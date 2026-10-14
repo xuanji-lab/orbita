@@ -4166,9 +4166,6 @@ button.panel-group-toggle:hover {
   margin-bottom: 3px;
 }
 /* 大字陈述：自动长高的 textarea，只读态无框、改字态描 accent 边 */
-.intent-stmt-wrap {
-  position: relative;
-}
 .intent-stmt {
   width: 100%;
   box-sizing: border-box;
@@ -4194,11 +4191,6 @@ button.panel-group-toggle:hover {
 .intent-stmt.no {
   text-decoration: line-through;
   color: var(--color-text-tertiary);
-}
-.intent-stmt-mic {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
 }
 .intent-box {
   border-radius: var(--radius-lg);
@@ -4265,7 +4257,7 @@ button.panel-group-toggle:hover {
   color: var(--color-text-tertiary);
   cursor: default;
 }
-/* Q / A 两个区各自滚动（max-height 160），摘句高亮自动居中，用户滚过就不再拉回 */
+/* Q / A 两个区各自滚动（各约 5 行：用户 10/14 23:27 嫌卡片太大），摘句高亮自动居中，用户滚过就不再拉回 */
 .intent-conv-turn {
   padding: 7px 11px;
   display: grid;
@@ -4275,7 +4267,8 @@ button.panel-group-toggle:hover {
   border-top: 1px solid var(--color-border-subtle);
 }
 .intent-conv-scroll {
-  max-height: 160px;
+  /* 5 行 = 5 × 正文行高（与下面 .intent-conv-md .chat-md 的字号 / 行高同源） */
+  max-height: calc(var(--font-size-caption) * 1.7 * 5);
   overflow: auto;
 }
 .intent-conv-who {
@@ -4312,6 +4305,18 @@ button.intent-conv-cut.openable:hover {
   font-size: var(--font-size-caption);
   line-height: 1.7;
 }
+/* 卡内的 markdown 标题不比正文大（h1 用 heading 字号会把 5 行的区撑成两三行）：同正文字号、只加粗 */
+.intent-conv-md .chat-md h1,
+.intent-conv-md .chat-md h2,
+.intent-conv-md .chat-md h3,
+.intent-conv-md .chat-md h4,
+.intent-conv-md .chat-md h5,
+.intent-conv-md .chat-md h6 {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: var(--weight-bold);
+}
 .intent-conv-turn:last-child .intent-conv-md {
   color: var(--color-text-secondary);
 }
@@ -4326,7 +4331,7 @@ mark.intent-mark {
   border-radius: 2px;
   padding: 0 1px;
 }
-/* 表态行：← / 不对 N / 对 Y / 改字 E / → */
+/* 表态行：← / 不对 / 对 / 改字 / →（快捷键 N / Y / E / ← → 照旧，不再画键帽：用户 10/14 23:27） */
 .intent-acts {
   display: flex;
   align-items: center;
@@ -4338,9 +4343,7 @@ mark.intent-mark {
    （别处的组件各自清）——这里一起清掉，否则会带一圈默认深色描边（harness 截图里看到的）。 */
 .intent-sq,
 .intent-final-chev,
-.intent-foot-quiet,
-.intent-note-mic,
-.intent-stmt-mic {
+.intent-foot-quiet {
   border: 0;
   font: inherit;
   display: inline-grid;
@@ -4392,27 +4395,16 @@ mark.intent-mark {
   color: var(--color-danger);
   background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 }
-.intent-kbd {
-  display: inline-grid;
-  place-items: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 4px;
-  font-family: var(--font-family-mono);
-  font-size: 10px;
-  color: var(--color-text-tertiary);
-}
-/* 底行：背景补充框（麦克风在框内右端）+ 两个出口 */
+/* 底行：背景补充框 + 麦克风 + 两个出口 */
 .intent-foot {
   display: grid;
   gap: 6px;
   padding: 0 16px 12px;
 }
+/* 行内垂直居中：背景框单行时 38 高（.text-field），按钮 30、麦克风 28——顶对齐会让它们比框高出 4px */
 .intent-foot-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
 }
 .intent-note-wrap {
@@ -4421,17 +4413,14 @@ mark.intent-mark {
   min-width: 0;
 }
 .intent-note {
+  /* block：行内 textarea 底下会多出一截基线留白，外壳比框高，居中就偏了 */
+  display: block;
   width: 100%;
   box-sizing: border-box;
   min-height: 30px;
-  padding: 5px 34px 5px 10px;
+  padding: 5px 10px;
   resize: none;
   overflow-y: hidden;
-}
-.intent-note-mic {
-  position: absolute;
-  right: 2px;
-  top: 2px;
 }
 .intent-foot-quiet {
   height: 30px;

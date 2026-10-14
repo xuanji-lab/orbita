@@ -14,8 +14,11 @@
  *   会话不在本机时禁用并就地说明）。
  * - 键盘：Y / N 表态并自动翻下一条（再按同一个撤掉就不翻），← → 翻页，E 改字；
  *   焦点在任何文本框里或听写进行中时快捷键全停。点顶部进度条跳到任意一条。
- * - 听写：背景框与大字陈述（改字态）各一个麦克风按钮，行为与输入框同款（再点或
- *   回车结束留字、Esc 取消、听写中只读、失败一行提示）。
+ * - 听写：全卡**一个**麦克风（用户 10/14 23:27：框内一个 + 陈述一个不优雅），在底行
+ *   背景框与「不确认，直接回答」之间，与输入框的麦克风同尺寸同样式。听写进正在用的那个框：
+ *   大字陈述在改字态（E / 改字）写进陈述，否则写进背景框；进行中的那一路优先（中途退出
+ *   改字态，再点麦克风仍是结束它）。行为与输入框同款（再点或回车结束留字、Esc 取消、
+ *   听写中只读、失败一行提示）。
  *
  * 卡片出现时拉本问的 /edges（那时它已写好）按 qaId + 岗 join 出 connection /
  * prediction / evidence / assistant / qa 原文；join 不到只显示 ask 自带的字段，不崩。
@@ -295,7 +298,7 @@ export function IntentConfirmCard(props: {
   const bigText = edge !== null ? predictionStatement(edge.prediction) : (item?.statement ?? "");
   const stmtText = row?.edited ?? bigText;
 
-  // ── 听写 ×2：背景框与大字陈述（改字态）。行为与输入框同款 ─────────────
+  // ── 听写：两个目标（背景框 / 大字陈述）各一路 useDictation，只有一个麦克风（见 micDictation）──
   const stmtRef = useRef<HTMLTextAreaElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const stmtDictation = useDictation({
@@ -316,6 +319,15 @@ export function IntentConfirmCard(props: {
     textareaRef: noteRef,
   });
   const dictating = stmtDictation.phase !== "idle" || noteDictation.phase !== "idle";
+  // 唯一的麦克风控制哪一路：进行中的优先（中途退出改字态也能再点结束），否则看改字态
+  const micDictation =
+    stmtDictation.phase !== "idle"
+      ? stmtDictation
+      : noteDictation.phase !== "idle"
+        ? noteDictation
+        : editing
+          ? stmtDictation
+          : noteDictation;
 
   // 两个输入框随内容长高
   useLayoutEffect(() => autofit(stmtRef.current), [stmtText, editing]);
@@ -446,62 +458,32 @@ export function IntentConfirmCard(props: {
         {/* 大字陈述：「如果对，这次回答会…」（join 不到边退回假设原文）。点它或按 E 改字 */}
         <div>
           <div className="intent-kick">{bigLabel}</div>
-          <div className="intent-stmt-wrap">
-            <textarea
-              ref={stmtRef}
-              className={`intent-stmt${row.verdict === "no" ? " no" : ""}${editing ? " editing" : ""}`}
-              value={stmtText}
-              readOnly={!editing || stmtDictation.phase !== "idle"}
-              aria-label={t.chat.recall.confirm.statementLabel}
-              rows={1}
-              onChange={(event) => {
-                dirtyRef.current = true;
-                setRows((prev) => editConfirmRow(prev, item.askId, event.target.value));
-              }}
-              onClick={() => {
-                if (!editing) startEditing();
-              }}
-              onKeyDown={(event) => {
-                // 回车：听写中结束听写（字留下），否则结束改字；Esc 收改字态
-                if (event.nativeEvent.isComposing) return;
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  if (stmtDictation.phase !== "idle") stmtDictation.finish();
-                  else setEditing(false);
-                } else if (event.key === "Escape" && stmtDictation.phase === "idle") {
-                  setEditing(false);
-                }
-              }}
-            />
-            {editing && (
-              <IconButton
-                label={stmtDictation.phase !== "idle" ? t.voice.dictateFinish : t.voice.dictate}
-                size={26}
-                active={stmtDictation.phase === "listening"}
-                disabled={stmtDictation.phase === "finishing"}
-                onClick={stmtDictation.toggle}
-                className="intent-stmt-mic"
-              >
-                {stmtDictation.phase === "connecting" || stmtDictation.phase === "finishing" ? (
-                  <Icon name="loader-circle" size={13} spin />
-                ) : (
-                  <Icon
-                    name="mic"
-                    size={13}
-                    strokeWidth={1.8}
-                    className={stmtDictation.phase === "listening" ? "orbita-breath" : undefined}
-                  />
-                )}
-              </IconButton>
-            )}
-          </div>
-          {(stmtDictation.phase !== "idle" || stmtDictation.problem !== null) && (
-            <DictationStatus
-              phase={stmtDictation.phase}
-              problem={stmtDictation.problem}
-              provider={stmtDictation.provider}
-            />
-          )}
+          <textarea
+            ref={stmtRef}
+            className={`intent-stmt${row.verdict === "no" ? " no" : ""}${editing ? " editing" : ""}`}
+            value={stmtText}
+            readOnly={!editing || stmtDictation.phase !== "idle"}
+            aria-label={t.chat.recall.confirm.statementLabel}
+            rows={1}
+            onChange={(event) => {
+              dirtyRef.current = true;
+              setRows((prev) => editConfirmRow(prev, item.askId, event.target.value));
+            }}
+            onClick={() => {
+              if (!editing) startEditing();
+            }}
+            onKeyDown={(event) => {
+              // 回车：听写中结束听写（字留下），否则结束改字；Esc 收改字态
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                if (stmtDictation.phase !== "idle") stmtDictation.finish();
+                else setEditing(false);
+              } else if (event.key === "Escape" && stmtDictation.phase === "idle") {
+                setEditing(false);
+              }
+            }}
+          />
         </div>
 
         {/* 为什么连上（边的 connection；join 不到就不画这格） */}
@@ -595,17 +577,19 @@ export function IntentConfirmCard(props: {
           type="button"
           className={`intent-big no${row.verdict === "no" ? " on" : ""}`}
           aria-pressed={row.verdict === "no"}
+          aria-keyshortcuts="N"
           onClick={() => vote("no")}
         >
-          <Icon name="x" size={13} /> {t.chat.recall.confirm.verdictNo} <kbd className="intent-kbd">N</kbd>
+          <Icon name="x" size={13} /> {t.chat.recall.confirm.verdictNo}
         </button>
         <button
           type="button"
           className={`intent-big yes${row.verdict === "yes" ? " on" : ""}`}
           aria-pressed={row.verdict === "yes"}
+          aria-keyshortcuts="Y"
           onClick={() => vote("yes")}
         >
-          <Icon name="check" size={13} /> {t.chat.recall.confirm.verdictYes} <kbd className="intent-kbd">Y</kbd>
+          <Icon name="check" size={13} /> {t.chat.recall.confirm.verdictYes}
         </button>
         <button
           type="button"
@@ -629,7 +613,7 @@ export function IntentConfirmCard(props: {
         </button>
       </div>
 
-      {/* 底行：背景补充（带麦克风）+ 两个出口同一行；听写状态行在框下 */}
+      {/* 底行：背景补充 + 麦克风 + 两个出口同一行；听写状态行在行下 */}
       <div className="intent-foot">
         <div className="intent-foot-row">
           <div className="intent-note-wrap">
@@ -654,26 +638,27 @@ export function IntentConfirmCard(props: {
                 }
               }}
             />
-            <IconButton
-              label={noteDictation.phase !== "idle" ? t.voice.dictateFinish : t.voice.dictate}
-              size={26}
-              active={noteDictation.phase === "listening"}
-              disabled={noteDictation.phase === "finishing"}
-              onClick={noteDictation.toggle}
-              className="intent-note-mic"
-            >
-              {noteDictation.phase === "connecting" || noteDictation.phase === "finishing" ? (
-                <Icon name="loader-circle" size={13} spin />
-              ) : (
-                <Icon
-                  name="mic"
-                  size={13}
-                  strokeWidth={1.8}
-                  className={noteDictation.phase === "listening" ? "orbita-breath" : undefined}
-                />
-              )}
-            </IconButton>
           </div>
+          {/* 唯一的麦克风：与输入框的同尺寸同样式（IconButton 28 / mic 15）。
+              改字态听写进大字陈述，否则进背景框（micDictation） */}
+          <IconButton
+            label={micDictation.phase !== "idle" ? t.voice.dictateFinish : t.voice.dictate}
+            size={28}
+            active={micDictation.phase === "listening"}
+            disabled={micDictation.phase === "finishing"}
+            onClick={micDictation.toggle}
+          >
+            {micDictation.phase === "connecting" || micDictation.phase === "finishing" ? (
+              <Icon name="loader-circle" size={15} spin />
+            ) : (
+              <Icon
+                name="mic"
+                size={15}
+                strokeWidth={1.8}
+                className={micDictation.phase === "listening" ? "orbita-breath" : undefined}
+              />
+            )}
+          </IconButton>
           <button type="button" className="quiet-control intent-foot-quiet" onClick={() => submit("skip-all")}>
             {t.chat.recall.confirm.answerWithoutConfirming}
           </button>
@@ -681,11 +666,11 @@ export function IntentConfirmCard(props: {
             {t.chat.recall.confirm.confirmAndAnswerCount(taken, props.ask.length)}
           </button>
         </div>
-        {(noteDictation.phase !== "idle" || noteDictation.problem !== null) && (
+        {(micDictation.phase !== "idle" || micDictation.problem !== null) && (
           <DictationStatus
-            phase={noteDictation.phase}
-            problem={noteDictation.problem}
-            provider={noteDictation.provider}
+            phase={micDictation.phase}
+            problem={micDictation.problem}
+            provider={micDictation.provider}
           />
         )}
       </div>
