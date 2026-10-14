@@ -12,7 +12,7 @@
  * **只蒸正常结束的轮**（completedTurnAssistantText）：被打断（无论有没有半截
  * 回答）或以报错收场的轮不蒸——半截与张冠李戴的条目比没有更糟。
  */
-import type { MemoryDraft } from "../shared/memory.ts";
+import type { MemoryCandidate, MemoryDraft } from "../shared/memory.ts";
 
 /** 一轮最多蒸出的条目数。蒸馏是摘录不是转写——超过这个数说明这轮该拆会话。 */
 const ENTRY_LIMIT = 5;
@@ -34,19 +34,39 @@ export const DISTILL_SYSTEM_PROMPT = `你是记忆蒸馏器。把一轮用户与
   那是过程的噪音，不是用户世界的事实；
 - 每条附 ≤8 个检索关键词（术语优先，中英文都可）。
 
+输入里可能带一节 <memories>：既往会话蒸馏出的旧记忆（各带 id）。若本轮内容
+**推翻**了其中某条（用户改了决定、纠正了旧事实），给对应新条目加
+"supersedes": "那条的id"——只是相关、补充、重述都不算推翻。没有推翻就不加；
+拿不准就不加（错标会把旧记忆藏起来）。没有 <memories> 节时永远不加。
+
 只输出 JSON 数组，除此之外不要有任何输出：
-[{"text": "……", "keywords": ["……"]}]
+[{"text": "……", "keywords": ["……"], "supersedes": "mem_xxx（可选）"}]
 没有值得记的内容时输出 []。`;
 
-/** 组装蒸馏调用的用户消息。`now` 用于把相对时间锚成绝对日期。 */
-export function buildDistillPrompt(input: { userText: string; assistantText: string; now: number }): string {
+/**
+ * 组装蒸馏调用的用户消息。`now` 用于把相对时间锚成绝对日期；candidates 是
+ * 主进程挑的冲突候选（旧记忆），有才出 <memories> 节——判「推翻」是模型的活，
+ * 但候选得先摆在它眼前。
+ */
+export function buildDistillPrompt(input: {
+  userText: string;
+  assistantText: string;
+  now: number;
+  candidates?: readonly MemoryCandidate[];
+}): string {
   const date = formatDate(input.now);
   const user = input.userText.slice(0, USER_TEXT_CHARS);
   const assistant =
     input.assistantText.length <= ASSISTANT_TEXT_CHARS
       ? input.assistantText
       : `……（中段略）${input.assistantText.slice(-ASSISTANT_TEXT_CHARS)}`;
-  return `<date>${date}</date>\n<user>\n${user}\n</user>\n<assistant>\n${assistant}\n</assistant>`;
+  const memories =
+    input.candidates !== undefined && input.candidates.length > 0
+      ? `<memories>\n${input.candidates
+          .map((candidate) => `[${candidate.id}] (${formatDate(candidate.timestamp)}) ${candidate.text}`)
+          .join("\n")}\n</memories>\n`
+      : "";
+  return `<date>${date}</date>\n${memories}<user>\n${user}\n</user>\n<assistant>\n${assistant}\n</assistant>`;
 }
 
 /**
@@ -54,7 +74,11 @@ export function buildDistillPrompt(input: { userText: string; assistantText: str
  * JSON.parse → 逐条校验。**任何一步失败都返回空数组**——坏输出蒸馏不出东西，
  * 静默跳过，下轮自然有新内容。
  */
-export function parseDistillReply(raw: string, timestamp: number): MemoryDraft[] {
+export function parseDistillReply(
+  raw: string,
+  timestamp: number,
+  candidateIds?: ReadonlySet<string>,
+): MemoryDraft[] {
   const fenced = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
   const start = fenced.indexOf("[");
   const end = fenced.lastIndexOf("]");
@@ -70,12 +94,17 @@ export function parseDistillReply(raw: string, timestamp: number): MemoryDraft[]
   for (const item of parsed) {
     if (drafts.length >= ENTRY_LIMIT) break;
     if (typeof item !== "object" || item === null) continue;
-    const suspect = item as { text?: unknown; keywords?: unknown };
+    const suspect = item as { text?: unknown; keywords?: unknown; supersedes?: unknown };
     if (typeof suspect.text !== "string" || suspect.text.trim() === "") continue;
     const keywords = Array.isArray(suspect.keywords)
       ? suspect.keywords.filter((k): k is string => typeof k === "string" && k.trim() !== "").slice(0, KEYWORD_LIMIT)
       : [];
-    drafts.push({ text: suspect.text.trim(), keywords, timestamp });
+    // supersedes 只认候选表里的 id（模型幻觉一个 id 就会指空），不在表里当没有
+    const supersedes =
+      typeof suspect.supersedes === "string" && (candidateIds?.has(suspect.supersedes) ?? false)
+        ? suspect.supersedes
+        : undefined;
+    drafts.push({ text: suspect.text.trim(), keywords, timestamp, ...(supersedes !== undefined ? { supersedes } : null) });
   }
   return drafts;
 }

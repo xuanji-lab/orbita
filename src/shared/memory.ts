@@ -112,6 +112,18 @@ export interface MemoryInjectionRecord {
   hits: readonly { id: string; score: number }[];
 }
 
+/** 蒸馏的冲突候选：与新内容可能相撞的旧条目（喂给蒸馏模型判断 supersedes）。 */
+export interface MemoryCandidate {
+  id: string;
+  text: string;
+  timestamp: number;
+}
+
+/** memoryContextRequest 的回执（readTaskResult 同款 ok 双分支）。 */
+export type MemoryContextOutcome =
+  | { ok: true; candidates: MemoryCandidate[] }
+  | { ok: false; error: string };
+
 /**
  * 蒸馏侧产出、待落盘的条目（还没有 id / sessionId，那两个由主进程落盘时补）。
  * 与 MemoryEntry 分开：id 的分配权在落盘侧，蒸馏侧不该能伪造来源。

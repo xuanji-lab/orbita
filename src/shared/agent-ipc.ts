@@ -21,7 +21,7 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
-import type { MemoryDraft, MemoryRetrieveOutcome } from "./memory.ts";
+import type { MemoryContextOutcome, MemoryDraft, MemoryRetrieveOutcome } from "./memory.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -809,6 +809,8 @@ export type AgentCommand =
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   /** 记忆：主进程对 memoryRetrieveRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "memoryRetrieveResult"; requestId: string } & MemoryRetrieveOutcome)
+  /** 记忆：主进程对 memoryContextRequest 的回执（蒸馏的冲突候选） */
+  | ({ type: "memoryContextResult"; requestId: string } & MemoryContextOutcome)
   | {
       /**
        * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
@@ -992,6 +994,18 @@ export type AgentEvent =
    * 写失败只记日志——记忆是易耗品，不该有报错通路打断对话。
    */
   | { type: "memoryAppend"; sessionId: string; turn: number; entries: MemoryDraft[] }
+  /**
+   * 蒸馏前的冲突候选请求：主进程按这轮内容词法挑可能相撞的旧条目，回
+   * memoryContextResult。查询文本是用户输入 + 助手回答的拼串（候选像不像
+   * 这轮说的事，就等于像不像这轮会蒸出的新条目）。
+   */
+  | {
+      type: "memoryContextRequest";
+      requestId: string;
+      sessionId: string;
+      query: string;
+      scope?: { workspaceId: string | null; cwd: string };
+    }
   /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
    * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。

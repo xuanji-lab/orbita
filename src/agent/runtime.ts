@@ -23,7 +23,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ChoreModelPayload, ProviderSecrets } from "../shared/agent-ipc.ts";
-import type { MemoryRetrieveOutcome } from "../shared/memory.ts";
+import type { MemoryCandidate, MemoryContextOutcome, MemoryRetrieveOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -530,6 +530,9 @@ async function recallMemories(
  * 但对 session 的读取（messages / model）都发生在 async 体的第一个 await 之前，
  * 与之后 turn-cycle 的 dispose 不冲突。
  */
+/** 冲突候选的硬超时：主进程读 JSONL + 词法打分是毫秒级，10 秒已是「出事了」。 */
+const MEMORY_CONTEXT_TIMEOUT_MS = 10_000;
+
 function scheduleMemoryDistill(
   sessionId: string,
   session: AgentSession,
@@ -541,6 +544,8 @@ function scheduleMemoryDistill(
   turn: number,
   /** 家务活模型（主进程在 sessionMemory 开着时装配）；缺席或解析失败退回会话模型 */
   choreModel?: ChoreModelPayload,
+  /** 开轮命令里的会话归属：冲突候选要按它挑作用域（meta 可能已被回退等改写） */
+  scope?: { workspaceId: string | null; cwd: string },
 ): void {
   if (note.memoryDistillInFlight) return;
   note.memoryDistillInFlight = true;
@@ -551,6 +556,23 @@ function scheduleMemoryDistill(
       const sessionModel = session.model;
       // null = 本轮没正常结束（打断 / 报错 / 还没开始回答就被打断），不蒸
       if (assistantText === null || assistantText.trim() === "" || sessionModel === undefined) return;
+      // 冲突候选：主进程按这轮内容挑可能相撞的旧记忆，喂给蒸馏模型判「推翻」。
+      // 拿不到（超时 / 报错 / 主进程读不了）就当没有候选——判不了总比判错好
+      let candidates: MemoryCandidate[] = [];
+      try {
+        const outcome = await requestBroker.request<MemoryContextOutcome>(
+          {
+            type: "memoryContextRequest",
+            sessionId,
+            query: `${userText}\n${assistantText}`.slice(0, 8000),
+            ...(scope !== undefined ? { scope } : null),
+          },
+          MEMORY_CONTEXT_TIMEOUT_MS,
+        );
+        if (outcome.ok) candidates = outcome.candidates;
+      } catch (cause) {
+        console.error("[memory] 冲突候选没拿到（照常蒸馏，不判推翻）", cause);
+      }
       const dedicated = choreModel === undefined ? null : await resolveChoreModel(choreModel);
       const model = dedicated?.model ?? sessionModel;
       // 鉴权面跟着模型走（generateSessionTitle 同款）：家务活模型没解析到时
@@ -564,7 +586,7 @@ function scheduleMemoryDistill(
           messages: [
             {
               role: "user",
-              content: buildDistillPrompt({ userText, assistantText, now: Date.now() }),
+              content: buildDistillPrompt({ userText, assistantText, now: Date.now(), candidates }),
               timestamp: Date.now(),
             },
           ],
@@ -588,7 +610,7 @@ function scheduleMemoryDistill(
       for (const block of response.content) {
         if (block.type === "text") output += block.text;
       }
-      const drafts = parseDistillReply(output, Date.now());
+      const drafts = parseDistillReply(output, Date.now(), new Set(candidates.map((c) => c.id)));
       if (drafts.length > 0) {
         send({ type: "memoryAppend", sessionId, turn, entries: drafts });
       }
@@ -1623,6 +1645,7 @@ async function echoAndPrompt(
       baseline,
       turn,
       command.choreModel,
+      { workspaceId: command.workspaceId, cwd: command.cwd },
     );
   }
 }
@@ -1809,6 +1832,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "memoryRetrieveResult") {
     // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 轮前调用方自己对超时 / ok:false / 空 hits 做「不注入」处理。
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "memoryContextResult") {
+    // 冲突候选的回执：同上，原样结掉；蒸馏调用方对失败按「没有候选」处理。
     requestBroker.resolve(command.requestId, command);
     return;
   }

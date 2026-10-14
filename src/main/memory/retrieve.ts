@@ -168,6 +168,34 @@ export function retrieveMemories(
   return hits;
 }
 
+/**
+ * 覆盖度打分（蒸馏的冲突候选专用）：**这条旧记忆有多少出现在本轮内容里**。
+ * 方向与 lexicalScore 相反——召回问「query 有多少落在条目里」（query 短、条目
+ * 是靶子），冲突判问「条目有多少落在 query 里」（这轮内容长，条目短）；按
+ * query 长度归一的那条路会把长对话里的同题旧记忆稀释到零。
+ */
+export function coverageScore(query: MemoryQuery, entry: MemoryEntry): number {
+  const bodyTokens = new Set(tokenize(entry.text));
+  const keywordTokens = new Set(entry.keywords.flatMap(tokenize));
+  const bodyHit =
+    bodyTokens.size === 0
+      ? 0
+      : [...bodyTokens].filter((token) => query.tokens.has(token)).length / bodyTokens.size;
+  const keywordHit =
+    keywordTokens.size === 0
+      ? 0
+      : [...keywordTokens].filter((token) => query.tokens.has(token)).length / keywordTokens.size;
+  // 关键词在 query 原文里原样出现（lexicalScore 的子串通道同款）：蒸馏时模型自己
+  // 标的靶子撞上了，给到覆盖满分
+  const haystack = query.text.toLowerCase();
+  const substringHit = entry.keywords.some((keyword) => {
+    const needle = keyword.trim().toLowerCase();
+    return needle !== "" && haystack.includes(needle);
+  });
+  const blended = keywordTokens.size > 0 ? 0.6 * bodyHit + 0.4 * keywordHit : bodyHit;
+  return Math.min(1, Math.max(blended, substringHit ? 1 : 0));
+}
+
 /* ---------- 常驻摘抄（pinned）：不打分，每轮必带，总量有上限 ---------- */
 
 /** 常驻注入的字符预算：常驻不打分，超了按最近使用取。2200 ≈ 一条打满的引用

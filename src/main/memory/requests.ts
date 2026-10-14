@@ -14,6 +14,7 @@
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import {
   MEMORY_GLOBAL_SCOPE,
+  type MemoryContextOutcome,
   type MemoryDraft,
   type MemoryEntry,
   type MemoryExcerptItem,
@@ -27,7 +28,7 @@ import {
   type MemoryTurnInjected,
   type MemoryTurnSummary,
 } from "../../shared/memory.ts";
-import { pickPinned, retrieveMemories } from "./retrieve.ts";
+import { coverageScore, pickPinned, retrieveMemories } from "./retrieve.ts";
 import { memoryScopeOf, type MemoryStore } from "./store.ts";
 import type { MemoryUsageStore } from "./usage.ts";
 
@@ -156,6 +157,43 @@ export async function applyMemoryAppend(
     return draft;
   });
   await memory.append(token, event.sessionId, event.turn, drafts);
+}
+
+/**
+ * memoryContextRequest：蒸馏前的冲突候选。按这轮内容（用户输入 + 助手回答的
+ * 拼串）对作用域 + 全局的活条目做词法打分，取最像的几条给模型判「新条目可能
+ * 推翻哪条」。**只出建议**：拍板在用户（冲突卡），主进程不动旧条目。
+ *
+ * 预算与召回不同：不要字符预算（候选全文要进蒸馏 prompt，装不下的候选没法判）、
+ * 条数收紧（8 条——判冲突是细活，堆 20 条只会稀释注意力）、阈值略降（相撞的
+ * 事实必然同题，但表述可能换了主语）。
+ */
+export async function applyMemoryContext(
+  sessions: SessionScopeReader,
+  memory: MemoryStore,
+  event: AgentEventOf<"memoryContextRequest">,
+): Promise<MemoryContextOutcome> {
+  const scope =
+    event.scope !== undefined ? memoryScopeOf(event.scope) : await scopeOfSession(sessions, event.sessionId);
+  if (scope === null) return { ok: true, candidates: [] };
+  const globalToken = memory.tokenOf(MEMORY_GLOBAL_SCOPE);
+  const token = memory.tokenOf(scope);
+  const [own, globalEntries] = await Promise.all([memory.list(token), memory.list(globalToken)]);
+  const active = dedupeById([...own, ...globalEntries]).filter(isRecallable);
+  const hits = retrieveMemories(active, event.query, {
+    scorer: coverageScore,
+    limit: 8,
+    maxChars: Number.MAX_SAFE_INTEGER,
+    threshold: 0.4,
+  });
+  return {
+    ok: true,
+    candidates: hits.map((hit) => ({
+      id: hit.entry.id,
+      text: hit.entry.text,
+      timestamp: hit.entry.timestamp,
+    })),
+  };
 }
 
 /* ---------- 设置 › 记忆库（memory:*）的装配与入参校验 ---------- */

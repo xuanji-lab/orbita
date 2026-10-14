@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
+const NOW = Date.now();
 import {
   buildDistillPrompt,
   completedTurnAssistantText,
@@ -159,4 +161,41 @@ test("DISTILL_SYSTEM_PROMPT 声明了原子条目三要素与空数组出口", (
 
 test("DISTILL_SYSTEM_PROMPT 排除元讨论（验收观察：关于记忆机制本身的议论不该入库）", () => {
   assert.ok(DISTILL_SYSTEM_PROMPT.includes("元讨论"));
+});
+
+test("prompt 带 <memories> 节：id + 日期 + 原文；没有候选时不出这一节", () => {
+    const withCandidates = buildDistillPrompt({
+      userText: "换回 npm",
+      assistantText: "好的",
+      now: NOW,
+      candidates: [{ id: "mem_old", text: "用 bun 管包", timestamp: NOW }],
+    });
+    assert.ok(withCandidates.includes("<memories>"));
+    assert.ok(withCandidates.includes("[mem_old]"));
+    assert.ok(withCandidates.includes("用 bun 管包"));
+    const bare = buildDistillPrompt({ userText: "u", assistantText: "a", now: NOW });
+    assert.ok(!bare.includes("<memories>"));
+    const empty = buildDistillPrompt({ userText: "u", assistantText: "a", now: NOW, candidates: [] });
+    assert.ok(!empty.includes("<memories>"));
+});
+
+test("parse：候选表里的 id 收下；不在表里的（幻觉）当没有", () => {
+    const ids = new Set(["mem_old"]);
+    const drafts = parseDistillReply(
+      JSON.stringify([
+        { text: "改回 npm", keywords: ["npm"], supersedes: "mem_old" },
+        { text: "带幻觉的", keywords: [], supersedes: "mem_ghost" },
+        { text: "没标的", keywords: [] },
+      ]),
+      1,
+      ids,
+    );
+    assert.equal(drafts[0]?.supersedes, "mem_old");
+    assert.equal(drafts[1]?.supersedes, undefined);
+    assert.equal(drafts[2]?.supersedes, undefined);
+});
+
+test("不传候选表时（旧调用方）：supersedes 一律不收——没有表就没有可判真的依据", () => {
+  const drafts = parseDistillReply(JSON.stringify([{ text: "t", keywords: [], supersedes: "mem_old" }]), 1);
+  assert.equal(drafts[0]?.supersedes, undefined);
 });

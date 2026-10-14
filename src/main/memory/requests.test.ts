@@ -12,6 +12,7 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { MEMORY_GLOBAL_SCOPE } from "../../shared/memory.ts";
 import {
   applyMemoryAppend,
+  applyMemoryContext,
   applyMemoryRetrieve,
   listScopes,
   parseBatchTarget,
@@ -442,5 +443,41 @@ describe("管理面入参校验（renderer 那头什么都能传）", () => {
     ]) {
       assert.throws(() => parseExcerptRequest(bad), /memory/);
     }
+  });
+});
+
+describe("applyMemoryContext（蒸馏的冲突候选）", () => {
+  test("按这轮内容挑最像的活条目（本作用域 + 全局），superseded / muted 不进候选", async () => {
+    const sessions = new FakeSessions();
+    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+      { text: "用户决定包管理器用 bun，bun 是唯一 lock writer", keywords: ["bun", "包管理器"], timestamp: NOW },
+      { text: "无关的旧记忆：用户养了一只猫", keywords: ["猫"], timestamp: NOW },
+    ]));
+    await memory.addManual(globalToken, "构建走 bun install");
+    const entries = await memory.list(wsAToken);
+    await memory.patch(wsAToken, entries[1]?.id ?? "", { status: "muted" });
+
+    const outcome = await applyMemoryContext(sessions, memory, {
+      type: "memoryContextRequest",
+      requestId: "r9",
+      sessionId: "in-workspace",
+      query: "包管理器还是换回 npm 吧，bun 在 Windows 上老出问题，构建也改成 npm install",
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.deepEqual(
+      outcome.candidates.map((candidate) => candidate.text),
+      ["用户决定包管理器用 bun，bun 是唯一 lock writer", "构建走 bun install"],
+    );
+  });
+
+  test("meta 读不到 = 空候选（ok: true），不抛", async () => {
+    const outcome = await applyMemoryContext(new FakeSessions(), memory, {
+      type: "memoryContextRequest",
+      requestId: "r10",
+      sessionId: "gone",
+      query: "任意内容",
+    });
+    assert.deepEqual(outcome, { ok: true, candidates: [] });
   });
 });

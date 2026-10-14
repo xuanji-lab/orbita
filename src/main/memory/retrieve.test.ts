@@ -5,7 +5,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { MemoryEntry } from "../../shared/memory.ts";
-import { lexicalScore, pickPinned, retrieveMemories, tokenize, PINNED_LIMIT, type EntryScorer } from "./retrieve.ts";
+import { coverageScore, lexicalScore, pickPinned, retrieveMemories, tokenize, PINNED_LIMIT, type EntryScorer } from "./retrieve.ts";
 
 const NOW = 1_800_000_000_000;
 const DAY = 86_400_000;
@@ -205,5 +205,28 @@ describe("pickPinned（常驻摘抄：不打分，每轮必带，总量有上限
     assert.equal(picked.length, PINNED_LIMIT);
     // 最近创建的在前
     assert.equal(picked[0]?.id, `mem_${PINNED_LIMIT + 2}`);
+  });
+});
+
+describe("coverageScore（冲突候选的覆盖度打分：条目 token 落在长对话里的比例）", () => {
+  const query = {
+    text: "包管理器还是换回 npm 吧，bun 在 Windows 上老出问题，构建也改成 npm install",
+    tokens: new Set(tokenize("包管理器还是换回 npm 吧，bun 在 Windows 上老出问题，构建也改成 npm install")),
+  };
+  const entry = (text: string, keywords: string[] = []): MemoryEntry => ({
+    id: "mem_x",
+    text,
+    keywords,
+    sessionId: "s",
+    timestamp: NOW,
+  });
+
+  test("同题旧记忆拿高分：条目的大多数 token 都出现在这轮内容里", () => {
+    assert.ok(coverageScore(query, entry("用户决定包管理器用 bun，bun 是唯一 lock writer", ["包管理器"])) >= 0.4);
+    assert.ok(coverageScore(query, entry("构建走 bun install")) >= 0.4);
+  });
+
+  test("无关条目拿低分：说了别的就是别的", () => {
+    assert.ok(coverageScore(query, entry("用户养了一只叫雪球的橘猫", ["雪球"])) < 0.4);
   });
 });

@@ -16,7 +16,7 @@ import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
-import type { MemoryRetrieveOutcome } from "../../shared/memory.ts";
+import type { MemoryContextOutcome, MemoryRetrieveOutcome } from "../../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -430,6 +430,17 @@ export class AgentHostCore {
       requestId,
       ...(outcome.ok
         ? { ok: true as const, hits: outcome.hits }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 记忆：memoryContextRequest 的回执（蒸馏的冲突候选）。同上，发完即回。 */
+  answerMemoryContext(requestId: string, outcome: MemoryContextOutcome): void {
+    this.child?.postMessage({
+      type: "memoryContextResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, candidates: outcome.candidates }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }

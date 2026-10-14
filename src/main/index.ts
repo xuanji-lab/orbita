@@ -15,7 +15,7 @@ import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { MemoryStore } from "./memory/store.ts";
 import { MemoryUsageStore } from "./memory/usage.ts";
 import { registerMemoryIpc } from "./memory/ipc.ts";
-import { applyMemoryAppend, applyMemoryRetrieve } from "./memory/requests.ts";
+import { applyMemoryAppend, applyMemoryContext, applyMemoryRetrieve } from "./memory/requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
@@ -473,6 +473,19 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerMemoryRetrieve(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerMemoryRetrieve(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 蒸馏前的冲突候选：按这轮内容挑可能相撞的旧条目给模型判 supersedes。
+    // 任何路径都回执（轮后蒸馏在同步等，挂着就蒸不了）。
+    if (event.type === "memoryContextRequest") {
+      void applyMemoryContext(sessions, memory, event)
+        .then((outcome) => agentHost.answerMemoryContext(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerMemoryContext(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
