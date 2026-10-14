@@ -4,6 +4,7 @@
  * 观察走 Electron 内建的 CDP（`webContents.debugger`），不引第三方浏览器库：
  *   observe   `Accessibility.getFullAXTree` → page-outline.ts 排成大纲
  *   extract   `Runtime.evaluate` 页内取 innerText 与链接 → page-text.ts 规整分段
+ *   wait      `Runtime.evaluate` 毫秒级探针 + 主进程分段轮询（见 waitFor）
  *   screenshot `Page.captureScreenshot` → 缩放压 JPEG（取帧见 frame-capture.ts）。CDP 截图在隐藏
  *              窗口、后台 tab 都拍得到真内容（2026-09-27 在主进程里实测五种窗口 / 视图状态）；
  *              但后来线上也出现过同一 tab 连续超时——页面活着（extract 秒回）却等不来新帧
@@ -26,6 +27,15 @@ import {
   type BrowserToolOutcome,
   type BrowserToolRequest,
 } from "../../shared/browser.ts";
+import {
+  formatWaitResult,
+  parseWaitSample,
+  parseWaitSpec,
+  waitProbeScript,
+  waitUntilHit,
+  type BrowserWaitSample,
+  type BrowserWaitSpec,
+} from "../../shared/browser-wait.ts";
 import { availableDownloadPath } from "./downloads.ts";
 import { resolveAddressOrSearch } from "./address.ts";
 import { looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
@@ -122,6 +132,7 @@ export async function applyBrowserRequest(
       }
       if (request.action === "observe") return await observe(tab, contents, request.maxNodes, !readsUser);
       if (request.action === "extract") return await extract(tab, contents, request);
+      if (request.action === "wait") return await waitFor(tab, contents, request);
       if (request.action === "screenshot") {
         return request.region !== undefined
           ? await zoom(tab, contents, request.region)
@@ -389,6 +400,47 @@ async function observe(
       : []),
   ].join("\n");
   return { ok: true, text, card: card(tab, contents) };
+}
+
+/**
+ * browser_wait_for：等页面上某个东西出现。**分段轮询**，不是页内一个长 Promise（MutationObserver +
+ * awaitPromise），两个理由：
+ *
+ * 1. 每次 Runtime.evaluate 都是毫秒级的探针，cdp.ts 的 10 秒命令超时原样不动——「卡死的页面不能把
+ *    agent 的一轮拖死」这条护栏不为等待放宽（页内长 Promise 要它放宽到 timeoutMs，卡死的页面就会
+ *    把一轮拖到 30 秒）。总时长由这里自己的 deadline 控制（≤ WAIT_MAX_TIMEOUT_MS）。
+ * 2. 等待期间页面换文档（点击触发跳转、SPA 重建执行上下文）时，旧文档里的长 Promise 会连同执行
+ *    上下文一起销毁、报错返回；分段探针只把那一轮当「还没到」，下一轮在新文档上接着等。
+ *
+ * 到点没出现**不是工具错误**：如实说「没出现」，让模型自己决定下一步（报错会让它以为工具坏了）。
+ */
+async function waitFor(
+  tab: BrowserTab,
+  contents: WebContents,
+  request: Extract<BrowserToolRequest, { action: "wait" }>,
+): Promise<BrowserToolOutcome> {
+  const parsed = parseWaitSpec(request);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const { spec, note } = parsed;
+  const outcome = await waitUntilHit(() => probeWait(contents, spec), spec);
+  if ("error" in outcome) {
+    return { ok: false, error: `"${String(spec.selector)}" is not a valid CSS selector.` };
+  }
+  const page = { url: pageUrl(contents), title: contents.getTitle() };
+  return { ok: true, text: formatWaitResult(page, spec, outcome, note), card: card(tab, contents) };
+}
+
+/** 一次探针。页面没答上来（正在换文档、崩了）回 null——当这一轮没探到，下一轮再说 */
+async function probeWait(
+  contents: WebContents,
+  spec: BrowserWaitSpec,
+): Promise<BrowserWaitSample | { error: "invalid-selector" } | null> {
+  const result = (await cdp(contents, "Runtime.evaluate", {
+    expression: waitProbeScript(spec),
+    returnByValue: true,
+  }).catch(() => null)) as { result?: { value?: unknown }; exceptionDetails?: unknown } | null;
+  if (result === null || result.exceptionDetails !== undefined) return null;
+  return parseWaitSample(result.result?.value);
 }
 
 async function extract(
