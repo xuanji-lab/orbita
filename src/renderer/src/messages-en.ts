@@ -217,6 +217,9 @@ export const en = {
 
   quote: {
     add: "Quote",
+    copy: "Copy",
+    copyTitle: "Copy the selected text",
+    toolbar: "Selected text actions",
     replyPlaceholder: (n: number) => (n === 1 ? "Reply to quote 1…" : `Reply by number — 1. … ${n}. …`),
     number: (n: number) => `Quote ${n}`,
     addTitle: "Quote this in your next message",

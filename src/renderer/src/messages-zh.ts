@@ -186,6 +186,9 @@ export const zh: Messages = {
 
   quote: {
     add: "引用",
+    copy: "复制",
+    copyTitle: "复制选中的文字",
+    toolbar: "选中文字的操作",
     replyPlaceholder: (n) => (n === 1 ? "回复引用 1…" : `按编号逐条回复——1. … ${n}. …`),
     number: (n) => `引用 ${n}`,
     addTitle: "在下一条消息里引用这段",
