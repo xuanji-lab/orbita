@@ -135,6 +135,12 @@ function block(node: DomNode): string[] {
     case "hr":
       return ["---"];
     default:
+      // 行内元素（a / strong / code / span…）出现在块级兄弟之间（直接挂在 body / div 下）时，
+      // 不能走 container()——那会把元素本身拆掉、丢掉链接与格式；按行内渲染保住它。
+      if (!BLOCK_TAGS.has(node.tag)) {
+        const text = inline([node]).trim();
+        return text === "" ? [] : [text];
+      }
       return container(node);
   }
 }

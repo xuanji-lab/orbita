@@ -144,3 +144,19 @@ test("collectLinks：文字 + URL、按 URL 去重、javascript: 丢掉、无文
 test("normalizeMarkdown：空行压一个、行尾空白去掉、首尾 trim", () => {
   assert.equal(normalizeMarkdown("  a  \n\n\n\n b \n"), "a\n\n b");
 });
+
+test("行内元素出现在块级兄弟之间：链接 / 加粗的格式不能丢（验收回归：验收页的 a 直接挂在 body 下丢了 href）", () => {
+  const out = domToMarkdown(
+    page(
+      el("h1", [text("标题")]),
+      el("ul", [el("li", [text("甲")])]),
+      el("a", [text("详情链接")], { href: "https://example.com/detail" }),
+      el("strong", [text("重要")]),
+      el("table", [el("tr", [el("th", [text("列")])])]),
+    ),
+  );
+  assert.equal(
+    out,
+    "# 标题\n\n- 甲\n\n[详情链接](https://example.com/detail)\n\n**重要**\n\n| 列 |\n| --- |",
+  );
+});
