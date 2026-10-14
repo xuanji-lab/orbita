@@ -7,6 +7,7 @@ import {
   clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
+  effectiveIntentSettings,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
@@ -638,5 +639,27 @@ describe("parseSettings 的 usagePet（星云钉日期 / 收起）", () => {
     deepStrictEqual(parseUsagePet({ hidden: false }), undefined);
     deepStrictEqual(parseUsagePet({ pinnedDate: "2026-10-09", hidden: false }), { pinnedDate: "2026-10-09" });
     deepStrictEqual(parseUsagePet([]), undefined);
+  });
+});
+
+describe("parseSettings 的 intent（实验功能 intent-system）", () => {
+  it("缺席 = undefined（effectiveIntentSettings 走全缺省）", () => {
+    deepStrictEqual(parseSettings({}).intent, undefined);
+  });
+
+  it("baseUrl 只认 http(s) 且去尾斜杠；channel / newSessionOn 只认真值", () => {
+    deepStrictEqual(
+      parseSettings({ intent: { baseUrl: "http://127.0.0.1:8723/", channel: "deepseek", newSessionOn: false } }).intent,
+      { baseUrl: "http://127.0.0.1:8723", channel: "deepseek", newSessionOn: false },
+    );
+    // 坏 baseUrl 丢掉；坏 channel 当没选过（回 proma 由 effectiveIntentSettings 兑现）
+    deepStrictEqual(parseSettings({ intent: { baseUrl: "ftp://x" } }).intent, undefined);
+    deepStrictEqual(parseSettings({ intent: { channel: "nonsense" } }).intent, undefined);
+  });
+
+  it("effectiveIntentSettings：缺省地址 127.0.0.1:8723、新会话默认开、渠道 proma", () => {
+    const effective = effectiveIntentSettings(undefined);
+    deepStrictEqual(effective, { baseUrl: "http://127.0.0.1:8723", newSessionOn: true, channel: "proma" });
+    deepStrictEqual(effectiveIntentSettings({ baseUrl: "http://localhost:9000//" }).baseUrl, "http://localhost:9000");
   });
 });

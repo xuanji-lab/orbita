@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
+import type { IntentRecallRecord } from "@shared/session";
+import type { RecallCardState } from "@shared/intent-recall";
+import type { IntentConfirmDecision } from "@shared/intent-confirm";
+import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import {
   EMPTY_ENTRY,
   dequeue,
@@ -12,6 +16,8 @@ import {
   moveQueued as moveQueuedIn,
   parseCompactCommand,
   removeApproval,
+  removeIntentAsk,
+  setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
   revertOptimisticTurn,
@@ -365,6 +371,20 @@ export interface ChatSession {
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
   newTaskIn: (workspace: Workspace) => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
+  /* ---------- 意图系统（实验功能 intent-system） ---------- */
+  /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
+  intentRecalls: readonly IntentRecallRecord[];
+  /** 运行中的召回卡（流事件归约）；终态记录到达后回 null */
+  intentRun: RecallCardState | null;
+  /** 挂起的回答前确认；null = 没有 */
+  intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
+  /** 确认卡的回答（对不上号的陈旧应答由 runtime 丢弃） */
+  answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 会话级召回开关：null = 没有会话（新任务）；undefined = 没开实验功能 */
+  intentEnabled: boolean | null | undefined;
+  setIntentEnabled: (next: boolean) => void;
+  /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
+  pendingEcho: { blocks: readonly string[] } | null;
 }
 
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
@@ -487,6 +507,10 @@ export interface SessionEngine {
   readonly turnErrorOf: (id: string) => string | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
+  /** 意图确认卡的回答（实验功能 intent-system） */
+  readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 乐观回显：发出即画用户气泡（真回显事件一到即清）。ephemeral */
+  readonly setPendingEcho: (id: string, blocks: readonly string[]) => void;
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
   readonly starSession: (id: string, starred: boolean) => void;
@@ -840,6 +864,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       } else {
         const turn = buildTurn(id);
         if (turn === null) return;
+        // 乐观回显同直发路径：投递那一刻先画气泡（真回显一到即换下）
+        applyStates((prev) => setPendingEcho(prev, id, splitEchoBlocks(head.text)));
         dispatch(() =>
           api.agent.submit({
             sessionId: id,
@@ -988,6 +1014,23 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [applyStates],
   );
 
+  /** 乐观回显：与 beginOptimisticTurn 同拍写入（发出那一刻），真回显清掉它 */
+  const setPendingEchoCb = useCallback(
+    (id: string, blocks: readonly string[]) => {
+      applyStates((prev) => setPendingEcho(prev, id, blocks));
+    },
+    [applyStates],
+  );
+
+  // 意图确认卡的回答（实验功能）：摘掉挂起的请示再送 agent 进程（按 requestId 对号）
+  const answerIntentConfirm = useCallback(
+    (requestId: string, decision: IntentConfirmDecision) => {
+      applyStates((prev) => removeIntentAsk(prev, requestId));
+      void api.agent.answerIntentConfirm(requestId, decision);
+    },
+    [applyStates],
+  );
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -1126,6 +1169,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     messagesRef,
     pickedThinkingRef,
     states,
+    answerIntentConfirm,
+    setPendingEcho: setPendingEchoCb,
     statesRef,
     views: views.current,
     applyStates,
@@ -1799,6 +1844,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       }
       // 乐观置 turn：不等第一帧事件回来，输入框立刻进入「跑着」的样子
       const revertTurn = engine.beginOptimisticTurn(id);
+      // 乐观回显：agent 进程冷启 / 开轮装配要几秒，真回显之前先就地画用户气泡
+      // （与 runtime 的回显同款切法，真回显一到无缝换下）
+      engine.setPendingEcho(id, splitEchoBlocks(text));
       try {
         // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效。
         // 文件引用与粘贴块跟图同行：主进程落盘副本 / agent 进程组装进正文
@@ -2323,6 +2371,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * **绝不为压缩新建会话**——对一条空会话压缩没有意义。进度不用单独回包：
    * `compaction_start` / `compaction` 事件那条链已经通了。
    */
+  /** 会话级意图召回开关（实验功能）：本地 meta 镜像先动（开关立即回弹），
+   *  落盘走 IPC、列表异步刷新。没有会话（新任务）时不动——首条消息按设置默认建。 */
+  const setIntentEnabled = useCallback(
+    (next: boolean) => {
+      setOpened((prev) => (prev === null ? prev : { ...prev, intentEnabled: next }));
+      const id = sessionRef.current ?? (opened !== null ? opened.id : null);
+      if (id === null) return;
+      void api.session
+        .setIntentEnabled(id, next)
+        .then(() => engine.reloadSessions())
+        .catch(() => undefined);
+    },
+    [opened, engine],
+  );
+
   const compact = useCallback((): void => {
     engine.setError(null);
     // 压缩要有可续的会话
@@ -2994,6 +3057,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     thinkingSupported: entry.thinking?.supported ?? null,
     catalog: engine.catalog,
     approvals: entry.approvals,
+    intentRecalls: entry.intentRecalls,
+    intentRun: entry.intentRun,
+    pendingEcho: entry.pendingEcho,
+    intentAsk: entry.intentAsk,
+    answerIntentConfirm: engine.answerIntentConfirm,
+    intentEnabled: opened === null ? null : opened.intentEnabled,
+    setIntentEnabled,
     workspaces: engine.workspaces,
     addWorkspace,
     createWorkspace,

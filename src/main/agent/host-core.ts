@@ -18,6 +18,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { ComputerUseToolOutcome } from "../../shared/computer-use.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -386,6 +387,11 @@ export class AgentHostCore {
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
+  }
+
+  /** 意图确认卡的回答（实验功能 intent-system）。同 answerPermission：不 ensure、发完即回。 */
+  answerIntentConfirm(requestId: string, decision: IntentConfirmDecision): void {
+    this.child?.postMessage({ type: "intentConfirmResult", requestId, decision } satisfies AgentCommand);
   }
 
   /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */

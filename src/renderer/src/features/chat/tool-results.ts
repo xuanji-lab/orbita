@@ -18,7 +18,7 @@ import { diffWords } from "diff";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
-import type { CompactedRecord, SessionRecord, TranscriptRecord } from "@shared/session";
+import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
@@ -68,7 +68,8 @@ export type RenderUnit =
       timestamp: number;
     }
   | { kind: "fileTurn"; key: string; record: FileTurnView }
-  | { kind: "revertMark"; key: string; record: RevertRecord };
+  | { kind: "revertMark"; key: string; record: RevertRecord }
+  | { kind: "intentRecall"; key: string; record: IntentRecallRecord };
 
 /** toolCall 单元的别名：分组函数的输入输出都说它。 */
 export type ToolCallUnit = Extract<RenderUnit, { kind: "toolCall" }>;
@@ -119,6 +120,12 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
       continue;
     }
     if (record.role === "undo") continue;
+    // 意图召回卡（实验功能）：自成一张过程卡（阶段条 / 入选数），不是消息，
+    // 也不参与折叠（它是过程元信息，与 fileTurn 同一批）
+    if (record.role === "intent-recall") {
+      units.push({ kind: "intentRecall", key: record.id, record });
+      continue;
+    }
     if (record.role === "user") {
       // 实时流里的通道消息：重载前 recorder 还没来得及把它落成 channel-mark 记录，
       // 首个 text 块能解出信封就按同一条判定画成标记行、不产 user 单元——
@@ -344,7 +351,8 @@ function isTurnContent(entry: RenderEntry): entry is TurnMemberEntry {
     entry.kind !== "compacted" &&
     entry.kind !== "channelMark" &&
     entry.kind !== "fileTurn" &&
-    entry.kind !== "revertMark"
+    entry.kind !== "revertMark" &&
+    entry.kind !== "intentRecall"
   );
 }
 
@@ -354,6 +362,7 @@ function entryTimestamp(entry: RenderEntry): number | null {
   if (entry.kind === "toolGroup") return entry.calls[0]?.timestamp ?? null;
   if (entry.kind === "fileTurn") return entry.record.timestamp;
   if (entry.kind === "revertMark") return entry.record.timestamp;
+  if (entry.kind === "intentRecall") return entry.record.timestamp;
   return entry.timestamp;
 }
 
@@ -1230,6 +1239,7 @@ export function branchAnchorIds(
       continue;
     }
     if (record.role === "revert" || record.role === "undo") continue;
+    if (record.role === "intent-recall") continue; // 召回卡是过程元信息，不构成边界
     if (record.status === "streaming") {
       candidate = null; // 还没完整——这一轮没有可分支的「最终输出」
       continue;

@@ -43,6 +43,7 @@ import {
   type UsageDayTotal,
 } from "../../shared/usage.ts";
 import { isEmptyErrorAssistant } from "../session/store.ts";
+import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 
 /** 侧栏显示的天数（含今天） */
@@ -254,9 +255,17 @@ function shiftDateKey(key: string, days: number): string {
  * store.ts，落盘侧不收它，这里同样跳过，两侧一个标准）。
  */
 function usageSourceOf(record: SessionRecord): UsageSource | null {
-  if (record.role !== "assistant" || record.usage === undefined) return null;
-  if (isEmptyErrorAssistant(record)) return null;
-  return { id: record.id, timestamp: record.timestamp, usage: record.usage };
+  if (record.role === "assistant") {
+    if (record.usage === undefined) return null;
+    if (isEmptyErrorAssistant(record)) return null;
+    return { id: record.id, timestamp: record.timestamp, usage: record.usage };
+  }
+  // 意图召回的 token（实验功能 intent-system，DeepSeek / Proma 管线）：跟 assistant
+  // 记录同一套去重（记录 id）；回填扫会话 JSONL 时凭这一支重建，不丢账
+  if (record.role === "intent-recall" && record.usage !== undefined) {
+    return { id: record.id, timestamp: record.timestamp, usage: usageCountsOfIntent(record.usage) };
+  }
+  return null;
 }
 
 /** 解析盘上文件；形状不对返回 null（调用方按空账本处理）。坏键 / 坏值逐个跳过，不连带丢整本 */

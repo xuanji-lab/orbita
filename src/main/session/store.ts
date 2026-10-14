@@ -664,6 +664,11 @@ export class SessionStore {
     return this.update(id, { unread });
   }
 
+  /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮开轮现读 */
+  setIntentEnabled(id: string, enabled: boolean): Promise<void> {
+    return this.update(id, { intentEnabled: enabled });
+  }
+
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });

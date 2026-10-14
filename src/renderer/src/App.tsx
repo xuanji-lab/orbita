@@ -7,6 +7,8 @@ import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
+import { effectiveIntentSettings } from "@shared/settings";
+import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -289,6 +291,17 @@ export function App() {
     },
     [session],
   );
+  // 意图面板（实验功能）：仍在转录里的 user item id 集（被回退的问不进轮次）与
+  // 「打开会话」出口（与子会话的 openAsMain 同一条路）
+  const intentLiveTurnIds = useMemo(
+    () =>
+      new Set(
+        session.transcript
+          .filter((record): record is Extract<typeof record, { role: "user" }> => record.role === "user")
+          .map((record) => record.id),
+      ),
+    [session.transcript],
+  );
   /** 子会话头部面包屑「↑ 父标题」：主槽回到父会话（2.2） */
   const openParent = useCallback(
     (parentId: string) => {
@@ -428,6 +441,16 @@ export function App() {
     setDrawerFocus({ tab: id, token: drawerFocusTokenRef.current });
     setRightPanel("drawer");
   };
+  /**
+   * 意图条目的「打开会话」（2026-10-14 用户裁决）：在**辅助对话**（右栏 drawer）里
+   * 打开那条来源会话——主槽不动，右栏从「意图」切过去。存在性在渲染时就判定
+   * （本机会话 id 集传进面板）：不存在的按钮直接禁用并就地说明，不让用户点了才知道。
+   */
+  const intentOpenableIds = useMemo(
+    () => new Set(session.sessions.map((meta) => meta.id)),
+    [session.sessions],
+  );
+
   const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
   const completionNotice =
     noticeMeta === undefined
@@ -505,6 +528,8 @@ export function App() {
   const handlePanel = useCallback((next: RightPanelKind | null) => {
     setRightPanel(next);
   }, []);
+  /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
+  const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
 
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
   // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
@@ -781,6 +806,10 @@ export function App() {
                 onSlashSpace={openTokenPicker}
                 tokenPickResult={tokenPickResult}
                 panelInsert={panelInsert}
+                intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
+                onOpenIntentPanel={openIntentPanel}
+                onOpenSideChat={openInSideChat}
+                intentOpenableIds={intentOpenableIds}
               />
             )}
           </div>
@@ -848,6 +877,20 @@ export function App() {
                     )
                   }
                 />
+              ) : shownPanel === "intent" ? (
+                <IntentPanel
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  turns={session.intentRecalls}
+                  liveRun={session.intentRun}
+                  pendingAsk={
+                    session.intentAsk === null
+                      ? null
+                      : { requestId: session.intentAsk.requestId, ask: session.intentAsk.ask }
+                  }
+                  liveTurnIds={intentLiveTurnIds}
+                  openableSessionIds={intentOpenableIds}
+                  onOpenSession={openInSideChat}
+                />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
                   parentId={channelParentId}
@@ -872,6 +915,7 @@ export function App() {
           panel={rightPanel}
           onPanel={handlePanel}
           railEntries={railEntries}
+          intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }
