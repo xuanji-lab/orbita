@@ -84,7 +84,18 @@ export const ipcChannels = {
    * 消费者是设置 General 页的 Data directory 行。
    */
   settingsDataDir: "settings:data-dir",
-  /** 记忆管理面（设置 › 记忆）：按作用域列条目 / 删一条。scope 语义见 shared/memory.ts */
+  /** 记忆管理面（设置 › 记忆库）：v2 按 token 寻址的一组通道（见 shared/memory.ts） */
+  memoryScopes: "memory:scopes",
+  memoryEntries: "memory:entries",
+  memoryPatch: "memory:patch",
+  memoryRemoveBatch: "memory:remove-batch",
+  memoryMoveGlobal: "memory:move-global",
+  memoryResolve: "memory:resolve",
+  memoryExcerpt: "memory:excerpt",
+  memoryExcerpts: "memory:excerpts",
+  memoryAddManual: "memory:add-manual",
+  memorySessionTurns: "memory:session-turns",
+  /** v1 旧通道（按工作区列 / 删单条）——随记忆库页改版移除 */
   memoryList: "memory:list",
   memoryRemove: "memory:remove",
   /**
@@ -966,12 +977,16 @@ export type AgentEvent =
    * （它在 created 回执之后才写），靠 meta 解析作用域是必输的竞态（真机验收
    * 实测三条会话首轮各刷一条「读不到 meta」）。带上它，首轮也能召回；
    * 缺席时主进程退回 meta 解析（旧调用方兼容）。
+   *
+   * `turn` 是本轮轮号（按用户消息计，1 起）：主进程拿它落注入记录
+   * （MemoryInjectionRecord），审查面板按轮汇总、库里的「用过几次」都从那份账来。
    */
   | {
       type: "memoryRetrieveRequest";
       requestId: string;
       sessionId: string;
       query: string;
+      turn: number;
       scope?: { workspaceId: string | null; cwd: string };
     }
   /**
@@ -979,7 +994,7 @@ export type AgentEvent =
    * 0–N 条 draft 发过来，主进程补 id / sessionId 追加进该会话作用域的 JSONL。
    * 写失败只记日志——记忆是易耗品，不该有报错通路打断对话。
    */
-  | { type: "memoryAppend"; sessionId: string; entries: MemoryDraft[] }
+  | { type: "memoryAppend"; sessionId: string; turn: number; entries: MemoryDraft[] }
   /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
    * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。
