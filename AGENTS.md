@@ -100,6 +100,8 @@ UI 真源是 `design-system/readme.md`，**所有用户可见渲染面无豁免�
 token 规范与实现不一致时以设计系统为准。
 
 - 禁裸 hex / 未定义 CSS 变量；accent 只给主操作（明主题蓝、暗主题黄）。
+- **字号只按角色取档**：`--font-size-xl|lg|base|sm|xs`，全部由 `--ui-font-size` 派生；禁裸 px / 数字字号（`design-tokens.test.ts` 把关）。
+  一张卡至多三档，层级先靠字重与颜色；规矩见设计系统 readme *Type roles*。
 - **行尾血线**：行 / 卡尾部元素右缘钉在行右内边距（`.row-trailing` 推右，悬停动作键不占位）；规矩见设计系统 readme *Implementation rules*，几何由 `scripts/ui-edges.mjs` 把关。
 - **禁 emoji 与 Unicode 字符当图标**——只用 lucide。状态优先用图标与文字，颜色是第二信号。
 - 重视空态、键盘操作、加载态、深浅主题。

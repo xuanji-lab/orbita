@@ -123,7 +123,7 @@ export function ImageLightbox(props: {
               background: "var(--color-bg-panel)",
               color: "var(--color-text-secondary)",
               fontFamily: "var(--font-family-mono)",
-              fontSize: "var(--font-size-caption)",
+              fontSize: "var(--font-size-sm)",
             }}
           >
             {index + 1} / {count}

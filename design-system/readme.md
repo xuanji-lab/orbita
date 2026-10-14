@@ -89,11 +89,11 @@ the English copy; the Chinese copy follows the same voice.
 - **Sentence case everywhere.** "New workspace name", "Remove workspace", "Main workspace". No
   Title Case, no ALL CAPS except acronyms. `ORBITA` appears capitalised only inside prose that names
   the app ("It may have been removed outside ORBITA."); the wordmark itself is lowercase.
-- **Group labels are the one uppercase.** Sidebar node titles, settings section labels, menu group
-  headers, panel group headers and card kickers are written in sentence case in the source and set
-  uppercase by CSS (`text-transform: uppercase`): mono, `--font-size-micro`, `0.06em` tracking,
-  secondary grey (tertiary for card kickers). They name a group; they never stand in for a heading
-  or a button.
+- **Group labels are quiet sentence case.** Sidebar node titles, settings section labels, menu group
+  headers, panel group headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey
+  (tertiary for card kickers), no uppercase, no tracking. They name a group; they never stand in for
+  a heading or a button. (Until 2026-10-14 they were uppercase mono — inherited from the pre-system
+  renderer, never chosen; the mono face is for machine facts, not for titles.)
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
@@ -217,9 +217,10 @@ paper. Its theme id is `copybook`; a stored `"manuscript"` still parses to it (`
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
-(variable, with Source Han Sans SC) runs the whole interface on a tight 11 → 20px scale, with a
-separate 15px/1.68 track for transcript prose and a mono/tabular face for machine facts. Weights:
-450 body, 500 controls, 600 titles, 650 for tool and card names, 700 for the chat header. Manrope's
+(variable, with Source Han Sans SC) runs the whole interface on **one base size and five roles**
+(18 / 16 / **14** / 12 / 11px, see *Type roles* below) — transcript prose sits on the same 14px base
+with a reading leading (1.75) and a hair of tracking — and a mono/tabular face for machine facts.
+Weights: 450 body, 500 controls, 600 titles, 650 for tool and card names, 700 for the chat header. Manrope's
 400 skeleton reads thin without subpixel antialiasing (off since this system doesn't force greyscale
 smoothing), so body sits at 450 — still one step below the 500 controls weight. Model and
 thinking-level labels in the composer bar are set *italic* at secondary grey — the only italic in
@@ -350,6 +351,35 @@ marks persist in the session meta, so the bar survives a restart.
 
 ## Implementation rules
 
+**Type roles: one base, five sizes, pick by role.** Every size derives from `--ui-font-size`
+(14px); changing it is the only way to scale interface type, and everything follows. Components
+pick a **role**, never a pixel value — bare `px` / `rem` / numeric `font-size` in
+`src/renderer/src` fails `design-tokens.test.ts`. Steps are 2px apart on purpose: a 1px difference
+reads as misalignment, not hierarchy. Separate levels with **weight and colour first**, size last.
+
+| Token | Formula | Default | Roles |
+| --- | --- | ---: | --- |
+| `--font-size-xl` | base + 4 | 18px | Markdown h1, page / conversation titles |
+| `--font-size-lg` | base + 2 | 16px | Markdown h2, settings and panel titles |
+| `--font-size-base` | base | 14px | Body, transcript, composer, buttons, menus, list rows, card titles, Markdown h3–h6 |
+| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments), group labels (semibold) |
+| `--font-size-xs` | base − 3 | 11px | Badges, counters, very weak metadata |
+
+- **A card uses at most three sizes**: title `base` + semibold, body `base` or `sm`, metadata `xs`.
+  Four sizes in one card is the "type out of control" smell this rule exists to kill.
+- **Markdown**: h1 `xl`, h2 `lg`, h3–h6 `base` distinguished by weight (h1–h4 600, h5 500, h6 450 +
+  secondary colour). Prose leading `--line-height-reading` (1.75), tracking `--tracking-reading`.
+- **Leading** has three values, all unitless: `--line-height-tight` 1.4 (headings), `-ui` 1.5
+  (interface text), `-reading` 1.75 (prose, user bubble). Code, diff, tool output and the terminal are
+  content, not interface: they keep their own values, but as declared tokens (`--line-height-code`,
+  `-code-block`, `--font-size-terminal`, `--line-height-terminal`), never literals. Bare `px` or
+  invented unitless leadings fail `design-tokens.test.ts`; only `0` / `1` (icon alignment) are free.
+- **Exceptions are tokens, not literals**: brand type (`--font-size-slogan`, `-slogan-mark`,
+  `-wordmark`) does not follow the base; em-relative sizes inside Markdown (inline code, citations)
+  follow their parent and are allowed.
+- Learned from ZCode's `text-ui-*` scale (2026-10); our `xs` is base − 3, not − 4 — 10px CJK is
+  below comfortable reading.
+
 **Trailing edges sit on the row's right hem.** A row / card / list item's trailing
 element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
 padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push
@@ -426,7 +456,7 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
 | --- | --- |
 | `styles.css` | The single entry point consumers link. `@import` lines only. |
 | `tokens/colors.css` | Surfaces, text, borders, accent, mode selection, status, chat surfaces + the dark and black themes. |
-| `tokens/typography.css` | Families, the 11→20px UI scale, line heights, weights, tracking. |
+| `tokens/typography.css` | Families, the base + five-role type scale, three leadings, weights, tracking. |
 | `tokens/fonts.css` | `@font-face` for Literata, Manrope, Source Han Serif/Sans SC. |
 | `tokens/spacing.css` | Space scale, radii, control and row heights, layout widths. |
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
@@ -501,7 +531,7 @@ source does not define them.
 - **新会话一律先进首页**：全局/工作区内/图标条/新建菜单的「会话、单 agent」入口都先呈现三卡首页（不立即创建 agent），**首条消息提交才 createAgent + prompt**；编排入口除外（保持原子创建）。
 - **输入框宽度连续性**：首页中卡宽度 = 聊天页内容区宽度（`settings.contentMaxWidth`，默认 1000px）——首页与聊天页的差别只有 slogan/会话卡消失 + 输入框滑落。
 - **首发过渡动画**（R5-05 白名单项）：首条消息发出时 slogan 与会话卡向上淡出、composer 卡向下滑向窗口底部（~240ms），随后聊天页 composer 落位。
-- **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-logo`（36px）品牌级字号。
+- **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-slogan`（36px；打字稿主题 30px）品牌级字号。
 - **模式选中色**（修正 R4-03 的"绿底"）：明主题蓝、暗主题黄——`--color-mode-active-bg` / `--color-mode-active-fg`，用于模式按钮与图标条当前项。
 
 ### 生效规范（摘要）

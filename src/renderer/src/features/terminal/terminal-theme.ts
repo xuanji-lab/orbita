@@ -59,6 +59,24 @@ export function readTerminalTheme(): ITheme {
 }
 
 /**
+ * 终端的字号 / 行高也从 token 来（`--font-size-terminal` / `--line-height-terminal`，
+ * typography.css 的「内容例外」）：xterm 只吃数字，这里把 CSS 值解成数。
+ * 解不出来（token 缺失 / 不是正数）就回落到 token 的声明值，终端不至于画成 0 号字。
+ */
+export function parseTerminalMetric(raw: string, fallback: number): number {
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function readTerminalMetrics(): { fontSize: number; lineHeight: number } {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    fontSize: parseTerminalMetric(style.getPropertyValue("--font-size-terminal"), 13),
+    lineHeight: parseTerminalMetric(style.getPropertyValue("--line-height-terminal"), 1.25),
+  };
+}
+
+/**
  * Windows 上 xterm.js 必须知道 ConPTY 的 build 才能选对 resize/回绕路径。固定成
  * 最早完整支持 ConPTY 的 build 19041，让所有 Windows 版本都走保守兼容路径——
  * 避免 xterm.js 与 ConPTY 对输入行/历史缓冲重复重排（光标上跳的老毛病，调研 1.4 节）。
