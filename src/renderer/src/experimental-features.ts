@@ -273,8 +273,8 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     icon: "brain-circuit",
     name: { zh: "会话记忆", en: "Session memory" },
     summary: {
-      zh: "每轮开轮前按工作区召回旧记忆注入提示词，轮后把值得长期记住的事实蒸馏落盘；关着时既不召回也不蒸馏，已落的条目不丢。",
-      en: "Before each turn, memories from this workspace are recalled into the prompt; after it, durable facts are distilled to disk. When off, neither happens, and what\u2019s already stored stays.",
+      zh: "每轮开轮前按工作区召回旧记忆注入提示词；轮后把值得长期记住的事实蒸馏落盘——蒸馏用设置里的家务活模型，且只蒸正常结束的轮（打断 / 报错不蒸）。关着时既不召回也不蒸馏，已落的条目不丢。",
+      en: "Before each turn, memories from this workspace are recalled into the prompt; after it, durable facts are distilled to disk — distillation runs on the chore model and only for turns that finished normally (aborted or failed turns are skipped). When off, neither happens, and what\u2019s already stored stays.",
     },
     changelog: [
       {
