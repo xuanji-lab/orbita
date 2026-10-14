@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { INTENT_SLOTS, parseIntentEdges } from "./intent-edges.ts";
+import { INTENT_SLOTS, findAskEdge, intentSlotNumber, parseIntentEdges, type IntentEdges } from "./intent-edges.ts";
 
 const EDGE = {
   qaId: "q1",
@@ -103,4 +103,35 @@ test("六个岗位的 id 与名字（图与卡片的岗名真源）", () => {
   );
   assert.equal(INTENT_SLOTS[0]?.name, "同一件事");
   assert.equal(INTENT_SLOTS[5]?.name, "时序与修订");
+});
+
+/** 一张合法的小图：两条边同 qaId 不同岗，供 join 测试用。 */
+const GRAPH: IntentEdges = {
+  sessionId: "s",
+  turnId: "t",
+  runId: "r",
+  thresholds: { pass: [0.7], high: [0.9] },
+  edges: [
+    { ...EDGE, qaId: "q1", slot: 2, band: "mid", asked: true, statement: "陈述", score: 0.75 },
+    { ...EDGE, qaId: "q1", slot: 3, band: "high", asked: false, score: 0.95 },
+    { ...EDGE, qaId: "q2", slot: 2, band: "mid", asked: false, score: 0.71 },
+  ],
+  links: [],
+};
+
+test("intentSlotNumber：岗名 → 岗号；认不出为 null", () => {
+  assert.equal(intentSlotNumber("同一目的"), 2);
+  assert.equal(intentSlotNumber("时序与修订"), 6);
+  assert.equal(intentSlotNumber("不存在"), null);
+});
+
+test("findAskEdge：按 qaId + 岗名 join；找不到为 null（卡片只显示 ask 自带的）", () => {
+  const hit = findAskEdge(GRAPH, { qaId: "q1", slot: "同一目的" });
+  assert.equal(hit?.score, 0.75);
+  assert.equal(hit?.statement, "陈述");
+  // 岗名对不上号 / qaId 不在图里 → null，不崩
+  assert.equal(findAskEdge(GRAPH, { qaId: "q1", slot: "别的叫法" }), null);
+  assert.equal(findAskEdge(GRAPH, { qaId: "q9", slot: "同一目的" }), null);
+  // 同 qaId 多岗不串：岗 3 那条是另一条
+  assert.equal(findAskEdge(GRAPH, { qaId: "q1", slot: "同构机制" })?.score, 0.95);
 });

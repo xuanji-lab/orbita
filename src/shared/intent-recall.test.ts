@@ -16,6 +16,7 @@ import {
   type RecallStageCell,
   parseIntentRecallEvent,
   pendingBackfillFromRecords,
+  recallRunView,
   ingestAnswerText,
   type IntentRecallStreamEvent,
   type SilenceScheduler,
@@ -579,4 +580,97 @@ test("s4 progress：解析接受 stage s4（无 step），keeper 格显示写字
   assert.equal(keeper.status, "done");
   assert.deepEqual(keeper.numbers, { selected: 1 }, "完成后照旧「选 N 条」");
   assert.equal(keeper.ms, 420000);
+});
+
+/* ---------- 运行卡（四胶囊版）的相位派生：recallRunView ---------- */
+test("运行卡相位：开局门卫 → 理解 → 打分 → 写理由 → 摘句，环刻度跟着走", () => {
+  let card = initialRecallCard("t1", 1);
+  let view = recallRunView(card);
+  assert.equal(view.current, "gate");
+  assert.equal(view.pills.understand, "pending");
+  assert.equal(view.fraction, 0.04);
+  assert.deepEqual(view.detail, { kind: "gate" });
+
+  card = applyRecallEvent(card, { type: "gate", needIntent: true, why: "需要", forced: false });
+  card = applyRecallEvent(card, { type: "stage", stage: "s1", status: "start", round: 1 });
+  view = recallRunView(card);
+  assert.equal(view.current, "understand");
+  assert.equal(view.pills.understand, "running");
+  assert.equal(view.fraction, 0.12);
+
+  card = applyRecallEvent(card, { type: "stage", stage: "s1", status: "done", round: 1, ms: 900 });
+  card = applyRecallEvent(card, { type: "stage", stage: "s3", status: "start", round: 1 });
+  card = applyRecallEvent(card, { type: "progress", stage: "s3", round: 1, step: 1, done: 1000, total: 4000, passed: 12, etaMs: null });
+  view = recallRunView(card);
+  assert.equal(view.current, "score");
+  assert.equal(view.pills.understand, "done");
+  assert.equal(view.pills.score, "running");
+  assert.equal(view.pills.reasons, "pending");
+  assert.equal(view.fraction, 0.16 + 0.48 * 0.25);
+  assert.deepEqual(view.detail, { kind: "score", done: 1000, total: 4000, passed: 12 });
+
+  card = applyRecallEvent(card, { type: "progress", stage: "s3", round: 1, step: 1, done: 4000, total: 4000, passed: 62, etaMs: null });
+  card = applyRecallEvent(card, { type: "progress", stage: "s3", round: 1, step: 2, done: 30, total: 62, passed: 30, etaMs: null });
+  view = recallRunView(card);
+  assert.equal(view.current, "reasons");
+  assert.equal(view.pills.score, "done");
+  assert.equal(view.pills.reasons, "running");
+  assert.equal(view.fraction, 0.64 + 0.16 * (30 / 62));
+  assert.deepEqual(view.detail, { kind: "reasons", done: 30, total: 62 });
+
+  card = applyRecallEvent(card, { type: "stage", stage: "s3", status: "done", round: 1, ms: 30000 });
+  card = applyRecallEvent(card, { type: "stage", stage: "s4", status: "start", round: 1 });
+  card = applyRecallEvent(card, { type: "progress", stage: "s4", round: 1, step: 1, done: 3, total: 90, passed: 1450, etaMs: null });
+  view = recallRunView(card);
+  assert.equal(view.current, "keeper");
+  assert.equal(view.pills.confirm, "pending");
+  assert.deepEqual(view.detail, { kind: "keeper", done: 3, chars: 1450 });
+});
+
+test("运行卡相位：等确认——环停 86%，确认胶囊在转，细节报条数", () => {
+  let card = initialRecallCard("t1", 1);
+  card = applyRecallEvent(card, { type: "gate", needIntent: true, why: "需要", forced: false });
+  card = applyRecallEvent(card, {
+    type: "review",
+    askRemaining: 0,
+    summary: "",
+    selected: [],
+    ask: [
+      { askId: "a1", qaId: "q1", slot: "同一目的", statement: "s", quote: "", when: "w", title: "t", whyUncertain: "u" },
+      { askId: "a2", qaId: "q2", slot: "同一目的", statement: "s", quote: "", when: "w", title: "t", whyUncertain: "u" },
+    ],
+    retried: false,
+    missing: "",
+  });
+  card = applyRecallEvent(card, {
+    type: "done",
+    runId: "r1",
+    injection: "",
+    needsFeedback: true,
+    timing: { totalMs: 58000, gateMs: 100, s1Ms: 900, s3Ms: 30000, s4Ms: 20000 },
+  });
+  const view = recallRunView(card);
+  assert.equal(view.awaitingConfirm, true);
+  assert.equal(view.current, null);
+  assert.equal(view.fraction, 0.86);
+  assert.equal(view.pills.confirm, "running");
+  assert.deepEqual(view.detail, { kind: "confirm", asked: 2 });
+});
+
+test("运行卡相位：不用问的轮——确认胶囊直接勾，细节是收尾间隙", () => {
+  let card = initialRecallCard("t1", 1);
+  card = applyRecallEvent(card, { type: "gate", needIntent: true, why: "需要", forced: false });
+  card = applyRecallEvent(card, { type: "review", askRemaining: 0, summary: "", selected: [], ask: [], retried: false, missing: "" });
+  let view = recallRunView(card);
+  assert.equal(view.pills.confirm, "done");
+  card = applyRecallEvent(card, {
+    type: "done",
+    runId: "r1",
+    injection: "块",
+    needsFeedback: false,
+    timing: { totalMs: 10000, gateMs: 100, s1Ms: 900, s3Ms: 5000, s4Ms: 3000 },
+  });
+  view = recallRunView(card);
+  assert.equal(view.awaitingConfirm, false);
+  assert.equal(view.pills.confirm, "done");
 });

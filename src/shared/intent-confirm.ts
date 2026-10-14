@@ -16,6 +16,13 @@ export interface IntentConfirmAnswer {
   verdict: "yes" | "no" | "skip";
   /** 改字 = 矫正：与原陈述不同的说法。可与任何 verdict 并存（契约原文）。 */
   edited?: string;
+  /**
+   * 改字时带上用户写的那段话（2026-10-14 裁决：改掉的大字陈述就是用户的表态，
+   * statement 与 edited 同文）。intent-lab 的 FeedbackAnswer 今天只认
+   * askId / verdict / edited（多余字段被它的解析剥掉），这个字段先随决策对象
+   * 走——服务端哪天想以用户措辞覆盖它存的「问时的陈述句」，不用再改客户端。
+   */
+  statement?: string;
 }
 
 /** 确认卡的未提交草稿（第五轮 2c）：表态、改字与补充背景——刷新 / 切会话不丢。 */
@@ -51,29 +58,42 @@ export function initialConfirmRows(ask: readonly IntentAskView[]): ConfirmRowSta
 /**
  * 三态切换：点「对 / 不对」选中它；**点已选中的那个回到不表态**（示意图交互：
  * 再点一下取消选择）。只动目标行，其余引用不变。
+ *
+ * 与改字的不变量（2026-10-14：改字 = 表态，同「对」）：离开「对」时把改字一起
+ * 撤掉——点「不对」或取消「对」，这条回到原始陈述（edited 清空）。改过的字与
+ * 「不对 / 不表态」自相矛盾，以最后一次表态为准。
  */
 export function toggleConfirmVerdict(
   rows: readonly ConfirmRowState[],
   askId: string,
   next: "yes" | "no",
 ): ConfirmRowState[] {
-  return rows.map((row) =>
-    row.askId === askId ? { ...row, verdict: row.verdict === next ? "skip" : next } : row,
-  );
+  return rows.map((row) => {
+    if (row.askId !== askId) return row;
+    if (next === "no") return { ...row, verdict: row.verdict === "no" ? "skip" : "no", edited: null };
+    // 点「对」：选中它（改字保留）；再点已选中的「对」：回到不表态，改字一并撤
+    return row.verdict === "yes" ? { ...row, verdict: "skip", edited: null } : { ...row, verdict: "yes" };
+  });
 }
 
-/** 行内改字（矫正）：记录当前编辑文本；是否真的算「改过」在组装 answers 时判。 */
+/**
+ * 行内改字（矫正）：记录当前编辑文本；是否真的算「改过」在组装 answers 时判。
+ * 改字本身就是表态（2026-10-14 用户裁决：用户改完的那句话就是他确认的说法）——
+ * 只要动了字，这一行按「对」计。
+ */
 export function editConfirmRow(
   rows: readonly ConfirmRowState[],
   askId: string,
   text: string,
 ): ConfirmRowState[] {
-  return rows.map((row) => (row.askId === askId ? { ...row, edited: text } : row));
+  return rows.map((row) => (row.askId === askId ? { ...row, edited: text, verdict: "yes" } : row));
 }
 
 /**
  * 「确认并回答」的 answers：选了对 → yes，不对 → no，没选 → skip；
- * 改过字的（trim 后与原陈述不同）带 edited——写回 intent-lab 的就是用户说法。
+ * 改过字的（trim 后与原陈述不同、且不是空串）强制按「对」计，并把用户的说法
+ * 同时填进 statement 与 edited——写回 intent-lab 的「理由」就是用户说法
+ * （服务端注入块连接句取 edited ?? statement）。
  */
 export function buildConfirmAnswers(
   rows: readonly ConfirmRowState[],
@@ -82,14 +102,30 @@ export function buildConfirmAnswers(
   return rows.map((row) => {
     const source = ask.find((item) => item.askId === row.askId);
     const original = source?.statement ?? "";
-    const edited = row.edited !== null && row.edited.trim() !== original.trim() ? row.edited.trim() : undefined;
-    return { askId: row.askId, verdict: row.verdict, ...(edited === undefined ? {} : { edited }) };
+    const edited =
+      row.edited !== null && row.edited.trim() !== "" && row.edited.trim() !== original.trim()
+        ? row.edited.trim()
+        : undefined;
+    return {
+      askId: row.askId,
+      verdict: edited !== undefined ? "yes" : row.verdict,
+      ...(edited === undefined ? {} : { edited, statement: edited }),
+    };
   });
 }
 
 /** 「不确认，直接回答」的 answers：全 skip（note 仍由调用方带上）。 */
 export function buildSkipAllAnswers(ask: readonly IntentAskView[]): IntentConfirmAnswer[] {
   return ask.map((item) => ({ askId: item.askId, verdict: "skip" as const }));
+}
+
+/**
+ * 确认卡大字陈述的显示文本（2026-10-14 逐条版）：卡上只留「如果对，这次回答会」
+ * 这一句——用 S3 写的 prediction，剥掉开头的「回答会」（标签里已有这四个字）。
+ * join 不到边（/edges 拉失败）时调用方退回 ask.statement，不走这里。
+ */
+export function predictionStatement(prediction: string): string {
+  return prediction.replace(/^\s*回答会[，,：:]?\s*/, "");
 }
 
 

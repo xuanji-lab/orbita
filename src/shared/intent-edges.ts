@@ -19,6 +19,32 @@ export const INTENT_SLOTS: readonly { id: number; name: string }[] = [
   { id: 6, name: "时序与修订" },
 ];
 
+/** 岗名 → 岗号：确认卡的 ask.slot 是名（界面语言），/edges 的边是号。认不出返回 null。 */
+export function intentSlotNumber(name: string): number | null {
+  return INTENT_SLOTS.find((slot) => slot.name === name)?.id ?? null;
+}
+
+/**
+ * 确认卡的一条 ask → 本问 /edges 里对应的那条边（qaId + 岗号对账）。
+ * 同一 (qaId, 岗) 理论上只有一条边；万一多条，取「被问过」的、分数最高的。
+ * 找不到返回 null——卡片只显示 ask 自带的字段，不崩。
+ */
+export function findAskEdge(
+  edges: IntentEdges,
+  ask: { qaId: string; slot: string },
+): IntentEdge | null {
+  const slot = intentSlotNumber(ask.slot);
+  if (slot === null) return null;
+  let best: IntentEdge | null = null;
+  for (const edge of edges.edges) {
+    if (edge.qaId !== ask.qaId || edge.slot !== slot) continue;
+    if (best === null || (edge.asked && !best.asked) || (edge.asked === best.asked && edge.score > best.score)) {
+      best = edge;
+    }
+  }
+  return best;
+}
+
 /** 一条 (QA, 岗) 边：一份历史 QA 在一个岗位上的相关度判定。 */
 export interface IntentEdge {
   qaId: string;

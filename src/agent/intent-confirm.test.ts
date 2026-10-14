@@ -14,6 +14,7 @@ import {
   buildSkipAllAnswers,
   editConfirmRow,
   initialConfirmRows,
+  predictionStatement,
   toggleConfirmVerdict,
   type IntentConfirmDecision,
 } from "../shared/intent-confirm.ts";
@@ -25,6 +26,15 @@ const ASK: IntentAskView[] = [
   { askId: "a1", qaId: "q1", slot: "岗一", statement: "陈述一", quote: "摘句一", when: "09-25 10:00", title: "会话一", whyUncertain: "理由" },
   { askId: "a2", qaId: "q2", slot: "岗二", statement: "陈述二", quote: "", when: "09-25 11:00", title: "会话二", whyUncertain: "理由" },
 ];
+
+test("predictionStatement：剥掉开头的「回答会」（标签里已有这四个字），其余原样", () => {
+  assert.equal(predictionStatement("回答会把骨架先对齐素材再落笔。"), "把骨架先对齐素材再落笔。");
+  assert.equal(predictionStatement("回答会，先对齐"), "先对齐");
+  assert.equal(predictionStatement("  回答会：先对齐"), "先对齐");
+  assert.equal(predictionStatement("直接调用已有笔记"), "直接调用已有笔记");
+  // 句中的「回答会」不动
+  assert.equal(predictionStatement("先落笔，回答会引用旧讨论"), "先落笔，回答会引用旧讨论");
+});
 
 test("等待器：请示发出、应答按 requestId 结掉", async () => {
   const sent: AgentEvent[] = [];
@@ -158,18 +168,37 @@ test("行状态机：默认全不表态；点选中、再点同一个回到不�
   assert.equal(rows[0]?.verdict, "yes");
 });
 
-test("行状态机：改字与原文相同（trim）不带 edited；不同则带", () => {
+test("行状态机：改字与原文相同（trim）不带 edited；不同则带，且改字 = 表态（同「对」）", () => {
   let rows = initialConfirmRows(ASK);
-  rows = editConfirmRow(rows, "a1", "陈述一 "); // 只是空白差异 → 不算改过
+  rows = editConfirmRow(rows, "a1", "陈述一 "); // 只是空白差异 → 不算改过，但动过字按「对」计
   rows = editConfirmRow(rows, "a2", "矫正后的说法");
   const answers = buildConfirmAnswers(rows, ASK);
   assert.equal(answers[0]?.edited, undefined);
+  assert.equal(answers[0]?.verdict, "yes");
   assert.equal(answers[1]?.edited, "矫正后的说法");
-  // verdict 与 edited 并存
+  // 改字 = 表态：verdict 强制「对」，statement 与 edited 同文（2026-10-14 裁决）
+  assert.equal(answers[1]?.verdict, "yes");
+  assert.equal(answers[1]?.statement, "矫正后的说法");
+  // 点「不对」撤掉改字（改过的字与「不对」自相矛盾，以最后一次表态为准）
   rows = toggleConfirmVerdict(rows, "a2", "no");
   const answers2 = buildConfirmAnswers(rows, ASK);
   assert.equal(answers2[1]?.verdict, "no");
-  assert.equal(answers2[1]?.edited, "矫正后的说法");
+  assert.equal(answers2[1]?.edited, undefined);
+  assert.equal(answers2[1]?.statement, undefined);
+});
+
+test("行状态机：改字后取消「对」连改字一起撤（回到原始陈述）", () => {
+  let rows = initialConfirmRows(ASK);
+  rows = editConfirmRow(rows, "a1", "矫正后的说法");
+  assert.equal(rows[0]?.verdict, "yes");
+  rows = toggleConfirmVerdict(rows, "a1", "yes"); // 再点已选中的「对」→ 不表态 + 清改字
+  assert.equal(rows[0]?.verdict, "skip");
+  assert.equal(rows[0]?.edited, null);
+  // 空串改字不算改过（清空陈述没有意义）：不带 edited，但动过字仍按「对」计
+  rows = editConfirmRow(rows, "a1", "   ");
+  const answers = buildConfirmAnswers(rows, ASK);
+  assert.equal(answers[0]?.edited, undefined);
+  assert.equal(answers[0]?.verdict, "yes");
 });
 
 test("两个按钮的 answers：确认按钮按行态生成；不确认按钮全 skip", () => {

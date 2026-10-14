@@ -880,6 +880,118 @@ export function deriveRecallStages(input: RecallStagesInput): RecallStageCell[] 
   return cells;
 }
 
+/* ================================================================ 运行卡（四胶囊版）的纯派生 */
+/**
+ * 运行卡的显示态（2026-10-14 重写：进度环 + 四胶囊「理解 / 打分 / 写理由 / 确认」
+ * + 一行当前步细节）。11 格阶段条还在——终态卡展开后的明细用它；运行中是给人
+ * 「到哪一步了」的一眼答案，不铺全部格子。
+ */
+export type RecallPillKey = "understand" | "score" | "reasons" | "confirm";
+
+/** 细节行的载荷（文案在渲染层按 kind 组，数字在这里算好）。 */
+export type RecallRunDetail =
+  | { kind: "gate" }
+  | { kind: "understand" }
+  | { kind: "score"; done: number; total: number; passed: number }
+  | { kind: "reasons"; done: number; total: number }
+  | { kind: "keeper"; done: number; chars: number }
+  /** 等确认：有几条拿不准 */
+  | { kind: "confirm"; asked: number }
+  /** S4 完了、review/done 还没到的间隙 */
+  | { kind: "settling" };
+
+export interface RecallRunView {
+  /** 四胶囊各自的状态 */
+  pills: Record<RecallPillKey, RecallStageStatus>;
+  /** 当前在走的相位；null = 等确认或收尾间隙（没有胶囊在转） */
+  current: RecallPillKey | "gate" | "keeper" | null;
+  /**
+   * 进度环 0–1。**相位刻度不是真实百分比**：每步一个固定区间，步内按 progress
+   * 的 done/total 走；等确认停在 0.86（表不随秒针走——看起来会像要求用户在期限
+   * 内表态）。
+   */
+  fraction: number;
+  detail: RecallRunDetail;
+  /** 等确认：recall 已 done、确认卡浮着等表态（环停、确认胶囊换气泡图标） */
+  awaitingConfirm: boolean;
+}
+
+const ratio = (done: number, total: number): number => (total > 0 ? Math.min(1, Math.max(0, done / total)) : 0);
+
+/** 卡片状态 → 运行卡显示态。纯函数，单测直接盖事件序列。 */
+export function recallRunView(card: RecallCardState): RecallRunView {
+  const b1 = card.s3Steps.step1;
+  const b2 = card.s3Steps.step2;
+  const s3Done = card.steps.s3 === "done";
+  const awaiting = card.status === "done" && card.pendingAsks > 0;
+  const pills: Record<RecallPillKey, RecallStageStatus> = {
+    // 门卫是理解的前奏：门卫还没回来，「理解」也不转（细节行说门卫在判断）
+    understand: card.gate === null ? "pending" : card.steps.s1 === "done" ? "done" : "running",
+    score:
+      b1 === null
+        ? s3Done
+          ? "done"
+          : "pending"
+        : s3Done || b2 !== null || b1.done >= b1.total
+          ? "done"
+          : "running",
+    reasons:
+      b2 === null
+        ? s3Done
+          ? "done"
+          : "pending"
+        : s3Done || b2.done >= b2.total
+          ? "done"
+          : "running",
+    // 确认胶囊只在「真在等你」时转（等确认态）；review 到了但不用问 = 直接勾
+    confirm:
+      card.review === null
+        ? "pending"
+        : card.review.ask.length === 0
+          ? "done"
+          : awaiting
+            ? "running"
+            : card.status === "done"
+              ? "done"
+              : "pending",
+  };
+  let current: RecallRunView["current"] = null;
+  if (card.status === "running") {
+    if (card.gate === null) current = "gate";
+    else if (card.steps.s1 !== "done") current = "understand";
+    else if (!s3Done) current = b2 !== null ? "reasons" : "score";
+    else if (card.steps.s4 !== "done") current = "keeper";
+  }
+  const fraction =
+    awaiting || card.status === "done"
+      ? 0.86
+      : current === "gate"
+        ? 0.04
+        : current === "understand"
+          ? 0.12
+          : current === "score"
+            ? 0.16 + 0.48 * ratio(b1?.done ?? 0, b1?.total ?? 0)
+            : current === "reasons"
+              ? 0.64 + 0.16 * ratio(b2?.done ?? 0, b2?.total ?? 0)
+              : current === "keeper"
+                ? 0.8 + 0.05 * ratio(card.s4Progress?.done ?? 0, card.s4Progress?.total ?? 0)
+                : 0.84;
+  const detail: RecallRunDetail = awaiting
+    ? { kind: "confirm", asked: card.pendingAsks }
+    : current === "gate"
+      ? { kind: "gate" }
+      : current === "understand"
+        ? { kind: "understand" }
+        : current === "score"
+          ? { kind: "score", done: b1?.done ?? 0, total: b1?.total ?? card.accepted?.qaTotal ?? 0, passed: b1?.passed ?? 0 }
+          : current === "reasons"
+            ? { kind: "reasons", done: b2?.done ?? 0, total: b2?.total ?? 0 }
+            : current === "keeper"
+              ? { kind: "keeper", done: card.s4Progress?.done ?? 0, chars: card.s4Progress?.chars ?? 0 }
+              : { kind: "settling" };
+  return { pills, current, fraction, detail, awaitingConfirm: awaiting };
+}
+
 /**
  * 流事件 → 卡片状态。**纯归约**（renderer 的 reducer 与测试共用）；
  * heartbeat 不改状态（它只保活 60 秒静默判定，那在 runtime 侧）。
