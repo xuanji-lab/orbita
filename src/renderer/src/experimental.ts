@@ -7,7 +7,9 @@ import type { ExperimentalFeatureId } from "@shared/settings";
  * - `paper-themes`：主题选择卡的纸面两档（copybook / typescript）；
  * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
  * - `composer-blackhole` / `composer-tetris`：输入框材料盒的两种互斥形态
- *   （App 里用 materialBoxStyle 合成 MaterialBoxContext，不走这个 hook）。
+ *   （App 里用 materialBoxStyle 合成 MaterialBoxContext，不走这个 hook）；
+ * - `session-memory`：设置 › 记忆页的入口（Sidebar 与 SettingsView 两处同源）；
+ *   召回 / 蒸馏的门在 agent 进程侧（开轮命令的 sessionMemory 字段），不走这个 hook。
  * 只藏入口不动数据，开了原样回来（语义的契约面在 shared/settings.ts）。
  *
  * 走 Context 而不是层层 props：消费面散在 Sidebar / ChatView / SettingsView，

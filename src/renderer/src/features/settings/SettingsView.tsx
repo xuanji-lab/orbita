@@ -27,6 +27,7 @@ import { MigrationView } from "./MigrationView";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
+import { useExperimentalFeature } from "../../experimental.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
@@ -81,6 +82,9 @@ export function SettingsView(props: {
   onTab: (tab: SettingsTab) => void;
 }) {
   const t = useT();
+  // 会话记忆开关：关着时不渲染记忆页内容（导航侧的门在 Sidebar，两处同源）——
+  // tab id 被直接指到 memory 时静默落到后面的分支，不白屏
+  const memoryOn = useExperimentalFeature("session-memory");
   const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
   /**
    * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
@@ -151,7 +155,7 @@ export function SettingsView(props: {
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
         </div>
-      ) : props.tab === "memory" ? (
+      ) : props.tab === "memory" && memoryOn ? (
         // 记忆管理面：按工作区列蒸馏条目、删一条（信任边界，用户要能审查）
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <MemorySettings />
