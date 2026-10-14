@@ -18,11 +18,9 @@ import type {
   MemoryEntriesResponse,
   MemoryExcerptResponse,
   MemoryExcerptsResponse,
-  MemoryListResponse,
   MemoryMoveGlobalResponse,
   MemoryPatchResponse,
   MemoryRemoveBatchResponse,
-  MemoryRemoveResponse,
   MemoryResolveResponse,
   MemoryScopesResponse,
   MemorySessionTurnsResponse,
@@ -137,21 +135,6 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
     return { items: await listExcerpts(memory, sessions, req.sessionId) };
   });
 
-  /* ── v1 旧通道（按工作区列 / 删单条）——随记忆库页改版移除 ── */
-
-  /** 这个作用域的全部条目，落盘顺序（旧在前）。空库 = 空数组，不是错误。 */
-  ipcMain.handle(ipcChannels.memoryList, async (_event, raw: unknown): Promise<MemoryListResponse> => ({
-    entries: await memory.list(memory.tokenOf(memoryScopeOf(parseMemoryScopeRef(raw)))),
-  }));
-
-  /**
-   * 删一条。removed=false = 这个 id 不在（含文件不存在 / 空 id），**幂等不抛错**——
-   * 用户连点两下删除，第二次安静地什么也不发生（store.remove 的语义）。
-   */
-  ipcMain.handle(ipcChannels.memoryRemove, async (_event, raw: unknown): Promise<MemoryRemoveResponse> => {
-    const req = parseMemoryRemoveRequest(raw);
-    return { removed: await memory.remove(memory.tokenOf(memoryScopeOf(req)), req.entryId) };
-  });
 }
 
 /** memory:entries 的入参：只要一个 token。 */
@@ -171,33 +154,4 @@ function asSessionRequest(raw: unknown): { sessionId: string } {
 function asRequestObject(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null) throw new Error("memory request must be an object");
   return raw as Record<string, unknown>;
-}
-
-/* ── v1 旧入参校验（memory:list / memory:remove）——随记忆库页改版移除 ── */
-
-type RequestRecord = { workspaceId?: unknown; cwd?: unknown; entryId?: unknown };
-
-/**
- * 校验 renderer 传上来的作用域引用。**不信任地验**（files/ipc.ts 的同一条纪律）：
- * `MemoryScopeRef` 只是编译期的约定，IPC 那头是什么都可能——cwd 不是字符串、
- * workspaceId 是个数字，都会让 scopeId 变成一个莫名其妙的哈希键，进而在
- * userData 里凭空多出一个谁也看不懂的 memory 文件。当场抛，让 renderer 走统一的
- * catch（whitelistedPath 的同款处理）。
- */
-function parseMemoryScopeRef(raw: unknown): { workspaceId: string | null; cwd: string } {
-  const req = asRequestObject(raw) as RequestRecord;
-  if (typeof req.cwd !== "string") throw new Error("memory request needs a string cwd");
-  // 缺席（undefined）按「没有工作区」收：null 与不传在这个面上是同一件事，
-  // renderer 写 `?? null` 还是直接透传都不该让面板白屏
-  const workspaceId = req.workspaceId ?? null;
-  if (workspaceId !== null && typeof workspaceId !== "string") {
-    throw new Error("memory request workspaceId must be a string or null");
-  }
-  return { workspaceId, cwd: req.cwd };
-}
-
-function parseMemoryRemoveRequest(raw: unknown): { workspaceId: string | null; cwd: string; entryId: string } {
-  const req = asRequestObject(raw) as RequestRecord;
-  if (typeof req.entryId !== "string") throw new Error("memory request needs a string entryId");
-  return { ...parseMemoryScopeRef(req), entryId: req.entryId };
 }

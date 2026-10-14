@@ -266,26 +266,3 @@ export interface MemoryExcerptItem {
 
 export type MemoryExcerptsRequest = { sessionId: string };
 export type MemoryExcerptsResponse = { items: MemoryExcerptItem[] };
-
-/* ---------- v1 管理面（memory:list / memory:remove）——随记忆库页改版移除 ---------- */
-
-/**
- * 作用域引用（v1）：语义与 agent 侧一致（`workspaceId ?? cwd`）。v2 管理面改按
- * token 寻址（MemoryScopeToken）；这两条只服务还没改版的旧记忆页，随该 commit 移除。
- */
-export interface MemoryScopeRef {
-  workspaceId: string | null;
-  cwd: string;
-}
-
-export type MemoryListRequest = MemoryScopeRef;
-export interface MemoryListResponse {
-  entries: MemoryEntry[];
-}
-
-export interface MemoryRemoveRequest extends MemoryScopeRef {
-  entryId: string;
-}
-export interface MemoryRemoveResponse {
-  removed: boolean;
-}

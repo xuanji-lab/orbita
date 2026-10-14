@@ -1,230 +1,485 @@
 /*
- * 设置 › 记忆（MemorySettings.tsx）专用样式，SettingsView 挂载这一页时由组件自己
- * import（照 providers-view.css / migration-view.css 的先例）。
- *
- * 行尾血线（AGENTS.md）：日期是行尾静止元素，右缘钉在行右内边距——与行首元素的
- * 左缘同一条基线（`.mem-day` 的 margin-left:auto，即共享 `.row-trailing` 原语的
- * 同一规矩；worktree 的 styles.css 尚未收那枚原语，这里按规矩写局部一份）。
- * 悬停才出现的删除键**不占位**：绝对定位盖在行尾，出现时日期让位（opacity 0）。
+ * 设置 › 记忆库（memory v2）。左侧作用域 / 右侧库的两栏铺满设置内容面
+ * （Providers 同款：自带滚动区，不再套 .set-page 的 720px 列）。
+ * 状态表达全在类里（hover / selected / data- 属性），值只用 token。
  */
 
-/* ===== 组头：文件夹图标 + 工作区名 + 条数 =====
- * 一个工作区一组；组间距由 .set-page 的网格 gap 给，组内行与行只隔 2px
- * （hover fill 自成行界）。.mem-group-head 的名字列要能缩：长工作区名截断，
- * 全文在 title 里。 */
-.mem-group-head {
+.memlib {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+}
+
+/* ── 左栏：作用域 ── */
+
+.memlib-side {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-1) var(--space-1);
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--color-border-subtle);
+  overflow-y: auto;
 }
 
-.mem-group-head .orbita-icon {
-  flex: none;
-  color: var(--color-text-tertiary);
+.memlib-side .section-label {
+  margin: 10px 8px 4px;
 }
 
-.mem-group-name {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-control);
-  font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
+.memlib-side .section-label:first-child {
+  margin-top: 0;
 }
 
-/* 条数是机器事实：等宽；跟在名字后面，不抢名字 */
-.mem-group-count {
-  flex: none;
-  font-family: var(--font-family-business);
+.memlib-side-hint {
+  padding: 6px 8px;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
 }
 
-/* ===== 条目行 ===== */
-
-.mem-list {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.mem-row {
-  position: relative;
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-1);
-  border-radius: var(--radius-sm);
-}
-
-/* 列表行的 hover 配方：中性半透明底，文字不换色（设计系统 *Hover, press, disabled*） */
-.mem-row:hover {
-  background: var(--color-bg-hover);
-}
-
-/* 蒸馏句：正文一级；最多两行，再多在这页里也是噪声——全文在 title 里 */
-.mem-text {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
-  color: var(--color-text-primary);
-}
-
-.mem-row-foot {
+.memlib-scope {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-/* 关键词：外部能力事件同款的 chip 语言——发丝框、全圆角、无 fill（设计系统 *Cards*）。
-   不是控件（不可点），所以是 span 不是 Chip；单个词长了截断，全文进 title */
-.mem-kws {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
-}
-
-.mem-kw {
-  max-width: 180px;
-  padding: 1px 8px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-pill);
-  font-size: var(--font-size-micro);
-  line-height: var(--line-height-micro);
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: var(--font-size-control);
   color: var(--color-text-secondary);
 }
 
-/* 日期：行尾血线——右缘钉在行右内边距 */
-.mem-day {
-  margin-left: auto;
-  flex: 0 0 auto;
+.memlib-scope .memlib-scope-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-family-business);
+  text-align: left;
+}
+
+.memlib-scope .memlib-scope-count {
+  flex: 0 0 auto;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
-  transition: opacity var(--duration-instant) var(--ease-standard);
 }
 
-/* ===== 行内动作键（悬停浮现，绝对定位不占位）===== */
+/* ── 右栏：库 ── */
 
-.mem-acts {
-  position: absolute;
-  right: var(--space-1);
-  bottom: var(--space-2);
+.memlib-main {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.memlib-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 16px 24px 6px;
+}
+
+.memlib-head h1 {
+  margin: 0;
+  font-size: var(--font-size-title);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memlib-stats {
+  flex: 0 0 auto;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.memlib-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 24px 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.memlib-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  width: 240px;
+}
+
+.memlib-search:focus-within {
+  border-color: var(--color-accent);
+}
+
+.memlib-search input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-primary);
+}
+
+.memlib-chip {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-default);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+
+.memlib-chip:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.memlib-chip[aria-pressed="true"] {
+  border-color: var(--color-text-primary);
+  color: var(--color-text-primary);
+}
+
+.memlib-chip-count {
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memlib-sort {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+/* ── 行区 ── */
+
+.memlib-rows {
+  overflow-y: auto;
+  padding: 4px 16px 16px;
+}
+
+.memlib-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 8px 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.memlib-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 150px minmax(0, auto);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 8px;
+  border-radius: var(--radius-md);
+}
+
+.memlib-row:hover,
+.memlib-row[data-selected] {
+  background: var(--color-bg-hover);
+}
+
+.memlib-check {
+  width: 14px;
+  height: 14px;
+  margin: 4px 0 0 2px;
+  accent-color: var(--color-accent);
+}
+
+.memlib-cell {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.memlib-text {
+  margin: 0;
+  font-size: var(--font-size-body);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memlib-row[data-muted] .memlib-text {
+  color: var(--color-text-tertiary);
+}
+
+.memlib-src {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.memlib-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-micro);
+  white-space: nowrap;
+}
+
+.memlib-tag[data-tone="warn"] {
+  color: var(--color-warning);
+}
+
+.memlib-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.memlib-origin:hover {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+}
+
+.memlib-origin.deleted {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+.memlib-stat {
+  padding-top: 2px;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.memlib-acts {
   display: flex;
   gap: 2px;
+  justify-content: flex-end;
+  align-items: center;
   opacity: 0;
-  transition: opacity var(--duration-instant) var(--ease-standard);
+  transition: opacity var(--duration-fast) var(--ease-out-quint);
 }
 
-/* 悬停 / 键盘焦点进这一行 / 正等二次确认：动作键现身，日期让位 */
-.mem-row:hover .mem-acts,
-.mem-row:focus-within .mem-acts,
-.mem-row[data-confirming] .mem-acts {
+.memlib-row:hover .memlib-acts,
+.memlib-row[data-selected] .memlib-acts,
+.memlib-acts:focus-within {
   opacity: 1;
 }
 
-.mem-row:hover .mem-day,
-.mem-row:focus-within .mem-day,
-.mem-row[data-confirming] .mem-day {
-  opacity: 0;
-}
-
-/* 安静控件配方：透明底、次级灰、hover 中性抬升（IconButton / .quiet-control 同款） */
-.mem-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  flex: none;
-  width: var(--control-height-sm);
-  height: var(--control-height-sm);
-  padding: 0;
+.memlib-ib {
+  width: 24px;
+  height: 24px;
   border: 0;
-  border-radius: var(--radius-md);
   background: transparent;
+  border-radius: var(--radius-sm);
+  display: inline-grid;
+  place-items: center;
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: var(--transition-hover);
 }
 
-.mem-btn:hover {
+.memlib-ib:hover {
+  background: var(--color-bg-panel);
   color: var(--color-text-primary);
-  background: var(--color-bg-hover);
 }
 
-/* 带字的重试键：宽度跟着字走，其余同安静控件 */
-.mem-btn.text {
-  width: auto;
-  padding: 0 var(--space-2);
-  font-family: var(--font-family-base);
+.memlib-ib.danger:hover {
+  color: var(--color-danger);
+}
+
+/* 行内编辑 */
+.memlib-edit {
+  display: grid;
+  gap: 6px;
+}
+
+.memlib-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 44px;
+}
+
+.memlib-edit-acts,
+.memlib-manual-acts {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* 行内冲突卡 */
+.memlib-conflict {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.memlib-conflict-old {
+  display: grid;
+  gap: 2px;
   font-size: var(--font-size-caption);
 }
 
-/* 删除是危险键：字着 danger，hover 铺 danger-soft（设计系统 *生效规范 › 按钮*） */
+.memlib-conflict-label {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-micro);
+}
+
+.memlib-conflict-old s {
+  color: var(--color-text-tertiary);
+  line-height: 1.6;
+}
+
+.memlib-conflict-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 手动添加行 */
+.memlib-manual {
+  display: grid;
+  gap: 6px;
+  margin: 12px 8px;
+  padding: 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.memlib-manual textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.memlib-row-error {
+  font-size: var(--font-size-caption);
+  color: var(--color-danger);
+}
+
+/* ── 底部批量栏 ── */
+
+.memlib-bulk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-caption);
+}
+
+.memlib-bulk-count {
+  color: var(--color-text-secondary);
+}
+
+.memlib-empty-hint {
+  display: block;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
+/* 共用的按钮配方（v1 的 .mem-btn 家族续用） */
+.mem-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.mem-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.mem-btn.text {
+  border-color: transparent;
+}
+
+.mem-btn.accent {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.mem-btn.accent:hover:not(:disabled) {
+  background: var(--color-accent-strong);
+  color: var(--color-accent-fg);
+}
+
 .mem-btn.danger {
   color: var(--color-danger);
 }
 
-.mem-btn.danger:hover {
-  color: var(--color-danger);
-  background: var(--color-danger-soft);
+.mem-btn.danger.solid {
+  background: var(--color-danger-solid);
+  border-color: var(--color-danger-solid);
+  color: var(--color-danger-fg);
 }
 
-.mem-btn:focus-visible {
-  outline: 1px solid var(--color-accent);
-  box-shadow: var(--focus-ring);
+.mem-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-/* 删除失败：留在那一行底下，红色是第二信号，字把事说清 */
-.mem-row-error {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-danger);
-}
-
-/* ===== 加载态 / 空态 / 错误态 ===== */
-
+/* 空态 / 错误 / 加载（v1 同款） */
 .mem-hint {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-1);
-  font-size: var(--font-size-caption);
+  gap: 8px;
+  padding: 22px 8px;
   color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
 }
 
 .mem-empty {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-4) var(--space-1);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-text-secondary);
-}
-
-.mem-empty .orbita-icon {
-  flex: none;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 22px 8px;
   color: var(--color-text-tertiary);
-}
-
-.mem-error {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-1);
   font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
 }

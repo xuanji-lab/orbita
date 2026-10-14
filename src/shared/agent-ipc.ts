@@ -95,9 +95,6 @@ export const ipcChannels = {
   memoryExcerpts: "memory:excerpts",
   memoryAddManual: "memory:add-manual",
   memorySessionTurns: "memory:session-turns",
-  /** v1 旧通道（按工作区列 / 删单条）——随记忆库页改版移除 */
-  memoryList: "memory:list",
-  memoryRemove: "memory:remove",
   /**
    * 在 Finder 里打开数据目录本身（`shell.openPath`，同 Skills 面板 footer 的 Reveal），无参，回 `void`。
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。

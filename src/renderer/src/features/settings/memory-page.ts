@@ -1,39 +1,103 @@
 /**
- * 设置 › 记忆页的纯函数层：把「工作区清单 + 各作用域的条目」整理成显示用的分组。
- * 不碰 React、不碰 IPC，`node --test` 直接测（memory-page.test.ts）。
+ * 设置 › 记忆库的纯函数层：筛选、搜索、分组、统计。不碰 React、不碰 IPC，
+ * `node --test` 直接测（memory-page.test.ts）。
  *
- * 作用域语义与主进程一致（shared/memory.ts：workspaceId ?? cwd）。这一页只列
- * **工作区**的记忆：不属于任何工作区的会话记忆 v1 不展示，UI 也不处理
- * workspaceId=null——条目按 workspaceApi 给的工作区逐个取，取不到的就是没有。
+ * 作用域按 token 寻址（MemoryScopeToken）；这一页只管「一个作用域内的条目怎么摆」。
+ * 分组、筛选、排序的口径都在这里定死——组件层只做渲染与动作。
  */
-import type { MemoryEntry } from "@shared/memory";
-import type { Workspace } from "@shared/workspace";
+import type { MemoryEntry, MemoryLibraryItem } from "@shared/memory";
 
-export interface MemoryGroup {
-  workspace: Workspace;
-  /** 该工作区的条目，最近发生的在前 */
-  entries: MemoryEntry[];
+/** 筛选 chip 的五个档。 */
+export type MemoryFilter = "all" | "distilled" | "excerpt" | "conflict" | "stale";
+
+export const MEMORY_FILTERS: readonly MemoryFilter[] = ["all", "distilled", "excerpt", "conflict", "stale"];
+
+/** 待处理的冲突建议（新条目一侧）：判过、没拍板、自己还活着。 */
+export function isPendingConflict(entry: MemoryEntry): boolean {
+  return (
+    entry.supersedes !== undefined &&
+    entry.conflictResolution === undefined &&
+    (entry.status ?? "active") === "active"
+  );
+}
+
+/** 90 天没参与过召回（从没注入过、或最近一次注入在 90 天前）。 */
+export function isStale(item: MemoryLibraryItem, now: number): boolean {
+  const last = item.usage.lastAt ?? item.entry.timestamp;
+  return now - last > 90 * 86_400_000;
+}
+
+/** 条目落在哪个筛选档（conflict / stale 可与来源档叠加，chip 只看主档）。 */
+export function matchesFilter(item: MemoryLibraryItem, filter: MemoryFilter, now: number): boolean {
+  if (filter === "all") return true;
+  if (filter === "conflict") return isPendingConflict(item.entry);
+  if (filter === "stale") return isStale(item, now);
+  const source = item.entry.source ?? "distilled";
+  if (filter === "excerpt") return source === "excerpt" || source === "manual";
+  return source === "distilled";
+}
+
+/** 搜索：正文、关键词、出处会话标题、态度文案（态度的本地化词由组件传入）。 */
+export function matchesQuery(
+  item: MemoryLibraryItem,
+  query: string,
+  stanceWords: Readonly<Record<string, string>>,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return true;
+  const stance = item.entry.stance !== undefined ? stanceWords[item.entry.stance] ?? "" : "";
+  const fields = [item.entry.text, ...item.entry.keywords, item.sessionTitle ?? "", stance];
+  return fields.some((field) => field.toLowerCase().includes(needle));
+}
+
+export interface LibraryGroup {
+  id: "conflicts" | "excerpts" | "distilled";
+  items: MemoryLibraryItem[];
 }
 
 /**
- * 分组：按 workspaceApi 给的顺序（用户自己的排序）过一遍。
- *
- * **没有条目的工作区不成组**——页面列的单位是记忆条目，空组只是一行顶着工作区
- * 名字的标题，底下什么都没有；整个库都空时由页面的空态说话（memoryGroups 返回
- * 空数组就是那个信号）。
- *
- * 组内按 timestamp 新的在前：用户翻记忆库时先看到最近沉淀的。同一轮蒸馏出的
- * 多条时间戳相同，稳定排序保持落盘顺序（Array.prototype.sort 在 ES2019 后稳定）。
+ * 分组：待处理冲突（新条目 + 被它指着的那条旧条目）→ 我的摘抄（excerpt / manual）→
+ * 自动蒸馏。其余状态（已替代 / 不再注入）留在原组里，由行上的标签交代。
+ * 组内按「最近使用」（最近一次注入，没用过按创建时刻）降序。
  */
-export function memoryGroups(
-  workspaces: readonly Workspace[],
-  entriesOf: (workspace: Workspace) => readonly MemoryEntry[],
-): MemoryGroup[] {
-  const groups: MemoryGroup[] = [];
-  for (const workspace of workspaces) {
-    const entries = [...entriesOf(workspace)].sort((a, b) => b.timestamp - a.timestamp);
-    if (entries.length === 0) continue;
-    groups.push({ workspace, entries });
-  }
-  return groups;
+export function libraryGroups(
+  items: readonly MemoryLibraryItem[],
+  now: number,
+): { groups: LibraryGroup[]; pendingOldIds: Set<string> } {
+  const pendingOldIds = new Set(
+    items.filter((item) => isPendingConflict(item.entry)).map((item) => item.entry.supersedes as string),
+  );
+  const byUse = (a: MemoryLibraryItem, b: MemoryLibraryItem): number =>
+    (b.usage.lastAt ?? b.entry.timestamp) - (a.usage.lastAt ?? a.entry.timestamp);
+  const conflicts = items
+    .filter((item) => isPendingConflict(item.entry) || pendingOldIds.has(item.entry.id))
+    .sort(byUse);
+  const excerpts = items
+    .filter((item) => {
+      const source = item.entry.source ?? "distilled";
+      return source !== "distilled" && !conflicts.includes(item);
+    })
+    .sort(byUse);
+  const distilled = items
+    .filter((item) => (item.entry.source ?? "distilled") === "distilled" && !conflicts.includes(item))
+    .sort(byUse);
+  const groups: LibraryGroup[] = [];
+  if (conflicts.length > 0) groups.push({ id: "conflicts", items: conflicts });
+  if (excerpts.length > 0) groups.push({ id: "excerpts", items: excerpts });
+  if (distilled.length > 0) groups.push({ id: "distilled", items: distilled });
+  return { groups, pendingOldIds };
+}
+
+/** 头部统计：总数 · 本周新增 · 待处理冲突。 */
+export function libraryStats(items: readonly MemoryLibraryItem[], now: number): {
+  total: number;
+  week: number;
+  conflicts: number;
+} {
+  const weekAgo = now - 7 * 86_400_000;
+  return {
+    total: items.length,
+    week: items.filter((item) => item.entry.timestamp >= weekAgo).length,
+    conflicts: items.filter((item) => isPendingConflict(item.entry)).length,
+  };
 }

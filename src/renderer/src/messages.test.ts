@@ -13,6 +13,8 @@ import { zh } from "./messages-zh.ts";
 const ALLOWED_LATIN = new Set([
   // 品牌
   "orbita",
+  // 对话里的另一方（记忆 / 审查的口语文案用「agent 说的」，与「智能体」同义、更口语）
+  "agent",
   // 协议 / 格式 / 技术名
   "MCP",
   "Git",
