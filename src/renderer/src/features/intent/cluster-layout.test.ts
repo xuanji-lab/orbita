@@ -10,10 +10,14 @@ import {
   buildEgoScene,
   buildSlotScene,
   leafRange,
+  maxDrift,
   mergeTurnLeaves,
   nebulaPercentOf,
   orbitaCentreCandidates,
+  paintScene,
+  rescaleScene,
   sceneSeed,
+  simulateToConvergence,
   type ClusterLeaf,
   type TurnLeaves,
 } from "./cluster-layout.ts";
@@ -55,8 +59,8 @@ test("确定性：同数据两次构建，坐标逐点相同", () => {
     leaf("q4", 3, 0.7, { sessionId: "s-q4", title: "会话 q4" }),
     leaf("q5", 5, 0.72, { sessionId: "s-q4", title: "会话 q4" }),
   ];
-  const a = buildSlotScene(leaves, "time", 400, 400);
-  const b = buildSlotScene(leaves, "time", 400, 400);
+  const a = buildSlotScene(leaves, 400, 400);
+  const b = buildSlotScene(leaves, 400, 400);
   assert.deepEqual(
     a.nodes.map((n) => [n.id, n.x.toFixed(3), n.y.toFixed(3)]),
     b.nodes.map((n) => [n.id, n.x.toFixed(3), n.y.toFixed(3)]),
@@ -71,7 +75,7 @@ test("按岗位成簇：六个岗位簇心；≥2 条的 (岗位, 会话) 分叉
     leaf("q4", 3, 0.7, { sessionId: "same", title: "同会话" }), // (岗3, same) 两条 → 子簇
     leaf("q1", 5, 0.72, { sessionId: "s-q1", title: "会话 q1" }), // q1 跨岗 → 桥
   ];
-  const scene = buildSlotScene(leaves, "time", 400, 400);
+  const scene = buildSlotScene(leaves, 400, 400);
   const hubs = scene.nodes.filter((n) => n.kind === "hub");
   // 六个岗位簇心 + 一个子簇（岗3 的 same 会话）
   assert.equal(hubs.filter((h) => h.kind === "hub" && !h.sub).length, 6);
@@ -103,7 +107,7 @@ test("按提问成网络：多中心；被多问召回的 QA 一片叶子、两�
       ],
     },
   ];
-  const scene = buildEgoScene(centres, "time", 400, 400);
+  const scene = buildEgoScene(centres, 400, 400);
   // 两个中心 soma；本问（past=false）固定
   const somas = scene.nodes.filter((n) => n.kind === "soma");
   assert.equal(somas.length, 2);
@@ -165,7 +169,7 @@ test("种子布局的稳定性：新问加进来，旧节点的位移有界（�
     leaf("q5", 5, 0.75, { ts: 5 * DAY }),
     leaf("q6", 6, 0.7, { ts: 6 * DAY }),
   ];
-  const before = buildSlotScene(base, "time", 400, 400);
+  const before = buildSlotScene(base, 400, 400);
   const seed = sceneSeed(before);
   // 新的一问长出 4 片新叶（其中一片是旧 QA 的新岗位）
   const grown = buildSlotScene(
@@ -176,7 +180,6 @@ test("种子布局的稳定性：新问加进来，旧节点的位移有界（�
       leaf("q9", 6, 0.86, { ts: 9 * DAY }),
       leaf("q1", 4, 0.9, { ts: 10 * DAY }),
     ],
-    "time",
     400,
     400,
     { seed },
@@ -220,4 +223,51 @@ test("岗位簇名（图与列表的岗名真源）", () => {
   assert.deepEqual(SLOT_CLUSTER_NAMES.length, 6);
   assert.equal(SLOT_CLUSTER_NAMES[0], "同一件事");
   assert.equal(SLOT_CLUSTER_NAMES[5], "时序与修订");
+});
+
+test("布局跑到收敛：再走一轮，任何节点都挪不动了", () => {
+  const leaves = Array.from({ length: 12 }, (_, i) =>
+    leaf(`q${i}`, (i % 6) + 1, 0.7 + (i % 3) * 0.1, { sessionId: `s${i % 4}`, title: `会话 ${i % 4}` }),
+  );
+  const scene = buildSlotScene(leaves, 400, 400);
+  // simulateToConvergence 已在 build 里跑过：补验「再走一轮的位移 < 0.5px」
+  assert.ok(maxDrift(scene.nodes, scene.links, 400, 400) < 0.5, "收敛后每轮位移应 < 0.5px");
+});
+
+test("切颜色模式（时间 / 相关度）绝不改变坐标——只改 percent", () => {
+  const leaves = [
+    leaf("q1", 1, 0.95, { lastRound: 1, rounds: [1] }),
+    leaf("q2", 3, 0.75, { lastRound: 3, rounds: [3] }),
+    leaf("q3", 5, 0.85, { lastRound: 5, rounds: [5] }),
+  ];
+  const scene = buildSlotScene(leaves, 400, 400);
+  paintScene(scene, "time");
+  const snap = () =>
+    scene.nodes.flatMap((n) =>
+      n.kind === "leaf" ? [{ id: n.id, x: n.x.toFixed(3), y: n.y.toFixed(3), p: n.percent }] : [],
+    );
+  paintScene(scene, "time");
+  const byTime = snap();
+  paintScene(scene, "score");
+  const byScore = snap();
+  // 坐标逐点相同
+  assert.deepEqual(
+    byTime.map(({ id, x, y }) => [id, x, y]),
+    byScore.map(({ id, x, y }) => [id, x, y]),
+  );
+  // 两种模式对同一批叶子给出不同档位（q2：时间=旧、分数=中）
+  const timeOf = Object.fromEntries(byTime.map(({ id, p }) => [id, p]));
+  const scoreOf = Object.fromEntries(byScore.map(({ id, p }) => [id, p]));
+  assert.notDeepEqual(timeOf, scoreOf);
+});
+
+test("尺寸变化等比缩放：坐标按比例走，节点间相对关系不变", () => {
+  const leaves = [leaf("q1", 1, 0.95), leaf("q2", 3, 0.75), leaf("q3", 5, 0.85)];
+  const scene = buildSlotScene(leaves, 400, 300);
+  const before = scene.nodes.map((n) => ({ id: n.id, rx: n.x / 400, ry: n.y / 300 }));
+  rescaleScene(scene, 400, 300, 200, 600);
+  scene.nodes.forEach((node, i) => {
+    const was = before[i]!;
+    assert.ok(Math.abs(node.x / 200 - was.rx) < 1e-9 && Math.abs(node.y / 600 - was.ry) < 1e-9, `${node.id} 应等比`);
+  });
 });

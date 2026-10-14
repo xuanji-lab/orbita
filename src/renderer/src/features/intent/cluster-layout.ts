@@ -129,6 +129,7 @@ export interface LeafNode extends SimPoint {
   rowKey: string;
   /** 被两个及以上簇 / 中心共享（描边强调） */
   shared: boolean;
+  /** 着色百分比（paintScene 就地更新——只改样式，绝不碰坐标） */
   percent: NebulaPercent;
 }
 
@@ -157,20 +158,9 @@ export function seededRandom(seed: number): () => number {
   return () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646;
 }
 
-/**
- * 力导向模拟（原型同款参数）：近距排斥 + 弹簧 + 向心 + 边界钳制。
- * 固定迭代数、初始位置由种子随机（或上一张图的坐标）——同数据同图。
- */
-export function simulate(
-  nodes: readonly SimNode[],
-  links: readonly SimLink[],
-  W: number,
-  H: number,
-  iterations = 420,
-  maxStep = 8,
-): void {
-  for (let it = 0; it < iterations; it += 1) {
-    const alpha = 1 - it / iterations;
+/** 单轮力学步进（排斥 + 弹簧 + 向心 + 边界钳制）。确定性：无随机。 */
+export function tick(nodes: readonly SimNode[], links: readonly SimLink[], W: number, H: number, alpha: number, maxStep: number): void {
+  {
     for (let i = 0; i < nodes.length; i += 1) {
       for (let j = i + 1; j < nodes.length; j += 1) {
         const a = nodes[i]!;
@@ -221,16 +211,60 @@ export function simulate(
   }
 }
 
+/**
+ * 跑到**收敛**：alpha 从 1 起、每轮 ×0.985 衰减，alpha < 0.02 停（或撞 800 轮
+ * 上限）。2026-10-14 真机教训：以前每次只跑一小段定长松弛，从上次的半路坐标
+ * 接着跑，图永远停在没收敛的歪斜状态；resize / 切换只让它再挪一小步。
+ * 收敛后坐标静止——只有数据（问 / 边）变化才重新布局。确定性：同数据同图。
+ *
+ * @param onTick 可选：每轮之后的回调（逐帧动画用它取坐标画中间态）。
+ * @returns 实际跑的轮数。
+ */
+export function simulateToConvergence(
+  nodes: readonly SimNode[],
+  links: readonly SimLink[],
+  W: number,
+  H: number,
+  options: { alpha?: number; maxIters?: number; onTick?: () => void } = {},
+): number {
+  const maxIters = options.maxIters ?? 800;
+  let alpha = options.alpha ?? 1;
+  let iter = 0;
+  for (; iter < maxIters && alpha >= 0.02; iter += 1) {
+    tick(nodes, links, W, H, alpha, 8);
+    alpha *= 0.985;
+    options.onTick?.();
+  }
+  return iter;
+}
+
+/** 再走一轮全体最多能挪多远（px）：收敛判定的度量。不改变节点状态。 */
+export function maxDrift(
+  nodes: readonly SimNode[],
+  links: readonly SimLink[],
+  W: number,
+  H: number,
+): number {
+  const before = nodes.map((node) => ({ x: node.x, y: node.y }));
+  tick(nodes, links, W, H, 0.02, 8);
+  let worst = 0;
+  nodes.forEach((node, i) => {
+    const was = before[i]!;
+    worst = Math.max(worst, Math.hypot(node.x - was.x, node.y - was.y));
+    node.x = was.x;
+    node.y = was.y;
+  });
+  return worst;
+}
+
 /** 布局种子：上一次成型的坐标（按节点 id 对回）。「新东西长在旧图上」的机制。 */
 export type LayoutSeed = ReadonlyMap<string, { x: number; y: number }>;
 
 export interface BuildOptions {
-  /** 上一张图的坐标：命中 id 的节点从原位出发 */
+  /** 上一张图的坐标：命中 id 的节点从原位出发（新节点热启动到带种子邻居的质心），
+   *  然后跑**到收敛**——种子只决定出发点，不截断模拟（2026-10-14 真机教训：
+   *  截断让图永远停在半路） */
   seed?: LayoutSeed;
-  /** 有种子时用小步松弛（新节点安家、旧节点微调）；无种子时全量迭代 */
-  iterations?: number;
-  /** 每轮迭代每轴的最大位移（种子模式收紧，旧节点只微调） */
-  maxStep?: number;
 }
 
 /** 初始位置：先看种子，没有再随机（rng）。 */
@@ -304,7 +338,6 @@ export const SLOT_CLUSTER_NAMES: readonly string[] = [
  */
 export function buildSlotScene(
   leaves: readonly ClusterLeaf[],
-  colorMode: GraphColorMode,
   W: number,
   H: number,
   options: BuildOptions = {},
@@ -354,7 +387,6 @@ export function buildSlotScene(
   hubs.forEach((hub, i) => {
     links.push({ a: soma, b: hub, len: 150, k: 0.04, w: 1 + totals[i]! * 0.5, op: 0.55 });
   });
-  const range = leafRange(leaves);
   const leafOf = new Map<string, LeafNode[]>();
   SLOT_CLUSTER_NAMES.forEach((_, i) => {
     const slot = i + 1;
@@ -406,7 +438,7 @@ export function buildSlotScene(
           r: leafRadius(leaf, dense),
           rep: 1,
           shared: false,
-          percent: nebulaPercentOf(colorMode, leaf, range),
+          percent: 62,
         };
         nodes.push(node);
         links.push({ a: parent, b: node, len: 24, k: 0.1, w: 0.9, op: 0.4 + 0.5 * leaf.score });
@@ -422,14 +454,7 @@ export function buildSlotScene(
     links.push({ a: group[0]!, b: group[1]!, len: 90, k: 0.01, bridge: true });
   }
   if (options.seed !== undefined) warmStartUnseeded(nodes, links, options.seed);
-  simulate(
-    nodes,
-    links,
-    W,
-    H,
-    options.iterations ?? (options.seed === undefined ? 420 : 90),
-    options.maxStep ?? (options.seed === undefined ? 8 : 3),
-  );
+  simulateToConvergence(nodes, links, W, H);
   return { nodes, links };
 }
 
@@ -453,7 +478,6 @@ export interface EgoCentre {
  */
 export function buildEgoScene(
   centres: readonly EgoCentre[],
-  colorMode: GraphColorMode,
   W: number,
   H: number,
   options: BuildOptions = {},
@@ -543,18 +567,8 @@ export function buildEgoScene(
       }
     });
   }
-  const range = leafRange([...merged.values()]);
-  for (const node of nodes) {
-    if (node.kind === "leaf") node.percent = nebulaPercentOf(colorMode, node.leaf, range);
-  }
-  simulate(
-    nodes,
-    links,
-    W,
-    H,
-    options.iterations ?? (options.seed === undefined ? 420 : 90),
-    options.maxStep ?? (options.seed === undefined ? 8 : 3),
-  );
+  if (options.seed !== undefined) warmStartUnseeded(nodes, links, options.seed);
+  simulateToConvergence(nodes, links, W, H);
   return { nodes, links };
 
   function hubFor(gi: number, sessionId: string): HubNode {
@@ -632,6 +646,35 @@ export function mergeTurnLeaves(
     }
   }
   return [...byKey.values()].sort((a, b) => a.ts - b.ts || (a.qaId < b.qaId ? -1 : 1));
+}
+
+/* ---------------------------------------------------------------- 上色 / 缩放（只改样式与几何映射，不重排） */
+
+/**
+ * 把着色档位写到叶子上（就地）。**只碰 percent，绝不碰坐标**——切「时间 / 相关度」
+ * 或换高亮轮永远不该引发重新布局（2026-10-14 用户裁决）。
+ */
+export function paintScene(scene: ClusterScene, colorMode: GraphColorMode): void {
+  const leaves = scene.nodes.filter((node): node is LeafNode => node.kind === "leaf");
+  const range = leafRange(leaves.map((node) => node.leaf));
+  for (const node of leaves) {
+    node.percent = nebulaPercentOf(colorMode, node.leaf, range);
+  }
+}
+
+/**
+ * 面板尺寸变了：已收敛的坐标按新宽高等比缩放（soma 的居中固定点也跟着走）。
+ * 不重新模拟——拖分隔条 / 微调窗口时图保持形状，只是整体伸缩（大跨度宽度变化
+ * 由调用方判断后整体重建）。
+ */
+export function rescaleScene(scene: ClusterScene, fromW: number, fromH: number, toW: number, toH: number): void {
+  if (fromW <= 0 || fromH <= 0) return;
+  const kx = toW / fromW;
+  const ky = toH / fromH;
+  for (const node of scene.nodes) {
+    node.x *= kx;
+    node.y *= ky;
+  }
 }
 
 /* ---------------------------------------------------------------- 提问网络的中心候选 */

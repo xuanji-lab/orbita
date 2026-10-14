@@ -42,6 +42,8 @@ import {
   type LayoutSeed,
   type TurnLeaves,
 } from "./cluster-layout.ts";
+import { GraphRenderer } from "./GraphRenderer.ts";
+import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
 
 type IntentView = "slots" | "questions";
 
@@ -68,10 +70,11 @@ export function IntentPanel(props: {
   pendingAsk: { requestId: string; ask: IntentAskView[] } | null;
   /** 折叠后仍在转录里的 user item id 集：被回退的问不进轮次 */
   liveTurnIds: ReadonlySet<string>;
-  /** 「打开会话」：主槽打开那条来源会话 */
-  onOpenSession: (sessionId: string) => void;
+  /** 「打开会话」：在辅助对话里打开那条来源会话；返回 false = 会话已不存在 */
+  onOpenSession: (sessionId: string) => boolean;
 }) {
   const t = useT();
+  const [missingSession, setMissingSession] = useState<string | null>(null);
   const liveTurns = useMemo(
     () => props.turns.filter((turn) => props.liveTurnIds.has(turn.turnId)),
     [props.turns, props.liveTurnIds],
@@ -305,6 +308,7 @@ export function IntentPanel(props: {
           extraCentres={extraCentres}
           latestRound={latestRound?.round ?? 0}
           activeRound={activeRound}
+          activeTurnId={activeRound === null ? null : (rounds[activeRound - 1]?.turnId ?? null)}
           readTotal={latestRound?.record.qaTotal ?? null}
           rowsTotal={rows.length}
           highCount={high}
@@ -334,6 +338,9 @@ export function IntentPanel(props: {
           onSelect={selectRow}
           onQuickVerdict={quickVerdict}
           onOpenSession={props.onOpenSession}
+          missingSession={missingSession}
+          onOpenMissing={() => setMissingSession("missing")}
+          onMissingCleared={() => setMissingSession(null)}
           listRef={listRef}
         />
       </div>
@@ -343,8 +350,15 @@ export function IntentPanel(props: {
 
 /* ---------------------------------------------------------------- 图 */
 
+/**
+ * 图：React 只负责容器、浮层（开关 / 摘要 / 图例）与数据→场景的装配；
+ * 落定动画、拖拽、上色、高亮全部由 GraphRenderer 指令式驱动（每帧不进 React）。
+ * 触发纪律（2026-10-14 用户裁决）：
+ * - 数据（问 / 边）变了 → 重建结构，逐帧动画跑到**收敛**，然后静止；
+ * - 颜色模式 / 选中 / 高亮轮变了 → 只上色 / 换 class，坐标绝不动；
+ * - 尺寸变了 → 已收敛的坐标等比缩放（拖分隔条不重排）；宽度剧变才整体重建。
+ */
 function IntentGraph(props: {
-  /** 图区高度（px）；folded 时图占满面板 */
   height: number;
   folded: boolean;
   view: IntentView;
@@ -356,6 +370,8 @@ function IntentGraph(props: {
   extraCentres: readonly EgoCentre[];
   latestRound: number;
   activeRound: number | null;
+  /** 高亮轮对应的 turnId（中心点亮用）；null = 全部 */
+  activeTurnId: string | null;
   readTotal: number | null;
   rowsTotal: number;
   highCount: number;
@@ -366,28 +382,30 @@ function IntentGraph(props: {
 }) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [size, setSize] = useState({ w: 380, h: 320 });
-  useEffect(() => {
-    const el = hostRef.current;
-    if (el === null) return;
-    const measure = (): void =>
-      setSize((prev) => {
-        const w = el.clientWidth;
-        const h = el.clientHeight;
-        return prev.w === w && prev.h === h ? prev : { w, h };
-      });
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  /** 布局种子（按视图各存一份）：新问长在旧图上，旧节点基本不动 */
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const rendererRef = useRef<GraphRenderer | null>(null);
+  /** 数据签：只有它变了才重建场景（颜色 / 高亮 / 尺寸都不进这个 key） */
+  const dataKey = [
+    props.view,
+    ...props.slotLeaves.map((leaf) => `${leaf.qaId}#${leaf.slot}:${leaf.lastRound}`),
+    ...props.centreLeaves.map((turn) => `${turn.turnId}=${turn.leaves.length}`),
+    ...props.extraCentres.map((centre) => centre.key),
+    props.latestRound,
+  ].join("|");
+  const sceneRef = useRef<ClusterScene | null>(null);
   const seedRef = useRef(new Map<string, LayoutSeed>());
-  const scene = useMemo<ClusterScene | null>(() => {
-    if (!props.hasData) return null;
+  const sizeRef = useRef<{ w: number; h: number } | null>(null);
+  const [resizeNonce, setResizeNonce] = useState(0);
+
+  /** 数据 → 场景（本组件里唯一的构建路径；两个 effect 共用） */
+  const rebuild = (animate: boolean): void => {
+    const host = hostRef.current;
+    const renderer = rendererRef.current;
+    if (host === null || renderer === null || !props.hasData) return;
+    const w = Math.max(1, host.clientWidth);
+    const h = Math.max(1, host.clientHeight);
     const seed = seedRef.current.get(props.view);
-    const built =
+    const scene =
       props.view === "questions"
         ? (() => {
             const centres: EgoCentre[] = props.centreLeaves.map((turn) => ({
@@ -397,14 +415,77 @@ function IntentGraph(props: {
               leaves: turn.leaves,
             }));
             if (centres.length === 0) return null;
-            return buildEgoScene([...centres, ...props.extraCentres], props.colorMode, size.w, size.h, {
-              seed,
-            });
+            return buildEgoScene([...centres, ...props.extraCentres], w, h, { seed });
           })()
-        : buildSlotScene(props.slotLeaves, props.colorMode, size.w, size.h, { seed });
-    if (built !== null) seedRef.current.set(props.view, sceneSeed(built));
-    return built;
-  }, [props.view, props.colorMode, props.slotLeaves, props.centreLeaves, props.extraCentres, props.latestRound, props.hasData, size.w, size.h, t]);
+        : buildSlotScene(props.slotLeaves, w, h, { seed });
+    if (scene === null) return;
+    seedRef.current.set(props.view, sceneSeed(scene));
+    sceneRef.current = scene;
+    sizeRef.current = { w, h };
+    renderer.setScene(scene, w, h, { animate });
+    renderer.paint(props.colorMode);
+    renderer.setHighlight(props.selKey, props.activeRound, props.activeTurnId);
+  };
+
+  // 渲染器生命周期
+  useEffect(() => {
+    if (svgRef.current === null) return;
+    const renderer = new GraphRenderer(svgRef.current, props.onSelectLeaf);
+    rendererRef.current = renderer;
+    return () => {
+      renderer.dispose();
+      rendererRef.current = null;
+    };
+    // onSelectLeaf 引用稳定（面板的 useCallback）
+  }, [props.onSelectLeaf]);
+
+  // 数据 → 场景：重建结构 + 逐帧落定（初次加载与每一轮新增都算「东西去哪了」）
+  useEffect(() => {
+    rebuild(true);
+    // dataKey 是数据签；colorMode / selKey / activeRound / 尺寸走各自的 effect
+    // eslint 无关：rebuild 每次渲染都是新的，但只有 dataKey 变才需要重建
+  }, [dataKey]);
+
+  // 尺寸：等比缩放（不重排）；宽度剧变（>120px）才整体重建
+  useEffect(() => {
+    const host = hostRef.current;
+    if (host === null) return;
+    const measure = (): void => {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const last = sizeRef.current;
+      if (renderer === null || scene === null) return;
+      const w = Math.max(1, host.clientWidth);
+      const h = Math.max(1, host.clientHeight);
+      if (last !== null && last.w === w && last.h === h) return;
+      if (last !== null && Math.abs(w - last.w) > 120) {
+        // 宽度剧变：整体重建（跑到收敛；不动画，避免大挪移的眩晕）
+        setResizeNonce((n) => n + 1);
+        return;
+      }
+      renderer.rescale(last?.w ?? w, last?.h ?? h, w, h);
+      sizeRef.current = { w, h };
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (resizeNonce === 0) return;
+    rebuild(false);
+    // eslint 无关：resizeNonce 是唯一依赖
+  }, [resizeNonce]);
+
+  // 颜色模式：只上色
+  useEffect(() => {
+    rendererRef.current?.paint(props.colorMode);
+  }, [props.colorMode, dataKey, resizeNonce]);
+
+  // 选中 / 高亮轮：只换 class
+  useEffect(() => {
+    rendererRef.current?.setHighlight(props.selKey, props.activeRound, props.activeTurnId);
+  }, [props.selKey, props.activeRound, props.activeTurnId, dataKey, resizeNonce]);
 
   const summary = t.intentPanel.summary(
     props.readTotal ?? t.intentPanel.readUnknown,
@@ -440,8 +521,7 @@ function IntentGraph(props: {
       </div>
       {props.loading && <p className="intent-summary">{t.intentPanel.loading}</p>}
       {!props.loading && !props.hasData && <p className="intent-summary">{t.intentPanel.emptyNoRecall}</p>}
-      {props.hasData && scene === null && <p className="intent-summary">{t.intentPanel.errorFetch}</p>}
-      {props.hasData && scene !== null && (
+      {props.hasData && (
         <>
           <p className="intent-summary">{summary}</p>
           <div className="intent-legend">
@@ -460,133 +540,10 @@ function IntentGraph(props: {
               {t.intentPanel.colorScore}
             </button>
           </div>
-          <ClusterSvg
-            scene={scene}
-            selKey={props.selKey}
-            activeRound={props.activeRound}
-            onSelectLeaf={props.onSelectLeaf}
-          />
+          <svg ref={svgRef} className="intent-cluster" width="100%" height="100%" />
         </>
       )}
     </div>
-  );
-}
-
-/** SVG 绘制：枝 → 桥 → 簇心 → 叶 → 胞体。着色与轮号的语义见文件头。 */
-function ClusterSvg(props: {
-  scene: ClusterScene;
-  selKey: string | null;
-  activeRound: number | null;
-  onSelectLeaf: (rowKey: string) => void;
-}) {
-  const bend = (a: { x: number; y: number }, b: { x: number; y: number }): string => {
-    const mx = (a.x + b.x) / 2;
-    const my = (a.y + b.y) / 2;
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const k = 0.12;
-    return `M${a.x.toFixed(1)},${a.y.toFixed(1)} Q${(mx - dy * k).toFixed(1)},${(my + dx * k).toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`;
-  };
-  const { nodes, links } = props.scene;
-  const inRound = (leaf: ClusterLeaf): boolean =>
-    props.activeRound === null || leaf.rounds.includes(props.activeRound);
-  const denseLeaves = nodes.filter((node) => node.kind === "leaf").length > 40;
-  return (
-    <svg className="intent-cluster" width="100%" height="100%">
-      <g>
-        {links.map((link, at) => {
-          if (link.bridge === true) return null;
-          const dimByRound = link.b.kind === "leaf" && !inRound(link.b.leaf);
-          return (
-            <path
-              key={`l${at}`}
-              className={`ibr${link.dim || dimByRound ? " dim" : ""}`}
-              d={bend(link.a, link.b)}
-              strokeWidth={link.w ?? 1}
-              strokeOpacity={link.op ?? 0.5}
-              fill="none"
-              style={
-                link.b.kind === "leaf"
-                  ? { stroke: `color-mix(in srgb, var(--color-nebula) ${link.b.percent}%, transparent)` }
-                  : undefined
-              }
-            />
-          );
-        })}
-      </g>
-      <g>
-        {links.map((link, at) =>
-          link.bridge === true ? (
-            <path key={`b${at}`} className="ibridge" d={bend(link.a, link.b)} fill="none" strokeWidth={1.2} />
-          ) : null,
-        )}
-      </g>
-      <g>
-        {nodes.map((node) =>
-          node.kind === "hub" ? (
-            <g key={node.id}>
-              <circle className="ihub" cx={node.x} cy={node.y} r={node.r} />
-              {node.label !== "" && (
-                <text className="ihub-label" x={node.x} y={node.y - node.r - 5} textAnchor="middle">
-                  {node.label}
-                </text>
-              )}
-            </g>
-          ) : null,
-        )}
-      </g>
-      <g>
-        {nodes.map((node) => {
-          if (node.kind !== "leaf") return null;
-          const selected = props.selKey === node.rowKey;
-          const cls = [
-            "ileaf",
-            node.leaf.solid ? "" : " mid",
-            node.shared ? " shared" : "",
-            inRound(node.leaf) ? "" : " dim",
-            node.leaf.verdict === "yes" ? " yes" : "",
-            selected ? " sel" : "",
-          ]
-            .filter(Boolean)
-            .join(" ");
-          const neb = `color-mix(in srgb, var(--color-nebula) ${node.percent}%, transparent)`;
-          // 轮号：只在大节点或选中时标（密集模式全靠颜色，不凑数）
-          const showRound = selected || (!denseLeaves && node.r >= 3.2);
-          return (
-            <g key={node.id} className={cls} onClick={() => props.onSelectLeaf(node.rowKey)}>
-              <circle className="ileaf-halo" cx={node.x} cy={node.y} r={node.r + 4} style={{ fill: neb }} />
-              <circle
-                className="ileaf-core"
-                cx={node.x}
-                cy={node.y}
-                r={Math.max(node.r, 1)}
-                style={selected ? undefined : { fill: node.leaf.solid ? neb : "var(--color-bg-panel)", stroke: neb }}
-              />
-              {showRound && (
-                <text className="ileaf-round" x={node.x + node.r + 3} y={node.y - node.r + 1}>
-                  {node.leaf.lastRound}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </g>
-      <g>
-        {nodes.map((node) =>
-          node.kind === "soma" ? (
-            <g key={node.id} className={`isoma${node.past ? " past" : ""}`}>
-              <circle className="imembrane" cx={node.x} cy={node.y} r={node.r + 6} />
-              <circle className="isoma-core" cx={node.x} cy={node.y} r={node.r} />
-              {node.label !== "" && (
-                <text className="isoma-label" x={node.x} y={node.y + node.r + 15} textAnchor="middle">
-                  {node.label}
-                </text>
-              )}
-            </g>
-          ) : null,
-        )}
-      </g>
-    </svg>
   );
 }
 
@@ -666,7 +623,11 @@ function IntentRows(props: {
   onHover: (key: string) => void;
   onSelect: (key: string, scroll: boolean) => void;
   onQuickVerdict: (qaId: string, verdict: "yes" | "no") => void;
-  onOpenSession: (sessionId: string) => void;
+  onOpenSession: (sessionId: string) => boolean;
+  /** 「会话已不存在」的一行说明（打开失败时挂在列表顶部，点行清除） */
+  missingSession: string | null;
+  onOpenMissing: () => void;
+  onMissingCleared: () => void;
   listRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
@@ -689,6 +650,11 @@ function IntentRows(props: {
       ref={props.listRef}
       style={props.hidden ? { display: "none" } : undefined}
     >
+      {props.missingSession !== null && (
+        <p className="intent-missing" onClick={props.onMissingCleared}>
+          {t.intentPanel.missingSession}
+        </p>
+      )}
       {groups.map((group) => {
         const open = !collapsed.has(group.label);
         return (
@@ -728,6 +694,7 @@ function IntentRows(props: {
                   onSelect={props.onSelect}
                   onQuickVerdict={props.onQuickVerdict}
                   onOpenSession={props.onOpenSession}
+                  onOpenMissing={props.onOpenMissing}
                 />
               ))}
           </div>
@@ -745,7 +712,8 @@ function IntentRowView(props: {
   onHover: (key: string) => void;
   onSelect: (key: string, scroll: boolean) => void;
   onQuickVerdict: (qaId: string, verdict: "yes" | "no") => void;
-  onOpenSession: (sessionId: string) => void;
+  onOpenSession: (sessionId: string) => boolean;
+  onOpenMissing: () => void;
 }) {
   const t = useT();
   const { leaf } = props.row;
@@ -776,13 +744,15 @@ function IntentRowView(props: {
         {props.sel && (
           <>
             <div className="intent-row-more">
-              <p>
-                <b>{t.intentPanel.youSaid}</b> {t.intentPanel.quote(leaf.q)}
-              </p>
+              <div className="intent-row-md">
+                <p className="intent-row-md-label">{t.intentPanel.youSaid}</p>
+                <MarkdownBlock text={leaf.q} />
+              </div>
               {leaf.a !== "" && (
-                <p>
-                  <b>{t.intentPanel.answerThen}</b> {leaf.a}
-                </p>
+                <div className="intent-row-md">
+                  <p className="intent-row-md-label">{t.intentPanel.answerThen}</p>
+                  <MarkdownBlock text={leaf.a} />
+                </div>
               )}
             </div>
             <div className="intent-row-acts">
@@ -798,7 +768,13 @@ function IntentRowView(props: {
               )}
               <span style={{ flex: 1 }} />
               {leaf.source === "orbita" && (
-                <button type="button" className="intent-mini" onClick={() => props.onOpenSession(leaf.sessionId)}>
+                <button
+                  type="button"
+                  className="intent-mini"
+                  onClick={() => {
+                    if (!props.onOpenSession(leaf.sessionId)) props.onOpenMissing();
+                  }}
+                >
                   <Icon name="external-link" size={12} /> {t.intentPanel.openSession}
                 </button>
               )}

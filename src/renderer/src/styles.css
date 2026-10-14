@@ -4224,3 +4224,34 @@ button.panel-group-toggle:hover {
   border-radius: 50%;
   background: var(--color-warning);
 }
+
+/* 意图条目展开后的 Q/A：复用聊天面的 markdown 渲染，收紧字号与行距 */
+.intent-row-md {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.intent-row-md-label {
+  margin: 0;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.intent-row-md .chat-md {
+  font-size: var(--font-size-caption);
+  line-height: 1.6;
+}
+.intent-row-md .chat-md p {
+  margin: 0 0 3px;
+}
+.intent-row-md .chat-md pre {
+  font-size: var(--font-size-micro);
+}
+.intent-missing {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+}
