@@ -78,7 +78,10 @@ export const computerUseGuestCommands = {
   type: "type",
   /** 按一个键或一组组合键（键名→VK 的映射表在桥里） */
   key: "key",
-  /** 把指针移到某点并滚轮（正数向下） */
+  /**
+   * 把指针移到某点并滚轮（正数向下）。deltaY 的单位是**滚轮格数**：桥乘 WHEEL_DELTA
+   * 得到 Windows 的 wheel 数据（wheel 正数向上，所以桥取负）。
+   */
   scroll: "scroll",
 } as const;
 

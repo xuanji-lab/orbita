@@ -245,12 +245,12 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     description:
       "Scroll at a point on the sandbox desktop, by x, y pixels of your latest computer_screenshot. The point " +
       "decides which pane scrolls — pass the x, y of the list or page you mean (omitted = the middle of the " +
-      "screen). deltaY is in wheel notches: positive scrolls down, negative up (one notch is 120). Take a " +
-      "screenshot afterwards to see the new position.",
+      "screen). deltaY is a number of wheel notches: positive scrolls down, negative up (3 is about nine " +
+      "lines). Take a screenshot afterwards to see the new position.",
     parameters: {
       type: "object",
       properties: {
-        deltaY: { type: "number", description: "Wheel notches; positive scrolls down (one notch = 120)." },
+        deltaY: { type: "number", description: "Wheel notches; positive scrolls down (3 ≈ nine lines)." },
         x: { type: "number", description: "Horizontal pixel in your latest computer_screenshot. Defaults to the middle." },
         y: { type: "number", description: "Vertical pixel in your latest computer_screenshot. Defaults to the middle." },
       },
@@ -260,7 +260,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const args = (params ?? {}) as Record<string, unknown>;
       const deltaY = numberOf(args["deltaY"]);
       if (deltaY === undefined) throw new Error("deltaY is required (positive scrolls down).");
-      const result = await call({ action: "scroll", ...scrollTarget(args), deltaY }, signal);
+      const notches = Math.round(deltaY);
+      const result = await call({ action: "scroll", ...scrollTarget(args), deltaY: notches }, signal);
       return { content: [{ type: "text" as const, text: result.text }], details: undefined };
     },
   };

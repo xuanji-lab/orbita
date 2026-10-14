@@ -102,7 +102,7 @@ export async function applyComputerUseRequest(
         return {
           ok: true,
           text:
-            `Scrolled by ${request.deltaY} at (${request.x}, ${request.y}) on the sandbox desktop ` +
+            `Scrolled by ${request.deltaY} wheel notch(es) at (${request.x}, ${request.y}) on the sandbox desktop ` +
             "(positive = down). Take a screenshot to see the new position.",
         };
       }
