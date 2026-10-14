@@ -146,7 +146,8 @@ describe("能力探测解析", () => {
     assert.equal(result.ready, false);
     assert.equal(result.platformOk, false);
     assert.equal(result.hypervisorState, "unknown");
-    assert.ok(result.guidance?.includes("Windows"));
+    // 平台不对时指引只给平台那一条：reg 根本没跑，「读不到版本档位」只会稀释信号
+    assert.deepEqual(result.guidance?.split("\n"), ["电脑使用沙箱目前只在 Windows 上可用。"]);
   });
 
   test("probe：reg 失败 + exe 不在 → unknown/disabled + 指引，绝不抛", async () => {

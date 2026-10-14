@@ -158,6 +158,9 @@ async function makeHarness(overrides: Partial<SandboxDeps> = {}): Promise<Harnes
     },
   };
   harness.controller = new SandboxController({
+    // 状态机测试模拟的是 Windows 环境（bridgeDir / sandboxExePath 都是 C:\…）：平台闸门
+    // 要看 win32；平台不对的那条路径单独用 platform: "darwin" 覆写测
+    platform: "win32",
     computerUseDir: dir,
     bridgeDir: "C:\\fake\\bridge",
     sandboxExePath: "C:\\Windows\\System32\\WindowsSandbox.exe",
@@ -584,6 +587,24 @@ describe("junction 末段名闸门", () => {
 // UI 显示「未启动」，宿主却留着 ~2GB 的孤儿 VM（第二次得按 PID 手动清）。
 // 现在：kill → 等退出（exit 事件 / exitCode 轮询，二者取先到）→ 还没退就升级一次
 // 按 PID 杀进程树 → 再等一个窗口仍不退才 off，并留下「进程可能未退出」的痕迹。
+
+describe("平台闸门", () => {
+  test("start：非 win32 → 只报平台那一条，不 spawn、不落 .wsb、状态停在 off（macOS 验收）", async () => {
+    const harness = await makeHarness({ platform: "darwin" });
+    try {
+      const result = await harness.controller.start();
+      assert.equal(result.ok, false);
+      assert.ok(result.ok === false && result.error.includes("只在 Windows"), result.ok ? "" : result.error);
+      // 不能报「先运行 bun run build:bridge」那类误导文案
+      assert.ok(result.ok === false && !result.error.includes("build:bridge"), result.ok ? "" : result.error);
+      assert.deepEqual(harness.spawned, [], "平台不对，不该起沙箱进程");
+      assert.equal(existsSync(join(harness.dir, "session.wsb")), false, "不该落 .wsb");
+      assert.deepEqual(harness.controller.status(), { state: "off" });
+    } finally {
+      await harness.close();
+    }
+  });
+});
 
 describe("stop 的收尾链", () => {
   /** 起一局并进入 running（三例共用） */

@@ -166,6 +166,8 @@ export interface SandboxDeps {
   bridgeDir: string;
   /** WindowsSandbox.exe 绝对路径（index.ts 用 capability.windowsSandboxExePath() 解出） */
   sandboxExePath: string;
+  /** 默认 process.platform，测试可注入。非 win32 时 start() 直接拒——先报平台，再谈文件 */
+  platform?: NodeJS.Platform;
   /** 真 spawn 在 index.ts 接线；测试注入假进程。**测试绝不许传真 spawn**（沙箱窗口是用户可见面） */
   spawnSandbox: (wsbPath: string) => SandboxProcess;
   /** 默认 existsSync */
@@ -249,6 +251,12 @@ export class SandboxController {
   }
 
   async start(): Promise<ComputerUseStartResult> {
+    // 平台不对时这是第一个该报的事：先报平台，再谈文件存在性——macOS/Linux 上报
+    // 「先运行 bun run build:bridge」是误导（桥编不了，编了也没沙箱可跑）。
+    // 文案与 probe 指引的平台那条一致（主进程文案 i18n 留给后续 PR）。
+    if ((this.deps.platform ?? process.platform) !== "win32") {
+      return { ok: false, error: "电脑使用沙箱目前只在 Windows 上可用。" };
+    }
     if (this.state === "starting") return { ok: false, error: "沙箱已经在启动中" };
     if (this.state === "running") return { ok: false, error: "沙箱已经在运行" };
     if (this.state === "stopping") return { ok: false, error: "沙箱正在关闭，等它关完再启动" };

@@ -85,6 +85,14 @@ export function probeVisual(result: ComputerUseProbeResult): ProbeVisual {
   return { kind: "not-ready", guidance };
 }
 
+/**
+ * 探测结果说平台不对 → 「启动」没有意义：主进程 start() 同样会拒（先报平台那条）。
+ * 探测还没做过（null）不拦——状态机 / 主进程自己会兜底，别把首次进入页面就置灰当成默认。
+ */
+export function probeBlocksStart(result: ComputerUseProbeResult | null): boolean {
+  return result !== null && result.platformOk === false;
+}
+
 export type ShotView =
   | { kind: "idle" }
   | { kind: "loading" }
