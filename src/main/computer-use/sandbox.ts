@@ -142,11 +142,18 @@ export function renderWsbXml(input: WsbRenderInput): string {
 /**
  * 我们 spawn 出来的沙箱进程的最小面。收窄成接口而不是直接用 ChildProcess：
  * 状态机测试注入一个只有 on/kill 的假进程就行，不用碰真的子进程类型。
+ *
+ * pid / exitCode 是给「确认真的死了」用的（stop 的收尾链），**可选**：假进程可以不实现，
+ * 那种情况下只剩 exit 事件一个信号源。
  */
 export interface SandboxProcess {
   on(event: "exit", listener: (code: number | null) => void): void;
   on(event: "error", listener: (error: Error) => void): void;
   kill(): boolean;
+  /** 进程 id（升级杀 `taskkill /PID <pid> /T /F` 要它） */
+  readonly pid?: number;
+  /** 退出码：null = 还在跑（Node 的 ChildProcess 语义）；没这个字段就只能靠 exit 事件判断 */
+  readonly exitCode?: number | null;
 }
 
 export interface SandboxDeps {
@@ -170,7 +177,28 @@ export interface SandboxDeps {
   onStatus?: (status: SandboxStatus) => void;
   /** 默认 console.log */
   log?: (message: string) => void;
+  /**
+   * 升级杀：按 PID 再杀一次进程树。生产在 index.ts 接真 `taskkill /PID <pid> /T /F`
+   * （沙箱是 launcher + WindowsSandboxClient 两棵树，单进程杀会留孤儿窗口与 ~2GB 的 VM）；
+   * 不接就退回再调一次 child.kill()。**不许按镜像名杀**（仓规：禁 pkill/killall 式按名字匹配）。
+   */
+  killTreeByPid?: (pid: number) => void;
+  /** kill 之后多久没确认退出就升级杀，默认 3_000；测试传小值 */
+  killFallbackMs?: number;
+  /** 升级之后再等多久仍不退出就收尾，默认 5_000；测试传小值 */
+  killEscalationMs?: number;
 }
+
+/**
+ * stop() 发起 kill 之后等多久还没确认退出就升级杀。
+ * 2026-10-14 真机咬两次：原来的 3 秒兜底定时器直接宣布 off，而进程根本没死——UI 显示
+ * 「未启动」，宿主却留着 ~2GB 的孤儿 VM（第二次得按 PID 手动清）。
+ */
+const STOP_FALLBACK_MS = 3_000;
+/** 升级杀之后再等多久仍不退出就收尾（并留下「进程可能未退出」的痕迹） */
+const STOP_ESCALATION_MS = 5_000;
+/** 退出确认的轮询节奏：exit 事件是主路径，这个是兜底信号（二者取先到） */
+const EXIT_POLL_INTERVAL_MS = 250;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -184,6 +212,10 @@ export class SandboxController {
   private startedAt = 0;
   private child: SandboxProcess | null = null;
   private stopFallbackTimer: NodeJS.Timeout | null = null;
+  /** 升级杀之后的第二个窗口 */
+  private escalationTimer: NodeJS.Timeout | null = null;
+  /** 退出确认的轮询（exit 事件的兜底信号） */
+  private exitWatchTimer: NodeJS.Timeout | null = null;
 
   constructor(deps: SandboxDeps) {
     this.deps = deps;
@@ -236,6 +268,8 @@ export class SandboxController {
     if (junctionIssue !== null) return { ok: false, error: junctionIssue };
 
     const generation = ++this.generation;
+    // 新一局开始：上一局可能还有没走完的收尾链（兜底 / 升级窗口 / 退出轮询），先全清
+    this.clearTimers();
     this.bridge = null;
     this.startedAt = Date.now();
     this.transition("starting");
@@ -306,21 +340,24 @@ export class SandboxController {
     this.transition("stopping");
     this.cleanup();
     const child = this.child;
-    if (child !== null) {
-      try {
-        child.kill();
-      } catch {
-        // 杀不掉就靠兜底定时器收尾（Windows 上 TerminateProcess 几乎不会失败）
-      }
-      this.stopFallbackTimer = setTimeout(() => {
-        if (this.state !== "stopping") return;
-        this.log("沙箱进程 3 秒内没有退出，直接收尾为 off");
-        this.child = null;
-        this.transition("off");
-      }, 3_000);
-    } else {
+    if (child === null) {
       this.transition("off");
+      return { ok: true };
     }
+    // 退出这件事从此刻起有两个信号源：exit 事件（快路径）与 exitCode 轮询（兜底），
+    // 谁先到算谁的（重复到达幂等，onChildExit 自己会挡住）。
+    // **宣布 off 必须有退出证据**：真机上 taskkill 可能没杀成 / 只杀掉 launcher，
+    // 盲宣布 off 会留下 ~2GB 的孤儿 VM（2026-10-14 咬两次）。
+    this.watchExit(child);
+    try {
+      child.kill();
+    } catch {
+      // 杀不掉不是失败：升级链会再试（下面）
+    }
+    this.stopFallbackTimer = setTimeout(
+      () => this.onStopFallback(child),
+      this.deps.killFallbackMs ?? STOP_FALLBACK_MS,
+    );
     return { ok: true };
   }
 
@@ -350,7 +387,7 @@ export class SandboxController {
   /** 应用退出前的总清理：作废全部回调、杀沙箱。不广播（退出中没人听了）。 */
   dispose(): void {
     this.generation += 1;
-    this.clearStopFallback();
+    this.clearTimers();
     const child = this.child;
     this.child = null;
     if (child !== null) {
@@ -395,12 +432,72 @@ export class SandboxController {
       return;
     }
     if (this.state === "stopping" || this.state === "running") {
-      // stopping = 我们 kill 的正常收尾；running = 用户自己关了沙箱窗口
-      this.clearStopFallback();
+      // stopping = 我们 kill 的正常收尾（这里就是「确认退出」的那一下）；
+      // running = 用户自己关了沙箱窗口
+      this.clearTimers();
       this.cleanup();
       this.transition("off");
     }
     // error：failLocal 已经清理并宣布过，不重复
+  }
+
+  /**
+   * 退出确认的轮询信号。真进程的 exit 事件是主路径（onChildExit），这里只是「二者取先到」
+   * 里的另一条：假进程 / 事件丢了的极端情况，靠 exitCode 也能把状态推到 off。
+   */
+  private watchExit(child: SandboxProcess): void {
+    this.clearExitWatch();
+    this.exitWatchTimer = setInterval(() => {
+      if (child.exitCode === undefined || child.exitCode === null) return; // 没这个字段 / 还在跑
+      this.onChildExit(this.generation, child.exitCode);
+    }, EXIT_POLL_INTERVAL_MS);
+  }
+
+  /**
+   * 兜底窗口到点：还没确认退出就升级一次——**按 PID 杀进程树**（不按镜像名）。
+   * 升级之后进第二个窗口，仍不退才收尾（onEscalationDeadline）。
+   */
+  private onStopFallback(child: SandboxProcess): void {
+    this.stopFallbackTimer = null;
+    if (this.child !== child) return; // 已经确认退出 / 换了一局
+    const fallbackMs = this.deps.killFallbackMs ?? STOP_FALLBACK_MS;
+    this.log(`沙箱进程（pid ${child.pid ?? "未知"}）${fallbackMs}ms 内没有退出，升级：按 PID 杀进程树`);
+    this.escalateKill(child);
+    this.escalationTimer = setTimeout(
+      () => this.onEscalationDeadline(child),
+      this.deps.killEscalationMs ?? STOP_ESCALATION_MS,
+    );
+  }
+
+  /** 升级杀：有 pid 且有注入点就走 taskkill 进程树，否则退回再调一次 child.kill() */
+  private escalateKill(child: SandboxProcess): void {
+    const pid = child.pid;
+    if (pid !== undefined && this.deps.killTreeByPid !== undefined) {
+      this.deps.killTreeByPid(pid);
+      return;
+    }
+    try {
+      child.kill();
+    } catch {
+      // 失败留到 onEscalationDeadline 收尾（那里会留下痕迹，不静默）
+    }
+  }
+
+  /**
+   * 升级之后仍不退出：收尾为 off，但**留下痕迹**——孤儿 VM 会吃 ~2GB，
+   * 静默变成「未启动」比报错更坑（用户看着干净，机器里留着两个进程）。
+   */
+  private onEscalationDeadline(child: SandboxProcess): void {
+    this.escalationTimer = null;
+    if (this.child !== child) return; // 第二个窗口里退出了 / 换了一局
+    const pid = child.pid ?? "未知";
+    this.log(
+      `沙箱进程（pid ${pid}）在升级杀之后仍未退出——状态收尾为 off，但宿主里可能留着孤儿 VM：` +
+        "任务管理器里若见 WindowsSandboxClient / WindowsSandbox 占着内存，按 PID 手动结束它",
+    );
+    this.child = null;
+    this.cleanup();
+    this.transition("off");
   }
 
   private onChildError(generation: number, cause: Error): void {
@@ -423,8 +520,25 @@ export class SandboxController {
   }
 
   private cleanup(): void {
-    this.clearStopFallback();
+    this.clearTimers();
     this.bridge = null;
+  }
+
+  /** 三个定时器一起清：兜底 / 升级窗口 / 退出轮询 */
+  private clearTimers(): void {
+    this.clearStopFallback();
+    this.clearExitWatch();
+    if (this.escalationTimer !== null) {
+      clearTimeout(this.escalationTimer);
+      this.escalationTimer = null;
+    }
+  }
+
+  private clearExitWatch(): void {
+    if (this.exitWatchTimer !== null) {
+      clearInterval(this.exitWatchTimer);
+      this.exitWatchTimer = null;
+    }
   }
 
   private clearStopFallback(): void {

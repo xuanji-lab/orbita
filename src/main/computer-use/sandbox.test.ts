@@ -18,6 +18,12 @@ import {
 
 class FakeSandboxProcess implements SandboxProcess {
   killed = false;
+  /** 进程 id（升级杀 `killTreeByPid` 认它） */
+  readonly pid = 4242;
+  /** 退出码：null = 还在跑（Node 的 ChildProcess 语义）；emitExit 会把它写上 */
+  exitCode: number | null = null;
+  /** kill() 被调了几次——「升级时是不是真的又打了一次」看它 */
+  killCount = 0;
   private readonly exitListeners: Array<(code: number | null) => void> = [];
   private readonly errorListeners: Array<(error: Error) => void> = [];
 
@@ -30,10 +36,12 @@ class FakeSandboxProcess implements SandboxProcess {
 
   kill(): boolean {
     this.killed = true;
+    this.killCount += 1;
     return true;
   }
 
   emitExit(code: number | null): void {
+    this.exitCode = code ?? 0;
     for (const listener of this.exitListeners) listener(code);
   }
 
@@ -75,6 +83,8 @@ interface Harness {
   announceBridge(options?: { delayMs?: number; respond?: Responder | null }): void;
   /** 已应答的请求记录 */
   requests: BridgeReq[];
+  /** 控制器写过的日志（收尾链的「痕迹」就在这里面） */
+  logs: string[];
   /** close() 后置位，命令应答器循环据此退出（不然 node --test 被永续循环拖着不退出） */
   closed: boolean;
   close(): Promise<void>;
@@ -89,6 +99,7 @@ async function makeHarness(overrides: Partial<SandboxDeps> = {}): Promise<Harnes
     spawnedWsb: [],
     events: [],
     requests: [],
+    logs: [],
     closed: false,
     announceBridge: (options = {}) => {
       const delayMs = options.delayMs ?? 30;
@@ -159,7 +170,7 @@ async function makeHarness(overrides: Partial<SandboxDeps> = {}): Promise<Harnes
     fileExists: () => true,
     bridgePollIntervalMs: 20,
     onStatus: (status) => harness.events.push(status),
-    log: () => {},
+    log: (message) => harness.logs.push(message),
     ...overrides,
   });
   return harness;
@@ -561,6 +572,85 @@ describe("junction 末段名闸门", () => {
       assert.deepEqual(harness.spawned, [], "闸门在 spawn 之前，不该起沙箱进程");
       assert.equal(existsSync(join(harness.dir, "session.wsb")), false, "不该落 .wsb");
       assert.deepEqual(harness.controller.status(), { state: "off" });
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// ── stop 的收尾链：宣布 off 必须有退出证据（2026-10-14 真机咬两次）──────────
+//
+// 原来的 3 秒兜底定时器直接宣布 off，而 taskkill 可能没杀成 / 只杀掉了 launcher：
+// UI 显示「未启动」，宿主却留着 ~2GB 的孤儿 VM（第二次得按 PID 手动清）。
+// 现在：kill → 等退出（exit 事件 / exitCode 轮询，二者取先到）→ 还没退就升级一次
+// 按 PID 杀进程树 → 再等一个窗口仍不退才 off，并留下「进程可能未退出」的痕迹。
+
+describe("stop 的收尾链", () => {
+  /** 起一局并进入 running（三例共用） */
+  const startRunning = async (harness: Harness): Promise<FakeSandboxProcess> => {
+    const startPromise = harness.controller.start();
+    harness.announceBridge();
+    assert.deepEqual(await startPromise, { ok: true });
+    return requireProc(harness);
+  };
+
+  test("① 正常退出：退出事件即确认，off；兜底与升级都不发生", async () => {
+    const escalated: number[] = [];
+    const harness = await makeHarness({
+      killTreeByPid: (pid) => escalated.push(pid),
+      killFallbackMs: 30,
+      killEscalationMs: 30,
+    });
+    try {
+      const proc = await startRunning(harness);
+      assert.deepEqual(await harness.controller.stop(), { ok: true });
+      assert.equal(harness.controller.status().state, "stopping", "stop() 回执只说这次调用，状态听推送");
+      assert.equal(proc.killCount, 1, "第一次 kill 照常发");
+
+      proc.emitExit(0);
+      assert.deepEqual(harness.controller.status(), { state: "off" });
+      // 两个窗口都过完之后也不许再有杀动作（定时器该被清掉）
+      await sleep(150);
+      assert.deepEqual(escalated, [], "确认退出之后不许升级杀");
+      assert.equal(proc.killCount, 1);
+      assert.deepEqual(harness.logs.filter((line) => /升级/.test(line)), []);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("② 永不退出：升级一次按 PID 杀进程树；仍不退才 off，且留下痕迹（不静默）", async () => {
+    const escalated: number[] = [];
+    const harness = await makeHarness({
+      killTreeByPid: (pid) => escalated.push(pid),
+      killFallbackMs: 30,
+      killEscalationMs: 40,
+    });
+    try {
+      const proc = await startRunning(harness);
+      await harness.controller.stop();
+      // 兜底窗口（30ms）→ 升级 → 升级窗口（40ms）→ off
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 2_000);
+      assert.deepEqual(escalated, [4242], "兜底窗口到点应按 PID 升级杀一次");
+      assert.ok(harness.logs.some((line) => /升级/.test(line)), harness.logs.join("\n"));
+      assert.ok(harness.logs.some((line) => /仍未退出/.test(line)), harness.logs.join("\n"));
+      assert.ok(harness.logs.some((line) => /手动结束/.test(line)), "痕迹要带上「怎么收拾」");
+      assert.equal(proc.killCount, 1, "升级走的是 killTreeByPid，不再调 child.kill()");
+      // 收尾之后不再有新的杀动作
+      await sleep(100);
+      assert.equal(escalated.length, 1);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("③ 没接升级杀（无 pid / 无注入点）→ 退回再调一次 child.kill()", async () => {
+    const harness = await makeHarness({ killFallbackMs: 30, killEscalationMs: 30 });
+    try {
+      const proc = await startRunning(harness);
+      await harness.controller.stop();
+      await waitFor(() => (proc.killCount >= 2 ? true : null), 2_000);
+      assert.equal(proc.killCount, 2, "第一次 kill + 升级时再调一次");
     } finally {
       await harness.close();
     }
