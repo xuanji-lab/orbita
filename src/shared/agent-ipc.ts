@@ -586,6 +586,12 @@ export type AgentCommand =
        * 并讲它的用法；缺席 = 关
        */
       pdfCitations?: boolean;
+      /**
+       * 实验功能「会话记忆」的开关（settings.experimentalFeatures["session-memory"]）。
+       * **主进程从设置装配**（同 pdfCitations）。开着时 runtime 才做轮前召回与
+       * 轮后蒸馏；缺席 = 关
+       */
+      sessionMemory?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -669,6 +675,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 实验功能「会话记忆」的开关，语义同 submit（缺席 = 关：不召回也不蒸馏） */
+      sessionMemory?: boolean;
     }
   | {
       /**

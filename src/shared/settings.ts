@@ -123,6 +123,7 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "composer-blackhole",
   "composer-tetris",
   "pdf-citations",
+  "session-memory",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
@@ -249,6 +250,9 @@ export interface AppSettings {
    * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
    *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
    *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
+   * - `session-memory`：会话记忆——每轮开轮前按工作区召回旧记忆注入提示词，
+   *   轮后把值得长期记住的事实蒸馏落盘；关着时既不召回也不蒸馏（agent 侧
+   *   整段跳过），已落的条目不丢、重新打开即恢复。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
    * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；

@@ -549,6 +549,15 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     );
   });
 
+  it("会话记忆（session-memory）也在逐项白名单里；缺席 = 关，不产生任何迁移键", () => {
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "session-memory": true } }).experimentalFeatures,
+      { "session-memory": true },
+    );
+    // 实验开关缺席时键不在（上面第一例的口径）：消费点缺席 = 关，与命令字段同一语义
+    deepStrictEqual("experimentalFeatures" in parseSettings({}), false);
+  });
+
   it("旧总开关 experimental: true = paper-themes 与 session-lifecycle 都开（黑洞不在其内）", () => {
     deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
       "paper-themes": true,
