@@ -302,13 +302,6 @@ export function App() {
       ),
     [session.transcript],
   );
-  const openSessionFromIntent = useCallback(
-    (id: string) => {
-      void session.openSession(id);
-      setRightPanel(null);
-    },
-    [session],
-  );
   /** 子会话头部面包屑「↑ 父标题」：主槽回到父会话（2.2） */
   const openParent = useCallback(
     (parentId: string) => {
@@ -448,6 +441,20 @@ export function App() {
     setDrawerFocus({ tab: id, token: drawerFocusTokenRef.current });
     setRightPanel("drawer");
   };
+  /**
+   * 意图条目的「打开会话」（2026-10-14 用户裁决）：在**辅助对话**（右栏 drawer）里
+   * 打开那条来源会话——主槽不动，右栏从「意图」切过去。会话已不存在时返回 false，
+   * 面板就地给一行说明（不静默）。
+   */
+  const openSessionFromIntent = useCallback(
+    (id: string): boolean => {
+      if (!session.sessions.some((meta) => meta.id === id)) return false;
+      openInSideChat(id);
+      return true;
+    },
+    [session, openInSideChat],
+  );
+
   const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
   const completionNotice =
     noticeMeta === undefined
