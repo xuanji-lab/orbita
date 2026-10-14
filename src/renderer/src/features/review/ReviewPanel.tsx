@@ -209,7 +209,7 @@ export function ReviewPanel(props: {
                         padding: "1px var(--space-2)",
                         borderRadius: "var(--radius-pill)",
                         background: "var(--color-bg-muted)",
-                        fontSize: "var(--font-size-caption)",
+                        fontSize: "var(--font-size-sm)",
                         color: "var(--color-text-tertiary)",
                       }}
                     >
@@ -217,15 +217,15 @@ export function ReviewPanel(props: {
                       {t.review.restored}
                     </span>
                   ) : entry.noBaseline === true ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                       {t.review.noBaseline}
                     </span>
                   ) : entry.binary ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                       {t.review.binary}
                     </span>
                   ) : (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
                       <Stats added={entry.added} removed={entry.removed} />
                     </span>
                   )}
@@ -233,11 +233,11 @@ export function ReviewPanel(props: {
                 {open && (
                   <div style={{ padding: "0 0 var(--space-2)", display: "grid" }}>
                     {diff === undefined || diffLoading === entry.path ? (
-                      <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                      <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.common.loading}
                       </span>
                     ) : diff.diff === null ? (
-                      <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                      <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {diff.restored ? t.review.restoredEmpty : t.review.binary}
                       </span>
                     ) : (
@@ -262,7 +262,7 @@ function RowName(props: { path: string; cwd: string | null }) {
       <span
         style={{
           fontWeight: 600,
-          fontSize: "var(--font-size-body)",
+          fontSize: "var(--font-size-base)",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -276,7 +276,7 @@ function RowName(props: { path: string; cwd: string | null }) {
         <span
           style={{
             minWidth: 0,
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
             color: "var(--color-text-tertiary)",
             overflow: "hidden",
             textOverflow: "ellipsis",

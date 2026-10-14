@@ -81,8 +81,8 @@ export function DiffBody(props: { entries: readonly EditDiffEntry[]; maxHeight?:
         maxHeight: props.maxHeight ?? 320,
         overflow: "auto",
         fontFamily: "var(--font-family-mono)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: 1.6,
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-code)",
       }}
     >
       {props.entries.map((entry, index) =>

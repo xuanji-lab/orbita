@@ -15,12 +15,12 @@ import type { CSSProperties } from "react";
  * `anywhere` 让最长无空格片段在 min-content 计算里也允许断开，宽度才收得下去。
  */
 
-/** 图标盒高度：一行行盒。文字继承 body 的 `--line-height-body`（22px），图标盒取同高、内部居中——多行时三角钉在首行，单行时与旧 `align-items: center` 的位置一致。 */
+/** 图标盒高度：一行行盒。文字继承 body 的 `--line-height-ui`（22px），图标盒取同高、内部居中——多行时三角钉在首行，单行时与旧 `align-items: center` 的位置一致。 */
 export const noticeIconBoxStyle: CSSProperties = {
   display: "inline-flex",
   flex: "0 0 auto",
   alignItems: "center",
-  height: "var(--line-height-body)",
+  height: "var(--line-height-ui)",
 };
 
 /** 文字 wrapper：允许收缩 + 片段内断行（`anywhere`，见上）。 */
@@ -40,6 +40,6 @@ export function noticeParagraphStyle(bad: boolean): CSSProperties {
     minWidth: 0,
     maxWidth: "100%",
     color: bad ? "var(--color-danger)" : "var(--color-text-secondary)",
-    fontSize: "var(--font-size-control)",
+    fontSize: "var(--font-size-base)",
   };
 }

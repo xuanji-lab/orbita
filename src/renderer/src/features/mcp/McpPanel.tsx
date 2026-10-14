@@ -353,7 +353,7 @@ function McpServerCard(props: {
       </span>
       <code
         style={{
-          fontSize: "var(--font-size-caption)",
+          fontSize: "var(--font-size-sm)",
           color: "var(--color-text-tertiary)",
           overflowWrap: "anywhere",
         }}
@@ -602,7 +602,7 @@ function AddServerForm(props: {
           <PanelIconButton title={t.mcp.backToList} onClick={props.onCancel}>
             <Icon name="chevron-left" size={16} />
           </PanelIconButton>
-          <strong style={{ fontSize: "var(--font-size-body)", fontWeight: "var(--weight-semibold)" }}>
+          <strong style={{ fontSize: "var(--font-size-base)", fontWeight: "var(--weight-semibold)" }}>
             {t.mcp.addServer}
           </strong>
         </>
@@ -702,7 +702,7 @@ function AddServerForm(props: {
               onChange={(e) => setJsonText(e.target.value)}
               rows={10}
               className="text-field"
-              style={{ fontFamily: "var(--font-family-mono)", lineHeight: 1.6 }}
+              style={{ fontFamily: "var(--font-family-mono)", lineHeight: "var(--line-height-code)" }}
               placeholder={'{\n  "mcpServers": {\n    "demo": { "command": "node", "args": ["server.js"] }\n  }\n}'}
             />
           </FormRow>
@@ -716,12 +716,12 @@ function AddServerForm(props: {
 function FormRow(props: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "grid", gap: "var(--space-2)" }}>
-      <span style={{ fontSize: "var(--font-size-caption)", fontWeight: "var(--weight-medium)" }}>
+      <span style={{ fontSize: "var(--font-size-sm)", fontWeight: "var(--weight-medium)" }}>
         {props.label}
       </span>
       {props.children}
       {props.hint !== undefined && (
-        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+        <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
           {props.hint}
         </span>
       )}
@@ -731,7 +731,7 @@ function FormRow(props: { label: string; hint?: string; children: React.ReactNod
 
 function FieldError(props: { children: React.ReactNode }) {
   return (
-    <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+    <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-danger)" }}>
       {props.children}
     </span>
   );
@@ -786,7 +786,7 @@ function StatusText(props: { status: McpStatus }) {
     <span
       className="mcp-status-text"
       style={{
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: status.kind === "failed" ? "var(--color-danger)" : "var(--color-text-tertiary)",
       }}
     >

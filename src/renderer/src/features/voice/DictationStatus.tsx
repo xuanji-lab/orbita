@@ -38,7 +38,7 @@ export function DictationStatus(props: {
         alignItems: "center",
         gap: "var(--space-1)",
         minWidth: 0,
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: problem !== null ? "var(--color-danger)" : "var(--color-text-secondary)",
       }}
     >

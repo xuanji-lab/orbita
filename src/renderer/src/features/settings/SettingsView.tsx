@@ -117,7 +117,7 @@ export function SettingsView(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+        <strong style={{ fontSize: "var(--font-size-lg)", fontWeight: "var(--weight-bold)" }}>
           {t.settings.tabs[active.id]}
         </strong>
       </header>
@@ -533,7 +533,7 @@ function General(props: {
 }
 
 /**
- * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，mono、micro、大写加字距，
+ * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，UI 字、sm、semibold，
  * Migration 同用）。最后一组的最后一行不画底线（`.set-group:last-child` 那条 CSS）。
  */
 function SettingGroup(props: { label: string; children: React.ReactNode }) {

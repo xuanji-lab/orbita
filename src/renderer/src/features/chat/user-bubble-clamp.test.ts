@@ -7,16 +7,16 @@ import { BUBBLE_CLAMP_LINES, bubbleClampStyle, isBubbleOverflowing } from "./use
  * 1. maxHeight 只由 行高 token × 行数 × 1em 构成——**不含任何像素常量**
  *    （旧实现 `calc(1.6em * 4 + 20px)` 把 padding/边框算进高度，而 overflow:hidden
  *    的裁剪边是 padding box，第 5 行上半截落进可见带，即本 bug）；
- * 2. 行高取设计系统 token `--line-height-bubble`，不硬编码 1.6（token 改了 clamp 跟着走）。
+ * 2. 行高取设计系统 token `--line-height-reading`，不硬编码 1.6（token 改了 clamp 跟着走）。
  */
 test("折叠态：maxHeight = 行高 token × 行数 × 1em，overflow hidden", () => {
   const style = bubbleClampStyle(false);
   assert.equal(style.overflow, "hidden");
-  assert.equal(style.maxHeight, `calc(var(--line-height-bubble) * ${BUBBLE_CLAMP_LINES} * 1em)`);
+  assert.equal(style.maxHeight, `calc(var(--line-height-reading) * ${BUBBLE_CLAMP_LINES} * 1em)`);
   // 不许再出现像素常量——padding / 边框进公式就是老 bug 回潮
   assert.equal(/\d+px/.test(String(style.maxHeight)), false);
   // 行高来自 token，不是写死的 1.6
-  assert.equal(style.maxHeight.includes("var(--line-height-bubble)"), true);
+  assert.equal(style.maxHeight.includes("var(--line-height-reading)"), true);
 });
 
 test("展开态：不 clamp、不 hidden", () => {

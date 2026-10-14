@@ -105,7 +105,7 @@ const RAIL_CELL: React.CSSProperties = {
   border: 0,
   borderRadius: "var(--radius-sm)",
   fontFamily: "var(--font-family-base)",
-  fontSize: "var(--font-size-micro)",
+  fontSize: "var(--font-size-xs)",
   textAlign: "left",
   cursor: "pointer",
 };
@@ -246,8 +246,8 @@ export function modelPickerRail(options: {
           visibility: "hidden",
           whiteSpace: "nowrap",
           fontFamily: "var(--font-family-base)",
-          // 与 RAIL_CELL 同一档（micro）：尺量错了，切厂商时左栏会自己胖瘦
-          fontSize: "var(--font-size-micro)",
+          // 与 RAIL_CELL 同一档（xs）：尺量错了，切厂商时左栏会自己胖瘦
+          fontSize: "var(--font-size-xs)",
           fontWeight: "var(--weight-semibold)",
         }}
       >

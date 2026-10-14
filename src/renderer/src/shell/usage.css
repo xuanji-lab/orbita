@@ -224,7 +224,7 @@
 /* 星期短标：11px 微字（设计系统字阶最小档），今天的加粗正墨 */
 .usage-wd {
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   line-height: 1;
   white-space: nowrap;
   color: var(--color-text-tertiary);
@@ -236,7 +236,7 @@
 
 /*
  * 星云说的话：悬停一格时从云头顶冒出的小气泡（不是浮层 tooltip——跟着星云走）。
- * 字号与格子下的星期同档（micro），尾巴是一个转 45° 的小方块，同底同描边，指向云。
+ * 字号与格子下的星期同档（xs），尾巴是一个转 45° 的小方块，同底同描边，指向云。
  * 默认居中在云上方；靠两端的格子（data-edge）把气泡往里收，尾巴仍对准云心。
  */
 .usage-say {
@@ -250,7 +250,7 @@
   background: var(--color-bg-panel);
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   line-height: 1;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;

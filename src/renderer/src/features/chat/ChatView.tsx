@@ -414,7 +414,7 @@ function QuoteSelectionLayer(props: {
         background: "var(--color-bg-panel)",
         boxShadow: "var(--shadow-popover)",
         color: "var(--color-text-primary)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         whiteSpace: "nowrap",
         cursor: "pointer",
       }}
@@ -972,7 +972,7 @@ function ChatViewBody(props: {
                 // 这里自己补上同一间距，保持与旧版一致的视觉分隔
                 marginLeft: "var(--space-2)",
                 fontFamily: "var(--font-family-base)",
-                fontSize: "var(--font-size-control)",
+                fontSize: "var(--font-size-base)",
                 color: "var(--color-text-primary)",
                 textDecoration: "underline",
                 cursor: "pointer",
@@ -1716,7 +1716,7 @@ function Pane(props: {
               padding: 0,
               cursor: "pointer",
               font: "inherit",
-              fontSize: "var(--font-size-caption)",
+              fontSize: "var(--font-size-sm)",
               color: "var(--color-text-tertiary)",
             }}
           >
@@ -1742,7 +1742,7 @@ function Pane(props: {
           }}
           onCancel={() => setEditing(false)}
           style={{
-            fontSize: "var(--font-size-title)",
+            fontSize: "var(--font-size-lg)",
             fontWeight: "var(--weight-bold)",
             height: 30,
           }}
@@ -1757,7 +1757,7 @@ function Pane(props: {
               // 与标题之间空出一大截（CDP 复验发现的回归，原来紧挨着的观感变了）。
               flex: "0 1 auto",
               minWidth: 0,
-              fontSize: "var(--font-size-title)",
+              fontSize: "var(--font-size-lg)",
               fontWeight: "var(--weight-bold)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1832,7 +1832,7 @@ function Pane(props: {
             background: "var(--color-bg-muted)",
             color: "var(--color-text-secondary)",
             fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
             fontWeight: "var(--weight-semibold)",
           }}
         >
@@ -1944,7 +1944,7 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
     background: "transparent",
     padding: 0,
     font: "inherit",
-    fontSize: "var(--font-size-caption)",
+    fontSize: "var(--font-size-sm)",
     color: waiting > 0 ? "var(--color-warning)" : "var(--color-text-tertiary)",
     ...(props.onClick !== undefined ? { cursor: "pointer" } : {}),
   };
@@ -2873,8 +2873,8 @@ function UserBubble(props: {
             background: "var(--color-chat-card-bg)",
             border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-bubble)",
-            fontSize: "var(--font-size-chat)",
-            lineHeight: "var(--line-height-bubble)",
+            fontSize: "var(--font-size-base)",
+            lineHeight: "var(--line-height-reading)",
             overflowWrap: "anywhere",
           }}
         >
@@ -3038,12 +3038,12 @@ function SkillInvocationCard(props: { name: string; content: string }) {
         }}
       >
         <Icon name="book-open" size={13} strokeWidth={1.8} style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }} />
-        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+        <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
           skill
         </span>
         <span
           style={{
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
             color: "var(--color-text-primary)",
             fontWeight: 600,
             overflow: "hidden",
@@ -3069,8 +3069,8 @@ function SkillInvocationCard(props: { name: string; content: string }) {
             borderRadius: "var(--radius-md)",
             border: "1px solid var(--color-border-subtle)",
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-caption)",
-            lineHeight: 1.6,
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-code)",
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
             color: "var(--color-text-secondary)",
@@ -3221,7 +3221,7 @@ function BranchRow(props: {
             color: "var(--color-text-tertiary)",
             fontFamily: "var(--font-family-business)",
             fontVariantNumeric: "tabular-nums",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
           }}
         >
           {formatSpeed(props.speed, t)}
@@ -3234,7 +3234,7 @@ function BranchRow(props: {
 /**
  * 折叠行共用骨架（设计系统 ToolCard / ThinkingCard）：满宽热区、hover 淡底、
  * 圆角裁边。行首（图标+label）是「状态」本体，副标是注脚（tertiary mono），
- * 状态词是机器事实（micro mono 等宽数字）。
+ * 状态词是机器事实（xs mono 等宽数字）。
  */
 function CollapseRow(props: {
   open: boolean;
@@ -3261,8 +3261,8 @@ function CollapseRow(props: {
           border: "none",
           color: "var(--color-text-secondary)",
           fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-control)",
-          lineHeight: "var(--line-height-control)",
+          fontSize: "var(--font-size-base)",
+          lineHeight: "var(--line-height-ui)",
           textAlign: "left",
           cursor: interactive ? "pointer" : "default",
         }}
@@ -3280,7 +3280,7 @@ function CollapseRow(props: {
 const TIME_LABEL = {
   color: "var(--color-text-tertiary)",
   fontFamily: "var(--font-family-business)",
-  fontSize: "var(--font-size-micro)",
+  fontSize: "var(--font-size-xs)",
   fontVariantNumeric: "tabular-nums",
 } satisfies React.CSSProperties;
 
@@ -3294,13 +3294,13 @@ const SLOT = {
     textOverflow: "ellipsis",
     color: "var(--color-text-tertiary)",
     fontFamily: "var(--font-family-mono)",
-    fontSize: "var(--font-size-caption)",
+    fontSize: "var(--font-size-sm)",
   },
   status: {
     flex: "0 0 auto",
     color: "var(--color-text-tertiary)",
     fontFamily: "var(--font-family-business)",
-    fontSize: "var(--font-size-micro)",
+    fontSize: "var(--font-size-xs)",
     fontVariantNumeric: "tabular-nums",
   },
 } satisfies Record<string, React.CSSProperties>;
@@ -3314,7 +3314,7 @@ function headLabel(active: boolean): React.CSSProperties {
   return {
     flex: "0 0 auto",
     fontWeight: "var(--weight-strong)",
-    fontSize: "var(--font-size-body)",
+    fontSize: "var(--font-size-base)",
     color: active ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
   };
 }
@@ -3350,8 +3350,8 @@ const EXPANDED_BODY = {
   maxHeight: 320,
   overflow: "auto",
   fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-caption)",
-  lineHeight: 1.6,
+  fontSize: "var(--font-size-sm)",
+  lineHeight: "var(--line-height-code)",
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 } satisfies React.CSSProperties;
@@ -3675,8 +3675,8 @@ function ToolLine(props: {
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                fontSize: "var(--font-size-caption)",
-                lineHeight: "18px",
+                fontSize: "var(--font-size-sm)",
+                lineHeight: "var(--line-height-ui)",
                 color: "var(--color-text-primary)",
                 fontFamily:
                   skillUse !== null ? "var(--font-family-business)" : "var(--font-family-mono)",
@@ -3810,8 +3810,8 @@ function ToolLine(props: {
             minWidth: 0,
             padding: "var(--space-2) 0",
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-caption)",
-            lineHeight: 1.6,
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-code)",
           }}
         >
           {tailPreview.map((line, index) => (
@@ -4168,8 +4168,8 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
         ...EXPANDED_FRAME,
         padding: "var(--space-2) 0",
         fontFamily: "var(--font-family-mono)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: 1.6,
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-code)",
       }}
     >
       {rows.flatMap((row, index) => [
@@ -4219,7 +4219,7 @@ function tokenSpans(line: readonly TokenSpan[]) {
 /**
  * MCP 工具的展开体（4-5，规格 §8）：失败时首行讲清错在哪一层（业务失败是
  * server 报的错，传输失败是我们连不上/等不到）；成功时文本照常、图片内联
- * （max-height 240、--radius-md、发丝边框、mimeType 一行 micro）。
+ * （max-height 240、--radius-md、发丝边框、mimeType 一行 xs）。
  * 相邻同名照常组折叠（组行不在这里，flatten 阶段已按 toolName 归组）。
  */
 function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
@@ -4244,7 +4244,7 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
       }}
     >
       {isFailure && (
-        <p style={{ margin: 0, fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+        <p style={{ margin: 0, fontSize: "var(--font-size-sm)", color: "var(--color-danger)" }}>
           {mcpFailureLead(result, t)}
         </p>
       )}
@@ -4254,8 +4254,8 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
           style={{
             margin: 0,
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-caption)",
-            lineHeight: 1.6,
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-code)",
             color: isFailure ? "var(--color-danger)" : "var(--color-text-primary)",
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
@@ -4287,7 +4287,7 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
           </button>
           <figcaption
             style={{
-              fontSize: "var(--font-size-micro)",
+              fontSize: "var(--font-size-xs)",
               color: "var(--color-text-tertiary)",
               fontFamily: "var(--font-family-mono)",
             }}
@@ -4319,7 +4319,7 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
         <Icon name="image" size={13} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
         <span
           style={{
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
             fontFamily: "var(--font-family-mono)",
             color: "var(--color-text-secondary)",
           }}
@@ -4353,7 +4353,7 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
             </button>
             <figcaption
               style={{
-                fontSize: "var(--font-size-micro)",
+                fontSize: "var(--font-size-xs)",
                 color: "var(--color-text-tertiary)",
                 fontFamily: "var(--font-family-mono)",
                 overflowWrap: "anywhere",
@@ -4437,7 +4437,7 @@ function PlainToolBody(props: {
             </button>
             <figcaption
               style={{
-                fontSize: "var(--font-size-micro)",
+                fontSize: "var(--font-size-xs)",
                 color: "var(--color-text-tertiary)",
                 fontFamily: "var(--font-family-mono)",
               }}
@@ -4489,8 +4489,8 @@ const PLAIN_BODY = {
   overflow: "auto",
   padding: "var(--space-2) 0",
   fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-caption)",
-  lineHeight: 1.6,
+  fontSize: "var(--font-size-sm)",
+  lineHeight: "var(--line-height-code)",
 } satisfies React.CSSProperties;
 
 const BODY_LINE = {
@@ -4668,7 +4668,7 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
         width: "fit-content",
         margin: 0,
         color: "var(--color-text-secondary)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
       }}
     >
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
@@ -4707,7 +4707,7 @@ function Compacting() {
         gap: "var(--space-2)",
         margin: 0,
         color: "var(--color-text-secondary)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
       }}
     >
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
@@ -4743,7 +4743,7 @@ function Retrying(props: { status: RetryStatus }) {
         maxWidth: "100%",
         margin: 0,
         color: "var(--color-text-secondary)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
       }}
     >
       <span style={{ display: "inline-flex", color: "var(--color-warning)" }}>
@@ -4800,7 +4800,7 @@ function StatusLine(props: { children: React.ReactNode; spin?: boolean }) {
         width: "100%",
         padding: "var(--space-4) 0",
         color: "var(--color-text-tertiary)",
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
       }}
     >
       {props.spin === true && (
