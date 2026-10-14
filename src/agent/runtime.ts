@@ -1561,11 +1561,15 @@ async function echoAndPrompt(
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
   // 轮前记忆召回：块拼在 prompt 尾部（KV cache 只破尾段）；超时 / 报错 / 空命中
-  // 都是 null——不注入、照常开轮，记忆的失败不该拦对话。
-  const memoryBlock = await recallMemories(command.sessionId, command.text, {
-    workspaceId: command.workspaceId,
-    cwd: command.cwd,
-  });
+  // 都是 null——不注入、照常开轮，记忆的失败不该拦对话。实验开关（缺席 = 关）
+  // 关着时召回与蒸馏两段一起跳过——已落的条目不丢，重新打开即恢复。
+  const memoryEnabled = command.sessionMemory === true;
+  const memoryBlock = memoryEnabled
+    ? await recallMemories(command.sessionId, command.text, {
+        workspaceId: command.workspaceId,
+        cwd: command.cwd,
+      })
+    : null;
   const promptText = composePromptText(command.text, pasted, files) + (memoryBlock ?? "");
   note.echoed.add(promptText);
   // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联
@@ -1581,7 +1585,9 @@ async function echoAndPrompt(
     ...(images.length > 0 ? { images: forModel(images) } : {}),
   });
   // 轮后蒸馏：fire-and-forget，与下一轮并发；失败静默（易耗品纪律同标题）
-  scheduleMemoryDistill(command.sessionId, opened.session, note, command.text);
+  if (memoryEnabled) {
+    scheduleMemoryDistill(command.sessionId, opened.session, note, command.text);
+  }
 }
 
 async function handle(command: AgentCommand): Promise<void> {
