@@ -399,7 +399,7 @@ export function IntentConfirmCard(props: {
             <Icon name="history" size={12} />
             <b>{edge?.qa.title ?? item.title}</b>
             <span className="intent-confirm-pos">{item.when}</span>
-            {edge !== null && <>· {edge.qa.source}</>}
+            {edge !== null && ` · ${edge.qa.source}`}
             <span style={{ flex: 1 }} />
             {edge !== null && (
               <>
