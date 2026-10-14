@@ -15,7 +15,7 @@ import type { CSSProperties } from "react";
  * 正确结构：**裁剪发生在内容自己的 wrapper 上**（无 padding、无边框），
  * `maxHeight` 只由行高 × 行数构成，气泡的 chrome（padding / 边框 / 圆角 / 遮罩）
  * 一概不进公式——以后改 padding、改边框、换行高 token，clamp 都不会回到
- * 「差一条 padding」的老 bug 上。行高取 `--line-height-bubble`（设计系统真源），
+ * 「差一条 padding」的老 bug 上。行高取 `--line-height-reading`（设计系统真源），
  * 不再硬编码 1.6。
  */
 
@@ -26,7 +26,7 @@ export const BUBBLE_CLAMP_LINES = 4;
 export function bubbleClampStyle(expanded: boolean): CSSProperties {
   if (expanded) return {};
   return {
-    maxHeight: `calc(var(--line-height-bubble) * ${BUBBLE_CLAMP_LINES} * 1em)`,
+    maxHeight: `calc(var(--line-height-reading) * ${BUBBLE_CLAMP_LINES} * 1em)`,
     overflow: "hidden",
   };
 }

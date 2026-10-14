@@ -21,6 +21,7 @@ import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import {
+  probeBlocksStart,
   probeVisual,
   sandboxControl,
   shotFromResult,
@@ -129,7 +130,7 @@ export function SettingsView(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+        <strong style={{ fontSize: "var(--font-size-lg)", fontWeight: "var(--weight-bold)" }}>
           {t.settings.tabs[active.id]}
         </strong>
       </header>
@@ -549,7 +550,7 @@ function General(props: {
 }
 
 /**
- * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，mono、micro、大写加字距，
+ * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，UI 字、sm、semibold，
  * Migration 同用）。最后一组的最后一行不画底线（`.set-group:last-child` 那条 CSS）。
  */
 function SettingGroup(props: { label: string; children: React.ReactNode }) {
@@ -1629,6 +1630,8 @@ function ComputerUseView() {
   const [pending, setPending] = useState<"start" | "stop" | null>(null);
   /** 这次 start / stop 调用的失败原话。与状态机的 error 是两个来源：这个是主进程的 return 值 */
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 最近一次探测结果。提升到这里：「启动」要不要置灰看它（平台不对时主进程也会拒） */
+  const [probeResult, setProbeResult] = useState<ComputerUseProbeResult | null>(null);
 
   // onStatus 返回退订函数，正好作 effect 的清理
   useEffect(() => api.computerUse.onStatus(setStatus), []);
@@ -1654,7 +1657,7 @@ function ComputerUseView() {
 
   return (
     <div className="set-page">
-      <ProbeGroup />
+      <ProbeGroup result={probeResult} onResult={setProbeResult} />
       <SettingGroup label={t.computerUse.sandboxGroup}>
         <SettingRow
           name={t.computerUse.sandboxState}
@@ -1673,7 +1676,7 @@ function ComputerUseView() {
               <Icon name={visual.icon} size={14} spin={visual.spin} style={{ color: visual.tone }} />
               {visual.label}
             </span>
-            <PanelButton onClick={() => run("start")} disabled={!control.canStart}>
+            <PanelButton onClick={() => run("start")} disabled={!control.canStart || probeBlocksStart(probeResult)}>
               <Icon name="play" size={13} /> {t.computerUse.start}
             </PanelButton>
             <PanelButton onClick={() => run("stop")} disabled={!control.canStop}>
@@ -1691,9 +1694,8 @@ function ComputerUseView() {
  * 能力检测：点按钮才查（全部只读，绝不代跑提权命令）；结果保留到下次检测。
  * 未就绪时逐条铺开主进程的 guidance（那边已组织成人话，这里只拆行）。
  */
-function ProbeGroup() {
+function ProbeGroup(props: { result: ComputerUseProbeResult | null; onResult: (result: ComputerUseProbeResult) => void }) {
   const t = useT();
-  const [result, setResult] = useState<ComputerUseProbeResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [probing, setProbing] = useState(false);
 
@@ -1703,7 +1705,7 @@ function ProbeGroup() {
     void api.computerUse
       .probe()
       .then((next) => {
-        setResult(next);
+        props.onResult(next);
         setProbing(false);
       })
       .catch(() => {
@@ -1712,7 +1714,7 @@ function ProbeGroup() {
       });
   };
 
-  const visual = result === null ? null : probeVisual(result);
+  const visual = props.result === null ? null : probeVisual(props.result);
   const note =
     probing ? (
       <span className="set-row-hint">

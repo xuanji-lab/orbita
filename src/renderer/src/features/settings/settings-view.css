@@ -4,14 +4,12 @@
  */
 
 /* ===== 分组标题（General 的 Section 与 Migration 的段落共用）=====
- * 与侧栏节点标题同一个处理：源码写 sentence case，这里转大写；mono、micro、0.06em。
+ * 与侧栏节点标题同一个处理：UI 字（Manrope）、sm、semibold、secondary，句首大写照原文。
  * 设计系统 *Content fundamentals › Group labels*。 */
 .section-label {
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: var(--weight-bold);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-secondary);
 }
 
@@ -59,19 +57,19 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
 }
 
 /* 控件旁的一句说明（如单语主题下语言芯片为何置灰）：状态用文字讲，颜色退到次要 */
 .set-row-hint {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
 .set-row-error {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-danger);
 }
 
@@ -80,8 +78,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
 
@@ -116,8 +114,8 @@
   gap: 1px;
   justify-items: end;
   font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
-  line-height: 16px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
 
@@ -214,7 +212,7 @@
 }
 
 .theme-card-name {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -347,7 +345,7 @@
   gap: 3px;
   white-space: nowrap;
   font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-primary);
 }
 
@@ -363,7 +361,7 @@
   justify-content: space-between;
   margin-top: 4px;
   font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -382,13 +380,13 @@
   direction: rtl;
   text-align: left;
   font-family: var(--font-family-business);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
 .data-dir-path-unavailable {
   font-family: var(--font-family-business);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -456,13 +454,13 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   font-family: var(--font-family-business);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-primary);
 }
 
 .login-site-count {
   font-family: var(--font-family-business);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -471,7 +469,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -503,7 +501,7 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -518,7 +516,7 @@
 
 .login-sites-empty {
   padding: var(--space-2) var(--space-2);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -551,7 +549,7 @@
   width: 320px;
   max-width: 100%;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 
 /* 服务端的原话（如 401 的 JSON）：等宽、次一级的灰，跟在原因后面 */
@@ -584,8 +582,8 @@
   margin: 0;
   padding: 0 0 var(--space-3);
   list-style: none;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
 }
@@ -620,7 +618,7 @@
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -634,11 +632,16 @@
  * import ProvidersView，样式已在产物里）；这里只补实验卡自己的部分：
  * 卡不是按钮（去 cursor / hover 抬升）、展开横跨两列、头部图标砖、
  * 底部发丝线 + 最近一次更新、展开的日志与安静文字钮。 */
+/* 字的三层（一张卡最多三档，字号与颜色同步降级，不交叉）：
+ *   名字 base + semibold + primary → 说明 sm + secondary → 底行元数据 xs + tertiary。
+ * 之前说明是 tertiary、底行反而是 secondary，PR 号又是链接蓝——最不要紧的一行最抢眼
+ * （2026-10-14 用户：「experimental 的字有点随意」）。 */
 .exp-lead {
   margin: 0;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-text-tertiary);
+  max-width: 72ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
 }
 
 /* 卡不是可点的（开关 / 链接 / 展开钮各自可点）：去掉厂商卡的指针与 hover 抬升。
@@ -690,9 +693,9 @@
 
 .exp-card-sum {
   margin: 0;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
-  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
 }
 
 /* 底部：发丝线下面一行「最近一次更新」——PR 号 + 一句话（超长省略）+ 展开钮 */
@@ -711,23 +714,24 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
-/* PR 号：机器事实，mono；无 PR 的旧条目是灰色的 — */
+/* PR 号：机器事实，mono；无 PR 的旧条目是灰色的 —。静止时与底行同灰，
+   悬停才显链接色——它是可点的元数据，不是卡片的主角 */
 .exp-pr {
   flex: none;
   min-width: 34px;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
-  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 a.exp-pr {
   text-decoration: none;
-  color: var(--color-chat-link);
 }
 a.exp-pr:hover {
+  color: var(--color-chat-link);
   text-decoration: underline;
 }
 
@@ -742,8 +746,8 @@ a.exp-pr:hover {
   border-radius: var(--radius-md);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -780,12 +784,12 @@ a.exp-pr:hover {
 .exp-card-date {
   flex: none;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .exp-card-note {
   min-width: 0;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }

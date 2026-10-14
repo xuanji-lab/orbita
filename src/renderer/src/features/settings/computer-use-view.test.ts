@@ -4,6 +4,7 @@ import type { ComputerUseProbeResult, ComputerUseScreenshotResult, SandboxState 
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
+  probeBlocksStart,
   probeVisual,
   sandboxControl,
   shotFromResult,
@@ -104,6 +105,14 @@ describe("电脑使用 · 五态 → 图标与文字", () => {
 });
 
 describe("电脑使用 · 探测结果", () => {
+  test("平台不对 → 拦住「启动」（主进程 start() 同样会拒）；没探测过 / 平台对 → 不拦", () => {
+    assert.equal(probeBlocksStart(null), false, "没探测过不拦，别把首屏就置灰当默认");
+    assert.equal(probeBlocksStart(probeResult()), false);
+    assert.equal(
+      probeBlocksStart(probeResult({ platformOk: false, ready: false, guidance: "电脑使用沙箱目前只在 Windows 上可用。" })),
+      true,
+    );
+  });
   test("就绪：ready，无指引", () => {
     assert.deepEqual(probeVisual(probeResult()), { kind: "ready" });
   });

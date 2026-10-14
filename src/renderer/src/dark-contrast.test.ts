@@ -2,7 +2,7 @@
  * 暗色两档的对比度守卫。
  *
  * 起因（2026-09-27）：用户点名黑色档里「回答结束后的折叠统计小字」看不清——
- * tertiary #6e6e6e 压在井 #141414 上只有 ~3.5:1，还落在 11px 的 micro 字号上。
+ * tertiary #6e6e6e 压在井 #141414 上只有 ~3.5:1，还落在 11px 的 xs 字号上。
  * 这类「调主题值时顺手把对比度调塌」的回归光靠眼睛兜不住，用 WCAG 对比度
  * 公式把底线钉进测试：井上的 tertiary ≥ 4.5（小字可读）、secondary ≥ 7、
  * 正文 ≥ 10，且三档文字的明度次序不许被调平。
@@ -63,7 +63,7 @@ function contrast(fg: string, bg: string): number {
 }
 
 const REQUIRED = [
-  { token: "--color-text-tertiary", floor: 4.5, why: "micro 小字（折叠统计行）的底线" },
+  { token: "--color-text-tertiary", floor: 4.5, why: "xs 小字（折叠统计行）的底线" },
   { token: "--color-text-secondary", floor: 7, why: "副标与状态词要稳读" },
   { token: "--color-text-primary", floor: 10, why: "正文对比即阅读舒适" },
 ] as const;
