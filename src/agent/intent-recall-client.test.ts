@@ -161,6 +161,28 @@ test("非 200：状态码与服务端正文里的 error 一起透传（2026-10-1
   }
 });
 
+test("非 200 正文读到一半被取消：照样结掉（cancelled），不挂住也不打崩进程", { timeout: 5000 }, async () => {
+  const server: Server = createServer((_req, res) => {
+    // 只发状态行与半截正文，不收尾——模拟服务端慢 / 卡住
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.write('{"error":"半截');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+  try {
+    const controller = new AbortController();
+    const pending = runIntentRecall({ ...INPUT, baseUrl: `http://127.0.0.1:${port}` }, controller.signal, () => {});
+    await new Promise((r) => setTimeout(r, 150));
+    controller.abort();
+    const outcome = await pending;
+    assert.equal(outcome.kind, "cancelled");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("挂在流上时外部取消能打断 reader", { timeout: 5000 }, async () => {
   await withServer(
     (_respond, _req) => {

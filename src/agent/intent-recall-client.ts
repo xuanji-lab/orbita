@@ -176,7 +176,9 @@ export async function runIntentRecall(
         res.on("data", (chunk: Buffer) => {
           if (body.length < 2048) body += chunk.toString("utf8");
         });
-        res.on("end", () => {
+        // end 之外还要接 close / error：读正文途中被取消或静默表到点会 destroy 连接，此时
+        // 不一定有 end；IncomingMessage 的 error 没有监听者会直接打崩 agent 进程。finish 幂等。
+        const settleNon200 = (): void => {
           if (signal.aborted) {
             finish({ kind: "cancelled" });
             return;
@@ -194,7 +196,10 @@ export async function runIntentRecall(
             message: `${INTENT_LAB_UNREACHABLE} (HTTP ${res.statusCode}${detail === "" ? "" : ` — ${detail}`})`,
             retryable: true,
           });
-        });
+        };
+        res.on("end", settleNon200);
+        res.on("close", settleNon200);
+        res.on("error", settleNon200);
         return;
       }
       const decoder = new StringDecoder("utf8");
