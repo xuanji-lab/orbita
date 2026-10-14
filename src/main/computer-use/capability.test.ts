@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   editionToSku,
   featureStateFromExe,
+  parseHypervisorPresent,
   parseRegEditionId,
   probe,
   windowsSandboxExePath,
@@ -45,11 +46,11 @@ describe("能力探测解析", () => {
     assert.ok(windowsSandboxExePath("C:\\Windows").endsWith("System32\\WindowsSandbox.exe"));
   });
 
-  test("probe：全过 → ready，无指引，只跑 reg 一条命令（不跑 DISM——非提权必 740）", async () => {
+  test("probe：全过 → ready，无指引，两条命令各跑一次（不跑 DISM——非提权必 740）", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const run: RunCommand = async (command, args) => {
       calls.push({ command, args });
-      return { stdout: REG_PRO, stderr: "" };
+      return { stdout: command === "powershell" ? "True" : REG_PRO, stderr: "" };
     };
     const result = await probe({ platform: "win32", run, exeExists: () => true, systemRoot: "C:\\Windows" });
     assert.equal(result.ready, true);
@@ -57,10 +58,53 @@ describe("能力探测解析", () => {
     assert.deepEqual(result.edition, "pro");
     assert.deepEqual(result.featureState, "enabled");
     assert.equal(result.sandboxExeFound, true);
+    assert.deepEqual(result.hypervisorState, "present");
     assert.deepEqual(
       calls.map((call) => call.command),
-      ["reg"],
+      ["reg", "powershell"],
     );
+    // 虚拟化查询用 Get-CimInstance（不用 wmic：24H2+ 已可选移除）
+    assert.ok(calls[1]?.args.join(" ").includes("Get-CimInstance Win32_ComputerSystem"), calls[1]?.args.join(" "));
+  });
+
+  test("probe：BIOS 关了虚拟化 → 不 ready，指引指回 BIOS（审查意见 B：别让 start 才失败）", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: async (command) => ({ stdout: command === "powershell" ? "False" : REG_PRO, stderr: "" }),
+      exeExists: () => true,
+    });
+    // 其它三项全过——只有虚拟化把它拦下来，这正是这一项存在的理由
+    assert.equal(result.edition, "pro");
+    assert.equal(result.featureState, "enabled");
+    assert.equal(result.sandboxExeFound, true);
+    assert.equal(result.hypervisorState, "absent");
+    assert.equal(result.ready, false);
+    assert.ok(result.guidance?.includes("BIOS"), result.guidance ?? "");
+    assert.ok(result.guidance?.includes("虚拟化"), result.guidance ?? "");
+  });
+
+  test("probe：虚拟化查不成（PowerShell 不在 / 超时）→ unknown，**不阻塞**，其余三项说了算", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: async (command) => {
+        if (command === "powershell") throw new Error("PowerShell 不在");
+        return { stdout: REG_PRO, stderr: "" };
+      },
+      exeExists: () => true,
+    });
+    assert.equal(result.hypervisorState, "unknown");
+    assert.equal(result.ready, true, "少一条信号不能把能用的机器判死");
+    assert.equal(result.guidance, null);
+  });
+
+  test("parseHypervisorPresent：True/False 认（大小写、空白），其余一律 unknown", () => {
+    assert.equal(parseHypervisorPresent("True"), "present");
+    assert.equal(parseHypervisorPresent("true\r\n"), "present");
+    assert.equal(parseHypervisorPresent("  False "), "absent");
+    assert.equal(parseHypervisorPresent("FALSE"), "absent");
+    assert.equal(parseHypervisorPresent(""), "unknown");
+    assert.equal(parseHypervisorPresent("Get-CimInstance : 拒绝访问"), "unknown");
+    assert.equal(parseHypervisorPresent("1"), "unknown");
   });
 
   test("probe：家庭版 → 不 ready，指引提到家庭版、且不给「去开功能」的误导", async () => {
@@ -101,6 +145,7 @@ describe("能力探测解析", () => {
     assert.equal(ran, false);
     assert.equal(result.ready, false);
     assert.equal(result.platformOk, false);
+    assert.equal(result.hypervisorState, "unknown");
     assert.ok(result.guidance?.includes("Windows"));
   });
 
@@ -116,6 +161,7 @@ describe("能力探测解析", () => {
     assert.equal(result.edition, "unknown");
     assert.equal(result.featureState, "disabled");
     assert.equal(result.sandboxExeFound, false);
+    assert.equal(result.hypervisorState, "unknown");
     assert.ok(result.guidance !== null && result.guidance.length > 0);
   });
 });

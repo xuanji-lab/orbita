@@ -82,6 +82,20 @@ export type WindowsEdition = "pro" | "enterprise" | "education" | "home" | "unkn
 /** 「Windows 沙箱」可选功能的状态——由 WindowsSandbox.exe 存在性推导（非提权进程查不了 DISM，错误 740）；unknown 留作契约兼容，当前实现不产出 */
 export type SandboxFeatureState = "enabled" | "disabled" | "unknown";
 
+/**
+ * 虚拟化（Hyper-V 所需的 VT-x / AMD-V）在不在。
+ *
+ * 为什么要单独探这一项：BIOS/UEFI 里虚拟化被关的机器上，功能启用、exe 也在，但
+ * WindowsSandbox.exe 一跑就退——只读探测报 ready、start 才失败，而失败现场（沙箱窗口
+ * 一闪而过 / 一条没头没尾的退出码）对用户没有信息量。读 Win32_ComputerSystem 的
+ * HypervisorPresent 是**非提权、瞬时**的信号（禁 wmic：24H2+ 已可选移除）。
+ *   present  = 虚拟化在（含已在跑 Hyper-V）
+ *   absent   = 被 BIOS/UEFI 关了，沙箱起不来
+ *   unknown  = 查不成（PowerShell 不在 / 超时 / 输出不认识）——**不阻塞**：unknown 只是
+ *             少一条信号，不能让探测把能用的机器判死。
+ */
+export type HypervisorState = "present" | "absent" | "unknown";
+
 /** computerUseProbe 的结果。guidance 是给用户看的手动操作指引（弹窗文案），ready 时为 null */
 export interface ComputerUseProbeResult {
   /** 是不是 Windows（非 Windows 平台一切免谈） */
@@ -92,7 +106,9 @@ export interface ComputerUseProbeResult {
   featureState: SandboxFeatureState;
   /** WindowsSandbox.exe 存在（System32 下） */
   sandboxExeFound: boolean;
-  /** 四项全过。false 时看 guidance */
+  /** 虚拟化在不在（BIOS 关 VT-x 的机器会栽在这里）。unknown = 查不成，不阻塞 */
+  hypervisorState: HypervisorState;
+  /** 四项全过（hypervisorState 为 unknown 也算过）。false 时看 guidance */
   ready: boolean;
   /** 不能就绪时的手动操作指引（含「启用或关闭 Windows 功能」路径与提权命令文本——只给文案，绝不代跑） */
   guidance: string | null;

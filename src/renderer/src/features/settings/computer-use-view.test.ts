@@ -19,6 +19,7 @@ function probeResult(overrides: Partial<ComputerUseProbeResult> = {}): ComputerU
     editionOk: true,
     featureState: "enabled",
     sandboxExeFound: true,
+    hypervisorState: "present",
     ready: true,
     guidance: null,
     ...overrides,
