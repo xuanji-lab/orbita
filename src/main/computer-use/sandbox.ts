@@ -75,7 +75,10 @@ function escapeXml(value: string): string {
  *    把桌面映射目录并到固定路径，再启动桥；&& 要 cmd 解释，整条命令包在 cmd.exe /c 里。
  *    （junction + LogonCommand + 桌面落点均已在 Windows 11 25H2 真机验证，2026-10-10。）
  *
- * Networking 用 Default：官方 .wsb 文档只定义 Disable / Default 两个值，Default 即启用。
+ * Networking 用 Default（沙箱能上网）：官方 .wsb 文档只定义 Disable / Default 两个值，
+ * Default 即启用。**这是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
+ * 断网等于没有这个功能；代价是沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
+ * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
  */
 export function renderWsbXml(input: WsbRenderInput): string {
   const bridgeOnDesktop = `${WSB_DESKTOP_USER}\\${basename(input.bridgeDir)}`;
