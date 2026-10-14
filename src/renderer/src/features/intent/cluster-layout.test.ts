@@ -19,9 +19,12 @@ import {
   mergeTurnLeaves,
   nebulaPercentOf,
   orbitaCentreCandidates,
+  parentLinks,
   parseOrbitaQaId,
+  pathToRoot,
   sceneSeed,
   simulateToConvergence,
+  spineLeaves,
   tick,
   unseededCount,
   type ClusterLeaf,
@@ -388,4 +391,50 @@ test("真实数据 · 5 问 → 7 问长出：旧节点平均位移小（图是�
   }
   // 两轮带来 21 个新节点（+34%），旧节点平均只挪 ~10px（340px 画布的 3%）
   assert.ok(total / count < 12, `旧节点平均位移 ${(total / count).toFixed(1)}px 应 < 12px`);
+});
+
+test("主干：相关度最高的几片叶各自沿树走回本问胞体，路径不经过跨岗桥，止于胞体", () => {
+  const leaves = [
+    leaf("q1", 1, 0.95),
+    leaf("q2", 1, 0.8),
+    leaf("q3", 3, 0.75, { sessionId: "same", title: "同会话" }),
+    leaf("q4", 3, 0.7, { sessionId: "same", title: "同会话" }),
+    leaf("q1", 5, 0.72, { sessionId: "s-q1", title: "会话 q1" }),
+    leaf("q9", 2, 0.99, { verdict: "no" }),
+  ];
+  const scene = buildSlotScene(leaves, 400, 400);
+  const parent = parentLinks(scene);
+  const spine = spineLeaves(scene, parent, 2);
+  assert.deepEqual(spine.map((n) => n.rowKey), ["q1#1", "q2#1"], "按分数取前几，被否认的不进");
+  const soma = scene.nodes.find((n) => n.kind === "soma");
+  for (const node of scene.nodes.filter((n) => n.kind === "leaf")) {
+    const path = pathToRoot(node, parent);
+    assert.ok(path.length >= 2, `${node.id} 至少两跳（叶 → 岗位 → 胞体）`);
+    assert.ok(path.every((l) => l.bridge !== true), "主干不走跨岗桥");
+    const last = path[path.length - 1]!;
+    assert.ok(last.a === soma || last.b === soma, "最后一跳到本问胞体");
+  }
+  // 子簇里的叶多一跳：叶 → 子簇 → 岗位 → 胞体
+  const q3 = scene.nodes.find((n) => n.kind === "leaf" && n.leaf.qaId === "q3")!;
+  assert.equal(pathToRoot(q3, parent).length, 3);
+});
+
+test("主干（按提问）：只连到旧中心的叶，路径止于那个旧中心；连到本问的走到本问", () => {
+  const centres = [
+    { key: "t1", label: "第 1 问", past: true, leaves: [leaf("q2", 2, 0.8, { sessionId: "s-q2", title: "会话 q2" })] },
+    { key: "t2", label: "第 2 问", past: false, leaves: [leaf("q3", 3, 0.75, { sessionId: "s-q3", title: "会话 q3", lastRound: 2, rounds: [2] })] },
+  ];
+  const scene = buildEgoScene(centres, 400, 400);
+  const parent = parentLinks(scene);
+  const end = (qaId: string) => {
+    const node = scene.nodes.find((n) => n.kind === "leaf" && n.leaf.qaId === qaId)!;
+    const path = pathToRoot(node, parent);
+    const last = path[path.length - 1]!;
+    const tip = [last.a, last.b].find((n) => n.kind === "soma");
+    return tip !== undefined && tip.kind === "soma" ? tip.past : null;
+  };
+  assert.equal(end("q3"), false, "本问的叶走到本问胞体");
+  assert.equal(end("q2"), true, "只属旧问的叶止于旧中心");
+  // q2（0.8）比 q3（0.75）更相关，但它连不到本问——主干只取连得到本问的
+  assert.deepEqual(spineLeaves(scene, parent).map((n) => n.leaf.qaId), ["q3"]);
 });

@@ -25,7 +25,10 @@ import {
   GROW_ALPHA,
   leafRange,
   nebulaPercentOf,
+  parentLinks,
+  pathToRoot,
   sceneSeed,
+  spineLeaves,
   simulateToConvergence,
   tick,
   unseededCount,
@@ -33,6 +36,7 @@ import {
   type GraphColorMode,
   type LayoutSeed,
   type LeafNode,
+  type SimLink,
   type SimNode,
 } from "./cluster-layout.ts";
 
@@ -109,7 +113,7 @@ export class GraphRenderer {
   private readonly onSelectLeaf: (rowKey: string) => void;
   /** 节点 id → DOM 句柄（位置更新只动 transform，不重建结构） */
   private readonly handles = new Map<SimNode, NodeHandle>();
-  private readonly linkEls: { path: SVGPathElement; a: SimNode; b: SimNode; leafEnd: LeafNode | null; styled: boolean }[] = [];
+  private readonly linkEls: { path: SVGPathElement; link: SimLink; a: SimNode; b: SimNode; leafEnd: LeafNode | null; styled: boolean }[] = [];
   /** 各视图上次收敛 / 离开时的坐标 */
   private readonly cache = new Map<string, CachedLayout>();
   private scene: ClusterScene | null = null;
@@ -261,11 +265,12 @@ export class GraphRenderer {
         class: link.bridge === true ? "ibridge" : link.ego === true ? `ibridge ego${link.dim === true ? " dim" : ""}` : "ibr",
         fill: "none",
         // 跨岗桥的粗细与透明度走 CSS（.ibridge 雾态 / .ibridge.lit 追溯态），这里不写内联
-        ...(isBridge ? {} : { "stroke-width": link.w ?? 1, "stroke-opacity": link.op ?? 0.5 }),
+        // 岗位粗枝的粗细 = 该岗累积相关度，但封顶 1.8px：再粗就和主干（2.2px 墨色）混了
+        ...(isBridge ? {} : { "stroke-width": Math.min(link.w ?? 1, 1.8), "stroke-opacity": link.op ?? 0.5 }),
       }) as SVGPathElement;
       (isBridge ? bridges : links).push(path);
       const leafEnd = link.b.kind === "leaf" ? link.b : null;
-      this.linkEls.push({ path, a: link.a, b: link.b, leafEnd, styled: !isBridge });
+      this.linkEls.push({ path, link, a: link.a, b: link.b, leafEnd, styled: !isBridge });
     }
     for (const node of scene.nodes) {
       const hit = el("circle", { class: "ihit", r: Math.max(node.r + 6, HIT_RADIUS) });
@@ -290,11 +295,11 @@ export class GraphRenderer {
         const root = el("g", { class: `isoma${node.past ? " past" : ""}`, "data-node": node.id });
         root.append(
           hit,
-          el("circle", { class: "imembrane", r: node.r + 6 }),
+          el("circle", { class: "imembrane", r: node.r + 4 }),
           el("circle", { class: "isoma-core", r: node.r }),
         );
         if (node.label !== "") {
-          const label = el("text", { class: "isoma-label", "text-anchor": "middle", y: node.r + 15 });
+          const label = el("text", { class: "isoma-label", "text-anchor": "middle", y: node.r + 13 });
           label.textContent = node.label;
           root.append(label);
         }
@@ -332,12 +337,10 @@ export class GraphRenderer {
     const leaves = scene.nodes.filter((node): node is LeafNode => node.kind === "leaf");
     const range = leafRange(leaves.map((node) => node.leaf));
     const inRound = (rounds: readonly number[]): boolean => activeRound === null || rounds.includes(activeRound);
-    const colorOf = new Map<LeafNode, string>();
     for (const node of leaves) {
       const handle = this.handles.get(node);
       if (handle?.core === undefined) continue;
       const color = nebulaFill(nebulaPercentOf(colorMode, node.leaf, range));
-      colorOf.set(node, color);
       const selected = selKey === node.rowKey;
       const cls = [
         "ileaf",
@@ -388,10 +391,29 @@ export class GraphRenderer {
       if (!link.styled) continue;
       const leaf = link.leafEnd;
       if (leaf === null) continue;
-      const color = colorOf.get(leaf);
-      if (color !== undefined) link.path.setAttribute("stroke", color);
-      link.path.setAttribute("class", `ibr${inRound(leaf.leaf.rounds) ? "" : " dim"}`);
+      // 枝一律中性墨色：颜色只给节点（用户：「节点本身用 color gradient」）——枝也上 nebula 色时，
+      // 蓝枝、灰粗枝、黑主干三种线混在一起分不清（2026-10-14 真机）。拿不准的叶连同它的枝退淡，
+      // 主干自然浮出来。
+      link.path.removeAttribute("stroke");
+      link.path.setAttribute("class", `ibr${inRound(leaf.leaf.rounds) ? "" : " dim"}${leaf.leaf.solid ? "" : " mid"}`);
     }
+    // 主干：相关度最高的几片叶走回本问的那一路边常亮（不管隔几跳）；选中的叶亮出它的那一路
+    // （trace，强调色）。class 在上面各自设完之后再叠加，坐标不动。
+    const parent = parentLinks(scene);
+    const spine = new Set<SimLink>();
+    const spineNodes = new Set<SimNode>();
+    for (const leaf of spineLeaves(scene, parent)) {
+      spineNodes.add(leaf);
+      for (const link of pathToRoot(leaf, parent)) spine.add(link);
+    }
+    const trace = new Set<SimLink>();
+    const picked = leaves.find((node) => node.rowKey === selKey);
+    if (picked !== undefined) for (const link of pathToRoot(picked, parent)) trace.add(link);
+    for (const item of this.linkEls) {
+      item.path.classList.toggle("spine", spine.has(item.link));
+      item.path.classList.toggle("trace", trace.has(item.link));
+    }
+    for (const node of leaves) this.handles.get(node)?.root.classList.toggle("spine", spineNodes.has(node));
   }
 
   /* ------------------------------------------------ 模拟循环 */

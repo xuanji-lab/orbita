@@ -394,7 +394,8 @@ export function buildSlotScene(
     y: somaAt.y,
     vx: 0,
     vy: 0,
-    r: dense ? 12 : 11,
+    // 本问胞体：墨色本身就够醒目，不用做大（用户 2026-10-14）
+    r: 7,
     rep: 3,
     pin: { x: W / 2, y: H / 2 },
     label: "",
@@ -583,7 +584,7 @@ export function buildEgoScene(
       y: at.y,
       vx: 0,
       vy: 0,
-      r: past ? 7 : 11,
+      r: past ? 5 : 7,
       rep: past ? 3 : 4,
       grav: 24,
       pin: past ? undefined : { x: W / 2, y: H / 2 },
@@ -818,4 +819,88 @@ export function parseOrbitaQaId(qaId: string): { sessionId: string; turnId: stri
   const at = rest.indexOf(":");
   if (at <= 0 || at >= rest.length - 1) return null;
   return { sessionId: rest.slice(0, at), turnId: rest.slice(at + 1) };
+}
+
+/* ---------------------------------------------------------------- 主干（spine）
+
+  用户 2026-10-14：「spine 应该是最相关的那几条——不管隔了几跳，它们连到本问的那一路边
+  都要亮起来」。图是一棵以本问胞体为根的树（再加跨岗桥 / 共享实线）；主干 = 相关度
+  最高的几片叶各自沿树走回本问的那条路径上的全部边。选中的叶同样亮出它的那一路。 */
+
+/** 主干取相关度最高的几片叶。 */
+export const SPINE_LEAVES = 3;
+
+/**
+ * 每个节点走回本问的父边：从**本问胞体**（钉住的那个、非旧中心）出发沿非桥边做 BFS；
+ * 按提问视图里只连到旧中心的叶，再从各旧中心补一轮（它们和本问之间没有直接的边，
+ * 那一路就止于它所属的旧中心）。返回 子节点 → 通向父节点的那条边。
+ */
+export function parentLinks(scene: ClusterScene): Map<SimNode, SimLink> {
+  const adj = new Map<SimNode, SimLink[]>();
+  for (const link of scene.links) {
+    if (link.bridge === true) continue;
+    for (const end of [link.a, link.b]) {
+      const list = adj.get(end) ?? [];
+      list.push(link);
+      adj.set(end, list);
+    }
+  }
+  const somas = scene.nodes.filter((node): node is SomaNode => node.kind === "soma");
+  const roots = [...somas.filter((soma) => !soma.past), ...somas.filter((soma) => soma.past)];
+  const parent = new Map<SimNode, SimLink>();
+  const seen = new Set<SimNode>();
+  for (const root of roots) {
+    if (seen.has(root)) continue;
+    seen.add(root);
+    const queue: SimNode[] = [root];
+    for (let head = 0; head < queue.length; head += 1) {
+      const node = queue[head]!;
+      for (const link of adj.get(node) ?? []) {
+        const next = link.a === node ? link.b : link.a;
+        if (seen.has(next) || next.kind === "soma") continue;
+        seen.add(next);
+        parent.set(next, link);
+        queue.push(next);
+      }
+    }
+  }
+  return parent;
+}
+
+/** 一片叶走回本问的全部边（叶 → 子簇 → 岗位 / 中心 → 胞体）。 */
+export function pathToRoot(leaf: SimNode, parent: ReadonlyMap<SimNode, SimLink>): SimLink[] {
+  const out: SimLink[] = [];
+  let node: SimNode = leaf;
+  for (let guard = 0; guard < 64; guard += 1) {
+    const link = parent.get(node);
+    if (link === undefined) break;
+    out.push(link);
+    node = link.a === node ? link.b : link.a;
+  }
+  return out;
+}
+
+/** 一条路径是否走到**本问**胞体（非旧中心）。 */
+export function reachesCurrent(path: readonly SimLink[]): boolean {
+  const last = path[path.length - 1];
+  if (last === undefined) return false;
+  return [last.a, last.b].some((node) => node.kind === "soma" && !node.past);
+}
+
+/**
+ * 主干叶：**连得到本问**的叶里相关度最高的几片（同分取最近一轮用过的；被否认的不进）。
+ * 按提问视图里只属于旧问的叶走不到本问——它们再相关也不是本问的主干。
+ */
+export function spineLeaves(
+  scene: ClusterScene,
+  parent: ReadonlyMap<SimNode, SimLink>,
+  count = SPINE_LEAVES,
+): LeafNode[] {
+  return scene.nodes
+    .filter(
+      (node): node is LeafNode =>
+        node.kind === "leaf" && node.leaf.verdict !== "no" && reachesCurrent(pathToRoot(node, parent)),
+    )
+    .sort((a, b) => b.leaf.score - a.leaf.score || b.leaf.lastRound - a.leaf.lastRound || (a.id < b.id ? -1 : 1))
+    .slice(0, count);
 }

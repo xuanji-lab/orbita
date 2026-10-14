@@ -512,6 +512,20 @@ function IntentGraph(props: {
       {props.hasData && (
         <>
           <p className="intent-summary">{summary}</p>
+          {/* 图例（用户 2026-10-14：「只看颜色分不出早晚，需要图例」）：色带两端随着色模式换字；
+              再给实心 / 空心 / 主干三个记号 */}
+          <div className="intent-key" aria-hidden="true">
+            <span className="intent-key-ramp">
+              <span>{props.colorMode === "time" ? t.intentPanel.legendEarly : t.intentPanel.legendLow}</span>
+              <i className="intent-key-bar" />
+              <span>{props.colorMode === "time" ? t.intentPanel.legendLate : t.intentPanel.legendHigh}</span>
+            </span>
+            <span className="intent-key-items">
+              <span><i className="intent-key-dot solid" />{t.intentPanel.legendSolid}</span>
+              <span><i className="intent-key-dot" />{t.intentPanel.legendMid}</span>
+              <span><i className="intent-key-line" />{t.intentPanel.legendSpine}</span>
+            </span>
+          </div>
           <div className="intent-legend">
             <button
               type="button"

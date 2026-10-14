@@ -1560,6 +1560,13 @@ export const en = {
     /** 图角着色开关：颜色编码的维度 */
     colorTime: "Time",
     colorScore: "Relevance",
+    legendEarly: "Earlier",
+    legendLate: "Later",
+    legendLow: "Weaker",
+    legendHigh: "Stronger",
+    legendSolid: "Selected",
+    legendMid: "Unsure",
+    legendSpine: "Spine",
     /** 分隔条 */
     entriesLabel: "Entries",
     selectedCount: (n: number) => `selected ${n}`,

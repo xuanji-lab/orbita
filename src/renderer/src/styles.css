@@ -3952,9 +3952,13 @@ button.panel-group-toggle:hover {
 .intent-summary {
   position: absolute;
   top: 34px;
-  left: 12px;
-  right: 12px;
+  left: 8px;
+  max-width: calc(100% - 16px);
   margin: 0;
+  /* 浮在图上的一行字：给一层面板底，枝和叶从它下面穿过时字仍可读（真机截图里被叶子压住） */
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-bg-panel) 82%, transparent);
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
   pointer-events: none;
@@ -3972,6 +3976,59 @@ button.panel-group-toggle:hover {
   z-index: 1;
 }
 
+/* 图例（左下）：色带两端随着色模式换字（时间：早→晚；相关度：弱→强），
+   色带就是叶子的 nebula 三档；再给实心 / 空心 / 主干三个记号 */
+.intent-key {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-bg-panel) 82%, transparent);
+  display: grid;
+  gap: 4px;
+  z-index: 1;
+  pointer-events: none;
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.intent-key-ramp,
+.intent-key-items,
+.intent-key-items > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.intent-key-items {
+  gap: 10px;
+}
+.intent-key-bar {
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--color-nebula) 30%, transparent),
+    color-mix(in srgb, var(--color-nebula) 62%, transparent),
+    var(--color-nebula)
+  );
+}
+.intent-key-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: 1.4px solid var(--color-nebula);
+  background: var(--color-bg-panel);
+}
+.intent-key-dot.solid {
+  background: var(--color-nebula);
+}
+.intent-key-line {
+  width: 14px;
+  height: 0;
+  border-top: 2.2px solid var(--color-text-primary);
+}
+
 /* —— 图元：枝 / 桥 / 簇心 / 叶 / 胞体 —— */
 .ibr {
   stroke: var(--color-text-primary);
@@ -3980,6 +4037,18 @@ button.panel-group-toggle:hover {
 .ibr.dim,
 .ileaf.dim {
   opacity: 0.22;
+}
+/* 拿不准（mid）的叶与它的枝退淡：真数据里大多数都是拿不准，满亮度时盖住了主干。
+   主干 / 选中路径 / 被选中的叶不受影响（下面的 .spine / .trace / .sel 规则写在后面，同权重后者胜）。 */
+.ibr.mid {
+  stroke-opacity: 0.18;
+}
+.ileaf.mid {
+  opacity: 0.4;
+}
+.ileaf.mid.spine,
+.ileaf.mid.sel {
+  opacity: 1;
 }
 /* 跨岗桥（按岗位视图）：同一事件存在几个岗位里——桥没错，但多了就成蛛网。平时是「雾」：
    淡到 12%、细虚线，只给一个隐约的连接感；选中一片叶时它连出去的桥亮起（.lit），可追溯。
@@ -3991,6 +4060,24 @@ button.panel-group-toggle:hover {
   stroke-opacity: 0.12;
   stroke-width: 0.9;
   transition: stroke-opacity var(--duration-fast, 120ms);
+}
+/* 主干：最相关的几片叶走回本问的那一路（不管几跳）——用墨色加粗压在普通枝上；
+   选中叶的那一路（trace）用强调色，盖过主干。用户 2026-10-14 定。 */
+.ibr.spine,
+.ibridge.ego.spine {
+  stroke: var(--color-text-primary);
+  stroke-opacity: 0.85;
+  stroke-width: 2.2;
+}
+.ibr.trace,
+.ibridge.ego.trace {
+  stroke: var(--color-accent);
+  stroke-opacity: 1;
+  stroke-width: 2.4;
+}
+.ileaf.spine .ileaf-core {
+  stroke: var(--color-text-primary);
+  stroke-width: 1.8;
 }
 .ibridge.lit {
   stroke-opacity: 0.9;
