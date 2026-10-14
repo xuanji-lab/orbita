@@ -4114,9 +4114,11 @@ button.panel-group-toggle:hover {
   font-weight: var(--weight-bold);
   font-size: var(--font-size-base);
 }
+/* 确认卡只用三档字号（用户 2026-10-15 硬规则）：大字陈述 lg / 标题与按钮 base / 其余一律 sm
+   （进度、分数、岗胶囊、会话表头、对话区标签、截断提示、说明行）。xs 不进这张卡 */
 .intent-confirm-pos {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -4152,7 +4154,7 @@ button.panel-group-toggle:hover {
   padding: 0 7px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--color-border-default);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
@@ -4231,7 +4233,7 @@ button.panel-group-toggle:hover {
   gap: 8px;
   padding: 7px 11px;
   border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 .intent-conv-h b {
@@ -4284,12 +4286,12 @@ button.panel-group-toggle:hover {
   overflow: auto;
 }
 .intent-conv-who {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   margin-bottom: 1px;
 }
 .intent-conv-located-note {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 /* 「… 前面 / 后面还有 N 字」：区首区尾的小字；来源在本机时是链接（点了在辅助对话打开） */
@@ -4299,7 +4301,7 @@ button.panel-group-toggle:hover {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   text-align: left;
 }
@@ -4317,13 +4319,20 @@ button.intent-conv-cut.openable:hover {
   font-size: var(--font-size-sm);
   line-height: var(--line-height-reading);
 }
-/* 卡内的 markdown 标题不比正文大（h1 用 heading 字号会把 5 行的区撑成两三行）：同正文字号、只加粗 */
+/* 卡内的 markdown 标题不比正文大（h1 用 heading 字号会把 5 行的区撑成两三行；面板条目展开后
+   h1 / h2 是第四、五档字号）：同正文字号、只加粗。确认卡对话区与面板条目展开区同一条规则 */
 .intent-conv-md .chat-md h1,
 .intent-conv-md .chat-md h2,
 .intent-conv-md .chat-md h3,
 .intent-conv-md .chat-md h4,
 .intent-conv-md .chat-md h5,
-.intent-conv-md .chat-md h6 {
+.intent-conv-md .chat-md h6,
+.intent-row-md .chat-md h1,
+.intent-row-md .chat-md h2,
+.intent-row-md .chat-md h3,
+.intent-row-md .chat-md h4,
+.intent-row-md .chat-md h5,
+.intent-row-md .chat-md h6 {
   margin: var(--space-2) 0 var(--space-1);
   font-size: inherit;
   line-height: inherit;
@@ -5010,6 +5019,11 @@ mark.intent-mark {
 .intent-row-md .chat-md p {
   margin: 0 0 3px;
 }
-.intent-row-md .chat-md pre {
-  font-size: var(--font-size-xs);
+/* 卡内 markdown 的代码（行内与块）跟正文同号：.chat-md 的行内 code 是 0.9em、块是 sm——放进 12px 的卡里
+   就是第四档字号（用户 2026-10-15 硬规则：一张卡至多三档）。等宽字与底色已经足够区分 */
+.intent-row-md .chat-md code,
+.intent-row-md .chat-md pre code,
+.intent-conv-md .chat-md code,
+.intent-conv-md .chat-md pre code {
+  font-size: inherit;
 }
