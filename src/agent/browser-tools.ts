@@ -1,6 +1,14 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
-import type { BrowserScrollDirection, BrowserTarget, BrowserToolOutcome, BrowserToolRequest } from "../shared/browser.ts";
+import {
+  BROWSER_DIAGNOSTICS_BUFFER_LIMIT,
+  BROWSER_DIAGNOSTICS_DEFAULT_LIMIT,
+  type BrowserConsoleLevel,
+  type BrowserScrollDirection,
+  type BrowserTarget,
+  type BrowserToolOutcome,
+  type BrowserToolRequest,
+} from "../shared/browser.ts";
 
 /**
  * agent 的受管浏览器工具：读取（navigate / observe / extract / screenshot / tabs / scroll）、
@@ -205,6 +213,95 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           ...(args["format"] === "markdown" ? { format: "markdown" as const } : {}),
           ...(typeof args["ref"] === "string" && args["ref"].trim() !== "" ? { ref: args["ref"].trim() } : {}),
         ...userTabArg(args["tab"]),
+        },
+        signal,
+      );
+    },
+  };
+
+  const consoleMessages: ToolDefinition = {
+    name: "browser_console_messages",
+    label: "browser_console_messages",
+    description:
+      "Read the console messages of the page in your browser tab: console.log / warn / error output, uncaught " +
+      "exceptions, and browser-level errors (failed requests, CORS, mixed content). Check this when a page loaded " +
+      "but looks empty or wrong — a JS error or a refused request usually explains it, so look here before guessing " +
+      "or retrying. level filters by minimum severity (debug < log < info < warn < error): pass \"error\" to see " +
+      "only errors. Only your own tab is read. Capture starts with the first call and stays on for the tab " +
+      "afterwards, so if the page is already broken when you call it, reload it (browser_navigate with the same " +
+      "URL) and call this tool again. " +
+      UNTRUSTED,
+    parameters: {
+      type: "object",
+      properties: {
+        level: {
+          type: "string",
+          enum: [...CONSOLE_LEVELS],
+          description: "Minimum severity to include: debug < log < info < warn < error. Defaults to log.",
+        },
+        limit: {
+          type: "number",
+          description:
+            `Return at most this many of the most recent messages, 1–${BROWSER_DIAGNOSTICS_BUFFER_LIMIT}. ` +
+            `Defaults to ${BROWSER_DIAGNOSTICS_DEFAULT_LIMIT}.`,
+        },
+      },
+      required: [],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const level = isConsoleLevel(args["level"]) ? args["level"] : undefined;
+      const limit = numberOf(args["limit"]);
+      return call(
+        { action: "console", ...(level === undefined ? {} : { level }), ...(limit === undefined ? {} : { limit }) },
+        signal,
+      );
+    },
+  };
+
+  const networkRequests: ToolDefinition = {
+    name: "browser_network_requests",
+    label: "browser_network_requests",
+    description:
+      "Read the network requests the page in your browser tab made: method, URL, status code, MIME type and " +
+      "failures (net::ERR_FAILED, CORS, DNS). Check this when a page loaded but shows no data — an XHR answering " +
+      "401/403 or a blocked request usually explains it, so look here before guessing or retrying. url filters by " +
+      "case-insensitive substring; statusMin / statusMax by status code range (statusMin: 400 for 4xx/5xx). " +
+      "Requests that failed to load have no status code and stop matching once a status range is given. " +
+      "Only your own tab is read. Capture starts with the first call and stays on for the tab afterwards, so if " +
+      "the page is already broken when you call it, reload it (browser_navigate with the same URL) and call again. " +
+      UNTRUSTED,
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Only requests whose URL contains this text (case-insensitive)." },
+        statusMin: { type: "number", description: "Only responses with a status code >= this (e.g. 400 for 4xx/5xx)." },
+        statusMax: { type: "number", description: "Only responses with a status code <= this (e.g. 499 for 4xx)." },
+        limit: {
+          type: "number",
+          description:
+            `Return at most this many of the most recent requests, 1–${BROWSER_DIAGNOSTICS_BUFFER_LIMIT}. ` +
+            `Defaults to ${BROWSER_DIAGNOSTICS_DEFAULT_LIMIT}.`,
+        },
+      },
+      required: [],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const url = typeof args["url"] === "string" && args["url"].trim() !== "" ? args["url"].trim() : undefined;
+      const statusMin = numberOf(args["statusMin"]);
+      const statusMax = numberOf(args["statusMax"]);
+      if (statusMin !== undefined && statusMax !== undefined && statusMin > statusMax) {
+        throw new Error(`statusMin (${statusMin}) is greater than statusMax (${statusMax}) — that range matches nothing.`);
+      }
+      const limit = numberOf(args["limit"]);
+      return call(
+        {
+          action: "network",
+          ...(url === undefined ? {} : { url }),
+          ...(statusMin === undefined ? {} : { statusMin }),
+          ...(statusMax === undefined ? {} : { statusMax }),
+          ...(limit === undefined ? {} : { limit }),
         },
         signal,
       );
@@ -439,7 +536,27 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     },
   };
 
-  return [navigate, observe, extract, screenshot, tabs, scroll, click, type, press, requestUserAction];
+  return [
+    navigate,
+    observe,
+    extract,
+    consoleMessages,
+    networkRequests,
+    screenshot,
+    tabs,
+    scroll,
+    click,
+    type,
+    press,
+    requestUserAction,
+  ];
+}
+
+/** 控制台级别的五个取值（JSON schema 的 enum 与请求契约同源） */
+const CONSOLE_LEVELS: readonly BrowserConsoleLevel[] = ["debug", "log", "info", "warn", "error"];
+
+function isConsoleLevel(value: unknown): value is BrowserConsoleLevel {
+  return typeof value === "string" && (CONSOLE_LEVELS as readonly string[]).includes(value);
 }
 
 /** 模型偶尔把数字写成字符串（"120"）：认；其余一律当没给 */

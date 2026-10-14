@@ -13,17 +13,24 @@ const CDP_TIMEOUT_MS = 10_000;
  */
 export class CdpTimeoutError extends Error {}
 
-/** 懒 attach 调试器；页面崩溃或被别的调试器抢走后下次调用自己重连。每条命令带超时 */
-export async function cdp(contents: WebContents, method: string, params?: object): Promise<unknown> {
+/**
+ * 懒 attach 调试器。attach 后页面崩溃或被别的调试器抢走，下次调用自己重连。
+ * 失败给一句能读的话——截图路径要认出它来换补拍路径（frame-capture.ts）。
+ */
+export function ensureDebugger(contents: WebContents): void {
   const debuggerApi = contents.debugger;
-  if (!debuggerApi.isAttached()) {
-    try {
-      debuggerApi.attach("1.3");
-    } catch (cause) {
-      throw new Error(`Could not inspect the page (${cause instanceof Error ? cause.message : String(cause)}).`);
-    }
+  if (debuggerApi.isAttached()) return;
+  try {
+    debuggerApi.attach("1.3");
+  } catch (cause) {
+    throw new Error(`Could not inspect the page (${cause instanceof Error ? cause.message : String(cause)}).`);
   }
-  return withTimeout(debuggerApi.sendCommand(method, params), CDP_TIMEOUT_MS, "The page did not respond in time.", CdpTimeoutError);
+}
+
+/** 懒 attach 调试器；每条命令带超时 */
+export async function cdp(contents: WebContents, method: string, params?: object): Promise<unknown> {
+  ensureDebugger(contents);
+  return withTimeout(contents.debugger.sendCommand(method, params), CDP_TIMEOUT_MS, "The page did not respond in time.", CdpTimeoutError);
 }
 
 export function withTimeout<T>(

@@ -13,10 +13,19 @@
  *              改用 browser_extract / browser_observe。
  * 交互（点击 / 输入 / 按键 / 滚动 / 后退）在 interactions.ts；这里派发，并把「动作之后页面怎么样了」
  * （换页、下载、弹框）统一报给模型。每个 CDP 命令都有超时（cdp.ts）：卡死的页面不能把 agent 的一轮拖死。
+ *
+ * 诊断（browser_console_messages / browser_network_requests）：页面加载成功但内容不对时，模型能读到的
+ * 唯一证据是控制台与网络记录。采集懒打开（第一次调用时才 enable Runtime / Log / Network 三个域，
+ * 见 diagnostics-recorder.ts），缓冲与过滤在纯逻辑的 diagnostics.ts。
  */
 import { nativeImage, type WebContents } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
+import {
+  BROWSER_DIAGNOSTICS_BUFFER_LIMIT,
+  BROWSER_DIAGNOSTICS_DEFAULT_LIMIT,
+  type BrowserToolOutcome,
+  type BrowserToolRequest,
+} from "../../shared/browser.ts";
 import { availableDownloadPath } from "./downloads.ts";
 import { resolveAddressOrSearch } from "./address.ts";
 import { looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
@@ -31,6 +40,8 @@ import { describeTabs } from "./user-tabs.ts";
 import { click, goHistory, guardDialogs, normalizeRef, press, releaseRefObjects, resolveRef, scroll, typeText, watchPageChange } from "./interactions.ts";
 import { captureFrame, captureRegion } from "./frame-capture.ts";
 import { fitWithin, regionClip, shotSize, SHOT_MAX_HEIGHT, SHOT_MAX_WIDTH } from "./screenshot-geometry.ts";
+import { BrowserDiagnostics } from "./diagnostics-recorder.ts";
+import { formatConsoleReport, formatNetworkReport } from "./diagnostics.ts";
 
 /** 页面加载最多等这么久；到点不算失败，如实说「还在加载」（慢站的正文往往已经可读） */
 const NAVIGATE_TIMEOUT_MS = 45_000;
@@ -46,6 +57,14 @@ const DOWNLOAD_WAIT_MS = 120_000;
  * 进程级一份——沙盒也只有一个。
  */
 const pacer = new HostPacer({ minIntervalMs: 1000 });
+
+/** 页面诊断（console / network）的缓冲：进程级一份，每个 tab 一个键，tab 关闭时由 recorder 自己清 */
+const browserDiagnostics = new BrowserDiagnostics();
+
+/** 诊断类动作的请求子集（两者共用一条读取路径） */
+type DiagnosticsRequest =
+  | Extract<BrowserToolRequest, { action: "console" }>
+  | Extract<BrowserToolRequest, { action: "network" }>;
 
 export async function applyBrowserRequest(
   sandbox: BrowserSandbox,
@@ -97,6 +116,9 @@ export async function applyBrowserRequest(
             ? "The user's tab is empty — they have not opened anything in it."
             : "Your browser tab has no page yet. Call browser_navigate first (or browser_tabs to see what the user has open).",
         };
+      }
+      if (request.action === "console" || request.action === "network") {
+        return await readDiagnostics(tab, contents, request);
       }
       if (request.action === "observe") return await observe(tab, contents, request.maxNodes, !readsUser);
       if (request.action === "extract") return await extract(tab, contents, request);
@@ -304,6 +326,40 @@ async function act(
     lines.push(`Still on ${pageUrl(contents)}. Observe or screenshot the page to see what changed.`);
   }
   return { ok: true, text: lines.join("\n"), card: card(tab, contents) };
+}
+
+/**
+ * 控制台 / 网络诊断：第一次调用时把采集打开（diagnostics-recorder.ts），然后读缓冲。
+ * 只作用于 agent 自己的 tab——用户的 tab 不采集，也不在这里出现（请求里根本没有 tab 参数）。
+ * 采集刚打开的那一次要如实说「只记从现在起的事」，否则空缓冲会被读成「页面没问题」。
+ */
+async function readDiagnostics(
+  tab: BrowserTab,
+  contents: WebContents,
+  request: DiagnosticsRequest,
+): Promise<BrowserToolOutcome> {
+  const { state, justEnabled } = await browserDiagnostics.open(contents);
+  const page = { url: pageUrl(contents), title: contents.getTitle() };
+  const limit = clampInt(request.limit ?? BROWSER_DIAGNOSTICS_DEFAULT_LIMIT, 1, BROWSER_DIAGNOSTICS_BUFFER_LIMIT);
+  if (request.action === "console") {
+    const query = { ...(request.level === undefined ? {} : { level: request.level }), limit };
+    return {
+      ok: true,
+      text: formatConsoleReport(page, state.consoleMessages(request.level), query, justEnabled, state.consoleCount),
+      card: card(tab, contents),
+    };
+  }
+  const query = {
+    ...(request.url === undefined ? {} : { url: request.url }),
+    ...(request.statusMin === undefined ? {} : { statusMin: request.statusMin }),
+    ...(request.statusMax === undefined ? {} : { statusMax: request.statusMax }),
+    limit,
+  };
+  return {
+    ok: true,
+    text: formatNetworkReport(page, state.networkRequests(query), query, justEnabled, state.networkCount),
+    card: card(tab, contents),
+  };
 }
 
 /** withRefs：给可交互节点发引用（自己的 tab）；读「你的」tab 时不发——agent 不操作它 */
