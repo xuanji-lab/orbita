@@ -45,11 +45,17 @@ export interface ClusterLeaf {
   rounds: readonly number[];
 }
 
-export type GraphColorMode = "time" | "score";
+/**
+ * 着色权重：0 = 全按时间（最近用过的轮次），1 = 全按相关度，中间按比例相加。
+ * 用户 2026-10-14：「时间和相关度给一个滑块……50% 就是既考虑时间又考虑相关度，
+ * 两套数字按百分比相加」。缺省 0.5。
+ */
+export type GraphColorWeight = number;
+export const DEFAULT_COLOR_WEIGHT: GraphColorWeight = 0.5;
 
-/** 叶子 / 枝的着色百分比（三档 30 / 62 / 100）——映射到
+/** 叶子的着色浓度（20–100，连续）——映射到
  *  `color-mix(in srgb, var(--color-nebula) X%, transparent)`（用量格同款 token）。 */
-export type NebulaPercent = 30 | 62 | 100;
+export type NebulaPercent = number;
 
 /** 着色归一的范围：轮次（time 模式）与分数（score 模式）各自的极差。 */
 export interface LeafRange {
@@ -60,25 +66,20 @@ export interface LeafRange {
 }
 
 /**
- * 颜色 = 使用的轮次新旧（time：越近的问用过越满，越早越淡）或相关度强弱
- * （score）。两个维度都按当前数据内的极差归一，三档切分（<1/3 / <2/3 / 其余）。
+ * 颜色 = 时间（使用的轮次，越近越满）与相关度（分数，越高越满）按权重相加：
+ * u = (1 − w)·时间分 + w·相关度分，两个分量都按当前数据内的极差归一到 [0, 1]；
+ * 浓度连续映射到 20–100%（不再切三档：混合后的值要能看出深浅的细差）。
  */
 export function nebulaPercentOf(
-  mode: GraphColorMode,
+  weight: GraphColorWeight,
   leaf: Pick<ClusterLeaf, "lastRound" | "score">,
   range: LeafRange,
 ): NebulaPercent {
-  const u =
-    mode === "time"
-      ? range.rMax === range.rMin
-        ? 0.5
-        : (leaf.lastRound - range.rMin) / (range.rMax - range.rMin)
-      : range.sMax === range.sMin
-        ? 0.5
-        : (leaf.score - range.sMin) / (range.sMax - range.sMin);
-  if (u < 1 / 3) return 30;
-  if (u < 2 / 3) return 62;
-  return 100;
+  const w = Math.min(1, Math.max(0, weight));
+  const uTime = range.rMax === range.rMin ? 0.5 : (leaf.lastRound - range.rMin) / (range.rMax - range.rMin);
+  const uScore = range.sMax === range.sMin ? 0.5 : (leaf.score - range.sMin) / (range.sMax - range.sMin);
+  const u = (1 - w) * uTime + w * uScore;
+  return Math.round(20 + 80 * u);
 }
 
 /** 全部叶子的取值范围（着色归一用）。空表给退化区间。 */

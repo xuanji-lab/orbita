@@ -4024,9 +4024,28 @@ button.panel-group-toggle:hover {
   gap: 4px;
   z-index: 1;
 }
+/* 着色权重滑块：图例框第一行——两端写「时间 / 相关度」，右侧显示当前比例 */
+.intent-weight {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  color: var(--color-text-secondary);
+}
+.intent-weight input[type="range"] {
+  width: 72px;
+  margin: 0;
+  accent-color: var(--color-nebula);
+}
+.intent-weight-val {
+  min-width: 28px;
+  text-align: right;
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
 
 /* 图例（左下）：色带两端随着色模式换字（时间：早→晚；相关度：弱→强），
-   色带就是叶子的 nebula 三档；再给实心 / 空心 / 主干三个记号 */
+   色带就是叶子的 nebula 浓度（连续）；再给实心 / 空心 / 主干三个记号 */
 .intent-key {
   position: absolute;
   left: 8px;

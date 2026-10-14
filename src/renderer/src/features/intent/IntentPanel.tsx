@@ -41,7 +41,8 @@ import {
   parseOrbitaQaId,
   type ClusterLeaf,
   type EgoCentre,
-  type GraphColorMode,
+  DEFAULT_COLOR_WEIGHT,
+  type GraphColorWeight,
   type TurnLeaves,
 } from "./cluster-layout.ts";
 import { GraphRenderer, nebulaFill, type SceneBuilder } from "./GraphRenderer.ts";
@@ -97,7 +98,7 @@ export function IntentPanel(props: {
 
   const [pickedRound, setPickedRound] = useState<number | null>(null);
   const [view, setView] = useState<IntentView>("slots");
-  const [colorMode, setColorMode] = useState<GraphColorMode>("time");
+  const [colorWeight, setColorWeight] = useState<GraphColorWeight>(DEFAULT_COLOR_WEIGHT);
   const [graphH, setGraphH] = useState(DEFAULT_GRAPH_H);
   const [folded, setFolded] = useState(false);
   const [selKey, setSelKey] = useState<string | null>(null);
@@ -322,8 +323,8 @@ export function IntentPanel(props: {
           folded={folded}
           view={view}
           onView={setView}
-          colorMode={colorMode}
-          onColorMode={setColorMode}
+          colorWeight={colorWeight}
+          onColorWeight={setColorWeight}
           slotLeaves={slotLeaves}
           centreLeaves={centreLeaves}
           extraCentres={extraCentres}
@@ -355,7 +356,7 @@ export function IntentPanel(props: {
           view={view}
           hidden={folded}
           selKey={selKey}
-          colorMode={colorMode}
+          colorWeight={colorWeight}
           pendingAsk={props.pendingAsk}
           onHover={setHoverKey}
           onSelect={toggleRow}
@@ -386,8 +387,8 @@ function IntentGraph(props: {
   folded: boolean;
   view: IntentView;
   onView: (view: IntentView) => void;
-  colorMode: GraphColorMode;
-  onColorMode: (mode: GraphColorMode) => void;
+  colorWeight: GraphColorWeight;
+  onColorWeight: (weight: GraphColorWeight) => void;
   slotLeaves: readonly ClusterLeaf[];
   centreLeaves: readonly TurnLeaves[];
   extraCentres: readonly EgoCentre[];
@@ -468,13 +469,13 @@ function IntentGraph(props: {
   // 样式：只上色 / 换 class（坐标绝不动）
   useEffect(() => {
     rendererRef.current?.setStyle({
-      colorMode: props.colorMode,
+      colorWeight: props.colorWeight,
       selKey: props.selKey,
       hoverKey: props.hoverKey,
       activeRound: props.activeRound,
       activeTurnId: props.activeTurnId,
     });
-  }, [props.colorMode, props.selKey, props.hoverKey, props.activeRound, props.activeTurnId, dataKey]);
+  }, [props.colorWeight, props.selKey, props.hoverKey, props.activeRound, props.activeTurnId, dataKey]);
 
   // 尺寸：等比缩放并居中（不重排）
   useEffect(() => {
@@ -563,33 +564,37 @@ function IntentGraph(props: {
           <p className="intent-summary">{summary}</p>
           {/* 图例（用户 2026-10-14：「只看颜色分不出早晚，需要图例」）：色带两端随着色模式换字；
               再给实心 / 空心 / 主干三个记号 */}
-          <div className="intent-key" aria-hidden="true">
-            <span className="intent-key-ramp">
-              <span>{props.colorMode === "time" ? t.intentPanel.legendEarly : t.intentPanel.legendLow}</span>
+          <div className="intent-key">
+            {/* 着色权重滑块：最左全按时间，最右全按相关度，中间按比例相加（缺省 50%） */}
+            <label className="intent-weight">
+              <span>{t.intentPanel.colorTime}</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round(props.colorWeight * 100)}
+                aria-label={t.intentPanel.colorWeightAria}
+                onChange={(event) => props.onColorWeight(Number(event.target.value) / 100)}
+                onDoubleClick={() => props.onColorWeight(DEFAULT_COLOR_WEIGHT)}
+              />
+              <span>{t.intentPanel.colorScore}</span>
+              <span className="intent-weight-val">{Math.round(props.colorWeight * 100)}%</span>
+            </label>
+            <span className="intent-key-ramp" aria-hidden="true">
+              <span>
+                {props.colorWeight <= 0 ? t.intentPanel.legendEarly : props.colorWeight >= 1 ? t.intentPanel.legendLow : t.intentPanel.legendMixLow}
+              </span>
               <i className="intent-key-bar" />
-              <span>{props.colorMode === "time" ? t.intentPanel.legendLate : t.intentPanel.legendHigh}</span>
+              <span>
+                {props.colorWeight <= 0 ? t.intentPanel.legendLate : props.colorWeight >= 1 ? t.intentPanel.legendHigh : t.intentPanel.legendMixHigh}
+              </span>
             </span>
-            <span className="intent-key-items">
+            <span className="intent-key-items" aria-hidden="true">
               <span><i className="intent-key-dot solid" />{t.intentPanel.legendSolid}</span>
               <span><i className="intent-key-dot" />{t.intentPanel.legendMid}</span>
               <span><i className="intent-key-line" />{t.intentPanel.legendSpine}</span>
             </span>
-          </div>
-          <div className="intent-legend">
-            <button
-              type="button"
-              className={`intent-gtoggle sm${props.colorMode === "time" ? " on" : ""}`}
-              onClick={() => props.onColorMode("time")}
-            >
-              {t.intentPanel.colorTime}
-            </button>
-            <button
-              type="button"
-              className={`intent-gtoggle sm${props.colorMode === "score" ? " on" : ""}`}
-              onClick={() => props.onColorMode("score")}
-            >
-              {t.intentPanel.colorScore}
-            </button>
           </div>
         </>
       )}
@@ -669,7 +674,7 @@ function IntentRows(props: {
   /** 折叠态：条目收到底部（图占满面板） */
   hidden: boolean;
   selKey: string | null;
-  colorMode: GraphColorMode;
+  colorWeight: GraphColorWeight;
   pendingAsk: { requestId: string; ask: IntentAskView[] } | null;
   onHover: (key: string | null) => void;
   onSelect: (key: string) => void;
@@ -734,7 +739,7 @@ function IntentRows(props: {
                   key={row.key}
                   row={row}
                   sel={props.selKey === row.key}
-                  dotPercent={nebulaPercentOf(props.colorMode, row.leaf, range)}
+                  dotPercent={nebulaPercentOf(props.colorWeight, row.leaf, range)}
                   pendingAsk={props.pendingAsk}
                   onHover={props.onHover}
                   onSelect={props.onSelect}

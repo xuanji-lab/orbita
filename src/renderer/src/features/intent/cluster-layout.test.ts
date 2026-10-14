@@ -203,15 +203,21 @@ test("合并：同一 (qaId, 岗) 跨问并成一个节点，展示取最近一�
   assert.equal(twoSlots.length, 2);
 });
 
-test("着色：time 按轮次归一三档，score 按分数归一三档", () => {
+test("着色：时间与相关度按权重相加，连续浓度 20–100", () => {
   const range = { rMin: 1, rMax: 4, sMin: 0.7, sMax: 1.0 };
-  assert.equal(nebulaPercentOf("time", { lastRound: 1, score: 0.9 }, range), 30);
-  assert.equal(nebulaPercentOf("time", { lastRound: 2, score: 0.9 }, range), 62);
-  assert.equal(nebulaPercentOf("time", { lastRound: 4, score: 0.9 }, range), 100);
-  assert.equal(nebulaPercentOf("score", { lastRound: 1, score: 0.7 }, range), 30);
-  assert.equal(nebulaPercentOf("score", { lastRound: 1, score: 0.85 }, range), 62);
-  assert.equal(nebulaPercentOf("score", { lastRound: 1, score: 1.0 }, range), 100);
-  assert.equal(nebulaPercentOf("time", { lastRound: 1, score: 0.9 }, { ...range, rMin: 1, rMax: 1 }), 62);
+  // w = 0：只看时间
+  assert.equal(nebulaPercentOf(0, { lastRound: 1, score: 0.9 }, range), 20);
+  assert.equal(nebulaPercentOf(0, { lastRound: 4, score: 0.7 }, range), 100);
+  // w = 1：只看相关度
+  assert.equal(nebulaPercentOf(1, { lastRound: 4, score: 0.7 }, range), 20);
+  assert.equal(nebulaPercentOf(1, { lastRound: 1, score: 1.0 }, range), 100);
+  // w = 0.5：两套分数各占一半——又早又弱最淡、又新又强最满、一新一弱居中
+  assert.equal(nebulaPercentOf(0.5, { lastRound: 1, score: 0.7 }, range), 20);
+  assert.equal(nebulaPercentOf(0.5, { lastRound: 4, score: 1.0 }, range), 100);
+  assert.equal(nebulaPercentOf(0.5, { lastRound: 4, score: 0.7 }, range), 60);
+  // 越界权重夹到 [0, 1]；退化区间取中
+  assert.equal(nebulaPercentOf(2, { lastRound: 1, score: 1.0 }, range), 100);
+  assert.equal(nebulaPercentOf(0, { lastRound: 1, score: 0.9 }, { ...range, rMin: 1, rMax: 1 }), 60);
   assert.deepEqual(
     leafRange([leaf("q1", 1, 0.7, { lastRound: 2, rounds: [2] }), leaf("q2", 1, 0.95, { lastRound: 5, rounds: [5] })]),
     { rMin: 2, rMax: 5, sMin: 0.7, sMax: 0.95 },

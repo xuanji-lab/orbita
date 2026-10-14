@@ -26,6 +26,7 @@
 
 import {
   ALPHA_DECAY,
+  DEFAULT_COLOR_WEIGHT,
   CONVERGED_ALPHA,
   GROW_ALPHA,
   leafRange,
@@ -38,7 +39,7 @@ import {
   tick,
   unseededCount,
   type ClusterScene,
-  type GraphColorMode,
+  type GraphColorWeight,
   type LayoutSeed,
   type LeafNode,
   type SimLink,
@@ -67,7 +68,8 @@ export function nebulaFill(percent: number): string {
 export type SceneBuilder = (W: number, H: number, seed: LayoutSeed | undefined) => ClusterScene | null;
 
 export interface GraphStyle {
-  colorMode: GraphColorMode;
+  /** 着色权重：0 = 时间，1 = 相关度 */
+  colorWeight: GraphColorWeight;
   selKey: string | null;
   /** 悬停条目行时点亮对应节点（只点亮，不选中、不展开） */
   hoverKey: string | null;
@@ -148,7 +150,7 @@ export class GraphRenderer {
   private readonly viewTfs = new Map<string, ViewTransform>();
   /** 视图变换变了（倍率 / 平移）的回调：React 侧刷新按钮态 */
   private onViewChange: ((view: ViewTransform) => void) | null = null;
-  private style: GraphStyle = { colorMode: "time", selKey: null, hoverKey: null, activeRound: null, activeTurnId: null };
+  private style: GraphStyle = { colorWeight: DEFAULT_COLOR_WEIGHT, selKey: null, hoverKey: null, activeRound: null, activeTurnId: null };
   /** 尺寸还没量到时先存着的数据（量到后立刻构建） */
   private pending: { view: string; build: SceneBuilder } | null = null;
   private frame = 0;
@@ -539,14 +541,14 @@ export class GraphRenderer {
   private applyStyle(): void {
     const scene = this.scene;
     if (scene === null) return;
-    const { colorMode, selKey, hoverKey, activeRound, activeTurnId } = this.style;
+    const { colorWeight, selKey, hoverKey, activeRound, activeTurnId } = this.style;
     const leaves = scene.nodes.filter((node): node is LeafNode => node.kind === "leaf");
     const range = leafRange(leaves.map((node) => node.leaf));
     const inRound = (rounds: readonly number[]): boolean => activeRound === null || rounds.includes(activeRound);
     for (const node of leaves) {
       const handle = this.handles.get(node);
       if (handle?.core === undefined) continue;
-      const color = nebulaFill(nebulaPercentOf(colorMode, node.leaf, range));
+      const color = nebulaFill(nebulaPercentOf(colorWeight, node.leaf, range));
       const selected = selKey === node.rowKey;
       const cls = [
         "ileaf",
