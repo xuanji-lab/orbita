@@ -126,9 +126,9 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "for you). **Start here and come back here after every action**: this image is the only way you can see " +
       "the sandbox, and the coordinates you pass to computer_click / computer_scroll are pixels of this image. " +
       "The image is scaled down (its size is in the result); do not assume it is the physical screen size. " +
-      "The sandbox starts empty and has no user data, no sign-in state and no browser of its own — its desktop " +
-      "is whatever you open in it. If the result says the sandbox is not running, tell the user to start it in " +
-      "Settings › Experimental features › Computer use; do not retry.",
+      "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
+      "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
+      "start it in Settings › Experimental features › Computer use; do not retry.",
     parameters: { type: "object", properties: {}, required: [] } as never,
     async execute(_toolCallId, _params, signal) {
       const result = await call({ action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, signal);
@@ -197,7 +197,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     name: "computer_type",
     label: "computer_type",
     description:
-      "Type text into whatever has focus on the sandbox desktop — click the field first with computer_click. " +
+      "Type text into whatever has focus on the sandbox desktop. **Click the target first** with " +
+      "computer_click — a window or dialog that just opened does not always have focus, and text typed into " +
+      "an unfocused desktop is silently dropped (a dialog that just opened, such as the win+r Run box, does " +
+      "not always take focus). " +
       "Goes in as Unicode, so Chinese and symbols work. Keys that are not text (Enter, Tab, arrows, " +
       "shortcuts) go through computer_key instead. Take a screenshot afterwards to confirm it landed where " +
       "you meant. Never type passwords, one-time codes or other credentials — ask the user instead. " +
@@ -222,7 +225,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "Press a key or a key combination on the sandbox desktop: enter, tab, escape, backspace, delete, home, " +
       "end, pageup, pagedown, up / down / left / right, f1–f12, ctrl+a, alt+f4, win+r, ctrl+shift+s… " +
       "It goes to the focused window — click the window first. Take a screenshot afterwards to confirm. " +
-      "This is how you open things from the desktop itself (win+r → type a program name → enter). " +
+      "This is how you open things from the desktop itself: win+r, type cmd (or a program path — the image " +
+      "is a bare Windows, notepad is not installed), then enter. " +
       CONSEQUENCES,
     parameters: {
       type: "object",
