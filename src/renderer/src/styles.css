@@ -4278,6 +4278,26 @@ mark.intent-mark {
   padding: 12px 16px;
   border-top: 1px solid var(--color-border-subtle);
 }
+/* 卡上的 quiet-control 按钮：.quiet-control 只管底色与字色，不清浏览器默认的按钮边框与字体
+   （别处的组件各自清）——这里一起清掉，否则会带一圈默认深色描边（harness 截图里看到的）。 */
+.intent-sq,
+.intent-final-chev,
+.intent-foot-quiet,
+.intent-note-mic,
+.intent-stmt-mic {
+  border: 0;
+  font: inherit;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+}
+.intent-foot-quiet {
+  display: inline-flex;
+  align-items: center;
+}
+.intent-confirm textarea {
+  resize: none;
+}
 .intent-sq {
   width: 36px;
   height: 36px;
