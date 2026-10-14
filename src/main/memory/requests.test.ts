@@ -9,7 +9,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { applyMemoryAppend, applyMemoryRetrieve, type SessionScopeReader } from "./requests.ts";
+import { applyMemoryAppend, applyMemoryRetrieve, parseMemoryRemoveRequest, parseMemoryScopeRef, type SessionScopeReader } from "./requests.ts";
 import { MemoryStore } from "./store.ts";
 
 /** 时间戳要贴近「现在」：衰减半衰期 180 天，用 epoch 0 之类的老时间戳会被衰减判负。 */
@@ -150,5 +150,42 @@ describe("event.scope 优先（首轮竞态回归：meta 未落盘也要能召�
     assert.equal(outcome.hits.length, 1);
     // append 一次 + 退回 meta 的召回一次
     assert.deepEqual(sessions.asked, ["in-workspace", "in-workspace"]);
+  });
+});
+
+describe("设置 › 记忆的入参校验（renderer 那头什么都能传）", () => {
+  test("parseMemoryScopeRef 收下工作区引用与纯 cwd 引用", () => {
+    assert.deepEqual(parseMemoryScopeRef({ workspaceId: "ws-a", cwd: "C:/work" }), {
+      workspaceId: "ws-a",
+      cwd: "C:/work",
+    });
+    assert.deepEqual(parseMemoryScopeRef({ workspaceId: null, cwd: "C:/work" }), {
+      workspaceId: null,
+      cwd: "C:/work",
+    });
+    // workspaceId 缺席按「没有工作区」：renderer 写 ?? null 还是直接透传是同一件事
+    assert.deepEqual(parseMemoryScopeRef({ cwd: "C:/work" }), { workspaceId: null, cwd: "C:/work" });
+  });
+
+  test("parseMemoryScopeRef 拒掉形状不对的请求", () => {
+    for (const bad of [null, undefined, "ws-a", 42, [], {}, { cwd: 42 }, { cwd: null }, { workspaceId: 7, cwd: "C:/" }, { workspaceId: {}, cwd: "C:/" }]) {
+      assert.throws(() => parseMemoryScopeRef(bad), /memory request/);
+    }
+  });
+
+  test("parseMemoryRemoveRequest 带上校验过的 entryId", () => {
+    assert.deepEqual(parseMemoryRemoveRequest({ workspaceId: "ws-a", cwd: "C:/work", entryId: "mem_1" }), {
+      workspaceId: "ws-a",
+      cwd: "C:/work",
+      entryId: "mem_1",
+    });
+    // 空串在这里不收也不拒的镜像：它过得来，由 store 回答「什么都没删」（幂等）
+    assert.equal(parseMemoryRemoveRequest({ workspaceId: null, cwd: "C:/work", entryId: "" }).entryId, "");
+  });
+
+  test("parseMemoryRemoveRequest 拒掉 entryId 不是字符串的请求", () => {
+    for (const bad of [{ workspaceId: null, cwd: "C:/" }, { workspaceId: null, cwd: "C:/", entryId: 3 }, { workspaceId: null, cwd: "C:/", entryId: null }]) {
+      assert.throws(() => parseMemoryRemoveRequest(bad), /memory request/);
+    }
   });
 });

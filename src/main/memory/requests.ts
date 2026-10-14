@@ -2,12 +2,15 @@
  * memoryRetrieveRequest / memoryAppend 在主进程的落点——**与 readTaskRequest 同一条边界**：
  * agent 进程不碰 userData，作用域（workspaceId ?? cwd）由主进程按会话归属解析，
  * 读写在主进程。纯核在 store / retrieve，这里只剩「解析作用域 → 调 store」一跳
- * （read-task.ts 同款分层：可测的判断不进 IPC 胶水）。
+ * 另一半是**设置 › 记忆的管理面**（memory:list / memory:remove）：用户本人按工作区翻
+ * 自己的记忆库，作用域由 renderer 显式给出、不从会话 meta 解析。那条路子的入参校验
+ * （parseMemoryScopeRef / parseMemoryRemoveRequest）也住这里——ipc.ts import electron，
+ * 判断放那里就没法被 `node --test` 直接测（files/list.ts 的同款先例）。
  *
  * **纯模块**：不 import electron，可被 `node --test` 直接测。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import type { MemoryRetrieveOutcome } from "../../shared/memory.ts";
+import type { MemoryRemoveRequest, MemoryRetrieveOutcome, MemoryScopeRef } from "../../shared/memory.ts";
 import { retrieveMemories } from "./retrieve.ts";
 import { memoryScopeOf, type MemoryStore } from "./store.ts";
 
@@ -69,4 +72,48 @@ export async function applyMemoryAppend(
   const scope = await scopeOfSession(sessions, event.sessionId);
   if (scope === null) return;
   await memory.append(scope, event.sessionId, event.entries);
+}
+
+/* ---------- 设置 › 记忆（memory:list / memory:remove）的入参校验 ---------- */
+
+/**
+ * 校验 renderer 传上来的作用域引用。**不信任地验**（files/ipc.ts 的同一条纪律）：
+ * `MemoryScopeRef` 只是编译期的约定，IPC 那头是什么都可能——cwd 不是字符串、
+ * workspaceId 是个数字，都会让 scopeId 变成一个莫名其妙的哈希键，进而在
+ * userData 里凭空多出一个谁也看不懂的 memory 文件。当场抛，让 renderer 走统一的
+ * catch（whitelistedPath 的同款处理）。
+ */
+export function parseMemoryScopeRef(raw: unknown): MemoryScopeRef {
+  return scopeRefOf(asRequestObject(raw));
+}
+
+/**
+ * memory:remove 的入参：作用域照上面校验，外加 entryId 必须是字符串。
+ * **空串不在这里拦**——「删一个空 id」的答案是「什么都没删」（removed: false），
+ * 那是 store 的幂等语义，交给它；这里只管类型。
+ */
+export function parseMemoryRemoveRequest(raw: unknown): MemoryRemoveRequest {
+  const req = asRequestObject(raw);
+  const entryId = req.entryId;
+  if (typeof entryId !== "string") throw new Error("memory request needs a string entryId");
+  return { ...scopeRefOf(req), entryId };
+}
+
+/** IPC 那头先是个什么都不能假设的东西；过这一道之后才谈得上逐字段验类型。 */
+function asRequestObject(raw: unknown): RequestRecord {
+  if (typeof raw !== "object" || raw === null) throw new Error("memory request must be an object");
+  return raw as RequestRecord;
+}
+
+type RequestRecord = { workspaceId?: unknown; cwd?: unknown; entryId?: unknown };
+
+function scopeRefOf(req: RequestRecord): MemoryScopeRef {
+  if (typeof req.cwd !== "string") throw new Error("memory request needs a string cwd");
+  // 缺席（undefined）按「没有工作区」收：null 与不传在这个面上是同一件事，
+  // renderer 写 `?? null` 还是直接透传都不该让面板白屏
+  const workspaceId = req.workspaceId ?? null;
+  if (workspaceId !== null && typeof workspaceId !== "string") {
+    throw new Error("memory request workspaceId must be a string or null");
+  }
+  return { workspaceId, cwd: req.cwd };
 }

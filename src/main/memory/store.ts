@@ -13,9 +13,9 @@
  * 排障用 `filePath(scopeId)` 现算，日志里打的就是它。
  *
  * 写入口径与 SessionStore / ChannelStore 一致：**只追加**（appendFile，一行一条），
- * 读全量、坏行跳过。`atomic-write.ts` 的临时文件 + rename 在这里用不上——rename 是
- * 「整份换掉」的语义，而记忆只增不改；单次追加写由 O_APPEND 保证不撕裂
- * （同 SessionStore.record 的约定）。
+ * 读全量、坏行跳过；单次追加写由 O_APPEND 保证不撕裂（同 SessionStore.record 的约定）。
+ * 唯一的例外是 remove——「删一条」按定义就是改写，走 `atomic-write.ts` 的临时文件 +
+ * rename（「整份换掉」的语义），半路被杀时盘上不会留下缺行的中间态。
  *
  * **纯模块**：不 import electron，可被 `node --test` 直接测（session/store.ts 同款先例）。
  */
@@ -23,6 +23,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MemoryDraft, MemoryEntry } from "../../shared/memory.ts";
+import { writeTextAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 
 /** 契约说关键词 ≤8 个（shared/memory.ts）。超了截断——多给的关键词只会把打分稀释。 */
@@ -156,6 +157,30 @@ export class MemoryStore {
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.filePath(scopeId), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
     return entries;
+  }
+
+  /**
+   * 删一条：读全量 → 滤掉这个 id → **整份换掉**（writeTextAtomic，临时文件 + rename）。
+   *
+   * JSONL 没有索引，删中间一行只能重写整个文件；用 rename 而不是裸写，是为了让
+   * 「写到一半被杀」表现为旧的完整文件或新的完整文件，而不是一条缺行的记忆库——
+   * 召回侧读到缺行的库不会报错，只会安静地少几条（最难查的那类）。
+   *
+   * 返回 false = 这个 id 本来就不在（**文件不存在也是这条路径**），不抛：设置页的
+   * 「删除」要幂等，用户连点两下，第二次该安静地什么也不发生。空 id 串同样 false——
+   * 它不是「删掉了什么」，是调用方没给对。
+   * **读不了 ≠ 没有**：list 抛出来的（权限坏了、盘上那个路径是个目录）照抛，
+   * 不冒充「删掉了」。
+   * 删空之后留空文件、不删文件：append 不在乎原来空不空（它自己会建目录），
+   * 多一条「删空就删文件」的分支只会给下一次 append 添一个没必要的边角。
+   */
+  async remove(scopeId: string, entryId: string): Promise<boolean> {
+    if (entryId === "") return false;
+    const existing = await this.list(scopeId);
+    const kept = existing.filter((entry) => entry.id !== entryId);
+    if (kept.length === existing.length) return false;
+    await writeTextAtomic(this.filePath(scopeId), `${kept.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    return true;
   }
 }
 

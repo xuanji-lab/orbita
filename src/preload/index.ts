@@ -8,6 +8,7 @@ import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
+import { memoryApi } from "./api/memory.ts";
 import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
@@ -32,6 +33,7 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  memory: memoryApi,
   terminal: terminalApi,
   usage: usageApi,
   import: importApi,

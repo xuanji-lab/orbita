@@ -13,6 +13,7 @@ import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { MemoryStore } from "./memory/store.ts";
+import { registerMemoryIpc } from "./memory/ipc.ts";
 import { applyMemoryAppend, applyMemoryRetrieve } from "./memory/requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
@@ -577,6 +578,9 @@ void app.whenReady().then(async () => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
+  // 记忆管理面（memory:list / memory:remove，设置 › 记忆）：与 agent 侧那条按 sessionId
+  // 问的路子共用同一个 MemoryStore，只是作用域由 renderer 按工作区显式给出
+  registerMemoryIpc(memory);
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
