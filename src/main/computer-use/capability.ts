@@ -1,10 +1,13 @@
 /**
  * computer use 能力探测 —— 全部只读，绝不自动执行提权命令。
  *
- * 两件事：
+ * 四件事：
  *   1. reg query 读 EditionID，判版本档位（沙箱仅 Pro / Enterprise / Education，Home 没有）；
  *   2. 查 WindowsSandbox.exe 在不在 System32——它是「沙箱功能已启用」的非提权信号：
- *      功能启用时这个 exe 才出现，没启用就不在。
+ *      功能启用时这个 exe 才出现，没启用就不在；
+ *   3. 读 Win32_ComputerSystem 的 HypervisorPresent——BIOS/UEFI 关了虚拟化的机器
+ *      功能与 exe 都对、一跑就退，这一项让探测提前拦住它（审查意见 B）；
+ *   4. 以上三项的汇总：ready + 给用户看的手动开启指引。
  *
  * 为什么不能查「可选功能状态」本身：DISM / Get-WindowsOptionalFeature 都需要管理员权限
  * （非提权跑 DISM 直接吃错误 740「需要提升权限才能运行 DISM」，2026-10-10 实测），
@@ -17,12 +20,23 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { ComputerUseProbeResult, SandboxFeatureState, WindowsEdition } from "../../shared/computer-use.ts";
+import type {
+  ComputerUseProbeResult,
+  HypervisorState,
+  SandboxFeatureState,
+  WindowsEdition,
+} from "../../shared/computer-use.ts";
 
 const execFileP = promisify(execFile);
 
-/** 探测命令的执行器。抽出来是为了测试注入 fixtures（不真跑 reg）。 */
+/** 探测命令的执行器。抽出来是为了测试注入 fixtures（不真跑 reg / powershell）。 */
 export type RunCommand = (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * 探测命令的超时（默认 run 注入）。这两条命令都是瞬时的（reg 与 CIM 查询都在百毫秒级），
+ * 5 秒没回来说明环境卡住了——宁可当 unknown，不能让设置页的「检测能力」一直转。
+ */
+export const PROBE_COMMAND_TIMEOUT_MS = 5_000;
 
 const EDITION_REG_PATH = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
 
@@ -63,11 +77,36 @@ export function featureStateFromExe(sandboxExeFound: boolean): SandboxFeatureSta
   return sandboxExeFound ? "enabled" : "disabled";
 }
 
+/**
+ * 虚拟化在不在：读 Win32_ComputerSystem 的 HypervisorPresent。
+ * 真机输出是 `True` / `False`（PowerShell 把布尔打印成这两个词），大小写不敏感。
+ * 认不出的输出、非 0 退出、PowerShell 不在、超时——全归 unknown（不阻塞，见契约里
+ * HypervisorState 的注释）。
+ *
+ * **不用 wmic**：24H2 起它是可选移除的功能（Win11 25H2 上已默认不在），而
+ * Get-CimInstance 是 PowerShell 自带的。
+ */
+export function parseHypervisorPresent(stdout: string): HypervisorState {
+  const text = stdout.trim().toLowerCase();
+  if (text === "true") return "present";
+  if (text === "false") return "absent";
+  return "unknown";
+}
+
+/** 虚拟化查询的命令行（导出让测试认这一条，别在测试里另写一份） */
+export const HYPERVISOR_PROBE_ARGS = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "(Get-CimInstance Win32_ComputerSystem).HypervisorPresent",
+] as const;
+
 function buildGuidance(result: {
   platformOk: boolean;
   edition: WindowsEdition;
   editionOk: boolean;
   sandboxExeFound: boolean;
+  hypervisorState: HypervisorState;
 }): string {
   const lines: string[] = [];
   if (!result.platformOk) {
@@ -87,6 +126,13 @@ function buildGuidance(result: {
         "Orbita 不会替你执行这条提权命令。",
     );
   }
+  if (result.hypervisorState === "absent") {
+    lines.push(
+      "这台机器的虚拟化（VT-x / AMD-V）在 BIOS/UEFI 里被关了，Windows 沙箱起不来。" +
+        "重启进 BIOS/UEFI → 打开虚拟化（各厂商名字不同：Intel Virtualization Technology / VT-x、AMD-V / SVM Mode）→ 保存重启后回来重试。" +
+        "（Windows 里也可确认：任务管理器 › 性能 › CPU 的「虚拟化」应为「已启用」。）",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -101,15 +147,18 @@ export interface ProbeDeps {
   systemRoot?: string;
 }
 
-/** 能力探测：并行三查全只读，任何一查失败都按「unknown / 未找到」处理并给指引，绝不抛。 */
+/** 能力探测：四项全只读，任何一查失败都按「unknown / 未找到」处理并给指引，绝不抛。 */
 export async function probe(deps: ProbeDeps = {}): Promise<ComputerUseProbeResult> {
   const platform = deps.platform ?? process.platform;
   const run =
-    deps.run ?? ((command: string, args: string[]) => execFileP(command, args, { encoding: "utf8", windowsHide: true }));
+    deps.run ??
+    ((command: string, args: string[]) =>
+      execFileP(command, args, { encoding: "utf8", windowsHide: true, timeout: PROBE_COMMAND_TIMEOUT_MS }));
   const exeExists = deps.exeExists ?? existsSync;
   const platformOk = platform === "win32";
 
   let edition: WindowsEdition = "unknown";
+  let hypervisorState: HypervisorState = "unknown";
   if (platformOk) {
     try {
       const output = await run("reg", ["query", EDITION_REG_PATH, "/v", "EditionID"]);
@@ -117,13 +166,21 @@ export async function probe(deps: ProbeDeps = {}): Promise<ComputerUseProbeResul
     } catch {
       edition = "unknown";
     }
+    try {
+      const output = await run("powershell", [...HYPERVISOR_PROBE_ARGS]);
+      hypervisorState = parseHypervisorPresent(output.stdout);
+    } catch {
+      // PowerShell 不在 / 被策略拦 / 超时：少一条信号，不当成「虚拟化被关」（那会误杀能用的机器）
+      hypervisorState = "unknown";
+    }
   }
 
   // 功能状态不走 DISM（非提权必失败，错误 740）：exe 在不在是唯一可靠的非提权信号
   const sandboxExeFound = platformOk && exeExists(windowsSandboxExePath(deps.systemRoot));
   const featureState = featureStateFromExe(sandboxExeFound);
   const editionOk = edition === "pro" || edition === "enterprise" || edition === "education";
-  const ready = platformOk && editionOk && sandboxExeFound;
-  const partial = { platformOk, edition, editionOk, sandboxExeFound };
+  // unknown 不拦（见 HypervisorState 的注释）；只有明确 absent 才判不就绪
+  const ready = platformOk && editionOk && sandboxExeFound && hypervisorState !== "absent";
+  const partial = { platformOk, edition, editionOk, sandboxExeFound, hypervisorState };
   return { ...partial, featureState, ready, guidance: ready ? null : buildGuidance(partial) };
 }
