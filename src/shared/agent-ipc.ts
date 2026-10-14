@@ -926,11 +926,22 @@ export type AgentEvent =
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
   /**
    * 记忆召回的读盘请求。**读在主进程**（agent 进程不碰 userData，readTaskRequest
-   * 同一条边界）：主进程按 sessionId 解析作用域（workspaceId ?? cwd）→ 读该作用域的
-   * 记忆 JSONL → 词法打分（阈值门控 + 预算截断）→ 回 memoryRetrieveResult。
-   * 轮前同步路径：runtime 用收窄的超时调它，超时 / 报错 / 空命中都不注入、正常开轮。
+   * 同一条边界）：主进程按作用域读记忆 JSONL → 词法打分（阈值门控 + 预算截断）
+   * → 回 memoryRetrieveResult。轮前同步路径：runtime 用收窄的超时调它，超时 /
+   * 报错 / 空命中都不注入、正常开轮。
+   *
+   * `scope` 是开轮命令里就有的归属（cwd + workspaceId）——首轮时 meta 还没落盘
+   * （它在 created 回执之后才写），靠 meta 解析作用域是必输的竞态（真机验收
+   * 实测三条会话首轮各刷一条「读不到 meta」）。带上它，首轮也能召回；
+   * 缺席时主进程退回 meta 解析（旧调用方兼容）。
    */
-  | { type: "memoryRetrieveRequest"; requestId: string; sessionId: string; query: string }
+  | {
+      type: "memoryRetrieveRequest";
+      requestId: string;
+      sessionId: string;
+      query: string;
+      scope?: { workspaceId: string | null; cwd: string };
+    }
   /**
    * 蒸馏条目的落盘事件。**单向、无回执**（title 事件同款）：轮结束后 runtime 蒸馏出
    * 0–N 条 draft 发过来，主进程补 id / sessionId 追加进该会话作用域的 JSONL。
