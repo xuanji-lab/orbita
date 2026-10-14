@@ -909,6 +909,6 @@ const DEFAULT_GRAPH_H = 340;
 const emptyStyle: React.CSSProperties = {
   margin: 0,
   padding: "var(--space-4)",
-  fontSize: "var(--font-size-caption)",
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-tertiary)",
 };

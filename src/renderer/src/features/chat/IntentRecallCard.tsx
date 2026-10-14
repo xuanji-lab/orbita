@@ -107,7 +107,7 @@ function RecallStageBar(props: { cells: readonly RecallStageCell[]; withMs?: boo
               display: "inline-flex",
               alignItems: "center",
               gap: 4,
-              fontSize: "var(--font-size-micro)",
+              fontSize: "var(--font-size-xs)",
               color:
                 cell.status === "error"
                   ? "var(--color-danger)"
@@ -359,7 +359,7 @@ export function IntentRecallFinalCard(props: { record: IntentRecallRecord; onOpe
         <div style={{ display: "grid", gap: "var(--space-2)", paddingTop: "var(--space-1)" }}>
           {record.stages !== undefined && <RecallStageBar cells={record.stages} withMs />}
           {failed && record.error !== null && (
-            <p style={{ margin: 0, paddingLeft: 44, fontSize: "var(--font-size-caption)", color: "var(--color-danger)" }}>
+            <p style={{ margin: 0, paddingLeft: 44, fontSize: "var(--font-size-sm)", color: "var(--color-danger)" }}>
               {haltedLine(record, t)} · {recallErrorText(record.error.message, t)}
             </p>
           )}

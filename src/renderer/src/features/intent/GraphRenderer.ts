@@ -493,8 +493,9 @@ export class GraphRenderer {
         else if (role === "round") {
           text.setAttribute("x", String(rz + 3));
           text.setAttribute("y", String(-rz + 1));
-        } else if (role === "title") text.setAttribute("y", String(rz + 11));
-        else if (role === "detail") text.setAttribute("y", String(rz + 22));
+        } else if (role === "title") text.setAttribute("y", String(rz + 12));
+        // 标题与详情都是 --font-size-xs（11px，#230 起不许更小）：基线间距 13 ≈ 1.2 倍字号，两行不贴
+        else if (role === "detail") text.setAttribute("y", String(rz + 25));
       }
     }
   }

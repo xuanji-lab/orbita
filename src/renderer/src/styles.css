@@ -3937,7 +3937,7 @@ button.panel-group-toggle:hover {
   display: grid;
   place-items: center;
   font-family: var(--font-family-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
@@ -3956,7 +3956,7 @@ button.panel-group-toggle:hover {
 .intent-run-title {
   flex: 0 0 auto;
   white-space: nowrap;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-bold);
   color: var(--color-text-primary);
 }
@@ -3966,13 +3966,13 @@ button.panel-group-toggle:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 .intent-run-time {
   flex: 0 0 auto;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -3988,7 +3988,7 @@ button.panel-group-toggle:hover {
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }
 .intent-card-mini:hover {
@@ -4008,7 +4008,7 @@ button.panel-group-toggle:hover {
   padding: 0 8px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .intent-pill.done {
@@ -4022,7 +4022,7 @@ button.panel-group-toggle:hover {
   border-color: color-mix(in srgb, var(--color-warning) 50%, transparent);
 }
 .intent-run-detail {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   min-height: 1em;
 }
@@ -4057,7 +4057,7 @@ button.panel-group-toggle:hover {
 .intent-final-title {
   flex: 0 0 auto;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   font-weight: var(--weight-bold);
   color: var(--color-text-secondary);
 }
@@ -4067,7 +4067,7 @@ button.panel-group-toggle:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 .intent-graph-link {
   flex: 0 0 auto;
@@ -4079,7 +4079,7 @@ button.panel-group-toggle:hover {
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   text-decoration: underline;
   text-decoration-color: var(--color-border-strong);
@@ -4112,11 +4112,11 @@ button.panel-group-toggle:hover {
 }
 .intent-confirm-title {
   font-weight: var(--weight-bold);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 .intent-confirm-pos {
   font-family: var(--font-family-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -4152,7 +4152,7 @@ button.panel-group-toggle:hover {
   padding: 0 7px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--color-border-default);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
@@ -4171,9 +4171,9 @@ button.panel-group-toggle:hover {
   grid-auto-rows: max-content;
 }
 .intent-kick {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
-  letter-spacing: 0.06em;
+  /* 卡片 kicker（#230 Group labels）：UI 字、sm、semibold、tertiary，不用等宽、不加字距 */
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-tertiary);
   margin-bottom: 3px;
 }
@@ -4189,8 +4189,8 @@ button.panel-group-toggle:hover {
   overflow-y: hidden;
   outline: none;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-title);
-  line-height: 1.55;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-ui);
   font-weight: var(--weight-medium);
   color: var(--color-text-primary);
 }
@@ -4208,14 +4208,14 @@ button.panel-group-toggle:hover {
   border-radius: var(--radius-lg);
   padding: 9px 11px;
   background: var(--color-bg-hover);
-  font-size: var(--font-size-caption);
-  line-height: 1.65;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
 .intent-why {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  line-height: 1.65;
+  line-height: var(--line-height-ui);
   padding-left: 10px;
   border-left: 2px solid color-mix(in srgb, var(--color-warning) 60%, transparent);
 }
@@ -4231,7 +4231,7 @@ button.panel-group-toggle:hover {
   gap: 8px;
   padding: 7px 11px;
   border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .intent-conv-h b {
@@ -4280,16 +4280,16 @@ button.panel-group-toggle:hover {
 }
 .intent-conv-scroll {
   /* 5 行 = 5 × 正文行高（与下面 .intent-conv-md .chat-md 的字号 / 行高同源） */
-  max-height: calc(var(--font-size-caption) * 1.7 * 5);
+  max-height: calc(var(--font-size-sm) * var(--line-height-reading) * 5);
   overflow: auto;
 }
 .intent-conv-who {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   margin-bottom: 1px;
 }
 .intent-conv-located-note {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 /* 「… 前面 / 后面还有 N 字」：区首区尾的小字；来源在本机时是链接（点了在辅助对话打开） */
@@ -4299,7 +4299,7 @@ button.panel-group-toggle:hover {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   text-align: left;
 }
@@ -4314,8 +4314,8 @@ button.intent-conv-cut.openable:hover {
   color: var(--color-text-primary);
 }
 .intent-conv-md .chat-md {
-  font-size: var(--font-size-caption);
-  line-height: 1.7;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
 }
 /* 卡内的 markdown 标题不比正文大（h1 用 heading 字号会把 5 行的区撑成两三行）：同正文字号、只加粗 */
 .intent-conv-md .chat-md h1,
@@ -4385,7 +4385,7 @@ mark.intent-mark {
   background: transparent;
   color: var(--color-text-primary);
   font: inherit;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -4438,14 +4438,14 @@ mark.intent-mark {
   height: 30px;
   padding: 0 10px;
   border-radius: var(--radius-md);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   white-space: nowrap;
 }
 .intent-foot-accent {
   height: 30px;
   padding: 0 12px;
   border-radius: var(--radius-md);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   white-space: nowrap;
 }
 
@@ -4515,7 +4515,7 @@ mark.intent-mark {
 /* 语义缩放的文字：不随倍率放大，带面板色描边压住枝叶；拿不准的叶整组 40%（文字跟着淡） */
 .ileaf-title,
 .ileaf-detail {
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   fill: var(--color-text-secondary);
   paint-order: stroke;
   stroke: var(--color-bg-panel);
@@ -4546,7 +4546,7 @@ mark.intent-mark {
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .intent-gtoggle:hover {
@@ -4560,7 +4560,7 @@ mark.intent-mark {
 .intent-gtoggle.sm {
   height: 20px;
   padding: 0 8px;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
 }
 .intent-summary {
   position: absolute;
@@ -4572,7 +4572,7 @@ mark.intent-mark {
   padding: 1px 4px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-bg-panel) 82%, transparent);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   pointer-events: none;
 }
@@ -4621,7 +4621,7 @@ mark.intent-mark {
   gap: 4px;
   z-index: 1;
   pointer-events: none;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .intent-key-ramp,
@@ -4728,8 +4728,8 @@ mark.intent-mark {
   fill: var(--color-text-secondary);
 }
 .ihub-label {
-  font-size: 9.5px;
-  font-weight: 450;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
   fill: var(--color-text-tertiary);
   paint-order: stroke;
   stroke: var(--color-bg-panel);
@@ -4769,7 +4769,7 @@ mark.intent-mark {
 }
 .ileaf-round {
   font-family: var(--font-family-mono);
-  font-size: 8.5px;
+  font-size: var(--font-size-xs);
   fill: var(--color-text-tertiary);
 }
 .imembrane {
@@ -4781,7 +4781,7 @@ mark.intent-mark {
   fill: var(--color-text-primary);
 }
 .isoma-label {
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   fill: var(--color-text-secondary);
 }
 .isoma.past .isoma-core {
@@ -4808,12 +4808,12 @@ mark.intent-mark {
   background: var(--color-bg-hover);
 }
 .intent-split .lbl {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
   color: var(--color-text-secondary);
 }
 .intent-split .det {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 .intent-split .grip {
@@ -4887,26 +4887,26 @@ mark.intent-mark {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
 }
 .intent-row-when {
   flex: none;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .intent-row-meta {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .intent-row-conn {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  line-height: 1.55;
+  line-height: var(--line-height-ui);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -4919,9 +4919,9 @@ mark.intent-mark {
   margin-top: 4px;
   display: grid;
   gap: 4px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
-  line-height: 1.55;
+  line-height: var(--line-height-ui);
 }
 .intent-row-more b {
   font-weight: var(--weight-semibold);
@@ -4944,7 +4944,7 @@ mark.intent-mark {
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   cursor: pointer;
   display: inline-flex;
   gap: 4px;
@@ -4961,7 +4961,7 @@ mark.intent-mark {
 /* 「打开会话」旁的就地说明（会话不在本机）：挨着按钮，不放列表顶部 */
 .intent-row-note {
   align-self: center;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -4976,7 +4976,7 @@ mark.intent-mark {
   border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -5000,16 +5000,16 @@ mark.intent-mark {
 }
 .intent-row-md-label {
   margin: 0;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .intent-row-md .chat-md {
-  font-size: var(--font-size-caption);
-  line-height: 1.6;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
 }
 .intent-row-md .chat-md p {
   margin: 0 0 3px;
 }
 .intent-row-md .chat-md pre {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
 }
