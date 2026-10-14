@@ -36,6 +36,31 @@ export interface MemoryHit {
  */
 export type MemoryRetrieveOutcome = { ok: true; hits: MemoryHit[] } | { ok: false; error: string };
 
+/* ---------- 记忆管理面（设置 › 记忆，renderer↔main IPC） ---------- */
+
+/**
+ * 作用域引用：语义与 agent 侧一致（`workspaceId ?? cwd`，见 main/memory/store.ts 的
+ * memoryScopeOf）。renderer 按工作区列举记忆时传工作区的 id 与根路径。
+ */
+export interface MemoryScopeRef {
+  workspaceId: string | null;
+  cwd: string;
+}
+
+/** memory:list 的请求；回应该作用域的全部条目（落盘顺序）。 */
+export type MemoryListRequest = MemoryScopeRef;
+export interface MemoryListResponse {
+  entries: MemoryEntry[];
+}
+
+/** memory:remove 的请求；removed=false 表示这个 id 在该作用域里不存在（幂等，不报错）。 */
+export interface MemoryRemoveRequest extends MemoryScopeRef {
+  entryId: string;
+}
+export interface MemoryRemoveResponse {
+  removed: boolean;
+}
+
 /**
  * 蒸馏侧产出、待落盘的条目（还没有 id / sessionId，那两个由主进程落盘时补）。
  * 与 MemoryEntry 分开：id 的分配权在落盘侧，蒸馏侧不该能伪造来源。

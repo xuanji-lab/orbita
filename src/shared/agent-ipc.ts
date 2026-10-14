@@ -84,6 +84,9 @@ export const ipcChannels = {
    * 消费者是设置 General 页的 Data directory 行。
    */
   settingsDataDir: "settings:data-dir",
+  /** 记忆管理面（设置 › 记忆）：按作用域列条目 / 删一条。scope 语义见 shared/memory.ts */
+  memoryList: "memory:list",
+  memoryRemove: "memory:remove",
   /**
    * 在 Finder 里打开数据目录本身（`shell.openPath`，同 Skills 面板 footer 的 Reveal），无参，回 `void`。
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
