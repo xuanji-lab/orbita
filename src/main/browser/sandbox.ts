@@ -18,6 +18,8 @@
  * 生命周期：
  *   - 懒创建：第一次 open 或第一次 agent 请求才建窗口；agent 建窗不显示窗口。
  *   - 用户关窗 = 隐藏：tab、历史、登录态都保留；agent 在隐藏的窗口里照常工作。
+ *   - agent tab 有回收：闲置到点、或全局超上限时按 LRU 淘汰，都走懒建路径重建
+ *     （决策在 agent-tab-ledger.ts，定时扫描在这里）。渲染进程崩了也按「重建」处理。
  *   - 应用退出（`prepareQuit` 之后）或最后一个主窗口关闭（`dispose`）才真正销毁。
  *
  * 安全：网页 `sandbox` + `contextIsolation`、不加载 preload；partition 级拒绝一切网页权限请求
@@ -52,6 +54,12 @@ import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
 import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
 import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
+import {
+  AgentTabLedger,
+  agentTabNotice,
+  type AgentTabNoticeContext,
+  type AgentTabReclaimReason,
+} from "./agent-tab-ledger.ts";
 import { placeInUserTab } from "./user-tabs.ts";
 import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
 import type { ShotGeometry } from "./screenshot-geometry.ts";
@@ -65,6 +73,13 @@ export const BROWSER_TOOLBAR_HEIGHT = 78;
 export const BROWSER_HANDOFF_BAR_HEIGHT = 44;
 /** 交接等太久自动取消：agent 的一轮不能被一张没人理的卡永远挂着 */
 const HANDOFF_TIMEOUT_MS = 30 * 60_000;
+
+/** agent tab 闲置多久回收：这段时间里没有该会话的 agent 浏览器请求就销毁，下次请求重建 */
+const AGENT_TAB_IDLE_MS = 15 * 60_000;
+/** 全局 agent tab 数上限：超了按 LRU 淘汰最久未活跃的 */
+const AGENT_TAB_MAX = 8;
+/** 回收扫描周期：闲置与超限都靠它兜底（建新 tab 前另有一次即时腾位） */
+const AGENT_TAB_SWEEP_MS = 60_000;
 
 /** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
 const PAGE_BACKGROUND_FALLBACK = "#f3f4f1";
@@ -98,6 +113,10 @@ export interface BrowserTab {
   refs: ElementRefs;
   /** 最近一次整页截图的几何：截图坐标换算成页面坐标靠它。跨文档导航时作废 */
   shot: ShotGeometry | null;
+  /** 在跑的工具调用数：>0 时回收要跳过它（导航、交接可能跑很久） */
+  pending: number;
+  /** 渲染进程崩过：webContents 还在但已经半死，isLive 要认出来 */
+  crashed: boolean;
 }
 
 interface PendingHandoff {
@@ -147,6 +166,12 @@ export class BrowserSandbox {
   private readonly popups = new Set<BrowserWindow>();
   private quitting = false;
   private guardedSession: Session | null = null;
+  /** agent tab 生命周期账本：闲置、上限、LRU 的纯决策都在它里面 */
+  private readonly ledger = new AgentTabLedger({ idleMs: AGENT_TAB_IDLE_MS, maxTabs: AGENT_TAB_MAX });
+  /** tab 被回收 / 崩溃后，给该会话留一句提示，下一次请求随工具结果发给模型 */
+  private readonly tabNotices = new Map<string, string>();
+  /** 回收扫描定时器；dispose 时清掉，不留泄漏 */
+  private sweepTimer: NodeJS.Timeout | null = null;
   /**
    * 「你的」tab 下载目录的缓存：will-download 里必须**同步**给出保存路径（晚了 Electron 就弹
    * 保存框），读设置是异步的——建窗时读一次，用户改了（setUserDownloadDir）就更新。
@@ -288,6 +313,7 @@ export class BrowserSandbox {
 
   /** 会话删除：它的 agent tab 一并关掉（交接中的先按取消结掉，别让那次工具调用挂着） */
   closeSessionTab(sessionId: string): void {
+    this.tabNotices.delete(sessionId);
     const tab = this.findAgentTab(sessionId);
     if (tab === undefined) return;
     this.settleHandoff(tab, "cancelled");
@@ -345,12 +371,39 @@ export class BrowserSandbox {
 
   // ── agent 侧（main/browser/agent-requests.ts）────────────────────────
 
+  /**
+   * 这个会话刚发来一次浏览器请求：刷新它 agent tab 的活跃时间。任何动作都算——读用户的 tab
+   * 也是这个会话在用浏览器，它自己的 tab 不该在这时被闲置回收。没有 tab 的会话是空操作。
+   */
+  noteBrowserRequest(sessionId: string): void {
+    this.ledger.touch(sessionId);
+  }
+
+  /** 取走并清掉待发的提示（tab 被回收 / 崩溃后的那一句）；没有就 null */
+  takeTabNotice(sessionId: string): string | null {
+    const notice = this.tabNotices.get(sessionId);
+    if (notice === undefined) return null;
+    this.tabNotices.delete(sessionId);
+    return notice;
+  }
+
   /** 会话自己的 agent tab，没有就建（不显示窗口、不切过去——不抢用户的屏幕） */
   async agentTab(sessionId: string): Promise<BrowserTab> {
     await this.ensureWindow();
     const existing = this.findAgentTab(sessionId);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined && this.isLive(existing)) {
+      this.ledger.touch(sessionId);
+      return existing;
+    }
+    if (existing !== undefined) {
+      // 半死的 tab（渲染进程崩了但事件还没走到清理）：按崩溃处理，清掉再重建
+      this.markAgentTabCrashed(existing);
+      this.destroyTab(existing);
+    }
+    // 上限：先给新 tab 腾位置，淘汰最久未活跃的（闲置的一并回收）
+    for (const victim of this.ledger.reclaimable(1)) this.reclaimAgentTab(victim.sessionId, victim.reason);
     const tab = this.createTab({ kind: "agent", sessionId });
+    this.ledger.register(sessionId);
     void this.deps
       .sessionTitle(sessionId)
       .then((title) => {
@@ -399,13 +452,26 @@ export class BrowserSandbox {
 
   /** 在 tab 上排队执行一个操作：同一页上的操作不交错，前一个失败不连累后一个 */
   runOnTab<T>(tab: BrowserTab, operation: () => Promise<T>): Promise<T> {
+    // 排队与执行期间这个 tab 算「忙」：回收要跳过它（导航、交接可能跑很久）
+    tab.pending += 1;
+    if (tab.owner.kind === "agent") this.ledger.setBusy(tab.owner.sessionId, true);
     const run = tab.queue.then(operation, operation);
     tab.queue = run.catch(() => undefined);
+    const settle = (): void => {
+      tab.pending -= 1;
+      if (tab.owner.kind === "agent" && tab.pending === 0) this.ledger.setBusy(tab.owner.sessionId, false);
+    };
+    void run.then(settle, settle);
     return run;
   }
 
   isLive(tab: BrowserTab): boolean {
-    return this.tabs.get(tab.id) === tab && !tab.view.webContents.isDestroyed();
+    return (
+      this.tabs.get(tab.id) === tab &&
+      !tab.crashed &&
+      !tab.view.webContents.isDestroyed() &&
+      !tab.view.webContents.isCrashed()
+    );
   }
 
   /**
@@ -462,10 +528,16 @@ export class BrowserSandbox {
 
   /** 真正销毁：最后一个主窗口关闭、或应用退出时调用 */
   dispose(): void {
+    if (this.sweepTimer !== null) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+    this.ledger.clear();
+    this.tabNotices.clear();
     nativeTheme.off("updated", this.onThemeMaybeChanged);
     for (const popup of this.popups) if (!popup.isDestroyed()) popup.destroy();
     this.popups.clear();
-    for (const tab of this.tabs.values()) {
+    for (const tab of [...this.tabs.values()]) {
       if (tab.handoff !== null) {
         const handoff = tab.handoff;
         tab.handoff = null;
@@ -531,6 +603,7 @@ export class BrowserSandbox {
       ...(await this.deps.toolbarWindowOptions()),
     });
     this.window = window;
+    this.startSweep();
     // 第一个 tab 就要对的底色：先读一次再建 tab
     await this.refreshPageBackground();
     // 与 dispose() 里的 off 一一对应：窗口销毁后不再吃主题事件
@@ -589,6 +662,8 @@ export class BrowserSandbox {
       downloads: [],
       refs: emptyElementRefs(),
       shot: null,
+      pending: 0,
+      crashed: false,
     };
     this.tabs.set(tab.id, tab);
     // 先垫到最底层：新 agent tab 不盖住用户正在看的那一页
@@ -608,7 +683,11 @@ export class BrowserSandbox {
     contents.on("did-navigate-in-page", () => this.push());
     contents.on("page-title-updated", () => this.push());
     // agent tab 离开页面不被 beforeunload 拦住：没人看得见那个「确定要离开吗」，拦住就是导航静默失败
-    if (owner.kind === "agent") contents.on("will-prevent-unload", (event) => event.preventDefault());
+    if (owner.kind === "agent") {
+      contents.on("will-prevent-unload", (event) => event.preventDefault());
+      // 渲染进程崩了：清掉这张半死的 tab，下次请求重建并提示模型（见 onAgentTabGone）
+      contents.on("render-process-gone", (_event, details) => this.onAgentTabGone(tab, details.reason));
+    }
     this.guardContents(contents);
     this.wireShortcuts(contents);
     // 网页视图不预载 about:blank：它会成为历史的第一条，首次导航后「后退」就是亮的、
@@ -621,6 +700,7 @@ export class BrowserSandbox {
     // 交接中的 tab 被关：那次工具调用按取消结掉，不挂着
     this.settleHandoff(tab, "cancelled");
     this.tabs.delete(tab.id);
+    if (tab.owner.kind === "agent") this.ledger.forget(tab.owner.sessionId);
     const window = this.window;
     if (window !== null && !window.isDestroyed()) window.contentView.removeChildView(tab.view);
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
@@ -630,6 +710,58 @@ export class BrowserSandbox {
     if (windowAlive && this.userTabs().length === 0) this.createTab({ kind: "user" });
     if (this.shownTabId === tab.id && windowAlive) this.show(this.currentUserTab().id);
     else this.push();
+  }
+
+  /** 给模型的那句提示的参数（闲置分钟数、上限都来自本文件的常量） */
+  private noticeContext(): AgentTabNoticeContext {
+    return { idleMinutes: AGENT_TAB_IDLE_MS / 60_000, maxTabs: AGENT_TAB_MAX };
+  }
+
+  /** 启动回收扫描；窗口重建时重复调用是空操作。unref：定时器不阻止应用退出 */
+  private startSweep(): void {
+    if (this.sweepTimer !== null) return;
+    this.sweepTimer = setInterval(() => this.sweepAgentTabs(), AGENT_TAB_SWEEP_MS);
+    this.sweepTimer.unref();
+  }
+
+  /** 扫描一轮：账本给出该回收的会话（闲置到点 + 超上限的 LRU 尾部），逐个拆掉 */
+  private sweepAgentTabs(): void {
+    for (const victim of this.ledger.reclaimable()) this.reclaimAgentTab(victim.sessionId, victim.reason);
+  }
+
+  /** 回收一个 agent tab：留一句提示，下次请求重建后发给模型 */
+  private reclaimAgentTab(sessionId: string, reason: AgentTabReclaimReason): void {
+    const tab = this.findAgentTab(sessionId);
+    if (tab === undefined) {
+      this.ledger.forget(sessionId);
+      return;
+    }
+    // 二道保险：账本已经滤掉忙碌的，这里再确认一次，绝不拆跑着的工具调用
+    if (tab.pending > 0) return;
+    this.tabNotices.set(sessionId, agentTabNotice(reason, this.noticeContext()));
+    console.info(`[browser] 回收会话 ${sessionId} 的 agent tab（${reason}）`);
+    this.destroyTab(tab);
+  }
+
+  /** 渲染进程崩了：标记这张 tab 半死，留一句提示，清掉——下次请求重建 */
+  private onAgentTabGone(tab: BrowserTab, reason: string): void {
+    if (tab.owner.kind !== "agent") return;
+    if (this.tabs.get(tab.id) !== tab) return; // 已经清掉了
+    console.warn(`[browser] 会话 ${tab.owner.sessionId} 的 agent tab 渲染进程没了（${reason}），下次请求重建`);
+    this.markAgentTabCrashed(tab);
+    try {
+      this.destroyTab(tab);
+    } catch (cause) {
+      // 清理失败不把异常抛回事件循环；tab 已标半死，下次请求会再清一次
+      console.error("[browser] 清理崩溃的 agent tab 失败，下次请求重建时再清", cause);
+    }
+  }
+
+  /** 标记崩溃并留提示；下一次 agentTab 重建后随工具结果发给模型 */
+  private markAgentTabCrashed(tab: BrowserTab): void {
+    if (tab.owner.kind !== "agent") return;
+    tab.crashed = true;
+    this.tabNotices.set(tab.owner.sessionId, agentTabNotice("crashed", this.noticeContext()));
   }
 
   private userTabs(): BrowserTab[] {
