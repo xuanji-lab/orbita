@@ -69,6 +69,8 @@ export type SceneBuilder = (W: number, H: number, seed: LayoutSeed | undefined) 
 export interface GraphStyle {
   colorMode: GraphColorMode;
   selKey: string | null;
+  /** 悬停条目行时点亮对应节点（只点亮，不选中、不展开） */
+  hoverKey: string | null;
   activeRound: number | null;
   activeTurnId: string | null;
 }
@@ -146,7 +148,7 @@ export class GraphRenderer {
   private readonly viewTfs = new Map<string, ViewTransform>();
   /** 视图变换变了（倍率 / 平移）的回调：React 侧刷新按钮态 */
   private onViewChange: ((view: ViewTransform) => void) | null = null;
-  private style: GraphStyle = { colorMode: "time", selKey: null, activeRound: null, activeTurnId: null };
+  private style: GraphStyle = { colorMode: "time", selKey: null, hoverKey: null, activeRound: null, activeTurnId: null };
   /** 尺寸还没量到时先存着的数据（量到后立刻构建） */
   private pending: { view: string; build: SceneBuilder } | null = null;
   private frame = 0;
@@ -537,7 +539,7 @@ export class GraphRenderer {
   private applyStyle(): void {
     const scene = this.scene;
     if (scene === null) return;
-    const { colorMode, selKey, activeRound, activeTurnId } = this.style;
+    const { colorMode, selKey, hoverKey, activeRound, activeTurnId } = this.style;
     const leaves = scene.nodes.filter((node): node is LeafNode => node.kind === "leaf");
     const range = leafRange(leaves.map((node) => node.leaf));
     const inRound = (rounds: readonly number[]): boolean => activeRound === null || rounds.includes(activeRound);
@@ -553,6 +555,7 @@ export class GraphRenderer {
         inRound(node.leaf.rounds) ? "" : "dim",
         node.leaf.verdict === "yes" ? "yes" : "",
         selected ? "sel" : "",
+        !selected && hoverKey === node.rowKey ? "hov" : "",
       ]
         .filter(Boolean)
         .join(" ");

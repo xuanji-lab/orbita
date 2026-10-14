@@ -4173,6 +4173,13 @@ button.panel-group-toggle:hover {
   stroke: var(--color-success);
   stroke-width: 1.8;
 }
+.ileaf.hov .ileaf-core {
+  stroke: var(--color-accent);
+  stroke-width: 1.6;
+}
+.ileaf.mid.hov {
+  opacity: 1;
+}
 .ileaf.sel .ileaf-core {
   stroke: var(--color-accent);
   stroke-width: 2.2;
@@ -4271,16 +4278,13 @@ button.panel-group-toggle:hover {
 .intent-row.sel {
   background: var(--option-active-bg);
 }
-.intent-row-mk {
+.intent-row-dot {
+  flex: none;
   margin-top: 3px;
-  color: var(--color-text-secondary);
-  display: inline-flex;
 }
-.intent-row-mk.mid {
-  color: var(--color-text-tertiary);
-}
-.intent-row-mk.yes {
-  color: var(--color-success);
+/* 与图上拿不准的节点同一档淡：空心 + 40% */
+.intent-row-dot.mid {
+  opacity: 0.4;
 }
 .intent-row-body {
   flex: 1;

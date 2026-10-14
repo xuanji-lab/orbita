@@ -34,7 +34,9 @@ import {
   buildEgoScene,
   buildSlotScene,
   centresOfTurns,
+  leafRange,
   mergeTurnLeaves,
+  nebulaPercentOf,
   orbitaCentreCandidates,
   parseOrbitaQaId,
   type ClusterLeaf,
@@ -42,7 +44,7 @@ import {
   type GraphColorMode,
   type TurnLeaves,
 } from "./cluster-layout.ts";
-import { GraphRenderer, type SceneBuilder } from "./GraphRenderer.ts";
+import { GraphRenderer, nebulaFill, type SceneBuilder } from "./GraphRenderer.ts";
 import { ZOOM_MAX, ZOOM_MIN } from "./graph-view.ts";
 import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
 
@@ -99,6 +101,8 @@ export function IntentPanel(props: {
   const [graphH, setGraphH] = useState(DEFAULT_GRAPH_H);
   const [folded, setFolded] = useState(false);
   const [selKey, setSelKey] = useState<string | null>(null);
+  /** 悬停的条目行：只点亮图上的节点；展开内容只跟点击走（用户 2026-10-14：「我要自己掌控」） */
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const selectRow = useCallback((key: string, scroll: boolean) => {
     setSelKey(key);
@@ -106,6 +110,8 @@ export function IntentPanel(props: {
     const row = listRef.current?.querySelector<HTMLElement>(`[data-row-key="${key}"]`);
     row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, []);
+  /** 点条目行：再点一次收起（展开由用户掌控，悬停不展开） */
+  const toggleRow = useCallback((key: string) => setSelKey((cur) => (cur === key ? null : key)), []);
   /** 点图上的叶子：选中并滚到那一行 */
   const selectLeaf = useCallback((key: string) => selectRow(key, true), [selectRow]);
 
@@ -330,6 +336,7 @@ export function IntentPanel(props: {
           loading={!fetched && rounds.length > 0}
           hasData={turnLeaves.some((turn) => turn.leaves.length > 0)}
           selKey={selKey}
+          hoverKey={hoverKey}
           onSelectLeaf={selectLeaf}
         />
         <IntentSplitBar
@@ -348,9 +355,10 @@ export function IntentPanel(props: {
           view={view}
           hidden={folded}
           selKey={selKey}
+          colorMode={colorMode}
           pendingAsk={props.pendingAsk}
-          onHover={setSelKey}
-          onSelect={selectRow}
+          onHover={setHoverKey}
+          onSelect={toggleRow}
           onQuickVerdict={quickVerdict}
           openableSessionIds={props.openableSessionIds}
           onOpenSession={props.onOpenSession}
@@ -393,6 +401,7 @@ function IntentGraph(props: {
   loading: boolean;
   hasData: boolean;
   selKey: string | null;
+  hoverKey: string | null;
   onSelectLeaf: (rowKey: string) => void;
 }) {
   const t = useT();
@@ -461,10 +470,11 @@ function IntentGraph(props: {
     rendererRef.current?.setStyle({
       colorMode: props.colorMode,
       selKey: props.selKey,
+      hoverKey: props.hoverKey,
       activeRound: props.activeRound,
       activeTurnId: props.activeTurnId,
     });
-  }, [props.colorMode, props.selKey, props.activeRound, props.activeTurnId, dataKey]);
+  }, [props.colorMode, props.selKey, props.hoverKey, props.activeRound, props.activeTurnId, dataKey]);
 
   // 尺寸：等比缩放并居中（不重排）
   useEffect(() => {
@@ -659,9 +669,10 @@ function IntentRows(props: {
   /** 折叠态：条目收到底部（图占满面板） */
   hidden: boolean;
   selKey: string | null;
+  colorMode: GraphColorMode;
   pendingAsk: { requestId: string; ask: IntentAskView[] } | null;
-  onHover: (key: string) => void;
-  onSelect: (key: string, scroll: boolean) => void;
+  onHover: (key: string | null) => void;
+  onSelect: (key: string) => void;
   onQuickVerdict: (qaId: string, verdict: "yes" | "no") => void;
   openableSessionIds: ReadonlySet<string>;
   onOpenSession: (sessionId: string, turnId: string | null) => void;
@@ -669,6 +680,8 @@ function IntentRows(props: {
 }) {
   const t = useT();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // 行首圆点与图上的节点同一套着色：同一份归一范围（全部条目）、同一着色模式
+  const range = useMemo(() => leafRange(props.rows.map((row) => row.leaf)), [props.rows]);
   const groups = useMemo(() => {
     const map = new Map<string, { label: string; rows: IntentRow[] }>();
     for (const row of props.rows) {
@@ -721,6 +734,7 @@ function IntentRows(props: {
                   key={row.key}
                   row={row}
                   sel={props.selKey === row.key}
+                  dotPercent={nebulaPercentOf(props.colorMode, row.leaf, range)}
                   pendingAsk={props.pendingAsk}
                   onHover={props.onHover}
                   onSelect={props.onSelect}
@@ -740,9 +754,11 @@ function IntentRows(props: {
 function IntentRowView(props: {
   row: IntentRow;
   sel: boolean;
+  /** 圆点的 nebula 浓度（与图上节点同一个值） */
+  dotPercent: number;
   pendingAsk: { requestId: string; ask: IntentAskView[] } | null;
-  onHover: (key: string) => void;
-  onSelect: (key: string, scroll: boolean) => void;
+  onHover: (key: string | null) => void;
+  onSelect: (key: string) => void;
   onQuickVerdict: (qaId: string, verdict: "yes" | "no") => void;
   /** 来源会话在本机存在（渲染时就判定，不让用户点了才知道） */
   openable: boolean;
@@ -758,11 +774,26 @@ function IntentRowView(props: {
       data-row-key={props.row.key}
       className={`intent-row${props.sel ? " sel" : ""}`}
       onMouseEnter={() => props.onHover(props.row.key)}
-      onClick={() => props.onSelect(props.row.key, false)}
+      onMouseLeave={() => props.onHover(null)}
+      onClick={(event) => {
+        // 展开后的正文与按钮区不触发收起：在里面选字、点按钮都不该把行折回去
+        if (event.target instanceof Element && event.target.closest(".intent-row-more, .intent-row-acts") !== null) return;
+        props.onSelect(props.row.key);
+      }}
+      aria-expanded={props.sel}
     >
-      <span className={`intent-row-mk ${kind}`}>
-        <Icon name={kind === "yes" ? "circle-check" : kind === "high" ? "circle-dot" : "circle-dashed"} size={14} />
-      </span>
+      {/* 行首圆点 = 图上那个节点的样子：实心（入选）/ 空心（拿不准）/ 绿圈（你点过对），
+          颜色同一套 nebula 浓度（时间 / 相关度）。用户 2026-10-14：两边的圆要统一 */}
+      <svg className={`intent-row-dot ${kind}`} width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <circle
+          cx="7"
+          cy="7"
+          r="4.5"
+          fill={props.row.solid ? nebulaFill(props.dotPercent) : "var(--color-bg-panel)"}
+          stroke={kind === "yes" ? "var(--color-success)" : nebulaFill(props.dotPercent)}
+          strokeWidth={kind === "yes" ? 1.8 : 1.2}
+        />
+      </svg>
       <div className="intent-row-body">
         <div className="intent-row-l1">
           <span className="intent-row-title">{leaf.title}</span>
