@@ -343,8 +343,10 @@ export const zh: Messages = {
     probeFailed: "检测没跑成",
     sandboxGroup: "沙箱",
     sandboxState: "状态",
+    // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；
+    // 改那边就要改这里（冷启动实测可达 105s+，首次还要制备基础镜像）
     sandboxStateInfo:
-      "启动要等沙箱回头注册（最多一分钟）；关闭会丢掉沙箱里的一切。出错之后，「启动」可以直接重试，「关闭」会复位回未启动。",
+      "启动要等沙箱回头注册（最多三分钟；首次启动要制备基础镜像，明显更慢，等超了直接重试即可）；关闭会丢掉沙箱里的一切。出错之后，「启动」可以直接重试，「关闭」会复位回未启动。",
     states: {
       off: "未启动",
       starting: "启动中…",
