@@ -45,6 +45,25 @@ export function findAskEdge(
   return best;
 }
 
+/**
+ * 摘句窗口（2026-10-14 契约增补）：qa.q / qa.a 从全文变成「围绕摘句 ±600 字」的窗口，
+ * 窗口的元数据在这里。旧服务端没有这两个字段——缺席时卡片退回旧行为（全文里找摘句）。
+ */
+export interface ExcerptWindow {
+  /** 窗口在原文里的起始偏移（字） */
+  start: number;
+  /** 原文总长（字） */
+  total: number;
+  /** 前面被裁掉了（卡片显示「… 前面还有 N 字」） */
+  cutBefore: boolean;
+  /** 后面被裁掉了 */
+  cutAfter: boolean;
+  /** 摘句在窗口里逐字定位到了；false = 摘句不是逐字原文（不画高亮、从头显示、就地说明） */
+  located: boolean;
+  /** true = 服务端没找到窗口、退回全文/头部——从头显示、不画高亮、不说话 */
+  fallback: boolean;
+}
+
 /** 一条 (QA, 岗) 边：一份历史 QA 在一个岗位上的相关度判定。 */
 export interface IntentEdge {
   qaId: string;
@@ -71,8 +90,8 @@ export interface IntentEdge {
   edited: string | null;
   /** 用户说「对」（或改字）后提升为入选 */
   promoted: boolean;
-  /** 该 QA 的出处与原文 */
-  qa: { ts: number; sessionId: string; title: string; source: string; q: string; a: string };
+  /** 该 QA 的出处与原文（契约增补：q/a 是摘句窗口时带 qWindow/aWindow 元数据） */
+  qa: { ts: number; sessionId: string; title: string; source: string; q: string; a: string; qWindow?: ExcerptWindow; aWindow?: ExcerptWindow };
 }
 
 /**
@@ -144,6 +163,26 @@ function parseEdge(raw: unknown): IntentEdge | null {
   const verdictRaw = v["verdict"];
   const verdict = verdictRaw === "yes" || verdictRaw === "no" || verdictRaw === "skip" ? verdictRaw : null;
   const edited = str(v["edited"]);
+  // 契约增补（2026-10-14）：摘句窗口元数据。**可选**——旧服务端没有；有但畸形时按缺席
+  // 处理（退回旧行为），不连累整条边（窗口只影响确认卡的高亮定位，不是图的数据面）
+  const windowOpt = (key: "qWindow" | "aWindow"): ExcerptWindow | undefined => {
+    const w = q[key];
+    if (typeof w !== "object" || w === null) return undefined;
+    const r = w as Record<string, unknown>;
+    const start = num(r["start"]);
+    const total = num(r["total"]);
+    if (start === null || total === null) return undefined;
+    return {
+      start,
+      total,
+      cutBefore: r["cutBefore"] === true,
+      cutAfter: r["cutAfter"] === true,
+      located: r["located"] === true,
+      fallback: r["fallback"] === true,
+    };
+  };
+  const qWindow = windowOpt("qWindow");
+  const aWindow = windowOpt("aWindow");
   return {
     qaId,
     slot,
@@ -159,7 +198,11 @@ function parseEdge(raw: unknown): IntentEdge | null {
     verdict,
     edited,
     promoted: v["promoted"] === true,
-    qa: { ts, sessionId, title, source, q: questionText, a: answerText },
+    qa: {
+      ts, sessionId, title, source, q: questionText, a: answerText,
+      ...(qWindow === undefined ? {} : { qWindow }),
+      ...(aWindow === undefined ? {} : { aWindow }),
+    },
   };
 }
 
