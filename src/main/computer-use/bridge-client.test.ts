@@ -1,9 +1,14 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchGuestScreenshot, GUEST_COMMAND_TIMEOUT_MS, isPlainScreenshotFileName } from "./bridge-client.ts";
+import {
+  fetchGuestScreenshot,
+  GUEST_COMMAND_TIMEOUT_MS,
+  isPlainScreenshotFileName,
+  sendGuestCommand,
+} from "./bridge-client.ts";
 import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,6 +19,8 @@ interface FakeBridgeRequest {
   seq: number;
   command: string;
   maxWidth?: number;
+  /** 各命令自己的字段（click 的 x/y、key 的 key…），断言时按名字取 */
+  [field: string]: unknown;
 }
 
 /**
@@ -30,7 +37,6 @@ function startFakeBridge(
   void (async () => {
     while (!stopped) {
       try {
-        const { readdir } = await import("node:fs/promises");
         const files = (await readdir(cmdDir)).filter((f) => f.endsWith(".req.json")).sort();
         for (const file of files) {
           const baseName = file.slice(0, -".req.json".length);
@@ -42,12 +48,10 @@ function startFakeBridge(
             await writeFile(jpgTmp, jpg);
             const jpgFinal = join(cmdDir, `${baseName}.jpg`);
             await rm(jpgFinal, { force: true });
-            const { rename } = await import("node:fs/promises");
             await rename(jpgTmp, jpgFinal);
           }
           const respTmp = join(cmdDir, `${baseName}.resp.json.tmp`);
           await writeFile(respTmp, JSON.stringify(resp), "utf8");
-          const { rename } = await import("node:fs/promises");
           const respFinal = join(cmdDir, `${baseName}.resp.json`);
           await rm(respFinal, { force: true });
           await rename(respTmp, respFinal);
@@ -82,7 +86,6 @@ describe("bridge-client（文件协议）", () => {
       assert.equal(bridge.requests[0]?.command, "screenshot");
       assert.equal(bridge.requests[0]?.maxWidth, 640);
       // 清理纪律：cmd 目录里 req/resp/jpg 都不许残留
-      const { readdir } = await import("node:fs/promises");
       const left = await readdir(join(dir, COMPUTER_USE_CMD_DIR));
       assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
     } finally {
@@ -116,7 +119,6 @@ describe("bridge-client（文件协议）", () => {
     try {
       const promise = fetchGuestScreenshot(dir, 1280, 3_000);
       await sleep(150); // 等 req 落盘
-      const { readdir } = await import("node:fs/promises");
       const cmdDir = join(dir, COMPUTER_USE_CMD_DIR);
       const reqFile = (await readdir(cmdDir)).find((f) => f.endsWith(".req.json"));
       assert.ok(reqFile, "req 应已落盘");
@@ -139,6 +141,43 @@ describe("bridge-client（文件协议）", () => {
 
   test("超时默认值是协议常量", () => {
     assert.equal(GUEST_COMMAND_TIMEOUT_MS, 15_000);
+  });
+
+  // ── 通用命令往返（PR2：agent 的 click / type / key / scroll 走它）──────────
+
+  test("通用命令：字段原样到桥、回执回传、文件清干净", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, dryRun: true, vks: [17, 65] } }));
+    try {
+      const resp = await sendGuestCommand(dir, "key", { key: "ctrl+a" });
+      assert.deepEqual(resp, { ok: true, dryRun: true, vks: [17, 65] });
+      assert.equal(bridge.requests[0]?.command, "key");
+      assert.equal(bridge.requests[0]?.["key"], "ctrl+a");
+      assert.deepEqual(await readdir(join(dir, COMPUTER_USE_CMD_DIR)), []);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("通用命令：桥回错误响应 → 原话抛出（模型要能照抄给用户）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: false, error: "不认识的按键名：hyper" } }));
+    try {
+      await assert.rejects(sendGuestCommand(dir, "key", { key: "hyper+x" }), /不认识的按键名：hyper/);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("通用命令：桥死了不回 → 超时抛出", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    try {
+      await assert.rejects(sendGuestCommand(dir, "click", { x: 1, y: 2 }, 300), /没有响应/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

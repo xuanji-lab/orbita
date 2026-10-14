@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
+  COMPUTER_USE_READ_TOOLS,
   decidePermission,
   DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
   isChannelTool,
+  isComputerUseReadTool,
   USER_ACTION_TOOL,
   isReadOnlyTool,
   PERMISSION_MODES,
@@ -130,6 +132,27 @@ describe("浏览器只读四件（BROWSER_READ_TOOLS）", () => {
       assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
     }
     assert.equal(isBrowserReadTool("browser_scroll"), true);
+  });
+});
+
+describe("沙箱截图（COMPUTER_USE_READ_TOOLS）", () => {
+  test("三档一律放行：它只向沙箱要一张图，不往沙箱里送任何输入", () => {
+    for (const tool of COMPUTER_USE_READ_TOOLS) {
+      for (const mode of PERMISSION_MODES) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode} ${tool}`);
+      }
+    }
+    assert.equal(isComputerUseReadTool("computer_click"), false);
+    for (const tool of COMPUTER_USE_READ_TOOLS) assert.equal(isReadOnlyTool(tool), false, tool);
+  });
+
+  test("点击 / 打字 / 按键 / 滚动真注入鼠标键盘，照写操作过闸：plan 拒、manual 问、skip 放", () => {
+    for (const tool of ["computer_click", "computer_type", "computer_key", "computer_scroll"]) {
+      assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
+      assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
+      assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
+      assert.equal(isComputerUseReadTool(tool), false, tool);
+    }
   });
 });
 

@@ -3,7 +3,13 @@
 // 文件协议：宿主写 out/cmd/<名字>.req.json（tmp+rename）→ 桥执行 →
 // 写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件）→ 删 req。
 // 覆盖：build.mjs 编译出 exe；bridge.json 就绪通告；screenshot 命令全链
-// （req 消失、resp 字段、JPEG 魔数与尺寸、长边 ≤ maxWidth）；未知命令 / 坏请求的 error 响应。
+// （req 消失、resp 字段、JPEG 魔数与尺寸、长边 ≤ maxWidth）；未知命令 / 坏请求的 error 响应；
+// 输入命令（click / type / key / scroll）的参数校验与键名→VK 映射。
+//
+// ⚠ **红线**：输入命令在宿主上跑就是劫持用户真实的鼠标键盘。所以这个文件里所有
+// click / type / key / scroll 请求一律带 `dryRun: true`（桥只解析不注入），并且
+// 第一个探针用的是「就算 dryRun 被忽略也没有任何副作用」的空文本 type——
+// 探针回执不带 dryRun 就当场失败，后面一条都不发。
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -83,7 +89,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.1.0");
+      assert.equal(info.version, "0.2.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -137,6 +143,113 @@ test(
       // 循环还活着：再发一个正常命令验证
       writeRequest(cmdDir, "cmd-000005", JSON.stringify({ seq: 5, command: "screenshot", maxWidth: 640 }));
       assert.ok(await waitForFile(path.join(cmdDir, "cmd-000005.resp.json")), "坏命令之后循环应继续工作");
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ── 输入命令（全部 dryRun：只验解析与校验，绝不注入）───────────────────────
+
+test(
+  "输入命令 dryRun：键名→VK、坐标/文本解析与参数校验；不注入任何事件",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-input-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+
+    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    let seq = 0;
+    /** 发一个请求并等回执（req 名字带序号，桥按名字排序处理） */
+    const ask = async (body) => {
+      seq += 1;
+      const name = "cmd-" + String(seq).padStart(6, "0");
+      writeRequest(cmdDir, name, JSON.stringify({ seq, ...body }));
+      const respPath = path.join(cmdDir, name + ".resp.json");
+      assert.ok(await waitForFile(respPath), `应收到响应。桥日志：\n${bridgeLog}`);
+      return JSON.parse(fs.readFileSync(respPath, "utf8"));
+    };
+
+    try {
+      assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
+
+      // ---- 探针：dryRun 缝真的生效（空文本 type，就算被忽略也是零事件）----
+      const probe = await ask({ command: "type", text: "", dryRun: true });
+      assert.equal(probe.ok, true);
+      assert.equal(probe.dryRun, true, "dryRun 没被桥认——后面的注入类请求一律不发（宿主上注入是红线）");
+
+      // ---- click ----
+      assert.deepEqual(await ask({ command: "click", x: 120, y: 340, dryRun: true }), {
+        ok: true,
+        dryRun: true,
+        x: 120,
+        y: 340,
+        button: "left",
+        double: false,
+      });
+      const right = await ask({ command: "click", x: 5, y: 6, button: "right", double: true, dryRun: true });
+      assert.deepEqual(right, { ok: true, dryRun: true, x: 5, y: 6, button: "right", double: true });
+      const noX = await ask({ command: "click", y: 6, dryRun: true });
+      assert.equal(noX.ok, false);
+      assert.match(noX.error, /整数 x 与 y/);
+      const badButton = await ask({ command: "click", x: 1, y: 2, button: "wheel", dryRun: true });
+      assert.equal(badButton.ok, false);
+      assert.match(badButton.error, /button 只能是/);
+
+      // ---- key：键名 → VK（宿主侧只看解析结果，不关心 VK 具体值是否“对”到某个物理键）----
+      const vks = async (key) => (await ask({ command: "key", key, dryRun: true })).vks;
+      assert.deepEqual(await vks("enter"), [0x0d]);
+      assert.deepEqual(await vks("Escape"), [0x1b]);
+      assert.deepEqual(await vks("f12"), [0x7b]);
+      assert.deepEqual(await vks("ctrl+a"), [0x11, 0x41]);
+      assert.deepEqual(await vks("alt+f4"), [0x12, 0x73]);
+      assert.deepEqual(await vks("win+r"), [0x5b, 0x52]);
+      assert.deepEqual(await vks("Ctrl + Shift + S"), [0x11, 0x10, 0x53]);
+      assert.deepEqual(await vks("numpad7"), [0x67]);
+      const unknown = await ask({ command: "key", key: "hyper+x", dryRun: true });
+      assert.equal(unknown.ok, false);
+      assert.match(unknown.error, /不认识的按键名：hyper/);
+      const emptyKey = await ask({ command: "key", dryRun: true });
+      assert.equal(emptyKey.ok, false);
+
+      // ---- type：转义与中文原样回显（引号/反斜杠/换行/中文都不能被切坏）----
+      const text = '他说"你好" \\ 换行\n制表\t结束';
+      const typed = await ask({ command: "type", text, dryRun: true });
+      assert.equal(typed.ok, true);
+      assert.equal(typed.text, text);
+      assert.equal(typed.length, text.length);
+      const noText = await ask({ command: "type", dryRun: true });
+      assert.equal(noText.ok, false);
+      assert.match(noText.error, /text 字段/);
+
+      // ---- scroll ----
+      assert.deepEqual(await ask({ command: "scroll", x: 10, y: 20, deltaY: -3, dryRun: true }), {
+        ok: true,
+        dryRun: true,
+        x: 10,
+        y: 20,
+        deltaY: -3,
+      });
+      const zeroDelta = await ask({ command: "scroll", x: 1, y: 2, deltaY: 0, dryRun: true });
+      assert.equal(zeroDelta.ok, false);
+      assert.match(zeroDelta.error, /deltaY 不能是 0/);
+      const noDelta = await ask({ command: "scroll", x: 1, y: 2, dryRun: true });
+      assert.equal(noDelta.ok, false);
+      assert.match(noDelta.error, /整数 deltaY/);
+
+      // 校验类请求也不许留下 req 文件（桥执行完就删）
+      assert.deepEqual(
+        fs.readdirSync(cmdDir).filter((f) => f.endsWith(".req.json")),
+        [],
+        "req 应全部由桥删掉",
+      );
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));

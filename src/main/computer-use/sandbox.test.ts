@@ -488,6 +488,8 @@ describe("手动截图", () => {
       assert.equal(shot.ok, true);
       if (shot.ok) {
         assert.equal(shot.jpegBase64, jpegBytes.toString("base64"));
+        assert.equal(shot.width, 640, "回图尺寸（模型看到的像素）要回给调用方：坐标换算靠它");
+        assert.equal(shot.height, 720);
         assert.equal(shot.nativeWidth, 2560);
         assert.equal(shot.nativeHeight, 1440);
         assert.ok(Math.abs(shot.takenAt - Date.now()) < 5_000);
@@ -880,6 +882,104 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
       assert.deepEqual(killed, [4300, 4300], "优雅关闭没生效 → 兜底强杀 + 升级再杀一次");
       assert.ok(harness.logs.some((line) => /退回强杀/.test(line)), harness.logs.join(" | "));
       assert.ok(harness.logs.some((line) => /可能未退出/.test(line)), "最终仍要留痕，不静默");
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// ── agent 工具的 guest 命令下发（PR2：click / type / key / scroll）────────────
+
+describe("guest 命令下发", () => {
+  /** 把桥看到的请求收窄成 Record，断言字段用 */
+  const fieldsOf = (harness: Harness, index: number): Record<string, unknown> =>
+    harness.requests[index] as unknown as Record<string, unknown>;
+
+  /** 去掉序号（进程级递增，断言里不能写死值） */
+  const withoutSeq = (fields: Record<string, unknown>): Record<string, unknown> => {
+    const { seq: _seq, ...rest } = fields;
+    return rest;
+  };
+
+  test("不在 running → 直接拒绝（消息里带“去哪儿启动”），一个 req 都不落盘", async () => {
+    const harness = await makeHarness();
+    try {
+      const result = await harness.controller.guestCommand("click", { x: 1, y: 2 });
+      assert.equal(result.ok, false);
+      assert.ok(result.ok === false && /没有在运行/.test(result.error));
+      assert.ok(result.ok === false && /设置 › 实验功能 › 电脑使用/.test(result.error));
+      assert.deepEqual(harness.requests, [], "闸门在写文件之前，不该有任何请求");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("running 时经文件协议下发：命令名与字段原样到桥，req/resp 清干净", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      // 所有命令都答 ok（含 ping）；默认应答器只答 ping，装死会让 click 等到超时
+      harness.announceBridge({ respond: () => ({ resp: { ok: true } }) });
+      await startPromise;
+
+      assert.deepEqual(
+        await harness.controller.guestCommand("click", { x: 100, y: 200, button: "right", double: true }),
+        { ok: true },
+      );
+      assert.deepEqual(
+        await harness.controller.guestCommand("type", { text: "你好" }),
+        { ok: true },
+      );
+      assert.deepEqual(await harness.controller.guestCommand("key", { key: "alt+f4" }), { ok: true });
+      assert.deepEqual(await harness.controller.guestCommand("scroll", { x: 5, y: 6, deltaY: -120 }), { ok: true });
+
+      const commands = harness.requests.slice(1).map((req) => req.command);
+      assert.deepEqual(commands, ["click", "type", "key", "scroll"]);
+      assert.deepEqual(withoutSeq(fieldsOf(harness, 1)), {
+        command: "click",
+        x: 100,
+        y: 200,
+        button: "right",
+        double: true,
+      });
+      assert.deepEqual(withoutSeq(fieldsOf(harness, 2)), { command: "type", text: "你好" });
+      assert.deepEqual(withoutSeq(fieldsOf(harness, 3)), { command: "key", key: "alt+f4" });
+      assert.deepEqual(withoutSeq(fieldsOf(harness, 4)), { command: "scroll", x: 5, y: 6, deltaY: -120 });
+
+      const left = await readdir(join(harness.dir, "out", COMPUTER_USE_CMD_DIR));
+      assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("桥回错误响应（不认识的键名）→ 原话带出", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) =>
+          req.command === "ping"
+            ? { resp: { ok: true } }
+            : { resp: { ok: false, error: "不认识的按键名：hyper" } },
+      });
+      await startPromise;
+      const result = await harness.controller.guestCommand("key", { key: "hyper+x" });
+      assert.deepEqual(result, { ok: false, error: "不认识的按键名：hyper" });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("桥死了不回 → 超时错误原话带出", async () => {
+    const harness = await makeHarness({ guestTimeoutMs: 300 });
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge(); // 默认应答器只答 ping
+      await startPromise;
+      const result = await harness.controller.guestCommand("click", { x: 1, y: 2 });
+      assert.equal(result.ok, false);
+      assert.ok(result.ok === false && /没有响应/.test(result.error));
     } finally {
       await harness.close();
     }
