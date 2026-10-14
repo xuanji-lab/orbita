@@ -94,6 +94,24 @@ export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof ty
  */
 export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
 
+/**
+ * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
+ *
+ * **45 秒不是拍脑袋的宽容值**：2026-10-10 真机实测，win+r 弹出「运行」框之后，
+ * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
+ * （触发面只有这类壳对话框；escape / click 后立刻 type 只要 433ms）。桥那边已改成
+ * 序号直探（guest-bridge/Program.cs 的 PollOnce），把黑窗压到 ~8s，但黑窗仍存在。
+ * 15 秒会把一次**真的成功了**的注入判成失败，而模型看到失败会重试——同一个动作做两遍
+ * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
+ * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
+ *
+ * 放在 shared（而不是定义它的 bridge-client）是因为 agent 侧的 computer-tools 也要读它：
+ * broker 的兜底超时必须比这条线更长，否则主进程还在等、agent 先把真成功判成
+ * 「主进程没有回执」（computer-tools.ts 的 BROKER_TIMEOUT_MS）。agent 进程不能
+ * import 主进程模块，跨进程共享的常量只有这里能放。
+ */
+export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
+
 // ── 沙箱状态机 ────────────────────────────────────────────────────────
 
 export type SandboxState = "off" | "starting" | "running" | "stopping" | "error";

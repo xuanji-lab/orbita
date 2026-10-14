@@ -5,12 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   fetchGuestScreenshot,
-  GUEST_COMMAND_TIMEOUT_MS,
   isPlainScreenshotFileName,
   resetGuestCommandSeq,
   sendGuestCommand,
 } from "./bridge-client.ts";
-import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
+import { COMPUTER_USE_CMD_DIR, GUEST_COMMAND_TIMEOUT_MS } from "../../shared/computer-use.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

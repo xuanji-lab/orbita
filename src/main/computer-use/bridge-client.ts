@@ -14,7 +14,11 @@
  */
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, win32 } from "node:path";
-import { COMPUTER_USE_CMD_DIR, computerUseGuestCommands } from "../../shared/computer-use.ts";
+import {
+  COMPUTER_USE_CMD_DIR,
+  computerUseGuestCommands,
+  GUEST_COMMAND_TIMEOUT_MS,
+} from "../../shared/computer-use.ts";
 
 export interface GuestScreenshot {
   jpeg: Uint8Array;
@@ -43,17 +47,9 @@ export function isPlainScreenshotFileName(name: string): boolean {
 }
 
 /**
- * 桥不应答时的放弃线。
- *
- * **45 秒不是拍脑袋的宽容值**：2026-10-14 真机实测，win+r 弹出「运行」框之后，
- * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
- * （触发面只有这类壳对话框；escape / click 后立刻 type 只要 433ms）。桥那边已改成
- * 序号直探（guest-bridge/Program.cs 的 PollOnce），把黑窗压到 ~8s，但黑窗仍存在。
- * 15 秒会把一次**真的成功了**的注入判成失败，而模型看到失败会重试——同一个动作做两遍
- * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
- * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
+ * 桥不应答时的放弃线已上提到 shared/computer-use.ts 的 GUEST_COMMAND_TIMEOUT_MS
+ * （agent 侧的 broker 兜底也要读它，注释与理由在那边）。
  */
-export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
 
 /** 等响应文件的轮询节奏（映射文件夹同步即时，这只是读盘节奏） */
 const RESP_POLL_INTERVAL_MS = 200;

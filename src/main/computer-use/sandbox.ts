@@ -25,6 +25,7 @@ import {
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
   computerUseGuestCommands,
+  GUEST_COMMAND_TIMEOUT_MS,
   type ComputerUseGuestCommand,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -37,7 +38,6 @@ import { writeTextAtomic } from "../atomic-write.ts";
 import { probe as probeCapability } from "./capability.ts";
 import {
   fetchGuestScreenshot,
-  GUEST_COMMAND_TIMEOUT_MS,
   pingGuest,
   resetGuestCommandSeq,
   sendGuestCommand,
