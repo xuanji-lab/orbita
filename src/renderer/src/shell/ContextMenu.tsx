@@ -159,7 +159,7 @@ export function ContextMenu(props: {
               borderRadius: "var(--radius-sm)",
               ...(item.danger === true && !disabled ? { color: "var(--color-danger)" } : null),
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               textAlign: "left",
               cursor: disabled ? "not-allowed" : "pointer",
             }}
@@ -201,7 +201,7 @@ export function ContextMenu(props: {
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     color: "var(--color-text-tertiary)",
-                    fontSize: "var(--font-size-micro)",
+                    fontSize: "var(--font-size-xs)",
                     whiteSpace: "nowrap",
                   }}
                 >

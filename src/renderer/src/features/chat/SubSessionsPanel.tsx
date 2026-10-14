@@ -119,7 +119,7 @@ export function SubSessionsPanel(props: {
               alignItems: "center",
               gap: "var(--space-1)",
               minWidth: 0,
-              fontSize: "var(--font-size-caption)",
+              fontSize: "var(--font-size-sm)",
               color: STATUS_COLOR[status],
             }}
           >
@@ -145,7 +145,7 @@ export function SubSessionsPanel(props: {
               background: "transparent",
               color: "var(--color-text-secondary)",
               font: "inherit",
-              fontSize: "var(--font-size-caption)",
+              fontSize: "var(--font-size-sm)",
               cursor: "pointer",
             }}
           >

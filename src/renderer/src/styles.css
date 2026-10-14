@@ -132,7 +132,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 .revert-cut::before,
@@ -203,14 +203,14 @@
  * JS 量宽度的逻辑（全走 CSS 容器查询 + overflow:hidden 兜底），允许它的 chip 收缩
  * 正是这里要的效果，只是不能外溢到别的消费者。
  *
- * 断点用实际内容量出来（都按 13px control 字号 + 现有 padding/gap 估算）：
- *   - 展开态：工作区芯片（图标12+gap5+文字~40+gap5+chevron11+padding16）≈89px、
- *     权限芯片固定 84px、模型芯片（无图标，文字~90+chevron11+padding16）≈120px
+ * 断点用实际内容量出来（都按 14px base 字号 + 现有 padding/gap 估算）：
+ *   - 展开态：工作区芯片（图标12+gap5+文字~43+gap5+chevron11+padding16）≈92px、
+ *     权限芯片固定 84px、模型芯片（无图标，文字~96+chevron11+padding16）≈123px
  *     起步（还会随模型名变长）、思考档固定 84px、用量环 ≈30px、4 个 gap ≈24px——
- *     全展开至少要 ~430px，装不下就已经开始互相挤。
+ *     全展开至少要 ~440px，装不下就已经开始互相挤。
  *   - 紧凑态（只留图标）：图标 12 + gap 5 + chevron 11 + padding 16 ≈ 44px 一个，
  *     工作区与权限各省 ~40–45px，留给模型名与思考档。
- * 取 420px 做断点——比展开态最小需求（~430px）略窄一点，容器一旦装不下当前展开
+ * 取 430px 做断点——比展开态最小需求（~440px）略窄一点，容器一旦装不下当前展开
  * 内容就立刻收，不留一段「即将重叠」的中间态。
  */
 /* 输入框本体。底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
@@ -219,9 +219,9 @@
 .composer-input {
   padding: 2px 4px;
   background: transparent;
-  line-height: var(--line-height-input);
+  line-height: var(--line-height-ui);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-input);
+  font-size: var(--font-size-base);
 }
 
 /* 输入框外层：textarea 与镜像层叠在同一格里，镜像在下、textarea 在上（修正液与句中 chip，
@@ -370,7 +370,7 @@
   border: 1px solid var(--color-border-subtle);
   background: var(--color-bg-panel);
   box-shadow: var(--shadow-popover);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -395,7 +395,7 @@
   min-width: 0;
 }
 
-@container (max-width: 420px) {
+@container (max-width: 430px) {
   /* 工作区与权限芯片只留图标，文字仍在 title 里（Chip 本来就总是设 title） */
   .composer-bottom-bar .chip-scope .chip-label,
   .composer-bottom-bar .chip-mode .chip-label {
@@ -649,8 +649,8 @@ body {
   background: var(--color-bg-app);
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
   font-weight: var(--weight-regular);
 }
 
@@ -1075,13 +1075,13 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: var(--weight-strong);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   color: var(--color-text-primary);
 }
 
 .inbox-row-ago {
   flex: 0 0 auto;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -1089,7 +1089,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -1098,14 +1098,14 @@ body {
   margin: 0;
   padding: var(--space-2) var(--space-3) 0;
   border-top: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
 /* 页头里「N 个在等你」的计数（warning 色由 inline 给） */
 .inbox-waiting-count {
   flex: 0 0 auto;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -1116,7 +1116,7 @@ body {
 
 .channel-reply-error {
   margin: 0 0 var(--space-1);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-danger);
 }
 
@@ -1135,8 +1135,8 @@ body {
   background: var(--color-bg-panel);
   outline: none;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-caption);
-  line-height: 1.5;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-primary);
   padding: 3px 8px;
 }
@@ -1181,7 +1181,7 @@ body {
 /*
  * 子会话对话流里的「来自父会话」消息（ChannelFromParentBubble）：头顶一行小引子
  * （谁在说话、说的是什么），下面一条虚线边的气泡——与用户气泡同一套底 / 圆角 /
- * 字号（--color-chat-card-bg / --radius-bubble / --font-size-chat），只有两点不同：
+ * 字号（--color-chat-card-bg / --radius-bubble / --font-size-base），只有两点不同：
  * 铺满整列（父的指令不是某一侧的话，是这条会话的上下文）与虚线描边
  * （它不是子会话自己说的话）。
  */
@@ -1197,7 +1197,7 @@ body {
   align-items: center;
   gap: 4px;
   margin: 0;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -1206,15 +1206,15 @@ body {
   background: var(--color-chat-card-bg);
   border: 1px dashed var(--color-border-default);
   border-radius: var(--radius-bubble);
-  font-size: var(--font-size-chat);
-  line-height: var(--line-height-bubble);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
   overflow-wrap: anywhere;
 }
 
 /* 账本未到 / 拉失败时的一行说明：引子还在，正文不假装 */
 .channel-from-note {
   margin: 0;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -1239,7 +1239,7 @@ body {
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-primary);
   text-align: left;
   cursor: pointer;
@@ -1280,7 +1280,7 @@ body {
   margin-left: auto;
   flex: 0 0 auto;
   color: var(--color-accent);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -1314,7 +1314,7 @@ body {
   cursor: pointer;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-family: inherit;
 }
 
@@ -1396,7 +1396,7 @@ body {
   text-align: left;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-family: inherit;
   min-width: 0;
 }
@@ -1413,7 +1413,7 @@ body {
 }
 
 .drawer-pickrow-meta {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -1547,8 +1547,9 @@ body {
 
 .chat-md {
   min-width: 0;
-  font-size: var(--font-size-chat);
-  line-height: var(--line-height-chat);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  letter-spacing: var(--tracking-reading);
   overflow-wrap: anywhere;
 }
 
@@ -1570,24 +1571,35 @@ body {
 .chat-md h4,
 .chat-md h5,
 .chat-md h6 {
-  margin: var(--space-4) 0 var(--space-2);
-  font-weight: var(--weight-bold);
-  line-height: 1.4;
+  margin: var(--space-6) 0 var(--space-2);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
 }
 
+/* 标题只占三档字号（xl / lg / base），h3–h6 和正文同字号、靠字重分层：
+   六档标题各占一个字号会把正文压成「小字」（照 ZCode 的 markdown 层级） */
 .chat-md h1 {
-  font-size: var(--font-size-heading);
+  font-size: var(--font-size-xl);
 }
 
 .chat-md h2 {
-  font-size: var(--font-size-title);
+  font-size: var(--font-size-lg);
 }
 
 .chat-md h3,
 .chat-md h4,
 .chat-md h5,
 .chat-md h6 {
-  font-size: var(--font-size-chat);
+  font-size: var(--font-size-base);
+}
+
+.chat-md h5 {
+  font-weight: var(--weight-medium);
+}
+
+.chat-md h6 {
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
 }
 
 .chat-md ul,
@@ -1607,7 +1619,7 @@ body {
 /* 用户气泡内的 markdown（variant="bubble"）：行高走气泡规格，段落间距压小——
    气泡是对话不是文档。标题已在组件层摊平成文本（BUBBLE_BANNED）。 */
 .chat-md.bubble-md {
-  line-height: var(--line-height-bubble);
+  line-height: var(--line-height-reading);
 }
 
 .chat-md.bubble-md p {
@@ -1627,9 +1639,9 @@ body {
  * span.bubble-chip，MarkdownBlock 的 ChipSpan 换成图标 + 名字）。与输入框镜像层的
  * .composer-chip 是同一语言的另一形态：气泡没有对齐约束，可以有横向 padding 与
  * 图标；配方照 Proma 的 mention chip（2026-10-11 用户裁决）：**无描边、4px 圆角、
- * 不透明淡色底**，padding 1px 4px 1px 2px。图标与文字缩到 caption 号——chip 是
+ * 不透明淡色底**，padding 1px 4px 1px 2px。图标与文字缩到 sm 号——chip 是
  * 句子里的一个对象，不与正文争字号。
- * 纵向不採行高：气泡行高 1.68（约 25px），chip 装得下 22px。
+ * 纵向不採行高：气泡行高 1.75（约 24.5px），chip 装得下 22px。
  */
 .bubble-chip {
   display: inline-flex;
@@ -1638,7 +1650,7 @@ body {
   padding: 1px 4px 1px 2px;
   border-radius: var(--radius-xs);
   background: var(--color-bg-muted);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   box-decoration-break: clone;
 }
 
@@ -1712,7 +1724,7 @@ body {
   padding: 0 4px;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-sm);
-  line-height: 1.5;
+  line-height: var(--line-height-ui);
   text-align: center;
 }
 .chat-md sup.chat-cite a:hover {
@@ -1737,7 +1749,7 @@ body {
 /* 图片占位（永不加载远程图，见 MarkdownBlock.ImagePlaceholder）：可点的链接芯片 */
 .chat-md .chat-img-placeholder {
   font-family: var(--font-family-business);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
@@ -1777,7 +1789,7 @@ body {
 .chat-md pre code {
   background: none;
   padding: 0;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   line-height: 1.55;
 }
 
@@ -1901,7 +1913,7 @@ body {
 .home-slogan {
   margin: 0 0 var(--space-1);
   font-family: var(--font-family-brand);
-  font-size: var(--font-size-logo);
+  font-size: var(--font-size-slogan);
   line-height: 1.25;
   font-weight: 600;
   letter-spacing: var(--tracking-slogan);
@@ -2020,7 +2032,7 @@ body {
 .completion-card-title {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   white-space: nowrap;
@@ -2053,7 +2065,7 @@ body {
   background: transparent;
   cursor: pointer;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -2069,7 +2081,7 @@ body {
 }
 
 .completion-card-dot {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -2099,7 +2111,7 @@ body {
 
 .bell-card-title {
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -2110,13 +2122,13 @@ body {
   border: 0;
   border-radius: var(--radius-xs);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
 .bell-card-empty {
   padding: var(--space-1) var(--space-3) var(--space-2);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -2173,7 +2185,7 @@ body {
   flex: 1;
   min-width: 0;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -2184,7 +2196,7 @@ body {
   flex: 0 1 auto;
   max-width: 40%;
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
   overflow: hidden;
@@ -2203,7 +2215,7 @@ body {
   background: var(--color-accent);
   color: var(--color-accent-fg);
   font-family: var(--font-family-business);
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   font-weight: var(--weight-semibold);
   line-height: 14px;
   text-align: center;
@@ -2257,9 +2269,9 @@ body {
   align-items: center;
   min-height: 24px;
   padding: 6px var(--space-4) 0;
-  line-height: 1.4;
+  line-height: var(--line-height-ui);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -2311,7 +2323,7 @@ body {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
   color: var(--color-text-primary);
   text-align: left;
@@ -2338,7 +2350,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -2409,21 +2421,21 @@ body {
   transition: opacity var(--duration-instant) ease;
 }
 .skill-row-tip-name {
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 .skill-row-tip-desc {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  line-height: 1.5;
+  line-height: var(--line-height-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .skill-row-tip-sets {
   font-family: var(--font-family-business);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   margin-top: 2px;
 }
@@ -2487,7 +2499,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   font-weight: var(--weight-regular);
   color: var(--color-text-tertiary);
@@ -2504,7 +2516,7 @@ body {
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-warning);
   white-space: nowrap;
 }
@@ -2529,8 +2541,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  /* 与树行的 size 同一写法（caption / tabular / 无衬线） */
-  font-size: var(--font-size-caption);
+  /* 与树行的 size 同一写法（sm / tabular / 无衬线） */
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
   transition: opacity var(--transition-hover);
@@ -2572,7 +2584,7 @@ body {
   background: transparent;
   color: var(--color-text-tertiary);
   font: inherit;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -2583,7 +2595,7 @@ body {
 
 /*
  * AgentsMdHint：工作区没有 AGENTS.md 时的一行浅灰可点行（右栏统一：原先是虚线卡）。
- * 几何同树行（30px、内缩、圆角），只是字是 caption / tertiary。
+ * 几何同树行（30px、内缩、圆角），只是字是 sm / tertiary。
  */
 .file-hint-row {
   display: flex;
@@ -2597,7 +2609,7 @@ body {
   border-radius: var(--radius-md);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   text-align: left;
   color: var(--color-text-tertiary);
   cursor: pointer;
@@ -2743,7 +2755,7 @@ body {
   border-radius: var(--radius-sm);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   cursor: pointer;
@@ -2792,7 +2804,7 @@ body {
   border-radius: var(--radius-sm);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   color: var(--color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -2861,7 +2873,7 @@ body {
   overflow: hidden;
   white-space: nowrap;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .file-preview-crumb-seg {
@@ -2880,7 +2892,7 @@ body {
   white-space: nowrap;
   flex: 0 0 auto;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -2914,7 +2926,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 .file-preview-error {
   display: flex;
@@ -2945,7 +2957,7 @@ body {
 .file-preview-source {
   margin: 0;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3082,7 +3094,7 @@ body {
 .mcp-name {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3136,7 +3148,7 @@ body {
 .mcp-tool-chip {
   display: inline-flex;
   font-family: var(--font-family-mono);
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   padding: 1.5px 6px;
   border-radius: var(--radius-xs);
   background: var(--color-bg-muted);
@@ -3176,9 +3188,9 @@ button.mcp-tool-chip {
   max-height: 110px;
   overflow-y: auto;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-danger);
-  line-height: 1.55;
+  line-height: var(--line-height-ui);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -3197,7 +3209,7 @@ button.mcp-tool-chip {
   border-radius: var(--radius-sm);
   color: var(--color-danger);
   font: inherit;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -3215,18 +3227,18 @@ button.mcp-tool-chip {
  * 设计稿真源 design/mcp-panel-workspace.html。五个类，其余复用现有配方。
  */
 
-/* 限定工作区行 / 定义来源行（同一个视觉：caption + tertiary + folder 图标） */
+/* 限定工作区行 / 定义来源行（同一个视觉：sm + tertiary + folder 图标） */
 .mcp-scope {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
 /* 实例状态行：独占一行，不挤头行（320px 抽屉放不下「图标+名字+长状态+动作+展开钮」） */
 .mcp-ws-status {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 .mcp-ws-status.bad {
@@ -3269,7 +3281,7 @@ button.mcp-tool-chip {
   grid-template-columns: auto auto 1fr;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 .mcp-instance .ws {
   font-weight: var(--weight-medium);
@@ -3284,7 +3296,7 @@ button.mcp-tool-chip {
 .mcp-instance .bind {
   grid-column: 1 / -1;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   overflow-wrap: anywhere;
   padding-left: 20px;
@@ -3310,7 +3322,7 @@ button.mcp-tool-chip {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   font: inherit;
-  font-size: var(--font-size-input);
+  font-size: var(--font-size-base);
   width: 100%;
   box-sizing: border-box;
 }
@@ -3371,7 +3383,7 @@ textarea.text-field {
   border-radius: var(--radius-pill);
   background: var(--glass-bg);
   box-shadow: var(--shadow-border);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 
 .material-chip-name {
@@ -3387,7 +3399,7 @@ textarea.text-field {
 .dir-mark-slash {
   flex: 0 0 auto;
   margin-left: 1px;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -3395,7 +3407,7 @@ textarea.text-field {
 .material-chip-meta {
   flex: 0 0 auto;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -3406,7 +3418,7 @@ textarea.text-field {
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-warning);
 }
 
@@ -3423,8 +3435,8 @@ textarea.text-field {
   box-shadow: var(--shadow-popover);
   color: var(--color-text-primary);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   overflow-wrap: anywhere;
   pointer-events: none;
   transition: opacity var(--duration-fast) var(--ease-standard);
@@ -3528,7 +3540,7 @@ textarea.text-field {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   background: var(--glass-bg);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 
 .material-quote-head {
@@ -3542,7 +3554,7 @@ textarea.text-field {
 .material-quote-idx {
   min-width: 10px;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
 
@@ -3569,7 +3581,7 @@ textarea.text-field {
    D 项同款）；用 .row-trailing 同一套推右 */
 .material-quote-note {
   white-space: nowrap;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   transition: opacity var(--transition-hover);
 }
@@ -3628,7 +3640,7 @@ textarea.text-field {
   border-radius: var(--radius-md);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
 }
@@ -3688,7 +3700,7 @@ textarea.text-field {
   flex: 0 0 auto;
 }
 .panel-title strong {
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
@@ -3718,7 +3730,7 @@ textarea.text-field {
   padding: 0;
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-primary);
 }
 .panel-filter input::placeholder {
@@ -3726,7 +3738,7 @@ textarea.text-field {
 }
 .panel-filter-count {
   flex: 0 0 auto;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3773,7 +3785,7 @@ button.panel-group-toggle:hover {
 }
 .panel-group-label {
   flex: 0 0 auto;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
 }
 .panel-group-detail {
@@ -3782,7 +3794,7 @@ button.panel-group-toggle:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   font-weight: var(--weight-regular);
   color: var(--color-text-tertiary);
 }
@@ -3818,7 +3830,7 @@ button.panel-group-toggle:hover {
 .panel-empty {
   margin: 0;
   padding: 6px var(--space-4);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -3852,7 +3864,7 @@ button.panel-group-toggle:hover {
   border: 0;
   border-radius: var(--radius-md);
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 

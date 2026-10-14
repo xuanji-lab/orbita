@@ -75,7 +75,7 @@
   border: 0;
   border-radius: var(--radius-md);
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
   flex: 0 0 auto;
   max-width: 160px;

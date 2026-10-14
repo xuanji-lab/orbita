@@ -24,8 +24,8 @@ export const EXIT_CARD_STYLE = {
 export const EXIT_CARD_KICKER = {
   flex: "0 0 auto",
   fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-micro)",
-  letterSpacing: "0.06em",
+  fontSize: "var(--font-size-xs)",
+  letterSpacing: "var(--tracking-label)",
   textTransform: "uppercase",
   color: "var(--color-text-tertiary)",
 } satisfies React.CSSProperties;
@@ -67,7 +67,7 @@ export function ExitCard(props: {
         <span
           style={{
             fontWeight: "var(--weight-strong)",
-            fontSize: "var(--font-size-body)",
+            fontSize: "var(--font-size-base)",
             minWidth: 0,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -83,7 +83,7 @@ export function ExitCard(props: {
               marginLeft: "auto",
               flex: "0 0 auto",
               fontFamily: "var(--font-family-mono)",
-              fontSize: "var(--font-size-micro)",
+              fontSize: "var(--font-size-xs)",
               color: props.status.color,
             }}
           >
@@ -95,7 +95,7 @@ export function ExitCard(props: {
         <p
           style={{
             margin: 0,
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
             color: "var(--color-text-secondary)",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -109,7 +109,7 @@ export function ExitCard(props: {
         <span
           style={{
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
             color: "var(--color-text-tertiary)",
             minWidth: 0,
             overflow: "hidden",

@@ -136,7 +136,7 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode }, { error: 
 function RenderFailed(props: { message: string }) {
   const t = useT();
   return (
-    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
+    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-sm)" }}>
       {t.chat.messageRenderFailed} {props.message}
     </p>
   );

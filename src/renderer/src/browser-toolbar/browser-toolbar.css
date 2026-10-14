@@ -48,7 +48,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-bold);
 }
 
@@ -63,7 +63,7 @@ body {
   border: 0;
   border-radius: var(--radius-md);
   font: inherit;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-bold);
 }
 
@@ -76,7 +76,7 @@ body {
   background: var(--color-bg-panel);
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   cursor: pointer;
 }
 
@@ -133,7 +133,7 @@ body {
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   text-align: start;
   cursor: pointer;
 }
@@ -203,7 +203,7 @@ body {
 .browser-address.text-field {
   height: var(--control-height-sm);
   padding-inline-start: calc(var(--space-3) + 13px + var(--space-2));
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 
 .browser-address[aria-invalid="true"] {
@@ -216,7 +216,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-danger);
   white-space: nowrap;
   overflow: hidden;

@@ -6,28 +6,25 @@
   /* numerals, ids, durations, paths — same family as mono, separate job */
   --font-family-business: var(--font-family-mono);
 
-  /* UI scale (default track; the app also ships compact/medium/large/xlarge) */
-  --font-size-micro: 11px;
-  --font-size-caption: 12px;
-  --font-size-control: 13px;
-  --font-size-body: 14px;
-  --font-size-chat: 15px;
-  --font-size-input: 14px;
-  --font-size-title: 16px;
-  --font-size-brand: 18px;
-  --font-size-heading: 20px;
-  --font-size-logo: 36px;
+  /* 字号：一个基准、五档角色（readme「Type roles」）。全界面只按角色取档，不挑像素——
+     改 --ui-font-size 一处，整个软件一起变。档距 2px 起：1px 的差肉眼读成「没对齐」，
+     读不成层级。xs 是 −3 而不是 −4：10px 的中文已经难读。 */
+  --ui-font-size: 14px;
+  --font-size-xl: calc(var(--ui-font-size) + 4px);   /* 18：h1、页面 / 对话标题 */
+  --font-size-lg: calc(var(--ui-font-size) + 2px);   /* 16：h2、设置 / 面板标题 */
+  --font-size-base: var(--ui-font-size);             /* 14：正文、对话、输入、按钮、菜单、卡片标题、h3–h6 */
+  --font-size-sm: calc(var(--ui-font-size) - 2px);   /* 12：次级说明、辅助文字、时间戳 */
+  --font-size-xs: calc(var(--ui-font-size) - 3px);   /* 11：徽标、计数、分组标签、极弱元数据 */
 
-  --line-height-micro: 16px;
-  --line-height-caption: 18px;
-  --line-height-control: 20px;
-  --line-height-body: 22px;
-  --line-height-input: 22px;
-  --line-height-title: 24px;
-  --line-height-heading: 28px;
-  /* unitless leadings for prose */
-  --line-height-chat: 1.68;
-  --line-height-bubble: 1.6;
+  /* 品牌字是唯一例外：不是界面层级，不跟基准走 */
+  --font-size-slogan: 36px;
+  --font-size-slogan-mark: 20px;
+  --font-size-wordmark: 22px;
+
+  /* 行高只有三档，全部无单位（随字号缩放，基准改了不用跟着改） */
+  --line-height-tight: 1.4;    /* 标题 */
+  --line-height-ui: 1.5;       /* 界面文字：控件、列表、卡片、说明 */
+  --line-height-reading: 1.75; /* 成段阅读：对话正文、用户气泡 */
 
   --weight-regular: 450;
   --weight-medium: 500;
@@ -37,6 +34,10 @@
   --weight-bold: 700;
 
   --tracking-slogan: 0.04em;
+  /* 成段阅读微微放开字距，中文不挤（照 ZCode 的 tracking-wide） */
+  --tracking-reading: 0.025em;
+  /* 大写分组标签（mono、xs） */
+  --tracking-label: 0.06em;
   --tracking-model: 0.01em;
 
   /* semantic aliases */
@@ -59,4 +60,6 @@
   --font-family-base: "Courier Prime", "Courier New", "Source Han Serif SC", monospace;
   --font-family-brand: "Special Elite", "Courier Prime", "Source Han Serif SC", monospace;
   --font-family-reading-cjk: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
+  /* Special Elite 字面宽，九个字的 slogan 放 36px 会挤出窄槽 */
+  --font-size-slogan: 30px;
 }

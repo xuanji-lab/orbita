@@ -15,7 +15,7 @@
 /* 数字小字：标签里的模型数、「仅显示已添加」后的家数 */
 .pv-row-count {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -58,8 +58,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-title);
-  line-height: var(--line-height-title);
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-ui);
   font-weight: var(--weight-strong);
 }
 .pv-headend {
@@ -80,7 +80,7 @@
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   cursor: help;
 }
@@ -128,7 +128,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 .pv-fld-stack {
@@ -137,8 +137,8 @@
   min-width: 0;
 }
 .pv-issue {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-danger);
 }
 
@@ -171,7 +171,7 @@
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-input);
+  font-size: var(--font-size-base);
   field-sizing: content;
 }
 /* 框本身画聚焦态（:focus-within），输入框不再叠第二道轮廓 */
@@ -185,7 +185,7 @@
   flex: 1 0 auto;
   padding-right: 10px;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   white-space: nowrap;
   cursor: help;
@@ -212,7 +212,7 @@
   height: 30px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-success);
   overflow: hidden;
 }
@@ -228,8 +228,8 @@
 /* 风险披露行：与状态行同款两栏位（左空标签），弱视觉但不藏 */
 .pv-oauth-hint {
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
 }
 
 /* Save 条：只在连接区有没存的改动时出现，贴在连接区底边 */
@@ -245,7 +245,7 @@
   align-items: center;
   gap: 5px;
   margin-right: auto;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -259,7 +259,7 @@
 }
 .pv-count {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -290,17 +290,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   color: var(--color-text-primary);
 }
 .pv-mid.dim {
   flex: none;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 .pv-mname {
   flex: none;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   color: var(--color-text-primary);
   white-space: nowrap;
 }
@@ -313,8 +313,8 @@
   border-radius: var(--radius-sm);
   background: var(--color-chat-muted-bg);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
-  line-height: 16px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
@@ -353,8 +353,8 @@
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -370,7 +370,7 @@
   gap: var(--space-3);
   padding: var(--space-6);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 .pv-mempty > .orbita-icon {
   color: var(--color-text-tertiary);
@@ -397,7 +397,7 @@
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 /* 搜索行整条就是输入框的外形，框内不再叠第二道轮廓 */
 .pv-fetch-search input:focus-visible {
@@ -440,12 +440,12 @@
   align-items: center;
   gap: 3px;
   margin-left: auto;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 .pv-fetch-none {
   padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 .pv-fetch-foot {
@@ -458,7 +458,7 @@
 .pv-fetch-count {
   margin-right: auto;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -497,7 +497,7 @@
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 .pv-search input::placeholder {
   color: var(--color-text-tertiary);
@@ -528,7 +528,7 @@
   background: transparent;
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .pv-seg button:hover {
@@ -549,7 +549,7 @@
   padding: var(--space-6) 0;
   text-align: center;
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 
 .pv-cards {
@@ -639,15 +639,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
 }
 .pv-cards.small .pv-vcard-name {
   flex: 1;
 }
 .pv-vcard-note {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
 .pv-vcard-foot {
@@ -656,7 +656,7 @@
   white-space: nowrap;
   padding-right: 30px;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 /* 已添加：图标是状态，颜色只是第二信号 */
@@ -670,7 +670,7 @@
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   white-space: nowrap;
 }
 .pv-added-badge .orbita-icon {
@@ -725,7 +725,7 @@
 }
 .pv-logo-text {
   font-family: var(--font-family-brand);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 
 /* ---------- 详情页头：返回、这一家、实例标签 ---------- */
@@ -741,7 +741,7 @@
   background: transparent;
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -768,11 +768,11 @@
   min-width: 0;
 }
 .pv-kind-name {
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
 }
 .pv-kind-note {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 .pv-tabs {
@@ -796,7 +796,7 @@
   background: transparent;
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -816,7 +816,7 @@
   white-space: nowrap;
 }
 .pv-tab-nokey {
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   font-weight: var(--weight-regular);
   color: var(--color-text-tertiary);
 }
@@ -842,8 +842,8 @@
   background: transparent;
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-control);
-  line-height: var(--line-height-control);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
   font-weight: var(--weight-medium);
   white-space: nowrap;
   cursor: pointer;
@@ -864,7 +864,7 @@
 }
 .pv-btn.sm {
   height: var(--control-height-sm);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 .pv-btn.icon.sm {
   width: var(--control-height-sm);
@@ -915,8 +915,8 @@
   background: var(--color-bg-panel);
   color: var(--color-text-primary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-input);
-  line-height: var(--line-height-input);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
   transition: var(--transition-hover);
 }
 .pv-input:focus {
@@ -933,7 +933,7 @@
 }
 .pv-mono {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 
 /* 锁定的事实（模型 id）：input 的形、只读的实，悬停 / 聚焦说明为什么锁 */
@@ -948,7 +948,7 @@
   background: var(--color-bg-muted);
   color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
   cursor: help;
 }
 .pv-locked .orbita-icon {
@@ -962,8 +962,8 @@
   align-items: center;
   gap: 6px;
   margin: 0;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
 .pv-line.ok .orbita-icon {
@@ -1024,7 +1024,7 @@
   border-bottom: 1px solid var(--color-border-subtle);
 }
 .pv-modal-head strong {
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-strong);
 }
 .pv-modal-body {
@@ -1077,7 +1077,7 @@
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-control);
+  font-size: var(--font-size-base);
 }
 .pv-unit input:focus-visible {
   outline: none;
@@ -1088,7 +1088,7 @@
 .pv-unit-mark {
   padding: 0 8px;
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
 }
@@ -1128,21 +1128,21 @@
   background: var(--color-text-tertiary);
 }
 .pv-assign-line {
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-primary);
 }
 .pv-assign-sub {
-  font-size: var(--font-size-micro);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
   color: var(--color-text-tertiary);
 }
 .pv-assign-done {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-primary);
 }
 .pv-assign-hint .pv-btn {
@@ -1166,7 +1166,7 @@
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
 }
 .pv-assign-row:last-child {
   border-bottom: 0;
@@ -1217,7 +1217,7 @@
 }
 .pv-assign-note {
   flex: none;
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   cursor: help;
 }
@@ -1226,7 +1226,7 @@
   align-items: center;
   gap: 6px;
   margin: var(--space-3) 0 0;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-danger);
 }
 .pv-assign-foot {
@@ -1237,6 +1237,6 @@
   margin-top: var(--space-3);
 }
 .pv-assign-sum {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }

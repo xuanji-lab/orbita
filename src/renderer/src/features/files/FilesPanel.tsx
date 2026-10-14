@@ -802,7 +802,7 @@ function TreeRow(props: {
           // 右内边距在 .file-row 的 CSS 里（= 行右血线）
           border: 0,
           font: "inherit",
-          fontSize: "var(--font-size-control)",
+          fontSize: "var(--font-size-base)",
           textAlign: "left",
           cursor: "pointer",
           color: "var(--color-text-primary)",
@@ -931,7 +931,7 @@ function AttachmentSection(props: {
           paddingLeft: "var(--space-2)",
           border: 0,
           font: "inherit",
-          fontSize: "var(--font-size-control)",
+          fontSize: "var(--font-size-base)",
           textAlign: "left",
           cursor: "pointer",
           color: "var(--color-text-primary)",
@@ -999,7 +999,7 @@ function ImageAttachmentRow(props: {
         paddingLeft: `calc(var(--space-2) + 1 * 16px)`,
         border: 0,
         font: "inherit",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         textAlign: "left",
         cursor: "pointer",
         color: "var(--color-text-primary)",
@@ -1069,7 +1069,7 @@ function AttachmentRow(props: {
           // 验收 M）；悬停动作键绝对定位盖上、尾部让位（styles.css）
           border: 0,
           font: "inherit",
-          fontSize: "var(--font-size-control)",
+          fontSize: "var(--font-size-base)",
           textAlign: "left",
           cursor: clickable ? "pointer" : "default",
           color: "var(--color-text-primary)",
@@ -1142,7 +1142,7 @@ function DimRow(props: { children: React.ReactNode; title?: string; indent?: num
         padding: "0 var(--space-2)",
         // indent：挂在某一层目录下时与该层文件名对齐（chevron 12 + 图标 14 + 两个 gap）
         paddingLeft: `calc(var(--space-2) + ${(props.indent ?? 0) * 16}px + ${props.indent ? 32 : 0}px)`,
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: "var(--color-text-tertiary)",
       }}
     >

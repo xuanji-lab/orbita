@@ -247,7 +247,7 @@ function QueueRow(props: {
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
-          fontSize: "var(--font-size-control)",
+          fontSize: "var(--font-size-base)",
           color: "var(--color-text-primary)",
         }}
       >
@@ -256,7 +256,7 @@ function QueueRow(props: {
       <span
         style={{
           flex: "0 0 auto",
-          fontSize: "var(--font-size-micro)",
+          fontSize: "var(--font-size-xs)",
           color: "var(--color-text-tertiary)",
         }}
       >

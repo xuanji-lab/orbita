@@ -65,7 +65,7 @@ export function Chip(props: {
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         fontStyle: props.italic === true ? "italic" : "normal",
         letterSpacing: props.italic === true ? "var(--tracking-model)" : "normal",
         whiteSpace: "nowrap",

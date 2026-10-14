@@ -581,7 +581,7 @@ function SkillDetail(props: {
           </PanelIconButton>
           <strong
             style={{
-              fontSize: "var(--font-size-body)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               minWidth: 0,
               overflow: "hidden",
@@ -626,7 +626,7 @@ function SkillDetail(props: {
         <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
           <code
             style={{
-              fontSize: "var(--font-size-caption)",
+              fontSize: "var(--font-size-sm)",
               color: "var(--color-text-tertiary)",
               fontFamily: "var(--font-family-mono)",
             }}
@@ -641,7 +641,7 @@ function SkillDetail(props: {
               background: "var(--color-bg-muted)",
               border: "1px solid var(--color-border-subtle)",
               borderRadius: "var(--radius-pill)",
-              fontSize: "var(--font-size-micro)",
+              fontSize: "var(--font-size-xs)",
               color: meta.missing ? "var(--color-danger)" : "var(--color-text-secondary)",
             }}
           >
@@ -651,7 +651,7 @@ function SkillDetail(props: {
           {meta.linkedPath !== null && (
             <span
               style={{
-                fontSize: "var(--font-size-micro)",
+                fontSize: "var(--font-size-xs)",
                 color: "var(--color-text-secondary)",
                 fontFamily: "var(--font-family-mono)",
                 overflowWrap: "anywhere",
@@ -760,12 +760,12 @@ function SkillDetail(props: {
 function Field(props: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "grid", gap: "var(--space-2)" }}>
-      <span style={{ fontSize: "var(--font-size-caption)", fontWeight: "var(--weight-medium)" }}>
+      <span style={{ fontSize: "var(--font-size-sm)", fontWeight: "var(--weight-medium)" }}>
         {props.label}
       </span>
       {props.children}
       {props.hint !== undefined && (
-        <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+        <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
           {props.hint}
         </span>
       )}
@@ -858,7 +858,7 @@ function MenuItemRow(props: { onClick: () => void; children: React.ReactNode }) 
         border: 0,
         background: "transparent",
         font: "inherit",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         color: "var(--color-text-primary)",
         textAlign: "left",
         cursor: "pointer",
