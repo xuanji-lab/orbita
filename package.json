@@ -15,7 +15,7 @@
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\" \"guest-bridge/*.test.mjs\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
     "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
-    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
+    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && node guest-bridge/build.mjs && electron-vite build && electron-builder --win --publish never",
     "icon": "bash scripts/make-icon.sh",
     "icon:win": "node scripts/make-icon-win.mjs"
   },
