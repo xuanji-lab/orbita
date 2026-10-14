@@ -14,10 +14,14 @@
  */
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, win32 } from "node:path";
-import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
+import { COMPUTER_USE_CMD_DIR, computerUseGuestCommands } from "../../shared/computer-use.ts";
 
 export interface GuestScreenshot {
   jpeg: Uint8Array;
+  /** 回图尺寸（按 maxWidth 缩过的那张图） */
+  width: number;
+  height: number;
+  /** 沙箱物理屏尺寸 */
   nativeWidth: number;
   nativeHeight: number;
 }
@@ -66,7 +70,7 @@ function parseResp(raw: string): Resp | null {
  * 文件协议的最小命令往返：写 req → 等 resp → 清理。
  * 抛错：超时（人话）/ 桥回的错误响应（原话带出）。
  */
-async function sendGuestCommand(
+async function sendGuestCommandRaw(
   outDir: string,
   command: string,
   fields: Record<string, unknown>,
@@ -119,12 +123,29 @@ async function sendGuestCommand(
 }
 
 /**
+ * 通用命令往返：写 req → 等 resp → 清理。回执是桥给的扁平 JSON（`ok` 已保证为 true）。
+ * 所有失败以 Error 抛出（消息已是人话，调用方直接展示）。
+ *
+ * 截图那条单独走 fetchGuestScreenshot：它除了 resp 还要读同名 .jpg 兄弟文件。
+ */
+export async function sendGuestCommand(
+  outDir: string,
+  command: string,
+  fields: Record<string, unknown> = {},
+  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
+): Promise<Record<string, unknown>> {
+  const { resp, cmdDir, baseName } = await sendGuestCommandRaw(outDir, command, fields, timeoutMs);
+  await rm(join(cmdDir, `${baseName}.req.json`), { force: true }).catch(() => {});
+  await rm(join(cmdDir, `${baseName}.resp.json`), { force: true }).catch(() => {});
+  return resp;
+}
+
+/**
  * 就绪探针：桥通告了 bridge.json ≠ 命令通道已通（host→guest 有开机热身期）。
  * start() 必须在宣布 running 之前等到 ping 应答。
  */
 export async function pingGuest(outDir: string, timeoutMs: number): Promise<void> {
-  const { resp, cmdDir, baseName } = await sendGuestCommand(outDir, "ping", {}, timeoutMs);
-  await rm(join(cmdDir, `${baseName}.resp.json`), { force: true }).catch(() => {});
+  const resp = await sendGuestCommand(outDir, computerUseGuestCommands.ping, {}, timeoutMs);
   if (resp.ok !== true) throw new Error("guest 桥的 ping 响应畸形");
 }
 
@@ -137,20 +158,26 @@ export async function fetchGuestScreenshot(
   maxWidth: number,
   timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
 ): Promise<GuestScreenshot> {
-  const { resp, cmdDir, baseName } = await sendGuestCommand(outDir, "screenshot", { maxWidth }, timeoutMs);
+  const { resp, cmdDir, baseName } = await sendGuestCommandRaw(outDir, computerUseGuestCommands.screenshot, { maxWidth }, timeoutMs);
 
   const nativeWidth = resp.nativeWidth;
   const nativeHeight = resp.nativeHeight;
+  const width = resp.width;
+  const height = resp.height;
   const jpegName = resp.jpeg;
   if (
     typeof nativeWidth !== "number" ||
     typeof nativeHeight !== "number" ||
     nativeWidth <= 0 ||
     nativeHeight <= 0 ||
+    typeof width !== "number" ||
+    typeof height !== "number" ||
+    width <= 0 ||
+    height <= 0 ||
     typeof jpegName !== "string" ||
     jpegName === ""
   ) {
-    throw new Error("guest 桥的截图响应缺字段（nativeWidth / nativeHeight / jpeg）");
+    throw new Error("guest 桥的截图响应缺字段（width / height / nativeWidth / nativeHeight / jpeg）");
   }
   // 路径穿越闸门：读盘之前先卡死（理由见 isPlainScreenshotFileName）
   if (!isPlainScreenshotFileName(jpegName)) {
@@ -176,5 +203,5 @@ export async function fetchGuestScreenshot(
   await rm(join(cmdDir, `${baseName}.resp.json`), { force: true }).catch(() => {});
   await rm(jpgPath, { force: true }).catch(() => {});
 
-  return { jpeg: new Uint8Array(jpeg), nativeWidth, nativeHeight };
+  return { jpeg: new Uint8Array(jpeg), width, height, nativeWidth, nativeHeight };
 }

@@ -16,6 +16,7 @@ import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
+import type { ComputerUseToolOutcome } from "../../shared/computer-use.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -454,6 +455,20 @@ export class AgentHostCore {
       requestId,
       ...(outcome.ok
         ? { ok: true as const, text: outcome.text, ...(outcome.terminal === undefined ? {} : { terminal: outcome.terminal }) }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /**
+   * computer use：computerUseRequest 的回执。同 answerBrowser 的理由：不 ensure、发完即回。
+   * shot（截图才有）随成功一起上船：工具层靠它把模型随后给的图像坐标换算成物理像素。
+   */
+  answerComputerUse(requestId: string, outcome: ComputerUseToolOutcome): void {
+    this.child?.postMessage({
+      type: "computerUseResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, text: outcome.text, ...(outcome.shot === undefined ? {} : { shot: outcome.shot }) }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }

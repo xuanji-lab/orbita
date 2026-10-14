@@ -47,6 +47,7 @@ import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
+import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -509,6 +510,20 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerTerminal(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // computer use：agent 的沙箱像素工具（截图 / 点击 / 打字 / 按键 / 滚动）——沙箱在主进程
+    // （SandboxController）。沙箱是应用级一份，不按会话分（sessionId 只为信封一致）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    if (event.type === "computerUseRequest") {
+      void applyComputerUseRequest(computerUse, event.request)
+        .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerComputerUse(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
