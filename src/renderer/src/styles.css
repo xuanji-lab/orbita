@@ -3902,6 +3902,18 @@ button.panel-group-toggle:hover {
   position: absolute;
   inset: 0;
   display: block;
+  touch-action: none;
+  user-select: none;
+}
+/* 每个节点一个透明命中圆（≥10px）：2px 的叶靠自己点不中 */
+.intent-cluster .ihit {
+  fill: transparent;
+  pointer-events: all;
+  cursor: grab;
+}
+.intent-cluster.dragging,
+.intent-cluster.dragging .ihit {
+  cursor: grabbing;
 }
 
 /* 图区浮层：视图开关（左上）、摘要（其下）、着色开关（右下） */
@@ -3974,6 +3986,16 @@ button.panel-group-toggle:hover {
   stroke-dasharray: 1.5 3.5;
   stroke-linecap: round;
   stroke-opacity: 0.75;
+  stroke-width: 1.3;
+}
+/* 按提问视图：共享叶到各中心的连线是实线、细淡（原型 .bridge.ego）；虚线只给跨岗桥 */
+.ibridge.ego {
+  stroke-dasharray: none;
+  stroke-width: 1.1;
+  stroke-opacity: 0.55;
+}
+.ibridge.ego.dim {
+  stroke-opacity: 0.3;
 }
 .ihub {
   fill: var(--color-text-secondary);
@@ -3986,8 +4008,12 @@ button.panel-group-toggle:hover {
   stroke: var(--color-bg-panel);
   stroke-width: 3px;
 }
-.ileaf {
-  cursor: pointer;
+.isoma.dim {
+  opacity: 0.35;
+}
+.isoma.lit .imembrane {
+  stroke: var(--color-accent);
+  stroke-opacity: 0.8;
 }
 .ileaf-halo {
   opacity: 0.16;

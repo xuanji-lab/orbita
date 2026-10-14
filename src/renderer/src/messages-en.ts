@@ -1575,6 +1575,7 @@ export const en = {
     openSession: "Open session",
     /** 打开会话失败（会话已删）：列表顶上的一行说明，点击消失 */
     missingSession: "That session no longer exists — it may have been deleted. (Click to dismiss)",
+    earlierRounds: (from: number, to: number) => `Q${from}–${to}`,
     cardVerdictAsked: "You confirmed",
     cardVerdictDenied: "You marked wrong · withdrawn",
     cardVerdictEdited: "You reworded it",

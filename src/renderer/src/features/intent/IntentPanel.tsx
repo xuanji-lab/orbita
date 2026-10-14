@@ -30,19 +30,18 @@ import type { IntentRecallRecord } from "@shared/session";
 import type { IntentAskView, RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmAnswer, IntentConfirmDecision } from "@shared/intent-confirm";
 import {
+  MAX_CENTRES,
   buildEgoScene,
   buildSlotScene,
+  centresOfTurns,
   mergeTurnLeaves,
   orbitaCentreCandidates,
-  sceneSeed,
   type ClusterLeaf,
-  type ClusterScene,
   type EgoCentre,
   type GraphColorMode,
-  type LayoutSeed,
   type TurnLeaves,
 } from "./cluster-layout.ts";
-import { GraphRenderer } from "./GraphRenderer.ts";
+import { GraphRenderer, type SceneBuilder } from "./GraphRenderer.ts";
 import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
 
 type IntentView = "slots" | "questions";
@@ -104,6 +103,8 @@ export function IntentPanel(props: {
     const row = listRef.current?.querySelector<HTMLElement>(`[data-row-key="${key}"]`);
     row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, []);
+  /** 点图上的叶子：选中并滚到那一行 */
+  const selectLeaf = useCallback((key: string) => selectRow(key, true), [selectRow]);
 
   /* ---------------- 拉每一问的 /edges（缓存；新落定的问增量拉） ---------------- */
   const settleKey = rounds.map((round) => round.turnId).join("|");
@@ -191,15 +192,22 @@ export function IntentPanel(props: {
       })),
     [turnLeaves],
   );
+  // 不看 view：离开「按提问」不清空、回来不重拉——以前每次切视图都 [] ↔ [c] 翻一次，
+  // 数据签跟着变两次，回到「按提问」时旧中心的节点被当作新节点重新加热（真机 113px 位移）
   useEffect(() => {
-    if (view !== "questions" || props.sessionId === null || turnLeaves.length === 0) {
-      setExtraCentres([]);
+    if (props.sessionId === null || turnLeaves.length === 0) {
+      // 已是空就不 set：无谓的重渲染曾让渲染器被换掉（2026-10-14 诊断 §0）
+      setExtraCentres((prev) => (prev.length === 0 ? prev : []));
       return () => undefined;
     }
     let cancelled = false;
-    // 中心预算：会话的问优先，剩下的给 orbita 候选，至多 6 个中心
-    const budget = Math.max(0, 6 - centreLeaves.length);
+    // 中心预算：会话的问优先，剩下的给 orbita 候选，总数不超过 MAX_CENTRES
+    const budget = Math.max(0, MAX_CENTRES - centreLeaves.length);
     const candidates = orbitaCentreCandidates(centreLeaves[centreLeaves.length - 1]!.leaves, budget);
+    if (candidates.length === 0) {
+      setExtraCentres((prev) => (prev.length === 0 ? prev : []));
+      return () => undefined;
+    }
     void Promise.all(
       candidates.map(async (candidate) => {
         const key = cacheKey(candidate.sessionId, candidate.turnId);
@@ -211,21 +219,23 @@ export function IntentPanel(props: {
       }),
     ).then((arrived) => {
       if (cancelled) return;
-      setExtraCentres(
-        arrived
-          .filter((item): item is { candidate: { sessionId: string; turnId: string }; edges: IntentEdges } => item !== null)
-          .map(({ candidate, edges }) => ({
-            key: `${candidate.sessionId}:${candidate.turnId}`,
-            label: "",
-            past: true,
-            leaves: egoLeavesOf(slotLeavesOf(edges, 0)),
-          })),
+      const next = arrived
+        .filter((item): item is { candidate: { sessionId: string; turnId: string }; edges: IntentEdges } => item !== null)
+        .map(({ candidate, edges }) => ({
+          key: `${candidate.sessionId}:${candidate.turnId}`,
+          label: "",
+          past: true,
+          leaves: egoLeavesOf(slotLeavesOf(edges, 0)),
+        }));
+      // 同一批 key 不换引用（数据签不变，图不重建）
+      setExtraCentres((prev) =>
+        prev.length === next.length && prev.every((centre, i) => centre.key === next[i]!.key) ? prev : next,
       );
     });
     return () => {
       cancelled = true;
     };
-  }, [view, props.sessionId, centreLeaves, turnLeaves]);
+  }, [props.sessionId, centreLeaves, turnLeaves]);
 
   /* ---------------- 条目（随视图分组；最近用的轮在前） ---------------- */
   const rows = useMemo(() => {
@@ -293,10 +303,12 @@ export function IntentPanel(props: {
           />
         </>
       }
-      contentKey={`${rounds.length}:${view}`}
+      // 固定：换 key 会重挂整个图区，各视图的坐标缓存随之丢失（视图 / 轮数都不进 key）
+      contentKey="graph"
     >
       <div className="intent-panel-body">
         <IntentGraph
+          key={props.sessionId ?? "none"}
           height={graphH}
           folded={folded}
           view={view}
@@ -315,7 +327,7 @@ export function IntentPanel(props: {
           loading={!fetched && rounds.length > 0}
           hasData={turnLeaves.some((turn) => turn.leaves.length > 0)}
           selKey={selKey}
-          onSelectLeaf={(key) => selectRow(key, true)}
+          onSelectLeaf={selectLeaf}
         />
         <IntentSplitBar
           count={rows.length}
@@ -351,12 +363,14 @@ export function IntentPanel(props: {
 /* ---------------------------------------------------------------- 图 */
 
 /**
- * 图：React 只负责容器、浮层（开关 / 摘要 / 图例）与数据→场景的装配；
- * 落定动画、拖拽、上色、高亮全部由 GraphRenderer 指令式驱动（每帧不进 React）。
- * 触发纪律（2026-10-14 用户裁决）：
- * - 数据（问 / 边）变了 → 重建结构，逐帧动画跑到**收敛**，然后静止；
- * - 颜色模式 / 选中 / 高亮轮变了 → 只上色 / 换 class，坐标绝不动；
- * - 尺寸变了 → 已收敛的坐标等比缩放（拖分隔条不重排）；宽度剧变才整体重建。
+ * 图：React 只负责容器、浮层（开关 / 摘要 / 图例）与「数据 → 场景」的装配闭包；
+ * DOM、落定动画、拖拽、上色、高亮、各视图坐标缓存全在 GraphRenderer（每帧不进 React）。
+ *
+ * 生命周期纪律（2026-10-14 诊断 §0 的根因就在这里）：
+ * - 渲染器**只创建一次**，绑 svg 元素；svg **常驻**（没数据时只叠空态文案），
+ *   否则 ref 时序又会绕回「每次渲染换一个实例、旧 DOM 留在 svg 里」。
+ * - 回调经 ref 取最新值，不进任何 effect 的依赖。
+ * - 三条 effect：数据签变了 → setData；样式变了 → setStyle；尺寸变了 → resize。
  */
 function IntentGraph(props: {
   height: number;
@@ -384,108 +398,81 @@ function IntentGraph(props: {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const rendererRef = useRef<GraphRenderer | null>(null);
+  const onSelectLeafRef = useRef(props.onSelectLeaf);
+  onSelectLeafRef.current = props.onSelectLeaf;
   /** 数据签：只有它变了才重建场景（颜色 / 高亮 / 尺寸都不进这个 key） */
   const dataKey = [
     props.view,
+    props.hasData ? "data" : "none",
     ...props.slotLeaves.map((leaf) => `${leaf.qaId}#${leaf.slot}:${leaf.lastRound}`),
-    ...props.centreLeaves.map((turn) => `${turn.turnId}=${turn.leaves.length}`),
-    ...props.extraCentres.map((centre) => centre.key),
+    ...(props.view === "questions"
+      ? [
+          ...props.centreLeaves.map((turn) => `${turn.turnId}=${turn.leaves.length}`),
+          ...props.extraCentres.map((centre) => centre.key),
+        ]
+      : []),
     props.latestRound,
   ].join("|");
-  const sceneRef = useRef<ClusterScene | null>(null);
-  const seedRef = useRef(new Map<string, LayoutSeed>());
-  const sizeRef = useRef<{ w: number; h: number } | null>(null);
-  const [resizeNonce, setResizeNonce] = useState(0);
+  /** 数据 → 场景的装配闭包；渲染器给布局空间尺寸与种子 */
+  const buildRef = useRef<SceneBuilder | null>(null);
+  buildRef.current = !props.hasData
+    ? null
+    : props.view === "questions"
+      ? (W, H, seed) => {
+          const centres = centresOfTurns(
+            props.centreLeaves,
+            props.latestRound,
+            (round) => t.intentPanel.roundChip(round, ""),
+            (from, to) => t.intentPanel.earlierRounds(from, to),
+          );
+          if (centres.length === 0) return null;
+          return buildEgoScene([...centres, ...props.extraCentres], W, H, { seed });
+        }
+      : (W, H, seed) => buildSlotScene(props.slotLeaves, W, H, { seed });
 
-  /** 数据 → 场景（本组件里唯一的构建路径；两个 effect 共用） */
-  const rebuild = (animate: boolean): void => {
-    const host = hostRef.current;
-    const renderer = rendererRef.current;
-    if (host === null || renderer === null || !props.hasData) return;
-    const w = Math.max(1, host.clientWidth);
-    const h = Math.max(1, host.clientHeight);
-    const seed = seedRef.current.get(props.view);
-    const scene =
-      props.view === "questions"
-        ? (() => {
-            const centres: EgoCentre[] = props.centreLeaves.map((turn) => ({
-              key: turn.turnId,
-              label: t.intentPanel.roundChip(turn.round, ""),
-              past: turn.round !== props.latestRound,
-              leaves: turn.leaves,
-            }));
-            if (centres.length === 0) return null;
-            return buildEgoScene([...centres, ...props.extraCentres], w, h, { seed });
-          })()
-        : buildSlotScene(props.slotLeaves, w, h, { seed });
-    if (scene === null) return;
-    seedRef.current.set(props.view, sceneSeed(scene));
-    sceneRef.current = scene;
-    sizeRef.current = { w, h };
-    renderer.setScene(scene, w, h, { animate });
-    renderer.paint(props.colorMode);
-    renderer.setHighlight(props.selKey, props.activeRound, props.activeTurnId);
-  };
-
-  // 渲染器生命周期
+  // 渲染器生命周期：绑 svg，只建一次；StrictMode 双跑下 dispose 清空 svg、再建一个干净的
   useEffect(() => {
-    if (svgRef.current === null) return;
-    const renderer = new GraphRenderer(svgRef.current, props.onSelectLeaf);
+    const svg = svgRef.current;
+    if (svg === null) return;
+    const renderer = new GraphRenderer(svg, (key) => onSelectLeafRef.current(key));
     rendererRef.current = renderer;
+    const host = hostRef.current;
+    if (host !== null) renderer.resize(host.clientWidth, host.clientHeight);
     return () => {
       renderer.dispose();
       rendererRef.current = null;
     };
-    // onSelectLeaf 引用稳定（面板的 useCallback）
-  }, [props.onSelectLeaf]);
+  }, []);
 
-  // 数据 → 场景：重建结构 + 逐帧落定（初次加载与每一轮新增都算「东西去哪了」）
+  // 数据 → 场景（整体替换；加热程度由渲染器按种子覆盖率定）
   useEffect(() => {
-    rebuild(true);
-    // dataKey 是数据签；colorMode / selKey / activeRound / 尺寸走各自的 effect
-    // eslint 无关：rebuild 每次渲染都是新的，但只有 dataKey 变才需要重建
+    rendererRef.current?.setData(props.view, buildRef.current);
+    // dataKey 是数据签；buildRef 每次渲染都是最新闭包，但只有数据签变了才需要重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataKey]);
 
-  // 尺寸：等比缩放（不重排）；宽度剧变（>120px）才整体重建
+  // 样式：只上色 / 换 class（坐标绝不动）
+  useEffect(() => {
+    rendererRef.current?.setStyle({
+      colorMode: props.colorMode,
+      selKey: props.selKey,
+      activeRound: props.activeRound,
+      activeTurnId: props.activeTurnId,
+    });
+  }, [props.colorMode, props.selKey, props.activeRound, props.activeTurnId, dataKey]);
+
+  // 尺寸：等比缩放并居中（不重排）
   useEffect(() => {
     const host = hostRef.current;
     if (host === null) return;
     const measure = (): void => {
-      const renderer = rendererRef.current;
-      const scene = sceneRef.current;
-      const last = sizeRef.current;
-      if (renderer === null || scene === null) return;
-      const w = Math.max(1, host.clientWidth);
-      const h = Math.max(1, host.clientHeight);
-      if (last !== null && last.w === w && last.h === h) return;
-      if (last !== null && Math.abs(w - last.w) > 120) {
-        // 宽度剧变：整体重建（跑到收敛；不动画，避免大挪移的眩晕）
-        setResizeNonce((n) => n + 1);
-        return;
-      }
-      renderer.rescale(last?.w ?? w, last?.h ?? h, w, h);
-      sizeRef.current = { w, h };
+      rendererRef.current?.resize(host.clientWidth, host.clientHeight);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(host);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => {
-    if (resizeNonce === 0) return;
-    rebuild(false);
-    // eslint 无关：resizeNonce 是唯一依赖
-  }, [resizeNonce]);
-
-  // 颜色模式：只上色
-  useEffect(() => {
-    rendererRef.current?.paint(props.colorMode);
-  }, [props.colorMode, dataKey, resizeNonce]);
-
-  // 选中 / 高亮轮：只换 class
-  useEffect(() => {
-    rendererRef.current?.setHighlight(props.selKey, props.activeRound, props.activeTurnId);
-  }, [props.selKey, props.activeRound, props.activeTurnId, dataKey, resizeNonce]);
 
   const summary = t.intentPanel.summary(
     props.readTotal ?? t.intentPanel.readUnknown,
@@ -503,6 +490,7 @@ function IntentGraph(props: {
           : { flex: "0 0 auto", height: `${props.height}px` }
       }
     >
+      <svg ref={svgRef} className="intent-cluster" width="100%" height="100%" />
       <div className="intent-graph-top">
         <button
           type="button"
@@ -540,7 +528,6 @@ function IntentGraph(props: {
               {t.intentPanel.colorScore}
             </button>
           </div>
-          <svg ref={svgRef} className="intent-cluster" width="100%" height="100%" />
         </>
       )}
     </div>

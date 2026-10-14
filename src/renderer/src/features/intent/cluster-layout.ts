@@ -10,10 +10,16 @@
  * - 按岗位（岗位成簇）：会话胞体居中，六个岗位各成一簇，簇内按来源会话分叉；
  *   同一条 QA 在两个岗位都入选，两片叶子之间拉桥——共享越多两簇越近。
  * - 按提问（提问网络）：会话里的每一问各是一个中心（最新一问最亮），中心的枝按
- *   来源会话成簇；被多个中心召回过的 QA 长在它们中间、两边各连一根（桥）。
+ *   来源会话成簇；被多个中心召回过的 QA 长在它们中间、两边各连一根（实线）。
  *
- * 力导向**确定性**（种子随机初始化 + 固定迭代数）：同一份数据（含同一份种子坐标）
- * 永远得到同一张图。颜色映射（轮次时间 / 相关度两档）也是纯函数。
+ * **所有权（2026-10-14 诊断后定死）**：本模块只产生**结构**——节点、连线、初始
+ * 坐标（有种子用种子）；**不跑模拟**。模拟循环、拖拽、坐标缓存全在 GraphRenderer；
+ * `tick` / `simulateToConvergence` 是给渲染器与测试用的纯力学步。以前 build 内部跑
+ * 到收敛、渲染器再从 alpha=1 跑一遍，已收敛的图被整体再加热（最大位移 46px）——
+ * 这就是「新一轮到达旧节点乱跳」的根因。
+ *
+ * **尺度相对化**：所有长度按 R = min(W, H) 的比例给，不用像素常量——原型是 470×600
+ * 的画布，面板只有 ~320–460 宽；像素常量原样搬过来，六个岗位 hub 全部顶在钳制墙上。
  */
 
 /** 一片叶子（一条被本会话用过的历史问答；按岗位视图里同一 QA 两岗 = 两片叶子）。 */
@@ -100,7 +106,12 @@ interface SimPoint {
   vy: number;
   r: number;
   rep: number;
+  /** 被拖拽中：坐标由指针给，力学不动它 */
   fixed?: boolean;
+  /** 钉住的目标点（本问胞体）：强弹簧拉向它——可拖，松手弹回 */
+  pin?: { x: number; y: number };
+  /** 向心力倍数（中心节点 10×：没有连接的中心也要被拉进画面） */
+  grav?: number;
 }
 
 export interface SomaNode extends SimPoint {
@@ -129,8 +140,6 @@ export interface LeafNode extends SimPoint {
   rowKey: string;
   /** 被两个及以上簇 / 中心共享（描边强调） */
   shared: boolean;
-  /** 着色百分比（paintScene 就地更新——只改样式，绝不碰坐标） */
-  percent: NebulaPercent;
 }
 
 export type SimNode = SomaNode | HubNode | LeafNode;
@@ -143,12 +152,20 @@ export interface SimLink {
   w?: number;
   op?: number;
   dim?: boolean;
+  /** 按岗位视图：同一 QA 跨岗的虚线桥（强调色） */
   bridge?: boolean;
+  /** 按提问视图：共享叶到各中心的实线（强调色、细淡）——不是虚线 */
+  ego?: boolean;
 }
 
 export interface ClusterScene {
   nodes: SimNode[];
   links: SimLink[];
+  /** 布局空间（构建时的面板尺寸）：模拟在这个空间里跑，渲染器等比映射到屏幕 */
+  w: number;
+  h: number;
+  /** 密集样式（>40 片叶）：叶更小、线更细 */
+  dense: boolean;
 }
 
 /** 种子随机（Lehmer / Park-Miller）：确定性布局的全部随机性都从这里出。 */
@@ -158,112 +175,114 @@ export function seededRandom(seed: number): () => number {
   return () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646;
 }
 
-/** 单轮力学步进（排斥 + 弹簧 + 向心 + 边界钳制）。确定性：无随机。 */
-export function tick(nodes: readonly SimNode[], links: readonly SimLink[], W: number, H: number, alpha: number, maxStep: number): void {
-  {
-    for (let i = 0; i < nodes.length; i += 1) {
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const a = nodes[i]!;
-        const b = nodes[j]!;
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let d2 = dx * dx + dy * dy + 0.01;
-        if (d2 > 220 * 220) continue;
-        const f = (a.rep * b.rep * 210) / d2;
-        const d = Math.sqrt(d2);
-        dx /= d;
-        dy /= d;
-        a.vx -= dx * f;
-        a.vy -= dy * f;
-        b.vx += dx * f;
-        b.vy += dy * f;
-      }
-    }
-    for (const l of links) {
-      const a = l.a;
-      const b = l.b;
-      let dx = b.x - a.x;
-      let dy = b.y - a.y;
-      const d = Math.hypot(dx, dy) + 0.01;
-      const f = (d - l.len) * l.k;
-      dx /= d;
-      dy /= d;
-      a.vx += dx * f;
-      a.vy += dy * f;
-      b.vx -= dx * f;
-      b.vy -= dy * f;
-    }
-    for (const n of nodes) {
-      if (n.fixed === true) {
-        n.vx = 0;
-        n.vy = 0;
-        continue;
-      }
-      n.vx += (W / 2 - n.x) * 0.0005;
-      n.vy += (H / 2 - n.y) * 0.0005;
-      n.x += Math.max(-maxStep, Math.min(maxStep, n.vx * alpha));
-      n.y += Math.max(-maxStep, Math.min(maxStep, n.vy * alpha));
-      n.vx *= 0.6;
-      n.vy *= 0.6;
-      n.x = Math.max(16, Math.min(W - 16, n.x));
-      n.y = Math.max(16, Math.min(H - 40, n.y));
-    }
-  }
+/** 物理常量的尺度基准：原型画布的短边。 */
+const UNIT = 340;
+
+/** 软边界的边距：节点进入边距带就被推回（标签要留得下） */
+export function boundaryMargin(W: number, H: number): number {
+  return Math.max(20, Math.min(W, H) * 0.07);
 }
 
 /**
- * 跑到**收敛**：alpha 从 1 起、每轮 ×0.985 衰减，alpha < 0.02 停（或撞 800 轮
- * 上限）。2026-10-14 真机教训：以前每次只跑一小段定长松弛，从上次的半路坐标
- * 接着跑，图永远停在没收敛的歪斜状态；resize / 切换只让它再挪一小步。
- * 收敛后坐标静止——只有数据（问 / 边）变化才重新布局。确定性：同数据同图。
- *
- * @param onTick 可选：每轮之后的回调（逐帧动画用它取坐标画中间态）。
+ * 单轮力学步进（排斥 + 弹簧 + 向心 + 钉点弹簧 + 软边界）。确定性：无随机。
+ * 排斥常量与截断距离按 min(W,H)/340 缩放，布局在小面板里不会因为力程不变而爆开。
+ * 边界是**软**的（进入边距带给回拉力），只在画布外沿做硬钳制——硬钳制在墙上
+ * 会把一堆节点压到同一个角点（2026-10-14 真机的「角落孤点」）。
+ */
+export function tick(nodes: readonly SimNode[], links: readonly SimLink[], W: number, H: number, alpha: number, maxStep: number): void {
+  const s = Math.min(W, H) / UNIT;
+  const cutoff2 = 220 * s * (220 * s);
+  const repK = 210 * s * s;
+  const margin = boundaryMargin(W, H);
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const a = nodes[i]!;
+      const b = nodes[j]!;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const d2 = dx * dx + dy * dy + 0.01;
+      if (d2 > cutoff2) continue;
+      const f = (a.rep * b.rep * repK) / d2;
+      const d = Math.sqrt(d2);
+      dx /= d;
+      dy /= d;
+      a.vx -= dx * f;
+      a.vy -= dy * f;
+      b.vx += dx * f;
+      b.vy += dy * f;
+    }
+  }
+  for (const l of links) {
+    const a = l.a;
+    const b = l.b;
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    const d = Math.hypot(dx, dy) + 0.01;
+    const f = (d - l.len) * l.k;
+    dx /= d;
+    dy /= d;
+    a.vx += dx * f;
+    a.vy += dy * f;
+    b.vx -= dx * f;
+    b.vy -= dy * f;
+  }
+  for (const n of nodes) {
+    if (n.fixed === true) {
+      n.vx = 0;
+      n.vy = 0;
+      continue;
+    }
+    const g = 0.0005 * (n.grav ?? 1);
+    n.vx += (W / 2 - n.x) * g;
+    n.vy += (H / 2 - n.y) * g;
+    if (n.pin !== undefined) {
+      n.vx += (n.pin.x - n.x) * 0.15;
+      n.vy += (n.pin.y - n.y) * 0.15;
+    }
+    if (n.x < margin) n.vx += (margin - n.x) * 0.12;
+    else if (n.x > W - margin) n.vx -= (n.x - (W - margin)) * 0.12;
+    if (n.y < margin) n.vy += (margin - n.y) * 0.12;
+    else if (n.y > H - margin) n.vy -= (n.y - (H - margin)) * 0.12;
+    n.x += Math.max(-maxStep, Math.min(maxStep, n.vx * alpha));
+    n.y += Math.max(-maxStep, Math.min(maxStep, n.vy * alpha));
+    n.vx *= 0.6;
+    n.vy *= 0.6;
+    n.x = Math.max(6, Math.min(W - 6, n.x));
+    n.y = Math.max(6, Math.min(H - 6, n.y));
+  }
+}
+
+/** 收敛阈值与衰减：alpha 从起点每轮 ×0.985，低于 0.02 视为静止。 */
+export const CONVERGED_ALPHA = 0.02;
+export const ALPHA_DECAY = 0.985;
+/** 有种子时（新一轮长出 / 拖拽松手）的起始热度：够新节点落定，旧节点只小幅让位 */
+export const GROW_ALPHA = 0.2;
+
+/**
+ * 同步跑到**收敛**（reduced-motion、测试用；渲染器逐帧动画走自己的循环）。
+ * alpha 从起点起每轮 ×0.985，< 0.02 停（或撞 800 轮上限）。
  * @returns 实际跑的轮数。
  */
 export function simulateToConvergence(
-  nodes: readonly SimNode[],
-  links: readonly SimLink[],
-  W: number,
-  H: number,
-  options: { alpha?: number; maxIters?: number; onTick?: () => void } = {},
+  scene: ClusterScene,
+  options: { alpha?: number; maxIters?: number } = {},
 ): number {
   const maxIters = options.maxIters ?? 800;
   let alpha = options.alpha ?? 1;
   let iter = 0;
-  for (; iter < maxIters && alpha >= 0.02; iter += 1) {
-    tick(nodes, links, W, H, alpha, 8);
-    alpha *= 0.985;
-    options.onTick?.();
+  for (; iter < maxIters && alpha >= CONVERGED_ALPHA; iter += 1) {
+    tick(scene.nodes, scene.links, scene.w, scene.h, alpha, 8);
+    alpha *= ALPHA_DECAY;
   }
   return iter;
-}
-
-/** 再走一轮全体最多能挪多远（px）：收敛判定的度量。不改变节点状态。 */
-export function maxDrift(
-  nodes: readonly SimNode[],
-  links: readonly SimLink[],
-  W: number,
-  H: number,
-): number {
-  const before = nodes.map((node) => ({ x: node.x, y: node.y }));
-  tick(nodes, links, W, H, 0.02, 8);
-  let worst = 0;
-  nodes.forEach((node, i) => {
-    const was = before[i]!;
-    worst = Math.max(worst, Math.hypot(node.x - was.x, node.y - was.y));
-    node.x = was.x;
-    node.y = was.y;
-  });
-  return worst;
 }
 
 /** 布局种子：上一次成型的坐标（按节点 id 对回）。「新东西长在旧图上」的机制。 */
 export type LayoutSeed = ReadonlyMap<string, { x: number; y: number }>;
 
 export interface BuildOptions {
-  /** 上一张图的坐标：命中 id 的节点从原位出发（新节点热启动到带种子邻居的质心），
-   *  然后跑**到收敛**——种子只决定出发点，不截断模拟（2026-10-14 真机教训：
-   *  截断让图永远停在半路） */
+  /** 上一张图的坐标：命中 id 的节点从原位出发（新节点热启动到带种子邻居的质心）。
+   *  种子只决定出发点；要不要加热、加热到几分由渲染器按「有多少节点没种子」决定 */
   seed?: LayoutSeed;
 }
 
@@ -309,15 +328,31 @@ function warmStartUnseeded(nodes: readonly SimNode[], links: readonly SimLink[],
   }
 }
 
-/** 把成型后的坐标收进种子表（下一次构建的起点）。 */
+/** 把成型后的坐标收进种子表（渲染器的各视图坐标缓存）。 */
 export function sceneSeed(scene: ClusterScene): Map<string, { x: number; y: number }> {
   const seed = new Map<string, { x: number; y: number }>();
   for (const node of scene.nodes) seed.set(node.id, { x: node.x, y: node.y });
   return seed;
 }
 
-function leafRadius(leaf: ClusterLeaf, dense: boolean): number {
-  return dense ? 1 + 2.4 * (leaf.score - 0.5) / 0.5 : 2.2 + 4 * (leaf.score - 0.5) / 0.5;
+/** 种子里有多少节点对不上（新节点数）：渲染器据此决定加热程度。 */
+export function unseededCount(scene: ClusterScene, seed: LayoutSeed | undefined): number {
+  if (seed === undefined) return scene.nodes.length;
+  let n = 0;
+  for (const node of scene.nodes) if (!seed.has(node.id)) n += 1;
+  return n;
+}
+
+/** 叶子半径：密集 2.5–5px、常规 3–6.5px（分数越高越大）。2px 的叶在真机上看不见也点不中。 */
+export function leafRadius(score: number, dense: boolean): number {
+  const u = Math.max(0, Math.min(1, (score - 0.5) / 0.5));
+  return dense ? 2.5 + 2.5 * u : 3 + 3.5 * u;
+}
+
+/** 叶枝长度：高分近、低分远（等长辐条 = 海胆）。 */
+function leafLen(score: number, R: number): number {
+  const u = Math.max(0, Math.min(1, (score - 0.5) / 0.5));
+  return R * (0.085 - 0.04 * u);
 }
 
 /* ---------------------------------------------------------------- ① 按岗位成簇 */
@@ -332,9 +367,11 @@ export const SLOT_CLUSTER_NAMES: readonly string[] = [
 ];
 
 /**
- * 按岗位成簇：会话胞体（固定居中）→ 六个岗位 hub →（岗位, 来源会话）子 hub
- * （该组 ≥2 条才分叉）→ 叶子（QA, 岗位）。同一 QA 两岗的叶子之间拉桥（弹簧，
- * 共享越多两簇越近）。叶子 / 枝按轮次或相关度着色；节点带最近使用的轮号。
+ * 按岗位成簇：会话胞体（钉在中心）→ 六个岗位 hub → 子簇 → 叶子（QA, 岗位）。
+ * 子簇规则：同一岗位下，≥2 条的来源会话各自一个子簇（≥3 条标会话名）；只有一条
+ * 的来源按首次召回它的那一问归成一根不标名的枝——真实数据里一个岗位 25 片叶来自
+ * 22 个会话，照「每会话一簇」画就是 22 根辐条（2026-10-14 真机的海胆）。
+ * 同一 QA 两岗的叶子之间拉桥（弹簧，共享越多两簇越近）。
  */
 export function buildSlotScene(
   leaves: readonly ClusterLeaf[],
@@ -342,27 +379,37 @@ export function buildSlotScene(
   H: number,
   options: BuildOptions = {},
 ): ClusterScene {
+  const R = Math.min(W, H);
   const dense = leaves.length > 40;
   const rng = seededRandom(3);
   const nodes: SimNode[] = [];
   const links: SimLink[] = [];
+  // 胞体也走种子：钉点弹簧与不对称的排斥平衡在离中心几 px 处，不用种子就会
+  // 在切回视图时跳回正中（真机 12.8px）
+  const somaAt = place("soma:session", { x: W / 2, y: H / 2 }, options.seed, rng, 0);
   const soma: SomaNode = {
     kind: "soma",
     id: "soma:session",
-    x: W / 2,
-    y: H / 2 - 10,
+    x: somaAt.x,
+    y: somaAt.y,
     vx: 0,
     vy: 0,
-    r: dense ? 13 : 11,
+    r: dense ? 12 : 11,
     rep: 3,
-    fixed: true,
+    pin: { x: W / 2, y: H / 2 },
     label: "",
     past: false,
   };
   nodes.push(soma);
   const hubs: HubNode[] = SLOT_CLUSTER_NAMES.map((name, i) => {
     const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
-    const at = place(`hub:slot:${i + 1}`, { x: soma.x + Math.cos(angle) * 120, y: soma.y + Math.sin(angle) * 120 }, options.seed, rng, 10);
+    const at = place(
+      `hub:slot:${i + 1}`,
+      { x: soma.x + Math.cos(angle) * R * 0.27, y: soma.y + Math.sin(angle) * R * 0.27 },
+      options.seed,
+      rng,
+      10,
+    );
     const hub: HubNode = {
       kind: "hub",
       id: `hub:slot:${i + 1}`,
@@ -385,96 +432,126 @@ export function buildSlotScene(
     (_, i) => leaves.filter((leaf) => leaf.slot === i + 1).reduce((sum, leaf) => sum + leaf.score, 0),
   );
   hubs.forEach((hub, i) => {
-    links.push({ a: soma, b: hub, len: 150, k: 0.04, w: 1 + totals[i]! * 0.5, op: 0.55 });
+    links.push({ a: soma, b: hub, len: R * 0.27, k: 0.04, w: 1 + totals[i]! * 0.4, op: 0.5 });
   });
   const leafOf = new Map<string, LeafNode[]>();
+  const addSub = (slot: number, id: string, label: string, count: number): HubNode => {
+    const hub = hubs[slot - 1]!;
+    const at = place(id, { x: hub.x, y: hub.y }, options.seed, rng, R * 0.12);
+    const sub: HubNode = {
+      kind: "hub",
+      id,
+      x: at.x,
+      y: at.y,
+      vx: 0,
+      vy: 0,
+      r: 1.8,
+      rep: 1.2,
+      label,
+      sub: true,
+      group: `slot:${slot}`,
+      count,
+      past: false,
+    };
+    nodes.push(sub);
+    links.push({ a: hub, b: sub, len: R * 0.11, k: 0.06, w: 1.4, op: 0.45 });
+    return sub;
+  };
+  const addLeaf = (parent: HubNode, leaf: ClusterLeaf, slot: number): void => {
+    const id = `leaf:${leaf.qaId}#${slot}`;
+    const at = place(id, { x: parent.x, y: parent.y }, options.seed, rng, R * 0.08);
+    const node: LeafNode = {
+      kind: "leaf",
+      id,
+      rowKey: `${leaf.qaId}#${slot}`,
+      leaf,
+      x: at.x,
+      y: at.y,
+      vx: 0,
+      vy: 0,
+      r: leafRadius(leaf.score, dense),
+      rep: dense ? 0.8 : 1,
+      shared: false,
+    };
+    nodes.push(node);
+    links.push({ a: parent, b: node, len: leafLen(leaf.score, R), k: 0.05, w: dense ? 0.8 : 1, op: 0.4 + 0.5 * leaf.score });
+    const group = leafOf.get(leaf.qaId) ?? [];
+    group.push(node);
+    leafOf.set(leaf.qaId, group);
+  };
   SLOT_CLUSTER_NAMES.forEach((_, i) => {
     const slot = i + 1;
     const mine = leaves.filter((leaf) => leaf.slot === slot);
+    hubs[i]!.count = mine.length;
     const bySession = new Map<string, ClusterLeaf[]>();
     for (const leaf of mine) {
       const list = bySession.get(leaf.sessionId) ?? [];
       list.push(leaf);
       bySession.set(leaf.sessionId, list);
     }
+    const singles: ClusterLeaf[] = [];
     for (const [sessionId, list] of bySession) {
-      let parent: HubNode = hubs[i]!;
-      parent.count += list.length;
-      if (list.length >= 2) {
-        const id = `hub:slot:${slot}:${sessionId}`;
-        const at = place(id, { x: hubs[i]!.x, y: hubs[i]!.y }, options.seed, rng, 40);
-        const sub: HubNode = {
-          kind: "hub",
-          id,
-          x: at.x,
-          y: at.y,
-          vx: 0,
-          vy: 0,
-          r: 1.8,
-          rep: 1.2,
-          // 密集模式只标 ≥3 条的簇（原型规则）
-          label: list.length >= 3 ? (list[0]!.title ?? sessionId) : "",
-          sub: true,
-          group: `slot:${slot}`,
-          count: list.length,
-          past: false,
-        };
-        nodes.push(sub);
-        links.push({ a: hubs[i]!, b: sub, len: 44, k: 0.07, w: 1.6, op: 0.5 });
-        parent = sub;
+      if (list.length < 2) {
+        singles.push(list[0]!);
+        continue;
       }
-      for (const leaf of list) {
-        const id = `leaf:${leaf.qaId}#${slot}`;
-        const at = place(id, { x: parent.x, y: parent.y }, options.seed, rng, 30);
-        const node: LeafNode = {
-          kind: "leaf",
-          id,
-          rowKey: `${leaf.qaId}#${slot}`,
-          leaf,
-          x: at.x,
-          y: at.y,
-          vx: 0,
-          vy: 0,
-          r: leafRadius(leaf, dense),
-          rep: 1,
-          shared: false,
-          percent: 62,
-        };
-        nodes.push(node);
-        links.push({ a: parent, b: node, len: 24, k: 0.1, w: 0.9, op: 0.4 + 0.5 * leaf.score });
-        const group = leafOf.get(leaf.qaId) ?? [];
-        group.push(node);
-        leafOf.set(leaf.qaId, group);
+      // 密集模式只标 ≥3 条的簇（原型规则）；常规 ≥2 条就标
+      const label = list.length >= (dense ? 3 : 2) ? list[0]!.title : "";
+      const sub = addSub(slot, `hub:slot:${slot}:${sessionId}`, label, list.length);
+      for (const leaf of list) addLeaf(sub, leaf, slot);
+    }
+    if (singles.length === 1) {
+      addLeaf(hubs[i]!, singles[0]!, slot);
+    } else {
+      // 单条来源的叶子按**首次召回它的那一问**归枝：一片叶的首轮永不变，新一轮只会
+      // 添一根新枝，旧枝的成员不变——按时间顺序每 5 片切一段的话，新叶插进来会让
+      // 后面所有段重新分组，旧叶跟着挪（真机实测旧节点平均位移 14px → 3px）
+      const byFirstRound = new Map<number, ClusterLeaf[]>();
+      for (const leaf of singles) {
+        const first = leaf.rounds[0] ?? leaf.lastRound;
+        const list = byFirstRound.get(first) ?? [];
+        list.push(leaf);
+        byFirstRound.set(first, list);
+      }
+      for (const [first, chunk] of [...byFirstRound.entries()].sort((a, b) => a[0] - b[0])) {
+        chunk.sort((a, b) => a.ts - b.ts || (a.qaId < b.qaId ? -1 : 1));
+        const sub = addSub(slot, `hub:slot:${slot}:twig:${first}`, "", chunk.length);
+        for (const leaf of chunk) addLeaf(sub, leaf, slot);
       }
     }
   });
   for (const group of leafOf.values()) {
     if (group.length < 2) continue;
     for (const node of group) node.shared = true;
-    links.push({ a: group[0]!, b: group[1]!, len: 90, k: 0.01, bridge: true });
+    for (let i = 1; i < group.length; i += 1) {
+      links.push({ a: group[0]!, b: group[i]!, len: R * 0.26, k: 0.01, bridge: true });
+    }
   }
   if (options.seed !== undefined) warmStartUnseeded(nodes, links, options.seed);
-  simulateToConvergence(nodes, links, W, H);
-  return { nodes, links };
+  return { nodes, links, w: W, h: H, dense };
 }
 
-/* ---------------------------------------------------------------- ③ 按提问成网络 */
+/* ---------------------------------------------------------------- ② 按提问成网络 */
 
 /** 一个中心（会话里的一问；或被召回历史里 orbita 自召回的旧提问）。 */
 export interface EgoCentre {
   key: string;
-  /** 中心标签（「第 3 问 · 10-13 23:18」） */
+  /** 中心标签（「第 3 问」） */
   label: string;
-  /** 最新一问 = false（最亮、居中固定）；其余中心 = true（旧中心退一档） */
+  /** 最新一问 = false（最亮、钉在中心）；其余中心 = true（旧中心退一档） */
   past: boolean;
   /** 该中心召回的叶子（每 QA 一片，slot = 主岗；含轮号信息） */
   leaves: readonly ClusterLeaf[];
 }
 
+/** 中心数上限（规格 C）。 */
+export const MAX_CENTRES = 6;
+
 /**
- * 按提问成网络：每个中心一个 soma（最新一问固定居中），(中心, 来源会话) 成簇；
- * 被多个中心召回的 QA 一片叶子长在它们中间、每边一根桥。叶子的展示数据取**最近
- * 使用它的那一问**（合并语义），轮号 / rounds 跨中心汇总。
+ * 按提问成网络：每个中心一个 soma（最新一问钉在中心，旧中心带 10× 向心力——
+ * 没有连接的中心也被拉进画面），(中心, 来源会话) 成簇；被多个中心召回的 QA 一片
+ * 叶子长在它们中间、每边一根**实线**（原型 `.bridge.ego` 无虚线——虚线只给按岗位
+ * 视图的跨岗桥）。叶子的展示数据取**最近使用它的那一问**（合并语义）。
  */
 export function buildEgoScene(
   centres: readonly EgoCentre[],
@@ -482,23 +559,23 @@ export function buildEgoScene(
   H: number,
   options: BuildOptions = {},
 ): ClusterScene {
+  const R = Math.min(W, H);
   const dense = centres.reduce((sum, centre) => sum + centre.leaves.length, 0) > 40;
   const rng = seededRandom(5);
   const nodes: SimNode[] = [];
   const links: SimLink[] = [];
-  const angles = [-2.3, -0.6, 1.6, 2.6, 0.5, -1.4];
-  const centreNodes: SomaNode[] = centres.map((centre, i) => {
+  const pastCount = centres.filter((centre) => centre.past).length;
+  let pastIndex = 0;
+  const centreNodes: SomaNode[] = centres.map((centre) => {
     const past = centre.past;
     const id = `soma:centre:${centre.key}`;
-    const at = place(
-      id,
-      past
-        ? { x: W / 2 + Math.cos(angles[(i - 1) % 6] ?? 0) * 200, y: H / 2 + Math.sin(angles[(i - 1) % 6] ?? 0) * 200 }
-        : { x: W / 2, y: H / 2 - 10 },
-      options.seed,
-      rng,
-      8,
-    );
+    let fallback = { x: W / 2, y: H / 2 };
+    if (past) {
+      const angle = (pastIndex / Math.max(1, pastCount)) * Math.PI * 2 - Math.PI / 2;
+      pastIndex += 1;
+      fallback = { x: W / 2 + Math.cos(angle) * R * 0.22, y: H / 2 + Math.sin(angle) * R * 0.22 };
+    }
+    const at = place(id, fallback, options.seed, rng, 8);
     const node: SomaNode = {
       kind: "soma",
       id,
@@ -507,8 +584,9 @@ export function buildEgoScene(
       vx: 0,
       vy: 0,
       r: past ? 7 : 11,
-      rep: 4,
-      fixed: !past,
+      rep: past ? 3 : 4,
+      grav: 24,
+      pin: past ? undefined : { x: W / 2, y: H / 2 },
       label: centre.label,
       past,
     };
@@ -527,11 +605,63 @@ export function buildEgoScene(
       if (found === undefined || leaf.lastRound > found.lastRound) merged.set(leaf.qaId, leaf);
     }
   });
+  const hubs = new Map<string, HubNode>();
+  const hubFor = (gi: number, sessionId: string, title: string): HubNode => {
+    const centre = centres[gi]!;
+    const id = `hub:centre:${centre.key}:${sessionId}`;
+    const found = hubs.get(id);
+    if (found !== undefined) {
+      found.count += 1;
+      return found;
+    }
+    const origin = centreNodes[gi]!;
+    const angle = rng() * Math.PI * 2;
+    const at = place(
+      id,
+      { x: origin.x + Math.cos(angle) * R * 0.14, y: origin.y + Math.sin(angle) * R * 0.14 },
+      options.seed,
+      rng,
+      10,
+    );
+    const hub: HubNode = {
+      kind: "hub",
+      id,
+      x: at.x,
+      y: at.y,
+      vx: 0,
+      vy: 0,
+      r: centre.past ? 1.6 : 2.6,
+      rep: 1.6,
+      label: "",
+      sub: true,
+      group: id,
+      count: 1,
+      past: centre.past,
+    };
+    hubs.set(id, hub);
+    nodes.push(hub);
+    links.push({
+      a: origin,
+      b: hub,
+      len: centre.past ? R * 0.11 : R * 0.18,
+      k: 0.05,
+      w: centre.past ? 1.1 : 1.8,
+      op: centre.past ? 0.35 : 0.6,
+      dim: centre.past,
+    });
+    // 最新一问的簇标来源会话名（≥3 条才标，见下方 count 校正）
+    hub.label = title;
+    return hub;
+  };
   for (const [qaId, gs] of who) {
     const leaf = merged.get(qaId)!;
-    const rounds = [...new Set(centres.filter((_, gi) => gs.includes(gi)).flatMap((c) => c.leaves.find((l) => l.qaId === qaId)?.rounds ?? [leaf.lastRound]))];
+    const rounds = [
+      ...new Set(
+        gs.flatMap((gi) => centres[gi]!.leaves.find((item) => item.qaId === qaId)?.rounds ?? [leaf.lastRound]),
+      ),
+    ].sort((a, b) => a - b);
     const shared = gs.length > 1;
-    const hs = gs.map((gi) => hubFor(gi, leaf.sessionId));
+    const hs = gs.map((gi) => hubFor(gi, leaf.sessionId, leaf.title));
     const node: LeafNode = {
       kind: "leaf",
       id: `leaf:${qaId}`,
@@ -541,72 +671,41 @@ export function buildEgoScene(
       y: 0,
       vx: 0,
       vy: 0,
-      r: leafRadius(leaf, dense),
-      rep: 1,
+      r: leafRadius(leaf.score, dense),
+      rep: dense ? 0.8 : 1,
       shared,
-      percent: 62,
     };
-    const at = place(node.id, { x: hs[0]!.x, y: hs[0]!.y }, options.seed, rng, 20);
+    const centroid = {
+      x: hs.reduce((sum, hub) => sum + hub.x, 0) / hs.length,
+      y: hs.reduce((sum, hub) => sum + hub.y, 0) / hs.length,
+    };
+    const at = place(node.id, centroid, options.seed, rng, R * 0.06);
     node.x = at.x;
     node.y = at.y;
     nodes.push(node);
     hs.forEach((hub, at2) => {
       const centre = centres[gs[at2]!]!;
       if (shared) {
-        links.push({ a: hub, b: node, len: 60, k: 0.04, bridge: true });
+        links.push({ a: hub, b: node, len: R * 0.16, k: 0.04, ego: true, dim: centre.past });
       } else {
         links.push({
           a: hub,
           b: node,
-          len: 22,
-          k: 0.1,
-          w: 0.9,
+          len: leafLen(leaf.score, R),
+          k: 0.06,
+          w: dense ? 0.8 : 1,
           op: centre.past ? 0.3 : 0.4 + 0.5 * leaf.score,
           dim: centre.past,
         });
       }
     });
   }
-  if (options.seed !== undefined) warmStartUnseeded(nodes, links, options.seed);
-  simulateToConvergence(nodes, links, W, H);
-  return { nodes, links };
-
-  function hubFor(gi: number, sessionId: string): HubNode {
-    const id = `hub:centre:${centres[gi]!.key}:${sessionId}`;
-    const centre = centres[gi]!;
-    const angle = rng() * Math.PI * 2;
-    const at = place(id, { x: centreNodes[gi]!.x + Math.cos(angle) * 60, y: centreNodes[gi]!.y + Math.sin(angle) * 60 }, options.seed, rng, 10);
-    let hub = nodes.find((n) => n.id === id);
-    if (hub === undefined || hub.kind !== "hub") {
-      hub = {
-        kind: "hub",
-        id,
-        x: at.x,
-        y: at.y,
-        vx: 0,
-        vy: 0,
-        r: centre.past ? 1.6 : 2.6,
-        rep: 1.6,
-        label: "",
-        sub: true,
-        group: id,
-        count: 0,
-        past: centre.past,
-      };
-      nodes.push(hub);
-      links.push({
-        a: centreNodes[gi]!,
-        b: hub,
-        len: centre.past ? 50 : 80,
-        k: 0.05,
-        w: centre.past ? 1.1 : 2,
-        op: centre.past ? 0.35 : 0.6,
-        dim: centre.past,
-      });
-    }
-    hub.count += 1;
-    return hub;
+  // 簇名：只给最新一问、≥3 条的簇（旧中心的簇不标，密了看不清）
+  for (const hub of hubs.values()) {
+    if (hub.past || hub.count < 3) hub.label = "";
   }
+  if (options.seed !== undefined) warmStartUnseeded(nodes, links, options.seed);
+  return { nodes, links, w: W, h: H, dense };
 }
 
 /* ---------------------------------------------------------------- 合并：多问 → 一张累积图 */
@@ -648,33 +747,43 @@ export function mergeTurnLeaves(
   return [...byKey.values()].sort((a, b) => a.ts - b.ts || (a.qaId < b.qaId ? -1 : 1));
 }
 
-/* ---------------------------------------------------------------- 上色 / 缩放（只改样式与几何映射，不重排） */
-
 /**
- * 把着色档位写到叶子上（就地）。**只碰 percent，绝不碰坐标**——切「时间 / 相关度」
- * 或换高亮轮永远不该引发重新布局（2026-10-14 用户裁决）。
+ * 本会话的问 → 按提问视图的中心（≤ MAX_CENTRES）：最新的几问各一个中心；超出
+ * 上限的更早几问并成一个「更早」中心（它们的叶子仍带各自的轮号）。
+ * 不出中心的轮不会让叶子失联——每片叶至少挂在「更早」中心上。
  */
-export function paintScene(scene: ClusterScene, colorMode: GraphColorMode): void {
-  const leaves = scene.nodes.filter((node): node is LeafNode => node.kind === "leaf");
-  const range = leafRange(leaves.map((node) => node.leaf));
-  for (const node of leaves) {
-    node.percent = nebulaPercentOf(colorMode, node.leaf, range);
+export function centresOfTurns(
+  turns: readonly TurnLeaves[],
+  latestRound: number,
+  labelOf: (round: number) => string,
+  earlierLabel: (fromRound: number, toRound: number) => string,
+): EgoCentre[] {
+  const live = turns.filter((turn) => turn.leaves.length > 0 || turn.round === latestRound);
+  if (live.length <= MAX_CENTRES) {
+    return live.map((turn) => ({
+      key: turn.turnId,
+      label: labelOf(turn.round),
+      past: turn.round !== latestRound,
+      leaves: turn.leaves,
+    }));
   }
-}
-
-/**
- * 面板尺寸变了：已收敛的坐标按新宽高等比缩放（soma 的居中固定点也跟着走）。
- * 不重新模拟——拖分隔条 / 微调窗口时图保持形状，只是整体伸缩（大跨度宽度变化
- * 由调用方判断后整体重建）。
- */
-export function rescaleScene(scene: ClusterScene, fromW: number, fromH: number, toW: number, toH: number): void {
-  if (fromW <= 0 || fromH <= 0) return;
-  const kx = toW / fromW;
-  const ky = toH / fromH;
-  for (const node of scene.nodes) {
-    node.x *= kx;
-    node.y *= ky;
-  }
+  const keep = live.slice(live.length - (MAX_CENTRES - 1));
+  const earlier = live.slice(0, live.length - (MAX_CENTRES - 1));
+  const mergedLeaves = mergeTurnLeaves(earlier, (leaf) => leaf.qaId);
+  return [
+    {
+      key: `earlier:${earlier[0]!.turnId}`,
+      label: earlierLabel(earlier[0]!.round, earlier[earlier.length - 1]!.round),
+      past: true,
+      leaves: mergedLeaves,
+    },
+    ...keep.map((turn) => ({
+      key: turn.turnId,
+      label: labelOf(turn.round),
+      past: turn.round !== latestRound,
+      leaves: turn.leaves,
+    })),
+  ];
 }
 
 /* ---------------------------------------------------------------- 提问网络的中心候选 */
@@ -690,17 +799,23 @@ export function orbitaCentreCandidates(
   const seen = new Set<string>();
   const out: { sessionId: string; turnId: string }[] = [];
   for (const leaf of leaves) {
-    if (!leaf.qaId.startsWith("orbita:")) continue;
-    const rest = leaf.qaId.slice("orbita:".length);
-    const at = rest.indexOf(":");
-    if (at <= 0 || at >= rest.length - 1) continue;
-    const sessionId = rest.slice(0, at);
-    const turnId = rest.slice(at + 1);
-    const key = `${sessionId}:${turnId}`;
+    // 先查预算再收：max=0（本会话的问已占满中心）时一个都不给
+    if (out.length >= max) break;
+    const parsed = parseOrbitaQaId(leaf.qaId);
+    if (parsed === null) continue;
+    const key = `${parsed.sessionId}:${parsed.turnId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ sessionId, turnId });
-    if (out.length >= max) break;
+    out.push(parsed);
   }
   return out;
+}
+
+/** `orbita:<sessionId>:<turnId>` → 两段；不是这个形状给 null。 */
+export function parseOrbitaQaId(qaId: string): { sessionId: string; turnId: string } | null {
+  if (!qaId.startsWith("orbita:")) return null;
+  const rest = qaId.slice("orbita:".length);
+  const at = rest.indexOf(":");
+  if (at <= 0 || at >= rest.length - 1) return null;
+  return { sessionId: rest.slice(0, at), turnId: rest.slice(at + 1) };
 }
