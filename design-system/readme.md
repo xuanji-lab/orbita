@@ -89,11 +89,11 @@ the English copy; the Chinese copy follows the same voice.
 - **Sentence case everywhere.** "New workspace name", "Remove workspace", "Main workspace". No
   Title Case, no ALL CAPS except acronyms. `ORBITA` appears capitalised only inside prose that names
   the app ("It may have been removed outside ORBITA."); the wordmark itself is lowercase.
-- **Group labels are the one uppercase.** Sidebar node titles, settings section labels, menu group
-  headers, panel group headers and card kickers are written in sentence case in the source and set
-  uppercase by CSS (`text-transform: uppercase`): mono, `--font-size-xs`, `--tracking-label` (0.06em),
-  secondary grey (tertiary for card kickers). They name a group; they never stand in for a heading
-  or a button.
+- **Group labels are quiet sentence case.** Sidebar node titles, settings section labels, menu group
+  headers, panel group headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey
+  (tertiary for card kickers), no uppercase, no tracking. They name a group; they never stand in for
+  a heading or a button. (Until 2026-10-14 they were uppercase mono — inherited from the pre-system
+  renderer, never chosen; the mono face is for machine facts, not for titles.)
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
@@ -362,8 +362,8 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 | `--font-size-xl` | base + 4 | 18px | Markdown h1, page / conversation titles |
 | `--font-size-lg` | base + 2 | 16px | Markdown h2, settings and panel titles |
 | `--font-size-base` | base | 14px | Body, transcript, composer, buttons, menus, list rows, card titles, Markdown h3–h6 |
-| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments) |
-| `--font-size-xs` | base − 3 | 11px | Badges, counters, uppercase group labels, very weak metadata |
+| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments), group labels (semibold) |
+| `--font-size-xs` | base − 3 | 11px | Badges, counters, very weak metadata |
 
 - **A card uses at most three sizes**: title `base` + semibold, body `base` or `sm`, metadata `xs`.
   Four sizes in one card is the "type out of control" smell this rule exists to kill.

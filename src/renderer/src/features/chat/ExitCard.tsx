@@ -23,10 +23,9 @@ export const EXIT_CARD_STYLE = {
 
 export const EXIT_CARD_KICKER = {
   flex: "0 0 auto",
-  fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-xs)",
-  letterSpacing: "var(--tracking-label)",
-  textTransform: "uppercase",
+  fontFamily: "var(--font-family-base)",
+  fontSize: "var(--font-size-sm)",
+  fontWeight: "var(--weight-semibold)",
   color: "var(--color-text-tertiary)",
 } satisfies React.CSSProperties;
 

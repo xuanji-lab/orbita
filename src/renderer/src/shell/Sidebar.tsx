@@ -1004,7 +1004,7 @@ function WorkspaceGroup(props: {
   );
 }
 
-/** 分组标题：机器面的小字用 business/mono，字号 xs，大写加字距 */
+/** 分组标题：UI 字、sm、semibold、secondary，句首大写照原文（设计系统 *Group labels*） */
 function NodeLabel(props: { children: React.ReactNode }) {
   return (
     <span
@@ -1012,11 +1012,9 @@ function NodeLabel(props: { children: React.ReactNode }) {
         display: "inline-flex",
         alignItems: "center",
         minHeight: 28,
-        fontFamily: "var(--font-family-business)",
-        fontSize: "var(--font-size-xs)",
-        letterSpacing: "var(--tracking-label)",
-        textTransform: "uppercase",
-        fontWeight: "var(--weight-bold)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        fontWeight: "var(--weight-semibold)",
         color: "var(--color-text-secondary)",
       }}
     >

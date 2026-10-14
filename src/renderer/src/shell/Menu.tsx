@@ -733,18 +733,17 @@ function MenuRow(props: {
         cursor: fact || header ? "default" : disabled ? "not-allowed" : "pointer",
         // 事实行矮一档（xs）：一眼能看出它们不是可点的那一类
         ...(fact ? { minHeight: "var(--control-height-xs)" } : null),
-        // 分组头 = 设置面节标题的同款语言：mono、xs、大写加字距
+        // 分组头 = 设置面节标题的同款语言：UI 字、sm、semibold、secondary
         ...(header
           ? {
               minHeight: "var(--control-height-sm)",
               paddingTop: "var(--space-2)",
-              fontFamily: "var(--font-family-mono)",
-              fontSize: "var(--font-size-xs)",
-              letterSpacing: "var(--tracking-label)",
-              textTransform: "uppercase",
-              // 加粗：模型菜单里组头与模型行同色同高、只差字号和大小写，两家 provider 靠得近时
-              // 分不清哪行是头（2026-09-21 wafo）。仍用二级文字色，不抢模型行的主角位。
-              fontWeight: "var(--weight-bold)",
+              fontFamily: "var(--font-family-base)",
+              fontSize: "var(--font-size-sm)",
+              // 加粗：两家 provider 靠得近时要一眼分出哪行是头（2026-09-21 wafo）——
+              // 去大写后（2026-10-14）只剩字号、字重、颜色三条信号，字重不能省。
+              // 仍用二级文字色，不抢模型行的主角位。
+              fontWeight: "var(--weight-semibold)",
               color: "var(--color-text-secondary)",
             }
           : null),

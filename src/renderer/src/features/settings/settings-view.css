@@ -4,14 +4,12 @@
  */
 
 /* ===== 分组标题（General 的 Section 与 Migration 的段落共用）=====
- * 与侧栏节点标题同一个处理：源码写 sentence case，这里转大写；mono、xs、--tracking-label。
+ * 与侧栏节点标题同一个处理：UI 字（Manrope）、sm、semibold、secondary，句首大写照原文。
  * 设计系统 *Content fundamentals › Group labels*。 */
 .section-label {
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  font-weight: var(--weight-bold);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-secondary);
 }
 
