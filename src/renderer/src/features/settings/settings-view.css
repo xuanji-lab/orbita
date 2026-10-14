@@ -749,8 +749,8 @@ a.exp-pr:hover {
   margin: 0;
   padding: 0 0 var(--space-3);
   list-style: none;
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
 }
@@ -785,7 +785,7 @@ a.exp-pr:hover {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
