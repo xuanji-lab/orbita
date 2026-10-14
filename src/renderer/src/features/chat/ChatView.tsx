@@ -514,6 +514,11 @@ function ChatViewBody(props: {
    */
   onOpenReviewAt?: (path: string) => void;
   /**
+   * 召回终态卡的「在右栏看图谱」：打开右栏意图面板。只有主槽拿到它（面板开在
+   * 主槽旁边）；右栏与抽屉里不传，终态卡不画这个链接。
+   */
+  onOpenIntentPanel?: () => void;
+  /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
    * 会话层——都有长转录、都会滚离底部。实现在本组件里三处共用。
@@ -1244,6 +1249,7 @@ function ChatViewBody(props: {
           actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
+          onOpenIntentPanel={props.onOpenIntentPanel}
           sessionId={openId}
         />
         </RevertPreviewContext.Provider>
@@ -1300,6 +1306,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   readOnly: boolean;
   /** 轮尾卡文件行的「在面板里看」（主槽才有；引用稳定） */
   onOpenReviewAt?: (path: string) => void;
+  /** 召回终态卡的「在右栏看图谱」（主槽才有；引用稳定，不破 memo） */
+  onOpenIntentPanel?: () => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
   /** 意图召回（实验功能 intent-system）：终态卡（按时间插回流）与运行中卡（转录末尾） */
@@ -1539,6 +1547,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
+                onOpenIntentPanel={props.onOpenIntentPanel}
                 sessionId={props.sessionId}
                 onRevertTo={props.onRevertTo}
                 streamingIds={streamingIds}
@@ -1558,7 +1567,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         );
       })}
       {props.pendingEcho !== null && <PendingEchoRow blocks={props.pendingEcho.blocks} />}
-      {props.intentRun !== null && props.intentRun.status === "running" && (
+      {/* 等确认态（done 且有待表态、终态记录还没落盘）也由运行卡画：环停 86%、
+          确认胶囊换气泡图标——确认卡此刻浮在输入框上方，两处互为上下文 */}
+      {props.intentRun !== null &&
+        (props.intentRun.status === "running" ||
+          (props.intentRun.status === "done" && props.intentRun.pendingAsks > 0)) && (
         <IntentRecallRunCard card={props.intentRun} onCancel={props.onAbort} />
       )}
       {props.turnError !== null && (
@@ -2408,6 +2421,8 @@ function EntryView(props: {
   readOnly?: boolean;
   /** 轮尾卡文件行的「在面板里看」（原样转发给 FileTurnCard） */
   onOpenReviewAt?: (path: string) => void;
+  /** 召回终态卡的「在右栏看图谱」（主槽才有） */
+  onOpenIntentPanel?: () => void;
   /** 产物打开按钮的会话对账（主进程白名单按它查） */
   sessionId: string;
 }) {
@@ -2441,7 +2456,7 @@ function EntryView(props: {
     return <RevertMarkView record={entry.record} cwd={props.cwd} onOpenFile={props.onOpenReviewAt} />;
   }
   if (entry.kind === "intentRecall") {
-    return <IntentRecallFinalCard record={entry.record} />;
+    return <IntentRecallFinalCard record={entry.record} onOpenIntentPanel={props.onOpenIntentPanel} />;
   }
   if (entry.kind === "channelMark") {
     // 子会话流里的父侧消息（task / reply / stop）：正文直接进对话流——虚线气泡 +

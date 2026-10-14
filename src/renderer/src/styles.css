@@ -3885,18 +3885,187 @@ button.panel-group-toggle:hover {
    这是用户 2026-10-14 的决定：复用用量格已有的色 token，不另造新色；桥与「你确认过」
    用 accent / success，旧中心与被高亮轮以外的节点退一档。 */
 
-/* 聊天面的召回运行卡：标题不换行、不被挤（场景行再长也只截它自己）。之前这两个 class
-   在组件里用了却没写规则——场景一长，「意图召回」被压成一字一行（2026-10-14 真机） */
+/* —— 聊天面的召回卡（2026-10-14 重写，confirm-card-options.html §1 的「召回卡 C」）：
+   细框卡 + 进度环 + 四胶囊（理解 / 打分 / 写理由 / 确认）+ 一行当前步细节；终态收成一行。
+   状态色只是第二信号：进行中的本体是环与转圈图标（warning），落定后整行退到 tertiary，
+   唯一的强色是出错的 danger 文字。标题不换行（窄列里「意图召回」被拆两行的老坑）。 —— */
+.intent-run-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--color-bg-panel) 40%, transparent);
+  margin-top: var(--space-3);
+  min-width: 0;
+}
+.intent-ring {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+}
+.intent-ring-pct {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.intent-run-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.intent-run-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
 .intent-run-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-bold);
+  color: var(--color-text-primary);
+}
+.intent-run-scene {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+.intent-run-time {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.intent-card-mini {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-micro);
+  cursor: pointer;
+}
+.intent-card-mini:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.intent-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.intent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+.intent-pill.done {
+  color: var(--color-text-secondary);
+}
+.intent-pill.done .orbita-icon {
+  color: var(--color-success);
+}
+.intent-pill.run {
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-warning) 50%, transparent);
+}
+.intent-run-detail {
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+  min-height: 1em;
+}
+/* 终态卡：收成一行细框卡；整行可点展开，展开只看阶段明细与错误 */
+.intent-final {
+  margin-top: var(--space-3);
+  min-width: 0;
+}
+.intent-final-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--color-bg-panel) 40%, transparent);
+}
+.intent-final-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-tertiary);
+}
+.intent-final-title {
   flex: 0 0 auto;
   white-space: nowrap;
   font-size: var(--font-size-caption);
   font-weight: var(--weight-bold);
   color: var(--color-text-secondary);
 }
-.intent-run-icon {
+.intent-final-stats {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-caption);
+}
+.intent-graph-link {
   flex: 0 0 auto;
-  color: var(--color-warning);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.intent-graph-link:hover {
+  color: var(--color-text-primary);
+}
+.intent-final-chev {
+  width: 22px;
+  height: 22px;
 }
 
 /* —— 面板体：图钉顶部（高度可拖），分隔条，条目列表占余下 —— */

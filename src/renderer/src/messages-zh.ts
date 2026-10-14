@@ -950,7 +950,6 @@ export const zh: Messages = {
     compacting: "正在压缩上下文…",
     /* ---------- 意图召回（实验功能 intent-system）：卡片 + 回答前确认 ---------- */
     recall: {
-      detailInPanel: "入选与表态在右栏「意图」面板里看。",
       label: "意图召回",
       stageGate: "门卫",
       stageUnderstand: "理解问题",
@@ -966,16 +965,29 @@ export const zh: Messages = {
       stageAnswer: "回答",
       stageEdges: (edges) => `回写${edges === null ? "" : ` ${edges} 条边`}`,
       sceneLine: (scene, want) => (want === "" ? scene : `${scene} · ${want}`),
-      doneLine: (read, selected, asked, duration) =>
-        `读了 ${typeof read === "number" ? read.toLocaleString("en-US") : read} 条 · 选中 ${selected} · 问了你 ${asked} · ${duration}`,
+      /* ---------- 运行卡（四胶囊版，2026-10-14 重写） ---------- */
+      pillUnderstand: "理解",
+      pillScore: "打分",
+      pillReasons: "写理由",
+      pillConfirm: "确认",
+      detailGate: "门卫判断中",
+      detailUnderstand: "理解问题中",
+      detailScore: (done, total, passed) =>
+        `打分 ${done.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} · 已过线 ${passed}`,
+      detailReasons: (done, total) => `写理由 ${done} / ${total}`,
+      detailKeeper: (done, chars) => `摘句 · 已写 ${done} 条 · ${chars.toLocaleString("en-US")} 字`,
+      detailSettling: "汇总中",
+      confirmWaitingDetail: (n) => `有 ${n} 条拿不准，在下面等你确认`,
+      /* ---------- 终态卡（收成一行） ---------- */
+      doneStats: (read, selected) => `读了 ${read} · 入选 ${selected}`,
+      doneConfirmed: (yes, asked) => `你确认 ${yes} / ${asked}`,
+      openGraph: "在右栏看图谱",
+      usageTokens: (total) => `${total} token`,
       readUnknown: "?",
       skippedLine: (why) => `这句没有做意图分析 · ${why}`,
       cancelled: "已取消，这句没有回答",
       failed: "意图召回失败",
-      waitingForYou: "等你确认",
-      pendingAsksLine: (n) => (n > 0 ? `有 ${n} 条没表态——这次按原样交给模型` : ""),
       askRemainingLine: (n) => `还有 ${n} 条下次问`,
-      usageLine: (total) => `· 召回用了 ${total} token`,
       stageNames: {
         gate: "门卫",
         s1: "理解问题",

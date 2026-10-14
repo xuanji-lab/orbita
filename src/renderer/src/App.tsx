@@ -528,6 +528,8 @@ export function App() {
   const handlePanel = useCallback((next: RightPanelKind | null) => {
     setRightPanel(next);
   }, []);
+  /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
+  const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
 
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
   // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
@@ -805,6 +807,7 @@ export function App() {
                 tokenPickResult={tokenPickResult}
                 panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
+                onOpenIntentPanel={openIntentPanel}
               />
             )}
           </div>

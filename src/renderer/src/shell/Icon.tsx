@@ -84,6 +84,7 @@ import pinOff from "../../../../design-system/assets/icons/lucide/pin-off.svg?ra
 import pin from "../../../../design-system/assets/icons/lucide/pin.svg?raw";
 import plug from "../../../../design-system/assets/icons/lucide/plug.svg?raw";
 import power from "../../../../design-system/assets/icons/lucide/power.svg?raw";
+import messageCircle from "../../../../design-system/assets/icons/lucide/message-circle.svg?raw";
 import messageSquareDashed from "../../../../design-system/assets/icons/lucide/message-square-dashed.svg?raw";
 import messageSquare from "../../../../design-system/assets/icons/lucide/message-square.svg?raw";
 import messagesSquare from "../../../../design-system/assets/icons/lucide/messages-square.svg?raw";
@@ -200,6 +201,7 @@ const ICONS = {
   // Iconography 那节「拷一份工作子集进来」的做法引入
   menu,
   lock,
+  "message-circle": messageCircle,
   "message-square": messageSquare,
   mic,
   "message-square-dashed": messageSquareDashed,

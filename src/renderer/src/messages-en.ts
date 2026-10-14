@@ -1036,7 +1036,6 @@ export const en = {
     compacting: "Compacting context…",
     /* ---------- 意图召回（实验功能 intent-system）：卡片 + 回答前确认 ---------- */
     recall: {
-      detailInPanel: "Picks and verdicts are in the Intent panel on the right.",
       label: "Intent recall",
       /** 11 格阶段条的格名（顺序即流水线顺序） */
       stageGate: "Gate",
@@ -1055,18 +1054,29 @@ export const en = {
       stageEdges: (edges: number | null) => `Edges${edges === null ? "" : ` · ${edges}`}`,
       /** 运行中的主行：S1 的场景与意图 */
       sceneLine: (scene: string, want: string) => (want === "" ? scene : `${scene} · ${want}`),
-      /** 终态行 */
-      doneLine: (read: number | string, selected: number, asked: number, duration: string) =>
-        `Read ${typeof read === "number" ? read.toLocaleString("en-US") : read} · selected ${selected} · asked you ${asked} · ${duration}`,
+      /* ---------- 运行卡（四胶囊版，2026-10-14 重写） ---------- */
+      pillUnderstand: "Understand",
+      pillScore: "Score",
+      pillReasons: "Reasons",
+      pillConfirm: "Confirm",
+      detailGate: "Gate checking",
+      detailUnderstand: "Understanding",
+      detailScore: (done: number, total: number, passed: number) =>
+        `Scoring ${done.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} · ${passed} passed`,
+      detailReasons: (done: number, total: number) => `Reasons ${done} / ${total}`,
+      detailKeeper: (done: number, chars: number) => `Excerpting · ${done} · ${chars.toLocaleString("en-US")} chars`,
+      detailSettling: "Wrapping up",
+      confirmWaitingDetail: (n: number) => `${n} unclear — waiting for you below`,
+      /* ---------- 终态卡（收成一行） ---------- */
+      doneStats: (read: string, selected: number) => `Read ${read} · picked ${selected}`,
+      doneConfirmed: (yes: number, asked: number) => `you confirmed ${yes} / ${asked}`,
+      openGraph: "See the graph in the Intent panel",
+      usageTokens: (total: string) => `${total} tokens`,
       readUnknown: "?",
       skippedLine: (why: string) => `No intent analysis for this one · ${why}`,
       cancelled: "Cancelled — this message wasn't answered",
       failed: "Intent recall failed",
-      waitingForYou: "Waiting for you to confirm",
-      pendingAsksLine: (n: number) =>
-        n > 0 ? `${n} statement${n === 1 ? "" : "s"} left unconfirmed — answered as-is` : "",
       askRemainingLine: (n: number) => `${n} more to ask next time`,
-      usageLine: (total: string) => `· recall used ${total} tokens`,
       /** 错误阶段名（error 转录行的「停在：」） */
       stageNames: {
         gate: "gate",
