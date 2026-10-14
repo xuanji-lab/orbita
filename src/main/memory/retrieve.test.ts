@@ -5,7 +5,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { MemoryEntry } from "../../shared/memory.ts";
-import { lexicalScore, retrieveMemories, tokenize, type EntryScorer } from "./retrieve.ts";
+import { lexicalScore, pickPinned, retrieveMemories, tokenize, PINNED_LIMIT, type EntryScorer } from "./retrieve.ts";
 
 const NOW = 1_800_000_000_000;
 const DAY = 86_400_000;
@@ -161,5 +161,49 @@ describe("关键词子串通道（真机验收缺陷回归：中文自然问句�
   test("关键词大小写不敏感（latin）", () => {
     const bun = CORPUS[0]!;
     assert.ok(lexicalScore({ text: "BUN 好用吗", tokens: new Set(tokenize("BUN 好用吗")) }, bun) >= 0.3);
+  });
+});
+
+describe("pickPinned（常驻摘抄：不打分，每轮必带，总量有上限）", () => {
+  const pinned = (id: string, text: string, timestamp: number): MemoryEntry => ({
+    id,
+    text,
+    keywords: [],
+    sessionId: "s",
+    timestamp,
+    pinned: true,
+    source: "excerpt",
+  });
+
+  test("按最近使用降序装车；没用过的按创建时刻", () => {
+    const usage = new Map([
+      ["mem_a", { count: 3, lastAt: 300 }],
+    ]);
+    const picked = pickPinned(
+      [pinned("mem_a", "aaa", 1), pinned("mem_b", "bbb", 200), pinned("mem_c", "ccc", 100)],
+      { usage },
+    );
+    assert.deepEqual(picked.map((entry) => entry.id), ["mem_a", "mem_b", "mem_c"]);
+  });
+
+  test("字符预算：装不下就跳过试下一条，第一条永远装", () => {
+    const usage = new Map([
+      ["mem_a", { count: 1, lastAt: 500 }], // 最近使用 → 第一条，但超长
+    ]);
+    const picked = pickPinned(
+      [pinned("mem_a", "x".repeat(2000), 1), pinned("mem_b", "短的", 100)],
+      { usage },
+    );
+    assert.deepEqual(picked.map((entry) => entry.id), ["mem_a", "mem_b"]);
+  });
+
+  test("条数上限：到 PINNED_LIMIT 停", () => {
+    const entries = Array.from({ length: PINNED_LIMIT + 3 }, (_, index) =>
+      pinned(`mem_${index}`, "短", index),
+    );
+    const picked = pickPinned(entries);
+    assert.equal(picked.length, PINNED_LIMIT);
+    // 最近创建的在前
+    assert.equal(picked[0]?.id, `mem_${PINNED_LIMIT + 2}`);
   });
 });

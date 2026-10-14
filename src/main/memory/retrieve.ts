@@ -10,7 +10,7 @@
  *
  * **纯模块**：不 import electron，可被 `node --test` 直接测。
  */
-import type { MemoryEntry, MemoryHit } from "../../shared/memory.ts";
+import type { MemoryEntry, MemoryHit, MemoryUsage } from "../../shared/memory.ts";
 
 /** 关键词权重高于正文：关键词是蒸馏时刻模型自己标的「这条是关于什么的」，比正文里偶然出现的词更准。 */
 const KEYWORD_WEIGHT = 0.7;
@@ -125,6 +125,10 @@ export function lexicalScore(query: MemoryQuery, entry: MemoryEntry): number {
  *
  * 空库 / 空 query（纯标点，分不出 token）/ 无命中都返回 `[]`——
  * 「没东西可注入」不是错误（契约：MemoryRetrieveOutcome 的 ok 双分支）。
+ *
+ * **常驻摘抄不走这里**（它们不打分，每轮必带，见 pickPinned）：词法召回的候选人
+ * 由调用方先减去常驻条目。superseded / muted 同样由调用方先滤掉（状态语义在
+ * requests.ts 的装配层，打分器只管相关度）。
  */
 export function retrieveMemories(
   entries: readonly MemoryEntry[],
@@ -162,4 +166,41 @@ export function retrieveMemories(
     hits.push({ entry: candidate.entry, score: candidate.score });
   }
   return hits;
+}
+
+/* ---------- 常驻摘抄（pinned）：不打分，每轮必带，总量有上限 ---------- */
+
+/** 常驻注入的字符预算：常驻不打分，超了按最近使用取。2200 ≈ 一条打满的引用
+ * （QUOTE_MAX_CHARS = 2000）再多一点——常驻的头一条无条件装，预算至少装得下
+ * 「最长的一条摘抄 + 一条短的」，否则最长的摘抄会把其余常驻全部挤出门外。 */
+export const PINNED_MAX_CHARS = 2200;
+/** 常驻注入的条数上限：先到者先停（预算与条数双门，防止满屏短句）。 */
+export const PINNED_LIMIT = 8;
+
+/**
+ * 挑这轮要带的常驻条目：按「最近一次使用（没用过按创建时刻）」降序装车，
+ * 到字符预算或条数上限停。使用统计从注入账本来（MemoryUsageStore.usageOf）；
+ * 没传时（测试）按创建时刻排。
+ *
+ * 与 retrieveMemories 同住一个文件：两套预算共用同一条「装不下就停」的纪律，
+ * 改预算策略时两处一起看。
+ */
+export function pickPinned(
+  entries: readonly MemoryEntry[],
+  options: { usage?: ReadonlyMap<string, MemoryUsage> } = {},
+): MemoryEntry[] {
+  const usage = options.usage;
+  const ranked = [...entries].sort(
+    (a, b) =>
+      (usage?.get(b.id)?.lastAt ?? b.timestamp) - (usage?.get(a.id)?.lastAt ?? a.timestamp),
+  );
+  const picked: MemoryEntry[] = [];
+  let used = 0;
+  for (const entry of ranked) {
+    if (picked.length >= PINNED_LIMIT) break;
+    if (picked.length > 0 && used + entry.text.length > PINNED_MAX_CHARS) continue;
+    used += entry.text.length;
+    picked.push(entry);
+  }
+  return picked;
 }

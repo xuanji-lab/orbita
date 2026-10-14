@@ -499,11 +499,12 @@ const MEMORY_DISTILL_TIMEOUT_MS = 60_000;
 async function recallMemories(
   sessionId: string,
   query: string,
+  turn: number,
   scope: { workspaceId: string | null; cwd: string },
 ): Promise<string | null> {
   try {
     const outcome = await requestBroker.request<MemoryRetrieveOutcome>(
-      { type: "memoryRetrieveRequest", sessionId, query, scope },
+      { type: "memoryRetrieveRequest", sessionId, query, turn, scope },
       MEMORY_RECALL_TIMEOUT_MS,
     );
     if (!outcome.ok || outcome.hits.length === 0) return null;
@@ -536,6 +537,8 @@ function scheduleMemoryDistill(
   userText: string,
   /** prompt 前 session.messages 的长度——蒸馏只认这之后新增的 assistant */
   baseline: number,
+  /** 本轮轮号（按用户消息计，1 起）——条目按轮分组的键 */
+  turn: number,
   /** 家务活模型（主进程在 sessionMemory 开着时装配）；缺席或解析失败退回会话模型 */
   choreModel?: ChoreModelPayload,
 ): void {
@@ -587,7 +590,7 @@ function scheduleMemoryDistill(
       }
       const drafts = parseDistillReply(output, Date.now());
       if (drafts.length > 0) {
-        send({ type: "memoryAppend", sessionId, entries: drafts });
+        send({ type: "memoryAppend", sessionId, turn, entries: drafts });
       }
     } catch (cause) {
       console.error("[memory] 蒸馏失败（静默，下轮自然重试新内容）", cause);
@@ -1577,12 +1580,16 @@ async function echoAndPrompt(
   }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
+  // 本轮轮号（按用户消息计，1 起）：注入账本与条目按轮分组的键，召回 / 蒸馏共用。
+  // prompt 之前的历史里数用户消息 +1 就是本轮——与 renderer 划选引用的轮号口径一致
+  //（quote-select.ts 的 quoteFromSelection）。
+  const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
   // 轮前记忆召回：块拼在 prompt 尾部（KV cache 只破尾段）；超时 / 报错 / 空命中
   // 都是 null——不注入、照常开轮，记忆的失败不该拦对话。实验开关（缺席 = 关）
   // 关着时召回与蒸馏两段一起跳过——已落的条目不丢，重新打开即恢复。
   const memoryEnabled = command.sessionMemory === true;
   const memoryBlock = memoryEnabled
-    ? await recallMemories(command.sessionId, command.text, {
+    ? await recallMemories(command.sessionId, command.text, turn, {
         workspaceId: command.workspaceId,
         cwd: command.cwd,
       })
@@ -1614,6 +1621,7 @@ async function echoAndPrompt(
       note,
       command.text,
       baseline,
+      turn,
       command.choreModel,
     );
   }

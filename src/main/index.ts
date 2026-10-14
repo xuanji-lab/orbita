@@ -13,6 +13,7 @@ import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { MemoryStore } from "./memory/store.ts";
+import { MemoryUsageStore } from "./memory/usage.ts";
 import { registerMemoryIpc } from "./memory/ipc.ts";
 import { applyMemoryAppend, applyMemoryRetrieve } from "./memory/requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -310,8 +311,10 @@ void app.whenReady().then(async () => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
-  // 会话记忆：每个作用域一个只追加 JSONL（sha1(scopeId).jsonl，见 memory/store.ts）
+  // 会话记忆：每个作用域一个只追加 JSONL（sha1(scopeId).jsonl，见 memory/store.ts）；
+  // 注入账本（injections.jsonl）同目录——审查面板按轮汇总、库里的「用过几次」都从它来
   const memory = new MemoryStore(join(configDir, "memory"));
+  const memoryUsage = new MemoryUsageStore(join(configDir, "memory"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
   // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
   // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
@@ -466,7 +469,7 @@ void app.whenReady().then(async () => {
     // 召回任何路径都回执（同 readTaskRequest）——轮前是同步等的，挂着就开不了工；
     // 追加写失败只记日志：记忆是易耗品，不该有报错通路打断对话（契约里的定性）。
     if (event.type === "memoryRetrieveRequest") {
-      void applyMemoryRetrieve(sessions, memory, event)
+      void applyMemoryRetrieve(sessions, memory, memoryUsage, event)
         .then((outcome) => agentHost.answerMemoryRetrieve(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerMemoryRetrieve(event.requestId, {
@@ -578,9 +581,9 @@ void app.whenReady().then(async () => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
-  // 记忆管理面（memory:list / memory:remove，设置 › 记忆）：与 agent 侧那条按 sessionId
-  // 问的路子共用同一个 MemoryStore，只是作用域由 renderer 按工作区显式给出
-  registerMemoryIpc(memory);
+  // 记忆管理面（memory:*，设置 › 记忆库 / 聊天摘抄 / 审查面板）：与 agent 侧那条按
+  // sessionId 问的路子共用同一个 MemoryStore，只是作用域按 token 寻址
+  registerMemoryIpc({ memory, usage: memoryUsage, sessions, workspaces });
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
