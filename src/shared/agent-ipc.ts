@@ -362,6 +362,17 @@ export interface ProviderSecrets {
 }
 
 /**
+ * 家务活模型（设置里的 choreModel）连密钥面的载荷。**主进程解好再发**：runtime
+ * 不读设置也不读密钥库，只收数据（同开轮命令的 provider）。generateTitle 的
+ * `model` 与 submit / interrupt 的 `choreModel` 共用这一份形状——同一件家务、
+ * 同一种装配。缺席（没配置 / provider 已删 / 密钥取不到）= 这件家务退回会话模型。
+ */
+export interface ChoreModelPayload {
+  provider: ProviderSecrets;
+  modelId: string;
+}
+
+/**
  * `provider:oauth-login` 的入参。登录即保存：主进程成功后 upsert 这条 provider
  * （scheme oauth）并落盘凭据。重登录（create=false）时模型清单沿用盘上的——
  * 换令牌不该把用户配好的模型一并抹掉。
@@ -592,9 +603,17 @@ export type AgentCommand =
       /**
        * 实验功能「会话记忆」的开关（settings.experimentalFeatures["session-memory"]）。
        * **主进程从设置装配**（同 pdfCitations）。开着时 runtime 才做轮前召回与
-       * 轮后蒸馏；缺席 = 关
+       * 轮后蒸馏；缺席 = 关。蒸馏**只蒸正常结束的轮**——被打断（无论有没有
+       * 半截回答）或以报错收场的轮不蒸，半截与张冠李戴的条目比没有更糟
        */
       sessionMemory?: boolean;
+      /**
+       * 蒸馏用的工作模型（设置里的 choreModel）。**只在 sessionMemory 开着时主进程
+       * 才装配**：蒸馏是家务不是对话，关着时连蒸馏都没有，这个字段就是死重。
+       * 缺席或 runtime 解析不到 = 蒸馏退回会话模型与账本密钥（同 generateTitle
+       * 的 model——家务不该因为一个删掉的 provider 停掉）
+       */
+      choreModel?: ChoreModelPayload;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -611,7 +630,7 @@ export type AgentCommand =
        * 缺席 = 用会话当前的模型（原有行为）；指的 provider 已删或解析失败时
        * 主进程同样不带，标题不因此停掉。
        */
-      model?: { provider: ProviderSecrets; modelId: string };
+      model?: ChoreModelPayload;
     }
   | {
       /**
@@ -678,8 +697,10 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
-      /** 实验功能「会话记忆」的开关，语义同 submit（缺席 = 关：不召回也不蒸馏） */
+      /** 实验功能「会话记忆」的开关，语义同 submit（缺席 = 关：不召回也不蒸馏；只蒸正常结束的轮） */
       sessionMemory?: boolean;
+      /** 蒸馏用的工作模型（家务活模型），语义同 submit——只在 sessionMemory 开着时装配 */
+      choreModel?: ChoreModelPayload;
     }
   | {
       /**
