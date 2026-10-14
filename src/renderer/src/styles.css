@@ -3981,12 +3981,20 @@ button.panel-group-toggle:hover {
 .ileaf.dim {
   opacity: 0.22;
 }
+/* 跨岗桥（按岗位视图）：同一事件存在几个岗位里——桥没错，但多了就成蛛网。平时是「雾」：
+   淡到 12%、细虚线，只给一个隐约的连接感；选中一片叶时它连出去的桥亮起（.lit），可追溯。
+   用户 2026-10-14 定：「dashed and being transparent … like fog」。 */
 .ibridge {
   stroke: var(--color-accent);
   stroke-dasharray: 1.5 3.5;
   stroke-linecap: round;
-  stroke-opacity: 0.75;
-  stroke-width: 1.3;
+  stroke-opacity: 0.12;
+  stroke-width: 0.9;
+  transition: stroke-opacity var(--duration-fast, 120ms);
+}
+.ibridge.lit {
+  stroke-opacity: 0.9;
+  stroke-width: 1.4;
 }
 /* 按提问视图：共享叶到各中心的连线是实线、细淡（原型 .bridge.ego）；虚线只给跨岗桥 */
 .ibridge.ego {

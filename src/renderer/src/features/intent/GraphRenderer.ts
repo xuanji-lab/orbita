@@ -260,12 +260,8 @@ export class GraphRenderer {
       const path = el("path", {
         class: link.bridge === true ? "ibridge" : link.ego === true ? `ibridge ego${link.dim === true ? " dim" : ""}` : "ibr",
         fill: "none",
-        ...(isBridge
-          ? scene.dense && link.bridge === true
-            // 密集时跨岗桥退到背景：25 根满饱和虚线会把枝盖掉（2026-10-14 真机）
-            ? { "stroke-width": 0.8, "stroke-opacity": 0.3 }
-            : {}
-          : { "stroke-width": link.w ?? 1, "stroke-opacity": link.op ?? 0.5 }),
+        // 跨岗桥的粗细与透明度走 CSS（.ibridge 雾态 / .ibridge.lit 追溯态），这里不写内联
+        ...(isBridge ? {} : { "stroke-width": link.w ?? 1, "stroke-opacity": link.op ?? 0.5 }),
       }) as SVGPathElement;
       (isBridge ? bridges : links).push(path);
       const leafEnd = link.b.kind === "leaf" ? link.b : null;
@@ -380,6 +376,13 @@ export class GraphRenderer {
       const lit = activeTurnId !== null && node.id === `soma:centre:${activeTurnId}`;
       const dim = activeTurnId !== null && !lit;
       handle.root.setAttribute("class", `isoma${node.past ? " past" : ""}${dim ? " dim" : ""}${lit ? " lit" : ""}`);
+    }
+    // 跨岗桥平时是「雾」，选中一片叶时它连出去的桥亮起来——同一事件存在几个岗位里，
+    // 点一下就能顺着桥追到它在别的岗位的那片叶（2026-10-14 用户：桥没错，要像雾，但要可追溯）
+    for (const link of this.linkEls) {
+      if (link.styled || !link.path.classList.contains("ibridge") || link.path.classList.contains("ego")) continue;
+      const touches = (node: SimNode): boolean => node.kind === "leaf" && (node as LeafNode).rowKey === selKey;
+      link.path.setAttribute("class", selKey !== null && (touches(link.a) || touches(link.b)) ? "ibridge lit" : "ibridge");
     }
     for (const link of this.linkEls) {
       if (!link.styled) continue;
