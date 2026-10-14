@@ -42,7 +42,7 @@ import {
 import type { IntentConfirmDecision, IntentConfirmDraft } from "../../../../shared/intent-confirm.ts";
 import { MarkdownBlock } from "./MarkdownBlock.tsx";
 import { locateQuote } from "./quote-select.ts";
-import { closeOpenFence, markScrollTop, windowCounts } from "./conv-window.ts";
+import { closeOpenFence, EXCERPT_SKIP, excerptMode, excerptNeedle, markScrollTop, windowCounts } from "./conv-window.ts";
 import { useDictation } from "../voice/useDictation.ts";
 import { DictationStatus } from "../voice/DictationStatus.tsx";
 
@@ -61,7 +61,9 @@ function autofit(el: HTMLTextAreaElement | null): void {
 }
 
 /**
- * 把摘句在渲染好的 markdown 里高亮成 <mark>：locateQuote 忽略空白差异找到起止。
+ * 把摘句在渲染好的 markdown 里高亮成 <mark>：locateQuote 按 intent-lab 的宽松口径（忽略空白 /
+ * markdown 符号 / 引号，EXCERPT_SKIP；行首列表标记先去掉，excerptNeedle）找到起止——服务端说
+ * located 的，这里也要找得到。
  * 起止在同一块级元素里（段落 / 列表项）：extractContents 整个抽出来包**一个** mark
  * （跨 strong/em 边界也行——部分选中的行内元素被克隆进片段），一个摘句一个高亮；
  * 跨块（段落边界）包一个会出非法嵌套，退回逐文本节点分段包。
@@ -76,7 +78,7 @@ function markExcerpt(root: HTMLElement | null, excerpt: string): boolean {
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) nodes.push(node as Text);
-  const at = locateQuote(nodes.map((node) => node.data), excerpt);
+  const at = locateQuote(nodes.map((node) => node.data), excerptNeedle(excerpt), EXCERPT_SKIP);
   if (at === null) return false;
   const startNode = nodes[at.start.node];
   const endNode = nodes[at.end.node];
@@ -119,9 +121,13 @@ function markExcerpt(root: HTMLElement | null, excerpt: string): boolean {
  *
  * 窗口元数据（qWindow / aWindow，契约 2026-10-14 增补）：
  * - cutBefore / cutAfter：区首 / 区尾一行小字「… 前面还有 N 字」，点了 = 在辅助对话打开；
- * - located=false：摘句不是逐字原文——不高亮、从头显示、加一行说明；
- * - fallback=true 或摘句为空：从头显示、不高亮、不说话（A 的摘句经常是空的，正常）；
- * - 没有窗口元数据（旧服务端）：退回旧行为——全文里逐字找摘句，找到才高亮。
+ * - 摘句怎么对待见 excerptMode：fallback=true 或摘句为空 → 从头显示、不高亮、不说话
+ *   （fallback 优先：服务端兜底时 located=false 与 fallback=true 同时发）；located=false 且
+ *   fallback=false → 从头显示、不高亮，加一行「未定位」；没有窗口元数据（旧服务端）→ 全文里找。
+ *
+ * 「用户手动滚过」的闩：记下程序自己摆到的 scrollTop，scroll 事件里位置与它不符就是用户动过
+ * ——滚轮、触摸、拖滚动条、键盘 PageDown 一并覆盖。不听 wheel：正文没溢出时滚轮滚的是页面，
+ *   听 wheel 会误落闩。
  */
 function ConvArea(props: {
   who: string;
@@ -140,48 +146,47 @@ function ConvArea(props: {
   const bodyRef = useRef<HTMLDivElement>(null);
   // 用户手动滚过的闩：一旦自己动手，宽度变化 / effect 重跑都不再拉回高亮处
   const userScrolled = useRef(false);
+  // 程序上一次摆到的 scrollTop（读回值，已被浏览器夹过）；scroll 事件里与它不符 = 用户动过
+  const autoTop = useRef(0);
   const counts = windowCounts(props.window, props.text.length);
-  const notLocated = props.window?.located === false;
-  const noMark = props.excerpt.trim() === "" || props.window?.fallback === true || notLocated;
+  const mode = excerptMode(props.window, props.excerpt);
+
+  /** 把本区的高亮摆到居中（没有高亮就回到开头）；只动本区 scrollTop，不用 scrollIntoView（会带动外层） */
+  const place = (scroller: HTMLDivElement, body: HTMLDivElement): void => {
+    const marks = [...body.querySelectorAll("mark.intent-mark")];
+    const first = marks[0];
+    const last = marks[marks.length - 1];
+    if (first === undefined || last === undefined) {
+      scroller.scrollTop = 0;
+    } else {
+      const cbox = scroller.getBoundingClientRect();
+      const top = first.getBoundingClientRect().top - cbox.top + scroller.scrollTop;
+      const bottom = last.getBoundingClientRect().bottom - cbox.top + scroller.scrollTop;
+      scroller.scrollTop = markScrollTop(top, bottom, scroller.clientHeight);
+    }
+    autoTop.current = scroller.scrollTop;
+  };
 
   // 标高亮 + 滚到位（useLayoutEffect：绘制前摆好，不闪）
   useLayoutEffect(() => {
     const body = bodyRef.current;
     const scroller = scrollRef.current;
     if (body === null || scroller === null) return;
-    const marked = noMark ? false : markExcerpt(body, props.excerpt);
-    if (userScrolled.current) return;
-    if (!marked) {
-      scroller.scrollTop = 0;
-      return;
-    }
-    const marks = [...body.querySelectorAll("mark.intent-mark")];
-    const first = marks[0];
-    const last = marks[marks.length - 1];
-    if (first === undefined || last === undefined) return;
-    const cbox = scroller.getBoundingClientRect();
-    const top = first.getBoundingClientRect().top - cbox.top + scroller.scrollTop;
-    const bottom = last.getBoundingClientRect().bottom - cbox.top + scroller.scrollTop;
-    scroller.scrollTop = markScrollTop(top, bottom, scroller.clientHeight);
-  }, [props.text, props.excerpt, noMark]);
+    if (mode === "mark") markExcerpt(body, props.excerpt);
+    if (!userScrolled.current) place(scroller, body);
+  }, [props.text, props.excerpt, mode]);
 
-  // 宽度变化（栏拖宽 / 窗口缩放）重排后重摆高亮；用户滚过就不动
+  // 尺寸变化（栏拖宽 / 窗口缩放让正文重排、字体晚到改了行高）后重摆高亮；用户滚过就不动。
+  // 可视区与正文都盯：可视区被 max-height 卡住时，正文长高不会触发可视区的回调
   useEffect(() => {
     const scroller = scrollRef.current;
-    if (scroller === null) return;
+    const body = bodyRef.current;
+    if (scroller === null || body === null) return;
     const observer = new ResizeObserver(() => {
-      if (userScrolled.current) return;
-      const body = bodyRef.current;
-      const first = body?.querySelector("mark.intent-mark");
-      if (body === undefined || body === null || first === null || first === undefined) return;
-      const marks = [...body.querySelectorAll("mark.intent-mark")];
-      const last = marks[marks.length - 1] ?? first;
-      const cbox = scroller.getBoundingClientRect();
-      const top = first.getBoundingClientRect().top - cbox.top + scroller.scrollTop;
-      const bottom = last.getBoundingClientRect().bottom - cbox.top + scroller.scrollTop;
-      scroller.scrollTop = markScrollTop(top, bottom, scroller.clientHeight);
+      if (!userScrolled.current) place(scroller, body);
     });
     observer.observe(scroller);
+    observer.observe(body);
     return () => observer.disconnect();
   }, []);
 
@@ -197,12 +202,15 @@ function ConvArea(props: {
   return (
     <div className="intent-conv-turn">
       <div className="intent-conv-who">{props.who}</div>
-      {notLocated && <div className="intent-conv-located-note">{t.chat.recall.confirm.excerptNotLocated}</div>}
+      {mode === "not-located" && (
+        <div className="intent-conv-located-note">{t.chat.recall.confirm.excerptNotLocated}</div>
+      )}
       <div
         ref={scrollRef}
         className="intent-conv-scroll scroll"
-        onWheel={() => (userScrolled.current = true)}
-        onTouchMove={() => (userScrolled.current = true)}
+        onScroll={(event) => {
+          if (Math.abs(event.currentTarget.scrollTop - autoTop.current) > 1) userScrolled.current = true;
+        }}
       >
         {counts !== null && counts.before > 0 && cutHint(counts.before, t.chat.recall.confirm.moreBefore(counts.before))}
         <div ref={bodyRef} className="intent-conv-md">

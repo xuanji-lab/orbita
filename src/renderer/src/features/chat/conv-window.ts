@@ -8,6 +8,40 @@
 import type { ExcerptWindow } from "../../../../shared/intent-edges.ts";
 
 /**
+ * 摘句高亮时比对跳过的字符——与 intent-lab 定位摘句的口径（src/excerpt-window.ts 的 SKIP）一致：
+ * 空白、markdown 符号（* _ ` # >）、全半角引号（含 CJK 角引号）。口径不一致会出现「服务端说
+ * located=true、卡片却找不到」（2026-10-14 真机：摘句省掉了原文里的「，高亮丢失）。
+ * 不带 g 标志：RegExp.test 带 g 会记 lastIndex，逐字符调用结果会跳。
+ */
+export const EXCERPT_SKIP = /[\s*_`#>"'“”‘’「」『』]/;
+
+/**
+ * 摘句拿去和渲染文本比对前的整理：去掉行首的列表标记（`- ` / `+ ` / `1. ` / `1) `）——摘句跨列表项
+ * 时带着它们，而渲染后的 <li> 文本里没有（标记是 CSS 画的）。`* ` 与 `> `、`#` 已在 EXCERPT_SKIP 里。
+ * 只动行首：句中的「-」「1.」是正文。
+ */
+export function excerptNeedle(excerpt: string): string {
+  return excerpt.replace(/^[ \t]*(?:[-+]|\d{1,3}[.)])[ \t]+/gm, "");
+}
+
+/**
+ * 一个滚动区怎么对待摘句：
+ * - "mark"：高亮并滚到居中；
+ * - "plain"：从头显示、不高亮、不说话——fallback=true（服务端退回原文开头：摘句为空 / 就是整段
+ *   原文 / 没找到）或摘句为空；fallback 优先于 located：服务端会同时发 located=false +
+ *   fallback=true，这时不该说「未定位」；
+ * - "not-located"：从头显示、不高亮，加一行「摘句不是逐字原文，未定位」——located=false 且
+ *   fallback=false（有摘句、有窗口，就是对不上）。
+ * 没有窗口元数据（旧服务端）且摘句非空："mark"（全文里找，找到才高亮）。
+ */
+export function excerptMode(win: ExcerptWindow | undefined, excerpt: string): "mark" | "plain" | "not-located" {
+  if (excerpt.trim() === "") return "plain";
+  if (win === undefined) return "mark";
+  if (win.fallback) return "plain";
+  return win.located ? "mark" : "not-located";
+}
+
+/**
  * 窗口截断可能把代码 fence 劈成奇数个 ``` ——markdown 会把后半截全当代码吃掉。
  * 奇数时在末尾补一个闭合 fence（只是显示，不写回数据）。~~~ fence 同理。
  */
