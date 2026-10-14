@@ -68,6 +68,30 @@ function escapeXml(value: string): string {
 }
 
 /**
+ * 映射目录的末段名能不能放进 LogonCommand 里那条不加引号的 junction 命令。
+ *
+ * 为什么只能查末段名：MappedFolder 没有客机路径参数，映射目录只会落在沙箱桌面的
+ * `<目录名>/` 下，所以**末段名**（basename）就是沙箱里那一段；宿主路径前面的空格 / 中文
+ * 都不参与那条命令，不该被拦。
+ *
+ * 为什么不能带空格 / cmd 特殊字符：整条命令包在 `cmd.exe /c "…"` 里，路径再各自套一层
+ * 引号会把自己绕死（cmd 的引号规则与 XML 转义叠加），所以 `mklink /J C:\orbita-bridge
+ * C:\…\Desktop\my bridge` 会被 cmd 切成两个参数——junction 建不成，桥也就不存在。
+ * 以前这条约束只活在注释里（2026-10-14 审查意见 F：让它可执行）。
+ *
+ * 返回人话错误（带上是哪个目录），没问题回 null。
+ */
+export function junctionPathIssue(bridgeDir: string, outputDir: string): string | null {
+  const names = [basename(bridgeDir), basename(outputDir)];
+  const bad = names.find((name) => /[\s&()^|<>%"]/.test(name));
+  if (bad === undefined) return null;
+  return (
+    `映射目录的末段名不能带空格或 cmd 特殊字符：「${bad}」——.wsb 里的 junction 命令不加引号，` +
+    "会被 cmd 切成两个参数。把 guest 桥 / 输出目录放到不含这些字符的路径下再启动。"
+  );
+}
+
+/**
  * 渲染 .wsb。两个坑都处理在明面上：
  *  - XML 转义：宿主路径可含空格 / 中文 / &，全部过 escapeXml（含命令串里的 && → &amp;&amp;）；
  *  - 沙箱内路径：MappedFolder 没有客机路径参数，只会落在沙箱桌面 <目录名>/ 下。协议要求
@@ -205,6 +229,11 @@ export class SandboxController {
         error: `找不到 ${this.deps.sandboxExePath}——Windows 沙箱功能可能未启用，先「检测能力」看开启指引`,
       };
     }
+    // LogonCommand 里那条 junction 命令不加引号（理由见 junctionPathIssue）：末段名带空格 /
+    // cmd 特殊字符的话它会被切坏——宁可不启动，也不落一份跑不起来的 .wsb
+    const outputDir = join(this.deps.computerUseDir, "out");
+    const junctionIssue = junctionPathIssue(this.deps.bridgeDir, outputDir);
+    if (junctionIssue !== null) return { ok: false, error: junctionIssue };
 
     const generation = ++this.generation;
     this.bridge = null;
@@ -212,7 +241,6 @@ export class SandboxController {
     this.transition("starting");
     try {
       // .wsb 原子落盘（临时文件 + rename 的仓规同样管它）；读写映射的 out 目录顺手建好
-      const outputDir = join(this.deps.computerUseDir, "out");
       await mkdir(outputDir, { recursive: true });
       // 上一局残留的通告与命令文件必须先清掉，不然轮询会捡到上一局沙箱的死人文件
       await rm(join(outputDir, BRIDGE_INFO_FILE), { force: true });
