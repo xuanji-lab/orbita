@@ -38,6 +38,7 @@ import {
   type SettingsPatch,
 } from "@shared/settings";
 import type { IntentHealth } from "@shared/intent-lab";
+import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
 import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
@@ -689,6 +690,12 @@ function IntentSettingsSection(props: {
         <span className="set-row-head">
           <span className="set-row-name">{t.settings.intentChannel}</span>
           <span className="set-row-hint">{t.settings.intentChannelHint}</span>
+          {/* 渠道在服务端不可用就就地说（2026-10-15 联调）：/recall 会 400，提示里带上修法 */}
+          {health !== "checking" &&
+            health !== null &&
+            intentChannelUnavailable(effective.channel, health.s3Presets) === true && (
+              <span className="set-row-hint">{t.settings.intentChannelMissing(effective.channel)}</span>
+            )}
         </span>
         <div className="set-row-ctl">
           <span className="set-chips" role="group" aria-label={t.settings.intentChannel}>

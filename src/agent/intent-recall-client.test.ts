@@ -136,6 +136,31 @@ test("连接失败（端口没人听）：INTENT_LAB_UNREACHABLE 且可重试", 
   }
 });
 
+test("非 200：状态码与服务端正文里的 error 一起透传（2026-10-15 联调教训）", async () => {
+  const server: Server = createServer((req, res) => {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "S3 预设 deepseek 需要 endpoints.deepseek：端点 deepseek 未配置或缺 baseUrl / apiKey / model" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+  try {
+    const outcome = await runIntentRecall(
+      { ...INPUT, baseUrl: `http://127.0.0.1:${port}` },
+      new AbortController().signal,
+      () => {},
+    );
+    assert.equal(outcome.kind, "error");
+    if (outcome.kind === "error") {
+      assert.equal(outcome.stage, "config");
+      assert.match(outcome.message, /HTTP 400 — S3 预设 deepseek 需要 endpoints\.deepseek/);
+      assert.equal(outcome.retryable, true);
+    }
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("挂在流上时外部取消能打断 reader", { timeout: 5000 }, async () => {
   await withServer(
     (_respond, _req) => {

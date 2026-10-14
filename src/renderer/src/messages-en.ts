@@ -470,6 +470,7 @@ export const en = {
     intentChannelProma: "Proma",
     intentChannelDeepseek: "DeepSeek (your own key)",
     intentChannelHint: "Which service the recall pipeline (gate, understand, scoring, review) calls.",
+    intentChannelMissing: (preset: string) => `The intent-lab config has no \"${preset}\" S3 preset yet — add a same-named endpoint under endpoints, or switch back to Proma`,
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */

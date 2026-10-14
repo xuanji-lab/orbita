@@ -433,6 +433,7 @@ export const zh: Messages = {
     intentChannelProma: "Proma",
     intentChannelDeepseek: "DeepSeek 官方（自己的密钥）",
     intentChannelHint: "召回的各环节（门卫、理解、打分、审核）调哪家的服务。",
+    intentChannelMissing: (preset) => `服务端还没配 ${preset} 这个召回预设：在 intent-lab 配置的 endpoints 里补同名端点，或换回 Proma`,
     agent: "智能体",
     autoCompact: "自动压缩",
     autoCompactInfoLead: "剩余上下文降到这一档时，把较早的历史折成摘要 · 关闭则只能手动 ",

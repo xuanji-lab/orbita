@@ -170,13 +170,31 @@ export async function runIntentRecall(
     { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": String(Buffer.byteLength(payload)) } },
     (res) => {
       if (res.statusCode !== 200) {
-        finish(signal.aborted ? { kind: "cancelled" } : {
-          kind: "error",
-          stage: "config",
-          message: `${INTENT_LAB_UNREACHABLE} (HTTP ${res.statusCode})`,
-          retryable: true,
+        // 非 200 的正文带着服务端原因（如「S3 预设 deepseek 需要 endpoints.deepseek」），
+        // 拼进括号一起透传——只报状态码的话，联调时只能干瞪 400（2026-10-15 真机教训）
+        let body = "";
+        res.on("data", (chunk: Buffer) => {
+          if (body.length < 2048) body += chunk.toString("utf8");
         });
-        res.resume(); // 把非 200 的身体放干净再关
+        res.on("end", () => {
+          if (signal.aborted) {
+            finish({ kind: "cancelled" });
+            return;
+          }
+          let detail = "";
+          try {
+            const parsed = JSON.parse(body) as Record<string, unknown>;
+            if (typeof parsed["error"] === "string") detail = parsed["error"].replace(/\s+/g, " ").slice(0, 300);
+          } catch {
+            // 正文不是 JSON 就不带 detail，状态码照报
+          }
+          finish({
+            kind: "error",
+            stage: "config",
+            message: `${INTENT_LAB_UNREACHABLE} (HTTP ${res.statusCode}${detail === "" ? "" : ` — ${detail}`})`,
+            retryable: true,
+          });
+        });
         return;
       }
       const decoder = new StringDecoder("utf8");

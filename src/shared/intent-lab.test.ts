@@ -12,6 +12,7 @@ import {
   ingestRowOf,
   userSpeechIn,
   intentQuestionText,
+  intentChannelUnavailable,
   type IntentHealth,
 } from "./intent-lab.ts";
 import { CLOSING_SCAN_PROMPT } from "./closing-scan.ts";
@@ -105,4 +106,11 @@ test("ingestRowOf：q 用意图口径、a 取最后一条 assistant 终态的最
   // 没有任何回答 → a 空串（契约：空回答也送）
   const empty = ingestRowOf("s1", "t1", "标题", "问", [], [], 5);
   assert.equal(empty.a, "");
+});
+
+test("intentChannelUnavailable：s3Presets 判渠道可用性；缺席（旧服务）= 判不了", () => {
+  assert.equal(intentChannelUnavailable("deepseek", ["deepseek", "proma"]), false);
+  assert.equal(intentChannelUnavailable("deepseek", ["proma"]), true);
+  assert.equal(intentChannelUnavailable("proma", []), true);
+  assert.equal(intentChannelUnavailable("deepseek", undefined), null);
 });

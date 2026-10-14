@@ -64,6 +64,17 @@ export function parseIntentChannel(raw: unknown): IntentChannel {
   return raw === "deepseek" ? "deepseek" : "proma";
 }
 
+/**
+ * 渠道在服务端是否不可用：/health 的 s3Presets 里没有同名的 S3 预设。渠道发
+ * /recall 的 models 每个阶段都点名这个预设名，服务端没有就是 400（2026-10-15
+ * 联调：Windows 真机在 config 没配 endpoints.deepseek 时整条召回 400）。
+ * s3Presets 缺席（旧服务）= 判不了，返回 null，调用方不报警。
+ */
+export function intentChannelUnavailable(channel: IntentChannel, s3Presets: readonly IntentS3Preset[] | undefined): boolean | null {
+  if (s3Presets === undefined) return null;
+  return !s3Presets.includes(channel);
+}
+
 /* ---------------------------------------------------------------- /health */
 
 /** GET /health 的形状（contract 2–7 同一张脸；7 起只加过事件与 /edges，字段面没动）。 */
