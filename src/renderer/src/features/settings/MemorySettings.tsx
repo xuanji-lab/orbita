@@ -132,7 +132,8 @@ export function MemorySettings() {
                   <span className="mem-row-foot">
                     {entry.keywords.length > 0 && (
                       <span className="mem-kws" aria-label={t.settings.memoryKeywords}>
-                        {entry.keywords.map((keyword) => (
+                        {/* 去重再渲染：蒸馏侧不保证关键词互异，重复词会让 React key 相撞 */}
+                        {[...new Set(entry.keywords)].map((keyword) => (
                           <span className="mem-kw" key={keyword} title={keyword}>
                             {keyword}
                           </span>
