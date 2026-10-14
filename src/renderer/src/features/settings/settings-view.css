@@ -566,11 +566,16 @@
  * import ProvidersView，样式已在产物里）；这里只补实验卡自己的部分：
  * 卡不是按钮（去 cursor / hover 抬升）、展开横跨两列、头部图标砖、
  * 底部发丝线 + 最近一次更新、展开的日志与安静文字钮。 */
+/* 字的三层（一张卡最多三档，字号与颜色同步降级，不交叉）：
+ *   名字 base + semibold + primary → 说明 sm + secondary → 底行元数据 xs + tertiary。
+ * 之前说明是 tertiary、底行反而是 secondary，PR 号又是链接蓝——最不要紧的一行最抢眼
+ * （2026-10-14 用户：「experimental 的字有点随意」）。 */
 .exp-lead {
   margin: 0;
+  max-width: 72ch;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
 }
 
 /* 卡不是可点的（开关 / 链接 / 展开钮各自可点）：去掉厂商卡的指针与 hover 抬升。
@@ -624,7 +629,7 @@
   margin: 0;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
 }
 
 /* 底部：发丝线下面一行「最近一次更新」——PR 号 + 一句话（超长省略）+ 展开钮 */
@@ -643,23 +648,24 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
-/* PR 号：机器事实，mono；无 PR 的旧条目是灰色的 — */
+/* PR 号：机器事实，mono；无 PR 的旧条目是灰色的 —。静止时与底行同灰，
+   悬停才显链接色——它是可点的元数据，不是卡片的主角 */
 .exp-pr {
   flex: none;
   min-width: 34px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
 }
 a.exp-pr {
   text-decoration: none;
-  color: var(--color-chat-link);
 }
 a.exp-pr:hover {
+  color: var(--color-chat-link);
   text-decoration: underline;
 }
 
@@ -674,8 +680,8 @@ a.exp-pr:hover {
   border-radius: var(--radius-md);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   cursor: pointer;
   transition: var(--transition-hover);
 }
