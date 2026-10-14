@@ -312,7 +312,11 @@ function highlightQuote(pane: HTMLElement, messageId: string, text: string): voi
 
 /**
  * 划选引用的入口（Proma 的 AgentHistorySelectionLayer 同款交互）：在转录里划选一段文字，
- * 松手后选区上方浮出「引用」，点了就进输入框的引用 chip。
+ * 松手后选区上方浮出一条小工具栏——「复制」进剪贴板、「引用」进输入框的引用 chip。
+ *
+ * 复制拷的是**选区原文**（`selection.toString()`，保留换行），不是引用用的规整版：
+ * 引用要压空白、截上限是为了进 prompt，拷到别处的东西应该和用户看到的一样。
+ * 复制后按钮原地变「已复制」、约一秒后收起，选区留着（用户可能还想再引用）。
  *
  * - 只认**单条消息内**的选区（起止落在同一个 `[data-quote-id]` 块里）：跨消息的一段
  *   说不清出处，跳不回去。
@@ -326,7 +330,15 @@ function QuoteSelectionLayer(props: {
   onQuote: (quote: TextQuote) => void;
 }) {
   const t = useT();
-  const [candidate, setCandidate] = useState<{ quote: TextQuote; x: number; top: number; bottom: number } | null>(null);
+  const [candidate, setCandidate] = useState<{
+    quote: TextQuote;
+    /** 选区原文（复制用，保留换行；quote.text 是规整过的） */
+    raw: string;
+    x: number;
+    top: number;
+    bottom: number;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
   const transcriptRef = useRef(props.transcript);
   transcriptRef.current = props.transcript;
   const { paneRef } = props;
@@ -355,15 +367,21 @@ function QuoteSelectionLayer(props: {
         return;
       }
       const rect = range.getBoundingClientRect();
-      setCandidate({ quote, x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
+      setCopied(false);
+      setCandidate({ quote, raw: selection.toString(), x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
     };
-    const schedule = (): void => {
+    const schedule = (event: Event): void => {
+      // 松手落在工具栏自己上（点复制 / 引用）不是一次新划选，不重新捕获：
+      // 重捕获会把刚亮起的「已复制」在 60ms 后打回「复制」，1 秒收起也就永远等不到
+      if (event.type === "pointerup" && event.target instanceof Element && event.target.closest("[data-quote-popover]") !== null) {
+        return;
+      }
       window.clearTimeout(timer);
       // 等浏览器把选区落定（双击选词、三击选段的 selection 在 pointerup 之后才定）
       timer = window.setTimeout(capture, 60);
     };
     const onKeyUp = (event: KeyboardEvent): void => {
-      if (event.shiftKey || event.key.startsWith("Arrow")) schedule();
+      if (event.shiftKey || event.key.startsWith("Arrow")) schedule(event);
     };
     const onPointerDown = (event: PointerEvent): void => {
       if (event.target instanceof Element && event.target.closest("[data-quote-popover]") !== null) return;
@@ -384,20 +402,26 @@ function QuoteSelectionLayer(props: {
     };
   }, [paneRef]);
 
+  // 「已复制」停留约一秒后收起工具栏；选区不动（用户可能还想引用）
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => {
+      setCopied(false);
+      setCandidate(null);
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
   if (candidate === null) return null;
   // 贴着窗口顶的选区往上弹会被裁掉，改弹到选区下方
   const below = candidate.top < 56;
   return createPortal(
-    <button
-      type="button"
+    <div
+      role="toolbar"
+      aria-label={t.quote.toolbar}
       data-quote-popover
-      title={t.quote.addTitle}
+      className="quote-toolbar"
       onPointerDown={(event) => event.preventDefault()}
-      onClick={() => {
-        props.onQuote(candidate.quote);
-        window.getSelection()?.removeAllRanges();
-        setCandidate(null);
-      }}
       style={{
         position: "fixed",
         left: candidate.x,
@@ -406,22 +430,41 @@ function QuoteSelectionLayer(props: {
         zIndex: 40,
         display: "inline-flex",
         alignItems: "center",
-        gap: "var(--space-1)",
-        height: 30,
-        padding: "0 var(--space-3)",
+        gap: 2,
+        padding: 2,
         border: "1px solid var(--color-border-subtle)",
         borderRadius: "var(--radius-md)",
         background: "var(--color-bg-panel)",
         boxShadow: "var(--shadow-popover)",
-        color: "var(--color-text-primary)",
-        fontSize: "var(--font-size-base)",
-        whiteSpace: "nowrap",
-        cursor: "pointer",
       }}
     >
-      <Icon name="quote" size={13} strokeWidth={1.8} />
-      {t.quote.add}
-    </button>,
+      <button
+        type="button"
+        title={copied ? t.chat.copied : t.quote.copyTitle}
+        aria-label={copied ? t.chat.copied : t.quote.copyTitle}
+        onClick={() => {
+          void navigator.clipboard.writeText(candidate.raw).then(
+            () => setCopied(true),
+            () => setCandidate(null),
+          );
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.8} />
+        {copied ? t.chat.copied : t.quote.copy}
+      </button>
+      <button
+        type="button"
+        title={t.quote.addTitle}
+        onClick={() => {
+          props.onQuote(candidate.quote);
+          window.getSelection()?.removeAllRanges();
+          setCandidate(null);
+        }}
+      >
+        <Icon name="quote" size={13} strokeWidth={1.8} />
+        {t.quote.add}
+      </button>
+    </div>,
     document.body,
   );
 }

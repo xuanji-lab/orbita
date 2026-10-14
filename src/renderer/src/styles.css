@@ -1983,6 +1983,33 @@ body {
   background-color: color-mix(in srgb, var(--color-info) 26%, transparent);
 }
 
+/* 划选工具栏（复制 / 引用）：按钮的基础样式只能走 class——内联样式压不过 :hover/:active，
+ * 也会漏掉 font-family（旧的单按钮就一直是 Arial，不是应用字体） */
+.quote-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.quote-toolbar button:hover {
+  background: var(--color-bg-hover);
+}
+
+.quote-toolbar button:active {
+  background: var(--color-bg-active);
+}
+
 .quote-flash {
   animation: quote-flash 1.6s cubic-bezier(0.4, 0, 0.6, 1);
   border-radius: var(--radius-md);
