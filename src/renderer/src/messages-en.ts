@@ -1566,6 +1566,9 @@ export const en = {
     legendHigh: "Stronger",
     legendSolid: "Selected",
     legendMid: "Unsure",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    zoomFit: "Fit to canvas",
     legendSpine: "Spine",
     /** 分隔条 */
     entriesLabel: "Entries",

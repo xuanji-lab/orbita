@@ -111,6 +111,9 @@ import user from "../../../../design-system/assets/icons/lucide/user.svg?raw";
 import unlink from "../../../../design-system/assets/icons/lucide/unlink.svg?raw";
 import workflow from "../../../../design-system/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../design-system/assets/icons/lucide/x.svg?raw";
+import zoomIn from "../../../../design-system/assets/icons/lucide/zoom-in.svg?raw";
+import zoomOut from "../../../../design-system/assets/icons/lucide/zoom-out.svg?raw";
+import maximize from "../../../../design-system/assets/icons/lucide/maximize.svg?raw";
 import wrench from "../../../../design-system/assets/icons/lucide/wrench.svg?raw";
 import zap from "../../../../design-system/assets/icons/lucide/zap.svg?raw";
 
@@ -238,6 +241,10 @@ const ICONS = {
   wrench,
   x,
   zap,
+  // 意图图的缩放组（放大 / 缩小 / 适配）——2026-10-14
+  "zoom-in": zoomIn,
+  "zoom-out": zoomOut,
+  maximize,
 } as const;
 
 export type IconName = keyof typeof ICONS;

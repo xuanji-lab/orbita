@@ -125,7 +125,10 @@ export interface SomaNode extends SimPoint {
 export interface HubNode extends SimPoint {
   kind: "hub";
   id: string;
+  /** 常规倍率下显示的标签（小簇为空，免得密集时互相压住） */
   label: string;
+  /** 完整标签（来源会话名）：语义缩放放大后每个簇心都显；单条归成的枝没有名字 */
+  fullLabel: string;
   sub: boolean;
   group: string;
   count: number;
@@ -421,6 +424,7 @@ export function buildSlotScene(
       r: 3.4,
       rep: 2.4,
       label: name,
+      fullLabel: name,
       sub: false,
       group: `slot:${i + 1}`,
       count: 0,
@@ -436,7 +440,7 @@ export function buildSlotScene(
     links.push({ a: soma, b: hub, len: R * 0.27, k: 0.04, w: 1 + totals[i]! * 0.4, op: 0.5 });
   });
   const leafOf = new Map<string, LeafNode[]>();
-  const addSub = (slot: number, id: string, label: string, count: number): HubNode => {
+  const addSub = (slot: number, id: string, label: string, fullLabel: string, count: number): HubNode => {
     const hub = hubs[slot - 1]!;
     const at = place(id, { x: hub.x, y: hub.y }, options.seed, rng, R * 0.12);
     const sub: HubNode = {
@@ -449,6 +453,7 @@ export function buildSlotScene(
       r: 1.8,
       rep: 1.2,
       label,
+      fullLabel,
       sub: true,
       group: `slot:${slot}`,
       count,
@@ -498,7 +503,7 @@ export function buildSlotScene(
       }
       // 密集模式只标 ≥3 条的簇（原型规则）；常规 ≥2 条就标
       const label = list.length >= (dense ? 3 : 2) ? list[0]!.title : "";
-      const sub = addSub(slot, `hub:slot:${slot}:${sessionId}`, label, list.length);
+      const sub = addSub(slot, `hub:slot:${slot}:${sessionId}`, label, list[0]!.title, list.length);
       for (const leaf of list) addLeaf(sub, leaf, slot);
     }
     if (singles.length === 1) {
@@ -516,7 +521,7 @@ export function buildSlotScene(
       }
       for (const [first, chunk] of [...byFirstRound.entries()].sort((a, b) => a[0] - b[0])) {
         chunk.sort((a, b) => a.ts - b.ts || (a.qaId < b.qaId ? -1 : 1));
-        const sub = addSub(slot, `hub:slot:${slot}:twig:${first}`, "", chunk.length);
+        const sub = addSub(slot, `hub:slot:${slot}:twig:${first}`, "", "", chunk.length);
         for (const leaf of chunk) addLeaf(sub, leaf, slot);
       }
     }
@@ -634,6 +639,7 @@ export function buildEgoScene(
       r: centre.past ? 1.6 : 2.6,
       rep: 1.6,
       label: "",
+      fullLabel: title,
       sub: true,
       group: id,
       count: 1,

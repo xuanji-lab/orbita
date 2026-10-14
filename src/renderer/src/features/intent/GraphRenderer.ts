@@ -17,6 +17,11 @@
  *   复热，松手弹回再收敛；位移 <4px 算点击（叶子 → 滚到条目行）。
  * - 窗口失焦暂停 rAF（Electron 失焦不触发 visibilitychange，同时听 blur/focus）；
  *   `prefers-reduced-motion` 直接给收敛结果。
+ * - 缩放 / 平移（2026-10-14 用户：「图要能放大缩小，放得越大节点显示的信息越多」）：
+ *   滚轮 / 触控板捏合围绕指针缩放、拖空白平移、双击空白复位，范围 0.6–4×；**只改视图
+ *   变换**（基础映射 ⊕ 视图变换合成一个 Mapping），不碰布局坐标、不碰缓存、不触发模拟；
+ *   每个视图各记一份。语义缩放：节点形状随倍率放大，文字不放大，按屏幕倍率分三档显示
+ *   轮号 / 短标题 / 分数与联系 / 簇全名，只给可见区域内的节点上标签。
  */
 
 import {
@@ -39,6 +44,19 @@ import {
   type SimLink,
   type SimNode,
 } from "./cluster-layout.ts";
+import {
+  IDENTITY_VIEW,
+  baseMapping,
+  clipText,
+  composeMapping,
+  labelTier,
+  panBy,
+  wheelFactor,
+  zoomAround,
+  type LabelTier,
+  type Mapping,
+  type ViewTransform,
+} from "./graph-view.ts";
 
 /** 三档百分比 → 用量格同款 color-mix（nebula 色带）。 */
 export function nebulaFill(percent: number): string {
@@ -79,17 +97,11 @@ function curveD(a: { x: number; y: number }, b: { x: number; y: number }): strin
   return `M${a.x.toFixed(1)},${a.y.toFixed(1)} Q${(mx - dy * k).toFixed(1)},${(my + dx * k).toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`;
 }
 
-/** 布局空间 → 屏幕的等比映射（短边贴合、居中）。 */
-interface Mapping {
-  k: number;
-  ox: number;
-  oy: number;
-}
-
-function mappingOf(space: { w: number; h: number }, view: { w: number; h: number }): Mapping {
-  const k = Math.min(view.w / space.w, view.h / space.h);
-  return { k, ox: (view.w - space.w * k) / 2, oy: (view.h - space.h * k) / 2 };
-}
+/** 叶子短标题 / 一句联系的截断长度（语义缩放） */
+const TITLE_CHARS = 12;
+const DETAIL_CHARS = 24;
+/** 标签只给可见区域内（外扩这么多 px）的节点 */
+const LABEL_MARGIN = 24;
 
 /** 一份坐标缓存：布局空间尺寸 + 各节点在该空间里的坐标。 */
 interface CachedLayout {
@@ -100,9 +112,16 @@ interface CachedLayout {
 
 interface NodeHandle {
   root: SVGElement;
+  /** 形状组：随倍率 scale(z)（命中圆、光晕、核） */
+  shape: SVGElement;
+  /** 文字组：不随倍率缩放，位置按屏幕倍率重算 */
+  labels: SVGElement;
   core?: SVGElement;
   halo?: SVGElement;
-  round?: SVGElement;
+  /** 文字组当前按哪一档构建（变档才重建文字） */
+  tier: LabelTier | -1;
+  /** 选中态要显轮号（和档位无关） */
+  selected: boolean;
 }
 
 export class GraphRenderer {
@@ -119,7 +138,14 @@ export class GraphRenderer {
   private scene: ClusterScene | null = null;
   private view = "";
   private viewport = { w: 0, h: 0 };
+  /** 基础映射（布局空间 → 面板，等比居中）；绘制用的是它 ⊕ 视图变换 */
+  private base: Mapping = { k: 1, ox: 0, oy: 0 };
   private mapping: Mapping = { k: 1, ox: 0, oy: 0 };
+  /** 当前视图的缩放 / 平移；各视图各一份 */
+  private viewTf: ViewTransform = IDENTITY_VIEW;
+  private readonly viewTfs = new Map<string, ViewTransform>();
+  /** 视图变换变了（倍率 / 平移）的回调：React 侧刷新按钮态 */
+  private onViewChange: ((view: ViewTransform) => void) | null = null;
   private style: GraphStyle = { colorMode: "time", selKey: null, activeRound: null, activeTurnId: null };
   /** 尺寸还没量到时先存着的数据（量到后立刻构建） */
   private pending: { view: string; build: SceneBuilder } | null = null;
@@ -137,6 +163,10 @@ export class GraphRenderer {
     // 接管全部子节点：上一个实例若没清干净，这里一并清掉
     svg.replaceChildren(this.gLinks, this.gBridges, this.gNodes);
     this.gNodes.addEventListener("pointerdown", this.onPointerDown);
+    // 平移 / 缩放挂在 svg 上：节点层的 pointerdown 已 stopPropagation，拖节点不会同时平移
+    svg.addEventListener("pointerdown", this.onPanStart);
+    svg.addEventListener("wheel", this.onWheel, { passive: false });
+    svg.addEventListener("dblclick", this.onDoubleClick);
     window.addEventListener("blur", this.onInactive);
     window.addEventListener("focus", this.onActive);
     document.addEventListener("visibilitychange", this.onVisibility);
@@ -147,6 +177,10 @@ export class GraphRenderer {
     this.stopLoop();
     this.endDrag(null);
     this.gNodes.removeEventListener("pointerdown", this.onPointerDown);
+    this.svg.removeEventListener("pointerdown", this.onPanStart);
+    this.svg.removeEventListener("wheel", this.onWheel);
+    this.svg.removeEventListener("dblclick", this.onDoubleClick);
+    this.endPan();
     window.removeEventListener("blur", this.onInactive);
     window.removeEventListener("focus", this.onActive);
     document.removeEventListener("visibilitychange", this.onVisibility);
@@ -190,9 +224,13 @@ export class GraphRenderer {
     }
     this.view = view;
     this.scene = scene;
-    this.mapping = mappingOf(scene, this.viewport);
+    this.viewTf = this.viewTfs.get(view) ?? IDENTITY_VIEW;
+    this.base = baseMapping(scene, this.viewport);
+    this.mapping = composeMapping(this.base, this.viewTf);
+    this.onViewChange?.(this.viewTf);
     this.buildDom(scene);
     this.applyStyle();
+    this.refreshLabels();
     const fresh = unseededCount(scene, seed);
     if (fresh === 0 && carry === 0) {
       // 切回视图：全部节点都有上次收敛的坐标，不加热
@@ -206,6 +244,7 @@ export class GraphRenderer {
   setStyle(style: GraphStyle): void {
     this.style = style;
     this.applyStyle();
+    this.refreshLabels();
   }
 
   /** 面板尺寸变了：换映射重画（布局空间不变，等比缩放并居中）。 */
@@ -219,8 +258,95 @@ export class GraphRenderer {
       return;
     }
     if (this.scene === null) return;
-    this.mapping = mappingOf(this.scene, this.viewport);
+    this.base = baseMapping(this.scene, this.viewport);
+    this.mapping = composeMapping(this.base, this.viewTf);
     this.draw();
+    this.refreshLabels();
+  }
+
+  /* ------------------------------------------------ 对外：缩放 / 平移（只改视图变换） */
+
+  /** React 侧订阅视图变换（按钮态）；立刻回一次当前值。 */
+  subscribeView(listener: ((view: ViewTransform) => void) | null): void {
+    this.onViewChange = listener;
+    listener?.(this.viewTf);
+  }
+
+  /** 以画布中心为锚放大 / 缩小。 */
+  zoomBy(factor: number): void {
+    this.setViewTransform(zoomAround(this.viewTf, factor, this.viewport.w / 2, this.viewport.h / 2));
+  }
+
+  /** 适配：回到基础映射（全部节点都在画布内）。 */
+  fit(): void {
+    this.setViewTransform(IDENTITY_VIEW);
+  }
+
+  private setViewTransform(next: ViewTransform): void {
+    if (this.disposed) return;
+    this.viewTf = next;
+    if (this.view !== "") this.viewTfs.set(this.view, next);
+    this.mapping = composeMapping(this.base, next);
+    this.onViewChange?.(next);
+    if (this.scene === null) return;
+    this.draw();
+    this.refreshLabels();
+  }
+
+  private pointerInSvg(event: { clientX: number; clientY: number }): { x: number; y: number } {
+    const rect = this.svg.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  private onWheel = (event: WheelEvent): void => {
+    if (this.scene === null) return;
+    event.preventDefault();
+    const at = this.pointerInSvg(event);
+    this.setViewTransform(zoomAround(this.viewTf, wheelFactor(event.deltaY, event.ctrlKey), at.x, at.y));
+  };
+
+  private onDoubleClick = (event: MouseEvent): void => {
+    if (this.nodeAt(event.target) !== null) return;
+    this.fit();
+  };
+
+  private pan: { pointerId: number; last: { x: number; y: number } } | null = null;
+
+  private onPanStart = (event: PointerEvent): void => {
+    if (this.scene === null || this.pan !== null || this.drag !== null || event.button !== 0) return;
+    if (this.nodeAt(event.target) !== null) return;
+    event.preventDefault();
+    this.pan = { pointerId: event.pointerId, last: { x: event.clientX, y: event.clientY } };
+    this.svg.setPointerCapture(event.pointerId);
+    this.svg.addEventListener("pointermove", this.onPanMove);
+    this.svg.addEventListener("pointerup", this.onPanEnd);
+    this.svg.addEventListener("pointercancel", this.onPanEnd);
+    this.svg.classList.add("panning");
+  };
+
+  private onPanMove = (event: PointerEvent): void => {
+    const pan = this.pan;
+    if (pan === null || event.pointerId !== pan.pointerId) return;
+    const dx = event.clientX - pan.last.x;
+    const dy = event.clientY - pan.last.y;
+    pan.last = { x: event.clientX, y: event.clientY };
+    this.setViewTransform(panBy(this.viewTf, dx, dy));
+  };
+
+  private onPanEnd = (event: PointerEvent): void => {
+    if (this.pan === null || event.pointerId !== this.pan.pointerId) return;
+    this.endPan();
+  };
+
+  private endPan(): void {
+    const pan = this.pan;
+    if (pan === null) return;
+    this.pan = null;
+    this.svg.removeEventListener("pointermove", this.onPanMove);
+    this.svg.removeEventListener("pointerup", this.onPanEnd);
+    this.svg.removeEventListener("pointercancel", this.onPanEnd);
+    this.svg.classList.remove("panning");
+    if (this.svg.hasPointerCapture(pan.pointerId)) this.svg.releasePointerCapture(pan.pointerId);
   }
 
   /* ------------------------------------------------ 缓存 */
@@ -235,7 +361,7 @@ export class GraphRenderer {
     const cached = this.cache.get(view);
     if (cached === undefined) return undefined;
     if (cached.w === space.w && cached.h === space.h) return cached.pos;
-    const m = mappingOf(cached, space);
+    const m = baseMapping(cached, space);
     const out = new Map<string, { x: number; y: number }>();
     for (const [id, at] of cached.pos) out.set(id, { x: m.ox + at.x * m.k, y: m.oy + at.y * m.k });
     return out;
@@ -274,37 +400,33 @@ export class GraphRenderer {
     }
     for (const node of scene.nodes) {
       const hit = el("circle", { class: "ihit", r: Math.max(node.r + 6, HIT_RADIUS) });
+      // 每个节点：root（只平移）→ shape（随倍率 scale）+ labels（不缩放，位置按屏幕倍率算）
+      const shape = el("g", { class: "ishape" });
+      const labels = el("g", { class: "ilabels" });
       if (node.kind === "hub") {
         const root = el("g", { class: `ihubg${node.sub ? " sub" : ""}`, "data-node": node.id });
-        root.append(hit, el("circle", { class: "ihub", r: node.r }));
-        if (node.label !== "") {
-          const label = el("text", { class: "ihub-label", "text-anchor": "middle", y: -node.r - 5 });
-          label.textContent = node.label;
-          root.append(label);
-        }
+        shape.append(hit, el("circle", { class: "ihub", r: node.r }));
+        root.append(shape, labels);
         nodes.push(root);
-        this.handles.set(node, { root });
+        this.handles.set(node, { root, shape, labels, tier: -1, selected: false });
       } else if (node.kind === "leaf") {
         const root = el("g", { class: "ileaf", "data-node": node.id });
         const halo = el("circle", { class: "ileaf-halo", r: node.r + 4 });
         const core = el("circle", { class: "ileaf-core", r: node.r });
-        root.append(hit, halo, core);
+        shape.append(hit, halo, core);
+        root.append(shape, labels);
         nodes.push(root);
-        this.handles.set(node, { root, core, halo });
+        this.handles.set(node, { root, shape, labels, core, halo, tier: -1, selected: false });
       } else {
         const root = el("g", { class: `isoma${node.past ? " past" : ""}`, "data-node": node.id });
-        root.append(
+        shape.append(
           hit,
           el("circle", { class: "imembrane", r: node.r + 4 }),
           el("circle", { class: "isoma-core", r: node.r }),
         );
-        if (node.label !== "") {
-          const label = el("text", { class: "isoma-label", "text-anchor": "middle", y: node.r + 13 });
-          label.textContent = node.label;
-          root.append(label);
-        }
+        root.append(shape, labels);
         nodes.push(root);
-        this.handles.set(node, { root });
+        this.handles.set(node, { root, shape, labels, tier: -1, selected: false });
       }
     }
     this.gLinks.replaceChildren(...links);
@@ -327,6 +449,88 @@ export class GraphRenderer {
         curveD({ x: ox + link.a.x * k, y: oy + link.a.y * k }, { x: ox + link.b.x * k, y: oy + link.b.y * k }),
       );
     }
+  }
+
+  /**
+   * 语义缩放：按屏幕倍率（合成映射的 k）定档，重建 / 定位每个节点的文字组，形状组
+   * 按倍率 scale。只给可见区域内的节点上标签。文字不随倍率放大。
+   */
+  private refreshLabels(): void {
+    const scene = this.scene;
+    if (scene === null) return;
+    const { k, ox, oy } = this.mapping;
+    // 形状倍率：相对基础映射的放大倍数（基础映射本身已把布局空间贴合到面板）
+    const z = this.base.k > 0 ? k / this.base.k : 1;
+    const tier = labelTier(k, scene.dense);
+    const scaleAttr = `scale(${z.toFixed(3)})`;
+    for (const node of scene.nodes) {
+      const handle = this.handles.get(node);
+      if (handle === undefined) continue;
+      handle.shape.setAttribute("transform", scaleAttr);
+      const sx = ox + node.x * k;
+      const sy = oy + node.y * k;
+      const visible =
+        sx >= -LABEL_MARGIN && sx <= this.viewport.w + LABEL_MARGIN && sy >= -LABEL_MARGIN && sy <= this.viewport.h + LABEL_MARGIN;
+      if (!visible) {
+        handle.labels.setAttribute("display", "none");
+        continue;
+      }
+      handle.labels.removeAttribute("display");
+      const rz = node.r * z;
+      if (handle.tier !== tier) {
+        handle.tier = tier;
+        handle.labels.replaceChildren(...this.labelsFor(node, tier, handle.selected));
+      }
+      // 位置：围着放大后的形状摆（上方的簇名、右上的轮号、下方的标题 / 详情）
+      for (const text of handle.labels.children) {
+        const role = text.getAttribute("data-role");
+        if (role === "hub") text.setAttribute("y", String(-rz - 5));
+        else if (role === "soma") text.setAttribute("y", String(rz + 13));
+        else if (role === "round") {
+          text.setAttribute("x", String(rz + 3));
+          text.setAttribute("y", String(-rz + 1));
+        } else if (role === "title") text.setAttribute("y", String(rz + 11));
+        else if (role === "detail") text.setAttribute("y", String(rz + 22));
+      }
+    }
+  }
+
+  /** 一个节点在某一档要显示哪些文字（内容；位置由 refreshLabels 定）。 */
+  private labelsFor(node: SimNode, tier: LabelTier, selected: boolean): SVGElement[] {
+    const out: SVGElement[] = [];
+    if (node.kind === "hub") {
+      const text = tier >= 2 ? node.fullLabel : node.label;
+      if (text !== "") {
+        const label = el("text", { class: "ihub-label", "text-anchor": "middle", "data-role": "hub" });
+        label.textContent = text;
+        out.push(label);
+      }
+    } else if (node.kind === "soma") {
+      if (node.label !== "") {
+        const label = el("text", { class: "isoma-label", "text-anchor": "middle", "data-role": "soma" });
+        label.textContent = node.label;
+        out.push(label);
+      }
+    } else {
+      const dense = this.scene?.dense === true;
+      // 轮号：选中的总是显；常规倍率下只给大节点（密集时不标）；放大后每片叶都标
+      if (selected || tier >= 1 || (!dense && node.r >= 4.5)) {
+        const round = el("text", { class: "ileaf-round", "data-role": "round" });
+        round.textContent = String(node.leaf.lastRound);
+        out.push(round);
+      }
+      if (tier >= 1) {
+        const title = el("text", { class: "ileaf-title", "text-anchor": "middle", "data-role": "title" });
+        title.textContent = clipText(node.leaf.title, TITLE_CHARS);
+        out.push(title);
+      }
+      if (tier >= 2) {
+        const detail = el("text", { class: "ileaf-detail", "text-anchor": "middle", "data-role": "detail" });
+        detail.textContent = `${node.leaf.score.toFixed(2)} · ${clipText(node.leaf.edited ?? node.leaf.connection, DETAIL_CHARS)}`;
+        out.push(detail);
+      }
+    }
+    return out;
   }
 
   /** 上色 + 高亮：fill / stroke / class / 轮号文字。坐标绝不动。 */
@@ -358,18 +562,10 @@ export class GraphRenderer {
       if (selected || node.shared || node.leaf.verdict === "yes") handle.core.removeAttribute("stroke");
       else handle.core.setAttribute("stroke", color);
       handle.halo?.setAttribute("fill", color);
-      // 轮号：大节点常显（密集时不标），选中的总是显
-      const showRound = selected || (!scene.dense && node.r >= 4.5);
-      if (showRound && handle.round === undefined) {
-        const text = el("text", { class: "ileaf-round", x: node.r + 3, y: -node.r + 1 });
-        text.textContent = String(node.leaf.lastRound);
-        handle.root.append(text);
-        handle.round = text;
-      } else if (!showRound && handle.round !== undefined) {
-        handle.round.remove();
-        handle.round = undefined;
-      } else if (handle.round !== undefined) {
-        handle.round.textContent = String(node.leaf.lastRound);
+      // 轮号 / 标题由语义缩放的文字组负责；选中态变了就让它在下一次 refreshLabels 重建
+      if (handle.selected !== selected) {
+        handle.selected = selected;
+        handle.tier = -1;
       }
     }
     for (const node of scene.nodes) {
@@ -463,6 +659,8 @@ export class GraphRenderer {
     this.running = false;
     this.alpha = 0;
     this.draw();
+    // 落定后按最终位置重算哪些节点在可见区域内（动画中只随节点平移，不逐帧算）
+    this.refreshLabels();
     this.rememberCurrent();
   }
 

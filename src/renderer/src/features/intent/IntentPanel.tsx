@@ -43,6 +43,7 @@ import {
   type TurnLeaves,
 } from "./cluster-layout.ts";
 import { GraphRenderer, type SceneBuilder } from "./GraphRenderer.ts";
+import { ZOOM_MAX, ZOOM_MIN } from "./graph-view.ts";
 import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
 
 type IntentView = "slots" | "questions";
@@ -400,6 +401,8 @@ function IntentGraph(props: {
   const rendererRef = useRef<GraphRenderer | null>(null);
   const onSelectLeafRef = useRef(props.onSelectLeaf);
   onSelectLeafRef.current = props.onSelectLeaf;
+  /** 当前倍率（按钮禁用态用；渲染器变换时回调） */
+  const [zoom, setZoom] = useState(1);
   /** 数据签：只有它变了才重建场景（颜色 / 高亮 / 尺寸都不进这个 key） */
   const dataKey = [
     props.view,
@@ -436,9 +439,11 @@ function IntentGraph(props: {
     if (svg === null) return;
     const renderer = new GraphRenderer(svg, (key) => onSelectLeafRef.current(key));
     rendererRef.current = renderer;
+    renderer.subscribeView((view) => setZoom(view.z));
     const host = hostRef.current;
     if (host !== null) renderer.resize(host.clientWidth, host.clientHeight);
     return () => {
+      renderer.subscribeView(null);
       renderer.dispose();
       rendererRef.current = null;
     };
@@ -507,6 +512,40 @@ function IntentGraph(props: {
           {t.intentPanel.viewQuestions}
         </button>
       </div>
+      {props.hasData && (
+        // 缩放组（右上）：放大 / 缩小 / 适配。滚轮、捏合、拖空白、双击空白在 svg 上
+        <div className="intent-zoom">
+          <button
+            type="button"
+            className="intent-zoom-btn"
+            title={t.intentPanel.zoomIn}
+            aria-label={t.intentPanel.zoomIn}
+            disabled={zoom >= ZOOM_MAX - 1e-6}
+            onClick={() => rendererRef.current?.zoomBy(1.25)}
+          >
+            <Icon name="zoom-in" size={13} />
+          </button>
+          <button
+            type="button"
+            className="intent-zoom-btn"
+            title={t.intentPanel.zoomOut}
+            aria-label={t.intentPanel.zoomOut}
+            disabled={zoom <= ZOOM_MIN + 1e-6}
+            onClick={() => rendererRef.current?.zoomBy(0.8)}
+          >
+            <Icon name="zoom-out" size={13} />
+          </button>
+          <button
+            type="button"
+            className="intent-zoom-btn"
+            title={t.intentPanel.zoomFit}
+            aria-label={t.intentPanel.zoomFit}
+            onClick={() => rendererRef.current?.fit()}
+          >
+            <Icon name="maximize" size={13} />
+          </button>
+        </div>
+      )}
       {props.loading && <p className="intent-summary">{t.intentPanel.loading}</p>}
       {!props.loading && !props.hasData && <p className="intent-summary">{t.intentPanel.emptyNoRecall}</p>}
       {props.hasData && (

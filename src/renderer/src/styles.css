@@ -3912,8 +3912,57 @@ button.panel-group-toggle:hover {
   cursor: grab;
 }
 .intent-cluster.dragging,
-.intent-cluster.dragging .ihit {
+.intent-cluster.dragging .ihit,
+.intent-cluster.panning {
   cursor: grabbing;
+}
+/* 缩放组（右上）：三个无边框图标钮，和视图开关同一套底 */
+.intent-zoom {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: flex;
+  gap: 2px;
+  z-index: 1;
+  padding: 1px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-bg-panel) 82%, transparent);
+}
+.intent-zoom-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.intent-zoom-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.intent-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* 语义缩放的文字：不随倍率放大，带面板色描边压住枝叶；拿不准的叶整组 40%（文字跟着淡） */
+.ileaf-title,
+.ileaf-detail {
+  font-size: 9px;
+  fill: var(--color-text-secondary);
+  paint-order: stroke;
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+.ileaf-detail {
+  fill: var(--color-text-tertiary);
+}
+.ilabels {
+  pointer-events: none;
 }
 
 /* 图区浮层：视图开关（左上）、摘要（其下）、着色开关（右下） */
