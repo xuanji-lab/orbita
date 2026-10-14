@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchGuestScreenshot, GUEST_COMMAND_TIMEOUT_MS } from "./bridge-client.ts";
+import { fetchGuestScreenshot, GUEST_COMMAND_TIMEOUT_MS, isPlainScreenshotFileName } from "./bridge-client.ts";
 import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,5 +139,68 @@ describe("bridge-client（文件协议）", () => {
 
   test("超时默认值是协议常量", () => {
     assert.equal(GUEST_COMMAND_TIMEOUT_MS, 15_000);
+  });
+});
+
+// ── 截图文件名：路径穿越闸门（审查意见 A）────────────────────────────────
+//
+// resp 是 guest 进程写的内容，是整条协议里唯一的不可信输入。没有这一关的话，
+// 被攻陷的 guest 回一个 `..\..\Users\<me>\.ssh\id_ed25519`，宿主就会替它把任意文件
+// 读出来、base64 之后经 IPC 送进 renderer。
+
+describe("截图文件名闸门", () => {
+  test("纯文件名才放行；目录 / 反斜杠 / .. / 盘符一律拒", () => {
+    for (const name of ["cmd-000001.jpg", "a.jpg", "截图.jpg"]) {
+      assert.equal(isPlainScreenshotFileName(name), true, name);
+    }
+    for (const name of [
+      "",
+      "..",
+      "../x.jpg",
+      "..\\x.jpg",
+      "..\\..\\Users\\me\\.ssh\\id_ed25519",
+      "sub/x.jpg",
+      "sub\\x.jpg",
+      "a/../b.jpg",
+      "/etc/passwd",
+      "C:\\Windows\\win.ini",
+      "C:x.jpg",
+      "a/..",
+    ]) {
+      assert.equal(isPlainScreenshotFileName(name), false, name);
+    }
+  });
+
+  test("恶意 resp：jpeg 指向 cmd 目录之外 → 抛错，绝不读那个文件", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const secretPath = join(dir, "id_ed25519");
+    const secret = "PRIVATE-KEY-CONTENT";
+    // 哨兵：cmd 目录是 <dir>/cmd，所以 `..\id_ed25519` 正好指向它
+    await writeFile(secretPath, secret, "utf8");
+    const bridge = startFakeBridge(dir, () => ({
+      resp: { ok: true, nativeWidth: 100, nativeHeight: 50, width: 100, height: 50, jpeg: "..\\id_ed25519" },
+    }));
+    try {
+      await assert.rejects(fetchGuestScreenshot(dir, 1280), /非法的截图文件名/);
+      assert.equal(await readFile(secretPath, "utf8"), secret, "哨兵文件应原封不动");
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("恶意 resp：绝对路径与正斜杠穿越同样拒（不同写法都堵）", async () => {
+    for (const jpeg of ["/etc/passwd", "C:\\Windows\\win.ini", "../x.jpg", "..", "sub/../x.jpg"]) {
+      const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+      const bridge = startFakeBridge(dir, () => ({
+        resp: { ok: true, nativeWidth: 100, nativeHeight: 50, width: 100, height: 50, jpeg },
+      }));
+      try {
+        await assert.rejects(fetchGuestScreenshot(dir, 1280), /非法的截图文件名/, jpeg);
+      } finally {
+        bridge.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
   });
 });
