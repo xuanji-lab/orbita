@@ -419,7 +419,8 @@ internal static class Program
     }
 
     /** scroll {x, y, deltaY}：先把指针移到 (x, y) 再滚轮——滚轮作用于指针下的窗口，
-     * 不先移过去就是在滚另一个面板。deltaY 正数向下（Windows 的 wheel 正数是向上，所以这里取负）。*/
+     * 不先移过去就是在滚另一个面板。deltaY 的单位是**滚轮格数**（正数向下），
+     * 这里乘 WHEEL_DELTA 得到 Windows 的 wheel 数据（wheel 正数向上，所以取负）。*/
     private static string ExecuteScroll(string raw)
     {
         int x, y;
