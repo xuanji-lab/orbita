@@ -127,6 +127,22 @@ export function isBrowserReadTool(toolName: string): boolean {
 }
 
 /**
+ * computer use 的只读一件：`computer_screenshot`。三档一律放行。
+ *
+ * 它只向沙箱要一张图，不往沙箱里送任何输入，也不碰用户的文件与 shell；plan 档下
+ * 「先看一眼屏幕再规划」本就是规划的一部分，manual 档下看一眼也弹审批只会让人烦。
+ *
+ * 其余四件（computer_click / type / key / scroll）**不在这里**：它们真往沙箱里注入
+ * 鼠标键盘事件，能提交表单、删文件、关窗口，走默认的写操作闸门（plan 拒 / manual 问 /
+ * skip 放）——与 browser_click / browser_type / browser_press 同一待遇，不为它们另立名单。
+ */
+export const COMPUTER_USE_READ_TOOLS = ["computer_screenshot"] as const;
+
+export function isComputerUseReadTool(toolName: string): boolean {
+  return (COMPUTER_USE_READ_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
  * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
  * 将来复用这个名字。
@@ -149,6 +165,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isChannelTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
+  // 沙箱截图：三档一律放行，理由见 COMPUTER_USE_READ_TOOLS 的注释
+  if (isComputerUseReadTool(toolName)) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };
