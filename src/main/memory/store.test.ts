@@ -145,3 +145,29 @@ describe("parseMemoryEntry", () => {
     assert.equal(parseMemoryEntry({ id: "mem_1", text: "t", keywords: ["k"], sessionId: "s" }), null);
   });
 });
+
+describe("append 去重（验收观察回归：模型复述记忆 → 同一事实重复入库）", () => {
+  test("逐字重复（含空白差异）的 draft 不再落盘，批内重复也只落一条", async () => {
+    const first = await store.append("ws-a", "s1", [
+      { text: "用户养了一只叫「雪球」的橘猫", keywords: ["雪球"], timestamp: 1 },
+    ]);
+    assert.equal(first.length, 1);
+    // 复述同一事实：逐字相同 + 一条带多余空白的变体 + 一条批内重复
+    const dup = await store.append("ws-a", "s2", [
+      { text: "用户养了一只叫「雪球」的橘猫", keywords: ["猫"], timestamp: 2 },
+      { text: "  用户养了一只叫「雪球」的橘猫 ", keywords: ["猫"], timestamp: 3 },
+      { text: "用户养了一只叫「雪球」的橘猫", keywords: ["猫"], timestamp: 4 },
+      { text: "新项目事实：dev 端口固定 5273", keywords: ["端口"], timestamp: 5 },
+    ]);
+    assert.deepEqual(dup.map((entry) => entry.text), ["新项目事实：dev 端口固定 5273"]);
+    assert.equal((await store.list("ws-a")).length, 2);
+  });
+
+  test("措辞有差的是另一条记忆（近似重复不挡）", async () => {
+    await store.append("ws-a", "s1", [{ text: "用户养了一只橘猫", keywords: ["猫"], timestamp: 1 }]);
+    const second = await store.append("ws-a", "s2", [
+      { text: "用户养的橘猫叫雪球", keywords: ["猫", "雪球"], timestamp: 2 },
+    ]);
+    assert.equal(second.length, 1);
+  });
+});

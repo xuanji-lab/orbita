@@ -134,15 +134,32 @@ export class MemoryStore {
   /**
    * 落一批 draft：补 id / sessionId 后逐行追加。返回铸好的完整条目（落盘顺序）。
    *
+   * **按归一化文本去重**（真机验收观察：模型在回答里复述记忆，轮后蒸馏会把同一
+   * 事实再蒸一条——不去重库就单调膨胀）。只挡逐字级重复（trim + 空白折叠），
+   * 近似重复不挡——那需要相似度计算，等语料长大再评（ponytail）。
+   * 读-改-写有理论竞态（同工作区两条会话同时收尾），漏网的代价只是一条重复，可接受。
+   *
    * 空批不碰盘——调用方（轮后蒸馏）产出 0 条是常态，不该为此建目录。
    */
   async append(scopeId: string, sessionId: string, drafts: readonly MemoryDraft[]): Promise<MemoryEntry[]> {
-    const entries = drafts
-      .map((draft) => toEntry(draft, sessionId))
-      .filter((entry): entry is MemoryEntry => entry !== null);
+    const seen = new Set((await this.list(scopeId)).map((entry) => normalizeText(entry.text)));
+    const entries: MemoryEntry[] = [];
+    for (const draft of drafts) {
+      const entry = toEntry(draft, sessionId);
+      if (entry === null) continue;
+      const key = normalizeText(entry.text);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push(entry);
+    }
     if (entries.length === 0) return [];
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.filePath(scopeId), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
     return entries;
   }
+}
+
+/** 去重键：trim + 内部空白折叠。逐字重复才归并，措辞有差的就是另一条记忆。 */
+function normalizeText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }
