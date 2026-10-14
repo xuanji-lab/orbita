@@ -285,6 +285,14 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
           en: "First version: per-workspace lexical recall plus post-turn distillation; verbatim duplicates dropped. Off by default.",
         },
       },
+      {
+        pr: 231,
+        date: "2026-10-15",
+        note: {
+          zh: "蒸馏改用家务活模型（未配置则退会话模型），且只蒸正常结束的轮——打断 / 报错不蒸。",
+          en: "Distillation now runs on the chore model (falling back to the session model) and only for turns that finished normally — aborted or failed turns are skipped.",
+        },
+      },
     ],
   },
 ];
