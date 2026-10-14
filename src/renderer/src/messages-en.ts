@@ -332,8 +332,10 @@ export const en = {
     probeFailed: "Couldn't run the check",
     sandboxGroup: "Sandbox",
     sandboxState: "State",
+    // "up to three minutes" mirrors BRIDGE_READY_TIMEOUT_MS in src/main/computer-use/sandbox.ts (180s);
+    // change one and the other follows
     sandboxStateInfo:
-      "Starting waits for the sandbox to register itself (up to a minute); stopping closes it and discards everything inside. After an error, Start retries and Stop resets.",
+      "Starting waits for the sandbox to register itself (up to three minutes; the first start prepares the base image and takes noticeably longer — if it times out, just retry); stopping closes it and discards everything inside. After an error, Start retries and Stop resets.",
     states: {
       off: "Off",
       starting: "Starting…",
