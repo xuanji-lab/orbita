@@ -210,6 +210,8 @@ export async function watchPageChange<T>(
  * 报给模型——Playwright 的默认同款。不拦的话 Electron 会弹原生模态框：落在用户屏幕上，或者挂在
  * 隐藏的沙盒窗口上没人看得见，页面的脚本线程就此卡住，之后每个工具调用都超时。
  * 新文档靠 addScriptToEvaluateOnNewDocument，当前文档当场补一次；调试器断开（页面崩溃）后重新注册。
+ * 注意：Chromium 150 起 addScriptToEvaluateOnNewDocument 必须先在同 session Page.enable，
+ * 否则返回成功却静默不生效（2026-10-14 隔离实例 A/B 实测）。
  *
  * **从没加载过任何页面的视图跳过**：它还没有渲染进程，任何 CDP 命令（连
  * addScriptToEvaluateOnNewDocument 都算）都不回，只能等超时——2026-09-28 实测：第一次导航前先装护栏，
@@ -218,6 +220,7 @@ export async function watchPageChange<T>(
 export async function guardDialogs(contents: WebContents): Promise<void> {
   if (contents.getURL() === "") return;
   if (!guarded.has(contents) || !contents.debugger.isAttached()) {
+    await cdp(contents, "Page.enable");
     await cdp(contents, "Page.addScriptToEvaluateOnNewDocument", { source: DIALOG_GUARD_JS });
     if (!guarded.has(contents)) contents.debugger.once("detach", () => guarded.delete(contents));
     guarded.add(contents);
