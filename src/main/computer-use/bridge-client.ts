@@ -27,6 +27,7 @@ export interface GuestScreenshot {
 }
 
 /**
+/**
  * resp 里的 jpeg 字段必须是**纯文件名**（`cmd-000001.jpg` 这种），不许带目录、不许有 `..`。
  *
  * 为什么必须有这一关：resp 是 guest 进程写的内容，是整条协议里**唯一的不可信输入**。
@@ -41,14 +42,37 @@ export function isPlainScreenshotFileName(name: string): boolean {
   return name !== "" && name === win32.basename(name) && !name.includes("..");
 }
 
-/** 桥不应答时的放弃线（就绪握手之后的命令通道是即时的，15s 没响应 = 桥死了 / 沙箱卡了） */
-export const GUEST_COMMAND_TIMEOUT_MS = 15_000;
+/**
+ * 桥不应答时的放弃线。
+ *
+ * **45 秒不是拍脑袋的宽容值**：2026-10-14 真机实测，win+r 弹出「运行」框之后，
+ * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
+ * （触发面只有这类壳对话框；escape / click 后立刻 type 只要 433ms）。桥那边已改成
+ * 序号直探（guest-bridge/Program.cs 的 PollOnce），把黑窗压到 ~8s，但黑窗仍存在。
+ * 15 秒会把一次**真的成功了**的注入判成失败，而模型看到失败会重试——同一个动作做两遍
+ * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
+ * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
+ */
+export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
 
 /** 等响应文件的轮询节奏（映射文件夹同步即时，这只是读盘节奏） */
 const RESP_POLL_INTERVAL_MS = 200;
 
 /** 进程内单调递增序号（每次沙箱会话 out/cmd 会被清空，不会撞上一局的文件） */
 let commandSeq = 0;
+
+/**
+ * 新一局沙箱开始：命令序号归零。
+ *
+ * 为什么必须有它：guest 桥的轮询是**直探下一个序号的文件名**（`cmd-<6 位>.req.json`，
+ * 见 guest-bridge/Program.cs 的 PollOnce），它从 1 起数。宿主计数器要是接着上一局的
+ * 数字往下走（模块级变量不随沙箱重启归零），桥的快路径就永远落空，得等 4 秒一次的
+ * 全量枚举对齐——那正是「开机第一条命令平白慢 4 秒」。沙箱每次 start() 都把 out/cmd
+ * 整个删掉（sandbox.ts），所以序号回到 1 不会撞上任何旧文件。
+ */
+export function resetGuestCommandSeq(): void {
+  commandSeq = 0;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -83,6 +107,7 @@ async function sendGuestCommandRaw(
   const reqPath = join(cmdDir, `${baseName}.req.json`);
   const respPath = join(cmdDir, `${baseName}.resp.json`);
 
+  // tmp + rename：桥轮询读目录，不许它读到半截请求
   await mkdir(cmdDir, { recursive: true });
   // tmp + rename：桥轮询读目录，不许它读到半截请求
   await writeFile(reqTmp, JSON.stringify({ seq: commandSeq, command, ...fields }), "utf8");
