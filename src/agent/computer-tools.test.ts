@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
 import { COMPUTER_USE_READ_TOOLS } from "../shared/permission.ts";
-import type { ComputerUseShot, ComputerUseToolOutcome } from "../shared/computer-use.ts";
+import { GUEST_COMMAND_TIMEOUT_MS, type ComputerUseShot, type ComputerUseToolOutcome } from "../shared/computer-use.ts";
 
 const setup = () => {
   const sent: Record<string, unknown>[] = [];
@@ -47,6 +47,34 @@ describe("computer_* 工具", () => {
     for (const name of COMPUTER_USE_TOOL_NAMES) {
       assert.equal((COMPUTER_USE_READ_TOOLS as readonly string[]).includes(name), name === "computer_screenshot");
     }
+  });
+
+  test("broker 等待比主进程的 guest 命令线更长：45 秒内到的回执不许被兑底判死", async () => {
+    // 假 broker：记下 request 收到的超时，回执由测试控制（不真等时钟）。settle 放盒子里：
+    // 闭包里的赋值 TS 看不见，直接 let 会被收窄成 null（属性 narrowing 会被函数调用重置）
+    const timeouts: Array<number | undefined> = [];
+    const box: { settle?: (outcome: ComputerUseToolOutcome) => void } = {};
+    const broker = {
+      request(_event: Record<string, unknown>, timeoutMs?: number): Promise<ComputerUseToolOutcome> {
+        timeouts.push(timeoutMs);
+        return new Promise((resolve) => {
+          box.settle = resolve;
+        });
+      },
+    } as unknown as RequestBroker;
+    const tools = createComputerUseTools(broker, "session-1");
+    const pending = tools
+      .find((tool) => tool.name === "computer_screenshot")!
+      .execute("call", {}, undefined, undefined, undefined as never);
+    assert.equal(timeouts.length, 1);
+    const timeout = timeouts[0];
+    assert.ok(timeout !== undefined, "call() 必须显式给 broker 传超时，不能吃 30s 默认");
+    assert.ok(
+      timeout > GUEST_COMMAND_TIMEOUT_MS,
+      `broker 兑底（${timeout}ms）必须长于主进程等 guest 命令的 ${GUEST_COMMAND_TIMEOUT_MS}ms，否则主进程还在等、agent 先把真成功判成失败`,
+    );
+    box.settle?.({ ok: true, text: "ok", shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "anBlZw==" } });
+    await pending;
   });
 
   test("screenshot：请求带 maxWidth 1280，回执的图与正文都进 content", async () => {

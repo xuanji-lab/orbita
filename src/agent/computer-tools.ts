@@ -20,6 +20,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
+  GUEST_COMMAND_TIMEOUT_MS,
   screenshotPointToNative,
   type ComputerUseButton,
   type ComputerUseShotGeometry,
@@ -53,6 +54,16 @@ const NEEDS_SCREENSHOT =
   "No screenshot yet in this turn: call computer_screenshot first. Coordinates are pixels of that image, " +
   "and the image is what tells you where anything is.";
 
+/**
+ * broker 的兜底超时：必须比主进程等 guest 命令的 GUEST_COMMAND_TIMEOUT_MS（45s）更长。
+ * broker 默认 30s 会抢在主进程之前超时：主进程还在等桥（win+r 黑窗实测 req 要 8–20s
+ * 才对 guest 可见），agent 先拿到「主进程没有在 30 秒内回执」，把一次真的成功了
+ * 的动作判成失败——模型看到失败会重做同一个动作（browser-tools.ts 导航同款考量）。
+ * 取主进程线 + 15s 余量：主进程自己的超时会回带人话的错误，broker 这条只兑「主进程
+ * 失联」。常量在 shared/computer-use.ts（agent 进程不能 import 主进程模块）。
+ */
+const BROKER_TIMEOUT_MS = GUEST_COMMAND_TIMEOUT_MS + 15_000;
+
 export function createComputerUseTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   /**
    * 本工具组最近一次截图的几何（回图尺寸 + 物理屏尺寸）。null = 这一轮还没截过图，
@@ -69,7 +80,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     signal: AbortSignal | undefined,
   ): Promise<ComputerUseSuccess> => {
     if (signal?.aborted === true) throw new Error("Stopped");
-    const pending = broker.request<ComputerUseToolOutcome>({ type: "computerUseRequest", sessionId, request });
+    const pending = broker.request<ComputerUseToolOutcome>(
+      { type: "computerUseRequest", sessionId, request },
+      BROKER_TIMEOUT_MS,
+    );
     const result =
       signal === undefined
         ? await pending
