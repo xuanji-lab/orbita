@@ -4,7 +4,8 @@
 // 写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件）→ 删 req。
 // 覆盖：build.mjs 编译出 exe；bridge.json 就绪通告；screenshot 命令全链
 // （req 消失、resp 字段、JPEG 魔数与尺寸、长边 ≤ maxWidth）；未知命令 / 坏请求的 error 响应；
-// 输入命令（click / type / key / scroll）的参数校验与键名→VK 映射。
+// 输入命令（click / type / key / scroll）的参数校验与键名→VK 映射；
+// 轮询的序号直探与全量对齐（跳号 / 迟到 / 半截）。
 //
 // ⚠ **红线**：输入命令在宿主上跑就是劫持用户真实的鼠标键盘。所以这个文件里所有
 // click / type / key / scroll 请求一律带 `dryRun: true`（桥只解析不注入），并且
@@ -89,7 +90,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.2.0");
+      assert.equal(info.version, "0.3.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -250,6 +251,85 @@ test(
         [],
         "req 应全部由桥删掉",
       );
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ── 轮询策略：序号直探（快路径）+ 全量枚举对齐（慢路径）────────────────────
+//
+// 为什么值得测：映射文件夹的目录枚举会被 RDP 驱动器重定向的缓存卡住——2026-10-14 真机
+// 实测，win+r 弹出「运行」框之后宿主刚写进的 req 在 Directory.GetFiles 里 20 秒内看不见。
+// 桥因此改成直探 `cmd-<序号>.req.json`（File.Exists），枚举退成每 ~4s 一次的兜底对齐。
+// 这里在宿主机上测的是**策略本身**（快路径即时、跳号能被兜住、迟到的 req 不被误判），
+// 不是那个只有沙箱里才复现得出来的黑窗。
+
+test(
+  "轮询：序号直探即时；跳号靠对齐兜住；迟到 / 半截的 req 不弄死循环",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-poll-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+    const name = (seq) => "cmd-" + String(seq).padStart(6, "0");
+    const respPath = (seq) => path.join(cmdDir, name(seq) + ".resp.json");
+    const readResp = (seq) => JSON.parse(fs.readFileSync(respPath(seq), "utf8"));
+
+    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    try {
+      assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
+
+      // ---- 快路径：序号从 1 起的连续三条命令应当「即时」回（不等 4s 的对齐周期）----
+      const fastStart = Date.now();
+      for (const seq of [1, 2, 3]) {
+        writeRequest(cmdDir, name(seq), JSON.stringify({ seq, command: "ping" }));
+        assert.ok(await waitForFile(respPath(seq), 5_000), `cmd-${seq} 应有响应。桥日志：\n${bridgeLog}`);
+        assert.equal(readResp(seq).ok, true);
+      }
+      const fastMs = Date.now() - fastStart;
+      assert.ok(fastMs < 3_000, `三条连续命令应走直探快路径（不等 4s 对齐），实际 ${fastMs}ms`);
+
+      // ---- 跳号：下一个序号没来、更远的序号先到 → 最多一个对齐周期（~4s）被捡到 ----
+      const jumpStart = Date.now();
+      writeRequest(cmdDir, name(9), JSON.stringify({ seq: 9, command: "ping" }));
+      assert.ok(await waitForFile(respPath(9), 8_000), `跳号应在一次对齐周期内被捡到。桥日志：\n${bridgeLog}`);
+      const jumpMs = Date.now() - jumpStart;
+      assert.ok(jumpMs < 8_000, `跳号对齐不该超过两个周期，实际 ${jumpMs}ms`);
+      // 对齐之后 _nextSeq 跟上了：10 又走回快路径
+      const afterStart = Date.now();
+      writeRequest(cmdDir, name(10), JSON.stringify({ seq: 10, command: "ping" }));
+      assert.ok(await waitForFile(respPath(10), 5_000));
+      assert.ok(Date.now() - afterStart < 3_000, "对齐之后应回到快路径");
+
+      // ---- 迟到：宿主只落了 .tmp、还没 rename → 桥看不到也不该误判 ----
+      // （这正是黑窗的宿主机等价物：文件「还没出现」。同一个序号会被反复重探，落空不跳过）
+      fs.writeFileSync(path.join(cmdDir, name(11) + ".tmp"), JSON.stringify({ seq: 11, command: "ping" }), "utf8");
+      await sleep(1_200); // 桥至少转了两轮
+      assert.ok(!fs.existsSync(respPath(11)), "req 还没出现，不该有任何响应");
+      fs.renameSync(path.join(cmdDir, name(11) + ".tmp"), path.join(cmdDir, name(11) + ".req.json"));
+      assert.ok(await waitForFile(respPath(11), 3_000), "rename 之后应立刻被直探捡到");
+      assert.equal(readResp(11).ok, true);
+
+      // ---- 半截内容：不当成功、不注入、循环继续 ----
+      // （读失败那条路——rename 途中读不到——在桥里是静默下轮，Windows 上没法从测试进程
+      //  确定性地制造「读不到」：node 打开文件默认带共享读写。这里测的是它的邻面。）
+      fs.writeFileSync(path.join(cmdDir, name(12) + ".req.json"), '{"seq":12,"command":"type","text":"半截', "utf8");
+      assert.ok(await waitForFile(respPath(12), 5_000));
+      const broken = readResp(12);
+      assert.equal(broken.ok, false, "半截请求不许当成成功");
+      assert.match(broken.error, /text 字段/, "半截的 text 没有收尾引号，应当读不出来");
+      assert.ok(!fs.existsSync(path.join(cmdDir, name(12) + ".req.json")), "坏请求也要删掉 req，不然会一直重跑");
+
+      // 循环还活着
+      writeRequest(cmdDir, name(13), JSON.stringify({ seq: 13, command: "ping" }));
+      assert.ok(await waitForFile(respPath(13), 5_000), `坏请求之后循环应继续工作。桥日志：\n${bridgeLog}`);
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));

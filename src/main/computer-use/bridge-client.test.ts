@@ -7,6 +7,7 @@ import {
   fetchGuestScreenshot,
   GUEST_COMMAND_TIMEOUT_MS,
   isPlainScreenshotFileName,
+  resetGuestCommandSeq,
   sendGuestCommand,
 } from "./bridge-client.ts";
 import { COMPUTER_USE_CMD_DIR } from "../../shared/computer-use.ts";
@@ -140,7 +141,30 @@ describe("bridge-client（文件协议）", () => {
   });
 
   test("超时默认值是协议常量", () => {
-    assert.equal(GUEST_COMMAND_TIMEOUT_MS, 15_000);
+    // 45s 不是宽容值：win+r 后映射目录的枚举缓存会卡住，host→guest 方向有 8–20s 的黑窗
+    // （2026-10-14 真机实测，见 GUEST_COMMAND_TIMEOUT_MS 的注释）。
+    // 15s 会把一次真成功的注入判成失败，而模型看到失败会重试——同一个动作做两遍。
+    assert.equal(GUEST_COMMAND_TIMEOUT_MS, 45_000);
+  });
+
+  test("命令序号：单调递增；resetGuestCommandSeq 后从 1 重新数（与桥的快路径对齐）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true } }));
+    try {
+      await sendGuestCommand(dir, "ping", {});
+      await sendGuestCommand(dir, "ping", {});
+      const seqs = bridge.requests.map((req) => req.seq);
+      assert.equal(seqs.length, 2);
+      assert.equal(seqs[1], (seqs[0] ?? 0) + 1, "同一次运行内序号单调递增");
+      // 新一局沙箱：宿主归零，桥的 _nextSeq 也从 1 起（否则快路径永远落空）
+      resetGuestCommandSeq();
+      await sendGuestCommand(dir, "ping", {});
+      assert.equal(bridge.requests.length, 3);
+      assert.equal(bridge.requests[2]?.seq, 1);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   // ── 通用命令往返（PR2：agent 的 click / type / key / scroll 走它）──────────

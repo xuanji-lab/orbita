@@ -9,6 +9,10 @@
 //
 // 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入）。
 //
+// 轮询：**直探下一个序号的文件名**（File.Exists），不是目录枚举——映射文件夹的目录枚举
+//   会被 RDP 驱动器重定向的缓存卡住（win+r 后 ~20s 看不见新文件，2026-10-14 真机实测）。
+//   为什么、实测数据与兜底对齐都在 PollOnce 的注释里。
+//
 // ⚠ 输入类命令（click / type / key / scroll）**只允许在沙箱里执行**：SendInput 注入的是
 //   当前会话的真实输入流，在宿主上跑就会劫持用户正在用的鼠标键盘（用户可能在开会、
 //   共享屏幕）。桥的设计前提就是「跑在沙箱内」，宿主侧代码一律不得在宿主机上跑这些命令。
@@ -36,7 +40,7 @@ using System.Threading;
 internal static class Program
 {
     // ---- 协议常量：与宿主侧（Orbita 主进程）严格对齐，一个字母都不能差 ----
-    private const string Version = "0.2.0";
+    private const string Version = "0.3.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -191,7 +195,14 @@ internal static class Program
         File.Move(tmpPath, finalPath);
     }
 
-    // ---- 命令循环：轮询 cmd 目录，执行，写响应，删请求 ----
+    // ---- 命令循环：直探下一个序号，周期性全量对齐 ----
+
+    /** 下一个期望的命令序号。宿主的名字是 cmd-<6 位递增>.req.json，每局从 1 起 */
+    private static int _nextSeq = 1;
+    /** 快路径连续落空的次数（慢路径按它定期对齐） */
+    private static int _polls = 0;
+    /** 全量枚举对齐的周期：16 × 250ms ≈ 4s */
+    private const int AlignEveryPolls = 16;
 
     private static void CommandLoop()
     {
@@ -210,28 +221,73 @@ internal static class Program
         }
     }
 
+    /**
+     * 一轮轮询。
+     *
+     * **快路径是「直探下一个序号的文件名」，不是目录枚举**。这不是优化，是正确性：
+     * 映射文件夹走 RDP 驱动器重定向，**目录枚举结果会被缓存卡住**。
+     * 2026-10-14 真机实测（三轮）：win+r 弹出「运行」框之后，宿主刚写进的 req 在
+     * Directory.GetFiles 里 20 秒内看不见——而桥活着（心跳每 4s 照落盘）、
+     * guest→host 方向全程通畅，所以不是通道死了、也不是宿主没写。
+     * 触发面只有 win+r 这类壳对话框：escape / click 之后立刻 type 只要 433ms。
+     * File.Exists 走直接路径查询，同场景 8.4s 就看到（枚举 20.7s）——所以直探是主路。
+     * 宿主侧的超时因此放到 45s（bridge-client.ts），给这个黑窗留余量。
+     */
     private static void PollOnce()
+    {
+        string expected = Path.Combine(_cmdDir, "cmd-" + _nextSeq.ToString("000000") + ReqSuffix);
+        if (File.Exists(expected))
+        {
+            ProcessOne(expected);
+            _nextSeq++;
+            return;
+        }
+        // 慢路径：每 ~4s 全量枚举一次，把 _nextSeq 拉回真实位置。
+        // 直探只认「下一个」，所以宿主跳号（写失败 / 双宿主并发 / 上一局残留）时得靠它兜底；
+        // 快路径一旦落空就一直落空（_nextSeq 卡住），所以这个计数器必然在走，不会饿死。
+        _polls++;
+        if (_polls % AlignEveryPolls != 0) return;
+        AlignFromEnumeration();
+    }
+
+    /** 全量枚举对齐：处理枚举到的每个请求，并按文件名把 _nextSeq 推到已见最大序号之后 */
+    private static void AlignFromEnumeration()
     {
         string[] reqs = Directory.GetFiles(_cmdDir, "*" + ReqSuffix);
         Array.Sort(reqs, StringComparer.Ordinal); // 名字即顺序（宿主命名带递增序号）
         foreach (string reqPath in reqs)
         {
+            ProcessOne(reqPath);
             string name = Path.GetFileName(reqPath);
-            string baseName = name.Substring(0, name.Length - ReqSuffix.Length);
-            string raw;
-            try
-            {
-                raw = File.ReadAllText(reqPath, Encoding.UTF8);
-            }
-            catch
-            {
-                continue; // 宿主 rename 途中的瞬时点，下轮再来
-            }
-            Log("收到命令 " + name);
-            string respJson = Execute(raw, baseName);
-            AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(respJson));
-            try { File.Delete(reqPath); } catch { }
+            int seen;
+            // cmd-000042.req.json → 序号在 [4, 10)
+            if (name.Length >= 14 && int.TryParse(name.Substring(4, 6), out seen) && seen >= _nextSeq)
+                _nextSeq = seen + 1;
         }
+    }
+
+    /**
+     * 处理一个请求文件：读 → 执行 → 写 resp → 删 req。
+     * 读失败（宿主 rename 途中的瞬时点 / 文件被占）**静默下轮**：不写 resp、不删 req、
+     * 不弄死循环——下一轮直探同一个名字会再试一次。
+     */
+    private static void ProcessOne(string reqPath)
+    {
+        string name = Path.GetFileName(reqPath);
+        string baseName = name.Substring(0, name.Length - ReqSuffix.Length);
+        string raw;
+        try
+        {
+            raw = File.ReadAllText(reqPath, Encoding.UTF8);
+        }
+        catch
+        {
+            return; // 宿主 rename 途中的瞬时点，下轮再来
+        }
+        Log("收到命令 " + name);
+        string respJson = Execute(raw, baseName);
+        AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(respJson));
+        try { File.Delete(reqPath); } catch { }
     }
 
     // ---- 命令执行 ----

@@ -39,6 +39,7 @@ import {
   fetchGuestScreenshot,
   GUEST_COMMAND_TIMEOUT_MS,
   pingGuest,
+  resetGuestCommandSeq,
   sendGuestCommand,
 } from "./bridge-client.ts";
 import { waitForBridgeInfo, type BridgeInfo } from "./bridge-ready.ts";
@@ -185,7 +186,7 @@ export interface SandboxDeps {
   readyTimeoutMs?: number;
   /** bridge.json 轮询间隔，默认 500ms；测试传小值 */
   bridgePollIntervalMs?: number;
-  /** 截图超时，默认 15_000 */
+  /** 截图 / 命令超时，默认 45_000（黑窗余量，见 bridge-client.ts 的 GUEST_COMMAND_TIMEOUT_MS） */
   guestTimeoutMs?: number;
   /** 状态机每次迁移的出口（index.ts 接 broadcastComputerUseStatus） */
   onStatus?: (status: SandboxStatus) => void;
@@ -290,9 +291,12 @@ export class SandboxController {
     try {
       // .wsb 原子落盘（临时文件 + rename 的仓规同样管它）；读写映射的 out 目录顺手建好
       await mkdir(outputDir, { recursive: true });
-      // 上一局残留的通告与命令文件必须先清掉，不然轮询会捡到上一局沙箱的死人文件
+      // 上一局残留的通告与命令文件必须先清掉，不然轮询会捡到上一局沙箱的死人文件；
+      // 序号一并归零：guest 桥的快路径直探 cmd-000001.req.json，宿主接着上局的数字往下走
+      // 会让它一直落空，只能等 4 秒一次的全量枚举（bridge-client.ts 的 resetGuestCommandSeq）
       await rm(join(outputDir, BRIDGE_INFO_FILE), { force: true });
       await rm(join(outputDir, COMPUTER_USE_CMD_DIR), { recursive: true, force: true });
+      resetGuestCommandSeq();
       const wsbPath = join(this.deps.computerUseDir, WSB_FILE_NAME);
       await writeTextAtomic(
         wsbPath,
@@ -402,7 +406,7 @@ export class SandboxController {
   /**
    * agent 工具的通用命令下发（PR2 的 click / type / key / scroll 走它）。
    * 闸门与 screenshot 同一处：只有 running 才发得出去——没在跑时命令会石沉大海（上一局的
-   * out/cmd 已被清空），等 15 秒超时再报错对模型毫无信息量。
+   * out/cmd 已被清空），等 45 秒超时再报错对模型毫无信息量。
    * 回执只有成/败：这些命令的语义就是「事件已送出」，屏幕变成什么样要看下一张截图。
    */
   async guestCommand(

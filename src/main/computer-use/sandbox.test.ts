@@ -666,12 +666,6 @@ describe("guest 命令下发", () => {
   const fieldsOf = (harness: Harness, index: number): Record<string, unknown> =>
     harness.requests[index] as unknown as Record<string, unknown>;
 
-  /** 去掉序号（进程级递增，断言里不能写死值） */
-  const withoutSeq = (fields: Record<string, unknown>): Record<string, unknown> => {
-    const { seq: _seq, ...rest } = fields;
-    return rest;
-  };
-
   test("不在 running → 直接拒绝（消息里带“去哪儿启动”），一个 req 都不落盘", async () => {
     const harness = await makeHarness();
     try {
@@ -706,16 +700,19 @@ describe("guest 命令下发", () => {
 
       const commands = harness.requests.slice(1).map((req) => req.command);
       assert.deepEqual(commands, ["click", "type", "key", "scroll"]);
-      assert.deepEqual(withoutSeq(fieldsOf(harness, 1)), {
+      // 序号从 1 起：start() 把上一局的序号归零，桥的快路径（直探 cmd-000001）第一条即命中
+      assert.deepEqual(harness.requests.map((req) => req.seq), [1, 2, 3, 4, 5]);
+      assert.deepEqual(fieldsOf(harness, 1), {
+        seq: 2,
         command: "click",
         x: 100,
         y: 200,
         button: "right",
         double: true,
       });
-      assert.deepEqual(withoutSeq(fieldsOf(harness, 2)), { command: "type", text: "你好" });
-      assert.deepEqual(withoutSeq(fieldsOf(harness, 3)), { command: "key", key: "alt+f4" });
-      assert.deepEqual(withoutSeq(fieldsOf(harness, 4)), { command: "scroll", x: 5, y: 6, deltaY: -120 });
+      assert.deepEqual(fieldsOf(harness, 2), { seq: 3, command: "type", text: "你好" });
+      assert.deepEqual(fieldsOf(harness, 3), { seq: 4, command: "key", key: "alt+f4" });
+      assert.deepEqual(fieldsOf(harness, 4), { seq: 5, command: "scroll", x: 5, y: 6, deltaY: -120 });
 
       const left = await readdir(join(harness.dir, "out", COMPUTER_USE_CMD_DIR));
       assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
