@@ -36,6 +36,7 @@ import {
   centresOfTurns,
   mergeTurnLeaves,
   orbitaCentreCandidates,
+  parseOrbitaQaId,
   type ClusterLeaf,
   type EgoCentre,
   type GraphColorMode,
@@ -69,11 +70,12 @@ export function IntentPanel(props: {
   pendingAsk: { requestId: string; ask: IntentAskView[] } | null;
   /** 折叠后仍在转录里的 user item id 集：被回退的问不进轮次 */
   liveTurnIds: ReadonlySet<string>;
-  /** 「打开会话」：在辅助对话里打开那条来源会话；返回 false = 会话已不存在 */
-  onOpenSession: (sessionId: string) => boolean;
+  /** 本机存在的会话 id 集：渲染时就判断「打开会话」能不能点（不存在的禁用并就地说明） */
+  openableSessionIds: ReadonlySet<string>;
+  /** 「打开会话」：在辅助对话里打开那条来源会话（主槽不动）；turnId 是那一问（能定位更好） */
+  onOpenSession: (sessionId: string, turnId: string | null) => void;
 }) {
   const t = useT();
-  const [missingSession, setMissingSession] = useState<string | null>(null);
   const liveTurns = useMemo(
     () => props.turns.filter((turn) => props.liveTurnIds.has(turn.turnId)),
     [props.turns, props.liveTurnIds],
@@ -349,10 +351,8 @@ export function IntentPanel(props: {
           onHover={setSelKey}
           onSelect={selectRow}
           onQuickVerdict={quickVerdict}
+          openableSessionIds={props.openableSessionIds}
           onOpenSession={props.onOpenSession}
-          missingSession={missingSession}
-          onOpenMissing={() => setMissingSession("missing")}
-          onMissingCleared={() => setMissingSession(null)}
           listRef={listRef}
         />
       </div>
@@ -610,11 +610,8 @@ function IntentRows(props: {
   onHover: (key: string) => void;
   onSelect: (key: string, scroll: boolean) => void;
   onQuickVerdict: (qaId: string, verdict: "yes" | "no") => void;
-  onOpenSession: (sessionId: string) => boolean;
-  /** 「会话已不存在」的一行说明（打开失败时挂在列表顶部，点行清除） */
-  missingSession: string | null;
-  onOpenMissing: () => void;
-  onMissingCleared: () => void;
+  openableSessionIds: ReadonlySet<string>;
+  onOpenSession: (sessionId: string, turnId: string | null) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
@@ -637,11 +634,6 @@ function IntentRows(props: {
       ref={props.listRef}
       style={props.hidden ? { display: "none" } : undefined}
     >
-      {props.missingSession !== null && (
-        <p className="intent-missing" onClick={props.onMissingCleared}>
-          {t.intentPanel.missingSession}
-        </p>
-      )}
       {groups.map((group) => {
         const open = !collapsed.has(group.label);
         return (
@@ -680,8 +672,8 @@ function IntentRows(props: {
                   onHover={props.onHover}
                   onSelect={props.onSelect}
                   onQuickVerdict={props.onQuickVerdict}
+                  openable={props.openableSessionIds.has(row.leaf.sessionId)}
                   onOpenSession={props.onOpenSession}
-                  onOpenMissing={props.onOpenMissing}
                 />
               ))}
           </div>
@@ -699,8 +691,9 @@ function IntentRowView(props: {
   onHover: (key: string) => void;
   onSelect: (key: string, scroll: boolean) => void;
   onQuickVerdict: (qaId: string, verdict: "yes" | "no") => void;
-  onOpenSession: (sessionId: string) => boolean;
-  onOpenMissing: () => void;
+  /** 来源会话在本机存在（渲染时就判定，不让用户点了才知道） */
+  openable: boolean;
+  onOpenSession: (sessionId: string, turnId: string | null) => void;
 }) {
   const t = useT();
   const { leaf } = props.row;
@@ -755,15 +748,19 @@ function IntentRowView(props: {
               )}
               <span style={{ flex: 1 }} />
               {leaf.source === "orbita" && (
-                <button
-                  type="button"
-                  className="intent-mini"
-                  onClick={() => {
-                    if (!props.onOpenSession(leaf.sessionId)) props.onOpenMissing();
-                  }}
-                >
-                  <Icon name="external-link" size={12} /> {t.intentPanel.openSession}
-                </button>
+                <>
+                  {!props.openable && (
+                    <span className="intent-row-note">{t.intentPanel.sessionNotLocal}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="intent-mini"
+                    disabled={!props.openable}
+                    onClick={() => props.onOpenSession(leaf.sessionId, parseOrbitaQaId(leaf.qaId)?.turnId ?? null)}
+                  >
+                    <Icon name="external-link" size={12} /> {t.intentPanel.openSession}
+                  </button>
+                </>
               )}
             </div>
           </>

@@ -1574,7 +1574,7 @@ export const en = {
     rowNo: "Wrong",
     openSession: "Open session",
     /** 打开会话失败（会话已删）：列表顶上的一行说明，点击消失 */
-    missingSession: "That session no longer exists — it may have been deleted. (Click to dismiss)",
+    sessionNotLocal: "This session is not in Orbita on this machine",
     earlierRounds: (from: number, to: number) => `Q${from}–${to}`,
     cardVerdictAsked: "You confirmed",
     cardVerdictDenied: "You marked wrong · withdrawn",

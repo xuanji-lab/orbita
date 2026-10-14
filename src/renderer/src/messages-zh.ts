@@ -1459,7 +1459,7 @@ export const zh: Messages = {
     rowYes: "对",
     rowNo: "不对",
     openSession: "打开会话",
-    missingSession: "那条会话已经不在了——可能已被删除。（点击消失）",
+    sessionNotLocal: "这个会话不在本机的 orbita 里",
     earlierRounds: (from, to) => `第 ${from}–${to} 问`,
     cardVerdictAsked: "你确认过",
     cardVerdictDenied: "你说不对 · 已撤下",

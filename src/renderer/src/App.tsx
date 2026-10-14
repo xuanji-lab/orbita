@@ -443,16 +443,12 @@ export function App() {
   };
   /**
    * 意图条目的「打开会话」（2026-10-14 用户裁决）：在**辅助对话**（右栏 drawer）里
-   * 打开那条来源会话——主槽不动，右栏从「意图」切过去。会话已不存在时返回 false，
-   * 面板就地给一行说明（不静默）。
+   * 打开那条来源会话——主槽不动，右栏从「意图」切过去。存在性在渲染时就判定
+   * （本机会话 id 集传进面板）：不存在的按钮直接禁用并就地说明，不让用户点了才知道。
    */
-  const openSessionFromIntent = useCallback(
-    (id: string): boolean => {
-      if (!session.sessions.some((meta) => meta.id === id)) return false;
-      openInSideChat(id);
-      return true;
-    },
-    [session, openInSideChat],
+  const intentOpenableIds = useMemo(
+    () => new Set(session.sessions.map((meta) => meta.id)),
+    [session.sessions],
   );
 
   const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
@@ -887,7 +883,8 @@ export function App() {
                       : { requestId: session.intentAsk.requestId, ask: session.intentAsk.ask }
                   }
                   liveTurnIds={intentLiveTurnIds}
-                  onOpenSession={openSessionFromIntent}
+                  openableSessionIds={intentOpenableIds}
+                  onOpenSession={openInSideChat}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
