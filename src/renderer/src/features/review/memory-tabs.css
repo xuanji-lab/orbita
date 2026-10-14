@@ -228,8 +228,16 @@
   align-items: center;
 }
 
-.memtab-conflict-resolved {
+.memtab-conflict-resolved,
+.memtab-conflict.resolved-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--color-text-tertiary);
+}
+
+.memtab-conflict.resolved-note {
+  border-style: dashed;
 }
 
 /* 注入折叠 */

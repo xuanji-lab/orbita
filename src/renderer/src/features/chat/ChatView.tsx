@@ -231,7 +231,9 @@ export function ChatView(props: ChatViewProps) {
   useEffect(() => {
     const jump = props.memoryJump;
     if (jump === null || jump === undefined || jump.token === jumpApplied.current) return;
-    if (jump.sessionId !== (session.sessionId ?? "")) return;
+    // 纯浏览的旧会话不起 runtime session（sessionId 为 null、opened 里拿得到）——
+    // 与 App / ReviewPanel 的 sessionId ?? opened?.id 同一个口径
+    if (jump.sessionId !== (session.sessionId ?? session.opened?.id ?? "")) return;
     if (session.transcript.filter((item) => item.role === "user").length < jump.turn) return;
     jumpApplied.current = jump.token;
     const sourceId = nthUserMessageId(session.transcript, jump.turn);
@@ -244,7 +246,9 @@ export function ChatView(props: ChatViewProps) {
   // 划选摘抄（实验功能「会话记忆」）：关着时工具栏不出第三键。sessionId 在这里
   // 收窄一次——闭包里的 ?. 判空保不住 TS 的流分析
   const memoryOn = useExperimentalFeature("session-memory");
-  const excerptSessionId = session.sessionId;
+  // 纯浏览的旧会话没有 runtime session（sessionId 为 null、opened 里拿得到）——
+  // 摘抄只是读文字 + 落库，不该把这类会话排除在外
+  const excerptSessionId = session.sessionId ?? session.opened?.id ?? null;
   return (
     <div
       ref={paneRef}

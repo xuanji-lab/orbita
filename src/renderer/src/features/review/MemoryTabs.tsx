@@ -37,14 +37,14 @@ export function ReviewMemoryTab(props: {
     setFailed(false);
     void api.memory
       .sessionTurns(props.sessionId)
-      .then((result) => {
-        setData(result);
-        setJustResolved(null);
-      })
+      .then((result) => setData(result))
       .catch(() => setFailed(true));
+    // 注：不清 justResolved——拍板后的撤销行要活到下一次 load 完成之后；换轮
+    // （revision 变）才整体翻篇
   }, [props.sessionId]);
 
   useEffect(() => {
+    setJustResolved(null);
     load();
   }, [load, props.revision]);
 
@@ -91,6 +91,43 @@ export function ReviewMemoryTab(props: {
             <span className="mono">{formatDay(turn.at, now)}</span>
             <span className="memtab-rule" />
           </header>
+          {/*
+           * 拍板回执独立于冲突卡：拍完 refresh，条目立刻离开「待处理冲突」的过滤
+           * （replace 后旧条目 superseded、drop-new 后新条目消失），挂在卡里会
+           * 跟着消失。按 justResolved.newId 对到这一轮就渲染在这里。
+           */}
+          {justResolved !== null &&
+            turn.added.some((added) => added.entry.id === justResolved.newId) &&
+            justResolvedTurn(data, justResolved.newId) === turn.turn && (
+              <div className="memtab-conflict resolved-note">
+                <span>
+                  {justResolved.resolution === "drop-new"
+                    ? t.memoryPanel.droppedNote
+                    : t.memoryPanel.resolvedNote}
+                </span>
+                {justResolved.resolution !== "drop-new" && (
+                  <button
+                    type="button"
+                    className="mem-btn text"
+                    disabled={busy}
+                    onClick={() =>
+                      mutate(() =>
+                        api.memory.resolve({
+                          token: data.scopeToken,
+                          newId: justResolved.newId,
+                          oldId: justResolved.oldId,
+                          resolution: justResolved.resolution,
+                          undo: true,
+                        }),
+                      )
+                    }
+                  >
+                    <Icon name="undo-2" size={12} strokeWidth={1.8} />
+                    {t.memoryPanel.undoResolve}
+                  </button>
+                )}
+              </div>
+            )}
           {turn.added
             .filter((added) => added.conflictWith !== null)
             .map((added) => (
@@ -99,7 +136,6 @@ export function ReviewMemoryTab(props: {
                 fresh={added.entry}
                 old={added.conflictWith}
                 busy={busy}
-                resolved={justResolved?.newId === added.entry.id ? justResolved : null}
                 onPick={(resolution) =>
                   mutate(
                     () =>
@@ -110,18 +146,6 @@ export function ReviewMemoryTab(props: {
                         resolution,
                       }),
                     () => setJustResolved({ newId: added.entry.id, oldId: added.conflictWith?.id ?? "", resolution }),
-                  )
-                }
-                onUndo={() =>
-                  justResolved !== null &&
-                  mutate(() =>
-                    api.memory.resolve({
-                      token: data.scopeToken,
-                      newId: justResolved.newId,
-                      oldId: justResolved.oldId,
-                      resolution: justResolved.resolution,
-                      undo: true,
-                    }),
                   )
                 }
               />
@@ -161,9 +185,7 @@ function ConflictCard(props: {
   fresh: { id: string; text: string; timestamp: number };
   old: { id: string; text: string; timestamp: number } | null;
   busy: boolean;
-  resolved: { resolution: MemoryConflictResolution } | null;
   onPick: (resolution: MemoryConflictResolution) => void;
-  onUndo: () => void;
 }) {
   const t = useT();
   const [now] = useState(() => Date.now());
@@ -179,34 +201,28 @@ function ConflictCard(props: {
         <span className="mono memtab-conflict-day">{formatDay(props.old.timestamp, now)}</span>
       </s>
       <p className="memtab-conflict-new">{props.fresh.text}</p>
-      {props.resolved === null ? (
-        <div className="memtab-conflict-acts">
-          <button type="button" className="mem-btn accent" disabled={props.busy} onClick={() => props.onPick("replace")}>
-            <Icon name="check" size={12} strokeWidth={1.8} />
-            {t.memoryLib.resolveReplace}
-          </button>
-          <button type="button" className="mem-btn" disabled={props.busy} onClick={() => props.onPick("keep-both")}>
-            {t.memoryLib.resolveKeepBoth}
-          </button>
-          <button type="button" className="mem-btn danger" disabled={props.busy} onClick={() => props.onPick("drop-new")}>
-            {t.memoryLib.resolveDropNew}
-          </button>
-        </div>
-      ) : (
-        <div className="memtab-conflict-resolved">
-          <span>
-            {props.resolved.resolution === "drop-new" ? t.memoryPanel.droppedNote : t.memoryPanel.resolvedNote}
-          </span>
-          {props.resolved.resolution !== "drop-new" && (
-            <button type="button" className="mem-btn text" disabled={props.busy} onClick={props.onUndo}>
-              <Icon name="undo-2" size={12} strokeWidth={1.8} />
-              {t.memoryPanel.undoResolve}
-            </button>
-          )}
-        </div>
-      )}
+      <div className="memtab-conflict-acts">
+        <button type="button" className="mem-btn accent" disabled={props.busy} onClick={() => props.onPick("replace")}>
+          <Icon name="check" size={12} strokeWidth={1.8} />
+          {t.memoryLib.resolveReplace}
+        </button>
+        <button type="button" className="mem-btn" disabled={props.busy} onClick={() => props.onPick("keep-both")}>
+          {t.memoryLib.resolveKeepBoth}
+        </button>
+        <button type="button" className="mem-btn danger" disabled={props.busy} onClick={() => props.onPick("drop-new")}>
+          {t.memoryLib.resolveDropNew}
+        </button>
+      </div>
     </div>
   );
+}
+
+/** 拍板回执挂在哪个轮：按新条目的 turn 找（refresh 后 added 列表里还有它）。 */
+function justResolvedTurn(data: MemorySessionTurnsResponse, newId: string): number | null {
+  for (const turn of data.turns) {
+    if (turn.added.some((added) => added.entry.id === newId)) return turn.turn;
+  }
+  return null;
 }
 
 function AddedEntry(props: {
