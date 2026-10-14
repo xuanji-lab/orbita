@@ -702,7 +702,7 @@ function AddServerForm(props: {
               onChange={(e) => setJsonText(e.target.value)}
               rows={10}
               className="text-field"
-              style={{ fontFamily: "var(--font-family-mono)", lineHeight: 1.6 }}
+              style={{ fontFamily: "var(--font-family-mono)", lineHeight: "var(--line-height-code)" }}
               placeholder={'{\n  "mcpServers": {\n    "demo": { "command": "node", "args": ["server.js"] }\n  }\n}'}
             />
           </FormRow>

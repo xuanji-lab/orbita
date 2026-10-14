@@ -745,7 +745,7 @@ function SkillDetail(props: {
                 className="text-field"
                 style={{
                   fontFamily: "var(--font-family-mono)",
-                  lineHeight: 1.6,
+                  lineHeight: "var(--line-height-code)",
                   cursor: disabled ? "not-allowed" : undefined,
                 }}
               />

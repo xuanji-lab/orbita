@@ -26,6 +26,15 @@
   --line-height-ui: 1.5;       /* 界面文字：控件、列表、卡片、说明 */
   --line-height-reading: 1.75; /* 成段阅读：对话正文、用户气泡 */
 
+  /* 内容例外：代码与终端是内容不是界面，不跟基准走（同 ZCode 对代码 / Diff / 终端的例外）。
+     声明在这里，不在调用点写数字——例外也要看得见。数值照搬迁移前的写死值，统不统一另议。 */
+  --line-height-code: 1.6;        /* diff、工具输出、MCP / skill 正文编辑 */
+  --line-height-code-block: 1.55; /* 对话里的代码块、文件预览源码 */
+  --font-size-terminal: 13px;   /* xterm 只吃数字：TerminalView 运行时读这两个值 */
+  --line-height-terminal: 1.25;
+  --line-height-brand: 1.25;      /* 首页 slogan */
+  --line-height-brand-mark: 1.2;  /* 纸面主题 slogan 下的红笔批语 */
+
   --weight-regular: 450;
   --weight-medium: 500;
   --weight-semibold: 600;

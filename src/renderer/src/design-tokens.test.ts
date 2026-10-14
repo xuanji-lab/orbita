@@ -275,7 +275,52 @@ function scanFontSizes(): string[] {
   return hits;
 }
 
+/**
+ * 行高同理：只许 `var(--line-height-*)`（含代码 / 终端 / 品牌这些声明过的例外）、
+ * `0` / `1`（图标与单行对齐的几何写法）、`normal` / `inherit`。裸的 `18px` / `1.55` 一类
+ * 会把一处钉死，也是「字乱」的另一半。
+ */
+const CSS_LINE_HEIGHT_RE = /(?<![-\w])line-height\s*:\s*([^;}\n]+)/g;
+// 只认对象属性位置（前面是 `{` / `,` / 行首）：`cond ? lineHeight : 22` 这类三元不是样式
+const TS_LINE_HEIGHT_RE = /(?:^|[{,])\s*lineHeight\s*:\s*([^,}\n]+)/g;
+const LINE_HEIGHT_OK = /^(["'`]?var\(--(line-height-[a-z-]+|paper-cell)\)["'`]?|["'`]?(0|1|normal|inherit)["'`]?)$/;
+/**
+ * 按「文件: 值」豁免（加条目必须写清理由）——两处都是几何，不是排版：
+ * - paper-themes.css 24px：打字稿主题输入框的行高要和每 24px 一条的横线背景对齐；
+ * - styles.css 14px：右栏铃铛未读角标，行高 = 胶囊高度，把数字竖向居中。
+ */
+const LINE_HEIGHT_EXEMPTIONS = new Set<string>([
+  "src/renderer/src/paper-themes.css: 24px",
+  "src/renderer/src/styles.css: 14px",
+]);
+
+function scanLineHeights(): string[] {
+  const hits: string[] = [];
+  for (const file of [...rendererCssFiles, ...rendererTsFiles]) {
+    const isCss = extname(file) === ".css";
+    const rel = relPath(file);
+    const lines = readClean(file, !isCss).split("\n");
+    lines.forEach((line, i) => {
+      for (const m of line.matchAll(isCss ? CSS_LINE_HEIGHT_RE : TS_LINE_HEIGHT_RE)) {
+        const value = group1(m).trim().replace(/\s*!important$/, "");
+        if (LINE_HEIGHT_EXEMPTIONS.has(`${rel}: ${value}`)) continue;
+        // TS 里只管字面量；表达式 / 变量（类型标注里的 `lineHeight: number` 也在内）放过
+        if (!isCss && !/^["'`\d]/.test(value)) continue;
+        if (!LINE_HEIGHT_OK.test(value)) hits.push(`  ${rel}:${i + 1}: ${value}`);
+      }
+    });
+  }
+  return hits;
+}
+
 describe("design-tokens —— 字号只按角色取档", () => {
+  test("src/renderer/src 下没有裸行高（px 或自造的无单位数）", () => {
+    const hits = scanLineHeights();
+    if (hits.length > 0) {
+      assert.fail(`发现裸行高（改用 var(--line-height-tight|ui|reading)，代码类用 -code / -code-block）：\n${hits.join("\n")}`);
+    }
+  });
+
   test("src/renderer/src 下没有裸 px / rem / 数字字号", () => {
     const hits = scanFontSizes();
     if (hits.length > 0) {

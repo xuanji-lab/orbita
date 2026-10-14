@@ -215,7 +215,7 @@
   margin: 10px 0 0;
   font-family: "Long Cang", "Bradley Hand", cursive;
   font-size: var(--font-size-slogan-mark);
-  line-height: 1.2;
+  line-height: var(--line-height-brand-mark);
   letter-spacing: 0.05em;
   color: var(--color-paper-pen);
   transform: rotate(-3deg);

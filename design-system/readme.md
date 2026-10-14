@@ -370,8 +370,10 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 - **Markdown**: h1 `xl`, h2 `lg`, h3–h6 `base` distinguished by weight (h1–h4 600, h5 500, h6 450 +
   secondary colour). Prose leading `--line-height-reading` (1.75), tracking `--tracking-reading`.
 - **Leading** has three values, all unitless: `--line-height-tight` 1.4 (headings), `-ui` 1.5
-  (interface text), `-reading` 1.75 (prose, user bubble). Code, diff and tool output keep their own
-  1.55–1.6 — content, not interface.
+  (interface text), `-reading` 1.75 (prose, user bubble). Code, diff, tool output and the terminal are
+  content, not interface: they keep their own values, but as declared tokens (`--line-height-code`,
+  `-code-block`, `--font-size-terminal`, `--line-height-terminal`), never literals. Bare `px` or
+  invented unitless leadings fail `design-tokens.test.ts`; only `0` / `1` (icon alignment) are free.
 - **Exceptions are tokens, not literals**: brand type (`--font-size-slogan`, `-slogan-mark`,
   `-wordmark`) does not follow the base; em-relative sizes inside Markdown (inline code, citations)
   follow their parent and are allowed.

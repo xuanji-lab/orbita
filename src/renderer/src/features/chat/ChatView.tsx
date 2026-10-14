@@ -2958,7 +2958,7 @@ function SkillInvocationCard(props: { name: string; content: string }) {
             border: "1px solid var(--color-border-subtle)",
             fontFamily: "var(--font-family-mono)",
             fontSize: "var(--font-size-sm)",
-            lineHeight: 1.6,
+            lineHeight: "var(--line-height-code)",
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
             color: "var(--color-text-secondary)",
@@ -3239,7 +3239,7 @@ const EXPANDED_BODY = {
   overflow: "auto",
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-sm)",
-  lineHeight: 1.6,
+  lineHeight: "var(--line-height-code)",
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 } satisfies React.CSSProperties;
@@ -3699,7 +3699,7 @@ function ToolLine(props: {
             padding: "var(--space-2) 0",
             fontFamily: "var(--font-family-mono)",
             fontSize: "var(--font-size-sm)",
-            lineHeight: 1.6,
+            lineHeight: "var(--line-height-code)",
           }}
         >
           {tailPreview.map((line, index) => (
@@ -4057,7 +4057,7 @@ function FileContentView(props: { text: string; startLine: number; lang: string 
         padding: "var(--space-2) 0",
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-sm)",
-        lineHeight: 1.6,
+        lineHeight: "var(--line-height-code)",
       }}
     >
       {rows.flatMap((row, index) => [
@@ -4143,7 +4143,7 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
             margin: 0,
             fontFamily: "var(--font-family-mono)",
             fontSize: "var(--font-size-sm)",
-            lineHeight: 1.6,
+            lineHeight: "var(--line-height-code)",
             color: isFailure ? "var(--color-danger)" : "var(--color-text-primary)",
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
@@ -4378,7 +4378,7 @@ const PLAIN_BODY = {
   padding: "var(--space-2) 0",
   fontFamily: "var(--font-family-mono)",
   fontSize: "var(--font-size-sm)",
-  lineHeight: 1.6,
+  lineHeight: "var(--line-height-code)",
 } satisfies React.CSSProperties;
 
 const BODY_LINE = {
