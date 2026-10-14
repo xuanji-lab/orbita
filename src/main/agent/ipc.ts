@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { mainWindows } from "../window/main-windows.ts";
 import {
   ipcChannels,
+  type ChoreModelPayload,
   type CompactAgentInput,
   type ProviderSecrets,
   type SubmitAgentInput,
@@ -238,6 +239,21 @@ export function registerAgentIpc(
   };
 
   /**
+   * 会话记忆的开轮字段：开关 + 蒸馏用的工作模型。**开关不进 turnFields**——它只
+   * 属于开主链路的 submit / interrupt，压缩轮不召回也不蒸馏；choreModel 更是只在
+   * 开关开着时才装配，关着时它是死重。装配失败（readChoreModel 内部）退 undefined，
+   * runtime 再退会话模型。缺省字段不进命令对象（可送化与深比较都要稳定形状）。
+   */
+  const memoryTurnFields = async (): Promise<{
+    sessionMemory?: boolean;
+    choreModel?: ChoreModelPayload;
+  }> => {
+    if (!(await readSessionMemory())) return {};
+    const choreModel = await readChoreModel();
+    return { sessionMemory: true, ...(choreModel === undefined ? {} : { choreModel }) };
+  };
+
+  /**
    * 附图装配：原图先落进会话目录（看大图用），带着引用发给 agent 进程（它缩放后发模型）。
    * 没图就不带字段——纯文字消息的命令与以前一字不差。
    */
@@ -370,9 +386,7 @@ export function registerAgentIpc(
         workspaceName: await workspaceNameOf(input.workspaceId),
         pdfCitations: await readPdfCitations(),
       }),
-      // 会话记忆的开关不进 turnFields：它只属于开主链路的 submit / interrupt，
-      // 压缩轮不召回也不蒸馏，不带这个字段
-      sessionMemory: await readSessionMemory(),
+      ...(await memoryTurnFields()),
     });
     await settleFirstTurn(input, piSessionFile);
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
@@ -399,7 +413,7 @@ export function registerAgentIpc(
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }), sessionMemory: await readSessionMemory() });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }), ...(await memoryTurnFields()) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
