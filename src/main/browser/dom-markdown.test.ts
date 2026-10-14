@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { domToMarkdown, normalizeMarkdown, type DomNode } from "./dom-markdown.ts";
+import { collectLinks, domToMarkdown, normalizeMarkdown, type DomNode } from "./dom-markdown.ts";
 
 /** 构造节点树的小工具：文本节点、元素节点（attrs 可选） */
 function text(value: string): DomNode {
@@ -123,6 +123,22 @@ test("深层嵌套不炸：200 层 div 包一段文字仍能取到", () => {
   let node: DomNode = el("p", [text("deep")]);
   for (let i = 0; i < 200; i += 1) node = el("div", [node]);
   assert.equal(domToMarkdown(node), "deep");
+});
+
+test("collectLinks：文字 + URL、按 URL 去重、javascript: 丢掉、无文字链接也收", () => {
+  const out = collectLinks(
+    page(
+      el("a", [text("Paper")], { href: "https://doi.org/10.1/a" }),
+      el("a", [text("Paper again")], { href: "https://doi.org/10.1/a" }),
+      el("a", [], { href: "https://example.com/x" }),
+      el("a", [text("go")], { href: "javascript:alert(1)" }),
+    ),
+  );
+  assert.deepEqual(out, [
+    ["Paper", "https://doi.org/10.1/a"],
+    ["", "https://example.com/x"],
+  ]);
+  assert.deepEqual(collectLinks(null), []);
 });
 
 test("normalizeMarkdown：空行压一个、行尾空白去掉、首尾 trim", () => {

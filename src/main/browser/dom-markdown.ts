@@ -67,6 +67,24 @@ export function domToMarkdown(root: DomNode | null | undefined): string {
   return normalizeMarkdown(blocks.join("\n\n"));
 }
 
+/** 从节点树里收集链接（文字 + 绝对 URL），按 URL 去重：markdown 模式的 links: true 用它 */
+export function collectLinks(root: DomNode | null | undefined): [string, string][] {
+  const out: [string, string][] = [];
+  const seen = new Set<string>();
+  const visit = (node: DomNode): void => {
+    if (node.tag === "a") {
+      const href = (node.attrs?.href ?? "").trim();
+      if (href !== "" && !/^javascript:/i.test(href) && !seen.has(href)) {
+        seen.add(href);
+        out.push([inline(node.children ?? []).replace(/\s+/g, " ").trim().slice(0, 200), href]);
+      }
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  if (root !== null && root !== undefined) visit(root);
+  return out;
+}
+
 /** 连续空行压成一个、行尾空白去掉、首尾空白去掉（与 page-text.ts 的文本规整同一套规矩） */
 export function normalizeMarkdown(text: string): string {
   return text

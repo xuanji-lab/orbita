@@ -160,8 +160,12 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     label: "browser_extract",
     description:
       "Read the visible text of the page in your browser tab, in reading order. Long pages are returned in chunks: " +
-      "the result says the total length, pass offset to continue. Set links to true to also list the page's links " +
-      "(text and absolute URL) — useful for following DOIs or result entries. " +
+      "the result says the total length, pass offset to continue. Set format to \"markdown\" to keep the page's " +
+      "structure — headings, lists, links as [text](URL), tables, emphasis, code — instead of flat text; use it for " +
+      "structured pages (articles, docs, search results) and whenever you need the URL behind a link. Set ref to an " +
+      "element from browser_observe to read only that element's subtree (a panel, an article) instead of the whole " +
+      "page. Set links to true to also list the page's links (text and absolute URL) — useful for following DOIs or " +
+      "result entries. " +
       UNTRUSTED,
     parameters: {
       type: "object",
@@ -169,6 +173,19 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
         offset: { type: "number", description: "Character offset to start from. Defaults to 0." },
         maxChars: { type: "number", description: "Characters to return, 1000–50000. Defaults to 20000." },
         links: { type: "boolean", description: "Also list the page's links. Defaults to false." },
+        format: {
+          type: "string",
+          enum: ["text", "markdown"],
+          description:
+            "\"text\" (default): flat visible text. \"markdown\": keep headings, lists, links, tables, emphasis " +
+            "and code — better for structured pages and when link URLs matter.",
+        },
+        ref: {
+          type: "string",
+          description:
+            "Element ref from browser_observe: read only that element's subtree instead of the whole page. Only " +
+            "works on your own tab.",
+        },
         tab: USER_TAB_PARAM,
       },
       required: [],
@@ -181,6 +198,8 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
           ...(typeof args["maxChars"] === "number" ? { maxChars: args["maxChars"] } : {}),
           ...(args["links"] === true ? { links: true } : {}),
+          ...(args["format"] === "markdown" ? { format: "markdown" as const } : {}),
+          ...(typeof args["ref"] === "string" && args["ref"].trim() !== "" ? { ref: args["ref"].trim() } : {}),
         ...userTabArg(args["tab"]),
         },
         signal,
