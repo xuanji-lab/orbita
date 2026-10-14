@@ -92,3 +92,7 @@ test("DISTILL_SYSTEM_PROMPT 声明了原子条目三要素与空数组出口", (
   assert.ok(DISTILL_SYSTEM_PROMPT.includes("YYYY-MM-DD"));
   assert.ok(DISTILL_SYSTEM_PROMPT.includes("[]"));
 });
+
+test("DISTILL_SYSTEM_PROMPT 排除元讨论（验收观察：关于记忆机制本身的议论不该入库）", () => {
+  assert.ok(DISTILL_SYSTEM_PROMPT.includes("元讨论"));
+});
