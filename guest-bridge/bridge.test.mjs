@@ -337,3 +337,19 @@ test(
     }
   },
 );
+
+
+// ── 注入失败文案（B）────────────────────────────────────────────────────
+//
+// 真机在垂死 / 未就绪的沙箱里拿到「SendInput 只送达 0/4（错误码 5）」，模型只能看见一个
+// 裸数字，白试了两轮。这条**测不了那条路径**（要 SendInput 真的失败，而宿主上跑注入是红线），
+// 所以照约定直接断言源码里的文案常量：它被删掉 / 被改回裸错误码时这条会红。
+
+test("注入失败文案：错误码 5 带人话解释（模型看得到的就这一句）", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+  assert.match(src, /DescribeSendInputError/);
+  assert.match(src, /错误码 5 = 拒绝访问/);
+  assert.match(src, /先截图确认沙箱状态/);
+  // 文案要接进异常消息里，不能只定义不用
+  assert.match(src, /个事件（" \+ DescribeSendInputError/);
+});

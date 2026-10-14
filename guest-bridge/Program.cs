@@ -555,14 +555,28 @@ internal static class Program
         return input;
     }
 
-    /** 送一批事件；没全送到就是失败（注入被拦 / 桌面不在交互态），不吞成成功 */
+    /**
+     * 送一批事件；没全送到就是失败（注入被拦 / 桌面不在交互态），不吞成成功。
+     * 错误码要翻成人话：2026-10-14 真机在垂死 / 未就绪的沙箱里拿到「只送达 0/4（错误码 5）」，
+     * 模型只能看见一个裸数字，白试了两轮——错误码 5 = 系统拒绝注入，含义是会话没就绪或已失效，
+     * 正确动作是先截图确认状态，不是反复重试。
+     */
     private static void SendInputs(INPUT[] inputs)
     {
         if (inputs.Length == 0) return;
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
         if (sent != (uint)inputs.Length)
             throw new InvalidOperationException("SendInput 只送达 " + sent + "/" + inputs.Length
-                + " 个事件（错误码 " + Marshal.GetLastWin32Error() + "）");
+                + " 个事件（" + DescribeSendInputError((int)Marshal.GetLastWin32Error()) + "）");
+    }
+
+    /** SendInput 失败的错误码 → 一句人话（模型看得到的就是它，别让它对着裸数字试） */
+    private static string DescribeSendInputError(int code)
+    {
+        if (code == 5)
+            return "错误码 5 = 拒绝访问：系统拒绝了这次注入——沙箱会话可能还没就绪或已经失效，"
+                + "先截图确认沙箱状态，再决定重试还是重启沙箱";
+        return "错误码 " + code;
     }
 
     private static bool TryButtonFlags(string button, out uint down, out uint up)
