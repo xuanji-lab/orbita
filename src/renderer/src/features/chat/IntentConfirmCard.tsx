@@ -66,6 +66,8 @@ function autofit(el: HTMLTextAreaElement | null): void {
  */
 function markExcerpt(root: HTMLElement | null, excerpt: string): void {
   if (root === null || excerpt.trim() === "") return;
+  // 幂等：同一份 DOM 上再跑一次（effect 重跑）不叠第二层
+  if (root.querySelector("mark.intent-mark") !== null) return;
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) nodes.push(node as Text);
@@ -196,10 +198,10 @@ export function IntentConfirmCard(props: {
   const assistantExcerpt = edge?.assistant ?? "";
   useEffect(() => {
     markExcerpt(qBodyRef.current, evidence);
-  }, [qText, evidence, edgesSettled, cur]);
+  }, [qText, evidence, edgesSettled, cur, item?.askId]);
   useEffect(() => {
     markExcerpt(aBodyRef.current, assistantExcerpt);
-  }, [aText, assistantExcerpt, edgesSettled, cur]);
+  }, [aText, assistantExcerpt, edgesSettled, cur, item?.askId]);
 
   const answered = useMemo(() => buildConfirmAnswers(rows, props.ask), [rows, props.ask]);
   const taken = rows.filter((r) => r.verdict !== "skip").length;
@@ -422,13 +424,17 @@ export function IntentConfirmCard(props: {
               <>
                 <div className="intent-conv-turn">
                   <div className="intent-conv-who">{t.chat.recall.confirm.youSaid}</div>
-                  <div ref={qBodyRef} className="intent-conv-md">
+                  {/* key 按条换：高亮是直接改 MarkdownBlock 渲染出的 DOM（包 <mark>），同一份 Q/A
+                      在相邻几条里不变时 React 不重渲，上一条的 mark 会留着、新的再叠上去，React
+                      再协调还会把被拆过的文本节点重复插一遍（真机：1/2/5 条同一处高亮、正文重复一截）。
+                      每条重挂一份干净的 DOM，再只包这一条自己的摘句。 */}
+                  <div key={`q:${item.askId}`} ref={qBodyRef} className="intent-conv-md">
                     <MarkdownBlock text={qText} variant="bubble" />
                   </div>
                 </div>
                 <div className="intent-conv-turn">
                   <div className="intent-conv-who">{t.chat.recall.confirm.assistantSaid}</div>
-                  <div ref={aBodyRef} className="intent-conv-md">
+                  <div key={`a:${item.askId}`} ref={aBodyRef} className="intent-conv-md">
                     <MarkdownBlock text={aText} />
                   </div>
                 </div>
