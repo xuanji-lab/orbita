@@ -199,11 +199,13 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     description:
       "Type text into whatever has focus on the sandbox desktop. **Click the target first** with " +
       "computer_click — a window or dialog that just opened does not always have focus, and text typed into " +
-      "an unfocused desktop is silently dropped (a dialog that just opened, such as the win+r Run box, does " +
-      "not always take focus). " +
-      "Goes in as Unicode, so Chinese and symbols work. Keys that are not text (Enter, Tab, arrows, " +
-      "shortcuts) go through computer_key instead. Take a screenshot afterwards to confirm it landed where " +
-      "you meant. Never type passwords, one-time codes or other credentials — ask the user instead. " +
+      "an unfocused desktop is silently dropped. " +
+      "Goes in as Unicode, so Chinese and symbols work. If typed characters do not appear at all, do not keep " +
+      "retrying the same box: the win+r Run box in this sandbox swallows them (its Cancel button does not " +
+      "respond either) — press escape and use the taskbar search box instead (click it, type the name, enter). " +
+      "Keys that are not text (Enter, Tab, arrows, shortcuts) go through computer_key instead. " +
+      "Take a screenshot afterwards to confirm it landed where you meant. Never type passwords, one-time " +
+      "codes or other credentials — ask the user instead. " +
       CONSEQUENCES,
     parameters: {
       type: "object",
@@ -223,10 +225,13 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     label: "computer_key",
     description:
       "Press a key or a key combination on the sandbox desktop: enter, tab, escape, backspace, delete, home, " +
-      "end, pageup, pagedown, up / down / left / right, f1–f12, ctrl+a, alt+f4, win+r, ctrl+shift+s… " +
+      "end, pageup, pagedown, up / down / left / right, f1–f12, ctrl+a, alt+f4, ctrl+shift+s… " +
       "It goes to the focused window — click the window first. Take a screenshot afterwards to confirm. " +
-      "This is how you open things from the desktop itself: win+r, type cmd (or a program path — the image " +
-      "is a bare Windows, notepad is not installed), then enter. " +
+      "This is how you open things from the desktop itself. **Prefer the taskbar search box**: click it, type " +
+      "the program name (cmd, msedge — the image is a bare Windows and notepad is not installed), press " +
+      "enter. **Do not use the win+r Run box**: in this sandbox click reaches it but typed characters do not " +
+      "land in it (and its Cancel button does not respond). If you already opened it and typing did nothing, " +
+      "do not retry that box — press escape and use the taskbar search box instead. " +
       CONSEQUENCES,
     parameters: {
       type: "object",
