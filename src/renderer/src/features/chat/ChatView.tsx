@@ -312,7 +312,7 @@ export function ChatView(props: ChatViewProps) {
           <ChatViewBody {...props} dropActive={dropActive} />
         </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
-      {/* 复制与摘抄只读文字，只读 / 归档 / 没配模型的会话里也能用；引用要往输入框里放，
+      {/* 复制与摘抄只读文字，只读（没有 pi 本子的旧会话）/ 没配模型的会话里也能用；引用要往输入框里放，
           输入框不可用时那一键不出现 */}
       <QuoteSelectionLayer
         paneRef={paneRef}

@@ -23,7 +23,6 @@ import {
   revertOptimisticTurn,
   seedFromDisk,
   setEntryPhase,
-  sessionViewReadOnly,
   type PendingApproval,
   type QueuedMessage,
   type SessionEntry,
@@ -3084,8 +3083,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     sessionsLoaded: engine.sessionsLoaded,
     loadingHistory,
     opened,
-    // 打开的是一条没有 pi 本子的旧会话且还没开新的——只能读；归档的会话同理（#233 联调补）
-    readOnly: sessionViewReadOnly({ opened, sessionId, sessions: engine.sessions }),
+    // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
+    readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
     openSession,
     renameSession: engine.renameSession,
     pinSession: engine.pinSession,

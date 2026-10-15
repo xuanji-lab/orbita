@@ -25,7 +25,6 @@ import {
   revertOptimisticTurn,
   seedFromDisk,
   setEntryPhase,
-  sessionViewReadOnly,
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
@@ -1018,15 +1017,4 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
     const merged = mergeSideRecords([], [], [], [], [], [user], [recall]);
     assert.deepEqual(merged.map((record) => record.role), ["user", "intent-recall"]);
   });
-});
-
-test("sessionViewReadOnly：浏览无本子的旧会话 / 已归档 → 只读；活会话与无主新会话 → 否", () => {
-  assert.equal(sessionViewReadOnly({ opened: { piSessionFile: null }, sessionId: null, sessions: [] }), true);
-  assert.equal(sessionViewReadOnly({ opened: { piSessionFile: "/x.jsonl", archived: true }, sessionId: null, sessions: [] }), true);
-  assert.equal(sessionViewReadOnly({ opened: { piSessionFile: "/x.jsonl", archived: true }, sessionId: "s1", sessions: [] }), true);
-  assert.equal(sessionViewReadOnly({ opened: { piSessionFile: "/x.jsonl" }, sessionId: "s1", sessions: [{ id: "s1", archived: true }] }), true);
-  assert.equal(sessionViewReadOnly({ opened: { piSessionFile: "/x.jsonl" }, sessionId: "s1", sessions: [{ id: "s1", archived: false }] }), false);
-  assert.equal(sessionViewReadOnly({ opened: { piSessionFile: "/x.jsonl" }, sessionId: "s1", sessions: [] }), false);
-  assert.equal(sessionViewReadOnly({ opened: null, sessionId: null, sessions: [] }), false);
-  assert.equal(sessionViewReadOnly({ opened: null, sessionId: "s2", sessions: [{ id: "s2", archived: true }] }), true);
 });
