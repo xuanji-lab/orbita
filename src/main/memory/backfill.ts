@@ -124,6 +124,9 @@ export interface MemoryBackfillDeps {
  * 子会话（有父的委派会话）不补蒸：它的产出经通道回流进父会话，父侧蒸过。
  * 归档会话、导入会话都包括——「历史」按用户的账算，不按活跃算。
  * 单条会话读不了只跳过那条（记日志），不拦整个预估 / 任务。
+ *
+ * 会话间小并发读（8 路）：几百条会话的预估要一两秒内给出（契约原话），
+ * 串行读盘时还娜娅 2 秒+，瓶颈是逐文件 IO 而不是解析。
  */
 export async function collectBackfillPlan(
   deps: Pick<MemoryBackfillDeps, "sessions" | "channels" | "ledger">,
@@ -131,33 +134,57 @@ export async function collectBackfillPlan(
   now: number,
 ): Promise<{ turns: BackfillTurn[]; skippedTurns: number; chars: number }> {
   const since = rangeStart(range, now);
-  const turns: BackfillTurn[] = [];
-  let skippedTurns = 0;
-  for (const meta of await deps.sessions.list()) {
-    if (meta.parentId !== undefined) continue;
+  const metas = (await deps.sessions.list()).filter((meta) => meta.parentId === undefined);
+  const perSession = await collectWithLimit(metas, 8, async (meta) => {
     const detail = await deps.sessions.load(meta.id).catch((cause: unknown) => {
       console.error("[memory:backfill] 会话账本读不了，跳过这条", meta.id, cause);
       return null;
     });
-    if (detail === null) continue;
+    if (detail === null) return null;
     const channelTexts = detail.transcript.some(isChannelMarkRecord)
       ? await channelTextsOf(deps.channels, meta.id, detail.transcript)
       : new Map<string, string>();
-    const collected = collectSessionTurns({
+    return collectSessionTurns({
       sessionId: meta.id,
       meta: { workspaceId: detail.meta.workspaceId, cwd: detail.meta.cwd },
       records: detail.transcript,
       channelTexts,
       distilled: deps.ledger.turnsOf(meta.id),
       since,
+      model: { providerId: detail.meta.providerId, modelId: detail.meta.modelId },
     });
+  });
+  const turns: BackfillTurn[] = [];
+  let skippedTurns = 0;
+  for (const collected of perSession) {
+    if (collected === null) continue;
     skippedTurns += collected.skippedTurns;
-    for (const turn of collected.pending) {
-      turns.push({ ...turn, model: { providerId: detail.meta.providerId, modelId: detail.meta.modelId } });
-    }
+    turns.push(...collected.pending);
   }
   turns.sort((a, b) => a.at - b.at);
   return { turns, skippedTurns, chars: turns.reduce((sum, turn) => sum + turn.chars, 0) };
+}
+
+/** 小并发池（保序收集）：读盘型任务的通用小工具，不做退避不做重试。 */
+async function collectWithLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      const item = items[index];
+      if (item === undefined) continue;
+      results[index] = await run(item);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /** 通道标记的正文表：这条会话里出现过的每条通道各读一次（读失败当没有）。 */
