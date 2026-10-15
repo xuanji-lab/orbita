@@ -451,8 +451,23 @@ function IntentGraph(props: {
     rendererRef.current = renderer;
     renderer.subscribeView((view) => setZoom(view.z));
     const host = hostRef.current;
+    // 适配要让开浮在图上的控件：顶部的视图切换与摘要、底部的图例。现量（控件随数据出现、
+    // 随面板宽度换行），量的是它们相对图区的外沿；不在就是 0
+    renderer.setInsetsProvider(() => {
+      if (host === null) return { top: 0, right: 0, bottom: 0, left: 0 };
+      const box = host.getBoundingClientRect();
+      let top = 0;
+      for (const selector of [".intent-graph-top", ".intent-summary", ".intent-zoom"]) {
+        const node = host.querySelector(selector);
+        if (node !== null) top = Math.max(top, node.getBoundingClientRect().bottom - box.top);
+      }
+      const key = host.querySelector(".intent-key");
+      const bottom = key === null ? 0 : Math.max(0, box.bottom - key.getBoundingClientRect().top);
+      return { top, right: 0, bottom, left: 0 };
+    });
     if (host !== null) renderer.resize(host.clientWidth, host.clientHeight);
     return () => {
+      renderer.setInsetsProvider(null);
       renderer.subscribeView(null);
       renderer.dispose();
       rendererRef.current = null;

@@ -182,22 +182,20 @@ export function seededRandom(seed: number): () => number {
 /** 物理常量的尺度基准：原型画布的短边。 */
 const UNIT = 340;
 
-/** 软边界的边距：节点进入边距带就被推回（标签要留得下） */
-export function boundaryMargin(W: number, H: number): number {
-  return Math.max(20, Math.min(W, H) * 0.07);
-}
-
 /**
- * 单轮力学步进（排斥 + 弹簧 + 向心 + 钉点弹簧 + 软边界）。确定性：无随机。
+ * 单轮力学步进（排斥 + 弹簧 + 向心 + 钉点弹簧）。确定性：无随机。
  * 排斥常量与截断距离按 min(W,H)/340 缩放，布局在小面板里不会因为力程不变而爆开。
- * 边界是**软**的（进入边距带给回拉力），只在画布外沿做硬钳制——硬钳制在墙上
- * 会把一堆节点压到同一个角点（2026-10-14 真机的「角落孤点」）。
+ *
+ * **没有边界**（2026-10-16 用户：「意图的这个图有隐形边界……我不喜欢」）。以前有
+ * 一圈软边距带 + 画布外沿硬钳制：节点一多（真机 300+），斥力把外圈全推到看不见的墙上，
+ * 排成上一行、左一列的整齐圆点——那是布局被框住的痕迹，不是数据的形状。画布现在只是
+ * 初始坐标与力程的尺度；图要多大就多大，只靠向心力不让孤点飘走，看全图靠渲染器的
+ * 「适配」（按节点实际范围缩放），而不是把节点关在面板里。
  */
 export function tick(nodes: readonly SimNode[], links: readonly SimLink[], W: number, H: number, alpha: number, maxStep: number): void {
   const s = Math.min(W, H) / UNIT;
   const cutoff2 = 220 * s * (220 * s);
   const repK = 210 * s * s;
-  const margin = boundaryMargin(W, H);
   for (let i = 0; i < nodes.length; i += 1) {
     for (let j = i + 1; j < nodes.length; j += 1) {
       const a = nodes[i]!;
@@ -243,16 +241,10 @@ export function tick(nodes: readonly SimNode[], links: readonly SimLink[], W: nu
       n.vx += (n.pin.x - n.x) * 0.15;
       n.vy += (n.pin.y - n.y) * 0.15;
     }
-    if (n.x < margin) n.vx += (margin - n.x) * 0.12;
-    else if (n.x > W - margin) n.vx -= (n.x - (W - margin)) * 0.12;
-    if (n.y < margin) n.vy += (margin - n.y) * 0.12;
-    else if (n.y > H - margin) n.vy -= (n.y - (H - margin)) * 0.12;
     n.x += Math.max(-maxStep, Math.min(maxStep, n.vx * alpha));
     n.y += Math.max(-maxStep, Math.min(maxStep, n.vy * alpha));
     n.vx *= 0.6;
     n.vy *= 0.6;
-    n.x = Math.max(6, Math.min(W - 6, n.x));
-    n.y = Math.max(6, Math.min(H - 6, n.y));
   }
 }
 
@@ -910,4 +902,20 @@ export function spineLeaves(
     )
     .sort((a, b) => b.leaf.score - a.leaf.score || b.leaf.lastRound - a.leaf.lastRound || (a.id < b.id ? -1 : 1))
     .slice(0, count);
+}
+
+/** 节点坐标的外接框（布局空间）。空场景返回 null。渲染器的「适配」与测试共用。 */
+export function nodeBounds(nodes: readonly { x: number; y: number }[]): { x0: number; y0: number; x1: number; y1: number } | null {
+  if (nodes.length === 0) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const n of nodes) {
+    if (n.x < x0) x0 = n.x;
+    if (n.x > x1) x1 = n.x;
+    if (n.y < y0) y0 = n.y;
+    if (n.y > y1) y1 = n.y;
+  }
+  return { x0, y0, x1, y1 };
 }

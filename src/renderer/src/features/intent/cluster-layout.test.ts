@@ -2,8 +2,11 @@
  * 簇布局与配色的纯函数测试：确定性（同数据同图）、分簇与桥、多问合并（轮号 /
  * rounds 汇总）、着色三档（轮次 / 相关度）、种子布局的稳定性（新节点长进来，
  * 旧节点位移有界）、中心封顶；以及用**真实数据**（55 片叶 / 26 会话 / 7 问）
- * 在面板尺寸（320–460 × 340）下的布局指标回归：贴边、直接挂岗位 hub 的叶、
- * 中心离墙、虚线桥占比、标签不重复。
+ * 在面板尺寸（320–460 × 340）下的布局指标回归：贴墙、直接挂岗位 hub 的叶、
+ * 中心离外缘、虚线桥占比、标签不重复；以及 300 片叶的大图不出「隐形墙」。
+ *
+ * 布局没有边界（2026-10-16），所以「贴墙」量的是外接框：一大串节点的 x 或 y 挤在
+ * 外接框同一条边上，就是被墙挡住的痕迹（真机截图里上一行、左一列的整齐圆点）。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -11,12 +14,12 @@ import {
   GROW_ALPHA,
   MAX_CENTRES,
   SLOT_CLUSTER_NAMES,
-  boundaryMargin,
   buildEgoScene,
   buildSlotScene,
   centresOfTurns,
   leafRange,
   mergeTurnLeaves,
+  nodeBounds,
   nebulaPercentOf,
   orbitaCentreCandidates,
   parentLinks,
@@ -324,8 +327,11 @@ function layoutMetrics(scene: ClusterScene): {
   dashedPct: number;
   dupLabels: string[];
 } {
-  const { w: W, h: H } = scene;
-  const atEdge = scene.nodes.filter((n) => n.x < 12 || n.x > W - 12 || n.y < 12 || n.y > H - 12);
+  const b = nodeBounds(scene.nodes)!;
+  // 贴在外接框某条边上（±1.5px）：自由布局里只有零星几个极值点，墙会让一整排排上去
+  const atEdge = scene.nodes.filter(
+    (n) => n.x - b.x0 < 1.5 || b.x1 - n.x < 1.5 || n.y - b.y0 < 1.5 || b.y1 - n.y < 1.5,
+  );
   const leafLinks = scene.links.filter((l) => l.b.kind === "leaf" && l.bridge !== true && l.ego !== true);
   const direct = leafLinks.filter((l) => l.a.kind === "hub" && !l.a.sub);
   const somas = scene.nodes.filter((n) => n.kind === "soma");
@@ -333,7 +339,7 @@ function layoutMetrics(scene: ClusterScene): {
   return {
     edgePct: atEdge.length / scene.nodes.length,
     directPct: leafLinks.length === 0 ? 0 : direct.length / leafLinks.length,
-    minSomaWall: Math.min(...somas.map((s) => Math.min(s.x, W - s.x, s.y, H - s.y))),
+    minSomaWall: Math.min(...somas.map((s) => Math.min(s.x - b.x0, b.x1 - s.x, s.y - b.y0, b.y1 - s.y))),
     dashedPct: scene.links.filter((l) => l.bridge === true).length / scene.links.length,
     dupLabels: labels.filter((l, i) => labels.indexOf(l) !== i),
   };
@@ -356,7 +362,6 @@ for (const W of [320, 380, 460]) {
     // 跨岗桥是结构性的（30 条 QA 里 25 条在两个岗位都入选）：数量 = 多岗 QA 数
     const multiSlot = new Set(leaves.map((l) => l.qaId)).size;
     assert.equal(scene.links.filter((l) => l.bridge === true).length, leaves.length - multiSlot);
-    assert.ok(boundaryMargin(W, H) >= 20);
   });
 
   test(`真实数据 · 按提问 ${W}×${H}：≤6 中心、中心离墙 >24px、贴边 <10%、虚线桥 <20%（实为 0）、标签不重复`, () => {
@@ -370,10 +375,13 @@ for (const W of [320, 380, 460]) {
     assert.ok(m.edgePct < 0.1, `贴边 ${(m.edgePct * 100).toFixed(1)}%`);
     assert.ok(m.dashedPct < 0.2, `虚线 ${(m.dashedPct * 100).toFixed(1)}%`);
     assert.deepEqual(m.dupLabels, []);
-    // 孤立中心也在画面里：每个中心离画面中心不超过半对角线的 3/4
+    // 孤立中心不飘到图的边缘：每个中心离外接框中心不超过半对角线的 3/4
+    const b = nodeBounds(scene.nodes)!;
+    const cx = (b.x0 + b.x1) / 2;
+    const cy = (b.y0 + b.y1) / 2;
     for (const soma of scene.nodes.filter((n) => n.kind === "soma")) {
-      const d = Math.hypot(soma.x - W / 2, soma.y - H / 2);
-      assert.ok(d < (Math.hypot(W, H) / 2) * 0.75, `${soma.label} 离中心 ${d.toFixed(0)}px`);
+      const d = Math.hypot(soma.x - cx, soma.y - cy);
+      assert.ok(d < (Math.hypot(b.x1 - b.x0, b.y1 - b.y0) / 2) * 0.75, `${soma.label} 离中心 ${d.toFixed(0)}px`);
     }
     assert.ok(maxDrift(scene) < 0.5, "收敛后静止");
   });
@@ -443,4 +451,28 @@ test("主干（按提问）：只连到旧中心的叶，路径止于那个旧�
   assert.equal(end("q2"), true, "只属旧问的叶止于旧中心");
   // q2（0.8）比 q3（0.75）更相关，但它连不到本问——主干只取连得到本问的
   assert.deepEqual(spineLeaves(scene, parent).map((n) => n.leaf.qaId), ["q3"]);
+});
+
+test("大图（300 片叶 / 60 会话 / 6 岗位）：没有隐形墙——极少节点挤在外接框边上、图比面板大、收敛静止", () => {
+  const leaves = Array.from({ length: 300 }, (_, i) =>
+    leaf(`q${String(i).padStart(3, "0")}`, (i % 6) + 1, 0.5 + ((i * 37) % 50) / 100, {
+      sessionId: `s-${i % 60}`,
+      title: `会话 ${i % 60}`,
+    }),
+  );
+  const W = 380;
+  const H = 340;
+  const scene = buildSlotScene(leaves, W, H);
+  simulateToConvergence(scene, { maxIters: 1500 });
+  const b = nodeBounds(scene.nodes)!;
+  const atEdge = scene.nodes.filter(
+    (n) => n.x - b.x0 < 1.5 || b.x1 - n.x < 1.5 || n.y - b.y0 < 1.5 || b.y1 - n.y < 1.5,
+  );
+  // 有墙时外圈整排压在墙上（以前这里是几十个）；自由布局只剩各边的极值点
+  assert.ok(atEdge.length <= 8, `贴在外接框边上的节点 ${atEdge.length} 个`);
+  // 这么多节点不该被塞进面板大小：图自然铺开，靠渲染器适配缩小来看全
+  assert.ok(b.x1 - b.x0 > W || b.y1 - b.y0 > H, `外接框 ${(b.x1 - b.x0).toFixed(0)}×${(b.y1 - b.y0).toFixed(0)}`);
+  // 也不该无限发散：向心力兜着
+  assert.ok(b.x1 - b.x0 < W * 8 && b.y1 - b.y0 < H * 8, "图没有飘散");
+  assert.ok(maxDrift(scene) < 0.5, "收敛后静止");
 });
