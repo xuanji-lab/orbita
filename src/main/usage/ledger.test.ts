@@ -80,6 +80,12 @@ afterEach(async () => {
 /** 固定时区的账本：全部用例用 UTC 切天，与 NOW 的取法配套 */
 const ledgerUtc = (): UsageLedger => new UsageLedger(file, { timeZone: "UTC" });
 
+/** 读盘上账本某一天的 tokens（跨午夜用例的断言面：不看 week() 窗口）。 */
+const dayTokens = async (path: string, date: string): Promise<number> => {
+  const parsed = JSON.parse(await readFile(path, "utf8")) as { days: Record<string, number> };
+  return parsed.days[date] ?? 0;
+};
+
 const todayKeyUtc = (offsetDays = 0): string =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(new Date(NOW - offsetDays * DAY));
 
@@ -101,7 +107,9 @@ describe("UsageLedger —— 累计与切天", () => {
   });
 
   test("跨午夜：同一时刻在不同时区切到不同的天（账本用时区切，不赌机器）", async () => {
-    // UTC 16:00 = 上海次日 00:00 之后：上海账本把这条记到「明天」
+    // UTC 16:00 = 上海次日 00:00 之后：上海账本把这条记到「明天」。断言读**盘上的
+    // days 表**而不是 week()——week() 只含到本地今天为止的 7 天，测试在 UTC 16 点前
+    // 跑时「上海的明天」不在窗口里（main 上真实发生过的时段性失败）
     const ts = new Date(NOW).setUTCHours(16, 0, 0, 0);
     const utc = new UsageLedger(join(dir, "utc.json"), { timeZone: "UTC" });
     const shanghai = new UsageLedger(join(dir, "sh.json"), { timeZone: "Asia/Shanghai" });
@@ -110,9 +118,11 @@ describe("UsageLedger —— 累计与切天", () => {
     const utcKey = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(new Date(ts));
     const shKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(ts));
     assert.notEqual(utcKey, shKey);
-    assert.equal(utc.week().find((d) => d.tokens === 5)?.date, utcKey);
-    assert.equal(shanghai.week().find((d) => d.tokens === 5)?.date, shKey);
+    assert.equal(await dayTokens(join(dir, "utc.json"), utcKey), 5);
+    assert.equal(await dayTokens(join(dir, "sh.json"), shKey), 5);
   });
+
+
 
   test("四项全 0 的记录不落账、不写盘", async () => {
     const ledger = ledgerUtc();
@@ -158,6 +168,48 @@ describe("UsageLedger —— 回填", () => {
     const s = new SessionStore(join(dir, "sessions"));
     return s;
   };
+
+  test("意图召回的 token（实验功能 intent-system）也进账本，且能从会话 JSONL 回填重建", async () => {
+    store = freshStore();
+    await store.ensureSession(meta());
+    // 会话转录里落一条带 usage 的意图召回记录（renderer 侧由 recorder 落；这里直接 record）
+    await store.record(ID, {
+      role: "intent-recall",
+      id: "ir1",
+      turnId: "t1",
+      status: "done",
+      runId: "r1",
+      timestamp: NOW,
+      startedAt: NOW,
+      finishedAt: NOW + 1000,
+      scene: null,
+      qaTotal: 10,
+      passed: 2,
+      budgetMs: null,
+      peak: false,
+      timings: null,
+      summary: null,
+      selected: [],
+      ask: [],
+      error: null,
+      halted: null,
+      skipped: null,
+      gateWhy: null,
+      usage: { promptTokens: 1000, completionTokens: 200, cachedTokens: 600 },
+    });
+    // 回填（账本从会话 JSONL 重建）：意图记录按 prompt+completion 总额计入
+    const ledger = ledgerUtc();
+    await ledger.backfill(store);
+    assert.equal(ledger.week()[6]?.tokens, 1200);
+    // 直接 recordUsage（实时路径，recorder 调）同样计
+    const live = ledgerUtc();
+    await live.recordUsage({
+      id: "ir1",
+      timestamp: NOW,
+      usage: { input: 400, output: 200, cacheRead: 600, cacheWrite: 0 },
+    });
+    assert.equal(live.week()[6]?.tokens, 1200);
+  });
 
   test("扫非导入会话的原始日志；导入会话（importedFrom）不进账", async () => {
     store = freshStore();

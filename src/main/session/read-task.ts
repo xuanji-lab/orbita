@@ -297,7 +297,8 @@ function firstTextOf(record: SessionRecord | undefined): string {
     isChannelMarkRecord(record) ||
     record.role === "file-turn" ||
     record.role === "revert" ||
-    record.role === "undo"
+    record.role === "undo" ||
+    record.role === "intent-recall"
   ) {
     return "";
   }

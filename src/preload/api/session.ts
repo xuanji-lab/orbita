@@ -50,6 +50,9 @@ export const sessionApi = {
   /** 完成状态：done/done_with_todos 记关闭时刻；回 open（reopen）清空。纯 meta 操作，只读会话也可用 */
   setCompletion: (id: string, completion: SessionCompletion): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetCompletion, id, completion),
+  /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效 */
+  setIntentEnabled: (id: string, enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionSetIntentEnabled, id, enabled),
   /**
    * 未读标记（后台跑完还没看）：标 `{ at, failed }`，null 清。落盘后重启仍在；
    * 侧栏竖条与铃铛清单都读 meta 上的它，不各存一份

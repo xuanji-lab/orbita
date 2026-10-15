@@ -69,7 +69,7 @@ export function FileRefChip(props: {
           name={props.name}
           dir={isDir}
           wrapStyle={{ flex: "0 1 auto" }}
-          nameStyle={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-primary)" }}
+          nameStyle={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-primary)" }}
         />
         {props.onRemove !== undefined && (
           <button
@@ -173,7 +173,7 @@ export function PastedTextChip(props: { text: string; lines: number }) {
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              fontSize: "var(--font-size-caption)",
+              fontSize: "var(--font-size-sm)",
             }}
           >
             {t.composer.pastedTitle(props.lines)}
@@ -192,8 +192,8 @@ export function PastedTextChip(props: { text: string; lines: number }) {
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-caption)",
-            lineHeight: "var(--line-height-bubble)",
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-reading)",
             color: "var(--color-text-secondary)",
           }}
         >

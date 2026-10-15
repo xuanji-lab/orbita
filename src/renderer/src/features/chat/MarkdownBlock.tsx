@@ -1,5 +1,11 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+// CJK 加粗（2026-10-14 用户报的两例）：CommonMark 的定界规则下 `**标题： **`
+// 的收尾 ** 前是空白、`**说明：**后文` 的收尾 ** 前是中文标点且后是汉字，都算
+// 不成右侧定界。remark-cjk-friendly（2.3.2，MIT，作者 tats-u，remark 生态的
+// 活跃维护者）放宽这两条对 CJK 的判定；数学 / 引用插件不动。
+import remarkCjkFriendly from "remark-cjk-friendly";
+import { normalizeEmphasisInnerSpace } from "./emphasis-space.ts";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
 import rehypeKatex from "rehype-katex";
@@ -78,10 +84,10 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   // `[^c4k2]` 是用户的字，不是 agent 核验过的引用；开关关着时标记退回纯文本
   const citations = useExperimentalFeature("pdf-citations") && !bubble;
   const remarkPlugins = bubble
-    ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath]
+    ? [remarkGfm, remarkCjkFriendly, remarkMath, remarkBreaks, remarkDemoteBoundaryMath]
     : citations
-      ? [remarkGfm, remarkMath, remarkDemoteBoundaryMath, remarkCitationMarkers]
-      : [remarkGfm, remarkMath, remarkDemoteBoundaryMath];
+      ? [remarkGfm, remarkCjkFriendly, remarkMath, remarkDemoteBoundaryMath, remarkCitationMarkers]
+      : [remarkGfm, remarkCjkFriendly, remarkMath, remarkDemoteBoundaryMath];
   return (
     // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
     <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
@@ -104,7 +110,9 @@ export const MarkdownBlock = memo(function MarkdownBlock({
           components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre, span: ChipSpan }}
           {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
         >
-          {streaming ? closePendingMath(text) : text}
+          {/* 强调定界内侧空白先收掉（emphasis-space.ts）：`**… **` 这类在
+              CommonMark 下整段不算强调，用户写它就是要加粗 */}
+          {streaming ? closePendingMath(normalizeEmphasisInnerSpace(text)) : normalizeEmphasisInnerSpace(text)}
         </ReactMarkdown>
       </MarkdownErrorBoundary>
     </div>
@@ -136,7 +144,7 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode }, { error: 
 function RenderFailed(props: { message: string }) {
   const t = useT();
   return (
-    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
+    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-sm)" }}>
       {t.chat.messageRenderFailed} {props.message}
     </p>
   );

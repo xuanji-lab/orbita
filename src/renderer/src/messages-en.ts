@@ -158,6 +158,10 @@ export const en = {
     pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
     pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     skillNoneInWorkspace: "No skills available in this workspace",
+    /** 意图召回的会话级开关（实验功能 intent-system）：输入框旁的小开关 */
+    intentToggle: "Intent recall",
+    intentToggleOnHint: "Recall runs before each reply in this task",
+    intentToggleOffHint: "No recall in this task — history is still archived",
   },
 
   /** 语音（shared/voice.ts）：输入框的听写 + 设置 › 语音 */
@@ -287,6 +291,7 @@ export const en = {
     subSessions: (count: number) => `Sub-sessions (${count})`,
     browser: "Built-in browser",
     bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
+    intent: "Intent graph",
   },
 
   browser: {
@@ -451,6 +456,21 @@ export const en = {
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
     experimentalCollapse: "Collapse",
+    /* ---------- 意图系统（实验）：实验开关打开才出现的设置区 ---------- */
+    intentTitle: "Intent system",
+    intentBaseUrl: "intent-lab address",
+    intentBaseUrlHint: "A local service you start yourself (`bun run serve` in the intent-lab repo). Orbita never launches it.",
+    intentConnection: "Connection",
+    intentChecking: "Checking…",
+    intentOnline: (model: string, imported: number, ingested: number) =>
+      `Connected · ${model} · ${imported + ingested} Q&As indexed`,
+    intentOffline: "Not reachable — start intent-lab first",
+    intentNewSessionOn: "Recall in new tasks",
+    intentChannel: "Pipeline",
+    intentChannelProma: "Proma",
+    intentChannelDeepseek: "DeepSeek (your own key)",
+    intentChannelHint: "Which service the recall pipeline (gate, understand, scoring, review) calls.",
+    intentChannelMissing: (preset: string) => `The intent-lab config has no \"${preset}\" S3 preset yet — add a same-named endpoint under endpoints, or switch back to Proma`,
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */
@@ -1015,6 +1035,96 @@ export const en = {
     thinking: "Thinking",
     compacted: "Compacted",
     compacting: "Compacting context…",
+    /* ---------- 意图召回（实验功能 intent-system）：卡片 + 回答前确认 ---------- */
+    recall: {
+      label: "Intent recall",
+      /** 11 格阶段条的格名（顺序即流水线顺序） */
+      stageGate: "Gate",
+      stageUnderstand: "Understand",
+      stageScore: (done: number, total: number) => `Score ${done}/${total}`,
+      stagePassline: (passed: number) => `${passed} passed`,
+      stageReasons: (done: number, total: number) => `Reasons ${done}/${total}`,
+      stageDedup: (after: number, merged: number | null) =>
+        `Dedup → ${after}${merged === null ? "" : ` · merged ${merged}`}`,
+      stageKeeperWriting: (done: number, chars: number) => `Excerpting · ${done} · ${chars} chars`,
+      stageKeeper: (selected: number | null) => `Excerpt${selected === null ? "" : ` · ${selected} picked`}`,
+      stageConfirmAsked: (asked: number) => `Confirm ${asked}`,
+      stageConfirmNone: "Nothing to ask",
+      stageContext: (added: number | null) => `Context${added === null ? "" : ` +${added}`}`,
+      stageAnswer: "Answer",
+      stageEdges: (edges: number | null) => `Edges${edges === null ? "" : ` · ${edges}`}`,
+      /** 运行中的主行：S1 的场景与意图 */
+      sceneLine: (scene: string, want: string) => (want === "" ? scene : `${scene} · ${want}`),
+      /* ---------- 运行卡（四胶囊版，2026-10-14 重写） ---------- */
+      pillUnderstand: "Understand",
+      pillScore: "Score",
+      pillReasons: "Reasons",
+      pillConfirm: "Confirm",
+      detailGate: "Gate checking",
+      detailUnderstand: "Understanding",
+      detailScore: (done: number, total: number, passed: number) =>
+        `Scoring ${done.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} · ${passed} passed`,
+      detailReasons: (done: number, total: number) => `Reasons ${done} / ${total}`,
+      detailKeeper: (done: number, chars: number) => `Excerpting · ${done} · ${chars.toLocaleString("en-US")} chars`,
+      detailSettling: "Wrapping up",
+      confirmWaitingDetail: (n: number) => `${n} unclear — waiting for you below`,
+      /* ---------- 终态卡（收成一行） ---------- */
+      doneStats: (read: string, selected: number) => `Read ${read} · picked ${selected}`,
+      doneConfirmed: (yes: number, asked: number) => `you confirmed ${yes} / ${asked}`,
+      openGraph: "See the graph in the Intent panel",
+      usageTokens: (total: string) => `${total} tokens`,
+      readUnknown: "?",
+      skippedLine: (why: string) => `No intent analysis for this one · ${why}`,
+      cancelled: "Cancelled — this message wasn't answered",
+      failed: "Intent recall failed",
+      askRemainingLine: (n: number) => `${n} more to ask next time`,
+      /** 错误阶段名（error 转录行的「停在：」） */
+      stageNames: {
+        gate: "gate",
+        s1: "understand",
+        s3: "scoring",
+        s4: "review",
+        config: "connect to intent-lab",
+        budget: "time budget",
+      } as Record<string, string>,
+      stoppedAtStage: (stage: string) => `stopped at ${stage}`,
+      unreachable: "intent-lab isn't running — start it with `bun run serve` in the intent-lab repo",
+      unreachableHttp: (status: string) => `intent-lab refused the request (HTTP ${status})`,
+      silent: "intent-lab has been silent for 60 seconds",
+      streamEnded: "the connection to intent-lab ended early",
+      /** 回答前确认卡 */
+      confirm: {
+        title: "Confirm before answering",
+        /** 大字陈述的标签：join 到边是 prediction（「如果对，这次回答会…」），join 不到退回假设原文 */
+        ifRight: "If this is right, this answer will",
+        hypothesis: "My assumption",
+        whyConnected: "Why it connects",
+        whyUncertainLabel: "Why I'm not sure",
+        youSaid: "You said",
+        assistantSaid: "The answer then",
+        /** 摘句窗口：区首 / 区尾的小字提示（点了 = 在辅助对话打开） */
+        moreBefore: (n: number) => `… ${n} more characters before`,
+        moreAfter: (n: number) => `… ${n} more characters after`,
+        /** located=false：摘句不是逐字原文，没法定位置 */
+        excerptNotLocated: "The excerpt isn't verbatim — can't locate it",
+        /** dupCount > 1：会话表头的小字 */
+        askedTimes: (n: number) => `This came up ${n} times`,
+        openInSideChat: "Open in side chat",
+        prevItem: "Previous",
+        nextItem: "Next",
+        editStatement: "Edit",
+        verdictYes: "Right",
+        verdictNo: "Wrong",
+        statementLabel: "Statement (editable)",
+        noteLabel: "Add background",
+        notePlaceholder: "Anything missing? Add a line…",
+        confirmAndAnswer: "Confirm and answer",
+        confirmAndAnswerCount: (done: number, total: number) => `Confirm and answer · ${done} / ${total}`,
+        answerWithoutConfirming: "Answer without confirming",
+        feedbackFailed: "Couldn't deliver your confirmation to intent-lab",
+        feedbackGone: "This recall run has expired — send the message again",
+      },
+    },
     waitingOutput: "(waiting for output…)",
     noOutput: "(no output)",
     branchFromHere: "Branch from here",
@@ -1453,6 +1563,66 @@ export const en = {
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
+  },
+
+  /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
+  intentPanel: {
+    title: "Intent",
+    /** 轮选择器（累积图的高亮，不切图） */
+    allRounds: (n: number) => `All · ${n} question${n === 1 ? "" : "s"}`,
+    roundChip: (round: number, when: string) =>
+      when === "" ? `Q${round}` : `Q${round} · ${when}`,
+    roundShort: (round: number) => `Q${round}`,
+    loading: "Loading…",
+    liveBadge: "Recalling…",
+    emptyNoRecall: "No recall for this question yet.",
+    emptyNoTurns: "This task has no intent recall yet.",
+    errorFetch: "Couldn't load the graph from intent-lab.",
+    readUnknown: "?",
+    /** 图区摘要（读的条数可能是 "?"） */
+    summary: (read: number | string, high: number, mid: number) =>
+      `Read ${typeof read === "number" ? read.toLocaleString("en-US") : read} · selected ${high} · unsure ${mid}`,
+    /** 图区顶部的两视图开关 */
+    viewSlots: "By slot",
+    viewQuestions: "By question",
+    /** 图角着色开关：颜色编码的维度 */
+    colorTime: "Time",
+    colorScore: "Relevance",
+    legendEarly: "Earlier",
+    legendMixLow: "Older · weaker",
+    legendMixHigh: "Newer · stronger",
+    colorWeightAria: "Colour by: mix of time and relevance (left = time, right = relevance)",
+    legendLate: "Later",
+    legendLow: "Weaker",
+    legendHigh: "Stronger",
+    legendSolid: "Selected",
+    legendMid: "Unsure",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    zoomFit: "Fit to canvas",
+    legendSpine: "Spine",
+    /** 分隔条 */
+    entriesLabel: "Entries",
+    selectedCount: (n: number) => `selected ${n}`,
+    splitHint: "Drag to resize · double-click to reset",
+    foldList: "Fold entries to the bottom",
+    unfoldList: "Unfold entries",
+    /** 条目行 */
+    youSaid: "You said",
+    answerThen: "The answer then",
+    quote: (q: string) => `“${q}”`,
+    rowYes: "Right",
+    rowNo: "Wrong",
+    openSession: "Open session",
+    /** 打开会话失败（会话已删）：列表顶上的一行说明，点击消失 */
+    sessionNotLocal: "This session is not in Orbita on this machine",
+    earlierRounds: (from: number, to: number) => `Q${from}–${to}`,
+    cardVerdictAsked: "You confirmed",
+    cardVerdictDenied: "You marked wrong · withdrawn",
+    cardVerdictEdited: "You reworded it",
+    cardVerdictSkipped: "Left blank · used as-is",
+    cardVerdictPending: "Waiting for your confirmation",
+    cardVerdictUnasked: "Not asked",
   },
 };
 

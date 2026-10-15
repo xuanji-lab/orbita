@@ -26,6 +26,7 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import type { ChannelMarkRecord, SessionRecord } from "../../shared/session.ts";
+import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
 import type { UsageLedger } from "../usage/ledger.ts";
 
@@ -51,6 +52,23 @@ export function createSessionRecorder(
   };
   return (event) => {
     if (event.type === "compaction") return persist(event.sessionId, event.record);
+    // 意图召回的终态记录（实验功能）：落盘进会话 JSONL；带 usage 时同步进日账本
+    // （DeepSeek / Proma 管线花的是用户自己的 token，账本可从记录回填重建）
+    if (event.type === "intentRecallRecord") {
+      persist(event.sessionId, event.record);
+      if (usage !== undefined && event.record.usage !== undefined) {
+        void usage
+          .recordUsage({
+            id: event.record.id,
+            timestamp: event.record.timestamp,
+            usage: usageCountsOfIntent(event.record.usage),
+          })
+          .catch((error: unknown) => {
+            console.error("[usage] 意图召回的 token 账没记上", event.sessionId, error);
+          });
+      }
+      return;
+    }
     if (event.type === "title") {
       // 标题落 meta 不落 transcript——它不是对话的一部分。store 内部核验
       // titleSource 仍是 derived 才写，迟到的标题盖不掉用户刚改的名字。

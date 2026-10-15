@@ -342,7 +342,7 @@ export function PanelButton(props: {
         border: danger ? "1px solid var(--color-danger)" : 0,
         borderRadius: "var(--radius-md)",
         font: "inherit",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         cursor: disabled ? "default" : "pointer",
       }}
     >
@@ -351,14 +351,14 @@ export function PanelButton(props: {
   );
 }
 
-/** 面板里的一行小字（caption/tertiary），说明与空态用。 */
+/** 面板里的一行小字（sm/tertiary），说明与空态用。 */
 export function PanelLine(props: { children: React.ReactNode; danger?: boolean }) {
   return (
     <p
       role={props.danger === true ? "alert" : undefined}
       style={{
         margin: 0,
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: props.danger === true ? "var(--color-danger)" : "var(--color-text-tertiary)",
       }}
     >

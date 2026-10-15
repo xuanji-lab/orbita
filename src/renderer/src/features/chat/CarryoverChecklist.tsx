@@ -81,15 +81,15 @@ export function CarryoverChecklist(props: {
     >
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         <Icon name="list-todo" size={16} style={{ color: "var(--color-text-secondary)" }} />
-        <strong style={{ fontSize: "var(--font-size-body)", fontWeight: "var(--weight-bold)" }}>
+        <strong style={{ fontSize: "var(--font-size-base)", fontWeight: "var(--weight-bold)" }}>
           {t.carryover.wrapUp}
         </strong>
       </div>
       <p
         style={{
           margin: 0,
-          fontSize: "var(--font-size-caption)",
-          lineHeight: "var(--line-height-caption)",
+          fontSize: "var(--font-size-sm)",
+          lineHeight: "var(--line-height-ui)",
           color: "var(--color-text-secondary)",
         }}
       >
@@ -159,7 +159,7 @@ export function CarryoverChecklist(props: {
                       background: "var(--color-bg-muted)",
                       color: "var(--color-text-primary)",
                       fontFamily: "var(--font-family-base)",
-                      fontSize: "var(--font-size-control)",
+                      fontSize: "var(--font-size-base)",
                       outline: "none",
                       boxShadow: "var(--focus-ring)",
                     }}
@@ -180,7 +180,7 @@ export function CarryoverChecklist(props: {
                         textAlign: "left",
                         color: "var(--color-text-primary)",
                         fontFamily: "var(--font-family-base)",
-                        fontSize: "var(--font-size-control)",
+                        fontSize: "var(--font-size-base)",
                         fontWeight: "var(--weight-medium)",
                         whiteSpace: "nowrap",
                         overflow: "hidden",
@@ -211,8 +211,8 @@ export function CarryoverChecklist(props: {
                     title={item.detail}
                     style={{
                       margin: "2px 0 0",
-                      fontSize: "var(--font-size-micro)",
-                      lineHeight: "var(--line-height-caption)",
+                      fontSize: "var(--font-size-xs)",
+                      lineHeight: "var(--line-height-ui)",
                       color: "var(--color-text-tertiary)",
                       display: "-webkit-box",
                       WebkitLineClamp: 2,
@@ -252,7 +252,7 @@ export function CarryoverChecklist(props: {
             background: "var(--color-bg-muted)",
             color: "var(--color-text-primary)",
             fontFamily: "var(--font-family-base)",
-            fontSize: "var(--font-size-control)",
+            fontSize: "var(--font-size-base)",
             outline: "none",
             boxShadow: "var(--focus-ring)",
           }}
@@ -324,7 +324,7 @@ const footerButtonStyle: React.CSSProperties = {
   borderRadius: "var(--radius-md)",
   background: "transparent",
   fontFamily: "var(--font-family-base)",
-  fontSize: "var(--font-size-control)",
+  fontSize: "var(--font-size-base)",
   cursor: "pointer",
   transition: "var(--transition-hover)",
 };

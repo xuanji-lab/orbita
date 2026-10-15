@@ -134,14 +134,15 @@ export function streamingStart(messageId: string): number | null {
  * 没挂的记录（旧会话）两边都不计，全部没挂就 null——不编。
  */
 export function replySpeed(
-  records: readonly { role: unknown; usage?: { output?: unknown } }[],
+  records: readonly { role: unknown; usage?: unknown }[],
 ): number | null {
   let outputTokens = 0;
   let genMs = 0;
   for (const record of records) {
     if (record.role !== "assistant") continue;
     const ms = (record as { genMs?: unknown }).genMs;
-    const output = record.usage?.output;
+    const usage = (record as { usage?: { output?: unknown } }).usage;
+    const output = usage?.output;
     if (typeof ms !== "number" || !(ms >= 0) || typeof output !== "number") continue;
     genMs += ms;
     outputTokens += output;

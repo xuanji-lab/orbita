@@ -39,8 +39,8 @@ export function QuoteChip(props: {
     background: "none",
     font: "inherit",
     textAlign: "left",
-    fontSize: "var(--font-size-control)",
-    lineHeight: 1.5,
+    fontSize: "var(--font-size-base)",
+    lineHeight: "var(--line-height-ui)",
     color: "var(--color-text-primary)",
     cursor: onJump === undefined ? "default" : "pointer",
     ...(props.expanded
@@ -64,13 +64,13 @@ export function QuoteChip(props: {
           background: "var(--color-bg-panel)",
           border: "1px solid var(--color-border-default)",
           fontFamily: "var(--font-family-mono)",
-          fontSize: "var(--font-size-micro)",
+          fontSize: "var(--font-size-xs)",
           lineHeight: 1,
         }}
       >
         {props.index}
       </span>
-      <span style={{ marginRight: 6, color: "var(--color-text-tertiary)", fontSize: "var(--font-size-caption)" }}>
+      <span style={{ marginRight: 6, color: "var(--color-text-tertiary)", fontSize: "var(--font-size-sm)" }}>
         {meta}
       </span>
       {body}

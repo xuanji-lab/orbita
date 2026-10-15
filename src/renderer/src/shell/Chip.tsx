@@ -3,6 +3,9 @@ import { Icon, type IconName } from "./Icon";
 /**
  * 安静的行内控件：输入卡底栏的作用域/权限/模型，设置面的分段选择，都是它。
  *
+ * 字号 sm（12）：它是次级控件，常和卡名 / 正文（base）并排——同号就抢标题的视线
+ * （2026-10-14 实验功能页：On / Off 与卡名一样大）。
+ *
  * 选中态用 `--color-mode-active-*`（明主题蓝、暗主题黄），hover 是中性抬升——
  * 这两者是设计系统里 accent 仅有的两个去处之一，别处一律中性。
  */
@@ -65,7 +68,7 @@ export function Chip(props: {
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-sm)",
         fontStyle: props.italic === true ? "italic" : "normal",
         letterSpacing: props.italic === true ? "var(--tracking-model)" : "normal",
         whiteSpace: "nowrap",
