@@ -132,6 +132,8 @@ export interface BrowserSandboxDeps {
   /** 本会话能用的目录（工作台 / cwd / 附加目录 / 浏览器下载）：browser_navigate 打开本地网页只认这些 */
   sessionRoots: (sessionId: string) => Promise<string[]>;
   appName: string;
+  /** 受管浏览器 UA 末尾的 `Orbita/<版本>`（见 identity.ts） */
+  appVersion: string;
 }
 
 export class BrowserSandbox {
@@ -697,7 +699,7 @@ export class BrowserSandbox {
     const partition = session.fromPartition(BROWSER_PARTITION);
     partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     partition.setPermissionCheckHandler(() => false);
-    partition.setUserAgent(browserUserAgent(partition.getUserAgent(), this.deps.appName));
+    partition.setUserAgent(browserUserAgent(partition.getUserAgent(), this.deps.appName, this.deps.appVersion));
     partition.on("will-download", (_event, item, contents) => this.onDownload(item, contents));
     // agent tab 打开 PDF 这类文件：改成下载，不在 tab 里显示——agent 读不了查看器里的字，
     // 下载进工作台它能用文件工具读。「你的」tab 不动，照常在查看器里看

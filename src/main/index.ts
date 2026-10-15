@@ -355,6 +355,7 @@ void app.whenReady().then(async () => {
       ];
     },
     appName: app.getName(),
+    appVersion: app.getVersion(),
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => browserSandbox.dispose());

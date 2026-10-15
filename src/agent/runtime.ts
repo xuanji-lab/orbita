@@ -82,6 +82,7 @@ import {
   composeAttachmentPrompt,
   composeIntentPrompt,
   initialRecallCard,
+  INTENT_GATE_OFF,
   INTENT_CONTEXT_GUIDELINE,
   stagesOfCard,
   type IntentContextFile,
@@ -1481,9 +1482,10 @@ async function listBuiltins(): Promise<void> {
  * 意图系统（实验功能 intent-system）的轮内闸门：回显之后、调模型之前跑 /recall。
  *
  * 三种结局：
- * - `injection: null` = 开关关闭（command.intent 缺席）或这一轮失败 / 取消——
+ * - `injection: null` = 这一轮失败 / 取消——
  *   失败时本轮不回答（卡片终态事件已发，phase idle 由 startTurn 的 finally 兕）；
- * - `injection: ""` = 门卫跳过 / 空注入：照常用原话回答（composeIntentPrompt 直通）；
+ * - `injection: ""` = 开关关闭（command.intent 缺席，见 INTENT_GATE_OFF）/ 门卫跳过 / 空注入：
+ *   照常用原话回答（composeIntentPrompt 直通）；
  * - 其它字符串 = 交给模型的注入块（附件方式时是交付说明）。
  *
  * 事件流（intentRecall）与终态记录（intentRecallRecord）都从这里发出，主进程
@@ -1496,7 +1498,8 @@ async function runIntentGate(
   turnId: string,
 ): Promise<{ injection: string | null }> {
   const intent = command.intent;
-  if (intent === undefined) return { injection: null };
+  // 开关关闭不是失败：空注入、照常回答（见 INTENT_GATE_OFF）
+  if (intent === undefined) return INTENT_GATE_OFF;
   const workbench = command.directories?.workbench ?? null;
   const startedAt = Date.now();
   let card = initialRecallCard(turnId, startedAt);
