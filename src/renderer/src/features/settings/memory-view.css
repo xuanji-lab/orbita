@@ -4,11 +4,18 @@
  * 状态表达全在类里（hover / selected / data- 属性），值只用 token。
  */
 
+.memlib-frame {
+  height: 100%;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: memlib;
+}
+
 .memlib {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 216px minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
 }
 
 /* ── 左栏：作用域 ── */
@@ -36,14 +43,25 @@
   color: var(--color-text-tertiary);
 }
 
+/* 作用域行是 <button>：.option-row 只管底色与字重，按钮的 UA 边框 / 字体要在这里清掉
+   （不清的话每行套一圈粗黑框，真机验收抓到的） */
 .memlib-scope {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
   padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
   font-size: var(--font-size-control);
   color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.memlib-scope[aria-pressed="true"] {
+  color: var(--color-text-primary);
 }
 
 .memlib-scope .memlib-scope-name {
@@ -73,11 +91,15 @@
 .memlib-head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 2px;
   padding: 16px 24px 6px;
 }
 
 .memlib-head h1 {
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: var(--font-size-title);
   font-weight: var(--weight-semibold);
@@ -86,8 +108,15 @@
   white-space: nowrap;
 }
 
+.memlib-head-acts {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+  align-self: center;
+}
+
 .memlib-stats {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
 }
@@ -110,7 +139,9 @@
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   color: var(--color-text-tertiary);
-  width: 240px;
+  flex: 1 1 200px;
+  max-width: 280px;
+  min-width: 160px;
 }
 
 .memlib-search:focus-within {
@@ -183,12 +214,16 @@
   font-size: var(--font-size-caption);
 }
 
+/* 两层：第一层正文与标签占满宽度；第二层左边使用统计、右边悬停操作。
+   原先四列（勾选 / 正文 / 统计 150px / 操作）在右栏开着时把正文挤成三四个字一行，
+   统计还会压到正文上 */
 .memlib-row {
   position: relative;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 150px minmax(0, auto);
-  gap: 10px;
-  align-items: start;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: center;
   padding: 10px 8px;
   border-radius: var(--radius-md);
 }
@@ -196,6 +231,16 @@
 .memlib-row:hover,
 .memlib-row[data-selected] {
   background: var(--color-bg-hover);
+}
+
+.memlib-row > .memlib-check {
+  grid-row: 1;
+  align-self: start;
+}
+
+.memlib-row > .memlib-cell {
+  grid-column: 2 / 4;
+  grid-row: 1;
 }
 
 .memlib-check {
@@ -275,14 +320,20 @@
 }
 
 .memlib-stat {
-  padding-top: 2px;
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
   line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .memlib-acts {
+  grid-column: 3;
+  grid-row: 2;
   display: flex;
   gap: 2px;
   justify-content: flex-end;
@@ -293,7 +344,8 @@
 
 .memlib-row:hover .memlib-acts,
 .memlib-row[data-selected] .memlib-acts,
-.memlib-acts:focus-within {
+.memlib-acts:focus-within,
+.memlib-acts:has(.solid) {
   opacity: 1;
 }
 
@@ -482,4 +534,44 @@
   padding: 22px 8px;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-caption);
+}
+
+/* ── 窄（右栏开着、或窗口本身窄）：作用域从左栏变成顶上一排横向 chip ── */
+@container memlib (max-width: 640px) {
+  .memlib {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .memlib-side {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .memlib-side .section-label {
+    display: none;
+  }
+
+  .memlib-scope {
+    width: auto;
+    flex: 0 0 auto;
+    max-width: 220px;
+  }
+
+  .memlib-head,
+  .memlib-tools {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .memlib-rows {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
 }

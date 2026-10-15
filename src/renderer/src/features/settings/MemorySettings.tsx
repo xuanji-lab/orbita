@@ -238,13 +238,16 @@ export function MemorySettings(props: {
   }, [items, now]);
 
   return (
+    // 外层只做尺寸查询容器：设置内容区宽度随右栏开合变化很大（右栏开着时只剩六七百像素），
+    // 两栏 / 单栏的切换按「这块地方有多宽」判断，不按窗口宽度
+    <div className="memlib-frame">
     <div className="memlib">
       {side}
       <div className="memlib-main">
         <header className="memlib-head">
           <h1>{scopeName}</h1>
           <span className="memlib-stats">{t.memoryLib.stats(stats.total, stats.week, stats.conflicts)}</span>
-          <span className="row-trailing" style={{ display: "inline-flex", gap: 6 }}>
+          <span className="memlib-head-acts">
             <button
               type="button"
               className="mem-btn text"
@@ -454,6 +457,7 @@ export function MemorySettings(props: {
         )}
       </div>
     </div>
+    </div>
   );
 }
 
@@ -641,7 +645,7 @@ function MemoryRow(props: {
       </div>
       <span className="memlib-stat">
         {isExcerpt ? t.memoryLib.statExcerpted(when) : t.memoryLib.statAdded(when)}
-        <br />
+        <span aria-hidden="true"> · </span>
         {used}
       </span>
       <span className="memlib-acts">
