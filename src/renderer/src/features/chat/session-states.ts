@@ -704,3 +704,21 @@ function seedSnapshot(transcript: readonly TranscriptItem[] = []): SessionSnapsh
     queuedSteerCount: 0,
   };
 }
+
+/**
+ * 会话查看的只读判定（composer 禁用 / 划选工具栏不出「引用」/ 不接拖放，都随它）：
+ * - 打开的会话 meta 说已归档 → 只读（归档是「收起来不放这儿」，不是能接着聊的状态；
+ *   打开归档任务只许读。真机清单⑤：归档任务里工具栏应只有「复制 / 摘抄」）；
+ * - 浏览一条没有 pi 本子的旧会话且还没开新的（原判定，#221 前）；
+ * - 活会话被归档（在开着时从行菜单归档）：sessions 表里的标志兜住。
+ */
+export function sessionViewReadOnly(input: {
+  opened: { piSessionFile: string | null; archived?: boolean } | null;
+  sessionId: string | null;
+  sessions: ReadonlyArray<{ id: string; archived?: boolean }>;
+}): boolean {
+  if (input.opened?.archived === true) return true;
+  if (input.opened !== null && input.opened.piSessionFile === null && input.sessionId === null) return true;
+  if (input.sessionId === null) return false;
+  return input.sessions.some((m) => m.id === input.sessionId && m.archived === true);
+}
