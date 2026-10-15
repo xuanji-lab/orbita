@@ -81,11 +81,17 @@
 
 /* ── 右栏：库 ── */
 
+/* 竖向 flex 而不是定行数的 grid：「从历史生成」那块按任务状态时有时无，
+   定行数的话它一缺席，列表就会落进 auto 行、失去自己的滚动 */
 .memlib-main {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.memlib-main > * {
+  flex: 0 0 auto;
 }
 
 .memlib-head {
@@ -199,6 +205,11 @@
 }
 
 /* ── 行区 ── */
+
+.memlib-main > .memlib-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 .memlib-rows {
   overflow-y: auto;
@@ -573,5 +584,120 @@
   .memlib-rows {
     padding-left: 8px;
     padding-right: 8px;
+  }
+}
+
+/* ── 从历史生成：设置卡（选范围 + 预估 + 开始） ── */
+
+.memlib-backfill {
+  display: grid;
+  gap: 10px;
+  margin: 4px 24px 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+
+.memlib-backfill-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-control);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.memlib-backfill-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.memlib-backfill-ranges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.memlib-backfill-estimate {
+  display: grid;
+  gap: 3px;
+  font-size: var(--font-size-caption);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.memlib-backfill-muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.memlib-backfill-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── 从历史生成：进度条 / 结果条（任务在跑、暂停、刚结束时常驻头部下方） ── */
+
+.memlib-backfill-bar {
+  display: grid;
+  gap: 6px;
+  margin: 2px 24px 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-caption);
+}
+
+.memlib-backfill-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border-subtle);
+  overflow: hidden;
+}
+
+/* 进度不是主操作也不是状态色：用中性的次级文字色填充，暂停时再退一档 */
+.memlib-backfill-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-text-secondary);
+  transition: width var(--duration-fast) var(--ease-out-quint);
+}
+
+.memlib-backfill-track[data-paused] > span {
+  background: var(--color-text-tertiary);
+}
+
+.memlib-backfill-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 4px;
+  color: var(--color-text-secondary);
+}
+
+.memlib-backfill-label {
+  color: var(--color-text-primary);
+}
+
+.memlib-backfill-line > .memlib-backfill-acts {
+  margin-left: auto;
+}
+
+.memlib-backfill-bar[data-state="failed"] .memlib-backfill-line > svg {
+  color: var(--color-danger);
+}
+
+@container memlib (max-width: 640px) {
+  .memlib-backfill,
+  .memlib-backfill-bar {
+    margin-left: 16px;
+    margin-right: 16px;
   }
 }

@@ -18,6 +18,7 @@ import {
   MEMORY_FILTERS,
   type MemoryFilter,
 } from "./memory-page.ts";
+import { MemoryBackfill } from "./MemoryBackfill";
 import "./memory-view.css";
 
 /** 跳回摘抄／条目出处的请求：打开那条会话、滚到那一轮那段话。 */
@@ -71,6 +72,8 @@ export function MemorySettings(props: {
   const [resolving, setResolving] = useState<string | null>(null);
   /** 手动添加的行内输入 */
   const [manual, setManual] = useState<string | null>(null);
+  /** 「从历史生成」设置卡的开合（进度条与结果条由组件按任务状态自己决定显示） */
+  const [backfillOpen, setBackfillOpen] = useState(false);
   /** 最近一次写操作失败的行 id（错误留在那一行底下，下一次操作清掉）；"bulk" = 批量栏 */
   const [rowError, setRowError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,6 +121,12 @@ export function MemorySettings(props: {
   useEffect(() => {
     loadItems();
   }, [loadItems]);
+
+  /** 补蒸暂停 / 结束后：作用域条数与当前库都可能变了，两样一起重拉 */
+  const refreshAll = useCallback(() => {
+    loadScopes();
+    loadItems();
+  }, [loadScopes, loadItems]);
 
   useEffect(() => {
     if (editing !== null) editRef.current?.focus();
@@ -251,6 +260,15 @@ export function MemorySettings(props: {
             <button
               type="button"
               className="mem-btn text"
+              aria-expanded={backfillOpen}
+              onClick={() => setBackfillOpen((open) => !open)}
+            >
+              <Icon name="history" size={13} strokeWidth={1.8} />
+              {t.memoryLib.backfillOpen}
+            </button>
+            <button
+              type="button"
+              className="mem-btn text"
               disabled={token === null || busy}
               onClick={() => {
                 setManual("");
@@ -262,6 +280,12 @@ export function MemorySettings(props: {
             </button>
           </span>
         </header>
+        <MemoryBackfill
+          setupOpen={backfillOpen}
+          onOpenSetup={() => setBackfillOpen(true)}
+          onCloseSetup={() => setBackfillOpen(false)}
+          onSettled={refreshAll}
+        />
         <div className="memlib-tools">
           <label className="memlib-search">
             <Icon name="search" size={13} strokeWidth={1.8} />
@@ -297,6 +321,14 @@ export function MemorySettings(props: {
               <button type="button" className="mem-btn text" onClick={loadItems}>
                 {t.memoryLib.retry}
               </button>
+            </p>
+          ) : scopes.kind === "ready" && token === null ? (
+            // 整个记忆库一个作用域都没有（刚打开开关、还没聊过）：没有可拉的条目，
+            // 不能停在「加载中」——直接给空态，并指向「从历史生成」
+            <p className="mem-empty">
+              <Icon name="brain-circuit" size={16} />
+              <span>{t.memoryLib.emptyScope}</span>
+              <span className="memlib-empty-hint">{t.memoryLib.emptyScopeHint}</span>
             </p>
           ) : items === null ? (
             <p className="mem-hint">
@@ -535,6 +567,7 @@ function MemoryRow(props: {
   if (muted) tags.push({ key: "muted", label: t.memoryLib.tagMuted });
   if (stance !== null) tags.push({ key: `stance-${entry.stance}`, label: stance });
   if (entry.pinned === true) tags.push({ key: "pin", label: t.memoryLib.tagPinned });
+  if (entry.backfilled === true) tags.push({ key: "backfilled", label: t.memoryLib.tagBackfilled });
   if (entry.editedAt !== undefined) tags.push({ key: "edited", label: t.memoryLib.tagEdited });
   const origin =
     sessionTitle !== null ? (
