@@ -634,6 +634,18 @@ export type AgentCommand =
        */
       choreModel?: ChoreModelPayload;
     }
+  | {
+      /**
+       * 补蒸：一批待蒸轮的蒸馏（从历史生成记忆）。requestId 问答（classifyGreetings
+       * 同款）：主进程编排层按时间从旧到新成批发来，runtime 限并发蒸完逐轮回执。
+       * 模型两级与实时蒸馏同款：choreModel 优先，缺席退每轮自己的 fallback。
+       */
+      type: "backfillDistill";
+      requestId: string;
+      turns: MemoryBackfillTurnInput[];
+      /** 家务活模型（设置里的 choreModel，主进程解好密钥面）；缺席 = 各轮退回自己的 fallback */
+      choreModel?: ChoreModelPayload;
+    }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
    * 生成是一次独立的小 LLM 调用，成功经 `title` 事件回传；失败/模型拒答不发事件，
@@ -935,6 +947,38 @@ export type ChannelSendOutcome =
   | { ok: true; messageId: string }
   | { ok: false; error: string };
 
+/* ---------- 从历史生成（补蒸）：主进程 ↔ agent 进程的批量蒸馏问答 ---------- */
+
+/**
+ * 补蒸的一轮（主进程从会话存储切好发来）。蒸馏仍住在 agent 进程（AGENTS.md：
+ * 模型调用与大字符串处理不进主进程），主进程只做编排与落盘。
+ *
+ * `at` 是那轮用户消息的时间戳——**蒸馏 prompt 的日期按它换算**，不能用今天：
+ * 「明天」「上周」这些相对时间只有回到当时才解得开。`fallback` 是该会话自己的
+ * 模型（设置没配家务活模型时的退路），主进程装配好密钥面发来。
+ */
+export interface MemoryBackfillTurnInput {
+  sessionId: string;
+  turn: number;
+  /** 轮发生时刻（用户消息时间戳） */
+  at: number;
+  userText: string;
+  assistantText: string;
+  /** 会话归属（冲突候选按它挑作用域，memoryContextRequest 同款） */
+  scope: { workspaceId: string | null; cwd: string };
+  /** 家务活模型缺席时退回该会话自己的模型；连它也深不出来（导入会话的占位
+   * provider 等）主进程就不把这轮逃逃发送 */
+  fallback?: { provider: ProviderSecrets; modelId: string };
+}
+
+/**
+ * 补蒸一轮的回执。失败不重试（重试在主进程编排层做指数退避）：这里只报告
+ * 这一次尝试的成败，错误写一句人话进 failedTurns 的排查日志。
+ */
+export type MemoryBackfillTurnResult =
+  | { sessionId: string; turn: number; ok: true; entries: MemoryDraft[] }
+  | { sessionId: string; turn: number; ok: false; error: string };
+
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
 export type AgentEvent =
   | { type: "ready" }
@@ -1128,6 +1172,12 @@ export type AgentEvent =
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
+  /**
+   * 补蒸一批轮的回执（backfillDistill 命令的 requestId 问答）：逐轮成败，
+   * 成功带蒸馏出的 MemoryDraft[]（可为空——蒸出 0 条也是成功），失败带一句人话。
+   * 不广播：这个事件只有发起方（主进程编排层）在等。
+   */
+  | { type: "backfillDistillResult"; requestId: string; results: MemoryBackfillTurnResult[] }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

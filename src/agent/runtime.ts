@@ -54,6 +54,7 @@ import {
   DISTILL_SYSTEM_PROMPT,
   parseDistillReply,
 } from "./memory-distill.ts";
+import { runBackfillDistill } from "./backfill-distill.ts";
 import { buildMemoryBlock } from "./memory-inject.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { planBranchCut } from "./branch-cut.ts";
@@ -406,6 +407,103 @@ async function probeProvider(command: Extract<AgentCommand, { type: "probeProvid
   } catch (cause) {
     reply(false, cause instanceof Error ? cause.message : String(cause));
   }
+}
+
+/** 补蒸的候选问答超时（实时蒸馏同款：主进程读盘 + 词法打分是毫秒级） */
+const BACKFILL_CONTEXT_TIMEOUT_MS = 10_000;
+
+/**
+ * 补蒸：一批待蒸轮的蒸馏（编排与候选/日期纪律在 backfill-distill.ts，
+ * 这里只做模型装配与 completeSimple）。模型两级与实时蒸馏同一条：
+ * choreModel 整批解析一次；缺席退各轮自己的 fallback（批内按 provider/model
+ * 缓存解析）。结果一次性回执，主进程编排层自己重试 / 计数。
+ */
+async function handleBackfillDistill(command: Extract<AgentCommand, { type: "backfillDistill" }>): Promise<void> {
+  const dedicated = command.choreModel === undefined ? null : await resolveChoreModel(command.choreModel);
+  const runtime = await ModelRuntime.create({});
+  /** fallback 模型解析缓存：同一 provider/model 整批只解析一次 */
+  const resolvedFallback = new Map<string, PiModel | null>();
+  const results = await runBackfillDistill(command.turns, {
+    fetchCandidates: async (input) => {
+      const outcome = await requestBroker.request<MemoryContextOutcome>(
+        {
+          type: "memoryContextRequest",
+          sessionId: input.sessionId,
+          query: input.query,
+          scope: input.scope,
+        },
+        BACKFILL_CONTEXT_TIMEOUT_MS,
+      );
+      return outcome.ok ? outcome.candidates : [];
+    },
+    callDistillModel: async (input) => {
+      try {
+        let model: PiModel | undefined;
+        let auth: { apiKey: string; headers?: Record<string, string> } | null = null;
+        if (dedicated !== null) {
+          model = dedicated.model;
+          auth = dedicated;
+        } else if (input.fallback !== undefined) {
+          const key = `${input.fallback.provider.id}/${input.fallback.modelId}`;
+          if (!resolvedFallback.has(key)) {
+            resolvedFallback.set(
+              key,
+              registerAndResolveModel(runtime, input.fallback.provider, input.fallback.modelId) ?? null,
+            );
+          }
+          model = resolvedFallback.get(key) ?? undefined;
+          if (model !== undefined) {
+            auth = {
+              apiKey: input.fallback.provider.apiKey,
+              ...(input.fallback.provider.headers ? { headers: input.fallback.provider.headers } : {}),
+            };
+          }
+        }
+        if (model === undefined || auth === null) {
+          return { ok: false, error: "没有可用的蒸馏模型（家务活模型与会话模型都解析不到）" };
+        }
+        const response = await completeSimple(
+          model,
+          {
+            systemPrompt: DISTILL_SYSTEM_PROMPT,
+            messages: [
+              {
+                role: "user",
+                // 日期锤在那一轮当时（backfill-distill.ts 的头注释）：不能用今天
+                content: buildDistillPrompt({
+                  userText: input.userText,
+                  assistantText: input.assistantText,
+                  now: input.now,
+                  candidates: input.candidates,
+                }),
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          {
+            apiKey: auth.apiKey,
+            maxTokens: 1024,
+            timeoutMs: MEMORY_DISTILL_TIMEOUT_MS,
+            signal: AbortSignal.timeout(MEMORY_DISTILL_TIMEOUT_MS),
+            // 家务活模型（或退回的会话模型）可能是 OAuth Claude：车道改写随 options 带上
+            onPayload: ccBillingPatch,
+            ...(auth.headers ? { headers: auth.headers } : {}),
+          },
+        );
+        if (response.stopReason === "error") {
+          return { ok: false, error: response.errorMessage ?? `${model.id} returned an error` };
+        }
+        let text = "";
+        for (const block of response.content) {
+          if (block.type === "text") text += block.text;
+        }
+        return { ok: true, text };
+      } catch (cause) {
+        return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+      }
+    },
+  });
+  send({ type: "backfillDistillResult", requestId: command.requestId, results });
 }
 
 /**
@@ -1917,6 +2015,20 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "probeProvider") {
     // 同上：独立小调用，不挡后续命令
     void probeProvider(command);
+    return;
+  }
+  if (command.type === "backfillDistill") {
+    // 同上：一批几秒到几分钟量级，不挡后续命令；主进程编排层在等回执。
+    // 任何路径都回执（readTaskRequest 同款纪律）：装配层抛了也要整批回失败，
+    // 否则编排层只能等超时
+    void handleBackfillDistill(command).catch((cause: unknown) => {
+      const error = cause instanceof Error ? cause.message : String(cause);
+      send({
+        type: "backfillDistillResult",
+        requestId: command.requestId,
+        results: command.turns.map((turn) => ({ sessionId: turn.sessionId, turn: turn.turn, ok: false, error })),
+      });
+    });
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

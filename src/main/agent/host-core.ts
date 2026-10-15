@@ -9,6 +9,7 @@ import type {
   AgentEvent,
   BuiltinProvider,
   ChannelSendOutcome,
+  ChoreModelPayload,
   DelegateOutcome,
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
@@ -16,6 +17,7 @@ import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
+import type { MemoryBackfillTurnInput, MemoryBackfillTurnResult } from "../../shared/agent-ipc.ts";
 import type { MemoryContextOutcome, MemoryRetrieveOutcome } from "../../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 
@@ -76,6 +78,12 @@ export class AgentHostCore {
     { resolve: (result: { ok: boolean; message: string }) => void; reject: (error: Error) => void }
   >();
   private probeSeq = 0;
+  /** 在等的 backfillDistill 回执（补蒸：主进程编排层发的批量蒸馏），按 requestId；退出全部 reject */
+  private readonly pendingBackfill = new Map<
+    string,
+    { resolve: (results: MemoryBackfillTurnResult[]) => void; reject: (error: Error) => void }
+  >();
+  private backfillSeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -127,6 +135,13 @@ export class AgentHostCore {
           pending?.resolve({ ok: message.ok, message: message.message });
           return;
         }
+        if (message.type === "backfillDistillResult") {
+          // 同 providerProbed：只结发起方（主进程编排层），不广播
+          const pending = this.pendingBackfill.get(message.requestId);
+          this.pendingBackfill.delete(message.requestId);
+          pending?.resolve(message.results);
+          return;
+        }
         if (message.type === "created") {
           const pending = this.pendingCreates.get(message.sessionId);
           if (pending) {
@@ -175,6 +190,8 @@ export class AgentHostCore {
         this.pendingGreetings.clear();
         for (const pending of this.pendingProbes.values()) pending.reject(new Error(message));
         this.pendingProbes.clear();
+        for (const pending of this.pendingBackfill.values()) pending.reject(new Error(message));
+        this.pendingBackfill.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -368,6 +385,47 @@ export class AgentHostCore {
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
     await this.ensure();
     this.post({ type: "setMode", sessionId, mode });
+  }
+
+  /**
+   * 补蒸：一批待蒸轮交给 agent 进程蒸馏，等逐轮回执。超时按批内并发摊：
+   * 一轮最坏 ≈ 75 秒（蒸馏 60s + 候选 10s），批内 3 路并发，每 3 轮一个 75 秒。
+   * 进程退出 / 超时都 reject——编排层把它们当这一轮的失败尝试计重试。
+   */
+  async backfillDistill(
+    turns: readonly MemoryBackfillTurnInput[],
+    choreModel?: ChoreModelPayload,
+  ): Promise<MemoryBackfillTurnResult[]> {
+    if (turns.length === 0) return [];
+    await this.ensure();
+    this.backfillSeq += 1;
+    const requestId = `backfill-${this.backfillSeq}`;
+    const timeoutMs = 90_000 * Math.ceil(turns.length / 3) + 30_000;
+    return new Promise<MemoryBackfillTurnResult[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingBackfill.has(requestId)) return;
+        this.pendingBackfill.delete(requestId);
+        reject(new Error("the distiller didn't answer in time"));
+      }, timeoutMs);
+      // 计时器不拖住进程：补蒸是后台家务，应用退出不该被它绊住
+      if (typeof timer.unref === "function") timer.unref();
+      this.pendingBackfill.set(requestId, {
+        resolve: (results) => {
+          clearTimeout(timer);
+          resolve(results);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({
+        type: "backfillDistill",
+        requestId,
+        turns: [...turns],
+        ...(choreModel === undefined ? {} : { choreModel }),
+      });
+    });
   }
 
   /**

@@ -589,3 +589,79 @@ describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽
     await assert.rejects(Promise.all([pending, Promise.resolve().then(() => child().exitWith(1))]), /exited/);
   });
 });
+
+describe("backfillDistill —— 补蒸批量蒸馏的问答（从历史生成）", () => {
+  const TURNS = [
+    {
+      sessionId: "s1",
+      turn: 1,
+      at: 1_650_000_000_000,
+      userText: "问一",
+      assistantText: "答一",
+      scope: { workspaceId: null, cwd: "/tmp/demo" },
+    },
+    {
+      sessionId: "s1",
+      turn: 2,
+      at: 1_650_000_100_000,
+      userText: "问二",
+      assistantText: "答二",
+      scope: { workspaceId: null, cwd: "/tmp/demo" },
+    },
+  ];
+
+  async function runningHost() {
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+    return ctx;
+  }
+
+  test("发命令带 turns 与 choreModel；回执按 requestId 结掉，不广播", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await runningHost();
+    const chore = { provider: { id: "zai", api: "openai-completions", baseUrl: "", apiKey: "k", models: [] }, modelId: "glm-flash" };
+    const pending = ctx.host.backfillDistill(TURNS, chore);
+    await flush();
+    const posted = ctx.child().posted.at(-1);
+    assert.equal(posted?.type, "backfillDistill");
+    if (posted.type !== "backfillDistill") return;
+    assert.equal(posted.turns.length, 2);
+    assert.equal(posted.turns[0]?.sessionId, "s1");
+    assert.equal(posted.choreModel?.modelId, "glm-flash");
+    ctx.child().emit({
+      type: "backfillDistillResult",
+      requestId: posted.requestId,
+      results: [
+        { sessionId: "s1", turn: 1, ok: true, entries: [] },
+        { sessionId: "s1", turn: 2, ok: false, error: "429" },
+      ],
+    });
+    const results = await pending;
+    assert.equal(results.length, 2);
+    assert.ok(results[0]?.ok);
+    assert.ok(!results[1]?.ok);
+    // 回执不进广播面（只有发起方在等）
+    assert.equal(ctx.events.some((event) => event.type === "backfillDistillResult"), false);
+  });
+
+  test("进程退出：在等的批次 reject（编排层当这轮失败计重试）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await runningHost();
+    const pending = ctx.host.backfillDistill(TURNS);
+    await flush();
+    await assert.rejects(
+      Promise.all([pending, Promise.resolve().then(() => ctx.child().exitWith(1))]),
+      /exited/,
+    );
+  });
+
+  test("空批不拉进程、直接空回执", async () => {
+    const ctx = await freshHost();
+    assert.deepEqual(await ctx.host.backfillDistill([]), []);
+    assert.equal(ctx.forks(), 0);
+  });
+});
