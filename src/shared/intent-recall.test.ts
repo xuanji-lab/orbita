@@ -9,6 +9,7 @@ import {
   composeAttachmentPrompt,
   INTENT_CONTEXT_GUIDELINE,
   composeIntentPrompt,
+  INTENT_GATE_OFF,
   createNdjsonAssembler,
   createSilenceTimer,
   initialRecallCard,
@@ -673,4 +674,9 @@ test("运行卡相位：不用问的轮——确认胶囊直接勾，细节是�
   view = recallRunView(card);
   assert.equal(view.awaitingConfirm, false);
   assert.equal(view.pills.confirm, "done");
+});
+
+test("INTENT_GATE_OFF：开关关闭是空注入、照常用原话回答，不是「本轮不回答」的 null", () => {
+  assert.equal(INTENT_GATE_OFF.injection, "");
+  assert.equal(composeIntentPrompt(INTENT_GATE_OFF.injection, "回复 ok"), "回复 ok");
 });
