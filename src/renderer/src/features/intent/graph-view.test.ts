@@ -12,13 +12,15 @@ import {
   clampZoom,
   clipText,
   composeMapping,
+  fitPadding,
+  fitView,
   labelTier,
   panBy,
   wheelFactor,
   zoomAround,
 } from "./graph-view.ts";
 
-test("clampZoom：钳到 [0.6, 4]，非法值回 1", () => {
+test("clampZoom：钳到 [ZOOM_MIN, ZOOM_MAX]，非法值回 1", () => {
   assert.equal(clampZoom(0.1), ZOOM_MIN);
   assert.equal(clampZoom(9), ZOOM_MAX);
   assert.equal(clampZoom(2), 2);
@@ -74,4 +76,47 @@ test("clipText：按字符截断加省略号，折叠空白", () => {
   assert.equal(clipText("博士研究方向梳理与讨论", 12), "博士研究方向梳理与讨论");
   assert.equal(clipText("这条 QA 里用户正在为「LLM 城市规划偏见」论文搭建论证骨架", 24), "这条 QA 里用户正在为「LLM 城市规划偏见」…");
   assert.equal(clipText("  a\n\nb  ", 5), "a b");
+});
+
+test("fitView：外接框整张进面板并居中、只缩不放、倍数在下限之上", () => {
+  const base = { k: 1, ox: 0, oy: 0 };
+  const viewport = { w: 400, h: 300 };
+  // 大图（1200×900）：缩到能放下（扣掉四周 24px）
+  const big = fitView({ x0: -400, y0: -300, x1: 800, y1: 600 }, base, viewport, 24);
+  const m = composeMapping(base, big);
+  const sx = (x: number) => m.ox + x * m.k;
+  const sy = (y: number) => m.oy + y * m.k;
+  assert.ok(sx(-400) >= 24 - 1e-6 && sx(800) <= 376 + 1e-6, "左右在边距内");
+  assert.ok(sy(-300) >= 24 - 1e-6 && sy(600) <= 276 + 1e-6, "上下在边距内");
+  assert.ok(Math.abs((sx(-400) + sx(800)) / 2 - 200) < 1e-6, "水平居中");
+  // 小图：不放大，只居中
+  const small = fitView({ x0: 100, y0: 100, x1: 140, y1: 120 }, base, viewport, 24);
+  assert.equal(small.z, 1);
+  const s2 = composeMapping(base, small);
+  assert.ok(Math.abs(s2.ox + 120 * s2.k - 200) < 1e-6 && Math.abs(s2.oy + 110 * s2.k - 150) < 1e-6);
+  // 极端大：钳在下限
+  assert.equal(fitView({ x0: 0, y0: 0, x1: 1e6, y1: 1e6 }, base, viewport, 24).z, ZOOM_MIN);
+  // 单点：按 1 居中
+  assert.equal(fitView({ x0: 5, y0: 5, x1: 5, y1: 5 }, base, viewport, 24).z, 1);
+});
+
+test("fitPadding：短边 8%，至少 24px", () => {
+  assert.equal(fitPadding({ w: 200, h: 200 }), 24);
+  assert.equal(fitPadding({ w: 1000, h: 600 }), 48);
+});
+
+test("fitView：让开浮层控件——图落在扣掉顶部摘要与底部图例之后的区域里", () => {
+  const base = { k: 1, ox: 0, oy: 0 };
+  const viewport = { w: 400, h: 400 };
+  const insets = { top: 60, right: 0, bottom: 90, left: 0 };
+  const view = fitView({ x0: 0, y0: 0, x1: 1000, y1: 1000 }, base, viewport, 20, insets);
+  const m = composeMapping(base, view);
+  assert.ok(m.oy + 0 * m.k >= 80 - 1e-6, "顶不压摘要");
+  assert.ok(m.oy + 1000 * m.k <= 400 - 110 + 1e-6, "底不压图例");
+});
+
+test("labelTier：缩小到总览档", () => {
+  assert.equal(labelTier(0.4, true), -1);
+  assert.equal(labelTier(0.4, false), -1);
+  assert.equal(labelTier(1, true), 0);
 });

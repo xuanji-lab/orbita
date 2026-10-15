@@ -18,9 +18,13 @@
  * - 窗口失焦暂停 rAF（Electron 失焦不触发 visibilitychange，同时听 blur/focus）；
  *   `prefers-reduced-motion` 直接给收敛结果。
  * - 缩放 / 平移（2026-10-14 用户：「图要能放大缩小，放得越大节点显示的信息越多」）：
- *   滚轮 / 触控板捏合围绕指针缩放、拖空白平移、双击空白复位，范围 0.6–4×；**只改视图
+ *   滚轮 / 触控板捏合围绕指针缩放、拖空白平移、双击空白适配，范围 0.15–4×；**只改视图
  *   变换**（基础映射 ⊕ 视图变换合成一个 Mapping），不碰布局坐标、不碰缓存、不触发模拟；
- *   每个视图各记一份。语义缩放：节点形状随倍率放大，文字不放大，按屏幕倍率分三档显示
+ *   每个视图各记一份。
+ * - 适配跟随（2026-10-16，布局去掉边界之后）：图没有墙，长多大由数据定，所以镜头
+ *   跟着图走——每画一帧都按节点外接框适配（只缩不放），新一轮长出的节点不会跑出
+ *   画面。用户一缩放、平移或拖动节点，该视图就交给用户、不再跟随；点「适配」或双击
+ *   空白恢复跟随。语义缩放：节点形状随倍率放大，文字不放大，按屏幕倍率分三档显示
  *   轮号 / 短标题 / 分数与联系 / 簇全名，只给可见区域内的节点上标签。
  */
 
@@ -35,6 +39,7 @@ import {
   pathToRoot,
   sceneSeed,
   spineLeaves,
+  nodeBounds,
   simulateToConvergence,
   tick,
   unseededCount,
@@ -50,6 +55,10 @@ import {
   baseMapping,
   clipText,
   composeMapping,
+  fitPadding,
+  fitView,
+  NO_INSETS,
+  type Insets,
   labelTier,
   panBy,
   wheelFactor,
@@ -122,8 +131,8 @@ interface NodeHandle {
   labels: SVGElement;
   core?: SVGElement;
   halo?: SVGElement;
-  /** 文字组当前按哪一档构建（变档才重建文字） */
-  tier: LabelTier | -1;
+  /** 文字组当前按哪一档构建（变档才重建文字）；null = 还没建 / 要重建 */
+  tier: LabelTier | null;
   /** 选中态要显轮号（和档位无关） */
   selected: boolean;
 }
@@ -148,6 +157,10 @@ export class GraphRenderer {
   /** 当前视图的缩放 / 平移；各视图各一份 */
   private viewTf: ViewTransform = IDENTITY_VIEW;
   private readonly viewTfs = new Map<string, ViewTransform>();
+  /** 用户亲手缩放 / 平移 / 拖过的视图：不再自动适配（点「适配」或双击空白移出） */
+  private readonly manualViews = new Set<string>();
+  /** 浮在图上的控件占掉的四边（适配时让开）；React 侧提供，适配时现量 */
+  private insetsOf: () => Insets = () => NO_INSETS;
   /** 视图变换变了（倍率 / 平移）的回调：React 侧刷新按钮态 */
   private onViewChange: ((view: ViewTransform) => void) | null = null;
   private style: GraphStyle = { colorWeight: DEFAULT_COLOR_WEIGHT, selKey: null, hoverKey: null, activeRound: null, activeTurnId: null };
@@ -231,6 +244,7 @@ export class GraphRenderer {
     this.viewTf = this.viewTfs.get(view) ?? IDENTITY_VIEW;
     this.base = baseMapping(scene, this.viewport);
     this.mapping = composeMapping(this.base, this.viewTf);
+    this.followFit();
     this.onViewChange?.(this.viewTf);
     this.buildDom(scene);
     this.applyStyle();
@@ -264,6 +278,7 @@ export class GraphRenderer {
     if (this.scene === null) return;
     this.base = baseMapping(this.scene, this.viewport);
     this.mapping = composeMapping(this.base, this.viewTf);
+    if (this.followFit()) this.onViewChange?.(this.viewTf);
     this.draw();
     this.refreshLabels();
   }
@@ -278,12 +293,46 @@ export class GraphRenderer {
 
   /** 以画布中心为锚放大 / 缩小。 */
   zoomBy(factor: number): void {
+    this.takeOver();
     this.setViewTransform(zoomAround(this.viewTf, factor, this.viewport.w / 2, this.viewport.h / 2));
   }
 
-  /** 适配：回到基础映射（全部节点都在画布内）。 */
+  /** 适配：整张图放进面板，并恢复跟随（之后新长出的节点也会被镜头带上）。 */
   fit(): void {
-    this.setViewTransform(IDENTITY_VIEW);
+    if (this.view !== "") this.manualViews.delete(this.view);
+    const next = this.fitTransform();
+    if (next !== null) this.setViewTransform(next);
+  }
+
+  /** 按当前节点外接框算出的适配变换；没有场景返回 null。 */
+  private fitTransform(): ViewTransform | null {
+    const bounds = this.scene === null ? null : nodeBounds(this.scene.nodes);
+    if (bounds === null) return null;
+    return fitView(bounds, this.base, this.viewport, fitPadding(this.viewport), this.insetsOf());
+  }
+
+  /** React 侧告诉渲染器：哪些边被浮层控件占着（视图切换 / 摘要在上，图例在下）。 */
+  setInsetsProvider(provider: (() => Insets) | null): void {
+    this.insetsOf = provider ?? (() => NO_INSETS);
+  }
+
+  /**
+   * 跟随：当前视图没被用户接管时，把视图变换改成适配。只改映射、不重画、不通知——
+   * 调用方决定（逐帧动画里每帧通知 React 会让按钮行跟着重渲染）。返回是否改了。
+   */
+  private followFit(): boolean {
+    if (this.view === "" || this.manualViews.has(this.view)) return false;
+    const next = this.fitTransform();
+    if (next === null) return false;
+    this.viewTf = next;
+    this.viewTfs.set(this.view, next);
+    this.mapping = composeMapping(this.base, next);
+    return true;
+  }
+
+  /** 用户亲手动了视图：该视图不再自动适配。 */
+  private takeOver(): void {
+    if (this.view !== "") this.manualViews.add(this.view);
   }
 
   private setViewTransform(next: ViewTransform): void {
@@ -306,6 +355,7 @@ export class GraphRenderer {
     if (this.scene === null) return;
     event.preventDefault();
     const at = this.pointerInSvg(event);
+    this.takeOver();
     this.setViewTransform(zoomAround(this.viewTf, wheelFactor(event.deltaY, event.ctrlKey), at.x, at.y));
   };
 
@@ -334,6 +384,8 @@ export class GraphRenderer {
     const dx = event.clientX - pan.last.x;
     const dy = event.clientY - pan.last.y;
     pan.last = { x: event.clientX, y: event.clientY };
+    if (dx === 0 && dy === 0) return;
+    this.takeOver();
     this.setViewTransform(panBy(this.viewTf, dx, dy));
   };
 
@@ -412,7 +464,7 @@ export class GraphRenderer {
         shape.append(hit, el("circle", { class: "ihub", r: node.r }));
         root.append(shape, labels);
         nodes.push(root);
-        this.handles.set(node, { root, shape, labels, tier: -1, selected: false });
+        this.handles.set(node, { root, shape, labels, tier: null, selected: false });
       } else if (node.kind === "leaf") {
         const root = el("g", { class: "ileaf", "data-node": node.id });
         const halo = el("circle", { class: "ileaf-halo", r: node.r + 4 });
@@ -420,7 +472,7 @@ export class GraphRenderer {
         shape.append(hit, halo, core);
         root.append(shape, labels);
         nodes.push(root);
-        this.handles.set(node, { root, shape, labels, core, halo, tier: -1, selected: false });
+        this.handles.set(node, { root, shape, labels, core, halo, tier: null, selected: false });
       } else {
         const root = el("g", { class: `isoma${node.past ? " past" : ""}`, "data-node": node.id });
         shape.append(
@@ -430,7 +482,7 @@ export class GraphRenderer {
         );
         root.append(shape, labels);
         nodes.push(root);
-        this.handles.set(node, { root, shape, labels, tier: -1, selected: false });
+        this.handles.set(node, { root, shape, labels, tier: null, selected: false });
       }
     }
     this.gLinks.replaceChildren(...links);
@@ -442,6 +494,7 @@ export class GraphRenderer {
   private draw(): void {
     const scene = this.scene;
     if (scene === null) return;
+    this.followFit();
     const { k, ox, oy } = this.mapping;
     for (const node of scene.nodes) {
       const handle = this.handles.get(node);
@@ -504,7 +557,8 @@ export class GraphRenderer {
   private labelsFor(node: SimNode, tier: LabelTier, selected: boolean): SVGElement[] {
     const out: SVGElement[] = [];
     if (node.kind === "hub") {
-      const text = tier >= 2 ? node.fullLabel : node.label;
+      // 总览档只留岗位名（顶层簇心）；子簇（来源会话）名字留给放大后再看
+      const text = tier < 0 && node.sub ? "" : tier >= 2 ? node.fullLabel : node.label;
       if (text !== "") {
         const label = el("text", { class: "ihub-label", "text-anchor": "middle", "data-role": "hub" });
         label.textContent = text;
@@ -519,7 +573,7 @@ export class GraphRenderer {
     } else {
       const dense = this.scene?.dense === true;
       // 轮号：选中的总是显；常规倍率下只给大节点（密集时不标）；放大后每片叶都标
-      if (selected || tier >= 1 || (!dense && node.r >= 4.5)) {
+      if (selected || tier >= 1 || (tier >= 0 && !dense && node.r >= 4.5)) {
         const round = el("text", { class: "ileaf-round", "data-role": "round" });
         round.textContent = String(node.leaf.lastRound);
         out.push(round);
@@ -571,7 +625,7 @@ export class GraphRenderer {
       // 轮号 / 标题由语义缩放的文字组负责；选中态变了就让它在下一次 refreshLabels 重建
       if (handle.selected !== selected) {
         handle.selected = selected;
-        handle.tier = -1;
+        handle.tier = null;
       }
     }
     for (const node of scene.nodes) {
@@ -665,6 +719,8 @@ export class GraphRenderer {
     this.running = false;
     this.alpha = 0;
     this.draw();
+    // 跟随适配在动画里逐帧改了倍率，只在落定时告诉 React 一次（缩放按钮的可用态）
+    this.onViewChange?.(this.viewTf);
     // 落定后按最终位置重算哪些节点在可见区域内（动画中只随节点平移，不逐帧算）
     this.refreshLabels();
     this.rememberCurrent();
@@ -735,9 +791,11 @@ export class GraphRenderer {
     if (drag === null || scene === null || event.pointerId !== drag.pointerId) return;
     drag.moved = Math.max(drag.moved, Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y));
     if (drag.moved < CLICK_SLOP) return;
+    // 真拖起来了（不是点击）：镜头交给用户，不然跟随适配会在手底下挪画面
+    this.takeOver();
     const at = this.toSpace(event.clientX, event.clientY);
-    drag.node.x = Math.max(6, Math.min(scene.w - 6, at.x));
-    drag.node.y = Math.max(6, Math.min(scene.h - 6, at.y));
+    drag.node.x = at.x;
+    drag.node.y = at.y;
     // 拖动中就地复热到较低热度：周围跟着让位，但不全场乱飞
     for (let i = 0; i < 2; i += 1) tick(scene.nodes, scene.links, scene.w, scene.h, 0.25, 8);
     this.draw();
