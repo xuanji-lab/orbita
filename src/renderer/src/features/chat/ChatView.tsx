@@ -124,7 +124,7 @@ import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments"
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
 import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
-import { findQuoteSource, locateQuote, quoteFromSelection } from "./quote-select.ts";
+import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
 import { modelThinkingLevels } from "./thinking-choice.ts";
@@ -188,6 +188,15 @@ function useFollowScroll(enabled: boolean) {
  */
 type ChatViewProps = Parameters<typeof ChatViewBody>[0];
 
+/** 摘抄跳回原文的一次性请求（App 发起，ChatView 消费后滚到原文并闪一下）。 */
+export interface ExcerptJumpRequest {
+  sessionId: string;
+  turn?: number;
+  role: "user" | "assistant";
+  text: string;
+  token: number;
+}
+
 /**
  * 拖图进来的落点是**整个聊天面板**，不只是输入框卡片——用户拖文件时眼睛看的是
  * 聊天区，松手在转录上是最常见的落点；只认输入框的话，落在别处什么都不发生
@@ -218,6 +227,64 @@ export function ChatView(props: ChatViewProps) {
   );
   // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
   const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
+  // 摘抄与跳回原文按「正在看的会话」算：纯浏览的旧会话不起 runtime session（sessionId 为
+  // null、opened 里拿得到），但它的文字照样能摘、摘过的照样能跳回来
+  const viewedId = session.sessionId ?? session.opened?.id ?? null;
+  // 摘抄跳回原文（审查面板 › 摘抄页签）：切会话后转录异步加载，token + 已应用水位保证
+  // 「加载到那一轮了再滚一次、只滚一次」。逐字原文找不到（被编辑、被回退）就退回到那一轮
+  // 的用户消息整块闪一下——至少落在对的地方。迁移来的旧摘抄没有轮号：只按原文找
+  const jumpApplied = useRef(0);
+  const { excerptJump } = props;
+  useEffect(() => {
+    if (excerptJump === null || excerptJump === undefined || excerptJump.token === jumpApplied.current) return;
+    if (excerptJump.sessionId !== viewedId) return;
+    const turns = session.transcript.filter((item) => item.role === "user").length;
+    if (excerptJump.turn !== undefined && turns < excerptJump.turn) return;
+    if (session.transcript.length === 0) return;
+    const sourceId =
+      findQuoteSource(session.transcript, {
+        messageId: "",
+        role: excerptJump.role,
+        text: excerptJump.text,
+        ...(excerptJump.turn !== undefined ? { turn: excerptJump.turn } : {}),
+      }) ?? (excerptJump.turn !== undefined ? nthUserMessageId(session.transcript, excerptJump.turn) : null);
+    if (sourceId === null) {
+      jumpApplied.current = excerptJump.token;
+      return;
+    }
+    // 刚切过来的会话会连着提交好几次（转录分批、图片、轮尾卡），每次提交都会被
+    // useFollowScroll 钉回底部：平滑滚动刚起步就被拽回去（真机：高亮在视口上方几千像素）。
+    // 等两帧让这一波提交落定，再**瞬时**滚过去——瞬时滚动立刻产生一次离底的 scroll
+    // 事件，把「跟随到底」关掉，之后的提交不再拽它
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const pane = paneRef.current;
+        if (pane === null) return;
+        // 真滚了才记水位：两帧之内转录又变时清理会取消这一次，下次 effect 重排
+        jumpApplied.current = excerptJump.token;
+        highlightQuote(pane, sourceId, excerptJump.text, "auto");
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [excerptJump, session.transcript, viewedId]);
+  const { onExcerptSaved } = props;
+  const saveExcerpt = useMemo(
+    () =>
+      viewedId === null
+        ? undefined
+        : async (quote: TextQuote, raw: string): Promise<"saved" | "duplicate"> => {
+            const result = await api.excerpt.add({
+              sessionId: viewedId,
+              role: quote.role,
+              // 存选区原文（保留换行）；引用用的 quote.text 压过空白、截过上限
+              text: raw,
+              ...(quote.turn !== undefined ? { turn: quote.turn } : {}),
+            });
+            onExcerptSaved?.();
+            return result.duplicate ? "duplicate" : "saved";
+          },
+    [viewedId, onExcerptSaved],
+  );
   return (
     <div
       ref={paneRef}
@@ -245,17 +312,22 @@ export function ChatView(props: ChatViewProps) {
           <ChatViewBody {...props} dropActive={dropActive} />
         </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
-      {accepts && (
-        <QuoteSelectionLayer
-          paneRef={paneRef}
-          transcript={session.transcript}
-          onQuote={(quote) => {
-            session.addQuote(quote);
-            // 引完回到输入框接着写——引用就是为了下一句话
-            paneRef.current?.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
-          }}
-        />
-      )}
+      {/* 复制与摘抄只读文字，只读（没有 pi 本子的旧会话）/ 没配模型的会话里也能用；引用要往输入框里放，
+          输入框不可用时那一键不出现 */}
+      <QuoteSelectionLayer
+        paneRef={paneRef}
+        transcript={session.transcript}
+        onQuote={
+          accepts
+            ? (quote) => {
+                session.addQuote(quote);
+                // 引完回到输入框接着写——引用就是为了下一句话
+                paneRef.current?.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+              }
+            : undefined
+        }
+        onExcerpt={saveExcerpt}
+      />
     </div>
   );
 }
@@ -268,14 +340,14 @@ const QuoteJumpContext = createContext<(quote: TextQuote) => (() => void) | unde
  * `scrollIntoView({ block: "center" })`：一条长回复整块居中时，被引用的那句常落在
  * 下半截，正好压在输入框上方叠起来的卡片（排队条、审批条、附图与引用）后面。
  */
-function scrollToTop(target: Element, rect: DOMRect): void {
+function scrollToTop(target: Element, rect: DOMRect, behavior: ScrollBehavior = "smooth"): void {
   const container = target.closest<HTMLElement>(".scroll");
   if (container === null) {
-    target.scrollIntoView({ block: "start", behavior: "smooth" });
+    target.scrollIntoView({ block: "start", behavior });
     return;
   }
   const top = container.scrollTop + rect.top - container.getBoundingClientRect().top - 24;
-  container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  container.scrollTo({ top: Math.max(0, top), behavior });
 }
 
 /**
@@ -283,7 +355,7 @@ function scrollToTop(target: Element, rect: DOMRect): void {
  * 几个文本块（都带同一个 data-quote-id），挑包含这段原文的那块；逐字定位不到
  * （原文被 markdown 渲染改写得太多）就整块闪一下——至少把人带到对的地方。
  */
-function highlightQuote(pane: HTMLElement, messageId: string, text: string): void {
+function highlightQuote(pane: HTMLElement, messageId: string, text: string, behavior: ScrollBehavior = "smooth"): void {
   const blocks = Array.from(pane.querySelectorAll<HTMLElement>(`[data-quote-id="${CSS.escape(messageId)}"]`));
   for (const block of blocks) {
     const nodes: Text[] = [];
@@ -296,14 +368,14 @@ function highlightQuote(pane: HTMLElement, messageId: string, text: string): voi
     const range = document.createRange();
     range.setStart(startNode, at.start.offset);
     range.setEnd(endNode, at.end.offset);
-    scrollToTop(block, range.getBoundingClientRect());
+    scrollToTop(block, range.getBoundingClientRect(), behavior);
     CSS.highlights.set("orbita-quote", new Highlight(range));
     window.setTimeout(() => CSS.highlights.delete("orbita-quote"), 2400);
     return;
   }
   const fallback = blocks[0];
   if (fallback === undefined) return;
-  scrollToTop(fallback, fallback.getBoundingClientRect());
+  scrollToTop(fallback, fallback.getBoundingClientRect(), behavior);
   fallback.classList.remove("quote-flash");
   // 强制回流，让同一块连点两次时动画能重新开始
   void fallback.offsetWidth;
@@ -312,7 +384,15 @@ function highlightQuote(pane: HTMLElement, messageId: string, text: string): voi
 
 /**
  * 划选引用的入口（Proma 的 AgentHistorySelectionLayer 同款交互）：在转录里划选一段文字，
- * 松手后选区上方浮出「引用」，点了就进输入框的引用 chip。
+ * 松手后选区上方浮出一条小工具栏——「复制」进剪贴板、「引用」进输入框的引用 chip、
+ * 「摘抄」存进摘抄（审查面板的「摘抄」页签里翻）。
+ *
+ * 摘抄只是收藏、不进模型，所以点一下就存，不问态度；存完原地变「已摘抄」（同一段已经
+ * 摘过则是「已经摘过」），停一拍后收起并清掉选区——这段话已经处理完了。
+ *
+ * 复制拷的是**选区原文**（`selection.toString()`，保留换行），不是引用用的规整版：
+ * 引用要压空白、截上限是为了进 prompt，拷到别处的东西应该和用户看到的一样。
+ * 复制后按钮原地变「已复制」、约一秒后收起，选区留着（用户可能还想再引用）。
  *
  * - 只认**单条消息内**的选区（起止落在同一个 `[data-quote-id]` 块里）：跨消息的一段
  *   说不清出处，跳不回去。
@@ -323,10 +403,23 @@ function highlightQuote(pane: HTMLElement, messageId: string, text: string): voi
 function QuoteSelectionLayer(props: {
   paneRef: React.RefObject<HTMLDivElement | null>;
   transcript: readonly TranscriptItem[];
-  onQuote: (quote: TextQuote) => void;
+  /** 缺席 = 「引用」键不出现（输入框不可用：只读 / 没配模型 / 子会话面板） */
+  onQuote?: (quote: TextQuote) => void;
+  /** 缺席 = 「摘抄」键不出现（首页等没有会话的地方）。raw 是选区原文 */
+  onExcerpt?: (quote: TextQuote, raw: string) => Promise<"saved" | "duplicate">;
 }) {
   const t = useT();
-  const [candidate, setCandidate] = useState<{ quote: TextQuote; x: number; top: number; bottom: number } | null>(null);
+  /** 摘抄的短暂相位：存的中途、存好、已经摘过、失败——各自停一拍再收起 */
+  const [excerptPhase, setExcerptPhase] = useState<"saving" | "saved" | "duplicate" | "failed" | null>(null);
+  const [candidate, setCandidate] = useState<{
+    quote: TextQuote;
+    /** 选区原文（复制用，保留换行；quote.text 是规整过的） */
+    raw: string;
+    x: number;
+    top: number;
+    bottom: number;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
   const transcriptRef = useRef(props.transcript);
   transcriptRef.current = props.transcript;
   const { paneRef } = props;
@@ -355,15 +448,22 @@ function QuoteSelectionLayer(props: {
         return;
       }
       const rect = range.getBoundingClientRect();
-      setCandidate({ quote, x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
+      setCopied(false);
+      setExcerptPhase(null);
+      setCandidate({ quote, raw: selection.toString(), x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
     };
-    const schedule = (): void => {
+    const schedule = (event: Event): void => {
+      // 松手落在工具栏自己上（点复制 / 引用）不是一次新划选，不重新捕获：
+      // 重捕获会把刚亮起的「已复制」在 60ms 后打回「复制」，1 秒收起也就永远等不到
+      if (event.type === "pointerup" && event.target instanceof Element && event.target.closest("[data-quote-popover]") !== null) {
+        return;
+      }
       window.clearTimeout(timer);
       // 等浏览器把选区落定（双击选词、三击选段的 selection 在 pointerup 之后才定）
       timer = window.setTimeout(capture, 60);
     };
     const onKeyUp = (event: KeyboardEvent): void => {
-      if (event.shiftKey || event.key.startsWith("Arrow")) schedule();
+      if (event.shiftKey || event.key.startsWith("Arrow")) schedule(event);
     };
     const onPointerDown = (event: PointerEvent): void => {
       if (event.target instanceof Element && event.target.closest("[data-quote-popover]") !== null) return;
@@ -384,20 +484,40 @@ function QuoteSelectionLayer(props: {
     };
   }, [paneRef]);
 
+  // 「已复制」停留约一秒后收起工具栏；选区不动（用户可能还想引用）
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => {
+      setCopied(false);
+      setCandidate(null);
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  // 摘抄的结果停一拍半再收起；成功（含已经摘过）连选区一起清掉，失败留着选区可以再点
+  useEffect(() => {
+    if (excerptPhase === null || excerptPhase === "saving") return;
+    const timer = window.setTimeout(() => {
+      if (excerptPhase !== "failed") {
+        window.getSelection()?.removeAllRanges();
+        setCandidate(null);
+      }
+      setExcerptPhase(null);
+    }, 1400);
+    return () => window.clearTimeout(timer);
+  }, [excerptPhase]);
+
   if (candidate === null) return null;
+  const { onQuote, onExcerpt } = props;
   // 贴着窗口顶的选区往上弹会被裁掉，改弹到选区下方
   const below = candidate.top < 56;
   return createPortal(
-    <button
-      type="button"
+    <div
+      role="toolbar"
+      aria-label={t.quote.toolbar}
       data-quote-popover
-      title={t.quote.addTitle}
+      className="quote-toolbar"
       onPointerDown={(event) => event.preventDefault()}
-      onClick={() => {
-        props.onQuote(candidate.quote);
-        window.getSelection()?.removeAllRanges();
-        setCandidate(null);
-      }}
       style={{
         position: "fixed",
         left: candidate.x,
@@ -406,22 +526,82 @@ function QuoteSelectionLayer(props: {
         zIndex: 40,
         display: "inline-flex",
         alignItems: "center",
-        gap: "var(--space-1)",
-        height: 30,
-        padding: "0 var(--space-3)",
+        gap: 2,
+        padding: 2,
         border: "1px solid var(--color-border-subtle)",
         borderRadius: "var(--radius-md)",
         background: "var(--color-bg-panel)",
         boxShadow: "var(--shadow-popover)",
-        color: "var(--color-text-primary)",
-        fontSize: "var(--font-size-base)",
-        whiteSpace: "nowrap",
-        cursor: "pointer",
       }}
     >
-      <Icon name="quote" size={13} strokeWidth={1.8} />
-      {t.quote.add}
-    </button>,
+      <button
+        type="button"
+        title={copied ? t.chat.copied : t.quote.copyTitle}
+        aria-label={copied ? t.chat.copied : t.quote.copyTitle}
+        onClick={() => {
+          void navigator.clipboard.writeText(candidate.raw).then(
+            () => setCopied(true),
+            () => setCandidate(null),
+          );
+        }}
+      >
+        <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.8} />
+        {copied ? t.chat.copied : t.quote.copy}
+      </button>
+      {onQuote !== undefined && (
+        <button
+          type="button"
+          title={t.quote.addTitle}
+          onClick={() => {
+            onQuote(candidate.quote);
+            window.getSelection()?.removeAllRanges();
+            setCandidate(null);
+          }}
+        >
+          <Icon name="quote" size={13} strokeWidth={1.8} />
+          {t.quote.add}
+        </button>
+      )}
+      {onExcerpt !== undefined && (
+        <button
+          type="button"
+          title={t.quote.excerptTitle}
+          aria-live="polite"
+          disabled={excerptPhase === "saving"}
+          data-done={excerptPhase === "saved" || excerptPhase === "duplicate" || undefined}
+          onClick={() => {
+            if (excerptPhase !== null && excerptPhase !== "failed") return;
+            setExcerptPhase("saving");
+            void onExcerpt(candidate.quote, candidate.raw).then(
+              (result) => setExcerptPhase(result),
+              () => setExcerptPhase("failed"),
+            );
+          }}
+        >
+          <Icon
+            name={
+              excerptPhase === "saving"
+                ? "loader-circle"
+                : excerptPhase === "saved" || excerptPhase === "duplicate"
+                  ? "check"
+                  : excerptPhase === "failed"
+                    ? "triangle-alert"
+                    : "bookmark"
+            }
+            size={13}
+            strokeWidth={1.8}
+            spin={excerptPhase === "saving"}
+          />
+          {excerptPhase === "saved"
+            ? t.quote.excerptSaved
+            : excerptPhase === "duplicate"
+              ? t.quote.excerptDuplicate
+              : excerptPhase === "failed"
+                ? t.quote.excerptFailed
+                : t.quote.excerpt}
+        </button>
+      )}
+    </div>,
     document.body,
   );
 }
@@ -519,6 +699,14 @@ function ChatViewBody(props: {
    * 只有主槽的 ChatView 拿到它（面板开在主槽旁边）；右栏与抽屉里不传，行不可点。
    */
   onOpenReviewAt?: (path: string) => void;
+  /**
+   * 摘抄跳回原文的一次性请求（审查面板 › 摘抄页签发起，token 单调递增，同 reviewFocus）：
+   * 外层 ChatView 消费——本会话直接滚，切过来的会话等转录加载到那一轮再滚。
+   * 只有主槽的 ChatView 拿到它。
+   */
+  excerptJump?: ExcerptJumpRequest | null;
+  /** 摘下一条之后（让审查面板的摘抄页签重拉）。只有主槽的 ChatView 拿到它 */
+  onExcerptSaved?: () => void;
   /**
    * 召回终态卡的「在右栏看图谱」：打开右栏意图面板。只有主槽拿到它（面板开在
    * 主槽旁边）；右栏与抽屉里不传，终态卡不画这个链接。

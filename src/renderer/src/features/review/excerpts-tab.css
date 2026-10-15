@@ -1,0 +1,276 @@
+/*
+ * 审查面板 › 页签栏（改动 / 摘抄）与「摘抄」页签。右栏窄：一行一条摘抄，
+ * 正文最多三行，出处与日期一行小字，删除键悬停才出现（确认态常显）。
+ * 值只用 token；悬停 / 选中 / 确认态全在类与属性上。
+ */
+
+/* ── 页签栏：贴着标题行，安静的分段 ── */
+
+.review-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.review-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.review-tabs button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.review-tabs button[aria-selected="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+/* ── 摘抄页签 ── */
+
+.excerpts {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.excerpts-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.excerpts-seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.excerpts-seg button {
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.excerpts-seg button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.excerpts-seg button[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.excerpts-seg button:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+.excerpts-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+
+.excerpts-search:focus-within {
+  border-color: var(--color-accent);
+}
+
+.excerpts-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.excerpts-clear {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.excerpts-clear:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.excerpts-empty {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: var(--space-3) var(--space-2);
+}
+
+.excerpts-hint {
+  color: var(--color-text-tertiary);
+}
+
+.excerpts-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+
+.excerpts-row {
+  display: grid;
+  gap: 4px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  transition: var(--transition-hover);
+}
+
+.excerpts-row:hover,
+.excerpts-row[data-confirming] {
+  background: var(--color-bg-hover);
+}
+
+/* 正文本身就是「回到原文」的按钮：整段可点，悬停只换光标，不加下划线（三行文字划线太吵） */
+.excerpts-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.excerpts-text:disabled {
+  color: var(--color-text-secondary);
+  cursor: default;
+}
+
+.excerpts-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.excerpts-origin {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.excerpts-acts {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out-quint);
+}
+
+.excerpts-row:hover .excerpts-acts,
+.excerpts-row[data-confirming] .excerpts-acts,
+.excerpts-acts:focus-within {
+  opacity: 1;
+}
+
+.excerpts-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.excerpts-icon:hover {
+  background: var(--color-bg-panel);
+  color: var(--color-danger);
+}
+
+.excerpts-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.excerpts-btn:hover:not(:disabled) {
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+}
+
+.excerpts-btn.danger {
+  border-color: var(--color-danger-solid);
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+}
+
+.excerpts-btn.danger:hover:not(:disabled) {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+}

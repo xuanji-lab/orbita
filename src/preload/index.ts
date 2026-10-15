@@ -6,6 +6,7 @@ import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
@@ -24,6 +25,7 @@ import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
 const api = {
   agent: agentApi,
   channel: channelApi,
+  excerpt: excerptApi,
   provider: providerApi,
   session: sessionApi,
   review: reviewApi,

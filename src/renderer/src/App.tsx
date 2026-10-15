@@ -39,6 +39,8 @@ import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
+import type { ExcerptJump } from "./features/review/ExcerptsTab";
+import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
@@ -235,6 +237,24 @@ export function App() {
     setReviewFocus({ path, token: reviewFocusTokenRef.current });
     setRightPanel("review");
   }, []);
+  /**
+   * 摘抄（审查面板 › 摘抄页签）点一条「回到原文」：目标不是当前会话时先切过去，
+   * 跳转请求由主槽 ChatView 在转录加载到那一轮后消费（滚到 + 闪一下）。token 同
+   * reviewFocus 的机制——同一条连点两次也会重新定位。
+   */
+  const [excerptJump, setExcerptJump] = useState<ExcerptJumpRequest | null>(null);
+  const excerptJumpTokenRef = useRef(0);
+  const openExcerpt = useCallback(
+    (jump: ExcerptJump) => {
+      excerptJumpTokenRef.current += 1;
+      setExcerptJump({ ...jump, token: excerptJumpTokenRef.current });
+      if (jump.sessionId !== mainOpenId) void session.openSession(jump.sessionId);
+    },
+    [mainOpenId, session],
+  );
+  /** 摘抄列表的版本：主槽每摘一条 +1，审查面板的摘抄页签据此重拉 */
+  const [excerptRevision, setExcerptRevision] = useState(0);
+  const bumpExcerpts = useCallback(() => setExcerptRevision((value) => value + 1), []);
   /**
    * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
@@ -793,6 +813,8 @@ export function App() {
                 session={session}
                 providersError={providersError}
                 onOpenReviewAt={openReviewAt}
+                excerptJump={excerptJump}
+                onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
                 onOpenSubSessions={openSubSessionsList}
                 onOpenParent={openParent}
@@ -837,6 +859,8 @@ export function App() {
                   focus={reviewFocus}
                   revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
                   cwd={session.cwd}
+                  excerptRevision={excerptRevision}
+                  onJumpExcerpt={openExcerpt}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel

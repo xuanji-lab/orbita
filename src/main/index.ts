@@ -30,6 +30,7 @@ import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
+import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { UsageLedger } from "./usage/ledger.ts";
 import { registerUsageIpc } from "./usage/ipc.ts";
@@ -44,6 +45,7 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
+import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
@@ -316,6 +318,9 @@ void app.whenReady().then(async () => {
   const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
   const record = createSessionRecorder(sessions, usageLedger);
   registerUsageIpc(usageLedger, sessions);
+  // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
+  // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处
+  registerExcerptIpc(new ExcerptStore(join(configDir, "excerpts.jsonl")), sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
