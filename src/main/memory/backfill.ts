@@ -128,13 +128,43 @@ export interface MemoryBackfillDeps {
  * 会话间小并发读（8 路）：几百条会话的预估要一两秒内给出（契约原话），
  * 串行读盘时还娜娅 2 秒+，瓶颈是逐文件 IO 而不是解析。
  */
+export interface BackfillPlan {
+  turns: BackfillTurn[];
+  skippedTurns: number;
+  chars: number;
+  /**
+   * choreModel 缺席时各会话的退路模型（密钥面已装配），按 sessionId 索引。
+   * **解析不出模型的会话（导入会话的占位 provider 等）不进 turns**——它们的轮
+   * 每次尝试都必然失败，排在队首会触发连续失败熔断、把整个任务打死；预估与
+   * 执行同口径地排除，配好家务活模型后它们自然回来。
+   */
+  fallbacks: Map<string, { provider: ProviderSecrets; modelId: string }>;
+}
+
 export async function collectBackfillPlan(
-  deps: Pick<MemoryBackfillDeps, "sessions" | "channels" | "ledger">,
+  deps: Pick<MemoryBackfillDeps, "sessions" | "channels" | "ledger" | "models">,
   range: MemoryBackfillRange,
   now: number,
-): Promise<{ turns: BackfillTurn[]; skippedTurns: number; chars: number }> {
+): Promise<BackfillPlan> {
   const since = rangeStart(range, now);
   const metas = (await deps.sessions.list()).filter((meta) => meta.parentId === undefined);
+  const chore = await deps.models.readChoreModel();
+  // 退路模型按 providerId 装配一次整批复用；解析失败记 null（该会话被排除）
+  const providerCache = new Map<string, ProviderSecrets | null>();
+  const resolveFallback = async (providerId: string): Promise<ProviderSecrets | null> => {
+    if (!providerCache.has(providerId)) {
+      providerCache.set(
+        providerId,
+        await deps.models.resolveProvider(providerId).catch((cause: unknown) => {
+          console.error("[memory:backfill] 会话模型装配失败（没配家务活模型时这类会话不补蒸）", providerId, cause);
+          return null;
+        }),
+      );
+    }
+    const provider = providerCache.get(providerId);
+    return provider === undefined ? null : provider;
+  };
+  const fallbacks = new Map<string, { provider: ProviderSecrets; modelId: string }>();
   const perSession = await collectWithLimit(metas, 8, async (meta) => {
     const detail = await deps.sessions.load(meta.id).catch((cause: unknown) => {
       console.error("[memory:backfill] 会话账本读不了，跳过这条", meta.id, cause);
@@ -144,7 +174,7 @@ export async function collectBackfillPlan(
     const channelTexts = detail.transcript.some(isChannelMarkRecord)
       ? await channelTextsOf(deps.channels, meta.id, detail.transcript)
       : new Map<string, string>();
-    return collectSessionTurns({
+    const collected = collectSessionTurns({
       sessionId: meta.id,
       meta: { workspaceId: detail.meta.workspaceId, cwd: detail.meta.cwd },
       records: detail.transcript,
@@ -153,6 +183,13 @@ export async function collectBackfillPlan(
       since,
       model: { providerId: detail.meta.providerId, modelId: detail.meta.modelId },
     });
+    if (collected.pending.length === 0) return collected;
+    if (chore === undefined) {
+      const provider = await resolveFallback(detail.meta.providerId);
+      if (provider === null) return { pending: [], skippedTurns: collected.skippedTurns };
+      fallbacks.set(meta.id, { provider, modelId: detail.meta.modelId });
+    }
+    return collected;
   });
   const turns: BackfillTurn[] = [];
   let skippedTurns = 0;
@@ -162,7 +199,7 @@ export async function collectBackfillPlan(
     turns.push(...collected.pending);
   }
   turns.sort((a, b) => a.at - b.at);
-  return { turns, skippedTurns, chars: turns.reduce((sum, turn) => sum + turn.chars, 0) };
+  return { turns, skippedTurns, chars: turns.reduce((sum, turn) => sum + turn.chars, 0), fallbacks };
 }
 
 /** 小并发池（保序收集）：读盘型任务的通用小工具，不做退避不做重试。 */
@@ -356,11 +393,12 @@ export class MemoryBackfillService {
     const plan = await collectBackfillPlan(this.deps, range, now);
     const chore = await this.deps.models.readChoreModel();
     this.chorePayload = chore;
-    const providerCache = new Map<string, ProviderSecrets>();
-    const queue: QueuedTurn[] = [];
-    for (const turn of plan.turns) {
-      queue.push({ turn, attempts: 0, notBefore: 0, ...(chore === undefined ? { fallback: await this.fallbackOf(turn, providerCache) } : {}) });
-    }
+    const queue: QueuedTurn[] = plan.turns.map((turn) => ({
+      turn,
+      attempts: 0,
+      notBefore: 0,
+      ...(chore === undefined ? { fallback: plan.fallbacks.get(turn.sessionId) } : {}),
+    }));
     this.queue = queue;
     this.remaining = remainingOf(queue);
     this.consecutiveFailed = 0;
@@ -529,29 +567,6 @@ export class MemoryBackfillService {
       return;
     }
     this.remaining.set(sessionId, left);
-  }
-
-  /** choreModel 缺席时这轮退回的会话模型（providerCache 按 providerId 复用装配）。 */
-  private async fallbackOf(
-    turn: BackfillTurn,
-    providerCache: Map<string, ProviderSecrets>,
-  ): Promise<{ provider: ProviderSecrets; modelId: string } | undefined> {
-    if (turn.model === undefined) return undefined;
-    let provider = providerCache.get(turn.model.providerId);
-    if (provider === undefined) {
-      try {
-        provider = await this.deps.models.resolveProvider(turn.model.providerId);
-        providerCache.set(turn.model.providerId, provider);
-      } catch (cause) {
-        console.error(
-          "[memory:backfill] 会话模型装配失败（这些轮没有退路模型，agent 侧会回失败）",
-          turn.model.providerId,
-          cause,
-        );
-        return undefined;
-      }
-    }
-    return { provider, modelId: turn.model.modelId };
   }
 
   private async persist(): Promise<void> {

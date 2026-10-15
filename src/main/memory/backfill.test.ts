@@ -344,14 +344,38 @@ describe("start / runLoop", () => {
     assert.equal(second.status.totalTurns, 0);
   });
 
-  test("没配 choreModel 时各轮带自己的 fallback（会话模型）；装配失败就没有", async () => {
-    const ctx = await makeCtx([{ meta: meta("s"), records: rounds(1, NOW) }], { chore: undefined });
-    ctx.distill.next(async () => [okResult("s", 1, [])]);
+  test("没配 choreModel 时各轮带自己的 fallback（会话模型）；解析不出 provider 的会话整条排除", async () => {
+    const ctx = await makeCtx(
+      [
+        { meta: meta("s"), records: rounds(1, NOW) },
+        { meta: meta("imported", { providerId: "placeholder" }), records: rounds(2, NOW + 1000) },
+      ],
+      { chore: undefined },
+    );
+    // 预估与执行同口径：imported（占位 provider）不进待蒸
+    const estimate = await ctx.service.estimate("all");
+    assert.equal(estimate.turns, 1);
+    assert.equal(estimate.sessions, 1);
+    ctx.distill.next(async (turns) => turns.map((turn) => okResult(turn.sessionId, turn.turn, [])));
     await ctx.service.start("all");
     await waitFor(() => ctx.service.statusSnapshot().state === "done");
     const input = ctx.distill.calls[0]?.turns[0];
     assert.equal(input?.fallback?.modelId, "glm-5.3");
     assert.equal(input?.fallback?.provider.id, "zai");
+    assert.equal(ctx.service.statusSnapshot().failedTurns, 0);
+    // 配了家务活模型后同一批会话都回来
+    const withChore = await makeCtx(
+      [
+        { meta: meta("s"), records: rounds(1, NOW) },
+        { meta: meta("imported", { providerId: "placeholder" }), records: rounds(2, NOW + 1000) },
+      ],
+      { chore: CHORE },
+    );
+    const estimateChore = await withChore.service.estimate("all");
+    // s 的那轮已在上一段蒸过（同一份账本）：回来的只有 imported 的 2 轮
+    assert.equal(estimateChore.turns, 2);
+    assert.equal(estimateChore.sessions, 1);
+    assert.equal(estimateChore.skippedTurns, 1);
   });
 
   test("supersedes 指向不存在的 id（模型幻觉）：条目照落、不落标、不计数", async () => {
