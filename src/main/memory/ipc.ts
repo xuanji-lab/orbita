@@ -15,6 +15,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import { MEMORY_GLOBAL_SCOPE } from "../../shared/memory.ts";
 import type {
   MemoryAddManualResponse,
+  MemoryBackfillStartResponse,
   MemoryEntriesResponse,
   MemoryExcerptResponse,
   MemoryExcerptsResponse,
@@ -41,16 +42,19 @@ import {
 } from "./requests.ts";
 import { sessionTurns } from "./requests.ts";
 import type { MemoryUsageStore } from "./usage.ts";
+import { parseBackfillRange, type MemoryBackfillService } from "./backfill.ts";
 
 export interface MemoryIpcDeps {
   memory: MemoryStore;
   usage: MemoryUsageStore;
   sessions: SessionScopeReader;
   workspaces: WorkspaceReader;
+  /** 从历史生成（补蒸）的任务编排：预估 / 开始 / 暂停 / 继续 / 取消 / 读状态。 */
+  backfill: MemoryBackfillService;
 }
 
 export function registerMemoryIpc(deps: MemoryIpcDeps): void {
-  const { memory, usage, sessions, workspaces } = deps;
+  const { memory, usage, sessions, workspaces, backfill } = deps;
   const globalToken = memory.tokenOf(MEMORY_GLOBAL_SCOPE);
 
   /** 作用域清单：工作区 / Home / 全局（分类与命名在 listScopes，纯函数可测）。 */
@@ -134,6 +138,33 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
     const req = asSessionRequest(raw);
     return { items: await listExcerpts(memory, sessions, req.sessionId) };
   });
+
+  /* ---------- 从历史生成（补蒸）：memory:backfill-* 六个通道 ---------- */
+
+  /** 预估（只读不写）：范围待蒸轮数 / 已蒸跳过 / 粗估 token / 家务活模型。 */
+  ipcMain.handle(
+    ipcChannels.memoryBackfillEstimate,
+    async (_event, raw: unknown) => backfill.estimate(parseBackfillRange(raw)),
+  );
+
+  /** 开跑：已有任务在跑 / 暂停中不另起（started=false）；开关关着拒绝并写原因。 */
+  ipcMain.handle(
+    ipcChannels.memoryBackfillStart,
+    async (_event, raw: unknown): Promise<MemoryBackfillStartResponse> =>
+      backfill.start(parseBackfillRange(raw)),
+  );
+
+  /** 暂停：状态立即翻 paused，在飞的那批蒸完照常落盘（那是已付的钱）。 */
+  ipcMain.handle(ipcChannels.memoryBackfillPause, () => backfill.pause());
+
+  /** 继续：重收计划（暂停期间新聊的轮一并接上），接着计数往下跑。 */
+  ipcMain.handle(ipcChannels.memoryBackfillResume, () => backfill.resume());
+
+  /** 取消：清队、状态 cancelled；已落的条目保留。 */
+  ipcMain.handle(ipcChannels.memoryBackfillCancel, () => backfill.cancel());
+
+  /** 读状态（闲聊拉取；细粒度进度靠 memoryBackfillEvent 推送）。 */
+  ipcMain.handle(ipcChannels.memoryBackfillStatus, () => backfill.statusSnapshot());
 
 }
 

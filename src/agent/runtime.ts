@@ -709,9 +709,9 @@ function scheduleMemoryDistill(
         if (block.type === "text") output += block.text;
       }
       const drafts = parseDistillReply(output, Date.now(), new Set(candidates.map((c) => c.id)));
-      if (drafts.length > 0) {
-        send({ type: "memoryAppend", sessionId, turn, entries: drafts });
-      }
+      // 蒸出 0 条也发：主进程要靠它记「这轮已蒸」的账（补蒸据此跳过，
+      // distilled-turns.json）——只在蒸馏调用成功后才发，失败的轮下次补蒸再试
+      send({ type: "memoryAppend", sessionId, turn, entries: drafts });
     } catch (cause) {
       console.error("[memory] 蒸馏失败（静默，下轮自然重试新内容）", cause);
     }

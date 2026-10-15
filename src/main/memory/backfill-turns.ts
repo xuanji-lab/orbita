@@ -40,6 +40,8 @@ export interface BackfillTurn {
   scope: { workspaceId: string | null; cwd: string };
   /** 两个文本的字符量（预估 token 用；收集时顺手记，免得二次遍历） */
   chars: number;
+  /** 该会话自己的模型（choreModel 缺席时的退路；收集时从 meta 顺手带出） */
+  model?: { providerId: string; modelId: string };
 }
 
 /** 一条会话的收集结果。 */
@@ -89,6 +91,8 @@ export function collectSessionTurns(input: {
   channelTexts: ReadonlyMap<string, string> | null;
   distilled: ReadonlySet<number>;
   since: number;
+  /** 该会话自己的模型（meta 的 providerId/modelId，退路用；缺席就没有） */
+  model?: { providerId: string; modelId: string };
 }): SessionTurnCollection {
   const scope = { workspaceId: input.meta.workspaceId, cwd: input.meta.cwd };
   const pending: BackfillTurn[] = [];
@@ -135,6 +139,7 @@ export function collectSessionTurns(input: {
       assistantText,
       scope,
       chars: userText.length + assistantText.length,
+      model: input.model,
     });
   }
   return { pending, skippedTurns };

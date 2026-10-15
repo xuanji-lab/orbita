@@ -67,7 +67,17 @@ const append = (
   entries: { text: string; keywords: string[]; timestamp: number; supersedes?: string }[],
 ): Extract<AgentEvent, { type: "memoryAppend" }> => ({ type: "memoryAppend", sessionId, turn, entries });
 
+/** 已蒸账本的记录桩：调用都记下来，测试断言「这轮记账了没有」。 */
+class LedgerStub {
+  readonly recorded: [string, number][] = [];
+  async record(sessionId: string, turn: number): Promise<void> {
+    this.recorded.push([sessionId, turn]);
+  }
+}
+let ledgerStub = new LedgerStub();
+
 beforeEach(async () => {
+  ledgerStub = new LedgerStub();
   dir = await mkdtemp(join(tmpdir(), "orbita-memory-ipc-"));
   memory = new MemoryStore(dir);
   usage = new MemoryUsageStore(dir);
@@ -82,13 +92,13 @@ afterEach(async () => {
 describe("applyMemoryAppend", () => {
   test("按会话归属落进对应作用域：工作区里的会话与只有 cwd 的会话不互通", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "用户偏好用 bun 作为包管理器", keywords: ["bun", "包管理器"], timestamp: NOW },
     ]));
-    await applyMemoryAppend(sessions, memory, append("no-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("no-workspace", 1, [
       { text: "用户偏好用 bun 作为包管理器", keywords: ["bun", "包管理器"], timestamp: NOW - 60_000 },
     ]));
-    await applyMemoryAppend(sessions, memory, append("gone", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("gone", 1, [
       { text: "会话已删，无处可落", keywords: ["bun"], timestamp: NOW },
     ]));
 
@@ -103,10 +113,11 @@ describe("applyMemoryAppend", () => {
     );
   });
 
-  test("0 条 draft 不碰盘", async () => {
+  test("0 条 draft 不碰盘，但这轮照样记账（补蒸据此跳过）", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, []));
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, []));
     assert.deepEqual(await memory.list(wsAToken), []);
+    assert.deepEqual(ledgerStub.recorded, [["in-workspace", 1]]);
   });
 
   test("冲突建议先验再落：目标不在（幻觉 id / 已删）不落标，条目本体照常落", async () => {
@@ -115,7 +126,7 @@ describe("applyMemoryAppend", () => {
       { text: "旧决定", keywords: ["旧"], timestamp: NOW },
     ]);
     assert.ok(old !== undefined);
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 2, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 2, [
       { text: "新决定", keywords: ["新"], timestamp: NOW, supersedes: old.id },
       { text: "带幻觉建议的", keywords: ["幻觉"], timestamp: NOW, supersedes: "mem_不存在" },
     ]));
@@ -128,7 +139,7 @@ describe("applyMemoryAppend", () => {
 describe("applyMemoryRetrieve（合并全局 + 常驻直通 + 注入账本）", () => {
   test("召回的是这条会话所在作用域 + 全局的记忆", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "用户偏好用 bun 作为包管理器，禁用 npm", keywords: ["bun", "包管理器"], timestamp: NOW },
     ]));
     // 全局条目：别的会话移过去的，跨工作区召回要带得上
@@ -162,7 +173,7 @@ describe("applyMemoryRetrieve（合并全局 + 常驻直通 + 注入账本）", 
 
   test("superseded / muted 不再参与召回（含常驻的 muted）", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "被替代的旧决定", keywords: ["决定"], timestamp: NOW },
       { text: "活着的新决定", keywords: ["决定"], timestamp: NOW },
     ]));
@@ -189,7 +200,7 @@ describe("applyMemoryRetrieve（合并全局 + 常驻直通 + 注入账本）", 
 
   test("每一轮都落一条注入账本（含零命中）——按轮汇总的地基", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "dev 端口固定 5273", keywords: ["端口"], timestamp: NOW },
     ]));
     await applyMemoryRetrieve(sessions, memory, usage, retrieve("in-workspace", "端口是多少", 1));
@@ -215,7 +226,7 @@ describe("applyMemoryRetrieve（合并全局 + 常驻直通 + 注入账本）", 
       ok: true,
       hits: [],
     });
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "用户喜欢深色主题", keywords: ["主题"], timestamp: NOW },
     ]));
     assert.deepEqual(await applyMemoryRetrieve(sessions, memory, usage, retrieve("in-workspace", "端口号是多少")), {
@@ -228,7 +239,7 @@ describe("applyMemoryRetrieve（合并全局 + 常驻直通 + 注入账本）", 
 describe("event.scope 优先（首轮竞态回归：meta 未落盘也要能召回）", () => {
   test("带 scope 的请求不读 meta，首轮即可召回", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "用户养了一只叫「雪球」的橘猫", keywords: ["雪球", "猫"], timestamp: NOW },
     ]));
     // "gone" 查无此会话（meta 还没落盘的首轮）；但请求带了开轮命令里的 scope
@@ -245,7 +256,7 @@ describe("event.scope 优先（首轮竞态回归：meta 未落盘也要能召�
 
   test("scope 缺席时退回 meta 解析（旧调用方兼容）", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "项目 dev 端口固定 5273", keywords: ["端口"], timestamp: NOW },
     ]));
     const outcome = await applyMemoryRetrieve(sessions, memory, usage, retrieve("in-workspace", "端口是多少"));
@@ -297,7 +308,7 @@ describe("sessionTurns（审查面板 › 记忆页签的数据）", () => {
     ]);
     assert.ok(old !== undefined);
     await applyMemoryRetrieve(sessions, memory, usage, retrieve("in-workspace", "无关", 1)); // 零命中轮
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 2, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 2, [
       { text: "新的包管理器决定", keywords: ["决定"], timestamp: NOW, supersedes: old.id },
     ]));
     await applyMemoryRetrieve(sessions, memory, usage, retrieve("in-workspace", "决定是什么", 3));
@@ -330,7 +341,7 @@ describe("sessionTurns（审查面板 › 记忆页签的数据）", () => {
     const sessions = new FakeSessions();
     const [old] = await memory.append(wsAToken, "s0", 1, [{ text: "旧", keywords: [], timestamp: NOW }]);
     assert.ok(old !== undefined);
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "新", keywords: [], timestamp: NOW, supersedes: old.id },
     ]));
     await memory.resolveConflict(wsAToken, globalToken, { newId: (await memory.list(wsAToken))[1]?.id ?? "", oldId: old.id }, "replace", false);
@@ -449,7 +460,7 @@ describe("管理面入参校验（renderer 那头什么都能传）", () => {
 describe("applyMemoryContext（蒸馏的冲突候选）", () => {
   test("按这轮内容挑最像的活条目（本作用域 + 全局），superseded / muted 不进候选", async () => {
     const sessions = new FakeSessions();
-    await applyMemoryAppend(sessions, memory, append("in-workspace", 1, [
+    await applyMemoryAppend(sessions, memory, ledgerStub, append("in-workspace", 1, [
       { text: "用户决定包管理器用 bun，bun 是唯一 lock writer", keywords: ["bun", "包管理器"], timestamp: NOW },
       { text: "无关的旧记忆：用户养了一只猫", keywords: ["猫"], timestamp: NOW },
     ]));

@@ -7,6 +7,7 @@ import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "ele
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
+import { ipcChannels } from "../shared/agent-ipc.ts";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
@@ -16,6 +17,9 @@ import { MemoryStore } from "./memory/store.ts";
 import { MemoryUsageStore } from "./memory/usage.ts";
 import { registerMemoryIpc } from "./memory/ipc.ts";
 import { applyMemoryAppend, applyMemoryContext, applyMemoryRetrieve } from "./memory/requests.ts";
+import { DistilledTurnLedger, DISTILLED_TURNS_FILE } from "./memory/backfill-ledger.ts";
+import { MemoryBackfillService } from "./memory/backfill.ts";
+import { readChoreModelPayload } from "./agent/ipc.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
@@ -315,6 +319,10 @@ void app.whenReady().then(async () => {
   // 注入账本（injections.jsonl）同目录——审查面板按轮汇总、库里的「用过几次」都从它来
   const memory = new MemoryStore(join(configDir, "memory"));
   const memoryUsage = new MemoryUsageStore(join(configDir, "memory"));
+  // 已蒸轮账本（补蒸的地基）：实时蒸馏与补蒸共写同一份。装载 await——record 是
+  // 整份重写，没装载完就记账会把旧账冲掉（文件极小，这里等得起）
+  const memoryLedger = new DistilledTurnLedger(join(configDir, "memory", DISTILLED_TURNS_FILE));
+  await memoryLedger.load();
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
   // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
   // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
@@ -493,7 +501,7 @@ void app.whenReady().then(async () => {
       return;
     }
     if (event.type === "memoryAppend") {
-      void applyMemoryAppend(sessions, memory, event).catch((cause: unknown) =>
+      void applyMemoryAppend(sessions, memory, memoryLedger, event).catch((cause: unknown) =>
         console.error("[memory] 记忆条目追加落盘失败", event.sessionId, cause),
       );
       return;
@@ -596,7 +604,32 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 记忆管理面（memory:*，设置 › 记忆库 / 聊天摘抄 / 审查面板）：与 agent 侧那条按
   // sessionId 问的路子共用同一个 MemoryStore，只是作用域按 token 寻址
-  registerMemoryIpc({ memory, usage: memoryUsage, sessions, workspaces });
+  // 从历史生成（补蒸）：任务编排住在主进程（读盘切轮 / 状态机 / 落盘），蒸馏在
+  // agent 进程（backfillDistill 问答）；进度经 memoryBackfillEvent 推给所有窗口
+  const memoryBackfill = new MemoryBackfillService({
+    sessions,
+    channels,
+    memory,
+    ledger: memoryLedger,
+    models: {
+      readChoreModel: () => readChoreModelPayload(providers, settings),
+      resolveProvider: (providerId) => resolveProviderSecrets(providers, providerId),
+    },
+    distill: agentHost,
+    isMemoryEnabled: async () => (await settings.read()).experimentalFeatures?.["session-memory"] === true,
+    broadcast: (status) => {
+      for (const window of mainWindows.list()) {
+        window.webContents.send(ipcChannels.memoryBackfillEvent, status);
+      }
+    },
+    now: () => Date.now(),
+    stateFile: join(configDir, "memory", "backfill-state.json"),
+  });
+  // 启动恢复：上次没跑完的任务恢复成 paused（等用户点继续），不自动开跑
+  void memoryBackfill.loadPersisted().catch((cause: unknown) =>
+    console.error("[memory:backfill] 任务状态装载失败", cause),
+  );
+  registerMemoryIpc({ memory, usage: memoryUsage, sessions, workspaces, backfill: memoryBackfill });
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。

@@ -60,7 +60,7 @@ async function scopeOfSession(sessions: SessionScopeReader, sessionId: string): 
 }
 
 /** 条目按 id 去重：移到全局半路被杀会短暂同存两份（store.move 的头注释），召回合并时兜住。 */
-function dedupeById(entries: readonly MemoryEntry[]): MemoryEntry[] {
+export function dedupeById(entries: readonly MemoryEntry[]): MemoryEntry[] {
   const seen = new Set<string>();
   const unique: MemoryEntry[] = [];
   for (const entry of entries) {
@@ -128,9 +128,10 @@ export async function applyMemoryRetrieve(
 }
 
 /**
- * memoryAppend：轮后蒸馏出的 draft 落进该会话作用域的 JSONL。**单向、无回执**
- * （契约同 title 事件）——调用方（index.ts 的接线）只负责把失败记进日志：
- * 记忆是易耗品，不该有报错通路打断对话。
+ * memoryAppend：轮后蒸馏出的 draft 落进该会话作用域的 JSONL，并把这轮记进
+ * 已蒸账本（补蒸据此跳过；含蒸出 0 条的轮——只要蒸馏调用成功就算处理过）。
+ * **单向、无回执**（契约同 title 事件）——调用方（index.ts 的接线）只负责把
+ * 失败记进日志：记忆是易耗品，不该有报错通路打断对话。
  *
  * draft 里的冲突建议（supersedes）先验再落：目标条目得真实存在且还没被替代，
  * 模型引错 id（幻觉）/ 已删的条目不落标——建议指向空气比没有建议更误导。
@@ -138,6 +139,7 @@ export async function applyMemoryRetrieve(
 export async function applyMemoryAppend(
   sessions: SessionScopeReader,
   memory: MemoryStore,
+  ledger: { record(sessionId: string, turn: number): Promise<void> },
   event: AgentEventOf<"memoryAppend">,
 ): Promise<void> {
   const scope = await scopeOfSession(sessions, event.sessionId);
@@ -157,6 +159,8 @@ export async function applyMemoryAppend(
     return draft;
   });
   await memory.append(token, event.sessionId, event.turn, drafts);
+  // 条目落了才记账（顺序有意义：反过来会让一次落盘失败被当成已处理，白丢一轮）
+  await ledger.record(event.sessionId, event.turn);
 }
 
 /**

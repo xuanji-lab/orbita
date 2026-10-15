@@ -9,6 +9,10 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   MemoryAddManualRequest,
   MemoryAddManualResponse,
+  MemoryBackfillEstimate,
+  MemoryBackfillRange,
+  MemoryBackfillStartResponse,
+  MemoryBackfillStatus,
   MemoryEntriesRequest,
   MemoryEntriesResponse,
   MemoryExcerptRequest,
@@ -57,4 +61,29 @@ export const memoryApi = {
   /** 审查面板 › 记忆页签：本会话按轮的注入与新增 + 待处理冲突数。 */
   sessionTurns: (sessionId: string): Promise<MemorySessionTurnsResponse> =>
     ipcRenderer.invoke(ipcChannels.memorySessionTurns, { sessionId }),
+  /* ---------- 从历史生成（补蒸） ---------- */
+  /** 预估：范围待蒸轮数 / 已蒸跳过 / 粗估 token / 家务活模型（只读不写）。 */
+  backfillEstimate: (range: MemoryBackfillRange): Promise<MemoryBackfillEstimate> =>
+    ipcRenderer.invoke(ipcChannels.memoryBackfillEstimate, { range }),
+  /** 开跑：已有任务在跑 / 暂停中不另起（started=false，带当前 status）。 */
+  backfillStart: (range: MemoryBackfillRange): Promise<MemoryBackfillStartResponse> =>
+    ipcRenderer.invoke(ipcChannels.memoryBackfillStart, { range }),
+  /** 暂停：立即翻 paused；在飞的那批蒸完照常落盘。 */
+  backfillPause: (): Promise<MemoryBackfillStatus> =>
+    ipcRenderer.invoke(ipcChannels.memoryBackfillPause),
+  /** 继续：重收计划接着跑（暂停期间新聊的轮一并接上）。 */
+  backfillResume: (): Promise<MemoryBackfillStatus> =>
+    ipcRenderer.invoke(ipcChannels.memoryBackfillResume),
+  /** 取消：清队；已落的条目保留。 */
+  backfillCancel: (): Promise<MemoryBackfillStatus> =>
+    ipcRenderer.invoke(ipcChannels.memoryBackfillCancel),
+  /** 读状态（拉取；细粒度进度靠 onBackfillEvent 推送）。 */
+  backfillStatus: (): Promise<MemoryBackfillStatus> =>
+    ipcRenderer.invoke(ipcChannels.memoryBackfillStatus),
+  /** 进度推送：每蒸完一轮一份 MemoryBackfillStatus。返回取消订阅函数。 */
+  onBackfillEvent: (listener: (status: MemoryBackfillStatus) => void): (() => void) => {
+    const handler = (_e: unknown, status: MemoryBackfillStatus): void => listener(status);
+    ipcRenderer.on(ipcChannels.memoryBackfillEvent, handler);
+    return () => ipcRenderer.removeListener(ipcChannels.memoryBackfillEvent, handler);
+  },
 } as const;

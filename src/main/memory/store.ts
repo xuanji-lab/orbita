@@ -97,6 +97,7 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
     supersedes?: unknown;
     supersededBy?: unknown;
     conflictResolution?: unknown;
+    backfilled?: unknown;
   };
   if (typeof suspect.id !== "string" || suspect.id === "") return null;
   if (typeof suspect.text !== "string" || suspect.text === "") return null;
@@ -139,6 +140,7 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
       : null),
     ...(resolution !== undefined ? { conflictResolution: resolution } : null),
     ...(suspect.origin !== undefined ? { origin: originOf(suspect.origin) } : null),
+    ...(suspect.backfilled === true ? { backfilled: true } : null),
   };
 }
 
@@ -150,7 +152,12 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
  * 返回 null = 这条 draft 不值得落盘（当前只有「文本空」一种）。跨进程进来的数据，
  * 清洗放在边界上：模型偶发产出空串 / 空白关键词时，落一条空条目只会白占召回预算。
  */
-function toEntry(draft: MemoryDraft, sessionId: string, turn: number): MemoryEntry | null {
+function toEntry(
+  draft: MemoryDraft,
+  sessionId: string,
+  turn: number,
+  backfilled: boolean,
+): MemoryEntry | null {
   const text = draft.text.trim();
   if (text === "") return null;
   const keywords: string[] = [];
@@ -169,6 +176,7 @@ function toEntry(draft: MemoryDraft, sessionId: string, turn: number): MemoryEnt
     timestamp: draft.timestamp,
     source: "distilled",
     turn,
+    ...(backfilled ? { backfilled: true } : null),
     ...(draft.supersedes !== undefined ? { supersedes: draft.supersedes } : null),
   };
 }
@@ -247,11 +255,12 @@ export class MemoryStore {
     sessionId: string,
     turn: number,
     drafts: readonly MemoryDraft[],
+    opts?: { backfilled?: boolean },
   ): Promise<MemoryEntry[]> {
     const seen = new Set((await this.list(token)).map((entry) => normalizeText(entry.text)));
     const entries: MemoryEntry[] = [];
     for (const draft of drafts) {
-      const entry = toEntry(draft, sessionId, turn);
+      const entry = toEntry(draft, sessionId, turn, opts?.backfilled === true);
       if (entry === null) continue;
       const key = normalizeText(entry.text);
       if (seen.has(key)) continue;

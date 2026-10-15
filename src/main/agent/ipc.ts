@@ -107,6 +107,33 @@ export async function resolveProviderSecrets(
 }
 
 
+/**
+ * 家务活模型（设置里的 choreModel）装配成带密钥的载荷。没指定、指的 provider
+ * 已删、或密钥取不到，一律返回 undefined 让调用方退回会话模型——家务是易耗品，
+ * 不该因为一个删掉的 provider 就停掉；但原因要落到 dev 终端，否则
+ * 「我选了模型为什么没生效」无从查起。开轮装配（registerAgentIpc）与补蒸
+ * 编排（memory/backfill.ts）共用这一份——「家务用哪个模型」只能有一套真相。
+ */
+export async function readChoreModelPayload(
+  providers: ProviderStore,
+  settings: SettingsStore,
+): Promise<{ provider: ProviderSecrets; modelId: string } | undefined> {
+  const choice = (await settings.read()).choreModel;
+  if (choice === undefined) return undefined;
+  try {
+    return {
+      provider: await resolveProviderSecrets(providers, choice.providerId),
+      modelId: choice.modelId,
+    };
+  } catch (error: unknown) {
+    console.error(
+      `[main] 家务活模型 ${choice.providerId}/${choice.modelId} 装配失败，这件家务退回会话模型`,
+      error,
+    );
+    return undefined;
+  }
+}
+
 export function registerAgentIpc(
   host: AgentHost,
   providers: ProviderStore,
@@ -213,30 +240,9 @@ export function registerAgentIpc(
     browserDownloads: await browserDownloadDir(settings),
   });
 
-  /**
-   * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
-   * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
-   * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
-   * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。
-   */
-  const readChoreModel = async (): Promise<
-    { provider: ProviderSecrets; modelId: string } | undefined
-  > => {
-    const choice = (await settings.read()).choreModel;
-    if (choice === undefined) return undefined;
-    try {
-      return {
-        provider: await resolveProviderSecrets(providers, choice.providerId),
-        modelId: choice.modelId,
-      };
-    } catch (error: unknown) {
-      console.error(
-        `[main] 家务活模型 ${choice.providerId}/${choice.modelId} 装配失败，这件家务退回会话模型`,
-        error,
-      );
-      return undefined;
-    }
-  };
+  /** 家务活模型装配：纯核在模块级 readChoreModelPayload（补蒸编排共用同一份）。 */
+  const readChoreModel = (): Promise<{ provider: ProviderSecrets; modelId: string } | undefined> =>
+    readChoreModelPayload(providers, settings);
 
   /**
    * 会话记忆的开轮字段：开关 + 蒸馏用的工作模型。**开关不进 turnFields**——它只
