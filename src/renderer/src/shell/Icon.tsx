@@ -14,6 +14,7 @@ import blend from "../../../../design-system/assets/icons/lucide/blend.svg?raw";
 import bell from "../../../../design-system/assets/icons/lucide/bell.svg?raw";
 import blocks from "../../../../design-system/assets/icons/lucide/blocks.svg?raw";
 import book from "../../../../design-system/assets/icons/lucide/book.svg?raw";
+import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg?raw";
 import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
@@ -132,6 +133,7 @@ const ICONS = {
   blend,
   blocks,
   book,
+  bookmark,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
   "arrow-down": arrowDown,

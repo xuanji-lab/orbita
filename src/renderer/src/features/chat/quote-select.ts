@@ -12,6 +12,21 @@ import {
 } from "../../../../shared/quote.ts";
 
 /**
+ * 第 N 轮（1 起，按用户消息计）的用户消息 id。摘抄跳回原文时，逐字原文找不到
+ * （被编辑、被回退）就退回到那一轮的开头，至少落在对的位置。轮不存在返回 null。
+ */
+export function nthUserMessageId(transcript: readonly TranscriptItem[], turn: number): string | null {
+  if (!Number.isInteger(turn) || turn < 1) return null;
+  let seen = 0;
+  for (const item of transcript) {
+    if (item.role !== "user") continue;
+    seen += 1;
+    if (seen === turn) return item.id;
+  }
+  return null;
+}
+
+/**
  * 一段划选能不能成为引用、成为什么样的引用。null = 不能：
  * - 消息不在转录里（选中的是别的东西）；
  * - 助手消息还在流式生成——文字还在变，引出去的可能是半句话（Proma 同一条规矩）；
