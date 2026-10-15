@@ -90,16 +90,7 @@ export default defineConfig({
     plugins: [photonWasmNextToChunk()],
   },
   preload: {
-    build: {
-      rollupOptions: {
-        // browser-page：受管浏览器网页视图的身份补丁（main/browser/sandbox.ts 的
-        // PAGE_PREFERENCES 引用），与主窗口 preload 是两个入口、互不打进对方
-        input: {
-          index: resolve(__dirname, "src/preload/index.ts"),
-          "browser-page": resolve(__dirname, "src/preload/browser-page.ts"),
-        },
-      },
-    },
+    build: { rollupOptions: { input: resolve(__dirname, "src/preload/index.ts") } },
   },
   renderer: {
     root: resolve(__dirname, "src/renderer"),

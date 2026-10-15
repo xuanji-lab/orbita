@@ -49,7 +49,7 @@ import {
   type BrowserWindowState,
 } from "../../shared/browser.ts";
 import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
-import { browserClientHints, browserUserAgent, hostClientHintsHost } from "./identity.ts";
+import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
 import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
 import { placeInUserTab } from "./user-tabs.ts";
@@ -69,19 +69,13 @@ const HANDOFF_TIMEOUT_MS = 30 * 60_000;
 /** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
 const PAGE_BACKGROUND_FALLBACK = "#f3f4f1";
 
-/**
- * 网页视图与弹窗子窗口共用的 webPreferences：preload 只装身份补丁（preload/browser-page.ts，
- * 纯属性补丁、不持任何能力），sandbox / webSecurity 不变量全开。
- * contextIsolation 关是它能在页面主世界跑的前提——补丁改的就是页面看到的 navigator，
- * 隔在 isolated world 里改了页面看不见（Google 登录风控要比对 JS 侧 brands，2026-10-14）。
- */
+/** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {
   partition: BROWSER_PARTITION,
   sandbox: true,
-  contextIsolation: false,
+  contextIsolation: true,
   nodeIntegration: false,
   webSecurity: true,
-  preload: join(__dirname, "../preload/browser-page.js"),
   // agent 在后台 tab 里工作：计时器与渲染不能因为「不在前台」被节流
   backgroundThrottling: false,
 } as const;
@@ -138,6 +132,8 @@ export interface BrowserSandboxDeps {
   /** 本会话能用的目录（工作台 / cwd / 附加目录 / 浏览器下载）：browser_navigate 打开本地网页只认这些 */
   sessionRoots: (sessionId: string) => Promise<string[]>;
   appName: string;
+  /** 受管浏览器 UA 末尾的 `Orbita/<版本>`（见 identity.ts） */
+  appVersion: string;
 }
 
 export class BrowserSandbox {
@@ -703,22 +699,7 @@ export class BrowserSandbox {
     const partition = session.fromPartition(BROWSER_PARTITION);
     partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     partition.setPermissionCheckHandler(() => false);
-    partition.setUserAgent(browserUserAgent(partition.getUserAgent(), this.deps.appName));
-    // setUserAgent 一覆写，Chromium 就停发整个 Sec-CH-UA 系列头，而 UA 字符串自称 Chrome——
-    // 两侧对不上，Google 登录风控就凭这个拒（/v3/signin/rejected）。按真 Chrome 的样子补回去；
-    // 页面/Chromium 哪天自己带上了就不覆盖
-    const hintsHost = hostClientHintsHost();
-    const clientHints = browserClientHints(partition.getUserAgent(), hintsHost);
-    partition.webRequest.onBeforeSendHeaders((details, callback) => {
-      const present = new Set(Object.keys(details.requestHeaders).map((name) => name.toLowerCase()));
-      const requestHeaders = { ...details.requestHeaders };
-      for (const [name, value] of Object.entries(clientHints)) {
-        if (!present.has(name.toLowerCase())) requestHeaders[name] = value;
-      }
-      callback({ requestHeaders });
-    });
-    // JS 侧身份补丁走 preload（PAGE_PREFERENCES）：平台保证先于页面脚本、含首个文档——
-    // CDP addScriptToEvaluateOnNewDocument 注册晚于首文档创建，恰恰漏掉登录页（2026-10-14 实测）
+    partition.setUserAgent(browserUserAgent(partition.getUserAgent(), this.deps.appName, this.deps.appVersion));
     partition.on("will-download", (_event, item, contents) => this.onDownload(item, contents));
     // agent tab 打开 PDF 这类文件：改成下载，不在 tab 里显示——agent 读不了查看器里的字，
     // 下载进工作台它能用文件工具读。「你的」tab 不动，照常在查看器里看
