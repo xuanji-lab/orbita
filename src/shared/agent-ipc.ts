@@ -96,6 +96,17 @@ export const ipcChannels = {
   memoryAddManual: "memory:add-manual",
   memorySessionTurns: "memory:session-turns",
   /**
+   * 从历史生成（补蒸）：预估 / 开始 / 暂停 / 继续 / 取消 / 读状态，外加主进程→renderer
+   * 的进度推送（memoryBackfillEvent，载荷是 MemoryBackfillStatus）。
+   */
+  memoryBackfillEstimate: "memory:backfill-estimate",
+  memoryBackfillStart: "memory:backfill-start",
+  memoryBackfillPause: "memory:backfill-pause",
+  memoryBackfillResume: "memory:backfill-resume",
+  memoryBackfillCancel: "memory:backfill-cancel",
+  memoryBackfillStatus: "memory:backfill-status",
+  memoryBackfillEvent: "memory:backfill-event",
+  /**
    * 在 Finder 里打开数据目录本身（`shell.openPath`，同 Skills 面板 footer 的 Reveal），无参，回 `void`。
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */

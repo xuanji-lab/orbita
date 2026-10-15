@@ -46,6 +46,12 @@ export interface MemoryEntry {
   conflictResolution?: MemoryConflictResolution;
   /** 被哪条新条目替代（status = superseded 时指向它），撤销替代时用它找回 */
   supersededBy?: string;
+  /**
+   * 这条是「从历史生成」补蒸出来的（不是开着开关时每轮实时蒸的）。
+   * 补蒸时冲突一律「新的替换旧的」自动拍板（历史已经发生，时间晚的就是结论），
+   * 带这个标记让界面能写明「导入时自动替换」，撤销照常可用。
+   */
+  backfilled?: boolean;
 }
 
 /** 条目来源。manual：设置 › 记忆库「手动添加」的（算用户的话，常驻）。 */
@@ -284,3 +290,58 @@ export interface MemoryExcerptItem {
 
 export type MemoryExcerptsRequest = { sessionId: string };
 export type MemoryExcerptsResponse = { items: MemoryExcerptItem[] };
+
+/* ---------- 从历史生成（补蒸）：对已有聊天记录按轮蒸馏 ---------- */
+
+/**
+ * 补蒸范围：按「轮发生的时间」截，不按会话的创建 / 更新时间——一条长会话
+ * 可能一半在范围里一半不在，只蒸范围里那一半。
+ */
+export type MemoryBackfillRange = "1m" | "3m" | "6m" | "all";
+
+export const MEMORY_BACKFILL_RANGES: readonly MemoryBackfillRange[] = ["1m", "3m", "6m", "all"];
+
+/** 预估（开跑前给用户看代价）。已经蒸过的轮（实时蒸过或上次补蒸过）不计入 turns。 */
+export interface MemoryBackfillEstimate {
+  range: MemoryBackfillRange;
+  /** 范围内有待蒸轮的会话数 */
+  sessions: number;
+  /** 待蒸的轮数（= 家务活模型调用次数） */
+  turns: number;
+  /** 范围内已经蒸过、这次会跳过的轮数 */
+  skippedTurns: number;
+  /** 粗估的输入 token 总量（按字符数折算，只给量级） */
+  estimatedInputTokens: number;
+  /** 当前设置的家务活模型；null = 没设，会退回各会话自己的模型 */
+  choreModel: { providerId: string; modelId: string } | null;
+}
+
+export type MemoryBackfillState = "idle" | "running" | "paused" | "done" | "cancelled" | "failed";
+
+/**
+ * 补蒸任务的进度快照。主进程持久化它（断点续跑：应用重启后 state 为 running 的
+ * 任务恢复成 paused，等用户点继续），并在每蒸完一轮后推一次 memoryBackfillEvent。
+ */
+export interface MemoryBackfillStatus {
+  state: MemoryBackfillState;
+  /** idle 时为 null */
+  range: MemoryBackfillRange | null;
+  totalSessions: number;
+  doneSessions: number;
+  totalTurns: number;
+  doneTurns: number;
+  /** 蒸出并落盘的新条目数 */
+  newEntries: number;
+  /** 自动「新的替换旧的」的次数 */
+  replaced: number;
+  /** 调用失败（重试后仍失败）而跳过的轮数；这些轮下次补蒸会再试 */
+  failedTurns: number;
+  /** state = failed 时的原因（一句话，给用户看） */
+  error?: string;
+  startedAt: number | null;
+  updatedAt: number | null;
+}
+
+export type MemoryBackfillRangeRequest = { range: MemoryBackfillRange };
+/** start 的回执：已有任务在跑 / 暂停中时不另起，started = false */
+export type MemoryBackfillStartResponse = { started: boolean; status: MemoryBackfillStatus };
