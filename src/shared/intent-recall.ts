@@ -417,6 +417,16 @@ export function createNdjsonAssembler(onLine: (line: string) => void): (chunk: s
 }
 
 /**
+ * 意图闸门在「开关关闭」时的结局：实验功能 intent-system 没开（命令里没有 intent）时，
+ * 闸门不跑 /recall，给空注入——照常用原话回答（composeIntentPrompt 直通）。
+ *
+ * 闸门结局里 `null` 专指「这一轮失败 / 取消、不回答」。早先把「开关关闭」也归进了
+ * null，结果没开意图系统的人每一轮都被静默吞掉：回显了用户消息、不调模型、不报错，
+ * 直接回 idle。常量放这里，是为了让「关闭 = 照常回答」能被 node --test 钉住。
+ */
+export const INTENT_GATE_OFF: { readonly injection: "" } = Object.freeze({ injection: "" });
+
+/**
  * 发给回答模型的整段正文：注入块 + 空行 + 用户原话（契约原文）。
  * 两本账对齐的关键：Orbita 转录里存的是 `text`（原话），pi 本子里存的是这里
  * 的返回值——branch-cut 按 role 按位对账，不比文本，两份各存各的形态是成立的。
