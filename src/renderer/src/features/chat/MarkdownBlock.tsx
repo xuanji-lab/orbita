@@ -8,17 +8,13 @@ import remarkCjkFriendly from "remark-cjk-friendly";
 import { normalizeEmphasisInnerSpace } from "./emphasis-space.ts";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo, useContext } from "react";
+import { Component, memo, useMemo, useContext } from "react";
 import { MdPre } from "./CodeBlock";
-import { closePendingMath } from "./pending-math";
 import { remarkDemoteBoundaryMath } from "./math-guard";
-import { rehypeBubbleChips } from "./chip-runs.ts";
+import { rehypePluginsFor, streamRenderPolicy } from "./stream-render.ts";
 import { Icon } from "../../shell/Icon";
 import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
@@ -27,28 +23,18 @@ import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citati
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 
 /**
- * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
- * rehype-raw 解析完照剥。**顺序敏感**（rehypePlugins 数组序）：rehypeRaw →
- * rehypeSanitize → rehypeKatex——sanitize 必须在 katex 前，否则会把 KaTeX 的
- * 输出剥掉；其默认 schema 保留 code 的 language-* class，math 节点能活着走到
- * katex。
- */
-const SANITIZE_SCHEMA = {
-  ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
-};
-
-/**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
  *
  * - **memo 按 text 记忆**：流式期间 transcript 每帧都产生新对象，但只有正在流的那条
  *   的 text 真的在变——没变的消息不重新解析 markdown。
  * - **数学公式**：remark-math 把 `$…$` / `$$…$$` 认成 math 节点，rehype-katex 就地
- *   变成 KaTeX HTML。`trust: false` 是安全闸——公式永远只是视觉，`\href` 等带行为
- *   的命令拒绝；`throwOnError: false` 让半截/非法 LaTeX 原地显示源码，由 styles.css
- *   降级成斜体次级灰（流式期间的常态，不是报警）。
+ *   变成 KaTeX HTML（KATEX 选项见 stream-render.ts）。非法 LaTeX 由 styles.css
+ *   降级成斜体次级灰，不是报警。流式帧不挂 katex，公式暂以 markdown 的原样显示
+ *   （行内是等宽的 LaTeX 片段、块级是无色代码块）。
  * - 代码块高亮走 shiki（`CodeBlock.tsx` 覆写 pre，双主题 HTML + CSS 变量切换），
  *   配色来自 github-light / github-dark 主题，是设计系统 token 的既定例外。
+ * - **流式帧省掉两件贵的渲染**（KaTeX 排版 + shiki 高亮，决策在 stream-render.ts）：
+ *   落定后 streaming 翻 false，memo 浅比较失效自动重渲一次补上。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 把网页送进内置浏览器、
  *   mailto 交给系统（`src/main/index.ts` 的 openLink），外链绝不能在应用窗口内导航走。
  * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
@@ -73,13 +59,21 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   /** "bubble"：用户气泡内的轻量渲染——标题摊平成文本；单个换行保留为 <br>
    *（remark-breaks，用户消息里按 Enter 的换行不该被 markdown 吞掉）。 */
   variant?: "full" | "bubble";
-  /** 仅流式中的那条消息传 true：尾部未闭合的 `$…` 补上闭合符让公式逐字成形
-   *（pending-math.ts）。落定的消息必须 false——已写完的文本里孤立的 `$`（如
-   * 「价格 $5 起」）不该被凭空补一个闭合符变成公式（2026-10 事故）。memo 按 prop
-   * 浅比较，布尔翻转不引发无关重渲染。 */
+  /** 仅流式中的那条消息传 true：本帧不挂 rehype-katex、不跑 shiki，公式按源码、
+   *代码块按无色显示（比每帧全量重排便宜一个量级，见 stream-render.ts）。落定的消息
+   *必须 false——落定帧才把公式与高亮补渲上。memo 按 prop 浅比较，布尔翻转正好触发
+   *那一次补渲，且不引发无关重渲染。 */
   streaming?: boolean;
 }) {
   const bubble = variant === "bubble";
+  const policy = streamRenderPolicy(streaming);
+  // pre 覆写的闭包按「跑不跑 shiki」记忆：react-markdown 不把自定义 prop 交给
+  // components 映射里的组件，只能在这里闭住 policy.highlight。身份只在流式翻落定
+  // 那一刻变一次（正是要补渲的时刻）；流式期间每帧同一身份，代码块子树不重挂。
+  const pre = useMemo(
+    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight={policy.highlight} />,
+    [policy.highlight],
+  );
   // PDF 引用标记（实验功能「PDF 引用」）只在 assistant 正文里认：用户气泡里打出来的
   // `[^c4k2]` 是用户的字，不是 agent 核验过的引用；开关关着时标记退回纯文本
   const citations = useExperimentalFeature("pdf-citations") && !bubble;
@@ -94,25 +88,13 @@ export const MarkdownBlock = memo(function MarkdownBlock({
       <MarkdownErrorBoundary>
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
-          rehypePlugins={
-            bubble
-              ? // bubble 变体在 sanitize 之后多挂 rehypeBubbleChips：用户原文里的 /skill: token
-                // 就地换成 chip（span.bubble-chip，chip-runs.ts）。必须排在 sanitize 之后
-                // ——span 不在白名单里，先换会被剥掉；排在 katex 之前——数学节点是 code，
-                // 与 chip 互不碰面
-                [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeBubbleChips, [rehypeKatex, { throwOnError: false, strict: false, trust: false }]]
-              : [
-                  rehypeRaw,
-                  [rehypeSanitize, SANITIZE_SCHEMA],
-                  [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
-                ]
-          }
-          components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre, span: ChipSpan }}
+          rehypePlugins={rehypePluginsFor(bubble, policy)}
+          components={{ a: ExternalAnchor, img: ImagePlaceholder, pre, span: ChipSpan }}
           {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
         >
           {/* 强调定界内侧空白先收掉（emphasis-space.ts）：`**… **` 这类在
               CommonMark 下整段不算强调，用户写它就是要加粗 */}
-          {streaming ? closePendingMath(normalizeEmphasisInnerSpace(text)) : normalizeEmphasisInnerSpace(text)}
+          {normalizeEmphasisInnerSpace(text)}
         </ReactMarkdown>
       </MarkdownErrorBoundary>
     </div>

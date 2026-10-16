@@ -1551,8 +1551,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
-  // 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming，
-  // closePendingMath 只该作用于打字未完成的文本（MarkdownBlock 的 streaming prop）
+  // 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming——
+  // 流式帧省掉公式排版与代码高亮（stream-render.ts），落定帧再补渲
   const streamingIds = useMemo(
     () =>
       new Set(
@@ -2597,7 +2597,7 @@ function EntryView(props: {
   activeThinkingKey: string | null;
   turnActive: boolean;
   /** 流式中的 assistant 记录 id 集：text 块的 MarkdownBlock 据此传 streaming——
-   * closePendingMath 只作用于打字未完成的文本，落定消息里孤立的 $ 不补闭合符 */
+   * 流式帧不挂 rehype-katex、不跑 shiki，落定（翻 false）后才补渲 */
   streamingIds: ReadonlySet<string>;
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
@@ -2687,7 +2687,8 @@ function EntryView(props: {
       return <CarryoverScanCard drafts={card.drafts} />;
     }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
-    // streaming：正在流式的那条才补尾部闭合符（pending-math.ts），落定后不再补
+    // streaming：正在流式的那条渲染成便宜的帧（不排公式、不高亮代码，见 stream-render.ts），
+    // 落定后自动补渲
     return (
       <div data-quote-id={entry.messageId} data-quote-role="assistant">
         <MarkdownBlock text={entry.text} streaming={props.streamingIds.has(entry.messageId)} />

@@ -1814,8 +1814,8 @@ body {
 
 /*
  * 数学公式（KaTeX，math 渲染管线见 MarkdownBlock）：颜色继承正文墨色、字号微升；
- * 块级公式居中（LaTeX 惯例）；解析失败的源码降级为斜体次级灰——这是流式期间
- * 半截公式的常态长相（pending 策略见 pending-math.ts），不是报警。
+ * 块级公式居中（LaTeX 惯例）；解析失败的源码降级为斜体次级灰——这不是报警
+ * （流式期间根本不挂 katex，公式先以源码文本显示，见 stream-render.ts）。
  */
 .chat-md .katex {
   font-size: 1.05em;
