@@ -1115,6 +1115,8 @@ export const zh: Messages = {
     thought: "思考",
     lines: (n) => `${n} 行`,
     files: (n) => `${n} 个文件`,
+    // 工具展开体的截断提示行（tool-body-clamp.ts）：两个数字都是**原文**总量
+    bodyTruncated: (lines, chars) => `已截断 · 原文共 ${lines} 行 ${chars} 字`,
     commands: (n) => `${n} 条命令`,
     matches: (n) => `${n} 处改动`,
     directories: (n) => `${n} 个目录`,
