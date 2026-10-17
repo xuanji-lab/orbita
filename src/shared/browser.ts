@@ -174,8 +174,10 @@ export type BrowserToolRequest =
   | { action: "observe"; maxNodes?: number; tab?: BrowserReadTarget }
   /**
    * format：markdown 保留结构（标题层级、有序 / 无序列表、链接 `[文字](URL)`、GFM 管道表、强调、代码块），
-   * 默认 text（`document.body.innerText`，行为不变）。ref：`browser_observe` 大纲里的元素引用，只提取那个
-   * 元素的子树（页面里只要一块时用），不传就整页。两者都照旧对超长内容走 offset / maxChars 分段。
+   * 默认 text（`document.body.innerText`，行为不变）。markdown 由 DOM 树生成，**CSS 隐藏的内容**
+   * （折叠菜单、弹窗、移动端重复导航）可能一并进来——取舍是「结构完整」优先，工具描述里已向模型说明。
+   * ref：`browser_observe` 大纲里的元素引用，只提取那个元素的子树（页面里只要一块时用），不传就整页。
+   * 两者都照旧对超长内容走 offset / maxChars 分段。
    */
   | {
       action: "extract";

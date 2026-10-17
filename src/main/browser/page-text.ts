@@ -33,6 +33,8 @@ export function extractScript(withLinks: boolean): string {
  * CDP 的 callFunctionOn 把引用解析出的节点绑成 this。节点上限与深度上限各截一道——节点树要
  * returnByValue 过 IPC，超大页面不能整个搬过来；截断了如实回 truncated，主进程再告诉模型。
  * script / style / noscript 这类不产出正文的标签在这里就跳过，markdown 侧不再判。
+ * 保留空白文本节点（不再丢弃）：行内元素之间的空格、代码块里的缩进都靠它们，丢了会让
+ * 相邻行内元素粘成一个词；代价是节点数略增，超限时照旧如实回 truncated。
  */
 export const SERIALIZE_TREE_FN = `function () {
   const SKIP = new Set(["script", "style", "noscript", "template", "head", "link", "meta", "svg", "canvas", "iframe", "object", "embed"]);
@@ -58,7 +60,9 @@ export const SERIALIZE_TREE_FN = `function () {
     }
     if (node.nodeType === 3) {
       const text = node.nodeValue || "";
-      if (text.trim() === "") return null;
+      if (text === "") return null;
+      // 空白文本节点也留着：行内元素之间的空隙就靠它（丢了 <span>a</span> <span>b</span> 会粘成
+      // "ab"），代码块里的缩进 / 换行也原样保留；纯空白的行内组在 dom-markdown 侧 trim 掉，不产生空块
       count += 1;
       return { tag: "#text", text: text };
     }

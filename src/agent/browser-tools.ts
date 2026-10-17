@@ -159,10 +159,12 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     name: "browser_extract",
     label: "browser_extract",
     description:
-      "Read the visible text of the page in your browser tab, in reading order. Long pages are returned in chunks: " +
+      "Read the page's text in your browser tab, in reading order. Long pages are returned in chunks: " +
       "the result says the total length, pass offset to continue. Set format to \"markdown\" to keep the page's " +
       "structure — headings, lists, links as [text](URL), tables, emphasis, code — instead of flat text; use it for " +
-      "structured pages (articles, docs, search results) and whenever you need the URL behind a link. Set ref to an " +
+      "structured pages (articles, docs, search results) and whenever you need the URL behind a link. Note that " +
+      "markdown is built from the DOM, so it can also contain content hidden by CSS (collapsed menus, dialogs, " +
+      "mobile-only duplicates); \"text\" matches what the page actually shows. Set ref to an " +
       "element from browser_observe to read only that element's subtree (a panel, an article) instead of the whole " +
       "page. Set links to true to also list the page's links (text and absolute URL) — useful for following DOIs or " +
       "result entries. " +
@@ -177,8 +179,10 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           type: "string",
           enum: ["text", "markdown"],
           description:
-            "\"text\" (default): flat visible text. \"markdown\": keep headings, lists, links, tables, emphasis " +
-            "and code — better for structured pages and when link URLs matter.",
+            "\"text\" (default): flat visible text, exactly what the page shows. \"markdown\": keep headings, " +
+            "lists, links, tables, emphasis and code — better for structured pages and when link URLs matter; " +
+            "built from the DOM, so content hidden by CSS (collapsed menus, dialogs, mobile-only duplicates) can " +
+            "appear too.",
         },
         ref: {
           type: "string",

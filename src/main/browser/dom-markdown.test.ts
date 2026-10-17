@@ -145,18 +145,63 @@ test("normalizeMarkdown：空行压一个、行尾空白去掉、首尾 trim", (
   assert.equal(normalizeMarkdown("  a  \n\n\n\n b \n"), "a\n\n b");
 });
 
-test("行内元素出现在块级兄弟之间：链接 / 加粗的格式不能丢（验收回归：验收页的 a 直接挂在 body 下丢了 href）", () => {
+test("行内元素出现在块级兄弟之间：格式不能丢，连续的行内兄弟合成一段（验收回归）", () => {
   const out = domToMarkdown(
     page(
       el("h1", [text("标题")]),
+      text("\n"),
       el("ul", [el("li", [text("甲")])]),
+      text("\n"),
       el("a", [text("详情链接")], { href: "https://example.com/detail" }),
+      text(" "),
       el("strong", [text("重要")]),
+      text("\n"),
       el("table", [el("tr", [el("th", [text("列")])])]),
     ),
   );
   assert.equal(
     out,
-    "# 标题\n\n- 甲\n\n[详情链接](https://example.com/detail)\n\n**重要**\n\n| 列 |\n| --- |",
+    "# 标题\n\n- 甲\n\n[详情链接](https://example.com/detail) **重要**\n\n| 列 |\n| --- |",
   );
+});
+
+test("连续的行内节点合成一段：li 里带链接不会被拆成多段（评审阻断回归）", () => {
+  const out = domToMarkdown(
+    page(el("ul", [el("li", [text("Read "), el("a", [text("docs")], { href: "https://x.com/" }), text(" now")])])),
+  );
+  assert.equal(out, "- Read [docs](https://x.com/) now");
+});
+
+test("容器里行内内容与块级子节点混排：行内那一组保持整句（评审阻断回归）", () => {
+  const out = domToMarkdown(
+    page(
+      el("div", [
+        text("See "),
+        el("a", [text("the docs")], { href: "https://x.com/" }),
+        text(" for details."),
+        el("p", [text("Next para")]),
+      ]),
+    ),
+  );
+  assert.equal(out, "See [the docs](https://x.com/) for details.\n\nNext para");
+});
+
+test("行内元素之间的空白文本节点保留成空格（相邻 span 不粘成一个词）", () => {
+  const out = domToMarkdown(page(el("p", [el("span", [text("a")]), text(" "), el("span", [text("b")])])));
+  assert.equal(out, "a b");
+});
+
+test("li 里的 <br>：续行缩进到列表文字之下，不另起一项", () => {
+  const out = domToMarkdown(page(el("ul", [el("li", [text("a"), el("br", []), text("b")])])));
+  assert.equal(out, "- a\n  b");
+});
+
+test("链接文字与图片 alt 里的方括号 / 反斜杠转义，不顶断 markdown 结构", () => {
+  const out = domToMarkdown(
+    page(
+      el("p", [el("a", [text("lab]el")], { href: "https://x.com/" })]),
+      el("p", [el("img", [], { alt: "a[b]c", src: "https://x.com/i.png" })]),
+    ),
+  );
+  assert.equal(out, "[lab\\]el](https://x.com/)\n\n![a\\[b\\]c](https://x.com/i.png)");
 });

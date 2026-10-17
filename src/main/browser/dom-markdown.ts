@@ -145,10 +145,36 @@ function block(node: DomNode): string[] {
   }
 }
 
+/**
+ * 子节点 → 块列表。**连续的行内节点先攒成一组、整组走一次 inline()**，遇到块级节点再 flush。
+ * 逐个走 block() 会把一句话拆成多段：`Read <a>docs</a> now` 会变成
+ * "Read\n\n[docs](…)\n\nnow"——li 里带链接在搜索结果 / 导航 / 目录里到处都是，是 2026-10-14
+ * 评审实测的阻断问题。
+ */
 function blockNodes(nodes: readonly DomNode[]): string[] {
   const out: string[] = [];
-  for (const node of nodes) out.push(...block(node));
+  let run: DomNode[] = [];
+  const flush = (): void => {
+    if (run.length === 0) return;
+    const text = inline(run).trim();
+    if (text !== "") out.push(text);
+    run = [];
+  };
+  for (const node of nodes) {
+    if (isInline(node)) {
+      run.push(node);
+      continue;
+    }
+    flush();
+    out.push(...block(node));
+  }
+  flush();
   return out;
+}
+
+/** 行内节点：文本节点，以及不在 BLOCK_TAGS 里的元素 */
+function isInline(node: DomNode): boolean {
+  return node.tag === "#text" || !BLOCK_TAGS.has(node.tag);
 }
 
 /** 容器：有块级子节点就拆成多块；只有行内内容就合成一段 */
@@ -177,7 +203,10 @@ function list(node: DomNode, ordered: boolean): string[] {
     const marker = ordered ? `${index}. ` : "- ";
     const pad = " ".repeat(marker.length);
     const ownBlocks = blockNodes(own).filter((part) => part !== "");
-    lines.push(marker + (ownBlocks[0] ?? ""));
+    // 第一块可能是多行（li 里的 <br> 会合成一行一段），续行要和后续块一样缩进到文字之下
+    const [firstLine = "", ...firstRest] = (ownBlocks[0] ?? "").split("\n");
+    lines.push(marker + firstLine);
+    for (const line of firstRest) lines.push(pad + line);
     for (const extra of ownBlocks.slice(1)) lines.push(pad + extra);
     for (const sub of nested) {
       for (const subLine of list(sub, sub.tag === "ol")) lines.push(pad + subLine);
@@ -284,16 +313,24 @@ function inline(nodes: readonly DomNode[]): string {
 /** 链接：文字空就回落到 URL 本身（`[](url)` 渲染出来什么都看不见） */
 function link(node: DomNode): string {
   const href = (node.attrs?.href ?? "").trim();
-  const label = inline(node.children ?? []).trim();
+  const label = escapeLinkText(inline(node.children ?? []).trim());
   if (href === "" || /^javascript:/i.test(href)) return label;
   if (label === "") return href;
   const destination = /[\s()]/.test(href) ? `<${href}>` : href;
   return `[${label}](${destination})`;
 }
 
+/**
+ * 链接文字 / 图片 alt 里的方括号与反斜杠要转义：`lab]el` 直接拼出 `[lab]el](…)`，
+ * markdown 结构当场断掉（2026-10-14 评审）。
+ */
+function escapeLinkText(text: string): string {
+  return text.replace(/[\\[\]]/g, (char) => `\\${char}`);
+}
+
 /** 图片：data: 内联图只留 alt（整段 base64 会把 token 烧光） */
 function image(node: DomNode): string {
-  const alt = collapse(node.attrs?.alt ?? "").trim();
+  const alt = escapeLinkText(collapse(node.attrs?.alt ?? "").trim());
   const src = (node.attrs?.src ?? "").trim();
   if (src === "" || src.startsWith("data:")) return alt;
   return `![${alt}](${src})`;

@@ -1,9 +1,110 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatExtract, normalizeText } from "./page-text.ts";
-import type { DomNode } from "./dom-markdown.ts";
+import { formatExtract, normalizeText, SERIALIZE_TREE_FN } from "./page-text.ts";
+import { domToMarkdown, type DomNode } from "./dom-markdown.ts";
 
 const page = { url: "https://example.com/", title: "Example" };
+
+// ── 页内序列化脚本的假 DOM 夹具 ────────────────────────────────────────
+// SERIALIZE_TREE_FN 只依赖 this 与节点的形状（nodeType / tagName / childNodes / getAttribute…），
+// 不碰 document（this 是元素时那条回落分支不执行），所以在 node --test 里能拿假节点真跑一遍。
+
+interface FakeNode {
+  nodeType: number;
+  nodeValue?: string;
+  tagName?: string;
+  hidden?: boolean;
+  childNodes: FakeNode[];
+  href?: string;
+  currentSrc?: string;
+  src?: string;
+  getAttribute(name: string): string | null;
+}
+
+function fakeText(value: string): FakeNode {
+  return { nodeType: 3, nodeValue: value, childNodes: [], getAttribute: () => null };
+}
+
+function fakeElement(tag: string, childNodes: FakeNode[] = [], attributes: Record<string, string> = {}): FakeNode {
+  return {
+    nodeType: 1,
+    tagName: tag.toUpperCase(),
+    hidden: Object.prototype.hasOwnProperty.call(attributes, "hidden"),
+    childNodes,
+    href: attributes["href"],
+    currentSrc: attributes["src"],
+    src: attributes["src"],
+    getAttribute: (name: string) => attributes[name] ?? null,
+  };
+}
+
+/** 在假 DOM 上真跑一遍页内序列化脚本 */
+function serialize(root: FakeNode): { root: DomNode | null; truncated: boolean } {
+  const serializer = new Function("return " + SERIALIZE_TREE_FN)() as (this: FakeNode) => {
+    root: DomNode | null;
+    truncated: boolean;
+  };
+  return serializer.call(root);
+}
+
+test("页内序列化：空白文本节点保留（相邻行内元素不会粘成一个词）", () => {
+  const body = fakeElement("body", [
+    fakeElement("p", [fakeElement("span", [fakeText("a")]), fakeText(" "), fakeElement("span", [fakeText("b")])]),
+  ]);
+  const tree = serialize(body);
+  const paragraph = tree.root?.children?.[0];
+  assert.equal(paragraph?.tag, "p");
+  assert.deepEqual(paragraph?.children?.map((node) => node.tag), ["span", "#text", "span"]);
+  assert.equal(paragraph?.children?.[1]?.text, " ");
+});
+
+test("页内序列化：script / style / hidden / 内联 display:none 跳过，正文留下", () => {
+  const body = fakeElement("body", [
+    fakeElement("script", [fakeText("alert(1)")]),
+    fakeElement("style", [fakeText("a{}")]),
+    fakeElement("div", [fakeText("hidden 属性")], { hidden: "" }),
+    fakeElement("div", [fakeText("内联 display:none")], { style: "display: none" }),
+    fakeElement("p", [fakeText("正文")]),
+  ]);
+  const tree = serialize(body);
+  assert.deepEqual(tree.root?.children?.map((node) => node.tag), ["p"]);
+  assert.equal(tree.root?.children?.[0]?.children?.[0]?.text, "正文");
+});
+
+test("评审阻断样例 1：li 里的行内链接经真实序列化脚本后仍是一句话", () => {
+  const body = fakeElement("body", [
+    fakeElement("ul", [
+      fakeElement("li", [
+        fakeText("Read "),
+        fakeElement("a", [fakeText("docs")], { href: "https://x.com/" }),
+        fakeText(" now"),
+      ]),
+    ]),
+  ]);
+  const tree = serialize(body);
+  assert.equal(domToMarkdown(tree.root), "- Read [docs](https://x.com/) now");
+});
+
+test("评审阻断样例 2：div 里行内内容后接段落，行内那句不被拆开", () => {
+  const body = fakeElement("body", [
+    fakeElement("div", [
+      fakeText("See "),
+      fakeElement("a", [fakeText("the docs")], { href: "https://x.com/" }),
+      fakeText(" for details."),
+      fakeElement("p", [fakeText("Next para")]),
+    ]),
+  ]);
+  const tree = serialize(body);
+  assert.equal(domToMarkdown(tree.root), "See [the docs](https://x.com/) for details.\n\nNext para");
+});
+
+test("页内序列化：代码块里的缩进 / 换行原样保留", () => {
+  const body = fakeElement("body", [
+    fakeElement("pre", [fakeElement("code", [fakeText("  const a = 1;\n  const b = 2;")])]),
+  ]);
+  const tree = serialize(body);
+  assert.equal(tree.root?.children?.[0]?.children?.[0]?.children?.[0]?.text, "  const a = 1;\n  const b = 2;");
+});
 
 test("normalizeText：空行压一个、行尾空白去掉、CRLF 统一", () => {
   assert.equal(normalizeText("  a  \r\n\r\n\r\n\nb\t\n c "), "a\n\nb\n c");
