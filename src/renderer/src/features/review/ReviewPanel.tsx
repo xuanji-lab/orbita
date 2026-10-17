@@ -8,6 +8,7 @@ import { api } from "../../api";
 import { REVIEW_SOURCES, type ReviewDiff, type ReviewEntry, type ReviewList, type ReviewSource } from "@shared/review";
 import { reviewEmptyText, reviewEmptyTitle, unifiedDiffEntries } from "./review-panel";
 import { pathParts, Stats } from "../chat/FileTurnCard";
+import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
 
 /**
  * 审查面板（右栏新入口，与 Files / Skills / MCP 互斥）：四种来源——本任务改动
@@ -17,6 +18,9 @@ import { pathParts, Stats } from "../chat/FileTurnCard";
  *
  * 数据全在主进程算（review:list / review:diff）；renderer 只收结果——git 的存在、
  * 仓库与否、upstream 与否都翻译成空态一句话（refusals explain the blocker）。
+ *
+ * 两个页签：「改动」（上面说的这些）与「摘抄」（用户划选存下的段落，见 ExcerptsTab）。
+ * 摘抄不吃 git 来源，切过去时标题行的来源下拉与刷新键一起收起。
  */
 export function ReviewPanel(props: {
   /** 正在看的会话；null = 还没开任务（task 来源没对象，git 来源也没 cwd） */
@@ -30,8 +34,13 @@ export function ReviewPanel(props: {
   revision: string;
   /** 会话 cwd：cwd 之内显示相对路径 */
   cwd: string | null;
+  /** 摘抄列表的版本（刚摘了一条就 +1）：变了就重拉摘抄页签 */
+  excerptRevision: number;
+  /** 摘抄页签点一条「回到原文」 */
+  onJumpExcerpt: (jump: ExcerptJump) => void;
 }) {
   const t = useT();
+  const [tab, setTab] = useState<"changes" | "excerpts">("changes");
   const [source, setSource] = useState<ReviewSource>("task");
   const [list, setList] = useState<ReviewList | null>(null);
   const [loading, setLoading] = useState(false);
@@ -71,9 +80,10 @@ export function ReviewPanel(props: {
     refresh(source);
   }, [source, props.sessionId, props.revision, refresh]);
 
-  // 一次性定位：展开目标路径并滚到它
+  // 一次性定位：展开目标路径并滚到它（「在面板里看」只发生在改动页签）
   useEffect(() => {
     if (props.focus === null) return;
+    setTab("changes");
     setExpanded(props.focus.path);
     const timer = window.setTimeout(() => {
       expandedRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -136,23 +146,40 @@ export function ReviewPanel(props: {
       header={
         <>
           <PanelTitle icon="file-diff" title={t.review.title} />
-          {/* 审查范围（本任务 / 工作区未提交 / 分支）：标题行中段的安静下拉（右栏统一） */}
-          <Menu items={sourceItems} trigger={({ toggle: open }) => (
-            <button type="button" onClick={open} title={t.review.source(source)} className="quiet-control panel-head-select no-drag">
-              {t.review.source(source)}
-              <Icon name="chevron-down" size={11} strokeWidth={1.8} />
-            </button>
-          )} />
+          {/* 审查范围（本任务 / 工作区未提交 / 分支）：标题行中段的安静下拉（右栏统一）；
+              摘抄页签不吃 git 来源，收起 */}
+          {tab === "changes" && (
+            <Menu items={sourceItems} trigger={({ toggle: open }) => (
+              <button type="button" onClick={open} title={t.review.source(source)} className="quiet-control panel-head-select no-drag">
+                {t.review.source(source)}
+                <Icon name="chevron-down" size={11} strokeWidth={1.8} />
+              </button>
+            )} />
+          )}
         </>
       }
       headerExtra={
-        <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
-          <Icon name="refresh-cw" size={15} spin={loading} />
-        </PanelIconButton>
+        tab === "changes" ? (
+          <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
+            <Icon name="refresh-cw" size={15} spin={loading} />
+          </PanelIconButton>
+        ) : undefined
       }
-      contentKey={`${source}:${props.sessionId ?? "none"}`}
+      contentKey={`${tab}:${source}:${props.sessionId ?? "none"}`}
     >
-      {props.sessionId === null ? (
+      <div className="review-tabs" role="tablist" aria-label={t.review.title}>
+        <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
+          <Icon name="file-diff" size={12} strokeWidth={1.8} />
+          {t.review.tabChanges}
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
+          <Icon name="quote" size={12} strokeWidth={1.8} />
+          {t.review.tabExcerpts}
+        </button>
+      </div>
+      {tab === "excerpts" ? (
+        <ExcerptsTab sessionId={props.sessionId} revision={props.excerptRevision} onJump={props.onJumpExcerpt} />
+      ) : props.sessionId === null ? (
         <EmptyState title={t.review.noTask} />
       ) : loading && list === null ? (
         <EmptyState title={t.common.loading} />
@@ -209,7 +236,7 @@ export function ReviewPanel(props: {
                         padding: "1px var(--space-2)",
                         borderRadius: "var(--radius-pill)",
                         background: "var(--color-bg-muted)",
-                        fontSize: "var(--font-size-caption)",
+                        fontSize: "var(--font-size-sm)",
                         color: "var(--color-text-tertiary)",
                       }}
                     >
@@ -217,15 +244,15 @@ export function ReviewPanel(props: {
                       {t.review.restored}
                     </span>
                   ) : entry.noBaseline === true ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                       {t.review.noBaseline}
                     </span>
                   ) : entry.binary ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                       {t.review.binary}
                     </span>
                   ) : (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-caption)" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
                       <Stats added={entry.added} removed={entry.removed} />
                     </span>
                   )}
@@ -233,11 +260,11 @@ export function ReviewPanel(props: {
                 {open && (
                   <div style={{ padding: "0 0 var(--space-2)", display: "grid" }}>
                     {diff === undefined || diffLoading === entry.path ? (
-                      <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                      <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.common.loading}
                       </span>
                     ) : diff.diff === null ? (
-                      <span style={{ fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+                      <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {diff.restored ? t.review.restoredEmpty : t.review.binary}
                       </span>
                     ) : (
@@ -262,7 +289,7 @@ function RowName(props: { path: string; cwd: string | null }) {
       <span
         style={{
           fontWeight: 600,
-          fontSize: "var(--font-size-body)",
+          fontSize: "var(--font-size-base)",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -276,7 +303,7 @@ function RowName(props: { path: string; cwd: string | null }) {
         <span
           style={{
             minWidth: 0,
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
             color: "var(--color-text-tertiary)",
             overflow: "hidden",
             textOverflow: "ellipsis",

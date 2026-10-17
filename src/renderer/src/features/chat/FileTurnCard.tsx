@@ -41,7 +41,7 @@ export function Stats(props: { added: number; removed: number }) {
 }
 
 const SLOT_DIR: React.CSSProperties = {
-  fontSize: "var(--font-size-caption)",
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-tertiary)",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -127,7 +127,7 @@ export function FileTurnCard(props: {
         border: `1px solid ${previewing ? "var(--color-border-strong)" : "var(--color-border-subtle)"}`,
         boxShadow: previewing ? "0 0 0 1px var(--color-border-strong)" : "none",
         borderRadius: "var(--radius-md)",
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
@@ -193,7 +193,7 @@ export function FileTurnCard(props: {
                 padding: "1px var(--space-2)",
                 borderRadius: "var(--radius-pill)",
                 background: "var(--color-bg-muted)",
-                fontSize: "var(--font-size-caption)",
+                fontSize: "var(--font-size-sm)",
                 color: "var(--color-text-tertiary)",
                 flex: "0 0 auto",
               }}
@@ -218,7 +218,7 @@ export function FileTurnCard(props: {
                 background: "transparent",
                 color: props.busy ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
                 font: "inherit",
-                fontSize: "var(--font-size-caption)",
+                fontSize: "var(--font-size-sm)",
                 cursor: props.busy ? "default" : "pointer",
                 flex: "0 0 auto",
               }}
@@ -279,7 +279,7 @@ export function FileTurnCard(props: {
 
 /** 旁路标记的槽位：小字、三级灰，不参与 rtl 折叠（它是固定文案，不是路径）。 */
 const SLOT_MARK: React.CSSProperties = {
-  fontSize: "var(--font-size-caption)",
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-tertiary)",
   whiteSpace: "nowrap",
   flex: "0 0 auto",
@@ -317,7 +317,7 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
     background: "transparent",
     color: "var(--color-text-secondary)",
     font: "inherit",
-    fontSize: "var(--font-size-caption)",
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
     whiteSpace: "nowrap",
   };
@@ -394,7 +394,7 @@ export function RevertMarkView(props: {
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
-          fontSize: "var(--font-size-caption)",
+          fontSize: "var(--font-size-sm)",
           color: "var(--color-text-tertiary)",
         }}
       >
@@ -412,7 +412,7 @@ export function RevertMarkView(props: {
             background: "var(--color-chat-card-bg)",
             border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-md)",
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
           }}
         >
           <button

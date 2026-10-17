@@ -131,11 +131,11 @@ const PILL_BASE = {
   padding: "2px 8px",
   borderRadius: "var(--radius-pill)",
   fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-micro)",
+  fontSize: "var(--font-size-xs)",
 } satisfies React.CSSProperties;
 
 /**
- * 通道标记胶囊：一行、宽度 fit-content、1px dashed 边框、mono micro、tertiary 底色，
+ * 通道标记胶囊：一行、宽度 fit-content、1px dashed 边框、mono xs、tertiary 底色，
  * tone 命中时描边与文字换色（颜色是第二信号，图标已经在说话）。
  * `breathing` 给 running 帧用（reply_subsession / report_to_parent 还没落定的结果）。
  *
@@ -283,7 +283,7 @@ export function DelegateCardView(props: {
             <p
               style={{
                 margin: 0,
-                fontSize: "var(--font-size-caption)",
+                fontSize: "var(--font-size-sm)",
                 color: "var(--color-text-secondary)",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -324,7 +324,7 @@ const TASK_CARD_TOGGLE_STYLE = {
   background: "transparent",
   color: "var(--color-accent)",
   font: "inherit",
-  fontSize: "var(--font-size-caption)",
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
   padding: 0,
   textAlign: "left",

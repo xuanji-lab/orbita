@@ -11,11 +11,10 @@ import "@xterm/xterm/css/xterm.css";
 import type { TerminalInfo } from "@shared/terminal";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
-import { CONSERVATIVE_CONPTY_BUILD, readTerminalTheme } from "./terminal-theme.ts";
+import { CONSERVATIVE_CONPTY_BUILD, readTerminalMetrics, readTerminalTheme } from "./terminal-theme.ts";
 
-/** 保持系统等宽字体的字形度量（--font-family-mono 的 token 值运行时读，见 effect） */
-const TERMINAL_FONT_SIZE = 13;
-const TERMINAL_LINE_HEIGHT = 1.25;
+// 字体、字号、行高都是 token（--font-family-mono / --font-size-terminal / --line-height-terminal），
+// 在 effect 里运行时读——不在这里写数字
 const TERMINAL_SCROLLBACK = 5000;
 
 export function TerminalView(props: {
@@ -48,8 +47,7 @@ export function TerminalView(props: {
       // 避免 resize / 回车时与 ConPTY 重复重排导致光标上跳（调研 1.4/2.6 节）
       reflowCursorLine: false,
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-family-mono").trim(),
-      fontSize: TERMINAL_FONT_SIZE,
-      lineHeight: TERMINAL_LINE_HEIGHT,
+      ...readTerminalMetrics(),
       scrollback: TERMINAL_SCROLLBACK,
       theme: readTerminalTheme(),
       ...(api.platform === "win32" ? { windowsPty: { backend: "conpty" as const, buildNumber: CONSERVATIVE_CONPTY_BUILD } } : {}),

@@ -12,6 +12,21 @@ import {
 } from "../../../../shared/quote.ts";
 
 /**
+ * 第 N 轮（1 起，按用户消息计）的用户消息 id。摘抄跳回原文时，逐字原文找不到
+ * （被编辑、被回退）就退回到那一轮的开头，至少落在对的位置。轮不存在返回 null。
+ */
+export function nthUserMessageId(transcript: readonly TranscriptItem[], turn: number): string | null {
+  if (!Number.isInteger(turn) || turn < 1) return null;
+  let seen = 0;
+  for (const item of transcript) {
+    if (item.role !== "user") continue;
+    seen += 1;
+    if (seen === turn) return item.id;
+  }
+  return null;
+}
+
+/**
  * 一段划选能不能成为引用、成为什么样的引用。null = 不能：
  * - 消息不在转录里（选中的是别的东西）；
  * - 助手消息还在流式生成——文字还在变，引出去的可能是半句话（Proma 同一条规矩）；
@@ -52,16 +67,23 @@ export interface TextPoint {
  * 在一串文本节点里找引用原文的起止位置，**忽略空白差异**：划选出来的文本经过规整
  * （块元素之间的换行、缩进被收掉），和 DOM 里的原样对不上逐字匹配；按非空白字符
  * 比就稳了。找不到返回 null——调用方退回整块闪一下。
+ *
+ * skip：比对时跳过的单字符（缺省只跳空白）。确认卡的摘句高亮传更宽的集合，与
+ * intent-lab 定位摘句的口径一致（见 conv-window.ts 的 EXCERPT_SKIP）。
  */
-export function locateQuote(segments: readonly string[], quote: string): { start: TextPoint; end: TextPoint } | null {
-  const needle = quote.replace(/\s+/g, "");
+export function locateQuote(
+  segments: readonly string[],
+  quote: string,
+  skip: RegExp = /\s/,
+): { start: TextPoint; end: TextPoint } | null {
+  const needle = [...quote].filter((char) => !skip.test(char)).join("");
   if (needle === "") return null;
   const points: TextPoint[] = [];
   let hay = "";
   segments.forEach((segment, node) => {
     for (let offset = 0; offset < segment.length; offset += 1) {
       const char = segment[offset] as string;
-      if (/\s/.test(char)) continue;
+      if (skip.test(char)) continue;
       hay += char;
       points.push({ node, offset });
     }

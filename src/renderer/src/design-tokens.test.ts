@@ -1,7 +1,7 @@
 /**
  * 设计 token 契约的静态扫描（AGENTS.md「禁裸 hex / 未定义 CSS 变量」）。
  *
- * 两条检查：
+ * 三条检查（第三条见文件下方「字号检查」）：
  *  1. **每个 `var(--x)` 引用都得有声明**——声明来自 `design-system/tokens/*.css`、
  *     渲染层 `.css`，以及渲染层 TS/TSX 在运行时写的自定义属性（对象字面量 `"--x": …` 或
  *     `el.style.setProperty("--x", …)`）。少了任何一处，token 就是静默回落到继承值，
@@ -230,6 +230,111 @@ describe("design-tokens —— var(--x) 引用都要有声明", () => {
       }
       assert.fail(`以下 token 有引用但找不到声明：\n${lines.join("\n")}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 字号检查：渲染层只按角色取档，不写像素
+// ---------------------------------------------------------------------------
+
+/**
+ * 字号是「一个基准、五档角色」（`tokens/typography.css`）：组件只能写 `var(--font-size-*)`，
+ * 或相对父级的 `em` / `%` / `inherit`——它们跟着父级的角色走，改基准时一起变。
+ * 裸 `px` / `rem` / 数字字面量会把那一处钉死在某个像素上：基准改了它不动，
+ * 而且一处一个数就是「字乱」的来源（2026-10 试用反馈：字号与字距看着不舒服）。
+ * 品牌字（slogan / wordmark）与代码字号如需例外，在 tokens 里声明成 token，不在这里开豁免。
+ */
+const CSS_FONT_SIZE_RE = /(?<![-\w])font-size\s*:\s*([^;}\n]+)/g;
+const TS_FONT_SIZE_RE = /\bfontSize\s*:\s*([^,}\n]+)/g;
+const FONT_SIZE_OK_CSS = /^(var\(--font-size-[a-z-]+\)|[\d.]+em|[\d.]+%|inherit)$/;
+/**
+ * 按值豁免（加条目必须写清理由）：
+ * - pdf.js 文字层：透明文字要和 canvas 上的字形逐像素重合才能选中 / 复制，字号是 PDF 的几何、
+ *   不是界面排版（同 ZCode 对代码 / Diff / 终端内容的例外）。
+ */
+const FONT_SIZE_VALUE_EXEMPTIONS = new Set<string>([
+  "calc(var(--text-scale-factor) * var(--font-height))",
+]);
+// TS 的值可能是表达式（三元、变量）：只抓确定是裸值的两种——数字字面量、px/rem 字符串
+const FONT_SIZE_BAD_TS = /(^|[?:]\s*)\d|["'`]\s*[\d.]+\s*(px|rem)/;
+
+function scanFontSizes(): string[] {
+  const hits: string[] = [];
+  for (const file of [...rendererCssFiles, ...rendererTsFiles]) {
+    const isCss = extname(file) === ".css";
+    const lines = readClean(file, !isCss).split("\n");
+    lines.forEach((line, i) => {
+      for (const m of line.matchAll(isCss ? CSS_FONT_SIZE_RE : TS_FONT_SIZE_RE)) {
+        const value = group1(m).trim().replace(/\s*!important$/, "");
+        if (FONT_SIZE_VALUE_EXEMPTIONS.has(value)) continue;
+        const bad = isCss ? !FONT_SIZE_OK_CSS.test(value) : FONT_SIZE_BAD_TS.test(value);
+        if (bad) hits.push(`  ${relPath(file)}:${i + 1}: ${value}`);
+      }
+    });
+  }
+  return hits;
+}
+
+/**
+ * 行高同理：只许 `var(--line-height-*)`（含代码 / 终端 / 品牌这些声明过的例外）、
+ * `0` / `1`（图标与单行对齐的几何写法）、`normal` / `inherit`。裸的 `18px` / `1.55` 一类
+ * 会把一处钉死，也是「字乱」的另一半。
+ */
+const CSS_LINE_HEIGHT_RE = /(?<![-\w])line-height\s*:\s*([^;}\n]+)/g;
+// 只认对象属性位置（前面是 `{` / `,` / 行首）：`cond ? lineHeight : 22` 这类三元不是样式
+const TS_LINE_HEIGHT_RE = /(?:^|[{,])\s*lineHeight\s*:\s*([^,}\n]+)/g;
+const LINE_HEIGHT_OK = /^(["'`]?var\(--(line-height-[a-z-]+|paper-cell)\)["'`]?|["'`]?(0|1|normal|inherit)["'`]?)$/;
+/**
+ * 按「文件: 值」豁免（加条目必须写清理由）——两处都是几何，不是排版：
+ * - paper-themes.css 24px：打字稿主题输入框的行高要和每 24px 一条的横线背景对齐；
+ * - styles.css 14px：右栏铃铛未读角标，行高 = 胶囊高度，把数字竖向居中。
+ */
+const LINE_HEIGHT_EXEMPTIONS = new Set<string>([
+  "src/renderer/src/paper-themes.css: 24px",
+  "src/renderer/src/styles.css: 14px",
+]);
+
+function scanLineHeights(): string[] {
+  const hits: string[] = [];
+  for (const file of [...rendererCssFiles, ...rendererTsFiles]) {
+    const isCss = extname(file) === ".css";
+    const rel = relPath(file);
+    const lines = readClean(file, !isCss).split("\n");
+    lines.forEach((line, i) => {
+      for (const m of line.matchAll(isCss ? CSS_LINE_HEIGHT_RE : TS_LINE_HEIGHT_RE)) {
+        const value = group1(m).trim().replace(/\s*!important$/, "");
+        if (LINE_HEIGHT_EXEMPTIONS.has(`${rel}: ${value}`)) continue;
+        // TS 里只管字面量；表达式 / 变量（类型标注里的 `lineHeight: number` 也在内）放过
+        if (!isCss && !/^["'`\d]/.test(value)) continue;
+        if (!LINE_HEIGHT_OK.test(value)) hits.push(`  ${rel}:${i + 1}: ${value}`);
+      }
+    });
+  }
+  return hits;
+}
+
+describe("design-tokens —— 字号只按角色取档", () => {
+  test("src/renderer/src 下没有裸行高（px 或自造的无单位数）", () => {
+    const hits = scanLineHeights();
+    if (hits.length > 0) {
+      assert.fail(`发现裸行高（改用 var(--line-height-tight|ui|reading)，代码类用 -code / -code-block）：\n${hits.join("\n")}`);
+    }
+  });
+
+  test("src/renderer/src 下没有裸 px / rem / 数字字号", () => {
+    const hits = scanFontSizes();
+    if (hits.length > 0) {
+      assert.fail(`发现裸字号（改用 var(--font-size-xs|sm|base|lg|xl)）：\n${hits.join("\n")}`);
+    }
+  });
+
+  test("旧的按像素命名的字号 / 行高 token 不再声明——合并进来的旧代码会在「死 token」检查里踩响", () => {
+    const retired = [
+      "font-size-micro", "font-size-caption", "font-size-control", "font-size-body",
+      "font-size-chat", "font-size-input", "font-size-title", "font-size-heading",
+      "line-height-caption", "line-height-body", "line-height-chat", "line-height-bubble",
+    ];
+    assert.deepEqual(retired.filter((name) => declared.has(name)), []);
   });
 });
 

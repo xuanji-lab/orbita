@@ -26,7 +26,7 @@
 :root[data-theme="copybook"] .composer-field {
   --paper-cell: 24px;
   /* 汉字字形距格线的左空：格子与字号差值的一半 */
-  --paper-lead: calc((var(--paper-cell) - var(--font-size-input)) / 2);
+  --paper-lead: calc((var(--paper-cell) - var(--font-size-base)) / 2);
   background-image:
     linear-gradient(to right, var(--color-paper-grid) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-paper-grid) 1px, transparent 1px);
@@ -40,7 +40,7 @@
    垫修正液（见下）。textarea 与镜像都吃这条规则，排版才一致 */
 :root[data-theme="copybook"] .composer-input {
   padding: 0 0 0 var(--paper-lead);
-  letter-spacing: calc(var(--paper-cell) - var(--font-size-input));
+  letter-spacing: calc(var(--paper-cell) - var(--font-size-base));
   line-height: var(--paper-cell);
 }
 
@@ -162,7 +162,7 @@
   margin: 0;
   font-family: "Ma Shan Zheng", var(--font-family-brand);
   font-weight: 400;
-  font-size: 36px;
+  font-size: var(--font-size-slogan);
   line-height: 1;
   letter-spacing: 0;
 }
@@ -206,7 +206,7 @@
 :root[data-theme="typescript"] .home-slogan {
   font-family: "Special Elite", var(--font-family-base);
   font-weight: 400;
-  font-size: 30px;
+  font-size: var(--font-size-slogan);
   letter-spacing: 0;
 }
 
@@ -214,8 +214,8 @@
 :root:is([data-theme="copybook"], [data-theme="typescript"]) .home-mark {
   margin: 10px 0 0;
   font-family: "Long Cang", "Bradley Hand", cursive;
-  font-size: 20px;
-  line-height: 1.2;
+  font-size: var(--font-size-slogan-mark);
+  line-height: var(--line-height-brand-mark);
   letter-spacing: 0.05em;
   color: var(--color-paper-pen);
   transform: rotate(-3deg);

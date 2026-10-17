@@ -179,3 +179,13 @@ export function splitUserTextBlocks(
   }
   return { body: bodyParts.join("\n\n"), pasted, files };
 }
+
+/**
+ * 正文按空行拆块回显（空段丢弃；整条为空保一个空块——纯图消息的形状不变）。
+ * runtime 的回显与 renderer 的乐观回显**共用这一个切法**：两处切法不一致的话，
+ * 真回显换下乐观气泡的那一瞬文本块会对不上（闪一下不同的分组）。
+ */
+export function splitEchoBlocks(text: string): string[] {
+  const parts = text.split("\n\n").filter((part) => part !== "");
+  return parts.length > 0 ? parts : [""];
+}

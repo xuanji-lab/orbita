@@ -1,18 +1,24 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+// CJK 加粗（2026-10-14 用户报的两例）：CommonMark 的定界规则下 `**标题： **`
+// 的收尾 ** 前是空白、`**说明：**后文` 的收尾 ** 前是中文标点且后是汉字，都算
+// 不成右侧定界。remark-cjk-friendly（2.3.2，MIT，作者 tats-u，remark 生态的
+// 活跃维护者）放宽这两条对 CJK 的判定；数学 / 引用插件不动。
+import remarkCjkFriendly from "remark-cjk-friendly";
+import { normalizeEmphasisInnerSpace } from "./emphasis-space.ts";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo, useContext } from "react";
+import { Component, memo, useMemo, useContext } from "react";
+import type { Components } from "react-markdown";
+import type { PluggableList } from "unified";
 import { MdPre } from "./CodeBlock";
-import { closePendingMath } from "./pending-math";
 import { remarkDemoteBoundaryMath } from "./math-guard";
-import { rehypeBubbleChips } from "./chip-runs.ts";
+import { rehypePluginsFor, streamRenderPolicy } from "./stream-render.ts";
+import { splitMarkdownBlocks } from "./markdown-blocks.ts";
+import { CITATION_MARKER } from "../../../../shared/pdf-quote.ts";
 import { Icon } from "../../shell/Icon";
 import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
@@ -21,28 +27,22 @@ import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citati
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 
 /**
- * sanitize 白名单：defaultSchema 之上只放行 `<details>`/`<summary>`，其余标签
- * rehype-raw 解析完照剥。**顺序敏感**（rehypePlugins 数组序）：rehypeRaw →
- * rehypeSanitize → rehypeKatex——sanitize 必须在 katex 前，否则会把 KaTeX 的
- * 输出剥掉；其默认 schema 保留 code 的 language-* class，math 节点能活着走到
- * katex。
- */
-const SANITIZE_SCHEMA = {
-  ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
-};
-
-/**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
  *
- * - **memo 按 text 记忆**：流式期间 transcript 每帧都产生新对象，但只有正在流的那条
- *   的 text 真的在变——没变的消息不重新解析 markdown。
+ * - **分块记忆化**：正文按顶层块边界切成小块（markdown-blocks.ts），每块一个 memo
+ *   叶子——流式期间前面已完成的块字符串逐字不变、整个子树跳过重渲染，每帧只有仍在
+ *   增长的尾块重跑 remark → rehype。memo 按 text 记忆：流式期间 transcript 每帧都产生
+ *   新对象，但只有正在流的那条的 text 真的在变。
  * - **数学公式**：remark-math 把 `$…$` / `$$…$$` 认成 math 节点，rehype-katex 就地
- *   变成 KaTeX HTML。`trust: false` 是安全闸——公式永远只是视觉，`\href` 等带行为
- *   的命令拒绝；`throwOnError: false` 让半截/非法 LaTeX 原地显示源码，由 styles.css
- *   降级成斜体次级灰（流式期间的常态，不是报警）。
+ *   变成 KaTeX HTML（KATEX 选项见 stream-render.ts）。非法 LaTeX 由 styles.css
+ *   降级成斜体次级灰，不是报警。流式帧不挂 katex，公式暂以 markdown 的原样显示
+ *   （行内是等宽的 LaTeX 片段、块级是无色代码块）。
  * - 代码块高亮走 shiki（`CodeBlock.tsx` 覆写 pre，双主题 HTML + CSS 变量切换），
  *   配色来自 github-light / github-dark 主题，是设计系统 token 的既定例外。
+ * - **流式帧省掉两件贵的渲染**（KaTeX 排版 + shiki 高亮，决策在 stream-render.ts）：
+ *   但**只省尾块**——已完成段是固定字符串、memo 命中，本来就只在它出现的那一帧算过
+ *   一次，没有理由在流式期间把它降级（否则先前渲好的公式 / 高亮会退回源码）。
+ *   消息落定后 streaming 翻 false，尾块的那次补渲照旧。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 把网页送进内置浏览器、
  *   mailto 交给系统（`src/main/index.ts` 的 openLink），外链绝不能在应用窗口内导航走。
  * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
@@ -58,6 +58,36 @@ const SANITIZE_SCHEMA = {
  */
 const BUBBLE_BANNED = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
+/** 正文里有没有 PDF 引用标记（非全局实例：`test` 不带 lastIndex 状态） */
+const CITATION_MARKER_PRESENT = new RegExp(CITATION_MARKER.source);
+
+/**
+ * 一个顶层块的渲染叶子。**memo 是这套方案的全部价值所在**：react-markdown 自己没有
+ * memo（每次渲染都重跑 remark / rehype），只有把这层 memo 垫在前面，流式期间未变的
+ * 块才会被跳过。其余 prop 由 MarkdownBlock 用 useMemo 维持稳定身份，比较即按 text。
+ */
+const MarkdownChunk = memo(function MarkdownChunk(props: {
+  text: string;
+  remarkPlugins: PluggableList;
+  rehypePlugins: PluggableList;
+  components: Components;
+  /** bubble 变体摊平的标题元素（全量变体传 undefined） */
+  disallowedElements?: string[];
+  unwrapDisallowed?: boolean;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={props.remarkPlugins}
+      rehypePlugins={props.rehypePlugins}
+      components={props.components}
+      disallowedElements={props.disallowedElements}
+      unwrapDisallowed={props.unwrapDisallowed}
+    >
+      {props.text}
+    </ReactMarkdown>
+  );
+});
+
 export const MarkdownBlock = memo(function MarkdownBlock({
   text,
   variant = "full",
@@ -65,47 +95,91 @@ export const MarkdownBlock = memo(function MarkdownBlock({
 }: {
   text: string;
   /** "bubble"：用户气泡内的轻量渲染——标题摊平成文本；单个换行保留为 <br>
-   *（remark-breaks，用户消息里按 Enter 的换行不该被 markdown 吞掉）。 */
+   *（remark-breaks，用户消息里按 Enter 的换行不该被 markdown 吞掉）。
+   * 气泡不分块：用户消息短，分段换不来什么。 */
   variant?: "full" | "bubble";
-  /** 仅流式中的那条消息传 true：尾部未闭合的 `$…` 补上闭合符让公式逐字成形
-   *（pending-math.ts）。落定的消息必须 false——已写完的文本里孤立的 `$`（如
-   * 「价格 $5 起」）不该被凭空补一个闭合符变成公式（2026-10 事故）。memo 按 prop
-   * 浅比较，布尔翻转不引发无关重渲染。 */
+  /** 仅流式中的那条消息传 true：仍在增长的尾块本帧不挂 rehype-katex、不跑 shiki，
+   *公式按源码、代码块按无色显示（比每帧全量重排便宜一个量级，见 stream-render.ts）。
+   *落定的消息必须 false——落定帧才把公式与高亮补渲上。memo 按 prop 浅比较，布尔翻转
+   *正好触发那一次补渲，且不引发无关重渲染。 */
   streaming?: boolean;
 }) {
   const bubble = variant === "bubble";
+  const citations = useExperimentalFeature("pdf-citations") && !bubble;
+
+  // 两个 pre 覆写 + 两份 components 映射：**身份稳定**是分块 memo 能命中的前提。
+  // react-markdown 不把自定义 prop 交给 components 映射里的组件，只能在这里闭住
+  // highlight；身份只在这两处各存在一份，不再随渲染新建。
+  const preHighlight = useMemo(
+    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight />,
+    [],
+  );
+  const prePlain = useMemo(
+    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight={false} />,
+    [],
+  );
+  const baseComponents = useMemo(
+    () => ({ a: ExternalAnchor, img: ImagePlaceholder, span: ChipSpan }),
+    [],
+  );
+  const highlightComponents = useMemo(
+    () => ({ ...baseComponents, pre: preHighlight }),
+    [baseComponents, preHighlight],
+  );
+  const plainComponents = useMemo(
+    () => ({ ...baseComponents, pre: prePlain }),
+    [baseComponents, prePlain],
+  );
+
   // PDF 引用标记（实验功能「PDF 引用」）只在 assistant 正文里认：用户气泡里打出来的
   // `[^c4k2]` 是用户的字，不是 agent 核验过的引用；开关关着时标记退回纯文本
-  const citations = useExperimentalFeature("pdf-citations") && !bubble;
-  const remarkPlugins = bubble
-    ? [remarkGfm, remarkMath, remarkBreaks, remarkDemoteBoundaryMath]
-    : citations
-      ? [remarkGfm, remarkMath, remarkDemoteBoundaryMath, remarkCitationMarkers]
-      : [remarkGfm, remarkMath, remarkDemoteBoundaryMath];
+  const remarkPlugins = useMemo(
+    () =>
+      bubble
+        ? [remarkGfm, remarkCjkFriendly, remarkMath, remarkBreaks, remarkDemoteBoundaryMath]
+        : citations
+          ? [remarkGfm, remarkCjkFriendly, remarkMath, remarkDemoteBoundaryMath, remarkCitationMarkers]
+          : [remarkGfm, remarkCjkFriendly, remarkMath, remarkDemoteBoundaryMath],
+    [bubble, citations],
+  );
+  const rehypePlugins = useMemo(
+    () => ({
+      settled: rehypePluginsFor(bubble, streamRenderPolicy(false)),
+      streaming: rehypePluginsFor(bubble, streamRenderPolicy(true)),
+    }),
+    [bubble],
+  );
+
+  // 强调定界内侧空白先整篇收掉（emphasis-space.ts），再切块——与不分块时的插件入参逐字一致
+  const normalized = useMemo(() => normalizeEmphasisInnerSpace(text), [text]);
+  const blocks = useMemo(() => {
+    // 引用标记的编号是「本条消息内的出场序号」（citation-markers.ts），而每个分块是
+    // 一次独立的 remark 解析、序号各自从 1 起——有标记时不分段
+    if (bubble || (citations && CITATION_MARKER_PRESENT.test(normalized))) return [normalized];
+    return splitMarkdownBlocks(normalized);
+  }, [normalized, bubble, citations]);
+
   return (
     // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
     <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
       <MarkdownErrorBoundary>
-        <ReactMarkdown
-          remarkPlugins={remarkPlugins}
-          rehypePlugins={
-            bubble
-              ? // bubble 变体在 sanitize 之后多挂 rehypeBubbleChips：用户原文里的 /skill: token
-                // 就地换成 chip（span.bubble-chip，chip-runs.ts）。必须排在 sanitize 之后
-                // ——span 不在白名单里，先换会被剥掉；排在 katex 之前——数学节点是 code，
-                // 与 chip 互不碰面
-                [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeBubbleChips, [rehypeKatex, { throwOnError: false, strict: false, trust: false }]]
-              : [
-                  rehypeRaw,
-                  [rehypeSanitize, SANITIZE_SCHEMA],
-                  [rehypeKatex, { throwOnError: false, strict: false, trust: false }],
-                ]
-          }
-          components={{ a: ExternalAnchor, img: ImagePlaceholder, pre: MdPre, span: ChipSpan }}
-          {...(bubble ? { disallowedElements: BUBBLE_BANNED, unwrapDisallowed: true } : {})}
-        >
-          {streaming ? closePendingMath(text) : text}
-        </ReactMarkdown>
+        {blocks.map((block, index) => {
+          // 只有仍在增长的尾块走流式取舍：已完成段的字符串不变、memo 命中，
+          // 它们在出现的那一帧就已经按落定策略渲染过了，不该在流式期间被降级
+          const cheap = streaming && index === blocks.length - 1;
+          return (
+            <MarkdownChunk
+              // 流式只在尾部追加块，索引 key 让已完成块的 content 跨帧稳定
+              key={index}
+              text={block}
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={cheap ? rehypePlugins.streaming : rehypePlugins.settled}
+              components={cheap ? plainComponents : highlightComponents}
+              disallowedElements={bubble ? BUBBLE_BANNED : undefined}
+              unwrapDisallowed={bubble}
+            />
+          );
+        })}
       </MarkdownErrorBoundary>
     </div>
   );
@@ -136,7 +210,7 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode }, { error: 
 function RenderFailed(props: { message: string }) {
   const t = useT();
   return (
-    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-caption)" }}>
+    <p style={{ color: "var(--color-danger)", fontSize: "var(--font-size-sm)" }}>
       {t.chat.messageRenderFailed} {props.message}
     </p>
   );

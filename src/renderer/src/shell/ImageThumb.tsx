@@ -82,7 +82,7 @@ export function ImageThumb(props: {
       {props.caption === true && named && (
         <span
           style={{
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
             color: "var(--color-text-tertiary)",
             fontFamily: "var(--font-family-mono)",
             whiteSpace: "nowrap",

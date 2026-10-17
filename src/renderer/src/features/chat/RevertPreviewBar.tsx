@@ -43,7 +43,7 @@ function Chip(props: { item: ChipItem; cwd: string | null; onOpen?: (path: strin
         borderRadius: "var(--radius-pill)",
         background: caution ? "var(--color-bg-muted)" : "transparent",
         font: "inherit",
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: "var(--color-text-primary)",
         cursor: clickable ? "pointer" : "default",
       }}
@@ -116,7 +116,7 @@ export function RevertPreviewBar(props: {
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={{ flex: 1, fontSize: "var(--font-size-caption)", color: "var(--color-text-tertiary)" }}>
+        <span style={{ flex: 1, fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
           {t.chat.revertShellNote}
         </span>
         <button
@@ -132,7 +132,7 @@ export function RevertPreviewBar(props: {
             borderRadius: "var(--radius-md)",
             cursor: "pointer",
             font: "inherit",
-            fontSize: "var(--font-size-control)",
+            fontSize: "var(--font-size-base)",
           }}
         >
           {t.common.cancel}
@@ -150,7 +150,7 @@ export function RevertPreviewBar(props: {
             background: "transparent",
             color: props.busy ? "var(--color-text-tertiary)" : "var(--color-danger)",
             font: "inherit",
-            fontSize: "var(--font-size-control)",
+            fontSize: "var(--font-size-base)",
             fontWeight: 500,
             cursor: props.busy ? "default" : "pointer",
           }}

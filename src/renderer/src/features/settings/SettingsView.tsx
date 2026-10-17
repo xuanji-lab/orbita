@@ -29,11 +29,16 @@ import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from 
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
+  DEFAULT_INTENT_BASE_URL,
+  effectiveIntentSettings,
   type AppSettings,
   type CompactionSetting,
   type ExperimentalFeatureId,
+  type IntentSettings,
   type SettingsPatch,
 } from "@shared/settings";
+import type { IntentHealth } from "@shared/intent-lab";
+import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
 import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
@@ -113,7 +118,7 @@ export function SettingsView(props: {
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
+        <strong style={{ fontSize: "var(--font-size-lg)", fontWeight: "var(--weight-bold)" }}>
           {t.settings.tabs[active.id]}
         </strong>
       </header>
@@ -529,7 +534,7 @@ function General(props: {
 }
 
 /**
- * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，mono、micro、大写加字距，
+ * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，UI 字、sm、semibold，
  * Migration 同用）。最后一组的最后一行不画底线（`.set-group:last-child` 那条 CSS）。
  */
 function SettingGroup(props: { label: string; children: React.ReactNode }) {
@@ -588,9 +593,12 @@ function ExperimentalSettings(props: {
   const language = effectiveLanguage(props.settings.theme, props.settings.language);
   /** 展开哪一张卡的日志（一次至多一张）：默认都收着，只看最近一条 */
   const [openId, setOpenId] = useState<ExperimentalFeatureId | null>(null);
+  // 意图系统（实验）：开关打开才出现设置区（地址 / 渠道 / 连接状态 / 新任务默认）
+  const intentOn = props.settings.experimentalFeatures?.["intent-system"] === true;
   return (
     <div className="set-page">
       <p className="exp-lead">{t.settings.experimentalLead}</p>
+      {intentOn && <IntentSettingsSection settings={props.settings} onChange={props.onChange} />}
       <div className="pv-cards large exp-cards">
         {EXPERIMENTAL_FEATURES.map((feature) => (
           <ExperimentalFeatureCard
@@ -614,6 +622,116 @@ function ExperimentalSettings(props: {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * 意图系统的设置区（实验功能 intent-system，开关打开才渲染）：地址 / 连接状态 /
+ * 渠道二选一 / 新任务默认。连接状态是探活结果（不落盘）：挂载与改地址时各探一次。
+ */
+function IntentSettingsSection(props: {
+  settings: AppSettings;
+  onChange: (patch: SettingsPatch) => void;
+}) {
+  const t = useT();
+  const effective = effectiveIntentSettings(props.settings.intent);
+  const [health, setHealth] = useState<"checking" | IntentHealth | null>("checking");
+  useEffect(() => {
+    setHealth("checking");
+    let cancelled = false;
+    void api.intent.health().then((result) => {
+      if (!cancelled) setHealth(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // 改地址后重探：baseUrl 在依赖里（effective 按它派生）
+  }, [effective.baseUrl]);
+  const patchIntent = (patch: Partial<IntentSettings>): void =>
+    props.onChange({ intent: { ...props.settings.intent, ...patch } });
+  return (
+    <section className="set-group">
+      <h3 className="set-group-title">{t.settings.intentTitle}</h3>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentBaseUrl}</span>
+          <span className="set-row-hint">{t.settings.intentBaseUrlHint}</span>
+        </span>
+        <div className="set-row-ctl">
+          <input
+            className="text-field voice-field"
+            style={{ width: 240 }}
+            value={props.settings.intent?.baseUrl ?? ""}
+            placeholder={DEFAULT_INTENT_BASE_URL}
+            spellCheck={false}
+            onChange={(event) => patchIntent({ baseUrl: event.target.value.trim() })}
+          />
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentConnection}</span>
+        </span>
+        <div className="set-row-ctl">
+          {health === "checking" ? (
+            <span className="set-row-hint">{t.settings.intentChecking}</span>
+          ) : health === null ? (
+            <span className="set-row-hint" style={{ color: "var(--color-danger)" }}>
+              {t.settings.intentOffline}
+            </span>
+          ) : (
+            <span className="set-row-hint">
+              {t.settings.intentOnline(health.main.model, health.qaImported, health.qaIngested)}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentChannel}</span>
+          <span className="set-row-hint">{t.settings.intentChannelHint}</span>
+          {/* 渠道在服务端不可用就就地说（2026-10-15 联调）：/recall 会 400，提示里带上修法 */}
+          {health !== "checking" &&
+            health !== null &&
+            intentChannelUnavailable(effective.channel, health.s3Presets) === true && (
+              <span className="set-row-hint">{t.settings.intentChannelMissing(effective.channel)}</span>
+            )}
+        </span>
+        <div className="set-row-ctl">
+          <span className="set-chips" role="group" aria-label={t.settings.intentChannel}>
+            <Chip
+              active={effective.channel === "proma"}
+              onClick={() => patchIntent({ channel: "proma" })}
+              title={t.settings.intentChannelProma}
+            >
+              {t.settings.intentChannelProma}
+            </Chip>
+            <Chip
+              active={effective.channel === "deepseek"}
+              onClick={() => patchIntent({ channel: "deepseek" })}
+              title={t.settings.intentChannelDeepseek}
+            >
+              {t.settings.intentChannelDeepseek}
+            </Chip>
+          </span>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentNewSessionOn}</span>
+        </span>
+        <div className="set-row-ctl">
+          <span className="set-chips" role="group" aria-label={t.settings.intentNewSessionOn}>
+            <Chip active={effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: true })}>
+              {t.common.on}
+            </Chip>
+            <Chip active={!effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: false })}>
+              {t.common.off}
+            </Chip>
+          </span>
+        </div>
+      </div>
+    </section>
   );
 }
 

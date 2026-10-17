@@ -52,6 +52,11 @@ const ALLOWED_LATIN = new Set([
   "Co-Authored-By",
   // 迁移来源（其他应用的名字）
   "Proma",
+  // 意图系统的本机服务与管线（召回走它；界面里只有名字没有第二写法）
+  "intent-lab",
+  "DeepSeek",
+  "deepseek",
+  "endpoints",
   "Claude",
   "Code",
   // Claude 订阅的档位名（产品自称，不译）与登录域名
