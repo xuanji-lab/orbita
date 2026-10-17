@@ -104,6 +104,10 @@ export function isChannelTool(toolName: string): boolean {
  * 点击、输入、按键（browser_click / browser_type / browser_press）**不在这里**：它们能提交表单、
  * 下单、发消息，走默认的写操作闸门——plan 拒、manual 问、skip 放。不为它们另立名单：
  * decidePermission 对不认识的工具本来就按有副作用处理。
+ *
+ * browser_console_messages / browser_network_requests 同属这里：页面加载成功但内容空白时，
+ * 它们是模型唯一能自己查清原因的只读证据（JS 报错、XHR 401/403、CORS 被拒）；查完要不要重试
+ * 仍由模型决定，工具本身不提交任何东西。
  */
 export const BROWSER_READ_TOOLS = [
   "browser_navigate",
@@ -112,6 +116,8 @@ export const BROWSER_READ_TOOLS = [
   "browser_screenshot",
   "browser_tabs",
   "browser_scroll",
+  "browser_console_messages",
+  "browser_network_requests",
 ] as const;
 
 export function isBrowserReadTool(toolName: string): boolean {

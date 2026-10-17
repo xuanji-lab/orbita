@@ -1578,6 +1578,16 @@ describe("toolCallSummary —— 受管浏览器", () => {
     assert.equal(toolCallSummary("browser_press", { key: "Enter" }), "Enter");
     assert.equal(toolCallSummary("browser_scroll", { direction: "down" }), "down");
   });
+
+  test("诊断工具摘要：控制台说级别、网络说地址与状态范围", () => {
+    assert.equal(toolCallSummary("browser_console_messages", { level: "error" }), "error");
+    assert.equal(toolCallSummary("browser_console_messages", {}), null);
+    assert.equal(toolCallSummary("browser_network_requests", { url: "api" }), "api");
+    assert.equal(toolCallSummary("browser_network_requests", { url: "api", statusMin: 400, statusMax: 499 }), "api (status 400–499)");
+    assert.equal(toolCallSummary("browser_network_requests", { statusMin: 500 }), "status 500–…");
+    assert.equal(toolCallSummary("browser_network_requests", { statusMax: 499 }), "status …–499");
+    assert.equal(toolCallSummary("browser_network_requests", {}), null);
+  });
 });
 
 describe("toolCallSummary —— delegate（子会话 PR4a）", () => {

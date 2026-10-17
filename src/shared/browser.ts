@@ -161,6 +161,24 @@ export interface BrowserRegion {
 export type BrowserScrollDirection = "up" | "down" | "left" | "right";
 
 /**
+ * 控制台消息级别，从低到高。工具过滤用的是「这个级别及以上」——`level: "error"` 就是只看错误。
+ * 映射：CDP 的 `warning` → warn、`assert` → error、`verbose` → debug，其余非标准类型（table、
+ * group、count…）一律算 log。
+ */
+export type BrowserConsoleLevel = "debug" | "log" | "info" | "warn" | "error";
+
+/**
+ * 页面诊断（browser_console_messages / browser_network_requests）每个 tab 每个域保留的
+ * 最近条数上限，同时也是工具 `limit` 参数的上限。
+ *
+ * 200 条：一次页面加载（含重定向与几个失败 XHR）通常在几十条内，200 足够复盘；再大就只是
+ * 让一次工具结果白占模型上下文。
+ */
+export const BROWSER_DIAGNOSTICS_BUFFER_LIMIT = 200;
+/** 工具 `limit` 的默认值：默认给最近 100 条，要更多由模型显式抬到上限 */
+export const BROWSER_DIAGNOSTICS_DEFAULT_LIMIT = 100;
+
+/**
  * agent 的浏览器工具请求（agent 进程 → 主进程，作用于该会话自己的 agent tab）。
  * 读取类、滚动与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）；
  * 点击、输入、按键会改变页面状态（提交表单、下单、发消息），照写操作过闸。
@@ -205,6 +223,23 @@ export type BrowserToolRequest =
   | { action: "scroll"; direction: BrowserScrollDirection; amount?: number; target?: BrowserTarget }
   /** 列出 agent 看得到的 tab：「你的」tab 与本会话的 agent tab（别的会话的 tab 不列） */
   | { action: "tabs" }
+  /**
+   * 控制台消息（CDP 的 Runtime + Log 域）：页面自己的 console 输出、未捕获异常，以及
+   * 浏览器级错误（请求失败、CORS 拒绝——这类只在 Log 域里）。
+   *
+   * **只读 agent 自己的 tab**：「你的」tab 不采集（`tab` 参数在这里没有意义，故不设）。
+   * `level` 是**最低级别**（含以上），`limit` 取最近若干条。采集在工具第一次被调用时才打开。
+   */
+  | { action: "console"; level?: BrowserConsoleLevel; limit?: number }
+  /**
+   * 网络请求（CDP 的 Network 域）：方法、URL、状态码、MIME 类型，以及加载失败原因
+   * （net::ERR_FAILED、CORS…）。过滤同 console：只读 agent 自己的 tab。
+   *
+   * `url` 是不区分大小写的子串匹配；`statusMin` / `statusMax` 是闭区间状态码范围
+   * （如只要 4xx/5xx 就传 statusMin: 400）。**加载失败的条目没有状态码**：一旦给了
+   * 状态码范围，它们不再匹配（想看失败原因就按 url 过滤或不给状态范围）。
+   */
+  | { action: "network"; url?: string; statusMin?: number; statusMax?: number; limit?: number }
   /** request_user_action：把 tab 交给用户，等用户交还（或取消、或这一轮被停掉） */
   | { action: "handoff"; toolCallId: string; reason: string };
 
