@@ -51,11 +51,13 @@ export async function applyBrowserRequest(
   sessionId: string,
   request: BrowserToolRequest,
 ): Promise<BrowserToolOutcome> {
+  // 任何一次 agent 浏览器请求都刷新这个会话 agent tab 的活跃时间（闲置回收看它）
+  sandbox.noteBrowserRequest(sessionId);
   if (request.action === "tabs") {
     await sandbox.agentTab(sessionId);
     return {
       ok: true,
-      text: describeTabs(sandbox.visibleTabs(sessionId), sandbox.onScreenTabId()),
+      text: withNotice(sandbox.takeTabNotice(sessionId), describeTabs(sandbox.visibleTabs(sessionId), sandbox.onScreenTabId())),
       card: { tabId: "", url: "", title: "" },
     };
   }
@@ -69,7 +71,10 @@ export async function applyBrowserRequest(
       error: `No user tab has the id "${userTabId}" — it may have been closed. Call browser_tabs to see the user's tabs and their ids.`,
     };
   }
-  const tab = userTab ?? (await sandbox.agentTab(sessionId));
+  // 用自己的 tab 时，回收 / 崩溃后的那句提示随这次结果一起发给模型（读用户 tab 不取）。
+  // agentTab() 懒建必有返回，这里没有「拿不到 tab」的路径。
+  const tab = userTab === undefined ? await sandbox.agentTab(sessionId) : userTab;
+  const notice = userTab === undefined ? sandbox.takeTabNotice(sessionId) : null;
   const outcome = await sandbox.runOnTab(tab, async (): Promise<BrowserToolOutcome> => {
     if (!sandbox.isLive(tab)) return { ok: false, error: "The browser tab was closed. Call the tool again to reopen it." };
     const contents = tab.view.webContents;
@@ -113,10 +118,17 @@ export async function applyBrowserRequest(
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
   });
+  // 回收 / 崩溃的提示接在结果前面：模型先知道旧页面没了，再看这一条的结果
+  const merged: BrowserToolOutcome =
+    notice === null
+      ? outcome
+      : outcome.ok
+        ? { ...outcome, text: [notice, outcome.text].join("\n") }
+        : { ...outcome, error: `${notice} ${outcome.error}` };
   // 这期间下完、还没告诉过 agent 的文件（导航以外触发的，或上一次没等到的）：附在结果末尾
-  if (!outcome.ok) return outcome;
+  if (!merged.ok) return merged;
   const finished = await sandbox.takeFinishedDownloads(tab);
-  return finished.length === 0 ? outcome : { ...outcome, text: [outcome.text, ...finished].join("\n") };
+  return finished.length === 0 ? merged : { ...merged, text: [merged.text, ...finished].join("\n") };
 }
 
 async function handoff(
@@ -482,4 +494,9 @@ function card(tab: BrowserTab, contents: WebContents) {
 
 function clampInt(value: number, min: number, max: number): number {
   return Math.min(Math.max(Math.round(Number.isFinite(value) ? value : min), min), max);
+}
+
+/** 把回收 / 崩溃的提示接在正文前面；没有提示就原样返回 */
+function withNotice(notice: string | null, text: string): string {
+  return notice === null ? text : `${notice}\n${text}`;
 }
