@@ -130,6 +130,54 @@ test("忙碌只挡回收，不挡闲置判定：交接中（busy）的 tab 即�
   assert.deepEqual(book.reclaimable(), [{ sessionId: "handoff", reason: "idle" }], "忙完了立刻可回收");
 });
 
+test("屏幕上显示中的 tab 不回收：闲置到点也留着，切走之后立刻收", () => {
+  const time = clock();
+  const book = ledger({ now: time.now });
+  book.register("watched");
+  time.advance(IDLE_MS);
+  assert.deepEqual(book.reclaimable(0, "watched"), [], "用户可能正在读这一页，到点也不拆");
+  time.advance(IDLE_MS * 2);
+  assert.deepEqual(book.reclaimable(0, "watched"), [], "一直显示着就一直不拆");
+  assert.deepEqual(book.reclaimable(), [{ sessionId: "watched", reason: "idle" }], "切走（不再传 keep）后按正常规则回收");
+});
+
+test("受保护只挡自己：别的闲置 tab 照常回收", () => {
+  const time = clock();
+  const book = ledger({ now: time.now });
+  book.register("watched");
+  time.advance(1000);
+  book.register("other");
+  time.advance(IDLE_MS);
+  assert.deepEqual(book.reclaimable(0, "watched"), [{ sessionId: "other", reason: "idle" }]);
+});
+
+test("受保护的不参与 LRU 淘汰：最旧的也在屏幕上就淘汰下一个；只剩它时宁可超上限", () => {
+  const time = clock();
+  const book = ledger({ now: time.now, maxTabs: 2 });
+  book.register("old");
+  time.advance(1000);
+  book.register("mid");
+  time.advance(1000);
+  book.register("new");
+  assert.deepEqual(book.reclaimable(0, "old"), [{ sessionId: "mid", reason: "evicted" }], "old 被跳过，mid 顶上");
+
+  const only = ledger({ now: time.now, maxTabs: 1 });
+  only.register("shown");
+  assert.deepEqual(only.reclaimable(1, "shown"), [], "只剩受保护的那张时，宁可超上限也不拆它");
+  time.advance(1000);
+  only.register("new");
+  assert.deepEqual(only.reclaimable(0, "shown"), [{ sessionId: "new", reason: "evicted" }], "不保护的那个照常按上限淘汰");
+});
+
+test("受保护的不拿来给新 tab 腾位：reserve 绕开它，淘汰别人", () => {
+  const time = clock();
+  const book = ledger({ now: time.now, maxTabs: 2 });
+  book.register("shown");
+  time.advance(1000);
+  book.register("other");
+  assert.deepEqual(book.reclaimable(1, "shown"), [{ sessionId: "other", reason: "evicted" }]);
+});
+
 test("崩溃后重建：forget + register 等于一张新 tab，回到最活跃、busy 归零", () => {
   const time = clock();
   const book = ledger({ now: time.now, maxTabs: 2 });

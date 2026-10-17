@@ -20,6 +20,8 @@
  *   - 用户关窗 = 隐藏：tab、历史、登录态都保留；agent 在隐藏的窗口里照常工作。
  *   - agent tab 有回收：闲置到点、或全局超上限时按 LRU 淘汰，都走懒建路径重建
  *     （决策在 agent-tab-ledger.ts，定时扫描在这里）。渲染进程崩了也按「重建」处理。
+ *     屏幕上正显示着的那张不回收（用户可能在读，等切走 / 窗口隐藏后再算）；用户在这张
+ *     tab 上的点击、滚动、键盘也算活跃，不只认 agent 请求。
  *   - 应用退出（`prepareQuit` 之后）或最后一个主窗口关闭（`dispose`）才真正销毁。
  *
  * 安全：网页 `sandbox` + `contextIsolation`、不加载 preload；partition 级拒绝一切网页权限请求
@@ -402,8 +404,10 @@ export class BrowserSandbox {
       this.markAgentTabCrashed(existing);
       this.destroyTab(existing);
     }
-    // 上限：先给新 tab 腾位置，淘汰最久未活跃的（闲置的一并回收）
-    for (const victim of this.ledger.reclaimable(1)) this.reclaimAgentTab(victim.sessionId, victim.reason);
+    // 上限：先给新 tab 腾位置，淘汰最久未活跃的（闲置的一并回收；屏幕上那张跳过）
+    for (const victim of this.ledger.reclaimable(1, this.onScreenAgentSession())) {
+      this.reclaimAgentTab(victim.sessionId, victim.reason);
+    }
     const tab = this.createTab({ kind: "agent", sessionId });
     this.ledger.register(sessionId);
     void this.deps
@@ -433,6 +437,18 @@ export class BrowserSandbox {
     const window = this.window;
     if (window === null || window.isDestroyed() || !window.isVisible() || window.isMinimized()) return null;
     return this.shownTabId === "" ? null : this.shownTabId;
+  }
+
+  /**
+   * 屏幕上正显示着的 agent tab 所属会话：回收要跳过它。用户可能正在这一页上读东西，
+   * 页面凭空消失比多占一点内存糟得多（2026-10-14 评审 #222 第 1 条）。窗口隐藏 / 最小化
+   * 时不算「屏幕上看得到」，照常按闲置与上限回收。
+   */
+  private onScreenAgentSession(): string {
+    const tabId = this.onScreenTabId();
+    if (tabId === null) return "";
+    const tab = this.tabs.get(tabId);
+    return tab !== undefined && tab.owner.kind === "agent" ? tab.owner.sessionId : "";
   }
 
   /** agent 看得到的 tab：用户的全部 tab + 这个会话自己的 agent tab。别的会话的 tab 不给——会话之间不互看 */
@@ -689,6 +705,10 @@ export class BrowserSandbox {
       contents.on("will-prevent-unload", (event) => event.preventDefault());
       // 渲染进程崩了：清掉这张半死的 tab，下次请求重建并提示模型（见 onAgentTabGone）
       contents.on("render-process-gone", (_event, details) => this.onAgentTabGone(tab, details.reason));
+      // 用户在这张 tab 上的操作也算活跃：模型把页面交还之后，用户常在这里接着读，
+      // 闲置计时不能只认 agent 请求（2026-10-14 评审 #222 第 2 条）。input-event 覆盖
+      // 点击、滚轮 / 手势滚动、键盘与触摸——滚动没有单独的主进程事件，靠它兜住。
+      contents.on("input-event", () => this.ledger.touch(owner.sessionId));
     }
     this.guardContents(contents);
     this.wireShortcuts(contents);
@@ -726,9 +746,11 @@ export class BrowserSandbox {
     this.sweepTimer.unref();
   }
 
-  /** 扫描一轮：账本给出该回收的会话（闲置到点 + 超上限的 LRU 尾部），逐个拆掉 */
+  /** 扫描一轮：账本给出该回收的会话（闲置到点 + 超上限的 LRU 尾部），逐个拆掉。屏幕上那张跳过 */
   private sweepAgentTabs(): void {
-    for (const victim of this.ledger.reclaimable()) this.reclaimAgentTab(victim.sessionId, victim.reason);
+    for (const victim of this.ledger.reclaimable(0, this.onScreenAgentSession())) {
+      this.reclaimAgentTab(victim.sessionId, victim.reason);
+    }
   }
 
   /** 回收一个 agent tab：留一句提示，下次请求重建后发给模型 */

@@ -10,6 +10,10 @@
  *   2. 上限：全局 agent tab 数超过 maxTabs 时，按 LRU 淘汰最久未活跃的
  *   3. 忙碌保护：一次工具调用还没结束（正在导航 / 交接）的 tab 绝不回收——
  *      宁可暂时超上限，也不拆一次跑着的工具调用
+ *
+ * 另有一条保护（不是回收）：屏幕上正显示着的那张 agent tab 也不回收——用户可能正在读
+ * 这一页，关掉就是「页面无故消失」。等用户切走（或窗口隐藏）后，下一次扫描再按上面
+ * 三条规则算（2026-10-14 评审 #222 第 1 条）。
  */
 
 /** 回收原因：闲置到点 / 超出全局上限被 LRU 淘汰 */
@@ -88,11 +92,14 @@ export class AgentTabLedger {
    *
    * reserve 给「马上要新建的那张 tab」留位置（sandbox 建新 tab 前传 1）。闲置的一定比
    * 没闲置的老，所以返回顺序整体就是 LRU。忙碌的一律跳过。
+   *
+   * keepSessionId：屏幕上正显示着的那张 tab 所属会话，同样跳过——它既不按闲置回收，也不
+   * 被 LRU 拿来腾位置（宁可暂时超上限）。传空串 = 没有要保护的那张。
    */
-  reclaimable(reserve = 0): AgentTabReclaimVictim[] {
+  reclaimable(reserve = 0, keepSessionId = ""): AgentTabReclaimVictim[] {
     const now = this.now();
     const candidates = [...this.entries.entries()]
-      .filter(([, entry]) => !entry.busy)
+      .filter(([sessionId, entry]) => !entry.busy && sessionId !== keepSessionId)
       .sort((a, b) => a[1].lastActiveAt - b[1].lastActiveAt);
     const victims: AgentTabReclaimVictim[] = [];
     const chosen = new Set<string>();
