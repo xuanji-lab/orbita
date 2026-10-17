@@ -156,6 +156,164 @@
   pointer-events: none;
 }
 
+/* ── 俄罗斯方块：四格方块（tetris 形态，TetrisPiece）───────────────────
+   形状几何在 tetris-geometry.ts（纯函数）。颜色只从 token 派生：doc / slides /
+   sheet 三族用 --color-filetype-*（填充 tint 12% 掺面板底、描边全色 75%、接缝 35%、
+   图标全色）；其余中性（玻璃底 + 正墨 16% 描边）。 */
+.bh-piece {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  --tp-fill: var(--glass-bg);
+  --tp-stroke: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
+  --tp-seam: color-mix(in srgb, var(--color-text-primary) 14%, transparent);
+  --tp-icon: var(--color-text-tertiary);
+}
+
+.bh-piece[data-tone="doc"] {
+  --tp-fill: color-mix(in srgb, var(--color-filetype-doc) 12%, var(--color-bg-panel));
+  --tp-stroke: color-mix(in srgb, var(--color-filetype-doc) 75%, transparent);
+  --tp-seam: color-mix(in srgb, var(--color-filetype-doc) 35%, transparent);
+  --tp-icon: var(--color-filetype-doc);
+}
+
+.bh-piece[data-tone="slides"] {
+  --tp-fill: color-mix(in srgb, var(--color-filetype-slides) 12%, var(--color-bg-panel));
+  --tp-stroke: color-mix(in srgb, var(--color-filetype-slides) 75%, transparent);
+  --tp-seam: color-mix(in srgb, var(--color-filetype-slides) 35%, transparent);
+  --tp-icon: var(--color-filetype-slides);
+}
+
+.bh-piece[data-tone="sheet"] {
+  --tp-fill: color-mix(in srgb, var(--color-filetype-sheet) 12%, var(--color-bg-panel));
+  --tp-stroke: color-mix(in srgb, var(--color-filetype-sheet) 75%, transparent);
+  --tp-seam: color-mix(in srgb, var(--color-filetype-sheet) 35%, transparent);
+  --tp-icon: var(--color-filetype-sheet);
+}
+
+/* 轮廓与接缝：几何由 JS 算好，这里只上色 */
+.bh-piece-shape {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.bh-piece-fill {
+  fill: var(--tp-fill);
+  stroke: var(--tp-stroke);
+  stroke-width: 1;
+}
+
+.bh-piece-seam {
+  stroke: var(--tp-seam);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+/* 名字行：满高 30px，图标 + 名字（省略）+ 行尾 .ext；移除键悬停显形不占位 */
+.bh-piece-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 9px;
+  position: absolute;
+  min-width: 0;
+  font-size: var(--font-size-caption);
+}
+
+.bh-piece-label .orbita-icon {
+  flex: 0 0 auto;
+  color: var(--tp-icon);
+}
+
+.bh-piece-name {
+  color: var(--color-text-primary);
+}
+
+.bh-piece-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  color: var(--color-text-tertiary);
+}
+
+.bh-piece-uncopied {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-micro);
+  color: var(--color-warning);
+}
+
+.bh-piece-x {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-standard);
+}
+
+.bh-cell:hover .bh-piece-x,
+.bh-piece-x:focus-visible {
+  opacity: 1;
+}
+
+/* 凸块：扩展名（大写、mono）；目录这版留空——子项数拿不到，不为它加 IPC */
+.bh-piece-nub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-micro);
+  letter-spacing: 0.04em;
+  color: var(--tp-icon);
+}
+
+/* 截图横幅：4×2 缩略图（圆角与普通块的轮廓同半径；缩进 GAP/2 与轮廓对齐） */
+.bh-piece-thumb {
+  display: block;
+  position: absolute;
+  /* GAP/2 = 2px：与四格方块可见轮廓的内缩量一致 */
+  inset: 2px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-bg-muted);
+  cursor: zoom-in;
+}
+
+.bh-piece-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bh-piece-x-corner {
+  top: 6px;
+  right: 6px;
+  transform: none;
+}
+
 /* ── 已发送消息顶上的缩小快照：外层占缩后的尺寸，内层整体 scale ─────────── */
 .bh-sent {
   position: relative;

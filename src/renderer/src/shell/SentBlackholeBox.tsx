@@ -2,9 +2,11 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { FileChip } from "./composer-material-stack.tsx";
 import { ImageLightbox } from "./ImageLightbox";
 import { ImageThumb } from "./ImageThumb";
+import { TetrisPiece } from "./TetrisPiece.tsx";
 import { imageSrc } from "./composer-images.ts";
 import { boxSpan, flyBlackholeInto } from "./BlackholeBox.tsx";
 import {
+  BLACKHOLE_GAP_PX,
   BLACKHOLE_SENT_SCALE,
   BLACKHOLE_STEP_PX,
   blackholeSeedKey,
@@ -14,6 +16,7 @@ import {
   packPlacements,
   type MaterialBoxStyle,
 } from "./blackhole-layout.ts";
+import { tetrisGeometry, tetrisSpan, type TetrisGeometry } from "./tetris-geometry.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import { useT } from "../locale.ts";
 
@@ -26,7 +29,7 @@ import { useT } from "../locale.ts";
  * 写任何布局。列数取消息列的宽（与输入框同一个 --content-max-width），整盒按
  * BLACKHOLE_SENT_SCALE 等比缩成一张快照、贴右（用户消息靠右）。不设行数上限。
  *
- * 落位模式跟形态走（黑洞 = 最低列位，俄罗斯方块 = 纯随机）：随机种子键用与输入框
+ * 落位模式跟形态走（黑洞 = 最低列位，俄罗斯方块 = 拼合）：种子键用与输入框
  * 同一条公式（blackholeSeedKey——截图按组内序号、文件按路径）。**布局不落盘**，
  * 用户后来切换形态 / 开关，旧消息的快照会按当下的形态重算——接受这一点。
  *
@@ -56,17 +59,23 @@ export function SentBlackholeBox(props: {
   }, []);
 
   const columns = columnsForWidth(width);
+  const tetris = props.style === "tetris";
   const items = [
     ...props.images.map((image, index) => ({ kind: "image" as const, name: "", image, index })),
     ...props.files.map((file) => ({ kind: file.kind, name: file.name, file })),
   ];
+  // 俄罗斯方块形态：四格方块几何只凭附件清单重算（同一输入同一结果），与输入框逐块一致
+  const geoByIndex = items.map((item) => (tetris ? tetrisGeometry({ kind: item.kind, name: item.name, columns }) : null));
   const placed = packPlacements(
-    items.map((item) => ({
-      ...boxSpan({ kind: item.kind, name: item.name }, columns),
-      seed: item.kind === "image" ? blackholeSeedKey({ kind: "image", index: item.index }) : blackholeSeedKey({ kind: item.kind, path: item.file.path }),
-    })),
+    items.map((item, index) => {
+      const geo = geoByIndex[index] ?? null;
+      return {
+        ...(geo !== null ? tetrisSpan(geo) : boxSpan({ kind: item.kind, name: item.name }, columns)),
+        seed: item.kind === "image" ? blackholeSeedKey({ kind: "image", index: item.index }) : blackholeSeedKey({ kind: item.kind, path: item.file.path }),
+      };
+    }),
     columns,
-    props.style === "tetris" ? "random" : "lowest",
+    tetris ? "fit" : "lowest",
   );
   const { cols, rows } = packedExtent(placed);
   const innerWidth = cellsToPx(cols);
@@ -98,6 +107,7 @@ export function SentBlackholeBox(props: {
             {items.map((item, index) => {
               const p = placed[index];
               if (p === undefined) return null;
+              const geo: TetrisGeometry | null = geoByIndex[index] ?? null;
               return (
                 <div
                   key={item.kind === "image" ? `image:${item.index}` : `file:${index}`}
@@ -105,14 +115,33 @@ export function SentBlackholeBox(props: {
                     cells.current[index] = el;
                   }}
                   className="bh-cell"
-                  style={{
-                    left: p.x * BLACKHOLE_STEP_PX,
-                    bottom: p.y * BLACKHOLE_STEP_PX,
-                    width: cellsToPx(p.w),
-                    height: cellsToPx(p.h),
-                  }}
+                  style={
+                    geo !== null
+                      ? {
+                          left: p.x * BLACKHOLE_STEP_PX - BLACKHOLE_GAP_PX / 2,
+                          bottom: p.y * BLACKHOLE_STEP_PX - BLACKHOLE_GAP_PX / 2,
+                          width: geo.cols * BLACKHOLE_STEP_PX,
+                          height: geo.rows * BLACKHOLE_STEP_PX,
+                        }
+                      : {
+                          left: p.x * BLACKHOLE_STEP_PX,
+                          bottom: p.y * BLACKHOLE_STEP_PX,
+                          width: cellsToPx(p.w),
+                          height: cellsToPx(p.h),
+                        }
+                  }
                 >
-                  {item.kind === "image" ? (
+                  {geo !== null ? (
+                    <TetrisPiece
+                      geo={geo}
+                      name={item.kind === "image" ? "" : item.file.name}
+                      kind={item.kind === "dir" ? "dir" : "file"}
+                      path={item.kind === "image" ? undefined : item.file.path}
+                      thumbSrc={item.kind === "image" ? imageSrc(item.image) : undefined}
+                      openLabel={item.kind === "image" ? t.lightbox.open : undefined}
+                      onOpen={item.kind === "image" ? () => setViewing(item.index) : undefined}
+                    />
+                  ) : item.kind === "image" ? (
                     <ImageThumb
                       src={imageSrc(item.image)}
                       name=""

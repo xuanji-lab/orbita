@@ -4,9 +4,11 @@ import { createPortal } from "react-dom";
 import { FileChip } from "./composer-material-stack.tsx";
 import { ImageLightbox } from "./ImageLightbox";
 import { ImageThumb } from "./ImageThumb";
+import { TetrisPiece } from "./TetrisPiece.tsx";
 import { imageSrc } from "./composer-images.ts";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import {
+  BLACKHOLE_GAP_PX,
   BLACKHOLE_STEP_PX,
   blackholeSeedKey,
   blackholeSpan,
@@ -27,6 +29,7 @@ import {
   type BlackholeSpan,
   type MaterialBoxStyle,
 } from "./blackhole-layout.ts";
+import { tetrisGeometry, tetrisSpan, type TetrisGeometry } from "./tetris-geometry.ts";
 import { useT } from "../locale.ts";
 
 /**
@@ -37,8 +40,9 @@ import { useT } from "../locale.ts";
  * 两种形态（2026-10-12 用户裁决：互斥的两个实验功能，不是父子）：
  * - `blackhole`：全套特效——拖拽悬停时输入卡中心变黑，替身螺旋缩进中心，会话顶端
  *   开一道舷窗，材料从缝里掉下来；发送时盒里的块飞进新消息。
- * - `tetris`：不演任何黑洞特效——新块从盒子上缘直落（短落程 + 回弹），落位纯随机
- *   （确定性种子，见 blackhole-layout.ts 的 dropOne）；盒口有沿（CSS 裁切，盒外不画）。
+ * - `tetris`：不演任何黑洞特效——新块从盒子上缘直落（短落程 + 回弹），块是四格
+ *   方块（形状随文件类型，见 tetris-geometry.ts），落位拼合（打分挑列位，确定性
+ *   种子，见 blackhole-layout.ts 的 dropOne）；盒口有沿（CSS 裁切，盒外不画）。
  * 共用的是盒子的骨架：形状、重力堆叠、删除补位、限高与盒内滚动、已发送消息的缩小快照。
  */
 export const MaterialBoxContext = createContext<MaterialBoxStyle | null>(null);
@@ -316,8 +320,9 @@ export function BlackholeBox(props: {
   const t = useT();
   const boxRef = props.boxRef;
   const blackholeFx = props.style === "blackhole";
-  /** 落位模式跟形态走：俄罗斯方块纯随机，黑洞取最低列位 */
-  const dropMode: BlackholeDropMode = props.style === "tetris" ? "random" : "lowest";
+  const tetrisStyle = props.style === "tetris";
+  /** 落位模式跟形态走：俄罗斯方块拼合（打分挑列位），黑洞取最低列位 */
+  const dropMode: BlackholeDropMode = tetrisStyle ? "fit" : "lowest";
   const [columns, setColumns] = useState(0);
   const [cap, setCap] = useState(Number.POSITIVE_INFINITY);
   const [viewing, setViewing] = useState<number | null>(null);
@@ -368,11 +373,32 @@ export function BlackholeBox(props: {
         : blackholeSeedKey({ kind: item.kind, path: item.ref.path }),
     );
   }
+  // 俄罗斯方块形态：每块的四格方块几何（形状 / 名字拆分 / 外轮廓），同一输入同一
+  // 结果——渲染与落位共用这一份，不会各算各的
+  const geoById = new Map<string, TetrisGeometry>();
+  if (tetrisStyle) {
+    for (const item of items) {
+      geoById.set(
+        item.id,
+        tetrisGeometry({
+          kind: item.kind,
+          name: item.name,
+          columns,
+          extraPx: item.kind !== "image" && item.ref.uncopied === true ? UNCOPIED_EXTRA_PX : 0,
+        }),
+      );
+    }
+  }
   const spanById = new Map(
-    items.map((item) => [
-      item.id,
-      boxSpan({ kind: item.kind, name: item.name, uncopied: item.kind !== "image" && item.ref.uncopied === true }, columns),
-    ]),
+    items.map((item) => {
+      const geo = geoById.get(item.id);
+      return [
+        item.id,
+        geo !== undefined
+          ? tetrisSpan(geo)
+          : boxSpan({ kind: item.kind, name: item.name, uncopied: item.kind !== "image" && item.ref.uncopied === true }, columns),
+      ];
+    }),
   );
   // 放出队列是异步跑的：它读的清单与形状必须是最新一次渲染的，不能是起跑那次闭包里的
   const latest = useRef({ ids, spanById, seedById });
@@ -725,10 +751,28 @@ export function BlackholeBox(props: {
           {items.map((item) => {
             const placedAt = placed.get(item.id);
             const span = spanOf(item.id);
+            const tetrisGeo = geoById.get(item.id);
             // 没放出的块：按形状的尺寸藏在盒底（不可见、不可聚焦），吸入时拿它的样子做替身
             const p = placedAt ?? { x: 0, y: 0, w: Math.min(span.col, Math.max(1, columns)), h: span.row };
             // 刚放出、还没起跳的块先藏着（起跳动画的 backwards 填充接手）
             const hidden = placedAt === undefined || f.released.includes(item.id);
+            // 俄罗斯方块的块：外接框含尾步进、四边各让 GAP/2，相邻块的可见轮廓
+            // 之间正好留一格间距；黑洞的块沿用 cellsToPx（无尾步进）
+            const cellStyle = tetrisGeo
+              ? {
+                  left: p.x * BLACKHOLE_STEP_PX - BLACKHOLE_GAP_PX / 2,
+                  bottom: p.y * BLACKHOLE_STEP_PX - BLACKHOLE_GAP_PX / 2,
+                  width: tetrisGeo.cols * BLACKHOLE_STEP_PX,
+                  height: tetrisGeo.rows * BLACKHOLE_STEP_PX,
+                  visibility: hidden ? ("hidden" as const) : undefined,
+                }
+              : {
+                  left: p.x * BLACKHOLE_STEP_PX,
+                  bottom: p.y * BLACKHOLE_STEP_PX,
+                  width: cellsToPx(p.w),
+                  height: cellsToPx(p.h),
+                  visibility: hidden ? ("hidden" as const) : undefined,
+                };
             return (
               <div
                 key={item.id}
@@ -740,15 +784,22 @@ export function BlackholeBox(props: {
                 data-bh-id={item.id}
                 data-staged={placedAt === undefined ? "" : undefined}
                 aria-hidden={placedAt === undefined ? true : undefined}
-                style={{
-                  left: p.x * BLACKHOLE_STEP_PX,
-                  bottom: p.y * BLACKHOLE_STEP_PX,
-                  width: cellsToPx(p.w),
-                  height: cellsToPx(p.h),
-                  visibility: hidden ? "hidden" : undefined,
-                }}
+                style={cellStyle}
               >
-                {item.kind === "image" ? (
+                {tetrisGeo !== undefined ? (
+                  <TetrisPiece
+                    geo={tetrisGeo}
+                    name={item.name}
+                    kind={item.kind === "dir" ? "dir" : "file"}
+                    path={item.kind === "image" ? undefined : item.ref.path}
+                    uncopied={item.kind !== "image" && item.ref.uncopied === true ? true : undefined}
+                    onRemove={item.remove}
+                    removeLabel={item.kind === "image" ? t.composer.removeImage : t.composer.removeFile}
+                    thumbSrc={item.kind === "image" ? imageSrc(item.image.image) : undefined}
+                    openLabel={item.kind === "image" ? t.lightbox.open : undefined}
+                    onOpen={item.kind === "image" ? () => setViewing(images.indexOf(item)) : undefined}
+                  />
+                ) : item.kind === "image" ? (
                   <ImageThumb
                     src={imageSrc(item.image.image)}
                     name={item.name}
