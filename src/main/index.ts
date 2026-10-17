@@ -34,6 +34,8 @@ import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { UsageLedger } from "./usage/ledger.ts";
 import { registerUsageIpc } from "./usage/ipc.ts";
+import { Updater } from "./updater/service.ts";
+import { registerUpdaterIpc } from "./updater/ipc.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -643,6 +645,21 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
+
+  /*
+   * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包产物才接线，
+   * 启动 10s 后首查 + 每 4h 一次 + 设置页的手动检查；autoDownload=false，下载与安装都由
+   * 用户那一下触发。beforeInstall 注入 agentHost.dispose——安装程序要替换应用文件，
+   * agent utility 进程是同一个 electron.exe，压着文件会让 NSIS 静默安装失败；
+   * 下面的 before-quit 里还有同一条 dispose，重入幂等。
+   */
+  const updater = new Updater({
+    packaged: app.isPackaged,
+    version: app.getVersion(),
+    beforeInstall: () => agentHost.dispose(),
+  });
+  registerUpdaterIpc(updater);
+  updater.start();
 
   app.on("before-quit", () => {
     appTray?.beginQuit();
