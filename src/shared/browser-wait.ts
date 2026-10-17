@@ -207,18 +207,24 @@ export function waitSelectorInvalidFallback(
  * 轮询等待的骨架：探针说「到了」就返回命中，deadline 到点返回未命中，选择器非法立即返回错误。
  * 探针由调用方给（主进程那侧就是一次 CDP `Runtime.evaluate`）——等待骨架不碰 Electron，
  * 能按真实时钟测；探针自己报错（页面正在换文档、崩了）不算结果，交给下一轮。
+ *
+ * 可选的绝对 deadline：同一次等待里探针报「选择器非法」后要降级重等（调用方会再进来一次），
+ * 计时不能跟着重来——第一轮探针卡了几秒才回结果时，重启计时会把总耗时推到接近两倍 timeoutMs，
+ * 超过 broker 的余量（2026-10-17 评审）。给定 deadline 时起点由它反推（降级沿用同一个
+ * spec.timeoutMs，见 waitSelectorInvalidFallback），elapsedMs 报的仍是整个等待的耗时。
  */
 export async function waitUntilHit(
   probe: () => Promise<BrowserWaitSample | { error: "invalid-selector" } | null>,
   spec: BrowserWaitSpec,
+  deadline?: number,
 ): Promise<{ hit: boolean; elapsedMs: number } | { error: "invalid-selector" }> {
-  const started = Date.now();
-  const deadline = started + spec.timeoutMs;
+  const end = deadline ?? Date.now() + spec.timeoutMs;
+  const started = end - spec.timeoutMs;
   for (;;) {
     const sample = await probe();
     if (sample !== null && "error" in sample) return { error: "invalid-selector" };
     if (sample !== null && waitSampleHit(sample, spec)) return { hit: true, elapsedMs: Date.now() - started };
-    const left = deadline - Date.now();
+    const left = end - Date.now();
     if (left <= 0) return { hit: false, elapsedMs: Date.now() - started };
     await delay(Math.min(WAIT_POLL_MS, left));
   }

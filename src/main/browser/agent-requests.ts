@@ -411,7 +411,8 @@ async function observe(
  * 1. 每次 Runtime.evaluate 都是毫秒级的探针，且每轮的超时夹到「离 deadline 还剩多少」（上限仍是
  *    cdp.ts 的 10 秒）——「卡死的页面不能把 agent 的一轮拖死」这条护栏不为等待放宽（页内长 Promise
  *    要它放宽到 timeoutMs，卡死的页面就会把一轮拖到 30 秒）。总时长由这里自己的 deadline 控制
- *    （≤ WAIT_MAX_TIMEOUT_MS），收尾最多多一个探针下限（250ms）。
+ *    （≤ WAIT_MAX_TIMEOUT_MS），收尾最多多一个探针下限（250ms）；选择器非法后的降级重等沿用同一个
+ *    deadline，不额外续一个 timeoutMs。
  * 2. 等待期间页面换文档（点击触发跳转、SPA 重建执行上下文）时，旧文档里的长 Promise 会连同执行
  *    上下文一起销毁、报错返回；分段探针只把那一轮当「还没到」，下一轮在新文档上接着等。
  *
@@ -425,12 +426,12 @@ async function waitFor(
   const parsed = parseWaitSpec(request);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   let { spec, note } = parsed;
-  // 每轮探针按剩余时间夹超时：接近 deadline 的那一轮不会吃满 10 秒命令超时，broker 的
-  // timeoutMs + 余量才够用（2026-10-14 评审）。
-  const waitOnce = () => {
-    const deadline = Date.now() + spec.timeoutMs;
-    return waitUntilHit(() => probeWait(contents, spec, deadline), spec);
-  };
+  // deadline 只算一次：选择器非法时降级重等的第二轮沿用它，计时不重启（2026-10-17 评审——第一轮
+  // 探针卡了几秒才报回非法选择器时，重启计时会把总耗时推到接近两倍 timeoutMs，吃掉 broker 的余量）。
+  // 每轮探针也按这个 deadline 夹超时：接近 deadline 的那一轮不会吃满 10 秒命令超时
+  // （2026-10-14 评审）。降级不会改 timeoutMs（waitSelectorInvalidFallback），所以第二轮照用。
+  const deadline = Date.now() + parsed.spec.timeoutMs;
+  const waitOnce = () => waitUntilHit(() => probeWait(contents, spec, deadline), spec, deadline);
   let outcome = await waitOnce();
   if ("error" in outcome) {
     // 选择器非法：同一次等待里还有 text 条件就丢掉选择器重等 text（结果里说明），

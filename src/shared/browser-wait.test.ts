@@ -339,6 +339,8 @@ describe("formatWaitResult", () => {
 });
 
 describe("waitUntilHit", () => {
+  const delayMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
   const specOf = (input: Parameters<typeof parseWaitSpec>[0]) => {
     const parsed = parseWaitSpec(input);
     if (!parsed.ok) throw new Error(parsed.error);
@@ -391,6 +393,45 @@ describe("waitUntilHit", () => {
   test("选择器非法：立即返回错误，不等超时", async () => {
     const outcome = await waitUntilHit(async () => ({ error: "invalid-selector" }), specOf({ selector: "#r", timeoutMs: 30_000 }));
     assert.deepEqual(outcome, { error: "invalid-selector" });
+  });
+
+  test("给定 deadline：降级重等不重启计时，elapsedMs 是整个等待的耗时", async () => {
+    const timeoutMs = 600;
+    const spec = specOf({ text: "3 results", timeoutMs });
+    const deadline = Date.now() + timeoutMs;
+    let calls = 0;
+    const probe = async () => {
+      calls += 1;
+      if (calls > 1) return { selector: null, text: true };
+      // 第一轮慢：页面卡了几秒才回「选择器非法」的缩影（这里压到 400ms）
+      await delayMs(400);
+      return { error: "invalid-selector" as const };
+    };
+    assert.deepEqual(await waitUntilHit(probe, spec, deadline), { error: "invalid-selector" });
+    const second = await waitUntilHit(probe, spec, deadline);
+    assert.ok(!("error" in second));
+    assert.equal(second.hit, true);
+    // 起点仍是第一轮之前：重启计时的话这里只剩几十毫秒
+    assert.ok(second.elapsedMs >= 400, `elapsed=${second.elapsedMs}`);
+  });
+
+  test("第一轮就把时间花光后降级重等：到点即返回，不再重来一个 timeoutMs", async () => {
+    const timeoutMs = WAIT_MIN_TIMEOUT_MS;
+    const spec = specOf({ text: "3 results", timeoutMs });
+    const deadline = Date.now() + timeoutMs;
+    let calls = 0;
+    const probe = async () => {
+      calls += 1;
+      if (calls > 1) return { selector: null, text: false };
+      await delayMs(timeoutMs + 50);
+      return { error: "invalid-selector" as const };
+    };
+    assert.deepEqual(await waitUntilHit(probe, spec, deadline), { error: "invalid-selector" });
+    const second = await waitUntilHit(probe, spec, deadline);
+    assert.ok(!("error" in second));
+    assert.equal(second.hit, false);
+    assert.equal(calls, 2, "到点后只再探一轮，不接着轮询");
+    assert.ok(second.elapsedMs < 2 * timeoutMs, `elapsed=${second.elapsedMs}`);
   });
 });
 
