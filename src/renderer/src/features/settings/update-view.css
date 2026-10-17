@@ -1,0 +1,124 @@
+/*
+ * 「软件更新」分组（UpdateCard.tsx）的私有样式。
+ *
+ * 状态行不新造卡片语言：它就是一行 .set-row——名字在左，状态用「图标 + 文字」讲，
+ * 右 hem 只放当前唯一的主操作。这些值只服务这一个功能，所以住在功能自己的 css 里，
+ * 不进 tokens/（设计系统 *Implementation rules*）。
+ * 状态化样式（hover / 展开 / 出错色）一律写在这里，组件不碰 outline 与 hover 态。
+ */
+
+/* 机器事实：版本号、MB 数——等宽字体，数字跳动时不左右晃 */
+.upd-mono {
+  font-family: var(--font-family-business);
+}
+
+/* 状态行：图标 + 文字 + 里头嵌的机器事实。次级灰是常态，出错才转红 */
+.upd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.upd-status[data-tone="error"] {
+  color: var(--color-danger);
+}
+
+/* 下载进度：4px 细轨 + accent 填充——accent 在这里仍是「进行中的主操作」这唯一职责 */
+.upd-progress {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-hover);
+  overflow: hidden;
+}
+
+.upd-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+/* 更新说明：默认折叠，点开是 muted 底的一块（不是新卡）——发布正文按行拆成条目，
+   左侧一条独立的图标轨道（原型版式 B，2026-10-18 用户选定） */
+.upd-notes {
+  grid-column: 1 / -1;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+/* 图标列是一条独立轨道（grid 的第一列），图标垂直居中于对应条目；
+   条目之间的细分隔线画在行间空隙正中，最后一条不画 */
+.upd-notes-rail {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-2);
+}
+
+/* 图标只当条目符号与示意：一律 currentColor + tertiary，不染色、不进 accent。
+   没有图标（或名字没登记）的条目也占着这一格，正文列才不会参差不齐 */
+.upd-note-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  padding: 0 3px;
+  color: var(--color-text-tertiary);
+}
+
+.upd-notes-rail .upd-note-icon:not(:nth-last-child(-n + 2))::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 4px);
+  width: 10px;
+  height: 1px;
+  transform: translateX(-50%);
+  background: var(--color-border-subtle);
+}
+
+/* 「更新内容」展开器：文字键，不是按钮形状——hover 只提亮字色 */
+.upd-notes-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.upd-notes-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+/* 展开后箭头翻过来，方向由 aria-expanded 决定（状态归 CSS） */
+.upd-notes-toggle[aria-expanded="true"] .orbita-icon {
+  transform: rotate(180deg);
+}
+
+/* 主 / 次操作的尺寸：颜色与状态照 .btn-accent / .quiet-control 两个配方走，
+   这里只补「带图标的中等行内按钮」这一处局部尺寸，不另立配方 */
+.upd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+}

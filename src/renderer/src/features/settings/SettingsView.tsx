@@ -21,8 +21,9 @@ import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
-import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
+import { SettingGroup, SettingRow } from "./SettingRow";
+import { UpdateCard } from "./UpdateCard";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
@@ -529,49 +530,8 @@ function General(props: {
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
       </SettingGroup>
-    </div>
-  );
-}
-
-/**
- * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，UI 字、sm、semibold，
- * Migration 同用）。最后一组的最后一行不画底线（`.set-group:last-child` 那条 CSS）。
- */
-function SettingGroup(props: { label: string; children: React.ReactNode }) {
-  return (
-    <section className="set-group">
-      <span className="section-label">{props.label}</span>
-      {props.children}
-    </section>
-  );
-}
-
-/**
- * 一条设置：左边只有名字（说明收进旁边的 info 悬停），右边是控件与它的效果预览。
- * **直接坐在内容面上，靠发丝线分隔，不套第二张卡**——玻璃已经分了三层，再加一层只会把层级讲糊。
- *
- * `note` 是名字下方可选的一行状态（Data directory 的 Reveal 失败原因）——它不是说明，
- * 是这一次操作的结果，所以常驻、不进悬停。
- */
-function SettingRow(props: {
-  name: string;
-  info?: React.ReactNode;
-  note?: React.ReactNode;
-  /** 挂在整行上（迁移页三步清单跳过来时滚动 / 高亮 / 聚焦用） */
-  rowRef?: React.Ref<HTMLDivElement>;
-  children: React.ReactNode;
-}) {
-  const t = useT();
-  return (
-    <div className="set-row" ref={props.rowRef}>
-      <span className="set-row-head">
-        <span className="set-row-name">
-          {props.name}
-          {props.info !== undefined && <InfoTip label={t.settings.aboutSetting(props.name)}>{props.info}</InfoTip>}
-        </span>
-        {props.note}
-      </span>
-      <div className="set-row-ctl">{props.children}</div>
+      {/* 「软件更新」殿后（2026-10-18 原型定稿）：关于这份安装的事实性信息，看完其余设置才关心它 */}
+      <UpdateCard />
     </div>
   );
 }
