@@ -24,6 +24,7 @@ import {
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
+import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
@@ -3776,7 +3777,12 @@ function ToolLine(props: {
   const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
   const diff = finished ? editDiffText(result) : null;
   const stats = finished ? editDiffStats(result) : null;
-  const rawBody = result !== undefined ? toolResultText(result, t) : "";
+  // 正文只在**真要用**时才拼：`toolResultText` 把结果里每个 text 块 join 成一整条
+  // （实测单条最大 479KB），而折叠着的工具行只有两处需要它——展开体（open）与
+  // 跑着的 shell 的活尾预览（shellActive）。活跃轮的组行默认铺开，一轮几十个工具时
+  // 这条 join 会随每一帧流式更新重跑几十遍，全是白付的分配；落定的成员行更不必说。
+  const needBody = open || shellActive;
+  const rawBody = needBody && result !== undefined ? toolResultText(result, t) : "";
   // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
   const body = live ? liveTailLines(rawBody) : rawBody;
   // 工具结果里的 image 块（read_pdf 页图 / read 读图）内联展示给用户——模型看得见
@@ -3786,7 +3792,7 @@ function ToolLine(props: {
       ? result.content.filter((block): block is Extract<(typeof result.content)[number], { type: "image" }> => block.type === "image")
       : [];
   const imagelessBody =
-    toolImages.length > 0 && result !== undefined
+    needBody && toolImages.length > 0 && result !== undefined
       ? result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n")
       : body;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
@@ -4597,6 +4603,17 @@ function PlainToolBody(props: {
   // 套了圆角虚线框后框底会多出一整行空白（2026-10-12 返工），渲染前剥掉尾部空行。
   // 中间的空行是内容结构，保留。
   const text = stripTrailingBlankLines(props.text);
+  // 读时投影：展开体是 320px 的滚动区，几万字的工具结果全进 DOM 只是重量。
+  // 首尾各留一段（阈值与依据见 tool-body-clamp.ts），会话记录不动。
+  const clamped = clampToolBody(text);
+  // 截断提示行：切口处的一行次级灰 caption——它是标点不是内容（行几何同 BODY_LINE，
+  // 字号退到 xs）。数字是**原文**总量，不是保留量。
+  const truncationNote =
+    clamped.omitted === null ? null : (
+      <div style={TRUNCATION_NOTE}>
+        {t.chat.bodyTruncated(clamped.omitted.lines, clamped.omitted.chars)}
+      </div>
+    );
   // 看大图：放在提前 return 之前（hook 顺序不能随内容变）
   const [viewing, setViewing] = useState<number | null>(null);
   const images = props.images ?? [];
@@ -4654,8 +4671,14 @@ function PlainToolBody(props: {
   if (props.failed) {
     return (
       <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-        {text.split("\n").map((line, index) => (
+        {clamped.head.map((line, index) => (
           <div key={index} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
+            {line === "" ? " " : line}
+          </div>
+        ))}
+        {truncationNote}
+        {clamped.tail.map((line, index) => (
+          <div key={`tail-${index}`} style={{ ...BODY_LINE, color: "var(--color-danger)" }}>
             {line === "" ? " " : line}
           </div>
         ))}
@@ -4665,7 +4688,9 @@ function PlainToolBody(props: {
   }
   return (
     <div ref={follow.ref} onScroll={follow.onScroll} className="scroll" style={PLAIN_BODY}>
-      {text.split("\n").map((line, index) => toolBodyLine(props.toolName, line, index))}
+      {clamped.head.map((line, index) => toolBodyLine(props.toolName, line, index))}
+      {truncationNote}
+      {clamped.tail.map((line, index) => toolBodyLine(props.toolName, line, clamped.head.length + index))}
       {imageStrip}
     </div>
   );
@@ -4686,6 +4711,13 @@ const BODY_LINE = {
   padding: "0 var(--space-2)",
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
+} satisfies React.CSSProperties;
+
+/** 截断提示行：BODY_LINE 的行几何 + 次级灰 caption（设计系统 xs）——它是标点不是内容。 */
+const TRUNCATION_NOTE = {
+  ...BODY_LINE,
+  color: "var(--color-text-tertiary)",
+  fontSize: "var(--font-size-xs)",
 } satisfies React.CSSProperties;
 
 /** 单行按工具着色；工具没有专门形态的走 secondary 原样行（无结构正文的内容基线） */

@@ -1207,6 +1207,8 @@ export const en = {
     thought: "thought",
     lines: (n: number) => `${n} lines`,
     files: (n: number) => `${n} files`,
+    // Truncation caption in a tool body (tool-body-clamp.ts); both numbers are the ORIGINAL totals
+    bodyTruncated: (lines: number, chars: number) => `Truncated · ${lines} lines, ${chars} chars in total`,
     commands: (n: number) => `${n} commands`,
     matches: (n: number) => `${n} matches`,
     directories: (n: number) => `${n} directories`,
