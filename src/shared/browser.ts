@@ -207,6 +207,12 @@ export type BrowserToolRequest =
       tab?: BrowserReadTarget;
     }
   /**
+   * 等页面上某个东西出现：CSS 选择器存在（visible 时还要求可见），或正文含某段文字；两个都给了
+   * **任一命中即返回**。到点没出现**不是工具错误**——正常返回「没出现」，让模型自己决定下一步
+   * （报错会让它以为工具坏了）。timeoutMs 的默认与上限由 shared/browser-wait.ts 夹取。
+   */
+  | { action: "wait"; selector?: string; text?: string; visible?: boolean; timeoutMs?: number; tab?: BrowserReadTarget }
+  /**
    * save：另存一份原图进会话工作台 screenshots/，结果给路径（默认不存，截图只给模型看）。
    * region：只拍整页截图里的这一块、放大给模型看（小字、图表细节）；放大图的像素不是点击坐标
    */

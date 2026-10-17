@@ -1364,6 +1364,13 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
       if (url !== null && range !== null) return `${url} (${range})`;
       return url ?? range;
     }
+    // 等待：摘要说等的是什么（两个都给了就是任一命中）
+    case "browser_wait_for": {
+      const selector = str("selector");
+      const text = str("text");
+      if (selector !== null && text !== null) return `${selector} or "${text}"`;
+      return selector ?? (text === null ? null : `"${text}"`);
+    }
     // 交接：摘要就是 agent 说的原因（交接卡的标题）
     case "request_user_action":
       return str("reason");

@@ -59,6 +59,7 @@ describe("browser_* 工具", () => {
     assert.deepEqual(props("browser_screenshot"), ["region", "save", "tab"]);
     assert.deepEqual(props("browser_observe"), ["maxNodes", "tab"]);
     assert.deepEqual(props("browser_extract"), ["format", "links", "maxChars", "offset", "ref", "tab"]);
+    assert.deepEqual(props("browser_wait_for"), ["selector", "tab", "text", "timeoutMs", "visible"]);
     assert.deepEqual(props("browser_console_messages"), ["level", "limit"]);
     assert.deepEqual(props("browser_network_requests"), ["limit", "statusMax", "statusMin", "url"]);
     assert.deepEqual(props("browser_click"), ["element", "ref", "x", "y"]);
@@ -161,6 +162,30 @@ describe("browser_* 工具", () => {
     assert.deepEqual(sent[1]?.["request"], { action: "screenshot" });
     answer(1, { ok: true, text: "Shot", card });
     await second;
+  });
+
+  test("wait_for：只带给了的条件，timeoutMs 夹取后总是上船（主进程不用再猜默认值）", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_wait_for", { selector: " #results ", timeoutMs: 5000 });
+    assert.deepEqual(sent[0]?.["request"], { action: "wait", selector: "#results", timeoutMs: 5000 });
+    answer(0, { ok: true, text: "Appeared", card });
+    await first;
+    // 不给 timeoutMs：默认值上船；visible 只在 true 时上船；text 与 selector 可以一起给
+    const second = run("browser_wait_for", { selector: "#r", text: "3 results", visible: "yes" });
+    assert.deepEqual(sent[1]?.["request"], { action: "wait", selector: "#r", text: "3 results", timeoutMs: 8000 });
+    answer(1, { ok: true, text: "Appeared", card });
+    await second;
+    const third = run("browser_wait_for", { text: "Results", visible: true, timeoutMs: 999_999 });
+    assert.deepEqual(sent[2]?.["request"], { action: "wait", text: "Results", visible: true, timeoutMs: 30_000 });
+    answer(2, { ok: true, text: "Appeared", card });
+    await third;
+  });
+
+  test("wait_for：selector 与 text 都缺省当场报错，不发请求", async () => {
+    const { sent, run } = setup();
+    await assert.rejects(run("browser_wait_for", {}), /Pass selector or text/);
+    await assert.rejects(run("browser_wait_for", { selector: "  " }), /Pass selector or text/);
+    assert.equal(sent.length, 0);
   });
 
   test("browser_tabs：无参上船", async () => {

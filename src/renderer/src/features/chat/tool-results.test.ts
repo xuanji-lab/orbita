@@ -1588,6 +1588,13 @@ describe("toolCallSummary —— 受管浏览器", () => {
     assert.equal(toolCallSummary("browser_network_requests", { statusMax: 499 }), "status …–499");
     assert.equal(toolCallSummary("browser_network_requests", {}), null);
   });
+
+  test("browser_wait_for 摘要是等的东西；两个都给了用 or 连起来", () => {
+    assert.equal(toolCallSummary("browser_wait_for", { selector: "#results", timeoutMs: 8000 }), "#results");
+    assert.equal(toolCallSummary("browser_wait_for", { text: "3 results" }), '"3 results"');
+    assert.equal(toolCallSummary("browser_wait_for", { selector: "#results", text: "3 results" }), '#results or "3 results"');
+    assert.equal(toolCallSummary("browser_wait_for", { timeoutMs: 8000 }), null);
+  });
 });
 
 describe("toolCallSummary —— delegate（子会话 PR4a）", () => {
