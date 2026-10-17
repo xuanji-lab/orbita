@@ -31,6 +31,7 @@ import {
   formatWaitResult,
   parseWaitSample,
   parseWaitSpec,
+  probeTimeoutMs,
   waitProbeScript,
   waitUntilHit,
   type BrowserWaitSample,
@@ -406,9 +407,10 @@ async function observe(
  * browser_wait_for：等页面上某个东西出现。**分段轮询**，不是页内一个长 Promise（MutationObserver +
  * awaitPromise），两个理由：
  *
- * 1. 每次 Runtime.evaluate 都是毫秒级的探针，cdp.ts 的 10 秒命令超时原样不动——「卡死的页面不能把
- *    agent 的一轮拖死」这条护栏不为等待放宽（页内长 Promise 要它放宽到 timeoutMs，卡死的页面就会
- *    把一轮拖到 30 秒）。总时长由这里自己的 deadline 控制（≤ WAIT_MAX_TIMEOUT_MS）。
+ * 1. 每次 Runtime.evaluate 都是毫秒级的探针，且每轮的超时夹到「离 deadline 还剩多少」（上限仍是
+ *    cdp.ts 的 10 秒）——「卡死的页面不能把 agent 的一轮拖死」这条护栏不为等待放宽（页内长 Promise
+ *    要它放宽到 timeoutMs，卡死的页面就会把一轮拖到 30 秒）。总时长由这里自己的 deadline 控制
+ *    （≤ WAIT_MAX_TIMEOUT_MS），收尾最多多一个探针下限（250ms）。
  * 2. 等待期间页面换文档（点击触发跳转、SPA 重建执行上下文）时，旧文档里的长 Promise 会连同执行
  *    上下文一起销毁、报错返回；分段探针只把那一轮当「还没到」，下一轮在新文档上接着等。
  *
@@ -422,7 +424,10 @@ async function waitFor(
   const parsed = parseWaitSpec(request);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const { spec, note } = parsed;
-  const outcome = await waitUntilHit(() => probeWait(contents, spec), spec);
+  // 每轮探针按剩余时间夹超时：接近 deadline 的那一轮不会吃满 10 秒命令超时，broker 的
+  // timeoutMs + 余量才够用（2026-10-14 评审）。
+  const deadline = Date.now() + spec.timeoutMs;
+  const outcome = await waitUntilHit(() => probeWait(contents, spec, deadline), spec);
   if ("error" in outcome) {
     return { ok: false, error: `"${String(spec.selector)}" is not a valid CSS selector.` };
   }
@@ -434,11 +439,14 @@ async function waitFor(
 async function probeWait(
   contents: WebContents,
   spec: BrowserWaitSpec,
+  deadline: number,
 ): Promise<BrowserWaitSample | { error: "invalid-selector" } | null> {
-  const result = (await cdp(contents, "Runtime.evaluate", {
-    expression: waitProbeScript(spec),
-    returnByValue: true,
-  }).catch(() => null)) as { result?: { value?: unknown }; exceptionDetails?: unknown } | null;
+  const result = (await cdp(
+    contents,
+    "Runtime.evaluate",
+    { expression: waitProbeScript(spec), returnByValue: true },
+    probeTimeoutMs(deadline),
+  ).catch(() => null)) as { result?: { value?: unknown }; exceptionDetails?: unknown } | null;
   if (result === null || result.exceptionDetails !== undefined) return null;
   return parseWaitSample(result.result?.value);
 }

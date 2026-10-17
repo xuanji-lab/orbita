@@ -10,6 +10,7 @@ import {
   formatWaitResult,
   parseWaitSample,
   parseWaitSpec,
+  probeTimeoutMs,
   waitProbeScript,
   waitSampleHit,
   waitUntilHit,
@@ -17,6 +18,8 @@ import {
   WAIT_MAX_TIMEOUT_MS,
   WAIT_MIN_TIMEOUT_MS,
   WAIT_POLL_MS,
+  WAIT_PROBE_TIMEOUT_FLOOR_MS,
+  WAIT_PROBE_TIMEOUT_MS,
 } from "./browser-wait.ts";
 
 describe("parseWaitSpec", () => {
@@ -99,6 +102,25 @@ describe("waitSampleHit", () => {
   });
 });
 
+describe("probeTimeoutMs：每轮探针夹到剩余时间（broker 余量对得上）", () => {
+  const now = 1_000_000;
+
+  test("剩余充足时用单命令上限", () => {
+    assert.equal(probeTimeoutMs(now + 20_000, now), WAIT_PROBE_TIMEOUT_MS);
+    assert.equal(probeTimeoutMs(now + WAIT_PROBE_TIMEOUT_MS, now), WAIT_PROBE_TIMEOUT_MS);
+  });
+
+  test("剩余不足时用剩余时间", () => {
+    assert.equal(probeTimeoutMs(now + 1_500, now), 1_500);
+    assert.equal(probeTimeoutMs(now + WAIT_PROBE_TIMEOUT_FLOOR_MS, now), WAIT_PROBE_TIMEOUT_FLOOR_MS);
+  });
+
+  test("deadline 已过也给一个下限，不留 0ms 超时", () => {
+    assert.equal(probeTimeoutMs(now - 5_000, now), WAIT_PROBE_TIMEOUT_FLOOR_MS);
+    assert.equal(probeTimeoutMs(now, now), WAIT_PROBE_TIMEOUT_FLOOR_MS);
+  });
+});
+
 describe("waitProbeScript", () => {
   const specOf = (input: Parameters<typeof parseWaitSpec>[0]) => {
     const parsed = parseWaitSpec(input);
@@ -113,14 +135,32 @@ describe("waitProbeScript", () => {
    */
   const runProbe = (
     input: Parameters<typeof parseWaitSpec>[0],
-    page: { nodes?: { width: number; height: number; visibility?: string }[]; text?: string; badSelector?: boolean },
+    page: {
+      nodes?: { width: number; height: number; visibility?: string }[];
+      /** innerText 看到的可见正文 */
+      text?: string;
+      /** textContent 看到的全部文本（默认与 text 一致；给不同值可模拟「藏在 CSS 里」） */
+      textContent?: string;
+      /** 让读 innerText 直接抛错：用来证明「候选都没命中时不会碰 innerText」 */
+      innerTextThrows?: boolean;
+      badSelector?: boolean;
+    },
   ): unknown => {
     const nodes = (page.nodes ?? []).map((node) => ({
       ...node,
       getBoundingClientRect: () => ({ width: node.width, height: node.height }),
     }));
+    const bodyStub =
+      page.innerTextThrows === true
+        ? {
+            textContent: page.textContent ?? page.text ?? "",
+            get innerText(): string {
+              throw new Error("layout forced");
+            },
+          }
+        : { innerText: page.text ?? "", textContent: page.textContent ?? page.text ?? "" };
     const documentStub = {
-      body: { innerText: page.text ?? "" },
+      body: bodyStub,
       querySelectorAll: (): unknown => {
         if (page.badSelector === true) throw new Error("SyntaxError: invalid selector");
         return nodes;
@@ -177,6 +217,23 @@ describe("waitProbeScript", () => {
     assert.deepEqual(runProbe({ selector: "#r" }, { badSelector: true }), { error: "invalid-selector" });
   });
 
+  test("文字探针先看 textContent 排除：候选没出现时不读 innerText（不强制 layout）", () => {
+    assert.deepEqual(
+      runProbe({ text: "3 results" }, { textContent: "nothing here", innerTextThrows: true }),
+      { selector: null, text: false },
+      "textContent 里没有就不该碰 innerText",
+    );
+    // 候选出现在 textContent 后仍以 innerText 为准：CSS 隐藏的内容不算「可见文字」
+    assert.deepEqual(runProbe({ text: "secret" }, { text: "", textContent: "secret hidden" }), {
+      selector: null,
+      text: false,
+    });
+    assert.deepEqual(runProbe({ text: "secret" }, { text: "secret visible", textContent: "secret visible" }), {
+      selector: null,
+      text: true,
+    });
+  });
+
   test("选择器与文字以 JSON 字面量嵌入——带引号的选择器不会串成代码", () => {
     const script = waitProbeScript(specOf({ selector: 'a[title="x"]', text: 'say "hi"' }));
     assert.ok(script.includes('const selector = "a[title=\\"x\\"]";'));
@@ -191,7 +248,7 @@ describe("waitProbeScript", () => {
     assert.ok(waitProbeScript(specOf({ selector: "#r" })).includes("const needVisible = false;"));
     const selectorOnly = waitProbeScript(specOf({ selector: "#r" }));
     assert.ok(selectorOnly.includes("if (selector !== null)"));
-    assert.ok(selectorOnly.includes("if (text !== null) out.text"));
+    assert.ok(selectorOnly.includes("if (text !== null)"));
   });
 });
 

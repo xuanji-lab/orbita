@@ -16,6 +16,22 @@ export const WAIT_MAX_TIMEOUT_MS = 30_000;
 export const WAIT_MIN_TIMEOUT_MS = 100;
 /** 轮询间隔：够短（人眼看不出滞后），又不会把 CDP 打成忙等 */
 export const WAIT_POLL_MS = 200;
+/** 单次探针（一条 CDP 命令）的超时上限：与 cdp.ts 的默认命令超时同量级 */
+export const WAIT_PROBE_TIMEOUT_MS = 10_000;
+/** 探针超时下限：deadline 已经到了也给一条命令走完的时间，别留 0ms 超时 */
+export const WAIT_PROBE_TIMEOUT_FLOOR_MS = 250;
+
+/**
+ * 这一轮探针该给多少超时：min(剩余时间, 单命令上限)，至少 floor。
+ *
+ * 为什么需要：broker 只给 timeoutMs + 余量（agent/browser-tools.ts 的 WAIT_REQUEST_MARGIN_MS）。
+ * 如果每轮探针都吃满 10 秒命令超时，接近 deadline 的那一轮会把总耗时推到 timeoutMs + 10s，
+ * broker 先判「主进程失联」（2026-10-14 评审）。夹到剩余时间后，总耗时最多超出 deadline 一个
+ * floor（250ms），余量按这个收尾预留。
+ */
+export function probeTimeoutMs(deadline: number, now = Date.now()): number {
+  return Math.max(WAIT_PROBE_TIMEOUT_FLOOR_MS, Math.min(WAIT_PROBE_TIMEOUT_MS, deadline - now));
+}
 /** 页内 visible 判定最多看几个匹配（页面里几千个 `.item` 时别整页扫） */
 const VISIBLE_SCAN_LIMIT = 500;
 
@@ -104,7 +120,17 @@ export function waitProbeScript(spec: BrowserWaitSpec): string {
       return { error: "invalid-selector" };
     }
   }
-  if (text !== null) out.text = (document.body ? document.body.innerText : "").includes(text);
+  if (text !== null) {
+    const body = document.body;
+    if (body) {
+      // 先在 textContent 上做不触发布局的快速排除：绝大多数轮次里文字还没出现，若每 200ms 读一次
+      // innerText 就是每轮强制一次 layout（2026-10-14 评审记的账）。只有 textContent 命中候选时才用
+      // innerText 确认——语义仍是「可见文字出现了，隐藏内容不算」。
+      out.text = (body.textContent || "").includes(text) ? body.innerText.includes(text) : false;
+    } else {
+      out.text = false;
+    }
+  }
   return out;
 })()`;
 }

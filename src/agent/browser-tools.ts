@@ -33,6 +33,9 @@ const HANDOFF_TIMEOUT_MS = 31 * 60_000;
  * 等待类工具的回执余量：主进程的等待上限（WAIT_MAX_TIMEOUT_MS）+ 探针与轮询的收尾。
  * broker 默认 30 秒，正好卡在等待上限上——不显式放宽，最长的那次等待会先被 broker 判成
  * 「主进程失联」。
+ *
+ * 主进程每轮探针已夹到剩余时间（shared/browser-wait.ts 的 probeTimeoutMs），总耗时最多超出
+ * timeoutMs 一个探针下限（250ms）加收包 / 排队开销，5 秒余量足够；不再按 10 秒命令超时预留。
  */
 const WAIT_REQUEST_MARGIN_MS = 5_000;
 
