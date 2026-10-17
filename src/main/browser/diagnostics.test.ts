@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   formatConsoleReport,
   formatNetworkReport,
+  MainDocumentWatcher,
   RingBuffer,
   TabDiagnostics,
   type ConsoleEntry,
@@ -143,6 +144,66 @@ describe("TabDiagnostics：控制台", () => {
     state.clear();
     assert.equal(state.consoleCount, 0);
     assert.equal(state.networkCount, 0);
+  });
+});
+
+describe("MainDocumentWatcher：主文档换页判定（CDP 侧）", () => {
+  const frameTree = (id: string, loaderId: string): unknown => ({ frameTree: { frame: { id, loaderId } } });
+  const documentRequest = (frameId: string, loaderId: string, requestId = "doc"): unknown => ({
+    requestId,
+    type: "Document",
+    frameId,
+    loaderId,
+    request: { url: "https://x.test/", method: "GET" },
+  });
+
+  test("setFrameTree：认得根帧与 loaderId；形状不认识回 false 且保持未就绪", () => {
+    const watcher = new MainDocumentWatcher();
+    assert.equal(watcher.setFrameTree(frameTree("F1", "L1")), true);
+    assert.equal(watcher.ready, true);
+
+    const broken = new MainDocumentWatcher();
+    assert.equal(broken.setFrameTree({ frameTree: {} }), false);
+    assert.equal(broken.ready, false);
+    assert.equal(broken.observe(documentRequest("F1", "L2")), false, "没就绪时绝不清缓冲，交给 did-navigate 兜底");
+  });
+
+  test("主帧新 Document 且 loaderId 变了 = 新一份主文档；同一 loaderId 的重定向不算", () => {
+    const watcher = new MainDocumentWatcher();
+    watcher.setFrameTree(frameTree("F1", "L1"));
+    assert.equal(watcher.observe(documentRequest("F1", "L2")), true);
+    assert.equal(watcher.observe(documentRequest("F1", "L2", "doc-redirect")), false, "重定向同 loaderId");
+    assert.equal(watcher.observe(documentRequest("F1", "L3")), true, "再换一页也算");
+  });
+
+  test("子帧 Document、非 Document（XHR / 图片）都不算换页", () => {
+    const watcher = new MainDocumentWatcher();
+    watcher.setFrameTree(frameTree("F1", "L1"));
+    assert.equal(watcher.observe(documentRequest("F2", "L2")), false, "iframe 自己的文档");
+    assert.equal(
+      watcher.observe({ requestId: "xhr", type: "XHR", frameId: "F1", loaderId: "L2", request: { url: "https://x.test/api", method: "GET" } }),
+      false,
+    );
+    assert.equal(watcher.observe({ requestId: "img", type: "Image", frameId: "F1", request: { url: "https://x.test/i.png", method: "GET" } }), false);
+  });
+
+  test("换页顺序：先清再记，主文档 403 留在新缓冲里（评审情景回归）", () => {
+    const state = new TabDiagnostics();
+    state.onRequestWillBeSent({ requestId: "old", request: { url: "https://x.test/old", method: "GET" } });
+    state.onConsoleApiCalled({ type: "log", args: [{ type: "string", value: "old page" }] });
+    const watcher = new MainDocumentWatcher();
+    watcher.setFrameTree(frameTree("F1", "L1"));
+
+    const mainDocument = documentRequest("F1", "L2", "doc2");
+    if (watcher.observe(mainDocument)) state.clear();
+    state.onRequestWillBeSent(mainDocument);
+    state.onResponseReceived({ requestId: "doc2", response: { status: 403, mimeType: "text/html" } });
+
+    assert.deepEqual(state.networkRequests({ limit: 10 }), [
+      { id: "doc2", method: "GET", url: "https://x.test/", status: 403, mimeType: "text/html" },
+    ]);
+    assert.equal(state.networkCount, 1);
+    assert.equal(state.consoleCount, 0, "上一页的控制台消息不带到新页");
   });
 });
 

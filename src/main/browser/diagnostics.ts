@@ -96,7 +96,8 @@ const LEVEL_RANK: Record<BrowserConsoleLevel, number> = { debug: 0, log: 1, info
 
 /**
  * 一个 tab 的诊断缓冲。**跨文档导航时由接线层 clear()**：上一页的消息不再代表当前页
- * （SPA 的 did-navigate-in-page 不算换文档，历史保留）。
+ * （SPA 的 did-navigate-in-page 不算换文档，历史保留）。「什么时候算换文档」由下面的
+ * MainDocumentWatcher 判定（CDP 的 requestWillBeSent，不是 did-navigate）。
  */
 export class TabDiagnostics {
   private readonly console = new RingBuffer<ConsoleEntry>(BROWSER_DIAGNOSTICS_BUFFER_LIMIT);
@@ -223,6 +224,53 @@ export class TabDiagnostics {
 
   private pushConsole(entry: ConsoleEntry): void {
     this.console.push({ ...entry, text: clampText(entry.text) });
+  }
+}
+
+/**
+ * 主文档换页追踪（CDP 侧）：判断一条 `Network.requestWillBeSent` 是不是「新的一份主文档」。
+ *
+ * 为什么在 CDP 侧判而不是 `did-navigate`：主文档请求的 requestWillBeSent / responseReceived
+ * 在导航提交**之前**到达，did-navigate 在提交**之后**才触发——在 did-navigate 里清缓冲，恰好
+ * 把主文档自己那条清掉（被 Cloudflare 拦下的 403/503、主文档 401，正是诊断要回答的问题），
+ * 也违背了工具描述里「重载页面后再调一次，第二次一定拿得到」的承诺（2026-10-14 评审）。
+ * 提前到 requestWillBeSent：看见新 loaderId 的主帧 Document 请求，先清缓冲、再记这一条。
+ *
+ * 主帧 id 来自 `Page.getFrameTree`（enable 时取一次）；拿不到时 `ready` 为 false，接线层退回
+ * did-navigate 兜底（老行为，至少不会把上一页的记录留在新页上）。
+ */
+export class MainDocumentWatcher {
+  private mainFrameId = "";
+  private loaderId = "";
+
+  /** 是否拿到了主帧信息（false = 接线层用 did-navigate 兜底） */
+  get ready(): boolean {
+    return this.mainFrameId !== "";
+  }
+
+  /** `Page.getFrameTree` 的回包 → 记下主帧与当前 loaderId；形状不认识回 false */
+  setFrameTree(value: unknown): boolean {
+    const frame = asRecord(asRecord(asRecord(value)["frameTree"])["frame"]);
+    const id = typeof frame["id"] === "string" ? frame["id"] : "";
+    if (id === "") return false;
+    this.mainFrameId = id;
+    this.loaderId = typeof frame["loaderId"] === "string" ? frame["loaderId"] : "";
+    return true;
+  }
+
+  /**
+   * 这条 requestWillBeSent 是否开启了一份新的主文档；是则更新内部 loaderId 并回 true。
+   * 重定向（同 loaderId 再发一次）不算换页；子帧的 Document 不算；XHR / 图片之类不算。
+   */
+  observe(params: unknown): boolean {
+    if (!this.ready) return false;
+    const event = asRecord(params);
+    if (event["type"] !== "Document") return false;
+    if (event["frameId"] !== this.mainFrameId) return false;
+    const loaderId = typeof event["loaderId"] === "string" ? event["loaderId"] : "";
+    if (loaderId === this.loaderId) return false;
+    this.loaderId = loaderId;
+    return true;
   }
 }
 

@@ -1352,6 +1352,18 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
       return str("key");
     case "browser_scroll":
       return str("direction");
+    // 诊断：摘要说清看的是哪一档（level）/ 哪个地址（url，含状态范围）；纯读上次记录的不编造
+    case "browser_console_messages":
+      return str("level");
+    case "browser_network_requests": {
+      const url = str("url");
+      const min = record["statusMin"];
+      const max = record["statusMax"];
+      const range =
+        typeof min === "number" || typeof max === "number" ? `status ${min ?? "…"}–${max ?? "…"}` : null;
+      if (url !== null && range !== null) return `${url} (${range})`;
+      return url ?? range;
+    }
     // 交接：摘要就是 agent 说的原因（交接卡的标题）
     case "request_user_action":
       return str("reason");

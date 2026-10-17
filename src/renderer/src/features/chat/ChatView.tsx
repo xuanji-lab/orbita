@@ -3634,6 +3634,8 @@ function toolIcon(toolName: string): IconName {
     case "browser_screenshot":
     case "browser_tabs":
     case "browser_scroll":
+    case "browser_console_messages":
+    case "browser_network_requests":
     case "browser_click":
     case "browser_type":
     case "browser_press":
