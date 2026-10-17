@@ -159,9 +159,16 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
     name: "browser_extract",
     label: "browser_extract",
     description:
-      "Read the visible text of the page in your browser tab, in reading order. Long pages are returned in chunks: " +
-      "the result says the total length, pass offset to continue. Set links to true to also list the page's links " +
-      "(text and absolute URL) — useful for following DOIs or result entries. " +
+      "Read the page's text in your browser tab, in reading order. Long pages are returned in chunks: " +
+      "the result says the total length, pass offset to continue. Set format to \"markdown\" to keep the page's " +
+      "structure — headings, lists, links as [text](URL), tables, emphasis, code — instead of flat text; use it for " +
+      "structured pages (articles, docs, search results) and whenever you need the URL behind a link. Note that " +
+      "markdown is built from the DOM, so it can also contain content hidden by CSS (collapsed menus, dialogs, " +
+      "mobile-only duplicates); \"text\" matches what the page actually shows. Set ref to an element from " +
+      "browser_observe to read only that element's subtree instead of the whole page — refs are issued for " +
+      "interactive elements (links, buttons, fields), not for plain containers like articles or panels. Set links " +
+      "to true to also list the page's links (text and absolute URL) — useful for following DOIs or " +
+      "result entries. " +
       UNTRUSTED,
     parameters: {
       type: "object",
@@ -169,6 +176,21 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
         offset: { type: "number", description: "Character offset to start from. Defaults to 0." },
         maxChars: { type: "number", description: "Characters to return, 1000–50000. Defaults to 20000." },
         links: { type: "boolean", description: "Also list the page's links. Defaults to false." },
+        format: {
+          type: "string",
+          enum: ["text", "markdown"],
+          description:
+            "\"text\" (default): flat visible text, exactly what the page shows. \"markdown\": keep headings, " +
+            "lists, links, tables, emphasis and code — better for structured pages and when link URLs matter; " +
+            "built from the DOM, so content hidden by CSS (collapsed menus, dialogs, mobile-only duplicates) can " +
+            "appear too.",
+        },
+        ref: {
+          type: "string",
+          description:
+            "Element ref from browser_observe: read only that element's subtree instead of the whole page. Only " +
+            "works on your own tab.",
+        },
         tab: USER_TAB_PARAM,
       },
       required: [],
@@ -181,6 +203,8 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           ...(typeof args["offset"] === "number" ? { offset: args["offset"] } : {}),
           ...(typeof args["maxChars"] === "number" ? { maxChars: args["maxChars"] } : {}),
           ...(args["links"] === true ? { links: true } : {}),
+          ...(args["format"] === "markdown" ? { format: "markdown" as const } : {}),
+          ...(typeof args["ref"] === "string" && args["ref"].trim() !== "" ? { ref: args["ref"].trim() } : {}),
         ...userTabArg(args["tab"]),
         },
         signal,

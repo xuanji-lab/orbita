@@ -22,12 +22,13 @@ import { resolveAddressOrSearch } from "./address.ts";
 import { looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
 import { pathToFileURL } from "node:url";
 import { formatAxOutline, type AxNode } from "./page-outline.ts";
-import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
+import { extractScript, formatExtract, SERIALIZE_TREE_FN, SUBTREE_TEXT_FN, type PageRaw } from "./page-text.ts";
+import { collectLinks, type DomNode } from "./dom-markdown.ts";
 import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
 import { cdp, delay } from "./cdp.ts";
 import { HostPacer } from "./host-pacer.ts";
 import { describeTabs } from "./user-tabs.ts";
-import { click, goHistory, guardDialogs, press, scroll, typeText, watchPageChange } from "./interactions.ts";
+import { click, goHistory, guardDialogs, normalizeRef, press, releaseRefObjects, resolveRef, scroll, typeText, watchPageChange } from "./interactions.ts";
 import { captureFrame, captureRegion } from "./frame-capture.ts";
 import { fitWithin, regionClip, shotSize, SHOT_MAX_HEIGHT, SHOT_MAX_WIDTH } from "./screenshot-geometry.ts";
 
@@ -338,14 +339,87 @@ async function extract(
   contents: WebContents,
   request: Extract<BrowserToolRequest, { action: "extract" }>,
 ): Promise<BrowserToolOutcome> {
-  const result = (await cdp(contents, "Runtime.evaluate", {
-    expression: extractScript(request.links === true),
-    returnByValue: true,
-  })) as { result?: { value?: unknown }; exceptionDetails?: unknown };
-  if (result.exceptionDetails !== undefined) throw new Error("The page did not let its text be read.");
-  const raw = asPageRaw(result.result?.value);
+  const markdown = request.format === "markdown";
+  const ref = typeof request.ref === "string" && request.ref.trim() !== "" ? normalizeRef(request.ref) : null;
+  if (ref !== null && tab.owner.kind === "user") {
+    throw new Error(
+      "ref only works on your own tab: browser_observe issues refs for your tab's page, and the user's tab is " +
+        "read-only. Open the page in your own tab, or drop ref to read the whole page.",
+    );
+  }
+  let raw: PageRaw;
+  if (markdown) {
+    const tree = ref === null ? await pageTree(contents) : await subtreeTree(contents, tab, ref);
+    // markdown 模式链接已内联，links: true 时从同一棵树里另收一份（复用页内已取的原料，不再跑一遍 DOM）
+    raw = {
+      text: "",
+      links: request.links === true ? collectLinks(tree.root) : [],
+      tree: tree.root,
+      treeTruncated: tree.truncated,
+    };
+  } else if (ref !== null) {
+    raw = { text: await subtreeText(contents, tab, ref), links: [] };
+  } else {
+    const result = (await cdp(contents, "Runtime.evaluate", {
+      expression: extractScript(request.links === true),
+      returnByValue: true,
+    })) as { result?: { value?: unknown }; exceptionDetails?: unknown };
+    if (result.exceptionDetails !== undefined) throw new Error("The page did not let its text be read.");
+    raw = asPageRaw(result.result?.value);
+  }
   const text = formatExtract({ url: pageUrl(contents), title: contents.getTitle() }, raw, request);
   return { ok: true, text, card: card(tab, contents) };
+}
+
+/** 整页 DOM → 节点树（markdown 模式） */
+async function pageTree(contents: WebContents): Promise<{ root: DomNode | null; truncated: boolean }> {
+  const result = readRecord(
+    await cdp(contents, "Runtime.evaluate", {
+      expression: `(${SERIALIZE_TREE_FN}).call(document.body)`,
+      returnByValue: true,
+    }),
+  );
+  return asTreeResult(result);
+}
+
+/** ref 子树 → 节点树；引用解析复用 interactions.ts 的 resolveRef（与 click / type 同一条路） */
+async function subtreeTree(
+  contents: WebContents,
+  tab: BrowserTab,
+  ref: string,
+): Promise<{ root: DomNode | null; truncated: boolean }> {
+  const objectId = await resolveRef(contents, tab, ref);
+  try {
+    const result = readRecord(
+      await cdp(contents, "Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: SERIALIZE_TREE_FN,
+        returnByValue: true,
+      }),
+    );
+    return asTreeResult(result);
+  } finally {
+    await releaseRefObjects(contents);
+  }
+}
+
+/** ref 子树的可见文字（text 模式 + ref） */
+async function subtreeText(contents: WebContents, tab: BrowserTab, ref: string): Promise<string> {
+  const objectId = await resolveRef(contents, tab, ref);
+  try {
+    const result = readRecord(
+      await cdp(contents, "Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: SUBTREE_TEXT_FN,
+        returnByValue: true,
+      }),
+    );
+    if (result["exceptionDetails"] !== undefined) throw new Error("The page did not let its text be read.");
+    const value = readRecord(result["result"])["value"];
+    return typeof value === "string" ? value : "";
+  } finally {
+    await releaseRefObjects(contents);
+  }
 }
 
 /**
@@ -486,6 +560,41 @@ function asPageRaw(value: unknown): PageRaw {
       )
     : [];
   return { text, links };
+}
+
+/** 页内脚本的节点树回包 → 校验过的节点树。页面内容是不可信输入，形状先过一道再交给纯函数 */
+function asTreeResult(record: Record<string, unknown>): { root: DomNode | null; truncated: boolean } {
+  if (record["exceptionDetails"] !== undefined) throw new Error("The page did not let its structure be read.");
+  const payload = readRecord(readRecord(record["result"])["value"]);
+  return { root: asDomNode(payload["root"]), truncated: payload["truncated"] === true };
+}
+
+function asDomNode(value: unknown): DomNode | null {
+  const record = readRecord(value);
+  const tag = record["tag"];
+  if (typeof tag !== "string") return null;
+  const node: DomNode = { tag };
+  if (typeof record["text"] === "string") node.text = record["text"];
+  const attrs = readRecord(record["attrs"]);
+  const parsedAttrs: NonNullable<DomNode["attrs"]> = {};
+  if (typeof attrs["href"] === "string") parsedAttrs.href = attrs["href"];
+  if (typeof attrs["alt"] === "string") parsedAttrs.alt = attrs["alt"];
+  if (typeof attrs["src"] === "string") parsedAttrs.src = attrs["src"];
+  if (Object.keys(parsedAttrs).length > 0) node.attrs = parsedAttrs;
+  const children = record["children"];
+  if (Array.isArray(children)) {
+    const parsed: DomNode[] = [];
+    for (const child of children) {
+      const item = asDomNode(child);
+      if (item !== null) parsed.push(item);
+    }
+    node.children = parsed;
+  }
+  return node;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 function card(tab: BrowserTab, contents: WebContents) {

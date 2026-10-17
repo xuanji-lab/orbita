@@ -201,7 +201,7 @@ export async function watchPageChange<T>(
     contents.off("did-start-navigation", onStart);
     contents.off("did-navigate", onCommit);
     // 引用解析出的页内对象整组释放；页面已经换了的话这条会失败，无所谓
-    await cdp(contents, "Runtime.releaseObjectGroup", { objectGroup: OBJECT_GROUP }).catch(() => undefined);
+    await releaseRefObjects(contents);
   }
 }
 
@@ -295,11 +295,15 @@ const ENTER_KEY: KeyStroke = { key: "Enter", code: "Enter", keyCode: 13, modifie
 const DELETE_KEY: KeyStroke = { key: "Delete", code: "Delete", keyCode: 46, modifiers: 0, text: "", commands: [] };
 
 /** 模型有时照抄大纲里的整段 `[ref=e12]`：只取引用本身 */
-function normalizeRef(ref: string): string {
+export function normalizeRef(ref: string): string {
   return ref.trim().replace(/^\[?ref=/, "").replace(/\]$/, "");
 }
 
-async function resolveRef(contents: WebContents, tab: InteractiveTab, ref: string): Promise<string> {
+/**
+ * 引用 → 页内对象 id。browser_extract 的 ref 子树提取复用同一条解析路径（同一张反查表、同一套
+ * 「引用作废」文案），不另造一套。用完调 releaseRefObjects 把整组对象放掉。
+ */
+export async function resolveRef(contents: WebContents, tab: InteractiveTab, ref: string): Promise<string> {
   const backendNodeId = tab.refs.byRef.get(ref);
   if (backendNodeId === undefined) {
     throw new Error(
@@ -317,6 +321,11 @@ async function resolveRef(contents: WebContents, tab: InteractiveTab, ref: strin
   const objectId = readRecord(readRecord(resolved)["object"])["objectId"];
   if (typeof objectId !== "string") throw gone;
   return objectId;
+}
+
+/** 释放引用解析出的页内对象（OBJECT_GROUP 整组）；页面已经换了的话这条会失败，忽略即可 */
+export async function releaseRefObjects(contents: WebContents): Promise<void> {
+  await cdp(contents, "Runtime.releaseObjectGroup", { objectGroup: OBJECT_GROUP }).catch(() => undefined);
 }
 
 /** 引用 → 滚进视口后的中心点（CSS 像素）+ 遮挡检查 */

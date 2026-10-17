@@ -58,7 +58,7 @@ describe("browser_* 工具", () => {
       Object.keys((tools.get(name)!.parameters as { properties: Record<string, unknown> }).properties).sort();
     assert.deepEqual(props("browser_screenshot"), ["region", "save", "tab"]);
     assert.deepEqual(props("browser_observe"), ["maxNodes", "tab"]);
-    assert.deepEqual(props("browser_extract"), ["links", "maxChars", "offset", "tab"]);
+    assert.deepEqual(props("browser_extract"), ["format", "links", "maxChars", "offset", "ref", "tab"]);
     assert.deepEqual(props("browser_click"), ["element", "ref", "x", "y"]);
     assert.deepEqual(props("browser_type"), ["clear", "element", "ref", "submit", "text"]);
     assert.deepEqual(props("browser_press"), ["key", "repeat"]);
@@ -167,6 +167,18 @@ describe("browser_* 工具", () => {
     answer(0, { ok: true, text: "…", card });
     await first;
     const second = run("browser_extract", { links: "yes" });
+    assert.deepEqual(sent[1]?.["request"], { action: "extract" });
+    answer(1, { ok: true, text: "…", card });
+    await second;
+  });
+
+  test("extract：format 只认 markdown，ref 去空白后上船（空串与非字符串当没给）", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_extract", { format: "markdown", ref: " e12 " });
+    assert.deepEqual(sent[0]?.["request"], { action: "extract", format: "markdown", ref: "e12" });
+    answer(0, { ok: true, text: "…", card });
+    await first;
+    const second = run("browser_extract", { format: "text", ref: "" });
     assert.deepEqual(sent[1]?.["request"], { action: "extract" });
     answer(1, { ok: true, text: "…", card });
     await second;
