@@ -63,6 +63,11 @@ export function parseWaitSpec(input: {
     return { ok: false, error: "Pass selector or text — at least one of them says what to wait for." };
   }
   const clamped = clampWaitTimeout(input.timeoutMs);
+  const notes = clamped.note === null ? [] : [clamped.note];
+  // 只给 text 时 visible 没有作用对象：明说忽略，而不是静默吞掉（文字本来就只认渲染出来的可见文本）
+  if (selector === undefined && input.visible === true) {
+    notes.push("visible applies to selector only — the text condition already matches visible text");
+  }
   return {
     ok: true,
     spec: {
@@ -71,7 +76,7 @@ export function parseWaitSpec(input: {
       visible: input.visible === true,
       timeoutMs: clamped.timeoutMs,
     },
-    note: clamped.note,
+    note: notes.length === 0 ? null : notes.join("; "),
   };
 }
 
@@ -159,6 +164,26 @@ export function waitSampleHit(sample: BrowserWaitSample, spec: BrowserWaitSpec):
 }
 
 /**
+ * 探针报「选择器非法」后的降级：同一次等待里还有 text 条件就丢掉 selector 只等 text，并在结果里
+ * 说明；没有 text 才把它当错误报出去。手滑的选择器不该把整次等待带走（#225 验收）。
+ */
+export function waitSelectorInvalidFallback(
+  spec: BrowserWaitSpec,
+  note: string | null,
+): { ok: true; spec: BrowserWaitSpec; note: string } | { ok: false; error: string } {
+  if (spec.text === undefined) {
+    return { ok: false, error: `"${String(spec.selector)}" is not a valid CSS selector.` };
+  }
+  const ignored = `selector "${String(spec.selector)}" is not valid CSS — ignored, waited on the text only`;
+  return {
+    ok: true,
+    // 显式重建而不是 { ...spec, selector: undefined }：缺席 = 不问这个条件，与 parseWaitSpec 一致
+    spec: { text: spec.text, visible: spec.visible, timeoutMs: spec.timeoutMs },
+    note: note === null ? ignored : `${ignored}; ${note}`,
+  };
+}
+
+/**
  * 轮询等待的骨架：探针说「到了」就返回命中，deadline 到点返回未命中，选择器非法立即返回错误。
  * 探针由调用方给（主进程那侧就是一次 CDP `Runtime.evaluate`）——等待骨架不碰 Electron，
  * 能按真实时钟测；探针自己报错（页面正在换文档、崩了）不算结果，交给下一轮。
@@ -199,10 +224,9 @@ export function formatWaitResult(
 ): string {
   const where = `${page.url} — "${page.title}"`;
   const target = describeWaitTarget(spec);
-  const seconds = Math.round(outcome.elapsedMs / 100) / 10;
   const lines = outcome.hit
     ? [
-        `${target} appeared after ${seconds}s on ${where}.`,
+        `${target} appeared after ${elapsedText(outcome.elapsedMs)} on ${where}.`,
         "Call browser_observe to see the structure (and get element refs), or browser_extract to read the text.",
       ]
     : [
@@ -216,6 +240,11 @@ export function formatWaitResult(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 命中耗时：不足 1 秒用毫秒——四舍五入成 0s 会掩盖「探一次就命中」这个事实 */
+function elapsedText(ms: number): string {
+  return ms < 1_000 ? `${Math.max(1, Math.round(ms))}ms` : `${Math.round(ms / 100) / 10}s`;
 }
 
 function trimmed(value: unknown): string | undefined {

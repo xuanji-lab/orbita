@@ -405,6 +405,8 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "Wait until something shows up on the page in your browser tab: selector waits for a CSS selector to exist in " +
       "the DOM (visible: true also requires a rendered, non-zero box), text waits for a string in the page's visible " +
       "text. Give one or both — with both, the wait ends as soon as either appears. " +
+      "An invalid selector is reported immediately; if you also gave text, the wait continues on the text alone " +
+      "and the result notes that the selector was ignored. " +
       "Use it after browser_navigate / browser_click when the content loads asynchronously (slow sites, single-page " +
       "apps): waiting for the exact thing you need is cheaper and more reliable than calling browser_observe over and " +
       "over and guessing. timeoutMs defaults to " +
@@ -427,6 +429,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
           type: "boolean",
           description:
             "With selector: also require the element to be visible (non-zero box, not visibility:hidden). " +
+            "Ignored when only text is given — text already matches visible text only (the result notes it). " +
             "Defaults to false.",
         },
         timeoutMs: {

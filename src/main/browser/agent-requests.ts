@@ -33,6 +33,7 @@ import {
   parseWaitSpec,
   probeTimeoutMs,
   waitProbeScript,
+  waitSelectorInvalidFallback,
   waitUntilHit,
   type BrowserWaitSample,
   type BrowserWaitSpec,
@@ -423,13 +424,26 @@ async function waitFor(
 ): Promise<BrowserToolOutcome> {
   const parsed = parseWaitSpec(request);
   if (!parsed.ok) return { ok: false, error: parsed.error };
-  const { spec, note } = parsed;
+  let { spec, note } = parsed;
   // 每轮探针按剩余时间夹超时：接近 deadline 的那一轮不会吃满 10 秒命令超时，broker 的
   // timeoutMs + 余量才够用（2026-10-14 评审）。
-  const deadline = Date.now() + spec.timeoutMs;
-  const outcome = await waitUntilHit(() => probeWait(contents, spec, deadline), spec);
+  const waitOnce = () => {
+    const deadline = Date.now() + spec.timeoutMs;
+    return waitUntilHit(() => probeWait(contents, spec, deadline), spec);
+  };
+  let outcome = await waitOnce();
   if ("error" in outcome) {
-    return { ok: false, error: `"${String(spec.selector)}" is not a valid CSS selector.` };
+    // 选择器非法：同一次等待里还有 text 条件就丢掉选择器重等 text（结果里说明），
+    // 手滑的选择器不该把合法的那一半带走（#225 验收）。丢掉后探针不会再报非法，
+    // 第二道闸主要给类型看，万一真报了，还是选择器非法这一个错。
+    const fallback = waitSelectorInvalidFallback(spec, note);
+    if (!fallback.ok) return { ok: false, error: fallback.error };
+    spec = fallback.spec;
+    note = fallback.note;
+    outcome = await waitOnce();
+    if ("error" in outcome) {
+      return { ok: false, error: `"${String(parsed.spec.selector)}" is not a valid CSS selector.` };
+    }
   }
   const page = { url: pageUrl(contents), title: contents.getTitle() };
   return { ok: true, text: formatWaitResult(page, spec, outcome, note), card: card(tab, contents) };

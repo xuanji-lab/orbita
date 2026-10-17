@@ -13,6 +13,7 @@ import {
   probeTimeoutMs,
   waitProbeScript,
   waitSampleHit,
+  waitSelectorInvalidFallback,
   waitUntilHit,
   WAIT_DEFAULT_TIMEOUT_MS,
   WAIT_MAX_TIMEOUT_MS,
@@ -59,6 +60,23 @@ describe("parseWaitSpec", () => {
     assert.equal(spec("true"), false);
     assert.equal(spec(1), false);
     assert.equal(spec(undefined), false);
+  });
+
+  test("只给 text 时 visible 没有作用对象：note 里说明忽略，不静默吞掉", () => {
+    const parsed = parseWaitSpec({ text: "3 results", visible: true });
+    assert.ok(parsed.ok);
+    assert.equal(parsed.note, "visible applies to selector only — the text condition already matches visible text");
+    // 已有夹取说明时拼在同一条 note 里，顺序：先说的在前
+    const capped = parseWaitSpec({ text: "3 results", visible: true, timeoutMs: 999_999 });
+    assert.ok(capped.ok);
+    assert.equal(
+      capped.note,
+      "timeoutMs was capped at 30000; visible applies to selector only — the text condition already matches visible text",
+    );
+    // 有 selector 时 visible 正常生效，不产生 note
+    const withSelector = parseWaitSpec({ selector: "#r", visible: true });
+    assert.ok(withSelector.ok);
+    assert.equal(withSelector.note, null);
   });
 });
 
@@ -274,6 +292,15 @@ describe("formatWaitResult", () => {
     assert.match(text, /browser_observe/);
   });
 
+  test("不足一秒的命中用毫秒：不说 0s（那是在掩盖探一次就命中）", () => {
+    const parsed = parseWaitSpec({ selector: "#results" });
+    assert.ok(parsed.ok);
+    assert.match(formatWaitResult(page, parsed.spec, { hit: true, elapsedMs: 8 }), /^#results appeared after 8ms on/);
+    assert.match(formatWaitResult(page, parsed.spec, { hit: true, elapsedMs: 420 }), /^#results appeared after 420ms on/);
+    // 一秒整起还是一位小数的秒
+    assert.match(formatWaitResult(page, parsed.spec, { hit: true, elapsedMs: 1000 }), /^#results appeared after 1s on/);
+  });
+
   test("没等到：不算错误，带上等了多久与可选的下一步；夹取说明附在末尾", () => {
     const parsed = parseWaitSpec({ text: "3 results", timeoutMs: 999_999 });
     assert.ok(parsed.ok);
@@ -337,6 +364,35 @@ describe("waitUntilHit", () => {
   test("选择器非法：立即返回错误，不等超时", async () => {
     const outcome = await waitUntilHit(async () => ({ error: "invalid-selector" }), specOf({ selector: "#r", timeoutMs: 30_000 }));
     assert.deepEqual(outcome, { error: "invalid-selector" });
+  });
+});
+
+describe("waitSelectorInvalidFallback", () => {
+  const specOf = (input: Parameters<typeof parseWaitSpec>[0]) => {
+    const parsed = parseWaitSpec(input);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return parsed.spec;
+  };
+
+  test("还有 text 条件：丢掉 selector 只等 text，note 说明；已有 note 拼在后面", () => {
+    const fallback = waitSelectorInvalidFallback(
+      specOf({ selector: "##bad[", text: "3 results", timeoutMs: 5000 }),
+      "timeoutMs was capped at 30000",
+    );
+    assert.ok(fallback.ok);
+    assert.deepEqual(fallback.spec, { text: "3 results", visible: false, timeoutMs: 5000 });
+    assert.equal(
+      fallback.note,
+      'selector "##bad[" is not valid CSS — ignored, waited on the text only; timeoutMs was capped at 30000',
+    );
+    const bare = waitSelectorInvalidFallback(specOf({ selector: "##bad[", text: "x" }), null);
+    assert.ok(bare.ok);
+    assert.equal(bare.note, 'selector "##bad[" is not valid CSS — ignored, waited on the text only');
+  });
+
+  test("只有 selector：没得降级，当场报错", () => {
+    const fallback = waitSelectorInvalidFallback(specOf({ selector: "##bad[" }), null);
+    assert.deepEqual(fallback, { ok: false, error: '"##bad[" is not a valid CSS selector.' });
   });
 });
 
