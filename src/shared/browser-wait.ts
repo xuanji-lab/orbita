@@ -95,6 +95,14 @@ export function clampWaitTimeout(value: unknown): { timeoutMs: number; note: str
 }
 
 /**
+ * 文字预筛的归一化：合并空白 + 转小写。页内脚本里是同一份逻辑（那段是字符串，只能抄一遍）。
+ * 目的只是别把 innerText 能命中的文字挡在预筛外，不参与最终判定。
+ */
+function normalizeForPrescreen(text: string): string {
+  return text.replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
  * 页内探针。selector 用 JSON 字面量嵌进去（模型给的选择器里有引号也不会串成代码）；
  * 选择器非法时回 `{ error: "invalid-selector" }`——主进程据此当场报错，不干等到超时。
  * visible 时在所有匹配里找第一个可见的（第一个匹配可能恰好被藏起来了）。
@@ -102,9 +110,12 @@ export function clampWaitTimeout(value: unknown): { timeoutMs: number; note: str
 export function waitProbeScript(spec: BrowserWaitSpec): string {
   const selector = spec.selector === undefined ? "null" : JSON.stringify(spec.selector);
   const text = spec.text === undefined ? "null" : JSON.stringify(spec.text);
+  // 预筛用的针：与页内的 textContent 一样先归一化。在 Node 侧算一次嵌进脚本，页内不必每轮重算
+  const textNeedle = spec.text === undefined ? "null" : JSON.stringify(normalizeForPrescreen(spec.text));
   return `(() => {
   const selector = ${selector};
   const text = ${text};
+  const needle = ${textNeedle};
   const needVisible = ${spec.visible ? "true" : "false"};
   const out = { selector: null, text: null };
   if (selector !== null) {
@@ -131,7 +142,16 @@ export function waitProbeScript(spec: BrowserWaitSpec): string {
       // 先在 textContent 上做不触发布局的快速排除：绝大多数轮次里文字还没出现，若每 200ms 读一次
       // innerText 就是每轮强制一次 layout（2026-10-14 评审记的账）。只有 textContent 命中候选时才用
       // innerText 确认——语义仍是「可见文字出现了，隐藏内容不算」。
-      out.text = (body.textContent || "").includes(text) ? body.innerText.includes(text) : false;
+      // 预筛两边都归一化（合并空白 + 转小写）再比：textContent 不合并源码里的换行缩进、也不应用
+      // text-transform，直接 includes 会比 innerText 筛掉更多——'<p>Loading⏎      complete</p>'、
+      // '<p style="text-transform:uppercase">sign in</p>' 都会被误判成「没出现」，一路等到超时
+      // （2026-10-17 评审）。归一化后预筛只会多放过、不会漏掉。
+      // 命中与否仍由下一行的 innerText.includes(text) 精确确认：大小写与空白要真的一致，
+      // 归一化只是让「值得读 innerText 看一眼」这个判断更宽，不改可见性语义。
+      const prescreen = body.textContent || "";
+      out.text = prescreen.replace(/\\s+/g, " ").toLowerCase().includes(needle)
+        ? body.innerText.includes(text)
+        : false;
     } else {
       out.text = false;
     }

@@ -252,10 +252,37 @@ describe("waitProbeScript", () => {
     });
   });
 
+  test("预筛两边都归一化再比：源码换行缩进与 text-transform 不再被筛掉（评审表格前两行）", () => {
+    // `<p>Loading⏎      complete</p>`：textContent 带源码里的换行与缩进，innerText 是合并后的可见文本
+    assert.deepEqual(
+      runProbe({ text: "Loading complete" }, { textContent: "Loading\n      complete", text: "Loading complete" }),
+      { selector: null, text: true },
+      "textContent 的换行缩进不该把 innerText 能命中的文字筛掉",
+    );
+    // `<p style="text-transform:uppercase">sign in</p>`：textContent 是源码里的原文，innerText 应用了变换
+    assert.deepEqual(
+      runProbe({ text: "SIGN IN" }, { textContent: "sign in", text: "SIGN IN" }),
+      { selector: null, text: true },
+      "text-transform 只改渲染文字，不该被预筛当成没出现",
+    );
+    // 预筛放宽了，确认仍是精确的：页面上没有这段可见文字就不算命中
+    assert.deepEqual(
+      runProbe({ text: "Loading complete" }, { textContent: "Loading\n complete", text: "still stalled" }),
+      { selector: null, text: false },
+    );
+    // 归一化只多放过、不会漏读：归一化后也对不上时仍不碰 innerText（不强制 layout）
+    assert.deepEqual(
+      runProbe({ text: "Loading complete" }, { textContent: "loading\n  stalled", innerTextThrows: true }),
+      { selector: null, text: false },
+    );
+  });
+
   test("选择器与文字以 JSON 字面量嵌入——带引号的选择器不会串成代码", () => {
     const script = waitProbeScript(specOf({ selector: 'a[title="x"]', text: 'say "hi"' }));
     assert.ok(script.includes('const selector = "a[title=\\"x\\"]";'));
     assert.ok(script.includes('const text = "say \\"hi\\"";'));
+    // 预筛的针是 Node 侧算好的归一化结果：段内多空格 / 换行合成一个空格、转小写
+    assert.ok(waitProbeScript(specOf({ text: "SIGN   IN" })).includes('const needle = "sign in";'));
     // 没问的条件是 null，页内不会去碰它
     const selectorOnly = waitProbeScript(specOf({ selector: "#r" }));
     assert.ok(selectorOnly.includes("const text = null;"));
