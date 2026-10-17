@@ -298,6 +298,13 @@ describe("给模型的报告", () => {
     assert.match(text, /reload the page/);
   });
 
+  test("控制台：首调即有内容（Runtime/Log 重放历史）→ 不再说「只记从现在起」，改说可能含调用前的消息", () => {
+    const text = formatConsoleReport(page, [consoleEntry("error", "boom")], { limit: 100 }, true, 1);
+    assert.match(text, /\[error\] boom/);
+    assert.doesNotMatch(text, /only what happened from now on/);
+    assert.match(text, /may include messages from before this call/);
+  });
+
   test("控制台：空缓冲但不是刚打开 → 只说没有；都被级别滤掉时说清还剩几条", () => {
     assert.match(formatConsoleReport(page, [], { limit: 100 }, false, 0), /No console messages in the buffer\./);
     const filtered = formatConsoleReport(page, [], { level: "error", limit: 100 }, false, 7);
@@ -323,6 +330,12 @@ describe("给模型的报告", () => {
     const text = formatNetworkReport(page, [], { limit: 100 }, true, 0);
     assert.match(text, /Capture was just turned on/);
     assert.match(text, /reload the page/);
+  });
+
+  test("网络：首调即有内容 → 不再带「采集刚打开」类提示（Network 域不重放，非空只是竞态）", () => {
+    const text = formatNetworkReport(page, [networkEntry("1", { status: 403 })], { limit: 100 }, true, 1);
+    assert.match(text, /GET https:\/\/x\.test\/1 → 403/);
+    assert.doesNotMatch(text, /just turned on|from now on/);
   });
 
   test("网络：都被过滤器滤掉时说清过滤器与缓冲里的条数", () => {

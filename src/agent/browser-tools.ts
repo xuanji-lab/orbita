@@ -228,8 +228,9 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "but looks empty or wrong — a JS error or a refused request usually explains it, so look here before guessing " +
       "or retrying. level filters by minimum severity (debug < log < info < warn < error): pass \"error\" to see " +
       "only errors. Only your own tab is read. Capture starts with the first call and stays on for the tab " +
-      "afterwards, so if the page is already broken when you call it, reload it (browser_navigate with the same " +
-      "URL) and call this tool again. " +
+      "afterwards: the browser replays the current page's console output on that first call, so earlier console " +
+      "messages usually show up immediately; browser-level errors (CORS and the like) may not — reload the page " +
+      "(browser_navigate with the same URL) and call again to be sure. " +
       UNTRUSTED,
     parameters: {
       type: "object",
@@ -268,8 +269,9 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "401/403 or a blocked request usually explains it, so look here before guessing or retrying. url filters by " +
       "case-insensitive substring; statusMin / statusMax by status code range (statusMin: 400 for 4xx/5xx). " +
       "Requests that failed to load have no status code and stop matching once a status range is given. " +
-      "Only your own tab is read. Capture starts with the first call and stays on for the tab afterwards, so if " +
-      "the page is already broken when you call it, reload it (browser_navigate with the same URL) and call again. " +
+      "Only your own tab is read. Capture starts with the first call and stays on for the tab afterwards — " +
+      "already-finished requests are not replayed, so if the page is already broken when you call it, reload it " +
+      "(browser_navigate with the same URL) and call again. " +
       UNTRUSTED,
     parameters: {
       type: "object",

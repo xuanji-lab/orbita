@@ -24,6 +24,8 @@ interface TabEntry {
   enabled: boolean;
   /** 当前挂在 debugger 上的 message 监听（重新 enable 前先摘掉旧的，避免事件重复进缓冲） */
   listener: ((event: unknown, method: string, params: unknown) => void) | null;
+  /** 当前挂在 debugger 上的 detach 监听（同上：重开前先摘旧的，否则每次重开都攒一个） */
+  onDetach: (() => void) | null;
 }
 
 /** 进程级一份：诊断是「这个 tab 发生过什么」的进程级事实，没有第二个消费者（同 agent-requests 的 pacer） */
@@ -40,7 +42,7 @@ export class BrowserDiagnostics {
     if (entry === undefined) {
       const state = new TabDiagnostics();
       const watcher = new MainDocumentWatcher();
-      entry = { state, watcher, enabled: false, listener: null };
+      entry = { state, watcher, enabled: false, listener: null, onDetach: null };
       this.tabs.set(id, entry);
       // 兜底：CDP 侧拿不到主帧信息时（Page.getFrameTree 失败）仍按 did-navigate 清。正常路径在
       // Network.requestWillBeSent 里判「新主文档」——did-navigate 在提交之后才触发，会把主文档
@@ -73,9 +75,13 @@ export class BrowserDiagnostics {
     };
     entry.listener = listener;
     contents.debugger.on("message", listener);
-    contents.debugger.once("detach", () => {
+    // detach 翻回未开等下次重开；挂前摘旧，不用 once——once 每次重开都会再攒一个（#224 验收）
+    if (entry.onDetach !== null) contents.debugger.removeListener("detach", entry.onDetach);
+    const onDetach = (): void => {
       entry.enabled = false;
-    });
+    };
+    entry.onDetach = onDetach;
+    contents.debugger.on("detach", onDetach);
     // 主帧信息是 CDP 侧换页判定的依据：先取再 enable，免得导航卡在中间漏判。取不到就保持
     // ready=false，退回 did-navigate 兜底；下次 enable（重新 attach）会重试。
     try {

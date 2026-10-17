@@ -311,7 +311,14 @@ export function formatConsoleReport(
     `${shown.length} of ${entries.length} message(s) shown${entries.length > shown.length ? " (most recent)" : ""}` +
       `${query.level === undefined ? "" : ` at level ${query.level} and above`}.`,
   );
-  if (justEnabled) lines.push("Capture was just turned on for this tab: only what happened from now on is recorded.");
+  // 首调即有内容：Runtime/Log 会重放本页已有的 console 输出。这里再说「只记从现在起」就与
+  // 上面列出的历史消息自相矛盾——#224 真机验收里模型据此对用户编了错误因果，改为如实说明
+  if (justEnabled) {
+    lines.push(
+      "Capture was just turned on: the browser replays this page's existing console output, " +
+        "so the list above may include messages from before this call.",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -337,7 +344,7 @@ export function formatNetworkReport(
     `${shown.length} of ${entries.length} request(s) shown${entries.length > shown.length ? " (most recent)" : ""}` +
       `${describeFilters(query)}.`,
   );
-  if (justEnabled) lines.push("Capture was just turned on for this tab: only what happened from now on is recorded.");
+  // Network 域不重放历史：首调时缓冲非空只是竞态，既无历史可解释，也不该带「只记从现在起」的提示
   return lines.join("\n");
 }
 
