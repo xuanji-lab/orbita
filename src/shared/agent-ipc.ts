@@ -103,7 +103,13 @@ export const ipcChannels = {
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
   sessionList: "session:list",
+  /**
+   * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
+   * 主进程仍全量读盘 + 折叠，切的是 IPC 传输量与 renderer 渲染量（瓶颈所在）。
+   */
   sessionLoad: "session:load",
+  /** 拉更早的一页（滚动触顶）：载荷 (id, before 记录 id, limit)，回 SessionOlderPage */
+  sessionLoadOlder: "session:load-older",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */

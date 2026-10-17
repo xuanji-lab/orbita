@@ -1024,6 +1024,8 @@ export const en = {
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
     noMessages: "No messages yet. Send the first one to start.",
+    /** 源侧分页：触顶拉更早一页那一行 */
+    loadingOlder: "Loading earlier messages…",
     backToParent: (title: string) => `Back to "${title}"`,
     renameTask: "Rename task",
     scrollToBottom: "Scroll to bottom",

@@ -21,7 +21,7 @@ import {
   HOME_CARD_QUERY_ROWS,
   selectHomeCards,
 } from "./home-cards";
-import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
+import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
@@ -833,6 +833,11 @@ function ChatViewBody(props: {
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
+  /**
+   * 触顶拉更早一页那一刻的滚动几何（源侧分页的滚动锚定）：
+   * pages = 当时的并入页数（回执后它变了就说明真并进来了一页）。
+   */
+  const olderAnchorRef = useRef<{ pages: number; scrollHeight: number; scrollTop: number } | null>(null);
 
   // 一键回底（feat/scroll-to-bottom-X）：距底超过 300px 浮出按钮。用 state——按钮显隐
   // 是渲染输出，与 followRef 的「无 UI 依赖」不同。重算挂两处：滚动事件管用户滚动，
@@ -854,7 +859,42 @@ function ChatViewBody(props: {
       followRef.current = isAtBottom(el.scrollTop, el.clientHeight, el.scrollHeight);
     }
     syncScrollToEnd();
+    // 触顶就拉更早的一页（源侧分页）。**先记滚动几何再发请求**：回执并进窗口后
+    // 靠它把 scrollTop 补回来（见下面的锚定 effect）。守卫在这里做——`loadOlder`
+    // 自己也会 no-op，但锚点不能为一个没发出去的请求留着（那会把下一次真拉回来的
+    // 页错锚到旧几何上）。
+    if (
+      el !== null &&
+      session.hasMoreHistory &&
+      !session.loadingOlder &&
+      shouldLoadOlder(el.scrollTop)
+    ) {
+      olderAnchorRef.current = {
+        pages: session.olderPages,
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+      session.loadOlder();
+    }
   };
+
+  // 滚动锚定（源侧分页）：更早的一页 prepend 之后，把 scrollTop 补上新旧 scrollHeight
+  // 之差——前面插进来多高，视口就往下走多远，用户视角纹丝不动。绘制前同步执行
+  // （useLayoutEffect），不会闪一下再跳。**声明在这支之前**：用户已经回到底部时
+  // 交给下面那支钉底，不拿旧几何再补一次。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = olderAnchorRef.current;
+    if (el === null || anchor === null) return;
+    if (session.olderPages === anchor.pages) {
+      // 请求落定但窗口没动（空页 / 失败）：锚点作废，不留到下一次
+      if (!session.loadingOlder) olderAnchorRef.current = null;
+      return;
+    }
+    olderAnchorRef.current = null;
+    if (followRef.current) return;
+    el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
+  });
 
   // 每次 commit 后钉底：不挑触发源——流式输出、忙碌指示出现、折叠展开全兜住；scrollTop 赋值廉价。
   // 绘制前同步执行，用户看不到先长高再滚下去的闪动。
@@ -927,6 +967,9 @@ function ChatViewBody(props: {
   // 打开/切换会话无条件跳到底并恢复跟随：后台会话的事件一直进自己的槽，切回时转录已是最新
   useLayoutEffect(() => {
     followRef.current = true;
+    // 换会话即作废分页锚点：在途回执并的是**旧会话**的窗口，拿它去补新会话的
+    // scrollTop 就是错位（锚点里存的是旧会话的 scrollHeight）
+    olderAnchorRef.current = null;
     const el = scrollRef.current;
     if (el !== null) el.scrollTop = el.scrollHeight;
     syncScrollToEnd();
@@ -1430,6 +1473,7 @@ function ChatViewBody(props: {
           retry={session.retry}
           turnError={session.turnError}
           loadingHistory={session.loadingHistory}
+          loadingOlder={session.loadingOlder}
           onBranch={session.branchFrom}
           onOpenTask={session.openSession}
           channel={channel}
@@ -1475,6 +1519,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   retry: RetryStatus | null;
   turnError: string | null;
   loadingHistory: boolean;
+  /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
+  loadingOlder: boolean;
   onBranch: (anchorItemId: string) => void;
   /** B-1：read_task 的「Open」——引用稳定（openSession 只依赖 engine），不破 memo */
   onOpenTask: (sessionId: string) => void;
@@ -1640,6 +1686,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     <>
       {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
       {props.loadingHistory && entries.length === 0 && <StatusLine spin>{t.common.loading}</StatusLine>}
+      {/* 触顶拉更早的一页：列首一行次级灰（设计系统的 caption 惯例）。import 耗尽了就不出现 */}
+      {props.loadingOlder && <StatusLine spin>{t.chat.loadingOlder}</StatusLine>}
       {/* 空会话（没发过消息）：一行 tertiary 交代「这里为什么是空的」 */}
       {entries.length === 0 &&
         !props.loadingHistory &&

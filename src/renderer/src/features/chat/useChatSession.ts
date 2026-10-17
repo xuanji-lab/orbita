@@ -19,9 +19,11 @@ import {
   removeIntentAsk,
   setPendingEcho,
   nextDeliverable,
+  prependOlder,
   removeSessionEntry,
   revertOptimisticTurn,
   seedFromDisk,
+  setOlderLoading,
   setEntryPhase,
   type PendingApproval,
   type QueuedMessage,
@@ -79,6 +81,7 @@ import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.t
 import {
   childSessions,
   rootSessions,
+  SESSION_PAGE_RECORDS,
   type Carryover,
   type ChannelMarkRecord,
   type CompactedRecord,
@@ -143,7 +146,25 @@ export interface UndoDialogState {
 
 export interface ChatSession {
   sessionId: string | null;
+  /**
+   * 已加载窗口的往来流（源侧分页：**盘上是全量，这里是尾部一段**）。
+   * 渲染、分组、锚点全按它算，与以前一样——只是开头可能还有没拉回来的更早历史。
+   */
   transcript: readonly TranscriptItem[];
+  /** 更早的历史还有没拉回来（尾窗之外还有记录）——顶部指示与触顶触发都读它 */
+  hasMoreHistory: boolean;
+  /** 更早的一页在途（顶部「正在加载更早的消息…」那一行） */
+  loadingOlder: boolean;
+  /**
+   * 本槽成功并入的早页数（只增）。**滚动锚定拿它当判据**：它变了就是前面真补进来了一页
+   * （拿窗口首条记录 id 比不出「重新种盘」与「真并页」的区别，槽里那个 id 两件事都会变）。
+   */
+  olderPages: number;
+  /**
+   * 拉更早的一页（滚动触顶时调）。**不满足条件时静默 no-op**（没有更早 / 在途 /
+   * 锚点未知）——滚动处理器每帧都可能调它，不该为「已经到顶」报任何东西。
+   */
+  loadOlder: () => void;
   /** 压缩界碑（与 transcript 分开记账）；显示时由 applyCompactionBoundary 合成 */
   compactions: readonly CompactedRecord[];
   /**
@@ -1254,6 +1275,8 @@ function filesField(files: readonly ComposerFileRef[] | undefined): { files?: Pr
 export function useSessionView(engine: SessionEngine, key: string): ChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  /** 本槽成功并入的早页数（滚动锚定的判据，见 ChatSession.olderPages） */
+  const [olderPages, setOlderPages] = useState(0);
   const [opened, setOpened] = useState<SessionMeta | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -2086,7 +2109,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           setSessionId(live ? id : null);
           sessionRef.current = live ? id : null;
           if (!engine.statesRef.current.has(id)) {
-            engine.applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+            engine.applyStates((prev) =>
+              seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
+            );
           }
         })
         .catch((cause: unknown) => {
@@ -2472,13 +2497,46 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .then((detail) => {
           if (detail === null) return;
           setOpened(detail.meta);
-          engine.applyStates((prev) => seedFromDisk(prev, id, detail.transcript, detail.meta.stats));
+          engine.applyStates((prev) =>
+            seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
+          );
         })
         .catch((cause: unknown) =>
           engine.setError(cause instanceof Error ? cause.message : String(cause)),
         ),
     [engine],
   );
+
+  /**
+   * 拉更早的一页（滚动触顶时调，源侧分页）。
+   *
+   * - **静默 no-op**：没更早 / 上一页还在途中 / 还没种过窗口（firstId 未知）
+   *   就直接返回——滚动处理器可能每帧都调它，「已经到顶」不该报任何东西；
+   * - **防重看槽里的 loading**（同步写进 ref）：连续两个滚动事件只发一次请求；
+   * - 回执并进窗口前面（`prependOlder`）；失败把 loading 收回去并上屏错误
+   *   （不回退已加载的历史，下次触顶自然会重试）。
+   */
+  const loadOlder = useCallback((): void => {
+    const id = sessionRef.current ?? opened?.id ?? null;
+    if (id === null) return;
+    const current = engine.statesRef.current.get(id);
+    if (current === undefined) return;
+    const win = current.window;
+    if (!win.hasMore || win.loading || win.firstId === null) return;
+    const before = win.firstId;
+    engine.applyStates((prev) => setOlderLoading(prev, id, true));
+    void api.session
+      .loadOlder(id, before, SESSION_PAGE_RECORDS)
+      .then((page) => {
+        engine.applyStates((prev) => prependOlder(prev, id, page.records, { hasMore: page.hasMore }));
+        // 只在本页真带了记录时动计数：空页 / 失败不改变几何，锚点由渲染侧作废
+        if (page.records.length > 0) setOlderPages((n) => n + 1);
+      })
+      .catch((cause: unknown) => {
+        engine.applyStates((prev) => setOlderLoading(prev, id, false));
+        engine.setError(ipcErrorText(cause));
+      });
+  }, [engine, opened]);
 
   /** 回退确认框 */
   const [revertDialog, setRevertDialog] = useState<RevertDialogState | null>(null);
@@ -3024,6 +3082,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   return {
     sessionId,
     transcript,
+    hasMoreHistory: entry.window.hasMore,
+    loadingOlder: entry.window.loading,
+    olderPages,
+    loadOlder,
     compactions: entry.compactions,
     marks: entry.marks,
     phase: entry.phase,

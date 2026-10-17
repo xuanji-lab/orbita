@@ -23,7 +23,9 @@ import {
   nextDeliverable,
   removeSessionEntry,
   revertOptimisticTurn,
+  prependOlder,
   seedFromDisk,
+  setOlderLoading,
   setEntryPhase,
   type QueuedMessage,
   type SessionEntry,
@@ -1016,5 +1018,137 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
     // 故意倒序传入（卡在前、气泡在后）：混排必须把卡排到气泡之后
     const merged = mergeSideRecords([], [], [], [], [], [user], [recall]);
     assert.deepEqual(merged.map((record) => record.role), ["user", "intent-recall"]);
+  });
+});
+
+// ── 源侧分页：更早的一页并到窗口前面（prependOlder）──
+
+describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", () => {
+  /** 尾窗种子：窗口 = [u3, a3]，外面还有更早的 */
+  const tailSeed = (): SessionStates =>
+    seedFromDisk(new Map(), "A", [userItem("u3", 3000), userItem("u4", 4000)], null, { hasMore: true });
+
+  test("并进前面：顺序不乱（更早的在前）、锚点移到新页头一条、hasMore 跟着回执走", () => {
+    const seeded = tailSeed();
+    assert.equal(seeded.get("A")?.window.firstId, "u3");
+
+    const next = prependOlder(seeded, "A", [userItem("u1", 1000), userItem("u2", 2000)], { hasMore: true });
+    assert.deepEqual(selectTranscript(next.get("A")!.transcript).map((item) => item.id), ["u1", "u2", "u3", "u4"]);
+    assert.equal(next.get("A")?.window.firstId, "u1");
+    assert.equal(next.get("A")?.window.hasMore, true);
+    // 原状态不被就地改写（reducer 是纯函数）
+    assert.deepEqual(selectTranscript(seeded.get("A")!.transcript).map((item) => item.id), ["u3", "u4"]);
+  });
+
+  test("去重：页里混进已经加载过的记录时不重复进列", () => {
+    const seeded = tailSeed();
+    const next = prependOlder(
+      seeded,
+      "A",
+      [userItem("u1", 1000), userItem("u2", 2000), userItem("u3", 3000), userItem("u1", 1000)],
+      { hasMore: false },
+    );
+    assert.deepEqual(selectTranscript(next.get("A")!.transcript).map((item) => item.id), ["u1", "u2", "u3", "u4"]);
+    assert.equal(next.get("A")?.window.firstId, "u1");
+    assert.equal(next.get("A")?.window.hasMore, false);
+  });
+
+  test("空页（锚点对不上盘）：记录不动、hasMore 归假、锚点保持", () => {
+    const seeded = tailSeed();
+    const next = prependOlder(seeded, "A", [], { hasMore: false });
+    assert.deepEqual(selectTranscript(next.get("A")!.transcript).map((item) => item.id), ["u3", "u4"]);
+    assert.equal(next.get("A")?.window.firstId, "u3");
+    assert.equal(next.get("A")?.window.hasMore, false);
+  });
+
+  test("侧记录一起前置：界碑 / 通道标记 / 轮尾账 / 意图卡进各自的桶", () => {
+    const seeded = seedFromDisk(new Map(), "A", [userItem("u5", 5000)], null, { hasMore: true });
+    const fileTurn: FileTurnRecord = {
+      role: "file-turn",
+      id: "f1",
+      timestamp: 1500,
+      changes: [],
+      webArtifacts: ["/w/out/report.html"],
+    };
+    const recall: IntentRecallRecord = {
+      role: "intent-recall",
+      id: "c1",
+      turnId: "u2",
+      status: "done",
+      runId: "r1",
+      timestamp: 2000,
+      startedAt: 2000,
+      finishedAt: 2001,
+      scene: null,
+      qaTotal: null,
+      passed: null,
+      budgetMs: null,
+      peak: false,
+      timings: null,
+      summary: null,
+      selected: [],
+      ask: [],
+      error: null,
+      halted: null,
+      skipped: null,
+      gateWhy: null,
+    };
+    const next = prependOlder(
+      seeded,
+      "A",
+      [userItem("u2", 2000), channelMark("k1", 1200), compacted("cp1", 1100), fileTurn, recall],
+      { hasMore: false },
+    );
+    const entry = next.get("A")!;
+    assert.deepEqual(entry.compactions.map((record) => record.id), ["cp1"]);
+    assert.deepEqual(entry.marks.map((record) => record.id), ["k1"]);
+    assert.deepEqual(entry.fileTurns.map((record) => record.id), ["f1"]);
+    assert.equal(entry.fileTurns[0]?.webArtifacts?.[0], "/w/out/report.html");
+    assert.deepEqual(entry.intentRecalls.map((record) => record.id), ["c1"]);
+    // 混排后仍是时间序（界碑与标记在 user 之前、卡在 user 之后）
+    const merged = mergeSideRecords(
+      entry.compactions,
+      entry.marks,
+      entry.fileTurns,
+      entry.reverts,
+      entry.undos,
+      selectTranscript(entry.transcript),
+      entry.intentRecalls,
+    );
+    assert.deepEqual(roles(merged), ["compacted", "channel-mark", "file-turn", "user", "intent-recall", "user"]);
+  });
+
+  test("尾部实时累积不动：prepend 不洗掉流式中的 progress 条目与 ephemeral 槽", () => {
+    let states = tailSeed();
+    states = applyAgentEvent(states, progress("A", assistantDone("a9", "正在答")));
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    const next = prependOlder(states, "A", [userItem("u1", 1000)], { hasMore: true });
+    const entry = next.get("A")!;
+    assert.deepEqual(selectTranscript(entry.transcript).map((item) => item.id), ["u1", "u3", "u4", "a9"]);
+    assert.equal(entry.phase, "turn");
+  });
+
+  test("槽不在了（会话被删 / 回到首页）就原样返回，不凭空造槽", () => {
+    const seeded = tailSeed();
+    const next = prependOlder(seeded, "B", [userItem("u1", 1000)], { hasMore: true });
+    assert.equal(next, seeded);
+    assert.deepEqual([...next.keys()], ["A"]);
+  });
+
+  test("prepend 落定即清 loading（顶部那行「正在加载更早的消息…」跟着收）", () => {
+    const loading = setOlderLoading(tailSeed(), "A", true);
+    assert.equal(loading.get("A")?.window.loading, true);
+    const next = prependOlder(loading, "A", [userItem("u1", 1000)], { hasMore: false });
+    assert.equal(next.get("A")?.window.loading, false);
+  });
+
+  test("setOlderLoading：同值 / 槽不在都返回原引用（不白激一次渲染）", () => {
+    const seeded = tailSeed();
+    assert.equal(setOlderLoading(seeded, "A", false), seeded);
+    assert.equal(setOlderLoading(seeded, "B", true), seeded);
+    const on = setOlderLoading(seeded, "A", true);
+    assert.notEqual(on, seeded);
+    assert.equal(on.get("A")?.window.loading, true);
+    assert.equal(seeded.get("A")?.window.loading, false);
   });
 });

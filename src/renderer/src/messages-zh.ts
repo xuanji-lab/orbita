@@ -939,6 +939,7 @@ export const zh: Messages = {
     noProvider: "先在设置里添加一个至少带一个模型的服务商，再发消息。",
     readOnlyTask: "这个任务记录于支持续聊之前，只能读、不能接着聊。新开一个任务继续吧。",
     noMessages: "还没有消息。发出第一条就开始了。",
+    loadingOlder: "正在加载更早的消息…",
     backToParent: (title) => `返回「${title}」`,
     renameTask: "重命名任务",
     scrollToBottom: "滚动到底部",

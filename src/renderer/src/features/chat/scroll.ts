@@ -30,6 +30,19 @@ export function isBeyondScrollDown(
 }
 
 /**
+ * 触顶阈值（源侧分页）：距顶多少像素内就去拉更早的一页。
+ *
+ * 200px ≈ 一屏的四分之一：不必等到 scrollTop 恰好为 0——真到 0 时顶部已经露出一段
+ * 空白，而请求要过 IPC + 一段渲染才回来。提前发出去，落地时人往往还在往上滚。
+ */
+export const OLDER_TRIGGER_PX = 200;
+
+/** 滚到顶附近了就拉更早的一页（触发回执的防重、幂等由调用方负责） */
+export function shouldLoadOlder(scrollTop: number, threshold: number = OLDER_TRIGGER_PX): boolean {
+  return scrollTop <= threshold;
+}
+
+/**
  * End 键是否归「一键回底」管：非 End 键、带修饰键（组合键各有各的语义，不抢）、
  * 焦点在文本框里（INPUT / TEXTAREA / contentEditable——composer 里 End 是行尾光标）
  * 都不接管。

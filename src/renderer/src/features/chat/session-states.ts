@@ -88,6 +88,18 @@ export function parseCompactCommand(text: string): { instructions?: string } | n
 export interface SessionEntry {
   transcript: TranscriptState;
   /**
+   * 源侧分页的窗口状态。**盘上仍是全量**（JSONL、折叠、续聊语义一字未改），
+   * 槽里只装尾部一段：分页分的是 IPC 传输量与渲染量。
+   */
+  window: {
+    /** 已加载窗口的第一条记录 id——`loadOlder` 的 before 锚点，也是滚动锚定的判据 */
+    firstId: string | null;
+    /** 更早还有记录（触顶要拉的那一页在不在） */
+    hasMore: boolean;
+    /** 更早的一页在途：顶部指示 + 防重（快速连续触顶只发一次） */
+    loading: boolean;
+  };
+  /**
    * 压缩界碑单独记账，**不进 pi 的归约器**——它不是消息，归约器不认识。
    * 显示时由 `applyCompactionBoundary` 按时间插回往来流。
    */
@@ -176,6 +188,7 @@ export function createSessionStates(): SessionStates {
 /** 空槽是常量：首页/无选中时用它兜底，避免每次渲染新建 TranscriptState。 */
 export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
+  window: { firstId: null, hasMore: false, loading: false },
   compactions: [],
   marks: [],
   phase: "idle",
@@ -363,43 +376,41 @@ export function revertOptimisticTurn(
 }
 
 /**
- * 用落盘的 transcript 覆盖一个槽。**整槽覆盖**：历史会话的真相在盘上，
- * 顺带把上次看它时留下的审批清掉——与老实现 `setApprovals([])` 同语义。
- * 活会话**不走这里**：槽里的累积比盘新，种盘等于回退。
+ * 一段记录按槽分流：模型消息进 pi 的归约器，其余各进各的桶（seedFromDisk 与
+ * prependOlder 共用一份分法——两处各写一遍迟早漂移）。
  */
-export function seedFromDisk(
-  states: SessionStates,
-  sessionId: string,
-  transcript: readonly SessionRecord[],
-  stats: AgentStats | null = null,
-): SessionStates {
-  // 界碑与通道标记都不进 pi 的归约器（它们不是模型消息，归约器不认识）——分开记账，
-  // 显示时由 mergeSideRecords 按时间插回往来流；实时与历史从此是同一条显示路径。
-  // 文件账三件（revert.ts）同理：轮尾账自成卡片（②/⑤ 接上渲染），回退界碑自成
-  // 标记行，撤销只是轮尾卡上的徽标——都不进归约器，也不进 items。
-  // 内联 role 谓词而非 isCompactedRecord()/isChannelMarkRecord()：本文件被 node --test
-  // 加载，@shared 的值导入解析不了（AGENTS.md 硬规则）。
-  const items = transcript.filter(
-    (item): item is TranscriptItem =>
-      item.role === "user" || item.role === "assistant" || item.role === "tool",
-  );
-  const compactions = transcript.filter(
-    (item): item is CompactedRecord => item.role === "compacted",
-  );
-  const marks = transcript.filter(
-    (item): item is ChannelMarkRecord => item.role === "channel-mark",
-  );
-  // 文件账三件：轮尾账与回退界碑进各自桶（undo 只在轮尾卡上挂徽标，不单独记账）；
-  // undo 记录随重读进不来这里——它在 transcript 里但没有渲染桶，卡片层从 transcript
-  // 以外的途径拿不到它……不：undo 记录也在 transcript 里，但它是轮尾卡的附注，
-  // 由 ChatView 从 records 里按 turnId 对回去（见 FileTurnCard），不占桶
-  const fileTurns: FileTurnView[] = [];
-  const reverts: RevertRecord[] = [];
-  const undos: UndoRecord[] = [];
-  const intentRecalls: IntentRecallRecord[] = [];
+interface SplitRecords {
+  items: TranscriptItem[];
+  compactions: CompactedRecord[];
+  marks: ChannelMarkRecord[];
+  fileTurns: FileTurnView[];
+  reverts: RevertRecord[];
+  undos: UndoRecord[];
+  intentRecalls: IntentRecallRecord[];
+}
+
+function splitRecords(transcript: readonly SessionRecord[]): SplitRecords {
+  const split: SplitRecords = {
+    items: [],
+    compactions: [],
+    marks: [],
+    fileTurns: [],
+    reverts: [],
+    undos: [],
+    intentRecalls: [],
+  };
   for (const record of transcript) {
-    if (record.role === "file-turn") {
-      fileTurns.push({
+    // 内联 role 谓词而非 isCompactedRecord()/isChannelMarkRecord()：本文件被 node --test
+    // 加载，@shared 的值导入解析不了（AGENTS.md 硬规则）。
+    if (record.role === "user" || record.role === "assistant" || record.role === "tool") {
+      split.items.push(record);
+    } else if (record.role === "compacted") {
+      split.compactions.push(record);
+    } else if (record.role === "channel-mark") {
+      split.marks.push(record);
+    } else if (record.role === "file-turn") {
+      // 轮尾账（revert.ts）：卡片层直接消费，剥掉快照正文只留路径与统计
+      split.fileTurns.push({
         role: "file-turn",
         id: record.id,
         timestamp: record.timestamp,
@@ -415,16 +426,45 @@ export function seedFromDisk(
         ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
       });
     } else if (record.role === "revert") {
-      reverts.push(record);
+      split.reverts.push(record);
     } else if (record.role === "undo") {
-      undos.push(record);
+      split.undos.push(record);
     } else if (record.role === "intent-recall") {
-      intentRecalls.push(record);
+      split.intentRecalls.push(record);
     }
   }
+  return split;
+}
+
+/**
+ * 用落盘的 transcript 覆盖一个槽。**整槽覆盖**：历史会话的真相在盘上，
+ * 顺带把上次看它时留下的审批清掉——与老实现 `setApprovals([])` 同语义。
+ * 活会话**不走这里**：槽里的累积比盘新，种盘等于回退。
+ *
+ * `page` 是源侧分页的窗口信息（尾部一段 + 外面还有没有更多）；不给就是「这一份
+ * 就是全部」——测试与全量种子照旧。窗口的第一条记录 id 由传进来的记录自己算
+ * （就是 `loadOlder` 下次要用的 before 锚点）。
+ */
+export function seedFromDisk(
+  states: SessionStates,
+  sessionId: string,
+  transcript: readonly SessionRecord[],
+  stats: AgentStats | null = null,
+  page?: { hasMore: boolean },
+): SessionStates {
+  // 界碑与通道标记都不进 pi 的归约器（它们不是模型消息，归约器不认识）——分开记账，
+  // 显示时由 mergeSideRecords 按时间插回往来流；实时与历史从是同一条显示路径。
+  // 文件账三件（revert.ts）同理：轮尾账自成卡片（②/⑤ 接上渲染），回退界碑自成
+  // 标记行，撤销只是轮尾卡上的徽标——都不进归约器，也不进 items。
+  const { items, compactions, marks, fileTurns, reverts, undos, intentRecalls } = splitRecords(transcript);
   const next = new Map(states);
   next.set(sessionId, {
     transcript: createTranscriptState(seedSnapshot(items)),
+    window: {
+      firstId: transcript[0]?.id ?? null,
+      hasMore: page?.hasMore ?? false,
+      loading: false,
+    },
     compactions,
     marks,
     phase: "idle",
@@ -459,6 +499,89 @@ function dedupeRecalls(records: readonly IntentRecallRecord[]): IntentRecallReco
   const lastOf = new Map<string, IntentRecallRecord>();
   for (const record of records) lastOf.set(record.turnId, record);
   return records.filter((record) => lastOf.get(record.turnId) === record);
+}
+
+/** 槽里已经装着哪些记录 id（prependOlder 的去重根据） */
+function loadedIds(entry: SessionEntry): Set<string> {
+  const ids = new Set<string>();
+  for (const item of entry.transcript.snapshot.transcript) ids.add(item.id);
+  for (const id of entry.transcript.progressItems.keys()) ids.add(id);
+  for (const record of entry.compactions) ids.add(record.id);
+  for (const record of entry.marks) ids.add(record.id);
+  for (const record of entry.fileTurns) ids.add(record.id);
+  for (const record of entry.reverts) ids.add(record.id);
+  for (const record of entry.undos) ids.add(record.id);
+  for (const record of entry.intentRecalls) ids.add(record.id);
+  return ids;
+}
+
+/**
+ * 把更早的一页并到槽的**前面**（源侧分页向前的方向，`session:loadOlder` 的回执）。
+ *
+ * - **前半部分拼接**：只往已加载窗口之前放记录，尾部的实时累积（progress 条目、
+ *   审批、队列）一个字不动——流式只发生在尾部，两件事正交。这里也因此直接改
+ *   `snapshot.transcript`（pi 的归约器只在种盘时建它，之后靠 progress 事件追加）：
+ *   重建 TranscriptState 会把流式中间态（progressItems / toolCallBuffers）洗掉。
+ * - **去重**：重试 / 并发拉回同一页时按记录 id 丢掉已有的（同一页里重复的也丢），
+ *   否则 React 会在同一列里看到两个同 key 的单元。
+ * - **锚点跟着页往前移**：firstId = 这一页的头一条，下一次 loadOlder 拿它当 before。
+ *   对不上盘（会话在途中被回退）时主进程回空页 + hasMore=false，锚点保持不动。
+ * - 槽不在了（会话被删 / 切到首页）就什么都不做：不凭空造一个只有历史的槽。
+ */
+export function prependOlder(
+  states: SessionStates,
+  sessionId: string,
+  records: readonly SessionRecord[],
+  page: { hasMore: boolean },
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return states;
+  const known = loadedIds(entry);
+  const fresh: SessionRecord[] = [];
+  for (const record of records) {
+    if (known.has(record.id)) continue;
+    known.add(record.id);
+    fresh.push(record);
+  }
+  const older = splitRecords(fresh);
+  const transcript: TranscriptState = {
+    snapshot: {
+      ...entry.transcript.snapshot,
+      transcript: [...older.items, ...entry.transcript.snapshot.transcript],
+    },
+    progressItems: entry.transcript.progressItems,
+    progressOrder: entry.transcript.progressOrder,
+    toolCallBuffers: entry.transcript.toolCallBuffers,
+  };
+  return new Map(states).set(sessionId, {
+    ...entry,
+    transcript,
+    compactions: [...older.compactions, ...entry.compactions],
+    marks: [...older.marks, ...entry.marks],
+    fileTurns: [...older.fileTurns, ...entry.fileTurns],
+    reverts: [...older.reverts, ...entry.reverts],
+    undos: [...older.undos, ...entry.undos],
+    // older 在前、已有的在后：同一 turn 重跑时后面的（更新的）那张赢，同种盘语义
+    intentRecalls: dedupeRecalls([...older.intentRecalls, ...entry.intentRecalls]),
+    window: {
+      firstId: fresh[0]?.id ?? entry.window.firstId,
+      hasMore: page.hasMore,
+      loading: false,
+    },
+  });
+}
+
+/**
+ * 标记「更早的一页在途」。写入前先看槽：不在 / 已经在途就不动（返回值不变引用，
+ * 不白激一次渲染）。hook 在发请求前调它——它是防重的唯一根据（快速连续触顶只发一次）。
+ */
+export function setOlderLoading(states: SessionStates, sessionId: string, loading: boolean): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || entry.window.loading === loading) return states;
+  return new Map(states).set(sessionId, {
+    ...entry,
+    window: { ...entry.window, loading },
+  });
 }
 
 /**

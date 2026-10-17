@@ -11,6 +11,7 @@ import {
   type CarryoverDraft,
   type CarryoverStatus,
   type SessionCompletion,
+  type SessionOlderPage,
 } from "../../shared/session.ts";
 import {
   MODEL_ASSIGN_TARGET_GONE_CODE,
@@ -43,7 +44,15 @@ export function registerSessionIpc(
   onReverted?: (sessionId: string, turnIds: readonly string[]) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
-  ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.load(id));
+  // 打开会话：**只回尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
+  // 25MB / 2948 条的会话一次过 IPC 是瓶颈所在，renderer 也无力一次渲染完
+  ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.loadWindow(id));
+  // 更早的一页：滚动触顶时 renderer 拿窗口第一条记录的 id 来拉（before 就是它）
+  ipcMain.handle(
+    ipcChannels.sessionLoadOlder,
+    (_event, id: string, before: string, limit: number): Promise<SessionOlderPage> =>
+      store.loadOlder(id, before, limit),
+  );
 
   // —— 给导入的会话分配模型（设置 › 服务商，契约在 shared/model-assign.ts） ——
   ipcMain.handle(ipcChannels.modelAssignGroups, async (): Promise<ModelAssignGroups> =>

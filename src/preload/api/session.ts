@@ -16,16 +16,23 @@ import type {
   CarryoverDraft,
   CarryoverStatus,
   SessionCompletion,
-  SessionDetail,
   SessionMeta,
+  SessionOlderPage,
+  SessionWindowDetail,
 } from "../../shared/session.ts";
 
 export const sessionApi = {
   /** 会话列表，新的在前 */
   list: (): Promise<SessionMeta[]> => ipcRenderer.invoke(ipcChannels.sessionList),
   /** 读一条会话的元数据与 transcript；不存在返回 null */
-  load: (id: string): Promise<SessionDetail | null> =>
+  load: (id: string): Promise<SessionWindowDetail | null> =>
     ipcRenderer.invoke(ipcChannels.sessionLoad, id),
+  /**
+   * 已加载窗口之前的一页（滚动触顶时拉）。before = 窗口第一条记录的 id（缺了 / 对不上
+   * 盘上的世界就回空页），limit = 想要的条数，主进程会夹在有效区间
+   */
+  loadOlder: (id: string, before: string, limit: number): Promise<SessionOlderPage> =>
+    ipcRenderer.invoke(ipcChannels.sessionLoadOlder, id, before, limit),
   /** 改名；空名字会退回从第一条用户消息推导 */
   rename: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRename, id, title),
