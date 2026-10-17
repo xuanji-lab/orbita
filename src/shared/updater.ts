@@ -36,8 +36,21 @@ export interface UpdateRelease {
   version: string;
   /** 安装包字节数；更新源没给是 null（界面少画一段「· 14.8 MB」） */
   size: number | null;
-  /** 更新说明，纯文本（GitHub 给的是 HTML 正文，主进程在边界上转干净）；没有是 null */
-  releaseNotes: string | null;
+  /** 更新说明，逐条（发布约定与解析见 main/updater/notes.ts）；没有是 null */
+  releaseNotes: readonly UpdateNote[] | null;
+}
+
+/**
+ * 一条更新说明。**发布约定**：Release 正文每行一条，行首可选 `[icon:名字]` 前缀指定
+ * 条目图标（例：`[icon:download] 下载改为用户确认后才开始。`）。
+ *
+ * `icon` 是 lucide 图标名，但是**未校验的字符串**：白名单只能来自 renderer 的
+ * `Icon.tsx` ICONS 表（主进程没有这张表），所以取值时在那边兑底——名字不在表里就当
+ * 没图标，不做第二个真源。
+ */
+export interface UpdateNote {
+  icon: string | null;
+  text: string;
 }
 
 /** 失败在哪一步：界面按它出文案，重试按钮按它决定重试哪个动作 */

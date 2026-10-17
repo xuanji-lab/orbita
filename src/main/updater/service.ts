@@ -17,8 +17,8 @@
  */
 import { CancellationToken, autoUpdater } from "electron-updater";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
-import type { UpdaterSnapshot, UpdateRelease, UpdateStage, UpdateState } from "../../shared/updater.ts";
-import { releaseNotesText } from "./notes.ts";
+import type { UpdateNote, UpdaterSnapshot, UpdateRelease, UpdateStage, UpdateState } from "../../shared/updater.ts";
+import { parseReleaseNotes } from "./notes.ts";
 import { reduceUpdater, type UpdaterAction } from "./state.ts";
 
 /** 启动后延迟首查：错开启动时那一串磁盘 / 网络活动，别和界面首帧抢 */
@@ -35,11 +35,11 @@ export interface UpdaterOptions {
   beforeInstall: () => void;
 }
 
-/** 更新说明取纯文本：GitHub 给的是 Release 正文的 HTML，fullChangelog 时是一个数组（最新一条在前） */
-function notesOf(info: UpdateInfo): string | null {
+/** 更新说明：GitHub 给的是 Release 正文的 HTML，fullChangelog 时是一个数组（最新一条在前） */
+function notesOf(info: UpdateInfo): readonly UpdateNote[] | null {
   const notes = info.releaseNotes;
   if (notes === undefined || notes === null) return null;
-  return releaseNotesText(typeof notes === "string" ? notes : (notes[0]?.note ?? null));
+  return parseReleaseNotes(typeof notes === "string" ? notes : (notes[0]?.note ?? null));
 }
 
 function releaseOf(info: UpdateInfo): UpdateRelease {

@@ -6,10 +6,14 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { UpdateRelease, UpdateState } from "../../shared/updater.ts";
+import type { UpdateNote, UpdateRelease, UpdateState } from "../../shared/updater.ts";
 import { isNewerVersion, reduceUpdater } from "./state.ts";
 
-const release = (version: string, size: number | null = 14_800_000, releaseNotes: string | null = "更新内容"): UpdateRelease => ({
+const release = (
+  version: string,
+  size: number | null = 14_800_000,
+  releaseNotes: readonly UpdateNote[] | null = [{ icon: "download", text: "更新内容" }],
+): UpdateRelease => ({
   version,
   size,
   releaseNotes,
@@ -118,12 +122,12 @@ describe("reduceUpdater —— 粘性规则", () => {
   test("取消下载 → 退回同一份 available（大小与更新说明都不丢）", () => {
     const downloading: UpdateState = {
       kind: "downloading",
-      release: release("0.2.0", 14_800_000, "更新内容"),
+      release: release("0.2.0", 14_800_000),
       progress: { percent: 30, transferred: 1, total: 2, bytesPerSecond: 3 },
     };
     assert.deepEqual(reduceUpdater(downloading, { type: "download-cancelled" }), {
       kind: "available",
-      release: release("0.2.0", 14_800_000, "更新内容"),
+      release: release("0.2.0", 14_800_000),
     });
   });
 

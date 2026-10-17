@@ -1,9 +1,9 @@
 import "./update-view.css";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { UpdaterSnapshot, UpdateState } from "@shared/updater";
+import type { UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
-import { Icon, type IconName } from "../../shell/Icon";
+import { Icon, isIconName, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { formatBytes, progressAmount, progressPercent } from "./update-format.ts";
@@ -55,7 +55,7 @@ export function UpdateCard() {
   /** 行底整幅的一格：下载进度条 / 展开的更新内容 */
   let below: ReactNode = null;
   /** 更新说明；没有就不显示展开器（原型第 8 条） */
-  let notes: string | null = null;
+  let notes: readonly UpdateNote[] | null = null;
   let action: { label: string; icon?: IconName; accent: boolean; disabled?: boolean; onClick: () => void } = {
     label: x.checkNow,
     icon: "refresh-cw",
@@ -94,7 +94,7 @@ export function UpdateCard() {
       </>
     );
     notes = release.releaseNotes;
-    if (notes !== null && notesOpen) below = <ReleaseNotes text={notes} />;
+    if (notes !== null && notesOpen) below = <ReleaseNotes notes={notes} />;
     action = { label: x.download, icon: "download", accent: true, onClick: () => void api.updater.download() };
   } else if (state.kind === "downloading") {
     statusIcon = "loader-circle";
@@ -191,23 +191,28 @@ function Mono(props: { children: ReactNode }) {
 }
 
 /**
- * 更新内容：一条一行。主进程给的已经是纯文本（一行一条），这里只负责把它拆成**条目**
- * 而不是一段文本——行首图标（原型下一版要配的那个）落进 `.upd-note` 这一行的图标位即可，
- * 不必再动结构。
+ * 更新内容：左侧图标列（原型版式 B，2026-10-18 用户选定）。每条占两格——图标列一格、
+ * 正文列一格；图标一律 currentColor + tertiary，只当条目符号。条目之间的细分隔线由
+ * CSS 画在图标轨道上（行间空隙正中），最后一条不画。
+ *
+ * 图标名来自 Release 正文的 `[icon:名字]` 前缀（解析见 main/updater/notes.ts），
+ * **名字不在 Icon.tsx 的表里就当没图标**（发布时写错字不该崩，也不该画一个空图标）：
+ * 那一行的图标格留空，正文列照旧对齐。
  */
-function ReleaseNotes(props: { text: string }) {
-  const lines = props.text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
+function ReleaseNotes(props: { notes: readonly UpdateNote[] }) {
   return (
-    <ul className="upd-notes">
-      {lines.map((line, index) => (
-        // 说明是静态文本，不会重排，用下标当 key 是安全的
-        <li className="upd-note" key={index}>
-          {line}
-        </li>
-      ))}
-    </ul>
+    <div className="upd-notes">
+      <div className="upd-notes-rail">
+        {props.notes.map((note, index) => (
+          // 说明是静态文本，不会重排，用下标当 key 是安全的
+          <Fragment key={index}>
+            <span className="upd-note-icon">
+              {note.icon !== null && isIconName(note.icon) && <Icon name={note.icon} size={14} />}
+            </span>
+            <span>{note.text}</span>
+          </Fragment>
+        ))}
+      </div>
+    </div>
   );
 }

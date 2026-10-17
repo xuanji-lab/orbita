@@ -41,34 +41,48 @@
   background: var(--color-accent);
 }
 
-/* 更新说明：默认折叠，点开是 muted 底的一块（不是新卡）。一条一行，行内已经留出
-   行首图标位（flex + gap）——原型下一版要给每条配图标时，往 .upd-note 里放一个
-   <Icon size={13}> 即可，结构与样式都不用动 */
+/* 更新说明：默认折叠，点开是 muted 底的一块（不是新卡）——发布正文按行拆成条目，
+   左侧一条独立的图标轨道（原型版式 B，2026-10-18 用户选定） */
 .upd-notes {
   grid-column: 1 / -1;
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  list-style: none;
-  display: grid;
-  gap: var(--space-2);
   background: var(--color-bg-muted);
   border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
   font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
+  line-height: var(--line-height-reading);
   color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
 }
 
-.upd-note {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
+/* 图标列是一条独立轨道（grid 的第一列），图标垂直居中于对应条目；
+   条目之间的细分隔线画在行间空隙正中，最后一条不画 */
+.upd-notes-rail {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-2);
 }
 
-/* 行首图标位：现在还没有图标，但位置留出来——将来加图标只需在 .upd-note 里多一个元素 */
-.upd-note > .orbita-icon {
-  flex: 0 0 auto;
-  margin-top: 1px;
+/* 图标只当条目符号与示意：一律 currentColor + tertiary，不染色、不进 accent。
+   没有图标（或名字没登记）的条目也占着这一格，正文列才不会参差不齐 */
+.upd-note-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  padding: 0 3px;
+  color: var(--color-text-tertiary);
+}
+
+.upd-notes-rail .upd-note-icon:not(:nth-last-child(-n + 2))::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 4px);
+  width: 10px;
+  height: 1px;
+  transform: translateX(-50%);
+  background: var(--color-border-subtle);
 }
 
 /* 「更新内容」展开器：文字键，不是按钮形状——hover 只提亮字色 */

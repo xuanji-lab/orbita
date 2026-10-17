@@ -14,6 +14,7 @@
  */
 import type {
   UpdateDownloadProgress,
+  UpdateNote,
   UpdateRelease,
   UpdateStage,
   UpdateState,
@@ -30,9 +31,19 @@ export type UpdaterAction =
   | { type: "downloaded"; version: string }
   | { type: "failed"; stage: UpdateStage; message: string };
 
-/** 一份发布的三个字段是否逐项相同（用于「这次检查与上次的答案一样」时不重发状态） */
+/** 更新说明逐条相比：解析一次就得到一份新数组，不比内容的话「同一次检查的同一个答案」会被当成两份 */
+function sameNotes(a: readonly UpdateNote[] | null, b: readonly UpdateNote[] | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || a.length !== b.length) return false;
+  return a.every((note, index) => {
+    const other = b[index];
+    return other !== undefined && note.icon === other.icon && note.text === other.text;
+  });
+}
+
+/** 一份发布的字段是否逐项相同（用于「这次检查与上次的答案一样」时不重发状态） */
 function sameRelease(a: UpdateRelease, b: UpdateRelease): boolean {
-  return a.version === b.version && a.size === b.size && a.releaseNotes === b.releaseNotes;
+  return a.version === b.version && a.size === b.size && sameNotes(a.releaseNotes, b.releaseNotes);
 }
 
 function sameProgress(a: UpdateDownloadProgress, b: UpdateDownloadProgress): boolean {
