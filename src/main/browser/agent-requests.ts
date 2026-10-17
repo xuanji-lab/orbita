@@ -71,11 +71,10 @@ export async function applyBrowserRequest(
       error: `No user tab has the id "${userTabId}" — it may have been closed. Call browser_tabs to see the user's tabs and their ids.`,
     };
   }
-  // 用自己的 tab 时，回收 / 崩溃后的那句提示随这次结果一起发给模型（读用户 tab 不取）
-  const ownTab = userTab === undefined ? await sandbox.agentTab(sessionId) : null;
-  const tab = userTab ?? ownTab;
-  if (tab === null) return { ok: false, error: "No browser tab is available. Call the tool again to reopen it." };
-  const notice = ownTab === null ? null : sandbox.takeTabNotice(sessionId);
+  // 用自己的 tab 时，回收 / 崩溃后的那句提示随这次结果一起发给模型（读用户 tab 不取）。
+  // agentTab() 懒建必有返回，这里没有「拿不到 tab」的路径。
+  const tab = userTab === undefined ? await sandbox.agentTab(sessionId) : userTab;
+  const notice = userTab === undefined ? sandbox.takeTabNotice(sessionId) : null;
   const outcome = await sandbox.runOnTab(tab, async (): Promise<BrowserToolOutcome> => {
     if (!sandbox.isLive(tab)) return { ok: false, error: "The browser tab was closed. Call the tool again to reopen it." };
     const contents = tab.view.webContents;

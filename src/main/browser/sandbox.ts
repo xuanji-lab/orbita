@@ -723,9 +723,17 @@ export class BrowserSandbox {
     this.settleHandoff(tab, "cancelled");
     this.tabs.delete(tab.id);
     if (tab.owner.kind === "agent") this.ledger.forget(tab.owner.sessionId);
+    // 原生摘除兑进 try：close() 对半死的 webContents 可能抛错，抛出去会中断下面的补位逻辑，
+    // 还会从回收扫描的 setInterval 里冒出未捕获异常（#222 验收）。视图先摘、再关 webContents；
+    // 这里失败只记日志——账本在前头已摘干净，不会再有人拿这张 tab 当入口。（Electron 43 的
+    // WebContents 已没有 destroy()，close() 默认不等 beforeunload，就是最强的关闭。）
     const window = this.window;
-    if (window !== null && !window.isDestroyed()) window.contentView.removeChildView(tab.view);
-    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    try {
+      if (window !== null && !window.isDestroyed()) window.contentView.removeChildView(tab.view);
+      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    } catch (cause) {
+      console.error("[browser] 拆除 tab 的原生视图失败", cause);
+    }
     if (this.lastUserTabId === tab.id) this.lastUserTabId = "";
     // 用户的 tab 至少留一个：它是登录入口，地球按钮也要有地方回（窗口没了就不补，重建时会建）
     const windowAlive = window !== null && !window.isDestroyed();
