@@ -6,6 +6,7 @@ import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
@@ -48,6 +49,9 @@ import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { windowsSandboxExePath } from "./computer-use/capability.ts";
+import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { SandboxController } from "./computer-use/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -360,6 +364,71 @@ void app.whenReady().then(async () => {
   registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => browserSandbox.dispose());
 
+  /*
+   * computer use v1（PR1 主进程部分）：Windows 沙箱生命周期 + 手动「看一眼」截图。
+   * guest 桥目录：开发 = 仓库 guest-bridge/bin（bun run build:bridge 出 exe），
+   * 打包 = resources/guest-bridge（electron-builder extraResources，见 package.json）。
+   * spawnSandbox 只在这里真接——测试全走假进程，沙箱窗口是用户可见面。
+   */
+  const sandboxExePath = windowsSandboxExePath();
+  /**
+   * 按 PID 杀整棵沙箱进程树（`taskkill /T /F`，与 spawnSandbox 里那套同一份火力）。
+   * 抽成独立函数是因为 stop() 的收尾链在「第一次 kill 没确认退出」时还要再打一次；
+   * 那时手上只有 pid，没有 child 对象。
+   * onFailure 只在第一次 kill 用（那里还拿得到 child，可以退回单进程杀）；升级那次不传，
+   * 失败交给收尾链的下一个窗口留痕迹。
+   */
+  const killTreeByPid = (pid: number, onFailure?: () => void): void => {
+    try {
+      const taskkill = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", () => onFailure?.());
+      taskkill.on("exit", (code) => {
+        if (code !== 0) onFailure?.();
+      });
+    } catch {
+      onFailure?.();
+    }
+  };
+
+  const computerUse = new SandboxController({
+    computerUseDir: join(configDir, "computer-use"),
+    bridgeDir: app.isPackaged
+      ? join(process.resourcesPath, "guest-bridge")
+      : join(app.getAppPath(), "guest-bridge", "bin"),
+    sandboxExePath,
+    /**
+     * 沙箱进程适配。**关闭必须杀整棵树**：spawn 出来的 WindowsSandbox.exe 是 launcher，
+     * 看得见的沙箱窗口是它的子进程 WindowsSandboxClient.exe——只杀 launcher 会留下
+     * 孤儿窗口，VM 一拆它就弹「与沙盒的连接已丢失 0x80072746」（2026-10-12 实测）。
+     * taskkill /T 是异步火力覆盖（同 terminal/runtime.ts 的杀树纪律）；它起不来 /
+     * 失败时退回单进程杀——宁可退化回孤儿窗口，也不能让「关闭」本身失效。
+     */
+    spawnSandbox: (wsbPath) => {
+      const child = spawn(sandboxExePath, [wsbPath], { stdio: "ignore" });
+      const killChild = child.kill.bind(child);
+      const killTree = (): boolean => {
+        const pid = child.pid;
+        if (pid === undefined) return killChild();
+        killTreeByPid(pid, () => {
+          try {
+            killChild();
+          } catch {
+            // 进程已退出
+          }
+        });
+        return true;
+      };
+      return Object.assign(child, { kill: killTree });
+    },
+    // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
+    killTreeByPid,
+    onStatus: broadcastComputerUseStatus,
+  });
+  registerComputerUseIpc(computerUse);
+
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
@@ -650,6 +719,8 @@ void app.whenReady().then(async () => {
     appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
+    // 沙箱是我们 spawn 的：应用退出时一并带走，别给用户留一个连不上宿主的孤儿沙箱窗口
+    computerUse.dispose();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
   });

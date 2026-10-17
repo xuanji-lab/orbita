@@ -540,6 +540,11 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
         .experimentalFeatures,
       { "paper-themes": true, "session-lifecycle": false },
     );
+    // computer-use（电脑使用页的开关，2026-10-12 挂进实验区）同表同规矩：布尔记账、缺席 = 关
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "computer-use": true } }).experimentalFeatures,
+      { "computer-use": true },
+    );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,
       undefined,
