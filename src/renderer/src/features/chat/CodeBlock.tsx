@@ -8,14 +8,23 @@
  *
  * **异步就绪**：引擎预热完成前（应用启动后的头一瞬）先渲染无色块，
  * `highlighterReady` resolve 后 setState 触发一次重渲上色；就绪之后
- * `highlightBlock` 同步返回（缓存命中），流式增长不再闪无色帧。
+ * `highlightBlock` 同步返回（缓存命中），落定帧不再闪无色。
+ *
+ * **流式帧不跑 shiki**（`highlight=false`，见 stream-render.ts）：高亮拿不到缓存命中
+ * （缓存按「语言 + 全文」，而全文每帧都在长），一帧就要几毫秒；流式期间先走无色兜底，
+ * 消息落定后 MarkdownBlock 自动重渲一次补上色。
  */
 import { useEffect, useMemo, useState, isValidElement } from "react";
 import type { ReactNode } from "react";
-import { highlightBlock, highlighterReady } from "./highlight";
+import { highlighterReady } from "./highlight";
+import { fenceHighlight } from "./stream-render.ts";
 
 /** react-markdown 的 pre 元素 */
-export function MdPre(props: { children?: ReactNode }) {
+export function MdPre(props: {
+  children?: ReactNode;
+  /** 本帧跑不跑 shiki（由 MarkdownBlock 按流式与否传入，缺省视为落定帧：上色） */
+  highlight?: boolean;
+}) {
   const child = Array.isArray(props.children) ? props.children[0] : props.children;
   if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) {
     return <pre>{props.children}</pre>;
@@ -24,17 +33,19 @@ export function MdPre(props: { children?: ReactNode }) {
   const lang = /^language-(\S+)$/.exec(className)?.[1];
   const text = nodeText(child.props.children);
   if (lang === undefined) return <PlainFence text={text} />;
-  return <FenceBlock lang={lang} text={text} />;
+  return <FenceBlock lang={lang} text={text} highlight={props.highlight ?? true} />;
 }
 
-/** 已知语言：shiki 双主题 HTML；未就绪期间先无色 */
-function FenceBlock(props: { lang: string; text: string }) {
+/** 已知语言：shiki 双主题 HTML；未就绪或流式帧先无色 */
+function FenceBlock(props: { lang: string; text: string; highlight: boolean }) {
   // warm 只是重渲触发器（引擎就绪那一刻）；HTML 每次渲染都同步取，缓存命中代价是一次 Map.get
   const [, setWarm] = useState(false);
   useEffect(() => {
+    // 流式帧不等引擎：这一帧本来就无色，不必为它多安排一次重渲
+    if (!props.highlight) return;
     void highlighterReady.then(() => setWarm(true));
-  }, []);
-  const html = highlightBlock(props.text, props.lang);
+  }, [props.highlight]);
+  const html = fenceHighlight(props.highlight, props.text, props.lang);
   // useMemo 按 html 字符串稳定 { __html } 对象引用：字面量在每次渲染新建对象，
   // React 19 按对象身份判断要不要重写 innerHTML，流式追加文本时同一段已经高亮完的
   // 代码块会被反复拆了重建（选不中、复制中断），见 icon-markup.ts 顶部注释的同款根因。
