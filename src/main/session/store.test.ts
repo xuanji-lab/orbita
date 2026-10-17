@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { branchRoles, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import { UNASSIGNED_PROVIDER_ID, type ChannelMarkRecord, type SessionMeta } from "../../shared/session.ts";
+import { UNASSIGNED_PROVIDER_ID, SESSION_PAGE_RECORDS, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -1039,5 +1039,210 @@ describe("SessionStore.assignModel（给导入的会话分配模型）", () => {
 
   test("meta 不在（刚被删）静默 false，不抛错", async () => {
     assert.equal(await store.assignModel("no-such-session", "zai", "glm-5.3"), false);
+  });
+});
+
+// ── 源侧分页：尾窗与 loadOlder ──
+
+/**
+ * 一条真实会话的形状：每轮 = 一条 user + 一条 assistant + n 条工具行。
+ * 工具行占多数是实测的样子（25MB 那条会话里 tool 结果的字节数占绝对多数），
+ * 窗口切点落在工具行中间正是要防的 case。
+ */
+const turnBlock = (n: number, tools: number): SessionRecord[] => {
+  const records: SessionRecord[] = [
+    { id: `u${n}`, role: "user", content: [{ type: "text", text: `第 ${n} 问` }], timestamp: 1000 + n } as TranscriptItem,
+    {
+      id: `a${n}`,
+      role: "assistant",
+      content: [{ type: "text", text: `第 ${n} 答` }],
+      model: { provider: "zai", id: "glm-5.3" },
+      timestamp: 1000 + n,
+      status: "complete",
+      stopReason: "stop",
+    } as TranscriptItem,
+  ];
+  for (let i = 0; i < tools; i += 1) {
+    records.push({
+      id: `t${n}-${i}`,
+      role: "tool",
+      toolCallId: `call-${n}-${i}`,
+      toolName: "bash",
+      input: {},
+      content: [{ type: "text", text: "ok" }],
+      timestamp: 1000 + n,
+      status: "complete",
+      isError: false,
+    } as TranscriptItem);
+  }
+  return records;
+};
+
+/** 直接落一份 JSONL（record() 每条一次原子写，几百条的构造太慢） */
+const seedLog = async (id: string, records: readonly SessionRecord[]): Promise<void> => {
+  await store.ensureSession(meta({ id }));
+  await mkdir(join(dir, "sessions"), { recursive: true });
+  await writeFile(
+    join(dir, "sessions", `${id}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    "utf8",
+  );
+};
+
+describe("SessionStore · 窗口分页", () => {
+  test("长会话只回尾窗：一页条数、起点对齐 user、hasMore 为真", async () => {
+    // 240 轮 × 5 条 = 1200 条；切点 1200-500 = 700 恰好落在轮首（u140）
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 1200);
+    assert.equal(detail?.window.hasMore, true);
+    assert.equal(detail?.transcript.length, SESSION_PAGE_RECORDS);
+    assert.equal(detail?.transcript[0]?.id, "u140");
+    assert.equal(detail?.transcript.at(-1)?.id, "t239-2");
+  });
+
+  test("切点落在工具行中间：窗口起点向前对齐到下一条 user（不留无主的半轮）", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    // 切点 1200-498 = 702 = t140-2（工具行）→ 对齐到 u141（705）
+    const detail = await store.loadWindow(ID, 498);
+    assert.equal(detail?.transcript[0]?.id, "u141");
+    assert.equal(detail?.transcript[0]?.role, "user");
+    assert.equal(detail?.transcript.length, 1200 - 705);
+    // 被对齐吃掉的那几条不算丢：下一页还会取到
+    assert.equal(detail?.window.hasMore, true);
+  });
+
+  test("窗口里一条 user 都没有（尾段全在同一轮里）：往回落到最后一条 user", async () => {
+    // u0 + 599 条工具行 = 600 条，切点 100 之后没有 user
+    const records: SessionRecord[] = [
+      { id: "u0", role: "user", content: [{ type: "text", text: "问" }], timestamp: 1000 } as TranscriptItem,
+    ];
+    for (let i = 0; i < 599; i += 1) {
+      records.push({
+        id: `t${i}`,
+        role: "tool",
+        toolCallId: `call-${i}`,
+        toolName: "bash",
+        input: {},
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 2000 + i,
+        status: "complete",
+        isError: false,
+      } as TranscriptItem);
+    }
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    // 宁可比一页稍大，也不给一段没有 user 的历史
+    assert.equal(detail?.transcript.length, 600);
+    assert.equal(detail?.transcript[0]?.role, "user");
+    assert.equal(detail?.window.hasMore, false);
+  });
+
+  test("channel-mark 也是轮边界：切点落在它之前就从它开始", async () => {
+    const records: SessionRecord[] = [
+      ...turnBlock(0, 8),
+      {
+        role: "channel-mark",
+        id: "k1",
+        peerId: "child-1",
+        messageId: "msg-1",
+        from: "child",
+        kind: "question",
+        timestamp: 5000,
+      },
+      ...turnBlock(1, 19).slice(1), // 第二轮：只留 assistant + 工具行
+    ];
+    await seedLog(ID, records);
+    // 31 条（10 + 标记 + 20），切点 31-25 = 6：6..9 无 user，第一条边界是 k1（下标 10）
+    const detail = await store.loadWindow(ID, 25);
+    assert.equal(detail?.transcript[0]?.role, "channel-mark");
+    assert.equal(detail?.transcript[0]?.id, "k1");
+  });
+
+  test("短会话不足一窗：全量返回，hasMore 为假", async () => {
+    await seedLog(ID, turnBlock(0, 2));
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 4);
+    assert.equal(detail?.window.hasMore, false);
+    assert.deepEqual(detail?.transcript.map((record) => record.id), ["u0", "a0", "t0-0", "t0-1"]);
+  });
+
+  test("空会话（没有 JSONL）：空窗口，不是 null", async () => {
+    await store.ensureSession(meta());
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 0);
+    assert.equal(detail?.window.hasMore, false);
+    assert.deepEqual(detail?.transcript, []);
+  });
+
+  test("meta 不在就是 null（与 load 同一条规矩）", async () => {
+    assert.equal(await store.loadWindow(OTHER), null);
+  });
+
+  test("loadOlder：按 before 定位前一段，到头的那一页 hasMore 为假", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.transcript[0]?.id, "u140");
+
+    const page1 = await store.loadOlder(ID, "u140", SESSION_PAGE_RECORDS);
+    // 700 - 500 = 200 = u40（对齐后仍是轮首）
+    assert.equal(page1.records[0]?.id, "u40");
+    assert.equal(page1.records.length, SESSION_PAGE_RECORDS);
+    assert.equal(page1.records.at(-1)?.id, "t139-2");
+    assert.equal(page1.hasMore, true);
+
+    const page2 = await store.loadOlder(ID, "u40", SESSION_PAGE_RECORDS);
+    assert.equal(page2.records[0]?.id, "u0");
+    assert.equal(page2.records.length, 200);
+    assert.equal(page2.hasMore, false);
+
+    // 拼回去正好是全量、且顺序不乱
+    const rebuilt = [...page2.records, ...page1.records, ...(detail?.transcript ?? [])];
+    assert.deepEqual(rebuilt.map((record) => record.id), records.map((record) => record.id));
+  });
+
+  test("loadOlder：锚点在盘上找不到（会话刚被回退）就回空页，不按旧下标切一段", async () => {
+    await seedLog(ID, turnBlock(0, 2));
+    const page = await store.loadOlder(ID, "不存在的记录 id", SESSION_PAGE_RECORDS);
+    assert.deepEqual(page.records, []);
+    assert.equal(page.hasMore, false);
+  });
+
+  test("loadOlder：锚点就是第一条时回空页、hasMore 为假", async () => {
+    await seedLog(ID, turnBlock(0, 2));
+    const page = await store.loadOlder(ID, "u0", SESSION_PAGE_RECORDS);
+    assert.deepEqual(page.records, []);
+    assert.equal(page.hasMore, false);
+  });
+
+  test("折叠语义不变：窗口从 fold 后的生效视图取，不是盘上的原始行", async () => {
+    // 10 轮（50 条）+ 回退界碑（目标 = u5）+ 后两轮：生效视图只有 u5 之前 + 界碑 + 后两轮
+    const records: SessionRecord[] = [
+      ...Array.from({ length: 10 }, (_, n) => turnBlock(n, 3)).flat(),
+      {
+        role: "revert",
+        id: "r1",
+        targetMessageId: "u5",
+        restored: [],
+        timestamp: 9000,
+      },
+      ...turnBlock(10, 3),
+      ...turnBlock(11, 3),
+    ];
+    await seedLog(ID, records);
+    const effective = await store.load(ID);
+    // 生效视图：25 条（u0..t4-2）+ 界碑 + 10 条 = 36 条
+    assert.equal(effective?.transcript.length, 36);
+    assert.equal(effective?.transcript.some((record) => record.id === "u5"), false);
+
+    const detail = await store.loadWindow(ID, 30);
+    assert.equal(detail?.window.total, 36);
+    assert.equal(detail?.transcript[0]?.id, "u2"); // 切点 6 → 向前对齐到 u2（10）
+    assert.equal(detail?.transcript.some((record) => record.role === "revert"), true);
+    assert.equal(detail?.transcript.some((record) => record.id === "u5"), false);
+    assert.equal(detail?.window.hasMore, true);
   });
 });

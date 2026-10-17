@@ -503,10 +503,44 @@ export interface SessionMeta {
   updatedAt: number;
 }
 
-/** 打开一条会话拿到的东西：元数据 + 落盘的 transcript */
+/** 打开一条会话拿到的东西：元数据 + 落盘的 transcript（**生效视图全量**） */
 export interface SessionDetail {
   meta: SessionMeta;
   transcript: SessionRecord[];
+}
+
+/**
+ * 源侧分页的一页有多少条记录（尾窗与 loadOlder 共用同一个数）。
+ *
+ * 500 条 ≈ 60 轮 × 平均 8 条/轮（一轮 = 一条 user + 回答与工具调用各若干条），
+ * 贴 ZCode 的冷订阅尾窗 60 行 / 滚顶每次再取 200 行的思路。**只分 IPC 传输量与
+ * renderer 渲染量**：主进程照样全量读盘 + 折叠，窗口是读时投影（见 store.loadWindow）。
+ */
+export const SESSION_PAGE_RECORDS = 500;
+
+/** 一条会话的窗口信息：已加载窗口之外还有多少历史 */
+export interface SessionWindow {
+  /** 生效视图里的记录总条数（主进程全量读 + 折叠后的长度），给排障与将来的进度显示 */
+  total: number;
+  /** 已加载窗口之前还有记录（滚动触顶要拉的那一页在不在） */
+  hasMore: boolean;
+}
+
+/**
+ * 打开一条会话的**尾窗**：元数据 + 尾部一段 transcript + 窗口信息。
+ * 与 `SessionDetail` 同形（transcript 只是被切过），renderer 的「已加载窗口」就是它。
+ * 要全量视图的消费者（导出 / 回退 / intent 归档 / read_task）走 store.load，不走这里。
+ */
+export interface SessionWindowDetail extends SessionDetail {
+  window: SessionWindow;
+}
+
+/** `session:loadOlder` 的一页：`before` 那条记录之前的一段 + 还有更早吗 */
+export interface SessionOlderPage {
+  /** 生效视图里紧挨在 before 之前的一段（起点同样对齐到轮边界） */
+  records: SessionRecord[];
+  /** 这一段之前还有记录 */
+  hasMore: boolean;
 }
 
 /**
