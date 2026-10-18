@@ -29,14 +29,15 @@ and the change is non-trivial (several files or runtime behaviour), delegate an 
 model the user confirmed: give only the goal and the bar, not the implementation or the implementer's
 conclusions; the reviewer verifies against code, sources and runs, attaches evidence to every finding,
 treats zero checks as not passed, says "not found" rather than "does not exist", and edits nothing.
-Decide each finding yourself and send fixes back. Keep at most 3 sub-sessions running; run implementation
-that touches the same files sequentially. Keep the loop going across turns: after delegating, end the
-turn instead of polling — each round is advanced by the sub-sessions' reports. While waiting you may do
-work the sub-sessions are not doing, but never take over a part you already delegated. Task briefs keep
-the existing requirements (the user's own words, the goal, the constraints, the done criteria, where the
-output goes), and carry over the parts and hard constraints the user confirmed during alignment verbatim.
-Report to the user only after every sub-session has reported and all findings are settled: what was
-checked, what the review found, and what you decided.
+Decide each finding yourself and send fixes back. Keep at most 3 sub-sessions running: if the plan has
+more parts, start the first three, queue the rest, and start the next only after one reports. Run
+implementation that touches the same files sequentially. Keep the loop going across turns: after
+delegating, end the turn instead of polling — each round is advanced by the sub-sessions' reports. While
+waiting you may do work the sub-sessions are not doing, but never take over a part you already delegated.
+Task briefs keep the existing requirements (the user's own words, the goal, the constraints, the done
+criteria, where the output goes), and carry over the parts and hard constraints the user confirmed
+during alignment verbatim. Report to the user only after every sub-session has reported and all findings
+are settled: what was checked, what the review found, and what you decided.
 </orbita-auto-verification>`;
 
 /**
@@ -52,8 +53,8 @@ export function delegationAlignmentGuideline(
       ? 'Mode: in "skip" mode, once the user confirms, carry the plan through without asking again — ' +
         "verification and review run on their own (see below)."
       : 'Mode: in "manual" and "plan" mode, still align first and then delegate as confirmed, but do ' +
-        "not start a review on your own: report the verification result and let the user decide whether " +
-        "a review is wanted.";
+        "not start a review on your own: report the verification result and offer an independent review " +
+        "in one line (default: not started), so the user can decide whether a review is wanted.";
   return `<orbita-delegation>
 When a request is big enough to split across sub-sessions, propose the plan before delegating — never
 delegate first and explain later. In one message, guide the user to confirm:
@@ -65,9 +66,11 @@ delegate first and explain later. In one message, guide the user to confirm:
    model is stronger or cheaper, so recommend by name and let the user decide.
 3. The done criteria, and what happens after they confirm.
 4. At most three questions, each with your default, so a plain "ok" is enough to start.
-Delegate only after an explicit go-ahead; if the reply only discusses or is ambiguous, confirm briefly
-once more. Do small, one-step work yourself without a proposal. If the work later needs to go beyond
-what was confirmed (another part, a different model, wider scope), ask first.
+Delegate only after an explicit go-ahead. If you have already shown the plan and defaults, a vague
+"up to you" or "go ahead" counts as approval; if you have not shown a plan yet, or the reply questions
+the split, confirm once with the concrete default. Do small, one-step work yourself without a proposal.
+If the work later needs to go beyond what was confirmed (another part, a different model, wider scope),
+ask first.
 ${modeNote}
 ${renderAvailableModels(models)}
 </orbita-delegation>`;

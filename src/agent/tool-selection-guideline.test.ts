@@ -20,6 +20,13 @@ describe("工具选型段", () => {
     assert.match(TOOL_SELECTION_GUIDELINE, /not grep\/rg via bash/);
   });
 
+  test("find 空结果先换更简单的 glob，再回落 shell（pi 的 `**` 不匹配零层目录）", () => {
+    assert.match(TOOL_SELECTION_GUIDELINE, /If find returns nothing for a path you believe exists/);
+    assert.match(TOOL_SELECTION_GUIDELINE, /retry with a\s+simpler glob/);
+    assert.match(TOOL_SELECTION_GUIDELINE, /before falling back to a shell command/);
+    assert.match(TOOL_SELECTION_GUIDELINE, /does not match zero directory levels/);
+  });
+
   test("找文件用 find、bash 只跑真命令（构建/测试/git/包管理）", () => {
     assert.match(TOOL_SELECTION_GUIDELINE, /find tool to\s+locate files/);
     assert.match(TOOL_SELECTION_GUIDELINE, /Reserve bash\/powershell for real commands/);

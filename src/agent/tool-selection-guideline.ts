@@ -24,7 +24,9 @@ export const TOOL_SELECTION_GUIDELINE =
   "Tool selection: use the grep tool to search file contents (not grep/rg via bash), the find tool to " +
   "locate files by name (not find via bash), and the read tool to read files (not cat, head, tail or " +
   "sed -n via bash). Reserve bash/powershell for real commands — builds, tests, git, package managers — " +
-  "not for looking at files.";
+  "not for looking at files. If find returns nothing for a path you believe exists, retry with a " +
+  "simpler glob (e.g. `src/agent/*.test.ts`) before falling back to a shell command: fd's `a/**/b` " +
+  "does not match zero directory levels, so a `**` pattern can miss files that are right there.";
 
 /**
  * 有相关能力而用户可能不知道时，主动说一句，而不是默默略过。

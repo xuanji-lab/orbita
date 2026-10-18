@@ -74,6 +74,10 @@ describe("describeChannelRole：root 的对齐段与闭环段", () => {
     assert.match(text, /At most three questions, each with your default/);
     assert.match(text, /a plain "ok" is enough to start/);
     assert.match(text, /Delegate only after an explicit go-ahead/);
+    // 口径写实（2026-10-18 第三轮验收）：已给方案与默认值后，「你看着办」算授权；
+    // 还没给方案、或回复质疑拆分时才再确认一次。
+    assert.match(text, /counts as approval/);
+    assert.match(text, /confirm once with the concrete default/);
     assert.match(text, /factual statement only/);
   });
 
@@ -82,6 +86,8 @@ describe("describeChannelRole：root 的对齐段与闭环段", () => {
     for (const mode of ["plan", "manual"] as const) {
       const text = delegationAlignmentGuideline(mode, MODELS);
       assert.match(text, /do not start a review on your own/);
+      // manual / plan 不是「不提审查」：把选择权交回时要用一句话给出可选动作
+      assert.match(text, /offer an independent review\s+in one line/);
       assert.equal(text.includes("carry the plan through without asking again"), false);
     }
   });
@@ -95,6 +101,9 @@ describe("describeChannelRole：root 的对齐段与闭环段", () => {
     assert.match(AUTO_VERIFICATION_GUIDELINE, /Decide each finding yourself/);
     // 跨轮推进：派完结束本轮，不轮询
     assert.match(AUTO_VERIFICATION_GUIDELINE, /end the\s+turn instead of polling/);
+    // 并行上限写成分批动作（第三轮实测：一条消息派了 4 个；运行时闸门另行立项）
+    assert.match(AUTO_VERIFICATION_GUIDELINE, /start the first three, queue the rest/);
+    assert.match(AUTO_VERIFICATION_GUIDELINE, /start the next only after one reports/);
   });
 });
 
