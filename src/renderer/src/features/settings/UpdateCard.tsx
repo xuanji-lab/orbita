@@ -2,7 +2,7 @@ import "./update-view.css";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { releaseTagUrl } from "@shared/updater";
-import type { UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
+import type { RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
 import { Icon, isIconName, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
@@ -19,9 +19,17 @@ import { formatBytes, progressAmount, progressPercent } from "./update-format.ts
  * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
  * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
  *
- * 「当前版本」那一行的尾部是版本号，它下面接着两个安静的入口：这一版的说明（GitHub Release）
- * 与全部版本。两个地址都由快照里的 `releasesUrl` 拼（owner/repo 的真源在 package.json 的
- * build.publish），不在界面里再写一份仓址。
+ * 三行的行尾各管一件事：「更新」是唯一的主操作（accent 只给「下载」与「重启以安装」
+ * 这两步真正推进更新的动作）；「当前版本」与「所有版本」两行行尾各只有一个展开三角，
+ * 点开就在下方就地看内容（本版说明 / 最近几个版本），GitHub 外链出口放在展开体底部。
+ * 三角占 12px（= .upd-btn 的右内边距），尾部文字的右缘因此落在同一条线上。
+ *
+ * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
+ * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
+ *
+ * 两个 GitHub 地址都由快照里的 `releasesUrl` 拼（owner/repo 的真源在 package.json 的
+ * build.publish），最近版本列表走 `updater:recentReleases`（主进程侧 10 分钟缓存），
+ * 界面里不再写第二份仓址。
  */
 export function UpdateCard() {
   const t = useT();
@@ -31,6 +39,8 @@ export function UpdateCard() {
   const [notesOpen, setNotesOpen] = useState(false);
   /** 「本版更新内容」同样默认收着（两个展开器各管各的：一个是待装的，一个是已装的） */
   const [currentOpen, setCurrentOpen] = useState(false);
+  /** 「最近几个版本」同样默认收着（点开才去打 GitHub API） */
+  const [recentOpen, setRecentOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,25 +167,28 @@ export function UpdateCard() {
     <SettingGroup label={x.group}>
       <SettingRow
         name={x.currentVersion}
-        note={
-          currentNotes === null ? undefined : (
-            <button
-              type="button"
-              className="upd-link"
-              aria-expanded={currentOpen}
-              onClick={() => setCurrentOpen(!currentOpen)}
-            >
-              <Icon name="chevron-down" size={12} />
-              {x.currentNotes}
-            </button>
-          )
+        below={
+          currentNotes !== null && currentOpen ? (
+            <>
+              <ReleaseNotes notes={currentNotes} />
+              {/* 外链出口在展开体底部：行尾只留一个三角，想看完整 Release 页从这里走 */}
+              {tagUrl !== null && <ReleaseFooter url={tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
+            </>
+          ) : undefined
         }
-        below={currentNotes !== null && currentOpen ? <ReleaseNotes notes={currentNotes} /> : undefined}
       >
-        <span className="upd-status">
+        {/*
+         * 行尾只有「版本号 + 一个三角」：版本号是机器事实（mono），三角就地展开本版说明。
+         * 三角占 12px（var(--space-3)，与 .upd-btn 的右内边距同宽），版本号右缘才落在
+         * hem − 12，与「检查更新」的文字同一条线；没有说明（没有 currentNotes）时不画
+         * 三角，用 padding 补上同样的 12px，右缘不跳。
+         */}
+        <span className="upd-current">
           <Mono>{currentVersion}</Mono>
+          {currentNotes !== null && (
+            <Caret expanded={currentOpen} label={x.currentNotes} onClick={() => setCurrentOpen(!currentOpen)} />
+          )}
         </span>
-        {tagUrl !== null && <ReleaseLink url={tagUrl}>{x.viewNotes}</ReleaseLink>}
       </SettingRow>
       <SettingRow
         name={x.updates}
@@ -218,8 +231,20 @@ export function UpdateCard() {
         </button>
       </SettingRow>
       {releasesUrl !== null && (
-        <SettingRow name={x.allVersions}>
-          <ReleaseLink url={releasesUrl}>{x.openOnGitHub}</ReleaseLink>
+        <SettingRow
+          name={x.allVersions}
+          below={
+            recentOpen ? (
+              <>
+                <RecentReleasesList />
+                {/* 更多历史版本去 GitHub：展开体底部的外链出口（与「当前版本」同款） */}
+                <ReleaseFooter url={releasesUrl}>{x.viewAllOnGitHub}</ReleaseFooter>
+              </>
+            ) : undefined
+          }
+        >
+          {/* 与「当前版本」对称：行尾只有一个三角，点它就地展开最近几个版本 */}
+          <Caret expanded={recentOpen} label={x.allVersions} onClick={() => setRecentOpen(!recentOpen)} />
         </SettingRow>
       )}
     </SettingGroup>
@@ -227,7 +252,7 @@ export function UpdateCard() {
 }
 
 /**
- * Release 页的入口（「查看说明」「在 GitHub 上打开」两个人的形状）。
+ * Release 页的入口（展开体底部的「在 GitHub 上查看本版 / 查看全部版本」两处）。
  *
  * **外链照仓里现成的走法**：`<a href>` + 拦掉默认行为交给 `window.open`——主进程的
  * setWindowOpenHandler 把网页送进内置浏览器（index.ts 的 openLink；同 SettingsView 的
@@ -246,6 +271,107 @@ function ReleaseLink(props: { url: string; children: ReactNode }) {
       <Icon name="external-link" size={12} />
       {props.children}
     </a>
+  );
+}
+
+/** 展开体底部的外链出口：安静一行，左缘与展开的内容对齐 */
+function ReleaseFooter(props: { url: string; children: ReactNode }) {
+  return (
+    <div className="upd-expand-footer">
+      <ReleaseLink url={props.url}>{props.children}</ReleaseLink>
+    </div>
+  );
+}
+
+/**
+ * 行尾的展开三角（「当前版本」「所有版本」两处同形）。
+ *
+ * **图标名与尺寸照「家务活模型」两行的 Chip chevron**（chevron-down / 11 / stroke 2），
+ * 展开时翻 180°，过渡与仓里其它 chevron 同一档（`--duration-fast`，见 .exp-toggle）。
+ * 它占 12px（`.upd-caret` 的宽度 = `.upd-btn` 的右内边距）：尾部文字右缘落在同一条线上。
+ */
+function Caret(props: { expanded: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="upd-caret"
+      aria-expanded={props.expanded}
+      aria-label={props.label}
+      title={props.label}
+      onClick={props.onClick}
+    >
+      <Icon name="chevron-down" size={11} strokeWidth={2} />
+    </button>
+  );
+}
+
+/**
+ * 「所有版本」展开体：最近几个版本（主进程打 GitHub API + 10 分钟缓存，见
+ * main/updater/recent-releases.ts）。**点开才拉**——挂载即请求一次，收起再展开是重挂载。
+ *
+ * 四个形态：拉取中 / 失败（一句人话 + 重试）/ 空（仓里只有 Draft 时就是这样）/ 列表。
+ * 失败不画成空列表：「获取失败」与「还没有已发布的版本」是两件事。
+ */
+function RecentReleasesList() {
+  const x = useT().settings.update;
+  const [result, setResult] = useState<RecentReleasesResult | null>(null);
+  /** 重试计数：递增一次就重跑一轮请求（依赖数组把它变成显式触发器） */
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setResult(null);
+    void api.updater
+      .recentReleases()
+      .then((next) => {
+        if (!cancelled) setResult(next);
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ ok: false, message: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  if (result === null) return <div className="upd-recent-quiet">{x.recentLoading}</div>;
+  if (!result.ok) {
+    return (
+      <div className="upd-recent-quiet">
+        <span title={result.message === "" ? undefined : result.message}>{x.recentFailed}</span>
+        <button type="button" className="upd-link" onClick={() => setAttempt(attempt + 1)}>
+          {x.retry}
+        </button>
+      </div>
+    );
+  }
+  if (result.releases.length === 0) return <div className="upd-recent-quiet">{x.recentEmpty}</div>;
+  return (
+    <div className="upd-recent">
+      {result.releases.map((release) => (
+        <a
+          key={release.tag}
+          className="upd-recent-row"
+          href={release.htmlUrl}
+          onClick={(event) => {
+            event.preventDefault();
+            window.open(release.htmlUrl);
+          }}
+        >
+          <span className="upd-recent-name">
+            <Mono>{release.version}</Mono>
+            {/*
+             * 标题只在它真的多给了信息时才画：打包技能里 `gh release create --title`
+             * 写的就是裸版本号，那种标题与左边的 mono 版本号逐字相同，再画一遍只是重影
+             */}
+            {release.title !== release.version && release.title !== release.tag && (
+              <span className="upd-recent-title">{release.title}</span>
+            )}
+          </span>
+          <span className="upd-recent-date">{release.publishedAt.slice(0, 10)}</span>
+        </a>
+      ))}
+    </div>
   );
 }
 

@@ -91,7 +91,7 @@
   background: var(--color-border-subtle);
 }
 
-/* 安静的文字键（「更新内容」展开器、「查看说明」「在 GitHub 上打开」两个 Release 入口）：
+/* 安静的文字键（行 2 的「更新内容」展开器、展开体底部的两个 GitHub 外链）：
    文字形状，不是按钮形状——hover 只提亮字色。三处形状相同，共用一个类 */
 .upd-link {
   display: inline-flex;
@@ -116,9 +116,121 @@ a.upd-link {
   color: var(--color-text-primary);
 }
 
-/* 展开后箭头翻过来，方向由 aria-expanded 决定（状态归 CSS） */
+/* 行 2 的「更新内容」展开器也是 .upd-link：展开后箭头翻过来，方向由 aria-expanded 决定 */
 .upd-link[aria-expanded="true"] .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
   transform: rotate(180deg);
+}
+
+/* 「当前版本」行尾：版本号（mono）+ 展开三角。**中间不留 gap**：三角盒就是 12px
+   （var(--space-3)），紧接版本号，版本号右缘才落在 hem − 12——与「检查更新」的文字
+   同一条线；没有三角时（这一版没有说明）用 padding 补上同样的 12px，右缘不跳 */
+.upd-current {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.upd-current:not(:has(.upd-caret)) {
+  padding-right: var(--space-3);
+}
+
+/* 行尾的展开三角（「当前版本」「所有版本」两处同形）：quiet 的纯图标键。
+   宽度取 var(--space-3)——与 .upd-btn 的右内边距同宽，是尾部文字右缘对齐的那把尺子；
+   图标 11 / stroke 2 与「家务活模型」两行的 Chip chevron 同一个 */
+.upd-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-3);
+  height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.upd-caret:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+/* 展开后箭头翻过来，过渡与仓里其它 chevron 同一档（.exp-toggle 用的 --duration-fast） */
+.upd-caret .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.upd-caret[aria-expanded="true"] .orbita-icon {
+  transform: rotate(180deg);
+}
+
+/* 展开体底部的外链出口（「在 GitHub 上查看本版 / 查看全部版本」）：与展开的内容同宽一行，
+   靠左；它是这一块的尾巴，不占行尾血线 */
+.upd-expand-footer {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+/* 「所有版本」展开的最近版本列表：quiet 的一列可点行（版本号 mono + 标题，右端日期） */
+.upd-recent {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.upd-recent-quiet {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+/* 行是链接（可点）：hover 才铺底，与安静控件同一套色 */
+.upd-recent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: inherit;
+  transition: var(--transition-hover);
+}
+
+.upd-recent-row:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.upd-recent-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* 标题可能很长：一行截断，不把日期顶走（hover 的 title 里有完整串） */
+.upd-recent-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upd-recent-date {
+  color: var(--color-text-tertiary);
 }
 
 /* 主 / 次操作的尺寸：颜色与状态照 .btn-accent / .quiet-control 两个配方走，
