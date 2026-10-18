@@ -24,6 +24,7 @@ import { SettingsView, type SettingsTab } from "./features/settings/SettingsView
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
+import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
@@ -278,6 +279,14 @@ export function App() {
     },
     [mainOpenId],
   );
+  // 引用跳转请求是「本次文件面板打开」的一次性请求：面板一旦不再是 files（切到
+  // 别的面板 / 收起，含按会话恢复面板），请求一并作废——否则面板重挂后
+  // consumedCiteRef 归零，旧请求重放会顶开 PDF 标签、重新跳转，等于变相恢复了
+  // 「不随会话恢复」的标签状态。同会话里关面板再开也不再重放：点引用的效力
+  // 随那次面板打开一起结束
+  useEffect(() => {
+    if (rightPanel !== "files") setCiteFocus(null);
+  }, [rightPanel]);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
     // 上一拍 id 必须在派发 setState 之前读出来链进局部量：updater 可能被 React
@@ -290,8 +299,29 @@ export function App() {
     subSessionsMainIdRef.current = nextMainId;
   }, [mainOpenId]);
 
+  // 每条会话记住自己离开时右栏开的是哪个面板（right-panel-memory.ts，用户
+  // 2026-10-18：「每个 session，应该记住自己离开的时候，右侧面板是啥」）。切主槽
+  // 会话的那一拍：把离开会话此刻的面板记下，再恢复目标会话记着的面板（没记过 =
+  // 关着）。只记种类、只记在 renderer 内存：文件面板里的标签不跟着恢复（切会话清
+  // 标签的既有设计不变），重启后都从「关着」起步，右栏宽度仍全局共用。首页
+  // （mainOpenId ""）不是会话：不记也不恢复，面板沿用当前值（与改前一致）。抽屉 /
+  // 辅助对话不开转例：右栏面板位属于主槽视图，一律按主槽会话记。
+  // rightPanel 进依赖是为了让切换那一拍读到「离开时」的面板值；面板自身变化时
+  // previous === mainOpenId 早退，自然空跑
+  const panelMemoryRef = useRef<PanelMemory>(new Map());
+  const panelMainIdRef = useRef(mainOpenId);
+  useEffect(() => {
+    const previous = panelMainIdRef.current;
+    panelMainIdRef.current = mainOpenId;
+    if (previous === mainOpenId) return;
+    const sessionOf = (id: string): string | null => (id === "" ? null : id);
+    panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
+    setRightPanel(recallPanel(panelMemoryRef.current, sessionOf(mainOpenId)));
+  }, [mainOpenId, rightPanel]);
+
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
-  // 面板本身也不该继续挂着一条够不到数据的内容）
+  // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
+  // 的 subsessions 若在新主槽下已不合法，由这里兜底关掉
   useEffect(() => {
     if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel(null);
   }, [rightPanel, hasSubSessions]);
@@ -314,11 +344,12 @@ export function App() {
     setSubSessionsNav(SUB_SESSIONS_LIST);
     setRightPanel("subsessions");
   }, []);
-  /** Open as main：主槽换看这条子会话，面板关闭（2.1 裁决） */
+  /** Open as main：主槽换看这条子会话（2.1 裁决「面板关闭」在按会话记忆后泛化为
+   * 「恢复这条会话自己记的面板」——没记过就是关着，首轮行为与裁决原文一致；
+   * 这里不再显式关面板，否则会把离开的那条会话错记成「关着」） */
   const openAsMain = useCallback(
     (childId: string) => {
       void session.openSession(childId);
-      setRightPanel(null);
     },
     [session],
   );

@@ -151,6 +151,36 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
   });
 });
 
+describe("decideCiteFocus：与右栏按会话记忆的配合", () => {
+  it("A 点开引用后切走，B 恢复文件面板：旧请求（戳 A）在 B 下作废，不开标签也不报错", () => {
+    deepStrictEqual(
+      decideCiteFocus({
+        request: request("session-a", "/Users/x/ws/Lan-2020.pdf"),
+        consumedToken: null,
+        session: "session-b",
+        roots: [root("/Users/x/ws")],
+        attachmentsRoot: null,
+        rootsLoading: false,
+      }),
+      { kind: "drop" },
+    );
+  });
+
+  it("回到 A 恢复文件面板：请求已随面板关闭被 App 清掉（request=null）→ idle，不重放跳转", () => {
+    deepStrictEqual(
+      decideCiteFocus({
+        request: null,
+        consumedToken: null,
+        session: "session-a",
+        roots: [root("/Users/x/ws")],
+        attachmentsRoot: null,
+        rootsLoading: false,
+      }),
+      { kind: "idle" },
+    );
+  });
+});
+
 describe("decideCiteFocus：一次性请求的基本守卫", () => {
   it("没有请求：idle", () => {
     deepStrictEqual(
