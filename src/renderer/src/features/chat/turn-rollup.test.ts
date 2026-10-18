@@ -224,6 +224,73 @@ describe("groupTurns", () => {
     assert.equal(turnStats(second, results).calls, 1);
   });
 
+  test("「思考 → 开场白 → 工具 → 正文」：开场白把首条思考单独切成一段——单时间戳段时长为 null（诚实未知，不显示「Worked 0.0s」），后续段口径不变", () => {
+    // 2026-10-18 真机验收反馈：这一段只有一条记录、一个时间戳，极差为 0，
+    // 折叠行曾显示「用时 0.0 秒」——模型实际想了几秒，这个数是编造。
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "thinking", thinking: "先想想" },
+        { type: "text", text: "开场白" },
+      ]),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "r1", toolName: "read", input: {} }]),
+      toolItem({ toolCallId: "r1", timestamp: 3500 }),
+      assistantItem("a3", 4000, [{ type: "text", text: "结论" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "text", "turnGroup", "text"],
+    );
+    const [first, second] = foldUnits(view);
+    assert.ok(first !== undefined && second !== undefined);
+    // 第一段：只有一个思考块、一个记录级时间戳，跨度量不到 → null；轮头时间照挂首块
+    assert.deepEqual(first.members.map((member) => member.kind), ["thinking"]);
+    assert.equal(first.durationMs, null);
+    assert.equal(first.startedAt, 2000);
+    // 第二段：调用帧 + 结果终态两个时刻，口径不变（仍以结果终态为右端）
+    assert.equal(second.durationMs, 500);
+    assert.equal(second.startedAt, null);
+    // turnStats 原样透传 null——渲染层据此不显示 Worked 段，只留「thought 1」
+    assert.equal(turnStats(first, indexToolResults(records)).durationMs, null);
+  });
+
+  test("只有一条记录的段：思考独占一条记录时 durationMs 为 null，不编造 0.0s", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "thinking", thinking: "想想" }]),
+      assistantItem("a2", 3000, [{ type: "text", text: "正文" }]),
+    ];
+    const fold = foldUnits(turnView(records, false))[0];
+    assert.ok(fold !== undefined);
+    assert.equal(fold.durationMs, null);
+  });
+
+  test("即时工具段（极差不足显示精度 50ms）：durationMs 为 null——「0.0 秒」没有信息量", () => {
+    // write/edit 这类几毫秒落定的工具，极差为正但不足 0.1 秒刻度；同记录
+    // 「思考+工具」段同理（显示的只是工具尾巴，思考时间不在极差里）
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "toolCall", toolCallId: "w1", toolName: "write", input: {} }]),
+      toolItem({ toolCallId: "w1", toolName: "write", timestamp: 2030 }),
+      assistantItem("a2", 3000, [{ type: "text", text: "写好了" }]),
+    ];
+    const fold = foldUnits(turnView(records, false))[0];
+    assert.ok(fold !== undefined);
+    assert.equal(fold.durationMs, null);
+  });
+
+  test("多条记录的段时长口径不变：两个思考来自不同记录，极差为正照显", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "thinking", thinking: "第一段" }]),
+      assistantItem("a2", 3500, [{ type: "thinking", thinking: "第二段" }]),
+    ];
+    const fold = foldUnits(turnView(records, false))[0];
+    assert.ok(fold !== undefined);
+    assert.equal(fold.durationMs, 1500);
+  });
+
   test("空白 text 块不当边界：不断开折叠、也不落视图", () => {
     // 流式常产生空 text delta 落块；拿它断开折叠会凭空多出一条统计行
     const records = [

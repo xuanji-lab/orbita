@@ -308,7 +308,9 @@ export interface TurnGroupUnit {
   members: readonly TurnMemberEntry[];
   /**
    * 本段的时间跨度 = 段内成员 timestamp 的极差（工具成员以其结果的终态时刻为
-   * 右端）。缺时间戳的单元在场时 null（诚实未知）。
+   * 右端）。缺时间戳的单元在场时 null；跨度不足显示精度（<50ms，显示即
+   * 「0.0 秒」）同样 null——它要么量不到（单记录思考段），要么只是即时工具的
+   * 尾巴，显示出来只会误导读出「没干活」。诚实未知，不显示编造值。
    */
   durationMs: number | null;
   /**
@@ -384,7 +386,16 @@ function segmentSpan(segment: readonly RenderEntry[], results?: ToolResultIndex)
       if (end !== undefined) raise(end);
     }
   }
-  return min !== null && max !== null ? max - min : null;
+  if (min === null || max === null) return null;
+  // 跨度不足显示精度（0.1 秒，即 <50ms）时不显示：极差为 0 是量不到——典型是
+  // 「思考 → 开场白 → 工具」的开头，开场白是分组边界，第一条思考被单独切成一段，
+  // 落盘只有记录级时间戳，块内真实耗时（模型实际想了几秒）不在任何极差里；
+  // 极差 1-49ms 是即时工具（write/edit 几毫秒落定）或同记录「思考+工具」段——
+  // 后者显示的只是工具尾巴，思考时间同样不在里面。这些「Worked 0.0s」要么不可信、
+  // 要么没有信息量，一律按诚实未知给 null（2026-10-18 真机验收反馈），
+  // 折叠行不显示时长段（TurnRollupLine 对 null 本就不渲染 Worked）。
+  const span = max - min;
+  return span >= 50 ? span : null;
 }
 
 /**
