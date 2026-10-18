@@ -288,46 +288,45 @@ export function groupToolUnits(
   return entries;
 }
 
-// ── 大折叠（一轮一行）：已落定轮次的思考与工具收进一条统计行 ──
+// ── 大折叠：已落定轮次的思考与工具按正文切段，各收进一条统计行 ──
 
 /**
- * 大折叠单元：一个**已落定轮次**里「首成员到末成员之间全部内容」的收纳——
- * 思考、工具行/组、以及它们之间穿插的正文。折叠外只剩两种正文：首成员之前的
- * 开场白与末成员之后的结尾回复，各在原位。
+ * 大折叠单元：一段**连续的思考与工具行**的收纳（thinking / toolCall / toolGroup，
+ * 原时间序，展开后就是原有的行）。
  *
- * 为什么穿插正文要收进来（BUG-6 裁决，2026-09-20）：单点折叠只有一个位置，
- * 「正文留在折叠外的原位」在实现上做不到——旧实现把首成员后的正文统统推到
- * 折叠之后，穿插陈述与结尾回复混作一堆，读起来是一串缺上下文的碎片。
- * 收进折叠后，展开即回到原相对位置；折叠外只剩有独立上下文的开场与结尾。
+ * 正文永不进折叠（2026-10-18 用户裁决，取代 2026-09-20 的 BUG-6 裁决）：text 是
+ * 分组边界而不是成员——foldChunk 遇到正文就收口当前折叠、正文原样留在原位，
+ * 正文之后再来的思考/工具开一个新的折叠单元。一轮因此可能有多个折叠块，
+ * 各自夹在正文段落之间；BUG-6 的「展开即回原相对位置」语义保留，范围从
+ * 整轮缩到一段。
  */
 export interface TurnGroupUnit {
   kind: "turnGroup";
   /** `turn:${首成员 key}`：成员集合不变时 key 不变，折叠的展开状态得以保住 */
   key: string;
-  /** 首末成员之间的全部 entry（thinking / toolCall / toolGroup / 穿插 text），原时间序；展开后就是原有的行 */
+  /** 本段的思考 / 工具行 / 工具组——永不含 text（类型层兜底，见 TurnMemberEntry） */
   members: readonly TurnMemberEntry[];
   /**
-   * 轮时间跨度 = 段内全部渲染单元 timestamp 的极差。adapter 每帧落 now()，末条
-   * assistant 的终态帧即正文流式完成时刻——所以这个跨度**含正文时间且旧会话也准**，
-   * 不需要现场计时。缺时间戳的单元在场时 null（诚实未知）。
+   * 本段的时间跨度 = 段内成员 timestamp 的极差（工具成员以其结果的终态时刻为
+   * 右端）。缺时间戳的单元在场时 null（诚实未知）。
    */
   durationMs: number | null;
   /**
    * 这轮开始流式回复的时刻 = 段内最早的 assistant 记录 timestamp（渲染单元的
    * timestamp 从记录上原样带来，即首条 assistant 的 message_start 时刻——含先吐
-   * 正文再思考的前导 text，它不在 members 里但在段内）。轮头时间标签的取值
-   * （ChatView 的 TurnRollupLine）；缺时间戳的单元在场时 null，同 durationMs 的
-   * 诚实未知口径。
+   * 正文再思考的前导 text，它不在成员里但在段内）。只有一轮的**第一个**折叠块
+   * 带这个值（轮头时间标签是轮级信息，ChatView 的 TurnRollupLine 据此渲染），
+   * 后续折叠块为 null；缺时间戳的单元在场时 null，同 durationMs 的诚实未知口径。
    */
   startedAt: number | null;
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit;
 
-/** 折叠边界的锚点：思考、单行工具调用、工具组。正文不锚边界，但被区间收进。 */
+/** 折叠成员：思考、单行工具调用、工具组。正文永不进折叠（2026-10-18 裁决），不在联合里。 */
 export type TurnMemberEntry = Extract<
   RenderEntry,
-  { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" } | { kind: "text" }
+  { kind: "thinking" } | { kind: "toolCall" } | { kind: "toolGroup" }
 >;
 
 /**
@@ -345,7 +344,7 @@ function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
  * 折叠区间内只会有这些。通道标记与 user 同级（子会话 2026-09-23 不变量）：
  * 它顶替的正是 pi 本子里的一条 user 消息，不该被收进折叠。
  */
-function isTurnContent(entry: RenderEntry): entry is TurnMemberEntry {
+function isTurnContent(entry: RenderEntry): boolean {
   return (
     entry.kind !== "user" &&
     entry.kind !== "compacted" &&
@@ -481,30 +480,40 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
   return view;
 }
 
-/** 单块内「找首尾轮成员、中间收进折叠」——`foldSegment` 按通道工具切出的每一块都走它。 */
+/**
+ * 单块内分组：text 是边界不是成员（2026-10-18 裁决）——成员攒成连续的一段就
+ * 收成一个折叠单元，遇到正文先收口再原样放行正文；正文之后的成员开新的一段。
+ * 一轮因此可能有多个折叠块，各自夹在正文之间。空白 text 块（流式常产生的空
+ * delta 落块）不当边界也不落视图：它渲染出来本就是空行，拿它断开折叠只会
+ * 凭空多出一条统计行。`foldSegment` 按通道工具切出的每一块都走这里。
+ */
 function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
-  const firstMember = chunk.findIndex(isTurnMember);
-  if (firstMember === -1) return [...chunk];
-  // 末成员（区间右端）：之后的内容（结尾回复）留在折叠外
-  let lastMember = -1;
-  for (let i = chunk.length - 1; i > firstMember; i--) {
-    if (isTurnMember(chunk[i]!)) {
-      lastMember = i;
-      break;
-    }
-  }
-  if (lastMember === -1) lastMember = firstMember;
   const view: TurnViewEntry[] = [];
-  view.push(...chunk.slice(0, firstMember));
-  view.push({
-    kind: "turnGroup",
-    key: `turn:${chunk[firstMember]?.key ?? ""}`,
-    // 首末成员之间的全部内容收进折叠——含穿插正文（BUG-6）：展开即回原位
-    members: chunk.slice(firstMember, lastMember + 1).filter(isTurnContent),
-    durationMs: segmentSpan(chunk, results),
-    startedAt: chunkStartAt(chunk),
-  });
-  view.push(...chunk.slice(lastMember + 1));
+  let run: TurnMemberEntry[] = [];
+  let firstGroup = true;
+  const flush = () => {
+    if (run.length === 0) return;
+    view.push({
+      kind: "turnGroup",
+      key: `turn:${run[0]?.key ?? ""}`,
+      members: run,
+      durationMs: segmentSpan(run, results),
+      // 轮头时间只挂在第一个折叠块上（轮级信息），后续块不带
+      startedAt: firstGroup ? chunkStartAt(chunk) : null,
+    });
+    firstGroup = false;
+    run = [];
+  };
+  for (const entry of chunk) {
+    if (isTurnMember(entry)) {
+      run.push(entry);
+      continue;
+    }
+    if (entry.kind === "text" && entry.text.trim() === "") continue;
+    flush();
+    view.push(entry);
+  }
+  flush();
   return view;
 }
 
@@ -618,8 +627,6 @@ export function turnStats(
       }
       continue;
     }
-    // 穿插正文（BUG-6 起也在 members 里）不参与统计：它既不是思考也不是工具
-    if (member.kind === "text") continue;
     for (const call of member.kind === "toolGroup" ? member.calls : [member]) {
       calls++;
       const statKey = rollupToolKey(call.toolName, call.input, skills);
