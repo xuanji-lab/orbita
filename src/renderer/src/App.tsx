@@ -25,7 +25,15 @@ import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import {
+  recallTerminalOpen,
+  rememberTerminalOpen,
+  moveDockTo,
+  restoreTerminalState,
+  type TerminalOpenMemory,
+} from "./shell/terminal-dock.ts";
 import { RightPanelSlot } from "./shell/RightPanel";
+import { TerminalDockSlot } from "./shell/TerminalDockSlot";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
@@ -42,7 +50,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT, TERMINAL_DOCK_HEIGHT_DEFAULT, type TerminalDock } from "@shared/settings";
 import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
@@ -174,6 +182,39 @@ export function App() {
   useEffect(() => {
     if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
   }, [settings.sidebarWidth]);
+
+  /**
+   * 终端停靠位（全局，settings.terminalDock；缺席 = right）与底部高度。高度同
+   * 右栏宽度的口径：拖动中只改本地，松手才落 settings；渲染时按 pane 高度再夹一次
+   * （TerminalDockSlot 里做，不回写）。
+   */
+  const terminalDock: TerminalDock = settings.terminalDock ?? "right";
+  const terminalDockRef = useRef(terminalDock);
+  terminalDockRef.current = terminalDock;
+  const [terminalBottomHeight, setTerminalBottomHeight] = useState(TERMINAL_DOCK_HEIGHT_DEFAULT);
+  useEffect(() => {
+    if (settings.terminalBottomHeight !== undefined) setTerminalBottomHeight(settings.terminalBottomHeight);
+  }, [settings.terminalBottomHeight]);
+  /**
+   * 底部终端开着吗（只在停靠位 = bottom 时有意义）。开 / 关按会话记（renderer
+   * 内存，同面板记忆那套），见下面切会话的 effect 与 terminal-dock.ts 的注释。
+   */
+  const [terminalBottomOpen, setTerminalBottomOpen] = useState(false);
+  /**
+   * 扳动终端头部的停靠开关：终端跟着开关搬家（moveDockTo——搬到的一头一定开
+   * 着，因为开关就住在终端自己的标题行里），位置落全局设置。搬到底部时右栏若
+   * 正显示终端就让位，其它面板不动；搬回右栏时面板位换成终端。
+   */
+  const handleTerminalDock = useCallback(
+    (next: TerminalDock) => {
+      if (next === terminalDockRef.current) return;
+      changeSettings({ terminalDock: next });
+      const moved = moveDockTo(next, rightPanel);
+      setRightPanel(moved.panel);
+      setTerminalBottomOpen(moved.bottomOpen);
+    },
+    [changeSettings, rightPanel],
+  );
 
   const { session, engine } = useChatSession(providers, t);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
@@ -309,6 +350,7 @@ export function App() {
   // rightPanel 进依赖是为了让切换那一拍读到「离开时」的面板值；面板自身变化时
   // previous === mainOpenId 早退，自然空跑
   const panelMemoryRef = useRef<PanelMemory>(new Map());
+  const terminalMemoryRef = useRef<TerminalOpenMemory>(new Map());
   const panelMainIdRef = useRef(mainOpenId);
   useEffect(() => {
     const previous = panelMainIdRef.current;
@@ -316,8 +358,22 @@ export function App() {
     if (previous === mainOpenId) return;
     const sessionOf = (id: string): string | null => (id === "" ? null : id);
     panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
-    setRightPanel(recallPanel(panelMemoryRef.current, sessionOf(mainOpenId)));
-  }, [mainOpenId, rightPanel]);
+    terminalMemoryRef.current = rememberTerminalOpen(
+      terminalMemoryRef.current,
+      sessionOf(previous),
+      terminalBottomOpen,
+    );
+    // 两条记忆按**当前**停靠位归位（restoreTerminalState）：记忆里的 "terminal"
+    // 是停靠位还在右栏的年代记下的，现在停底部就恢复成「底部终端开着」，不把
+    // 终端塞回右栏面板位
+    const restored = restoreTerminalState(
+      recallPanel(panelMemoryRef.current, sessionOf(mainOpenId)),
+      recallTerminalOpen(terminalMemoryRef.current, sessionOf(mainOpenId)),
+      terminalDockRef.current,
+    );
+    setRightPanel(restored.panel);
+    setTerminalBottomOpen(restored.bottomOpen);
+  }, [mainOpenId, rightPanel, terminalBottomOpen]);
 
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
   // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
@@ -386,7 +442,10 @@ export function App() {
     () =>
       api.terminal.onEvent((event) => {
         if (event.type !== "agent-open") return;
-        setRightPanel("terminal");
+        // 停靠位在哪就在哪点亮：底部停靠开的是底部终端（不占面板位），右栏停靠
+        // 照旧点亮面板位。effect 只订一次，停靠位读 ref
+        if (terminalDockRef.current === "bottom") setTerminalBottomOpen(true);
+        else setRightPanel("terminal");
         setPendingTerminal(event.terminalId);
       }),
     [],
@@ -671,11 +730,14 @@ export function App() {
         // 文件面板开着预览：这一下 Esc 只关预览（退一层），面板留着
       } else if (rightPanel !== null) {
         setRightPanel(null);
+      } else if (terminalDockRef.current === "bottom" && terminalBottomOpen) {
+        // 面板全关着时才轮到底部终端（第二出口，同「再点图标」的退出台阶）
+        setTerminalBottomOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, subSessionsNav]);
+  }, [rightPanel, subSessionsNav, terminalBottomOpen]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）。判定抽在 shell/drawer-shortcut.ts：
   // macOS 上 Option 会把 event.key 变成 ∂，只看 key 在 mac 上永远匹配不到
@@ -709,6 +771,24 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
+
+  /**
+   * 底部终端同款收起窗口（TerminalDockSlot 的 height 过渡回 0，同壳的机制）：
+   * 关掉那一拍先保持挂载，动画走完再卸载——xterm 视图随卸载消失，PTY 在主进程
+   * 不受影响，重开时 list 收养。
+   */
+  const [bottomMounted, setBottomMounted] = useState(false);
+  useEffect(() => {
+    if (terminalBottomOpen) {
+      setBottomMounted(true);
+      return;
+    }
+    if (!bottomMounted) return;
+    const timer = setTimeout(() => setBottomMounted(false), 220);
+    return () => clearTimeout(timer);
+    // bottomMounted 故意不进依赖：收起窗口里只需为这次置空排一次定时器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalBottomOpen]);
   // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
   // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
@@ -830,7 +910,12 @@ export function App() {
         />
 
         <main className="pane">
-          <div className="pane-main">
+          {/* 对话区列（pane-col）：chat 主区 + 底部终端停靠槽。终端停底部时横跨
+              对话区下方，不跨侧栏、不跨右栏（与 RightPanelSlot 并排）；输入框在
+              ChatView 里，位置不动。列常驻（不停靠时只有 pane-main 一个孩子）——
+              挂载树不随停靠开关重排，ChatView 不重挂 */}
+          <div className="pane-col">
+            <div className="pane-main">
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
@@ -875,6 +960,27 @@ export function App() {
                 onOpenSideChat={openInSideChat}
                 intentOpenableIds={intentOpenableIds}
               />
+            )}
+            </div>
+            {/* 底部终端停靠槽：只在停靠位 = bottom 时存在；关着也常驻（height 过渡
+                的同一条动画路径），内容在收起窗口后卸载（bottomMounted） */}
+            {terminalDock === "bottom" && (
+              <TerminalDockSlot
+                open={terminalBottomOpen}
+                height={terminalBottomHeight}
+                onHeightChange={setTerminalBottomHeight}
+                onHeightCommit={(height) => changeSettings({ terminalBottomHeight: height })}
+              >
+                {bottomMounted && (
+                  <TerminalPanel
+                    cwd={session.cwd}
+                    activateId={pendingTerminal}
+                    onActivated={() => setPendingTerminal(null)}
+                    dock={terminalDock}
+                    onDockChange={handleTerminalDock}
+                  />
+                )}
+              </TerminalDockSlot>
             )}
           </div>
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
@@ -924,6 +1030,8 @@ export function App() {
                   cwd={session.cwd}
                   activateId={pendingTerminal}
                   onActivated={() => setPendingTerminal(null)}
+                  dock={terminalDock}
+                  onDockChange={handleTerminalDock}
                 />
               ) : shownPanel === "drawer" ? (
                 <Drawer
@@ -981,6 +1089,9 @@ export function App() {
         <RightRail
           panel={rightPanel}
           onPanel={handlePanel}
+          terminalDock={terminalDock}
+          terminalBottomOpen={terminalBottomOpen}
+          onTerminalBottom={setTerminalBottomOpen}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           subSessions={

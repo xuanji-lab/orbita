@@ -87,6 +87,45 @@ export const COMPACTION_DEFAULT: CompactionSetting = { reservePercent: 20, enabl
 export const COMPACTION_PERCENT = { min: 5, max: 50 } as const;
 
 /**
+ * 终端的停靠位置（2026-10-18 用户：终端在右栏里太窄，「分屏的很难受」——只有终端
+ * 多一个停靠位，功能栏其余不动）。「right」= 右栏共享面板位的一个面板（默认，
+ * 一直以来的行为）；「bottom」= 横跨对话区下方的底部停靠，不占右栏位（右栏可同时
+ * 开文件 / 审查等其它面板）。**全局一份**（同右栏宽度的记账思路），不按会话分；
+ * 按会话记的只有「这条会话离开时终端开没开」（renderer 内存，right-panel-memory
+ * 同一套思路，见 shell/terminal-dock.ts）。
+ */
+export type TerminalDock = "right" | "bottom";
+
+/**
+ * 底部终端的默认高度（px，双击拖动热区的复位目标，会再按当前 pane 高度夹一次）。
+ */
+export const TERMINAL_DOCK_HEIGHT_DEFAULT = 260;
+
+/**
+ * 底部终端高度的地板（px）。再矮就只剩标题行加半行输出，看不出内容；它会压过
+ * 按比例算出的上限——挤到对话区也比终端消失好（同 RIGHT_PANEL_WIDTH_FLOOR）。
+ */
+const TERMINAL_DOCK_HEIGHT_FLOOR = 160;
+
+/**
+ * 把底部终端高度夹进合法区间。区间按 pane 高度的比例：上限 **2/3**——对话区至少
+ * 留 1/3（与右栏宽度 [P/3, 2P/3] 同一条纪律的纵向版）；地板是固定像素 160
+ * （终端收窄到一条缝比对话区被挤更糟），不像右栏那样把地板也抬到 1/3——终端
+ * 常驻窄条是合理形态，面板收窄不是。
+ *
+ * `paneHeight` 量不到（未挂载，0 或非数）时只保地板，不拿假值去夹（同
+ * clampRightPanelWidth）。
+ */
+export function clampTerminalHeight(height: number, paneHeight: number): number {
+  const wanted = Number.isFinite(height) ? Math.round(height) : TERMINAL_DOCK_HEIGHT_DEFAULT;
+  if (!Number.isFinite(paneHeight) || paneHeight <= 0) {
+    return Math.max(TERMINAL_DOCK_HEIGHT_FLOOR, wanted);
+  }
+  const ceiling = Math.round((paneHeight * 2) / 3);
+  return Math.max(TERMINAL_DOCK_HEIGHT_FLOOR, Math.min(ceiling, wanted));
+}
+
+/**
  * 上次使用的权限档与模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
  * 会话各自的档/模型记在各条 meta 与内存 Map（按会话记账，cd0ee98）；这里是
  * **启动恢复点**：新会话槽的初始值。切换时逐键写回（改档只写 mode）。
@@ -199,6 +238,18 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写。
    */
   sidebarWidth?: number;
+  /**
+   * 终端的停靠位置（见 TerminalDock）。缺席 = "right"（右栏面板，默认与既有行为
+   * 一致）。全局一份，不按会话分；终端「开 / 关」的按会话记忆在 renderer 内存
+   * （shell/terminal-dock.ts），不进这里。
+   */
+  terminalDock?: TerminalDock;
+  /**
+   * 终端停靠底部时的高度（px）。缺席 = 260。**这里只做 ≥160 的硬校验**：合法上界
+   * 依赖当前 pane 高度（见 clampTerminalHeight），落盘的值换个显示器就可能越界，
+   * 真正的夹取在渲染层每次渲染时做。拖动中不落盘，松手才写（同 rightPanelWidth）。
+   */
+  terminalBottomHeight?: number;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -431,6 +482,8 @@ export function parseSettings(raw: unknown): AppSettings {
     drawer?: unknown;
     rightPanelWidth?: unknown;
     sidebarWidth?: unknown;
+    terminalDock?: unknown;
+    terminalBottomHeight?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     completionSound?: unknown;
@@ -456,6 +509,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
+  const terminalBottomHeight = record.terminalBottomHeight;
   const compaction = parseCompaction(record.compaction);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
@@ -486,6 +540,16 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar >= SIDEBAR_WIDTH_MIN &&
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
+      : {}),
+    // 终端停靠位：只认两个合法值，别的（含手改拼写错）当没逃过，回默认 right
+    ...(record.terminalDock === "right" || record.terminalDock === "bottom"
+      ? { terminalDock: record.terminalDock }
+      : {}),
+    // 底部终端高度同右栏宽度：只做 ≥ 地板的硬校验，上界随 pane 高度，渲染层每次夹
+    ...(typeof terminalBottomHeight === "number" &&
+    Number.isFinite(terminalBottomHeight) &&
+    terminalBottomHeight >= TERMINAL_DOCK_HEIGHT_FLOOR
+      ? { terminalBottomHeight: Math.round(terminalBottomHeight) }
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),

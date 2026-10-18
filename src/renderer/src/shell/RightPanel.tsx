@@ -141,6 +141,12 @@ export function RightPanelFrame(props: {
   /** 页头最右的动作槽（说明 ?、添加、刷新等） */
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
+  /**
+   * 头部挂不挂 .titlebar（窗口拖拽区）。右栏顶部时它就是窗口顶行，默认挂；
+   * 终端停靠底部时头部在窗口中间，不能拖窗口也不该双击最大化，传 false
+   * （terminalHeaderIsTitlebar）。默认 true，既有面板全部不动。
+   */
+  titlebar?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -151,7 +157,7 @@ export function RightPanelFrame(props: {
         gridTemplateRows: "auto minmax(0,1fr) auto",
       }}
     >
-      <header className="titlebar panel-head">
+      <header className={props.titlebar === false ? "panel-head" : "titlebar panel-head"}>
         {props.header}
         <span className="panel-head-spacer" aria-hidden="true" />
         {props.headerExtra}

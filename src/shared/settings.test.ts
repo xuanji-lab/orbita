@@ -5,6 +5,7 @@ import {
   selectableThemes,
   themeLanguage,
   clampRightPanelWidth,
+  clampTerminalHeight,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
   effectiveIntentSettings,
@@ -189,6 +190,47 @@ describe("parseSettings 的 rightPanelWidth", () => {
     deepStrictEqual(parseSettings({ rightPanelWidth: 150 }).rightPanelWidth, undefined);
     deepStrictEqual(parseSettings({ rightPanelWidth: 900 }).rightPanelWidth, 900);
     deepStrictEqual(parseSettings({ rightPanelWidth: "wide" }).rightPanelWidth, undefined);
+  });
+});
+
+describe("parseSettings 的 terminalDock / terminalBottomHeight", () => {
+  it("缺席 = 默认右栏停靠、默认高度，不落这两个键", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }).terminalDock, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite" }).terminalBottomHeight, undefined);
+  });
+
+  it("停靠位只认 right / bottom，手改的拼写错当没逃过", () => {
+    deepStrictEqual(parseSettings({ terminalDock: "bottom" }).terminalDock, "bottom");
+    deepStrictEqual(parseSettings({ terminalDock: "right" }).terminalDock, "right");
+    deepStrictEqual(parseSettings({ terminalDock: "left" }).terminalDock, undefined);
+    deepStrictEqual(parseSettings({ terminalDock: "Bottom" }).terminalDock, undefined);
+  });
+
+  // 上界依赖当前 pane 高度（clampTerminalHeight），存储层判不了：4K 屏存下的
+  // 高度在笔记本上越界，但不是坏值——夹取交给渲染层，同 rightPanelWidth 的纪律
+  it("底部高度只拦 <160 的坏值，大值留着交给渲染层夹", () => {
+    deepStrictEqual(parseSettings({ terminalBottomHeight: 300 }).terminalBottomHeight, 300);
+    deepStrictEqual(parseSettings({ terminalBottomHeight: 261.6 }).terminalBottomHeight, 262);
+    deepStrictEqual(parseSettings({ terminalBottomHeight: 159 }).terminalBottomHeight, undefined);
+    deepStrictEqual(parseSettings({ terminalBottomHeight: "tall" }).terminalBottomHeight, undefined);
+  });
+});
+
+describe("clampTerminalHeight（底部终端的高度夹取）", () => {
+  it("pane 量不到时只保地板，不拿假值去夹", () => {
+    deepStrictEqual(clampTerminalHeight(300, 0), 300);
+    deepStrictEqual(clampTerminalHeight(120, 0), 160);
+    deepStrictEqual(clampTerminalHeight(Number.NaN, 0), 260);
+  });
+
+  it("上限是 pane 高度的 2/3，对话区至少留 1/3", () => {
+    deepStrictEqual(clampTerminalHeight(600, 600), 400);
+    deepStrictEqual(clampTerminalHeight(300, 600), 300);
+    deepStrictEqual(clampTerminalHeight(160.4, 900), 160);
+  });
+
+  it("pane 很矮时地板压过比例上限：终端不收成缝（同右栏地板胜出的裁决）", () => {
+    deepStrictEqual(clampTerminalHeight(200, 180), 160);
   });
 });
 

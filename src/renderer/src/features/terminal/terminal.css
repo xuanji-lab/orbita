@@ -52,6 +52,25 @@
   --terminal-ansi-bright-white: rgb(240, 243, 246);
 }
 
+/* 停靠位分段开关（终端头部右侧，+ 旁边）：两个安静按钮并排（设置页 Copy / Link
+   的 mg-seg 同款配方），按下的那个用 mode-active 底，不染 accent */
+.terminal-dock-seg {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.terminal-dock-seg-btn {
+  width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+
 /* 全部 tab 共享一行；面板头下、xterm 区上。超出横向滚动，不换行 */
 .terminal-tabstrip {
   display: flex;
