@@ -26,7 +26,7 @@ import type {
   UpdateState,
   UpdateSupport,
 } from "../../shared/updater.ts";
-import { readCurrentNotes, saveCurrentNotes } from "./current-notes.ts";
+import { builtinNotes } from "./builtin-notes.ts";
 import { appNotesOf } from "./notes.ts";
 import { releasesUrl } from "./releases-url.ts";
 import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
@@ -43,8 +43,6 @@ export interface UpdaterOptions {
   platform: string;
   /** 当前应用版本（app.getVersion()），界面「当前版本」那一行用它 */
   version: string;
-  /** 「本版更新内容」落在哪里（userData 下的一个 JSON，见 current-notes.ts） */
-  currentNotesFile: string;
   /** 安装前的收尾：把 agent utility 进程收掉（见文件头） */
   beforeInstall: () => void;
 }
@@ -74,16 +72,15 @@ export class Updater {
   /** 能不能更新；不是 supported 时检查 / 下载 / 安装一律不做 */
   private readonly support: UpdateSupport;
   private readonly version: string;
-  private readonly currentNotesFile: string;
   private readonly beforeInstall: () => void;
   private readonly listeners = new Set<(snapshot: UpdaterSnapshot) => void>();
   private state: UpdateState = { kind: "idle" };
   /**
-   * 当前这一版的更新说明（启动时从 userData 读回，见 readCurrentNotes）。**只读一次**：
-   * 它说的是「已经装上的这一版」，本次进程里版本不会变；下载新版时覆盖文件，那是给下次
-   * 启动用的（此刻用户还在旧版上跑，他那版的说明不该当场消失）。
+   * 当前这一版的更新说明——**应用内置的那份**（package.json 的 build.releaseInfo，
+   * 见 builtin-notes.ts）。每个安装包自带自己这一版的说明，离线可用、不问 GitHub；
+   * 版本号永远对得上，不再需要「下载时落盘、下次启动读回」那套持久化。
    */
-  private currentNotes: readonly UpdateNote[] | null = null;
+  private readonly currentNotes: readonly UpdateNote[] | null = builtinNotes();
   /**
    * 正在下载的版本（用户主动发起的那一次）。库的 `error` 事件不带阶段，靠它把
    * 「检查失败」与「下载失败」分开——两者的重试动作不同。
@@ -99,7 +96,6 @@ export class Updater {
   constructor(options: UpdaterOptions) {
     this.support = updateSupport(options.packaged, options.platform);
     this.version = options.version;
-    this.currentNotesFile = options.currentNotesFile;
     this.beforeInstall = options.beforeInstall;
   }
 
@@ -121,9 +117,6 @@ export class Updater {
 
   /** 接线 electron-updater 并排上两次自动检查。dev（未打包）下什么都不做。 */
   start(): void {
-    // 「本版更新内容」在 dev 下也读：它说的是磁盘上的事实（这一版带来了什么），与要不要
-    // 接线更新无关——接不了更新的实例同样能看它，验收也靠这条（见 current-notes.ts）
-    void this.loadCurrentNotes();
     if (this.support !== "supported") {
       console.info(
         this.support === "unpackaged"
@@ -159,8 +152,6 @@ export class Updater {
     autoUpdater.on("update-downloaded", (info) => {
       this.activeDownload = null;
       this.apply({ type: "downloaded", version: info.version });
-      // 说明跟着安装包一起落盘：装完重启之后就只剩磁盘这一条出处了（见 current-notes.ts）
-      void this.rememberNotes(info);
     });
     autoUpdater.on("error", (error: Error) => this.fail(this.stageOf(), error));
 
@@ -236,29 +227,6 @@ export class Updater {
     console.info("[更新] 退出并安装");
     // 延后一拍：让 install 的 IPC 回执先发回 renderer，再收进程
     setImmediate(() => autoUpdater.quitAndInstall(true, true));
-  }
-
-  /**
-   * 启动时读一次「本版更新内容」。**慢在磁盘上、不阻塞任何人**（窗口与设置页不等它），
-   * 读到就在读到的那一刻推一份快照——渲染层是「整份替换」，不关心它什么时候到。
-   */
-  private async loadCurrentNotes(): Promise<void> {
-    const notes = await readCurrentNotes(this.currentNotesFile, this.version);
-    if (notes === null) return;
-    this.currentNotes = notes;
-    this.push();
-  }
-
-  /**
-   * 落盘这一版的说明（`update-downloaded`）。**失败不影响「已下载」这个事实**：界面照旧
-   * 进 downloaded 等用户重启，最坏的结果只是重启后看不到这一版的说明。
-   */
-  private async rememberNotes(info: UpdateInfo): Promise<void> {
-    try {
-      await saveCurrentNotes(this.currentNotesFile, info.version, notesOf(info));
-    } catch (error) {
-      console.warn("[更新] 本版更新内容没能落盘：", error);
-    }
   }
 
   private stageOf(): UpdateStage {

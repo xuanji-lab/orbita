@@ -497,7 +497,7 @@ export const zh: Messages = {
       group: "软件更新",
       currentVersion: "当前版本",
       currentNotes: "本版更新内容",
-      currentNotesMissing: "GitHub 上没有这一版的更新说明。",
+      currentNotesMissing: "这一版没有更新说明。",
       viewOnGitHub: "在 GitHub 上查看本版",
       updates: "更新",
       idleHint: "后台自动检查更新。",

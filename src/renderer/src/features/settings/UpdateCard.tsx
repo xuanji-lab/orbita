@@ -1,7 +1,7 @@
 import "./update-view.css";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { currentVersionNotesView, historyReleases, recentReleaseTitle, releaseTagUrl } from "@shared/updater";
+import { historyReleases, recentReleaseTitle, releaseTagUrl } from "@shared/updater";
 import type { RecentRelease, RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
 import { Icon, isIconName, type IconName } from "../../shell/Icon";
@@ -23,7 +23,7 @@ import { formatBytes, progressAmount, progressPercent } from "./update-format.ts
  * （点行上任何位置开合，键盘 Tab + Enter/Space 同样）：点开就在下方就地看内容
  * （本版说明 / 最近几个版本），GitHub 外链出口放在展开体底部（按钮外面）。
  * 「当前版本」**无条件可展开**（2026-10-18 用户验收：「首先你得能展开当前版本」）：
- * 说明来源的两级取舍见 CurrentVersionNotesPanel，没有说明 / 拉取失败也照旧展开，出口仍在。
+ * 说明是应用内置的（见 CurrentVersionNotesPanel），没写也照旧展开，GitHub 出口仍在。
  * 三角占 12px（= .upd-btn 的右内边距），尾部文字的右缘因此落在同一条线上。
  * 「更新」那一行不动：那里有真操作按钮（accent 只给「下载」与「重启以安装」）。
  *
@@ -61,7 +61,7 @@ export function UpdateCard() {
   // 快照还没到（或桥不在）时不猜：入口置灰、版本号留空，等真值到了再画
   const supported = snapshot?.support === "supported";
   const state: UpdateState = snapshot?.state ?? { kind: "idle" };
-  /** 已装上的这一版的说明（装完重启后从 userData 读回的那份）；没有时展开体再去问 GitHub */
+  /** 当前这一版的说明（应用内置的那份，见 snapshot 契约；没写是 null） */
   const currentNotes = snapshot?.currentNotes ?? null;
   /** Release 页基址；拿不到（publish 没写 owner/repo）就连两个入口一起不画 */
   const releasesUrl = snapshot?.releasesUrl ?? null;
@@ -178,7 +178,7 @@ export function UpdateCard() {
           </span>
         }
       >
-        <CurrentVersionNotesPanel currentVersion={currentVersion} localNotes={currentNotes} tagUrl={tagUrl} />
+        <CurrentVersionNotesPanel notes={currentNotes} tagUrl={tagUrl} />
       </DisclosureRow>
       <SettingRow
         name={x.updates}
@@ -326,61 +326,24 @@ function Caret() {
 }
 
 /**
- * 「当前版本」的展开体：这一版的说明 + 底部的 GitHub 出口。画哪一态由纯函数
- * currentVersionNotesView 决定（shared/updater.ts，有测试），这里只做薄适配。
+ * 「当前版本」的展开体：这一版的说明 + 底部的 GitHub 出口。
  *
- * **本地没有说明才发请求**：`snapshot.currentNotes`（下载这一版时留在 userData）优先生效、
- * 离线可用；为空才去问 GitHub——与「历史版本」列表同一个调用（updater:recentReleases）、
- * 同一份 10 分钟缓存。展开即挂载、收起即卸载，与 RecentReleasesList 同一个节拍。
+ * 说明是**应用内置的**（package.json 的 build.releaseInfo，随 main bundle 内联，
+ * 见 main/updater/builtin-notes.ts）：离线可用、不发请求——当前版本的说明应用自己知道，
+ * GitHub 只用于「历史版本」与外链（2026-10-18 用户裁决）。没写（发版兑底测试拦着，
+ * 理论上不会发生）就说一句「这一版没有更新说明」，出口仍在底部，行不因此变回点不开。
  *
- * 不管哪一态，外链出口都在底部：拉取失败 / 这一版没有说明时行不会变回点不开
- * （2026-10-18 用户验收），「在 GitHub 上查看本版」仍然是出路。
+ * 之前那版在这里点开时去拉 updater:recentReleases 找当前版本的那一条，已删：内置说明
+ * 上线后那个远程兑底不再有到达路径，留着是两个真源。
  */
-function CurrentVersionNotesPanel(props: {
-  currentVersion: string;
-  localNotes: readonly UpdateNote[] | null;
-  tagUrl: string | null;
-}) {
+function CurrentVersionNotesPanel(props: { notes: readonly UpdateNote[] | null; tagUrl: string | null }) {
   const x = useT().settings.update;
-  const needsFetch = props.localNotes === null;
-  const [remote, setRemote] = useState<RecentReleasesResult | null>(null);
-  /** 重试计数：递增一次就重跑一轮请求（依赖数组把它变成显式触发器） */
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    if (!needsFetch) return;
-    let cancelled = false;
-    setRemote(null);
-    void api.updater
-      .recentReleases()
-      .then((next) => {
-        if (!cancelled) setRemote(next);
-      })
-      .catch(() => {
-        if (!cancelled) setRemote({ ok: false, message: "" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [needsFetch, attempt]);
-
-  const view = currentVersionNotesView(props.currentVersion, props.localNotes, remote);
   return (
     <>
-      {view.kind === "local" || view.kind === "remote" ? (
-        <ReleaseNotes notes={view.notes} />
-      ) : view.kind === "fetching" ? (
-        <div className="upd-recent-quiet">{x.recentLoading}</div>
-      ) : view.kind === "failed" ? (
-        <div className="upd-recent-quiet">
-          {/* 机器原话进 title：界面上说人话，鼠标停上去能拿到诊断用的原文 */}
-          <span title={view.message === "" ? undefined : view.message}>{x.recentFailed}</span>
-          <button type="button" className="upd-link" onClick={() => setAttempt(attempt + 1)}>
-            {x.retry}
-          </button>
-        </div>
-      ) : (
+      {props.notes === null ? (
         <div className="upd-recent-quiet">{x.currentNotesMissing}</div>
+      ) : (
+        <ReleaseNotes notes={props.notes} />
       )}
       {props.tagUrl !== null && <ReleaseFooter url={props.tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
     </>

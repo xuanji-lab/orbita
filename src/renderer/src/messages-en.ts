@@ -543,7 +543,7 @@ export const en = {
       group: "Software update",
       currentVersion: "Current version",
       currentNotes: "What's in this version",
-      currentNotesMissing: "No release notes for this version on GitHub.",
+      currentNotesMissing: "This version has no release notes.",
       viewOnGitHub: "View this release on GitHub",
       updates: "Updates",
       idleHint: "Checked automatically in the background.",
