@@ -46,12 +46,15 @@ describe("进入拼装", () => {
     assert.match(source, /PROACTIVE_CAPABILITY_GUIDELINE/);
   });
 
-  test("两段都在 before_agent_start 的 systemPrompt 数组里（指出了常量却没拼进提示词）", () => {
-    const start = source.indexOf("systemPrompt: [");
-    const end = source.indexOf('.filter((part) => part !== "")', start);
-    assert.ok(start >= 0 && end > start, "找不到 before_agent_start 的 systemPrompt 数组");
+  test("两段都进了 composeSystemPrompt 调用（指出了常量却没拼进提示词）", () => {
+    // 装配层（system-prompt.ts）重构后，runtime 里是 composeSystemPrompt({ ... }) 而非
+    // 字面量数组：断言两段作为 toolSelection 字段出现在调用里，且回复语言段在其后
+    // （拼装顺序本身由 prompt-sections.test.ts 钉）。
+    const start = source.indexOf("composeSystemPrompt({");
+    const end = source.indexOf("replyLanguage:", start);
+    assert.ok(start >= 0 && end > start, "找不到 before_agent_start 的 composeSystemPrompt 调用");
     const assembled = source.slice(start, end);
-    assert.ok(assembled.includes("TOOL_SELECTION_GUIDELINE"), "工具选型段没进数组");
-    assert.ok(assembled.includes("PROACTIVE_CAPABILITY_GUIDELINE"), "非编程能力引导没进数组");
+    assert.ok(assembled.includes("TOOL_SELECTION_GUIDELINE"), "工具选型段没进拼装");
+    assert.ok(assembled.includes("PROACTIVE_CAPABILITY_GUIDELINE"), "非编程能力引导没进拼装");
   });
 });

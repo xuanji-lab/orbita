@@ -87,6 +87,7 @@ describe("系统提示词装配", () => {
       gitAttribution: "",
       permission: parts().permission,
       storeTools: parts().storeTools,
+      toolSelection: parts().toolSelection,
     });
     assert.equal(shuffled, straight);
   });
