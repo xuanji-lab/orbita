@@ -141,6 +141,15 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
 
+**Muted surface** (`--color-bg-muted`): the one neutral fill for anything that sits as a block on a
+panel — expandable detail cards (release notes, migration lists), chips and badges, a control's
+resting fill, image placeholders. On light it is a **cool grey `#eef0f2`, not a warm off-white**
+(settled 2026-10-18): the old `#f8f8f5` was 1.06:1 against white and vanished on the warm glass, so
+cards and chips read as bare text; the cool grey matches the text greys and the blue accent. It is
+never the accent wash — `--color-accent-soft` means *selected*, and a release-notes card or a badge
+in that colour reads as chosen. The paper faces keep their own warm `#f4f4ef` (paper is warm on
+purpose); the dark tiers are unaffected.
+
 **Category colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): a shared
 three-colour set — blue for doc-ish, green for sheets, orange-red for slides — that tells file
 types apart **at a glance in their 13–14px icons** (files tree, composer pills, sent-attachment

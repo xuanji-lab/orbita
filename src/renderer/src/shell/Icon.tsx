@@ -256,6 +256,15 @@ const ICONS = {
 export type IconName = keyof typeof ICONS;
 
 /**
+ * 名字是不是本表里登记过的图标。给「名字从外部来」的调用点用（今天的消费者是设置页的
+ * 更新说明：`[icon:名字]` 写在 Release 正文里，白名单只能在这里——**不另建第二份名单**，
+ * 没登记的当没图标处理）。
+ */
+export function isIconName(value: string): value is IconName {
+  return Object.hasOwn(ICONS, value);
+}
+
+/**
  * SVG 源文件里的换行与缩进会原样变成 DOM 文本节点，把承载图标的按钮的 `textContent`
  * 污染成 `"\n  \n  \nProviders"`——读屏与任何按文本找元素的东西都会踩到。
  * 构建期洗一次，运行时零成本。
