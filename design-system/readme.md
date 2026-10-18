@@ -397,6 +397,25 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 - Learned from ZCode's `text-ui-*` scale (2026-10); our `xs` is base − 3, not − 4 — 10px CJK is
   below comfortable reading.
 
+**The top rows are one regulated zone (顶部栏， 2026-10-19).** Every top row (sidebar
+wordmark, conversation / settings / panel headers, the right rail's first slot) shares the height
+`--titlebar-row` (26px), centred on the traffic-light line (macOS lights y 19–31 → centre 25px; the row
+centre and the lights' centre are the same horizontal line, Windows included). Everything inside a top
+row comes from four tokens and nothing else: icons `--titlebar-icon` (14px), icon-button boxes
+`--titlebar-control` (24px), fields / tabs / pills `--titlebar-field` (22px), and titles
+`--font-size-titlebar` (= `--font-size-sm`, weight unchanged). These are enforced by a **scope rule**, not
+by every component remembering: `.titlebar` (`.panel-head` included) sets `--icon-size` and the heights /
+title size of its descendants, so a self-drawn header element is sized correctly even when it forgot —
+the Files panel's hand-rolled title leaked at 14px/16px exactly once before this rule existed. For the
+scope to win, `Icon` does not carry an inline width: it writes a request variable
+(`--icon-size-request`) and the global `.orbita-icon` rule reads `var(--icon-size, var(--icon-size-request))`
+— no `!important` anywhere. Headers use `PanelTitle` (its toggle variant when the title is a switch);
+exceptions are explicit and commented: `.window-titlebar` (Windows' own 36×28 window buttons),
+`.titlebar-exempt` (the right rail's first slot — the whole rail keeps its own 26px/16px system), and
+`.titlebar-icon-own` for deliberately smaller glyphs (chevrons, close ✕, run-state marks).
+`src/renderer/src/shell/window-tools.test.ts` guards the whole chain: tokens ↔ constants ↔ scope rules ↔
+no literal heights / font sizes in the family CSS.
+
 **Trailing edges sit on the row's right hem.** A row / card / list item's trailing
 element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
 padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push

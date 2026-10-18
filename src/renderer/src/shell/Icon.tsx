@@ -304,8 +304,14 @@ export function Icon(props: {
 }) {
   const size = props.size ?? 16;
   const style = {
-    width: size,
-    height: size,
+    /**
+     * 尺寸不是 inline width/height，而是「请求值」自定义属性：真正的宽度规则在
+     * styles.css 的 .orbita-icon（读 var(--icon-size, var(--icon-size-request))）。
+     * 为什么绕这一层：inline 样式压过一切选择器，作用域规则（顶部栏把行内图标
+     * 统一成 --titlebar-icon）就永远接管不了；改成变量后，作用域只需翻 --icon-size，
+     * 不用 !important（2026-10-19 顶部栏公共规定，见 styles.css 的作用域注释）。
+     */
+    "--icon-size-request": `${size}px`,
     "--icon-stroke": props.strokeWidth ?? 2,
     ...(props.fill === true
       ? { "--icon-fill": "currentColor" }

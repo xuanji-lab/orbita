@@ -32,9 +32,21 @@ const RENDERER_SRC = join(HERE, "..");
 const REPO_ROOT = join(RENDERER_SRC, "..", "..", "..");
 const stylesCss = readFileSync(join(RENDERER_SRC, "styles.css"), "utf8");
 const spacingCss = readFileSync(join(REPO_ROOT, "design-system/tokens/spacing.css"), "utf8");
+const typographyCss = readFileSync(join(REPO_ROOT, "design-system/tokens/typography.css"), "utf8");
 const sidebarTsx = readFileSync(join(RENDERER_SRC, "shell/Sidebar.tsx"), "utf8");
 const appTsx = readFileSync(join(RENDERER_SRC, "App.tsx"), "utf8");
+const iconTsx = readFileSync(join(RENDERER_SRC, "shell/Icon.tsx"), "utf8");
+const windowToolsTsx = readFileSync(join(RENDERER_SRC, "shell/WindowTools.tsx"), "utf8");
 const mainIndexTs = readFileSync(join(REPO_ROOT, "src/main/index.ts"), "utf8");
+
+/** 从 CSS 文本里抽出一条规则的声明块（选择器在行首匹配，避免子串误中长选择器）；找不到返回 null */
+function ruleBlock(css: string, selector: string): string | null {
+  const index = css.indexOf(`\n${selector}`);
+  if (index === -1) return null;
+  const open = css.indexOf("{", index);
+  const close = css.indexOf("}", open);
+  return close === -1 ? null : css.slice(open + 1, close);
+}
 
 const PLATFORMS = ["darwin", "other"] as const;
 
@@ -66,11 +78,12 @@ test("CSS 侧同一套值：净空 / inset 变量与 .layer、侧栏的内边距
   assert.ok(clearanceDecl !== null, "styles.css 缺 darwin 的 --traffic-clearance 声明");
   assert.equal(Number(clearanceDecl[1]), DARWIN_CLEARANCE, "DARWIN_CLEARANCE 与 styles.css 的 --traffic-clearance 漂了");
 
-  // 收起态页头 inset：--window-tools-inset = --space-3（非 darwin）/ calc(--space-3 + --traffic-clearance)（darwin）
+  // 收起态页头 inset：基值 --window-tools-inset = --space-3（tokens/spacing.css）；
+  // darwin 覆写 = calc(--space-3 + --traffic-clearance)（styles.css）
   assert.match(
-    stylesCss,
+    spacingCss,
     /--window-tools-inset:\s*var\(--space-3\)/,
-    "styles.css 缺 --window-tools-inset: var(--space-3)",
+    "tokens/spacing.css 缺 --window-tools-inset: var(--space-3)",
   );
   assert.match(
     stylesCss,
@@ -107,10 +120,11 @@ test("顶栏行高：中心钉在红绿灯中心那条线上，主进程 / 常�
   assert.ok(pos !== null, "src/main/index.ts 里找不到 trafficLightPosition");
   assert.equal(Number(pos[2]), TRAFFIC_LIGHT_Y, "主进程红绿灯 y 改了——TRAFFIC_LIGHT_Y / TITLEBAR_ROW_HEIGHT 要重算");
 
-  // 各处页头用的 CSS 变量与推导同值
-  const row = stylesCss.match(/--titlebar-row:\s*(\d+)px/);
-  assert.ok(row !== null, "styles.css 缺 --titlebar-row 声明");
-  assert.equal(Number(row[1]), TITLEBAR_ROW_HEIGHT, "styles.css 的 --titlebar-row 与 TITLEBAR_ROW_HEIGHT 漂了");
+  // 各处页头用的 CSS 变量与推导同值（token 真源在 tokens/spacing.css）
+  const row = spacingCss.match(/--titlebar-row:\s*(\d+)px/);
+  assert.ok(row !== null, "tokens/spacing.css 缺 --titlebar-row 声明");
+  assert.equal(Number(row[1]), TITLEBAR_ROW_HEIGHT, "--titlebar-row 与 TITLEBAR_ROW_HEIGHT 漂了");
+  assert.ok(!/--titlebar-row:\s*\d+px/.test(stylesCss), "--titlebar-row 又在渲染层 styles.css 里另写了一份——真源在 tokens");
 });
 
 test("断点常量只此一份：收起断点 960，App 的 matchMedia 用它", () => {
@@ -120,4 +134,90 @@ test("断点常量只此一份：收起断点 960，App 的 matchMedia 用它", 
     /matchMedia\(`\(max-width: \$\{COLLAPSE_BREAKPOINT - 1}px\)`\)/,
     "App 的自动收起 effect 不再用 COLLAPSE_BREAKPOINT——断点改成了两处字面量",
   );
+});
+
+// —— 顶部栏公共规定（2026-10-19 用户：「感觉得搞下公共的规定，顶部栏相关的」）——
+// 一处定义（token）+ 作用域兑底（.titlebar 规则自动接管行内一切）+ 组件只引 token。
+// 下面的检查拦的是「下一处漏网」：token 被删 / 作用域被拆 / 组件又写回魔法数。
+
+test("顶部栏 token 一份真源：几何量在 spacing.css，标题字号在 typography.css", () => {
+  const expectToken = (css: string, name: string, value: string, file: string): void => {
+    const found = css.match(new RegExp(`${name}:\\s*${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*;`));
+    assert.ok(found !== null, `${file} 缺 ${name}: ${value}`);
+  };
+  expectToken(spacingCss, "--titlebar-row", `${TITLEBAR_ROW_HEIGHT}px`, "tokens/spacing.css");
+  expectToken(spacingCss, "--titlebar-icon", "14px", "tokens/spacing.css");
+  expectToken(spacingCss, "--titlebar-control", "24px", "tokens/spacing.css");
+  expectToken(spacingCss, "--titlebar-field", "22px", "tokens/spacing.css");
+  expectToken(typographyCss, "--font-size-titlebar", "var(--font-size-sm)", "tokens/typography.css");
+});
+
+test("作用域兑底还在：.titlebar 行内的图标 / 按钮 / 输入框 / 标题自动一档", () => {
+  // 图标：作用域只翻 --icon-size，不用 !important（Icon 交出 inline 尺寸见下一案）
+  assert.match(
+    stylesCss,
+    /\.titlebar:not\(\.window-titlebar\):not\(\.titlebar-exempt\)\s*\{\s*--icon-size:\s*var\(--titlebar-icon\)/,
+    "顶部栏作用域的 --icon-size 规则不足——行内图标尺寸会失控",
+  );
+  assert.match(
+    stylesCss,
+    /\.titlebar \.titlebar-icon-own\s*\{\s*--icon-size:\s*var\(--icon-size-request\)/,
+    "缺 .titlebar-icon-own 豁免（小箭头 / 状态点回自己的请求尺寸）",
+  );
+  const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [kind, prop, value] of [
+    ["button", "height", "var(--titlebar-button-h, var(--titlebar-control))"],
+    ["input", "height", "var(--titlebar-field)"],
+    ["input", "font-size", "var(--font-size-titlebar)"],
+    ["strong", "font-size", "var(--font-size-titlebar)"],
+  ] as const) {
+    assert.match(
+      stylesCss,
+      new RegExp(
+        `\\.titlebar:not\\(\\.window-titlebar\\):not\\(\\.titlebar-exempt\\) ${kind}\\s*\\{[^}]*${prop}:\\s*${escapeRe(value)}`,
+      ),
+      `缺 .titlebar ${kind} 的 ${prop} 作用域规则（${value}）`,
+    );
+  }
+});
+
+test("Icon 把尺寸交给 CSS：请求值变量 + 全局宽度规则，不再 inline width/height", () => {
+  assert.match(iconTsx, /"--icon-size-request": `\$\{size\}px`/, "Icon.tsx 不再写 --icon-size-request——作用域接管不了行内图标");
+  assert.ok(!/width: size/.test(iconTsx), "Icon.tsx 又把 width 写回 inline 了——作用域永远盖不过 inline");
+  const orbita = ruleBlock(stylesCss, ".orbita-icon {");
+  assert.ok(orbita !== null, "styles.css 缺 .orbita-icon 基础规则");
+  assert.match(
+    orbita,
+    /width:\s*var\(--icon-size,\s*var\(--icon-size-request\)\)/,
+    ".orbita-icon 的宽度不再是 var(--icon-size, var(--icon-size-request)) 两层",
+  );
+});
+
+test("顶部栏家族的 CSS 规则里不许再写字面量高度 / 字号（一律 token）", () => {
+  const FAMILY = [
+    ".panel-title strong",
+    ".panel-title-toggle",
+    ".panel-filter",
+    ".panel-head-select",
+    ".files-tab",
+    ".files-title-toggle",
+    ".intent-turn-chip",
+  ];
+  for (const selector of FAMILY) {
+    const block = ruleBlock(stylesCss, `${selector} {`);
+    assert.ok(block !== null, `styles.css 缺 ${selector} 规则`);
+    const literal = block.match(/(?:height|font-size):\s*\d+(?:\.\d+)?px/);
+    assert.equal(
+      literal,
+      null,
+      `${selector} 里出现了字面量 ${literal?.[0]}——顶部行的高度 / 字号只能引 --titlebar-* / --font-size-titlebar`,
+    );
+  }
+});
+
+test("组件只引 token：面板按钮 / 收起态工具组的外框不写魔法数", () => {
+  const rightPanelTsx = readFileSync(join(RENDERER_SRC, "shell/RightPanel.tsx"), "utf8");
+  assert.match(rightPanelTsx, /size="var\(--titlebar-control\)"/, "PanelIconButton / PanelHelp 的外框不再走 --titlebar-control");
+  assert.ok(!/size=\{2[46]\}/.test(rightPanelTsx), "RightPanel.tsx 里又出现了 size={24}/{26} 魔法数");
+  assert.match(windowToolsTsx, /width: "var\(--titlebar-control\)"/, "RailButton 外框不再走 --titlebar-control");
 });

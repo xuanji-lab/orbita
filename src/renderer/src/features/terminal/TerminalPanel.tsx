@@ -165,7 +165,12 @@ export function TerminalPanel(props: {
         </>
       }
       headerExtra={
-        <IconButton label={t.terminal.newTerminal} size={24} onClick={openTerminal} className="no-drag">
+        <IconButton
+          label={t.terminal.newTerminal}
+          size="var(--titlebar-control)"
+          onClick={openTerminal}
+          className="no-drag"
+        >
           <Icon name="plus" size={14} />
         </IconButton>
       }
@@ -224,7 +229,7 @@ function TabButton(props: {
           props.onClose();
         }}
       >
-        <Icon name="x" size={10} />
+        <Icon name="x" size={10} className="titlebar-icon-own" />
       </button>
     </span>
   );

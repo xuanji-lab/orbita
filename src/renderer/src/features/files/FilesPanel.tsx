@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
-import { PanelFilter, PanelGroupHead, PanelIconButton, PanelLine, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelFilter, PanelGroupHead, PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { IconButton } from "../../shell/IconButton";
 import { api } from "../../api";
 import type { ChatSession } from "../chat/useChatSession";
@@ -448,19 +448,26 @@ export function FilesPanel(props: {
       header={
         <>
           {/* 「文件」标题本身就是文件树开关（原型裁决）：树开着时呈点亮态（选中行
-              的 mode 淡底配方）；没有打开文件时禁用——那时树就是整个面板 */}
-          <button
-            type="button"
-            className="files-title-toggle"
-            aria-expanded={fileOpen && treeOn ? "true" : undefined}
-            disabled={!fileOpen}
-            title={t.files.treeToggleTip}
+              的 mode 淡底配方）；没有打开文件时禁用——那时树就是整个面板。
+              2026-10-19 走 PanelTitle 的开关形态：字号 / 高度 / hover / 点亮态全部
+              由公共配方接管，这里只留负缩进与图标着色（styles.css 的 .files-title-toggle） */}
+          <PanelTitle
+            icon="folder"
+            title={t.files.title}
+            tip={t.files.treeToggleTip}
             onClick={() => setTreeOn((value) => !value)}
-          >
-            <Icon name="folder" size={16} style={{ flex: "0 0 auto" }} />
-            <span>{t.files.title}</span>
-            <Icon name="chevron-right" size={11} strokeWidth={2.2} className="files-title-chev" />
-          </button>
+            ariaExpanded={fileOpen && treeOn}
+            disabled={!fileOpen}
+            className="files-title-toggle"
+            trailing={
+              <Icon
+                name="chevron-right"
+                size={11}
+                strokeWidth={2.2}
+                className="files-title-chev titlebar-icon-own"
+              />
+            }
+          />
           {tabs.length === 0 ? (
             // 没打开文件：树就是整个面板，过滤框住在标题行（方案 B）；打开文件后标题行
             // 让给标签页，过滤框挪到树的顶部（树开着时才在场）
@@ -511,7 +518,7 @@ export function FilesPanel(props: {
                           closeOne(tab.path);
                         }}
                       >
-                        <Icon name="x" size={10} strokeWidth={2.4} />
+                        <Icon name="x" size={10} strokeWidth={2.4} className="titlebar-icon-own" />
                       </button>
                     </div>
                   );

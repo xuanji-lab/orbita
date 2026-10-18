@@ -127,9 +127,7 @@ export function SettingsView(props: {
         }}
       >
         {props.windowTools}
-        <strong style={{ fontSize: "var(--font-size-sm)", fontWeight: "var(--weight-bold)" }}>
-          {t.settings.tabs[active.id]}
-        </strong>
+        <strong style={{ fontWeight: "var(--weight-bold)" }}>{t.settings.tabs[active.id]}</strong>
       </header>
 
       {migrationVisited ? (

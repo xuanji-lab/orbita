@@ -195,19 +195,65 @@ export function PanelIconButton(props: {
   children: React.ReactNode;
 }) {
   return (
-    <IconButton label={props.title} size={24} disabled={props.disabled} onClick={props.onClick} className="no-drag">
+    <IconButton
+      label={props.title}
+      size="var(--titlebar-control)"
+      disabled={props.disabled}
+      onClick={props.onClick}
+      className="no-drag"
+    >
       {props.children}
     </IconButton>
   );
 }
 
-/** 标题行左段：图标 + 标题。六个面板同一种写法（字号 / 字重 / 图标色由 CSS 管） */
-export function PanelTitle(props: { icon: IconName; title: string; tip?: string }) {
-  return (
-    <span className="panel-title" title={props.tip}>
+/**
+ * 标题行左段：图标 + 标题。各面板同一种写法（尺寸 / 字重 / 图标色由顶部栏 token 与
+ * CSS 作用域接管，2026-10-19 公共规定——自己画的标题也会被兑底，但新面板一律用它，
+ * 不再手写）。传 onClick 就是开关形态（button 同配方，aria-expanded 点亮态走
+ * mode 选中色），文件面板的「文件」标题（树开关）是第一个消费者。
+ */
+export function PanelTitle(props: {
+  icon: IconName;
+  title: string;
+  tip?: string;
+  /** 给了就是可点开关：渲染 button（.panel-title-toggle 同配方）而不是 span */
+  onClick?: () => void;
+  /** 开关形态：展开着（点亮态）置 true */
+  ariaExpanded?: boolean;
+  /** 开关形态：禁用（如文件面板没有打开文件时树开关不可点） */
+  disabled?: boolean;
+  /** 开关形态的行尾（如折叠 chevron） */
+  trailing?: React.ReactNode;
+  /** 调用方追加的 class（文件面板的负缩进等局部覆盖） */
+  className?: string;
+}) {
+  const inner = (
+    <>
       <Icon name={props.icon} size={14} />
       <strong>{props.title}</strong>
-    </span>
+      {props.trailing}
+    </>
+  );
+  const className = `panel-title${props.className === undefined ? "" : ` ${props.className}`}`;
+  if (props.onClick === undefined) {
+    return (
+      <span className={className} title={props.tip}>
+        {inner}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`${className} panel-title-toggle`}
+      title={props.tip}
+      onClick={props.onClick}
+      aria-expanded={props.ariaExpanded === true}
+      disabled={props.disabled}
+    >
+      {inner}
+    </button>
   );
 }
 
@@ -257,7 +303,7 @@ export function PanelFilter(props: {
  */
 export function PanelHelp(props: { text: string; label: string }) {
   return (
-    <IconButton label={props.label} title={props.text} size={24} className="no-drag">
+    <IconButton label={props.label} title={props.text} size="var(--titlebar-control)" className="no-drag">
       <Icon name="circle-help" size={14} />
     </IconButton>
   );

@@ -602,9 +602,7 @@ function AddServerForm(props: {
           <PanelIconButton title={t.mcp.backToList} onClick={props.onCancel}>
             <Icon name="chevron-left" size={14} />
           </PanelIconButton>
-          <strong style={{ fontSize: "var(--font-size-sm)", fontWeight: "var(--weight-semibold)" }}>
-            {t.mcp.addServer}
-          </strong>
+          <strong style={{ fontWeight: "var(--weight-semibold)" }}>{t.mcp.addServer}</strong>
         </>
       }
       footer={

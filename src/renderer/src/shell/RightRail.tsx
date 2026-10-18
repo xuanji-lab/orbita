@@ -109,13 +109,14 @@ export function RightRail(props: {
         overflow: "hidden",
       }}
     >
-      {/* 顶部这行兼作拖拽区（.titlebar）；行内住 Files 入口，与左侧折叠图标同行同高
-          （2026-09-22 文件面板加入：顶行让给最常用的 Files，Skills 顺延一格）。
+      {/* 顶部这行兼作拖拽区（.titlebar）；行内住 Files 入口，与左侧折叠图标同一条
+          中心线。titlebar-exempt：整条右图标条的图标 / 按钮是竖列自己的体系
+          （26px 盒 / 16px 图标），顶部栏作用域不接管这一格（2026-10-19 公共规定）。
           paddingInlineStart: 0——豁免 darwin 给 .titlebar 统一加的 66px 红绿灯净空：
           红绿灯在窗口左上，这条 32px 窄条在最右，让净空会把 icon 推出可视区外
           （overflow:hidden，A-0 复验 BUG-3）。 */}
       <span
-        className="titlebar"
+        className="titlebar titlebar-exempt"
         style={{
           height: "var(--titlebar-row)",
           width: "100%",

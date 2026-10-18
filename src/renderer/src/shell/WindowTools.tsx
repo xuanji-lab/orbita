@@ -22,7 +22,8 @@ export function WindowTools(props: { onExpand: () => void; onNewTask: () => void
 
 /**
  * 图标条时代的按钮（设计系统 components/navigation/RailButton）：
- * 24px 方块（顶栏收窄到 26px 后的档位，上下各留 1px），**tooltip 是它唯一的标签**。
+ * 外框 --titlebar-control（24px，顶部栏公共规定），**tooltip 是它唯一的标签**；
+ * 图标尺寸由顶部栏作用域接管（14px）——这里给的是请求值。
  * 当前项用模式选中色（R4-03 修正：明蓝暗黄）；accent 只给 New task 这个主操作
  * （styles.css 的 `.rail-btn[data-accent]` 常显 accent 态）。
  */
@@ -47,8 +48,8 @@ export function RailButton(props: {
       style={{
         display: "grid",
         placeItems: "center",
-        width: 24,
-        height: 24,
+        width: "var(--titlebar-control)",
+        height: "var(--titlebar-control)",
         flex: "0 0 auto",
         border: 0,
         borderRadius: "var(--radius-md)",

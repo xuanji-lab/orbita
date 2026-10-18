@@ -785,22 +785,11 @@ body {
 }
 
 /*
- * 窗口工具组的水平几何（常量与纯函数在 shell/window-tools.ts，两侧互为对账，
- * window-tools.test.ts 把关）：
- *  - --traffic-clearance：darwin 红绿灯净空（trafficLightPosition x=18、三键约 52px 宽）；
- *  - --window-tools-inset：侧栏收起后「窗口工具」组（侧栏开关 · 新任务）在对话卡
- *    页头里的左内边距——补齐侧栏自己那层 --space-3 与红绿灯净空，让组的左缘在
- *    展开（侧栏顶行）/ 收起（对话卡页头）两态落在同一个窗口 x 上，开关不跳位。
+ * 窗口工具组与顶部栏的尺寸真源在 design-system/tokens（spacing.css 的 --titlebar-* /
+ * --traffic-clearance / --window-tools-inset，typography.css 的 --font-size-titlebar），
+ * 常量与纯函数的对应在 shell/window-tools.ts，两侧互为对账，window-tools.test.ts 把关；
+ * darwin 的红绿灯净空覆写在下面这条（data-platform 只在渲染层）。
  */
-:root {
-  --traffic-clearance: 0px;
-  --window-tools-inset: var(--space-3);
-  /* 顶部行行高：垂直中心钉在 darwin 红绿灯中心（y=25）那条线上——行顶 = 卡顶
-     （--space-3 = 12），所以 2×(25−12) = 26。推导与对账在 shell/window-tools.ts
-     （TITLEBAR_ROW_HEIGHT），Windows 无红绿灯也用同一条中心线保持一致 */
-  --titlebar-row: 26px;
-}
-
 :root[data-platform="darwin"] {
   --traffic-clearance: 66px;
   --window-tools-inset: calc(var(--space-3) + var(--traffic-clearance));
@@ -808,6 +797,39 @@ body {
 
 :root[data-platform="darwin"] .titlebar {
   padding-inline-start: var(--traffic-clearance);
+}
+
+/*
+ * 顶部栏作用域（2026-10-19 用户：「感觉得搞下公共的规定，顶部栏相关的」）：
+ * 尺寸的一处定义在 tokens（--titlebar-* / --font-size-titlebar），这里按作用域兜底
+ * ——落在顶部行（.titlebar，含 .panel-head）里的图标 / 标题 / 按钮 / 输入框，
+ * 哪怕组件自己画、忘了配（文件面板的标题开关就这么漏过一次），也自动是这一档。
+ * 能接管的前提：Icon 的尺寸不是 inline width/height，而是「请求值」变量
+ * --icon-size-request，宽度规则在 .orbita-icon 读 var(--icon-size, 请求值)——
+ * 作用域只翻 --icon-size 这一层，不用 !important。
+ * 例外必须显式声明（不许悄悄）：
+ *  - :not(.window-titlebar)：Windows 自绘窗口键（36×28）自己一套；
+ *  - :not(.titlebar-exempt)：右图标条首行——整条 rail 的图标 / 按钮是竖列自己的体系；
+ *  - .titlebar-icon-own：刻意小于标准档的小箭头 / 状态点（chevron、✕、运行状态
+ *    图标），回到自己的请求尺寸。
+ */
+.titlebar:not(.window-titlebar):not(.titlebar-exempt) {
+  --icon-size: var(--titlebar-icon);
+}
+.titlebar .titlebar-icon-own {
+  --icon-size: var(--icon-size-request);
+}
+.titlebar:not(.window-titlebar):not(.titlebar-exempt) button {
+  /* 同图标的「两层」于法：行内嵌着的小键（文件 / 终端页签的 ✕）在自己的类里只翻
+   * --titlebar-button-h，不用提高选择器强度对抗作用域 */
+  height: var(--titlebar-button-h, var(--titlebar-control));
+}
+.titlebar:not(.window-titlebar):not(.titlebar-exempt) input {
+  height: var(--titlebar-field);
+  font-size: var(--font-size-titlebar);
+}
+.titlebar:not(.window-titlebar):not(.titlebar-exempt) strong {
+  font-size: var(--font-size-titlebar);
 }
 
 .pane {
@@ -1561,6 +1583,11 @@ body {
   flex: 0 0 auto;
   line-height: 0;
   pointer-events: none;
+  /* 尺寸的两层：--icon-size 是作用域给的（顶部栏统一 --titlebar-icon），
+   * 没有作用域时回落到 Icon 组件的请求值（--icon-size-request，见 Icon.tsx）。
+   * 之前是 inline width/height，作用域永远接管不了（2026-10-19 改制） */
+  width: var(--icon-size, var(--icon-size-request));
+  height: var(--icon-size, var(--icon-size-request));
 }
 
 .orbita-icon svg {
@@ -2812,35 +2839,12 @@ body {
  * （--option-active-bg 淡底 + semibold），与树里当前文件行的选中高亮同一语言。
  */
 .files-title-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 26px;
-  flex: none;
+  /* 只剩文件专属的局部覆盖：字号 / 高度 / hover / 点亮态全部由 .panel-title(-toggle)
+   * 与顶部栏 token / 作用域接管（2026-10-19 公共规定） */
   margin-left: -8px; /* 视觉左对齐标题文字（标题两侧 padding 内的负缩进，原型同款） */
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font: inherit;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: var(--transition-hover);
 }
 .files-title-toggle .orbita-icon:first-child {
   color: var(--color-text-secondary);
-}
-.files-title-toggle:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-.files-title-toggle[aria-expanded="true"] {
-  background: var(--color-mode-active-bg);
-  color: var(--color-mode-active-fg);
-}
-.files-title-toggle:disabled {
-  cursor: default;
 }
 .files-title-chev {
   color: var(--color-text-tertiary);
@@ -2865,15 +2869,15 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 22px;
+  height: var(--titlebar-field);
   flex: none;
   padding: 0 4px 0 10px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   font: inherit;
-  /* 顶栏收窄到 26px 行（2026-10-18）：页头里的页签与过滤框同降一档 */
-  font-size: var(--font-size-sm);
+  /* 顶部行一档（2026-10-19 公共规定，token + 作用域兑底） */
+  font-size: var(--font-size-titlebar);
   color: var(--color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -2899,6 +2903,8 @@ body {
   justify-content: center;
   width: 16px;
   height: 16px;
+  /* 顶部栏作用域里保持 16px 小方块（翻过 --titlebar-button-h，见作用域注释） */
+  --titlebar-button-h: 16px;
   flex: none;
   padding: 0;
   border: 0;
@@ -3771,10 +3777,38 @@ textarea.text-field {
   flex: 0 0 auto;
 }
 .panel-title strong {
-  /* 顶栏收窄到 26px 行（2026-10-18）：页头标题降一档，字重不变 */
-  font-size: var(--font-size-sm);
+  /* 顶部行标题一档（2026-10-19 公共规定）：显式写 token，作用域规则也会兑底 */
+  font-size: var(--font-size-titlebar);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
+}
+
+/*
+ * PanelTitle 的开关形态（2026-10-19）：标题本身就是开关时（文件面板的树开关是
+ * 第一个消费者）用 button 同配方——hover 中性底、点亮态（aria-expanded）走
+ * mode 选中色；高度 / 图标 / 字号全部由顶部栏 token 与作用域接管，这里只补
+ * 开关自己的形状（padding / 圆角 / 手势）。
+ */
+.panel-title-toggle {
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.panel-title-toggle:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.panel-title-toggle[aria-expanded="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+}
+.panel-title-toggle:disabled {
+  cursor: default;
 }
 
 /* 标题行里的过滤框：浅底胶囊（--color-bg-muted），不画边框；聚焦只亮一圈 focus ring */
@@ -3783,7 +3817,7 @@ textarea.text-field {
   align-items: center;
   gap: 6px;
   min-width: 96px;
-  height: 22px;
+  height: var(--titlebar-field);
   margin-left: 4px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-md);
@@ -3930,7 +3964,7 @@ button.panel-group-toggle:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
+  height: var(--titlebar-field);
   margin-left: 4px;
   padding: 0 var(--space-2);
   border: 0;
@@ -5037,7 +5071,7 @@ mark.intent-mark {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: var(--titlebar-control);
   padding: 0 8px;
   border: 0;
   border-radius: var(--radius-md);

@@ -129,6 +129,7 @@ export function SubSessionsPanel(props: {
               size={12}
               strokeWidth={1.8}
               spin={status === "running"}
+              className="titlebar-icon-own"
             />
             {t.subSessions.rowStatus[status]}
           </span>
@@ -139,7 +140,7 @@ export function SubSessionsPanel(props: {
             title={t.subSessions.openAsMainTip}
             style={{
               flex: "0 0 auto",
-              height: 24,
+              height: "var(--titlebar-control)",
               padding: "0 var(--space-2)",
               border: "1px solid var(--color-border-default)",
               borderRadius: "var(--radius-sm)",

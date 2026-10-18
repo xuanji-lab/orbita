@@ -307,7 +307,7 @@ export function IntentPanel(props: {
                 {activeRound === null
                   ? t.intentPanel.allRounds(rounds.length)
                   : t.intentPanel.roundChip(activeRound, shortWhen(rounds[activeRound - 1]?.record.startedAt ?? 0))}
-                <Icon name="chevron-down" size={12} />
+                <Icon name="chevron-down" size={12} className="titlebar-icon-own" />
               </button>
             )}
           />

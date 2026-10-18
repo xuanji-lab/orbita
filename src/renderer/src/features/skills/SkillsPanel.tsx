@@ -581,7 +581,6 @@ function SkillDetail(props: {
           </PanelIconButton>
           <strong
             style={{
-              fontSize: "var(--font-size-sm)",
               fontWeight: "var(--weight-semibold)",
               minWidth: 0,
               overflow: "hidden",

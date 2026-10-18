@@ -152,7 +152,7 @@ export function ReviewPanel(props: {
             <Menu items={sourceItems} trigger={({ toggle: open }) => (
               <button type="button" onClick={open} title={t.review.source(source)} className="quiet-control panel-head-select no-drag">
                 {t.review.source(source)}
-                <Icon name="chevron-down" size={11} strokeWidth={1.8} />
+                <Icon name="chevron-down" size={11} strokeWidth={1.8} className="titlebar-icon-own" />
               </button>
             )} />
           )}

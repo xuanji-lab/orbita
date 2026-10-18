@@ -22,6 +22,10 @@
   --font-size-slogan: 36px;
   --font-size-slogan-mark: 20px;
   --font-size-wordmark: var(--font-size-lg);
+  /* 顶部行里的标题（会话标题 / 面板页头标题 / 设置页标题）固定一档：顶部栏比例的
+     一部分（2026-10-19 公共规定，几何量在 spacing.css 的 --titlebar-*），
+     由 styles.css 的 .titlebar 作用域自动套到行内 strong / 输入框上 */
+  --font-size-titlebar: var(--font-size-sm);
 
   /* 行高只有三档，全部无单位（随字号缩放，基准改了不用跟着改） */
   --line-height-tight: 1.4;    /* 标题 */

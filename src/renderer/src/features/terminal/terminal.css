@@ -94,6 +94,8 @@
   justify-content: center;
   width: 16px;
   height: 16px;
+  /* 顶部栏作用域里保持 16px 小方块（翻过 --titlebar-button-h，见 styles.css 作用域注释） */
+  --titlebar-button-h: 16px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);

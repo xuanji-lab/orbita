@@ -1996,7 +1996,7 @@ function Pane(props: {
               color: "var(--color-text-tertiary)",
             }}
           >
-            <Icon name="arrow-up" size={11} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+            <Icon name="arrow-up" size={11} strokeWidth={1.8} style={{ flex: "0 0 auto" }} className="titlebar-icon-own" />
             <span
               style={{
                 minWidth: 0,
@@ -2017,11 +2017,7 @@ function Pane(props: {
             props.onRename?.(value);
           }}
           onCancel={() => setEditing(false)}
-          style={{
-            fontSize: "var(--font-size-sm)",
-            fontWeight: "var(--weight-bold)",
-            height: 26,
-          }}
+          style={{ fontWeight: "var(--weight-bold)" }}
         >
           <strong
             style={{
@@ -2033,7 +2029,6 @@ function Pane(props: {
               // 与标题之间空出一大截（CDP 复验发现的回归，原来紧挨着的观感变了）。
               flex: "0 1 auto",
               minWidth: 0,
-              fontSize: "var(--font-size-sm)",
               fontWeight: "var(--weight-bold)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -2045,7 +2040,11 @@ function Pane(props: {
         </InlineName>
         {/* 铅笔夹在名字与 id 之间：它属于名字，不属于这条会话的其它动作 */}
         {props.onRename !== undefined && !editing && (
-          <IconButton label={t.chat.renameTask} size={24} onClick={() => setEditing(true)}>
+          <IconButton
+            label={t.chat.renameTask}
+            size="var(--titlebar-control)"
+            onClick={() => setEditing(true)}
+          >
             <Icon name="pencil-line" size={13} />
           </IconButton>
         )}
@@ -2056,7 +2055,7 @@ function Pane(props: {
         */}
         {props.completion !== null && props.onSetCompletion !== undefined && (
           <IconButton
-            size={24}
+            size="var(--titlebar-control)"
             label={
               props.completion === "open"
                 ? props.closing === true
