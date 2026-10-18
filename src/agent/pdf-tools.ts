@@ -284,6 +284,10 @@ export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } 
       "current range instead (at most 5 pages). Scanned PDFs (no text layer) come back automatically as page " +
       "images on vision models. Image output requires a vision model; otherwise text is returned with a note. " +
       "Use this instead of read for any .pdf file — read cannot show PDF content.",
+    promptGuidelines: [
+      "When the user asks about a specific figure or table in a PDF, look it up in the figures index and call " +
+        "read_pdf again with image_pages set to that page to render it and look closely.",
+    ],
     parameters: {
       type: "object",
       properties: {
@@ -579,6 +583,12 @@ export function createCitePdfTool(cwd: string): ToolDefinition {
       "found come back as errors with the closest passage; fix them and call again instead of citing from " +
       "memory. Do not paste the quoted text into your reply as well — the marker already shows it.",
     promptSnippet: "cite_pdf: verify quotes from a PDF and get clickable citation markers for your reply",
+    promptGuidelines: [
+      "When your answer about a PDF relies on specific wording in it, call cite_pdf and put the returned marker " +
+        "right after the sentence it supports.",
+      "Keep any line numbers the workspace requires (e.g. txt line references) as well — the clickable marker and " +
+        "the line numbers complement each other, neither replaces the other.",
+    ],
     parameters: {
       type: "object",
       properties: {

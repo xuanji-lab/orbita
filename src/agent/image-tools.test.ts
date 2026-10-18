@@ -77,6 +77,12 @@ describe("show_image", () => {
     await assert.rejects(run(["missing.png"]), /ENOENT/);
   });
 
+  test("promptGuidelines：用户该亲眼看的图交给它展示", () => {
+    const guidelines = tool.promptGuidelines ?? [];
+    assert.ok(guidelines.some((line) => /show it with show_image/.test(line)), "缺展示那条");
+    assert.ok(guidelines.some((line) => /instead of only describing it/.test(line)));
+  });
+
   test("转录友好：超长边的 png 缩到上限（原图 base64 双份进 JSONL，不能存原图）", async () => {
     const canvas = ncanvas.createCanvas(3000, 1000);
     canvas.getContext("2d").fillRect(0, 0, 3000, 1000);
