@@ -518,7 +518,7 @@ export const zh: Messages = {
       installFailed: "安装程序没有启动，请重启应用再试。",
       retry: "重试",
       unsupported: "只有安装好的应用才能自动更新。",
-      allVersions: "所有版本",
+      history: "历史版本",
       viewAllOnGitHub: "在 GitHub 上查看全部版本",
       recentLoading: "正在获取…",
       recentFailed: "获取失败",

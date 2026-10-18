@@ -2,7 +2,7 @@ import "./update-view.css";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { recentReleaseTitle, releaseTagUrl } from "@shared/updater";
-import type { RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
+import type { RecentRelease, RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
 import { Icon, isIconName, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
@@ -233,7 +233,7 @@ export function UpdateCard() {
       </SettingRow>
       {releasesUrl !== null && (
         <DisclosureRow
-          name={x.allVersions}
+          name={x.history}
           panelId="upd-recent-releases"
           expanded={recentOpen}
           onToggle={() => setRecentOpen(!recentOpen)}
@@ -322,22 +322,22 @@ function DisclosureRow(props: {
 }
 
 /**
- * 行尾的展开三角（两处同形）：**不是按钮**——整行才是，它只是这一行的开合指示。
+ * 行尾的展开三角：**不是按钮**——整行才是，它只是这一行的开合指示。
  *
- * 图标名与尺寸照「家务活模型」两行的 Chip chevron（chevron-down / 11 / stroke 2），
- * 展开时翻 180°，过渡与仓里其它 chevron 同一档（`--duration-fast`）。它宽
- * var(--space-3) = .upd-btn 的右内边距：尾部文字右缘落在同一条线上的那把尺子。
+ * 图标与尺寸按定稿小样（`chevron-down` / 14 / stroke 2）；盒子高 20px，宽取
+ * `var(--space-3)` = `.upd-btn` 的右内边距——尾部文字右缘落在同一条线上，靠的是它。
+ * 展开时翻 180°，过渡与仓里其它 chevron 同一档（`var(--duration-fast)`，定稿小样的 160ms）。
  */
 function Caret() {
   return (
     <span className="upd-caret" aria-hidden="true">
-      <Icon name="chevron-down" size={11} strokeWidth={2} />
+      <Icon name="chevron-down" size={14} strokeWidth={2} />
     </span>
   );
 }
 
 /**
- * 「所有版本」展开体：最近几个版本（主进程打 GitHub API + 10 分钟缓存，见
+ * 「历史版本」展开体：最近几个版本（主进程打 GitHub API + 10 分钟缓存，见
  * main/updater/recent-releases.ts）。**点开才拉**——挂载即请求一次，收起再展开是重挂载。
  *
  * 四个形态：拉取中 / 失败（一句人话 + 重试）/ 空（仓里只有 Draft 时就是这样）/ 列表。
@@ -379,27 +379,71 @@ function RecentReleasesList() {
   if (result.releases.length === 0) return <div className="upd-recent-quiet">{x.recentEmpty}</div>;
   return (
     <div className="upd-recent">
-      {result.releases.map((release) => {
-        // 标题与版本号相同时只画一次（判同在纯函数里，有测试；见 shared/updater.ts）
-        const title = recentReleaseTitle(release);
-        return (
-          <a
-            key={release.tag}
-            className="upd-recent-row"
-            href={release.htmlUrl}
-            onClick={(event) => {
-              event.preventDefault();
-              window.open(release.htmlUrl);
-            }}
-          >
-            <span className="upd-recent-name">
-              <Mono>{release.version}</Mono>
-              {title !== null && <span className="upd-recent-title">{title}</span>}
-            </span>
-            <span className="upd-recent-date">{release.publishedAt.slice(0, 10)}</span>
-          </a>
-        );
-      })}
+      {result.releases.map((release) => (
+        <RecentReleaseRow key={release.tag} release={release} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 「历史版本」列表里的一行：**整行又是一条 disclosure**（与主行同一套交互语言——同一
+ * 洗底 hover、同一 -8px 探出、同一三角翻转，只是字号与行高压一档）：点行上任何位置
+ * 就地展开**那一版**的更新内容（图标列版式照旧），展开体底部是该版的 GitHub 出口。
+ *
+ * **没有说明的版本**（`notes` 为 null）退化成不可点的一行：不画三角、无 hover 底，
+ * 只留一个与三角同宽的空格保持日期右缘对齐（同「当前版本」没有说明时的退化）。一行只
+ * 开自己，与主行、与兄弟行互不影响（各自的 useState）。
+ *
+ * Hmm：行本身就是网格（版本 | 标题 | 日期 | 三角），标题与版本号相同时不画——
+ * 判同在纯函数里（shared/updater.ts 的 recentReleaseTitle，有测试）。
+ */
+function RecentReleaseRow(props: { release: RecentRelease }) {
+  const x = useT().settings.update;
+  const [open, setOpen] = useState(false);
+  const title = recentReleaseTitle(props.release);
+  const notes = props.release.notes;
+  /** 这一版没有可看的说明：不画三角、整行不可点（但行本身还在：版本号 / 标题 / 日期都在） */
+  const flat = notes === null || notes.length === 0;
+  const cells = (
+    <>
+      <span className="upd-recent-ver">{props.release.version}</span>
+      {/* 标题与版本号相同时留空（不重影）；有时带一个「·」当分隔 */}
+      <span className="upd-recent-title">{title === null ? "" : `· ${title}`}</span>
+      <span className="upd-recent-date">{props.release.publishedAt.slice(0, 10)}</span>
+    </>
+  );
+
+  if (flat) {
+    return (
+      <div className="upd-recent-row upd-recent-row--flat">
+        {cells}
+        <span className="upd-recent-void" aria-hidden="true" />
+      </div>
+    );
+  }
+
+  const panelId = `upd-notes-${props.release.tag}`;
+  return (
+    <div className="upd-recent-group">
+      <button
+        type="button"
+        className="upd-recent-row"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen(!open)}
+      >
+        {cells}
+        <Caret />
+      </button>
+      <div className="upd-recent-panel" id={panelId} hidden={!open}>
+        {open ? (
+          <>
+            <ReleaseNotes notes={notes} nested />
+            <ReleaseFooter url={props.release.htmlUrl}>{x.viewOnGitHub}</ReleaseFooter>
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -419,9 +463,9 @@ function Mono(props: { children: ReactNode }) {
  * **名字不在 Icon.tsx 的表里就当没图标**（发布时写错字不该崩，也不该画一个空图标）：
  * 那一行的图标格留空，正文列照旧对齐。
  */
-function ReleaseNotes(props: { notes: readonly UpdateNote[] }) {
+function ReleaseNotes(props: { notes: readonly UpdateNote[]; nested?: boolean }) {
   return (
-    <div className="upd-notes">
+    <div className={props.nested === true ? "upd-notes upd-notes--nested" : "upd-notes"}>
       <div className="upd-notes-rail">
         {props.notes.map((note, index) => (
           // 说明是静态文本，不会重排，用下标当 key 是安全的

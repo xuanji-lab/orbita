@@ -137,18 +137,19 @@ a.upd-link {
   padding-right: var(--space-3);
 }
 
-/* 行即开关（「当前版本」「所有版本」）：整行一个按钮，展开体在按钮外面。
+/* 行即开关（「当前版本」「历史版本」）：整行一个按钮，展开体在按钮外面。
    按钮自己就是 .set-row 那套两列网格的同一份模板，右簇几何不变；hover 走 .quiet-control
-   的配方，内边距拿回来当 hover 底的外扩、负外边距把内容框钉回原位（同 .login-site-row
-   那类「在容器留白里铺底」的画法）。行名要 primary，所以把 quiet-control 的次级字色覆盖回来 */
+   的配方，内边距拿回来当 hover 底的外扩（左右各 8px，与定稿小样同）、负外边距把内容框
+   钉回原位（同 .login-site-row 那类「在容器留白里铺底」的画法）。行名要 primary，
+   所以把 quiet-control 的次级字色覆盖回来 */
 .upd-disclosure > .upd-row-toggle {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(150px, 1fr) minmax(0, auto);
   align-items: center;
   gap: var(--space-4);
-  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3));
-  padding: var(--space-2) var(--space-3);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
+  padding: var(--space-2) var(--space-2);
   border: 0;
   border-radius: var(--radius-md);
   font: inherit;
@@ -169,26 +170,26 @@ a.upd-link {
   display: none;
 }
 
-/* 行尾的展开三角（「当前版本」「所有版本」两处同形）：**不是按钮**——整行才是，
-   它只是这一行的开合指示。宽度取 var(--space-3)——与 .upd-btn 的右内边距同宽，
-   是尾部文字右缘对齐的那把尺子；图标 11 / stroke 2 与「家务活模型」两行的 Chip
-   chevron 同一个 */
+/* 行尾的展开三角（主行与历史版本行两处同形）：**不是按钮**——整行才是，
+   它只是这一行的开合指示。图标 14 / stroke 2 按定稿小样；宽取 var(--space-3)
+   ——与 .upd-btn 的右内边距同宽，是尾部文字右缘对齐的那把尺子 */
 .upd-caret {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: var(--space-3);
-  height: var(--control-height-xs);
+  height: var(--space-5);
   color: var(--color-text-tertiary);
 }
 
-/* 展开后箭头翻过来，过渡与仓里其它 chevron 同一档（.exp-toggle 用的 --duration-fast） */
+/* 展开后箭头翻过来，过渡与仓里其它 chevron 同一档（--duration-fast） */
 .upd-caret .orbita-icon {
   transition: transform var(--duration-fast) var(--ease-standard);
 }
 
-.upd-row-toggle[aria-expanded="true"] .upd-caret .orbita-icon {
+.upd-row-toggle[aria-expanded="true"] .upd-caret .orbita-icon,
+.upd-recent-row[aria-expanded="true"] .upd-caret .orbita-icon {
   transform: rotate(180deg);
 }
 
@@ -199,14 +200,12 @@ a.upd-link {
   justify-self: start;
 }
 
-/* 「所有版本」展开的最近版本列表：quiet 的一列可点行（版本号 mono + 标题，右端日期） */
+/* 「历史版本」展开的最近版本列表：一行一个版本，**每一行自己也是一条 disclosure**
+   （与主行同一洗底 hover、同一 -8px 探出、同一三角翻转，只是字号与行高压一档） */
 .upd-recent {
   grid-column: 1 / -1;
   display: grid;
   gap: 2px;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-secondary);
 }
 
 .upd-recent-quiet {
@@ -219,40 +218,90 @@ a.upd-link {
   color: var(--color-text-tertiary);
 }
 
-/* 行是链接（可点）：hover 才铺底，与安静控件同一套色 */
+/* 行本身（button 与退化态的 div 共用一份网格：版本 | 标题 | 日期 | 三角） */
 .upd-recent-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto var(--space-3);
   align-items: baseline;
   column-gap: var(--space-3);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-md);
-  text-decoration: none;
-  color: inherit;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: var(--space-2) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  /* 显式主色：button 的 UA 默认色是 ButtonText（黑），暗主题下不写就是黑字 */
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
   transition: var(--transition-hover);
 }
 
 .upd-recent-row:hover {
-  background: var(--option-hover-bg);
+  background: var(--color-bg-hover);
+}
+
+/* 这一版没有说明：整行不可点、无 hover 底，只留一个与三角同宽的空格保住日期右缘 */
+.upd-recent-row--flat {
+  cursor: default;
+}
+
+.upd-recent-row--flat:hover {
+  background: none;
+}
+
+.upd-recent-void {
+  display: block;
+  width: var(--space-3);
+}
+
+/* 三角列与其它 cell 不同基线（否则会贴在字上） */
+.upd-recent-row > .upd-caret {
+  align-self: center;
+}
+
+.upd-recent-ver {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-base);
   color: var(--color-text-primary);
 }
 
-.upd-recent-name {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-/* 标题可能很长：一行截断，不把日期顶走（hover 的 title 里有完整串） */
+/* 标题可能很长：一行截断，不把日期顶走；与版本号相同时留空（判同见 shared/updater.ts） */
 .upd-recent-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 .upd-recent-date {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
+}
+
+/* 版本行的展开体：比主展开体再退一层——去掉主展开体的洗底与缩进，只留图标列
+   + 10px 缩进（定稿小样），底下补一根发丝线把这段说明与下一行分开 */
+.upd-recent-group {
+  display: grid;
+}
+
+.upd-recent-panel {
+  display: grid;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 0 0 var(--space-3);
+}
+
+.upd-recent-panel[hidden] {
+  display: none;
+}
+
+/* 嵌套的说明块：与主说明同一版式，只是不再铺 muted 底、向左缩 10px（定稿小样） */
+.upd-notes--nested {
+  background: none;
+  padding: 0 0 0 10px;
 }
 
 /* 主 / 次操作的尺寸：颜色与状态照 .btn-accent / .quiet-control 两个配方走，

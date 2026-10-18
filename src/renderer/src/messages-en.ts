@@ -564,7 +564,7 @@ export const en = {
       installFailed: "Couldn't start the installer. Try restarting the app.",
       retry: "Retry",
       unsupported: "Software updates are only available in the installed app.",
-      allVersions: "All versions",
+      history: "Version history",
       viewAllOnGitHub: "View all versions on GitHub",
       recentLoading: "Loading…",
       recentFailed: "Couldn't load",
