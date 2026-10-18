@@ -138,3 +138,18 @@ export interface RecentRelease {
 export type RecentReleasesResult =
   | { ok: true; releases: readonly RecentRelease[] }
   | { ok: false; message: string };
+
+/**
+ * 「最近版本」列表里那一行的标题该不该画。**标题与版本号逐字相同就不画**，只留左边的
+ * mono 版本号——打包技能里 `gh release create --title` 写的就是裸版本号，再画一遍
+ * 屏幕上就是「0.1.15 0.1.15」（2026-10-18 验收发现）。
+ *
+ * 比之前先把 tag 风格的 `v` 前缀剥掉：标题写 `v0.1.15`、版本号是 `0.1.15` 也是同一个。
+ * 返回 null = 这一行只画版本号与日期。空标题（GitHub 允许没写名字）同样返回 null。
+ */
+export function recentReleaseTitle(release: RecentRelease): string | null {
+  const title = release.title.trim();
+  if (title === "") return null;
+  const bare = title.startsWith("v") ? title.slice(1) : title;
+  return bare === release.version ? null : title;
+}

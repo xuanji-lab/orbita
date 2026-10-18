@@ -1,7 +1,7 @@
 import "./update-view.css";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { releaseTagUrl } from "@shared/updater";
+import { recentReleaseTitle, releaseTagUrl } from "@shared/updater";
 import type { RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
 import { Icon, isIconName, type IconName } from "../../shell/Icon";
@@ -19,10 +19,11 @@ import { formatBytes, progressAmount, progressPercent } from "./update-format.ts
  * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
  * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
  *
- * 三行的行尾各管一件事：「更新」是唯一的主操作（accent 只给「下载」与「重启以安装」
- * 这两步真正推进更新的动作）；「当前版本」与「所有版本」两行行尾各只有一个展开三角，
- * 点开就在下方就地看内容（本版说明 / 最近几个版本），GitHub 外链出口放在展开体底部。
+ * 「当前版本」与「所有版本」两行行尾都只有一个展开三角，**整行是一个 disclosure 按钮**
+ * （点行上任何位置开合，键盘 Tab + Enter/Space 同样）：点开就在下方就地看内容
+ * （本版说明 / 最近几个版本），GitHub 外链出口放在展开体底部（按钮外面）。
  * 三角占 12px（= .upd-btn 的右内边距），尾部文字的右缘因此落在同一条线上。
+ * 「更新」那一行不动：那里有真操作按钮（accent 只给「下载」与「重启以安装」）。
  *
  * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
  * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
@@ -165,31 +166,31 @@ export function UpdateCard() {
 
   return (
     <SettingGroup label={x.group}>
-      <SettingRow
-        name={x.currentVersion}
-        below={
-          currentNotes !== null && currentOpen ? (
-            <>
-              <ReleaseNotes notes={currentNotes} />
-              {/* 外链出口在展开体底部：行尾只留一个三角，想看完整 Release 页从这里走 */}
-              {tagUrl !== null && <ReleaseFooter url={tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
-            </>
-          ) : undefined
-        }
-      >
-        {/*
-         * 行尾只有「版本号 + 一个三角」：版本号是机器事实（mono），三角就地展开本版说明。
-         * 三角占 12px（var(--space-3)，与 .upd-btn 的右内边距同宽），版本号右缘才落在
-         * hem − 12，与「检查更新」的文字同一条线；没有说明（没有 currentNotes）时不画
-         * 三角，用 padding 补上同样的 12px，右缘不跳。
-         */}
-        <span className="upd-current">
-          <Mono>{currentVersion}</Mono>
-          {currentNotes !== null && (
-            <Caret expanded={currentOpen} label={x.currentNotes} onClick={() => setCurrentOpen(!currentOpen)} />
-          )}
-        </span>
-      </SettingRow>
+      {currentNotes === null ? (
+        // 这一版没有说明：不是可开合的行，保持纯文本行（不画三角、不可点）
+        <SettingRow name={x.currentVersion}>
+          <span className="upd-current">
+            <Mono>{currentVersion}</Mono>
+          </span>
+        </SettingRow>
+      ) : (
+        <DisclosureRow
+          name={x.currentVersion}
+          panelId="upd-current-notes"
+          expanded={currentOpen}
+          onToggle={() => setCurrentOpen(!currentOpen)}
+          trailing={
+            <span className="upd-current">
+              <Mono>{currentVersion}</Mono>
+              <Caret />
+            </span>
+          }
+        >
+          <ReleaseNotes notes={currentNotes} />
+          {/* 外链出口在展开体底部（按钮外面）：想看完整 Release 页从这里走 */}
+          {tagUrl !== null && <ReleaseFooter url={tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
+        </DisclosureRow>
+      )}
       <SettingRow
         name={x.updates}
         note={
@@ -231,21 +232,17 @@ export function UpdateCard() {
         </button>
       </SettingRow>
       {releasesUrl !== null && (
-        <SettingRow
+        <DisclosureRow
           name={x.allVersions}
-          below={
-            recentOpen ? (
-              <>
-                <RecentReleasesList />
-                {/* 更多历史版本去 GitHub：展开体底部的外链出口（与「当前版本」同款） */}
-                <ReleaseFooter url={releasesUrl}>{x.viewAllOnGitHub}</ReleaseFooter>
-              </>
-            ) : undefined
-          }
+          panelId="upd-recent-releases"
+          expanded={recentOpen}
+          onToggle={() => setRecentOpen(!recentOpen)}
+          trailing={<Caret />}
         >
-          {/* 与「当前版本」对称：行尾只有一个三角，点它就地展开最近几个版本 */}
-          <Caret expanded={recentOpen} label={x.allVersions} onClick={() => setRecentOpen(!recentOpen)} />
-        </SettingRow>
+          <RecentReleasesList />
+          {/* 更多历史版本去 GitHub：展开体底部的外链出口（与「当前版本」同款） */}
+          <ReleaseFooter url={releasesUrl}>{x.viewAllOnGitHub}</ReleaseFooter>
+        </DisclosureRow>
       )}
     </SettingGroup>
   );
@@ -284,24 +281,58 @@ function ReleaseFooter(props: { url: string; children: ReactNode }) {
 }
 
 /**
- * 行尾的展开三角（「当前版本」「所有版本」两处同形）。
+ * 行即开关的一行（「当前版本」「所有版本」）：**整行是一个 disclosure 按钮**，点行上任何
+ * 位置都开合；键盘 Tab 到它、Enter / Space 同样能开合（原生 button 自带的）。
  *
- * **图标名与尺寸照「家务活模型」两行的 Chip chevron**（chevron-down / 11 / stroke 2），
- * 展开时翻 180°，过渡与仓里其它 chevron 同一档（`--duration-fast`，见 .exp-toggle）。
- * 它占 12px（`.upd-caret` 的宽度 = `.upd-btn` 的右内边距）：尾部文字右缘落在同一条线上。
+ * 展开体在按钮**外面**：里面的 GitHub 外链不能嵌进 button（无效的嵌套交互元素），
+ * 而且 `below` 那一格本来就不属于左名 / 右簇任何一列。面板的 id 常驻（收起时用 `hidden`），
+ * `aria-controls` 才总有着落；收起时不渲染子节点——“点开才拉”的列表因此每次展开重挂载。
+ *
+ * 按钮自己就是 .set-row 那套两列网格的同一份模板：左名 / 右簇的几何与普通行逐像素一致
+ * （右簇仍钉在右血线）。hover 走 .quiet-control 的配方；内边距拿回来当 hover 底的外扩，
+ * 负外边距把内容框钉回原来的位置，所以右缘几何不动。
  */
-function Caret(props: { expanded: boolean; label: string; onClick: () => void }) {
+function DisclosureRow(props: {
+  name: string;
+  panelId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  trailing: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <button
-      type="button"
-      className="upd-caret"
-      aria-expanded={props.expanded}
-      aria-label={props.label}
-      title={props.label}
-      onClick={props.onClick}
-    >
+    <div className="set-row upd-disclosure">
+      <button
+        type="button"
+        className="upd-row-toggle quiet-control"
+        aria-expanded={props.expanded}
+        aria-controls={props.panelId}
+        onClick={props.onToggle}
+      >
+        <span className="set-row-head">
+          <span className="set-row-name">{props.name}</span>
+        </span>
+        <span className="set-row-ctl">{props.trailing}</span>
+      </button>
+      <div className="upd-disclosure-body" id={props.panelId} hidden={!props.expanded}>
+        {props.expanded ? props.children : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 行尾的展开三角（两处同形）：**不是按钮**——整行才是，它只是这一行的开合指示。
+ *
+ * 图标名与尺寸照「家务活模型」两行的 Chip chevron（chevron-down / 11 / stroke 2），
+ * 展开时翻 180°，过渡与仓里其它 chevron 同一档（`--duration-fast`）。它宽
+ * var(--space-3) = .upd-btn 的右内边距：尾部文字右缘落在同一条线上的那把尺子。
+ */
+function Caret() {
+  return (
+    <span className="upd-caret" aria-hidden="true">
       <Icon name="chevron-down" size={11} strokeWidth={2} />
-    </button>
+    </span>
   );
 }
 
@@ -348,29 +379,27 @@ function RecentReleasesList() {
   if (result.releases.length === 0) return <div className="upd-recent-quiet">{x.recentEmpty}</div>;
   return (
     <div className="upd-recent">
-      {result.releases.map((release) => (
-        <a
-          key={release.tag}
-          className="upd-recent-row"
-          href={release.htmlUrl}
-          onClick={(event) => {
-            event.preventDefault();
-            window.open(release.htmlUrl);
-          }}
-        >
-          <span className="upd-recent-name">
-            <Mono>{release.version}</Mono>
-            {/*
-             * 标题只在它真的多给了信息时才画：打包技能里 `gh release create --title`
-             * 写的就是裸版本号，那种标题与左边的 mono 版本号逐字相同，再画一遍只是重影
-             */}
-            {release.title !== release.version && release.title !== release.tag && (
-              <span className="upd-recent-title">{release.title}</span>
-            )}
-          </span>
-          <span className="upd-recent-date">{release.publishedAt.slice(0, 10)}</span>
-        </a>
-      ))}
+      {result.releases.map((release) => {
+        // 标题与版本号相同时只画一次（判同在纯函数里，有测试；见 shared/updater.ts）
+        const title = recentReleaseTitle(release);
+        return (
+          <a
+            key={release.tag}
+            className="upd-recent-row"
+            href={release.htmlUrl}
+            onClick={(event) => {
+              event.preventDefault();
+              window.open(release.htmlUrl);
+            }}
+          >
+            <span className="upd-recent-name">
+              <Mono>{release.version}</Mono>
+              {title !== null && <span className="upd-recent-title">{title}</span>}
+            </span>
+            <span className="upd-recent-date">{release.publishedAt.slice(0, 10)}</span>
+          </a>
+        );
+      })}
     </div>
   );
 }

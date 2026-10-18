@@ -137,9 +137,42 @@ a.upd-link {
   padding-right: var(--space-3);
 }
 
-/* 行尾的展开三角（「当前版本」「所有版本」两处同形）：quiet 的纯图标键。
-   宽度取 var(--space-3)——与 .upd-btn 的右内边距同宽，是尾部文字右缘对齐的那把尺子；
-   图标 11 / stroke 2 与「家务活模型」两行的 Chip chevron 同一个 */
+/* 行即开关（「当前版本」「所有版本」）：整行一个按钮，展开体在按钮外面。
+   按钮自己就是 .set-row 那套两列网格的同一份模板，右簇几何不变；hover 走 .quiet-control
+   的配方，内边距拿回来当 hover 底的外扩、负外边距把内容框钉回原位（同 .login-site-row
+   那类「在容器留白里铺底」的画法）。行名要 primary，所以把 quiet-control 的次级字色覆盖回来 */
+.upd-disclosure > .upd-row-toggle {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: var(--space-4);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3));
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+}
+
+/* 展开体：按钮外的一格，撑满整行（说明、版本列表、底部外链都在这一格） */
+.upd-disclosure-body {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 收起时用 hidden（不是不渲染外层）：面板 id 常驻，aria-controls 才总有着落。
+   类选择器的优先级高过 UA 的 [hidden]，要自己把它收起来 */
+.upd-disclosure-body[hidden] {
+  display: none;
+}
+
+/* 行尾的展开三角（「当前版本」「所有版本」两处同形）：**不是按钮**——整行才是，
+   它只是这一行的开合指示。宽度取 var(--space-3)——与 .upd-btn 的右内边距同宽，
+   是尾部文字右缘对齐的那把尺子；图标 11 / stroke 2 与「家务活模型」两行的 Chip
+   chevron 同一个 */
 .upd-caret {
   display: inline-flex;
   flex: 0 0 auto;
@@ -147,18 +180,7 @@ a.upd-link {
   justify-content: center;
   width: var(--space-3);
   height: var(--control-height-xs);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--color-text-tertiary);
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-
-.upd-caret:hover {
-  background: var(--option-hover-bg);
-  color: var(--color-text-primary);
 }
 
 /* 展开后箭头翻过来，过渡与仓里其它 chevron 同一档（.exp-toggle 用的 --duration-fast） */
@@ -166,7 +188,7 @@ a.upd-link {
   transition: transform var(--duration-fast) var(--ease-standard);
 }
 
-.upd-caret[aria-expanded="true"] .orbita-icon {
+.upd-row-toggle[aria-expanded="true"] .upd-caret .orbita-icon {
   transform: rotate(180deg);
 }
 

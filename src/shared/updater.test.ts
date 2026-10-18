@@ -7,7 +7,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { releaseTagUrl } from "./updater.ts";
+import { recentReleaseTitle, releaseTagUrl } from "./updater.ts";
 
 describe("releaseTagUrl —— 某一版的 Release 页", () => {
   test("版本号拼成 v<版本号> 的 tag 地址", () => {
@@ -26,5 +26,29 @@ describe("releaseTagUrl —— 某一版的 Release 页", () => {
 
   test("版本号还没到（空串）时不拼：返回 null，而不是把人送到 /tag/v 上", () => {
     assert.equal(releaseTagUrl("https://github.com/example/repo/releases", ""), null);
+  });
+});
+
+describe("recentReleaseTitle —— 列表行的标题该不该画", () => {
+  const release = (title: string, version: string) => ({
+    tag: `v${version}`,
+    version,
+    title,
+    publishedAt: "2026-10-18T05:00:00Z",
+    htmlUrl: "https://github.com/example/repo/releases",
+  });
+
+  test("与版本号相同 → null（只画 mono 版本号，不再重影）", () => {
+    assert.equal(recentReleaseTitle(release("0.1.15", "0.1.15")), null);
+    assert.equal(recentReleaseTitle(release("v0.1.15", "0.1.15")), null);
+  });
+
+  test("不同 → 原样返回（画成「0.1.13 · 会话记忆」那样的标题）", () => {
+    assert.equal(recentReleaseTitle(release("会话记忆与回退", "0.1.13")), "会话记忆与回退");
+  });
+
+  test("标题为空（GitHub 允许没写名字）→ null", () => {
+    assert.equal(recentReleaseTitle(release("", "0.1.15")), null);
+    assert.equal(recentReleaseTitle(release("   ", "0.1.15")), null);
   });
 });
