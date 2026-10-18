@@ -142,7 +142,7 @@ export function TerminalPanel(props: {
           <PanelTitle icon="square-terminal" title={t.terminal.title} />
           {/* 终端标签住在标题行中段（右栏统一方案 B：没有第二条工具行） */}
           {allIds.length > 0 && (
-            <div className="terminal-tabstrip panel-head-grow no-drag" role="tablist" aria-label={t.terminal.title}>
+            <div className="cap-tabs cap-grow no-drag" role="tablist" aria-label={t.terminal.title}>
               {tabs.map((tab) => (
                 <TabButton
                   key={tab.terminalId}
@@ -156,7 +156,7 @@ export function TerminalPanel(props: {
                 />
               ))}
               {pendingIds.map((id) => (
-                <span key={id} className="quiet-control terminal-tab" title={t.terminal.newTerminal}>
+                <span key={id} className="quiet-control cap-tab" title={t.terminal.newTerminal}>
                   <Icon name="loader-circle" size={12} spin />
                 </span>
               ))}
@@ -170,8 +170,9 @@ export function TerminalPanel(props: {
           size="var(--titlebar-control)"
           onClick={openTerminal}
           className="no-drag"
+          style={{ borderRadius: "var(--radius-pill)" }}
         >
-          <Icon name="plus" size={14} />
+          <Icon name="plus" size={16} strokeWidth={2} />
         </IconButton>
       }
       contentKey="terminal"
@@ -211,7 +212,7 @@ function TabButton(props: {
 }) {
   return (
     <span
-      className={`quiet-control terminal-tab${props.exited !== null ? " is-exited" : ""}`}
+      className={`quiet-control cap-tab${props.exited !== null ? " is-exited" : ""}`}
       role="tab"
       aria-selected={props.active}
       title={`${props.label} · ${props.shell}`}
@@ -221,7 +222,7 @@ function TabButton(props: {
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{props.label}</span>
       <button
         type="button"
-        className="terminal-tab-close"
+        className="files-tab-close"
         aria-label={props.closeLabel}
         title={props.closeLabel}
         onClick={(event) => {

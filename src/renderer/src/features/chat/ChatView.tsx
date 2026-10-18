@@ -665,16 +665,6 @@ function ChatViewBody(props: {
    */
   onOpenSubSession?: (childId: string) => void;
   /**
-   * 点头部「N sub-sessions」芯片 → 打开右栏 Sub-sessions 面板的**列表层**（子会话
-   * PR4c）。只有主槽的 ChatView 拿到它。
-   */
-  onOpenSubSessions?: () => void;
-  /**
-   * 子会话被 Open as main 之后：头部标题前的面包屑「↑ 父标题」点了回主槽的父会话
-   * （子会话 PR4c）。只有主槽的 ChatView 拿到它。
-   */
-  onOpenParent?: (parentId: string) => void;
-  /**
    * 解析后的主题：只给首页门面用（纸面两档的 slogan 与批语，HomeHero.tsx）。
    * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
    */
@@ -749,11 +739,10 @@ function ChatViewBody(props: {
    *  可选：副槽（抽屉 / 子会话面板）不传——那里不出开关 */
   intentNewSessionDefault?: boolean;
   /**
-   * 侧栏收起后的「窗口工具」组（侧栏开关 · 新任务）：嵌在本页头最左（首页则嵌在
-   * 顶部空条里），左缘由 --window-tools-inset 与展开态侧栏顶行对齐（window-tools.ts）。
-   * **只有主槽的 ChatView 拿到它**（App 只给主槽）；抽屉 / Sub-sessions 面板不传。
+   * 主槽传 true：对话卡不再有页头（2026-10-19 方案 B v2，会话信息住工具栏的
+   * 会话胶囊）；辅助对话抽屉不传，抽屉里的 ChatView 保留卡内标题行。
    */
-  windowTools?: React.ReactNode;
+  bareHeader?: boolean;
 }) {
   const t = useT();
   // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
@@ -1104,25 +1093,6 @@ function ChatViewBody(props: {
    * 的子会话数；为 0 时芯片只显示前半（不拼出 "· 0 waiting"）。点击调用方按
    * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
    */
-  const subSessionRows = ownChildren;
-  const subSessionsChip =
-    subSessionRows.length === 0
-      ? null
-      : {
-          count: subSessionRows.length,
-          waiting: subSessionRows.filter((child) => channelSummaries.get(child.id)?.status === "waiting").length,
-        };
-  /**
-   * 子会话在主槽打开时的面包屑「↑ 父标题」（2.2）：只在 `onOpenParent` 给了
-   * （主槽专属，同 `onOpenSubSessions`）且这条会话确有 `parentId` 时出现。
-   * 父标题的查找/兜底复用 `peerTitleOf`——同一句「对面是谁」的口径不另写一份。
-   */
-  const parentId = openMeta?.parentId;
-  const onOpenParentProp = props.onOpenParent;
-  const parentCrumb =
-    onOpenParentProp !== undefined && parentId !== undefined
-      ? { title: peerTitleOf(channel, parentId, t), onClick: () => onOpenParentProp(parentId) }
-      : null;
 
   const composer = (
     <Composer
@@ -1286,36 +1256,6 @@ function ChatViewBody(props: {
           overflow: "hidden",
         }}
       >
-        {/*
-          首页没有页头，但顶部这一条同样要能拖窗口 / 双击缩放——不给的话用户从会话页
-          回到首页就会发现「刚才能拖的地方现在不能拖了」。高度与 Pane 页头同一常量
-          （--titlebar-row）。压在内容下面（zIndex 0）：窗口矮到内容顶上来时，会话卡
-          的点击优先，不被拖拽区吞掉。侧栏收起后这一条不再只是拖拽区：窗口工具组住
-          在最左（升到 zIndex 2 才点得着），按钮由 .titlebar button 自动豁免。
-        */}
-        <div
-          className="titlebar"
-          style={{
-            position: "absolute",
-            insetInlineStart: 0,
-            insetInlineEnd: 0,
-            top: 0,
-            height: "var(--titlebar-row)",
-            // 侧栏收起后这一条不再只是拖拽区：窗口工具组住在最左（左缘与展开态侧栏
-            // 顶行同一个 x，见 window-tools.ts）。组要在内容之上（zIndex 2）才点得着；
-            // 空条本身仍然整条拖拽，按钮由 .titlebar button 自动豁免
-            ...(props.windowTools == null
-              ? { zIndex: 0 }
-              : {
-                  zIndex: 2,
-                  display: "flex" as const,
-                  alignItems: "center" as const,
-                  paddingInlineStart: "var(--window-tools-inset)",
-                }),
-          }}
-        >
-          {props.windowTools}
-        </div>
         <div
           ref={stageRef}
           style={{
@@ -1412,10 +1352,7 @@ function ChatViewBody(props: {
         scanless={openMeta?.piSessionFile == null}
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
-        subSessionsChip={subSessionsChip}
-        onOpenSubSessions={props.onOpenSubSessions}
-        parentCrumb={parentCrumb}
-        windowTools={props.windowTools}
+        hideHeader={props.bareHeader === true}
         footer={
           <>
             {notices}
@@ -1908,18 +1845,6 @@ function Pane(props: {
   scanless?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
-  /**
-   * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）。null = 不出现
-   * （没有子会话）。点击走 `onOpenSubSessions`——不给时芯片仍显示（信息性），
-   * 只是不可点，同 `ChannelMarkPill` 的门槛。
-   */
-  subSessionsChip?: { count: number; waiting: number } | null;
-  onOpenSubSessions?: (() => void) | undefined;
-  /**
-   * 子会话被 Open as main 后头部标题前的面包屑「↑ 父标题」（子会话 PR4c，2.2）。
-   * null = 不出现（本会话不是子会话，或调用方不是主槽）。
-   */
-  parentCrumb?: { title: string; onClick: () => void } | null;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: (() => void) | undefined;
@@ -1930,11 +1855,10 @@ function Pane(props: {
    */
   scrollToEnd?: { visible: boolean; onClick: () => void } | null;
   /**
-   * 侧栏收起后的「窗口工具」组（App 只给主槽）：嵌在页头最左，标题跟在后面；
-   * 页头左内边距换成 --window-tools-inset——组的左缘与展开态侧栏顶行的开关
-   * 落在同一个窗口 x（几何见 shell/window-tools.ts）。
+   * 主槽传 true：不渲染卡内页头（2026-10-19 方案 B v2——会话信息住工具栏的会话
+   * 胶囊，对话卡从工具栏下直接开始）；抽屉里的 ChatView 保留页头。
    */
-  windowTools?: React.ReactNode;
+  hideHeader?: boolean;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -1951,64 +1875,22 @@ function Pane(props: {
         gridTemplateRows: "auto minmax(0,1fr) auto",
       }}
     >
-      {/* 页头兼窗口拖拽区：整行可拖可双击缩放，里面的铅笔与输入框由 `.titlebar button/input` 自动豁免 */}
+      {/* 抽屉里保留的卡内页头（主槽 hideHeader，2026-10-19 方案 B v2：会话信息住
+          工具栏的会话胶囊）；窗口拖拽由顶部工具栏整条接管，这里只是内容行 */}
+      {props.hideHeader !== true && (
       <header
-        // chat-head：主槽弹出卡的宿主据它让到页头之下（styles.css 的 .pane-pop-host）
-        className="titlebar chat-head"
         style={{
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
           minWidth: 0,
-          // 页头 --titlebar-row（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线
-          // 连成一条；行中心钉在红绿灯中心那条线上（window-tools.ts 的推导）。
-          // 侧栏收起后左内边距让位给窗口工具组（--window-tools-inset 在 mac 上含
-          // 红绿灯净空；展开态没有这组，维持 18px）
-          height: "var(--titlebar-row)",
-          padding: props.windowTools == null ? "0 18px" : "0 18px 0 var(--window-tools-inset)",
+          height: 36,
+          padding: "0 14px",
           boxSizing: "border-box",
           borderBottom: "1px solid var(--color-border-subtle)",
+          flex: "0 0 auto",
         }}
       >
-        {props.windowTools}
-        {/* 面包屑「↑ 父标题」：子会话被 Open as main 后，标题前的一句「你是从哪来的」——
-            caption tertiary，不与标题抢重量；点击回主槽的父会话（子会话 PR4c，2.2） */}
-        {props.parentCrumb != null && (
-          <button
-            type="button"
-            onClick={props.parentCrumb.onClick}
-            title={t.chat.backToParent(props.parentCrumb.title)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "var(--space-1)",
-              // flex-shrink:1（非 0 0 auto）+ minWidth:0：主槽变窄时它也让路，
-              // maxWidth 只是宽松时的上限，不是「永远这么宽」（子会话 PR4c fix）
-              flex: "0 1 auto",
-              minWidth: 0,
-              maxWidth: 160,
-              border: 0,
-              background: "transparent",
-              padding: 0,
-              cursor: "pointer",
-              font: "inherit",
-              fontSize: "var(--font-size-sm)",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            <Icon name="arrow-up" size={11} strokeWidth={1.8} style={{ flex: "0 0 auto" }} className="titlebar-icon-own" />
-            <span
-              style={{
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {props.parentCrumb.title}
-            </span>
-          </button>
-        )}
         <InlineName
           editing={editing}
           value={props.title}
@@ -2094,11 +1976,6 @@ function Pane(props: {
             />
           </IconButton>
         )}
-        {/* 次要芯片「N sub-sessions · M waiting」：信息性，onOpenSubSessions 给了才可点
-            （辅助对话里渲染的 ChatView 不传，芯片仍显示、只是不可点） */}
-        {props.subSessionsChip != null && (
-          <SubSessionsChip chip={props.subSessionsChip} onClick={props.onOpenSubSessions} />
-        )}
         <span
           title={props.badgeTitle}
           style={{
@@ -2115,6 +1992,7 @@ function Pane(props: {
           {props.badge}
         </span>
       </header>
+      )}
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走。
           样式在 styles.css 的 .chat-scroll-seg（含 overflow: hidden——页脚很高时滚动段不越界盖到页脚下） */}
@@ -2195,11 +2073,6 @@ function Pane(props: {
   );
 }
 
-/**
- * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）。waiting 为 0
- * 时只拼前半——不拼出一句「· 0 waiting」，那不是「有事要你做」，不值得占位。
- * `onClick` 未给时渲染成 `span`（信息性、不可点），同 `ChannelMarkPill` 的做法。
- */
 function SubSessionsChip(props: { chip: { count: number; waiting: number }; onClick?: () => void }) {
   const t = useT();
   const { count, waiting } = props.chip;

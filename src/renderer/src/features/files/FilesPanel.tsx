@@ -449,8 +449,8 @@ export function FilesPanel(props: {
         <>
           {/* 「文件」标题本身就是文件树开关（原型裁决）：树开着时呈点亮态（选中行
               的 mode 淡底配方）；没有打开文件时禁用——那时树就是整个面板。
-              2026-10-19 走 PanelTitle 的开关形态：字号 / 高度 / hover / 点亮态全部
-              由公共配方接管，这里只留负缩进与图标着色（styles.css 的 .files-title-toggle） */}
+              2026-10-19 走 PanelTitle 的开关形态，住工具栏右栏胶囊（样式见
+              shell/toolbar.css 的 .cap-pt） */}
           <PanelTitle
             icon="folder"
             title={t.files.title}
@@ -458,13 +458,12 @@ export function FilesPanel(props: {
             onClick={() => setTreeOn((value) => !value)}
             ariaExpanded={fileOpen && treeOn}
             disabled={!fileOpen}
-            className="files-title-toggle"
             trailing={
               <Icon
                 name="chevron-right"
                 size={11}
                 strokeWidth={2.2}
-                className="files-title-chev titlebar-icon-own"
+                className="files-title-chev"
               />
             }
           />
@@ -480,7 +479,7 @@ export function FilesPanel(props: {
             />
           ) : (
             <>
-              <div className="files-head-tabs panel-head-grow" role="tablist" aria-label={t.files.tabsAria} ref={tabsBarRef}>
+              <div className="cap-tabs cap-grow" role="tablist" aria-label={t.files.tabsAria} ref={tabsBarRef}>
                 {tabs.map((tab) => {
                   const name = tab.name ?? fileTabName(tab.path);
                   const active = tab.path === activePath;
@@ -491,7 +490,7 @@ export function FilesPanel(props: {
                       role="tab"
                       tabIndex={0}
                       aria-selected={active}
-                      className="files-tab no-drag"
+                      className="cap-tab no-drag"
                       title={tab.path}
                       onClick={() => setActivePath(tab.path)}
                       onKeyDown={(event) => {
@@ -518,7 +517,7 @@ export function FilesPanel(props: {
                           closeOne(tab.path);
                         }}
                       >
-                        <Icon name="x" size={10} strokeWidth={2.4} className="titlebar-icon-own" />
+                        <Icon name="x" size={10} strokeWidth={2.4} />
                       </button>
                     </div>
                   );
@@ -544,10 +543,10 @@ export function FilesPanel(props: {
             }}
             disabled={tree.refreshing}
           >
-            <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={14} spin={tree.refreshing} />
+            <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} strokeWidth={1.8} spin={tree.refreshing} />
           </PanelIconButton>
           <PanelIconButton title={t.files.attach} onClick={attach}>
-            <Icon name="plus" size={14} />
+            <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
         </>
       }

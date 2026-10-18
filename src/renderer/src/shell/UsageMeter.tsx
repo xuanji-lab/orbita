@@ -78,6 +78,11 @@ export function UsageMeter(props: {
 
   return (
     <div className="usage-meter" data-hidden={hidden || undefined}>
+      {/* 字标（2026-10-19 用户裁决：「orbita 字标放在左下角和星云同一列吧，根据星云的
+          位置自适应」）：跟用量格同一列、钉在星云停机坪上方——星云显形时它在云与气泡
+          之上，星云收起（padding 塌掉）时它贴着格子，始终不压格子和气泡 */}
+      <div className="usage-brand">orbita</div>
+      <div className="usage-meter-body">
       <div className="usage-pet" style={{ left: petLeft(active) }}>
         {hovered !== undefined && (
           // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）
@@ -115,6 +120,7 @@ export function UsageMeter(props: {
             onPick={() => props.onPetChange(petPrefAfterCellClick(cells, props.pet, index))}
           />
         ))}
+      </div>
       </div>
     </div>
   );

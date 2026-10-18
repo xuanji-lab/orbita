@@ -193,7 +193,7 @@ function SkillList(props: {
     <>
       <PanelHelp label={t.skills.helpLabel} text={t.skills.help} />
       <PanelIconButton title={t.skills.openDir} onClick={() => skills.reveal(null)}>
-        <Icon name="folder-open" size={14} />
+        <Icon name="folder-open" size={16} strokeWidth={1.8} />
       </PanelIconButton>
       <AddMenu skills={skills} onCreateSkill={props.onCreateSkill} />
     </>
@@ -577,19 +577,9 @@ function SkillDetail(props: {
       header={
         <>
           <PanelIconButton title={t.skills.backToList} onClick={props.onBack}>
-            <Icon name="chevron-left" size={14} />
+            <Icon name="chevron-left" size={16} strokeWidth={2} />
           </PanelIconButton>
-          <strong
-            style={{
-              fontWeight: "var(--weight-semibold)",
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {meta.name}
-          </strong>
+          <strong className="cap-title">{meta.name}</strong>
         </>
       }
       footer={
@@ -801,7 +791,7 @@ function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {
   return (
     <span style={{ position: "relative", display: "inline-flex" }}>
       <PanelIconButton title={t.skills.add} onClick={() => setOpen((v) => !v)}>
-        <Icon name="plus" size={14} />
+        <Icon name="plus" size={16} strokeWidth={2} />
       </PanelIconButton>
       {open && (
         <span

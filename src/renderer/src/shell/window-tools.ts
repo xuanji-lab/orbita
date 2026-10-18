@@ -1,72 +1,106 @@
 /**
- * 「窗口工具」组（红绿灯净空 · 侧栏开关 · 新任务）的水平几何，与侧栏收起断点。
+ * 顶部工具栏的几何（2026-10-19 方案 B v2：Safari 式整条工具栏 + 全胶囊）。
  *
- * 这一组在两种状态下住两个不同的容器：
- *  - **展开态**：侧栏顶行（aside 的 `.titlebar`）——组左缘距窗口左缘 =
- *      `.layer` 的 padding-inline（`--space-3`）
- *    + 侧栏 aside 自己的 padding-inline-start（`--space-3`）
- *    + `.titlebar` 的红绿灯净空（darwin 66px，其它平台 0）
- *  - **收起态**：对话卡页头（ChatView 的 Pane 页头 / SettingsView 的页头；收起后
- *    没有左侧图标条，pane 铺到最左）——组左缘 =
- *      `.layer` 的 `--space-3` + 页头的 padding-inline-start（`--window-tools-inset`）
+ * 窗口最顶一整条 52 的工具栏（`.toolbar`，整条 `.titlebar` 拖拽区）横跨整宽、在卡片外；
+ * 里面只有胶囊（`.toolbar-capsule`，共 32 高），**所有胶囊的中心 y 钉在 darwin 红绿灯
+ * 中心那条线上**（trafficLightPosition y=19 + 6px 键径 = 25；红绿灯位置不动，2026-10-18
+ * 用户裁决「移不了红绿灯，把我们的顶栏对齐它」）。侧栏、对话卡、右栏、右图标条都从
+ * 52 下面开始。
  *
- * 两条链必须得出**同一个数**——侧栏开关的屏幕 x 不随开合跳动，这是 2026-10-18
- * 用户裁决的核心原则（「开关不再跳来跳去」）。收起态的 `--window-tools-inset`
- * 因此在 styles.css 里定义为 `var(--space-3) + 红绿灯净空`，与这里的 px 常量
- * 互为对账：`window-tools.test.ts` 同时读 CSS 与 Sidebar 源码，验证链上每一环
- * 没有各自漂移。
+ * 这里的纯函数只管**水平**几何（左胶囊 x、会话胶囊的居中与收缩、对话列左右缘）；
+ * 垂直只留一条推导（胶囊上沿 = 中心线 − 胶囊高/2 = 9），与 tokens/spacing.css 的
+ * `--titlebar-capsule-top` 互为对账。**侧栏开关在展开 / 收起两态坐标不变**由结构保证：
+ * 它始终住在工具栏左胶囊的第一个格，开合不换容器（旧版「两条链对账」随之删除）。
  */
 
-/** 窗口窄于这条线自动收起侧栏：288px 的侧栏在 960 以下会把内容面挤得太瘦 */
+export type ToolbarPlatform = "darwin" | "other";
+
+/** 主进程 `trafficLightPosition`（红绿灯不动；测试与这里对账） */
+export const TRAFFIC_LIGHT_X = 18;
+export const TRAFFIC_LIGHT_Y = 19;
+/** macOS 红绿灯键径（Big Sur 起标准尺寸） */
+export const TRAFFIC_LIGHT_DOT = 12;
+/** 三键并排总宽（close · min · zoom 各 12，间距 8）：x 18 → 70 */
+export const TRAFFIC_LIGHT_GROUP_W = 52;
+
+/** 红绿灯中心线：所有胶囊的中心 y */
+export const CENTER_Y = TRAFFIC_LIGHT_Y + TRAFFIC_LIGHT_DOT / 2;
+
+/** `.layer` 的 padding（`--space-3`）：卡片与窗口边的留白 */
+export const LAYER_PAD = 12;
+/** 右图标条宽 */
+export const RAIL_W = 32;
+/** 窗口窄于这条线自动收起侧栏（960 以下 288px 侧栏会把内容面挤得太瘦） */
 export const COLLAPSE_BREAKPOINT = 960;
 
-/** `.layer` 的 padding（tokens/spacing.css 的 `--space-3`）。展开 / 收起两态共用这一层 */
-export const LAYER_PAD = 12;
-
-/** 侧栏 aside 的 padding-inline-start（Sidebar 的 `var(--space-3)`） */
-export const SIDEBAR_PAD = 12;
-
-/**
- * darwin 红绿灯净空（styles.css 的 `--traffic-clearance`）：红绿灯由主进程
- * `trafficLightPosition: { x: 18 }` 定位、三键约 52px 宽，`.titlebar` 由此让出 66px。
- */
-export const DARWIN_CLEARANCE = 66;
-
-/**
- * 红绿灯垂直几何（主进程 src/main/index.ts 的 `trafficLightPosition.y`）。
- * 位置**不动**（2026-10-18 用户裁决：移不了红绿灯，把我们的顶栏收窄去对齐它——
- * 「顶部栏有点太宽了，可以窄一些，和红绿灯横线居中对齐」）。
- */
-export const TRAFFIC_LIGHT_Y = 19;
-/** macOS 红绿灯键径（Big Sur 起的标准尺寸） */
-export const TRAFFIC_LIGHT_DOT = 12;
-
-/**
- * 顶部行行高（styles.css 的 `--titlebar-row`，侧栏字标行 / 对话卡页头 / 设置页头 /
- * 右栏页头 / 右图标条顶行共用）：**行的垂直中心钉在红绿灯中心那条线上**。
- * 行顶 = 卡顶（.layer 的 --space-3 = LAYER_PAD），红绿灯中心 = TRAFFIC_LIGHT_Y +
- * 键径/2 = 25px，所以行高 = 2 × (25 − 12) = 26。Windows 没有红绿灯，用同一条
- * 中心线保持跨平台一致的较窄顶栏。按钮不缩到点不准：行里的方块用 24px
- * （IconButton/RailButton 现有档位），上下各留 1px。
- */
-export const TITLEBAR_ROW_HEIGHT = 2 * (TRAFFIC_LIGHT_Y + TRAFFIC_LIGHT_DOT / 2 - LAYER_PAD);
-
-/** 平台只分「有红绿灯」与「没有」——工具组的几何只受这一件事影响 */
-export type WindowToolsPlatform = "darwin" | "other";
-
-export function clearanceOf(platform: WindowToolsPlatform): number {
-  return platform === "darwin" ? DARWIN_CLEARANCE : 0;
+/** 左胶囊左缘 x：darwin 在红绿灯右侧留 10px；其它平台（无红绿灯）从窗口内边距起 */
+export function leftCapsuleX(platform: ToolbarPlatform): number {
+  return platform === "darwin" ? TRAFFIC_LIGHT_X + TRAFFIC_LIGHT_GROUP_W + 10 : LAYER_PAD;
 }
 
-/** 展开态：组（侧栏开关）左缘距窗口左缘多少 px */
-export function expandedToolsX(platform: WindowToolsPlatform): number {
-  return LAYER_PAD + SIDEBAR_PAD + clearanceOf(platform);
+/** 左胶囊宽度：2px 内边距 + 侧栏开关 36 + 新任务 36 + 专注 36（计时态由专注功能自己加宽） */
+export const LEFT_CAPSULE_W = 2 + 36 + 36 + 36 + 2;
+
+/** 会话胶囊（排法甲 · 地址栏式）：首选宽与两侧最小间距 */
+export const SESSION_W = 480;
+export const SESSION_GAP = 12;
+
+/** 右栏胶囊：筛选框收成搜索格的断点 / 右栏最小宽（默认值，可推翻） */
+export const PANEL_FILTER_BREAK = 300;
+export const PANEL_MIN_W = 260;
+
+/** Windows 自绘窗口键（min · max · close 三枚）占的宽：右端胶囊组整体左让 */
+export const WIN_CTL_W = 118;
+
+/**
+ * 对话列（会话胶囊的居中基准 = 这一列）：左缘 = 侧栏右侧（收起 = 卡片内边距），
+ * 右缘 = 右栏分隔线（右栏没开 = 卡片右缘）。
+ */
+export function conversationColumn(input: {
+  windowWidth: number;
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
+  panelOpen: boolean;
+  panelWidth: number;
+}): { left: number; right: number } {
+  const left = input.sidebarCollapsed ? LAYER_PAD : LAYER_PAD + input.sidebarWidth + LAYER_PAD;
+  const paneRight = input.windowWidth - LAYER_PAD - RAIL_W - LAYER_PAD;
+  return { left, right: paneRight - (input.panelOpen ? input.panelWidth : 0) };
 }
 
 /**
- * 收起态页头的 padding-inline-start（px）。pane 的左缘已经带着 `.layer` 的那层
- * `--space-3`，这里只补侧栏自己那层与红绿灯净空——两条链由此落在同一个 x 上。
+ * 右端边界：会话胶囊右缘能探到的最右处 = 右栏胶囊左缘（右栏开着 = 分隔线）或
+ * 右栏开关胶囊左缘（没开）。Windows 的自绘窗口键在最右，右栏开关整体左让。
  */
-export function collapsedHeaderInset(platform: WindowToolsPlatform): number {
-  return expandedToolsX(platform) - LAYER_PAD;
+export function rightEdge(input: {
+  windowWidth: number;
+  platform: ToolbarPlatform;
+  panelOpen: boolean;
+  panelWidth: number;
+}): number {
+  const paneRight = input.windowWidth - LAYER_PAD - RAIL_W - LAYER_PAD;
+  if (input.panelOpen) return paneRight - input.panelWidth;
+  const toggleRight = input.windowWidth - LAYER_PAD - (input.platform === "darwin" ? 0 : WIN_CTL_W + 8);
+  return toggleRight - RAIL_W;
+}
+
+/**
+ * 会话胶囊几何（排法甲）：居中于对话列，两侧至少各让 `SESSION_GAP`；空间不够先收缩
+ * 宽度（首选 480），再窄下去只剩多少算多少——标题省略号兜底，不换行不溢出。
+ */
+export function sessionCapsule(input: {
+  windowWidth: number;
+  colLeft: number;
+  colRight: number;
+  leftCapRight: number;
+  rightLimit: number;
+}): { x: number; width: number } {
+  const lo = input.leftCapRight + SESSION_GAP;
+  const hi = input.rightLimit - SESSION_GAP;
+  const width = Math.max(0, Math.min(SESSION_W, hi - lo));
+  const center = (input.colLeft + input.colRight) / 2;
+  let x = Math.round(center - width / 2);
+  if (x < lo) x = lo;
+  if (x + width > hi) x = hi - width;
+  return { x, width };
 }

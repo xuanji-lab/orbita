@@ -8,15 +8,28 @@
  */
 
 .usage-meter {
+  /* 字标一行 + 星云停机坪 + 格子：星云收起时停机坪塌掉，字标贴着格子 */
+  flex: 0 0 auto;
+}
+.usage-brand {
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-wordmark);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary);
+  padding: 0 0 6px 2px;
+  white-space: nowrap;
+}
+.usage-meter-body {
   position: relative;
   /* 能量体的停机坪：80×48 的云悬在格子上方，云心对准当前格（petLeft） */
   padding-top: 46px;
-  flex: 0 0 auto;
   transition: padding-top var(--duration-enter) var(--ease-out-quint);
 }
 
 /* 星云收起：上方停机坪让给会话列表；星云钻回格子（缩小 + 淡出 + 下沉） */
-.usage-meter[data-hidden] {
+.usage-meter[data-hidden] .usage-meter-body {
   padding-top: 0;
 }
 

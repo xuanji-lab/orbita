@@ -69,11 +69,6 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
 export function SettingsView(props: {
   tab: SettingsTab;
-  /**
-   * 侧栏收起后的「窗口工具」组（App 只传收起态）：嵌在页头最左，标题跟在后面；
-   * 左缘由 --window-tools-inset 与展开态侧栏顶行对齐（window-tools.ts）。
-   */
-  windowTools?: React.ReactNode;
   settings: AppSettings;
   /** 全部厂商（含没填 key 的）；命名模型菜单自己过 usableProviders */
   providers: readonly ProviderDto[];
@@ -107,28 +102,9 @@ export function SettingsView(props: {
         height: "100%",
         minHeight: 0,
         display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr)",
+        gridTemplateRows: "minmax(0,1fr)",
       }}
     >
-      {/* 与聊天页同一个页头形状——同一张卡，页头就该长一样，拖拽区也一样 */}
-      <header
-        className="titlebar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          minWidth: 0,
-          // 页头 --titlebar-row（含 1px 底线）：与右栏标题行（.panel-head）同高，两边
-          // 底线连成一条；行中心钉在红绿灯中心那条线上（window-tools.ts）。
-          // 侧栏收起后左内边距让位给窗口工具组（--window-tools-inset）
-          height: "var(--titlebar-row)",
-          padding: props.windowTools == null ? "0 18px" : "0 18px 0 var(--window-tools-inset)",
-          boxSizing: "border-box",
-          borderBottom: "1px solid var(--color-border-subtle)",
-        }}
-      >
-        {props.windowTools}
-        <strong style={{ fontWeight: "var(--weight-bold)" }}>{t.settings.tabs[active.id]}</strong>
-      </header>
 
       {migrationVisited ? (
         // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；

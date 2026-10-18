@@ -150,9 +150,9 @@ export function ReviewPanel(props: {
               摘抄页签不吃 git 来源，收起 */}
           {tab === "changes" && (
             <Menu items={sourceItems} trigger={({ toggle: open }) => (
-              <button type="button" onClick={open} title={t.review.source(source)} className="quiet-control panel-head-select no-drag">
+              <button type="button" onClick={open} title={t.review.source(source)} className="cap-sel no-drag">
                 {t.review.source(source)}
-                <Icon name="chevron-down" size={11} strokeWidth={1.8} className="titlebar-icon-own" />
+                <Icon name="chevron-down" size={11} strokeWidth={1.8} />
               </button>
             )} />
           )}
@@ -161,7 +161,7 @@ export function ReviewPanel(props: {
       headerExtra={
         tab === "changes" ? (
           <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
-            <Icon name="refresh-cw" size={14} spin={loading} />
+            <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
           </PanelIconButton>
         ) : undefined
       }

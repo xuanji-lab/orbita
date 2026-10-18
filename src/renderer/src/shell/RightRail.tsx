@@ -102,38 +102,19 @@ export function RightRail(props: {
         flexDirection: "column",
         alignItems: "center",
         gap: "var(--space-2)",
-        // 顶行与侧栏字标行同一条中心线（顶行坐到卡顶，行高 --titlebar-row），
-        // 第一个入口与左侧折叠图标对齐——两边都钉在红绿灯中心那条线上
-        padding: "0 0 var(--space-2)",
+        // 2026-10-19 方案 B v2：顶部没有行级对齐了（右栏开关住工具栏胶囊），
+        // rail 从工具栏下开始，首格离卡顶一个 space-1
+        padding: "var(--space-1) 0 var(--space-2)",
         background: "transparent",
         overflow: "hidden",
       }}
     >
-      {/* 顶部这行兼作拖拽区（.titlebar）；行内住 Files 入口，与左侧折叠图标同一条
-          中心线。titlebar-exempt：整条右图标条的图标 / 按钮是竖列自己的体系
-          （26px 盒 / 16px 图标），顶部栏作用域不接管这一格（2026-10-19 公共规定）。
-          paddingInlineStart: 0——豁免 darwin 给 .titlebar 统一加的 66px 红绿灯净空：
-          红绿灯在窗口左上，这条 32px 窄条在最右，让净空会把 icon 推出可视区外
-          （overflow:hidden，A-0 复验 BUG-3）。 */}
-      <span
-        className="titlebar titlebar-exempt"
-        style={{
-          height: "var(--titlebar-row)",
-          width: "100%",
-          flex: "0 0 auto",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          paddingInlineStart: 0,
-        }}
-      >
-        <RailEntryButton
-          icon="folder"
-          label={t.rail.files}
-          lit={props.panel === "files"}
-          onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
-        />
-      </span>
+      <RailEntryButton
+        icon="folder"
+        label={t.rail.files}
+        lit={props.panel === "files"}
+        onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
+      />
       <RailEntryButton
         icon="file-diff"
         label={t.rail.review}
@@ -158,12 +139,6 @@ export function RightRail(props: {
         label={t.rail.terminal}
         lit={props.panel === "terminal"}
         onClick={() => props.onPanel(props.panel === "terminal" ? null : "terminal")}
-      />
-      <RailEntryButton
-        icon="panel-right"
-        label={t.rail.sideChat}
-        lit={props.panel === "drawer"}
-        onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
       />
       {props.intentAvailable && (
         <RailEntryButton

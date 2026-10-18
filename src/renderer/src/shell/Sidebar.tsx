@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
-import { RailButton } from "./WindowTools";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
@@ -230,7 +229,7 @@ export function Sidebar(props: {
     pages: new Map<string, number>(),
   });
   // 收起态页头点「新任务」（App 发的 nonce 信号）：展开后 TASKS 组跟着展开，
-  // 新会话不落进收着的组里（与侧栏里大按钮的 startNewTask 同一条纪律）
+  // 新会话不落进收着的组里（与工具栏左胶囊「新任务」同一条纪律，信号从 App 来）
   useEffect(() => {
     if (props.newTaskSignal === 0) return;
     setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
@@ -257,17 +256,6 @@ export function Sidebar(props: {
     setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(openWorkspaceId)));
   }, [openId, openWorkspaceId]);
 
-  /**
-   * 新建任务顺带退出设置页（wafo 2026-09-03：此前停在 Settings 里点 New Task
-   * 没反应，得再按一次 Settings 才回得去——用户的心智是「新建 = 回到对话」）。
-   */
-  const startNewTask = (): void => {
-    props.onOverlay(null);
-    props.onCollapsedChange(false);
-    // 新任务落在 TASKS 里——不能落进一个收着的组里无声无息
-    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
-    session.newTask();
-  };
   /**
    * 不属于任何工作区的会话。**也包括归属指向已移除工作区的那些**——
    * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。
@@ -356,12 +344,10 @@ export function Sidebar(props: {
     window.addEventListener("pointerup", up, { once: true });
   };
 
-  // —— 收起态（2026-10-18 用户裁决）：不再有左侧图标条，这里什么都不渲染，
-  // 主区域向左铺满，折叠期间列表不可达，要切会话先展开（开关在对话卡页头）。
-  // 「窗口工具」组（红绿灯净空 · 侧栏开关 · 新任务）嵌在对话卡
-  // 页头的最左边（shell/WindowTools.tsx，由 App 注入 ChatView / SettingsView），
-  // 旧图标条的两个入口都活在那个组里。Archived / Carryovers / Settings 的入口
-  // 本来就只在右栏底部（2026-09-22 裁决），右栏不折叠。
+  // —— 收起态：什么都不渲染，主区域向左铺满。侧栏开关与新任务住工具栏左胶囊
+  // （shell/Toolbar.tsx），开合不换容器；折叠期间列表不可达，要切会话先展开。
+  // Archived / Carryovers / Settings 的入口本来就只在右栏底部（2026-09-22 裁决），
+  // 右栏不折叠。
   if (props.collapsed) {
     return null;
   }
@@ -385,32 +371,6 @@ export function Sidebar(props: {
         transition: resizing ? "none" : "width var(--duration-fast) var(--ease-standard)",
       }}
     >
-      {/**
-        顶栏兼作标题栏：`titleBarStyle: "hiddenInset"` 之后这是窗口左侧唯一的可拖区域，
-        macOS 上给红黄绿三个键让净空（styles.css 的 `.titlebar`）。
-        **收起开关守在净空后第一个位**（与收起态页头里的 WindowTools 同一个窗口 x，
-        几何见 window-tools.ts）；字标 orbita 推到行的另一端——左锚点让给开关，
-        开合之间手不用找（2026-10-18）。行高 --titlebar-row：行中心钉在红绿灯
-        中心那条线上（用户裁决「顶栏窄一些，和红绿灯横线居中对齐」）。
-      */}
-      <div
-        className="titlebar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          height: "var(--titlebar-row)",
-          fontFamily: "var(--font-family-brand)",
-          fontSize: "var(--font-size-wordmark)",
-          fontWeight: 500,
-          lineHeight: 1,
-          letterSpacing: "0.01em",
-          color: "var(--color-text-primary)",
-        }}
-      >
-        <RailButton icon="panel-left" title={t.sidebar.collapse} onClick={() => props.onCollapsedChange(true)} />
-        <span style={{ marginInlineStart: "auto" }}>orbita</span>
-      </div>
-
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
         <ModeChip icon="bot" active>
           {t.sidebar.agentMode}
@@ -419,33 +379,6 @@ export function Sidebar(props: {
           {t.sidebar.orchestrate}
         </ModeChip>
       </div>
-
-      {/* 一屏一个 accent：主操作（新建 / 发送）与模式选中，别处一律中性 */}
-      <button
-        type="button"
-        onClick={startNewTask}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          width: "100%",
-          height: 32,
-          padding: "0 10px",
-          border: 0,
-          borderRadius: "var(--radius-md)",
-          background: "var(--color-accent)",
-          color: "var(--color-accent-fg)",
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-base)",
-          fontWeight: "var(--weight-medium)",
-          cursor: "pointer",
-          transition: "var(--transition-hover)",
-        }}
-      >
-        <Icon name="plus" size={16} />
-        {t.common.newTask}
-      </button>
 
       {/**
         筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
@@ -790,7 +723,7 @@ export function Sidebar(props: {
       style={{
         position: "absolute",
         left: `calc(var(--space-3) + ${width}px + var(--space-3) - 6px)`,
-        top: "var(--space-3)",
+        top: "var(--titlebar-row)",
         bottom: "var(--space-3)",
         width: 6,
         cursor: "col-resize",

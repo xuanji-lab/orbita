@@ -235,16 +235,14 @@ smoothing), so body sits at 450 — still one step below the 500 controls weight
 thinking-level labels in the composer bar are set *italic* at secondary grey — the only italic in
 the UI.
 
-**Layout.** A fixed shell: left sidebar (288px; collapsing it removes it entirely — no icon
-rail — and the window tools (traffic-light clearance · sidebar toggle · New task) ride the leftmost of the
-conversation header, 2026-10-18), conversation pane,
+**Layout.** A fixed shell: a full-width top toolbar (52px, capsules only — see Implementation
+rules), below it left sidebar (288px; collapsing it removes it entirely — no icon rail, the toggle lives
+in the toolbar's left capsule, 2026-10-19), conversation pane,
 a 32px action rail for session actions, right drawer (320px, **closed by default**). Every top row
 (sidebar wordmark, conversation / settings / panel headers, the right rail's first slot) shares one
 height — `--titlebar-row`, 26px — centred on the traffic-light line (macOS lights at y 19–31;
 the row centre and the lights' centre are the same horizontal line, Windows included for cross-platform
-consistency). Top-row contents follow the narrow line (same day, user: "变窄了之后，好多都太大了"):
-header titles sit at `--font-size-sm` (weight unchanged), head icons run 14px inside 22–24px boxes,
-and the sidebar wordmark tracks `--font-size-lg`. Both sidebars
+consistency). The window's top chrome is the one regulated toolbar (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
@@ -397,24 +395,27 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 - Learned from ZCode's `text-ui-*` scale (2026-10); our `xs` is base − 3, not − 4 — 10px CJK is
   below comfortable reading.
 
-**The top rows are one regulated zone (顶部栏， 2026-10-19).** Every top row (sidebar
-wordmark, conversation / settings / panel headers, the right rail's first slot) shares the height
-`--titlebar-row` (26px), centred on the traffic-light line (macOS lights y 19–31 → centre 25px; the row
-centre and the lights' centre are the same horizontal line, Windows included). Everything inside a top
-row comes from four tokens and nothing else: icons `--titlebar-icon` (14px), icon-button boxes
-`--titlebar-control` (24px), fields / tabs / pills `--titlebar-field` (22px), and titles
-`--font-size-titlebar` (= `--font-size-sm`, weight unchanged). These are enforced by a **scope rule**, not
-by every component remembering: `.titlebar` (`.panel-head` included) sets `--icon-size` and the heights /
-title size of its descendants, so a self-drawn header element is sized correctly even when it forgot —
-the Files panel's hand-rolled title leaked at 14px/16px exactly once before this rule existed. For the
-scope to win, `Icon` does not carry an inline width: it writes a request variable
-(`--icon-size-request`) and the global `.orbita-icon` rule reads `var(--icon-size, var(--icon-size-request))`
-— no `!important` anywhere. Headers use `PanelTitle` (its toggle variant when the title is a switch);
-exceptions are explicit and commented: `.window-titlebar` (Windows' own 36×28 window buttons),
-`.titlebar-exempt` (the right rail's first slot — the whole rail keeps its own 26px/16px system), and
-`.titlebar-icon-own` for deliberately smaller glyphs (chevrons, close ✕, run-state marks).
-`src/renderer/src/shell/window-tools.test.ts` guards the whole chain: tokens ↔ constants ↔ scope rules ↔
-no literal heights / font sizes in the family CSS.
+**The top toolbar is one regulated zone (顶部工具栏，方案 B v2, 2026-10-19).** The window's top is a
+single 52px toolbar (`.toolbar`, `--titlebar-row`) spanning the full width on the card, outside every
+content card — the whole strip is the drag region and **its direct children are capsules only**
+(`.toolbar-capsule`, the material-chip face: full radius · `--glass-bg` · `--shadow-border`); Windows'
+own min / max / close group (`.win-ctl`) is the one declared exception. Every capsule shares the height
+`--titlebar-capsule` (32 = `--control-height-md`) and sits at `--titlebar-capsule-top` (9) so the capsule
+**centre is the traffic-light centre line, y = 25** (`trafficLightPosition` stays at `{x:18, y:19}`, user
+ruling: move our chrome to the lights, never the lights). Inside capsules everything comes from tokens:
+cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons `--titlebar-icon` (16),
+titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
+Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
+the session capsule (address-bar layout, fixed 480 shrinking to fit, centred on the conversation column,
+min 12 from its neighbours), the right-panel capsule (left edge pinned to the panel divider, width =
+`--right-panel-w`; panel headers portal into it; below 300 the filter collapses to a search cell),
+and the right-panel toggle. Cards start at y=52 — conversation / settings cards have **no header row**
+(session info lives in the session capsule; panel headers live in the right-panel capsule), and the
+sidebar has neither wordmark row nor big New-task button: the wordmark sits at the bottom of the usage
+column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 80 darwin / 12 otherwise;
+session capsule centring and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
+lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
+and the toolbar's direct children are capsules.
 
 **Trailing edges sit on the row's right hem.** A row / card / list item's trailing
 element — a status mark, footnote, count or timestamp — pins its right edge to the row's right

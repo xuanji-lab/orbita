@@ -144,6 +144,13 @@ export const en = {
     restore: "Restore",
   },
 
+  toolbar: {
+    copyId: "Copy session id",
+    copiedId: (id: string) => `Copied ${id}`,
+    /** 专注模式还没落地：planned 的东西显示、禁用、说明为什么（设计系统规矩） */
+    focusPlanned: "Focus mode (coming soon)",
+  },
+
   composer: {
     send: "Send",
     stop: "Stop",

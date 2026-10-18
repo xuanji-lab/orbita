@@ -23,8 +23,9 @@ import {
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
-import { WindowTools } from "./shell/WindowTools";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
+import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
+import { SessionCapsule } from "./shell/SessionCapsule";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
@@ -44,7 +45,6 @@ import { ReviewPanel } from "./features/review/ReviewPanel";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
-import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -206,10 +206,15 @@ export function App() {
     setNewTaskSignal(newTaskNonceRef.current);
     session.newTask();
   };
-  /** 收起态嵌在对话卡页头最左的「窗口工具」组；展开时侧栏自己的顶行 / 大按钮就是入口，这里不注入 */
-  const windowTools = sidebarCollapsed ? (
-    <WindowTools onExpand={() => setSidebarCollapsed(false)} onNewTask={startNewTaskFromTools} />
-  ) : null;
+  /** 窗口宽（胶囊几何要用：会话胶囊居中于对话列、右栏胶囊钉分隔线） */
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const sync = (): void => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, []);
+  /** 右栏胶囊的宿主（Toolbar 挂好回填；各面板的页头内容 portal 进来） */
+  const [panelSlot, setPanelSlot] = useState<HTMLDivElement | null>(null);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
@@ -229,6 +234,15 @@ export function App() {
   // 已删（2026-10-12 用户裁决）：它总是自己弹出，且把两边对话抽到第三个又长又啰嗦
   // 的地方——沟通回到两边对话流，Sub-sessions 面板变收件箱，不再有任何自动弹出。
   const channelSummaries = useChannelSummaries(channelParentId);
+
+  /**
+   * 工具栏会话胶囊的数据（2026-10-19 方案 B v2：对话卡不再有页头，标题 / id /
+   * 收工 / 子会话芯片 / 父会话面包屑全住这颗胶囊，见 SessionCapsule）。
+   * 标题口径同旧页头：落盘的 meta 标题，没落盘就是「新任务」。
+   */
+  const capsuleTitle = mainOpenMeta?.title ?? t.common.newTask;
+  const capsuleShortId = mainOpenId === "" ? null : mainOpenId.slice(0, 6);
+  const capsuleParentId = mainOpenMeta?.parentId;
 
   /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
   const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
@@ -356,13 +370,6 @@ export function App() {
           .map((record) => record.id),
       ),
     [session.transcript],
-  );
-  /** 子会话头部面包屑「↑ 父标题」：主槽回到父会话（2.2） */
-  const openParent = useCallback(
-    (parentId: string) => {
-      void session.openSession(parentId);
-    },
-    [session],
   );
   /** 右栏会话层正开着的那条子会话 id——只在面板真的开着时才算「点亮」，见派出卡描边 */
   const litSubSessionId =
@@ -748,6 +755,47 @@ export function App() {
     setShowArchived(next.showArchived);
     setShowCarryovers(next.showCarryovers);
   };
+  /**
+   * 工具栏居中那颗胶囊的内容：设置页 = 标题（只有标题）；会话页 = SessionCapsule；
+   * 首页 = 不渲染。
+   */
+  const sessionSlot =
+    overlay === "settings" ? (
+      <div className="cap-sess">
+        <div className="cap-sc">
+          <strong className="cap-title">{t.settings.tabs[settingsTab]}</strong>
+        </div>
+      </div>
+    ) : mainOpenId === "" && session.opened === null ? null : (
+      <SessionCapsule
+        title={capsuleTitle}
+        shortId={capsuleShortId}
+        onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
+        completion={
+          sessionLifecycle && mainOpenId !== ""
+            ? {
+                state: mainOpenMeta?.completion ?? "open",
+                closing: session.closingScan,
+                busy: session.phase !== "idle",
+                scanless: mainOpenMeta?.piSessionFile == null,
+                onMark: session.startClosingRitual,
+                onSet: (next) => session.setCompletionSession(mainOpenId, next),
+              }
+            : null
+        }
+        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou } : null}
+        onOpenSubSessions={openSubSessionsList}
+        crumb={
+          capsuleParentId !== undefined
+            ? {
+                title: session.sessions.find((meta) => meta.id === capsuleParentId)?.title ?? "",
+                onClick: () => void session.openSession(capsuleParentId),
+              }
+            : null
+        }
+      />
+    );
+
   const railEntries: RailEntry[] = [
     // 遗留事项入口（收尾扫描的下游）挂会话生命周期开关；Archived / Browser / Settings 不挂
     ...(sessionLifecycle
@@ -798,9 +846,24 @@ export function App() {
       )}
     >
     <CitationOpenContext.Provider value={openCitation}>
+    <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
-      <Titlebar />
       <div className="layer">
+        <Toolbar
+          platform={api.platform === "darwin" ? "darwin" : "other"}
+          sidebarCollapsed={sidebarCollapsed}
+          sidebarWidth={sidebarWidth}
+          onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          onNewTask={startNewTaskFromTools}
+          windowWidth={windowWidth}
+          panelOpen={rightPanel !== null}
+          panelWidth={panelWidth}
+          narrow={narrow}
+          sessionSlot={sessionSlot}
+          onPanelSlot={setPanelSlot}
+          drawerLit={rightPanel === "drawer"}
+          onToggleDrawer={() => setRightPanel(rightPanel === "drawer" ? null : "drawer")}
+        />
         <Sidebar
           session={session}
           overlay={overlay}
@@ -833,7 +896,6 @@ export function App() {
             {overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
-                windowTools={windowTools}
                 settings={settings}
                 providers={providers}
                 starredModels={settings.starredModels ?? []}
@@ -851,13 +913,11 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
-                windowTools={windowTools}
+                bareHeader
                 onOpenReviewAt={openReviewAt}
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
-                onOpenSubSessions={openSubSessionsList}
-                onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
@@ -997,6 +1057,7 @@ export function App() {
         />
       </div>
     </div>
+    </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
     </MaterialBoxContext.Provider>
     </PastedTextCollapseContext.Provider>
