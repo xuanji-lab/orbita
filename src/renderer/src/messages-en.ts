@@ -83,6 +83,7 @@ export const en = {
     refresh: "Refresh",
     tabChanges: "Changes",
     tabExcerpts: "Excerpts",
+    copyPath: "Copy path",
     excerptsThisTask: "This task",
     excerptsAll: "All",
     excerptsSearch: "Search excerpts",

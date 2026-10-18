@@ -3932,6 +3932,15 @@ button.panel-group-toggle:hover {
 }
 .review-row:hover:not(:disabled) {
   background: var(--color-bg-hover);
+}
+/* 2026-10-18 行改版：行里只显文件名（重名才补最短区分父目录），行尾（增减统计 /
+   状态尾注）钉在行右血线，悬停让位给「在访达中显示」（.file-hover-act 同文件面板
+   配方）；指针落在动作键上时行按钮自己已不在 :hover，由 host 兜住行底色 */
+.file-hover-host:hover .review-row:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.file-hover-host:hover .review-row-tail {
+  opacity: 0;
 }/* ================================================================ 意图系统（实验功能 intent-system）
    右栏「意图」面板：会话累积簇图 + 条目。数据色只有一条带——--color-nebula（用量格
    同款 token，五主题各一值）按 30/62/100 三档 color-mix（时间=轮次新旧 / 相关度），

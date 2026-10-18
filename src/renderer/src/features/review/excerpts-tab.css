@@ -9,7 +9,9 @@
 .review-tabs {
   display: flex;
   gap: 2px;
-  padding: 0 var(--space-2) var(--space-2);
+  /* 上下留白相等（2026-10-18 修：顶部 padding 为 0 时选中态底色块贴着内容区上边，
+     看着「没有居中」）；只许 token，不写魔数 */
+  padding: var(--space-2) var(--space-2) var(--space-2);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 

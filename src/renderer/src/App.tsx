@@ -898,6 +898,7 @@ export function App() {
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  workspaceId={session.workspaceId}
                   focus={reviewFocus}
                   revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
                   cwd={session.cwd}

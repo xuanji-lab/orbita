@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { unifiedDiffEntries } from "./review-panel.ts";
+import { absoluteReviewPath, disambiguatedDirs, unifiedDiffEntries } from "./review-panel.ts";
 
 describe("unifiedDiffEntries", () => {
   test("unified diff → DiffBody 条目：@@ 头不进正文、行号按新旧行、一删一增配对", () => {
@@ -59,4 +59,64 @@ test("jsdiff 的 `=====` 分隔行与 Index 头不进正文（实机：被画成
   const rows = unifiedDiffEntries(diff);
   assert.equal(rows.length, 2);
   assert.ok(rows.every((entry) => entry.kind !== "pair" && entry.row.kind === "add"));
+});
+
+describe("absoluteReviewPath（审查行 2026-10-18 改版：title / 复制 / reveal 用绝对路径）", () => {
+  test("task 来源本就是绝对路径（resolveToCwd），原样返回", () => {
+    assert.equal(absoluteReviewPath("/Users/x/ws/a.ts", "task", "/Users/x/ws"), "/Users/x/ws/a.ts");
+  });
+
+  test("git 来源是仓库相对路径，按会话 cwd 拼（与主进程 untrackedEntries 同口径）", () => {
+    assert.equal(absoluteReviewPath("src/a.ts", "unstaged", "/Users/x/ws"), "/Users/x/ws/src/a.ts");
+  });
+
+  test("cwd 缺失（列表没回来 / 空串）时不硬造，原样返回", () => {
+    assert.equal(absoluteReviewPath("src/a.ts", "staged", null), "src/a.ts");
+    assert.equal(absoluteReviewPath("src/a.ts", "branch", ""), "src/a.ts");
+  });
+});
+
+describe("disambiguatedDirs（重名文件补最短区分父目录）", () => {
+  test("无重名：全部 null，行里只显文件名", () => {
+    const dirs = disambiguatedDirs(["a/shot.mjs", "b/fold.ts", "c/other.mjs"], null);
+    assert.equal(dirs.get("a/shot.mjs"), null);
+    assert.equal(dirs.get("b/fold.ts"), null);
+    assert.equal(dirs.get("c/other.mjs"), null);
+  });
+
+  test("两个同名 shot.mjs：各补一段区分父目录", () => {
+    const dirs = disambiguatedDirs(["smoke/shot.mjs", "ui/shot.mjs", "a/fold.ts"], null);
+    assert.equal(dirs.get("smoke/shot.mjs"), "smoke");
+    assert.equal(dirs.get("ui/shot.mjs"), "ui");
+    // 独一份的名字不补
+    assert.equal(dirs.get("a/fold.ts"), null);
+  });
+
+  test("最后一段撞车（x 出现两次）：整组统一补到两段", () => {
+    const dirs = disambiguatedDirs(["a/x/shot.mjs", "b/x/shot.mjs"], null);
+    assert.equal(dirs.get("a/x/shot.mjs"), "a/x");
+    assert.equal(dirs.get("b/x/shot.mjs"), "b/x");
+  });
+
+  test("深度不同也能区分：浅的那个用全部目录，深的补到分得开为止", () => {
+    const dirs = disambiguatedDirs(["x/shot.mjs", "b/x/shot.mjs"], null);
+    assert.equal(dirs.get("x/shot.mjs"), "x");
+    assert.equal(dirs.get("b/x/shot.mjs"), "b/x");
+  });
+
+  test("根下同名文件：目录为空串（显示层不补段），另一个补一段", () => {
+    const dirs = disambiguatedDirs(["shot.mjs", "x/shot.mjs"], null);
+    assert.equal(dirs.get("shot.mjs"), "");
+    assert.equal(dirs.get("x/shot.mjs"), "x");
+  });
+
+  test("task 来源的绝对路径先按 cwd 剥再分组（pathParts 同一口径）", () => {
+    const dirs = disambiguatedDirs(
+      ["/ws/smoke/shot.mjs", "/ws/ui/shot.mjs", "/ws/fold.ts"],
+      "/ws",
+    );
+    assert.equal(dirs.get("/ws/smoke/shot.mjs"), "smoke");
+    assert.equal(dirs.get("/ws/ui/shot.mjs"), "ui");
+    assert.equal(dirs.get("/ws/fold.ts"), null);
+  });
 });
