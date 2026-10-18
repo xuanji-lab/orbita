@@ -73,6 +73,17 @@ function errorMessage(cause: unknown): string {
  */
 const MAX_RUNNING_CHILDREN = 3;
 
+/**
+ * 计入上限的 phase：**非 idle 才算在跑**。
+ *
+ * 轮结束会写入 `idle`（main/index.ts 的 phase 事件），键留在 map 里是正常的——
+ * 判 `phases.has()` 会把所有跑过的子会话永远算成在跑，名额永不释放。
+ * 2026-10-19 真机验收踩到：3 个子会话全部完成 / 被终止后，第 4 个仍被拒。
+ */
+function isRunningPhase(phase: SessionPhase | undefined): boolean {
+  return phase !== undefined && phase !== "idle";
+}
+
 // ── 子会话模型解析 ──
 
 export type SubSessionModelResult =
@@ -179,7 +190,7 @@ export async function applyDelegate(
   }
 
   const runningChildren = childSessions(await deps.sessions.list(), parent.id).filter((child) =>
-    deps.phases.has(child.id),
+    isRunningPhase(deps.phases.get(child.id)),
   );
   if (runningChildren.length >= MAX_RUNNING_CHILDREN) {
     const titles = runningChildren
@@ -455,6 +466,9 @@ export async function applyStop(deps: ChannelDeps, input: ChannelStopInput): Pro
   }
   const phase = deps.phases.get(child.id);
   if (phase !== undefined && phase !== "idle") await deps.abort(child.id);
+  // 终止是终态：把 phase 键也清掉，别让上限把这条件算成「在跑」（abort 不保证
+  // 一定再回来一个 idle 事件）。
+  deps.phases.delete(child.id);
   deps.cancelBrowserHandoff(child.id);
   const message: ChannelMessage = {
     id: randomUUID(),

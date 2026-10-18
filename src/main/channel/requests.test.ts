@@ -258,10 +258,28 @@ describe("applyDelegate", () => {
     assert.match(!blocked.ok ? blocked.error : "", /Wait for one to report/);
     assert.match(!blocked.ok ? blocked.error : "", /第 1 块/);
 
-    // 一个子会话回报（phase 被清）后，第 4 个才能派
-    phases.delete(ids[0] ?? "");
+    // 一个子会话回报（phase 翻 idle）后，第 4 个才能派；键不删也可以，
+    // 判据是「非 idle」而不是「键存在」（2026-10-19 真机回归）。
+    phases.set(ids[0] ?? "", "idle");
     const after = await applyDelegate(deps, delegateEvent({ title: "第 4 块" }));
     assert.equal(after.ok, true);
+  });
+
+  test("已完成（idle）的子会话不计入上限：3 个 idle 不挡新派", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    for (let index = 1; index <= 3; index += 1) {
+      await sessions.ensureSession(
+        baseMeta({ id: `2222222${index}-2222-3333-4444-55555555555${index}`, parentId: PARENT }),
+      );
+    }
+    const phases = new Map<string, SessionPhase>([
+      ["22222221-2222-3333-4444-555555555551", "idle"],
+      ["22222222-2222-3333-4444-555555555552", "idle"],
+      ["22222223-2222-3333-4444-555555555553", "idle"],
+    ]);
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])], phases });
+    const outcome = await applyDelegate(deps, delegateEvent({ title: "新一轮" }));
+    assert.equal(outcome.ok, true);
   });
 
   test("思考档跟着模型走：delegate 显式档 > 模型来自哪（requested/setting → 该模型默认档；parent → 父的档）", async () => {
@@ -538,6 +556,8 @@ describe("applyStop", () => {
     assert.equal(stop?.kind, "stop");
     assert.equal(stop?.author, "user");
     assert.equal(stop?.from, "parent");
+    // 终止是终态：phase 键清掉，别让 delegate 上限把它继续算成「在跑」
+    assert.equal(phases.has(CHILD), false);
     assert.equal(broadcastCalls.some((event) => event.type === "status" && event.status === "stopped"), true);
     assert.equal(broadcastCalls.some((event) => event.type === "message"), true);
   });
