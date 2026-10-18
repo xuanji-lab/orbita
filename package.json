@@ -82,7 +82,7 @@
     ],
     "npmRebuild": false,
     "releaseInfo": {
-      "releaseNotes": "[icon:download] Windows 版现在能自己更新了：有新版本会告诉你，你点「下载」才下载，下完点「重启以安装」才装。\n[icon:history] 设置 › 通用 › 软件更新 里可以看「历史版本」，点开就能看每一版改了什么。\n[icon:fold-vertical] 对话更好读了：agent 每说一段话都留在外面，只把中间的思考和工具调用收起来。\n[icon:eye] 浅色主题下，说明卡片和小标签的底色换成了更清楚的冷灰，不再和白底糊成一片。"
+      "releaseNotes": "[icon:download] 新：Windows 版能自己更新了——有新版本会告诉你，你点「下载」才下载，下完点「重启以安装」才装。\n[icon:history] 新：设置 › 通用 › 软件更新 里能看「历史版本」，点开就知道每一版改了什么。\n[icon:fold-vertical] 新：对话更好读了——agent 说的话都留在外面，只把中间的思考和工具调用收起来。\n[icon:eye] 新：浅色主题下，卡片和小标签的底色换成更清楚的冷灰。\n[icon:hard-drive] 一切都在你自己的电脑上：会话、配置、密钥都存在本机，不上传、不同步。\n[icon:shield-check] 三档权限：计划（只读）、手动（每步问你）、放行（直接干活），随时切换。\n[icon:git-fork] 从任意一问分出新会话；也能回退到某一问，连这期间改过的文件一起退回。\n[icon:file-diff] 每轮结束有改动卡片，右栏「审查」里能看每个文件改了什么、逐个撤销。\n[icon:bot] agent 能派子会话分头干活；子会话的模型、权限你都能直接改，也能叫停。\n[icon:folder] 右栏「文件」：浏览工作区，直接预览文本、图片和 PDF。\n[icon:square-terminal] 内置终端：agent 跑的命令你都看得见，随时可以接手。\n[icon:globe] 内置浏览器：agent 能替你查网页、点按钮，和你共享登录状态。\n[icon:paperclip] 输入框：拖进文件、文件夹、图片；划选对话里的一段当引用发出去；还能语音听写。\n[icon:blocks] Skills 与 MCP：agent 能自己建 skill、接 MCP 服务，按工作区开关。\n[icon:cpu] 模型：内置 DeepSeek、智谱、Claude、Kimi 等，也能接任意兼容接口；密钥加密存在本机。\n[icon:folder-sync] 迁移：把 Proma、Claude Code、Codex 等的会话、skills、MCP 一键搬过来。"
     },
     "publish": [
       {
