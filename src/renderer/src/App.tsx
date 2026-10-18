@@ -33,7 +33,7 @@ import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
-import type { PdfJump } from "./features/files/PdfView";
+import type { CiteFocusRequest } from "./features/files/cite-focus.ts";
 import { CitationOpenContext } from "./features/chat/citation-context.ts";
 import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
@@ -260,13 +260,24 @@ export function App() {
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
    * PDF 所在的根、打开预览、滚到原文并高亮。
    */
-  const [citeFocus, setCiteFocus] = useState<PdfJump | null>(null);
+  const [citeFocus, setCiteFocus] = useState<CiteFocusRequest | null>(null);
   const citeFocusTokenRef = useRef(0);
-  const openCitation = useCallback((citation: PdfCitation) => {
-    citeFocusTokenRef.current += 1;
-    setCiteFocus({ citation, token: citeFocusTokenRef.current });
-    setRightPanel("files");
-  }, []);
+  const openCitation = useCallback(
+    (citation: PdfCitation) => {
+      citeFocusTokenRef.current += 1;
+      // 请求带上出生会话戳（主槽此刻的会话，与 FilesPanel 的 sessionId 同一 null 形
+      // 口径）：文件面板只在主槽会话的根里找 PDF，换了会话后旧请求被 cite-focus.ts
+      // 判作废——不会拿旧会话的路径对新会话的根报「打不开」（2026-10-18 跨会话
+      // citeOutside 误报：面板重挂后 consumedCiteRef 归零，旧请求重放）
+      setCiteFocus({
+        citation,
+        token: citeFocusTokenRef.current,
+        session: mainOpenId === "" ? null : mainOpenId,
+      });
+      setRightPanel("files");
+    },
+    [mainOpenId],
+  );
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
     // 上一拍 id 必须在派发 setState 之前读出来链进局部量：updater 可能被 React
