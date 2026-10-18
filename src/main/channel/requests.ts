@@ -33,7 +33,7 @@ import {
 } from "../../shared/channel.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
-import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
+import { deriveSessionTitle, childSessions, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, ModelPair } from "../../shared/settings.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { ChannelStore } from "./store.ts";
@@ -62,6 +62,16 @@ export interface ChannelDeps {
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
+
+/**
+ * 同时在跑的直系子会话上限（2026-10-18 第三轮验收）。
+ *
+ * 提示词里写了「最多 3 个同时跑、其余排队」，但实测一条消息派 4 个照样全部起
+ * （四个子会话 meta 的 createdAt 落在同一毫秒段）——只靠自律不稳。这里给硬闸：
+ * 只数 phase 还活着的直系子会话；applyDelegate 在 submitTurn 前就先占位，
+ * 同一批 4 个 delegate 依次进来时计数是准的。
+ */
+const MAX_RUNNING_CHILDREN = 3;
 
 // ── 子会话模型解析 ──
 
@@ -166,6 +176,22 @@ export async function applyDelegate(
   if (task === "") return { ok: false, error: "task must not be empty." };
   if (event.thinkingLevel !== undefined && !isThinkingLevel(event.thinkingLevel)) {
     return { ok: false, error: `"${event.thinkingLevel}" is not a valid thinking level.` };
+  }
+
+  const runningChildren = childSessions(await deps.sessions.list(), parent.id).filter((child) =>
+    deps.phases.has(child.id),
+  );
+  if (runningChildren.length >= MAX_RUNNING_CHILDREN) {
+    const titles = runningChildren
+      .slice(0, MAX_RUNNING_CHILDREN)
+      .map((child) => `"${child.title}"`)
+      .join(", ");
+    return {
+      ok: false,
+      error:
+        `You already have ${runningChildren.length} sub-sessions running (${titles}). ` +
+        "Wait for one to report, or stop one, before delegating another — start the rest after a report.",
+    };
   }
 
   const settings = await deps.settings.read();

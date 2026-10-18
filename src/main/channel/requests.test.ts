@@ -239,6 +239,31 @@ describe("applyDelegate", () => {
     assert.equal(outcome.card.workbench, sessions.workbenchPath(outcome.childId));
   });
 
+  test("同时在跑的子会话到 3 个就拒第 4 个，一个回报后放行", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const phases = new Map<string, SessionPhase>();
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])], phases });
+
+    const ids: string[] = [];
+    for (let index = 1; index <= 3; index += 1) {
+      const outcome = await applyDelegate(deps, delegateEvent({ title: `第 ${index} 块` }));
+      assert.equal(outcome.ok, true);
+      if (outcome.ok) ids.push(outcome.childId);
+    }
+    assert.equal(phases.size, 3, "每个派出的子会话都要在 phases 里占位");
+
+    const blocked = await applyDelegate(deps, delegateEvent({ title: "第 4 块" }));
+    assert.equal(blocked.ok, false);
+    assert.match(!blocked.ok ? blocked.error : "", /already have 3 sub-sessions running/);
+    assert.match(!blocked.ok ? blocked.error : "", /Wait for one to report/);
+    assert.match(!blocked.ok ? blocked.error : "", /第 1 块/);
+
+    // 一个子会话回报（phase 被清）后，第 4 个才能派
+    phases.delete(ids[0] ?? "");
+    const after = await applyDelegate(deps, delegateEvent({ title: "第 4 块" }));
+    assert.equal(after.ok, true);
+  });
+
   test("思考档跟着模型走：delegate 显式档 > 模型来自哪（requested/setting → 该模型默认档；parent → 父的档）", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT, thinkingLevel: "low" }));
     // zai 声明 glm-5.3-flash：白名单里它的默认思考档是 max（known-providers.ts）
