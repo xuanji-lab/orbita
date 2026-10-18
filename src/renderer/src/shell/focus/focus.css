@@ -1,56 +1,14 @@
 /*
- * 专注模式的样式：闪电胶囊、开始专注浮层、胶囊浮层、左栏的文件树。
- * 配方全部来自设计系统与原型（focus-proto.html，像素照它）：
- * - 胶囊复用 .material-chip 的配方（--radius-pill、--glass-bg 底、--shadow-border
- *   内发丝、28px 高、sm 字），不用 accent 填充；倒计时等宽 + tabular-nums。
+ * 专注模式的样式：开始专注浮层、胶囊浮层、左栏的文件树。
+ * 配方来自设计系统与原型（focus-proto.html，像素照它）：
+ * - 专注键 / 倒计时格住工具栏左胶囊（toolbar.css 的 .cap-seg / .cap-focus-run，
+ *   沿用胶囊按钮配方，不另起外观）；倒计时等宽 + tabular-nums。
  * - 浮层是 .menu-panel 配方（实底 --color-bg-panel + 发丝 + --shadow-popover），
- *   portal 到 body + fixed 定位（同 Menu：侧栏与内容面都是 overflow:hidden）。
+ *   portal 到 body + fixed 定位（同 Menu：工具栏 / 侧栏在 overflow 裁剪链上）。
  * - U / M：字母第一信号（等宽半粗），颜色第二。M 亮档用 warning 琥珀；**暗档
  *   （黛 / 玄）换 info 蓝**——琥珀离强调黄太近，选中行的淡黄底就在旁边（原型
  *   待定 11 的默认做法，PR 描述里可推翻）。
  */
-
-/* —─ 胶囊（专注中的倒计时） ── */
-.focus-capsule {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 10px 0 8px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--glass-bg);
-  box-shadow: var(--shadow-border);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: var(--transition-hover);
-}
-
-.focus-capsule:hover,
-.focus-capsule[aria-expanded="true"] {
-  /* background-image 叠一层，不覆盖 --glass-bg 底 */
-  background-image: linear-gradient(var(--color-bg-hover), var(--color-bg-hover));
-}
-
-.focus-capsule .ic {
-  color: var(--color-text-secondary);
-}
-
-.focus-capsule-time {
-  font-family: var(--font-family-business);
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.02em;
-}
-
-/* 时间到：不再是数字，回到界面字体 */
-.focus-capsule[data-done] .focus-capsule-time {
-  font-family: var(--font-family-base);
-  letter-spacing: 0;
-}
 
 /* —─ 浮层通用（menu-panel 配方 + fixed 定位由内联 style 给） ── */
 .focus-pop {

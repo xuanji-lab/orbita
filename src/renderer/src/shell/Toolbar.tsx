@@ -46,6 +46,11 @@ export function Toolbar(props: {
   onPanelSlot: (el: HTMLDivElement | null) => void;
   /** 右栏开关的开关（点亮 = 任意面板开着，见 App 的接线） */
   onToggleDrawer: () => void;
+  /**
+   * 专注键 / 倒计时格（FocusControl 的实例，App 注入）：不开专注时不存在时
+   * 退回 planned 占位（显示 + 禁用 + 说明），槽位不塌。
+   */
+  focus?: React.ReactNode;
 }) {
   const t = useT();
   const darwin = props.platform === "darwin";
@@ -104,17 +109,20 @@ export function Toolbar(props: {
             <Icon name="plus" size={16} strokeWidth={2.2} />
           </button>
         </span>
-        {/* 专注模式：先留槽位（planned，显示 + 禁用 + 说明），专注模式的子会话会接上 */}
-        <button
-          type="button"
-          className="quiet-control cap-seg"
-          title={t.toolbar.focusPlanned}
-          aria-label={t.toolbar.focusPlanned}
-          disabled
-          aria-disabled
-        >
-          <Icon name="zap" size={16} strokeWidth={1.9} />
-        </button>
+        {/* 专注模式：专注键 / 倒计时格（App 注入的 FocusControl）；没注入时退回
+            planned 占位，槽位不塌 */}
+        {props.focus ?? (
+          <button
+            type="button"
+            className="quiet-control cap-seg"
+            title={t.toolbar.focusPlanned}
+            aria-label={t.toolbar.focusPlanned}
+            disabled
+            aria-disabled
+          >
+            <Icon name="zap" size={16} strokeWidth={1.9} />
+          </button>
+        )}
       </div>
 
       {/* 会话胶囊 / 设置标题：几何在这里（居中于对话列），内容 App 注入 */}

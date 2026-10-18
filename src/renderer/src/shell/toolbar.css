@@ -83,6 +83,29 @@
   width: var(--titlebar-control);
 }
 
+/* 专注中 / 时间到：zap + 等宽倒计时的一格（宽随文字自适应，点开胶囊浮层）。
+ * 图标与字号照胶囊内件的 token；时间到（data-done）不是数字，回界面字体 */
+.cap-focus-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--titlebar-control);
+  padding: 0 12px 0 10px;
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
+  font-size: var(--font-size-titlebar);
+}
+.cap-focus-run .cap-focus-time {
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+.cap-focus-run[data-done] .cap-focus-time {
+  font-family: var(--font-family-base);
+  letter-spacing: 0;
+}
+
 /* 新任务：accent 圆点（一屏一个 accent 的那一个） */
 .cap-accent {
   display: grid;

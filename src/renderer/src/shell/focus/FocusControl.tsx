@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./focus.css";
 import { Icon } from "../Icon";
-import { RailButton } from "../WindowTools";
 import { placeMenu } from "../menu-position";
 import { useT } from "../../locale";
 import type { Workspace } from "@shared/workspace";
@@ -19,17 +18,18 @@ import {
 import type { FocusStatus } from "./use-focus.ts";
 
 /**
- * 专注键（平时）→ 闪电胶囊（专注中）。
+ * 专注键（平时）→ 闪电 + 倒计时（专注中）。
  *
- * 住两个容器（展开态侧栏顶行 / 收起态页头的窗口工具组），位置都紧跟侧栏开关那组，
- * 与红绿灯的相对位置不随开合变（原型状态 1 / 2）。浮层两块：
+ * 住工具栏左胶囊的第三格（#248 预留的槽位：侧栏开关 · 新任务 · 专注），样式
+ * 沿用胶囊按钮——平时是圆格 cap-seg（选中态走 quiet-control 的蓝色选中配方），
+ * 专注中变成 zap + 等宽倒计时的一格 cap-focus-run，不另起按钮外观。浮层两块：
  * - **开始专注**（点闪电）：滚轮选时长（10–120 分钟，默认 25）+ 选工作区 +
  *   唯一的强调色按钮。Enter 开始，Esc 关。
- * - **胶囊浮层**（点胶囊）：剩余、进度线、+5 / +15、提前结束。没有暂停——
- *   原型待定 9 的默认做法。
+ * - **胶囊浮层**（点倒计时）：剩余、进度线、+5 / +15、提前结束。没有暂停——
+ *   原型待定 9 的默认做法。时间到出口只剩「结束专注」。
  *
- * 浮层 portal 到 body + fixed（侧栏与内容面都是 overflow:hidden，原地渲染会被裁，
- * 同 Menu 的理由）；定位复用 placeMenu（below + start，出屏自己夹回）。
+ * 浮层 portal 到 body + fixed（工具栏与侧栏都是 overflow 裁剪链上的容器，原地
+ * 渲染会被裁，同 Menu 的理由）；定位复用 placeMenu（below + start，出屏自己夹回）。
  */
 export function FocusControl(props: {
   status: FocusStatus;
@@ -309,16 +309,20 @@ export function FocusControl(props: {
   return (
     <span ref={anchorRef} style={{ position: "relative", display: "inline-flex", flex: "0 0 auto" }}>
       {run === null ? (
-        <RailButton
-          icon="zap"
+        <button
+          type="button"
+          className="quiet-control cap-seg"
           title={t.focus.keyTitle}
-          active={pop === "picker"}
+          aria-label={t.focus.keyTitle}
+          aria-pressed={pop === "picker" || undefined}
           onClick={() => setPop((current) => (current === "picker" ? null : "picker"))}
-        />
+        >
+          <Icon name="zap" size={16} strokeWidth={1.9} />
+        </button>
       ) : (
         <button
           type="button"
-          className="focus-capsule"
+          className="quiet-control cap-focus-run"
           data-done={done || undefined}
           aria-expanded={pop === "menu"}
           title={done ? t.focus.timeUp : t.focus.capsuleTitle(wsName(run.workspaceId))}
@@ -327,8 +331,8 @@ export function FocusControl(props: {
             setPop((current) => (current === "menu" ? null : "menu"));
           }}
         >
-          <Icon name="zap" size={13} strokeWidth={2} />
-          <span className="focus-capsule-time">{done ? t.focus.timeUp : formatFocusClock(remain)}</span>
+          <Icon name="zap" size={16} strokeWidth={1.9} />
+          <span className="cap-focus-time">{done ? t.focus.timeUp : formatFocusClock(remain)}</span>
         </button>
       )}
       {panel !== null ? createPortal(panel, document.body) : null}

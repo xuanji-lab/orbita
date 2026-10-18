@@ -26,6 +26,8 @@ import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
+import { FocusControl } from "./shell/focus/FocusControl.tsx";
+import { useFocus } from "./shell/focus/use-focus.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
@@ -192,6 +194,75 @@ export function App() {
   }, []);
 
   const { session, engine } = useChatSession(providers, t);
+
+  // ── 专注模式（原型：focus-proto）──────────────────────────────
+  // 计时住在内存里（用户裁决：关掉重开 = 已结束），App 持有：展开态侧栏顶行与
+  // 收起态页头的窗口工具组共用同一个 FocusControl 实例。
+  const focus = useFocus();
+  /** 浏览态（不计时看一眼工作区文件）；专注开始时退出 */
+  const [wsBrowse, setWsBrowse] = useState<string | null>(null);
+  /** 外部发起的开浮层请求（浏览态的「以此开始专注」）：token 递增，同源连点也重开 */
+  const focusPickerNonceRef = useRef(0);
+  const [focusPickerRequest, setFocusPickerRequest] = useState<{ workspaceId: string; token: number } | null>(null);
+  const openFocusPickerAt = useCallback((workspaceId: string): void => {
+    focusPickerNonceRef.current += 1;
+    setFocusPickerRequest({ workspaceId, token: focusPickerNonceRef.current });
+  }, []);
+  const startFocus = useCallback(
+    (workspaceId: string, minutes: number): void => {
+      setWsBrowse(null);
+      focus.start(workspaceId, minutes);
+    },
+    [focus],
+  );
+  /** 左栏此刻的文件视图：专注中 = 所选工作区；否则看浏览态；都没有 = 会话列表 */
+  const focusFilesView =
+    focus.status.kind === "off"
+      ? wsBrowse === null
+        ? null
+        : { mode: "browse" as const, workspaceId: wsBrowse }
+      : { mode: "focus" as const, workspaceId: focus.status.run.workspaceId };
+  /** 到点那一拍要响的事：提示音（设置可关）、窗口不在前台时发系统通知、收起的
+   * 侧栏展开（星云要在左下角说话——原型待定 10 的默认做法）。依赖只盯 kind：
+   * done 只发生一次，延长不会重响。 */
+  const focusRun = focus.status.kind === "off" ? null : focus.status.run;
+  useEffect(() => {
+    if (focus.status.kind !== "done" || focusRun === null) return;
+    if (settings.completionSound ?? true) playCompletionChime();
+    if (
+      isWindowInactive({
+        hasFocus: document.hasFocus(),
+        visibilityState: document.visibilityState,
+      })
+    ) {
+      const wsName =
+        session.workspaces.find((item) => item.id === focusRun.workspaceId)?.name ?? t.focus.deletedWorkspace;
+      void api.focus.notifyDone({
+        title: t.focus.notifyTitle,
+        body: t.focus.notifyBody(Math.round(focusRun.totalMs / 60_000), wsName),
+      });
+    }
+    setSidebarCollapsed(false);
+    // settle 那拍读到的闭包值就是真值（settings / session / t 都在本渲染里）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus.status.kind]);
+  const focusControl = (
+    <FocusControl
+      status={focus.status}
+      now={focus.now}
+      workspaces={session.workspaces}
+      defaultWorkspaceId={session.workspaceId}
+      preset={focus.lastPreset}
+      pickerRequest={focusPickerRequest}
+      sessionCountOf={(id) =>
+        rootSessions(session.sessions).filter((meta) => meta.workspaceId === id && !meta.archived).length
+      }
+      onStart={startFocus}
+      onExtend={focus.extend}
+      onEnd={focus.end}
+    />
+  );
+
   /**
    * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
    * 再发 nonce 信号让 Sidebar 把 TASKS 组展开（新会话不落进收着的组里）——与侧栏里
@@ -453,6 +524,9 @@ export function App() {
     [engine, session],
   );
   const prevStatesRef = useRef(engine.states);
+  /** 专注中（计时里）：完成提醒静音——记未读、不响铃、不弹卡（用户裁决：专注期间
+   * 其它会话跑完只记帐，专注结束后铃铛照常可见）。done 之后恢复常觃。 */
+  const focusQuiet = focus.status.kind === "run";
   useEffect(() => {
     const prev = prevStatesRef.current;
     prevStatesRef.current = engine.states;
@@ -471,7 +545,7 @@ export function App() {
       const plan = planNotice({
         watched: watchedIds.includes(id),
         windowActive,
-        soundOn: settings.completionSound ?? true,
+        soundOn: focusQuiet ? false : (settings.completionSound ?? true),
       });
       ring ||= plan.sound;
       if (plan.unread) fresh.push(id);
@@ -481,7 +555,8 @@ export function App() {
     const latest = fresh[fresh.length - 1];
     if (latest !== undefined) {
       markUnread(fresh);
-      setNoticeId(latest);
+      // 专注中不弹卡（未读照记，铃铛清单里看得到）；结束后新落定的照常弹
+      if (!focusQuiet) setNoticeId(latest);
     }
     // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -862,6 +937,7 @@ export function App() {
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
           onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
+          focus={focusControl}
         />
         <Sidebar
           session={session}
@@ -885,6 +961,15 @@ export function App() {
           collapsed={sidebarCollapsed}
           onCollapsedChange={setSidebarCollapsed}
           newTaskSignal={newTaskSignal}
+          filesView={focusFilesView}
+          onBrowseWorkspace={(id) => {
+            setOverlay(null);
+            setShowArchived(false);
+            setShowCarryovers(false);
+            setWsBrowse(id);
+          }}
+          onExitBrowse={() => setWsBrowse(null)}
+          onStartFocusHere={openFocusPickerAt}
         />
 
         <main className="pane">
