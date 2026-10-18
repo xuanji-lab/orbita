@@ -221,6 +221,20 @@ export const ipcChannels = {
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
   usageEvent: "usage:event",
+  /** 自动更新：拉当前快照（`UpdaterSnapshot`，载荷形状在 shared/updater.ts）。之后的状态变化走 updaterState 推送 */
+  updaterGet: "updater:get",
+  /** 自动更新：手动检查（启动首查与 4h 定时在 main/updater/service.ts） */
+  updaterCheck: "updater:check",
+  /** 自动更新：用户确认后开始下载（autoDownload=false，库不自己下） */
+  updaterDownload: "updater:download",
+  /** 自动更新：取消正在进行的下载，退回 available */
+  updaterCancel: "updater:cancel",
+  /** 自动更新：退出并安装已下载的更新（quitAndInstall，安装前先收掉 agent utility 进程） */
+  updaterInstall: "updater:install",
+  /** 主进程 → renderer 推送：更新状态每次变化推一份完整快照（`UpdaterSnapshot`） */
+  updaterState: "updater:state",
+  /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
+  updaterRecentReleases: "updater:recentReleases",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
   carryoverCreate: "carryover:create",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */

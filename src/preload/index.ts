@@ -16,6 +16,7 @@ import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
 import { terminalApi } from "./api/terminal.ts";
 import { usageApi } from "./api/usage.ts";
+import { updaterApi } from "./api/updater.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { windowApi } from "./api/window.ts";
@@ -37,6 +38,7 @@ const api = {
   files: filesApi,
   terminal: terminalApi,
   usage: usageApi,
+  updater: updaterApi,
   import: importApi,
   intent: intentApi,
   browser: browserApi,

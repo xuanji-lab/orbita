@@ -73,6 +73,7 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  rollupLead,
   turnAssistantRecords,
   turnStats,
   writeLineCount,
@@ -2824,6 +2825,10 @@ function TurnRollupLine(props: {
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
   const segments: ReactNode[] = [];
+  // 加粗开头：有时长是「用时」，量不到时由第一段统计顶上（rollupLead）。顶上来的那段
+  // 首字母大写（英文 thought / tools 本是小写的统计词；中文不受影响）
+  const lead = rollupLead(stats);
+  const leadStyle: React.CSSProperties = { ...headLabel(false), textTransform: "capitalize" };
   if (stats.durationMs !== null) {
     segments.push(
       <span style={headLabel(false)}>
@@ -2833,13 +2838,13 @@ function TurnRollupLine(props: {
   }
   if (stats.thinkingCount > 0) {
     segments.push(
-      <span style={SLOT.status}>
+      <span style={lead === "thinking" ? leadStyle : SLOT.status}>
         {t.chat.thought} {stats.thinkingCount}
       </span>,
     );
   }
   if (stats.calls > 0) {
-    segments.push(<span style={SLOT.status}>{t.chat.tools(stats.calls)}</span>);
+    segments.push(<span style={lead === "tools" ? leadStyle : SLOT.status}>{t.chat.tools(stats.calls)}</span>);
   }  for (const { toolName, count, failed } of stats.byTool) {
     segments.push(
       <span style={SLOT.status}>

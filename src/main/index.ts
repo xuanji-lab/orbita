@@ -34,6 +34,10 @@ import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { UsageLedger } from "./usage/ledger.ts";
 import { registerUsageIpc } from "./usage/ipc.ts";
+import { Updater } from "./updater/service.ts";
+import { registerUpdaterIpc } from "./updater/ipc.ts";
+import { createRecentReleases } from "./updater/recent-releases.ts";
+import { CURRENT_NOTES_FILE } from "./updater/current-notes.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -643,6 +647,27 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
+
+  /*
+   * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包产物才接线，
+   * 启动 10s 后首查 + 每 4h 一次 + 设置页的手动检查；autoDownload=false，下载与安装都由
+   * 用户那一下触发。beforeInstall 注入 agentHost.dispose——安装程序要替换应用文件，
+   * agent utility 进程是同一个 electron.exe，压着文件会让 NSIS 静默安装失败；
+   * 下面的 before-quit 里还有同一条 dispose，重入幂等。
+   *
+   * currentNotesFile 是「本版更新内容」（装完之后还能看的说明书）：下载完成时写、启动时读
+   * （dev 下也读，见 main/updater/current-notes.ts）。
+   */
+  const updater = new Updater({
+    packaged: app.isPackaged,
+    version: app.getVersion(),
+    currentNotesFile: join(app.getPath("userData"), CURRENT_NOTES_FILE),
+    beforeInstall: () => agentHost.dispose(),
+  });
+  // 「所有版本」展开体的最近版本列表：纯网络请求 + 内存缓存（10 分钟），
+  // 与更新器接不接线无关——dev 下也照常能用（见 main/updater/recent-releases.ts）
+  registerUpdaterIpc(updater, createRecentReleases());
+  updater.start();
 
   app.on("before-quit", () => {
     appTray?.beginQuit();
