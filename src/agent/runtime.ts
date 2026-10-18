@@ -916,8 +916,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
                 // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
                 describeDirectories(command.cwd, command.directories),
-                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
-                describeChannelRole(role),
+                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段。
+                // 2026-10-18 起 root 还按当前档位带「派发前对齐」（三档都有）与
+                // 「确认后自主跑验收闭环」（仅 skip）两段——档位从账本现读，中途切档
+                // 下一个 LLM 调用就重讲；可选模型清单随开轮命令固定，加了模型下一轮生效。
+                describeChannelRole(
+                  role,
+                  currentMode(),
+                  "availableModels" in command ? command.availableModels ?? [] : [],
+                ),
                 // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
                 // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
                 storeToolsGuideline(

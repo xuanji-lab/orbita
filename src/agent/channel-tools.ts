@@ -2,7 +2,10 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome } from "../shared/agent-ipc.ts";
+import type { AvailableModel } from "../shared/available-models.ts";
+import type { PermissionMode } from "../shared/permission.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
+import { AUTO_VERIFICATION_GUIDELINE, delegationAlignmentGuideline } from "./delegation-prompt.ts";
 
 /**
  * 子会话的三个通道工具（子会话 2026-09-23）：delegate / reply_subsession /
@@ -270,7 +273,21 @@ the output is. If you cannot complete the task, send failed with the reason. The
 as <channel from="parent" kind="reply"> blocks, possibly mid-task — adjust accordingly.
 </orbita-sub-sessions>`;
 
-/** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */
-export function describeChannelRole(role: "root" | "child"): string {
-  return role === "root" ? ROOT_CHANNEL_GUIDELINES : CHILD_CHANNEL_GUIDELINES;
+/**
+ * 按角色、当前档位与可选模型清单拼出通道使用说明。
+ *
+ * root 最多三段（顺序就是阅读顺序）：通道工具怎么用 → 派发前对齐（**任何档位都有**）
+ * → 确认后自主跑验收闭环（**仅 skip 档**，放行档的承诺）。child 恒为一段——它不能再
+ * 派子会话，给它讲怎么验收只会诱导它调不存在的工具。档位从账本现读、清单随开轮命令，
+ * 两者逐轮重讲：中途切档下一个 LLM 调用就生效，加了模型下一轮生效。
+ */
+export function describeChannelRole(
+  role: "root" | "child",
+  mode: PermissionMode,
+  availableModels: readonly AvailableModel[],
+): string {
+  if (role === "child") return CHILD_CHANNEL_GUIDELINES;
+  const sections = [ROOT_CHANNEL_GUIDELINES, delegationAlignmentGuideline(mode, availableModels)];
+  if (mode === "skip") sections.push(AUTO_VERIFICATION_GUIDELINE);
+  return sections.join("\n\n");
 }

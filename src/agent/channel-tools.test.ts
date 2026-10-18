@@ -317,14 +317,14 @@ describe("report_to_parent", () => {
 
 describe("describeChannelRole", () => {
   test("root：含 delegate / reply_subsession，不含 report_to_parent", () => {
-    const text = describeChannelRole("root");
+    const text = describeChannelRole("root", "skip", []);
     assert.match(text, /delegate/);
     assert.match(text, /reply_subsession/);
     assert.doesNotMatch(text, /report_to_parent/);
   });
 
   test("child：含 report_to_parent，不含 delegate", () => {
-    const text = describeChannelRole("child");
+    const text = describeChannelRole("child", "skip", []);
     assert.match(text, /report_to_parent/);
     assert.doesNotMatch(text, /\bdelegate\b/);
   });
