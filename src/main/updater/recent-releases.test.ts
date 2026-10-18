@@ -20,6 +20,7 @@ const ENTRY = {
   name: "0.1.15",
   published_at: "2026-10-18T05:00:00Z",
   html_url: "https://github.com/xuanji-lab/orbita/releases/tag/v0.1.15",
+  body: "[icon:download] Windows 自动更新：后台检查，确认后才下载。\n修了几个窄窗口下的对齐问题。",
 };
 
 /** 记录请求地址、按给定载荷作答的 fetch 替身 */
@@ -34,7 +35,7 @@ function stubFetch(calls: string[], payload: unknown, status = 200): typeof fetc
 }
 
 describe("parseRecentReleases —— GitHub releases 载荷 → 界面条目", () => {
-  test("正常：tag 去 v 成版本号，标题 / 日期 / 链接原样带出", () => {
+  test("正常：tag 去 v 成版本号，标题 / 日期 / 链接 / 逐条说明都带出", () => {
     const parsed = parseRecentReleases([ENTRY]);
     assert.deepEqual(parsed, [
       {
@@ -43,8 +44,30 @@ describe("parseRecentReleases —— GitHub releases 载荷 → 界面条目", (
         title: "0.1.15",
         publishedAt: "2026-10-18T05:00:00Z",
         htmlUrl: "https://github.com/xuanji-lab/orbita/releases/tag/v0.1.15",
+        notes: [
+          { icon: "download", text: "Windows 自动更新：后台检查，确认后才下载。" },
+          { icon: null, text: "修了几个窄窗口下的对齐问题。" },
+        ],
       },
     ]);
+  });
+
+  test("正文带 [icon:名字] 前缀的条目：图标与正文分开", () => {
+    const parsed = parseRecentReleases([{ ...ENTRY, body: "[icon:square-terminal] 终端面板重绘更快。" }]);
+    assert.deepEqual(parsed?.[0]?.notes, [{ icon: "square-terminal", text: "终端面板重绘更快。" }]);
+  });
+
+  test("正文没有前缀的行：图标为 null，正文原样", () => {
+    const parsed = parseRecentReleases([{ ...ENTRY, body: "修了几个窄窗口下的对齐问题。" }]);
+    assert.deepEqual(parsed?.[0]?.notes, [{ icon: null, text: "修了几个窄窗口下的对齐问题。" }]);
+  });
+
+  test("正文为空（没写 / 只有空行）：notes 是 null——那一行不画三角，但仍在列表里", () => {
+    assert.equal(parseRecentReleases([{ ...ENTRY, body: "" }])?.[0]?.notes, null);
+    assert.equal(parseRecentReleases([{ ...ENTRY, body: "\n\n  \n" }])?.[0]?.notes, null);
+    assert.equal(parseRecentReleases([{ ...ENTRY, body: undefined }])?.[0]?.notes, null);
+    // 行本身还在（版本号 / 日期 / 外链照常画）
+    assert.equal(parseRecentReleases([{ ...ENTRY, body: "" }])?.[0]?.version, "0.1.15");
   });
 
   test("没有标题的 Release 回落到 tag；tag 没有 v 前缀时版本号原样", () => {

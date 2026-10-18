@@ -10,12 +10,16 @@
  * 三条取舍：
  * - **解析是纯函数**（parseRecentReleases）：字段缺失 / 形状不对的条目**整条丢掉**。
  *   半个版本条目画出来比少一条更糟——它挂着一条点开 404 的链接。
+ * - **正文也在这里解析**（`body` → `notes`，复用 notes.ts 的同一套发布约定）：列表里每
+ *   一行自己是一条 disclosure，展开就地看那一版带来了什么；解不出条目就是 `notes: null`，
+ *   界面据此不画三角（不是丢掉这一行——版本号与日期还是要列出来）。
  * - **只缓存成功**，10 分钟。失败不缓存，用户点「重试」是真的再打一次；成功则点开 /
  *   收起来回点不打 API。内测期发布节奏远慢于 10 分钟，够用。
  * - **失败是数据**（RecentReleasesResult）：离线 / 限流 / 非 200 都由界面在展开体里
  *   说一句人话并给重试，不让 invoke reject（见 shared/updater.ts 的取舍说明）。
  */
 import type { RecentRelease, RecentReleasesResult } from "../../shared/updater.ts";
+import { parseReleaseNotes } from "./notes.ts";
 import { releasesApiUrl } from "./releases-url.ts";
 
 /** 展开体一屏够看，别把发布史整本拉下来 */
@@ -58,6 +62,8 @@ export function parseRecentReleases(payload: unknown): readonly RecentRelease[] 
       title: text(record.name) ?? tag,
       publishedAt,
       htmlUrl,
+      // 正文按发布约定逐条解析（与 update-downloaded 同一条路）；没正文 / 解不出条目是 null
+      notes: parseReleaseNotes(text(record.body)),
     });
   }
   return releases;
