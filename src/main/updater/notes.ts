@@ -7,10 +7,15 @@
  * 新功能发布时选当时那个功能的图标——图标只是条目符号，不是每种变更的封闭分类表。
  * 用 markdown 列表写也行：行首的 `-` / `*` / `·` 记号会被剥掉再看前缀。
  *
- * 为什么要在边界上转一次：GitHub provider 的 releaseNotes 取自 Release atom feed 的
- * `<content>`，也就是**发布正文的 HTML**（我们自己的 Release 正文是一整份功能总览，
- * 而不是几行 changelog）。在设置页那一行里渲染 HTML，要么引一条 sanitize 管线、要么把
- * 「更新」这一行变成文档阅读器；回答「这次更新带来了什么」，逐行文本够了。
+ * **软件里的说明与 GitHub Release 页分开写**（2026-10-18 用户：「release page 粘贴归粘贴，
+ * 软件里的还是更人性化更通俗易懂一些的」——软件里是普通用户，Release 页是专业用户）：
+ * - 软件里：打包时从 package.json 的 `build.releaseInfo.releaseNotes` 写进 `latest.yml` 的几行
+ *   纯文本（electron-builder 的 updateInfoBuilder）。更新器优先读它（GitHubProvider：yml 里
+ *   有 releaseNotes 就不碰 feed），「历史版本」也去下载每一版的 latest.yml 读它；
+ * - Release 页正文：随便写的完整文档，**不进软件**。latest.yml 里没写说明时，electron-updater
+ *   会退回去拿 Release 页 atom feed 的 HTML（fullChangelog 时是数组）——appNotesOf 看到 HTML
+ *   或数组一律当没有说明，宁可不显示也不把整篇文档塞进设置页。
+ * 下面仍能剥 HTML 标签与实体，是防御：纯文本里偶尔出现的实体照样解开。
  *
  * 处理顺序：块级标签断行 → 剥掉剩下的标签 → 解实体 → 去空行 → 拆条目（前缀 + 图标名）。
  * **先剥标签再解实体**是有意的：解出来的 `&lt;` 是正文文本，不该再被当成标签；
@@ -78,4 +83,18 @@ export function parseReleaseNotes(raw: string | null | undefined): UpdateNote[] 
     notes.push({ icon, text: clipped });
   }
   return notes.length === 0 ? null : notes;
+}
+
+/** 一个 HTML 标签：出现它就说明这份说明来自 Release 页的 feed，不是 latest.yml 里的纯文本 */
+const HTML_TAG_RE = /<\/?[a-z][^>]*>/i;
+
+/**
+ * `UpdateInfo.releaseNotes`（字段原样传进来）→ 软件里显示的条目。**只认 latest.yml 里的纯文本**：
+ * 不是字符串（没写 / fullChangelog 数组）或带 HTML 标签（electron-updater 退回去拿了 Release 页
+ * 正文）都返回 null——那份是给专业用户的完整文档，不进软件（见文件头）。
+ * 更新器（service.ts）与「历史版本」（recent-releases.ts）共用这一个口子。
+ */
+export function appNotesOf(releaseNotes: unknown): UpdateNote[] | null {
+  if (typeof releaseNotes !== "string" || HTML_TAG_RE.test(releaseNotes)) return null;
+  return parseReleaseNotes(releaseNotes);
 }
