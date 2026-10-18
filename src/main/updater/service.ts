@@ -1,7 +1,8 @@
 /**
  * 自动更新（electron-updater + GitHub Releases）。
  *
- * **门控**：只有打包产物才接线（`packaged`）——dev 实例没有任何可更新的安装，检查只会
+ * **门控**：只有打包好的 Windows 应用才接线（`updateSupport`，见 state.ts；macOS 包未签名公证、
+ * 装不上，本版不接）——dev 实例没有任何可更新的安装，检查只会
  * 往日志里灌网络错误。feed 地址不写在这里：`package.json` 的 `build.publish` 在打包时
  * 烘焙进 `resources/app-update.yml`，库自己去读。
  *
@@ -17,11 +18,18 @@
  */
 import { CancellationToken, autoUpdater } from "electron-updater";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
-import type { UpdateNote, UpdaterSnapshot, UpdateRelease, UpdateStage, UpdateState } from "../../shared/updater.ts";
+import type {
+  UpdateNote,
+  UpdaterSnapshot,
+  UpdateRelease,
+  UpdateStage,
+  UpdateState,
+  UpdateSupport,
+} from "../../shared/updater.ts";
 import { readCurrentNotes, saveCurrentNotes } from "./current-notes.ts";
 import { parseReleaseNotes } from "./notes.ts";
 import { releasesUrl } from "./releases-url.ts";
-import { reduceUpdater, type UpdaterAction } from "./state.ts";
+import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
 
 /** 启动后延迟首查：错开启动时那一串磁盘 / 网络活动，别和界面首帧抢 */
 const FIRST_CHECK_DELAY_MS = 10_000;
@@ -29,8 +37,10 @@ const FIRST_CHECK_DELAY_MS = 10_000;
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 export interface UpdaterOptions {
-  /** 只有打包产物才做更新（dev 下 supported=false，界面据此置灰） */
+  /** 是否打包产物（app.isPackaged）；与 platform 一起决定能不能更新（见 state.ts 的 updateSupport） */
   packaged: boolean;
+  /** process.platform：本版只有 Windows 接线，macOS 说清楚「暂不支持」 */
+  platform: string;
   /** 当前应用版本（app.getVersion()），界面「当前版本」那一行用它 */
   version: string;
   /** 「本版更新内容」落在哪里（userData 下的一个 JSON，见 current-notes.ts） */
@@ -63,7 +73,8 @@ function stageLabel(stage: UpdateStage): string {
 }
 
 export class Updater {
-  private readonly packaged: boolean;
+  /** 能不能更新；不是 supported 时检查 / 下载 / 安装一律不做 */
+  private readonly support: UpdateSupport;
   private readonly version: string;
   private readonly currentNotesFile: string;
   private readonly beforeInstall: () => void;
@@ -88,7 +99,7 @@ export class Updater {
   private cancelHandled = false;
 
   constructor(options: UpdaterOptions) {
-    this.packaged = options.packaged;
+    this.support = updateSupport(options.packaged, options.platform);
     this.version = options.version;
     this.currentNotesFile = options.currentNotesFile;
     this.beforeInstall = options.beforeInstall;
@@ -98,7 +109,7 @@ export class Updater {
   snapshot(): UpdaterSnapshot {
     return {
       currentVersion: this.version,
-      supported: this.packaged,
+      support: this.support,
       state: this.state,
       currentNotes: this.currentNotes,
       releasesUrl: releasesUrl(),
@@ -115,8 +126,12 @@ export class Updater {
     // 「本版更新内容」在 dev 下也读：它说的是磁盘上的事实（这一版带来了什么），与要不要
     // 接线更新无关——接不了更新的实例同样能看它，验收也靠这条（见 current-notes.ts）
     void this.loadCurrentNotes();
-    if (!this.packaged) {
-      console.info("[更新] 未打包的实例不接线自动更新（只有安装好的应用才能更新自己）");
+    if (this.support !== "supported") {
+      console.info(
+        this.support === "unpackaged"
+          ? "[更新] 未打包的实例不接线自动更新（只有安装好的应用才能更新自己）"
+          : "[更新] 本平台暂不接线自动更新（macOS 包未签名公证，装不上；新版本请到 GitHub 下载）",
+      );
       return;
     }
     autoUpdater.logger = {
@@ -168,7 +183,7 @@ export class Updater {
    * 两条都翻译成同一个 action，状态机自己去重（同一条错误不换对象、不重复广播）。
    */
   async check(): Promise<void> {
-    if (!this.packaged) return;
+    if (this.support !== "supported") return;
     try {
       await autoUpdater.checkForUpdates();
     } catch (error) {
@@ -181,7 +196,7 @@ export class Updater {
    * 也堵住「下载已经排上、界面还能再点一次」的那个窗口。
    */
   async download(): Promise<void> {
-    if (!this.packaged || this.state.kind !== "available") return;
+    if (this.support !== "supported" || this.state.kind !== "available") return;
     const version = this.state.release.version;
     this.apply({ type: "download-started" });
     this.activeDownload = version;
@@ -216,7 +231,7 @@ export class Updater {
    * 会随进程一起停掉（等空闲再装是后续单独立的项）。
    */
   install(): void {
-    if (!this.packaged || this.state.kind !== "downloaded") return;
+    if (this.support !== "supported" || this.state.kind !== "downloaded") return;
     this.installing = true;
     // 先收掉 agent utility 进程，再让安装程序动手：NSIS 会等父进程退出后才替换文件
     this.beforeInstall();

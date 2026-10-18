@@ -60,7 +60,7 @@ export function UpdateCard() {
 
   const currentVersion = snapshot?.currentVersion ?? "";
   // 快照还没到（或桥不在）时不猜：入口置灰、版本号留空，等真值到了再画
-  const supported = snapshot?.supported === true;
+  const supported = snapshot?.support === "supported";
   const state: UpdateState = snapshot?.state ?? { kind: "idle" };
   /** 已装上的这一版的说明（装完重启后从 userData 读回的那份）；没有就不画这行展开器 */
   const currentNotes = snapshot?.currentNotes ?? null;
@@ -88,7 +88,8 @@ export function UpdateCard() {
   };
 
   if (!supported) {
-    statusText = x.unsupported;
+    // 原因不同说的话不同：dev 下是「装好的应用才行」，macOS 包是「这个平台暂不支持，去 GitHub 下载」
+    statusText = snapshot?.support === "platform" ? x.unsupportedPlatform : x.unsupported;
   } else if (state.kind === "idle") {
     // 出厂形态：只说「后台会自己查」，主操作是手动查一次
     action = { label: x.checkNow, icon: "refresh-cw", accent: false, onClick: () => void api.updater.check() };

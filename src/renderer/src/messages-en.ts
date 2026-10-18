@@ -564,6 +564,7 @@ export const en = {
       installFailed: "Couldn't start the installer. Try restarting the app.",
       retry: "Retry",
       unsupported: "Software updates are only available in the installed app.",
+      unsupportedPlatform: "Automatic updates aren't available on macOS yet. Download new versions from GitHub under Version history below.",
       history: "Version history",
       viewAllOnGitHub: "View all versions on GitHub",
       recentLoading: "Loading…",

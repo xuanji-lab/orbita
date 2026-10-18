@@ -649,7 +649,8 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps);
 
   /*
-   * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包产物才接线，
+   * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包好的 Windows 应用才接线
+   * （macOS 包未签名公证、装不上，界面说「暂不支持」），
    * 启动 10s 后首查 + 每 4h 一次 + 设置页的手动检查；autoDownload=false，下载与安装都由
    * 用户那一下触发。beforeInstall 注入 agentHost.dispose——安装程序要替换应用文件，
    * agent utility 进程是同一个 electron.exe，压着文件会让 NSIS 静默安装失败；
@@ -660,6 +661,7 @@ void app.whenReady().then(async () => {
    */
   const updater = new Updater({
     packaged: app.isPackaged,
+    platform: process.platform,
     version: app.getVersion(),
     currentNotesFile: join(app.getPath("userData"), CURRENT_NOTES_FILE),
     beforeInstall: () => agentHost.dispose(),
