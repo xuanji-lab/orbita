@@ -600,6 +600,22 @@ export interface TurnStats {
 }
 
 /**
+ * 折叠行的加粗开头由哪一段担任。有时长时是「用时 X」；量不到时长（durationMs 为
+ * null，见 segmentSpan 的诚实未知）时，由第一段统计顶上——思考数，没有思考就是
+ * 工具数。否则行首只剩一串 tertiary 等宽小字，看着不像一行可以点开的折叠
+ * （2026-10-18 真机验收：「thought 1」「tools 1 · bash 1」两种行单独看都发虚）。
+ * 一段统计都没有时返回 null（成员只有通道 / 钉住之外的空段，正常不会出现）。
+ */
+export type RollupLead = "duration" | "thinking" | "tools" | null;
+
+export function rollupLead(stats: Pick<TurnStats, "durationMs" | "thinkingCount" | "calls">): RollupLead {
+  if (stats.durationMs !== null) return "duration";
+  if (stats.thinkingCount > 0) return "thinking";
+  if (stats.calls > 0) return "tools";
+  return null;
+}
+
+/**
  * 折叠统计行的「统计词汇」（2026-09-27 裁决）：read SKILL.md 记作 skill、mcp__ 名
  * 记作 mcp——按「家族」计数，不逐 server/tool 展开名字（多台 server 会撑爆一行）。
  * TurnToolStat.toolName 装的是它，不总是真实工具名。

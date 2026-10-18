@@ -11,6 +11,7 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  rollupLead,
   thinkingDurationText,
   turnStats,
   type TurnGroupUnit,
@@ -576,5 +577,21 @@ describe("failedFoldKey —— 回合级失败的图标只在失败轮里找折�
 
   test("空视图 null", () => {
     assert.equal(failedFoldKey([]), null);
+  });
+});
+
+describe("rollupLead —— 折叠行的加粗开头由哪一段担任", () => {
+  test("量得到时长：开头是「用时」", () => {
+    assert.equal(rollupLead({ durationMs: 7100, thinkingCount: 1, calls: 1 }), "duration");
+  });
+  test("量不到时长、有思考：思考数顶上（「thought 1」那种单独思考段）", () => {
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 1, calls: 0 }), "thinking");
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 2, calls: 3 }), "thinking");
+  });
+  test("量不到时长、只有工具：工具数顶上（「tools 1 · bash 1」那种即时工具段）", () => {
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 0, calls: 1 }), "tools");
+  });
+  test("什么统计都没有：没有开头", () => {
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 0, calls: 0 }), null);
   });
 });
