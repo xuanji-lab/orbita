@@ -87,7 +87,7 @@ export function UpdateCard() {
   };
 
   if (!supported) {
-    // 原因不同说的话不同：dev 下是「装好的应用才行」，macOS 包是「这个平台暂不支持，去 GitHub 下载」
+    // 原因不同说的话不同：dev 下是「装好的应用才行」，非 Windows 的包是「本平台暂不支持，去 GitHub 下载」
     statusText = snapshot?.support === "platform" ? x.unsupportedPlatform : x.unsupported;
   } else if (state.kind === "idle") {
     // 出厂形态：只说「后台会自己查」，主操作是手动查一次

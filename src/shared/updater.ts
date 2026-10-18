@@ -24,7 +24,8 @@
  * 自动更新在这个实例上可不可用，以及不可用的原因（界面按原因出不同的话）：
  * - `supported`：打包好的 Windows 应用，正常检查 / 下载 / 安装
  * - `unpackaged`：未打包（dev / 从源码跑），没有可更新的安装
- * - `platform`：打包了但本平台暂不支持（macOS，见上），新版本要用户自己去下载
+ * - `platform`：打包了但本平台暂不支持（不是 Windows；当前会产出的这类包只有 macOS，见上），
+ *   新版本要用户自己去下载
  */
 export type UpdateSupport = "supported" | "unpackaged" | "platform";
 

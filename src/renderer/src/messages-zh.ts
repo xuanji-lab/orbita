@@ -496,7 +496,6 @@ export const zh: Messages = {
     update: {
       group: "软件更新",
       currentVersion: "当前版本",
-      currentNotes: "本版更新内容",
       currentNotesMissing: "这一版没有更新说明。",
       viewOnGitHub: "在 GitHub 上查看本版",
       updates: "更新",
@@ -519,7 +518,7 @@ export const zh: Messages = {
       installFailed: "安装程序没有启动，请重启应用再试。",
       retry: "重试",
       unsupported: "只有安装好的应用才能自动更新。",
-      unsupportedPlatform: "macOS 暂不支持自动更新，新版本请在下方「历史版本」里打开 GitHub 下载。",
+      unsupportedPlatform: "当前平台暂不支持自动更新，新版本请在下方「历史版本」里打开 GitHub 下载。",
       history: "历史版本",
       viewAllOnGitHub: "在 GitHub 上查看全部版本",
       recentLoading: "正在获取…",
