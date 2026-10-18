@@ -91,8 +91,9 @@
   background: var(--color-border-subtle);
 }
 
-/* 「更新内容」展开器：文字键，不是按钮形状——hover 只提亮字色 */
-.upd-notes-toggle {
+/* 安静的文字键（「更新内容」展开器、「查看说明」「在 GitHub 上打开」两个 Release 入口）：
+   文字形状，不是按钮形状——hover 只提亮字色。三处形状相同，共用一个类 */
+.upd-link {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -106,12 +107,17 @@
   transition: var(--transition-hover);
 }
 
-.upd-notes-toggle:hover {
+/* 链接版（<a>）：发丝线只留给 hover，静止态与展开器同脸 */
+a.upd-link {
+  text-decoration: none;
+}
+
+.upd-link:hover {
   color: var(--color-text-primary);
 }
 
 /* 展开后箭头翻过来，方向由 aria-expanded 决定（状态归 CSS） */
-.upd-notes-toggle[aria-expanded="true"] .orbita-icon {
+.upd-link[aria-expanded="true"] .orbita-icon {
   transform: rotate(180deg);
 }
 

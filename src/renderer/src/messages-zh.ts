@@ -496,6 +496,8 @@ export const zh: Messages = {
     update: {
       group: "软件更新",
       currentVersion: "当前版本",
+      currentNotes: "本版更新内容",
+      viewNotes: "查看说明",
       updates: "更新",
       idleHint: "后台自动检查更新。",
       checkNow: "检查更新",
@@ -516,6 +518,8 @@ export const zh: Messages = {
       installFailed: "安装程序没有启动，请重启应用再试。",
       retry: "重试",
       unsupported: "只有安装好的应用才能自动更新。",
+      allVersions: "所有版本",
+      openOnGitHub: "在 GitHub 上打开",
     },
     unavailable: "不可用",
     openDataDirectory: "打开数据目录",

@@ -542,6 +542,8 @@ export const en = {
     update: {
       group: "Software update",
       currentVersion: "Current version",
+      currentNotes: "What's in this version",
+      viewNotes: "Release notes",
       updates: "Updates",
       idleHint: "Checked automatically in the background.",
       checkNow: "Check now",
@@ -562,6 +564,8 @@ export const en = {
       installFailed: "Couldn't start the installer. Try restarting the app.",
       retry: "Retry",
       unsupported: "Software updates are only available in the installed app.",
+      allVersions: "All versions",
+      openOnGitHub: "Open on GitHub",
     },
     unavailable: "Unavailable",
     openDataDirectory: "Open the data directory",

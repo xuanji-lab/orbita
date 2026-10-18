@@ -13,6 +13,7 @@ import { zh } from "./messages-zh.ts";
 const ALLOWED_LATIN = new Set([
   // 品牌
   "orbita",
+  "GitHub",
   // 协议 / 格式 / 技术名
   "MCP",
   "Git",

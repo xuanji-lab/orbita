@@ -36,6 +36,7 @@ import { UsageLedger } from "./usage/ledger.ts";
 import { registerUsageIpc } from "./usage/ipc.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
+import { CURRENT_NOTES_FILE } from "./updater/current-notes.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -652,10 +653,14 @@ void app.whenReady().then(async () => {
    * 用户那一下触发。beforeInstall 注入 agentHost.dispose——安装程序要替换应用文件，
    * agent utility 进程是同一个 electron.exe，压着文件会让 NSIS 静默安装失败；
    * 下面的 before-quit 里还有同一条 dispose，重入幂等。
+   *
+   * currentNotesFile 是「本版更新内容」（装完之后还能看的说明书）：下载完成时写、启动时读
+   * （dev 下也读，见 main/updater/current-notes.ts）。
    */
   const updater = new Updater({
     packaged: app.isPackaged,
     version: app.getVersion(),
+    currentNotesFile: join(app.getPath("userData"), CURRENT_NOTES_FILE),
     beforeInstall: () => agentHost.dispose(),
   });
   registerUpdaterIpc(updater);

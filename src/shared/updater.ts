@@ -80,4 +80,31 @@ export interface UpdaterSnapshot {
   /** false = 未打包（dev / 从源码跑）：不检查也不下载，界面把入口说清楚并置灰 */
   supported: boolean;
   state: UpdateState;
+  /**
+   * **已装上的这一版**的更新说明——装完之后才有的那一份。更新源只会给「新版本」的说明，
+   * 版本装上以后用户再想问「我现在这版带来了什么」就没有出处了；所以下载完成时把那一版的
+   * 说明留在 userData 上（写字的地方见 main/updater/service.ts 的 update-downloaded），
+   * 下次启动版本号对得上就放进快照。没有（没存过 / 存的不是这一版 / 文件坏了）是 null，
+   * 界面据此不画「本版更新内容」。
+   */
+  currentNotes: readonly UpdateNote[] | null;
+  /**
+   * Release 页基址（`https://github.com/<owner>/<repo>/releases`）。**owner/repo 只有一份
+   * 真源**：主进程从 package.json 的 `build.publish` 取（main/updater/releases-url.ts）——
+   * 打包时写进 app-update.yml 的也是它。界面上的「查看说明」「所有版本」两个入口都由这个
+   * 基址拼出来，不再硬编码第二份仓址。publish 里没有 owner/repo 时是 null：没有出处就不画
+   * 链接，也不拿一个兜底地址冒充。
+   */
+  releasesUrl: string | null;
+}
+
+/**
+ * 某一版的 Release 页地址（界面的「查看说明」打开它）。**发布约定**：tag 是 `v<版本号>`。
+ *
+ * 版本号还没到（快照未到，currentVersion 是空串）时返回 null——拼不出地址就不渲染入口，
+ * 而不是把用户送到 `/tag/v` 上。
+ */
+export function releaseTagUrl(releasesUrl: string, version: string): string | null {
+  if (version === "") return null;
+  return `${releasesUrl}/tag/v${version}`;
 }

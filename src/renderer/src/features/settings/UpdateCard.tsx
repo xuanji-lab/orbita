@@ -1,6 +1,7 @@
 import "./update-view.css";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { releaseTagUrl } from "@shared/updater";
 import type { UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
 import { Icon, isIconName, type IconName } from "../../shell/Icon";
@@ -17,6 +18,10 @@ import { formatBytes, progressAmount, progressPercent } from "./update-format.ts
  *
  * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
  * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
+ *
+ * 「当前版本」那一行的尾部是版本号，它下面接着两个安静的入口：这一版的说明（GitHub Release）
+ * 与全部版本。两个地址都由快照里的 `releasesUrl` 拼（owner/repo 的真源在 package.json 的
+ * build.publish），不在界面里再写一份仓址。
  */
 export function UpdateCard() {
   const t = useT();
@@ -24,6 +29,8 @@ export function UpdateCard() {
   const [snapshot, setSnapshot] = useState<UpdaterSnapshot | null>(null);
   /** 「更新内容」默认收着：一行状态是默认形态，细节想看了再展开 */
   const [notesOpen, setNotesOpen] = useState(false);
+  /** 「本版更新内容」同样默认收着（两个展开器各管各的：一个是待装的，一个是已装的） */
+  const [currentOpen, setCurrentOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +51,11 @@ export function UpdateCard() {
   // 快照还没到（或桥不在）时不猜：入口置灰、版本号留空，等真值到了再画
   const supported = snapshot?.supported === true;
   const state: UpdateState = snapshot?.state ?? { kind: "idle" };
+  /** 已装上的这一版的说明（装完重启后从 userData 读回的那份）；没有就不画这行展开器 */
+  const currentNotes = snapshot?.currentNotes ?? null;
+  /** Release 页基址；拿不到（publish 没写 owner/repo）就连两个入口一起不画 */
+  const releasesUrl = snapshot?.releasesUrl ?? null;
+  const tagUrl = releasesUrl === null ? null : releaseTagUrl(releasesUrl, currentVersion);
 
   /** 状态行：图标 + 文字。tone 只有「出错」一档——成功不染色，图标与文字已经是状态 */
   let statusIcon: IconName | null = null;
@@ -143,10 +155,27 @@ export function UpdateCard() {
 
   return (
     <SettingGroup label={x.group}>
-      <SettingRow name={x.currentVersion}>
+      <SettingRow
+        name={x.currentVersion}
+        note={
+          currentNotes === null ? undefined : (
+            <button
+              type="button"
+              className="upd-link"
+              aria-expanded={currentOpen}
+              onClick={() => setCurrentOpen(!currentOpen)}
+            >
+              <Icon name="chevron-down" size={12} />
+              {x.currentNotes}
+            </button>
+          )
+        }
+        below={currentNotes !== null && currentOpen ? <ReleaseNotes notes={currentNotes} /> : undefined}
+      >
         <span className="upd-status">
           <Mono>{currentVersion}</Mono>
         </span>
+        {tagUrl !== null && <ReleaseLink url={tagUrl}>{x.viewNotes}</ReleaseLink>}
       </SettingRow>
       <SettingRow
         name={x.updates}
@@ -166,7 +195,7 @@ export function UpdateCard() {
             {notes !== null && (
               <button
                 type="button"
-                className="upd-notes-toggle"
+                className="upd-link"
                 aria-expanded={notesOpen}
                 onClick={() => setNotesOpen(!notesOpen)}
               >
@@ -188,7 +217,35 @@ export function UpdateCard() {
           {action.label}
         </button>
       </SettingRow>
+      {releasesUrl !== null && (
+        <SettingRow name={x.allVersions}>
+          <ReleaseLink url={releasesUrl}>{x.openOnGitHub}</ReleaseLink>
+        </SettingRow>
+      )}
     </SettingGroup>
+  );
+}
+
+/**
+ * Release 页的入口（「查看说明」「在 GitHub 上打开」两个人的形状）。
+ *
+ * **外链照仓里现成的走法**：`<a href>` + 拦掉默认行为交给 `window.open`——主进程的
+ * setWindowOpenHandler 把网页送进内置浏览器（index.ts 的 openLink；同 SettingsView 的
+ * PR 号链接）。不为此新开一条 IPC：外链有一条现成的路，再加一条就是两个写入者。
+ */
+function ReleaseLink(props: { url: string; children: ReactNode }) {
+  return (
+    <a
+      className="upd-link"
+      href={props.url}
+      onClick={(event) => {
+        event.preventDefault();
+        window.open(props.url);
+      }}
+    >
+      <Icon name="external-link" size={12} />
+      {props.children}
+    </a>
   );
 }
 
@@ -198,7 +255,8 @@ function Mono(props: { children: ReactNode }) {
 }
 
 /**
- * 更新内容：左侧图标列（原型版式 B，2026-10-18 用户选定）。每条占两格——图标列一格、
+ * 更新说明的逐条版式（待装的「更新内容」与已装的「本版更新内容」共用一份）：
+ * 左侧图标列（原型版式 B，2026-10-18 用户选定）。每条占两格——图标列一格、
  * 正文列一格；图标一律 currentColor + tertiary，只当条目符号。条目之间的细分隔线由
  * CSS 画在图标轨道上（行间空隙正中），最后一条不画。
  *
