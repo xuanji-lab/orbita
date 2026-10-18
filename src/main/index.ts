@@ -36,6 +36,7 @@ import { UsageLedger } from "./usage/ledger.ts";
 import { registerUsageIpc } from "./usage/ipc.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
+import { createRecentReleases } from "./updater/recent-releases.ts";
 import { CURRENT_NOTES_FILE } from "./updater/current-notes.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
@@ -663,7 +664,9 @@ void app.whenReady().then(async () => {
     currentNotesFile: join(app.getPath("userData"), CURRENT_NOTES_FILE),
     beforeInstall: () => agentHost.dispose(),
   });
-  registerUpdaterIpc(updater);
+  // 「所有版本」展开体的最近版本列表：纯网络请求 + 内存缓存（10 分钟），
+  // 与更新器接不接线无关——dev 下也照常能用（见 main/updater/recent-releases.ts）
+  registerUpdaterIpc(updater, createRecentReleases());
   updater.start();
 
   app.on("before-quit", () => {
