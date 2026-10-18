@@ -170,3 +170,52 @@ export function recentReleaseTitle(release: RecentRelease): string | null {
   const bare = title.startsWith("v") ? title.slice(1) : title;
   return bare === release.version ? null : title;
 }
+
+/**
+ * 「当前版本」展开体该画什么——决定权在纯函数，UpdateCard 只做薄适配（有测试）。
+ *
+ * 说明的两级来源：
+ * 1. `snapshot.currentNotes`——下载这一版时装进 userData 的那份，**本地、离线可用**；
+ * 2. 本地没有 → `updater:recentReleases` 结果里 `version === currentVersion` 那一条的
+ *    `notes`。与「历史版本」列表同一个调用、同一份 10 分钟缓存，不为这一行单开 IPC。
+ *
+ * 其余三态各对应展开体里的一句话：`fetching`（本地没有、GitHub 还没回话）、`failed`
+ * （拉取失败，带机器原话进 title 当诊断）、`missing`（问过了，这一版没有应用内说明——
+ * GitHub 上还没有这一版的 Release、那一版没附 latest.yml、latest.yml 里没写，三种同因
+ * 同话）。不管哪一态，那一行都是可展开的 disclosure：GitHub 外链出口不因此消失
+ * （2026-10-18 用户验收：「首先你得能展开当前版本」）。
+ */
+export type CurrentVersionNotesView =
+  | { kind: "local"; notes: readonly UpdateNote[] }
+  | { kind: "remote"; notes: readonly UpdateNote[] }
+  | { kind: "fetching" }
+  | { kind: "failed"; message: string }
+  | { kind: "missing" };
+
+export function currentVersionNotesView(
+  currentVersion: string,
+  localNotes: readonly UpdateNote[] | null,
+  remote: RecentReleasesResult | null,
+): CurrentVersionNotesView {
+  if (localNotes !== null) return { kind: "local", notes: localNotes };
+  if (remote === null) return { kind: "fetching" };
+  if (!remote.ok) return { kind: "failed", message: remote.message };
+  const mine = remote.releases.find((release) => release.version === currentVersion) ?? null;
+  if (mine === null || mine.notes === null || mine.notes.length === 0) return { kind: "missing" };
+  return { kind: "remote", notes: mine.notes };
+}
+
+/**
+ * 「历史版本」列表去掉当前版本（2026-10-18 用户验收：「历史版本里不应该有当前版本」）。
+ * 这一版的说明归「当前版本」那一行管，列表里再挂一份就是重影。
+ *
+ * **比当前新的版本保留**：有可用更新还没装时，GitHub 上已经挂着那一版——留在列表里
+ * 能看到它、点开还能就地看它的说明，这是信息不是错；装上重启后它变成当前版本，
+ * 自然从这里消失。
+ */
+export function historyReleases(
+  releases: readonly RecentRelease[],
+  currentVersion: string,
+): readonly RecentRelease[] {
+  return releases.filter((release) => release.version !== currentVersion);
+}
