@@ -861,8 +861,7 @@ export function App() {
           narrow={narrow}
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
-          drawerLit={rightPanel === "drawer"}
-          onToggleDrawer={() => setRightPanel(rightPanel === "drawer" ? null : "drawer")}
+          onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
         />
         <Sidebar
           session={session}

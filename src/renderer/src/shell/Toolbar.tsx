@@ -43,8 +43,7 @@ export function Toolbar(props: {
   sessionSlot: React.ReactNode;
   /** 右栏胶囊宿主挂好时回填（portal 目标） */
   onPanelSlot: (el: HTMLDivElement | null) => void;
-  /** 右栏开关（辅助对话）点亮态与开关 */
-  drawerLit: boolean;
+  /** 右栏开关的开关（点亮 = 任意面板开着，见 App 的接线） */
   onToggleDrawer: () => void;
 }) {
   const t = useT();
@@ -134,7 +133,7 @@ export function Toolbar(props: {
           className="quiet-control cap-seg solo"
           title={t.rail.sideChat}
           aria-label={t.rail.sideChat}
-          aria-pressed={props.drawerLit || undefined}
+          aria-pressed={props.panelOpen || undefined}
           onClick={props.onToggleDrawer}
         >
           <Icon name="panel-right" size={16} strokeWidth={1.9} />

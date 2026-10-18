@@ -204,6 +204,15 @@ test("控件配方兜住浏览器默认边框：quiet-control 与胶囊内 butto
   assert.match(toolbarCss, /\.toolbar-capsule button\s*\{[^}]*border:\s*0/, "胶囊内 button 缺边框重置");
 });
 
+test("选中蓝底在：rail 入口走 quiet-control 配方，右栏开关跟任意面板点亮", () => {
+  const rail = readFileSync(join(RENDERER_SRC, "shell/RightRail.tsx"), "utf8");
+  // 点亮不再是 inline 玻璃白（2026-10-19 回归：用户点名要保留蓝底）
+  assert.ok(!rail.includes('background: lit ?'), "rail 入口的点亮又写回 inline 玻璃白了——走 quiet-control[aria-pressed]");
+  assert.match(rail, /className="quiet-control"\n      title=\{props\.label\}/, "RailEntryButton 没挂 quiet-control");
+  // 右栏开关：点亮 = 面板开着（不是只看 drawer）
+  assert.match(toolbarTsx, /aria-pressed=\{props\.panelOpen \|\| undefined\}/, "右栏开关的点亮没跟任意面板开");
+});
+
 test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧净空变量", () => {
   assert.ok(!stylesCss.includes(".panel-head"), "styles.css 里还有 .panel-head");
   assert.ok(!stylesCss.includes("titlebar-exempt"), "titlebar-exempt 没删干净");

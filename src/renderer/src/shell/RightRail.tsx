@@ -198,10 +198,11 @@ export function RightRail(props: {
 }
 
 /**
- * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮 =
- * `--glass-bg` + `--shadow-composer`（与面板融合的单层 token，见头注释），
- * 再点已点亮的由调用方表达成收起。badge（铃铛的未读角标）常驻在右上角，
- * 0 / 缺席不渲染。
+ * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮走
+ * `.quiet-control[aria-pressed]` 的 mode 选中底（浅蓝 / 暗档黄，2026-10-19
+ * 方案 B v2 用户点名保留；此前是 inline 的 `--glass-bg` 玻璃白，看不出选中）。
+ * hover 也交给 CSS（quiet-control:hover），不再用 JS 模拟。再点已点亮的由
+ * 调用方表达成收起。badge（铃铛的未读角标）常驻在右上角，0 / 缺席不渲染。
  */
 function RailEntryButton(props: {
   icon: IconName;
@@ -211,13 +212,13 @@ function RailEntryButton(props: {
   /** 未读角标；缺席或 0 不渲染 */
   badge?: number;
 }) {
-  const lit = props.lit;
   return (
     <button
       type="button"
+      className="quiet-control"
       title={props.label}
       aria-label={props.label}
-      aria-pressed={lit}
+      aria-pressed={props.lit}
       onClick={props.onClick}
       style={{
         width: 26,
@@ -226,22 +227,10 @@ function RailEntryButton(props: {
         alignItems: "center",
         justifyContent: "center",
         padding: 0,
-        border: 0,
         cursor: "pointer",
         borderRadius: "var(--radius-sm)",
-        background: lit ? "var(--glass-bg)" : "transparent",
-        boxShadow: lit ? "var(--shadow-composer)" : "none",
-        color: lit ? "var(--color-text-primary)" : "var(--color-text-secondary)",
         // 角标的定位基准
         position: "relative",
-      }}
-      onMouseEnter={(e) => {
-        if (lit) return;
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        if (lit) return;
-        e.currentTarget.style.background = "transparent";
       }}
     >
       <Icon name={props.icon} size={16} />
