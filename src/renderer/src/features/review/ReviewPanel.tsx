@@ -351,7 +351,7 @@ export function ReviewPanel(props: {
                     title / 右键挂 host 而不是行按钮：disabled 行（二进制 / 已还原）
                     在浏览器里不发鼠标事件，挂按钮上这些行就右键不了、也没 tooltip */}
                 <div
-                  className="file-hover-host"
+                  className={revealable ? "file-hover-host review-row-actable" : "file-hover-host"}
                   style={{ position: "relative" }}
                   title={absolute}
                   onContextMenu={(event) => {
@@ -379,8 +379,8 @@ export function ReviewPanel(props: {
                       <Icon name="chevron-right" size={12} strokeWidth={1.8} />
                     </span>
                     <RowName path={entry.path} cwd={props.cwd} disambig={disambig.get(entry.path) ?? null} />
-                    {/* 行尾（一次性轻提示不参加悬停让位，右侧留出动作键的位） */}
-                    {rowHint !== null ? (
+                    {/* 一次性轻提示与行尾并排（数字不被顶掉），只在触发它的那一行短郎闪现 */}
+                    {rowHint !== null && (
                       <span
                         style={{
                           flex: "0 0 auto",
@@ -389,15 +389,14 @@ export function ReviewPanel(props: {
                           gap: 4,
                           fontSize: "var(--font-size-sm)",
                           color: rowHint.tone === "ok" ? "var(--color-success)" : "var(--color-danger)",
-                          marginRight: `calc(var(--space-2) + ${ROW_ACT_SIZE}px)`,
                         }}
                       >
                         <Icon name={rowHint.tone === "ok" ? "check" : "triangle-alert"} size={11} strokeWidth={2} />
                         {rowHint.text}
                       </span>
-                    ) : entry.restored === true ? (
+                    )}
+                    {entry.restored === true ? (
                       <span
-                        className="review-row-tail"
                         style={{
                           flex: "0 0 auto",
                           display: "inline-flex",
@@ -414,15 +413,15 @@ export function ReviewPanel(props: {
                         {t.review.restored}
                       </span>
                     ) : entry.noBaseline === true ? (
-                      <span className="review-row-tail" style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.noBaseline}
                       </span>
                     ) : entry.binary ? (
-                      <span className="review-row-tail" style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.binary}
                       </span>
                     ) : (
-                      <span className="review-row-tail" style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
                         <Stats added={entry.added} removed={entry.removed} />
                       </span>
                     )}
