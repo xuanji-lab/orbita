@@ -42,6 +42,7 @@ describe("系统提示词装配", () => {
     directories: "<directories>cwd</directories>",
     channelRole: "<orbita-sub-sessions>root</orbita-sub-sessions>",
     storeTools: "<orbita-store>workspace</orbita-store>",
+    toolSelection: "Tool selection: use the grep tool…",
     toolGuidelines: "For commands that may take a while…",
     expectedSeconds: "When calling bash/powershell…",
     intent: "",

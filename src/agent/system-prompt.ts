@@ -29,6 +29,8 @@ export interface SystemPromptParts {
   channelRole: string;
   /** 工作区归属（store 工具）：storeToolsGuideline */
   storeTools: string;
+  /** 工具选型 + 非编程能力主动提及：TOOL_SELECTION_GUIDELINE + PROACTIVE_CAPABILITY_GUIDELINE */
+  toolSelection: string;
   /** bash 参数纪律：TOOL_GUIDELINES */
   toolGuidelines: string;
   /** expected_seconds：EXPECTED_SECONDS_GUIDELINE */
@@ -52,6 +54,7 @@ export function composeSystemPrompt(parts: SystemPromptParts): string {
     parts.directories,
     parts.channelRole,
     parts.storeTools,
+    parts.toolSelection,
     parts.toolGuidelines,
     parts.expectedSeconds,
     parts.intent,

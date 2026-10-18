@@ -78,6 +78,7 @@ import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { PROACTIVE_CAPABILITY_GUIDELINE, TOOL_SELECTION_GUIDELINE } from "./tool-selection-guideline.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -928,6 +929,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   command.workspaceId === null ? null : { name: command.workspaceName },
                   command.cwd,
                 ),
+                // 工具选型（2026-10-18）：内建工具恒在，用固定文本钉住默认通道——搜索/读文件
+                // 别再走 bash，bash 只跑真命令；末尾补一句「有能力而用户可能不知道时主动提一句」
+                toolSelection: TOOL_SELECTION_GUIDELINE + "\n\n" + PROACTIVE_CAPABILITY_GUIDELINE,
                 toolGuidelines: TOOL_GUIDELINES,
                 expectedSeconds: EXPECTED_SECONDS_GUIDELINE,
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——

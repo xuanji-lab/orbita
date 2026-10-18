@@ -447,3 +447,25 @@ describe("cite_pdf", () => {
     await assert.rejects(cite(join(dir, "three-pages.pdf"), []), /requires "quotes"/);
   });
 });
+
+/**
+ * 非编程能力引导（2026-10-18）：工具的 promptGuidelines 由 pi 在工具在场时自动注入、自动去重
+ * （agent-session.js 的 _rebuildSystemPrompt）。这里只钉住两句文案在场，不 import runtime。
+ */
+describe("read_pdf / cite_pdf 的 promptGuidelines", () => {
+  test("read_pdf：讲到具体图表时用 image_pages 渲染细看", () => {
+    const guidelines = createPdfTools(dir)[0]!.promptGuidelines ?? [];
+    assert.ok(guidelines.some((line) => /image_pages/.test(line)), "缺 image_pages 那条");
+    assert.ok(guidelines.some((line) => /figure or table/.test(line)), "缺 figure/table 那条");
+  });
+
+  test("cite_pdf：引原文附可点击标记；工作区要求的行号照留，互补不替代", () => {
+    const citeTool = createPdfTools(dir, { pdfCitations: true }).find((t) => t.name === "cite_pdf")!;
+    const guidelines = citeTool.promptGuidelines ?? [];
+    assert.ok(guidelines.some((line) => /marker right after the sentence/.test(line)), "缺标记那条");
+    assert.ok(
+      guidelines.some((line) => /line numbers/.test(line) && /complement each other/.test(line)),
+      "缺「行号照留、两者互补」那条",
+    );
+  });
+});

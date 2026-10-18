@@ -91,6 +91,10 @@ export function createImageTools(cwd: string): ToolDefinition[] {
       "paths; they render as a gallery card in the chat. You also receive the images yourself (on vision " +
       "models), so you can keep talking about them. Reading an image for yourself only (user does not " +
       "need to see it) is the read tool's job — do not call show_image for that.",
+    promptGuidelines: [
+      "When the user should see an image with their own eyes (figures you cropped from a PDF, pictures in a " +
+        "folder, generated files), show it with show_image instead of only describing it.",
+    ],
     parameters: {
       type: "object",
       properties: {
