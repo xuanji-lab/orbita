@@ -7,6 +7,7 @@ import {
   rememberTerminalOpen,
   restoreTerminalState,
   TERMINAL_DOCK_RESIZER_SIZE,
+  terminalHeaderIsTitlebar,
   type TerminalOpenMemory,
 } from "./terminal-dock.ts";
 import type { RightPanelKind } from "./RightRail.tsx";
@@ -98,5 +99,12 @@ describe("dockResizerBottomOffset（拖高热区骑在分界线上下各一半�
     deepStrictEqual(TERMINAL_DOCK_RESIZER_SIZE, 12);
     deepStrictEqual(dockResizerBottomOffset(260), 254);
     deepStrictEqual(dockResizerBottomOffset(400), 394);
+  });
+});
+
+describe("terminalHeaderIsTitlebar（底部终端的头部不是窗口拖拽区）", () => {
+  it("右栏 = 窗口顶行，挂 titlebar；底部 = 窗口中间，不拖窗口也不双击最大化", () => {
+    deepStrictEqual(terminalHeaderIsTitlebar("right"), true);
+    deepStrictEqual(terminalHeaderIsTitlebar("bottom"), false);
   });
 });

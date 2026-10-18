@@ -18,6 +18,7 @@ import type { TerminalDock } from "@shared/settings";
 import type { TerminalInfo } from "@shared/terminal";
 import { TerminalView } from "./TerminalView";
 import { activeTerminalId, mergeTerminals } from "./terminal-tabs.ts";
+import { terminalHeaderIsTitlebar } from "../../shell/terminal-dock.ts";
 import "./terminal.css";
 
 export function TerminalPanel(props: {
@@ -203,6 +204,7 @@ export function TerminalPanel(props: {
         </>
       }
       contentKey="terminal"
+      titlebar={terminalHeaderIsTitlebar(props.dock)}
     >
       {allIds.length > 0 ? (
         <div className="terminal-views" style={{ height: "100%" }}>

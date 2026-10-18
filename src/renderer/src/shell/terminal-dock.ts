@@ -94,3 +94,16 @@ export const TERMINAL_DOCK_RESIZER_SIZE = 12;
 export function dockResizerBottomOffset(dockHeight: number): number {
   return dockHeight - TERMINAL_DOCK_RESIZER_SIZE / 2;
 }
+
+/**
+ * 底部终端的头部**不是窗口拖拽区**（2026-10-18 用户验收：「终端的这条栏目，有局部
+ * 集成了顶部栏的拖拽功能，这是不应该的」，且「偶现」——头部空白处能拖，挂了
+ * no-drag 的标签条 / 分段开关 / + 键不能，所以时灵时不灵）。右栏顶部时它就是
+ * 窗口顶行，挂 `.titlebar`（-webkit-app-region: drag）没问题；停到底部后这条
+ * 栏在窗口中间，既不能拖窗口也不该响应双击最大化——两头都不给，保持一致
+ * （RightPanelFrame 的 titlebar 开关读这里，不各自猜；**不要**反过来给它
+ * 加双击最大化）。
+ */
+export function terminalHeaderIsTitlebar(dock: TerminalDock): boolean {
+  return dock === "right";
+}
