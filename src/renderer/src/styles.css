@@ -2865,14 +2865,15 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
+  height: 22px;
   flex: none;
   padding: 0 4px 0 10px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   font: inherit;
-  font-size: var(--font-size-base);
+  /* 顶栏收窄到 26px 行（2026-10-18）：页头里的页签与过滤框同降一档 */
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -3770,7 +3771,8 @@ textarea.text-field {
   flex: 0 0 auto;
 }
 .panel-title strong {
-  font-size: var(--font-size-base);
+  /* 顶栏收窄到 26px 行（2026-10-18）：页头标题降一档，字重不变 */
+  font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
@@ -3781,7 +3783,7 @@ textarea.text-field {
   align-items: center;
   gap: 6px;
   min-width: 96px;
-  height: 24px;
+  height: 22px;
   margin-left: 4px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-md);
@@ -3928,7 +3930,7 @@ button.panel-group-toggle:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: 22px;
   margin-left: 4px;
   padding: 0 var(--space-2);
   border: 0;
@@ -3936,6 +3938,11 @@ button.panel-group-toggle:hover {
   font: inherit;
   font-size: var(--font-size-sm);
   cursor: pointer;
+}
+
+/* 顶栏收窄到 26px 行（2026-10-18）：终端页头里的页签文字同降一档（quiet-control 配方不变） */
+.terminal-tab {
+  font-size: var(--font-size-sm);
 }
 
 /* 改动审查的文件行：同一套圆角行，组间不画分隔线 */

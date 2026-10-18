@@ -205,7 +205,7 @@ export function PanelIconButton(props: {
 export function PanelTitle(props: { icon: IconName; title: string; tip?: string }) {
   return (
     <span className="panel-title" title={props.tip}>
-      <Icon name={props.icon} size={16} />
+      <Icon name={props.icon} size={14} />
       <strong>{props.title}</strong>
     </span>
   );
@@ -258,7 +258,7 @@ export function PanelFilter(props: {
 export function PanelHelp(props: { text: string; label: string }) {
   return (
     <IconButton label={props.label} title={props.text} size={24} className="no-drag">
-      <Icon name="circle-help" size={15} />
+      <Icon name="circle-help" size={14} />
     </IconButton>
   );
 }

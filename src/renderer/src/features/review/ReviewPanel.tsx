@@ -161,7 +161,7 @@ export function ReviewPanel(props: {
       headerExtra={
         tab === "changes" ? (
           <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
-            <Icon name="refresh-cw" size={15} spin={loading} />
+            <Icon name="refresh-cw" size={14} spin={loading} />
           </PanelIconButton>
         ) : undefined
       }

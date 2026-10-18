@@ -537,10 +537,10 @@ export function FilesPanel(props: {
             }}
             disabled={tree.refreshing}
           >
-            <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} spin={tree.refreshing} />
+            <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={14} spin={tree.refreshing} />
           </PanelIconButton>
           <PanelIconButton title={t.files.attach} onClick={attach}>
-            <Icon name="plus" size={16} />
+            <Icon name="plus" size={14} />
           </PanelIconButton>
         </>
       }

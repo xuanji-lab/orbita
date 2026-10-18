@@ -16,10 +16,12 @@
   --font-size-sm: calc(var(--ui-font-size) - 2px);   /* 12：次级说明、辅助文字、时间戳 */
   --font-size-xs: calc(var(--ui-font-size) - 3px);   /* 11：徽标、计数、分组标签、极弱元数据 */
 
-  /* 品牌字是唯一例外：不是界面层级，不跟基准走 */
+  /* 品牌字是唯一例外：不是界面层级，不跟基准走。wordmark 例外中的例外：
+     2026-10-18 顶栏收窄到 26px 行（中心钉红绿灯线）后从 22px 降档跟随 --font-size-lg，
+     否则字标在窄行里比会话标题还抢 */
   --font-size-slogan: 36px;
   --font-size-slogan-mark: 20px;
-  --font-size-wordmark: 22px;
+  --font-size-wordmark: var(--font-size-lg);
 
   /* 行高只有三档，全部无单位（随字号缩放，基准改了不用跟着改） */
   --line-height-tight: 1.4;    /* 标题 */

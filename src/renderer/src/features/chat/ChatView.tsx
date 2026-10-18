@@ -2018,7 +2018,7 @@ function Pane(props: {
           }}
           onCancel={() => setEditing(false)}
           style={{
-            fontSize: "var(--font-size-lg)",
+            fontSize: "var(--font-size-sm)",
             fontWeight: "var(--weight-bold)",
             height: 26,
           }}
@@ -2033,7 +2033,7 @@ function Pane(props: {
               // 与标题之间空出一大截（CDP 复验发现的回归，原来紧挨着的观感变了）。
               flex: "0 1 auto",
               minWidth: 0,
-              fontSize: "var(--font-size-lg)",
+              fontSize: "var(--font-size-sm)",
               fontWeight: "var(--weight-bold)",
               whiteSpace: "nowrap",
               overflow: "hidden",

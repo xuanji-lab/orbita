@@ -242,7 +242,9 @@ a 32px action rail for session actions, right drawer (320px, **closed by default
 (sidebar wordmark, conversation / settings / panel headers, the right rail's first slot) shares one
 height — `--titlebar-row`, 26px — centred on the traffic-light line (macOS lights at y 19–31;
 the row centre and the lights' centre are the same horizontal line, Windows included for cross-platform
-consistency). Both sidebars
+consistency). Top-row contents follow the narrow line (same day, user: "变窄了之后，好多都太大了"):
+header titles sit at `--font-size-sm` (weight unchanged), head icons run 14px inside 22–24px boxes,
+and the sidebar wordmark tracks `--font-size-lg`. Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the

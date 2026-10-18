@@ -165,8 +165,8 @@ export function TerminalPanel(props: {
         </>
       }
       headerExtra={
-        <IconButton label={t.terminal.newTerminal} size={26} onClick={openTerminal} className="no-drag">
-          <Icon name="plus" size={16} />
+        <IconButton label={t.terminal.newTerminal} size={24} onClick={openTerminal} className="no-drag">
+          <Icon name="plus" size={14} />
         </IconButton>
       }
       contentKey="terminal"

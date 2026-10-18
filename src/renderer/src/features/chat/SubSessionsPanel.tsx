@@ -112,7 +112,7 @@ export function SubSessionsPanel(props: {
           }}
         >
           <PanelIconButton title={t.subSessions.back} onClick={props.onBackToList}>
-            <Icon name="arrow-left" size={16} />
+            <Icon name="arrow-left" size={14} />
           </PanelIconButton>
           <span
             style={{
