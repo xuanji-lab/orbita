@@ -122,19 +122,21 @@ a.upd-link {
   transform: rotate(180deg);
 }
 
-/* 「当前版本」行尾：版本号（mono）+ 展开三角。**中间不留 gap**：三角盒就是 12px
-   （var(--space-3)），紧接版本号，版本号右缘才落在 hem − 12——与「检查更新」的文字
-   同一条线；没有三角时（这一版没有说明）用 padding 补上同样的 12px，右缘不跳 */
+/* 「当前版本」行尾：版本号（mono）+ 展开三角，中间留 8px（var(--space-2)）。
+   之前不留 gap、三角盒只有 12px，而图标是 14px——图标溢出盒子压到版本号上，
+   「0.1.15」和三角贴在一起（2026-10-18 用户验收）。没有三角时（这一版没有说明）
+   用 padding 补上「三角盒 + 间距」，版本号右缘不跳 */
 .upd-current {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
 
 .upd-current:not(:has(.upd-caret)) {
-  padding-right: var(--space-3);
+  padding-right: calc(var(--space-4) + var(--space-2));
 }
 
 /* 行即开关（「当前版本」「历史版本」）：整行一个按钮，展开体在按钮外面。
@@ -171,14 +173,14 @@ a.upd-link {
 }
 
 /* 行尾的展开三角（主行与历史版本行两处同形）：**不是按钮**——整行才是，
-   它只是这一行的开合指示。图标 14 / stroke 2 按定稿小样；宽取 var(--space-3)
-   ——与 .upd-btn 的右内边距同宽，是尾部文字右缘对齐的那把尺子 */
+   它只是这一行的开合指示。图标 14 / stroke 2 按定稿小样；盒宽 var(--space-4)
+   要装得下 14px 的图标（原先 12px 的盒子让图标溢出、贴上左边的文字） */
 .upd-caret {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: var(--space-3);
+  width: var(--space-4);
   height: var(--space-5);
   color: var(--color-text-tertiary);
 }
@@ -221,7 +223,7 @@ a.upd-link {
 /* 行本身（button 与退化态的 div 共用一份网格：版本 | 标题 | 日期 | 三角） */
 .upd-recent-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto var(--space-3);
+  grid-template-columns: auto minmax(0, 1fr) auto var(--space-4);
   align-items: baseline;
   column-gap: var(--space-3);
   margin: 0 calc(-1 * var(--space-2));
