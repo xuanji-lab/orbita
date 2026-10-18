@@ -3,6 +3,7 @@ import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
 import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/BellCard";
+import type { TerminalDock } from "@shared/settings";
 
 /**
  * 右图标条，32px，**常驻**（首页也可达）。与左栏同款「无自己的面」：直接坐在
@@ -51,6 +52,15 @@ export interface RailEntry {
 export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
+  /**
+   * 终端停靠位（2026-10-18：终端多一个「底部」停靠，其余面板不动）。停在右侧时
+   * 终端就是面板位的一员，入口行为不变；停在底部时这个入口开关的是底部终端
+   * （不占面板位），点亮与点击都按底部终端算——由 App 把三个 props 组装好传入，
+   * 本组件不自己记状态。
+   */
+  terminalDock: TerminalDock;
+  terminalBottomOpen: boolean;
+  onTerminalBottom: (open: boolean) => void;
   /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
   railEntries: RailEntry[];
   /**
@@ -150,12 +160,17 @@ export function RightRail(props: {
         lit={props.panel === "mcp"}
         onClick={() => props.onPanel(props.panel === "mcp" ? null : "mcp")}
       />
-      {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
+      {/* 终端（人工验收自己的开发）：停在右侧时与 Files 等共用面板位，收起面板不杀
+          PTY；停在底部时开关的是底部终端（横跨对话区下方，不占面板位） */}
       <RailEntryButton
         icon="square-terminal"
         label={t.rail.terminal}
-        lit={props.panel === "terminal"}
-        onClick={() => props.onPanel(props.panel === "terminal" ? null : "terminal")}
+        lit={props.terminalDock === "bottom" ? props.terminalBottomOpen : props.panel === "terminal"}
+        onClick={() =>
+          props.terminalDock === "bottom"
+            ? props.onTerminalBottom(!props.terminalBottomOpen)
+            : props.onPanel(props.panel === "terminal" ? null : "terminal")
+        }
       />
       <RailEntryButton
         icon="panel-right"

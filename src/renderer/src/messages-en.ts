@@ -65,6 +65,7 @@ export const en = {
     failed: "Failed",
     settings: "Settings",
     dragResize: "Drag to resize · double-click to reset",
+    dragResizeHeight: "Drag to resize height · double-click to reset",
     loading: "Loading…",
     /** 列举的分隔：英文逗号，中文顿号 */
     listSeparator: ", ",
@@ -1521,6 +1522,10 @@ export const en = {
     title: "Terminal",
     newTerminal: "New terminal",
     closeTab: "Close terminal",
+    /** Dock position segmented switch (terminal header, panel-right / panel-bottom) */
+    dockPosition: "Terminal dock position",
+    dockRight: "Dock on the right",
+    dockBottom: "Dock at the bottom",
     exitNotice: (code: number) => `Process exited (${code})`,
     runtimeLost: "The terminal runtime is gone. Close this tab and open a new one.",
     spawnFailed: (message: string) => `Could not start a terminal: ${message}`,

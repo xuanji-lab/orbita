@@ -14,6 +14,7 @@ import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import type { TerminalDock } from "@shared/settings";
 import type { TerminalInfo } from "@shared/terminal";
 import { TerminalView } from "./TerminalView";
 import { activeTerminalId, mergeTerminals } from "./terminal-tabs.ts";
@@ -29,6 +30,13 @@ export function TerminalPanel(props: {
    */
   activateId: string | null;
   onActivated: () => void;
+  /**
+   * 停靠位（右侧 = 右栏面板位；底部 = 横跨对话区下方，不占右栏位）。标题行右侧
+   * 的二选一分段开关（panel-right / panel-bottom）显示与扳动都走这两个 props，
+   * 落设置与「终端搬家」由 App 编排（moveDockTo）。
+   */
+  dock: TerminalDock;
+  onDockChange: (dock: TerminalDock) => void;
 }) {
   const t = useT();
   /** 现存终端（创建顺序即 tab 顺序）；pendingIds 是视图还在创建中的（info 未回） */
@@ -165,9 +173,34 @@ export function TerminalPanel(props: {
         </>
       }
       headerExtra={
-        <IconButton label={t.terminal.newTerminal} size={26} onClick={openTerminal} className="no-drag">
-          <Icon name="plus" size={16} />
-        </IconButton>
+        <>
+          {/* 停靠位分段开关：两个安静按钮（mg-seg 同款配方），按下的那个 mode 底 */}
+          <span className="terminal-dock-seg no-drag" role="group" aria-label={t.terminal.dockPosition}>
+            <button
+              type="button"
+              className="quiet-control terminal-dock-seg-btn"
+              aria-pressed={props.dock === "right"}
+              aria-label={t.terminal.dockRight}
+              title={t.terminal.dockRight}
+              onClick={() => props.onDockChange("right")}
+            >
+              <Icon name="panel-right" size={13} />
+            </button>
+            <button
+              type="button"
+              className="quiet-control terminal-dock-seg-btn"
+              aria-pressed={props.dock === "bottom"}
+              aria-label={t.terminal.dockBottom}
+              title={t.terminal.dockBottom}
+              onClick={() => props.onDockChange("bottom")}
+            >
+              <Icon name="panel-bottom" size={13} />
+            </button>
+          </span>
+          <IconButton label={t.terminal.newTerminal} size={26} onClick={openTerminal} className="no-drag">
+            <Icon name="plus" size={16} />
+          </IconButton>
+        </>
       }
       contentKey="terminal"
     >

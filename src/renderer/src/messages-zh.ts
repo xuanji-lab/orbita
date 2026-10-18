@@ -86,6 +86,7 @@ export const zh: Messages = {
     failed: "失败",
     settings: "设置",
     dragResize: "拖动调整宽度 · 双击复原",
+    dragResizeHeight: "拖动调整高度 · 双击复原",
     loading: "正在载入…",
     listSeparator: "、",
     on: "开",
@@ -1415,6 +1416,10 @@ export const zh: Messages = {
     title: "终端",
     newTerminal: "新建终端",
     closeTab: "关闭终端",
+    /** 停靠位分段开关（终端头部，panel-right / panel-bottom 两枚图标） */
+    dockPosition: "终端停靠位置",
+    dockRight: "停靠在右侧",
+    dockBottom: "停靠在底部",
     exitNotice: (code) => `进程已退出（${code}）`,
     runtimeLost: "终端运行时已退出。关掉这个标签页，再开一个新的。",
     spawnFailed: (message) => `终端启动失败：${message}`,

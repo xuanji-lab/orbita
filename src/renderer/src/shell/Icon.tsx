@@ -82,6 +82,7 @@ import paperclip from "../../../../design-system/assets/icons/lucide/paperclip.s
 import quote from "../../../../design-system/assets/icons/lucide/quote.svg?raw";
 import panelLeft from "../../../../design-system/assets/icons/lucide/panel-left.svg?raw";
 import panelRight from "../../../../design-system/assets/icons/lucide/panel-right.svg?raw";
+import panelBottom from "../../../../design-system/assets/icons/lucide/panel-bottom.svg?raw";
 import pinOff from "../../../../design-system/assets/icons/lucide/pin-off.svg?raw";
 import pin from "../../../../design-system/assets/icons/lucide/pin.svg?raw";
 import plug from "../../../../design-system/assets/icons/lucide/plug.svg?raw";
@@ -216,6 +217,7 @@ const ICONS = {
   orbit,
   "panel-left": panelLeft,
   "panel-right": panelRight,
+  "panel-bottom": panelBottom,
   "pencil-line": pencilLine,
   play,
   paperclip,

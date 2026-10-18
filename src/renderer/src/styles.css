@@ -822,6 +822,20 @@ body {
  * 内容面：左会话列（ChatView 自带 height:100% 的栅格根）+ 右侧面板壳。
  * 壳是 pane 的子元素——**同一个面板**（2026-09-12 裁决：不要间隔，一条竖线）。
  */
+/*
+ * 对话区列（2026-10-18 终端停靠底部）：chat 主区在上、底部终端停靠槽在下，
+ * 整列与右栏面板壳并排——终端停底部时横跨的只有对话区，不跨侧栏、不跨右栏，
+ * 右栏可同时开其它面板。列常驻（不停靠时只有 pane-main 一个孩子），
+ * 挂载树不随停靠开关重排。
+ */
+.pane-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .pane-main {
   position: relative;
   flex: 1;
@@ -921,6 +935,51 @@ body {
 }
 
 .right-panel-slot-resizer:hover {
+  background: var(--color-border-subtle);
+}
+
+/*
+ * 底部终端停靠壳（.right-panel-slot 的纵向镜像，2026-10-18）：终端停靠底部时
+ * 横跨对话区下方。高度变量 --terminal-dock-h 由组件注入；开合只有一条 height
+ * 过渡路径，内容固定高——动画期间只被「拉下」不 reflow。拖动中禁过渡（同纪律）。
+ */
+.terminal-dock-slot {
+  flex: 0 0 auto;
+  height: 0;
+  transition:
+    height 0.2s ease,
+    border-top-width 0.2s ease;
+  overflow: hidden;
+  position: relative;
+  border-top: 0 solid var(--color-border-default);
+}
+
+.terminal-dock-slot.open {
+  height: var(--terminal-dock-h, 260px);
+  border-top-width: 1px;
+}
+
+.terminal-dock-slot.dragging {
+  transition: none;
+}
+
+/* 内容固定高：壳的 height 动画期间它只被逐渐「拉下」，内容不 reflow */
+.terminal-dock-inner {
+  height: var(--terminal-dock-h, 260px);
+}
+
+/* 横线即分界；把手骑在横线上（同右栏的竖线把手） */
+.terminal-dock-resizer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 30;
+}
+
+.terminal-dock-resizer:hover {
   background: var(--color-border-subtle);
 }
 
