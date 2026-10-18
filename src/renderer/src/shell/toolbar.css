@@ -20,6 +20,18 @@
   /* 整条可拖；胶囊里的按钮 / 输入框由 .titlebar button / input 全局豁免 no-drag */
 }
 
+/* 胶囊里的一切按钮先吃一遍控件重置（quiet-control 之外还有 cap-dot 这类实底键）：
+ * 无边框、无默认底、字体随行——浏览器默认的 2px outset 黑框进不了工具栏 */
+.toolbar-capsule button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+}
+.toolbar-capsule button.cap-dot {
+  background: var(--color-accent);
+}
+
 /* —— 胶囊（四处共用一个配方） —— */
 .toolbar-capsule {
   position: absolute;
@@ -133,6 +145,7 @@
   gap: 4px;
   height: 22px;
   padding: 0 8px 0 6px;
+  font: inherit;
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
   color: var(--color-text-secondary);

@@ -65,19 +65,25 @@ test("对话列与右端边界（原型 v2 的 1440 窗实算：SBW 288 / RAIL 3
   assert.equal(rightEdge({ windowWidth: 1440, platform: "darwin", panelOpen: true, panelWidth: 360 }), 1024);
 });
 
-test("会话胶囊：居中于对话列，放不下先收缩，两侧至少各让 12", () => {
-  // 状态 1（侧栏展开、无右栏）：中心 848，480 宽 → x = 608，两侧远超 12
+test("会话胶囊：优先居中于对话列（对称收缩），低于 280 才贴左", () => {
+  // 状态 1（1440，侧栏展开、无右栏）：对话列中心 848，对称可用远超 480 → 满宽居中
   const a = sessionCapsule({ windowWidth: 1440, colLeft: 312, colRight: 1384, leftCapRight: 80 + LEFT_CAPSULE_W, rightLimit: 1364 });
   assert.equal(a.width, SESSION_W);
   assert.equal(a.x, 608);
-  // 空间不够（hi−lo = 344 < 480）：宽度收缩到可用宽，左缘贴住下限
+  // 验收实例（1200 宽、侧栏展开、右栏开到分隔线 654）：中心 483，对称可用 2×159=318
+  // → 缩到 318 居中（x=324），不铺满左胶囊到右栏胶囊的整段
+  const m = sessionCapsule({ windowWidth: 1200, colLeft: 312, colRight: 654, leftCapRight: 80 + LEFT_CAPSULE_W, rightLimit: 654 });
+  assert.equal(m.width, 318);
+  assert.equal(m.x, 324);
+  assert.equal(m.x + m.width, 642);
+  // 对称凑不到 280：贴左（宽度取 280，左缘钉下限）
   const b = sessionCapsule({ windowWidth: 620, colLeft: 12, colRight: 564, leftCapRight: 192, rightLimit: 560 });
-  assert.equal(b.width, 344);
+  assert.equal(b.width, 280);
   assert.equal(b.x, 204);
-  // 再窄（可用 304）：右缘钉上限
-  const c = sessionCapsule({ windowWidth: 560, colLeft: 12, colRight: 500, leftCapRight: 192, rightLimit: 520 });
-  assert.equal(c.width, 304);
-  assert.equal(c.x + c.width, 508);
+  // 连 280 都放不下：能拿多少拿多少
+  const c = sessionCapsule({ windowWidth: 480, colLeft: 12, colRight: 424, leftCapRight: 192, rightLimit: 460 });
+  assert.equal(c.width, 244);
+  assert.equal(c.x, 204);
 });
 
 test("断点与侧栏开关的结构性不变量：左胶囊 x 与侧栏开合无关", () => {
@@ -185,6 +191,17 @@ test("右栏最窄宽与常量对账（settings 的地板 = PANEL_MIN_W = 260）
   const floor = settings.match(/RIGHT_PANEL_WIDTH_FLOOR = (\d+)/);
   assert.ok(floor !== null);
   assert.equal(Number(floor[1]), 260, "右栏地板变了——window-tools.ts 的 PANEL_MIN_W 与右栏胶囊的断点要一起看");
+});
+
+test("壳的竖直骨架在：.app-shell 撑满窗口高（上一提交被 CSS 手术误删，整窗下方空白）", () => {
+  assert.match(stylesCss, /\.app-shell\s*\{[^}]*height:\s*100%/);
+  assert.match(stylesCss, /\.app-shell\s*\{[^}]*display:\s*flex/);
+  assert.match(stylesCss, /\.app-shell\s*\.layer\s*\{[^}]*flex:\s*1/);
+});
+
+test("控件配方兜住浏览器默认边框：quiet-control 与胶囊内 button 都重置 border", () => {
+  assert.match(stylesCss, /\.quiet-control\s*\{[^}]*border:\s*0/, ".quiet-control 配方缺 border: 0——裸 button 会露出 2px outset");
+  assert.match(toolbarCss, /\.toolbar-capsule button\s*\{[^}]*border:\s*0/, "胶囊内 button 缺边框重置");
 });
 
 test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧净空变量", () => {

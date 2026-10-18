@@ -88,6 +88,9 @@
   color: var(--color-text-secondary);
   cursor: pointer;
   transition: var(--transition-hover);
+  /* 配方自带边框重置（2026-10-19：胶囊里的按钮不另走 IconButton，露出了浏览器
+     默认 2px outset——重置属于配方，不该靠每个调用点记得写 inline） */
+  border: 0;
 }
 
 .quiet-control:hover {
@@ -689,6 +692,23 @@ body {
   border: 0;
   border-radius: 0;
   overflow: hidden;
+}
+
+/*
+ * 壳的竖直骨架（2026-10-19 修复：上一提交的 CSS 手术把这两条误删，.app-shell
+ * 落回浏览器默认 display:block、高度随内容塌——整窗下方一片空白）。工具栏在
+ * .layer 里绝对定位，.app-shell 只负责把 .layer 撑满窗口高。
+ */
+.app-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell .layer {
+  height: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .titlebar {

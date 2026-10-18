@@ -41,8 +41,9 @@ export function leftCapsuleX(platform: ToolbarPlatform): number {
 /** 左胶囊宽度：2px 内边距 + 侧栏开关 36 + 新任务 36 + 专注 36（计时态由专注功能自己加宽） */
 export const LEFT_CAPSULE_W = 2 + 36 + 36 + 36 + 2;
 
-/** 会话胶囊（排法甲 · 地址栏式）：首选宽与两侧最小间距 */
+/** 会话胶囊（排法甲 · 地址栏式）：首选宽 / 对称收缩的最小宽 / 两侧最小间距 */
 export const SESSION_W = 480;
+export const SESSION_MIN = 280;
 export const SESSION_GAP = 12;
 
 /** 右栏胶囊：筛选框收成搜索格的断点 / 右栏最小宽（默认值，可推翻） */
@@ -85,8 +86,10 @@ export function rightEdge(input: {
 }
 
 /**
- * 会话胶囊几何（排法甲）：居中于对话列，两侧至少各让 `SESSION_GAP`；空间不够先收缩
- * 宽度（首选 480），再窄下去只剩多少算多少——标题省略号兜底，不换行不溢出。
+ * 会话胶囊几何（排法甲，2026-10-19 验收修正）：**优先居中于对话列**——以对话列
+ * 中心为中心、两侧都不越界（各留 `SESSION_GAP`）的前提下取最大宽度（首选 480，
+ * 对称收缩）；对称可用宽低于 `SESSION_MIN` 才退而贴左（左缘钉下限、宽度取可用宽，
+ * 再窄标题省略号兜底，不换行不溢出）。
  */
 export function sessionCapsule(input: {
   windowWidth: number;
@@ -97,10 +100,14 @@ export function sessionCapsule(input: {
 }): { x: number; width: number } {
   const lo = input.leftCapRight + SESSION_GAP;
   const hi = input.rightLimit - SESSION_GAP;
-  const width = Math.max(0, Math.min(SESSION_W, hi - lo));
   const center = (input.colLeft + input.colRight) / 2;
-  let x = Math.round(center - width / 2);
-  if (x < lo) x = lo;
-  if (x + width > hi) x = hi - width;
-  return { x, width };
+  // 对称可用：中心到两侧上限里较短那段 × 2
+  const symmetric = 2 * Math.min(center - lo, hi - center);
+  if (symmetric >= SESSION_MIN) {
+    const width = Math.min(SESSION_W, symmetric);
+    return { x: Math.round(center - width / 2), width: Math.round(width) };
+  }
+  // 对称凑不到最小宽：贴左，能拿多少拿多少
+  const width = Math.max(0, Math.min(SESSION_MIN, hi - lo));
+  return { x: lo, width };
 }
