@@ -35,6 +35,7 @@ import {
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
+import { readBeforeWriteRefusal, recordedGuardKey } from "./read-guard.ts";
 import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
@@ -568,6 +569,13 @@ interface LedgerNote {
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
+  /**
+   * 本会话已读过的文件（归一化 key，见 read-guard.ts）。read 成功、以及本会话自己
+   * write / edit 成功的路径都记在这里；read-before-write 守卫拿它放行。
+   * **跨轮**活着——agent 每轮 open 重建 pi 对象，账本不能挂在那种对象上；
+   * 会话删除（dispose）时随 ledger 一起销账。
+   */
+  readPaths: Set<string>;
 }
 
 /**
@@ -580,7 +588,7 @@ const ledger = new Map<string, LedgerNote>();
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "" };
+    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "", readPaths: new Set() };
     ledger.set(sessionId, note);
   }
   return note;
@@ -832,6 +840,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     askPermission(command.sessionId),
     command.protectedPaths,
     command.cwd,
+    // read-before-write 守卫（read-guard.ts）：改一个**已存在**的文件前必须先读过它。
+    // 账本从跨轮账本现取（不闭包一份拷贝）——同一会话的多轮共享同一份已读记录。
+    (event) =>
+      readBeforeWriteRefusal(event, {
+        cwd: command.cwd,
+        hasRead: (key) => ledgerNote(command.sessionId).readPaths.has(key),
+      }),
   );
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
@@ -893,6 +908,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               const result = await gate(event);
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
+            });
+            // 已读账本（read-guard.ts）：只记**成功**的调用——read 成功 = 看过；
+            // write / edit 成功 = 本会话自己造/改的路径，后续改动不必重读。
+            // tool_result 带 isError，tool_call 不带（那时还没跑），所以记在这里。
+            pi.on("tool_result", (event) => {
+              if (event.isError) return;
+              const key = recordedGuardKey(event, command.cwd);
+              if (key !== null) ledgerNote(command.sessionId).readPaths.add(key);
             });
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
