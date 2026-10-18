@@ -11,6 +11,7 @@ import {
   type ProviderSecrets,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
+import { availableModelsFromProviders, type AvailableModel } from "../../shared/available-models.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import {
   composeInvocationPrompt,
@@ -199,6 +200,13 @@ export function registerAgentIpc(
   /** 实验功能「PDF 引用」的开关同款每轮现读；缺席 = 关（与设置契约同一口径） */
   const readPdfCitations = async (): Promise<boolean> =>
     (await settings.read()).experimentalFeatures?.["pdf-citations"] === true;
+
+  /**
+   * 子会话可选模型清单（派发前对齐段的数据面，2026-10-18）：每轮现读 provider 配置，
+   * 设置里加/删模型下一轮即生效。过滤规则与模型菜单同源（见 shared/available-models.ts）。
+   */
+  const readAvailableModels = async (): Promise<AvailableModel[]> =>
+    availableModelsFromProviders(await providers.list());
 
   /** 署名语言同样每轮现读：换主题 / 改语言，下一轮的署名就跟上（规则在 shared 的 effectiveLanguage） */
   const readAttributionLanguage = async (): Promise<Language> => {
@@ -410,6 +418,8 @@ export function registerAgentIpc(
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
       ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}),
       ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}),
+      // 子会话可选模型清单：每轮现读，随开轮命令进提示词（派发前对齐段）
+      availableModels: await readAvailableModels(),
       ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
@@ -448,7 +458,7 @@ export function registerAgentIpc(
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), availableModels: await readAvailableModels(), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
