@@ -285,13 +285,15 @@ const CSS_LINE_HEIGHT_RE = /(?<![-\w])line-height\s*:\s*([^;}\n]+)/g;
 const TS_LINE_HEIGHT_RE = /(?:^|[{,])\s*lineHeight\s*:\s*([^,}\n]+)/g;
 const LINE_HEIGHT_OK = /^(["'`]?var\(--(line-height-[a-z-]+|paper-cell)\)["'`]?|["'`]?(0|1|normal|inherit)["'`]?)$/;
 /**
- * 按「文件: 值」豁免（加条目必须写清理由）——两处都是几何，不是排版：
+ * 按「文件: 值」豁免（加条目必须写清理由）——三处都是几何，不是排版：
  * - paper-themes.css 24px：打字稿主题输入框的行高要和每 24px 一条的横线背景对齐；
- * - styles.css 14px：右栏铃铛未读角标，行高 = 胶囊高度，把数字竖向居中。
+ * - styles.css 14px：右栏铃铛未读角标，行高 = 胶囊高度，把数字竖向居中；
+ * - focus.css 32px：专注滚轮的选中档数字，行高 = 滚轮行高，把数字竖向居中在选中带里。
  */
 const LINE_HEIGHT_EXEMPTIONS = new Set<string>([
   "src/renderer/src/paper-themes.css: 24px",
   "src/renderer/src/styles.css: 14px",
+  "src/renderer/src/shell/focus/focus.css: 32px",
 ]);
 
 function scanLineHeights(): string[] {

@@ -72,6 +72,7 @@ import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
 import listFilter from "../../../../design-system/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../design-system/assets/icons/lucide/list-todo.svg?raw";
+import listTree from "../../../../design-system/assets/icons/lucide/list-tree.svg?raw";
 import menu from "../../../../design-system/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
@@ -200,6 +201,7 @@ const ICONS = {
   layers,
   "list-filter": listFilter,
   "list-todo": listTodo,
+  "list-tree": listTree,
   // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——
   // 模型卡片左栏的视图开关（2026-10-01）。lucide 完整集里的 `menu`，按设计系统
   // Iconography 那节「拷一份工作子集进来」的做法引入
