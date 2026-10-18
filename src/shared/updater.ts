@@ -128,6 +128,13 @@ export interface RecentRelease {
   publishedAt: string;
   /** Release 页地址：列表里点一行跳它 */
   htmlUrl: string;
+  /**
+   * **这一版**的更新内容：GitHub Release 正文（`body`）按发布约定逐条解析（同 `update-downloaded`
+   * 那条路用同一个解析器，见 main/updater/notes.ts）。列表里每一行自己也是一条 disclosure——
+   * 点开就地看这一版带来了什么，不用跳到网页。没有正文 / 正文里一条条目都没解出来是 null：
+   * 界面据此不画那一行的三角、整行不可点（同「当前版本」没有说明时的退化）。
+   */
+  notes: readonly UpdateNote[] | null;
 }
 
 /**

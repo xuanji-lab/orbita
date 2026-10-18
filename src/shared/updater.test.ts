@@ -36,6 +36,7 @@ describe("recentReleaseTitle —— 列表行的标题该不该画", () => {
     title,
     publishedAt: "2026-10-18T05:00:00Z",
     htmlUrl: "https://github.com/example/repo/releases",
+    notes: null,
   });
 
   test("与版本号相同 → null（只画 mono 版本号，不再重影）", () => {
