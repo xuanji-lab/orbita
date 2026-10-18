@@ -14,6 +14,7 @@ import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
+import type { AvailableModel } from "./available-models.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
@@ -600,6 +601,14 @@ export type AgentCommand =
        * （每条会话各拉起一份 `npx some-server` 会让子进程随会话数线性增长）。
        */
       mcpServers: Record<string, McpServer>;
+      /**
+       * 子会话可选模型的事实清单（派发前对齐段的数据面，2026-10-18）。
+       * **主进程从 provider 配置装配**（同 skillsDirs / directories / mcpServers 的纪律）：
+       * agent 进程不认 provider 配置，只收数据。空数组 = 没有可选模型，提示词写明
+       * 子会话沿用父会话的模型；缺席（旧夹具）与空数组一样处理。每轮现读，
+       * 设置里加/删模型下一轮即生效。
+       */
+      availableModels?: AvailableModel[];
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
       /**
@@ -712,6 +721,8 @@ export type AgentCommand =
       skillsDirs: string[];
       directories?: TurnDirectories;
       mcpServers: Record<string, McpServer>;
+      /** 子会话可选模型清单，语义同 submit（无状态化后每轮开机都要带全） */
+      availableModels?: AvailableModel[];
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;

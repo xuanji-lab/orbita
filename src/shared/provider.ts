@@ -110,6 +110,20 @@ export type ProviderDto = Omit<Provider, "auth"> & {
     | { scheme: "none" };
 };
 
+/**
+ * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
+ * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
+ *
+ * 2026-10-18 从 renderer 的 providers-view-model.ts 搬来契约层：nav 状态点、模型菜单与此前
+ * 新加的「子会话可选模型清单」（available-models.ts）必须共用同一个判定——同一个问题
+ * （谁配好了）在两个层各写一份，就会出现「菜单里可选、派过去没有密钥」这类两个答案。
+ */
+export function hasCredentials(auth: ProviderDto["auth"]): boolean {
+  if (auth.scheme === "api_key") return auth.hasSecret;
+  if (auth.scheme === "oauth") return auth.loggedIn;
+  return auth.scheme === "env";
+}
+
 /** upsert 入参：新建或改写一个 provider；apiKey 有值时同时写入密钥库。 */
 export interface ProviderUpsertInput {
   provider: Omit<Provider, "auth"> & { auth: { scheme: ProviderAuth["scheme"] } };
