@@ -7,7 +7,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { parseReleaseNotes } from "./notes.ts";
+import { appNotesOf, parseReleaseNotes } from "./notes.ts";
 
 /** 本版发布正文的三条（发布约定写法的样子） */
 const BODY = [
@@ -117,5 +117,25 @@ describe("parseReleaseNotes —— HTML 正文与边界", () => {
     assert.equal(rest?.length, 2);
     assert.equal(rest?.[1]?.text.length, 4000);
     assert.equal(rest?.[1]?.text.endsWith("…"), true);
+  });
+});
+
+describe("appNotesOf —— 软件里只认 latest.yml 的纯文本", () => {
+  test("纯文本：按发布约定逐条解析", () => {
+    assert.deepEqual(appNotesOf("[icon:download] Windows 自动更新。\n修了对齐问题。"), [
+      { icon: "download", text: "Windows 自动更新。" },
+      { icon: null, text: "修了对齐问题。" },
+    ]);
+  });
+  test("带 HTML 标签 = electron-updater 退回去拿了 Release 页正文：不进软件", () => {
+    assert.equal(appNotesOf("<h1>ORBITA v0.1.15 · 功能总览</h1><p>本地优先的桌面 AI Agent</p>"), null);
+  });
+  test("纯文本里的比较号不是标签，照常显示", () => {
+    assert.deepEqual(appNotesOf("启动 < 1 秒"), [{ icon: null, text: "启动 < 1 秒" }]);
+  });
+  test("不是字符串（没写 / fullChangelog 数组）：null", () => {
+    assert.equal(appNotesOf(undefined), null);
+    assert.equal(appNotesOf(null), null);
+    assert.equal(appNotesOf([{ version: "0.1.15", note: "<p>x</p>" }]), null);
   });
 });

@@ -10,16 +10,21 @@
  * 三条取舍：
  * - **解析是纯函数**（parseRecentReleases）：字段缺失 / 形状不对的条目**整条丢掉**。
  *   半个版本条目画出来比少一条更糟——它挂着一条点开 404 的链接。
- * - **正文也在这里解析**（`body` → `notes`，复用 notes.ts 的同一套发布约定）：列表里每
- *   一行自己是一条 disclosure，展开就地看那一版带来了什么；解不出条目就是 `notes: null`，
- *   界面据此不画三角（不是丢掉这一行——版本号与日期还是要列出来）。
+ * - **说明读每一版附带的 latest.yml，不读 Release 正文**（`body` 是给专业用户的完整文档，
+ *   见 notes.ts 文件头）：列表里每一行自己是一条 disclosure，展开就地看那一版带来了什么；
+ *   没传 latest.yml / 里面没写 / 拉不到就是 `notes: null`，界面据此不画三角（不是丢掉这一行
+ *   ——版本号与日期还是要列出来）。每版多一次请求（最多 5 次，并行），走 GitHub 的下载地址，
+ *   不占 API 的未认证配额。
  * - **只缓存成功**，10 分钟。失败不缓存，用户点「重试」是真的再打一次；成功则点开 /
  *   收起来回点不打 API。内测期发布节奏远慢于 10 分钟，够用。
  * - **失败是数据**（RecentReleasesResult）：离线 / 限流 / 非 200 都由界面在展开体里
  *   说一句人话并给重试，不让 invoke reject（见 shared/updater.ts 的取舍说明）。
  */
-import type { RecentRelease, RecentReleasesResult } from "../../shared/updater.ts";
-import { parseReleaseNotes } from "./notes.ts";
+// electron-updater 自己读 latest.yml 的那一个解析函数（js-yaml load）：说明与更新器同口径，
+// 也不为读一个字段再引一份 YAML 依赖。包没有 exports 字段，深路径可用；版本精确锁在 6.8.9
+import { parseUpdateInfo } from "electron-updater/out/providers/Provider.js";
+import type { RecentRelease, RecentReleasesResult, UpdateNote } from "../../shared/updater.ts";
+import { appNotesOf } from "./notes.ts";
 import { releasesApiUrl } from "./releases-url.ts";
 
 /** 展开体一屏够看，别把发布史整本拉下来 */
@@ -46,9 +51,42 @@ function versionOf(tag: string): string {
  * 返回空数组 = 真的没有已发布的版本（全是 Draft 时就是这样）。两者在界面上是两句不同的话。
  * 单个条目字段缺失 → 跳过那一条，不影响别的。
  */
-export function parseRecentReleases(payload: unknown): readonly RecentRelease[] | null {
+/**
+ * 列表里的一条，说明还没拉：`notesUrl` 是这一版 Release 附带的 latest.yml（没有就是 null）。
+ * 说明不读 Release 正文（`body`）——那是给专业用户的完整文档，见 notes.ts 文件头。
+ */
+export interface ListedRelease extends Omit<RecentRelease, "notes"> {
+  notesUrl: string | null;
+}
+
+/** 带说明的更新元数据文件：Windows 的 latest.yml 优先，没有再看 mac 的（两份说明同源） */
+const CHANNEL_FILES = ["latest.yml", "latest-mac.yml"] as const;
+
+function channelFileUrl(assets: unknown): string | null {
+  if (!Array.isArray(assets)) return null;
+  for (const name of CHANNEL_FILES) {
+    for (const asset of assets) {
+      if (typeof asset !== "object" || asset === null) continue;
+      const record = asset as Record<string, unknown>;
+      const url = text(record.browser_download_url);
+      if (record.name === name && url !== null) return url;
+    }
+  }
+  return null;
+}
+
+/** latest.yml 原文 → 软件里的说明；解析不了 / 没写说明都是 null（不拖垮整个列表） */
+export function notesFromChannelFile(raw: string): readonly UpdateNote[] | null {
+  try {
+    return appNotesOf(parseUpdateInfo(raw, "latest.yml", new URL("https://github.com/")).releaseNotes);
+  } catch {
+    return null;
+  }
+}
+
+export function parseRecentReleases(payload: unknown): readonly ListedRelease[] | null {
   if (!Array.isArray(payload)) return null;
-  const releases: RecentRelease[] = [];
+  const releases: ListedRelease[] = [];
   for (const entry of payload) {
     if (typeof entry !== "object" || entry === null) continue;
     const record = entry as Record<string, unknown>;
@@ -62,8 +100,7 @@ export function parseRecentReleases(payload: unknown): readonly RecentRelease[] 
       title: text(record.name) ?? tag,
       publishedAt,
       htmlUrl,
-      // 正文按发布约定逐条解析（与 update-downloaded 同一条路）；没正文 / 解不出条目是 null
-      notes: parseReleaseNotes(text(record.body)),
+      notesUrl: channelFileUrl(record.assets),
     });
   }
   return releases;
@@ -89,6 +126,24 @@ export function createRecentReleases(options: RecentReleasesOptions = {}): Recen
   const now = options.now ?? Date.now;
   let cached: { at: number; releases: readonly RecentRelease[] } | null = null;
 
+  /** 拉一版的 latest.yml 读说明。transient = 网络层失败（超时 / 断网 / 5xx），不是「没有这份文件」 */
+  async function withNotes(
+    release: Omit<RecentRelease, "notes">,
+    notesUrl: string | null,
+  ): Promise<{ release: RecentRelease; transient: boolean }> {
+    if (notesUrl === null) return { release: { ...release, notes: null }, transient: false };
+    try {
+      const response = await call(notesUrl, {
+        headers: { "user-agent": "orbita" },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (!response.ok) return { release: { ...release, notes: null }, transient: response.status >= 500 };
+      return { release: { ...release, notes: notesFromChannelFile(await response.text()) }, transient: false };
+    } catch {
+      return { release: { ...release, notes: null }, transient: true };
+    }
+  }
+
   return {
     async recent(): Promise<RecentReleasesResult> {
       const url = endpoint();
@@ -100,9 +155,14 @@ export function createRecentReleases(options: RecentReleasesOptions = {}): Recen
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
-        const releases = parseRecentReleases(await response.json());
-        if (releases === null) return { ok: false, message: "返回的不是版本列表" };
-        cached = { at: now(), releases };
+        const listed = parseRecentReleases(await response.json());
+        if (listed === null) return { ok: false, message: "返回的不是版本列表" };
+        // 每一版各拉一份 latest.yml（并行，最多 PER_PAGE 份）；单份失败只让那一行没有说明
+        const fetched = await Promise.all(listed.map(({ notesUrl, ...release }) => withNotes(release, notesUrl)));
+        const releases = fetched.map((entry) => entry.release);
+        // 有一份是网络层失败（不是「这一版没传 latest.yml」）就不缓存：下次展开再试，别把
+        // 一次抖动记成十分钟的「没有说明」
+        if (fetched.every((entry) => !entry.transient)) cached = { at: now(), releases };
         return { ok: true, releases };
       } catch (error) {
         return { ok: false, message: error instanceof Error ? error.message : String(error) };

@@ -27,7 +27,7 @@ import type {
   UpdateSupport,
 } from "../../shared/updater.ts";
 import { readCurrentNotes, saveCurrentNotes } from "./current-notes.ts";
-import { parseReleaseNotes } from "./notes.ts";
+import { appNotesOf } from "./notes.ts";
 import { releasesUrl } from "./releases-url.ts";
 import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
 
@@ -49,11 +49,9 @@ export interface UpdaterOptions {
   beforeInstall: () => void;
 }
 
-/** 更新说明：GitHub 给的是 Release 正文的 HTML，fullChangelog 时是一个数组（最新一条在前） */
+/** 更新说明：只认打包时写进 latest.yml 的纯文本；退回到 Release 页正文时不显示（见 notes.ts 的 appNotesOf） */
 function notesOf(info: UpdateInfo): readonly UpdateNote[] | null {
-  const notes = info.releaseNotes;
-  if (notes === undefined || notes === null) return null;
-  return parseReleaseNotes(typeof notes === "string" ? notes : (notes[0]?.note ?? null));
+  return appNotesOf(info.releaseNotes);
 }
 
 function releaseOf(info: UpdateInfo): UpdateRelease {
