@@ -81,6 +81,9 @@
       }
     ],
     "npmRebuild": false,
+    "releaseInfo": {
+      "releaseNotes": "[icon:download] Windows 版现在能自己更新了：有新版本会告诉你，你点「下载」才下载，下完点「重启以安装」才装。\n[icon:history] 设置 › 通用 › 软件更新 里可以看「历史版本」，点开就能看每一版改了什么。\n[icon:fold-vertical] 对话更好读了：agent 每说一段话都留在外面，只把中间的思考和工具调用收起来。\n[icon:eye] 浅色主题下，说明卡片和小标签的底色换成了更清楚的冷灰，不再和白底糊成一片。"
+    },
     "publish": [
       {
         "provider": "github",

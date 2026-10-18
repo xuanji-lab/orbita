@@ -7,6 +7,8 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import packageJson from "../../../package.json" with { type: "json" };
 import { appNotesOf, parseReleaseNotes } from "./notes.ts";
 
 /** 本版发布正文的三条（发布约定写法的样子） */
@@ -137,5 +139,29 @@ describe("appNotesOf —— 软件里只认 latest.yml 的纯文本", () => {
     assert.equal(appNotesOf(undefined), null);
     assert.equal(appNotesOf(null), null);
     assert.equal(appNotesOf([{ version: "0.1.15", note: "<p>x</p>" }]), null);
+  });
+});
+
+/**
+ * 发版兜底：这一版给普通用户看的说明（package.json 的 build.releaseInfo.releaseNotes，打包时写进
+ * latest.yml）必须写了、每行都带图标、图标真的登记在 Icon.tsx 里。写错图标名不会崩，但那一条
+ * 会没有图标——发版前在这里报红，比装到用户机器上才发现好。
+ */
+describe("发版：package.json 里的应用内更新说明", () => {
+  const notes = appNotesOf(packageJson.build.releaseInfo.releaseNotes) ?? [];
+  const iconSource = readFileSync(new URL("../../renderer/src/shell/Icon.tsx", import.meta.url), "utf8");
+
+  test("写了，且是纯文本（不是从 Release 页抄来的 markdown / HTML）", () => {
+    assert.ok(notes.length > 0, "build.releaseInfo.releaseNotes 为空：软件里这一版会没有说明");
+    for (const note of notes) assert.doesNotMatch(note.text, /^#|\*\*|^\|/, `像是 markdown：${note.text}`);
+  });
+
+  test("每一条都带 [icon:名字]，且图标已在 Icon.tsx 登记（有 svg、有 import）", () => {
+    for (const note of notes) {
+      assert.ok(note.icon !== null, `这一条没写图标：${note.text}`);
+      const svg = new URL(`../../../design-system/assets/icons/lucide/${note.icon}.svg`, import.meta.url);
+      assert.ok(existsSync(svg), `design-system 里没有 ${note.icon}.svg`);
+      assert.ok(iconSource.includes(`lucide/${note.icon}.svg?raw`), `Icon.tsx 没有登记 ${note.icon}`);
+    }
   });
 });
