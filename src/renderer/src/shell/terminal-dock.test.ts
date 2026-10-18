@@ -1,10 +1,12 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  dockResizerBottomOffset,
   moveDockTo,
   recallTerminalOpen,
   rememberTerminalOpen,
   restoreTerminalState,
+  TERMINAL_DOCK_RESIZER_SIZE,
   type TerminalOpenMemory,
 } from "./terminal-dock.ts";
 import type { RightPanelKind } from "./RightRail.tsx";
@@ -88,5 +90,13 @@ describe("moveDockTo（扳动停靠开关：终端跟着搬家）", () => {
       bottomOpen: false,
     });
     deepStrictEqual(moveDockTo("right", null), { panel: "terminal", bottomOpen: false });
+  });
+});
+
+describe("dockResizerBottomOffset（拖高热区骑在分界线上下各一半）", () => {
+  it("热区 12px：底边 = 分界线 + 6，上缘伸进对话区 6px（槽里那半被裁掉，热区挂 pane-col）", () => {
+    deepStrictEqual(TERMINAL_DOCK_RESIZER_SIZE, 12);
+    deepStrictEqual(dockResizerBottomOffset(260), 254);
+    deepStrictEqual(dockResizerBottomOffset(400), 394);
   });
 });

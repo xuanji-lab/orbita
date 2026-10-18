@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { clampTerminalHeight, TERMINAL_DOCK_HEIGHT_DEFAULT } from "@shared/settings";
+import {
+  clampTerminalHeight,
+  TERMINAL_DOCK_HEIGHT_DEFAULT,
+} from "@shared/settings";
+import {
+  TERMINAL_DOCK_RESIZER_SIZE,
+  dockResizerBottomOffset,
+} from "./terminal-dock.ts";
 import { useT } from "../locale.ts";
 
 /**
@@ -76,16 +83,14 @@ export function TerminalDockSlot(props: {
   };
 
   return (
-    <section
-      ref={hostRef}
-      className={`terminal-dock-slot${open ? " open" : ""}${resizing ? " dragging" : ""}`}
-      style={{ "--terminal-dock-h": `${height}px` } as React.CSSProperties}
-    >
-      {/* 拖高热区：顶缘 6px 骑在横线上；双击回 260。只在展开时给（收起动画期间
-          高度归零，把手没有可拖的语义） */}
+    <>
+      {/* 拖高热区：骑在分界线上下各一半，整个挂在 pane-col 里（定位基准是分界线；
+          槽自己 overflow:hidden，线以上那半在槽里注定被裁）。静止不显示，
+          悬停 / 拖动才显示一条细线；双击回 260。只在展开时给 */}
       {open && (
         <span
-          className="terminal-dock-resizer no-drag"
+          className={`terminal-dock-resizer no-drag${resizing ? " dragging" : ""}`}
+          style={{ bottom: dockResizerBottomOffset(height) }}
           onPointerDown={startResize}
           onDoubleClick={() =>
             props.onHeightCommit(clampTerminalHeight(TERMINAL_DOCK_HEIGHT_DEFAULT, paneHeight))
@@ -93,7 +98,13 @@ export function TerminalDockSlot(props: {
           title={t.common.dragResizeHeight}
         />
       )}
-      <div className="terminal-dock-inner">{props.children}</div>
-    </section>
+      <section
+        ref={hostRef}
+        className={`terminal-dock-slot${open ? " open" : ""}${resizing ? " dragging" : ""}`}
+        style={{ "--terminal-dock-h": `${height}px` } as React.CSSProperties}
+      >
+        <div className="terminal-dock-inner">{props.children}</div>
+      </section>
+    </>
   );
 }

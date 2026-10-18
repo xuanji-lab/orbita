@@ -81,3 +81,16 @@ export function moveDockTo(
   }
   return { panel: "terminal", bottomOpen: false };
 }
+
+/**
+ * 拖高热区的几何（2026-10-18 用户验收：「拖高那根线难瞄准」）：热区 12px，
+ * **骑在分界线上下各一半**——槽自己 overflow:hidden（开合动画要裁内容），
+ * 线上方那半在槽里注定裁掉，所以热区整个挂在 pane-col 里（定位基准是分界线，
+ * bottom 偏移 = 槽高 − 半个热区）。静止不显示，悬停 / 拖动才显示一条细线。
+ */
+export const TERMINAL_DOCK_RESIZER_SIZE = 12;
+
+/** 热区在 pane-col 里的 bottom 偏移（px）：热区底边 = 分界线 + 半个热区 */
+export function dockResizerBottomOffset(dockHeight: number): number {
+  return dockHeight - TERMINAL_DOCK_RESIZER_SIZE / 2;
+}

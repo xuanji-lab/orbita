@@ -834,6 +834,9 @@ body {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  /* 底部终端的拖高热区以这里为定位基准（骑在分界线上下各一半，见
+     .terminal-dock-resizer）——槽自己裁内容，热区那半在槽外 */
+  position: relative;
 }
 
 .pane-main {
@@ -968,19 +971,34 @@ body {
   height: var(--terminal-dock-h, 260px);
 }
 
-/* 横线即分界；把手骑在横线上（同右栏的竖线把手） */
+/* 横线即分界；热区（12px）骑在分界线上下各一半、挂在 pane-col 里，静止不
+   显示，悬停 / 拖动才显示一条 2px 细线（光标 row-resize）——比右栏竖线把手的
+   6px 全在栏内更宽：那根线要瞄准的是一条横缝，上下各留一半才好抓 */
 .terminal-dock-resizer {
   position: absolute;
-  top: 0;
   left: 0;
   right: 0;
-  height: 6px;
+  height: 12px;
   cursor: row-resize;
-  z-index: 30;
+  z-index: 40;
 }
 
-.terminal-dock-resizer:hover {
-  background: var(--color-border-subtle);
+.terminal-dock-resizer::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--transition-hover);
+}
+
+.terminal-dock-resizer:hover::after,
+.terminal-dock-resizer.dragging::after {
+  background: var(--color-border-default);
 }
 
 /* ===== 侧栏 ===== */
