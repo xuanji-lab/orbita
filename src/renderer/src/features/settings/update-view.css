@@ -12,7 +12,7 @@
   font-family: var(--font-family-business);
 }
 
-/* 状态行：图标 + 文字 + 里头嵌的机器事实。次级灰是常态，出错才转红 */
+/* 状态行：图标 + 一整块文字（里头嵌的机器事实也在那块文字里）。次级灰是常态，出错才转红 */
 .upd-status {
   display: inline-flex;
   align-items: center;
@@ -20,6 +20,12 @@
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
+}
+
+/* 图标是自己一项、不被文字挤缩；文字整体是另一项，按普通行内排版——
+   字数不同、窗口窄了要折行，都不该由 flex 一项一项去猜间距（见 UpdateCard.tsx 的注释） */
+.upd-status .orbita-icon {
+  flex: 0 0 auto;
 }
 
 .upd-status[data-tone="error"] {

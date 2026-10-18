@@ -154,7 +154,14 @@ export function UpdateCard() {
           <>
             <span className="upd-status" data-tone={statusTone} title={statusDetail ?? undefined}>
               {statusIcon !== null && <Icon name={statusIcon} size={13} spin={statusSpin} />}
-              {statusText}
+              {/*
+               * 状态文字整体包在一个 span 里：**它是普通文字，不是一堆 flex 项**。
+               * .upd-status 是 inline-flex，之前文字、<Mono>、" · " 各自算一个匿名 flex 项，
+               * 项与项之间加 6px 的 gap、而每项首尾的空格被吞掉——于是「is available· 14.8 MB」
+               * （圆点前没了空格）、「Downloading 0.1.16 … 6.3 MB」（省略号前多出 6px）。
+               * 现在字间距只来自文案里的空格，屏幕上的样子与文案逐字一致。
+               */}
+              <span>{statusText}</span>
             </span>
             {notes !== null && (
               <button
