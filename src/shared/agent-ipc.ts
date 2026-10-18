@@ -254,6 +254,10 @@ export const ipcChannels = {
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
   reviewDiff: "review:diff",
+  /** 专注模式：一个工作区此刻的 U / M 改动（含增删行数与当前分支名，载荷形状在 shared/focus.ts）。git 只读，与审查面板同一套 git-source */
+  focusChanges: "focus:changes",
+  /** 专注模式：时间到的系统通知（Electron Notification，点按聚焦窗口；载荷 FocusNotifyRequest） */
+  focusNotifyDone: "focus:notify-done",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */

@@ -105,3 +105,21 @@ export function parseUntrackedLine(line: string): string | null {
   if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) path = path.slice(1, -1);
   return path === "" ? null : path;
 }
+
+/**
+ * `git status --porcelain=v2` 的已跟踪改动行（`1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`）
+ * → path 与 XY（暂存位 + 工作区位，`.` = 那一侧没动）。专注模式的左栏文件树用它分 U / M：
+ * 有一侧是 A（新增）就算新文件（U），其余（M / D / T / R / C）算修改（M）。
+ * 改名行（`2`）不产——调用方带 `--no-renames`；万一出现返回 null 跳过，不猜。
+ * 解不了（空行、格式漂移、路径为空）返回 null。
+ */
+export function parseStatusChangedLine(line: string): { path: string; xy: string } | null {
+  if (!line.startsWith("1 ")) return null;
+  const parts = line.split(" ");
+  // parts[0]="1"，[1]=XY，[2..7]=sub/mH/mI/mW/hH/hI，[8..]=path（可含空格，原样拼回）
+  if (parts.length < 9) return null;
+  const xy = parts[1] ?? "";
+  const path = parts.slice(8).join(" ");
+  if (xy.length !== 2 || path === "") return null;
+  return { path, xy };
+}
