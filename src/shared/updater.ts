@@ -108,3 +108,33 @@ export function releaseTagUrl(releasesUrl: string, version: string): string | nu
   if (version === "") return null;
   return `${releasesUrl}/tag/v${version}`;
 }
+
+/**
+ * 最近几个版本的 Release —— 「所有版本」行尾三角展开的那份列表。
+ *
+ * 更新源（GitHub Releases）只把「最新」交给 electron-updater，历史版本本来没有出口。
+ * 这份数据来自 `updater:recentReleases`（主进程打 GitHub API，见
+ * main/updater/recent-releases.ts）：它是**点开才要**的一次网络请求，所以不放进快照——
+ * 混进每次状态推送里，会让与它无关的状态变化也跟着背上一份列表。
+ */
+export interface RecentRelease {
+  /** tag，如 `v0.1.15` */
+  tag: string;
+  /** 版本号（tag 去掉前缀 `v` 的那一段），列表里显示的是它 */
+  version: string;
+  /** Release 标题；作者没写标题时主进程回落到 tag */
+  title: string;
+  /** 发布日期的 ISO 串（界面只截日期那一段） */
+  publishedAt: string;
+  /** Release 页地址：列表里点一行跳它 */
+  htmlUrl: string;
+}
+
+/**
+ * `updater:recentReleases` 的回执。**失败是数据而不是异常**：拉不到列表（离线、限流、
+ * 非 200、返回的形状不对）时在展开体里说一句人话并给重试，而不是让 invoke reject、
+ * 让界面多写一套异常展示（同 updater:check 那五个 handler 的取舍）。
+ */
+export type RecentReleasesResult =
+  | { ok: true; releases: readonly RecentRelease[] }
+  | { ok: false; message: string };
