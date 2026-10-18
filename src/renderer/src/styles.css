@@ -784,8 +784,30 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/*
+ * 窗口工具组的水平几何（常量与纯函数在 shell/window-tools.ts，两侧互为对账，
+ * window-tools.test.ts 把关）：
+ *  - --traffic-clearance：darwin 红绿灯净空（trafficLightPosition x=18、三键约 52px 宽）；
+ *  - --window-tools-inset：侧栏收起后「窗口工具」组（侧栏开关 · 新任务）在对话卡
+ *    页头里的左内边距——补齐侧栏自己那层 --space-3 与红绿灯净空，让组的左缘在
+ *    展开（侧栏顶行）/ 收起（对话卡页头）两态落在同一个窗口 x 上，开关不跳位。
+ */
+:root {
+  --traffic-clearance: 0px;
+  --window-tools-inset: var(--space-3);
+  /* 顶部行行高：垂直中心钉在 darwin 红绿灯中心（y=25）那条线上——行顶 = 卡顶
+     （--space-3 = 12），所以 2×(25−12) = 26。推导与对账在 shell/window-tools.ts
+     （TITLEBAR_ROW_HEIGHT），Windows 无红绿灯也用同一条中心线保持一致 */
+  --titlebar-row: 26px;
+}
+
+:root[data-platform="darwin"] {
+  --traffic-clearance: 66px;
+  --window-tools-inset: calc(var(--space-3) + var(--traffic-clearance));
+}
+
 :root[data-platform="darwin"] .titlebar {
-  padding-inline-start: 66px;
+  padding-inline-start: var(--traffic-clearance);
 }
 
 .pane {
@@ -837,8 +859,8 @@ body {
  *   输入卡右缘、正文右缘落在同一根线上；
  * - 纵向 `--pane-pop-block` = 输入卡离主槽底边的距离（ChatView 底部行的 10px），
  *   清单卡的底边与输入卡底边齐平；
- * - 有会话页头时宿主顶边让到页头分隔线之下（页头 30px + 上下 12px 内边距 + 1px 线，
- *   ChatView.tsx 的 header），提醒卡不骑在分隔线上。
+ * - 有会话页头时宿主顶边让到页头分隔线之下（页头 --titlebar-row + 1px 线 +
+ *   6px 余量，ChatView.tsx 的 header），提醒卡不骑在分隔线上。
  * 各占离入口最近的角：提醒卡右上（辅助对话入口在右栏上部），清单右下（铃铛在右栏底）。
  * 右栏面板开着时卡片停在主槽这一侧，不再压到面板上。
  */
@@ -852,7 +874,7 @@ body {
 }
 
 .pane-main:has(.chat-head) > .pane-pop-host {
-  top: 55px;
+  top: 33px;
 }
 
 .pane-pop {
@@ -2843,7 +2865,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: 24px;
   flex: none;
   padding: 0 4px 0 10px;
   border: 0;
@@ -3714,7 +3736,9 @@ textarea.text-field {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 48px;
+  /* 与对话卡 / 设置页 / 侧栏的顶部行同一条中心线（--titlebar-row，见 :root 注释）——
+     两边底线连成一条 */
+  height: var(--titlebar-row);
   padding: 0 10px 0 16px;
   border-bottom: 1px solid var(--color-border-subtle);
 }
@@ -3757,7 +3781,7 @@ textarea.text-field {
   align-items: center;
   gap: 6px;
   min-width: 96px;
-  height: 28px;
+  height: 24px;
   margin-left: 4px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-md);
@@ -3904,7 +3928,7 @@ button.panel-group-toggle:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: 24px;
   margin-left: 4px;
   padding: 0 var(--space-2);
   border: 0;

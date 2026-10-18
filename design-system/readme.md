@@ -235,8 +235,14 @@ smoothing), so body sits at 450 — still one step below the 500 controls weight
 thinking-level labels in the composer bar are set *italic* at secondary grey — the only italic in
 the UI.
 
-**Layout.** A fixed shell: left sidebar (288px, collapsing to a 48px icon rail), conversation pane,
-a 32px action rail for session actions, right drawer (320px, **closed by default**). Both sidebars
+**Layout.** A fixed shell: left sidebar (288px; collapsing it removes it entirely — no icon
+rail — and the window tools (traffic-light clearance · sidebar toggle · New task) ride the leftmost of the
+conversation header, 2026-10-18), conversation pane,
+a 32px action rail for session actions, right drawer (320px, **closed by default**). Every top row
+(sidebar wordmark, conversation / settings / panel headers, the right rail's first slot) shares one
+height — `--titlebar-row`, 26px — centred on the traffic-light line (macOS lights at y 19–31;
+the row centre and the lights' centre are the same horizontal line, Windows included for cross-platform
+consistency). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the

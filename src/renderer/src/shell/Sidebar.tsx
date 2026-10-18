@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
+import { RailButton } from "./WindowTools";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
@@ -39,9 +40,6 @@ import type { Messages } from "../messages-en.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
 export type Overlay = "settings" | null;
-
-/** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
-const COLLAPSE_BREAKPOINT = 960;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -150,6 +148,17 @@ export function Sidebar(props: {
   /** 左下角星云的摆放偏好（settings.usagePet）与改它的回调 */
   usagePet: UsagePetPref | undefined;
   onUsagePetChange: (next: UsagePetPref) => void;
+  /**
+   * 折叠态由 App 持有（2026-10-18 起收起后没有图标条，「窗口工具」组嵌在对话卡
+   * 页头里，那份状态两边共用）。断点自动收起也在 App。
+   */
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
+  /**
+   * 收起态页头「新任务」的信号（nonce 递增）：Sidebar 展开列表后把 TASKS 组跟着
+   * 展开——新任务不能落进一个收着的组里无声无息。0 = 从未发过。
+   */
+  newTaskSignal: number;
 }) {
   const t = useT();
   const { session } = props;
@@ -213,11 +222,6 @@ export function Sidebar(props: {
    */
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   /**
-   * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
-   * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
-   */
-  const [collapsed, setCollapsed] = useState(false);
-  /**
    * 分组状态：哪些组折叠着、哪些组点了 Show more 全量铺开。状态本体在
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
    */
@@ -225,13 +229,12 @@ export function Sidebar(props: {
     overrides: new Set<string>(),
     pages: new Map<string, number>(),
   });
+  // 收起态页头点「新任务」（App 发的 nonce 信号）：展开后 TASKS 组跟着展开，
+  // 新会话不落进收着的组里（与侧栏里大按钮的 startNewTask 同一条纪律）
   useEffect(() => {
-    const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
-    const sync = () => setCollapsed(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
+    if (props.newTaskSignal === 0) return;
+    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+  }, [props.newTaskSignal]);
   /**
    * 任意会话在跑（含后台与子会话）：用量格的星云碎片 3 倍速——「今在干活」
    * 是全应用的状态，不是当前会话的。phaseOf 读引擎的同步镜像；每次 phase
@@ -260,7 +263,7 @@ export function Sidebar(props: {
    */
   const startNewTask = (): void => {
     props.onOverlay(null);
-    setCollapsed(false);
+    props.onCollapsedChange(false);
     // 新任务落在 TASKS 里——不能落进一个收着的组里无声无息
     setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
     session.newTask();
@@ -353,37 +356,14 @@ export function Sidebar(props: {
     window.addEventListener("pointerup", up, { once: true });
   };
 
-  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签）。
-  // 折叠期间列表不可达，要切会话先展开。Archived / Carryovers / Settings
-  // 不在这里重复摆入口：它们的唯一入口在右栏底部（2026-09-22 裁决），
-  // 折叠态也能点到（右栏不折叠）。
-  if (collapsed) {
-    return (
-      <aside
-        style={{
-          width: 48,
-          flex: "0 0 48px",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 4,
-          padding: "var(--space-2) 0",
-          background: "transparent",
-          overflow: "hidden",
-          transition: "width var(--duration-fast) var(--ease-standard)",
-        }}
-      >
-        {/* 顶栏仍兼窗口拖拽区：48px 里没有 logo 的位置 */}
-        <div className="titlebar" style={{ height: 34, width: "100%" }} />
-        <RailButton icon="panel-left" title={t.sidebar.expand} onClick={() => setCollapsed(false)} />
-        <RailButton
-          icon="plus"
-          title={t.common.newTask}
-          accent
-          onClick={startNewTask}
-        />
-      </aside>
-    );
+  // —— 收起态（2026-10-18 用户裁决）：不再有左侧图标条，这里什么都不渲染，
+  // 主区域向左铺满，折叠期间列表不可达，要切会话先展开（开关在对话卡页头）。
+  // 「窗口工具」组（红绿灯净空 · 侧栏开关 · 新任务）嵌在对话卡
+  // 页头的最左边（shell/WindowTools.tsx，由 App 注入 ChatView / SettingsView），
+  // 旧图标条的两个入口都活在那个组里。Archived / Carryovers / Settings 的入口
+  // 本来就只在右栏底部（2026-09-22 裁决），右栏不折叠。
+  if (props.collapsed) {
+    return null;
   }
 
   return (
@@ -396,24 +376,29 @@ export function Sidebar(props: {
         display: "flex",
         flexDirection: "column",
         gap: "var(--space-3)",
-        padding: "var(--space-2) var(--space-3)",
+        // 顶部不留白：顶行要坐到卡顶（与 .pane 的页头同一条中心线，对齐红绿灯）；
+        // 底部留白与拖宽热区同步（top: var(--space-3)）
+        padding: "0 var(--space-3) var(--space-2)",
         background: "transparent",
         overflow: "hidden",
         // 拖动中禁过渡：160ms 的宽度动画会让跟手变成拖一根皮筋
         transition: resizing ? "none" : "width var(--duration-fast) var(--ease-standard)",
       }}
     >
-      {/*
-        顶栏兼作标题栏：`titleBarStyle: "hiddenInset"` 之后这是窗口唯一的可拖区域，
-        macOS 上还要给红黄绿三个键让净空——见 styles.css 的 `.titlebar`。
-        没有 logo：品牌就是衬线体里的小写 orbita（设计系统 *No logo*）。
+      {/**
+        顶栏兼作标题栏：`titleBarStyle: "hiddenInset"` 之后这是窗口左侧唯一的可拖区域，
+        macOS 上给红黄绿三个键让净空（styles.css 的 `.titlebar`）。
+        **收起开关守在净空后第一个位**（与收起态页头里的 WindowTools 同一个窗口 x，
+        几何见 window-tools.ts）；字标 orbita 推到行的另一端——左锚点让给开关，
+        开合之间手不用找（2026-10-18）。行高 --titlebar-row：行中心钉在红绿灯
+        中心那条线上（用户裁决「顶栏窄一些，和红绿灯横线居中对齐」）。
       */}
       <div
         className="titlebar"
         style={{
           display: "flex",
           alignItems: "center",
-          height: 34,
+          height: "var(--titlebar-row)",
           fontFamily: "var(--font-family-brand)",
           fontSize: "var(--font-size-wordmark)",
           fontWeight: 500,
@@ -422,16 +407,8 @@ export function Sidebar(props: {
           color: "var(--color-text-primary)",
         }}
       >
-        orbita
-        <IconButton
-          label={t.sidebar.collapse}
-          title={t.sidebar.collapseTip}
-          size={24}
-          onClick={() => setCollapsed(true)}
-          style={{ marginInlineStart: "auto", color: "var(--color-text-tertiary)" }}
-        >
-          <Icon name="panel-left" size={14} />
-        </IconButton>
+        <RailButton icon="panel-left" title={t.sidebar.collapse} onClick={() => props.onCollapsedChange(true)} />
+        <span style={{ marginInlineStart: "auto" }}>orbita</span>
       </div>
 
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
@@ -587,7 +564,7 @@ export function Sidebar(props: {
               // （cwd / 归属跟随它）——不能落进一个收着的组里无声无息
               props.onShowCarryovers(false);
               props.onOverlay(null);
-              setCollapsed(false);
+              props.onCollapsedChange(false);
               const source = session.sessions.find((m) => m.id === item.sourceSessionId);
               setGroups((current) =>
                 source?.workspaceId != null
@@ -1945,46 +1922,6 @@ function ListError(props: { message: string; onRetry: () => void }) {
         {t.common.retry}
       </button>
     </p>
-  );
-}
-
-/**
- * 折叠图标条上的按钮（设计系统 components/navigation/RailButton）：
- * 48px rail 里的 32px 方块，**tooltip 是它唯一的标签**。
- * 当前项用模式选中色（R4-03 修正：明蓝暗黄，图标条当前项同款）；
- * accent 只给 New task 这个主操作。
- */
-function RailButton(props: {
-  icon: IconName;
-  title: string;
-  active?: boolean;
-  accent?: boolean;
-  onClick?: () => void;
-}) {
-  const active = props.active === true;
-  const accent = props.accent === true;
-  return (
-    <button
-      type="button"
-      className="quiet-control rail-btn"
-      title={props.title}
-      aria-label={props.title}
-      aria-pressed={active || accent ? true : undefined}
-      data-accent={accent || undefined}
-      onClick={props.onClick}
-      style={{
-        display: "grid",
-        placeItems: "center",
-        width: 32,
-        height: 32,
-        flex: "0 0 auto",
-        border: 0,
-        borderRadius: "var(--radius-md)",
-        cursor: "pointer",
-      }}
-    >
-      <Icon name={props.icon} size={16} />
-    </button>
   );
 }
 

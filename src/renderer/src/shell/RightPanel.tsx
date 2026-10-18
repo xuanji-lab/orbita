@@ -183,9 +183,10 @@ export function RightPanelFrame(props: {
 }
 
 /**
- * 面板内的 26px 图标方块：就是 IconButton（安静控件配方 + 自绘 tooltip）。
+ * 面板内的 24px 图标方块：就是 IconButton（安静控件配方 + 自绘 tooltip）。
  * 原先这里自己画 hover（onMouseEnter 写 style）、用原生 title——违反「状态样式归 CSS」
- * 与「tooltip 自绘」两条规矩，右栏统一时收口到 IconButton。
+ * 与「tooltip 自绘」两条规矩，右栏统一时收口到 IconButton。26→24（2026-10-18）：
+ * 页头收窄到 --titlebar-row（26px）后上下各留 1px，不贴卡顶与底线。
  */
 export function PanelIconButton(props: {
   title: string;
@@ -194,7 +195,7 @@ export function PanelIconButton(props: {
   children: React.ReactNode;
 }) {
   return (
-    <IconButton label={props.title} size={26} disabled={props.disabled} onClick={props.onClick} className="no-drag">
+    <IconButton label={props.title} size={24} disabled={props.disabled} onClick={props.onClick} className="no-drag">
       {props.children}
     </IconButton>
   );
@@ -256,7 +257,7 @@ export function PanelFilter(props: {
  */
 export function PanelHelp(props: { text: string; label: string }) {
   return (
-    <IconButton label={props.label} title={props.text} size={26} className="no-drag">
+    <IconButton label={props.label} title={props.text} size={24} className="no-drag">
       <Icon name="circle-help" size={15} />
     </IconButton>
   );

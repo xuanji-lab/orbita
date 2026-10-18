@@ -103,8 +103,9 @@ export function SubSessionsPanel(props: {
             alignItems: "center",
             gap: "var(--space-2)",
             minWidth: 0,
-            // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
-            height: 48,
+            // 页头 --titlebar-row（含 1px 底线）：与右栏标题行（.panel-head）同高，两边
+            // 底线连成一条；行中心钉在红绿灯中心那条线上（window-tools.ts）
+            height: "var(--titlebar-row)",
             padding: "0 14px",
             boxSizing: "border-box",
             borderBottom: "1px solid var(--color-border-subtle)",

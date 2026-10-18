@@ -23,6 +23,8 @@ import {
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
+import { WindowTools } from "./shell/WindowTools";
+import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
@@ -174,7 +176,40 @@ export function App() {
     if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
   }, [settings.sidebarWidth]);
 
+  /**
+   * 侧栏折叠态（2026-10-18 起由 App 持有）：收起后没有左侧图标条，「窗口工具」组
+   * （侧栏开关 · 新任务）嵌在对话卡页头里（ChatView / SettingsView），与 Sidebar
+   * 共用同一份状态。断点自动收起（960 以下）也在这里；手动开合不持久化——窗口
+   * 宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
+   */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
+    const sync = () => setSidebarCollapsed(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
   const { session, engine } = useChatSession(providers, t);
+  /**
+   * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
+   * 再发 nonce 信号让 Sidebar 把 TASKS 组展开（新会话不落进收着的组里）——与侧栏里
+   * 大按钮的 startNewTask 同一条纪律，状态在两棵子树里，只能靠信号带过去。
+   */
+  const newTaskNonceRef = useRef(0);
+  const [newTaskSignal, setNewTaskSignal] = useState(0);
+  const startNewTaskFromTools = (): void => {
+    setOverlay(null);
+    setSidebarCollapsed(false);
+    newTaskNonceRef.current += 1;
+    setNewTaskSignal(newTaskNonceRef.current);
+    session.newTask();
+  };
+  /** 收起态嵌在对话卡页头最左的「窗口工具」组；展开时侧栏自己的顶行 / 大按钮就是入口，这里不注入 */
+  const windowTools = sidebarCollapsed ? (
+    <WindowTools onExpand={() => setSidebarCollapsed(false)} onNewTask={startNewTaskFromTools} />
+  ) : null;
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
@@ -785,6 +820,9 @@ export function App() {
           }}
           usagePet={settings.usagePet}
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
+          collapsed={sidebarCollapsed}
+          onCollapsedChange={setSidebarCollapsed}
+          newTaskSignal={newTaskSignal}
         />
 
         <main className="pane">
@@ -795,6 +833,7 @@ export function App() {
             {overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
+                windowTools={windowTools}
                 settings={settings}
                 providers={providers}
                 starredModels={settings.starredModels ?? []}
@@ -812,6 +851,7 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
+                windowTools={windowTools}
                 onOpenReviewAt={openReviewAt}
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}

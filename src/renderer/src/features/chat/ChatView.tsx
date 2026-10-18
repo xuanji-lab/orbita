@@ -748,6 +748,12 @@ function ChatViewBody(props: {
   /** 意图系统（实验功能）：新会话的召回默认（settings.intent.newSessionOn 已解缺省）。
    *  可选：副槽（抽屉 / 子会话面板）不传——那里不出开关 */
   intentNewSessionDefault?: boolean;
+  /**
+   * 侧栏收起后的「窗口工具」组（侧栏开关 · 新任务）：嵌在本页头最左（首页则嵌在
+   * 顶部空条里），左缘由 --window-tools-inset 与展开态侧栏顶行对齐（window-tools.ts）。
+   * **只有主槽的 ChatView 拿到它**（App 只给主槽）；抽屉 / Sub-sessions 面板不传。
+   */
+  windowTools?: React.ReactNode;
 }) {
   const t = useT();
   // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
@@ -1282,13 +1288,34 @@ function ChatViewBody(props: {
       >
         {/*
           首页没有页头，但顶部这一条同样要能拖窗口 / 双击缩放——不给的话用户从会话页
-          回到首页就会发现「刚才能拖的地方现在不能拖了」。高度与 Pane 页头对齐（30 + 12×2）。
-          压在内容下面（zIndex 0）：窗口矮到内容顶上来时，会话卡的点击优先，不被拖拽区吞掉。
+          回到首页就会发现「刚才能拖的地方现在不能拖了」。高度与 Pane 页头同一常量
+          （--titlebar-row）。压在内容下面（zIndex 0）：窗口矮到内容顶上来时，会话卡
+          的点击优先，不被拖拽区吞掉。侧栏收起后这一条不再只是拖拽区：窗口工具组住
+          在最左（升到 zIndex 2 才点得着），按钮由 .titlebar button 自动豁免。
         */}
         <div
           className="titlebar"
-          style={{ position: "absolute", insetInlineStart: 0, insetInlineEnd: 0, top: 0, height: 54, zIndex: 0 }}
-        />
+          style={{
+            position: "absolute",
+            insetInlineStart: 0,
+            insetInlineEnd: 0,
+            top: 0,
+            height: "var(--titlebar-row)",
+            // 侧栏收起后这一条不再只是拖拽区：窗口工具组住在最左（左缘与展开态侧栏
+            // 顶行同一个 x，见 window-tools.ts）。组要在内容之上（zIndex 2）才点得着；
+            // 空条本身仍然整条拖拽，按钮由 .titlebar button 自动豁免
+            ...(props.windowTools == null
+              ? { zIndex: 0 }
+              : {
+                  zIndex: 2,
+                  display: "flex" as const,
+                  alignItems: "center" as const,
+                  paddingInlineStart: "var(--window-tools-inset)",
+                }),
+          }}
+        >
+          {props.windowTools}
+        </div>
         <div
           ref={stageRef}
           style={{
@@ -1388,6 +1415,7 @@ function ChatViewBody(props: {
         subSessionsChip={subSessionsChip}
         onOpenSubSessions={props.onOpenSubSessions}
         parentCrumb={parentCrumb}
+        windowTools={props.windowTools}
         footer={
           <>
             {notices}
@@ -1901,6 +1929,12 @@ function Pane(props: {
    * 摆位，判定在 ChatViewBody。
    */
   scrollToEnd?: { visible: boolean; onClick: () => void } | null;
+  /**
+   * 侧栏收起后的「窗口工具」组（App 只给主槽）：嵌在页头最左，标题跟在后面；
+   * 页头左内边距换成 --window-tools-inset——组的左缘与展开态侧栏顶行的开关
+   * 落在同一个窗口 x（几何见 shell/window-tools.ts）。
+   */
+  windowTools?: React.ReactNode;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -1926,13 +1960,17 @@ function Pane(props: {
           alignItems: "center",
           gap: "var(--space-2)",
           minWidth: 0,
-          // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
-          height: 48,
-          padding: "0 18px",
+          // 页头 --titlebar-row（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线
+          // 连成一条；行中心钉在红绿灯中心那条线上（window-tools.ts 的推导）。
+          // 侧栏收起后左内边距让位给窗口工具组（--window-tools-inset 在 mac 上含
+          // 红绿灯净空；展开态没有这组，维持 18px）
+          height: "var(--titlebar-row)",
+          padding: props.windowTools == null ? "0 18px" : "0 18px 0 var(--window-tools-inset)",
           boxSizing: "border-box",
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
+        {props.windowTools}
         {/* 面包屑「↑ 父标题」：子会话被 Open as main 后，标题前的一句「你是从哪来的」——
             caption tertiary，不与标题抢重量；点击回主槽的父会话（子会话 PR4c，2.2） */}
         {props.parentCrumb != null && (
@@ -1982,7 +2020,7 @@ function Pane(props: {
           style={{
             fontSize: "var(--font-size-lg)",
             fontWeight: "var(--weight-bold)",
-            height: 30,
+            height: 26,
           }}
         >
           <strong
@@ -2018,6 +2056,7 @@ function Pane(props: {
         */}
         {props.completion !== null && props.onSetCompletion !== undefined && (
           <IconButton
+            size={24}
             label={
               props.completion === "open"
                 ? props.closing === true

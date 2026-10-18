@@ -102,8 +102,9 @@ export function RightRail(props: {
         flexDirection: "column",
         alignItems: "center",
         gap: "var(--space-2)",
-        // 顶行与侧栏字标行同行同高（padding-top 一致），第一个入口与左侧折叠图标对齐
-        padding: "var(--space-2) 0",
+        // 顶行与侧栏字标行同一条中心线（顶行坐到卡顶，行高 --titlebar-row），
+        // 第一个入口与左侧折叠图标对齐——两边都钉在红绿灯中心那条线上
+        padding: "0 0 var(--space-2)",
         background: "transparent",
         overflow: "hidden",
       }}
@@ -116,7 +117,7 @@ export function RightRail(props: {
       <span
         className="titlebar"
         style={{
-          height: 34,
+          height: "var(--titlebar-row)",
           width: "100%",
           flex: "0 0 auto",
           display: "flex",
