@@ -153,3 +153,60 @@ describe("resolveFileRoots", () => {
     assert.equal(after.find((entry) => entry.kind === "attachments")?.exists, true);
   });
 });
+
+describe("resolveFileRoots：专注 / 浏览态的额外预览根（extraWorkspaceId）", () => {
+  test("按 id 解出工作区，作第二颗 workspace 根排在会话工作区之后", async () => {
+    await workspaces.ensureHome();
+    const focus = await workspaces.create("focusrepo"); // 真实目录 + 真实 id
+    // 当前会话是 Home（workspaceId null）——专注工作区不在会话根里
+    const roots = await resolveFileRoots(workspaces, sessions, {
+      sessionId: null,
+      workspaceId: null,
+      extraWorkspaceId: focus.id,
+    });
+    const extra = roots.find((entry) => entry.path === focus.path);
+    assert.ok(extra !== undefined, "额外根要在清单里");
+    assert.equal(extra.kind, "workspace");
+    assert.equal(extra.exists, true); // create 建了目录
+    // 顺序：session（无）→ workspace(Home) → extra → attachments（无 session）
+    assert.equal(roots[1]?.path, focus.path);
+  });
+
+  test("与 workspaceId 相同不重复出根；指到不存在的 id 安静缺席", async () => {
+    const focus = await workspaces.create("focusrepo");
+    const same = await resolveFileRoots(workspaces, sessions, {
+      sessionId: null,
+      workspaceId: focus.id,
+      extraWorkspaceId: focus.id,
+    });
+    assert.equal(same.filter((entry) => entry.path === focus.path).length, 1);
+    const ghost = await resolveFileRoots(workspaces, sessions, {
+      sessionId: null,
+      workspaceId: null,
+      extraWorkspaceId: "00000000-0000-0000-0000-0000000000ff",
+    });
+    assert.equal(ghost.length, 1); // 只有 Home
+  });
+
+  test("白名单一起对账：额外根内放行、根外仍拒、伪造 root 路径拒（renderer 只传 id 这条路才通）", async () => {
+    const { whitelistedPath } = await import("./list.ts");
+    const focus = await workspaces.create("focusrepo");
+    const file = join(focus.path, "src", "a.ts");
+    await mkdir(join(focus.path, "src"), { recursive: true });
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(file, "hello\n", "utf8");
+    const req = { sessionId: null, workspaceId: null, extraWorkspaceId: focus.id };
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    // 额外根内：放行（root = 专注工作区路径、dir = 其下真实文件）
+    const inside = await whitelistedPath(roots, { ...req, root: focus.path, dir: file });
+    assert.equal(inside, await realpath(file));
+    // 根外（同盘另一个目录）：拒
+    await assert.rejects(
+      whitelistedPath(roots, { ...req, root: focus.path, dir: join(dir, "outside.txt") }),
+    );
+    // 伪造 root（没带 extraWorkspaceId 时 renderer 硬塞专注工作区的路径）：拒——
+    // 白名单认的是「这次请求的根清单」，不是任何工作区的路径
+    const plainRoots = await resolveFileRoots(workspaces, sessions, { sessionId: null, workspaceId: null });
+    await assert.rejects(whitelistedPath(plainRoots, { sessionId: null, workspaceId: null, root: focus.path, dir: file }));
+  });
+});

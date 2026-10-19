@@ -46,6 +46,25 @@ export async function resolveFileRoots(
     },
   ];
 
+  // 专注 / 浏览态的只读预览根（extraWorkspaceId）：左栏正在看的工作区。按 id 从
+  // store 解路径（renderer 从不传路径）；与会话自己的工作区相同就不重复出根，
+  // 指到不存在的 id（刚被移除）就安静地没有这根。身份是第二颗 workspace 根，
+  // 文件面板的树多一组、白名单多一块——边界仍是「存储里真实存在的工作区目录」。
+  if (
+    req.extraWorkspaceId != null &&
+    req.extraWorkspaceId !== req.workspaceId
+  ) {
+    const extra = (await workspaces.list()).find((w) => w.id === req.extraWorkspaceId);
+    if (extra !== undefined) {
+      roots.push({
+        kind: "workspace",
+        label: fileRootLabel("workspace", extra.path, extra.name, ""),
+        path: extra.path,
+        exists: await pathExists(extra.path),
+      });
+    }
+  }
+
   for (const dir of attachedDirs) {
     roots.push({
       kind: "attached",
