@@ -76,6 +76,17 @@ export function FilesPanel(props: {
    * 递进来）。token 单调递增，同一条引用连点也会重新定位。null = 没有请求
    */
   citeFocus?: PdfJump | null;
+  /**
+   * 专注 / 浏览态正在看的工作区（额外预览根，shared/files.ts 的 extraWorkspaceId）：
+   * 当前会话可以不在它里面——左栏（WorkspaceFiles）双击的文件照样能预览。
+   * null = 不在专注 / 浏览态，面板根只跟会话走
+   */
+  focusWorkspaceId?: string | null;
+  /**
+   * 左栏文件树的双击打开请求（与 citeFocus 同一套消费模式）：token 单调递增，
+   * 同一个文件连点两次也重新激活。null = 没有请求
+   */
+  fileOpen?: { path: string; token: number } | null;
 }) {
   const t = useT();
   const session = props.session;
@@ -111,7 +122,8 @@ export function FilesPanel(props: {
     name: string;
     kind: FileEntryKind;
   } | null>(null);
-  const tree = useFileTree(sessionId, workspaceId, session.workspaces);
+  const focusWorkspaceId = props.focusWorkspaceId ?? null;
+  const tree = useFileTree(sessionId, workspaceId, session.workspaces, focusWorkspaceId);
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
@@ -251,6 +263,25 @@ export function FilesPanel(props: {
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
   }, [citeFocus, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
+
+  // 左栏（专注 / 浏览态的文件树）双击打开：与 citeFocus 同一套——找到路径所在的根
+  // （额外预览根让专注工作区总在清单里），开它的标签；根清单没回来先等
+  const focusFileOpen = props.fileOpen ?? null;
+  const consumedOpenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (focusFileOpen === null || consumedOpenRef.current === focusFileOpen.token) return;
+    const candidates = tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot];
+    const owner = candidates.find((root) => root.exists && pathWithin(root.path, focusFileOpen.path)) ?? null;
+    if (owner === null) {
+      if (tree.rootsLoading) return;
+      consumedOpenRef.current = focusFileOpen.token;
+      setActionError(t.files.treeOpenOutside(pathTail(focusFileOpen.path) || focusFileOpen.path));
+      return;
+    }
+    consumedOpenRef.current = focusFileOpen.token;
+    setActionError(null);
+    openFile(owner, focusFileOpen.path);
+  }, [focusFileOpen, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
 
   // 切换或新开标签：把激活标签滚进标签栏可视区（纯函数 tabScrollTarget 裁决
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
@@ -635,6 +666,7 @@ export function FilesPanel(props: {
               key={activeTab.path}
               sessionId={sessionId}
               workspaceId={workspaceId}
+              extraWorkspaceId={focusWorkspaceId}
               root={activeTab.root}
               path={activeTab.path}
               rootLabel={

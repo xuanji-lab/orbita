@@ -828,3 +828,8 @@
 .usage-say .usage-say-x {
   pointer-events: auto;
 }
+
+/* 左栏文件行的选中态（单击只选中，双击 / Enter 才打开）——与右栏选中同款淡底 */
+.focus-frow[data-selected] {
+  background: var(--option-active-bg);
+}

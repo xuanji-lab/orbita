@@ -211,6 +211,14 @@ export function App() {
     minutes?: number;
     token: number;
   } | null>(null);
+  /** 左栏（专注 / 浏览态）双击文件 → 右栏文件面板开预览标签（token 递增，与 reviewFocus 同款） */
+  const fileOpenNonceRef = useRef(0);
+  const [fileOpenRequest, setFileOpenRequest] = useState<{ path: string; token: number } | null>(null);
+  const openFocusFile = useCallback((absPath: string): void => {
+    fileOpenNonceRef.current += 1;
+    setFileOpenRequest({ path: absPath, token: fileOpenNonceRef.current });
+    setRightPanel("files");
+  }, []);
   const openFocusPickerAt = useCallback((workspaceId: string, minutes?: number): void => {
     focusPickerNonceRef.current += 1;
     setFocusPickerRequest({ workspaceId, ...(minutes === undefined ? {} : { minutes }), token: focusPickerNonceRef.current });
@@ -1070,6 +1078,7 @@ export function App() {
           }}
           onExitBrowse={() => setWsBrowse(null)}
           onStartFocusHere={openFocusPickerAt}
+          onOpenFile={openFocusFile}
         />
 
         <main className="pane">
@@ -1136,7 +1145,13 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} escapeRef={filesEscapeRef} citeFocus={citeFocus} />
+                <FilesPanel
+                session={session}
+                escapeRef={filesEscapeRef}
+                citeFocus={citeFocus}
+                focusWorkspaceId={focusFilesView?.workspaceId ?? null}
+                fileOpen={fileOpenRequest}
+              />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}

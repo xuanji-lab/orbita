@@ -1588,6 +1588,8 @@ export const zh: Messages = {
     pdfPassword: "这个 PDF 有密码保护，没法预览。",
     citeNotFound: (page) => `第 ${page} 页上已经找不到被引的那段了。文件可能在引用之后改过。`,
     citeOutside: (name) => `${name} 不在这条任务能看到的文件夹里，这里打不开。`,
+    /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
+    treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

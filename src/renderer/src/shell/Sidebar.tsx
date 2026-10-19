@@ -172,6 +172,8 @@ export function Sidebar(props: {
   onExitBrowse: () => void;
   /** 浏览态的「以此开始专注」：开专注浮层并预选这个工作区 */
   onStartFocusHere: (workspaceId: string) => void;
+  /** 双击 / Enter 打开左栏文件预览（绝对路径 → App → 右栏文件面板） */
+  onOpenFile: (absPath: string) => void;
   /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
   usageSay: React.ReactNode | null;
   /** 星云头顶的卡片（专注时间到）；null = 无 */
@@ -345,6 +347,7 @@ export function Sidebar(props: {
             openId={openId}
             onBack={props.onExitBrowse}
             onStartFocusHere={() => props.onStartFocusHere(filesViewWs.id)}
+            onOpenFile={props.onOpenFile}
           />
         )
       : null;
