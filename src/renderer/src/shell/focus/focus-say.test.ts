@@ -85,3 +85,9 @@ test("左栏文件行复用右栏 .file-row：不许内联 background（会压�
   assert.doesNotMatch(tsx, /background: "transparent"/, "内联 background 会压过 :hover 与选中");
   assert.doesNotMatch(tsx, /import\("@shared/, "禁 inline import");
 });
+
+test("胶囊浮层的结束行：标签与动作同一个判据（done || ending → onEnd）", () => {
+  const tsx = readFileSync(new URL("./FocusControl.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /\{done \|\| ending \? t\.focus\.endFocus : t\.focus\.endEarly\}/);
+  assert.match(tsx, /if \(done \|\| ending\) props\.onEnd\(\);\s*else props\.onEarlyEnd\(\);/, "ending 相位显示「结束专注」却调 onEarlyEnd = 空转，退不出专注");
+});

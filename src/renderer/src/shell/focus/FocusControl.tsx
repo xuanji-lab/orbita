@@ -323,7 +323,9 @@ export function FocusControl(props: {
           className="focus-cm-row"
           onClick={() => {
             setPop(null);
-            if (done) props.onEnd();
+            // 时间到 / 已提前结束（ending）都是「结束专注」——走 onEnd 回会话列表。
+            // ending 相位再调 onEarlyEnd 是空转（use-focus 只认 run），用户会卡在专注里
+            if (done || ending) props.onEnd();
             else props.onEarlyEnd();
           }}
         >
