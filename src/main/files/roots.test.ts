@@ -1,9 +1,10 @@
 /** resolveFileRoots 的账：顺序 session → workspace → attached（→ 不进树的 attachments），label 与 exists 的来源。 */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { whitelistedPath } from "./list.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { SessionStore } from "../session/store.ts";
 import { WorkspaceStore } from "../workspace/store.ts";
@@ -189,11 +190,9 @@ describe("resolveFileRoots：专注 / 浏览态的额外预览根（extraWorkspa
   });
 
   test("白名单一起对账：额外根内放行、根外仍拒、伪造 root 路径拒（renderer 只传 id 这条路才通）", async () => {
-    const { whitelistedPath } = await import("./list.ts");
     const focus = await workspaces.create("focusrepo");
     const file = join(focus.path, "src", "a.ts");
     await mkdir(join(focus.path, "src"), { recursive: true });
-    const { writeFile } = await import("node:fs/promises");
     await writeFile(file, "hello\n", "utf8");
     const req = { sessionId: null, workspaceId: null, extraWorkspaceId: focus.id };
     const roots = await resolveFileRoots(workspaces, sessions, req);
