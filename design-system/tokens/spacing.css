@@ -34,13 +34,13 @@
    一处定义、处处自动生效：量在这里；承载在渲染层 styles.css 的 .toolbar 与
    shell/toolbar.css 的胶囊配方（工具栏的直接子元素只能是胶囊，静态守卫在
    window-tools.test.ts）。行高 52 与胶囊中心 25 的推导对账在 shell/window-tools.ts。 */
---titlebar-row: 52px;      /* 工具栏行高（整条横跨窗口，在卡片外） */
---titlebar-capsule: var(--control-height-md); /* 胶囊高（32）：中心钉红绿灯中心 y=25 */
---titlebar-capsule-top: 9px; /* 胶囊上沿 = 25 − 32/2 */
---titlebar-control: 28px;  /* 胶囊内的圆格（quiet-control） */
---titlebar-field: 24px;    /* 胶囊内嵌的筛选框 / 选择 / 页签 */
---titlebar-icon: 16px;     /* 胶囊内的 lucide 图标 */
---toolbar-inset: 12px;     /* 左胶囊左缘（darwin 在渲染层覆写为红绿灯右侧 80px） */
+  --titlebar-row: 52px;      /* 工具栏行高（整条横跨窗口，在卡片外） */
+  --titlebar-capsule: var(--control-height-md); /* 胶囊高（32）：中心钉红绿灯中心 y=25 */
+  --titlebar-capsule-top: 9px; /* 胶囊上沿 = 25 − 32/2 */
+  --titlebar-control: 28px;  /* 胶囊内的圆格（quiet-control） */
+  --titlebar-field: 24px;    /* 胶囊内嵌的筛选框 / 选择 / 页签 */
+  --titlebar-icon: 16px;     /* 胶囊内的 lucide 图标 */
+  --toolbar-inset: 12px;     /* 左胶囊左缘（darwin 在渲染层覆写为红绿灯右侧 80px） */
 
   /* layout */
   --sidebar-rail-width: 48px;
