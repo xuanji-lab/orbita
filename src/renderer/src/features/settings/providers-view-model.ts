@@ -105,28 +105,24 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
- * 模型卡片左栏一个厂商格的渲染内容（方案丁，2026-10-19 用户定）。
+ * 模型卡片左栏一个厂商格的渲染内容：一律厂商 / 协议图标。
  *
- * 取代原 `railShortNames` 的文字短名（DS / zhipu / STEP…）：左栏从文字换成设置里那套
- * 厂商 logo。
+ * 取代原 `railShortNames` 的文字短名（DS / zhipu / STEP…）。2026-10-19 方案丁原本
+ * 让自建兼容网关留实例名文字；同日用户改判：「即使我的 openai 兼容的 provider 叫
+ * proma，也应该给我加上 openai 的 logo，好让我知道这是 openai 接口的，比较统一」——
+ * 兼容网关显示**协议**的标（openai-compatible → OpenAI，anthropic-compatible →
+ * Anthropic，VendorLogo 的 LOGOS 里本就有这两条映射）。
  *
- * - 目录里认得的厂商 → 厂商图标：kindId 交给 VendorLogo 查 LOGOS。同一家多个实例共用
- *   一枚标、不带序号角标，区别只靠格子的 title / aria-label——这是丁方案明确接受的代价
- *   （带序号角标是丙方案，不做）。
- * - 自建兼容网关（openai-compatible / anthropic-compatible）→ 实例名文字：图标给的是
- *   OpenAI / Anthropic 的标，说不清是哪个网关；用户起的名字才说得出。这正是原
- *   railShortNames「兼容入口用实例名」语义的自然延伸。
+ * 同一家 / 同一协议多个实例共用一枚标、不带序号角标，区别靠格子的 title / aria-label
+ * （实例名）；模型行的副行也写着实例名。
  */
-export type RailVendorCell =
-  | { kind: "logo"; kindId: string; label: string }
-  | { kind: "text"; text: string };
+export interface RailVendorCell {
+  kindId: string;
+  label: string;
+}
 
 export function railVendorCell(provider: ProviderDto): RailVendorCell {
-  const known = knownProviderOf(provider);
-  if (known.id === "openai-compatible" || known.id === "anthropic-compatible") {
-    return { kind: "text", text: provider.displayName };
-  }
-  return { kind: "logo", kindId: known.id, label: provider.displayName };
+  return { kindId: knownProviderOf(provider).id, label: provider.displayName };
 }
 
 /**

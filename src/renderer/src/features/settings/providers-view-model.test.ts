@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
@@ -311,7 +312,7 @@ describe("connectionDirty", () => {
   });
 });
 
-describe("railVendorCell —— 模型卡片左栏的厂商格（方案丁）", () => {
+describe("railVendorCell —— 模型卡片左栏的厂商格：一律图标", () => {
   const dto = (id: string, displayName: string, extra: Partial<ProviderDto> = {}): ProviderDto => ({
     id,
     displayName,
@@ -321,70 +322,69 @@ describe("railVendorCell —— 模型卡片左栏的厂商格（方案丁）", 
     ...extra,
   });
 
-  test("目录认得的厂商 → logo + 正确的 kindId（认回自己的条目，与实例名无关）", () => {
-    assert.deepEqual(railVendorCell(dto("deepseek", "DeepSeek")), {
-      kind: "logo",
-      kindId: "deepseek",
-      label: "DeepSeek",
-    });
+  test("目录认得的厂商 → 自己的 kindId（与实例名无关）", () => {
+    assert.deepEqual(railVendorCell(dto("deepseek", "DeepSeek")), { kindId: "deepseek", label: "DeepSeek" });
     assert.deepEqual(
       railVendorCell(
         dto("zhipu-coding", "智谱 Coding Plan", {
           endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
         }),
       ),
-      { kind: "logo", kindId: "zhipu-coding", label: "智谱 Coding Plan" },
+      { kindId: "zhipu-coding", label: "智谱 Coding Plan" },
     );
   });
 
-  test("自建兼容网关 → 实例名文字（openai / anthropic 两种协议都留名）", () => {
-    assert.deepEqual(railVendorCell(dto("my-gateway", "公司网关", { kind: "openai-compatible" })), {
-      kind: "text",
-      text: "公司网关",
+  test("自建兼容网关 → 协议的标（用户 2026-10-19：叫 proma 也要 openai 的 logo）", () => {
+    assert.deepEqual(railVendorCell(dto("my-gateway", "proma", { kind: "openai-compatible" })), {
+      kindId: "openai-compatible",
+      label: "proma",
     });
     assert.deepEqual(
       railVendorCell(
-        dto("gw", "Proma", {
+        dto("gw", "Anthropic 兼容", {
           kind: "anthropic-compatible",
           endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
         }),
       ),
-      { kind: "text", text: "Proma" },
+      { kindId: "anthropic-compatible", label: "Anthropic 兼容" },
     );
   });
 
-  test("没有 kind、id 也认不出：按协议落兼容入口，留实例名文字", () => {
+  test("没有 kind、id 也认不出：按协议落兼容入口，仍是协议的标", () => {
     assert.deepEqual(
       railVendorCell(
-        dto("my-gateway", "公司网关", {
-          endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
-        }),
+        dto("my-gateway", "公司网关", { endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" } }),
       ),
-      { kind: "text", text: "公司网关" },
+      { kindId: "anthropic-compatible", label: "公司网关" },
     );
   });
 
-  test("Claude 官方 OAuth 是目录条目 → logo（VendorLogo 把它映射到 Anthropic 标）", () => {
+  test("Claude 官方 OAuth → kindId claude（VendorLogo 给它橙色 Claude 标，与 Anthropic 兼容区分）", () => {
     assert.deepEqual(
       railVendorCell(
-        dto("claude", "Claude", {
-          endpoint: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages" },
-        }),
+        dto("claude", "Claude", { endpoint: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages" } }),
       ),
-      { kind: "logo", kindId: "claude", label: "Claude" },
+      { kindId: "claude", label: "Claude" },
     );
   });
 
-  test("同一家两个实例：都是 logo、同 kindId、不带序号角标（丁方案接受的代价）", () => {
-    assert.deepEqual(railVendorCell(dto("deepseek", "DeepSeek")), {
-      kind: "logo",
-      kindId: "deepseek",
-      label: "DeepSeek",
-    });
-    assert.deepEqual(railVendorCell(dto("deepseek-2", "DeepSeek 2")), {
-      kind: "logo",
-      kindId: "deepseek",
-      label: "DeepSeek 2",
-    });
+  test("同一家两个实例：同 kindId、label 各自的实例名（悬停 / 读屏靠它区分）", () => {
+    assert.deepEqual(railVendorCell(dto("deepseek-2", "DeepSeek 2")), { kindId: "deepseek", label: "DeepSeek 2" });
+  });
+});
+
+describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用一枚", () => {
+  const src = readFileSync(new URL("./VendorLogo.tsx", import.meta.url), "utf8");
+  test("claude 映射到 claude.svg（橙色），anthropic-compatible 仍是 anthropic.svg", () => {
+    assert.match(src, /import claude from "[^"]*vendor-logos\/claude\.svg\?raw"/);
+    assert.match(src, /^\s*claude,\s*$/m);
+    assert.match(src, /"anthropic-compatible": anthropic,/);
+    assert.match(src, /"openai-compatible": openai,/);
+  });
+  test("claude.svg 是彩色标（自带 Claude 品牌橙），不是 currentColor 单色", () => {
+    const svg = readFileSync(new URL("../../../../../design-system/assets/vendor-logos/claude.svg", import.meta.url), "utf8");
+    // 断言「自带实色」而不写出色值（design-tokens 守卫禁 src 里出现裸 hex）
+    assert.match(svg, /fill="#[0-9a-f]{6}"/i);
+    assert.doesNotMatch(svg, /currentColor/);
   });
 });

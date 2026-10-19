@@ -234,39 +234,9 @@ export function modelPickerRail(options: {
   return (
     <>
       {/*
-        左栏的宽度尺：选中那一格是 semibold（.option-row 的选中配方），比常规字重宽——
-        不把「加粗后的宽度」也算进基准的话，切厂商时左栏会自己胖瘦，卡片宽度跟着动
-        （2026-10-01 真机验收量到：379 → 369）。
-
-        丁方案下只有**文字格**（自建网关）会随字重变宽，图标格是固定 14px、不吃字重；
-        所以尺里只摆自建网关的实例名。图标厂商不再摆一份隐藏短名——否则左栏仍被短名
-        撑宽，失去「换成图标」的意义。
+        左栏只有图标格（2026-10-19 用户：兼容网关也换协议的标，「比较统一」），格宽恒定、
+        不随选中字重变——原先给文字格（自建网关实例名）准备的隐藏宽度尺随之删掉。
       */}
-      <span
-        aria-hidden
-        style={{
-          height: 0,
-          overflow: "hidden",
-          visibility: "hidden",
-          whiteSpace: "nowrap",
-          fontFamily: "var(--font-family-base)",
-          // 与 RAIL_CELL 同一档（xs）：尺量错了，切厂商时左栏会自己胖瘦
-          fontSize: "var(--font-size-xs)",
-          fontWeight: "var(--weight-semibold)",
-        }}
-      >
-        {options.providers.map((provider) => {
-          const cell = railVendorCell(provider);
-          if (cell.kind === "logo") return null;
-          return (
-            // 横向 padding 与 RAIL_CELL 相同：尺比的是「格子整宽」——少算这 16px 的话，
-            // 选中格变 semibold 时左栏还是会胖 1px（pr138 机器验收量到 61.55 → 62.55）
-            <div key={`rail-ruler:${provider.id}`} style={{ padding: "0 var(--space-2)" }}>
-              {cell.text}
-            </div>
-          );
-        })}
-      </span>
       <button
         type="button"
         className="option-row"
@@ -297,19 +267,14 @@ export function modelPickerRail(options: {
             type="button"
             className="option-row"
             style={RAIL_CELL}
+            // 同协议多个网关共用一枚标：实例名靠悬停 title 与读屏 aria-label 区分
             title={provider.displayName}
             // 图标格的 VendorLogo 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
-            aria-label={cell.kind === "logo" ? provider.displayName : undefined}
+            aria-label={provider.displayName}
             aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
             onClick={() => options.onScope({ kind: "provider", id: provider.id })}
           >
-            {cell.kind === "logo" ? (
-              <VendorLogo kindId={cell.kindId} label={cell.label} size={14} />
-            ) : (
-              <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-                {cell.text}
-              </span>
-            )}
+            <VendorLogo kindId={cell.kindId} label={cell.label} size={14} />
           </button>
         );
       })}
