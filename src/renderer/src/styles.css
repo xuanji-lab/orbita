@@ -686,7 +686,8 @@ body {
   position: relative;
   display: flex;
   gap: var(--space-3);
-  /* 顶部不留白：整条 52 的工具栏（Toolbar，绝对定位横跨整宽）住在卡上，卡片从它下面开始 */
+  /* 顶部不留白：工具栏（Toolbar，绝对定位横跨整宽）住在卡上，卡片从它下面开始。
+     Windows 两行（brand row 32 + 胶囊行 52 = 84）由 .layer 的 data-platform 覆写。 */
   padding: var(--titlebar-row) var(--space-3) var(--space-3);
   background: var(--glass-bg);
   border: 0;
@@ -709,6 +710,12 @@ body {
   height: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* Windows / Linux：工具栏拆两行（brand row 32 + 胶囊行 52），卡片让到 84 下面 */
+:root[data-platform="win32"] .layer,
+:root[data-platform="linux"] .layer {
+  padding-top: calc(var(--titlebar-brand-row) + var(--titlebar-row));
 }
 
 .titlebar {

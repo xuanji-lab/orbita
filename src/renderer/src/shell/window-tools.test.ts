@@ -133,10 +133,10 @@ test("胶囊中心 y = 25：tokens 三方对账（行 52 · 胶囊 32 · 上沿 
 
 /* ── 3. 结构守卫 ───────────────────────────────────────────── */
 
-test("工具栏的直接子元素只有胶囊（Windows 窗口键是唯一例外）", () => {
+test("工具栏的直接子元素只有胶囊（Windows brand row 是唯一例外）", () => {
   // Toolbar 组件 return 的 JSX：6 空格缩进的元素行 = .toolbar 的直接子节点
-  // （只看主 return——WindowControls 内部的按钮在自己那层，不是工具栏直接子元素）
-  const start = toolbarTsx.indexOf('return (\n    <div className="titlebar toolbar">');
+  // （只看主 return——WindowControls 内部的按钮在 brand row 那层，不是工具栏直接子元素）
+  const start = toolbarTsx.indexOf('return (\n    <div className="titlebar toolbar" data-platform={props.platform}>');
   const body = toolbarTsx.slice(start, toolbarTsx.indexOf("/** 自绘三键"));
   const direct = [...body.matchAll(/^ {6}<[A-Za-z]/gm)].map((m) => m[0]);
   assert.ok(direct.length >= 2, "Toolbar 的直接子节点少了（至少左胶囊与右栏开关两颗常驻胶囊）");
@@ -151,11 +151,11 @@ test("工具栏的直接子元素只有胶囊（Windows 窗口键是唯一例外
     assert.ok(body.includes(marker), `Toolbar 缺胶囊：${marker}`);
   }
   for (const line of direct) {
-    // 取该元素的 className 首值
+    // 取该元素的 className 首值；brand row 是 Windows 唯一声明的例外（商标 + 三键，2026-10-19 修订）
     const rest = body.slice(body.indexOf(line));
     const cls = rest.match(/className=\{?"([^"$]+)/)?.[1] ?? rest.match(/className="([^"]+)"/)?.[1] ?? "";
     assert.ok(
-      cls.startsWith("toolbar-capsule") || cls.startsWith("win-ctl") || line.startsWith("      <WindowControls"),
+      cls.startsWith("toolbar-capsule") || cls.startsWith("brand-row"),
       `工具栏里出现了非胶囊的直接子元素：${line.trim()}（class=${cls}）——散放的字和键从结构上进不来`,
     );
   }
