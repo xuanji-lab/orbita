@@ -54,6 +54,8 @@ export const zh: Messages = {
     excerptDelete: "删除",
     excerptConfirmDelete: "确认删除",
     excerptCancel: "取消",
+    excerptExpand: "展开",
+    excerptCollapse: "收起",
     noTask: "先打开一个任务，才能看它的改动。",
     errorTitle: "读不出改动",
     titleNotRepo: "不是 Git 仓库",
