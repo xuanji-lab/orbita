@@ -44,11 +44,13 @@ step("检查 renderer 挂载");
 check("renderer 已挂载（#root 非空）", (await evaluate(`document.querySelector("#root")?.children.length > 0`)) === true);
 
 // 2. 主操作入口：New task / 新任务 按钮（accent 主操作，任何形态都在）。
-//    中英两种界面都认：开发版数据目录里语言设成中文时，只认英文会误报
+//    中英两种界面都认：开发版数据目录里语言设成中文时，只认英文会误报。
+//    形态两种都认：方案 B v2（2026-10-19）起它是工具栏左胶囊里的图标键，
+//    文本为空、全名在 title / aria-label 上——所以除了 textContent 还要测这两处。
 step("检查主操作入口");
 check(
   "主操作入口存在（New task / 新任务）",
-  (await evaluate(`[...document.querySelectorAll("button")].some((b) => /New task|新任务/.test(b.textContent))`)) === true,
+  (await evaluate(`[...document.querySelectorAll("button")].some((b) => /New task|新任务/.test(b.textContent) || ["New task", "新任务"].includes(b.title) || ["New task", "新任务"].includes(b.getAttribute("aria-label")))`)) === true,
 );
 
 // 3. 设置面可打开：点侧栏的 Settings（展开态是文字 NavRow，收起态是 title 方块），
