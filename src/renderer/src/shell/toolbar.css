@@ -49,6 +49,12 @@
   padding: 0 6px 0 0;
   width: auto;
 }
+/* 标题键是开关形态时（文件面板：点了收 / 放文件树）渲染成 button，同样要豁免 padding:0——
+ * 2026-10-19 实测：漏了它时文件胶囊的图标距胶囊左缘只有 2px，而非开关形态（span）的审查标题是正常的 */
+.toolbar-capsule .cap-pt {
+  padding: 0 8px 0 10px;
+  width: auto;
+}
 
 /* —— 胶囊（四处共用一个配方） —— */
 .toolbar-capsule {

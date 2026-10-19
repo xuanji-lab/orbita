@@ -250,7 +250,7 @@ test("审查页签以胶囊中心居中：三列 grid 两个 1fr 等宽轨道（
 });
 
 test("胶囊内带文字的键豁免兜底重置（页签曾被压到 44px、padding 被清零）", () => {
-  for (const cls of [".cap-tab", ".cap-sel", ".cap-subchip"]) {
+  for (const cls of [".cap-tab", ".cap-sel", ".cap-subchip", ".cap-crumb", ".cap-pt"]) {
     assert.match(
       toolbarCss,
       new RegExp(`\\.toolbar-capsule ${cls.replace(".", "\\.")}\\s*\\{[^}]*width:\\s*auto`),
