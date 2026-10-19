@@ -146,20 +146,55 @@
 /* —— 会话胶囊（排法甲 · 地址栏式，用户裁决）：三栏网格，标题永远在胶囊正中 —— */
 .cap-sess {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  /* 中栏 minmax(0, max-content)：放得下时取标题全宽、两侧 1fr 对称——标题居中；
+   * 放不下时中栏先让（标题省略号），两侧 1fr 的下限是各自内容的 min-content，
+   * 不再被挤到内容以下——原先 1fr auto 1fr 的中栏不肯缩，右端短 id 溢进标题
+   * （2026-10-19 用户验收：窗口缩小后「…3」压在标题上） */
+  grid-template-columns: 1fr minmax(0, max-content) 1fr;
   align-items: center;
   padding: 0 2px 0 4px;
+  /* 胶囊宽由工具栏几何给（sessionCapsule），这里按自身宽逐级让位 */
+  container-type: inline-size;
+}
+/* 让位顺序（窄到哪一档丢哪样；收工键始终在）：
+ * ① 短 id 先藏（复制键仍在，悬停给提示）② 子会话芯片只留图标 + 数字 ③ 标题省略 */
+@container (max-width: 380px) {
+  .cap-sess .cap-sid {
+    display: none;
+  }
+}
+@container (max-width: 300px) {
+  .cap-sess .cap-subchip > span {
+    display: none;
+  }
+  .cap-sess .cap-crumb > span {
+    display: none;
+  }
+  /* 标题两侧为悬停铅笔预留的 24px 占位（对称居中用）窄时让给标题；重命名仍可双击标题 */
+  .cap-sess .cap-sc > .cap-mini {
+    display: none;
+  }
 }
 .cap-sess > * {
   display: flex;
   align-items: center;
   min-width: 0;
 }
+/* 两侧保住自己的内容宽（覆盖上面 > * 的 min-width:0）：缺了它两侧轨道能被压到 0、
+ * 内容照样画出来，子会话芯片 / 短 id 就叠到标题上。让位靠下面的 @container 逐级藏 */
+.cap-sess .cap-sl,
+.cap-sess .cap-sr {
+  min-width: max-content;
+}
 .cap-sess .cap-sl {
   justify-self: start;
 }
 .cap-sess .cap-sc {
-  justify-self: center;
+  /* 拉满中栏、在栏内居中：justify-self:center 会让它按内容（nowrap 标题的全长）
+   * 定宽，轨道缩了它照样溢出——标题省略号永远等不到 */
+  justify-self: stretch;
+  justify-content: center;
+  overflow: hidden;
   gap: 2px;
 }
 .cap-sess .cap-sr {
@@ -175,6 +210,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 0 4px;
+  /* flex 子项默认 min-width:auto = 内容宽，ellipsis 永远不生效——必须能缩到 0 */
+  min-width: 0;
+  flex: 0 1 auto;
 }
 /* 24px 小圆格：铅笔 / 复制这些次要动作 */
 .cap-mini {

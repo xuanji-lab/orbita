@@ -287,3 +287,13 @@ test("工具栏右栏胶囊只认右栏实际渲染宽（夹过 1/3–2/3），�
   assert.match(app, /onRenderedWidth=\{setPanelRenderedWidth\}/);
   assert.match(slot, /onRenderedWidth\?\.\(renderedWidth\)/, "RightPanelSlot 要把夹过的宽度报出去");
 });
+
+test("会话胶囊窄时逐级让位、不重叠：中栏可缩、两侧保内容宽、标题能省略", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  assert.match(css, /\.cap-sess \{[^}]*grid-template-columns:\s*1fr minmax\(0, max-content\) 1fr/s, "中栏要能缩（原先 auto 不缩，右端短 id 溢进标题）");
+  assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size/s);
+  assert.match(css, /\.cap-sess \.cap-sl,\s*\.cap-sess \.cap-sr \{\s*min-width:\s*max-content/, "两侧轨道不许被压到内容以下");
+  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*justify-self:\s*stretch/s, "中栏按内容定宽会溢出轨道");
+  assert.match(css, /\.cap-title \{[^}]*min-width:\s*0/s, "flex 子项不设 min-width:0 省略号不生效");
+  assert.match(css, /@container \(max-width: 380px\) \{\s*\.cap-sess \.cap-sid \{\s*display:\s*none/, "第一档：短 id 先藏");
+});
