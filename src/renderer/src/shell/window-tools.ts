@@ -33,9 +33,12 @@ export const RAIL_W = 32;
 /** 窗口窄于这条线自动收起侧栏（960 以下 288px 侧栏会把内容面挤得太瘦） */
 export const COLLAPSE_BREAKPOINT = 960;
 
-/** 左胶囊左缘 x：darwin 在红绿灯右侧留 10px；其它平台（无红绿灯）从窗口内边距起 */
+/** 左胶囊与红绿灯右缘的间距（2026-10-19 验收：隔 10 太贴，改 18——红绿灯右缘 x=70，左胶囊 x=88） */
+export const LIGHTS_GAP = 18;
+
+/** 左胶囊左缘 x：darwin = 红绿灯右缘 + 18（88）；其它平台（无红绿灯）从窗口内边距起（12） */
 export function leftCapsuleX(platform: ToolbarPlatform): number {
-  return platform === "darwin" ? TRAFFIC_LIGHT_X + TRAFFIC_LIGHT_GROUP_W + 10 : LAYER_PAD;
+  return platform === "darwin" ? TRAFFIC_LIGHT_X + TRAFFIC_LIGHT_GROUP_W + LIGHTS_GAP : LAYER_PAD;
 }
 
 /** 左胶囊宽度：2px 内边距 + 侧栏开关 36 + 新任务 36 + 专注 36（计时态由专注功能自己加宽） */
@@ -49,6 +52,13 @@ export const SESSION_GAP = 12;
 /** 右栏胶囊：筛选框收成搜索格的断点 / 右栏最小宽（默认值，可推翻） */
 export const PANEL_FILTER_BREAK = 300;
 export const PANEL_MIN_W = 260;
+
+/**
+ * 右栏胶囊相对右栏的分隔线 / 右缘各内缩多少（2026-10-19 验收：胶囊贴着分隔线
+ * 「顶到了」）：取右栏卡片内容的行内边距那一档（.panel-list 的 --space-2 = 8），
+ * 胶囊左缘与右栏**内容**左缘（文件树文字起点）对齐，宽度仍随右栏拖动。
+ */
+export const PANEL_CAPSULE_INSET = 8;
 
 /** Windows 自绘窗口键（min · max · close 三枚）占的宽：右端胶囊组整体左让 */
 export const WIN_CTL_W = 118;

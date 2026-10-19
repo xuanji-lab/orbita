@@ -6,6 +6,7 @@ import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import "./toolbar.css";
 import {
   LEFT_CAPSULE_W,
+  PANEL_CAPSULE_INSET,
   LAYER_PAD,
   RAIL_W,
   WIN_CTL_W,
@@ -72,9 +73,13 @@ export function Toolbar(props: {
   // 右栏开关胶囊：右缘与卡片右缘齐（Windows 让过自绘窗口键）
   const toggleRight = props.windowWidth - LAYER_PAD - (darwin ? 0 : WIN_CTL_W + 8);
   const toggleLeft = toggleRight - RAIL_W;
-  // 右栏胶囊：常态左缘钉分隔线、宽 = 右栏宽；窄窗覆盖层锚右、默认宽
-  const panelW = props.narrow ? RIGHT_PANEL_WIDTH_DEFAULT : props.panelWidth;
-  const panelLeft = props.narrow ? toggleLeft - panelW : col.right;
+  // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
+  // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
+  const panelW =
+    (props.narrow ? RIGHT_PANEL_WIDTH_DEFAULT : props.panelWidth) - 2 * PANEL_CAPSULE_INSET;
+  const panelLeft = props.narrow
+    ? toggleLeft - PANEL_CAPSULE_INSET - panelW
+    : col.right + PANEL_CAPSULE_INSET;
 
   return (
     <div className="titlebar toolbar">

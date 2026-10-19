@@ -78,11 +78,14 @@ export function UsageMeter(props: {
 
   return (
     <div className="usage-meter" data-hidden={hidden || undefined}>
-      {/* 字标（2026-10-19 用户裁决：「orbita 字标放在左下角和星云同一列吧，根据星云的
-          位置自适应」）：跟用量格同一列、钉在星云停机坪上方——星云显形时它在云与气泡
-          之上，星云收起（padding 塌掉）时它贴着格子，始终不压格子和气泡 */}
-      <div className="usage-brand">orbita</div>
       <div className="usage-meter-body">
+        {/* 字标（2026-10-19 二次裁决：「左下角的 orbita 没有和星云横向居中对齐放在
+            一行里」）：与星云**同一行**——绝对定位在停机坪左端（用量格左缘那条线），
+            高度对齐云的 48px 空域，中心 y 与星云中心同一条水平线；星云悬停 / 钉到
+            最左两格会压到字标，届时字标淡出让位（data-yield，默认可推翻） */}
+        <div className="usage-brand" data-yield={active <= 1 || undefined}>
+          orbita
+        </div>
       <div className="usage-pet" style={{ left: petLeft(active) }}>
         {hovered !== undefined && (
           // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）

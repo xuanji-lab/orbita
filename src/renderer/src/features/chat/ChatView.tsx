@@ -1872,7 +1872,10 @@ function Pane(props: {
         height: "100%",
         minHeight: 0,
         display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr) auto",
+        // 行数随页头有无切换（2026-10-19 修复：主槽删页头后若仍是三行，滚动区会
+        // 掉进第一行 auto、输入卡掉进第二行 1fr——composer 卡在半空、下方一片空白）
+        gridTemplateRows:
+          props.hideHeader === true ? "minmax(0,1fr) auto" : "auto minmax(0,1fr) auto",
       }}
     >
       {/* 抽屉里保留的卡内页头（主槽 hideHeader，2026-10-19 方案 B v2：会话信息住

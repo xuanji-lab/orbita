@@ -146,7 +146,22 @@ export function ReviewPanel(props: {
       header={
         <>
           <PanelTitle icon="file-diff" title={t.review.title} />
-          {/* 审查范围（本任务 / 工作区未提交 / 分支）：标题行中段的安静下拉（右栏统一）；
+          {/* 「改动 / 摘抄」页签进胶囊中段、在剩余空间里横向居中（2026-10-19 用户：
+              「忘了调整成在那个栏里横向居中」；卡内那行删掉——垂直空间宝贵）。
+              两侧 grow 夹住 = 居中于标题键与右侧动作之间 */}
+          <span className="cap-grow" aria-hidden="true" />
+          <div className="cap-tabs" role="tablist" aria-label={t.review.title}>
+            <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
+              <Icon name="file-diff" size={12} strokeWidth={1.8} />
+              {t.review.tabChanges}
+            </button>
+            <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
+              <Icon name="quote" size={12} strokeWidth={1.8} />
+              {t.review.tabExcerpts}
+            </button>
+          </div>
+          <span className="cap-grow" aria-hidden="true" />
+          {/* 审查范围（本任务 / 工作区未提交 / 分支）：胶囊右侧的安静下拉；
               摘抄页签不吃 git 来源，收起 */}
           {tab === "changes" && (
             <Menu items={sourceItems} trigger={({ toggle: open }) => (
@@ -167,16 +182,6 @@ export function ReviewPanel(props: {
       }
       contentKey={`${tab}:${source}:${props.sessionId ?? "none"}`}
     >
-      <div className="review-tabs" role="tablist" aria-label={t.review.title}>
-        <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
-          <Icon name="file-diff" size={12} strokeWidth={1.8} />
-          {t.review.tabChanges}
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
-          <Icon name="quote" size={12} strokeWidth={1.8} />
-          {t.review.tabExcerpts}
-        </button>
-      </div>
       {tab === "excerpts" ? (
         <ExcerptsTab sessionId={props.sessionId} revision={props.excerptRevision} onJump={props.onJumpExcerpt} />
       ) : props.sessionId === null ? (

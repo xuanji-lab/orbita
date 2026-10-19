@@ -18,6 +18,7 @@ import {
   CENTER_Y,
   COLLAPSE_BREAKPOINT,
   LEFT_CAPSULE_W,
+  LIGHTS_GAP,
   RAIL_W,
   SESSION_GAP,
   SESSION_W,
@@ -42,9 +43,9 @@ const mainIndexTs = readFileSync(join(REPO_ROOT, "src/main/index.ts"), "utf8");
 
 /* ── 1. 纯函数 ─────────────────────────────────────────────── */
 
-test("左胶囊 x：darwin 在红绿灯右侧留 10px（=80），其它平台从窗口内边距起（=12）", () => {
-  assert.equal(leftCapsuleX("darwin"), TRAFFIC_LIGHT_X + TRAFFIC_LIGHT_GROUP_W + 10);
-  assert.equal(leftCapsuleX("darwin"), 80);
+test("左胶囊 x：darwin 与红绿灯右缘隔 18（=88，2026-10-19 验收：隔 10 太贴），其它平台从窗口内边距起（=12）", () => {
+  assert.equal(leftCapsuleX("darwin"), TRAFFIC_LIGHT_X + TRAFFIC_LIGHT_GROUP_W + LIGHTS_GAP);
+  assert.equal(leftCapsuleX("darwin"), 88);
   assert.equal(leftCapsuleX("other"), 12);
 });
 
@@ -67,12 +68,12 @@ test("对话列与右端边界（原型 v2 的 1440 窗实算：SBW 288 / RAIL 3
 
 test("会话胶囊：优先居中于对话列（对称收缩），低于 280 才贴左", () => {
   // 状态 1（1440，侧栏展开、无右栏）：对话列中心 848，对称可用远超 480 → 满宽居中
-  const a = sessionCapsule({ windowWidth: 1440, colLeft: 312, colRight: 1384, leftCapRight: 80 + LEFT_CAPSULE_W, rightLimit: 1364 });
+  const a = sessionCapsule({ windowWidth: 1440, colLeft: 312, colRight: 1384, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 1364 });
   assert.equal(a.width, SESSION_W);
   assert.equal(a.x, 608);
   // 验收实例（1200 宽、侧栏展开、右栏开到分隔线 654）：中心 483，对称可用 2×159=318
   // → 缩到 318 居中（x=324），不铺满左胶囊到右栏胶囊的整段
-  const m = sessionCapsule({ windowWidth: 1200, colLeft: 312, colRight: 654, leftCapRight: 80 + LEFT_CAPSULE_W, rightLimit: 654 });
+  const m = sessionCapsule({ windowWidth: 1200, colLeft: 312, colRight: 654, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 654 });
   assert.equal(m.width, 318);
   assert.equal(m.x, 324);
   assert.equal(m.x + m.width, 642);
@@ -154,9 +155,11 @@ test("工具栏的直接子元素只有胶囊（Windows 窗口键是唯一例外
   }
 });
 
-test("右栏胶囊：左缘钉右栏分隔线、宽 = 右栏宽（窄窗锚右、默认宽）", () => {
-  // 常态：left = col.right（conversationColumn 的 right 就是分隔线 x）
-  assert.match(toolbarTsx, /const panelLeft = props\.narrow \? toggleLeft - panelW : col\.right;/);
+test("右栏胶囊：钉右栏分隔线 + 两侧内缩 8（与右栏内容左缘对齐，2026-10-19 验收）", () => {
+  assert.match(toolbarTsx, /col\.right \+ PANEL_CAPSULE_INSET/, "右栏胶囊左缘没加分隔线内缩");
+  assert.match(toolbarTsx, /- 2 \* PANEL_CAPSULE_INSET/, "右栏胶囊宽度没减两侧内缩");
+  const wt = readFileSync(join(RENDERER_SRC, "shell/window-tools.ts"), "utf8");
+  assert.match(wt, /PANEL_CAPSULE_INSET = 8/, "内缩档不再是 8（--space-2）——改的话测试与注释一起改");
   // conversationColumn 的 right = 卡片右缘 − 右栏宽（分隔线定义）
   assert.match(
     readFileSync(join(RENDERER_SRC, "shell/window-tools.ts"), "utf8"),
@@ -211,6 +214,23 @@ test("选中蓝底在：rail 入口走 quiet-control 配方，右栏开关跟任
   assert.match(rail, /className="quiet-control"\n      title=\{props\.label\}/, "RailEntryButton 没挂 quiet-control");
   // 右栏开关：点亮 = 面板开着（不是只看 drawer）
   assert.match(toolbarTsx, /aria-pressed=\{props\.panelOpen \|\| undefined\}/, "右栏开关的点亮没跟任意面板开");
+});
+
+test("对话卡的高度链：删页头后 grid 行数跟着切换（composer 曾卡半空）", () => {
+  const chat = readFileSync(join(RENDERER_SRC, "features/chat/ChatView.tsx"), "utf8");
+  assert.match(
+    chat,
+    /props\.hideHeader === true \? "minmax\(0,1fr\) auto" : "auto minmax\(0,1fr\) auto"/,
+    "Pane 的 grid 行没随页头有无切换——滚动区会掉进 auto 行、输入卡掉进 1fr 行",
+  );
+});
+
+test("字标与星云同一行：绝对定位在停机坪、中心对齐云心（24），最左两格淡出让位", () => {
+  const usageCss = readFileSync(join(RENDERER_SRC, "shell/usage.css"), "utf8");
+  assert.match(usageCss, /\.usage-brand\s*\{[^}]*position:\s*absolute[^}]*height:\s*48px/s, "字标没有绝对定位到星云那行（48px 空域）");
+  assert.match(usageCss, /\.usage-brand\[data-yield\]\s*\{\s*opacity:\s*0/, "缺最左格的淡出让位");
+  const meter = readFileSync(join(RENDERER_SRC, "shell/UsageMeter.tsx"), "utf8");
+  assert.match(meter, /data-yield=\{active <= 1 \|\| undefined\}/, "避让判定没接 active 格序");
 });
 
 test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧净空变量", () => {
