@@ -40,3 +40,33 @@ export interface FocusNotifyRequest {
   title: string;
   body: string;
 }
+
+/** `focus:summarize` 的请求：归拢 [startedAt, until] 内的素材并让家务活模型写收工小结 */
+export interface FocusSummaryRequest {
+  /** 专注开始时刻（epoch ms） */
+  startedAt: number;
+  /** 素材截止时刻（epoch ms）——起跑那一刻的 now */
+  until: number;
+  /** 所选工作区（U/M 改动与分支名的来源） */
+  workspaceId: string;
+}
+
+/** 小结的回执。空态与错误分开说（不编造：没素材 / 没模型都是诚实的结果） */
+export type FocusSummaryResult =
+  | {
+      kind: "ok";
+      /** 3–5 条中文要点（模型原文，不经改写） */
+      bullets: string[];
+      /** 素材里实际读了的会话数（卡片「读了 N 个会话」） */
+      sessionsRead: number;
+      /** 用了哪个模型（providerId/modelId） */
+      modelLabel: string;
+    }
+  | { kind: "empty"; reason: FocusSummaryEmptyReason }
+  | { kind: "error"; message: string };
+
+export type FocusSummaryEmptyReason =
+  /** 时段内没有任何会话活动（也没有 U/M 改动）——没有可总结的 */
+  | "no-activity"
+  /** 家务活模型与回退（上次使用）都没配，调不了模型 */
+  | "no-model";
