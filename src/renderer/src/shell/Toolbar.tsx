@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 import { api } from "../api";
 import { useT } from "../locale.ts";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import appIcon from "../../../../design-system/assets/app-icon.svg?raw";
 import "./toolbar.css";
 import {
   /**
@@ -104,7 +105,8 @@ export function Toolbar(props: {
     rightLimit: limit,
   });
   // 右栏开关胶囊：右缘与卡片右缘齐（Windows 让过自绘窗口键）
-  const toggleRight = props.windowWidth - LAYER_PAD - (darwin ? 0 : WIN_CTL_W + 8);
+  // 右栏开关胶囊：右缘与卡片右缘齐（Windows 时三键已上行，不再左让）
+  const toggleRight = props.windowWidth - LAYER_PAD;
   const toggleLeft = toggleRight - RAIL_W;
   // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
   // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
@@ -115,7 +117,18 @@ export function Toolbar(props: {
     : col.right + PANEL_CAPSULE_INSET;
 
   return (
-    <div className="titlebar toolbar">
+    <div className="titlebar toolbar" data-platform={props.platform}>
+      {/* Windows / Linux：brand row（商标 + 软件名 + 自绘三键，整行拖拽）；macOS 无此行 */}
+      {!darwin && (
+        <div className="brand-row">
+          <span className="brand-mark">
+            <span className="brand-icon" dangerouslySetInnerHTML={{ __html: appIcon }} />
+            orbita
+          </span>
+          <WindowControls />
+        </div>
+      )}
+
       {/* 左胶囊：侧栏开关 · 新任务 · 专注。开合侧栏不换容器——开关坐标天然不变；
           宽随内容（专注中的倒计时格比圆格宽，量内层 wrapper，见上） */}
       <div className="toolbar-capsule" style={{ left, width: leftW }}>
@@ -184,8 +197,6 @@ export function Toolbar(props: {
         </button>
       </div>
 
-      {/* Windows / Linux：自绘窗口键住最右（中心同样在 y=25） */}
-      {!darwin && <WindowControls />}
     </div>
   );
 }
