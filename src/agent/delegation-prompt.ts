@@ -41,12 +41,26 @@ are settled: what was checked, what the review found, and what you decided.
 </orbita-auto-verification>`;
 
 /**
- * 「派发前对齐」段：root 任何档位都有。把可选模型清单渲染成每轮的事实陈述——
- * 只列事实（provider / model id / 显示名 / 能不能看图），不写谁更强更便宜。
+ * 「派发前对齐」段：root 任何档位都有。
+ *
+ * **不再铺开可选模型清单**（2026-10-19 用户裁决）：清单是用户自己配的，逐条列出
+ * 既长（本机 16 条、含 3 组重名）又不通用（换个人配的模型全不同）。改成两条
+ * 真正会改变方案的事实：
+ *   - **默认落点**：不点名 model 时子会话落到哪（设了 subSessionModel 就它，否则同父）；
+ *   - **看图能力**：哪些 model id 能吃图片输入（只有它是硬约束：截图验收块必须用它）。
+ * 要指定别的型号时用用户自己给的 id（delegate 传不存在的 id 会报错并列出全部可用）。
  */
+export interface SubSessionModelFacts {
+  /** 本会话当前的模型 id：没设 subSessionModel 时子会话沿用它 */
+  sessionModelId: string;
+  /** 设置里的子会话模型 id（设了它优先于同父）；缺席 = 没设 */
+  subSessionModelId?: string;
+}
+
 export function delegationAlignmentGuideline(
   mode: PermissionMode,
   models: readonly AvailableModel[],
+  facts: SubSessionModelFacts,
 ): string {
   const modeNote =
     mode === "skip"
@@ -60,10 +74,11 @@ When a request is big enough to split across sub-sessions, propose the plan befo
 delegate first and explain later. In one message, guide the user to confirm:
 1. The task type (research/exploration, implementation, verifying a running app, review, writing…) and
    how you would split it. Ask them to confirm or correct it.
-2. For each part, the model and thinking level you recommend, with a one-line reason (e.g. image input
-   for screenshot checks, stronger reasoning for review). Recommend from the available models below; do
-   not ask an open "which model?". The list is a factual statement only — it says nothing about which
-   model is stronger or cheaper, so recommend by name and let the user decide.
+2. For each part, the model and thinking level you recommend, with a one-line reason (e.g. a block that
+   must read screenshots needs a model that accepts image input; a review block wants stronger
+   reasoning). Do not ask an open "which model?" — recommend the default stated below, or a specific
+   model id when you have a concrete reason for it. Never invent a model id: if you are unsure which
+   ids the user has configured, ask.
 3. The done criteria, and what happens after they confirm.
 4. At most three questions, each with your default, so a plain "ok" is enough to start.
 Delegate only after an explicit go-ahead. If you have already shown the plan and defaults, a vague
@@ -72,31 +87,33 @@ the split, confirm once with the concrete default. Do small, one-step work yours
 If the work later needs to go beyond what was confirmed (another part, a different model, wider scope),
 ask first.
 ${modeNote}
-${renderAvailableModels(models)}
+${renderSubSessionModelFacts(models, facts)}
 </orbita-delegation>`;
 }
 
 /**
- * 可选模型清单的一行一条。空清单照样出段，只是写明「没有可选模型，子会话沿用父会话的模型」——
- * 缺席与空数组在这里同义（旧夹具 / 没配好 provider 都一样）。
+ * 子会话模型的两条事实：默认落点 + 能吃图片输入的 model id。
+ *
+ * 不铺清单的理由见 `delegationAlignmentGuideline` 的注释。空清单（没配好 provider）
+ * 与「没有声明 vision 的模型」在这里同义：看图那行如实写「没有声明」，不猜。
  */
-function renderAvailableModels(models: readonly AvailableModel[]): string {
-  if (models.length === 0) {
-    return "Available models for sub-sessions: none are configured — sub-sessions inherit this session's model.";
-  }
-  const lines = models.map(
-    (model) =>
-      `- provider: ${model.providerName} (${model.providerId}) / model id: ${model.modelId} / ` +
-      `display name: ${model.modelName} / image input: ${imageInputText(model)}`,
-  );
+function renderSubSessionModelFacts(
+  models: readonly AvailableModel[],
+  facts: SubSessionModelFacts,
+): string {
+  const fallback =
+    facts.subSessionModelId === undefined
+      ? `this session's model (${facts.sessionModelId})`
+      : `the configured sub-session model (${facts.subSessionModelId})`;
+  const vision = models.filter((model) => model.imageInput === true).map((model) => model.modelId);
+  const visionLine =
+    vision.length === 0
+      ? "No configured model is declared as accepting image input."
+      : `Models that accept image input: ${vision.join(", ")}.`;
   return [
-    "Available models for sub-sessions (provider / model id / display name / image input):",
-    ...lines,
+    "Sub-session models: a sub-session runs on the model you name in delegate; with no model named it",
+    `inherits ${fallback}.`,
+    visionLine,
+    "Name a model only when you have a reason; otherwise leave the default in place.",
   ].join("\n");
-}
-
-/** 能不能看图：配置声明过就说 yes / no，没声明就说 unknown（不猜、不查目录） */
-function imageInputText(model: AvailableModel): string {
-  if (model.imageInput === undefined) return "unknown";
-  return model.imageInput ? "yes" : "no";
 }

@@ -5,7 +5,11 @@ import type { ChannelSendOutcome, DelegateCard, DelegateOutcome } from "../share
 import type { AvailableModel } from "../shared/available-models.ts";
 import type { PermissionMode } from "../shared/permission.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
-import { AUTO_VERIFICATION_GUIDELINE, delegationAlignmentGuideline } from "./delegation-prompt.ts";
+import {
+  AUTO_VERIFICATION_GUIDELINE,
+  delegationAlignmentGuideline,
+  type SubSessionModelFacts,
+} from "./delegation-prompt.ts";
 
 /**
  * 子会话的三个通道工具（子会话 2026-09-23）：delegate / reply_subsession /
@@ -285,9 +289,10 @@ export function describeChannelRole(
   role: "root" | "child",
   mode: PermissionMode,
   availableModels: readonly AvailableModel[],
+  facts: SubSessionModelFacts,
 ): string {
   if (role === "child") return CHILD_CHANNEL_GUIDELINES;
-  const sections = [ROOT_CHANNEL_GUIDELINES, delegationAlignmentGuideline(mode, availableModels)];
+  const sections = [ROOT_CHANNEL_GUIDELINES, delegationAlignmentGuideline(mode, availableModels, facts)];
   if (mode === "skip") sections.push(AUTO_VERIFICATION_GUIDELINE);
   return sections.join("\n\n");
 }

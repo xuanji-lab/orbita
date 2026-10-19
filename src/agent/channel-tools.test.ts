@@ -316,15 +316,17 @@ describe("report_to_parent", () => {
 });
 
 describe("describeChannelRole", () => {
+  const FACTS = { sessionModelId: "deepseek-v4" } as const;
+
   test("root：含 delegate / reply_subsession，不含 report_to_parent", () => {
-    const text = describeChannelRole("root", "skip", []);
+    const text = describeChannelRole("root", "skip", [], FACTS);
     assert.match(text, /delegate/);
     assert.match(text, /reply_subsession/);
     assert.doesNotMatch(text, /report_to_parent/);
   });
 
   test("child：含 report_to_parent，不含 delegate", () => {
-    const text = describeChannelRole("child", "skip", []);
+    const text = describeChannelRole("child", "skip", [], FACTS);
     assert.match(text, /report_to_parent/);
     assert.doesNotMatch(text, /\bdelegate\b/);
   });
