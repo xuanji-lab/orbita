@@ -11,7 +11,7 @@ import {
   type ProviderSecrets,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
-import { availableModelsFromProviders, type AvailableModel } from "../../shared/available-models.ts";
+import { availableModelsFromProviders, usableSubSessionSetting, type AvailableModel } from "../../shared/available-models.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import {
   composeInvocationPrompt,
@@ -205,9 +205,13 @@ export function registerAgentIpc(
    * 设置里的子会话模型（`settings.subSessionModel`）：提示词要告诉模型「不点名时
    * 子会话落到哪」（设了它优先，否则同父），所以每轮现读——设置里改了下一轮即生效。
    * 缺席 = 没设。
+   *
+   * provider 被删时返回 undefined：运行时（`resolveSubSessionModel`）此时退回同父，
+   * 提示词也得讲同父——否则模型会向用户复述一个不会发生的落点（2026-10-19 验收）。
+   * 判据同在 `usableSubSessionSetting`，两处不各写一份。
    */
   const readSubSessionModel = async (): Promise<ModelPair | undefined> =>
-    (await settings.read()).subSessionModel;
+    usableSubSessionSetting((await settings.read()).subSessionModel, await providers.list());
 
   /**
    * 子会话可选模型清单（派发前对齐段的数据面，2026-10-18）：每轮现读 provider 配置，

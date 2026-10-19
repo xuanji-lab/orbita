@@ -23,6 +23,7 @@ import type {
   DelegateOutcome,
   SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
+import { usableSubSessionSetting } from "../../shared/available-models.ts";
 import {
   allowedKinds,
   channelStatus,
@@ -135,11 +136,13 @@ export function resolveSubSessionModel(input: {
       }`,
     };
   }
+  // 设置里的子会话模型只在它的 provider 还在时才算数：判据与提示词侧
+  // （agent/ipc.ts 的 readSubSessionModel → delegation-prompt 的默认落点）同源。
+  const setting = usableSubSessionSetting(input.setting, input.providers);
+  if (setting !== undefined) {
+    return { ok: true, providerId: setting.providerId, modelId: setting.modelId, source: "setting" };
+  }
   if (input.setting !== undefined) {
-    const provider = input.providers.find((candidate) => candidate.id === input.setting?.providerId);
-    if (provider !== undefined) {
-      return { ok: true, providerId: provider.id, modelId: input.setting.modelId, source: "setting" };
-    }
     // 易耗品处理，同 readChoreModel（agent/ipc.ts）：设置指的 provider 被删了不该
     // 拦住派出，退回同父；但原因要落到 dev 终端，否则「为什么没用我设的模型」无从查起。
     console.error(
