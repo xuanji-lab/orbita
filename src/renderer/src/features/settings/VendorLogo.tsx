@@ -22,6 +22,8 @@ const LOGOS: Record<string, string> = {
   stepfun,
   "kimi-coding": kimi,
   "opencode-go": opencode,
+  // claude 是 Anthropic 官方 OAuth 订阅（Claude Pro / Max），不是自建网关，用 Anthropic 的标
+  claude: anthropic,
   "anthropic-compatible": anthropic,
   "openai-compatible": openai,
 };

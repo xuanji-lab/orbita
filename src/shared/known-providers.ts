@@ -27,18 +27,6 @@ export interface KnownProvider {
    * 同一厂商在两个分区各有一条时 label 相同，实例的默认名靠 knownProviderDefaultName 区分。
    */
   label: string;
-  /**
-   * 模型卡片左栏那一格里的短名字。**尽量取官方或大家都那么叫的**（2026-10-01 定）：
-   *
-   * - `deepseek` → `DS`（中文圈就这么叫）；`stepfun` → `STEP`（模型线就叫 `step-*`）；
-   *   其余名字长的取词首（`OC` / `ANT` / `OAI`）——这三条是我们自造的，官方没有缩写。
-   * - **智谱那三格直接用条目 id**：`zhipu` / `zhipu-cp` / `zai`。它比任何缩写都短且天然唯一，
-   *   而 `CP` 单独一个指不回智谱（仓里两格都是 Coding Plan），`ZAI` 也分不开国内与国际站。
-   *
-   * 同一家多个实例时第二个起加序号（DS / DS 2），兼容入口用实例名——规则在
-   * providers-view-model.ts 的 `railShortNames`。
-   */
-  short: string;
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
@@ -153,7 +141,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "deepseek",
     label: "DeepSeek",
-    short: "DS",
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
     catalogId: "deepseek",
@@ -191,7 +178,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "zhipu",
     label: "智谱",
-    short: "zhipu",
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
@@ -200,7 +186,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "claude",
     label: "Claude",
-    short: "Claude",
     api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     catalogId: "anthropic",
@@ -215,7 +200,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "zhipu-coding",
     label: "智谱",
-    short: "zhipu-cp",
     api: "anthropic-messages",
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
@@ -246,7 +230,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "zai",
     label: "Z.AI",
-    short: "zai",
     api: "openai-completions",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     catalogId: "zai",
@@ -257,7 +240,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "stepfun",
     label: "阶跃星辰",
-    short: "STEP",
     api: "openai-completions",
     baseUrl: "https://api.stepfun.com/step_plan/v1",
     // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
@@ -303,7 +285,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "kimi-coding",
     label: "Kimi",
-    short: "Kimi",
     /*
      * Kimi 会员（Kimi Code）的编程端点。走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
      * 条目同一个 baseUrl 与协议（客户端接 /v1/messages），模型参数（k3 / k3-256k /
@@ -320,7 +301,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "opencode-go",
     label: "OpenCode",
-    short: "OC",
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
@@ -333,7 +313,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
-    short: "ANT",
     api: "anthropic-messages",
     baseUrl: "",
     modelParams: {
@@ -384,7 +363,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "openai-compatible",
     label: "OpenAI 兼容",
-    short: "OAI",
     api: "openai-completions",
     baseUrl: "",
     note: "自建网关 / 私有部署，地址要带到版本段，客户端接 /chat/completions",

@@ -16,7 +16,7 @@ import {
   parseRateInput,
   parseTokenInput,
   providerCards,
-  railShortNames,
+  railVendorCell,
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
@@ -311,7 +311,7 @@ describe("connectionDirty", () => {
   });
 });
 
-describe("railShortNames —— 模型卡片左栏的短名", () => {
+describe("railVendorCell —— 模型卡片左栏的厂商格（方案丁）", () => {
   const dto = (id: string, displayName: string, extra: Partial<ProviderDto> = {}): ProviderDto => ({
     id,
     displayName,
@@ -321,25 +321,70 @@ describe("railShortNames —— 模型卡片左栏的短名", () => {
     ...extra,
   });
 
-  test("认得的厂商用 short，与实例名无关（存量旧名、默认名带后缀都不影响）", () => {
-    const names = railShortNames([
-      dto("zhipu", "智谱（按量）"),
-      dto("zhipu-coding", "智谱 Coding Plan", { endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" } }),
-      dto("deepseek", "DeepSeek"),
-    ]);
-    assert.equal(names.get("zhipu"), "zhipu");
-    assert.equal(names.get("zhipu-coding"), "zhipu-cp");
-    assert.equal(names.get("deepseek"), "DS");
+  test("目录认得的厂商 → logo + 正确的 kindId（认回自己的条目，与实例名无关）", () => {
+    assert.deepEqual(railVendorCell(dto("deepseek", "DeepSeek")), {
+      kind: "logo",
+      kindId: "deepseek",
+      label: "DeepSeek",
+    });
+    assert.deepEqual(
+      railVendorCell(
+        dto("zhipu-coding", "智谱 Coding Plan", {
+          endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
+        }),
+      ),
+      { kind: "logo", kindId: "zhipu-coding", label: "智谱 Coding Plan" },
+    );
   });
 
-  test("同一家多个实例：第二个起加序号，按传入顺序", () => {
-    const names = railShortNames([dto("deepseek", "DeepSeek"), dto("deepseek-2", "DeepSeek 2")]);
-    assert.equal(names.get("deepseek"), "DS");
-    assert.equal(names.get("deepseek-2"), "DS 2");
+  test("自建兼容网关 → 实例名文字（openai / anthropic 两种协议都留名）", () => {
+    assert.deepEqual(railVendorCell(dto("my-gateway", "公司网关", { kind: "openai-compatible" })), {
+      kind: "text",
+      text: "公司网关",
+    });
+    assert.deepEqual(
+      railVendorCell(
+        dto("gw", "Proma", {
+          kind: "anthropic-compatible",
+          endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
+        }),
+      ),
+      { kind: "text", text: "Proma" },
+    );
   });
 
-  test("兼容入口用实例名：用户自建网关，短码说不出是哪个", () => {
-    const names = railShortNames([dto("my-gateway", "公司网关", { kind: "openai-compatible" })]);
-    assert.equal(names.get("my-gateway"), "公司网关");
+  test("没有 kind、id 也认不出：按协议落兼容入口，留实例名文字", () => {
+    assert.deepEqual(
+      railVendorCell(
+        dto("my-gateway", "公司网关", {
+          endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
+        }),
+      ),
+      { kind: "text", text: "公司网关" },
+    );
+  });
+
+  test("Claude 官方 OAuth 是目录条目 → logo（VendorLogo 把它映射到 Anthropic 标）", () => {
+    assert.deepEqual(
+      railVendorCell(
+        dto("claude", "Claude", {
+          endpoint: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages" },
+        }),
+      ),
+      { kind: "logo", kindId: "claude", label: "Claude" },
+    );
+  });
+
+  test("同一家两个实例：都是 logo、同 kindId、不带序号角标（丁方案接受的代价）", () => {
+    assert.deepEqual(railVendorCell(dto("deepseek", "DeepSeek")), {
+      kind: "logo",
+      kindId: "deepseek",
+      label: "DeepSeek",
+    });
+    assert.deepEqual(railVendorCell(dto("deepseek-2", "DeepSeek 2")), {
+      kind: "logo",
+      kindId: "deepseek",
+      label: "DeepSeek 2",
+    });
   });
 });

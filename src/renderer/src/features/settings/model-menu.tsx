@@ -20,7 +20,8 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import type { MenuPlacementSide } from "../../shell/menu-position";
-import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railShortNames } from "./providers-view-model.ts";
+import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railVendorCell } from "./providers-view-model.ts";
+import { VendorLogo } from "./VendorLogo";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -230,13 +231,16 @@ export function modelPickerRail(options: {
   scope: ModelScope;
   onScope: (scope: ModelScope) => void;
 }): React.ReactNode {
-  const shortNames = railShortNames(options.providers);
   return (
     <>
       {/*
         左栏的宽度尺：选中那一格是 semibold（.option-row 的选中配方），比常规字重宽——
         不把「加粗后的宽度」也算进基准的话，切厂商时左栏会自己胖瘦，卡片宽度跟着动
-        （2026-10-01 真机验收量到：379 → 369）。摆一份加粗的全部短名，不可见、不占高。
+        （2026-10-01 真机验收量到：379 → 369）。
+
+        丁方案下只有**文字格**（自建网关）会随字重变宽，图标格是固定 14px、不吃字重；
+        所以尺里只摆自建网关的实例名。图标厂商不再摆一份隐藏短名——否则左栏仍被短名
+        撑宽，失去「换成图标」的意义。
       */}
       <span
         aria-hidden
@@ -251,13 +255,17 @@ export function modelPickerRail(options: {
           fontWeight: "var(--weight-semibold)",
         }}
       >
-        {options.providers.map((provider) => (
-          // 横向 padding 与 RAIL_CELL 相同：尺比的是「格子整宽」——少算这 16px 的话，
-          // 选中格变 semibold 时左栏还是会胖 1px（pr138 机器验收量到 61.55 → 62.55）
-          <div key={`rail-ruler:${provider.id}`} style={{ padding: "0 var(--space-2)" }}>
-            {shortNames.get(provider.id) ?? provider.displayName}
-          </div>
-        ))}
+        {options.providers.map((provider) => {
+          const cell = railVendorCell(provider);
+          if (cell.kind === "logo") return null;
+          return (
+            // 横向 padding 与 RAIL_CELL 相同：尺比的是「格子整宽」——少算这 16px 的话，
+            // 选中格变 semibold 时左栏还是会胖 1px（pr138 机器验收量到 61.55 → 62.55）
+            <div key={`rail-ruler:${provider.id}`} style={{ padding: "0 var(--space-2)" }}>
+              {cell.text}
+            </div>
+          );
+        })}
       </span>
       <button
         type="button"
@@ -281,21 +289,30 @@ export function modelPickerRail(options: {
       >
         <Icon name="menu" size={13} strokeWidth={1.8} />
       </button>
-      {options.providers.map((provider) => (
-        <button
-          key={provider.id}
-          type="button"
-          className="option-row"
-          style={RAIL_CELL}
-          title={provider.displayName}
-          aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
-          onClick={() => options.onScope({ kind: "provider", id: provider.id })}
-        >
-          <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-            {shortNames.get(provider.id) ?? provider.displayName}
-          </span>
-        </button>
-      ))}
+      {options.providers.map((provider) => {
+        const cell = railVendorCell(provider);
+        return (
+          <button
+            key={provider.id}
+            type="button"
+            className="option-row"
+            style={RAIL_CELL}
+            title={provider.displayName}
+            // 图标格的 VendorLogo 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
+            aria-label={cell.kind === "logo" ? provider.displayName : undefined}
+            aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
+            onClick={() => options.onScope({ kind: "provider", id: provider.id })}
+          >
+            {cell.kind === "logo" ? (
+              <VendorLogo kindId={cell.kindId} label={cell.label} size={14} />
+            ) : (
+              <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                {cell.text}
+              </span>
+            )}
+          </button>
+        );
+      })}
     </>
   );
 }

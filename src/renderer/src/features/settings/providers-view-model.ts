@@ -105,32 +105,28 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
- * 模型卡片左栏每一格的短名（按传入顺序，键是 provider id）。
+ * 模型卡片左栏一个厂商格的渲染内容（方案丁，2026-10-19 用户定）。
  *
- * **不靠「名字是否等于 label」猜用户改没改过名**：#140 把 label 改成纯厂商名（「智谱」），
- * 新建实例的默认名还会带「（按量）/（套餐）」或序号，存量实例沿用旧名（「智谱 Coding
- * Plan」）——按名字猜，几乎每个实例都会被误判成「改过名」，左栏显示完整长名。
+ * 取代原 `railShortNames` 的文字短名（DS / zhipu / STEP…）：左栏从文字换成设置里那套
+ * 厂商 logo。
  *
- * 规则：
- *   - 目录里认得的厂商一律用它的 short；同一家有多个实例时，第二个起加序号（DS / DS 2），
- *     完整实例名放格子的 title。
- *   - 兼容入口（openai-compatible / anthropic-compatible）用实例名：那是用户自建的网关，
- *     「OAI / OAI 2」说不出是哪个网关，用户起的名字才说得出。
+ * - 目录里认得的厂商 → 厂商图标：kindId 交给 VendorLogo 查 LOGOS。同一家多个实例共用
+ *   一枚标、不带序号角标，区别只靠格子的 title / aria-label——这是丁方案明确接受的代价
+ *   （带序号角标是丙方案，不做）。
+ * - 自建兼容网关（openai-compatible / anthropic-compatible）→ 实例名文字：图标给的是
+ *   OpenAI / Anthropic 的标，说不清是哪个网关；用户起的名字才说得出。这正是原
+ *   railShortNames「兼容入口用实例名」语义的自然延伸。
  */
-export function railShortNames(providers: readonly ProviderDto[]): Map<string, string> {
-  const names = new Map<string, string>();
-  const seen = new Map<string, number>();
-  for (const provider of providers) {
-    const known = knownProviderOf(provider);
-    if (known.id === "openai-compatible" || known.id === "anthropic-compatible") {
-      names.set(provider.id, provider.displayName);
-      continue;
-    }
-    const count = (seen.get(known.id) ?? 0) + 1;
-    seen.set(known.id, count);
-    names.set(provider.id, count === 1 ? known.short : `${known.short} ${count}`);
+export type RailVendorCell =
+  | { kind: "logo"; kindId: string; label: string }
+  | { kind: "text"; text: string };
+
+export function railVendorCell(provider: ProviderDto): RailVendorCell {
+  const known = knownProviderOf(provider);
+  if (known.id === "openai-compatible" || known.id === "anthropic-compatible") {
+    return { kind: "text", text: provider.displayName };
   }
-  return names;
+  return { kind: "logo", kindId: known.id, label: provider.displayName };
 }
 
 /**
