@@ -149,3 +149,12 @@
   height: 100%;
 }
 
+
+/*
+ * 滚动条滑块圆角：xterm 6 的滚动条是自己的 DOM（.xterm-scrollable-element > .scrollbar
+ * > .slider），默认方角；按全局细条口径改成胶囊（宽与颜色在 TerminalView /
+ * terminal-theme.ts 里喂给 xterm）
+ */
+.terminal-view .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  border-radius: var(--radius-pill);
+}
