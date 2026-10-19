@@ -433,6 +433,7 @@ export const zh: Messages = {
     pickerNote: "到点前 5 分钟，家务活模型会整理这段时间做了什么。",
     start: "开始专注",
     capsuleTitle: (workspace: string) => `专注中 · ${workspace} · 点开可延长或提前结束`,
+    endingTitle: (workspace: string) => `已提前结束 · ${workspace} · 点开结束专注`,
     timeUp: "时间到",
     menuLabel: "专注中",
     remainLabel: (total: number) => `剩余 · 共 ${total} 分钟`,

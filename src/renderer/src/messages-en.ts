@@ -466,6 +466,7 @@ export const en = {
     pickerNote: "Five minutes before the end, the chore model starts putting the session in order.",
     start: "Start focusing",
     capsuleTitle: (workspace: string) => `Focusing · ${workspace} · click to extend or end early`,
+    endingTitle: (workspace: string) => `Ended early · ${workspace} · click to end focus`,
     timeUp: "Time's up",
     menuLabel: "Focusing",
     remainLabel: (total: number) => `left · ${total} min total`,
