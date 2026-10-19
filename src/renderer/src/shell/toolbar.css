@@ -291,7 +291,7 @@
 .cap-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   height: var(--titlebar-field);
   padding: 0 6px 0 10px;
   border-radius: var(--radius-pill);
@@ -354,6 +354,7 @@
 
 /* 切换面板：外框（位置 / 宽度 / 圆角）不动，内容 120ms 淡入 */
 .cap-panel-content {
+  position: relative; /* .cap-center 的绝对居中基准（= 胶囊内容） */
   display: flex;
   align-items: center;
   gap: 2px;
@@ -361,6 +362,19 @@
   width: 100%;
   height: 100%;
   animation: right-panel-fade var(--duration-instant) var(--ease-out-quint);
+}
+/* 胶囊中段的**真·横向居中**（2026-10-19 验收：grow 对称做不到——右侧固定件比左侧
+ * 多时页签组会偏左）：宽栏（≥420）绝对定位以胶囊中心为轴，两侧固定件不参与让位；
+ * 窄于 420 回到流里按优先级退化（横滚 + 右缘渐隐）。按内容自然宽、不收缩 */
+.cap-center {
+  flex: 0 0 auto;
+}
+@container (width >= 420px) {
+  .cap-center {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
 }
 
 /* —— Windows / Linux 自绘窗口键：工具栏最右一组，中心也在 y=25 —— */

@@ -146,11 +146,9 @@ export function ReviewPanel(props: {
       header={
         <>
           <PanelTitle icon="file-diff" title={t.review.title} />
-          {/* 「改动 / 摘抄」页签进胶囊中段、在剩余空间里横向居中（2026-10-19 用户：
-              「忘了调整成在那个栏里横向居中」；卡内那行删掉——垂直空间宝贵）。
-              两侧 grow 夹住 = 居中于标题键与右侧动作之间 */}
-          <span className="cap-grow" aria-hidden="true" />
-          <div className="cap-tabs" role="tablist" aria-label={t.review.title}>
+          {/* 「改动 / 摘抄」页签在胶囊里**以胶囊中心为轴**横向居中（cap-center，
+              2026-10-19 二轮验收：grow 对称会把它挤向左）；窄于 420 回到流里退化 */}
+          <div className="cap-tabs cap-center" role="tablist" aria-label={t.review.title}>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
               <Icon name="file-diff" size={12} strokeWidth={1.8} />
               {t.review.tabChanges}

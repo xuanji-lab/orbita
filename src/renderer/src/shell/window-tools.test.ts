@@ -233,6 +233,21 @@ test("字标与星云同一行：绝对定位在停机坪、中心对齐云心�
   assert.match(meter, /data-yield=\{active <= 1 \|\| undefined\}/, "避让判定没接 active 格序");
 });
 
+test("审查页签以胶囊中心为轴居中（宽栏绝对定位；窄栏回流退化）", () => {
+  // 宽栏：绝对定位 left 50% + translateX(-50%) —— 中心 = 胶囊中心是构造性的（±0）
+  assert.match(
+    toolbarCss,
+    /@container \(width >= 420px\)\s*\{\s*\.cap-center\s*\{\s*position:\s*absolute;\s*left:\s*50%;\s*transform:\s*translateX\(-50%\)/s,
+    "缺 .cap-center 的宽栏绝对居中规则——grow 对称会把页签挤向左",
+  );
+  // 窄栏：回到流里（不绝对定位），可收缩
+  assert.match(toolbarCss, /\.cap-center\s*\{\s*flex:\s*0 0 auto;/, ".cap-center 的自然宽基准没了");
+  const review = readFileSync(join(RENDERER_SRC, "features/review/ReviewPanel.tsx"), "utf8");
+  assert.match(review, /className="cap-tabs cap-center"/, "审查页签组没挂 cap-center");
+  // 页签按钮按内容自然宽（曾被压到 46px 装不下「图标 + 两个字」）
+  assert.match(toolbarCss, /\.cap-tabs \.cap-tab\s*\{\s*flex:\s*0 0 auto;/, "页签按钮没了自然宽（flex: 0 0 auto）");
+});
+
 test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧净空变量", () => {
   assert.ok(!stylesCss.includes(".panel-head"), "styles.css 里还有 .panel-head");
   assert.ok(!stylesCss.includes("titlebar-exempt"), "titlebar-exempt 没删干净");
