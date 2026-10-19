@@ -10,8 +10,11 @@
  *   待定 11 的默认做法，PR 描述里可推翻）。
  */
 
-/* —─ 浮层通用（menu-panel 配方 + fixed 定位由内联 style 给） ── */
+/* —─ 浮层通用（menu-panel 配方 + fixed 定位由内联 style 给） ──
+   z-index 与 Menu 的 portal 面板同档（40）：同为「弹在内容之上的浮层」，
+   低于 tooltip（70）；主页会话卡片 / 侧栏 / 右栏都不在此层之上。 */
 .focus-pop {
+  z-index: 40;
   background: var(--color-bg-panel);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
@@ -155,6 +158,8 @@
   background: var(--option-active-bg);
   font-weight: var(--weight-semibold);
 }
+/* 键盘焦点环走全局 :focus-visible（accent 描边）——选中只认淡底 + 勾，
+ * 不另造第三种「看似选中」的形态 */
 
 .focus-wsopt .ic.lead {
   color: var(--color-text-secondary);

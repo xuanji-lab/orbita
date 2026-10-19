@@ -1,10 +1,14 @@
-import { createContext, useState } from "react";
+import { createContext, useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { api } from "../api";
 import { useT } from "../locale.ts";
 import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import "./toolbar.css";
 import {
+  /**
+   * 左胶囊宽度（三格圆位 36×3 + 两侧 padding 2×2），也是量宽的地板：
+   * 专注中第三格变成「zap + 倒计时」，胶囊随内容变宽（Toolbar 实测 scrollWidth）。
+   */
   LEFT_CAPSULE_W,
   PANEL_CAPSULE_INSET,
   LAYER_PAD,
@@ -55,6 +59,30 @@ export function Toolbar(props: {
   const t = useT();
   const darwin = props.platform === "darwin";
   const left = leftCapsuleX(props.platform);
+  /**
+   * 左胶囊的实际宽度：第三格在专注中变成「zap + 倒计时」（比 36 的圆格宽），
+   * 胶囊右缘要包住内容（验收实测：定宽 112 时倒计时伸出右边界）。量的是内层
+   * wrapper（.toolbar-capsule-in）的自然宽——胶囊自己定宽，内容溢出不会改变它
+   * 的尺寸，ResizeObserver 盯它永远不触发；wrapper 随内容涨缩，一变就量。
+   * 地板是三格圆位的 LEFT_CAPSULE_W；会话胶囊的左边界用同一个实测值。
+   */
+  const leftInnerRef = useRef<HTMLDivElement | null>(null);
+  const [leftW, setLeftW] = useState(LEFT_CAPSULE_W);
+  useEffect(() => {
+    const el = leftInnerRef.current;
+    if (el === null) return;
+    const PAD = 4; // 胶囊两侧内边距 2 + 2（toolbar.css 的 .toolbar-capsule）
+    const measure = (): void => {
+      const w = Math.ceil(el.getBoundingClientRect().width) + PAD;
+      setLeftW((current) => (current === Math.max(LEFT_CAPSULE_W, w) ? current : Math.max(LEFT_CAPSULE_W, w)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // 只挂一次：胶囊的三个格都是常驻 / 受控替换，量的是同一颗胶囊的内容
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const col = conversationColumn({
     windowWidth: props.windowWidth,
     sidebarCollapsed: props.sidebarCollapsed,
@@ -72,7 +100,7 @@ export function Toolbar(props: {
     windowWidth: props.windowWidth,
     colLeft: col.left,
     colRight: col.right,
-    leftCapRight: left + LEFT_CAPSULE_W,
+    leftCapRight: left + leftW,
     rightLimit: limit,
   });
   // 右栏开关胶囊：右缘与卡片右缘齐（Windows 让过自绘窗口键）
@@ -88,8 +116,10 @@ export function Toolbar(props: {
 
   return (
     <div className="titlebar toolbar">
-      {/* 左胶囊：侧栏开关 · 新任务 · 专注。开合侧栏不换容器——开关坐标天然不变 */}
-      <div className="toolbar-capsule" style={{ left, width: LEFT_CAPSULE_W }}>
+      {/* 左胶囊：侧栏开关 · 新任务 · 专注。开合侧栏不换容器——开关坐标天然不变；
+          宽随内容（专注中的倒计时格比圆格宽，量内层 wrapper，见上） */}
+      <div className="toolbar-capsule" style={{ left, width: leftW }}>
+        <div ref={leftInnerRef} className="toolbar-capsule-in">
         <button
           type="button"
           className="quiet-control cap-seg"
@@ -123,6 +153,7 @@ export function Toolbar(props: {
             <Icon name="zap" size={16} strokeWidth={1.9} />
           </button>
         )}
+        </div>
       </div>
 
       {/* 会话胶囊 / 设置标题：几何在这里（居中于对话列），内容 App 注入 */}

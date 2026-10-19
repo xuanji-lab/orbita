@@ -68,6 +68,13 @@
   background: var(--glass-bg);
   box-shadow: var(--shadow-border);
 }
+/* 左胶囊的内容层：宽随内容（专注格从圆格变成「zap + 倒计时」），Toolbar 量它
+ * 定胶囊宽（胶囊自己定宽，量它永远重不触发）。其余胶囊定宽，用不上 */
+.toolbar-capsule-in {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
 
 /* 胶囊内的圆格（quiet-control）：36 宽的标准格 */
 .cap-seg {
@@ -94,6 +101,8 @@
   border-radius: var(--radius-pill);
   flex: 0 0 auto;
   font-size: var(--font-size-titlebar);
+  /* 量宽的前提：不换行（CJK 会在字间断行，胶囊跟着跳宽） */
+  white-space: nowrap;
 }
 .cap-focus-run .cap-focus-time {
   font-family: var(--font-family-business);

@@ -72,3 +72,21 @@ export function formatStartClock(startedAt: number): string {
   const date = new Date(startedAt);
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
+
+/**
+ * 浮层打开时该选中的工作区：显式选择 > 上次的档位 > 默认（当前会话所在）> 第一个。
+ * 工作区列表是异步加载的——挂载时空表初始化出的 null 不会自愈（验收实测：只有一个
+ * 工作区时「开始专注」禁用，非得手点一下那行），FocusControl 在列表 / 默认值变化时
+ * 按这条链回填；选中的那行已被移除时同样走这条链落回有效项。
+ */
+export function resolvePickerWorkspace(
+  current: string | null,
+  preset: string | null,
+  defaultId: string | null,
+  workspaceIds: readonly string[],
+): string | null {
+  if (current !== null && workspaceIds.includes(current)) return current;
+  if (preset !== null && workspaceIds.includes(preset)) return preset;
+  if (defaultId !== null && workspaceIds.includes(defaultId)) return defaultId;
+  return workspaceIds[0] ?? null;
+}

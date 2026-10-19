@@ -13,6 +13,7 @@ import {
   formatFocusClock,
   formatStartClock,
   remainMs,
+  resolvePickerWorkspace,
   wheelIndex,
 } from "./focus-timer.ts";
 import type { FocusStatus } from "./use-focus.ts";
@@ -53,6 +54,22 @@ export function FocusControl(props: {
   const [workspaceId, setWorkspaceId] = useState<string | null>(
     props.preset?.workspaceId ?? props.defaultWorkspaceId ?? props.workspaces[0]?.id ?? null,
   );
+  /**
+   * 选中的工作区跟着事实回填：工作区列表异步加载，挂载时空表初始化出的 null
+   * 不会自愈（验收：只有一个工作区时开始锿禁用）；选中项被移除也在这里落回
+   * 有效项。链条在 resolvePickerWorkspace（纯函数，带测试）：显式选择 >
+   * 上次档位 > 默认（当前会话所在）> 第一个。
+   */
+  useEffect(() => {
+    setWorkspaceId((current) =>
+      resolvePickerWorkspace(
+        current,
+        props.preset?.workspaceId ?? null,
+        props.defaultWorkspaceId,
+        props.workspaces.map((item) => item.id),
+      ),
+    );
+  }, [props.workspaces, props.defaultWorkspaceId, props.preset]);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
   const wheelRef = useRef<HTMLDivElement | null>(null);
@@ -220,6 +237,7 @@ export function FocusControl(props: {
                   type="button"
                   className="focus-wsopt"
                   data-active={workspace.id === workspaceId || undefined}
+                  aria-selected={workspace.id === workspaceId}
                   title={workspace.path}
                   onClick={() => setWorkspaceId(workspace.id)}
                 >

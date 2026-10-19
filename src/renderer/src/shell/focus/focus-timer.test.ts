@@ -1,7 +1,7 @@
 /**
  * 专注计时纯函数的测试（focus-timer.ts）。时间全部注入，不碰真实时钟。
  */
-import { test } from "node:test";
+import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FOCUS_MINUTES,
@@ -12,6 +12,7 @@ import {
   formatFocusClock,
   formatStartClock,
   remainMs,
+  resolvePickerWorkspace,
   startFocusRun,
   wheelIndex,
 } from "./focus-timer.ts";
@@ -84,4 +85,27 @@ test("档位表：默认 25 在表内，升序、无重复", () => {
     assert.ok(FOCUS_MINUTES[i - 1]! < FOCUS_MINUTES[i]!, "档位必须升序");
   }
   assert.equal(new Set(FOCUS_MINUTES).size, FOCUS_MINUTES.length);
+});
+
+describe("resolvePickerWorkspace：工作区晚到也要有有效选择", () => {
+  const ids = ["ws-a", "ws-b"];
+  test("挂载时空表初始化出的 null：列表到了回填（preset > 默认 > 第一个）", () => {
+    // 空表阶段：null 进 null 出
+    assert.equal(resolvePickerWorkspace(null, null, null, []), null);
+    // 列表晚到：无 preset 无默认 → 第一个
+    assert.equal(resolvePickerWorkspace(null, null, null, ids), "ws-a");
+    // 默认（当前会话所在）在表里 → 它优先于第一个
+    assert.equal(resolvePickerWorkspace(null, null, "ws-b", ids), "ws-b");
+    // 上次的档位优先于默认
+    assert.equal(resolvePickerWorkspace(null, "ws-a", "ws-b", ids), "ws-a");
+  });
+  test("已选的且还在：不动（用户手选不被覆盖）", () => {
+    assert.equal(resolvePickerWorkspace("ws-b", "ws-a", "ws-a", ids), "ws-b");
+  });
+  test("选中项被移除：落回 preset，再落默认 / 第一个", () => {
+    assert.equal(resolvePickerWorkspace("ws-gone", "ws-b", "ws-a", ids), "ws-b");
+    assert.equal(resolvePickerWorkspace("ws-gone", "ws-gone", "ws-a", ids), "ws-a");
+    assert.equal(resolvePickerWorkspace("ws-gone", "ws-gone", "ws-gone", ids), "ws-a");
+    assert.equal(resolvePickerWorkspace("ws-gone", "ws-gone", "ws-gone", []), null);
+  });
 });
