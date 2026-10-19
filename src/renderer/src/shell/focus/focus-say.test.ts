@@ -76,3 +76,12 @@ test("工作区会话行：清默认边框，选中不加描边（只认淡底�
   assert.match(css, /\.focus-wsrow \{\s*border:\s*0/);
   assert.doesNotMatch(css, /\.focus-wsrow\[data-active[^{]*\{[^}]*outline/);
 });
+
+test("左栏文件行复用右栏 .file-row：不许内联 background（会压过悬停与选中）", () => {
+  const tsx = readFileSync(new URL("./WorkspaceFiles.tsx", import.meta.url), "utf8");
+  assert.equal((tsx.match(/className="file-row focus-frow"/g) ?? []).length, 2, "目录行与文件行都要挂 .file-row");
+  assert.equal((tsx.match(/className="file-hover-host"/g) ?? []).length, 2, "两种行都要包 .file-hover-host（悬停底在它的 :hover 上）");
+  assert.match(tsx, /aria-selected=\{props\.selected\}/, "选中态走 aria-selected，与右栏同一条规则");
+  assert.doesNotMatch(tsx, /background: "transparent"/, "内联 background 会压过 :hover 与选中");
+  assert.doesNotMatch(tsx, /import\("@shared/, "禁 inline import");
+});

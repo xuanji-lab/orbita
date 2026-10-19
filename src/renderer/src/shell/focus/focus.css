@@ -487,9 +487,6 @@
   transition: var(--transition-hover);
 }
 
-.focus-frow:hover {
-  background: var(--color-bg-hover);
-}
 
 .focus-frow .focus-frow-tw {
   width: 12px;
@@ -829,9 +826,19 @@
   pointer-events: auto;
 }
 
-/* 左栏文件行的选中态（单击只选中，双击 / Enter 才打开）——与右栏选中同款淡底 */
-.focus-frow[data-selected] {
-  background: var(--option-active-bg);
+/* 左栏文件行直接复用右栏树行的 .file-row / .file-hover-host（悬停底、aria-selected
+ * 选中底 + 字重都在 styles.css 那一份）。原先行上写了 inline background:transparent，
+ * 内联样式压过 :hover 与选中规则——悬停没反应、单击选中看不见（2026-10-19 用户验收）。
+ * 这里只补 button 的控件重置与行几何 */
+.focus-frow.file-row {
+  width: 100%;
+  height: var(--list-item-compact);
+  border: 0;
+  font: inherit;
+  font-size: var(--font-size-base);
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text-primary);
 }
 
 /* 「这个工作区的会话」行是 <button>：不清 border 就每行都吃浏览器默认的 2px outset

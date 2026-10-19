@@ -9,7 +9,8 @@ import { useFileTree } from "../../features/files/useFileTree";
 import { fileIcon, fileIconTone } from "../../features/files/tree-view";
 import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import type { FocusChanges } from "@shared/focus";
+import type { FileEntry } from "@shared/files";
+import type { FocusChangeEntry, FocusChangeKind, FocusChanges } from "@shared/focus";
 import type { ChatSession } from "../../features/chat/useChatSession";
 import { runStateLabel, sessionRunState } from "../../features/notify/completion-notice";
 import {
@@ -257,11 +258,11 @@ function FileRows(props: {
   rootPath: string;
   rel: string;
   depth: number;
-  dirs: ReadonlyMap<string, readonly import("@shared/files").FileEntry[]>;
+  dirs: ReadonlyMap<string, readonly FileEntry[]>;
   expanded: ReadonlySet<string>;
   onToggle: (root: string, dir: string) => void;
-  byPath: Map<string, import("@shared/focus").FocusChangeEntry>;
-  dirDots: Map<string, import("@shared/focus").FocusChangeKind>;
+  byPath: Map<string, FocusChangeEntry>;
+  dirDots: Map<string, FocusChangeKind>;
   selectedRel: string | null;
   onSelect: (rel: string) => void;
   onOpen: (absPath: string) => void;
@@ -328,17 +329,17 @@ function FileDirRow(props: {
   name: string;
   depth: number;
   open: boolean;
-  dot: import("@shared/focus").FocusChangeKind | null;
+  dot: FocusChangeKind | null;
   onToggle: () => void;
 }) {
   const t = useT();
   return (
+    <div className="file-hover-host">
     <button
       type="button"
-      className="focus-frow"
-      style={{ paddingLeft: 2 + props.depth * 12, cursor: "pointer", border: 0, background: "transparent", width: "100%", textAlign: "left", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)" }}
+      className="file-row focus-frow"
+      style={{ paddingLeft: `calc(var(--space-2) + ${props.depth} * 16px)` }}
       onClick={props.onToggle}
-      onDoubleClick={props.onToggle}
       aria-expanded={props.open}
     >
       <span className="focus-frow-tw">
@@ -363,6 +364,7 @@ function FileDirRow(props: {
         )}
       </span>
     </button>
+    </div>
   );
 }
 
@@ -372,7 +374,7 @@ function FileDirRow(props: {
 function FileRow(props: {
   name: string;
   depth: number;
-  change: import("@shared/focus").FocusChangeEntry | null;
+  change: FocusChangeEntry | null;
   selected: boolean;
   onSelect: () => void;
   onOpen: () => void;
@@ -381,11 +383,12 @@ function FileRow(props: {
   const change = props.change;
   const lines = change !== null ? formatChangeLines(change) : "";
   return (
+    <div className="file-hover-host">
     <button
       type="button"
-      className="focus-frow"
-      data-selected={props.selected || undefined}
-      style={{ paddingLeft: 2 + props.depth * 12, border: 0, background: "transparent", width: "100%", textAlign: "left", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)" }}
+      className="file-row focus-frow"
+      aria-selected={props.selected}
+      style={{ paddingLeft: `calc(var(--space-2) + ${props.depth} * 16px)` }}
       title={change !== null ? `${props.name}${lines === "" ? "" : ` · ${lines}`}` : props.name}
       onClick={props.onSelect}
       onDoubleClick={props.onOpen}
@@ -414,6 +417,7 @@ function FileRow(props: {
         )}
       </span>
     </button>
+    </div>
   );
 }
 
