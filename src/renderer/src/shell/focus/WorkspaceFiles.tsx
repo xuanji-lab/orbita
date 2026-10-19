@@ -433,7 +433,7 @@ function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: 
   return (
     <button
       type="button"
-      className="option-row"
+      className="option-row focus-wsrow"
       data-active={props.active || undefined}
       onClick={() => session.openSession(meta.id)}
       style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", width: "100%", minHeight: "var(--control-height-md)", margin: "2px 0", padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)", textAlign: "left" }}

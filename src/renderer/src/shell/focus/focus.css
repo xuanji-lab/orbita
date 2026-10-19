@@ -833,3 +833,15 @@
 .focus-frow[data-selected] {
   background: var(--option-active-bg);
 }
+
+/* 「这个工作区的会话」行是 <button>：不清 border 就每行都吃浏览器默认的 2px outset
+ * 黑框（2026-10-19 用户：「每个 session 都加粗就不太好」）。只有当前会话描一圈：
+ * accent 色（与新任务键同一个主操作色）、1.5px、描在行**外**（outline-offset），
+ * 不压进行内左侧的三节状态竖条 */
+.focus-wsrow {
+  border: 0;
+}
+.focus-wsrow[data-active="true"] {
+  outline: 1.5px solid var(--color-accent);
+  outline-offset: 1px;
+}
