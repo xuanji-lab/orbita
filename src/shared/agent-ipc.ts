@@ -494,8 +494,18 @@ export interface TurnDirectories {
    * （父有子时 related 也非空）。
    *
    * 缺席 = 没有父子关系（绝大多数会话）。
+   *
+   * `status` 只给子会话（`relation: "child"`）：通道状态 running / done / failed / stopped，
+   * 即「它对我交付过没有」（2026-10-19 裁决：派发路由靠这一格——已交付的子会话不再接新任务，
+   * 验收也另起会话）。父那一项没有也不该有状态。
    */
-  related?: { sessionId: string; relation: "parent" | "child"; label: string; path: string }[];
+  related?: {
+    sessionId: string;
+    relation: "parent" | "child";
+    label: string;
+    path: string;
+    status?: ChannelStatus;
+  }[];
   /**
    * 受管浏览器「你的」tab 的下载目录（设置 › 浏览器，缺席 = 系统下载文件夹）。用户在浏览器里
    * 下载的论文、导出文件落在这里；agent 可读写，帮用户按对话整理。只告知不硬拦（同 attached）。
@@ -964,12 +974,31 @@ export interface DelegateCard {
 
 /** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
 export type DelegateOutcome =
-  | { ok: true; childId: string; title: string; card: DelegateCard }
+  | {
+      ok: true;
+      childId: string;
+      title: string;
+      card: DelegateCard;
+      /**
+       * 派完之后手上还开着的直系子会话（含刚派出的这个）：count 给那句「你有 N 个在跑」，
+       * ids 让模型不必翻历史就知道还有谁可以 reply_subsession（2026-10-19 派发路由）。
+       */
+      openChildren: { count: number; ids: string[] };
+    }
   | { ok: false; error: string };
 
 /** channelSendRequest 的回执载荷：成功回落进通道的那条消息 id（供对账与测试断言） */
 export type ChannelSendOutcome =
-  | { ok: true; messageId: string }
+  | {
+      ok: true;
+      messageId: string;
+      /**
+       * 投递**之前**目标子会话的通道状态（父→子的 reply 一落账就把状态翻回 running，
+       * 所以必须先取再写）。done = 它已经交付过——工具结果会提醒模型「新任务用 delegate」。
+       * 父→父或用户代父发言时缺席。
+       */
+      targetStatus?: ChannelStatus;
+    }
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */

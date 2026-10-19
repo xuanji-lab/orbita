@@ -34,7 +34,7 @@ import {
 } from "../../shared/channel.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
-import { deriveSessionTitle, childSessions, type SessionMeta } from "../../shared/session.ts";
+import { deriveSessionTitle, childSessions, isSessionDone, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, ModelPair } from "../../shared/settings.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { ChannelStore } from "./store.ts";
@@ -293,6 +293,13 @@ export async function applyDelegate(
   deps.broadcast({ type: "message", parentId: parent.id, childId, message: taskMessage });
   deps.broadcast({ type: "status", parentId: parent.id, childId, status: channelStatus([taskMessage]) });
 
+  // 派完之后手上还开着的直系子会话（含刚派出的这个，所以在建完子会话之后算）：
+  // count 是真实总数（不受 ids 的 8 条上限影响），ids 按 createdAt 倒序取前 8。
+  // 工具结果用它告诉模型「你现在有 N 个开着的、它们是谁」——台账路由的
+  // 提示而非法闸（硬闸只有上面的 MAX_RUNNING_CHILDREN）。
+  const open = childSessions(await deps.sessions.list(), parent.id).filter((child) => !isSessionDone(child));
+  open.sort((a, b) => b.createdAt - a.createdAt);
+
   return {
     ok: true,
     childId,
@@ -304,6 +311,7 @@ export async function applyDelegate(
       thinkingLevel,
       workbench: deps.sessions.workbenchPath(childId),
     },
+    openChildren: { count: open.length, ids: open.slice(0, 8).map((child) => child.id) },
   };
 }
 
@@ -370,10 +378,14 @@ export async function applyChannelSend(
     };
   }
   const key: ChannelKey = { parentId: sender.id, childId: child.id };
+  // 投递**之前**的目标通道状态：父→子的 reply 一落账就把状态翻回 running，
+  // 事后读不到「它曾经交付过」。done = 已交付——工具结果据此提醒模型新任务走
+  // delegate（提示而非硬拦：改它自己写的东西仍然合法）。
+  const statusBefore = channelStatus(await deps.channels.load(key));
   // **核心语义（用户裁决）**：被用户终止的子会话，父模型的 reply 不能重开它——
   // 否则父会话通过回信绕过用户的决定。只有用户在通道里代父发言
   // （applySpeak，author user）能重开。错误文本写给模型看，把路指给用户。
-  if (channelStatus(await deps.channels.load(key)) === "stopped") {
+  if (statusBefore === "stopped") {
     return {
       ok: false,
       error:
@@ -399,7 +411,7 @@ export async function applyChannelSend(
       error: `The message was recorded in the channel, but delivery failed: ${errorMessage(cause)}`,
     };
   }
-  return { ok: true, messageId: message.id };
+  return { ok: true, messageId: message.id, targetStatus: statusBefore };
 }
 
 // ── 代父发言（channel:speak）──

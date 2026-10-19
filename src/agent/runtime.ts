@@ -1971,7 +1971,7 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(
       command.requestId,
       command.ok
-        ? { ok: true, childId: command.childId, title: command.title, card: command.card }
+        ? { ok: true, childId: command.childId, title: command.title, card: command.card, openChildren: command.openChildren }
         : { ok: false, error: command.error ?? "Delegate failed" },
     );
     return;
@@ -1980,7 +1980,11 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(
       command.requestId,
       command.ok
-        ? { ok: true, messageId: command.messageId }
+        ? {
+            ok: true,
+            messageId: command.messageId,
+            ...(command.targetStatus === undefined ? {} : { targetStatus: command.targetStatus }),
+          }
         : { ok: false, error: command.error ?? "Send failed" },
     );
     return;
