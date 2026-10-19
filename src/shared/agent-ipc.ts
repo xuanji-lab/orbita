@@ -19,7 +19,7 @@ import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
-import type { CompactionSetting, Language } from "./settings.ts";
+import type { CompactionSetting, Language, ModelPair } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
@@ -623,6 +623,13 @@ export type AgentCommand =
        * 设置里加/删模型下一轮即生效。
        */
       availableModels?: AvailableModel[];
+      /**
+       * 设置里的「子会话模型」（`settings.subSessionModel`）。**主进程从设置装配**
+       * （同 compaction / availableModels 的纪律）：agent 进程不读设置，只收事实。
+       * 用途只有一个——提示词要告诉模型「不点名模型时子会话落到哪」：设了它优先，
+       * 否则同父。缺席 = 没设。
+       */
+      subSessionModel?: ModelPair;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
       /**
@@ -737,6 +744,8 @@ export type AgentCommand =
       mcpServers: Record<string, McpServer>;
       /** 子会话可选模型清单，语义同 submit（无状态化后每轮开机都要带全） */
       availableModels?: AvailableModel[];
+      /** 设置里的「子会话模型」，语义同 submit（提示词讲「不点名时落到哪」用） */
+      subSessionModel?: ModelPair;
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;

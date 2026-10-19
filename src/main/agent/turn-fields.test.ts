@@ -71,5 +71,20 @@ describe("turnFields", () => {
     const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
     assert.equal("piSessionFile" in fields, false);
   });
+
+  // 子会话模型（2026-10-19）：提示词讲「不点名 model 时子会话落到哪」用，同 workspaceName
+  // 的纪律——缺席时键不出现（没设 vs 设了但没值，靠键在不在区分）
+  test("subSessionModel 有值：透传进命令", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
+      ...environment,
+      subSessionModel: { providerId: "zhipu-coding", modelId: "glm-5.3" },
+    });
+    assert.deepEqual(fields.subSessionModel, { providerId: "zhipu-coding", modelId: "glm-5.3" });
+  });
+
+  test("subSessionModel 缺席（没设）：键彻底不出现，不是 undefined 挂着", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
+    assert.equal("subSessionModel" in fields, false);
+  });
 });
 
