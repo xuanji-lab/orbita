@@ -139,8 +139,14 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
   height: 32px;
   padding: 0 var(--space-2);
+  /* 这一行是 <button>：不清 border 就吃浏览器默认的 2px outset 黑框（2026-10-19
+   * 用户：「为什么要这个加粗边缘」）。选中只认淡底 + 勾 */
+  border: 0;
+  font-family: inherit;
   border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
@@ -160,6 +166,20 @@
 }
 /* 键盘焦点环走全局 :focus-visible（accent 描边）——选中只认淡底 + 勾，
  * 不另造第三种「看似选中」的形态 */
+
+/* 工作区名单行：放不下省略（悬停 title 给全路径），不折成两行把行高撑乱 */
+.focus-wsopt .focus-wsopt-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.focus-wsopt .focus-wsopt-meta,
+.focus-wsopt .focus-wsopt-ok {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 
 .focus-wsopt .ic.lead {
   color: var(--color-text-secondary);
@@ -799,4 +819,12 @@
 
 .neb-card-btn:hover {
   background: var(--color-bg-hover);
+}
+
+/* 气泡住在 .usage-pet 里，而 .usage-pet 为了不挡格子的悬停把 pointer-events 关了——
+ * 气泡里的键会跟着点不动（2026-10-19 用户：提前结束「要 / 不要」不可交互，退不出专注）。
+ * 只给真按钮开回来，气泡底板仍不挡格子 */
+.usage-say .usage-say-act,
+.usage-say .usage-say-x {
+  pointer-events: auto;
 }

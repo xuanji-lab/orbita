@@ -246,7 +246,7 @@ export function FocusControl(props: {
                   onClick={() => setWorkspaceId(workspace.id)}
                 >
                   <Icon name="folder" size={14} strokeWidth={1.8} className="lead" />
-                  <span>{workspace.name}</span>
+                  <span className="focus-wsopt-name">{workspace.name}</span>
                   {workspace.id === workspaceId ? (
                     <span className="focus-wsopt-ok row-trailing">
                       <Icon name="check" size={13} strokeWidth={2} />

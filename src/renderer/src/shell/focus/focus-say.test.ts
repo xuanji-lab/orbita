@@ -1,6 +1,7 @@
 /**
  * 星云气泡状态机的测试（focus-say.ts）。
  */
+import { readFileSync } from "node:fs";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { cardPopsAtDone, focusSayOf } from "./focus-say.ts";
@@ -57,4 +58,15 @@ describe("cardPopsAtDone", () => {
     assert.equal(cardPopsAtDone(status("run"), false), false);
     assert.equal(cardPopsAtDone(status("ending"), false), false);
   });
+});
+
+test("气泡里的键要能点：.usage-pet 关了 pointer-events，气泡里的按钮必须开回来", () => {
+  const css = readFileSync(new URL("./focus.css", import.meta.url), "utf8");
+  assert.match(css, /\.usage-say \.usage-say-act,\s*\.usage-say \.usage-say-x\s*\{\s*pointer-events:\s*auto/);
+});
+
+test("工作区选项是 button：必须清掉默认边框，名字单行省略", () => {
+  const css = readFileSync(new URL("./focus.css", import.meta.url), "utf8");
+  assert.match(css, /\.focus-wsopt \{[^}]*border:\s*0/s);
+  assert.match(css, /\.focus-wsopt \.focus-wsopt-name \{[^}]*white-space:\s*nowrap[^}]*text-overflow:\s*ellipsis/s);
 });
