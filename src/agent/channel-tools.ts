@@ -120,11 +120,15 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       });
       if (!result.ok) throw new Error(result.error);
       const card = result.card;
+      const openNote =
+        result.openChildren.count > 0
+          ? ` You now have ${result.openChildren.count} open sub-sessions: ${result.openChildren.ids.join(", ")}.`
+          : "";
       const text =
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
         `(thinking: ${card.thinkingLevel}). It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
-        "not poll or wait for it.";
+        `not poll or wait for it.${openNote}`;
       return {
         content: [{ type: "text", text }],
         details: { delegate: card satisfies DelegateCard },
@@ -182,8 +186,14 @@ function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
         ...(delivery === undefined ? {} : { delivery }),
       });
       if (!result.ok) throw new Error(result.error);
+      // 目标在投递前已是 done：投递本身合法（改它自己写的东西），但提醒模型
+      // 新任务该走 delegate——这正是台账路由要防的「新活丢给已交付的会话」。
+      const deliveredNote =
+        result.targetStatus === "done"
+          ? " That sub-session has already delivered its task — if this is a new task, create a new one with delegate (a reply only steers the work it already owns)."
+          : "";
       return {
-        content: [{ type: "text", text: "Reply sent to the sub-session." }],
+        content: [{ type: "text", text: `Reply sent to the sub-session.${deliveredNote}` }],
         // 落账那条通道消息的 id：renderer 的发送侧标记凭它点了能定位到这一条
         // （tool-results.ts 的 channelSendMessageId）；给模型看的正文不带
         details: { messageId: result.messageId },
@@ -260,8 +270,10 @@ unless you have unrelated work to do — do not poll or wait for it. Its message
 done / failed) arrive as <channel from="child" …> blocks in a later turn. If it asks something the
 user's own words do not answer, do not decide on the user's behalf — end this turn and ask the user
 first; only once you have their answer, reply with reply_subsession. Progress needs no reply. When you
-see done, check its workbench / cwd for the actual output before reporting to the user. Do not delegate
-for small things.
+see done, check its workbench / cwd for the actual output before reporting to the user. Each
+sub-session owns one deliverable: a new deliverable gets a new sub-session — never hand a new task to
+one that has already delivered, and never send finished work back to the same one. Do not delegate for
+small things.
 </orbita-sub-sessions>`;
 
 const CHILD_CHANNEL_GUIDELINES = `<orbita-sub-sessions>

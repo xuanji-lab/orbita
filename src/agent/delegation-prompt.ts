@@ -24,7 +24,9 @@ export const AUTO_VERIFICATION_GUIDELINE = `<orbita-auto-verification>
 The user runs this task in "skip" mode: once they have confirmed a delegation plan, carry it through
 without asking again. A sub-session's done report is a claim, not a result. When it arrives, re-run the
 checks yourself (typecheck, tests, and the app itself for UI changes); if they fail, send it back with
-reply_subsession and the failing output, at most 3 rounds, then tell the user honestly. Once checks pass
+reply_subsession and the failing output, at most 3 rounds, then tell the user honestly. Verification
+never runs in the sub-session that did the work — re-running checks, screenshots and reviews go to a
+different sub-session; the implementer only takes fixes to what it wrote. Once checks pass
 and the change is non-trivial (several files or runtime behaviour), delegate an independent review on the
 model the user confirmed: give only the goal and the bar, not the implementation or the implementer's
 conclusions; the reviewer verifies against code, sources and runs, attaches evidence to every finding,
@@ -68,12 +70,15 @@ export function delegationAlignmentGuideline(
         "verification and review run on their own (see below)."
       : 'Mode: in "manual" and "plan" mode, still align first and then delegate as confirmed, but do ' +
         "not start a review on your own: report the verification result and offer an independent review " +
-        "in one line (default: not started), so the user can decide whether a review is wanted.";
+        "in one line (default: not started), so the user can decide whether a review is wanted. Either " +
+        "way, verification never runs in the sub-session that did the work.";
   return `<orbita-delegation>
 When a request is big enough to split across sub-sessions, propose the plan before delegating — never
 delegate first and explain later. In one message, guide the user to confirm:
 1. The task type (research/exploration, implementation, verifying a running app, review, writing…) and
-   how you would split it. Ask them to confirm or correct it.
+   how you would split it. Ask them to confirm or correct it. Split at alignment time: one block per
+   deliverable (different files, a different question, or something to verify get their own sub-session);
+   changes to the same files run sequentially.
 2. For each part, the model and thinking level you recommend, with a one-line reason (e.g. a block that
    must read screenshots needs a model that accepts image input; a review block wants stronger
    reasoning). Do not ask an open "which model?" — recommend the default stated below, or a specific

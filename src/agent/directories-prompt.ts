@@ -39,10 +39,15 @@ export function describeDirectories(cwd: string, directories: TurnDirectories | 
       ...directories.related.map((entry) =>
         entry.relation === "parent"
           ? `Parent session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`
-          : `Sub-session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`,
+          : entry.status === undefined
+            ? `Sub-session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`
+            : `Sub-session "${entry.label}" (id ${entry.sessionId}) — state: ${entry.status} · workbench: ${entry.path}`,
       ),
       "  These are other sessions' private workbenches: read them to hand off material. " +
-        "Do not modify files the other session is actively using unless the task calls for it.",
+        "Do not modify files the other session is actively using unless the task calls for it. " +
+        "Sub-session ids are the recipients of reply_subsession. state: done means it has already " +
+        "delivered — start a new sub-session with delegate for a new deliverable; failed can still be " +
+        "asked what went wrong; stopped is a channel the user terminated — do not send into it.",
     );
   }
   if (directories.browserDownloads !== undefined) {

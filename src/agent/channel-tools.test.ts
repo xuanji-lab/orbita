@@ -86,6 +86,7 @@ describe("delegate", () => {
         thinkingLevel: "medium",
         workbench: "/workbenches/child-1",
       },
+      openChildren: { count: 1, ids: ["child-1"] },
     });
     const result = await pending;
     assert.equal(result.content.length, 1);
@@ -94,6 +95,8 @@ describe("delegate", () => {
     assert.match(text, /glm-5\.3/);
     assert.match(text, /end this turn/);
     assert.match(text, /do not poll or wait/i);
+    // 开着的子会话清单拼在结果末尾（台账路由：让模型知道手里有谁）
+    assert.match(text, /You now have 1 open sub-sessions: child-1\./);
     assert.deepEqual(result.details, {
       delegate: {
         childId: "child-1",
@@ -123,8 +126,31 @@ describe("delegate", () => {
       childId: "c",
       title: "t",
       card: { childId: "c", title: "t", modelId: "claude-opus", thinkingLevel: "high", workbench: "/w" },
+      openChildren: { count: 1, ids: ["c"] },
     });
     await pending;
+  });
+
+  test("openChildren.count 为 0（理论上只剩刚派的这个，防降级）时不拼那句清单", async () => {
+    const { tools, fake } = setup("root");
+    const delegate = toolByName(tools, "delegate");
+    const pending = delegate.execute(
+      "call-2b",
+      { title: "t", task: "d" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    fake.answer(fake.requestIdAt(0), {
+      ok: true,
+      childId: "c",
+      title: "t",
+      card: { childId: "c", title: "t", modelId: "m", thinkingLevel: "high", workbench: "/w" },
+      openChildren: { count: 0, ids: [] },
+    });
+    const result = await pending;
+    const text = (result.content[0] as { text: string }).text;
+    assert.doesNotMatch(text, /open sub-sessions/);
   });
 
   test("title / task 缺席或空白：不发请求，直接抛错", async () => {
@@ -189,6 +215,26 @@ describe("reply_subsession", () => {
     assert.deepEqual(result.content, [{ type: "text", text: "Reply sent to the sub-session." }]);
     // 落账那条通道消息的 id 进 details（给 renderer 的标记定位），不进给模型看的正文
     assert.deepEqual(result.details, { messageId: "m-1" });
+  });
+
+  test("投递前目标已是 done：照常成功，但正文追加「已交付，新任务用 delegate 新建」的提醒", async () => {
+    const { tools, fake } = setup("root");
+    const reply = toolByName(tools, "reply_subsession");
+    const pending = reply.execute(
+      "call-1b",
+      { childId: "child-1", text: "把你写的那处修一下" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    fake.answer(fake.requestIdAt(0), { ok: true, messageId: "m-1b", targetStatus: "done" });
+    const result = await pending;
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /^Reply sent to the sub-session\./);
+    assert.match(text, /already delivered its task/);
+    assert.match(text, /create a new one with delegate/);
+    assert.match(text, /only steers the work it already owns/);
+    assert.deepEqual(result.details, { messageId: "m-1b" });
   });
 
   test("delivery 给了就原样上船（steer / followUp 都合法）", async () => {
@@ -323,6 +369,16 @@ describe("describeChannelRole", () => {
     assert.match(text, /delegate/);
     assert.match(text, /reply_subsession/);
     assert.doesNotMatch(text, /report_to_parent/);
+  });
+
+  test("root 根段带派发路由：一决一产出、已交付不接新活；验收分离句在档位备注里", () => {
+    const text = describeChannelRole("root", "manual", [], FACTS);
+    assert.match(text, /Each\s+sub-session owns one deliverable/);
+    assert.match(text, /never hand a new task to\s+one that has already delivered/);
+    assert.match(text, /never send finished work back to the same one/);
+    // skip 档的验收分离句在 AUTO_VERIFICATION_GUIDELINE（delegation-prompt.test 钉住）；
+    // manual / plan 没有那一段，靠 modeNote 这半句——只在根段重复一遍会是同句两现
+    assert.match(text, /verification never runs in the sub-session that did the work/i);
   });
 
   test("child：含 report_to_parent，不含 delegate", () => {

@@ -68,6 +68,37 @@ describe("describeDirectories", () => {
     assert.ok(text.includes('Sub-session "先派出的" (id child-1) workbench: /workbenches/child-1'));
     assert.ok(text.includes('Sub-session "Sub-session" (id child-2) workbench: /workbenches/child-2'));
   });
+
+  test("related 的子带状态：行内带 — state: <status>，段尾讲台账路由（done 新派、failed 可追问、stopped 别发）", () => {
+    const text = describeDirectories(
+      "/repo/orbita",
+      dirs({
+        related: [
+          { sessionId: "child-1", relation: "child", label: "改外壳的", path: "/workbenches/child-1", status: "done" },
+          { sessionId: "child-2", relation: "child", label: "还在跑的", path: "/workbenches/child-2", status: "running" },
+        ],
+      }),
+    );
+    assert.ok(text.includes('Sub-session "改外壳的" (id child-1) — state: done · workbench: /workbenches/child-1'));
+    assert.ok(text.includes('Sub-session "还在跑的" (id child-2) — state: running · workbench: /workbenches/child-2'));
+    // 段尾说明：id 是收件人，state 决定还能不能派活
+    assert.ok(text.includes("recipients of reply_subsession"));
+    assert.ok(text.includes("already delivered"));
+    assert.ok(text.includes("delegate"));
+    assert.ok(text.includes("stopped"));
+    assert.ok(text.includes("do not send into it"));
+  });
+
+  test("related 的子不带状态（旧装配/旧夹具）：行格式保持原样，不出现 — state 标记", () => {
+    const text = describeDirectories(
+      "/repo/orbita",
+      dirs({
+        related: [{ sessionId: "child-1", relation: "child", label: "先派出的", path: "/workbenches/child-1" }],
+      }),
+    );
+    assert.ok(text.includes('Sub-session "先派出的" (id child-1) workbench: /workbenches/child-1'));
+    assert.ok(!text.includes("— state:"));
+  });
   test("browserDownloads：有就说在哪、可以整理；缺席不出现", () => {
     const withDownloads = describeDirectories("/cwd", { attached: [], workbench: "/wb", browserDownloads: "/Users/me/Downloads" });
     assert.match(withDownloads, /Browser downloads: \/Users\/me\/Downloads/);
