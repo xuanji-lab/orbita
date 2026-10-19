@@ -40,12 +40,15 @@ export function FocusControl(props: {
   defaultWorkspaceId: string | null;
   /** 上一次开始用的档位（「再专注一轮」沿用） */
   preset: { workspaceId: string; minutes: number } | null;
-  /** 外部发起的开浮层请求（浏览态的「以此开始专注」）：token 递增，同源连点也重开 */
-  pickerRequest: { workspaceId: string; token: number } | null;
+  /** 外部发起的开浮层请求（浏览态「以此开始专注」/卡片「再专注一轮」）：token 递增，同源连点也重开；minutes 给了就一并预选 */
+  pickerRequest: { workspaceId: string; minutes?: number; token: number } | null;
   /** 每个工作区此刻的会话数（清单行尾的 meta） */
   sessionCountOf: (workspaceId: string) => number;
   onStart: (workspaceId: string, minutes: number) => void;
   onExtend: (minutes: number) => void;
+  /** 提前结束：停表、星云气泡问要不要总结（run 相位胶囊浮层的那一行） */
+  onEarlyEnd: () => void;
+  /** 结束专注：直接回会话列表（done 相位胶囊浮层的那一行） */
   onEnd: () => void;
 }) {
   const t = useT();
@@ -84,6 +87,7 @@ export function FocusControl(props: {
     if (props.pickerRequest === null) return;
     if (props.status.kind !== "off") return;
     setWorkspaceId(props.pickerRequest.workspaceId);
+    if (props.pickerRequest.minutes !== undefined) setMinutes(props.pickerRequest.minutes);
     setPop("picker");
   }, [props.pickerRequest, props.status.kind]);
 
@@ -315,7 +319,8 @@ export function FocusControl(props: {
           className="focus-cm-row"
           onClick={() => {
             setPop(null);
-            props.onEnd();
+            if (done) props.onEnd();
+            else props.onEarlyEnd();
           }}
         >
           <Icon name="square" size={13} strokeWidth={2} />

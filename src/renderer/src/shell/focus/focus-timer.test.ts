@@ -7,12 +7,14 @@ import {
   FOCUS_MINUTES,
   FOCUS_MINUTES_DEFAULT,
   FOCUS_WHEEL_ROW,
+  SUMMARY_LEAD_MS,
   extendFocusRun,
   focusProgress,
   formatFocusClock,
   formatStartClock,
   remainMs,
   resolvePickerWorkspace,
+  shouldStartSummary,
   startFocusRun,
   wheelIndex,
 } from "./focus-timer.ts";
@@ -85,6 +87,18 @@ test("档位表：默认 25 在表内，升序、无重复", () => {
     assert.ok(FOCUS_MINUTES[i - 1]! < FOCUS_MINUTES[i]!, "档位必须升序");
   }
   assert.equal(new Set(FOCUS_MINUTES).size, FOCUS_MINUTES.length);
+});
+
+test("shouldStartSummary：剩 5 分钟线（到点后仍真；延长把线推后）", () => {
+  const run = startFocusRun(0, "ws-1", 25);
+  assert.equal(shouldStartSummary(run, 0), false);
+  assert.equal(shouldStartSummary(run, 20 * 60_000 - 1), false);
+  assert.equal(shouldStartSummary(run, 20 * 60_000), true);
+  assert.equal(shouldStartSummary(run, 25 * 60_000), true);
+  const extended = extendFocusRun(run, 15);
+  assert.equal(shouldStartSummary(extended, 20 * 60_000), false);
+  assert.equal(shouldStartSummary(extended, 35 * 60_000), true);
+  assert.equal(SUMMARY_LEAD_MS, 5 * 60_000);
 });
 
 describe("resolvePickerWorkspace：工作区晚到也要有有效选择", () => {

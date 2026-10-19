@@ -463,7 +463,7 @@ export const en = {
     minutesUnit: "min",
     sessionsCount: (count: number) => `${count} session${count === 1 ? "" : "s"}`,
     noWorkspaces: "No workspaces yet — add one first.",
-    pickerNote: "While focusing, other sessions' completion alerts are muted (unread still recorded).",
+    pickerNote: "Five minutes before the end, the chore model starts putting the session in order.",
     start: "Start focusing",
     capsuleTitle: (workspace: string) => `Focusing · ${workspace} · click to extend or end early`,
     timeUp: "Time's up",
@@ -491,6 +491,25 @@ export const en = {
     workspaceMissing: "This workspace's folder no longer exists on disk.",
     browseFiles: "Show workspace files",
     notifyTitle: "Focus session over",
+    // —— 收工小结（星云的气泡与卡片） ——
+    /** 剩 5 分钟 / 提前结束点「要」之后：星云头顶小气泡的正文（缓慢呼吸） */
+    summarizing: "Putting this stretch in order…",
+    /** 提前结束的问询气泡 + 两颗键 */
+    askSummary: "Summarize this stretch?",
+    askYes: "Yes",
+    askNo: "No",
+    cardLabel: "Focus wrap-up",
+    cardTitle: "Nice work — take a break",
+    cardKick: (minutes: number, workspace: string) => `Focus over · ${minutes} min · ${workspace}`,
+    cardKickEarly: (minutes: number, workspace: string) => `Ended early · ${minutes} min · ${workspace}`,
+    cardClose: "Close (keep the focus view)",
+    summaryRunning: "The chore model is still putting it in order…",
+    summaryFailed: "The summary didn't come back (the chore model ran into an error).",
+    summaryNoModel: "No chore model configured — no summary this time.",
+    summaryNoActivity: "No session activity in this stretch — nothing to summarize.",
+    summarySource: (sessions: number, model: string) =>
+      `Chore model · read ${sessions} session${sessions === 1 ? "" : "s"} · ${model}`,
+    again: "Another round",
     notifyBody: (minutes: number, workspace: string) =>
       `${minutes} min focused on ${workspace} — take a break.`,
   },

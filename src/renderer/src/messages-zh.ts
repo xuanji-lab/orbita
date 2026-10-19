@@ -430,7 +430,7 @@ export const zh: Messages = {
     minutesUnit: "分钟",
     sessionsCount: (count: number) => `${count} 个会话`,
     noWorkspaces: "还没有工作区——先加一个。",
-    pickerNote: "专注期间其它会话的完成提醒静音（未读照记）。",
+    pickerNote: "到点前 5 分钟，家务活模型会整理这段时间做了什么。",
     start: "开始专注",
     capsuleTitle: (workspace: string) => `专注中 · ${workspace} · 点开可延长或提前结束`,
     timeUp: "时间到",
@@ -458,6 +458,24 @@ export const zh: Messages = {
     workspaceMissing: "这个工作区的文件夹已不在盘上。",
     browseFiles: "查看工作区文件",
     notifyTitle: "专注结束",
+    // —— 收工小结（星云的气泡与卡片） ——
+    /** 剩 5 分钟 / 提前结束点「要」之后：星云头顶小气泡的正文（缓慢呼吸） */
+    summarizing: "正在整理这段时间做了什么…",
+    /** 提前结束的问询气泡 + 两颗键 */
+    askSummary: "要不要总结一下这段时间？",
+    askYes: "要",
+    askNo: "不要",
+    cardLabel: "专注结束",
+    cardTitle: "辛苦了，休息一下吧",
+    cardKick: (minutes: number, workspace: string) => `专注结束 · ${minutes} 分钟 · ${workspace}`,
+    cardKickEarly: (minutes: number, workspace: string) => `提前结束 · ${minutes} 分钟 · ${workspace}`,
+    cardClose: "关闭（保持专注视图）",
+    summaryRunning: "家务活模型还在整理…",
+    summaryFailed: "总结没写成（家务活模型出了错）。",
+    summaryNoModel: "还没配家务活模型，这次没有总结。",
+    summaryNoActivity: "这段时间没有会话活动，没什么可总结的。",
+    summarySource: (sessions: number, model: string) => `家务活模型整理 · 读了 ${sessions} 个会话 · ${model}`,
+    again: "再专注一轮",
     notifyBody: (minutes: number, workspace: string) =>
       `在 ${workspace} 专注了 ${minutes} 分钟，休息一下吧。`,
   },

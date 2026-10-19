@@ -34,6 +34,13 @@ export function UsageMeter(props: {
   running: boolean;
   pet: UsagePetPref | undefined;
   onPetChange: (next: UsagePetPref) => void;
+  /**
+   * 星云头顶的**常驻**小气泡（专注模式的「正在整理…」/「要不要总结」；null = 无）。
+   * 与悬停报数同一个位置：它在的时候悬停报数让位——一次只说一句话。
+   */
+  petSay: React.ReactNode | null;
+  /** 星云头顶的卡片（专注时间到 / 提前结束）；null = 无。尾巴自动对准星云当格中心 */
+  petCard: React.ReactNode | null;
 }) {
   const [days, setDays] = useState<UsageDayTotal[] | null>(null);
   /** 悬停的格序号；null = 回到今天 */
@@ -77,7 +84,7 @@ export function UsageMeter(props: {
   const hovered = hover === null ? undefined : cells[hover];
 
   return (
-    <div className="usage-meter" data-hidden={hidden || undefined}>
+    <div className="usage-meter" data-hidden={hidden || undefined} data-say={props.petSay !== null || undefined}>
       <div className="usage-meter-body">
         {/* 字标（2026-10-19 二次裁决：「左下角的 orbita 没有和星云横向居中对齐放在
             一行里」）：与星云**同一行**——绝对定位在停机坪左端（用量格左缘那条线），
@@ -87,16 +94,30 @@ export function UsageMeter(props: {
         <div className="usage-brand" data-yield={active <= 1 || undefined}>
           orbita
         </div>
+      {props.petCard !== null && (
+        // 卡片锚在停机坪上方，尾巴对准星云当格中心（钉住别的天也对得准）；
+        // 两端夹回卡片内，不悬在角上
+        <div
+          className="neb-card-anchor"
+          style={{ "--neb-tail-x": `${Math.max(14, Math.min(346, petLeft(active) + 40))}px` } as React.CSSProperties}
+        >
+          {props.petCard}
+        </div>
+      )}
       <div className="usage-pet" style={{ left: petLeft(active) }}>
-        {hovered !== undefined && (
-          // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）
-          <div
-            className="usage-say"
-            role="status"
-            data-edge={active <= 1 ? "start" : active >= cells.length - 2 ? "end" : undefined}
-          >
-            {usageText(hovered, t)}
-          </div>
+        {props.petSay !== null ? (
+          props.petSay
+        ) : (
+          hovered !== undefined && (
+            // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）
+            <div
+              className="usage-say"
+              role="status"
+              data-edge={active <= 1 ? "start" : active >= cells.length - 2 ? "end" : undefined}
+            >
+              {usageText(hovered, t)}
+            </div>
+          )
         )}
         <button
           type="button"

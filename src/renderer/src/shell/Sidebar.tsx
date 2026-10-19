@@ -172,6 +172,10 @@ export function Sidebar(props: {
   onExitBrowse: () => void;
   /** 浏览态的「以此开始专注」：开专注浮层并预选这个工作区 */
   onStartFocusHere: (workspaceId: string) => void;
+  /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
+  usageSay: React.ReactNode | null;
+  /** 星云头顶的卡片（专注时间到）；null = 无 */
+  usageCard: React.ReactNode | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -756,7 +760,7 @@ export function Sidebar(props: {
        * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
        * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
        */}
-      <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} />
+      <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} petSay={props.usageSay} petCard={props.usageCard} />
     </aside>
     {/*
       拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。
