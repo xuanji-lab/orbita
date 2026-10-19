@@ -34,12 +34,18 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RENDERER_SRC = join(HERE, "..");
 const REPO_ROOT = join(RENDERER_SRC, "..", "..", "..");
-const stylesCss = readFileSync(join(RENDERER_SRC, "styles.css"), "utf8");
-const toolbarCss = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
-const toolbarTsx = readFileSync(join(RENDERER_SRC, "shell/Toolbar.tsx"), "utf8");
-const appTsx = readFileSync(join(RENDERER_SRC, "App.tsx"), "utf8");
-const spacingCss = readFileSync(join(REPO_ROOT, "design-system/tokens/spacing.css"), "utf8");
-const mainIndexTs = readFileSync(join(REPO_ROOT, "src/main/index.ts"), "utf8");
+/** 读源码做文本断言，统一把 CRLF 归一成 LF：Windows 检出（core.autocrlf=true）的工作区
+ * 是 CRLF，下面的 indexOf / 正则断言都按 LF 写，不归一就在 Windows 上必挂。 */
+function readSource(path: string): string {
+  return readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+}
+
+const stylesCss = readSource(join(RENDERER_SRC, "styles.css"));
+const toolbarCss = readSource(join(RENDERER_SRC, "shell/toolbar.css"));
+const toolbarTsx = readSource(join(RENDERER_SRC, "shell/Toolbar.tsx"));
+const appTsx = readSource(join(RENDERER_SRC, "App.tsx"));
+const spacingCss = readSource(join(REPO_ROOT, "design-system/tokens/spacing.css"));
+const mainIndexTs = readSource(join(REPO_ROOT, "src/main/index.ts"));
 
 /* ── 1. 纯函数 ─────────────────────────────────────────────── */
 
@@ -158,11 +164,11 @@ test("工具栏的直接子元素只有胶囊（Windows 窗口键是唯一例外
 test("右栏胶囊：钉右栏分隔线 + 两侧内缩 8（与右栏内容左缘对齐，2026-10-19 验收）", () => {
   assert.match(toolbarTsx, /col\.right \+ PANEL_CAPSULE_INSET/, "右栏胶囊左缘没加分隔线内缩");
   assert.match(toolbarTsx, /- 2 \* PANEL_CAPSULE_INSET/, "右栏胶囊宽度没减两侧内缩");
-  const wt = readFileSync(join(RENDERER_SRC, "shell/window-tools.ts"), "utf8");
+  const wt = readSource(join(RENDERER_SRC, "shell/window-tools.ts"));
   assert.match(wt, /PANEL_CAPSULE_INSET = 8/, "内缩档不再是 8（--space-2）——改的话测试与注释一起改");
   // conversationColumn 的 right = 卡片右缘 − 右栏宽（分隔线定义）
   assert.match(
-    readFileSync(join(RENDERER_SRC, "shell/window-tools.ts"), "utf8"),
+    readSource(join(RENDERER_SRC, "shell/window-tools.ts")),
     /paneRight - \(input\.panelOpen \? input\.panelWidth : 0\)/,
   );
 });
@@ -185,12 +191,12 @@ test("胶囊内件走 token：圆格 / 内嵌框 / 图标 / 标题字（家族�
   // 窄断点与常量对账
   assert.match(toolbarCss, /@container \(width < 300px\)/);
   // 主题字号 = base
-  const typographyCss = readFileSync(join(REPO_ROOT, "design-system/tokens/typography.css"), "utf8");
+  const typographyCss = readSource(join(REPO_ROOT, "design-system/tokens/typography.css"));
   assert.match(typographyCss, /--font-size-titlebar:\s*var\(--font-size-base\)/);
 });
 
 test("右栏最窄宽与常量对账（settings 的地板 = PANEL_MIN_W = 260）", () => {
-  const settings = readFileSync(join(REPO_ROOT, "src/shared/settings.ts"), "utf8");
+  const settings = readSource(join(REPO_ROOT, "src/shared/settings.ts"));
   const floor = settings.match(/RIGHT_PANEL_WIDTH_FLOOR = (\d+)/);
   assert.ok(floor !== null);
   assert.equal(Number(floor[1]), 260, "右栏地板变了——window-tools.ts 的 PANEL_MIN_W 与右栏胶囊的断点要一起看");
@@ -208,7 +214,7 @@ test("控件配方兜住浏览器默认边框：quiet-control 与胶囊内 butto
 });
 
 test("选中蓝底在：rail 入口走 quiet-control 配方，右栏开关跟任意面板点亮", () => {
-  const rail = readFileSync(join(RENDERER_SRC, "shell/RightRail.tsx"), "utf8");
+  const rail = readSource(join(RENDERER_SRC, "shell/RightRail.tsx"));
   // 点亮不再是 inline 玻璃白（2026-10-19 回归：用户点名要保留蓝底）
   assert.ok(!rail.includes('background: lit ?'), "rail 入口的点亮又写回 inline 玻璃白了——走 quiet-control[aria-pressed]");
   assert.match(rail, /className="quiet-control"\n      title=\{props\.label\}/, "RailEntryButton 没挂 quiet-control");
@@ -217,7 +223,7 @@ test("选中蓝底在：rail 入口走 quiet-control 配方，右栏开关跟任
 });
 
 test("对话卡的高度链：删页头后 grid 行数跟着切换（composer 曾卡半空）", () => {
-  const chat = readFileSync(join(RENDERER_SRC, "features/chat/ChatView.tsx"), "utf8");
+  const chat = readSource(join(RENDERER_SRC, "features/chat/ChatView.tsx"));
   assert.match(
     chat,
     /props\.hideHeader === true \? "minmax\(0,1fr\) auto" : "auto minmax\(0,1fr\) auto"/,
@@ -226,10 +232,10 @@ test("对话卡的高度链：删页头后 grid 行数跟着切换（composer �
 });
 
 test("字标与星云同一行：绝对定位在停机坪、中心对齐云心（24），最左两格右移对齐今天", () => {
-  const usageCss = readFileSync(join(RENDERER_SRC, "shell/usage.css"), "utf8");
+  const usageCss = readSource(join(RENDERER_SRC, "shell/usage.css"));
   assert.match(usageCss, /\.usage-brand\s*\{[^}]*position:\s*absolute[^}]*height:\s*48px/s, "字标没有绝对定位到星云那行（48px 空域）");
   assert.match(usageCss, /\.usage-brand\[data-yield\]\s*\{\s*transform:\s*translateX\(calc\(216px - 100%\)\)/, "星云在最左两格时字标没有右移对齐「今天」格");
-  const meter = readFileSync(join(RENDERER_SRC, "shell/UsageMeter.tsx"), "utf8");
+  const meter = readSource(join(RENDERER_SRC, "shell/UsageMeter.tsx"));
   assert.match(meter, /data-yield=\{active <= 1 \|\| undefined\}/, "避让判定没接 active 格序");
 });
 
@@ -241,7 +247,7 @@ test("审查页签以胶囊中心居中：三列 grid 两个 1fr 等宽轨道（
     /\.cap-review-head\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*1fr auto 1fr/s,
     "缺审查头的三列 grid——页签组无法构造性居中",
   );
-  const review = readFileSync(join(RENDERER_SRC, "features/review/ReviewPanel.tsx"), "utf8");
+  const review = readSource(join(RENDERER_SRC, "features/review/ReviewPanel.tsx"));
   assert.match(review, /className="cap-review-head"/, "审查头没用三列 grid");
   assert.match(review, /className="cap-tabs"/, "审查页签组不在 grid 中列");
   // 来源下拉收成图标键（给居中让位；点开同一个来源菜单）
