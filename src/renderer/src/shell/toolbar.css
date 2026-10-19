@@ -334,9 +334,25 @@
   display: flex;
   gap: 2px;
   overflow: hidden;
-  /* 右缘渐隐：横向滚动装不下时提示还有（mask 只取 alpha，颜色用 token 不裸 hex） */
-  -webkit-mask-image: linear-gradient(90deg, var(--color-text-primary) 85%, transparent);
-  mask-image: linear-gradient(90deg, var(--color-text-primary) 85%, transparent);
+}
+/* 右缘渐隐只在「真的装不下、右边还有」时出现（2026-10-19 用户：「摘抄的抄字有过渡消失的
+ * 视觉，不应该是实的吗」——之前 mask 常驻，放得下也注掉最后 15%）。用自身的横向滚动时间线驱动：
+ * 没有可滚动溢出时时间线不活动、动画不生效 = 不渐隐；滚到最右时也收掉。纯 CSS，不测量。
+ * mask 只取 alpha，颜色用 token 不裸 hex */
+@keyframes cap-tabs-fade {
+  0%,
+  99% {
+    -webkit-mask-image: linear-gradient(90deg, var(--color-text-primary) 85%, transparent);
+    mask-image: linear-gradient(90deg, var(--color-text-primary) 85%, transparent);
+  }
+  100% {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+.cap-tabs {
+  animation: cap-tabs-fade linear both;
+  animation-timeline: scroll(self inline);
 }
 .cap-tabs .cap-tab {
   flex: 0 0 auto;

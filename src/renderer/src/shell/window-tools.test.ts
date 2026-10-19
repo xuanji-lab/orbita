@@ -259,6 +259,15 @@ test("胶囊内带文字的键豁免兜底重置（页签曾被压到 44px、pad
   }
 });
 
+test("页签组的右缘渐隐只在装不下时出现（曾常驻，把「摘抄」的「抄」字淡掉）", () => {
+  const block = /\.cap-tabs\s*\{[^}]*\}/g;
+  for (const rule of toolbarCss.match(block) ?? []) {
+    assert.doesNotMatch(rule, /mask-image/, ".cap-tabs 规则里不得直接写 mask-image（会常驻）");
+  }
+  assert.match(toolbarCss, /animation-timeline:\s*scroll\(self inline\)/, "渐隐要挂在页签组自身的横向滚动时间线上");
+  assert.match(toolbarCss, /@keyframes cap-tabs-fade/, "渐隐关键帧没了");
+});
+
 test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧净空变量", () => {
   assert.ok(!stylesCss.includes(".panel-head"), "styles.css 里还有 .panel-head");
   assert.ok(!stylesCss.includes("titlebar-exempt"), "titlebar-exempt 没删干净");
