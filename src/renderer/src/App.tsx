@@ -28,6 +28,7 @@ import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { FocusControl } from "./shell/focus/FocusControl.tsx";
 import { FocusSummaryCard } from "./shell/focus/FocusSummaryCard.tsx";
+import { focusSayOf } from "./shell/focus/focus-say.ts";
 import { useFocus } from "./shell/focus/use-focus.ts";
 import { Icon } from "./shell/Icon";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
@@ -216,10 +217,13 @@ export function App() {
   }, []);
   /** 星云卡片的一次关闭（「关闭（保持专注视图）」）：只藏卡不结束专注；每轮新开时重置 */
   const [summaryCardClosed, setSummaryCardClosed] = useState(false);
+  /** 「正在整理」气泡的一次关闭（点了 x）：只藏气泡，到点的卡照样弹（focus-say 的口径） */
+  const [sayDismissed, setSayDismissed] = useState(false);
   const startFocus = useCallback(
     (workspaceId: string, minutes: number): void => {
       setWsBrowse(null);
       setSummaryCardClosed(false);
+      setSayDismissed(false);
       focus.start(workspaceId, minutes);
     },
     [focus],
@@ -278,11 +282,39 @@ export function App() {
     (focusRun !== null
       ? session.workspaces.find((item) => item.id === focusRun.workspaceId)?.name
       : undefined) ?? t.focus.deletedWorkspace;
-  /** 正在整理（剩 5 分钟自动起跑 / 提前结束点「要」之后）：克制的提示，不弹窗不改胶囊 */
+  /** 星云的「正在整理」气泡：起跑后**常驻**（用户验收：只在 running 挂着十秒就闪没了，
+   *  人看不到）——running 转圈、落定换一句诚实的话带关闭键，点 x 才消失；状态机在
+   *  focus-say.ts（纯函数）。ending 相位的问询是另一套，保持原样。 */
+  const sayView = focusSayOf(focus.status, focus.summary, sayDismissed);
+  const settledLine =
+    sayView.kind === "settled"
+      ? sayView.line === "ready"
+        ? t.focus.sayReady
+        : sayView.line === "failed"
+          ? t.focus.summaryFailed
+          : sayView.line === "no-model"
+            ? t.focus.summaryNoModel
+            : t.focus.summaryNoActivity
+      : null;
   const focusSay =
-    focus.status.kind === "run" && focus.summary.state === "running" ? (
+    sayView.kind === "running" ? (
       <div className="usage-say usage-say-focus" role="status" data-edge="end">
+        <Icon name="loader-circle" size={12} spin />
         <span className="orbita-breath">{t.focus.summarizing}</span>
+      </div>
+    ) : sayView.kind === "settled" ? (
+      <div className="usage-say usage-say-status" role="status" data-edge="end">
+        {sayView.line === "ready" ? <Icon name="check" size={12} strokeWidth={2.2} /> : null}
+        <span>{settledLine}</span>
+        <button
+          type="button"
+          className="usage-say-x"
+          title={t.focus.sayDismiss}
+          aria-label={t.focus.sayDismiss}
+          onClick={() => setSayDismissed(true)}
+        >
+          <Icon name="x" size={11} />
+        </button>
       </div>
     ) : focus.status.kind === "ending" && focus.summary.state === "idle" ? (
       <div className="usage-say usage-say-ask" role="status" data-edge="end">

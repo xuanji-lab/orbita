@@ -494,6 +494,9 @@ export const en = {
     // —— 收工小结（星云的气泡与卡片） ——
     /** 剩 5 分钟 / 提前结束点「要」之后：星云头顶小气泡的正文（缓慢呼吸） */
     summarizing: "Putting this stretch in order…",
+    /** 整理完的常驻气泡（带对勾 + 关闭键；到点还是会弹卡） */
+    sayReady: "All set — see the recap at the buzzer",
+    sayDismiss: "Got it (the recap still pops at the buzzer)",
     /** 提前结束的问询气泡 + 两颗键 */
     askSummary: "Summarize this stretch?",
     askYes: "Yes",

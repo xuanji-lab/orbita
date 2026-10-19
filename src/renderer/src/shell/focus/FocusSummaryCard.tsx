@@ -3,11 +3,12 @@ import { useT } from "../../locale";
 import type { FocusSummary } from "./use-focus.ts";
 
 /**
- * 时间到 / 提前结束后星云头顶的卡片（原型状态 9）：菜单面板配方（实底 + 发丝 +
- * --shadow-popover），尾巴对准星云（定位在 UsageMeter 的锚上）。内容四档：
- * ready = 3–5 条要点（模型原文）；running = 「正在整理」转圈行；failed / none =
- * 诚实的退路文案，不编造。按钮「结束专注」「再专注一轮」（沿用上次的时长与
- * 工作区，开回浮层）。
+ * 时间到 / 提前结束后星云头顶的卡片（原型状态 9）：**portal 到 body + fixed**（侧栏
+ * aside 是 overflow:hidden，360px 的卡在原地渲染右缘被裁——2026-10-19 用户截图实证），
+ * 由 UsageMeter 的 NebCardPortal 锚在星云上方、尾巴对准云心。面板配方与 Menu 同一套
+ * （glass-card glass-float menu-panel：实底 + 发丝 + 浮层阴影 + 圆角）。内容四档：
+ * ready = 3–5 条要点（模型原文，自动换行）；running = 转圈行；failed / none = 诚实的
+ * 退路文案。bullet 区可滚动（max-height 由锚限制在视口内），按钮行常驻可见。
  */
 export function FocusSummaryCard(props: {
   /** 卡片顶行的定性：时间到（自然跑满）或提前结束 */
@@ -50,10 +51,14 @@ export function FocusSummaryCard(props: {
       : null;
 
   return (
-    <div className="neb-card menu-panel" role="dialog" aria-label={t.focus.cardLabel}>
+    <div className="neb-card glass-card glass-float menu-panel" role="dialog" aria-label={t.focus.cardLabel}>
       <div className="neb-card-kick">
         <Icon name="zap" size={12} strokeWidth={2} />
-        {props.ending ? t.focus.cardKickEarly(props.minutes, props.workspaceName) : t.focus.cardKick(props.minutes, props.workspaceName)}
+        <span className="neb-card-kick-text">
+          {props.ending
+            ? t.focus.cardKickEarly(props.minutes, props.workspaceName)
+            : t.focus.cardKick(props.minutes, props.workspaceName)}
+        </span>
         <span className="neb-card-x">
           <button
             type="button"
@@ -67,8 +72,11 @@ export function FocusSummaryCard(props: {
         </span>
       </div>
       <h4>{t.focus.cardTitle}</h4>
-      {body}
-      {src !== null && <div className="neb-card-src">{src}</div>}
+      {/* 内容区自己滚：卡高被锚限制在视口内，按钮行恒可见 */}
+      <div className="neb-card-scroll">
+        {body}
+        {src !== null && <div className="neb-card-src">{src}</div>}
+      </div>
       <div className="neb-card-acts">
         <button type="button" className="neb-card-btn" onClick={props.onEnd}>
           {t.focus.endFocus}

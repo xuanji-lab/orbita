@@ -582,6 +582,39 @@
   white-space: nowrap;
 }
 
+/* 落定态（整理完 / 失败 / 没素材 / 没模型）：图标 + 一句话 + 关闭键，
+   **常驻**——用户裁决：状态结束了也不懂，可以点掉也可以不管 */
+.usage-say-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.usage-say-status > .orbita-icon:first-child {
+  color: var(--color-success);
+}
+
+.usage-say-x {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.usage-say-x:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
 /* 问询态：文字 + 两颗小键（要 / 不要）——键是 quiet-control，不另造外观 */
 .usage-say-ask {
   display: inline-flex;
@@ -607,25 +640,25 @@
   color: var(--color-text-primary);
 }
 
-/* —─ 时间到 / 提前结束的星云卡片（原型状态 9）：菜单面板配方 + usage-say 的尾巴；
-   锚（.neb-card-anchor）由 UsageMeter 放在停机坪上方，尾巴对准星云当格中心 */
+/* —─ 时间到 / 提前结束的星云卡片（原型状态 9）：**portal 到 body + fixed**（侧栏
+   aside 是 overflow:hidden，360px 的卡在原地渲染右缘被裁——2026-10-19 用户截图实证）。
+   外壳 .neb-card-anchor 的 position / 尺寸由 UsageMeter 的 NebCardPortal 内联给出；
+   面板配方 = Menu 浮层那套（glass-card glass-float menu-panel：实底 + 发丝 + 浮层
+   阴影 + --radius-xl 圆角）。宽超侧栏就盖到对话区上（原型本就如此）。 */
 .neb-card-anchor {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% - 4px);
-  width: 100%;
-  z-index: 70;
-}
-
-/* 常驻气泡在时停机坪抬高一档，气泡不叠在列表上 */
-.usage-meter[data-say] .usage-meter-body {
-  padding-top: 70px;
+  display: flex;
+  flex-direction: column;
+  z-index: 40;
 }
 
 .neb-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   width: 360px;
   max-width: calc(100vw - 16px);
+  max-height: 100%;
   padding: var(--space-4) var(--space-4) var(--space-3);
 }
 
@@ -633,7 +666,7 @@
   content: "";
   position: absolute;
   top: 100%;
-  left: var(--neb-tail-x, 216px);
+  left: var(--neb-tail-x, 180px);
   width: 10px;
   height: 10px;
   margin: -5px 0 0 -5px;
@@ -660,9 +693,16 @@
   font-family: var(--font-family-business);
 }
 
+.neb-card-kick .neb-card-kick-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .neb-card-kick .neb-card-x {
   margin-left: auto;
   display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .neb-card-close {
@@ -711,6 +751,14 @@
   margin: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+/* 内容区自己滚：卡高被锚限制在视口内，按钮行恒可见 */
+.neb-card-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .neb-card-src {

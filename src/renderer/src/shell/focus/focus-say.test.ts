@@ -1,0 +1,60 @@
+/**
+ * 星云气泡状态机的测试（focus-say.ts）。
+ */
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { cardPopsAtDone, focusSayOf } from "./focus-say.ts";
+import type { FocusStatus, FocusSummary } from "./use-focus.ts";
+import type { FocusRun } from "./focus-timer.ts";
+
+const run: FocusRun = { workspaceId: "ws", startedAt: 0, totalMs: 1, endsAt: 1 };
+const status = (kind: FocusStatus["kind"]): FocusStatus => ({ kind, run }) as FocusStatus;
+const summary = (state: FocusSummary["state"]): FocusSummary =>
+  state === "idle"
+    ? { state }
+    : state === "running"
+      ? { state }
+      : state === "ready"
+        ? { state, bullets: ["a", "b"], sessionsRead: 2, modelLabel: "p/m" }
+        : state === "failed"
+          ? { state, message: "boom" }
+          : { state, reason: "no-activity" };
+
+describe("focusSayOf", () => {
+  test("run + idle（还没到 T-5）：不显示", () => {
+    assert.deepEqual(focusSayOf(status("run"), summary("idle"), false), { kind: "hidden" });
+  });
+  test("run + running：转圈那句", () => {
+    assert.deepEqual(focusSayOf(status("run"), summary("running"), false), { kind: "running" });
+  });
+  test("落定各态的句子选择", () => {
+    assert.deepEqual(focusSayOf(status("run"), summary("ready"), false), { kind: "settled", line: "ready" });
+    assert.deepEqual(focusSayOf(status("run"), summary("failed"), false), { kind: "settled", line: "failed" });
+    assert.deepEqual(focusSayOf(status("run"), { state: "none", reason: "no-model" }, false), {
+      kind: "settled",
+      line: "no-model",
+    });
+    assert.deepEqual(focusSayOf(status("run"), { state: "none", reason: "no-activity" }, false), {
+      kind: "settled",
+      line: "no-activity",
+    });
+  });
+  test("点了 x：落定也隐藏；没点不隐藏", () => {
+    assert.deepEqual(focusSayOf(status("run"), summary("ready"), true), { kind: "hidden" });
+    assert.deepEqual(focusSayOf(status("run"), summary("running"), true), { kind: "hidden" });
+  });
+  test("ending / done / off 不出这颗气泡（ending 是问询，done 出卡）", () => {
+    for (const kind of ["ending", "done", "off"] as const) {
+      assert.deepEqual(focusSayOf(status(kind), summary("ready"), false), { kind: "hidden" });
+    }
+  });
+});
+
+describe("cardPopsAtDone", () => {
+  test("只在 done 弹；卡自己的关闭键压住；气泡被点掉不影响", () => {
+    assert.equal(cardPopsAtDone(status("done"), false), true);
+    assert.equal(cardPopsAtDone(status("done"), true), false);
+    assert.equal(cardPopsAtDone(status("run"), false), false);
+    assert.equal(cardPopsAtDone(status("ending"), false), false);
+  });
+});
