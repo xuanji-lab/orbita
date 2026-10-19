@@ -7,7 +7,7 @@ import { formatTokens } from "../utils/format-tokens.ts";
 import { isWindowInactive } from "./window-activity.ts";
 import {
   effectivePin,
-  petAnchor,
+  nebulaPlacement,
   petLeft,
   petPrefAfterCellClick,
   petPrefAfterHide,
@@ -77,9 +77,10 @@ export function UsageMeter(props: {
     () => usageWeekCells(new Date(), new Map((days ?? []).map((day) => [day.date, day.tokens]))),
     [days],
   );
-  const hidden = props.pet?.hidden === true;
+  // 星云要说话（专注气泡 / 卡片）时先回今天、临时现身，再冒泡（nebulaPlacement）
+  const speaking = props.petSay !== null || props.petCard !== null;
+  const { active, hidden } = nebulaPlacement(cells, props.pet, hover, speaking);
   const pinned = effectivePin(cells, props.pet);
-  const active = (hidden ? null : hover) ?? petAnchor(cells, props.pet);
   const activeTier: UsageTier = cells[active]?.tier ?? 0;
   const t = useT();
   const hovered = hover === null ? undefined : cells[hover];

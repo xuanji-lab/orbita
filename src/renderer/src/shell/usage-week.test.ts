@@ -7,7 +7,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { effectivePin, petAnchor, petLeft, petPrefAfterCellClick, petPrefAfterHide, usageTier, usageWeekCells, weekdayIndex } from "./usage-week.ts";
+import { effectivePin, nebulaPlacement, petAnchor, petLeft, petPrefAfterCellClick, petPrefAfterHide, usageTier, usageWeekCells, weekdayIndex } from "./usage-week.ts";
 
 /** 2026-10-12 是周一：一周七天恰好周一→周日，星期索引最好对 */
 const MONDAY = new Date(2026, 9, 12, 15, 30, 0);
@@ -120,5 +120,22 @@ describe("星云摆放偏好（按日期钉 / 收起）", () => {
     assert.deepEqual(hidden, { pinnedDate: "2026-10-08", hidden: true });
     assert.deepEqual(petPrefAfterCellClick(cells, hidden, 0), { pinnedDate: "2026-10-06" });
     assert.deepEqual(petPrefAfterCellClick(cells, hidden, 6), {});
+  });
+});
+
+describe("nebulaPlacement：星云要说话时先回今天、临时现身", () => {
+  const cells = usageWeekCells(MONDAY, new Map());
+  const today = cells.length - 1;
+  const pinnedFirst = { pinnedDate: cells[0]!.date };
+  test("平时：悬停 > 钉住 > 今天；收起时不跟悬停", () => {
+    assert.deepEqual(nebulaPlacement(cells, pinnedFirst, null, false), { active: 0, hidden: false });
+    assert.deepEqual(nebulaPlacement(cells, pinnedFirst, 3, false), { active: 3, hidden: false });
+    assert.deepEqual(nebulaPlacement(cells, { hidden: true }, 3, false), { active: today, hidden: true });
+  });
+  test("说话时：钉在最左也回今天，悬停不拉走", () => {
+    assert.deepEqual(nebulaPlacement(cells, pinnedFirst, 1, true), { active: today, hidden: false });
+  });
+  test("说话时：收起的星云临时现身（否则「要 / 不要」点不到，退不出专注）", () => {
+    assert.deepEqual(nebulaPlacement(cells, { hidden: true, ...pinnedFirst }, null, true), { active: today, hidden: false });
   });
 });
