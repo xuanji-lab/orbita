@@ -117,6 +117,28 @@ describe("buildSummaryMaterial + buildSummaryPrompt", () => {
     assert.equal(material.hasActivity, true);
   });
 
+  test("摘抄拼回素材：活动会话里、窗口内摘的才算；跨窗口与外会话的不算", () => {
+    const material = buildSummaryMaterial(inputs, {
+      workspaceNames: new Map([["ws-1", "orbita"]]),
+      workspaceName: "orbita",
+      branch: null,
+      changeEntries: [],
+      startedAt: T0,
+      until: T1,
+      excerpts: [
+        { sessionId: "a", text: "原则：代码是唯一真源", createdAt: T0 + 80 },
+        { sessionId: "a", text: "窗口外摘的", createdAt: T0 - 1 },
+        { sessionId: "silent", text: "没进素材的会话", createdAt: T0 + 90 },
+        { sessionId: "gone", text: "不存在的会话", createdAt: T0 + 90 },
+      ],
+    });
+    const lines = material.sessions.find((session) => session.title === "任务-a")?.lines ?? [];
+    assert.ok(lines.includes("摘抄：原则：代码是唯一真源"));
+    assert.equal(lines.filter((line) => line.startsWith("摘抄：")).length, 1);
+    // 只有摘抄、没有流水的会话（silent）也能进素材——活动就是活动
+    assert.ok(material.sessions.some((session) => session.title === "任务-silent"));
+  });
+
   test("全空 → hasActivity false（回 no-activity 的依据）", () => {
     const material = buildSummaryMaterial([], {
       workspaceNames: new Map(),

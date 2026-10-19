@@ -324,8 +324,10 @@ void app.whenReady().then(async () => {
   const record = createSessionRecorder(sessions, usageLedger);
   registerUsageIpc(usageLedger, sessions);
   // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
-  // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处
-  registerExcerptIpc(new ExcerptStore(join(configDir, "excerpts.jsonl")), sessions);
+  // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处。
+  // 同一个实例也喂给专注小结（摘抄是素材之一）
+  const excerpts = new ExcerptStore(join(configDir, "excerpts.jsonl"));
+  registerExcerptIpc(excerpts, sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
@@ -608,8 +610,8 @@ void app.whenReady().then(async () => {
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
-  // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型
-  registerFocusIpc(workspaces, sessions, providers, settings, agentHost);
+  // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型（摘抄也是素材）
+  registerFocusIpc(workspaces, sessions, providers, settings, agentHost, excerpts);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);

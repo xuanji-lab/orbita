@@ -114,6 +114,13 @@ export interface SummaryMaterial {
   hasActivity: boolean;
 }
 
+/** 摘抄的最小面（主进程从 ExcerptStore 全量里筛出窗口内的再传进来） */
+export interface SummaryExcerpt {
+  sessionId: string;
+  text: string;
+  createdAt: number;
+}
+
 /**
  * 归拢：会话（窗口内抽出的行非空才算数——改个标题那种「活动」出不了行）+
  * 工作区 U / M。workspaceNames 由调用方按 id 解好传进来（这里不碰 store）。
@@ -127,11 +134,18 @@ export function buildSummaryMaterial(
     changeEntries: readonly FocusChangeEntry[];
     startedAt: number;
     until: number;
+    /** 这段时间摘下的摘抄（可选；按 sessionId 归到对应会话的流水里） */
+    excerpts?: readonly SummaryExcerpt[];
   },
 ): SummaryMaterial {
   const sessions: SummarySessionMaterial[] = [];
   for (const { meta, records } of inputs) {
     const lines = extractSessionLines(records, opts.startedAt, opts.until);
+    // 摘抄不在会话记录里（独立存储），在这里拼回去——用户点名素材要含摘抄
+    for (const excerpt of opts.excerpts ?? []) {
+      if (excerpt.sessionId !== meta.id || !inWindow(excerpt.createdAt, opts.startedAt, opts.until)) continue;
+      lines.push(`摘抄：${clip(excerpt.text, 120)}`);
+    }
     if (lines.length === 0) continue;
     sessions.push({
       title: meta.title === "" ? "（未命名任务）" : meta.title,

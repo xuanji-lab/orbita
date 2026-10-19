@@ -23,6 +23,7 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { AgentHost } from "../agent/host.ts";
 import { resolveProviderSecrets } from "../agent/ipc.ts";
 import { gitWorkdirChanges, realGitRunner } from "../review/git-source.ts";
+import { ExcerptStore } from "../excerpt/store.ts";
 import { buildSummaryMaterial, buildSummaryPrompt, pickActiveSessions } from "./summary-source.ts";
 
 export function registerFocusIpc(
@@ -31,6 +32,7 @@ export function registerFocusIpc(
   providers: ProviderStore,
   settings: SettingsStore,
   host: AgentHost,
+  excerpts: ExcerptStore,
 ): void {
   ipcMain.handle(ipcChannels.focusChanges, async (_event, raw: unknown): Promise<FocusChanges> => {
     if (typeof raw !== "string") return { kind: "error", message: "invalid focus changes request" };
@@ -95,6 +97,10 @@ export function registerFocusIpc(
         changeEntries,
         startedAt: req.startedAt,
         until: req.until,
+        // 摘抄不在会话记录里（独立存储），拼回素材：只取活动会话里的、窗口内摘的
+        excerpts: (await excerpts.list())
+          .filter((excerpt) => active.some((meta) => meta.id === excerpt.sessionId))
+          .map((excerpt) => ({ sessionId: excerpt.sessionId, text: excerpt.text, createdAt: excerpt.createdAt })),
       });
       if (!material.hasActivity) return { kind: "empty", reason: "no-activity" };
 
