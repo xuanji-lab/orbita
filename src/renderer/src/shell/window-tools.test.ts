@@ -233,19 +233,30 @@ test("字标与星云同一行：绝对定位在停机坪、中心对齐云心�
   assert.match(meter, /data-yield=\{active <= 1 \|\| undefined\}/, "避让判定没接 active 格序");
 });
 
-test("审查页签以胶囊中心为轴居中（宽栏绝对定位；窄栏回流退化）", () => {
-  // 宽栏：绝对定位 left 50% + translateX(-50%) —— 中心 = 胶囊中心是构造性的（±0）
+test("审查页签以胶囊中心居中：三列 grid 两个 1fr 等宽轨道（构造性 ±0），放不下自退化", () => {
+  // grid 1fr auto 1fr：两轨等宽 → 页签组构造性落在胶囊中心；放不下轨道压缩、
+  // 页签组顺排（cap-tabs 自带横滚渐隐），不与两侧重叠（绝对居中压过下拉，已弃）
   assert.match(
     toolbarCss,
-    /@container \(width >= 420px\)\s*\{\s*\.cap-center\s*\{\s*position:\s*absolute;\s*left:\s*50%;\s*transform:\s*translateX\(-50%\)/s,
-    "缺 .cap-center 的宽栏绝对居中规则——grow 对称会把页签挤向左",
+    /\.cap-review-head\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*1fr auto 1fr/s,
+    "缺审查头的三列 grid——页签组无法构造性居中",
   );
-  // 窄栏：回到流里（不绝对定位），可收缩
-  assert.match(toolbarCss, /\.cap-center\s*\{\s*flex:\s*0 0 auto;/, ".cap-center 的自然宽基准没了");
   const review = readFileSync(join(RENDERER_SRC, "features/review/ReviewPanel.tsx"), "utf8");
-  assert.match(review, /className="cap-tabs cap-center"/, "审查页签组没挂 cap-center");
-  // 页签按钮按内容自然宽（曾被压到 46px 装不下「图标 + 两个字」）
-  assert.match(toolbarCss, /\.cap-tabs \.cap-tab\s*\{\s*flex:\s*0 0 auto;/, "页签按钮没了自然宽（flex: 0 0 auto）");
+  assert.match(review, /className="cap-review-head"/, "审查头没用三列 grid");
+  assert.match(review, /className="cap-tabs"/, "审查页签组不在 grid 中列");
+  // 来源下拉收成图标键（给居中让位；点开同一个来源菜单）
+  assert.match(review, /git-branch" size=\{16\}/, "来源图标键没了");
+  assert.match(review, /cap-review-head[\s\S]{0,2000}cap-seg solo/, "来源下拉没收成图标键");
+});
+
+test("胶囊内带文字的键豁免兜底重置（页签曾被压到 44px、padding 被清零）", () => {
+  for (const cls of [".cap-tab", ".cap-sel", ".cap-subchip"]) {
+    assert.match(
+      toolbarCss,
+      new RegExp(`\\.toolbar-capsule ${cls.replace(".", "\\.")}\\s*\\{[^}]*width:\\s*auto`),
+      `${cls} 没豁免 .toolbar-capsule button 的 padding:0 / 定宽`,
+    );
+  }
 });
 
 test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧净空变量", () => {

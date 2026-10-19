@@ -144,11 +144,12 @@ export function ReviewPanel(props: {
   return (
     <RightPanelFrame
       header={
-        <>
-          <PanelTitle icon="file-diff" title={t.review.title} />
-          {/* 「改动 / 摘抄」页签在胶囊里**以胶囊中心为轴**横向居中（cap-center，
-              2026-10-19 二轮验收：grow 对称会把它挤向左）；窄于 420 回到流里退化 */}
-          <div className="cap-tabs cap-center" role="tablist" aria-label={t.review.title}>
+        <div className="cap-review-head">
+          <PanelTitle icon="file-diff" title={t.review.title} className="cap-slot-left" />
+          {/* 「改动 / 摘抄」页签组：两个 1fr 轨道等宽 → 构造性落在胶囊中心
+              （2026-10-19 两轮复测：grow 对称偏左、绝对居中压下拉，都不对）。
+              放不下时轨道压缩，页签组顺排 + 横滚渐隐退化 */}
+          <div className="cap-tabs" role="tablist" aria-label={t.review.title}>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
               <Icon name="file-diff" size={12} strokeWidth={1.8} />
               {t.review.tabChanges}
@@ -158,25 +159,30 @@ export function ReviewPanel(props: {
               {t.review.tabExcerpts}
             </button>
           </div>
-          <span className="cap-grow" aria-hidden="true" />
-          {/* 审查范围（本任务 / 工作区未提交 / 分支）：胶囊右侧的安静下拉；
-              摘抄页签不吃 git 来源，收起 */}
-          {tab === "changes" && (
-            <Menu items={sourceItems} trigger={({ toggle: open }) => (
-              <button type="button" onClick={open} title={t.review.source(source)} className="cap-sel no-drag">
-                {t.review.source(source)}
-                <Icon name="chevron-down" size={11} strokeWidth={1.8} />
-              </button>
-            )} />
-          )}
-        </>
-      }
-      headerExtra={
-        tab === "changes" ? (
-          <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
-            <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
-          </PanelIconButton>
-        ) : undefined
+          <div className="cap-slot-right">
+            {/* 审查来源（本任务 / 工作区 / 分支）：收成图标键（点开同一个菜单，tooltip
+                报当前来源）——宽栏给页签组让出居中空间，窄栏更省；摘抄页签不吃 git
+                来源，收起 */}
+            {tab === "changes" && (
+              <Menu items={sourceItems} trigger={({ toggle: open }) => (
+                <button
+                  type="button"
+                  onClick={open}
+                  title={t.review.source(source)}
+                  aria-label={t.review.source(source)}
+                  className="quiet-control cap-seg solo no-drag"
+                >
+                  <Icon name="git-branch" size={16} strokeWidth={1.8} />
+                </button>
+              )} />
+            )}
+            {tab === "changes" && (
+              <PanelIconButton title={t.review.refresh} onClick={() => refresh(source)} disabled={loading}>
+                <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
+              </PanelIconButton>
+            )}
+          </div>
+        </div>
       }
       contentKey={`${tab}:${source}:${props.sessionId ?? "none"}`}
     >

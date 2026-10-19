@@ -31,6 +31,24 @@
 .toolbar-capsule button.cap-dot {
   background: var(--color-accent);
 }
+/* 带文字的键豁免上面的 padding:0（2026-10-19 复测：页签被压到 44px、
+ * 「图标 + 两个字」溢出）——重申各自的内边距与自然宽（width: auto） */
+.toolbar-capsule .cap-tab {
+  padding: 0 var(--space-2);
+  width: auto;
+}
+.toolbar-capsule .cap-sel {
+  padding: 0 8px 0 10px;
+  width: auto;
+}
+.toolbar-capsule .cap-subchip {
+  padding: 0 8px 0 6px;
+  width: auto;
+}
+.toolbar-capsule .cap-crumb {
+  padding: 0 6px 0 0;
+  width: auto;
+}
 
 /* —— 胶囊（四处共用一个配方） —— */
 .toolbar-capsule {
@@ -363,18 +381,30 @@
   height: 100%;
   animation: right-panel-fade var(--duration-instant) var(--ease-out-quint);
 }
-/* 胶囊中段的**真·横向居中**（2026-10-19 验收：grow 对称做不到——右侧固定件比左侧
- * 多时页签组会偏左）：宽栏（≥420）绝对定位以胶囊中心为轴，两侧固定件不参与让位；
- * 窄于 420 回到流里按优先级退化（横滚 + 右缘渐隐）。按内容自然宽、不收缩 */
-.cap-center {
-  flex: 0 0 auto;
+/* 审查头的三列 grid：标题键 | 页签组 | 右侧动作区。**两个 1fr 轨道等宽 → 页签组
+ * 构造性地落在胶囊中心**（grow 对称做不到：右侧固定件更宽时会偏左；绝对居中又会
+ * 压到下拉——2026-10-19 两轮复测的教训）。放不下时 1fr 轨道自己压缩到 0，
+ * 页签组（cap-tabs 自带横滚 + 渐隐）退化为「标题键之后顺排」，不与两侧重叠；
+ * 来源下拉收成图标键（cap-sel-compact），左右固定区近似等宽（68 / 60） */
+.cap-review-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-width: 0;
+  height: 100%;
 }
-@container (width >= 420px) {
-  .cap-center {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-  }
+.cap-review-head > .cap-slot-left {
+  justify-self: start;
+  min-width: 0;
+}
+.cap-review-head > .cap-slot-right {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 
 /* —— Windows / Linux 自绘窗口键：工具栏最右一组，中心也在 y=25 —— */
