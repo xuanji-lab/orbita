@@ -22,6 +22,12 @@ export function RightPanelSlot(props: {
   narrow: boolean;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /**
+   * 把**实际渲染**的宽度（夹过 1/3–2/3 之后）报给调用方——工具栏的右栏胶囊要跟它
+   * 对齐。工具栏原先拿盘上的原始宽度自己算：窗口缩小后右栏被夹窄、胶囊还是旧宽，
+   * 压到会话胶囊与左上角（2026-10-19 用户验收）。宽度只在这里夹一次，别处只读。
+   */
+  onRenderedWidth?: (width: number) => void;
   children: React.ReactNode;
 }) {
   const t = useT();
@@ -36,6 +42,11 @@ export function RightPanelSlot(props: {
    */
   const paneTotal = usePaneTotalWidth(asideRef, !narrow);
   const width = paneTotal > 0 ? clampRightPanelWidth(props.width, paneTotal) : props.width;
+  const renderedWidth = narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width;
+  const onRenderedWidth = props.onRenderedWidth;
+  useEffect(() => {
+    onRenderedWidth?.(renderedWidth);
+  }, [renderedWidth, onRenderedWidth]);
 
   /**
    * 拖宽（4-0）：左移变宽。区间**按 pane 算**——右栏 ∈ [P/3, 2P/3]，

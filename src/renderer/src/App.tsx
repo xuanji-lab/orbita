@@ -171,6 +171,8 @@ export function App() {
 
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
+  /** 右栏实际渲染宽（RightPanelSlot 夹过 1/3–2/3 后报上来）：工具栏右栏胶囊只认它 */
+  const [panelRenderedWidth, setPanelRenderedWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
@@ -1038,7 +1040,7 @@ export function App() {
           onNewTask={startNewTaskFromTools}
           windowWidth={windowWidth}
           panelOpen={rightPanel !== null}
-          panelWidth={panelWidth}
+          panelWidth={panelRenderedWidth}
           narrow={narrow}
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
@@ -1135,6 +1137,7 @@ export function App() {
             narrow={narrow}
             onWidthChange={setPanelWidth}
             onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+            onRenderedWidth={setPanelRenderedWidth}
           >
             {/* 收起动画期间保持原内容；切换时 key 变化触发 120ms 内容淡入 */}
             <div

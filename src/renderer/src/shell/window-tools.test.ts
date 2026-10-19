@@ -278,3 +278,12 @@ test("旧机制的残骸清干净：没有 .panel-head / .titlebar-exempt / 旧�
   }
   assert.ok(!toolbarTsx.includes("RailButton"), "RailButton 已被胶囊格取代，不该再出现");
 });
+
+test("工具栏右栏胶囊只认右栏实际渲染宽（夹过 1/3–2/3），不认盘上原始宽", () => {
+  const app = readFileSync(join(RENDERER_SRC, "App.tsx"), "utf8");
+  const slot = readFileSync(join(RENDERER_SRC, "shell/RightPanel.tsx"), "utf8");
+  assert.match(app, /panelWidth=\{panelRenderedWidth\}/, "Toolbar 的 panelWidth 必须是 RightPanelSlot 报上来的渲染宽");
+  assert.doesNotMatch(app, /<Toolbar[\s\S]{0,800}panelWidth=\{panelWidth\}/, "Toolbar 不能拿未夹的原始宽");
+  assert.match(app, /onRenderedWidth=\{setPanelRenderedWidth\}/);
+  assert.match(slot, /onRenderedWidth\?\.\(renderedWidth\)/, "RightPanelSlot 要把夹过的宽度报出去");
+});
