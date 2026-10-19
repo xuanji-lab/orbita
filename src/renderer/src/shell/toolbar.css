@@ -37,6 +37,12 @@
   padding: 0 var(--space-2);
   width: auto;
 }
+/* 专注倒计时同理：被上面的 padding:0 / font:inherit 吃掉后，数字离胶囊右缘只剩 2.5px
+ * （2026-10-19 用户：「左上角太顶到了」）——重申 .cap-focus-run 的内边距与字号 */
+.toolbar-capsule .cap-focus-run {
+  padding: 0 12px 0 10px;
+  font-size: var(--font-size-titlebar);
+}
 .toolbar-capsule .cap-sel {
   padding: 0 8px 0 10px;
   width: auto;
