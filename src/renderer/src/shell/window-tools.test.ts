@@ -225,10 +225,10 @@ test("对话卡的高度链：删页头后 grid 行数跟着切换（composer �
   );
 });
 
-test("字标与星云同一行：绝对定位在停机坪、中心对齐云心（24），最左两格淡出让位", () => {
+test("字标与星云同一行：绝对定位在停机坪、中心对齐云心（24），最左两格右移对齐今天", () => {
   const usageCss = readFileSync(join(RENDERER_SRC, "shell/usage.css"), "utf8");
   assert.match(usageCss, /\.usage-brand\s*\{[^}]*position:\s*absolute[^}]*height:\s*48px/s, "字标没有绝对定位到星云那行（48px 空域）");
-  assert.match(usageCss, /\.usage-brand\[data-yield\]\s*\{\s*opacity:\s*0/, "缺最左格的淡出让位");
+  assert.match(usageCss, /\.usage-brand\[data-yield\]\s*\{\s*transform:\s*translateX\(calc\(216px - 100%\)\)/, "星云在最左两格时字标没有右移对齐「今天」格");
   const meter = readFileSync(join(RENDERER_SRC, "shell/UsageMeter.tsx"), "utf8");
   assert.match(meter, /data-yield=\{active <= 1 \|\| undefined\}/, "避让判定没接 active 格序");
 });

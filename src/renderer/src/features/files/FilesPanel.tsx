@@ -458,13 +458,16 @@ export function FilesPanel(props: {
             onClick={() => setTreeOn((value) => !value)}
             ariaExpanded={fileOpen && treeOn}
             disabled={!fileOpen}
+            // 没打开文件时开关是禁用的，箭头只会让人以为能点——干脆不画（2026-10-19 用户裁决）
             trailing={
-              <Icon
-                name="chevron-right"
-                size={11}
-                strokeWidth={2.2}
-                className="files-title-chev"
-              />
+              fileOpen ? (
+                <Icon
+                  name="chevron-right"
+                  size={11}
+                  strokeWidth={2.2}
+                  className="files-title-chev"
+                />
+              ) : undefined
             }
           />
           {tabs.length === 0 ? (

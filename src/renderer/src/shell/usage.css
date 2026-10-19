@@ -18,8 +18,9 @@
 }
 /* 字标与星云同一行：绝对定位在停机坪左端（格子左缘那条线），高度 = 云的 48px
  * 空域、垂直居中——中心 y 与星云中心（24）同一条水平线。星云移到最左两格
- * （active ≤ 1）时 data-yield 淡出让位；星云收起时（停机坪塌掉）回到流里
- * 变成格子上方的一小行 */
+ * （active ≤ 1）时 data-yield 让位：字标滑到格子行右端、右缘对齐「今天」格
+ * （2026-10-19 用户裁决，替代原先的淡出）；216px = .usage-cells 的定宽。
+ * 星云收起时（停机坪塌掉）回到流里变成格子上方的一小行 */
 .usage-brand {
   position: absolute;
   left: 0;
@@ -35,15 +36,16 @@
   color: var(--color-text-secondary);
   white-space: nowrap;
   pointer-events: none;
-  transition: opacity var(--duration-fast) var(--ease-standard);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
 }
 .usage-brand[data-yield] {
-  opacity: 0;
+  transform: translateX(calc(216px - 100%));
 }
 .usage-meter[data-hidden] .usage-brand {
   position: static;
   height: auto;
   padding: 0 0 4px 2px;
+  transform: none;
 }
 
 /* 星云收起：上方停机坪让给会话列表；星云钻回格子（缩小 + 淡出 + 下沉） */

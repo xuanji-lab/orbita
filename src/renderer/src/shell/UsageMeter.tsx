@@ -82,7 +82,8 @@ export function UsageMeter(props: {
         {/* 字标（2026-10-19 二次裁决：「左下角的 orbita 没有和星云横向居中对齐放在
             一行里」）：与星云**同一行**——绝对定位在停机坪左端（用量格左缘那条线），
             高度对齐云的 48px 空域，中心 y 与星云中心同一条水平线；星云悬停 / 钉到
-            最左两格会压到字标，届时字标淡出让位（data-yield，默认可推翻） */}
+            最左两格会压到字标，届时字标滑到格子行右端、对齐「今天」格（data-yield，
+            2026-10-19 用户裁决） */}
         <div className="usage-brand" data-yield={active <= 1 || undefined}>
           orbita
         </div>
