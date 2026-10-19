@@ -142,7 +142,7 @@ describe("describeChannelRole：root 的对齐段与闭环段", () => {
     assert.match(text, /one block per\s+deliverable/);
     assert.match(text, /changes to the same files run sequentially/);
     // skip 档的验收分离写在闭环段：复跑/截图/审查另起会话，实现者只接返工（\s+ 防换行抖动）
-    assert.match(AUTO_VERIFICATION_GUIDELINE, /Verification\s+never runs in the sub-session that did the work/);
+    assert.match(AUTO_VERIFICATION_GUIDELINE, /Verification\s+never goes back to the sub-session that did the work/);
     assert.match(AUTO_VERIFICATION_GUIDELINE, /the implementer only takes fixes to what it wrote/);
     // manual / plan 不自动派审查，但验收同样不回给实现者（半句写在档位说明里）
     for (const mode of ["plan", "manual"] as const) {

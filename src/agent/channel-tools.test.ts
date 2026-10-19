@@ -95,8 +95,8 @@ describe("delegate", () => {
     assert.match(text, /glm-5\.3/);
     assert.match(text, /end this turn/);
     assert.match(text, /do not poll or wait/i);
-    // 开着的子会话清单拼在结果末尾（台账路由：让模型知道手里有谁）
-    assert.match(text, /You now have 1 open sub-sessions: child-1\./);
+    // 开着的子会话清单拼在结果末尾（台账路由：让模型知道手里有谁）；单个用单数
+    assert.match(text, /You now have 1 open sub-session: child-1\./);
     assert.deepEqual(result.details, {
       delegate: {
         childId: "child-1",
@@ -106,6 +106,36 @@ describe("delegate", () => {
         workbench: "/workbenches/child-1",
       },
     });
+  });
+
+  test("开着的子会话超过 8 个：复数用 sub-sessions，并说明还有几个没列（否则模型会去找缺的 id）", async () => {
+    const { tools, fake } = setup("root");
+    const delegate = toolByName(tools, "delegate");
+    const pending = delegate.execute(
+      "call-many",
+      { title: "t", task: "d" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    const ids = Array.from({ length: 8 }, (_, index) => `child-${index + 1}`);
+    fake.answer(fake.requestIdAt(0), {
+      ok: true,
+      childId: "child-1",
+      title: "t",
+      card: {
+        childId: "child-1",
+        title: "t",
+        modelId: "glm-5.3",
+        thinkingLevel: "medium",
+        workbench: "/workbenches/child-1",
+      },
+      openChildren: { count: 10, ids },
+    });
+    const result = await pending;
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /You now have 10 open sub-sessions: child-1, /);
+    assert.match(text, /\(2 more not listed\)\./);
   });
 
   test("model / thinkingLevel 给了就原样上船", async () => {

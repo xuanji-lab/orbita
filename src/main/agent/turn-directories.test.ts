@@ -266,6 +266,50 @@ describe("resolveTurnDirectories 的 related（子会话 2026-09-23 裁决：父
       [...ids].reverse().slice(0, 8),
     );
   });
+
+  test("先剔已收尾再截 8：已收尾的子即使最后活动最新，也不占名额、不挤掉开着的子", async () => {
+    // 变异守卫：把 slice 与 filter 对调后只留 7 条——done 的子排在 lastAt 最前，
+    // 先截就把一个还开着的子饿死了（审查 2026-10-19 的变异实验）。
+    await sessions.ensureSession({ ...baseMeta, id: PARENT, title: "母任务" });
+    const openIds = Array.from({ length: 9 }, (_, index) => `cccccccc-0000-0000-0000-00000000000${index + 1}`);
+    for (const [index, childId] of openIds.entries()) {
+      await sessions.ensureSession({ ...baseMeta, id: childId, title: `开着的 ${index + 1}`, parentId: PARENT });
+      await channels.append(
+        { parentId: PARENT, childId },
+        {
+          id: `t-${index}`,
+          from: "parent",
+          author: "model",
+          kind: "task",
+          text: "去做",
+          delivery: "followUp",
+          createdAt: (index + 1) * 10,
+        },
+      );
+    }
+    const doneId = "dddddddd-0000-0000-0000-000000000001";
+    await sessions.ensureSession({
+      ...baseMeta,
+      id: doneId,
+      title: "已收尾的",
+      parentId: PARENT,
+      completion: "done",
+    });
+    await channels.append(
+      { parentId: PARENT, childId: doneId },
+      { id: "t-done", from: "parent", author: "model", kind: "task", text: "去做", delivery: "followUp", createdAt: 999 },
+    );
+
+    const dirs = await resolveTurnDirectories(workspaces, sessions, channels, {
+      sessionId: PARENT,
+      workspaceId: null,
+    });
+    const childIds = (dirs.related ?? []).map((entry) => entry.sessionId);
+    // 已收尾的不列；9 个开着的按 lastAt 倒序留 8 条（done 不占名额 → 仍有 8 条）
+    assert.equal(childIds.length, 8);
+    assert.equal(childIds.includes(doneId), false);
+    assert.deepEqual(childIds, [...openIds].reverse().slice(0, 8));
+  });
 });
 
 describe("SessionStore.workbenchPath", () => {

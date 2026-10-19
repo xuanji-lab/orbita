@@ -120,9 +120,12 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       });
       if (!result.ok) throw new Error(result.error);
       const card = result.card;
+      const { count, ids } = result.openChildren;
+      const omitted = count - ids.length;
       const openNote =
-        result.openChildren.count > 0
-          ? ` You now have ${result.openChildren.count} open sub-sessions: ${result.openChildren.ids.join(", ")}.`
+        count > 0
+          ? ` You now have ${count} open sub-session${count === 1 ? "" : "s"}: ${ids.join(", ")}` +
+            `${omitted > 0 ? ` (${omitted} more not listed)` : ""}.`
           : "";
       const text =
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +

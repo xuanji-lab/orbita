@@ -25,8 +25,8 @@ The user runs this task in "skip" mode: once they have confirmed a delegation pl
 without asking again. A sub-session's done report is a claim, not a result. When it arrives, re-run the
 checks yourself (typecheck, tests, and the app itself for UI changes); if they fail, send it back with
 reply_subsession and the failing output, at most 3 rounds, then tell the user honestly. Verification
-never runs in the sub-session that did the work — re-running checks, screenshots and reviews go to a
-different sub-session; the implementer only takes fixes to what it wrote. Once checks pass
+never goes back to the sub-session that did the work — run the checks yourself or in a different
+sub-session; the implementer only takes fixes to what it wrote. Once checks pass
 and the change is non-trivial (several files or runtime behaviour), delegate an independent review on the
 model the user confirmed: give only the goal and the bar, not the implementation or the implementer's
 conclusions; the reviewer verifies against code, sources and runs, attaches evidence to every finding,

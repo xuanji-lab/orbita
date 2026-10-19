@@ -99,6 +99,19 @@ describe("describeDirectories", () => {
     assert.ok(text.includes('Sub-session "先派出的" (id child-1) workbench: /workbenches/child-1'));
     assert.ok(!text.includes("— state:"));
   });
+
+  test("子会话视角（related 只有 parent）：不拼台账路由注——它没有 delegate / reply_subsession", () => {
+    const text = describeDirectories(
+      "/repo/orbita",
+      dirs({
+        related: [{ sessionId: "parent-1", relation: "parent", label: "母任务", path: "/workbenches/parent-1" }],
+      }),
+    );
+    assert.ok(text.includes('Parent session "母任务" (id parent-1)'));
+    assert.ok(text.includes("private workbenches"));
+    assert.ok(!text.includes("reply_subsession"));
+    assert.ok(!text.includes("recipients of"));
+  });
   test("browserDownloads：有就说在哪、可以整理；缺席不出现", () => {
     const withDownloads = describeDirectories("/cwd", { attached: [], workbench: "/wb", browserDownloads: "/Users/me/Downloads" });
     assert.match(withDownloads, /Browser downloads: \/Users\/me\/Downloads/);

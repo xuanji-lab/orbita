@@ -995,7 +995,8 @@ export type ChannelSendOutcome =
       /**
        * 投递**之前**目标子会话的通道状态（父→子的 reply 一落账就把状态翻回 running，
        * 所以必须先取再写）。done = 它已经交付过——工具结果会提醒模型「新任务用 delegate」。
-       * 父→父或用户代父发言时缺席。
+       * 只有父→子这条路径有；子→父（report_to_parent）不带，用户代父发言（applySpeak）
+       * 也不产生这个回执。
        */
       targetStatus?: ChannelStatus;
     }
