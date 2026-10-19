@@ -607,8 +607,9 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
-  // 专注模式（focus:changes / focus:notify-done）：U/M 只读跑 git，时间到发系统通知
-  registerFocusIpc(workspaces);
+  // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
+  // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型
+  registerFocusIpc(workspaces, sessions, providers, settings, agentHost);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
