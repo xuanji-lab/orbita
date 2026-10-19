@@ -20,6 +20,52 @@
   /* 整条可拖；胶囊里的按钮 / 输入框由 .titlebar button / input 全局豁免 no-drag */
 }
 
+/* Windows / Linux 拆两行（2026-10-19 修订，Proma 式）：.toolbar 本身变成 84 高的
+ * 两行容器——上行 brand row（商标 + 软件名 + 自绘三键），下行胶囊行。macOS 仍单行 52。 */
+.toolbar[data-platform="other"] {
+  height: calc(var(--titlebar-brand-row) + var(--titlebar-row));
+  display: grid;
+  grid-template-rows: var(--titlebar-brand-row) var(--titlebar-row);
+}
+/* 胶囊在 Windows 两行里落在第二行：top 基准从 9 变成 brand row + 9 */
+.toolbar[data-platform="other"] .toolbar-capsule {
+  top: calc(var(--titlebar-brand-row) + var(--titlebar-capsule-top));
+}
+
+/* brand row：Windows 顶栏第一行——左商标 + 软件名，右自绘三键（整行拖拽，三键豁免） */
+.brand-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: var(--space-3) 0;
+}
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-wordmark);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  user-select: none;
+}
+.brand-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+.brand-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Windows / Linux 自绘窗口键：brand row 最右一组，垂直居中于 brand row */
+.win-ctl {
+  display: flex;
+  align-items: center;
+}
+
 /* 胶囊里的一切按钮先吃一遍控件重置（quiet-control 之外还有 cap-dot 这类实底键）：
  * 无边框、无默认底、字体随行——浏览器默认的 2px outset 黑框进不了工具栏 */
 .toolbar-capsule button {
@@ -505,15 +551,7 @@
   min-width: 0;
 }
 
-/* —— Windows / Linux 自绘窗口键：工具栏最右一组，中心也在 y=25 —— */
-.win-ctl {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-}
+
 .win-ctl-btn {
   display: grid;
   place-items: center;
