@@ -71,8 +71,8 @@ test("工作区选项是 button：必须清掉默认边框，名字单行省略"
   assert.match(css, /\.focus-wsopt \.focus-wsopt-name \{[^}]*white-space:\s*nowrap[^}]*text-overflow:\s*ellipsis/s);
 });
 
-test("工作区会话行：清默认边框，只有当前会话描 accent 外圈", () => {
+test("工作区会话行：清默认边框，选中不加描边（只认淡底）", () => {
   const css = readFileSync(new URL("./focus.css", import.meta.url), "utf8");
   assert.match(css, /\.focus-wsrow \{\s*border:\s*0/);
-  assert.match(css, /\.focus-wsrow\[data-active="true"\] \{\s*outline:\s*1\.5px solid var\(--color-accent\);\s*outline-offset:\s*1px/);
+  assert.doesNotMatch(css, /\.focus-wsrow\[data-active[^{]*\{[^}]*outline/);
 });
