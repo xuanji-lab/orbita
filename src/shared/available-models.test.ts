@@ -5,7 +5,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { availableModelsFromProviders } from "./available-models.ts";
+import { availableModelsFromProviders, usableSubSessionSetting } from "./available-models.ts";
 import type { AgentCommand } from "./agent-ipc.ts";
 import type { ProviderDto } from "./provider.ts";
 
@@ -92,6 +92,35 @@ describe("availableModelsFromProviders", () => {
       [],
     );
     assert.deepEqual(availableModelsFromProviders([]), []);
+  });
+});
+
+describe("usableSubSessionSetting —— 设置里的子会话模型此刻是否会生效", () => {
+  const setting = { providerId: "gpt", modelId: "strong" };
+  const alive = provider({
+    id: "gpt",
+    displayName: "GPT",
+    auth: { scheme: "api_key", hasSecret: true, masked: "k" },
+    models: { declared: [{ id: "strong" }] },
+  });
+
+  test("provider 还在 → 原样返回（提示词讲设置里的模型）", () => {
+    assert.deepEqual(usableSubSessionSetting(setting, [alive]), setting);
+  });
+
+  test("provider 被删 → undefined（运行时退回同父，提示词也得讲同父）", () => {
+    assert.equal(usableSubSessionSetting(setting, []), undefined);
+    assert.equal(
+      usableSubSessionSetting(setting, [
+        provider({ id: "other", displayName: "Other", auth: { scheme: "env", envKeys: ["OTHER_KEY"] } }),
+      ]),
+      undefined,
+    );
+  });
+
+  test("本来就没设 → undefined，且不因 provider 列表而变化", () => {
+    assert.equal(usableSubSessionSetting(undefined, [alive]), undefined);
+    assert.equal(usableSubSessionSetting(undefined, []), undefined);
   });
 });
 

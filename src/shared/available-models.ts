@@ -14,6 +14,7 @@
  * 密钥的模型，等于让 agent 推荐一个派下去必失败（`has no API key stored`）的模型。
  */
 import { hasCredentials, type ProviderDto } from "./provider.ts";
+import type { ModelPair } from "./settings.ts";
 
 /** 一条「哪些模型可以派子会话」的事实。渲染成提示词一行（见 agent/delegation-prompt.ts）。 */
 export interface AvailableModel {
@@ -52,4 +53,22 @@ export function availableModelsFromProviders(providers: readonly ProviderDto[]):
     }
   }
   return models;
+}
+
+/**
+ * 设置里的「子会话模型」此刻是否真的会生效：provider 还在注册表里才算。
+ *
+ * 判据与 `resolveSubSessionModel`（main/channel/requests.ts）里那句**必须一致**——
+ * 两处讲的是同一件事。provider 被删时运行时退回同父（易耗品处理），提示词若还讲
+ * 「沿用设置里的子会话模型 (X)」，模型就会据此向用户复述一个不会发生的落点
+ * （2026-10-19 验收发现的边界）。
+ *
+ * 返回 undefined = 不点名时并没有设置项可落，提示词该如实讲「同父」。
+ */
+export function usableSubSessionSetting(
+  setting: ModelPair | undefined,
+  providers: readonly ProviderDto[],
+): ModelPair | undefined {
+  if (setting === undefined) return undefined;
+  return providers.some((provider) => provider.id === setting.providerId) ? setting : undefined;
 }
