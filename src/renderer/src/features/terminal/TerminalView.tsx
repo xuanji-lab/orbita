@@ -12,6 +12,7 @@ import type { TerminalInfo } from "@shared/terminal";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { CONSERVATIVE_CONPTY_BUILD, readTerminalMetrics, readTerminalTheme } from "./terminal-theme.ts";
+import { shouldTerminalTakeFocus } from "./terminal-tabs.ts";
 
 // 字体、字号、行高都是 token（--font-family-mono / --font-size-terminal / --line-height-terminal），
 // 在 effect 里运行时读——不在这里写数字
@@ -143,7 +144,9 @@ export function TerminalView(props: {
           lastRendered = snapshot.sequence;
           void api.terminal.ackOutput(props.terminalId, snapshot.sequence).catch(() => undefined);
           finishRestore();
-          terminal.focus();
+          // 不抢正在别处打字的焦点（agent 开的终端也走这里）——见 shouldTerminalTakeFocus
+          const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          if (shouldTerminalTakeFocus(focused, focused !== null && host.contains(focused))) terminal.focus();
         });
       } catch (error) {
         if (disposed) return;
