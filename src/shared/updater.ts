@@ -14,10 +14,20 @@
  *   updater:install   退出并安装已下载的更新（quitAndInstall）
  *   updater:state     主进程 → renderer 的状态广播
  *
- * **dev（未打包）下不接线**：`UpdaterSnapshot.supported` 为 false，界面据此把入口
- * 说清楚并置灰——参考实现（Proma）在 dev 下点「检查更新」会走进库的失败路径，
- * 那不是设计，是漏判。
+ * **只有打包好的 Windows 应用接线**（`UpdaterSnapshot.support`）：dev 下没有可更新的安装；
+ * macOS 包只是 ad-hoc 签名、未公证，Squirrel.Mac 安装时要校验代码签名，接上只会得到
+ * 「检查失败」或「下完装不上」。两种都把入口说清楚并置灰——参考实现（Proma）在 dev 下
+ * 点「检查更新」会走进库的失败路径，那不是设计，是漏判。
  */
+
+/**
+ * 自动更新在这个实例上可不可用，以及不可用的原因（界面按原因出不同的话）：
+ * - `supported`：打包好的 Windows 应用，正常检查 / 下载 / 安装
+ * - `unpackaged`：未打包（dev / 从源码跑），没有可更新的安装
+ * - `platform`：打包了但本平台暂不支持（不是 Windows；当前会产出的这类包只有 macOS，见上），
+ *   新版本要用户自己去下载
+ */
+export type UpdateSupport = "supported" | "unpackaged" | "platform";
 
 /** 下载进度（electron-updater 的 ProgressInfo 子集，单位一律字节与百分比） */
 export interface UpdateDownloadProgress {
@@ -77,15 +87,15 @@ export type UpdateState =
 export interface UpdaterSnapshot {
   /** 当前应用版本（主进程的 app.getVersion()），界面「当前版本」那一行用它 */
   currentVersion: string;
-  /** false = 未打包（dev / 从源码跑）：不检查也不下载，界面把入口说清楚并置灰 */
-  supported: boolean;
+  /** 不是 `supported` 时不检查也不下载，界面按原因把入口说清楚并置灰 */
+  support: UpdateSupport;
   state: UpdateState;
   /**
-   * **已装上的这一版**的更新说明——装完之后才有的那一份。更新源只会给「新版本」的说明，
-   * 版本装上以后用户再想问「我现在这版带来了什么」就没有出处了；所以下载完成时把那一版的
-   * 说明留在 userData 上（写字的地方见 main/updater/service.ts 的 update-downloaded），
-   * 下次启动版本号对得上就放进快照。没有（没存过 / 存的不是这一版 / 文件坏了）是 null，
-   * 界面据此不画「本版更新内容」。
+   * **当前这一版**的更新说明——应用内置的那份：打包时从 package.json 的
+   * `build.releaseInfo.releaseNotes` 随 main bundle 内联进应用（与写进 latest.yml 的是同一份
+   * 出处，见 main/updater/builtin-notes.ts）。离线可用、不问 GitHub、版本号永远对得上
+   * （2026-10-18 用户裁决：本版说明应用自己知道，GitHub 只用于「历史版本」与外链）。
+   * 没写是 null（发版兑底测试拦着，理论上不会发生）。
    */
   currentNotes: readonly UpdateNote[] | null;
   /**
@@ -129,10 +139,11 @@ export interface RecentRelease {
   /** Release 页地址：列表里点一行跳它 */
   htmlUrl: string;
   /**
-   * **这一版**的更新内容：GitHub Release 正文（`body`）按发布约定逐条解析（同 `update-downloaded`
-   * 那条路用同一个解析器，见 main/updater/notes.ts）。列表里每一行自己也是一条 disclosure——
-   * 点开就地看这一版带来了什么，不用跳到网页。没有正文 / 正文里一条条目都没解出来是 null：
-   * 界面据此不画那一行的三角、整行不可点（同「当前版本」没有说明时的退化）。
+   * **这一版**的应用内更新说明：读这一版 Release 附带的 `latest.yml` 里的 `releaseNotes`（打包时从
+   * package.json 的 `build.releaseInfo.releaseNotes` 写进去，与更新器同一个来源），按发布约定逐条解析。
+   * **不读 GitHub Release 页的正文**：那是给专业用户的完整文档，软件里给普通用户看的是另写的几行。
+   * 列表里每一行自己也是一条 disclosure——点开就地看这一版带来了什么。没有 `latest.yml` /
+   * 里面没写说明 / 拉不到是 null：界面不画那一行的三角、整行不可点。
    */
   notes: readonly UpdateNote[] | null;
 }
@@ -159,4 +170,20 @@ export function recentReleaseTitle(release: RecentRelease): string | null {
   if (title === "") return null;
   const bare = title.startsWith("v") ? title.slice(1) : title;
   return bare === release.version ? null : title;
+}
+
+/**
+ * 「历史版本」列表去掉当前版本（2026-10-18 用户验收：「历史版本里不应该有当前版本」）。
+ * 这一版的说明归「当前版本」那一行管（应用内置，见 UpdaterSnapshot.currentNotes），
+ * 列表里再挂一份就是重影。
+ *
+ * **比当前新的版本保留**：有可用更新还没装时，GitHub 上已经挂着那一版——留在列表里
+ * 能看到它、点开还能就地看它的说明，这是信息不是错；装上重启后它变成当前版本，
+ * 自然从这里消失。
+ */
+export function historyReleases(
+  releases: readonly RecentRelease[],
+  currentVersion: string,
+): readonly RecentRelease[] {
+  return releases.filter((release) => release.version !== currentVersion);
 }

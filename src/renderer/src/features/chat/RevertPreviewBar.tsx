@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import type { RevertPlan, UndoPlan } from "@shared/revert";
 import { chipsOf, type ChipItem } from "./revert-preview.ts";
-import { pathParts } from "./FileTurnCard";
+import { pathParts } from "./path-parts.ts";
 
 /**
  * 回退 / 撤销的预览模式（用户 2026-10-01 在四种形态里选了 D）。
