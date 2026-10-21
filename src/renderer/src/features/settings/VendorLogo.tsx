@@ -1,4 +1,5 @@
 import anthropic from "../../../../../design-system/assets/vendor-logos/anthropic.svg?raw";
+import claude from "../../../../../design-system/assets/vendor-logos/claude.svg?raw";
 import deepseek from "../../../../../design-system/assets/vendor-logos/deepseek.svg?raw";
 import kimi from "../../../../../design-system/assets/vendor-logos/kimi.svg?raw";
 import openai from "../../../../../design-system/assets/vendor-logos/openai.svg?raw";
@@ -22,6 +23,10 @@ const LOGOS: Record<string, string> = {
   stepfun,
   "kimi-coding": kimi,
   "opencode-go": opencode,
+  // claude 是 Anthropic 官方 OAuth 订阅（Claude Pro / Max）：用 Claude 的橙色标，与
+  // 「Anthropic 兼容」网关的 Anthropic 字母标区分开（2026-10-19 用户：「给 claude oauth
+  // 的 provider 加个 claude 的 logo（橙色的那个），和 anthropic 兼容的 logo 区分开」）
+  claude,
   "anthropic-compatible": anthropic,
   "openai-compatible": openai,
 };
