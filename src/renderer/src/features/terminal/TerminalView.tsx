@@ -16,6 +16,8 @@ import { CONSERVATIVE_CONPTY_BUILD, readTerminalMetrics, readTerminalTheme } fro
 // 字体、字号、行高都是 token（--font-family-mono / --font-size-terminal / --line-height-terminal），
 // 在 effect 里运行时读——不在这里写数字
 const TERMINAL_SCROLLBACK = 5000;
+/** 与全局滚动条同宽（styles.css 的 *::-webkit-scrollbar width: 8px） */
+const TERMINAL_SCROLLBAR_WIDTH = 8;
 
 export function TerminalView(props: {
   terminalId: string;
@@ -49,6 +51,10 @@ export function TerminalView(props: {
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-family-mono").trim(),
       ...readTerminalMetrics(),
       scrollback: TERMINAL_SCROLLBACK,
+      // 滚动条宽：xterm 6 取 overviewRuler.width，缺省 14px——比全局 8px 细条粗出
+      // 一截（2026-10-19 用户：「这个滑块也太粗了吧，怎么没有复用语义」）。
+      // 我们不画概览标尺装饰，这个宽度只用来定滚动条
+      overviewRuler: { width: TERMINAL_SCROLLBAR_WIDTH },
       theme: readTerminalTheme(),
       ...(api.platform === "win32" ? { windowsPty: { backend: "conpty" as const, buildNumber: CONSERVATIVE_CONPTY_BUILD } } : {}),
     });

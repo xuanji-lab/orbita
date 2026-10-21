@@ -33,6 +33,20 @@ export function readTerminalTheme(): ITheme {
     theme.cursorAccent = cursor;
   }
   if (selection !== "") theme.selectionBackground = selection;
+  // 滚动条滑块：xterm 6 画的是自己的 DOM 滚动条（VS Code 那套），不吃全局
+  // *::-webkit-scrollbar 的细条规则——颜色只能经 theme 喂。口径同全局：thumb 贴
+  // --color-border-default，悬停 / 按住加深一档到 --color-border-strong
+  const thumb = style.getPropertyValue("--color-border-default").trim();
+  const thumbStrong = style.getPropertyValue("--color-border-strong").trim();
+  if (thumb !== "") theme.scrollbarSliderBackground = thumb;
+  if (thumbStrong !== "") {
+    theme.scrollbarSliderHoverBackground = thumbStrong;
+    theme.scrollbarSliderActiveBackground = thumbStrong;
+  }
+  // 定滚动条宽要借 overviewRuler.width，而开了概览标尺 xterm 会在它左缘画一条
+  // overviewRulerBorder（缺省浅灰），暗色下是一根贯穿全高的亮线——我们不用标尺，
+  // 边线一律透明（实测：不设时右缘多出 1px 竖线）
+  theme.overviewRulerBorder = "rgba(0, 0, 0, 0)";
   const ansi = ANSI_ORDER.map((name) => read(`--terminal-ansi-${name}`));
   const brightAnsi = ANSI_ORDER.map((name) => read(`--terminal-ansi-bright-${name}`));
   if (ansi.every((value) => value !== "")) {
