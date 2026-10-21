@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { streamSimple as streamOpenAI } from "@earendil-works/pi-ai/api/openai-completions";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 import {
@@ -670,5 +671,134 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
     const params = await outgoingParams(sonnet, "medium");
     assert.equal((params.thinking as { type?: string } | undefined)?.type, "enabled");
     assert.equal("output_config" in params, false);
+  });
+});
+
+describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录条目借协议", () => {
+  /** 目录条目替身：compat 取自 pi-ai 0.84.3 的 opencode-go 实际条目 */
+  function directoryModel(id: string, compat: Record<string, unknown>): PiModel {
+    return {
+      id,
+      name: id,
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0.22, output: 0.66, cacheRead: 0.007, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat,
+    } as unknown as PiModel;
+  }
+  const opencodeCatalog = [
+    directoryModel("deepseek-v4-flash", {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: "deepseek",
+    }),
+    directoryModel("glm-5.3", { supportsStore: false, thinkingFormat: "zai" }),
+  ];
+
+  function register(declaredIds: string[], api = "openai-completions"): PiModel[] {
+    return toFallbackModels(
+      opencodeCatalog,
+      declaredIds.map((id) => ({ id })),
+      [],
+      { api },
+      opencodeCatalog,
+    ) as PiModel[];
+  }
+
+  test("deepseek-v4.1-flash 借到两项思考协议；端点怪癖（supportsStore 等）一个不抄", () => {
+    const [model] = register(["deepseek-v4.1-flash"]);
+    assert.deepEqual(model?.compat, {
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: "deepseek",
+    });
+  });
+
+  test("家族不串味：glm-5.9 借到 zai 的形状，不会抄成 deepseek", () => {
+    const [model] = register(["glm-5.9"]);
+    assert.deepEqual(model?.compat, { thinkingFormat: "zai" });
+  });
+
+  test("没有同族条目就不带：不按 id 猜协议", () => {
+    const [model] = register(["mystery-model-1"]);
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  test("协议不跨 api 借：anthropic-messages 接入时不带 openai-completions 的回传项", () => {
+    const [model] = register(["deepseek-v4.1-flash"], "anthropic-messages");
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  /** 真正要发出去的请求体：onPayload 里截下后抛错，请求不出进程 */
+  async function outgoing(model: PiModel): Promise<Record<string, unknown>> {
+    let captured: Record<string, unknown> | undefined;
+    const wire = { ...model, provider: "my-gw", api: "openai-completions", baseUrl: "https://gw.example/v1" };
+    const events = streamOpenAI(
+      wire as Model<"openai-completions">,
+      {
+        messages: [
+          { role: "user", content: "跑一下", timestamp: 0 },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }],
+            api: "openai-completions",
+            provider: "my-gw",
+            model: model.id,
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: "toolUse",
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "bash",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        reasoning: "high",
+        onPayload: (payload) => {
+          captured = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    for await (const _event of events) {
+      // 抛错后流以 error 事件收尾，排干即可
+    }
+    assert.ok(captured !== undefined, "pi 没有走到构造请求体那一步");
+    return captured;
+  }
+
+  function assistantTurn(params: Record<string, unknown>): Record<string, unknown> {
+    const messages = params.messages as Array<Record<string, unknown>>;
+    const assistant = messages.find((message) => message.role === "assistant");
+    assert.ok(assistant !== undefined);
+    return assistant;
+  }
+
+  test("缺思考的 assistant 消息回传空 reasoning_content —— 这是那条 400 的直接解", async () => {
+    const [model] = register(["deepseek-v4.1-flash"]);
+    assert.ok(model !== undefined);
+    const params = await outgoing(model);
+    assert.equal(assistantTurn(params).reasoning_content, "");
+    assert.deepEqual(params.thinking, { type: "enabled" });
+  });
+
+  test("对照：不带这一项时同一段历史没有 reasoning_content（证明上一条断的是这一项的效果）", async () => {
+    const [model] = register(["deepseek-v4.1-flash"]);
+    assert.ok(model !== undefined);
+    const { compat: _compat, ...bare } = model;
+    const params = await outgoing(bare as PiModel);
+    assert.equal("reasoning_content" in assistantTurn(params), false);
   });
 });
