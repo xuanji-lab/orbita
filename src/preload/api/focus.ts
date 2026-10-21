@@ -4,7 +4,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { FocusChanges, FocusNotifyRequest } from "../../shared/focus.ts";
+import type { FocusChanges, FocusNotifyRequest, FocusSummaryRequest, FocusSummaryResult } from "../../shared/focus.ts";
 
 export const focusApi = {
   /** 一个工作区此刻的 U / M 改动（含增删行数与当前分支名）；git 只读 */
@@ -13,4 +13,7 @@ export const focusApi = {
   /** 专注时间到：发一条系统通知（点按聚焦窗口） */
   notifyDone: (req: FocusNotifyRequest): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.focusNotifyDone, req),
+  /** 收工小结：归拢 [startedAt, until] 的素材交给家务活模型，回 3–5 条要点 */
+  summarize: (req: FocusSummaryRequest): Promise<FocusSummaryResult> =>
+    ipcRenderer.invoke(ipcChannels.focusSummarize, req),
 } as const;

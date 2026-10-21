@@ -40,12 +40,15 @@ export function FocusControl(props: {
   defaultWorkspaceId: string | null;
   /** 上一次开始用的档位（「再专注一轮」沿用） */
   preset: { workspaceId: string; minutes: number } | null;
-  /** 外部发起的开浮层请求（浏览态的「以此开始专注」）：token 递增，同源连点也重开 */
-  pickerRequest: { workspaceId: string; token: number } | null;
+  /** 外部发起的开浮层请求（浏览态「以此开始专注」/卡片「再专注一轮」）：token 递增，同源连点也重开；minutes 给了就一并预选 */
+  pickerRequest: { workspaceId: string; minutes?: number; token: number } | null;
   /** 每个工作区此刻的会话数（清单行尾的 meta） */
   sessionCountOf: (workspaceId: string) => number;
   onStart: (workspaceId: string, minutes: number) => void;
   onExtend: (minutes: number) => void;
+  /** 提前结束：停表、星云气泡问要不要总结（run 相位胶囊浮层的那一行） */
+  onEarlyEnd: () => void;
+  /** 结束专注：直接回会话列表（done 相位胶囊浮层的那一行） */
   onEnd: () => void;
 }) {
   const t = useT();
@@ -84,6 +87,7 @@ export function FocusControl(props: {
     if (props.pickerRequest === null) return;
     if (props.status.kind !== "off") return;
     setWorkspaceId(props.pickerRequest.workspaceId);
+    if (props.pickerRequest.minutes !== undefined) setMinutes(props.pickerRequest.minutes);
     setPop("picker");
   }, [props.pickerRequest, props.status.kind]);
 
@@ -168,6 +172,10 @@ export function FocusControl(props: {
 
   const remain = run === null ? 0 : remainMs(run, props.now);
   const done = props.status.kind === "done";
+  // ending = 提前结束后的等待相位（B 半）：表停住等小结决定。延长在此相位本就是
+  // no-op（use-focus 只认 run），浮层里也就不再摆延长键；出口只剩「结束专注」。「要」
+  // 与「不要」的星云气泡（FocusSummaryCard 一侧）才是这个相位的正题。
+  const ending = props.status.kind === "ending";
 
   const panel =
     pop === "picker" ? (
@@ -242,7 +250,7 @@ export function FocusControl(props: {
                   onClick={() => setWorkspaceId(workspace.id)}
                 >
                   <Icon name="folder" size={14} strokeWidth={1.8} className="lead" />
-                  <span>{workspace.name}</span>
+                  <span className="focus-wsopt-name">{workspace.name}</span>
                   {workspace.id === workspaceId ? (
                     <span className="focus-wsopt-ok row-trailing">
                       <Icon name="check" size={13} strokeWidth={2} />
@@ -288,8 +296,8 @@ export function FocusControl(props: {
         <div className="focus-cm-track">
           <i style={{ width: `${(focusProgress(run, props.now) * 100).toFixed(1)}%` }} />
         </div>
-        {/* 时间到就没有延长一说，两个键收起；出口只剩「结束专注」 */}
-        {done ? null : (
+        {/* 时间到 / 已提前结束就没有延长一说，两个键收起；出口只剩「结束专注」 */}
+        {done || ending ? null : (
           <div className="focus-cm-ext">
             <button
               type="button"
@@ -309,17 +317,20 @@ export function FocusControl(props: {
             </button>
           </div>
         )}
-        {done ? null : <div className="focus-cm-sep" />}
+        {done || ending ? null : <div className="focus-cm-sep" />}
         <button
           type="button"
           className="focus-cm-row"
           onClick={() => {
             setPop(null);
-            props.onEnd();
+            // 时间到 / 已提前结束（ending）都是「结束专注」——走 onEnd 回会话列表。
+            // ending 相位再调 onEarlyEnd 是空转（use-focus 只认 run），用户会卡在专注里
+            if (done || ending) props.onEnd();
+            else props.onEarlyEnd();
           }}
         >
           <Icon name="square" size={13} strokeWidth={2} />
-          {done ? t.focus.endFocus : t.focus.endEarly}
+          {done || ending ? t.focus.endFocus : t.focus.endEarly}
         </button>
       </div>
     ) : null;
@@ -343,7 +354,11 @@ export function FocusControl(props: {
           className="quiet-control cap-focus-run"
           data-done={done || undefined}
           aria-expanded={pop === "menu"}
-          title={done ? t.focus.timeUp : t.focus.capsuleTitle(wsName(run.workspaceId))}
+          title={done
+            ? t.focus.timeUp
+            : ending
+              ? t.focus.endingTitle(wsName(run.workspaceId))
+              : t.focus.capsuleTitle(wsName(run.workspaceId))}
           onClick={() => {
             // 时间到也点得开：出口只剩「结束专注」（星云卡片是下一个 PR 的事）
             setPop((current) => (current === "menu" ? null : "menu"));

@@ -76,6 +76,12 @@ export class AgentHostCore {
     { resolve: (result: { ok: boolean; message: string }) => void; reject: (error: Error) => void }
   >();
   private probeSeq = 0;
+  /** 在等的 summarizeFocus 回执（专注收工小结），按 requestId；进程退出全部 reject */
+  private readonly pendingFocusSummaries = new Map<
+    string,
+    { resolve: (bullets: string[]) => void; reject: (error: Error) => void }
+  >();
+  private focusSummarySeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -118,6 +124,14 @@ export class AgentHostCore {
           this.pendingGreetings.delete(message.requestId);
           if (message.throwaway === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
           else pending?.resolve(message.throwaway);
+          return;
+        }
+        if (message.type === "focusSummarized") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingFocusSummaries.get(message.requestId);
+          this.pendingFocusSummaries.delete(message.requestId);
+          if (message.bullets === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
+          else pending?.resolve(message.bullets);
           return;
         }
         if (message.type === "providerProbed") {
@@ -175,6 +189,8 @@ export class AgentHostCore {
         this.pendingGreetings.clear();
         for (const pending of this.pendingProbes.values()) pending.reject(new Error(message));
         this.pendingProbes.clear();
+        for (const pending of this.pendingFocusSummaries.values()) pending.reject(new Error(message));
+        this.pendingFocusSummaries.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -331,6 +347,39 @@ export class AgentHostCore {
         },
       });
       this.post({ type: "classifyGreetings", requestId, provider, modelId, messages });
+    });
+  }
+
+  /**
+   * 专注模式的收工小结：素材正文交给 agent 进程里的家务活模型，等回执（bullets）。
+   * 素材比问候检查大、生成 3–5 条要点可能到分钟量级，兑底放宽到 220 秒（agent 侧
+   * 180 秒先断）——到点时卡片先出「正在整理」，转圈等它。
+   */
+  async summarizeFocus(
+    provider: Extract<AgentCommand, { type: "summarizeFocus" }>["provider"],
+    modelId: string,
+    prompt: string,
+  ): Promise<string[]> {
+    await this.ensure();
+    this.focusSummarySeq += 1;
+    const requestId = `focus-summary-${this.focusSummarySeq}`;
+    return new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingFocusSummaries.has(requestId)) return;
+        this.pendingFocusSummaries.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 220_000);
+      this.pendingFocusSummaries.set(requestId, {
+        resolve: (bullets) => {
+          clearTimeout(timer);
+          resolve(bullets);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "summarizeFocus", requestId, provider, modelId, prompt });
     });
   }
 

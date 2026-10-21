@@ -464,9 +464,10 @@ export const en = {
     minutesUnit: "min",
     sessionsCount: (count: number) => `${count} session${count === 1 ? "" : "s"}`,
     noWorkspaces: "No workspaces yet — add one first.",
-    pickerNote: "While focusing, other sessions' completion alerts are muted (unread still recorded).",
+    pickerNote: "Five minutes before the end, the chore model starts putting the session in order.",
     start: "Start focusing",
     capsuleTitle: (workspace: string) => `Focusing · ${workspace} · click to extend or end early`,
+    endingTitle: (workspace: string) => `Ended early · ${workspace} · click to end focus`,
     timeUp: "Time's up",
     menuLabel: "Focusing",
     remainLabel: (total: number) => `left · ${total} min total`,
@@ -492,6 +493,28 @@ export const en = {
     workspaceMissing: "This workspace's folder no longer exists on disk.",
     browseFiles: "Show workspace files",
     notifyTitle: "Focus session over",
+    // —— 收工小结（星云的气泡与卡片） ——
+    /** 剩 5 分钟 / 提前结束点「要」之后：星云头顶小气泡的正文（缓慢呼吸） */
+    summarizing: "Putting this stretch in order…",
+    /** 整理完的常驻气泡（带对勾 + 关闭键；到点还是会弹卡） */
+    sayReady: "All set — see the recap at the buzzer",
+    sayDismiss: "Got it (the recap still pops at the buzzer)",
+    /** 提前结束的问询气泡 + 两颗键 */
+    askSummary: "Summarize this stretch?",
+    askYes: "Yes",
+    askNo: "No",
+    cardLabel: "Focus wrap-up",
+    cardTitle: "Nice work — take a break",
+    cardKick: (minutes: number, workspace: string) => `Focus over · ${minutes} min · ${workspace}`,
+    cardKickEarly: (minutes: number, workspace: string) => `Ended early · ${minutes} min · ${workspace}`,
+    cardClose: "Close (keep the focus view)",
+    summaryRunning: "The chore model is still putting it in order…",
+    summaryFailed: "The summary didn't come back (the chore model ran into an error).",
+    summaryNoModel: "No chore model configured — no summary this time.",
+    summaryNoActivity: "No session activity in this stretch — nothing to summarize.",
+    summarySource: (sessions: number, model: string) =>
+      `Chore model · read ${sessions} session${sessions === 1 ? "" : "s"} · ${model}`,
+    again: "Another round",
     notifyBody: (minutes: number, workspace: string) =>
       `${minutes} min focused on ${workspace} — take a break.`,
   },
@@ -1679,6 +1702,8 @@ export const en = {
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
+    /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
+    treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

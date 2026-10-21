@@ -1,12 +1,13 @@
 import "./usage.css";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import { useT } from "../locale.ts";
 import { formatTokens } from "../utils/format-tokens.ts";
 import { isWindowInactive } from "./window-activity.ts";
 import {
   effectivePin,
-  petAnchor,
+  nebulaPlacement,
   petLeft,
   petPrefAfterCellClick,
   petPrefAfterHide,
@@ -34,6 +35,13 @@ export function UsageMeter(props: {
   running: boolean;
   pet: UsagePetPref | undefined;
   onPetChange: (next: UsagePetPref) => void;
+  /**
+   * 星云头顶的**常驻**小气泡（专注模式的「正在整理…」/「要不要总结」；null = 无）。
+   * 与悬停报数同一个位置：它在的时候悬停报数让位——一次只说一句话。
+   */
+  petSay: React.ReactNode | null;
+  /** 星云头顶的卡片（专注时间到 / 提前结束）；null = 无。尾巴自动对准星云当格中心 */
+  petCard: React.ReactNode | null;
 }) {
   const [days, setDays] = useState<UsageDayTotal[] | null>(null);
   /** 悬停的格序号；null = 回到今天 */
@@ -69,15 +77,17 @@ export function UsageMeter(props: {
     () => usageWeekCells(new Date(), new Map((days ?? []).map((day) => [day.date, day.tokens]))),
     [days],
   );
-  const hidden = props.pet?.hidden === true;
+  // 星云要说话（专注气泡 / 卡片）时先回今天、临时现身，再冒泡（nebulaPlacement）
+  const speaking = props.petSay !== null || props.petCard !== null;
+  const { active, hidden } = nebulaPlacement(cells, props.pet, hover, speaking);
   const pinned = effectivePin(cells, props.pet);
-  const active = (hidden ? null : hover) ?? petAnchor(cells, props.pet);
   const activeTier: UsageTier = cells[active]?.tier ?? 0;
   const t = useT();
   const hovered = hover === null ? undefined : cells[hover];
+  const petRef = useRef<HTMLDivElement | null>(null);
 
   return (
-    <div className="usage-meter" data-hidden={hidden || undefined}>
+    <div className="usage-meter" data-hidden={hidden || undefined} data-say={props.petSay !== null || undefined}>
       <div className="usage-meter-body">
         {/* 字标（2026-10-19 二次裁决：「左下角的 orbita 没有和星云横向居中对齐放在
             一行里」）：与星云**同一行**——绝对定位在停机坪左端（用量格左缘那条线），
@@ -87,16 +97,23 @@ export function UsageMeter(props: {
         <div className="usage-brand" data-yield={active <= 1 || undefined}>
           orbita
         </div>
-      <div className="usage-pet" style={{ left: petLeft(active) }}>
-        {hovered !== undefined && (
-          // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）
-          <div
-            className="usage-say"
-            role="status"
-            data-edge={active <= 1 ? "start" : active >= cells.length - 2 ? "end" : undefined}
-          >
-            {usageText(hovered, t)}
-          </div>
+      {props.petCard !== null && (
+        <NebCardPortal petRef={petRef}>{props.petCard}</NebCardPortal>
+      )}
+      <div ref={petRef} className="usage-pet" style={{ left: petLeft(active) }}>
+        {props.petSay !== null ? (
+          props.petSay
+        ) : (
+          hovered !== undefined && (
+            // 气泡尾巴指向云；两端的格子把气泡往里收，免得出侧栏（data-edge）
+            <div
+              className="usage-say"
+              role="status"
+              data-edge={active <= 1 ? "start" : active >= cells.length - 2 ? "end" : undefined}
+            >
+              {usageText(hovered, t)}
+            </div>
+          )
         )}
         <button
           type="button"
@@ -247,5 +264,70 @@ function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
         );
       })}
     </div>
+  );
+}
+
+/**
+ * 星云卡片的浮层锚：portal 到 body + fixed（侧栏 aside 是 overflow:hidden，360px 的卡
+ * 在原地渲染右缘被裁——2026-10-19 用户截图实证）。位置随星云当格（petRef 量 rect）：
+ * 水平居中于云心、两端夹回视口；底边钉在云顶上方 8px，向上生长；max-height = 云顶到
+ * 视口顶的余量（再减 24），内容区自己滚。窗口尺寸变化重算（侧栏拖宽 / 缩放）。
+ */
+function NebCardPortal(props: { petRef: React.RefObject<HTMLDivElement | null>; children: React.ReactNode }) {
+  const [spot, setSpot] = useState<{ left: number; bottom: number; maxHeight: number; tailX: number } | null>(null);
+  useLayoutEffect(() => {
+    const place = (): void => {
+      const pet = props.petRef.current;
+      if (pet === null) {
+        setSpot(null);
+        return;
+      }
+      const rect = pet.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 16);
+      const center = rect.left + rect.width / 2;
+      const left = Math.max(8, Math.min(Math.round(center - width / 2), window.innerWidth - width - 8));
+      const tailX = Math.max(14, Math.min(width - 14, Math.round(center - left)));
+      const next = {
+        left,
+        bottom: Math.max(8, window.innerHeight - rect.top + 8),
+        maxHeight: Math.max(120, rect.top - 24),
+        tailX,
+      };
+      setSpot((current) =>
+        current !== null &&
+        current.left === next.left &&
+        current.bottom === next.bottom &&
+        current.maxHeight === next.maxHeight &&
+        current.tailX === next.tailX
+          ? current
+          : next,
+      );
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [props.petRef, props.children]);
+  if (spot === null) return null;
+  return createPortal(
+    <div
+      className="neb-card-anchor"
+      style={
+        {
+          position: "fixed",
+          left: spot.left,
+          bottom: spot.bottom,
+          maxHeight: spot.maxHeight,
+          "--neb-tail-x": `${spot.tailX}px`,
+        } as React.CSSProperties
+      }
+    >
+      {props.children}
+    </div>,
+    document.body,
   );
 }

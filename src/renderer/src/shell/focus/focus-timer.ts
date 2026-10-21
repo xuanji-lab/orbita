@@ -15,6 +15,12 @@ export const FOCUS_MINUTES_DEFAULT = 25;
 /** 滚轮一行的高度（px）：选档判定 = round(scrollTop / 行高)，几何在 FocusControl 同步 */
 export const FOCUS_WHEEL_ROW = 32;
 
+/**
+ * 剩这么多毫秒时收工小结起跑（家务活模型要分钟量级，预留给它；原型状态 8）。
+ * 滚轮最小档 10 分钟，T-5 恒在开始之后——不存在「来不及等」的档位。
+ */
+export const SUMMARY_LEAD_MS = 5 * 60_000;
+
 /** 一次专注。startedAt/endsAt 是 Date.now() 的毫秒；延长时 totalMs 与 endsAt 同步右移 */
 export interface FocusRun {
   workspaceId: string;
@@ -40,6 +46,11 @@ export function extendFocusRun(run: FocusRun, minutes: number): FocusRun {
 /** 剩余毫秒，到 0 为止（不会负） */
 export function remainMs(run: FocusRun, now: number): number {
   return Math.max(0, run.endsAt - now);
+}
+
+/** 收工小结该起跑了吗：剩 SUMMARY_LEAD_MS 以内（含到点后的补跑） */
+export function shouldStartSummary(run: FocusRun, now: number): boolean {
+  return remainMs(run, now) <= SUMMARY_LEAD_MS;
 }
 
 /** 已过进度（0..1）：胶囊浮层那条细进度线的宽度 */

@@ -9,7 +9,8 @@ import { useFileTree } from "../../features/files/useFileTree";
 import { fileIcon, fileIconTone } from "../../features/files/tree-view";
 import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import type { FocusChanges } from "@shared/focus";
+import type { FileEntry } from "@shared/files";
+import type { FocusChangeEntry, FocusChangeKind, FocusChanges } from "@shared/focus";
 import type { ChatSession } from "../../features/chat/useChatSession";
 import { runStateLabel, sessionRunState } from "../../features/notify/completion-notice";
 import {
@@ -42,12 +43,19 @@ export function WorkspaceFiles(props: {
   onBack: () => void;
   /** 浏览态的「以此开始专注」 */
   onStartFocusHere: () => void;
+  /**
+   * 双击 / Enter 打开一个文件的预览（绝对路径；App 经 nonce 请求递给右栏文件面板，
+   * 预览根 = 本工作区——见 shared/files.ts 的 extraWorkspaceId）
+   */
+  onOpenFile: (absPath: string) => void;
 }) {
   const t = useT();
   const { session, workspace } = props;
   const tree = useFileTree(null, workspace.id, props.workspaces);
   const [changes, setChanges] = useState<FocusChanges | null>(null);
   const [sessionsOpen, setSessionsOpen] = useState(true);
+  /** 单击选中的文件（相对路径）：只高亮不打开——打开走双击 / Enter（用户裁决） */
+  const [selectedRel, setSelectedRel] = useState<string | null>(null);
 
   // —─ U / M：拉取 + 30 秒一拉（快照视图：agent 写盘由 useFileTree 的自动刷新盖住，
   //    U/M 的半分锦延迟可见不是问题） ──
@@ -235,6 +243,9 @@ export function WorkspaceFiles(props: {
             onToggle={tree.toggle}
             byPath={byPath}
             dirDots={dirDots}
+            selectedRel={selectedRel}
+            onSelect={(rel) => setSelectedRel(rel)}
+            onOpen={(abs) => props.onOpenFile(abs)}
           />
         )}
       </div>
@@ -247,11 +258,14 @@ function FileRows(props: {
   rootPath: string;
   rel: string;
   depth: number;
-  dirs: ReadonlyMap<string, readonly import("@shared/files").FileEntry[]>;
+  dirs: ReadonlyMap<string, readonly FileEntry[]>;
   expanded: ReadonlySet<string>;
   onToggle: (root: string, dir: string) => void;
-  byPath: Map<string, import("@shared/focus").FocusChangeEntry>;
-  dirDots: Map<string, import("@shared/focus").FocusChangeKind>;
+  byPath: Map<string, FocusChangeEntry>;
+  dirDots: Map<string, FocusChangeKind>;
+  selectedRel: string | null;
+  onSelect: (rel: string) => void;
+  onOpen: (absPath: string) => void;
 }) {
   const abs = props.rel === "" ? props.rootPath : `${props.rootPath}/${props.rel}`;
   const entries = props.dirs.get(abs);
@@ -286,6 +300,9 @@ function FileRows(props: {
             onToggle={props.onToggle}
             byPath={props.byPath}
             dirDots={props.dirDots}
+            selectedRel={props.selectedRel}
+            onSelect={props.onSelect}
+            onOpen={props.onOpen}
           />,
         );
       }
@@ -298,6 +315,9 @@ function FileRows(props: {
         name={entry.name}
         depth={props.depth}
         change={props.byPath.get(rel) ?? null}
+        selected={props.selectedRel === rel}
+        onSelect={() => props.onSelect(rel)}
+        onOpen={() => props.onOpen(`${props.rootPath}/${rel}`)}
       />,
     );
   }
@@ -309,15 +329,16 @@ function FileDirRow(props: {
   name: string;
   depth: number;
   open: boolean;
-  dot: import("@shared/focus").FocusChangeKind | null;
+  dot: FocusChangeKind | null;
   onToggle: () => void;
 }) {
   const t = useT();
   return (
+    <div className="file-hover-host">
     <button
       type="button"
-      className="focus-frow"
-      style={{ paddingLeft: 2 + props.depth * 12, cursor: "pointer", border: 0, background: "transparent", width: "100%", textAlign: "left", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)" }}
+      className="file-row focus-frow"
+      style={{ paddingLeft: `calc(var(--space-2) + ${props.depth} * 16px)` }}
       onClick={props.onToggle}
       aria-expanded={props.open}
     >
@@ -343,19 +364,40 @@ function FileDirRow(props: {
         )}
       </span>
     </button>
+    </div>
   );
 }
 
-/** 文件行：空转轴 + 类型图标 + 名字 +（悬停的）增删行数 + U / M */
-function FileRow(props: { name: string; depth: number; change: import("@shared/focus").FocusChangeEntry | null }) {
+/** 文件行：空转轴 + 类型图标 + 名字 +（悬停的）增删行数 + U / M。
+ * 单击只选中（高亮），双击 / Enter 打开预览——与右栏文件树「单击即开」不同：
+ * 左栏是文件导航不是标签页面板，误触不该开一排标签（用户裁决） */
+function FileRow(props: {
+  name: string;
+  depth: number;
+  change: FocusChangeEntry | null;
+  selected: boolean;
+  onSelect: () => void;
+  onOpen: () => void;
+}) {
   const t = useT();
   const change = props.change;
   const lines = change !== null ? formatChangeLines(change) : "";
   return (
-    <div
-      className="focus-frow"
-      style={{ paddingLeft: 2 + props.depth * 12 }}
+    <div className="file-hover-host">
+    <button
+      type="button"
+      className="file-row focus-frow"
+      aria-selected={props.selected}
+      style={{ paddingLeft: `calc(var(--space-2) + ${props.depth} * 16px)` }}
       title={change !== null ? `${props.name}${lines === "" ? "" : ` · ${lines}`}` : props.name}
+      onClick={props.onSelect}
+      onDoubleClick={props.onOpen}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        // Enter 原生会触发 click（= 选中）；这里拦下换成打开，与双击同义
+        event.preventDefault();
+        props.onOpen();
+      }}
     >
       <span className="focus-frow-tw" />
       <span className="focus-frow-icon" data-tone={fileIconTone(props.name, "file") ?? undefined}>
@@ -374,6 +416,7 @@ function FileRow(props: { name: string; depth: number; change: import("@shared/f
           </span>
         )}
       </span>
+    </button>
     </div>
   );
 }
@@ -394,7 +437,7 @@ function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: 
   return (
     <button
       type="button"
-      className="option-row"
+      className="option-row focus-wsrow"
       data-active={props.active || undefined}
       onClick={() => session.openSession(meta.id)}
       style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", width: "100%", minHeight: "var(--control-height-md)", margin: "2px 0", padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)", textAlign: "left" }}

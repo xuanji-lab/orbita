@@ -81,6 +81,24 @@ export function petAnchor(cells: readonly UsageCell[], pref: UsagePetPref | unde
   return pinned === -1 ? cells.length - 1 : pinned;
 }
 
+/**
+ * 星云此刻停哪一格、是否收起。平时：悬停优先，其次钉住的那天，否则今天；收起时
+ * 不跟悬停。**星云要说话时**（专注的气泡 / 卡片，speaking）：一律回到今天、并且
+ * 临时现身——钉在最左两格时气泡会伸出窗口左缘被裁（2026-10-19 用户：「结束的时候，
+ * 星云先自动回到今天，再冒泡说话」）；收起时气泡跟着隐身，提前结束的「要 / 不要」
+ * 就点不到、退不出专注。只影响显示，不改用户的钉 / 收起偏好。
+ */
+export function nebulaPlacement(
+  cells: readonly UsageCell[],
+  pref: UsagePetPref | undefined,
+  hover: number | null,
+  speaking: boolean,
+): { active: number; hidden: boolean } {
+  if (speaking) return { active: cells.length - 1, hidden: false };
+  const hidden = pref?.hidden === true;
+  return { active: (hidden ? null : hover) ?? petAnchor(cells, pref), hidden };
+}
+
 /** 有效的钉日期：还在窗口里且不是今天（钉今天 = 没钉） */
 export function effectivePin(cells: readonly UsageCell[], pref: UsagePetPref | undefined): string | undefined {
   const anchor = petAnchor(cells, pref);

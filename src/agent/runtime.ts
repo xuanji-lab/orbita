@@ -48,6 +48,7 @@ import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
+import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
@@ -367,6 +368,61 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
       return;
     }
     send({ type: "greetingsClassified", requestId: command.requestId, throwaway });
+  } catch (cause) {
+    fail(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/** 专注收工小结的硬上限（主进程那头 220 秒兑底，这里先放手）：素材比问候检查大得多 */
+const FOCUS_SUMMARY_TIMEOUT_MS = 180_000;
+
+/**
+ * 专注模式的收工小结（focus-summary.ts）：一次独立的 `completeSimple`，模型与密钥面
+ * 由主进程装好（家务活模型，缺席时主进程已回退到上次使用的模型）。结果经
+ * `focusSummarized` 回执；模型解不出、调用出错、回复读不懂都回 null 并带原因——
+ * 界面上等着这张卡，失败要说出来。
+ */
+async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeFocus" }>): Promise<void> {
+  const fail = (error: string): void => {
+    send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error });
+  };
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
+    if (model === undefined) {
+      fail(`unknown model "${command.provider.id}/${command.modelId}"`);
+      return;
+    }
+    const response = await completeSimple(
+      model,
+      {
+        systemPrompt: FOCUS_SUMMARY_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: command.prompt, timestamp: Date.now() }],
+      },
+      {
+        apiKey: command.provider.apiKey,
+        maxTokens: 2048,
+        timeoutMs: FOCUS_SUMMARY_TIMEOUT_MS,
+        signal: AbortSignal.timeout(FOCUS_SUMMARY_TIMEOUT_MS),
+        onPayload: ccBillingPatch,
+        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") {
+      fail(response.errorMessage ?? `${model.id} returned an error`);
+      return;
+    }
+    let output = "";
+    for (const block of response.content) {
+      if (block.type === "text") output += block.text;
+    }
+    const bullets = parseSummaryReply(output);
+    if (bullets === null) {
+      console.warn(`[focus-summary] ${model.id} 的回复读不懂，原文前 200 字：${JSON.stringify(output.slice(0, 200))}`);
+      fail(`${model.id}'s reply couldn't be read`);
+      return;
+    }
+    send({ type: "focusSummarized", requestId: command.requestId, bullets });
   } catch (cause) {
     fail(cause instanceof Error ? cause.message : String(cause));
   }
@@ -1974,6 +2030,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "classifyGreetings") {
     // 不 await：判定是几秒量级的独立调用，不挡住后面进来的命令（与标题同理）
     void classifyGreetings(command);
+    return;
+  }
+  if (command.type === "summarizeFocus") {
+    // 同上：独立小调用（可能到分钟量级），不挡后续命令
+    void summarizeFocus(command);
     return;
   }
   if (command.type === "probeProvider") {

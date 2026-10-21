@@ -139,8 +139,14 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
   height: 32px;
   padding: 0 var(--space-2);
+  /* 这一行是 <button>：不清 border 就吃浏览器默认的 2px outset 黑框（2026-10-19
+   * 用户：「为什么要这个加粗边缘」）。选中只认淡底 + 勾 */
+  border: 0;
+  font-family: inherit;
   border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
@@ -160,6 +166,20 @@
 }
 /* 键盘焦点环走全局 :focus-visible（accent 描边）——选中只认淡底 + 勾，
  * 不另造第三种「看似选中」的形态 */
+
+/* 工作区名单行：放不下省略（悬停 title 给全路径），不折成两行把行高撑乱 */
+.focus-wsopt .focus-wsopt-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.focus-wsopt .focus-wsopt-meta,
+.focus-wsopt .focus-wsopt-ok {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 
 .focus-wsopt .ic.lead {
   color: var(--color-text-secondary);
@@ -467,9 +487,6 @@
   transition: var(--transition-hover);
 }
 
-.focus-frow:hover {
-  background: var(--color-bg-hover);
-}
 
 .focus-frow .focus-frow-tw {
   width: 12px;
@@ -571,4 +588,261 @@
 :root[data-theme="graphite"] .focus-ddot[data-k="M"],
 :root[data-theme="black"] .focus-ddot[data-k="M"] {
   background: var(--color-info);
+}
+
+/* —─ 星云头顶的小气泡（专注：正在整理 / 要不要总结）——沿用 usage-say 的形态，
+   常驻（不只在悬停时）；定位由 UsageMeter 放在 .usage-pet 里，尾巴同 usage-say */
+.usage-say-focus {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* 落定态（整理完 / 失败 / 没素材 / 没模型）：图标 + 一句话 + 关闭键，
+   **常驻**——用户裁决：状态结束了也不懂，可以点掉也可以不管 */
+.usage-say-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.usage-say-status > .orbita-icon:first-child {
+  color: var(--color-success);
+}
+
+.usage-say-x {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.usage-say-x:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+/* 问询态：文字 + 两颗小键（要 / 不要）——键是 quiet-control，不另造外观 */
+.usage-say-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.usage-say-ask .usage-say-act {
+  padding: 1px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.usage-say-ask .usage-say-act:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+/* —─ 时间到 / 提前结束的星云卡片（原型状态 9）：**portal 到 body + fixed**（侧栏
+   aside 是 overflow:hidden，360px 的卡在原地渲染右缘被裁——2026-10-19 用户截图实证）。
+   外壳 .neb-card-anchor 的 position / 尺寸由 UsageMeter 的 NebCardPortal 内联给出；
+   面板配方 = Menu 浮层那套（glass-card glass-float menu-panel：实底 + 发丝 + 浮层
+   阴影 + --radius-xl 圆角）。宽超侧栏就盖到对话区上（原型本就如此）。 */
+.neb-card-anchor {
+  display: flex;
+  flex-direction: column;
+  z-index: 40;
+}
+
+.neb-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 360px;
+  max-width: calc(100vw - 16px);
+  max-height: 100%;
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+
+.neb-card::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: var(--neb-tail-x, 180px);
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: var(--color-bg-panel);
+  border-right: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  transform: rotate(45deg);
+}
+
+:root[data-theme="black"] .neb-card::after {
+  border-color: var(--glass-border);
+}
+
+.neb-card-kick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.neb-card-kick .mono {
+  font-family: var(--font-family-business);
+}
+
+.neb-card-kick .neb-card-kick-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.neb-card-kick .neb-card-x {
+  margin-left: auto;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.neb-card-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-tertiary);
+}
+
+.neb-card h4 {
+  margin: 6px 0 var(--space-2);
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+}
+
+.neb-card ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  line-height: var(--line-height-ui);
+}
+
+.neb-card li {
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.neb-card li::marker {
+  color: var(--color-text-tertiary);
+}
+
+/* 转圈行（到点了总结还没跑完）与退路文案（失败 / 没素材 / 没模型） */
+.neb-card-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.neb-card-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 内容区自己滚：卡高被锚限制在视口内，按钮行恒可见 */
+.neb-card-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.neb-card-src {
+  margin-top: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.neb-card-src .mono,
+.neb-card-note .mono {
+  font-family: var(--font-family-business);
+}
+
+.neb-card-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.neb-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  background: transparent;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.neb-card-btn:hover {
+  background: var(--color-bg-hover);
+}
+
+/* 气泡住在 .usage-pet 里，而 .usage-pet 为了不挡格子的悬停把 pointer-events 关了——
+ * 气泡里的键会跟着点不动（2026-10-19 用户：提前结束「要 / 不要」不可交互，退不出专注）。
+ * 只给真按钮开回来，气泡底板仍不挡格子 */
+.usage-say .usage-say-act,
+.usage-say .usage-say-x {
+  pointer-events: auto;
+}
+
+/* 左栏文件行直接复用右栏树行的 .file-row / .file-hover-host（悬停底、aria-selected
+ * 选中底 + 字重都在 styles.css 那一份）。原先行上写了 inline background:transparent，
+ * 内联样式压过 :hover 与选中规则——悬停没反应、单击选中看不见（2026-10-19 用户验收）。
+ * 这里只补 button 的控件重置与行几何 */
+.focus-frow.file-row {
+  width: 100%;
+  height: var(--list-item-compact);
+  border: 0;
+  font: inherit;
+  font-size: var(--font-size-base);
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+
+/* 「这个工作区的会话」行是 <button>：不清 border 就每行都吃浏览器默认的 2px outset
+ * 黑框。选中只认淡底 + 字重（与主列表一致，不另加描边——2026-10-19 肖志锋 / 用户裁决） */
+.focus-wsrow {
+  border: 0;
 }
