@@ -324,7 +324,9 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
-    // 网关硬要求（缺了 400 MissingSessionID）：会话头用于前缀缓存路由，任意稳定值即可
+    // 网关硬要求（缺了 400 MissingSessionID）：这是**探活兜底**的占位值——真实会话
+    // 在开轮 / 换模型时由 opencode-session.ts 按会话 id 覆盖它（OpenCode 要求每个会话
+    // 一个稳定 id，共用常量会让路由与前缀缓存失去意义）。
     headers: { "x-opencode-session": "orbita" },
     // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
     billing: "plan",
