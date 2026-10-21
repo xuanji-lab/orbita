@@ -18,6 +18,66 @@ import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
 /** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
+
+/**
+ * compat 里属于「模型怎么思考」而不是「网关怎么认字」的两项。
+ * 其余 compat 是端点怪癖（supportsStore / supportsDeveloperRole …），不跨条目借。
+ */
+type ThinkingReplayCompat = {
+  requiresReasoningContentOnAssistantMessages?: boolean;
+  thinkingFormat?: string;
+};
+
+/**
+ * 型号家族键：取 id 最后一段的字母前缀。`deepseek-v4.1-flash` 与
+ * `deepseek-ai/DeepSeek-V4-Flash` 都归到 `deepseek`。
+ *
+ * 聚合网关给同一型号换写法（deepseek-v4.1-flash 之于 opencode-go 目录里的
+ * deepseek-v4-flash）时，精确 id 查不到目录条目——这就是家族键存在的理由。
+ */
+function modelFamily(id: string): string {
+  const last = id.split(/[\\/]/).filter(Boolean).pop() ?? id;
+  return /^[a-z]+/.exec(last.toLowerCase())?.[0] ?? last.toLowerCase();
+}
+
+/**
+ * 从**同一家目录**里同家族的条目借思考回传协议。
+ *
+ * 背景（2026-10-21 实测）：openai-completions 上声明 `deepseek-v4.1-flash`，
+ * 目录只收录了 `deepseek-v4-flash` / `deepseek-v4-pro`，精确命中落空 → compat 整份缺省
+ * → pi 按标准 OpenAI 发：不回传 `reasoning_content`、思考参数用 `reasoning_effort`。
+ * 只要历史里有一条 assistant 没带 reasoning_content（上游偶尔不回思考），DeepSeek 的
+ * thinking 上游就 400「The reasoning_content in the thinking mode must be passed back」。
+ *
+ * 两项协议跟**网关**走（opencode-go 是 deepseek 形状、openrouter 是 openrouter 形状），
+ * 所以只从同一家的条目借，不按 id 跨家猜。
+ */
+function borrowedThinkingReplay(
+  models: readonly PiModel[],
+  modelId: string,
+  api: string | undefined,
+): ThinkingReplayCompat | undefined {
+  if (api !== "openai-completions") return undefined;
+  const family = modelFamily(modelId);
+  for (const model of models) {
+    if (model.api !== "openai-completions" || model.compat === undefined) continue;
+    if (modelFamily(model.id) !== family) continue;
+    const compat = model.compat as ThinkingReplayCompat;
+    if (
+      compat.requiresReasoningContentOnAssistantMessages === undefined &&
+      compat.thinkingFormat === undefined
+    ) {
+      continue;
+    }
+    return {
+      ...(compat.requiresReasoningContentOnAssistantMessages === undefined
+        ? {}
+        : { requiresReasoningContentOnAssistantMessages: compat.requiresReasoningContentOnAssistantMessages }),
+      ...(compat.thinkingFormat === undefined ? {} : { thinkingFormat: compat.thinkingFormat }),
+    };
+  }
+  return undefined;
+}
 /** pi 注册表里的 provider 对象（同上，签名推导） */
 export type PiProvider = ReturnType<ModelRuntime["getProviders"]>[number];
 /** registerProvider 第二参的完整形状（同上，签名推导） */
@@ -102,6 +162,16 @@ export function toFallbackModels(
     const levelMap =
       borrowedMap ??
       (declaredAdaptive && patch.thinkingLevels !== undefined ? effortLevelMap(patch.thinkingLevels) : undefined);
+    // 目录没收录精确 id 时（聚合网关换写法），思考回传协议从同家同家族的条目借；
+    // 借不到就不带——不按 id 猜协议，猜错比不带更糟（发错字段当场 400）
+    const replay = known === undefined ? borrowedThinkingReplay(current, decl.id, prefer.api) : undefined;
+    const compat =
+      adaptive || replay !== undefined
+        ? {
+            ...(adaptive ? { forceAdaptiveThinking: true } : {}),
+            ...(replay ?? {}),
+          }
+        : undefined;
     const base =
       known === undefined
         ? {
@@ -115,7 +185,7 @@ export function toFallbackModels(
             contextWindow: borrowed.contextWindow,
             maxTokens: borrowed.maxTokens,
             ...(levelMap === undefined ? {} : { thinkingLevelMap: { ...levelMap } }),
-            ...(adaptive ? { compat: { forceAdaptiveThinking: true } } : {}),
+            ...(compat === undefined ? {} : { compat }),
           }
         : { ...known };
     return {
