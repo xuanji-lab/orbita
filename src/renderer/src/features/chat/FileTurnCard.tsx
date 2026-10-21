@@ -4,7 +4,7 @@ import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
 import { isWebArtifactFile } from "@shared/files";
-import { splitPathTail } from "./tool-results";
+import { pathParts } from "./path-parts.ts";
 import { RevertPreviewContext } from "./revert-preview.ts";
 
 /**
@@ -15,16 +15,6 @@ import { RevertPreviewContext } from "./revert-preview.ts";
  * 卡片是**落盘事实的投影**（冷启动从 JSONL 重建，不依赖内存）——实时事件与盘上
  * 种子喂的是同一种记录。
  */
-
-/** 路径的显示形：cwd 之内显示相对，之外显示绝对；再拆成 文件名（粗）+ 目录（淡）。 */
-export function pathParts(path: string, cwd: string | null): { name: string; dir: string } {
-  const display =
-    cwd !== null && cwd !== "" && (path === cwd || path.startsWith(`${cwd}/`) || path.startsWith(`${cwd}\\`))
-      ? path.slice(cwd.length + 1)
-      : path;
-  const tail = splitPathTail(display.replaceAll("\\", "/"));
-  return { name: tail.name, dir: tail.dir.replace(/\/$/, "") };
-}
 
 /**
  * 一行增删统计（git stat 读法：+ 绿 − 红）。**为零的一侧不画**（zcode 同款）：

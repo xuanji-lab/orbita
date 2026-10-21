@@ -7,7 +7,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { UpdateNote, UpdateRelease, UpdateState } from "../../shared/updater.ts";
-import { isNewerVersion, reduceUpdater } from "./state.ts";
+import { isNewerVersion, reduceUpdater, updateSupport } from "./state.ts";
 
 const release = (
   version: string,
@@ -207,5 +207,18 @@ describe("isNewerVersion —— 版本比较", () => {
     assert.equal(isNewerVersion("0.1.16", "nightly"), false);
     assert.equal(isNewerVersion("0.1.16 发布", "0.1.15"), false);
     assert.equal(isNewerVersion("0.1.16.1.2", "0.1.15"), true);
+  });
+});
+
+describe("updateSupport —— 只有打包好的 Windows 应用接线", () => {
+  test("打包 + Windows：supported", () => {
+    assert.equal(updateSupport(true, "win32"), "supported");
+  });
+  test("打包 + macOS：platform（未签名公证，装不上，界面说暂不支持）", () => {
+    assert.equal(updateSupport(true, "darwin"), "platform");
+  });
+  test("未打包：不论平台都是 unpackaged（dev 下的那句话优先）", () => {
+    assert.equal(updateSupport(false, "win32"), "unpackaged");
+    assert.equal(updateSupport(false, "darwin"), "unpackaged");
   });
 });

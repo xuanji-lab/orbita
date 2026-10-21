@@ -7,67 +7,81 @@
  *   是两句不同的话）。
  * - **回路**：缓存 10 分钟、失败不缓存（点重试是真再打一次）、非 200 与网络异常都落成
  *   `ok:false` 而不是抛错。
+ * - **说明只来自每一版的 latest.yml**，Release 正文（给专业用户的完整文档）不进软件。
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import packageJson from "../../../package.json" with { type: "json" };
-import { createRecentReleases, parseRecentReleases } from "./recent-releases.ts";
+import { createRecentReleases, notesFromChannelFile, parseRecentReleases } from "./recent-releases.ts";
 import { releasesApiUrl } from "./releases-url.ts";
 
-/** GitHub releases 端点的一个条目（只留我们要用的字段） */
+const YML_URL = "https://github.com/xuanji-lab/orbita/releases/download/v0.1.15/latest.yml";
+
+/** GitHub releases 端点的一个条目（只留我们要用的字段）。正文是给专业用户的完整文档，不该进软件 */
 const ENTRY = {
   tag_name: "v0.1.15",
   name: "0.1.15",
   published_at: "2026-10-18T05:00:00Z",
   html_url: "https://github.com/xuanji-lab/orbita/releases/tag/v0.1.15",
-  body: "[icon:download] Windows 自动更新：后台检查，确认后才下载。\n修了几个窄窗口下的对齐问题。",
+  body: "# ORBITA v0.1.15 · 功能总览\n\n## 一、Agent 与对话\n- **独立进程的 agent**：…",
+  assets: [
+    { name: "orbita-0.1.15-win-x64-setup.exe", browser_download_url: "https://example.com/setup.exe" },
+    { name: "latest.yml", browser_download_url: YML_URL },
+  ],
 };
 
-/** 记录请求地址、按给定载荷作答的 fetch 替身 */
-function stubFetch(calls: string[], payload: unknown, status = 200): typeof fetch {
+/** electron-builder 写出的 latest.yml（releaseNotes 是多行块标量） */
+const LATEST_YML = [
+  "version: 0.1.15",
+  "files:",
+  "  - url: orbita-0.1.15-win-x64-setup.exe",
+  "    sha512: abc",
+  "    size: 100",
+  "path: orbita-0.1.15-win-x64-setup.exe",
+  "sha512: abc",
+  "releaseNotes: |-",
+  "  [icon:download] Windows 自动更新：确认后才下载。",
+  "  修了几个窄窗口下的对齐问题。",
+  "releaseDate: '2026-10-18T05:00:00.000Z'",
+  "",
+].join("\n");
+
+/** 按地址作答的 fetch 替身：列表端点给 JSON，latest.yml 给原文；没登记的地址 404 */
+function stubFetch(calls: string[], routes: Record<string, { status?: number; body: unknown }>): typeof fetch {
   return async (input) => {
-    calls.push(String(input));
-    return new Response(JSON.stringify(payload), {
-      status,
-      headers: { "content-type": "application/json" },
-    });
+    const url = String(input);
+    calls.push(url);
+    const route = Object.entries(routes).find(([prefix]) => url.startsWith(prefix))?.[1];
+    if (route === undefined) return new Response("not found", { status: 404 });
+    const body = typeof route.body === "string" ? route.body : JSON.stringify(route.body);
+    return new Response(body, { status: route.status ?? 200 });
   };
 }
 
-describe("parseRecentReleases —— GitHub releases 载荷 → 界面条目", () => {
-  test("正常：tag 去 v 成版本号，标题 / 日期 / 链接 / 逐条说明都带出", () => {
-    const parsed = parseRecentReleases([ENTRY]);
-    assert.deepEqual(parsed, [
+const API = "https://api.github.com/repos/a/b/releases";
+/** 正常的一套：列表 + 这一版的 latest.yml */
+const ROUTES = { [API]: { body: [ENTRY] }, [YML_URL]: { body: LATEST_YML } };
+
+describe("parseRecentReleases —— GitHub releases 载荷 → 列表条目（说明另拉）", () => {
+  test("正常：tag 去 v 成版本号，标题 / 日期 / 链接带出，说明地址指向这一版的 latest.yml", () => {
+    assert.deepEqual(parseRecentReleases([ENTRY]), [
       {
         tag: "v0.1.15",
         version: "0.1.15",
         title: "0.1.15",
         publishedAt: "2026-10-18T05:00:00Z",
         htmlUrl: "https://github.com/xuanji-lab/orbita/releases/tag/v0.1.15",
-        notes: [
-          { icon: "download", text: "Windows 自动更新：后台检查，确认后才下载。" },
-          { icon: null, text: "修了几个窄窗口下的对齐问题。" },
-        ],
+        notesUrl: YML_URL,
       },
     ]);
   });
 
-  test("正文带 [icon:名字] 前缀的条目：图标与正文分开", () => {
-    const parsed = parseRecentReleases([{ ...ENTRY, body: "[icon:square-terminal] 终端面板重绘更快。" }]);
-    assert.deepEqual(parsed?.[0]?.notes, [{ icon: "square-terminal", text: "终端面板重绘更快。" }]);
-  });
-
-  test("正文没有前缀的行：图标为 null，正文原样", () => {
-    const parsed = parseRecentReleases([{ ...ENTRY, body: "修了几个窄窗口下的对齐问题。" }]);
-    assert.deepEqual(parsed?.[0]?.notes, [{ icon: null, text: "修了几个窄窗口下的对齐问题。" }]);
-  });
-
-  test("正文为空（没写 / 只有空行）：notes 是 null——那一行不画三角，但仍在列表里", () => {
-    assert.equal(parseRecentReleases([{ ...ENTRY, body: "" }])?.[0]?.notes, null);
-    assert.equal(parseRecentReleases([{ ...ENTRY, body: "\n\n  \n" }])?.[0]?.notes, null);
-    assert.equal(parseRecentReleases([{ ...ENTRY, body: undefined }])?.[0]?.notes, null);
-    // 行本身还在（版本号 / 日期 / 外链照常画）
-    assert.equal(parseRecentReleases([{ ...ENTRY, body: "" }])?.[0]?.version, "0.1.15");
+  test("没有 latest.yml 时退到 latest-mac.yml；两份都没有是 null（那一行没有说明，但仍在列表里）", () => {
+    const mac = "https://example.com/latest-mac.yml";
+    const onlyMac = { ...ENTRY, assets: [{ name: "latest-mac.yml", browser_download_url: mac }] };
+    assert.equal(parseRecentReleases([onlyMac])?.[0]?.notesUrl, mac);
+    assert.equal(parseRecentReleases([{ ...ENTRY, assets: [] }])?.[0]?.notesUrl, null);
+    assert.equal(parseRecentReleases([{ ...ENTRY, assets: undefined }])?.[0]?.version, "0.1.15");
   });
 
   test("没有标题的 Release 回落到 tag；tag 没有 v 前缀时版本号原样", () => {
@@ -99,37 +113,79 @@ describe("parseRecentReleases —— GitHub releases 载荷 → 界面条目", (
   });
 });
 
+describe("notesFromChannelFile —— latest.yml → 软件里的说明", () => {
+  test("读出 releaseNotes 的多行块，按发布约定逐条拆", () => {
+    assert.deepEqual(notesFromChannelFile(LATEST_YML), [
+      { icon: "download", text: "Windows 自动更新：确认后才下载。" },
+      { icon: null, text: "修了几个窄窗口下的对齐问题。" },
+    ]);
+  });
+  test("没写 releaseNotes / YAML 坏了：null，不抛", () => {
+    assert.equal(notesFromChannelFile("version: 0.1.15\n"), null);
+    assert.equal(notesFromChannelFile("version: [坏的"), null);
+  });
+});
+
 describe("createRecentReleases —— 缓存与失败", () => {
-  test("打到 API 端点，带 per_page；成功条目透传", async () => {
+  test("打到 API 端点（带 per_page），再拉这一版的 latest.yml：说明来自 yml，Release 正文不进来", async () => {
     const calls: string[] = [];
-    const recent = createRecentReleases({ endpoint: () => "https://api.github.com/repos/a/b/releases", call: stubFetch(calls, [ENTRY]) });
+    const recent = createRecentReleases({ endpoint: () => API, call: stubFetch(calls, ROUTES) });
     const result = await recent.recent();
     assert.equal(result.ok, true);
-    assert.equal(result.ok ? result.releases.length : -1, 1);
-    assert.deepEqual(calls, ["https://api.github.com/repos/a/b/releases?per_page=5"]);
+    assert.deepEqual(result.ok ? result.releases[0]?.notes : null, [
+      { icon: "download", text: "Windows 自动更新：确认后才下载。" },
+      { icon: null, text: "修了几个窄窗口下的对齐问题。" },
+    ]);
+    assert.deepEqual(calls, [`${API}?per_page=5`, YML_URL]);
+    // 回执里不带内部字段（notesUrl 不出主进程）
+    assert.equal(result.ok ? "notesUrl" in (result.releases[0] ?? {}) : true, false);
+  });
+
+  test("这一版没传 latest.yml（404）：那一行没有说明，列表照常，且照常缓存", async () => {
+    const calls: string[] = [];
+    const recent = createRecentReleases({ endpoint: () => API, call: stubFetch(calls, { [API]: { body: [ENTRY] } }) });
+    const first = await recent.recent();
+    assert.equal(first.ok ? first.releases[0]?.notes : "x", null);
+    await recent.recent();
+    assert.equal(calls.length, 2, "404 是确定的「没有」，第二次应命中缓存");
+  });
+
+  test("latest.yml 网络层失败：那一行没有说明，但不缓存——下次展开再试", async () => {
+    const calls: string[] = [];
+    const flaky: typeof fetch = async (input) => {
+      calls.push(String(input));
+      if (String(input) === YML_URL) throw new Error("socket hang up");
+      return new Response(JSON.stringify([ENTRY]), { status: 200 });
+    };
+    const recent = createRecentReleases({ endpoint: () => API, call: flaky });
+    const first = await recent.recent();
+    assert.equal(first.ok, true);
+    assert.equal(first.ok ? first.releases[0]?.notes : "x", null);
+    await recent.recent();
+    assert.equal(calls.length, 4, "有一份是网络失败就不缓存，第二次整套重拉");
   });
 
   test("成功结果缓存 10 分钟：窗口内再点不打 API，过期后再打", async () => {
     const calls: string[] = [];
     let clock = 0;
     const recent = createRecentReleases({
-      endpoint: () => "https://api.github.com/repos/a/b/releases",
-      call: stubFetch(calls, [ENTRY]),
+      endpoint: () => API,
+      call: stubFetch(calls, ROUTES),
       now: () => clock,
     });
     await recent.recent();
     await recent.recent();
-    assert.equal(calls.length, 1, "10 分钟窗口内第二次应命中缓存");
+    assert.equal(calls.length, 2, "10 分钟窗口内第二次应命中缓存（第一次是列表 + yml 两个请求）");
     clock = 10 * 60 * 1000;
     await recent.recent();
-    assert.equal(calls.length, 2, "窗口过期后应重新请求");
+    assert.equal(calls.length, 4, "窗口过期后应重新请求");
   });
 
   test("非 200 落成 ok:false，且不缓存——重试真的再打一次", async () => {
     const calls: string[] = [];
     const recent = createRecentReleases({
-      endpoint: () => "https://api.github.com/repos/a/b/releases",
-      call: stubFetch(calls, { message: "rate limited" }, 403),
+      endpoint: () => API,
+      call: stubFetch(calls, { [API]: { status: 403, body: { message: "rate limited" } } }),
     });
     const first = await recent.recent();
     assert.equal(first.ok, false);
@@ -140,22 +196,22 @@ describe("createRecentReleases —— 缓存与失败", () => {
 
   test("根形状不对（非数组）落成 ok:false", async () => {
     const recent = createRecentReleases({
-      endpoint: () => "https://api.github.com/repos/a/b/releases",
-      call: stubFetch([], { message: "Not Found" }),
+      endpoint: () => API,
+      call: stubFetch([], { [API]: { body: { message: "Not Found" } } }),
     });
     const result = await recent.recent();
     assert.equal(result.ok, false);
   });
 
   test("没有配置发布源时不给兜底地址，直接说清楚", async () => {
-    const recent = createRecentReleases({ endpoint: () => null, call: stubFetch([], []) });
+    const recent = createRecentReleases({ endpoint: () => null, call: stubFetch([], {}) });
     const result = await recent.recent();
     assert.equal(result.ok, false);
   });
 
   test("网络异常落成 ok:false，不抛给调用方", async () => {
     const recent = createRecentReleases({
-      endpoint: () => "https://api.github.com/repos/a/b/releases",
+      endpoint: () => API,
       call: async () => {
         throw new Error("ENOTFOUND api.github.com");
       },
