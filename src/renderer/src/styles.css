@@ -3928,9 +3928,22 @@ button.panel-group-toggle:hover {
   font: inherit;
   text-align: left;
   color: var(--color-text-primary);
-  transition: var(--transition-hover);
+  /* 悬停时右内边距要平滑让位（见 .review-row-actable），行底 / 字色沿用快变 */
+  transition: var(--transition-hover), padding-right var(--duration-fast) var(--ease-out-quint);
 }
 .review-row:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+/* 2026-10-18 行改版：行里只显文件名（重名才补最短区分父目录），行尾（增减统计 /
+   状态尾注 / 轻提示）静止时钉在行右血线。悬停时「在访达中显示」键出现在**数字
+   后面**（行最右，用户：「打开文件所在路径的那个开关应该在这个加减的数字的后面」）：
+   数字不隐藏，行右内边距让出键的宽度（26 = 22 键 + 4 隙，与 ReviewPanel 的
+   ROW_ACT_SIZE 同一套 --list-item-compact 几何），行高与文件名起点都不动；指针
+   落在键上时行按钮自己不在 :hover，由 host 兜住行底色 */
+.review-row-actable:hover .review-row {
+  padding-right: calc(var(--space-2) + 26px);
+}
+.file-hover-host:hover .review-row:not(:disabled) {
   background: var(--color-bg-hover);
 }/* ================================================================ 意图系统（实验功能 intent-system）
    右栏「意图」面板：会话累积簇图 + 条目。数据色只有一条带——--color-nebula（用量格

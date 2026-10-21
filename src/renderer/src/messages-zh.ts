@@ -38,6 +38,7 @@ export const zh: Messages = {
     refresh: "刷新",
     tabChanges: "改动",
     tabExcerpts: "摘抄",
+    copyPath: "复制路径",
     excerptsThisTask: "本任务",
     excerptsAll: "全部",
     excerptsSearch: "搜索摘抄",

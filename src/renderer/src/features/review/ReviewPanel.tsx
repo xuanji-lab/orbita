@@ -1,14 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
+import { ContextMenu } from "../../shell/ContextMenu";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import { PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import { REVIEW_SOURCES, type ReviewDiff, type ReviewEntry, type ReviewList, type ReviewSource } from "@shared/review";
-import { reviewEmptyText, reviewEmptyTitle, unifiedDiffEntries } from "./review-panel";
-import { pathParts, Stats } from "../chat/FileTurnCard";
+import type { FileRoot } from "@shared/files";
+import { pathWithin } from "../../../../shared/path.ts";
+import {
+  absoluteReviewPath,
+  disambiguatedDirs,
+  reviewEmptyText,
+  reviewEmptyTitle,
+  unifiedDiffEntries,
+} from "./review-panel.ts";
+import { pathParts } from "../chat/path-parts.ts";
+import { Stats } from "../chat/FileTurnCard";
 import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
+
+/**
+ * 悬停动作键的几何（与文件面板树行同一套 --list-item-compact 行配方：22px 方块、
+ * 上下各留 5、右缘钉在行右内边距 var(--space-2)）
+ */
+const ROW_ACT_SIZE = 22;
+const ROW_ACT_TOP = 5;
+const ROW_ACT_RIGHT = 8;
 
 /**
  * 审查面板（右栏新入口，与 Files / Skills / MCP 互斥）：四种来源——本任务改动
@@ -25,6 +44,8 @@ import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
 export function ReviewPanel(props: {
   /** 正在看的会话；null = 还没开任务（task 来源没对象，git 来源也没 cwd） */
   sessionId: string | null;
+  /** 会话的工作区（git 来源「在访达中显示」要拿 fs:roots 白名单找宿主根） */
+  workspaceId: string | null;
   /** 轮尾卡 / 界碑卡的「在面板里看」请求：带 token 的一次性定位（展开 + 滚到） */
   focus: { path: string; token: number } | null;
   /**
@@ -48,6 +69,48 @@ export function ReviewPanel(props: {
   const [diffs, setDiffs] = useState<Map<string, ReviewDiff>>(new Map());
   const [diffLoading, setDiffLoading] = useState<string | null>(null);
   const expandedRef = useRef<HTMLDivElement | null>(null);
+  /** 右键菜单（复制路径）：并同 FilesPanel 的 ContextMenu 配方，位置在指针处 */
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  /** 行尾的一次性轻提示（已复制 / reveal 失败原因）：只落在触发它的那一行，短郎自灭 */
+  const [hint, setHint] = useState<{ path: string; text: string; tone: "ok" | "bad" } | null>(null);
+  const hintTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (hintTimerRef.current !== null) window.clearTimeout(hintTimerRef.current);
+  }, []);
+  const flashHint = useCallback((path: string, text: string, tone: "ok" | "bad"): void => {
+    if (hintTimerRef.current !== null) window.clearTimeout(hintTimerRef.current);
+    setHint({ path, text, tone });
+    hintTimerRef.current = window.setTimeout(() => {
+      setHint(null);
+      hintTimerRef.current = null;
+    }, 1500);
+  }, []);
+
+  /**
+   * 「在访达中显示」的宿主根（git 来源）：git 条目是仓库相对路径，拼成绝对路径后
+   * 必须落在会话允许的某条根之内才能走 fs:reveal（白名单在主进程，同文件面板的
+   * 纪律）。task 来源不走这里——它的白名单就是本任务文件账（session:reveal-artifact）。
+   * 根没回来 / 都不收留：按钮不出现（同附件行「不在根内的只展示不可点」）。
+   */
+  const [revealRoots, setRevealRoots] = useState<readonly FileRoot[] | null>(null);
+  useEffect(() => {
+    if (source === "task" || props.sessionId === null) {
+      setRevealRoots(null);
+      return;
+    }
+    let alive = true;
+    void api.files
+      .roots({ sessionId: props.sessionId, workspaceId: props.workspaceId })
+      .then((all) => {
+        if (alive) setRevealRoots(all.filter((root) => root.kind !== "attachments" && root.exists));
+      })
+      .catch(() => {
+        if (alive) setRevealRoots(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [source, props.sessionId, props.workspaceId]);
 
   const refresh = useCallback(
     (wanted: ReviewSource) => {
@@ -94,6 +157,62 @@ export function ReviewPanel(props: {
   }, [props.focus?.token]);
 
   const entries = list?.kind === "ok" ? list.entries : [];
+  const listCwd = list?.kind === "ok" ? list.cwd : null;
+  /** 重名文件补显的父目录（review-panel.ts 纯函数）：无重名的名字不补，行里只显文件名 */
+  const disambig = useMemo(
+    () => disambiguatedDirs(entries.map((entry) => entry.path), props.cwd),
+    [entries, props.cwd],
+  );
+
+  /** 右键 → 复制路径：复制的是绝对路径（title 同源），成 / 败都在那一行闪一条轻提示 */
+  const copyPath = useCallback(
+    (path: string): void => {
+      void navigator.clipboard.writeText(absoluteReviewPath(path, source, listCwd)).then(
+        () => flashHint(path, t.chat.copied, "ok"),
+        (cause: unknown) => {
+          console.error("[review] 复制路径失败", cause);
+          flashHint(path, String(cause instanceof Error ? cause.message : cause), "bad");
+        },
+      );
+    },
+    [source, listCwd, flashHint, t],
+  );
+
+  /**
+   * 悬停键「在访达中显示」：task 来源走 session:reveal-artifact（白名单 = 本任务文件
+   * 账，恰是这张列表的来源，账外的路径一概不碰），不需要找宿主根；git 来源拼绝对
+   * 路径后找 fs:roots 白名单内的宿主根走 fs:reveal，拼出来的路径不在任何根内 →
+   * 按钮本就不出现。
+   */
+  const gitRevealTarget = useCallback(
+    (path: string): { root: string; dir: string } | null => {
+      const dir = absoluteReviewPath(path, source, listCwd);
+      const owner = revealRoots?.find((root) => pathWithin(root.path, dir)) ?? null;
+      return owner === null ? null : { root: owner.path, dir };
+    },
+    [source, listCwd, revealRoots],
+  );
+  const revealEntry = useCallback(
+    (path: string): void => {
+      if (props.sessionId === null) return;
+      if (source === "task") {
+        void api.session.revealArtifact(props.sessionId, path).catch((cause: unknown) => {
+          console.error("[review] 在访达中显示失败", cause);
+          flashHint(path, cause instanceof Error ? cause.message : String(cause), "bad");
+        });
+        return;
+      }
+      const target = gitRevealTarget(path);
+      if (target === null) return;
+      void api.files
+        .reveal({ sessionId: props.sessionId, workspaceId: props.workspaceId, root: target.root, dir: target.dir })
+        .catch((cause: unknown) => {
+          console.error("[review] 在访达中显示失败", cause);
+          flashHint(path, cause instanceof Error ? cause.message : String(cause), "bad");
+        });
+    },
+    [source, props.sessionId, props.workspaceId, gitRevealTarget, flashHint],
+  );
 
   const toggle = useCallback((entry: ReviewEntry) => {
     if (entry.binary || entry.restored === true || entry.noBaseline === true) return;
@@ -167,6 +286,22 @@ export function ReviewPanel(props: {
       }
       contentKey={`${tab}:${source}:${props.sessionId ?? "none"}`}
     >
+      <ContextMenu
+        position={menu === null ? null : { x: menu.x, y: menu.y }}
+        onClose={() => setMenu(null)}
+        items={
+          menu === null
+            ? []
+            : [
+                {
+                  id: "copy-path",
+                  label: t.review.copyPath,
+                  icon: "copy",
+                  onSelect: () => copyPath(menu.path),
+                },
+              ]
+        }
+      />
       <div className="review-tabs" role="tablist" aria-label={t.review.title}>
         <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
           <Icon name="file-diff" size={12} strokeWidth={1.8} />
@@ -203,60 +338,107 @@ export function ReviewPanel(props: {
             const open = expanded === entry.path;
             const diff = diffs.get(entry.path);
             const expandable = !entry.binary && entry.restored !== true && entry.noBaseline !== true;
+            // 悬停键「在访达中显示」：task 来源必有（白名单 = 本任务文件账）；git 来源
+            // 要落在 fs:roots 白名单的某条根内，否则不出现（同附件行「根外只展示」）
+            const revealable = source === "task" || gitRevealTarget(entry.path) !== null;
+            // title / 复制 / reveal 用的都是绝对路径（absoluteReviewPath，与行里显示的
+            // 去路径名字分开算）
+            const absolute = absoluteReviewPath(entry.path, source, listCwd);
+            const rowHint = hint !== null && hint.path === entry.path ? hint : null;
             return (
               <div key={entry.path} ref={open ? expandedRef : undefined}>
-                <button
-                  type="button"
-                  onClick={() => toggle(entry)}
-                  aria-expanded={open}
-                  disabled={!expandable}
-                  title={entry.path}
-                  className="review-row"
-                  style={{ cursor: expandable ? "pointer" : "default" }}
+                {/* host 行包住行按钮与悬停动作键（button 不能套 button，同文件面板）；
+                    title / 右键挂 host 而不是行按钮：disabled 行（二进制 / 已还原）
+                    在浏览器里不发鼠标事件，挂按钮上这些行就右键不了、也没 tooltip */}
+                <div
+                  className={revealable ? "file-hover-host review-row-actable" : "file-hover-host"}
+                  style={{ position: "relative" }}
+                  title={absolute}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setMenu({ x: event.clientX, y: event.clientY, path: entry.path });
+                  }}
                 >
-                  <span
-                    style={{
-                      color: "var(--color-text-tertiary)",
-                      flex: "0 0 auto",
-                      transition: "transform var(--duration-fast) var(--ease-out-quint)",
-                      transform: open ? "rotate(90deg)" : "none",
-                      visibility: expandable ? "visible" : "hidden",
-                    }}
+                  <button
+                    type="button"
+                    onClick={() => toggle(entry)}
+                    aria-expanded={open}
+                    disabled={!expandable}
+                    className="review-row"
+                    style={{ cursor: expandable ? "pointer" : "default" }}
                   >
-                    <Icon name="chevron-right" size={12} strokeWidth={1.8} />
-                  </span>
-                  <RowName path={entry.path} cwd={props.cwd} />
-                  {entry.restored === true ? (
                     <span
                       style={{
-                        flex: "0 0 auto",
-                        display: "inline-flex",
-                        gap: 4,
-                        alignItems: "center",
-                        padding: "1px var(--space-2)",
-                        borderRadius: "var(--radius-pill)",
-                        background: "var(--color-bg-muted)",
-                        fontSize: "var(--font-size-sm)",
                         color: "var(--color-text-tertiary)",
+                        flex: "0 0 auto",
+                        transition: "transform var(--duration-fast) var(--ease-out-quint)",
+                        transform: open ? "rotate(90deg)" : "none",
+                        visibility: expandable ? "visible" : "hidden",
                       }}
                     >
-                      <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
-                      {t.review.restored}
+                      <Icon name="chevron-right" size={12} strokeWidth={1.8} />
                     </span>
-                  ) : entry.noBaseline === true ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
-                      {t.review.noBaseline}
-                    </span>
-                  ) : entry.binary ? (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
-                      {t.review.binary}
-                    </span>
-                  ) : (
-                    <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
-                      <Stats added={entry.added} removed={entry.removed} />
-                    </span>
+                    <RowName path={entry.path} cwd={props.cwd} disambig={disambig.get(entry.path) ?? null} />
+                    {/* 一次性轻提示与行尾并排（数字不被顶掉），只在触发它的那一行短郎闪现 */}
+                    {rowHint !== null && (
+                      <span
+                        style={{
+                          flex: "0 0 auto",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: "var(--font-size-sm)",
+                          color: rowHint.tone === "ok" ? "var(--color-success)" : "var(--color-danger)",
+                        }}
+                      >
+                        <Icon name={rowHint.tone === "ok" ? "check" : "triangle-alert"} size={11} strokeWidth={2} />
+                        {rowHint.text}
+                      </span>
+                    )}
+                    {entry.restored === true ? (
+                      <span
+                        style={{
+                          flex: "0 0 auto",
+                          display: "inline-flex",
+                          gap: 4,
+                          alignItems: "center",
+                          padding: "1px var(--space-2)",
+                          borderRadius: "var(--radius-pill)",
+                          background: "var(--color-bg-muted)",
+                          fontSize: "var(--font-size-sm)",
+                          color: "var(--color-text-tertiary)",
+                        }}
+                      >
+                        <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
+                        {t.review.restored}
+                      </span>
+                    ) : entry.noBaseline === true ? (
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
+                        {t.review.noBaseline}
+                      </span>
+                    ) : entry.binary ? (
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
+                        {t.review.binary}
+                      </span>
+                    ) : (
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
+                        <Stats added={entry.added} removed={entry.removed} />
+                      </span>
+                    )}
+                  </button>
+                  {revealable && (
+                    <RowHoverAction
+                      icon="folder-open"
+                      title={t.files.revealInFileManager}
+                      onClick={() => revealEntry(entry.path)}
+                      right={ROW_ACT_RIGHT}
+                      top={ROW_ACT_TOP}
+                      size={ROW_ACT_SIZE}
+                      iconSize={13}
+                      className="file-hover-act review-row-act"
+                    />
                   )}
-                </button>
+                </div>
                 {open && (
                   <div style={{ padding: "0 0 var(--space-2)", display: "grid" }}>
                     {diff === undefined || diffLoading === entry.path ? (
@@ -282,8 +464,14 @@ export function ReviewPanel(props: {
 }
 
 /** 文件名（粗）+ 目录（淡、可截断，cwd 之内为相对路径）。截断落在目录上，文件名与统计永远可见。 */
-function RowName(props: { path: string; cwd: string | null }) {
-  const { name, dir } = pathParts(props.path, props.cwd);
+/**
+ * 文件名完整优先（粗体；过长截断名字本身，不再在行里铺路径——用户 2026-10-18：
+ * 「它不优先显示完整的文件名，反而是去显示文件路径了，这就有点不可理喻了」）；
+ * 重名时才用 tertiary 小字补最短区分父目录（disambiguatedDirs 算好，无重名不补）。
+ * 悬停看整行 title = 完整路径，右键可复制。
+ */
+function RowName(props: { path: string; cwd: string | null; disambig: string | null }) {
+  const { name } = pathParts(props.path, props.cwd);
   return (
     <span style={{ minWidth: 0, display: "flex", alignItems: "baseline", gap: "var(--space-1)", flex: "1 1 auto", overflow: "hidden" }}>
       <span
@@ -294,14 +482,15 @@ function RowName(props: { path: string; cwd: string | null }) {
           overflow: "hidden",
           textOverflow: "ellipsis",
           minWidth: 0,
-          flex: "0 1 auto",
+          flex: "1 1 auto",
         }}
       >
         {name}
       </span>
-      {dir !== "" && (
+      {props.disambig !== null && props.disambig !== "" && (
         <span
           style={{
+            flex: "0 1 auto",
             minWidth: 0,
             fontSize: "var(--font-size-sm)",
             color: "var(--color-text-tertiary)",
@@ -310,7 +499,7 @@ function RowName(props: { path: string; cwd: string | null }) {
             whiteSpace: "nowrap",
           }}
         >
-          {dir}
+          {props.disambig}
         </span>
       )}
     </span>
