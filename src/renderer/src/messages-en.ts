@@ -100,6 +100,8 @@ export const en = {
     excerptDelete: "Delete",
     excerptConfirmDelete: "Confirm delete",
     excerptCancel: "Cancel",
+    excerptExpand: "Expand",
+    excerptCollapse: "Collapse",
     noTask: "Open a task to review its changes.",
     errorTitle: "Couldn't load changes",
     titleNotRepo: "Not a Git repository",

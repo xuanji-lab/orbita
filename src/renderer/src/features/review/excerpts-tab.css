@@ -196,6 +196,47 @@
   cursor: default;
 }
 
+/* 展开态：解掉三行截断，整段铺开（点正文依旧是「回到原文」） */
+.excerpts-text[data-expanded="true"] {
+  -webkit-line-clamp: unset;
+}
+
+/*
+ * 展开 / 收起键：settings 的 .exp-toggle 同款安静文字键（箭头随 aria-expanded 转 180°）。
+ * 只在被截断的条目上渲染（ExcerptBody 量 scrollHeight 判）；贴左不占行尾——
+ * 行尾是悬停删除键（.excerpts-acts）的领地，两键互不相让。
+ */
+.excerpts-toggle {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 5px;
+  margin-left: -5px; /* 悬停底色块外扩 5px，文字仍与正文左缘对齐 */
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.excerpts-toggle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.excerpts-toggle .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.excerpts-toggle[aria-expanded="true"] .orbita-icon {
+  transform: rotate(180deg);
+}
+
 .excerpts-meta {
   display: flex;
   align-items: center;
