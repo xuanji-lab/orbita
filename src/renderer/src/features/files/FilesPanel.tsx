@@ -39,6 +39,7 @@ import {
   TREE_BREAKPOINT,
   type FileTab,
 } from "./panel-layout.ts";
+import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
@@ -72,10 +73,11 @@ export function FilesPanel(props: {
    */
   escapeRef: { current: (() => boolean) | null };
   /**
-   * PDF 引用跳转请求（实验功能「PDF 引用」：点了正文里的引用编号，App 打开本面板并
-   * 递进来）。token 单调递增，同一条引用连点也会重新定位。null = 没有请求
+   * PDF 引用跳转请求（实验功能「PDF 引用」）：点了正文里的引用编号，App 打开本面板并
+   * 递进来。token 单调递增，同一条引用连点也会重新定位；请求带着出生会话戳，
+   * 换会话后由 cite-focus.ts 判作废。null = 没有请求
    */
-  citeFocus?: PdfJump | null;
+  citeFocus?: CiteFocusRequest | null;
 }) {
   const t = useT();
   const session = props.session;
@@ -153,12 +155,16 @@ export function FilesPanel(props: {
   // 会话 / 工作区切换 = 换一棵树：标签与分组折叠跟着清掉，treeOn 一并复位——旧
   // 会话的文件路径在新树里没有意义（同 useFileTree 清缓存 / 展开态的先例），树的
   // 展开理由也随最后一个文件消失；新会话从「树关」起步，点开文件不会突然顶着
-  // 浮层 / 并排列（同 closeOne 关最后一个标签的复位逻辑）
+  // 浮层 / 并排列（同 closeOne 关最后一个标签的复位逻辑）。顶部的报错与引用跳转
+  // 同理清掉：错误属于旧会话里那次点击，带进新会话就是张冠李戴的常驻红字
+  // （2026-10-18 修的 citeOutside 跨会话残留）
   useEffect(() => {
     setTabs([]);
     setActivePath(null);
     setCollapsedGroups(new Set());
     setTreeOn(false);
+    setActionError(null);
+    setJump(null);
   }, [sessionId, workspaceId]);
 
   // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
@@ -227,30 +233,37 @@ export function FilesPanel(props: {
     if (narrowRef.current) setTreeOn(false);
   };
 
-  // 引用跳转（实验功能「PDF 引用」）：找到 PDF 所在的根（含不进树的附件根）→
-  // 打开它的标签并带上跳转。根清单可能还没回来（面板刚被点开）：等 roots 到了
-  // 再消费；已消费的 token 不重放（同一条引用连点两次，每次都是新 token）
+  // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
+  // 裁决（含「请求属于别的会话 → 作废」——面板重挂后旧会话的请求不会拿新会话的
+  // 根重判、报出无关的 citeOutside，2026-10-18 修），这里只按结论改 state；
+  // 已消费的 token 不重放（同一条引用连点两次，每次都是新 token）
   const citeFocus = props.citeFocus ?? null;
   const consumedCiteRef = useRef<number | null>(null);
   const [jump, setJump] = useState<PdfJump | null>(null);
   useEffect(() => {
-    if (citeFocus === null || consumedCiteRef.current === citeFocus.token) return;
+    if (citeFocus === null) return;
+    const outcome = decideCiteFocus({
+      request: citeFocus,
+      consumedToken: consumedCiteRef.current,
+      session: sessionId,
+      roots: tree.roots,
+      attachmentsRoot: tree.attachmentsRoot,
+      rootsLoading: tree.rootsLoading,
+    });
+    if (outcome.kind === "idle" || outcome.kind === "wait") return;
+    consumedCiteRef.current = citeFocus.token;
+    if (outcome.kind === "drop") return;
     const path = citeFocus.citation.path;
-    const candidates = tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot];
-    const owner = candidates.find((root) => root.exists && pathWithin(root.path, path)) ?? null;
-    if (owner === null) {
-      if (tree.rootsLoading) return;
-      consumedCiteRef.current = citeFocus.token;
+    if (outcome.kind === "outside") {
       setActionError(t.files.citeOutside(pathTail(path) || path));
       return;
     }
-    consumedCiteRef.current = citeFocus.token;
     setActionError(null);
-    setTabs((prev) => openTab(prev, owner.path, path));
+    setTabs((prev) => openTab(prev, outcome.root, path));
     setActivePath(path);
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
-  }, [citeFocus, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
+  }, [citeFocus, sessionId, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
 
   // 切换或新开标签：把激活标签滚进标签栏可视区（纯函数 tabScrollTarget 裁决
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，

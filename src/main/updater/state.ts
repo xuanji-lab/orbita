@@ -18,7 +18,22 @@ import type {
   UpdateRelease,
   UpdateStage,
   UpdateState,
+  UpdateSupport,
 } from "../../shared/updater.ts";
+
+/**
+ * 这个实例能不能自动更新。只有**打包好的 Windows 应用**能：
+ * - 未打包（dev / 从源码跑）没有可更新的安装；
+ * - 打包了但不是 Windows → `platform`，本平台暂不接线。当前会产出的这类包只有 macOS
+ *   （ad-hoc 签名、未公证——Squirrel.Mac 安装前校验代码签名，接上只会得到「检查失败」
+ *   或「下完装不上」），界面统一说「本平台暂不支持，到 GitHub 下载新版」——文案不点名 macOS，
+ *   免得将来真有 Linux 包时显示错平台（2026-10-18）。
+ *   有了开发者签名与公证后放开这里即可，其余链路平台无关。
+ */
+export function updateSupport(packaged: boolean, platform: string): UpdateSupport {
+  if (!packaged) return "unpackaged";
+  return platform === "win32" ? "supported" : "platform";
+}
 
 /** electron-updater 的事件与我们的命令，都先翻译成它 */
 export type UpdaterAction =

@@ -124,8 +124,7 @@ a.upd-link {
 
 /* 「当前版本」行尾：版本号（mono）+ 展开三角，中间留 8px（var(--space-2)）。
    之前不留 gap、三角盒只有 12px，而图标是 14px——图标溢出盒子压到版本号上，
-   「0.1.15」和三角贴在一起（2026-10-18 用户验收）。没有三角时（这一版没有说明）
-   用 padding 补上「三角盒 + 间距」，版本号右缘不跳 */
+   「0.1.15」和三角贴在一起（2026-10-18 用户验收） */
 .upd-current {
   display: inline-flex;
   align-items: center;
@@ -133,10 +132,6 @@ a.upd-link {
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
-}
-
-.upd-current:not(:has(.upd-caret)) {
-  padding-right: calc(var(--space-4) + var(--space-2));
 }
 
 /* 行即开关（「当前版本」「历史版本」）：整行一个按钮，展开体在按钮外面。

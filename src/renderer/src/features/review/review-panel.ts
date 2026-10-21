@@ -3,6 +3,7 @@
  * 组件薄、逻辑在这里，`node --test` 直接测（ReviewPanel.tsx 不进测试）。
  */
 import { editDiffEntries, parseDiffLines, type EditDiffRow } from "../chat/tool-results.ts";
+import { pathParts } from "../chat/path-parts.ts";
 import type { Messages } from "../../messages-en.ts";
 import type { ReviewList, ReviewSource } from "@shared/review";
 
@@ -60,4 +61,58 @@ export function reviewEmptyTitle(list: Extract<ReviewList, { kind: "empty" | "er
     case "no-upstream":
       return t.review.titleNoUpstream;
   }
+}
+
+/**
+ * 审查行的绝对路径（title / 复制 / 「在访达中显示」用）。task 来源的条目本就是
+ * 绝对路径（resolveToCwd 的结果）；git 来源是仓库相对路径，按会话 cwd 拼——与
+ * 主进程 untrackedEntries 的 `${cwd}/${path}` 同一口径（仓库根 == 会话 cwd 的
+ * 常态下两者重合；仓库在 cwd 之上时拼出的路径盘上没有，reveal 会在主进程被
+ * realpath 拒绝，如实报错）。
+ */
+export function absoluteReviewPath(path: string, source: ReviewSource, cwd: string | null): string {
+  if (source === "task") return path;
+  if (cwd === null || cwd === "") return path;
+  return `${cwd}/${path}`;
+}
+
+/**
+ * 重名文件补显的父目录段（2026-10-18 审查行改版：行里不再铺路径、只显文件名，
+ * 同名文件会分不清）。编辑器标签页的做法：一组重名里取「能让整组互相区分」的
+ * 最短**尾部**父目录，整组用同一段数——一个补两段、同组另一个只补一段，反而
+ * 更难对齐着读。无重名 → null；重名但父目录也全同（同一列表里路径唯一，理论
+ * 上不会发生）→ 兜底显示全部目录。
+ *
+ * 键 = 调用方传入的原路径字符串（列表里唯一，可当行身份用）。
+ */
+export function disambiguatedDirs(
+  paths: readonly string[],
+  cwd: string | null,
+): ReadonlyMap<string, string | null> {
+  const groups = new Map<string, { path: string; dir: string }[]>();
+  for (const path of paths) {
+    const { name, dir } = pathParts(path, cwd);
+    const group = groups.get(name);
+    if (group === undefined) groups.set(name, [{ path, dir }]);
+    else group.push({ path, dir });
+  }
+  const out = new Map<string, string | null>();
+  for (const group of groups.values()) {
+    if (group.length <= 1) {
+      out.set(group[0]!.path, null);
+      continue;
+    }
+    const dirs = group.map((item) => (item.dir === "" ? [] : item.dir.split("/")));
+    const maxDepth = Math.max(...dirs.map((segs) => segs.length));
+    let depth = 1;
+    while (depth < maxDepth) {
+      const suffixes = new Set(dirs.map((segs) => segs.slice(-depth).join("/")));
+      if (suffixes.size === group.length) break;
+      depth += 1;
+    }
+    for (let i = 0; i < group.length; i += 1) {
+      out.set(group[i]!.path, dirs[i]!.slice(-depth).join("/"));
+    }
+  }
+  return out;
 }

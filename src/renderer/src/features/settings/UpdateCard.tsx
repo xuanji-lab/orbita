@@ -1,7 +1,7 @@
 import "./update-view.css";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { recentReleaseTitle, releaseTagUrl } from "@shared/updater";
+import { historyReleases, recentReleaseTitle, releaseTagUrl } from "@shared/updater";
 import type { RecentRelease, RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
 import { api } from "../../api";
 import { Icon, isIconName, type IconName } from "../../shell/Icon";
@@ -19,14 +19,13 @@ import { formatBytes, progressAmount, progressPercent } from "./update-format.ts
  * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
  * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
  *
- * 「当前版本」与「所有版本」两行行尾都只有一个展开三角，**整行是一个 disclosure 按钮**
+ * 「当前版本」与「历史版本」两行行尾都只有一个展开三角，**整行是一个 disclosure 按钮**
  * （点行上任何位置开合，键盘 Tab + Enter/Space 同样）：点开就在下方就地看内容
  * （本版说明 / 最近几个版本），GitHub 外链出口放在展开体底部（按钮外面）。
+ * 「当前版本」**无条件可展开**（2026-10-18 用户验收：「首先你得能展开当前版本」）：
+ * 说明是应用内置的（见 CurrentVersionNotesPanel），没写也照旧展开，GitHub 出口仍在。
  * 三角占 12px（= .upd-btn 的右内边距），尾部文字的右缘因此落在同一条线上。
  * 「更新」那一行不动：那里有真操作按钮（accent 只给「下载」与「重启以安装」）。
- *
- * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
- * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
  *
  * 两个 GitHub 地址都由快照里的 `releasesUrl` 拼（owner/repo 的真源在 package.json 的
  * build.publish），最近版本列表走 `updater:recentReleases`（主进程侧 10 分钟缓存），
@@ -60,9 +59,9 @@ export function UpdateCard() {
 
   const currentVersion = snapshot?.currentVersion ?? "";
   // 快照还没到（或桥不在）时不猜：入口置灰、版本号留空，等真值到了再画
-  const supported = snapshot?.supported === true;
+  const supported = snapshot?.support === "supported";
   const state: UpdateState = snapshot?.state ?? { kind: "idle" };
-  /** 已装上的这一版的说明（装完重启后从 userData 读回的那份）；没有就不画这行展开器 */
+  /** 当前这一版的说明（应用内置的那份，见 snapshot 契约；没写是 null） */
   const currentNotes = snapshot?.currentNotes ?? null;
   /** Release 页基址；拿不到（publish 没写 owner/repo）就连两个入口一起不画 */
   const releasesUrl = snapshot?.releasesUrl ?? null;
@@ -88,7 +87,8 @@ export function UpdateCard() {
   };
 
   if (!supported) {
-    statusText = x.unsupported;
+    // 原因不同说的话不同：dev 下是「装好的应用才行」，非 Windows 的包是「本平台暂不支持，去 GitHub 下载」
+    statusText = snapshot?.support === "platform" ? x.unsupportedPlatform : x.unsupported;
   } else if (state.kind === "idle") {
     // 出厂形态：只说「后台会自己查」，主操作是手动查一次
     action = { label: x.checkNow, icon: "refresh-cw", accent: false, onClick: () => void api.updater.check() };
@@ -166,31 +166,20 @@ export function UpdateCard() {
 
   return (
     <SettingGroup label={x.group}>
-      {currentNotes === null ? (
-        // 这一版没有说明：不是可开合的行，保持纯文本行（不画三角、不可点）
-        <SettingRow name={x.currentVersion}>
+      <DisclosureRow
+        name={x.currentVersion}
+        panelId="upd-current-notes"
+        expanded={currentOpen}
+        onToggle={() => setCurrentOpen(!currentOpen)}
+        trailing={
           <span className="upd-current">
             <Mono>{currentVersion}</Mono>
+            <Caret />
           </span>
-        </SettingRow>
-      ) : (
-        <DisclosureRow
-          name={x.currentVersion}
-          panelId="upd-current-notes"
-          expanded={currentOpen}
-          onToggle={() => setCurrentOpen(!currentOpen)}
-          trailing={
-            <span className="upd-current">
-              <Mono>{currentVersion}</Mono>
-              <Caret />
-            </span>
-          }
-        >
-          <ReleaseNotes notes={currentNotes} />
-          {/* 外链出口在展开体底部（按钮外面）：想看完整 Release 页从这里走 */}
-          {tagUrl !== null && <ReleaseFooter url={tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
-        </DisclosureRow>
-      )}
+        }
+      >
+        <CurrentVersionNotesPanel notes={currentNotes} tagUrl={tagUrl} />
+      </DisclosureRow>
       <SettingRow
         name={x.updates}
         note={
@@ -239,7 +228,7 @@ export function UpdateCard() {
           onToggle={() => setRecentOpen(!recentOpen)}
           trailing={<Caret />}
         >
-          <RecentReleasesList />
+          <RecentReleasesList currentVersion={currentVersion} />
           {/* 更多历史版本去 GitHub：展开体底部的外链出口（与「当前版本」同款） */}
           <ReleaseFooter url={releasesUrl}>{x.viewAllOnGitHub}</ReleaseFooter>
         </DisclosureRow>
@@ -337,13 +326,41 @@ function Caret() {
 }
 
 /**
+ * 「当前版本」的展开体：这一版的说明 + 底部的 GitHub 出口。
+ *
+ * 说明是**应用内置的**（package.json 的 build.releaseInfo，随 main bundle 内联，
+ * 见 main/updater/builtin-notes.ts）：离线可用、不发请求——当前版本的说明应用自己知道，
+ * GitHub 只用于「历史版本」与外链（2026-10-18 用户裁决）。没写（发版兑底测试拦着，
+ * 理论上不会发生）就说一句「这一版没有更新说明」，出口仍在底部，行不因此变回点不开。
+ *
+ * 之前那版在这里点开时去拉 updater:recentReleases 找当前版本的那一条，已删：内置说明
+ * 上线后那个远程兑底不再有到达路径，留着是两个真源。
+ */
+function CurrentVersionNotesPanel(props: { notes: readonly UpdateNote[] | null; tagUrl: string | null }) {
+  const x = useT().settings.update;
+  return (
+    <>
+      {props.notes === null ? (
+        <div className="upd-recent-quiet">{x.currentNotesMissing}</div>
+      ) : (
+        <ReleaseNotes notes={props.notes} />
+      )}
+      {props.tagUrl !== null && <ReleaseFooter url={props.tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
+    </>
+  );
+}
+
+/**
  * 「历史版本」展开体：最近几个版本（主进程打 GitHub API + 10 分钟缓存，见
  * main/updater/recent-releases.ts）。**点开才拉**——挂载即请求一次，收起再展开是重挂载。
  *
  * 四个形态：拉取中 / 失败（一句人话 + 重试）/ 空（仓里只有 Draft 时就是这样）/ 列表。
  * 失败不画成空列表：「获取失败」与「还没有已发布的版本」是两件事。
+ *
+ * 列表去掉当前版本（纯函数 historyReleases，有测试）：它的说明归「当前版本」那一行管。
+ * 过滤后为空（仓里只发过当前这一版）是另一句话：不是「没有版本」，是「没有更早的」。
  */
-function RecentReleasesList() {
+function RecentReleasesList(props: { currentVersion: string }) {
   const x = useT().settings.update;
   const [result, setResult] = useState<RecentReleasesResult | null>(null);
   /** 重试计数：递增一次就重跑一轮请求（依赖数组把它变成显式触发器） */
@@ -377,9 +394,11 @@ function RecentReleasesList() {
     );
   }
   if (result.releases.length === 0) return <div className="upd-recent-quiet">{x.recentEmpty}</div>;
+  const releases = historyReleases(result.releases, props.currentVersion);
+  if (releases.length === 0) return <div className="upd-recent-quiet">{x.noEarlierVersions}</div>;
   return (
     <div className="upd-recent">
-      {result.releases.map((release) => (
+      {releases.map((release) => (
         <RecentReleaseRow key={release.tag} release={release} />
       ))}
     </div>

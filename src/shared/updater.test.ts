@@ -7,7 +7,8 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { recentReleaseTitle, releaseTagUrl } from "./updater.ts";
+import { historyReleases, recentReleaseTitle, releaseTagUrl } from "./updater.ts";
+import type { RecentRelease } from "./updater.ts";
 
 describe("releaseTagUrl —— 某一版的 Release 页", () => {
   test("版本号拼成 v<版本号> 的 tag 地址", () => {
@@ -51,5 +52,30 @@ describe("recentReleaseTitle —— 列表行的标题该不该画", () => {
   test("标题为空（GitHub 允许没写名字）→ null", () => {
     assert.equal(recentReleaseTitle(release("", "0.1.15")), null);
     assert.equal(recentReleaseTitle(release("   ", "0.1.15")), null);
+  });
+});
+
+describe("historyReleases —— 「历史版本」列表去掉当前版本", () => {
+  const release = (version: string): RecentRelease => ({
+    tag: `v${version}`,
+    version,
+    title: version,
+    publishedAt: "2026-10-18T05:00:00Z",
+    htmlUrl: `https://github.com/example/repo/releases/tag/v${version}`,
+    notes: null,
+  });
+
+  test("当前版本从列表里去掉（它的说明归「当前版本」那一行管）", () => {
+    const releases = [release("0.1.15"), release("0.1.14"), release("0.1.13")];
+    assert.deepEqual(historyReleases(releases, "0.1.15"), [release("0.1.14"), release("0.1.13")]);
+  });
+
+  test("比当前新的版本保留（有可用更新还没装时，GitHub 上已挂着那一版）", () => {
+    const releases = [release("0.1.16"), release("0.1.15"), release("0.1.14")];
+    assert.deepEqual(historyReleases(releases, "0.1.15"), [release("0.1.16"), release("0.1.14")]);
+  });
+
+  test("仓里只发过当前这一版 → 空列表（界面据此说「没有更早的版本」，不是「还没有版本」）", () => {
+    assert.deepEqual(historyReleases([release("0.1.15")], "0.1.15"), []);
   });
 });
