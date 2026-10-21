@@ -901,13 +901,14 @@ body {
 }
 
 /*
- * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出删除键，原 onMouseEnter
- * 挂在组的外层 div 上，:hover 的命中范围原样对应。**只点名 `.workspace-group-remove`，
- * 不用通用的 `.reveal`**——组头与它下面的会话行是同一个 `.workspace-group` 的
- * DOM 兄弟，任务行自己的星标/完成/更多也叫 `.reveal`；用后代选择器裸配 `.reveal`
- * 会连带点亮全组每一行的这些键（2026-09-23 验收发现的真回归）。
+ * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出悬停动作键（「查看
+ * 工作区文件」与删除键），原 onMouseEnter 挂在组的外层 div 上，:hover 的命中范围
+ * 原样对应。**只点名 `.workspace-group-act`，不用通用的 `.reveal`**——组头与它
+ * 下面的会话行是同一个 `.workspace-group` 的 DOM 兄弟，任务行自己的星标/完成/更多
+ * 也叫 `.reveal`；用后代选择器裸配 `.reveal` 会连带点亮全组每一行的这些键
+ * （2026-09-23 验收发现的真回归）。
  */
-.workspace-group:hover .workspace-group-remove {
+.workspace-group:hover .workspace-group-act {
   opacity: 1;
 }
 

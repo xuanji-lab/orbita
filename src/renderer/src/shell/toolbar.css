@@ -83,6 +83,12 @@
   padding: 0 var(--space-2);
   width: auto;
 }
+/* 专注倒计时同理：被上面的 padding:0 / font:inherit 吃掉后，数字离胶囊右缘只剩 2.5px
+ * （2026-10-19 用户：「左上角太顶到了」）——重申 .cap-focus-run 的内边距与字号 */
+.toolbar-capsule .cap-focus-run {
+  padding: 0 12px 0 10px;
+  font-size: var(--font-size-titlebar);
+}
 .toolbar-capsule .cap-sel {
   padding: 0 8px 0 10px;
   width: auto;
@@ -114,6 +120,13 @@
   background: var(--glass-bg);
   box-shadow: var(--shadow-border);
 }
+/* 左胶囊的内容层：宽随内容（专注格从圆格变成「zap + 倒计时」），Toolbar 量它
+ * 定胶囊宽（胶囊自己定宽，量它永远重不触发）。其余胶囊定宽，用不上 */
+.toolbar-capsule-in {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
 
 /* 胶囊内的圆格（quiet-control）：36 宽的标准格 */
 .cap-seg {
@@ -127,6 +140,31 @@
 /* 单格胶囊里的窄格（右栏开关等） */
 .cap-seg.solo {
   width: var(--titlebar-control);
+}
+
+/* 专注中 / 时间到：zap + 等宽倒计时的一格（宽随文字自适应，点开胶囊浮层）。
+ * 图标与字号照胶囊内件的 token；时间到（data-done）不是数字，回界面字体 */
+.cap-focus-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--titlebar-control);
+  padding: 0 12px 0 10px;
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
+  font-size: var(--font-size-titlebar);
+  /* 量宽的前提：不换行（CJK 会在字间断行，胶囊跟着跳宽） */
+  white-space: nowrap;
+}
+.cap-focus-run .cap-focus-time {
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+.cap-focus-run[data-done] .cap-focus-time {
+  font-family: var(--font-family-base);
+  letter-spacing: 0;
 }
 
 /* 新任务：accent 圆点（一屏一个 accent 的那一个） */

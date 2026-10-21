@@ -1,0 +1,574 @@
+/*
+ * 专注模式的样式：开始专注浮层、胶囊浮层、左栏的文件树。
+ * 配方来自设计系统与原型（focus-proto.html，像素照它）：
+ * - 专注键 / 倒计时格住工具栏左胶囊（toolbar.css 的 .cap-seg / .cap-focus-run，
+ *   沿用胶囊按钮配方，不另起外观）；倒计时等宽 + tabular-nums。
+ * - 浮层是 .menu-panel 配方（实底 --color-bg-panel + 发丝 + --shadow-popover），
+ *   portal 到 body + fixed 定位（同 Menu：工具栏 / 侧栏在 overflow 裁剪链上）。
+ * - U / M：字母第一信号（等宽半粗），颜色第二。M 亮档用 warning 琥珀；**暗档
+ *   （黛 / 玄）换 info 蓝**——琥珀离强调黄太近，选中行的淡黄底就在旁边（原型
+ *   待定 11 的默认做法，PR 描述里可推翻）。
+ */
+
+/* —─ 浮层通用（menu-panel 配方 + fixed 定位由内联 style 给） ──
+   z-index 与 Menu 的 portal 面板同档（40）：同为「弹在内容之上的浮层」，
+   低于 tooltip（70）；主页会话卡片 / 侧栏 / 右栏都不在此层之上。 */
+.focus-pop {
+  z-index: 40;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  font-family: var(--font-family-base);
+  color: var(--color-text-primary);
+  text-align: left;
+}
+
+:root[data-theme="light"] .focus-pop {
+  border-color: var(--color-border-subtle);
+}
+
+/* —─ 开始专注浮层 ── */
+.focus-picker {
+  width: 400px;
+  max-width: calc(100vw - 16px);
+  padding: var(--space-4);
+}
+
+.focus-picker h4 {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+.focus-picker .focus-picker-sub {
+  margin: 2px 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.focus-pickgrid {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.focus-pk-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+/* 滚轮：中间那条带是选中档，上下渐隐（mask），滚动吸附 */
+.focus-wheel {
+  position: relative;
+  height: 168px;
+  border-radius: var(--radius-md);
+}
+
+.focus-wheel-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 68px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-hover);
+  pointer-events: none;
+}
+
+.focus-wheel-list {
+  position: relative;
+  height: 100%;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  padding: 68px 0;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, var(--color-text-primary) 36%, var(--color-text-primary) 64%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, var(--color-text-primary) 36%, var(--color-text-primary) 64%, transparent 100%);
+}
+
+.focus-wheel-list::-webkit-scrollbar {
+  display: none;
+}
+
+.focus-wheel-opt {
+  height: 32px;
+  scroll-snap-align: center;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--duration-instant) var(--ease-standard);
+}
+
+.focus-wheel-opt b {
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-medium);
+  line-height: 32px;
+}
+
+.focus-wheel-opt span {
+  font-size: var(--font-size-sm);
+}
+
+.focus-wheel-opt[data-on] {
+  color: var(--color-text-primary);
+}
+
+.focus-wheel-opt[data-on] b {
+  font-weight: var(--weight-semibold);
+}
+
+/* 工作区清单 */
+.focus-wslist {
+  display: grid;
+  gap: 2px;
+  max-height: 168px;
+  overflow: auto;
+}
+
+.focus-wsopt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--font-size-base);
+  background: transparent;
+  color: var(--color-text-primary);
+  transition: var(--transition-hover);
+}
+
+.focus-wsopt:hover {
+  background: var(--option-hover-bg);
+}
+
+.focus-wsopt[data-active] {
+  background: var(--option-active-bg);
+  font-weight: var(--weight-semibold);
+}
+/* 键盘焦点环走全局 :focus-visible（accent 描边）——选中只认淡底 + 勾，
+ * 不另造第三种「看似选中」的形态 */
+
+.focus-wsopt .ic.lead {
+  color: var(--color-text-secondary);
+}
+
+.focus-wsopt .focus-wsopt-meta {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-wsopt .focus-wsopt-ok {
+  color: var(--color-mode-active-fg);
+}
+
+.focus-pickfoot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.focus-pickfoot .focus-picknote {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  flex: 1;
+}
+
+/* 开始专注：这一屏唯一的强调色按钮 */
+.focus-start {
+  height: 32px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.focus-start:hover {
+  background: var(--color-accent-strong);
+}
+
+.focus-start:disabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* —─ 胶囊浮层（延长 / 提前结束） ── */
+.focus-cmenu {
+  width: 264px;
+  max-width: calc(100vw - 16px);
+  padding: var(--space-3);
+}
+
+.focus-cm-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.focus-cm-top .focus-cm-big {
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-semibold);
+}
+
+.focus-cm-top .focus-cm-of {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.focus-cm-ws {
+  padding: 0 4px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.focus-cm-track {
+  height: 3px;
+  margin: 10px 4px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-hover);
+  overflow: hidden;
+}
+
+.focus-cm-track i {
+  display: block;
+  height: 100%;
+  background: var(--color-text-secondary);
+  border-radius: var(--radius-pill);
+}
+
+.focus-cm-ext {
+  display: flex;
+  gap: 6px;
+  padding: 0 4px 10px;
+}
+
+.focus-cm-ext button {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.focus-cm-ext button:hover {
+  background: var(--color-bg-hover);
+}
+
+.focus-cm-sep {
+  height: 1px;
+  background: var(--color-border-subtle);
+  margin: 0 0 4px;
+}
+
+.focus-cm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.focus-cm-row:hover {
+  background: var(--option-hover-bg);
+}
+
+.focus-cm-row .ic {
+  color: var(--color-text-secondary);
+}
+
+/* —─ 左栏的工作区文件视图（浏览 / 专注共用） ── */
+.focus-wshead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-height-md);
+}
+
+.focus-wshead strong {
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.focus-wshead-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 浏览态的浅提示条 */
+.focus-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.focus-hint-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.focus-hint-btn:hover {
+  background: var(--option-hover-bg);
+}
+
+/* 分节头（这个工作区的会话 / 文件） */
+.focus-foldhead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  margin-top: var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.focus-foldhead .focus-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-family: var(--font-family-base);
+  font-weight: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.focus-foldhead .focus-fold-count {
+  font-family: var(--font-family-business);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.focus-foldhead .focus-legend {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.focus-legend b {
+  font-family: var(--font-family-business);
+  font-weight: var(--weight-semibold);
+  margin-right: 2px;
+  color: var(--color-success);
+}
+
+.focus-legend .focus-legend-m {
+  color: var(--color-warning);
+}
+
+:root[data-theme="graphite"] .focus-legend .focus-legend-m,
+:root[data-theme="black"] .focus-legend .focus-legend-m {
+  color: var(--color-info);
+}
+
+.focus-changesum {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  padding: 0 0 4px 4px;
+}
+
+.focus-changesum .mono {
+  font-family: var(--font-family-business);
+  color: var(--color-text-secondary);
+}
+
+/* 文件行 */
+.focus-frow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding-right: var(--space-2);
+  border-radius: var(--radius-md);
+  transition: var(--transition-hover);
+}
+
+.focus-frow:hover {
+  background: var(--color-bg-hover);
+}
+
+.focus-frow .focus-frow-tw {
+  width: 12px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-tertiary);
+}
+
+.focus-frow .focus-frow-icon {
+  color: var(--color-text-tertiary);
+  display: grid;
+  place-items: center;
+}
+
+.focus-frow .focus-frow-icon[data-tone="doc"] {
+  color: var(--color-filetype-doc);
+}
+
+.focus-frow .focus-frow-icon[data-tone="slides"] {
+  color: var(--color-filetype-slides);
+}
+
+.focus-frow .focus-frow-icon[data-tone="sheet"] {
+  color: var(--color-filetype-sheet);
+}
+
+.focus-frow .focus-frow-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.focus-frow .focus-frow-name.dir {
+  color: var(--color-text-primary);
+}
+
+.focus-frow .focus-frow-tail {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 增删行数只在悬停时出现，免得一列计数器 */
+.focus-frow-lines {
+  display: none;
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.focus-frow:hover .focus-frow-lines {
+  display: inline;
+}
+
+/* U / M 字母徽标 */
+.focus-badge {
+  width: 12px;
+  text-align: center;
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.focus-badge[data-k="U"] {
+  color: var(--color-success);
+}
+
+.focus-badge[data-k="M"] {
+  color: var(--color-warning);
+}
+
+:root[data-theme="graphite"] .focus-badge[data-k="M"],
+:root[data-theme="black"] .focus-badge[data-k="M"] {
+  color: var(--color-info);
+}
+
+/* 目录小圆点：里面有改动 */
+.focus-ddot {
+  width: 6px;
+  height: 6px;
+  margin: 0 3px;
+  border-radius: var(--radius-pill);
+}
+
+.focus-ddot[data-k="U"] {
+  background: var(--color-success);
+}
+
+.focus-ddot[data-k="M"] {
+  background: var(--color-warning);
+}
+
+:root[data-theme="graphite"] .focus-ddot[data-k="M"],
+:root[data-theme="black"] .focus-ddot[data-k="M"] {
+  background: var(--color-info);
+}

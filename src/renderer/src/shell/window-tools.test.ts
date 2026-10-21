@@ -98,9 +98,11 @@ test("断点与侧栏开关的结构性不变量：左胶囊 x 与侧栏开合�
   // leftCapsuleX 不吃侧栏状态——「开关两态坐标不变」由「同一个容器」保证
   // leftCapsuleX 的签名只有 platform——不吃侧栏状态，两态同 x 由签名本身保证
   assert.ok(leftCapsuleX.length === 1, "leftCapsuleX 应只吃 platform 一个参数");
-  // Toolbar 用同一常量渲染左胶囊（两态同一个元素）
+  // Toolbar 用同一常量渲染左胶囊（两态同一个元素）；宽度随内容置：leftW 的地板是
+  // LEFT_CAPSULE_W（专注中的倒计时格比圆格宽，Toolbar 用 ResizeObserver 量内容）
   assert.match(toolbarTsx, /const left = leftCapsuleX\(props\.platform\)/);
-  assert.match(toolbarTsx, /style=\{\{ left, width: LEFT_CAPSULE_W \}\}/);
+  assert.match(toolbarTsx, /style=\{\{ left, width: leftW \}\}/);
+  assert.match(toolbarTsx, /useState\(LEFT_CAPSULE_W\)/, "leftW 的地板应是 LEFT_CAPSULE_W");
 });
 
 /* ── 2. 垂直链：胶囊中心 = 红绿灯中心 = 25 ──────────────────── */
@@ -142,7 +144,7 @@ test("工具栏的直接子元素只有胶囊（Windows brand row 是唯一例�
   assert.ok(direct.length >= 2, "Toolbar 的直接子节点少了（至少左胶囊与右栏开关两颗常驻胶囊）");
   // 四颗胶囊都在场（会话 / 右栏两颗住在条件包裹里，按文本确认）
   const markers = [
-    "toolbar-capsule\" style={{ left, width: LEFT_CAPSULE_W }}",
+    "toolbar-capsule\" style={{ left, width: leftW }}",
     "toolbar-capsule\" style={{ left: sess.x, width: sess.width }}",
     "toolbar-capsule cap-panel\" style={{ left: panelLeft, width: panelW }}",
     "toolbar-capsule\" style={{ left: toggleLeft, width: RAIL_W }}",

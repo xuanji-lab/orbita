@@ -5,6 +5,7 @@ import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
+import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
@@ -158,6 +159,19 @@ export function Sidebar(props: {
    * 展开——新任务不能落进一个收着的组里无声无息。0 = 从未发过。
    */
   newTaskSignal: number;
+  /**
+   * 左栏此刻换成哪个工作区的文件视图：browse = 不计时地看一眼（工作区行悬停的
+   * 「查看工作区文件」进的），focus = 专注中。null = 正常的会话列表。
+   * 工作区已被移除时这里可能指向不存在的 id——按 null 处理（App 会清）。
+   * 专注键 / 胶囊不在侧栏——住工具栏左胶囊（Toolbar 的 focus 槽，App 注入）。
+   */
+  filesView: { mode: "browse" | "focus"; workspaceId: string } | null;
+  /** 工作区行悬停的「查看工作区文件」 */
+  onBrowseWorkspace: (id: string) => void;
+  /** 浏览态的「返回会话列表」 */
+  onExitBrowse: () => void;
+  /** 浏览态的「以此开始专注」：开专注浮层并预选这个工作区 */
+  onStartFocusHere: (workspaceId: string) => void;
 }) {
   const t = useT();
   const { session } = props;
@@ -309,6 +323,29 @@ export function Sidebar(props: {
   };
 
   /**
+   * 左栏的文件视图（浏览 / 专注）：设置页与 Archived / Carryovers 子视图盖着时
+   * 优先让位给它们（那些入口在右栏，不受专注影响）；工作区被移除则回会话列表。
+   */
+  const filesViewWs =
+    props.filesView !== null && !settingsOpen && !props.showArchived && !props.showCarryovers
+      ? (session.workspaces.find((item) => item.id === props.filesView?.workspaceId) ?? null)
+      : null;
+  const filesBody =
+    filesViewWs !== null && props.filesView !== null
+      ? (
+          <WorkspaceFiles
+            mode={props.filesView.mode}
+            workspace={filesViewWs}
+            workspaces={session.workspaces}
+            session={session}
+            openId={openId}
+            onBack={props.onExitBrowse}
+            onStartFocusHere={() => props.onStartFocusHere(filesViewWs.id)}
+          />
+        )
+      : null;
+
+  /**
    * 拖宽：右移变宽（与右侧面板同一套机制，只是方向相反）。**区间是固定像素 240–400**
    * ——右栏那条「pane 的 1/3–2/3」不管左栏（2026-09-22 wafo 澄清：那一对说的是
    * chat 主区与右栏）；
@@ -371,6 +408,15 @@ export function Sidebar(props: {
         transition: resizing ? "none" : "width var(--duration-fast) var(--ease-standard)",
       }}
     >
+      {/*
+        #248 的 Safari 式工具栏之后侧栏没有顶行了（字标与星云同在左下角停机坪）；
+        专注 / 浏览工作区文件时换掉的是模式页签 + 新任务大按钮 + 列表这一整段，
+        左下角的用量格与星云照常在（专注中星云要说话）。
+      */}
+      {filesBody !== null ? (
+        filesBody
+      ) : (
+      <>
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
         <ModeChip icon="bot" active>
           {t.sidebar.agentMode}
@@ -639,6 +685,7 @@ export function Sidebar(props: {
                       }}
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
+                      onBrowse={() => props.onBrowseWorkspace(workspace.id)}
                       onOpen={open}
                     />
                   ))
@@ -701,6 +748,8 @@ export function Sidebar(props: {
           </>
         )}
       </div>
+      </>
+      )}
 
       {/**
        * 左下角的 7 天 token 用量格 + 星云能量体：常驻（不是实验功能），
@@ -762,6 +811,8 @@ function WorkspaceGroup(props: {
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
+  /** 悬停的「查看工作区文件」 */
+  onBrowse: () => void;
   onOpen: (id: string) => void;
 }) {
   const t = useT();
@@ -865,25 +916,41 @@ function WorkspaceGroup(props: {
           />
         )}
 
-        <IconButton
-          label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
-          title={
-            armed
-              ? t.sidebar.removeArmedTip
-              : t.sidebar.removeTip
-          }
-          size={20}
-          onClick={() => (armed ? props.onRemove() : setArmed(true))}
-          className="reveal workspace-group-remove"
-          style={{
-            borderRadius: "var(--radius-xs)",
-            color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
-            // armed（二次确认已按下）常显，不等 hover——armed 只有 mouseleave 才清
-            opacity: armed ? 1 : undefined,
-          }}
-        >
-          <Icon name="trash-2" size={11} />
-        </IconButton>
+        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
+          {/**
+            悬停动作簇（静止不占位）：「查看工作区文件」（list-tree，zcode 同款）
+            在删除键前面——浏览是常事，删除是两段式。
+          */}
+          <IconButton
+            label={t.focus.browseFiles}
+            title={t.focus.browseFiles}
+            size={20}
+            onClick={props.onBrowse}
+            className="reveal workspace-group-act"
+            style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
+          >
+            <Icon name="list-tree" size={14} strokeWidth={1.8} />
+          </IconButton>
+          <IconButton
+            label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
+            title={
+              armed
+                ? t.sidebar.removeArmedTip
+                : t.sidebar.removeTip
+            }
+            size={20}
+            onClick={() => (armed ? props.onRemove() : setArmed(true))}
+            className="reveal workspace-group-act"
+            style={{
+              borderRadius: "var(--radius-xs)",
+              color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
+              // armed（二次确认已按下）常显，不等 hover——armed 只有 mouseleave 才清
+              opacity: armed ? 1 : undefined,
+            }}
+          >
+            <Icon name="trash-2" size={11} />
+          </IconButton>
+        </span>
 
         <IconButton label={t.sidebar.newTaskInWorkspace} size={26} onClick={props.onNewTask}>
           <Icon name="plus" size={14} />

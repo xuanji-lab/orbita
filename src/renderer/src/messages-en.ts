@@ -454,6 +454,48 @@ export const en = {
     jumpToSourceTip: "Open the task this came from",
   },
 
+  focus: {
+    /** 闪电键（平时）的 tooltip */
+    keyTitle: "Focus · pick a duration and a workspace",
+    pickerTitle: "Start focusing",
+    pickerSub: "Pick a duration and a workspace; the sidebar becomes that workspace's files.",
+    durationLabel: "Duration",
+    workspaceLabel: "Workspace",
+    minutesUnit: "min",
+    sessionsCount: (count: number) => `${count} session${count === 1 ? "" : "s"}`,
+    noWorkspaces: "No workspaces yet — add one first.",
+    pickerNote: "While focusing, other sessions' completion alerts are muted (unread still recorded).",
+    start: "Start focusing",
+    capsuleTitle: (workspace: string) => `Focusing · ${workspace} · click to extend or end early`,
+    timeUp: "Time's up",
+    menuLabel: "Focusing",
+    remainLabel: (total: number) => `left · ${total} min total`,
+    startedAt: (time: string) => `· started ${time}`,
+    extend: (minutes: number) => `+${minutes} min`,
+    endEarly: "End early",
+    endFocus: "End focus",
+    deletedWorkspace: "(workspace removed)",
+    backToSessions: "Back to sessions",
+    browseHint: "Just browsing — no timer running",
+    startHere: "Focus here",
+    wsSessions: "Sessions in this workspace",
+    newTaskHere: "New task in this workspace",
+    filesTitle: "Files",
+    legendU: "new file",
+    legendM: "modified",
+    badgeU: "Untracked new file",
+    badgeM: "Modified",
+    changeSummary: (changed: number, untracked: number) =>
+      `${changed} file${changed === 1 ? "" : "s"} changed, ${untracked} new`,
+    notRepo: "Not a git repository — no U / M to show",
+    noGit: "git isn't installed on this machine — no U / M to show",
+    workspaceMissing: "This workspace's folder no longer exists on disk.",
+    browseFiles: "Show workspace files",
+    notifyTitle: "Focus session over",
+    notifyBody: (minutes: number, workspace: string) =>
+      `${minutes} min focused on ${workspace} — take a break.`,
+  },
+
   usage: {
     /** 周一基的星期短标（侧栏左下角 7 天用量格下方的字） */
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],

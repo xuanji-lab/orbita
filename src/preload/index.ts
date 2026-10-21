@@ -8,6 +8,7 @@ import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
+import { focusApi } from "./api/focus.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
 import { providerApi } from "./api/provider.ts";
@@ -36,6 +37,7 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  focus: focusApi,
   terminal: terminalApi,
   usage: usageApi,
   updater: updaterApi,
