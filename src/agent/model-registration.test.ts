@@ -698,7 +698,11 @@ describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录�
       requiresReasoningContentOnAssistantMessages: true,
       thinkingFormat: "deepseek",
     }),
-    directoryModel("glm-5.3", { supportsStore: false, thinkingFormat: "zai" }),
+    directoryModel("glm-5.3", {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+    }),
   ];
 
   function register(declaredIds: string[], api = "openai-completions"): PiModel[] {
@@ -719,9 +723,12 @@ describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录�
     });
   });
 
-  test("家族不串味：glm-5.9 借到 zai 的形状，不会抄成 deepseek", () => {
+  // 真实目录里 glm 条目**没有**思考协议两项（pi-ai 0.84.3 实测）——所以 glm-5.9 借不到
+  // 任何东西，也绝不能把同目录里 deepseek 条目的协议抄过来。替身曾给 glm 造过
+  // thinkingFormat:"zai"，那是目录里不存在的形状，断言跟着说了不存在的行为（验收发现）。
+  test("家族不串味：glm-5.9 借不到协议，更不会抄成 deepseek 的", () => {
     const [model] = register(["glm-5.9"]);
-    assert.deepEqual(model?.compat, { thinkingFormat: "zai" });
+    assert.equal(model !== undefined && "compat" in model, false);
   });
 
   test("没有同族条目就不带：不按 id 猜协议", () => {
