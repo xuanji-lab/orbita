@@ -303,3 +303,10 @@ test("会话胶囊窄时逐级让位、不重叠：中栏可缩、两侧保内�
   assert.match(css, /\.cap-title \{[^}]*min-width:\s*0/s, "flex 子项不设 min-width:0 省略号不生效");
   assert.match(css, /@container \(max-width: 380px\) \{\s*\.cap-sess \.cap-sid \{\s*display:\s*none/, "第一档：短 id 先藏");
 });
+
+test("会话胶囊容器显式铺满 + 标题钉中栏：设置页只有标题一个孩子也不塌、居中", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  // container-type: inline-size 下元素宽不随内容撑开，没有显式宽就塌成 0
+  assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size[^}]*width:\s*100%/s);
+  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*grid-column:\s*2/s);
+});
