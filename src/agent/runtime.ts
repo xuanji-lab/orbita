@@ -541,12 +541,15 @@ async function setLedgerModel(
   modelId: string,
 ): Promise<void> {
   try {
+    // 同一套会话头注入，与 setSessionModel 对称：落账的鉴权面（generateTitle 用）也要带
+    // 本会话 id——不包的话，下一次 openTurn 覆盖之前标题调用会发回静态占位头
+    const scoped = withOpencodeSession(provider, sessionId);
     const runtime = await ModelRuntime.create({});
-    const model = registerAndResolveModel(runtime, provider, modelId);
+    const model = registerAndResolveModel(runtime, scoped, modelId);
     if (model === undefined) {
-      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+      throw new Error(`unknown model "${scoped.id}/${modelId}"`);
     }
-    updateLedgerAuth(sessionId, provider);
+    updateLedgerAuth(sessionId, scoped);
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
