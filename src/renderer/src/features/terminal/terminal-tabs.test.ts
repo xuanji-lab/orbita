@@ -1,7 +1,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { TerminalInfo } from "@shared/terminal";
-import { activeTerminalId, mergeTerminals } from "./terminal-tabs.ts";
+import { activeTerminalId, mergeTerminals, shouldTerminalTakeFocus } from "./terminal-tabs.ts";
 
 const tab = (id: string): TerminalInfo => ({
   terminalId: id,
@@ -45,5 +45,34 @@ describe("mergeTerminals —— 收养 agent 开的终端", () => {
     // 用户关掉了 b，面板只剩 a；此刻若按一份过期清单整体替换，b 会回来（PTY 已杀）
     deepStrictEqual(mergeTerminals([tab("a")], [tab("a"), tab("b")]).map((t) => t.terminalId), ["a", "b"]);
     deepStrictEqual(mergeTerminals([tab("a")], [tab("b")]).map((t) => t.terminalId), ["a", "b"]);
+  });
+});
+
+describe("shouldTerminalTakeFocus —— 终端画完快照不抢正在别处打字的焦点", () => {
+  const el = (tagName: string, extra: { isContentEditable?: boolean; type?: string; readOnly?: boolean } = {}) => ({
+    tagName,
+    isContentEditable: extra.isContentEditable ?? false,
+    ...(extra.type === undefined ? {} : { type: extra.type }),
+    ...(extra.readOnly === undefined ? {} : { readOnly: extra.readOnly }),
+  });
+  it("用户在 composer（textarea）里打字时 agent 开终端：不抢", () => {
+    strictEqual(shouldTerminalTakeFocus(el("TEXTAREA"), false), false);
+  });
+  it("文本类 input / contenteditable 同样不抢", () => {
+    strictEqual(shouldTerminalTakeFocus(el("INPUT", { type: "text" }), false), false);
+    strictEqual(shouldTerminalTakeFocus(el("INPUT"), false), false);
+    strictEqual(shouldTerminalTakeFocus(el("DIV", { isContentEditable: true }), false), false);
+  });
+  it("用户点「+」/ tab（焦点在按钮上）、焦点在 body、无焦点：照旧给终端", () => {
+    strictEqual(shouldTerminalTakeFocus(el("BUTTON"), false), true);
+    strictEqual(shouldTerminalTakeFocus(el("BODY"), false), true);
+    strictEqual(shouldTerminalTakeFocus(null, false), true);
+    strictEqual(shouldTerminalTakeFocus(el("INPUT", { type: "checkbox" }), false), true);
+  });
+  it("焦点本来就在这个终端里（xterm 自己的 textarea）：给", () => {
+    strictEqual(shouldTerminalTakeFocus(el("TEXTAREA"), true), true);
+  });
+  it("只读的文本框不算在打字", () => {
+    strictEqual(shouldTerminalTakeFocus(el("TEXTAREA", { readOnly: true }), false), true);
   });
 });
