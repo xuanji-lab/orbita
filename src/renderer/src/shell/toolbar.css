@@ -1,0 +1,497 @@
+/*
+ * 顶部工具栏（2026-10-19 方案 B v2，用户：「这一版很完美啊」）：窗口最顶一整条
+ * 52（--titlebar-row），整条 .titlebar 拖拽区，**直接子元素只有胶囊**（.toolbar-capsule）
+ * ——散放的字和键从结构上进不来（window-tools.test.ts 静态守卫）。
+ *
+ * 胶囊面 = material-chip 的面：全圆角 · --glass-bg · --shadow-border，四处共用
+ * （左胶囊 · 会话胶囊 · 右栏胶囊 · 右栏开关）。所有胶囊同高（--titlebar-capsule），
+ * 上沿 --titlebar-capsule-top——中心钉在红绿灯中心线 y=25（推导见 window-tools.ts）。
+ * 胶囊里的格全部走顶部栏 token：圆格 --titlebar-control、内嵌框 --titlebar-field、
+ * 图标 --titlebar-icon、标题字 --font-size-titlebar；例外（更小的箭头 / ✕ / 状态点）
+ * 由调用处显式给小号，不用作用域兜底——结构守卫（只有胶囊）+ 共享配方已把漏网拦死。
+ */
+
+/* —— 工具栏本体：横跨整宽的拖拽区，胶囊都是绝对定位（几何由 Toolbar 按布局量算） —— */
+.toolbar {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: var(--titlebar-row);
+  /* 整条可拖；胶囊里的按钮 / 输入框由 .titlebar button / input 全局豁免 no-drag */
+}
+
+/* Windows / Linux 拆两行（2026-10-19 修订，Proma 式）：.toolbar 本身变成 84 高的
+ * 两行容器——上行 brand row（商标 + 软件名 + 自绘三键），下行胶囊行。macOS 仍单行 52。 */
+.toolbar[data-platform="other"] {
+  height: calc(var(--titlebar-brand-row) + var(--titlebar-row));
+  display: grid;
+  grid-template-rows: var(--titlebar-brand-row) var(--titlebar-row);
+}
+/* 胶囊在 Windows 两行里落在第二行：top 基准从 9 变成 brand row + 9 */
+.toolbar[data-platform="other"] .toolbar-capsule {
+  top: calc(var(--titlebar-brand-row) + var(--titlebar-capsule-top));
+}
+
+/* brand row：Windows 顶栏第一行——左商标 + 软件名，右自绘三键（整行拖拽，三键豁免） */
+.brand-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: var(--space-3) 0;
+}
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-wordmark);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  user-select: none;
+}
+.brand-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+.brand-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Windows / Linux 自绘窗口键：brand row 最右一组，垂直居中于 brand row */
+.win-ctl {
+  display: flex;
+  align-items: center;
+}
+
+/* 胶囊里的一切按钮先吃一遍控件重置（quiet-control 之外还有 cap-dot 这类实底键）：
+ * 无边框、无默认底、字体随行——浏览器默认的 2px outset 黑框进不了工具栏 */
+.toolbar-capsule button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+}
+.toolbar-capsule button.cap-dot {
+  background: var(--color-accent);
+}
+/* 带文字的键豁免上面的 padding:0（2026-10-19 复测：页签被压到 44px、
+ * 「图标 + 两个字」溢出）——重申各自的内边距与自然宽（width: auto） */
+.toolbar-capsule .cap-tab {
+  padding: 0 var(--space-2);
+  width: auto;
+}
+.toolbar-capsule .cap-sel {
+  padding: 0 8px 0 10px;
+  width: auto;
+}
+.toolbar-capsule .cap-subchip {
+  padding: 0 8px 0 6px;
+  width: auto;
+}
+.toolbar-capsule .cap-crumb {
+  padding: 0 6px 0 0;
+  width: auto;
+}
+/* 标题键是开关形态时（文件面板：点了收 / 放文件树）渲染成 button，同样要豁免 padding:0——
+ * 2026-10-19 实测：漏了它时文件胶囊的图标距胶囊左缘只有 2px，而非开关形态（span）的审查标题是正常的 */
+.toolbar-capsule .cap-pt {
+  padding: 0 8px 0 10px;
+  width: auto;
+}
+
+/* —— 胶囊（四处共用一个配方） —— */
+.toolbar-capsule {
+  position: absolute;
+  top: var(--titlebar-capsule-top);
+  height: var(--titlebar-capsule);
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-border);
+}
+
+/* 胶囊内的圆格（quiet-control）：36 宽的标准格 */
+.cap-seg {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: var(--titlebar-control);
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
+}
+/* 单格胶囊里的窄格（右栏开关等） */
+.cap-seg.solo {
+  width: var(--titlebar-control);
+}
+
+/* 新任务：accent 圆点（一屏一个 accent 的那一个） */
+.cap-accent {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: var(--titlebar-control);
+  flex: 0 0 auto;
+}
+.cap-accent .cap-dot {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  transition: var(--transition-hover);
+}
+.cap-accent:hover .cap-dot {
+  background: var(--color-accent-strong);
+}
+
+/* —— 会话胶囊（排法甲 · 地址栏式，用户裁决）：三栏网格，标题永远在胶囊正中 —— */
+.cap-sess {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 2px 0 4px;
+}
+.cap-sess > * {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.cap-sess .cap-sl {
+  justify-self: start;
+}
+.cap-sess .cap-sc {
+  justify-self: center;
+  gap: 2px;
+}
+.cap-sess .cap-sr {
+  justify-self: end;
+  gap: 2px;
+}
+/* 标题是唯一的主体：titlebar 档、半粗、正墨 */
+.cap-title {
+  font-size: var(--font-size-titlebar);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+}
+/* 24px 小圆格：铅笔 / 复制这些次要动作 */
+.cap-mini {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+/* 悬停才显形，但用 visibility 占位——显形时标题一个像素都不挪 */
+.cap-hov {
+  visibility: hidden;
+}
+.toolbar-capsule:hover .cap-hov {
+  visibility: visible;
+}
+/* 短 id：等宽（business）· xs · 三级墨 */
+.cap-sid {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.02em;
+  padding: 0 2px 0 6px;
+}
+/* 左端子会话小芯片 / 面包屑 */
+.cap-subchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  font: inherit;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.cap-subchip .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+.cap-subchip b {
+  font-family: var(--font-family-business);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.cap-crumb {
+  border: 0;
+  background: transparent;
+  padding: 0 6px 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 160px;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.cap-crumb > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 细竖线分组 */
+.cap-vsep {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border-default);
+  margin: 0 4px;
+  flex: 0 0 auto;
+}
+/* 「已复制」轻提示：胶囊下方浮一颗小药丸，1.2s 后淡出（动画在组件里掐） */
+.cap-toast {
+  position: absolute;
+  top: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  z-index: 5;
+}
+.cap-toast .orbita-icon {
+  color: var(--color-success);
+}
+
+/* —— 右栏胶囊：左缘钉右栏分隔线、宽 = 右栏宽（几何由 Toolbar 算）；内容配方固定：
+ *      标题键 · 中段（筛选 / 页签 / 选择，吃剩余宽）· 动作格 —— */
+.cap-panel {
+  gap: 2px;
+  /* 窄于断点时筛选框收成搜索格（container query；断点值与 window-tools.ts 对账） */
+  container-type: size;
+}
+/* 标题键：面板图标 + 名称；是开关就带 chevron（PanelTitle 的开关形态） */
+.cap-pt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--titlebar-control);
+  padding: 0 8px 0 10px;
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
+}
+.cap-pt strong {
+  font-weight: var(--weight-semibold);
+  font-size: var(--font-size-titlebar);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+.cap-pt .orbita-icon:first-child {
+  color: var(--color-text-secondary);
+}
+/* 中段吃剩余宽 */
+.cap-grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 内嵌筛选框 / 选择 / 页签：--titlebar-field 高、胶囊圆角 */
+.cap-pf {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--titlebar-field);
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cap-pf input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.cap-pf input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.cap-pf .cap-count {
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.cap-sel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--titlebar-field);
+  padding: 0 8px 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* 页签（文件 / 终端）：24 高小药丸，选中走 mode 色 */
+.cap-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--titlebar-field);
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cap-tab[aria-selected="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+  font-weight: var(--weight-semibold);
+}
+.cap-tabs {
+  display: flex;
+  gap: 2px;
+  overflow: hidden;
+}
+/* 右缘渐隐只在「真的装不下、右边还有」时出现（2026-10-19 用户：「摘抄的抄字有过渡消失的
+ * 视觉，不应该是实的吗」——之前 mask 常驻，放得下也注掉最后 15%）。用自身的横向滚动时间线驱动：
+ * 没有可滚动溢出时时间线不活动、动画不生效 = 不渐隐；滚到最右时也收掉。纯 CSS，不测量。
+ * mask 只取 alpha，颜色用 token 不裸 hex */
+@keyframes cap-tabs-fade {
+  0%,
+  99% {
+    -webkit-mask-image: linear-gradient(90deg, var(--color-text-primary) 85%, transparent);
+    mask-image: linear-gradient(90deg, var(--color-text-primary) 85%, transparent);
+  }
+  100% {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+.cap-tabs {
+  animation: cap-tabs-fade linear both;
+  animation-timeline: scroll(self inline);
+}
+.cap-tabs .cap-tab {
+  flex: 0 0 auto;
+}
+
+/* 窄于断点：完整筛选框让位给搜索格；点开（.open）占满胶囊 */
+.cap-pf-full {
+  display: flex;
+}
+.cap-pf-collapsed {
+  display: none;
+}
+@container (width < 300px) {
+  .cap-pf-full:not(.open) {
+    display: none;
+  }
+  .cap-pf-collapsed {
+    display: grid;
+  }
+}
+/* 点开搜索格：筛选框占满整颗胶囊（标题键 / 动作格还在下面，被盖住） */
+.cap-pf.open {
+  position: absolute;
+  inset: 2px;
+  z-index: 3;
+  background: var(--color-bg-panel);
+  box-shadow: 0 0 0 1px var(--color-accent), var(--focus-ring);
+  color: var(--color-text-primary);
+  padding: 0 4px 0 10px;
+}
+/* 右栏胶囊的宿主：铺满胶囊，portal 进来的内容自带 .cap-panel-content */
+.cap-panel-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* 切换面板：外框（位置 / 宽度 / 圆角）不动，内容 120ms 淡入 */
+.cap-panel-content {
+  position: relative; /* .cap-center 的绝对居中基准（= 胶囊内容） */
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  animation: right-panel-fade var(--duration-instant) var(--ease-out-quint);
+}
+/* 审查头的三列 grid：标题键 | 页签组 | 右侧动作区。**两个 1fr 轨道等宽 → 页签组
+ * 构造性地落在胶囊中心**（grow 对称做不到：右侧固定件更宽时会偏左；绝对居中又会
+ * 压到下拉——2026-10-19 两轮复测的教训）。放不下时 1fr 轨道自己压缩到 0，
+ * 页签组（cap-tabs 自带横滚 + 渐隐）退化为「标题键之后顺排」，不与两侧重叠；
+ * 来源下拉收成图标键（cap-sel-compact），左右固定区近似等宽（68 / 60） */
+.cap-review-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+}
+.cap-review-head > .cap-slot-left {
+  justify-self: start;
+  min-width: 0;
+}
+.cap-review-head > .cap-slot-right {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+
+.win-ctl-btn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.win-ctl-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.win-ctl-btn.close:hover {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+}

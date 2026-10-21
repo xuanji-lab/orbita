@@ -119,6 +119,13 @@ export const zh: Messages = {
     restore: "还原",
   },
 
+  toolbar: {
+    copyId: "复制会话 ID",
+    copiedId: (id: string) => `已复制 ${id}`,
+    /** 专注模式还没落地：planned 的东西显示、禁用、说明为什么（设计系统规矩） */
+    focusPlanned: "专注模式（即将）",
+  },
+
   composer: {
     send: "发送",
     stop: "停止",

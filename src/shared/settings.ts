@@ -355,7 +355,7 @@ export const SIDEBAR_WIDTH_DEFAULT = 288;
  * 右栏宽度的硬地板（px）。小窗口保护：窗口再窄，右栏也不能收成一条看不出内容的缝。
  * 它会压过下面按比例算出的上限——挤到 chat 也比右栏消失好。
  */
-const RIGHT_PANEL_WIDTH_FLOOR = 200;
+const RIGHT_PANEL_WIDTH_FLOOR = 260;
 
 /**
  * 把右栏宽度夹进合法区间。**区间是相对 pane 的比例，不是固定像素**——
@@ -367,7 +367,7 @@ const RIGHT_PANEL_WIDTH_FLOOR = 200;
  * 右栏拿多少它就让多少）。区间直接就是 **[P/3, 2P/3]**——这一对本身各占 pane 的
  * 三分之一到三分之二，不需要再换算。
  *
- * 地板与上限撞车（P 小到 2P/3 < 200）时**地板胜出**，见 RIGHT_PANEL_WIDTH_FLOOR。
+ * 地板与上限撞车（P 小到 2P/3 < 260）时**地板胜出**，见 RIGHT_PANEL_WIDTH_FLOOR。
  * `paneTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 P 去夹。
  */
 export function clampRightPanelWidth(width: number, paneTotal: number): number {

@@ -157,7 +157,7 @@ export function McpPanel(props: {
           {/* 原先铺在列表底部的两段说明（重载语义、工作区限定）收进「?」（右栏统一） */}
           <PanelHelp label={t.mcp.helpLabel} text={`${t.mcp.reloadNote} ${t.mcp.workspaceHint}`} />
           <PanelIconButton title={t.mcp.addServer} onClick={() => setAdding(true)}>
-            <Icon name="plus" size={16} />
+            <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
           {/* 低频的两件（编辑 mcp.json、重新加载）收进「更多」：320 宽的面板标题行
               放不下过滤框 + 四颗键（右栏统一验收实测 + 被挤出视野） */}
@@ -600,11 +600,9 @@ function AddServerForm(props: {
       header={
         <>
           <PanelIconButton title={t.mcp.backToList} onClick={props.onCancel}>
-            <Icon name="chevron-left" size={16} />
+            <Icon name="chevron-left" size={16} strokeWidth={2} />
           </PanelIconButton>
-          <strong style={{ fontSize: "var(--font-size-base)", fontWeight: "var(--weight-semibold)" }}>
-            {t.mcp.addServer}
-          </strong>
+          <strong className="cap-title">{t.mcp.addServer}</strong>
         </>
       }
       footer={

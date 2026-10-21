@@ -102,27 +102,9 @@ export function SettingsView(props: {
         height: "100%",
         minHeight: 0,
         display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr)",
+        gridTemplateRows: "minmax(0,1fr)",
       }}
     >
-      {/* 与聊天页同一个页头形状——同一张卡，页头就该长一样，拖拽区也一样 */}
-      <header
-        className="titlebar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          minWidth: 0,
-          // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
-          height: 48,
-          padding: "0 18px",
-          boxSizing: "border-box",
-          borderBottom: "1px solid var(--color-border-subtle)",
-        }}
-      >
-        <strong style={{ fontSize: "var(--font-size-lg)", fontWeight: "var(--weight-bold)" }}>
-          {t.settings.tabs[active.id]}
-        </strong>
-      </header>
 
       {migrationVisited ? (
         // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；

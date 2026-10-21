@@ -163,11 +163,11 @@ export function FilePreviewPane(props: {
           <div className="file-preview-actions">
             {webPage && (
               <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
-                <Icon name="globe" size={16} />
+                <Icon name="globe" size={16} strokeWidth={1.8} />
               </PanelIconButton>
             )}
             <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
-              <Icon name={copied ? "check" : "copy"} size={16} />
+              <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
             </PanelIconButton>
             <PanelIconButton
               title={t.files.refreshPreview}
@@ -176,7 +176,7 @@ export function FilePreviewPane(props: {
                 if (pdf) setPdfReload((n) => n + 1);
               }}
             >
-              <Icon name="refresh-cw" size={16} spin={loading} />
+              <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
             </PanelIconButton>
           </div>
         )}

@@ -235,8 +235,14 @@ smoothing), so body sits at 450 — still one step below the 500 controls weight
 thinking-level labels in the composer bar are set *italic* at secondary grey — the only italic in
 the UI.
 
-**Layout.** A fixed shell: left sidebar (288px, collapsing to a 48px icon rail), conversation pane,
-a 32px action rail for session actions, right drawer (320px, **closed by default**). Both sidebars
+**Layout.** A fixed shell: a full-width top toolbar (52px, capsules only — see Implementation
+rules), below it left sidebar (288px; collapsing it removes it entirely — no icon rail, the toggle lives
+in the toolbar's left capsule, 2026-10-19), conversation pane,
+a 32px action rail for session actions, right drawer (320px, **closed by default**). Every top row
+(sidebar wordmark, conversation / settings / panel headers, the right rail's first slot) shares one
+height — `--titlebar-row`, 26px — centred on the traffic-light line (macOS lights at y 19–31;
+the row centre and the lights' centre are the same horizontal line, Windows included for cross-platform
+consistency). The window's top chrome is the one regulated toolbar (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
@@ -388,6 +394,28 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
   follow their parent and are allowed.
 - Learned from ZCode's `text-ui-*` scale (2026-10); our `xs` is base − 3, not − 4 — 10px CJK is
   below comfortable reading.
+
+**The top toolbar is one regulated zone (顶部工具栏，方案 B v2, 2026-10-19).** The window's top is a
+single 52px toolbar (`.toolbar`, `--titlebar-row`) spanning the full width on the card, outside every
+content card — the whole strip is the drag region and **its direct children are capsules only**
+(`.toolbar-capsule`, the material-chip face: full radius · `--glass-bg` · `--shadow-border`); Windows'
+own min / max / close group (`.win-ctl`) is the one declared exception. Every capsule shares the height
+`--titlebar-capsule` (32 = `--control-height-md`) and sits at `--titlebar-capsule-top` (9) so the capsule
+**centre is the traffic-light centre line, y = 25** (`trafficLightPosition` stays at `{x:18, y:19}`, user
+ruling: move our chrome to the lights, never the lights). Inside capsules everything comes from tokens:
+cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons `--titlebar-icon` (16),
+titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
+Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
+the session capsule (address-bar layout, fixed 480 shrinking to fit, centred on the conversation column,
+min 12 from its neighbours), the right-panel capsule (left edge pinned to the panel divider, width =
+`--right-panel-w`; panel headers portal into it; below 300 the filter collapses to a search cell),
+and the right-panel toggle. Cards start at y=52 — conversation / settings cards have **no header row**
+(session info lives in the session capsule; panel headers live in the right-panel capsule), and the
+sidebar has neither wordmark row nor big New-task button: the wordmark sits at the bottom of the usage
+column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 80 darwin / 12 otherwise;
+session capsule centring and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
+lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
+and the toolbar's direct children are capsules.
 
 **Trailing edges sit on the row's right hem.** A row / card / list item's trailing
 element — a status mark, footnote, count or timestamp — pins its right edge to the row's right

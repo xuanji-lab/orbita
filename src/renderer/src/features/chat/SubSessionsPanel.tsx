@@ -13,7 +13,8 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
@@ -22,6 +23,7 @@ import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { ToolbarPanelSlotContext } from "../../shell/Toolbar";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
@@ -94,64 +96,45 @@ export function SubSessionsPanel(props: {
     const childId = props.nav.sessionId;
     const child = children.find((meta) => meta.id === childId);
     const status = subSessionStatusOf(childId, summaries.get(childId)?.status, props.engine);
+    const toolbarSlot = useContext(ToolbarPanelSlotContext);
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div
-          className="titlebar"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            minWidth: 0,
-            // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
-            height: 48,
-            padding: "0 14px",
-            boxSizing: "border-box",
-            borderBottom: "1px solid var(--color-border-subtle)",
-          }}
-        >
-          <PanelIconButton title={t.subSessions.back} onClick={props.onBackToList}>
-            <Icon name="arrow-left" size={16} />
-          </PanelIconButton>
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "var(--space-1)",
-              minWidth: 0,
-              fontSize: "var(--font-size-sm)",
-              color: STATUS_COLOR[status],
-            }}
-          >
-            <Icon
-              name={STATUS_ICON[status]}
-              size={12}
-              strokeWidth={1.8}
-              spin={status === "running"}
-            />
-            {t.subSessions.rowStatus[status]}
-          </span>
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={() => props.onOpenAsMain(childId)}
-            title={t.subSessions.openAsMainTip}
-            style={{
-              flex: "0 0 auto",
-              height: 24,
-              padding: "0 var(--space-2)",
-              border: "1px solid var(--color-border-default)",
-              borderRadius: "var(--radius-sm)",
-              background: "transparent",
-              color: "var(--color-text-secondary)",
-              font: "inherit",
-              fontSize: "var(--font-size-sm)",
-              cursor: "pointer",
-            }}
-          >
-            {t.subSessions.openAsMain}
-          </button>
-        </div>
+        {toolbarSlot !== null &&
+          createPortal(
+            <div className="cap-panel-content" key={`subsessions:${childId}`}>
+              <PanelIconButton title={t.subSessions.back} onClick={props.onBackToList}>
+                <Icon name="arrow-left" size={16} strokeWidth={2} />
+              </PanelIconButton>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "var(--space-1)",
+                  minWidth: 0,
+                  fontSize: "var(--font-size-sm)",
+                  color: STATUS_COLOR[status],
+                }}
+              >
+                <Icon
+                  name={STATUS_ICON[status]}
+                  size={12}
+                  strokeWidth={1.8}
+                  spin={status === "running"}
+                />
+                {t.subSessions.rowStatus[status]}
+              </span>
+              <span className="cap-grow" />
+              <button
+                type="button"
+                className="cap-sel no-drag"
+                onClick={() => props.onOpenAsMain(childId)}
+                title={t.subSessions.openAsMainTip}
+              >
+                {t.subSessions.openAsMain}
+              </button>
+            </div>,
+            toolbarSlot,
+          )}
         {/* 用户对子会话的控制行（用户裁决：mode / 模型 / 终止都归用户，不归父模型）。
             key 按子会话 id：换一条就把确认步 / 错误行复位 */}
         {child !== undefined && (
