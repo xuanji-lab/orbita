@@ -50,6 +50,7 @@ import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { withOpencodeSession } from "./opencode-session.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
@@ -567,12 +568,14 @@ async function setSessionModel(
   modelId: string,
 ): Promise<void> {
   try {
-    const model = registerAndResolveModel(session.modelRuntime, provider, modelId);
+    // 同一套会话头注入（OpenCode Go）：换模型后新模型也要带本会话 id
+    const scoped = withOpencodeSession(provider, sessionId);
+    const model = registerAndResolveModel(session.modelRuntime, scoped, modelId);
     if (model === undefined) {
-      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+      throw new Error(`unknown model "${scoped.id}/${modelId}"`);
     }
     await session.setModel(model);
-    updateLedgerAuth(sessionId, provider);
+    updateLedgerAuth(sessionId, scoped);
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -594,12 +597,15 @@ async function setLedgerModel(
   modelId: string,
 ): Promise<void> {
   try {
+    // 同一套会话头注入，与 setSessionModel 对称：落账的鉴权面（generateTitle 用）也要带
+    // 本会话 id——不包的话，下一次 openTurn 覆盖之前标题调用会发回静态占位头
+    const scoped = withOpencodeSession(provider, sessionId);
     const runtime = await ModelRuntime.create({});
-    const model = registerAndResolveModel(runtime, provider, modelId);
+    const model = registerAndResolveModel(runtime, scoped, modelId);
     if (model === undefined) {
-      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+      throw new Error(`unknown model "${scoped.id}/${modelId}"`);
     }
-    updateLedgerAuth(sessionId, provider);
+    updateLedgerAuth(sessionId, scoped);
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -846,11 +852,15 @@ interface TurnImageBudget {
  *   里，压完轮还在，发 idle 会让 renderer 误投递）。
  */
 async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<OpenedTurn> {
+  // OpenCode Go 的会话头按会话注入：配置里的值是占位，pi 自己发的正确值会被它盖掉
+  // （合并顺序：配置头最后覆盖）。标题走 note.headers，所以必须在落账之前包。
+  // 官方 DeepSeek 的 baseUrl 不是 opencode.ai，原对象返回，行为一字不变。
+  const provider = withOpencodeSession(command.provider, command.sessionId);
   const note = ledgerNote(command.sessionId);
   note.mode = command.mode;
-  note.apiKey = command.provider.apiKey;
-  if (command.provider.headers === undefined) delete note.headers;
-  else note.headers = command.provider.headers;
+  note.apiKey = provider.apiKey;
+  if (provider.headers === undefined) delete note.headers;
+  else note.headers = provider.headers;
 
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
@@ -860,9 +870,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 注册与解析的完整规则（auth 面 → 补注册兜底）抽在 model-registration，
    * 会话内换模型（C-4）走同一条路径——两处的「能不能用某个模型」必须是一套真相。
    */
-  const model = registerAndResolveModel(modelRuntime, command.provider, command.modelId);
+  const model = registerAndResolveModel(modelRuntime, provider, command.modelId);
   if (model === undefined) {
-    throw new Error(`unknown model "${command.provider.id}/${command.modelId}"`);
+    throw new Error(`unknown model "${provider.id}/${command.modelId}"`);
   }
 
   /**
