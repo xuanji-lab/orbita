@@ -25,6 +25,7 @@ import {
   quotaProblemText,
   snapshotOf,
   usedPercent,
+  windowLabel,
   windowValueText,
 } from "./quota-view.ts";
 
@@ -171,7 +172,7 @@ function QuotaFacts(props: { snapshot: QuotaSnapshot; now: number }) {
             return (
               <div className="q-win" key={window.id} data-tone={percent >= 100 ? "spent" : undefined}>
                 <div className="q-win-top">
-                  <span className="q-label">{window.label}</span>
+                  <span className="q-label">{windowLabel(window, t)}</span>
                   <span className="q-value">{windowValueText(window, now, t)}</span>
                 </div>
                 <span className="quota-bar q-bar" aria-hidden data-spent={percent >= 100 ? "true" : undefined}>

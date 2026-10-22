@@ -1401,6 +1401,15 @@ export const en = {
     checkNow: "Check now",
     // 数字后面永远带 used：条本身方向中性，靠这个词钉住「左段 = 已用」
     usedUnit: "used",
+    /**
+     * 窗口的语义类别（`QuotaWindow.kind`）。智谱 / Kimi 只给机器字段、没有给人读的标签，
+     * 英文 label 不能直接出现在中文界面——两处窗口名都走 `windowLabel` 取这一份。
+     */
+    windowKind: {
+      "5h": "5-hour window",
+      weekly: "Weekly",
+      monthly: "Monthly",
+    },
     resetsIn: (duration: string) => `resets in ${duration}`,
     justNow: "just now",
     minutesAgo: (n: number) => `${n} min ago`,

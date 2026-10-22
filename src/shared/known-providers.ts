@@ -197,6 +197,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
+    // 按量计费的 API 没有实证过的余额端点（"zhipu" 条目故意不声明 quota）：不猜
     note: "智谱开放平台标准 API（按 token 计费）",
   },
   {
@@ -220,6 +221,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
     billing: "plan",
+    /**
+     * 套餐额度：`{origin}/api/monitor/usage/quota/limit`——**网页控制台在用的内部接口**
+     * （不是公开契约，厂商改版就失效）。鉴权要**裸 key**，带 `Bearer` 直接 401。
+     */
+    quota: "plan-windows",
     modelParams: {
       /**
        * pi 的 `zai-coding-cn` 目录里没有 flash（只到 glm-5.3），
@@ -251,6 +257,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogId: "zai",
     // 端点就是 `/coding/paas/`——与国内站 Coding Plan 同一套餐制
     billing: "plan",
+    // 套餐额度：与国内站同一个后端（`/api/monitor/usage/quota/limit`），内部接口，裸 key
+    quota: "plan-windows",
     note: "智谱国际站的 GLM Coding Plan，与国内站账号不通用",
   },
   {
@@ -312,6 +320,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://api.kimi.com/coding",
     catalogId: "kimi-coding",
     billing: "plan",
+    // 套餐额度：`/coding/v1/usages`（会员网页控制台的内部接口），Bearer 鉴权
+    quota: "plan-windows",
     note: "Kimi Code 会员订阅，走 Anthropic 兼容端点",
   },
   {

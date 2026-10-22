@@ -11,6 +11,7 @@ import {
   quotaMenuItems,
   resetLabel,
   usedPercent,
+  windowLabel,
   windowValueText,
 } from "./quota-view.ts";
 import { en } from "../../messages-en.ts";
@@ -128,6 +129,35 @@ const okResult = (snapshot: { credits?: { amount: string; currency: string }; wi
 });
 
 const labels = (items: ReturnType<typeof quotaMenuItems>) => items.map((item) => item.label);
+
+describe("窗口名 —— 已知语义类别就本地化", () => {
+  test("kind 已知 → 本地化文案（中文界面不能出现英文 label）", () => {
+    assert.equal(windowLabel(window({ kind: "5h" }), zh), "5 小时");
+    assert.equal(windowLabel(window({ kind: "weekly" }), zh), "每周");
+    assert.equal(windowLabel(window({ kind: "monthly" }), zh), "每月");
+    assert.equal(windowLabel(window({ kind: "5h" }), en), "5-hour window");
+  });
+
+  test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {
+    assert.equal(windowLabel(window({ kind: "custom", label: "TOKENS_LIMIT" }), zh), "TOKENS_LIMIT");
+    assert.equal(windowLabel(window({ label: "45m" }), zh), "45m");
+  });
+
+  test("环菜单与设置页同一口径：菜单行也用本地化后的名字", () => {
+    const items = quotaMenuItems(
+      okResult({
+        windows: [{ id: "tokens_limit:6:1", label: "Weekly", kind: "weekly", usedPercent: 30 }],
+        fetchedAt: NOW,
+      }),
+      "plan-windows",
+      false,
+      zh,
+      undefined,
+      () => undefined,
+    );
+    assert.deepEqual(labels(items), ["账户", "每周", "刚刚查过"]);
+  });
+});
 
 describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
   test("能力为 none：整段不出现（连标题都没有）", () => {

@@ -1296,6 +1296,12 @@ export const zh: Messages = {
     notCheckedYet: "还没有查过。",
     checkNow: "立即查询",
     usedUnit: "已用",
+    // 窗口的语义类别：中文界面必须纯中文，不能直接显示厂商的英文 label
+    windowKind: {
+      "5h": "5 小时",
+      weekly: "每周",
+      monthly: "每月",
+    },
     resetsIn: (duration) => `${duration} 后重置`,
     justNow: "刚刚",
     minutesAgo: (n) => `${n} 分钟前`,

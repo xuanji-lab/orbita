@@ -9,7 +9,7 @@
  *
  * 方向只有 `usedPercent`（已用）一个：智谱 / codex 的原始口径都是「已用」，
  * 界面上数字后面永远带 `used`，条本身方向中性（见 decisions 第 6 条）。
- * 厂商原文标签（「5-hour window」「Weekly」）不翻译——它们不是同一件事。
+ * 窗口标签不跨语言：已知语义类别（`kind`）由渲染层本地化，认不出的才用厂商原文。
  */
 
 /** 这一家能不能查额度，以及查的是哪一类。声明在 `known-providers.ts` 的条目上 */
@@ -32,11 +32,26 @@ export interface QuotaCredits {
   toppedUp?: string;
 }
 
+export type QuotaWindowKind = "5h" | "weekly" | "monthly" | "custom";
+
 export interface QuotaWindow {
-  /** 厂商侧窗口 id（如 `tokens:3:5`），稳定、可作 React key */
+  /** 厂商侧窗口 id（如 `tokens_limit:3:5`、`usage`），稳定、可作 React key */
   id: string;
-  /** 厂商原文标签，不翻译（「5-hour window」/「Weekly」不是同一件事） */
+  /**
+   * 窗口名的**原文兜底**，不翻译。已知 `kind` 时它是一个稳定的英文名
+   * （`5-hour window` / `Weekly`），渲染层会按 `kind` 换成中文；`custom` 时它就是
+   * 厂商的机器字段原文（`TOKENS_LIMIT`、`45m`）——翻译不了的就原样。
+   */
   label: string;
+  /**
+   * 窗口的**语义类别**：由我们自己从厂商字段推出来（智谱只给 type/unit/number，
+   * Kimi 只给 duration + timeUnit），**厂商没有给人读的标签**。
+   *
+   * 为什么不能只靠 `label`：这些标签是英文的，而中文界面必须纯中文。渲染层优先按
+   * `kind` 取本地化文案（`windowLabel`），`label` 只是认不出 `kind`（`custom`）时
+   * 的原文兜底。缺省不写 = 旧快照 / 余额类，行为等同 `custom`。
+   */
+  kind?: QuotaWindowKind;
   /** 已用百分比 0–100。**方向只有这一个** */
   usedPercent: number;
   /** 窗口长度（分钟）。厂商没给就不写 */

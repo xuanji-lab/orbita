@@ -133,12 +133,16 @@ describe("isPlanBilling —— 两句话不能混", () => {
 });
 
 describe("knownProviderQuota —— 谁有可查的额度", () => {
-  it("只有 DeepSeek 声明了余额（公开文档接口）", () => {
+  it("DeepSeek 是余额（公开文档接口）；三家 coding plan 是套餐窗口（控制台内部接口）", () => {
     assert.equal(knownProviderQuota(p("deepseek")), "balance");
+    for (const id of ["zhipu-coding", "zai", "kimi-coding"]) {
+      assert.equal(knownProviderQuota(p(id)), "plan-windows", id);
+    }
   });
 
   it("其余条目缺省是 none（整块不渲染，不留「—」）", () => {
-    for (const id of ["zhipu", "zhipu-coding", "zai", "kimi-coding", "stepfun", "opencode-go"]) {
+    // 智谱标准 API（按量）没有实证过的余额端点：不声张，不猜
+    for (const id of ["zhipu", "stepfun", "opencode-go", "claude"]) {
       assert.equal(knownProviderQuota(p(id)), "none", id);
     }
   });
