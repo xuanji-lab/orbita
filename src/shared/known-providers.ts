@@ -336,6 +336,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     headers: { "x-opencode-session": "orbita" },
     // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
     billing: "plan",
+    /**
+     * 订阅窗口：`/zen/go/v1/usage`——推理网关自己的路由，**官方文档没写**（只说去 console
+     * 看用量）。能用但未文档化：厂商改版会静默失效。Bearer 鉴权，与推理共用同一把 key。
+     */
+    quota: "plan-windows",
     note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {

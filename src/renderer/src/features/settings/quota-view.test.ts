@@ -145,6 +145,11 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
     assert.notEqual(windowLabel(window({ kind: "mcp" }), zh), windowLabel(window({ kind: "monthly" }), zh));
   });
 
+  test("OpenCode Go 的滚动窗：不是 5 小时，也不是每月", () => {
+    assert.equal(windowLabel(window({ kind: "rolling", label: "Rolling window" }), zh), "滚动窗口");
+    assert.equal(windowLabel(window({ kind: "rolling", label: "Rolling window" }), en), "Rolling window");
+  });
+
   test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {
     assert.equal(windowLabel(window({ kind: "custom", label: "TOKENS_LIMIT" }), zh), "TOKENS_LIMIT");
     assert.equal(windowLabel(window({ label: "45m" }), zh), "45m");

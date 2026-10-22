@@ -539,3 +539,91 @@ describe("probeQuota —— Kimi Code 的套餐窗口", () => {
     assert.equal(stub.calls.length, 0);
   });
 });
+
+const opencodeInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput => ({
+  probe: "plan-windows",
+  kind: "opencode-go",
+  baseUrl: "https://opencode.ai/zen/go/v1",
+  apiKey: "sk-oc",
+  ...overrides,
+});
+
+describe("probeQuota —— OpenCode Go 的订阅窗口", () => {
+  test("三窗口齐全：kind / 已用百分比 / 重置时刻；URL 与 Bearer 鉴权", async () => {
+    const stub = stubFetch(() =>
+      okBody({
+        usage: {
+          rolling: { status: "ok", percent: 42, resetsAt: "2026-10-23T05:00:00Z" },
+          weekly: { status: "ok", percent: 7.5, resetsAt: "2026-10-27T00:00:00.000Z" },
+          monthly: { status: "ok", percent: 0 },
+        },
+      }),
+    );
+    const result = await probeQuota(opencodeInput());
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
+      { id: "rolling", label: "Rolling window", kind: "rolling", usedPercent: 42, resetsAt: Date.parse("2026-10-23T05:00:00Z") },
+      { id: "weekly", label: "Weekly", kind: "weekly", usedPercent: 7.5, resetsAt: Date.parse("2026-10-27T00:00:00.000Z") },
+      // 没有 resetsAt 就不造一个
+      { id: "monthly", label: "Monthly", kind: "monthly", usedPercent: 0 },
+    ]);
+    assert.equal(stub.calls[0]?.url, "https://opencode.ai/zen/go/v1/usage");
+    assert.equal(headersOf(stub.calls[0]).Authorization, "Bearer sk-oc");
+    assert.equal(headersOf(stub.calls[0]).Accept, "application/json");
+  });
+
+  test("只有 weekly 就只报一个窗口，不补别的", async () => {
+    stubFetch(() => okBody({ usage: { weekly: { status: "ok", percent: 12, resetsAt: "2026-10-27T00:00:00Z" } } }));
+    const result = await probeQuota(opencodeInput());
+    assert.deepEqual(
+      (result.status === "ok" ? result.snapshot.windows : []).map((window) => window.id),
+      ["weekly"],
+    );
+  });
+
+  test("percent 缺了跳过该窗口（不写 0%）；status 不参与计算（rate-limited 也照收）", async () => {
+    stubFetch(() =>
+      okBody({
+        usage: {
+          rolling: { status: "rate-limited", percent: 100, resetsAt: "2026-10-23T05:00:00Z" },
+          weekly: { status: "rate-limited" },
+          monthly: null,
+        },
+      }),
+    );
+    const result = await probeQuota(opencodeInput());
+    const windows = result.status === "ok" ? result.snapshot.windows : [];
+    assert.deepEqual(
+      windows.map((window) => [window.id, window.usedPercent]),
+      [["rolling", 100]],
+    );
+  });
+
+  test("401 → auth；403 → unsupported（没订阅 / 凭据不合法，不是钥匙错）；404 → protocol", async () => {
+    stubFetch(() => new Response("{}", { status: 401 }));
+    assert.deepEqual(await probeQuota(opencodeInput()), { status: "error", reason: "auth", cached: null });
+
+    stubFetch(() => new Response("{}", { status: 403 }));
+    assert.deepEqual(await probeQuota(opencodeInput()), {
+      status: "error",
+      reason: "unsupported",
+      cached: null,
+    });
+
+    stubFetch(() => new Response("not found", { status: 404 }));
+    assert.deepEqual(await probeQuota(opencodeInput()), { status: "error", reason: "protocol", cached: null });
+  });
+
+  test("5xx / 连不上 → network；结构不认 → protocol", async () => {
+    stubFetch(() => new Response("oops", { status: 502 }));
+    assert.deepEqual(await probeQuota(opencodeInput()), { status: "error", reason: "network", cached: null });
+
+    stubFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    assert.deepEqual(await probeQuota(opencodeInput()), { status: "error", reason: "network", cached: null });
+
+    stubFetch(() => okBody({ usage: {} }));
+    assert.deepEqual(await probeQuota(opencodeInput()), { status: "error", reason: "protocol", cached: null });
+  });
+});

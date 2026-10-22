@@ -38,6 +38,8 @@ const KIND_LABELS = {
   monthly: "Monthly",
   // MCP 工具额度：与 token 窗口不是同一种东西，标签必须分开
   mcp: "MCP monthly",
+  // 滚动窗：厂商没给长度，不能当 5 小时标（那是智谱的说法）
+  rolling: "Rolling window",
 } as const;
 
 function failure(reason: QuotaFailure): QuotaResult {
@@ -106,7 +108,16 @@ interface FetchFail {
 }
 
 /** 一次 GET + JSON 解析，把 HTTP 状态压成四类原因（分类口径与 DeepSeek 那条一致） */
-async function fetchJson(url: string, headers: Record<string, string>): Promise<FetchOk | FetchFail> {
+/**
+ * 一次 GET + JSON 解析，把 HTTP 状态压成四类原因（分类口径与 DeepSeek 那条一致）。
+ * `forbidden` 让调用方覆盖 403 的分类：OpenCode Go 用 403 表示「没订阅 / 凭据不合法」，
+ * 那与「钥匙填错了」不是同一件要用户做的事。
+ */
+async function fetchJson(
+  url: string,
+  headers: Record<string, string>,
+  forbidden: QuotaFailure = "auth",
+): Promise<FetchOk | FetchFail> {
   let response: Response;
   try {
     response = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -114,7 +125,8 @@ async function fetchJson(url: string, headers: Record<string, string>): Promise<
     // 超时、DNS、TLS、连接被拒：都归 network——用户能做的是稍后再试
     return { ok: false, reason: "network", retryable: true };
   }
-  if (response.status === 401 || response.status === 403) return { ok: false, reason: "auth", retryable: false };
+  if (response.status === 401) return { ok: false, reason: "auth", retryable: false };
+  if (response.status === 403) return { ok: false, reason: forbidden, retryable: false };
   if (response.status === 404) return { ok: false, reason: "protocol", retryable: true };
   if (!response.ok) return { ok: false, reason: "network", retryable: response.status >= 500 };
   try {
@@ -480,6 +492,71 @@ async function probeKimi(origin: string, apiKey: string): Promise<QuotaResult> {
 }
 
 /* ------------------------------------------------------------------ *
+ * OpenCode Go：订阅的三个用量窗口
+ * ------------------------------------------------------------------ */
+
+/** 固定顺序（也是 id）：厂商没给顺序，界面每次打开不应该换行 */
+const OPENCODE_WINDOW_IDS = ["rolling", "weekly", "monthly"] as const;
+
+/**
+ * 把 `/zen/go/v1/usage` 的响应翻成窗口。
+ *
+ * ⚠ 这个端点是**推理网关自己的路由，官方文档没写**（文档只说「去 console 看用量」），
+ * 属于「能用但未文档化」：厂商改版就静默失效，所以上层必须能把它当失败藏起来。
+ *
+ * 三条纪律：
+ *   - 三个窗口**不是每个都在**（按订阅类型），缺哪个跳过哪个，不补 0%；
+ *   - `percent` 是**已用**，直接作 `usedPercent`；超过 100 不在这里夹（渲染层已经夹过）；
+ *   - `status`（`ok` / `rate-limited`）**不折成百分比、不参与计算**：数字以 `percent` 为准。
+ *     「rate-limited 就不算可用」这个判断**还没在真机验证**，先照原样收下不据它过滤。
+ */
+export function parseOpenCodeUsage(body: unknown, fetchedAt: number): ParseOutcome {
+  const record = asRecord(body);
+  if (record === null) return { ok: false, reason: "protocol" };
+  const usage = asRecord(record.usage);
+  if (usage === null) return { ok: false, reason: "protocol" };
+
+  const windows: QuotaWindow[] = [];
+  for (const id of OPENCODE_WINDOW_IDS) {
+    const entry = asRecord(usage[id]);
+    if (entry === null) continue;
+    const percent = asNumber(entry.percent);
+    // 缺 percent（或不是数）= 这一项没有可展示的数字，跳过，不写 0% 冒充
+    if (percent === undefined) continue;
+    const resetsAt = asTimestamp(entry.resetsAt);
+    windows.push({
+      id,
+      label: KIND_LABELS[id],
+      kind: id,
+      usedPercent: percent,
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    });
+  }
+  if (windows.length === 0) return { ok: false, reason: "protocol" };
+  return parsed(windows, fetchedAt);
+}
+
+async function probeOpenCode(origin: string, apiKey: string): Promise<QuotaResult> {
+  // baseUrl 是 `https://opencode.ai/zen/go/v1`；路径从 origin 拼回来，与 Kimi 同一手法
+  let url: string;
+  try {
+    url = new URL("/zen/go/v1/usage", origin).toString();
+  } catch {
+    return failure("protocol");
+  }
+  const attempt = await fetchJson(
+    url,
+    { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+    // 403：源码里 `EntitlementError` 的语义——没订阅 / 凭据不合法，要用户换账号而不是换钥匙
+    "unsupported",
+  );
+  if (!attempt.ok) return failure(attempt.reason);
+  const outcome = parseOpenCodeUsage(attempt.body, Date.now());
+  if (!outcome.ok) return failure(outcome.reason);
+  return { status: "ok", snapshot: outcome.snapshot, fromCache: false };
+}
+
+/* ------------------------------------------------------------------ *
  * 分发
  * ------------------------------------------------------------------ */
 
@@ -510,6 +587,8 @@ export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
       return probeZhipu(origin, input.apiKey, ZAI_FALLBACKS);
     case "kimi-coding":
       return probeKimi(origin, input.apiKey);
+    case "opencode-go":
+      return probeOpenCode(origin, input.apiKey);
     default:
       // 能力声明了但这家还没接：不猜端点
       return failure("unsupported");
