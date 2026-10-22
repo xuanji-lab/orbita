@@ -1283,6 +1283,7 @@ export const zh: Messages = {
     unknownUntilReply: "下次回复后可知",
     cost: "费用",
     speed: (n) => `${n} tok/s`,
+    emptyUsage: "本会话还没有用量",
   },
 
   /** 厂商账号额度（与 en.quota 同一套键：两个面共用一套说法） */

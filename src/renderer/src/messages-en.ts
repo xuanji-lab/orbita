@@ -1383,6 +1383,8 @@ export const en = {
     unknownUntilReply: "unknown until next reply",
     cost: "Cost",
     speed: (n: number) => `${n} tok/s`,
+    /** 新会话还没有任何用量时，环菜单里占住「本会话这段」的位置（否则额度段凭空冒出来） */
+    emptyUsage: "No usage in this session yet",
   },
 
   /**

@@ -2467,13 +2467,18 @@ function UsageRing(props: { session: ChatSession }) {
   const freshTokens =
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
+  const usageRows = usageBreakdown(stats, t, billing);
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
-      id: row.label,
-      label: row.label,
-      hint: row.value,
-      fact: true,
-    })),
+    // 新会话还没有用量：在「本会话」那一段原来的位置上留一行事实，否则菜单里第一个
+    // 出现的就是下方的额度段，读起来像原来的用量被换掉了（用户 2026-10-23 反馈）。
+    ...(usageRows.length === 0
+      ? [{ id: "usage-empty", label: t.stats.emptyUsage, fact: true } satisfies MenuItem]
+      : usageRows.map((row): MenuItem => ({
+          id: row.label,
+          label: row.label,
+          hint: row.value,
+          fact: true,
+        }))),
     ...quotaMenuItems(quota, quotaProbe, quotaBusy, t, () => void loadQuota(true)),
     ...(confirming
       ? [
