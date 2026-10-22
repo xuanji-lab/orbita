@@ -2479,7 +2479,7 @@ function UsageRing(props: { session: ChatSession }) {
           hint: row.value,
           fact: true,
         }))),
-    ...quotaMenuItems(quota, quotaProbe, quotaBusy, t, () => void loadQuota(true)),
+    ...quotaMenuItems(quota, quotaProbe, quotaBusy, t, provider?.displayName, () => void loadQuota(true)),
     ...(confirming
       ? [
           {

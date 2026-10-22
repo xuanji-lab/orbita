@@ -129,27 +129,36 @@ const okResult = (snapshot: { credits?: { amount: string; currency: string }; wi
 
 const labels = (items: ReturnType<typeof quotaMenuItems>) => items.map((item) => item.label);
 
- describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
+describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
   test("能力为 none：整段不出现（连标题都没有）", () => {
-    assert.deepEqual(quotaMenuItems(null, "none", false, en, () => undefined), []);
+    assert.deepEqual(quotaMenuItems(null, "none", false, en, undefined, () => undefined), []);
   });
 
   test("从未查过：标题 + 事实行 + 立即查询（作战行可点）", () => {
-    const items = quotaMenuItems(null, "balance", false, en, () => undefined);
+    const items = quotaMenuItems(null, "balance", false, en, undefined, () => undefined);
     assert.deepEqual(labels(items), ["Account", "Not checked yet.", "Check now"]);
     assert.equal(items[0]?.header, true);
     assert.equal(items[1]?.fact, true);
     assert.equal(items[2]?.disabled, false);
   });
 
+  test("分组头带实例显示名：余额不会说不清是谁的（同一家加两次也能区分）", () => {
+    const named = quotaMenuItems(null, "balance", false, en, "DeepSeek 2", () => undefined);
+    assert.equal(named[0]?.header, true);
+    assert.equal(named[0]?.hint, "DeepSeek 2");
+    // 不传 / 空串就只是普通标题，不造一个空 hint
+    assert.equal("hint" in (quotaMenuItems(null, "balance", false, en, undefined, () => undefined)[0] ?? {}), false);
+    assert.equal("hint" in (quotaMenuItems(null, "balance", false, en, "", () => undefined)[0] ?? {}), false);
+  });
+
   test("查询中（用户刚点的）：标签换成正在查询且禁用，不出转圈", () => {
-    const items = quotaMenuItems(null, "balance", true, en, () => undefined);
+    const items = quotaMenuItems(null, "balance", true, en, undefined, () => undefined);
     assert.equal(items.at(-1)?.label, "Checking…");
     assert.equal(items.at(-1)?.disabled, true);
   });
 
   test("没有旧值时的失败：说清分类，不冒充 0", () => {
-    const items = quotaMenuItems({ status: "error", reason: "network", cached: null }, "balance", false, en, () => undefined);
+    const items = quotaMenuItems({ status: "error", reason: "network", cached: null }, "balance", false, en, undefined, () => undefined);
     assert.deepEqual(labels(items), ["Account", "Couldn't refresh (network error).", "Check now"]);
   });
 
@@ -163,6 +172,7 @@ const labels = (items: ReturnType<typeof quotaMenuItems>) => items.map((item) =>
       "balance",
       false,
       en,
+      undefined,
       () => undefined,
     );
     assert.deepEqual(labels(items), ["Account", "Balance", "5-hour window", "Checked 12 min ago"]);
@@ -181,6 +191,7 @@ const labels = (items: ReturnType<typeof quotaMenuItems>) => items.map((item) =>
       "balance",
       false,
       en,
+      undefined,
       () => undefined,
     );
     assert.equal(items.at(-1)?.label, "Couldn't refresh (unexpected response) · 12 min ago");

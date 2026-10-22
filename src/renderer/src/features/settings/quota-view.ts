@@ -142,19 +142,31 @@ export function snapshotOf(result: QuotaResult | null): QuotaSnapshot | null {
  *   - capability 为 none 时整段不出现（连标题也不留）；
  *   - **这一层不画 loading**：值只来自缓存；没有值时就给「立即查询」这一行动作。
  *     唯一的例外是用户刚点了它：那时把标签换成「正在查询」（文字，不是转圈）。
+ *
+ * `providerName` 是**实例显示名**（不是目录名）：用户可能把同一个厂商加两次并改名成
+ * 「DeepSeek 2」，而环卡里只有一行，「余额」不说自己是谁的余额就分不出来。
  */
 export function quotaMenuItems(
   result: QuotaResult | null,
   probe: QuotaProbe,
   busy: boolean,
   t: Messages,
+  providerName: string | undefined,
   onCheckNow: () => void,
 ): MenuItem[] {
   if (probe === "none") return [];
   const now = Date.now();
   const snapshot = snapshotOf(result);
   const failure = result !== null && result.status === "error" ? result.reason : null;
-  const items: MenuItem[] = [{ id: "quota-account", label: t.quota.account, header: true }];
+  const items: MenuItem[] = [
+    {
+      id: "quota-account",
+      label: t.quota.account,
+      header: true,
+      // 分组头带 hint：右缘写这家是谁（Menu 的 header 行本来就支持，不用改 Menu）
+      ...(providerName === undefined || providerName === "" ? {} : { hint: providerName }),
+    },
+  ];
 
   if (snapshot === null) {
     items.push({
