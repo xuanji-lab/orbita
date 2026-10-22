@@ -246,6 +246,18 @@ export function App() {
         ? null
         : { mode: "browse" as const, workspaceId: wsBrowse }
       : { mode: "focus" as const, workspaceId: focus.status.run.workspaceId };
+  /**
+   * 左栏双击打开请求只属于当时那个专注 / 浏览工作区：模式结束或换工作区后作废。
+   *
+   * 请求是一次性的，但面板收下后 token 仍留在 App——面板关掉再打开（FilesPanel
+   * 重挂、consumed 的 ref 清空）会再消费一次；那时该工作区的根已经不在 tree.roots 里，
+   * 于是报一句「<文件> 不在这个面板能看到的文件夹里」（2026-10-22 验收 #259 时实测）。
+   * 同一个工作区内重开面板不受影响（workspaceId 没变）。
+   */
+  const focusFilesWorkspaceId = focusFilesView?.workspaceId ?? null;
+  useEffect(() => {
+    setFileOpenRequest(null);
+  }, [focusFilesWorkspaceId]);
   /** 到点那一拍要响的事：提示音（设置可关）、窗口不在前台时发系统通知、收起的
    * 侧栏展开（星云要在左下角说话——原型待定 10 的默认做法）。依赖只盯 kind：
    * done 只发生一次，延长不会重响。 */
