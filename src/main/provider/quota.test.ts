@@ -239,14 +239,14 @@ describe("probeQuota —— 智谱 / Z.AI 的套餐窗口", () => {
     assert.equal(stub.calls[0]?.url, "https://open.bigmodel.cn/api/monitor/usage/quota/limit");
   });
 
-  test("只给 TIME_LIMIT → 每月窗（MCP），没有能确定的窗口长度就不写", async () => {
+  test("只给 TIME_LIMIT → MCP 工具的每月额度（不归到 token 的月窗口）", async () => {
     stubFetch(() =>
       okBody({ success: true, code: 200, data: { limits: [{ type: "TIME_LIMIT", unit: 5, number: 1, percentage: 12 }] } }),
     );
     const result = await probeQuota(planInput("zhipu-coding"));
     const windows = result.status === "ok" ? result.snapshot.windows : [];
     assert.deepEqual(windows, [
-      { id: "time_limit:5:1", label: "Monthly", kind: "monthly", usedPercent: 12 },
+      { id: "time_limit:5:1", label: "MCP monthly", kind: "mcp", usedPercent: 12 },
     ]);
   });
 
@@ -287,7 +287,7 @@ describe("probeQuota —— 智谱 / Z.AI 的套餐窗口", () => {
     });
   });
 
-  test("2026-10-23 真实响应（个人账号 max 档）：5 小时 0%、每周 25%、MCP 月 6%", async () => {
+  test("2026-10-23 真实响应（个人账号 max 档）：5 小时 0%、每周 25%、MCP 月 6%（三种不同语义）", async () => {
     // 原文来自 open.bigmodel.cn（Z.AI 国际站同一个后端，字段一致）
     stubFetch(() =>
       okBody({
@@ -321,7 +321,7 @@ describe("probeQuota —— 智谱 / Z.AI 的套餐窗口", () => {
       [
         ["5h", 0, undefined],
         ["weekly", 25, 1_792_950_771_999],
-        ["monthly", 6, 1_793_948_515_998],
+        ["mcp", 6, 1_793_948_515_998],
       ],
     );
     // percentage 是已用：MCP 那条 currentValue/usage = 250/4000 = 6.25% → 6

@@ -138,6 +138,13 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
     assert.equal(windowLabel(window({ kind: "5h" }), en), "5-hour window");
   });
 
+  test("MCP 月额度与套餐月窗口不是同一件事：两种 kind 两种文案", () => {
+    // 智谱的第三行是 MCP 工具的月额度，混写成「每月」会把两件事说成一件
+    assert.equal(windowLabel(window({ kind: "mcp", label: "MCP monthly" }), zh), "MCP 每月");
+    assert.equal(windowLabel(window({ kind: "mcp", label: "MCP monthly" }), en), "MCP monthly");
+    assert.notEqual(windowLabel(window({ kind: "mcp" }), zh), windowLabel(window({ kind: "monthly" }), zh));
+  });
+
   test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {
     assert.equal(windowLabel(window({ kind: "custom", label: "TOKENS_LIMIT" }), zh), "TOKENS_LIMIT");
     assert.equal(windowLabel(window({ label: "45m" }), zh), "45m");

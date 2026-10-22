@@ -36,6 +36,8 @@ const KIND_LABELS = {
   "5h": "5-hour window",
   weekly: "Weekly",
   monthly: "Monthly",
+  // MCP 工具额度：与 token 窗口不是同一种东西，标签必须分开
+  mcp: "MCP monthly",
 } as const;
 
 function failure(reason: QuotaFailure): QuotaResult {
@@ -208,7 +210,10 @@ const TEAM_HINT = /组织|团队|企业|organization|team|enterprise/i;
  *
  * 三条硬纪律：
  *   - 窗口**只按 `type + unit + number` 识别，绝不按数组下标猜**（ZCode 的做法）：
- *     `TOKENS_LIMIT,3,5` = 5 小时，`TOKENS_LIMIT,6` = 每周，`TIME_LIMIT` / `CREDIT_LIMIT` = 每月；
+ *     `TOKENS_LIMIT,3,5` = 5 小时，`TOKENS_LIMIT,6` = 每周，`TIME_LIMIT` = MCP 每月调用额度，
+ *     `CREDIT_LIMIT` = 账号的每月额度；
+ *   - **`MCP 每月` 与 token 窗口不是同一种额度，标签必须区分**（2026-10-23 验收时发现
+ *     两者都写成「每月」，界面读起来像同一类窗口）——下一个人改文案时不要再合并回去；
  *   - `percentage` 是**已用**，直接作 `usedPercent`；`remaining` / `usage` 是厂商的另一套数，
  *     不当唯一口径（不在这里再做第二次换算）；
  *   - 成功但 `limits` 是空数组 = 没有个人额度（团队账号的常态）→ unsupported，不是 0%。
@@ -268,8 +273,13 @@ function zhipuWindow(limit: Record<string, unknown> | null): QuotaWindow | null 
     kind = "weekly";
     label = KIND_LABELS.weekly;
     windowMinutes = 7 * 24 * 60;
-  } else if (type === "TIME_LIMIT" || type === "CREDIT_LIMIT") {
-    // TIME_LIMIT = MCP 每月额度；CREDIT_LIMIT 是 Z.AI 团队版的同一件事
+  } else if (type === "TIME_LIMIT") {
+    // MCP 工具的每月调用额度（usageDetails 里是 search-prime / web-reader 这些工具），
+    // **不是 token 套餐的月窗**：单独一类 mcp
+    kind = "mcp";
+    label = KIND_LABELS.mcp;
+  } else if (type === "CREDIT_LIMIT") {
+    // Z.AI 团队版的账号级额度，才是真正的「每月」窗口
     kind = "monthly";
     label = KIND_LABELS.monthly;
   }

@@ -32,7 +32,11 @@ export interface QuotaCredits {
   toppedUp?: string;
 }
 
-export type QuotaWindowKind = "5h" | "weekly" | "monthly" | "custom";
+/**
+ * 窗口的语义类别。`mcp` 与 `monthly` **不是同一种额度**：前者是 MCP 工具的每月调用额度，
+ * 后者是账号的每月 token / 信用额度——现界面上都写成「每月」就会把两件事说成一件。
+ */
+export type QuotaWindowKind = "5h" | "weekly" | "monthly" | "mcp" | "custom";
 
 export interface QuotaWindow {
   /** 厂商侧窗口 id（如 `tokens_limit:3:5`、`usage`），稳定、可作 React key */

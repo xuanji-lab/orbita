@@ -1409,6 +1409,8 @@ export const en = {
       "5h": "5-hour window",
       weekly: "Weekly",
       monthly: "Monthly",
+      // MCP 工具的每月额度，与 token 窗口不是同一种额度
+      mcp: "MCP monthly",
     },
     resetsIn: (duration: string) => `resets in ${duration}`,
     justNow: "just now",
