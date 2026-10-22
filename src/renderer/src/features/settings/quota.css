@@ -1,0 +1,209 @@
+/*
+ * 额度块（QuotaBlock）。规格来自定稿原型（workbench quota-ui-prototype.html，
+ * 2026-10-22）——颜色、字号、间距全部取设计系统 token，不写裸 hex、不写裸 px 字号。
+ *
+ * 块自己带边框与面板底（与相邻的 .pv-block 同一套描边 / 圆角 / 底色），
+ * 因为它要能脱离 providers-view.css 单独说清自己的长相。
+ */
+
+.q-block {
+  margin-top: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+}
+
+/* 标题行：节标题在左，刷新是安静的图标键，钉在右内边距上（行尾血线） */
+.q-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.q-head-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.q-refresh {
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.q-refresh:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+}
+
+.q-refresh:disabled {
+  cursor: default;
+  color: var(--color-text-tertiary);
+}
+
+/* 套餐窗口：一行标签 + 值，第二行是吃满左右内边距的条 */
+.q-rows {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-1);
+}
+
+.q-win-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: var(--control-height-xs);
+}
+
+/* 厂商原文标签，不翻译 */
+.q-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 机器事实（百分比 / 时长）：mono + 等宽数字，钉在行右内边距 */
+.q-value {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.q-bar {
+  display: block;
+  height: 3px;
+  margin-top: var(--space-1);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  overflow: hidden;
+}
+
+.q-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--color-text-secondary);
+  border-radius: inherit;
+}
+
+/* 用尽 = 失败，红是这套系统里唯一的失败色；不到 100% 一律只有墨色 + 字重 */
+.q-win[data-tone="spent"] .q-bar > i {
+  background: var(--color-danger);
+}
+
+.q-win[data-tone="spent"] .q-value {
+  color: var(--color-danger);
+  font-weight: var(--weight-semibold);
+}
+
+/* 余额：一个标量，没有条 */
+.q-money-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-1);
+}
+
+.q-money {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.q-money-sub {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 页脚：多久以前查过 / 为什么失败；失败时页脚右侧给 Retry */
+.q-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.q-foot-text {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.q-foot .q-retry {
+  margin-left: auto;
+}
+
+/* 单行状态（鉴权失败 / 不支持 / 从未查过）：不摆空条，只写一句能执行的话 */
+.q-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.q-line[data-tone="danger"] {
+  color: var(--color-danger);
+}
+
+.q-line .q-retry {
+  margin-left: auto;
+  flex: none;
+}
+
+/* 安静的文字键（Retry / Check now）：不是主操作，不借 accent */
+.q-retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.q-retry:hover:not(:disabled) {
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+}
+
+.q-retry:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+/* 紧凑档：只有事实行 + 条。块自己的边框与标题都收起来——它嵌在别人的面里 */
+.q-block.q-compact {
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+
+.q-compact .q-money-row,
+.q-compact .q-rows {
+  padding: var(--space-1) 0 0;
+}

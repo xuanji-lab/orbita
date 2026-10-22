@@ -1,0 +1,189 @@
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import {
+  ageLabel,
+  checkedLabel,
+  creditsBreakdownText,
+  failedLabel,
+  formatDuration,
+  formatMoney,
+  progressOf,
+  quotaMenuItems,
+  resetLabel,
+  usedPercent,
+  windowValueText,
+} from "./quota-view.ts";
+import { en } from "../../messages-en.ts";
+import { zh } from "../../messages-zh.ts";
+import type { QuotaResult, QuotaWindow } from "@shared/quota";
+
+const window = (overrides: Partial<QuotaWindow> = {}): QuotaWindow => ({
+  id: "tokens:3:5",
+  label: "5-hour window",
+  usedPercent: 62,
+  ...overrides,
+});
+
+describe("formatMoney —— 金额保精度、符号不留空格", () => {
+  test("认识的币种写符号，不认识的把代码放在后面", () => {
+    assert.equal(formatMoney({ amount: "43.21", currency: "CNY" }), "¥43.21");
+    assert.equal(formatMoney({ amount: "40.00", currency: "USD" }), "$40.00");
+    assert.equal(formatMoney({ amount: "6.50", currency: "SGD" }), "6.50 SGD");
+    assert.equal(formatMoney({ amount: "0", currency: "" }), "0");
+  });
+
+  test("字符串原样：末尾的 0 不被吃掉", () => {
+    assert.equal(formatMoney({ amount: "40.00", currency: "CNY" }), "¥40.00");
+  });
+});
+
+describe("formatDuration —— 机器口径，不翻译", () => {
+  test("天 / 时 / 分 / 秒各一档", () => {
+    assert.equal(formatDuration((2 * 60 + 14) * 60_000), "2h 14m");
+    assert.equal(formatDuration(41 * 60_000), "41m");
+    assert.equal(formatDuration(30_000), "30s");
+    assert.equal(formatDuration((26 * 60 + 5) * 60_000), "1d 2h");
+  });
+
+  test("负数（时钟回拨 / 过点）夹到 0s", () => {
+    assert.equal(formatDuration(-5_000), "0s");
+  });
+});
+
+describe("窗口的展示", () => {
+  const now = 1_700_000_000_000;
+
+  test("已用百分比取整并夹到 0–100；条宽同口径", () => {
+    assert.equal(usedPercent(window({ usedPercent: 62.4 })), 62);
+    assert.equal(usedPercent(window({ usedPercent: 100 })), 100);
+    assert.equal(usedPercent(window({ usedPercent: 120 })), 100);
+    assert.equal(usedPercent(window({ usedPercent: -3 })), 0);
+    assert.equal(progressOf(window({ usedPercent: 50 })), 0.5);
+  });
+
+  test("值行带 used，后面接剩余时长（环里那一行）", () => {
+    assert.equal(
+      windowValueText(window({ resetsAt: now + (2 * 60 + 14) * 60_000 }), now, en),
+      "62% used · 2h 14m",
+    );
+    // 不知道什么时候重置就只写已用，不编一个时间
+    assert.equal(windowValueText(window(), now, en), "62% used");
+    // 已经过点：不再写剩余
+    assert.equal(windowValueText(window({ resetsAt: now - 1 }), now, en), "62% used");
+  });
+
+  test("中文同样带「已用」：数字后面永远有那个词", () => {
+    assert.equal(windowValueText(window(), now, zh), "62% 已用");
+  });
+
+  test("重置行：有将来时间才写", () => {
+    assert.equal(resetLabel(window({ resetsAt: now + 41 * 60_000 }), now, en), "resets in 41m");
+    assert.equal(resetLabel(window(), now, en), null);
+    assert.equal(resetLabel(window({ resetsAt: now }), now, en), null);
+  });
+});
+
+describe("页脚的时间说法", () => {
+  const now = 1_700_000_000_000;
+
+  test("不到一分钟算刚刚，之后按分 / 时 / 天走", () => {
+    assert.equal(ageLabel(30_000, en), "just now");
+    assert.equal(ageLabel(12 * 60_000, en), "12 min ago");
+    assert.equal(ageLabel(3 * 3_600_000, en), "3h ago");
+    assert.equal(ageLabel(2 * 86_400_000, en), "2d ago");
+    assert.equal(checkedLabel(now - 30_000, now, en), "Checked just now");
+    assert.equal(checkedLabel(now - 60_000, now, en), "Checked 1 min ago");
+  });
+
+  test("中文的分 / 时 / 天：数字与汉字之间一个空格", () => {
+    assert.equal(ageLabel(12 * 60_000, zh), "12 分钟前");
+    assert.equal(zh.quota.checked("12 分钟前"), "查于 12 分钟前");
+  });
+
+  test("刷新失败：原因分类 + 旧值多久以前", () => {
+    assert.equal(
+      failedLabel("network", now - 12 * 60_000, now, en),
+      "Couldn't refresh (network error) · 12 min ago",
+    );
+    assert.equal(failedLabel("auth", now - 12 * 60_000, now, zh), "刷新失败（密钥无效） · 12 分钟前");
+  });
+});
+
+describe("余额小字", () => {
+  test("两个拆分都在时用 · 分开；缺一个就只说有的那个；都没有返回 null", () => {
+    assert.equal(
+      creditsBreakdownText({ amount: "43.21", currency: "CNY", toppedUp: "40.00", granted: "3.21" }, en),
+      "topped up ¥40.00 · granted ¥3.21",
+    );
+    assert.equal(creditsBreakdownText({ amount: "43.21", currency: "CNY", granted: "3.21" }, en), "granted ¥3.21");
+    assert.equal(creditsBreakdownText({ amount: "43.21", currency: "CNY" }, en), null);
+  });
+});
+
+const NOW = Date.now();
+const okResult = (snapshot: { credits?: { amount: string; currency: string }; windows?: QuotaWindow[]; fetchedAt: number }): QuotaResult => ({
+  status: "ok",
+  fromCache: false,
+  snapshot: { windows: [], ...snapshot },
+});
+
+const labels = (items: ReturnType<typeof quotaMenuItems>) => items.map((item) => item.label);
+
+ describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
+  test("能力为 none：整段不出现（连标题都没有）", () => {
+    assert.deepEqual(quotaMenuItems(null, "none", false, en, () => undefined), []);
+  });
+
+  test("从未查过：标题 + 事实行 + 立即查询（作战行可点）", () => {
+    const items = quotaMenuItems(null, "balance", false, en, () => undefined);
+    assert.deepEqual(labels(items), ["Account", "Not checked yet.", "Check now"]);
+    assert.equal(items[0]?.header, true);
+    assert.equal(items[1]?.fact, true);
+    assert.equal(items[2]?.disabled, false);
+  });
+
+  test("查询中（用户刚点的）：标签换成正在查询且禁用，不出转圈", () => {
+    const items = quotaMenuItems(null, "balance", true, en, () => undefined);
+    assert.equal(items.at(-1)?.label, "Checking…");
+    assert.equal(items.at(-1)?.disabled, true);
+  });
+
+  test("没有旧值时的失败：说清分类，不冒充 0", () => {
+    const items = quotaMenuItems({ status: "error", reason: "network", cached: null }, "balance", false, en, () => undefined);
+    assert.deepEqual(labels(items), ["Account", "Couldn't refresh (network error).", "Check now"]);
+  });
+
+  test("有值：余额与每个窗口各一行，窗行带 progress，页脚写查于何时", () => {
+    const items = quotaMenuItems(
+      okResult({
+        credits: { amount: "43.21", currency: "CNY" },
+        windows: [{ id: "tokens:3:5", label: "5-hour window", usedPercent: 62 }],
+        fetchedAt: NOW - 12 * 60_000,
+      }),
+      "balance",
+      false,
+      en,
+      () => undefined,
+    );
+    assert.deepEqual(labels(items), ["Account", "Balance", "5-hour window", "Checked 12 min ago"]);
+    assert.equal(items[1]?.hint, "¥43.21");
+    assert.equal(items[2]?.hint, "62% used");
+    assert.equal(items[2]?.progress, 0.62);
+  });
+
+  test("有值但刷新失败：页脚写原因 + 旧值多久以前（值照旧显示）", () => {
+    const items = quotaMenuItems(
+      {
+        status: "error",
+        reason: "protocol",
+        cached: { credits: { amount: "6.00", currency: "USD" }, windows: [], fetchedAt: NOW - 12 * 60_000 },
+      },
+      "balance",
+      false,
+      en,
+      () => undefined,
+    );
+    assert.equal(items.at(-1)?.label, "Couldn't refresh (unexpected response) · 12 min ago");
+    assert.equal(items[1]?.label, "Balance");
+  });
+});

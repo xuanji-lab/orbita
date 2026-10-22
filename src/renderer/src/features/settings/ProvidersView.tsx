@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
-import { KNOWN_PROVIDERS, knownProviderDefaultName, type KnownProvider } from "@shared/known-providers";
+import { KNOWN_PROVIDERS, knownProviderDefaultName, knownProviderQuota, type KnownProvider } from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
 import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
@@ -31,6 +31,7 @@ import {
 import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
 import { VendorLogo } from "./VendorLogo";
+import { QuotaBlock } from "./QuotaBlock";
 
 /**
  * Provider 设置面 —— 两层：**卡片墙**（每个目录条目一张卡，加过的挂「已添加」角标，顶部搜索 /
@@ -994,6 +995,21 @@ export function ProvidersView(props: {
                   </div>
                 )}
               </section>
+
+              {/*
+                账号额度（余额 / 套餐窗口）：紧接连接区、在模型区之前——它回答的是
+                「这个 key 背后的账号还剩多少」，与上面那组身份字段同属「这个账号」这一层。
+                能力为 none 的厂商整块不渲染（QuotaBlock 自己返回 null），不留空块。
+                只给已落盘的实例查：查询靠 providerId 取密钥，新建表单里还没有 id。
+              */}
+              {!isNew && editing !== undefined && knownProviderQuota(editing) !== "none" && (
+                <QuotaBlock
+                  providerId={editing.id}
+                  probe={knownProviderQuota(editing)}
+                  density="full"
+                  hasKey={hasCredentials(editing.auth)}
+                />
+              )}
 
               <div className="pv-mhead">
                 <span className="section-label">{t.providers.models}</span>
