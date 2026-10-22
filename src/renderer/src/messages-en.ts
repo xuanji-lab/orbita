@@ -1385,6 +1385,42 @@ export const en = {
     speed: (n: number) => `${n} tok/s`,
   },
 
+  /**
+   * 厂商账号额度（余额 / 套餐窗口）。**一个命名空间服务两个面**（设置页的额度块
+   * 与底栏环的菜单行）：同一句话只能有一份写法，否则两处迟早就两个答案。
+   */
+  quota: {
+    account: "Account",
+    balance: "Balance",
+    planQuota: "Plan quota",
+    refresh: "Refresh",
+    checking: "Checking…",
+    notCheckedYet: "Not checked yet.",
+    checkNow: "Check now",
+    // 数字后面永远带 used：条本身方向中性，靠这个词钉住「左段 = 已用」
+    usedUnit: "used",
+    resetsIn: (duration: string) => `resets in ${duration}`,
+    justNow: "just now",
+    minutesAgo: (n: number) => `${n} min ago`,
+    hoursAgo: (n: number) => `${n}h ago`,
+    daysAgo: (n: number) => `${n}d ago`,
+    checked: (age: string) => `Checked ${age}`,
+    checkedJustNow: "Checked just now",
+    failedKeeping: (reason: string, age: string) => `Couldn't refresh (${reason}) · ${age}`,
+    failedAlone: (reason: string) => `Couldn't refresh (${reason}).`,
+    toppedUp: (money: string) => `topped up ${money}`,
+    granted: (money: string) => `granted ${money}`,
+    unlimited: "Unlimited",
+    authMissing: "Add an API key above to see the balance.",
+    authRejected: "The provider rejected this API key (401). Update it above, then try again.",
+    teamUnsupported: "Team accounts aren't supported. Sign in with a personal account to see quota here.",
+    probeUnsupported: "This provider has no quota endpoint yet.",
+    reasonAuth: "key rejected",
+    reasonNetwork: "network error",
+    reasonProtocol: "unexpected response",
+    reasonUnsupported: "not supported",
+  },
+
   /** 子会话通道：消息种类、标记行、通道列、派出卡 */
   channel: {
     kinds: {

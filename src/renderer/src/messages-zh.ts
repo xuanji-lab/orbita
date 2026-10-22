@@ -1285,6 +1285,38 @@ export const zh: Messages = {
     speed: (n) => `${n} tok/s`,
   },
 
+  /** 厂商账号额度（与 en.quota 同一套键：两个面共用一套说法） */
+  quota: {
+    account: "账户",
+    balance: "余额",
+    planQuota: "套餐额度",
+    refresh: "刷新",
+    checking: "正在查询…",
+    notCheckedYet: "还没有查过。",
+    checkNow: "立即查询",
+    usedUnit: "已用",
+    resetsIn: (duration) => `${duration} 后重置`,
+    justNow: "刚刚",
+    minutesAgo: (n) => `${n} 分钟前`,
+    hoursAgo: (n) => `${n} 小时前`,
+    daysAgo: (n) => `${n} 天前`,
+    checked: (age) => `查于 ${age}`,
+    checkedJustNow: "刚刚查过",
+    failedKeeping: (reason, age) => `刷新失败（${reason}） · ${age}`,
+    failedAlone: (reason) => `刷新失败（${reason}）。`,
+    toppedUp: (money) => `充值 ${money}`,
+    granted: (money) => `赠送 ${money}`,
+    unlimited: "不限量",
+    authMissing: "先在上面填 API 密钥才能查余额。",
+    authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
+    teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
+    probeUnsupported: "这家厂商还没有可查额度的接口。",
+    reasonAuth: "密钥无效",
+    reasonNetwork: "网络错误",
+    reasonProtocol: "返回格式变了",
+    reasonUnsupported: "不支持",
+  },
+
   channel: {
     kinds: {
       task: "任务",
