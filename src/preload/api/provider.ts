@@ -6,6 +6,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels, type BuiltinProvider, type OauthLoginInput } from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
+import type { QuotaQuery, QuotaResult } from "../../shared/quota.ts";
 
 export type UpsertResult =
   | { ok: true; provider: ProviderDto }
@@ -32,6 +33,11 @@ export const providerApi = {
   }): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke(ipcChannels.providerTest, input),
   /** 显示明文密钥（用户点眼睛时才调，不随 list 下发） */
   reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
+  /**
+   * 账号额度（余额 / 套餐窗口）。值来自主进程缓存，刷新在背后发生；
+   * 返回的永远不含密钥——密钥只在主进程 → 厂商端点这一个方向上流。
+   */
+  quota: (query: QuotaQuery): Promise<QuotaResult> => ipcRenderer.invoke(ipcChannels.providerQuota, query),
   /**
    * Claude OAuth 登录：主进程开系统浏览器并等回调，返回时 provider 已连凭据落盘。
    * promise 会挂着等用户在浏览器里完成授权（上限 10 分钟）。
