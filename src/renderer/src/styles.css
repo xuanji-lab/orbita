@@ -533,6 +533,39 @@
 }
 
 /*
+ * 额度条——设置页的额度块（QuotaBlock）与底栏环菜单里的窗行**共用这一条**。
+ * 几何（3px / --radius-xs）与颜色（轨道 = 墨色 12% 混色、填充 = 次级文字色）只在这里写一份：
+ * 两个面一旦各写一份，改一处就漂。两个面自己只管外边距（`.q-bar` / `.menu-progress`）。
+ *
+ * 方向只有「已用」：宽度由 JS 给（宽度是运行时值），**颜色由 `data-spent` 决定**——
+ * 只有真的用尽（>= 100%）才借 --color-danger，那时数字也同时变红；不到 100% 只有墨色。
+ */
+.quota-bar {
+  display: block;
+  position: relative;
+  height: 3px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  overflow: hidden;
+}
+
+.quota-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-text-secondary);
+}
+
+.quota-bar[data-spent="true"] > i {
+  background: var(--color-danger);
+}
+
+/* 菜单里的那一条：吃满行的左右内边距（行自己已有 padding），行下留一小段呼吸 */
+.menu-progress {
+  margin: 0 var(--space-2) var(--space-1);
+}
+
+/*
  * 会话行最左侧的三节竖条（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `bar` /
  * 铃铛清单 BellCard）：取代上一版的渐变带（动效太耗 GPU，低端 Windows /
  * MacBook 不友好）与未读浅底。**静态，无任何动效**。

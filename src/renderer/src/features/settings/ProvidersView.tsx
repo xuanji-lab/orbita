@@ -1006,7 +1006,6 @@ export function ProvidersView(props: {
                 <QuotaBlock
                   providerId={editing.id}
                   probe={knownProviderQuota(editing)}
-                  density="full"
                   hasKey={hasCredentials(editing.auth)}
                 />
               )}

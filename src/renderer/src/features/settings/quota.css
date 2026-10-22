@@ -86,27 +86,12 @@
   color: var(--color-text-primary);
 }
 
+/* 条的几何与颜色在 styles.css 的 `.quota-bar`（与菜单里那条共用一份）；这里只管外边距 */
 .q-bar {
-  display: block;
-  height: 3px;
   margin-top: var(--space-1);
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
-  overflow: hidden;
 }
 
-.q-bar > i {
-  display: block;
-  height: 100%;
-  background: var(--color-text-secondary);
-  border-radius: inherit;
-}
-
-/* 用尽 = 失败，红是这套系统里唯一的失败色；不到 100% 一律只有墨色 + 字重 */
-.q-win[data-tone="spent"] .q-bar > i {
-  background: var(--color-danger);
-}
-
+/* 用尽时数字跟着变红（条自己由 `.quota-bar[data-spent]` 负责） */
 .q-win[data-tone="spent"] .q-value {
   color: var(--color-danger);
   font-weight: var(--weight-semibold);
@@ -194,16 +179,4 @@
 .q-retry:disabled {
   color: var(--color-text-tertiary);
   cursor: default;
-}
-
-/* 紧凑档：只有事实行 + 条。块自己的边框与标题都收起来——它嵌在别人的面里 */
-.q-block.q-compact {
-  margin: 0;
-  border: 0;
-  background: transparent;
-}
-
-.q-compact .q-money-row,
-.q-compact .q-rows {
-  padding: var(--space-1) 0 0;
 }

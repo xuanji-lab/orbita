@@ -29,7 +29,6 @@ function stubFetch(run: (url: string, init?: RequestInit) => Response | Promise<
 function input(overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput {
   return {
     probe: "balance",
-    providerId: "deepseek",
     kind: "deepseek",
     baseUrl: DEEPSEEK,
     apiKey: "sk-test",

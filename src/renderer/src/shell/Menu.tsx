@@ -879,6 +879,9 @@ function MenuRow(props: {
   /*
    * 行底下那条进度（额度窗口用）。它是**行的兄弟**而不是行里的一列：条要吃满卡片
    * 左右内边距，而行内部有图标槽与 hint 列，塞进去就只能在文字列里拐个弯。
+   *
+   * 颜色与几何全部交给 styles.css 的 `.quota-bar`（与设置页的额度块共用同一条）：
+   * 这里只给**运行时值**（宽度）与一个布尔属性（是否用尽），不写字面色值。
    */
   const progress = item.progress === undefined ? null : Math.max(0, Math.min(1, item.progress));
   const body =
@@ -887,26 +890,8 @@ function MenuRow(props: {
     ) : (
       <div style={{ display: "grid" }}>
         {row}
-        <span
-          aria-hidden
-          style={{
-            display: "block",
-            height: 3,
-            margin: "0 var(--space-2) var(--space-1)",
-            borderRadius: "var(--radius-xs)",
-            background: "color-mix(in srgb, var(--color-text-primary) 12%, transparent)",
-            overflow: "hidden",
-          }}
-        >
-          <i
-            style={{
-              display: "block",
-              height: "100%",
-              width: `${progress * 100}%`,
-              borderRadius: "inherit",
-              background: progress >= 1 ? "var(--color-danger)" : "var(--color-text-secondary)",
-            }}
-          />
+        <span className="quota-bar menu-progress" aria-hidden data-spent={progress >= 1 ? "true" : undefined}>
+          <i style={{ width: `${progress * 100}%` }} />
         </span>
       </div>
     );

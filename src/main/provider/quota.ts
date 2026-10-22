@@ -15,7 +15,6 @@ import type { QuotaCredits, QuotaFailure, QuotaResult, QuotaSnapshot } from "../
 /** 探针入参。`kind` 是**目录条目 id**（`knownProviderOf` 的结果），不是存储行的 kind */
 export interface QuotaProbeInput {
   probe: "balance" | "plan-windows" | "none";
-  providerId: string;
   kind?: string;
   baseUrl: string;
   apiKey: string | null;

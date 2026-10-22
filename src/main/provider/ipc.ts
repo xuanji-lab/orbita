@@ -192,7 +192,6 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
 
     const result = await probeQuota({
       probe,
-      providerId: query.providerId,
       // 传**目录条目 id** 而不是存储行的 kind：老数据没有 kind，第二个实例也只能靠 id 认回来
       kind: knownProviderOf(provider).id,
       baseUrl: provider.endpoint.baseUrl,

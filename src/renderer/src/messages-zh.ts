@@ -1310,7 +1310,6 @@ export const zh: Messages = {
     authMissing: "先在上面填 API 密钥才能查余额。",
     authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
     teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
-    probeUnsupported: "这家厂商还没有可查额度的接口。",
     reasonAuth: "密钥无效",
     reasonNetwork: "网络错误",
     reasonProtocol: "返回格式变了",

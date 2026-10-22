@@ -1,5 +1,5 @@
 /**
- * 账号额度块 —— 设置页的 provider 卡片（`density="full"`）与（将来）环卡的紧凑档共用。
+ * 账号额度块 —— 设置页 provider 卡上的余额 / 套餐额度。
  *
  * 三个决定：
  *  1. **打开才拉**（decisions 12）：组件挂载 = 用户打开了这张卡。成功后主进程 60s 内复用，
@@ -31,12 +31,10 @@ import {
 export function QuotaBlock(props: {
   providerId: string;
   probe: QuotaProbe;
-  density: "full" | "compact";
   /** 盘上有密钥吗：没有时鉴权失败要说「先填密钥」，而不是「厂商拒绝了」 */
   hasKey?: boolean;
 }) {
   const t = useT();
-  const compact = props.density === "compact";
   const [result, setResult] = useState<QuotaResult | null>(null);
   // 首帧就当「查过了」在跑：挂载即拉，否则第一帧会闪一下「还没有查过」
   const [busy, setBusy] = useState(true);
@@ -110,31 +108,26 @@ export function QuotaBlock(props: {
     );
 
   return (
-    <section
-      className={`q-block${compact ? " q-compact" : ""}`}
-      aria-label={props.probe === "balance" ? t.quota.balance : t.quota.planQuota}
-    >
-      {compact ? null : (
-        <div className="q-head">
-          <span className="section-label">
-            {props.probe === "balance" ? t.quota.balance : t.quota.planQuota}
-          </span>
-          <span className="q-head-end">
-            <button
-              type="button"
-              className="q-refresh"
-              aria-label={t.quota.refresh}
-              title={t.quota.refresh}
-              disabled={busy}
-              onClick={() => void load(true)}
-            >
-              <Icon name={busy ? "loader-circle" : "refresh-cw"} size={13} spin={busy} />
-            </button>
-          </span>
-        </div>
-      )}
+    <section className="q-block" aria-label={props.probe === "balance" ? t.quota.balance : t.quota.planQuota}>
+      <div className="q-head">
+        <span className="section-label">
+          {props.probe === "balance" ? t.quota.balance : t.quota.planQuota}
+        </span>
+        <span className="q-head-end">
+          <button
+            type="button"
+            className="q-refresh"
+            aria-label={t.quota.refresh}
+            title={t.quota.refresh}
+            disabled={busy}
+            onClick={() => void load(true)}
+          >
+            <Icon name={busy ? "loader-circle" : "refresh-cw"} size={13} spin={busy} />
+          </button>
+        </span>
+      </div>
       {body}
-      {snapshot !== null && !compact ? (
+      {snapshot !== null ? (
         <div className="q-foot">
           <Icon name={busy ? "loader-circle" : failure === null ? "clock" : "triangle-alert"} size={12} spin={busy} />
           <span className="q-foot-text">
@@ -181,7 +174,7 @@ function QuotaFacts(props: { snapshot: QuotaSnapshot; now: number }) {
                   <span className="q-label">{window.label}</span>
                   <span className="q-value">{windowValueText(window, now, t)}</span>
                 </div>
-                <span className="q-bar" aria-hidden>
+                <span className="quota-bar q-bar" aria-hidden data-spent={percent >= 100 ? "true" : undefined}>
                   <i style={{ width: `${progressOf(window) * 100}%` }} />
                 </span>
               </div>
