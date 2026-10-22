@@ -16,6 +16,7 @@ import type { ThinkingLevel } from "./thinking.ts";
  * 这部分是干净的，值得学。不该学的是 `fetchModels` 那个 15 分支 switch。
  */
 import type { ProviderApi } from "./provider.ts";
+import type { QuotaProbe } from "./quota.ts";
 
 export interface KnownProvider {
   /** 我们的稳定 id，也是用户看到的 identifier */
@@ -50,10 +51,23 @@ export interface KnownProvider {
    * 包月用户看到 `$0.062` 第一反应是「我不是包月吗」（wafo 2026-09-03 实测）：
    * 那个数字是拿 API 价目表算出来的**估价**，跟他这个月的账单毫无关系。
    *
-   * 套餐还剩多少（额度 / 到期）要另接厂商接口，**今天不做**：这里只负责不说错话。
+   * 套餐还剩多少（额度 / 到期）走条目的 `quota` 声明，与这里分开——
+   * `billing` 说的是「按量还是包月」，`quota` 说的是「能不能问厂商要额度」。
    * 缺省 = `metered`：不知道的当按量算，那是绝大多数（自建网关也落在这一档）。
    */
   billing?: "metered" | "plan";
+  /**
+   * **这家能不能查账号额度，以及查的是哪一类**。缺省 = `none`（整块不渲染）。
+   *
+   * ⚠ 这些端点里**多数是厂商网页控制台的内部接口**（智谱 / Z.AI 的 `quota/limit`、
+   * Kimi 的 `usages`），不是公开契约：厂商改版就静默失效，团队账号还走不通。
+   * 所以能力必须在这里**逐家声明**，失败时整块隐藏 + 说清原因，**绝不显示 0**——
+   * 「查不到」和「没钱了」是两句话。
+   *
+   * 唯一的例外是 DeepSeek 的 `GET /user/balance`：它是 api-docs.deepseek.com 的
+   * 公开文档接口（Bearer 鉴权，金额是字符串）。
+   */
+  quota?: QuotaProbe;
   /**
    * **快速适配通道：我们自己补的模型参数。**
    *
@@ -144,6 +158,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
     catalogId: "deepseek",
+    // 公开文档接口（api-docs.deepseek.com 的 Get User Balance），不是控制台内部接口
+    quota: "balance",
     /**
      * 快速适配通道（2026-09-03，wafo 指出遗漏）：pi 的 deepseek 目录条目
      * 只有 v4-flash / v4-pro 两个，**vision-exp 没收**——但它是官方三模型之一
@@ -431,6 +447,17 @@ export function knownProviderOf(provider: ProviderKindSource): KnownProvider {
  */
 export function isPlanBilling(provider: ProviderKindSource): boolean {
   return knownProviderOf(provider).billing === "plan";
+}
+
+/**
+ * 这家能不能查额度、查哪一类。**认不得的一律 `none`**（自建网关没有可查的账号余额）。
+ *
+ * 与 `isPlanBilling` 同一个入口（`knownProviderOf`）而不是只看 `kind`：老数据没有 kind，
+ * 第二个实例（`deepseek-2`）也只能靠 id 认回来——只看 kind 会让这些实例的额度块凭空消失。
+ * 能力本身逐条写在条目上（`quota`），这里只负责找到那条。
+ */
+export function knownProviderQuota(provider: ProviderKindSource): QuotaProbe {
+  return knownProviderOf(provider).quota ?? "none";
 }
 
 /**

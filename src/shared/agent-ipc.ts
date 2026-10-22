@@ -84,6 +84,11 @@ export const ipcChannels = {
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
   /**
+   * 厂商账号额度（余额 / 套餐窗口）：入参 QuotaQuery，回 QuotaResult。
+   * 主进程负责取密钥、打厂商端点、落缓存；密钥不进返回值。
+   */
+  providerQuota: "provider:quota",
+  /**
    * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
    * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
    * 不进 renderer——登录本身就是保存。
