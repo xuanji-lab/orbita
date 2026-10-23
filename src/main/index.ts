@@ -55,6 +55,7 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
@@ -426,21 +427,25 @@ void app.whenReady().then(async () => {
   };
 
   /**
-   * 给沙箱窗口发 WM_CLOSE（等价用户点 X）——**不能改成 taskkill**。
+   * 关掉沙箱窗口（等价用户点 X 并按下确认框的 Ok）。**不能改成 taskkill。**
    *
    * 2026-10-23 真机验收：直接 taskkill 能杀掉 Server / RemoteSession，但 VM 不退——
-   * vmwp.exe + vmmemWindowsSandbox（3.4GB）继续占着内存，而且 vmwp 自己 taskkill 是
-   * 拒绝访问；不带 /F 打 RemoteSession 则完全无效（它不是控制台进程，只是收到一个终止信号）。
-   * 而对方收到 WM_CLOSE 后 9~12 秒内整条链自行退出、VM 内存释放。
+   * vmwp.exe + vmmemWindowsSandbox（各 ~3.5GB）继续占着内存，vmwp 自己 taskkill 是拒绝访问，
+   * 不带 /F 打 RemoteSession 则完全无效（它不是控制台进程）；泄漏攒多了会报
+   * 「与该服务器建立的会话太多」，新沙箱都起不来。
+   * 而走「关窗 → 替用户按 Ok」的路子，9~12 秒内整条链自行退出、VM 内存释放。
+   *
+   * 脚本本体在 close-window-script.ts（纯 ASCII，带前台 PID 护栏）；这里只负责跑它。
+   * 20 秒超时：脚本内部关窗 1.2s + 激活 0.5s，剩下是系统关 VM 的时间。
    * 失败不抛：控制器看到 throw 会退回强杀链（宁可退化成旧行为，不能坐视 VM 泄漏）。
    */
   const closeSandboxWindow = (pid: number): void => {
     if (process.platform !== "win32") return;
-    spawnSync(
-      "powershell",
-      ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).CloseMainWindow() | Out-Null`],
-      { stdio: "ignore", windowsHide: true, timeout: 5_000 },
-    );
+    spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)], {
+      stdio: "ignore",
+      windowsHide: true,
+      timeout: 20_000,
+    });
   };
 
   const computerUse = new SandboxController({

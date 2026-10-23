@@ -194,9 +194,9 @@ export interface SandboxDeps {
   /** 升级之后再等多久仍不退出就收尾，默认 5_000；测试传小值 */
   killEscalationMs?: number;
   /**
-   * 优雅关闭给多久：给 RemoteSession 的窗口发 WM_CLOSE 之后等这批 PID 自己消失。
-   * 默认 15_000——真机实测 VM 从关窗到 vmwp / vmmemWindowsSandbox 退出要 9~12 秒，
-   * 比强杀宽裕些；测试传小值。
+   * 优雅关闭给多久：「关窗 + 替他按下确认框的 Ok」之后等这批 PID 自己消失。
+   * 默认 25_000——真机实测从确认到 vmwp / vmmemWindowsSandbox 退出要 9~12 秒，
+   * 留足确认框交互的余量；测试传小值。
    */
   gracefulCloseMs?: number;
   /**
@@ -212,9 +212,10 @@ export interface SandboxDeps {
    */
   listSandboxProcesses?: () => SandboxProcessInfo[];
   /**
-   * 给沙箱窗口发 WM_CLOSE（等价用户点 X）。生产在 index.ts 接
-   * `powershell -NoProfile -Command "(Get-Process -Id <pid>).CloseMainWindow()"`。
-   * 不发就只有强杀链——强杀会杀掉窗口进程却把 VM 留给宿主（2026-10-23 真机实测）。
+   * 关掉沙箱窗口：关窗 + 替用户按下沙箱自己的确认框（Ok 是默认按钮）——
+   * 光发 CloseMainWindow 会停在确认框上，没人按就等于没关，最后退回强杀而泄漏 VM。
+   * 生产在 index.ts 跑 close-window-script.ts 生成的脚本。不发就只有强杀链——强杀会杀掉
+   * 窗口进程却把 VM 留给宿主（2026-10-23 真机实测，各 ~3.5GB）。
    */
   closeSandboxWindow?: (pid: number) => void;
 }
@@ -228,10 +229,12 @@ const STOP_FALLBACK_MS = 3_000;
 /** 升级杀之后再等多久仍不退出就收尾（并留下「进程可能未退出」的痕迹） */
 const STOP_ESCALATION_MS = 5_000;
 /**
- * 优雅关窗（WM_CLOSE）之后等多久：2026-10-23 真机实测，窗口关掉到
- * RemoteSession → Server → vmwp → vmmemWindowsSandbox 全部退出要 9~12 秒，比强杀宽裕些。
+ * 优雅关窗（关窗 + 替用户按确认框的 Ok）之后等多久：
+ * 2026-10-23 真机实测，确认框按下之后 RemoteSession → Server → vmwp → vmmemWindowsSandbox
+ * 全部退出要 9~12 秒；这里给到 25 秒——以前给 15 秒时，确认框没人按（弹出到被关掉的那段时间
+ * 也算在内）会卡在窗口上直接超时，白等一轮才退回强杀。
  */
-const STOP_GRACEFUL_MS = 15_000;
+const STOP_GRACEFUL_MS = 25_000;
 /** 退出确认的轮询节奏：exit 事件是主路径，这个是兜底信号（二者取先到） */
 const EXIT_POLL_INTERVAL_MS = 250;
 
@@ -448,9 +451,10 @@ export class SandboxController {
       }
     } else {
       // 新架构：启动器早退了，沙箱活在 Server / RemoteSession / vmwp 里。应用正在退，
-      // 没人听推送也来不及轮询——先给窗口发一条 WM_CLOSE 就完事：真机实测 9~12 秒内
-      // 整条链（RemoteSession → Server → vmwp → vmmem）自行退出，VM 内存随之释放。
-      // **这里不能强杀**：taskkill /F 打掉 RemoteSession 会把 vmwp + 3.4GB 的 VM 留给宿主。
+      // 没人听推送也来不及轮询——把「关窗 + 按确认框 Ok」一次性发出去就完事：真机实测
+      // 9~12 秒内整条链（RemoteSession → Server → vmwp → vmmem）自行退出，VM 内存随之释放。
+      // **这里不能强杀**：taskkill /F 打掉 RemoteSession 会把 vmwp + 3.5GB 的 VM 留给宿主，
+      // 泄漏攒多了会报「与该服务器建立的会话太多」，连新沙箱都起不来。
       if (!this.closeSandboxWindowGracefully()) this.killOrphans(this.newSandboxProcesses());
     }
     this.state = "off";
@@ -485,21 +489,24 @@ export class SandboxController {
   }
 
   /**
-   * 给这只沙箱的 RemoteSession 窗口发一条 WM_CLOSE（等价用户点 X）。
+   * 给这只沙箱的 RemoteSession 窗口发「关窗 + 按 Ok」那一个动作。
    * 返回 true = 真的发出去了（此时应等它自己退出，不要强杀）。
+   *
+   * 注意它不只是 WM_CLOSE：关窗会弹沙箱自己的确认框，确认框没人按就永远不关，
+   * 所以 deps 实现里带着「激活 + 校验前台 PID + 发 Enter」（见 close-window-script.ts）。
    */
   private closeSandboxWindowGracefully(): boolean {
     const close = this.deps.closeSandboxWindow;
     if (close === undefined) return false;
     const window = this.newSandboxProcesses().find((process) => isRemoteSessionImage(process.image));
     if (window === undefined) return false;
-    this.log(`给沙箱窗口（pid ${window.pid}）发 WM_CLOSE：等它自己收 VM（强杀会把 VM 留给宿主）`);
+    this.log(`关闭沙箱窗口（pid ${window.pid}，含确认框的 Ok）：等它自己收 VM（强杀会把 VM 留给宿主）`);
     try {
       close(window.pid);
       return true;
     } catch {
       // 发不出去就退回强杀链：宁可退化成旧行为，也不能让「关闭」本身失效
-      this.log(`WM_CLOSE 没发出去（pid ${window.pid}），退回强杀`);
+      this.log(`关窗脚本没发出去（pid ${window.pid}），退回强杀`);
       return false;
     }
   }
@@ -518,7 +525,7 @@ export class SandboxController {
 
   /**
    * stop() 的新架构收尾链（child 已经为 null），三级：
-   *   a. **优雅关窗**：给 RemoteSession 发 WM_CLOSE，等整条链自己退（VM 关要 10s±）；
+   *   a. **优雅关窗**：关 RemoteSession 的窗口并按下确认框的 Ok，等整条链自己退（VM 关要 10s±）；
    *   b. 没等到 → 原有的强杀链（杀 → 等 → 升级再杀 → 再等）；
    *   c. 仍不消失 → 留痕后 off。
    *

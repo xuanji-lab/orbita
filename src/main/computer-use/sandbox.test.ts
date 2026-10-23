@@ -801,8 +801,9 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
 //
 // 强杀能杀掉 Server / RemoteSession，**但 VM 不退**：vmwp.exe + vmmemWindowsSandbox
 // （3.4GB）继续占着，vmwp 自己 taskkill 还是拒绝访问。等于「关窗但泄漏 VM」。
-// 正确收尾是给 RemoteSession 的窗口发 WM_CLOSE（等价用户点 X）：真机 9~12 秒内整条链
-// 自行退出、VM 内存释放。所以 stopOrphans 的第一级是优雅关窗，强杀只是退路。
+// 正确收尾是关掉 RemoteSession 的窗口（等价用户点 X）**并替他按下沙箱自己的确认框**：
+// 只发 WM_CLOSE 会停在「Are you sure…? [Ok] [Cancel]」上没人按，真机 9~12 秒是把 Ok 按下去
+// 之后的数字。所以 stopOrphans 的第一级是优雅关窗（含确认），强杀只是退路。
 
 describe("graceful close：先关窗，关不掉才强杀", () => {
   /** 起一局，启动器 0 秒退出，沙箱侧出现 Server + RemoteSession + vmwp 三个进程 */
@@ -818,7 +819,7 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
     assert.deepEqual(await startPromise, { ok: true });
   };
 
-  test("① 有 RemoteSession：先发 WM_CLOSE，PID 优雅消失后不再强杀", async () => {
+  test("① 有 RemoteSession：先关窗（含确认框 Ok），PID 优雅消失后不再强杀", async () => {
     const closed: number[] = [];
     const killed: number[] = [];
     let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
@@ -845,15 +846,15 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
 
       assert.deepEqual(await harness.controller.stop(), { ok: true });
       await waitFor(() => (harness.controller.status().state === "off" ? true : null));
-      assert.deepEqual(closed, [4300], "WM_CLOSE 只发给 RemoteSession（窗口进程），不发 Server / vmwp");
+      assert.deepEqual(closed, [4300], "关窗只发给 RemoteSession（窗口进程），不发 Server / vmwp");
       assert.deepEqual(killed, [], "优雅关窗生效后不许再强杀——强杀会把 VM 留给宿主");
-      assert.ok(harness.logs.some((line) => /WM_CLOSE/.test(line)), harness.logs.join(" | "));
+      assert.ok(harness.logs.some((line) => /关闭沙箱窗口/.test(line)), harness.logs.join(" | "));
     } finally {
       await harness.close();
     }
   });
 
-  test("② 发了 WM_CLOSE 但 PID 不消失 → 退回强杀升级链，最后留痕 off", async () => {
+  test("② 关了窗但 PID 不消失 → 退回强杀升级链，最后留痕 off", async () => {
     const closed: number[] = [];
     const killed: number[] = [];
     let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
@@ -861,7 +862,7 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
       killFallbackMs: 40,
       killEscalationMs: 40,
       gracefulCloseMs: 40,
-      listSandboxProcesses: () => alive, // 装死：窗口不理会 WM_CLOSE，taskkill 也打不动
+      listSandboxProcesses: () => alive, // 装死：窗口不理会关窗确认，taskkill 也打不动
       closeSandboxWindow: (pid) => closed.push(pid),
       killTreeByPid: (pid) => killed.push(pid),
     });

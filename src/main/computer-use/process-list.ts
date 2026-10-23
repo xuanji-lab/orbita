@@ -7,7 +7,7 @@
  * 启动器一退，stop 就没有 PID 可杀（当时留了孤儿 VM，得手动 `taskkill /PID <pid> /T /F`）。
  *
  * 这里**只做观测**：谁是我们这只沙箱由控制器用「启动前基线 → 现在」的差集算出来；
- * 关闭先发给 RemoteSession 的窗口一条 WM_CLOSE（见 isRemoteSessionImage），不行才按 PID
+ * 关闭先关 RemoteSession 的窗口并按下它弹的确认框（见 isRemoteSessionImage），不行才按 PID
  * 走 taskkill /T /F。**绝不按镜像名杀**（仓规：禁 pkill/killall 式按名字匹配）。
  *
  * 按前缀比而不是全名比：tasklist 的 Image Name 列在部分 Windows 版本上会被截到 25 个字符，
@@ -42,7 +42,7 @@ export function isSandboxImage(imageName: string): boolean {
 /**
  * 是不是这只沙箱的「窗口」进程（RemoteSession）。优雅关闭只发给它。
  *
- * 2026-10-23 真机实测（主会话）：给它发 WM_CLOSE（等价用户点 X）后 9~12 秒内
+ * 2026-10-23 真机实测（主会话）：关它的窗口（等价用户点 X）并在确认框上按 Ok 后 9~12 秒内
  * RemoteSession → Server → vmwp → vmmemWindowsSandbox 全部自行退出，VM 内存释放；
  * 而 `taskkill /F` 打掉 RemoteSession 会留下 vmwp + 3.4GB 的 vmmemWindowsSandbox（关了窗但从
  * 宿主泄漏 VM），不带 /F 则完全无效（它不是控制台进程）。所以这条路径必须先走优雅关闭。
