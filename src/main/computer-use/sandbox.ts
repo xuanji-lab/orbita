@@ -212,10 +212,10 @@ export interface SandboxDeps {
    */
   listSandboxProcesses?: () => SandboxProcessInfo[];
   /**
-   * 关掉沙箱窗口：关窗 + 替用户按下沙箱自己的确认框（Ok 是默认按钮）——
-   * 光发 CloseMainWindow 会停在确认框上，没人按就等于没关，最后退回强杀而泄漏 VM。
-   * 生产在 index.ts 跑 close-window-script.ts 生成的脚本。不发就只有强杀链——强杀会杀掉
-   * 窗口进程却把 VM 留给宿主（2026-10-23 真机实测，各 ~3.5GB）。
+   * 关掉沙箱窗口：关窗 + 替用户按下沙箱自己的确认框（用 UI Automation 直接 Invoke Ok；
+   * SendKeys 的 Enter 真机实测按不掉它）。光发 CloseMainWindow 会停在确认框上，没人按
+   * 就等于没关，最后退回强杀而泄漏 VM。生产在 index.ts 跑 close-window-script.ts 生成的
+   * 脚本。不发就只有强杀链——强杀会杀掉窗口进程却把 VM 留给宿主（2026-10-23 实测，各 ~3.5GB）。
    */
   closeSandboxWindow?: (pid: number) => void;
 }
@@ -500,7 +500,7 @@ export class SandboxController {
     if (close === undefined) return false;
     const window = this.newSandboxProcesses().find((process) => isRemoteSessionImage(process.image));
     if (window === undefined) return false;
-    this.log(`关闭沙箱窗口（pid ${window.pid}，含确认框的 Ok）：等它自己收 VM（强杀会把 VM 留给宿主）`);
+    this.log(`关闭沙箱窗口（pid ${window.pid}，UIA 按下确认框的 Ok）：等它自己收 VM（强杀会把 VM 留给宿主）`);
     try {
       close(window.pid);
       return true;
