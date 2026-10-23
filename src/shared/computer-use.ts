@@ -272,6 +272,25 @@ export type ComputerUseToolOutcome =
     }
   | { ok: false; error: string };
 
+/**
+ * 一次 computer_* 调用的审计载荷（pi 工具结果的 `details.computerUse`）。
+ *
+ * **只给 UI 与日志、不入模型上下文**（pi 对 details 的通路就是这样）；模型看到的是
+ * 工具结果正文。字段刻意只留「发生了什么」：动作名、模型给的原始入参、时刻。
+ * 坐标是**模型看到的截图像素**（不是物理像素）——审计要回答的是「它点了图里的哪里」，
+ * 换算后的物理像素对回看的人没有意义。
+ *
+ * 转录本身（tool call + result 记录）已经是审计主通道，这里补的是 renderer 不解析
+ * 正文也能画的一层结构化摘要（browser 的 details.browser.handoff 同款）。
+ */
+export interface ComputerUseAudit {
+  action: ComputerUseToolRequest["action"];
+  /** 模型给的原始入参（未换算、未改写） */
+  args: Record<string, unknown>;
+  /** 调用发起的时刻（毫秒） */
+  at: number;
+}
+
 /** 只用到尺寸的那部分几何（换算函数的最小输入，测试与工具层都不必凑齐字节） */
 export interface ComputerUseShotGeometry {
   width: number;

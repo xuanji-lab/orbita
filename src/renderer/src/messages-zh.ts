@@ -1282,6 +1282,10 @@ export const zh: Messages = {
     tools: (n) => `工具 ${n}`,
     failedCount: (n) => `${n} 个失败`,
     toolInterrupted: "已中断 · 未执行",
+    /* computer_type 的入参文本默认折叠：它是模型打进去的原文，可能含隐私 / 凭据 */
+    typedChars: (count) => `输入了 ${count} 个字符`,
+    showInput: "展开输入",
+    hideInput: "收起输入",
     interruptedCount: (n) => `${n} 个已中断`,
     toolRead: "读取",
     toolSearch: "搜索",

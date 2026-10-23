@@ -1380,6 +1380,10 @@ export const en = {
     tools: (n: number) => `tools ${n}`,
     failedCount: (n: number) => `${n} failed`,
     toolInterrupted: "Interrupted · not run",
+    /* computer_type input is collapsed by default: it is the literal text the agent typed */
+    typedChars: (count: number) => `typed ${count} characters`,
+    showInput: "Show input",
+    hideInput: "Hide input",
     interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
     toolSearch: "Search",
