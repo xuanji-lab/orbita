@@ -20,7 +20,9 @@ import {
 } from "../shared/permission.ts";
 import {
   COMPUTER_USE_DENIED_MESSAGE,
+  COMPUTER_USE_HARD_LIMIT,
   COMPUTER_USE_REVOKED_MESSAGE,
+  COMPUTER_USE_SOFT_LIMIT,
   countNearbyClicks,
   describeComputerUseRisk,
   judgeComputerUseBudget,
@@ -99,6 +101,22 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
     lines.push(
       `Refused outright: ${deny.join(", ")}. Do not call them, and do not tell the user you will ` +
         "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
+    );
+  }
+  /**
+   * 电脑使用：闸门对模型是**不可见**的（审批只拦在 tool_call 上），不讲的话模型会在
+   * skip 档第一次点击时撞上「会话授权卡」却不知为何，撤权后还会反复重试。只在这组
+   * 工具真的注册了时讲（实验开关关着时它们根本不存在，说了是假话）。
+   */
+  if (extraToolNames.some((tool) => isComputerUseTool(tool))) {
+    lines.push(
+      "Computer use: the four input actions (computer_click / computer_type / computer_key / computer_scroll) need " +
+        `the user's session grant in Skip mode — the first one asks them once, and a denial means those tools refuse ` +
+        `for the rest of the session. Destructive actions (closing or locking windows, format/delete commands, ` +
+        `clicking the same spot five times) stop for a separate confirmation even after the grant. A denied or ` +
+        `revoked grant is final: do not retry, summarize instead. Each turn has a budget of ` +
+        `${COMPUTER_USE_SOFT_LIMIT} actions (hard stop at ${COMPUTER_USE_HARD_LIMIT} or 20 minutes); when it runs out, ` +
+        "summarize what is left instead of retrying.",
     );
   }
   lines.push(
