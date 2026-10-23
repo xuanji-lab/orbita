@@ -290,7 +290,7 @@ export type ComputerUseToolRequest =
   | { action: "sandbox-screenshot"; maxWidth?: number }
   /** 把宿主文件拷进映射目录再喂给 <input type=file>。path 是**宿主**绝对路径 */
   | { action: "sandbox-upload"; selector: string; path: string; element?: string }
-  /** 点一个下载链接，文件落映射目录，回执带宿主侧落点与文件名 */
+  /** 点一个下载链接，文件落映射目录，回执带宿主侧落点与文件名。dir = 可选子目录名（相对 downloads/） */
   | { action: "sandbox-download"; selector: string; dir?: string; element?: string };
 
 /**

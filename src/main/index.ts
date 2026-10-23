@@ -59,6 +59,8 @@ import { buildCloseSandboxWindowScript } from "./computer-use/close-window-scrip
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
+import { applySandboxBrowserRequest, CdpSession } from "./computer-use/cdp.ts";
+import { isSandboxBrowserAction } from "../shared/computer-use.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -510,6 +512,22 @@ void app.whenReady().then(async () => {
   });
   registerComputerUseIpc(computerUse);
 
+  /**
+   * CDP 浏览器通道（PR3）：沙箱里那份 Edge 的会话级状态。
+   *
+   * 宿主这一侧只持有「起没起」的缓存与上传/下载的落点——WebSocket、标签页、选择器表全在
+   * guest 桥里（沙箱是应用级一份，所以这里也只有一个）。outDir 与 SandboxController 的
+   * 映射输出目录是同一个：`<userData>/computer-use/out` ↔ guest 的 `C:\orbita-out`。
+   * 用闭包转一道而不是直接传 controller：CdpGuest 只需要两个方法，测试注入假桥足够。
+   */
+  const cdp = new CdpSession(
+    {
+      guestCommandReply: (command, fields) => computerUse.guestCommandReply(command, fields),
+      guestShot: (command, fields) => computerUse.guestShot(command, fields),
+    },
+    join(configDir, "computer-use", "out"),
+  );
+
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
@@ -605,11 +623,16 @@ void app.whenReady().then(async () => {
         );
       return;
     }
-    // computer use：agent 的沙箱像素工具（截图 / 点击 / 打字 / 按键 / 滚动）——沙箱在主进程
-    // （SandboxController）。沙箱是应用级一份，不按会话分（sessionId 只为信封一致）。
-    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    // computer use：agent 的沙箱工具。
+    //   computer_*（PR2）→ 像素注入，走 SandboxController；
+    //   sandbox_*（PR3）→ 沙箱内 Edge 的 CDP 语义命令，走 CdpSession。
+    // 两条通道都**只有 agent 进程看得见**（renderer 面只有 PR1 那四个入口）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去。
     if (event.type === "computerUseRequest") {
-      void applyComputerUseRequest(computerUse, event.request)
+      void (isSandboxBrowserAction(event.request.action)
+        ? applySandboxBrowserRequest(cdp, event.request)
+        : applyComputerUseRequest(computerUse, event.request)
+      )
         .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
