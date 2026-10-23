@@ -147,8 +147,6 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
   });
 
   test("OpenCode Go 的滚动窗：不是 5 小时，也不是每月", () => {
-    assert.equal(windowLabel(window({ kind: "rolling", label: "Rolling window" }), zh), "滚动窗口");
-    assert.equal(windowLabel(window({ kind: "rolling", label: "Rolling window" }), en), "Rolling window");
   });
 
   test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {

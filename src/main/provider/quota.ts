@@ -38,8 +38,6 @@ const KIND_LABELS = {
   monthly: "Monthly",
   // MCP 工具额度：与 token 窗口不是同一种东西，标签必须分开
   mcp: "MCP monthly",
-  // 滚动窗：厂商没给长度，不能当 5 小时标（那是智谱的说法）
-  rolling: "Rolling window",
 } as const;
 
 function failure(reason: QuotaFailure): QuotaResult {
@@ -524,10 +522,17 @@ export function parseOpenCodeUsage(body: unknown, fetchedAt: number): ParseOutco
     // 缺 percent（或不是数）= 这一项没有可展示的数字，跳过，不写 0% 冒充
     if (percent === undefined) continue;
     const resetsAt = asTimestamp(entry.resetsAt);
+    /*
+     * `rolling` 就是 OpenCode 的 5 小时订阅窗：上游 `Subscription.analyzeRollingUsage`
+     * 算的就是它，issue #43983 的原话是 "the current rolling 5-hour, weekly, and monthly
+     * limits"。所以对外按 `5h` 标（与智谱 / Kimi 同一档），id 仍保留厂商的 `rolling`——
+     * 将来厂商改了窗口长度，从 id 还能看出来源。
+     */
+    const kind: QuotaWindowKind = id === "rolling" ? "5h" : id;
     windows.push({
       id,
-      label: KIND_LABELS[id],
-      kind: id,
+      label: KIND_LABELS[kind],
+      kind,
       usedPercent: percent,
       ...(resetsAt === undefined ? {} : { resetsAt }),
     });

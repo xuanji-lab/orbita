@@ -1303,7 +1303,6 @@ export const zh: Messages = {
       monthly: "每月",
       // MCP 是协议名，保留英文；与「每月」的 token 窗口不是同一种额度
       mcp: "MCP 每月",
-      rolling: "滚动窗口",
     },
     resetsIn: (duration) => `${duration} 后重置`,
     // 额度事实只作副行：缓存说明不了这次失败是谁造成的，不能冒充原因

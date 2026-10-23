@@ -562,7 +562,7 @@ describe("probeQuota —— OpenCode Go 的订阅窗口", () => {
     const result = await probeQuota(opencodeInput());
     assert.equal(result.status, "ok");
     assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
-      { id: "rolling", label: "Rolling window", kind: "rolling", usedPercent: 42, resetsAt: Date.parse("2026-10-23T05:00:00Z") },
+      { id: "rolling", label: "5-hour window", kind: "5h", usedPercent: 42, resetsAt: Date.parse("2026-10-23T05:00:00Z") },
       { id: "weekly", label: "Weekly", kind: "weekly", usedPercent: 7.5, resetsAt: Date.parse("2026-10-27T00:00:00.000Z") },
       // 没有 resetsAt 就不造一个
       { id: "monthly", label: "Monthly", kind: "monthly", usedPercent: 0 },
