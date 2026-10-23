@@ -197,6 +197,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
+    // 按量计费的 API 没有实证过的余额端点（"zhipu" 条目故意不声明 quota）：不猜
     note: "智谱开放平台标准 API（按 token 计费）",
   },
   {
@@ -220,6 +221,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
     billing: "plan",
+    /**
+     * 套餐额度：`{origin}/api/monitor/usage/quota/limit`——**网页控制台在用的内部接口**
+     * （不是公开契约，厂商改版就失效）。鉴权要**裸 key**，带 `Bearer` 直接 401。
+     */
+    quota: "plan-windows",
     modelParams: {
       /**
        * pi 的 `zai-coding-cn` 目录里没有 flash（只到 glm-5.3），
@@ -251,6 +257,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogId: "zai",
     // 端点就是 `/coding/paas/`——与国内站 Coding Plan 同一套餐制
     billing: "plan",
+    // 套餐额度：与国内站同一个后端（`/api/monitor/usage/quota/limit`），内部接口，裸 key
+    quota: "plan-windows",
     note: "智谱国际站的 GLM Coding Plan，与国内站账号不通用",
   },
   {
@@ -261,6 +269,15 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
     // **Step Plan 是订阅制**（Credit 月池，platform.stepfun.com/docs/zh/step-plan）
     billing: "plan",
+    /**
+     * Step Plan 的额度：`GET {origin}/step_plan/v1/usage`。
+     *
+     * ⚠ **官方未文档化、返回格式未验证**：我们的唯一证据是无凭据请求回 401
+     * `invalid_api_key`（同方向的 `/usage/summary`、`/credits`、`/balance` 等全部 404），
+     * 以及用户真实的 baseUrl 就是 `/step_plan/v1`。200 的响应形状至今没人见过，
+     * 解析是保守假设（见 main/provider/quota.ts 的 parseStepfunUsage）。
+     */
+    quota: "plan-windows",
     /**
      * 快速适配通道（2026-09-03，源：官方模型页，当日实拉）：
      *   step-3.7-flash        256K（198B MoE 旗舰多模态推理）
@@ -312,6 +329,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://api.kimi.com/coding",
     catalogId: "kimi-coding",
     billing: "plan",
+    // 套餐额度：`/coding/v1/usages`（会员网页控制台的内部接口），Bearer 鉴权
+    quota: "plan-windows",
     note: "Kimi Code 会员订阅，走 Anthropic 兼容端点",
   },
   {
@@ -326,6 +345,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     headers: { "x-opencode-session": "orbita" },
     // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
     billing: "plan",
+    /**
+     * 订阅窗口：`/zen/go/v1/usage`——推理网关自己的路由，**官方文档没写**（只说去 console
+     * 看用量）。能用但未文档化：厂商改版会静默失效。Bearer 鉴权，与推理共用同一把 key。
+     */
+    quota: "plan-windows",
     note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {

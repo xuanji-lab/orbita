@@ -1296,6 +1296,14 @@ export const zh: Messages = {
     notCheckedYet: "还没有查过。",
     checkNow: "立即查询",
     usedUnit: "已用",
+    // 窗口的语义类别：中文界面必须纯中文，不能直接显示厂商的英文 label
+    windowKind: {
+      "5h": "5 小时",
+      weekly: "每周",
+      monthly: "每月",
+      // MCP 是协议名，保留英文；与「每月」的 token 窗口不是同一种额度
+      mcp: "MCP 每月",
+    },
     resetsIn: (duration) => `${duration} 后重置`,
     justNow: "刚刚",
     minutesAgo: (n) => `${n} 分钟前`,
@@ -1311,6 +1319,7 @@ export const zh: Messages = {
     authMissing: "先在上面填 API 密钥才能查余额。",
     authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
     teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
+    noPlan: "这个账号没有订阅套餐。",
     reasonAuth: "密钥无效",
     reasonNetwork: "网络错误",
     reasonProtocol: "返回格式变了",

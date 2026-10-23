@@ -1401,6 +1401,17 @@ export const en = {
     checkNow: "Check now",
     // 数字后面永远带 used：条本身方向中性，靠这个词钉住「左段 = 已用」
     usedUnit: "used",
+    /**
+     * 窗口的语义类别（`QuotaWindow.kind`）。智谱 / Kimi 只给机器字段、没有给人读的标签，
+     * 英文 label 不能直接出现在中文界面——两处窗口名都走 `windowLabel` 取这一份。
+     */
+    windowKind: {
+      "5h": "5-hour window",
+      weekly: "Weekly",
+      monthly: "Monthly",
+      // MCP 工具的每月额度，与 token 窗口不是同一种额度
+      mcp: "MCP monthly",
+    },
     resetsIn: (duration: string) => `resets in ${duration}`,
     justNow: "just now",
     minutesAgo: (n: number) => `${n} min ago`,
@@ -1416,6 +1427,7 @@ export const en = {
     authMissing: "Add an API key above to see the balance.",
     authRejected: "The provider rejected this API key (401). Update it above, then try again.",
     teamUnsupported: "Team accounts aren't supported. Sign in with a personal account to see quota here.",
+    noPlan: "This account has no subscription.",
     reasonAuth: "key rejected",
     reasonNetwork: "network error",
     reasonProtocol: "unexpected response",
