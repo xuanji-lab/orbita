@@ -233,6 +233,9 @@ export function App() {
   const startFocus = useCallback(
     (workspaceId: string, minutes: number): void => {
       setWsBrowse(null);
+      // 专注是���个替代会话列表的左栏视图；设置页是 overlay，优先级高过它——
+      // 不退掉 overlay 的话，从设置页开始专注，左栏会继续停在设置导航（2026-10-23 实测）。
+      setOverlay(null);
       setSummaryCardClosed(false);
       setSayDismissed(false);
       focus.start(workspaceId, minutes);
