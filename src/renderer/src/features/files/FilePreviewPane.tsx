@@ -42,6 +42,13 @@ export function FilePreviewPane(props: {
   rootLabel: string;
   /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
   jump?: PdfJump | null;
+  /**
+   * 强制走 PDF 预览（论文工作台）：项目里刚编出来的 PDF 是编译条的直接产物，
+   * 不受「PDF 引用」实验开关管。开关管理的只是引用编号，不是「能不能看 PDF」。
+   */
+  pdfPreview?: boolean;
+  /** 外部要求重载 PDF（编译成功后自增）：按 mtime 重读，失败时不增、保留旧 PDF */
+  pdfReloadToken?: number;
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
@@ -49,9 +56,11 @@ export function FilePreviewPane(props: {
   const extra = extraWorkspaceId === null ? {} : { extraWorkspaceId };
   const sentImage = props.sentImage;
   // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
-  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
+  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF。
+  // 论文工作台直接编出来的 PDF 有 pdfPreview 豁免（见 props 注释）
   const pdfCitations = useExperimentalFeature("pdf-citations");
-  const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
+  const pdf =
+    sentImage === undefined && (pdfCitations || props.pdfPreview === true) && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
@@ -201,7 +210,7 @@ export function FilePreviewPane(props: {
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
-            reloadToken={pdfReload}
+            reloadToken={pdfReload + (props.pdfReloadToken ?? 0)}
           />
         ) : sentImage === undefined ? (
           <PreviewBody

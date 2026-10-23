@@ -2765,6 +2765,154 @@ body {
   height: 100%;
 }
 
+/* ---------- 论文工作台：编译条 + 问题抽屉（LaTeX 项目） ----------
+ * 面板内容变成「编译条 / 文件内容 / 问题抽屉」三段的纵向 flex：
+ * 编译条与抽屉都不滚（抽屉自己的列表滚），中间的文件内容吃剩余高度。
+ * 非 LaTeX 文件只有中间一段，几何与改动前一致。 */
+.files-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.files-workbench > .files-panel-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.latex-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* 编译键：安静态是文字按钮，dirty 态换成 accent 主按钮（.btn-accent）。
+   几何独立于两种配方：24 高、内边距 8，与胶囊里的 chip 齐平 */
+.latex-compile {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.latex-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-status-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* 抽屉：默认一行；展开后列表自己有上限，不把文件内容挤没 */
+.latex-problems {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.latex-problems-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0;
+  font-size: var(--font-size-sm);
+  text-align: left;
+}
+.latex-problems-head:disabled {
+  cursor: default;
+}
+.latex-problem-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+}
+.latex-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.latex-count.err {
+  color: var(--color-danger);
+}
+.latex-count.warn {
+  color: var(--color-warning);
+}
+.latex-problem-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+.latex-problem {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.latex-problem:hover {
+  background: var(--option-hover-bg);
+}
+.latex-problem[data-level="layout"] {
+  color: var(--color-text-secondary);
+}
+.latex-problem-loc {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-problem-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.latex-problem-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.latex-problem-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.latex-error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
 /*
  * 预览头：标签页模型下关闭归标签 ✕ 与 Esc 管，头部只剩面包屑（从所在根开始的
  * 路径分段 + size·mtime）与动作。面包屑分段由 crumbSegmentsFromRoot 从根的名
