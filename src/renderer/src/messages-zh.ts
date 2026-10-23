@@ -1636,6 +1636,26 @@ export const zh: Messages = {
     quoteMissingPackage: "缺少宏包",
   },
 
+  /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
+  editor: {
+    aria: "LaTeX 源码编辑器",
+    saved: "已保存",
+    unsaved: "未保存",
+    saving: "保存中…",
+    saveFailed: "保存失败",
+    conflictState: "有冲突",
+    cursor: (line, column) => `第 ${line} 行，第 ${column} 列`,
+    conflictBanner: "你编辑期间这个文件在磁盘上被改过了。你的改动没有被写下去。",
+    errorBanner: "这个文件没能保存。",
+    conflictAfterClose: "没保存：你编辑期间文件在磁盘上被改过了。重新打开这个标签再处理。",
+    conflictBlocksCompile: "没有编译：先处理这个文件的冲突——编辑器里的和磁盘上的不一致。",
+    resolveConflictFirst: "先处理这个文件的冲突（重新加载或保留我的）。",
+    resolveConflictBeforeSwitch: "没有切换：先处理这个文件的冲突（重新加载或保留我的）——切走会丢掉你没保存的内容。",
+    reload: "重新加载",
+    keepMine: "保留我的",
+    tooLarge: (size, limit) => `没有保存：${size} 超过了编辑器 ${limit} 的上限。`,
+  },
+
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "意图",
