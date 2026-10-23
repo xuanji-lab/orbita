@@ -394,6 +394,10 @@ export const en = {
     shotNeedsRunning: "Start the sandbox to take a look",
     shotNativeSize: "Native size",
     shotAlt: "Sandbox desktop screenshot",
+    /* Composer-bar grant chip (session-level consent; click toggles grant / revoke) */
+    grantChip: "Computer use",
+    grantChipOn: "This session may drive the sandbox · click to revoke (takes effect in the current turn)",
+    grantChipOff: "This session is not authorized to drive the sandbox · click to allow (takes effect in the current turn)",
   },
 
   drawer: {
@@ -1526,6 +1530,19 @@ export const en = {
     deny: "Deny",
     stopEditing: "Stop editing",
     editInput: "Edit input",
+    /* Session grant card for computer use (not an ordinary approval: allow = the whole session) */
+    sessionTitle: "Let the agent drive the sandbox?",
+    sessionBody:
+      "It will see the sandbox screen and click, type and press keys inside it. The sandbox desktop is shared app-wide: there is only one screen, and other sessions can drive it too — you are allowing this session to act. Destructive actions (delete, format, close a window) still stop and ask you separately.",
+    allowSession: "Allow for this session",
+    /* Destructive-action confirmation (D1/D2/D3): not a refusal — allowing it runs the step */
+    riskTitle: "This step may be hard to undo. Confirm?",
+    riskKeys: (detail: string) => `About to press ${detail}`,
+    riskCommand: (detail: string) => `About to type a destructive command: ${detail}`,
+    riskRepeat: (count: number) => `About to click the same spot for the ${count}. time (±4px)`,
+    riskHint: "Inputs that match a guard rule stop before they run; you can cancel or allow.",
+    allowRisk: "Run it anyway",
+    cancelRisk: "Cancel",
   },
 
   carryover: {

@@ -573,6 +573,12 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 电脑使用授权（PR4）：闸门是唯一知道用户点了什么的层，它把「允许」经事件报回来，
+    // 主进程负责落 meta（下一轮开机的种子）。**不 return**：事件还要广播给 renderer
+    // 更新会话头的授权标识。写盘失败不该卡住事件转发（授权在当前轮已由账本兑现）。
+    if (event.type === "computerUseGrant") {
+      void sessions.setComputerUseGrant(event.sessionId, event.at).catch(() => undefined);
+    }
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
     if (event.type === "failed" && event.sessionId === null) phases.clear();

@@ -2148,6 +2148,8 @@ function ComposerBar(props: {
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
+  // 电脑使用授权芯片：实验开关关着时工具根本没注册，挂个授权入口只会让人以为它能用
+  const computerUseFeature = useExperimentalFeature("computer-use");
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
   // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
@@ -2312,6 +2314,20 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
+      {/* 电脑使用授权（会话级同意书）：有会话才显示。**授权与撤销同一个入口**——
+          撤销之后还要能重新授予，否则 skip 档下用户只能等下一个进程重启。
+          active = 已授权；点击立即切换，当前轮的下一次 computer_* 就按新值判。 */}
+      {computerUseFeature && session.hasSession ? (
+        <Chip
+          icon="monitor"
+          active={session.computerUseGranted}
+          title={session.computerUseGranted ? t.computerUse.grantChipOn : t.computerUse.grantChipOff}
+          onClick={() => session.setComputerUseGrant(!session.computerUseGranted)}
+          className="chip-computer-use"
+        >
+          {t.computerUse.grantChip}
+        </Chip>
+      ) : null}
       {props.intentToggle !== null && (
         <Chip
           icon="waypoints"

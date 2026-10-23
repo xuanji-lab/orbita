@@ -177,10 +177,10 @@ describe("computer-guard —— 预算两级（按轮重置的边界）", () => 
     assert.equal(judgeComputerUseBudget({ count: 0, startedAt: null, now: Number.MAX_SAFE_INTEGER }).level, "ok");
   });
 
-  test("被挡下的调用不计数：count 是「已执行」的次数，连续软限错误不会快进到硬限", () => {
+  test("count 是「已尝试」的次数：同一 count 反复判得到同一结论（推进计数是闸门的事）", () => {
     const soft = judgeComputerUseBudget({ count: COMPUTER_USE_SOFT_LIMIT, startedAt: now, now });
     assert.equal(soft.level, "soft");
-    // 模型重试 100 次，count 仍是 60 → 每次都还是 soft，不会变成 hard
+    // 纯函数只认输入：同一个 count 判多少次都是 soft；闸门每次尝试才把 count 推进 1
     for (let i = 0; i < 100; i += 1) {
       assert.equal(judgeComputerUseBudget({ count: COMPUTER_USE_SOFT_LIMIT, startedAt: now, now }).level, "soft");
     }

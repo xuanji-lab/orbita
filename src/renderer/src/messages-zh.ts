@@ -364,6 +364,10 @@ export const zh: Messages = {
     shotNeedsRunning: "沙箱启动后才能看一眼",
     shotNativeSize: "原始尺寸",
     shotAlt: "沙箱桌面截图",
+    /* 输入框底栏的授权芯片（会话级同意书；点击在授权 / 撤销之间切换） */
+    grantChip: "电脑使用",
+    grantChipOn: "本次会话已允许操作沙箱 · 点击撤销（当前轮立即生效）",
+    grantChipOff: "本会话还没有授权操作沙箱 · 点击授予（当前轮立即生效）",
   },
 
   drawer: {
@@ -1422,6 +1426,19 @@ export const zh: Messages = {
     deny: "拒绝",
     stopEditing: "结束编辑",
     editInput: "改参数",
+    /* 电脑使用的会话授权卡（不是普通审批：允许 = 整条会话放行） */
+    sessionTitle: "允许智能体操作沙箱？",
+    sessionBody:
+      "它会看见沙箱的屏幕，并在里面点击、输入、按键。沙箱桌面是应用级共享的：同一时间只有一块屏幕，其它会话也能操作它——你在这里同意的是「这条会话可以动手」。删除、格式化、关窗这类破坏性动作仍会单独再问你一次。",
+    allowSession: "本次会话允许",
+    /* 破坏性动作的确认卡（D1/D2/D3）：不是拒绝，点了仍要执行就放行 */
+    riskTitle: "这一步可能会不可逆，确认？",
+    riskKeys: (detail) => `即将按下组合键 ${detail}`,
+    riskCommand: (detail) => `即将输入一条破坏性命令：${detail}`,
+    riskRepeat: (count) => `即将第 ${count} 次点击同一坐标（±4 像素）`,
+    riskHint: "命中规则的输入与按键会在执行前停下来问你；可以取消，也可以放行。",
+    allowRisk: "仍要执行",
+    cancelRisk: "取消",
   },
 
   carryover: {

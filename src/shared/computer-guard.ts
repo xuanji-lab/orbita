@@ -231,7 +231,13 @@ export const COMPUTER_USE_HARD_LIMIT = 90;
 export const COMPUTER_USE_TURN_DEADLINE_MS = 20 * 60_000;
 
 export interface ComputerUseBudgetState {
-  /** 本轮**已经执行**的 computer_* 次数（不含当前这一次；被预算挡下的调用不计数） */
+  /**
+   * 本轮**已经尝试过**的 computer_* 次数（不含当前这一次；当前这一次是 count + 1）。
+   *
+   * **被软限挡下的重试也计数**——这是硬限存在的意义：软限给模型 30 次收尾机会，
+   * 它要是还在一遍遍重试，第 91 次就中断本轮。不计数的话 count 停在 60，硬限永远
+   * 到不了，模型可以无限刷软限错误。
+   */
   count: number;
   /** 本轮第一次 computer_* 的时刻（毫秒）；null = 还没开始 */
   startedAt: number | null;

@@ -392,6 +392,18 @@ export interface ChatSession {
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
   newTaskIn: (workspace: Workspace) => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
+  /**
+   * 本会话是否已被用户授权操作沙箱（会话级同意书，落 SessionMeta）。
+   * **不是**实验开关：开关决定工具存不存在，这个决定工具存在时能不能动手。
+   */
+  computerUseGranted: boolean;
+  /** 本槽是否正看着一条已经存在的会话（活会话或盘上打开的）；新任务槽为 false */
+  hasSession: boolean;
+  /**
+   * 撤销 / 重新授予电脑使用（会话头入口）。撤销立即生效：当前轮的下一次 computer_*
+   * 就返回人话错误；重新授予后同样不等下一轮。
+   */
+  setComputerUseGrant: (granted: boolean) => void;
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
   intentRecalls: readonly IntentRecallRecord[];
@@ -421,6 +433,8 @@ interface ViewHandle {
   alignThinking(event: { level: PiThinkingLevel }): void;
   /** 档位被父会话切档联动改了（主进程已落 meta / runtime）：mode 芯片对齐 */
   alignMode(mode: PermissionMode): void;
+  /** 电脑使用授权被别处改了（gate 的会话卡 / 急停 / 另一个窗口）：本槽标识对齐 */
+  alignComputerUse(at: number | null): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
@@ -527,6 +541,10 @@ export interface SessionEngine {
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
+  /** 按 requestId 反查审批属于哪条会话（会话授权卡回答后要更新那条会话的标识） */
+  readonly approvalOwner: (
+    requestId: string,
+  ) => { sessionId: string; approval: PendingApproval } | null;
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
@@ -948,6 +966,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
             }
           }
         }
+        // 电脑使用授权变更（gate 的会话卡 / 另一个窗口的撤销）：对齐正看着那条
+        if (event.type === "computerUseGrant") {
+          for (const view of views.current) {
+            if (event.sessionId === view.viewedIdRef.current) {
+              view.alignComputerUse(event.at);
+              break;
+            }
+          }
+        }
         // 工具耗时在这里记账（事件必经之路）：组折叠时成员行不渲染，渲染驱动会漏
         if (
           event.type === "progress" &&
@@ -1184,6 +1211,16 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
     [],
   );
+  const approvalOwner = useCallback(
+    (requestId: string): { sessionId: string; approval: PendingApproval } | null => {
+      for (const [id, entry] of statesRef.current) {
+        const approval = entry.approvals.find((item) => item.requestId === requestId);
+        if (approval !== undefined) return { sessionId: id, approval };
+      }
+      return null;
+    },
+    [],
+  );
 
   return {
     catalog,
@@ -1220,6 +1257,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     phaseOf,
     turnErrorOf,
     approvalsOf,
+    approvalOwner,
     answerApproval,
     renameSession,
     pinSession,
@@ -1282,6 +1320,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
   const [mode, setMode] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE);
+  /**
+   * 本会话的电脑使用授权时刻（毫秒）；null = 未授权 / 已撤销。
+   * 来源三处：打开会话时 meta、会话卡点了「本次会话允许」、会话头 / 急停的 IPC 回环。
+   */
+  const [computerUseGrantedAt, setComputerUseGrantedAt] = useState<number | null>(null);
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
   const sessionRef = useRef<string | null>(null);
@@ -1460,6 +1503,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
       // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
       alignMode: (mode) => setMode(mode),
+      alignComputerUse: (at) => setComputerUseGrantedAt(at),
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       alignThinking: (event) => {
@@ -2056,6 +2100,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     sessionRef.current = null;
     engine.setError(null);
     setOpened(null);
+    // 新任务槽还没有会话：授权属于会话，不跟着槽走
+    setComputerUseGrantedAt(null);
     // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
     // 思考档按规则重算：模型不变，但档位不能沿用刚才打开的那条旧会话的账——
     // 否则「回首页开新任务」看起来会像是继承了上一条会话的思考档
@@ -2091,6 +2137,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           // 切走再切回时若拿 meta 重置 chip，chip 就会说 plan 而下一轮实际跑 skip
           const own = engine.sessionIntent.current.get(id);
           setMode(own?.mode ?? detail.meta.mode);
+          setComputerUseGrantedAt(detail.meta.computerUseGrantedAt ?? null);
           setModel(own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId });
           setThinkingLevelState(own?.thinkingLevel ?? detail.meta.thinkingLevel);
           // 无状态：没有「活会话集合」要重连——正在跑的会话它的槽本来就在 states
@@ -2337,6 +2384,38 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (switched !== null) applySessionThinking(id, switched);
     },
     [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
+  );
+
+  /**
+   * 电脑使用授权（会话级同意书的撤销 / 重新授予入口）。**撤销立即生效**：
+   * 主进程落 meta 并把新值推给 agent 进程，当前轮的下一次 computer_* 就按它判。
+   */
+  const setComputerUseGrant = useCallback(
+    (granted: boolean) => {
+      const id = sessionRef.current ?? opened?.id ?? null;
+      if (id === null) return;
+      setComputerUseGrantedAt(granted ? Date.now() : null);
+      void api.agent
+        .setComputerUseGrant(id, granted)
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+    },
+    [engine, opened],
+  );
+
+  /**
+   * 审批回答：会话授权卡点了「允许」就等于本会话授权成立（gate 也会回一条
+   * `computerUseGrant` 事件，两条路同源，谁先到都一样）；普通卡原样透传。
+   */
+  const answerApproval = useCallback(
+    (requestId: string, answer: PermissionAnswer) => {
+      const owner = engine.approvalOwner(requestId);
+      void engine.answerApproval(requestId, answer);
+      if (answer.behavior !== "allow" || owner === null) return;
+      if (owner.approval.scope === "session" && owner.sessionId === viewedIdRef.current) {
+        setComputerUseGrantedAt(Date.now());
+      }
+    },
+    [engine],
   );
 
   const changeMode = useCallback(
@@ -3192,7 +3271,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     moveQueuedTo,
     newTask,
     newTaskIn,
-    answerApproval: engine.answerApproval,
+    answerApproval,
+    computerUseGranted: computerUseGrantedAt !== null,
+    hasSession: sessionId !== null || opened !== null,
+    setComputerUseGrant,
   };
 }
 
