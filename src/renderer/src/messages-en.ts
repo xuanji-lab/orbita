@@ -1699,6 +1699,8 @@ export const en = {
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
+    /** 大 md 退化：不再跑 MarkdownBlock，按等宽原文看 */
+    largeTextPlain: (size: string) => `Large file (${size}) — showing plain text`,
     pdfFailed: "Couldn't open this PDF:",
     pdfPassword: "This PDF is password-protected and can't be previewed.",
     citeNotFound: (page: number) =>

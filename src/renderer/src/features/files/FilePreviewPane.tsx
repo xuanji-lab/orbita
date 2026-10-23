@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { PanelButton, PanelIconButton, PanelLine } from "../../shell/RightPanel";
@@ -7,7 +7,8 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
+import { textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
+import { WindowedText } from "./WindowedText";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
@@ -90,6 +91,9 @@ export function FilePreviewPane(props: {
     const el = crumbRef.current;
     if (el !== null) el.scrollLeft = el.scrollWidth;
   }, [segments]);
+
+  // 预览体的滚动容器：窗口化渲染（大文件）要按它的 scrollTop / clientHeight 算窗口
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const copyPath = (): void => {
     navigator.clipboard
@@ -196,7 +200,7 @@ export function FilePreviewPane(props: {
           </Chip>
         </div>
       )}
-      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined}>
+      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined} ref={bodyRef}>
         {pdf ? (
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
@@ -206,6 +210,8 @@ export function FilePreviewPane(props: {
         ) : sentImage === undefined ? (
           <PreviewBody
             name={name}
+            resetKey={path}
+            scroller={bodyRef}
             mode={mode}
             previewMode={previewMode}
             state={state}
@@ -336,6 +342,9 @@ function useSentImage(enabled: boolean, ref: string): SentImageState {
 /** 体：读取中 / 失败 / 按 kind 与文本形态分派的正文 */
 function PreviewBody(props: {
   name: string;
+  /** 换文件时窗口化渲染要重置滚动与窗口（软刷新同文件不重置） */
+  resetKey: string;
+  scroller: RefObject<HTMLDivElement | null>;
   mode: "rendered" | "source";
   previewMode: "markdown" | "code" | "plain";
   state: LoadState;
@@ -397,30 +406,68 @@ function PreviewBody(props: {
           <PanelLine>{truncatedNotice(PREVIEW_TEXT_LIMIT, data.size, t)}</PanelLine>
         </div>
       )}
-      <TextBody name={props.name} mode={props.mode} previewMode={props.previewMode} text={data.text} />
+      <TextBody
+        name={props.name}
+        mode={props.mode}
+        previewMode={props.previewMode}
+        text={data.text}
+        size={data.size}
+        scroller={props.scroller}
+        resetKey={props.resetKey}
+      />
     </>
   );
 }
 
-/** 三种文本形态的正文：markdown 渲染 / 代码高亮 / 等宽原文；md 的 Source 与超限代码都落等宽原文 */
+/**
+ * 文本正文的四条路径（判定在 preview-view.ts 的 textRenderKind）：markdown 渲染 /
+ * 代码高亮 / 等宽原文 / 窗口化大文本。md 的 Source、超限代码与大文件都落等宽原文。
+ *
+ * 大文件窗口化时一律不折行、横向滚动——行高必须固定，窗口才算得准（见 WindowedText）。
+ */
 function TextBody(props: {
   name: string;
   mode: "rendered" | "source";
   previewMode: "markdown" | "code" | "plain";
   text: string;
+  /** 文件字节数（提示条上显示的体积要用真实字节，不是字符数） */
+  size: number;
+  scroller: RefObject<HTMLDivElement | null>;
+  resetKey: string;
 }) {
-  if (props.previewMode === "markdown" && props.mode === "rendered") {
+  const t = useT();
+  const kind = textRenderKind(props.previewMode, props.mode, props.text.length);
+  if (kind === "markdown") {
     return <MarkdownBlock text={props.text} variant="full" />;
   }
-  if (props.previewMode === "code" && props.text.length <= HIGHLIGHT_LIMIT) {
+  if (kind === "highlight") {
     return <HighlightedCode name={props.name} text={props.text} />;
+  }
+  // md 退化成纯文本要说明一声（窗口化本身对 txt / bib / tex 是透明的，不提示）；
+  // 两条退化路径（小一些的整篇 `<pre>`、大一些的窗口化）共用同一条提示
+  const notice =
+    props.previewMode === "markdown" && props.mode === "rendered" ? (
+      <div className="file-preview-notice">
+        <PanelLine>{t.files.largeTextPlain(formatSize(props.size))}</PanelLine>
+      </div>
+    ) : null;
+  if (kind === "windowed") {
+    return (
+      <>
+        {notice}
+        <WindowedText text={props.text} scroller={props.scroller} resetKey={props.resetKey} />
+      </>
+    );
   }
   // 超过高亮上限的代码仍按代码排：不折行（与高亮卡片一致，横向滚动），
   // 折行只给 txt / md 源码这类散文式文本
   return (
-    <pre className="file-preview-source" data-wrap={props.previewMode === "code" ? "off" : undefined}>
-      {props.text}
-    </pre>
+    <>
+      {notice}
+      <pre className="file-preview-source" data-wrap={props.previewMode === "code" ? "off" : undefined}>
+        {props.text}
+      </pre>
+    </>
   );
 }
 
