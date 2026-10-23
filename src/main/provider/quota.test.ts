@@ -627,3 +627,99 @@ describe("probeQuota —— OpenCode Go 的订阅窗口", () => {
     assert.deepEqual(await probeQuota(opencodeInput()), { status: "error", reason: "protocol", cached: null });
   });
 });
+
+const stepfunInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput => ({
+  probe: "plan-windows",
+  kind: "stepfun",
+  baseUrl: "https://api.stepfun.com/step_plan/v1",
+  apiKey: "sk-step",
+  ...overrides,
+});
+
+describe("probeQuota —— StepFun（响应形状未验证，只能按保守假设）", () => {
+  test("窗口式：rolling / weekly / monthly 各一个，kind 与重置时刻对上；URL 与 Bearer", async () => {
+    const stub = stubFetch(() =>
+      okBody({
+        usage: {
+          rolling: { percent: 42, resetsAt: "2026-10-23T05:00:00Z" },
+          weekly: { percent: 7.5, resetTime: 1792972800000 },
+          monthly: { percent: 0 },
+        },
+      }),
+    );
+    const result = await probeQuota(stepfunInput());
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
+      {
+        id: "rolling",
+        label: "5-hour window",
+        kind: "5h",
+        usedPercent: 42,
+        windowMinutes: 300,
+        resetsAt: Date.parse("2026-10-23T05:00:00Z"),
+      },
+      { id: "weekly", label: "Weekly", kind: "weekly", usedPercent: 7.5, windowMinutes: 10080, resetsAt: 1_792_972_800_000 },
+      { id: "monthly", label: "Monthly", kind: "monthly", usedPercent: 0 },
+    ]);
+    assert.equal(stub.calls[0]?.url, "https://api.stepfun.com/step_plan/v1/usage");
+    assert.equal(headersOf(stub.calls[0]).Authorization, "Bearer sk-step");
+  });
+
+  test("认不得的窗口名 → custom + 原文标签（不硬套成 5 小时 / 每月）", async () => {
+    stubFetch(() => okBody({ usage: { burst: { percent: 12 } } }));
+    const result = await probeQuota(stepfunInput());
+    assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
+      { id: "burst", label: "burst", kind: "custom", usedPercent: 12 },
+    ]);
+  });
+
+  test("余额式：remaining 直接作余额；只有 total+used 时做减法；币种缺省 CNY", async () => {
+    stubFetch(() => okBody({ credits: { remaining: "750.00", currency: "CNY" } }));
+    const first = await probeQuota(stepfunInput());
+    assert.deepEqual(first.status === "ok" ? first.snapshot : null, {
+      credits: { amount: "750.00", currency: "CNY" },
+      windows: [],
+      fetchedAt: first.status === "ok" ? first.snapshot.fetchedAt : 0,
+    });
+
+    stubFetch(() => okBody({ balance: { total: 1000, used: 250 } }));
+    const second = await probeQuota(stepfunInput());
+    assert.deepEqual(second.status === "ok" ? second.snapshot.credits : null, { amount: "750", currency: "CNY" });
+  });
+
+  test("认不出 → protocol，不抛；日志只打字段名（值一个都不进日志）", async () => {
+    const original = console.warn;
+    const logged: unknown[][] = [];
+    console.warn = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      const stub = stubFetch(() => okBody({ foo: 1, bar: "secret-ish" }));
+      // 不抛，也不需要任何端口
+      assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "protocol", cached: null });
+      assert.equal(stub.calls.length, 1);
+    } finally {
+      console.warn = original;
+    }
+    assert.deepEqual(logged[0], ["[quota] stepfun 未识别的响应字段", ["foo", "bar"], []]);
+  });
+
+  test("401 → auth；403 → unsupported；404 → protocol；5xx / 连不上 → network", async () => {
+    stubFetch(() => new Response("{}", { status: 401 }));
+    assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "auth", cached: null });
+
+    stubFetch(() => new Response("{}", { status: 403 }));
+    assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "unsupported", cached: null });
+
+    stubFetch(() => new Response("not found", { status: 404 }));
+    assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "protocol", cached: null });
+
+    stubFetch(() => new Response("oops", { status: 502 }));
+    assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "network", cached: null });
+
+    stubFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "network", cached: null });
+  });
+});

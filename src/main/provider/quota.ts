@@ -562,6 +562,130 @@ async function probeOpenCode(origin: string, apiKey: string): Promise<QuotaResul
 }
 
 /* ------------------------------------------------------------------ *
+ * StepFun：Step Plan 的额度
+ * ------------------------------------------------------------------ */
+
+/**
+ * StepFun 的 **200 响应至今没人见过**（证据见下），所以解析只接受两种可辩护的形状，
+ * 其余一律 protocol——不猜字段含义、不拿未知字段当百分比。
+ *
+ * 已知事实（2026-10-23）：
+ *   - 官方 API 参考只有 chat / models / files / audio，计费页只讲 Credit 规则并让去控制台看；
+ *   - `stepfun-cli@0.2.4` 与 `stepcode@2.0.0` 的 bundle 里没有任何 usage 路径；
+ *   - 路由**真实存在**：`GET /step_plan/v1/usage` 无凭据回 401
+ *     （`invalid_api_key`），而同方向的 `/usage/summary`、`/credits`、`/balance`、
+ *     `/subscription`、`/v1/usage`、`/v1/user/balance` 全部 404。
+ *
+ * 所以：**这条 200 至今没人见过**，下面的解析是「可辩护的保守假设」。第一次拿到真实响应后
+ * 要回来收紧（尤其是 `rolling` 到底是不是 5 小时窗）；认不出时只打**字段名**，不打值。
+ */
+export function parseStepfunUsage(body: unknown, fetchedAt: number): ParseOutcome {
+  const record = asRecord(body);
+  if (record === null) return { ok: false, reason: "protocol" };
+
+  const windows = stepfunWindows(asRecord(record.usage));
+  if (windows.length > 0) return parsed(windows, fetchedAt);
+
+  const credits = stepfunCredits(record);
+  if (credits !== null) return { ok: true, snapshot: { credits, windows: [], fetchedAt } };
+
+  // 只打字段名：这里可能有额度数字或账号信息，一个值都不进日志
+  console.warn(
+    "[quota] stepfun 未识别的响应字段",
+    Object.keys(record),
+    Object.keys(asRecord(record.usage) ?? {}),
+  );
+  return { ok: false, reason: "protocol" };
+}
+
+/**
+ * 窗口式：`{ usage: { <name>: { percent, resetsAt|resetTime } } }`。
+ * `rolling` 按 5 小时窗处理（Step Plan 的滚动窗，与智谱 / Kimi / OpenCode 同档）——
+ * **这是假设，不是实证**；其余 `weekly` / `monthly` 按名字；认不得的名字用原文当标签。
+ */
+function stepfunWindows(usage: Record<string, unknown> | null): QuotaWindow[] {
+  if (usage === null) return [];
+  const windows: QuotaWindow[] = [];
+  for (const [name, value] of Object.entries(usage)) {
+    const entry = asRecord(value);
+    if (entry === null) continue;
+    const percent = asNumber(entry.percent);
+    // 缺 percent 就不拿 unknown 字段顶上：这一项跳过，不写 0% 冒充
+    if (percent === undefined) continue;
+    const kind = stepfunKind(name);
+    const resetsAt = asTimestamp(entry.resetsAt) ?? asTimestamp(entry.resetTime);
+    windows.push({
+      id: name,
+      label: kind === "custom" ? name : KIND_LABELS[kind],
+      kind,
+      usedPercent: percent,
+      ...(kind === "5h" ? { windowMinutes: 5 * 60 } : {}),
+      ...(kind === "weekly" ? { windowMinutes: 7 * 24 * 60 } : {}),
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    });
+  }
+  return windows;
+}
+
+function stepfunKind(name: string): QuotaWindowKind {
+  switch (name) {
+    case "rolling":
+      return "5h";
+    case "weekly":
+      return "weekly";
+    case "monthly":
+      return "monthly";
+    default:
+      return "custom";
+  }
+}
+
+/** 金额字段：字符串原样保精度，数字转字符串（数字本身没有末尾 0，不会丢） */
+function stepfunMoney(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim() !== "") return value;
+  const parsed = asNumber(value);
+  return parsed === undefined ? undefined : String(parsed);
+}
+
+/**
+ * 余额式：`{ credits|credit|balance: { total|remaining|used } }`，能配出「剩余」的才算数。
+ * `remaining` 直接就是答案；只有 `total` 时它自己就是剩余；`total` + `used` 做一次减法
+ * （本探针唯一的金额算术，只用于积分类整数）。币种缺省 `CNY`（StepFun 是国内站）。
+ */
+function stepfunCredits(record: Record<string, unknown>): QuotaCredits | null {
+  const source = asRecord(record.credits) ?? asRecord(record.credit) ?? asRecord(record.balance);
+  if (source === null) return null;
+  const currency = asString(source.currency) ?? "CNY";
+  const remaining = stepfunMoney(source.remaining);
+  if (remaining !== undefined) return { amount: remaining, currency };
+  const total = stepfunMoney(source.total);
+  if (total === undefined) return null;
+  const used = stepfunMoney(source.used);
+  if (used === undefined) return { amount: total, currency };
+  const derived = Number(total) - Number(used);
+  return Number.isFinite(derived) ? { amount: String(derived), currency } : null;
+}
+
+async function probeStepfun(origin: string, apiKey: string): Promise<QuotaResult> {
+  let url: string;
+  try {
+    url = new URL("/step_plan/v1/usage", origin).toString();
+  } catch {
+    return failure("protocol");
+  }
+  const attempt = await fetchJson(
+    url,
+    { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+    // 403：账号不符合 Step Plan 的条件（没订阅 / 不在白名单），要用户换账号
+    "unsupported",
+  );
+  if (!attempt.ok) return failure(attempt.reason);
+  const outcome = parseStepfunUsage(attempt.body, Date.now());
+  if (!outcome.ok) return failure(outcome.reason);
+  return { status: "ok", snapshot: outcome.snapshot, fromCache: false };
+}
+
+/* ------------------------------------------------------------------ *
  * 分发
  * ------------------------------------------------------------------ */
 
@@ -594,6 +718,8 @@ export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
       return probeKimi(origin, input.apiKey);
     case "opencode-go":
       return probeOpenCode(origin, input.apiKey);
+    case "stepfun":
+      return probeStepfun(origin, input.apiKey);
     default:
       // 能力声明了但这家还没接：不猜端点
       return failure("unsupported");

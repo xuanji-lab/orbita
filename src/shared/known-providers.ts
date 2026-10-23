@@ -270,6 +270,15 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     // **Step Plan 是订阅制**（Credit 月池，platform.stepfun.com/docs/zh/step-plan）
     billing: "plan",
     /**
+     * Step Plan 的额度：`GET {origin}/step_plan/v1/usage`。
+     *
+     * ⚠ **官方未文档化、返回格式未验证**：我们的唯一证据是无凭据请求回 401
+     * `invalid_api_key`（同方向的 `/usage/summary`、`/credits`、`/balance` 等全部 404），
+     * 以及用户真实的 baseUrl 就是 `/step_plan/v1`。200 的响应形状至今没人见过，
+     * 解析是保守假设（见 main/provider/quota.ts 的 parseStepfunUsage）。
+     */
+    quota: "plan-windows",
+    /**
      * 快速适配通道（2026-09-03，源：官方模型页，当日实拉）：
      *   step-3.7-flash        256K（198B MoE 旗舰多模态推理）
      *   step-3.5-flash        256K（196B MoE 旗舰语言推理）
