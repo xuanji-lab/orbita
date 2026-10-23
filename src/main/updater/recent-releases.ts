@@ -13,8 +13,9 @@
  * - **说明读每一版附带的 latest.yml，不读 Release 正文**（`body` 是给专业用户的完整文档，
  *   见 notes.ts 文件头）：列表里每一行自己是一条 disclosure，展开就地看那一版带来了什么；
  *   没传 latest.yml / 里面没写 / 拉不到就是 `notes: null`，界面据此不画三角（不是丢掉这一行
- *   ——版本号与日期还是要列出来）。每版多一次请求（最多 5 次，并行），走 GitHub 的下载地址，
- *   不占 API 的未认证配额。
+ *   ——版本号与日期还是要列出来）。每版多一次请求（最多 5 次，并行），走发布资产端点
+ *   （`releases/assets/<id>`）而不是 `browser_download_url`：后者在 github.com 网页域名上，
+ *   部分网络被拦（与更新器同一个理由，见 github-api-provider.ts）。
  * - **只缓存成功**，10 分钟。失败不缓存，用户点「重试」是真的再打一次；成功则点开 /
  *   收起来回点不打 API。内测期发布节奏远慢于 10 分钟，够用。
  * - **失败是数据**（RecentReleasesResult）：离线 / 限流 / 非 200 都由界面在展开体里
@@ -62,14 +63,17 @@ export interface ListedRelease extends Omit<RecentRelease, "notes"> {
 /** 带说明的更新元数据文件：Windows 的 latest.yml 优先，没有再看 mac 的（两份说明同源） */
 const CHANNEL_FILES = ["latest.yml", "latest-mac.yml"] as const;
 
-function channelFileUrl(assets: unknown): string | null {
+function channelFileUrl(assets: unknown, assetBaseUrl: string | null): string | null {
   if (!Array.isArray(assets)) return null;
   for (const name of CHANNEL_FILES) {
     for (const asset of assets) {
       if (typeof asset !== "object" || asset === null) continue;
       const record = asset as Record<string, unknown>;
+      if (record.name !== name) continue;
+      // 优先用资产 id 拼 API 地址；老响应没有 id 才退回网页下载地址（那条可能被拦）
+      if (typeof record.id === "number" && assetBaseUrl !== null) return `${assetBaseUrl}/${record.id}`;
       const url = text(record.browser_download_url);
-      if (record.name === name && url !== null) return url;
+      if (url !== null) return url;
     }
   }
   return null;
@@ -84,7 +88,7 @@ export function notesFromChannelFile(raw: string): readonly UpdateNote[] | null 
   }
 }
 
-export function parseRecentReleases(payload: unknown): readonly ListedRelease[] | null {
+export function parseRecentReleases(payload: unknown, assetBaseUrl: string | null = null): readonly ListedRelease[] | null {
   if (!Array.isArray(payload)) return null;
   const releases: ListedRelease[] = [];
   for (const entry of payload) {
@@ -100,7 +104,7 @@ export function parseRecentReleases(payload: unknown): readonly ListedRelease[] 
       title: text(record.name) ?? tag,
       publishedAt,
       htmlUrl,
-      notesUrl: channelFileUrl(record.assets),
+      notesUrl: channelFileUrl(record.assets, assetBaseUrl),
     });
   }
   return releases;
@@ -134,7 +138,8 @@ export function createRecentReleases(options: RecentReleasesOptions = {}): Recen
     if (notesUrl === null) return { release: { ...release, notes: null }, transient: false };
     try {
       const response = await call(notesUrl, {
-        headers: { "user-agent": "orbita" },
+        // 资产端点要这个头才回文件；网页下载地址收到它也无害
+        headers: { accept: "application/octet-stream", "user-agent": "orbita" },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!response.ok) return { release: { ...release, notes: null }, transient: response.status >= 500 };
@@ -155,7 +160,10 @@ export function createRecentReleases(options: RecentReleasesOptions = {}): Recen
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
-        const listed = parseRecentReleases(await response.json());
+        const listed = parseRecentReleases(
+          await response.json(),
+          url.endsWith("/releases") ? `${url}/assets` : null,
+        );
         if (listed === null) return { ok: false, message: "返回的不是版本列表" };
         // 每一版各拉一份 latest.yml（并行，最多 PER_PAGE 份）；单份失败只让那一行没有说明
         const fetched = await Promise.all(listed.map(({ notesUrl, ...release }) => withNotes(release, notesUrl)));

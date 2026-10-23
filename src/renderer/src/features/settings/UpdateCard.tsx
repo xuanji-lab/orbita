@@ -147,8 +147,25 @@ export function UpdateCard() {
   } else {
     statusIcon = "triangle-alert";
     statusTone = "error";
-    statusText =
+    /** 阶段先说「哪一步失败了」，再按原因补一句用户能做的事（分类见 shared/updater.ts） */
+    const stageText =
       state.stage === "download" ? x.downloadFailed : state.stage === "install" ? x.installFailed : x.checkFailed;
+    const failureText =
+      state.failure === "network"
+        ? x.failureNetwork
+        : state.failure === "not-found"
+          ? x.failureNotFound
+          : state.failure === "rate-limit"
+            ? x.failureRateLimit
+            : state.failure === "server"
+              ? x.failureServer
+              : x.failureUnknown;
+    statusText = (
+      <>
+        {stageText}
+        {failureText}
+      </>
+    );
     statusDetail = state.message;
     // 重试按失败的那一步走：检查 / 下载 / 安装各自可重入
     action = {

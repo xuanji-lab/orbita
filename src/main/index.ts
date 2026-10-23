@@ -670,7 +670,10 @@ void app.whenReady().then(async () => {
   // 「所有版本」展开体的最近版本列表：纯网络请求 + 内存缓存（10 分钟），
   // 与更新器接不接线无关——dev 下也照常能用（见 main/updater/recent-releases.ts）
   registerUpdaterIpc(updater, createRecentReleases());
-  updater.start();
+  updater.start().catch((error: unknown) => {
+    // start 只会在 Electron session 初始化时失败；更新是可选功能，不能拖住主窗口启动
+    console.warn("[更新] 初始化失败：", error instanceof Error ? error.message : String(error));
+  });
 
   app.on("before-quit", () => {
     appTray?.beginQuit();

@@ -76,6 +76,17 @@ describe("parseRecentReleases —— GitHub releases 载荷 → 列表条目（�
     ]);
   });
 
+  test("有资产 id 时优先拼发布资产端点（browser_download_url 在 github.com，部分网络被拦）", () => {
+    const entry = {
+      ...ENTRY,
+      assets: [{ id: 668402530, name: "latest.yml", browser_download_url: YML_URL }],
+    };
+    assert.equal(
+      parseRecentReleases([entry], "https://api.github.com/repos/xuanji-lab/orbita/releases/assets")?.[0]?.notesUrl,
+      "https://api.github.com/repos/xuanji-lab/orbita/releases/assets/668402530",
+    );
+  });
+
   test("没有 latest.yml 时退到 latest-mac.yml；两份都没有是 null（那一行没有说明，但仍在列表里）", () => {
     const mac = "https://example.com/latest-mac.yml";
     const onlyMac = { ...ENTRY, assets: [{ name: "latest-mac.yml", browser_download_url: mac }] };
