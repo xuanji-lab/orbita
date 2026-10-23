@@ -111,6 +111,32 @@ export function dropTabsAtRoot(
 }
 
 /**
+ * 这一刻该收哪个工作区的标签：专注 / 浏览态的额外根「失去」或「这一轮专注到点」时
+ * 返回它的 id，否则 null。FilesPanel 拿它去映射路径再交给 dropTabsAtRoot。
+ *
+ * 单独抽成纯函数是因为触发条件不在 id 上：专注自然到点（run → done）时左栏的专注
+ * 视图与额外根都还在，focusWorkspaceId 一个字节也不变——只看 id 的 effect 不会跑，
+ * 预览标签就留在了已经结束的那一轮里（2026-10-23 验收 files.scope.done 实测）。
+ * 回来 null 表示「这一拍不动」：done → done 再渲染多少次也只收一次，effect 依赖
+ * 里有 tabs 也不会反复收；再专注一轮（done → run）不误收。
+ */
+export function focusRootToDrop(
+  previousWorkspaceId: string | null,
+  nextWorkspaceId: string | null,
+  previousDone: boolean,
+  nextDone: boolean,
+): string | null {
+  // 之前就不在专注 / 浏览态：没有额外根可丢（打开面板时可能已经是 done，
+  // 但那时候标签原本就是空的，由面板挂载清空负责）
+  if (previousWorkspaceId === null) return null;
+  // 换了工作区 / 退回会话列表：丢的是上一个根
+  if (previousWorkspaceId !== nextWorkspaceId) return previousWorkspaceId;
+  // 同一个工作区、这一拍刚走到 done：专注视图还在，但这一轮结束了
+  if (!previousDone && nextDone) return nextWorkspaceId;
+  return null;
+}
+
+/**
  * 拉窄即折叠：树开着时面板被拉窄（任何幅度）→ 收起树。
  *
  * 为什么不用「跨 640px 断点」判：面板宽度的夹取下界是 pane 的 1/3

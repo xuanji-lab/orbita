@@ -6,6 +6,7 @@ import {
   crumbSegmentsFromRoot,
   dropTabsAtRoot,
   fileTabName,
+  focusRootToDrop,
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
@@ -114,6 +115,47 @@ describe("dropTabsAtRoot", () => {
     const result = dropTabsAtRoot(tabs, "/ws/a.ts", "/focus");
     deepStrictEqual(result, { tabs, activePath: "/ws/a.ts" });
     deepStrictEqual(tabs, [tab("/ws/a.ts")]);
+  });
+});
+
+describe("focusRootToDrop", () => {
+  it("专注中（run）同一工作区再渲染：不动", () => {
+    strictEqual(focusRootToDrop("focus", "focus", false, false), null);
+  });
+
+  it("run → done：返回专注工作区（左栏视图还在，但这一轮结束了）", () => {
+    strictEqual(focusRootToDrop("focus", "focus", false, true), "focus");
+  });
+
+  it("done 之后再渲染 / 再专注一轮：不重复收", () => {
+    strictEqual(focusRootToDrop("focus", "focus", true, true), null);
+    strictEqual(focusRootToDrop("focus", "focus", true, false), null);
+  });
+
+  it("结束专注 / 退回会话列表：丢上一个根", () => {
+    strictEqual(focusRootToDrop("focus", null, false, false), "focus");
+    strictEqual(focusRootToDrop("focus", null, true, false), "focus");
+  });
+
+  it("换到另一个工作区：丢上一个根，不丢新的", () => {
+    strictEqual(focusRootToDrop("focus", "other", false, false), "focus");
+  });
+
+  it("之前就不在专注 / 浏览态：没有根可丢", () => {
+    strictEqual(focusRootToDrop(null, "focus", false, false), null);
+    strictEqual(focusRootToDrop(null, null, false, true), null);
+  });
+
+  it("run → done 这一拍只收一次：再喂同一个状态，dropTabsAtRoot 不会被再触发", () => {
+    const tabs = [tab("/ws/a.ts"), tab("/focus/a.ts", "/focus")];
+    const first = focusRootToDrop("focus", "focus", false, true);
+    strictEqual(first, "focus");
+    deepStrictEqual(dropTabsAtRoot(tabs, "/focus/a.ts", "/focus"), {
+      tabs: [tab("/ws/a.ts")],
+      activePath: "/ws/a.ts",
+    });
+    // 下一拍 effect 再跑（tabs 变了也重跑）：没有相位变化 → 不收
+    strictEqual(focusRootToDrop("focus", "focus", true, true), null);
   });
 });
 

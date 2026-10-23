@@ -32,6 +32,7 @@ import {
   closeTab,
   dropTabsAtRoot,
   fileTabName,
+  focusRootToDrop,
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
@@ -86,6 +87,12 @@ export function FilesPanel(props: {
    */
   focusWorkspaceId?: string | null;
   /**
+   * 专注时间已到（useFocus 的 done 相位）：左栏的专注视图还在、额外根也还在，
+   * 但这一轮专注结束了——该工作区的预览标签按「结束专注」同一纪律收掉。
+   * 与 focusWorkspaceId 分开传：id 不变，光看它分不出 run → done 这一拍
+   */
+  focusDone?: boolean;
+  /**
    * 左栏文件树的双击打开请求（与 citeFocus 同一套消费模式）：token 单调递增，
    * 同一个文件连点两次也重新激活。null = 没有请求
    */
@@ -126,26 +133,37 @@ export function FilesPanel(props: {
     kind: FileEntryKind;
   } | null>(null);
   const focusWorkspaceId = props.focusWorkspaceId ?? null;
+  const focusDone = props.focusDone === true;
   const tree = useFileTree(sessionId, workspaceId, session.workspaces, focusWorkspaceId);
 
-  // 专注 / 浏览态结束（或换到另一个工作区）：之前那个额外根失去 fs:read 白名单
-  // （roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的标签会重新读一次、
-  // 变成常驻「不是这条会话允许的根目录之一」（2026-10-22 发版前验收实测）。
-  // 与换会话 / 换工作区清标签同一条纪律，只收掉 root 恰是那个工作区路径的标签；
-  // 会话自己就在该工作区时（会话根包含它）标签仍可读，不动。
+  // 专注 / 浏览态结束（或换到另一个工作区）、以及专注到点（run → done）：之前那个
+  // 额外根失去 fs:read 白名单（roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的
+  // 标签会重新读一次、变成常驻「不是这条会话允许的根目录之一」（2026-10-22 发版前
+  // 验收实测）。与换会话 / 换工作区清标签同一条纪律，只收掉 root 恰是那个工作区路径
+  // 的标签；会话自己就在该工作区时（会话根包含它）标签仍可读，不动。
+  //
+  // done 这一拍不一样：左栏专注视图与额外根都还在，focusWorkspaceId 一个字节也不变，
+  // 原先只看 id 的 effect 不触发——2026-10-23 验收 files.scope.done 实测 done 后
+  // tabCount=1，点「结束专注」才归零。但这一轮专注已经结束了，预览标签按「结束专注」
+  // 同一纪律收掉：同时盯 focusDone，用 panel-layout 的纯函数裁决该收哪个根——只在
+  // 真正的相位变化上返回 id，effect 依赖里有 tabs 也不会反复收。
   const previousFocusRef = useRef<string | null>(focusWorkspaceId);
+  const previousFocusDoneRef = useRef(focusDone);
   useEffect(() => {
     const previous = previousFocusRef.current;
+    const wasDone = previousFocusDoneRef.current;
     previousFocusRef.current = focusWorkspaceId;
-    if (previous === null || previous === focusWorkspaceId || session.workspaceId === previous) return;
-    const lostRoot = session.workspaces.find((workspace) => workspace.id === previous)?.path ?? null;
+    previousFocusDoneRef.current = focusDone;
+    const lost = focusRootToDrop(previous, focusWorkspaceId, wasDone, focusDone);
+    if (lost === null || session.workspaceId === lost) return;
+    const lostRoot = session.workspaces.find((workspace) => workspace.id === lost)?.path ?? null;
     if (lostRoot === null) return;
     const next = dropTabsAtRoot(tabs, activePath, lostRoot);
     if (next.tabs.length === tabs.length) return;
     setTabs(next.tabs);
     setActivePath(next.activePath);
     if (next.activePath === null) setTreeOn(false);
-  }, [focusWorkspaceId, session.workspaceId, session.workspaces, tabs, activePath]);
+  }, [focusWorkspaceId, focusDone, session.workspaceId, session.workspaces, tabs, activePath]);
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
