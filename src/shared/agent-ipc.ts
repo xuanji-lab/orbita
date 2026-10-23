@@ -22,6 +22,7 @@ import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
 import type { ComputerUseRisk } from "./computer-guard.ts";
+import type { EmergencyStopBroadcast } from "./computer-use.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -1269,7 +1270,7 @@ export type AgentEvent =
    * 同款：主进程借同一条广播通道）。收到它就复位授权标识、给一条「已急停」提示。
    * **沙箱不关**——现场留着给用户看。
    */
-  | { type: "computerUseEmergencyStop"; at: number; sessionIds: string[] }
+  | ({ type: "computerUseEmergencyStop" } & EmergencyStopBroadcast)
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成
