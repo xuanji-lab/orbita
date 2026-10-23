@@ -6,7 +6,7 @@ import { preferIPv4 } from "../shared/dial-v4.ts";
 import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
@@ -55,6 +55,7 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { parseSandboxProcessIds } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
@@ -399,6 +400,30 @@ void app.whenReady().then(async () => {
     }
   };
 
+  /**
+   * 现在宿主上有哪些沙箱侧进程（**只观测，不杀**）。
+   *
+   * 三类镜像名来自 2026-10-23 真机实测：新沙箱架构下 WindowsSandbox.exe 只是启动器，
+   * 沙箱本体活在 WindowsSandboxServer / WindowsSandboxRemoteSession / vmwp 里。
+   * 控制器拿「启动前基线」做差集，才知道哪些是我们这只（而不是同机上别人的沙箱）。
+   * 只读 tasklist；杀仍走 killTreeByPid（taskkill /T /F）——不按镜像名杀（仓规）。
+   */
+  const listSandboxProcessIds = (): number[] => {
+    if (process.platform !== "win32") return [];
+    try {
+      const listed = spawnSync("tasklist", ["/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+      });
+      if (listed.status !== 0 || typeof listed.stdout !== "string") return [];
+      return parseSandboxProcessIds(listed.stdout);
+    } catch {
+      // 观测失败当成「看不见」：宁可走旧路径，也不让启动 / 关闭被观测拖坐
+      return [];
+    }
+  };
+
   const computerUse = new SandboxController({
     computerUseDir: join(configDir, "computer-use"),
     bridgeDir: app.isPackaged
@@ -431,6 +456,17 @@ void app.whenReady().then(async () => {
     },
     // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
     killTreeByPid,
+    /**
+     * 观测沙箱侧进程（只读，不杀）。
+     *
+     * 2026-10-23（Windows 更新后的新沙箱架构）实测：`WindowsSandbox.exe` 只是启动器——
+     * spawn 后 **0 秒就以 code 0 退出**，把 VM 交给 `WindowsSandboxServer`；真正占着 ~2.5GB
+     * 的是 `WindowsSandboxServer.exe` / `WindowsSandboxRemoteSession.exe` / `vmwp.exe`。
+     * 于是 stop 时 child 早就为 null、没有 PID 可杀（第二天主会话得手动 taskkill /T /F 清）。
+     * 这里只提供「现在有哪些沙箱侧进程」的观测，由控制器拿**启动前基线**做差集认出我们
+     * 自己那只；杀掉仍然走上面的 killTreeByPid（taskkill /T /F）——**不按镜像名杀**（仓规）。
+     */
+    listSandboxProcessIds,
     onStatus: broadcastComputerUseStatus,
   });
   registerComputerUseIpc(computerUse);

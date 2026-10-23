@@ -192,6 +192,17 @@ export interface SandboxDeps {
   killFallbackMs?: number;
   /** 升级之后再等多久仍不退出就收尾，默认 5_000；测试传小值 */
   killEscalationMs?: number;
+  /**
+   * 观测沙箱侧进程（WindowsSandboxServer / WindowsSandboxRemoteSession / vmwp）。
+   *
+   * 2026-10-23（Windows 更新后的新沙箱架构）实测：`WindowsSandbox.exe` 只是启动器——
+   * 它把 VM 交给 WindowsSandboxServer 后 **0 秒就以 code 0 退出**，真正干活的是
+   * Server / RemoteSession / vmwp 三类进程。于是老办法（杀 launcher 的进程树）失效：
+   * stop 时那个 child 早就没了。这里改成「启动前记基线、stop 时按新出现的 PID 收」，
+   * 仍然**不按镜像名杀**——只碰我们自己启动后新出现的进程。
+   * 生产在 index.ts 用 tasklist 接；不接就只有旧架构的路径。
+   */
+  listSandboxProcessIds?: () => number[];
 }
 
 /**
@@ -216,6 +227,8 @@ export class SandboxController {
   private bridge: BridgeInfo | null = null;
   private startedAt = 0;
   private child: SandboxProcess | null = null;
+  /** start 前观测到的沙箱侧进程 PID（新架构下 stop 用它算「我们这只沙箱」） */
+  private baselinePids: number[] = [];
   private stopFallbackTimer: NodeJS.Timeout | null = null;
   /** 升级杀之后的第二个窗口 */
   private escalationTimer: NodeJS.Timeout | null = null;
@@ -296,6 +309,9 @@ export class SandboxController {
         renderWsbXml({ bridgeDir: this.deps.bridgeDir, outputDir }),
       );
 
+      // 新架构：启动器 spawn 后很快 exit 0，沙箱活在 Server/RemoteSession/vmwp 里。
+      // 基线要在 spawn **之前**记——spawn 之后它们就开始出现
+      this.baselinePids = this.deps.listSandboxProcessIds?.() ?? [];
       const child = this.deps.spawnSandbox(wsbPath);
       this.child = child;
       child.on("exit", (code) => this.onChildExit(generation, code));
@@ -348,11 +364,15 @@ export class SandboxController {
       this.transition("off");
       return { ok: true };
     }
+    const generation = this.generation;
     this.transition("stopping");
     this.cleanup();
     const child = this.child;
     if (child === null) {
-      this.transition("off");
+      // 新架构（2026-10-23 Windows 更新后）：启动器在 starting 阶段就 exit 0 了，我们手上早就
+      // 没有 child，可 VM 还在 WindowsSandboxServer / RemoteSession / vmwp 里跑。按「启动前
+      // 基线 → 现在」的差集认我们自己那只，异步收尾（宣布 off 同样要有退出证据）。
+      void this.stopOrphans(generation);
       return { ok: true };
     }
     // 退出这件事从此刻起有两个信号源：exit 事件（快路径）与 exitCode 轮询（兜底），
@@ -407,12 +427,103 @@ export class SandboxController {
       } catch {
         // 应用都在退出了，没有更好的办法
       }
+    } else {
+      // 新架构：启动器早退了，沙箱活在 Server / RemoteSession / vmwp 里。应用正在退，
+      // 没人听推送也来不及轮询——按基线差集杀一次就走。
+      this.killOrphans(this.newSandboxPids());
     }
     this.state = "off";
     this.bridge = null;
   }
 
   // ── 内部 ──
+
+  /**
+   * 新架构下属于我们这只沙箱的进程 PID：**启动前基线之外**的那些。
+   *
+   * 为什么是差集而不是镜像名：仓规禁按进程名杀（同机可能有别人的沙箱 / 用户自己的 VM），
+   * 差值把「我们 spawn 之后才出现」钉死在这一局的范围内。基线没记（没接
+   * listSandboxProcessIds）时它返回空——旧架构路径完全不受影响。
+   */
+  private newSandboxPids(): number[] {
+    const list = this.deps.listSandboxProcessIds;
+    if (list === undefined) return [];
+    const baseline = new Set(this.baselinePids);
+    const seen = new Set<number>();
+    const fresh: number[] = [];
+    for (const pid of list()) {
+      if (baseline.has(pid) || seen.has(pid)) continue;
+      seen.add(pid);
+      fresh.push(pid);
+    }
+    return fresh;
+  }
+
+  private killOrphans(pids: readonly number[]): void {
+    if (pids.length === 0) return;
+    const killTreeByPid = this.deps.killTreeByPid;
+    if (killTreeByPid === undefined) {
+      this.log(`宿主里还有沙箱进程 ${pids.join(", ")}，但没有接 killTreeByPid，杀不了——按 PID 手动结束它`);
+      return;
+    }
+    this.log(`按基线差集终止沙箱进程：${pids.join(", ")}`);
+    for (const pid of pids) killTreeByPid(pid);
+  }
+
+  /**
+   * stop() 的新架构收尾链（child 已经为 null）：杀 → 等这批 PID 真的消失 → 还在就升级一次
+   * → 再等一个窗口 → 仍不消失才 off，并留痕。
+   *
+   * 与旧路径同一条纪律：**宣布 off 必须有退出证据**。这台机器上 taskkill 偶尔只杀掉一层，
+   * 留下 vmwp + vmmemWindowsSandbox（VM 回收时才消失），盲宣布 off 就是留 ~2.5GB 垃圾。
+   */
+  private async stopOrphans(generation: number): Promise<void> {
+    const isCurrent = (): boolean => generation === this.generation && this.phase() === "stopping";
+    let pids = this.newSandboxPids();
+    if (pids.length === 0) {
+      // 一只都没起来（或已经被系统回收）：没有要等的证据，直接收尾
+      if (isCurrent()) this.transition("off");
+      return;
+    }
+    this.killOrphans(pids);
+    if (await this.waitPidsGone(pids, this.deps.killFallbackMs ?? STOP_FALLBACK_MS, generation)) {
+      if (isCurrent()) this.transition("off");
+      return;
+    }
+    if (!isCurrent()) return;
+    // 升级：重新取一次差集——上一轮杀的过程中可能有新进程接上来（RemoteSession 会重起）
+    pids = this.newSandboxPids();
+    if (pids.length === 0) {
+      this.transition("off");
+      return;
+    }
+    this.log(`沙箱进程 ${pids.join(", ")} 没有退出，升级：再按 PID 杀一次进程树`);
+    this.killOrphans(pids);
+    if (await this.waitPidsGone(pids, this.deps.killEscalationMs ?? STOP_ESCALATION_MS, generation)) {
+      if (isCurrent()) this.transition("off");
+      return;
+    }
+    if (!isCurrent()) return;
+    this.log(
+      `沙箱进程可能未退出：${pids.join(", ")}——状态收尾为 off，但宿主里可能留着孤儿 VM：` +
+        "任务管理器里若见 WindowsSandboxRemoteSession / vmwp 占着内存，按 PID 手动结束它",
+    );
+    this.transition("off");
+  }
+
+  /** 等到这批 PID 全部消失（true）或窗口到点（false）；换了一局就立刻放弃 */
+  private async waitPidsGone(pids: readonly number[], timeoutMs: number, generation: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    const alive = (): number => {
+      const current = new Set(this.newSandboxPids());
+      return pids.reduce((count, pid) => (current.has(pid) ? count + 1 : count), 0);
+    };
+    for (;;) {
+      if (alive() === 0) return true;
+      if (Date.now() >= deadline || generation !== this.generation) return false;
+      await sleep(Math.min(EXIT_POLL_INTERVAL_MS, Math.max(deadline - Date.now(), 1)));
+    }
+  }
 
   /**
    * ping 握手包装：把「取消」与「真超时」分开——取消 resolve false（start 走取消结算），
@@ -439,6 +550,14 @@ export class SandboxController {
     if (generation !== this.generation) return;
     this.child = null;
     if (this.state === "starting") {
+      // 2026-10-23 Windows 更新后的新沙箱架构（真机实测）：WindowsSandbox.exe 只是启动器，
+      // 它把 VM 交给 WindowsSandboxServer 后 **0 秒就以 0 退出**，而 guest 桥那边还在正常
+      // 启动（实测桥随后就通告就绪）。旧代码把「启动器退出」当成「窗口关了」，于是明明起
+      // 得来的沙箱被判 error。所以 code 0 / null 只记一笔、继续等桥；非 0 才是真失败。
+      if (code === 0 || code === null) {
+        this.log(`沙箱启动器已退出（code ${code ?? "null"}）——新架构由 WindowsSandboxServer 接管，继续等 guest 桥就绪`);
+        return;
+      }
       this.failLocal(`沙箱窗口在 guest 桥就绪前就关闭了（exit code ${code}）`);
       return;
     }

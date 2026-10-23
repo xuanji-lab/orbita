@@ -677,3 +677,113 @@ describe("stop 的收尾链", () => {
     }
   });
 });
+
+// ── 2026-10-23 Windows 更新后的新沙箱架构 ─────────────────────────────────
+//
+// 真机取证（秒级采样）：`WindowsSandbox.exe` 只是启动器——spawn 后 **0 秒就以 code 0 退出**，
+// 把 VM 交给 `WindowsSandboxServer`（`WindowsSandboxClient` 时代结束）。旧代码把「child 退出」
+// 当成「窗口被用户关了」，于是三处一起坏：
+//   ① starting 阶段明明起得来的沙箱被判 error；
+//   ② running 阶段再也没有「用户关窗」信号（这条不在本组测试的范围内）；
+//   ③ stop 时 child 已经是 null → 没有 PID 可杀 → 留下 ~2.5GB 的 VM。
+// 对策：① 启动器 code 0 / null 只记一笔、继续等桥；③ 启动前记沙箱侧进程基线，stop 时按
+// 「现在有、基线里没有」的差集收，收尾仍要有退出证据（沿用 2026-10-14 的纪律）。
+
+describe("新沙箱架构：启动器退出与基线差集收尾", () => {
+  test("① starting 阶段启动器 exit 0 → 不失败，桥随后就绪 → running", async () => {
+    const harness = await makeHarness({ listSandboxProcessIds: () => [] });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      // 新架构的现实：启动器 0 秒退出，桥还在正常启动
+      requireProc(harness).emitExit(0);
+      await sleep(20);
+      assert.equal(harness.controller.status().state, "starting", "启动器退出不该被当成窗口被关");
+      assert.ok(
+        harness.logs.some((line) => /启动器已退出/.test(line)),
+        `应留下一笔「启动器退出、由 Server 接管」的日志：${harness.logs.join(" | ")}`,
+      );
+
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+      assert.equal(harness.controller.status().state, "running");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("② starting 阶段启动器 exit 非 0 → 仍是真失败（原话带出）", async () => {
+    const harness = await makeHarness({ listSandboxProcessIds: () => [] });
+    try {
+      const startPromise = harness.controller.start();
+      await sleep(50);
+      requireProc(harness).emitExit(3);
+      const result = await startPromise;
+      assert.equal(result.ok, false);
+      assert.ok(result.ok === false && /就绪前就关闭了（exit code 3）/.test(result.error), result.ok ? "" : result.error);
+      assert.equal(harness.controller.status().state, "error");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("③ stop 且 child 已为 null：只杀基线之外的新 PID，全部消失才 off", async () => {
+    // 基线 = 别人的沙箱 / 上一局的残留；这只沙箱起来后多出 4100 / 4101
+    let alive = [1000];
+    const killed: number[] = [];
+    const harness = await makeHarness({
+      killFallbackMs: 60,
+      killEscalationMs: 60,
+      listSandboxProcessIds: () => alive,
+      killTreeByPid: (pid) => {
+        killed.push(pid);
+        alive = alive.filter((current) => current !== pid);
+      },
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      alive = [1000, 4100, 4101]; // 启动器把 VM 拉起来之后，沙箱侧才出现这两个
+      requireProc(harness).emitExit(0); // 新架构：启动器立刻走了，于是 stop 时 child 为 null
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+
+      assert.deepEqual(await harness.controller.stop(), { ok: true });
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null));
+      assert.deepEqual(killed, [4100, 4101], "只杀我们这只沙箱新起的两个，基线里的 1000 不许碰");
+      assert.deepEqual(harness.controller.status(), { state: "off" });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("④ stop 且 PID 一直不消失：升级再杀一次 → 留痕 → off", async () => {
+    let alive = [1000];
+    const killed: number[] = [];
+    const harness = await makeHarness({
+      killFallbackMs: 40,
+      killEscalationMs: 40,
+      listSandboxProcessIds: () => alive, // 装死：taskkill 打不动
+      killTreeByPid: (pid) => killed.push(pid),
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      alive = [1000, 4100];
+      requireProc(harness).emitExit(0);
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+
+      await harness.controller.stop();
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 3_000);
+      assert.deepEqual(killed, [4100, 4100], "兜底窗口没消失 → 升级再杀一次");
+      assert.ok(
+        harness.logs.some((line) => /可能未退出/.test(line)),
+        `收尾要留痕，不能静默 off：${harness.logs.join(" | ")}`,
+      );
+      assert.ok(harness.logs.some((line) => /手动结束/.test(line)), "痕迹要带上「怎么收拾」");
+    } finally {
+      await harness.close();
+    }
+  });
+});
