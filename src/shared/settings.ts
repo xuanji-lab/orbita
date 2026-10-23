@@ -120,8 +120,6 @@ export interface ModelPair {
 export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
   "session-lifecycle",
-  "composer-blackhole",
-  "composer-tetris",
   "pdf-citations",
   "intent-system",
 ] as const;
@@ -287,23 +285,20 @@ export interface AppSettings {
    * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
    * 开了就回来。
    *
-   * 四项各自的语义：
+   * 各项的语义：
    * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
    * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
-   * - `composer-blackhole`：输入框黑洞——开启后截图 / 文件 / 目录不再叠成两行，
-   *   而是被吸进输入框中心、从舷窗掉进上方看不见的盒子堆起来；只在基础三套主题
-   *   （浅 / 黛 / 玄）生效，判定在渲染层 blackhole-layout.ts 的 materialBoxStyle；
-   * - `composer-tetris`：俄罗斯方块——同一只盒子的另一种形态：材料不演黑洞特效，
-   *   从盒子上缘随机落下（确定性种子）。**与 composer-blackhole 互斥**：设置页打开
-   *   一个会连带关掉另一个（experimental-features.ts 的 exclusiveWith）；盘上手改出
-   *   两个都开时 parseSettings 以黑洞为准、丢掉 tetris（见 parseExperimentalFeatures）。
    * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
    *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
    *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
-   * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；
-   * - 旧 `composerBlackhole` 原样并入 composer-blackhole 一项。
+   * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开。
+   *
+   * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
+   * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
+   * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
+   * 解析时直接丢，下一次写入从盘上带走。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
@@ -450,8 +445,6 @@ export function parseSettings(raw: unknown): AppSettings {
     intent?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
     experimental?: unknown;
-    /** 旧黑洞开关：原样并入 experimentalFeatures["composer-blackhole"] */
-    composerBlackhole?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -532,7 +525,6 @@ export function parseSettings(raw: unknown): AppSettings {
 function parseExperimentalFeatures(record: {
   experimentalFeatures?: unknown;
   experimental?: unknown;
-  composerBlackhole?: unknown;
 }): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
   const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
   const raw = record.experimentalFeatures;
@@ -542,21 +534,11 @@ function parseExperimentalFeatures(record: {
       if (typeof value === "boolean") out[id] = value;
     }
   }
-  // 旧总开关：true = 当年挂在它后面的两项都照常开（黑洞另有自己的旧键）。
+  // 旧总开关：true = 当年挂在它后面的两项都照常开。
   // 新键里已显式给值的项以新键为准（??=）
   if (record.experimental === true) {
     out["paper-themes"] ??= true;
     out["session-lifecycle"] ??= true;
-  }
-  // 旧黑洞开关原样并入：用户逃过的是「这一项」，不是「总开关 + 这一项」
-  if (typeof record.composerBlackhole === "boolean") {
-    out["composer-blackhole"] ??= record.composerBlackhole;
-  }
-  // 黑洞与俄罗斯方块互斥（两种材料盒形态，同一时刻只能有一种）。设置页的开关已经
-  // 连带关掉对方，这里兜住手改的盘：两个都开时以黑洞为准（先落盘的既有功能优先），
-  // tetris 当作没开——下一次任何设置写入都会把这个裁决写回盘上
-  if (out["composer-blackhole"] === true && out["composer-tetris"] === true) {
-    delete out["composer-tetris"];
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }

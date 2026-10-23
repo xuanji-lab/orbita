@@ -552,12 +552,7 @@ function ExperimentalSettings(props: {
             onToggleLog={() => setOpenId(openId === feature.id ? null : feature.id)}
             onSwitch={(value) =>
               props.onChange({
-                experimentalFeatures: {
-                  [feature.id]: value,
-                  // 互斥的项连带关掉（黑洞 ↔ 俄罗斯方块）：两个都开没有定义的行为，
-                  // 与其让 parseSettings 静默裁决，不如打开的这一制替用户关上另一个
-                  ...(value && feature.exclusiveWith !== undefined ? { [feature.exclusiveWith]: false } : {}),
-                },
+                experimentalFeatures: { [feature.id]: value },
               })
             }
           />
