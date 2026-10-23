@@ -43,9 +43,15 @@ describe("computer_* 工具", () => {
   test("五个工具一个不少；截图是免审批的只读件，其余四件照写操作过闸", () => {
     const { tools } = setup();
     assert.deepEqual([...tools.keys()].sort(), [...COMPUTER_USE_TOOL_NAMES].sort());
-    assert.deepEqual([...COMPUTER_USE_READ_TOOLS], ["computer_screenshot"]);
+    // 只读桶里也有 sandbox_* 的读取件（见 sandbox-tools.test.ts），这里只查像素组自己：
+    // 五个里只有 screenshot 免审批，其余四件真注入键鼠。
+    assert.equal((COMPUTER_USE_READ_TOOLS as readonly string[]).includes("computer_screenshot"), true);
     for (const name of COMPUTER_USE_TOOL_NAMES) {
-      assert.equal((COMPUTER_USE_READ_TOOLS as readonly string[]).includes(name), name === "computer_screenshot");
+      assert.equal(
+        (COMPUTER_USE_READ_TOOLS as readonly string[]).includes(name),
+        name === "computer_screenshot",
+        name,
+      );
     }
   });
 

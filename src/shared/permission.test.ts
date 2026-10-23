@@ -135,8 +135,8 @@ describe("浏览器只读四件（BROWSER_READ_TOOLS）", () => {
   });
 });
 
-describe("沙箱截图（COMPUTER_USE_READ_TOOLS）", () => {
-  test("三档一律放行：它只向沙箱要一张图，不往沙箱里送任何输入", () => {
+describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
+  test("三档一律放行：它们只向沙箱要图 / 要文本，不往沙箱里送任何输入", () => {
     for (const tool of COMPUTER_USE_READ_TOOLS) {
       for (const mode of PERMISSION_MODES) {
         assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode} ${tool}`);
