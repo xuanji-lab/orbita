@@ -16,6 +16,9 @@
  * 环境里有这个变量，就给那个 session 设 proxyRules（见 proxy.ts）——给系统代理没开、
  * 只能显式走代理的机器一条出口；没配就维持默认（跟随系统代理）。
  *
+ * **下载**：库自带的下载器单连接、一断就从 0 重来；这里换成 4MB 分段、最多 6 段并行、
+ * 每段从已写字节续传（见 resilient-executor.ts），下完按 latest.yml 的 sha512 校验。
+ *
  * **节奏**（沿用参考实现 Proma，去掉它的「等 agent 空闲再装」调度）：启动 10s 后首查，
  * 之后每 4h 一次；手动检查同一条路。`autoDownload=false`——发现新版本只进 `available`，
  * 用户点「下载」才 `downloadUpdate()`；下完进 `downloaded`，用户点「重启安装」才
@@ -44,6 +47,7 @@ import { GitHubApiProvider } from "./github-api-provider.ts";
 import { appNotesOf } from "./notes.ts";
 import { proxyRulesOf } from "./proxy.ts";
 import { publishTarget, releasesUrl } from "./releases-url.ts";
+import { installResilientDownload } from "./resilient-executor.ts";
 import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
 
 /** 启动后延迟首查：错开启动时那一串磁盘 / 网络活动，别和界面首帧抢 */
@@ -153,6 +157,9 @@ export class Updater {
 
     // 读取方式换成 GitHub API（见 github-api-provider.ts）：网页域名被拦时也能检查更新。
     // owner/repo 仍来自 build.publish；取不到就不覆盖，让库照 app-update.yml 走。
+    // 下载器必须在 setFeedURL 前换：provider 的 runtimeOptions 在 setFeedURL 时
+    // 捕获 httpExecutor，晚一步换，provider 还会拿旧的。
+    installResilientDownload(autoUpdater);
     const target = publishTarget();
     if (target === null) {
       console.warn("[更新] build.publish 里没有 owner/repo，更新源沿用打包时的 app-update.yml");

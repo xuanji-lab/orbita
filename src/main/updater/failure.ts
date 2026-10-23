@@ -78,6 +78,10 @@ export function failureKindOf(error: unknown): UpdateFailureKind {
 
   if ((status !== null && status >= 500) || (code !== null && /^HTTP_ERROR_5\d\d$/.test(code))) return "server";
 
+  // 下载完 sha512 对不上：更新源 / 中间链路给的字节不是 GitHub 记录的那一份。
+  // 不是本机的网络问题，归到 server；界面说“稍后再试”，原始信息仍在 title。
+  if (code === "ERR_UPDATER_INVALID_CHECKSUM") return "server";
+
   if (code !== null && NETWORK_CODES.has(code)) return "network";
   if (NETWORK_MESSAGE.test(message)) return "network";
 
