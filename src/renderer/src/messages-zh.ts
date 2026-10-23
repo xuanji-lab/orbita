@@ -1306,8 +1306,9 @@ export const zh: Messages = {
       rolling: "滚动窗口",
     },
     resetsIn: (duration) => `${duration} 后重置`,
-    exhausted: (label, duration) => `${label}窗口已用尽 · ${duration} 后重置`,
-    exhaustedNoReset: (label) => `${label}窗口已用尽`,
+    // 额度事实只作副行：缓存说明不了这次失败是谁造成的，不能冒充原因
+    exhausted: (label, duration) => `账户额度：${label}窗口已用尽 · ${duration} 后重置`,
+    exhaustedNoReset: (label) => `账户额度：${label}窗口已用尽`,
     justNow: "刚刚",
     minutesAgo: (n) => `${n} 分钟前`,
     hoursAgo: (n) => `${n} 小时前`,

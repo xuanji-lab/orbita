@@ -41,7 +41,10 @@ import type { Messages } from "../../messages-en.ts";
  */
 export interface TurnFailure {
   message: string;
-  /** 这一轮是因为某个额度窗口用尽而失败（主进程判定，不是按文案猜） */
+  /**
+   * 失败发生时这个账户有窗口满着（主进程判定，不是按文案猜）。
+   * **是账户状态，不是失败原因**：与「钥匙过期」可以同时成立，所以它只作副行。
+   */
   quota?: QuotaExhaustedHint;
 }
 

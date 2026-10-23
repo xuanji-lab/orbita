@@ -119,11 +119,14 @@ export function usedText(percent: number, t: Messages): string {
 }
 
 /**
- * 额度窗口用尽导致这一轮失败时的「人话」（PR3）：`5 小时窗口已用尽 · 2h 14m 后重置`。
+ * 额度窗口用尽时的「账户状态」行（`5 小时窗口已用尽 · 2h 14m 后重置`，带「账户额度：」前缀）。
  *
  * 句子在 renderer 组（主进程只给 `kind` / `label` / `resetsAt`）：窗口名走
  * `kindLabel`，时长用 `formatDuration`，两者与设置页的额度块同一口径。
  * 渲染时重置时刻已经过点就不说时间——「0s 后重置」是句假话。
+ *
+ * **它是账户状态，不是失败原因**：缓存只说明窗口满了，说不了这次失败是谁造成的
+ * （钥匙过期 + 恰好窗口满时，主因是 401），所以渲染位置只能在厂商原文之后。
  */
 export function quotaExhaustedText(hint: QuotaExhaustedHint, now: number, t: Messages): string {
   const label = kindLabel(hint.kind, hint.label, t);

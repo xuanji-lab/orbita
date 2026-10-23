@@ -244,28 +244,28 @@ describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
 
 // ── 额度用尽导致的失败：人话在 renderer 组（主进程只给事实） ──
 
-describe("quotaExhaustedText —— 窗口用尽时的那句人话", () => {
+describe("quotaExhaustedText —— 账户额度那句副行（不是失败原因）", () => {
   const HOUR = 60 * 60 * 1000;
   const now = Date.UTC(2026, 9, 23, 9, 0, 0);
   const hint = { kind: "5h" as const, label: "5-hour window", resetsAt: now + 2 * HOUR + 14 * 60_000 };
 
-  test("中文：窗口名本地化 + 时长走机器口径", () => {
-    assert.equal(quotaExhaustedText(hint, now, zh), "5 小时窗口已用尽 · 2h 14m 后重置");
+  test("中文：带账户额度前缀，窗口名本地化 + 时长走机器口径", () => {
+    assert.equal(quotaExhaustedText(hint, now, zh), "账户额度：5 小时窗口已用尽 · 2h 14m 后重置");
   });
 
   test("英文：同一份事实，同一份时长", () => {
-    assert.equal(quotaExhaustedText(hint, now, en), "5-hour window exhausted · resets in 2h 14m");
+    assert.equal(quotaExhaustedText(hint, now, en), "Account quota: 5-hour window exhausted · resets in 2h 14m");
   });
 
   test("custom 名字用厂商原文，不硬翻", () => {
     assert.equal(
       quotaExhaustedText({ ...hint, kind: "custom", label: "TOKENS_LIMIT" }, now, zh),
-      "TOKENS_LIMIT窗口已用尽 · 2h 14m 后重置",
+      "账户额度：TOKENS_LIMIT窗口已用尽 · 2h 14m 后重置",
     );
   });
 
   test("渲染时已经过点：不说时间（「0s 后重置」是句假话）", () => {
-    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, zh), "5 小时窗口已用尽");
-    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, en), "5-hour window exhausted");
+    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, zh), "账户额度：5 小时窗口已用尽");
+    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, en), "Account quota: 5-hour window exhausted");
   });
 });

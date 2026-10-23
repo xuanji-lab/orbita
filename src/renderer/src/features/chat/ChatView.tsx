@@ -1806,28 +1806,24 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         >
           <Notice tone="bad">
             {/*
-             * 额度窗口用尽时先说一句人话（主进程只给结构化事实，句子在这里组），
-             * 厂商原文降为副行——两行都留：人话让人知道「等到什么时候」，原文留着排障。
+             * 厂商原文永远是第一行——原文就是证据，也是这条红字的「原因」。
+             * 额度事实只能当副行：缓存只说明「某个窗口满了」，不说明这次失败是它
+             * 造成的（钥匙过期 + 恰好窗口满时，主因是 401）。把它摆在前面会让用户
+             * 去等 2 小时而不是换 key。
              */}
+            <span>{props.turnError.message}</span>
             {props.turnError.quota !== undefined && (
-              <span style={{ display: "block" }}>
+              <span
+                style={{
+                  display: "block",
+                  marginTop: "var(--space-1)",
+                  color: "var(--color-text-secondary)",
+                  fontSize: "var(--font-size-sm)",
+                }}
+              >
                 {quotaExhaustedText(props.turnError.quota, Date.now(), t)}
               </span>
             )}
-            <span
-              style={
-                props.turnError.quota === undefined
-                  ? undefined
-                  : {
-                      display: "block",
-                      marginTop: "var(--space-1)",
-                      color: "var(--color-text-tertiary)",
-                      fontSize: "var(--font-size-sm)",
-                    }
-              }
-            >
-              {props.turnError.message}
-            </span>
           </Notice>
         </div>
       )}

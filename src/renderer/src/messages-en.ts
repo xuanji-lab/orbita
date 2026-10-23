@@ -1415,12 +1415,16 @@ export const en = {
     },
     resetsIn: (duration: string) => `resets in ${duration}`,
     /**
-     * 额度窗口用尽导致这一轮失败（主进程给事实，句子在这里组）。
+     * 额度窗口用尽时的「账户状态」行（PR3 复核后改为**副行**）。
+     *
+     * 为什么带「账户额度：」前缀：缓存只说明「这个窗口满了」这个事实，
+     * **不说明这次失败是它造成的**（钥匙过期 + 恰好窗口满了时，主因是 401）。
+     * 所以要把它读成一条账户状态，不能放在原文前面冒充失败原因。
      * `label` 已经过 `windowLabel` 本地化，`duration` 是 `2h 14m` 这类机器口径的时长。
      */
-    exhausted: (label: string, duration: string) => `${label} exhausted · resets in ${duration}`,
+    exhausted: (label: string, duration: string) => `Account quota: ${label} exhausted · resets in ${duration}`,
     /** 渲染时重置时刻已经过了（判定时还在未来）：没有可信的恢复时间，就不说 */
-    exhaustedNoReset: (label: string) => `${label} exhausted`,
+    exhaustedNoReset: (label: string) => `Account quota: ${label} exhausted`,
     justNow: "just now",
     minutesAgo: (n: number) => `${n} min ago`,
     hoursAgo: (n: number) => `${n}h ago`,
