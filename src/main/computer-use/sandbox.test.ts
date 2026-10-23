@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BRIDGE_INFO_FILE, COMPUTER_USE_CMD_DIR, type SandboxStatus } from "../../shared/computer-use.ts";
 import { parseBridgeInfo, waitForBridgeInfo } from "./bridge-ready.ts";
+import { type SandboxProcessInfo } from "./process-list.ts";
 import {
   junctionPathIssue,
   renderWsbXml,
@@ -691,7 +692,7 @@ describe("stop 的收尾链", () => {
 
 describe("新沙箱架构：启动器退出与基线差集收尾", () => {
   test("① starting 阶段启动器 exit 0 → 不失败，桥随后就绪 → running", async () => {
-    const harness = await makeHarness({ listSandboxProcessIds: () => [] });
+    const harness = await makeHarness({ listSandboxProcesses: () => [] });
     try {
       const startPromise = harness.controller.start();
       await waitFor(() => harness.spawned[0] ?? null);
@@ -713,7 +714,7 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
   });
 
   test("② starting 阶段启动器 exit 非 0 → 仍是真失败（原话带出）", async () => {
-    const harness = await makeHarness({ listSandboxProcessIds: () => [] });
+    const harness = await makeHarness({ listSandboxProcesses: () => [] });
     try {
       const startPromise = harness.controller.start();
       await sleep(50);
@@ -729,21 +730,26 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
 
   test("③ stop 且 child 已为 null：只杀基线之外的新 PID，全部消失才 off", async () => {
     // 基线 = 别人的沙箱 / 上一局的残留；这只沙箱起来后多出 4100 / 4101
-    let alive = [1000];
+    let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
     const killed: number[] = [];
     const harness = await makeHarness({
       killFallbackMs: 60,
       killEscalationMs: 60,
-      listSandboxProcessIds: () => alive,
+      listSandboxProcesses: () => alive,
       killTreeByPid: (pid) => {
         killed.push(pid);
-        alive = alive.filter((current) => current !== pid);
+        alive = alive.filter((current) => current.pid !== pid);
       },
     });
     try {
       const startPromise = harness.controller.start();
       await waitFor(() => harness.spawned[0] ?? null);
-      alive = [1000, 4100, 4101]; // 启动器把 VM 拉起来之后，沙箱侧才出现这两个
+      // 启动器把 VM 拉起来之后，沙箱侧才出现这两个
+      alive = [
+        { image: "vmwp.exe", pid: 1000 },
+        { image: "WindowsSandboxServer.exe", pid: 4100 },
+        { image: "WindowsSandboxRemoteSessi", pid: 4101 },
+      ];
       requireProc(harness).emitExit(0); // 新架构：启动器立刻走了，于是 stop 时 child 为 null
       harness.announceBridge();
       assert.deepEqual(await startPromise, { ok: true });
@@ -758,18 +764,21 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
   });
 
   test("④ stop 且 PID 一直不消失：升级再杀一次 → 留痕 → off", async () => {
-    let alive = [1000];
+    let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
     const killed: number[] = [];
     const harness = await makeHarness({
       killFallbackMs: 40,
       killEscalationMs: 40,
-      listSandboxProcessIds: () => alive, // 装死：taskkill 打不动
+      listSandboxProcesses: () => alive, // 装死：taskkill 打不动
       killTreeByPid: (pid) => killed.push(pid),
     });
     try {
       const startPromise = harness.controller.start();
       await waitFor(() => harness.spawned[0] ?? null);
-      alive = [1000, 4100];
+      alive = [
+        { image: "vmwp.exe", pid: 1000 },
+        { image: "WindowsSandboxServer.exe", pid: 4100 },
+      ];
       requireProc(harness).emitExit(0);
       harness.announceBridge();
       assert.deepEqual(await startPromise, { ok: true });
@@ -782,6 +791,94 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
         `收尾要留痕，不能静默 off：${harness.logs.join(" | ")}`,
       );
       assert.ok(harness.logs.some((line) => /手动结束/.test(line)), "痕迹要带上「怎么收拾」");
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// ── 优雅关窗（2026-10-23 真机验收补的一层）─────────────────────────────────
+//
+// 强杀能杀掉 Server / RemoteSession，**但 VM 不退**：vmwp.exe + vmmemWindowsSandbox
+// （3.4GB）继续占着，vmwp 自己 taskkill 还是拒绝访问。等于「关窗但泄漏 VM」。
+// 正确收尾是给 RemoteSession 的窗口发 WM_CLOSE（等价用户点 X）：真机 9~12 秒内整条链
+// 自行退出、VM 内存释放。所以 stopOrphans 的第一级是优雅关窗，强杀只是退路。
+
+describe("graceful close：先关窗，关不掉才强杀", () => {
+  /** 起一局，启动器 0 秒退出，沙箱侧出现 Server + RemoteSession + vmwp 三个进程 */
+  const startNewArch = async (
+    harness: Harness,
+    onSpawned: () => void,
+  ): Promise<void> => {
+    const startPromise = harness.controller.start();
+    await waitFor(() => harness.spawned[0] ?? null);
+    onSpawned();
+    requireProc(harness).emitExit(0);
+    harness.announceBridge();
+    assert.deepEqual(await startPromise, { ok: true });
+  };
+
+  test("① 有 RemoteSession：先发 WM_CLOSE，PID 优雅消失后不再强杀", async () => {
+    const closed: number[] = [];
+    const killed: number[] = [];
+    let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
+    const harness = await makeHarness({
+      killFallbackMs: 60,
+      killEscalationMs: 60,
+      gracefulCloseMs: 200,
+      listSandboxProcesses: () => alive,
+      closeSandboxWindow: (pid) => {
+        closed.push(pid);
+        // 真机语义：关窗后整条链自己退（这里立刻模拟，省时间）
+        alive = [{ image: "vmwp.exe", pid: 1000 }];
+      },
+      killTreeByPid: (pid) => killed.push(pid),
+    });
+    try {
+      await startNewArch(harness, () => {
+        alive = [
+          { image: "vmwp.exe", pid: 1000 },
+          { image: "WindowsSandboxServer.exe", pid: 4200 },
+          { image: "WindowsSandboxRemoteSession.exe", pid: 4300 },
+        ];
+      });
+
+      assert.deepEqual(await harness.controller.stop(), { ok: true });
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null));
+      assert.deepEqual(closed, [4300], "WM_CLOSE 只发给 RemoteSession（窗口进程），不发 Server / vmwp");
+      assert.deepEqual(killed, [], "优雅关窗生效后不许再强杀——强杀会把 VM 留给宿主");
+      assert.ok(harness.logs.some((line) => /WM_CLOSE/.test(line)), harness.logs.join(" | "));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("② 发了 WM_CLOSE 但 PID 不消失 → 退回强杀升级链，最后留痕 off", async () => {
+    const closed: number[] = [];
+    const killed: number[] = [];
+    let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
+    const harness = await makeHarness({
+      killFallbackMs: 40,
+      killEscalationMs: 40,
+      gracefulCloseMs: 40,
+      listSandboxProcesses: () => alive, // 装死：窗口不理会 WM_CLOSE，taskkill 也打不动
+      closeSandboxWindow: (pid) => closed.push(pid),
+      killTreeByPid: (pid) => killed.push(pid),
+    });
+    try {
+      await startNewArch(harness, () => {
+        alive = [
+          { image: "vmwp.exe", pid: 1000 },
+          { image: "WindowsSandboxRemoteSession.exe", pid: 4300 },
+        ];
+      });
+
+      await harness.controller.stop();
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 3_000);
+      assert.deepEqual(closed, [4300]);
+      assert.deepEqual(killed, [4300, 4300], "优雅关闭没生效 → 兜底强杀 + 升级再杀一次");
+      assert.ok(harness.logs.some((line) => /退回强杀/.test(line)), harness.logs.join(" | "));
+      assert.ok(harness.logs.some((line) => /可能未退出/.test(line)), "最终仍要留痕，不静默");
     } finally {
       await harness.close();
     }

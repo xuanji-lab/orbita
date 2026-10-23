@@ -55,7 +55,7 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
-import { parseSandboxProcessIds } from "./computer-use/process-list.ts";
+import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
@@ -405,10 +405,11 @@ void app.whenReady().then(async () => {
    *
    * 三类镜像名来自 2026-10-23 真机实测：新沙箱架构下 WindowsSandbox.exe 只是启动器，
    * 沙箱本体活在 WindowsSandboxServer / WindowsSandboxRemoteSession / vmwp 里。
-   * 控制器拿「启动前基线」做差集，才知道哪些是我们这只（而不是同机上别人的沙箱）。
+   * 控制器拿「启动前基线」做差集，才知道哪些是我们这只（而不是同机上别人的沙箱）；
+   * 带镜像名是为了挑出 RemoteSession 去**优雅关窗**（只认 PID 的话发不了 WM_CLOSE）。
    * 只读 tasklist；杀仍走 killTreeByPid（taskkill /T /F）——不按镜像名杀（仓规）。
    */
-  const listSandboxProcessIds = (): number[] => {
+  const listSandboxProcesses = (): SandboxProcessInfo[] => {
     if (process.platform !== "win32") return [];
     try {
       const listed = spawnSync("tasklist", ["/FO", "CSV", "/NH"], {
@@ -417,11 +418,29 @@ void app.whenReady().then(async () => {
         timeout: 5_000,
       });
       if (listed.status !== 0 || typeof listed.stdout !== "string") return [];
-      return parseSandboxProcessIds(listed.stdout);
+      return parseSandboxProcesses(listed.stdout);
     } catch {
       // 观测失败当成「看不见」：宁可走旧路径，也不让启动 / 关闭被观测拖坐
       return [];
     }
+  };
+
+  /**
+   * 给沙箱窗口发 WM_CLOSE（等价用户点 X）——**不能改成 taskkill**。
+   *
+   * 2026-10-23 真机验收：直接 taskkill 能杀掉 Server / RemoteSession，但 VM 不退——
+   * vmwp.exe + vmmemWindowsSandbox（3.4GB）继续占着内存，而且 vmwp 自己 taskkill 是
+   * 拒绝访问；不带 /F 打 RemoteSession 则完全无效（它不是控制台进程，只是收到一个终止信号）。
+   * 而对方收到 WM_CLOSE 后 9~12 秒内整条链自行退出、VM 内存释放。
+   * 失败不抛：控制器看到 throw 会退回强杀链（宁可退化成旧行为，不能坐视 VM 泄漏）。
+   */
+  const closeSandboxWindow = (pid: number): void => {
+    if (process.platform !== "win32") return;
+    spawnSync(
+      "powershell",
+      ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).CloseMainWindow() | Out-Null`],
+      { stdio: "ignore", windowsHide: true, timeout: 5_000 },
+    );
   };
 
   const computerUse = new SandboxController({
@@ -466,7 +485,9 @@ void app.whenReady().then(async () => {
      * 这里只提供「现在有哪些沙箱侧进程」的观测，由控制器拿**启动前基线**做差集认出我们
      * 自己那只；杀掉仍然走上面的 killTreeByPid（taskkill /T /F）——**不按镜像名杀**（仓规）。
      */
-    listSandboxProcessIds,
+    listSandboxProcesses,
+    // 优雅关窗：强杀窗口会把 VM 留给宿主（真机实测 3.4GB 不释放），见 closeSandboxWindow 的注释
+    closeSandboxWindow,
     onStatus: broadcastComputerUseStatus,
   });
   registerComputerUseIpc(computerUse);

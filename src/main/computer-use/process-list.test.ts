@@ -4,7 +4,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { isSandboxImage, parseSandboxProcessIds } from "./process-list.ts";
+import { isRemoteSessionImage, isSandboxImage, parseSandboxProcesses } from "./process-list.ts";
 
 const csv = [
   '"Image Name","PID","Session Name","Session#","Mem Usage"',
@@ -21,9 +21,27 @@ const csv = [
   "",
 ].join("\r\n");
 
-describe("parseSandboxProcessIds", () => {
+describe("parseSandboxProcesses", () => {
   test("只取沙箱侧三类进程；启动器 WindowsSandbox.exe 与名字相近的不算", () => {
-    assert.deepEqual(parseSandboxProcessIds(csv), [6040, 6152, 7204, 8008]);
+    assert.deepEqual(parseSandboxProcesses(csv), [
+      { image: "WindowsSandboxServer.exe", pid: 6040 },
+      { image: "WindowsSandboxRemoteSession.exe", pid: 6152 },
+      { image: "vmwp.exe", pid: 7204 },
+      // tasklist 截断到 25 字符的那一行也要认出来（否则挑不到窗口去发 WM_CLOSE）
+      { image: "WindowsSandboxRemoteSessi", pid: 8008 },
+    ]);
+  });
+
+  test("镜像名要带得住：能挑出 RemoteSession（窗口）而不是 Server / vmwp", () => {
+    const processes = parseSandboxProcesses(csv);
+    assert.deepEqual(
+      processes.filter((process) => isRemoteSessionImage(process.image)).map((process) => process.pid),
+      [6152, 8008],
+      "截断形态也算窗口",
+    );
+    assert.equal(isRemoteSessionImage("WindowsSandboxServer.exe"), false);
+    assert.equal(isRemoteSessionImage("vmwp.exe"), false);
+    assert.equal(isRemoteSessionImage("WindowsSandbox.exe"), false);
   });
 
   test("列截断（Image Name 少半截）仍认得出 RemoteSession——前缀比不按全名", () => {
@@ -37,10 +55,14 @@ describe("parseSandboxProcessIds", () => {
   });
 
   test("坏行 / 空输出 / 非 CSV 一律跳过，不抛错", () => {
-    assert.deepEqual(parseSandboxProcessIds(""), []);
-    assert.deepEqual(parseSandboxProcessIds("\n\n"), []);
-    assert.deepEqual(parseSandboxProcessIds("INFO: No tasks are running which match the specified criteria."), []);
-    assert.deepEqual(parseSandboxProcessIds('"vmwp.exe","not-a-pid"'), [], "PID 不是数字就不认");
-    assert.deepEqual(parseSandboxProcessIds('"WindowsSandboxServer.exe","12","Console"'), [12], "列不足时前两列够用");
+    assert.deepEqual(parseSandboxProcesses(""), []);
+    assert.deepEqual(parseSandboxProcesses("\n\n"), []);
+    assert.deepEqual(parseSandboxProcesses("INFO: No tasks are running which match the specified criteria."), []);
+    assert.deepEqual(parseSandboxProcesses('"vmwp.exe","not-a-pid"'), [], "PID 不是数字就不认");
+    assert.deepEqual(
+      parseSandboxProcesses('"WindowsSandboxServer.exe","12","Console"'),
+      [{ image: "WindowsSandboxServer.exe", pid: 12 }],
+      "列不足时前两列够用",
+    );
   });
 });
