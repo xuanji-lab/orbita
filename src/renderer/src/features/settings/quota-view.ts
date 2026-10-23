@@ -7,7 +7,7 @@
  */
 import type { Messages } from "../../messages-en.ts";
 import type { MenuItem } from "../../shell/Menu";
-import type { QuotaCredits, QuotaFailure, QuotaProbe, QuotaResult, QuotaSnapshot, QuotaWindow } from "@shared/quota";
+import type { QuotaCredits, QuotaExhaustedHint, QuotaFailure, QuotaProbe, QuotaResult, QuotaSnapshot, QuotaWindow, QuotaWindowKind } from "@shared/quota";
 
 /** 金额：符号紧贴数字（`¥43.21`，中间不留空格）；不认识的币种把代码放在后面 */
 const SYMBOLS: Record<string, string> = {
@@ -32,8 +32,16 @@ export function formatMoney(credits: QuotaCredits): string {
  * 认不出（`custom` / 旧快照）才用厂商原文 `label`。
  */
 export function windowLabel(window: QuotaWindow, t: Messages): string {
-  if (window.kind === undefined || window.kind === "custom") return window.label;
-  return t.quota.windowKind[window.kind];
+  return kindLabel(window.kind, window.label, t);
+}
+
+/**
+ * 与 `windowLabel` 同一口径，但吃的是一对裸事实（`failed` 事件里的额度提示
+ * 只有 kind + label，没有完整窗口）——不为了叫一个名字去伪造一个 `QuotaWindow`。
+ */
+export function kindLabel(kind: QuotaWindowKind | undefined, label: string, t: Messages): string {
+  if (kind === undefined || kind === "custom") return label;
+  return t.quota.windowKind[kind];
 }
 
 /** 已用百分比取整并夹到 0–100：厂商给小数，界面不显示 62.4% */
@@ -111,6 +119,23 @@ export function resetLabel(window: QuotaWindow, now: number, t: Messages): strin
 /** `62% used` —— 数字后面永远带 used（decisions 6） */
 export function usedText(percent: number, t: Messages): string {
   return `${percent}% ${t.quota.usedUnit}`;
+}
+
+/**
+ * 额度窗口用尽时的「账户状态」行（`5 小时窗口已用尽 · 2h 14m 后重置`，带「账户额度：」前缀）。
+ *
+ * 句子在 renderer 组（主进程只给 `kind` / `label` / `resetsAt`）：窗口名走
+ * `kindLabel`，时长用 `formatDuration`，两者与设置页的额度块同一口径。
+ * 渲染时重置时刻已经过点就不说时间——「0s 后重置」是句假话。
+ *
+ * **它是账户状态，不是失败原因**：缓存只说明窗口满了，说不了这次失败是谁造成的
+ * （钥匙过期 + 恰好窗口满时，主因是 401），所以渲染位置只能在厂商原文之后。
+ */
+export function quotaExhaustedText(hint: QuotaExhaustedHint, now: number, t: Messages): string {
+  const label = kindLabel(hint.kind, hint.label, t);
+  const remaining = hint.resetsAt - now;
+  if (remaining <= 0) return t.quota.exhaustedNoReset(label);
+  return t.quota.exhausted(label, formatDuration(remaining));
 }
 
 /** 环里的值行：`62% used · 2h 14m`（紧凑，不带 resets in 的介词） */

@@ -29,6 +29,7 @@ import {
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
+  type TurnFailure,
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
@@ -180,7 +181,7 @@ export interface ChatSession {
    * 回合级失败标注（重试耗尽）：渲染在转录末尾——这轮没送出去的那条用户消息下面。
    * 新一轮开跑自动清除。操作级失败（建会话 / 压缩 / 分支被拒）仍在 error 上。
    */
-  turnError: string | null;
+  turnError: TurnFailure | null;
   /**
    * 最近一次用量快照（token / 花费 / 上下文余量），每轮落定时由 runtime 推来。
    * null = 还没有：纯浏览的旧会话不起 runtime session，等说话唤醒后才有数字。
@@ -192,7 +193,7 @@ export interface ChatSession {
    */
   phaseOf: (id: string) => SessionEntry["phase"];
   /** 按 id 查回合失败标注（槽里有真相）——未读标记的 failed 快照用，与「当前看哪条」无关 */
-  turnErrorOf: (id: string) => string | null;
+  turnErrorOf: (id: string) => TurnFailure | null;
   /** 按 id 查挂着的工具审批（槽里有真相）——竖条「在等你」要读到后台会话的审批 */
   approvalsOf: (id: string) => readonly PendingApproval[];
   error: string | null;
@@ -525,7 +526,7 @@ export interface SessionEngine {
   readonly defaultCwd: string;
   readonly usable: ProviderDto[];
   readonly phaseOf: (id: string) => SessionEntry["phase"];
-  readonly turnErrorOf: (id: string) => string | null;
+  readonly turnErrorOf: (id: string) => TurnFailure | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
@@ -1175,7 +1176,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [],
   );
   const turnErrorOf = useCallback(
-    (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
+    (id: string): TurnFailure | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
   // 按 id 查挂着的审批（2026-10-10 未读/竖条一刀）：竖条「在等你」要读到后台

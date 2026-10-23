@@ -101,3 +101,55 @@ export const QUOTA_STALE_MS = 24 * 60 * 60 * 1000;
 export function quotaIsStale(fetchedAt: number, now: number): boolean {
   return now - fetchedAt > QUOTA_STALE_MS;
 }
+
+/**
+ * 「这一轮失败是因为某个额度窗口用尽」的结构化随件（`failed` 事件的可选字段）。
+ *
+ * **只带事实，不带句子**：窗口名由 renderer 按 `kind` 本地化（`windowLabel`），
+ * 「N 后重置」由 renderer 用 `resetsAt` 现算——主进程没有文案表，中文界面不能
+ * 从主进程冒出来。
+ */
+export interface QuotaExhaustedHint {
+  /** 窗口的语义类别；厂商没给可推的语义时是 `custom`（名字走 `label` 原文） */
+  kind: QuotaWindowKind;
+  /** 窗口名的原文兜底（`kind` 认不出时 renderer 直接显示它） */
+  label: string;
+  /** 重置时刻（毫秒时间戳）。判定时已保证它在未来，但渲染时可能已过点 */
+  resetsAt: number;
+}
+
+/**
+ * 额度判定只认**快照**，不认厂商文案（decisions 22 的落地边界）。
+ *
+ * 为什么不做错误串匹配：各家措辞不同（429、`insufficient_quota`、`额度已用尽`、
+ * `credit balance is too low`……），匹配表一定会漏；更糟的是「钥匙错」与「额度满」
+ * 在文案上常有交集，一张表会把 401 误判成用尽，把用户引到错误的自救方向。
+ * 快照里的 `usedPercent` + `resetsAt` 是厂商自己报的事实，判据只有这一个。
+ */
+export function exhaustedWindowOf(snapshot: QuotaSnapshot, now: number): QuotaWindow | null {
+  for (const window of snapshot.windows) {
+    // 厂商可能给 99.7：取 99 而不是 100，否则永远命不中
+    if (window.usedPercent < 99) continue;
+    // 没有重置时刻 = 不知道什么时候恢复，宁可不说；已过点 = 窗口本该续上了，也不说
+    if (window.resetsAt === undefined || window.resetsAt <= now) continue;
+    return window;
+  }
+  return null;
+}
+
+/**
+ * 失败提示只认**5 分钟内的缓存**。
+ *
+ * 失败已经发生了，再为解释它发一次 8s 探测只会让界面更慢（任务约束 2）。
+ * 缓存太旧时宁可只显示厂商原文——「宁可不解释，也不编」。
+ */
+export const QUOTA_HINT_FRESH_MS = 5 * 60 * 1000;
+
+/** 快照 → 这条失败该带的额度提示；没有（窗口没满 / 缓存过期 / 没查过）就 null */
+export function quotaHintOf(snapshot: QuotaSnapshot | null, now: number): QuotaExhaustedHint | null {
+  if (snapshot === null) return null;
+  if (now - snapshot.fetchedAt > QUOTA_HINT_FRESH_MS) return null;
+  const window = exhaustedWindowOf(snapshot, now);
+  if (window === null || window.resetsAt === undefined) return null;
+  return { kind: window.kind ?? "custom", label: window.label, resetsAt: window.resetsAt };
+}

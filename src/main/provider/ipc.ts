@@ -47,7 +47,15 @@ async function resolveKey(
   return store.resolveApiKey(providerId);
 }
 
-export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, quotaDir?: string): void {
+/**
+ * `quotaCache` 由主进程传入（同一个实例还给 `failed` 事件的额度补丁用）：缓存是
+ * 「上次看到的事实」，两处只能读同一份文件、同一个形状。
+ */
+export function registerProviderIpc(
+  store: ProviderStore,
+  host?: AgentHostCore,
+  quotaCache?: QuotaCache,
+): void {
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
 
   ipcMain.handle(
@@ -157,9 +165,9 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
    *   - `> 24h` 的旧值当作没有——一周前的余额比「不知道」更容易误导。
    * 密钥只在主进程用一次，不进任何返回值。
    */
-  const quotaCache = quotaDir === undefined ? null : new QuotaCache(quotaDir);
+  const quotaStore = quotaCache ?? null;
   ipcMain.handle(ipcChannels.providerQuota, async (_event, query: QuotaQuery): Promise<QuotaResult> => {
-    if (quotaCache === null) return { status: "none" };
+    if (quotaStore === null) return { status: "none" };
     const provider = (await store.list()).find((item) => item.id === query.providerId);
     if (provider === undefined) return { status: "none" };
 
@@ -167,7 +175,7 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
     if (probe === "none") return { status: "none" };
 
     const now = Date.now();
-    const stored = (await quotaCache.read())[query.providerId] ?? null;
+    const stored = (await quotaStore.read())[query.providerId] ?? null;
     const cached = stored !== null && !quotaIsStale(stored.fetchedAt, now) ? stored : null;
 
     const last = quotaProbeState.get(query.providerId);
@@ -201,7 +209,7 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
     if (result.status === "ok") {
       quotaProbeState.set(query.providerId, { at: now, failed: false });
       try {
-        await quotaCache.write(query.providerId, result.snapshot);
+        await quotaStore.write(query.providerId, result.snapshot);
       } catch (cause) {
         // 落盘失败不该让「已经拿到的余额」显示不出来；下次打开会重新探
         console.error("[provider] 额度缓存写入失败", cause);
