@@ -1,9 +1,9 @@
 /**
- * agent 的 LaTeX 工具（PR1）：compile_latex。
+ * agent 的 LaTeX 工具：compile_latex（PR1）与 new_paper（PR2）。
  *
  * 形态与 terminal-tools.ts / browser-tools.ts 完全同构：这一层**只是翻译**——
- * 参数 → latexRequest → 等 latexResult → pi 工具结果。latexmk、.log 解析、
- * 并发与项目目录的授权全在主进程（main/latex/）。agent 进程不碰 fs 策略，
+ * 参数 → latexRequest / newPaperRequest → 等回执 → pi 工具结果。latexmk、.log 解析、
+ * 并发、项目目录的授权与模板写盘全在主进程（main/latex/）。agent 进程不碰 fs 策略，
  * 也不持有「哪个项目在编」的状态。
  *
  * 为什么它值得一个专门的工具而不是让模型拼 `latexmk` 走 bash：
@@ -25,11 +25,14 @@ import {
   type LatexIssue,
   type LatexResult,
   type LatexRunOutcome,
+  type NewPaperOutcome,
+  type NewPaperRequest,
+  type NewPaperResult,
 } from "../shared/latex.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
-/** 本工具的名字。权限档描述（describePermissionMode）与测试都认这一份 */
-export const LATEX_TOOL_NAMES = ["compile_latex"] as const;
+/** 本工具集的名字。权限档描述（describePermissionMode）与测试都认这一份 */
+export const LATEX_TOOL_NAMES = ["compile_latex", "new_paper"] as const;
 
 /** 结果正文里最多列几条：错全列（修完重编即可），告警只列头部——它们是次要信号 */
 const MAX_ERRORS_SHOWN = 20;
@@ -41,6 +44,12 @@ const MAX_WARNINGS_SHOWN = 10;
  * 工具就拿到「主进程没回执」，可 latexmk 还在跑，模型会以为编译失败了。
  */
 const BROKER_TIMEOUT_MS = LATEX_TIMEOUT_MS + 30_000;
+
+/**
+ * 建模板的回执上限。写三份小文件是毫秒级，不需要编译那个长超时；
+ * 留 30 秒只是「主进程失联」的兜底（RequestBroker 的默认值）
+ */
+const NEW_PAPER_TIMEOUT_MS = 30_000;
 
 export interface LatexToolContext {
   /** 会话 cwd：dir 相对路径的解析基准（主进程按同一基准解析并做授权） */
@@ -55,25 +64,36 @@ export function createLatexTools(
   sessionId: string,
   context: LatexToolContext,
 ): ToolDefinition[] {
-  /** 发请求并等回执；这一轮被停掉（abort）就立刻放手（terminal-tools.ts 同款） */
-  const call = async (
-    request: { dir?: string; main?: string; engine?: LatexEngine },
+  /**
+   * 发请求并等回执；这一轮被停掉（abort）就立刻放手（terminal-tools.ts 同款）。
+   * 两种请求（编译 / 建模板）只差事件名与超时，配对与中止逻辑共用一份。
+   */
+  const requestReply = async <T extends { ok: boolean }>(
+    event: Record<string, unknown>,
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+  ): Promise<T> => {
+    if (signal?.aborted === true) throw new Error("Stopped");
+    const pending = broker.request<T>(event, timeoutMs);
+    return signal === undefined
+      ? await pending
+      : await Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) =>
+            signal.addEventListener("abort", () => reject(new Error("Stopped")), { once: true }),
+          ),
+        ]);
+  };
+
+  const compileWith = async (
+    compileRequest: { dir?: string; main?: string; engine?: LatexEngine },
     signal: AbortSignal | undefined,
   ) => {
-    if (signal?.aborted === true) throw new Error("Stopped");
-    const pending = broker.request<LatexRunOutcome>(
-      { type: "latexRequest", sessionId, request },
+    const result = await requestReply<LatexRunOutcome>(
+      { type: "latexRequest", sessionId, request: compileRequest },
       BROKER_TIMEOUT_MS,
+      signal,
     );
-    const result =
-      signal === undefined
-        ? await pending
-        : await Promise.race([
-            pending,
-            new Promise<never>((_resolve, reject) =>
-              signal.addEventListener("abort", () => reject(new Error("Stopped")), { once: true }),
-            ),
-          ]);
     if (!result.ok) throw new Error(result.error);
     return { content: [{ type: "text" as const, text: describe(result.result) }], details: undefined };
   };
@@ -133,7 +153,7 @@ export function createLatexTools(
       }
       // 校验之后才拿得到 LatexEngine 类型：收窄与请求类型同源，不靠 as
       const picked: LatexEngine | undefined = engine !== undefined && isLatexEngine(engine) ? engine : undefined;
-      return call(
+      return compileWith(
         {
           ...(dir === undefined ? {} : { dir }),
           ...(main === undefined ? {} : { main }),
@@ -144,7 +164,65 @@ export function createLatexTools(
     },
   };
 
-  return [compile];
+  /**
+   * new_paper：写一份可编译的最小论文骨架。模板内容与授权都在主进程（目的一是
+   * 「agent 不碰 fs 策略」，二是模板只有一份真源、agent 版本不随轮次漂移）。
+   * 目标目录必须不存在或为空——这个工具不覆盖任何已有文件。
+   */
+  const newPaper: ToolDefinition = {
+    name: "new_paper",
+    label: "new_paper",
+    description:
+      "Create a new LaTeX paper project from the built-in minimal template: main.tex (article class, one figure, " +
+      "one table, one equation), refs.bib with three real citations, and figures/example.png. The target " +
+      "directory must be missing or empty — existing files are never overwritten. Returns the file list; " +
+      "build it afterwards with compile_latex. Use this instead of hand-writing a skeleton when the user asks " +
+      "for a new paper or report to start from.",
+    promptSnippet:
+      "Scaffold a paper project (main.tex + refs.bib + placeholder figure) in a missing or empty directory, then compile it.",
+    promptGuidelines: [
+      "Give new_paper a new directory (for example the paper's short title, relative to the session working directory): a non-empty directory is refused rather than overwritten.",
+      "After it succeeds, call compile_latex with the same dir — the tool already reports the exact next step.",
+      "The template text is a placeholder: replace title/sections/abstract per the user's request instead of shipping the sample prose.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        dir: {
+          type: "string",
+          description:
+            "Directory for the new project: absolute or relative to the session working directory. It must be " +
+            "missing or empty, and must resolve inside the session's authorized directories. Omit to use the " +
+            "session working directory (only works when that directory is empty).",
+        },
+        title: {
+          type: "string",
+          description:
+            "Optional paper title written into \\title{}. LaTeX special characters are escaped. " +
+            "Defaults to a neutral placeholder title.",
+        },
+      },
+      required: [],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const dir = text(args["dir"]);
+      const title = text(args["title"]);
+      const request: NewPaperRequest = {
+        ...(dir === undefined ? {} : { dir }),
+        ...(title === undefined ? {} : { title }),
+      };
+      const result = await requestReply<NewPaperOutcome>(
+        { type: "newPaperRequest", sessionId, request },
+        NEW_PAPER_TIMEOUT_MS,
+        signal,
+      );
+      if (!result.ok) throw new Error(result.error);
+      return { content: [{ type: "text" as const, text: describeNewPaper(result.result) }], details: undefined };
+    },
+  };
+
+  return [compile, newPaper];
 }
 
 /** 结果 → 给模型的正文。每段都要回答「下一步干什么」，不是状态回显 */
@@ -235,4 +313,20 @@ function formatIssue(issue: LatexIssue): string {
   const where =
     issue.file === null ? "" : issue.line === null ? `${issue.file} — ` : `${issue.file}:${issue.line} — `;
   return `${where}${issue.message}`;
+}
+
+/**
+ * 建模板成功 → 给模型的正文：文件清单 + **下一步的命令**。
+ * 不给「已创建、一切正常」这种回显：模板里的正文全是占位符，模型下一句必须
+ * 去编译并换成用户真正要写的内容。
+ */
+function describeNewPaper(result: NewPaperResult): string {
+  const lines = [`Created a paper project in ${result.dir}:`];
+  for (const file of result.files) lines.push(`- ${file}`);
+  lines.push(
+    "",
+    `Next: run compile_latex with dir "${result.dir}" — the PDF lands in build/main.pdf.`,
+    "Then replace the template prose, the table numbers and the placeholder figure with the user's actual content.",
+  );
+  return lines.join("\n");
 }

@@ -157,3 +157,27 @@ export const LATEX_DEFAULT_OUT_DIR = "build";
 
 /** 项目级配置文件的相对路径（相对项目目录） */
 export const LATEX_CONFIG_PATH = ".orbita/latex.json";
+
+/**
+ * `new_paper` 的请求：把一个内置模板写成一份新项目。
+ *
+ * `dir` 走与 compile_latex 同一套会话授权（相对会话 cwd 解析、必须落在授权目录内），
+ * 但**允许不存在**——创建目录正是这个工具的工作；父目录可以缺失。
+ * `title` 只影响 `\title{}` 那一行（LaTeX 特殊字符会被转义）。
+ */
+export interface NewPaperRequest {
+  dir?: string;
+  title?: string;
+}
+
+/** 写成功的回执：项目目录的绝对路径 + 写出的相对文件清单 */
+export interface NewPaperResult {
+  dir: string;
+  files: string[];
+}
+
+/**
+ * `new_paper` 的对外结局。失败一律 `{ ok: false }`：目录非空、越界、写盘失败
+ * 都是「一个字都没写（或只写了一半并已报告）」，不能伪装成创建成功。
+ */
+export type NewPaperOutcome = { ok: true; result: NewPaperResult } | { ok: false; error: string };

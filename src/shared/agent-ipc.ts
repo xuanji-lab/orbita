@@ -21,7 +21,7 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
-import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
+import type { LatexCompileRequest, LatexRunOutcome, NewPaperOutcome, NewPaperRequest } from "./latex.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -858,6 +858,8 @@ export type AgentCommand =
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
   | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
+  /** 论文模板：主进程对 newPaperRequest 的回执（latexResult 同款） */
+  | ({ type: "newPaperResult"; requestId: string } & NewPaperOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -1041,6 +1043,12 @@ export type AgentEvent =
    * 就是第二个真源。回 latexResult
    */
   | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
+  /**
+   * 论文模板：agent 的 new_paper 请求（形状见 shared/latex.ts 的 NewPaperRequest）。
+   * **写盘在主进程**（latex/new-paper.ts，latexRequest 同一条边界）：授权目录只有
+   * 主进程认识，agent 进程不持有 fs 策略。回 newPaperResult。
+   */
+  | { type: "newPaperRequest"; requestId: string; sessionId: string; request: NewPaperRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、

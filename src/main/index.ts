@@ -48,6 +48,7 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { LatexRunner } from "./latex/run.ts";
 import { applyLatexRequest } from "./latex/agent-requests.ts";
+import { applyNewPaperRequest } from "./latex/new-paper.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -470,6 +471,19 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerLatex(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerLatex(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 论文模板：agent 的 new_paper——授权与写盘都在主进程（latexRequest 同一条边界）。
+    // 同样任何路径都回执，否则那次工具调用会永远等下去
+    if (event.type === "newPaperRequest") {
+      void applyNewPaperRequest(sessions, workspaces, event)
+        .then((outcome) => agentHost.answerNewPaper(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerNewPaper(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
