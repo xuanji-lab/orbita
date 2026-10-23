@@ -5,6 +5,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
+import type { TurnFailure } from "./session-states.ts";
 import {
   ChannelFromChildPill,
   ChannelFromParentBubble,
@@ -115,7 +116,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling, knownProviderQuota } from "@shared/known-providers";
 import type { QuotaResult } from "@shared/quota";
-import { quotaMenuItems } from "../settings/quota-view.ts";
+import { quotaMenuItems, quotaExhaustedText } from "../settings/quota-view.ts";
 import { deriveWorkspaceName } from "@shared/workspace";
 import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
@@ -1486,7 +1487,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   marks: readonly ChannelMarkRecord[];
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
-  turnError: string | null;
+  turnError: TurnFailure | null;
   loadingHistory: boolean;
   /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
   loadingOlder: boolean;
@@ -1803,7 +1804,31 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{props.turnError}</Notice>
+          <Notice tone="bad">
+            {/*
+             * 额度窗口用尽时先说一句人话（主进程只给结构化事实，句子在这里组），
+             * 厂商原文降为副行——两行都留：人话让人知道「等到什么时候」，原文留着排障。
+             */}
+            {props.turnError.quota !== undefined && (
+              <span style={{ display: "block" }}>
+                {quotaExhaustedText(props.turnError.quota, Date.now(), t)}
+              </span>
+            )}
+            <span
+              style={
+                props.turnError.quota === undefined
+                  ? undefined
+                  : {
+                      display: "block",
+                      marginTop: "var(--space-1)",
+                      color: "var(--color-text-tertiary)",
+                      fontSize: "var(--font-size-sm)",
+                    }
+              }
+            >
+              {props.turnError.message}
+            </span>
+          </Notice>
         </div>
       )}
       {props.phase === "turn" &&

@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatMoney,
   progressOf,
+  quotaExhaustedText,
   quotaMenuItems,
   resetLabel,
   usedPercent,
@@ -238,5 +239,33 @@ describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
     );
     assert.equal(items.at(-1)?.label, "Couldn't refresh (unexpected response) · 12 min ago");
     assert.equal(items[1]?.label, "Balance");
+  });
+});
+
+// ── 额度用尽导致的失败：人话在 renderer 组（主进程只给事实） ──
+
+describe("quotaExhaustedText —— 窗口用尽时的那句人话", () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 23, 9, 0, 0);
+  const hint = { kind: "5h" as const, label: "5-hour window", resetsAt: now + 2 * HOUR + 14 * 60_000 };
+
+  test("中文：窗口名本地化 + 时长走机器口径", () => {
+    assert.equal(quotaExhaustedText(hint, now, zh), "5 小时窗口已用尽 · 2h 14m 后重置");
+  });
+
+  test("英文：同一份事实，同一份时长", () => {
+    assert.equal(quotaExhaustedText(hint, now, en), "5-hour window exhausted · resets in 2h 14m");
+  });
+
+  test("custom 名字用厂商原文，不硬翻", () => {
+    assert.equal(
+      quotaExhaustedText({ ...hint, kind: "custom", label: "TOKENS_LIMIT" }, now, zh),
+      "TOKENS_LIMIT窗口已用尽 · 2h 14m 后重置",
+    );
+  });
+
+  test("渲染时已经过点：不说时间（「0s 后重置」是句假话）", () => {
+    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, zh), "5 小时窗口已用尽");
+    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, en), "5-hour window exhausted");
   });
 });

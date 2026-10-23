@@ -1306,6 +1306,8 @@ export const zh: Messages = {
       rolling: "滚动窗口",
     },
     resetsIn: (duration) => `${duration} 后重置`,
+    exhausted: (label, duration) => `${label}窗口已用尽 · ${duration} 后重置`,
+    exhaustedNoReset: (label) => `${label}窗口已用尽`,
     justNow: "刚刚",
     minutesAgo: (n) => `${n} 分钟前`,
     hoursAgo: (n) => `${n} 小时前`,

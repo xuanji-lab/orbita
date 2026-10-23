@@ -1414,6 +1414,13 @@ export const en = {
       rolling: "Rolling window",
     },
     resetsIn: (duration: string) => `resets in ${duration}`,
+    /**
+     * 额度窗口用尽导致这一轮失败（主进程给事实，句子在这里组）。
+     * `label` 已经过 `windowLabel` 本地化，`duration` 是 `2h 14m` 这类机器口径的时长。
+     */
+    exhausted: (label: string, duration: string) => `${label} exhausted · resets in ${duration}`,
+    /** 渲染时重置时刻已经过了（判定时还在未来）：没有可信的恢复时间，就不说 */
+    exhaustedNoReset: (label: string) => `${label} exhausted`,
     justNow: "just now",
     minutesAgo: (n: number) => `${n} min ago`,
     hoursAgo: (n: number) => `${n}h ago`,
