@@ -72,10 +72,12 @@ export interface QuotaSnapshot {
 }
 
 /**
- * 失败原因必须分三类（decisions 15），否则用户无法判断该改什么：
- * 钥匙错 / 厂商改版 / 网络。`unsupported` 是「这家就是查不了」（团队账号、未接入）。
+ * 失败原因必须分四类（decisions 15），否则用户无法判断该改什么：
+ * 钥匙错 / 厂商改版 / 网络。另有两种「这不是错」的情形：
+ * `unsupported` = 这家就是查不了（团队账号、未接入）；
+ * `no-plan` = 账号没订阅套餐（能查、但不是故障——别把它说成「格式变了」）。
  */
-export type QuotaFailure = "auth" | "unsupported" | "network" | "protocol";
+export type QuotaFailure = "auth" | "unsupported" | "no-plan" | "network" | "protocol";
 
 export type QuotaResult =
   | { status: "ok"; snapshot: QuotaSnapshot; fromCache: boolean }

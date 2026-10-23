@@ -566,69 +566,112 @@ async function probeOpenCode(origin: string, apiKey: string): Promise<QuotaResul
  * ------------------------------------------------------------------ */
 
 /**
- * StepFun 的 **200 响应至今没人见过**（证据见下），所以解析只接受两种可辩护的形状，
- * 其余一律 protocol——不猜字段含义、不拿未知字段当百分比。
+ * StepFun 的 200 信封（2026-10-23 用用户真实 key 首次看到）：
  *
- * 已知事实（2026-10-23）：
- *   - 官方 API 参考只有 chat / models / files / audio，计费页只讲 Credit 规则并让去控制台看；
- *   - `stepfun-cli@0.2.4` 与 `stepcode@2.0.0` 的 bundle 里没有任何 usage 路径；
- *   - 路由**真实存在**：`GET /step_plan/v1/usage` 无凭据回 401
- *     （`invalid_api_key`），而同方向的 `/usage/summary`、`/credits`、`/balance`、
- *     `/subscription`、`/v1/usage`、`/v1/user/balance` 全部 404。
+ *   { schema_version, observed_at_ms, scope, account: { id },
+ *     plan: { state, family, name, subscription },
+ *     quota: { state, allowed, reason, windows: [], credit_buckets: [] } }
  *
- * 所以：**这条 200 至今没人见过**，下面的解析是「可辩护的保守假设」。第一次拿到真实响应后
- * 要回来收紧（尤其是 `rolling` 到底是不是 5 小时窗）；认不出时只打**字段名**，不打值。
+ * 两个重要事实：
+ *   - **有套餐和没套餐返回同一个信封**：没订阅时 `allowed: false`、两个额度数组都是空的——
+ *     这不是「格式变了」，是 `no-plan`（以前把 200 + 空数组判成 protocol，是一句错话）；
+ *   - `schema_version` / `observed_at_ms` **不参与计算**：前者是协议版本，后者是厂商的
+ *     观察时刻；快照时间一律用我们自己的 `fetchedAt`。
+ *
+ * 背景（路由的真实性有证据，窗口字段的语义仍无样本）：官方 API 参考只有 chat / models /
+ * files / audio，计费页只讲 Credit 规则并让去控制台看；`stepfun-cli@0.2.4` 与
+ * `stepcode@2.0.0` 的 bundle 里没有任何 usage 路径；同方向的 `/usage/summary`、`/credits`、
+ * `/balance`、`/subscription`、`/v1/usage`、`/v1/user/balance` 全部 404——活着的只有
+ * `GET /step_plan/v1/usage`（无凭据 401 `invalid_api_key`）。上文那个信封来自**没订阅**的
+ * 账号，所以 `windows` / `credit_buckets` 里每项的字段含义仍是「可辩护的宽容解析」。
+ * 认不出时只打**字段名**，一个值都不进日志（响应里可能是额度数字或账号信息）。
  */
 export function parseStepfunUsage(body: unknown, fetchedAt: number): ParseOutcome {
   const record = asRecord(body);
-  if (record === null) return { ok: false, reason: "protocol" };
+  const quota = record === null ? null : asRecord(record.quota);
+  if (record === null || quota === null) {
+    warnStepfunShape(record, null);
+    return { ok: false, reason: "protocol" };
+  }
 
-  const windows = stepfunWindows(asRecord(record.usage));
-  if (windows.length > 0) return parsed(windows, fetchedAt);
+  const rawWindows = Array.isArray(quota.windows) ? quota.windows : [];
+  const rawBuckets = Array.isArray(quota.credit_buckets) ? quota.credit_buckets : [];
 
-  const credits = stepfunCredits(record);
-  if (credits !== null) return { ok: true, snapshot: { credits, windows: [], fetchedAt } };
+  // 厂商明说不可用，或两个额度数组都空：账号没有 Step Plan 订阅，不是端点/格式出了问题
+  if (quota.allowed === false || (rawWindows.length === 0 && rawBuckets.length === 0)) {
+    return { ok: false, reason: "no-plan" };
+  }
 
-  // 只打字段名：这里可能有额度数字或账号信息，一个值都不进日志
+  const windows = stepfunWindows(rawWindows);
+  const credits = stepfunCredits(rawBuckets);
+  if (windows.length === 0 && credits === null) {
+    warnStepfunShape(record, quota);
+    return { ok: false, reason: "protocol" };
+  }
+  return {
+    ok: true,
+    snapshot: { ...(credits === null ? {} : { credits }), windows, fetchedAt },
+  };
+}
+
+/** 只打字段名：这里可能有额度数字或账号信息，一个值都不进日志 */
+function warnStepfunShape(
+  record: Record<string, unknown> | null,
+  quota: Record<string, unknown> | null,
+): void {
   console.warn(
     "[quota] stepfun 未识别的响应字段",
-    Object.keys(record),
-    Object.keys(asRecord(record.usage) ?? {}),
+    record === null ? [] : Object.keys(record),
+    quota === null ? [] : Object.keys(quota),
   );
-  return { ok: false, reason: "protocol" };
 }
 
 /**
- * 窗口式：`{ usage: { <name>: { percent, resetsAt|resetTime } } }`。
- * `rolling` 按 5 小时窗处理（Step Plan 的滚动窗，与智谱 / Kimi / OpenCode 同档）——
- * **这是假设，不是实证**；其余 `weekly` / `monthly` 按名字；认不得的名字用原文当标签。
+ * `quota.windows` 逐项映射。宽容但只认可辩护的字段：标签取 `name | kind | label` 里第一个
+ * 字符串；能认出 `rolling / weekly / monthly` 就归到已知语义（`rolling` 是不是 5 小时窗
+ * **仍未验**，沿用 OpenCode 那档），否则 `custom` + 原文。
  */
-function stepfunWindows(usage: Record<string, unknown> | null): QuotaWindow[] {
-  if (usage === null) return [];
+function stepfunWindows(raw: unknown[]): QuotaWindow[] {
   const windows: QuotaWindow[] = [];
-  for (const [name, value] of Object.entries(usage)) {
+  raw.forEach((value, index) => {
     const entry = asRecord(value);
-    if (entry === null) continue;
-    const percent = asNumber(entry.percent);
-    // 缺 percent 就不拿 unknown 字段顶上：这一项跳过，不写 0% 冒充
-    if (percent === undefined) continue;
-    const kind = stepfunKind(name);
-    const resetsAt = asTimestamp(entry.resetsAt) ?? asTimestamp(entry.resetTime);
+    if (entry === null) return;
+    const percent = stepfunPercent(entry);
+    // 没有可辩护的百分比就不展示这一项：不拿未知字段顶上，也不写 0% 冒充
+    if (percent === undefined) return;
+    const rawLabel = asString(entry.name) ?? asString(entry.kind) ?? asString(entry.label);
+    const kind = rawLabel === undefined ? "custom" : stepfunKind(rawLabel);
+    const label = rawLabel === undefined ? `window ${index + 1}` : rawLabel;
+    // id 要能当 React key：同名窗口（极少）靠下标岔开
+    const id = windows.some((item) => item.id === label) ? `${label}:${index}` : label;
+    const resetsAt =
+      asTimestamp(entry.resetsAt) ?? asTimestamp(entry.resetAt) ?? asTimestamp(entry.reset_at);
     windows.push({
-      id: name,
-      label: kind === "custom" ? name : KIND_LABELS[kind],
+      id,
+      label: kind === "custom" ? label : KIND_LABELS[kind],
       kind,
       usedPercent: percent,
       ...(kind === "5h" ? { windowMinutes: 5 * 60 } : {}),
       ...(kind === "weekly" ? { windowMinutes: 7 * 24 * 60 } : {}),
       ...(resetsAt === undefined ? {} : { resetsAt }),
     });
-  }
+  });
   return windows;
 }
 
-function stepfunKind(name: string): QuotaWindowKind {
-  switch (name) {
+/** 已用百分比：`percent` 优先；否则 `used / (used + remaining)`；都给不出就 undefined */
+function stepfunPercent(entry: Record<string, unknown>): number | undefined {
+  const percent = asNumber(entry.percent);
+  if (percent !== undefined) return percent;
+  const used = asNumber(entry.used);
+  const remaining = asNumber(entry.remaining);
+  if (used === undefined || remaining === undefined) return undefined;
+  const total = used + remaining;
+  return total > 0 ? (used / total) * 100 : undefined;
+}
+
+function stepfunKind(label: string): QuotaWindowKind {
+  switch (label.trim().toLowerCase()) {
     case "rolling":
       return "5h";
     case "weekly":
@@ -648,22 +691,26 @@ function stepfunMoney(value: unknown): string | undefined {
 }
 
 /**
- * 余额式：`{ credits|credit|balance: { total|remaining|used } }`，能配出「剩余」的才算数。
- * `remaining` 直接就是答案；只有 `total` 时它自己就是剩余；`total` + `used` 做一次减法
- * （本探针唯一的金额算术，只用于积分类整数）。币种缺省 `CNY`（StepFun 是国内站）。
+ * `quota.credit_buckets` → `credits`：**只取第一个能配出「剩余」的桶**
+ * （`remaining` 直接就是答案；只有 `total` 时它自己就是剩余；`total` + `used` 做一次减法）。
+ * 多桶（加油包 / 多个 Credit 池）怎么展示还没样本，等真实多桶响应再定。
+ * 金额保字符串，币种缺省 `CNY`（StepFun 是国内站）。
  */
-function stepfunCredits(record: Record<string, unknown>): QuotaCredits | null {
-  const source = asRecord(record.credits) ?? asRecord(record.credit) ?? asRecord(record.balance);
-  if (source === null) return null;
-  const currency = asString(source.currency) ?? "CNY";
-  const remaining = stepfunMoney(source.remaining);
-  if (remaining !== undefined) return { amount: remaining, currency };
-  const total = stepfunMoney(source.total);
-  if (total === undefined) return null;
-  const used = stepfunMoney(source.used);
-  if (used === undefined) return { amount: total, currency };
-  const derived = Number(total) - Number(used);
-  return Number.isFinite(derived) ? { amount: String(derived), currency } : null;
+function stepfunCredits(buckets: unknown[]): QuotaCredits | null {
+  for (const raw of buckets) {
+    const bucket = asRecord(raw);
+    if (bucket === null) continue;
+    const currency = asString(bucket.currency) ?? "CNY";
+    const remaining = stepfunMoney(bucket.remaining);
+    if (remaining !== undefined) return { amount: remaining, currency };
+    const total = stepfunMoney(bucket.total);
+    if (total === undefined) continue;
+    const used = stepfunMoney(bucket.used);
+    if (used === undefined) return { amount: total, currency };
+    const derived = Number(total) - Number(used);
+    if (Number.isFinite(derived)) return { amount: String(derived), currency };
+  }
+  return null;
 }
 
 async function probeStepfun(origin: string, apiKey: string): Promise<QuotaResult> {

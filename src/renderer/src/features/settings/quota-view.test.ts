@@ -10,6 +10,7 @@ import {
   progressOf,
   quotaExhaustedText,
   quotaMenuItems,
+  quotaProblemText,
   resetLabel,
   usedPercent,
   windowLabel,
@@ -167,6 +168,14 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
       () => undefined,
     );
     assert.deepEqual(labels(items), ["账户", "每周", "刚刚查过"]);
+  });
+});
+
+describe("失败文案——「没订阅」与「团队账号」是两句话", () => {
+  test("no-plan 走 noPlan，不混进 teamUnsupported", () => {
+    assert.equal(quotaProblemText("no-plan", zh), "这个账号没有订阅套餐。");
+    assert.equal(quotaProblemText("no-plan", en), "This account has no subscription.");
+    assert.notEqual(quotaProblemText("no-plan", zh), quotaProblemText("unsupported", zh));
   });
 });
 

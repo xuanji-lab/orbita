@@ -628,6 +628,16 @@ describe("probeQuota —— OpenCode Go 的订阅窗口", () => {
   });
 });
 
+/** 2026-10-23 用户真实 key 拿到的**没订阅**信封（只保留结构，值已隐去） */
+const STEPFUN_NO_PLAN = {
+  schema_version: 1,
+  observed_at_ms: 0,
+  scope: "step_plan",
+  account: { id: "acc_test" },
+  plan: { state: "none", family: "step_plan", name: null, subscription: null },
+  quota: { state: "unavailable", allowed: false, reason: "no_subscription", windows: [], credit_buckets: [] },
+};
+
 const stepfunInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput => ({
   probe: "plan-windows",
   kind: "stepfun",
@@ -636,19 +646,46 @@ const stepfunInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput
   ...overrides,
 });
 
-describe("probeQuota —— StepFun（响应形状未验证，只能按保守假设）", () => {
-  test("窗口式：rolling / weekly / monthly 各一个，kind 与重置时刻对上；URL 与 Bearer", async () => {
-    const stub = stubFetch(() =>
+describe("probeQuota —— StepFun（真实信封：没订阅 = no-plan，不是格式变了）", () => {
+  test("真实信封 allowed:false + 空数组 → no-plan（且不误报 protocol、不打 warn）", async () => {
+    const original = console.warn;
+    const logged: unknown[][] = [];
+    console.warn = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      const stub = stubFetch(() => okBody(STEPFUN_NO_PLAN));
+      const result = await probeQuota(stepfunInput());
+      assert.deepEqual(result, { status: "error", reason: "no-plan", cached: null });
+      assert.notEqual(result.status === "error" ? result.reason : null, "protocol");
+      assert.equal(stub.calls[0]?.url, "https://api.stepfun.com/step_plan/v1/usage");
+      assert.equal(headersOf(stub.calls[0]).Authorization, "Bearer sk-step");
+    } finally {
+      console.warn = original;
+    }
+    assert.deepEqual(logged, [], "没订阅是可解释的结果，不该打「未识别」");
+  });
+
+  test("allowed:true 但两个数组都空也算 no-plan（同一句话，不猜订阅）", async () => {
+    stubFetch(() => okBody({ quota: { allowed: true, windows: [], credit_buckets: [] } }));
+    assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "no-plan", cached: null });
+  });
+
+  test("windows 非空：标签取 name|kind|label，rolling→5h、weekly→weekly；percent 直接作已用", async () => {
+    stubFetch(() =>
       okBody({
-        usage: {
-          rolling: { percent: 42, resetsAt: "2026-10-23T05:00:00Z" },
-          weekly: { percent: 7.5, resetTime: 1792972800000 },
-          monthly: { percent: 0 },
+        schema_version: 1,
+        quota: {
+          allowed: true,
+          windows: [
+            { name: "rolling", percent: 42, resetsAt: "2026-10-23T05:00:00Z" },
+            { kind: "weekly", percent: 7.5, reset_at: 1_792_972_800_000 },
+          ],
+          credit_buckets: [],
         },
       }),
     );
     const result = await probeQuota(stepfunInput());
-    assert.equal(result.status, "ok");
     assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
       {
         id: "rolling",
@@ -659,22 +696,41 @@ describe("probeQuota —— StepFun（响应形状未验证，只能按保守假
         resetsAt: Date.parse("2026-10-23T05:00:00Z"),
       },
       { id: "weekly", label: "Weekly", kind: "weekly", usedPercent: 7.5, windowMinutes: 10080, resetsAt: 1_792_972_800_000 },
-      { id: "monthly", label: "Monthly", kind: "monthly", usedPercent: 0 },
     ]);
-    assert.equal(stub.calls[0]?.url, "https://api.stepfun.com/step_plan/v1/usage");
-    assert.equal(headersOf(stub.calls[0]).Authorization, "Bearer sk-step");
   });
 
-  test("认不得的窗口名 → custom + 原文标签（不硬套成 5 小时 / 每月）", async () => {
-    stubFetch(() => okBody({ usage: { burst: { percent: 12 } } }));
+  test("没有 percent 时用 used/(used+remaining)；都缺就跳过这一项", async () => {
+    stubFetch(() =>
+      okBody({
+        quota: {
+          allowed: true,
+          windows: [
+            { label: "monthly", used: 25, remaining: 75 },
+            { name: "mystery", reason: "no numbers here" },
+            { name: "custom-ish", percent: 12 },
+          ],
+          credit_buckets: [],
+        },
+      }),
+    );
     const result = await probeQuota(stepfunInput());
     assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
-      { id: "burst", label: "burst", kind: "custom", usedPercent: 12 },
+      { id: "monthly", label: "Monthly", kind: "monthly", usedPercent: 25 },
+      // 认不出的名字：custom + 原文标签，不硬套成已知档
+      { id: "custom-ish", label: "custom-ish", kind: "custom", usedPercent: 12 },
     ]);
   });
 
-  test("余额式：remaining 直接作余额；只有 total+used 时做减法；币种缺省 CNY", async () => {
-    stubFetch(() => okBody({ credits: { remaining: "750.00", currency: "CNY" } }));
+  test("credit_buckets：取第一个能配出剩余的桶；金额保字符串、币种缺省 CNY", async () => {
+    stubFetch(() =>
+      okBody({
+        quota: {
+          allowed: true,
+          windows: [],
+          credit_buckets: [{ label: "empty" }, { remaining: "750.00", currency: "CNY" }, { remaining: "1.00" }],
+        },
+      }),
+    );
     const first = await probeQuota(stepfunInput());
     assert.deepEqual(first.status === "ok" ? first.snapshot : null, {
       credits: { amount: "750.00", currency: "CNY" },
@@ -682,22 +738,20 @@ describe("probeQuota —— StepFun（响应形状未验证，只能按保守假
       fetchedAt: first.status === "ok" ? first.snapshot.fetchedAt : 0,
     });
 
-    stubFetch(() => okBody({ balance: { total: 1000, used: 250 } }));
+    stubFetch(() => okBody({ quota: { allowed: true, windows: [], credit_buckets: [{ total: 1000, used: 250 }] } }));
     const second = await probeQuota(stepfunInput());
     assert.deepEqual(second.status === "ok" ? second.snapshot.credits : null, { amount: "750", currency: "CNY" });
   });
 
-  test("认不出 → protocol，不抛；日志只打字段名（值一个都不进日志）", async () => {
+  test("认不出 → protocol，不抛；warn 只拿到字段名", async () => {
     const original = console.warn;
     const logged: unknown[][] = [];
     console.warn = (...args: unknown[]) => {
       logged.push(args);
     };
     try {
-      const stub = stubFetch(() => okBody({ foo: 1, bar: "secret-ish" }));
-      // 不抛，也不需要任何端口
+      stubFetch(() => okBody({ foo: 1, bar: "secret-ish" }));
       assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "protocol", cached: null });
-      assert.equal(stub.calls.length, 1);
     } finally {
       console.warn = original;
     }

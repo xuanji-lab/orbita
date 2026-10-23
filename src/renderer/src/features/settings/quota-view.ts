@@ -97,6 +97,9 @@ export function failureText(reason: QuotaFailure, t: Messages): string {
       return t.quota.reasonProtocol;
     case "unsupported":
       return t.quota.reasonUnsupported;
+    case "no-plan":
+      // 不是故障：这账号就是没订阅套餐。页脚里也只能用同一句话，不能现编一句短话
+      return t.quota.noPlan;
     case "network":
       return t.quota.reasonNetwork;
   }
@@ -162,6 +165,8 @@ export function creditsBreakdownText(credits: QuotaCredits, t: Messages): string
 export function quotaProblemText(failure: QuotaFailure, t: Messages, hasKey?: boolean): string {
   if (failure === "auth") return hasKey === false ? t.quota.authMissing : t.quota.authRejected;
   if (failure === "unsupported") return t.quota.teamUnsupported;
+  // 「没订阅」与「团队账号」是两件事，不能共用一句文案
+  if (failure === "no-plan") return t.quota.noPlan;
   return t.quota.failedAlone(failureText(failure, t));
 }
 
