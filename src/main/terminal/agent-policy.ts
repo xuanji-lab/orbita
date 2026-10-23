@@ -86,8 +86,8 @@ export function resolveAgentCwd(
   deps: AgentCwdDeps,
   policy: AgentCwdPolicy,
 ): AgentCwdResult {
-  const path = deps.path ?? defaultPath();
-  const roots = realRoots(context.roots, deps);
+  const path = deps.path ?? defaultPathApi();
+  const roots = realAuthorizedRoots(context.roots, deps);
   if (roots.length === 0) {
     return { ok: false, error: `This session has no authorized directory to open a ${policy.subject} in.` };
   }
@@ -102,7 +102,7 @@ export function resolveAgentCwd(
   } catch {
     return { ok: false, error: `"${resolved}" does not exist, so no ${policy.subject} can be opened there.` };
   }
-  if (!roots.some((root) => withinRoot(root, real, path, deps.platform ?? process.platform))) {
+  if (!roots.some((root) => pathWithinRoot(root, real, path, deps.platform ?? process.platform))) {
     return {
       ok: false,
       error:
@@ -116,8 +116,13 @@ export function resolveAgentCwd(
   return { ok: true, cwd: real };
 }
 
-/** 授权目录各自过一遍 realpath：失效的（被挪走 / 删掉）直接从名单里去掉 */
-function realRoots(roots: readonly string[], deps: AgentCwdDeps): string[] {
+/**
+ * 授权目录各自过一遍 realpath：失效的（被挪走 / 删掉）直接从名单里去掉。
+ * 导出给 latex/new-paper.ts 用——它要判一个**还不存在**的目标目录，走不了
+ * resolveAgentCwd（那条路要求目录已存在），但必须认同一份根名单与同一套
+ * realpath / 大小写口径，否则「能不能写进这个工作区」会有两个答案。
+ */
+export function realAuthorizedRoots(roots: readonly string[], deps: AgentCwdDeps): string[] {
   const real: string[] = [];
   for (const root of roots) {
     try {
@@ -133,8 +138,14 @@ function realRoots(roots: readonly string[], deps: AgentCwdDeps): string[] {
 /**
  * 目录包含判定。Windows 文件系统大小写不敏感，比较前折叠（同 agent/permission.ts
  * 的 foldPath 口径）；posix 大小写敏感，原样比。
+ * 导出：new-paper 判「这个还不存在的目录将来会不会落在授权目录外」。
  */
-function withinRoot(root: string, candidate: string, path: PathApi, platform: NodeJS.Platform): boolean {
+export function pathWithinRoot(
+  root: string,
+  candidate: string,
+  path: PathApi = defaultPathApi(),
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   const rel = path.relative(fold(root, platform), fold(candidate, platform));
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
@@ -143,9 +154,9 @@ function fold(value: string, platform: NodeJS.Platform): string {
   return platform === "win32" ? value.replaceAll("\\", "/").replace(/\/{2,}/g, "/").toLowerCase() : value;
 }
 
-function defaultPath(): PathApi {
-  // 延迟到调用时取：模块加载时 process.platform 已定，这里只为「默认随平台」一处说法
-  return process.platform === "win32" ? win32 : posix;
+/** 平台默认路径算法。测试注入别的保持可移植，生产默认随 process.platform */
+export function defaultPathApi(platform: NodeJS.Platform = process.platform): PathApi {
+  return platform === "win32" ? win32 : posix;
 }
 
 /**

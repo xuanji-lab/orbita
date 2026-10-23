@@ -804,7 +804,7 @@ function extraToolNames(
     "add_mcp_server",
     "read_task",
     ...TERMINAL_TOOL_NAMES,
-    // LaTeX 编译：同样逐档判——plan 档下编译（会写 build/）被拒，manual 档下要问
+    // LaTeX：编译与建模板都逐档判——plan 档下写盘（build/ 或项目目录）被拒，manual 档下要问
     ...LATEX_TOOL_NAMES,
     ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
@@ -1429,8 +1429,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
-    // agent 的 LaTeX 工具（PR1）：compile_latex。latexmk 与 .log 解析在主进程
-    // （main/latex/），这里只翻译参数；目录授权在主进程按会话名单硬校验
+    // agent 的 LaTeX 工具：compile_latex + new_paper。latexmk、.log 解析与模板写盘
+    // 都在主进程（main/latex/），这里只翻译参数；目录授权在主进程按会话名单硬校验
     ...createLatexTools(requestBroker, command.sessionId, { cwd: command.cwd }),
     ...createChannelTools(requestBroker, command.sessionId, role),
     ...(memoryTools
@@ -2352,6 +2352,11 @@ async function handle(command: AgentCommand): Promise<void> {
   }
   if (command.type === "latexResult") {
     // LaTeX 工具的回执（terminalResult 同款）：形状即契约，原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "newPaperResult") {
+    // 论文模板工具的回执（latexResult 同款）：形状即契约，原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }
