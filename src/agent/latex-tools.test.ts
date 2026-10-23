@@ -7,22 +7,23 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { LatexResult, LatexRunOutcome } from "../shared/latex.ts";
-import { createLatexTools, type LatexToolBroker } from "./latex-tools.ts";
+import type { LatexResult, LatexRunOutcome, NewPaperOutcome } from "../shared/latex.ts";
+import { createLatexTools, LATEX_TOOL_NAMES, type LatexToolBroker } from "./latex-tools.ts";
 
 interface SeenRequest {
   event: Record<string, unknown>;
   timeoutMs: number | undefined;
 }
 
-function fakeBroker(outcome: LatexRunOutcome): { broker: LatexToolBroker; seen: SeenRequest[] } {
+/** 假 broker：回执原样交回去（编译与建模板两种回执形状都能磨） */
+function fakeBroker<TOutcome>(outcome: TOutcome): { broker: LatexToolBroker; seen: SeenRequest[] } {
   const seen: SeenRequest[] = [];
   return {
     seen,
     broker: {
       request: async <T,>(event: Record<string, unknown>, timeoutMs?: number): Promise<T> => {
         seen.push({ event, timeoutMs });
-        return outcome as T;
+        return outcome as unknown as T;
       },
     },
   };
@@ -187,5 +188,61 @@ describe("compile_latex —— 失败", () => {
       }),
     });
     assert.match(text, /latexmk is not installed/);
+  });
+});
+
+describe("new_paper", () => {
+  const okOutcome: NewPaperOutcome = {
+    ok: true,
+    result: { dir: "/repo/paper/rag-study", files: ["main.tex", "refs.bib", "figures/example.png"] },
+  };
+
+  function newPaperTool(outcome: NewPaperOutcome) {
+    const { broker, seen } = fakeBroker(outcome);
+    const tools = createLatexTools(broker, "session-1", { cwd: "/repo/paper" });
+    const tool = tools.find((item) => item.name === "new_paper");
+    assert.ok(tool !== undefined);
+    return { tool, seen };
+  }
+
+  async function run(outcome: NewPaperOutcome, params: Record<string, unknown> = {}): Promise<string> {
+    const { tool } = newPaperTool(outcome);
+    const out = await execute(tool, params);
+    const blocks = Array.isArray(out.content) ? out.content : [];
+    return (blocks[0] as { text?: string } | undefined)?.text ?? "";
+  }
+
+  test("注册在工具集与权限清单里", () => {
+    const { broker } = fakeBroker(okOutcome);
+    const tools = createLatexTools(broker, "session-1", { cwd: "/repo/paper" });
+    assert.deepEqual(tools.map((item) => item.name), ["compile_latex", "new_paper"]);
+    assert.ok((LATEX_TOOL_NAMES as readonly string[]).includes("new_paper"));
+  });
+
+  test("参数转成 newPaperRequest，空串不传", async () => {
+    const { tool, seen } = newPaperTool(okOutcome);
+    await execute(tool, { dir: "rag-study", title: "RAG: 50%_faster" });
+    const request = seen[0];
+    assert.ok(request !== undefined);
+    assert.equal(request.event["type"], "newPaperRequest");
+    assert.equal(request.event["sessionId"], "session-1");
+    assert.deepEqual(request.event["request"], { dir: "rag-study", title: "RAG: 50%_faster" });
+
+    await execute(tool, { dir: "  ", title: "" });
+    assert.deepEqual(seen[1]?.event["request"], {});
+  });
+
+  test("成功：给文件清单与下一步 compile_latex", async () => {
+    const text = await run(okOutcome);
+    assert.match(text, /Created a paper project in \/repo\/paper\/rag-study/);
+    assert.match(text, /- main\.tex/);
+    assert.match(text, /- refs\.bib/);
+    assert.match(text, /- figures\/example\.png/);
+    assert.match(text, /Next: run compile_latex with dir "\/repo\/paper\/rag-study"/);
+  });
+
+  test("主进程拒绝（非空目录）：抛成工具失败，不装成功", async () => {
+    const { tool } = newPaperTool({ ok: false, error: '"/repo/paper" is not empty (notes.txt).' });
+    await assert.rejects(() => execute(tool, {}), /is not empty/);
   });
 });

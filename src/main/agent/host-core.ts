@@ -16,7 +16,7 @@ import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
-import type { LatexRunOutcome } from "../../shared/latex.ts";
+import type { LatexRunOutcome, NewPaperOutcome } from "../../shared/latex.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 
@@ -518,6 +518,15 @@ export class AgentHostCore {
   answerLatex(requestId: string, outcome: LatexRunOutcome): void {
     this.child?.postMessage({
       type: "latexResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, result: outcome.result } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 论文模板：newPaperRequest 的回执（answerLatex 同款）。 */
+  answerNewPaper(requestId: string, outcome: NewPaperOutcome): void {
+    this.child?.postMessage({
+      type: "newPaperResult",
       requestId,
       ...(outcome.ok ? { ok: true as const, result: outcome.result } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
