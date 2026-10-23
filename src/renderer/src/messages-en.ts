@@ -1427,6 +1427,7 @@ export const en = {
     authMissing: "Add an API key above to see the balance.",
     authRejected: "The provider rejected this API key (401). Update it above, then try again.",
     teamUnsupported: "Team accounts aren't supported. Sign in with a personal account to see quota here.",
+    noPlan: "This account has no subscription.",
     reasonAuth: "key rejected",
     reasonNetwork: "network error",
     reasonProtocol: "unexpected response",
