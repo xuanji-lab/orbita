@@ -405,6 +405,28 @@ export function FilesPanel(props: {
   };
 
   /**
+   * 把当前激活标签滚进可视区。正常切换 / 新开由下面的 effect 管；**被拦下的切换**
+   * 不经过 effect（activePath 与 tabs.length 都没变），而浏览器点击已把被点的标签
+   * 滚进了视口——必须手动滚回去，否则用户眼前是那个并没切过去的标签，会以为切换成功了。
+   */
+  const scrollActiveTabIntoView = useCallback((): void => {
+    const bar = tabsBarRef.current;
+    const tab = activeTabRef.current;
+    if (bar === null || tab === null) return;
+    // 用视口矩形换算成「滚动内容坐标」：标签的 offsetParent 不一定是滚动容器
+    // （.cap-tabs 没有 position），offsetLeft 是相对 toolbar 的，直接喂给
+    // tabScrollTarget 会把它当成已可见（实测：真正左溢出 91px 时 offsetLeft
+    // 恰好等于 scrollLeft，target 被判成 null）。
+    const barRect = bar.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const target = tabScrollTarget(
+      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
+      { offsetLeft: tabRect.left - barRect.left + bar.scrollLeft, offsetWidth: tabRect.width },
+    );
+    if (target !== null) bar.scrollTo({ left: target });
+  }, []);
+
+  /**
    * 切换激活标签前的保存闸：当前编辑器脏就先 flush，**冲突 / 写盘失败时不切走**。
    * 切走会让 TexEditorPane 卸载，而卸载时的兜底保存一旦撞上冲突，那份未保存文本
    * 就再也拿不回来了（验收实测的丢字路径）。flush 成功后由这里统一 setActivePath；
@@ -419,11 +441,18 @@ export function FilesPanel(props: {
         return;
       }
       void current.flush().then((outcome) => {
-        if (outcome === "saved" || outcome === "clean") setActivePath(next);
-        else setEditorNotice(t.editor.resolveConflictBeforeSwitch);
+        if (outcome === "saved" || outcome === "clean") {
+          setActivePath(next);
+          return;
+        }
+        setEditorNotice(t.editor.resolveConflictBeforeSwitch);
+        // 点击已经把被点的标签滚进视口（浏览器对聚焦元素的默认行为）；把可视区
+        // 拉回真正的激活标签，否则看起来像已经切过去了。
+        // 延到下一帧：浏览器的「聚焦滚动」排在点击处理器之后，当场 scrollTo 会被它盖掉
+        window.requestAnimationFrame(() => scrollActiveTabIntoView());
       });
     },
-    [activePath, t],
+    [activePath, scrollActiveTabIntoView, t],
   );
 
   // 预览打开时 Esc 关当前激活标签（原型同语义）；没有激活标签回报「没处理」，
@@ -513,15 +542,8 @@ export function FilesPanel(props: {
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
   // 重跑一次也只是无事发生
   useEffect(() => {
-    const bar = tabsBarRef.current;
-    const tab = activeTabRef.current;
-    if (bar === null || tab === null) return;
-    const target = tabScrollTarget(
-      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
-      { offsetLeft: tab.offsetLeft, offsetWidth: tab.offsetWidth },
-    );
-    if (target !== null) bar.scrollTo({ left: target });
-  }, [activePath, tabs.length]);
+    scrollActiveTabIntoView();
+  }, [activePath, tabs.length, scrollActiveTabIntoView]);
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
