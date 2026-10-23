@@ -7,7 +7,9 @@
 //   结果写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件），然后删掉 req。
 //   宿主读完响应后负责清理 resp/jpg。
 //
-// 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入）。
+// 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入），
+// 以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP 语义命令，实现在文件末尾的 CdpSession）。
+// CDP 的 WebSocket 只在 guest 内（桥 ↔ 同机 Edge 的 127.0.0.1 端口），不过映射目录。
 //
 // 轮询：**直探下一个序号的文件名**（File.Exists），不是目录枚举——映射文件夹的目录枚举
 //   会被 RDP 驱动器重定向的缓存卡住（win+r 后 ~20s 看不见新文件，2026-10-14 真机实测）。
@@ -20,6 +22,12 @@
 // 测试缝：请求里带 "dryRun":true 时，输入类命令**只解析不注入**，回执带解析结果
 //   （坐标 / 键名→VK / 原文）。宿主上跑 guest-bridge/bridge.test.mjs 验键名映射与参数校验
 //   就走它——宿主上真注入是红线。宿主主进程永远不发这个字段。
+//
+// 测试缝 2：桥启动时带 `--no-browser` 时，CDP 命令的**启动 Edge**那一步直接报错，
+//   已经跑着的会话仍然工作。为什么需要：在宿主上跑 bridge.test.mjs 时，一条
+//   cdp-nav / cdp-observe 就会去 Process.Start msedge.exe——那是用户的真实浏览器进程，
+//   属于红线。带这个参数就能把参数校验、错误文案、幂等分派全验一遍，而不碰 Edge。
+//   生产（.wsb 的 LogonCommand）不带它。
 //
 // 就绪通告：启动完成后写 out/bridge.json（tmp+rename）——它出现即代表命令循环已上线。
 //
@@ -40,7 +48,9 @@ using System.Threading;
 internal static class Program
 {
     // ---- 协议常量：与宿主侧（Orbita 主进程）严格对齐，一个字母都不能差 ----
-    private const string Version = "0.3.0";
+    // ⚠ 0.4.0 起多了 cdp-*（浏览器通道）。宿主不逐字比版本，但 bridge.json 里的版本
+    // 是排查现场的第一行证据：抬了能力就抬它。
+    private const string Version = "0.4.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -48,6 +58,8 @@ internal static class Program
 
     private static string _outDir = "";
     private static string _cmdDir = "";
+    /** --no-browser：测试模式，CDP 的“启动 Edge”直接报错（绝不 Process.Start msedge.exe） */
+    internal static bool BrowserDisabled = false;
 
     [DllImport("user32.dll")]
     private static extern bool SetProcessDPIAware();
@@ -152,6 +164,11 @@ internal static class Program
         {
             string flag = args[i];
             i++;
+            if (flag == "--no-browser")
+            {
+                BrowserDisabled = true;
+                continue;
+            }
             if (i >= args.Length)
             {
                 Log("参数 " + flag + " 缺少值");
@@ -187,7 +204,7 @@ internal static class Program
     }
 
     // tmp + rename 原子写：对端可能在任何时刻读，不许读到半截文件
-    private static void AtomicWrite(string finalPath, byte[] bytes)
+    internal static void AtomicWrite(string finalPath, byte[] bytes)
     {
         string tmpPath = finalPath + ".tmp";
         File.WriteAllBytes(tmpPath, bytes);
@@ -304,6 +321,9 @@ internal static class Program
         if (command == "type") return ExecuteType(raw);
         if (command == "key") return ExecuteKey(raw);
         if (command == "scroll") return ExecuteScroll(raw);
+        // CDP 浏览器通道（PR3）：一条语义命令 = 一次文件往返，内部可以有多条 CDP 消息。
+        // 实现在文件末尾的 CdpSession；它自己管 Edge 进程与 WebSocket 的生命周期。
+        if (command.Length > 4 && command.Substring(0, 4) == "cdp-") return CdpSession.Execute(command, raw, baseName, _cmdDir);
         return "{\"ok\":false,\"error\":\"未知命令：" + JsonEscape(command) + "\"}";
     }
 
@@ -672,7 +692,7 @@ internal static class Program
 
     // ---- 极简 JSON 字段抽取（命令是宿主生成的扁平小对象，不值得引 JSON 库） ----
 
-    private static string ExtractString(string json, string field)
+    internal static string ExtractString(string json, string field)
     {
         string needle = "\"" + field + "\":\"";
         int start = json.IndexOf(needle, StringComparison.Ordinal);
@@ -683,7 +703,7 @@ internal static class Program
         return json.Substring(start, end - start);
     }
 
-    private static string ExtractNumber(string json, string field)
+    internal static string ExtractNumber(string json, string field)
     {
         string needle = "\"" + field + "\":";
         int start = json.IndexOf(needle, StringComparison.Ordinal);
@@ -700,7 +720,7 @@ internal static class Program
      * 的读法会把 `他说"你好"` 切坏——type 命令必须用它。
      * 回 null = 没有这个字段，或者字符串没收尾（半截请求）。
      */
-    private static string ExtractJsonString(string json, string field)
+    internal static string ExtractJsonString(string json, string field)
     {
         string needle = "\"" + field + "\":\"";
         int start = json.IndexOf(needle, StringComparison.Ordinal);
@@ -741,13 +761,13 @@ internal static class Program
     }
 
     /** 布尔字段：JSON.stringify 落盘是紧凑的（`"dryRun":true`），找字面量即可 */
-    private static bool ExtractBool(string json, string field)
+    internal static bool ExtractBool(string json, string field)
     {
         return json.IndexOf("\"" + field + "\":true", StringComparison.Ordinal) >= 0;
     }
 
     /** 字符串 → JSON 字面量（dryRun 回显用；非 ASCII 直接原样输出，UTF-8 编码已定） */
-    private static string JsonQuote(string value)
+    internal static string JsonQuote(string value)
     {
         StringBuilder sb = new StringBuilder("\"");
         for (int i = 0; i < value.Length; i++)
@@ -764,7 +784,7 @@ internal static class Program
         return sb.Append("\"").ToString();
     }
 
-    private static string JsonEscape(string value)
+    internal static string JsonEscape(string value)
     {
         return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
@@ -817,7 +837,7 @@ internal static class Program
         finally { full.Dispose(); }
     }
 
-    private static byte[] EncodeJpeg(Bitmap bmp, long quality)
+    internal static byte[] EncodeJpeg(Bitmap bmp, long quality)
     {
         ImageCodecInfo codec = null;
         ImageCodecInfo[] encoders = ImageCodecInfo.GetImageEncoders();
@@ -836,7 +856,7 @@ internal static class Program
         }
     }
 
-    private static void Log(string msg)
+    internal static void Log(string msg)
     {
         Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] [bridge] " + msg);
     }

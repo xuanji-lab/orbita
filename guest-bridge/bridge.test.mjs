@@ -90,7 +90,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.3.0");
+      assert.equal(info.version, "0.4.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -338,6 +338,118 @@ test(
   },
 );
 
+
+// ── CDP 命令：参数校验 / 错误文案 / 测试模式下不碰 Edge ─────────────────────
+//
+// ⚠ **红线**：快路径的 cdp-nav / cdp-observe 在真机上会 Process.Start msedge.exe——
+// 在宿主上跑就是拉起用户真实的浏览器。所以这一组全部用桥的 `--no-browser` 测试缝
+// （启动 Edge 那一步直接报错），验的是分派、参数校验与人话错误，不碰任何进程。
+// 真机路径（起 Edge / WS / 截图 / 上传下载）只能由沙箱里的验收覆盖，这里如实不测。
+
+test(
+  "cdp-*：分派与参数校验；--no-browser 下绝不启动 Edge",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-cdp-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-browser"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    let seq = 0;
+    const ask = async (body) => {
+      seq += 1;
+      const name = "cmd-" + String(seq).padStart(6, "0");
+      writeRequest(cmdDir, name, JSON.stringify({ seq, ...body }));
+      const respPath = path.join(cmdDir, name + ".resp.json");
+      assert.ok(await waitForFile(respPath), `应收到响应。桥日志：\n${bridgeLog}`);
+      return JSON.parse(fs.readFileSync(respPath, "utf8"));
+    };
+
+    try {
+      assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
+
+      // 没起过 Edge：status 报 running:false 并给出下一步（不启动任何进程）
+      const status = await ask({ command: "cdp-status" });
+      assert.equal(status.ok, true);
+      assert.equal(status.running, false);
+      assert.match(status.hint, /computer_screenshot/, "要告诉模型可以退回像素工具");
+
+      // stop 幂等：没起过也回 ok
+      assert.deepEqual(await ask({ command: "cdp-stop" }), { ok: true });
+
+      // 参数校验失败都发生在「碰 CDP」之前
+      const noUrl = await ask({ command: "cdp-nav" });
+      assert.equal(noUrl.ok, false);
+      assert.match(noUrl.error, /需要 url/);
+
+      const noSelector = await ask({ command: "cdp-click" });
+      assert.equal(noSelector.ok, false);
+      assert.match(noSelector.error, /需要 selector/);
+
+      const noText = await ask({ command: "cdp-type", selector: "#q" });
+      assert.equal(noText.ok, false);
+      assert.match(noText.error, /需要 text/);
+
+      const noWait = await ask({ command: "cdp-wait" });
+      assert.equal(noWait.ok, false);
+      assert.match(noWait.error, /selector 或 ms/);
+
+      const badUploadDir = await ask({ command: "cdp-upload", selector: "#f", path: "C:\\Windows\\win.ini" });
+      assert.equal(badUploadDir.ok, false);
+      assert.match(badUploadDir.error, /只接受/);
+      assert.match(badUploadDir.error, /orbita-out/);
+
+      const badDownloadDir = await ask({ command: "cdp-download", selector: "#f", dir: "C:\\Windows\\Temp" });
+      assert.equal(badDownloadDir.ok, false);
+      assert.match(badDownloadDir.error, /orbita-out/);
+
+      const badOp = await ask({ command: "cdp-tabs", op: "delete" });
+      assert.equal(badOp.ok, false);
+      assert.match(badOp.error, /list 或 switch/);
+
+      const unknown = await ask({ command: "cdp-eval", expression: "1+1" });
+      assert.equal(unknown.ok, false);
+      assert.match(unknown.error, /未知的 CDP 命令/);
+
+      // 会去起 Edge 的命令：cdp-start 被测试缝挡住；其余命令报「浏览器没在运行」
+      // （宿主那边会先自动 cdp-start，所以这句只在自动拉起也失败时才会被模型看到）
+      const start = await ask({ command: "cdp-start" });
+      assert.equal(start.ok, false, "cdp-start 在 --no-browser 下不许成功");
+      assert.match(start.error, /测试模式/);
+      assert.match(start.error, /computer_screenshot/, "错误里要有降级指引");
+
+      for (const body of [
+        { command: "cdp-nav", url: "https://example.com/" },
+        { command: "cdp-observe" },
+        { command: "cdp-shot" },
+        { command: "cdp-extract" },
+      ]) {
+        const resp = await ask(body);
+        assert.equal(resp.ok, false, `${body.command} 在 --no-browser 下不许成功`);
+        assert.match(resp.error, /没有在运行/, `${body.command} 应报浏览器未启动：${JSON.stringify(resp)}`);
+        assert.match(resp.error, /computer_screenshot/, `${body.command} 的错误里要有降级指引`);
+      }
+
+      // 循环还活着（CDP 分支报错不能弄死命令循环）
+      const ping = await ask({ command: "ping" });
+      assert.deepEqual(ping, { ok: true });
+
+      // 没留下任何 jpg 兄弟文件（截图命令在测试缝下根本没跑）
+      assert.deepEqual(fs.readdirSync(cmdDir).filter((f) => f.endsWith(".jpg")), []);
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
 
 // ── 注入失败文案（B）────────────────────────────────────────────────────
 //
