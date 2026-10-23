@@ -1411,7 +1411,6 @@ export const en = {
       monthly: "Monthly",
       // MCP 工具的每月额度，与 token 窗口不是同一种额度
       mcp: "MCP monthly",
-      rolling: "Rolling window",
     },
     resetsIn: (duration: string) => `resets in ${duration}`,
     justNow: "just now",
