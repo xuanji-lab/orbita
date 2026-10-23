@@ -106,6 +106,14 @@ export async function applyComputerUseRequest(
             "(positive = down). Take a screenshot to see the new position.",
         };
       }
+      // sandbox_* 动作走 CDP 通道（main/computer-use/cdp.ts），不经过这一层：
+      // 它们要一条常驻的 CdpSession（socket / 标签页 / 自动起 Edge），而这里只认沙箱状态机。
+      // index.ts 按 isSandboxBrowserAction 分流；走到这里说明分流漏了，宁可报错也不要静默。
+      default:
+        return {
+          ok: false,
+          error: `内部错误：${request.action} 应该走 CDP 通道（sandbox_*），不该进像素命令这一层。`,
+        };
     }
   } catch (cause: unknown) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
