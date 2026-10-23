@@ -49,10 +49,10 @@ const setup = () => {
 };
 
 describe("sandbox_* 工具注册", () => {
-  test("九个工具一个不少，名字与导出清单一致", () => {
+  test("十个工具一个不少，名字与导出清单一致", () => {
     const { tools } = setup();
     assert.deepEqual([...tools.keys()].sort(), [...SANDBOX_BROWSER_TOOL_NAMES].sort());
-    assert.equal(SANDBOX_BROWSER_TOOL_NAMES.length, 9);
+    assert.equal(SANDBOX_BROWSER_TOOL_NAMES.length, 10);
   });
 
   test("只读桶：observe / extract / screenshot / wait 三档放行；navigate / click / type / upload / download 过写闸门", () => {
@@ -68,6 +68,7 @@ describe("sandbox_* 工具注册", () => {
       "sandbox_type",
       "sandbox_upload",
       "sandbox_download",
+      "sandbox_tabs",
     ]) {
       assert.equal((COMPUTER_USE_READ_TOOLS as readonly string[]).includes(name), false, name);
       assert.equal(decidePermission("plan", name).behavior, "deny", name);
@@ -212,6 +213,17 @@ describe("sandbox_* → computerUseRequest", () => {
     });
     const timeout = timeouts[timeouts.length - 1];
     assert.ok((timeout ?? 0) > GUEST_COMMAND_TIMEOUT_MS, `下载要留出 20s 落盘等待，实际 ${timeout}`);
+  });
+
+  test("tabs：list / switch 的 op 与 index 下发；非法 op 当场拒绝", async () => {
+    const { requestOf, run } = setup();
+    assert.deepEqual(await requestOf("sandbox_tabs", {}), { action: "sandbox-tabs", op: "list" });
+    assert.deepEqual(await requestOf("sandbox_tabs", { op: "switch", index: 2 }), {
+      action: "sandbox-tabs",
+      op: "switch",
+      index: 2,
+    });
+    await assert.rejects(run("sandbox_tabs", { op: "close" }), /op must be/);
   });
 
   test("失败回执翻成工具错误（pi 侧 throw），错误原话不吞", async () => {

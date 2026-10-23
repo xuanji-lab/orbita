@@ -38,6 +38,7 @@ export const SANDBOX_BROWSER_TOOL_NAMES = [
   "sandbox_screenshot",
   "sandbox_upload",
   "sandbox_download",
+  "sandbox_tabs",
 ] as const;
 
 /**
@@ -451,7 +452,45 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     },
   };
 
-  return [navigate, observe, click, type, extract, wait, screenshot, upload, download];
+  const tabs: ToolDefinition = {
+    name: "sandbox_tabs",
+    label: "sandbox_tabs",
+    description:
+      SCOPE +
+      "List the tabs open in the sandbox browser, or switch to one. A popup or a target=_blank link opens a new " +
+      "tab without changing the one you are acting on — list the tabs here, then switch when you actually need " +
+      "that page. Selectors belong to one page: after switching, call sandbox_observe again. " +
+      UNTRUSTED,
+    parameters: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          enum: ["list", "switch"],
+          description: "list (default) = show the tabs; switch = make tab `index` the active one.",
+        },
+        index: { type: "number", description: "Tab index from the list, for op=switch. Defaults to 0." },
+      },
+      required: [],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const op = args["op"] === "switch" ? "switch" : args["op"] === "list" || args["op"] === undefined ? "list" : undefined;
+      if (op === undefined) throw new Error('op must be "list" or "switch".');
+      const index = numberOf(args["index"]);
+      const result = await call(
+        {
+          action: "sandbox-tabs",
+          op,
+          ...(index === undefined ? {} : { index: Math.round(index) }),
+        },
+        signal,
+      );
+      return textOnly(result);
+    },
+  };
+
+  return [navigate, observe, click, type, extract, wait, screenshot, upload, download, tabs];
 }
 
 /** 模型偶尔把数字写成字符串（"120"）：认；其余一律当没给 */

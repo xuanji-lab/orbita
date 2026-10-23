@@ -361,6 +361,32 @@ describe("上传 / 下载：宿主侧的文件搬运", () => {
     }
   });
 
+  test("upload：模型给正斜杠路径（C:/...）也能取对文件名，guest 路径仍落到 upload/", async () => {
+    const outDir = tempOutDir();
+    const sourceDir = mkdtempSync(path.join(os.tmpdir(), "orbita-cdp-src-"));
+    const source = path.join(sourceDir, "slash.pdf");
+    writeFileSync(source, "bytes");
+    const { guest, calls } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, outDir);
+
+    try {
+      const outcome = await run(cdp, {
+        action: "sandbox-upload",
+        selector: "#file",
+        // Windows 上同一个文件的另一种写法
+        path: source.replaceAll("\\", "/"),
+      });
+      assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
+      const call = calls.find((item) => item.command === computerUseGuestCommands.cdpUpload);
+      const guestPath = String(call?.fields["path"]);
+      assert.ok(guestPath.startsWith("C:\\orbita-out\\upload\\"), guestPath);
+      assert.ok(guestPath.endsWith("-slash.pdf"), guestPath);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
   test("upload：文件不存在 / 目录 / 空文件都当场报错，不发命令", async () => {
     const outDir = tempOutDir();
     const dirSource = path.join(outDir, "a-directory");
@@ -424,11 +450,15 @@ describe("上传 / 下载：宿主侧的文件搬运", () => {
     const cdp = new CdpSession(guest, outDir);
 
     try {
-      await run(cdp, { action: "sandbox-download", selector: "#export", dir: "../../etc" });
-      const call = calls.find((item) => item.command === computerUseGuestCommands.cdpDownload);
-      const dir = String(call?.fields["dir"]);
-      assert.ok(dir.startsWith("C:\\orbita-out\\downloads\\"), dir);
-      assert.doesNotMatch(dir, /\.\./, dir);
+      for (const bad of ["../../etc", "..", "."]) {
+        await run(cdp, { action: "sandbox-download", selector: "#export", dir: bad });
+        const call = calls[calls.length - 1];
+        const dir = String(call?.fields["dir"]);
+        assert.ok(dir.startsWith("C:\\orbita-out\\downloads\\"), dir);
+        assert.equal(dir.includes(".."), false, dir);
+        // `.` / `..` 都不能变成「就是 downloads 本身」
+        assert.notEqual(dir.replace(/\\+$/, ""), "C:\\orbita-out\\downloads", dir);
+      }
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
@@ -456,6 +486,42 @@ describe("上传 / 下载：宿主侧的文件搬运", () => {
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("标签页", () => {
+  test("tabs：list 回清单并标出 active；switch 说清「切过去了，要重新 observe」", async () => {
+    const { guest, calls } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpTabs]: (fields) => ({
+          ok: true,
+          resp: {
+            ok: true,
+            active: fields["op"] === "switch" ? 1 : 0,
+            count: 2,
+            tabs: [
+              { index: 0, id: "A", url: "https://a.example/", title: "A", active: fields["op"] !== "switch" },
+              { index: 1, id: "B", url: "https://b.example/", title: "B", active: fields["op"] === "switch" },
+            ],
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+
+    const listed = await run(cdp, { action: "sandbox-tabs" });
+    assert.equal(listed.ok, true);
+    const listText = listed.ok ? listed.text : "";
+    assert.match(listText, /2 tab\(s\)/);
+    assert.match(listText, /\* \[0\] A — https:\/\/a\.example\//);
+
+    const switched = await run(cdp, { action: "sandbox-tabs", op: "switch", index: 1 });
+    assert.equal(switched.ok, true);
+    assert.match(switched.ok ? switched.text : "", /Switched to tab 1/);
+    assert.match(switched.ok ? switched.text : "", /observe again/);
+    const last = calls[calls.length - 1];
+    assert.deepEqual(last?.fields, { op: "switch", index: 1 });
   });
 });
 

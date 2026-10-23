@@ -168,7 +168,8 @@ export class CdpSession {
     if (!info.isFile()) throw new Error(`这不是一个文件：${hostPath}`);
     if (info.size === 0) throw new Error(`这个文件是空的（0 字节）：${hostPath}`);
 
-    const base = win32.basename(hostPath);
+    // 模型可能给正斜杠路径（"C:/Users/me/a.pdf"）：win32.basename 只认反斜杠，先归一化
+    const base = win32.basename(hostPath.replaceAll("/", "\\"));
     const safe = base.replace(/[\\/:*?"<>|]/g, "_");
     if (safe === "") throw new Error(`文件名不可用：${hostPath}`);
     const name = `${Date.now()}-${safe}`;
@@ -183,7 +184,10 @@ export class CdpSession {
    * 决定 guest 绝对路径），非法字符一律回落到时间戳。
    */
   async prepareDownload(sub: string | undefined): Promise<{ guestDir: string; hostDir: string }> {
-    const label = sub !== undefined && /^[A-Za-z0-9._-]{1,40}$/.test(sub) ? sub : String(Date.now());
+    // `.` / `..` 也合语法，但它们会逃出 downloads/：与文件名同一道闸门，直接回落时间戳
+    const usable =
+      sub !== undefined && /^[A-Za-z0-9._-]{1,40}$/.test(sub) && sub !== "." && sub !== ".." && !sub.includes("..");
+    const label = usable && sub !== undefined ? sub : String(Date.now());
     const hostDir = join(this.outDir, "downloads", label);
     await mkdir(hostDir, { recursive: true });
     return { guestDir: `${COMPUTER_USE_GUEST_DOWNLOAD_DIR}\\${label}`, hostDir };
@@ -200,7 +204,7 @@ export class CdpSession {
     const paths: string[] = [];
     const deadline = Date.now() + 5_000;
     for (const raw of names) {
-      const name = win32.basename(raw);
+      const name = win32.basename(raw.replaceAll("/", "\\"));
       if (name === "" || name === "." || name === ".." || name.includes("..")) continue;
       const full = join(hostDir, name);
       for (;;) {
@@ -439,6 +443,29 @@ export async function applySandboxBrowserRequest(
             "\nUse them directly with your file tools (read_pdf, read, …).",
         };
       }
+      case "sandbox-tabs": {
+        // 切换标签页会改「当前页面」，所以没起过浏览器时也要求先 navigate（不开空白页）
+        const op = request.op ?? "list";
+        const resp = await cdp.call(
+          computerUseGuestCommands.cdpTabs,
+          { op, ...(request.index === undefined ? {} : { index: request.index }) },
+          "open",
+        );
+        const tabs = parseTabs(resp["tabs"]);
+        const active = number(resp["active"]);
+        const lines = tabs.map((tab) =>
+          `${tab.active ? "* " : "  "}[${tab.index}] ${tab.title === "" ? "(untitled)" : tab.title} — ${tab.url}`,
+        );
+        return {
+          ok: true,
+          text:
+            `${tabs.length} tab(s) in the sandbox browser (the * is the one you are acting on):\n` +
+            `${lines.length === 0 ? "(none)" : lines.join("\n")}\n` +
+            (op === "switch" ? `Switched to tab ${active ?? "?"}. ` : "") +
+            "A popup or a target=_blank link opens a new tab without switching to it — list them here and switch " +
+            "when you actually need that page. Selectors from the old tab do not apply to the new one: observe again.",
+        };
+      }
       default:
         return {
           ok: false,
@@ -463,6 +490,32 @@ function number(value: unknown): number | undefined {
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
+}
+
+/** cdp-tabs 的 tabs 数组：字段对不上就跳过 */
+interface TabEntry {
+  index: number;
+  id: string;
+  url: string;
+  title: string;
+  active: boolean;
+}
+
+function parseTabs(value: unknown): TabEntry[] {
+  if (!Array.isArray(value)) return [];
+  const tabs: TabEntry[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item as Record<string, unknown>;
+    tabs.push({
+      index: number(record["index"]) ?? tabs.length,
+      id: text(record["id"]),
+      url: text(record["url"]),
+      title: text(record["title"]),
+      active: record["active"] === true,
+    });
+  }
+  return tabs;
 }
 
 /** cdp-observe 的 elements：字段对不上就跳过（不同桥版本不应该让整个 observe 失效） */
