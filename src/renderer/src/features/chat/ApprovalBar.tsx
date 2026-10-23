@@ -140,9 +140,13 @@ export function ApprovalBar(props: {
         >
           {risk !== undefined && scope !== "session" ? t.approval.cancelRisk : t.approval.deny}
         </button>
-        <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
-          {editing ? t.approval.stopEditing : t.approval.editInput}
-        </button>
+        {/* 会话授权卡不提供「改参数」：允许的是整条会话，改这一步的入参没有意义
+            （闸门也不会采纳这张卡上的编辑） */}
+        {scope !== "session" && (
+          <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
+            {editing ? t.approval.stopEditing : t.approval.editInput}
+          </button>
+        )}
       </div>
     </section>
   );

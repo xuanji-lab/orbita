@@ -475,6 +475,11 @@ export function createToolCallGate(
       if (answer.behavior === "deny") {
         return { block: true, reason: answer.message ?? "Denied by the user." };
       }
+      // 确认卡也能改入参（比如把 format d: 改成别的东西再放行）：与 manual 支同一套
+      if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, answer.input as Record<string, unknown>);
+      }
     }
 
     return budgetRefusal() ?? allow();

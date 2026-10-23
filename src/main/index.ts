@@ -523,10 +523,17 @@ void app.whenReady().then(async () => {
    * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
    * （与 mcpIpc / delegate 的 TDZ 说明同一条约定）。
    */
+  /**
+   * 热键注册早于 `phases` / `agentHost` 的创建（它们在下面）。启动那几毫秒里按下热键
+   * 不能去碰还没初始化的 const（TDZ 会抛 ReferenceError）：置位前按键直接忽略——
+   * 那时也没有轮可停。
+   */
+  let emergencyStopReady = false;
   const emergencyStop = createEmergencyStop({
     register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
     unregister: (accelerator) => globalShortcut.unregister(accelerator),
     onTrigger: () => {
+      if (!emergencyStopReady) return;
       const at = Date.now();
       const runningSessions = [...phases.entries()]
         .filter(([, phase]) => phase !== "idle")
@@ -546,6 +553,7 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -712,6 +720,8 @@ void app.whenReady().then(async () => {
     record(event);
     broadcastAgentEvent(event);
   });
+  // 急停热键此时可以真正干活了（phases / agentHost 都已就绪）
+  emergencyStopReady = true;
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
