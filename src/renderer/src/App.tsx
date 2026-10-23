@@ -430,20 +430,41 @@ export function App() {
   const autoSplit =
     paperColumn === "chat" &&
     shouldSplitPaper({ layout: "chat", windowWidth, hasPdf: paperReady, workbenchOpen });
-  /**
-   * 自动并排那一刻把右栏拉宽一次：默认 320 里并排两块，每块 160——那就是原型里被
-   * 否掉的形态。只在下限出现的那一刻纠正一次（返回值恒为 900，窗口再变不动它），
-   * 用户之后把面板拖窄照常生效——持续夹取会让「拖窄」这个动作失效。
-   */
   const autoSplitWidth = autoSplitPanelWidth({
     layout: paperColumn,
     windowWidth,
     hasPdf: paperReady,
     workbenchOpen,
   });
+  /** 自动加宽之前的宽度（effect 里读的那一拍值，不把 panelWidth 加进依赖） */
+  const panelWidthRef = useRef(panelWidth);
+  panelWidthRef.current = panelWidth;
+  /**
+   * 自动并排那一刻把右栏拉宽一次：默认 320 里并排两块，每块 160——那就是原型里被
+   * 否掉的形态。只在**进入**并排时纠正一次（用户之后把面板拖窄照常生效——持续夹取会
+   * 让「拖窄」这个动作失效）；离开并排（窗口缩回 1800 以下）时把它收回去。
+   *
+   * 为什么要收回：这个宽度是本地 state，不收回就会带进后续所有的「窄窗口」形态；
+   * 窗口再缩到 1000 时面板宽远大于 pane，而右栏的夹取又是按「自己 + 对话区」量出来的
+   * （对话区被挤成 0 之后就自洽地停在原宽），结果对话区被整块盖掉。收回让这一刀不制造
+   * 那个形态；**用户自己拖动**造成的同样局面是另一回事（既有的夹取自洽问题，不在这里改）。
+   */
+  const panelBeforeAutoSplitRef = useRef<{ before: number; widened: number } | null>(null);
   useEffect(() => {
-    if (autoSplitWidth === 0) return;
-    setPanelWidth((width) => Math.max(width, autoSplitWidth));
+    if (autoSplitWidth > 0) {
+      if (panelBeforeAutoSplitRef.current === null) {
+        const before = panelWidthRef.current;
+        panelBeforeAutoSplitRef.current = { before, widened: Math.max(before, autoSplitWidth) };
+        setPanelWidth(panelBeforeAutoSplitRef.current.widened);
+      }
+      return;
+    }
+    const pending = panelBeforeAutoSplitRef.current;
+    if (pending === null) return;
+    panelBeforeAutoSplitRef.current = null;
+    // 用户在并排期间自己拖过就保留他的；没动过才回到进并排前的宽度
+    setPanelWidth((width) => (width === pending.widened ? pending.before : width));
+    // 只跟「并排开关」走：panelWidth 在闭包里只用于「进并排前是多少」这一个快照
   }, [autoSplitWidth]);
 
   /**
