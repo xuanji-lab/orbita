@@ -70,6 +70,24 @@ test("build.mjs 编译出 exe", { skip: !isWindows && "仅在 Windows 上运行"
 });
 
 test(
+  "JSON 取值器 selftest：Chromium 的 /json/version spaced 写法与转义都要吃",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    // 这段测的是真机验收抓到的第一个 bug：/json/version 是 `"key": "value"`（冒号后有空格），
+    // 旧取值器只认紧凑写法，cdp-start 拿不到 webSocketDebuggerUrl。selftest 还覆盖
+    // 转义序列（引号 / 反斜杠 / 换行 / \uXXXX）——cdp-observe / cdp-extract 的正文缺尾巴就是它。
+    // 纯函数用例，不需要沙箱、不碰桌面。
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-json"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 20, `用例数应 >= 20，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test(
   "桥就绪通告 + screenshot 命令全链 + 错误命令",
   { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
   async () => {
