@@ -675,13 +675,21 @@ internal static class CdpSession
         string lower = url.ToLowerInvariant();
         if (lower == "back" || lower == "forward")
         {
-            EvalString("(function(){history." + lower + "();return 'ok';})()", 5000);
-            WaitForReady(null, timeoutMs);
-            return NavResult(sw, null);
+            try { EvalString("(function(){history." + lower + "();return 'ok';})()", 5000); }
+            catch
+            {
+                // 导航会把执行上下文销毁，Runtime.evaluate 可能就在那一刻回不来了；
+                // 这是正常现场，不要因为历史前进/后退把整条命令判死
+            }
+            bool moved = WaitForReady(null, timeoutMs);
+            return NavResult(sw, moved ? null : "历史" + (lower == "back" ? "后退" : "前进") + "后页面在 "
+                + timeoutMs + "ms 内没有加载完成（可能已经没有上一页 / 下一页）");
         }
 
         string target = NormalizeUrl(url);
-        Call("Page.navigate", "{\"url\":" + Program.JsonQuote(target) + "}", timeoutMs);
+        string navReply = Call("Page.navigate", "{\"url\":" + Program.JsonQuote(target) + "}", timeoutMs);
+        string navError = CdpError(navReply);
+        if (navError != null) return Fail("无法打开这个网址（" + target + "）：" + navError);
         bool loaded = WaitForReady(target, timeoutMs);
         return NavResult(sw, loaded ? null : "页面在 " + timeoutMs + "ms 内没有加载完成，"
             + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构");
