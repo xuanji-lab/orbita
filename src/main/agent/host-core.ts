@@ -519,7 +519,7 @@ export class AgentHostCore {
       type: "delegateResult",
       requestId,
       ...(outcome.ok
-        ? { ok: true as const, childId: outcome.childId, title: outcome.title, card: outcome.card }
+        ? { ok: true as const, childId: outcome.childId, title: outcome.title, card: outcome.card, openChildren: outcome.openChildren }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
@@ -530,7 +530,11 @@ export class AgentHostCore {
       type: "channelSendResult",
       requestId,
       ...(outcome.ok
-        ? { ok: true as const, messageId: outcome.messageId }
+        ? {
+            ok: true as const,
+            messageId: outcome.messageId,
+            ...(outcome.targetStatus === undefined ? {} : { targetStatus: outcome.targetStatus }),
+          }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }

@@ -2,7 +2,14 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome } from "../shared/agent-ipc.ts";
+import type { AvailableModel } from "../shared/available-models.ts";
+import type { PermissionMode } from "../shared/permission.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
+import {
+  AUTO_VERIFICATION_GUIDELINE,
+  delegationAlignmentGuideline,
+  type SubSessionModelFacts,
+} from "./delegation-prompt.ts";
 
 /**
  * 子会话的三个通道工具（子会话 2026-09-23）：delegate / reply_subsession /
@@ -113,11 +120,18 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       });
       if (!result.ok) throw new Error(result.error);
       const card = result.card;
+      const { count, ids } = result.openChildren;
+      const omitted = count - ids.length;
+      const openNote =
+        count > 0
+          ? ` You now have ${count} open sub-session${count === 1 ? "" : "s"}: ${ids.join(", ")}` +
+            `${omitted > 0 ? ` (${omitted} more not listed)` : ""}.`
+          : "";
       const text =
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
         `(thinking: ${card.thinkingLevel}). It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
-        "not poll or wait for it.";
+        `not poll or wait for it.${openNote}`;
       return {
         content: [{ type: "text", text }],
         details: { delegate: card satisfies DelegateCard },
@@ -175,8 +189,14 @@ function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
         ...(delivery === undefined ? {} : { delivery }),
       });
       if (!result.ok) throw new Error(result.error);
+      // 目标在投递前已是 done：投递本身合法（改它自己写的东西），但提醒模型
+      // 新任务该走 delegate——这正是台账路由要防的「新活丢给已交付的会话」。
+      const deliveredNote =
+        result.targetStatus === "done"
+          ? " That sub-session has already delivered its task — if this is a new task, create a new one with delegate (a reply only steers the work it already owns)."
+          : "";
       return {
-        content: [{ type: "text", text: "Reply sent to the sub-session." }],
+        content: [{ type: "text", text: `Reply sent to the sub-session.${deliveredNote}` }],
         // 落账那条通道消息的 id：renderer 的发送侧标记凭它点了能定位到这一条
         // （tool-results.ts 的 channelSendMessageId）；给模型看的正文不带
         details: { messageId: result.messageId },
@@ -253,8 +273,10 @@ unless you have unrelated work to do — do not poll or wait for it. Its message
 done / failed) arrive as <channel from="child" …> blocks in a later turn. If it asks something the
 user's own words do not answer, do not decide on the user's behalf — end this turn and ask the user
 first; only once you have their answer, reply with reply_subsession. Progress needs no reply. When you
-see done, check its workbench / cwd for the actual output before reporting to the user. Do not delegate
-for small things.
+see done, check its workbench / cwd for the actual output before reporting to the user. Each
+sub-session owns one deliverable: a new deliverable gets a new sub-session — never hand a new task to
+one that has already delivered, and never send finished work back to the same one. Do not delegate for
+small things.
 </orbita-sub-sessions>`;
 
 const CHILD_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
@@ -270,7 +292,22 @@ the output is. If you cannot complete the task, send failed with the reason. The
 as <channel from="parent" kind="reply"> blocks, possibly mid-task — adjust accordingly.
 </orbita-sub-sessions>`;
 
-/** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */
-export function describeChannelRole(role: "root" | "child"): string {
-  return role === "root" ? ROOT_CHANNEL_GUIDELINES : CHILD_CHANNEL_GUIDELINES;
+/**
+ * 按角色、当前档位与可选模型清单拼出通道使用说明。
+ *
+ * root 最多三段（顺序就是阅读顺序）：通道工具怎么用 → 派发前对齐（**任何档位都有**）
+ * → 确认后自主跑验收闭环（**仅 skip 档**，放行档的承诺）。child 恒为一段——它不能再
+ * 派子会话，给它讲怎么验收只会诱导它调不存在的工具。档位从账本现读、清单随开轮命令，
+ * 两者逐轮重讲：中途切档下一个 LLM 调用就生效，加了模型下一轮生效。
+ */
+export function describeChannelRole(
+  role: "root" | "child",
+  mode: PermissionMode,
+  availableModels: readonly AvailableModel[],
+  facts: SubSessionModelFacts,
+): string {
+  if (role === "child") return CHILD_CHANNEL_GUIDELINES;
+  const sections = [ROOT_CHANNEL_GUIDELINES, delegationAlignmentGuideline(mode, availableModels, facts)];
+  if (mode === "skip") sections.push(AUTO_VERIFICATION_GUIDELINE);
+  return sections.join("\n\n");
 }

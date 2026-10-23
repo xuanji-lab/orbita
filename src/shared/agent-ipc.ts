@@ -14,11 +14,12 @@ import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
+import type { AvailableModel } from "./available-models.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
-import type { CompactionSetting, Language } from "./settings.ts";
+import type { CompactionSetting, Language, ModelPair } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
@@ -503,8 +504,18 @@ export interface TurnDirectories {
    * （父有子时 related 也非空）。
    *
    * 缺席 = 没有父子关系（绝大多数会话）。
+   *
+   * `status` 只给子会话（`relation: "child"`）：通道状态 running / done / failed / stopped，
+   * 即「它对我交付过没有」（2026-10-19 裁决：派发路由靠这一格——已交付的子会话不再接新任务，
+   * 验收也另起会话）。父那一项没有也不该有状态。
    */
-  related?: { sessionId: string; relation: "parent" | "child"; label: string; path: string }[];
+  related?: {
+    sessionId: string;
+    relation: "parent" | "child";
+    label: string;
+    path: string;
+    status?: ChannelStatus;
+  }[];
   /**
    * 受管浏览器「你的」tab 的下载目录（设置 › 浏览器，缺席 = 系统下载文件夹）。用户在浏览器里
    * 下载的论文、导出文件落在这里；agent 可读写，帮用户按对话整理。只告知不硬拦（同 attached）。
@@ -624,6 +635,21 @@ export type AgentCommand =
        * （每条会话各拉起一份 `npx some-server` 会让子进程随会话数线性增长）。
        */
       mcpServers: Record<string, McpServer>;
+      /**
+       * 子会话可选模型的事实清单（派发前对齐段的数据面，2026-10-18）。
+       * **主进程从 provider 配置装配**（同 skillsDirs / directories / mcpServers 的纪律）：
+       * agent 进程不认 provider 配置，只收数据。空数组 = 没有可选模型，提示词写明
+       * 子会话沿用父会话的模型；缺席（旧夹具）与空数组一样处理。每轮现读，
+       * 设置里加/删模型下一轮即生效。
+       */
+      availableModels?: AvailableModel[];
+      /**
+       * 设置里的「子会话模型」（`settings.subSessionModel`）。**主进程从设置装配**
+       * （同 compaction / availableModels 的纪律）：agent 进程不读设置，只收事实。
+       * 用途只有一个——提示词要告诉模型「不点名模型时子会话落到哪」：设了它优先，
+       * 否则同父。缺席 = 没设。
+       */
+      subSessionModel?: ModelPair;
       /** 有值就让 pi 打开这份它自己的 session 文件（续），没有就新建（`SessionManager.open` vs `.create`） */
       piSessionFile?: string;
       /**
@@ -748,6 +774,10 @@ export type AgentCommand =
       skillsDirs: string[];
       directories?: TurnDirectories;
       mcpServers: Record<string, McpServer>;
+      /** 子会话可选模型清单，语义同 submit（无状态化后每轮开机都要带全） */
+      availableModels?: AvailableModel[];
+      /** 设置里的「子会话模型」，语义同 submit（提示词讲「不点名时落到哪」用） */
+      subSessionModel?: ModelPair;
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;
@@ -966,12 +996,32 @@ export interface DelegateCard {
 
 /** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
 export type DelegateOutcome =
-  | { ok: true; childId: string; title: string; card: DelegateCard }
+  | {
+      ok: true;
+      childId: string;
+      title: string;
+      card: DelegateCard;
+      /**
+       * 派完之后手上还开着的直系子会话（含刚派出的这个）：count 给那句「你有 N 个在跑」，
+       * ids 让模型不必翻历史就知道还有谁可以 reply_subsession（2026-10-19 派发路由）。
+       */
+      openChildren: { count: number; ids: string[] };
+    }
   | { ok: false; error: string };
 
 /** channelSendRequest 的回执载荷：成功回落进通道的那条消息 id（供对账与测试断言） */
 export type ChannelSendOutcome =
-  | { ok: true; messageId: string }
+  | {
+      ok: true;
+      messageId: string;
+      /**
+       * 投递**之前**目标子会话的通道状态（父→子的 reply 一落账就把状态翻回 running，
+       * 所以必须先取再写）。done = 它已经交付过——工具结果会提醒模型「新任务用 delegate」。
+       * 只有父→子这条路径有；子→父（report_to_parent）不带，用户代父发言（applySpeak）
+       * 也不产生这个回执。
+       */
+      targetStatus?: ChannelStatus;
+    }
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */

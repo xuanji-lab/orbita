@@ -239,6 +239,49 @@ describe("applyDelegate", () => {
     assert.equal(outcome.card.workbench, sessions.workbenchPath(outcome.childId));
   });
 
+  test("同时在跑的子会话到 3 个就拒第 4 个，一个回报后放行", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const phases = new Map<string, SessionPhase>();
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])], phases });
+
+    const ids: string[] = [];
+    for (let index = 1; index <= 3; index += 1) {
+      const outcome = await applyDelegate(deps, delegateEvent({ title: `第 ${index} 块` }));
+      assert.equal(outcome.ok, true);
+      if (outcome.ok) ids.push(outcome.childId);
+    }
+    assert.equal(phases.size, 3, "每个派出的子会话都要在 phases 里占位");
+
+    const blocked = await applyDelegate(deps, delegateEvent({ title: "第 4 块" }));
+    assert.equal(blocked.ok, false);
+    assert.match(!blocked.ok ? blocked.error : "", /already have 3 sub-sessions running/);
+    assert.match(!blocked.ok ? blocked.error : "", /Wait for one to report/);
+    assert.match(!blocked.ok ? blocked.error : "", /第 1 块/);
+
+    // 一个子会话回报（phase 翻 idle）后，第 4 个才能派；键不删也可以，
+    // 判据是「非 idle」而不是「键存在」（2026-10-19 真机回归）。
+    phases.set(ids[0] ?? "", "idle");
+    const after = await applyDelegate(deps, delegateEvent({ title: "第 4 块" }));
+    assert.equal(after.ok, true);
+  });
+
+  test("已完成（idle）的子会话不计入上限：3 个 idle 不挡新派", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    for (let index = 1; index <= 3; index += 1) {
+      await sessions.ensureSession(
+        baseMeta({ id: `2222222${index}-2222-3333-4444-55555555555${index}`, parentId: PARENT }),
+      );
+    }
+    const phases = new Map<string, SessionPhase>([
+      ["22222221-2222-3333-4444-555555555551", "idle"],
+      ["22222222-2222-3333-4444-555555555552", "idle"],
+      ["22222223-2222-3333-4444-555555555553", "idle"],
+    ]);
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])], phases });
+    const outcome = await applyDelegate(deps, delegateEvent({ title: "新一轮" }));
+    assert.equal(outcome.ok, true);
+  });
+
   test("思考档跟着模型走：delegate 显式档 > 模型来自哪（requested/setting → 该模型默认档；parent → 父的档）", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT, thinkingLevel: "low" }));
     // zai 声明 glm-5.3-flash：白名单里它的默认思考档是 max（known-providers.ts）
@@ -325,6 +368,48 @@ describe("applyDelegate", () => {
     assert.deepEqual(await sessions.list(), [(await sessions.load(PARENT))?.meta]);
     assert.deepEqual(await channels.listForParent(PARENT, async () => ""), []);
   });
+
+  test("openChildren：只数还开着的（completion open），含刚派出的这个，ids 按 createdAt 倒序", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const OPEN_PRIOR = "bbbbbbbb-0000-0000-0000-000000000001";
+    const DONE_PRIOR = "bbbbbbbb-0000-0000-0000-000000000002";
+    await sessions.ensureSession(baseMeta({ id: OPEN_PRIOR, parentId: PARENT, createdAt: 100 }));
+    // 已收尾（completion done）的子会话不计数：它不再是台账上的「开着的」
+    await sessions.ensureSession(baseMeta({ id: DONE_PRIOR, parentId: PARENT, createdAt: 200, completion: "done" }));
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+
+    const outcome = await applyDelegate(deps, delegateEvent());
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.openChildren.count, 2);
+    // 刚派出的 createdAt 最大，排最前；已完成的不在名单里
+    assert.deepEqual(outcome.openChildren.ids, [outcome.childId, OPEN_PRIOR]);
+  });
+
+  test("openChildren：ids 截到 8 条，count 仍是真实总数", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const prior = Array.from({ length: 9 }, (_, index) => `dddddddd-0000-0000-0000-${String(index + 1).padStart(12, "0")}`);
+    for (const [index, id] of prior.entries()) {
+      await sessions.ensureSession(baseMeta({ id, parentId: PARENT, createdAt: index + 1 }));
+    }
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+
+    const outcome = await applyDelegate(deps, delegateEvent());
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    // 9 个先前的 + 刚派出的 = 10，但 ids 只带最近 8 个
+    assert.equal(outcome.openChildren.count, 10);
+    assert.equal(outcome.openChildren.ids.length, 8);
+    assert.equal(outcome.openChildren.ids[0], outcome.childId);
+    // 其余 7 个是 createdAt 最大的那批（9..3），最早的（1、2）被截掉
+    assert.deepEqual(
+      outcome.openChildren.ids.slice(1),
+      ["dddddddd-0000-0000-0000-000000000009", "dddddddd-0000-0000-0000-000000000008",
+       "dddddddd-0000-0000-0000-000000000007", "dddddddd-0000-0000-0000-000000000006",
+       "dddddddd-0000-0000-0000-000000000005", "dddddddd-0000-0000-0000-000000000004",
+       "dddddddd-0000-0000-0000-000000000003"],
+    );
+  });
 });
 
 function channelSendEvent(
@@ -394,6 +479,54 @@ describe("applyChannelSend", () => {
       channelSendEvent({ sessionId: PARENT, to: { childId: OTHER }, kind: "reply", text: "x" }),
     );
     assert.equal(outcome.ok, false);
+  });
+
+  test("reply 落到已交付（done）的子会话：投递照常成功，targetStatus 回报 done", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    // task + 子的 done 回报 → 通道状态 done（投递前）
+    await channels.append({ parentId: PARENT, childId: CHILD }, {
+      id: "t1", from: "parent", author: "model", kind: "task", text: "去做", delivery: "followUp", createdAt: 1,
+    });
+    await channels.append({ parentId: PARENT, childId: CHILD }, {
+      id: "d1", from: "child", author: "model", kind: "done", text: "做完了", delivery: "followUp", createdAt: 2,
+    });
+    const { deps, submitCalls } = fakeDeps();
+
+    const outcome = await applyChannelSend(
+      deps,
+      channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "改下你自己写的那处" }),
+    );
+    // 已交付不足硬拦：改它自己写的东西仍合法，提醒由工具结果层拼（agent 侧）
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) {
+      assert.equal(outcome.targetStatus, "done");
+      assert.equal(typeof outcome.messageId, "string");
+    }
+    // 投递照常发生（子空闲 → 开轮），且账本里多出了这条 reply（通道翻回 running）
+    assert.equal(submitCalls.length, 1);
+    const messages = await channels.load({ parentId: PARENT, childId: CHILD });
+    assert.equal(messages.at(-1)?.kind, "reply");
+  });
+
+  test("targetStatus 只在父→子分支：running 照实回报，子→父回执不带这个键", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    await channels.append({ parentId: PARENT, childId: CHILD }, {
+      id: "t1", from: "parent", author: "model", kind: "task", text: "去做", delivery: "followUp", createdAt: 1,
+    });
+    const { deps } = fakeDeps();
+
+    const reply = await applyChannelSend(
+      deps,
+      channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "继续" }),
+    );
+    assert.equal(reply.ok, true);
+    assert.equal(reply.ok && reply.targetStatus, "running");
+
+    const report = await applyChannelSend(deps, channelSendEvent({ kind: "progress", text: "还在跑" }));
+    assert.equal(report.ok, true);
+    assert.equal(report.ok && "targetStatus" in report, false);
   });
 
   test("子空闲（phase 不在 map 里）→ submitTurn，resume 用子的 piSessionFile", async () => {
@@ -513,6 +646,8 @@ describe("applyStop", () => {
     assert.equal(stop?.kind, "stop");
     assert.equal(stop?.author, "user");
     assert.equal(stop?.from, "parent");
+    // 终止是终态：phase 键清掉，别让 delegate 上限把它继续算成「在跑」
+    assert.equal(phases.has(CHILD), false);
     assert.equal(broadcastCalls.some((event) => event.type === "status" && event.status === "stopped"), true);
     assert.equal(broadcastCalls.some((event) => event.type === "message"), true);
   });

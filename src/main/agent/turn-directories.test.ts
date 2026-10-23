@@ -157,7 +157,7 @@ describe("resolveTurnDirectories 的 related（子会话 2026-09-23 裁决：父
     ]);
   });
 
-  test("父会话开轮：related 列出每个子会话，label 是子标题，path 是子的工作台", async () => {
+  test("父会话开轮：related 列出每个子会话，label 是子标题，path 是子的工作台，带通道状态", async () => {
     const CHILD2 = "44444444-5555-6666-7777-888888888888";
     await sessions.ensureSession({ ...baseMeta, id: PARENT, title: "母任务" });
     await sessions.ensureSession({ ...baseMeta, id: CHILD, title: "先派出的", parentId: PARENT });
@@ -174,13 +174,141 @@ describe("resolveTurnDirectories 的 related（子会话 2026-09-23 裁决：父
       sessionId: PARENT,
       workspaceId: null,
     });
+    // 只有 task 账本的通道状态是 running；status 只给子会话，父那一项没有
     assert.deepEqual(
       [...(dirs.related ?? [])].sort((a, b) => a.label.localeCompare(b.label)),
       [
-        { sessionId: CHILD2, relation: "child", label: "Sub-session", path: sessions.workbenchPath(CHILD2) },
-        { sessionId: CHILD, relation: "child", label: "先派出的", path: sessions.workbenchPath(CHILD) },
+        { sessionId: CHILD2, relation: "child", label: "Sub-session", path: sessions.workbenchPath(CHILD2), status: "running" },
+        { sessionId: CHILD, relation: "child", label: "先派出的", path: sessions.workbenchPath(CHILD), status: "running" },
       ].sort((a, b) => a.label.localeCompare(b.label)),
     );
+  });
+
+  test("台账带状态：子回报 done 的通道状态是 done，没回报的是 running（父那一项没有 status 键）", async () => {
+    await sessions.ensureSession({ ...baseMeta, id: PARENT, title: "母任务" });
+    await sessions.ensureSession({ ...baseMeta, id: CHILD, title: "干完活的", parentId: PARENT });
+    await channels.append(
+      { parentId: PARENT, childId: CHILD },
+      { id: "m1", from: "parent", author: "model", kind: "task", text: "去做", delivery: "followUp", createdAt: 1 },
+    );
+    await channels.append(
+      { parentId: PARENT, childId: CHILD },
+      { id: "m2", from: "child", author: "model", kind: "done", text: "做完了", delivery: "followUp", createdAt: 2 },
+    );
+    const dirs = await resolveTurnDirectories(workspaces, sessions, channels, {
+      sessionId: PARENT,
+      workspaceId: null,
+    });
+    const childEntry = (dirs.related ?? []).find((entry) => entry.relation === "child");
+    assert.deepEqual(childEntry, {
+      sessionId: CHILD,
+      relation: "child",
+      label: "干完活的",
+      path: sessions.workbenchPath(CHILD),
+      status: "done",
+    });
+    // 子会话开轮看父：父那一项不带 status（通道状态是父看子的概念，反向不存在）
+    const childDirs = await resolveTurnDirectories(workspaces, sessions, channels, {
+      sessionId: CHILD,
+      workspaceId: null,
+    });
+    const parentEntry = (childDirs.related ?? []).find((entry) => entry.relation === "parent");
+    assert.equal(parentEntry !== undefined && "status" in parentEntry, false);
+  });
+
+  test("台账跳过已完成（completion !== open）的子会话：不列、不占 8 条名额", async () => {
+    const DONE_CHILD = "55555555-6666-7777-8888-999999999999";
+    await sessions.ensureSession({ ...baseMeta, id: PARENT, title: "母任务" });
+    await sessions.ensureSession({ ...baseMeta, id: CHILD, title: "还在干的", parentId: PARENT });
+    // completion 翻 done 的子会话：判据是会话收尾状态，与通道是否回报过 done 无关
+    await sessions.ensureSession({ ...baseMeta, id: DONE_CHILD, title: "收尾归档的", parentId: PARENT, completion: "done" });
+    for (const childId of [CHILD, DONE_CHILD]) {
+      await channels.append(
+        { parentId: PARENT, childId },
+        { id: `t-${childId}`, from: "parent", author: "model", kind: "task", text: "去做", delivery: "followUp", createdAt: 1 },
+      );
+    }
+    const dirs = await resolveTurnDirectories(workspaces, sessions, channels, {
+      sessionId: PARENT,
+      workspaceId: null,
+    });
+    assert.deepEqual(
+      (dirs.related ?? []).map((entry) => entry.sessionId),
+      [CHILD],
+    );
+  });
+
+  test("子会话超过 8 条：只留最后活动最近的 8 条（按 lastAt 倒序截断）", async () => {
+    await sessions.ensureSession({ ...baseMeta, id: PARENT, title: "母任务" });
+    const ids = Array.from({ length: 9 }, (_, index) => `cccccccc-0000-0000-0000-00000000000${index + 1}`);
+    for (const [index, childId] of ids.entries()) {
+      await sessions.ensureSession({ ...baseMeta, id: childId, title: `第 ${index + 1} 块`, parentId: PARENT });
+      await channels.append(
+        { parentId: PARENT, childId },
+        {
+          id: `t-${index}`,
+          from: "parent",
+          author: "model",
+          kind: "task",
+          text: "去做",
+          delivery: "followUp",
+          createdAt: (index + 1) * 10,
+        },
+      );
+    }
+    const dirs = await resolveTurnDirectories(workspaces, sessions, channels, {
+      sessionId: PARENT,
+      workspaceId: null,
+    });
+    // lastAt 倒序：最新的在前，截 8 条后丢掉最早的那个（第 1 块，createdAt 10）
+    assert.deepEqual(
+      (dirs.related ?? []).map((entry) => entry.sessionId),
+      [...ids].reverse().slice(0, 8),
+    );
+  });
+
+  test("先剔已收尾再截 8：已收尾的子即使最后活动最新，也不占名额、不挤掉开着的子", async () => {
+    // 变异守卫：把 slice 与 filter 对调后只留 7 条——done 的子排在 lastAt 最前，
+    // 先截就把一个还开着的子饿死了（审查 2026-10-19 的变异实验）。
+    await sessions.ensureSession({ ...baseMeta, id: PARENT, title: "母任务" });
+    const openIds = Array.from({ length: 9 }, (_, index) => `cccccccc-0000-0000-0000-00000000000${index + 1}`);
+    for (const [index, childId] of openIds.entries()) {
+      await sessions.ensureSession({ ...baseMeta, id: childId, title: `开着的 ${index + 1}`, parentId: PARENT });
+      await channels.append(
+        { parentId: PARENT, childId },
+        {
+          id: `t-${index}`,
+          from: "parent",
+          author: "model",
+          kind: "task",
+          text: "去做",
+          delivery: "followUp",
+          createdAt: (index + 1) * 10,
+        },
+      );
+    }
+    const doneId = "dddddddd-0000-0000-0000-000000000001";
+    await sessions.ensureSession({
+      ...baseMeta,
+      id: doneId,
+      title: "已收尾的",
+      parentId: PARENT,
+      completion: "done",
+    });
+    await channels.append(
+      { parentId: PARENT, childId: doneId },
+      { id: "t-done", from: "parent", author: "model", kind: "task", text: "去做", delivery: "followUp", createdAt: 999 },
+    );
+
+    const dirs = await resolveTurnDirectories(workspaces, sessions, channels, {
+      sessionId: PARENT,
+      workspaceId: null,
+    });
+    const childIds = (dirs.related ?? []).map((entry) => entry.sessionId);
+    // 已收尾的不列；9 个开着的按 lastAt 倒序留 8 条（done 不占名额 → 仍有 8 条）
+    assert.equal(childIds.length, 8);
+    assert.equal(childIds.includes(doneId), false);
+    assert.deepEqual(childIds, [...openIds].reverse().slice(0, 8));
   });
 });
 

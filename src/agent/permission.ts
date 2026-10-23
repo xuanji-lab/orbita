@@ -115,8 +115,13 @@ export interface ToolCallGateResult {
 
 export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
 
-/** 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
-const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
+/**
+ * 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。
+ *
+ * `PATH_MUTATING_TOOLS` 导出是因为 read-guard（read-before-write 守卫）问的是同一个问题
+ * ——「这个工具在按路径改文件吗」——两处各写一份就会漂（漂了的后果是守卫少盖一个工具）。
+ */
+export const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 
 /**
@@ -255,8 +260,24 @@ export interface PiExtensionApi {
       event: { type: "context"; messages: ContextBudgetMessage[] },
     ) => { messages: ContextBudgetMessage[] } | undefined | void,
   ): void;
+  /**
+   * 工具执行落定（工具已经跑完，可改结果）。这里只用它记账：成功的 read / write / edit
+   * 把路径记进已读账本（read-guard.ts）。返回 void = 不改结果。
+   */
+  on(
+    event: "tool_result",
+    handler: (event: ToolResultLike) => void | Promise<void>,
+  ): void;
   /** 往 pi 本子追加 custom entry（不进 LLM 上下文）：跨轮持久化扩展自己的状态 */
   appendEntry(customType: string, data?: unknown): void;
+}
+
+/** pi 的 tool_result 事件里我们用得上的部分（上游另带 content / details / usage，用不着） */
+export interface ToolResultLike {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  isError: boolean;
 }
 
 /** context 事件里的消息形状（AgentMessage 的结构化子集），image-byte-budget 定义 */
@@ -273,12 +294,19 @@ export type ContextBudgetMessage = ContextMessage;
  * 顺序上讲一句：参数兜底（`raiseCommandTimeout`）跑在**所有早退之前**，而用户在审批卡片里
  * 改的入参跑在**最后**——两条都是原地改，含义不同：兜底是防模型失手，人工明确填的秒表
  * 是当事人自己的选择，不以兜底覆盖它。
+ *
+ * `readGuard`（read-before-write，read-guard.ts）的位置也是刻意的：**在否决判定之后、
+ * 问用户之前**。放在否决之前的话，plan 档下模型收到的是「先去读」而不是「这个档不能改」
+ * ——信息更差、还多一次无谓的读；放在问用户之后的话，用户点了允许才被告知这次要拦，
+ * 白点一次。用户如果在审批卡片里把路径改成了另一个没读过的文件，这里**不再复查**：
+ * 那是当事人当场的明确选择（与 protectedPaths 同一取舍），仓库里现有闸门都这一套。
  */
 export function createToolCallGate(
   getMode: () => PermissionMode,
   ask: PermissionAsk,
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
+  readGuard?: (event: ToolCallLike) => string | null,
 ) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
@@ -287,8 +315,10 @@ export function createToolCallGate(
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
     if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);
-    if (decision.behavior === "allow") return {};
     if (decision.behavior === "deny") return { block: true, reason: decision.message };
+    const guardRefusal = readGuard?.(event) ?? null;
+    if (guardRefusal !== null) return { block: true, reason: guardRefusal };
+    if (decision.behavior === "allow") return {};
 
     const answer = await ask(event);
     if (answer.behavior === "deny") {

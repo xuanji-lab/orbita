@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
+import { readBeforeWriteRefusal, recordedGuardKey } from "./read-guard.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 
 function gateFor(mode: PermissionMode, answer?: PermissionAnswer) {
@@ -176,5 +177,77 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
     const e = event("bash", { command: "bun run test", timeout: 60 });
     await gate(e);
     assert.equal(e.input["timeout"], 30);
+  });
+});
+
+/**
+ * read-before-write 守卫（read-guard.ts）在闸门里的位置。
+ *
+ * 守卫本体在 read-guard.test.ts 单测；这里只钉**顺序**与**和权限档的相互作用**——
+ * 这两件事只有经闸门才看得见：守卫必须在否决之后（plan 档拿到的该是档位理由）、
+ * 在问用户之前（被拦的调用不该让用户白点一次允许）。
+ */
+describe("read-before-write 守卫在闸门里的位置", () => {
+  const REFUSAL = "Blocked by the read-before-write guard: read it first";
+
+  /** 守卫恒定拦下（返回固定理由），用来观察闸门各条路 */
+  function blockedGate(mode: PermissionMode, answer?: PermissionAnswer) {
+    const asked: ToolCallLike[] = [];
+    const gate = createToolCallGate(
+      () => mode,
+      async (event) => {
+        asked.push(event);
+        return answer ?? { behavior: "allow" };
+      },
+      [],
+      "/work",
+      () => REFUSAL,
+    );
+    return { gate, asked };
+  }
+
+  test("skip 档（默认直达放行）也拦得住", async () => {
+    const { gate } = blockedGate("skip");
+    const result = await gate(event("write", { path: "a.ts", content: "x" }));
+    assert.equal(result.block, true);
+    assert.equal(result.reason, REFUSAL);
+  });
+
+  test("manual 档：被守卫拦下的调用不惊动用户（先判守卫，再问）", async () => {
+    const { gate, asked } = blockedGate("manual");
+    const result = await gate(event("edit", { path: "a.ts" }));
+    assert.equal(result.block, true);
+    assert.deepEqual(asked, [], "注定要拦的调用不该让用户点一次允许");
+  });
+
+  test("plan 档：收到的是档位理由，不是守卫理由（否决先于守卫）", async () => {
+    const { gate } = blockedGate("plan");
+    const result = await gate(event("write", { path: "a.ts" }));
+    assert.equal(result.block, true);
+    assert.match(result.reason ?? "", /Plan mode/);
+  });
+
+  test("只读工具照旧放行：守卫只看 write / edit", async () => {
+    // 真守卫（不是恒定拦的假货）：read 成功落账 → 同一个文件的 write 放行
+    const readPaths = new Set<string>();
+    const gate = createToolCallGate(
+      () => "skip",
+      async () => ({ behavior: "allow" }),
+      [],
+      "/work",
+      (e) =>
+        readBeforeWriteRefusal(e, {
+          cwd: "/work",
+          hasRead: (key) => readPaths.has(key),
+          exists: () => true,
+          fold: false,
+        }),
+    );
+    assert.equal((await gate(event("write", { path: "a.ts" }))).block, true, "没读过先拦");
+    // read 成功落定（tool_result 那一跳）
+    const key = recordedGuardKey({ toolName: "read", input: { path: "a.ts" } }, "/work", false);
+    assert.notEqual(key, null);
+    readPaths.add(key ?? "");
+    assert.deepEqual(await gate(event("write", { path: "a.ts", content: "new" })), {}, "读过之后放行");
   });
 });

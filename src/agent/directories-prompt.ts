@@ -39,11 +39,23 @@ export function describeDirectories(cwd: string, directories: TurnDirectories | 
       ...directories.related.map((entry) =>
         entry.relation === "parent"
           ? `Parent session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`
-          : `Sub-session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`,
+          : entry.status === undefined
+            ? `Sub-session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`
+            : `Sub-session "${entry.label}" (id ${entry.sessionId}) — state: ${entry.status} · workbench: ${entry.path}`,
       ),
       "  These are other sessions' private workbenches: read them to hand off material. " +
         "Do not modify files the other session is actively using unless the task calls for it.",
     );
+    // 台账路由注只给有子会话的那一侧（root）。子会话的 related 恒为 [parent]：它没有
+    // delegate / reply_subsession，给它讲「新产出用 delegate」只会诱导它调不存在的工具
+    // （同 describeChannelRole 只给孩子一段的道理，2026-10-19 审查指出）。
+    if (directories.related.some((entry) => entry.relation === "child")) {
+      lines.push(
+        "  Sub-session ids are the recipients of reply_subsession. state: done means it has already " +
+          "delivered — start a new sub-session with delegate for a new deliverable; failed can still be " +
+          "asked what went wrong; stopped is a channel the user terminated — do not send into it.",
+      );
+    }
   }
   if (directories.browserDownloads !== undefined) {
     lines.push(

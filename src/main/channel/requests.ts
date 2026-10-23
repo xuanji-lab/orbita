@@ -23,6 +23,7 @@ import type {
   DelegateOutcome,
   SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
+import { usableSubSessionSetting } from "../../shared/available-models.ts";
 import {
   allowedKinds,
   channelStatus,
@@ -33,7 +34,7 @@ import {
 } from "../../shared/channel.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
-import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
+import { deriveSessionTitle, childSessions, isSessionDone, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, ModelPair } from "../../shared/settings.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { ChannelStore } from "./store.ts";
@@ -61,6 +62,27 @@ export interface ChannelDeps {
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * 同时在跑的直系子会话上限（2026-10-18 第三轮验收）。
+ *
+ * 提示词里写了「最多 3 个同时跑、其余排队」，但实测一条消息派 4 个照样全部起
+ * （四个子会话 meta 的 createdAt 落在同一毫秒段）——只靠自律不稳。这里给硬闸：
+ * 只数 phase 还活着的直系子会话；applyDelegate 在 submitTurn 前就先占位，
+ * 同一批 4 个 delegate 依次进来时计数是准的。
+ */
+const MAX_RUNNING_CHILDREN = 3;
+
+/**
+ * 计入上限的 phase：**非 idle 才算在跑**。
+ *
+ * 轮结束会写入 `idle`（main/index.ts 的 phase 事件），键留在 map 里是正常的——
+ * 判 `phases.has()` 会把所有跑过的子会话永远算成在跑，名额永不释放。
+ * 2026-10-19 真机验收踩到：3 个子会话全部完成 / 被终止后，第 4 个仍被拒。
+ */
+function isRunningPhase(phase: SessionPhase | undefined): boolean {
+  return phase !== undefined && phase !== "idle";
 }
 
 // ── 子会话模型解析 ──
@@ -114,11 +136,13 @@ export function resolveSubSessionModel(input: {
       }`,
     };
   }
+  // 设置里的子会话模型只在它的 provider 还在时才算数：判据与提示词侧
+  // （agent/ipc.ts 的 readSubSessionModel → delegation-prompt 的默认落点）同源。
+  const setting = usableSubSessionSetting(input.setting, input.providers);
+  if (setting !== undefined) {
+    return { ok: true, providerId: setting.providerId, modelId: setting.modelId, source: "setting" };
+  }
   if (input.setting !== undefined) {
-    const provider = input.providers.find((candidate) => candidate.id === input.setting?.providerId);
-    if (provider !== undefined) {
-      return { ok: true, providerId: provider.id, modelId: input.setting.modelId, source: "setting" };
-    }
     // 易耗品处理，同 readChoreModel（agent/ipc.ts）：设置指的 provider 被删了不该
     // 拦住派出，退回同父；但原因要落到 dev 终端，否则「为什么没用我设的模型」无从查起。
     console.error(
@@ -166,6 +190,22 @@ export async function applyDelegate(
   if (task === "") return { ok: false, error: "task must not be empty." };
   if (event.thinkingLevel !== undefined && !isThinkingLevel(event.thinkingLevel)) {
     return { ok: false, error: `"${event.thinkingLevel}" is not a valid thinking level.` };
+  }
+
+  const runningChildren = childSessions(await deps.sessions.list(), parent.id).filter((child) =>
+    isRunningPhase(deps.phases.get(child.id)),
+  );
+  if (runningChildren.length >= MAX_RUNNING_CHILDREN) {
+    const titles = runningChildren
+      .slice(0, MAX_RUNNING_CHILDREN)
+      .map((child) => `"${child.title}"`)
+      .join(", ");
+    return {
+      ok: false,
+      error:
+        `You already have ${runningChildren.length} sub-sessions running (${titles}). ` +
+        "Wait for one to report, or stop one, before delegating another — start the rest after a report.",
+    };
   }
 
   const settings = await deps.settings.read();
@@ -253,6 +293,13 @@ export async function applyDelegate(
   deps.broadcast({ type: "message", parentId: parent.id, childId, message: taskMessage });
   deps.broadcast({ type: "status", parentId: parent.id, childId, status: channelStatus([taskMessage]) });
 
+  // 派完之后手上还开着的直系子会话（含刚派出的这个，所以在建完子会话之后算）：
+  // count 是真实总数（不受 ids 的 8 条上限影响），ids 按 createdAt 倒序取前 8。
+  // 工具结果用它告诉模型「你现在有 N 个开着的、它们是谁」——台账路由的
+  // 提示而非法闸（硬闸只有上面的 MAX_RUNNING_CHILDREN）。
+  const open = childSessions(await deps.sessions.list(), parent.id).filter((child) => !isSessionDone(child));
+  open.sort((a, b) => b.createdAt - a.createdAt);
+
   return {
     ok: true,
     childId,
@@ -264,6 +311,7 @@ export async function applyDelegate(
       thinkingLevel,
       workbench: deps.sessions.workbenchPath(childId),
     },
+    openChildren: { count: open.length, ids: open.slice(0, 8).map((child) => child.id) },
   };
 }
 
@@ -330,10 +378,14 @@ export async function applyChannelSend(
     };
   }
   const key: ChannelKey = { parentId: sender.id, childId: child.id };
+  // 投递**之前**的目标通道状态：父→子的 reply 一落账就把状态翻回 running，
+  // 事后读不到「它曾经交付过」。done = 已交付——工具结果据此提醒模型新任务走
+  // delegate（提示而非硬拦：改它自己写的东西仍然合法）。
+  const statusBefore = channelStatus(await deps.channels.load(key));
   // **核心语义（用户裁决）**：被用户终止的子会话，父模型的 reply 不能重开它——
   // 否则父会话通过回信绕过用户的决定。只有用户在通道里代父发言
   // （applySpeak，author user）能重开。错误文本写给模型看，把路指给用户。
-  if (channelStatus(await deps.channels.load(key)) === "stopped") {
+  if (statusBefore === "stopped") {
     return {
       ok: false,
       error:
@@ -359,7 +411,7 @@ export async function applyChannelSend(
       error: `The message was recorded in the channel, but delivery failed: ${errorMessage(cause)}`,
     };
   }
-  return { ok: true, messageId: message.id };
+  return { ok: true, messageId: message.id, targetStatus: statusBefore };
 }
 
 // ── 代父发言（channel:speak）──
@@ -429,6 +481,9 @@ export async function applyStop(deps: ChannelDeps, input: ChannelStopInput): Pro
   }
   const phase = deps.phases.get(child.id);
   if (phase !== undefined && phase !== "idle") await deps.abort(child.id);
+  // 终止是终态：把 phase 键也清掉，别让上限把这条件算成「在跑」（abort 不保证
+  // 一定再回来一个 idle 事件）。
+  deps.phases.delete(child.id);
   deps.cancelBrowserHandoff(child.id);
   const message: ChannelMessage = {
     id: randomUUID(),

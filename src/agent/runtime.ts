@@ -35,6 +35,7 @@ import {
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
+import { readBeforeWriteRefusal, recordedGuardKey } from "./read-guard.ts";
 import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
@@ -70,6 +71,7 @@ import {
 } from "./retry-policy.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
 import { describeDirectories } from "./directories-prompt.ts";
+import { composeSystemPrompt } from "./system-prompt.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
@@ -79,6 +81,7 @@ import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { PROACTIVE_CAPABILITY_GUIDELINE, TOOL_SELECTION_GUIDELINE } from "./tool-selection-guideline.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -628,6 +631,13 @@ interface LedgerNote {
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
+  /**
+   * 本会话已读过的文件（归一化 key，见 read-guard.ts）。read 成功、以及本会话自己
+   * write / edit 成功的路径都记在这里；read-before-write 守卫拿它放行。
+   * **跨轮**活着——agent 每轮 open 重建 pi 对象，账本不能挂在那种对象上；
+   * 会话删除（dispose）时随 ledger 一起销账。
+   */
+  readPaths: Set<string>;
 }
 
 /**
@@ -640,7 +650,7 @@ const ledger = new Map<string, LedgerNote>();
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "" };
+    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "", readPaths: new Set() };
     ledger.set(sessionId, note);
   }
   return note;
@@ -896,6 +906,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     askPermission(command.sessionId),
     command.protectedPaths,
     command.cwd,
+    // read-before-write 守卫（read-guard.ts）：改一个**已存在**的文件前必须先读过它。
+    // 账本从跨轮账本现取（不闭包一份拷贝）——同一会话的多轮共享同一份已读记录。
+    (event) =>
+      readBeforeWriteRefusal(event, {
+        cwd: command.cwd,
+        hasRead: (key) => ledgerNote(command.sessionId).readPaths.has(key),
+      }),
   );
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
@@ -958,17 +975,28 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
             });
+            // 已读账本（read-guard.ts）：只记**成功**的调用——read 成功 = 看过；
+            // write / edit 成功 = 本会话自己造/改的路径，后续改动不必重读。
+            // tool_result 带 isError，tool_call 不带（那时还没跑），所以记在这里。
+            pi.on("tool_result", (event) => {
+              if (event.isError) return;
+              const key = recordedGuardKey(event, command.cwd);
+              if (key !== null) ledgerNote(command.sessionId).readPaths.add(key);
+            });
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
             // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
+            // **段的顺序不在这个对象里**（对象键序不是契约），由 system-prompt.ts 的
+            // composeSystemPrompt 按固定顺序拼——身份段恒跟在基底之后、回复语言段恒在最末、
+            // 空串段被滤掉（Git 标识关了就是空串）。那边是纯模块，顺序有测试钉着。
             pi.on("before_agent_start", (event) => ({
-              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
-              systemPrompt: [
-                adaptSystemPrompt(event.systemPrompt),
-                describePermissionMode(currentMode(), [
+              systemPrompt: composeSystemPrompt({
+                base: adaptSystemPrompt(event.systemPrompt),
+                // 权限档逐轮重讲，工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话
+                permission: describePermissionMode(currentMode(), [
                   ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
                   "create_skill",
                   "add_mcp_server",
@@ -980,31 +1008,47 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
                 // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
-                // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
-                describeDirectories(command.cwd, command.directories),
-                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
-                describeChannelRole(role),
+                directories: describeDirectories(command.cwd, command.directories),
+                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段。
+                // 2026-10-18 起 root 还按当前档位带「派发前对齐」（三档都有）与
+                // 「确认后自主跑验收闭环」（仅 skip）两段——档位从账本现读，中途切档
+                // 下一个 LLM 调用就重讲；子会话模型事实（默认落点 + 看图能力）随开轮命令。
+                channelRole: describeChannelRole(
+                  role,
+                  currentMode(),
+                  "availableModels" in command ? command.availableModels ?? [] : [],
+                  {
+                    sessionModelId: command.modelId,
+                    ...("subSessionModel" in command && command.subSessionModel !== undefined
+                      ? { subSessionModelId: command.subSessionModel.modelId }
+                      : {}),
+                  },
+                ),
                 // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
                 // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
-                storeToolsGuideline(
+                storeTools: storeToolsGuideline(
                   command.workspaceId === null ? null : { name: command.workspaceName },
                   command.cwd,
                 ),
-                TOOL_GUIDELINES,
-                EXPECTED_SECONDS_GUIDELINE,
+                // 工具选型（2026-10-18）：内建工具恒在，用固定文本钉住默认通道——搜索/读文件
+                // 别再走 bash，bash 只跑真命令；末尾补一句「有能力而用户可能不知道时主动提一句」
+                toolSelection: TOOL_SELECTION_GUIDELINE + "\n\n" + PROACTIVE_CAPABILITY_GUIDELINE,
+                toolGuidelines: TOOL_GUIDELINES,
+                expectedSeconds: EXPECTED_SECONDS_GUIDELINE,
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
-                ...("intent" in command && command.intent !== undefined ? [INTENT_CONTEXT_GUIDELINE] : []),
+                intent: "intent" in command && command.intent !== undefined ? INTENT_CONTEXT_GUIDELINE : "",
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
-                QUOTE_GUIDELINE,
+                quote: QUOTE_GUIDELINE,
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
-                gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
+                gitAttribution: gitAttributionGuideline(
+                  command.gitAttribution ?? true,
+                  command.attributionLanguage ?? "en",
+                ),
                 // 回复语言放最末一段（离对话最近、权重最高），见 prompt-narration.ts
-                REPLY_LANGUAGE_GUIDELINE,
-              ]
-                .filter((part) => part !== "")
-                .join("\n\n"),
+                replyLanguage: REPLY_LANGUAGE_GUIDELINE,
+              }),
             }));
           },
         },
@@ -1993,7 +2037,7 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(
       command.requestId,
       command.ok
-        ? { ok: true, childId: command.childId, title: command.title, card: command.card }
+        ? { ok: true, childId: command.childId, title: command.title, card: command.card, openChildren: command.openChildren }
         : { ok: false, error: command.error ?? "Delegate failed" },
     );
     return;
@@ -2002,7 +2046,11 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(
       command.requestId,
       command.ok
-        ? { ok: true, messageId: command.messageId }
+        ? {
+            ok: true,
+            messageId: command.messageId,
+            ...(command.targetStatus === undefined ? {} : { targetStatus: command.targetStatus }),
+          }
         : { ok: false, error: command.error ?? "Send failed" },
     );
     return;

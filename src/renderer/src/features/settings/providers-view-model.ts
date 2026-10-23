@@ -126,16 +126,11 @@ export function railVendorCell(provider: ProviderDto): RailVendorCell {
 }
 
 /**
- * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
- * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
- * nav 状态点与模型菜单的 usableProviders 是两个真实消费者——此前各写各的判定，
- * env 档厂商在模型菜单里能选、nav 却挂空心环，同一个问题给出两个答案。
+ * 「这个厂商能不能用」的判定已上移到契约层（shared/provider.ts 的 hasCredentials，
+ * 2026-10-18）：主进程装配「子会话可选模型清单」时要用同一条规则，判定不能只活在
+ * renderer 里。这里保留导出，nav 状态点与模型菜单的既有 import 不用动。
  */
-export function hasCredentials(auth: ProviderDto["auth"]): boolean {
-  if (auth.scheme === "api_key") return auth.hasSecret;
-  if (auth.scheme === "oauth") return auth.loggedIn;
-  return auth.scheme === "env";
-}
+export { hasCredentials } from "../../../../shared/provider.ts";
 
 /**
  * 模型行的上下文简报。**生效值 = 用户覆盖 > 推断出的基线**（基线内部已经是

@@ -432,7 +432,13 @@ describe("answerDelegate / answerChannelSend —— 子会话请求的回执", (
     await pending;
 
     const card = { childId: "c1", title: "调研分支", modelId: "m", thinkingLevel: "medium" as const, workbench: "/wb/c1" };
-    ctx.host.answerDelegate("r1", { ok: true, childId: "c1", title: "调研分支", card });
+    ctx.host.answerDelegate("r1", {
+      ok: true,
+      childId: "c1",
+      title: "调研分支",
+      card,
+      openChildren: { count: 1, ids: ["c1"] },
+    });
     ctx.host.answerDelegate("r2", { ok: false, error: "empty task" });
     assert.deepEqual(ctx.child().posted.at(-2), {
       type: "delegateResult",
@@ -441,6 +447,7 @@ describe("answerDelegate / answerChannelSend —— 子会话请求的回执", (
       childId: "c1",
       title: "调研分支",
       card,
+      openChildren: { count: 1, ids: ["c1"] },
     });
     assert.deepEqual(ctx.child().posted.at(-1), {
       type: "delegateResult",
@@ -461,17 +468,26 @@ describe("answerDelegate / answerChannelSend —— 子会话请求的回执", (
 
     ctx.host.answerChannelSend("r1", { ok: true, messageId: "m1" });
     ctx.host.answerChannelSend("r2", { ok: false, error: "kind not allowed" });
-    assert.deepEqual(ctx.child().posted.at(-2), {
+    // targetStatus（父→子投递前目标状态）给了就透传，缺席不带键
+    ctx.host.answerChannelSend("r3", { ok: true, messageId: "m3", targetStatus: "done" });
+    assert.deepEqual(ctx.child().posted.at(-3), {
       type: "channelSendResult",
       requestId: "r1",
       ok: true,
       messageId: "m1",
     });
-    assert.deepEqual(ctx.child().posted.at(-1), {
+    assert.deepEqual(ctx.child().posted.at(-2), {
       type: "channelSendResult",
       requestId: "r2",
       ok: false,
       error: "kind not allowed",
+    });
+    assert.deepEqual(ctx.child().posted.at(-1), {
+      type: "channelSendResult",
+      requestId: "r3",
+      ok: true,
+      messageId: "m3",
+      targetStatus: "done",
     });
   });
 });
