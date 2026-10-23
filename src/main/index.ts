@@ -3,7 +3,7 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
-import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, globalShortcut, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -55,6 +55,7 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
 import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
@@ -508,7 +509,39 @@ void app.whenReady().then(async () => {
     closeSandboxWindow,
     onStatus: broadcastComputerUseStatus,
   });
-  registerComputerUseIpc(computerUse);
+  /**
+   * 急停热键（computer use PR4）：`Control+Alt+Shift+Escape`。沙箱窗口在前台时用户够不到
+   * Orbita 的停止按钮，这个热键必须真的能注册上——注册失败（被别的应用占用）时
+   * 设置页会如实显示「不可用」，不假装保护存在。
+   *
+   * 按下后三件事（顺序即语义）：
+   *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
+   *   2. 撤销它们的电脑使用授权（落 meta + 推 agent 账本，闸门从此直接拒）；
+   *   3. 广播给 renderer 显示「已急停」。
+   * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
+   *
+   * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
+   * （与 mcpIpc / delegate 的 TDZ 说明同一条约定）。
+   */
+  const emergencyStop = createEmergencyStop({
+    register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
+    unregister: (accelerator) => globalShortcut.unregister(accelerator),
+    onTrigger: () => {
+      const at = Date.now();
+      const runningSessions = [...phases.entries()]
+        .filter(([, phase]) => phase !== "idle")
+        .map(([id]) => id);
+      for (const sessionId of runningSessions) {
+        void sessions.setComputerUseGrant(sessionId, null).catch(() => undefined);
+        agentHost.setComputerUseGrant(sessionId, false);
+        agentHost.abortIfRunning(sessionId);
+        // 与 IPC 撤销路径同一份事件：renderer 的授权标识立即复位
+        broadcastAgentEvent({ type: "computerUseGrant", sessionId, granted: false, at: null });
+      }
+      broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
+    },
+  });
+  registerComputerUseIpc(computerUse, emergencyStop);
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
@@ -846,6 +879,8 @@ void app.whenReady().then(async () => {
     terminals.dispose();
     // 沙箱是我们 spawn 的：应用退出时一并带走，别给用户留一个连不上宿主的孤儿沙箱窗口
     computerUse.dispose();
+    // 全局热键显式注销（Electron 退出时也会清，但释放时机不该靠它）
+    emergencyStop.dispose();
   });
 
   /**

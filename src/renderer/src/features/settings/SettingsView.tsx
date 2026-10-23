@@ -16,7 +16,7 @@ import type {
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
-import type { ComputerUseProbeResult, SandboxStatus } from "@shared/computer-use";
+import type { ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus } from "@shared/computer-use";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
@@ -1746,7 +1746,73 @@ function ComputerUseView() {
         </SettingRow>
       </SettingGroup>
       <LookGroup canScreenshot={control.canScreenshot} running={status.state === "running"} />
+      <GuardGroup />
     </div>
+  );
+}
+
+/**
+ * 安全组（computer use PR4）：急停热键的**真实可用性**。
+ *
+ * 为什么一定要显示状态：`globalShortcut.register` 被别的应用占用时返回 false 而不是
+ * 抛错——只在控制台留一行的话，用户以为急停能用；真出事时按下去什么都没发生。
+ * 注册失败的文案要能行动（关掉占用的应用后重启）。
+ */
+function GuardGroup() {
+  const t = useT();
+  const [state, setState] = useState<EmergencyStopStatus | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void api.computerUse
+      .emergencyStopState()
+      .then((next) => {
+        if (alive) setState(next);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const note = failed
+    ? "读取热键状态失败（主进程没有回执）"
+    : state === null
+      ? undefined
+      : state.registered
+        ? undefined
+        : t.computerUse.emergencyUnavailable(state.error ?? "");
+
+  return (
+    <SettingGroup label={t.computerUse.emergencyGroup}>
+      <SettingRow
+        name={t.computerUse.emergencyHotkey}
+        info={t.computerUse.emergencyHotkeyInfo}
+        note={
+          note === undefined ? undefined : (
+            <span role={state !== null && !state.registered ? "alert" : undefined} className="set-row-hint">
+              {note}
+            </span>
+          )
+        }
+      >
+        <span className="set-inline">
+          <span className="cu-state">
+            <Icon
+              name={state?.registered === true ? "shield-check" : "triangle-alert"}
+              size={14}
+              style={{ color: state?.registered === true ? "var(--color-success)" : "var(--color-danger)" }}
+            />
+            <code style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-sm)" }}>
+              {state?.accelerator ?? "Control+Alt+Shift+Escape"}
+            </code>
+          </span>
+          {state?.registered === true && <span className="set-row-hint">{t.computerUse.emergencyRegistered}</span>}
+        </span>
+      </SettingRow>
+    </SettingGroup>
   );
 }
 

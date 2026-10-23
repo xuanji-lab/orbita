@@ -1161,6 +1161,8 @@ function ChatViewBody(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/* 急停（全局热键）：提示会自动收掉——它不是持续状态。授权芯片同一时刻复位。 */}
+      {session.estopAt !== null && <Notice tone="bad">{t.computerUse.emergencyStopped}</Notice>}
       {/*
         收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报。
         读不懂扫描结果时这行带一个 Retry（重发同一条扫描消息）——失败不该只留一句

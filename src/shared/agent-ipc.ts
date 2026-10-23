@@ -1264,6 +1264,12 @@ export type AgentEvent =
    * `at` = 允许的时刻，null = 撤销。renderer 用它更新会话头的授权标识。
    */
   | { type: "computerUseGrant"; sessionId: string; granted: boolean; at: number | null }
+  /**
+   * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
+   * 同款：主进程借同一条广播通道）。收到它就复位授权标识、给一条「已急停」提示。
+   * **沙箱不关**——现场留着给用户看。
+   */
+  | { type: "computerUseEmergencyStop"; at: number; sessionIds: string[] }
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

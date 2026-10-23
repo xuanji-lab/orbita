@@ -399,6 +399,8 @@ export interface ChatSession {
   computerUseGranted: boolean;
   /** 本槽是否正看着一条已经存在的会话（活会话或盘上打开的）；新任务槽为 false */
   hasSession: boolean;
+  /** 急停命中本会话的时刻（12 秒后自动清）；null = 没有提示 */
+  estopAt: number | null;
   /**
    * 撤销 / 重新授予电脑使用（会话头入口）。撤销立即生效：当前轮的下一次 computer_*
    * 就返回人话错误；重新授予后同样不等下一轮。
@@ -435,6 +437,8 @@ interface ViewHandle {
   alignMode(mode: PermissionMode): void;
   /** 电脑使用授权被别处改了（gate 的会话卡 / 急停 / 另一个窗口）：本槽标识对齐 */
   alignComputerUse(at: number | null): void;
+  /** 急停命中本槽正看着的会话：撤销授权标识并给一条「已急停」提示 */
+  handleEmergencyStop(at: number): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
@@ -966,6 +970,14 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
             }
           }
         }
+        // 急停（主进程广播）：命中的会话复位授权标识，并给一条「已急停」提示。
+        // **不关沙箱**（主进程的语义），这里只做界面反馈。
+        if (event.type === "computerUseEmergencyStop") {
+          for (const view of views.current) {
+            const viewed = view.viewedIdRef.current;
+            if (viewed !== null && event.sessionIds.includes(viewed)) view.handleEmergencyStop(event.at);
+          }
+        }
         // 电脑使用授权变更（gate 的会话卡 / 另一个窗口的撤销）：对齐正看着那条
         if (event.type === "computerUseGrant") {
           for (const view of views.current) {
@@ -1325,6 +1337,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 来源三处：打开会话时 meta、会话卡点了「本次会话允许」、会话头 / 急停的 IPC 回环。
    */
   const [computerUseGrantedAt, setComputerUseGrantedAt] = useState<number | null>(null);
+  /** 急停发生的时刻（本槽正看着的会话被命中时置位）；12 秒后自动收掉提示 */
+  const [estopAt, setEstopAt] = useState<number | null>(null);
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
   const sessionRef = useRef<string | null>(null);
@@ -1504,6 +1518,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
       alignMode: (mode) => setMode(mode),
       alignComputerUse: (at) => setComputerUseGrantedAt(at),
+      handleEmergencyStop: (at) => {
+        setComputerUseGrantedAt(null);
+        setEstopAt(at);
+      },
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       alignThinking: (event) => {
@@ -2102,6 +2120,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setOpened(null);
     // 新任务槽还没有会话：授权属于会话，不跟着槽走
     setComputerUseGrantedAt(null);
+    setEstopAt(null);
     // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
     // 思考档按规则重算：模型不变，但档位不能沿用刚才打开的那条旧会话的账——
     // 否则「回首页开新任务」看起来会像是继承了上一条会话的思考档
@@ -2417,6 +2436,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine],
   );
+
+  /** 急停提示只留一会儿：它不是持续状态，落在转录上方会长期占位 */
+  useEffect(() => {
+    if (estopAt === null) return;
+    const timer = setTimeout(() => setEstopAt(null), 12_000);
+    return () => clearTimeout(timer);
+  }, [estopAt]);
 
   const changeMode = useCallback(
     (next: PermissionMode) => {
@@ -3274,6 +3300,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     answerApproval,
     computerUseGranted: computerUseGrantedAt !== null,
     hasSession: sessionId !== null || opened !== null,
+    estopAt,
     setComputerUseGrant,
   };
 }

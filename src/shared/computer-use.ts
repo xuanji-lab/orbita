@@ -47,6 +47,12 @@ export const computerUseChannels = {
   computerUseScreenshot: "computer-use:screenshot",
   /** 主进程 → renderer：沙箱状态机每次迁移推一次最新 SandboxStatus */
   computerUseStatus: "computer-use:status",
+  /**
+   * 急停热键的注册状态（renderer 发起、主进程回答）。**注册失败必须让用户看见**：
+   * `globalShortcut.register` 被占用时返回 false 而不是抛错，不 surface 的话用户
+   * 以为自己有保护。设置页每次挂载问一次。
+   */
+  computerUseEmergencyStopState: "computer-use:emergency-stop-state",
 } as const;
 
 export type ComputerUseChannel = (typeof computerUseChannels)[keyof typeof computerUseChannels];
@@ -111,6 +117,30 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  * import 主进程模块，跨进程共享的常量只有这里能放。
  */
 export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
+
+// ── 急停 ──────────────────────────────────────────────────────────────
+
+/**
+ * 急停热键的当前状态。`registered=false` 时 error 必须是一句用户能行动的话
+ * （「快捷键被占用」），不能只在控制台留一行。
+ */
+export interface EmergencyStopStatus {
+  /** 键位字符串（设置页展示） */
+  accelerator: string;
+  registered: boolean;
+  error: string | null;
+}
+
+/**
+ * 主进程 → renderer 的急停广播：按下了热键、这一轮已中断、这些会话的授权已撤销。
+ * 走 `agentEvent` 同一条广播（AgentEvent 的 `computerUseEmergencyStop`），
+ * 界面据此把授权标识复位并给一条「已急停」提示。**不关沙箱**——保留现场。
+ */
+export interface EmergencyStopBroadcast {
+  at: number;
+  /** 被中断并撤销授权的会话 id（当时正在跑的）；空数组 = 没有会话在跑 */
+  sessionIds: string[];
+}
 
 // ── 沙箱状态机 ────────────────────────────────────────────────────────
 

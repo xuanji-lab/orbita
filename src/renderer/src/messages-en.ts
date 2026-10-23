@@ -398,6 +398,15 @@ export const en = {
     grantChip: "Computer use",
     grantChipOn: "This session may drive the sandbox · click to revoke (takes effect in the current turn)",
     grantChipOff: "This session is not authorized to drive the sandbox · click to allow (takes effect in the current turn)",
+    /* Emergency stop hotkey (Settings › Security group) and the stop notice */
+    emergencyGroup: "Safety",
+    emergencyHotkey: "Emergency stop hotkey",
+    emergencyHotkeyInfo:
+      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. **It does not close the sandbox** — the screen stays for you to look at. Re-authorize to use computer use again.",
+    emergencyRegistered: "Registered and available",
+    emergencyUnavailable: (error: string) => `Unavailable: ${error}. Close the app holding this shortcut and restart Orbita.`,
+    emergencyStopped:
+      "Emergency stop: this turn was stopped and this session's computer-use grant was revoked. The sandbox is still open.",
   },
 
   drawer: {

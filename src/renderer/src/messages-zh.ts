@@ -368,6 +368,14 @@ export const zh: Messages = {
     grantChip: "电脑使用",
     grantChipOn: "本次会话已允许操作沙箱 · 点击撤销（当前轮立即生效）",
     grantChipOff: "本会话还没有授权操作沙箱 · 点击授予（当前轮立即生效）",
+    /* 急停热键（设置页「安全」组）与急停提示 */
+    emergencyGroup: "安全",
+    emergencyHotkey: "急停热键",
+    emergencyHotkeyInfo:
+      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。**不关闭沙箱**——现场留着给你看。要再用需要重新授权。",
+    emergencyRegistered: "已注册，随时可用",
+    emergencyUnavailable: (error) => `不可用：${error}。请关掉占用这个快捷键的应用后重启本应用。`,
+    emergencyStopped: "已急停：这一轮已经停下，本会话的电脑使用授权已撤销。沙箱没有关闭，画面还在。",
   },
 
   drawer: {
