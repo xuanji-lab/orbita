@@ -489,6 +489,28 @@ describe("上传 / 下载：宿主侧的文件搬运", () => {
   });
 });
 
+describe("停浏览器", () => {
+  test("stop：发 cdp-stop 并清掉「已启动」缓存；桥不响应也不抛（停沙箱时是常态）", async () => {
+    const { guest, calls } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, tempOutDir());
+    await run(cdp, { action: "sandbox-observe" });
+    assert.equal(calls[0]?.command, computerUseGuestCommands.cdpStatus);
+
+    await cdp.stop();
+    assert.equal(calls[calls.length - 1]?.command, computerUseGuestCommands.cdpStop);
+
+    const failing: CdpGuest = {
+      async guestCommandReply() {
+        return { ok: false, error: "guest 桥 45000ms 内没有响应（cdp-stop 超时）" };
+      },
+      async guestShot() {
+        return { ok: false, error: "不该走到这里" };
+      },
+    };
+    await new CdpSession(failing, tempOutDir()).stop(); // 不抛
+  });
+});
+
 describe("标签页", () => {
   test("tabs：list 回清单并标出 active；switch 说清「切过去了，要重新 observe」", async () => {
     const { guest, calls } = fakeGuest({

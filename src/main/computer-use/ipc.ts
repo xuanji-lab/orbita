@@ -16,13 +16,25 @@ import {
 } from "../../shared/computer-use.ts";
 import type { SandboxController } from "./sandbox.ts";
 
-export function registerComputerUseIpc(controller: SandboxController): void {
+/**
+ * 停沙箱前的收尾钩子（可选）。PR3 用它把沙箱里的 Edge 先停掉：`cdp-stop` 只杀我们自己
+ * 记录的那个进程树，桥已经不响应就算了——沙箱销毁会带走整个 VM。
+ * **不做成等待**：停沙箱是用户按的按钮，不能被一条浏览器命令拖住 45 秒。
+ */
+export interface ComputerUseIpcHooks {
+  beforeStop?: () => void;
+}
+
+export function registerComputerUseIpc(controller: SandboxController, hooks: ComputerUseIpcHooks = {}): void {
   ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
   ipcMain.handle(
     computerUseChannels.computerUseStart,
     (): Promise<ComputerUseStartResult> => controller.start(),
   );
-  ipcMain.handle(computerUseChannels.computerUseStop, (): Promise<ComputerUseStopResult> => controller.stop());
+  ipcMain.handle(computerUseChannels.computerUseStop, (): Promise<ComputerUseStopResult> => {
+    hooks.beforeStop?.();
+    return controller.stop();
+  });
   ipcMain.handle(
     computerUseChannels.computerUseScreenshot,
     (_event, maxWidth: unknown): Promise<ComputerUseScreenshotResult> =>

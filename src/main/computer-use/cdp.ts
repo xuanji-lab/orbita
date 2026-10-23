@@ -143,6 +143,20 @@ export class CdpSession {
     }
   }
 
+  /**
+   * 停掉沙箱里的 Edge（只杀桥自己记录的那个进程树）。**尽力而为**：用户停沙箱时
+   * fire-and-forget 调一次，让 Edge 在 VM 拆掉之前自己收尾；桥已经死了就算了，
+   * VM 销毁会带走整个进程树。调用后缓存置为「没起」，下次 navigate 会重新拉起。
+   */
+  async stop(): Promise<void> {
+    this.started = false;
+    try {
+      await this.guest.guestCommandReply(computerUseGuestCommands.cdpStop, {});
+    } catch {
+      // 停沙箱的过程中桥不响应是常态，不打扰用户
+    }
+  }
+
   /** 页面截图（走兄弟 .jpg，回执里只有文件名；字节经 IPC 送出去是 base64） */
   async shot(maxWidth: number): Promise<{ jpeg: Uint8Array; resp: Record<string, unknown> }> {
     await this.ensureOpen();

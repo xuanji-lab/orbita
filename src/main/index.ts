@@ -510,8 +510,6 @@ void app.whenReady().then(async () => {
     closeSandboxWindow,
     onStatus: broadcastComputerUseStatus,
   });
-  registerComputerUseIpc(computerUse);
-
   /**
    * CDP 浏览器通道（PR3）：沙箱里那份 Edge 的会话级状态。
    *
@@ -527,6 +525,9 @@ void app.whenReady().then(async () => {
     },
     join(configDir, "computer-use", "out"),
   );
+  // 用户停沙箱时先把里面的 Edge 停掉（best effort、不等待：不能用一条浏览器命令拖住
+  // 停沙箱按钮）。桥已经死了就算了，VM 销毁会带走整个进程树。
+  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stop(); } });
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
