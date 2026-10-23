@@ -338,3 +338,10 @@ test("窄窗右栏胶囊不与会话胶囊重叠：会话胶囊的右限要让�
   );
   assert.doesNotMatch(toolbar, /panelLeft = props\.narrow\s*\?/, "panelLeft 不再单算一套窄窗分支");
 });
+
+test("会话胶囊容器显式铺满 + 标题钉中栏：设置页只有标题一个孩子也不塌、居中", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  // container-type: inline-size 下元素宽不随内容撑开，没有显式宽就塌成 0
+  assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size[^}]*width:\s*100%/s);
+  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*grid-column:\s*2/s);
+});
