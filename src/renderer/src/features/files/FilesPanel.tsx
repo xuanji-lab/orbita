@@ -107,6 +107,22 @@ export function FilesPanel(props: {
    * 回车仍由用户按——缺宏包的安装可能需要 sudo / 管理员密码，agent 不替用户提权。
    */
   onRunInTerminal?: (command: string) => void;
+  /**
+   * 布局 B（稿件为主）：稿件工作台占主位、对话收进右侧一栏。页头跟着画在卡里
+   * （inline），源码与 PDF 并排。由 App 的 paper-layout.ts 裁决后传进来。
+   */
+  paperLayout?: boolean;
+  /**
+   * 布局 A 的大屏自动并排（窗口 ≥ 1800、项目有 PDF）：只并排，不改页头位置与侧栏。
+   */
+  autoSplit?: boolean;
+  /** 切换布局的按钮（住在文件页头的右端——两种布局里是同一个位置） */
+  onTogglePaperLayout?: () => void;
+  /**
+   * 项目里有 PDF（可以并排）：报给 App——布局 A 的自动并排与「并排前把右栏拉宽」
+   * 都要先知道这一点，而项目事实住在本面板里。
+   */
+  onPaperReady?: (ready: boolean) => void;
 }) {
   const t = useT();
   const session = props.session;
@@ -210,9 +226,6 @@ export function FilesPanel(props: {
     stale: pdfStale(latex.project?.pdf?.modifiedAt ?? null, latex.project?.sourceModifiedAt ?? null),
     hasPdf: latex.project?.pdf !== null && latex.project !== undefined,
   });
-  /** 当前标签是不是这个项目编译出来的 PDF（PDF 标签的预览豁免与编译后重载都认它） */
-  const latexPdfActive =
-    activeTab !== null && latex.project?.pdf != null && samePath(latex.project.pdf.path, activeTab.path);
   useEffect(() => {
     if (latex.last !== null && isFailedStatus(latex.last.status)) setProblemsOpen(true);
   }, [latex.last]);
@@ -221,6 +234,36 @@ export function FilesPanel(props: {
   useEffect(() => {
     setProblemsOpen(false);
   }, [latexContext?.path]);
+
+  /**
+   * 论文工作台的两种布局（paper-layout.ts）：B 的并排是主位天然形态；A 在宽屏
+   * （≥1800）也自动并排。并排的右半永远是**这个项目的 PDF**，左半是激活标签——
+   * 激活标签本身就是 PDF 时，左半换成项目主文件（原型：左源码右 PDF）。
+   */
+  const projectPdfPath = latex.project?.pdf?.path ?? null;
+  const splitWanted = props.paperLayout === true || props.autoSplit === true;
+  const mainSourcePath =
+    latex.project !== null && latex.project.main !== null
+      ? `${latex.project.dir}${/[\\/]$/.test(latex.project.dir) ? "" : "/"}${latex.project.main}`
+      : null;
+  const splitPdfPath = splitWanted ? projectPdfPath : null;
+  const activeIsPdf =
+    activeTab !== null && splitPdfPath !== null && samePath(activeTab.path, splitPdfPath);
+  const splitLeftPath = activeIsPdf ? mainSourcePath : (activeTab?.path ?? null);
+  const splitOn =
+    splitPdfPath !== null && splitLeftPath !== null && !samePath(splitLeftPath, splitPdfPath);
+  /** 左栏真正显示的文件：不并排时就是激活标签（含「激活标签是 PDF」那种单栏） */
+  const leftPath = splitOn ? splitLeftPath : (activeTab?.path ?? null);
+  /** 左栏显示的是不是项目 PDF（决定它要不要走 PDF 预览与编译后重载） */
+  const leftIsProjectPdf =
+    leftPath !== null && projectPdfPath !== null && samePath(leftPath, projectPdfPath);
+
+  // 项目有 PDF 才谈得上并排（App 据此决定 A 的自动并排与右栏宽度）
+  const paperReady = latex.project !== null && latex.project.pdf !== null;
+  const reportPaperReady = props.onPaperReady;
+  useEffect(() => {
+    reportPaperReady?.(paperReady);
+  }, [paperReady, reportPaperReady]);
 
   /**
    * 编译前强制保存：未落盘的改动先写盘，编译用的就是你眼前这一版（原型场景 1 第 5 步 / 场景 4）。
@@ -724,6 +767,7 @@ export function FilesPanel(props: {
 
   return (
     <RightPanelFrame
+      inline={props.paperLayout === true}
       header={
         <>
           {/* 「文件」标题本身就是文件树开关（原型裁决）：树开着时呈点亮态（选中行
@@ -840,6 +884,22 @@ export function FilesPanel(props: {
           <PanelIconButton title={t.files.attach} onClick={attach}>
             <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
+          {/* 两种布局的切换键（同一个位置：页头最右）：布局 A 只在论文项目里出现
+              （布局 B 是为稿件工作台做的）；布局 B 里**总是**在——否则在 B 里打开一个
+              非项目文件后再也点不回去（只能靠快捷键退出） */}
+          {(latex.project !== null || props.paperLayout === true) &&
+            props.onTogglePaperLayout !== undefined && (
+            <PanelIconButton
+              title={props.paperLayout === true ? t.paper.toChat : t.paper.toPaper}
+              onClick={props.onTogglePaperLayout}
+            >
+              <Icon
+                name={props.paperLayout === true ? "panel-right" : "maximize"}
+                size={16}
+                strokeWidth={1.8}
+              />
+            </PanelIconButton>
+          )}
         </>
       }
     >
@@ -935,32 +995,60 @@ export function FilesPanel(props: {
           </div>
           {/* 浮层形态的遮罩：常驻渲染，显隐由 container query 管（与树同源） */}
           <div className="files-panel-backdrop" aria-hidden="true" onClick={() => setTreeOn(false)} />
+          {/* 稿件区：单标签，或并排的两块。左块在两种形态下是**同一个组件位置**
+              （只外面多一层 flex 容器），切布局不会把编辑器重挂 */}
           {activeTab !== null && (
-            <FilePreviewPane
-              key={activeTab.path}
-              sessionId={sessionId}
-              workspaceId={workspaceId}
-              extraWorkspaceId={focusWorkspaceId}
-              root={activeTab.root}
-              path={activeTab.path}
-              rootLabel={
-                tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
-              }
-              {...(activeTab.name !== undefined ? { sentImage: { name: activeTab.name } } : {})}
-              // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
-              jump={jump !== null && jump.citation.path === activeTab.path ? jump : null}
-              // 论文工作台：项目里的 PDF 走预览（不受「PDF 引用」实验开关管——
-              // 刚编出来的 PDF 是编译条的直接产物）；编译成功后按 mtime 重载。
-              // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
-              pdfPreview={latexPdfActive}
-              pdfReloadToken={latexPdfActive ? latex.pdfReloadToken : 0}
-              editor={{
-                register: registerEditor,
-                onDirtyChange: handleEditorDirty,
-                onSaved: handleEditorSaved,
-                onError: handleEditorError,
-              }}
-            />
+            <div className={`files-panel-panes${splitOn ? " split" : ""}`}>
+              <div className="files-panel-pane">
+                <FilePreviewPane
+                  key={`left:${leftPath ?? activeTab.path}`}
+                  sessionId={sessionId}
+                  workspaceId={workspaceId}
+                  extraWorkspaceId={focusWorkspaceId}
+                  root={activeTab.root}
+                  path={leftPath ?? activeTab.path}
+                  rootLabel={
+                    tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
+                  }
+                  {...(leftPath === activeTab.path && activeTab.name !== undefined
+                    ? { sentImage: { name: activeTab.name } }
+                    : {})}
+                  // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上；
+                  // 并排时的左块若换成了主文件，旧跳转也不属于它
+                  jump={leftPath === activeTab.path && jump !== null && jump.citation.path === activeTab.path ? jump : null}
+                  // 论文工作台：项目里的 PDF 走预览（不受「PDF 引用」实验开关管——
+                  // 刚编出来的 PDF 是编译条的直接产物）；编译成功后按 mtime 重载。
+                  // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
+                  pdfPreview={leftIsProjectPdf}
+                  pdfReloadToken={leftIsProjectPdf ? latex.pdfReloadToken : 0}
+                  editor={{
+                    register: registerEditor,
+                    onDirtyChange: handleEditorDirty,
+                    onSaved: handleEditorSaved,
+                    onError: handleEditorError,
+                  }}
+                />
+              </div>
+              {splitOn && splitPdfPath !== null && (
+                <div className="files-panel-pane">
+                  {/* 右块：项目的 PDF。它不属于标签队列（标签仍是用户打开的那些），
+                      所以不接跳转、不接编辑器，只在编译成功后重载 */}
+                  <FilePreviewPane
+                    key={`pdf:${splitPdfPath}`}
+                    sessionId={sessionId}
+                    workspaceId={workspaceId}
+                    extraWorkspaceId={focusWorkspaceId}
+                    root={activeTab.root}
+                    path={splitPdfPath}
+                    rootLabel={
+                      tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
+                    }
+                    pdfPreview
+                    pdfReloadToken={latex.pdfReloadToken}
+                  />
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
