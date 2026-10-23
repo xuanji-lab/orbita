@@ -64,6 +64,10 @@ export interface DownloadFileOptions {
   concurrency?: number;
   /** 连续多少次「一点进展都没有」就放弃；默认 3 */
   maxStalledAttempts?: number;
+  /** 重试退避基数；默认 500ms，测试可调小 */
+  retryBaseDelayMs?: number;
+  /** 日志出口；库本身不直接写 console（避免测试子进程的输出干扰 test runner） */
+  log?: (message: string) => void;
 }
 
 /** 服务器没给总长度 / 不能用 Range 到无法继续时抛它，调用方可退回库的单连接下载 */
@@ -189,6 +193,7 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
     : 1;
   const parts = planParts(total, partSize);
   const maxStalled = Math.max(1, options.maxStalledAttempts ?? DEFAULT_MAX_STALLED);
+  const retryBaseDelay = Math.max(1, options.retryBaseDelayMs ?? 500);
 
   const file = await open(destination, "w");
   try {
@@ -274,8 +279,8 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
           if (stalled >= maxStalled) {
             throw new Error(`下载反复中断，已停止重试：${messageOf(error)}`);
           }
-          const backoff = Math.min(MAX_BACKOFF_MS, 500 * 2 ** Math.max(0, stalled - 1));
-          console.info(
+          const backoff = Math.min(MAX_BACKOFF_MS, retryBaseDelay * 2 ** Math.max(0, stalled - 1));
+          options.log?.(
             `[更新] 分段 ${index + 1}/${parts.length} 中断（已收 ${position - part.start}/${part.end + 1 - part.start} 字节），${backoff}ms 后续传：${messageOf(error)}`,
           );
           await sleep(backoff);

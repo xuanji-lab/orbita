@@ -159,6 +159,7 @@ describe("downloadFile", () => {
         sha512: sha512(data),
         partSize: data.length,
         concurrency: 1,
+        retryBaseDelayMs: 1,
       });
       const written = await readFile(path);
       assert.equal(written.length, data.length);

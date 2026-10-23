@@ -256,6 +256,7 @@ export class ResilientElectronHttpExecutor extends ElectronHttpExecutor {
         sha512: options.sha512,
         cancellation: options.cancellationToken,
         onProgress: options.onProgress,
+        log: (message) => console.info(message),
       });
       return destination;
     } catch (error) {
