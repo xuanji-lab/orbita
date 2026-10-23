@@ -252,12 +252,21 @@ export function TexEditorPane(props: {
     viewRef.current = view;
     setCursor(cursorPosition(view.state.doc, view.state.selection.main.head));
     props.register(path, handleRef.current);
+    // 挂载即干净：上一个实例若在冲突中卸载，残留的脏标记不能跟着新实例继续亮
+    dirtyRef.current = false;
+    props.onDirtyChange(path, false);
 
     return () => {
       // 切换标签 / 关标签也会走到这里；先把当前文本抓下来再销毁视图。
-      // FilesPanel 在关标签前会主动 flush，这里是兜底（两条路径都幂等）。
+      // FilesPanel 在切换 / 关标签前会主动 flush（冲突就不切走），这里是兜底。
       const fixed = snapshot();
-      if (fixed !== null && fixed.hash !== savedHashRef.current) void runSave(false, fixed);
+      if (fixed !== null && fixed.hash !== savedHashRef.current) {
+        void runSave(false, fixed);
+      } else {
+        // 没有未落盘内容：把脏标记清掉，不留在外层变成一个永不灭的圆点
+        dirtyRef.current = false;
+        props.onDirtyChange(path, false);
+      }
       props.register(path, null);
       view.destroy();
       viewRef.current = null;
@@ -401,11 +410,4 @@ export function TexEditorPane(props: {
       </div>
     </div>
   );
-}
-
-/** 字节数的短写法（错误条里用；与 tree-view 的 formatSize 分工：这里只要数字 + 单位） */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

@@ -1,7 +1,7 @@
 /**
  * LaTeX 源码编辑器（CodeMirror 6）的语言与外观配置。
  *
- * **为什么用 SteamLanguage + legacy-modes/stex**：上游没有维护良好的官方 LaTeX 语言包，
+ * **为什么用 StreamLanguage + legacy-modes/stex**：上游没有维护良好的官方 LaTeX 语言包，
  * @codemirror/legacy-modes 的 stex 是 CodeMirror 5 的成熟词法器（命令、注释、数学模式、
  * \begin/\end 参数都认），由官方维护者移植到 CM6，体积只有几 KB。不引入第三方
  * 「codemirror-lang-latex」一类包（维护状态不明，且要自己带一套 Lezer grammar）。

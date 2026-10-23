@@ -1650,6 +1650,7 @@ export const zh: Messages = {
     conflictAfterClose: "没保存：你编辑期间文件在磁盘上被改过了。重新打开这个标签再处理。",
     conflictBlocksCompile: "没有编译：先处理这个文件的冲突——编辑器里的和磁盘上的不一致。",
     resolveConflictFirst: "先处理这个文件的冲突（重新加载或保留我的）。",
+    resolveConflictBeforeSwitch: "没有切换：先处理这个文件的冲突（重新加载或保留我的）——切走会丢掉你没保存的内容。",
     reload: "重新加载",
     keepMine: "保留我的",
     tooLarge: (size, limit) => `没有保存：${size} 超过了编辑器 ${limit} 的上限。`,

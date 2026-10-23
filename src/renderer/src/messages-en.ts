@@ -1760,6 +1760,8 @@ export const en = {
     conflictAfterClose: "Not saved: the file changed on disk while you were editing. Reopen the tab to resolve it.",
     conflictBlocksCompile: "Not compiled: resolve the file conflict first — the editor's copy and the disk disagree.",
     resolveConflictFirst: "Resolve the file conflict first (reload from disk or keep mine).",
+    resolveConflictBeforeSwitch:
+      "Not switched: resolve this file's conflict first — switching would lose what you haven't saved.",
     reload: "Reload from disk",
     keepMine: "Keep mine",
     tooLarge: (size: string, limit: string) => `Not saved: ${size} is over the ${limit} editor limit.`,

@@ -404,6 +404,28 @@ export function FilesPanel(props: {
     applyClose(path);
   };
 
+  /**
+   * 切换激活标签前的保存闸：当前编辑器脏就先 flush，**冲突 / 写盘失败时不切走**。
+   * 切走会让 TexEditorPane 卸载，而卸载时的兜底保存一旦撞上冲突，那份未保存文本
+   * 就再也拿不回来了（验收实测的丢字路径）。flush 成功后由这里统一 setActivePath；
+   * 本来干净 / 没有编辑器就直接切。
+   */
+  const switchTo = useCallback(
+    (next: string | null): void => {
+      if (next === activePath) return;
+      const current = activePath === null ? undefined : editorsRef.current.get(activePath);
+      if (current === undefined || !current.isDirty()) {
+        setActivePath(next);
+        return;
+      }
+      void current.flush().then((outcome) => {
+        if (outcome === "saved" || outcome === "clean") setActivePath(next);
+        else setEditorNotice(t.editor.resolveConflictBeforeSwitch);
+      });
+    },
+    [activePath, t],
+  );
+
   // 预览打开时 Esc 关当前激活标签（原型同语义）；没有激活标签回报「没处理」，
   // 让 App 继续把 Esc 用在关面板上。由 App 的全局监听派发过来（见 props.escapeRef）
   const escapeRef = props.escapeRef;
@@ -424,7 +446,7 @@ export function FilesPanel(props: {
    * 自动收起——窄侧事实来自 ResizeObserver 的缓存，不在这里量宽度做显示判定 */
   const openFile = (root: FileRoot, path: string): void => {
     setTabs((prev) => openTab(prev, root.path, path));
-    setActivePath(path);
+    switchTo(path);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -432,7 +454,7 @@ export function FilesPanel(props: {
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
     setTabs((prev) => openTab(prev, "", ref, name));
-    setActivePath(ref);
+    switchTo(ref);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -463,7 +485,7 @@ export function FilesPanel(props: {
     }
     setActionError(null);
     setTabs((prev) => openTab(prev, outcome.root, path));
-    setActivePath(path);
+    switchTo(path);
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
   }, [citeFocus, sessionId, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
@@ -731,11 +753,11 @@ export function FilesPanel(props: {
                       aria-selected={active}
                       className="cap-tab no-drag"
                       title={tab.path}
-                      onClick={() => setActivePath(tab.path)}
+                      onClick={() => switchTo(tab.path)}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        setActivePath(tab.path);
+                        switchTo(tab.path);
                       }}
                     >
                       <Icon
