@@ -2,9 +2,9 @@
  * LaTeX 编译域契约 —— 也是 agent 工具 `compile_latex` 的载荷形状。
  *
  * 一条链路、一个内核（main/latex/）：agent 进程 → `latexRequest` / `latexResult`
- * （shared/agent-ipc.ts，terminalRequest 同款）。renderer 的 IPC 面（`latex:compile` /
- * `latex:probe`）与 preload 等 PR3 有界面时再加——现在没有调用点，按消费者纪律
- * 不进仓（评审 M6）。
+ * （shared/agent-ipc.ts，terminalRequest 同款）；renderer 的文件面板 → `latex:*`
+ * （下面的 latexChannels，PR3 的编译条是第一个消费者）。两条入口走同一份
+ * `LatexRunner` 与同一套 .log 解析，不是第二套内核。
  *
  * **编译在主进程**：latexmk 是外部进程，产物落在项目目录里（`build/`），
  * agent 进程既不碰 fs 策略也不该持有一份「哪个项目在编」的并发状态。主进程是
@@ -157,3 +157,74 @@ export const LATEX_DEFAULT_OUT_DIR = "build";
 
 /** 项目级配置文件的相对路径（相对项目目录） */
 export const LATEX_CONFIG_PATH = ".orbita/latex.json";
+
+/**
+ * renderer 的编译条通道 —— IPC 四层契约的第 1 层。
+ *
+ * **授权与 fs:* 同一道**：renderer 只传「根 + 当前文件」（`LatexFileContext`），
+ * 项目目录由主进程从文件往上找、再用文件面板的白名单校验——renderer 不能拿
+ * 这条通道去编任意目录（TeX 的 \input 能读任意文件，编一个来路不明的 .tex 等价于
+ * 让模型读那些文件）。
+ */
+export const latexChannels = {
+  /** 本机 latexmk 与引擎探测（缓存在主进程；界面点开引擎 chip 时现问） */
+  probe: "latex:probe",
+  /** 当前文件所属的 LaTeX 项目（找不到就是 found:false） */
+  project: "latex:project",
+  /** 编一次；结局是 LatexRunOutcome（并发被拒也走 ok:false） */
+  compile: "latex:compile",
+  /** 取消这个项目在跑的编译；true = 确实有东西被叫停 */
+  cancel: "latex:cancel",
+  /** 把引擎 / 主文件的选择写进项目 `.orbita/latex.json`，回刷新后的项目 */
+  configure: "latex:configure",
+} as const;
+
+/**
+ * 一次界面请求的授权上下文：与 `fs:*` 的 root/dir 同形。`root` 是文件面板里的
+ * 那个根（白名单按它核），`path` 是当前打开的文件（`fs:read` 的 dir 语义）。
+ */
+export interface LatexFileContext {
+  sessionId: string | null;
+  workspaceId: string | null;
+  /** 专注 / 浏览态的额外根，与 fs:* 同义 */
+  extraWorkspaceId?: string | null;
+  root: string;
+  path: string;
+}
+
+/** 项目描述：编译条的 chip 与「PDF 是否过期」都只读这一份。 */
+export interface LatexProjectInfo {
+  /** 项目目录绝对路径（主文件所在目录；magic root 会改写它） */
+  dir: string;
+  /** 编译时会用的引擎（请求以外的来源：magic > 配置 > 自动） */
+  engine: LatexEngine;
+  /** 引擎是怎么定下来的，界面据此说「自动」还是「项目设置」 */
+  engineSource: "magic" | "config" | "auto";
+  /** 主文件（相对 dir）；多 .tex 且没 main.tex 时为 null，界面让用户选 */
+  main: string | null;
+  /** 项目顶层的 .tex（主文件候选） */
+  mains: string[];
+  /** `.orbita/latex.json` 里的显式选择（chip 的当前值） */
+  configured: { main?: string; engine?: LatexEngine };
+  /** 磁盘上的 PDF；没有编译过就是 null。它可能是**上一次成功**的那份 */
+  pdf: { path: string; modifiedAt: number } | null;
+  /** 参与「过期」判定的最新源码 mtime（主文件 + .tex / .bib / .cls / .sty） */
+  sourceModifiedAt: number | null;
+  /** 主文件解析失败的一句原因（no-main-file 的 detail）；成功时 null */
+  detail: string | null;
+}
+
+export type LatexProjectOutcome = { found: false } | { found: true; project: LatexProjectInfo };
+
+/** 编译条发起的编译：不给 dir——项目目录由主进程从 path 找，绕不过白名单 */
+export type LatexCompileIpcRequest = LatexFileContext;
+
+/** 引擎 / 主文件选择。`main` 是相对项目目录的 .tex；两项都可单独给 */
+export interface LatexConfigureRequest extends LatexFileContext {
+  main?: string;
+  engine?: LatexEngine;
+}
+
+export type LatexConfigureOutcome =
+  | { ok: true; project: LatexProjectInfo }
+  | { ok: false; error: string };

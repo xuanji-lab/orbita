@@ -48,6 +48,7 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { LatexRunner } from "./latex/run.ts";
 import { applyLatexRequest } from "./latex/agent-requests.ts";
+import { registerLatexIpc } from "./latex/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -633,8 +634,10 @@ void app.whenReady().then(async () => {
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();
   registerTerminalIpc(terminals);
-  // LaTeX 编译：latexmk 进程、.log 解析、并发记账都在主进程（当前唯一消费者是 agent 工具）
+  // LaTeX 编译：latexmk 进程、.log 解析、并发记账都在主进程（agent 工具与文件面板
+  // 的编译条共用同一个 runner——两边看到的是同一次编译）
   const latex = new LatexRunner();
+  registerLatexIpc(latex, workspaces, sessions);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
