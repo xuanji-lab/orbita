@@ -32,7 +32,8 @@
 // 就绪通告：启动完成后写 out/bridge.json（tmp+rename）——它出现即代表命令循环已上线。
 //
 // 编译：node build.mjs（用 Windows 自带的 .NET Framework 4.x csc.exe，零第三方依赖）。
-// 约束：单文件、单进程、无持久化——沙箱每次重置即消失，不需要任何清理逻辑。
+// 约束：单 exe、单进程、无持久化——沙箱每次重置即消失，不需要任何清理逻辑。
+//   源码两个文件：Program.cs（文件协议与像素命令）+ Cdp.cs（浏览器通道），一起用 build.mjs 编。
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 
 using System;

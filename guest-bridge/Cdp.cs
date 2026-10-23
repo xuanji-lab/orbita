@@ -513,8 +513,17 @@ internal static class CdpSession
 
         byte[] bytes = Encoding.UTF8.GetBytes(m.ToString());
         Task send = _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
-        if (!send.Wait(timeoutMs)) throw new Exception("CDP 发送超时（" + method + "）");
-        if (send.IsFaulted) throw new Exception("CDP 发送失败（" + method + "）：" + BaseMessage(send));
+        if (!send.Wait(timeoutMs))
+        {
+            // 超时的 SendAsync 会让 socket 进入不可用状态：丢掉引用，下一条命令重连
+            CloseSocket();
+            throw new Exception("CDP 发送超时（" + method + "）");
+        }
+        if (send.IsFaulted)
+        {
+            CloseSocket();
+            throw new Exception("CDP 发送失败（" + method + "）：" + BaseMessage(send));
+        }
 
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
