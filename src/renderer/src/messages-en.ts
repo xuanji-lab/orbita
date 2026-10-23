@@ -1746,6 +1746,25 @@ export const en = {
     quoteMissingPackage: "Missing package",
   },
 
+  /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
+  editor: {
+    aria: "LaTeX source editor",
+    saved: "Saved",
+    unsaved: "Unsaved",
+    saving: "Saving…",
+    saveFailed: "Couldn't save",
+    conflictState: "Conflict",
+    cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
+    conflictBanner: "This file changed on disk while you were editing. Nothing was overwritten.",
+    errorBanner: "Couldn't save this file.",
+    conflictAfterClose: "Not saved: the file changed on disk while you were editing. Reopen the tab to resolve it.",
+    conflictBlocksCompile: "Not compiled: resolve the file conflict first — the editor's copy and the disk disagree.",
+    resolveConflictFirst: "Resolve the file conflict first (reload from disk or keep mine).",
+    reload: "Reload from disk",
+    keepMine: "Keep mine",
+    tooLarge: (size: string, limit: string) => `Not saved: ${size} is over the ${limit} editor limit.`,
+  },
+
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "Intent",

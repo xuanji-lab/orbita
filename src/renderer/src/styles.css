@@ -2913,6 +2913,150 @@ body {
   color: var(--color-danger);
 }
 
+/* ---------- 源码编辑器（.tex 标签，PR4） ----------
+ * 编辑器吃满预览体：body 让出内边距与滚动（滚动在 CodeMirror 的 .cm-scroller 里，
+ * 行号槽跟着滚）；上下是冲突/错误条与状态行，都不随正文滚。
+ * 语法着色只引用 token——五个变量在这里声明，深浅主题、纸面主题自动跟随；
+ * accent 保留给主操作，所以命令靠字重而不是颜色区分。 */
+.file-preview-body[data-kind="tex"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.tex-editor {
+  --tex-cmd: var(--color-text-primary);
+  --tex-argument: var(--color-text-secondary);
+  --tex-math: var(--color-info);
+  --tex-number: var(--color-text-secondary);
+  --tex-comment: var(--color-text-tertiary);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--color-bg-panel);
+}
+.tex-editor-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.tex-editor-host .cm-editor {
+  height: 100%;
+}
+.tex-editor-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-secondary);
+}
+.tex-editor-status[data-phase="dirty"] .tex-editor-save-state {
+  color: var(--color-warning);
+}
+.tex-editor-status[data-phase="conflict"] .tex-editor-save-state,
+.tex-editor-status[data-phase="error"] .tex-editor-save-state {
+  color: var(--color-danger);
+}
+/* 保存中的转圈：CSS 转，不引图标组件（状态行只有 11px） */
+.tex-editor-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--color-border-strong);
+  border-top-color: var(--color-text-secondary);
+  border-radius: 50%;
+  animation: tex-editor-spin 0.8s linear infinite;
+}
+@keyframes tex-editor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 冲突 / 保存失败条：颜色只是第二信号，图标与文字已在说同一件事 */
+.tex-editor-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.tex-editor-banner[data-tone="warning"] .tex-editor-banner-icon {
+  color: var(--color-warning);
+}
+.tex-editor-banner[data-tone="danger"] .tex-editor-banner-icon {
+  color: var(--color-danger);
+}
+.tex-editor-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tex-editor-banner-detail {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+.tex-editor-banner-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.tex-editor-banner-acts .quiet-control {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+/* 标签上的未保存圆点：与 ✕ 共用同一个 16px 槽位（CSS 负责悬停换位） */
+.files-tab-tail {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+.files-tab-tail .files-tab-close {
+  position: absolute;
+  inset: 0;
+}
+.files-tab-dirty {
+  display: grid;
+  place-items: center;
+  color: var(--color-warning);
+}
+.cap-tab:hover .files-tab-dirty {
+  display: none;
+}
+/* 脏标签默认只露圆点；✕ 悬停才出现（含当前选中的标签——否则选中的脏标签
+   永远显示 ✕，圆点等于不存在）。选择器比重与上面 .cap-tab[aria-selected] 那条对齐 */
+.cap-tab .files-tab-close.is-dirty,
+.cap-tab[aria-selected="true"] .files-tab-close.is-dirty {
+  opacity: 0;
+}
+.cap-tab:hover .files-tab-close.is-dirty,
+.cap-tab[aria-selected="true"]:hover .files-tab-close.is-dirty,
+.cap-tab:focus-within .files-tab-close.is-dirty {
+  opacity: 1;
+}
+
 /*
  * 预览头：标签页模型下关闭归标签 ✕ 与 Esc 管，头部只剩面包屑（从所在根开始的
  * 路径分段 + size·mtime）与动作。面包屑分段由 crumbSegmentsFromRoot 从根的名
