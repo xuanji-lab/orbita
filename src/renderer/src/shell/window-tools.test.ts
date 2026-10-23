@@ -27,6 +27,7 @@ import {
   TRAFFIC_LIGHT_Y,
   conversationColumn,
   leftCapsuleX,
+  paperColumns,
   rightEdge,
   sessionCapsule,
 } from "./window-tools.ts";
@@ -302,4 +303,22 @@ test("会话胶囊窄时逐级让位、不重叠：中栏可缩、两侧保内�
   assert.match(css, /\.cap-sess \.cap-sc \{[^}]*justify-self:\s*stretch/s, "中栏按内容定宽会溢出轨道");
   assert.match(css, /\.cap-title \{[^}]*min-width:\s*0/s, "flex 子项不设 min-width:0 省略号不生效");
   assert.match(css, /@container \(max-width: 380px\) \{\s*\.cap-sess \.cap-sid \{\s*display:\s*none/, "第一档：短 id 先藏");
+});
+
+test("布局 B 的横向分区：对话栏钉右缘 340，工作台吃掉其余；侧栏展开时工作台从侧栏右缘起", () => {
+  // 1920 窗口、侧栏收起：pane 右缘 = 1920 − 12 − 32 − 12 = 1864，对话栏 = 1524..1864
+  const wide = paperColumns({ windowWidth: 1920, sidebarCollapsed: true, sidebarWidth: 288 });
+  assert.deepEqual(wide.chat, { left: 1524, right: 1864 });
+  assert.deepEqual(wide.workbench, { left: 12, right: 1524 });
+
+  // 侧栏展开：工作台从侧栏右缘 + 留白起（对话栏宽度不变）
+  const withSidebar = paperColumns({ windowWidth: 1920, sidebarCollapsed: false, sidebarWidth: 288 });
+  assert.equal(withSidebar.workbench.left, 12 + 288 + 12);
+  assert.equal(withSidebar.chat.right - withSidebar.chat.left, 340);
+  assert.equal(withSidebar.workbench.right, withSidebar.chat.left);
+
+  // 窄窗口：对话栏不越过 pane 左缘（workbench 宽度不为负）
+  const narrow = paperColumns({ windowWidth: 700, sidebarCollapsed: true, sidebarWidth: 288 });
+  assert.ok(narrow.workbench.right >= narrow.workbench.left);
+  assert.equal(narrow.chat.right - narrow.chat.left <= 340, true);
 });

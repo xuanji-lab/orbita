@@ -17,6 +17,7 @@ import {
   WIN_CTL_W,
   conversationColumn,
   leftCapsuleX,
+  paperColumns,
   rightEdge,
   sessionCapsule,
   type ToolbarPlatform,
@@ -45,6 +46,12 @@ export function Toolbar(props: {
   panelWidth: number;
   /** 窄窗（<960）：右栏转右侧锚定覆盖层，胶囊跟着锚右、用默认宽 */
   narrow: boolean;
+  /**
+   * 论文工作台的布局 B（稿件为主）：工作台的页头住在卡里（不占右栏胶囊），工具栏
+   * 换成「会话胶囊居中于工作台 + 右侧一栏顶上写「对话」」。栏宽常量在
+   * features/files/paper-layout.ts，坐标由 paperColumns 算。
+   */
+  paper: boolean;
   /** 会话胶囊内容（SessionCapsule / 设置标题）；null = 不渲染（首页） */
   sessionSlot: React.ReactNode;
   /** 右栏胶囊宿主挂好时回填（portal 目标） */
@@ -84,19 +91,34 @@ export function Toolbar(props: {
     // 只挂一次：胶囊的三个格都是常驻 / 受控替换，量的是同一颗胶囊的内容
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const col = conversationColumn({
-    windowWidth: props.windowWidth,
-    sidebarCollapsed: props.sidebarCollapsed,
-    sidebarWidth: props.sidebarWidth,
-    panelOpen: props.panelOpen && !props.narrow,
-    panelWidth: props.panelWidth,
-  });
-  const limit = rightEdge({
-    windowWidth: props.windowWidth,
-    platform: props.platform,
-    panelOpen: props.panelOpen && !props.narrow,
-    panelWidth: props.panelWidth,
-  });
+  /** 布局 B 的工作台 / 对话栏分区；null = 布局 A 的常态 */
+  const paperCols = props.paper
+    ? paperColumns({
+        windowWidth: props.windowWidth,
+        sidebarCollapsed: props.sidebarCollapsed,
+        sidebarWidth: props.sidebarWidth,
+      })
+    : null;
+  const col =
+    paperCols === null
+      ? conversationColumn({
+          windowWidth: props.windowWidth,
+          sidebarCollapsed: props.sidebarCollapsed,
+          sidebarWidth: props.sidebarWidth,
+          panelOpen: props.panelOpen && !props.narrow,
+          panelWidth: props.panelWidth,
+        })
+      : paperCols.workbench;
+  // 会话胶囊右缘收在工作台右缘（再往右就是「对话」胶囊，两颗不叠）
+  const limit =
+    paperCols === null
+      ? rightEdge({
+          windowWidth: props.windowWidth,
+          platform: props.platform,
+          panelOpen: props.panelOpen && !props.narrow,
+          panelWidth: props.panelWidth,
+        })
+      : paperCols.chat.left;
   const sess = sessionCapsule({
     windowWidth: props.windowWidth,
     colLeft: col.left,
@@ -115,6 +137,14 @@ export function Toolbar(props: {
   const panelLeft = props.narrow
     ? toggleLeft - PANEL_CAPSULE_INSET - panelW
     : col.right + PANEL_CAPSULE_INSET;
+  /** 布局 B：「对话」胶囊盖住右侧一栏（左缘 = 分栏线 + 内缩，同右栏胶囊的配方） */
+  const paperChat =
+    paperCols === null
+      ? null
+      : {
+          left: paperCols.chat.left + PANEL_CAPSULE_INSET,
+          width: paperCols.chat.right - paperCols.chat.left - 2 * PANEL_CAPSULE_INSET,
+        };
 
   return (
     <div className="titlebar toolbar" data-platform={props.platform}>
@@ -176,10 +206,24 @@ export function Toolbar(props: {
         </div>
       )}
 
-      {/* 右栏胶囊：各面板的页头内容 portal 进这个宿主；切面板外框不动、内容淡入 */}
-      {props.panelOpen && (
+      {/* 右栏胶囊：各面板的页头内容 portal 进这个宿主；切面板外框不动、内容淡入。
+          布局 B 里没有这颗胶囊：工作台占的是主位，它的页头画在卡里（见 RightPanelFrame
+          的 inline） */}
+      {props.panelOpen && paperChat === null && (
         <div className="toolbar-capsule cap-panel" style={{ left: panelLeft, width: panelW }}>
           <div ref={props.onPanelSlot} className="cap-panel-slot" />
+        </div>
+      )}
+
+      {/* 布局 B：右侧 340 一栏顶上的「对话」胶囊（原型：这一栏的标题写「对话」） */}
+      {paperChat !== null && (
+        <div className="toolbar-capsule cap-panel" style={{ left: paperChat.left, width: paperChat.width }}>
+          <div className="cap-panel-content">
+            <span className="cap-pt">
+              <Icon name="message-square" size={16} strokeWidth={1.8} />
+              <strong>{t.paper.chatTitle}</strong>
+            </span>
+          </div>
         </div>
       )}
 
