@@ -397,20 +397,60 @@ export function FilesPanel(props: {
   // styles.css 的 container query 裁决，这里只更新状态
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const narrowRef = useRef(false);
+  /**
+   * 「退出布局 B」这一拍面板会同时变窄，而下面的「拉窄即折叠」会把它刚恢复的树
+   * 又折掉（那不是用户拉窄）。恢复时置一次标记，让那条规则放过这次布局切换；
+   * 500ms 后自动失效，免得没有宽度变化时标记一直挂着、吞掉下一次真正的拉窄。
+   */
+  const skipCollapseRef = useRef(false);
   useEffect(() => {
     const el = bodyRef.current;
     if (el === null) return;
     let lastWidth: number | null = null;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? 0;
-      // 首帧只记宽、不动作：面板挂载时不该把已经开着的树折掉
-      if (shouldCollapseOnNarrow(lastWidth, width)) setTreeOn(false);
+      // 首帧只记宽、不动作（lastWidth === null）：面板挂载时不该把已经开着的树折掉。
+      // 退出 B 的宽度是 200ms 过渡出来的，回调会来很多次——跳过标记必须在整段过渡里都
+      // 有效，不能第一次回调就清（清早了后面的几帧照样把树折掉）
+      if (!skipCollapseRef.current && shouldCollapseOnNarrow(lastWidth, width)) setTreeOn(false);
       lastWidth = width;
       narrowRef.current = width < TREE_BREAKPOINT;
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  /**
+   * 布局 B 里文件树自动收起：树占掉 224 以后，并排的两块只剩 280–300——正是原型里
+   * 判「三块都读不了」的那个形态（B 的原型画面本来也没有树）。退出 B 时恢复**进 B
+   * 之前**的开合态（与侧栏同一套记忆纪律）；布局 A 的宽屏自动并排不跟——那里宽度够。
+   * B 里要看树随时点「文件」展开。
+   *
+   * 恢复时如果面板此刻是窄的（<640，树只能是浮层），不自动弹出：那是又一层盖在内容上
+   * 的面，交给用户自己点；既有的「拉窄即折叠」本来也会把它折回去。
+   */
+  const treeOnRef = useRef(treeOn);
+  treeOnRef.current = treeOn;
+  const treeBeforePaperRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (props.paperLayout === true) {
+      if (treeBeforePaperRef.current === null) treeBeforePaperRef.current = treeOnRef.current;
+      setTreeOn(false);
+      return;
+    }
+    const before = treeBeforePaperRef.current;
+    if (before === null) return;
+    treeBeforePaperRef.current = null;
+    const restore = before && !narrowRef.current;
+    if (restore) {
+      // 「拉窄即折叠」会看到退出 B 带来的缩窄——那是布局切换，不是用户拉窄
+      skipCollapseRef.current = true;
+      window.setTimeout(() => {
+        skipCollapseRef.current = false;
+      }, 500);
+    }
+    setTreeOn(restore);
+  }, [props.paperLayout]);
 
   /** 关闭一个标签；关掉最后一个 = 回纯树，treeOn 一并复位——之后从 solo 点开
    * 文件不会突然顶着浮层 / 并排列（树的展开理由随最后一个文件消失） */
