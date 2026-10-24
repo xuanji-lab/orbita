@@ -519,8 +519,10 @@ describe("缓存与拉取退回", () => {
   test("缓存路径挨着 pi 目录缓存（CATALOG_CACHE_ENV 的同目录）；读坏的当没有；applyTokenrhythmFromCache 从环境变量给的路径读", async () => {
     const previous = process.env[CATALOG_CACHE_ENV];
     try {
-      process.env[CATALOG_CACHE_ENV] = "/tmp/orbita-test/model-catalog-cache.json";
-      assert.equal(tokenrhythmCachePath(), "/tmp/orbita-test/tokenrhythm-catalog.json");
+      // 期望值也过 join：实现用 path.join，Windows 上分隔符是反斜杠（写死 POSIX 串在 Windows 上必挂）
+      const base = join(tmpdir(), "orbita-test");
+      process.env[CATALOG_CACHE_ENV] = join(base, "model-catalog-cache.json");
+      assert.equal(tokenrhythmCachePath(), join(base, "tokenrhythm-catalog.json"));
       const dir = mkdtempSync(join(tmpdir(), "orbita-tr-cache-"));
       const bad = join(dir, "tokenrhythm-catalog.json");
       writeFileSync(bad, "{ not json");
