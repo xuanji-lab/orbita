@@ -244,18 +244,47 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  */
 export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
 
-// ── 沙箱租约（同一时间只归一个会话）──────────────────────────────────
+// ── 沙箱租约（按资源切分：桌面独占 + 每会话浏览器）────────────────────
 
 /**
- * 沙箱是**一份**（应用级单例：一个 Windows Sandbox、一份 guest 桥、沙箱里一页 Edge），
- * 而 agent 会话可以是**多个**（主会话 + 它派出的子会话真并发）。命令在 guest 桥里串行，
- * 但两条独立动作序列会任意交错：A 点框 → B 点另一个框 → A `computer_type`，文字进了 B 的框；
- * A 用自己截图的坐标去点、屏幕已被 B 换掉 → 点错元素；CDP 只有一页，B 的导航换掉 A 在读的页面。
- * 两边都收到「成功」——这是零归属的并发，不是资源竞争。
+ * 沙箱里真正稀缺的东西**不是整台机器，而是那块桌面**：像素工具（截图 / 点击 / 打字 / 按键 /
+ * 滚动）动的是唯一一块屏幕与唯一一个前台焦点，两个会话交错就是 A 的文字落进 B 的框。
  *
- * 所以沙箱对外是一个**独占租约**：拿到才下发，拿不到就给模型一句人话。数值定在这里
- * （而不是 lease.ts 里）是因为两侧都要读：租约自己判超时，工具描述要告诉模型「会被占用」
- * 且不要重试。
+ * 浏览器通道（`sandbox_*`）从每会话一个 Edge 起就不再共享了：A 的 cdp-nav 只换 A 自己那个
+ * 实例的页面，碰不到 B 的。所以它不该去排桌面的队——否则「网页任务并行」等于没做，
+ * 一个会话在网页上的长轮次会把所有会话的浏览器操作串起来。
+ *
+ * 于是租约按**资源键**切分：
+ *   desktop:exclusive  桌面独占（像素 / 前台 / 整屏截图），数值见 COMPUTER_USE_LEASE
+ *   browser:<session>  每会话一把（自己的浏览器永远立即可用，不排队、不设 idle / 硬上限）
+ * 每个键独立持有者、独立队列、独立计时；revoke 仍然一次清掉所有键（沙箱没了，谁都用不了）。
+ */
+export const COMPUTER_USE_DESKTOP_KEY = "desktop:exclusive";
+
+/** 浏览器键的前缀（lease.ts 靠它选策略；两端字符串必须一致） */
+export const COMPUTER_USE_BROWSER_KEY_PREFIX = "browser:";
+
+/**
+ * 会话 → 它的浏览器资源键。
+ *
+ * 用**原始会话 id**，不用 safeBrowserSessionId 归一化后的桥侧键：那个键会把非法字符换成 `_`
+ * 并截到 48 字，两个不同的宿主会话（`a/b` 与 `a_b`）会撞成同一个键，于是两个会话又被串到
+ * 一把租约上——正是这一层要拆开的东西。空 id 退回 default（与桥的缺省会话同义）。
+ */
+export function browserKey(sessionId: string): string {
+  const raw = sessionId.trim() === "" ? COMPUTER_USE_DEFAULT_BROWSER_SESSION : sessionId;
+  return COMPUTER_USE_BROWSER_KEY_PREFIX + raw;
+}
+
+/**
+ * 桌面键的数值。
+ *
+ * 桌面是**一份**（一块屏幕、一个前台焦点），而 agent 会话可以是**多个**（主会话 + 它派出的
+ * 子会话真并发）。命令在 guest 桥里串行，但两条独立动作序列会任意交错：A 点框 → B 点另一个框
+ * → A `computer_type`，文字进了 B 的框；A 用自己截图的坐标去点、屏幕已被 B 换掉 → 点错元素。
+ * 两边都收到「成功」——这是零归属的并发，不是资源竞争。所以桌面对外是一个**独占租约**：
+ * 拿到才下发，拿不到就给模型一句人话。数值定在这里（而不是 lease.ts 里）是因为两侧都要读：
+ * 租约自己判超时，工具描述要告诉模型「会被占用」且不要重试。
  */
 export const COMPUTER_USE_LEASE = {
   /**
@@ -280,6 +309,21 @@ export const COMPUTER_USE_LEASE = {
 } as const;
 
 /**
+ * 浏览器键的数值：**不排队、不限时**。
+ *
+ * 键里带着会话 id，持有者只可能是它自己——所以 acquire 永远立刻成功（同会话幂等的续期），
+ * 既没有 30 秒等待，也没有「占得太久」的硬上限（一个跑长网页任务的会话没有占着任何别人的
+ * 东西）。idle 也不设：浏览器自己是否回收由桥的 COMPUTER_USE_BROWSER_IDLE_MS 管，租约只记
+ * 归属，不替它决定生命周期。
+ */
+export const COMPUTER_USE_BROWSER_LEASE = {
+  waitMs: 0,
+  queueLimit: 0,
+  idleMs: null,
+  holdMaxMs: null,
+} as const;
+
+/**
  * 租约错误。文案是**给模型读的**：它看不见 UI，也不会自己想到「另一个会话占着」——
  * 不写清楚它会立刻重试，而重试正好是这里最不该做的事（对方还在用）。
  */
@@ -300,6 +344,13 @@ export const computerUseLeaseErrors = {
   revoked: (reason: string): string =>
     `沙箱已经关闭（${reason}），操作权全部作废，这条命令没有下发。` +
     "不要重试：先在「设置 › 实验功能 › 电脑使用」里重新启动沙箱，再从头开始。",
+  /**
+   * 不排队的资源被另一个会话持有。浏览器键按会话切分，正常走不到这里；这条只兜
+   * 「调用方给错了键」的编程错误——仍然给一句模型能转告用户的话，而不是抛异常。
+   */
+  busy: (holderTitle: string): string =>
+    `这个通道现在归另一个会话${holderSuffix(holderTitle)}，本操作不排队，这条命令没有下发。` +
+    "不要重试：等对方那一轮结束后再试。",
 } as const;
 
 /** 文案里带占用者名字的尾巴（没有标题的会话——刚建、还没起名的——只报 id 少了信息量，就退成一句不带名字的话） */
@@ -313,6 +364,49 @@ function holderSuffix(title: string): string {
  * 调用方不必再拼一遍。
  */
 export type ComputerUseLeaseResult = { ok: true } | { ok: false; error: string };
+
+// ── 租约审计（归属、等待与持有时长，决定后续路线用真实数据）──────────────
+
+/**
+ * 一条租约账：**每次** acquired / released / rejected 记一条（内存、进程生命周期内）。
+ *
+ * 为什么记 `waitedMs` 与 `heldMs` 两个时长而不是只记事件：v1.5-2 要回答的是
+ * 「桌面到底挤不挤」——排了多久、占了多久，决定后面是继续拆资源、还是把像素工具也搬到
+ * 每会话实例里。只有事件计数回答不了这个问题。
+ */
+export interface ComputerUseLeaseAuditRecord {
+  kind: "acquired" | "released" | "rejected";
+  /** 资源键（desktop:exclusive 或 browser:<session>） */
+  key: string;
+  sessionId: string;
+  /** 从调用 acquire 到真正拿到手的毫秒数（立刻拿到为 0；released / rejected 带当初的等待） */
+  waitedMs: number;
+  /** 持有到放手的毫秒数（acquired / rejected 为 0） */
+  heldMs: number;
+  /** 记账时刻的队列深度（不含持有者） */
+  queueDepth: number;
+  /** 记账时刻（epoch ms） */
+  at: number;
+}
+
+/** 按 key 聚合的租约统计（stats() 的返回项） */
+export interface ComputerUseLeaseKeyStats {
+  key: string;
+  /** 成功拿到手的次数 */
+  acquired: number;
+  /** 放手的次数（主动 / idle / 硬上限 / revoke） */
+  released: number;
+  /** 被拒的次数（超时 / 队列满 / 不排队的资源被占） */
+  rejected: number;
+  /** 平均等待（只算真正拿到手的那些） */
+  averageWaitMs: number;
+  /** 平均持有（只算已放手的那些） */
+  averageHeldMs: number;
+  /** 此刻的队列深度（不含持有者） */
+  queueDepth: number;
+  /** 此刻的持有者会话 id（没有就是 null） */
+  owner: string | null;
+}
 
 // ── 沙箱状态机 ────────────────────────────────────────────────────────
 
