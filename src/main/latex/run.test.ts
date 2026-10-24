@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LatexProbe } from "./probe.ts";
 import { LatexRunner } from "./run.ts";
-import type { LatexResult, LatexRunOutcome } from "../../shared/latex.ts";
+import { latexMaxConcurrent, LATEX_IDLE_TIMEOUT_MS, LATEX_TOTAL_TIMEOUT_MS, type LatexResult, type LatexRunOutcome } from "../../shared/latex.ts";
 
 const roots: string[] = [];
 const nodeExe = process.execPath;
@@ -52,8 +52,28 @@ function probe(available = true): LatexProbe {
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
-/** 挂死的 node 进程：测超时与取消用，不烧 CPU */
+/** 挂死的 node 进程：不写任何日志，测总时长闸与取消用，不烧 CPU */
 const HANG = ["-e", "setTimeout(() => undefined, 60000)"];
+
+/** 有 main.tex 但不带 recipe 的项目 */
+function plainProject(): string {
+  return project({ "main.tex": "\\documentclass{article}\\begin{document}hi\\end{document}" });
+}
+
+/**
+ * 在项目里装一个假编译器（`recipe[0]` = node，脚本收项目目录作 argv[2]）。
+ * 超时判据只看日志文件，所以这里的脚本要能精确控制 .log 的写入节奏。
+ */
+function fakeCompiler(dir: string, lines: string[]): void {
+  const script = join(dir, "fake-compiler.mjs");
+  writeFileSync(script, lines.join("\n"), "utf8");
+  mkdirSync(join(dir, ".orbita"), { recursive: true });
+  writeFileSync(
+    join(dir, ".orbita", "latex.json"),
+    JSON.stringify({ recipe: [nodeExe, script, "%DIR%"] }),
+    "utf8",
+  );
+}
 
 /** 断言 outcome 成功并取 result（失败时把 error 抛出来，别让断言变成 undefined 爆炸） */
 function resultOf(outcome: LatexRunOutcome): LatexResult {
@@ -83,56 +103,175 @@ describe("LatexRunner —— 拒绝路径", () => {
   });
 });
 
-describe("LatexRunner —— 超时与取消", () => {
-  test("超时：按构造参数缩到 300ms，杀进程树后返回 timeout", async () => {
-    const dir = texProject([nodeExe, ...HANG]);
-    const runner = new LatexRunner(probe(), { timeoutMs: 300 });
+describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () => {
+  test("日志一直在写就不算卡住：慢编译（模拟首次 xelatex 建字体缓存）不被误杀", async () => {
+    const dir = plainProject();
+    // 每 100ms 写一行日志、忙等 100ms，共 2 秒——比缩小的 1.2 秒静默阀持久得多
+    // （整机跑全量测试时进程会被 OS 调度延迟，阀值留的余量要大于一次调度停顿）
+    fakeCompiler(dir, [
+      'import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'mkdirSync(join(dir, "build"), { recursive: true });',
+      'const log = join(dir, "build", "main.log");',
+      "for (let i = 0; i < 20; i += 1) {",
+      '  appendFileSync(log, `[${i}] 建字体缓存…\\n`);',
+      "  const end = Date.now() + 100;",
+      "  while (Date.now() < end) { /* 忙等，模拟引擎在排版 */ }",
+      "}",
+      'writeFileSync(join(dir, "build", "main.pdf"), "%PDF-1.4 fake\\n");',
+      'appendFileSync(log, "Output written on build/main.pdf (2 pages, 9 bytes).\\n");',
+    ]);
+    const runner = new LatexRunner(probe(), { idleTimeoutMs: 1_200, totalTimeoutMs: 30_000, pollIntervalMs: 50 });
+    const started = Date.now();
+    const result = resultOf(await runner.compile({ dir }));
+    const elapsed = Date.now() - started;
+    assert.equal(result.status, "ok");
+    assert.equal(result.timeoutKind, null);
+    assert.equal(result.pages, 2);
+    assert.ok(elapsed >= 1_900, `只跑了 ${elapsed}ms，假编译器没按预期写满日志`);
+  });
+
+  test("日志静默到点：杀进程树，status timeout + timeoutKind idle；文案不断言死循环", async () => {
+    const dir = plainProject();
+    // 只写一行日志就挂住：之后一直没有新输出，就是死循环的样子
+    fakeCompiler(dir, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'mkdirSync(join(dir, "build"), { recursive: true });',
+      'writeFileSync(join(dir, "build", "main.log"), "starting…\\n");',
+      "setTimeout(() => undefined, 60000);",
+    ]);
+    const runner = new LatexRunner(probe(), { idleTimeoutMs: 400, totalTimeoutMs: 30_000, pollIntervalMs: 50 });
     const started = Date.now();
     const result = resultOf(await runner.compile({ dir }));
     const elapsed = Date.now() - started;
     assert.equal(result.status, "timeout");
-    assert.ok(elapsed >= 300, `只等了 ${elapsed}ms，超时没生效`);
+    assert.equal(result.timeoutKind, "idle");
+    assert.ok(elapsed >= 400, `只等了 ${elapsed}ms，静默超时没生效`);
+    assert.ok(elapsed < 10_000, `等了 ${elapsed}ms，静默超时没有尽快生效`);
+    // 日志按 4 KiB 块落盘，合法但耗时的编译也会长时间不动，所以不能断言“卡住”
+    assert.match(result.errors[0]?.message ?? "", /连续 \d+\.\d 秒没有新的日志输出/);
+    assert.match(result.errors[0]?.message ?? "", /可能是长时间计算/);
+    assert.doesNotMatch(result.errors[0]?.message ?? "", /编译卡住/);
     // 挂死的进程被杀了：runner 手里不再有子进程（cancelAll 是幂等的空转）
     runner.cancelAll();
   });
 
+  test("日志一份都没生成：不算静默，交给总时长闸（区分 timeoutKind total）", async () => {
+    const dir = texProject([nodeExe, ...HANG]);
+    const runner = new LatexRunner(probe(), { idleTimeoutMs: 200, totalTimeoutMs: 700, pollIntervalMs: 50 });
+    const started = Date.now();
+    const result = resultOf(await runner.compile({ dir }));
+    const elapsed = Date.now() - started;
+    assert.equal(result.status, "timeout");
+    assert.equal(result.timeoutKind, "total", "没有日志时不能按静默判卡住");
+    assert.ok(elapsed >= 700, `只等了 ${elapsed}ms，总时长闸没生效`);
+    assert.match(result.errors[0]?.message ?? "", /总时长上限/);
+    // 日志一份都没生成（自定义 recipe 不写 .log）：文案要说清“没有可用的日志输出”
+    assert.match(result.errors[0]?.message ?? "", /没有可用的日志输出/);
+  });
+
+  test("日志被轮换（删除）后：按进程存活处理，仍然只在总时长到点被杀", async () => {
+    const dir = plainProject();
+    fakeCompiler(dir, [
+      'import { mkdirSync, rmSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'mkdirSync(join(dir, "build"), { recursive: true });',
+      'const log = join(dir, "build", "main.log");',
+      'writeFileSync(log, "round one\\n");',
+      "setTimeout(() => rmSync(log, { force: true }), 300);",
+      "setTimeout(() => undefined, 60000);",
+    ]);
+    const runner = new LatexRunner(probe(), { idleTimeoutMs: 400, totalTimeoutMs: 1_200, pollIntervalMs: 50 });
+    const started = Date.now();
+    const result = resultOf(await runner.compile({ dir }));
+    const elapsed = Date.now() - started;
+    assert.equal(result.status, "timeout");
+    assert.equal(result.timeoutKind, "total", "日志消失不等于进程卡住");
+    assert.ok(elapsed >= 1_200, `只等了 ${elapsed}ms，说明删除日志后被当成静默提前杀了`);
+    // 见过日志（后来被轮换）：不能反过来说“没有可用的日志输出”
+    assert.doesNotMatch(result.errors[0]?.message ?? "", /没有可用的日志输出/);
+  });
+
   test("取消：cancelAll 杀掉在编的进程，回 cancelled 而不是挂着", async () => {
     const dir = texProject([nodeExe, ...HANG]);
-    const runner = new LatexRunner(probe(), { timeoutMs: 30_000 });
+    const runner = new LatexRunner(probe(), { idleTimeoutMs: 30_000, totalTimeoutMs: 30_000 });
     const pending = runner.compile({ dir });
     await sleep(300);
     runner.cancelAll();
     const result = resultOf(await pending);
     assert.equal(result.status, "cancelled");
+    assert.equal(result.timeoutKind, null);
   });
 });
 
-describe("LatexRunner —— 并发互斥", () => {
+describe("LatexRunner —— 并发（按内存定上限，满了明确拒绝）", () => {
   test("同项目第二次请求被拒；第一次仍按取消收尾", async () => {
     const dir = texProject([nodeExe, ...HANG]);
-    const runner = new LatexRunner(probe(), { timeoutMs: 30_000 });
+    const runner = new LatexRunner(probe(), { totalTimeoutMs: 30_000, totalMemoryBytes: 32 * 1024 ** 3 });
     const first = runner.compile({ dir });
     await sleep(300);
     const second = await runner.compile({ dir });
     assert.equal(second.ok, false);
+    assert.equal(second.ok ? null : second.reason, "same-project");
     assert.match(second.ok ? "" : second.error, /already running/i);
     runner.cancelAll();
     assert.equal(resultOf(await first).status, "cancelled");
   });
 
-  test("全局最多同时 2 个：第三个项目被拒", async () => {
+  test("16 GiB 机器：第二个项目明确拒绝（reason busy + 中文请稍后），不排队", async () => {
+    const a = texProject([nodeExe, ...HANG]);
+    const b = texProject([nodeExe, ...HANG]);
+    const runner = new LatexRunner(probe(), { totalTimeoutMs: 30_000, totalMemoryBytes: 16 * 1024 ** 3 });
+    const first = runner.compile({ dir: a });
+    await sleep(300);
+    const second = await runner.compile({ dir: b });
+    assert.equal(second.ok, false, "低内存机不允许第二个编译开跑");
+    assert.equal(second.ok ? null : second.reason, "busy");
+    assert.match(second.ok ? "" : second.error, /at most 1 at a time/);
+    assert.match(second.ok ? "" : second.error, /do not queue/);
+    runner.cancelAll();
+    assert.equal(resultOf(await first).status, "cancelled");
+  });
+
+  test(">16 GiB 机器：仍然同时跑 2 个，第三个被拒", async () => {
     const a = texProject([nodeExe, ...HANG]);
     const b = texProject([nodeExe, ...HANG]);
     const c = texProject([nodeExe, ...HANG]);
-    const runner = new LatexRunner(probe(), { timeoutMs: 30_000 });
+    const runner = new LatexRunner(probe(), { totalTimeoutMs: 30_000, totalMemoryBytes: 32 * 1024 ** 3 });
     const first = runner.compile({ dir: a });
     const second = runner.compile({ dir: b });
     await sleep(400);
     const third = await runner.compile({ dir: c });
     assert.equal(third.ok, false);
-    assert.match(third.ok ? "" : third.error, /2 LaTeX builds are running/);
+    assert.equal(third.ok ? null : third.reason, "busy");
+    assert.match(third.ok ? "" : third.error, /at most 2 at a time/);
     runner.cancelAll();
     await Promise.all([first, second]);
+  });
+});
+
+describe("latexMaxConcurrent —— 内存阀值边界", () => {
+  test("16 GiB 是阀值：等于→1，多 1 字节→2；GB 与 GiB 的换算不能搞反", () => {
+    const gib = 1024 ** 3;
+    assert.equal(latexMaxConcurrent(16 * gib), 1, "标称 16 GB = 16 GiB，必须落进低内存档");
+    assert.equal(latexMaxConcurrent(16 * gib + 1), 2);
+    // 16 GB 机器 os.totalmem() 的典型报值：固件 / 内核保留掉一点，略小于 16 GiB
+    assert.equal(latexMaxConcurrent(15.9 * gib), 1);
+    assert.equal(latexMaxConcurrent(24 * gib), 2);
+    assert.equal(latexMaxConcurrent(32 * gib), 2);
+    // 十进制的 16 GB 当然也落在 ≤16 GiB 里（要是按 16e9 当阀值，16 GiB 机器反而会漏过）
+    assert.equal(latexMaxConcurrent(16_000_000_000), 1);
+  });
+
+  test("默认值：idle 300 秒（90 秒已被实测证伪）、总时长 10 分钟", () => {
+    assert.equal(LATEX_IDLE_TIMEOUT_MS, 300_000);
+    assert.equal(LATEX_TOTAL_TIMEOUT_MS, 600_000);
+    // 总时长闸必须比静默闸长，否则 idle 永远轮不到
+    assert.ok(LATEX_TOTAL_TIMEOUT_MS > LATEX_IDLE_TIMEOUT_MS);
   });
 });
 
