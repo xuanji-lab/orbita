@@ -244,6 +244,34 @@ describe("内建 provider 目录的到达时机（债务 B #2）", () => {
     assert.deepEqual(await ctx.host.listBuiltins(), providers);
     assert.equal(ctx.forks(), 1);
   });
+
+  test("目录刷新后再报一次：缓存换成新的，并交给 onEvent 广播（窗口不用刷新）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const model = (id: string) => ({
+      id,
+      contextWindow: 1_000_000,
+      maxTokens: 8_192,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+    });
+    const first = [{ id: "anthropic", name: "Anthropic", baseUrl: "https://a", api: "anthropic-messages", models: [model("old")] }];
+    const refreshed = [{ ...first[0]!, models: [model("old"), { ...model("claude-opus-5-5"), name: "Claude Opus 5.5" }] }];
+    const pending = ctx.host.listBuiltins();
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "builtins", providers: first });
+    await pending;
+    ctx.child().emit({ type: "builtins", providers: refreshed });
+    assert.deepEqual(await ctx.host.listBuiltins(), refreshed);
+    assert.deepEqual(
+      ctx.events.filter((event) => event.type === "builtins"),
+      [
+        { type: "builtins", providers: first },
+        { type: "builtins", providers: refreshed },
+      ],
+    );
+  });
 });
 
 describe("disposeSession —— 会话释放（刀 0-4 债务 A）", () => {
