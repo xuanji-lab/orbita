@@ -723,7 +723,7 @@ export const zh: Messages = {
     hideKey: "隐藏密钥",
     showKey: "显示密钥",
     // —— 浏览器登录订阅（oauth 目录条目专用：Claude / ChatGPT / GitHub Copilot / xAI）——
-    oauthAccount: (vendor) => `${vendor} 账号`,
+    oauthAccount: "账号",
     oauthLoginButton: (vendor) => `登录 ${vendor}`,
     oauthRelogin: "重新登录",
     oauthWaiting: "等待浏览器里完成授权…",

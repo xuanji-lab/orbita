@@ -808,7 +808,8 @@ export const en = {
     hideKey: "Hide key",
     showKey: "Show key",
     // —— 浏览器登录订阅（oauth 目录条目专用：Claude / ChatGPT / GitHub Copilot / xAI）——
-    oauthAccount: (vendor: string) => `${vendor} account`,
+    // 厂商名已经在详情头上了；标签栏只有 76px，「GitHub Copilot account」会折成三行
+    oauthAccount: "Account",
     oauthLoginButton: (vendor: string) => `Log in with ${vendor}`,
     oauthRelogin: "Log in again",
     oauthWaiting: "Waiting for authorization in the browser…",

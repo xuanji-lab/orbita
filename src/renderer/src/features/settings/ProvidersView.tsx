@@ -83,6 +83,8 @@ export function ProvidersView(props: {
   const [loggingIn, setLoggingIn] = useState(false);
   /** 设备码登录（Copilot / xAI）要用户在网页里输入的码；只在登录进行中显示 */
   const [deviceCode, setDeviceCode] = useState<OauthDeviceCode | null>(null);
+  /** 这次登录是用户自己点了取消：结束时不报红（那不是错误） */
+  const oauthCancelled = useRef(false);
   const [revealed, setRevealed] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
@@ -423,7 +425,9 @@ export function ProvidersView(props: {
     if (loggingIn || known === undefined) return;
     setLoggingIn(true);
     setDeviceCode(null);
-    setStatus({ tone: "busy", text: t.providers.oauthWaiting });
+    oauthCancelled.current = false;
+    // 账号行自己在转圈写「等待浏览器里完成授权…」，状态行不再重复一遍
+    setStatus(null);
     try {
       const result = await api.provider.oauthLogin({
         id: draft.id.trim(),
@@ -448,7 +452,7 @@ export function ProvidersView(props: {
       const account = updated?.auth.scheme === "oauth" ? updated.auth.account : null;
       setStatus({ tone: "ok", text: t.providers.oauthLoggedIn(account) });
     } catch (cause) {
-      setStatus({ tone: "bad", text: ipcErrorText(cause) });
+      setStatus(oauthCancelled.current ? null : { tone: "bad", text: ipcErrorText(cause) });
     } finally {
       setLoggingIn(false);
       setDeviceCode(null);
@@ -457,6 +461,7 @@ export function ProvidersView(props: {
 
   /** 叫停进行中的登录：主进程关掉回调服务器 / 停止轮询，oauthLogin 以「登录已取消」返回 */
   const cancelOauth = (): void => {
+    oauthCancelled.current = true;
     void api.provider.oauthCancel(draft.id.trim());
   };
 
@@ -919,7 +924,7 @@ export function ProvidersView(props: {
                   {oauthEntry ? (
                     <>
                     <div className="pv-fld">
-                      <label>{t.providers.oauthAccount(vendorName)}</label>
+                      <label>{t.providers.oauthAccount}</label>
                       <div className="pv-krow">
                         <span className="pv-oauth-state">
                           {loggingIn ? (
