@@ -156,11 +156,12 @@ describe("catalogPreferenceOf —— 设置页、菜单与会话装配共用的�
     });
   });
 
-  it("OpenCode Go 是「目录说了算」：聚合网关会收窄型号能力（kimi-k3 只开 max）", () => {
+  it("OpenCode Go 与基元律动是「目录说了算」：聚合网关会收窄型号能力（kimi-k3 只开 max）", () => {
     assert.equal(catalogPreferenceOf(byId("opencode-go")).catalogAuthoritative, true);
+    assert.equal(catalogPreferenceOf(byId("tokenrhythm")).catalogAuthoritative, true);
     // 其余条目都不是：白名单存在的意义就是赶在目录前面纠错
     for (const provider of KNOWN_PROVIDERS) {
-      if (provider.id === "opencode-go") continue;
+      if (provider.id === "opencode-go" || provider.id === "tokenrhythm") continue;
       assert.equal("catalogAuthoritative" in catalogPreferenceOf(provider), false, provider.id);
     }
   });

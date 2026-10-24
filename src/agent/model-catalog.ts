@@ -32,6 +32,7 @@ import { readFileSync } from "node:fs";
 import { writeJsonAtomic } from "../main/atomic-write.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { KNOWN_PROVIDERS } from "../shared/known-providers.ts";
+import { applyTokenrhythmFromCache, TOKENRHYTHM_CATALOG_ID } from "./tokenrhythm-catalog.ts";
 
 /** 刷新间隔。与 pi 的单家节流同为 4 小时（REMOTE_CATALOG_REFRESH_INTERVAL_MS，未导出） */
 export const CATALOG_REFRESH_EVERY_MS = 4 * 60 * 60 * 1000;
@@ -42,9 +43,13 @@ export const CATALOG_REFRESH_EVERY_MS = 4 * 60 * 60 * 1000;
  */
 const CATALOG_GATE_KEY = "orbita-catalog-refresh-placeholder";
 
-/** 预置服务商用到的 pi 目录 id（去重，保持表内顺序） */
+/** 预置服务商用到的 pi 目录 id（去重，保持表内顺序）。基元律动的 catalogId 不是 pi.dev 的条目——它的目录从它自己的接口刷新（tokenrhythm-catalog.ts），不向 pi.dev 要 */
 export function catalogIdsToRefresh(): string[] {
-  const ids = KNOWN_PROVIDERS.flatMap((provider) => (provider.catalogId === undefined ? [] : [provider.catalogId]));
+  const ids = KNOWN_PROVIDERS.flatMap((provider) =>
+    provider.catalogId === undefined || provider.catalogId === TOKENRHYTHM_CATALOG_ID
+      ? []
+      : [provider.catalogId],
+  );
   return [...new Set(ids)];
 }
 
@@ -118,9 +123,13 @@ export function catalogStore(): ModelsStore {
 /**
  * Orbita 里建 ModelRuntime 的唯一入口：不读 ~/.pi/agent，目录读 Orbita 自己的缓存，不联网。
  * 会话、起名、探测、列目录都走它——「能不能用某个模型」只该有一套真相。
+ * 建好顺手把基元律动的目录缓存灌进去（tokenrhythm-catalog.ts）：它不在 pi.dev 目录里，
+ * 但设置页与会话注册都把它当一条普通目录条目用。
  */
-export function createModelRuntime(store: ModelsStore = catalogStore()): Promise<ModelRuntime> {
-  return ModelRuntime.create({ modelsPath: null, modelsStore: store, credentials: new InMemoryCredentialStore() });
+export async function createModelRuntime(store: ModelsStore = catalogStore()): Promise<ModelRuntime> {
+  const runtime = await ModelRuntime.create({ modelsPath: null, modelsStore: store, credentials: new InMemoryCredentialStore() });
+  applyTokenrhythmFromCache(runtime);
+  return runtime;
 }
 
 export interface RefreshCatalogsInput {

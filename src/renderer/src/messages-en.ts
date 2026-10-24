@@ -64,6 +64,7 @@ const KNOWN_LABELS: Record<string, string> = {
   doubao: "Volcengine Ark",
   "ark-coding-plan": "Volcengine Ark Agent",
   "zhipu-coding-team": "Zhipu Team",
+  tokenrhythm: "TokenRhythm",
   "openai-responses-compatible": "OpenAI Responses-compatible",
 };
 

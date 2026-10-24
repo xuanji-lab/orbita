@@ -29,6 +29,7 @@ import {
   type PiModel,
 } from "./model-registration.ts";
 import { CATALOG_REFRESH_EVERY_MS, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
+import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import {
   createToolCallGate,
   describePermissionMode,
@@ -2110,12 +2111,15 @@ void listBuiltins().catch(() => undefined);
 const CATALOG_REFRESH_TIMEOUT_MS = 60_000;
 
 /**
- * 向 pi.dev 拉目录覆盖层，拉完重报一次目录（主进程缓存的是最后一份，设置页下次打开就是新的）。
- * 先报缓存、后联网：启动不等网络。失败只记日志——这家继续用旧缓存或内建快照。
+ * 向 pi.dev 拉目录覆盖层、向基元律动拉它自家的目录，拉完重报一次目录（主进程缓存的是最后一份，
+ * 设置页下次打开就是新的）。先报缓存、后联网：启动不等网络。失败只记日志——这家继续用旧缓存或内建快照。
  */
 async function refreshCatalogsAndRelist(): Promise<void> {
   const errors = await refreshCatalogs({ signal: AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS) });
   for (const [id, error] of errors) console.warn(`[catalog] ${id} 的目录没刷新成功，继续用旧的：${error.message}`);
+  const cachePath = tokenrhythmCachePath();
+  const tokenrhythm = await fetchTokenrhythmCatalog(cachePath === undefined ? {} : { cachePath });
+  if (!tokenrhythm.ok) console.warn(`[catalog] 基元律动目录没刷新成功，继续用旧的：${tokenrhythm.reason}`);
   await listBuiltins();
 }
 void refreshCatalogsAndRelist().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));

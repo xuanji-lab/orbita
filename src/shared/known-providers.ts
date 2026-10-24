@@ -434,6 +434,34 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "SuperGrok / X Premium 订阅",
   },
   {
+    id: "tokenrhythm",
+    label: "基元律动",
+    api: "openai-completions",
+    baseUrl: "https://tokenrhythm.studio/v1",
+    /*
+     * 出处（2026-10-24 查证）：https://tokenrhythm.studio/docs/api-integration 「接口概览」——
+     * 统一基础地址 https://tokenrhythm.studio/v1，OpenAI 对话 POST /v1/chat/completions、
+     * Anthropic 对话 POST /v1/messages（要 anthropic-version: 2023-06-01，且必须传 max_tokens）。
+     * Anthropic 接入方式填裸域：客户端（Anthropic SDK）自己接 /v1/messages，填 …/v1 会变 /v1/v1/messages。
+     * 两种协议同一个地址，与 OpenCode Go 那种两种地址的网关不同——选哪种接入方式只改协议，不改地址。
+     */
+    access: [
+      { api: "openai-completions", baseUrl: "https://tokenrhythm.studio/v1" },
+      { api: "anthropic-messages", baseUrl: "https://tokenrhythm.studio" },
+    ],
+    /*
+     * ⚠ catalogId 不是 pi.dev 的条目——它不在 models.dev 目录里。指向我们自建的基元律动目录
+     * （agent/tokenrhythm-catalog.ts：把它自家 https://tokenrhythm.studio/api/models 的公开目录
+     * 翻译成 pi 的一个 provider 条目注册进运行时），下游（设置页清单、参数推断、会话注册、
+     * 官方单价）把它当普通目录条目用；刷新不走 pi.dev（catalogIdsToRefresh 排除它）。
+     */
+    catalogId: "tokenrhythm",
+    // 聚合网关：它自家目录收窄了型号能力（哪个型号开哪种协议、思考恒开与否），型号口径以它为准
+    catalogAuthoritative: true,
+    untested: true,
+    note: "聚合网关，一个 key 调用多家模型；型号清单与参数跟着它自己的目录走，计费按各厂官方美元单价",
+  },
+  {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
     api: "anthropic-messages",

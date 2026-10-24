@@ -97,11 +97,16 @@ describe("createModelRuntime 不读 pi CLI 的 ~/.pi/agent", () => {
 });
 
 describe("refreshCatalogs", () => {
-  test("刷新的是预置服务商用到的目录，去重", () => {
+  test("刷新的是预置服务商用到的目录，去重；基元律动除外（它读自家接口，不向 pi.dev 要）", () => {
     const ids = catalogIdsToRefresh();
     assert.equal(new Set(ids).size, ids.length);
     for (const provider of KNOWN_PROVIDERS) {
-      if (provider.catalogId !== undefined) assert.ok(ids.includes(provider.catalogId), provider.catalogId);
+      if (provider.catalogId === undefined) continue;
+      if (provider.catalogId === "tokenrhythm") {
+        assert.equal(ids.includes("tokenrhythm"), false, "自建目录不该向 pi.dev 刷新");
+        continue;
+      }
+      assert.ok(ids.includes(provider.catalogId), provider.catalogId);
     }
     assert.ok(ids.includes("opencode-go"));
   });
