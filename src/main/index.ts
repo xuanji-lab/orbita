@@ -60,12 +60,8 @@ import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/p
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
 import { applySandboxBrowserRequest, CdpSession } from "./computer-use/cdp.ts";
-import { createSandboxLease, runWithLease } from "./computer-use/lease.ts";
-import {
-  COMPUTER_USE_LEASE,
-  computerUseLeaseErrors,
-  isSandboxBrowserAction,
-} from "../shared/computer-use.ts";
+import { createComputerUseDispatcher } from "./computer-use/dispatch.ts";
+import { createComputerUseLease } from "./computer-use/lease.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -518,7 +514,8 @@ void app.whenReady().then(async () => {
        * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
        * 持有者与排队者都是等着用同一个已经不存在的东西，留着只会让排队的会话排满
        * 30 秒后收到一句「被某个会话占着」——那是一个不成立的原因。
-       * 这一顿用 SandboxLease（定义在 computer-use/lease.ts）。
+       * 这一顿用 ComputerUseLease（定义在 computer-use/lease.ts）。浏览器键也一起作废——
+       * 浏览器在沙箱里，沙箱没了它们就不存在了。
        */
       if (status.state === "off" || status.state === "error") {
         computerUseLease.revoke(status.state === "off" ? "沙箱已停止" : "沙箱出错");
@@ -527,11 +524,12 @@ void app.whenReady().then(async () => {
     },
   });
   /**
-   * 沙箱桌面归谁：一个沙箱同一时间只归一个会话（理由与状态机见 computer-use/lease.ts）。
+   * 沙箱里的资源归谁：一块桌面归一个会话（理由与状态机见 computer-use/lease.ts），
+   * 每个会话自己的浏览器归它自己（不占桌面）。
    * 放在 SandboxController 之前声明——控制器的 onStatus 要引用它（TDZ：onStatus 只会在
    * 后面的迁移中执行，但读到变量本身仍需要先声明）。
    */
-  const computerUseLease = createSandboxLease({
+  const computerUseLease = createComputerUseLease({
     clock: { now: () => Date.now(), setTimeout: (callback, ms) => {
       const timer = setTimeout(callback, ms);
       return () => clearTimeout(timer);
@@ -539,34 +537,31 @@ void app.whenReady().then(async () => {
     onEvent: (event) => {
       if (event.type === "acquired") {
         console.log(
-          `[computer-use] 沙箱桌面交给「${event.title || event.sessionId}」（等了 ${String(event.waitedMs)}ms，后面排 ${String(event.queueDepth)} 个）`,
+          `[computer-use] ${event.key} 交给「${event.title || event.sessionId}」（等了 ${String(event.waitedMs)}ms，后面排 ${String(event.queueDepth)} 个）`,
         );
         return;
       }
       if (event.type === "released") {
         console.log(
-          `[computer-use] 沙箱桌面收回（「${event.title || event.sessionId}」，原因 ${event.reason}，持有了 ${String(event.heldMs)}ms）`,
+          `[computer-use] ${event.key} 收回（「${event.title || event.sessionId}」，原因 ${event.reason}，持有了 ${String(event.heldMs)}ms）`,
         );
         // 硬上限强制收回：持有者下一条命令不该因为「锁空着」就静默拿到——
         // 它已经在一个被裁定为「占得太久」的轮次里了，要让它把这句话转告用户。
-        if (event.reason === "holdExpired") expiredLeaseSessions.add(event.sessionId);
+        // 只有桌面键有硬上限，浏览器键永远不会走到这个分支。
+        if (event.reason === "holdExpired") computerUseDispatch.noteHoldExpired(event.sessionId);
         return;
       }
       if (event.type === "revoked") {
-        console.log(`[computer-use] 沙箱桌面租约全部作废：${event.reason}（清掉 ${String(event.droppedWaiters)} 个等待者）`);
+        console.log(
+          `[computer-use] 租约全部作废：${event.reason}（${String(event.keys)} 个资源键，清掉 ${String(event.droppedWaiters)} 个等待者）`,
+        );
         return;
       }
       if (event.type === "rejected") {
-        console.warn(`[computer-use] 没拿到沙箱桌面：${event.sessionId}（${event.cause}）`);
+        console.warn(`[computer-use] 没拿到 ${event.key}：${event.sessionId}（${event.cause}）`);
       }
     },
   });
-  /**
-   * 被硬上限收回过、还没重新开始的会话。**在会话重新拿到租约时清掉这两条线**：
-   * 一个会话被收回后，它下一条命令要看到终态错误（而不是默默地又拿到锁）；之后再
-   * 跑就重新计。这是租约内部状态机的第一次业务消费，不落盘（重启即忘）。
-   */
-  const expiredLeaseSessions = new Set<string>();
   /**
    * CDP 浏览器通道（PR3）：沙箱里有几个浏览器实例的会话级状态。
    *
@@ -588,36 +583,23 @@ void app.whenReady().then(async () => {
   registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } });
 
   /**
-   * 要沙箱桌面（computer_* / sandbox_* 下发前的唯一入口）。
+   * computer_* / sandbox_* 下发前的唯一入口：按动作选资源键（桌面独占 / 每会话浏览器），
+   * 要不到就回一句人话，要到了才下发。键的选择与硬上限的收尾都在 dispatch.ts 里——
+   * 这样「sandbox_* 在别人持桌面时照常下发」这条回归才有地方可测（它不碰 electron）。
    *
    * 标题只是文案素材：拿不到锁时的错误要说出**占用者是谁**，不然模型无法转告用户
    * （「被占据了」而不说是谁，用户也没法处置）。读不出 meta（会话刚建、已删）就退成空串，
    * 租约那边不会塞一对空引号。
-   *
-   * 硬上限被强制收回过的会话（expiredLeaseSessions）：下一条命令不再静默拿到锁，而是
-   * 拿到终态错误——它在一个被判为「占得太久」的轮次里，应该先与用户对齐再动。
    */
-  const acquireComputerUseLease = async (
-    sessionId: string,
-  ): Promise<{ ok: true; title: string } | { ok: false; error: string }> => {
-    if (expiredLeaseSessions.has(sessionId)) {
-      // 只拦一条：说清楚之后就把标记清掉，下一次拿到锁就是普通的一轮。
-      // 不留在集合里的话，这个会话以后再也用不了沙箱（但用户可能只是想让它接着干）。
-      expiredLeaseSessions.delete(sessionId);
-      return {
-        ok: false,
-        error: computerUseLeaseErrors.holdExpired(COMPUTER_USE_LEASE.holdMaxMs / 60_000),
-      };
-    }
-    const meta = await sessions.readMeta(sessionId).catch(() => null);
-    const title = meta?.title ?? "";
-    // 这里**只是预检**（拿得到就立刻拿到，拿不到就是排队 / 报错），真正的 acquire 在
-    // runWithLease 里——两处都要读同一个标题，所以先读一次 meta 交下去。预检拿到的锁
-    // 紧接着被 runWithLease 的 acquire 命中（同一会话幂等续期），不会多占一个位置。
-    const leased = await computerUseLease.acquire(sessionId, title);
-    if (!leased.ok) return { ok: false, error: leased.error };
-    return { ok: true, title };
-  };
+  const computerUseDispatch = createComputerUseDispatcher({
+    lease: computerUseLease,
+    titleOf: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId).catch(() => null);
+      return meta?.title ?? "";
+    },
+    runPixels: (sessionId, request) => applyComputerUseRequest(computerUse, sessionId, request),
+    runBrowser: (sessionId, request) => applySandboxBrowserRequest(cdp, sessionId, request),
+  });
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
@@ -686,11 +668,12 @@ void app.whenReady().then(async () => {
     if (event.type === "phase" && event.phase === "idle") {
       browserSandbox.cancelSessionHandoff(event.sessionId);
       /*
-       * 沙箱桌面也一并让出来：轮次结束 = 这一轮不再需要它了。abort 与急停走的都是这里
+       * 沙箱资源也一并让出来：轮次结束 = 这一轮不再需要它们了。abort 与急停走的都是这里
        * （abortCycle 的收尾最终发 idle，非 preempt 的预抢跑才不发），所以不需要在三条
-       * 路径上各接一次。不主动放的话，下一个会话要白白等到 idle 线 60s 或硬上限 15min。
+       * 路径上各接一次。桌面键与这个会话的浏览器键一起放：不主动放的话，下一个会话要白白
+       * 等到 idle 线 60s 或硬上限 15min。浏览器键下一次 sandbox_* 再 acquire 是立刻成功的。
        */
-      computerUseLease.release(event.sessionId, "轮次结束");
+      computerUseLease.releaseSession(event.sessionId);
     }
     if (event.type === "failed" && event.sessionId === null) {
       phases.clear();
@@ -736,20 +719,8 @@ void app.whenReady().then(async () => {
     // 人话给模型——它看不见 UI，不会自己想到「另一个会话占着」。
     // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去。
     if (event.type === "computerUseRequest") {
-      void acquireComputerUseLease(event.sessionId)
-        .then(async (leased) => {
-          if (!leased.ok) return { ok: false as const, error: leased.error };
-          return await runWithLease({
-            lease: computerUseLease,
-            sessionId: event.sessionId,
-            title: leased.title,
-            run: async () =>
-              isSandboxBrowserAction(event.request.action)
-                ? await applySandboxBrowserRequest(cdp, event.sessionId, event.request)
-                : await applyComputerUseRequest(computerUse, event.sessionId, event.request),
-            rejected: (error) => ({ ok: false as const, error }),
-          });
-        })
+      void computerUseDispatch
+        .dispatch(event.sessionId, event.request)
         .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
@@ -859,9 +830,10 @@ void app.whenReady().then(async () => {
       agentHost.disposeSession(id);
       // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档的尾账也丢
       browserSandbox.closeSessionTab(id);
-      // 沙箱桌面：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）
-      computerUseLease.release(id, "会话已删除");
-      expiredLeaseSessions.delete(id);
+      // 沙箱资源：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）；
+      // 桌面键与这个会话的浏览器键一起放。硬上限标记也一并忘掉。
+      computerUseLease.releaseSession(id);
+      computerUseDispatch.forget(id);
       intentIngest.forget(id);
     },
     agentHost,
@@ -986,6 +958,22 @@ void app.whenReady().then(async () => {
     // 租约只在内存里（见 lease.ts 头部：落盘会留下没人能放掉的死锁）；退出前把定时器收掉，
     // 不给进程留一个拽着退出 30s 的句柄
     computerUseLease.revoke("应用退出");
+    /*
+     * 审计：一行账把「桌面到底挤不挤」留在日志里（v1.5-2 要用真实数据决定后续路线）。
+     * 只在真有人用过沙箱时才打——没人用过就没数字可报。
+     */
+    const leaseStats = computerUseLease.stats();
+    if (leaseStats.length > 0) {
+      console.log(
+        "[computer-use] 租约统计（应用退出）：" +
+          leaseStats
+            .map(
+              (row) =>
+                `${row.key} 拿到 ${String(row.acquired)} 次 / 等 ${String(Math.round(row.averageWaitMs))}ms / 持有 ${String(Math.round(row.averageHeldMs))}ms / 拒 ${String(row.rejected)} 次`,
+            )
+            .join("；"),
+      );
+    }
   });
 
   /**

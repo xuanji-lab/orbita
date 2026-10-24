@@ -84,12 +84,13 @@ const SCOPE =
   "browser and not Orbita's built-in browser tab. ";
 
 /**
- * 沙箱桌面归谁：多个会话能同时用工具，但**桌面只有一份**。拿不到时接口会回一句
- * 「被另一个会话占着」——不写明「不要重试」，模型会立刻再调一次（lease.ts 的等待会更长）。
+ * 每会话自己的浏览器：**不排队**。只有像素工具共享那块唯一的桌面。
+ * 模型看不见 UI，不写明“另一个会话在持桌面时你也能用”的话，它会在网页任务里白白等或被拒后重试。
  */
 const BUSY =
-  "One session at a time holds the sandbox: if the result says another session is using it, do not retry — " +
-  "wait for that session's turn to end, or ask the user which session should drive the sandbox. ";
+  "This browser instance belongs to your session alone: it never queues, and another session holding the " +
+  "sandbox desktop does not block it. Only the pixel tools (computer_*) share the single desktop and wait " +
+  "for each other — for web tasks stay in sandbox_* instead of waiting on the desktop. ";
 
 const PIXEL_FALLBACK =
   "If this fails with a CDP / browser error, fall back to the pixel tools (computer_screenshot, computer_click, " +
