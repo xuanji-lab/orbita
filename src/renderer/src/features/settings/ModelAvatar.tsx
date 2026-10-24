@@ -12,6 +12,7 @@ import kimiK3 from "../../../../../design-system/assets/model-avatars/kimi-k3.pn
 import kimiK31 from "../../../../../design-system/assets/model-avatars/kimi-k3.1.png";
 import mimoFlash from "../../../../../design-system/assets/model-avatars/mimo-v2.6-flash.png";
 import mimoPro from "../../../../../design-system/assets/model-avatars/mimo-v2.6-pro.png";
+import step5Preview from "../../../../../design-system/assets/model-avatars/step-5-preview.png";
 import { VendorLogo } from "./VendorLogo";
 
 /**
@@ -25,7 +26,7 @@ import { VendorLogo } from "./VendorLogo";
  * - 公众号封面（推文在微信列表里显示的封面图，不是正文里的图；原件与裁切脚本在本地登记页
  *   docs/model-avatars/tools/）：kimi-k3（磁感线）、glm-5.3（数字三角）、glm-5.3-flash（光锥）、
  *   deepseek-v4.1-flash（抹掉封面上的字，鲸鱼标放进金色光环）、deepseek-v4-pro（标题下的
- *   橙紫波浪 + 同一枚鲸鱼标）、mimo-v2.6-*（封面蝴蝶，左下角按封面的细框 + 刻度尺画 Pro / Flash，
+ *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（封面蝴蝶，左下角按封面的细框 + 刻度尺画 Pro / Flash，
  *   不铺底色；字体 Manrope，OFL）。
  * 位图按 96px 存：菜单 20px、设置页 18px，Retina 下也有富余。
  */
@@ -36,6 +37,7 @@ const OWN_AVATARS: Record<ModelAvatarKey, string> = {
   "glm-5.3-flash": glm53Flash,
   "deepseek-v4-pro": deepseekV4Pro,
   "deepseek-v4.1-flash": deepseekV41Flash,
+  "step-5-preview": step5Preview,
   "claude-fable": claudeFable,
   "claude-opus": claudeOpus,
   "claude-sonnet": claudeSonnet,

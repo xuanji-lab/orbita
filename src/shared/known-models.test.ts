@@ -215,6 +215,8 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("deepseek-v4-pro"), { kind: "own", key: "deepseek-v4-pro" });
     assert.deepEqual(modelAvatarOf("glm-5.3"), { kind: "own", key: "glm-5.3" });
     assert.deepEqual(modelAvatarOf("glm-5.3-flash"), { kind: "own", key: "glm-5.3-flash" });
+    // 阶跃官方 id 与 OpenCode Go 的免费档是同一个模型
+    for (const id of ["step-5-preview", "step-5-preview-free"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "step-5-preview" }, id);
     assert.deepEqual(modelAvatarOf("mimo-v2.6-flash"), { kind: "own", key: "mimo-v2.6-flash" });
   });
 
@@ -234,7 +236,7 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("deepseek-v4-flash"), { kind: "family", logo: "deepseek" });
     assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "family", logo: "qwen" });
     assert.deepEqual(modelAvatarOf("MiniMax-M3"), { kind: "family", logo: "minimax" });
-    assert.deepEqual(modelAvatarOf("step-5-preview"), { kind: "family", logo: "stepfun" });
+    assert.deepEqual(modelAvatarOf("step-3.7-flash"), { kind: "family", logo: "stepfun" });
     assert.deepEqual(modelAvatarOf("gpt-6-astra"), { kind: "family", logo: "openai" });
     assert.deepEqual(modelAvatarOf("mimo-v2.5"), { kind: "family", logo: "xiaomimimo" });
   });

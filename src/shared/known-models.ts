@@ -393,6 +393,7 @@ export type ModelAvatarKey =
   | "glm-5.3-flash"
   | "deepseek-v4-pro"
   | "deepseek-v4.1-flash"
+  | "step-5-preview"
   | "claude-fable"
   | "claude-opus"
   | "claude-sonnet"
@@ -415,6 +416,8 @@ const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
   "deepseek-v4-pro": "deepseek-v4-pro",
   "deepseek-v4.1-flash": "deepseek-v4.1-flash",
   "deepseek-flash": "deepseek-v4.1-flash",
+  "step-5-preview": "step-5-preview",
+  "step-5-preview-free": "step-5-preview",
   "mimo-v2.6-pro": "mimo-v2.6-pro",
   "mimo-v2.6-pro-ultraspeed": "mimo-v2.6-pro",
   "mimo-v2.6-flash": "mimo-v2.6-flash",
