@@ -20,6 +20,7 @@ import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
 import type { IntentConfirmAnswer } from "./intent-confirm.ts";
+import type { SessionWrapup, WrapupItem, WrapupTokens } from "./wrapup.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -481,6 +482,16 @@ export interface SessionMeta {
    */
   closedAt?: number | null;
   /**
+   * 收尾确认的记录（旧 → 新）：每次确认「做完的事」各一件，任务账本按它记账（价格 · 能力图的
+   * 实测任务只认这里与子会话）。下次收尾从最后一次的 throughTurn + 1 扫起。缺席即空。
+   */
+  wrapups?: SessionWrapup[];
+  /**
+   * 这条会话在接着做哪些遗留事项（carryover id）：从遗留清单「继续」开出的新会话、或在原会话
+   * 续跑时记下；这条会话收尾确认时，它们自动标为做完，然后清空。缺席即空。
+   */
+  resumedCarryovers?: string[];
+  /**
    * 最近 3 条用户提问（新→旧，每条首行、截断规则同 title）。
    * 首页会话卡的三个提问槽吃它；**旧会话没有这个字段，显示空槽**。
    */
@@ -737,6 +748,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     starred: value["starred"] === true,
     completion: isSessionCompletion(value["completion"]) ? value["completion"] : "open",
     closedAt: num(value["closedAt"]),
+    // 收尾记录与在做的遗留事项：缺席即空；坏条目逐条丢（一条坏账不连累整条会话）
+    ...parseWrapupsField(value["wrapups"]),
+    ...parseResumedField(value["resumedCarryovers"]),
     // 未读标记：缺 at 整条丢（当已读）——见 parseSessionUnread 的纪律
     unread: parseSessionUnread(value["unread"]),
     // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
@@ -761,6 +775,79 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
+}
+
+function parseTokens(raw: unknown): WrapupTokens | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const v = raw as Record<string, unknown>;
+  const keys = ["input", "output", "cacheRead", "cacheWrite"] as const;
+  if (!keys.every((key) => typeof v[key] === "number" && Number.isFinite(v[key]) && (v[key] as number) >= 0)) {
+    return null;
+  }
+  return { input: v["input"] as number, output: v["output"] as number, cacheRead: v["cacheRead"] as number, cacheWrite: v["cacheWrite"] as number };
+}
+
+function parseTurnRange(raw: unknown): [number, number] | null | undefined {
+  if (raw === null) return null;
+  if (!Array.isArray(raw) || raw.length !== 2) return undefined;
+  const [from, to] = raw as unknown[];
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return undefined;
+  if ((from as number) < 1 || (to as number) < (from as number)) return undefined;
+  return [from as number, to as number];
+}
+
+function parseWrapupItem(raw: unknown): WrapupItem | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const v = raw as Record<string, unknown>;
+  if (typeof v["title"] !== "string") return null;
+  const turns = parseTurnRange(v["turns"]);
+  const tokens = parseTokens(v["tokens"]);
+  const unpricedTokens = parseTokens(v["unpricedTokens"]);
+  if (turns === undefined || tokens === null || unpricedTokens === null) return null;
+  const recordedCost = v["recordedCost"];
+  if (typeof recordedCost !== "number" || !Number.isFinite(recordedCost) || recordedCost < 0) return null;
+  const providerId = typeof v["providerId"] === "string" ? v["providerId"] : null;
+  const modelId = typeof v["modelId"] === "string" ? v["modelId"] : null;
+  return {
+    title: v["title"],
+    turns,
+    providerId,
+    modelId,
+    level: isThinkingLevel(v["level"]) ? v["level"] : null,
+    tokens,
+    recordedCost,
+    unpricedTokens,
+  };
+}
+
+/** 一次收尾确认；坏了返回 null（逐条丢） */
+export function parseSessionWrapup(raw: unknown): SessionWrapup | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const v = raw as Record<string, unknown>;
+  const id = str(v["id"]);
+  const at = num(v["at"]);
+  const through = v["throughTurn"];
+  if (id === null || at === null || !Number.isInteger(through) || (through as number) < 0) return null;
+  if (!Array.isArray(v["items"])) return null;
+  const items: WrapupItem[] = [];
+  for (const entry of v["items"] as unknown[]) {
+    const item = parseWrapupItem(entry);
+    if (item === null) return null;
+    items.push(item);
+  }
+  return { id, at, throughTurn: through as number, items };
+}
+
+function parseWrapupsField(raw: unknown): { wrapups?: SessionWrapup[] } {
+  if (!Array.isArray(raw)) return {};
+  const wrapups = raw.map(parseSessionWrapup).filter((w): w is SessionWrapup => w !== null);
+  return wrapups.length === 0 ? {} : { wrapups };
+}
+
+function parseResumedField(raw: unknown): { resumedCarryovers?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const ids = [...new Set(raw.filter((id): id is string => typeof id === "string" && id !== ""))];
+  return ids.length === 0 ? {} : { resumedCarryovers: ids };
 }
 
 /**

@@ -11,7 +11,8 @@
  *   （PR 号、日期、一句用户看得懂的话，中英各一）。PR 号开 PR 后回填；
  * - **转正**（用户说「把 X 移出实验功能」）：
  *   1. 去掉该功能所有 `useExperimentalFeature("…")` 门，入口常驻；
- *   2. 把这一项的 changelog 整理成正式版本的更新说明（`UPDATE_NOTES.md` 一节）；
+ *   2. 把这一项的 changelog 整理成正式版本的更新说明——UPDATE_NOTES.md 已移出仓库，
+ *      写进转正那个 commit 的正文（会话生命周期 2026-10-24 即如此）；
  *   3. 从这张表里删掉这一项，并把它在 EXPERIMENTAL_FEATURE_IDS 里的 id 一并删掉。
  *   表空了不删设置键：下一个实验功能还要用它。
  *
@@ -100,65 +101,6 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         note: {
           zh: "挂到实验开关后面：关着时主题选择卡不列这两档，已选的照常生效。",
           en: "Moved behind the experimental switch: hidden from the theme picker when off; a theme already chosen keeps applying.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-12",
-        note: {
-          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
-          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
-        },
-      },
-    ],
-  },
-  {
-    id: "session-lifecycle",
-    icon: "circle-check",
-    name: { zh: "会话生命周期", en: "Session lifecycle" },
-    summary: {
-      zh: "给会话加星标、标记完成；完成时扫描遗留事项，挂在右栏「遗留事项」里。",
-      en: "Star sessions and mark them done; marking done scans for carryovers, listed under Carryovers in the right rail.",
-    },
-    changelog: [
-      {
-        pr: null,
-        date: "2026-09-22",
-        note: {
-          zh: "首版：星标、完成状态与闲置收尾建议；完成时扫描遗留事项，扫描结果渲染成卡片。",
-          en: "First version: stars, done state and idle nudges; marking done scans for carryovers, shown as a card.",
-        },
-      },
-      {
-        pr: 76,
-        date: "2026-09-25",
-        note: {
-          zh: "遗留事项入口常驻，0 条时点进去看空态。",
-          en: "The Carryovers entry is always there; with none, it opens to an empty state.",
-        },
-      },
-      {
-        pr: 94,
-        date: "2026-09-27",
-        note: {
-          zh: "修复：设置页里点右栏的已归档 / 遗留事项入口没反应。",
-          en: "Fix: the Archived and Carryovers entries in the right rail did nothing while Settings was open.",
-        },
-      },
-      {
-        pr: 130,
-        date: "2026-10-02",
-        note: {
-          zh: "收尾扫描要求模型交卷前自检格式，扫描结果不再偶发解析失败。",
-          en: "The carryover scan asks the model to check its own output, so scans stop failing to parse now and then.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-10",
-        note: {
-          zh: "挂到实验开关后面：关着时星标、完成、遗留事项的入口全部隐藏，数据原样保留。",
-          en: "Moved behind the experimental switch: stars, done and carryover entries hide when off; the data stays.",
         },
       },
       {

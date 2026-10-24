@@ -979,11 +979,7 @@ export function App() {
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
-  // 实验功能逐项开关（会话生命周期挂在其中）：关着时右栏底部的遗留事项
-  // 入口不渲染；showCarryovers 的本地状态可能残留（开着面板去设置里关了开关），
-  // 在传给 Sidebar 的路上一并压掉——开关关了，这个子视图就不该再出得来
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  const sessionLifecycle = experimentalFeatures["session-lifecycle"] === true;
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -1007,7 +1003,7 @@ export function App() {
         shortId={capsuleShortId}
         onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
         completion={
-          sessionLifecycle && mainOpenId !== ""
+          mainOpenId !== ""
             ? {
                 state: mainOpenMeta?.completion ?? "open",
                 closing: session.closingScan,
@@ -1032,17 +1028,13 @@ export function App() {
     );
 
   const railEntries: RailEntry[] = [
-    // 遗留事项入口（收尾扫描的下游）挂会话生命周期开关；Archived / Browser / Settings 不挂
-    ...(sessionLifecycle
-      ? [
-          {
-            icon: "list-todo" as const,
-            label: t.app.carryoversEntry(openCarryoverCount),
-            lit: railSubviewLit(subviewState, "carryovers"),
-            onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-          },
-        ]
-      : []),
+    // 遗留事项入口（收尾扫描的下游）
+    {
+      icon: "list-todo" as const,
+      label: t.app.carryoversEntry(openCarryoverCount),
+      lit: railSubviewLit(subviewState, "carryovers"),
+      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
+    },
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
@@ -1097,7 +1089,7 @@ export function App() {
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
           showArchived={showArchived}
-          showCarryovers={showCarryovers && sessionLifecycle}
+          showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}

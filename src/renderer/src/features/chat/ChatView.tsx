@@ -102,7 +102,7 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
-import { CarryoverChecklist } from "./CarryoverChecklist";
+import { WrapupCard } from "./WrapupCard";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import { DiffBody } from "../../shell/DiffView";
@@ -111,7 +111,7 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
-import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
+import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 import {
   contextRing,
   formatSpeed,
@@ -137,7 +137,7 @@ import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
-import { modelThinkingLevels } from "@shared/model-defaults";
+import { modelDisplayName, modelThinkingLevels } from "@shared/model-defaults";
 import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
@@ -754,9 +754,6 @@ function ChatViewBody(props: {
   bareHeader?: boolean;
 }) {
   const t = useT();
-  // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
-  // 关闭时收尾相关数据源一并在渲染前置空（首页卡退回提问行位、消息流不出扫描卡）
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { session, providersError, homeBare, hideComposer } = props;
   // 意图系统（实验功能）：确认卡、输入框开关挂它后面；转录里的终态卡另在
   // TranscriptColumn 里判（历史记录照渲染，入口才藏）
@@ -838,6 +835,36 @@ function ChatViewBody(props: {
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 收尾卡上的型号名：与模型菜单同一套显示名（声明名 > 白名单 > 目录名 > id）
+  const wrapupModelName = useCallback(
+    (modelId: string): string => {
+      const declared = session.usable.flatMap((p) => p.models.declared).find((m) => m.id === modelId);
+      return modelDisplayName(session.catalog, modelId, {}, declared?.name);
+    },
+    [session.usable, session.catalog],
+  );
+  // 收尾卡「第 x–y 轮」：跳回那一轮的用户消息并闪一下。不在已加载的窗口里就往前翻页再找
+  // （每页 SESSION_PAGE_RECORDS 条，最多翻 20 页——再远的历史不值得一直等）
+  const hasMoreRef = useRef(session.hasMoreHistory);
+  hasMoreRef.current = session.hasMoreHistory;
+  const loadOlderRef = useRef(session.loadOlder);
+  loadOlderRef.current = session.loadOlder;
+  const jumpToMessage = useCallback((messageId: string) => {
+    let tries = 0;
+    const attempt = () => {
+      const pane = scrollRef.current;
+      if (pane === null) return;
+      if (pane.querySelector(`[data-quote-id="${CSS.escape(messageId)}"]`) !== null) {
+        highlightQuote(pane, messageId, "");
+        return;
+      }
+      if (!hasMoreRef.current || tries >= 20) return;
+      tries += 1;
+      loadOlderRef.current();
+      window.setTimeout(attempt, 400);
+    };
+    attempt();
+  }, []);
   const followRef = useRef(true);
   /**
    * 触顶拉更早一页那一刻的滚动几何（源侧分页的滚动锚定）：
@@ -1015,10 +1042,9 @@ function ChatViewBody(props: {
   // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
   // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
   // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
-  // 会话生命周期开关关闭时遗留清单传空——首页卡全部退回「最近提问」行位，不出待办卡。
   const homeCards = useMemo(
-    () => selectHomeCards(session.sessions, lifecycle ? session.carryovers : []),
-    [session.sessions, session.carryovers, lifecycle],
+    () => selectHomeCards(session.sessions, session.carryovers),
+    [session.sessions, session.carryovers],
   );
 
   // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
@@ -1117,9 +1143,13 @@ function ChatViewBody(props: {
       onStop={session.stop}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
-      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
+      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index。
+      // 收尾扫描中：扫描轮不设超时，唯一出口是这张卡上的停止键（空草稿 + 在跑 = 发送键变停止），
+      // 占位里直接说出来（审核 S-4）
       placeholder={
-        session.quotes.length > 0
+        session.closingScan
+          ? t.chat.placeholderScanning
+          : session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
             ? t.chat.placeholderNew
@@ -1130,10 +1160,10 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
-          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（生命周期开关 + 已落盘 + 未完成），
-          // 同一条收尾仪式
+          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（已落盘 + 未完成；会话生命周期已转正，
+          // 不再看实验开关），同一条收尾仪式
           markDone={
-            lifecycle && openId !== "" && (openMeta?.completion ?? "open") === "open"
+            openId !== "" && (openMeta?.completion ?? "open") === "open"
               ? { onSelect: session.startClosingRitual, busy: session.phase !== "idle" || session.closingScan }
               : null
           }
@@ -1352,17 +1382,16 @@ function ChatViewBody(props: {
         onScroll={handleScroll}
         scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
         // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用。
-        // 会话生命周期开关关闭时整组不传（Pane 头部的完成入口随之不渲染）
         completion={
-          lifecycle && openId !== "" ? (openMeta?.completion ?? "open") : null
+          openId !== "" ? (openMeta?.completion ?? "open") : null
         }
         onSetCompletion={
-          lifecycle && openId !== ""
+          openId !== ""
             ? (next) => session.setCompletionSession(openId, next)
             : undefined
         }
         // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
-        onMarkDone={lifecycle && openId !== "" ? session.startClosingRitual : undefined}
+        onMarkDone={openId !== "" ? session.startClosingRitual : undefined}
         closing={session.closingScan}
         busy={session.phase !== "idle"}
         scanless={openMeta?.piSessionFile == null}
@@ -1415,13 +1444,18 @@ function ChatViewBody(props: {
               />
             )}
             {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
-                （scanResult 由 hook 查看槽持有，切走再切回还在）。挂会话生命周期开关：
-                开关在确认卡开着时被关掉（去设置里关）的话，回来不再渲染 */}
-            {lifecycle && session.scanResult !== null && session.scanResult.sessionId === openId && (
-              <CarryoverChecklist
-                drafts={session.scanResult.drafts}
+                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
+            {session.scanResult !== null && session.scanResult.sessionId === openId && (
+              <WrapupCard
+                // 每次扫描是一张新卡：换一份清单就重挂，卡内的编辑状态不串到下一次
+                key={`${session.scanResult.sessionId}:${session.scanResult.plan.lastTurn}:${session.scanResult.plan.sinceTurn}`}
+                plan={session.scanResult.plan}
+                draft={session.scanResult.draft}
+                nameOf={wrapupModelName}
                 onConfirm={session.confirmCarryovers}
                 onCancel={session.cancelCarryovers}
+                onRevise={session.reviseWrapup}
+                onJumpTurn={jumpToMessage}
               />
             )}
             {/*
@@ -1546,9 +1580,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   pendingEcho: { blocks: readonly string[] } | null;
 }) {
   const t = useT();
-  // 会话生命周期开关：关闭时消息流不出收尾扫描卡（同 useT 读 Context 的先例——开关
-  // 几乎不变，偶尔破一次 memo 无妨）
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   // 意图系统开关：关着时终态记录照渲染（历史还在），运行卡与入口全藏
   const intentOn = useExperimentalFeature("intent-system");
   const { transcript } = props;
@@ -1628,9 +1659,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
   // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
   const carryoverCards = useMemo(() => {
-    // 会话生命周期开关关闭：消息流不出收尾扫描卡（历史会话里的旧扫描回答同样不卡片化）
-    if (!lifecycle) return new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
-    const cards = new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
+    const cards = new Map<string, { scan: ScanMessage; firstKey: string }>();
     for (const record of records) {
       if (record.role !== "assistant" || record.status === "streaming") continue;
       let firstKey: string | null = null;
@@ -1641,11 +1670,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         parts.push(block.text);
       });
       if (firstKey === null) continue;
-      const drafts = matchCarryoverMessage(parts.join(""));
-      if (drafts !== null) cards.set(record.id, { drafts, firstKey });
+      const scan = matchScanMessage(parts.join(""));
+      if (scan !== null) cards.set(record.id, { scan, firstKey });
     }
     return cards;
-  }, [records, lifecycle]);
+  }, [records]);
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
@@ -2674,7 +2703,7 @@ function EntryView(props: {
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
@@ -2756,7 +2785,7 @@ function EntryView(props: {
     if (card !== undefined) {
       // 同一条消息的多个 text 块只渲染一张卡（第一个块的位置），其余已并进卡里
       if (entry.key !== card.firstKey) return null;
-      return <CarryoverScanCard drafts={card.drafts} />;
+      return <CarryoverScanCard scan={card.scan} />;
     }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
     // streaming：正在流式的那条渲染成便宜的帧（不排公式、不高亮代码，见 stream-render.ts），
@@ -2820,7 +2849,7 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */

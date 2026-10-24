@@ -598,6 +598,40 @@ describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽
   });
 });
 
+describe("choreComplete（收尾清单按反馈改写）", () => {
+  test("不是会话里的一轮：命令不带 sessionId、不碰任何会话；回执只结发起方，不广播（没有 thinking / model 事件可被输入卡对齐）", async () => {
+    const child = new FakeChild();
+    const events: AgentEvent[] = [];
+    const host = new AgentHostCore(() => child, (event) => events.push(event));
+    const pending = host.choreComplete(TURN_FIELDS.provider, "flash", "sys", "prompt");
+    child.emit({ type: "ready" });
+    await flush();
+    const commands = child.posted.filter((command) => command.type !== "listBuiltins");
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0]?.type, "choreComplete");
+    assert.equal("sessionId" in (commands[0] ?? {}), false);
+    const command = commands[0] as Extract<AgentCommand, { type: "choreComplete" }>;
+    child.emit({ type: "choreCompleted", requestId: command.requestId, text: "```json\n{}\n```" });
+    assert.equal(await pending, "```json\n{}\n```");
+    assert.equal(events.length, 0);
+  });
+
+  test("失败回执 reject 带原因；进程退出 reject", async () => {
+    const child = new FakeChild();
+    const host = new AgentHostCore(() => child, () => undefined);
+    const failed = host.choreComplete(TURN_FIELDS.provider, "m", "s", "p");
+    child.emit({ type: "ready" });
+    await flush();
+    const command = child.posted.find((c) => c.type === "choreComplete") as Extract<AgentCommand, { type: "choreComplete" }>;
+    child.emit({ type: "choreCompleted", requestId: command.requestId, text: null, error: "401" });
+    await assert.rejects(failed, /401/);
+    const late = host.choreComplete(TURN_FIELDS.provider, "m", "s", "p");
+    await flush();
+    child.exitWith(1);
+    await assert.rejects(late, /exited/);
+  });
+});
+
 describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F-1）", () => {
   function scopedHost(scope: () => Promise<readonly string[]>) {
     let child!: FakeChild;

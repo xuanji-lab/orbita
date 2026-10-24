@@ -184,7 +184,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const source = { list: async () => metas, readRawLog: async (id: string) => logs[id] ?? [], readPiFile: async () => null };
+const source = { list: async () => metas, readUsageLog: async (id: string) => logs[id] ?? [], readPiTimeline: async () => [] };
 
 describe("用量格：新账本按「天 × 型号」汇总", () => {
   test("同一份会话数据，新旧两种算法得出的每天合计相等（回填与增量两条路径都相等）", async () => {
@@ -200,7 +200,7 @@ describe("用量格：新账本按「天 × 型号」汇总", () => {
     // 增量：与 recorder 落盘同样逐条喂（只喂会真的落盘的：空 error 回答 recorder 不收，导入会话的旧记录不重放）
     const live = new TaskLedger(join(dir, "live.json"), { timeZone: TZ });
     await live.load();
-    await live.backfill({ list: async () => [], readRawLog: async () => [], readPiFile: async () => null });
+    await live.backfill({ list: async () => [], readUsageLog: async () => [], readPiTimeline: async () => [] });
     for (const m of metas.filter((x) => x.importedFrom === undefined)) {
       for (const record of logs[m.id] ?? []) {
         if (record.role === "intent-recall" && record.usage !== undefined) {

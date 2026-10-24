@@ -14,7 +14,6 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
@@ -28,6 +27,7 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
@@ -37,7 +37,7 @@ import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
-import { TaskLedger } from "./usage/task-ledger.ts";
+import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
@@ -328,8 +328,8 @@ void app.whenReady().then(async () => {
   const record = createSessionRecorder(sessions, taskLedger);
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
-    readRawLog: (id) => sessions.readRawLog(id),
-    readPiFile: (path) => readFile(path, "utf8").catch(() => null),
+    readUsageLog: (id) => sessions.readUsageLog(id),
+    readPiTimeline: (path) => readPiThinkingTimeline(path),
   });
   // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
   // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处。
@@ -591,6 +591,21 @@ void app.whenReady().then(async () => {
     (path) => browserSandbox.openLocalFile(path),
     intentOnReverted,
   );
+  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
+  registerWrapupIpc({
+    sessions,
+    carryovers,
+    providers,
+    settings,
+    host: agentHost,
+    catalog: () => agentHost.listBuiltins(),
+    // 确认的做完的事记进任务账本（价格图的主会话任务）
+    onConfirmed: (sessionId, wrapup) => {
+      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
+        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
+      });
+    },
+  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -638,7 +653,12 @@ void app.whenReady().then(async () => {
   registerProviderIpc(providers, agentHost);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
-  registerPriceChartIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
+  registerPriceChartIpc({
+    ledger: taskLedger,
+    providers: () => providers.load(),
+    catalog: () => agentHost.listBuiltins(),
+    sessions: () => sessions.list(),
+  });
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
@@ -62,8 +62,8 @@ function source(logs: Record<string, SessionRecord[]>, metas: SessionMeta[]): Ta
       src.listed += 1;
       return metas;
     },
-    readRawLog: async (id: string) => logs[id] ?? [],
-    readPiFile: async () => null,
+    readUsageLog: async (id: string) => logs[id] ?? [],
+    readPiTimeline: async () => [],
   };
   return src;
 }
@@ -200,6 +200,22 @@ describe("TaskLedger", () => {
     assert.equal(ledger.untrustedSessions(), 1);
   });
 
+  test("去重表只留最近 14 天：窗口内的重复 id 跳过，窗口外的旧 id 被剪掉（pruneSeen 用建好的格式化器）", async () => {
+    const ledger = new TaskLedger(join(dir, "seen.json"), { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source({}, []));
+    const now = Date.now();
+    const recent = taskRecordOf(reply("r1", now - 86_400_000, "glm-5.3", "max"), "max")!;
+    const old = taskRecordOf(reply("o1", now - 30 * 86_400_000, "glm-5.3", "max"), "max")!;
+    await ledger.record("a", recent);
+    await ledger.record("a", recent);
+    await ledger.record("a", old); // 记进账，但它的日期在窗口外，这一次 prune 就剪掉
+    await ledger.record("a", old);
+    const input = ledger.tasks().reduce((n, task) => n + Object.values(task.days).reduce((m, day) => m + day.tokens.input, 0), 0);
+    // recent 一次 + old 两次（第二次已不在去重表里）= 3 × 100 input
+    assert.equal(input, 300);
+  });
+
   test("意图召回：按天记、按 id 去重、读盘后还在", async () => {
     const file = join(dir, "t.json");
     const ledger = new TaskLedger(file, { timeZone: TZ });
@@ -221,5 +237,123 @@ describe("TaskLedger", () => {
     await ledger.load();
     assert.notEqual(await ledger.backfill(source({ b: logs.b }, [meta("b", 2)])), null);
     assert.equal(ledger.tasks().length, 1);
+  });
+});
+
+describe("收尾确认的做完的事（价格图的主会话任务）", () => {
+  const tokens = { input: 10, output: 1, cacheRead: 100, cacheWrite: 0 };
+  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const wrapup = {
+    id: "w1",
+    at: DAY2,
+    throughTurn: 2,
+    items: [
+      { title: "修好登录", turns: [1, 2] as [number, number], providerId: "p", modelId: "glm-5.3", level: "max" as const, tokens, recordedCost: 0.3, unpricedTokens: zero },
+      // 自己加的、没有轮次：没有归属，不进图
+      { title: "自己加的", turns: null, providerId: null, modelId: null, level: null, tokens: zero, recordedCost: 0, unpricedTokens: zero },
+    ],
+  };
+
+  test("增量：recordWrapup 记一件、同一个收尾记录只记一次；不动按天的 token；重读盘还在", async () => {
+    const file = join(dir, "usage-tasks.json");
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source(logs, metas));
+    const before = JSON.stringify(ledger.tasks());
+    await ledger.recordWrapup("a", wrapup);
+    await ledger.recordWrapup("a", wrapup);
+    assert.equal(ledger.doneTasks().length, 1);
+    assert.equal(JSON.stringify(ledger.tasks()), before);
+    const again = new TaskLedger(file, { timeZone: TZ });
+    await again.load();
+    assert.deepEqual(again.doneTasks(), ledger.doneTasks());
+  });
+
+  test("回填：从各会话 meta.wrapups 补上，与增量记出同一份", async () => {
+    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
+    const ledger = new TaskLedger(join(dir, "x.json"), { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source(logs, withWrapup));
+    assert.deepEqual(ledger.doneTasks(), [
+      {
+        sessionId: "a",
+        wrapupId: "w1",
+        providerId: "p",
+        modelId: "glm-5.3",
+        level: "max",
+        totals: { tokens, recordedCost: 0.3, unpricedTokens: zero },
+      },
+    ]);
+  });
+
+  test("价格图任务全集：没确认过的主会话不在里面；子会话整条一件", async () => {
+    const ledger = new TaskLedger(join(dir, "y.json"), { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source(logs, metas));
+    assert.deepEqual(ledger.chartTasks(new Set()), []);
+    await ledger.recordWrapup("a", wrapup);
+    const tasks = ledger.chartTasks(new Set(["b"]));
+    assert.deepEqual(tasks.map((t) => [t.modelId, t.level, t.totals.recordedCost]), [
+      ["glm-5.3", "max", 0.3],
+      ["glm-5.3", "max", 1],
+    ]);
+  });
+
+  test("旧版本（2）迁移而不重扫：任务与意图召回原样留下，done 从 meta.wrapups 补上、不读会话正文", async () => {
+    // 先用当前版本回填出一本，再改写成 2 版的形状（没有 done）落盘
+    const file = join(dir, "old.json");
+    const seed = new TaskLedger(file, { timeZone: TZ });
+    await seed.load();
+    await seed.backfill(source(logs, metas));
+    const v3 = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    const { done: _done, ...rest } = v3;
+    await writeFile(file, JSON.stringify({ ...rest, version: 2 }));
+
+    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
+    const src = source(logs, withWrapup);
+    let logReads = 0;
+    const counting: TaskBackfillSource = {
+      ...src,
+      readUsageLog: async (id) => {
+        logReads += 1;
+        return src.readUsageLog(id);
+      },
+    };
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    assert.equal(await ledger.backfill(counting), null, "已回填过：不整本重扫");
+    assert.equal(logReads, 0);
+    assert.deepEqual(ledger.tasks(), seed.tasks());
+    assert.equal(ledger.doneTasks().length, 1);
+    const disk = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    assert.equal(disk["version"], 3);
+    assert.equal("donePending" in disk, false);
+  });
+
+  test("迁移后、补 done 之前就落了盘：donePending 跟着落盘，下次启动接着补", async () => {
+    const file = join(dir, "old.json");
+    await writeFile(file, JSON.stringify({ version: 2, backfilled: true, untrustedSessions: 0, tasks: [], open: {}, intent: {} }));
+    const first = new TaskLedger(file, { timeZone: TZ });
+    await first.load();
+    await first.recordIntent({ id: "i1", timestamp: DAY1, tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
+    assert.equal((JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>)["donePending"], true);
+    const second = new TaskLedger(file, { timeZone: TZ });
+    await second.load();
+    await second.backfill(source(logs, metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m))));
+    assert.equal(second.doneTasks().length, 1);
+  });
+
+  test("重建入口（F-9）：删掉账本文件再启动，回填出与原来逐字段相同的一本", async () => {
+    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
+    const file = join(dir, "usage-tasks.json");
+    const first = new TaskLedger(file, { timeZone: TZ });
+    await first.load();
+    await first.backfill(source(logs, withWrapup));
+    const before = await readFile(file, "utf8");
+    await rm(file);
+    const rebuilt = new TaskLedger(file, { timeZone: TZ });
+    await rebuilt.load();
+    assert.notEqual(await rebuilt.backfill(source(logs, withWrapup)), null);
+    assert.equal(await readFile(file, "utf8"), before);
   });
 });

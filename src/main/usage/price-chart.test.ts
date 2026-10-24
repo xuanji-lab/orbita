@@ -5,7 +5,7 @@ import type { Provider } from "../../shared/provider.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { buildPriceChart, type ArenaSnapshot, type PriceChartSources } from "./price-chart.ts";
-import { appendTaskRecord, emptyTaskBook, taskRecordsOf } from "./task-cost.ts";
+import { appendTaskRecord, chartTasks, emptyTaskBook, taskRecordsOf } from "./task-cost.ts";
 
 const snapshot: ArenaSnapshot = {
   dataset: "lmarena-ai/leaderboard-dataset",
@@ -109,6 +109,8 @@ const catalog: BuiltinProvider[] = [
 /**
  * 数据源：把会话日志按回填同一套规则（跳过导入会话、createdAt 正序、消息 id 去重、
  * taskRecordsOf → appendTaskRecord）记成任务账，再交给 buildPriceChart——与 TaskLedger.backfill 同口径。
+ * 这里的每条会话都当**子会话**（整条会话一件做完的事）：图的计算只看任务全集，主会话的
+ * 「确认的做完的事」怎么来见 task-cost.test.ts 的 chartTasks。
  */
 function sources(logs: Record<string, SessionRecord[]>, metas: SessionMeta[], providers: Provider[]): PriceChartSources {
   const book = emptyTaskBook();
@@ -122,7 +124,7 @@ function sources(logs: Record<string, SessionRecord[]>, metas: SessionMeta[], pr
     }
   }
   return {
-    tasks: async () => book.tasks,
+    tasks: async () => chartTasks(book.tasks, [], new Set(native.map((m) => m.id))),
     providers: async () => providers,
     catalog: async () => catalog,
   };
@@ -139,11 +141,12 @@ describe("buildPriceChart", () => {
     s1: [reply("a1", "kimi-coding", "k3", "max", 1), reply("a2", "kimi-coding", "k3", "max", 1)],
     s2: [reply("b1", "kimi-coding", "k3", "max", 3)],
     s3: [reply("c1", "kimi-coding", "k3", "max", 5)],
-    s4: [reply("d1", "opencode-go", "glm-5.3-flash", "low", 0.1), reply("d2", "opencode-go", "glm-5.3-flash", "high", 0.3)],
+    s4: [reply("d1", "opencode-go", "glm-5.3-flash", "low", 0.1)],
+    s6: [reply("d2", "opencode-go", "glm-5.3-flash", "high", 0.3)],
     s5: [reply("e1", "opencode-go", "glm-5.3-flash", "medium", 0.2)],
     imported: [reply("z1", "kimi-coding", "k3", "max", 999)],
   };
-  const metas = [meta("s1", 1), meta("s2", 2), meta("s3", 3), meta("s4", 4), meta("s5", 6), meta("imported", 5, { importedFrom: "/x.jsonl" })];
+  const metas = [meta("s1", 1), meta("s2", 2), meta("s3", 3), meta("s4", 4), meta("s6", 4.5), meta("s5", 6), meta("imported", 5, { importedFrom: "/x.jsonl" })];
 
   test("实测点：各会话段花费的中位数与样本数；导入会话不计", async () => {
     const data = await buildPriceChart(sources(logs, metas, providers), snapshot);
@@ -242,7 +245,9 @@ describe("buildPriceChart", () => {
     const book = emptyTaskBook();
     appendTaskRecord(book, "x", { id: "u1", providerId: "kimi-coding", modelId: "k3", tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, cost: 5, timestamp: 1 }, () => "2026-10-24");
     assert.equal(book.tasks[0]?.level, null);
-    const data = await buildPriceChart({ tasks: async () => book.tasks, providers: async () => providers, catalog: async () => catalog }, snapshot);
+    const tasks = chartTasks(book.tasks, [], new Set(["x"]));
+    assert.deepEqual(tasks, []);
+    const data = await buildPriceChart({ tasks: async () => tasks, providers: async () => providers, catalog: async () => catalog }, snapshot);
     assert.equal(data.profile.reference, true);
     const k3 = data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "k3");
     assert.equal(k3, undefined);

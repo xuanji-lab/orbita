@@ -41,7 +41,9 @@ const ordered = (levels: readonly ThinkingLevel[]) =>
 
 interface Sides {
   ui: { contextWindow: number; maxTokens: number; image: boolean; levels: readonly ThinkingLevel[] | null };
-  runtime: { contextWindow: number; maxTokens: number; image: boolean; levels: ThinkingLevel[]; api: string; baseUrl: string } | undefined;
+  runtime:
+    | { contextWindow: number; maxTokens: number; image: boolean; levels: ThinkingLevel[]; api: string; baseUrl: string }
+    | undefined;
   /** 这家服务商条目配的协议与地址（会话必须照这个发） */
   endpoint: { api: string; baseUrl: string };
 }

@@ -420,6 +420,13 @@ export function registerAgentIpc(
       }),
     });
     await settleFirstTurn(input, piSessionFile);
+    // 遗留清单「继续」开的轮：记下这条会话在接着做哪条遗留事项（收尾确认时自动标做完）。
+    // 必须在 settleFirstTurn 之后：新会话的 meta 在那里才建出来
+    if (input.carryoverId !== undefined) {
+      await sessions.addResumedCarryover(input.sessionId, input.carryoverId).catch((error: unknown) => {
+        console.error("[carryover] 记不下接着做的遗留事项（不影响发送）", error);
+      });
+    }
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。

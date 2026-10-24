@@ -1,13 +1,17 @@
 /**
  * 「每任务成本」的口径 —— 价格 · 能力图的横轴。**纯模块**：不 import electron，可被 `node --test` 直接测。
  *
- * ## 什么是一个任务（用户 2026-10-24 拍板）
- * **一个会话就是一个任务**（「一个 session 就是一个任务」）：
- * - 会话中途没换型号、也没换思考档的，整个会话是一个任务；用户消息不切，一个任务里可以有很多轮。
- * - 中途换过型号或档的，在切换点切开，各段各自记账（「中途切换了模型，也是可以截断的」）。
- *   所以一个任务 = 一个会话里同一型号 × 同一思考档的连续一段。
- * - 子会话本身就是独立的会话，单独算任务；父会话的成本**不**并入子会话，子会话的也不并入父会话
- *   （切段按会话各自的记录做，从不跨会话拼接）。
+ * ## 什么是一个任务（用户 2026-10-24 拍板，第二版）
+ * 「点一次打勾就算完成一次任务」——**主会话里，一个任务 = 收尾时确认的一件「做完的事」**：
+ * - 花费 = 那几轮的合计；算给那几轮里 token 最多的型号 × 档（用户只接受这一条规则）。
+ *   数字在确认那一刻算好、落在 meta.wrapups（main/session/wrapup.ts），账本照抄。
+ * - 没确认过的主会话不进实测；收尾扫描那一轮不属于任何一轮，因此不算进任何一件事。
+ * - **子会话**不弹收尾卡，交回结果就算一件做完的事：整个子会话一个任务，同样算给 token 最多的
+ *   型号 × 档。
+ *
+ * 账本里另有一份「会话 × 型号 × 档的连续一段」（StoredTask）：那是**按天记 token** 用的
+ * （侧栏用量格的每日合计，收尾轮次照算——那是真实花掉的 token），不再是价格图的任务。
+ * 第一版「一个会话里同一型号 × 同一档的连续一段 = 一个任务」只剩切段这一层意思。
  *
  * ## 每条回复花了多少
  * assistant 记录的 `usage.cost.total` 大于 0 就用它（落盘时 pi 按当时费率算好的）；等于 0 而
@@ -71,20 +75,29 @@ export interface LevelChange {
 export function piThinkingTimeline(piFileText: string): LevelChange[] {
   const out: LevelChange[] = [];
   for (const line of piFileText.split("\n")) {
-    if (!line.includes("thinking_level_change")) continue;
-    try {
-      const entry: unknown = JSON.parse(line);
-      if (typeof entry !== "object" || entry === null) continue;
-      const e = entry as Record<string, unknown>;
-      if (e["type"] !== "thinking_level_change" || !isThinkingLevel(e["thinkingLevel"])) continue;
-      const at = typeof e["timestamp"] === "string" ? Date.parse(e["timestamp"]) : Number.NaN;
-      if (!Number.isFinite(at)) continue;
-      out.push({ at, level: e["thinkingLevel"] });
-    } catch {
-      // 坏行跳过
-    }
+    const change = levelChangeOfLine(line);
+    if (change !== null) out.push(change);
   }
   return out;
+}
+
+/**
+ * pi 本子的一行 → 档位变化；不是 thinking_level_change 条目 / 坏行返回 null。
+ * piThinkingTimeline 与回填的流式读（task-ledger 的 readPiThinkingTimeline）共用这一处判定。
+ */
+export function levelChangeOfLine(line: string): LevelChange | null {
+  if (!line.includes("thinking_level_change")) return null;
+  try {
+    const entry: unknown = JSON.parse(line);
+    if (typeof entry !== "object" || entry === null) return null;
+    const e = entry as Record<string, unknown>;
+    if (e["type"] !== "thinking_level_change" || !isThinkingLevel(e["thinkingLevel"])) return null;
+    const at = typeof e["timestamp"] === "string" ? Date.parse(e["timestamp"]) : Number.NaN;
+    if (!Number.isFinite(at)) return null;
+    return { at, level: e["thinkingLevel"] };
+  } catch {
+    return null; // 坏行跳过
+  }
 }
 
 /**
@@ -256,6 +269,91 @@ export function appendTaskRecord(
 /** 一个任务各天合计 */
 export function taskTotals(task: StoredTask): DayCounts {
   return Object.values(task.days).reduce(addDay, ZERO_DAY);
+}
+
+/** 价格图上的一个任务（收尾确认的一件做完的事，或一个子会话） */
+export interface ChartTask {
+  providerId: string;
+  modelId: string;
+  level: ThinkingLevel;
+  totals: DayCounts;
+}
+
+/** 收尾确认的一件做完的事（账本里存的形状）：wrapupId 去重用 */
+export interface StoredDone {
+  sessionId: string;
+  wrapupId: string;
+  providerId: string;
+  modelId: string;
+  level: ThinkingLevel;
+  totals: DayCounts;
+}
+
+/**
+ * 一次收尾记录 → 账本里的做完的事。没有归属（没指定轮次 / 那几轮没用量）或档不可考的不收：
+ * 价格图按「型号 × 档」画，它们落不到任何一个点上。
+ */
+export function storedDonesOf(
+  sessionId: string,
+  wrapup: { id: string; items: readonly { providerId: string | null; modelId: string | null; level: ThinkingLevel | null; tokens: TokenCounts; recordedCost: number; unpricedTokens: TokenCounts }[] },
+): StoredDone[] {
+  return wrapup.items.flatMap((item) =>
+    item.providerId === null || item.modelId === null || item.level === null || (tokenTotal(item.tokens) === 0 && !(item.recordedCost > 0))
+      ? []
+      : [
+          {
+            sessionId,
+            wrapupId: wrapup.id,
+            providerId: item.providerId,
+            modelId: item.modelId,
+            level: item.level,
+            totals: { tokens: { ...item.tokens }, recordedCost: item.recordedCost, unpricedTokens: { ...item.unpricedTokens } },
+          },
+        ],
+  );
+}
+
+/**
+ * 价格图的任务全集：确认的做完的事 + 每个子会话一件（整个子会话合计，算给 token 最多的
+ * 「服务商 × 型号 × 档」；最多的那组档不可考就不收）。没确认过的主会话不在里面。
+ */
+export function chartTasks(
+  segments: readonly StoredTask[],
+  dones: readonly StoredDone[],
+  childIds: ReadonlySet<string>,
+): ChartTask[] {
+  const out: ChartTask[] = dones.map((done) => ({
+    providerId: done.providerId,
+    modelId: done.modelId,
+    level: done.level,
+    totals: done.totals,
+  }));
+  const children = new Map<string, Map<string, { providerId: string; modelId: string; level: ThinkingLevel | null; totals: DayCounts }>>();
+  for (const segment of segments) {
+    if (!childIds.has(segment.sessionId)) continue;
+    const groups = children.get(segment.sessionId) ?? new Map();
+    const key = `${segment.providerId}\u0000${segment.modelId}\u0000${segment.level ?? ""}`;
+    const prev = groups.get(key);
+    const totals = taskTotals(segment);
+    groups.set(key, {
+      providerId: segment.providerId,
+      modelId: segment.modelId,
+      level: segment.level,
+      totals: prev === undefined ? totals : addDay(prev.totals, totals),
+    });
+    children.set(segment.sessionId, groups);
+  }
+  for (const groups of children.values()) {
+    let top: { providerId: string; modelId: string; level: ThinkingLevel | null; totals: DayCounts } | null = null;
+    let all = ZERO_DAY;
+    for (const group of groups.values()) {
+      all = addDay(all, group.totals);
+      if (top === null || tokenTotal(group.totals.tokens) > tokenTotal(top.totals.tokens)) top = group;
+    }
+    if (top === null || top.level === null) continue;
+    out.push({ providerId: top.providerId, modelId: top.modelId, level: top.level, totals: all });
+  }
+  return out;
 }
 
 /** 按单价（$ / 百万 token）给一堆 token 算钱 */
