@@ -4,6 +4,7 @@ import {
   closeTab,
   crumbSegments,
   crumbSegmentsFromRoot,
+  decideFocusDrop,
   dropTabsAtRoot,
   fileTabName,
   focusRootToDrop,
@@ -156,6 +157,172 @@ describe("focusRootToDrop", () => {
     });
     // 下一拍 effect 再跑（tabs 变了也重跑）：没有相位变化 → 不收
     strictEqual(focusRootToDrop("focus", "focus", true, true), null);
+  });
+});
+
+describe("decideFocusDrop", () => {
+  const workspaceIdPath = (id: string, path: string): { id: string; path: string } => ({ id, path });
+  const rootFact = (kind: string, path: string): { kind: string; path: string } => ({ kind, path });
+  /** 专注结束（id → null）这一拍 */
+  const leavingFocus = (extra: {
+    sessionWorkspaceId?: string | null;
+    workspaces?: { id: string; path: string }[];
+    roots?: { kind: string; path: string }[];
+  }) =>
+    decideFocusDrop({
+      previousWorkspaceId: "focus",
+      nextWorkspaceId: null,
+      previousDone: false,
+      nextDone: false,
+      sessionWorkspaceId: extra.sessionWorkspaceId === undefined ? "ws" : extra.sessionWorkspaceId,
+      workspaces: extra.workspaces ?? [
+        workspaceIdPath("ws", "/e2e/proj"),
+        workspaceIdPath("focus", "/e2e/vault"),
+      ],
+      roots: extra.roots ?? [
+        rootFact("session", "/e2e/wb"),
+        rootFact("workspace", "/e2e/proj"),
+        rootFact("workspace", "/e2e/vault"),
+      ],
+    });
+
+  it("C8 附加目录：失去的根也是会话附加目录 → 不收、不藏（标签照旧读得动）", () => {
+    deepStrictEqual(
+      leavingFocus({
+        roots: [
+          rootFact("session", "/e2e/wb"),
+          rootFact("workspace", "/e2e/proj"),
+          rootFact("workspace", "/e2e/vault"),
+          rootFact("attached", "/e2e/vault"),
+        ],
+      }),
+      { rootPath: null },
+    );
+  });
+
+  it("C8 会话自己的工作区：失去的根就是会话的根 → 不收", () => {
+    deepStrictEqual(
+      leavingFocus({
+        sessionWorkspaceId: "focus",
+        workspaces: [workspaceIdPath("focus", "/e2e/vault")],
+        // roots.ts 在 id 相同时不重复出额外根，只剩会话自己那一颗
+        roots: [rootFact("session", "/e2e/wb"), rootFact("workspace", "/e2e/vault")],
+      }),
+      { rootPath: null },
+    );
+  });
+
+  it("C8 会话根本身：失去的根恰好也是会话根路径 → 不收", () => {
+    deepStrictEqual(
+      leavingFocus({
+        roots: [
+          rootFact("session", "/e2e/vault"),
+          rootFact("workspace", "/e2e/proj"),
+          rootFact("workspace", "/e2e/vault"),
+        ],
+      }),
+      { rootPath: null },
+    );
+  });
+
+  it("C8 只按路径相等判：失去的根落在幸存根里面（/vault/sub）仍要收", () => {
+    // 主进程白名单只认「root 恰是某一颗根」（list.ts 的 root.path === req.root），
+    // 包含关系救不了它：留着只会变成常驻「不是这条会话允许的根目录之一」
+    deepStrictEqual(
+      leavingFocus({
+        roots: [
+          rootFact("workspace", "/e2e/proj"),
+          rootFact("workspace", "/e2e/vault"),
+          rootFact("attached", "/e2e/vault/sub"),
+        ],
+      }),
+      { rootPath: "/e2e/vault" },
+    );
+  });
+
+  it("C9 真正失去白名单：同一拍给出要收的根路径（先藏后收，不给预览用失效根再读的机会）", () => {
+    const decision = leavingFocus({});
+    strictEqual(decision.rootPath, "/e2e/vault");
+    const tabs = [tab("/e2e/proj/a.ts", "/e2e/proj"), tab("/e2e/vault/b.ts", "/e2e/vault")];
+    // 渲染期：激活的是待收标签 → FilePreviewPane 不渲染，读取 effect 不会跑
+    strictEqual(tabs.find((item) => item.root === decision.rootPath)?.path, "/e2e/vault/b.ts");
+    // 收标签 effect：收掉的正是同一批（渲染期的挡与这里的收不分叉）
+    deepStrictEqual(dropTabsAtRoot(tabs, "/e2e/vault/b.ts", decision.rootPath), {
+      tabs: [tab("/e2e/proj/a.ts", "/e2e/proj")],
+      activePath: "/e2e/proj/a.ts",
+    });
+  });
+
+  it("专注到点（run → done）也收：左栏视图与额外根都还在，但这一轮结束了", () => {
+    deepStrictEqual(
+      decideFocusDrop({
+        previousWorkspaceId: "focus",
+        nextWorkspaceId: "focus",
+        previousDone: false,
+        nextDone: true,
+        sessionWorkspaceId: "ws",
+        workspaces: [workspaceIdPath("ws", "/e2e/proj"), workspaceIdPath("focus", "/e2e/vault")],
+        roots: [rootFact("workspace", "/e2e/proj"), rootFact("workspace", "/e2e/vault")],
+      }),
+      { rootPath: "/e2e/vault" },
+    );
+  });
+
+  it("专注到点也认附加目录：根仍可读 → 不收（C8 与 done 同一口径）", () => {
+    deepStrictEqual(
+      decideFocusDrop({
+        previousWorkspaceId: "focus",
+        nextWorkspaceId: "focus",
+        previousDone: false,
+        nextDone: true,
+        sessionWorkspaceId: "ws",
+        workspaces: [workspaceIdPath("ws", "/e2e/proj"), workspaceIdPath("focus", "/e2e/vault")],
+        roots: [
+          rootFact("workspace", "/e2e/proj"),
+          rootFact("workspace", "/e2e/vault"),
+          rootFact("attached", "/e2e/vault"),
+        ],
+      }),
+      { rootPath: null },
+    );
+  });
+
+  it("没有相位变化 / 还不在专注态：不收", () => {
+    const base = {
+      sessionWorkspaceId: "ws",
+      workspaces: [workspaceIdPath("ws", "/e2e/proj"), workspaceIdPath("focus", "/e2e/vault")],
+      roots: [rootFact("workspace", "/e2e/proj"), rootFact("workspace", "/e2e/vault")],
+    };
+    deepStrictEqual(
+      decideFocusDrop({
+        ...base,
+        previousWorkspaceId: "focus",
+        nextWorkspaceId: "focus",
+        previousDone: true,
+        nextDone: true,
+      }),
+      { rootPath: null },
+    );
+    deepStrictEqual(
+      decideFocusDrop({
+        ...base,
+        previousWorkspaceId: null,
+        nextWorkspaceId: "focus",
+        previousDone: false,
+        nextDone: false,
+      }),
+      { rootPath: null },
+    );
+  });
+
+  it("失去的工作区已经被删（工作区表里解不出路径）：不收、不藏", () => {
+    deepStrictEqual(
+      leavingFocus({
+        workspaces: [workspaceIdPath("ws", "/e2e/proj")],
+        roots: [rootFact("workspace", "/e2e/proj")],
+      }),
+      { rootPath: null },
+    );
   });
 });
 

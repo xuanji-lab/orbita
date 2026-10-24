@@ -30,9 +30,9 @@ import {
 import { FilePreviewPane } from "./FilePreviewPane";
 import {
   closeTab,
+  decideFocusDrop,
   dropTabsAtRoot,
   fileTabName,
-  focusRootToDrop,
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
@@ -140,30 +140,66 @@ export function FilesPanel(props: {
   // 额外根失去 fs:read 白名单（roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的
   // 标签会重新读一次、变成常驻「不是这条会话允许的根目录之一」（2026-10-22 发版前
   // 验收实测）。与换会话 / 换工作区清标签同一条纪律，只收掉 root 恰是那个工作区路径
-  // 的标签；会话自己就在该工作区时（会话根包含它）标签仍可读，不动。
+  // 的标签；失去的根仍是白名单里的另一条（会话自己的根 / 会话的工作区 / 附加目录）时
+  // 标签仍可读，不动——专注的工作区恰好也是会话附加目录就是这种（#267 C8）。
   //
   // done 这一拍不一样：左栏专注视图与额外根都还在，focusWorkspaceId 一个字节也不变，
   // 原先只看 id 的 effect 不触发——2026-10-23 验收 files.scope.done 实测 done 后
   // tabCount=1，点「结束专注」才归零。但这一轮专注已经结束了，预览标签按「结束专注」
   // 同一纪律收掉：同时盯 focusDone，用 panel-layout 的纯函数裁决该收哪个根——只在
-  // 真正的相位变化上返回 id，effect 依赖里有 tabs 也不会反复收。
+  // 真正的相位变化上给出路径，effect 依赖里有 tabs 也不会反复收。
+  //
+  // 「收哪个」不只看相位：失去的根若同时是会话附加目录（C8），标签仍读得动，不收。
   const previousFocusRef = useRef<string | null>(focusWorkspaceId);
   const previousFocusDoneRef = useRef(focusDone);
+  // 渲染期就读这两只 ref：它们只在下面的 effect 里写，读到的就是「上一次提交的专注
+  // 相位」——正是判「这一拍刚失去根」要的那份。判决本身是纯函数，effect 用同一份输入
+  // 再算一次，两边不会分叉。
+  const focusDrop = decideFocusDrop({
+    previousWorkspaceId: previousFocusRef.current,
+    nextWorkspaceId: focusWorkspaceId,
+    previousDone: previousFocusDoneRef.current,
+    nextDone: focusDone,
+    sessionWorkspaceId: session.workspaceId,
+    workspaces: session.workspaces,
+    roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+  });
   useEffect(() => {
-    const previous = previousFocusRef.current;
-    const wasDone = previousFocusDoneRef.current;
+    // 判决用更新前的 ref（与渲染期同一份输入），然后记下这一拍
+    const drop = decideFocusDrop({
+      previousWorkspaceId: previousFocusRef.current,
+      nextWorkspaceId: focusWorkspaceId,
+      previousDone: previousFocusDoneRef.current,
+      nextDone: focusDone,
+      sessionWorkspaceId: session.workspaceId,
+      workspaces: session.workspaces,
+      roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+    });
     previousFocusRef.current = focusWorkspaceId;
     previousFocusDoneRef.current = focusDone;
-    const lost = focusRootToDrop(previous, focusWorkspaceId, wasDone, focusDone);
-    if (lost === null || session.workspaceId === lost) return;
-    const lostRoot = session.workspaces.find((workspace) => workspace.id === lost)?.path ?? null;
-    if (lostRoot === null) return;
-    const next = dropTabsAtRoot(tabs, activePath, lostRoot);
+    if (drop.rootPath === null) return;
+    const next = dropTabsAtRoot(tabs, activePath, drop.rootPath);
     if (next.tabs.length === tabs.length) return;
     setTabs(next.tabs);
     setActivePath(next.activePath);
     if (next.activePath === null) setTreeOn(false);
-  }, [focusWorkspaceId, focusDone, session.workspaceId, session.workspaces, tabs, activePath]);
+  }, [
+    focusWorkspaceId,
+    focusDone,
+    session.workspaceId,
+    session.workspaces,
+    tree.roots,
+    tree.attachmentsRoot,
+    tabs,
+    activePath,
+  ]);
+
+  /**
+   * 这一拍要收的标签先不渲染（C9）：读取 effect 是子组件的、先于上面收标签的 effect
+   * 跑，渲染出来就会拿刚失效的根再读一次（界面无报错，主进程日志多一条被拒记录）。
+   * 挡的是同一个判决、同一个根，effect 在下一拍把状态也收掉。
+   */
+  const shownTab = activeTab !== null && activeTab.root === focusDrop.rootPath ? null : activeTab;
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
@@ -712,20 +748,20 @@ export function FilesPanel(props: {
           </div>
           {/* 浮层形态的遮罩：常驻渲染，显隐由 container query 管（与树同源） */}
           <div className="files-panel-backdrop" aria-hidden="true" onClick={() => setTreeOn(false)} />
-          {activeTab !== null && (
+          {shownTab !== null && (
             <FilePreviewPane
-              key={activeTab.path}
+              key={shownTab.path}
               sessionId={sessionId}
               workspaceId={workspaceId}
               extraWorkspaceId={focusWorkspaceId}
-              root={activeTab.root}
-              path={activeTab.path}
+              root={shownTab.root}
+              path={shownTab.path}
               rootLabel={
-                tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
+                tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
               }
-              {...(activeTab.name !== undefined ? { sentImage: { name: activeTab.name } } : {})}
+              {...(shownTab.name !== undefined ? { sentImage: { name: shownTab.name } } : {})}
               // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
-              jump={jump !== null && jump.citation.path === activeTab.path ? jump : null}
+              jump={jump !== null && jump.citation.path === shownTab.path ? jump : null}
             />
           )}
         </div>
