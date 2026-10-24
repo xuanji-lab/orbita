@@ -227,6 +227,16 @@ export const COMPUTER_USE_GUEST_DOWNLOAD_DIR = "C:\\orbita-out\\downloads";
 export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
 
 /**
+ * 沙箱是否允许出网的**缺省值**（= 允许）。
+ *
+ * v1 的 computer use 就是「沙箱里的网页自动化」，断网等于没有这个功能，所以默认开；
+ * 开关是给只想让 agent 操作本地桌面 / 文件的人收紧攻击面的：关掉后宿主渲染的 .wsb
+ * 写 `<Networking>Disable</Networking>`（官方只定义 Disable / Default 两个值）。
+ * 放在 shared 是因为两侧都要读：主进程拼 .wsb 时兑缺省，设置页画开关时也是它。
+ */
+export const COMPUTER_USE_DEFAULT_ALLOW_NETWORK = true;
+
+/**
  * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
  *
  * **45 秒不是拍脑袋的宽容值**：2026-10-10 真机实测，win+r 弹出「运行」框之后，

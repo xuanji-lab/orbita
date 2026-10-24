@@ -6,11 +6,13 @@
  */
 import type { IconName } from "../../shell/Icon";
 import type { Messages } from "../../messages-en.ts";
-import type {
-  ComputerUseProbeResult,
-  ComputerUseScreenshotResult,
-  SandboxState,
-} from "@shared/computer-use";
+import {
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  type ComputerUseProbeResult,
+  type ComputerUseScreenshotResult,
+  type SandboxState,
+} from "../../../../shared/computer-use.ts";
+import type { AppSettings, SettingsPatch } from "../../../../shared/settings.ts";
 
 /** 正在途中的那次点击；null = 没有在途动作 */
 export type SandboxActionPending = "start" | "stop" | null;
@@ -68,6 +70,23 @@ export function statusVisual(state: SandboxState, t: Messages): StatusVisual {
     case "error":
       return { icon: "triangle-alert", tone: "var(--color-danger)", label: t.computerUse.states.error, spin: false };
   }
+}
+
+/**
+ * 出网开关的当前值：**缺席 = 允许**（与主进程 `effectiveAllowNetwork` 同一个方向）。
+ * 解析层只在用户真的动过开关时落这个键，所以 UI 必须自己兜这一层——
+ * 否则新用户看到的是 Off，而沙箱实际在联网。
+ */
+export function allowNetworkEnabled(settings: AppSettings): boolean {
+  return settings.computerUse?.allowNetwork ?? COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+}
+
+/**
+ * 点一下开关要发的补丁。子对象整块回写（它目前只有这一项），
+ * 不走 `{ allowNetwork }` 以外的推导——渲染层不替下一个人猜字段。
+ */
+export function allowNetworkPatch(enabled: boolean): Pick<SettingsPatch, "computerUse"> {
+  return { computerUse: { allowNetwork: enabled } };
 }
 
 export type ProbeVisual = { kind: "ready" } | { kind: "not-ready"; guidance: string[] };
