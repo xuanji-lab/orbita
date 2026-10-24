@@ -241,6 +241,11 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  * broker 的兜底超时必须比这条线更长，否则主进程还在等、agent 先把真成功判成
  * 「主进程没有回执」（computer-tools.ts 的 BROKER_TIMEOUT_MS）。agent 进程不能
  * import 主进程模块，跨进程共享的常量只有这里能放。
+ *
+ * **0.7.0 起它与 guest 里的 worker 超时是一对**：`cdp-*` 由该会话自己的 worker 子进程执行，
+ * worker 40 秒还没有回执就被 taskkill（guest-bridge/WorkerHost.cs 的 CommandTimeoutMs），
+ * 桥在同一秒内回一句人话。它必须比这条 45 秒的线早，模型才拿得到那句能照着做的错误，
+ * 而不是宿主一句笼统的「没响应」。
  */
 export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
 

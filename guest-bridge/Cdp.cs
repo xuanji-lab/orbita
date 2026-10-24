@@ -1,8 +1,11 @@
 // Orbita guest bridge —— 沙箱内 Edge 的 CDP 通道（桥版本 0.4.0 新增）。
 //
 // 0.6.0 起**一个会话一个实例**：CdpSession 是每个会话自己的 Edge（各自的 --user-data-dir 与
-// --remote-debugging-port=0），CdpSessions 是那张会话表（按 session 字段路由、上限 4、
-// 空闲 5 分钟回收）。不带 session 的调用一律落到 `default`，行为与 0.5.0 一模一样。
+// --remote-debugging-port=0）。0.7.0 起执行者换成**该会话自己的 worker 子进程**（WorkerHost.cs）：
+// 一个 worker 进程里只有一个 CdpSession，因而这里不再需要会话表 / 空闲回收——上来的是
+// 「会话」这件事已经由「哪个 worker 进程」表达了，worker 被杀 = 它的 Edge 一起死。
+// CdpSessions 因此只剩纯函数与常量：会话 id 安全化（两边必须逐字一致）、命令名白名单、
+// 实例上限那句话、profile 目录的路径与删除。
 //
 // 为什么是「语义原子命令」而不是裸 CDP 转发：
 //   ① CDP 是事件驱动的（导航完成是 Page.loadEventFired 事件，不是 navigate 的回执），
@@ -43,8 +46,6 @@ internal sealed class CdpSession
     // ── 沙箱内的固定路径（与 shared/computer-use.ts 的常量严格一致）────────────────
     private const string EdgePathX86 = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
     private const string EdgePathX64 = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
-    /** profile 根目录：每个会话一个子目录（共用 profile 时两个 Edge 会抢 SingletonLock，第二个起不来） */
-    private const string ProfileRoot = @"C:\orbita-browser\sessions";
     private const string UploadRoot = @"C:\orbita-out\upload";
     private const string DownloadRoot = @"C:\orbita-out\downloads";
 
@@ -59,13 +60,11 @@ internal sealed class CdpSession
     /** extract / observe 正文单次上限（resp 是整读整写的文件，超了宿主吃不下） */
     private const int TextLimit = 20000;
 
-    // ── 会话状态：**一个实例一个会话**（v1.5-1 起；registry 在 CdpSessions）────────────────
+    // ── 会话状态：**一个实例一个会话**（v1.5-1 起；一个 worker 进程只有它）────────────────
     /** 安全化之后的会话键（等于 profile 目录名）。诊断日志与回执里的 session 字段都用它 */
     internal readonly string Key;
     /** 这个会话的 profile 目录（guest 绝对路径，C:\orbita-browser\sessions\<Key>） */
     private readonly string _profileDir;
-    /** 最后一次被命令碰到的时刻（UTC）。空闲回收看它 */
-    internal DateTime LastActivityUtc;
     private ClientWebSocket _ws;
     /** CDP 的 flatten sessionId（不是我们的会话键；同名不同物，别混） */
     private string _sessionId = "";
@@ -79,15 +78,13 @@ internal sealed class CdpSession
     public CdpSession(string key)
     {
         Key = key;
-        _profileDir = Path.Combine(ProfileRoot, key);
-        LastActivityUtc = DateTime.UtcNow;
+        _profileDir = CdpSessions.ProfileDir(key);
     }
 
-    // ── 入口：registry 按 session 分派到具体的会话实例 ─────────────────────────────
+    // ── 入口：worker（或没有 worker 时的临时实例）按命令分派 ─────────────────────
 
     internal string Execute(string command, string raw, string baseName, string cmdDir)
     {
-        LastActivityUtc = DateTime.UtcNow;
         try
         {
             if (command == "cdp-start") return Start(raw);
@@ -272,9 +269,9 @@ internal sealed class CdpSession
         return content;
     }
 
-    // ── 停一个会话（registry 负责从字典里摘掉再调它）──────────────────────────────
+    // ── 停一个会话（worker 收到 worker-stop / 被主桥杀掉之前调它）─────────────────
 
-    /** 清连接、清状态、杀我们自己起的那个进程树。不删 profile 目录（显式 stop 还留着，空闲回收才删） */
+    /** 清连接、清状态、杀我们自己起的那个进程树。不删 profile 目录（那个由主桥在收尾时删） */
     internal void Shutdown()
     {
         CloseSocket();
@@ -285,24 +282,7 @@ internal sealed class CdpSession
         KillOurEdge();
     }
 
-    /**
-     * 删掉这个会话的 profile 目录（空闲回收用）。**删不掉只记日志**：
-     * Edge 刚被杀时文件句柄可能还没全放开，删不动是常态；残留目录不占名额，
-     * 下次同会话启动时会被自己复用。
-     */
-    internal void ReapProfile()
-    {
-        try
-        {
-            if (Directory.Exists(_profileDir)) Directory.Delete(_profileDir, true);
-        }
-        catch (Exception ex)
-        {
-            Program.Log("删除 profile 目录失败（" + _profileDir + "）：" + ex.Message);
-        }
-    }
-
-    /** 是否还占着一个实例名额：我们起的 Edge 进程还在 */
+    /** 是否还在跑我们起的 Edge：worker 用它判断「启动失败不占着这个 worker」 */
     internal bool HasLiveProcess()
     {
         return _edge != null && !_edge.HasExited;
@@ -383,31 +363,6 @@ internal sealed class CdpSession
             return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
                 .Str("error", ex.Message).ToString();
         }
-    }
-
-    /**
-     * 汇总视图里的一行（cdp-status 不带 session 时每个会话给这一条）。
-     * 与 Status 的差别：不列标签页、不报错，读不到 url/title 就给空串——
-     * 4 个会话里一个卡住不该让整份汇总失败。
-     */
-    internal string SummaryJson()
-    {
-        if (!IsAlive())
-            return new JObj().Str("session", Key).Bool("running", false).Num("port", _port).ToString();
-        string url = "";
-        string title = "";
-        try
-        {
-            ConnectAndAttach();
-            url = EvalString("location.href", 3000);
-            title = EvalString("document.title", 3000);
-        }
-        catch
-        {
-            // 只是诊断信息：连不上就留空，running 仍按进程存活报
-        }
-        return new JObj().Str("session", Key).Bool("running", true).Num("port", _port)
-            .Str("url", url).Str("title", title).ToString();
     }
 
     private string OkWithStatus(bool alreadyRunning)
@@ -1362,67 +1317,30 @@ internal sealed class JObj
 }
 
 /**
- * 会话注册表：`cdp-*` 的入口（Program.cs 的命令循环把 CDP 命令交给它）。
+ * CDP 侧的两个纯函数与常量（0.7.0 起不再是「会话注册表」）。
  *
- * v1.5-1 之前 CdpSession 是静态单例——所有会话共用一个 Edge、一份 profile。那条线上
- * 两个 agent 的网页任务根本没法并行：A 的导航会换掉 B 正在读的页面，两个 Edge 也不可能
- * 共用一份 profile（Chromium 的 SingletonLock 只放一个进程）。现在一个会话一个实例：
- * 各自的 Edge、各自的 `--user-data-dir`、各自的 `--remote-debugging-port=0`。
- *
- * 这里只做四件事：按 `session` 字段路由、执行实例上限、空闲回收、把会话 id 安全化成目录名。
- * 键 = 安全化后的会话 id，缺省 `default`——**不带 session 字段的旧调用行为与改动前一模一样**，
- * 这是向后兼容那条线。
+ * 0.6.0 之前这里是一张会话表：按 session 路由、执行 4 个实例的上限、空闲回收。
+ * 0.7.0 把执行搬进了**每会话一个 worker 子进程**（WorkerHost.cs）之后，那张表就由
+ * 「哪个 worker 进程」本身表达了——资源上限也在主桥（谁负责拉 worker，谁计数）。
+ * 留在这里的只有：命令名白名单（主桥据此判「未知的 CDP 命令」）、会话 id 安全化
+ * （**与宿主 shared/computer-use.ts 的 safeBrowserSessionId 逐字一致**）、上限那句话
+ * （模型看得见的文案，自测断言它）、以及删 profile 目录。
  */
 internal static class CdpSessions
 {
     /** 与 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_MAX 同值（桥是执行者，宿主只是转述） */
-    private const int MaxBrowsers = 4;
+    internal const int MaxBrowsers = 4;
+
     /** 与 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_IDLE_MS 同值 */
-    private const int IdleReapMs = 5 * 60 * 1000;
+    internal const int IdleReapMs = 5 * 60 * 1000;
+
     /** 与 COMPUTER_USE_DEFAULT_BROWSER_SESSION 同值 */
     private const string DefaultKey = "default";
+
     /** 会话 id 进目录名之前截断到这么长（Windows 路径长度 + 可读性的折中） */
     private const int MaxKeyLength = 48;
 
-    private static readonly Dictionary<string, CdpSession> Sessions =
-        new Dictionary<string, CdpSession>(StringComparer.Ordinal);
-
-    /** 命令循环的唯一入口。任何失败都回人话 JSON，绝不抛到命令循环里 */
-    public static string Execute(string command, string raw, string baseName, string cmdDir)
-    {
-        try
-        {
-            if (!IsKnown(command)) return Fail("未知的 CDP 命令：" + command);
-
-            string rawSession = Program.ExtractJsonString(raw, "session");
-            bool hasSession = rawSession != null && rawSession.Length > 0;
-            // cdp-status 不带 session = **汇总**所有会话（宿主缓存到上限时靠它拿真值）
-            if (command == "cdp-status" && !hasSession) return StatusAll();
-
-            string key = SafeSessionId(rawSession);
-            if (command == "cdp-start") return StartSession(key, raw);
-            if (command == "cdp-stop") return StopSession(key);
-            if (command == "cdp-status") return StatusOne(key);
-
-            CdpSession session;
-            if (!Sessions.TryGetValue(key, out session))
-            {
-                // 这个会话还没起过浏览器：**仍然走一遍实例的参数校验**（旧行为：cdp-nav 缺 url 报
-                // 「需要 url」、cdp-tabs 的 op 写错报「list 或 switch」，而不是一句笼统的「没在运行」）。
-                // 这个实例**不进字典、不占名额、不起进程**，命令做完就丢。
-                return new CdpSession(key).Execute(command, raw, baseName, cmdDir);
-            }
-            return session.Execute(command, raw, baseName, cmdDir);
-        }
-        catch (Exception ex)
-        {
-            Program.Log("CDP 路由 " + command + " 失败：" + ex.Message);
-            return Fail("沙箱里的浏览器命令 " + command + " 失败：" + ex.Message
-                + "。可以再试一次 sandbox_navigate；连续失败就改用 computer_screenshot / computer_click 像素工具");
-        }
-    }
-
-    private static bool IsKnown(string command)
+    internal static bool IsKnown(string command)
     {
         return command == "cdp-start" || command == "cdp-stop" || command == "cdp-status"
             || command == "cdp-nav" || command == "cdp-observe" || command == "cdp-click"
@@ -1430,117 +1348,6 @@ internal static class CdpSessions
             || command == "cdp-shot" || command == "cdp-upload" || command == "cdp-download"
             || command == "cdp-tabs";
     }
-
-    // ── 生命周期 ────────────────────────────────────────────────────────────────
-
-    private static string StartSession(string key, string raw)
-    {
-        CdpSession existing;
-        if (Sessions.TryGetValue(key, out existing))
-        {
-            if (existing.HasLiveProcess())
-            {
-                // 幂等：这个会话的浏览器已经在跑，直接回现状（带 url 就当作一次导航）
-                return existing.Execute("cdp-start", raw, "", "");
-            }
-            // 进程已经没了（用户关掉了窗口 / 上一轮启动失败）：摘掉，下面按新建处理。
-            // **不删 profile**：重启同一个会话应当接着用它的登录态。
-            Sessions.Remove(key);
-            existing.Shutdown();
-        }
-        PruneDead();
-        if (Sessions.Count >= MaxBrowsers) return TooManyReply(key);
-
-        CdpSession session = new CdpSession(key);
-        Sessions.Add(key, session);
-        string reply = session.Execute("cdp-start", raw, "", "");
-        // 启动失败（找不到 msedge / 端口没开 / 测试缝）不占名额：下一次调用要能重新试，
-        // 而不是被自己的一次失败卡一个位置
-        if (!session.HasLiveProcess()) Sessions.Remove(key);
-        return reply;
-    }
-
-    private static string StopSession(string key)
-    {
-        CdpSession session;
-        if (!Sessions.TryGetValue(key, out session))
-            return new JObj().Bool("ok", true).Str("session", key).Bool("alreadyStopped", true).ToString();
-        Sessions.Remove(key);
-        session.Shutdown();
-        return new JObj().Bool("ok", true).Str("session", key).ToString();
-    }
-
-    private static string StatusOne(string key)
-    {
-        CdpSession session;
-        // 没有实例不是错误（status 是查询）：造一个临时的问一下，它会回
-        // `ok:true, running:false, hint`——宿主靠 `running` 决定要不要 cdp-start，抛出错就断链了。
-        if (!Sessions.TryGetValue(key, out session)) session = new CdpSession(key);
-        return session.Execute("cdp-status", "", "", "");
-    }
-
-    /** 汇总：每个会话一行（诊断用；也是宿主在「缓存说到上限」时拿真值的那个形状） */
-    private static string StatusAll()
-    {
-        PruneDead();
-        StringBuilder list = new StringBuilder("[");
-        int count = 0;
-        bool anyRunning = false;
-        foreach (KeyValuePair<string, CdpSession> pair in Sessions)
-        {
-            if (count > 0) list.Append(",");
-            list.Append(pair.Value.SummaryJson());
-            if (pair.Value.HasLiveProcess()) anyRunning = true;
-            count++;
-        }
-        list.Append("]");
-        return new JObj().Bool("ok", true).Bool("running", anyRunning)
-            .Num("count", count).Raw("sessions", list.ToString()).ToString();
-    }
-
-    /**
-     * 空闲回收：命令循环每轮调一次（250ms 一次，字典空时立刻返回）。
-     *
-     * 只按**字典里的会话**回收，绝不按镜像名找进程（仓规）。停完删 profile 目录——
-     * 目录里有登录态与缓存，留着等于把「这个会话已经不用了」的数据继续摊在地上；
-     * 删不掉只记日志（刚杀的进程可能还没放开句柄）。
-     */
-    public static void ReapIdle()
-    {
-        if (Sessions.Count == 0) return;
-        List<string> keys = new List<string>(Sessions.Keys);
-        for (int i = 0; i < keys.Count; i++)
-        {
-            CdpSession session;
-            if (!Sessions.TryGetValue(keys[i], out session)) continue;
-            double idleMs = (DateTime.UtcNow - session.LastActivityUtc).TotalMilliseconds;
-            if (idleMs < IdleReapMs) continue;
-            Program.Log("CDP 会话 " + session.Key + " 空闲 " + (long)(idleMs / 1000) + " 秒，回收（停 Edge + 删 profile）");
-            Sessions.Remove(session.Key);
-            session.Shutdown();
-            session.ReapProfile();
-        }
-    }
-
-    /** 摘掉 Edge 已经退出的会话（它们不占名额，也不该出现在汇总里） */
-    private static void PruneDead()
-    {
-        if (Sessions.Count == 0) return;
-        List<string> dead = new List<string>();
-        foreach (KeyValuePair<string, CdpSession> pair in Sessions)
-        {
-            if (!pair.Value.HasLiveProcess()) dead.Add(pair.Key);
-        }
-        for (int i = 0; i < dead.Count; i++)
-        {
-            CdpSession session;
-            if (!Sessions.TryGetValue(dead[i], out session)) continue;
-            Sessions.Remove(dead[i]);
-            session.Shutdown();
-        }
-    }
-
-    // ── 回执文案 ────────────────────────────────────────────────────────────────
 
     /**
      * 上限文案。**自测断言它**提到 cdp-stop 与「最多 4 个」——模型只有这句话能照着做：
@@ -1553,17 +1360,29 @@ internal static class CdpSessions
             + (IdleReapMs / 60000) + " 分钟后自动回收）";
     }
 
-    private static string TooManyReply(string key)
+    /** 会话键 → profile 目录（两边同一个规则：C:\orbita-browser\sessions\<键>） */
+    internal static string ProfileDir(string key)
     {
-        return new JObj().Bool("ok", false).Str("session", key).Str("error", TooManyMessage()).ToString();
+        return System.IO.Path.Combine(@"C:\orbita-browser\sessions", key);
     }
 
-    private static string Fail(string message)
+    /**
+     * 删掉一个会话的 profile 目录（显式 stop / 空闲回收）。**删不掉只记日志**：
+     * Edge 刚被杀时文件句柄可能还没全放开，删不动是常态；残留目录不占名额，
+     * 下次同会话启动时会被自己复用。
+     */
+    internal static void DeleteProfile(string key)
     {
-        return new JObj().Bool("ok", false).Str("error", message).ToString();
+        string dir = ProfileDir(key);
+        try
+        {
+            if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("删除 profile 目录失败（" + dir + "）：" + ex.Message);
+        }
     }
-
-    // ── 会话 id → 目录名 ────────────────────────────────────────────────────────
 
     /**
      * 安全化（与 shared/computer-use.ts 的 safeBrowserSessionId **逐字一致**）：
@@ -1571,7 +1390,8 @@ internal static class CdpSessions
      *
      * 为什么必须有这一关：键会拼进 `C:\orbita-browser\sessions\<键>`——带 `..` 或 `\`
      * 的会话 id 能把 profile 目录指到 guest 的任意位置（那目录里全是可执行配置）。
-     * 同时它也是「两个宿主会话不会在桥侧撞成同一个浏览器」的保证。
+     * 同时它也是「两个宿主会话不会在桥侧撞成同一个浏览器」的保证，以及 worker 目录名
+     * （`out\worker\<键>`）与命令文件名前缀的来源。
      */
     internal static string SafeSessionId(string raw)
     {

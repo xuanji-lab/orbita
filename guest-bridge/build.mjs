@@ -59,6 +59,8 @@ const args = [
   // CDP 浏览器通道（0.4.0）：单独一个源文件，免得 Program.cs 再涨一倍
   // （仍然零依赖、仍然只产出一个 exe）
   path.join(scriptDir, "Cdp.cs"),
+  // 可杀的 CDP worker（0.7.0）：主桥路由 + worker 进程本体 + worker 层自测
+  path.join(scriptDir, "WorkerHost.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);
