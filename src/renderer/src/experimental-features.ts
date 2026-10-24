@@ -43,12 +43,6 @@ export interface ExperimentalFeature {
   name: LocalizedText;
   /** 一句话：这个功能是什么、在哪里看得到 */
   summary: LocalizedText;
-  /**
-   * 与另一项互斥（今天只有黑洞 ↔ 俄罗斯方块这一对）：设置页打开这一项时连带
-   * 把它关掉（SettingsView 的开关逻辑）。盘上手改出两个都开时 parseSettings
-   * 以黑洞为准。双方都要声明（对称），文案里也要说清互斥。
-   */
-  exclusiveWith?: ExperimentalFeatureId;
   /** 按时间顺序（旧 → 新） */
   changelog: readonly ExperimentalChange[];
 }
@@ -173,70 +167,6 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         note: {
           zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
           en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
-        },
-      },
-    ],
-  },
-  {
-    id: "composer-blackhole",
-    icon: "orbit",
-    exclusiveWith: "composer-tetris",
-    name: { zh: "输入框黑洞", en: "Input box black hole" },
-    summary: {
-      zh: "拖进来的文件被吸进输入框中心，再从聊天区顶上的舷窗掉进输入框上方的隐形盒子，堆起来；发送后消息顶上留一份缩小的快照。只在浅色、黛、玄三套主题生效。与『俄罗斯方块』互斥：打开这个会关掉俄罗斯方块。",
-      en: "Dropped files are pulled into the centre of the composer, then fall from a porthole at the top of the chat into an invisible box above it and pile up; sent messages keep a shrunken snapshot. Light, Slate and Onyx themes only. Mutually exclusive with Tetris: turning this on turns Tetris off.",
-    },
-    changelog: [
-      {
-        pr: 188,
-        date: "2026-10-11",
-        note: {
-          zh: "首版：中心变黑、吸入、舷窗掉落、重力堆叠与删除补位，发送后消息里留缩小快照。",
-          en: "First version: the centre darkens, files are pulled in, fall from the porthole, stack under gravity and settle when one is removed; sent messages keep a shrunken snapshot.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-11",
-        note: {
-          zh: "挂到实验开关后面：关着时设置里不出这个开关，存过的选择也不生效。",
-          en: "Moved behind the experimental switch: the toggle is hidden when off, and a saved choice has no effect.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-12",
-        note: {
-          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
-          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
-        },
-      },
-      {
-        pr: 212,
-        date: "2026-10-12",
-        note: {
-          zh: "与『俄罗斯方块』互斥：打开这个会连带关掉俄罗斯方块（同一个材料盒的两种形态）。",
-          en: "Mutually exclusive with Tetris: turning this on now turns Tetris off (two styles of the same material box).",
-        },
-      },
-    ],
-  },
-  {
-    id: "composer-tetris",
-    icon: "blocks",
-    exclusiveWith: "composer-blackhole",
-    name: { zh: "俄罗斯方块", en: "Tetris" },
-    summary: {
-      zh: "拖进来的文件不演黑洞特效，从输入框上方的隐形盒子口随机落下、堆起来，删除后重力补位，发送后消息顶上留一份缩小快照。只在浅色、黛、玄三套主题生效。与『输入框黑洞』互斥：打开这个会关掉黑洞。",
-      en: "Dragged files skip the black-hole theatrics: they drop at random from the mouth of the invisible box above the input and stack up, settle under gravity when removed, and sent messages keep a shrunken snapshot. Light, Slate and Onyx themes only. Mutually exclusive with the input box black hole: turning this on turns the black hole off.",
-    },
-    changelog: [
-      {
-        pr: 212,
-        date: "2026-10-12",
-        note: {
-          zh: "首版：材料从盒口纯随机落点落下（确定性种子，同一份清单永远同一个布局）。",
-          en: "First version: materials drop from the mouth of the box to purely random spots (deterministic seeds; the same list always yields the same layout).",
         },
       },
     ],

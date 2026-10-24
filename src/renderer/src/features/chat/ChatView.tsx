@@ -124,8 +124,6 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
-import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
-import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
@@ -1867,8 +1865,6 @@ function Pane(props: {
   const [editing, setEditing] = useState(false);
   return (
     <div
-      // 输入框黑洞的舷窗挂在滚动段顶边（data-porthole-anchor）：BlackholeBox 从输入框往上找这一对
-      data-chat-pane=""
       style={{
         height: "100%",
         minHeight: 0,
@@ -2000,7 +1996,7 @@ function Pane(props: {
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走。
           样式在 styles.css 的 .chat-scroll-seg（含 overflow: hidden——页脚很高时滚动段不越界盖到页脚下） */}
-      <div data-porthole-anchor="" className="chat-scroll-seg">
+      <div className="chat-scroll-seg">
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
@@ -2925,7 +2921,6 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
-  const boxStyle = useContext(MaterialBoxContext);
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
@@ -2950,16 +2945,7 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {/* 材料盒启用（黑洞 / 俄罗斯方块）：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
-      {boxStyle !== null && images.length + fileRefs.length > 0 ? (
-        <SentBlackholeBox
-          style={boxStyle}
-          images={images}
-          files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
-        />
-      ) : (
-        images.length > 0 && <UserImages images={images} />
-      )}
+      {images.length > 0 && <UserImages images={images} />}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2981,7 +2967,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {boxStyle === null && fileRefs.length > 0 && (
+      {fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡

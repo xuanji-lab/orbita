@@ -37,8 +37,6 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
-import { MaterialBoxContext } from "./shell/BlackholeBox.tsx";
-import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -1073,15 +1071,6 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
-    {/* 输入框材料盒：开关 × 主题（只在浅 / 黛 / 玄）× 黑洞与俄罗斯方块的互斥优先级，
-        在这里用 materialBoxStyle 算一次，输入框与转录都读它 */}
-    <MaterialBoxContext.Provider
-      value={materialBoxStyle(
-        experimentalFeatures["composer-blackhole"] === true,
-        experimentalFeatures["composer-tetris"] === true,
-        resolvedTheme,
-      )}
-    >
     <CitationOpenContext.Provider value={openCitation}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
@@ -1316,7 +1305,6 @@ export function App() {
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
-    </MaterialBoxContext.Provider>
     </PastedTextCollapseContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>
