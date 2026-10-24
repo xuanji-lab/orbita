@@ -225,6 +225,9 @@ export function App() {
     openFilesPanel,
     playChime: playCompletionChime,
   });
+  /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
+  const focusFilesView = focus.filesView;
+  const fileOpenRequest = focus.fileOpen;
 
   /**
    * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
@@ -1092,8 +1095,8 @@ export function App() {
                 session={session}
                 escapeRef={filesEscapeRef}
                 citeFocus={citeFocus}
-                focusWorkspaceId={focus.filesView?.workspaceId ?? null}
-                fileOpen={focus.fileOpen}
+                focusWorkspaceId={focusFilesView?.workspaceId ?? null}
+                fileOpen={fileOpenRequest}
               />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
