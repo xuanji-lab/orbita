@@ -17,6 +17,7 @@ import {
 } from "./usage-week.ts";
 import type { UsagePetPref } from "@shared/settings";
 import type { UsageDayTotal } from "@shared/usage";
+import { ModelAvatar } from "../features/settings/ModelAvatar";
 
 /**
  * 侧栏左下角的 7 天 token 用量格 + 星云能量体。
@@ -84,6 +85,7 @@ export function UsageMeter(props: {
   const activeTier: UsageTier = cells[active]?.tier ?? 0;
   const t = useT();
   const hovered = hover === null ? undefined : cells[hover];
+  const hoveredDay = hovered === undefined ? undefined : days?.find((day) => day.date === hovered.date);
   const petRef = useRef<HTMLDivElement | null>(null);
 
   return (
@@ -111,7 +113,8 @@ export function UsageMeter(props: {
               role="status"
               data-edge={active <= 1 ? "start" : active >= cells.length - 2 ? "end" : undefined}
             >
-              {usageText(hovered, t)}
+              <div className="usage-say-total">{usageText(hovered, t)}</div>
+              {hoveredDay !== undefined && <DayBreakdown day={hoveredDay} />}
             </div>
           )
         )}
@@ -145,6 +148,46 @@ export function UsageMeter(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * 悬停一格的明细（与价格 · 能力图同一本账、同一个型号口径）：按型号的 token（头像 + 显示名），
+ * 意图召回单列，最后一行「≈ $x（按官方单价折算）」。没有用量的一天不出明细。
+ */
+function DayBreakdown(props: { day: UsageDayTotal }) {
+  const t = useT();
+  const { day } = props;
+  if (day.tokens === 0) return null;
+  return (
+    <div className="usage-say-rows">
+      {day.models.map((model) => (
+        <div key={model.modelId} className="usage-say-row">
+          <ModelAvatar modelId={model.modelId} provider={model.vendor} size={14} />
+          <span className="usage-say-name">{model.name}</span>
+          <span className="usage-say-num">{formatTokens(model.tokens)}</span>
+        </div>
+      ))}
+      {day.intentTokens > 0 && (
+        <div className="usage-say-row">
+          <span className="usage-say-dot" aria-hidden="true" />
+          <span className="usage-say-name">{t.usage.intentRecall}</span>
+          <span className="usage-say-num">{formatTokens(day.intentTokens)}</span>
+        </div>
+      )}
+      {day.cost !== null && (
+        <div className="usage-say-cost">
+          {(day.cost.partial ? t.usage.costPartial : t.usage.cost)(formatUsd(day.cost.usd))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 花费：≥ $1 两位小数，< $1 两位有效数字（$0.031） */
+function formatUsd(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd === 0) return "$0";
+  return `$${usd.toPrecision(2)}`;
 }
 
 /** 悬停时星云说的那句：当天总量，零用量说「没有用量」 */
