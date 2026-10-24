@@ -22,6 +22,8 @@
  * 最近提问时要先剥掉引用——否则侧栏标题会是一行 `<quoted_context …>`。
  */
 
+import { parseTaskRefs, type TaskRef } from "./task-ref.ts";
+
 /** 被引用的消息是谁说的。Proma 还有 system，我们的转录里没有可划选的 system 消息 */
 export type QuoteRole = "user" | "assistant";
 
@@ -137,10 +139,13 @@ function attribute(attrs: string, name: string): string | undefined {
  * 整段正文 → 引用 + 用户自己的话。解析不出的块原样留在文字里（宁可显示一段标签，
  * 也不吞掉用户看不见的内容）。用户文字不含引用块时返回 `{ quotes: [], text }`，text 原样。
  */
-export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text: string } {
-  if (!message.includes("<quoted_")) return { quotes: [], text: message };
+export function parseQuotedMessage(message: string): { quotes: TextQuote[]; tasks: TaskRef[]; text: string } {
+  // 任务引用行（task-ref.ts）排在引用块前面，一并剥掉：标题 / 最近提问 / 撤回回填这些只要
+  // 用户自己话的消费者都经过这里，各自再剥一遍容易漏（漏了侧栏标题就是一行裸标签）
+  const { tasks, text: rest } = parseTaskRefs(message);
+  if (!rest.includes("<quoted_")) return { quotes: [], tasks, text: rest };
   const quotes: TextQuote[] = [];
-  const text = message.replace(BLOCK, (whole, tag: string, attrs: string, body: string) => {
+  const text = rest.replace(BLOCK, (whole, tag: string, attrs: string, body: string) => {
     if (tag === "quoted_file") {
       const filePath = attribute(attrs, "path");
       if (filePath === undefined) return whole;
@@ -157,7 +162,7 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
     });
     return "";
   });
-  return { quotes, text: text.trim() };
+  return { quotes, tasks, text: text.trim() };
 }
 
 /** 只要用户自己说的那部分（标题、最近提问、复制键都要它） */

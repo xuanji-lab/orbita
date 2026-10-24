@@ -12,13 +12,17 @@
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
 import type { TextQuote } from "../../../shared/quote.ts";
+import type { TaskRef } from "../../../shared/task-ref.ts";
 import type { ComposerFileRef } from "./composer-attachments.ts";
 import type { ComposerImage } from "./composer-images.ts";
 import { quoteMeta } from "./quote-label.ts";
 import type { Messages } from "../messages-en.ts";
 
-/** 材料种类。file / dir 分开记：图标与语义都不同（模型对目录用 list、对文件用 read） */
-export type ComposerMaterialKind = "image" | "file" | "dir" | "quote";
+/**
+ * 材料种类。file / dir 分开记：图标与语义都不同（模型对目录用 list、对文件用 read）。
+ * task = 从侧栏拖进来的一条会话（模型用 read_task 读它）
+ */
+export type ComposerMaterialKind = "image" | "file" | "dir" | "task" | "quote";
 
 /**
  * 一条材料。`meta` 是排在名字后面的一小句机器事实（粘贴的行数、引用的来源与字数），
@@ -44,6 +48,14 @@ export type ComposerMaterial =
       ref: ComposerFileRef;
     }
   | {
+      kind: "task";
+      id: string;
+      name: string;
+      meta: null;
+      remove: () => void;
+      task: TaskRef;
+    }
+  | {
       kind: "quote";
       id: string;
       name: string;
@@ -61,9 +73,11 @@ export function composerMaterials(input: {
   attachments: readonly ComposerImage[];
   files: readonly ComposerFileRef[];
   quotes: readonly TextQuote[];
+  tasks: readonly TaskRef[];
   onRemoveAttachment: (id: string) => void;
   onRemoveFile: (id: string) => void;
   onRemoveQuote: (index: number) => void;
+  onRemoveTask: (id: string) => void;
   t: Messages;
 }): ComposerMaterial[] {
   const { t } = input;
@@ -85,6 +99,15 @@ export function composerMaterials(input: {
       meta: null,
       remove: () => input.onRemoveFile(ref.id),
       ref,
+    })),
+    // 任务引用与文件同一层胶囊（都是「带进来的东西」的指针），排在文件后面
+    ...input.tasks.map<ComposerMaterial>((task) => ({
+      kind: "task",
+      id: `task:${task.id}`,
+      name: task.title === "" ? t.common.newTask : task.title,
+      meta: null,
+      remove: () => input.onRemoveTask(task.id),
+      task,
     })),
     ...input.quotes.map<ComposerMaterial>((quote, index) => ({
       kind: "quote",

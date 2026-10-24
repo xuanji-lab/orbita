@@ -1132,6 +1132,8 @@ function ChatViewBody(props: {
       dropActive={props.dropActive === true}
       quotes={session.quotes}
       onRemoveQuote={session.removeQuote}
+      tasks={session.tasks}
+      onRemoveTask={session.removeTaskRef}
       jumpToQuote={jumpToQuote}
       attachments={session.attachments}
       onAttach={session.attachIncoming}

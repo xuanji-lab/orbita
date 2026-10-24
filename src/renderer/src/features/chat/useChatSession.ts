@@ -57,6 +57,7 @@ import {
   type ComposerPasteBlock,
 } from "../../shell/paste-blocks.ts";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
+import { composeTaskRefMessage, type TaskRef } from "../../../../shared/task-ref.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
@@ -225,6 +226,11 @@ export interface ChatSession {
   /** 加一条引用。同一条消息里的同一段重复加不重复记 */
   addQuote: (quote: TextQuote) => void;
   removeQuote: (index: number) => void;
+  /** 当前查看会话输入框里的任务引用（侧栏拖进来的会话）；发送时展开成引用行排在最前 */
+  tasks: readonly TaskRef[];
+  /** 加一条任务引用。重复的、拖进自己这条会话的都不记（read_task 读自己会被拒） */
+  addTaskRef: (task: TaskRef) => void;
+  removeTaskRef: (id: string) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
@@ -1259,6 +1265,7 @@ const NO_ATTACHMENTS: readonly ComposerImage[] = [];
 const NO_FILES: readonly ComposerFileRef[] = [];
 const NO_PASTED: readonly ComposerPasteBlock[] = [];
 const NO_QUOTES: readonly TextQuote[] = [];
+const NO_TASKS: readonly TaskRef[] = [];
 
 /** 附图载荷：空就不带字段，纯文字消息的 IPC 载荷与以前一字不差 */
 function imagesField(images: readonly PromptImage[] | undefined): { images?: PromptImage[] } {
@@ -1363,6 +1370,22 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         if (after === before) return prev;
         if (current === undefined && after.length === 0) return prev;
         return new Map(prev).set(draftKey, { text: current?.text ?? "", pasted: after });
+      });
+    },
+    [],
+  );
+  /** 任务引用：同文字引用的规矩（按会话隔离，纯内存，发送 / 排队时展开进正文，撤回时解析回来） */
+  const [taskMap, setTaskMap] = useState<ReadonlyMap<string, readonly TaskRef[]>>(new Map());
+  const writeTasks = useCallback(
+    (draftKey: string, update: (current: readonly TaskRef[]) => readonly TaskRef[]) => {
+      setTaskMap((prev) => {
+        const current = prev.get(draftKey) ?? [];
+        const next = update(current);
+        if (next === current) return prev;
+        const map = new Map(prev);
+        if (next.length === 0) map.delete(draftKey);
+        else map.set(draftKey, next);
+        return map;
       });
     },
     [],
@@ -1514,6 +1537,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const files = fileMap.get(draftKey) ?? NO_FILES;
   const pasted = drafts.get(draftKey)?.pasted ?? NO_PASTED;
   const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
+  const tasks = taskMap.get(draftKey) ?? NO_TASKS;
 
   const addQuote = useCallback(
     (quote: TextQuote) => {
@@ -1530,6 +1554,19 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const removeQuote = useCallback(
     (index: number) => writeQuotes(draftKey, (current) => current.filter((_, i) => i !== index)),
     [draftKey, writeQuotes],
+  );
+  // 拖进自己这条：read_task 读当前会话直接拒（没有信息增量），chip 不该出现
+  const viewingId = sessionId ?? opened?.id ?? null;
+  const addTaskRef = useCallback(
+    (task: TaskRef) => {
+      if (task.id === viewingId) return;
+      writeTasks(draftKey, (current) => (current.some((item) => item.id === task.id) ? current : [...current, task]));
+    },
+    [draftKey, viewingId, writeTasks],
+  );
+  const removeTaskRef = useCallback(
+    (id: string) => writeTasks(draftKey, (current) => current.filter((item) => item.id !== id)),
+    [draftKey, writeTasks],
   );
 
   /**
@@ -1732,6 +1769,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     fresh: boolean;
     text: string;
     quotes: readonly TextQuote[];
+    tasks: readonly TaskRef[];
     images: readonly ComposerImage[];
     files: readonly ComposerFileRef[];
     /** 草稿当时的粘贴块（区间指向 text——快照存的就是那份原文） */
@@ -1761,6 +1799,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         });
       }
       if (snap.quotes.length > 0) writeQuotes(snap.draftKey, (current) => [...current, ...snap.quotes]);
+      if (snap.tasks.length > 0) writeTasks(snap.draftKey, (current) => [...current, ...snap.tasks]);
       if (snap.images.length > 0) {
         writeAttachments(snap.draftKey, (current) => [...current, ...snap.images].slice(0, PROMPT_IMAGE_MAX_COUNT));
       }
@@ -1809,7 +1848,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         setOpened(null);
       }
     },
-    [writeQuotes, writeAttachments, writeFiles],
+    [writeQuotes, writeTasks, writeAttachments, writeFiles],
   );
   useEffect(
     () =>
@@ -1914,6 +1953,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       own === "" &&
       images.length === 0 &&
       quotes.length === 0 &&
+      tasks.length === 0 &&
       files.length === 0 &&
       !pasteActive
     ) {
@@ -1922,7 +1962,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）。
     // 句中粘贴胶囊就地组装成 <pasted-text> 块——位置保留（方案 C），展开的区间本就是
     // 正文。组装后的 text 从这里往下走：排队、投递都以它为准（回填快照另存草稿原文）
-    const raw = composeQuotedMessage(quotes, own);
+    // 任务引用行排在最前（shared/task-ref.ts），引用块随后，用户的话殿后
+    const raw = composeTaskRefMessage(tasks, composeQuotedMessage(quotes, own));
     const text = assemblePasteDraft(raw, pasted);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
@@ -1930,7 +1971,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
     // 拦下会把附件悉数丢掉——按普通消息发。
     const compact =
-      images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
+      images.length === 0 && quotes.length === 0 && tasks.length === 0 && files.length === 0 && !pasteActive
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -2005,6 +2046,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
+      writeTasks(draftKey, () => []);
       return;
     }
     try {
@@ -2028,6 +2070,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         // 还原成发送前的样子，不是已组装的消息
         text: draft,
         quotes,
+        tasks,
         images: attachments,
         files,
         pasted,
@@ -2037,11 +2080,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
+      writeTasks(draftKey, () => []);
       await submitTurn(id, text, target, workspace, resume, images, { files });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
+  }, [engine, draft, attachments, quotes, tasks, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, writeTasks, submitTurn]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -2447,7 +2491,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         nextPasteSeq,
         pasteLang,
       );
-      const { quotes: withdrawn, text } = parseQuotedMessage(textWithTokens);
+      const { quotes: withdrawn, tasks: withdrawnTasks, text } = parseQuotedMessage(textWithTokens);
       // 文本与粘贴块同拍写回：块的 token 在 text 里，分两拍会有一帧对不上账
       setDrafts((prev) => {
         const current = prev.get(draftKey);
@@ -2465,6 +2509,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         });
       });
       if (withdrawn.length > 0) writeQuotes(draftKey, (current) => [...current, ...withdrawn]);
+      if (withdrawnTasks.length > 0) {
+        writeTasks(draftKey, (current) => [
+          ...current,
+          ...withdrawnTasks.filter((task) => !current.some((item) => item.id === task.id)),
+        ]);
+      }
       // 附图一起退回输入框（接在已有的后面）——撤回是「这条我要改」，图是这条的一部分。
       // 超出名额的截掉：输入框里多于上限的图发不出去，留着只会让发送卡住
       if (images.length > 0) {
@@ -2480,7 +2530,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         writeFiles(draftKey, (current) => [...current, ...files.map((file) => ({ ...file, id: crypto.randomUUID() }))]);
       }
     },
-    [draftKey, engine, writeAttachments, writeQuotes, writeFiles],
+    [draftKey, engine, writeAttachments, writeQuotes, writeTasks, writeFiles],
   );
 
   // ————————————————— 会话回退 / 单轮撤销（revert.ts） —————————————————
@@ -2741,13 +2791,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (item.kind === "text") {
         // 排队的 text 里粘贴块已内联：拆回 token 与块，快照还原成发送前的草稿样子
         const tokenized = draftFromSentText(item.text, nextPasteSeq, engine.messagesRef.current.composer.pasteToken);
-        const { quotes: queuedQuotes, text: queuedText } = parseQuotedMessage(tokenized.draft);
+        const { quotes: queuedQuotes, tasks: queuedTasks, text: queuedText } = parseQuotedMessage(tokenized.draft);
         restoreRef.current = {
           sessionId: id,
           draftKey,
           fresh: false,
           text: queuedText,
           quotes: queuedQuotes,
+          tasks: queuedTasks,
           // PromptImage → ComposerImage 与撤回同款转换（排队时名字已丢，name 空串是既有先例）
           images: (item.images ?? []).map((image) => ({ id: crypto.randomUUID(), name: "", image })),
           files: item.files ?? [],
@@ -3112,6 +3163,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     quotes,
     addQuote,
     removeQuote,
+    tasks,
+    addTaskRef,
+    removeTaskRef,
     mode,
     changeMode,
     thinkingLevel,

@@ -5,6 +5,7 @@ import { Menu } from "./Menu";
 import { MaterialStack } from "./composer-material-stack.tsx";
 import { PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
+import type { TaskRef } from "@shared/task-ref";
 import { isPastedTextLarge, pastedTextSize } from "@shared/prompt-attachments";
 import { filesOf, type ComposerImage } from "./composer-images.ts";
 import type { ComposerFileRef } from "./composer-attachments.ts";
@@ -91,6 +92,9 @@ export function Composer(props: {
   /** 输入框里待发的文字引用（按会话隔离，状态在 useChatSession）；展开显示全文 */
   quotes: readonly TextQuote[];
   onRemoveQuote: (index: number) => void;
+  /** 侧栏拖进来的会话（任务引用）；发送时展开成引用行，模型用 read_task 读 */
+  tasks: readonly TaskRef[];
+  onRemoveTask: (id: string) => void;
   /** 跳回被引用的原文；返回 null 表示这条引用的原文不在当前转录里（不画成可点） */
   jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
   /** 输入框里待发的附图（按会话隔离，状态在 useChatSession） */
@@ -255,12 +259,14 @@ export function Composer(props: {
         attachments: props.attachments,
         files: props.files,
         quotes: props.quotes,
+        tasks: props.tasks,
         onRemoveAttachment: props.onRemoveAttachment,
         onRemoveFile: props.onRemoveFile,
         onRemoveQuote: props.onRemoveQuote,
+        onRemoveTask: props.onRemoveTask,
         t,
       }),
-    [props.attachments, props.files, props.quotes, props.onRemoveAttachment, props.onRemoveFile, props.onRemoveQuote, t],
+    [props.attachments, props.files, props.quotes, props.tasks, props.onRemoveAttachment, props.onRemoveFile, props.onRemoveQuote, props.onRemoveTask, t],
   );
   // 有字就能发——跑着的时候 Enter 是排队发送（C-1）。没字 + 跑着 = 停止键：
   // 同一个位置的两面，按输入态切换。想停止时清掉草稿即可，排队是高频动作、停止是少数。
@@ -271,6 +277,7 @@ export function Composer(props: {
     (props.value.trim() !== "" ||
       props.attachments.length > 0 ||
       props.quotes.length > 0 ||
+      props.tasks.length > 0 ||
       props.files.length > 0);
   const stopping = running && !sendable;
   const submit = (): void => props.onSubmit();

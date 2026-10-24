@@ -19,7 +19,7 @@ const reply: TextQuote = { text: "第一行\n第二行", messageId: "m-1", role:
 describe("composeQuotedMessage / parseQuotedMessage", () => {
   it("没有引用就是原文，一字不差", () => {
     assert.equal(composeQuotedMessage([], "你好"), "你好");
-    assert.deepEqual(parseQuotedMessage("你好"), { quotes: [], text: "你好" });
+    assert.deepEqual(parseQuotedMessage("你好"), { quotes: [], tasks: [], text: "你好" });
   });
 
   it("往返：同一批引用（按顺序）与同一句话；messageId 不进正文，解析回来是空串", () => {
@@ -27,6 +27,7 @@ describe("composeQuotedMessage / parseQuotedMessage", () => {
     const message = composeQuotedMessage(quotes, "1. 对\n2. 不对");
     assert.deepEqual(parseQuotedMessage(message), {
       quotes: quotes.map((quote) => ({ ...quote, messageId: "" })),
+      tasks: [],
       text: "1. 对\n2. 不对",
     });
   });
@@ -44,7 +45,7 @@ describe("composeQuotedMessage / parseQuotedMessage", () => {
 
   it("只发引用、没有自己的话也成立", () => {
     const message = composeQuotedMessage([reply], "");
-    assert.deepEqual(parseQuotedMessage(message), { quotes: [{ ...reply, messageId: "" }], text: "" });
+    assert.deepEqual(parseQuotedMessage(message), { quotes: [{ ...reply, messageId: "" }], tasks: [], text: "" });
   });
 
   it("正文里的闭合标签被改写，不会把块提前截断", () => {
@@ -69,13 +70,14 @@ describe("composeQuotedMessage / parseQuotedMessage", () => {
         { text: "文件里的一段", messageId: "", role: "user", filePath: "/repo/a.md" },
         { text: "旧引用", messageId: "p-9", role: "assistant" },
       ],
+      tasks: [],
       text: "问题",
     });
   });
 
   it("解析不出的半截块原样留在文字里，不吞内容", () => {
     const broken = '<quoted_context role="assistant">\n没闭合';
-    assert.deepEqual(parseQuotedMessage(broken), { quotes: [], text: broken });
+    assert.deepEqual(parseQuotedMessage(broken), { quotes: [], tasks: [], text: broken });
   });
 
   it("withoutQuotes 只留用户自己的话", () => {
