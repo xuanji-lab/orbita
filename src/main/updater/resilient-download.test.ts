@@ -209,6 +209,50 @@ describe("downloadFile", () => {
     });
   });
 
+  test("一段反复失败：其余段立刻收工，不再打网络也不再写已关闭的文件", async () => {
+    const data = Buffer.alloc(120_000, 3);
+    let calls = 0;
+    /** 第 0 段永远连不上；其它段慢慢吐，保证第 0 段先耗尽重试 */
+    const transport: RangeTransport = {
+      async open(_url, _headers, range) {
+        calls += 1;
+        if (range.start === 0 && range.end > 0) throw new Error("socket hang up");
+        return {
+          status: 206,
+          headers: { "content-range": `bytes ${range.start}-${range.end}/${data.length}` },
+          body: (async function* () {
+            const slice = data.subarray(range.start, range.end + 1);
+            for (let offset = 0; offset < slice.length; offset += 4096) {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+              yield slice.subarray(offset, offset + 4096);
+            }
+          })(),
+          close: () => undefined,
+        };
+      },
+    };
+
+    await withTempFile(async (path) => {
+      await assert.rejects(
+        downloadFile(transport, {
+          url: URL_OK,
+          destination: path,
+          headers: {},
+          partSize: 40_000,
+          concurrency: 3,
+          maxStalledAttempts: 2,
+          retryBaseDelayMs: 1,
+        }),
+        /下载反复中断/,
+      );
+
+      // 失败后 60ms 内不应再有任何新请求：兄弟段已收工（修之前它们会碰 EBADF 重试）
+      const afterFailure = calls;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(calls, afterFailure);
+    });
+  });
+
   test("服务器不认 Range（200 + content-length）→ 单段下载仍然完整", async () => {
     const data = Buffer.alloc(70_000, 7);
     const transport = new FakeTransport(data, { ignoreRange: true });

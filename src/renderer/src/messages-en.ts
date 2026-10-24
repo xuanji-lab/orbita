@@ -621,6 +621,8 @@ export const en = {
       viewOnGitHub: "View this release on GitHub",
       updates: "Updates",
       idleHint: "Checked automatically in the background.",
+      networkHint:
+        "Updates need access to GitHub. On a restricted network, turn on the system proxy, or set HTTPS_PROXY / HTTP_PROXY and restart the app.",
       checkNow: "Check now",
       checking: "Checking for updates…",
       upToDate: "Up to date",
@@ -637,7 +639,7 @@ export const en = {
       checkFailed: "Couldn't check for updates — ",
       downloadFailed: "The download didn't finish — ",
       installFailed: "Couldn't start the installer — ",
-      failureNetwork: "GitHub is unreachable. Check your network or proxy and try again.",
+      failureNetwork: "GitHub is unreachable.",
       failureNotFound:
         "The update source is missing this release's files — the release may not have uploaded completely.",
       failureRateLimit: "GitHub's API is rate-limiting this machine right now. Try again later.",

@@ -17,6 +17,14 @@ export type ProxyEnv = Readonly<Record<string, string | undefined>>;
 
 const KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
 
+/**
+ * 环境里终究给了代理值吗——即使它因为带凭据 / 协议不认识被上面丢掉了。
+ * service 用它区分「没配」与「配了但用不上」：后者静默直连会让用户以为代理生效了。
+ */
+export function hasProxySetting(env: ProxyEnv): boolean {
+  return KEYS.some((key) => (env[key]?.trim() ?? "") !== "");
+}
+
 /** 
  * 环境变量 → Chromium `proxyRules`；没配 / 配了不认识的协议 / 带凭据时返回 null。
  *

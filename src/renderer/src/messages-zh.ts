@@ -573,6 +573,8 @@ export const zh: Messages = {
       viewOnGitHub: "在 GitHub 上查看本版",
       updates: "更新",
       idleHint: "后台自动检查更新。",
+      networkHint:
+        "自动更新需要能访问 GitHub；受限网络请开启系统代理，或设置 HTTPS_PROXY / HTTP_PROXY 后重启应用。",
       checkNow: "检查更新",
       checking: "正在检查更新…",
       upToDate: "已是最新",
@@ -589,7 +591,7 @@ export const zh: Messages = {
       checkFailed: "检查更新失败，",
       downloadFailed: "下载没有完成，",
       installFailed: "安装程序没有启动，",
-      failureNetwork: "连不上 GitHub。检查网络或代理后重试。",
+      failureNetwork: "连不上 GitHub。",
       failureNotFound: "更新源上没有这一版的发布文件，可能这次发布没传全。",
       failureRateLimit: "GitHub 接口暂时限流，过一会儿再试。",
       failureServer: "GitHub 那边临时出错，稍后再试。",

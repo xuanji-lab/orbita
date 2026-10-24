@@ -226,6 +226,14 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
       });
     };
 
+    /**
+     * 任一段终态失败后立起来：其余段在下一个检查点退出，不再对着已关闭的文件句柄重试。
+     * 没有它，Promise.all 一 reject 文件就被关掉，兄弟段还在写 → EBADF → 各自再重试
+     * 三次（每个 worker 还多打几次网络请求），失败之后还要空转一会儿。
+     */
+    let stopped = false;
+    let firstFailure: Error | null = null;
+
     const downloadPart = async (index: number): Promise<void> => {
       const part = parts[index];
       if (part === undefined) return;
@@ -233,6 +241,7 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
       let lastPosition = part.start;
 
       while ((cursors[index] ?? 0) <= part.end) {
+        if (stopped) return;
         if (isCancelled()) throw new DownloadCancelledError();
         const start = cursors[index] ?? part.start;
         let response: RangeResponse | null = null;
@@ -250,6 +259,7 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
           }
 
           for await (const chunk of response.body) {
+            if (stopped) return;
             if (isCancelled()) throw new DownloadCancelledError();
             const cursor = cursors[index] ?? part.start;
             const remaining = part.end + 1 - cursor;
@@ -290,16 +300,28 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
       }
     };
 
-    // 简单的工作队列：段数多于并发时，谁先空出来谁拿下一段
+    // 简单的工作队列：段数多于并发时，谁先空出来谁拿下一段。
+    // 错误在这里收住而不让 worker 直接 reject：一个段失败不代表整包失败，但要继续
+    // 失败的那个原因。每段都在 stopped 上收工，Promise.all 不必提前炸开。
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < parts.length) {
+        if (stopped) return;
         const index = next;
         next += 1;
-        await downloadPart(index);
+        try {
+          await downloadPart(index);
+        } catch (error) {
+          stopped = true;
+          if (firstFailure === null) {
+            firstFailure = error instanceof Error ? error : new Error(messageOf(error));
+          }
+          return;
+        }
       }
     };
     await Promise.all(Array.from({ length: Math.max(1, concurrency) }, () => worker()));
+    if (firstFailure !== null) throw firstFailure;
     report(true);
   } finally {
     await file.close();

@@ -225,7 +225,17 @@ export function UpdateCard() {
             )}
           </>
         }
-        below={below}
+        below={
+          <>
+            {below}
+            {/*
+             * 常驻一句「更新要能访问 GitHub」+ 受限网络的出口（issue #283）。
+             * 只在这一行能更新时出现（装好的应用）；出错时它就在状态行下方，
+             * 所以错误文案本身不再重复「开代理」那半句（见 messages-*.ts 的 failureNetwork）。
+             */}
+            {supported && <p className="upd-hint">{x.networkHint}</p>}
+          </>
+        }
       >
         <button
           type="button"

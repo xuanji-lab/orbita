@@ -45,7 +45,7 @@ import { builtinNotes } from "./builtin-notes.ts";
 import { failureKindOf } from "./failure.ts";
 import { GitHubApiProvider } from "./github-api-provider.ts";
 import { appNotesOf } from "./notes.ts";
-import { proxyRulesOf } from "./proxy.ts";
+import { hasProxySetting, proxyRulesOf } from "./proxy.ts";
 import { publishTarget, releasesUrl } from "./releases-url.ts";
 import { installResilientDownload } from "./resilient-executor.ts";
 import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
@@ -295,7 +295,15 @@ export class Updater {
    */
   private async applyProxy(): Promise<void> {
     const rules = proxyRulesOf(process.env);
-    if (rules === null) return;
+    if (rules === null) {
+      // 配了却用不上（带账号密码 / 协议不认识）：不能静默直连，否则用户以为代理已生效
+      if (hasProxySetting(process.env)) {
+        console.warn(
+          "[更新] HTTPS_PROXY / HTTP_PROXY 的值不能当更新出口（无法解析、协议不认识，或带账号密码），继续直连",
+        );
+      }
+      return;
+    }
     try {
       await session.fromPartition(NET_SESSION_NAME, { cache: false }).setProxy({ proxyRules: rules });
       console.info("[更新] 更新出口已按 HTTPS_PROXY / HTTP_PROXY 设置代理");

@@ -6,7 +6,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { proxyRulesOf } from "./proxy.ts";
+import { hasProxySetting, proxyRulesOf } from "./proxy.ts";
 
 describe("proxyRulesOf", () => {
   test("HTTPS_PROXY 的 URL 形态 → http/https 两条规则（同一个代理接管两者）", () => {
@@ -37,5 +37,14 @@ describe("proxyRulesOf", () => {
     assert.equal(proxyRulesOf({ HTTPS_PROXY: "http://user:pass@127.0.0.1:7897" }), null);
     assert.equal(proxyRulesOf({ HTTPS_PROXY: "ftp://127.0.0.1:21" }), null);
     assert.equal(proxyRulesOf({ HTTPS_PROXY: "not a url" }), null);
+  });
+
+  test("hasProxySetting 区分「没配」与「配了但用不上」（后者要报一句，不静默直连）", () => {
+    assert.equal(hasProxySetting({}), false);
+    assert.equal(hasProxySetting({ HTTPS_PROXY: "   " }), false);
+    assert.equal(hasProxySetting({ http_proxy: "127.0.0.1:7897" }), true);
+    // 带凭据：proxyRules 用不上，但 env 里确实给了值——service 据此提醒
+    assert.equal(hasProxySetting({ HTTPS_PROXY: "http://user:pass@127.0.0.1:7897" }), true);
+    assert.equal(proxyRulesOf({ HTTPS_PROXY: "http://user:pass@127.0.0.1:7897" }), null);
   });
 });
