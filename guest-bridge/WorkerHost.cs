@@ -393,6 +393,9 @@ internal static class WorkerHost
         ProcessStartInfo info = new ProcessStartInfo(ExecutablePath(), args.ToString());
         info.UseShellExecute = false;
         info.CreateNoWindow = true;
+        // **不加 RedirectStandardOutput/Error**：那是同步管道，父进程（单线程轮询循环）不读干子进程就会阻。
+        // worker 自己的日志由**它自己**写进映射目录（Program.RedirectWorkerLog），这里只记一笔路标。
+        Program.Log("启动 worker：会话 " + key + "，日志 " + Path.Combine(dir, "worker.log"));
         Process process = Process.Start(info);
         if (process == null) throw new Exception("进程没有起来（Process.Start 返回 null）");
 
@@ -600,6 +603,27 @@ internal static class WorkerHost
         }
     }
 
+    /**
+     * 读一个**别人还开着写**的文件（worker.log 就是这样：worker 活着的整个期间都持着句柄）。
+     * `File.ReadAllText` 的共享模式是 FileShare.Read，撞上可写的对端就是一个共享冲突；
+     * 这里要 FileShare.ReadWrite。宿主侧读 out\worker\<会话>\worker.log 也得用同款共享模式
+     * （PowerShell Get-Content / git bash cat 默认就是，不用特别处理）。
+     */
+    private static string TryReadShared(string path)
+    {
+        try
+        {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete))
+            using (StreamReader r = new StreamReader(fs, Encoding.UTF8))
+                return r.ReadToEnd();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static bool HasExited(WorkerHandle worker)
     {
         if (worker.Process == null) return true;
@@ -756,6 +780,9 @@ internal static class WorkerHost
             }
             _cdp = new CdpSession(_key);
             WriteInfo();
+            // 开局一行心跳：它同时是「worker.log 真的落在了宿主读得到的地方」的看门狗
+            Program.Log("worker 启动：会话 " + _key + "，pid " + Process.GetCurrentProcess().Id
+                + "，命令目录 " + _cmdDir + (_testHooks ? "（test-hooks）" : ""));
 
             int next = 1;
             while (true)
@@ -989,6 +1016,16 @@ internal static class WorkerHost
                 ping1 != null && ping1.IndexOf("\"session\":\"st\"", StringComparison.Ordinal) >= 0);
             Program.CheckTrue(failures, ref cases, "① 回执里的 pid 与 worker.json 一致",
                 ping1 != null && ping1.IndexOf("\"pid\":" + pid1, StringComparison.Ordinal) >= 0);
+
+            // ①' worker 自己的日志必须落在映射目录里（2026-10-25 真机：worker 的话一行都没人收，
+            // 导致「错误页取不到正文」猜了三轮）。这里在 worker 还活着、句柄还开着的时候读——
+            // 宿主就是这么读的（FileShare.ReadWrite）。
+            string workerLogPath = Path.Combine(tmp, WorkerDirName, "st", "worker.log");
+            string workerLog = TryReadShared(workerLogPath);
+            Program.CheckTrue(failures, ref cases, "①' worker 日志落在 out\\worker\\<会话>\\worker.log（宿主读得到）",
+                workerLog != null && workerLog.IndexOf("worker 启动：会话 st", StringComparison.Ordinal) >= 0);
+            Program.CheckTrue(failures, ref cases, "①' 日志行带时间与 [bridge] 前缀（与 bridge.log 同款）",
+                workerLog != null && workerLog.IndexOf("[bridge]", StringComparison.Ordinal) >= 0);
 
             // ② 超时：主桥到点 taskkill（CommandTimeoutMs 在 --test-hooks 下是 2.5s）
             string hang = Ask(cmdDir, ref seq, "{\"command\":\"worker-hang\",\"session\":\"st\"}");

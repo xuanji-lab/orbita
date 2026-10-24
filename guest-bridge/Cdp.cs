@@ -959,10 +959,15 @@ internal sealed class CdpSession
         }
         string navError = CdpError(navReply);
         if (navError != null) return Fail("无法打开这个网址（" + ShortUrl(target, NavUrlInMessageMax) + "）：" + navError);
+        // Page.navigate 在导航**提交前**就失败时自己带一份原因码（net::ERR_NAME_NOT_RESOLVED）。
+        // 真机 2026-10-25：错误页 DOM 里一句文本也取不到，这是唯一能拿到码的来源。
+        // 只拿它**解释**已经判定的错误页，不拿它判失败——页内下载会回 net::ERR_ABORTED，
+        // 那不是导航失败。
+        string navErrorText = Program.ExtractJsonString(navReply, "errorText");
         int ready = WaitForReady(target, timeoutMs);
         // 落在浏览器的错误页 = 这一页没有打开。不能报 ok:true：错误页也是「加载完成」的
         // 普通页面，模型拿到 ok 会接着 observe / click 去操作「你似乎未连接到 Internet」。
-        if (ready == ReadyErrorPage) return NavFailure(sw);
+        if (ready == ReadyErrorPage) return NavFailure(sw, navErrorText);
         return NavResult(sw, ready == ReadyOk ? null : "页面在 " + timeoutMs + "ms 内没有加载完成，"
             + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构");
     }
@@ -973,15 +978,40 @@ internal sealed class CdpSession
      *
      * 不回 `chrome-error://chromewebdata/` 这种内部串：模型只会照着它去猜一个不存在的页面。
      */
-    private string NavFailure(Stopwatch sw)
+    private string NavFailure(Stopwatch sw, string navErrorText)
     {
         string href = SafeEvalString("location.href", 3000);
         string title = SafeEvalString("document.title", 3000);
+        // 先看 Page.navigate 自带的 errorText：导航一失败它就在手上了，而错误页正文往往根本
+        // 拿不到（真机 2026-10-25）。既然码已经有了，就**只读一次**正文留证据，不为抠码再等 2s。
+        string code = NavErrorCode(navErrorText);
         string dump;
-        string code = WaitForErrorCode(out dump);
-        LogErrorPageEvidence(code, dump);
+        if (code != null)
+        {
+            dump = ReadErrorPageDump();
+        }
+        else
+        {
+            dump = WaitForErrorDump();
+            code = NavErrorReason(dump, navErrorText);
+        }
+        LogErrorPageEvidence(code, dump, navErrorText);
         return new JObj().Bool("ok", false).Str("error", NavErrorMessage(code))
             .Str("url", href).Str("title", title).Num("ms", sw.ElapsedMilliseconds).ToString();
+    }
+
+    /**
+     * 错误页的原因码，两张牌按顺序打：
+     *   ① 页面本体（innerText / textContent / shadow / outerHTML）；
+     *   ② Page.navigate 自带的 `errorText`（`net::ERR_NAME_NOT_RESOLVED`）。
+     * 真机 2026-10-25：错误页的 DOM 里一句文本都取不到，② 是唯一能拿到码的来源——所以
+     * 不能因为「页面里有码」就把 ② 删了。**纯函数**。
+     */
+    internal static string NavErrorReason(string dump, string navErrorText)
+    {
+        string code = NavErrorCode(dump);
+        if (code != null) return code;
+        return NavErrorCode(navErrorText);
     }
 
     /** 同一形状的失败回执，但不去读页面（超时后页面多半也读不到，再读就是又一轮卡死） */
@@ -991,26 +1021,23 @@ internal sealed class CdpSession
     }
 
     /**
-     * 错误页正文里的原因码，带一个**很短的等待窗口**。
+     * 错误页的正文/源码，带一个**很短的等待窗口**（返回窗口内最后一次读到的内容）。
      *
      * 为什么不能一判出错误页就直接读：`chrome-error://` 一出现就判失败（那一步很早就完成了），
      * 而那一刻错误页的 DOM 往往还没渲染好，正文是空的——真机 2026-10-25 的回执就是
-     * 「页面加载失败（没有拿到内容）」，而正文其实稍后就有 ERR_NAME_NOT_RESOLVED。
+     * 「页面加载失败（没有拿到内容）」。
      * 为什么要设上限：错误页的 DOM 是本地资源，正常一两帧（<300ms）就好；等超过 2s 说明
-     * 这一页根本不会渲染正文，再等就是把「省下的 20 秒」还回去了。
-     *
-     * `lastDump` 交回最后一次读到的内容（包含了每路来源的长度），供诊断日志用。
+     * 这一页根本不会渲染正文（该换路，而不是加时间），再等就是把「省下的 20 秒」还回去了。
      */
-    private string WaitForErrorCode(out string lastDump)
+    private string WaitForErrorDump()
     {
-        lastDump = "";
+        string dump = "";
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(ErrorCodeWaitMs);
         while (true)
         {
-            lastDump = ReadErrorPageDump();
-            string code = NavErrorCode(lastDump);
-            if (code != null) return code;
-            if (DateTime.UtcNow >= deadline) return null;
+            dump = ReadErrorPageDump();
+            if (NavErrorCode(dump) != null) return dump;
+            if (DateTime.UtcNow >= deadline) return dump;
             Thread.Sleep(ErrorCodePollMs);
         }
     }
@@ -1022,11 +1049,12 @@ internal sealed class CdpSession
      * 正文却一个字也读不到」，靠猜改了两轮。这行日志把「取不到」与「取到了但没码」分开：
      * 每路来源的字符数都在 dump 开头（`[body.innerText=0] [html.outerHTML=18302] …`）。
      */
-    private void LogErrorPageEvidence(string code, string dump)
+    private void LogErrorPageEvidence(string code, string dump, string navErrorText)
     {
         string head = dump == null ? "" : dump.Replace("\r", " ").Replace("\n", " ");
         if (head.Length > ErrorPageLogChars) head = head.Substring(0, ErrorPageLogChars);
         Program.Log("错误页诊断：会话 " + Key + "，抓到码=" + (code == null ? "(无)" : code)
+            + "，Page.navigate 的 errorText=" + (navErrorText == null || navErrorText.Length == 0 ? "(无)" : navErrorText)
             + "，取到的内容（前 " + ErrorPageLogChars + " 字）：" + (head.Length == 0 ? "(空)" : head));
     }
 

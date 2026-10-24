@@ -234,7 +234,127 @@ internal static class Program
             return 1;
         }
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        // worker 自己的日志落到映射目录：这是宿主**唯一**能看见 guest 内部发生了什么的通道
+        RedirectWorkerLog(outDir, session);
         return WorkerHost.RunWorker(outDir, session, testHooks, parentPid);
+    }
+
+    /**
+     * worker.log 的单文件上限。超了清空重写（长跑的 worker 不能把映射目录撑爆）；
+     * 1 MB 按一行 ~100 字节算是一万行，足够一个会话一局的诊断量。
+     */
+    private const long WorkerLogMaxBytes = 1024 * 1024;
+
+    /**
+     * 把 worker 的 Console 输出（stdout / stderr）接到 `out\worker\<会话>\worker.log`。
+     *
+     * 为什么要它（2026-10-25 真机）：`.wsb` 的 LogonCommand 只把**主桥**的 stdout 重定向进
+     * out\bridge.log；worker 是 Process.Start 起的子进程，它自己的 Console 输出在真机上哪里都
+     * 看不到——「CDP 启动 Edge…」「CDP 端口…」「错误页诊断」「注入失败原因」全部丢掉，宿主侧
+     * 只能靠猜（错误页正文拿不到码，猜了三轮）。现在 worker 自己把输出写进映射目录，
+     * 宿主直接读得到。
+     *
+     * 为什么不是主桥 RedirectStandardOutput + 转发：那是同步管道，父进程不读干子进程就阻塞，
+     * 而主桥是单线程轮询循环（0.7.0 存在的理由就是不许被一条慢命令堵住）。**主桥一个
+     * RedirectStandard* 都没加，没有新增任何同步等待**。
+     *
+     * 每次 worker 启动覆盖重建（每次重启只看这一次的现场，不会与上一具尸体的话搵在一起）。
+     */
+    private static void RedirectWorkerLog(string outDir, string session)
+    {
+        string key = CdpSessions.SafeSessionId(session);
+        string dir = Path.Combine(outDir, WorkerHost.WorkerDirName, key);
+        string path = Path.Combine(dir, "worker.log");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            CappedFileWriter writer = new CappedFileWriter(path, WorkerLogMaxBytes);
+            Console.SetOut(writer);
+            Console.SetError(writer);
+            Log("worker 日志文件：" + path);
+        }
+        catch (Exception ex)
+        {
+            // 落不了盘就退回 stdout（不能因为日志把 worker 弄死，它还有活儿要干）
+            Log("worker 日志文件建不起来（" + path + "）：" + ex.Message + "，退回 stdout");
+        }
+    }
+
+    /**
+     * 写 worker.log 的 TextWriter：只接管 Write(string) / Write(char)——Console.Write / WriteLine
+     * 的所有重载最终都落到这两条（base 的 WriteLine 先 Write(string) 再写换行）。
+     * 超过上限就 dispose 重开（FileMode.Create = 清空），不会在文件里留洞。
+     */
+    private sealed class CappedFileWriter : TextWriter
+    {
+        private readonly string _path;
+        private readonly long _maxBytes;
+        private readonly object _gate = new object();
+        private StreamWriter _inner;
+
+        internal CappedFileWriter(string path, long maxBytes)
+        {
+            _path = path;
+            _maxBytes = maxBytes;
+            _inner = Create(_path);
+        }
+
+        private static StreamWriter Create(string path)
+        {
+            FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            StreamWriter w = new StreamWriter(fs, new UTF8Encoding(false));
+            w.AutoFlush = true; // 被 taskkill 也要留下已经写过的行
+            return w;
+        }
+
+        public override Encoding Encoding
+        {
+            get { return Encoding.UTF8; }
+        }
+
+        public override void Write(string value)
+        {
+            if (value == null) return;
+            lock (_gate)
+            {
+                RotateIfNeeded();
+                _inner.Write(value);
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (_gate)
+            {
+                RotateIfNeeded();
+                _inner.Write(value);
+            }
+        }
+
+        public override void Flush()
+        {
+            lock (_gate)
+            {
+                try { _inner.Flush(); } catch { }
+            }
+        }
+
+        private void RotateIfNeeded()
+        {
+            try
+            {
+                if (_inner.BaseStream.Length < _maxBytes) return;
+            }
+            catch
+            {
+                return;
+            }
+            try { _inner.Dispose(); } catch { }
+            _inner = Create(_path);
+            _inner.Write("[" + DateTime.Now.ToString("HH:mm:ss") + "] [bridge] （日志超过 "
+                + (_maxBytes / 1024) + " KB，已清空重写）\r\n");
+        }
     }
 
     // ---- 参数解析 ----
@@ -1467,6 +1587,15 @@ internal static class Program
             && dumpJs.IndexOf("outerHTML", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "每路来源都记了字符数（日志要靠它区分「空」与「没码」）",
             dumpJs.IndexOf("s.length", StringComparison.Ordinal) >= 0);
+
+        // 原因码的第二张牌：Page.navigate 的 errorText（真机错误页 DOM 取不到任何文本时靠它）
+        CheckString(failures, ref cases, "正文空时用 Page.navigate 的 errorText", "ERR_NAME_NOT_RESOLVED",
+            CdpSession.NavErrorReason("", "net::ERR_NAME_NOT_RESOLVED"));
+        CheckString(failures, ref cases, "正文里的码优先（比 errorText 更具体）", "ERR_HTTP_RESPONSE_CODE_FAILURE",
+            CdpSession.NavErrorReason("ERR_HTTP_RESPONSE_CODE_FAILURE", "net::ERR_FAILED"));
+        CheckString(failures, ref cases, "两张牌都没有时回 null", null,
+            CdpSession.NavErrorReason("[body.innerText=0]", null));
+        CheckString(failures, ref cases, "errorText 是空串时不编造码", null, CdpSession.NavErrorReason("", ""));
 
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
