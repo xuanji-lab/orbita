@@ -87,6 +87,24 @@ export const computerUseGuestCommands = {
    */
   scroll: "scroll",
 
+  // ── 打包产物冒烟（0.5.0）：不起沙箱里的 agent 就不发这几条 ──
+  /**
+   * 在沙箱里启动一个可执行文件（`{path, args?}`）→ `{ok, pid}`。
+   * path 必须是沙箱桌面下的绝对路径（桥的 `GuestPathRejection` 只会放行 `.exe`）。
+   * 用途只有一个：跑只读映射进来的打包版（`C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita.exe`）。
+   */
+  launch: "launch",
+  /**
+   * 按 pid 杀进程树（`{pid}`）→ `{ok}`。**绝不按镜像名杀**——沙箱里可能同时跑着
+   * 用户自己开的同程序进程。pid 已经不存在时也回 ok（幂等，冒烟脚本在 finally 里无脑调）。
+   */
+  kill: "kill",
+  /**
+   * 只回数字的截图统计（`{maxWidth?}`）→ `{width, height, mean, stdDev, blackRatio, whiteRatio, distinctColors}`。
+   * 冒烟脚本靠它断言「画面非空、不是全黑/全白」：不需要宿主解 JPEG，也不需要基线图。
+   */
+  screenshotStats: "screenshot-stats",
+
   // ── CDP 浏览器通道（PR3）：一条命令内部 3~4 条 CDP 消息，但只算**一次**文件往返 ──
   /** 起沙箱内的 Edge 并等到 CDP 可用（幂等）。端口取 0 让系统分配，桥读 DevToolsActivePort */
   cdpStart: "cdp-start",

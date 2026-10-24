@@ -38,6 +38,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -49,9 +50,10 @@ using System.Threading;
 internal static class Program
 {
     // ---- 协议常量：与宿主侧（Orbita 主进程）严格对齐，一个字母都不能差 ----
-    // ⚠ 0.4.0 起多了 cdp-*（浏览器通道）。宿主不逐字比版本，但 bridge.json 里的版本
-    // 是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.4.0";
+    // ⚠ 0.4.0 起多了 cdp-*（浏览器通道），0.5.0 起多了 launch / kill / screenshot-stats
+    //（打包版 UI 冒烟：在沙箱里启动一份只读映射进来的 orbita.exe 并用像素统计判断它渲染没渲染）。
+    // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
+    private const string Version = "0.5.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -136,6 +138,8 @@ internal static class Program
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--selftest-json") return RunJsonSelfTest();
+            // 打包产物冒烟的路径闸门自测（纯函数：不启动任何进程、不碰桌面）
+            if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -327,6 +331,10 @@ internal static class Program
         if (command == "type") return ExecuteType(raw);
         if (command == "key") return ExecuteKey(raw);
         if (command == "scroll") return ExecuteScroll(raw);
+        // 打包产物冒烟（0.5.0）：起 / 停映射进来的 exe，以及只回数字的截图统计
+        if (command == "launch") return ExecuteLaunch(raw);
+        if (command == "kill") return ExecuteKill(raw);
+        if (command == "screenshot-stats") return ExecuteScreenshotStats(raw);
         // CDP 浏览器通道（PR3）：一条语义命令 = 一次文件往返，内部可以有多条 CDP 消息。
         // 实现在文件末尾的 CdpSession；它自己管 Edge 进程与 WebSocket 的生命周期。
         if (command.Length > 4 && command.Substring(0, 4) == "cdp-") return CdpSession.Execute(command, raw, baseName, _cmdDir);
@@ -355,6 +363,321 @@ internal static class Program
         {
             Log("截图失败：" + ex.Message);
             return "{\"ok\":false,\"error\":\"截图失败：" + JsonEscape(ex.Message) + "\"}";
+        }
+    }
+
+    // ---- 打包产物冒烟：launch / kill / screenshot-stats（0.5.0）----
+    //
+    // 用途：在**干净、一次性**的沙箱里验证「打包出的 orbita.exe 能起来并渲染」——
+    // 宿主把 dist/win-unpacked 只读映射成 C:\Users\WDAGUtilityAccount\Desktop\orbita-app，
+    // 冒烟脚本 launch 它、等几秒、用 screenshot-stats 断言画面非空，再 kill 掉。
+    // 与像素工具（click/type）同一条纪律：真正碰桌面的动作只在沙箱里跑。
+
+    /**
+     * launch {path, args?, dryRun?}
+     *
+     * path 必须是**沙箱桌面的映射目录之内**的绝对路径。为什么要这层白名单：
+     * 桥能 Process.Start 任何 exe，被换掉的宿主（或一段伪造的 req）就能让它拉起
+     * 沙箱里的任意程序；而这条命令的全部用途只有「跑映射进来的打包产物」，
+     * 边界收紧到桌面根目录不会失去任何能力。
+     *
+     * args 是**一条命令行字符串**（不是数组）：打包产物的启动参数就是
+     * `--user-data-dir=...` 这种键值，交给 ProcessStartInfo 按 Windows 规则切比
+     * 在桥里再实现一遍引号解析靠谱。
+     *
+     * dryRun（测试缝）：只做路径校验与解析、**不启动任何进程**，回执带解析结果。
+     * bridge.test.mjs 在宿主上跑它——宿主上真启动一份打包版属于红线。
+     */
+    private static string ExecuteLaunch(string raw)
+    {
+        string path = ExtractJsonString(raw, "path");
+        if (path == null || path.Trim().Length == 0)
+            return "{\"ok\":false,\"error\":\"launch 需要 path 字段（沙箱内的绝对路径，指向映射进来的可执行文件）\"}";
+        path = path.Trim();
+
+        string rejection = GuestPathRejection(path);
+        if (rejection != null)
+            return "{\"ok\":false,\"error\":" + JsonQuote(rejection) + "}";
+        if (!File.Exists(path))
+            return "{\"ok\":false,\"error\":" + JsonQuote("沙箱里没有这个文件：" + path
+                + "——宿主是不是还没出包？先把 dist/win-unpacked 映射进来（bun run dist:win）") + "}";
+
+        string args = ExtractJsonString(raw, "args");
+        if (args != null) args = args.Trim();
+
+        if (ExtractBool(raw, "dryRun"))
+            return "{\"ok\":true,\"dryRun\":true,\"path\":" + JsonQuote(path)
+                + ",\"args\":" + (args == null ? "null" : JsonQuote(args)) + "}";
+
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo(path);
+            if (args != null && args.Length > 0) info.Arguments = args;
+            info.UseShellExecute = false;
+            info.WorkingDirectory = Path.GetDirectoryName(path);
+            Process started = Process.Start(info);
+            if (started == null) throw new InvalidOperationException("进程没有起来（Process.Start 返回 null）");
+            int pid = started.Id;
+            // 句柄我们不需要：调完就放，进程本身继续跑（kill 按 pid 找它）
+            started.Dispose();
+            Log("launched " + path + (args == null ? "" : " " + args) + " → pid " + pid);
+            return "{\"ok\":true,\"pid\":" + pid + ",\"path\":" + JsonQuote(path) + "}";
+        }
+        catch (Exception ex)
+        {
+            Log("启动失败：" + ex.Message);
+            return "{\"ok\":false,\"error\":" + JsonQuote("启动 " + path + " 失败：" + ex.Message
+                + "——若是缺 VC++ 运行库或 side-by-side 配置错，沙箱里跑不了这份产物，先看宿主能不能双击启动") + "}";
+        }
+    }
+
+    /**
+     * kill {pid}
+     *
+     * **只杀这一个 pid 的进程树**（Electron 是 主进程 + 一堆 renderer/GPU 子进程，
+     * 只杀主进程会留一群孤儿）。**绝不按镜像名杀**——仓规的硬约束，而且沙箱里
+     * 可能同时跑着别的 orbita.exe（用户手动开的），按名字杀会连它们一起带走。
+     *
+     * pid 不存在 / 已经退出都回 ok（幂等：冒烟脚本在 finally 里无脑调用）。
+     */
+    private static string ExecuteKill(string raw)
+    {
+        string pidRaw = ExtractNumber(raw, "pid");
+        int pid;
+        if (pidRaw == null || !int.TryParse(pidRaw, out pid) || pid <= 0)
+            return "{\"ok\":false,\"error\":\"kill 需要整数 pid（launch 回执里的那个）\"}";
+
+        bool dryRun = ExtractBool(raw, "dryRun"); // 测试缝：只校验参数，不杀任何进程
+        bool existed;
+        try
+        {
+            Process p = Process.GetProcessById(pid);
+            existed = true;
+            p.Dispose();
+        }
+        catch (ArgumentException)
+        {
+            existed = false; // 没有这个进程：幂等成功
+        }
+        if (!existed)
+        {
+            Log("kill " + pid + "：没有这个进程（已经退出）");
+            return "{\"ok\":true,\"pid\":" + pid + ",\"alreadyGone\":true}";
+        }
+        if (dryRun)
+            return "{\"ok\":true,\"dryRun\":true,\"pid\":" + pid + "}";
+
+        try
+        {
+            // taskkill /T 是整棵树（Electron 的子进程不继承父进程的杀），/F 免确认
+            ProcessStartInfo info = new ProcessStartInfo("taskkill", "/PID " + pid + " /T /F");
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            Process killer = Process.Start(info);
+            if (killer == null) throw new InvalidOperationException("taskkill 没有起来");
+            string output = killer.StandardOutput.ReadToEnd() + killer.StandardError.ReadToEnd();
+            killer.WaitForExit(15000);
+            int code = killer.ExitCode;
+            killer.Dispose();
+            // taskkill 的退出码 128 = 进程已经不存在（竞态下正常），其它非 0 才当失败
+            if (code != 0 && code != 128)
+                return "{\"ok\":false,\"error\":" + JsonQuote("taskkill 失败（退出码 " + code + "）：" + output.Trim()) + "}";
+            Log("killed pid " + pid + "（树）");
+            return "{\"ok\":true,\"pid\":" + pid + "}";
+        }
+        catch (Exception ex)
+        {
+            Log("kill 失败：" + ex.Message);
+            return "{\"ok\":false,\"error\":" + JsonQuote("终止 pid " + pid + " 失败：" + ex.Message) + "}";
+        }
+    }
+
+    /**
+     * screenshot-stats {maxWidth?}
+     *
+     * 只回**数字**，不回图：冒烟脚本用它断言「窗口非空、不是全黑/全白」，
+     * 不需要宿主解 JPEG、也不需要基线图（基线图会在每次 UI 改版后过期）。
+     *
+     * 统计在缩到 ~640 宽的那张图上做——全屏逐像素对 4K 屏幕是 8M 次运算，
+     * 缩样后 0.3M 次，而「有没有内容」这种结论在 640 宽上完全够。
+     * 亮度 = (0.299R + 0.587G + 0.114B)，与常见的灰度公式一致；
+     * blackRatio = 亮度 < 16 的占比，whiteRatio = 亮度 > 240 的占比。
+     * distinctColors = 缩样后出现过的 (R,G,B) 种类数（上限 4096，够判「是不是纯色」）。
+     */
+    private const int StatsSampleWidth = 640;
+    private const int StatsDistinctCap = 4096;
+
+    private static string ExecuteScreenshotStats(string raw)
+    {
+        int maxWidth = StatsSampleWidth;
+        string maxWidthRaw = ExtractNumber(raw, "maxWidth");
+        if (maxWidthRaw != null && (!int.TryParse(maxWidthRaw, out maxWidth) || maxWidth <= 0))
+            return "{\"ok\":false,\"error\":\"maxWidth 必须是正整数\"}";
+        if (maxWidth > 2560) maxWidth = 2560;
+
+        try
+        {
+            int width, height;
+            double mean, stdDev, blackRatio, whiteRatio;
+            int distinctColors;
+            CaptureStats(maxWidth, out width, out height, out mean, out stdDev,
+                out blackRatio, out whiteRatio, out distinctColors);
+            Log("像素统计 " + width + "x" + height + " mean=" + mean.ToString("F1") + " sd=" + stdDev.ToString("F1")
+                + " black=" + blackRatio.ToString("F3") + " white=" + whiteRatio.ToString("F3") + " colors=" + distinctColors);
+            return "{\"ok\":true,\"width\":" + width + ",\"height\":" + height
+                + ",\"mean\":" + mean.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"stdDev\":" + stdDev.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"blackRatio\":" + blackRatio.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"whiteRatio\":" + whiteRatio.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"distinctColors\":" + distinctColors + "}";
+        }
+        catch (Exception ex)
+        {
+            Log("像素统计失败：" + ex.Message);
+            return "{\"ok\":false,\"error\":" + JsonQuote("像素统计失败：" + ex.Message) + "}";
+        }
+    }
+
+    /**
+     * 沙箱内允许 launch 的路径闸门：只认桌面根目录之下的绝对路径。
+     *
+     * 为什么是桌面根而不是「映射目录的 basename」：.wsb 的映射目录一律落在
+     * C:\Users\WDAGUtilityAccount\Desktop\<名字>\，映射名可由宿主任意起
+     * （PR5 的打包产物映射叫 orbita-app），桥不该把那个名字编译进来。
+     * 桌面根仍然把范围钉死在「宿主拷进来的东西」，而 C:\Windows\... 之类一概拒绝。
+     *
+     * 路径先归一化：拒绝 `..`（`Desktop\..\Windows\system32\cmd.exe` 会被规范化成
+     * 桌面之外的路径）。回 null = 放行。
+     */
+    internal static string GuestPathRejection(string path)
+    {
+        // 先判绝对路径：GetFullPath 会把相对路径接到**桥的工作目录**上，
+        // 那是宿主不该知道的一个值（而且它在沙箱桌面下吗？不一定）——直接拒绝才可控。
+        if (!Path.IsPathRooted(path))
+            return "launch 的 path 必须是绝对路径：" + path;
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception ex)
+        {
+            return "路径不合法：" + path + "（" + ex.Message + "）";
+        }
+        string allowRoot = GuestDesktopRoot(); // 带结尾反斜杠
+        if (!full.StartsWith(allowRoot, StringComparison.OrdinalIgnoreCase))
+            return "launch 只允许沙箱桌面下的路径（" + allowRoot + "），收到：" + full
+                + "——宿主把产物映射进桌面后，路径形如 " + allowRoot + "orbita-app\\orbita.exe";
+        if (!full.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            return "launch 只启动 .exe，收到：" + full;
+        return null;
+    }
+
+    /** 沙箱桌面根（固定用户 WDAGUtilityAccount，WSB 的映射落点），带结尾反斜杠 */
+    internal static string GuestDesktopRoot()
+    {
+        return WSB_DESKTOP_ROOT;
+    }
+
+    private const string WSB_DESKTOP_ROOT = "C:\\Users\\WDAGUtilityAccount\\Desktop\\";
+
+    /**
+     * 主屏 → 缩样图 → 逐像素统计。
+     * 只读桌面，不改任何状态；失败（拿不到桌面尺寸 / 没有交互会话）抛异常给调用方翻成人话。
+     */
+    private static void CaptureStats(int maxWidth, out int width, out int height, out double mean,
+        out double stdDev, out double blackRatio, out double whiteRatio, out int distinctColors)
+    {
+        int nativeW = GetSystemMetrics(SM_CXSCREEN);
+        int nativeH = GetSystemMetrics(SM_CYSCREEN);
+        if (nativeW <= 0 || nativeH <= 0)
+            throw new InvalidOperationException("无法获取主屏尺寸（可能不在交互式桌面会话中）");
+
+        width = nativeW;
+        height = nativeH;
+        int longEdge = Math.Max(nativeW, nativeH);
+        if (longEdge > maxWidth)
+        {
+            double scale = (double)maxWidth / longEdge;
+            width = Math.Max(1, (int)Math.Round(nativeW * scale));
+            height = Math.Max(1, (int)Math.Round(nativeH * scale));
+        }
+
+        Bitmap full = new Bitmap(nativeW, nativeH);
+        Bitmap sample = null;
+        try
+        {
+            Graphics g = Graphics.FromImage(full);
+            try { g.CopyFromScreen(0, 0, 0, 0, new Size(nativeW, nativeH)); }
+            finally { g.Dispose(); }
+
+            if (width != nativeW || height != nativeH)
+            {
+                sample = new Bitmap(width, height);
+                Graphics g2 = Graphics.FromImage(sample);
+                try
+                {
+                    g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g2.DrawImage(full, new Rectangle(0, 0, width, height),
+                        new Rectangle(0, 0, nativeW, nativeH), GraphicsUnit.Pixel);
+                }
+                finally { g2.Dispose(); }
+            }
+            Bitmap target = sample != null ? sample : full;
+
+            // 逐行拷成数组再算：Bitmap.GetPixel 每像素一次 GDI 调用，30 万次会拖到秒级
+            System.Drawing.Imaging.BitmapData data = target.LockBits(
+                new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                int stride = data.Stride;
+                int absStride = Math.Abs(stride);
+                byte[] buffer = new byte[absStride * height];
+                Marshal.Copy(data.Scan0, buffer, 0, buffer.Length);
+
+                double sum = 0;
+                double sumSq = 0;
+                long black = 0;
+                long white = 0;
+                long count = (long)width * height;
+                HashSet<int> colors = new HashSet<int>();
+                bool colorsFull = false;
+                for (int y = 0; y < height; y++)
+                {
+                    int row = y * absStride;
+                    for (int x = 0; x < width; x++)
+                    {
+                        int at = row + x * 4;
+                        byte b = buffer[at];
+                        byte gr = buffer[at + 1];
+                        byte r = buffer[at + 2];
+                        double luma = 0.299 * r + 0.587 * gr + 0.114 * b;
+                        sum += luma;
+                        sumSq += luma * luma;
+                        if (luma < 16) black++;
+                        else if (luma > 240) white++;
+                        if (!colorsFull)
+                        {
+                            colors.Add((r << 16) | (gr << 8) | b);
+                            if (colors.Count >= StatsDistinctCap) colorsFull = true;
+                        }
+                    }
+                }
+                mean = sum / count;
+                double variance = sumSq / count - mean * mean;
+                stdDev = variance > 0 ? Math.Sqrt(variance) : 0;
+                blackRatio = (double)black / count;
+                whiteRatio = (double)white / count;
+                distinctColors = colors.Count;
+            }
+            finally { target.UnlockBits(data); }
+        }
+        finally
+        {
+            if (sample != null) sample.Dispose();
+            full.Dispose();
         }
     }
 
@@ -887,6 +1210,59 @@ internal static class Program
         json.Append("}");
         Console.WriteLine(json.ToString());
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    // ---- launch 路径闸门自测（--selftest-launch）--------------------------------
+    //
+    // launch 的这条闸门是「桥能 Process.Start 任意 exe」的唯一边界，而它恰好是纯函数——
+    // 在宿主上就能测，不必起沙箱、也不必真启动一份打包版（那在宿主上是红线）。
+
+    private static int RunLaunchSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        string ok = "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita.exe";
+        CheckReject(failures, ref cases, "映射目录里的 exe 放行", null, GuestPathRejection(ok));
+        CheckReject(failures, ref cases, "大小写不敏感", null,
+            GuestPathRejection("c:\\users\\wdagutilityaccount\\desktop\\orbita-app\\orbita.EXE"));
+        CheckReject(failures, ref cases, "桌面根下的深层路径放行", null,
+            GuestPathRejection("C:\\Users\\WDAGUtilityAccount\\Desktop\\a\\b\\c\\x.exe"));
+        CheckReject(failures, ref cases, "桌面外的系统目录拒绝", "拒绝",
+            GuestPathRejection("C:\\Windows\\System32\\cmd.exe"));
+        CheckReject(failures, ref cases, ".. 穿越回桌面之外拒绝", "拒绝",
+            GuestPathRejection("C:\\Users\\WDAGUtilityAccount\\Desktop\\..\\..\\Windows\\System32\\cmd.exe"));
+        CheckReject(failures, ref cases, "桌面根本身（\"Desktop\" 前缀但不是子路径）拒绝", "拒绝",
+            GuestPathRejection("C:\\Users\\WDAGUtilityAccount\\DesktopX\\a.exe"));
+        CheckReject(failures, ref cases, "非 .exe 拒绝", "拒绝",
+            GuestPathRejection("C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\resources\\app.asar"));
+        CheckReject(failures, ref cases, "相对路径拒绝", "拒绝", GuestPathRejection("orbita-app\\orbita.exe"));
+
+        StringBuilder json = new StringBuilder();
+        json.Append("{\"ok\":").Append(failures.Count == 0 ? "true" : "false").Append(",\"cases\":").Append(cases);
+        if (failures.Count > 0)
+        {
+            json.Append(",\"failures\":[");
+            for (int i = 0; i < failures.Count; i++)
+            {
+                if (i > 0) json.Append(",");
+                json.Append(JsonQuote(failures[i]));
+            }
+            json.Append("]");
+        }
+        json.Append("}");
+        Console.WriteLine(json.ToString());
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** expectKind：null = 应放行；"拒绝" = 应被拦（只断言倾向，不断言整句文案） */
+    private static void CheckReject(List<string> failures, ref int cases, string name, string expectKind, string rejection)
+    {
+        cases++;
+        bool allowed = rejection == null;
+        bool expectedAllowed = expectKind == null;
+        if (allowed != expectedAllowed)
+            failures.Add(name + "：实际" + (allowed ? "放行" : "拦下（" + rejection + "）"));
     }
 
     private static void CheckString(List<string> failures, ref int cases, string name, string expected, string actual)
