@@ -227,7 +227,7 @@ export const COMPUTER_USE_GUEST_DOWNLOAD_DIR = "C:\\orbita-out\\downloads";
 export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
 
 /**
- * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
+ * 桥不应答时的放弃线（主进程等一条 **像素 / 桌面** guest 命令的上限）。
  *
  * **45 秒不是拍脑袋的宽容值**：2026-10-10 真机实测，win+r 弹出「运行」框之后，
  * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
@@ -237,17 +237,44 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
  * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
  *
+ * **浏览器命令（`cdp-*`）不用这条线**，它有自己的 `COMPUTER_USE_CDP_TIMEOUT_MS`：那边
+ * guest 里还有一条 40 秒的 worker 杀线，错误文案再走回宿主又要一跳（真机满载实测 8–19s）。
+ * 一条命令走哪条线由 `computerUseGuestTimeoutMs` 决定，别在调用点各写一份。
+ *
  * 放在 shared（而不是定义它的 bridge-client）是因为 agent 侧的 computer-tools 也要读它：
  * broker 的兜底超时必须比这条线更长，否则主进程还在等、agent 先把真成功判成
  * 「主进程没有回执」（computer-tools.ts 的 BROKER_TIMEOUT_MS）。agent 进程不能
  * import 主进程模块，跨进程共享的常量只有这里能放。
- *
- * **0.7.0 起它与 guest 里的 worker 超时是一对**：`cdp-*` 由该会话自己的 worker 子进程执行，
- * worker 40 秒还没有回执就被 taskkill（guest-bridge/WorkerHost.cs 的 CommandTimeoutMs），
- * 桥在同一秒内回一句人话。它必须比这条 45 秒的线早，模型才拿得到那句能照着做的错误，
- * 而不是宿主一句笼统的「没响应」。
  */
 export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
+
+/**
+ * 浏览器命令（`cdp-*`）的放弃线。**比像素那条长，不是宽容，是两条线要对得上**。
+ *
+ * 0.7.0 起 CDP 由该会话自己的 worker 子进程执行，主桥 **40 秒**没有回执就把它连 Edge
+ * 一起 taskkill（guest-bridge/WorkerHost.cs 的 CommandTimeoutMs），并回一句带下一步的
+ * 人话。但从那一刻起，**那句话还要走回宿主**：2026-10-25 真机满载实测（Edge 卡在
+ * 不可路由地址时），宿主→guest / guest→宿主**每一跳都要 8–19 秒**。
+ * 于是最坏情况下那句人话落在宿主时，距 host 写 req 已经过了：
+ *     9s（req 可见）+ 40s（杀线）+ 10s（resp 可见）≈ **59s**。
+ * 45 秒会在 40s 杀线之前就放弃——模型只看到一句笼统的「没有响应」，看不见
+ * 「通道已重启」，也不知道下一步做什么（2026-10-25 真机就是这样把那句人话丢掉的）。
+ *
+ * 70 秒 = 40（杀线）+ 19（实测最坏一跳）+ 11 余量。
+ * **下游兜底必须比它长**：agent 侧 sandbox_* 的 broker 85s、sandbox_navigate 155s
+ * （见 sandbox-tools.ts）。改这一条时三条一起看。
+ */
+export const COMPUTER_USE_CDP_TIMEOUT_MS = 70_000;
+
+/**
+ * 一条 guest 命令的放弃线：`cdp-*` 走 CDP 线，其余（像素 / 桌面）走 45s。
+ *
+ * 纯函数、唯一一份规则：`bridge-client` 的默认值与 `SandboxController` 的四个下发口
+ * 都从它取；调用点只负责「测试注入的覆盖值优先」。
+ */
+export function computerUseGuestTimeoutMs(command: string): number {
+  return command.startsWith("cdp-") ? COMPUTER_USE_CDP_TIMEOUT_MS : GUEST_COMMAND_TIMEOUT_MS;
+}
 
 // ── 沙箱租约（按资源切分：桌面独占 + 每会话浏览器）────────────────────
 

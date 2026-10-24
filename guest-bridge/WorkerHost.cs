@@ -65,9 +65,15 @@ internal static class WorkerHost
     private const int ShotCopyWaitMs = 2000;
 
     /**
-     * 一条 worker 命令的放弃线。**必须小于宿主的 GUEST_COMMAND_TIMEOUT_MS（45s）**：
-     * 宿主到点会直接放弃等待，那时我们再回一句人话已经没人听了。40s 留 5s 余量做
-     * 「杀进程 + 写回执」。cdp-* 自己的内部超时（导航 20s、截图 25s、下载 20s）都在它之下。
+     * 一条 worker 命令的放弃线（杀线）。
+     *
+     * 宿主等**浏览器命令**的那条线是 COMPUTER_USE_CDP_TIMEOUT_MS（70s，见
+     * shared/computer-use.ts），不是像素命令的 45s——因为杀掉之后这里写的回执还要走一跳
+     * 才能到宿主（2026-10-25 真机满载：每一跳 8–19s）。40 + 19 = 59s < 70s，那句人话才送得到；
+     * 45s 会在杀线之前就放弃（真机就是这样把那句人话丢掉的）。
+     *
+     * 40s 本身留给「杀进程 + 写回执」；cdp-* 自己的内部超时（导航 20s、截图 25s、下载 20s）
+     * 都在它之下。**改这个数字要同步看 shared/computer-use.ts 的两条客线。**
      */
     internal static int CommandTimeoutMs = 40000;
 
