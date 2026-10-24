@@ -537,9 +537,9 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
 
   it("逐项只认布尔；不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "paper-themes": true, "session-lifecycle": false } })
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": false } })
         .experimentalFeatures,
-      { "paper-themes": true, "session-lifecycle": false },
+      { "paper-themes": true, "pdf-citations": false },
     );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,
@@ -551,11 +551,18 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     );
   });
 
-  it("旧总开关 experimental: true = paper-themes 与 session-lifecycle 都开", () => {
+  it("旧总开关 experimental: true = paper-themes 开（会话生命周期已转正，不再有开关）", () => {
     deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
       "paper-themes": true,
-      "session-lifecycle": true,
     });
+  });
+
+  it("转正的 session-lifecycle：盘上残留的键开着关着都丢掉，不产生任何效果", () => {
+    deepStrictEqual(parseSettings({ experimentalFeatures: { "session-lifecycle": true } }).experimentalFeatures, undefined);
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "paper-themes": true } }).experimentalFeatures,
+      { "paper-themes": true },
+    );
   });
 
   it("旧总开关 false / 非布尔：不产生任何逐项键", () => {
@@ -567,9 +574,9 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     deepStrictEqual(
       parseSettings({
         experimental: true,
-        experimentalFeatures: { "session-lifecycle": false },
+        experimentalFeatures: { "paper-themes": false },
       }).experimentalFeatures,
-      { "paper-themes": true, "session-lifecycle": false },
+      { "paper-themes": false },
     );
   });
 

@@ -341,8 +341,6 @@ export const zh: Messages = {
 
   sidebar: {
     emptyHasTodos: "没有带未完成遗留事项的任务。收尾一个任务，它的遗留事项会收到这里。",
-    emptyActiveStarred: "没有进行中的星标任务。取消「星标」筛选即可看到其余任务。",
-    emptyActive: "眼下没有进行中的任务——都做完了。",
     emptyDoneStarred: "还没有已完成的星标任务。",
     emptyDone: "还没有已完成的任务。在任务上标记完成，它就会出现在这里。",
     emptyStarred: "还没有星标任务。指针移到任务上、点一下星标，它就会出现在这里。",
@@ -354,8 +352,6 @@ export const zh: Messages = {
     orchestratePlanned: "编排模式（规划中）",
     filterAll: "全部",
     filterAllTip: "全部任务",
-    filterActive: "进行中",
-    filterActiveTip: "仍在进行的任务",
     filterDone: "已完成",
     filterDoneTip: "已完成的任务",
     filterStarred: "星标",

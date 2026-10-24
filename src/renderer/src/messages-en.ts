@@ -399,8 +399,6 @@ export const en = {
 
   sidebar: {
     emptyHasTodos: "No task has open carryover items. Wrap one up to collect them here.",
-    emptyActiveStarred: "No active starred tasks. Clear the Starred filter to see the rest.",
-    emptyActive: "No active tasks right now — everything is done.",
     emptyDoneStarred: "No starred tasks done yet.",
     emptyDone: "No done tasks yet. Mark a task done from its menu to find it here.",
     emptyStarred: "No starred tasks yet. Hover a task and click its star to find it here.",
@@ -412,8 +410,6 @@ export const en = {
     orchestratePlanned: "Orchestration mode (planned)",
     filterAll: "All",
     filterAllTip: "All tasks",
-    filterActive: "Active",
-    filterActiveTip: "Tasks still in progress",
     filterDone: "Done",
     filterDoneTip: "Completed tasks",
     filterStarred: "Starred",

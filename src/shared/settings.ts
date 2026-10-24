@@ -119,7 +119,6 @@ export interface ModelPair {
  */
 export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
-  "session-lifecycle",
   "pdf-citations",
   "intent-system",
 ] as const;
@@ -287,18 +286,20 @@ export interface AppSettings {
    *
    * 各项的语义：
    * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
-   * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
    * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
    *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
    *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
-   * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开。
+   * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。
    *
    * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
    * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
    * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
    * 解析时直接丢，下一次写入从盘上带走。
+   *
+   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻）：盘上残留的 `session-lifecycle`
+   * 不在表里，解析时丢掉，开着关着都不再有任何效果。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
@@ -443,7 +444,7 @@ export function parseSettings(raw: unknown): AppSettings {
     experimentalFeatures?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
-    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
+    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
     experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
@@ -534,11 +535,10 @@ function parseExperimentalFeatures(record: {
       if (typeof value === "boolean") out[id] = value;
     }
   }
-  // 旧总开关：true = 当年挂在它后面的两项都照常开。
+  // 旧总开关：true = 当年挂在它后面的 paper-themes 照常开（另一项会话生命周期已转正）。
   // 新键里已显式给值的项以新键为准（??=）
   if (record.experimental === true) {
     out["paper-themes"] ??= true;
-    out["session-lifecycle"] ??= true;
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }

@@ -744,9 +744,6 @@ function ChatViewBody(props: {
   bareHeader?: boolean;
 }) {
   const t = useT();
-  // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
-  // 关闭时收尾相关数据源一并在渲染前置空（首页卡退回提问行位、消息流不出扫描卡）
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { session, providersError, homeBare, hideComposer } = props;
   // 意图系统（实验功能）：确认卡、输入框开关挂它后面；转录里的终态卡另在
   // TranscriptColumn 里判（历史记录照渲染，入口才藏）
@@ -1035,10 +1032,9 @@ function ChatViewBody(props: {
   // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
   // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
   // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
-  // 会话生命周期开关关闭时遗留清单传空——首页卡全部退回「最近提问」行位，不出待办卡。
   const homeCards = useMemo(
-    () => selectHomeCards(session.sessions, lifecycle ? session.carryovers : []),
-    [session.sessions, session.carryovers, lifecycle],
+    () => selectHomeCards(session.sessions, session.carryovers),
+    [session.sessions, session.carryovers],
   );
 
   // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
@@ -1365,17 +1361,16 @@ function ChatViewBody(props: {
         onScroll={handleScroll}
         scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
         // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用。
-        // 会话生命周期开关关闭时整组不传（Pane 头部的完成入口随之不渲染）
         completion={
-          lifecycle && openId !== "" ? (openMeta?.completion ?? "open") : null
+          openId !== "" ? (openMeta?.completion ?? "open") : null
         }
         onSetCompletion={
-          lifecycle && openId !== ""
+          openId !== ""
             ? (next) => session.setCompletionSession(openId, next)
             : undefined
         }
         // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
-        onMarkDone={lifecycle && openId !== "" ? session.startClosingRitual : undefined}
+        onMarkDone={openId !== "" ? session.startClosingRitual : undefined}
         closing={session.closingScan}
         busy={session.phase !== "idle"}
         scanless={openMeta?.piSessionFile == null}
@@ -1428,9 +1423,8 @@ function ChatViewBody(props: {
               />
             )}
             {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
-                （scanResult 由 hook 查看槽持有，切走再切回还在）。挂会话生命周期开关：
-                开关在确认卡开着时被关掉（去设置里关）的话，回来不再渲染 */}
-            {lifecycle && session.scanResult !== null && session.scanResult.sessionId === openId && (
+                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
+            {session.scanResult !== null && session.scanResult.sessionId === openId && (
               <WrapupCard
                 // 每次扫描是一张新卡：换一份清单就重挂，卡内的编辑状态不串到下一次
                 key={`${session.scanResult.sessionId}:${session.scanResult.plan.lastTurn}:${session.scanResult.plan.sinceTurn}`}
@@ -1565,9 +1559,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   pendingEcho: { blocks: readonly string[] } | null;
 }) {
   const t = useT();
-  // 会话生命周期开关：关闭时消息流不出收尾扫描卡（同 useT 读 Context 的先例——开关
-  // 几乎不变，偶尔破一次 memo 无妨）
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   // 意图系统开关：关着时终态记录照渲染（历史还在），运行卡与入口全藏
   const intentOn = useExperimentalFeature("intent-system");
   const { transcript } = props;
@@ -1647,8 +1638,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
   // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
   const carryoverCards = useMemo(() => {
-    // 会话生命周期开关关闭：消息流不出收尾扫描卡（历史会话里的旧扫描回答同样不卡片化）
-    if (!lifecycle) return new Map<string, { scan: ScanMessage; firstKey: string }>();
     const cards = new Map<string, { scan: ScanMessage; firstKey: string }>();
     for (const record of records) {
       if (record.role !== "assistant" || record.status === "streaming") continue;
@@ -1664,7 +1653,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       if (scan !== null) cards.set(record.id, { scan, firstKey });
     }
     return cards;
-  }, [records, lifecycle]);
+  }, [records]);
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
