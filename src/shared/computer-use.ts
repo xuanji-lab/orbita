@@ -106,6 +106,10 @@ export const computerUseGuestCommands = {
   screenshotStats: "screenshot-stats",
 
   // ── CDP 浏览器通道（PR3）：一条命令内部 3~4 条 CDP 消息，但只算**一次**文件往返 ──
+  // 0.6.0 起这些命令都认一个**可选**的 `session`（字符串）：缺省 `default`，桥按它选那个会话
+  // 自己的 Edge 实例（各自的 --user-data-dir 与调试端口）。上限 COMPUTER_USE_BROWSER_MAX，
+  // 空闲 COMPUTER_USE_BROWSER_IDLE_MS 后自动回收。只有 `cdp-status` 不带 session 时是
+  // 「汇总所有会话」的形态；其余命令（含 cdp-stop）都只落在一个实例上。
   /** 起沙箱内的 Edge 并等到 CDP 可用（幂等）。端口取 0 让系统分配，桥读 DevToolsActivePort */
   cdpStart: "cdp-start",
   /** 只停桥自己启动的那个 Edge 进程树（按记录的 pid；绝不按镜像名杀） */
@@ -137,11 +141,71 @@ export const computerUseGuestCommands = {
 export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof typeof computerUseGuestCommands];
 
 /**
- * 沙箱里那份 Edge 的 profile 目录（guest 绝对路径）。**每次沙箱一次性**：不映射到宿主，
- * 沙箱销毁即丢——登录态不跨会话，这是产品语义（与 Operator 的 ephemeral VM 同构）。
- * 桥的 cdp-start 在 guest 里建它；宿主不读它，只把它写进错误文案。
+ * 每会话一个 Edge 时 profile 的**根目录**（guest 绝对路径）：每个实例落在
+ * `<root>\<安全化后的会话 id>`（见 safeBrowserSessionId）。
+ *
+ * **每次沙箱一次性**：不映射到宿主，沙箱销毁即丢——登录态不跨会话，这是产品语义
+ * （与 Operator 的 ephemeral VM 同构）。桥的 cdp-start 在 guest 里建它，宿主不读它。
+ *
+ * v1.5-1 之前是所有会话共用一个 `C:\orbita-browser\profile`；改成按会话分目录不是
+ * 「整理目录」，而是隔离的**实现**：共用 profile 时两个 Edge 实例会互相抢锁（Chromium 的
+ * SingletonLock），第二个根本起不来。
  */
-export const COMPUTER_USE_GUEST_BROWSER_PROFILE = "C:\\orbita-browser\\profile";
+export const COMPUTER_USE_BROWSER_PROFILE_ROOT = "C:\\orbita-browser\\sessions";
+
+/**
+ * 沙箱里同时最多几个浏览器实例（一个会话一个 Edge）。
+ *
+ * 4 不是拍脑袋：sandbox guest 空载占 0.9–1.2GB，每个 Edge 约 0.4GB，.wsb 的配额给到 4GB
+ * （sandbox.ts 的 `<MemoryInMB>4096</MemoryInMB>`）。上限由**桥**执行（它才知道真实活着的实例），
+ * 宿主这一侧只在「缓存说已经到上限」时去问一次真值，见 cdp.ts 的 pruneAgainstBridge。
+ */
+export const COMPUTER_USE_BROWSER_MAX = 4;
+
+/**
+ * 空闲回收线：某个会话的浏览器这么久没被碰过，桥自动 cdp-stop 并删掉它的 profile 目录。
+ *
+ * 为什么要有它：模型想事情、等用户审批时 Edge 一直占着 ~0.4GB；4 个实例的上限下，一个
+ * 忘了收尾的会话会把名额吃死（后面来的会话只收到「先 cdp-stop 一个」，而它没有可停的）。
+ * 5 分钟是「一轮里正常的停顿」与「这个会话其实不用了」之间的折中（与租约 idle 同量级）。
+ */
+export const COMPUTER_USE_BROWSER_IDLE_MS = 5 * 60_000;
+
+/**
+ * 不传 `session` 时用的会话键。单 agent（只有一个会话）走的就是它——所有 `cdp-*` 命令
+ * 不带上 session 字段时的行为与 v1.5-1 之前**完全一致**，这是向后兼容的那条线。
+ */
+export const COMPUTER_USE_DEFAULT_BROWSER_SESSION = "default";
+
+/**
+ * 会话 id → 目录名 / 桥侧键。**两端必须逐字一致**（宿主 cdp.ts 与 guest-bridge/Cdp.cs 各有一份）：
+ * 只允许 `[A-Za-z0-9_-]`，其余一律换成 `_`，最长 48 字符；空 / 缺省回落 `default`。
+ *
+ * 为什么不能直接用会话 id：它会被拼进 `C:\orbita-browser\sessions\<id>`——一个带 `..` 或
+ * `\` 的 id 就能把 profile 目录指到 guest 的任意位置（profile 目录里全是可执行配置）。
+ * 反过来，宿主缓存也用同一个键：两边归一化规则不一致的话，两个宿主会话可能在桥侧撞成
+ * 同一个浏览器，而宿主以为各自独立。
+ */
+export function safeBrowserSessionId(raw: string | null | undefined): string {
+  if (typeof raw !== "string" || raw.length === 0) return COMPUTER_USE_DEFAULT_BROWSER_SESSION;
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48);
+  return safe === "" ? COMPUTER_USE_DEFAULT_BROWSER_SESSION : safe;
+}
+
+/**
+ * 浏览器实例层面的错误文案（**给模型读的**：它看不见 UI，也不会自己想到「4 个名额用完了」）。
+ * 文案里的数字从常量来，别在别处再写一遍「4」——改上限时只有一处要改。
+ */
+export const computerUseBrowserErrors = {
+  /** 第 5 个实例被拒（桥是执行者；宿主在缓存到上限时提前用同一句话拦下） */
+  tooMany: (max: number): string =>
+    `沙箱里同时最多 ${max} 个浏览器，先 cdp-stop 一个再开新的（不用的实例在空闲 ` +
+    `${Math.round(COMPUTER_USE_BROWSER_IDLE_MS / 60_000)} 分钟后会自动回收）。` +
+    "如果你只是要换一个页面，用 sandbox_navigate 打开它即可，不必再起一个实例。",
+  /** 按会话停不掉（停沙箱的收尾路径）：只记日志，不让模型/用户看到一句没头没尾的报错 */
+  stopFailed: (session: string, cause: string): string =>
+    `按会话停浏览器失败（会话 ${session}）：${cause}。沙箱销毁会带走整个进程树，不影响后续操作。`,
+} as const;
 
 /**
  * 上传文件的落点（guest 绝对路径）。宿主先把用户给的文件拷进这里（映射目录的宿主侧就是
