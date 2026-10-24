@@ -9,8 +9,10 @@ import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { isDocxFile } from "@shared/docx";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { DocxView } from "../docx/DocxView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
@@ -53,6 +55,9 @@ export function FilePreviewPane(props: {
   const pdfCitations = useExperimentalFeature("pdf-citations");
   const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // .docx 走应用内的分页编辑器（issue #273）：它不需要实验开关，也不再是「不支持的类型」
+  const docx = sentImage === undefined && isDocxFile(path);
+  const [docxReload, setDocxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -179,6 +184,7 @@ export function FilePreviewPane(props: {
               onClick={() => {
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
+                if (docx) setDocxReload((n) => n + 1);
               }}
             >
               <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
@@ -196,8 +202,13 @@ export function FilePreviewPane(props: {
           </Chip>
         </div>
       )}
-      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined}>
-        {pdf ? (
+      <div className="file-preview-body" data-kind={docx ? "docx" : pdf ? "pdf" : undefined}>
+        {docx ? (
+          <DocxView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={docxReload}
+          />
+        ) : pdf ? (
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}

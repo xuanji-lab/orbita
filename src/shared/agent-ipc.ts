@@ -214,6 +214,18 @@ export const ipcChannels = {
    * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
    */
   fsPickFolders: "fs:pick-folders",
+  /**
+   * 打开 .docx 给应用内分页编辑器（契约在 `docx.ts`，白名单与 fs:read 同一道）。
+   * 超过 DOCX_MAX_BYTES 回 too-large，加密 / 非 zip / 缺正文回 invalid——
+   * 解析全在 renderer 的引擎里，主进程只负责判大小、判完整性与读字节。
+   */
+  docxOpen: "docx:open",
+  /**
+   * 把引擎序列化出的整份 docx 写回磁盘（同 root/dir 白名单）。expectedHash 与磁盘
+   * 现状不一致就回 conflict、一个字节都不写；写入走原子写 + 同路径串行，覆盖前把
+   * 上一版复制进应用数据目录的 docx-backups。
+   */
+  docxSave: "docx:save",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */

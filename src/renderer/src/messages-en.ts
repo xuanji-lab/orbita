@@ -1708,6 +1708,53 @@ export const en = {
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },
 
+  /* ---------- docx 轻量编辑（issue #273）：工具栏、保存状态、保真闸门 ---------- */
+  docx: {
+    bold: "Bold",
+    italic: "Italic",
+    underline: "Underline",
+    undo: "Undo",
+    redo: "Redo",
+    /** 刚打开、还没动过：磁盘上的这一份就是屏幕上的这一份 */
+    clean: "No changes",
+    unsaved: "Not saved",
+    saving: "Saving…",
+    saved: "Saved",
+    saveFailed: "Couldn't save",
+    /** 工具栏状态栏的短写；完整说明在下面的提示条里 */
+    conflictShort: "File changed on disk",
+    conflictChanged: "This file changed on disk after you opened it. Nothing was written.",
+    conflictMissing: "This file was deleted on disk. Nothing was written.",
+    reload: "Reload from disk",
+    dismiss: "Dismiss",
+    /** 保真闸门：这次保存会整份重新生成文档，先把原因说清楚 */
+    repackLead: (reasons: string) => `This save rewrites the whole document (${reasons}).`,
+    repackReason: {
+      structure: "paragraphs or tables changed",
+      image: "a new image was added",
+      numbering: "a new numbering definition was added",
+      engine: "the editor reports a full rewrite",
+    },
+    /** 覆盖前的上一版落在应用数据目录（不进工作区） */
+    backupHint: "The previous version is copied into orbita's app data folder first, so you can go back to it.",
+    saveAnyway: "Save anyway",
+    savedWithBackup: (path: string) => `Save (previous version: ${path})`,
+    /** 挂载前的页数粗估：先问，不要先冻住面板 */
+    oversizeEstimate: (estimate: number, limit: number) =>
+      `About ${estimate} pages — beyond the in-app limit (${limit}). Opening it here can freeze the panel for a while.`,
+    openAnyway: "Open anyway",
+    /** 页数超过 DOCX_MAX_PAGES：只读，改去 Word */
+    oversize: (limit: number, pages: number) =>
+      `This document has ${pages} pages — the in-app editor stops at ${limit}. It is read-only here; edit it in Word.`,
+    tooLarge: (size: string, limit: string) => `Too large to open here (${size} — the limit is ${limit})`,
+    invalid: {
+      password: "This document is password-protected. Remove the password in Word and save again.",
+      "not-docx": "This file isn't a Word document.",
+      corrupt: "This file is damaged — it isn't a readable .docx package.",
+      missing: "This file isn't on disk anymore — it was deleted or renamed outside orbita.",
+    },
+  },
+
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "Intent",

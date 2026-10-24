@@ -9,7 +9,7 @@
  */
 import { lstat, readdir, realpath } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   sortFileEntries,
   type FileEntry,
@@ -45,6 +45,58 @@ export async function whitelistedPath(roots: readonly FileRoot[], req: FileListR
     throw new Error(`「${req.dir}」不在允许的根之内`);
   }
   return dirReal;
+}
+
+/**
+ * **写通道**的白名单：与 whitelistedPath 同一道根校验，但允许目标文件**已经不存在**。
+ *
+ * 为什么需要单独一支：保存前若先 realpath 目标本身，外部删掉文件之后这里会先抛
+ * 「目录不存在」，`saveDocxFile` 里那条「ENOENT → conflict(missing)」永远轮不到，
+ * 用户看到的是一句原始 IPC 报错，磁盘上也不会重建文件——两件事都要在契约上成立。
+ *
+ * 做法：存在就照旧 realpath 整条路径（symlink 跳板同样被解析后判掉）；不存在就
+ * realpath **父目录**、把文件名拼回去——父目录才是可判定的一段，文件名只是最后一段。
+ * 父目录也不在（整棵树被删）时回 `missing`：不 mkdir 重建用户的目录结构。
+ */
+export async function whitelistedTargetPath(
+  roots: readonly FileRoot[],
+  req: FileListRequest,
+): Promise<{ path: string } | { missing: true }> {
+  if (!roots.some((root) => root.path === req.root)) {
+    throw new Error(`「${req.root}」不是这条会话允许的根目录之一`);
+  }
+  let rootReal: string;
+  try {
+    rootReal = await realpath(req.root);
+  } catch {
+    throw new Error(`根目录不存在：${req.root}`);
+  }
+  const inside = (candidate: string): void => {
+    const rel = relative(rootReal, candidate);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error(`「${req.dir}」不在允许的根之内`);
+    }
+  };
+
+  try {
+    const dirReal = await realpath(req.dir);
+    inside(dirReal);
+    return { path: dirReal };
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+  }
+
+  const name = basename(req.dir);
+  if (name === "" || name === "." || name === "..") return { missing: true };
+  let parentReal: string;
+  try {
+    parentReal = await realpath(dirname(req.dir));
+  } catch (error) {
+    if (isNotFound(error)) return { missing: true };
+    throw error;
+  }
+  inside(parentReal);
+  return { path: join(parentReal, name) };
 }
 
 export async function listDirectory(
