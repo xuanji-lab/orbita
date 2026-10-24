@@ -1229,10 +1229,17 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   applyBillingStreamPatch(session);
   // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
   // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
-  // 「换模型后支持集变了」——芯片每次开轮自我纠真
+  // 「换模型后支持集变了」——芯片每次开轮自我纠真。
+  // 带上型号：supported 只对它成立，renderer 切型号后靠它判过期（见 AgentEvent 注释）。
+  // 型号取 session.model（与 getAvailableThinkingLevels 同源），缺了才退到本轮解析的 model
+  const thinkingModel = (): { providerId: string; modelId: string } => {
+    const current = session.model ?? model;
+    return { providerId: current.provider, modelId: current.id };
+  };
   send({
     type: "thinking",
     sessionId: command.sessionId,
+    ...thinkingModel(),
     level: session.thinkingLevel,
     supported: session.getAvailableThinkingLevels(),
   });
@@ -1292,6 +1299,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       send({
         type: "thinking",
         sessionId: command.sessionId,
+        ...thinkingModel(),
         level: event.level,
         supported: session.getAvailableThinkingLevels(),
       });

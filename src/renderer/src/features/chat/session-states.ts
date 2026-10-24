@@ -149,8 +149,10 @@ export interface SessionEntry {
   /**
    * 思考档真值（clamp 后的事实 + 模型支持集）。null = 还没开过轮——芯片显示
    * meta 里的意图档，下一轮并跑时 runtime 的第一次推送会填上真值。ephemeral，不落盘。
+   * providerId / modelId 是报这组真值的型号：切型号后它就过期了，**读一律走
+   * observedThinkingFor**，不直接拿 supported（切型号不清这里，按型号判过期）。
    */
-  thinking: { level: PiThinkingLevel; supported: readonly PiThinkingLevel[] } | null;
+  thinking: ObservedThinking | null;
   approvals: PendingApproval[];
   /**
    * 轮尾文件账（revert.ts，与 marks 同一条纪律）：不进归约器，卡片层直接消费；
@@ -176,6 +178,36 @@ export interface SessionEntry {
    * ephemeral。
    */
   pendingEcho: { blocks: readonly string[] } | null;
+}
+
+/** 一份运行时报回的思考档真值，连同报它的型号 */
+export interface ObservedThinking {
+  providerId: string;
+  modelId: string;
+  level: PiThinkingLevel;
+  supported: readonly PiThinkingLevel[];
+}
+
+/**
+ * 当前型号可用的「运行时报回的支持集」：真值是别的型号报的（会话里切过型号、
+ * 还没用新型号开过轮）就当没有，返回 null 让调用方回落白名单 / 目录。
+ * 服务商也要对上——同一个型号 id 在两家的支持集可以不同（Kimi Coding 的 k3 三档、
+ * OpenCode Go 的 kimi-k3 只开 max）。
+ */
+export function observedThinkingFor(
+  observed: ObservedThinking | null,
+  model: { providerId: string; modelId: string } | null,
+): readonly PiThinkingLevel[] | null {
+  if (observed === null || !sameModel(observed, model)) return null;
+  return observed.supported;
+}
+
+/** 两个型号引用是不是同一个（服务商 + 型号 id 都要对上）；任一侧为 null 不算 */
+export function sameModel(
+  a: { providerId: string; modelId: string } | null,
+  b: { providerId: string; modelId: string } | null,
+): boolean {
+  return a !== null && b !== null && a.providerId === b.providerId && a.modelId === b.modelId;
 }
 
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
@@ -281,7 +313,12 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   if (event.type === "thinking") {
     return update(states, event.sessionId, (entry) => ({
       ...entry,
-      thinking: { level: event.level, supported: event.supported },
+      thinking: {
+        providerId: event.providerId,
+        modelId: event.modelId,
+        level: event.level,
+        supported: event.supported,
+      },
     }));
   }
   if (event.type === "permission") {

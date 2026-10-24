@@ -29,6 +29,8 @@ import {
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
+  observedThinkingFor,
+  sameModel,
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
@@ -411,7 +413,7 @@ interface ViewHandle {
   readonly viewedIdRef: Readonly<{ current: string | null }>;
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
-  alignThinking(event: { level: PiThinkingLevel }): void;
+  alignThinking(event: { providerId: string; modelId: string; level: PiThinkingLevel }): void;
   /** 档位被父会话切档联动改了（主进程已落 meta / runtime）：mode 芯片对齐 */
   alignMode(mode: PermissionMode): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
@@ -1274,6 +1276,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
+  // alignThinking 判「真值是不是当前型号报的」用的镜像：注册只发生一次，闭包里的 model 会陈旧
+  const modelRef = useRef<{ providerId: string; modelId: string } | null>(null);
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
+
   const [mode, setMode] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE);
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
@@ -1451,12 +1459,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const handle: ViewHandle = {
       sessionRef,
       viewedIdRef,
-      alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
+      alignModel: (event) => {
+        const next = { providerId: event.providerId, modelId: event.modelId };
+        // 镜像当场跟上：紧随其后的 thinking 事件可能在重渲染（effect 同步镜像）之前到
+        modelRef.current = next;
+        setModel(next);
+      },
       // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
       alignMode: (mode) => setMode(mode),
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
+      // 只认当前型号报的：轮中切了型号（新型号下一轮才生效），旧型号此后因改档再报的
+      // clamp 值是旧型号的事实，写进芯片就会被当作新型号的意图档发出去
       alignThinking: (event) => {
+        if (!sameModel(event, modelRef.current)) return;
         if (isThinkingLevel(event.level)) setThinkingLevelState(event.level);
       },
       handleRemoved: (id) => {
@@ -3132,7 +3148,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     changeMode,
     thinkingLevel,
     changeThinkingLevel,
-    thinkingSupported: entry.thinking?.supported ?? null,
+    // 只给当前型号报回的支持集；别的型号报的（切过型号还没开轮）当没有，菜单回落目录
+    thinkingSupported: observedThinkingFor(entry.thinking, model),
     catalog: engine.catalog,
     approvals: entry.approvals,
     intentRecalls: entry.intentRecalls,

@@ -27,6 +27,8 @@ import {
   seedFromDisk,
   setOlderLoading,
   setEntryPhase,
+  observedThinkingFor,
+  sameModel,
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
@@ -99,35 +101,92 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.deepEqual(texts(states, "A"), ["甲一"]);
   });
 
-  test("thinking 事件进自己会话的槽：clamp 真值与支持集各归各", () => {
+  test("thinking 事件进自己会话的槽：clamp 真值、支持集与报它的型号各归各", () => {
     let states = applyAgentEvent(new Map(), {
       type: "thinking",
       sessionId: "A",
+      providerId: "kimi-coding",
+      modelId: "k3",
       level: "low",
       supported: ["minimal", "low", "medium", "high"],
     });
     states = applyAgentEvent(states, {
       type: "thinking",
       sessionId: "B",
+      providerId: "p",
+      modelId: "plain",
       level: "off",
       supported: ["off"],
     });
     assert.deepEqual(states.get("A")?.thinking, {
+      providerId: "kimi-coding",
+      modelId: "k3",
       level: "low",
       supported: ["minimal", "low", "medium", "high"],
     });
-    assert.deepEqual(states.get("B")?.thinking, { level: "off", supported: ["off"] });
-    // 后到的真值整体覆盖先到的（换模型后支持集变了）
+    assert.deepEqual(states.get("B")?.thinking, { providerId: "p", modelId: "plain", level: "off", supported: ["off"] });
+    // 后到的真值整体覆盖先到的（换模型后支持集变了，型号也跟着换）
     states = applyAgentEvent(states, {
       type: "thinking",
       sessionId: "A",
-      level: "medium",
-      supported: ["off", "medium", "high"],
+      providerId: "opencode-go",
+      modelId: "kimi-k3",
+      level: "max",
+      supported: ["max"],
     });
     assert.deepEqual(states.get("A")?.thinking, {
-      level: "medium",
-      supported: ["off", "medium", "high"],
+      providerId: "opencode-go",
+      modelId: "kimi-k3",
+      level: "max",
+      supported: ["max"],
     });
+  });
+
+  describe("observedThinkingFor：运行时报回的支持集只对报它的型号成立", () => {
+    const kimiCoding = { providerId: "kimi-coding", modelId: "k3" };
+    const opencodeK3 = { providerId: "opencode-go", modelId: "kimi-k3" };
+    const reported = (model: { providerId: string; modelId: string }, supported: readonly ("low" | "medium" | "high" | "max")[]) =>
+      applyAgentEvent(new Map(), { type: "thinking", sessionId: "A", ...model, level: supported[0] ?? "max", supported })
+        .get("A")?.thinking ?? null;
+
+    it("同一型号：生效", () => {
+      assert.deepEqual(observedThinkingFor(reported(kimiCoding, ["low", "medium", "high"]), kimiCoding), ["low", "medium", "high"]);
+    });
+
+    it("切到别的型号还没开轮：不生效（用户复现：kimi-coding/k3 的三档跟到了 opencode-go/kimi-k3）", () => {
+      assert.equal(observedThinkingFor(reported(kimiCoding, ["low", "medium", "high"]), opencodeK3), null);
+    });
+
+    it("同一个型号 id、不同服务商：不生效", () => {
+      const sameIdOtherProvider = { providerId: "opencode-go", modelId: "k3" };
+      assert.equal(observedThinkingFor(reported(kimiCoding, ["low", "medium", "high"]), sameIdOtherProvider), null);
+    });
+
+    it("新型号开轮报回后：又生效", () => {
+      let states = applyAgentEvent(new Map(), {
+        type: "thinking",
+        sessionId: "A",
+        ...kimiCoding,
+        level: "high",
+        supported: ["low", "medium", "high"],
+      });
+      assert.equal(observedThinkingFor(states.get("A")?.thinking ?? null, opencodeK3), null);
+      states = applyAgentEvent(states, { type: "thinking", sessionId: "A", ...opencodeK3, level: "max", supported: ["max"] });
+      assert.deepEqual(observedThinkingFor(states.get("A")?.thinking ?? null, opencodeK3), ["max"]);
+    });
+
+    it("没报过 / 没有当前型号：null", () => {
+      assert.equal(observedThinkingFor(null, kimiCoding), null);
+      assert.equal(observedThinkingFor(reported(kimiCoding, ["high"]), null), null);
+    });
+  });
+
+  test("sameModel：服务商与型号 id 都对上才算同一个", () => {
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, { providerId: "a", modelId: "m" }), true);
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, { providerId: "b", modelId: "m" }), false);
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, { providerId: "a", modelId: "n" }), false);
+    assert.equal(sameModel(null, { providerId: "a", modelId: "m" }), false);
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, null), false);
   });
 
   test("phase 按槽独立：A turn 与 B idle 并存", () => {
