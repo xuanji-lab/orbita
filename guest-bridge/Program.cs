@@ -58,9 +58,10 @@ internal static class Program
     //（打包版 UI 冒烟：在沙箱里启动一份只读映射进来的 orbita.exe 并用像素统计判断它渲染没渲染），
     // 0.6.0 起**一个会话一个 Edge 实例**（cdp-* 带 session 字段，各自 profile / 端口，上限 4，
     // 空闲 5 分钟回收），0.7.0 起 cdp-* 由**该会话自己的 worker 子进程**执行（可超时杀；
-    // 慢命令不再堵住整条桥，宿主侧协议不变）。宿主不逐字比版本，但 bridge.json 里的版本是
-    // 排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.7.0";
+    // 慢命令不再堵住整条桥，宿主侧协议不变），0.7.1 修了「超时杀完 worker、重开同一会话时
+    // 读到上一只 Edge 的旧端口」那条自愈路上的 bug（起 Edge 前清端口文件 + 连接重试）。
+    // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
+    private const string Version = "0.7.1";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果

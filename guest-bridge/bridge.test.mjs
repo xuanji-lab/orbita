@@ -134,7 +134,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.7.0");
+      assert.equal(info.version, "0.7.1");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -556,6 +556,36 @@ test(
     console.log(`    worker 自测：${parsed.cases} 条断言全过`);
   },
 );
+
+// ── 超时杀 worker 之后的自愈（v1.5-3 真机第一轮的 bug）─────────────────────────
+//
+// 现场：40s 超时杀 worker 只杀进程树、不删 profile（故意的：登录态要留），于是
+// `<profile>\DevToolsActivePort` 里还留着上一只 Edge 的端口。新 Edge 起来后
+// WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，把旧端口当成新端口 →
+// 下一条 cdp-start 回「Unable to connect to the remote server」，模型既看不懂也修不了。
+//
+// 修复的两半都要钉住：
+//   ① 起 Edge **之前**清掉旧端口文件（顺序错了等于没修）——纯函数行为由
+//      `--selftest-worker` 的 ⑥ 那组断言覆盖；
+//   ② 连不上要在 guest 内重试，最后回一句带下一步的人话，而不是把 .NET 的裸错误扔给模型。
+// 真 Edge 只能在沙箱里验（宿主上碰 msedge 是红线），所以这里锁源码里的顺序与文案。
+
+test("超时杀 worker 后的自愈：起 Edge 前清旧端口文件，连不上在 guest 内重试", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+
+  const clearAt = src.indexOf("ClearStalePortFile(_profileDir)");
+  const startAt = src.indexOf("Process.Start(new ProcessStartInfo(edge, args))");
+  assert.ok(clearAt > 0, "Launch() 里应当清旧端口文件");
+  assert.ok(startAt > 0, "Launch() 里应当启动 Edge");
+  assert.ok(clearAt < startAt, "清端口文件必须排在 Process.Start 之前——晚了就是把旧端口当新端口用");
+
+  // 连接要重试（不是一次 HttpGet 失败就抛），且重试前重读端口文件
+  assert.match(src, /ConnectRetryMs/);
+  assert.match(src, /RefreshPortFromFile\(\)/);
+  // 最终失败也要给模型一句能照着做的：裸的 "Unable to connect to the remote server" 不算
+  assert.match(src, /稍后重试一次 sandbox_navigate/);
+  assert.match(src, /computer_screenshot \/ computer_click 像素工具/);
+});
 
 // ── 注入失败文案（B）────────────────────────────────────────────────────
 //

@@ -119,6 +119,19 @@ internal sealed class CdpSession
 
     // ── cdp-start ────────────────────────────────────────────────────────────────
 
+    /**
+     * 等 CDP 连接就绪的期限与节奏。
+     *
+     * **必须重试**：超时杀掉 worker 之后重开同一个会话时，profile 里可能还留着上一只 Edge 的
+     * DevToolsActivePort（ClearStalePortFile 会先删它，但删不掉 / Edge 自己写一半都可能留下旧端口），
+     * 于是第一条命令去连一个死端口，.NET 只回一句「Unable to connect to the remote server」
+     * ——模型看不懂也修不了（2026-10-25 真机就这么挂在超时之后的自愈路上）。
+     * 这种「端口还没就绪」的阶段在 guest 内轮询掉，别把异常扔给模型。
+     * 8s 与 LaunchTimeoutMs 加起来仍在主桥的 40s 命令线之下。
+     */
+    private const int ConnectRetryMs = 8000;
+    private const int ConnectRetryIntervalMs = 400;
+
     private string Start(string raw)
     {
         bool headless = Program.ExtractBool(raw, "headless");
@@ -172,6 +185,11 @@ internal sealed class CdpSession
                 + "这个会话的浏览器用不了：先 cdp-stop 这个会话，再 sandbox_navigate 重试；连续失败就改用 computer_screenshot 像素工具");
         }
         string args = BuildArgs(port, headless, false);
+        // 开场之前先清掉**上一只 Edge 留下的端口文件**：超时杀 worker 只杀进程树（不删 profile，
+        // 免得把登录态一起扔了），而 DevToolsActivePort 会活下来。留着它的后果：新 Edge 刚起来、
+        // WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，然后把**旧端口**当成本次端口，
+        // 之后去连一个死 socket——真机 2026-10-25 的「cdp-start 失败：Unable to connect to the remote server」。
+        ClearStalePortFile(_profileDir);
         Program.Log("CDP 启动 Edge：" + edge + " " + args);
         _edge = Process.Start(new ProcessStartInfo(edge, args));
         if (_edge == null) throw new Exception("启动 msedge.exe 失败（进程没有起来）");
@@ -199,11 +217,53 @@ internal sealed class CdpSession
         }
         string[] lines = content.Replace("\r", "").Split('\n');
         string portText = lines.Length > 0 ? lines[0].Trim() : "";
-        int parsed;
-        if (!int.TryParse(portText, out parsed) || parsed <= 0)
+        int parsed = ParsePortFileContent(content);
+        if (parsed <= 0)
             throw new Exception("DevToolsActivePort 的首行不是端口号（读到「" + portText + "」）——这个 Edge 版本的端口文件格式不同");
         _port = parsed;
         Program.Log("CDP 端口 " + _port + "（来自 DevToolsActivePort）");
+    }
+
+    /**
+     * 端口文件正文 → 端口（首行）。不能解析回 0。**纯函数**：自测在宿主上直接验它，不碰 Edge。
+     * 格式固定是「端口\n/devtools/browser/<id>」。
+     */
+    internal static int ParsePortFileContent(string content)
+    {
+        if (content == null) return 0;
+        string[] lines = content.Replace("\r", "").Split('\n');
+        string portText = lines.Length > 0 ? lines[0].Trim() : "";
+        int port;
+        if (!int.TryParse(portText, out port) || port <= 0 || port > 65535) return 0;
+        return port;
+    }
+
+    /**
+     * 起 Edge **之前**删掉旧的 DevToolsActivePort。返回 true = 现在可以放心起了（文件不在）。
+     *
+     * 为什么不能只靠「新 Edge 会重写它」：写是晚于我们读的。旧文件在场时，新 Edge 刚被拉起、
+     * 还没监听，等待循环却已经把旧端口交回去了。**删不掉不算失败**（记日志，继续起）——
+     * 后面的连接重试与重读端口文件是第二道防线。
+     */
+    internal static bool ClearStalePortFile(string profileDir)
+    {
+        string path = Path.Combine(profileDir, "DevToolsActivePort");
+        try
+        {
+            if (!File.Exists(path)) return true;
+            File.Delete(path);
+            if (File.Exists(path))
+            {
+                Program.Log("旧的 DevToolsActivePort 删不掉（还在）：" + path);
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Program.Log("删除旧的 DevToolsActivePort 失败（" + path + "）：" + ex.Message);
+            return false;
+        }
     }
 
     private string BuildArgs(int port, bool headless, bool noSandbox)
@@ -394,20 +454,102 @@ internal sealed class CdpSession
         try
         {
             if (_port <= 0) throw new Exception("不知道 CDP 端口（DevToolsActivePort 没读到）");
-            string version = HttpGet("http://127.0.0.1:" + _port + "/json/version", 5000);
-            string wsUrl = Program.ExtractString(version, "webSocketDebuggerUrl");
-            if (wsUrl == null || wsUrl.Length == 0)
-                throw new Exception("Edge 的 /json/version 里没有 webSocketDebuggerUrl（端口 " + _port + " 可能被别的进程占了）");
-            _product = Program.ExtractString(version, "Browser");
-            CloseSocket();
-            _ws = Connect(wsUrl, 5000);
-            Program.Log("CDP 已连接：" + wsUrl + " product=" + _product);
+            OpenSocket();
             AttachPage();
         }
         finally
         {
             _connecting = false;
         }
+    }
+
+    /**
+     * 拿 browser 级 WebSocket（/json/version → webSocketDebuggerUrl → 连接）。
+     *
+     * **连不上就重试**（理由见 ConnectRetryMs）：真机上这只 Edge 可能刚被重新拉起、
+     * 端口文件里还是上一只的旧端口，或监听还没就绪。这两种都是秒级自愈的，
+     * 不该变成模型看到的一句「Unable to connect to the remote server」。
+     * 每次重试前**重读端口文件**：旧端口 → 新端口的切换就靠它。
+     */
+    private void OpenSocket()
+    {
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(ConnectRetryMs);
+        while (true)
+        {
+            string version;
+            try
+            {
+                version = HttpGet("http://127.0.0.1:" + _port + "/json/version", 5000);
+            }
+            catch (Exception ex)
+            {
+                if (RetryConnection(ex, deadline)) continue;
+                throw new Exception("沙箱里的 Edge 调试端口 " + _port + " 连不上（" + BaseMessage(ex) + "）。"
+                    + "可能是 Edge 刚重启、调试端口还没就绪：稍后重试一次 sandbox_navigate；"
+                    + "连续失败就改用 computer_screenshot / computer_click 像素工具");
+            }
+            string wsUrl = Program.ExtractString(version, "webSocketDebuggerUrl");
+            if (wsUrl == null || wsUrl.Length == 0)
+                throw new Exception("Edge 的 /json/version 里没有 webSocketDebuggerUrl（端口 " + _port + " 可能被别的进程占了）");
+            _product = Program.ExtractString(version, "Browser");
+            CloseSocket();
+            try
+            {
+                _ws = Connect(wsUrl, 5000);
+            }
+            catch (Exception ex)
+            {
+                if (RetryConnection(ex, deadline)) continue;
+                throw;
+            }
+            Program.Log("CDP 已连接：" + wsUrl + " product=" + _product);
+            return;
+        }
+    }
+
+    /**
+     * 一次连接失败之后：还能等就重读端口、睡一下、回 true（调用方 continue）；
+     * 超期限回 false（调用方报错）；**Edge 已经退了就直接说「没有在运行」**——宿主的
+     * 缓存自愈就是按这句话触发的。
+     */
+    private bool RetryConnection(Exception cause, DateTime deadline)
+    {
+        if (_edge == null || _edge.HasExited)
+            throw new Exception("沙箱里的浏览器没有在运行（Edge 在等调试端口时退出了）。"
+                + "先 sandbox_navigate 把它重新拉起来；连续失败就改用 computer_screenshot / computer_click 像素工具");
+        if (DateTime.UtcNow >= deadline) return false;
+        RefreshPortFromFile();
+        Program.Log("CDP 连接还没就绪（" + BaseMessage(cause) + "），" + ConnectRetryIntervalMs
+            + "ms 后重试（端口 " + _port + "）");
+        Thread.Sleep(ConnectRetryIntervalMs);
+        return true;
+    }
+
+    /** 重读端口文件：上次读到的可能是上一只 Edge 留下的旧端口（换了就跟着改，并记一笔） */
+    private void RefreshPortFromFile()
+    {
+        try
+        {
+            string path = Path.Combine(_profileDir, "DevToolsActivePort");
+            if (!File.Exists(path)) return;
+            int port = ParsePortFileContent(File.ReadAllText(path));
+            if (port <= 0 || port == _port) return;
+            Program.Log("CDP 端口从 " + _port + " 改成 " + port + "（端口文件被新的 Edge 重写过）");
+            _port = port;
+        }
+        catch
+        {
+            // 端口文件可能正被写一半，下一轮再读
+        }
+    }
+
+    /** 底层异常取最内层原因（WebException 自己的 Message 只有「远程服务器返回错误」这类套话） */
+    private static string BaseMessage(Exception ex)
+    {
+        if (ex == null) return "未知原因";
+        Exception inner = ex.GetBaseException();
+        string message = inner == null ? ex.Message : inner.Message;
+        return message == null || message.Length == 0 ? "未知原因" : message;
     }
 
     /** 选一个 page target 并 attach（flatten）；没有就新建一个 */

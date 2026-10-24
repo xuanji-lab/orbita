@@ -1015,6 +1015,30 @@ internal static class WorkerHost
             Program.CheckTrue(failures, ref cases, "⑤ 没有 worker 时汇总 status = 0 个会话",
                 status != null && status.IndexOf("\"count\":0", StringComparison.Ordinal) >= 0);
             Program.CheckTrue(failures, ref cases, "⑤ 汇总 status 不拉起新 worker", ReadWorkerPid(tmp, "st") == 0);
+
+            // ⑥ 超时杀掉 worker 之后重开同一个会话：**旧的 DevToolsActivePort 不许被复用**。
+            //
+            // 真机事故（2026-10-25）：40s 超时杀 worker 只杀进程树、不删 profile（故意的，
+            // 登录态要留），于是 <profile>\DevToolsActivePort 里还留着上一只 Edge 的端口；
+            // 新 Edge 起来后 WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，
+            // 把旧端口当成新端口 → cdp-start 回「Unable to connect to the remote server」。
+            // 这一段只验纯函数（删旧文件 / 解析端口），**不启动任何 Edge**。
+            string profileDir = Path.Combine(tmp, "profile", "wa");
+            Directory.CreateDirectory(profileDir);
+            string portPath = Path.Combine(profileDir, "DevToolsActivePort");
+            Program.AtomicWrite(portPath, Encoding.UTF8.GetBytes("50000\n/devtools/browser/old-dead-edge"));
+            Program.CheckTrue(failures, ref cases, "⑥ 端口文件能解析出上一只 Edge 的端口",
+                CdpSession.ParsePortFileContent("50000\n/devtools/browser/old-dead-edge") == 50000);
+            Program.CheckTrue(failures, ref cases, "⑥ 端口文件是垃圾时解析成 0（不猜）",
+                CdpSession.ParsePortFileContent("not-a-port\n/x") == 0
+                && CdpSession.ParsePortFileContent("") == 0
+                && CdpSession.ParsePortFileContent(null) == 0);
+            Program.CheckTrue(failures, ref cases, "⑥ 起 Edge 前旧端口文件被清掉（不复用旧端口）",
+                CdpSession.ClearStalePortFile(profileDir) && !File.Exists(portPath));
+            Program.CheckTrue(failures, ref cases, "⑥ 清第二次也是成功（幂等：文件本来就不在了）",
+                CdpSession.ClearStalePortFile(profileDir));
+            Program.CheckTrue(failures, ref cases, "⑥ 清掉之后读不出任何端口（新 Edge 写的才是真值）",
+                CdpSession.ParsePortFileContent(TryReadText(portPath)) == 0);
         }
         catch (Exception ex)
         {
