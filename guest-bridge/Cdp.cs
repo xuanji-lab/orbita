@@ -55,6 +55,15 @@ internal sealed class CdpSession
     private const int DefaultTimeoutMs = 10000;
     /** 导航默认等待（页内资源多的站点要更久） */
     private const int NavTimeoutMs = 20000;
+    /**
+     * 错误页正文里原因码的等待窗口（另见 WaitForErrorCode）。为什么是 2s：
+     * 错误页的 DOM 是本地资源，正常一两帧就好；超过 2s 说明这页不会渲染正文了，
+     * 继续等就是在把「省下的 20 秒」还回去。每 300ms 一轮 = 最多 7 次读正文。
+     */
+    private const int ErrorCodeWaitMs = 2000;
+    private const int ErrorCodePollMs = 300;
+    /** 错误文案里回显 URL 的上限：data: / 长查询串会把一句话撑成一屏（真机见过几百字符） */
+    private const int NavUrlInMessageMax = 80;
     /** 截图默认上限宽度（长边），与像素截图同值 */
     private const int ShotMaxWidth = 1280;
     /** extract / observe 正文单次上限（resp 是整读整写的文件，超了宿主吃不下） */
@@ -401,12 +410,7 @@ internal sealed class CdpSession
 
     private string Status()
     {
-        if (!IsAlive())
-        {
-            return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
-                .Str("hint", "沙箱里的 Edge 没有在运行。sandbox_navigate 会自动把它拉起来；"
-                    + "如果拉不起来，改用 computer_screenshot / computer_click 像素工具").ToString();
-        }
+        if (!IsAlive()) return NotRunningStatus();
         try
         {
             ConnectAndAttach();
@@ -420,9 +424,24 @@ internal sealed class CdpSession
         }
         catch (Exception ex)
         {
-            return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
-                .Str("error", ex.Message).ToString();
+            // CDP 通道坏了不等于浏览器没了。旧行为在这里一律回 running:false，于是宿主看到
+            // 「没在跑」而进程其实好好的（自相矛盾），「下一条命令能不能用」也没人处理。
+            InvalidateSession();
+            // 先确认真相：没等到的这段时间 Edge 也可能真的退了（那就是真的没在跑）
+            if (!IsAlive()) return NotRunningStatus();
+            return new JObj().Bool("ok", true).Str("session", Key).Bool("running", true).Num("port", _port)
+                .Str("error", ex.Message)
+                .Str("hint", "浏览器进程还活着，但 CDP 通道刚断过一次（上一条命令超时 / 页面崩了）。"
+                    + "下一条 sandbox_navigate 会自动重连；连续失败就改用 computer_screenshot / computer_click 像素工具")
+                .ToString();
         }
+    }
+
+    private string NotRunningStatus()
+    {
+        return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
+            .Str("hint", "沙箱里的 Edge 没有在运行。sandbox_navigate 会自动把它拉起来；"
+                + "如果拉不起来，改用 computer_screenshot / computer_click 像素工具").ToString();
     }
 
     private string OkWithStatus(bool alreadyRunning)
@@ -552,11 +571,18 @@ internal sealed class CdpSession
         return message == null || message.Length == 0 ? "未知原因" : message;
     }
 
-    /** 选一个 page target 并 attach（flatten）；没有就新建一个 */
+    /** 选一个 page target 并 attach（flatten）。优先回到原来那个 target（保持当前标签页），没有就新建一个 */
     private void AttachPage()
     {
         List<TargetInfo> pages = PageTargets();
-        TargetInfo chosen = pages.Count > 0 ? pages[0] : null;
+        TargetInfo chosen = null;
+        // 重连（上一条命令超时后 session 被丢掉）时不能随手拿 pages[0]：那会把模型
+        // 从正在操作的那个标签页换到另一个上。原来那个 target 还在就回到它。
+        for (int i = 0; i < pages.Count; i++)
+        {
+            if (_targetId.Length > 0 && pages[i].Id == _targetId) { chosen = pages[i]; break; }
+        }
+        if (chosen == null) chosen = pages.Count > 0 ? pages[0] : null;
         if (chosen == null)
         {
             string created = CallBrowser("Target.createTarget", "{\"url\":\"about:blank\"}", 10000);
@@ -676,7 +702,26 @@ internal sealed class CdpSession
     {
         if (!_connecting) ConnectAndAttach();
         if (_ws == null || _ws.State != WebSocketState.Open) throw new Exception("CDP 连接已断开");
+        string text = Exchange(sessionId, method, paramsJson, timeoutMs);
+        if (sessionId == null || sessionId.Length == 0) return text;
+        if (!IsStaleSessionError(text)) return text;
+        // attach 自己发命令时（_connecting）不在这里重连：本来就在建连，重入只会害自己
+        if (_connecting) return text;
+        // 这条 flatten session 在 Edge 那边已经没了。真机现场（2026-10-25）：上一条
+        // cdp-nav 的 Page.navigate 超时之后，**紧接着的下一条命令**必回
+        // 「Session with given id not found」，再下一条才自愈——对模型就是「刚才那个
+        // 站点打不开，现在连下一个页面也打不开」。这里当场重连 + 重发一次（session 失效
+        // 意味着这条命令根本没执行过，重发是安全的）。
+        Program.Log("CDP session 已失效（" + method + " 回 Session not found），重连后重发一次");
+        InvalidateSession();
+        ConnectAndAttach();
+        if (_sessionId.Length == 0) return text;
+        return Exchange(_sessionId, method, paramsJson, timeoutMs);
+    }
 
+    /** 发一条 CDP 消息并等它自己的回执（只发、不重试、不解释错误） */
+    private string Exchange(string sessionId, string method, string paramsJson, int timeoutMs)
+    {
         int id = ++_nextId;
         StringBuilder m = new StringBuilder();
         m.Append("{\"id\":").Append(id).Append(",\"method\":\"").Append(method).Append("\",\"params\":").Append(paramsJson);
@@ -689,12 +734,12 @@ internal sealed class CdpSession
         if (!send.Wait(timeoutMs))
         {
             // 超时的 SendAsync 会让 socket 进入不可用状态：丢掉引用，下一条命令重连
-            CloseSocket();
+            InvalidateSession();
             throw new Exception("CDP 发送超时（" + method + "）");
         }
         if (send.IsFaulted)
         {
-            CloseSocket();
+            InvalidateSession();
             throw new Exception("CDP 发送失败（" + method + "）：" + BaseMessage(send));
         }
 
@@ -707,7 +752,32 @@ internal sealed class CdpSession
             // **没有 id 的是事件**（Page.loadEventFired / Network.* 等），一律丢掉
             if (HasId(text, id)) return text;
         }
+        // 超时之后这条 session 也可能已经废了（真机：下一条命令会撞 Session not found），
+        // 连同 socket 一起丢掉；_targetId 留着，重连时回到同一个标签页。
+        InvalidateSession();
         throw new Exception("CDP 命令超时（" + method + "，" + timeoutMs + "ms 内没有回执）");
+    }
+
+    /**
+     * 丢掉 CDP 连接与会话，但**不杀 Edge、也不丢 _targetId**：下次用到时重连 + 重新 attach，
+     * 仍然回到原来那个标签页。用在「上一条命令超时 / session 已失效 / 状态查询失败」之后。
+     */
+    private void InvalidateSession()
+    {
+        CloseSocket();
+        _sessionId = "";
+    }
+
+    /**
+     * 回执里是不是「这个 flatten session 已经不存在了」。真机原文：
+     * `Session with given id not found.`（target 没了时是 `No target with given id found`）。
+     * **纯函数**：自测在宿主上直接验它。
+     */
+    internal static bool IsStaleSessionError(string reply)
+    {
+        if (reply == null) return false;
+        return reply.IndexOf("Session with given id not found", StringComparison.OrdinalIgnoreCase) >= 0
+            || reply.IndexOf("No target with given id", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     /**
@@ -869,9 +939,24 @@ internal sealed class CdpSession
         }
 
         string target = NormalizeUrl(url);
-        string navReply = Call("Page.navigate", "{\"url\":" + Program.JsonQuote(target) + "}", timeoutMs);
+        string navReply;
+        try
+        {
+            navReply = Call("Page.navigate", "{\"url\":" + Program.JsonQuote(target) + "}", timeoutMs);
+        }
+        catch (Exception ex)
+        {
+            // Page.navigate 自己超时（连接超时 / 渲染器卡死）：Call 里已经把 session 丢掉了，
+            // 所以下一条命令会重连，不会带着残骸去撞 Session not found。
+            // 给模型的话里不回「CDP 命令超时（Page.navigate，…）」这种内部措辞。
+            if (!IsCdpTimeoutMessage(ex.Message)) throw;
+            // 不报 timeoutMs（超时可能发生在内部的 Page.enable 上，未必是导航那 20s）：
+            // 报真实等到的秒数，两种现场都说得对。
+            long seconds = Math.Max(1, sw.ElapsedMilliseconds / 1000);
+            return NavFailureReceipt(sw, NavErrorMessage("连接超时（浏览器在 " + seconds + " 秒内没有回应）"));
+        }
         string navError = CdpError(navReply);
-        if (navError != null) return Fail("无法打开这个网址（" + target + "）：" + navError);
+        if (navError != null) return Fail("无法打开这个网址（" + ShortUrl(target, NavUrlInMessageMax) + "）：" + navError);
         int ready = WaitForReady(target, timeoutMs);
         // 落在浏览器的错误页 = 这一页没有打开。不能报 ok:true：错误页也是「加载完成」的
         // 普通页面，模型拿到 ok 会接着 observe / click 去操作「你似乎未连接到 Internet」。
@@ -888,11 +973,37 @@ internal sealed class CdpSession
      */
     private string NavFailure(Stopwatch sw)
     {
-        string href = SafeEvalString("location.href");
-        string title = SafeEvalString("document.title");
-        string code = NavErrorCode(ReadPageText());
-        return new JObj().Bool("ok", false).Str("error", NavErrorMessage(code))
+        string href = SafeEvalString("location.href", 3000);
+        string title = SafeEvalString("document.title", 3000);
+        return new JObj().Bool("ok", false).Str("error", NavErrorMessage(WaitForErrorCode()))
             .Str("url", href).Str("title", title).Num("ms", sw.ElapsedMilliseconds).ToString();
+    }
+
+    /** 同一形状的失败回执，但不去读页面（超时后页面多半也读不到，再读就是又一轮卡死） */
+    private string NavFailureReceipt(Stopwatch sw, string error)
+    {
+        return new JObj().Bool("ok", false).Str("error", error).Num("ms", sw.ElapsedMilliseconds).ToString();
+    }
+
+    /**
+     * 错误页正文里的原因码，带一个**很短的等待窗口**。
+     *
+     * 为什么不能一判出错误页就直接读：`chrome-error://` 一出现就判失败（那一步很早就完成了），
+     * 而那一刻错误页的 DOM 往往还没渲染好，正文是空的——真机 2026-10-25 的回执就是
+     * 「页面加载失败（没有拿到内容）」，而正文其实稍后就有 ERR_NAME_NOT_RESOLVED。
+     * 为什么要设上限：错误页的 DOM 是本地资源，正常一两帧（<300ms）就好；等超过 2s 说明
+     * 这一页根本不会渲染正文，再等就是把「省下的 20 秒」还回去了。
+     */
+    private string WaitForErrorCode()
+    {
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(ErrorCodeWaitMs);
+        while (true)
+        {
+            string code = NavErrorCode(ReadPageText());
+            if (code != null) return code;
+            if (DateTime.UtcNow >= deadline) return null;
+            Thread.Sleep(ErrorCodePollMs);
+        }
     }
 
     /** 读页面可见正文（截断 4000 字符）：错误页的原因码就在里面，不需要整页 */
@@ -901,7 +1012,7 @@ internal sealed class CdpSession
         try
         {
             return EvalString("(function(){var b=document.body;var t=b?(b.innerText||b.textContent||''):'';"
-                + "return t.substring(0,4000);})()", 8000);
+                + "return t.substring(0,4000);})()", 3000);
         }
         catch
         {
@@ -911,9 +1022,9 @@ internal sealed class CdpSession
         }
     }
 
-    private string SafeEvalString(string expression)
+    private string SafeEvalString(string expression, int timeoutMs)
     {
-        try { return EvalString(expression, 8000); }
+        try { return EvalString(expression, timeoutMs); }
         catch { return ""; }
     }
 
@@ -965,7 +1076,7 @@ internal sealed class CdpSession
             // 错误页的判定**不挂在 readyState 上**：chrome-error:// 一旦出现就说明导航已经失败了，
             // 不必先相信「这个 Chromium 会在哪个时刻把错误页报成 complete」（我们只有真机回执，
             // 回执里只有「URL 一直对不上」，没有 readyState 的时间线）。
-            string href = expected == null ? null : SafeEvalString("location.href");
+            string href = expected == null ? null : SafeEvalString("location.href", 3000);
             if (href != null && IsNavErrorPage(href, null)) return ReadyErrorPage;
             bool complete;
             try { complete = EvalString("document.readyState", 5000) == "complete"; }
@@ -1037,19 +1148,47 @@ internal sealed class CdpSession
     }
 
     /**
-     * 错误页给模型看的人话：原因 + 怎么确认 + 还能做什么。
+     * 导航失败给模型看的人话：原因 + 怎么确认 + 还能做什么。
+     *
+     * `reason` 要么是错误页的原因码（ERR_INTERNET_DISCONNECTED），要么是一句人说的原因
+     *（「连接超时（浏览器在 20 秒内没有回应）」）——两种都是「页面没有加载」的后半句。
      *
      * 不写「设置 › … › 允许沙箱出网」：这个开关现在不存在（.wsb 固定 `<Networking>Default`），
-     * 指一条不存在的路比不指更坏。拿不到码时不编一个，就说没有拿到内容。
+     * 指一条不存在的路比不指更坏。拿不到原因时不编一个，就说没有拿到内容。
      */
-    internal static string NavErrorMessage(string code)
+    internal static string NavErrorMessage(string reason)
     {
-        string reason = code == null || code.Length == 0
+        string head = reason == null || reason.Length == 0
             ? "页面加载失败（没有拿到内容）"
-            : "页面没有加载：" + code;
-        return reason + "（沙箱可能没有出网、宿主机没联网，或这个地址不可达）。"
+            : "页面没有加载：" + reason;
+        return head + "（沙箱可能没有出网、宿主机没联网，或这个地址不可达）。"
             + "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。"
             + "仍要操作当前界面时改用 computer_screenshot / computer_click 像素工具。";
+    }
+
+    /**
+     * 错误文案里回显 URL 的截断（80 字符 + `…`）。
+     * 真机现场：一条 data: URL 的失败把「无法打开这个网址（…）：…」撑成一屏，
+     * 真正有用的后半句（错误原因）被挤到看不见。**纯函数**。
+     */
+    internal static string ShortUrl(string url, int max)
+    {
+        if (url == null) return "";
+        string v = url.Trim();
+        if (max <= 0 || v.Length <= max) return v;
+        return v.Substring(0, max) + "…";
+    }
+
+    /**
+     * 底部异常是不是 CDP 自己的超时（连接 / 发送 / 等回执），而不是页面或 bridge 的错误。
+     * 是的话导航把它翻成一句人话（「连接超时」），不再把 `CDP 命令超时（Page.navigate，…）`
+     * 这种内部措辞甩给模型。**纯函数**。
+     */
+    internal static bool IsCdpTimeoutMessage(string message)
+    {
+        if (message == null) return false;
+        return message.IndexOf("CDP ", StringComparison.Ordinal) >= 0
+            && message.IndexOf("超时", StringComparison.Ordinal) >= 0;
     }
 
     private bool UrlMatches(string expected, string actual)

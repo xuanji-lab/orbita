@@ -1417,6 +1417,45 @@ internal static class Program
             withCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0
             && noCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0);
 
+        // 连接超时也是同一句人话的前半句（不回「CDP 命令超时（Page.navigate，…）」）
+        string timeoutText = CdpSession.NavErrorMessage("连接超时（20000ms 内没有回执）");
+        CheckTrue(failures, ref cases, "超时：说成「页面没有加载：连接超时」",
+            timeoutText.StartsWith("页面没有加载：连接超时", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "超时文案里没有 CDP 内部措辞",
+            timeoutText.IndexOf("Page.navigate", StringComparison.Ordinal) < 0
+            && timeoutText.IndexOf("CDP 命令超时", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "人话不会撑成一屏（< 400 字符）",
+            withCode.Length < 400 && timeoutText.Length < 400);
+
+        // 超时异常的识别（Nav 靠它把内部措辞换成上面那句人话）
+        CheckTrue(failures, ref cases, "CDP 命令超时命中",
+            CdpSession.IsCdpTimeoutMessage("CDP 命令超时（Page.navigate，20000ms 内没有回执）"));
+        CheckTrue(failures, ref cases, "CDP 发送超时也命中", CdpSession.IsCdpTimeoutMessage("CDP 发送超时（Page.navigate）"));
+        CheckTrue(failures, ref cases, "页面脚本报错不算超时",
+            !CdpSession.IsCdpTimeoutMessage("页面里的脚本报错：Cannot read properties of null"));
+        CheckTrue(failures, ref cases, "「Edge 没有在运行」不算超时",
+            !CdpSession.IsCdpTimeoutMessage("沙箱里的 Edge 没有在运行（或已经退出）"));
+        CheckTrue(failures, ref cases, "null 不算超时", !CdpSession.IsCdpTimeoutMessage(null));
+
+        // 失效 session 的识别（真机 2026-10-25：上一条导航超时后，紧接着的下一条必撞它）
+        string staleReply = "{\"id\":7,\"error\":{\"code\":-32001,\"message\":\"Session with given id not found.\"}}";
+        CheckTrue(failures, ref cases, "Session with given id not found 命中", CdpSession.IsStaleSessionError(staleReply));
+        CheckTrue(failures, ref cases, "No target with given id 命中",
+            CdpSession.IsStaleSessionError("{\"error\":{\"message\":\"No target with given id found\"}}"));
+        CheckTrue(failures, ref cases, "正常回执不算失效",
+            !CdpSession.IsStaleSessionError("{\"id\":7,\"result\":{\"frameId\":\"A1\"}}"));
+        CheckTrue(failures, ref cases, "navigation 失败的普通错误不算失效",
+            !CdpSession.IsStaleSessionError("{\"error\":{\"message\":\"net::ERR_NAME_NOT_RESOLVED\"}}"));
+        CheckTrue(failures, ref cases, "null 不算失效", !CdpSession.IsStaleSessionError(null));
+
+        // 错误文案里的 URL 截断（data: URL 真机把一句错误撑成一屏）
+        string longData = "data:text/html;charset=utf-8;base64," + new string('A', 500);
+        string shorted = CdpSession.ShortUrl(longData, 80);
+        CheckTrue(failures, ref cases, "长 URL 截到 80 + …", shorted.Length == 81 && shorted.EndsWith("…", StringComparison.Ordinal));
+        CheckString(failures, ref cases, "短 URL 原样保留", "https://example.com/", CdpSession.ShortUrl("https://example.com/", 80));
+        CheckString(failures, ref cases, "刚好 80 不截", new string('a', 80), CdpSession.ShortUrl(new string('a', 80), 80));
+        CheckString(failures, ref cases, "null URL 回空串", "", CdpSession.ShortUrl(null, 80));
+
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
     }

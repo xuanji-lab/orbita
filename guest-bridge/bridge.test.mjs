@@ -646,7 +646,7 @@ test(
 // 「导航真的落在 chrome-error:// 上」只有沙箱验收能验。
 
 test(
-  "浏览器错误页 selftest：chrome-error:// 与正文 ERR_ 码命中、正常页面不命中、码与人话对得上",
+  "浏览器错误页 selftest：chrome-error:// 与正文 ERR_ 码命中、正常页面不命中、码/人话/URL 截断/失效 session 都对得上",
   { skip: !isWindows && "仅在 Windows 上运行" },
   () => {
     assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
@@ -654,7 +654,7 @@ test(
     assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
-    assert.ok(parsed.cases >= 20, `用例数应 >= 20，实际 ${parsed.cases}`);
+    assert.ok(parsed.cases >= 30, `用例数应 >= 30，实际 ${parsed.cases}`);
   },
 );
 
