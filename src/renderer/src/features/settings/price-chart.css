@@ -1,4 +1,7 @@
-/* 价格 · 能力图（PriceCapabilityChart.tsx）：卡片墙下面，与分区之间一条细线隔开 */
+/* 价格 · 能力图（PriceCapabilityChart.tsx）：卡片墙下面，与分区之间一条细线隔开。
+   「前沿」一律用 --color-nebula（侧栏用量格的那个颜色，每个主题各一种——用户 2026-10-24：
+   「帕累托的那条折线的颜色能不能继承主题里的用量格的颜色」）：折线、前沿点描边、图例那段线、
+   「帕累托最优」的图标。估算点的虚线框与同型号连线是灰色系，与它分得开。 */
 .pc-block {
   margin-top: var(--space-6);
   padding-top: var(--space-5);
@@ -114,7 +117,7 @@
 }
 .pc-frontier {
   fill: none;
-  stroke: var(--color-success);
+  stroke: var(--color-nebula);
   stroke-width: 1.5;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
@@ -171,7 +174,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  cursor: default;
+  cursor: pointer;
   opacity: 0.78;
   z-index: 2;
   transition: opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -184,14 +187,14 @@
 .pc-dot.frontier {
   opacity: 1;
   z-index: 3;
-  border: 1.5px solid var(--color-success);
+  border: 1.5px solid var(--color-nebula);
 }
 /* 估算点：虚线空心框，头像减淡——没跑过，横轴是算出来的 */
 .pc-dot.estimated {
   border: 1.5px dashed var(--color-text-tertiary);
 }
 .pc-dot.estimated.frontier {
-  border-color: var(--color-success);
+  border-color: var(--color-nebula);
 }
 .pc-dot.estimated .model-avatar {
   opacity: 0.55;
@@ -220,10 +223,47 @@
   color: var(--color-text-tertiary);
 }
 
-/* 悬停浮层（fixed，跟鼠标走；聚焦时贴在点的右边） */
-.pc-tip {
-  position: fixed;
-  z-index: 60;
+/* 点开的点：一圈中性描边（选中不是主操作，不用 accent），详情卡关之前一直在 */
+.pc-dot[aria-expanded="true"] {
+  opacity: 1;
+  z-index: 6;
+  box-shadow: 0 0 0 2px var(--color-text-secondary);
+}
+
+/* 悬停 / 键盘聚焦的轻提示：只给不在前沿上的点（前沿上的已经带名字），纯 CSS，不占 JS 状态 */
+.pc-hint {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 6px);
+  translate: 0 -50%;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pc-hint.left {
+  left: auto;
+  right: calc(100% + 6px);
+}
+.pc-dot:hover .pc-hint,
+.pc-dot:focus-visible .pc-hint {
+  opacity: 1;
+}
+.pc-dot[aria-expanded="true"] .pc-hint {
+  opacity: 0;
+}
+
+/* 点开的详情卡：钉在点旁边（left / top 是点的百分比坐标），水平方向用 transform、垂直方向用
+   translate 各管一轴，两个类叠起来不互相覆盖 */
+.pc-pop {
+  position: absolute;
+  z-index: 8;
   min-width: 220px;
   max-width: 300px;
   padding: var(--space-2) var(--space-3);
@@ -233,9 +273,23 @@
   box-shadow: var(--shadow-popover);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-  pointer-events: none;
   display: grid;
   gap: 2px;
+}
+.pc-pop.right {
+  transform: translateX(16px);
+}
+.pc-pop.left {
+  transform: translateX(calc(-100% - 16px));
+}
+.pc-pop.middle {
+  translate: 0 -50%;
+}
+.pc-pop.below {
+  translate: 0 14px;
+}
+.pc-pop.above {
+  translate: 0 calc(-100% - 14px);
 }
 .pc-tip-name {
   display: flex;
@@ -249,6 +303,10 @@
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
+}
+.pc-tip-row > span:first-child {
+  flex: none;
+  white-space: nowrap;
 }
 .pc-tip-row > span:last-child {
   text-align: right;
@@ -297,7 +355,7 @@
 }
 .pc-pf {
   width: 16px;
-  border-top: 1.5px solid var(--color-success);
+  border-top: 1.5px solid var(--color-nebula);
 }
 
 /* 右栏：帕累托最优 */
@@ -318,7 +376,7 @@
 }
 .pc-best-head .icon,
 .pc-best-head svg {
-  color: var(--color-success);
+  color: var(--color-nebula);
 }
 .pc-best-row {
   display: flex;
@@ -414,4 +472,18 @@
 }
 .pc-source a:hover {
   color: var(--color-text-secondary);
+}
+
+/* 「用过、但榜单没评的档」：与其余两组同一种 chip，可点开写出榜单评过的档 */
+.pc-chip-button {
+  font-family: inherit;
+  cursor: pointer;
+}
+.pc-chip-button:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.pc-chip-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }

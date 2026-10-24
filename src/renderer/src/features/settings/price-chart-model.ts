@@ -125,3 +125,17 @@ export function formatScore(score: number, unit: PriceChartScoreUnit): string {
 export function pointKey(point: Pick<PriceChartPoint, "modelId" | "thinkingLevel">): string {
   return `${point.modelId}\u0000${point.thinkingLevel ?? "none"}`;
 }
+
+/**
+ * 点开的详情卡放在点的哪一侧（点的坐标是绘图区内的百分比，0 在左 / 上）：靠右的点卡片翻到左边、
+ * 靠上的往下放、靠下的往上放，中间的上下居中——卡片不出绘图区的边。
+ */
+export function popoverPlacement(
+  x: number,
+  y: number,
+): { side: "left" | "right"; vertical: "above" | "middle" | "below" } {
+  return {
+    side: x > 55 ? "left" : "right",
+    vertical: y < 30 ? "below" : y > 70 ? "above" : "middle",
+  };
+}

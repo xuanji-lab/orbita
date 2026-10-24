@@ -891,7 +891,7 @@ export const en = {
       legendMeasured: "Measured · median of your tasks",
       legendEstimated: "Estimate · official price × your token mix",
       legendLevels: "Dashed line = same model, other levels",
-      legendFrontier: "Green line = Pareto frontier",
+      legendFrontier: "Solid line = Pareto frontier",
       frontierTitle: "Pareto optimal",
       frontierNote: "Above the frontier, a higher score costs more.",
       tipScore: "Score",
@@ -906,6 +906,10 @@ export const en = {
       unranked: "Not on this board",
       unpriced: "No official price",
       unpricedTip: "Fill in this model's rates in its settings to place it on the chart",
+      unrated: "Used, but the board didn't rate this level",
+      unratedMeasured: (samples: number, cost: string) =>
+        `measured ${samples} task${samples === 1 ? "" : "s"} · median ${cost}`,
+      ratedOnly: (levels: string) => `The board only rated: ${levels}`,
       explainer:
         "A task is one stretch of a session on the same model and thinking level; switching either one starts a new task. Sub-sessions count on their own.",
       planNote: "Plans and subscriptions are converted at official prices.",

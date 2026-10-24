@@ -8,6 +8,7 @@ import {
   formatCostTick,
   formatScore,
   paretoFrontier,
+  popoverPlacement,
   scoreTicks,
   shouldShowPriceChart,
 } from "./price-chart-model.ts";
@@ -88,5 +89,14 @@ describe("分类循环与格式", () => {
     assert.deepEqual([0.05, 0.1, 1, 20].map(formatCostTick), ["$0.05", "$0.1", "$1", "$20"]);
     assert.equal(formatScore(0.0157, "net-improvement"), "+1.6%");
     assert.equal(formatScore(-0.0177, "net-improvement"), "−1.8%");
+  });
+});
+
+describe("点开的详情卡放哪一侧", () => {
+  test("靠右翻到左边，靠上往下、靠下往上，中间居中", () => {
+    assert.deepEqual(popoverPlacement(20, 50), { side: "right", vertical: "middle" });
+    assert.deepEqual(popoverPlacement(80, 50), { side: "left", vertical: "middle" });
+    assert.deepEqual(popoverPlacement(40, 10), { side: "right", vertical: "below" });
+    assert.deepEqual(popoverPlacement(90, 95), { side: "left", vertical: "above" });
   });
 });

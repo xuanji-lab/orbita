@@ -822,7 +822,7 @@ export const zh: Messages = {
       legendMeasured: "实测 · 你的任务中位数",
       legendEstimated: "估算 · 官方单价 × 你的 token 构成",
       legendLevels: "虚线 = 同一型号的不同档位",
-      legendFrontier: "绿线 = 帕累托前沿",
+      legendFrontier: "实线 = 帕累托前沿",
       frontierTitle: "帕累托最优",
       frontierNote: "前沿上的点：再往上找更高分，就要花更多钱。",
       tipScore: "分数",
@@ -836,6 +836,9 @@ export const zh: Messages = {
       unranked: "未上榜（当前分类查不到）",
       unpriced: "缺官方单价",
       unpricedTip: "在这个型号的设置里填上费率，就能画进图里",
+      unrated: "用过、但榜单没评的档",
+      unratedMeasured: (samples: number, cost: string) => `实测 ${samples} 个任务 · 中位数 ${cost}`,
+      ratedOnly: (levels: string) => `榜单只评了：${levels}`,
       explainer: "一个任务 = 一个会话里同一型号 × 同一思考档的连续一段，中途换型号或换档就切开；子会话单独算。",
       planNote: "套餐与订阅按官方单价折算。",
       source: (date: string, revision: string) =>
