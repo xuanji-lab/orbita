@@ -10,12 +10,39 @@
  * `2026-10-08`。
  */
 
-/** 一天的用量。tokens 是当日全部模型调用的四项 token 之和 */
+/**
+ * 一天里一个型号用了多少（悬停某一格时列出来）。型号的口径与价格 · 能力图相同：同一型号
+ * 挂在几家服务商下、写成别名（k3 / kimi-k3）合成一行；显示名与头像由主进程按 modelDisplayName /
+ * 型号头像的规则解析好，renderer 直接画。
+ */
+export interface UsageDayModel {
+  /** 代表 id（头像按它取） */
+  modelId: string;
+  /** 显示名（modelDisplayName：声明里的名字 > 白名单 > 目录名 > id） */
+  name: string;
+  /** 头像第三级兜底用的服务商（ModelAvatar 的 provider：厂商条目 id 与显示名） */
+  vendor: { kindId: string; label: string };
+  tokens: number;
+}
+
+/**
+ * 一天的用量。tokens 是当日全部模型调用的四项 token 之和——**从任务账本按「天 × 型号」汇总**
+ * （与价格 · 能力图同一本账），再加上意图召回的 token；数字与改账本之前的日账本一致（测试守着）。
+ */
 export interface UsageDayTotal {
   /** 本地日期键 `YYYY-MM-DD`（用户时区，跨午夜按本地零点切天） */
   date: string;
   /** 当日总 token（input + output + cacheRead + cacheWrite） */
   tokens: number;
+  /** 当日按型号的分布，token 多的在前；意图召回不在这里（不是对话型号），单列 intentTokens */
+  models: UsageDayModel[];
+  /** 当日意图召回（实验功能，DeepSeek / Proma 管线）用掉的 token */
+  intentTokens: number;
+  /**
+   * 当日花费，按官方单价折算（套餐与订阅的零价记录也折算，与价格 · 能力图同一个价）。
+   * partial = 有一部分 token 找不到单价（含意图召回），没算进去；当日没有用量为 null。
+   */
+  cost: { usd: number; partial: boolean } | null;
 }
 
 /**
