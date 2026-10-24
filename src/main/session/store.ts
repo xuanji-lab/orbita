@@ -22,6 +22,7 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
+import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
@@ -1022,6 +1023,39 @@ export class SessionStore {
    */
   readRawLog(id: string): Promise<SessionRecord[]> {
     return this.readLogEntries(id);
+  }
+
+  /**
+   * 只读用量相关的记录：assistant 与 intent-recall，按盘上顺序，不做回退折叠（与 readRawLog 同口径——
+   * 回退不抹掉已经花掉的 token）。任务账本回填专用（审核 F-3）：**流式按行读、按行首的 role 粗筛**，
+   * 工具结果这类几 MB 的大行不解码不解析，内存只跟留下的小行走（见 main/jsonl-scan.ts）。
+   * 行首看不到 role 的行保守地整行解析，解析后再按 role 精筛，所以结果与
+   * `readRawLog` 再筛这两种 role 逐条一致。读失败返回空，与 readLogEntries 同一兜底。
+   */
+  async readUsageLog(id: string): Promise<SessionRecord[]> {
+    const records: SessionRecord[] = [];
+    try {
+      await scanJsonlLines(
+        this.logPath(id),
+        (head) => {
+          const role = headStringField(head, "role");
+          return role === undefined || role === "assistant" || role === "intent-recall";
+        },
+        (line) => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            return; // 半截行跳过
+          }
+          const role = (parsed as { role?: unknown } | null)?.role;
+          if (role === "assistant" || role === "intent-recall") records.push(parsed as SessionRecord);
+        },
+      );
+    } catch {
+      return [];
+    }
+    return records;
   }
 
   /**

@@ -13,7 +13,6 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
@@ -37,7 +36,7 @@ import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
-import { TaskLedger } from "./usage/task-ledger.ts";
+import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
@@ -328,8 +327,8 @@ void app.whenReady().then(async () => {
   const record = createSessionRecorder(sessions, taskLedger);
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
-    readRawLog: (id) => sessions.readRawLog(id),
-    readPiFile: (path) => readFile(path, "utf8").catch(() => null),
+    readUsageLog: (id) => sessions.readUsageLog(id),
+    readPiTimeline: (path) => readPiThinkingTimeline(path),
   });
   // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
   // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处。

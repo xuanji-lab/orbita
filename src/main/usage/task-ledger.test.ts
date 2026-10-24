@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
@@ -62,8 +62,8 @@ function source(logs: Record<string, SessionRecord[]>, metas: SessionMeta[]): Ta
       src.listed += 1;
       return metas;
     },
-    readRawLog: async (id: string) => logs[id] ?? [],
-    readPiFile: async () => null,
+    readUsageLog: async (id: string) => logs[id] ?? [],
+    readPiTimeline: async () => [],
   };
   return src;
 }
@@ -283,12 +283,61 @@ describe("收尾确认的做完的事（价格图的主会话任务）", () => {
     ]);
   });
 
-  test("旧版本（2）的账本当坏文件：回填重建", async () => {
+  test("旧版本（2）迁移而不重扫：任务与意图召回原样留下，done 从 meta.wrapups 补上、不读会话正文", async () => {
+    // 先用当前版本回填出一本，再改写成 2 版的形状（没有 done）落盘
     const file = join(dir, "old.json");
-    await writeFile(file, JSON.stringify({ version: 2, backfilled: true, untrustedSessions: 0, tasks: [], open: {}, intent: {} }));
+    const seed = new TaskLedger(file, { timeZone: TZ });
+    await seed.load();
+    await seed.backfill(source(logs, metas));
+    const v3 = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    const { done: _done, ...rest } = v3;
+    await writeFile(file, JSON.stringify({ ...rest, version: 2 }));
+
+    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
+    const src = source(logs, withWrapup);
+    let logReads = 0;
+    const counting: TaskBackfillSource = {
+      ...src,
+      readUsageLog: async (id) => {
+        logReads += 1;
+        return src.readUsageLog(id);
+      },
+    };
     const ledger = new TaskLedger(file, { timeZone: TZ });
     await ledger.load();
-    const stats = await ledger.backfill(source(logs, metas));
-    assert.notEqual(stats, null);
+    assert.equal(await ledger.backfill(counting), null, "已回填过：不整本重扫");
+    assert.equal(logReads, 0);
+    assert.deepEqual(ledger.tasks(), seed.tasks());
+    assert.equal(ledger.doneTasks().length, 1);
+    const disk = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    assert.equal(disk["version"], 3);
+    assert.equal("donePending" in disk, false);
+  });
+
+  test("迁移后、补 done 之前就落了盘：donePending 跟着落盘，下次启动接着补", async () => {
+    const file = join(dir, "old.json");
+    await writeFile(file, JSON.stringify({ version: 2, backfilled: true, untrustedSessions: 0, tasks: [], open: {}, intent: {} }));
+    const first = new TaskLedger(file, { timeZone: TZ });
+    await first.load();
+    await first.recordIntent({ id: "i1", timestamp: DAY1, tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
+    assert.equal((JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>)["donePending"], true);
+    const second = new TaskLedger(file, { timeZone: TZ });
+    await second.load();
+    await second.backfill(source(logs, metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m))));
+    assert.equal(second.doneTasks().length, 1);
+  });
+
+  test("重建入口（F-9）：删掉账本文件再启动，回填出与原来逐字段相同的一本", async () => {
+    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
+    const file = join(dir, "usage-tasks.json");
+    const first = new TaskLedger(file, { timeZone: TZ });
+    await first.load();
+    await first.backfill(source(logs, withWrapup));
+    const before = await readFile(file, "utf8");
+    await rm(file);
+    const rebuilt = new TaskLedger(file, { timeZone: TZ });
+    await rebuilt.load();
+    assert.notEqual(await rebuilt.backfill(source(logs, withWrapup)), null);
+    assert.equal(await readFile(file, "utf8"), before);
   });
 });

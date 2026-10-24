@@ -75,20 +75,29 @@ export interface LevelChange {
 export function piThinkingTimeline(piFileText: string): LevelChange[] {
   const out: LevelChange[] = [];
   for (const line of piFileText.split("\n")) {
-    if (!line.includes("thinking_level_change")) continue;
-    try {
-      const entry: unknown = JSON.parse(line);
-      if (typeof entry !== "object" || entry === null) continue;
-      const e = entry as Record<string, unknown>;
-      if (e["type"] !== "thinking_level_change" || !isThinkingLevel(e["thinkingLevel"])) continue;
-      const at = typeof e["timestamp"] === "string" ? Date.parse(e["timestamp"]) : Number.NaN;
-      if (!Number.isFinite(at)) continue;
-      out.push({ at, level: e["thinkingLevel"] });
-    } catch {
-      // 坏行跳过
-    }
+    const change = levelChangeOfLine(line);
+    if (change !== null) out.push(change);
   }
   return out;
+}
+
+/**
+ * pi 本子的一行 → 档位变化；不是 thinking_level_change 条目 / 坏行返回 null。
+ * piThinkingTimeline 与回填的流式读（task-ledger 的 readPiThinkingTimeline）共用这一处判定。
+ */
+export function levelChangeOfLine(line: string): LevelChange | null {
+  if (!line.includes("thinking_level_change")) return null;
+  try {
+    const entry: unknown = JSON.parse(line);
+    if (typeof entry !== "object" || entry === null) return null;
+    const e = entry as Record<string, unknown>;
+    if (e["type"] !== "thinking_level_change" || !isThinkingLevel(e["thinkingLevel"])) return null;
+    const at = typeof e["timestamp"] === "string" ? Date.parse(e["timestamp"]) : Number.NaN;
+    if (!Number.isFinite(at)) return null;
+    return { at, level: e["thinkingLevel"] };
+  } catch {
+    return null; // 坏行跳过
+  }
 }
 
 /**

@@ -86,7 +86,7 @@ export function registerUsageIpc(deps: {
 
 /**
  * 任务账本（价格 · 能力图的数据面）开机：读盘，升级后第一次启动回填一次。不阻塞启动；
- * 回填每扫完一条会话让一次事件循环。recorder 在这之前就可能来记账——都排在同一条写入链上，
+ * 回填流式读、按 8ms 时间片让事件循环（task-ledger.ts「回填的代价」）。recorder 在这之前就可能来记账——都排在同一条写入链上，
  * load 先跑。
  */
 export function startTaskLedger(ledger: TaskLedger, source: TaskBackfillSource): void {
