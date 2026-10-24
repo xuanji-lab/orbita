@@ -209,6 +209,12 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
       assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "kimi-k3.1" }, id);
     }
     assert.deepEqual(modelAvatarOf("mimo-v2.6-pro-ultraspeed"), { kind: "own", key: "mimo-v2.6-pro" });
+    // 公众号封面：开放平台与 Kimi Code 的 K3、两种写法的 DeepSeek V4.1 Flash 各共用一枚
+    for (const id of ["k3", "k3-256k", "kimi-k3"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "kimi-k3" }, id);
+    assert.deepEqual(modelAvatarOf("deepseek-flash"), { kind: "own", key: "deepseek-v4.1-flash" });
+    assert.deepEqual(modelAvatarOf("deepseek-v4-pro"), { kind: "own", key: "deepseek-v4-pro" });
+    assert.deepEqual(modelAvatarOf("glm-5.3"), { kind: "own", key: "glm-5.3" });
+    assert.deepEqual(modelAvatarOf("glm-5.3-flash"), { kind: "own", key: "glm-5.3-flash" });
     assert.deepEqual(modelAvatarOf("mimo-v2.6-flash"), { kind: "own", key: "mimo-v2.6-flash" });
   });
 
@@ -222,10 +228,10 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
 
   test("第二级 · 家族图标按 id 前缀：认不出产品线的 claude-* 退回 Claude 家族标；GLM 用 Z.ai 的标", () => {
     assert.deepEqual(modelAvatarOf("claude-instant-1"), { kind: "family", logo: "claude" });
-    assert.deepEqual(modelAvatarOf("glm-5.3"), { kind: "family", logo: "zai" });
-    assert.deepEqual(modelAvatarOf("k3"), { kind: "family", logo: "kimi" });
+    assert.deepEqual(modelAvatarOf("glm-5.3-highspeed"), { kind: "family", logo: "zai" });
+    assert.deepEqual(modelAvatarOf("k2.9"), { kind: "family", logo: "kimi" });
     assert.deepEqual(modelAvatarOf("kimi-for-coding"), { kind: "family", logo: "kimi" });
-    assert.deepEqual(modelAvatarOf("deepseek-v4.1-flash"), { kind: "family", logo: "deepseek" });
+    assert.deepEqual(modelAvatarOf("deepseek-v4-flash"), { kind: "family", logo: "deepseek" });
     assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "family", logo: "qwen" });
     assert.deepEqual(modelAvatarOf("MiniMax-M3"), { kind: "family", logo: "minimax" });
     assert.deepEqual(modelAvatarOf("step-5-preview"), { kind: "family", logo: "stepfun" });

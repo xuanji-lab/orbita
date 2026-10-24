@@ -4,6 +4,11 @@ import claudeFable from "../../../../../design-system/assets/model-avatars/claud
 import claudeHaiku from "../../../../../design-system/assets/model-avatars/claude-haiku.svg";
 import claudeOpus from "../../../../../design-system/assets/model-avatars/claude-opus.svg";
 import claudeSonnet from "../../../../../design-system/assets/model-avatars/claude-sonnet.svg";
+import deepseekV41Flash from "../../../../../design-system/assets/model-avatars/deepseek-v4.1-flash.png";
+import deepseekV4Pro from "../../../../../design-system/assets/model-avatars/deepseek-v4-pro.png";
+import glm53Flash from "../../../../../design-system/assets/model-avatars/glm-5.3-flash.png";
+import glm53 from "../../../../../design-system/assets/model-avatars/glm-5.3.png";
+import kimiK3 from "../../../../../design-system/assets/model-avatars/kimi-k3.png";
 import kimiK31 from "../../../../../design-system/assets/model-avatars/kimi-k3.1.png";
 import mimoFlash from "../../../../../design-system/assets/model-avatars/mimo-v2.6-flash.png";
 import mimoPro from "../../../../../design-system/assets/model-avatars/mimo-v2.6-pro.png";
@@ -17,12 +22,20 @@ import { VendorLogo } from "./VendorLogo";
  * - kimi-k3.1：月之暗面 K3.1 博客头图与书法图层合成后裁方（官方宣传素材，用于标识它自家型号）；
  * - claude-*：platform.claude.com 文档页的四枚产品线线稿（/images/dashboard-discovery/），
  *   底色参照 Proma 截图配、烧进 SVG 里（界面代码不写颜色）；
- * - mimo-v2.6-*：小米 V2.6 横幅的蝴蝶当底，左下角按横幅的细框 + 刻度尺画 Pro / Flash 标签
- *   （字体 Manrope，OFL）。
+ * - 公众号封面（推文在微信列表里显示的封面图，不是正文里的图；原件与裁切脚本在本地登记页
+ *   docs/model-avatars/tools/）：kimi-k3（磁感线）、glm-5.3（数字三角）、glm-5.3-flash（光锥）、
+ *   deepseek-v4.1-flash（抹掉封面上的字，鲸鱼标放进金色光环）、deepseek-v4-pro（标题下的
+ *   橙紫波浪 + 同一枚鲸鱼标）、mimo-v2.6-*（封面蝴蝶，左下角按封面的细框 + 刻度尺画 Pro / Flash，
+ *   不铺底色；字体 Manrope，OFL）。
  * 位图按 96px 存：菜单 20px、设置页 18px，Retina 下也有富余。
  */
 const OWN_AVATARS: Record<ModelAvatarKey, string> = {
   "kimi-k3.1": kimiK31,
+  "kimi-k3": kimiK3,
+  "glm-5.3": glm53,
+  "glm-5.3-flash": glm53Flash,
+  "deepseek-v4-pro": deepseekV4Pro,
+  "deepseek-v4.1-flash": deepseekV41Flash,
   "claude-fable": claudeFable,
   "claude-opus": claudeOpus,
   "claude-sonnet": claudeSonnet,

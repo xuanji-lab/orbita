@@ -388,6 +388,11 @@ export function knownDisplayName(modelId: string): string | undefined {
  */
 export type ModelAvatarKey =
   | "kimi-k3.1"
+  | "kimi-k3"
+  | "glm-5.3"
+  | "glm-5.3-flash"
+  | "deepseek-v4-pro"
+  | "deepseek-v4.1-flash"
   | "claude-fable"
   | "claude-opus"
   | "claude-sonnet"
@@ -401,6 +406,15 @@ const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
   "k3.1-pro-highspeed": "kimi-k3.1",
   "kimi-k3.1-pro": "kimi-k3.1",
   "kimi-k3.1-pro-highspeed": "kimi-k3.1",
+  // 以下取自各家公众号发布推文的封面（2026-10-24 用户：「从封面里面截图对应模型的背景」）
+  k3: "kimi-k3",
+  "k3-256k": "kimi-k3",
+  "kimi-k3": "kimi-k3",
+  "glm-5.3": "glm-5.3",
+  "glm-5.3-flash": "glm-5.3-flash",
+  "deepseek-v4-pro": "deepseek-v4-pro",
+  "deepseek-v4.1-flash": "deepseek-v4.1-flash",
+  "deepseek-flash": "deepseek-v4.1-flash",
   "mimo-v2.6-pro": "mimo-v2.6-pro",
   "mimo-v2.6-pro-ultraspeed": "mimo-v2.6-pro",
   "mimo-v2.6-flash": "mimo-v2.6-flash",

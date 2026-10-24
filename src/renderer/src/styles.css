@@ -608,10 +608,14 @@
   background: var(--color-bg-muted);
   color: var(--color-text-primary);
 }
-/* 专属头像自带底色：不要边框占掉一圈像素，用内描边在暗底上勾出边缘 */
+/*
+ * 专属头像自带底色：不要边框占掉一圈像素，用内描边勾出边缘。取 strong 档：浅色头像
+ * （GLM-5.3 的米白、K3 的浅灰）放在明主题的浅底上，subtle 那一档几乎看不见轮廓
+ * （2026-10-24 用户：「可能加个细边框好一些」）。
+ */
 .model-avatar.own {
   border: 0;
-  outline: 1px solid var(--color-border-subtle);
+  outline: 1px solid var(--color-border-strong);
   outline-offset: -1px;
 }
 .model-avatar.own img {
