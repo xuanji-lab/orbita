@@ -71,6 +71,16 @@ test("formatChangeLines：两侧 / 单侧 / 零 / 二进制", () => {
   assert.equal(formatChangeLines(entry("a", "M", 10, 2, true)), "");
 });
 
+test("formatChangeLines：超大未跟踪文件的行数未知，不拿 +0 冒充", () => {
+  // 超过单文件上限只判了二进制、没数行 → 显「行数未知」（悬停文案）
+  assert.equal(formatChangeLines({ ...entry("big.dat", "U", 0, 0), lineCountUnknown: true }), "行数未知");
+  // 二进制仍是空串：binary 优先，不额外说「行数未知」
+  assert.equal(
+    formatChangeLines({ ...entry("big.bin", "U", 0, 0, true), lineCountUnknown: true }),
+    "",
+  );
+});
+
 test("joinRel 与 changeIndexOf", () => {
   assert.equal(joinRel("", "src"), "src");
   assert.equal(joinRel("src", "a.ts"), "src/a.ts");

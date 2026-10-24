@@ -21,6 +21,11 @@ export interface FocusChangeEntry {
   added: number;
   removed: number;
   binary: boolean;
+  /**
+   * 行数未知：未跟踪文件超过单文件上限时只读了开头判二进制、没有数行（added / removed 落 0）。
+   * UI 据此显「行数未知」而不是 +0；其他来源（numstat / 小文件）不带这个字段。
+   */
+  lineCountUnknown?: boolean;
 }
 
 /** `focus:changes` 的回执。空态与错误分开说（同 review:list 的口径：没有改动 ≠ 出不了结果） */

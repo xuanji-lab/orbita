@@ -45,9 +45,11 @@ export function changeSummary(entries: readonly FocusChangeEntry[]): { changed: 
   return { changed: entries.length, untracked: entries.filter((entry) => entry.kind === "U").length };
 }
 
-/** 增删行数文案（悬停才出现）：`+42 −7`，只有一侧就只写一侧；二进制没有行级统计 */
+/** 增删行数文案（悬停才出现）：`+42 −7`，只有一侧就只写一侧；二进制没有行级统计；
+ * 超大未跟踪文件只判了二进制、没数行 → 「行数未知」（不能拿 +0 冒充没改动） */
 export function formatChangeLines(entry: FocusChangeEntry): string {
   if (entry.binary) return "";
+  if (entry.lineCountUnknown === true) return "行数未知";
   const parts: string[] = [];
   if (entry.added > 0) parts.push(`+${entry.added}`);
   if (entry.removed > 0) parts.push(`\u2212${entry.removed}`);
