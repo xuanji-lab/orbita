@@ -1263,6 +1263,8 @@ export const en = {
     compactNow: "Compact context now",
     compactReadOnly: "this task can't be continued",
     compactWait: "wait for this turn",
+    compactSuggestDone: "Consider marking this done and continuing in a new task",
+    compactSuggestNew: "Consider continuing in a new task",
     showLess: "Show less",
     showMore: "Show more",
     copied: "Copied",
@@ -1482,6 +1484,8 @@ export const en = {
     context: "Context",
     unknownUntilReply: "unknown until next reply",
     cost: "Cost",
+    compacted: "Compacted",
+    compactedTimes: (n: number) => (n === 1 ? "1 time" : `${n} times`),
     speed: (n: number) => `${n} tok/s`,
   },
 

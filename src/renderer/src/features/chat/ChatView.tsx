@@ -112,7 +112,17 @@ import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
 import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
-import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
+import {
+  contextRing,
+  formatSpeed,
+  replySpeed,
+  ringLayers,
+  streamingStart,
+  usageBreakdown,
+  WRAP_UP_AFTER_COMPACTIONS,
+  type ContextRing,
+  type RingLayers,
+} from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
 import { modelCardFooter, modelChipParts, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
@@ -1120,6 +1130,13 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
+          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（生命周期开关 + 已落盘 + 未完成），
+          // 同一条收尾仪式
+          markDone={
+            lifecycle && openId !== "" && (openMeta?.completion ?? "open") === "open"
+              ? { onSelect: session.startClosingRitual, busy: session.phase !== "idle" || session.closingScan }
+              : null
+          }
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
@@ -2129,6 +2146,8 @@ function ComposerBar(props: {
   onOpenProviders: () => void;
   /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
   intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
+  /** 用量环浮层里的「标记完成」（见 UsageRing）；null = 不给 */
+  markDone: { onSelect: () => void; busy: boolean } | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -2386,7 +2405,7 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
-      <UsageRing session={session} />
+      <UsageRing session={session} markDone={props.markDone} />
     </>
   );
 }
@@ -2403,11 +2422,19 @@ function ComposerBar(props: {
  * 压缩只在闲着时给：pi 的 `compact()` 会先打断当前这一轮——跑着时让人点得动，
  * 他以为只是整理一下，实际把回答砍了。**禁用的理由写在 hint 里**，不让它只是变灰。
  */
-function UsageRing(props: { session: ChatSession }) {
+function UsageRing(props: {
+  session: ChatSession;
+  /**
+   * 「标记完成」入口（压缩 ≥ 2 次时浮层里给）。null = 不给这一项、只留提示文字：
+   * 会话生命周期实验开关关着、会话还没落盘、或已经是完成态。
+   */
+  markDone: { onSelect: () => void; busy: boolean } | null;
+}) {
   const t = useT();
   const { session } = props;
   const stats = session.stats;
   const ring = contextRing(stats, t);
+  const compactions = session.compactionCount;
   const busy = session.phase !== "idle";
   // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
@@ -2445,6 +2472,40 @@ function UsageRing(props: { session: ChatSession }) {
       hint: row.value,
       fact: true,
     })),
+    // 压缩次数：0 次不出这一行（没压过就没什么可报的）
+    ...(compactions > 0
+      ? [
+          {
+            id: "compacted-count",
+            label: t.stats.compacted,
+            hint: t.stats.compactedTimes(compactions),
+            fact: true,
+          } satisfies MenuItem,
+        ]
+      : []),
+    // 压过两次就建议收尾：第三次压缩时摘要已是摘要的摘要，不如带着遗留事项换会话
+    ...(compactions >= WRAP_UP_AFTER_COMPACTIONS && !confirming
+      ? [
+          {
+            id: "wrap-up-hint",
+            label: props.markDone === null ? t.chat.compactSuggestNew : t.chat.compactSuggestDone,
+            icon: "lightbulb" as const,
+            fact: true,
+          } satisfies MenuItem,
+          ...(props.markDone === null
+            ? []
+            : [
+                {
+                  id: "wrap-up-done",
+                  label: t.chat.markTaskDone,
+                  icon: "check" as const,
+                  hint: props.markDone.busy ? t.chat.compactWait : undefined,
+                  disabled: props.markDone.busy,
+                  onSelect: props.markDone.onSelect,
+                } satisfies MenuItem,
+              ]),
+        ]
+      : []),
     ...(confirming
       ? [
           {
@@ -2498,8 +2559,13 @@ function UsageRing(props: { session: ChatSession }) {
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (
-          <Chip active={open} onClick={toggle} ariaLabel={ring.label}>
-            <Ring ring={ring} />
+          <Chip
+            active={open}
+            onClick={toggle}
+            ariaLabel={compactions > 0 ? `${ring.label} · ${t.stats.compacted} ${t.stats.compactedTimes(compactions)}` : ring.label}
+            leading={<Ring ring={ring} layers={ringLayers(compactions)} />}
+          >
+            {null}
           </Chip>
         )}
       />
@@ -2507,25 +2573,37 @@ function UsageRing(props: { session: ChatSession }) {
   );
 }
 
-/** 环的几何：直径、线宽——底栏芯片里 12px 的图标位 */
-const RING_SIZE = 14;
+/**
+ * 环的几何：外径 20 = 模型芯片里的型号头像（两者在底栏同高对齐），线宽 2、圈隙 1，
+ * 两圈半径依次 9 / 6。数字档只有外圈，里面留 16px 给数字。
+ */
+const RING_SIZE = 20;
 const RING_STROKE = 2;
+const RING_GAP = 1;
 
 /**
- * 上下文占用环。底环一圈中性边框色，弧从 12 点方向顺时针长——和钟一样，不用学。
- * 颜色是第二信号（设计系统）：过七成前继承文字色，之后才用 warning / danger。
- * `fill` 为 null 时只有底环：没数字就不画数字。
+ * 上下文占用环（Apple 健身圆环式，档位见 stats-format 的 `ringLayers`）。
+ * 底轨一圈中性边框色，弧从 12 点方向顺时针长——和钟一样，不用学。
+ * 画满的圈（用完的窗口）用 tertiary 墨，当前圈继承文字色：前者是历史，后者才是要看的那一圈。
+ * 颜色是第二信号（设计系统）：过七成 warning、过九成 danger，**只给当前圈**。
+ * `fill` 为 null 时当前圈只有底轨：没数字就不画数字。
  */
-function Ring(props: { ring: ContextRing }) {
-  const radius = (RING_SIZE - RING_STROKE) / 2;
-  const circumference = 2 * Math.PI * radius;
+function Ring(props: { ring: ContextRing; layers: RingLayers }) {
   const { fill, tone } = props.ring;
+  const { full, label } = props.layers;
   const color =
     tone === "danger"
       ? "var(--color-danger)"
       : tone === "warning"
         ? "var(--color-warning)"
         : "currentColor";
+  const center = RING_SIZE / 2;
+  const radii = Array.from(
+    { length: full + 1 },
+    (_, index) => (RING_SIZE - RING_STROKE) / 2 - index * (RING_STROKE + RING_GAP),
+  );
+  const current = radii[full] ?? (RING_SIZE - RING_STROKE) / 2;
+  const circumference = 2 * Math.PI * current;
   return (
     <svg
       width={RING_SIZE}
@@ -2534,27 +2612,47 @@ function Ring(props: { ring: ContextRing }) {
       aria-hidden
       style={{ display: "block" }}
     >
-      <circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={radius}
-        fill="none"
-        stroke="var(--color-border-strong)"
-        strokeWidth={RING_STROKE}
-      />
+      {radii.map((radius, index) => (
+        <circle
+          key={radius}
+          cx={center}
+          cy={center}
+          r={radius}
+          fill="none"
+          stroke={index < full ? "var(--color-text-tertiary)" : "var(--color-border-strong)"}
+          strokeWidth={RING_STROKE}
+        />
+      ))}
       {fill !== null && fill > 0 && (
         <circle
-          cx={RING_SIZE / 2}
-          cy={RING_SIZE / 2}
-          r={radius}
+          cx={center}
+          cy={center}
+          r={current}
           fill="none"
           stroke={color}
           strokeWidth={RING_STROKE}
           strokeLinecap="round"
           strokeDasharray={`${circumference * fill} ${circumference}`}
-          transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+          transform={`rotate(-90 ${center} ${center})`}
           style={{ transition: "stroke-dasharray var(--duration-hover) var(--ease-standard)" }}
         />
+      )}
+      {label !== null && (
+        <text
+          x={center}
+          y={center}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="currentColor"
+          style={{
+            fontFamily: "var(--font-family-base)",
+            fontSize: "var(--font-size-xs)",
+            fontWeight: "var(--weight-semibold)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {label}
+        </text>
       )}
     </svg>
   );

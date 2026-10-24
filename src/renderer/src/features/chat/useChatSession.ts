@@ -20,6 +20,7 @@ import {
   setPendingEcho,
   nextDeliverable,
   prependOlder,
+  compactionCount,
   removeSessionEntry,
   revertOptimisticTurn,
   seedFromDisk,
@@ -162,6 +163,11 @@ export interface ChatSession {
   loadOlder: () => void;
   /** 压缩界碑（与 transcript 分开记账）；显示时由 applyCompactionBoundary 合成 */
   compactions: readonly CompactedRecord[];
+  /**
+   * 这条会话一共压缩过几次（含尾窗之外、还没拉进来的界碑）——用量环的「第几个窗口」。
+   * 不能拿 `compactions.length` 顶：那只是已加载窗口里的。
+   */
+  compactionCount: number;
   /**
    * 通道标记（子会话 PR4a，与 compactions 分开记账，同一条纪律）：盘上读回的
    * `ChannelMarkRecord`；显示时由 `mergeSideRecords` 按时间插回往来流。
@@ -3119,6 +3125,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     olderPages,
     loadOlder,
     compactions: entry.compactions,
+    compactionCount: compactionCount(entry),
     marks: entry.marks,
     phase: entry.phase,
     retry: entry.retry,
