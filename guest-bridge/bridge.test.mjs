@@ -639,6 +639,25 @@ test(
   },
 );
 
+// ── 浏览器错误页判定的纯函数自测（--selftest-cdp）──────────────────────────────────
+//
+// 离线时错误页也是一个「加载完成」的普通页面，旧行为因此回 ok:true + 「可能还在渲染」——
+// 对模型是假成功，而且每次白等满 20 秒。判定与原因码都是纯函数，宿主上就能测；
+// 「导航真的落在 chrome-error:// 上」只有沙箱验收能验。
+
+test(
+  "浏览器错误页 selftest：chrome-error:// 与正文 ERR_ 码命中、正常页面不命中、码与人话对得上",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-cdp"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 20, `用例数应 >= 20，实际 ${parsed.cases}`);
+  },
+);
+
 // ── 打包产物冒烟的三条命令：参数校验与错误路径（不启动、不杀任何真进程）───────────
 //
 // ⚠ **红线**：launch 真成功就是在宿主上拉起一个 exe。所以这一组：

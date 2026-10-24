@@ -153,6 +153,8 @@ internal static class Program
             if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
             // 会话 id 安全化的自测（纯函数：CDP 会话键直接拼进 profile 目录，这一关失守就是路径穿越）
             if (args[i] == "--selftest-session") return RunSessionSelfTest();
+            // 浏览器错误页判定的自测（纯函数：不启动任何进程、不碰 Edge）
+            if (args[i] == "--selftest-cdp") return RunCdpSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
         }
@@ -1355,7 +1357,71 @@ internal static class Program
         return failures.Count == 0 ? 0 : 1;
     }
 
-    /** 统一的自测回执照 JSON（四个 selftest 共用一份形状，跑测试的人不用记四种） */
+    // ---- 浏览器错误页判定的自测（--selftest-cdp）----------------------------------
+    //
+    // 2026-10-25 真机：沙箱离线时每条 sandbox_navigate 都回 ok:true + 「可能还在渲染」，
+    // 而正文是「你似乎未连接到 Internet」。对模型是假成功——它会接着去 operate 一个错误页，
+    // 而且每次白等满 20 秒。错误页的判定与原因码都是纯函数，在宿主上就能测；
+    // 真机才能验的部分（导航真落在 chrome-error:// 上）交给验收。
+
+    private static int RunCdpSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // 真机回执里的最终 URL（Edge 154）
+        CheckTrue(failures, ref cases, "chrome-error://chromewebdata/ 命中",
+            CdpSession.IsNavErrorPage("chrome-error://chromewebdata/", null));
+        CheckTrue(failures, ref cases, "新标签时的 chrome-error:// 也命中",
+            CdpSession.IsNavErrorPage("chrome-error://", ""));
+        CheckTrue(failures, ref cases, "大小写 / 首尾空白不影响",
+            CdpSession.IsNavErrorPage("  CHROME-ERROR://chromewebdata/\r\n", null));
+        CheckTrue(failures, ref cases, "正常页面不命中（URL）",
+            !CdpSession.IsNavErrorPage("https://example.com/", null));
+        CheckTrue(failures, ref cases, "正常页面不命中（正文里只有普通 error 字样）",
+            !CdpSession.IsNavErrorPage("https://example.com/", "Server error: try again later (500)"));
+        CheckTrue(failures, ref cases, "about:blank / data: / file: 不命中",
+            !CdpSession.IsNavErrorPage("about:blank", "")
+            && !CdpSession.IsNavErrorPage("data:text/html,<h1>hi</h1>", "hi")
+            && !CdpSession.IsNavErrorPage("file:///C:/orbita-out/upload/a.html", "hello"));
+
+        // 正文里的原因码（离线错误页的正文形状，三站点实测）
+        string offline = "你似乎未连接到 Internet\r\n\r\nERR_INTERNET_DISCONNECTED\r\n\r\n请检查你的网络连接";
+        CheckTrue(failures, ref cases, "正文里的 ERR_ 命中", CdpSession.IsNavErrorPage(null, offline));
+        CheckString(failures, ref cases, "抓到 ERR_INTERNET_DISCONNECTED", "ERR_INTERNET_DISCONNECTED",
+            CdpSession.NavErrorCode(offline));
+        CheckString(failures, ref cases, "net::ERR_NAME_NOT_RESOLVED 只献出码", "ERR_NAME_NOT_RESOLVED",
+            CdpSession.NavErrorCode("net::ERR_NAME_NOT_RESOLVED"));
+        CheckString(failures, ref cases, "正文里有多个码时取第一个", "ERR_HTTP_RESPONSE_CODE_FAILURE",
+            CdpSession.NavErrorCode("ERR_HTTP_RESPONSE_CODE_FAILURE\nERR_SSL_VERSION_OR_CIPHER_MISMATCH"));
+        CheckString(failures, ref cases, "大写字母开头的 ERR_ 不是码（NETERR_FOO）", null,
+            CdpSession.NavErrorCode("NETERR_FOO"));
+        CheckString(failures, ref cases, "孤零零的 ERR_ 不是码", null, CdpSession.NavErrorCode("错误光 ERR_ 没有码"));
+        CheckString(failures, ref cases, "没有原因码时回 null", null,
+            CdpSession.NavErrorCode("你似乎未连接到 Internet"));
+        CheckString(failures, ref cases, "null 正文不会崩", null, CdpSession.NavErrorCode(null));
+
+        // 人话：带原因、带下一步、不带内部串
+        string withCode = CdpSession.NavErrorMessage("ERR_INTERNET_DISCONNECTED");
+        CheckTrue(failures, ref cases, "有码：报出原因", withCode.IndexOf("ERR_INTERNET_DISCONNECTED", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "有码：不是「没有拿到内容」",
+            withCode.IndexOf("没有拿到内容", StringComparison.Ordinal) < 0);
+        string noCode = CdpSession.NavErrorMessage(null);
+        CheckTrue(failures, ref cases, "无码：说清没拿到内容", noCode.IndexOf("页面加载失败（没有拿到内容）", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案带下一步（换一个地址）",
+            withCode.IndexOf("换一个", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案带降级工具（computer_screenshot / computer_click）",
+            withCode.IndexOf("computer_screenshot", StringComparison.Ordinal) >= 0
+            && withCode.IndexOf("computer_click", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案不把 chromewebdata 这种内部串甩给模型",
+            withCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0
+            && noCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 统一的自测回执照 JSON（五个 selftest 共用一份形状，跑测试的人不用记五种） */
     internal static string BuildSelfTestJson(List<string> failures, int cases)
     {
         StringBuilder json = new StringBuilder();

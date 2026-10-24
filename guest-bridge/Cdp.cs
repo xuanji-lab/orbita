@@ -863,8 +863,8 @@ internal sealed class CdpSession
                 // 导航会把执行上下文销毁，Runtime.evaluate 可能就在那一刻回不来了；
                 // 这是正常现场，不要因为历史前进/后退把整条命令判死
             }
-            bool moved = WaitForReady(null, timeoutMs);
-            return NavResult(sw, moved ? null : "历史" + (lower == "back" ? "后退" : "前进") + "后页面在 "
+            int moved = WaitForReady(null, timeoutMs);
+            return NavResult(sw, moved == ReadyOk ? null : "历史" + (lower == "back" ? "后退" : "前进") + "后页面在 "
                 + timeoutMs + "ms 内没有加载完成（可能已经没有上一页 / 下一页）");
         }
 
@@ -872,9 +872,49 @@ internal sealed class CdpSession
         string navReply = Call("Page.navigate", "{\"url\":" + Program.JsonQuote(target) + "}", timeoutMs);
         string navError = CdpError(navReply);
         if (navError != null) return Fail("无法打开这个网址（" + target + "）：" + navError);
-        bool loaded = WaitForReady(target, timeoutMs);
-        return NavResult(sw, loaded ? null : "页面在 " + timeoutMs + "ms 内没有加载完成，"
+        int ready = WaitForReady(target, timeoutMs);
+        // 落在浏览器的错误页 = 这一页没有打开。不能报 ok:true：错误页也是「加载完成」的
+        // 普通页面，模型拿到 ok 会接着 observe / click 去操作「你似乎未连接到 Internet」。
+        if (ready == ReadyErrorPage) return NavFailure(sw);
+        return NavResult(sw, ready == ReadyOk ? null : "页面在 " + timeoutMs + "ms 内没有加载完成，"
             + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构");
+    }
+
+    /**
+     * 导航落在错误页时的回执：**ok:false + 人话**，但 url / title / ms 照留——排查要看这些
+     *（真机上 title 甚至还是主机名，那正是「假成功」的来源）。
+     *
+     * 不回 `chrome-error://chromewebdata/` 这种内部串：模型只会照着它去猜一个不存在的页面。
+     */
+    private string NavFailure(Stopwatch sw)
+    {
+        string href = SafeEvalString("location.href");
+        string title = SafeEvalString("document.title");
+        string code = NavErrorCode(ReadPageText());
+        return new JObj().Bool("ok", false).Str("error", NavErrorMessage(code))
+            .Str("url", href).Str("title", title).Num("ms", sw.ElapsedMilliseconds).ToString();
+    }
+
+    /** 读页面可见正文（截断 4000 字符）：错误页的原因码就在里面，不需要整页 */
+    private string ReadPageText()
+    {
+        try
+        {
+            return EvalString("(function(){var b=document.body;var t=b?(b.innerText||b.textContent||''):'';"
+                + "return t.substring(0,4000);})()", 8000);
+        }
+        catch
+        {
+            // 错误页也可能在换上下文的一瞬间不响应：正文拿不到就按「没有拿到内容」报，
+            // 不要因为拿不到原因码就把「这是错误页」这个判定一起丢掉。
+            return "";
+        }
+    }
+
+    private string SafeEvalString(string expression)
+    {
+        try { return EvalString(expression, 8000); }
+        catch { return ""; }
     }
 
     private string NavResult(Stopwatch sw, string warning)
@@ -896,17 +936,30 @@ internal sealed class CdpSession
         return "https://" + url;
     }
 
+    /** WaitForReady 的三个结果（C# 5 禁枚举，用常量） */
+    internal const int ReadyOk = 0;
+    private const int ReadyTimeout = 1;
+    private const int ReadyErrorPage = 2;
+
     /**
      * 等 page readyState === 'complete' 且 URL 对上（expected == null 就只看 readyState）。
      *
      * 为什么不用 Page.loadEventFired：事件没有 id，要和普通回执混在一条 socket 上抢读；
      * 而「加载完了」本来就有一个可轮询的真值（readyState）。轮询多几条 CDP 消息，换来的是
      * 不会因为一次事件迟到 / 丢失把整条命令判死。
+     *
+     * 落成错误页时**立刻**返回 ReadyErrorPage，不空转到 timeoutMs：错误页是导航失败的那一刻
+     * 就 complete 的（2026-10-25 真机：离线时每条导航白等满 20 秒才回）。它是「已经失败」，
+     * 不是「还没到」——再等下去，这个页面也不会变成用户要的那一页。
+     *
+     * 正文只在「complete 但 URL 对不上」时读，且同一个 href 只读一次（重定向到别的路径的
+     * 慢站点不该每 300ms 读一遍整页正文）。
      */
-    private bool WaitForReady(string expected, int timeoutMs)
+    private int WaitForReady(string expected, int timeoutMs)
     {
         Thread.Sleep(300); // 让 navigate 真正开始（否则第一轮读到的还是旧页面的 complete）
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        string checkedHref = null;
         while (DateTime.UtcNow < deadline)
         {
             bool complete;
@@ -914,13 +967,86 @@ internal sealed class CdpSession
             catch { complete = false; }
             if (complete)
             {
-                if (expected == null) return true;
-                string href = EvalString("location.href", 5000);
-                if (UrlMatches(expected, href)) return true;
+                if (expected == null) return ReadyOk;
+                string href = SafeEvalString("location.href");
+                if (UrlMatches(expected, href)) return ReadyOk;
+                if (IsNavErrorPage(href, null)) return ReadyErrorPage;
+                // 正文兜底：Chromium 版本 / 证书拦截页的 scheme 不一定是 chrome-error
+                if (href != checkedHref)
+                {
+                    checkedHref = href;
+                    if (IsNavErrorPage(null, ReadPageText())) return ReadyErrorPage;
+                }
             }
             Thread.Sleep(300);
         }
-        return false;
+        return ReadyTimeout;
+    }
+
+    // ── 浏览器错误页的判定（纯函数：自测在宿主上直接验，不碰 Edge）──────────────────
+
+    /**
+     * 导航是不是落在了 Chromium 的「打不开」错误页上。
+     *
+     * 为什么错误页必须算**失败**：错误页本身也是一个加载完成的普通页面——readyState 是
+     * complete、`document.title` 还是主机名，于是旧行为只会在「URL 对不上」里空转到超时，
+     * 再回 ok:true + 「可能还在渲染」。对模型是假成功：它会接着 sandbox_observe / sandbox_click
+     * 去操作一个正文写着「你似乎未连接到 Internet」的页面（2026-10-25 真机，三个站点全这样）。
+     *
+     * 两个信号，都只认「这确实是错误页」，不认「看起来奇怪」：
+     *   ① 地址是 chrome-error:// —— 这个 scheme 只有 Chromium 的错误页在用，几乎不可能误判；
+     *   ② 正文里有 ERR_* 原因码 —— 只在「URL 对不上」时才看，所以停在旧页面上等新页面的
+     *      那几百毫秒不会把旧正文当成本次导航的结果。
+     */
+    internal static bool IsNavErrorPage(string url, string bodyText)
+    {
+        if (url != null && url.Trim().ToLowerInvariant().StartsWith("chrome-error://", StringComparison.Ordinal))
+            return true;
+        return NavErrorCode(bodyText) != null;
+    }
+
+    /**
+     * 从错误页正文里抠原因码（`ERR_INTERNET_DISCONNECTED` 这种），没有就回 null。**纯函数**。
+     *
+     * 边界：码必须由一个不属于 [A-Z0-9_] 的字符开头（`NETERR_FOO` 不算 `ERR_FOO`）；
+     * 后面必须真跟着码字符（正文里孤零零一个 `ERR_` 不算一个码）。
+     */
+    internal static string NavErrorCode(string bodyText)
+    {
+        if (bodyText == null) return null;
+        const string prefix = "ERR_";
+        int from = 0;
+        while (true)
+        {
+            int at = bodyText.IndexOf(prefix, from, StringComparison.Ordinal);
+            if (at < 0) return null;
+            from = at + 1;
+            if (at > 0 && IsErrorCodeChar(bodyText[at - 1])) continue;
+            int end = at + prefix.Length;
+            while (end < bodyText.Length && IsErrorCodeChar(bodyText[end])) end++;
+            if (end > at + prefix.Length) return bodyText.Substring(at, end - at);
+        }
+    }
+
+    private static bool IsErrorCodeChar(char c)
+    {
+        return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    }
+
+    /**
+     * 错误页给模型看的人话：原因 + 怎么确认 + 还能做什么。
+     *
+     * 不写「设置 › … › 允许沙箱出网」：这个开关现在不存在（.wsb 固定 `<Networking>Default`），
+     * 指一条不存在的路比不指更坏。拿不到码时不编一个，就说没有拿到内容。
+     */
+    internal static string NavErrorMessage(string code)
+    {
+        string reason = code == null || code.Length == 0
+            ? "页面加载失败（没有拿到内容）"
+            : "页面没有加载：" + code;
+        return reason + "（沙箱可能没有出网、宿主机没联网，或这个地址不可达）。"
+            + "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。"
+            + "仍要操作当前界面时改用 computer_screenshot / computer_click 像素工具。";
     }
 
     private bool UrlMatches(string expected, string actual)
