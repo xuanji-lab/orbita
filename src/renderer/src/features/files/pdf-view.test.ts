@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { fitScale, locateCitation, mergeLineRects, PDF_PAGE_GAP } from "./pdf-view.ts";
+import {
+  clickToPdfPoint,
+  fitScale,
+  locateCitation,
+  mergeLineRects,
+  PDF_PAGE_GAP,
+  syncRectStyle,
+} from "./pdf-view.ts";
 import { findQuote, indexPageText } from "../../../../shared/pdf-quote.ts";
 
 describe("fitScale", () => {
@@ -47,5 +54,33 @@ describe("mergeLineRects", () => {
       { left: 400, top: 100, width: 50, height: 12 },
       { left: 10, top: 116, width: 80, height: 12 },
     ]);
+  });
+});
+
+describe("syncRectStyle", () => {
+  it("PDF 点 × 渲染缩放 = 覆盖层 CSS px（scale 1 时数值不变）", () => {
+    const rect = { left: 100, top: 200, width: 300, height: 9 };
+    assert.deepEqual(syncRectStyle(rect, 1), rect);
+    assert.deepEqual(syncRectStyle(rect, 1.5), { left: 150, top: 300, width: 450, height: 13.5 });
+  });
+});
+
+describe("clickToPdfPoint", () => {
+  const page = { left: 40, top: 12, width: 595.28, height: 841.89 };
+
+  it("页内点击：换回 PDF 点（左上原点）", () => {
+    assert.deepEqual(clickToPdfPoint(page, 1, 40 + 100, 12 + 200), { x: 100, y: 200 });
+  });
+
+  it("缩放为 0.5 时尺寸也要放大回去", () => {
+    // 渲染后页是 297.64×420.945，点在 (40+50, 12+100)
+    const small = { left: 40, top: 12, width: 297.64, height: 420.945 };
+    const point = clickToPdfPoint(small, 0.5, 90, 112);
+    assert.deepEqual(point, { x: 100, y: 200 });
+  });
+
+  it("页外 / 缩放为 0：null（不拿最近的记录编一个答案）", () => {
+    assert.equal(clickToPdfPoint(page, 1, 10, 20), null);
+    assert.equal(clickToPdfPoint(page, 0, 40, 12), null);
   });
 });

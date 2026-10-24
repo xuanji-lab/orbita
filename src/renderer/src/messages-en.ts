@@ -1744,6 +1744,13 @@ export const en = {
     quoteWarning: "Compile warning",
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
+    /* ---------- SyncTeX (source ↔ PDF) ---------- */
+    syncNoPdf: "No PDF yet — compile once, then jump.",
+    syncNoSynctex: "This PDF has no SyncTeX data. Compile it again to enable jumping (the build passes -synctex for you).",
+    syncNotFound: "The PDF has no record for this spot. Recompile after editing the source.",
+    syncOutside: "This spot belongs to a file outside the project (a system package), not your source.",
+    syncNotInstalled: "The synctex command was not found. Your TeX distribution may be missing a component.",
+    syncFailed: (detail: string) => `SyncTeX failed: ${detail}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
@@ -1756,6 +1763,8 @@ export const en = {
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
   editor: {
     aria: "LaTeX source editor",
+    locateInPdf: "Show in PDF",
+    quoteLine: "Quote to chat",
     saved: "Saved",
     unsaved: "Unsaved",
     saving: "Saving…",

@@ -18,7 +18,11 @@ import {
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
   type LatexFileContext,
+  type LatexForwardOutcome,
+  type LatexForwardRequest,
   type LatexProjectOutcome,
+  type LatexReverseOutcome,
+  type LatexReverseRequest,
   type LatexRunOutcome,
 } from "../../shared/latex.ts";
 import type { SessionStore } from "../session/store.ts";
@@ -26,6 +30,7 @@ import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
+import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
 import type { LatexRunner } from "./run.ts";
 
 export function registerLatexIpc(
@@ -72,6 +77,49 @@ export function registerLatexIpc(
       return { ok: true, project: describeLatexProject(located.dir) };
     },
   );
+
+  /**
+   * 源码 → PDF。响应要求（源码文件）必须是项目内的文件：synctex 对「项目外的一行」
+   * 会给出最近似的命中，那会把用户引到别的文件上——先在白名单层拦下。
+   */
+  ipcMain.handle(
+    latexChannels.synctexForward,
+    async (_event, req: LatexForwardRequest): Promise<LatexForwardOutcome> => {
+      const located = await locateProject(req, workspaces, sessions);
+      if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
+      const source = insideProject(located.dir, located.file);
+      if (source === null) return { ok: false, reason: "outside-project", detail: located.file };
+      const project = describeLatexProject(located.dir);
+      if (project.pdf === null) return { ok: false, reason: "no-pdf", detail: project.dir };
+      const probe = await runner.probeEnvironment();
+      return forwardSearch({
+        dir: project.dir,
+        file: source.file,
+        pdf: project.pdf.path,
+        line: req.line,
+        column: req.column ?? 1,
+        latexmk: probe.latexmk,
+      });
+    },
+  );
+
+  /** PDF 页面坐标 → 源码。`path` 是 PDF 自己：项目目录与白名单都按它核 */
+  ipcMain.handle(
+    latexChannels.synctexReverse,
+    async (_event, req: LatexReverseRequest): Promise<LatexReverseOutcome> => {
+      const located = await locateProject(req, workspaces, sessions);
+      if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
+      const probe = await runner.probeEnvironment();
+      return reverseSearch({
+        dir: located.dir,
+        pdf: located.file,
+        page: req.page,
+        x: req.x,
+        y: req.y,
+        latexmk: probe.latexmk,
+      });
+    },
+  );
 }
 
 /**
@@ -83,7 +131,7 @@ async function locateProject(
   req: LatexFileContext,
   workspaces: WorkspaceStore,
   sessions: SessionStore,
-): Promise<{ dir: string } | null> {
+): Promise<{ dir: string; file: string } | null> {
   const roots = await resolveFileRoots(workspaces, sessions, req);
   const listReq: FileListRequest = {
     sessionId: req.sessionId,
@@ -100,5 +148,5 @@ async function locateProject(
     // 根不存在（工作台还没建）：findLatexProjectDir 也会走到同一个结论
   }
   const dir = findLatexProjectDir(file, boundary);
-  return dir === null ? null : { dir };
+  return dir === null ? null : { dir, file };
 }
