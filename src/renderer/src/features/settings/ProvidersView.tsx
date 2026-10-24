@@ -35,6 +35,7 @@ import {
 } from "./providers-view-model.ts";
 import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
+import { useBuiltinCatalog } from "./model-menu";
 import { VendorLogo } from "./VendorLogo";
 
 /**
@@ -91,7 +92,8 @@ export function ProvidersView(props: {
   /** 模型弹窗：isNew = 新增（弹窗内填 id），否则编辑 id 指向的已启用模型 */
   const [editor, setEditor] = useState<{ isNew: boolean; id: string | null } | null>(null);
   /** pi 内建目录，按 catalogId 取官方模型清单——离线就有，不用打网络 */
-  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
+  // 与模型菜单同一个钩子：目录刷新后的广播也收（useBuiltinCatalog）
+  const catalog = useBuiltinCatalog();
   /** 拖拽排序中的厂商行 id；null = 没在拖 */
   const [dragId, setDragId] = useState<string | null>(null);
   /** 小框高亮的目标行：框住谁，松手就落到谁的位置 */
@@ -136,10 +138,6 @@ export function ProvidersView(props: {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    void api.provider.builtins().then(setCatalog).catch(() => setCatalog([]));
-  }, []);
 
   // 弹窗开着时 Escape 关闭（与点遮罩 / Cancel 同语义）
   useEffect(() => {

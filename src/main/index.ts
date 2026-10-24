@@ -518,6 +518,11 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 内建目录（启动时一次，pi.dev 刷新后再一次）：不属于任何会话，不落账、不进意图存档，只转给窗口
+    if (event.type === "builtins") {
+      broadcastAgentEvent(event);
+      return;
+    }
     // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
     // 在 record 之前喂：与 recorder 各自独立，互不阻塞
     intentIngest.onEvent(event);

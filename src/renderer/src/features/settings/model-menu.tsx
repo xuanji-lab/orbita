@@ -45,10 +45,23 @@ export function usableProviders(providers: readonly ProviderDto[]): ProviderDto[
 export function useBuiltinCatalog(): BuiltinProvider[] {
   const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
   useEffect(() => {
+    let live = true;
     void api.provider
       .builtins()
-      .then(setCatalog)
-      .catch(() => setCatalog([]));
+      .then((providers) => {
+        if (live) setCatalog(providers);
+      })
+      .catch(() => {
+        if (live) setCatalog([]);
+      });
+    // 目录在后台从 pi.dev 刷新完会再广播一次：开着的菜单与设置页跟着换，不用刷新窗口
+    const off = api.agent.onEvent((event) => {
+      if (event.type === "builtins") setCatalog(event.providers);
+    });
+    return () => {
+      live = false;
+      off();
+    };
   }, []);
   return catalog;
 }

@@ -104,6 +104,9 @@ export class AgentHostCore {
           this.builtins = message.providers;
           this.resolveBuiltins?.(message.providers);
           this.resolveBuiltins = null;
+          // 也交 onEvent 广播：目录在后台联网刷新完会再报一次（model-catalog.ts），窗口里开着的
+          // 菜单 / 设置页要跟着换，不然新型号的名字要用户刷新窗口才出来（2026-10-24 验收发现）
+          this.onEvent(message);
           return;
         }
         if (message.type === "mcp") {
