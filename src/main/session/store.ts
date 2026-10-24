@@ -27,6 +27,14 @@ import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
+import { isClosingScanText } from "../../shared/wrapup-scan.ts";
+
+/** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
+function isMachinePrompt(record: SessionRecord): boolean {
+  if (record.role !== "user") return false;
+  const text = record.content.find((block) => block.type === "text");
+  return text !== undefined && text.type === "text" && isClosingScanText(text.text);
+}
 import {
   childSessions,
   deriveSessionTitle,
@@ -450,9 +458,10 @@ export class SessionStore {
         }
       }
       // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致。
+      // 收尾扫描的机器提问不是用户的提问，不进最近提问（首页卡上会冒出一行「【Orbita 收尾扫描】」）
       if (item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text") {
+        if (text !== undefined && text.type === "text" && !isClosingScanText(text.text)) {
           changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);
         }
       }
@@ -763,7 +772,7 @@ export class SessionStore {
         pinned: false,
         archived: false,
         // 分支的新会话带着前缀里的最近提问——它的历史是真的，卡片不该显示空槽
-        recentQueries: recentQueriesFromRecords(prefix),
+        recentQueries: recentQueriesFromRecords(prefix.filter((record) => !isMachinePrompt(record))),
         // A-2（2026-09-17 裁决）：聚合前缀的 tokens/cost——「这条分支此前花了多少」
         // 是真实历史。**contextUsage 恒为 null**：pi 那本是裁过的，余量算不出来，
         // UI 如实显示「未知」，等它自己跑一轮就有真值

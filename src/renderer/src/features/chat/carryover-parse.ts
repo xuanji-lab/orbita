@@ -7,9 +7,6 @@ import type { SubmitAgentInput } from "@shared/agent-ipc";
 import type { WrapupPlan } from "@shared/wrapup";
 import { buildClosingScanPrompt, parseWrapupBlock, soleFencedJson } from "../../../../shared/wrapup-scan.ts";
 
-/** 扫描轮的超时（ms）：超了就降级直接标完成，不让用户卡在等待里。 */
-export const CLOSING_SCAN_TIMEOUT_MS = 120_000;
-
 /**
  * 扫描轮落定后，从转录里取**解析输入**：基线之后最后一条已完成的 assistant
  * 消息的全部 text 块拼接。null = 这一轮根本没出现可用的回答。

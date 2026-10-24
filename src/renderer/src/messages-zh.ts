@@ -1468,6 +1468,7 @@ export const zh: Messages = {
     reviseUnreadable: "读不懂智能体的回复，清单没动。可以换个说法再试。",
     revised: (summary) => `按你说的：${summary}`,
     undoRevise: "撤回这次修改",
+    expand: "展开清单",
     change: {
       merged: "合并",
       "moved-to-left": "从做完挪过来",
@@ -1489,8 +1490,7 @@ export const zh: Messages = {
     pickModelFirst: "先选一个模型。",
     noWorkspaceFolder: "先选一个工作区文件夹",
     noRunningToCompact: "没有正在运行的任务可压缩",
-    scanTimeout: "收尾扫描没能按时完成——已标为完成，没有生成清单。",
-    scanUnreadable: "读不懂扫描结果——已标为完成，没有生成清单。反复出现的话，可以在设置里换一个家务活模型。",
+    scanUnreadable: "没拿到能读懂的收尾清单——已标为完成。点「重试」再扫一次；反复出现的话，换个模型再试。",
     queuedBeforeWrapUp: "这个任务里还有排队的消息——先发出或撤回，再收尾。",
     noAgentSession: "这个任务没法扫描（没有智能体会话）——已直接标为完成。",
     nothingSaid: "这个任务里还没说过话——已直接标为完成。",

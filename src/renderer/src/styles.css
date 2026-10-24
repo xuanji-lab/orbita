@@ -1008,6 +1008,11 @@ body {
 .wrapup-list {
   min-height: 0;
   max-height: 46vh;
+  /* 行的悬停底色向两侧各伸出 --space-2（负外边距）：滚动容器同样外扩、内衬回来，
+     否则伸出的那一截被当成横向溢出，底部冒出一条横向滚动条 */
+  margin: 0 calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+  overflow-x: hidden;
   display: grid;
   gap: var(--space-1);
   align-content: start;

@@ -53,6 +53,12 @@ export function WrapupCard(props: {
   const [editing, setEditing] = useState<{ group: WrapupGroup; index: number; value: string } | null>(null);
   const [adding, setAdding] = useState<{ group: WrapupGroup; value: string } | null>(null);
   const [cancelArmed, setCancelArmed] = useState(false);
+  /**
+   * 收起：点「第 x–y 轮」跳回对话时，卡片收成一行，把聊天面让出来看那一段（卡片展开时
+   * 占掉输入卡上方的大半，留给对话的只剩几十像素——真机 800 高的窗口实测 50px）。点「展开清单」回来，
+   * 编辑状态都在。
+   */
+  const [collapsed, setCollapsed] = useState(false);
   const [feedback, setFeedback] = useState("");
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
   const dictation = useDictation({ value: feedback, onChange: setFeedback, textareaRef: feedbackRef });
@@ -143,7 +149,10 @@ export function WrapupCard(props: {
                   title={t.carryover.jumpToTurns}
                   disabled={firstTurn === undefined || props.onJumpTurn === undefined}
                   onClick={() => {
-                    if (firstTurn !== undefined) props.onJumpTurn?.(firstTurn.userId);
+                    if (firstTurn === undefined) return;
+                    setCollapsed(true);
+                    // 等收起后的布局落定再滚：聊天面要先长高，滚动的目标位置才算得对
+                    requestAnimationFrame(() => requestAnimationFrame(() => props.onJumpTurn?.(firstTurn.userId)));
                   }}
                 >
                   {t.carryover.turns(turns[0], turns[1])}
@@ -231,9 +240,17 @@ export function WrapupCard(props: {
       <div className="wrapup-head">
         <Icon name="list-todo" size={16} />
         <strong>{t.carryover.wrapUp}</strong>
+        {collapsed && (
+          <button type="button" className="wrapup-undo row-trailing" onClick={() => setCollapsed(false)}>
+            <Icon name="chevron-up" size={12} />
+            {t.carryover.expand}
+          </button>
+        )}
       </div>
-      <p className="wrapup-intro">{t.carryover.intro(counts.done, counts.left)}</p>
+      {!collapsed && <p className="wrapup-intro">{t.carryover.intro(counts.done, counts.left)}</p>}
 
+      {!collapsed && (
+        <>
       {revising !== null && (
         <>
           <div className="wrapup-said">
@@ -344,6 +361,9 @@ export function WrapupCard(props: {
           <Icon name="arrow-up" size={14} />
         </button>
       </div>
+
+        </>
+      )}
 
       <div className="wrapup-foot">
         {cancelArmed ? (

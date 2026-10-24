@@ -69,7 +69,7 @@ import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
-import { CLOSING_SCAN_TIMEOUT_MS, collectScanAnswer, locateMessageRange, scanSubmitInput } from "./carryover-parse.ts";
+import { collectScanAnswer, locateMessageRange, scanSubmitInput } from "./carryover-parse.ts";
 import { isClosingScanText, parseWrapupScan } from "../../../../shared/wrapup-scan.ts";
 import type { WrapupDraft, WrapupPlan, WrapupReviseResult } from "@shared/wrapup";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
@@ -2872,27 +2872,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     return null;
   };
 
-  /** 转录里那条扫描消息的 id（重试回退的锚点；找不到 null，重试退回追加式）。 */
-  const scanMessageIdOf = (transcript: Parameters<typeof selectTranscript>[0]): string | null =>
-    scanMessageIdIn(selectTranscript(transcript));
 
-  /** 扫描超时（默认 60s）：直接标完成并说清楚，不让用户卡在等待里。
-   *  依赖取稳定字段而不是整个 engine（每次渲染都是新引用，会让 timer 被无谓
-   *  重置）：setCompletionSession 是 useCallback 产物，引用稳定。 */
-  const setCompletionSession = engine.setCompletionSession;
-  useEffect(() => {
-    if (closingScan === null) return;
-    const timer = window.setTimeout(() => {
-      setCompletionSession(closingScan.sessionId, "done");
-      setScanNotice(engine.messagesRef.current.session.scanTimeout);
-      setScanFailed({
-        sessionId: closingScan.sessionId,
-        messageId: scanMessageIdOf(engine.statesRef.current.get(closingScan.sessionId)?.transcript ?? EMPTY_ENTRY.transcript),
-      });
-      setClosingScan(null);
-    }, CLOSING_SCAN_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [closingScan, setCompletionSession]);
+  /*
+   * 扫描不设超时（v1 是 60s）：扫描改用会话自己的模型之后，大模型开着高档回看一长段会话，实测
+   * 两分钟还在思考（Kimi K3 · 最高，15 轮）；到点强行标完成会把随后到的答案扔掉。扫描是对话流里
+   * 一条看得见的轮，输入卡上有停止键——用户不想等就停，停下来没有回答走「读不懂」那条降级（标完成
+   * + 可重试）。
+   */
 
   /**
    * 扫描轮落定（phase 回 idle，且本槽看着它）→ 取注入之后新增的 assistant

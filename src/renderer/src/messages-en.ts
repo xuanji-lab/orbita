@@ -1613,6 +1613,7 @@ export const en = {
     reviseUnreadable: "Couldn't read the agent's reply — the list is unchanged. Try saying it another way.",
     revised: (summary: string) => `As you said: ${summary}`,
     undoRevise: "Undo this revision",
+    expand: "Show the list",
     change: {
       merged: "Merged",
       "moved-to-left": "Moved from done",
@@ -1635,9 +1636,8 @@ export const en = {
     pickModelFirst: "Pick a model first.",
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
-    scanTimeout: "The leftover scan didn't finish in time — marked done without a checklist.",
     scanUnreadable:
-      "Couldn't read the scan result — marked done without a checklist. If this keeps happening, try a different chore model in Settings.",
+      "Didn't get a wrap-up list it could read — marked done. Retry to scan again; if it keeps happening, try another model.",
     queuedBeforeWrapUp: "There are queued messages in this task — send or withdraw them before wrapping up.",
     noAgentSession: "This task cannot be scanned (no agent session) — marked done directly.",
     nothingSaid: "Nothing was ever said in this task — marked done directly.",

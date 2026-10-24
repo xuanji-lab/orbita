@@ -1,4 +1,5 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
+import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -133,6 +134,13 @@ describe("SessionStore", () => {
     await store.record(ID, userItem("第三问", 5000));
     await store.record(ID, userItem("第四问", 6000));
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["第四问", "第三问", "第二问"]);
+  });
+
+  test("收尾扫描的机器提问不进 recentQueries", async () => {
+    await store.ensureSession(meta());
+    await store.record(ID, userItem("真问题"));
+    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
   });
 
   test("列表按 updatedAt 倒序——新的在前", async () => {
