@@ -89,11 +89,15 @@ the English copy; the Chinese copy follows the same voice.
 - **Sentence case everywhere.** "New workspace name", "Remove workspace", "Main workspace". No
   Title Case, no ALL CAPS except acronyms. `ORBITA` appears capitalised only inside prose that names
   the app ("It may have been removed outside ORBITA."); the wordmark itself is lowercase.
-- **Group labels are quiet sentence case.** Sidebar node titles, settings section labels, menu group
-  headers, panel group headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey
-  (tertiary for card kickers), no uppercase, no tracking. They name a group; they never stand in for
-  a heading or a button. (Until 2026-10-14 they were uppercase mono — inherited from the pre-system
-  renderer, never chosen; the mono face is for machine facts, not for titles.)
+- **Group labels are quiet sentence case.** Sidebar node titles, menu group headers, panel group
+  headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey (tertiary for card
+  kickers), no uppercase, no tracking. They name a group; they never stand in for a heading or a
+  button. (Until 2026-10-14 they were uppercase mono — inherited from the pre-system renderer, never
+  chosen; the mono face is for machine facts, not for titles.)
+- **Settings section titles are the exception: `--font-size-lg`, semibold, primary text.** A settings
+  page is a document of groups whose rows and cards are `base`; a `sm` grey label there was smaller
+  than what it heads and read as noise (2026-10-24: "the title text is too small to read"). The
+  `.section-label` class carries this; other group labels keep the quiet treatment above.
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
@@ -375,9 +379,9 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 | Token | Formula | Default | Roles |
 | --- | --- | ---: | --- |
 | `--font-size-xl` | base + 4 | 18px | Markdown h1, page / conversation titles |
-| `--font-size-lg` | base + 2 | 16px | Markdown h2, settings and panel titles |
+| `--font-size-lg` | base + 2 | 16px | Markdown h2, settings and panel titles, settings section titles (semibold) |
 | `--font-size-base` | base | 14px | Body, transcript, composer, buttons, menus, list rows, card titles, Markdown h3–h6 |
-| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments), group labels (semibold) |
+| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments), group labels (semibold; not settings section titles) |
 | `--font-size-xs` | base − 3 | 11px | Badges, counters, very weak metadata |
 
 - **A card uses at most three sizes**: title `base` + semibold, body `base` or `sm`, metadata `xs`.
