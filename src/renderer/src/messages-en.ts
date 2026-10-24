@@ -512,6 +512,8 @@ export const en = {
     cardClose: "Close (keep the focus view)",
     summaryRunning: "The chore model is still putting it in order…",
     summaryFailed: "The summary didn't come back (the chore model ran into an error).",
+    /** Shown next to a failure reason: resend the same material window (user-initiated only) */
+    summaryRetry: "Retry",
     summaryNoModel: "No chore model configured — no summary this time.",
     summaryNoActivity: "No session activity in this stretch — nothing to summarize.",
     summarySource: (sessions: number, model: string) =>
