@@ -38,6 +38,7 @@ import {
 } from "./permission.ts";
 import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
+import { nonInteractivePrefixFor } from "./shell-env.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
@@ -771,10 +772,17 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  *
  * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
  * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
+ *
+ * 后两句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
+ * 用 bash 跑——bash 没有默认超时，又不给人看中途输出，模型只能等到它自己退出（实测
+ * 有跑过 3.7 小时的）；要看、要打断就走 terminal_*。真要在 bash 里跑长任务则要求显式
+ * 给 timeout：前者讲「别给慢命令短超时」，这里讲「无上限的长任务要自己设上限」。
  */
 const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
+  "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
+  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway. ` +
+  "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
+  "If a long task really has to run in bash, pass an explicit timeout in seconds: bash has no default timeout, so a command that never exits blocks the turn.";
 
 /**
  * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
@@ -1148,6 +1156,25 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   if (services.settingsManager.getShellPath() === undefined) {
     const shellPath = resolveShellPath();
     if (shellPath !== undefined) services.settingsManager.applyOverrides({ shellPath });
+  }
+  /**
+   * 非交互环境前缀，与上面那条同一个口径（用户显式设过就不盖）。
+   *
+   * 治「命令在等人」：分页器（`git log` 进 less）、凭据提示（`git push` / `gh`）、
+   * 交互确认——这些命令在无 TTY 的 bash 里会一直等，实测有跑过 3.7 小时不收尾的。
+   * 路线是改环境不改命令（codex / dsh 已如此），理由与 pi 的接线点见 ./shell-env.ts。
+   *
+   * **顺序有讲究**：读 `getShellPath()` 必须在上一条 applyOverrides 之后——前缀按
+   * **最终生效的** shell 算。用探测前那个旧值（通常是 undefined）会在用户把 shellPath
+   * 设成 PowerShell 的机器上仍然判成 POSIX，`export` 那一行于是把每条命令弄成语法错误。
+   *
+   * 已知边界：pi 只把这个前缀给 **bash** 工具，`powershell` 工具不受影响（它自己就是
+   * 非交互探测式调用，没有分页器与 TTY 提示这回事）。
+   */
+  if (services.settingsManager.getShellCommandPrefix() === undefined) {
+    // 非 POSIX shell（cmd / PowerShell）拿到的是空串：不填，等于这台机器行为不变
+    const prefix = nonInteractivePrefixFor(services.settingsManager.getShellPath());
+    if (prefix !== "") services.settingsManager.applyOverrides({ shellCommandPrefix: prefix });
   }
   /**
    * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。
