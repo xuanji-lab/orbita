@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { FocusSummaryRequest, FocusSummaryResult } from "@shared/focus";
-import { startFocusRun, extendFocusRun, shouldStartSummary, summaryWindowOf, type FocusRun } from "./focus-timer.ts";
+import {
+  SUMMARY_LEAD_MS,
+  startFocusRun,
+  extendFocusRun,
+  shouldStartSummary,
+  summaryWindowOf,
+  type FocusRun,
+} from "./focus-timer.ts";
 
 /**
  * 专注计时的 hook（App 持有，工具栏左胶囊的 FocusControl 与左栏的文件视图共用）。
  *
  * - **状态不落盘**（用户裁决：关掉应用重开 = 已结束）——它只活在这里的 useState。
- * - run 期间每秒跳一拍 `now`；到点转 done，计时停。四个相位：
+ * - **不向外暴露每秒跳动的 `now`**：App 只在相位变化时重渲染；秒针住在
+ *   FocusControl 本地（`perf(focus)`：原来每秒 setNow 把整棵 App 提起来重画）。
+ *   到点转 done 靠 endsAt 上的一个 setTimeout。四个相位：
  *   `run`（在跑）/ `ending`（提前结束、等用户决定要不要总结，计时停）/
  *   `done`（时间到）/ `off`。
  * - **收工小结**（PR B）：run 相位剩 5 分钟自动起跑（原型状态 8）；ending 相位
@@ -33,8 +42,6 @@ export type FocusSummary =
 
 export interface FocusApi {
   status: FocusStatus;
-  /** 每秒跳动的当前时刻（只在 run 期间跳动）；ending/done 停在停表那一拍 */
-  now: number;
   summary: FocusSummary;
   start: (workspaceId: string, minutes: number) => void;
   extend: (minutes: number) => void;
@@ -60,24 +67,23 @@ function summaryOf(result: FocusSummaryResult): FocusSummary {
 
 export function useFocus(): FocusApi {
   const [status, setStatus] = useState<FocusStatus>({ kind: "off" });
-  const [now, setNow] = useState(() => Date.now());
   const [summary, setSummary] = useState<FocusSummary>({ state: "idle" });
   const [lastPreset, setLastPreset] = useState<{ workspaceId: string; minutes: number } | null>(null);
   /** 最近一次起跑用的素材窗口：重试沿用它（窗口不随重试时刻变长） */
   const lastRequest = useRef<FocusSummaryRequest | null>(null);
 
-  // 计时：run 期间每秒一拍。status 对象换了（开始 / 延长 / 到点 / 提前结束）重排一拍
+  // 到点转 done：在 endsAt 上排一个 setTimeout（原来搭每秒那一拍的顺风车）。
+  // status 换了（开始 / 延长）就清掉重排，延长不会提前收工。
   useEffect(() => {
     if (status.kind !== "run") return;
     const run = status.run;
-    const tick = (): void => {
-      const current = Date.now();
-      setNow(current);
-      if (current >= run.endsAt) setStatus({ kind: "done", run });
-    };
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
+    const delay = run.endsAt - Date.now();
+    if (delay <= 0) {
+      setStatus({ kind: "done", run });
+      return;
+    }
+    const timer = window.setTimeout(() => setStatus({ kind: "done", run }), delay);
+    return () => window.clearTimeout(timer);
   }, [status]);
 
   /** 起跑小结（唯一入口：run 相位自动 / ending 相位用户点「要」/ failed 态点「重试」） */
@@ -100,11 +106,20 @@ export function useFocus(): FocusApi {
     if (request !== null && summary.state === "failed") send(request);
   }, [send, summary.state]);
 
-  // 自动起跑：剩 5 分钟（shouldStartSummary 也含到点之后——补跑，卡片不再等下一拍）
+  // 自动起跑：剩 5 分钟（shouldStartSummary 也含到点之后——补跑）。按
+  // endsAt − SUMMARY_LEAD_MS 排一个 setTimeout，相位变化（开始 / 延长）时重排；
+  // 进窗口时若还没起跑（补跑）就立刻起跑——语义与原来逐秒判断一致，只是不再
+  // 靠每秒跳动的 now。
   useEffect(() => {
     if (status.kind !== "run" || summary.state !== "idle") return;
-    if (shouldStartSummary(status.run, now)) fire(status.run);
-  }, [status, now, summary.state, fire]);
+    const run = status.run;
+    if (shouldStartSummary(run, Date.now())) {
+      fire(run);
+      return;
+    }
+    const timer = window.setTimeout(() => fire(run), run.endsAt - SUMMARY_LEAD_MS - Date.now());
+    return () => window.clearTimeout(timer);
+  }, [status, summary.state, fire]);
 
   const start = useCallback((workspaceId: string, minutes: number): void => {
     const next = startFocusRun(Date.now(), workspaceId, minutes);
@@ -135,5 +150,5 @@ export function useFocus(): FocusApi {
     // 没人消费——下一次 start 会重置，这里不清也无人再读
   }, []);
 
-  return { status, now, summary, start, extend, earlyEnd, requestSummary, retrySummary, end, lastPreset };
+  return { status, summary, start, extend, earlyEnd, requestSummary, retrySummary, end, lastPreset };
 }

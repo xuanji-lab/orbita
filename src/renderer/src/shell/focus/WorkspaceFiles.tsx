@@ -21,6 +21,7 @@ import {
   formatChangeLines,
   isHiddenEntry,
   joinRel,
+  shouldPollChanges,
 } from "./focus-files.ts";
 
 /**
@@ -58,7 +59,8 @@ export function WorkspaceFiles(props: {
   const [selectedRel, setSelectedRel] = useState<string | null>(null);
 
   // —─ U / M：拉取 + 30 秒一拉（快照视图：agent 写盘由 useFileTree 的自动刷新盖住，
-  //    U/M 的半分锦延迟可见不是问题） ──
+  //    U/M 的半分钟延迟可见不是问题）。**窗口藏起来时跳过这一拍**：后台没人看，
+  //    每次 git 读 + IPC 都是纯烧电；回到前台由 visibilitychange 立刻补一拍。 ──
   const [changesGen, setChangesGen] = useState(0);
   const loadChanges = useCallback(async (): Promise<void> => {
     try {
@@ -70,8 +72,18 @@ export function WorkspaceFiles(props: {
   }, [workspace.id]);
   useEffect(() => {
     void loadChanges();
-    const timer = window.setInterval(() => void loadChanges(), 30_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (!shouldPollChanges(document.visibilityState)) return;
+      void loadChanges();
+    }, 30_000);
+    const onVisible = (): void => {
+      if (shouldPollChanges(document.visibilityState)) void loadChanges();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [loadChanges]);
 
   // 只取工作区根这一个根（fs:roots 还会带附加目录；专注看的是工作区本身）
