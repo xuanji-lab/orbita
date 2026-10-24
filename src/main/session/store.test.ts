@@ -143,6 +143,14 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
   });
 
+  test("收尾扫描轮压过的权限档不写回会话 meta（审核 F-4）", async () => {
+    // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
+    await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
+    await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
+    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    assert.equal((await store.load(ID))?.meta.mode, "skip");
+  });
+
   test("列表按 updatedAt 倒序——新的在前", async () => {
     await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
     await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));

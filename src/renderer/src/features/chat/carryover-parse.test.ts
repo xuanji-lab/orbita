@@ -181,4 +181,25 @@ describe("scanSubmitInput（扫描轮用会话自己的模型与档）", () => {
     assert.equal(sessionId, "s1");
     assert.ok(text.startsWith("【Orbita 收尾扫描】"));
   });
+
+  test("权限档压到不高于「询问」：放行 → 询问，计划档原样；其余字段仍与会话一字不差（审核 F-4）", () => {
+    const turn = {
+      cwd: "/w",
+      workspaceId: null,
+      resume: { piSessionFile: "/pi/a.jsonl" },
+      providerId: "anthropic",
+      modelId: "claude-opus-5-5",
+      mode: "skip" as const,
+      thinkingLevel: "high" as const,
+    };
+    const plan = { sinceTurn: 1, lastTurn: 2, turns: [], compactions: [] };
+    const { text, sessionId: _id, mode, ...rest } = scanSubmitInput("s1", turn, plan);
+    assert.equal(mode, "manual");
+    const { mode: _skip, ...same } = turn;
+    assert.deepEqual(rest, same);
+    assert.match(text, /只回看对话，不要调用任何工具/);
+    assert.equal(scanSubmitInput("s1", { ...turn, mode: "plan" }, plan).mode, "plan");
+    // 输入里的 turn 不被改（launchScan 传进来的是会话的开工上下文，下一轮还要用）
+    assert.equal(turn.mode, "skip");
+  });
 });

@@ -5,6 +5,7 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { SubmitAgentInput } from "@shared/agent-ipc";
 import type { WrapupPlan } from "@shared/wrapup";
+import { atMostManual } from "../../../../shared/permission.ts";
 import { buildClosingScanPrompt, parseWrapupBlock, soleFencedJson } from "../../../../shared/wrapup-scan.ts";
 
 /**
@@ -32,16 +33,21 @@ export function collectScanAnswer(
 }
 
 /**
- * 扫描轮的 submit 载荷：**原样用会话自己的开工上下文**（buildTurn 的结果：会话的模型、档、权限、
- * 本子），只换正文。不换模型、不换档——上一版换成家务活模型，开轮推回的思考档（家务活模型 clamp
+ * 扫描轮的 submit 载荷：**原样用会话自己的开工上下文**（buildTurn 的结果：会话的模型、档、本子），
+ * 只换正文。不换模型、不换档——上一版换成家务活模型，开轮推回的思考档（家务活模型 clamp
  * 后的档）被输入卡当成会话的档写上，下一轮真按它发了出去。测试守着「扫描轮的模型与档 = 会话的」。
+ *
+ * **唯一的例外是权限档：压到不高于「询问」**（atMostManual，审核 F-4）。扫描只该回看对话，提示词
+ * 也写明不调工具；「放行」档下模型照着历史里的路径动手是 PR 320 验收的真事故。模型仍去调工具 →
+ * 弹审批，这是预期。这一档只随这一条 submit 走：不写会话 meta（已存在的会话 ensureSession 不改
+ * mode）、不写输入卡（launchScan 不碰本槽的 mode 状态），下一轮按用户自己的档发。
  */
 export function scanSubmitInput(
   sessionId: string,
   turn: Omit<SubmitAgentInput, "sessionId" | "text">,
   plan: Pick<WrapupPlan, "sinceTurn" | "lastTurn" | "turns" | "compactions">,
 ): SubmitAgentInput {
-  return { ...turn, sessionId, text: buildClosingScanPrompt(plan) };
+  return { ...turn, mode: atMostManual(turn.mode), sessionId, text: buildClosingScanPrompt(plan) };
 }
 
 /** 消息流里的扫描回答（只读展示卡吃它） */

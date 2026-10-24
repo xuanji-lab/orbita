@@ -58,7 +58,7 @@ import {
 } from "../../shell/paste-blocks.ts";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
-import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
+import { atMostManual, DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { modelThinkingLevels } from "@shared/model-defaults";
@@ -1843,7 +1843,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string },
+      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string; mode?: PermissionMode },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -1874,7 +1874,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           resume,
           providerId: model.providerId,
           modelId: model.modelId,
-          mode,
+          // 遗留事项开工压过档（见 startCarryoverTask）：本轮按压过的发，setMode 要到下一次渲染才生效
+          mode: extras?.mode ?? mode,
           thinkingLevel,
         });
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
@@ -2164,10 +2165,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setCwd(source?.cwd ?? null);
       setWorkspaceId(source?.workspaceId ?? null);
       engine.setError(null);
+      // 权限档压到不高于「询问」（atMostManual，审核 F-4）：种子里的 detail 常带上一个会话的绝对
+      // 路径，「放行」档下智能体会照着往用户真实目录写。输入卡同步显示这一档（新会话 meta 也按它建），
+      // 用户可以自己再切；不写 settings.lastUsed——那是用户给新任务选的起始档，不归这次开工改。
+      // 在原会话里续跑（continueCarryoverInSource）不降档：那是用户自己的会话、自己的档。
+      const startMode = atMostManual(mode);
+      setMode(startMode);
       // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
-      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { carryoverId: item.id });
+      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { carryoverId: item.id, mode: startMode });
     },
-    [engine, model, cwd, workspaceId, reset, submitTurn],
+    [engine, model, mode, cwd, workspaceId, reset, submitTurn],
   );
 
   /**

@@ -141,7 +141,7 @@ export function buildClosingScanPrompt(
 ${segments.map((segment) => `\n【${segment.from === segment.to ? `第 ${segment.from} 轮` : `第 ${segment.from}–${segment.to} 轮`} · 压缩摘要】\n${segment.summary.trim()}`).join("\n")}
 `;
   return `${CLOSING_SCAN_HEAD}
-这个任务要收尾了。回看第 ${range} 轮对话，列出两样东西：
+这个任务要收尾了。只回看对话，不要调用任何工具（不读文件、不跑命令、不改任何东西）。回看第 ${range} 轮对话，列出两样东西：
 1. 做完的事：用户要的、已经做成的每一件事，各占第几轮到第几轮；
 2. 留下的事：还没做完的（答应要做的、被岔开的、明确延后的）。
 
