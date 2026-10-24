@@ -15,6 +15,8 @@ import {
   kindOf,
   nextCopyId,
   nextFreeId,
+  MODEL_SCOPE_ALL,
+  openingModelScope,
   parseRateInput,
   parseTokenInput,
   providerCards,
@@ -416,5 +418,34 @@ describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用�
     // 断言「自带实色」而不写出色值（design-tokens 守卫禁 src 里出现裸 hex）
     assert.match(svg, /fill="#[0-9a-f]{6}"/i);
     assert.doesNotMatch(svg, /currentColor/);
+  });
+});
+
+describe("openingModelScope —— 模型卡片每次打开时左栏落在哪一格", () => {
+  const dto = (id: string, models: string[]): ProviderDto => ({
+    id,
+    displayName: id,
+    endpoint: { baseUrl: "https://example.com", api: "openai-completions" },
+    models: { declared: models.map((m) => ({ id: m })) },
+    auth: { scheme: "none" },
+  });
+  // 同一个型号挂在两家：芯片只写型号名，卡片得替用户说清是哪一家
+  const providers = [dto("kimi-code", ["kimi-k3"]), dto("opencode-go", ["kimi-k3", "glm-5"])];
+
+  test("当前型号所属的那家 → 落在那家（同型号挂两家时按 providerId 认，不按型号认）", () => {
+    assert.deepEqual(openingModelScope(providers, { providerId: "opencode-go" }), {
+      kind: "provider",
+      id: "opencode-go",
+    });
+    assert.deepEqual(openingModelScope(providers, { providerId: "kimi-code" }), { kind: "provider", id: "kimi-code" });
+  });
+
+  test("还没选型号（新任务） → 全部", () => {
+    assert.equal(openingModelScope(providers, null), MODEL_SCOPE_ALL);
+  });
+
+  test("那家已被删 / 没 key（不在可用清单里） → 全部", () => {
+    assert.equal(openingModelScope(providers, { providerId: "deepseek" }), MODEL_SCOPE_ALL);
+    assert.equal(openingModelScope([], { providerId: "kimi-code" }), MODEL_SCOPE_ALL);
   });
 });

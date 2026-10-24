@@ -23,7 +23,10 @@ import {
   hasCredentials,
   modelAcceptsImage,
   modelContextText,
+  MODEL_SCOPE_ALL,
   modelPreferenceOf,
+  type ModelScope,
+  openingModelScope,
   railVendorCell,
 } from "./providers-view-model.ts";
 import { ModelAvatar } from "./ModelAvatar";
@@ -117,20 +120,13 @@ export function modelChipParts(
   };
 }
 
-/**
- * 左栏的选中态。
- *
- * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
- * 而右栏列的是实例。星标是**跨厂商**的一维，所以自成一档，不跟厂商交集
- * （交集会造出空集：星标里恰好没有某家的模型时，用户对着两格都亮着的地方看到空卡片）。
- */
-export type ModelScope =
-  | { kind: "all" }
-  | { kind: "starred" }
-  | { kind: "provider"; id: string };
-
-/** 「全部」在状态里的值。默认态，也是搜索时的复位目标 */
-export const MODEL_SCOPE_ALL: ModelScope = { kind: "all" };
+/** 两个左栏选中态是不是同一格（provider 档要比 id）。内部用：只给下面关着时的对齐去重 */
+function sameScope(a: ModelScope, b: ModelScope): boolean {
+  if (a.kind === "provider" || b.kind === "provider") {
+    return a.kind === "provider" && b.kind === "provider" && a.id === b.id;
+  }
+  return a.kind === b.kind;
+}
 
 /** 星标的键：两个 id 成对（与 AppSettings.starredModels 同一口径）。内部用，不导出——没有第二个消费者 */
 function starKey(providerId: string, modelId: string): string {
@@ -204,7 +200,22 @@ export function ModelPickerMenu(props: {
   /** 原样转发给 Menu：输入卡给 `above`（芯片菜单朝上开），设置面与子会话面板用默认下方 */
   placement?: MenuPlacementSide;
 }): React.ReactNode {
-  const [scope, setScope] = useState<ModelScope>(MODEL_SCOPE_ALL);
+  const [scope, setScope] = useState<ModelScope>(() => openingModelScope(props.providers, props.selected));
+  const [open, setOpen] = useState(false);
+  /*
+   * 每次打开都落在当前型号所属的那家（openingModelScope）。**关着的时候就对齐**，不等打开那一刻：
+   * Menu 在点开的同一个事件里按**当时的清单**把光标放到打勾行（cursorAtChecked）、再
+   * scrollIntoView——若等打开后才改左栏，那一刻打勾行还不在清单里，光标落到第一行。
+   * 关着时跟着 selected 变：换会话 / 刚选了别家的型号，下次打开就是新那家。
+   * 打开期间不动：用户手点的左栏 / 搜索复位照旧；关掉即回到当前型号那家，不沿用上次手选。
+   */
+  const selectedProviderId = props.selected?.providerId ?? null;
+  useEffect(() => {
+    if (open) return;
+    const next = openingModelScope(props.providers, selectedProviderId === null ? null : { providerId: selectedProviderId });
+    // 调用方多半每次渲染都给一份新的 providers 数组：等值就留旧对象，不白白多渲染一次
+    setScope((prev) => (sameScope(prev, next) ? prev : next));
+  }, [open, selectedProviderId, props.providers]);
   const pick = (range: ModelScope) =>
     modelCardItems({
       t: props.t,
@@ -237,6 +248,7 @@ export function ModelPickerMenu(props: {
     <Menu
       items={withLeading(visible)}
       searchable
+      onOpenChange={setOpen}
       rail={
         isCard ? modelPickerRail({ t: props.t, providers: props.providers, scope, onScope: setScope }) : undefined
       }

@@ -143,6 +143,43 @@ export function railVendorCell(provider: ProviderDto): RailVendorCell {
 }
 
 /**
+ * 模型卡片左栏的选中态。
+ *
+ * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
+ * 而右栏列的是实例。星标是**跨厂商**的一维，所以自成一档，不跟厂商交集
+ * （交集会造出空集：星标里恰好没有某家的模型时，用户对着两格都亮着的地方看到空卡片）。
+ * 住在这里而不是 model-menu.tsx：打开时的初始值要能被 node --test 直接测（.tsx 加载不了）。
+ */
+export type ModelScope =
+  | { kind: "all" }
+  | { kind: "starred" }
+  | { kind: "provider"; id: string };
+
+/** 「全部」在状态里的值。没有当前型号时的初始态，也是搜索时的复位目标 */
+export const MODEL_SCOPE_ALL: ModelScope = { kind: "all" };
+
+/**
+ * 模型卡片**每次打开**时左栏落在哪一格：当前型号所属的那家服务商。
+ *
+ * 同一个型号常挂在好几家下（Kimi K3 在 Kimi Code、OpenCode、基元律动都有），芯片只写型号名，
+ * 用户靠这张卡认「现在走的是哪家」和「这家还有什么可选」——停在「全部」时这两件事都要
+ * 自己去翻（2026-10-25 用户：「model 选择卡不会自动定位到那个 provider 和那个模型」）。
+ *
+ * 没有当前型号（新任务还没选）、或那家已不在可用清单里（被删 / 没 key）：回「全部」。
+ * 只看服务商在不在、不要求它仍声明着这个型号——型号被删时「全部」里同样没有打勾的行，
+ * 而落在那家至少还回答了「这家还有什么」。
+ */
+export function openingModelScope(
+  providers: readonly ProviderDto[],
+  selected: { providerId: string } | null,
+): ModelScope {
+  if (selected === null) return MODEL_SCOPE_ALL;
+  return providers.some((p) => p.id === selected.providerId)
+    ? { kind: "provider", id: selected.providerId }
+    : MODEL_SCOPE_ALL;
+}
+
+/**
  * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
  * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
  * nav 状态点与模型菜单的 usableProviders 是两个真实消费者——此前各写各的判定，
