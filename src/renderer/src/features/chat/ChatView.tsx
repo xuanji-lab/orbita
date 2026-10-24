@@ -1133,9 +1133,13 @@ function ChatViewBody(props: {
       onStop={session.stop}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
-      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
+      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index。
+      // 收尾扫描中：扫描轮不设超时，唯一出口是这张卡上的停止键（空草稿 + 在跑 = 发送键变停止），
+      // 占位里直接说出来（审核 S-4）
       placeholder={
-        session.quotes.length > 0
+        session.closingScan
+          ? t.chat.placeholderScanning
+          : session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
             ? t.chat.placeholderNew

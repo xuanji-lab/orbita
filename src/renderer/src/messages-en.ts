@@ -1226,6 +1226,8 @@ export const en = {
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
+    // 收尾扫描是会话里的一轮、不设超时（审核 S-4）：出口是输入卡的停止键，这里说出来
+    placeholderScanning: "Wrapping up this task — press Stop anytime to end the scan",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
     noProvider: "Add a provider with at least one model in Settings, then send a message.",
     readOnlyTask:

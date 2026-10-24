@@ -1098,6 +1098,7 @@ export const zh: Messages = {
     homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
     placeholderNew: "问点什么，或交办一件事",
     placeholderReply: "回一句，或调整方向",
+    placeholderScanning: "正在收尾扫描，随时可以点停止键结束",
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,
     noProvider: "先在设置里添加一个至少带一个模型的服务商，再发消息。",
     readOnlyTask: "这个任务记录于支持续聊之前，只能读、不能接着聊。新开一个任务继续吧。",
