@@ -4,7 +4,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -477,6 +477,43 @@ describe("缓存与拉取退回", () => {
     assert.equal((await fetchTokenrhythmCatalog(input)).status, "fetched", "时间在未来（改过时钟）：拉");
     assert.equal(requests, 3);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("进程内缓存（F-6）：缓存文件没变就不重读重算；文件变了（mtime）按新的注册", async () => {
+    const previous = process.env[CATALOG_CACHE_ENV];
+    const dir = mkdtempSync(join(tmpdir(), "orbita-tr-memo-"));
+    try {
+      process.env[CATALOG_CACHE_ENV] = join(dir, "model-catalog-cache.json");
+      const cachePath = join(dir, "tokenrhythm-catalog.json");
+      writeFileSync(cachePath, JSON.stringify({ fetchedAt: "x", payload: samplePayload() }));
+      const stamp = new Date("2026-10-25T00:00:00.000Z");
+      utimesSync(cachePath, stamp, stamp);
+      assert.equal(applyTokenrhythmFromCache(await freshRuntime()), 4);
+
+      // 换成等长的另一份内容、把 mtime 拨回原值：戳不变 → 命中进程内缓存，仍是旧型号（证明没重读）
+      writeFileSync(cachePath, readFileSync(cachePath, "utf8").replace(/"glm-5\.3"/g, '"glm-9.9"'));
+      utimesSync(cachePath, stamp, stamp);
+      const cached = await freshRuntime();
+      applyTokenrhythmFromCache(cached);
+      assert.ok(cached.getModel(TOKENRHYTHM_CATALOG_ID, "glm-5.3"), "戳没变：用的是进程内缓存");
+      assert.equal(cached.getModel(TOKENRHYTHM_CATALOG_ID, "glm-9.9"), undefined);
+
+      // mtime 变了：重读，新型号进来
+      const later = new Date("2026-10-25T01:00:00.000Z");
+      utimesSync(cachePath, later, later);
+      const reread = await freshRuntime();
+      applyTokenrhythmFromCache(reread);
+      assert.ok(reread.getModel(TOKENRHYTHM_CATALOG_ID, "glm-9.9"), "戳变了：按新文件注册");
+      assert.equal(reread.getModel(TOKENRHYTHM_CATALOG_ID, "glm-5.3"), undefined);
+
+      // 缓存文件删了：不注册
+      rmSync(cachePath);
+      assert.equal(applyTokenrhythmFromCache(await freshRuntime()), 0);
+    } finally {
+      if (previous === undefined) delete process.env[CATALOG_CACHE_ENV];
+      else process.env[CATALOG_CACHE_ENV] = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("缓存路径挨着 pi 目录缓存（CATALOG_CACHE_ENV 的同目录）；读坏的当没有；applyTokenrhythmFromCache 从环境变量给的路径读", async () => {

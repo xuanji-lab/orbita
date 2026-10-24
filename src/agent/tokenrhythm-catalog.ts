@@ -35,7 +35,7 @@
  * minimax-m3.1-flash 的 low…max）照清单收窄。「关」是否真能关、档位深浅，由
  * 「用户自己定义每个型号的思考档」那条线解决，这里不按型号手写名单。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { writeJsonAtomic } from "../main/atomic-write.ts";
@@ -206,15 +206,24 @@ export function tokenrhythmRegistration(
  * 返回注册进去的型号数；形状不对或一条不剩时返回 0、什么都不注册。幂等：重复注册 merge。
  */
 export function applyTokenrhythmCatalog(runtime: ModelRuntime, payload: unknown): number {
+  const registration = registrationFor(runtime, payload);
+  if (registration === null) return 0;
+  runtime.registerProvider(TOKENRHYTHM_CATALOG_ID, registration);
+  return registration.models.length;
+}
+
+type Registration = ReturnType<typeof tokenrhythmRegistration>;
+
+/** 解析 + 查官方单价，得出注册配置；形状不对或一条不剩 → null */
+function registrationFor(runtime: ModelRuntime, payload: unknown): Registration | null {
   const parsed = parseTokenrhythmCatalog(payload);
-  if (parsed === null || parsed.models.length === 0) return 0;
+  if (parsed === null || parsed.models.length === 0) return null;
   // 官方单价从 pi 目录查：排除我们自己（重复 apply 时不自引用），也排除用户实例的合并条目
   const catalog = runtime
     .getProviders()
     .filter((provider) => provider.id !== TOKENRHYTHM_CATALOG_ID)
     .map(toBuiltinProvider);
-  runtime.registerProvider(TOKENRHYTHM_CATALOG_ID, tokenrhythmRegistration(parsed.models, catalog));
-  return parsed.models.length;
+  return tokenrhythmRegistration(parsed.models, catalog);
 }
 
 // ── 缓存：上次成功的原始响应，原子写 ─────────────────────────────────────────────
@@ -258,12 +267,42 @@ export function loadTokenrhythmCache(path: string): unknown {
   }
 }
 
+/** 文件的身份戳（路径 + mtime + 大小）；文件不在 → undefined */
+function fileStamp(path: string): string | undefined {
+  try {
+    const stat = statSync(path);
+    return `${path}:${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 进程内缓存：上一次从缓存文件算出的注册配置（审核 F-6）。每轮开机都要 createModelRuntime，
+ * 不缓存就每轮同步读 113 KB、解析、对 25 个型号全目录查官方价（Mac 实测同步 3.7 ms → 缓存后 0.8 ms）。
+ * 剩下的开销不在这里：pi 的 registerProvider 末尾会 `void this.refresh()`，把目录缓存整份重读一遍。
+ * 失效键 = 基元律动缓存文件的戳 + pi 目录缓存文件的戳：前者变了型号清单变，后者变了
+ * 官方单价可能变（pi.dev 刷新会改写它）。两个文件都只由本进程原子写（rename 换新 inode，
+ * mtime 必变），所以按戳失效不会漏。
+ */
+let fromCacheMemo: { key: string; registration: Registration } | undefined;
+
 /** 建运行时时把缓存里的目录灌进去（createModelRuntime 调；没缓存就什么都不做） */
 export function applyTokenrhythmFromCache(runtime: ModelRuntime): number {
   const path = tokenrhythmCachePath();
   if (path === undefined) return 0;
-  const payload = loadTokenrhythmCache(path);
-  return payload === undefined ? 0 : applyTokenrhythmCatalog(runtime, payload);
+  const stamp = fileStamp(path);
+  if (stamp === undefined) return 0;
+  const key = `${stamp}|${fileStamp(process.env[CATALOG_CACHE_ENV] ?? "") ?? "-"}`;
+  if (fromCacheMemo?.key !== key) {
+    const payload = loadTokenrhythmCache(path);
+    const registration = payload === undefined ? null : registrationFor(runtime, payload);
+    if (registration === null) return 0;
+    fromCacheMemo = { key, registration };
+  }
+  // 交给 pi 的是拷贝：registerProvider 拿去的对象不与缓存共享，pi 怎么处理都碰不到下一轮
+  runtime.registerProvider(TOKENRHYTHM_CATALOG_ID, structuredClone(fromCacheMemo.registration));
+  return fromCacheMemo.registration.models.length;
 }
 
 export interface FetchTokenrhythmInput {
