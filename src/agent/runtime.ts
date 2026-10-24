@@ -18,7 +18,6 @@ import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
-  ModelRuntime,
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
@@ -29,6 +28,7 @@ import {
   toBuiltinProvider,
   type PiModel,
 } from "./model-registration.ts";
+import { CATALOG_REFRESH_EVERY_MS, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
 import {
   createToolCallGate,
   describePermissionMode,
@@ -301,7 +301,7 @@ async function resolveChoreModel(
   payload: NonNullable<Extract<AgentCommand, { type: "generateTitle" }>["model"]>,
 ): Promise<ResolvedChoreModel | null> {
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, payload.provider, payload.modelId);
     if (model === undefined) {
       console.warn(`[title] 指定的 ${payload.provider.id}/${payload.modelId} 解析不到，退回会话模型`);
@@ -331,7 +331,7 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
     send({ type: "greetingsClassified", requestId: command.requestId, throwaway: null, error });
   };
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, command.provider, command.modelId);
     if (model === undefined) {
       fail(`unknown model "${command.provider.id}/${command.modelId}"`);
@@ -388,7 +388,7 @@ async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeF
     send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error });
   };
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, command.provider, command.modelId);
     if (model === undefined) {
       fail(`unknown model "${command.provider.id}/${command.modelId}"`);
@@ -443,7 +443,7 @@ async function probeProvider(command: Extract<AgentCommand, { type: "probeProvid
     send({ type: "providerProbed", requestId: command.requestId, ok, message });
   };
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, command.provider, command.modelId);
     if (model === undefined) {
       reply(false, `unknown model "${command.provider.id}/${command.modelId}"`);
@@ -600,7 +600,7 @@ async function setLedgerModel(
     // 同一套会话头注入，与 setSessionModel 对称：落账的鉴权面（generateTitle 用）也要带
     // 本会话 id——不包的话，下一次 openTurn 覆盖之前标题调用会发回静态占位头
     const scoped = withOpencodeSession(provider, sessionId);
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, scoped, modelId);
     if (model === undefined) {
       throw new Error(`unknown model "${scoped.id}/${modelId}"`);
@@ -862,8 +862,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   if (provider.headers === undefined) delete note.headers;
   else note.headers = provider.headers;
 
-  // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
-  const modelRuntime = await ModelRuntime.create({});
+  // provider 经内存注册交给 pi，不读也不写 ~/.pi/agent 的 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
+  const modelRuntime = await createModelRuntime();
   /**
    * **选中的模型必须显式解析并传给会话**。不传的话 pi 自己挑默认模型——实测会挑到
    * 一个完全不相干的 provider（UI 里选的从来不是会话里跑的那个，存量 bug）。
@@ -1519,11 +1519,11 @@ function undoPiBookCommand(command: Extract<AgentCommand, { type: "undoPiBook" }
 }
 
 /**
- * pi 内建 provider 目录 → 我们的 BuiltinProvider。
- * agentDir 指向一个不存在的路径：只要 pi 的内建目录，不去读用户的 ~/.pi/agent 配置。
+ * pi 内建 provider 目录 → 我们的 BuiltinProvider。读的是内建快照 + 本地缓存的 pi.dev 覆盖层，
+ * 不联网、不读用户的 ~/.pi/agent（createModelRuntime）。
  */
 async function listBuiltins(): Promise<void> {
-  const runtime = await ModelRuntime.create({});
+  const runtime = await createModelRuntime();
   // 映射跟注册时的跨目录推断共用一份（toBuiltinProvider）：设置页看到的目录快照
   // 必须与 agent 借参数时用的是同一份，否则两边会对同一个模型说出两个窗口。
   send({ type: "builtins", providers: runtime.getProviders().map(toBuiltinProvider) });
@@ -2105,3 +2105,21 @@ parentPort.start?.();
 send({ type: "ready" });
 // 目录不依赖任何 session，启动即报——设置面不必为了填个下拉框等一次往返
 void listBuiltins().catch(() => undefined);
+
+/** 单次联网刷新的总时限：pi.dev 慢或连不上时，后台这一趟最多挂这么久 */
+const CATALOG_REFRESH_TIMEOUT_MS = 60_000;
+
+/**
+ * 向 pi.dev 拉目录覆盖层，拉完重报一次目录（主进程缓存的是最后一份，设置页下次打开就是新的）。
+ * 先报缓存、后联网：启动不等网络。失败只记日志——这家继续用旧缓存或内建快照。
+ */
+async function refreshCatalogsAndRelist(): Promise<void> {
+  const errors = await refreshCatalogs({ signal: AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS) });
+  for (const [id, error] of errors) console.warn(`[catalog] ${id} 的目录没刷新成功，继续用旧的：${error.message}`);
+  await listBuiltins();
+}
+void refreshCatalogsAndRelist().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
+// 应用常开不关：之后每 4 小时再来一趟（每家是否真下载由 pi 的节流决定）。unref：不为它续命
+setInterval(() => {
+  void refreshCatalogsAndRelist().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
+}, CATALOG_REFRESH_EVERY_MS).unref();

@@ -3,6 +3,7 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
+import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -378,7 +379,11 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     arch: process.arch,
   });
-  const agentProcessEnv = existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : { ...process.env };
+  const agentProcessEnv = {
+    ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
+    // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
+    [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
+  };
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
