@@ -170,6 +170,18 @@ describe("buildSummaryMaterial + buildSummaryPrompt", () => {
     assert.ok(material.sessions.some((session) => session.title === "任务-silent"));
   });
 
+  test("工作区改动段落说明这是「此刻全部未提交改动」（可能含专注前就有的）", () => {
+    const material = buildSummaryMaterial(inputs, {
+      workspaceNames: new Map([["ws-1", "orbita"]]),
+      workspaceName: "orbita",
+      branch: null,
+      changeEntries: changes,
+      startedAt: T0,
+      until: T1,
+    });
+    assert.match(buildSummaryPrompt(material, T0, T1), /这是此刻工作区全部未提交改动，可能含专注开始前就有的/);
+  });
+
   test("全空 → hasActivity false（回 no-activity 的依据）", () => {
     const material = buildSummaryMaterial([], {
       workspaceNames: new Map(),
@@ -198,18 +210,6 @@ describe("buildSummaryMaterial + buildSummaryPrompt", () => {
     assert.match(prompt, /用户：帮我建个 skill/);
     assert.match(prompt, /U focus\/new\.ts（\+64）/);
     assert.match(prompt, /M shell\/Sidebar\.tsx（\+42 −7）/);
-  });
-
-  test("工作区改动段落说明这是「此刻全部未提交改动」（可能含专注前就有的）", () => {
-    const material = buildSummaryMaterial(inputs, {
-      workspaceNames: new Map([["ws-1", "orbita"]]),
-      workspaceName: "orbita",
-      branch: null,
-      changeEntries: changes,
-      startedAt: T0,
-      until: T1,
-    });
-    assert.match(buildSummaryPrompt(material, T0, T1), /这是此刻工作区全部未提交改动，可能含专注开始前就有的/);
   });
 
   test("无改动时的诚实句", () => {
