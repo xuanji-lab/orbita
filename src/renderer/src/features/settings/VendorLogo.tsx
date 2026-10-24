@@ -1,7 +1,9 @@
 import anthropic from "../../../../../design-system/assets/vendor-logos/anthropic.svg?raw";
 import claude from "../../../../../design-system/assets/vendor-logos/claude.svg?raw";
+import copilot from "../../../../../design-system/assets/vendor-logos/copilot.svg?raw";
 import deepseek from "../../../../../design-system/assets/vendor-logos/deepseek.svg?raw";
 import gemini from "../../../../../design-system/assets/vendor-logos/gemini.svg?raw";
+import grok from "../../../../../design-system/assets/vendor-logos/grok.svg?raw";
 import kimi from "../../../../../design-system/assets/vendor-logos/kimi.svg?raw";
 import minimax from "../../../../../design-system/assets/vendor-logos/minimax.svg?raw";
 import openai from "../../../../../design-system/assets/vendor-logos/openai.svg?raw";
@@ -50,6 +52,10 @@ const LOGOS: Record<string, string> = {
   "ark-coding-plan": volcengine,
   openrouter,
   "zhipu-coding-team": zhipu,
+  // 浏览器登录订阅：ChatGPT 用 OpenAI 的标，xAI 的订阅产品是 Grok，用 Grok 的标
+  "openai-codex": openai,
+  "github-copilot": copilot,
+  xai: grok,
 };
 
 /** 没有 logo 的条目（以后新加、还没配图的）显示名字首字，不留空框 */

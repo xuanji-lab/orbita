@@ -44,6 +44,9 @@ const KNOWN_NOTES: Record<string, string> = {
   doubao: "Volcengine Ark Coding Plan subscription; only the models the plan grants",
   "ark-coding-plan": "Volcengine Ark Agent Plan subscription",
   "openai-responses-compatible": "Self-hosted gateway on the Responses protocol; the client appends /responses",
+  "openai-codex": "ChatGPT Plus / Pro subscription, uses your Codex quota",
+  "github-copilot": "Copilot subscription — models from many vendors on your Copilot quota",
+  xai: "SuperGrok / X Premium subscription",
 };
 
 const KNOWN_LABELS: Record<string, string> = {
@@ -804,14 +807,19 @@ export const en = {
     pasteKey: "Paste your API key",
     hideKey: "Hide key",
     showKey: "Show key",
-    // —— Claude 订阅登录（oauth 目录条目专用）——
-    oauthAccount: "Claude account",
-    oauthLoginButton: "Log in with Claude",
+    // —— 浏览器登录订阅（oauth 目录条目专用：Claude / ChatGPT / GitHub Copilot / xAI）——
+    oauthAccount: (vendor: string) => `${vendor} account`,
+    oauthLoginButton: (vendor: string) => `Log in with ${vendor}`,
     oauthRelogin: "Log in again",
     oauthWaiting: "Waiting for authorization in the browser…",
     oauthLoggedIn: (account: string | null) => (account === null ? "Logged in" : `Logged in as ${account}`),
-    oauthLoggedOut: "Not logged in — log in to draw on your Claude Pro / Max subscription",
-    oauthNote: "Opens the browser to claude.ai · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins",
+    oauthLoggedOut: (vendor: string) => `Not logged in — log in to draw on your ${vendor} subscription`,
+    oauthNote: (host: string) =>
+      `Opens the browser to ${host} · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins`,
+    /** 设备码登录（Copilot / xAI）：网页已经打开，用户要把码输进去 */
+    oauthDeviceCode: "Enter this code on the page that opened",
+    oauthCopyCode: "Copy code",
+    oauthCancel: "Cancel login",
     oauthRisk:
       "Subscription quota via third-party clients is currently tolerated but can be revoked at any time; use an API key instead if that concerns you",
     test: "Test",
