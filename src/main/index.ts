@@ -436,16 +436,28 @@ void app.whenReady().then(async () => {
    * 而走「关窗 → 替用户按 Ok」的路子，9~12 秒内整条链自行退出、VM 内存释放。
    *
    * 脚本本体在 close-window-script.ts（纯 ASCII，带前台 PID 护栏）；这里只负责跑它。
-   * 20 秒超时：脚本内部关窗 1.2s + 激活 0.5s，剩下是系统关 VM 的时间。
+   * 20 秒超时：脚本内部最多轮询 6s 找确认框 + 激活 0.5s + 确认 0.8s，剩下是系统关 VM 的时间。
    * 失败不抛：控制器看到 throw 会退回强杀链（宁可退化成旧行为，不能坐视 VM 泄漏）。
+   * 但退出码要留痕——别把「用户正在用别的应用、脚本守规矩没发键」和「确认框压根没按到」
+   * 混成一句「关窗失败」，真机排查时要能一眼分清是哪条路断的（见脚本头部的码表）。
    */
   const closeSandboxWindow = (pid: number): void => {
     if (process.platform !== "win32") return;
-    spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)], {
-      stdio: "ignore",
-      windowsHide: true,
-      timeout: 20_000,
-    });
+    const result = spawnSync(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)],
+      { stdio: "ignore", windowsHide: true, timeout: 20_000 },
+    );
+    if (result.status === 0) return;
+    const reason =
+      result.status === 2
+        ? "前台不是这只沙箱，守规矩没发键"
+        : result.status === 3
+          ? "确认框没按到 Ok"
+          : result.error !== undefined
+            ? `脚本没跑起来（${result.error.message}）`
+            : `脚本异常退出（signal ${String(result.signal)}）`;
+    console.warn(`[computer-use] 关窗脚本退出码 ${String(result.status)}（${reason}），交由强杀兜底（pid ${pid}）`);
   };
 
   const computerUse = new SandboxController({
