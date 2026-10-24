@@ -89,6 +89,14 @@ export const ipcChannels = {
    * 不进 renderer——登录本身就是保存。
    */
   providerOauthLogin: "provider:oauth-login",
+  /** 取消进行中的浏览器登录（参数：provider id）。设备码流程要等十几分钟，得能叫停 */
+  providerOauthCancel: "provider:oauth-cancel",
+  /**
+   * 主进程 → renderer 推送：设备码登录（GitHub Copilot / xAI）要用户在浏览器里输入的
+   * 验证码。载荷 OauthDeviceCode；登录结束（成功 / 失败 / 取消）不另推，以 oauthLogin 的
+   * 返回为准。
+   */
+  providerOauthDeviceCode: "provider:oauth-device-code",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   /**
@@ -424,11 +432,25 @@ export interface ProviderSecrets {
  */
 export interface OauthLoginInput {
   id: string;
+  /**
+   * 走哪家的登录流程 = 目录条目 id（`claude` / `openai-codex` / `github-copilot` / `xai`）。
+   * 也决定新建时落盘的 kind 与默认 endpoint。
+   */
+  kind: string;
   displayName: string;
   /** 新建时 true（id 撞名拒绝）；已有 provider 重登录时缺省 */
   create?: boolean;
   /** 仅 create 时生效：登录后启用的模型清单（一般空，登录后用 Fetch 拉取） */
   models?: ModelDecl[];
+}
+
+/** 设备码登录要用户在浏览器里输入的码（providerOauthDeviceCode 的载荷） */
+export interface OauthDeviceCode {
+  /** 哪个 provider 的登录（OauthLoginInput.id） */
+  id: string;
+  userCode: string;
+  /** 输入验证码的页面（主进程已经替用户打开过一次） */
+  verificationUri: string;
 }
 
 /**

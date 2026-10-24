@@ -416,6 +416,7 @@ export function ProvidersView(props: {
     try {
       const result = await api.provider.oauthLogin({
         id: draft.id.trim(),
+        kind: known.id,
         displayName: draft.displayName.trim() || knownProviderDefaultName(known),
         ...(isNew ? { create: true, models: draft.models } : {}),
       });

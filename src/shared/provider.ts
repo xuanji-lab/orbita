@@ -41,6 +41,12 @@ export interface OauthCredential {
   /** 毫秒时间戳，已扣掉安全提前量（过期前该刷新） */
   expiresAt: number;
   accountEmail: string | null;
+  /**
+   * 登录流程自己要带的其余字段，续期与取请求鉴权时原样还给它：ChatGPT（Codex）的
+   * accountId、GitHub Copilot 的 enterpriseUrl 与 availableModelIds。Claude 没有。
+   * 形状归流程（pi 的 OAuthCredential 的扩展字段），我们只负责保管，不解读。
+   */
+  flowData?: Record<string, unknown>;
 }
 
 export type ProviderAuth =

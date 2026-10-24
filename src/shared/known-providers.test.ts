@@ -43,6 +43,9 @@ describe("knownProviderGroup —— 添加服务商目录的四个分区", () =>
 
   it("浏览器登录的订阅单独一区——不看计费口径（Claude 也是套餐计费，但不进套餐区）", () => {
     assert.equal(groupOf("claude"), "oauth");
+    assert.equal(groupOf("openai-codex"), "oauth");
+    assert.equal(groupOf("github-copilot"), "oauth");
+    assert.equal(groupOf("xai"), "oauth");
     for (const provider of KNOWN_PROVIDERS) {
       assert.equal(knownProviderGroup(provider) === "oauth", provider.auth === "oauth", provider.id);
     }
@@ -201,6 +204,9 @@ describe("未实测 —— 还没用真实账号验证过的条目如实标出",
       "doubao",
       "ark-coding-plan",
       "openai-responses-compatible",
+      "openai-codex",
+      "github-copilot",
+      "xai",
     ]) {
       assert.ok(ids.has(id), id);
     }
