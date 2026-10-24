@@ -27,7 +27,8 @@ import "./price-chart.css";
  * 价格 · 能力图（原型 7，2026-10-24 定稿）：设置 › 模型服务卡片墙下面，给「派子任务交给谁划算」
  * 当参考。门槛（≥ 2 个型号）由调用方判（price-chart-model 的 shouldShowPriceChart），这里只管画。
  *
- * - 一个点 = 已添加的（服务商，型号）× 思考档；头像就是点。实测点实心，估算点虚线空心框。
+ * - 一个点 = 已添加的（服务商，型号）× 思考档；头像就是点。实测点实心，估算点虚线空心框；
+ *   跑过但不够门槛的也按估算画，悬停里另写一行「实测 n 个任务 $x」。
  * - 横轴对数、纵轴线性；绿线是当前分类的帕累托前沿，前沿上的点带名字，其余悬停 / 聚焦看详情。
  * - 分类用左右按钮循环（默认 Agent 综合），每类各算一条前沿。
  * - 当前分类查不到的型号列「未上榜」，查得到但横轴定不了的列「缺官方单价」，都不硬画进图里。
@@ -341,6 +342,11 @@ export function PriceCapabilityChart(props: {
               </span>
             </span>
           </div>
+          {hovered.measured !== undefined && (
+            <div className="pc-tip-note">
+              {copy.tipMeasuredFew(hovered.measured.samples, formatCost(hovered.measured.cost))}
+            </div>
+          )}
           <div className="pc-tip-row">
             <span>{copy.tipProvider}</span>
             <span>{providerLabel(hovered.providerId)}</span>

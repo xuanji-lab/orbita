@@ -830,6 +830,7 @@ export const zh: Messages = {
       tipMeasured: (samples: number) => `实测 · ${samples} 个任务`,
       tipEstimated: "估算",
       tipReference: "估算 · 参考画像",
+      tipMeasuredFew: (samples: number, cost: string) => `实测 ${samples} 个任务 ${cost} · 样本太少，按估算画`,
       tipProvider: "服务商",
       tipBoard: "榜单条目",
       levelUnlabeled: "榜单未标档",
