@@ -253,7 +253,8 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     // 剥掉后缀也命中不了表的，继续往家族 / 服务商那两级走
     assert.deepEqual(modelAvatarOf("deepseek-v4-flash-0731"), { kind: "family", logo: "deepseek" });
     // 防误伤：尾段不是日期的不受影响
-    assert.deepEqual(modelAvatarOf("qwen3.8-27b"), { kind: "family", logo: "qwen" });
+    // （qwen3.6-35b 而不是 qwen3.8-27b：后者在头像 PR 里有了专属头像，拿它当「落家族标」的例子会和那边打架）
+    assert.deepEqual(modelAvatarOf("qwen3.6-35b"), { kind: "family", logo: "qwen" });
     assert.deepEqual(modelAvatarOf("seed-2.1-pro"), { kind: "family", logo: "doubao-seed" });
     assert.deepEqual(modelAvatarOf("kimi-k2.7-code"), { kind: "family", logo: "kimi" });
     // 白名单里真实存在的 -YYMM 后缀（不是日期，是变体号）：剥不动，仍按原 id 匹配
