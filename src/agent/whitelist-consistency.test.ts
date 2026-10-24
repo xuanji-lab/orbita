@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { KNOWN_MODELS } from "../shared/known-models.ts";
-import { KNOWN_PROVIDERS, catalogPreferenceOf, type KnownProvider } from "../shared/known-providers.ts";
+import { KNOWN_PROVIDERS, catalogPreferenceOf, knownAccessMethods, type KnownProvider } from "../shared/known-providers.ts";
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 import { protocolAddress, registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
@@ -184,7 +184,11 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
   });
 
   test("智谱 Coding Plan 的 glm-5.3：本家目录（zai-coding-cn）是 OpenAI 协议，会话仍走条目配的 Anthropic 端点", async () => {
-    const sides = await bothSides(entry("zhipu-coding"), "glm-5.3");
+    // 条目默认已跟 pi 改成 OpenAI Chat；这里模拟选了 Anthropic 的实例（含 10-24 之前建的老实例）
+    const sides = await bothSides(
+      { ...entry("zhipu-coding"), api: "anthropic-messages", baseUrl: "https://open.bigmodel.cn/api/anthropic" },
+      "glm-5.3",
+    );
     // 前提：目录条目的协议真的不一样，否则这条测的不是「不被目录改道」
     const catalogEntry = (await freshRuntime()).getModel("zai-coding-cn", "glm-5.3");
     assert.equal(catalogEntry?.api, "openai-completions");
@@ -192,6 +196,17 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
     assert.equal(sides.runtime?.baseUrl, "https://open.bigmodel.cn/api/anthropic");
     // 档位表照带（型号能力跟 id 走）
     assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["low", "high", "max"]);
+  });
+
+  test("与 pi 内建同名的条目选了另一种协议（DeepSeek 的 Anthropic 端点）：协议听条目的，不留内建的 openai-completions", async () => {
+    const sides = await bothSides(
+      { ...entry("deepseek"), api: "anthropic-messages", baseUrl: "https://api.deepseek.com/anthropic" },
+      "deepseek-v4-flash",
+    );
+    // 前提：内建条目真的是另一种协议
+    assert.equal((await freshRuntime()).getModel("deepseek", "deepseek-v4-flash")?.api, "openai-completions");
+    assert.equal(sides.runtime?.api, "anthropic-messages");
+    assert.equal(sides.runtime?.baseUrl, "https://api.deepseek.com/anthropic");
   });
 
   test("按量的智谱：地址是 paas/v4，不被带进 Coding Plan 的 coding/paas/v4", async () => {
@@ -216,13 +231,16 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
  * （走「只注册 auth 面」那条路），与一个白名单型号（走补注册那条路）。
  */
 describe("接入方式一致性 —— 会话里的协议与地址就是条目自己的", () => {
-  test("每个预填了地址的条目：本家目录型号、同名内建条目的型号与白名单型号都按条目的 api / baseUrl 注册", async () => {
+  test("每个预填了地址的条目 × 它的每一种接入方式：本家目录型号、同名内建条目的型号与白名单型号都按选中的 api / baseUrl 注册", async () => {
     const piRuntime = await freshRuntime();
     const piModels = (id: string | undefined) =>
       piRuntime.getProviders().find((provider) => provider.id === id)?.getModels() ?? [];
     const checked: string[] = [];
-    for (const known of KNOWN_PROVIDERS) {
-      if (known.baseUrl === "") continue;
+    for (const entry of KNOWN_PROVIDERS) {
+      if (entry.baseUrl === "") continue;
+      // 用户在详情页选了另一种协议：实例落盘的就是那一种的 api + baseUrl（只有默认那一种也照样核对）
+      for (const method of knownAccessMethods(entry)) {
+      const known = { ...entry, api: method.api, baseUrl: method.baseUrl };
       // 本家目录（catalogId）的全部型号 + 与我们的 id **同名**的 pi 内建条目的型号（qwen-token-plan 的坑）
       // + 一个白名单型号（走补注册那条路）
       const ids = new Set([...piModels(known.catalogId), ...piModels(known.id)].map((model) => model.id));
@@ -253,12 +271,19 @@ describe("接入方式一致性 —— 会话里的协议与地址就是条目�
           );
           assert.ok(pair, `${known.id}/${modelId} 的协议被改道了（${model.api} @ ${model.baseUrl}）`);
         }
-        checked.push(`${known.id}/${modelId}`);
+        checked.push(`${known.id}@${known.api}/${modelId}`);
+      }
       }
     }
     // 前提断言：真的核对过条目（不会因为全被跳过而永远为真），且智谱两条与 minimax-m3 在里面
     assert.ok(checked.length >= 50, `只核对了 ${checked.length} 条`);
-    for (const must of ["zhipu/glm-5.3", "zhipu-coding/glm-5.3", "opencode-go/minimax-m3"]) {
+    for (const must of [
+      "zhipu@openai-completions/glm-5.3",
+      "zhipu-coding@anthropic-messages/glm-5.3",
+      "zhipu-coding@openai-responses/glm-5.3",
+      "kimi-coding@openai-completions/kimi-for-coding",
+      "opencode-go@openai-completions/minimax-m3",
+    ]) {
       assert.ok(checked.includes(must), `${must} 没被核对`);
     }
   });

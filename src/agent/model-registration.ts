@@ -492,7 +492,19 @@ export function registerAndResolveModel(
     const registered = runtime.getModel(provider.id, decl.id);
     return registered !== undefined && protocolAddress(provider.catalogId, provider, registered.api) !== undefined;
   });
-  if (model === undefined || hasModelOverrides(provider.models) || whitelisted || readdressed) {
+  /**
+   * 我们的 id 与 pi 内建 id 同名（deepseek / zai / kimi-coding / minimax）、而用户选了**另一种**
+   * 协议时：只注 auth 面，pi 只把条目地址盖到内建型号上、协议仍是内建的——会话拿
+   * openai-completions 去打 `api.deepseek.com/anthropic`（2026-10-24 接入方式选择器的一致性
+   * 测试拦下）。目录描述的不是这个端点（不是多协议网关）时，必须补注册，让协议听条目的。
+   */
+  const sameIdModels = runtime.getProviders().find((item) => item.id === provider.id)?.getModels() ?? [];
+  const reprotocoled =
+    provider.models.some((decl) => {
+      const registered = runtime.getModel(provider.id, decl.id);
+      return registered !== undefined && registered.api !== provider.api;
+    }) && !catalogDescribesEndpoint(sameIdModels, provider);
+  if (model === undefined || hasModelOverrides(provider.models) || whitelisted || readdressed || reprotocoled) {
     /**
      * **拿哪家的目录条目去保留合并：按 catalogId，不是按我们自己的 id。**
      *
