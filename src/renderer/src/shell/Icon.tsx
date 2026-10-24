@@ -11,6 +11,7 @@ import arrowRight from "../../../../design-system/assets/icons/lucide/arrow-righ
 import arrowUp from "../../../../design-system/assets/icons/lucide/arrow-up.svg?raw";
 import arrowUpRight from "../../../../design-system/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../design-system/assets/icons/lucide/blend.svg?raw";
+import bold from "../../../../design-system/assets/icons/lucide/bold.svg?raw";
 import bell from "../../../../design-system/assets/icons/lucide/bell.svg?raw";
 import blocks from "../../../../design-system/assets/icons/lucide/blocks.svg?raw";
 import book from "../../../../design-system/assets/icons/lucide/book.svg?raw";
@@ -45,8 +46,10 @@ import fileJson2 from "../../../../design-system/assets/icons/lucide/file-json-2
 import fileSpreadsheet from "../../../../design-system/assets/icons/lucide/file-spreadsheet.svg?raw";
 import fileVideo2 from "../../../../design-system/assets/icons/lucide/file-video-2.svg?raw";
 import presentation from "../../../../design-system/assets/icons/lucide/presentation.svg?raw";
+import save from "../../../../design-system/assets/icons/lucide/save.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../design-system/assets/icons/lucide/image.svg?raw";
+import italic from "../../../../design-system/assets/icons/lucide/italic.svg?raw";
 import info from "../../../../design-system/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../design-system/assets/icons/lucide/fold-vertical.svg?raw";
 import flaskConical from "../../../../design-system/assets/icons/lucide/flask-conical.svg?raw";
@@ -95,6 +98,7 @@ import notebookPen from "../../../../design-system/assets/icons/lucide/notebook-
 import octagonX from "../../../../design-system/assets/icons/lucide/octagon-x.svg?raw";
 import orbit from "../../../../design-system/assets/icons/lucide/orbit.svg?raw";
 import plus from "../../../../design-system/assets/icons/lucide/plus.svg?raw";
+import redo2 from "../../../../design-system/assets/icons/lucide/redo-2.svg?raw";
 import refreshCw from "../../../../design-system/assets/icons/lucide/refresh-cw.svg?raw";
 import rotateCcw from "../../../../design-system/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../design-system/assets/icons/lucide/settings.svg?raw";
@@ -110,6 +114,7 @@ import waypoints from "../../../../design-system/assets/icons/lucide/waypoints.s
 import sliders from "../../../../design-system/assets/icons/lucide/sliders.svg?raw";
 import star from "../../../../design-system/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../design-system/assets/icons/lucide/triangle-alert.svg?raw";
+import underline from "../../../../design-system/assets/icons/lucide/underline.svg?raw";
 import undo2 from "../../../../design-system/assets/icons/lucide/undo-2.svg?raw";
 import user from "../../../../design-system/assets/icons/lucide/user.svg?raw";
 import unlink from "../../../../design-system/assets/icons/lucide/unlink.svg?raw";
@@ -133,6 +138,7 @@ const ICONS = {
   bell,
   blend,
   blocks,
+  bold,
   book,
   bookmark,
   "book-open": bookOpen,
@@ -192,6 +198,7 @@ const ICONS = {
   "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,
   image,
+  italic,
   info,
   key,
   lightbulb,
@@ -227,8 +234,10 @@ const ICONS = {
   power,
   quote,
   plus,
+  "redo-2": redo2,
   "refresh-cw": refreshCw,
   "rotate-ccw": rotateCcw,
+  "save": save,
   settings,
   "shield-check": shieldCheck,
   waypoints,
@@ -242,6 +251,7 @@ const ICONS = {
   "file-text": fileText,
   "trash-2": trash2,
   "triangle-alert": triangleAlert,
+  "underline": underline,
   "undo-2": undo2,
   user,
   unlink,
