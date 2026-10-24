@@ -21,7 +21,7 @@ import { RequestBroker } from "./request-broker.ts";
 import {
   COMPUTER_USE_BROWSER_IDLE_MS,
   COMPUTER_USE_BROWSER_MAX,
-  GUEST_COMMAND_TIMEOUT_MS,
+  COMPUTER_USE_CDP_TIMEOUT_MS,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
 } from "../shared/computer-use.ts";
@@ -44,17 +44,18 @@ export const SANDBOX_BROWSER_TOOL_NAMES = [
 ] as const;
 
 /**
- * broker 的兜底超时：必须比主进程等 guest 命令的 GUEST_COMMAND_TIMEOUT_MS（45s）更长，
- * 否则主进程还在等（映射目录黑窗实测 8–20s），agent 先把真成功判成「主进程失联」——
- * 模型看到失败会重做同一个动作（computer-tools.ts 同款考量，那边踩过一轮）。
+ * broker 的兜底超时：必须比主进程等一条 guest **浏览器命令**的线（COMPUTER_USE_CDP_TIMEOUT_MS，
+ * 70s）更长，否则主进程还在等（映射目录黑窗 + guest 里 40s 的 worker 杀线），agent 先把真成功
+ * 判成「主进程失联」——模型看到失败会重做同一个动作（computer-tools.ts 同款考量，那边踩过一轮）。
+ * 取主进程线 + 15s 余量：主进程自己的超时会回带人话的错误，broker 这条只兑「主进程失联」。
  */
-const BROKER_TIMEOUT_MS = GUEST_COMMAND_TIMEOUT_MS + 15_000;
+const BROKER_TIMEOUT_MS = COMPUTER_USE_CDP_TIMEOUT_MS + 15_000;
 
 /**
  * 导航要给两次 guest 命令留余量：先 cdp-start（冷启动实测 2.5s，最坏 25s 超时切 no-sandbox 重试）
- * 再 cdp-nav（页面加载 20s）。60s 会把合法的慢启动判死。
+ * 再 cdp-nav（页面加载 20s）。两条都走 CDP 线—— 45s 会把合法的慢启动判死（而且比那 40s 杀线还短）。
  */
-const NAVIGATE_TIMEOUT_MS = BROKER_TIMEOUT_MS + GUEST_COMMAND_TIMEOUT_MS;
+const NAVIGATE_TIMEOUT_MS = BROKER_TIMEOUT_MS + COMPUTER_USE_CDP_TIMEOUT_MS;
 
 /** 沙箱里的网页同样是**不可信输入**：描述里必须写，模型才会把页面上的指令当数据 */
 const UNTRUSTED =

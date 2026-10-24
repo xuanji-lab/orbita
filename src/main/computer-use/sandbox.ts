@@ -25,7 +25,6 @@ import {
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
   computerUseGuestCommands,
-  GUEST_COMMAND_TIMEOUT_MS,
   type ComputerUseGuestCommand,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -254,7 +253,10 @@ export interface SandboxDeps {
   readyTimeoutMs?: number;
   /** bridge.json 轮询间隔，默认 500ms；测试传小值 */
   bridgePollIntervalMs?: number;
-  /** 截图 / 命令超时，默认 45_000（黑窗余量，见 bridge-client.ts 的 GUEST_COMMAND_TIMEOUT_MS） */
+  /**
+   * 命令超时的覆盖值（测试传小值）。不传就按**命令类**取：cdp-* 走 COMPUTER_USE_CDP_TIMEOUT_MS，
+   * 其余（像素 / 桌面）走 GUEST_COMMAND_TIMEOUT_MS（规则在 shared/computer-use.ts）。
+   */
   guestTimeoutMs?: number;
   /** 状态机每次迁移的出口（index.ts 接 broadcastComputerUseStatus） */
   onStatus?: (status: SandboxStatus) => void;
@@ -512,7 +514,7 @@ export class SandboxController {
       const shot = await fetchGuestScreenshot(
         this.outDir(),
         clampMaxWidth(maxWidth),
-        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+        this.deps.guestTimeoutMs,
       );
       return {
         ok: true,
@@ -545,7 +547,7 @@ export class SandboxController {
         this.outDir(),
         command,
         fields,
-        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+        this.deps.guestTimeoutMs,
       );
       return { ok: true };
     } catch (cause: unknown) {
@@ -568,7 +570,7 @@ export class SandboxController {
         this.outDir(),
         command,
         fields,
-        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+        this.deps.guestTimeoutMs,
       );
       return { ok: true, resp };
     } catch (cause: unknown) {
@@ -590,7 +592,7 @@ export class SandboxController {
         this.outDir(),
         command,
         fields,
-        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+        this.deps.guestTimeoutMs,
       );
       return { ok: true, jpeg: shot.jpeg, resp: shot.resp };
     } catch (cause: unknown) {

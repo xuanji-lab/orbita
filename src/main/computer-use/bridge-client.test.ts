@@ -5,11 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   fetchGuestScreenshot,
+  guestTimeoutMessage,
   isPlainScreenshotFileName,
   resetGuestCommandSeq,
   sendGuestCommand,
 } from "./bridge-client.ts";
-import { COMPUTER_USE_CMD_DIR, GUEST_COMMAND_TIMEOUT_MS } from "../../shared/computer-use.ts";
+import {
+  COMPUTER_USE_CDP_TIMEOUT_MS,
+  COMPUTER_USE_CMD_DIR,
+  computerUseGuestTimeoutMs,
+  GUEST_COMMAND_TIMEOUT_MS,
+} from "../../shared/computer-use.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -146,6 +152,46 @@ describe("bridge-client（文件协议）", () => {
     assert.equal(GUEST_COMMAND_TIMEOUT_MS, 45_000);
   });
 
+  test("浏览器命令走更长的线：容得下 40s 杀线 + 那句话走回宿主的一跳", () => {
+    // 2026-10-25 真机：40s 杀线确实杀了 worker，但宿主 45s 已经放弃——那句「通道已重启、
+    // 可以用 cdp-status 确认 / 改用像素工具」没送到模型面前，模型只看到一句笼统的「没有响应」。
+    // 那一刻起宿主还要等 resp 过来：同一台机器满载实测每一跳 8–19s（8+40+10 ≈ 59s）。
+    assert.equal(COMPUTER_USE_CDP_TIMEOUT_MS, 70_000);
+    const bridgeKillLineMs = 40_000; // guest-bridge/WorkerHost.cs 的 CommandTimeoutMs
+    assert.ok(
+      COMPUTER_USE_CDP_TIMEOUT_MS > bridgeKillLineMs + 15_000,
+      "宿主线必须比杀线长出「杀线之后那句话再走一跳」的余量（实测最坏 19s）",
+    );
+    assert.ok(COMPUTER_USE_CDP_TIMEOUT_MS > GUEST_COMMAND_TIMEOUT_MS, "浏览器命令比像素命令长");
+
+    // 规则只有一份：按命令名取线
+    assert.equal(computerUseGuestTimeoutMs("cdp-nav"), COMPUTER_USE_CDP_TIMEOUT_MS);
+    assert.equal(computerUseGuestTimeoutMs("cdp-shot"), COMPUTER_USE_CDP_TIMEOUT_MS);
+    assert.equal(computerUseGuestTimeoutMs("cdp-status"), COMPUTER_USE_CDP_TIMEOUT_MS);
+    for (const pixel of ["screenshot", "click", "type", "key", "scroll", "ping"]) {
+      assert.equal(computerUseGuestTimeoutMs(pixel), GUEST_COMMAND_TIMEOUT_MS, pixel);
+    }
+  });
+
+  test("超时文案能照着做：浏览器命令指向 cdp-status / 像素工具，桌面命令指向先截图", () => {
+    // 模型看不见 UI：一句「没有响应」它只能重试同一个动作。两句都要带下一步。
+    const browser = guestTimeoutMessage("cdp-nav", COMPUTER_USE_CDP_TIMEOUT_MS);
+    assert.match(browser, /沙箱里的浏览器没有响应/);
+    assert.match(browser, /cdp-nav 超时 70s/);
+    assert.match(browser, /cdp-status/);
+    assert.match(browser, /computer_screenshot \/ computer_click/);
+
+    const desktop = guestTimeoutMessage("screenshot", GUEST_COMMAND_TIMEOUT_MS);
+    assert.match(desktop, /沙箱里的桌面没有响应/);
+    assert.match(desktop, /screenshot 超时 45s/);
+    assert.match(desktop, /computer_screenshot/);
+
+    // 超时不是「缓存过期」：宿主的 cdp.ts 靠这两个词做自愈重试，超时不该触发它
+    for (const text of [browser, desktop]) {
+      assert.ok(!text.includes("没有在运行") && !text.includes("没有启动"), text);
+    }
+  });
+
   test("命令序号：单调递增；resetGuestCommandSeq 后从 1 重新数（与桥的快路径对齐）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true } }));
@@ -194,10 +240,16 @@ describe("bridge-client（文件协议）", () => {
     }
   });
 
-  test("通用命令：桥死了不回 → 超时抛出", async () => {
+  test("通用命令：桥死了不回 → 超时抛出（带下一步，不是一句干巴巴的「没有响应」）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
     try {
-      await assert.rejects(sendGuestCommand(dir, "click", { x: 1, y: 2 }, 300), /没有响应/);
+      await assert.rejects(sendGuestCommand(dir, "click", { x: 1, y: 2 }, 300), (cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        assert.match(message, /没有响应/);
+        assert.match(message, /click 超时 300ms/);
+        assert.match(message, /computer_screenshot/, "要告诉模型下一步做什么");
+        return true;
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
