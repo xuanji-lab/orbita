@@ -69,7 +69,9 @@ export function Chip(props: {
         minWidth: props.fixedWidth,
         gap: props.compact === true ? 0 : 5,
         maxWidth: 260,
-        padding: props.compact === true ? "3px 6px" : "3px 8px",
+        // 带头像的芯片（模型芯片，头像 20px）收窄上下与左边距：芯片总高仍与同排的文字芯片齐平，
+        // 头像贴近左缘、不显得被框在一个更大的胶囊里
+        padding: props.compact === true ? "3px 6px" : props.leading !== undefined ? "2px 8px 2px 2px" : "3px 8px",
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",

@@ -1098,7 +1098,8 @@ export function ProvidersView(props: {
                             <ModelAvatar
                               modelId={model.id}
                               provider={{ kindId: draft.kind, label: draft.displayName || (known?.label ?? draft.kind) }}
-                              size={18}
+                              // 24px：单行 36px 行高的三分之二，再大要把行撑高（2026-10-24 用户：原来的 18px 太小）
+                              size={24}
                             />
                             {displayName !== model.id && <span className="pv-mname">{displayName}</span>}
                             <span className={`pv-mid${displayName !== model.id ? " dim" : ""}`} title={model.id}>

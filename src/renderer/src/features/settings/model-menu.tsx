@@ -95,7 +95,9 @@ export function modelChipParts(
   const cell =
     provider === undefined ? { kindId: selected.providerId, label: selected.providerId } : railVendorCell(provider);
   return {
-    avatar: <ModelAvatar modelId={selected.modelId} provider={cell} size={14} />,
+    // 20px = 输入框发送键（28px 圆）的内接正方形（28 / √2 ≈ 19.8）：头像在圆里刚好顶住
+    // （2026-10-24 用户：「composer 里的 chip 的模型 avatar 就是刚好在圆形里顶住的方形」）
+    avatar: <ModelAvatar modelId={selected.modelId} provider={cell} size={20} />,
     name,
     // 名字就是 id 时不再写第二遍
     detail: name === selected.modelId ? cell.label : `${cell.label} · ${selected.modelId}`,
@@ -362,7 +364,8 @@ export function modelCardItems(options: {
           }),
       // 主行换成显示名之后，按 id 与服务商名照样要搜得到
       searchText: `${declared.id} ${provider.displayName}`,
-      avatar: <ModelAvatar modelId={declared.id} provider={railVendorCell(provider)} size={20} />,
+      // 32px：两行行（48px，上下各留 4px）里约等于两行文字的高度（2026-10-24 用户：原来的 20px 太小）
+      avatar: <ModelAvatar modelId={declared.id} provider={railVendorCell(provider)} size={32} />,
       badge: (
         <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
           <span className="pv-badge" title={options.t.modelMenu.contextWindow}>

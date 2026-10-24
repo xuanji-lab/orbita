@@ -724,8 +724,8 @@ function MenuRow(props: {
         // 图标槽 14px：里面的图标就是 13px，16 的槽只是每行白多一道缝。
         // label 和 hint 合用中间这一列（见下面的内层 flex）：hint 太长会把
         // label 挤没，就是这一行的宽度分配方式（2026-09-23 修复）。
-        // 有头像的行（模型卡片）首列放 20px 头像，留 2px 给选中的那圈描边
-        gridTemplateColumns: item.avatar === undefined ? "14px minmax(0,1fr) auto" : "22px minmax(0,1fr) auto",
+        // 有头像的行（模型卡片）首列放 32px 头像，留 2px 给选中的那圈描边
+        gridTemplateColumns: item.avatar === undefined ? "14px minmax(0,1fr) auto" : "34px minmax(0,1fr) auto",
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
