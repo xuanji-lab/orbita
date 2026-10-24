@@ -165,6 +165,100 @@ describe("LatexRunner —— 产物定位（M2）", () => {
   });
 });
 
+/*
+ * xelatex 的日志写的是 `.xdv`（它先出 XDV，再由 xdvipdfmx 转 PDF）。把 XDV 当产物
+ * 交给调用方，打开的就是一个 .xdv——中文主路径上人人都踩。
+ */
+describe("LatexRunner —— 只把 .pdf 当产物（xelatex 的 .xdv）", () => {
+  test("日志写 Output written on build/main.xdv，且两个文件都在：返回同目录同名的 .pdf", async () => {
+    const dir = project({ "main.tex": "\\documentclass{ctexart}" });
+    writeFileSync(
+      join(dir, "fake-xelatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        // 真 xelatex 的顺序：先写 XDV，日志记 XDV，再由 xdvipdfmx 写 PDF
+        'writeFileSync(join(out, "main.xdv"), "XDV");',
+        'writeFileSync(join(out, "main.pdf"), "%PDF-1.5 fake\\n");',
+        'writeFileSync(join(out, "main.log"), "Output written on build/main.xdv (1 page, 516 bytes).\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-xelatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.pdf, join(resolve(dir), "build", "main.pdf"));
+    assert.equal(result.pages, 1);
+    assert.equal(result.pdfFresh, true);
+  });
+
+  test("只有 .xdv、没有 .pdf：不返回 .xdv（否则调用方拿中间格式当 PDF）", async () => {
+    const dir = project({ "main.tex": "\\documentclass{ctexart}" });
+    writeFileSync(
+      join(dir, "fake-xelatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        'writeFileSync(join(out, "main.xdv"), "XDV");',
+        'writeFileSync(join(out, "main.log"), "Output written on build/main.xdv (1 page, 516 bytes).\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-xelatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.pdf, null);
+    assert.equal(result.pdfFresh, false);
+    // 回 0 却没有 PDF 是假成功，得说清楚（不能悄悄交个 .xdv 蒙混过关）
+    assert.equal(result.status, "compile-error");
+    assert.ok(result.errors.some((issue) => /no PDF was found/.test(issue.message)));
+  });
+
+  test("大写 .PDF 也算 PDF", async () => {
+    const dir = project({ "main.tex": "\\documentclass{ctexart}" });
+    writeFileSync(
+      join(dir, "fake-xelatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        'writeFileSync(join(out, "main.PDF"), "%PDF-1.5 fake\\n");',
+        'writeFileSync(join(out, "main.log"), "Output written on build/main.PDF (1 page, 9 bytes).\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-xelatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok");
+    assert.ok(result.pdf !== null && result.pdf.endsWith("main.PDF"), `拿到的是 ${String(result.pdf)}`);
+  });
+});
+
 describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
   test("同一坏文档连编两次：第二次仍拿到 file:line，但 pages 不来自陈旧日志", async () => {
     const dir = project({ "main.tex": "\\documentclass{article}" });

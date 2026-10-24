@@ -374,6 +374,12 @@ function outputDirs(plan: LatexPlan): string[] {
 /**
  * PDF 在哪。日志里的 `Output written on <path>` 最权威——它记录的是引擎真正写的
  * 文件，可能不在我们猜的任何一个 outDir 下（评审 M2）。找不到再按候选目录找。
+ *
+ * **只认 `.pdf`**（大小写不敏感）。xelatex 的日志天生写
+ * `Output written on build/main.xdv (1 page, 516 bytes).`——那是引擎的中间格式，
+ * 随后由 xdvipdfmx 写出同目录同名的 `main.pdf`；把 `.xdv` 当产物交出去，调用方
+ * 会拿它当 PDF 打开（xelatex 又是中文主路径，这条踩到的人最多）。所以日志给的
+ * 不是 `.pdf` 时，按同目录同名的 `.pdf` 再试一次，再退到候选目录。
  */
 function locatePdf(
   output: string | null,
@@ -381,11 +387,21 @@ function locatePdf(
   mainBase: string,
   dir: string,
 ): string | null {
-  const candidates = [
-    ...(output === null ? [] : [isAbsolute(output) ? output : resolve(dir, output)]),
-    ...dirs.map((candidate) => join(candidate, `${mainBase}.pdf`)),
-  ];
-  return candidates.find((path) => existsSync(path)) ?? null;
+  const candidates: string[] = [];
+  if (output !== null) {
+    const fromLog = isAbsolute(output) ? output : resolve(dir, output);
+    candidates.push(fromLog);
+    // `…/main.xdv` → `…/main.pdf`：换扩展名而不是拼字符串，路径里有 `.` 的目录也安全
+    const asPdf = `${fromLog.slice(0, fromLog.length - extname(fromLog).length)}.pdf`;
+    if (asPdf !== fromLog) candidates.push(asPdf);
+  }
+  for (const candidate of dirs) candidates.push(join(candidate, `${mainBase}.pdf`));
+  return candidates.find(isPdfFile) ?? null;
+}
+
+/** 存在且扩展名是 .pdf（大小写不敏感）。`.xdv` / `.dvi` 是中间产物，不是给用户开的 PDF */
+function isPdfFile(path: string): boolean {
+  return existsSync(path) && extname(path).toLowerCase() === ".pdf";
 }
 
 interface PickedLog {
