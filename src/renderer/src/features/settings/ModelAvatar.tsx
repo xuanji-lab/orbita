@@ -33,8 +33,10 @@ import { VendorLogo } from "./VendorLogo";
  * - 公众号封面（推文在微信列表里显示的封面图，不是正文里的图；原件与裁切脚本在本地登记页
  *   docs/model-avatars/tools/）：kimi-k3（磁感线）、glm-5.3（数字三角）、glm-5.3-flash（光锥）、
  *   deepseek-v4.1-flash（抹掉封面上的字，鲸鱼标放进金色光环）、deepseek-v4-pro（标题下的
- *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（封面蝴蝶，左下角按封面的细框 + 刻度尺画 Pro / Flash，
- *   不铺底色；字体 Manrope，OFL）。
+ *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（两只蝴蝶，不写字——2026-10-25 用户：「上一版的作为 pro，
+ *   当前版的作为 flash，然后把 pro 和 flash 的字体移除掉」：Pro 用 V2.6 横幅里的正面蝴蝶（橙色翼尖），抹掉压在左翼的
+ *   「v2.6」；Flash 用 V2.6 推文封面的侧面蓝翼蝴蝶。两枚靠颜色与姿态区分，16px 下也分得开，原来的 Pro / Flash
+ *   字样在 20px 以下读不出）。
  * - gpt-astra / gpt-sol / gpt-luna：developers.openai.com 模型页三张旗舰横幅的无字底图（/images/api/models/
  *   <id>-texture.webp）——把星系、太阳、月亮抠出来缩到方图约三分之一，放在同图取样的星空底上；
  *   月亮在原图里被右缘切掉一截，按左半镜像补成整轮（2026-10-25 用户：「月亮和太阳的占比放小一点」）；
