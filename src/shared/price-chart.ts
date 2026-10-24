@@ -3,13 +3,16 @@
  *
  *   usage:price-chart（agent-ipc.ts 的 ipcChannels.usagePriceChart）  renderer 拉一份现算的图数据
  *
- * 设置 › 模型服务的卡片墙下面那张散点图：一个点 = 已添加的（服务商，型号）× 思考档。
+ * 设置 › 模型服务的卡片墙下面那张散点图：**一个点 = 型号 × 思考档**，也就是一条榜单条目
+ * （用户 2026-10-24：「其实只要看得出模型的数据就好了，不关心它有多少个服务商」）。同一个型号
+ * 挂在几家服务商下、或用别名（k3 / kimi-k3）添加，都合成一个点，契约里因此没有服务商字段。
  *
  * - **纵轴：分数**。只用 Arena 官方 HF 数据集 `lmarena-ai/leaderboard-dataset`（CC-BY-4.0，
  *   须署名）——快照随应用分发（src/main/usage/arena-snapshot.json，带 revision）。arena.ai
  *   网页上的成本 / 单价 / Agent 其余三类分数条款禁止分发，一个数字都不进来。
  * - **横轴：用户自己的「每任务成本」**（美元，对数刻度）。一个任务 = 一个会话里同一型号 ×
- *   同一思考档的连续一段，中途换型号或换档就切开。实测点取各段花费的中位数；没用过的
+ *   同一思考档的连续一段，中途换型号或换档就切开。实测点取这个型号 × 档在各服务商下全部任务
+ *   花费的中位数；没用过的
  *   型号 × 档按官方单价 × 用户自己的 token 构成 × 任务 token 中位数估算（空心点）。
  *
  * 计算全在主进程（main/usage/price-chart.ts）：要读全部会话 JSONL 与 pi 本子，renderer
@@ -45,7 +48,10 @@ export type PriceChartCostBasis =
   | "reference";
 
 export interface PriceChartPoint {
-  providerId: string;
+  /**
+   * 代表这个型号的 Orbita id（显示名与头像按它取）：同一型号的几个别名里，取服务商列表里
+   * 最先添加的那一个。
+   */
   modelId: string;
   /** 榜单条目上的思考档；null = 榜单没标档（不猜档，横轴取这个型号全部档位的任务） */
   thinkingLevel: ThinkingLevel | null;
@@ -62,15 +68,14 @@ export interface PriceChartPoint {
   /** 实测点的样本数（任务段数）；估算点为 0 */
   samples: number;
   /**
-   * 估算点上**不够门槛的实测**：这个服务商 × 型号 × 档跑过、但任务数不到门槛（见主进程
+   * 估算点上**不够门槛的实测**：这个型号 × 档跑过（各服务商合计）、但任务数不到门槛（见主进程
    * MIN_MEASURED_TASKS），点按估算画，悬停时另写一行「实测 n 个任务 $x」。实测点上缺席。
    */
   measured?: { cost: number; samples: number };
 }
 
-/** 已添加但不能画进图的型号（列在图下） */
+/** 已添加但不能画进图的型号（列在图下，按型号去重：别名合成一条，不缀服务商） */
 export interface PriceChartModelRef {
-  providerId: string;
   modelId: string;
 }
 
