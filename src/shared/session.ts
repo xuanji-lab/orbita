@@ -12,7 +12,7 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
 import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
-import { parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { isThinkingLevel, parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillSegments } from "./skill.ts";
 import { stripInvocationBlock } from "./invocation.ts";
@@ -217,12 +217,36 @@ export function isIntentRecallRecord(raw: unknown): raw is IntentRecallRecord {
  */
 export type SessionRecord =
   | TranscriptItem
+  | StampedAssistantRecord
   | CompactedRecord
   | ChannelMarkRecord
   | FileTurnRecord
   | RevertRecord
   | UndoRecord
   | IntentRecallRecord;
+
+/**
+ * 落盘的 assistant 记录多一个 Orbita 自己盖的字段：**这一轮实际生效的思考档**。
+ *
+ * 为什么要盖：pi 的消息条目不带档位，pi 本子里的 `thinking_level_change` 只在建会话与
+ * 手动压缩前后写——续会话时 sdk 见本子里已有一条就不再写，会话中途改档在两本账里都
+ * 留不下痕迹（orbita-dev 2026-10-24 实测：137 条原生会话里 23 条 meta 的档与 pi 本子
+ * 最后一条对不上）。「价格 · 能力图」按「型号 × 档」算每任务成本，档必须逐轮可考。
+ *
+ * 值取开轮时 runtime 推的 `thinking` 事件（clamp 之后的真值，不是用户点的意图），
+ * 由主进程 recorder 在落盘同一刻盖上。缺席 = 盖章之前的旧记录，读者按 pi 本子的
+ * 时间线补（main/usage/task-cost.ts）。协议加字段是加法：不认识它的读者原样忽略。
+ */
+export type StampedAssistantRecord = Extract<TranscriptItem, { role: "assistant" }> & {
+  thinkingLevel?: ThinkingLevel;
+};
+
+/** 记录上盖的档（缺席或坏值 = undefined，不兑默认——补不补、拿什么补是读者的事） */
+export function stampedThinkingLevel(record: SessionRecord): ThinkingLevel | undefined {
+  if (record.role !== "assistant" || !("thinkingLevel" in record)) return undefined;
+  const level: unknown = record.thinkingLevel;
+  return isThinkingLevel(level) ? level : undefined;
+}
 
 /**
  * 渲染层的合并记录：SessionRecord 外加轮尾账的**视图形**（FileTurnView——剥掉快照
