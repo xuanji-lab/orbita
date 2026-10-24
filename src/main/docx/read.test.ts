@@ -114,3 +114,10 @@ describe("readDocxFile —— 挂载前的页数粗估依据", () => {
     assert.deepEqual(result.stats, { paragraphs: 3, pageBreaks: 1 });
   });
 });
+
+describe("readDocxFile —— 打开时文件已经不在了", () => {
+  test("ENOENT 回 invalid(missing)，不抛 stat 的原始报错", async () => {
+    const result = await readDocxFile(join(dir, "never-existed.docx"));
+    assert.deepEqual(result, { kind: "invalid", reason: "missing", size: 0, modifiedAt: 0 });
+  });
+});

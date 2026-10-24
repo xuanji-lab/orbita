@@ -20,6 +20,7 @@ import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { PanelButton, PanelLine } from "../../shell/RightPanel";
 import { docxFacts, docxRepackReasons, type DocxFactsNode, type DocxRepackReason } from "./docx-change.ts";
+import { registerDocxFlush, type DocxFlushOutcome } from "./docx-flush.ts";
 
 /**
  * 应用内 docx 轻量编辑（issue #273 的第一刀）：打开、分页显示、改字、保存。
@@ -124,10 +125,12 @@ export function DocxView(props: { request: FileListRequest; reloadToken: number 
       <div className="file-preview-empty">
         <Icon name="file-text" size={24} style={{ color: "var(--color-text-tertiary)" }} />
         <PanelLine>{t.docx.invalid[state.reason]}</PanelLine>
-        <PanelButton onClick={openDefault}>
-          <Icon name="external-link" size={14} />
-          {t.files.openDefault}
-        </PanelButton>
+        {state.reason !== "missing" && (
+          <PanelButton onClick={openDefault}>
+            <Icon name="external-link" size={14} />
+            {t.files.openDefault}
+          </PanelButton>
+        )}
       </div>
     );
   }
@@ -180,6 +183,9 @@ type Marks = { bold: boolean; italic: boolean; underline: boolean };
 
 const NO_MARKS: Marks = { bold: false, italic: false, underline: false };
 
+/** 不以单字符出现、但真的会改文档的键（其余编辑键 key.length === 1） */
+const EDIT_KEYS = new Set(["Backspace", "Delete", "Enter", "Tab"]);
+
 /**
  * 挂着引擎的编辑面。`opened.hash` 是这一刻磁盘内容的身份：每次保存都带着它去判冲突，
  * 保存成功后换成新内容的 hash —— 于是「外部改了文件」与「我自己刚存过」不会混为一谈。
@@ -208,14 +214,23 @@ function DocxSurface(props: {
   const [conflict, setConflict] = useState<"changed" | "missing" | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const [backupPath, setBackupPath] = useState<string | null>(null);
+  /** 保存失败的原始信息：状态栏只写一句「保存失败」，细节放提示条（长报错不挤工具栏） */
+  const [saveDetail, setSaveDetail] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   /** 磁盘内容的 hash：保存时的冲突判据，保存成功后更新 */
   const hashRef = useRef(opened.hash);
   /** 打开时的文档事实：保存前比对，判「会不会整份重排」 */
   const baselineRef = useRef<ReturnType<typeof docxFacts> | null>(null);
   const dirtyRef = useRef(false);
-  const busyRef = useRef(false);
-  const queuedRef = useRef(false);
+  /**
+   * 改动计数。保存期间用户还能继续打字（引擎不锁输入），一次「旧快照」保存成功
+   * 不能把状态说成「已保存」——落盘的是改动发生之前的那一版。所以每次改动 +1，
+   * 保存前记一次，成功时只有计数没动才算干净。
+   */
+  const editSeqRef = useRef(0);
+  /** 保存串行队列：自动保存、Ctrl+S、切走前的 flush 全排在这里，不会两条 rename 交叉 */
+  const chainRef = useRef<Promise<unknown>>(Promise.resolve());
   const confirmedRef = useRef(false);
   /**
    * 引擎自己报告「这次保存发生了保真回退」（onError 里的 fidelity fallback）。
@@ -226,8 +241,9 @@ function DocxSurface(props: {
   const timerRef = useRef<number | null>(null);
   const oversizeRef = useRef(false);
   const conflictRef = useRef(false);
-  /** 最新一版保存函数：键盘监听与定时器都经过它，闭包不会读到旧的 state */
+  /** 最新一版保存 / flush：键盘监听、定时器与登记表都经过它们，闭包不会读到旧的 state */
   const saveRef = useRef<(kind: "auto" | "manual") => void>(() => undefined);
+  const flushRef = useRef<() => Promise<DocxFlushOutcome>>(async () => ({ ok: true }));
 
   const getView = (): EditorView | null => viewRef.current;
 
@@ -318,9 +334,16 @@ function DocxSurface(props: {
     [syncMarks],
   );
 
-  const scheduleAutosave = useCallback(() => {
+  /**
+   * 用户一敲键就算「未保存」。不能只等引擎的 `onChange`：它比真实输入晚 0.7–1.5 s
+   * （评审复现的丢字窗口就是这段延迟 + 自动保存的 1.5 s 定时器叠出来的），
+   * 状态栏在那段时间里说着「未改动」，切走就没人救了。
+   */
+  const markDirty = useCallback(() => {
+    editSeqRef.current += 1;
     dirtyRef.current = true;
-    setSaveState({ kind: "dirty" });
+    // 已经是 dirty 就返回同一个对象（React 跳过这次更新）：否则每敲一个字都整树重渲染
+    setSaveState((prev) => (prev.kind === "dirty" ? prev : { kind: "dirty" }));
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
@@ -333,7 +356,7 @@ function DocxSurface(props: {
    * 让引擎重跑（并再次回调我们），轻则白重渲染、重则渲染循环。
    */
   const onSelectionChange = useCallback(() => syncMarks(), [syncMarks]);
-  const onChange = useCallback(() => scheduleAutosave(), [scheduleAutosave]);
+  const onChange = useCallback(() => markDirty(), [markDirty]);
   const onEngineError = useCallback((error: Error) => {
     // 保真回退是「需要确认」，不是「坏了」：交给保存流程里的闸门处理
     if (/fidelity fallback/i.test(error.message)) {
@@ -343,23 +366,33 @@ function DocxSurface(props: {
     setFatal(error.message);
   }, []);
 
+  /**
+   * 还有没有没落盘的东西。**两个来源取或**：自己的脏标记（用户一敲键就置位）
+   * 与引擎自己的 `hasPendingChanges()`（权威，但迟到）。只信自己也信不过：
+   * `Input.insertText` / 输入法组字 / 程序化写入都不产生 keydown，脏标记会漏；
+   * 只信引擎则要等 0.7–1.5 s，切走那一下仍然丢字。
+   */
+  const hasUnsaved = (): boolean => {
+    if (dirtyRef.current) return true;
+    return editorRef.current?.hasPendingChanges() ?? false;
+  };
+
   /** 真正落盘的那一步：判定重排 → 提示 → 序列化 → 写盘（冲突是值不是异常） */
-  const runSave = useCallback(
-    async (kind: "auto" | "manual") => {
+  const performSave = useCallback(
+    async (kind: "auto" | "manual"): Promise<DocxFlushOutcome> => {
       const ref = editorRef.current;
-      if (ref === null || oversizeRef.current || conflictRef.current) return;
-      if (busyRef.current) {
-        queuedRef.current = true;
-        return;
-      }
-      if (!dirtyRef.current) return;
+      if (ref === null) return { ok: true };
+      if (!hasUnsaved()) return { ok: true };
+      if (conflictRef.current) return { ok: false, reason: "conflict" };
+      if (oversizeRef.current) return { ok: false, reason: "failed" };
       // 撤销回到磁盘上的那一份：没有待序列化的改动，就不用写盘，状态也退回「未改动」
       if (!ref.hasPendingChanges()) {
         dirtyRef.current = false;
         setSaveState({ kind: "clean" });
-        return;
+        return { ok: true };
       }
 
+      const seqAtStart = editSeqRef.current;
       const view = getView();
       const nowFacts = view === null ? null : docxFacts(view.state.doc as unknown as DocxFactsNode);
       // 基线可能还没拿到（视图创建慢于第一次编辑）：拿不到就不做重排判定，
@@ -371,22 +404,22 @@ function DocxSurface(props: {
       if (reasons.length > 0 && !confirmedRef.current) {
         // 自动保存绝不整份重排：提示挂出来，等用户按 Ctrl+S 或点「仍然保存」
         setGate(reasons);
-        return;
+        return { ok: false, reason: "blocked" };
       }
 
-      busyRef.current = true;
       setSaveState({ kind: "saving" });
       try {
         engineFallbackRef.current = false;
         const buffer = await ref.save();
         if (buffer === null) {
           setSaveState({ kind: "failed", message: t.docx.saveFailed });
-          return;
+          setSaveDetail(null);
+          return { ok: false, reason: "failed" };
         }
         if (engineFallbackRef.current && !confirmedRef.current) {
           // 引擎已经整份重排了一遍：这一份先不写，等用户确认
           setGate(["engine"]);
-          return;
+          return { ok: false, reason: "blocked" };
         }
         const result = await api.docx.save({
           target: request,
@@ -397,59 +430,151 @@ function DocxSurface(props: {
           conflictRef.current = true;
           setConflict(result.reason);
           setSaveState({ kind: "failed", message: t.docx.conflictShort });
-          return;
+          setSaveDetail(null);
+          return { ok: false, reason: "conflict" };
         }
         hashRef.current = result.hash;
         setBackupPath(result.backupPath ?? null);
         if (nowFacts !== null) baselineRef.current = nowFacts;
         confirmedRef.current = false;
-        dirtyRef.current = false;
         setGate(null);
-        setSaveState({ kind: "saved", at: result.modifiedAt });
-      } catch (cause: unknown) {
-        setSaveState({
-          kind: "failed",
-          message: cause instanceof Error ? cause.message : String(cause),
-        });
-      } finally {
-        busyRef.current = false;
-        if (queuedRef.current) {
-          queuedRef.current = false;
-          // 保存期间又改了：紧接着再存一次（改动不属于这次快照）
-          if (dirtyRef.current) saveRef.current("auto");
+        setSaveDetail(null);
+        if (editSeqRef.current === seqAtStart && !ref.hasPendingChanges()) {
+          dirtyRef.current = false;
+          setSaveState({ kind: "saved", at: result.modifiedAt });
+        } else {
+          // 保存期间又改了：状态如实留在「未保存」，并再排一次自动保存
+          dirtyRef.current = true;
+          setSaveState({ kind: "dirty" });
+          if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+          timerRef.current = window.setTimeout(() => {
+            timerRef.current = null;
+            saveRef.current("auto");
+          }, DOCX_AUTOSAVE_DELAY_MS);
         }
+        return { ok: true };
+      } catch (cause: unknown) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setSaveState({ kind: "failed", message: t.docx.saveFailed });
+        setSaveDetail(message);
+        return { ok: false, reason: "failed" };
       }
     },
     [request, t],
   );
 
-  // 定时器与键盘监听走 ref：它们只在挂载时绑定一次，不必跟着 runSave 的身份重绑
-  saveRef.current = (kind) => {
-    void runSave(kind);
-  };
+  /** 排进串行队列：一次只跑一个保存，后来的等前一个结算 */
+  const enqueueSave = useCallback(
+    (kind: "auto" | "manual"): Promise<DocxFlushOutcome> => {
+      const next = chainRef.current.then(
+        () => performSave(kind),
+        () => performSave(kind),
+      );
+      chainRef.current = next.catch(() => undefined);
+      return next;
+    },
+    [performSave],
+  );
 
+  /**
+   * 切走 / 关窗口前的 flush：把待存改动**全部**落盘。
+   * 保存期间又改了的话（引擎不锁输入）再排一次，最多三轮——三轮还没干净就是
+   * 真有问题，交给调用方「别切走」。
+   */
+  const flushNow = useCallback(async (): Promise<DocxFlushOutcome> => {
+    for (let round = 0; round < 3; round += 1) {
+      const outcome = await enqueueSave("manual");
+      if (!outcome.ok) return outcome;
+      if (!hasUnsaved()) return { ok: true };
+    }
+    return hasUnsaved() ? { ok: false, reason: "failed" } : { ok: true };
+  }, [enqueueSave]);
+
+  saveRef.current = (kind) => {
+    void enqueueSave(kind);
+  };
+  flushRef.current = flushNow;
+
+  // 登记给「切标签 / 关标签 / 切会话 / 关窗口」的闸门（docx-flush.ts）
   useEffect(() => {
+    return registerDocxFlush(request.dir, {
+      flush: () => flushRef.current(),
+      pending: () => dirtyRef.current || (editorRef.current?.hasPendingChanges() ?? false),
+    });
+  }, [request.dir]);
+
+  /**
+   * 键盘：Ctrl/Cmd+S 保存；其余编辑键**立刻**标脏。
+   * 只在焦点落在本文档里时接管（`view.hasFocus()` 或事件目标在自己的根里）——
+   * 否则别处输入框里的 Ctrl+S 会被这里悄悄吃掉。
+   */
+  useEffect(() => {
+    const isMine = (event: KeyboardEvent): boolean => {
+      const view = viewRef.current;
+      if (view !== null && view.hasFocus()) return true;
+      const root = rootRef.current;
+      return root !== null && event.target instanceof Node && root.contains(event.target);
+    };
     const onKey = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
-      if (event.key.toLowerCase() !== "s") return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
+      if (!isMine(event)) return;
+      const command = event.metaKey || event.ctrlKey;
+      if (command && !event.altKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        void flushNow();
+        return;
       }
-      saveRef.current("manual");
+      if (command || event.altKey) return;
+      if (event.key.length === 1 || EDIT_KEYS.has(event.key)) markDirty();
     };
     // capture：引擎自己的快捷键监听在窗口内，抢在它前面拦下 Cmd/Ctrl+S
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [flushNow, markDirty]);
 
+  /**
+   * 不走 keydown 的编辑路径同样立刻标脏：粘贴 / 剪切、输入法组字、程序化写入
+   * （`beforeinput` 覆盖 typing / paste / IME 三类，`input` 兜住只发后者的实现）。
+   */
   useEffect(() => {
+    const onEdit = (event: Event): void => {
+      const view = viewRef.current;
+      const focused = view !== null && view.hasFocus();
+      const root = rootRef.current;
+      const inside = root !== null && event.target instanceof Node && root.contains(event.target);
+      if (!focused && !inside) return;
+      markDirty();
+    };
+    const types = ["beforeinput", "input", "paste", "cut", "compositionstart"] as const;
+    for (const type of types) window.addEventListener(type, onEdit, true);
     return () => {
+      for (const type of types) window.removeEventListener(type, onEdit, true);
+    };
+  }, [markDirty]);
+
+  /**
+   * 关窗口的兜底：有没落盘的改动就先拦下这次卸载，flush 完再关。
+   * （Windows 上点叉是「收进托盘」、页面不卸载；这条兜住的是真退出 / macOS 关窗。）
+   */
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent): void => {
+      if (!dirtyRef.current && !(editorRef.current?.hasPendingChanges() ?? false)) return;
+      event.preventDefault();
+      event.returnValue = "";
+      void flushNow().then((outcome) => {
+        if (outcome.ok) window.close();
+      });
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     };
-  }, []);
+  }, [flushNow]);
 
   const runCommand = (command: Command): void => {
     const view = getView();
@@ -487,7 +612,7 @@ function DocxSurface(props: {
   );
 
   return (
-    <div className="docx-view" data-oversize={oversize ? "" : undefined}>
+    <div className="docx-view" ref={rootRef} data-oversize={oversize ? "" : undefined}>
       <div className="docx-bar">
         <DocxTool
           icon="bold"
@@ -529,7 +654,11 @@ function DocxSurface(props: {
             syncMarks();
           }}
         />
-        <span className="docx-status row-trailing" data-kind={saveState.kind}>
+        <span
+          className="docx-status row-trailing"
+          data-kind={saveState.kind}
+          title={saveDetail ?? statusText}
+        >
           {statusText}
         </span>
         <DocxTool
@@ -594,6 +723,13 @@ function DocxSurface(props: {
               {t.docx.saveAnyway}
             </button>
           </div>
+        </div>
+      )}
+
+      {saveDetail !== null && saveState.kind === "failed" && (
+        <div className="docx-note" data-tone="danger" role="alert">
+          <Icon name="octagon-x" size={14} />
+          <span>{saveDetail}</span>
         </div>
       )}
 

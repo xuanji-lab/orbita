@@ -21,6 +21,7 @@ import {
   orderEntriesByType,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
+import { flushAllDocx, flushDocxAt } from "../docx/docx-flush.ts";
 import {
   attachmentName,
   collectSentAttachments,
@@ -142,9 +143,12 @@ export function FilesPanel(props: {
     if (lostRoot === null) return;
     const next = dropTabsAtRoot(tabs, activePath, lostRoot);
     if (next.tabs.length === tabs.length) return;
-    setTabs(next.tabs);
-    setActivePath(next.activePath);
-    if (next.activePath === null) setTreeOn(false);
+    // 掉标签 = 可能卸载正在编辑的 docx：先让它落盘再掉
+    void flushDocxAt(activePath).then(() => {
+      setTabs(next.tabs);
+      setActivePath(next.activePath);
+      if (next.activePath === null) setTreeOn(false);
+    });
   }, [focusWorkspaceId, session.workspaceId, session.workspaces, tabs, activePath]);
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
@@ -191,6 +195,10 @@ export function FilesPanel(props: {
   // 同理清掉：错误属于旧会话里那次点击，带进新会话就是张冠李戴的常驻红字
   // （2026-10-18 修的 citeOutside 跨会话残留）
   useEffect(() => {
+    // 换会话 / 换工作区 = 整片换掉旧面板，打开着的 docx 随之卸载。openSession 已经
+    // 在切换前闸过一次（失败就不切），这里再兜一道覆盖不经过它的路径；换完之后
+    // 旧标签没有意义，照旧清掉。
+    void flushAllDocx();
     setTabs([]);
     setActivePath(null);
     setCollapsedGroups(new Set());
@@ -224,13 +232,32 @@ export function FilesPanel(props: {
     return () => observer.disconnect();
   }, []);
 
+  /**
+   * 离开当前标签之前，先让 docx 把待存改动落盘（.tex 编辑器同一道切换闸门纪律）。
+   * `outcome.ok === false` 就**原地不动**：提示由 docx 视图自己挂出来
+   * （保真闸门 / 冲突 / 保存失败各有文案），这里不另造第二套错误界面。
+   *
+   * 为什么要这一刀：引擎把字收在文档模型里，卸载组件里只能 clearTimeout；
+   * 切标签 / 关标签都会让还没落盘的字无声消失（2026-10-24 评审复现）。
+   */
+  const leaveActive = (next: () => void): void => {
+    void flushDocxAt(activePath).then((outcome) => {
+      if (outcome.ok) next();
+    });
+  };
+
   /** 关闭一个标签；关掉最后一个 = 回纯树，treeOn 一并复位——之后从 solo 点开
    * 文件不会突然顶着浮层 / 并排列（树的展开理由随最后一个文件消失） */
   const closeOne = (path: string): void => {
     const next = closeTab(tabs, activePath, path);
-    setTabs(next.tabs);
-    setActivePath(next.activePath);
-    if (next.activePath === null) setTreeOn(false);
+    const apply = (): void => {
+      setTabs(next.tabs);
+      setActivePath(next.activePath);
+      if (next.activePath === null) setTreeOn(false);
+    };
+    // 只有关的是当前激活的 docx 才需要等它落盘；关后台标签不打断前台
+    if (path === activePath) leaveActive(apply);
+    else apply();
   };
 
   // 预览打开时 Esc 关当前激活标签（原型同语义）；没有激活标签回报「没处理」，
@@ -252,17 +279,23 @@ export function FilesPanel(props: {
    * 双击 / Enter 同一动作（标签复用，幂等）。浮层里点了文件 = 挑选完成：浮层
    * 自动收起——窄侧事实来自 ResizeObserver 的缓存，不在这里量宽度做显示判定 */
   const openFile = (root: FileRoot, path: string): void => {
-    setTabs((prev) => openTab(prev, root.path, path));
-    setActivePath(path);
-    if (narrowRef.current) setTreeOn(false);
+    if (path === activePath) return;
+    leaveActive(() => {
+      setTabs((prev) => openTab(prev, root.path, path));
+      setActivePath(path);
+      if (narrowRef.current) setTreeOn(false);
+    });
   };
 
   /** 单击附图行 = 打开 / 激活附图标签：身份用原图引用（同一张图复用同一个标签），
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
-    setTabs((prev) => openTab(prev, "", ref, name));
-    setActivePath(ref);
-    if (narrowRef.current) setTreeOn(false);
+    if (ref === activePath) return;
+    leaveActive(() => {
+      setTabs((prev) => openTab(prev, "", ref, name));
+      setActivePath(ref);
+      if (narrowRef.current) setTreeOn(false);
+    });
   };
 
   // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
@@ -559,11 +592,13 @@ export function FilesPanel(props: {
                       aria-selected={active}
                       className="cap-tab no-drag"
                       title={tab.path}
-                      onClick={() => setActivePath(tab.path)}
+                      onClick={() => {
+                        if (!active) leaveActive(() => setActivePath(tab.path));
+                      }}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        setActivePath(tab.path);
+                        if (!active) leaveActive(() => setActivePath(tab.path));
                       }}
                     >
                       <Icon

@@ -67,7 +67,17 @@ async function classify(bytes: Uint8Array): Promise<{ invalid: DocxInvalidReason
  * 大小判定在读之前：50 MB 的文件整个读进内存再丢掉没有意义。
  */
 export async function readDocxFile(path: string, limit: number = DOCX_MAX_BYTES): Promise<DocxOpenResult> {
-  const stats = await stat(path);
+  let stats;
+  try {
+    stats = await stat(path);
+  } catch (error) {
+    // 文件在打开这一刻已经不在了（外部删除 / 改名）：回一个可读的结论，而不是把
+    // stat 的原始报错经 IPC 糊到界面上
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { kind: "invalid", reason: "missing", size: 0, modifiedAt: 0 };
+    }
+    throw error;
+  }
   if (!stats.isFile()) throw new Error(`Not a file: ${path}`);
   const size = stats.size;
   const modifiedAt = stats.mtimeMs;

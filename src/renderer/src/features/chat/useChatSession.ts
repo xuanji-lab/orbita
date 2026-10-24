@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { flushAllDocx } from "../docx/docx-flush.ts";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
@@ -2073,7 +2074,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 「打开后接着发消息」的编排（遗留事项续跑原会话）要等它，否则 submit 先行
    * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
    */
-  const openSession = useCallback(
+  const openSessionNow = useCallback(
     (id: string): Promise<void> => {
       if (id === sessionRef.current) return Promise.resolve();
       engine.setError(null);
@@ -2120,6 +2121,19 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         });
     },
     [engine],
+  );
+
+  /**
+   * 切会话 = 把两栏整片换掉，打开着的 docx 会随之卸载。先让它们把待存改动落盘；
+   * 任何一份失败（要确认整份重排 / 磁盘被外部改过 / 写盘失败）就**不切走**——
+   * 提示由 docx 视图自己挂出来（2026-10-24 评审：切会话会丢字）。
+   */
+  const openSession = useCallback(
+    (id: string): Promise<void> => {
+      if (id === sessionRef.current) return Promise.resolve();
+      return flushAllDocx().then((outcome) => (outcome.ok ? openSessionNow(id) : undefined));
+    },
+    [openSessionNow],
   );
 
   /**

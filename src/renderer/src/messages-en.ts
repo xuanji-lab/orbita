@@ -1751,6 +1751,7 @@ export const en = {
       password: "This document is password-protected. Remove the password in Word and save again.",
       "not-docx": "This file isn't a Word document.",
       corrupt: "This file is damaged — it isn't a readable .docx package.",
+      missing: "This file isn't on disk anymore — it was deleted or renamed outside orbita.",
     },
   },
 

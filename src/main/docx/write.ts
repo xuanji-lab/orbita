@@ -116,8 +116,3 @@ export async function saveDocxFile(options: DocxSaveOptions): Promise<DocxSaveRe
     };
   });
 }
-
-/** 测试用：等所有在途写落定（队列为空） */
-export async function docxSaveIdle(): Promise<void> {
-  await Promise.all([...pathQueues.values()]);
-}

@@ -1634,6 +1634,7 @@ export const zh: Messages = {
       password: "这份文档有密码保护。请在 Word 里去掉密码再保存一次。",
       "not-docx": "这个文件不是 Word 文档。",
       corrupt: "这个文件已损坏——不是能读的 docx 包。",
+      missing: "这个文件已经不在磁盘上了——在 orbita 之外被删除或改名了。",
     },
   },
 

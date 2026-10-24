@@ -2949,8 +2949,18 @@ body {
   margin: 0 var(--space-1);
   background: var(--color-border-subtle);
 }
-/* 保存状态贴在行的右血线上（.row-trailing 推到右缘），保存键在它之后 */
+/*
+ * 保存状态贴在行的右血线上（.row-trailing 推到右缘），保存键在它之后。
+ * **窄面板里报错不能把保存键挤出工具栏**：状态是这一行唯一可伸缩的一段，
+ * 超长（原始 IPC 报错经常很长）从尾部省略，全文在 title 里；失败细节另走提示条。
+ */
 .docx-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   padding: 0 var(--space-2);

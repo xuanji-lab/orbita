@@ -61,8 +61,12 @@ export function isDocxFile(path: string): boolean {
 /** docx 的读写请求：形状与 `fs:read` 完全一致（root/dir 白名单同一道） */
 export type DocxTarget = FileListRequest;
 
-/** 打不开的原因：`password` 是加密包（OLE2 容器），`not-docx` 不是 zip，`corrupt` 是 zip 里没有正文 */
-export type DocxInvalidReason = "password" | "not-docx" | "corrupt";
+/**
+ * 打不开的原因：`password` 是加密包（OLE2 容器），`not-docx` 不是 zip，`corrupt` 是
+ * zip 里没有正文，`missing` 是文件在打开这一刻已经不在了（外部删除 / 改名——
+ * 同一份文档可能正开着编辑器，用户在别处把它删了，再点刷新）。
+ */
+export type DocxInvalidReason = "password" | "not-docx" | "corrupt" | "missing";
 
 /**
  * `docx:open` 的回执。`data` 是整份字节（Uint8Array 走结构化克隆，不转 base64），
