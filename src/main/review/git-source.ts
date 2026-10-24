@@ -8,7 +8,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import {
   parseNumstatLine,
@@ -80,6 +79,14 @@ const diskUntrackedReader: UntrackedReader = async (path) => {
   }
 };
 
+/**
+ * status 的路径默认就是工作区相对（git 1.5.4 起），但工作区之外的改动会带 `../` 前缀
+ * ——不归这棵树管（与 `git diff --relative` 的排除口径一致）。git 只输出 `/` 分隔。
+ */
+function insideWorkspace(path: string): boolean {
+  return path !== ".." && !path.startsWith("../");
+}
+
 /** 未跟踪文件（porcelain v2 的 `? ` 行）：行数对着空文件算，二进制标 binary。 */
 async function untrackedEntries(
   cwd: string,
@@ -89,7 +96,7 @@ async function untrackedEntries(
   const entries: ReviewEntry[] = [];
   for (const line of statusStdout.split("\n")) {
     const path = parseUntrackedLine(line);
-    if (path === null) continue;
+    if (path === null || !insideWorkspace(path)) continue;
     const bytes = await read(`${cwd}/${path}`);
     // 刚被删 / 读不了：跳过——status 快照与磁盘现状之间的窗口，不值得报错
     if (bytes === null) continue;
@@ -128,11 +135,16 @@ function diffArgs(
   // `旧名.txt => 新名.txt` 一行，解析出的路径读不了盘、拉不到 diff（空正文误显「已还原」）。
   const numstat = opts.numstat === true ? ["--numstat"] : [];
   const pathArg = opts.path === undefined ? [] : ["--", opts.path];
-  if (source === "unstaged") return ["diff", "--no-renames", ...numstat, ...pathArg];
-  if (source === "staged") return ["diff", "--cached", "--no-renames", ...numstat, ...pathArg];
+  // --relative：在子目录里跑时把输出路径改成**工作区相对**，并排除工作区之外的改动。
+  // 不加时 diff 给的是仓库根相对路径，与 status 的工作区相对路径不是同一基准——
+  // 两套路径混进同一份列表，按它去 `git diff -- <path>` 就找不到（误显「已还原」）。
+  if (source === "unstaged") return ["diff", "--no-renames", "--relative", ...numstat, ...pathArg];
+  if (source === "staged") {
+    return ["diff", "--cached", "--no-renames", "--relative", ...numstat, ...pathArg];
+  }
   if (source === "branch") {
     if (upstream === null) return null;
-    return ["diff", "--no-renames", ...numstat, `${upstream}...HEAD`, ...pathArg];
+    return ["diff", "--no-renames", "--relative", ...numstat, `${upstream}...HEAD`, ...pathArg];
   }
   return null;
 }
@@ -251,7 +263,7 @@ export async function gitWorkdirChanges(
   mergeLineStat(stats, numstatEntries((await runner(diffArgs("unstaged", null, { numstat: true }) ?? [], cwd)).stdout));
   mergeLineStat(
     stats,
-    numstatEntries((await runner(["diff", "--cached", "--no-renames", "--numstat"], cwd)).stdout),
+    numstatEntries((await runner(diffArgs("staged", null, { numstat: true }) ?? [], cwd)).stdout),
   );
   // 未跟踪文件不在 git diff 的覆盖面里，行数对着空文件算（读盘，与审查面板同一条路）
   const untrackedStats = new Map(
@@ -265,6 +277,7 @@ export async function gitWorkdirChanges(
   for (const line of status.stdout.split("\n")) {
     const untrackedPath = parseUntrackedLine(line);
     if (untrackedPath !== null) {
+      if (!insideWorkspace(untrackedPath)) continue;
       const fromDisk = untrackedStats.get(untrackedPath);
       // 读盘失败（刚被删 / 二进制读不了）的未跟踪文件不在 untrackedEntries 里——
       // status 快照与磁盘现状之间的窗口，不值得报错；行数落 0 但 U 标记保留
@@ -278,7 +291,7 @@ export async function gitWorkdirChanges(
       continue;
     }
     const changed = parseStatusChangedLine(line);
-    if (changed === null) continue;
+    if (changed === null || !insideWorkspace(changed.path)) continue;
     const stat = stats.get(changed.path);
     entries.push({
       path: changed.path,
@@ -288,19 +301,9 @@ export async function gitWorkdirChanges(
       binary: stat?.binary ?? false,
     });
   }
-  // git 路径相对于仓库根；树相对于工作区目录。工作区不是仓库根时（嵌在更大的
-  // 仓库里）换算成工作区相对路径，落在工作区之外的改动不归这棵树管，丢掉
-  const cwdRelative = (path: string): string | null => {
-    const rel = relative(cwd, join(root, path));
-    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
-    return sep === "/" ? rel : rel.split(sep).join("/");
-  };
-  const scoped = [] as FocusChangeEntry[];
-  for (const entry of entries) {
-    const rel = cwdRelative(entry.path);
-    if (rel !== null) scoped.push({ ...entry, path: rel });
-  }
-  return { kind: "ok", branch: await currentBranch(runner, cwd), entries: scoped };
+  // status 与 diff（--relative）现在都是工作区相对路径，直接就是这棵树要的形态；
+  // 工作区之外的改动已在上面按 `../` 前缀与 --relative 排除
+  return { kind: "ok", branch: await currentBranch(runner, cwd), entries };
 }
 
 /** `review:diff` 的 git 侧实现（unified diff 原样返回）。 */
