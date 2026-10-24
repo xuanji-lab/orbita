@@ -5,6 +5,7 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "./computer-use.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -191,9 +192,13 @@ export interface ComputerUseSettings {
   allowNetwork: boolean;
 }
 
-/** 沙箱出网的生效值：只认布尔，缺席 / 坏值都按「允许」——「坏值该被丢掉」而不是当成假值。 */
+/**
+ * 沙箱出网的生效值：只认布尔，缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_ALLOW_NETWORK`）。
+ * **兜底走 shared 的常量，不写 true**：主进程控制器与渲染层读的是同一个源，
+ * 改默认只改那一处（否则三处各自硬编码，行为今天对、将来会漂）。
+ */
 export function effectiveAllowNetwork(settings: { computerUse?: ComputerUseSettings } | undefined): boolean {
-  return settings?.computerUse?.allowNetwork !== false;
+  return settings?.computerUse?.allowNetwork ?? COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
 }
 
 /**

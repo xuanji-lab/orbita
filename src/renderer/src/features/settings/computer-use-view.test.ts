@@ -1,9 +1,13 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ComputerUseProbeResult, ComputerUseScreenshotResult, SandboxState } from "../../../../shared/computer-use.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "../../../../shared/computer-use.ts";
+import type { AppSettings } from "../../../../shared/settings.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
+  allowNetworkEnabled,
+  allowNetworkPatch,
   probeBlocksStart,
   probeVisual,
   sandboxControl,
@@ -151,5 +155,49 @@ describe("电脑使用 · 截图回执两分支", () => {
       const meta = shotMeta(2240, 1400, 1_760_000_000_000, table);
       assert.match(meta, /^2240 × 1400 · /);
     }
+  });
+});
+
+describe("电脑使用 · 出网开关", () => {
+  /** AppSettings 的最小形状：parseSettings 的产物里 theme 与 drawer 恒在 */
+  const settings = (allowNetwork?: boolean): AppSettings =>
+    allowNetwork === undefined ? { theme: "system", drawer: { width: 320, docked: [] } } : {
+      theme: "system",
+      drawer: { width: 320, docked: [] },
+      computerUse: { allowNetwork },
+    };
+
+  test("缺席 = 允许（与主进程 effectiveAllowNetwork 同方向，新用户不会看到 Off 而沙箱在联网）", () => {
+    assert.equal(allowNetworkEnabled(settings()), true);
+    assert.equal(allowNetworkEnabled(settings()), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+  });
+
+  test("显式两个值都按盘上的来", () => {
+    assert.equal(allowNetworkEnabled(settings(true)), true);
+    assert.equal(allowNetworkEnabled(settings(false)), false);
+  });
+
+  test("点开关发的补丁是整块 computerUse（settings.set 走的就是这个形状）", () => {
+    assert.deepEqual(allowNetworkPatch(false), { computerUse: { allowNetwork: false } });
+    assert.deepEqual(allowNetworkPatch(true), { computerUse: { allowNetwork: true } });
+  });
+
+  test("info 写清「不能上网」（hover 里的完整解释）", () => {
+    assert.match(zh.computerUse.allowNetworkInfo, /不能上网/);
+    assert.match(zh.computerUse.allowNetworkInfo, /网页自动化需要开着/);
+    assert.match(en.computerUse.allowNetworkInfo, /off the network/i);
+    assert.match(en.computerUse.allowNetworkInfo, /web automation needs it on/i);
+    assert.ok(en.computerUse.allowNetwork.length > 0 && zh.computerUse.allowNetwork.length > 0);
+  });
+
+  test("生效时机常驻在 below 里，且点明运行中的沙箱不改（不只在 hover）", () => {
+    // 运行中点了「关」而沙箱还在联网是这一行最大的误读风险：那句必须看得见
+    for (const table of [en, zh] as const) {
+      assert.ok(table.computerUse.allowNetworkBelow.length > 0, "below 不能是空句");
+    }
+    assert.match(zh.computerUse.allowNetworkBelow, /下次启动/);
+    assert.match(zh.computerUse.allowNetworkBelow, /仍按启动时/);
+    assert.match(en.computerUse.allowNetworkBelow, /next time the sandbox starts/i);
+    assert.match(en.computerUse.allowNetworkBelow, /running sandbox/i);
   });
 });
