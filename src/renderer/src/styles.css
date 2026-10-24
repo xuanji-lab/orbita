@@ -533,6 +533,43 @@
 }
 
 /*
+ * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
+ * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
+ * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold
+ * 对图标无效，只剩一层淡底——玄上 .08 的黄几乎看不出（2026-10-25 用户：「看不清是什么
+ * provider - 没有光圈」）。inset：左栏 overflow 会裁掉外扩的环。
+ * 特异度 (0,3,0) 压过 `.option-row:hover`，选中格悬停时环不掉。
+ */
+.option-row.model-rail-cell[aria-selected="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+  box-shadow: inset 0 0 0 1px var(--color-mode-active-fg);
+}
+
+/* 左栏格子的悬停提示：与 IconButton 的单行 caption 同一套（z-index 同档 70，高于 Menu 的 40） */
+.model-rail-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: 240px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* 首帧定位前不显形，免得先闪在左上角再跳（同 material-path-tip） */
+.model-rail-tip[data-placed="false"] {
+  opacity: 0;
+}
+
+/*
  * 会话行最左侧的三节竖条（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `bar` /
  * 铃铛清单 BellCard）：取代上一版的渐变带（动效太耗 GPU，低端 Windows /
  * MacBook 不友好）与未读浅底。**静态，无任何动效**。

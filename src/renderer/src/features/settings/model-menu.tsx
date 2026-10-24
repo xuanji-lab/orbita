@@ -10,6 +10,7 @@
  *    就是这一刀返工五次的起因（2026-10-01）——所以外壳只有一个，谁也不许再拼。
  */
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { modelDisplayName, resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
@@ -19,11 +20,15 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import type { MenuPlacementSide } from "../../shell/menu-position";
+import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
   hasCredentials,
   modelAcceptsImage,
   modelContextText,
+  MODEL_SCOPE_ALL,
   modelPreferenceOf,
+  type ModelScope,
+  openingModelScope,
   railVendorCell,
 } from "./providers-view-model.ts";
 import { ModelAvatar } from "./ModelAvatar";
@@ -117,20 +122,13 @@ export function modelChipParts(
   };
 }
 
-/**
- * 左栏的选中态。
- *
- * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
- * 而右栏列的是实例。星标是**跨厂商**的一维，所以自成一档，不跟厂商交集
- * （交集会造出空集：星标里恰好没有某家的模型时，用户对着两格都亮着的地方看到空卡片）。
- */
-export type ModelScope =
-  | { kind: "all" }
-  | { kind: "starred" }
-  | { kind: "provider"; id: string };
-
-/** 「全部」在状态里的值。默认态，也是搜索时的复位目标 */
-export const MODEL_SCOPE_ALL: ModelScope = { kind: "all" };
+/** 两个左栏选中态是不是同一格（provider 档要比 id）。内部用：只给下面关着时的对齐去重 */
+function sameScope(a: ModelScope, b: ModelScope): boolean {
+  if (a.kind === "provider" || b.kind === "provider") {
+    return a.kind === "provider" && b.kind === "provider" && a.id === b.id;
+  }
+  return a.kind === b.kind;
+}
 
 /** 星标的键：两个 id 成对（与 AppSettings.starredModels 同一口径）。内部用，不导出——没有第二个消费者 */
 function starKey(providerId: string, modelId: string): string {
@@ -204,7 +202,22 @@ export function ModelPickerMenu(props: {
   /** 原样转发给 Menu：输入卡给 `above`（芯片菜单朝上开），设置面与子会话面板用默认下方 */
   placement?: MenuPlacementSide;
 }): React.ReactNode {
-  const [scope, setScope] = useState<ModelScope>(MODEL_SCOPE_ALL);
+  const [scope, setScope] = useState<ModelScope>(() => openingModelScope(props.providers, props.selected));
+  const [open, setOpen] = useState(false);
+  /*
+   * 每次打开都落在当前型号所属的那家（openingModelScope）。**关着的时候就对齐**，不等打开那一刻：
+   * Menu 在点开的同一个事件里按**当时的清单**把光标放到打勾行（cursorAtChecked）、再
+   * scrollIntoView——若等打开后才改左栏，那一刻打勾行还不在清单里，光标落到第一行。
+   * 关着时跟着 selected 变：换会话 / 刚选了别家的型号，下次打开就是新那家。
+   * 打开期间不动：用户手点的左栏 / 搜索复位照旧；关掉即回到当前型号那家，不沿用上次手选。
+   */
+  const selectedProviderId = props.selected?.providerId ?? null;
+  useEffect(() => {
+    if (open) return;
+    const next = openingModelScope(props.providers, selectedProviderId === null ? null : { providerId: selectedProviderId });
+    // 调用方多半每次渲染都给一份新的 providers 数组：等值就留旧对象，不白白多渲染一次
+    setScope((prev) => (sameScope(prev, next) ? prev : next));
+  }, [open, selectedProviderId, props.providers]);
   const pick = (range: ModelScope) =>
     modelCardItems({
       t: props.t,
@@ -237,6 +250,7 @@ export function ModelPickerMenu(props: {
     <Menu
       items={withLeading(visible)}
       searchable
+      onOpenChange={setOpen}
       rail={
         isCard ? modelPickerRail({ t: props.t, providers: props.providers, scope, onScope: setScope }) : undefined
       }
@@ -266,8 +280,8 @@ export function ModelPickerMenu(props: {
  * 模型卡片的左栏：星标 / 全部 / 各厂商（**单选互斥**）。
  *
  * 星标格永远描边、不填实：星形的**填充在这个应用里只有一个意思**——「这个模型已星标」
- * （会话行在用）。选中那一格说的是「现在只看星标」，那是视图状态，走 .option-row 的
- * 选中底（aria-selected），不借填充去说。
+ * （会话行在用）。选中那一格说的是「现在只看星标」，那是视图状态，走左栏当前格的
+ * 底 + 光圈（`.model-rail-cell[aria-selected]`，styles.css），不借填充去说。
  *
  * 不用像设置面那样列「组头」：左栏已经把厂商说了一遍，行里只在副行重复一次。
  */
@@ -283,47 +297,87 @@ export function modelPickerRail(options: {
         左栏只有图标格（2026-10-19 用户：兼容网关也换协议的标，「比较统一」），格宽恒定、
         不随选中字重变——原先给文字格（自建网关实例名）准备的隐藏宽度尺随之删掉。
       */}
-      <button
-        type="button"
-        className="option-row"
-        style={RAIL_CELL}
-        title={options.t.modelMenu.starred}
-        aria-label={options.t.modelMenu.starred}
-        aria-selected={options.scope.kind === "starred"}
+      <RailCell
+        label={options.t.modelMenu.starred}
+        selected={options.scope.kind === "starred"}
         onClick={() => options.onScope({ kind: "starred" })}
       >
         <Icon name="star" size={13} strokeWidth={1.8} />
-      </button>
-      <button
-        type="button"
-        className="option-row"
-        style={RAIL_CELL}
-        title={options.t.menu.all}
-        aria-label={options.t.menu.all}
-        aria-selected={options.scope.kind === "all"}
+      </RailCell>
+      <RailCell
+        label={options.t.menu.all}
+        selected={options.scope.kind === "all"}
         onClick={() => options.onScope(MODEL_SCOPE_ALL)}
       >
         <Icon name="menu" size={13} strokeWidth={1.8} />
-      </button>
+      </RailCell>
       {options.providers.map((provider) => {
         const cell = railVendorCell(provider);
         return (
-          <button
+          <RailCell
             key={provider.id}
-            type="button"
-            className="option-row"
-            style={RAIL_CELL}
-            // 同协议多个网关共用一枚标：实例名靠悬停 title 与读屏 aria-label 区分
-            title={provider.displayName}
-            // 图标格的 VendorLogo 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
-            aria-label={provider.displayName}
-            aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
+            // 同协议多个网关共用一枚标：实例名靠悬停提示与读屏 aria-label 区分
+            label={provider.displayName}
+            selected={options.scope.kind === "provider" && options.scope.id === provider.id}
             onClick={() => options.onScope({ kind: "provider", id: provider.id })}
           >
             <VendorLogo kindId={cell.kindId} label={cell.label} size={14} />
-          </button>
+          </RailCell>
         );
       })}
+    </>
+  );
+}
+
+/** 左栏格子的悬停提示延迟：与 IconButton 同 200ms（同为纯图标控件） */
+const RAIL_TIP_DELAY_MS = 200;
+
+/**
+ * 左栏一格：纯图标，所以名字全靠悬停提示与 aria-label。
+ *
+ * 提示用自绘的 useHoverTooltip，不挂原生 `title`：macOS 原生 tooltip 约两秒才出
+ * （同 IconButton 弃用 title 的理由），而左栏只有标、同协议的网关还共用一枚标——
+ * 「这格是哪家」只能靠悬停回答（2026-10-25 用户：「也看不清是什么 provider」）。
+ * 选中态的光圈在 CSS（`.model-rail-cell[aria-selected="true"]`），状态样式不写 inline。
+ */
+function RailCell(props: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}): React.ReactNode {
+  const tooltip = useHoverTooltip<HTMLButtonElement>(RAIL_TIP_DELAY_MS, true);
+  return (
+    <>
+      <button
+        ref={tooltip.anchorRef}
+        type="button"
+        className="option-row model-rail-cell"
+        style={RAIL_CELL}
+        // 图标格的 VendorLogo / Icon 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
+        aria-label={props.label}
+        aria-selected={props.selected}
+        onClick={props.onClick}
+        onMouseEnter={tooltip.handlers.onMouseEnter}
+        onMouseLeave={tooltip.handlers.onMouseLeave}
+        onFocus={tooltip.handlers.onFocus}
+        onBlur={tooltip.handlers.onBlur}
+      >
+        {props.children}
+      </button>
+      {tooltip.open &&
+        createPortal(
+          <div
+            ref={tooltip.tooltipRef}
+            role="tooltip"
+            className="model-rail-tip"
+            data-placed={tooltip.placement !== null}
+            style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
+          >
+            {props.label}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
