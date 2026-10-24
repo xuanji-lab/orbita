@@ -32,8 +32,8 @@ const ordered = (levels: readonly ThinkingLevel[]) =>
   [...levels].sort((a, b) => THINKING_LEVELS.indexOf(a) - THINKING_LEVELS.indexOf(b));
 
 interface Sides {
-  ui: { contextWindow: number; maxTokens: number; levels: readonly ThinkingLevel[] | null };
-  runtime: { contextWindow: number; maxTokens: number; levels: ThinkingLevel[] } | undefined;
+  ui: { contextWindow: number; maxTokens: number; image: boolean; levels: readonly ThinkingLevel[] | null };
+  runtime: { contextWindow: number; maxTokens: number; image: boolean; levels: ThinkingLevel[] } | undefined;
 }
 
 /** 一个（服务商条目，型号）在两边各算出什么 */
@@ -60,12 +60,18 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
     ui: {
       contextWindow: defaults.contextWindow,
       maxTokens: defaults.maxTokens,
+      image: defaults.input.includes("image"),
       levels: modelThinkingLevels(modelId, catalog, null, prefer),
     },
     runtime:
       model === undefined
         ? undefined
-        : { contextWindow: model.contextWindow, maxTokens: model.maxTokens, levels: getSupportedThinkingLevels(model) },
+        : {
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens,
+            image: model.input.includes("image"),
+            levels: getSupportedThinkingLevels(model),
+          },
   };
 }
 
@@ -73,6 +79,8 @@ function assertAgree(label: string, sides: Sides): void {
   assert.ok(sides.runtime !== undefined, `${label}：会话里解析不出这个型号`);
   assert.equal(sides.runtime.contextWindow, sides.ui.contextWindow, `${label} 窗口`);
   assert.equal(sides.runtime.maxTokens, sides.ui.maxTokens, `${label} 输出上限`);
+  // 图片徽标说能看图、会话里却被 pi 当纯文本剥图（或反过来），是同一类两套话
+  assert.equal(sides.runtime.image, sides.ui.image, `${label} 收不收图`);
   // 菜单说「未知」（null）时按全量显示、开轮后由 thinking 事件纠真——那不是撒谎，不比
   if (sides.ui.levels !== null) {
     assert.deepEqual(ordered(sides.runtime.levels), ordered(sides.ui.levels), `${label} 思考档`);

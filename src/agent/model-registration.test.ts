@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as streamOpenAI } from "@earendil-works/pi-ai/api/openai-completions";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
@@ -202,6 +202,73 @@ describe("toFallbackModels —— 借参抄档位表（thinkingLevelMap 是模�
     const registered = toFallbackModels([], [{ id: "ghost-model" }], [], {}, [])[0];
     assert.notEqual(registered, undefined);
     assert.equal(registered !== undefined && "thinkingLevelMap" in registered, false);
+  });
+});
+
+describe("白名单档位 → pi 的 thinkingLevelMap（openai-completions；移植自 #180）", () => {
+  /** 注册 + 补上 provider 级的 api / baseUrl（真 runtime 的组合层会补齐，替身只存 models） */
+  function registered(id: string, api = "openai-completions"): PiModel {
+    const entry = toFallbackModels([], [{ id }], [], { api }, [])[0];
+    assert.notEqual(entry, undefined);
+    return { ...entry, api, provider: "p", baseUrl: "https://example.com/v1" } as unknown as PiModel;
+  }
+
+  /**
+   * pi 真正要发出去的 reasoning_effort。档位先按 pi agent 的规矩夹（clampThinkingLevel），
+   * off 不传 reasoning（pi-agent-core agent.js：`thinkingLevel === "off" ? undefined`）——
+   * #180 原测试把 "off" 当档名直接传，那条路径 agent 不会走。
+   */
+  async function sentEffort(model: PiModel, picked: Parameters<typeof clampThinkingLevel>[1]): Promise<unknown> {
+    const level = clampThinkingLevel(model, picked);
+    let captured: Record<string, unknown> | undefined;
+    const events = streamOpenAI(
+      model as Model<"openai-completions">,
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      {
+        apiKey: "sk-test",
+        ...(level === "off" ? {} : { reasoning: level }),
+        onPayload: (payload) => {
+          captured = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    for await (const _event of events) {
+      // 抛错后流以 error 事件收尾
+    }
+    assert.ok(captured !== undefined, "pi 没走到构造请求体");
+    return captured["reasoning_effort"] ?? null;
+  }
+
+  test("菜单的三档就是 pi 认的三档：step-5-preview 的 off / xhigh / max 被夹掉", async () => {
+    const model = registered("step-5-preview");
+    assert.deepEqual(model.thinkingLevelMap, { off: null, minimal: null, xhigh: null, max: null });
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high"]);
+    // 真实发出去的：low / medium / high 原样；老会话账里的 off 被夹成能发的 low
+    assert.equal(await sentEffort(model, "low"), "low");
+    assert.equal(await sentEffort(model, "medium"), "medium");
+    assert.equal(await sentEffort(model, "off"), "low");
+    assert.equal(await sentEffort(model, "max"), "high");
+  });
+
+  test("白名单里 xhigh / max 是真档的型号（space-bunny）：它们原样发出去，不再被夹成 high", async () => {
+    const model = registered("space-bunny");
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high", "xhigh", "max"]);
+    assert.equal(await sentEffort(model, "xhigh"), "xhigh");
+    assert.equal(await sentEffort(model, "max"), "max");
+  });
+
+  test("白名单没写 medium 的型号（deepseek-flash）：发出去的不会是它会 400 的 medium", async () => {
+    const model = registered("deepseek-flash");
+    assert.deepEqual(getSupportedThinkingLevels(model), ["off", "low", "high", "max"]);
+    assert.equal(await sentEffort(model, "medium"), "high");
+  });
+
+  test("白名单的模态也跟着过线：step-3.5-flash 注册成纯文本，step-5-preview 收图", () => {
+    assert.deepEqual(registered("step-3.5-flash").input, ["text"]);
+    assert.deepEqual(registered("step-5-preview").input, ["text", "image"]);
+    assert.equal(registered("step-5-preview").contextWindow, 1_000_000);
+    assert.equal(registered("step-5-preview").maxTokens, 65_536);
   });
 });
 
