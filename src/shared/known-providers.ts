@@ -52,6 +52,22 @@ export interface KnownProvider {
    */
   access?: readonly KnownAccess[];
   /**
+   * **同一组端点的其他写法**：每组是与 `access` 同一套协议的另一套地址（网关改过域名 / 路径、
+   * 文档与目录各写一种）。用户存的地址落在哪一组，换协议时就给哪一组的地址；已存旧写法的实例
+   * 照旧能用，不迁移。不在任何一组里的地址是用户自己改的（自建网关 / 镜像），协议与地址全听条目的。
+   */
+  accessAliases?: readonly (readonly KnownAccess[])[];
+  /**
+   * **型号各走各的协议**（多协议网关）：一个 key、一个网关，每个型号只开一种协议（OpenCode Go 的
+   * minimax-m3 只走 Anthropic Messages、kimi-k3 只走 OpenAI Chat）。本家目录收录的型号用目录给它的
+   * 协议，地址从 `access`（或用户所在那组别名）里取该协议的；目录没收录的型号走条目自己的协议。
+   *
+   * 缺省 = 条目的协议对这家所有型号都成立（智谱 / DeepSeek 选了 Anthropic，所有型号就走 Anthropic）。
+   * 只看这个声明，不看目录里型号的地址长什么样：目录地址会随上游改名漂移（2026-10 pi.dev 在线目录
+   * 把 opencode-go 从 zen/go 整体换到 inference/go，旧判定「目录里有一条地址与条目逐字相等」就失效了）。
+   */
+  protocolPerModel?: true;
+  /**
    * **这家网关要求的额外请求头**，随 endpoint 持久化，真实会话与测试 / 发现同源带上。
    * 现在只有 OpenCode Go 的会话头——它的网关缺这个头直接 400（无法高效路由）。
    */
@@ -318,7 +334,39 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     id: "opencode-go",
     label: "OpenCode",
     api: "openai-completions",
-    baseUrl: "https://opencode.ai/zen/go/v1",
+    /*
+     * 出处（2026-10-25 查证）：https://opencode.ai/v2/docs/console/go/#endpoints（按协议列端点，
+     * 模型列表在 inference/go/v1/models）；models.dev（https://models.dev/api.json 的 opencode-go）；
+     * pi.dev 在线目录（31 条型号全在 inference/go[/v1]）。
+     *
+     * 默认取 inference/go/v1 这一组（与 pi 在线目录同一写法）：文档表里的 /openai/v1 发对话能通，但
+     * 「获取列表」拼出来的 /openai/v1/models 是 404，只有 /v1/models 应答（无 key 实测）。
+     * Anthropic 客户端自己接 /v1/messages，所以它那条不带 /v1。
+     */
+    baseUrl: "https://opencode.ai/inference/go/v1",
+    access: [
+      { api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/v1" },
+      { api: "anthropic-messages", baseUrl: "https://opencode.ai/inference/go" },
+      { api: "openai-responses", baseUrl: "https://opencode.ai/inference/go/v1" },
+      { api: "google-generative-ai", baseUrl: "https://opencode.ai/inference/go/v1" },
+    ],
+    accessAliases: [
+      // 2026-10 之前的地址（pi 内建快照至今仍是这一组）：已存它的实例继续走它。这一组没有 Google
+      // 路由（zen/go 下各种写法都 404）
+      [
+        { api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1" },
+        { api: "anthropic-messages", baseUrl: "https://opencode.ai/zen/go" },
+        { api: "openai-responses", baseUrl: "https://opencode.ai/zen/go/v1" },
+      ],
+      // 文档端点表的写法（按协议分子路径）：用户照文档填进来也认得
+      [
+        { api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/openai/v1" },
+        { api: "anthropic-messages", baseUrl: "https://opencode.ai/inference/go/anthropic" },
+        { api: "openai-responses", baseUrl: "https://opencode.ai/inference/go/openai/v1" },
+        { api: "google-generative-ai", baseUrl: "https://opencode.ai/inference/go/google/v1beta" },
+      ],
+    ],
+    protocolPerModel: true,
     catalogId: "opencode-go",
     // 聚合网关会收窄型号能力（kimi-k3 只开 max）：目录收录的型号以目录为准，理由见字段注释
     catalogAuthoritative: true,
@@ -334,8 +382,9 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     id: "zhipu-coding-team",
     label: "智谱团队版",
     api: "anthropic-messages",
-    // 与个人版同一个端点。pi 目录的 zai-coding-cn 是 OpenAI 协议的另一个端点，挂上它请求会被
-    // 改道过去（个人版 zhipu-coding 现在就是这样，见一致性测试里的已知例外）：不挂 catalogId
+    // 与个人版 Anthropic 那一种同一个端点。不挂 catalogId：团队版能用哪些型号、参数是否与个人版
+    // 一致都没有账号核实过，不借 zai-coding-cn 的目录（挂了也不会改道——协议与地址听条目的，
+    // 一致性测试逐条核对）
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     billing: "plan",
     untested: true,
@@ -411,6 +460,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "github-copilot",
     label: "GitHub Copilot",
+    protocolPerModel: true,
     // 多协议网关：目录里的 Claude 型号走 Messages、GPT 新型号走 Responses，注册时按型号各走各的；
     // 目录外手加的型号落这里写的协议（/chat/completions 在 Copilot 上对所有型号都开着）
     api: "openai-completions",
@@ -502,9 +552,75 @@ export function knownAccessMethods(provider: KnownProvider): readonly KnownAcces
   return first === undefined ? methods : [first, ...methods.filter((method) => method !== first)];
 }
 
-/** 选中某个协议时用的地址：这家声明了这个协议就用它的，没有就 undefined（调用方保留原地址） */
-export function knownAccessFor(provider: KnownProvider, api: ProviderApi): KnownAccess | undefined {
-  return knownAccessMethods(provider).find((method) => method.api === api);
+/** 地址比较用：去掉尾部斜杠（用户填的与文档写的常差这一个字符） */
+function sameUrl(a: string, b: string): boolean {
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
+/**
+ * 这个实例的协议 + 地址属于这家哪一组官方端点：默认那组（`access`）或某组别名（`accessAliases`）。
+ * 认不出（用户改成了自建网关 / 镜像）为 undefined——那时协议与地址全听实例自己的。
+ */
+export function accessFamilyOf(
+  provider: KnownProvider,
+  endpoint: { api: string; baseUrl: string },
+): readonly KnownAccess[] | undefined {
+  const families = [knownAccessMethods(provider), ...(provider.accessAliases ?? [])];
+  return families.find((family) =>
+    family.some((method) => method.api === endpoint.api && sameUrl(method.baseUrl, endpoint.baseUrl)),
+  );
+}
+
+/**
+ * 协议选择器里给哪几种：当前地址所在那一组里有的（存的是旧写法 zen/go，就只给 zen/go 那组有的）；
+ * 当前地址认不出或没给时给默认那组。
+ *
+ * 不跨组：zen/go 那组没有 Google 路由，就不给 Google 这一项——而不是点了之后静默把用户存的地址
+ * 换成另一组的（改用户自己写的地址要他自己同意，2026-10-25）。想用 Google 的用户把地址改成
+ * inference/go 那组，选择器就跟着列出它。
+ */
+export function accessChoicesFor(
+  provider: KnownProvider,
+  current?: { api: string; baseUrl: string },
+): readonly KnownAccess[] {
+  return (current === undefined ? undefined : accessFamilyOf(provider, current)) ?? knownAccessMethods(provider);
+}
+
+/**
+ * 选中某个协议时用的地址：取自当前地址所在那一组（见 accessChoicesFor）。
+ * 那一组没有这个协议就 undefined（调用方保留原地址）。
+ */
+export function knownAccessFor(
+  provider: KnownProvider,
+  api: ProviderApi,
+  current?: { api: string; baseUrl: string },
+): KnownAccess | undefined {
+  return accessChoicesFor(provider, current).find((method) => method.api === api);
+}
+
+/**
+ * 会话载荷里随条目带给 agent 进程的接入信息（`ProviderSecrets` 的同名字段）。主进程装配载荷与
+ * 一致性测试从这里取，不各拼一份。
+ *
+ * 多协议网关（`protocolPerModel`）且实例地址属于某组官方端点时，带上 `protocolPerModel` 与**那一组**的
+ * `access`。地址认不出（镜像 / 自建）时两个都不带：不知道别的协议在哪，按单协议处理——协议与地址
+ * 全听条目的。单协议的家（智谱选了 Anthropic）也不带：agent 进程只在型号各走各的协议时才换地址。
+ */
+export function endpointHintsOf(
+  known: KnownProvider,
+  endpoint: { api: string; baseUrl: string },
+): {
+  catalogId?: string;
+  catalogAuthoritative?: true;
+  access?: KnownAccess[];
+  protocolPerModel?: true;
+} {
+  const family = known.protocolPerModel === true ? accessFamilyOf(known, endpoint) : undefined;
+  return {
+    ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
+    ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
+    ...(family === undefined ? {} : { protocolPerModel: true, access: family.map((method) => ({ ...method })) }),
+  };
 }
 
 /** knownProviderOf 要的最小形状：Provider / ProviderDto 天然满足 */

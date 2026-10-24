@@ -10,6 +10,9 @@ import {
   knownProviderGroup,
   knownAccessFor,
   knownAccessMethods,
+  accessChoicesFor,
+  accessFamilyOf,
+  endpointHintsOf,
 } from "./known-providers.ts";
 import { PROVIDER_APIS, type ProviderApi } from "./provider.ts";
 
@@ -248,5 +251,75 @@ describe("接入方式 —— 一家可以开着几种协议", () => {
     assert.ok(stepfun !== undefined);
     assert.equal(knownAccessMethods(stepfun).length, 1);
     assert.equal(knownAccessFor(stepfun, "anthropic-messages"), undefined);
+  });
+
+  it("别名组与 access 同形：每组协议不重复、都是 access 里有的协议、地址是 https", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      const declared = new Set(knownAccessMethods(provider).map((method) => method.api));
+      for (const family of provider.accessAliases ?? []) {
+        const apis = family.map((method) => method.api);
+        assert.equal(new Set(apis).size, apis.length, `${provider.id} 别名组有重复协议`);
+        for (const method of family) {
+          assert.ok(declared.has(method.api), `${provider.id} 别名组多出 ${method.api}`);
+          assert.match(method.baseUrl, /^https:\/\//, provider.id);
+        }
+      }
+    }
+  });
+});
+
+describe("地址分组 —— OpenCode Go 的 inference/go、旧写法 zen/go、文档子路径是同一个网关", () => {
+  const go = KNOWN_PROVIDERS.find((item) => item.id === "opencode-go");
+  assert.ok(go !== undefined);
+  const zen = { api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1" } as const;
+  const inference = { api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/v1" } as const;
+  const subpath = { api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/openai/v1" } as const;
+  const mirror = { api: "openai-completions", baseUrl: "https://mirror.example/zen/go/v1" } as const;
+
+  it("默认是 pi 在线目录那一组（inference/go/v1）", () => {
+    assert.equal(go.baseUrl, "https://opencode.ai/inference/go/v1");
+    assert.deepEqual(accessFamilyOf(go, inference), knownAccessMethods(go));
+  });
+
+  it("换协议跟着当前地址那一组走：存 zen 给 zen、存 inference 给 inference、存文档子路径给子路径", () => {
+    assert.equal(knownAccessFor(go, "anthropic-messages", zen)?.baseUrl, "https://opencode.ai/zen/go");
+    assert.equal(knownAccessFor(go, "openai-responses", zen)?.baseUrl, "https://opencode.ai/zen/go/v1");
+    assert.equal(knownAccessFor(go, "anthropic-messages", inference)?.baseUrl, "https://opencode.ai/inference/go");
+    assert.equal(knownAccessFor(go, "openai-responses", inference)?.baseUrl, "https://opencode.ai/inference/go/v1");
+    assert.equal(knownAccessFor(go, "anthropic-messages", subpath)?.baseUrl, "https://opencode.ai/inference/go/anthropic");
+    assert.equal(knownAccessFor(go, "openai-responses", subpath)?.baseUrl, "https://opencode.ai/inference/go/openai/v1");
+    assert.equal(knownAccessFor(go, "google-generative-ai", subpath)?.baseUrl, "https://opencode.ai/inference/go/google/v1beta");
+    // 从 Anthropic 那条认回同一组再换回来：一来一回地址不漂
+    const back = knownAccessFor(go, "openai-completions", { api: "anthropic-messages", baseUrl: "https://opencode.ai/zen/go/" });
+    assert.equal(back?.baseUrl, "https://opencode.ai/zen/go/v1");
+  });
+
+  it("zen/go 那一组没有 Google 路由：选择器不给这一项，不静默把地址换到另一组", () => {
+    assert.deepEqual(
+      accessChoicesFor(go, zen).map((method) => method.api),
+      ["openai-completions", "anthropic-messages", "openai-responses"],
+    );
+    assert.equal(knownAccessFor(go, "google-generative-ai", zen), undefined);
+    assert.ok(accessChoicesFor(go, inference).some((method) => method.api === "google-generative-ai"));
+  });
+
+  it("镜像 / 自建地址认不出组：选择器给默认那组（用户点了才换），会话载荷不带 access", () => {
+    assert.equal(accessFamilyOf(go, mirror), undefined);
+    assert.deepEqual(accessChoicesFor(go, mirror), knownAccessMethods(go));
+    assert.deepEqual(endpointHintsOf(go, mirror), { catalogId: "opencode-go", catalogAuthoritative: true });
+  });
+
+  it("会话载荷：多协议网关带上所在那一组；单协议的家（智谱选了 Anthropic）不带", () => {
+    const hints = endpointHintsOf(go, zen);
+    assert.equal(hints.protocolPerModel, true);
+    assert.deepEqual(
+      hints.access?.find((method) => method.api === "anthropic-messages"),
+      { api: "anthropic-messages", baseUrl: "https://opencode.ai/zen/go" },
+    );
+    const zhipu = KNOWN_PROVIDERS.find((item) => item.id === "zhipu-coding");
+    assert.ok(zhipu !== undefined);
+    assert.deepEqual(endpointHintsOf(zhipu, { api: "anthropic-messages", baseUrl: "https://open.bigmodel.cn/api/anthropic" }), {
+      catalogId: "zai-coding-cn",
+    });
   });
 });
