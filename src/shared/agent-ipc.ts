@@ -327,8 +327,16 @@ export const ipcChannels = {
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
 
 /**
- * pi 内建 provider 目录里的一条。目录由 pi 维护、每 4 小时从 pi.dev 刷新覆盖层，
- * 我们零维护——用户选中名字就拿到官方 baseUrl / 协议 / 模型清单。
+ * 主进程交给 agent 进程的环境变量：pi.dev 目录覆盖层的缓存文件（Orbita 自己的数据目录里）。
+ * 缺席（单测、裸跑 runtime）时目录缓存只留在内存，不落盘——绝不退回 pi CLI 的 ~/.pi/agent。
+ */
+export const CATALOG_CACHE_ENV = "ORBITA_MODEL_CATALOG_CACHE";
+
+/**
+ * pi 内建 provider 目录里的一条。目录由 pi 维护，我们零维护——用户选中名字就拿到官方
+ * baseUrl / 协议 / 模型清单。内建快照随 pi 版本发布；agent 进程启动时与之后每 4 小时，
+ * 再为预置服务商用到的那几份目录向 pi.dev 拉一次覆盖层（src/agent/model-catalog.ts），
+ * 所以新型号不必等 pi 发版。
  */
 export interface BuiltinProvider {
   id: string;
