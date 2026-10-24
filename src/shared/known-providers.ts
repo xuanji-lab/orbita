@@ -572,6 +572,18 @@ export function knownProviderOf(provider: ProviderKindSource): KnownProvider {
 }
 
 /**
+ * 已添加的服务商用到哪几份目录（去重，按列表顺序）：目录联网刷新只拉这些——
+ * 用户没添加的服务商不向任何目录服务暴露使用事实。没有 catalogId 的（自建网关）不算。
+ */
+export function catalogIdsOfProviders(providers: readonly ProviderKindSource[]): string[] {
+  const ids = providers.flatMap((provider) => {
+    const catalogId = knownProviderOf(provider).catalogId;
+    return catalogId === undefined ? [] : [catalogId];
+  });
+  return [...new Set(ids)];
+}
+
+/**
  * 这家是不是包月制。**认不得的（自建网关）一律当按量算**——
  * 误报成包月会把真实花费藏起来，比多显示一行估价更坏。按条目判而不是按 id：
  * 第二个 Kimi 实例（kimi-coding-2）一样是套餐。

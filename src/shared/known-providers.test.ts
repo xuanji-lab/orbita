@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   KNOWN_PROVIDERS,
   KNOWN_PROVIDER_GROUPS,
+  catalogIdsOfProviders,
   catalogPreferenceOf,
   isPlanBilling,
   knownProviderDefaultName,
@@ -89,6 +90,23 @@ const p = (id: string, extra: { kind?: string; api?: ProviderApi } = {}) => ({
   id,
   ...(extra.kind === undefined ? {} : { kind: extra.kind }),
   endpoint: { api: extra.api ?? ("openai-completions" as ProviderApi) },
+});
+
+describe("catalogIdsOfProviders —— 目录联网刷新只拉已添加的服务商", () => {
+  it("没添加任何服务商：一份也不拉", () => {
+    assert.deepEqual(catalogIdsOfProviders([]), []);
+  });
+  it("按已添加的服务商取目录 id，去重；老数据靠 id 认回条目；自建网关没有目录", () => {
+    assert.deepEqual(
+      catalogIdsOfProviders([
+        p("my-ds", { kind: "deepseek" }),
+        p("deepseek-2"),
+        p("tr", { kind: "tokenrhythm" }),
+        p("my-gateway", { kind: "openai-compatible" }),
+      ]),
+      ["deepseek", "tokenrhythm"],
+    );
+  });
 });
 
 describe("knownProviderOf —— 同一家的第二个实例也认得出", () => {

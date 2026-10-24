@@ -80,6 +80,11 @@ export const ipcChannels = {
   /** 从 attachedDirs 移除一条；不在列表里不报错 */
   workspaceDetachDir: "workspace:detach-dir",
   providerBuiltins: "provider:builtins",
+  /**
+   * 「添加」页点开一张还没保存的服务商卡片：现拉一次这家的目录（节流内不拉），
+   * 拉完的新目录经 `builtins` 事件广播回来。发完即回，不等网络。
+   */
+  providerRefreshCatalog: "provider:refresh-catalog",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
@@ -873,6 +878,15 @@ export type AgentCommand =
       pdfCitations?: boolean;
     }
   | { type: "listBuiltins" }
+  /**
+   * 目录联网刷新（pi.dev 覆盖层 + 基元律动自家目录）**只针对给出的目录 id**——
+   * agent 进程自己不知道用户添加了哪些服务商，没收到 `added` 之前一份也不拉。
+   * - `added`：已添加服务商用到的全部目录（主进程每次拉起 agent 进程、服务商列表变了都送一份全量）；
+   *   替换后台 4 小时循环的刷新范围，并当场按节流补刷一次；
+   * - `peek`：设置页点开一张还没保存的卡片，只刷这几份、不进 4 小时循环。
+   * 每份目录各自节流（4 小时内拉过就不拉）；有刷新动作就重报一次 `builtins`。
+   */
+  | { type: "refreshCatalogs"; scope: "added" | "peek"; catalogIds: string[] }
   /**
    * 热重载（1-1）：把现有 MCP 连接全拆，下一轮开机按新配置重建。**不送 servers**——
    * 配置本来就每轮由主进程现读现解析（开轮命令里的 `mcpServers`），这里再送一份
