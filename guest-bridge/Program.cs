@@ -51,9 +51,11 @@ internal static class Program
 {
     // ---- 协议常量：与宿主侧（Orbita 主进程）严格对齐，一个字母都不能差 ----
     // ⚠ 0.4.0 起多了 cdp-*（浏览器通道），0.5.0 起多了 launch / kill / screenshot-stats
-    //（打包版 UI 冒烟：在沙箱里启动一份只读映射进来的 orbita.exe 并用像素统计判断它渲染没渲染）。
-    // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.5.0";
+    //（打包版 UI 冒烟：在沙箱里启动一份只读映射进来的 orbita.exe 并用像素统计判断它渲染没渲染），
+    // 0.6.0 起**一个会话一个 Edge 实例**（cdp-* 带 session 字段，各自 profile / 端口，上限 4，
+    // 空闲 5 分钟回收）。宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：
+    // 抬了能力就抬它。
+    private const string Version = "0.6.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -140,6 +142,8 @@ internal static class Program
             if (args[i] == "--selftest-json") return RunJsonSelfTest();
             // 打包产物冒烟的路径闸门自测（纯函数：不启动任何进程、不碰桌面）
             if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
+            // 会话 id 安全化的自测（纯函数：CDP 会话键直接拼进 profile 目录，这一关失守就是路径穿越）
+            if (args[i] == "--selftest-session") return RunSessionSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -238,6 +242,10 @@ internal static class Program
             try
             {
                 PollOnce();
+                // 空闲浏览器实例的回收：每轮都看一眼（字典空时立刻返回）。
+                // 放在这里而不是命令里：一只空闲的 Edge 没有任何命令会经过它，
+                // 不在循环里主动看就永远不会被收。
+                CdpSessions.ReapIdle();
             }
             catch (Exception ex)
             {
@@ -336,8 +344,9 @@ internal static class Program
         if (command == "kill") return ExecuteKill(raw);
         if (command == "screenshot-stats") return ExecuteScreenshotStats(raw);
         // CDP 浏览器通道（PR3）：一条语义命令 = 一次文件往返，内部可以有多条 CDP 消息。
-        // 实现在文件末尾的 CdpSession；它自己管 Edge 进程与 WebSocket 的生命周期。
-        if (command.Length > 4 && command.Substring(0, 4) == "cdp-") return CdpSession.Execute(command, raw, baseName, _cmdDir);
+        // 实现在 Cdp.cs；0.6.0 起一个会话一个实例，由 CdpSessions 按 session 字段路由
+        //（不传就是 default，与改动前同一份行为）。
+        if (command.Length > 4 && command.Substring(0, 4) == "cdp-") return CdpSessions.Execute(command, raw, baseName, _cmdDir);
         return "{\"ok\":false,\"error\":\"未知命令：" + JsonEscape(command) + "\"}";
     }
 
@@ -1195,20 +1204,7 @@ internal static class Program
         CheckBool(failures, ref cases, "缺失布尔", false, ExtractBool("{\"a\":\"b\"}", "nope"));
         CheckBool(failures, ref cases, "字符串里的 true 不算", false, ExtractBool("{\"text\":\"dryRun: true\"}", "dryRun"));
 
-        StringBuilder json = new StringBuilder();
-        json.Append("{\"ok\":").Append(failures.Count == 0 ? "true" : "false").Append(",\"cases\":").Append(cases);
-        if (failures.Count > 0)
-        {
-            json.Append(",\"failures\":[");
-            for (int i = 0; i < failures.Count; i++)
-            {
-                if (i > 0) json.Append(",");
-                json.Append(JsonQuote(failures[i]));
-            }
-            json.Append("]");
-        }
-        json.Append("}");
-        Console.WriteLine(json.ToString());
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -1238,6 +1234,49 @@ internal static class Program
             GuestPathRejection("C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\resources\\app.asar"));
         CheckReject(failures, ref cases, "相对路径拒绝", "拒绝", GuestPathRejection("orbita-app\\orbita.exe"));
 
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    // ---- 会话 id 安全化自测（--selftest-session）----------------------------------
+    //
+    // 会话 id 会被拼成 `C:\orbita-browser\sessions\<键>`——它是**外部输入**（宿主给的 session
+    // 字段），而 profile 目录里全是可执行配置。带 `..` 或 `\` 的 id 就能把目录指到 guest 的
+    // 任意位置。这一关是纯函数，在宿主上就能测，不必起沙箱、更不必起 Edge。
+    //
+    // 充分一条：实例上限的文案（模型只有这句话能照着做）。它跟宿主的
+    // computerUseBrowserErrors.tooMany 同义，两边都在模型看得见的路径上。
+
+    private static int RunSessionSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        CheckString(failures, ref cases, "缺省（null）回落 default", "default", CdpSessions.SafeSessionId(null));
+        CheckString(failures, ref cases, "空串回落 default", "default", CdpSessions.SafeSessionId(""));
+        CheckString(failures, ref cases, "会话 UUID 原样保留", "5408f95e-cc30-4689-a8bb-3abfdc4ff044",
+            CdpSessions.SafeSessionId("5408f95e-cc30-4689-a8bb-3abfdc4ff044"));
+        CheckString(failures, ref cases, "下划线 / 减号 / 大小写都是合法字符", "A-b_1", CdpSessions.SafeSessionId("A-b_1"));
+        CheckString(failures, ref cases, "空格换下划线", "a_b", CdpSessions.SafeSessionId("a b"));
+        CheckString(failures, ref cases, "路径分隔符与 .. 全部换掉", "______x", CdpSessions.SafeSessionId("..\\..\\x"));
+        CheckString(failures, ref cases, "正斜杠也换掉", "a_b", CdpSessions.SafeSessionId("a/b"));
+        CheckString(failures, ref cases, "中文（多字节）换下划线", "__", CdpSessions.SafeSessionId("中文"));
+        CheckString(failures, ref cases, "冒号（盘符）换掉", "C__x", CdpSessions.SafeSessionId("C:\\x"));
+        CheckString(failures, ref cases, "超长截到 48 字符", new string('a', 48), CdpSessions.SafeSessionId(new string('a', 60)));
+        CheckString(failures, ref cases, "全非法字符不回 default（不能和默认会话撞）", "___", CdpSessions.SafeSessionId("///"));
+        CheckString(failures, ref cases, "首尾空格也不放过", "_x_", CdpSessions.SafeSessionId(" x "));
+
+        string tooMany = CdpSessions.TooManyMessage();
+        CheckTrue(failures, ref cases, "上限文案点明 4 个", tooMany.IndexOf("最多 4 个", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "上限文案给出下一步（cdp-stop）", tooMany.IndexOf("cdp-stop", StringComparison.Ordinal) >= 0);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 统一的自测回执照 JSON（三个 selftest 共用一份形状，跑测试的人不用记三种） */
+    private static string BuildSelfTestJson(List<string> failures, int cases)
+    {
         StringBuilder json = new StringBuilder();
         json.Append("{\"ok\":").Append(failures.Count == 0 ? "true" : "false").Append(",\"cases\":").Append(cases);
         if (failures.Count > 0)
@@ -1251,8 +1290,13 @@ internal static class Program
             json.Append("]");
         }
         json.Append("}");
-        Console.WriteLine(json.ToString());
-        return failures.Count == 0 ? 0 : 1;
+        return json.ToString();
+    }
+
+    private static void CheckTrue(List<string> failures, ref int cases, string name, bool condition)
+    {
+        cases++;
+        if (!condition) failures.Add(name + "：不成立");
     }
 
     /** expectKind：null = 应放行；"拒绝" = 应被拦（只断言倾向，不断言整句文案） */

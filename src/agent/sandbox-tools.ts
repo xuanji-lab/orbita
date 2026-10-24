@@ -19,6 +19,8 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import {
+  COMPUTER_USE_BROWSER_IDLE_MS,
+  COMPUTER_USE_BROWSER_MAX,
   GUEST_COMMAND_TIMEOUT_MS,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
@@ -93,6 +95,17 @@ const PIXEL_FALLBACK =
   "If this fails with a CDP / browser error, fall back to the pixel tools (computer_screenshot, computer_click, " +
   "computer_type) which drive the sandbox desktop without Edge's debugging port.";
 
+/**
+ * 一个会话一个浏览器（v1.5-1）：模型得知道「我这一轮看不见的页面还在不在」与「名额用完怎么办」。
+ * 数字从 shared 的常量来——改上限 / 回收线时只有一处要改。
+ */
+const INSTANCES =
+  `Each agent session gets its own browser instance in the sandbox (separate profile, cookies and tabs), so ` +
+  `concurrent sessions never share a page. At most ${COMPUTER_USE_BROWSER_MAX} instances exist at once; one that ` +
+  `sits idle for ${Math.round(COMPUTER_USE_BROWSER_IDLE_MS / 60_000)} minutes is closed automatically (your next ` +
+  `sandbox_navigate then starts a fresh one with an empty profile). If the limit is reached, close another ` +
+  `session's browser first — this tool says which. `;
+
 export function createSandboxBrowserTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   /**
    * 发请求并等回执；**这一轮被停掉（signal abort）就立刻放手**——pi 等工具返回才结束一轮，
@@ -132,6 +145,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     description:
       SCOPE +
       BUSY +
+      INSTANCES +
       "Open a URL in it and wait for the page to load. Use this for any web task that should happen in the " +
       "sandbox — it starts the sandbox's Edge automatically, so it is the first call of a browser session. " +
       "Accepts \"back\" / \"forward\" for history, and a bare domain such as example.com (https is assumed). " +

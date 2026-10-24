@@ -568,11 +568,12 @@ void app.whenReady().then(async () => {
    */
   const expiredLeaseSessions = new Set<string>();
   /**
-   * CDP 浏览器通道（PR3）：沙箱里那份 Edge 的会话级状态。
+   * CDP 浏览器通道（PR3）：沙箱里有几个浏览器实例的会话级状态。
    *
-   * 宿主这一侧只持有「起没起」的缓存与上传/下载的落点——WebSocket、标签页、选择器表全在
-   * guest 桥里（沙箱是应用级一份，所以这里也只有一个）。outDir 与 SandboxController 的
-   * 映射输出目录是同一个：`<userData>/computer-use/out` ↔ guest 的 `C:\orbita-out`。
+   * v1.5-1 起**一个 agent 会话一个 Edge**（不再是全员共用一份）：宿主这一侧按会话记「起没起」
+   * 的缓存，每条 `cdp-*` 都带 session 字段；WebSocket、标签页、选择器表全在 guest 桥里。
+   * outDir 与 SandboxController 的映射输出目录是同一个：`<userData>/computer-use/out` ↔
+   * guest 的 `C:\orbita-out`。
    * 用闭包转一道而不是直接传 controller：CdpGuest 只需要两个方法，测试注入假桥足够。
    */
   const cdp = new CdpSession(
@@ -582,9 +583,9 @@ void app.whenReady().then(async () => {
     },
     join(configDir, "computer-use", "out"),
   );
-  // 用户停沙箱时先把里面的 Edge 停掉（best effort、不等待：不能用一条浏览器命令拖住
-  // 停沙箱按钮）。桥已经死了就算了，VM 销毁会带走整个进程树。
-  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stop(); } });
+  // 用户停沙箱时先把里面的浏览器逐个会话停掉（best effort、不等待：不能用一串浏览器命令
+  // 拖住停沙箱按钮）。桥已经死了就算了，VM 销毁会带走整个进程树。
+  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } });
 
   /**
    * 要沙箱桌面（computer_* / sandbox_* 下发前的唯一入口）。
@@ -744,7 +745,7 @@ void app.whenReady().then(async () => {
             title: leased.title,
             run: async () =>
               isSandboxBrowserAction(event.request.action)
-                ? await applySandboxBrowserRequest(cdp, event.request)
+                ? await applySandboxBrowserRequest(cdp, event.sessionId, event.request)
                 : await applyComputerUseRequest(computerUse, event.sessionId, event.request),
             rejected: (error) => ({ ok: false as const, error }),
           });
