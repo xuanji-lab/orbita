@@ -8,6 +8,7 @@ import { BRIDGE_INFO_FILE, COMPUTER_USE_CMD_DIR, type SandboxStatus } from "../.
 import { parseBridgeInfo, waitForBridgeInfo } from "./bridge-ready.ts";
 import { type SandboxProcessInfo } from "./process-list.ts";
 import {
+  COMPUTER_USE_GUEST_APP_EXE,
   junctionPathIssue,
   renderWsbXml,
   SandboxController,
@@ -219,6 +220,154 @@ describe("renderWsbXml", () => {
     assert.ok(command.includes("&amp;&amp;"), "&& 必须转义成 &amp;&amp;");
     assert.ok(!command.includes("&&"), "不允许裸 && 留在 XML 里");
   });
+
+  // ── 打包产物映射（PR5）───────────────────────────────────────────────
+  //
+  // 这条映射是可选的：没出包时 .wsb 必须少一条 MappedFolder，而不是写一条指向不存在目录的
+  // 映射（那会让整个沙箱起不来）。两种情况都必须是合法 XML，且只在有产物时才多出那一条。
+
+  test("无打包产物：只有两条映射，且不出现 orbita-app / appDir", () => {
+    const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out" });
+    assert.equal(mappedFolders(xml).length, 2);
+    assert.ok(!xml.includes("orbita-app"), "没传 appDir 就不该出现打包产物的映射");
+    assert.equal(readOnlyFlags(xml).join(","), "true,false");
+  });
+
+  test("有打包产物：多一条只读映射，宿主路径转义，LogonCommand 不变", () => {
+    const appDir = "C:\\Users\\达 玛 & <dev>\\orbita\\dist\\win-unpacked";
+    const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out", appDir });
+    const folders = mappedFolders(xml);
+    assert.equal(folders.length, 3, "第三条是打包产物映射");
+    assert.deepEqual(folders, [
+      { host: "C:\\a\\bin", readOnly: "true" },
+      { host: "C:\\b\\out", readOnly: "false" },
+      { host: "C:\\Users\\达 玛 &amp; &lt;dev&gt;\\orbita\\dist\\win-unpacked", readOnly: "true" },
+    ]);
+    // junction 命令不需要多建一条：MappedFolder 自己就落到桌面的 orbita-app/ 下
+    const command = /<Command>(.+)<\/Command>/s.exec(xml)?.[1] ?? "";
+    assert.ok(command.includes("mklink /J C:\\orbita-bridge"));
+    assert.ok(!command.includes("orbita-app"), "打包产物不进 LogonCommand（没有要建的 junction）");
+  });
+
+  test("Xml 合法性：tag 配对、根元素、映射顺序稳定（两种情况都是）", () => {
+    for (const appDir of [undefined, "C:\\repo\\dist\\win-unpacked"]) {
+      const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out", ...(appDir === undefined ? {} : { appDir }) });
+      assertLegalWsb(xml);
+    }
+  });
+
+  test("COMPUTER_USE_GUEST_APP_EXE 与映射名指向同一个目录（两边拼法一致）", () => {
+    // .wsb 没有客机路径参数，落点就是桌面下的同名目录；冒烟脚本用的是这条常量。
+    // 两边改了任一处而没改另一处，沙箱里就会 launch 一个不存在的路径。
+    assert.match(COMPUTER_USE_GUEST_APP_EXE, /^C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita\.exe$/);
+  });
+});
+
+/** 把 .wsb 里的 MappedFolder 抽成 [{host, readOnly}]（顺序即文档顺序） */
+function mappedFolders(xml: string): Array<{ host: string; readOnly: string }> {
+  const result: Array<{ host: string; readOnly: string }> = [];
+  const pattern = /<MappedFolder>\s*<HostFolder>([\s\S]*?)<\/HostFolder>\s*<ReadOnly>([^<]*)<\/ReadOnly>\s*<\/MappedFolder>/g;
+  for (const match of xml.matchAll(pattern)) {
+    result.push({ host: match[1] ?? "", readOnly: match[2] ?? "" });
+  }
+  return result;
+}
+
+function readOnlyFlags(xml: string): string[] {
+  return mappedFolders(xml).map((folder) => folder.readOnly);
+}
+
+/**
+ * .wsb 必须是合法 XML，不然 WindowsSandbox.exe 直接报「配置文件格式错误」——
+ * 这是最贵的一种错（起不来才说，而且现场是一句报错）。这里只做结构性的检查：
+ * 根元素、每个标签都闭合、每个标签名都成对，足以接住「少写一个 </ >」这类错。
+ */
+function assertLegalWsb(xml: string): void {
+  const withoutHeader = xml.replace(/^<\?xml[^>]*\?>\s*/, "");
+  assert.ok(withoutHeader.startsWith("<Configuration>"), "根元素应是 Configuration");
+  assert.ok(withoutHeader.trimEnd().endsWith("</Configuration>"), "根元素应闭合");
+  const stack: string[] = [];
+  for (const match of withoutHeader.matchAll(/<(\/?)([A-Za-z][\w.-]*)[^>]*?(\/?)>/g)) {
+    const [, closing, name, selfClosing] = match;
+    if (selfClosing === "/") continue;
+    if (closing === "/") {
+      assert.equal(stack.pop(), name, `<${String(name)}> 的闭合标签对不上`);
+    } else {
+      stack.push(String(name));
+    }
+  }
+  assert.deepEqual(stack, [], "有标签没有闭合");
+}
+
+// ── 打包产物映射：start() 侧的「有就映射、没有就不映射」──────────────────//
+// renderWsbXml 是纯函数（上面已测）；这里测的是控制器的决定：文件系统上到底有没有产物。
+// 关键约束是「没产物也不能影响启动」——映射一个不存在的目录会让整个 .wsb 失败，
+// 那等于把「没出包」变成「连看一眼沙箱桌面都不行」。
+
+describe("打包产物映射（appDir）", () => {
+  const readWsb = async (harness: Harness): Promise<string> => readFile(join(harness.dir, "session.wsb"), "utf8");
+
+  test("appDir 存在：.wsb 带第三条只读映射，并记日志说出 guest 路径", async () => {
+    const appDir = await mkdtemp(join(tmpdir(), "orbita-app-dist-"));
+    const harness = await makeHarness({ appDir });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      const xml = await readWsb(harness);
+      assert.ok(xml.includes(`<HostFolder>${appDir}</HostFolder>`), "产物目录应被映射进去");
+      assert.match(xml, /<ReadOnly>true<\/ReadOnly>/);
+      assert.ok(
+        harness.logs.some((line) => line.includes("打包产物已只读映射进沙箱")),
+        `日志里应有映射记录：\n${harness.logs.join("\n")}`,
+      );
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true }, "有产物时启动路径不受影响");
+      assert.equal(harness.controller.status().state, "running");
+    } finally {
+      await harness.close();
+      await rm(appDir, { recursive: true, force: true });
+    }
+  });
+
+  test("appDir 不存在：不写这条映射、不改启动结果，但日志明说没找到产物", async () => {
+    // 故意给一个不存在的路径（开发机上没出包就是这个样子）。fileExists 要模拟真磁盘：
+    // 只认桥 exe 与 WindowsSandbox.exe 存在，产物目录不存在——默认的 `() => true`
+    // 会把这条用例变成「永远存在」，测不到闸门。
+    const missingAppDir = join(tmpdir(), "orbita-definitely-not-built-xyz");
+    const harness = await makeHarness({
+      appDir: missingAppDir,
+      fileExists: (path) => path !== missingAppDir,
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      const xml = await readWsb(harness);
+      assert.ok(!xml.includes("orbita-definitely-not-built-xyz"), "不存在的目录不许进 .wsb");      assert.equal(xml.match(/<MappedFolder>/g)?.length, 2, "只剩桥与 out 两条映射");
+      assert.ok(
+        harness.logs.some((line) => line.includes("没有找到打包产物") && line.includes("dist:win")),
+        `日志里应说清楚下一步：\n${harness.logs.join("\n")}`,
+      );
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true }, "没产物不该挡住启动");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("不传 appDir（主进程的默认用法）：不出这条映射、也不报没产物", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      const xml = await readWsb(harness);
+      assert.equal(xml.match(/<MappedFolder>/g)?.length, 2);
+      assert.ok(!harness.logs.some((line) => line.includes("没有找到打包产物")), "没传就不要碎碎念");
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+    } finally {
+      await harness.close();
+    }
+  });
 });
 
 // ── bridge.json 通告解析 ────────────────────────────────────────────────
@@ -287,8 +436,7 @@ describe("沙箱状态机（假进程 + 真 bridge.json 通告）", () => {
     }
   });
 
-  test("上一局残留的 bridge.json 会被清掉——不许捡到死人通告", async () => {
-    const harness = await makeHarness();
+  test("上一局残留的 bridge.json 会被清掉——不许捡到死人通告", async () => {    const harness = await makeHarness();
     try {
       // 预埋一份上一局的死通告
       await mkdir(join(harness.dir, "out"), { recursive: true });

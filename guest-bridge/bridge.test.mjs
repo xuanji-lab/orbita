@@ -108,7 +108,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.4.0");
+      assert.equal(info.version, "0.5.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -483,3 +483,131 @@ test("注入失败文案：错误码 5 带人话解释（模型看得到的就�
   // 文案要接进异常消息里，不能只定义不用
   assert.match(src, /个事件（" \+ DescribeSendInputError/);
 });
+
+// ── launch 路径闸门的纯函数自测（--selftest-launch）────────────────────────────
+//
+// launch 能 Process.Start 任意 exe，边界就是那道路径闸门；它是纯函数，宿主上就能测，
+// 不必起沙箱、更不必真启动一份打包版（在宿主上真启动打包版属于红线）。
+
+test(
+  "launch 路径闸门 selftest：只放行沙箱桌面下的 .exe，.. / 大小写 / 相对路径都被判对",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-launch"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 8, `用例数应 >= 8，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 打包产物冒烟的三条命令：参数校验与错误路径（不启动、不杀任何真进程）───────────
+//
+// ⚠ **红线**：launch 真成功就是在宿主上拉起一个 exe。所以这一组：
+//   - launch 一律走 dryRun（桥只校验路径，不启动进程）；
+//   - 真启动的路径用**沙箱里才存在**的路径去撞（宿主上没有 C:\Users\WDAGUtilityAccount），
+//     于是它必然停在「沙箱里没有这个文件」——不启动任何东西，却能把成功前置的校验跑完；
+//   - kill 只碰一个几乎不可能存在的 pid，并且一律带 dryRun 或者根本不存在。
+
+test(
+  "launch / kill / screenshot-stats：参数校验与错误路径；宿主上不启动任何进程",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-launch-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+
+    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    const guestExe = "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita.exe";
+    let seq = 0;
+    const ask = async (body) => {
+      seq += 1;
+      const name = "cmd-" + String(seq).padStart(6, "0");
+      writeRequest(cmdDir, name, JSON.stringify({ seq, ...body }));
+      const respPath = path.join(cmdDir, name + ".resp.json");
+      assert.ok(await waitForFile(respPath), `应收到响应。桥日志：\n${bridgeLog}`);
+      return JSON.parse(fs.readFileSync(respPath, "utf8"));
+    };
+
+    try {
+      assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
+
+      // ---- launch：参数校验 ----
+      const noPath = await ask({ command: "launch", dryRun: true });
+      assert.equal(noPath.ok, false);
+      assert.match(noPath.error, /需要 path 字段/);
+
+      const outside = await ask({ command: "launch", path: "C:\\Windows\\System32\\cmd.exe", dryRun: true });
+      assert.equal(outside.ok, false, "桌面之外的路径不许放行");
+      assert.match(outside.error, /只允许沙箱桌面下/);
+
+      const traversal = await ask({
+        command: "launch",
+        path: "C:\\Users\\WDAGUtilityAccount\\Desktop\\..\\..\\Windows\\System32\\cmd.exe",
+        dryRun: true,
+      });
+      assert.equal(traversal.ok, false, ".. 穿越回桌面之外要拦下");
+
+      const notExe = await ask({
+        command: "launch",
+        path: "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\resources\\app.asar",
+        dryRun: true,
+      });
+      assert.equal(notExe.ok, false);
+      assert.match(notExe.error, /只启动 \.exe/);
+
+      // 路径合法但文件不存在（宿主上没有 WDAGUtilityAccount）→ 人话错误，**不启动任何东西**
+      const missing = await ask({ command: "launch", path: guestExe, dryRun: true });
+      assert.equal(missing.ok, false);
+      assert.match(missing.error, /沙箱里没有这个文件/);
+      assert.match(missing.error, /dist\/win-unpacked/, "错误里要写出下一步（先出包）");
+
+      // ---- kill：参数校验与幂等 ----
+      const noPid = await ask({ command: "kill" });
+      assert.equal(noPid.ok, false);
+      assert.match(noPid.error, /整数 pid/);
+
+      const zeroPid = await ask({ command: "kill", pid: 0 });
+      assert.equal(zeroPid.ok, false, "pid 0 是拒绝值（不能变成「杀当前进程组」之类）");
+
+      const negative = await ask({ command: "kill", pid: -5 });
+      assert.equal(negative.ok, false);
+
+      // 不存在的 pid：幂等成功，并且**没有任何东西被杀**（dryRun 也拦一道）
+      const gone = await ask({ command: "kill", pid: 4_000_000, dryRun: true });
+      assert.equal(gone.ok, true, JSON.stringify(gone));
+      assert.equal(gone.alreadyGone, true);
+
+      // ---- screenshot-stats：字段与边界 ----
+      const stats = await ask({ command: "screenshot-stats", maxWidth: 320 });
+      assert.equal(stats.ok, true, JSON.stringify(stats));
+      assert.ok(Number.isInteger(stats.width) && stats.width > 0);
+      assert.ok(Number.isInteger(stats.height) && stats.height > 0);
+      assert.ok(Math.max(stats.width, stats.height) <= 320, `长边应 ≤ 320，实际 ${stats.width}x${stats.height}`);
+      for (const key of ["mean", "stdDev", "blackRatio", "whiteRatio"]) {
+        assert.equal(typeof stats[key], "number", `${key} 应是数字`);
+        assert.ok(stats[key] >= 0, `${key} 不该是负数`);
+      }
+      assert.ok(stats.mean <= 255, "mean 是亮度，不该超过 255");
+      assert.ok(stats.blackRatio <= 1 && stats.whiteRatio <= 1, "占比不该超过 1");
+      assert.ok(stats.blackRatio + stats.whiteRatio <= 1.0001, "黑与非黑互斥：两者之和不该超过 1");
+      assert.ok(Number.isInteger(stats.distinctColors) && stats.distinctColors >= 1);
+
+      const badWidth = await ask({ command: "screenshot-stats", maxWidth: 0 });
+      assert.equal(badWidth.ok, false);
+      assert.match(badWidth.error, /maxWidth 必须是正整数/);
+
+      // 循环还活着
+      assert.deepEqual(await ask({ command: "ping" }), { ok: true });
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
