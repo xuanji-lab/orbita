@@ -4,13 +4,14 @@ import "./providers-view.css";
 import {
   KNOWN_PROVIDERS,
   catalogPreferenceOf,
+  knownAccessMethods,
   knownProviderDefaultName,
   knownProviderGroup,
   type KnownProvider,
 } from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
 import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
-import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
+import type { ModelDecl, ProviderApi, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider, OauthDeviceCode } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
 import { Icon } from "../../shell/Icon";
@@ -191,7 +192,8 @@ export function ProvidersView(props: {
    * 偏好与会话注册同源（catalogPreferenceOf）：「目录说了算」的服务商这里也不吃白名单。
    */
   const modelDefaults = (target: KnownProvider | undefined, id: string): ModelDefaults =>
-    resolveModelDefaults(catalog, id, target === undefined ? {} : catalogPreferenceOf(target));
+    // 按草稿选中的协议查（会话注册按实例协议走；同一型号在两种协议下档位可能不同）
+    resolveModelDefaults(catalog, id, target === undefined ? {} : catalogPreferenceOf(target, draft.api));
   /** 某个已适配 provider 在 pi 目录里的模型 id 清单（Fetch 的兜底候选池） */
   const catalogIds = (target: KnownProvider | undefined): string[] =>
     target?.catalogId === undefined
@@ -217,6 +219,8 @@ export function ProvidersView(props: {
       id: provider.id,
       displayName: provider.displayName,
       baseUrl: provider.endpoint.baseUrl,
+      // 实例落盘的协议（老实例可能不是条目现在的默认，原样保留）
+      api: provider.endpoint.api,
       models: provider.models.declared.map((m) => ({ ...m })),
       apiKey: "",
     });
@@ -329,9 +333,23 @@ export function ProvidersView(props: {
             ? knownProviderDefaultName(target)
             : `${knownProviderDefaultName(target)} ${instancesOfKind(target.id).length + 1}`,
       baseUrl: target?.baseUrl ?? "",
+      api: target?.api ?? "openai-completions",
       models: [],
       apiKey: "",
     });
+  };
+
+  /**
+   * 换接入协议：地址跟着换成这家在这个协议下的官方地址；上一个协议拉来的候选与状态行作废
+   * （换了端点，那份清单与「连接成功」都不再成立）。存了才生效，与改地址同一个 Save 条。
+   */
+  const pickAccess = (api: ProviderApi) => {
+    if (known === undefined || api === draft.api) return;
+    const method = knownAccessMethods(known).find((item) => item.api === api);
+    if (method === undefined) return;
+    setDraft({ ...draft, api, baseUrl: method.baseUrl });
+    setDiscovered(null);
+    setStatus(null);
   };
 
   /**
@@ -377,7 +395,7 @@ export function ProvidersView(props: {
     guard(t.providers.fetchingModels, async () => {
       const result = await api.provider.discover({
         baseUrl: draft.baseUrl.trim(),
-        api: known?.api ?? "openai-completions",
+        api: draft.api,
         ...withKey(),
         ...withHeaders(),
       });
@@ -403,7 +421,7 @@ export function ProvidersView(props: {
     try {
       await guard(t.providers.testingConnection, async () => {
         const result = await api.provider.test({
-          api: known?.api ?? "openai-completions",
+          api: draft.api,
           baseUrl: draft.baseUrl.trim(),
           modelId: draft.models[0]?.id ?? "",
           ...withKey(),
@@ -471,7 +489,7 @@ export function ProvidersView(props: {
   const testModel = (id: string) => {
     setModelTests((prev) => ({ ...prev, [id]: { tone: "busy", text: t.providers.testing } }));
     api.provider
-      .test({ api: known?.api ?? "openai-completions", baseUrl: draft.baseUrl.trim(), modelId: id, ...withKey(), ...withHeaders() })
+      .test({ api: draft.api, baseUrl: draft.baseUrl.trim(), modelId: id, ...withKey(), ...withHeaders() })
       .then((result) => {
         setModelTests((prev) => ({ ...prev, [id]: { tone: result.ok ? "ok" : "bad", text: result.message } }));
         if (result.ok) dismissLater(id);
@@ -565,7 +583,8 @@ export function ProvidersView(props: {
         displayName: draft.displayName.trim(),
         endpoint: {
           baseUrl: draft.baseUrl.trim(),
-          api: known?.api ?? "openai-completions",
+          // 选中的接入协议（多协议条目由选择器定，其余就是条目协议 / 实例原协议）
+          api: draft.api,
           ...(endpointHeaders === undefined ? {} : { headers: endpointHeaders }),
         },
         models: { declared: draft.models },
@@ -613,7 +632,7 @@ export function ProvidersView(props: {
           displayName: `${name} (copy)`,
           endpoint: {
             baseUrl,
-            api: known?.api ?? editing.endpoint.api,
+            api: draft.api,
             ...(editing.endpoint.headers === undefined ? {} : { headers: editing.endpoint.headers }),
           },
           models: {
@@ -643,6 +662,7 @@ export function ProvidersView(props: {
       id,
       displayName: `${name} (copy)`,
       baseUrl,
+      api: draft.api,
       models: draft.models.map((m) => ({ ...m })),
       apiKey: "",
     });
@@ -696,7 +716,7 @@ export function ProvidersView(props: {
     (editing !== undefined &&
       connectionDirty(
         draft,
-        { displayName: editing.displayName, baseUrl: editing.endpoint.baseUrl },
+        { displayName: editing.displayName, baseUrl: editing.endpoint.baseUrl, api: editing.endpoint.api },
         revealedKey,
       ));
 
@@ -848,7 +868,16 @@ export function ProvidersView(props: {
                   {draft.displayName || (isNew ? t.providers.newProvider : editing?.displayName)}
                 </span>
                 {/* 协议是锁定的事实，不是一个要填的字段：从整行降成标题旁的徽标 */}
-                <ApiFormatBadge api={known.api} />
+                {/* 协议：这家官方开着几种就给选择器（地址跟着换），只有一种就是锁着的徽标 */}
+                {knownAccessMethods(known).length > 1 ? (
+                  <AccessPicker
+                    methods={knownAccessMethods(known).map((method) => method.api)}
+                    value={draft.api}
+                    onPick={pickAccess}
+                  />
+                ) : (
+                  <ApiFormatBadge api={draft.api} />
+                )}
                 <span className="pv-headend">
                   {isNew ? null : confirmRemove ? (
                     <>
@@ -912,7 +941,7 @@ export function ProvidersView(props: {
                     <span className="pv-fld-stack">
                       <UrlField
                         value={draft.baseUrl}
-                        suffix={urlSuffix(known.api)}
+                        suffix={urlSuffix(draft.api)}
                         invalid={issueFor("endpoint.baseUrl") !== undefined}
                         onChange={(baseUrl) => setDraft({ ...draft, baseUrl })}
                       />
@@ -1245,6 +1274,7 @@ export function ProvidersView(props: {
         <div className="pv-modal-root">
           <ModelDialog
             known={known}
+            api={draft.api}
             catalog={catalog}
             decl={editorDecl}
             existingIds={draft.models.map((m) => m.id)}
@@ -1288,6 +1318,40 @@ function UntestedNotice() {
         {t.providers.untestedNoticeEnd}
       </span>
     </div>
+  );
+}
+
+/** 接入协议的显示名：协议名是专名，中英文界面同一写法；悬停里另有 pi 的 api id */
+const ACCESS_LABELS: Partial<Record<ProviderApi, string>> = {
+  "anthropic-messages": "Anthropic Messages",
+  "openai-completions": "OpenAI Chat",
+  "openai-responses": "OpenAI Responses",
+};
+
+/**
+ * 接入协议选择器：只给官方开着两种以上协议的条目（智谱 / Kimi / DeepSeek / MiniMax / Z.AI），
+ * 与卡片墙的「大 / 小」同款分段钮。选中项用 aria-pressed 表达；说明进悬停（同协议徽标）。
+ */
+function AccessPicker(props: { methods: readonly ProviderApi[]; value: ProviderApi; onPick: (api: ProviderApi) => void }) {
+  const t = useT();
+  const tip = useSettingTip<HTMLSpanElement>(t.providers.accessTip);
+  return (
+    <>
+      <span className="pv-seg pv-access" role="group" aria-label={t.providers.accessLabel} {...tip.anchor}>
+        {props.methods.map((api) => (
+          <button
+            key={api}
+            type="button"
+            aria-pressed={props.value === api}
+            title={api}
+            onClick={() => props.onPick(api)}
+          >
+            {ACCESS_LABELS[api] ?? api}
+          </button>
+        ))}
+      </span>
+      {tip.layer}
+    </>
   );
 }
 
@@ -1703,6 +1767,8 @@ function FetchPanel(props: {
  */
 function ModelDialog(props: {
   known: KnownProvider;
+  /** 实例（草稿）选中的协议：查型号参数按它，与详情页的模型行同源 */
+  api: ProviderApi;
   catalog: BuiltinProvider[];
   decl: ModelDecl | undefined;
   existingIds: readonly string[];
@@ -1714,7 +1780,7 @@ function ModelDialog(props: {
   const isNew = props.decl === undefined;
   // 与模型行同一条推断（按 id 跨目录）：行上显示 1M、弹窗却写 Inherit (128000) 是说两句话
   const defaultsOf = (id: string): ModelDefaults =>
-    resolveModelDefaults(props.catalog, id, catalogPreferenceOf(props.known));
+    resolveModelDefaults(props.catalog, id, catalogPreferenceOf(props.known, props.api));
   const [idValue, setIdValue] = useState(props.decl?.id ?? "");
   const [name, setName] = useState(props.decl?.name ?? "");
   const [ctxText, setCtxText] = useState(props.decl?.contextWindow?.toString() ?? "");
@@ -1995,5 +2061,13 @@ function Line(props: { tone: "ok" | "bad" | "busy"; children: React.ReactNode })
 }
 
 function emptyDraft() {
-  return { kind: "", id: "", displayName: "", baseUrl: "", models: [] as ModelDecl[], apiKey: "" };
+  return {
+    kind: "",
+    id: "",
+    displayName: "",
+    baseUrl: "",
+    api: "openai-completions" as ProviderApi,
+    models: [] as ModelDecl[],
+    apiKey: "",
+  };
 }

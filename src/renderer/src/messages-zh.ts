@@ -751,6 +751,8 @@ export const zh: Messages = {
     editModel: (id) => `编辑 ${id}`,
     removeModel: (id) => `移除 ${id}`,
     apiFormatTip: "接口格式由预设决定 · 要换协议就换一个条目",
+    accessLabel: "接口格式",
+    accessTip: "这家官方同时开着几种协议 · 切换后地址跟着换 · 保存后生效",
     urlSuffixTip: "客户端会接上这段路径",
     searchProviders: "搜索服务商、地址或你起的名字",
     onlyAdded: "仅显示已添加",
