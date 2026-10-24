@@ -98,6 +98,11 @@ export interface SessionEntry {
     hasMore: boolean;
     /** 更早的一页在途：顶部指示 + 防重（快速连续触顶只发一次） */
     loading: boolean;
+    /**
+     * 窗口之前还有几条压缩界碑（主进程数的，见 `SessionWindow.compactionsBefore`）。
+     * 拉进更早一页时，那页里的界碑从这里挪进 `compactions`——两者之和恒为会话的压缩次数。
+     */
+    compactionsBefore: number;
   };
   /**
    * 压缩界碑单独记账，**不进 pi 的归约器**——它不是消息，归约器不认识。
@@ -188,7 +193,7 @@ export function createSessionStates(): SessionStates {
 /** 空槽是常量：首页/无选中时用它兜底，避免每次渲染新建 TranscriptState。 */
 export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
-  window: { firstId: null, hasMore: false, loading: false },
+  window: { firstId: null, hasMore: false, loading: false, compactionsBefore: 0 },
   compactions: [],
   marks: [],
   phase: "idle",
@@ -450,7 +455,7 @@ export function seedFromDisk(
   sessionId: string,
   transcript: readonly SessionRecord[],
   stats: AgentStats | null = null,
-  page?: { hasMore: boolean },
+  page?: { hasMore: boolean; compactionsBefore: number },
 ): SessionStates {
   // 界碑与通道标记都不进 pi 的归约器（它们不是模型消息，归约器不认识）——分开记账，
   // 显示时由 mergeSideRecords 按时间插回往来流；实时与历史从是同一条显示路径。
@@ -464,6 +469,7 @@ export function seedFromDisk(
       firstId: transcript[0]?.id ?? null,
       hasMore: page?.hasMore ?? false,
       loading: false,
+      compactionsBefore: page?.compactionsBefore ?? 0,
     },
     compactions,
     marks,
@@ -567,8 +573,18 @@ export function prependOlder(
       firstId: fresh[0]?.id ?? entry.window.firstId,
       hasMore: page.hasMore,
       loading: false,
+      // 这页里的界碑已经进了 compactions：从「窗口之前」的数里挪走，总数不变
+      compactionsBefore: Math.max(0, entry.window.compactionsBefore - older.compactions.length),
     },
   });
+}
+
+/**
+ * 会话一共压缩过几次 = 已加载窗口里的界碑 + 窗口之前的界碑。
+ * 回退折叠在主进程做完了，这里数到的就是当前生效视图的口径。
+ */
+export function compactionCount(entry: Pick<SessionEntry, "compactions" | "window">): number {
+  return entry.compactions.length + entry.window.compactionsBefore;
 }
 
 /**

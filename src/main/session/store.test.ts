@@ -1161,6 +1161,37 @@ describe("SessionStore · 窗口分页", () => {
     assert.equal(detail?.transcript[0]?.id, "k1");
   });
 
+  test("compactionsBefore 只数窗口之前、生效视图里的压缩界碑", async () => {
+    const boundary = (id: string, timestamp: number): SessionRecord => ({
+      role: "compacted",
+      id,
+      summary: "## Goal",
+      tokensBefore: 90_000,
+      timestamp,
+    });
+    // 界碑与 user 一样是轮首；前 140 轮里插两块，尾窗里再插一块
+    const records = Array.from({ length: 240 }, (_, n) => [
+      ...(n === 30 ? [boundary("c30", 1029)] : []),
+      ...(n === 90 ? [boundary("c90", 1089)] : []),
+      ...(n === 200 ? [boundary("c200", 1199)] : []),
+      ...turnBlock(n, 3),
+    ]).flat();
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.hasMore, true);
+    assert.equal(detail?.window.compactionsBefore, 2);
+    assert.equal(detail?.transcript.filter((record) => record.role === "compacted").length, 1);
+  });
+
+  test("短会话整份进窗：compactionsBefore 为 0", async () => {
+    await seedLog(ID, [
+      { role: "compacted", id: "c1", summary: "s", tokensBefore: 1, timestamp: 999 },
+      ...turnBlock(0, 2),
+    ]);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.compactionsBefore, 0);
+  });
+
   test("短会话不足一窗：全量返回，hasMore 为假", async () => {
     await seedLog(ID, turnBlock(0, 2));
     const detail = await store.loadWindow(ID);

@@ -850,7 +850,12 @@ export class SessionStore {
     return {
       meta,
       transcript: effective.slice(start),
-      window: { total: effective.length, hasMore: start > 0 },
+      window: {
+        total: effective.length,
+        hasMore: start > 0,
+        // 窗口之前的压缩界碑：用量环的「第几个窗口」要数全量，尾窗外的不能漏
+        compactionsBefore: effective.slice(0, start).filter((record) => record.role === "compacted").length,
+      },
     };
   }
 

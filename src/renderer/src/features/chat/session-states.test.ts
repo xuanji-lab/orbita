@@ -30,6 +30,7 @@ import {
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
+  compactionCount,
 } from "./session-states.ts";
 import { en } from "../../messages-en.ts";
 
@@ -1026,7 +1027,7 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
 describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", () => {
   /** 尾窗种子：窗口 = [u3, a3]，外面还有更早的 */
   const tailSeed = (): SessionStates =>
-    seedFromDisk(new Map(), "A", [userItem("u3", 3000), userItem("u4", 4000)], null, { hasMore: true });
+    seedFromDisk(new Map(), "A", [userItem("u3", 3000), userItem("u4", 4000)], null, { hasMore: true, compactionsBefore: 0 });
 
   test("并进前面：顺序不乱（更早的在前）、锚点移到新页头一条、hasMore 跟着回执走", () => {
     const seeded = tailSeed();
@@ -1053,6 +1054,29 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
     assert.equal(next.get("A")?.window.hasMore, false);
   });
 
+  test("压缩次数：窗口外的界碑算进总数；拉进更早一页时从窗口外挪进窗口，总数不变", () => {
+    // 窗口里一块界碑，窗口外还有两块
+    const seeded = seedFromDisk(new Map(), "A", [compacted("c3", 2500), userItem("u3", 3000)], null, {
+      hasMore: true,
+      compactionsBefore: 2,
+    });
+    assert.equal(compactionCount(seeded.get("A")!), 3);
+    // 更早一页带回其中一块
+    const next = prependOlder(seeded, "A", [compacted("c2", 1500), userItem("u2", 2000)], { hasMore: true });
+    assert.equal(next.get("A")?.window.compactionsBefore, 1);
+    assert.equal(next.get("A")?.compactions.length, 2);
+    assert.equal(compactionCount(next.get("A")!), 3);
+    // 实时压缩：事件进槽，总数 +1
+    const live = applyAgentEvent(next, { type: "compaction", sessionId: "A", record: compacted("c4", 5000) });
+    assert.equal(compactionCount(live.get("A")!), 4);
+  });
+
+  test("压缩次数：不给分页信息（全量种子）时只数窗口里的，空槽为 0", () => {
+    const seeded = seedFromDisk(new Map(), "A", [compacted("c1", 1500), userItem("u1", 2000)]);
+    assert.equal(compactionCount(seeded.get("A")!), 1);
+    assert.equal(compactionCount(EMPTY_ENTRY), 0);
+  });
+
   test("空页（锚点对不上盘）：记录不动、hasMore 归假、锚点保持", () => {
     const seeded = tailSeed();
     const next = prependOlder(seeded, "A", [], { hasMore: false });
@@ -1062,7 +1086,7 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
   });
 
   test("侧记录一起前置：界碑 / 通道标记 / 轮尾账 / 意图卡进各自的桶", () => {
-    const seeded = seedFromDisk(new Map(), "A", [userItem("u5", 5000)], null, { hasMore: true });
+    const seeded = seedFromDisk(new Map(), "A", [userItem("u5", 5000)], null, { hasMore: true, compactionsBefore: 0 });
     const fileTurn: FileTurnRecord = {
       role: "file-turn",
       id: "f1",
