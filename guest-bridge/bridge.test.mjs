@@ -63,6 +63,32 @@ async function waitForFile(filePath, timeoutMs = 15_000) {
   return true;
 }
 
+/**
+ * 收尾：按 `<out>/worker/<会话>/worker.json` 里记下的 pid 逐个清掉 worker。
+ *
+ * 为什么测试也要做：桥被 kill 之后，worker 是它的子进程——正常情况下 worker 会在 ~2s 内
+ * 发现父进程没了就自己退（WorkerHost.cs 的 ParentGone），但测试进程不该赌那 2 秒，
+ * 而且残留的 worker 会去轮询一个已被删掉的临时目录。**只杀 worker.json 里的 pid**（仓规）。
+ */
+function killLeftoverWorkers(outDir) {
+  let names;
+  try {
+    names = fs.readdirSync(path.join(outDir, "worker"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    try {
+      const info = JSON.parse(fs.readFileSync(path.join(outDir, "worker", name, "worker.json"), "utf8"));
+      if (Number.isInteger(info.pid) && info.pid > 0) {
+        spawnSync("taskkill", ["/PID", String(info.pid), "/T", "/F"], { windowsHide: true });
+      }
+    } catch {
+      // 桥已经把它撤掉了（worker.json 不在了）：没有可杀的
+    }
+  }
+}
+
 test("build.mjs 编译出 exe", { skip: !isWindows && "仅在 Windows 上运行" }, async () => {
   const r = spawnSync(process.execPath, [buildScript], { encoding: "utf8" });
   assert.equal(r.status, 0, `build.mjs 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
@@ -108,7 +134,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.6.0");
+      assert.equal(info.version, "0.7.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -493,8 +519,41 @@ test(
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));
+      killLeftoverWorkers(outDir);
       fs.rmSync(outDir, { recursive: true, force: true });
     }
+  },
+);
+
+// ── worker 层（v1.5-3）：cdp-* 由该会话自己的可杀 worker 子进程执行 ────────────────
+//
+// 为什么这一层只能靠自测证：它的全部能力都是「进程能起来、能到点被杀、崩了能再起」，
+// 纯函数测不到；而真机验收（沙箱 + Edge）太贵，且在这里碰 msedge 是红线。
+// `--selftest-worker` 自己起一个子桥（--no-browser --test-hooks），再扮演宿主发命令：
+//   ① worker 被拉起并应答 worker-ping（pid 与 worker.json 一致）
+//   ② 转发超时（worker-hang 睡 60s）→ 主桥 taskkill，回执是「没有响应（<命令> 超时）」
+//   ③ 超时后下一条命令拉起新 worker；把新 worker 打死，下一条还能拉起
+//   ④ worker-stop → worker 自己退出（不是被 taskkill 带走的）
+//   ⑤ 没有 worker 时汇总 cdp-status 只回 0 个、不拉新进程
+
+test(
+  "worker 层 selftest：拉起 / 超时被杀 / 崩了能重启 / 自己退出（全程不碰 Edge）",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 180_000 },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-worker"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 150_000,
+    });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    // 只解析最后一行：万一自测进程自己也往 stdout 写了一条日志，不该把整份回执打坏
+    const line = (r.stdout ?? "").trim().split(/\r?\n/).filter((text) => text.length > 0).pop();
+    const parsed = JSON.parse(line);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 12, `用例数应 >= 12，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+    console.log(`    worker 自测：${parsed.cases} 条断言全过`);
   },
 );
 

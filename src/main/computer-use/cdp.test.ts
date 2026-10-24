@@ -777,3 +777,35 @@ describe("每会话一个浏览器", () => {
   });
 });
 
+// ── 可杀的 worker（v1.5-3）：一条卡住的 CDP 命令不再堵住整条桥 ─────────────────
+//
+// 执行已经搬进 guest 里的 worker 子进程（guest-bridge/WorkerHost.cs），宿主这一层
+// **一个字段都没变**。这里要钉的只有一件事：桥把「慢命令」换成的**那句人话**必须原样
+// 到模型面前，并且宿主不会自作聪明去重试——重试等于再等一轮 40 秒的超时。
+//
+// 真实行为（worker 被 taskkill、Edge 跟着走）由桥的自测覆盖：
+// `orbita-guest-bridge.exe --selftest-worker`（guest-bridge/bridge.test.mjs），宿主上碰
+// msedge 是红线。
+
+describe("worker 超时", () => {
+  test("桥的 worker 超时文案原样透传 + 降级指引；宿主不重试", async () => {
+    const timeoutText =
+      "沙箱里的浏览器没有响应（cdp-nav 超时），已重启该会话的浏览器通道——可以用 cdp-status 确认，或改用像素工具";
+    const { guest, calls } = fakeGuest({
+      running: true,
+      replies: { [computerUseGuestCommands.cdpNav]: () => ({ ok: false, error: timeoutText }) },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+
+    const outcome = await run(cdp, { action: "sandbox-navigate", url: "https://slow.example/" }, "a");
+    assert.equal(outcome.ok, false);
+    const error = outcome.ok ? "" : outcome.error;
+    assert.ok(error.includes(timeoutText), `桥的原话要原样交给模型：${error}`);
+    assert.match(error, /computer_screenshot/, "还要告诉模型能退回像素工具");
+    assert.equal(
+      calls.filter((call) => call.command === computerUseGuestCommands.cdpNav).length,
+      1,
+      "超时不是「没有在运行」：宿主不该自动重试（那会再等一整轮超时）",
+    );
+  });
+});
