@@ -86,6 +86,39 @@ export function agentMarkEffect(ranges: readonly { from: number; to: number }[])
   );
 }
 
+/** 换掉「SyncTeX 定位到的那一行」的高亮范围（PDF 双击 / 右键在 PDF 中定位的结果） */
+const setSyncLine = StateEffect.define<DecorationSet>();
+
+/**
+ * 与 agentMarks 同一套 StateField（用户一打字就跟着文字走，不会错行）：
+ * **整行底色**用 line 装饰而不是 mark——定位的是「这一行」，不是某段文字。
+ */
+const syncLineMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    let next = marks.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(setSyncLine)) next = effect.value;
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * 高亮一行。行装饰（Decoration.line）的区间**必须是零长**（CodeMirror 的硬约束：
+ * 传 from..to 会抛 "Line decoration ranges must be zero-length" 并掀翻整个编辑器），
+ * 只接受行的起点；1 基行号的换算在调用方。
+ */
+export function syncLineEffect(from: number): StateEffect<DecorationSet> {
+  return setSyncLine.of(Decoration.set([Decoration.line({ class: "cm-sync-line" }).range(from)], true));
+}
+
+/** 清掉定位高亮（TexEditorPane 在 2 秒后发这发，短暂停留是为了让人看见「跳到哪了」） */
+export function clearSyncLineEffect(): StateEffect<DecorationSet> {
+  return setSyncLine.of(Decoration.none);
+}
+
 /**
  * 语法着色只写 token，不写颜色值：深浅主题、纸面主题都按同一份 CSS 变量走。
  * 变量在 styles.css 的 `.tex-editor` 作用域里声明（见那里的说明）。
@@ -123,6 +156,7 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
     syntaxHighlighting(latexHighlight),
     readOnlyCompartment.of(readOnlyExtensions(false)),
     agentMarks,
+    syncLineMarks,
     search({ top: true }),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of((update) => {
@@ -177,6 +211,10 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
       ".cm-agent-hunk": {
         backgroundColor: "var(--color-success-soft)",
         borderRadius: "2px",
+      },
+      // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的落点框同色系）
+      ".cm-sync-line": {
+        backgroundColor: "var(--color-accent-soft)",
       },
       ".cm-panels": {
         backgroundColor: "var(--color-bg-panel)",

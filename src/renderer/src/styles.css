@@ -3463,6 +3463,36 @@ body {
 }
 
 /*
+ * SyncTeX 落点（源码 → PDF，PdfView.tsx）：短暂出现再淡出——一次定位不该在页面上
+ * 留下一个常驻标记，下一次定位用新的 token 重新播一遍。层在引用高亮之上（3 > 2），
+ * 不吃指针，翻页 / 选中文字都不受影响。
+ */
+.pdf-sync-mark {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
+  animation: pdf-sync-flash 2.4s ease-out forwards;
+}
+
+@keyframes pdf-sync-flash {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边
