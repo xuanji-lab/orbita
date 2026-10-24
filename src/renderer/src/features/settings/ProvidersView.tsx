@@ -36,6 +36,8 @@ import {
 import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
 import { ModelAvatar } from "./ModelAvatar";
+import { PriceCapabilityChart } from "./PriceCapabilityChart";
+import { shouldShowPriceChart } from "./price-chart-model.ts";
 import { VendorLogo } from "./VendorLogo";
 
 /**
@@ -723,6 +725,7 @@ export function ProvidersView(props: {
         {view.kind === "grid" && providers !== null && (
           <ProviderGrid
             providers={sorted}
+            catalog={catalog}
             banner={assignBanner}
             query={query}
             onQuery={setQuery}
@@ -1373,6 +1376,8 @@ function AssignView(props: {
  */
 function ProviderGrid(props: {
   providers: readonly ProviderDto[];
+  /** pi 内建目录：价格 · 能力图的显示名要它（modelDisplayName） */
+  catalog: readonly BuiltinProvider[];
   /** 分配模型的提示条（没有就是 null） */
   banner: React.ReactNode;
   query: string;
@@ -1449,6 +1454,13 @@ function ProviderGrid(props: {
             </div>
           </section>
         ))}
+        {/*
+          价格 · 能力图挂在卡片墙下面（原型 7，2026-10-24 裁决）：没有单独入口；所有服务商加起来
+          ≥ 2 个型号才出现。吃的是全部服务商，不是筛过的卡片——「仅显示已添加」与搜索都不影响它。
+        */}
+        {shouldShowPriceChart(props.providers) && (
+          <PriceCapabilityChart providers={props.providers} catalog={props.catalog} />
+        )}
       </div>
     </div>
   );

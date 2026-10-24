@@ -220,6 +220,8 @@ export const ipcChannels = {
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
   usageEvent: "usage:event",
+  /** 「价格 · 能力图」的数据（载荷形状在 shared/price-chart.ts）：分数快照 × 已添加型号 × 本地每任务成本，主进程现算。回 `PriceChartData` */
+  usagePriceChart: "usage:price-chart",
   /** 自动更新：拉当前快照（`UpdaterSnapshot`，载荷形状在 shared/updater.ts）。之后的状态变化走 updaterState 推送 */
   updaterGet: "updater:get",
   /** 自动更新：手动检查（启动首查与 4h 定时在 main/updater/service.ts） */
