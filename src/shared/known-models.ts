@@ -441,7 +441,9 @@ export type ModelFamilyLogo =
   | "stepfun"
   | "claude"
   | "openai"
-  | "xiaomimimo";
+  | "xiaomimimo"
+  | "doubao"
+  | "longcat";
 
 /**
  * 第二级 · 家族图标，按 id 前缀（小写比）。聚合网关与自建网关里最有用的一级：一家网关里的
@@ -458,6 +460,9 @@ const MODEL_FAMILY_PREFIXES: readonly (readonly [pattern: RegExp, logo: ModelFam
   [/^claude-/, "claude"],
   [/^(gpt-|o\d)/, "openai"],
   [/^mimo-/, "xiaomimimo"],
+  // 豆包的模型 id 前缀是 seed（火山方舟的 Seed 系列），龙猫用自家名
+  [/^seed-/, "doubao"],
+  [/^longcat-/, "longcat"],
 ];
 
 export type ModelAvatarRef = { kind: "own"; key: ModelAvatarKey } | { kind: "family"; logo: ModelFamilyLogo };
@@ -466,10 +471,20 @@ export type ModelAvatarRef = { kind: "own"; key: ModelAvatarKey } | { kind: "fam
  * 头像三级规则的前两级，先到先得：专属头像 > 家族图标。认不出返回 undefined——第三级是
  * 服务商图标，要看服务商条目，由界面层给（每个服务商都有图标，所以第三级必有结果）。
  * 只看型号 id，不联网。
+ *
+ * 专属那一层多试一次「去掉末尾 `-\d{4}` 日期后缀」：聚合网关常在 id 尾巴上带快照日期
+ * （基元律动的 deepseek-v4.1-flash-1017、qwen-token-plan 目录里的 deepseek-v4-flash-0731），
+ * 型号还是那个型号，头像不该因为后缀丢了。只对精确表生效——后缀剥掉后仍要恰好命中表里的
+ * 键才算（qwen3.8-27b、seed-2.1-pro 这类尾段不是日期的不受影响）。
  */
 export function modelAvatarOf(modelId: string): ModelAvatarRef | undefined {
   const exact = Object.hasOwn(MODEL_AVATAR_IDS, modelId) ? MODEL_AVATAR_IDS[modelId] : undefined;
   if (exact !== undefined) return { kind: "own", key: exact };
+  const stripped = /-\d{4}$/.test(modelId) ? modelId.replace(/-\d{4}$/, "") : modelId;
+  const dated = Object.hasOwn(MODEL_AVATAR_IDS, stripped) ? MODEL_AVATAR_IDS[stripped] : undefined;
+  if (stripped !== modelId && dated !== undefined) {
+    return { kind: "own", key: dated };
+  }
   const id = modelId.toLowerCase();
   const line = MODEL_AVATAR_PREFIXES.find(([prefix]) => id.startsWith(prefix));
   if (line !== undefined) return { kind: "own", key: line[1] };
