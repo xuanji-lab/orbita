@@ -61,6 +61,11 @@ export interface PriceChartPoint {
   costBasis: PriceChartCostBasis;
   /** 实测点的样本数（任务段数）；估算点为 0 */
   samples: number;
+  /**
+   * 估算点上**不够门槛的实测**：这个服务商 × 型号 × 档跑过、但任务数不到门槛（见主进程
+   * MIN_MEASURED_TASKS），点按估算画，悬停时另写一行「实测 n 个任务 $x」。实测点上缺席。
+   */
+  measured?: { cost: number; samples: number };
 }
 
 /** 已添加但不能画进图的型号（列在图下） */
