@@ -128,7 +128,7 @@ import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } fr
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
 import { modelThinkingLevels } from "@shared/model-defaults";
-import { modelPreferenceById } from "../settings/providers-view-model.ts";
+import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
@@ -2207,6 +2207,7 @@ function ComposerBar(props: {
           catalog,
           session.thinkingSupported,
           modelPreferenceById(session.usable, session.model.providerId),
+          declaredThinkingLevels(session.usable, session.model.providerId, session.model.modelId),
         );
   const thinkingMenuLevels = thinkingSupported ?? THINKING_LEVELS;
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判

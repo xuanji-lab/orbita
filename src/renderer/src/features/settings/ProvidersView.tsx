@@ -10,7 +10,14 @@ import {
   type KnownProvider,
 } from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
-import { modelDisplayName, resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
+import {
+  knownParamsFor,
+  modelDisplayName,
+  modelThinkingLevels,
+  resolveModelDefaults,
+  type ModelDefaults,
+} from "@shared/model-defaults";
+import { THINKING_LEVELS, type ThinkingLevel } from "@shared/thinking";
 import type { ModelDecl, ProviderApi, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider, OauthDeviceCode } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
@@ -21,6 +28,7 @@ import {
   cardAddress,
   compactTokens,
   connectionDirty,
+  customThinkingSeed,
   hasCredentials,
   kindOf,
   mergeModelCost,
@@ -33,6 +41,7 @@ import {
   parseTokenInput,
   providerCards,
   reorderIds,
+  toggleThinkingLevel,
   type ProviderCard,
   urlSuffix,
 } from "./providers-view-model.ts";
@@ -1818,6 +1827,8 @@ function ModelDialog(props: {
   const [vision, setVision] = useState<"inherit" | "on" | "off">(
     props.decl?.vision === true ? "on" : props.decl?.vision === false ? "off" : "inherit",
   );
+  // 思考档：null = 继承（白名单 > 目录），数组 = 用户勾的档（至少一档，按词汇表顺序）
+  const [thinking, setThinking] = useState<ThinkingLevel[] | null>(props.decl?.thinkingLevels ?? null);
   const [idIssue, setIdIssue] = useState<string | null>(null);
   const [fieldIssue, setFieldIssue] = useState<string | null>(null);
 
@@ -1831,6 +1842,12 @@ function ModelDialog(props: {
     activeDefaults.source === "catalog" || activeDefaults.source === "catalog-family";
   // 三档里的 Inherit 到底继承了什么：图标 + 悬停写出来，不然用户只能靠猜
   const inheritImage = activeDefaults.input.includes("image");
+  // 继承时菜单会显示的档：与底栏菜单同一个函数，只是不带覆盖、也没有运行时报回（弹窗里没有会话）
+  const activeId = isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? "");
+  const activePrefer = catalogPreferenceOf(props.known, props.api);
+  const inheritedLevels = activeId === "" ? null : modelThinkingLevels(activeId, props.catalog, null, activePrefer);
+  const inheritedLevelsSource =
+    knownParamsFor(props.catalog, activeId, activePrefer).thinkingLevels === undefined ? "catalog" : "known";
   // 模型弹窗头上的来源徽标：原来弹窗底部那句「Source: …」收成一枚徽标，整句进悬停
   const source = t.providers.sourceBadges[activeDefaults.source];
   const sourceTip = useSettingTip<HTMLSpanElement>(
@@ -1871,6 +1888,7 @@ function ModelDialog(props: {
     if (cost !== undefined) decl.cost = cost;
     if (vision === "on") decl.vision = true;
     if (vision === "off") decl.vision = false;
+    if (thinking !== null) decl.thinkingLevels = thinking;
     props.onApply(decl);
   };
 
@@ -1965,6 +1983,71 @@ function ModelDialog(props: {
               </Chip>
             </div>
           </div>
+          <div className="pv-fld wide pv-fld-top">
+            <span className="pv-lab">{t.providers.thinkingLevels}</span>
+            <div className="pv-fld-stack">
+              <div role="group" aria-label={t.providers.thinkingLevels} className="pv-inline tight">
+                <Chip
+                  active={thinking === null}
+                  title={inheritedLevels === null ? undefined : t.providers.inheritThinkingTip}
+                  onClick={() => setThinking(null)}
+                >
+                  {t.providers.inherit}
+                </Chip>
+                <Chip
+                  active={thinking !== null}
+                  onClick={() => setThinking((current) => current ?? customThinkingSeed(inheritedLevels))}
+                >
+                  {t.providers.custom}
+                </Chip>
+              </div>
+              {thinking === null ? (
+                <div className="pv-levels-inherited">
+                  {inheritedLevels === null ? (
+                    <span>{t.providers.thinkingUnknown}</span>
+                  ) : (
+                    <>
+                      <span>{inheritedLevels.map((level) => t.thinkingLevel(level, activeId)).join(" · ")}</span>
+                      <span className="pv-levels-source">
+                        <Icon name="book-open" size={11} strokeWidth={1.8} />
+                        {t.providers.sourceBadges[inheritedLevelsSource].label}
+                      </span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div role="group" aria-label={t.providers.custom} className="pv-levels">
+                    {THINKING_LEVELS.map((level) => {
+                      const checked = thinking.includes(level);
+                      // 最后一档锁住：去不掉，悬停说明怎么回到目录口径
+                      const last = checked && thinking.length === 1;
+                      return (
+                        <Chip
+                          key={level}
+                          icon={checked ? "check" : undefined}
+                          active={checked}
+                          disabled={last}
+                          title={last ? t.providers.lastThinkingLevelTip : undefined}
+                          onClick={() => setThinking(toggleThinkingLevel(thinking, level))}
+                        >
+                          {t.thinkingLevel(level, activeId)}
+                        </Chip>
+                      );
+                    })}
+                  </div>
+                  <span className="pv-levels-hint">
+                    {t.providers.customThinkingHint}
+                    {inheritedLevels !== null &&
+                      ` ${t.providers.customThinkingFrom(
+                        t.providers.sourceBadges[inheritedLevelsSource].label,
+                        inheritedLevels.map((level) => t.thinkingLevel(level, activeId)).join(" · "),
+                      )}`}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
           <div className="pv-grid2">
             <UnitField
               id="pv-model-ctx"
@@ -2014,6 +2097,7 @@ function ModelDialog(props: {
               setCinText("");
               setCoutText("");
               setVision("inherit");
+              setThinking(null);
             }}
           >
             <Icon name="rotate-ccw" size={13} strokeWidth={1.8} /> {t.common.reset}

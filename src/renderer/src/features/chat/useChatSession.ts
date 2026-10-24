@@ -66,7 +66,7 @@ import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentI
 import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
-import { modelPreferenceById } from "../settings/providers-view-model.ts";
+import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
 import {
@@ -1294,7 +1294,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const applyNewTaskThinking = useCallback(
     (providerId: string, modelId: string) => {
       // 支持集按「哪家服务商的哪个型号」算：同一个 kimi-k3，OpenCode Go 上只有 max
-      const supported = modelThinkingLevels(modelId, catalog, null, modelPreferenceById(usable, providerId));
+      const supported = modelThinkingLevels(
+        modelId,
+        catalog,
+        null,
+        modelPreferenceById(usable, providerId),
+        declaredThinkingLevels(usable, providerId, modelId),
+      );
       setThinkingLevelState(resolveThinkingLevel({ modelId, supported, picked: pickedThinkingRef.current }));
     },
     // 只依赖 catalog、usable 与 ref：engine 是每次渲染新建的对象，依赖它会让下面依赖本函数的
@@ -2103,6 +2109,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
               engine.catalog,
               null,
               modelPreferenceById(engine.usable, restoredModel.providerId),
+              declaredThinkingLevels(engine.usable, restoredModel.providerId, restoredModel.modelId),
             ),
           );
           setThinkingLevelState(nextThinking);
@@ -2328,7 +2335,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 不支持才落新模型的默认档——换模型不该顺手改掉会话自己的设定
       // 新模型仍支持当前档（或支持集未知）就不动，不支持才落新模型的默认档——与打开旧会话
       // 同一条规则（reconcileThinkingLevel），规则只留一份
-      const supported = modelThinkingLevels(modelId, catalog, null, modelPreferenceById(engine.usable, providerId));
+      const supported = modelThinkingLevels(
+        modelId,
+        catalog,
+        null,
+        modelPreferenceById(engine.usable, providerId),
+        declaredThinkingLevels(engine.usable, providerId, modelId),
+      );
       const reconciled = reconcileThinkingLevel(thinkingLevel, modelId, supported);
       const switched = reconciled === thinkingLevel ? null : reconciled;
       // 盘上打开的旧会话按它的 id 记账与注入（理由见函数头）；首页新任务槽两者皆空

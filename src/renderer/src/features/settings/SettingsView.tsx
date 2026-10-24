@@ -47,7 +47,7 @@ import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelP
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
 import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
-import { modelPreferenceById } from "./providers-view-model.ts";
+import { declaredThinkingLevels, modelPreferenceById } from "./providers-view-model.ts";
 import { useT } from "../../locale.ts";
 import { playCompletionChime } from "../notify/chime.ts";
 
@@ -286,6 +286,7 @@ function General(props: {
             catalog,
             null,
             modelPreferenceById(usable, subSessionModel.providerId),
+            declaredThinkingLevels(usable, subSessionModel.providerId, subSessionModel.modelId),
           );
           return {
             modelId: subSessionModel.modelId,

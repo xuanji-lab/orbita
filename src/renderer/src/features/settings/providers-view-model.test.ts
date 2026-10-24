@@ -7,6 +7,8 @@ import {
   cardAddress,
   compactTokens,
   connectionDirty,
+  customThinkingSeed,
+  declaredThinkingLevels,
   hasCredentials,
   mergeModelCost,
   modelAcceptsImage,
@@ -20,6 +22,7 @@ import {
   providerCards,
   railVendorCell,
   reorderIds,
+  toggleThinkingLevel,
   urlSuffix,
 } from "./providers-view-model.ts";
 import { KNOWN_MODELS } from "../../../../shared/known-models.ts";
@@ -416,5 +419,29 @@ describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用�
     // 断言「自带实色」而不写出色值（design-tokens 守卫禁 src 里出现裸 hex）
     assert.match(svg, /fill="#[0-9a-f]{6}"/i);
     assert.doesNotMatch(svg, /currentColor/);
+  });
+});
+
+describe("型号思考档覆盖（弹窗的勾选逻辑与按服务商取声明）", () => {
+  test("切到自定义：预勾继承来的那几档；继承也未知就全勾", () => {
+    assert.deepEqual(customThinkingSeed(["off", "low", "high"]), ["off", "low", "high"]);
+    assert.deepEqual(customThinkingSeed(null), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("勾 / 去勾按词汇表顺序；最后一档去不掉", () => {
+    assert.deepEqual(toggleThinkingLevel(["high"], "off"), ["off", "high"]);
+    assert.deepEqual(toggleThinkingLevel(["max", "low"], "medium"), ["low", "medium", "max"]);
+    assert.deepEqual(toggleThinkingLevel(["off", "high"], "off"), ["high"]);
+    assert.deepEqual(toggleThinkingLevel(["high"], "high"), ["high"]);
+  });
+
+  test("declaredThinkingLevels：按（服务商，型号）取声明；没写 / 找不到 = 继承", () => {
+    const provider = {
+      id: "tokenrhythm",
+      models: { declared: [{ id: "kimi-k3", thinkingLevels: ["high"] }, { id: "glm-5.3" }] },
+    } as unknown as ProviderDto;
+    assert.deepEqual(declaredThinkingLevels([provider], "tokenrhythm", "kimi-k3"), ["high"]);
+    assert.equal(declaredThinkingLevels([provider], "tokenrhythm", "glm-5.3"), undefined);
+    assert.equal(declaredThinkingLevels([provider], "other", "kimi-k3"), undefined);
   });
 });
