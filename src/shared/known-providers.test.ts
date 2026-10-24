@@ -2,6 +2,7 @@ import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   KNOWN_PROVIDERS,
+  KNOWN_PROVIDER_GROUPS,
   catalogPreferenceOf,
   isPlanBilling,
   knownProviderDefaultName,
@@ -22,7 +23,7 @@ test("KNOWN_PROVIDERS：id 合法且不重复——下拉框的 key 与 upsert �
   }
 });
 
-describe("knownProviderGroup —— 添加服务商目录的三个分区", () => {
+describe("knownProviderGroup —— 添加服务商目录的四个分区", () => {
   const groupOf = (id: string) => {
     const provider = KNOWN_PROVIDERS.find((item) => item.id === id);
     assert.ok(provider !== undefined, id);
@@ -37,11 +38,19 @@ describe("knownProviderGroup —— 添加服务商目录的三个分区", () =>
     assert.equal(groupOf("opencode-go"), "plan");
     assert.equal(groupOf("anthropic-compatible"), "custom");
     assert.equal(groupOf("openai-compatible"), "custom");
+    assert.equal(groupOf("openai-responses-compatible"), "custom");
   });
 
-  it("每个区都不空——空区意味着条目的 billing / baseUrl 写错了", () => {
+  it("浏览器登录的订阅单独一区——不看计费口径（Claude 也是套餐计费，但不进套餐区）", () => {
+    assert.equal(groupOf("claude"), "oauth");
+    for (const provider of KNOWN_PROVIDERS) {
+      assert.equal(knownProviderGroup(provider) === "oauth", provider.auth === "oauth", provider.id);
+    }
+  });
+
+  it("每个区都不空——空区意味着条目的 auth / billing / baseUrl 写错了", () => {
     const groups = new Set(KNOWN_PROVIDERS.map(knownProviderGroup));
-    assert.deepEqual([...groups].sort(), ["api", "custom", "plan"]);
+    assert.deepEqual([...groups].sort(), [...KNOWN_PROVIDER_GROUPS].sort());
   });
 });
 
@@ -60,7 +69,11 @@ describe("命名 —— label 是厂商名，计费方式交给分区", () => {
     };
     assert.equal(knownProviderDefaultName(byId("zhipu")), "智谱（按量）");
     assert.equal(knownProviderDefaultName(byId("zhipu-coding")), "智谱（套餐）");
-    assert.equal(knownProviderDefaultName(byId("kimi-coding")), "Kimi");
+    // Kimi 有了按量 API 一条之后同名，套餐那条也要补区别
+    assert.equal(knownProviderDefaultName(byId("kimi-coding")), "Kimi（套餐）");
+    assert.equal(knownProviderDefaultName(byId("kimi-api")), "Kimi（按量）");
+    assert.equal(knownProviderDefaultName(byId("deepseek")), "DeepSeek");
+    assert.equal(knownProviderDefaultName(byId("ark-coding-plan")), "火山方舟 Agent");
     const names = KNOWN_PROVIDERS.map(knownProviderDefaultName);
     assert.equal(new Set(names).size, names.length, "默认名撞了，服务商列表里分不出来");
   });
@@ -89,6 +102,7 @@ describe("knownProviderOf —— 同一家的第二个实例也认得出", () =>
   it("认不出的按协议落兼容；不认识的 kind 当没写", () => {
     assert.equal(knownProviderOf(p("proma")).id, "openai-compatible");
     assert.equal(knownProviderOf(p("gw", { api: "anthropic-messages" })).id, "anthropic-compatible");
+    assert.equal(knownProviderOf(p("gw", { api: "openai-responses" })).id, "openai-responses-compatible");
     assert.equal(knownProviderOf(p("gw", { kind: "nope" })).id, "openai-compatible");
   });
   it("第二个套餐实例同样按套餐计费", () => {
@@ -144,6 +158,51 @@ describe("catalogPreferenceOf —— 设置页、菜单与会话装配共用的�
   it("「目录说了算」必须有本家目录可依——没有 catalogId 的条目标它没有意义", () => {
     for (const provider of KNOWN_PROVIDERS) {
       if (provider.catalogAuthoritative === true) assert.ok(provider.catalogId !== undefined, provider.id);
+    }
+  });
+});
+
+describe("未实测 —— 还没用真实账号验证过的条目如实标出", () => {
+  // 用户用真实账号跑通过的条目（2026-10-24 用户裁决的名单）：不带标记
+  const VERIFIED = [
+    "deepseek",
+    "zhipu",
+    "zhipu-coding",
+    "claude",
+    "zai",
+    "stepfun",
+    "kimi-coding",
+    "opencode-go",
+    "anthropic-compatible",
+    "openai-compatible",
+  ];
+
+  it("已实测的不带标记，其余一律带——新加条目默认是没验过的", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      assert.equal(provider.untested === true, !VERIFIED.includes(provider.id), provider.id);
+    }
+  });
+
+  it("对齐补进来的条目都在（API / 套餐 / 自定义各区）", () => {
+    const ids = new Set(KNOWN_PROVIDERS.map((provider) => provider.id));
+    for (const id of [
+      "anthropic",
+      "openai",
+      "google",
+      "kimi-api",
+      "minimax",
+      "xiaomi",
+      "qwen",
+      "doubao-api",
+      "openrouter",
+      "zhipu-coding-team",
+      "qwen-token-plan",
+      "xiaomi-token-plan",
+      "doubao",
+      "ark-coding-plan",
+      "openai-responses-compatible",
+    ]) {
+      assert.ok(ids.has(id), id);
     }
   });
 });
