@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { collectScanAnswer, locateMessageRange, matchScanMessage } from "./carryover-parse.ts";
+import { collectScanAnswer, locateMessageRange, matchScanMessage, scanSubmitInput } from "./carryover-parse.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 
 const msg = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
@@ -163,3 +163,22 @@ describe("collectScanAnswer", () => {
   });
 });
 
+
+describe("scanSubmitInput（扫描轮用会话自己的模型与档）", () => {
+  test("模型、档、权限、本子与会话的开工上下文一字不差，只换正文", () => {
+    const turn = {
+      cwd: "/w",
+      workspaceId: null,
+      resume: { piSessionFile: "/pi/a.jsonl" },
+      providerId: "anthropic",
+      modelId: "claude-opus-5-5",
+      mode: "manual" as const,
+      thinkingLevel: "medium" as const,
+    };
+    const input = scanSubmitInput("s1", turn, { sinceTurn: 1, lastTurn: 2, turns: [], compactions: [] });
+    const { text, sessionId, ...rest } = input;
+    assert.deepEqual(rest, turn);
+    assert.equal(sessionId, "s1");
+    assert.ok(text.startsWith("【Orbita 收尾扫描】"));
+  });
+});

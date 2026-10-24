@@ -3,7 +3,9 @@
  * 遗留事项的锚点。prompt 与严格解析在 shared/wrapup-scan.ts（与主进程共用）。
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { parseWrapupBlock, soleFencedJson } from "../../../../shared/wrapup-scan.ts";
+import type { SubmitAgentInput } from "@shared/agent-ipc";
+import type { WrapupPlan } from "@shared/wrapup";
+import { buildClosingScanPrompt, parseWrapupBlock, soleFencedJson } from "../../../../shared/wrapup-scan.ts";
 
 /** 扫描轮的超时（ms）：超了就降级直接标完成，不让用户卡在等待里。 */
 export const CLOSING_SCAN_TIMEOUT_MS = 120_000;
@@ -30,6 +32,19 @@ export function collectScanAnswer(
       .join("");
   }
   return answer;
+}
+
+/**
+ * 扫描轮的 submit 载荷：**原样用会话自己的开工上下文**（buildTurn 的结果：会话的模型、档、权限、
+ * 本子），只换正文。不换模型、不换档——上一版换成家务活模型，开轮推回的思考档（家务活模型 clamp
+ * 后的档）被输入卡当成会话的档写上，下一轮真按它发了出去。测试守着「扫描轮的模型与档 = 会话的」。
+ */
+export function scanSubmitInput(
+  sessionId: string,
+  turn: Omit<SubmitAgentInput, "sessionId" | "text">,
+  plan: Pick<WrapupPlan, "sinceTurn" | "lastTurn" | "turns" | "compactions">,
+): SubmitAgentInput {
+  return { ...turn, sessionId, text: buildClosingScanPrompt(plan) };
 }
 
 /** 消息流里的扫描回答（只读展示卡吃它） */

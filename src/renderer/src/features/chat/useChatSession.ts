@@ -69,8 +69,8 @@ import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
-import { CLOSING_SCAN_TIMEOUT_MS, collectScanAnswer, locateMessageRange } from "./carryover-parse.ts";
-import { buildClosingScanPrompt, isClosingScanText, parseWrapupScan } from "../../../../shared/wrapup-scan.ts";
+import { CLOSING_SCAN_TIMEOUT_MS, collectScanAnswer, locateMessageRange, scanSubmitInput } from "./carryover-parse.ts";
+import { isClosingScanText, parseWrapupScan } from "../../../../shared/wrapup-scan.ts";
 import type { WrapupDraft, WrapupPlan, WrapupReviseResult } from "@shared/wrapup";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
 import {
@@ -2938,7 +2938,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setClosingScan({ sessionId: id, baseline, plan });
       const revertTurn = engine.beginOptimisticTurn(id);
       void api.agent
-        .submit({ sessionId: id, text: buildClosingScanPrompt(plan), ...turn })
+        .submit(scanSubmitInput(id, turn, plan))
         .catch((cause: unknown) => {
           // 提交没送出去：扫描轮没开起来，归位并交代一句
           setClosingScan(null);
