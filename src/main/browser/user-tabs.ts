@@ -51,7 +51,7 @@ export function describeTabs(tabs: readonly BrowserTabSummary[], onScreenTabId: 
     ...lines,
     "To read one of the user's tabs, pass its id as tab (read-only); pick the one that matches what the user is " +
       "talking about. If the user already has the page you need open (often signed in through a library or proxy " +
-      "address), read it instead of starting over; to act on it, open the same address in your own tab — the " +
-      "sign-in is shared.",
+      "address), read it instead of starting over; to act on it, open the same address in your own tab — its " +
+      "sign-in state is separate, so sign in there or hand that tab to the user.",
   ].join("\n");
 }

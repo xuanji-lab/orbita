@@ -11,8 +11,8 @@
  * 沙盒窗口上方是工具条（我们自己的页面，走同一个 preload），下方是网页；两块上下分区、不重叠。
  *
  * tab：用户的 tab（不属于任何会话；至少一个，可新开、可关）+ 每个用过浏览器的会话一个 agent tab。
- * 全部由主进程持有、共用同一个 partition（登录态共享）；窗口一次只显示一个，其余在后台照跑——
- * agent 操作自己的 tab 不抢用户的屏幕。
+ * 全部由主进程持有；partition 按会话分（agent tab 一份、用户 tab 一份），登录态互不可见。
+ * 窗口一次只显示一个，其余在后台照跑——agent 操作自己的 tab 不抢用户的屏幕。
  *
  * 交接（第三刀）：agent 碰到登录墙 / 验证码 / 授权时调 `request_user_action`，把自己的 tab
  * 交给用户。交接期间这个 tab 的操作队列被占住——agent 的后续浏览器调用排在用户交还之后，
@@ -33,7 +33,7 @@
 export const browserChannels = {
   /** 打开或聚焦沙盒窗口（懒创建），显示「你的」tab。窗口关过只是隐藏，再开页面与登录态都还在 */
   browserOpen: "browser:open",
-  /** 清除沙盒 partition 的全部数据（cookie、站点存储、缓存）。登录态随之清空 */
+  /** 清除受管浏览器用过的全部 partition 数据（cookie、站点存储、缓存）。各会话与用户自己的登录态都随之清空 */
   browserClearData: "browser:clear-data",
   /** 地址栏提交（作用于正在显示的 tab）。输入由主进程规范化；不是网址回 `{ ok: false }`，不抛 */
   browserNavigate: "browser:navigate",
@@ -134,7 +134,7 @@ export type BrowserNavigateResult = { ok: true } | { ok: false; reason: "not-an-
 /**
  * 读取类工具读哪个 tab：缺席 = agent 自己的 tab；否则是 browser_tabs 列出的某个**用户 tab 的 id**
  * （**只读**）。用户常常自己先打开并登录好了（例如经图书馆代理进 Scopus）——agent 读得到它，
- * 要操作就在自己的 tab 里打开同一个地址（登录态共享）。
+ * 但登录态不跨 partition：要在自己的 tab 里操作，需要在那里登录，或者交接给用户登。
  *
  * 用户的 tab 可以有多个，读哪个由模型按上下文自己挑（2026-09-29 用户裁决：不硬编码「读正在看的
  * 那个」）；browser_tabs 如实标出哪个此刻正显示，挑的依据给足，规则不替它定。

@@ -856,8 +856,9 @@ void app.whenReady().then(async () => {
     sessions,
     (id) => {
       agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档的尾账也丢
-      browserSandbox.closeSessionTab(id);
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉，并清掉它自己那份浏览器存储；
+      // 意图存档的尾账也丢
+      void browserSandbox.closeSessionTab(id);
       // 沙箱桌面：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）
       computerUseLease.release(id, "会话已删除");
       expiredLeaseSessions.delete(id);

@@ -19,7 +19,8 @@ import { parseWaitSpec, WAIT_DEFAULT_TIMEOUT_MS, WAIT_MAX_TIMEOUT_MS } from "../
  * （WebContentsView、CDP、tab）全在主进程（main/browser/），agent 进程碰不到——
  * 换内核时只重写这个文件。
  *
- * 每个会话有自己的 agent tab，与用户及其它会话互不抢；登录态全局共享（同一 partition）。
+ * 每个会话有自己的 agent tab 与自己的浏览器登录态（partition 按会话派生），与用户及其他会话
+ * 互不抢、互不可见；需要登录时交接给用户（request_user_action），在它自己的 tab 里登。
  * 权限：读取与交接三档一律放行（shared/permission.ts 的 BROWSER_READ_TOOLS）；交互照写操作过闸——
  * 所以 click / type 带一个 element 参数：模型用一句人话说它要点什么，审批卡上用户看的是这句话，
  * 而不是一个没有意义的 e12（Playwright MCP 同样的做法）。
@@ -54,7 +55,8 @@ const ELEMENT_PARAM = {
 } as const;
 
 const LOGIN_HINT =
-  "The browser shares its sign-in state with the user. If a page needs a login, a CAPTCHA or an authorization " +
+  "Each session's browser tab has its own sign-in state: cookies and logins from other sessions and from the " +
+  "user's tabs are not visible here. If a page needs a login, a CAPTCHA or an authorization " +
   "you cannot do yourself, call request_user_action — do not guess credentials.";
 
 /**
@@ -470,7 +472,7 @@ export function createBrowserTools(broker: RequestBroker, sessionId: string): To
       "List the browser tabs you can see: the user's tabs (each with an id) and your own, marking the one on " +
       "screen now. Use it first — the user often already has the page you need open and signed in, e.g. through " +
       "a library proxy. Reading a user's tab is read-only; to act on a page the user opened, open the same " +
-      "address in your own tab — the sign-in is shared.",
+      "address in your own tab — its sign-in state is separate, so sign in there or hand it to the user.",
     parameters: { type: "object", properties: {}, required: [] } as never,
     async execute(_toolCallId, _params, signal) {
       return call({ action: "tabs" }, signal);

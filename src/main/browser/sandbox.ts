@@ -3,7 +3,7 @@
  *
  * 结构：
  *   BrowserWindow（沙盒窗口）── 自己的 webContents 加载工具条页面（我们的 renderer，同一个 preload）
- *     └─ contentView 子视图：每个 tab 一个 WebContentsView（网页，无 preload，同一个持久化 partition）
+ *     └─ contentView 子视图：每个 tab 一个 WebContentsView（网页，无 preload，partition 按会话分）
  * 工具条占窗口顶部固定高度，网页视图贴在它下面。两块上下分区、永不重叠——这正是把浏览器
  * 放进独立窗口的理由：原生视图不会再压住任何 DOM 浮层，也就不需要任何让位逻辑。
  *
@@ -24,9 +24,12 @@
  *     tab 上的点击、滚动、键盘也算活跃，不只认 agent 请求。
  *   - 应用退出（`prepareQuit` 之后）或最后一个主窗口关闭（`dispose`）才真正销毁。
  *
- * 安全：网页 `sandbox` + `contextIsolation`、不加载 preload；partition 级拒绝一切网页权限请求
+ * 登录态：partition 按会话派生（partition.ts）——agent tab 是 `persist:orbita-browser-<sessionId>`，
+ * 用户的 tab 用旧的全局那份。会话之间、会话与用户之间 cookie / localStorage 互不可见。
+ *
+ * 安全：网页 `sandbox` + `contextIsolation`、不加载 preload；每个 partition 都拒绝一切网页权限请求
  * （定位 / 通知 / 摄像头…）。页面弹窗（window.open 带 features，常见于 SSO）允许开成子窗口，
- * 沿用同一 partition 与同样的约束——拦掉会让弹窗式登录断在半路。
+ * 沿用 opener 那个 tab 的 partition 与同样的约束——拦掉会让弹窗式登录断在半路。
  */
 import {
   BrowserWindow,
@@ -63,11 +66,9 @@ import {
   type AgentTabReclaimReason,
 } from "./agent-tab-ledger.ts";
 import { placeInUserTab } from "./user-tabs.ts";
+import { SessionPartitions } from "./partition.ts";
 import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
 import type { ShotGeometry } from "./screenshot-geometry.ts";
-
-/** 全局一个持久化 partition（2026-09-27 裁决：学校登录是跨工作区的身份，不按工作区分） */
-export const BROWSER_PARTITION = "persist:orbita-browser";
 
 /** 工具条高度（tab 条 + 导航行）。工具条页面的 CSS 用同一个值（`--browser-toolbar-height`） */
 export const BROWSER_TOOLBAR_HEIGHT = 78;
@@ -86,9 +87,8 @@ const AGENT_TAB_SWEEP_MS = 60_000;
 /** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
 const PAGE_BACKGROUND_FALLBACK = "#f3f4f1";
 
-/** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
+/** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开。partition 逐个 tab 补 */
 const PAGE_PREFERENCES = {
-  partition: BROWSER_PARTITION,
   sandbox: true,
   contextIsolation: true,
   nodeIntegration: false,
@@ -169,7 +169,11 @@ export class BrowserSandbox {
   /** 页面开出的弹窗子窗口：dispose 时一并收掉 */
   private readonly popups = new Set<BrowserWindow>();
   private quitting = false;
-  private guardedSession: Session | null = null;
+  /** 按会话打开的 partition 表：派生、复用、按会话清存储都在 partition.ts */
+  private readonly partitions = new SessionPartitions<Session>({
+    open: (partition) => session.fromPartition(partition),
+    guard: (_partition, store) => this.guardPartition(store),
+  });
   /** agent tab 生命周期账本：闲置、上限、LRU 的纯决策都在它里面 */
   private readonly ledger = new AgentTabLedger({ idleMs: AGENT_TAB_IDLE_MS, maxTabs: AGENT_TAB_MAX });
   /** tab 被回收 / 崩溃后，给该会话留一句提示，下一次请求随工具结果发给模型 */
@@ -315,13 +319,26 @@ export class BrowserSandbox {
     this.destroyTab(tab);
   }
 
-  /** 会话删除：它的 agent tab 一并关掉（交接中的先按取消结掉，别让那次工具调用挂着） */
-  closeSessionTab(sessionId: string): void {
+  /**
+   * 会话删除：它的 agent tab 一并关掉（交接中的先按取消结掉，别让那次工具调用挂着），
+   * 再清掉**这个会话自己那份**浏览器存储——cookie、站点数据都跟着会话消失，不留登录态在盘上。
+   * 别的会话与用户那份一概不碰（partition 按会话分，见 partition.ts）。
+   */
+  async closeSessionTab(sessionId: string): Promise<void> {
     this.tabNotices.delete(sessionId);
     const tab = this.findAgentTab(sessionId);
-    if (tab === undefined) return;
-    this.settleHandoff(tab, "cancelled");
-    this.destroyTab(tab);
+    if (tab !== undefined) {
+      this.settleHandoff(tab, "cancelled");
+      this.destroyTab(tab);
+    }
+    try {
+      const cleared = await this.partitions.clearSession(sessionId);
+      // 派生不出会话自己的 partition：跳过而不是退回去清 default（那会抹掉用户那份登录态）
+      if (!cleared) console.warn(`[browser] 会话 id 不能用来派生 partition，跳过清浏览器存储：${sessionId}`);
+    } catch (cause) {
+      // 会话已经删了：清存储失败不该把异常抛回删除流程，只留日志
+      console.error(`[browser] 会话 ${sessionId} 的浏览器存储没清掉`, cause);
+    }
   }
 
   /** 交接卡「去浏览器完成」：打开窗口、切到那个 tab、提到最前 */
@@ -361,14 +378,12 @@ export class BrowserSandbox {
 
   /**
    * 清除 partition 的全部数据：cookie、localStorage / IndexedDB、Service Worker、HTTP 缓存、
-   * HTTP 认证缓存。显示中的页面刷新一次，让「已退出登录」当场看得见。
-   * 窗口从没开过也能清：partition 是持久化的，数据在盘上不在窗口里。
+   * HTTP 认证缓存。这里清的是**受管浏览器用过的每一份 partition**——用户的那份与每个会话
+   * 各自那份（见 partition.ts 的 clearAll 与它写明的边界）。显示中的页面刷新一次，
+   * 让「已退出登录」当场看得见。窗口从没开过也能清：partition 是持久化的，数据在盘上不在窗口里。
    */
   async clearData(): Promise<void> {
-    const partition = session.fromPartition(BROWSER_PARTITION);
-    await partition.clearStorageData();
-    await partition.clearCache();
-    await partition.clearAuthCache();
+    await this.partitions.clearAll();
     const contents = this.shownContents();
     if (contents !== null && pageUrl(contents) !== "") contents.reload();
   }
@@ -609,7 +624,7 @@ export class BrowserSandbox {
   }
 
   private async createWindow(): Promise<BrowserWindow> {
-    this.guardSession();
+    // 用户那份 partition 的约束随第一个用户 tab 一起装上（createTab → partitions.get(null)）
     if (this.userDownloads === "") this.userDownloads = await this.deps.userDownloadDir();
     const window = new BrowserWindow({
       width: 1100,
@@ -665,7 +680,9 @@ export class BrowserSandbox {
   private createTab(owner: BrowserTab["owner"]): BrowserTab {
     const window = this.window;
     if (window === null) throw new Error("浏览器窗口不在");
-    const view = new WebContentsView({ webPreferences: PAGE_PREFERENCES });
+    // 用户的 tab 用旧的全局那份（它不是任何会话的）；agent tab 用自己会话的
+    const { partition } = this.partitions.get(owner.kind === "agent" ? owner.sessionId : null);
+    const view = new WebContentsView({ webPreferences: { ...PAGE_PREFERENCES, partition } });
     // 没加载过页面的视图是**透明**的（不是白的）：所有 tab 铺满同一块区域，不垫一层
     // 不透明底色，空白 tab 会透出下面别的 tab 的页面
     view.setBackgroundColor(this.pageBackground);
@@ -710,7 +727,7 @@ export class BrowserSandbox {
       // 点击、滚轮 / 手势滚动、键盘与触摸——滚动没有单独的主进程事件，靠它兜住。
       contents.on("input-event", () => this.ledger.touch(owner.sessionId));
     }
-    this.guardContents(contents);
+    this.guardContents(contents, partition);
     this.wireShortcuts(contents);
     // 网页视图不预载 about:blank：它会成为历史的第一条，首次导航后「后退」就是亮的、
     // 点了退到一张空白页（第一刀 CDP 冒烟抓到的）。空白态的观感靠上面的不透明垫底色
@@ -855,17 +872,15 @@ export class BrowserSandbox {
     window.webContents.send(browserChannels.browserState, state);
   }
 
-  /** partition 级约束：只装一次（session 对象全局唯一，重复装会叠加监听） */
-  private guardSession(): void {
-    if (this.guardedSession !== null) return;
-    const partition = session.fromPartition(BROWSER_PARTITION);
-    partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    partition.setPermissionCheckHandler(() => false);
-    partition.setUserAgent(browserUserAgent(partition.getUserAgent(), this.deps.appName, this.deps.appVersion));
-    partition.on("will-download", (_event, item, contents) => this.onDownload(item, contents));
+  /** partition 级约束：每个 partition 只装一次（registry 保证） */
+  private guardPartition(store: Session): void {
+    store.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    store.setPermissionCheckHandler(() => false);
+    store.setUserAgent(browserUserAgent(store.getUserAgent(), this.deps.appName, this.deps.appVersion));
+    store.on("will-download", (_event, item, contents) => this.onDownload(item, contents));
     // agent tab 打开 PDF 这类文件：改成下载，不在 tab 里显示——agent 读不了查看器里的字，
     // 下载进工作台它能用文件工具读。「你的」tab 不动，照常在查看器里看
-    partition.webRequest.onHeadersReceived((details, callback) => {
+    store.webRequest.onHeadersReceived((details, callback) => {
       const agentTab =
         details.resourceType === "mainFrame" &&
         [...this.tabs.values()].some(
@@ -874,7 +889,6 @@ export class BrowserSandbox {
       const headers = agentTab ? forceDownloadHeaders(details.responseHeaders) : undefined;
       callback(headers === undefined ? {} : { responseHeaders: headers });
     });
-    this.guardedSession = partition;
   }
 
   /**
@@ -917,8 +931,9 @@ export class BrowserSandbox {
   /**
    * 新窗口请求：带 features 的 window.open（弹窗式 SSO）开成子窗口，保留 opener 关系；
    * 普通 target=_blank 链接在当前视图里打开。非 http(s) 一律拒绝。
+   * 子窗口沿用 opener 的 partition——弹窗里登的录就是那个 tab 登录态的一部分。
    */
-  private guardContents(contents: WebContents): void {
+  private guardContents(contents: WebContents, partition: string): void {
     contents.setWindowOpenHandler(({ url, disposition }) => {
       if (normalizeAddress(url) === null) return { action: "deny" };
       if (disposition === "new-window") {
@@ -927,7 +942,7 @@ export class BrowserSandbox {
           overrideBrowserWindowOptions: {
             ...(this.window !== null ? { parent: this.window } : {}),
             autoHideMenuBar: true,
-            webPreferences: PAGE_PREFERENCES,
+            webPreferences: { ...PAGE_PREFERENCES, partition },
           },
         };
       }
@@ -937,7 +952,7 @@ export class BrowserSandbox {
     contents.on("did-create-window", (popup) => {
       this.popups.add(popup);
       popup.once("closed", () => this.popups.delete(popup));
-      this.guardContents(popup.webContents);
+      this.guardContents(popup.webContents, partition);
     });
   }
 

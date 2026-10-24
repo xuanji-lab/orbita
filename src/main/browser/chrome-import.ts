@@ -1,5 +1,7 @@
 /**
  * 登录状态导入：Chrome 等 Chromium 系浏览器 → 受管浏览器 partition（macOS only）。
+ * 写进哪一份 partition 由调用方给：设置里的导入是全局入口，没有会话上下文，落到 default
+ * （用户自己 tab 的那份）；带 sessionId 时写进那个会话自己那份（partition.ts）。
  *
  * 范围裁决（2026-10 刀次）：只做 macOS、只做与 Chrome 存储格式相同的五种浏览器；
  * 只导入用户勾选的网站——浏览器是 agent 的工具，把 Chrome 的 cookie 全量导进来
@@ -386,7 +388,7 @@ export interface StoredCookie {
   secure?: boolean;
 }
 
-/** cookie 写入目标（受管浏览器 partition），由 ipc.ts 注入 */
+/** cookie 写入目标（受管浏览器某个 partition 的 session），由 ipc.ts 注入 */
 export interface CookieWriteTarget {
   cookies: {
     set(details: ImportCookieDetails): Promise<void>;
@@ -404,7 +406,11 @@ export function storedCookieUrl(cookie: StoredCookie): string {
 }
 
 export interface LoginImporterDeps {
-  cookieTarget: () => CookieWriteTarget;
+  /**
+   * cookie 写进哪一份 partition：给 sessionId 就写进那个会话的（partition.ts 派生），
+   * 不给（undefined / 空）就落到 default——旧的全局那份，也就是用户自己 tab 的登录态。
+   */
+  cookieTarget: (sessionId?: string) => CookieWriteTarget;
   /** 导入账本（import-ledger.ts）的落盘路径：userData/browser-imports.json */
   ledgerPath: string;
   /** 覆盖浏览器数据根目录（测试用）；默认 ~/Library/Application Support */
@@ -527,7 +533,8 @@ export class LoginImporter {
     return { ok: true, pendingId, sites: list };
   }
 
-  async commit(pendingId: string, selectedSites: string[]): Promise<BrowserImportCommitResult> {
+  /** 导入到哪个会话的 partition；不给 = default（用户自己那份） */
+  async commit(pendingId: string, selectedSites: string[], sessionId?: string): Promise<BrowserImportCommitResult> {
     const pending = this.pending;
     if (pending === null || pending.id !== pendingId) return { ok: false, error: "no-pending" };
 
@@ -551,7 +558,7 @@ export class LoginImporter {
     /** 至少写进一条的网站才记账——一条都没写进去的，说「已导入」就是假话 */
     const landed = new Set<string>();
     if (toWrite.length > 0) {
-      const target = this.deps.cookieTarget();
+      const target = this.deps.cookieTarget(sessionId);
       for (let offset = 0; offset < toWrite.length; offset += WRITE_CONCURRENCY) {
         const batch = toWrite.slice(offset, offset + WRITE_CONCURRENCY);
         const settled = await Promise.allSettled(batch.map((item) => target.cookies.set(item.cookie)));
@@ -586,11 +593,11 @@ export class LoginImporter {
    * 已导入清单：账本里的网站 + 受管浏览器此刻还有没有它的 cookie（按 siteGroupKey 同一套
    * 分组现查）。cookie 全过期、被网站清掉，账本还在，present 为 false——设置页据此提示重新导入。
    */
-  async imported(): Promise<BrowserImportedSite[]> {
+  async imported(sessionId?: string): Promise<BrowserImportedSite[]> {
     if (process.platform !== "darwin") return [];
     const entries = await this.ledgerSnapshot();
     if (entries.length === 0) return [];
-    const stored = await this.deps.cookieTarget().cookies.get({});
+    const stored = await this.deps.cookieTarget(sessionId).cookies.get({});
     const sitesWithCookies = new Set(stored.map((cookie) => siteGroupKey(cookie.domain ?? "")));
     return entries.map((entry) => ({ ...entry, present: sitesWithCookies.has(entry.site) }));
   }
@@ -599,14 +606,14 @@ export class LoginImporter {
    * 移除一个已导入的网站：删掉受管浏览器里这个网站的**全部** cookie（分不出导入的与浏览时
    * 种的——要的效果就是「内置浏览器退出这个网站」），再从账本销掉。回新清单。
    */
-  async removeImported(site: string): Promise<BrowserImportedSite[]> {
-    const target = this.deps.cookieTarget();
+  async removeImported(site: string, sessionId?: string): Promise<BrowserImportedSite[]> {
+    const target = this.deps.cookieTarget(sessionId);
     const stored = await target.cookies.get({});
     const doomed = stored.filter((cookie) => siteGroupKey(cookie.domain ?? "") === site);
     await Promise.all(doomed.map((cookie) => target.cookies.remove(storedCookieUrl(cookie), cookie.name)));
     if (doomed.length > 0) await target.cookies.flushStore();
     await this.updateLedger((entries) => entries.filter((entry) => entry.site !== site));
-    return this.imported();
+    return this.imported(sessionId);
   }
 
   /** 清除全部浏览器数据之后：cookie 已经全没了，账本跟着清空 */
