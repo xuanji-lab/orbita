@@ -33,7 +33,7 @@ import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { UsageLedger } from "./usage/ledger.ts";
-import { registerUsageIpc } from "./usage/ipc.ts";
+import { registerPriceChartIpc, registerUsageIpc } from "./usage/ipc.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
@@ -614,6 +614,7 @@ void app.whenReady().then(async () => {
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
+  registerPriceChartIpc({ sessions, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();
