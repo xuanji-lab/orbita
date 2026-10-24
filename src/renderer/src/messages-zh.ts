@@ -312,7 +312,7 @@ export const zh: Messages = {
     addressPlaceholder: "输入网址或搜索词",
     notAnAddress: "输入网址或搜索词",
     tabs: "浏览器标签页",
-    yourTabTip: (page) => `${page === "" ? "" : `${page}——`}你的标签页 · 在这里登录网站，智能体共用登录状态`,
+    yourTabTip: (page) => `${page === "" ? "" : `${page}——`}你的标签页 · 在这里登录网站（每个会话的登录状态各自独立）`,
     agentTab: (session) => (session === "" ? "智能体" : session),
     agentTabTip: (session, page) => `智能体标签页${session === "" ? "" : ` · ${session}`}${page === "" ? "" : `——${page}`}`,
     newTab: "新标签页",
@@ -643,7 +643,8 @@ export const zh: Messages = {
     aboutSetting: (name) => `关于「${name}」`,
     browserData: "浏览器数据",
     clearBrowserData: "清除全部浏览器数据",
-    clearBrowserDataInfo: "内置浏览器退出所有网站，删除它保存的登录信息、站点数据与缓存 · 不影响你自己的浏览器",
+    clearBrowserDataInfo:
+      "内置浏览器退出所有网站：删除你的标签页与每个会话保存的登录信息、站点数据与缓存 · 不影响你自己的浏览器",
     clearBrowserDataAction: "清除全部",
     clearBrowserDataConfirm: "退出所有网站？",
     clearBrowserDataDone: "已清除 · 内置浏览器已退出所有网站",
@@ -657,7 +658,7 @@ export const zh: Messages = {
     loginImportGroup: "登录状态",
     loginImport: "导入登录状态",
     loginImportInfo:
-      "把 Chrome、Edge、Brave、Arc 或 Chromium 的登录 cookie 带进内置浏览器 · 只导入你勾选的网站 · 读取时会请求 macOS 钥匙串授权 · 有些网站仍需重新登录 · 不改动你自己的浏览器",
+      "把 Chrome、Edge、Brave、Arc 或 Chromium 的登录 cookie 带进内置浏览器的「你的」标签页 · 只导入你勾选的网站 · 读取时会请求 macOS 钥匙串授权 · 有些网站仍需重新登录 · 智能体各会话的登录状态独立 · 不改动你自己的浏览器",
     loginImportNoBrowsers: "没有找到存有登录信息的浏览器",
     loginImportRead: "选择网站…",
     loginImportReadTitle: "列出网站前会请求 macOS 钥匙串授权",
@@ -677,7 +678,7 @@ export const zh: Messages = {
     loginImportAlready: "已导入",
     loginImported: "已导入的网站",
     loginImportedInfo:
-      "已把登录带进内置浏览器的网站 · 智能体在这些网站上以你的身份登录 · 移除即让内置浏览器退出该网站",
+      "已把登录带进内置浏览器「你的」标签页的网站 · 智能体各会话的登录状态独立，需要时请在它的标签页里登录 · 移除即让内置浏览器退出该网站",
     loginImportedNone: "还没有导入任何网站",
     loginImportedFrom: (source, day) => `来自 ${source} · ${day}`,
     loginImportedStale: "已失效 · 请重新导入",

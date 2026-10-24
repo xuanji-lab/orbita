@@ -341,7 +341,7 @@ export const en = {
     notAnAddress: "Enter a web address or search words",
     tabs: "Browser tabs",
     yourTabTip: (page: string) =>
-      `${page === "" ? "" : `${page} — `}Your tab · sign in to sites here; the agent shares the sign-in`,
+      `${page === "" ? "" : `${page} — `}Your tab · sign in to sites here (each session has its own sign-in state)`,
     agentTab: (session: string) => (session === "" ? "Agent" : session),
     agentTabTip: (session: string, page: string) =>
       `Agent tab${session === "" ? "" : ` · ${session}`}${page === "" ? "" : ` — ${page}`}`,
@@ -692,7 +692,7 @@ export const en = {
     browserData: "Browser data",
     clearBrowserData: "Clear all browser data",
     clearBrowserDataInfo:
-      "Signs the built-in browser out of every site and deletes its cookies, site storage and cache · your own browser is not affected",
+      "Signs the built-in browser out everywhere — your tabs and every session's state — and deletes its cookies, site storage and cache · your own browser is not affected",
     clearBrowserDataAction: "Clear all",
     clearBrowserDataConfirm: "Sign out of every site?",
     clearBrowserDataDone: "Cleared · the built-in browser is signed out everywhere",
@@ -707,7 +707,7 @@ export const en = {
     loginImportGroup: "Login state",
     loginImport: "Import sign-ins",
     loginImportInfo:
-      "Brings sign-in cookies from Chrome, Edge, Brave, Arc or Chromium into the built-in browser · only the sites you tick are imported · reading asks macOS to unlock the keychain · some sites will still ask you to sign in again · your own browser is not changed",
+      "Brings sign-in cookies from Chrome, Edge, Brave, Arc or Chromium into the built-in browser's Your tab · only the sites you tick are imported · reading asks macOS to unlock the keychain · some sites will still ask you to sign in again · each agent session has its own sign-in state · your own browser is not changed",
     loginImportNoBrowsers: "No browser with saved cookies was found",
     loginImportRead: "Choose sites…",
     loginImportReadTitle: "Listing the sites asks macOS for the browser's keychain key",
@@ -727,7 +727,7 @@ export const en = {
     loginImportAlready: "Imported",
     loginImported: "Imported sites",
     loginImportedInfo:
-      "Sites whose sign-in you brought into the built-in browser · the agent is signed in as you there · remove a site to sign the built-in browser out of it",
+      "Sites whose sign-in you brought into the built-in browser's Your tab · each agent session has its own sign-in state — sign in on its tab when needed · remove a site to sign the built-in browser out of it",
     loginImportedNone: "None yet",
     loginImportedFrom: (source: string, day: string) => `From ${source} · ${day}`,
     loginImportedStale: "Signed out · import it again",

@@ -17,13 +17,16 @@ import {
 import type { SettingsStore } from "../settings/store.ts";
 import { LoginImporter } from "./chrome-import.ts";
 import { browserDownloadDir } from "./download-dir.ts";
-import { BROWSER_PARTITION, type BrowserSandbox } from "./sandbox.ts";
+import { partitionForSession } from "./partition.ts";
+import type { BrowserSandbox } from "./sandbox.ts";
 
 export function registerBrowserIpc(sandbox: BrowserSandbox, settings: SettingsStore, configDir: string): void {
   // 登录状态导入（chrome-import.ts；cookie 值不过 IPC，renderer 只拿网站与计数）。
-  // 建在最前：清除浏览器数据也要用它清空导入账本
+  // 建在最前：清除浏览器数据也要用它清空导入账本。
+  // cookie 写进哪一份 partition 由调用方按会话给：设置里的导入是全局入口，没有会话上下文，
+  // 落到 default（旧的全局那份，也就是用户自己 tab 的登录态）；带了 sessionId 就写进那个会话。
   const loginImporter = new LoginImporter({
-    cookieTarget: () => session.fromPartition(BROWSER_PARTITION),
+    cookieTarget: (sessionId?: string) => session.fromPartition(partitionForSession(sessionId)),
     ledgerPath: join(configDir, "browser-imports.json"),
   });
 
