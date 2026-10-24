@@ -11,6 +11,11 @@ import { Icon, type IconName } from "./Icon";
  */
 export function Chip(props: {
   icon?: IconName;
+  /**
+   * 文字前面的一小块自定义内容（模型芯片的型号头像）。与 icon 同位、不进 chip-label：
+   * 名字被省略号截断时头像不跟着被裁。
+   */
+  leading?: React.ReactNode;
   active?: boolean;
   disabled?: boolean;
   title?: string;
@@ -76,6 +81,7 @@ export function Chip(props: {
       }}
     >
       {props.icon !== undefined && <Icon name={props.icon} size={12} />}
+      {props.leading}
       {props.compact !== true && (
         // chip-label：composer 底栏窄槽下按容器查询隐藏（styles.css），文字退到上面
         // 的 title 里；这里的 minWidth:0 与省略号截断本身与宽窄无关，一直生效

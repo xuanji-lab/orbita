@@ -77,6 +77,32 @@ export function selectedModelAcceptsImage(
 }
 
 /**
+ * 模型芯片（输入卡底栏、子会话面板两处）显示什么：型号头像 + 显示名，不带服务商名
+ * （2026-10-24 用户：「要，还要显示 avatar。可以不用显示渠道名，就 avatar + 模型名字」）。
+ * 服务商与型号 id 退到悬停提示里——同一型号挂在两家时靠它分辨。
+ * 显示名、头像与模型卡片同一套口径（modelDisplayName / ModelAvatar）。
+ * 选中的服务商已被删 / 没 key 了：头像按型号 id 认（第三级退到首字），名字照样按目录查。
+ */
+export function modelChipParts(
+  providers: readonly ProviderDto[],
+  catalog: readonly BuiltinProvider[],
+  selected: { providerId: string; modelId: string },
+): { avatar: React.ReactNode; name: string; detail: string } {
+  const provider = providers.find((p) => p.id === selected.providerId);
+  const declared = provider?.models.declared.find((m) => m.id === selected.modelId);
+  const prefer = provider === undefined ? {} : modelPreferenceOf(provider);
+  const name = modelDisplayName(catalog, selected.modelId, prefer, declared?.name);
+  const cell =
+    provider === undefined ? { kindId: selected.providerId, label: selected.providerId } : railVendorCell(provider);
+  return {
+    avatar: <ModelAvatar modelId={selected.modelId} provider={cell} size={14} />,
+    name,
+    // 名字就是 id 时不再写第二遍
+    detail: name === selected.modelId ? cell.label : `${cell.label} · ${selected.modelId}`,
+  };
+}
+
+/**
  * 左栏的选中态。
  *
  * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
