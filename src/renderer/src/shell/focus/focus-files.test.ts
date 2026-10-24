@@ -11,6 +11,7 @@ import {
   formatChangeLines,
   isHiddenEntry,
   joinRel,
+  shouldPollChanges,
 } from "./focus-files.ts";
 import type { FocusChangeEntry } from "@shared/focus";
 
@@ -77,4 +78,12 @@ test("joinRel 与 changeIndexOf", () => {
   const index = changeIndexOf([entry("src/a.ts", "M", 3, 1)]);
   assert.equal(index.get("src/a.ts")?.added, 3);
   assert.equal(index.get("nope"), undefined);
+});
+
+test("shouldPollChanges：只在看得见时拉 U / M", () => {
+  assert.equal(shouldPollChanges("visible"), true);
+  // 窗口藏着（最小化 / 在别的应用前）：这一拍跳过
+  assert.equal(shouldPollChanges("hidden"), false);
+  // 「先渲染再画」的中间态不算藏起来——宁可多拉一拍，屏幕上的人在看
+  assert.equal(shouldPollChanges("prerender"), true);
 });

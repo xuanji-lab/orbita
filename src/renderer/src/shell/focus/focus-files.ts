@@ -58,3 +58,13 @@ export function formatChangeLines(entry: FocusChangeEntry): string {
 export function joinRel(dir: string, name: string): string {
   return dir === "" ? name : `${dir}/${name}`;
 }
+
+/**
+ * 这一拍要不要去拉 U / M：窗口藏起来（最小化 / 切到别的应用 / 别的 Space）时
+ * 不拉——后台没人看，30 秒一次的 git 读与 IPC 只是烧电（`perf(focus)`：最小化
+ * 时 focus:changes 照样每 30 秒调一次）。回到前台由 visibilitychange 立刻补一拍，
+ * 所以看得见的时候永远不会比旧行为更旧。
+ */
+export function shouldPollChanges(visibilityState: string): boolean {
+  return visibilityState !== "hidden";
+}
