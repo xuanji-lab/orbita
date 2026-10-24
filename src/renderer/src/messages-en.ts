@@ -901,7 +901,6 @@ export const en = {
       tipReference: "estimate · reference profile",
       tipMeasuredFew: (samples: number, cost: string) =>
         `Measured ${samples} task${samples === 1 ? "" : "s"} ${cost} · too few to plot, shown as an estimate`,
-      tipProvider: "Provider",
       tipBoard: "Leaderboard entry",
       levelUnlabeled: "level not on board",
       unranked: "Not on this board",

@@ -27,7 +27,7 @@ import "./price-chart.css";
  * 价格 · 能力图（原型 7，2026-10-24 定稿）：设置 › 模型服务卡片墙下面，给「派子任务交给谁划算」
  * 当参考。门槛（≥ 2 个型号）由调用方判（price-chart-model 的 shouldShowPriceChart），这里只管画。
  *
- * - 一个点 = 已添加的（服务商，型号）× 思考档；头像就是点。实测点实心，估算点虚线空心框；
+ * - 一个点 = 型号 × 思考档（同一型号挂几家服务商、写成别名都合成一个，不显示服务商）；头像就是点。实测点实心，估算点虚线空心框；
  *   跑过但不够门槛的也按估算画，悬停里另写一行「实测 n 个任务 $x」。
  * - 横轴对数、纵轴线性；绿线是当前分类的帕累托前沿，前沿上的点带名字，其余悬停 / 聚焦看详情。
  * - 分类用左右按钮循环（默认 Agent 综合），每类各算一条前沿。
@@ -77,11 +77,10 @@ export function PriceCapabilityChart(props: {
     const xOf = (cost: number) =>
       ((Math.log10(cost) - Math.log10(x.min)) / (Math.log10(x.max) - Math.log10(x.min))) * 100;
     const yOf = (score: number) => 100 - ((score - y.min) / (y.max - y.min)) * 100;
-    // 同一（服务商，型号）的不同档连一条虚线
+    // 同一型号的不同档连一条虚线
     const byModel = new Map<string, PriceChartPoint[]>();
     for (const point of points) {
-      const k = `${point.providerId}\u0000${point.modelId}`;
-      byModel.set(k, [...(byModel.get(k) ?? []), point]);
+      byModel.set(point.modelId, [...(byModel.get(point.modelId) ?? []), point]);
     }
     const levelLines = [...byModel.values()]
       .filter((list) => list.length > 1)
@@ -89,9 +88,14 @@ export function PriceCapabilityChart(props: {
     return { points, frontier, frontierKeys, x, y, xOf, yOf, levelLines };
   }, [current]);
 
-  const providerOf = (id: string) => props.providers.find((p) => p.id === id);
+  /**
+   * 点不带服务商（一个点 = 型号 × 档）：显示名的偏好与头像第三级兜底，借最先声明了这个 id 的那家——
+   * 与主进程挑代表 id 的顺序一致。
+   */
+  const providerOf = (modelId: string) =>
+    props.providers.find((p) => p.models.declared.some((m) => m.id === modelId));
   const nameOf = (ref: PriceChartModelRef) => {
-    const provider = providerOf(ref.providerId);
+    const provider = providerOf(ref.modelId);
     const declared = provider?.models.declared.find((m) => m.id === ref.modelId);
     return modelDisplayName(
       props.catalog,
@@ -100,13 +104,12 @@ export function PriceCapabilityChart(props: {
       declared?.name,
     );
   };
-  const providerLabel = (id: string) => providerOf(id)?.displayName ?? id;
   const avatar = (ref: PriceChartModelRef, size: number) => {
-    const provider = providerOf(ref.providerId);
+    const provider = providerOf(ref.modelId);
     return (
       <ModelAvatar
         modelId={ref.modelId}
-        provider={provider === undefined ? { kindId: ref.providerId, label: ref.providerId } : railVendorCell(provider)}
+        provider={provider === undefined ? { kindId: ref.modelId, label: ref.modelId } : railVendorCell(provider)}
         size={size}
       />
     );
@@ -214,7 +217,7 @@ export function PriceCapabilityChart(props: {
                         type="button"
                         className={`pc-dot${onFront ? " frontier" : ""}${point.costBasis === "measured" ? "" : " estimated"}`}
                         style={{ left: `${left}%`, top: `${view.yOf(point.score)}%` }}
-                        aria-label={`${nameOf(point)} · ${levelOf(point)} · ${providerLabel(point.providerId)}`}
+                        aria-label={`${nameOf(point)} · ${levelOf(point)}`}
                         onMouseMove={(e) => show(e.clientX, e.clientY)}
                         onFocus={(e) => {
                           const rect = e.currentTarget.getBoundingClientRect();
@@ -266,9 +269,7 @@ export function PriceCapabilityChart(props: {
                     {avatar(point, 20)}
                     <span className="pc-best-name">
                       <span className="pc-best-n">{nameOf(point)}</span>
-                      <span className="pc-best-l">
-                        {levelOf(point)} · {providerLabel(point.providerId)}
-                      </span>
+                      <span className="pc-best-l">{levelOf(point)}</span>
                     </span>
                     <span className="pc-best-val row-trailing">
                       <span className="pc-best-s">{formatScore(point.score, current.unit)}</span>
@@ -280,13 +281,12 @@ export function PriceCapabilityChart(props: {
             </aside>
           </div>
 
-          <ModelChips label={copy.unranked} icon="circle-off" refs={current.unranked} nameOf={nameOf} providerLabel={providerLabel} avatar={avatar} />
+          <ModelChips label={copy.unranked} icon="circle-off" refs={current.unranked} nameOf={nameOf} avatar={avatar} />
           <ModelChips
             label={copy.unpriced}
             icon="circle-help"
             refs={current.unpriced}
             nameOf={nameOf}
-            providerLabel={providerLabel}
             avatar={avatar}
             title={copy.unpricedTip}
           />
@@ -348,10 +348,6 @@ export function PriceCapabilityChart(props: {
             </div>
           )}
           <div className="pc-tip-row">
-            <span>{copy.tipProvider}</span>
-            <span>{providerLabel(hovered.providerId)}</span>
-          </div>
-          <div className="pc-tip-row">
             <span>{copy.tipBoard}</span>
             <span className="pc-mono">{hovered.boardName}</span>
           </div>
@@ -361,13 +357,12 @@ export function PriceCapabilityChart(props: {
   );
 }
 
-/** 图下的型号清单（未上榜 / 缺官方单价）：头像 + 显示名 + 服务商名 */
+/** 图下的型号清单（未上榜 / 缺官方单价）：头像 + 显示名，按型号去重 */
 function ModelChips(props: {
   label: string;
   icon: "circle-off" | "circle-help";
   refs: readonly PriceChartModelRef[];
   nameOf: (ref: PriceChartModelRef) => string;
-  providerLabel: (id: string) => string;
   avatar: (ref: PriceChartModelRef, size: number) => React.ReactNode;
   title?: string;
 }) {
@@ -379,10 +374,9 @@ function ModelChips(props: {
         {props.label}
       </span>
       {props.refs.map((ref) => (
-        <span key={`${ref.providerId}\u0000${ref.modelId}`} className="pc-chip">
+        <span key={ref.modelId} className="pc-chip">
           {props.avatar(ref, 14)}
           <span>{props.nameOf(ref)}</span>
-          <span className="pc-chip-why">{props.providerLabel(ref.providerId)}</span>
         </span>
       ))}
     </div>

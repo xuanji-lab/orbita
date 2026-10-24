@@ -391,10 +391,6 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
 }
-.pc-chip-why {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
 
 .pc-notes {
   display: flex;

@@ -121,7 +121,7 @@ export function formatScore(score: number, unit: PriceChartScoreUnit): string {
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
 }
 
-/** 点的身份（服务商 × 型号 × 档；同一型号挂两家是两个点） */
-export function pointKey(point: Pick<PriceChartPoint, "providerId" | "modelId" | "thinkingLevel">): string {
-  return `${point.providerId}\u0000${point.modelId}\u0000${point.thinkingLevel ?? "none"}`;
+/** 点的身份（型号 × 档：同一型号挂几家服务商都是一个点） */
+export function pointKey(point: Pick<PriceChartPoint, "modelId" | "thinkingLevel">): string {
+  return `${point.modelId}\u0000${point.thinkingLevel ?? "none"}`;
 }
