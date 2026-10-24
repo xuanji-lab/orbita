@@ -206,6 +206,23 @@ describe("renderWsbXml", () => {
     assert.ok(xml.includes("<Networking>Default</Networking>"));
   });
 
+  test("内存配额：MemoryInMB = 4096，位置在 Networking 之后、MappedFolders 之前", () => {
+    // 一个会话一个 Edge（最多 4 个）：guest 空载 0.9–1.2GB + 每个 ~0.4GB，不给配额就会被动杀
+    // 进程（现场是「Edge 莫名其妙退出」）。元素顺序按官方 schema：MemoryInMB 在 Networking
+    // 之后、MappedFolders 之前——顺序错了 WSB 直接报「配置文件格式错误」。
+    const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out" });
+    assert.ok(xml.includes("<MemoryInMB>4096</MemoryInMB>"), xml);
+    const networkAt = xml.indexOf("<Networking>");
+    const memoryAt = xml.indexOf("<MemoryInMB>");
+    const foldersAt = xml.indexOf("<MappedFolders>");
+    assert.ok(networkAt > 0 && memoryAt > networkAt && foldersAt > memoryAt);
+    // 两条映射与它们的 SandboxFolder 不因为多了一个元素而改
+    assert.deepEqual(
+      mappedFolders(xml).map((folder) => folder.sandbox),
+      ["C:\\Users\\WDAGUtilityAccount\\Desktop\\bin", "C:\\Users\\WDAGUtilityAccount\\Desktop\\out"],
+    );
+  });
+
   test("LogonCommand：junction 并到协议固定路径，桥只带 --out-dir（文件协议无 token/端口）", () => {
     const xml = renderWsbXml({ bridgeDir: "C:\\some path\\guest-bridge\\bin", outputDir: "C:\\out dir\\out" });
     const command = /<Command>(.+)<\/Command>/s.exec(xml)?.[1] ?? "";

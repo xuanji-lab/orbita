@@ -101,6 +101,13 @@ export interface WsbRenderInput {
   appDir?: string;
 }
 
+/**
+ * 沙箱的内存配额（MB）。**4GB 不是取整好看**：guest 空载 0.9–1.2GB + 每个 Edge 约 0.4GB，
+ * 4 个实例需要 4GB（与 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_MAX 配套）。
+ * 不写这一项就退回 WSB 的默认值（不保证够），写进去才是一份可验收的契约。
+ */
+const WSB_MEMORY_IN_MB = 4096;
+
 function escapeXml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -126,6 +133,11 @@ function escapeXml(value: string): string {
  * Default 即启用。**这是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
  * 断网等于没有这个功能；代价是沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
  * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
+ *
+ * MemoryInMB = 4096：v1.5-1 起一个会话一个 Edge（最多 4 个实例）。10/23 真机实测，
+ * 沙箱 guest 空载就占 0.9–1.2GB，每个 Edge 约 0.4GB——4 个实例叠加已经超过 2.5GB。
+ * 配额不够时被动杀进程，现场是「Edge 莫名其妙退出，CDP 报没有在运行」，极难归因。
+ * 元素顺序按官方 schema：MemoryInMB 在 Networking 之后、MappedFolders 之前。
  *
  * appDir（PR5，打包产物冒烟）：多一条**只读**映射，把 `<repo>/dist/win-unpacked` 放到沙箱
  * 桌面的 orbita-app/ 下（SandboxFolder 与 COMPUTER_USE_GUEST_APP_EXE 同源）。
@@ -157,6 +169,7 @@ export function renderWsbXml(input: WsbRenderInput): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <Configuration>
   <Networking>Default</Networking>
+  <MemoryInMB>${WSB_MEMORY_IN_MB}</MemoryInMB>
   <MappedFolders>
     <MappedFolder>
       <HostFolder>${escapeXml(input.bridgeDir)}</HostFolder>
