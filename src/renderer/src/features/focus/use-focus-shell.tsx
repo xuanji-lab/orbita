@@ -21,6 +21,7 @@ import { rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { FocusControl } from "../../shell/focus/FocusControl.tsx";
 import { useFocus } from "../../shell/focus/use-focus.ts";
+import type { FocusStatus } from "../../shell/focus/use-focus.ts";
 import { isWindowInactive } from "../../shell/window-activity.ts";
 import { FocusCardLayer, FocusSay } from "./FocusLayer.tsx";
 import { focusBubbleOf, focusFilesViewOf, type FocusFilesView } from "./focus-shell.ts";
@@ -49,6 +50,8 @@ interface FocusShellOptions {
 }
 
 interface FocusShell {
+  /** 当前专注相位（App 的 FilesPanel 接线读 done） */
+  status: FocusStatus;
   /** 工具栏左胶囊那一格（闪电 / 倒计时） */
   control: ReactNode;
   /** 星云头顶的气泡（Sidebar 的 usageSay） */
@@ -243,6 +246,7 @@ export function useFocusShell(options: FocusShellOptions): FocusShell {
   );
 
   return {
+    status: focus.status,
     control,
     say,
     card,
