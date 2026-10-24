@@ -544,7 +544,7 @@ export const zh: Messages = {
     compactHistory: "历史",
     compactSummary: "折成摘要",
     choreModel: "家务活模型",
-    choreModelInfo: "给任务起名、收尾扫描、导入时过滤只发了一句的会话 · 一次小调用，快模型就够 · 以后还会把更多家务交给它",
+    choreModelInfo: "给任务起名、按你的话改收尾清单、导入时过滤只发了一句的会话 · 一次小调用，快模型就够 · 以后还会把更多家务交给它",
     choreModelTip: "家务活用任务正在用的模型",
     sameAsSession: "与会话相同",
     sameAsSessionHint: "用任务正在用的模型",

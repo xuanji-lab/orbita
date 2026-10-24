@@ -11,6 +11,7 @@ import { deriveSessionTitle } from "./session.ts";
 import {
   WRAPUP_CHANGES,
   type WrapupChange,
+  type WrapupCompaction,
   type WrapupDraft,
   type WrapupEntry,
   type WrapupPlan,
@@ -83,6 +84,41 @@ export function splitTurns(records: readonly SessionRecord[]): TurnSpan[] {
   return turns;
 }
 
+/**
+ * 会话里的压缩点：每条 compacted 记录发生时已经开始了几轮（真人用户消息数）+ 它的摘要。
+ * 预检压缩的界碑落在刚发的那句之前，afterTurn 因此不含那一轮——那一轮的原文在压缩之后，模型看得到。
+ */
+export function compactionPoints(records: readonly SessionRecord[]): WrapupCompaction[] {
+  const points: WrapupCompaction[] = [];
+  let turns = 0;
+  for (const record of records) {
+    if (record.role === "compacted") {
+      points.push({ afterTurn: turns, summary: record.summary });
+      continue;
+    }
+    const text = userText(record);
+    if (text !== null && !isClosingScanText(text)) turns += 1;
+  }
+  return points;
+}
+
+/**
+ * 本次范围里要靠摘要看的那几段：压缩点 afterTurn ≥ sinceTurn 的，每段覆盖「上一个压缩点之后
+ * （至少 sinceTurn）到这个压缩点」的轮次。只有最后一次压缩之后的轮次模型看得到原文。
+ */
+export function compactedSegments(
+  plan: Pick<WrapupPlan, "sinceTurn" | "compactions">,
+): { from: number; to: number; summary: string }[] {
+  const out: { from: number; to: number; summary: string }[] = [];
+  let prev = plan.sinceTurn - 1;
+  for (const point of plan.compactions) {
+    if (point.afterTurn < plan.sinceTurn) continue;
+    if (point.afterTurn > prev) out.push({ from: prev + 1, to: point.afterTurn, summary: point.summary });
+    prev = Math.max(prev, point.afterTurn);
+  }
+  return out;
+}
+
 // —— 扫描 prompt ——
 
 /** 轮次表的一行：首行截断（「（只有附件）」兜底，免得模型看到一行空白） */
@@ -91,8 +127,19 @@ function turnLine(turn: Pick<WrapupTurn, "n" | "preview">): string {
 }
 
 /** 收尾扫描的机器提问全文（作为一条普通用户消息发进同一个会话，复用对话缓存） */
-export function buildClosingScanPrompt(plan: Pick<WrapupPlan, "sinceTurn" | "lastTurn" | "turns">): string {
+export function buildClosingScanPrompt(
+  plan: Pick<WrapupPlan, "sinceTurn" | "lastTurn" | "turns"> & Partial<Pick<WrapupPlan, "compactions">>,
+): string {
   const range = `${plan.sinceTurn}–${plan.lastTurn}`;
+  const segments = compactedSegments({ sinceTurn: plan.sinceTurn, compactions: plan.compactions ?? [] });
+  const compacted =
+    segments.length === 0
+      ? ""
+      : `
+这个会话中途压缩过 ${segments.length} 次：压缩点之前的轮次原文已经不在你的上下文里，只剩当时的摘要。
+下面按段给出每次压缩的摘要（摘要可能连带复述更早的内容，只归纳该段轮次范围里的事）。先逐段归纳每段做完了什么、留下了什么，再和最后一次压缩之后的轮次（原文你看得到）整合成一份清单；一件事跨了几段就合成一项，轮次写跨的全程。
+${segments.map((segment) => `\n【${segment.from === segment.to ? `第 ${segment.from} 轮` : `第 ${segment.from}–${segment.to} 轮`} · 压缩摘要】\n${segment.summary.trim()}`).join("\n")}
+`;
   return `${CLOSING_SCAN_HEAD}
 这个任务要收尾了。回看第 ${range} 轮对话，列出两样东西：
 1. 做完的事：用户要的、已经做成的每一件事，各占第几轮到第几轮；
@@ -100,7 +147,7 @@ export function buildClosingScanPrompt(plan: Pick<WrapupPlan, "sinceTurn" | "las
 
 「第 n 轮」= 第 n 条用户消息起、到下一条用户消息前。本次要看的轮次：
 ${plan.turns.map(turnLine).join("\n")}
-
+${compacted}
 只输出一个 fenced json 代码块，不要输出任何其他内容：
 {"done": [{"title": "一句话说做成了什么", "turns": [起始轮, 结束轮]}], "carryovers": [{"title": "一句话事项", "detail": "上下文摘录"}]}
 一件事跨了好几轮就合成一项；只是闲聊、没有要做成的事的轮次可以不列。两样都没有就输出 {"done": [], "carryovers": []}。

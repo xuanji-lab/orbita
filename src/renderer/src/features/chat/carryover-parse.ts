@@ -1,5 +1,5 @@
 /**
- * 收尾扫描在 renderer 这一侧的纯函数：取扫描回答、扫描轮用哪个模型、消息流里认出扫描回答、
+ * 收尾扫描在 renderer 这一侧的纯函数：取扫描回答、消息流里认出扫描回答、
  * 遗留事项的锚点。prompt 与严格解析在 shared/wrapup-scan.ts（与主进程共用）。
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -30,23 +30,6 @@ export function collectScanAnswer(
       .join("");
   }
   return answer;
-}
-
-/**
- * 扫描这**一轮**用哪个模型：设置里配了家务活模型（`settings.choreModel`）就用它，
- * 没配就用会话自己的模型。扫描是一次机械的总结活，与命名同类，没必要花主力
- * 模型的钱。
- *
- * **只影响这一轮**：返回新对象、不改传入的轮次上下文；且 submit 携带的
- * providerId / modelId 不会回写会话 meta——主进程只在首轮建 meta 时落它，跨轮的
- * 模型真值由 `model` 事件写，而开轮不发这个事件。下一轮自然回到会话模型。
- */
-export function scanTurnModel<T extends { providerId: string; modelId: string }>(
-  turn: T,
-  naming: { providerId: string; modelId: string } | undefined,
-): T {
-  if (naming === undefined) return turn;
-  return { ...turn, providerId: naming.providerId, modelId: naming.modelId };
 }
 
 /** 消息流里的扫描回答（只读展示卡吃它） */

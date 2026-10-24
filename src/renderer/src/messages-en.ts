@@ -616,7 +616,7 @@ export const en = {
     compactSummary: "folds into a summary",
     choreModel: "Chore model",
     choreModelInfo:
-      "Small housekeeping calls — naming tasks, closing scans, filtering throwaway imports · a fast model is enough · more chores will move here over time",
+      "Small housekeeping calls — naming tasks, revising the wrap-up list from what you say, filtering throwaway imports · a fast model is enough · more chores will move here over time",
     choreModelTip: "Chores use the model the task is running",
     sameAsSession: "Same as session",
     sameAsSessionHint: "Use whichever model the task is running",

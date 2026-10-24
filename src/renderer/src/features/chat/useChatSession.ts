@@ -69,7 +69,7 @@ import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
-import { CLOSING_SCAN_TIMEOUT_MS, collectScanAnswer, locateMessageRange, scanTurnModel } from "./carryover-parse.ts";
+import { CLOSING_SCAN_TIMEOUT_MS, collectScanAnswer, locateMessageRange } from "./carryover-parse.ts";
 import { buildClosingScanPrompt, isClosingScanText, parseWrapupScan } from "../../../../shared/wrapup-scan.ts";
 import type { WrapupDraft, WrapupPlan, WrapupReviseResult } from "@shared/wrapup";
 import { buildCarryoverFollowUp, buildCarryoverSeed } from "./carryover-resume.ts";
@@ -2925,24 +2925,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 发出扫描消息（首次与重试共用）。**它是一条普通的用户消息**：走与
    * `send` 同一条 submit 链，进消息流、进 pi 历史，标题门禁与最近提问按普通消息处理。
    *
-   * 只有一处不同：这一轮优先用设置里的家务活模型（`settings.choreModel`）——详 scanTurnModel。
-   * 设置读不出来不拦扫描，退回会话模型就是了。
+   * **用会话自己当前的模型**，不用家务活模型（用户 2026-10-24：「这个总结上下文其实是需要一个
+   * 上下文很好的模型来总结的」）：它的窗口装得下这段会话，扫描发在同一个会话里前缀缓存是热的，
+   * 比换一个小模型重读全文便宜。上一版用家务活模型时还有个副作用：开轮推回的思考档是家务活
+   * 模型 clamp 后的档，被当成会话的档写上输入卡，下一轮真按它发了出去。
    */
   const launchScan = useCallback(
     (id: string, baseline: number, turn: Omit<SubmitAgentInput, "sessionId" | "text">, plan: WrapupPlan): void => {
       setClosingScan({ sessionId: id, baseline, plan });
       const revertTurn = engine.beginOptimisticTurn(id);
-      void api.settings
-        .get()
-        .then((settings) => settings.choreModel)
-        .catch(() => undefined)
-        .then((naming) =>
-          api.agent.submit({
-            sessionId: id,
-            text: buildClosingScanPrompt(plan),
-            ...scanTurnModel(turn, naming),
-          }),
-        )
+      void api.agent
+        .submit({ sessionId: id, text: buildClosingScanPrompt(plan), ...turn })
         .catch((cause: unknown) => {
           // 提交没送出去：扫描轮没开起来，归位并交代一句
           setClosingScan(null);

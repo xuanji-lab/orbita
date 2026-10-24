@@ -6,6 +6,8 @@ import {
   buildClosingScanPrompt,
   buildWrapupRevisePrompt,
   CLOSING_SCAN_HEAD,
+  compactedSegments,
+  compactionPoints,
   isClosingScanText,
   LEGACY_CLOSING_SCAN_PROMPT,
   parseWrapupRevise,
@@ -201,5 +203,47 @@ describe("wrapupItemTotals（花费算给 token 最多的型号 × 档）", () =
     const none = wrapupItemTotals(turns, null);
     assert.equal(none.modelId, null);
     assert.equal(none.tokens.input, 0);
+  });
+});
+
+describe("压缩过的会话：按压缩切段，每段给摘要", () => {
+  const compacted = (id: string, summary: string): SessionRecord => ({ role: "compacted", id, summary, tokensBefore: 1, timestamp: 0 });
+  const records = [
+    user("u1", "a"),
+    reply("a1"),
+    user("u2", "b"),
+    compacted("c1", "摘要一：做了 a、b"),
+    reply("a2"),
+    user("u3", "c"),
+    compacted("c2", "摘要二：做了 c"),
+    user("u4", "d"),
+    reply("a3"),
+  ];
+
+  test("压缩点记的是当时已经开始了几轮", () => {
+    assert.deepEqual(compactionPoints(records), [
+      { afterTurn: 2, summary: "摘要一：做了 a、b" },
+      { afterTurn: 3, summary: "摘要二：做了 c" },
+    ]);
+  });
+
+  test("切段：从 sinceTurn 起，到每个压缩点为止；上次确认之前的压缩不算", () => {
+    const compactions = compactionPoints(records);
+    assert.deepEqual(compactedSegments({ sinceTurn: 1, compactions }), [
+      { from: 1, to: 2, summary: "摘要一：做了 a、b" },
+      { from: 3, to: 3, summary: "摘要二：做了 c" },
+    ]);
+    assert.deepEqual(compactedSegments({ sinceTurn: 3, compactions }), [{ from: 3, to: 3, summary: "摘要二：做了 c" }]);
+    assert.deepEqual(compactedSegments({ sinceTurn: 4, compactions }), []);
+  });
+
+  test("prompt 带上每段摘要与轮次范围、交代要逐段归纳再整合；没压缩过就不带这一节", () => {
+    const turns = splitTurns(records).map((t) => ({ n: t.n, userId: t.userId, preview: t.preview, usage: [] }));
+    const prompt = buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 4, turns, compactions: compactionPoints(records) });
+    assert.ok(prompt.includes("压缩过 2 次"));
+    assert.ok(prompt.includes("【第 1–2 轮 · 压缩摘要】\n摘要一：做了 a、b"));
+    assert.ok(prompt.includes("【第 3 轮 · 压缩摘要】\n摘要二：做了 c"));
+    assert.ok(prompt.includes("逐段归纳"));
+    assert.ok(!buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 4, turns, compactions: [] }).includes("压缩过"));
   });
 });

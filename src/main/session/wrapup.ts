@@ -13,7 +13,7 @@ import type { ModelCostDecl } from "../../shared/provider.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup, WrapupConfirmInput, WrapupPlan, WrapupTurnUsage } from "../../shared/wrapup.ts";
-import { splitTurns, wrapupItemTotals } from "../../shared/wrapup-scan.ts";
+import { compactionPoints, splitTurns, wrapupItemTotals } from "../../shared/wrapup-scan.ts";
 import { taskCost, taskRecordsOf, type LevelChange, type TaskRecord, type TokenCounts } from "../usage/task-cost.ts";
 
 const ZERO: TokenCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -51,6 +51,7 @@ export function wrapupPlanOf(input: {
   return {
     sinceTurn,
     lastTurn,
+    compactions: compactionPoints(input.records).filter((point) => point.afterTurn >= sinceTurn),
     turns: turns
       .filter((turn) => turn.n >= sinceTurn)
       .map((turn) => {

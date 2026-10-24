@@ -100,7 +100,7 @@ export function registerWrapupIpc(deps: {
   ipcMain.handle(
     ipcChannels.sessionWrapupConfirm,
     async (_event, id: string, input: WrapupConfirmInput): Promise<void> => {
-      const plan = (await planOf(id)) ?? { sinceTurn: input.throughTurn + 1, lastTurn: input.throughTurn, turns: [] };
+      const plan = (await planOf(id)) ?? { sinceTurn: input.throughTurn + 1, lastTurn: input.throughTurn, turns: [], compactions: [] };
       const wrapup = wrapupOf(plan, input, Date.now());
       const drafts: CarryoverDraft[] = input.carryovers.filter((draft) => draft.title.trim() !== "");
       // 遗留事项先落：会话标了完成而清单丢了，比反过来更糟（再点完成还能重扫）

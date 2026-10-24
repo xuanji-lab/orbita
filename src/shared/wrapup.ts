@@ -61,6 +61,18 @@ export interface WrapupPlan {
   lastTurn: number;
   /** sinceTurn..lastTurn 各轮（含两端） */
   turns: WrapupTurn[];
+  /**
+   * 本次范围里发生过的上下文压缩（旧 → 新）：afterTurn = 压缩发生时已经开始了几轮（压缩点落在
+   * 第 afterTurn 轮里或它之后）；summary = 那条 compacted 记录的摘要。扫描时模型的上下文里只有
+   * 最后一次压缩的摘要与之后的轮次，更早的轮次原文看不到——扫描 prompt 按压缩切段，把每段的
+   * 摘要连同轮次范围一起给它（用户 2026-10-24：「去前面看五次压缩，然后总结五次，然后再整合」）。
+   */
+  compactions: WrapupCompaction[];
+}
+
+export interface WrapupCompaction {
+  afterTurn: number;
+  summary: string;
 }
 
 /** 清单上的一行被反馈改动的方式（卡片上挂的小标签） */

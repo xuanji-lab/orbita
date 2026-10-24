@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { collectScanAnswer, locateMessageRange, matchScanMessage, scanTurnModel } from "./carryover-parse.ts";
+import { collectScanAnswer, locateMessageRange, matchScanMessage } from "./carryover-parse.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 
 const msg = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
@@ -163,20 +163,3 @@ describe("collectScanAnswer", () => {
   });
 });
 
-describe("scanTurnModel", () => {
-  const turn = { providerId: "zai", modelId: "glm-5.3", mode: "plan" as const };
-
-  test("配了命名模型：这一轮换成它，其余开工上下文原样", () => {
-    const next = scanTurnModel(turn, { providerId: "zhipu", modelId: "glm-5.3-flash" });
-    assert.deepEqual(next, { providerId: "zhipu", modelId: "glm-5.3-flash", mode: "plan" });
-  });
-
-  test("没配（Same as session）：原样返回会话模型", () => {
-    assert.equal(scanTurnModel(turn, undefined), turn);
-  });
-
-  test("只影响这一轮：传入的轮次上下文不被改写", () => {
-    scanTurnModel(turn, { providerId: "zhipu", modelId: "glm-5.3-flash" });
-    assert.deepEqual(turn, { providerId: "zai", modelId: "glm-5.3", mode: "plan" });
-  });
-});
