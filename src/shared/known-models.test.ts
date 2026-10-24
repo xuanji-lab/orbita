@@ -1,6 +1,6 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { KNOWN_MODELS, knownModelParams } from "./known-models.ts";
+import { KNOWN_MODELS, knownModelParams, modelAvatarOf } from "./known-models.ts";
 import { defaultThinkingLevel } from "./model-defaults.ts";
 
 describe("型号白名单 —— 按模型 id 记官方口径", () => {
@@ -202,3 +202,48 @@ describe("Kimi K3.1 Pro 与 K2.8 Preview（2026-10-24 按开放平台 quickstart
     assert.equal("maxTokens" in k28, false);
   });
 });
+
+describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () => {
+  test("第一级 · 专属头像按精确 id，不看服务商：K3.1 四个 id 同一枚，MiMo Pro / Flash 各一枚", () => {
+    for (const id of ["k3.1-pro", "k3.1-pro-highspeed", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "kimi-k3.1" }, id);
+    }
+    assert.deepEqual(modelAvatarOf("mimo-v2.6-pro-ultraspeed"), { kind: "own", key: "mimo-v2.6-pro" });
+    // 公众号封面：开放平台与 Kimi Code 的 K3、两种写法的 DeepSeek V4.1 Flash 各共用一枚
+    for (const id of ["k3", "k3-256k", "kimi-k3"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "kimi-k3" }, id);
+    assert.deepEqual(modelAvatarOf("deepseek-flash"), { kind: "own", key: "deepseek-v4.1-flash" });
+    assert.deepEqual(modelAvatarOf("deepseek-v4-pro"), { kind: "own", key: "deepseek-v4-pro" });
+    assert.deepEqual(modelAvatarOf("glm-5.3"), { kind: "own", key: "glm-5.3" });
+    assert.deepEqual(modelAvatarOf("glm-5.3-flash"), { kind: "own", key: "glm-5.3-flash" });
+    // 阶跃官方 id 与 OpenCode Go 的免费档是同一个模型
+    for (const id of ["step-5-preview", "step-5-preview-free"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "step-5-preview" }, id);
+    assert.deepEqual(modelAvatarOf("mimo-v2.6-flash"), { kind: "own", key: "mimo-v2.6-flash" });
+  });
+
+  test("Claude 按产品线各一枚，认前缀——新出的型号不用逐个登记", () => {
+    assert.deepEqual(modelAvatarOf("claude-opus-5-5"), { kind: "own", key: "claude-opus" });
+    assert.deepEqual(modelAvatarOf("claude-opus-4-6"), { kind: "own", key: "claude-opus" });
+    assert.deepEqual(modelAvatarOf("claude-fable-5-1"), { kind: "own", key: "claude-fable" });
+    assert.deepEqual(modelAvatarOf("claude-sonnet-5-5"), { kind: "own", key: "claude-sonnet" });
+    assert.deepEqual(modelAvatarOf("claude-haiku-5-5"), { kind: "own", key: "claude-haiku" });
+  });
+
+  test("第二级 · 家族图标按 id 前缀：认不出产品线的 claude-* 退回 Claude 家族标；GLM 用 Z.ai 的标", () => {
+    assert.deepEqual(modelAvatarOf("claude-instant-1"), { kind: "family", logo: "claude" });
+    assert.deepEqual(modelAvatarOf("glm-5.3-highspeed"), { kind: "family", logo: "zai" });
+    assert.deepEqual(modelAvatarOf("k2.9"), { kind: "family", logo: "kimi" });
+    assert.deepEqual(modelAvatarOf("kimi-for-coding"), { kind: "family", logo: "kimi" });
+    assert.deepEqual(modelAvatarOf("deepseek-v4-flash"), { kind: "family", logo: "deepseek" });
+    assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "family", logo: "qwen" });
+    assert.deepEqual(modelAvatarOf("MiniMax-M3"), { kind: "family", logo: "minimax" });
+    assert.deepEqual(modelAvatarOf("step-3.7-flash"), { kind: "family", logo: "stepfun" });
+    assert.deepEqual(modelAvatarOf("gpt-6-astra"), { kind: "family", logo: "openai" });
+    assert.deepEqual(modelAvatarOf("mimo-v2.5"), { kind: "family", logo: "xiaomimimo" });
+  });
+
+  test("认不出的 id 交给第三级（服务商图标，由界面层按服务商条目给）", () => {
+    assert.equal(modelAvatarOf("beam-free"), undefined);
+    assert.equal(modelAvatarOf("my-gateway-model"), undefined);
+  });
+});
+

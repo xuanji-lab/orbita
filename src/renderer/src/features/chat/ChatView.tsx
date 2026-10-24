@@ -115,7 +115,7 @@ import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, modelChipParts, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -2351,18 +2351,23 @@ function ComposerBar(props: {
               },
             })
           }
-          trigger={({ open, toggle }) => (
-            <Chip
-              active={open}
-              title={t.chat.modelTip}
-              onClick={toggle}
-              chevron
-              // 名字随时可省略号截断（styles.css），不等断点
-              className="chip-model"
-            >
-              {session.model?.modelId ?? t.chat.noModel}
-            </Chip>
-          )}
+          trigger={({ open, toggle }) => {
+            // 头像 + 显示名（不带服务商名）；服务商与 id 进悬停提示
+            const parts = session.model === null ? null : modelChipParts(session.usable, catalog, session.model);
+            return (
+              <Chip
+                active={open}
+                title={parts === null ? t.chat.modelTip : `${parts.name} · ${parts.detail}\n${t.chat.modelTip}`}
+                onClick={toggle}
+                chevron
+                leading={parts?.avatar}
+                // 名字随时可省略号截断（styles.css），不等断点
+                className="chip-model"
+              >
+                {parts?.name ?? t.chat.noModel}
+              </Chip>
+            );
+          }}
         />
       )}
       <Menu

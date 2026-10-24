@@ -8,7 +8,7 @@ import {
   type KnownProvider,
 } from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
-import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
+import { modelDisplayName, resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
@@ -35,6 +35,7 @@ import {
 } from "./providers-view-model.ts";
 import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
+import { ModelAvatar } from "./ModelAvatar";
 import { VendorLogo } from "./VendorLogo";
 
 /**
@@ -1072,6 +1073,12 @@ export function ProvidersView(props: {
                 ) : (
                   draft.models.map((model) => {
                     const defaults = modelDefaults(known, model.id);
+                    const displayName = modelDisplayName(
+                      catalog,
+                      model.id,
+                      known === undefined ? {} : catalogPreferenceOf(known),
+                      model.name,
+                    );
                     const badge = modelContextText(model, defaults);
                     const tested = modelTests[model.id];
                     const busy = tested?.tone === "busy";
@@ -1083,8 +1090,19 @@ export function ProvidersView(props: {
                       >
                         <div className="pv-mrow">
                           <span className="pv-grow">
-                            {model.name !== undefined && <span className="pv-mname">{model.name}</span>}
-                            <span className={`pv-mid${model.name !== undefined ? " dim" : ""}`} title={model.id}>
+                            {/*
+                              行首型号头像 + 显示名为主文字、id 跟在后面（原型 4，2026-10-24）。
+                              显示名与模型卡片同一个口径（modelDisplayName）：声明里的名字 > 白名单 > 目录名 > id；
+                              名字就是 id 时不重复写两遍。
+                            */}
+                            <ModelAvatar
+                              modelId={model.id}
+                              provider={{ kindId: draft.kind, label: draft.displayName || (known?.label ?? draft.kind) }}
+                              // 24px：单行 36px 行高的三分之二，再大要把行撑高（2026-10-24 用户：原来的 18px 太小）
+                              size={24}
+                            />
+                            {displayName !== model.id && <span className="pv-mname">{displayName}</span>}
+                            <span className={`pv-mid${displayName !== model.id ? " dim" : ""}`} title={model.id}>
                               {model.id}
                             </span>
                             <span

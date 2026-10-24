@@ -15,7 +15,7 @@
  * 判定，两边不会对同一个模型说出两个上下文窗口。
  */
 import type { BuiltinModel, BuiltinProvider } from "./agent-ipc.ts";
-import { knownModelParams, type ModelParams } from "./known-models.ts";
+import { knownDisplayName, knownModelParams, type ModelParams } from "./known-models.ts";
 import { clampThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /** 模型接受的输入模态。与 pi `Model["input"]` 同形（pi 只有这两档）。 */
@@ -177,6 +177,36 @@ export function lookupCatalogSource(
     if (hit !== undefined) return { provider, model: hit };
   }
   return undefined;
+}
+
+/**
+ * 型号的显示名：模型菜单与设置页模型列表的主文字（id 降到次行）。
+ *
+ * 顺序：**声明里的名字**（用户在编辑框里起的、或拉取列表时厂商 /models 给的）> 白名单 >
+ * 目录名 > id 原文。用户 / 厂商亲口说的名字最权威；白名单在目录前面，因为它就是为纠目录
+ * 而写的（kimi-for-coding 目录里还叫 K2.7 Code）。
+ *
+ * 目录名**只认精确 id**，不走 lookupCatalogSource 的 Claude 家族兜底：家族借的是参数口径，
+ * 借名字就会把 claude-opus-5-5 叫成「Claude Opus 5」。偏好的那家先查，再按 api 同的先查全目录。
+ */
+export function modelDisplayName(
+  catalog: readonly BuiltinProvider[],
+  modelId: string,
+  prefer: CatalogPreference = {},
+  declaredName?: string,
+): string {
+  const declared = declaredName?.trim();
+  if (declared !== undefined && declared !== "") return declared;
+  const known = knownDisplayName(modelId);
+  if (known !== undefined) return known;
+  const home = prefer.catalogId === undefined ? undefined : catalog.find((p) => p.id === prefer.catalogId);
+  const rank = (provider: BuiltinProvider) =>
+    provider === home ? 0 : prefer.api !== undefined && provider.api === prefer.api ? 1 : 2;
+  for (const provider of [...catalog].sort((a, b) => rank(a) - rank(b))) {
+    const name = provider.models.find((m) => m.id === modelId)?.name;
+    if (name !== undefined && name !== "" && name !== modelId) return name;
+  }
+  return modelId;
 }
 
 /**

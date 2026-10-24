@@ -334,6 +334,12 @@ export interface BuiltinProvider {
  */
 export interface BuiltinModel {
   id: string;
+  /**
+   * 目录里的显示名（「Kimi K3」「Claude Opus 4.6」）。菜单与设置页的主文字按「声明里的名字 >
+   * 白名单 > 这里 > id」取（model-defaults 的 modelDisplayName）。目录名就是 id 本身时不带
+   * （pi.dev 的 kimi-for-coding 就是这样）——那不是名字。
+   */
+  name?: string;
   contextWindow: number;
   maxTokens: number;
   /**

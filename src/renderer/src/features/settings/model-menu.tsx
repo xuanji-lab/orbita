@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
-import { resolveModelDefaults } from "@shared/model-defaults";
+import { modelDisplayName, resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
@@ -26,6 +26,7 @@ import {
   modelPreferenceOf,
   railVendorCell,
 } from "./providers-view-model.ts";
+import { ModelAvatar } from "./ModelAvatar";
 import { VendorLogo } from "./VendorLogo";
 import type { Messages } from "../../messages-en.ts";
 
@@ -73,6 +74,34 @@ export function selectedModelAcceptsImage(
   const declared = provider?.models.declared.find((m) => m.id === selected.modelId);
   if (provider === undefined || declared === undefined) return true;
   return modelAcceptsImage(declared, defaultsFor(provider, catalog, declared.id));
+}
+
+/**
+ * 模型芯片（输入卡底栏、子会话面板两处）显示什么：型号头像 + 显示名，不带服务商名
+ * （2026-10-24 用户：「要，还要显示 avatar。可以不用显示渠道名，就 avatar + 模型名字」）。
+ * 服务商与型号 id 退到悬停提示里——同一型号挂在两家时靠它分辨。
+ * 显示名、头像与模型卡片同一套口径（modelDisplayName / ModelAvatar）。
+ * 选中的服务商已被删 / 没 key 了：头像按型号 id 认（第三级退到首字），名字照样按目录查。
+ */
+export function modelChipParts(
+  providers: readonly ProviderDto[],
+  catalog: readonly BuiltinProvider[],
+  selected: { providerId: string; modelId: string },
+): { avatar: React.ReactNode; name: string; detail: string } {
+  const provider = providers.find((p) => p.id === selected.providerId);
+  const declared = provider?.models.declared.find((m) => m.id === selected.modelId);
+  const prefer = provider === undefined ? {} : modelPreferenceOf(provider);
+  const name = modelDisplayName(catalog, selected.modelId, prefer, declared?.name);
+  const cell =
+    provider === undefined ? { kindId: selected.providerId, label: selected.providerId } : railVendorCell(provider);
+  return {
+    // 20px = 输入框发送键（28px 圆）的内接正方形（28 / √2 ≈ 19.8）：头像在圆里刚好顶住
+    // （2026-10-24 用户：「composer 里的 chip 的模型 avatar 就是刚好在圆形里顶住的方形」）
+    avatar: <ModelAvatar modelId={selected.modelId} provider={cell} size={20} />,
+    name,
+    // 名字就是 id 时不再写第二遍
+    detail: name === selected.modelId ? cell.label : `${cell.label} · ${selected.modelId}`,
+  };
 }
 
 /**
@@ -307,14 +336,36 @@ export function modelCardItems(options: {
   onSelect: (providerId: string, modelId: string) => void;
 }): MenuItem[] {
   const starredKeys = new Set(options.starred.map((pair) => starKey(pair.providerId, pair.modelId)));
+  /*
+   * 「全部」与「星标」里同一个型号可能来自不同服务商（OpenCode 上的 kimi-k3 与 Kimi 套餐的 k3），
+   * 副行要缀上服务商名；左栏选了某一家时它就在左栏亮着，副行只留 id（原型 4，2026-10-24）。
+   */
+  const showProvider = options.scope.kind !== "provider";
   const rowFor = (provider: ProviderDto, declared: ModelDecl): MenuItem => {
-    const defaults = resolveModelDefaults(options.catalog, declared.id, modelPreferenceOf(provider));
+    const prefer = modelPreferenceOf(provider);
+    const defaults = resolveModelDefaults(options.catalog, declared.id, prefer);
     const context = modelContextText(declared, defaults);
     const isStarred = starredKeys.has(starKey(provider.id, declared.id));
+    const name = modelDisplayName(options.catalog, declared.id, prefer, declared.name);
     return {
       id: starKey(provider.id, declared.id),
-      label: declared.id,
-      subLabel: provider.displayName,
+      label: name,
+      /*
+       * 有显示名：主文字是名字，型号 id 降到副行（等宽：它是机器事实）。
+       * 没有（名字就是 id）：副行不再把 id 写第二遍，照旧写服务商名——行还是两行，
+       * 卡片「定高六行」的尺子不变。
+       */
+      ...(name === declared.id
+        ? { subLabel: provider.displayName }
+        : {
+            subLabel: declared.id,
+            subLabelMono: true,
+            ...(showProvider ? { subLabelTrail: provider.displayName } : {}),
+          }),
+      // 主行换成显示名之后，按 id 与服务商名照样要搜得到
+      searchText: `${declared.id} ${provider.displayName}`,
+      // 32px：两行行（48px，上下各留 4px）里约等于两行文字的高度（2026-10-24 用户：原来的 20px 太小）
+      avatar: <ModelAvatar modelId={declared.id} provider={railVendorCell(provider)} size={32} />,
       badge: (
         <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
           <span className="pv-badge" title={options.t.modelMenu.contextWindow}>

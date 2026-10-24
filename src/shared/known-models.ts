@@ -354,6 +354,129 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
   },
 };
 
+// ── 显示名与头像（2026-10-24，原型 4「显示名与头像」）──────────────────────────────
+// 与上面的参数表分开放：参数口径在目录跟上之后要删（见文件头），名字和头像是我们自己定的，
+// 不随目录删；放在一张表里，「该删的」和「该留的」就分不开了。
+
+/**
+ * 型号显示名：模型菜单与设置页模型列表的主文字（id 降到次行）。生效顺序见 model-defaults 的
+ * `modelDisplayName`：声明里的名字 > 这里 > 目录名 > id。
+ * **只写目录给不了、或目录写错的**：K3.1 目录还没收录；kimi-for-coding 在 Kimi Code 里早已
+ * 原地升级成 K2.8 Preview，目录还叫它「Kimi K2.7 Code」/ 直接写 id；deepseek-flash 与
+ * step-5-preview 是厂商官方 id，目录只收了网关的写法。
+ */
+const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  "k3.1-pro": "Kimi K3.1 Pro",
+  "k3.1-pro-highspeed": "Kimi K3.1 Pro Highspeed",
+  "kimi-k3.1-pro": "Kimi K3.1 Pro",
+  "kimi-k3.1-pro-highspeed": "Kimi K3.1 Pro Highspeed",
+  "kimi-for-coding": "Kimi K2.8 Preview",
+  "kimi-for-coding-highspeed": "Kimi K2.7 Code HighSpeed",
+  "deepseek-flash": "DeepSeek V4.1 Flash",
+  "step-5-preview": "Step 5 Preview",
+};
+
+/** 这个型号 id 在白名单里的显示名；没写返回 undefined（调用方接着查目录） */
+export function knownDisplayName(modelId: string): string | undefined {
+  return Object.hasOwn(MODEL_DISPLAY_NAMES, modelId) ? MODEL_DISPLAY_NAMES[modelId] : undefined;
+}
+
+/**
+ * 型号专属头像的素材键。素材本身在 renderer（design-system/assets/model-avatars/，
+ * ModelAvatar.tsx 登记）——shared 不碰图片文件，这里只说「哪个型号用哪一枚」。
+ * 来源与拍板记录在本地的头像登记页（docs/model-avatars/registry.json，不进仓）。
+ */
+export type ModelAvatarKey =
+  | "kimi-k3.1"
+  | "kimi-k3"
+  | "glm-5.3"
+  | "glm-5.3-flash"
+  | "deepseek-v4-pro"
+  | "deepseek-v4.1-flash"
+  | "step-5-preview"
+  | "claude-fable"
+  | "claude-opus"
+  | "claude-sonnet"
+  | "claude-haiku"
+  | "mimo-v2.6-pro"
+  | "mimo-v2.6-flash";
+
+/** 第一级 · 型号专属头像，按精确 id。按 id 生效、不看服务商：OpenCode Go 上的 kimi-k3.1-pro 一样是它 */
+const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
+  "k3.1-pro": "kimi-k3.1",
+  "k3.1-pro-highspeed": "kimi-k3.1",
+  "kimi-k3.1-pro": "kimi-k3.1",
+  "kimi-k3.1-pro-highspeed": "kimi-k3.1",
+  // 以下取自各家公众号发布推文的封面（2026-10-24 用户：「从封面里面截图对应模型的背景」）
+  k3: "kimi-k3",
+  "k3-256k": "kimi-k3",
+  "kimi-k3": "kimi-k3",
+  "glm-5.3": "glm-5.3",
+  "glm-5.3-flash": "glm-5.3-flash",
+  "deepseek-v4-pro": "deepseek-v4-pro",
+  "deepseek-v4.1-flash": "deepseek-v4.1-flash",
+  "deepseek-flash": "deepseek-v4.1-flash",
+  "step-5-preview": "step-5-preview",
+  "step-5-preview-free": "step-5-preview",
+  "mimo-v2.6-pro": "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed": "mimo-v2.6-pro",
+  "mimo-v2.6-flash": "mimo-v2.6-flash",
+};
+
+/** 第一级（续）· Claude 按产品线各一枚，认前缀：新出的 claude-opus-* 不用逐个登记 */
+const MODEL_AVATAR_PREFIXES: readonly (readonly [prefix: string, avatar: ModelAvatarKey])[] = [
+  ["claude-fable-", "claude-fable"],
+  ["claude-opus-", "claude-opus"],
+  ["claude-sonnet-", "claude-sonnet"],
+  ["claude-haiku-", "claude-haiku"],
+];
+
+/** 家族图标的厂商标键（renderer 的 VendorLogo 按它取 svg，类型保证一个都不缺） */
+export type ModelFamilyLogo =
+  | "kimi"
+  | "zai"
+  | "deepseek"
+  | "qwen"
+  | "minimax"
+  | "stepfun"
+  | "claude"
+  | "openai"
+  | "xiaomimimo";
+
+/**
+ * 第二级 · 家族图标，按 id 前缀（小写比）。聚合网关与自建网关里最有用的一级：一家网关里的
+ * 多家型号各用各的标。GLM 用 Z.ai 的标——那是现在 GLM 系列的标，lobe-icons 的 chatglm 是
+ * ChatGLM 时代的旧标（2026-10-24 用户指出）。
+ */
+const MODEL_FAMILY_PREFIXES: readonly (readonly [pattern: RegExp, logo: ModelFamilyLogo])[] = [
+  [/^(kimi-|k\d)/, "kimi"],
+  [/^glm-/, "zai"],
+  [/^deepseek-/, "deepseek"],
+  [/^qwen/, "qwen"],
+  [/^minimax-/, "minimax"],
+  [/^step-/, "stepfun"],
+  [/^claude-/, "claude"],
+  [/^(gpt-|o\d)/, "openai"],
+  [/^mimo-/, "xiaomimimo"],
+];
+
+export type ModelAvatarRef = { kind: "own"; key: ModelAvatarKey } | { kind: "family"; logo: ModelFamilyLogo };
+
+/**
+ * 头像三级规则的前两级，先到先得：专属头像 > 家族图标。认不出返回 undefined——第三级是
+ * 服务商图标，要看服务商条目，由界面层给（每个服务商都有图标，所以第三级必有结果）。
+ * 只看型号 id，不联网。
+ */
+export function modelAvatarOf(modelId: string): ModelAvatarRef | undefined {
+  const exact = Object.hasOwn(MODEL_AVATAR_IDS, modelId) ? MODEL_AVATAR_IDS[modelId] : undefined;
+  if (exact !== undefined) return { kind: "own", key: exact };
+  const id = modelId.toLowerCase();
+  const line = MODEL_AVATAR_PREFIXES.find(([prefix]) => id.startsWith(prefix));
+  if (line !== undefined) return { kind: "own", key: line[1] };
+  const family = MODEL_FAMILY_PREFIXES.find(([pattern]) => pattern.test(id));
+  return family === undefined ? undefined : { kind: "family", logo: family[1] };
+}
+
 /**
  * 这个型号 id 的白名单口径。**只按模型 id 查**：这张表记的是「这个型号的官方口径」，
  * 与它从哪家网关接进来无关。认不得的 id 返回空对象——调用方据此原样走目录 / 兜底。
