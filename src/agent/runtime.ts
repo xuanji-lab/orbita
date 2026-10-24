@@ -33,6 +33,7 @@ import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refresh
 import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import { createToolCallGate, ENABLED_BUILTIN_TOOLS, type PiExtensionApi } from "./permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
+import { nonInteractivePrefixFor } from "./shell-env.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
@@ -1286,6 +1287,25 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   if (services.settingsManager.getShellPath() === undefined) {
     const shellPath = resolveShellPath();
     if (shellPath !== undefined) services.settingsManager.applyOverrides({ shellPath });
+  }
+  /**
+   * 非交互环境前缀，与上面那条同一个口径（用户显式设过就不盖）。
+   *
+   * 治「命令在等人」：分页器（`git log` 进 less）、凭据提示（`git push` / `gh`）、
+   * 交互确认——这些命令在无 TTY 的 bash 里会一直等，实测有跑过 3.7 小时不收尾的。
+   * 路线是改环境不改命令（codex / dsh 已如此），理由与 pi 的接线点见 ./shell-env.ts。
+   *
+   * **顺序有讲究**：读 `getShellPath()` 必须在上一条 applyOverrides 之后——前缀按
+   * **最终生效的** shell 算。用探测前那个旧值（通常是 undefined）会在用户把 shellPath
+   * 设成 PowerShell 的机器上仍然判成 POSIX，`export` 那一行于是把每条命令弄成语法错误。
+   *
+   * 已知边界：pi 只把这个前缀给 **bash** 工具，`powershell` 工具不受影响（它自己就是
+   * 非交互探测式调用，没有分页器与 TTY 提示这回事）。
+   */
+  if (services.settingsManager.getShellCommandPrefix() === undefined) {
+    // 非 POSIX shell（cmd / PowerShell）拿到的是空串：不填，等于这台机器行为不变
+    const prefix = nonInteractivePrefixFor(services.settingsManager.getShellPath());
+    if (prefix !== "") services.settingsManager.applyOverrides({ shellCommandPrefix: prefix });
   }
   /**
    * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。

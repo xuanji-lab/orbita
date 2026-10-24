@@ -22,11 +22,18 @@ import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
  * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
  * 不填的补默认上限。后半句要讲：模型不知道有这条上限，就会把真要跑一小时以上的命令（长训练、
  * 大构建）也不带 timeout 发出去，到点被杀。
+ *
+ * 最后两句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
+ * 用 bash 跑——bash 不给人看中途输出、也不能打断；要看、要打断就走 terminal_*。
+ * 真要在 bash 里跑长任务则要求显式给 timeout：前者讲「别给慢命令短超时」，这里讲
+ * 「没有上限的长任务要自己设上限」。
  */
 const TOOL_GUIDELINES =
   "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
   `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
-  `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that.`;
+  `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that. ` +
+  "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
+  "If a long task really has to run in bash, pass an explicit timeout in seconds: a command you expect to outlast the default limit above must raise it.";
 
 const EXPECTED_SECONDS_GUIDELINE =
   "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
