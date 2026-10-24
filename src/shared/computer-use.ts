@@ -180,6 +180,76 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  */
 export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
 
+// ── 沙箱租约（同一时间只归一个会话）──────────────────────────────────
+
+/**
+ * 沙箱是**一份**（应用级单例：一个 Windows Sandbox、一份 guest 桥、沙箱里一页 Edge），
+ * 而 agent 会话可以是**多个**（主会话 + 它派出的子会话真并发）。命令在 guest 桥里串行，
+ * 但两条独立动作序列会任意交错：A 点框 → B 点另一个框 → A `computer_type`，文字进了 B 的框；
+ * A 用自己截图的坐标去点、屏幕已被 B 换掉 → 点错元素；CDP 只有一页，B 的导航换掉 A 在读的页面。
+ * 两边都收到「成功」——这是零归属的并发，不是资源竞争。
+ *
+ * 所以沙箱对外是一个**独占租约**：拿到才下发，拿不到就给模型一句人话。数值定在这里
+ * （而不是 lease.ts 里）是因为两侧都要读：租约自己判超时，工具描述要告诉模型「会被占用」
+ * 且不要重试。
+ */
+export const COMPUTER_USE_LEASE = {
+  /**
+   * 等别人让出沙箱的上限。比一条 guest 命令的 GUEST_COMMAND_TIMEOUT_MS 短一点：
+   * 对方向前是一个正常动作时，等它做完比当场失败更接近用户的意图（子会话一次截图 3 秒）；
+   * 再长就不值了——模型的耐心有限，等不到就该让它停手。
+   */
+  waitMs: 30_000,
+  /** 排队者的上限。**满了直接拒绝，不排队**：无限队列只会把「等不到」变成「排到天荒地老」 */
+  queueLimit: 8,
+  /**
+   * 最后一次续期之后多久算「放手了」。持有者每下发一条命令就续期一次，所以这条线只在
+   * **持有者静默**时才到点（模型在想、在等审批、会话被搁置）。60s 是「一轮里正常的停顿」
+   * 与「这个会话其实不会再用」之间的折中。
+   */
+  idleMs: 60_000,
+  /**
+   * 单次持有的硬上限。**不看续期**：一个会话若不停地截图（每张都在续期），光靠 idle 线
+   * 永远放不掉，别的会话会饿死。15 分钟到点强制收回，持有者下一条命令拿到终态错误。
+   */
+  holdMaxMs: 15 * 60_000,
+} as const;
+
+/**
+ * 租约错误。文案是**给模型读的**：它看不见 UI，也不会自己想到「另一个会话占着」——
+ * 不写清楚它会立刻重试，而重试正好是这里最不该做的事（对方还在用）。
+ */
+export const computerUseLeaseErrors = {
+  /** 等不到（超时） */
+  timeout: (holderTitle: string): string =>
+    `沙箱桌面的操作权现在在另一个会话手里${holderSuffix(holderTitle)}，等了 ${COMPUTER_USE_LEASE.waitMs / 1000} 秒没等到。` +
+    "不要重试：这一侧继续调 computer_* / sandbox_* 只会再等一轮。等对方那一轮结束后再试，或者请用户确认现在该由谁来操作沙箱。",
+  /** 队列满 */
+  queueFull: (holderTitle: string, queueLimit: number): string =>
+    `沙箱桌面的操作权在另一个会话手里${holderSuffix(holderTitle)}，排队等它的会话已经排到上限（${queueLimit} 个）。` +
+    "不要重试：请用户先让其它会话停下来，或者自己确认该由谁来操作沙箱。",
+  /** 硬上限到点 */
+  holdExpired: (holdMinutes: number): string =>
+    `这个会话连续占用沙箱桌面已经超过 ${holdMinutes} 分钟，操作权被强制收回，这条命令没有下发。` +
+    "不要重试：告诉用户沙箱刚才被收回，如果还要继续，让用户决定下一次由谁来操作。",
+  /** 沙箱被停 / 进 error */
+  revoked: (reason: string): string =>
+    `沙箱已经关闭（${reason}），操作权全部作废，这条命令没有下发。` +
+    "不要重试：先在「设置 › 实验功能 › 电脑使用」里重新启动沙箱，再从头开始。",
+} as const;
+
+/** 文案里带占用者名字的尾巴（没有标题的会话——刚建、还没起名的——只报 id 少了信息量，就退成一句不带名字的话） */
+function holderSuffix(title: string): string {
+  const trimmed = title.trim();
+  return trimmed === "" ? "" : `（「${trimmed}」）`;
+}
+
+/**
+ * 取租约的结果。**ok:false 时 error 已经是可以直接交给模型的话**（同上文的理由），
+ * 调用方不必再拼一遍。
+ */
+export type ComputerUseLeaseResult = { ok: true } | { ok: false; error: string };
+
 // ── 沙箱状态机 ────────────────────────────────────────────────────────
 
 export type SandboxState = "off" | "starting" | "running" | "stopping" | "error";
