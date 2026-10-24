@@ -14,7 +14,10 @@ import {
   agentWritesInTurn,
   clampCursorLine,
   diffHunks,
+  isPossibleWriteTool,
   locateBlock,
+  nonOverlappingChanges,
+  pruneStaleIds,
   resolveToolPath,
   syncDecision,
   writePhaseOf,
@@ -289,20 +292,90 @@ describe("clampCursorLine", () => {
 
 describe("syncDecision —— 回合落定怎么处理盘上的新内容", () => {
   test("盘上没变：什么都不做（不管脏不脏、有没有冲突）", () => {
-    assert.equal(syncDecision({ diskChanged: false, conflicted: true, dirty: true }), "nothing");
-    assert.equal(syncDecision({ diskChanged: false, conflicted: false, dirty: true }), "nothing");
+    assert.equal(syncDecision({ diskChanged: false, conflicted: true, dirty: true, editedThisTurn: true }), "nothing");
+    assert.equal(syncDecision({ diskChanged: false, conflicted: false, dirty: true, editedThisTurn: false }), "nothing");
   });
 
   test("冲突未裁决：等用户（不覆盖他眼前的状态）", () => {
-    assert.equal(syncDecision({ diskChanged: true, conflicted: true, dirty: false }), "wait");
-    assert.equal(syncDecision({ diskChanged: true, conflicted: true, dirty: true }), "wait");
+    assert.equal(syncDecision({ diskChanged: true, conflicted: true, dirty: false, editedThisTurn: false }), "wait");
+    assert.equal(syncDecision({ diskChanged: true, conflicted: true, dirty: true, editedThisTurn: true }), "wait");
   });
 
   test("有未保存改动：只挂冲突条，绝不重载", () => {
-    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: true }), "keep");
+    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: true, editedThisTurn: true }), "keep");
+    // 用户改完又改回去（文档与基线一致），本轮仍然动过 → 也不能静默重载
+    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: false, editedThisTurn: true }), "keep");
   });
 
-  test("干净：静默重载", () => {
-    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: false }), "reload");
+  test("干净且本轮没动过：静默重载", () => {
+    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: false, editedThisTurn: false }), "reload");
+  });
+});
+
+describe("isPossibleWriteTool —— 只读不止 write/edit", () => {
+  test("shell / 终端执行 / 任一 MCP 工具都算", () => {
+    assert.equal(isPossibleWriteTool("bash"), true);
+    assert.equal(isPossibleWriteTool("powershell"), true);
+    assert.equal(isPossibleWriteTool("terminal_execute"), true);
+    assert.equal(isPossibleWriteTool("mcp__fs__write_file"), true);
+  });
+
+  test("读工具与只开终端的工具不算", () => {
+    assert.equal(isPossibleWriteTool("read"), false);
+    assert.equal(isPossibleWriteTool("grep"), false);
+    assert.equal(isPossibleWriteTool("terminal_open"), false);
+    assert.equal(isPossibleWriteTool("terminal_read"), false);
+    assert.equal(isPossibleWriteTool("compile_latex"), false);
+  });
+});
+
+describe("agentWritesInTurn —— 回合起点", () => {
+  test("按开轮时记下的起点扫：上一轮的写不算这一轮（P2 误只读）", () => {
+    const transcript: TranscriptItem[] = [
+      userItem("u1"),
+      assistantItem("a1", [writeCall("c1", "main.tex")]),
+      toolItem("c1"),
+      // 开轮那一刻只有这些；新的 user item 晚到
+    ];
+    // 起点 = 3（开轮时的长度），还没有任何工具调用 → 空
+    assert.deepEqual(agentWritesInTurn(transcript, "/w", 3), []);
+    // 新 user item 与真实的本轮调用到齐之后
+    const later: TranscriptItem[] = [...transcript, userItem("u2"), assistantItem("a2", [writeCall("c2", "other.tex")])];
+    assert.deepEqual(agentWritesInTurn(later, "/w", 3), [{ path: "/w/other.tex", phase: "writing" }]);
+    // 不带起点（面板中途挂上）退回「最后一条 user 消息」的老口径
+    assert.deepEqual(agentWritesInTurn(later, "/w"), [{ path: "/w/other.tex", phase: "writing" }]);
+  });
+});
+
+describe("nonOverlappingChanges —— 整轮撤销的间隔守卫", () => {
+  test("重叠的后一块被丢掉，其余保留（CodeMirror 不接重叠）", () => {
+    const { keep, dropped } = nonOverlappingChanges([
+      { id: "a", from: 10, to: 20 },
+      { id: "b", from: 15, to: 25 },
+      { id: "c", from: 20, to: 30 },
+    ]);
+    assert.deepEqual(keep.map((item) => item.id), ["a", "c"]);
+    assert.deepEqual(dropped.map((item) => item.id), ["b"]);
+  });
+
+  test("首尾相接（from === lastTo）不算重叠；乱序输入会先排序", () => {
+    const { keep, dropped } = nonOverlappingChanges([
+      { id: "b", from: 5, to: 8 },
+      { id: "a", from: 0, to: 5 },
+    ]);
+    assert.deepEqual(keep.map((item) => item.id), ["a", "b"]);
+    assert.equal(dropped.length, 0);
+  });
+});
+
+describe("pruneStaleIds —— 撤掉别的块之后不可撤的块仍在", () => {
+  test("还在清单里的 stale 保留，消失的去掉", () => {
+    const next = pruneStaleIds(new Set(["a", "b"]), [{ id: "a" }, { id: "c" }]);
+    assert.deepEqual([...next], ["a"]);
+  });
+
+  test("没有 stale 时返回同一个对象（不触发重渲染）", () => {
+    const stale = new Set<string>();
+    assert.equal(pruneStaleIds(stale, [{ id: "a" }]), stale);
   });
 });

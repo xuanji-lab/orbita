@@ -24,6 +24,7 @@ import type { TexEditorHandle } from "./TexEditorPane.tsx";
 import {
   agentWritesInTurn,
   diffHunks,
+  isPossibleWriteTool,
   writePhaseOf,
   type AgentWrite,
   type AgentWritePhase,
@@ -39,6 +40,11 @@ export interface EditorSyncRequest {
 export interface EditorCollabState {
   /** 本轮 agent 的写入集（回合之外恒为空） */
   writes: readonly AgentWrite[];
+  /**
+   * 本轮出现过「可能写文件」的工具（shell / 终端执行 / MCP）。它们改哪个文件我们看不见，
+   * 所以打开的文件都按「可能被写」处理：只读 + 暂停自动保存。
+   */
+  mayWrite: boolean;
   /** 本轮 agent 的改动块（按文件绝对路径） */
   hunks: ReadonlyMap<string, readonly EditorHunk[]>;
   /** 回合结束时要交给编辑器同步的盘上内容（按文件绝对路径）；没有就空表 */
@@ -73,14 +79,47 @@ export function useEditorCollab(input: {
   const snapshotsRef = useRef(new Map<string, Snapshot>());
   const runningRef = useRef(false);
   const sessionRef = useRef(input.sessionId);
+  /**
+   * 本轮的起点 = 开轮那一刻 transcript 的长度。**不能用「最后一条 user 消息」**：
+   * 真回显比 phase 事件晚到几十毫秒，按 user 消息取会把上一轮的工具调用算进这一轮，
+   * 开轮那一帧整片误只读（P2）。
+   *
+   * 在**渲染期**更新（不是 effect）：开轮这一帧就要用它算写入集，等 effect 会晚一帧，
+   * 正好是父会话量到的那 90ms 误只读。值只由 phase 与 transcript 长度推导，无副作用。
+   */
+  const boundaryRef = useRef<{ active: boolean; at: number }>({ active: false, at: 0 });
+  if (input.phase === "turn" && !boundaryRef.current.active) {
+    boundaryRef.current = { active: true, at: input.transcript.length };
+  } else if (input.phase !== "turn" && boundaryRef.current.active) {
+    boundaryRef.current = { active: false, at: 0 };
+  }
+  const boundary = boundaryRef.current.active ? boundaryRef.current.at : null;
   const syncTokenRef = useRef(0);
   const requestForRef = useRef(input.requestFor);
   requestForRef.current = input.requestFor;
 
   const writes = useMemo(
-    () => (input.phase === "turn" ? agentWritesInTurn(input.transcript, input.cwd) : []),
-    [input.phase, input.transcript, input.cwd],
+    () =>
+      input.phase === "turn"
+        ? agentWritesInTurn(input.transcript, input.cwd, boundary ?? undefined)
+        : [],
+    [input.phase, input.transcript, input.cwd, boundary],
   );
+
+  /** 本轮是否有「看不见写了哪个文件」的工具（shell / 终端执行 / MCP） */
+  const mayWrite = useMemo(() => {
+    if (input.phase !== "turn") return false;
+    const from = boundary ?? 0;
+    for (let index = Math.max(0, Math.min(from, input.transcript.length)); index < input.transcript.length; index += 1) {
+      const item = input.transcript[index];
+      if (item === undefined || item.role !== "assistant") continue;
+      for (const block of item.content) {
+        if (block.type !== "toolCall") continue;
+        if (isPossibleWriteTool(block.toolName)) return true;
+      }
+    }
+    return false;
+  }, [input.phase, input.transcript, boundary]);
 
   /** 给每个挂着的编辑器补一份快照（本轮还没抓过这个文件才记） */
   const snapshotMounted = useCallback((): void => {
@@ -147,6 +186,7 @@ export function useEditorCollab(input: {
     sessionRef.current = input.sessionId;
     snapshotsRef.current = new Map();
     runningRef.current = input.phase === "turn";
+    boundaryRef.current = { active: input.phase === "turn", at: input.transcript.length };
     setHunks(new Map());
     setSync(new Map());
   }, [input.sessionId, input.phase]);
@@ -194,5 +234,5 @@ export function useEditorCollab(input: {
     [writes],
   );
 
-  return { writes, hunks, sync, dropHunks, writePhase };
+  return { writes, mayWrite, hunks, sync, dropHunks, writePhase };
 }
