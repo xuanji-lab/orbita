@@ -98,10 +98,24 @@ const CLAUDE_ALWAYS_THINKING: ModelParams = {
   defaultThinkingLevel: "high",
 };
 
-/** Kimi K3：思考恒开，low / high / max，默认 max（k3 与 kimi-k3 共用） */
-const KIMI_K3: ModelParams = {
-  thinkingLevels: ["low", "high", "max"],
+/** Kimi 的思考档：恒开，只认 low / high / max（Kimi Code 与开放平台同一口径） */
+const KIMI_THINKING_LEVELS: ThinkingLevel[] = ["low", "high", "max"];
+
+/**
+ * Kimi K3.1 Pro（含 Highspeed）：Kimi Code 的 k3.1-pro* 与开放平台的 kimi-k3.1-pro* 同一个模型，
+ * 口径一份。1M 窗口、输出默认 131072（上限 1048576，我们按默认值记——会话真要的就是
+ * 默认上限）、思考恒开、默认 max。
+ * 目录还没收录（pi.dev 的 kimi-coding / moonshotai 都没有），所以 adaptive 只能在这里声明：
+ * Kimi 的 Anthropic 协议端点只认 `output_config.effort`，不认 budget_tokens——不声明的话
+ * pi 发 budget_tokens，选的档被无视，永远按默认 max 跑。
+ */
+const KIMI_K31_PRO: ModelParams = {
+  contextWindow: 1_048_576,
+  maxTokens: 131_072,
+  reasoning: true,
+  thinkingLevels: KIMI_THINKING_LEVELS,
   defaultThinkingLevel: "max",
+  adaptiveThinking: true,
 };
 
 export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
@@ -311,13 +325,33 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
 
   // ── Kimi ──
   /*
-   * Kimi K3（2026-09-23，源：platform.kimi.ai 的 K3 quickstart 与 Kimi Code 更新日志）：
-   * 思考恒开、关不掉，`reasoning_effort` 只认 low / high / max，省略时默认 max（Kimi
-   * Code 同为 max）。窗口走目录（kimi-coding 收录了 k3）。官方 API id 是 kimi-k3，
-   * 网关常写作 k3——两个键共用一份。
+   * 源（2026-10-24 核对）：
+   * - 开放平台：platform.kimi.ai 的 K3 / K3.1 Pro quickstart（「Important limits」一节）——
+   *   思考恒开，reasoning_effort 只认 low / high / max，默认 max；max_completion_tokens 默认
+   *   131072、上限 1048576；1M 窗口。
+   * - Kimi Code 会员：kimi.com/en/help/kimi-code/models 的型号表与「Effort mapping」——
+   *   k3 / k3-256k 默认 **high**，kimi-for-coding（K2.8 Preview）默认 max、1M 窗口。
+   * 同一个 K3，两处默认档不同：Kimi Code 用 k3 这个 id，开放平台用 kimi-k3，正好按 id 分开记。
+   * K3 的窗口走目录（kimi-coding 收录了 k3 = 1M、k3-256k = 256K）。注意 Kimi Code 的 Plus
+   * 会员 k3 实际只给 256K（1M 要 Pro 及以上），这是账号层面的限制，型号口径仍记 1M。
    */
-  k3: KIMI_K3,
-  "kimi-k3": KIMI_K3,
+  k3: { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high" },
+  "k3-256k": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high" },
+  "kimi-k3": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "max" },
+  "k3.1-pro": KIMI_K31_PRO,
+  "k3.1-pro-highspeed": KIMI_K31_PRO,
+  "kimi-k3.1-pro": KIMI_K31_PRO,
+  "kimi-k3.1-pro-highspeed": KIMI_K31_PRO,
+  /*
+   * K2.8 Preview（Kimi Code 里原地升级了 kimi-for-coding 这个 id）：1M、三档、默认 max。
+   * pi 0.84.3 的内建目录还是 256K、没有档位表——目录联网刷新之前，白名单先纠过来。
+   * 输出上限官方没写（pi.dev 目录记 32768），不确知就不写，交给目录。
+   */
+  "kimi-for-coding": {
+    contextWindow: 1_048_576,
+    thinkingLevels: KIMI_THINKING_LEVELS,
+    defaultThinkingLevel: "max",
+  },
 };
 
 /**
