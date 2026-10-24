@@ -19,7 +19,7 @@ import { KNOWN_MODELS } from "../shared/known-models.ts";
 import { KNOWN_PROVIDERS, catalogPreferenceOf, type KnownProvider } from "../shared/known-providers.ts";
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
-import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
+import { protocolAddress, registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
 
 /** 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网） */
 async function freshRuntime(): Promise<ModelRuntime> {
@@ -34,7 +34,14 @@ const ordered = (levels: readonly ThinkingLevel[]) =>
 
 interface Sides {
   ui: { contextWindow: number; maxTokens: number; image: boolean; levels: readonly ThinkingLevel[] | null };
-  runtime: { contextWindow: number; maxTokens: number; image: boolean; levels: ThinkingLevel[] } | undefined;
+  runtime: { contextWindow: number; maxTokens: number; image: boolean; levels: ThinkingLevel[]; api: string; baseUrl: string } | undefined;
+  /** 这家服务商条目配的协议与地址（会话必须照这个发） */
+  endpoint: { api: string; baseUrl: string };
+}
+
+/** 兼容条目没有预填地址（用户自己填），测试里给一个占位 */
+function baseUrlOf(known: KnownProvider): string {
+  return known.baseUrl === "" ? "https://gateway.example/v1" : known.baseUrl;
 }
 
 /** 一个（服务商条目，型号）在两边各算出什么 */
@@ -49,7 +56,7 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
     {
       id: known.id,
       apiKey: "sk-test",
-      baseUrl: known.baseUrl === "" ? "https://gateway.example/v1" : known.baseUrl,
+      baseUrl: baseUrlOf(known),
       api: known.api,
       models: [{ id: modelId }],
       ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
@@ -72,12 +79,37 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
             maxTokens: model.maxTokens,
             image: model.input.includes("image"),
             levels: getSupportedThinkingLevels(model),
+            api: model.api,
+            baseUrl: model.baseUrl,
           },
+    // 期望值按没注册过的目录算：注册之后运行时里的同 id 服务商已被我们的条目替换
+    endpoint: expectedEndpoint(known, modelId, await freshRuntime()),
   };
+}
+
+/**
+ * 会话该用的端点：本家目录描述的就是这家端点（有条目协议、地址都与服务商条目一样——多协议网关
+ * OpenCode Go）且收录了这个型号时，协议听型号自己的（minimax-m3 走 Anthropic 协议），地址换成
+ * 目录里该协议的（/zen/go，不是 /zen/go/v1）；否则协议、地址都听条目的。
+ */
+function expectedEndpoint(known: KnownProvider, modelId: string, runtime: ModelRuntime): { api: string; baseUrl: string } {
+  const entry = { api: known.api, baseUrl: baseUrlOf(known) };
+  if (known.catalogId === undefined) return entry;
+  const home = runtime.getModels(known.catalogId);
+  const describes = home.some(
+    (model) => model.api === known.api && model.baseUrl.replace(/\/+$/, "") === entry.baseUrl.replace(/\/+$/, ""),
+  );
+  const own = home.find((model) => model.id === modelId);
+  if (!describes || own === undefined) return entry;
+  return { api: own.api, baseUrl: protocolAddress(known.catalogId, entry, own.api) ?? entry.baseUrl };
 }
 
 function assertAgree(label: string, sides: Sides): void {
   assert.ok(sides.runtime !== undefined, `${label}：会话里解析不出这个型号`);
+  // 协议与地址听服务商条目的：目录只借参数。以前目录条目的 api / baseUrl 会盖掉条目配的，
+  // zhipu-coding 的会话一直悄悄发到 OpenAI 协议的 Coding Plan 端点（2026-10-24 查出）
+  assert.equal(sides.runtime.api, sides.endpoint.api, `${label} 协议`);
+  assert.equal(sides.runtime.baseUrl, sides.endpoint.baseUrl, `${label} 地址`);
   assert.equal(sides.runtime.contextWindow, sides.ui.contextWindow, `${label} 窗口`);
   assert.equal(sides.runtime.maxTokens, sides.ui.maxTokens, `${label} 输出上限`);
   // 图片徽标说能看图、会话里却被 pi 当纯文本剥图（或反过来），是同一类两套话
@@ -116,6 +148,60 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
     const sides = await bothSides(entry("opencode-go"), "deepseek-v4.1-flash");
     assert.deepEqual(sides.ui.levels, ["off", "low", "high", "max"]);
     assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["off", "low", "high", "max"]);
+  });
+
+  test("OpenCode Go 是多协议网关：minimax-m3 照目录走 Anthropic 协议，声明里混了白名单型号（走补注册）也不变", async () => {
+    for (const declared of [["minimax-m3"], ["minimax-m3", "deepseek-v4.1-flash"]]) {
+      const known = entry("opencode-go");
+      const model = registerAndResolveModel(
+        await freshRuntime(),
+        {
+          id: known.id,
+          apiKey: "sk-test",
+          baseUrl: known.baseUrl,
+          api: known.api,
+          models: declared.map((id) => ({ id })),
+          ...catalogPreferenceOf(known),
+        },
+        "minimax-m3",
+      );
+      assert.equal(model?.api, "anthropic-messages", declared.join(","));
+      // Anthropic 客户端自己接 /v1/messages：地址必须是 /zen/go，/zen/go/v1 会变成 /v1/v1/messages → 404
+      assert.equal(model?.baseUrl, "https://opencode.ai/zen/go", declared.join(","));
+    }
+  });
+
+  test("OpenCode Go 换成镜像地址时不猜另一协议的地址：原样用条目的（与修之前一样）", async () => {
+    const known = entry("opencode-go");
+    const model = registerAndResolveModel(
+      await freshRuntime(),
+      {
+        id: known.id,
+        apiKey: "sk-test",
+        baseUrl: "https://mirror.example/zen/go/v1",
+        api: known.api,
+        models: [{ id: "minimax-m3" }],
+        ...catalogPreferenceOf(known),
+      },
+      "minimax-m3",
+    );
+    assert.equal(model?.baseUrl, "https://mirror.example/zen/go/v1");
+  });
+
+  test("智谱 Coding Plan 的 glm-5.3：本家目录（zai-coding-cn）是 OpenAI 协议，会话仍走条目配的 Anthropic 端点", async () => {
+    const sides = await bothSides(entry("zhipu-coding"), "glm-5.3");
+    // 前提：目录条目的协议真的不一样，否则这条测的不是「不被目录改道」
+    const catalogEntry = (await freshRuntime()).getModel("zai-coding-cn", "glm-5.3");
+    assert.equal(catalogEntry?.api, "openai-completions");
+    assert.equal(sides.runtime?.api, "anthropic-messages");
+    assert.equal(sides.runtime?.baseUrl, "https://open.bigmodel.cn/api/anthropic");
+    // 档位表照带（型号能力跟 id 走）
+    assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["low", "high", "max"]);
+  });
+
+  test("按量的智谱：地址是 paas/v4，不被带进 Coding Plan 的 coding/paas/v4", async () => {
+    const sides = await bothSides(entry("zhipu"), "glm-5.3");
+    assert.equal(sides.runtime?.baseUrl, "https://open.bigmodel.cn/api/paas/v4");
   });
 
   test("Claude 订阅的 claude-opus-5：本家目录收录，白名单的档位照样进会话（不再多出 minimal）", async () => {

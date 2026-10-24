@@ -15,6 +15,7 @@
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
 import type { ModelParams } from "../shared/known-models.ts";
 import {
@@ -148,7 +149,14 @@ export function toFallbackModels(
    * `adaptiveThinking` 声明，档位表按白名单 thinkingLevels 生成（见 whitelistLevelMap）。
    */
   catalogModels: readonly PiModel[] = [],
+  /**
+   * 这家服务商条目配的端点。给了才做协议判定（见 withKnownParams）；缺席时（老调用方、
+   * 单测）按 `prefer.api` 当条目协议、目录不算描述同一端点。
+   */
+  endpoint?: { api: string; baseUrl: string },
 ): NonNullable<PiProviderRegistration["models"]> {
+  const sameEndpoint = endpoint !== undefined && catalogDescribesEndpoint(current, endpoint);
+  const entryApi = endpoint?.api ?? prefer.api;
   return declared.map((decl) => {
     const known = current.find((model) => model.id === decl.id);
     // 白名单口径（「目录说了算」的服务商在本家目录命中时为空，理由见 knownParamsFor）
@@ -159,9 +167,13 @@ export function toFallbackModels(
     const base =
       known === undefined
         ? borrowedModel(decl.id, patch, declaredAdaptive, current, catalog, prefer, catalogModels)
-        : withKnownParams(known, patch, declaredAdaptive);
+        : withKnownParams(known, patch, declaredAdaptive, sameEndpoint || entryApi === undefined ? known.api : entryApi);
+    // 多协议网关里协议与条目不同的型号，地址换成该协议的（见 protocolAddress）
+    const address =
+      endpoint === undefined || base.api === undefined ? undefined : protocolAddress(prefer.catalogId, endpoint, base.api);
     return {
       ...base,
+      ...(address === undefined ? {} : { baseUrl: address }),
       name: decl.name ?? base.name,
       contextWindow: decl.contextWindow ?? base.contextWindow,
       maxTokens: decl.maxTokens ?? base.maxTokens,
@@ -177,14 +189,33 @@ export function toFallbackModels(
 type RegisteredModel = NonNullable<PiProviderRegistration["models"]>[number];
 
 /**
- * 本家目录认识的型号：目录条目原样带回，白名单逐字段盖上。
+ * 本家目录认识的型号：目录条目带回**参数**，白名单逐字段盖上。
  *
  * 白名单优先于目录（它存在的意义就是赶在目录前面纠错）。以前这里不看白名单——窗口与
  * 输出由主进程当成用户覆盖塞进声明才生效，思考档则根本到不了会话。
+ *
+ * **地址永远不从目录带，协议看情况**（2026-10-24）：目录条目自带 `api` / `baseUrl`，pi 合并
+ * 注册时是「型号上的 ?? 服务商上的」（provider-composer 的 modelFromJson），原样带回就等于
+ * 用目录的端点盖掉用户配的端点。我们的 zhipu-coding 配的是 Anthropic 协议 /api/anthropic，
+ * 它借参数的目录（zai-coding-cn）是 OpenAI 协议 /api/coding/paas/v4——会话一直悄悄发到后者
+ * （用户真实会话 10-11 起记的都是 `"api":"openai-completions"`）；按量的 zhipu 也被带进了
+ * Coding Plan 端点。
+ * - 地址：一律用服务商条目的（pi 自己给内建服务商合并用户配置时也是 `config.baseUrl ?? model.baseUrl`）。
+ * - 协议：`api` 参数由调用方定（见 toFallbackModels 的 `endpoint`）。目录描述的就是这家端点时
+ *   （多协议网关 OpenCode Go：minimax-m3 走 Anthropic 协议，其余走 OpenAI），用型号自己的；
+ *   目录描述的是别的端点时（zai-coding-cn 之于 zhipu-coding），用条目的。
+ *
+ * 最终协议与目录条目不同时 `compat` 也不带：那是那个端点的协议怪癖（openai 端点的
+ * thinkingFormat、supportsStrictMode……），换了协议就不适用——与 borrowedModel「只认同协议
+ * 的条目」同一条规矩。档位表照带：它是型号能力，跟 id 走。
  */
-function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: boolean): RegisteredModel {
+function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: boolean, api: string): RegisteredModel {
+  const { api: knownApi, baseUrl: _knownBaseUrl, compat: knownCompat, ...params } = known;
+  const compat = knownApi === api ? knownCompat : undefined;
   return {
-    ...known,
+    ...params,
+    api,
+    ...(compat === undefined ? {} : { compat }),
     ...(patch.contextWindow === undefined ? {} : { contextWindow: patch.contextWindow }),
     ...(patch.maxTokens === undefined ? {} : { maxTokens: patch.maxTokens }),
     ...(patch.reasoning === undefined ? {} : { reasoning: patch.reasoning }),
@@ -192,8 +223,45 @@ function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: b
     ...(patch.thinkingLevels === undefined
       ? {}
       : { thinkingLevelMap: whitelistLevelMap(known.thinkingLevelMap, patch.thinkingLevels) }),
-    ...(declaredAdaptive ? { compat: { ...(known.compat ?? {}), forceAdaptiveThinking: true } } : {}),
+    ...(declaredAdaptive ? { compat: { ...(compat ?? {}), forceAdaptiveThinking: true } } : {}),
   } as RegisteredModel;
+}
+
+/** 地址比较用：去掉尾部斜杠（用户填的与目录写的常差这一个字符） */
+function sameUrl(a: string, b: string): boolean {
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
+/**
+ * 多协议网关上「另一种协议」的地址。OpenCode Go 一个网关两种协议：OpenAI 协议在
+ * `https://opencode.ai/zen/go/v1`，Anthropic 协议在 `https://opencode.ai/zen/go`——Anthropic
+ * 客户端自己会接 `/v1/messages`。条目只能填一个地址（OpenAI 那个），所以 minimax-m3 / claude-*
+ * 这些 Anthropic 协议的型号要换成目录里该协议的地址，否则请求打到 `/zen/go/v1/v1/messages`
+ * → 404（2026-10-24 实测；main 上也是这样，pi 合并注册时把条目地址盖到了每个型号上）。
+ *
+ * 只认 pi 内建快照里的地址表（按协议各一个），且**条目填的就是网关原地址**时才换：用户改成
+ * 镜像地址时我们不知道镜像的另一协议在哪，原样不动（与修之前一样，不更坏）。
+ * 用内建快照而不是运行时的目录：同 id 注册之后，运行时里的型号地址已经被条目地址盖掉了。
+ */
+export function protocolAddress(
+  catalogId: string | undefined,
+  entry: { api: string; baseUrl: string },
+  api: string,
+): string | undefined {
+  if (catalogId === undefined || api === entry.api) return undefined;
+  const models = builtinProviders().find((provider) => provider.id === catalogId)?.getModels() ?? [];
+  const addressOf = (target: string) => models.find((model) => model.api === target)?.baseUrl;
+  const entryAddress = addressOf(entry.api);
+  if (entryAddress === undefined || !sameUrl(entryAddress, entry.baseUrl)) return undefined;
+  return addressOf(api);
+}
+
+/**
+ * 这份目录描述的是不是这家服务商的端点：有任一条目的协议与地址都和条目配的一样。
+ * 是 → 目录里每个型号自己的协议算数（多协议网关）；不是 → 目录只借参数，协议听条目的。
+ */
+function catalogDescribesEndpoint(current: readonly PiModel[], endpoint: { api: string; baseUrl: string }): boolean {
+  return current.some((model) => model.api === endpoint.api && sameUrl(model.baseUrl, endpoint.baseUrl));
 }
 
 /**
@@ -392,7 +460,10 @@ export function toFallbackRegistration(
 ): PiProviderRegistration {
   return {
     ...toAuthConfig(provider),
-    models: toFallbackModels(current, provider.models, catalog, preferenceOf(provider), catalogModels),
+    models: toFallbackModels(current, provider.models, catalog, preferenceOf(provider), catalogModels, {
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+    }),
   };
 }
 
@@ -419,7 +490,13 @@ export function registerAndResolveModel(
   // 白名单要改动的型号（窗口 / 输出 / 能否思考 / 档位）也得补注册：只注 auth 面的话
   // getModel 返回目录原值，白名单在设置页里显示、到会话里不生效
   const whitelisted = provider.models.some((decl) => touchesRuntime(knownParamsFor(catalog, decl.id, prefer)));
-  if (model === undefined || hasModelOverrides(provider.models) || whitelisted) {
+  // 多协议网关里有型号要换地址（OpenCode Go 的 Anthropic 协议型号）：只注 auth 面的话 pi 会把
+  // 条目地址盖到每个型号上，必须带 models 补注册，型号上的地址才算数（见 protocolAddress）
+  const readdressed = provider.models.some((decl) => {
+    const registered = runtime.getModel(provider.id, decl.id);
+    return registered !== undefined && protocolAddress(provider.catalogId, provider, registered.api) !== undefined;
+  });
+  if (model === undefined || hasModelOverrides(provider.models) || whitelisted || readdressed) {
     /**
      * **拿哪家的目录条目去保留合并：按 catalogId，不是按我们自己的 id。**
      *
