@@ -100,18 +100,48 @@ function parseBoardName(name: string): ParsedBoardName {
   };
 }
 
+/** 榜单基名的规范写法：转小写、空白换连字符（`Grok 4.7` → `grok-4.7`）。只用来和 id 比相等 */
+function normalizeBase(base: string): string {
+  return base.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
 /**
- * Orbita 型号 id 对应的榜单基名。先精确匹配，再取路径最后一段的小写（聚合网关写成
- * `z-ai/glm-5.3`、`openai/gpt-5.6-sol`）。查不到 = 这个型号不在任何榜上。
+ * 兜底查找表：快照里出现过的全部榜单基名，按规范写法索引。由调用方从快照建一次
+ * （boardIndexOf），boardBaseOf / boardEntriesFor 在手写表查不到时用它。
  */
-export function boardBaseOf(modelId: string): string | undefined {
-  const candidates = [modelId, (modelId.split("/").pop() ?? modelId).toLowerCase()];
-  for (const candidate of candidates) {
+export type BoardIndex = ReadonlyMap<string, string>;
+
+export function boardIndexOf(rowLists: readonly (readonly BoardRow[])[]): BoardIndex {
+  const index = new Map<string, string>();
+  for (const rows of rowLists) {
+    for (const [name] of rows) {
+      const parsed = parseBoardName(name);
+      if (parsed.unknownQualifier) continue;
+      index.set(normalizeBase(parsed.base), parsed.base);
+    }
+  }
+  return index;
+}
+
+/**
+ * Orbita 型号 id 对应的榜单基名。查不到 = 这个型号不在任何榜上。两层：
+ *
+ * 1. **手写表**（BOARD_MODEL_IDS）：先精确匹配，再取路径最后一段的小写（聚合网关写成
+ *    `z-ai/glm-5.3`、`openai/gpt-5.6-sol`）。别名（k3 = kimi-k3）只能靠它。
+ * 2. **规范化后精确相等**的兜底（给了 index 才查）：手写表只覆盖我们跟踪的那批型号，新服务商
+ *    （xAI / Codex / Copilot）带进来的 id 一个都配不上——2026-10-24 用户加了 xAI 的 grok-4.7，
+ *    Agent 榜上明明有 `Grok 4.7 (xHigh)`，却进了「未上榜」。榜单基名转小写、空白换连字符之后与
+ *    id 最后一段**整串相等**才算：`Claude Opus 5` 不会配给 claude-opus-5-5、`GPT-6.1 Sol` 不会
+ *    配给 gpt-6-luna。不做前缀、包含或编辑距离——宁可漏配进「未上榜」，不错配成别的型号的分。
+ */
+export function boardBaseOf(modelId: string, index?: BoardIndex): string | undefined {
+  const tail = (modelId.split("/").pop() ?? modelId).toLowerCase();
+  for (const candidate of [modelId, tail]) {
     for (const [base, ids] of Object.entries(BOARD_MODEL_IDS)) {
       if (ids.includes(candidate)) return base;
     }
   }
-  return undefined;
+  return index?.get(tail);
 }
 
 export interface BoardEntry {
@@ -157,8 +187,13 @@ function versionKey(version: string | undefined, publishDate: string): string | 
  *
  * 不同档各留一条：GPT-6 Luna 的 Low / Medium / Max 是三个点。
  */
-export function boardEntriesFor(rows: readonly BoardRow[], modelId: string, publishDate: string): BoardEntry[] {
-  const base = boardBaseOf(modelId);
+export function boardEntriesFor(
+  rows: readonly BoardRow[],
+  modelId: string,
+  publishDate: string,
+  index?: BoardIndex,
+): BoardEntry[] {
+  const base = boardBaseOf(modelId, index);
   if (base === undefined) return [];
   const groups = new Map<string, { entry: BoardEntry; version: string | null; undated: boolean }[]>();
   for (const [name, score, lower, upper, samples, rank] of rows) {

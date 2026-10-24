@@ -20,7 +20,7 @@ import {
 import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
 import { stampedThinkingLevel, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { boardBaseOf, boardEntriesFor, type BoardRow } from "./arena-board.ts";
+import { boardBaseOf, boardEntriesFor, boardIndexOf, type BoardRow } from "./arena-board.ts";
 import {
   estimateTaskCost,
   median,
@@ -151,10 +151,8 @@ interface ModelGroup {
   rates: ModelCostDecl | null;
 }
 
-const groupKey = (modelId: string): string => {
-  const base = boardBaseOf(modelId);
-  return base === undefined ? `id:${modelId}` : `base:${base}`;
-};
+const groupKey = (base: string | undefined, modelId: string): string =>
+  base === undefined ? `id:${modelId}` : `base:${base}`;
 
 const costKey = (base: string, level: ThinkingLevel | "any") => `${base}\u0000${level}`;
 
@@ -168,12 +166,17 @@ export async function buildPriceChart(
     sources.catalog(),
     scanTasks(sources, cache),
   ]);
+  const rowsOf = (category: string): BoardRow[] =>
+    (snapshot.categories[category]?.rows ?? []).map(toRow).filter((row): row is BoardRow => row !== null);
+  // 手写表之外的兜底：快照里出现过的全部榜单基名（arena-board 的 boardBaseOf）
+  const index = boardIndexOf(Object.keys(snapshot.categories).map(rowsOf));
   const groups = new Map<string, ModelGroup>();
   for (const provider of providers) {
     const prefer = catalogPreferenceOf(knownProviderOf(provider), provider.endpoint.api);
     for (const decl of provider.models.declared) {
-      const k = groupKey(decl.id);
-      const group = groups.get(k) ?? { base: boardBaseOf(decl.id), modelId: decl.id, rates: null };
+      const base = boardBaseOf(decl.id, index);
+      const k = groupKey(base, decl.id);
+      const group = groups.get(k) ?? { base, modelId: decl.id, rates: null };
       group.rates ??= officialRates(catalog, decl.id, prefer, decl.cost);
       groups.set(k, group);
     }
@@ -189,7 +192,7 @@ export async function buildPriceChart(
     costs.set(k, list);
   };
   for (const segment of scanned.segments) {
-    const base = boardBaseOf(segment.modelId);
+    const base = boardBaseOf(segment.modelId, index);
     if (base === undefined) continue;
     const cost = segmentCost(segment, groups.get(`base:${base}`)?.rates ?? null);
     if (cost === null || cost <= 0) continue;
@@ -202,13 +205,13 @@ export async function buildPriceChart(
   for (const category of PRICE_CHART_CATEGORIES) {
     const board = snapshot.categories[category];
     if (board === undefined) continue;
-    const rows = board.rows.map(toRow).filter((row): row is BoardRow => row !== null);
+    const rows = rowsOf(category);
     const points: PriceChartPoint[] = [];
     const unranked: PriceChartModelRef[] = [];
     const unpriced: PriceChartModelRef[] = [];
     for (const group of groups.values()) {
       const ref = { modelId: group.modelId };
-      const entries = group.base === undefined ? [] : boardEntriesFor(rows, group.modelId, board.publishDate);
+      const entries = group.base === undefined ? [] : boardEntriesFor(rows, group.modelId, board.publishDate, index);
       if (group.base === undefined || entries.length === 0) {
         unranked.push(ref);
         continue;

@@ -21,6 +21,7 @@ const snapshot: ArenaSnapshot = {
         ["GLM-5.3-Flash", -0.0177, -0.024, -0.011, 100, 30],
         ["Qwen3.8-Max", 0.0113, 0.005, 0.017, 100, 25],
         ["Claude Opus 5.5 (Max)", 0.2077, 0.18, 0.23, 100, 1],
+        ["Grok 4.7 (xHigh)", 0.05, 0.04, 0.06, 100, 6],
       ],
     },
     webdev: {
@@ -295,5 +296,21 @@ describe("一个点 = 型号 × 档：几家服务商、几个别名合成一个
     const kimi = agent.points.find((p) => p.boardName === "Kimi K3 (Max)");
     assert.equal(kimi?.costBasis, "estimated");
     assert.deepEqual(kimi?.measured, { cost: 1.5, samples: 2 });
+  });
+});
+
+describe("手写表外的型号（新服务商）：规范化兜底配上榜", () => {
+  test("xAI 的 grok-4.7 在有它的分类里出点、在没有它的分类里进未上榜", async () => {
+    const xai = [
+      provider("xai", "xai", [{ id: "grok-4.7", cost: { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 } }]),
+      provider("kimi-coding", "kimi-coding", [{ id: "k3" }]),
+    ];
+    const { data } = await buildPriceChart(sources({}, [], xai), snapshot);
+    const agent = data.categories.find((c) => c.category === "agent");
+    const grok = agent?.points.find((p) => p.modelId === "grok-4.7");
+    assert.equal(grok?.thinkingLevel, "xhigh");
+    assert.equal(grok?.boardName, "Grok 4.7 (xHigh)");
+    const webdev = data.categories.find((c) => c.category === "webdev");
+    assert.ok(webdev?.unranked.some((u) => u.modelId === "grok-4.7"));
   });
 });

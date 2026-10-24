@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { boardEntriesFor, type BoardRow } from "./arena-board.ts";
+import { boardEntriesFor, boardIndexOf, type BoardRow } from "./arena-board.ts";
 import snapshot from "./arena-snapshot.json" with { type: "json" };
 
 const row = (name: string, score: number, rank: number): BoardRow => [name, score, score - 5, score + 5, 1000, rank];
@@ -125,6 +125,35 @@ describe("随应用分发的快照", () => {
       const rows = board.rows as BoardRow[];
       const hit = boardEntriesFor(rows, "kimi-k3.1-pro", board.publishDate).length > 0;
       assert.equal(hit, category === "webdev", category);
+    }
+  });
+});
+
+describe("手写表查不到时：规范化后精确相等的兜底", () => {
+  const withIndex = (rows: BoardRow[], modelId: string) => boardEntriesFor(rows, modelId, D, boardIndexOf([rows]));
+
+  test("新服务商带进来的 id：Grok 4.7 → grok-4.7（空格换连字符、转小写，整串相等）", () => {
+    const rows = [row("Grok 4.7 (xHigh)", 0.05, 6), row("Grok 4.6 (xHigh)", 0.02, 12)];
+    assert.deepEqual(withIndex(rows, "grok-4.7").map((e) => e.name), ["Grok 4.7 (xHigh)"]);
+    assert.deepEqual(withIndex(rows, "xai/grok-4.7").map((e) => e.thinking), ["xhigh"]);
+  });
+
+  test("不做前缀 / 包含匹配：claude-opus-5-5 配不到 Claude Opus 5，gpt-6-luna 配不到 GPT-6.1 Sol", () => {
+    assert.deepEqual(withIndex([row("Claude Opus 5 (Max)", 1490, 13)], "claude-opus-5-5"), []);
+    assert.deepEqual(withIndex([row("GPT-6.1 Sol (Max)", 1480, 27)], "gpt-6-luna"), []);
+    assert.deepEqual(withIndex([row("Grok 4.7 (xHigh)", 0.05, 6)], "grok-4"), []);
+    assert.deepEqual(withIndex([row("Grok 4 (0709)", 1400, 90)], "grok-4.7"), []);
+  });
+
+  test("没给 index 就不兜底（只走手写表）", () => {
+    assert.deepEqual(boardEntriesFor([row("Grok 4.7 (xHigh)", 0.05, 6)], "grok-4.7", D), []);
+  });
+
+  test("真实快照：grok-4.7 在六类里都出点（文字榜与 WebDev 上也有 Grok 4.7 (xHigh)）", () => {
+    const index = boardIndexOf(Object.values(snapshot.categories).map((c) => c.rows as BoardRow[]));
+    for (const [category, board] of Object.entries(snapshot.categories)) {
+      const entries = boardEntriesFor(board.rows as BoardRow[], "grok-4.7", board.publishDate, index);
+      assert.deepEqual(entries.map((e) => e.name), ["Grok 4.7 (xHigh)"], category);
     }
   });
 });
