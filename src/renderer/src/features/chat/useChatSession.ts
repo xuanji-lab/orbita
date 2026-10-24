@@ -297,7 +297,7 @@ export interface ChatSession {
   setCarryoverStatus: (id: string, status: Carryover["status"]) => void;
   /**
    * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
-   * context」）。cwd / 归属跟随来源会话；完成与否不回写——勾选办结留给用户手动。
+   * context」）。cwd / 归属跟随来源会话；新会话收尾确认时这条遗留事项自动标为做完。
    */
   startCarryoverTask: (item: Carryover) => void;
   /**
@@ -1843,7 +1843,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[] },
+      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -1868,6 +1868,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           text,
           ...imagesField(images),
           ...filesField(extras?.files),
+          ...(extras?.carryoverId === undefined ? {} : { carryoverId: extras.carryoverId }),
           cwd: target,
           workspaceId: workspace,
           resume,
@@ -2136,8 +2137,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
    * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
    * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
-   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。完成与否不回写：
-   * 新单完成 ≠ 遗留办结，勾选留给用户（不猜）。
+   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。新会话记下它接的是哪条
+   * 遗留事项（meta.resumedCarryovers），收尾确认时那条自动标为做完（2026-10-24 用户：
+   * 遗留事项的后续之前「没有设计」）。
    */
   const startCarryoverTask = useCallback(
     (item: Carryover): void => {
@@ -2162,7 +2164,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setCwd(source?.cwd ?? null);
       setWorkspaceId(source?.workspaceId ?? null);
       engine.setError(null);
-      void submitTurn(crypto.randomUUID(), seed, target, workspace, null);
+      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
+      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { carryoverId: item.id });
     },
     [engine, model, cwd, workspaceId, reset, submitTurn],
   );
@@ -2199,7 +2202,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           sessionRef.current = id;
         }
         const revertTurn = engine.beginOptimisticTurn(id);
-        void api.agent.submit({ sessionId: id, text, ...turn }).catch((cause: unknown) => {
+        void api.agent.submit({ sessionId: id, text, ...turn, carryoverId: item.id }).catch((cause: unknown) => {
           engine.setError(cause instanceof Error ? cause.message : String(cause));
           revertTurn();
         });
