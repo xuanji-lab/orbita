@@ -309,6 +309,12 @@ describe("connectionDirty", () => {
   const saved = { displayName: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4" };
   const draft = { ...saved, apiKey: "" };
 
+  test("换了接入协议算改动——Kimi 的 Chat 与 Responses 同在 /v1，地址不变也要出 Save 条", () => {
+    const kimi = { displayName: "Kimi", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" };
+    assert.equal(connectionDirty({ ...kimi, apiKey: "" }, kimi, null), false);
+    assert.equal(connectionDirty({ ...kimi, api: "openai-responses", apiKey: "" }, kimi, null), true);
+  });
+
   test("原样未动、key 留空：没有改动", () => {
     assert.equal(connectionDirty(draft, saved, null), false);
   });

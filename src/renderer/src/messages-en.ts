@@ -21,10 +21,10 @@ const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
   claude: "Claude Pro / Max subscription, tokens renew automatically",
-  "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
+  "zhipu-coding": "GLM Coding Plan subscription",
   zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
   stepfun: "Step Plan subscription (the URL must include /v1)",
-  "kimi-coding": "Kimi Code membership, via the Anthropic-compatible endpoint",
+  "kimi-coding": "Kimi Code membership",
   "opencode-go": "OpenCode Go subscription — one key for open models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
@@ -32,7 +32,7 @@ const KNOWN_NOTES: Record<string, string> = {
   anthropic: "Anthropic official API, billed per key (for subscription login see Claude below)",
   openai: "OpenAI official API, via the Responses protocol",
   google: "Gemini API (an AI Studio key)",
-  "kimi-api": "Kimi open platform pay-as-you-go API, via the OpenAI-compatible endpoint",
+  "kimi-api": "Kimi open platform pay-as-you-go API",
   minimax: "API and coding plan share one endpoint; billing follows the key",
   xiaomi: "Xiaomi MiMo open platform API, via the OpenAI-compatible endpoint",
   qwen: "Alibaba Cloud Model Studio (DashScope), OpenAI-compatible mode",
@@ -846,6 +846,9 @@ export const en = {
     editModel: (id: string) => `Edit ${id}`,
     removeModel: (id: string) => `Remove ${id}`,
     apiFormatTip: "API format · set by the provider preset · to switch protocol, add a different entry",
+    /** 多协议条目的协议选择器（KnownProvider.access） */
+    accessLabel: "API format",
+    accessTip: "This provider officially supports several protocols · switching also switches the URL · takes effect after Save",
     urlSuffixTip: "The client appends this path",
     /** 「添加服务商」目录的四个分区标题（knownProviderGroup） */
     /** 模型服务卡片墙的工具条与卡片 */

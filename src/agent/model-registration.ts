@@ -15,7 +15,6 @@
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
 import type { ModelParams } from "../shared/known-models.ts";
 import {
@@ -150,12 +149,12 @@ export function toFallbackModels(
    */
   catalogModels: readonly PiModel[] = [],
   /**
-   * 这家服务商条目配的端点。给了才做协议判定（见 withKnownParams）；缺席时（老调用方、
-   * 单测）按 `prefer.api` 当条目协议、目录不算描述同一端点。
+   * 这家服务商条目配的端点（多协议网关还带着各协议的地址）。给了才做协议判定（见
+   * withKnownParams）；缺席时（老调用方、单测）按 `prefer.api` 当条目协议、型号不各走各的协议。
    */
-  endpoint?: { api: string; baseUrl: string },
+  endpoint?: ProviderEndpoint,
 ): NonNullable<PiProviderRegistration["models"]> {
-  const sameEndpoint = endpoint !== undefined && catalogDescribesEndpoint(current, endpoint);
+  const sameEndpoint = prefer.catalogId !== undefined && endpoint !== undefined && modelsPickProtocol(endpoint);
   const entryApi = endpoint?.api ?? prefer.api;
   return declared.map((decl) => {
     const known = current.find((model) => model.id === decl.id);
@@ -170,7 +169,7 @@ export function toFallbackModels(
         : withKnownParams(known, patch, declaredAdaptive, sameEndpoint || entryApi === undefined ? known.api : entryApi);
     // 多协议网关里协议与条目不同的型号，地址换成该协议的（见 protocolAddress）
     const address =
-      endpoint === undefined || base.api === undefined ? undefined : protocolAddress(prefer.catalogId, endpoint, base.api);
+      endpoint === undefined || base.api === undefined ? undefined : protocolAddress(endpoint, base.api);
     return {
       ...base,
       ...(address === undefined ? {} : { baseUrl: address }),
@@ -201,9 +200,9 @@ type RegisteredModel = NonNullable<PiProviderRegistration["models"]>[number];
  * （用户真实会话 10-11 起记的都是 `"api":"openai-completions"`）；按量的 zhipu 也被带进了
  * Coding Plan 端点。
  * - 地址：一律用服务商条目的（pi 自己给内建服务商合并用户配置时也是 `config.baseUrl ?? model.baseUrl`）。
- * - 协议：`api` 参数由调用方定（见 toFallbackModels 的 `endpoint`）。目录描述的就是这家端点时
- *   （多协议网关 OpenCode Go：minimax-m3 走 Anthropic 协议，其余走 OpenAI），用型号自己的；
- *   目录描述的是别的端点时（zai-coding-cn 之于 zhipu-coding），用条目的。
+ * - 协议：`api` 参数由调用方定（见 toFallbackModels 的 `endpoint`）。多协议网关（OpenCode Go：
+ *   minimax-m3 走 Anthropic 协议，其余走 OpenAI）用型号自己的；其余（zai-coding-cn 之于
+ *   zhipu-coding）用条目的。
  *
  * 最终协议与目录条目不同时 `compat` 也不带：那是那个端点的协议怪癖（openai 端点的
  * thinkingFormat、supportsStrictMode……），换了协议就不适用——与 borrowedModel「只认同协议
@@ -227,41 +226,42 @@ function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: b
   } as RegisteredModel;
 }
 
-/** 地址比较用：去掉尾部斜杠（用户填的与目录写的常差这一个字符） */
-function sameUrl(a: string, b: string): boolean {
-  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+/**
+ * 服务商条目配的端点。多协议网关带着 `protocolPerModel` 与实例所在那一组官方端点的 `access`
+ * （主进程按 known-providers 的 endpointHintsOf 装配，地址认不出时两个都不带）。
+ */
+interface ProviderEndpoint {
+  api: string;
+  baseUrl: string;
+  protocolPerModel?: boolean;
+  access?: readonly { api: string; baseUrl: string }[];
 }
 
 /**
- * 多协议网关上「另一种协议」的地址。OpenCode Go 一个网关两种协议：OpenAI 协议在
- * `https://opencode.ai/zen/go/v1`，Anthropic 协议在 `https://opencode.ai/zen/go`——Anthropic
- * 客户端自己会接 `/v1/messages`。条目只能填一个地址（OpenAI 那个），所以 minimax-m3 / claude-*
- * 这些 Anthropic 协议的型号要换成目录里该协议的地址，否则请求打到 `/zen/go/v1/v1/messages`
- * → 404（2026-10-24 实测；main 上也是这样，pi 合并注册时把条目地址盖到了每个型号上）。
+ * 本家目录收录的型号各走各的协议吗（多协议网关）。**只看条目声明，不看目录里型号的地址**。
  *
- * 只认 pi 内建快照里的地址表（按协议各一个），且**条目填的就是网关原地址**时才换：用户改成
- * 镜像地址时我们不知道镜像的另一协议在哪，原样不动（与修之前一样，不更坏）。
- * 用内建快照而不是运行时的目录：同 id 注册之后，运行时里的型号地址已经被条目地址盖掉了。
+ * 以前的判定是「目录里有一条型号的协议与地址和条目逐字相等」。pi.dev 在线目录 2026-10 把
+ * opencode-go 的型号地址整体换成 inference/go，那个判定只靠内建快照里 8 条已下架的旧型号（还写着
+ * zen/go）撑着为真；pi 升级快照后就变假，minimax-m3 / claude-haiku-5-5 会被套上条目的 openai-completions
+ * 打到 /v1/chat/completions（审核 F-2）。目录地址会漂，条目的声明不会。
  */
-export function protocolAddress(
-  catalogId: string | undefined,
-  entry: { api: string; baseUrl: string },
-  api: string,
-): string | undefined {
-  if (catalogId === undefined || api === entry.api) return undefined;
-  const models = builtinProviders().find((provider) => provider.id === catalogId)?.getModels() ?? [];
-  const addressOf = (target: string) => models.find((model) => model.api === target)?.baseUrl;
-  const entryAddress = addressOf(entry.api);
-  if (entryAddress === undefined || !sameUrl(entryAddress, entry.baseUrl)) return undefined;
-  return addressOf(api);
+function modelsPickProtocol(endpoint: ProviderEndpoint): boolean {
+  return endpoint.protocolPerModel === true && endpoint.access !== undefined;
 }
 
 /**
- * 这份目录描述的是不是这家服务商的端点：有任一条目的协议与地址都和条目配的一样。
- * 是 → 目录里每个型号自己的协议算数（多协议网关）；不是 → 目录只借参数，协议听条目的。
+ * 多协议网关上「另一种协议」的地址。OpenCode Go 一个网关几种协议：OpenAI 协议在
+ * `…/inference/go/v1`，Anthropic 协议在 `…/inference/go`——Anthropic 客户端自己会接 `/v1/messages`。
+ * 条目只能填一个地址（OpenAI 那个），所以 minimax-m3 / claude-* 这些 Anthropic 协议的型号要换成
+ * 该协议的地址，否则请求打到 `/v1/v1/messages` → 404（2026-10-24 实测）。
+ *
+ * 地址取自载荷里的 `access`：服务商条目（known-providers）里实例地址所在的那一组——存的是旧写法
+ * zen/go 就给 zen/go 那组的。实例地址认不出（镜像 / 自建）时载荷不带 access，原样不动。
+ * 这家没声明这个协议（Copilot 只声明了默认一种，各协议共用一个主机）也原样不动。
  */
-function catalogDescribesEndpoint(current: readonly PiModel[], endpoint: { api: string; baseUrl: string }): boolean {
-  return current.some((model) => model.api === endpoint.api && sameUrl(model.baseUrl, endpoint.baseUrl));
+export function protocolAddress(endpoint: ProviderEndpoint, api: string): string | undefined {
+  if (!modelsPickProtocol(endpoint) || api === endpoint.api) return undefined;
+  return endpoint.access?.find((method) => method.api === api)?.baseUrl;
 }
 
 /**
@@ -435,6 +435,10 @@ interface ProviderWire {
   catalogId?: string;
   /** 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录的型号不吃白名单 */
   catalogAuthoritative?: boolean;
+  /** 多协议网关：型号各走各的协议（见 ProviderEndpoint） */
+  protocolPerModel?: boolean;
+  /** 实例地址所在那一组官方端点（见 ProviderEndpoint） */
+  access?: readonly { api: string; baseUrl: string }[];
 }
 
 /** 载荷 → 查目录的偏好（与 renderer 的 catalogPreferenceOf 同形，三处同一个判定） */
@@ -463,6 +467,8 @@ export function toFallbackRegistration(
     models: toFallbackModels(current, provider.models, catalog, preferenceOf(provider), catalogModels, {
       api: provider.api,
       baseUrl: provider.baseUrl,
+      ...(provider.protocolPerModel === undefined ? {} : { protocolPerModel: provider.protocolPerModel }),
+      ...(provider.access === undefined ? {} : { access: provider.access }),
     }),
   };
 }
@@ -494,9 +500,20 @@ export function registerAndResolveModel(
   // 条目地址盖到每个型号上，必须带 models 补注册，型号上的地址才算数（见 protocolAddress）
   const readdressed = provider.models.some((decl) => {
     const registered = runtime.getModel(provider.id, decl.id);
-    return registered !== undefined && protocolAddress(provider.catalogId, provider, registered.api) !== undefined;
+    return registered !== undefined && protocolAddress(provider, registered.api) !== undefined;
   });
-  if (model === undefined || hasModelOverrides(provider.models) || whitelisted || readdressed) {
+  /**
+   * 我们的 id 与 pi 内建 id 同名（deepseek / zai / kimi-coding / minimax）、而用户选了**另一种**
+   * 协议时：只注 auth 面，pi 只把条目地址盖到内建型号上、协议仍是内建的——会话拿
+   * openai-completions 去打 `api.deepseek.com/anthropic`（2026-10-24 接入方式选择器的一致性
+   * 测试拦下）。不是多协议网关时，必须补注册，让协议听条目的。
+   */
+  const reprotocoled =
+    provider.models.some((decl) => {
+      const registered = runtime.getModel(provider.id, decl.id);
+      return registered !== undefined && registered.api !== provider.api;
+    }) && !modelsPickProtocol(provider);
+  if (model === undefined || hasModelOverrides(provider.models) || whitelisted || readdressed || reprotocoled) {
     /**
      * **拿哪家的目录条目去保留合并：按 catalogId，不是按我们自己的 id。**
      *

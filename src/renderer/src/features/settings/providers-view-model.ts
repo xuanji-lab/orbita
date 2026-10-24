@@ -239,12 +239,14 @@ export function cardAddress(url: string): string {
  * 草稿（`revealedKey`），原样未动也不算改动，改了一个字才算。
  */
 export function connectionDirty(
-  draft: { displayName: string; baseUrl: string; apiKey: string },
-  saved: { displayName: string; baseUrl: string },
+  draft: { displayName: string; baseUrl: string; apiKey: string; api?: string },
+  saved: { displayName: string; baseUrl: string; api?: string },
   revealedKey: string | null,
 ): boolean {
   if (draft.displayName !== saved.displayName) return true;
   if (draft.baseUrl !== saved.baseUrl) return true;
+  // 换了接入协议：Kimi 的 Chat 与 Responses 同在 /v1，地址不变也算改动
+  if (draft.api !== undefined && saved.api !== undefined && draft.api !== saved.api) return true;
   return draft.apiKey !== "" && draft.apiKey !== revealedKey;
 }
 

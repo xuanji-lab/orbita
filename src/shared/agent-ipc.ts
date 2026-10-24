@@ -431,6 +431,16 @@ export interface ProviderSecrets {
    * 型号的通用口径在它那里不成立。目录没收录的型号仍由白名单补。
    */
   catalogAuthoritative?: boolean;
+  /**
+   * 多协议网关（`KnownProvider.protocolPerModel`）：本家目录收录的型号各走目录给它的协议。
+   * 只在实例地址属于这家某组官方端点时为 true（known-providers 的 endpointHintsOf）。
+   */
+  protocolPerModel?: boolean;
+  /**
+   * 实例地址所在那一组官方端点，按协议各一个地址（存的是旧写法 zen/go，这里就是 zen/go 那组）。
+   * 与 protocolPerModel 同进同出：型号的协议与条目不同时，地址从这里取。
+   */
+  access?: { api: string; baseUrl: string }[];
 }
 
 /**
