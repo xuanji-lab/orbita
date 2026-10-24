@@ -33,7 +33,6 @@ import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
-import { UsageLedger } from "./usage/ledger.ts";
 import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
 import { TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
@@ -319,14 +318,11 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
-  // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
-  // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
-  const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
-  // 任务账本（价格 · 能力图）：同一条落盘路径上按「会话 × 型号 × 档的连续一段」增量记账，
-  // 升级后第一次启动回填一次；打开图只读它，不扫会话
+  // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
+  // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
+  // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
   const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
-  const record = createSessionRecorder(sessions, usageLedger, taskLedger);
-  registerUsageIpc(usageLedger, sessions);
+  const record = createSessionRecorder(sessions, taskLedger);
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
     readRawLog: (id) => sessions.readRawLog(id),
@@ -624,6 +620,8 @@ void app.whenReady().then(async () => {
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
+  // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
+  registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
   registerPriceChartIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲

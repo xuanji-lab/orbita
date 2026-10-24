@@ -493,6 +493,9 @@ export const zh: Messages = {
     noUsage: "休息，就好好享受休息吧~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
+    intentRecall: "意图召回",
+    cost: (usd: string) => `≈ ${usd}（按官方单价折算）`,
+    costPartial: "部分用量缺单价，未计入",
     pinPetHere: "点一下：星云停在这天",
     backToToday: "点一下：星云回到今天",
     showPetHere: "点一下：星云从这里出来",

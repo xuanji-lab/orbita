@@ -7,7 +7,7 @@
  * 不扫会话。
  */
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
-import { catalogPreferenceOf, isPlanBilling, knownProviderOf } from "../../shared/known-providers.ts";
+import { isPlanBilling } from "../../shared/known-providers.ts";
 import {
   PRICE_CHART_CATEGORIES,
   type PriceChartCategory,
@@ -18,13 +18,13 @@ import {
   type PriceChartScoreUnit,
   type PriceChartUnratedLevel,
 } from "../../shared/price-chart.ts";
-import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
+import type { Provider } from "../../shared/provider.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/thinking.ts";
 import { boardBaseOf, boardEntriesFor, boardIndexOf, type BoardRow } from "./arena-board.ts";
+import { modelGroups } from "./model-groups.ts";
 import {
   estimateTaskCost,
   median,
-  officialRates,
   taskCost,
   taskTotals,
   tokenProfile,
@@ -68,27 +68,6 @@ function toRow(raw: (string | number)[]): BoardRow | null {
  */
 const MIN_MEASURED_TASKS = 3;
 
-/**
- * 一个型号：同一条榜单基名下的全部已添加（服务商，id）。**一个点 = 型号 × 档**（用户 2026-10-24：
- * 「其实只要看得出模型的数据就好了，不关心它有多少个服务商」）——k3 挂在 Kimi Code、kimi-k3
- * 挂在 Anthropic 兼容，合成一个 Kimi K3。不在任何榜上的 id 各自成组（只进「未上榜」）。
- */
-interface ModelGroup {
-  /** 榜单基名；不在榜上的 id 为 undefined */
-  base: string | undefined;
-  /** 代表 id：服务商列表里最先添加的那个（显示名与头像按它取） */
-  modelId: string;
-  /**
-   * 这个型号的官方单价：成员按服务商列表的顺序逐个用 officialRates 查（用户自填 > 本家目录 >
-   * 全目录），**取第一个查得到的**。几家查到的价不同时以先添加的那家为准——同一个型号的官方价
-   * 本该是一个数，不同多半是某家目录或用户自填有偏差，取哪个都要有个确定的规则。
-   */
-  rates: ModelCostDecl | null;
-}
-
-const groupKey = (base: string | undefined, modelId: string): string =>
-  base === undefined ? `id:${modelId}` : `base:${base}`;
-
 const costKey = (base: string, level: ThinkingLevel | "any") => `${base}\u0000${level}`;
 
 /**
@@ -122,17 +101,9 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     (snapshot.categories[category]?.rows ?? []).map(toRow).filter((row): row is BoardRow => row !== null);
   // 手写表之外的兜底：快照里出现过的全部榜单基名（arena-board 的 boardBaseOf）
   const index = boardIndexOf(Object.keys(snapshot.categories).map(rowsOf));
-  const groups = new Map<string, ModelGroup>();
-  for (const provider of providers) {
-    const prefer = catalogPreferenceOf(knownProviderOf(provider), provider.endpoint.api);
-    for (const decl of provider.models.declared) {
-      const base = boardBaseOf(decl.id, index);
-      const k = groupKey(base, decl.id);
-      const group = groups.get(k) ?? { base, modelId: decl.id, rates: null };
-      group.rates ??= officialRates(catalog, decl.id, prefer, decl.cost);
-      groups.set(k, group);
-    }
-  }
+  // 「一个型号」的口径（别名合并、官方单价取哪家）与侧栏用量格共用：model-groups.ts
+  const models = modelGroups(providers, catalog, index);
+  const rateOfBase = new Map(models.added.flatMap((g) => (g.base === undefined ? [] : [[g.base, g.rates] as const])));
 
   // 每个（型号，档）与（型号，任意档）的各段花费——各服务商、各别名的任务合在一起。
   // 零价记录（套餐 / 订阅）按这个型号的官方单价折算，与估算同一个价。
@@ -148,7 +119,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
   for (const { task, totals } of tasks) {
     const base = boardBaseOf(task.modelId, index);
     if (base === undefined || task.level === null) continue;
-    const cost = taskCost(totals, groups.get(`base:${base}`)?.rates ?? null);
+    const cost = taskCost(totals, rateOfBase.get(base) ?? null);
     if (cost === null || cost <= 0) continue;
     push(costKey(base, task.level), cost);
     push(costKey(base, "any"), cost);
@@ -165,7 +136,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     const unranked: PriceChartModelRef[] = [];
     const unpriced: PriceChartModelRef[] = [];
     const unratedLevels: PriceChartUnratedLevel[] = [];
-    for (const group of groups.values()) {
+    for (const group of models.added) {
       const ref = { modelId: group.modelId };
       const entries = group.base === undefined ? [] : boardEntriesFor(rows, group.modelId, board.publishDate, index);
       if (group.base === undefined || entries.length === 0) {

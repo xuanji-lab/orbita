@@ -34,17 +34,15 @@ import { stampedThinkingLevel, type ChannelMarkRecord, type SessionRecord } from
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
-import type { UsageLedger } from "../usage/ledger.ts";
 import type { TaskLedger } from "../usage/task-ledger.ts";
 import { taskRecordOf } from "../usage/task-cost.ts";
 
 export function createSessionRecorder(
   store: SessionStore,
-  /** 日用量账本（可选——旧测试夹具不传则不计账）。assistant 记录落盘的同一条路径上落账 */
-  usage?: UsageLedger,
   /**
-   * 任务账本（价格 · 能力图，可选——旧夹具不传则不记）。与日账本同一条落盘路径：assistant 记录
-   * 落盘时按「会话 × 型号 × 档的连续一段」增量记账，档取记录上刚盖的章。
+   * 任务账本（侧栏用量格与价格 · 能力图共用，可选——旧夹具不传则不记）。assistant 记录落盘的
+   * 同一条路径上按「会话 × 型号 × 档的连续一段」增量记账，档取记录上刚盖的章；意图召回的 token
+   * 另记一份按天的账。失败不拦对话——账本是可以从会话 JSONL 重建的派生数据。
    */
   tasks?: TaskLedger,
 ): (event: AgentEvent) => void {
@@ -53,15 +51,6 @@ export function createSessionRecorder(
     void store.record(sessionId, item).catch((error: unknown) => {
       console.error("[session] 落盘失败", sessionId, error);
     });
-    // 用量落账：只认带 usage 的 assistant 记录（去重在账本里按 message id 做）。
-    // 失败同样不拦对话——账本是可以重建的派生数据，下一条消息还有机会补上今天的账
-    if (usage !== undefined && item.role === "assistant" && item.usage !== undefined) {
-      void usage.recordUsage({ id: item.id, timestamp: item.timestamp, usage: item.usage }).catch(
-        (error: unknown) => {
-          console.error("[usage] 日账本落账失败", sessionId, error);
-        },
-      );
-    }
     if (tasks !== undefined && item.role === "assistant") {
       const task = taskRecordOf(item, stampedThinkingLevel(item));
       if (task !== null) {
@@ -79,16 +68,16 @@ export function createSessionRecorder(
       return;
     }
     if (event.type === "compaction") return persist(event.sessionId, event.record);
-    // 意图召回的终态记录（实验功能）：落盘进会话 JSONL；带 usage 时同步进日账本
+    // 意图召回的终态记录（实验功能）：落盘进会话 JSONL；带 usage 时同步进任务账本的意图召回那一份
     // （DeepSeek / Proma 管线花的是用户自己的 token，账本可从记录回填重建）
     if (event.type === "intentRecallRecord") {
       persist(event.sessionId, event.record);
-      if (usage !== undefined && event.record.usage !== undefined) {
-        void usage
-          .recordUsage({
+      if (tasks !== undefined && event.record.usage !== undefined) {
+        void tasks
+          .recordIntent({
             id: event.record.id,
             timestamp: event.record.timestamp,
-            usage: usageCountsOfIntent(event.record.usage),
+            tokens: usageCountsOfIntent(event.record.usage),
           })
           .catch((error: unknown) => {
             console.error("[usage] 意图召回的 token 账没记上", event.sessionId, error);

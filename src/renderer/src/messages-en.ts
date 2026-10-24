@@ -529,6 +529,12 @@ export const en = {
     noUsage: "A rest day. Enjoy it~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
+    /** 悬停一格的明细：意图召回那一行（实验功能，不是对话型号） */
+    intentRecall: "Intent recall",
+    /** 明细最后一行：当天花费按官方单价折算 */
+    cost: (usd: string) => `≈ ${usd} (at official prices)`,
+    /** 花费下面单独一行：有一部分用量找不到单价（含意图召回），没算进去 */
+    costPartial: "Some usage has no price, not counted",
     /** 点一格的效果（格子的悬停 title） */
     pinPetHere: "Click to keep the nebula on this day",
     backToToday: "Click to bring the nebula back to today",
