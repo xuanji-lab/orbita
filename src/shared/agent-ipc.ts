@@ -246,6 +246,18 @@ export const ipcChannels = {
   updaterRecentReleases: "updater:recentReleases",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
   carryoverCreate: "carryover:create",
+  /**
+   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
+   * （会话不存在 / 没有新轮次时 null）。
+   */
+  sessionWrapupPlan: "session:wrapup-plan",
+  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
+  sessionWrapupRevise: "session:wrapup-revise",
+  /**
+   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
+   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
+   */
+  sessionWrapupConfirm: "session:wrapup-confirm",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
@@ -512,6 +524,11 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
+  /**
+   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
+   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
+   */
+  carryoverId?: string;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -751,6 +768,18 @@ export type AgentCommand =
       requestId: string;
       provider: ProviderSecrets;
       modelId: string;
+      prompt: string;
+    }
+  | {
+      /**
+       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
+       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
+       */
+      type: "choreComplete";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      system: string;
       prompt: string;
     }
   | {
@@ -1175,6 +1204,8 @@ export type AgentEvent =
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
+  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
+  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
