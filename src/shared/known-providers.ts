@@ -100,8 +100,18 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "智谱开放平台标准 API（按 token 计费）",
   },
   /*
-   * ── 以下 API 条目对齐 Proma 开源版的厂商清单与默认端点（只取事实：厂商、端点、协议），
-   * 全部 `untested`。catalogId 只挂协议与地址都和 pi 目录一致的几家。
+   * ── 以下 API 条目对齐 Proma 开源版的厂商清单（只取事实：厂商与端点），全部 `untested`。
+   *
+   * **协议跟 pi 的目录走，不跟 Proma 走。** Proma 的 Agent 内核是 Claude Agent SDK，只会说
+   * Anthropic 协议，所以它把能接的厂商都接在 `/anthropic` 端点上；我们跑的是 pi，pi 的目录
+   * 给这几家维护的是 OpenAI 兼容端点（型号参数、思考回传格式都按那条路调过）。而且协议
+   * 对不上会真出事：目录模型在会话里带着自己的 api / baseUrl 注册（agent/model-registration
+   * 的保留合并），我们的 id 又常与 pi 内建 id 同名（xiaomi、qwen-token-plan）——挂了一个
+   * 协议不同的 catalogId，请求就被悄悄改道到目录的协议上。一致性测试
+   * （agent/whitelist-consistency.test.ts）对每条都核对「会话里的协议与地址就是条目自己的」。
+   *
+   * pi 目录里没有的厂商（通义千问 DashScope、火山方舟）照 Proma 的默认端点与协议填，不挂
+   * catalogId，型号参数照样能按型号 id 跨目录借。
    */
   {
     id: "anthropic",
@@ -134,10 +144,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "kimi-api",
     label: "Kimi",
-    api: "anthropic-messages",
-    baseUrl: "https://api.moonshot.cn/anthropic",
+    api: "openai-completions",
+    baseUrl: "https://api.moonshot.cn/v1",
+    catalogId: "moonshotai-cn",
     untested: true,
-    note: "Kimi 开放平台按量 API，走 Anthropic 兼容端点",
+    note: "Kimi 开放平台按量 API，走 OpenAI 兼容端点",
   },
   {
     id: "minimax",
@@ -152,10 +163,11 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "xiaomi",
     label: "小米 MiMo",
-    api: "anthropic-messages",
-    baseUrl: "https://api.xiaomimimo.com/anthropic",
+    api: "openai-completions",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    catalogId: "xiaomi",
     untested: true,
-    note: "小米 MiMo 开放平台 API，走 Anthropic 兼容端点",
+    note: "小米 MiMo 开放平台 API，走 OpenAI 兼容端点",
   },
   {
     id: "qwen",
@@ -247,7 +259,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     id: "zhipu-coding-team",
     label: "智谱团队版",
     api: "anthropic-messages",
-    // 与个人版同一个端点；pi 目录的 zai-coding-cn 是 OpenAI 协议，不挂 catalogId
+    // 与个人版同一个端点。pi 目录的 zai-coding-cn 是 OpenAI 协议的另一个端点，挂上它请求会被
+    // 改道过去（个人版 zhipu-coding 现在就是这样，见一致性测试里的已知例外）：不挂 catalogId
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     billing: "plan",
     untested: true,
@@ -256,17 +269,19 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "qwen-token-plan",
     label: "通义千问",
-    api: "anthropic-messages",
-    baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+    api: "openai-completions",
+    baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    catalogId: "qwen-token-plan-cn",
     billing: "plan",
     untested: true,
-    note: "通义千问 Token Plan 订阅，走 Anthropic 兼容端点",
+    note: "通义千问 Token Plan 订阅，走 OpenAI 兼容端点",
   },
   {
     id: "xiaomi-token-plan",
     label: "小米 MiMo",
-    api: "anthropic-messages",
-    baseUrl: "https://token-plan-cn.xiaomimimo.com/anthropic",
+    api: "openai-completions",
+    baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+    catalogId: "xiaomi-token-plan-cn",
     billing: "plan",
     untested: true,
     note: "小米 MiMo Token Plan 订阅",
