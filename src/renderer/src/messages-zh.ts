@@ -854,7 +854,7 @@ export const zh: Messages = {
       unrated: "用过、但榜单没评的档",
       unratedMeasured: (samples: number, cost: string) => `实测 ${samples} 个任务 · 中位数 ${cost}`,
       ratedOnly: (levels: string) => `榜单只评了：${levels}`,
-      explainer: "一个任务 = 一个会话里同一型号 × 同一思考档的连续一段，中途换型号或换档就切开；子会话单独算。",
+      explainer: "一个任务 = 收尾时确认的一件「做完的事」：花费是那几轮的合计，算给那几轮里 token 最多的型号 × 档；子会话交回结果算一件。没收尾确认过的会话不进实测。",
       planNote: "套餐与订阅按官方单价折算。",
       source: (date: string, revision: string) =>
         `分数：Arena（arena.ai）· lmarena-ai/leaderboard-dataset · CC BY 4.0 · 榜单 ${date} · revision ${revision} · Orbita 选取了子集与列`,

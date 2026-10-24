@@ -963,7 +963,7 @@ export const en = {
         `measured ${samples} task${samples === 1 ? "" : "s"} · median ${cost}`,
       ratedOnly: (levels: string) => `The board only rated: ${levels}`,
       explainer:
-        "A task is one stretch of a session on the same model and thinking level; switching either one starts a new task. Sub-sessions count on their own.",
+        "A task is one thing you confirmed as done when wrapping up a session: its cost is those turns added up, counted toward the model and thinking level that used the most tokens in them. A sub-session that reports back counts as one task. Sessions never wrapped up are not measured.",
       planNote: "Plans and subscriptions are converted at official prices.",
       source: (date: string, revision: string) =>
         `Scores: Arena (arena.ai) · lmarena-ai/leaderboard-dataset · CC BY 4.0 · board ${date} · revision ${revision} · subsets and columns selected by Orbita`,

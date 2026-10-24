@@ -9,7 +9,9 @@ import {
   officialRates,
   piThinkingTimeline,
   appendTaskRecord,
+  chartTasks,
   emptyTaskBook,
+  taskRecordOf,
   taskCost,
   taskRecordsOf,
   taskTotals,
@@ -244,5 +246,28 @@ describe("官方单价", () => {
 
   test("哪儿都没有：null", () => {
     assert.equal(officialRates(catalog, "claude-opus-5-5", {}, undefined), null);
+  });
+});
+
+describe("chartTasks：子会话整条一件，算给 token 最多的型号 × 档", () => {
+  test("子会话里两种型号：合计全部，归属看 token；档不可考的最多组不收；主会话不收", () => {
+    const seen = new Set<string>();
+    const child = segmentTasks(
+      [
+        taskRecordOf(reply("c1", 1, "opus", { level: "high", tokens: [100, 0, 0, 0], cost: 1 }), "high"),
+        taskRecordOf(reply("c2", 2, "flash", { level: "low", tokens: [500, 0, 0, 0], cost: 0.1 }), "low"),
+      ].filter((r) => r !== null),
+      seen,
+      "child",
+    );
+    const main = segmentTasks([taskRecordOf(reply("m1", 3, "opus", { level: "high" }), "high")].filter((r) => r !== null), seen, "main");
+    const tasks = chartTasks([...child, ...main], [], new Set(["child"]));
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0]?.modelId, "flash");
+    assert.equal(tasks[0]?.level, "low");
+    assert.equal(tasks[0]?.totals.recordedCost, 1.1);
+    assert.equal(tasks[0]?.totals.tokens.input, 600);
+    const unknown = segmentTasks([taskRecordOf(reply("u1", 1, "opus", { tokens: [9, 0, 0, 0] }), undefined)].filter((r) => r !== null), seen, "u");
+    assert.deepEqual(chartTasks(unknown, [], new Set(["u"])), []);
   });
 });

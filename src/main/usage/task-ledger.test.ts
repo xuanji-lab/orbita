@@ -223,3 +223,72 @@ describe("TaskLedger", () => {
     assert.equal(ledger.tasks().length, 1);
   });
 });
+
+describe("收尾确认的做完的事（价格图的主会话任务）", () => {
+  const tokens = { input: 10, output: 1, cacheRead: 100, cacheWrite: 0 };
+  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const wrapup = {
+    id: "w1",
+    at: DAY2,
+    throughTurn: 2,
+    items: [
+      { title: "修好登录", turns: [1, 2] as [number, number], providerId: "p", modelId: "glm-5.3", level: "max" as const, tokens, recordedCost: 0.3, unpricedTokens: zero },
+      // 自己加的、没有轮次：没有归属，不进图
+      { title: "自己加的", turns: null, providerId: null, modelId: null, level: null, tokens: zero, recordedCost: 0, unpricedTokens: zero },
+    ],
+  };
+
+  test("增量：recordWrapup 记一件、同一个收尾记录只记一次；不动按天的 token；重读盘还在", async () => {
+    const file = join(dir, "usage-tasks.json");
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source(logs, metas));
+    const before = JSON.stringify(ledger.tasks());
+    await ledger.recordWrapup("a", wrapup);
+    await ledger.recordWrapup("a", wrapup);
+    assert.equal(ledger.doneTasks().length, 1);
+    assert.equal(JSON.stringify(ledger.tasks()), before);
+    const again = new TaskLedger(file, { timeZone: TZ });
+    await again.load();
+    assert.deepEqual(again.doneTasks(), ledger.doneTasks());
+  });
+
+  test("回填：从各会话 meta.wrapups 补上，与增量记出同一份", async () => {
+    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
+    const ledger = new TaskLedger(join(dir, "x.json"), { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source(logs, withWrapup));
+    assert.deepEqual(ledger.doneTasks(), [
+      {
+        sessionId: "a",
+        wrapupId: "w1",
+        providerId: "p",
+        modelId: "glm-5.3",
+        level: "max",
+        totals: { tokens, recordedCost: 0.3, unpricedTokens: zero },
+      },
+    ]);
+  });
+
+  test("价格图任务全集：没确认过的主会话不在里面；子会话整条一件", async () => {
+    const ledger = new TaskLedger(join(dir, "y.json"), { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source(logs, metas));
+    assert.deepEqual(ledger.chartTasks(new Set()), []);
+    await ledger.recordWrapup("a", wrapup);
+    const tasks = ledger.chartTasks(new Set(["b"]));
+    assert.deepEqual(tasks.map((t) => [t.modelId, t.level, t.totals.recordedCost]), [
+      ["glm-5.3", "max", 0.3],
+      ["glm-5.3", "max", 1],
+    ]);
+  });
+
+  test("旧版本（2）的账本当坏文件：回填重建", async () => {
+    const file = join(dir, "old.json");
+    await writeFile(file, JSON.stringify({ version: 2, backfilled: true, untrustedSessions: 0, tasks: [], open: {}, intent: {} }));
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    const stats = await ledger.backfill(source(logs, metas));
+    assert.notEqual(stats, null);
+  });
+});

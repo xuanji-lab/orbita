@@ -40,14 +40,19 @@ import { isNotFound } from "../fs-errors.ts";
 import { todayKey } from "../../shared/usage.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
+import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { stampedThinkingLevel } from "../../shared/session.ts";
 import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import {
   appendTaskRecord,
+  chartTasks,
   emptyTaskBook,
+  storedDonesOf,
   piThinkingTimeline,
   taskRecordsOf,
+  type ChartTask,
   type DayCounts,
+  type StoredDone,
   type StoredTask,
   type TaskBook,
   type TaskRecord,
@@ -77,13 +82,18 @@ export interface BackfillStats {
  * （见 packDay）。任务按下标存，open 指向下标。
  */
 interface LedgerOnDisk {
-  /** 2：加了 intent（意图召回按天）。读到 1 当坏文件——回填重建，补上意图召回 */
-  version: 2;
+  /**
+   * 3：加了 done（收尾确认的做完的事，价格图的主会话任务）。读到 1 / 2 当坏文件——回填重建，
+   * 从各会话 meta.wrapups 补上做完的事（2：加了 intent，意图召回按天）
+   */
+  version: 3;
   backfilled: boolean;
   untrustedSessions: number;
   tasks: { s: string; p: string; m: string; l: ThinkingLevel | null; d: Record<string, number[]> }[];
   open: Record<string, number>;
   intent: Record<string, number[]>;
+  /** 做完的事：s 会话、w 收尾记录 id、p / m / l 归属、t 合计（packDay 同一个 9 数格式） */
+  done: { s: string; w: string; p: string; m: string; l: ThinkingLevel; t: number[] }[];
 }
 
 export class TaskLedger {
@@ -91,6 +101,7 @@ export class TaskLedger {
   private readonly timeZone: string | undefined;
   private book: TaskBook = emptyTaskBook();
   private intent = new Map<string, TokenCounts>();
+  private dones: StoredDone[] = [];
   private readonly listeners: (() => void)[] = [];
   private seen = new Map<string, string>();
   private backfilled = false;
@@ -135,6 +146,7 @@ export class TaskLedger {
       }
       this.book = parsed.book;
       this.intent = parsed.intent;
+      this.dones = parsed.dones;
       this.backfilled = parsed.backfilled;
       this.untrusted = parsed.untrusted;
     });
@@ -164,6 +176,22 @@ export class TaskLedger {
       this.addIntent(item.timestamp, item.tokens);
       this.changes += 1;
       this.pruneSeen();
+      await this.persist();
+      this.emit();
+    });
+  }
+
+  /**
+   * 记一次收尾确认（session:wrapup-confirm 落定后）：每件做完的事一个价格图任务。同一个收尾
+   * 记录 id 只记一次。不动按天的 token 账——那几轮的 token 早在落盘时记过了。
+   */
+  recordWrapup(sessionId: string, wrapup: SessionWrapup): Promise<void> {
+    return this.runSerialized(async () => {
+      if (this.dones.some((done) => done.wrapupId === wrapup.id)) return;
+      const added = storedDonesOf(sessionId, wrapup);
+      if (added.length === 0) return;
+      this.dones.push(...added);
+      this.changes += 1;
       await this.persist();
       this.emit();
     });
@@ -200,6 +228,10 @@ export class TaskLedger {
           this.seen.set(item.id, this.dateKey(item.timestamp));
           appendTaskRecord(this.book, meta.id, item, this.dateKey);
         }
+        for (const wrapup of meta.wrapups ?? []) {
+          if (this.dones.some((done) => done.wrapupId === wrapup.id)) continue;
+          this.dones.push(...storedDonesOf(meta.id, wrapup));
+        }
         for (const record of raw) {
           if (record.role !== "intent-recall" || record.usage === undefined || all.has(record.id)) continue;
           const tokens = usageCountsOfIntent(record.usage);
@@ -228,6 +260,16 @@ export class TaskLedger {
   /** 全部任务（只读快照）。不排写入链：变更块是同步的，两次链任务之间内存总是整份一致 */
   tasks(): readonly StoredTask[] {
     return this.book.tasks;
+  }
+
+  /** 收尾确认的做完的事（只读快照） */
+  doneTasks(): readonly StoredDone[] {
+    return this.dones;
+  }
+
+  /** 价格图的任务全集：做完的事 + 每个子会话一件（childIds：哪些会话是子会话） */
+  chartTasks(childIds: ReadonlySet<string>): ChartTask[] {
+    return chartTasks(this.book.tasks, this.dones, childIds);
   }
 
   /** 意图召回按天（日期 → token） */
@@ -285,7 +327,7 @@ export class TaskLedger {
 
   private async persist(): Promise<void> {
     const file: LedgerOnDisk = {
-      version: 2,
+      version: 3,
       backfilled: this.backfilled,
       untrustedSessions: this.untrusted,
       tasks: this.book.tasks.map((task) => ({
@@ -297,6 +339,14 @@ export class TaskLedger {
       })),
       open: Object.fromEntries(this.book.open),
       intent: Object.fromEntries([...this.intent].map(([date, tokens]) => [date, packTokens(tokens)])),
+      done: this.dones.map((done) => ({
+        s: done.sessionId,
+        w: done.wrapupId,
+        p: done.providerId,
+        m: done.modelId,
+        l: done.level,
+        t: packDay(done.totals),
+      })),
     };
     await writeJsonAtomic(this.file, file);
   }
@@ -339,7 +389,7 @@ function unpackDay(raw: unknown): DayCounts | null {
 /** 解析盘上文件；形状不对返回 null（按空账重建）。坏任务逐条跳过会让 open 的下标错位，所以任务坏一条就整本重建 */
 function parseLedgerFile(
   raw: string,
-): { book: TaskBook; intent: Map<string, TokenCounts>; backfilled: boolean; untrusted: number } | null {
+): { book: TaskBook; intent: Map<string, TokenCounts>; dones: StoredDone[]; backfilled: boolean; untrusted: number } | null {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -348,7 +398,7 @@ function parseLedgerFile(
   }
   if (typeof value !== "object" || value === null) return null;
   const v = value as Record<string, unknown>;
-  if (v["version"] !== 2 || !Array.isArray(v["tasks"])) return null;
+  if (v["version"] !== 3 || !Array.isArray(v["tasks"]) || !Array.isArray(v["done"])) return null;
   const tasks: StoredTask[] = [];
   for (const entry of v["tasks"] as unknown[]) {
     if (typeof entry !== "object" || entry === null) return null;
@@ -380,8 +430,17 @@ function parseLedgerFile(
       intent.set(date, { input, output, cacheRead, cacheWrite });
     }
   }
+  const dones: StoredDone[] = [];
+  for (const entry of v["done"] as unknown[]) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const d = entry as Record<string, unknown>;
+    const totals = unpackDay(d["t"]);
+    if (typeof d["s"] !== "string" || typeof d["w"] !== "string" || typeof d["p"] !== "string" || typeof d["m"] !== "string") return null;
+    if (!isThinkingLevel(d["l"]) || totals === null) return null;
+    dones.push({ sessionId: d["s"], wrapupId: d["w"], providerId: d["p"], modelId: d["m"], level: d["l"], totals });
+  }
   const untrusted = typeof v["untrustedSessions"] === "number" ? v["untrustedSessions"] : 0;
-  return { book: { tasks, open }, intent, backfilled: v["backfilled"] === true, untrusted };
+  return { book: { tasks, open }, intent, dones, backfilled: v["backfilled"] === true, untrusted };
 }
 
 /** 日期键平移 n 天（与日账本同一写法） */

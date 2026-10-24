@@ -598,6 +598,12 @@ void app.whenReady().then(async () => {
     settings,
     host: agentHost,
     catalog: () => agentHost.listBuiltins(),
+    // 确认的做完的事记进任务账本（价格图的主会话任务）
+    onConfirmed: (sessionId, wrapup) => {
+      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
+        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
+      });
+    },
   });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
@@ -646,7 +652,12 @@ void app.whenReady().then(async () => {
   registerProviderIpc(providers, agentHost);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
-  registerPriceChartIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
+  registerPriceChartIpc({
+    ledger: taskLedger,
+    providers: () => providers.load(),
+    catalog: () => agentHost.listBuiltins(),
+    sessions: () => sessions.list(),
+  });
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();

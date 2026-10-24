@@ -14,6 +14,7 @@ import { dateKeysBack, type UsageDayTotal, type UsageWeekEvent } from "../../sha
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PriceChartData } from "../../shared/price-chart.ts";
 import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
+import type { SessionMeta } from "../../shared/session.ts";
 import { boardIndexOf, type BoardRow } from "./arena-board.ts";
 import { usageDays } from "./day-summary.ts";
 import { modelGroups } from "./model-groups.ts";
@@ -112,6 +113,8 @@ export function registerPriceChartIpc(deps: {
   ledger: TaskLedger;
   providers: () => Promise<Provider[]>;
   catalog: () => Promise<BuiltinProvider[]>;
+  /** 会话清单：认哪些是子会话（子会话交回结果算一件做完的事） */
+  sessions: () => Promise<SessionMeta[]>;
 }): void {
   /**
    * 上次算好的结果：账本版本、服务商声明（型号与费率）、目录条数都没变就原样返回。
@@ -121,9 +124,11 @@ export function registerPriceChartIpc(deps: {
   ipcMain.handle(ipcChannels.usagePriceChart, async (): Promise<PriceChartData> => {
     const started = Date.now();
     await deps.ledger.settled();
-    const [providers, catalog] = await Promise.all([deps.providers(), deps.catalog()]);
+    const [providers, catalog, sessions] = await Promise.all([deps.providers(), deps.catalog(), deps.sessions()]);
+    const childIds = new Set(sessions.filter((meta) => meta.parentId !== undefined).map((meta) => meta.id));
     const key = [
       deps.ledger.version(),
+      childIds.size,
       catalog.length,
       JSON.stringify(providers.map((p) => [p.id, p.kind, p.endpoint.api, p.models.declared])),
     ].join("|");
@@ -132,7 +137,7 @@ export function registerPriceChartIpc(deps: {
       return memo.data;
     }
     const data = await buildPriceChart(
-      { tasks: async () => deps.ledger.tasks(), providers: async () => providers, catalog: async () => catalog },
+      { tasks: async () => deps.ledger.chartTasks(childIds), providers: async () => providers, catalog: async () => catalog },
       arenaSnapshot,
     );
     memo = { key, data };

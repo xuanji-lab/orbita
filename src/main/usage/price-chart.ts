@@ -26,9 +26,8 @@ import {
   estimateTaskCost,
   median,
   taskCost,
-  taskTotals,
   tokenProfile,
-  type StoredTask,
+  type ChartTask,
 } from "./task-cost.ts";
 
 /** 快照的形状（scripts/build-arena-snapshot.py 生成） */
@@ -45,8 +44,8 @@ export interface ArenaSnapshot {
 }
 
 export interface PriceChartSources {
-  /** 任务账本里的全部任务（会话 × 型号 × 档的连续一段，按天分账） */
-  tasks(): Promise<readonly StoredTask[]>;
+  /** 价格图的任务全集（task-cost 的 chartTasks：收尾确认的做完的事 + 每个子会话一件） */
+  tasks(): Promise<readonly ChartTask[]>;
   providers(): Promise<Provider[]>;
   catalog(): Promise<BuiltinProvider[]>;
 }
@@ -95,8 +94,8 @@ function unratedOf(
 
 export async function buildPriceChart(sources: PriceChartSources, snapshot: ArenaSnapshot): Promise<PriceChartData> {
   const [providers, catalog, stored] = await Promise.all([sources.providers(), sources.catalog(), sources.tasks()]);
-  // 档不可考的段（level null）计 token、不进图，也不进估算画像——与改账本之前的口径一致
-  const tasks = stored.filter((task) => task.level !== null).map((task) => ({ task, totals: taskTotals(task) }));
+  // 档不可考的不在里面（chartTasks 已经筛掉）：计 token、不进图，也不进估算画像
+  const tasks = stored.map((task) => ({ task, totals: task.totals }));
   const rowsOf = (category: string): BoardRow[] =>
     (snapshot.categories[category]?.rows ?? []).map(toRow).filter((row): row is BoardRow => row !== null);
   // 手写表之外的兜底：快照里出现过的全部榜单基名（arena-board 的 boardBaseOf）
@@ -118,7 +117,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
   const usedLevels = new Map<string, Set<ThinkingLevel>>();
   for (const { task, totals } of tasks) {
     const base = boardBaseOf(task.modelId, index);
-    if (base === undefined || task.level === null) continue;
+    if (base === undefined) continue;
     const cost = taskCost(totals, rateOfBase.get(base) ?? null);
     if (cost === null || cost <= 0) continue;
     push(costKey(base, task.level), cost);
