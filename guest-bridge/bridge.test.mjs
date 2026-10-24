@@ -108,7 +108,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.5.0");
+      assert.equal(info.version, "0.6.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -394,22 +394,46 @@ test(
       assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
 
       // 没起过 Edge：status 报 running:false 并给出下一步（不启动任何进程）
+      // 不带 session = **汇总**形态（宿主在缓存到上限时靠它拿真值）
       const status = await ask({ command: "cdp-status" });
       assert.equal(status.ok, true);
       assert.equal(status.running, false);
-      assert.match(status.hint, /computer_screenshot/, "要告诉模型可以退回像素工具");
+      assert.equal(status.count, 0, "还没有任何会话实例");
+      assert.deepEqual(status.sessions, []);
 
-      // stop 幂等：没起过也回 ok
-      assert.deepEqual(await ask({ command: "cdp-stop" }), { ok: true });
+      // 带 session = 那个会话自己：回执里回显**安全化之后**的键。
+      // 没起过也是 ok:true + running:false（宿主靠 running 决定要不要 cdp-start；status 是查询不是命令）
+      const one = await ask({ command: "cdp-status", session: "agent-1" });
+      assert.equal(one.ok, true);
+      assert.equal(one.running, false);
+      assert.equal(one.session, "agent-1");
+      assert.match(one.hint, /computer_screenshot/, "要告诉模型可以退回像素工具");
+      const sanitized = await ask({ command: "cdp-status", session: "..\\..\\evil / x" });
+      assert.equal(sanitized.session, "______evil___x", "会话键进 profile 目录前必须安全化");
 
-      // 参数校验失败都发生在「碰 CDP」之前
-      const noUrl = await ask({ command: "cdp-nav" });
+      // stop 幂等：没起过也回 ok（并且说是 default 会话、已经停过）
+      const stopDefault = await ask({ command: "cdp-stop" });
+      assert.equal(stopDefault.ok, true);
+      assert.equal(stopDefault.session, "default");
+      assert.equal(stopDefault.alreadyStopped, true);
+      const stopOne = await ask({ command: "cdp-stop", session: "agent-1" });
+      assert.equal(stopOne.ok, true);
+      assert.equal(stopOne.session, "agent-1");
+
+      // 参数校验失败都发生在「碰 CDP」之前（带 session 也一样）
+      const noUrl = await ask({ command: "cdp-nav", session: "agent-1" });
       assert.equal(noUrl.ok, false);
       assert.match(noUrl.error, /需要 url/);
 
-      const noSelector = await ask({ command: "cdp-click" });
+      const noSelector = await ask({ command: "cdp-click", session: "agent-1" });
       assert.equal(noSelector.ok, false);
       assert.match(noSelector.error, /需要 selector/);
+
+      // 没起过这个会话的浏览器：报「没有在运行」并给出降级指引（宿主靠这句话自愈）
+      const notRunning = await ask({ command: "cdp-observe", session: "agent-2" });
+      assert.equal(notRunning.ok, false);
+      assert.match(notRunning.error, /没有在运行/);
+      assert.match(notRunning.error, /computer_screenshot/);
 
       const noText = await ask({ command: "cdp-type", selector: "#q" });
       assert.equal(noText.ok, false);
@@ -432,16 +456,21 @@ test(
       assert.equal(badOp.ok, false);
       assert.match(badOp.error, /list 或 switch/);
 
-      const unknown = await ask({ command: "cdp-eval", expression: "1+1" });
+      const unknown = await ask({ command: "cdp-eval", expression: "1+1", session: "agent-1" });
       assert.equal(unknown.ok, false);
       assert.match(unknown.error, /未知的 CDP 命令/);
 
       // 会去起 Edge 的命令：cdp-start 被测试缝挡住；其余命令报「浏览器没在运行」
       // （宿主那边会先自动 cdp-start，所以这句只在自动拉起也失败时才会被模型看到）
-      const start = await ask({ command: "cdp-start" });
+      const start = await ask({ command: "cdp-start", session: "agent-3" });
       assert.equal(start.ok, false, "cdp-start 在 --no-browser 下不许成功");
       assert.match(start.error, /测试模式/);
       assert.match(start.error, /computer_screenshot/, "错误里要有降级指引");
+
+      // 启动失败不占名额：下一次发同一个会话的命令仍然按「没在运行」报，而不是「已起过」
+      const afterFailedStart = await ask({ command: "cdp-status", session: "agent-3" });
+      assert.equal(afterFailedStart.running, false);
+      assert.equal(afterFailedStart.session, "agent-3");
 
       for (const body of [
         { command: "cdp-nav", url: "https://example.com/" },
@@ -499,6 +528,25 @@ test(
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
     assert.ok(parsed.cases >= 8, `用例数应 >= 8，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 会话 id 安全化的纯函数自测（--selftest-session）────────────────────────────────
+//
+// 会话 id 是**外部输入**（宿主给的 session 字段），而它会被拼进 `C:\orbita-browser\sessions\<键>`。
+// 没这层闸门，一个带 `..` 的 id 就能把 profile 目录指到 guest 的任意位置。
+// 纯函数，宿主上就能测，不必起沙箱、更不必起 Edge。
+
+test(
+  "会话 id 安全化 selftest：只留 [A-Za-z0-9_-]、截断 48、空串回 default、上限文案可照做",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-session"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 12, `用例数应 >= 12，实际 ${parsed.cases}`);
   },
 );
 
