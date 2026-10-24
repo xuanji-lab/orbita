@@ -238,20 +238,35 @@ export function FilesPanel(props: {
   /**
    * 按路径拼一份 fs:read 请求（与预览同一个 root / 白名单口径）。
    * 附图标签（root 空串、name 有值）不走 fs:read，返回 null——它不可能是要编辑的 .tex。
+   *
+   * **不在标签里的文件也要能读**：布局 B / 自动并排的左块是项目主文件（`splitLeftPath`
+   * 不进标签队列），只认标签会让那块的落定重载与改动块全部失效（P2）。没有标签时按
+   * 根归属拼请求——文件必须落在某个真实存在的根内，白名单口径不变。
    */
   const readRequestFor = useCallback(
     (path: string): FileListRequest | null => {
       const tab = tabs.find((item) => samePath(item.path, path));
-      if (tab === undefined || tab.name !== undefined) return null;
+      if (tab !== undefined) {
+        if (tab.name !== undefined) return null;
+        return {
+          sessionId,
+          workspaceId,
+          ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+          root: tab.root,
+          dir: tab.path,
+        };
+      }
+      const owner = tree.roots.find((root) => root.exists && pathWithin(root.path, path));
+      if (owner === undefined) return null;
       return {
         sessionId,
         workspaceId,
         ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
-        root: tab.root,
-        dir: tab.path,
+        root: owner.path,
+        dir: path,
       };
     },
-    [tabs, sessionId, workspaceId, focusWorkspaceId],
+    [tabs, tree.roots, sessionId, workspaceId, focusWorkspaceId],
   );
 
   /**
@@ -1124,9 +1139,12 @@ export function FilesPanel(props: {
                     onDirtyChange: handleEditorDirty,
                     onSaved: handleEditorSaved,
                     onError: handleEditorError,
-                    // agent 与本文件同改一个文件：只读 / 重载 / 按块撤销（按左块路径取）
+                    // agent 与本文件同改一个文件：只读 / 重载 / 按块撤销（按左块路径取）。
+                    // 写过的文件用 writePhase 定文案；本轮只要出现 shell / 终端 / MCP，
+                    // 打开的文件一律按「可能被写」占位（看不见它写了哪个文件）
                     collab: {
-                      write: collab.writePhase(leftPath ?? activeTab.path),
+                      hold: collab.writePhase(leftPath ?? activeTab.path) ?? (collab.mayWrite ? "possible" : null),
+                      turnActive: session.phase === "turn",
                       hunks: collab.hunks.get(leftPath ?? activeTab.path) ?? EMPTY_HUNKS,
                       onUndone: (ids) => collab.dropHunks(leftPath ?? activeTab.path, ids),
                       sync: syncFor(collab.sync, leftPath ?? activeTab.path, samePath),

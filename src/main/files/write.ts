@@ -35,8 +35,9 @@ function queueWrite<T>(path: string, task: () => Promise<T>): Promise<T> {
 /**
  * 把编辑器里的文本写回 `path`。
  *
- * `expectedHash === null` 是用户明确选择「保留我的」后的强制写：跳过比对，但仍排队、
- * 仍原子写。除这个入口外，所有写都必须过冲突检查。
+ * `expectedHash === null` 是**跳过比对**的强制写（保留着给真正的「我知道我在覆盖」用）。
+ * 编辑器的「保留我的」不走它：它带的是**冲突那一刻**的盘上指纹——盘上在那之后又被改过
+ * 就再冲突一次，不替用户把更新的一份抹掉。除这两种情况外，所有写都必须过冲突检查。
  */
 export async function writeEditedFile(
   path: string,

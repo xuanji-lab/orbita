@@ -20,10 +20,27 @@
  */
 import { structuredPatch } from "diff";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
 import { samePath } from "../../../../shared/path.ts";
 
-/** 会写盘的内建工具（pi 0.84.3 的 createAllToolDefinitions：只有这两个改文件） */
+/** 会写盘的内建工具（pi 0.84.3 的 createAllToolDefinitions：只有这两个直接改文件） */
 const FILE_WRITE_TOOLS: readonly string[] = ["write", "edit"];
+
+/**
+ * **可能**写文件的工具：它们不告诉我们写了哪个文件（shell 里一行重定向、终端里一条
+ * 命令、MCP 服务自己决定改什么），但一轮里出现任何一个，就得把本轮打开的项目文件当成
+ * 「可能被写」——按 P0 的代价权衡：宁可多锁一轮，不能丢字。
+ *
+ * 名单只放真能落盘的：bash / powershell（pi 内建）、terminal_execute（终端工具里唯一
+ * 会敲命令的）、以及所有 MCP 工具（服务端行为不可知）。
+ */
+const RISKY_TOOLS: readonly string[] = ["bash", "powershell", "terminal_execute"];
+
+/** 这个工具名是否「可能写文件」：shell / 终端执行 / 任一 MCP 工具 */
+export function isPossibleWriteTool(toolName: string): boolean {
+  if (RISKY_TOOLS.includes(toolName)) return true;
+  return parseQualifiedToolName(toolName) !== null;
+}
 
 /** agent 对某个文件的写入状态：正在写 / 本轮写过（已落定） */
 export type AgentWritePhase = "writing" | "done";
@@ -88,12 +105,18 @@ function turnStart(transcript: readonly TranscriptItem[]): number {
 /**
  * 本轮 agent 对文件的写入集（按出现顺序）。同一个文件本轮写了两次只留一条：
  * 第二次调用开始后它又回到 writing——上一份 after 已经不是它手里的底本。
+ *
+ * `from` 是**回合起点**（开轮那一刻 transcript 的长度）。必须用它而不是「最后一条
+ * user 消息」：真回显比 phase 事件晚到几十毫秒，按最后一条 user 消息取会把上一轮的
+ * 工具调用算进这一轮，开轮一瞬间整片误只读。`from` 缺席（面板在回合中途才挂上）
+ * 才退回最后一条 user 消息。
  */
 export function agentWritesInTurn(
   transcript: readonly TranscriptItem[],
   cwd: string | null,
+  from?: number,
 ): AgentWrite[] {
-  const start = turnStart(transcript);
+  const start = from !== undefined && from >= 0 && from <= transcript.length ? from : turnStart(transcript);
   if (start < 0) return [];
   /** toolCallId → 这份调用的绝对路径（结果按 id 对回来） */
   const callPaths = new Map<string, string>();
@@ -283,8 +306,54 @@ export function syncDecision(input: {
   diskChanged: boolean;
   conflicted: boolean;
   dirty: boolean;
+  /**
+   * 本轮里用户动过这个编辑器（用户事务，不是「落定那一刻脏不脏」）。P0 那道口子就在这里：
+   * 自动保存可能在回合中把用户的字写下去、随后被 agent 的写覆盖，落定那一刻文档是「干净」
+   * 的——只看 dirty 会静默重载，把用户的字冲掉。动过就按「不覆盖」处理。
+   */
+  editedThisTurn: boolean;
 }): SyncDecision {
   if (!input.diskChanged) return "nothing";
   if (input.conflicted) return "wait";
-  return input.dirty ? "keep" : "reload";
+  return input.dirty || input.editedThisTurn ? "keep" : "reload";
+}
+
+/**
+ * 一次撤销要 dispatch 的多处改动：**按位置排序并丢掉重叠的那些**。
+ *
+ * CodeMirror 对同一批 changes 要求互不重叠，否则整次 dispatch 抛
+ * `Overlapping ranges`——而定位是**按内容**做的，用户手动编辑过之后两块可能落到
+ * 同一段文字上。重叠的后一块这一轮不撤（调用方把它的 id 标成不可撤），
+ * 好过整个「全部撤销」失败。
+ */
+export function nonOverlappingChanges<T extends { from: number; to: number }>(
+  items: readonly T[],
+): { keep: T[]; dropped: T[] } {
+  const sorted = [...items].sort((a, b) => a.from - b.from || a.to - b.to);
+  const keep: T[] = [];
+  const dropped: T[] = [];
+  let lastTo = -1;
+  for (const item of sorted) {
+    if (item.from < lastTo) {
+      dropped.push(item);
+      continue;
+    }
+    keep.push(item);
+    lastTo = item.to;
+  }
+  return { keep, dropped };
+}
+
+/**
+ * 撤掉几块之后，旧的「现场找不到」标记只保留**还在清单里**的那些。
+ * 以前一律清空：撤掉别的块会把不可撤的块重新伪装成可点（P3）。
+ */
+export function pruneStaleIds(
+  stale: ReadonlySet<string>,
+  hunks: readonly { id: string }[],
+): ReadonlySet<string> {
+  if (stale.size === 0) return stale;
+  const alive = new Set(hunks.map((hunk) => hunk.id));
+  const next = new Set([...stale].filter((id) => alive.has(id)));
+  return next.size === stale.size ? stale : next;
 }
