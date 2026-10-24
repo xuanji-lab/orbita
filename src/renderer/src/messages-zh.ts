@@ -1133,6 +1133,8 @@ export const zh: Messages = {
     compactNow: "立即压缩上下文",
     compactReadOnly: "这个任务不能接着聊",
     compactWait: "等这一轮结束",
+    compactSuggestDone: "建议标记完成，剩下的事留给新会话",
+    compactSuggestNew: "建议把剩下的事留到新会话",
     showLess: "收起",
     showMore: "展开",
     copied: "已复制",
@@ -1342,6 +1344,8 @@ export const zh: Messages = {
     context: "上下文",
     unknownUntilReply: "下次回复后可知",
     cost: "费用",
+    compacted: "已压缩",
+    compactedTimes: (n) => `${n} 次`,
     speed: (n) => `${n} tok/s`,
   },
 
