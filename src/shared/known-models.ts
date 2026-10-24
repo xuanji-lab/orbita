@@ -442,7 +442,9 @@ export type ModelFamilyLogo =
   | "claude"
   | "openai"
   | "xiaomimimo"
-  | "doubao"
+  // 不叫 doubao：那是火山方舟服务商条目的 id（VendorLogo 的 LOGOS 里 doubao → 火山引擎的标），
+  // 同名会被服务商那一行盖掉，seed-* 型号就显示成火山方舟的山形标
+  | "doubao-seed"
   | "longcat";
 
 /**
@@ -461,7 +463,7 @@ const MODEL_FAMILY_PREFIXES: readonly (readonly [pattern: RegExp, logo: ModelFam
   [/^(gpt-|o\d)/, "openai"],
   [/^mimo-/, "xiaomimimo"],
   // 豆包的模型 id 前缀是 seed（火山方舟的 Seed 系列），龙猫用自家名
-  [/^seed-/, "doubao"],
+  [/^seed-/, "doubao-seed"],
   [/^longcat-/, "longcat"],
 ];
 

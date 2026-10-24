@@ -254,14 +254,14 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("deepseek-v4-flash-0731"), { kind: "family", logo: "deepseek" });
     // 防误伤：尾段不是日期的不受影响
     assert.deepEqual(modelAvatarOf("qwen3.8-27b"), { kind: "family", logo: "qwen" });
-    assert.deepEqual(modelAvatarOf("seed-2.1-pro"), { kind: "family", logo: "doubao" });
+    assert.deepEqual(modelAvatarOf("seed-2.1-pro"), { kind: "family", logo: "doubao-seed" });
     assert.deepEqual(modelAvatarOf("kimi-k2.7-code"), { kind: "family", logo: "kimi" });
     // 白名单里真实存在的 -YYMM 后缀（不是日期，是变体号）：剥不动，仍按原 id 匹配
     assert.deepEqual(modelAvatarOf("step-3.5-flash-2603"), { kind: "family", logo: "stepfun" });
   });
 
   test("家族图标补豆包（seed-*）与龙猫（longcat-*）；龙猫以外的模型落在原级", () => {
-    assert.deepEqual(modelAvatarOf("seed-2.1-turbo"), { kind: "family", logo: "doubao" });
+    assert.deepEqual(modelAvatarOf("seed-2.1-turbo"), { kind: "family", logo: "doubao-seed" });
     assert.deepEqual(modelAvatarOf("longcat-2.0"), { kind: "family", logo: "longcat" });
     assert.deepEqual(modelAvatarOf("longcat-2.5-preview-free"), { kind: "family", logo: "longcat" });
     // NeoHorse 没有家族标：交第三级用服务商图标（这里应认不出）

@@ -42,7 +42,7 @@ const FAMILY_LOGOS: Record<ModelFamilyLogo, string> = {
   claude,
   openai,
   xiaomimimo,
-  doubao,
+  "doubao-seed": doubao,
   longcat,
 };
 
