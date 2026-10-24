@@ -23,7 +23,7 @@ import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
+import { knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
@@ -80,6 +80,7 @@ export async function resolveProviderSecrets(
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
+  const known = knownProviderOf(dto);
   // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
   return {
     id: dto.id,
@@ -88,26 +89,17 @@ export async function resolveProviderSecrets(
     apiKey,
     ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
     /**
-     * 声明的模型 + **我们自己补的参数**（快速适配通道）。用户显式填过的优先，
-     * 其次是白名单，再其次由 runtime 走「pi 目录 → 兜底」。
-     * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
+     * 声明的模型原样过线。型号白名单（known-models.ts）不在这里叠：它要和 pi 目录比
+     * （「目录说了算」的服务商在本家目录命中时不吃白名单），而目录只在 agent 进程里有——
+     * 以前在这里把白名单窗口 / 输出当用户覆盖塞进声明，思考档却塞不进去，菜单与会话
+     * 对同一个型号说两套话。叠加统一在 agent 侧 model-registration 做。
      */
-    models: dto.models.declared.map((decl) => {
-      const patch = knownModelParams(decl.id);
-      return {
-        ...decl,
-        ...(decl.contextWindow === undefined && patch.contextWindow !== undefined
-          ? { contextWindow: patch.contextWindow }
-          : {}),
-        ...(decl.maxTokens === undefined && patch.maxTokens !== undefined
-          ? { maxTokens: patch.maxTokens }
-          : {}),
-      };
-    }),
+    models: dto.models.declared,
     // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
     // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
     // 按条目认（knownProviderOf）而不是按 id：第二个 DeepSeek 实例（deepseek-2）同样吃目录参数
-    ...(knownProviderOf(dto).catalogId === undefined ? {} : { catalogId: knownProviderOf(dto).catalogId }),
+    ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
+    ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
   };
 }
 

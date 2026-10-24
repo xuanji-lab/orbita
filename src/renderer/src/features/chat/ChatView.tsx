@@ -129,7 +129,8 @@ import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
-import { modelThinkingLevels } from "./thinking-choice.ts";
+import { modelThinkingLevels } from "@shared/model-defaults";
+import { modelPreferenceById } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
@@ -2203,7 +2204,14 @@ function ComposerBar(props: {
   // pi 旁算好过线）。都没有 = 未知：按全量显示、不禁用，开轮后由 thinking 事件
   // 纠真——宁可待验证，不先撒谎
   const thinkingSupported =
-    session.model === null ? null : modelThinkingLevels(session.model.modelId, catalog, session.thinkingSupported);
+    session.model === null
+      ? null
+      : modelThinkingLevels(
+          session.model.modelId,
+          catalog,
+          session.thinkingSupported,
+          modelPreferenceById(session.usable, session.model.providerId),
+        );
   const thinkingMenuLevels = thinkingSupported ?? THINKING_LEVELS;
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
   // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集

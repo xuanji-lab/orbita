@@ -7,12 +7,22 @@
  * 所以注册分两步：先只给 auth（目录元数据存活），目录里解析不到选中 id、**或任一
  * 声明模型带了用户覆盖字段**时才补注册 models。补注册做**保留合并 + 用户字段覆盖**：
  * 已认识的目录条目原样带回，用户声明的字段逐个盖上（用户 > 目录 > 兜底）。
+ *
+ * 型号白名单（known-models.ts）也在这一层落地：用户 > 白名单 > 目录 > 兜底，逐字段。
+ * 设置页与底栏菜单走 model-defaults 的同一个判定（knownParamsFor），三处对同一个
+ * 型号说同一句话——以前白名单的思考档只进菜单、不进会话，菜单里选 max 实际被 pi
+ * 夹成 high（2026-10-24 实测：kimi-for-coding、OpenCode Go 的 deepseek-v4.1-flash）。
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
-import { knownModelParams } from "../shared/known-providers.ts";
-import { lookupCatalogModel, resolveModelDefaults, type CatalogPreference } from "../shared/model-defaults.ts";
+import type { ModelParams } from "../shared/known-models.ts";
+import {
+  knownParamsFor,
+  lookupCatalogSource,
+  resolveModelDefaults,
+  type CatalogPreference,
+} from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
@@ -104,6 +114,9 @@ export function toAuthConfig(provider: {
  * （pi modelOverrides 同款 `??` 语义：目录会过时或零价——实测 glm-5.3 目录定价全零——
  * 用户填了的才算数）。不做保留的话，补一个新 id 会把同 provider 其它目录模型的
  * 官方参数一并砸掉（models 是整体替换，已验证）。
+ *
+ * 用户字段之下是型号白名单，再之下才是目录（knownParamsFor；「目录说了算」的服务商
+ * 在本家目录命中时不吃白名单）。
  */
 export function toFallbackModels(
   current: readonly PiModel[],
@@ -132,62 +145,21 @@ export function toFallbackModels(
    * budget_tokens 发出去，effort 一个都送不到（2026-09-23 实测）。
    *
    * 目录没收录、家族也借不到的型号（claude-opus-5-5）没有条目可借：由白名单
-   * `adaptiveThinking` 声明，档位表按白名单 thinkingLevels 生成（见 effortLevelMap）。
+   * `adaptiveThinking` 声明，档位表按白名单 thinkingLevels 生成（见 whitelistLevelMap）。
    */
   catalogModels: readonly PiModel[] = [],
 ): NonNullable<PiProviderRegistration["models"]> {
   return declared.map((decl) => {
     const known = current.find((model) => model.id === decl.id);
-    const borrowed = resolveModelDefaults(catalog, decl.id, prefer);
-    // 借参来源的原始目录条目（理由见参数注释）。目录缺席时退回精确 id
-    const sourceId = lookupCatalogModel(catalog, decl.id, prefer)?.id ?? decl.id;
-    const sources = catalogModels.filter((model) => model.id === sourceId);
-    const borrowedMap = sources[0]?.thinkingLevelMap;
+    // 白名单口径（「目录说了算」的服务商在本家目录命中时为空，理由见 knownParamsFor）
+    const patch = knownParamsFor(catalog, decl.id, prefer);
     // 目录没收录、也借不到家族参数的新 Claude（claude-opus-5-5）：白名单声明它只收
-    // adaptive。同样只对 anthropic-messages 协议的接入生效
-    const patch = knownModelParams(decl.id);
+    // adaptive。只对 anthropic-messages 协议的接入生效
     const declaredAdaptive = prefer.api === "anthropic-messages" && patch.adaptiveThinking === true;
-    // 只认同协议的条目：copilot 的 openai-completions 版 claude-fable-5 就不带这一项
-    const adaptive =
-      declaredAdaptive ||
-      sources.some(
-        (model) =>
-          model.api === prefer.api &&
-          model.compat !== undefined &&
-          "forceAdaptiveThinking" in model.compat &&
-          model.compat.forceAdaptiveThinking === true,
-      );
-    // 档位表：目录的优先；目录没有而白名单声明了 adaptive，就按白名单档位生成——
-    // 否则 pi 按「无表」规则不认 xhigh / max，用户选的这两档会被夹成 high
-    const levelMap =
-      borrowedMap ??
-      (declaredAdaptive && patch.thinkingLevels !== undefined ? effortLevelMap(patch.thinkingLevels) : undefined);
-    // 目录没收录精确 id 时（聚合网关换写法），思考回传协议从同家同家族的条目借；
-    // 借不到就不带——不按 id 猜协议，猜错比不带更糟（发错字段当场 400）
-    const replay = known === undefined ? borrowedThinkingReplay(current, decl.id, prefer.api) : undefined;
-    const compat =
-      adaptive || replay !== undefined
-        ? {
-            ...(adaptive ? { forceAdaptiveThinking: true } : {}),
-            ...(replay ?? {}),
-          }
-        : undefined;
     const base =
       known === undefined
-        ? {
-            id: decl.id,
-            name: decl.id,
-            // 跨目录借参的第五件：reasoning。借不到才落 false——「不确定就不发」
-            // （发不支持的档位当场 400）；借得到（如 glm-5.3-flash 在白名单）就是真值
-            reasoning: borrowed.reasoning,
-            input: borrowed.input,
-            cost: borrowed.cost,
-            contextWindow: borrowed.contextWindow,
-            maxTokens: borrowed.maxTokens,
-            ...(levelMap === undefined ? {} : { thinkingLevelMap: { ...levelMap } }),
-            ...(compat === undefined ? {} : { compat }),
-          }
-        : { ...known };
+        ? borrowedModel(decl.id, patch, declaredAdaptive, current, catalog, prefer, catalogModels)
+        : withKnownParams(known, patch, declaredAdaptive);
     return {
       ...base,
       name: decl.name ?? base.name,
@@ -201,19 +173,123 @@ export function toFallbackModels(
   });
 }
 
+/** 补注册时一条模型的形状（registerProvider 的 models 元素） */
+type RegisteredModel = NonNullable<PiProviderRegistration["models"]>[number];
+
 /**
- * 白名单档位 → pi 的 thinkingLevelMap（目录外的 adaptive 型号用）：不在档位表里的档
- * 标 null（pi 视为不支持，发送前夹走——例如 opus-5-5 关不掉思考，off 就是 null）；
- * xhigh / max 映射成同名 effort（pi 只在表里有字符串时才把这两档当 effort 原样送出，
- * 否则按「无表」规则直接不认）；其余档留空 = pi 的默认映射（low / medium / high 同名）。
+ * 本家目录认识的型号：目录条目原样带回，白名单逐字段盖上。
+ *
+ * 白名单优先于目录（它存在的意义就是赶在目录前面纠错）。以前这里不看白名单——窗口与
+ * 输出由主进程当成用户覆盖塞进声明才生效，思考档则根本到不了会话。
  */
-function effortLevelMap(levels: readonly ThinkingLevel[]): NonNullable<PiModel["thinkingLevelMap"]> {
+function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: boolean): RegisteredModel {
+  return {
+    ...known,
+    ...(patch.contextWindow === undefined ? {} : { contextWindow: patch.contextWindow }),
+    ...(patch.maxTokens === undefined ? {} : { maxTokens: patch.maxTokens }),
+    ...(patch.reasoning === undefined ? {} : { reasoning: patch.reasoning }),
+    ...(patch.thinkingLevels === undefined
+      ? {}
+      : { thinkingLevelMap: whitelistLevelMap(known.thinkingLevelMap, patch.thinkingLevels) }),
+    ...(declaredAdaptive ? { compat: { ...(known.compat ?? {}), forceAdaptiveThinking: true } } : {}),
+  } as RegisteredModel;
+}
+
+/**
+ * 本家目录不认识的型号：按 id 跨目录借参数（白名单 > 目录 > 兜底，见 resolveModelDefaults），
+ * 档位表与思考协议从借参数的那一条抄。
+ */
+function borrowedModel(
+  modelId: string,
+  patch: ModelParams,
+  declaredAdaptive: boolean,
+  current: readonly PiModel[],
+  catalog: readonly BuiltinProvider[],
+  prefer: CatalogPreference,
+  catalogModels: readonly PiModel[],
+): RegisteredModel {
+  const borrowed = resolveModelDefaults(catalog, modelId, prefer);
+  // 借参来源的原始目录条目（理由见 toFallbackModels 的参数注释）。目录缺席时退回精确 id。
+  // **与设置页挑同一家的那一条**（lookupCatalogSource）：同 id 在不同网关上档位不同，
+  // 只按 id 抄第一条的话，菜单（同协议优先）与会话（排第一的那家）各拿各的
+  const source = lookupCatalogSource(catalog, modelId, prefer);
+  const sameId = catalogModels.filter((model) => model.id === (source?.model.id ?? modelId));
+  const fromSource = source === undefined ? [] : sameId.filter((model) => model.provider === source.provider.id);
+  const sources = fromSource.length > 0 ? fromSource : sameId;
+  const borrowedMap = sources[0]?.thinkingLevelMap;
+  // 只认同协议的条目：copilot 的 openai-completions 版 claude-fable-5 就不带这一项
+  const adaptive =
+    declaredAdaptive ||
+    sources.some(
+      (model) =>
+        model.api === prefer.api &&
+        model.compat !== undefined &&
+        "forceAdaptiveThinking" in model.compat &&
+        model.compat.forceAdaptiveThinking === true,
+    );
+  // 档位表：白名单写了档位就以白名单为准（在借来的表上改），没写才原样用借来的表
+  const levelMap =
+    patch.thinkingLevels === undefined ? borrowedMap : whitelistLevelMap(borrowedMap, patch.thinkingLevels);
+  // 目录没收录精确 id 时（聚合网关换写法），思考回传协议从同家同家族的条目借；
+  // 借不到就不带——不按 id 猜协议，猜错比不带更糟（发错字段当场 400）
+  const replay = borrowedThinkingReplay(current, modelId, prefer.api);
+  const compat =
+    adaptive || replay !== undefined
+      ? {
+          ...(adaptive ? { forceAdaptiveThinking: true } : {}),
+          ...(replay ?? {}),
+        }
+      : undefined;
+  return {
+    id: modelId,
+    name: modelId,
+    // 跨目录借参的第五件：reasoning。借不到才落 false——「不确定就不发」
+    // （发不支持的档位当场 400）；借得到（如 glm-5.3-flash 在白名单）就是真值
+    reasoning: borrowed.reasoning,
+    input: borrowed.input,
+    cost: borrowed.cost,
+    contextWindow: borrowed.contextWindow,
+    maxTokens: borrowed.maxTokens,
+    ...(levelMap === undefined ? {} : { thinkingLevelMap: { ...levelMap } }),
+    ...(compat === undefined ? {} : { compat }),
+  };
+}
+
+/**
+ * 白名单档位 → pi 的 thinkingLevelMap，在已有的表（目录条目 / 借来的条目）上改：
+ * - 不在白名单档位里的档标 null（pi 视为不支持，发送前夹走——opus-5-5 关不掉思考，
+ *   off 就是 null；DeepSeek 没有 medium，medium 就是 null）；
+ * - 在档位里、原表给了字符串的保留原值（那是网关认的取值，如 hy3 的 off → "none"）；
+ * - 在档位里的 xhigh / max 映射成同名值：pi 只在表里有字符串时才把这两档原样送出，
+ *   否则按「无表」规则直接不认，用户选的 max 被夹成 high；
+ * - 其余档（off / minimal / low / medium / high）留空 = pi 的默认映射（同名）。
+ */
+function whitelistLevelMap(
+  base: PiModel["thinkingLevelMap"] | undefined,
+  levels: readonly ThinkingLevel[],
+): NonNullable<PiModel["thinkingLevelMap"]> {
   const map: NonNullable<PiModel["thinkingLevelMap"]> = {};
   for (const level of THINKING_LEVELS) {
-    if (!levels.includes(level)) map[level] = null;
+    if (!levels.includes(level)) {
+      map[level] = null;
+      continue;
+    }
+    const mapped = base?.[level];
+    if (typeof mapped === "string") map[level] = mapped;
     else if (level === "xhigh" || level === "max") map[level] = level;
   }
   return map;
+}
+
+/** 白名单这一条会不会改变会话里的模型（默认思考档只是偏好，不进 pi 的模型对象） */
+function touchesRuntime(patch: ModelParams): boolean {
+  return (
+    patch.contextWindow !== undefined ||
+    patch.maxTokens !== undefined ||
+    patch.reasoning !== undefined ||
+    patch.thinkingLevels !== undefined ||
+    patch.adaptiveThinking === true
+  );
 }
 
 /**
@@ -285,6 +361,17 @@ interface ProviderWire {
    * 缺席 = 目录里没这家（自建网关）。
    */
   catalogId?: string;
+  /** 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录的型号不吃白名单 */
+  catalogAuthoritative?: boolean;
+}
+
+/** 载荷 → 查目录的偏好（与 renderer 的 catalogPreferenceOf 同形，三处同一个判定） */
+function preferenceOf(provider: ProviderWire): CatalogPreference {
+  return {
+    api: provider.api,
+    ...(provider.catalogId === undefined ? {} : { catalogId: provider.catalogId }),
+    ...(provider.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
+  };
 }
 
 /**
@@ -301,15 +388,12 @@ export function toFallbackRegistration(
 ): PiProviderRegistration {
   return {
     ...toAuthConfig(provider),
-    models: toFallbackModels(current, provider.models, catalog, {
-      catalogId: provider.catalogId,
-      api: provider.api,
-    }, catalogModels),
+    models: toFallbackModels(current, provider.models, catalog, preferenceOf(provider), catalogModels),
   };
 }
 
 /**
- * 注册（先 auth 面，目录 miss / 用户覆盖时补注册兜底）并解析选中模型。
+ * 注册（先 auth 面；目录 miss、用户覆盖、或白名单要改模型时补注册）并解析选中模型。
  * create 与会话内换模型（C-4）共用同一条装配路径——解析规则必须一致，
  * 否则「建会话能用的模型」和「切过去能用的模型」是两套真相。
  */
@@ -320,7 +404,18 @@ export function registerAndResolveModel(
 ): PiModel | undefined {
   runtime.registerProvider(provider.id, toAuthConfig(provider));
   let model: PiModel | undefined = runtime.getModel(provider.id, modelId);
-  if (model === undefined || hasModelOverrides(provider.models)) {
+  const providers = runtime.getProviders();
+  /**
+   * 本家查不到时还有第二跳：**按模型 id 跨整个目录借**（见 shared/model-defaults）。
+   * 自建网关本来就不属于哪一家，但它跑的 claude-opus-5 / k3 / glm-5.3 都是有官方
+   * 口径的型号——不借就全落 128k，1M 模型会提前 8 倍触发压缩，图片还会被 pi 剥掉。
+   */
+  const catalog = providers.map(toBuiltinProvider);
+  const prefer = preferenceOf(provider);
+  // 白名单要改动的型号（窗口 / 输出 / 能否思考 / 档位）也得补注册：只注 auth 面的话
+  // getModel 返回目录原值，白名单在设置页里显示、到会话里不生效
+  const whitelisted = provider.models.some((decl) => touchesRuntime(knownParamsFor(catalog, decl.id, prefer)));
+  if (model === undefined || hasModelOverrides(provider.models) || whitelisted) {
     /**
      * **拿哪家的目录条目去保留合并：按 catalogId，不是按我们自己的 id。**
      *
@@ -336,14 +431,7 @@ export function registerAndResolveModel(
      * 注册仍然用我们自己的 id：会话里 `model.provider` 要与 meta 对得上。
      */
     const source = provider.catalogId ?? provider.id;
-    const providers = runtime.getProviders();
     const known = providers.find((p) => p.id === source);
-    /**
-     * 本家查不到时还有第二跳：**按模型 id 跨整个目录借**（见 shared/model-defaults）。
-     * 自建网关本来就不属于哪一家，但它跑的 claude-opus-5 / k3 / glm-5.3 都是有官方
-     * 口径的型号——不借就全落 128k，1M 模型会提前 8 倍触发压缩，图片还会被 pi 剥掉。
-     */
-    const catalog = providers.map(toBuiltinProvider);
     runtime.registerProvider(
       provider.id,
       toFallbackRegistration(provider, known?.getModels() ?? [], catalog, providers.flatMap((item) => item.getModels())),

@@ -2,11 +2,12 @@
  * ProvidersView 的纯函数层 —— 弹窗解析 / 费率合并 / 复制 id / 行简报。
  * UI 状态留在组件里，这里只放有边界要守的换算；node --test 可直接加载。
  */
-import type { ModelDefaults } from "@shared/model-defaults";
+import type { CatalogPreference, ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import {
   KNOWN_PROVIDERS,
+  catalogPreferenceOf,
   knownProviderGroup,
   knownProviderOf,
   type KnownProvider,
@@ -102,6 +103,21 @@ export function reorderIds(ids: readonly string[], from: string, to: string): re
  * 设置页与聊天底栏的模型简报共用——两边必须认同同一个目录。 */
 export function kindOf(provider: ProviderDto): string {
   return knownProviderOf(provider).id;
+}
+
+/**
+ * 一个已配置 provider 查型号参数时的偏好（去哪家目录查、协议、目录说不说了算）。
+ * 模型菜单、底栏思考档菜单、子会话默认档共用——与主进程装配会话载荷同一个来源
+ * （catalogPreferenceOf），菜单里能选的档就是会话里真能发出去的档。
+ */
+export function modelPreferenceOf(provider: ProviderDto): CatalogPreference {
+  return catalogPreferenceOf(knownProviderOf(provider), provider.endpoint.api);
+}
+
+/** 按 id 找 provider 再取偏好；找不到（已删的服务商、列表还没加载）就按型号的通用口径答 */
+export function modelPreferenceById(providers: readonly ProviderDto[], providerId: string): CatalogPreference {
+  const provider = providers.find((item) => item.id === providerId);
+  return provider === undefined ? {} : modelPreferenceOf(provider);
 }
 
 /**

@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
-import { KNOWN_PROVIDERS, knownProviderDefaultName, type KnownProvider } from "@shared/known-providers";
+import {
+  KNOWN_PROVIDERS,
+  catalogPreferenceOf,
+  knownProviderDefaultName,
+  type KnownProvider,
+} from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
 import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
@@ -170,9 +175,10 @@ export function ProvidersView(props: {
   /**
    * 这个模型 id 的生效参数基线（白名单 > pi 目录 > 兜底）。**按 id 跨目录查**：
    * 自建网关没有 catalogId，但它跑的 claude-opus-5 / k3 / glm-5.3 都有官方口径。
+   * 偏好与会话注册同源（catalogPreferenceOf）：「目录说了算」的服务商这里也不吃白名单。
    */
   const modelDefaults = (target: KnownProvider | undefined, id: string): ModelDefaults =>
-    resolveModelDefaults(catalog, id, { catalogId: target?.catalogId, api: target?.api });
+    resolveModelDefaults(catalog, id, target === undefined ? {} : catalogPreferenceOf(target));
   /** 某个已适配 provider 在 pi 目录里的模型 id 清单（Fetch 的兜底候选池） */
   const catalogIds = (target: KnownProvider | undefined): string[] =>
     target?.catalogId === undefined
@@ -1605,10 +1611,7 @@ function ModelDialog(props: {
   const isNew = props.decl === undefined;
   // 与模型行同一条推断（按 id 跨目录）：行上显示 1M、弹窗却写 Inherit (128000) 是说两句话
   const defaultsOf = (id: string): ModelDefaults =>
-    resolveModelDefaults(props.catalog, id, {
-      catalogId: props.known.catalogId,
-      api: props.known.api,
-    });
+    resolveModelDefaults(props.catalog, id, catalogPreferenceOf(props.known));
   const [idValue, setIdValue] = useState(props.decl?.id ?? "");
   const [name, setName] = useState(props.decl?.name ?? "");
   const [ctxText, setCtxText] = useState(props.decl?.contextWindow?.toString() ?? "");

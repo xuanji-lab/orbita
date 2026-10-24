@@ -2,7 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { BuiltinProvider } from "../../../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../../../shared/thinking.ts";
-import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
+import { modelThinkingLevels } from "../../../../shared/model-defaults.ts";
+import { resolveThinkingLevel } from "./thinking-choice.ts";
 
 /** 目录条目替身：只填这两个函数用得到的字段 */
 function entry(id: string, supportedThinkingLevels?: ThinkingLevel[]) {

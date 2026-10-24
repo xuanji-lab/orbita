@@ -61,12 +61,13 @@ import { recordAssistantStart } from "./stats-format.ts";
 import { DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
-import { defaultThinkingLevel } from "@shared/model-defaults";
+import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
 import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
-import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
+import { modelPreferenceById } from "../settings/providers-view-model.ts";
+import { resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
 import {
   CLOSING_SCAN_PROMPT,
@@ -1297,15 +1298,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 默认播种 / 回首页开新任务 / 换模型且本槽无会话）；有会话时档位跟着
    * 会话账走，是另一条路（changeThinkingLevel / chooseModel 换模型分支）。
    */
-  const { catalog, pickedThinkingRef } = engine;
+  const { catalog, pickedThinkingRef, usable } = engine;
   const applyNewTaskThinking = useCallback(
-    (modelId: string) => {
-      const supported = modelThinkingLevels(modelId, catalog);
+    (providerId: string, modelId: string) => {
+      // 支持集按「哪家服务商的哪个型号」算：同一个 kimi-k3，OpenCode Go 上只有 max
+      const supported = modelThinkingLevels(modelId, catalog, null, modelPreferenceById(usable, providerId));
       setThinkingLevelState(resolveThinkingLevel({ modelId, supported, picked: pickedThinkingRef.current }));
     },
-    // 只依赖 catalog 与 ref：engine 是每次渲染新建的对象，依赖它会让下面依赖本函数的
-    // effect 每次渲染都跑一遍
-    [catalog, pickedThinkingRef],
+    // 只依赖 catalog、usable 与 ref：engine 是每次渲染新建的对象，依赖它会让下面依赖本函数的
+    // effect 每次渲染都跑一遍（usable 是 useMemo 出来的，providers 不变它就不变）
+    [catalog, usable, pickedThinkingRef],
   );
 
   /**
@@ -1328,7 +1330,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           setModel({ providerId: last.providerId, modelId: last.modelId });
           // 恢复了模型之后，思考档按规则起（手选 > 这个模型的默认档）——
           // 不是巧合地停在初始 medium
-          applyNewTaskThinking(last.modelId);
+          applyNewTaskThinking(last.providerId, last.modelId);
         }
       })
       .catch(() => undefined); // 读不出来就停在默认，不挡开工
@@ -2059,7 +2061,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
     // 思考档按规则重算：模型不变，但档位不能沿用刚才打开的那条旧会话的账——
     // 否则「回首页开新任务」看起来会像是继承了上一条会话的思考档
-    if (model !== null) applyNewTaskThinking(model.modelId);
+    if (model !== null) applyNewTaskThinking(model.providerId, model.modelId);
   }, [engine, model, applyNewTaskThinking]);
 
   /**
@@ -2312,13 +2314,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
       // 这条会话的档要不要跟着动：新模型仍支持当前档（或支持集未知）就不动，
       // 不支持才落新模型的默认档——换模型不该顺手改掉会话自己的设定
-      const supported = modelThinkingLevels(modelId, catalog);
+      const supported = modelThinkingLevels(modelId, catalog, null, modelPreferenceById(engine.usable, providerId));
       const switched =
         supported !== null && !supported.includes(thinkingLevel) ? defaultThinkingLevel(modelId, supported) : null;
       // 盘上打开的旧会话按它的 id 记账与注入（理由见函数头）；首页新任务槽两者皆空
       const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {
-        applyNewTaskThinking(modelId);
+        applyNewTaskThinking(providerId, modelId);
         return;
       }
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
@@ -2787,7 +2789,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (first === undefined || firstModel === undefined) return;
     setModel({ providerId: first.id, modelId: firstModel.id });
     // 这个默认模型也要有一个真实的起档，不是停在初始 medium
-    applyNewTaskThinking(firstModel.id);
+    applyNewTaskThinking(first.id, firstModel.id);
   }, [engine.usable, model, opened, applyNewTaskThinking]);
 
   // 目录是异步到的：上面几处起档发生时 engine.catalog 可能还是空数组，算出来的
@@ -2800,7 +2802,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 档覆盖成默认档（2026-09-23 实机复现：会话记 high，打开显示 Max）。
   useEffect(() => {
     if (sessionRef.current !== null || opened !== null || model === null) return;
-    applyNewTaskThinking(model.modelId);
+    applyNewTaskThinking(model.providerId, model.modelId);
   }, [catalog, model, opened, applyNewTaskThinking]);
 
   /** 「当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 空槽兜底。
