@@ -6,6 +6,7 @@ import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { citeApi } from "./api/cite.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
@@ -41,6 +42,7 @@ const api = {
   focus: focusApi,
   terminal: terminalApi,
   latex: latexApi,
+  cite: citeApi,
   usage: usageApi,
   updater: updaterApi,
   import: importApi,

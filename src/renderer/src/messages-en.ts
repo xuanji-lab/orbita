@@ -1753,6 +1753,16 @@ export const en = {
     syncFailed: (detail: string) => `SyncTeX failed: ${detail}`,
   },
 
+  /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
+  cite: {
+    // 抽屉的定位列已经写着文件名，消息里不再重复（重复会把 300px 的面板挤成三行）
+    badEntries: (count: number) => `Skipped ${count} malformed ${count === 1 ? "entry" : "entries"}`,
+    unreadable: (detail: string) => `Couldn't read this file: ${detail}`,
+    /* 上限 / 体积挡下的文件：补全可能不全，必须说出来 */
+    skipped: (count: number) => `Not read: ${count} .bib ${count === 1 ? "file" : "files"} (too large or too many) — completions may be incomplete`,
+    truncated: "The project has more files than the scan reads — some .bib entries may be missing from completions",
+  },
+
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
   paper: {
     chatTitle: "Chat",

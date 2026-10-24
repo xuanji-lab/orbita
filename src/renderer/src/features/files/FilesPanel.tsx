@@ -38,6 +38,7 @@ import {
   pdfStale,
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
+import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { closeDecision } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
@@ -57,7 +58,7 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump, PdfSyncJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileListRequest, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import type { LatexFileContext, LatexSyncFailure } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexSyncFailure } from "@shared/latex";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -196,6 +197,8 @@ export function FilesPanel(props: {
     };
   }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
   const latex = useLatexWorkbench(latexContext);
+  /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
+  const citeLibrary = useCiteLibrary(latexContext, latex.project);
 
   /**
    * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
@@ -286,9 +289,37 @@ export function FilesPanel(props: {
 
   /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
   const [problemsOpen, setProblemsOpen] = useState(false);
+  /**
+   * 坏 .bib 也是问题：整份读不了、某个条目缺 key / 括号不闭合、或**因上限 / 体积
+   * 压根没读**。它**不阻塞编译**（BibTeX 自己也会跳过），但补全里会少条目，用户得
+   * 知道为什么。
+   *
+   * 「没读」那类**不能静默**（评审 F1：`figures/` 放两千张图就能把后面的
+   * `refs/ok.bib` 挤掉）：被扫掉的可能是一批文件，逐条列出来只是 N 行同一句话，
+   * 所以汇总成一条「N 份没读」；`truncated` 连数都数不出来（预算用完、深度截断），
+   * 单独一句。两种都只说事实，不拦编译。
+   */
+  const bibIssues = useMemo<LatexIssue[]>(() => {
+    if (citeLibrary === null) return [];
+    const issues: LatexIssue[] = [];
+    for (const file of citeLibrary.files) {
+      if (file.error !== null) {
+        issues.push({ file: file.path, line: null, kind: "warning", message: t.cite.unreadable(file.error) });
+      } else if (file.bad > 0) {
+        issues.push({ file: file.path, line: null, kind: "warning", message: t.cite.badEntries(file.bad) });
+      }
+    }
+    if (citeLibrary.skipped.length > 0) {
+      issues.push({ file: null, line: null, kind: "warning", message: t.cite.skipped(citeLibrary.skipped.length) });
+    }
+    if (citeLibrary.truncated) {
+      issues.push({ file: null, line: null, kind: "warning", message: t.cite.truncated });
+    }
+    return issues;
+  }, [citeLibrary, t]);
   const latexGroups = useMemo(
-    () => groupLatexIssues(latex.last?.errors ?? [], latex.last?.warnings ?? []),
-    [latex.last],
+    () => groupLatexIssues(latex.last?.errors ?? [], [...(latex.last?.warnings ?? []), ...bibIssues]),
+    [latex.last, bibIssues],
   );
   const latexState = latexBarState({
     running: latex.running,
@@ -1299,6 +1330,8 @@ export function FilesPanel(props: {
                       ? {}
                       : { onForwardSync: (line: number) => locateInPdf(leftPath ?? activeTab.path, line) }),
                     onQuote: (text, line) => quoteEditorText(leftPath ?? activeTab.path, text, line),
+                    // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
+                    ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
                     reveal:
                       reveal !== null && samePath(reveal.path, leftPath ?? activeTab.path)
                         ? { line: reveal.line, token: reveal.token }
