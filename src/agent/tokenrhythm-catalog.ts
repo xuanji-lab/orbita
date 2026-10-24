@@ -22,13 +22,13 @@
  * 这样每条消息按官方美元价计费（pi 按注册价算 usage.cost），用量格与价格图也口径一致；
  * 找不到官方价的填零价——用量里如实算「部分缺单价」、价格图进「缺官方单价」（现成行为）。
  *
- * ## 思考参数（未实测，没有 key）
- * 它文档没写思考参数怎么传（背后是多厂商）。默认按 pi 的标准 OpenAI 发法
- * （reasoning_effort，不带任何厂商 compat 怪癖）：它对外是一层归一化网关（自家目录用
- * 统一的 reasoningMode / efforts 描述），赌它归一化了思考参数；只从目录映射两件事——
- * reasoningMode=required 的不给「关」（thinkingLevelMap.off = null），目录给了 efforts
- * 档位清单的（如 minimax-m3.1-flash 的 low…max）照清单收窄。逐家真发过之前，这两条
- * 映射之外的一切都以「未实测」论，PR 里如实写。
+ * ## 思考参数（minimal 除外均已实测可用；2026-10-25 用户用真 key 全量实测）
+ * 按标准 OpenAI 发法（reasoning_effort、不带任何厂商 compat 怪癖）。目录映射三件事：
+ * **minimal 一律不提供**——glm-5.3-flashx 与 deepseek-v4.1-flash-1017 发 minimal 直接
+ * 400（no body），其余型号 minimal 与 low 无可分辨差别；reasoningMode=required 的不给
+ * 「关」（thinkingLevelMap.off = null）；目录给了 efforts 档位清单的（如
+ * minimax-m3.1-flash 的 low…max）照清单收窄。「关」是否真能关、档位深浅，由
+ * 「用户自己定义每个型号的思考档」那条线解决，这里不按型号手写名单。
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -82,9 +82,13 @@ function openaiAvailable(entry: Record<string, unknown>): boolean {
 
 /**
  * 思考档映射：目录的 reasoningMode / reasoningSupportedEfforts → pi 的 thinkingLevelMap。
+ * - minimal 一律不提供（null）：2026-10-25 用户用真 key 全量实测，glm-5.3-flashx 与
+ *   deepseek-v4.1-flash-1017 发 minimal 直接 400（no body），其余型号 minimal 与 low 无差别——
+ *   这家网关不认识 minimal，不冒这个险（包括目录没给 efforts 清单的情况）
  * - efforts 有清单：不在清单里的档标 null，xhigh / max 落字符串（pi 只认带字符串的这两档）
  * - 没清单但思考恒开（required）：只去掉 off，其余交给 pi 默认
- * - 都没有：不给表（pi 默认集），文档没写的默认比猜一张表诚实
+ * - 其余（optional、无清单）：只去掉 minimal，其余交给 pi 默认——档位深浅与能否真关，
+ *   由「用户自己定义每个型号的思考档」那条线解决，这里不按型号手写名单
  */
 function thinkingLevelMapOf(entry: Record<string, unknown>, reasoning: boolean): Partial<Record<ThinkingLevel, string | null>> | undefined {
   if (!reasoning) return undefined;
@@ -99,10 +103,11 @@ function thinkingLevelMapOf(entry: Record<string, unknown>, reasoning: boolean):
         map[level] = null;
       }
     }
+    map.minimal = null;
     return map;
   }
-  if (entry.reasoningMode === "required") return { off: null };
-  return undefined;
+  if (entry.reasoningMode === "required") return { off: null, minimal: null };
+  return { minimal: null };
 }
 
 /**

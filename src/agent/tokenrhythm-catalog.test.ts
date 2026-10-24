@@ -119,7 +119,7 @@ describe("parseTokenrhythmCatalog —— 容错解析与过滤", () => {
     assert.deepEqual(parsed.dropped, ["paused-model", "fixing-model", "gray-model", "anthropic-only", "no-window"]);
   });
 
-  test("reasoningMode=required 不给「关」；有 efforts 清单的照清单收窄；optional 不带表", () => {
+  test("minimal 一律不提供：optional / required / efforts 清单三种都不含（真 key 实测发 minimal 会 400）", () => {
     const parsed = parseTokenrhythmCatalog(samplePayload());
     assert.ok(parsed !== null);
     assert.equal(parsed.models.length, 4);
@@ -127,12 +127,45 @@ describe("parseTokenrhythmCatalog —— 容错解析与过滤", () => {
     const kimi = parsed.models[1];
     const minimax = parsed.models[2];
     assert.ok(glm !== undefined && kimi !== undefined && minimax !== undefined);
-    // required、无清单
-    assert.deepEqual(glm.thinkingLevelMap, { off: null });
-    // required、low…max
+    // required、无清单：off 与 minimal 都去掉
+    assert.deepEqual(glm.thinkingLevelMap, { off: null, minimal: null });
+    // optional、无清单：只去掉 minimal，其余交给 pi 默认
+    assert.deepEqual(kimi.thinkingLevelMap, { minimal: null });
+    // required、low…max 清单：照清单收窄，minimal 也不给
     assert.deepEqual(minimax.thinkingLevelMap, { off: null, minimal: null, xhigh: null, max: "max" });
-    // optional、无清单
-    assert.equal(kimi.thinkingLevelMap, undefined);
+  });
+
+  test("reasoningMode=required 不给「关」；efforts 清单里的 xhigh / max 落字符串", () => {
+    const parsed = parseTokenrhythmCatalog(samplePayload());
+    assert.ok(parsed !== null);
+    const glm = parsed.models[0];
+    const minimax = parsed.models[2];
+    assert.ok(glm !== undefined && minimax !== undefined);
+    assert.equal(glm.thinkingLevelMap?.off, null);
+    assert.equal(minimax.thinkingLevelMap?.max, "max");
+    assert.equal(minimax.thinkingLevelMap?.xhigh, null);
+  });
+
+  test("目录的 efforts 清单里真写了 minimal 也不提供——一律 null，不冒 400 的险", () => {
+    const base = {
+      type: "chat",
+      status: "online",
+      contextWindow: 100000,
+      supportsReasoning: true,
+      protocolCapabilities: { openai: { available: true } },
+    };
+    const parsed = parseTokenrhythmCatalog({
+      code: 0,
+      data: [{ ...base, id: "odd-model", name: "Odd", reasoningMode: "optional", reasoningSupportedEfforts: ["minimal", "low", "high"] }],
+    });
+    assert.ok(parsed !== null);
+    assert.deepEqual(parsed.models[0]?.thinkingLevelMap, {
+      off: null,
+      minimal: null,
+      medium: null,
+      xhigh: null,
+      max: null,
+    });
   });
 
   test("reasoningMode=unsupported 的型号不能思考，也不给表", () => {
@@ -289,8 +322,9 @@ describe("注册进 pi 运行时 —— 下游当普通目录条目用", () => {
     assert.equal(model.maxTokens, 131_072);
     assert.equal(model.api, "openai-completions");
     assert.equal(model.baseUrl, TOKENRHYTHM_BASE_URL);
-    // required：菜单与会话都没有 off
+    // required：菜单与会话都没有 off；minimal 一律不提供（真 key 实测会 400）
     assert.equal(getSupportedThinkingLevels(model).includes("off"), false);
+    assert.equal(getSupportedThinkingLevels(model).includes("minimal"), false);
 
     // 设置页那一侧（model-defaults 按本家目录优先）算出同一组参数
     const catalog = runtime.getProviders().map(toBuiltinProvider);
