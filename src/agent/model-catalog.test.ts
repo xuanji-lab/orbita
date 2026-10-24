@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { InMemoryCredentialStore, InMemoryModelsStore, type Api, type Model } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { KNOWN_PROVIDERS } from "../shared/known-providers.ts";
-import { catalogIdsToRefresh, createModelRuntime, JsonFileModelsStore, refreshCatalogs } from "./model-catalog.ts";
+import { CatalogRefresher, createModelRuntime, JsonFileModelsStore, piCatalogIds, refreshCatalogs } from "./model-catalog.ts";
+import type { FetchTokenrhythmResult } from "./tokenrhythm-catalog.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "orbita-catalog-"));
@@ -97,18 +98,19 @@ describe("createModelRuntime 不读 pi CLI 的 ~/.pi/agent", () => {
 });
 
 describe("refreshCatalogs", () => {
-  test("刷新的是预置服务商用到的目录，去重；基元律动除外（它读自家接口，不向 pi.dev 要）", () => {
-    const ids = catalogIdsToRefresh();
-    assert.equal(new Set(ids).size, ids.length);
-    for (const provider of KNOWN_PROVIDERS) {
-      if (provider.catalogId === undefined) continue;
-      if (provider.catalogId === "tokenrhythm") {
-        assert.equal(ids.includes("tokenrhythm"), false, "自建目录不该向 pi.dev 刷新");
-        continue;
-      }
-      assert.ok(ids.includes(provider.catalogId), provider.catalogId);
-    }
-    assert.ok(ids.includes("opencode-go"));
+  test("向 pi.dev 要的只是给出的目录 id，去重；基元律动除外（它读自家接口，不向 pi.dev 要）", () => {
+    assert.deepEqual(piCatalogIds(["deepseek", "tokenrhythm", "deepseek", "opencode-go"]), ["deepseek", "opencode-go"]);
+    assert.deepEqual(piCatalogIds([]), []);
+    // 预置表里每份目录都是合法输入（catalogIdsOfProviders 只会从表里取）
+    const all = KNOWN_PROVIDERS.flatMap((provider) => (provider.catalogId === undefined ? [] : [provider.catalogId]));
+    assert.equal(piCatalogIds(all).includes("tokenrhythm"), false, "自建目录不该向 pi.dev 刷新");
+  });
+
+  test("一份目录都没给：不建 runtime、不联网，直接返回空", async () => {
+    const errors = await refreshCatalogs({ ids: [], catalogBaseUrl: "http://127.0.0.1:9", force: true });
+    assert.equal(errors.size, 0);
+    const onlyTokenrhythm = await refreshCatalogs({ ids: ["tokenrhythm"], catalogBaseUrl: "http://127.0.0.1:9", force: true });
+    assert.equal(onlyTokenrhythm.size, 0, "基元律动不走 pi.dev：连不上的地址也不会被碰");
   });
 
   test("从目录服务拉到新型号，落进缓存；下次建 runtime 不联网也看得到；占位凭据不外发", async () => {
@@ -185,5 +187,106 @@ describe("refreshCatalogs", () => {
     assert.ok(errors.has("opencode-go"));
     const after = await createModelRuntime(store);
     assert.equal(after.getModel("opencode-go", "brand-new-model"), undefined);
+  });
+});
+
+/** 记账的假依赖：看 CatalogRefresher 向谁要了什么 */
+function fakeDeps(tokenrhythm: FetchTokenrhythmResult = { status: "fetched", models: 3 }) {
+  const calls: string[] = [];
+  const warnings: string[] = [];
+  const deps = {
+    refreshPi: async (ids: string[]): Promise<ReadonlyMap<string, Error>> => {
+      calls.push(`pi:${ids.join(",")}`);
+      return new Map();
+    },
+    refreshTokenrhythm: async (): Promise<FetchTokenrhythmResult> => {
+      calls.push("tokenrhythm");
+      return tokenrhythm;
+    },
+    relist: async (): Promise<void> => {
+      calls.push("relist");
+    },
+    warn: (message: string): void => {
+      warnings.push(message);
+    },
+  };
+  return { deps, calls, warnings };
+}
+
+describe("CatalogRefresher —— 只刷已添加服务商的目录（审核 F-1）", () => {
+  test("主进程还没说添加了谁：4 小时那一拍什么都不拉", async () => {
+    const { deps, calls } = fakeDeps();
+    await new CatalogRefresher(deps).tick();
+    assert.deepEqual(calls, []);
+  });
+
+  test("没添加任何服务商（added 为空）：pi.dev 与基元律动都不拉，也不重报目录", async () => {
+    const { deps, calls } = fakeDeps();
+    const refresher = new CatalogRefresher(deps);
+    await refresher.request("added", []);
+    await refresher.tick();
+    assert.deepEqual(calls, []);
+  });
+
+  test("只添加了 pi.dev 的服务商：只刷那几家，不碰基元律动", async () => {
+    const { deps, calls } = fakeDeps();
+    await new CatalogRefresher(deps).request("added", ["deepseek", "opencode-go"]);
+    assert.deepEqual(calls, ["pi:deepseek,opencode-go", "relist"]);
+  });
+
+  test("添加了基元律动才拉它；之后的 tick 按最近一次 added 的范围", async () => {
+    const { deps, calls } = fakeDeps();
+    const refresher = new CatalogRefresher(deps);
+    await refresher.request("added", ["deepseek"]);
+    // 用户又添加了基元律动：主进程送新的全量，当场补刷
+    await refresher.request("added", ["deepseek", "tokenrhythm"]);
+    calls.length = 0;
+    await refresher.tick();
+    assert.deepEqual(calls, ["pi:deepseek", "tokenrhythm", "relist"]);
+    // 删掉了 deepseek：之后的 tick 不再刷它
+    await refresher.request("added", ["tokenrhythm"]);
+    calls.length = 0;
+    await refresher.tick();
+    assert.deepEqual(calls, ["tokenrhythm", "relist"]);
+  });
+
+  test("peek 只刷给出的那份，不进 4 小时循环", async () => {
+    const { deps, calls } = fakeDeps();
+    const refresher = new CatalogRefresher(deps);
+    await refresher.request("peek", ["tokenrhythm"]);
+    assert.deepEqual(calls, ["tokenrhythm", "relist"]);
+    calls.length = 0;
+    await refresher.tick();
+    assert.deepEqual(calls, [], "没 added 过：peek 不会让 tick 开始联网");
+  });
+
+  test("基元律动落在节流里（fresh）：不重报目录；失败记 warn 也不重报", async () => {
+    const fresh = fakeDeps({ status: "fresh" });
+    await new CatalogRefresher(fresh.deps).request("added", ["tokenrhythm"]);
+    assert.deepEqual(fresh.calls, ["tokenrhythm"]);
+    const failed = fakeDeps({ status: "failed", reason: "HTTP 503" });
+    await new CatalogRefresher(failed.deps).request("added", ["tokenrhythm"]);
+    assert.deepEqual(failed.calls, ["tokenrhythm"]);
+    assert.ok(failed.warnings[0]?.includes("HTTP 503"));
+  });
+
+  test("刷新排队串行：启动的 added 还在路上时来了 peek，等前一趟完了才开始", async () => {
+    const { deps, calls } = fakeDeps();
+    const refresher = new CatalogRefresher(deps);
+    let releaseFirst: (() => void) | undefined;
+    deps.refreshPi = async (ids: string[]): Promise<ReadonlyMap<string, Error>> => {
+      calls.push(`pi:${ids.join(",")}`);
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      return new Map();
+    };
+    const first = refresher.request("added", ["deepseek"]);
+    const second = refresher.request("peek", ["tokenrhythm"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ["pi:deepseek"], "第二趟没有并发开始");
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    assert.deepEqual(calls, ["pi:deepseek", "relist", "tokenrhythm", "relist"]);
   });
 });

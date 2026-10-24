@@ -597,3 +597,93 @@ describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽
     await assert.rejects(Promise.all([pending, Promise.resolve().then(() => child().exitWith(1))]), /exited/);
   });
 });
+
+describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F-1）", () => {
+  function scopedHost(scope: () => Promise<readonly string[]>) {
+    let child!: FakeChild;
+    const host = new AgentHostCore(
+      () => {
+        child = new FakeChild();
+        return child;
+      },
+      () => undefined,
+      scope,
+    );
+    return { host, child: () => child };
+  }
+  const refreshes = (child: FakeChild) => child.posted.filter((command) => command.type === "refreshCatalogs");
+
+  test("进程拉起（ready）后送一份 added 全量；崩溃重拉后再送一份", async () => {
+    let ids: string[] = ["deepseek"];
+    const ctx = scopedHost(async () => ids);
+    void ctx.host.listBuiltins().catch(() => undefined);
+    const first = ctx.child();
+    assert.deepEqual(refreshes(first), [], "ready 之前不送");
+    first.emit({ type: "ready" });
+    await flush();
+    assert.deepEqual(refreshes(first), [{ type: "refreshCatalogs", scope: "added", catalogIds: ["deepseek"] }]);
+
+    first.exitWith(1);
+    ids = ["deepseek", "tokenrhythm"];
+    void ctx.host.listBuiltins().catch(() => undefined);
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    assert.notEqual(ctx.child(), first);
+    assert.deepEqual(refreshes(ctx.child()), [
+      { type: "refreshCatalogs", scope: "added", catalogIds: ["deepseek", "tokenrhythm"] },
+    ]);
+  });
+
+  test("服务商列表变了：送新的全量；进程没起时不为它拉起", async () => {
+    let ids: string[] = [];
+    let forks = 0;
+    let child!: FakeChild;
+    const host = new AgentHostCore(
+      () => {
+        forks += 1;
+        child = new FakeChild();
+        return child;
+      },
+      () => undefined,
+      async () => ids,
+    );
+    host.syncCatalogScope();
+    await flush();
+    assert.equal(forks, 0, "没起的进程不拉起：下次拉起时 ready 会送");
+
+    void host.listBuiltins().catch(() => undefined);
+    child.emit({ type: "ready" });
+    await flush();
+    ids = ["tokenrhythm"];
+    host.syncCatalogScope();
+    await flush();
+    assert.deepEqual(refreshes(child).map((command) => command.type === "refreshCatalogs" && command.catalogIds), [
+      [],
+      ["tokenrhythm"],
+    ]);
+  });
+
+  test("peek：点开卡片时拉起进程，只送那一份", async () => {
+    const ctx = scopedHost(async () => []);
+    const peek = ctx.host.peekCatalog("tokenrhythm");
+    ctx.child().emit({ type: "ready" });
+    await peek;
+    await flush();
+    // 两条谁先到无所谓：agent 侧排队串行（CatalogRefresher）
+    const sent = refreshes(ctx.child()).map((command) => JSON.stringify(command)).sort();
+    assert.deepEqual(sent, [
+      JSON.stringify({ type: "refreshCatalogs", scope: "added", catalogIds: [] }),
+      JSON.stringify({ type: "refreshCatalogs", scope: "peek", catalogIds: ["tokenrhythm"] }),
+    ]);
+  });
+
+  test("没给 catalogScope（测试 / 裸跑）：一条刷新命令都不送", async () => {
+    const ctx = await freshHost();
+    void ctx.host.listBuiltins().catch(() => undefined);
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.host.syncCatalogScope();
+    await flush();
+    assert.deepEqual(refreshes(ctx.child()), []);
+  });
+});

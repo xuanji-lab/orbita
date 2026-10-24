@@ -20,6 +20,7 @@ import {
   fetchTokenrhythmCatalog,
   loadTokenrhythmCache,
   parseTokenrhythmCatalog,
+  tokenrhythmCacheFetchedAt,
   tokenrhythmCachePath,
   tokenrhythmOfficialRates,
   tokenrhythmRegistration,
@@ -377,7 +378,7 @@ describe("缓存与拉取退回", () => {
       cachePath,
       fetchImpl: (async () => new Response(JSON.stringify(samplePayload()), { status: 200 })) as typeof fetch,
     });
-    assert.deepEqual(ok, { ok: true, models: 4 });
+    assert.deepEqual(ok, { status: "fetched", models: 4 });
     const cached = JSON.parse(readFileSync(cachePath, "utf8")) as { fetchedAt: string; payload: unknown };
     assert.equal(typeof cached.fetchedAt, "string");
     assert.deepEqual(parseTokenrhythmCatalog(cached.payload)?.models.map((model) => model.id), ["glm-5.3", "kimi-k3", "minimax-m3.1-flash", "deepseek-v4.1-flash-1017"]);
@@ -399,21 +400,82 @@ describe("缓存与拉取退回", () => {
         throw new Error("ETIMEDOUT");
       }) as typeof fetch,
     });
-    assert.equal(unreachable.ok, false);
+    assert.equal(unreachable.status, "failed");
 
     const reshaped = await fetchTokenrhythmCatalog({
       cachePath,
       fetchImpl: (async () => new Response(JSON.stringify({ code: 0, message: "ok" }), { status: 200 })) as typeof fetch,
     });
-    assert.equal(reshaped.ok, false);
+    assert.equal(reshaped.status, "failed");
 
     const emptied = await fetchTokenrhythmCatalog({
       cachePath,
       fetchImpl: (async () => new Response(JSON.stringify({ code: 0, data: [] }), { status: 200 })) as typeof fetch,
     });
-    assert.equal(emptied.ok, false);
+    assert.equal(emptied.status, "failed");
 
-    assert.equal(readFileSync(cachePath, "utf8"), before, "失败的三种形态都不许动缓存");
+    // 非 2xx：即便响应体是一份能解析的目录也不落（网关错误页偶尔会带 JSON）
+    const unavailable = await fetchTokenrhythmCatalog({
+      cachePath,
+      fetchImpl: (async () => new Response(JSON.stringify(samplePayload()), { status: 503 })) as typeof fetch,
+    });
+    assert.equal(unavailable.status, "failed");
+    assert.ok(unavailable.status === "failed" && unavailable.reason.includes("503"));
+
+    // 超过体积上限：报了 content-length 的当场拒；没报长度的边读边数，超了中止
+    const body = JSON.stringify(samplePayload());
+    const declared = await fetchTokenrhythmCatalog({
+      cachePath,
+      maxBytes: 100,
+      fetchImpl: (async () =>
+        new Response(body, { status: 200, headers: { "content-length": String(body.length) } })) as typeof fetch,
+    });
+    assert.equal(declared.status, "failed");
+    const streamed = await fetchTokenrhythmCatalog({
+      cachePath,
+      maxBytes: 100,
+      fetchImpl: (async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              const bytes = new TextEncoder().encode(body);
+              for (let i = 0; i < bytes.length; i += 64) controller.enqueue(bytes.slice(i, i + 64));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        )) as typeof fetch,
+    });
+    assert.equal(streamed.status, "failed");
+    assert.ok(streamed.status === "failed" && streamed.reason.includes("上限"));
+
+    assert.equal(readFileSync(cachePath, "utf8"), before, "失败的各种形态都不许动缓存");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("4 小时节流：缓存的 fetchedAt 未过期不联网；过期了、没缓存、缓存时间在未来都照常拉", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orbita-tr-cache-"));
+    const cachePath = join(dir, "tokenrhythm-catalog.json");
+    const hour = 60 * 60 * 1000;
+    const now = Date.parse("2026-10-25T12:00:00.000Z");
+    let requests = 0;
+    const fetchImpl = (async () => {
+      requests += 1;
+      return new Response(JSON.stringify(samplePayload()), { status: 200 });
+    }) as typeof fetch;
+    const input = { cachePath, fetchImpl, minIntervalMs: 4 * hour, now: () => now };
+
+    assert.equal((await fetchTokenrhythmCatalog(input)).status, "fetched", "没缓存：拉");
+    assert.equal(requests, 1);
+    assert.equal(tokenrhythmCacheFetchedAt(cachePath), now);
+    assert.equal((await fetchTokenrhythmCatalog(input)).status, "fresh", "刚拉过：不拉");
+    assert.equal(requests, 1);
+
+    writeFileSync(cachePath, JSON.stringify({ fetchedAt: new Date(now - 5 * hour).toISOString(), payload: samplePayload() }));
+    assert.equal((await fetchTokenrhythmCatalog(input)).status, "fetched", "过期：拉");
+    writeFileSync(cachePath, JSON.stringify({ fetchedAt: new Date(now + 5 * hour).toISOString(), payload: samplePayload() }));
+    assert.equal((await fetchTokenrhythmCatalog(input)).status, "fetched", "时间在未来（改过时钟）：拉");
+    assert.equal(requests, 3);
     rmSync(dir, { recursive: true, force: true });
   });
 

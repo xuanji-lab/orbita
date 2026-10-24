@@ -13,7 +13,12 @@
  * 拉取成功 → 原子写缓存（上次成功的原始响应）；拉取失败 → 缓存不动，继续用上次的；
  * 缓存也没有 → 不注册目录条目（设置页「获取模型」仍可用 key 打 `/v1/models` 拿 id 清单，
  * 参数退到白名单 / 跨目录借参——比目录口径弱，但能用）。响应整体形状不对（data 缺席 /
- * code 非 0）视为拉取失败，不落缓存；单条型号缺关键字段（如 contextWindow）只丢那一条。
+ * code 非 0）、非 2xx、响应超过 2 MB 都视为拉取失败，不落缓存；单条型号缺关键字段（如
+ * contextWindow）只丢那一条。
+ *
+ * ## 什么时候联网（审核 F-1，2026-10-25）
+ * 只在用户添加了基元律动（或在「添加」页点开它的卡片）时拉；缓存里的 `fetchedAt` 不到 4 小时
+ * 不拉。没添加的用户一次都不连 tokenrhythm.studio——设置页「添加」里看到的是上次的缓存或空。
  *
  * ## 单价 = 官方美元价（用户拍板，2026-10-24：「价格还是都是用模型的官方价格吧」）
  * 不用它的人民币价（inputPrice 等字段一律不读）。注册时对每个型号拿**同一型号**在 pi
@@ -59,8 +64,8 @@ export interface TokenrhythmModel {
   thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
 }
 
-/** 目录响应的整体形状不对（当拉取失败处理，不落缓存） */
-export class TokenrhythmShapeError extends Error {}
+/** 响应体积上限：真实目录约 110 KB，超过 2 MB 必是接口出了岔子——当拉取失败，不落缓存 */
+export const TOKENRHYTHM_MAX_BYTES = 2 * 1024 * 1024;
 
 const SKIP_STATUSES = new Set(["offline", "maintenance"]);
 
@@ -229,6 +234,18 @@ export function tokenrhythmCachePath(): string | undefined {
   return join(dirname(store), "tokenrhythm-catalog.json");
 }
 
+/** 缓存里记的上次成功拉取时间（毫秒）；文件不在 / 读坏 / 没记 → undefined（当没拉过） */
+export function tokenrhythmCacheFetchedAt(path: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(parsed) || typeof parsed.fetchedAt !== "string") return undefined;
+    const at = Date.parse(parsed.fetchedAt);
+    return Number.isNaN(at) ? undefined : at;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 读缓存里的原始响应；文件不在 / 读坏 / 形状不对 → undefined（当没有缓存） */
 export function loadTokenrhythmCache(path: string): unknown {
   try {
@@ -251,20 +268,66 @@ export function applyTokenrhythmFromCache(runtime: ModelRuntime): number {
 
 export interface FetchTokenrhythmInput {
   cachePath?: string;
+  /** 节流：缓存里的上次成功拉取距今不到这么久就不联网（缺省不节流，测试与强制刷新用） */
+  minIntervalMs?: number;
   /** 测试注入；缺省真连基元律动 */
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** 响应体积上限，缺省 TOKENRHYTHM_MAX_BYTES（测试可调小） */
+  maxBytes?: number;
+  /** 测试注入的「现在」 */
+  now?: () => number;
 }
 
-export type FetchTokenrhythmResult = { ok: true; models: number } | { ok: false; reason: string };
+export type FetchTokenrhythmResult =
+  | { status: "fetched"; models: number }
+  /** 节流内：缓存够新，没联网 */
+  | { status: "fresh" }
+  | { status: "failed"; reason: string };
+
+/**
+ * 读响应体，超过上限就中止（先看 content-length，再边读边数——服务器可以不报或报假长度）。
+ * 超限抛错，调用方当拉取失败。
+ */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`响应 ${declared} 字节，超过上限 ${maxBytes}`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`响应超过上限 ${maxBytes} 字节`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 /**
  * 向基元律动拉一次目录，成功则原子写缓存。失败不动缓存（下一次 createModelRuntime
- * 继续用旧的），也不抛——调用方（后台刷新循环）只记日志。
+ * 继续用旧的），也不抛——调用方（后台刷新）只记日志。
+ * 只该在用户添加了基元律动时调（runtime 的目录刷新按主进程给的目录 id 判）。
  */
 export async function fetchTokenrhythmCatalog(input: FetchTokenrhythmInput = {}): Promise<FetchTokenrhythmResult> {
+  const now = input.now ?? Date.now;
+  if (input.minIntervalMs !== undefined && input.cachePath !== undefined) {
+    const fetchedAt = tokenrhythmCacheFetchedAt(input.cachePath);
+    // 缓存时间在未来（改过系统时钟）不算新：照常拉，免得卡死在一份旧目录上
+    if (fetchedAt !== undefined && fetchedAt <= now() && now() - fetchedAt < input.minIntervalMs) {
+      return { status: "fresh" };
+    }
+  }
   const doFetch = input.fetchImpl ?? fetch;
   const controller = new AbortController();
+  // 超时盖住整趟（连接 + 读完响应体）：读体卡住也会被 abort 打断
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 15_000);
   let payload: unknown;
   try {
@@ -272,20 +335,24 @@ export async function fetchTokenrhythmCatalog(input: FetchTokenrhythmInput = {})
       headers: { Accept: "application/json" },
       signal: controller.signal,
     });
-    const text = await response.text();
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { status: "failed", reason: `${TOKENRHYTHM_MODELS_URL} 返回 HTTP ${response.status}，不落缓存` };
+    }
+    const text = await readBodyCapped(response, input.maxBytes ?? TOKENRHYTHM_MAX_BYTES);
     payload = JSON.parse(text) as unknown;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, reason: `${TOKENRHYTHM_MODELS_URL} 拉取失败：${reason}` };
+    return { status: "failed", reason: `${TOKENRHYTHM_MODELS_URL} 拉取失败：${reason}` };
   } finally {
     clearTimeout(timer);
   }
   const parsed = parseTokenrhythmCatalog(payload);
-  if (parsed === null) return { ok: false, reason: `${TOKENRHYTHM_MODELS_URL} 的响应形状变了（data / code），不落缓存` };
-  if (parsed.models.length === 0) return { ok: false, reason: `${TOKENRHYTHM_MODELS_URL} 一条可用的 chat 型号都没有，不落缓存` };
+  if (parsed === null) return { status: "failed", reason: `${TOKENRHYTHM_MODELS_URL} 的响应形状变了（data / code），不落缓存` };
+  if (parsed.models.length === 0) return { status: "failed", reason: `${TOKENRHYTHM_MODELS_URL} 一条可用的 chat 型号都没有，不落缓存` };
   if (input.cachePath !== undefined) {
-    const file: CacheFile = { fetchedAt: new Date().toISOString(), payload };
+    const file: CacheFile = { fetchedAt: new Date(now()).toISOString(), payload };
     await writeJsonAtomic(input.cachePath, file);
   }
-  return { ok: true, models: parsed.models.length };
+  return { status: "fetched", models: parsed.models.length };
 }

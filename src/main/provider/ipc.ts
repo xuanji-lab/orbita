@@ -39,7 +39,10 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore):
     ipcChannels.providerUpsert,
     async (_event, input: ProviderUpsertInput): Promise<UpsertResult> => {
       try {
-        return { ok: true, provider: await store.upsert(input) };
+        const provider = await store.upsert(input);
+        // 新添加的 / 改了条目的服务商：补刷它的目录，不等 4 小时循环
+        host?.syncCatalogScope();
+        return { ok: true, provider };
       } catch (error) {
         if (error instanceof ProviderValidationError) return { ok: false, issues: error.issues };
         throw error;
@@ -133,9 +136,19 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore):
     store.resolveApiKey(id),
   );
 
-  ipcMain.handle(ipcChannels.providerRemove, (_event, id: string): Promise<void> =>
-    store.remove(id),
-  );
+  ipcMain.handle(ipcChannels.providerRemove, async (_event, id: string): Promise<void> => {
+    await store.remove(id);
+    // 删掉最后一个实例的那家目录退出刷新范围
+    host?.syncCatalogScope();
+  });
+
+  // 「添加」页点开一张还没保存的卡片：现拉一次这家的目录（节流内不拉），新目录走 builtins 广播
+  ipcMain.handle(ipcChannels.providerRefreshCatalog, async (_event, catalogId: string): Promise<void> => {
+    if (typeof catalogId !== "string" || catalogId === "") return;
+    // 只认目录表里有的 id：renderer 不能借这条通道让 agent 进程去拉任意目录
+    if (!KNOWN_PROVIDERS.some((known) => known.catalogId === catalogId)) return;
+    await host?.peekCatalog(catalogId);
+  });
 
   ipcMain.handle(ipcChannels.providerReorder, (_event, ids: string[]): Promise<void> =>
     store.reorder(ids),
@@ -200,6 +213,7 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore):
         ...(input.create === true ? { create: true } : {}),
       });
       await store.saveOauthCredential(input.id, credential);
+      host?.syncCatalogScope();
       const fresh = (await store.list()).find((p) => p.id === input.id);
       return { ok: true, provider: fresh ?? saved };
     } catch (error) {

@@ -16,8 +16,10 @@
  * 只发 accept、User-Agent 与 If-None-Match），占位值不会发给任何人。这个 runtime 只用来刷新，
  * 用完即弃，绝不拿它发模型请求。
  *
- * 刷新哪些：预置服务商（known-providers.ts）用到的那几份目录——设置页给用户看的、会话借参数的
- * 都是它们。每家的节流（4 小时内不重复下载、过期用 ETag 复验）是 pi 自己做的。
+ * 刷新哪些：**只有用户已添加的服务商用到的那几份目录**（审核 F-1，2026-10-25）——agent 进程
+ * 不知道用户添加了谁，由主进程经 `refreshCatalogs` 命令告知（CatalogRefresher）；没收到之前
+ * 一份也不拉。没添加的服务商在设置页「添加」里看到的是内建快照或旧缓存（点开卡片时现拉一次）。
+ * 每家的节流（4 小时内不重复下载、过期用 ETag 复验）是 pi 自己做的。
  * pi 升级后，比内建快照旧的缓存会被它自动忽略（remoteModels 按 lastModified 比），不用我们清。
  */
 import {
@@ -31,8 +33,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { writeJsonAtomic } from "../main/atomic-write.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
-import { KNOWN_PROVIDERS } from "../shared/known-providers.ts";
-import { applyTokenrhythmFromCache, TOKENRHYTHM_CATALOG_ID } from "./tokenrhythm-catalog.ts";
+import { applyTokenrhythmFromCache, TOKENRHYTHM_CATALOG_ID, type FetchTokenrhythmResult } from "./tokenrhythm-catalog.ts";
 
 /** 刷新间隔。与 pi 的单家节流同为 4 小时（REMOTE_CATALOG_REFRESH_INTERVAL_MS，未导出） */
 export const CATALOG_REFRESH_EVERY_MS = 4 * 60 * 60 * 1000;
@@ -43,14 +44,9 @@ export const CATALOG_REFRESH_EVERY_MS = 4 * 60 * 60 * 1000;
  */
 const CATALOG_GATE_KEY = "orbita-catalog-refresh-placeholder";
 
-/** 预置服务商用到的 pi 目录 id（去重，保持表内顺序）。基元律动的 catalogId 不是 pi.dev 的条目——它的目录从它自己的接口刷新（tokenrhythm-catalog.ts），不向 pi.dev 要 */
-export function catalogIdsToRefresh(): string[] {
-  const ids = KNOWN_PROVIDERS.flatMap((provider) =>
-    provider.catalogId === undefined || provider.catalogId === TOKENRHYTHM_CATALOG_ID
-      ? []
-      : [provider.catalogId],
-  );
-  return [...new Set(ids)];
+/** 给定目录 id 里该向 pi.dev 要的那些（去重，保持顺序）。基元律动的 catalogId 不是 pi.dev 的条目——它的目录从它自己的接口刷新（tokenrhythm-catalog.ts），不向 pi.dev 要 */
+export function piCatalogIds(catalogIds: readonly string[]): string[] {
+  return [...new Set(catalogIds.filter((id) => id !== TOKENRHYTHM_CATALOG_ID))];
 }
 
 function isEntry(value: unknown): value is ModelsStoreEntry {
@@ -134,7 +130,8 @@ export async function createModelRuntime(store: ModelsStore = catalogStore()): P
 
 export interface RefreshCatalogsInput {
   store?: ModelsStore;
-  ids?: readonly string[];
+  /** 要刷的 pi 目录 id——没有缺省：刷哪几家必须由调用方（已添加的服务商）说清楚 */
+  ids: readonly string[];
   /** 测试用：把 pi.dev 换成本地假服务 */
   catalogBaseUrl?: string;
   /** 不论 4 小时节流，立刻下载（测试用；pi 的 force） */
@@ -146,8 +143,9 @@ export interface RefreshCatalogsInput {
  * 向 pi.dev 拉一次目录覆盖层，落进缓存。返回每家的失败原因（没失败的不在里面）；
  * 失败只意味着这家继续用旧缓存或内建快照，不影响任何会话。
  */
-export async function refreshCatalogs(input: RefreshCatalogsInput = {}): Promise<ReadonlyMap<string, Error>> {
-  const ids = input.ids ?? catalogIdsToRefresh();
+export async function refreshCatalogs(input: RefreshCatalogsInput): Promise<ReadonlyMap<string, Error>> {
+  const ids = piCatalogIds(input.ids);
+  if (ids.length === 0) return new Map();
   const credentials = new InMemoryCredentialStore();
   for (const id of ids) {
     await credentials.modify(id, async () => ({ type: "api_key", key: CATALOG_GATE_KEY }));
@@ -166,4 +164,66 @@ export async function refreshCatalogs(input: RefreshCatalogsInput = {}): Promise
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
   return result.errors;
+}
+
+export interface CatalogRefresherDeps {
+  /** 向 pi.dev 刷这几家（refreshCatalogs）；返回每家的失败原因 */
+  refreshPi: (ids: string[]) => Promise<ReadonlyMap<string, Error>>;
+  /** 向基元律动刷它自家的目录（fetchTokenrhythmCatalog，带节流） */
+  refreshTokenrhythm: () => Promise<FetchTokenrhythmResult>;
+  /** 有刷新动作之后重报一次目录（runtime 的 listBuiltins） */
+  relist: () => Promise<void>;
+  warn: (message: string) => void;
+}
+
+/**
+ * 目录联网刷新的调度（审核 F-1）：**只刷主进程说过的目录**。
+ * - `added` 记下已添加服务商的目录全量，作为 4 小时循环（tick）的范围，并当场刷一次；
+ * - `peek` 只刷给出的那几份，不改范围；
+ * - 没收到过 `added` 时 tick 什么都不做——agent 进程刚起、主进程还没告知时不联网。
+ * 刷新排队串行：启动时的 added 与用户点开卡片的 peek 撞在一起，不会对同一份目录并发下载两次
+ * （排在后面的那次落到节流里）。每份目录的节流各归各：pi.dev 的由 pi 做，基元律动的看缓存 fetchedAt。
+ */
+export class CatalogRefresher {
+  private readonly deps: CatalogRefresherDeps;
+  private added: string[] | null = null;
+  private queue: Promise<void> = Promise.resolve();
+
+  constructor(deps: CatalogRefresherDeps) {
+    this.deps = deps;
+  }
+
+  /** refreshCatalogs 命令的入口 */
+  request(scope: "added" | "peek", catalogIds: readonly string[]): Promise<void> {
+    if (scope === "added") this.added = [...new Set(catalogIds)];
+    return this.enqueue([...catalogIds]);
+  }
+
+  /** 4 小时循环的一拍：按最近一次 added 的范围刷 */
+  tick(): Promise<void> {
+    return this.added === null ? Promise.resolve() : this.enqueue(this.added);
+  }
+
+  private enqueue(catalogIds: string[]): Promise<void> {
+    this.queue = this.queue.catch(() => undefined).then(() => this.runOnce(catalogIds));
+    return this.queue;
+  }
+
+  private async runOnce(catalogIds: readonly string[]): Promise<void> {
+    const pi = piCatalogIds(catalogIds);
+    const tokenrhythm = catalogIds.includes(TOKENRHYTHM_CATALOG_ID);
+    if (pi.length === 0 && !tokenrhythm) return;
+    // pi 不告诉我们这一趟是真下载了还是落在节流里，跑了就重报；基元律动只在真拉到新目录时才算
+    let changed = pi.length > 0;
+    if (pi.length > 0) {
+      const errors = await this.deps.refreshPi(pi);
+      for (const [id, error] of errors) this.deps.warn(`[catalog] ${id} 的目录没刷新成功，继续用旧的：${error.message}`);
+    }
+    if (tokenrhythm) {
+      const result = await this.deps.refreshTokenrhythm();
+      if (result.status === "fetched") changed = true;
+      if (result.status === "failed") this.deps.warn(`[catalog] 基元律动目录没刷新成功，继续用旧的：${result.reason}`);
+    }
+    if (changed) await this.deps.relist();
+  }
 }

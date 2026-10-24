@@ -4,6 +4,7 @@
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
+import { catalogIdsOfProviders } from "../shared/known-providers.ts";
 import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -534,7 +535,8 @@ void app.whenReady().then(async () => {
     intentIngest.onEvent(event);
     record(event);
     broadcastAgentEvent(event);
-  });
+    // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
+  }, async () => catalogIdsOfProviders(await providers.load()));
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
