@@ -174,11 +174,9 @@ function DayBreakdown(props: { day: UsageDayTotal }) {
           <span className="usage-say-num">{formatTokens(day.intentTokens)}</span>
         </div>
       )}
-      {day.cost !== null && (
-        <div className="usage-say-cost">
-          {(day.cost.partial ? t.usage.costPartial : t.usage.cost)(formatUsd(day.cost.usd))}
-        </div>
-      )}
+      {day.cost !== null && <div className="usage-say-cost">{t.usage.cost(formatUsd(day.cost.usd))}</div>}
+      {/* 「部分缺单价」单独一行：接在花费那行后面会把气泡撑宽，「今天」那格的气泡向左展开会出侧栏 */}
+      {day.cost?.partial === true && <div className="usage-say-cost">{t.usage.costPartial}</div>}
     </div>
   );
 }

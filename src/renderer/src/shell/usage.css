@@ -334,7 +334,8 @@
 }
 .usage-say-name {
   min-width: 0;
-  max-width: 150px;
+  /* 气泡在「今天」那格向左展开，侧栏里只有约 230px：名字封顶 132px，整个气泡不超过约 210px */
+  max-width: 132px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

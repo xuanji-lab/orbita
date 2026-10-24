@@ -495,7 +495,7 @@ export const zh: Messages = {
     day: (tokens: string) => `${tokens} tokens`,
     intentRecall: "意图召回",
     cost: (usd: string) => `≈ ${usd}（按官方单价折算）`,
-    costPartial: (usd: string) => `≈ ${usd}（按官方单价折算，部分用量缺单价未计入）`,
+    costPartial: "部分用量缺单价，未计入",
     pinPetHere: "点一下：星云停在这天",
     backToToday: "点一下：星云回到今天",
     showPetHere: "点一下：星云从这里出来",
