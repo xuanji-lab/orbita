@@ -1198,10 +1198,17 @@ export type AgentEvent =
    * 我们传的意图档可能被模型能力裁剪（不支持的就近落档），芯片必须显示这个值
    * 而不是用户点的那一档。supported 是 pi 算的支持集（可能含我们菜单外的 xhigh /
    * max——菜单只放 5 档，这不矛盾：菜单管「能选什么」，supported 管「它支持什么」）。
+   *
+   * providerId / modelId 是**报这组真值的型号**（与 `model` 事件同口径：pi 的
+   * model.provider / model.id）。supported 只对这个型号成立——会话切到别的型号
+   * （含同名型号换服务商：kimi-coding/k3 → opencode-go/kimi-k3）后，renderer 必须
+   * 按它判出这份真值已过期、回落目录，而不是拿上一个型号的集合画菜单。
    */
   | {
       type: "thinking";
       sessionId: string;
+      providerId: string;
+      modelId: string;
       level: PiThinkingLevel;
       supported: readonly PiThinkingLevel[];
     }

@@ -371,6 +371,8 @@ describe("recorder 给 assistant 记录盖本轮生效的思考档（价格 · �
   const thinking = (level: "low" | "high" | "xhigh" | "max"): AgentEvent => ({
     type: "thinking",
     sessionId: ID,
+    providerId: "p",
+    modelId: "m",
     level,
     supported: ["low", "high", "max"],
   });
@@ -402,7 +404,7 @@ describe("recorder 给 assistant 记录盖本轮生效的思考档（价格 · �
   });
 
   test("别的会话的 thinking 事件不串档", async () => {
-    record({ type: "thinking", sessionId: "other", level: "max", supported: ["max"] });
+    record({ type: "thinking", sessionId: "other", providerId: "p", modelId: "m", level: "max", supported: ["max"] });
     record(progress({ type: "item_finished", item: assistant("complete") }));
     await settleUntil(transcriptLanded(1));
     assert.deepEqual(await rawLevels(), ["absent"]);
