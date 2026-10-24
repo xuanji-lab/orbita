@@ -41,20 +41,20 @@ export function registerLatexIpc(
   ipcMain.handle(latexChannels.probe, () => runner.probeEnvironment());
 
   ipcMain.handle(latexChannels.project, async (_event, req: LatexFileContext): Promise<LatexProjectOutcome> => {
-    const located = await locateProject(req, workspaces, sessions);
+    const located = await locateLatexProject(req, workspaces, sessions);
     return located === null
       ? { found: false }
       : { found: true, project: describeLatexProject(located.dir) };
   });
 
   ipcMain.handle(latexChannels.compile, async (_event, req: LatexFileContext): Promise<LatexRunOutcome> => {
-    const located = await locateProject(req, workspaces, sessions);
+    const located = await locateLatexProject(req, workspaces, sessions);
     if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
     return runner.compile({ dir: located.dir });
   });
 
   ipcMain.handle(latexChannels.cancel, async (_event, req: LatexFileContext): Promise<boolean> => {
-    const located = await locateProject(req, workspaces, sessions);
+    const located = await locateLatexProject(req, workspaces, sessions);
     return located === null ? false : runner.cancel(located.dir);
   });
 
@@ -64,7 +64,7 @@ export function registerLatexIpc(
       if (req.engine !== undefined && !isLatexEngine(req.engine)) {
         return { ok: false, error: `Unknown engine: ${String(req.engine)}` };
       }
-      const located = await locateProject(req, workspaces, sessions);
+      const located = await locateLatexProject(req, workspaces, sessions);
       if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
       try {
         await writeLatexProjectConfig(located.dir, {
@@ -85,7 +85,7 @@ export function registerLatexIpc(
   ipcMain.handle(
     latexChannels.synctexForward,
     async (_event, req: LatexForwardRequest): Promise<LatexForwardOutcome> => {
-      const located = await locateProject(req, workspaces, sessions);
+      const located = await locateLatexProject(req, workspaces, sessions);
       if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
       const source = insideProject(located.dir, located.file);
       if (source === null) return { ok: false, reason: "outside-project", detail: located.file };
@@ -107,7 +107,7 @@ export function registerLatexIpc(
   ipcMain.handle(
     latexChannels.synctexReverse,
     async (_event, req: LatexReverseRequest): Promise<LatexReverseOutcome> => {
-      const located = await locateProject(req, workspaces, sessions);
+      const located = await locateLatexProject(req, workspaces, sessions);
       if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
       const probe = await runner.probeEnvironment();
       return reverseSearch({
@@ -126,8 +126,11 @@ export function registerLatexIpc(
  * 请求 → 白名单内的真实文件路径 → 项目目录。找不到项目回 null（不是错误：
  * 「这个文件不属于 LaTeX 项目」是文件面板的日常，编译条不出现即可）。
  * 路径越界 / 根不对由 whitelistedPath 抛，renderer 的 catch 把它显示成一行错误。
+ *
+ * 导出给 `main/cite/ipc.ts` 用：引用补全读哪个目录，必须与编译读的同一个目录——
+ * 两份「从文件往上找项目」的实现在 magic comment 上迟早会分家。
  */
-async function locateProject(
+export async function locateLatexProject(
   req: LatexFileContext,
   workspaces: WorkspaceStore,
   sessions: SessionStore,

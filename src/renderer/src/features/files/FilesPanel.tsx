@@ -38,6 +38,7 @@ import {
   pdfStale,
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
+import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { closeDecision } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
@@ -57,7 +58,7 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump, PdfSyncJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileListRequest, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import type { LatexFileContext, LatexSyncFailure } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexSyncFailure } from "@shared/latex";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -196,6 +197,8 @@ export function FilesPanel(props: {
     };
   }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
   const latex = useLatexWorkbench(latexContext);
+  /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
+  const citeLibrary = useCiteLibrary(latexContext, latex.project);
 
   /**
    * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
@@ -286,9 +289,37 @@ export function FilesPanel(props: {
 
   /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
   const [problemsOpen, setProblemsOpen] = useState(false);
+  /**
+   * 坏 .bib 也是问题：整份读不了、或某个条目缺 key / 括号不闭合。它**不阻塞编译**
+   * （BibTeX 自己也会跳过），但补全里会少条目，用户得知道为什么。
+   */
+  const bibIssues = useMemo<LatexIssue[]>(() => {
+    const files = citeLibrary?.files ?? [];
+    return files.flatMap((file) =>
+      file.error !== null
+        ? [
+            {
+              file: file.path,
+              line: null,
+              kind: "warning" as const,
+              message: t.cite.unreadable(file.error),
+            },
+          ]
+        : file.bad > 0
+          ? [
+              {
+                file: file.path,
+                line: null,
+                kind: "warning" as const,
+                message: t.cite.badEntries(file.bad),
+              },
+            ]
+          : [],
+    );
+  }, [citeLibrary, t]);
   const latexGroups = useMemo(
-    () => groupLatexIssues(latex.last?.errors ?? [], latex.last?.warnings ?? []),
-    [latex.last],
+    () => groupLatexIssues(latex.last?.errors ?? [], [...(latex.last?.warnings ?? []), ...bibIssues]),
+    [latex.last, bibIssues],
   );
   const latexState = latexBarState({
     running: latex.running,
@@ -1299,6 +1330,8 @@ export function FilesPanel(props: {
                       ? {}
                       : { onForwardSync: (line: number) => locateInPdf(leftPath ?? activeTab.path, line) }),
                     onQuote: (text, line) => quoteEditorText(leftPath ?? activeTab.path, text, line),
+                    // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
+                    ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
                     reveal:
                       reveal !== null && samePath(reveal.path, leftPath ?? activeTab.path)
                         ? { line: reveal.line, token: reveal.token }

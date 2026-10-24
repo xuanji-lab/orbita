@@ -12,6 +12,7 @@ import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./Te
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FileListRequest, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
+import type { CiteEntry } from "@shared/cite";
 import { PdfView, type PdfJump, type PdfSyncJump } from "./PdfView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
@@ -72,6 +73,8 @@ export function FilePreviewPane(props: {
     onQuote?: (text: string, line: number) => void;
     /** PDF 反查回来的落点：滚到这一行并短暂高亮 */
     reveal?: { line: number; token: number } | null;
+    /** 项目文献库：`\cite{` 的候选（不在 LaTeX 项目里时缺席） */
+    cite?: readonly CiteEntry[];
   };
 }) {
   const t = useT();
@@ -282,6 +285,7 @@ export function FilePreviewPane(props: {
             {...(props.editor?.onForwardSync === undefined ? {} : { onForwardSync: props.editor.onForwardSync })}
             {...(props.editor?.onQuote === undefined ? {} : { onQuote: props.editor.onQuote })}
             reveal={props.editor?.reveal ?? null}
+            {...(props.editor?.cite === undefined ? {} : { cite: props.editor.cite })}
           />
         ) : sentImage === undefined ? (
           <PreviewBody

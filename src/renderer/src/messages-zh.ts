@@ -1643,6 +1643,13 @@ export const zh: Messages = {
     syncFailed: (detail) => `SyncTeX 出错：${detail}`,
   },
 
+  /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
+  cite: {
+    // 抽屉的定位列已经写着文件名，消息里不再重复
+    badEntries: (count) => `有 ${count} 条格式不对，已跳过`,
+    unreadable: (detail) => `读不了这个文件：${detail}`,
+  },
+
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
   paper: {
     chatTitle: "对话",

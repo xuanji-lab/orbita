@@ -216,6 +216,51 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
       ".cm-sync-line": {
         backgroundColor: "var(--color-accent-soft)",
       },
+      // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
+      // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来
+      ".cm-tooltip": {
+        backgroundColor: "var(--color-bg-panel)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
+        color: "var(--color-text-primary)",
+      },
+      // key 是机器事实：等宽、sm 档；列表高度封顶（再长就该多打两个字）
+      ".cm-tooltip-autocomplete > ul": {
+        fontFamily: "var(--font-family-mono)",
+        fontSize: "var(--font-size-sm)",
+        maxHeight: "16em",
+      },
+      ".cm-tooltip-autocomplete > ul > li": {
+        padding: "var(--space-1) var(--space-2)",
+        lineHeight: "var(--line-height-ui)",
+      },
+      // 选中行：与列表选中同一套（淡底 + 墨色不变），不引入第四种强调色
+      ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+        backgroundColor: "var(--color-bg-active)",
+        color: "var(--color-text-primary)",
+      },
+      // 命中的那段字只加粗，不画下划线（下划线在等宽小字里挤成一团）
+      ".cm-completionMatchedText": {
+        textDecoration: "none",
+        fontWeight: "650",
+      },
+      // 标题是散文不是机器事实：换回界面字面，退到第三档墨色
+      ".cm-completionDetail": {
+        marginLeft: "var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontStyle: "normal",
+        color: "var(--color-text-tertiary)",
+      },
+      // 选中项的补充说明（作者 + 来源 .bib），两行之间要真的换行
+      ".cm-tooltip.cm-completionInfo": {
+        padding: "var(--space-1) var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
+        whiteSpace: "pre-line",
+        maxWidth: "28em",
+      },
       ".cm-panels": {
         backgroundColor: "var(--color-bg-panel)",
         color: "var(--color-text-primary)",
