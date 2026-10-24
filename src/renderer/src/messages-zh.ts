@@ -1661,6 +1661,14 @@ export const zh: Messages = {
     reload: "重新加载",
     keepMine: "保留我的",
     tooLarge: (size, limit) => `没有保存：${size} 超过了编辑器 ${limit} 的上限。`,
+    agentWriting: "智能体正在写这个文件，回合结束前编辑器只读。",
+    agentWrote: "智能体这一轮改过这个文件，回合结束前编辑器只读。",
+    agentHunks: (count) => `智能体这一轮改了 ${count} 处`,
+    undoTurn: "全部撤销",
+    undoHunk: "撤销",
+    hunkEdited: "已被改动，不可撤销",
+    hunksShow: "展开改动块",
+    hunksHide: "收起改动块",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
