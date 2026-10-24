@@ -21,6 +21,7 @@ import { Icon } from "../../shell/Icon";
 import { PanelButton, PanelLine } from "../../shell/RightPanel";
 import { docxFacts, docxRepackReasons, type DocxFactsNode, type DocxRepackReason } from "./docx-change.ts";
 import { registerDocxFlush, type DocxFlushOutcome } from "./docx-flush.ts";
+import { applyTocHeal, collectTocFacts, layoutCoversDocument, planTocHeal, type TocHealLayout } from "./toc-heal.ts";
 
 /**
  * 应用内 docx 轻量编辑（issue #273 的第一刀）：打开、分页显示、改字、保存。
@@ -181,6 +182,26 @@ type SaveState =
 
 type Marks = { bold: boolean; italic: boolean; underline: boolean };
 
+/**
+ * 等版面跟上改动：总时长与轮询间隔。上界故意压得很短——保存不应该为了页码去等排版，
+ * 等不到就这一轮不写页码（下一轮保存还有机会）。实测慢一拍的量级是一两帧（≤200 ms）。
+ */
+const LAYOUT_WAIT_MS = 600;
+const LAYOUT_POLL_MS = 50;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/**
+ * 保存前那次目录自愈的结果（issue #276），只为界面提示；计数是「这次改了什么 / 什么没算出来」。
+ * `noLayout` = 屏幕上还没有分页（排版没跑完），这一轮没有页码可对齐。
+ */
+type TocHealNote = {
+  fieldsChanged: number;
+  staticChanged: number;
+  missed: number;
+  noLayout: boolean;
+};
+
 const NO_MARKS: Marks = { bold: false, italic: false, underline: false };
 
 /** 不以单字符出现、但真的会改文档的键（其余编辑键 key.length === 1） */
@@ -216,6 +237,8 @@ function DocxSurface(props: {
   const [backupPath, setBackupPath] = useState<string | null>(null);
   /** 保存失败的原始信息：状态栏只写一句「保存失败」，细节放提示条（长报错不挤工具栏） */
   const [saveDetail, setSaveDetail] = useState<string | null>(null);
+  /** 上一次保存里目录自愈的结果（没有目录 / 没算出来都是 null 或计数，见 tocHealNoteText） */
+  const [tocNote, setTocNote] = useState<TocHealNote | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   /** 磁盘内容的 hash：保存时的冲突判据，保存成功后更新 */
@@ -377,6 +400,58 @@ function DocxSurface(props: {
     return editorRef.current?.hasPendingChanges() ?? false;
   };
 
+  /**
+   * 保存前的目录页码自愈（issue #276）。判定与计划在 toc-heal.ts（纯函数），这里只做接线：
+   * 屏幕上那一份 layout + 当前文档 → 计划 → 派发一次事务。
+   *
+   * **版面必须已经跟上这一次改动**：保存紧跟输入时 `getLayout()` 会慢一拍（实测：打字后
+   * 250 ms 按 Ctrl+S，拿到的是改前的四页版面，而文档已是五页）。这里等它一拍（最多
+   * 600 ms），等不到就这一轮不动任何页码——宁可旧数字，不写错数字。
+   *
+   * **失败不阻塞保存**：没有视图、排版没跟上、计划或写回抛错，都只返回计数交给界面提示；
+   * 计划为空（没有目录 / 页码已经对）就不派发——文档一个字节都不动。
+   */
+  const healTocNumbers = async (view: EditorView | null): Promise<TocHealNote | null> => {
+    const editor = editorRef.current?.getEditorRef();
+    const target = editor?.getView() ?? view;
+    if (target === null) return null;
+    const doc = target.state.doc;
+    const facts = collectTocFacts(doc);
+    if (facts.fields.length === 0 && facts.staticEntries.length === 0) return null;
+    const total = facts.fields.length + facts.staticEntries.length;
+    let layout = editor?.getLayout() ?? null;
+    if (layout === null) return { fieldsChanged: 0, staticChanged: 0, missed: 0, noLayout: true };
+    // 版面还没排到文档末尾 = 还是改动前那一版：等一拍。等的时候用户又改了就不算了，
+    // 这一轮交给下一次保存（位置对不上的计划比旧页码更糟）
+    const deadline = performance.now() + LAYOUT_WAIT_MS;
+    while (!layoutCoversDocument(layout, doc.content.size)) {
+      if (performance.now() >= deadline || target.state.doc !== doc) {
+        return { fieldsChanged: 0, staticChanged: 0, missed: 0, noLayout: true };
+      }
+      await sleep(LAYOUT_POLL_MS);
+      const next = editor?.getLayout() ?? null;
+      if (next === null) return { fieldsChanged: 0, staticChanged: 0, missed: 0, noLayout: true };
+      layout = next;
+    }
+    try {
+      const plan = planTocHeal(facts, layout);
+      if (plan.ops.length > 0) {
+        const tr = target.state.tr;
+        applyTocHeal(tr, plan);
+        target.dispatch(tr);
+      }
+      return {
+        fieldsChanged: plan.changed - plan.staticChanged,
+        staticChanged: plan.staticChanged,
+        missed: plan.missed,
+        noLayout: false,
+      };
+    } catch {
+      // 字段结构异常 / 引擎状态在两次读之间变了：这一轮一条都不改，交给界面说「没定位到」
+      return { fieldsChanged: 0, staticChanged: 0, missed: total, noLayout: false };
+    }
+  };
+
   /** 真正落盘的那一步：判定重排 → 提示 → 序列化 → 写盘（冲突是值不是异常） */
   const performSave = useCallback(
     async (kind: "auto" | "manual"): Promise<DocxFlushOutcome> => {
@@ -392,7 +467,6 @@ function DocxSurface(props: {
         return { ok: true };
       }
 
-      const seqAtStart = editSeqRef.current;
       const view = getView();
       const nowFacts = view === null ? null : docxFacts(view.state.doc as unknown as DocxFactsNode);
       // 基线可能还没拿到（视图创建慢于第一次编辑）：拿不到就不做重排判定，
@@ -406,6 +480,12 @@ function DocxSurface(props: {
         setGate(reasons);
         return { ok: false, reason: "blocked" };
       }
+
+      // 目录页码自愈（issue #276）：先把 PAGEREF 域的缓存页码对齐到屏幕上这一份分页，再序列化。
+      // 它只改域缓存与静态目录的尾部数字，不动段落 / 表格成员，所以不影响上面的重排判定。
+      // 这一步在我们自己的派发里，不计入「用户在保存期间又改了」——序号在它之后取。
+      setTocNote(await healTocNumbers(view));
+      const seqAtStart = editSeqRef.current;
 
       setSaveState({ kind: "saving" });
       try {
@@ -595,6 +675,18 @@ function DocxSurface(props: {
             ? t.docx.unsaved
             : t.docx.clean;
 
+  /** 上一次保存里目录自愈的结果：只说确实发生了什么，没事就一句不说 */
+  const tocNoteText = ((): string => {
+    if (tocNote === null) return "";
+    if (tocNote.noLayout) return t.docx.tocNoLayout;
+    const parts: string[] = [];
+    if (tocNote.fieldsChanged > 0) parts.push(t.docx.tocHealed(tocNote.fieldsChanged));
+    if (tocNote.staticChanged > 0) parts.push(t.docx.tocStatic(tocNote.staticChanged));
+    if (tocNote.missed > 0) parts.push(t.docx.tocMissed(tocNote.missed));
+    // 中文句子自带句号，不用再加空格；英文靠空格分开
+    return parts.join(locale === "zh" ? "" : " ");
+  })();
+
   const editor = (
       <DocxEditor
         documentBuffer={opened.data}
@@ -723,6 +815,13 @@ function DocxSurface(props: {
               {t.docx.saveAnyway}
             </button>
           </div>
+        </div>
+      )}
+
+      {tocNoteText !== "" && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="info" size={14} />
+          <span>{tocNoteText}</span>
         </div>
       )}
 

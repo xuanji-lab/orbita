@@ -1753,6 +1753,13 @@ export const en = {
       corrupt: "This file is damaged — it isn't a readable .docx package.",
       missing: "This file isn't on disk anymore — it was deleted or renamed outside orbita.",
     },
+    /* 目录页码自愈（issue #276）：保存时按屏幕上这一份分页改写目录里的页码 */
+    tocNoLayout: "Pagination isn't ready yet, so the contents page numbers weren't updated.",
+    tocHealed: (n: number) => `Updated ${n} contents page number${n === 1 ? "" : "s"}.`,
+    tocMissed: (n: number) =>
+      `Couldn't locate ${n} contents entr${n === 1 ? "y" : "ies"}; their page numbers were left as they were.`,
+    tocStatic: (n: number) =>
+      `Updated ${n} page number${n === 1 ? "" : "s"} in a static contents list — convert it to a field in Word for a lasting fix.`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

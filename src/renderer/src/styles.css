@@ -2986,6 +2986,10 @@ body {
 .docx-note[data-tone="danger"] {
   color: var(--color-text-primary);
 }
+/* 只是个告知（目录页码已对齐）：不用警告黄，与旁边的普通次要文字同色 */
+.docx-note[data-tone="info"] > .orbita-icon {
+  color: var(--color-text-tertiary);
+}
 .docx-note > svg,
 .docx-note > .orbita-icon {
   flex: 0 0 auto;
