@@ -56,6 +56,9 @@ const args = [
   "/r:System.Core.dll",
   "/r:System.Drawing.dll",
   path.join(scriptDir, "Program.cs"),
+  // CDP 浏览器通道（0.4.0）：单独一个源文件，免得 Program.cs 再涨一倍
+  // （仍然零依赖、仍然只产出一个 exe）
+  path.join(scriptDir, "Cdp.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);

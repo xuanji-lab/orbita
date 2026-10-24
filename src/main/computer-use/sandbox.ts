@@ -38,6 +38,7 @@ import { writeTextAtomic } from "../atomic-write.ts";
 import { probe as probeCapability } from "./capability.ts";
 import {
   fetchGuestScreenshot,
+  fetchGuestShot,
   pingGuest,
   resetGuestCommandSeq,
   sendGuestCommand,
@@ -174,6 +175,19 @@ export interface SandboxProcess {
  * 跨边界的那份是 shared/computer-use.ts 的 ComputerUseToolOutcome。
  */
 export type GuestCommandResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * 带**回执载荷**的 guest 命令结果（CDP 通道要读 resp 里的 port / running / text / elements）。
+ * 与 GuestCommandResult 的区别只是多了 resp：像素命令的语义是「事件已送出」，没什么可读的。
+ */
+export type GuestCommandReply =
+  | { ok: true; resp: Record<string, unknown> }
+  | { ok: false; error: string };
+
+/** 带 JPEG 兄弟文件的 guest 命令结果（cdp-shot 与像素截图共用） */
+export type GuestShotReply =
+  | { ok: true; jpeg: Uint8Array; resp: Record<string, unknown> }
+  | { ok: false; error: string };
 
 export interface SandboxDeps {
   /** userData/computer-use：session.wsb 与 out/（读写映射的宿主侧）都落这里 */
@@ -476,6 +490,51 @@ export class SandboxController {
         this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
       );
       return { ok: true };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * CDP 命令的通用下发（PR3 的 sandbox_* 工具组走它）。与 guestCommand 同一道闸门：
+   * 只有 running 才发得出去。**回执载荷原样带回**（cdp 层自己读 port / running / text 等字段）。
+   */
+  async guestCommandReply(
+    command: ComputerUseGuestCommand,
+    fields: Record<string, unknown>,
+  ): Promise<GuestCommandReply> {
+    const gate = this.notRunning("沙箱里的浏览器操作");
+    if (gate !== null) return gate;
+    try {
+      const resp = await sendGuestCommand(
+        this.outDir(),
+        command,
+        fields,
+        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+      );
+      return { ok: true, resp };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 带 JPEG 兄弟文件的 CDP 命令（cdp-shot）。与 screenshot 同一道闸门、同一套文件名闸门。
+   */
+  async guestShot(
+    command: ComputerUseGuestCommand,
+    fields: Record<string, unknown>,
+  ): Promise<GuestShotReply> {
+    const gate = this.notRunning("沙箱里的浏览器操作");
+    if (gate !== null) return gate;
+    try {
+      const shot = await fetchGuestShot(
+        this.outDir(),
+        command,
+        fields,
+        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+      );
+      return { ok: true, jpeg: shot.jpeg, resp: shot.resp };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }

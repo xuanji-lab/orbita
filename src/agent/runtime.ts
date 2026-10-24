@@ -79,6 +79,7 @@ import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
+import { createSandboxBrowserTools, SANDBOX_BROWSER_TOOL_NAMES } from "./sandbox-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   applyRecallEvent,
@@ -980,7 +981,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   // computer use 工具组：同样不列的话模型不知道 manual 档下每次点击都
                   // 会停下来等批准、plan 档下更是直接被拒。**开关关着时不列**：那时它们
                   // 根本没注册，说给模型听就是一句假话
-                  ...(command.computerUse === true ? COMPUTER_USE_TOOL_NAMES : []),
+                  ...(command.computerUse === true
+                    ? [...COMPUTER_USE_TOOL_NAMES, ...SANDBOX_BROWSER_TOOL_NAMES]
+                    : []),
                   // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
@@ -1212,6 +1215,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf 的纪律）。
     // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
     ...(command.computerUse === true ? createComputerUseTools(requestBroker, command.sessionId) : []),
+    // sandbox_*（PR3）：沙箱里那份 Edge 的 DOM 级工具（navigate / observe / click / type /
+    // extract / wait / screenshot / upload / download）。与像素组同一个实验开关——它们
+    // 操作的是同一个沙箱，分开两个开关只会让模型看到半套工具。写动作的 element 字段是
+    // 给 PR4 确认卡用的（审批卡上给用户看一句人话，而不是一个选择器）。
+    ...(command.computerUse === true ? createSandboxBrowserTools(requestBroker, command.sessionId) : []),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是

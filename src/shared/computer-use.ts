@@ -28,7 +28,10 @@
  * PR2 范围 = agent 的像素工具组（截图 / 点击 / 打字 / 按键 / 滚动）：命令经
  * `computerUseRequest` / `computerUseResult`（agent-ipc.ts 的 requestId 问答，
  * browserRequest 同款）下发，**只有 agent 进程看得见**——renderer 面照旧只有 PR1 那四个入口。
- * CDP 浏览器通道是 PR3，不在这里。
+ * PR3 范围 = 沙箱内 Edge 的 CDP 语义命令（`cdp-*`）与 agent 的 `sandbox_*` 工具组：
+ * DOM 级操作，比像素工具稳；像素工具留作 CDP 不可用时的兜底。
+ * CDP 的 WebSocket **只在 guest 里**（桥 ↔ 同机的 Edge），不过映射目录、不过 IPC；
+ * 宿主看见的仍然是一条语义命令 + 一个扁平回执。
  *
  * 调用方：
  *   renderer   → computerUseProbe / Start / Stop / Screenshot（renderer 发起、主进程执行）
@@ -83,9 +86,56 @@ export const computerUseGuestCommands = {
    * 得到 Windows 的 wheel 数据（wheel 正数向上，所以桥取负）。
    */
   scroll: "scroll",
+
+  // ── CDP 浏览器通道（PR3）：一条命令内部 3~4 条 CDP 消息，但只算**一次**文件往返 ──
+  /** 起沙箱内的 Edge 并等到 CDP 可用（幂等）。端口取 0 让系统分配，桥读 DevToolsActivePort */
+  cdpStart: "cdp-start",
+  /** 只停桥自己启动的那个 Edge 进程树（按记录的 pid；绝不按镜像名杀） */
+  cdpStop: "cdp-stop",
+  /** 一眼现状：running / port / 当前标签页清单（供降级判定与模型自查） */
+  cdpStatus: "cdp-status",
+  /** 导航并等加载完成；内部用 readyState 轮询而不是等 loadEventFired 事件 */
+  cdpNav: "cdp-nav",
+  /** 正文文本 + 可交互元素清单（每条都带可直接用于 click/type 的选择器与中心坐标） */
+  cdpObserve: "cdp-observe",
+  /** 按选择器点击：滚动到可见 → 取中心点 → 走浏览器输入管线（mousedown/mouseup） */
+  cdpClick: "cdp-click",
+  /** 聚焦选择器并把文本用 Input.insertText 送进去（中文安全），可顺带回车提交 */
+  cdpType: "cdp-type",
+  /** 取正文（或某个选择器的）文本，超长截断并回报总长 */
+  cdpExtract: "cdp-extract",
+  /** 在 guest 内部等：选择器出现（轮询）或固定毫秒数；一次往返搞定 */
+  cdpWait: "cdp-wait",
+  /** 页面截图：JPEG 写同名兄弟文件，回执只带文件名与两套尺寸（同 screenshot 通道） */
+  cdpShot: "cdp-shot",
+  /** 把映射目录里的文件喂给 <input type=file>（DOM.setFileInputFiles） */
+  cdpUpload: "cdp-upload",
+  /** 打开下载到映射目录（Browser.setDownloadBehavior），轮询到文件落定 */
+  cdpDownload: "cdp-download",
+  /** 标签页清单 / 切换（Target.getTargets + attachToTarget） */
+  cdpTabs: "cdp-tabs",
 } as const;
 
 export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof typeof computerUseGuestCommands];
+
+/**
+ * 沙箱里那份 Edge 的 profile 目录（guest 绝对路径）。**每次沙箱一次性**：不映射到宿主，
+ * 沙箱销毁即丢——登录态不跨会话，这是产品语义（与 Operator 的 ephemeral VM 同构）。
+ * 桥的 cdp-start 在 guest 里建它；宿主不读它，只把它写进错误文案。
+ */
+export const COMPUTER_USE_GUEST_BROWSER_PROFILE = "C:\\orbita-browser\\profile";
+
+/**
+ * 上传文件的落点（guest 绝对路径）。宿主先把用户给的文件拷进这里（映射目录的宿主侧就是
+ * `<computerUseDir>/out/upload`），再把 guest 路径交给 cdp-upload。
+ *
+ * 桥只认这个前缀下的路径（白名单）：`DOM.setFileInputFiles` 能读 guest 里任意文件，
+ * 不设边界等于让一份伪造的回执把映射目录当跳板。
+ */
+export const COMPUTER_USE_GUEST_UPLOAD_DIR = "C:\\orbita-out\\upload";
+
+/** 下载文件的落点（guest 绝对路径，宿主侧同一目录：`<computerUseDir>/out/downloads`） */
+export const COMPUTER_USE_GUEST_DOWNLOAD_DIR = "C:\\orbita-out\\downloads";
 
 /**
  * 回图的宽度上限（缺省值）。回图会被缩放压成 JPEG——模型要看清按钮与文字，
@@ -215,7 +265,43 @@ export type ComputerUseToolRequest =
   | { action: "click"; x: number; y: number; button?: ComputerUseButton; double?: boolean }
   | { action: "type"; text: string }
   | { action: "key"; key: string }
-  | { action: "scroll"; x: number; y: number; deltaY: number };
+  | { action: "scroll"; x: number; y: number; deltaY: number }
+  // ── sandbox_* 浏览器工具（PR3）。**动作名带 `sandbox-` 前缀**：像素组的
+  // screenshot / click / type 已经占用了那几个动词，同一个联合里不能重名。
+  // 每个动作由主进程翻成一条 cdp-* guest 命令（一次文件往返）。
+  //
+  // **错误语义（与像素组一致）**：任何失败都是 `{ok:false, error}`，error 是给模型读的
+  // 人话，且必须说清下一步怎么做。CDP 侧失败时要带「可以退回 computer_* 像素工具」——
+  // 模型看不见 UI，不告诉它它就会重试同一个动作。选择器失效 / 页面未导航 / ref 作废
+  // 都属于这一类，文案里点名重新 sandbox_observe。
+  /** 打开网址并等加载；沙箱里的 Edge 没起来时先自动 cdp-start（模型不必知道这一步） */
+  | { action: "sandbox-navigate"; url: string; timeoutMs?: number }
+  /** 正文 + 可交互元素清单。返回的是**给模型读的文本**，不是 DOM 树 */
+  | { action: "sandbox-observe"; maxElements?: number }
+  /** 按 sandbox_observe 给的选择器点击。element 是一句人话，审批卡上给用户看 */
+  | { action: "sandbox-click"; selector: string; element?: string }
+  /** 聚焦选择器并输入；submit = 输入后回车。clear 缺省 true（换掉旧值而不是追加） */
+  | { action: "sandbox-type"; selector: string; text: string; submit?: boolean; clear?: boolean; element?: string }
+  /** 取页面正文（或某个选择器的）文本 */
+  | { action: "sandbox-extract"; selector?: string }
+  /** 等选择器出现（timeoutMs 上限 10s）或等固定毫秒数 */
+  | { action: "sandbox-wait"; selector?: string; ms?: number; timeoutMs?: number }
+  /** 页面截图（JPEG 兄弟文件）；width/height 是图，nativeWidth/Height 是视口 CSS 像素 */
+  | { action: "sandbox-screenshot"; maxWidth?: number }
+  /** 把宿主文件拷进映射目录再喂给 <input type=file>。path 是**宿主**绝对路径 */
+  | { action: "sandbox-upload"; selector: string; path: string; element?: string }
+  /** 点一个下载链接，文件落映射目录，回执带宿主侧落点与文件名。dir = 可选子目录名（相对 downloads/） */
+  | { action: "sandbox-download"; selector: string; dir?: string; element?: string }
+  /** 标签页：list = 看有哪些（弹窗 / target=_blank 会新开一个），switch = 切到第 index 个 */
+  | { action: "sandbox-tabs"; op?: "list" | "switch"; index?: number };
+
+/**
+ * 这个动作走 CDP 通道（sandbox_*）还是像素通道（computer_*）。主进程按它分流：
+ * 前者要一个长期存活的 CdpSession，后者只需要沙箱状态机。
+ */
+export function isSandboxBrowserAction(action: ComputerUseToolRequest["action"]): boolean {
+  return action.startsWith("sandbox-");
+}
 
 /**
  * 一张截图的全部几何 + 字节：工具层存下它，把模型随后给的图像坐标换算成物理像素。
@@ -243,6 +329,53 @@ export type ComputerUseToolOutcome =
   | { ok: false; error: string };
 
 /** 只用到尺寸的那部分几何（换算函数的最小输入，测试与工具层都不必凑齐字节） */
+/**
+ * 页面侧的一张图（sandbox-screenshot）。字段与像素组**刻意同形**：工具层与读图的代码不必
+ * 分叉。差异只在语义——这里的 width/height 是 JPEG 的像素，nativeWidth/Height 是视口 CSS
+ * 像素（DPR=1 时两者相等；缩放只由 maxWidth 引起）。
+ */
+export interface SandboxShot {
+  /** JPEG 字节的 base64 */
+  data: string;
+  /** JPEG 像素尺寸（模型看到的那张图） */
+  width: number;
+  height: number;
+  /** 视口 CSS 像素尺寸（页面坐标系的参照） */
+  nativeWidth: number;
+  nativeHeight: number;
+}
+
+/** cdp-observe 的一行可交互元素（字段名与 guest 回执一一对应） */
+export interface SandboxElement {
+  /** 可直接传给 sandbox_click / sandbox_type 的 CSS 选择器（页面导航后全部作废） */
+  selector: string;
+  /** 标签名；输入类带上 type，如 `input[email]` */
+  tag: string;
+  /** 可读文本（aria-label / placeholder / innerText / value 里第一个非空的，截到 80 字） */
+  text: string;
+  /** 元素中心点的视口 CSS 像素坐标 */
+  x: number;
+  y: number;
+  /** 元素上显式的 role 属性（没有就是空串） */
+  role: string;
+  /** 是不是可输入控件（input / textarea / contenteditable） */
+  editable: boolean;
+}
+
+/**
+ * cdp-shot 的回执（宿主只读这几个字段；jpeg 是**纯文件名**，读盘前必须过
+ * isPlainScreenshotFileName 那道闸门）。
+ */
+export interface CdpShotReply {
+  jpeg: string;
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+  url: string;
+  title: string;
+}
+
 export interface ComputerUseShotGeometry {
   width: number;
   height: number;
