@@ -102,7 +102,7 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
-import { CarryoverChecklist } from "./CarryoverChecklist";
+import { WrapupCard } from "./WrapupCard";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import { DiffBody } from "../../shell/DiffView";
@@ -111,7 +111,7 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
-import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
+import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
@@ -127,7 +127,7 @@ import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
-import { modelThinkingLevels } from "@shared/model-defaults";
+import { modelDisplayName, modelThinkingLevels } from "@shared/model-defaults";
 import { modelPreferenceById } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
@@ -828,6 +828,36 @@ function ChatViewBody(props: {
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 收尾卡上的型号名：与模型菜单同一套显示名（声明名 > 白名单 > 目录名 > id）
+  const wrapupModelName = useCallback(
+    (modelId: string): string => {
+      const declared = session.usable.flatMap((p) => p.models.declared).find((m) => m.id === modelId);
+      return modelDisplayName(session.catalog, modelId, {}, declared?.name);
+    },
+    [session.usable, session.catalog],
+  );
+  // 收尾卡「第 x–y 轮」：跳回那一轮的用户消息并闪一下。不在已加载的窗口里就往前翻页再找
+  // （每页 SESSION_PAGE_RECORDS 条，最多翻 20 页——再远的历史不值得一直等）
+  const hasMoreRef = useRef(session.hasMoreHistory);
+  hasMoreRef.current = session.hasMoreHistory;
+  const loadOlderRef = useRef(session.loadOlder);
+  loadOlderRef.current = session.loadOlder;
+  const jumpToMessage = useCallback((messageId: string) => {
+    let tries = 0;
+    const attempt = () => {
+      const pane = scrollRef.current;
+      if (pane === null) return;
+      if (pane.querySelector(`[data-quote-id="${CSS.escape(messageId)}"]`) !== null) {
+        highlightQuote(pane, messageId, "");
+        return;
+      }
+      if (!hasMoreRef.current || tries >= 20) return;
+      tries += 1;
+      loadOlderRef.current();
+      window.setTimeout(attempt, 400);
+    };
+    attempt();
+  }, []);
   const followRef = useRef(true);
   /**
    * 触顶拉更早一页那一刻的滚动几何（源侧分页的滚动锚定）：
@@ -1401,10 +1431,16 @@ function ChatViewBody(props: {
                 （scanResult 由 hook 查看槽持有，切走再切回还在）。挂会话生命周期开关：
                 开关在确认卡开着时被关掉（去设置里关）的话，回来不再渲染 */}
             {lifecycle && session.scanResult !== null && session.scanResult.sessionId === openId && (
-              <CarryoverChecklist
-                drafts={session.scanResult.drafts}
+              <WrapupCard
+                // 每次扫描是一张新卡：换一份清单就重挂，卡内的编辑状态不串到下一次
+                key={`${session.scanResult.sessionId}:${session.scanResult.plan.lastTurn}:${session.scanResult.plan.sinceTurn}`}
+                plan={session.scanResult.plan}
+                draft={session.scanResult.draft}
+                nameOf={wrapupModelName}
                 onConfirm={session.confirmCarryovers}
                 onCancel={session.cancelCarryovers}
+                onRevise={session.reviseWrapup}
+                onJumpTurn={jumpToMessage}
               />
             )}
             {/*
@@ -1612,8 +1648,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
   const carryoverCards = useMemo(() => {
     // 会话生命周期开关关闭：消息流不出收尾扫描卡（历史会话里的旧扫描回答同样不卡片化）
-    if (!lifecycle) return new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
-    const cards = new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
+    if (!lifecycle) return new Map<string, { scan: ScanMessage; firstKey: string }>();
+    const cards = new Map<string, { scan: ScanMessage; firstKey: string }>();
     for (const record of records) {
       if (record.role !== "assistant" || record.status === "streaming") continue;
       let firstKey: string | null = null;
@@ -1624,8 +1660,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         parts.push(block.text);
       });
       if (firstKey === null) continue;
-      const drafts = matchCarryoverMessage(parts.join(""));
-      if (drafts !== null) cards.set(record.id, { drafts, firstKey });
+      const scan = matchScanMessage(parts.join(""));
+      if (scan !== null) cards.set(record.id, { scan, firstKey });
     }
     return cards;
   }, [records, lifecycle]);
@@ -2575,7 +2611,7 @@ function EntryView(props: {
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
@@ -2657,7 +2693,7 @@ function EntryView(props: {
     if (card !== undefined) {
       // 同一条消息的多个 text 块只渲染一张卡（第一个块的位置），其余已并进卡里
       if (entry.key !== card.firstKey) return null;
-      return <CarryoverScanCard drafts={card.drafts} />;
+      return <CarryoverScanCard scan={card.scan} />;
     }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
     // streaming：正在流式的那条渲染成便宜的帧（不排公式、不高亮代码，见 stream-render.ts），
@@ -2721,7 +2757,7 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */

@@ -13,7 +13,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import { dateKeysBack, type UsageDayTotal, type UsageWeekEvent } from "../../shared/usage.ts";
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PriceChartData } from "../../shared/price-chart.ts";
-import type { Provider } from "../../shared/provider.ts";
+import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
 import { boardIndexOf, type BoardRow } from "./arena-board.ts";
 import { usageDays } from "./day-summary.ts";
 import { modelGroups } from "./model-groups.ts";
@@ -40,6 +40,18 @@ const boardIndex = boardIndexOf(
     }),
   ),
 );
+
+/**
+ * （型号，服务商）→ 官方单价：与侧栏用量格、价格 · 能力图同一个型号口径（model-groups）。
+ * 收尾卡片给每件做完的事标「≈ 官方价花费」用的就是它。
+ */
+export function officialRatesResolver(
+  providers: readonly Provider[],
+  catalog: readonly BuiltinProvider[],
+): (modelId: string, providerId: string) => ModelCostDecl | null {
+  const models = modelGroups(providers, catalog, boardIndex);
+  return (modelId, providerId) => models.of(modelId, providerId).rates;
+}
 
 /**
  * 侧栏用量格（usage:week / usage:event）：从任务账本按「天 × 型号」汇总（day-summary.ts）。

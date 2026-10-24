@@ -244,8 +244,6 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
-  carryoverCreate: "carryover:create",
   /**
    * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
    * （会话不存在 / 没有新轮次时 null）。

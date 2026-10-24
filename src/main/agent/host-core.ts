@@ -82,6 +82,9 @@ export class AgentHostCore {
     { resolve: (bullets: string[]) => void; reject: (error: Error) => void }
   >();
   private focusSummarySeq = 0;
+  /** 在等的 choreComplete 回执（收尾清单按反馈改写），按 requestId；进程退出全部 reject */
+  private readonly pendingChores = new Map<string, { resolve: (text: string) => void; reject: (error: Error) => void }>();
+  private choreSeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -135,6 +138,14 @@ export class AgentHostCore {
           this.pendingFocusSummaries.delete(message.requestId);
           if (message.bullets === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
           else pending?.resolve(message.bullets);
+          return;
+        }
+        if (message.type === "choreCompleted") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingChores.get(message.requestId);
+          this.pendingChores.delete(message.requestId);
+          if (message.text === null) pending?.reject(new Error(message.error ?? "the model didn't answer"));
+          else pending?.resolve(message.text);
           return;
         }
         if (message.type === "providerProbed") {
@@ -194,6 +205,8 @@ export class AgentHostCore {
         this.pendingProbes.clear();
         for (const pending of this.pendingFocusSummaries.values()) pending.reject(new Error(message));
         this.pendingFocusSummaries.clear();
+        for (const pending of this.pendingChores.values()) pending.reject(new Error(message));
+        this.pendingChores.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -383,6 +396,39 @@ export class AgentHostCore {
         },
       });
       this.post({ type: "summarizeFocus", requestId, provider, modelId, prompt });
+    });
+  }
+
+  /**
+   * 家务活模型的一次独立小调用（收尾清单按反馈改写）：交回回复原文，解析在调用方。
+   * 150 秒兜底（agent 侧 120 秒先断）。
+   */
+  async choreComplete(
+    provider: Extract<AgentCommand, { type: "choreComplete" }>["provider"],
+    modelId: string,
+    system: string,
+    prompt: string,
+  ): Promise<string> {
+    await this.ensure();
+    this.choreSeq += 1;
+    const requestId = `chore-${this.choreSeq}`;
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingChores.has(requestId)) return;
+        this.pendingChores.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 150_000);
+      this.pendingChores.set(requestId, {
+        resolve: (text) => {
+          clearTimeout(timer);
+          resolve(text);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "choreComplete", requestId, provider, modelId, system, prompt });
     });
   }
 

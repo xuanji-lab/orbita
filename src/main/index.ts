@@ -27,6 +27,7 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
@@ -589,6 +590,15 @@ void app.whenReady().then(async () => {
     (path) => browserSandbox.openLocalFile(path),
     intentOnReverted,
   );
+  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
+  registerWrapupIpc({
+    sessions,
+    carryovers,
+    providers,
+    settings,
+    host: agentHost,
+    catalog: () => agentHost.listBuiltins(),
+  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到

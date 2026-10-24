@@ -17,7 +17,7 @@
  * 纯模块（不 import electron，可被 node --test 直接加载）：HTTP 与配置读取都注入。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { isClosingScanText } from "../../shared/closing-scan.ts";
+import { isClosingScanText } from "../../shared/wrapup-scan.ts";
 import { ingestRowOf, userSpeechIn } from "../../shared/intent-lab.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 

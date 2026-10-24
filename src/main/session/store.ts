@@ -26,6 +26,7 @@ import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } fr
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { SessionWrapup } from "../../shared/wrapup.ts";
 import {
   childSessions,
   deriveSessionTitle,
@@ -654,6 +655,42 @@ export class SessionStore {
       (meta.completion ?? "open") === completion
         ? null
         : { completion, closedAt: completion === "open" ? null : Date.now() },
+    );
+  }
+
+  /**
+   * 收尾确认（session:wrapup-confirm）：一次 meta 写入里追加收尾记录、翻完成状态、取走这条会话
+   * 在接着做的遗留事项 id（返回给调用方去标做完）。会话不存在返回 null。
+   * 完成状态的翻法同 setCompletion：同态不刷新关闭时刻。
+   */
+  confirmWrapup(
+    id: string,
+    wrapup: SessionWrapup,
+    completion: Exclude<SessionCompletion, "open">,
+  ): Promise<{ resumed: string[] } | null> {
+    return this.queueMeta(id, async () => {
+      const meta = await this.readMeta(id);
+      if (meta === null) return null;
+      const resumed = meta.resumedCarryovers ?? [];
+      const same = (meta.completion ?? "open") === completion;
+      const next: SessionMeta = {
+        ...meta,
+        wrapups: [...(meta.wrapups ?? []), wrapup],
+        completion,
+        closedAt: same ? (meta.closedAt ?? Date.now()) : Date.now(),
+      };
+      delete next.resumedCarryovers;
+      await writeJsonAtomic(this.metaPath(id), next);
+      return { resumed };
+    });
+  }
+
+  /** 记下这条会话在接着做某条遗留事项（遗留清单的「继续」）；重复的 id 不再记 */
+  addResumedCarryover(id: string, carryoverId: string): Promise<void> {
+    return this.update(id, (meta) =>
+      (meta.resumedCarryovers ?? []).includes(carryoverId)
+        ? null
+        : { resumedCarryovers: [...(meta.resumedCarryovers ?? []), carryoverId] },
     );
   }
 
