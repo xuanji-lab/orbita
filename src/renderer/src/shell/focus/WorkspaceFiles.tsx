@@ -343,12 +343,7 @@ function FileDirRow(props: {
       aria-expanded={props.open}
     >
       <span className="focus-frow-tw">
-        <Icon
-          name={props.open ? "chevron-down" : "chevron-right"}
-          size={11}
-          strokeWidth={2.2}
-          style={{ transform: props.open ? "rotate(0deg)" : "rotate(0deg)", transition: "transform var(--duration-fast) var(--ease-out-quint)" }}
-        />
+        <Icon name={props.open ? "chevron-down" : "chevron-right"} size={11} strokeWidth={2.2} />
       </span>
       <span className="focus-frow-icon">
         <Icon name={props.open ? "folder-open" : "folder"} size={14} strokeWidth={1.8} />
