@@ -199,4 +199,27 @@ describe("TaskLedger", () => {
     assert.equal(ledger.tasks()[0]?.level, null);
     assert.equal(ledger.untrustedSessions(), 1);
   });
+
+  test("意图召回：按天记、按 id 去重、读盘后还在", async () => {
+    const file = join(dir, "t.json");
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source({}, []));
+    const item = { id: "i1", timestamp: DAY1, tokens: { input: 200, output: 40, cacheRead: 100, cacheWrite: 0 } };
+    await ledger.recordIntent(item);
+    await ledger.recordIntent(item);
+    assert.deepEqual(Object.fromEntries(ledger.intentByDay()), { "2026-10-20": item.tokens });
+    const restarted = new TaskLedger(file, { timeZone: TZ });
+    await restarted.load();
+    assert.deepEqual(Object.fromEntries(restarted.intentByDay()), { "2026-10-20": item.tokens });
+  });
+
+  test("旧版账本文件（version 1，没有意图召回）当坏文件：回填重建", async () => {
+    const file = join(dir, "t.json");
+    await writeFile(file, JSON.stringify({ version: 1, backfilled: true, untrustedSessions: 0, tasks: [], open: {} }), "utf8");
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    assert.notEqual(await ledger.backfill(source({ b: logs.b }, [meta("b", 2)])), null);
+    assert.equal(ledger.tasks().length, 1);
+  });
 });
