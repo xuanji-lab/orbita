@@ -381,11 +381,15 @@ const FOCUS_SUMMARY_TIMEOUT_MS = 180_000;
  * 专注模式的收工小结（focus-summary.ts）：一次独立的 `completeSimple`，模型与密钥面
  * 由主进程装好（家务活模型，缺席时主进程已回退到上次使用的模型）。结果经
  * `focusSummarized` 回执；模型解不出、调用出错、回复读不懂都回 null 并带原因——
- * 界面上等着这张卡，失败要说出来。
+ * 界面上等着这张卡，失败要说出来。每条失败路径都在这里落一条 warn（requestId /
+ * 模型 / 原因），否则卡上只有一句笼统的话，事后无法归因。
  */
 async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeFocus" }>): Promise<void> {
-  const fail = (error: string): void => {
-    send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error });
+  const fail = (reason: string): void => {
+    console.warn(
+      `[focus-summary] ${command.requestId} 失败（${command.provider.id}/${command.modelId}）：${reason}`,
+    );
+    send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error: reason });
   };
   try {
     const runtime = await ModelRuntime.create({});
@@ -419,6 +423,7 @@ async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeF
     }
     const bullets = parseSummaryReply(output);
     if (bullets === null) {
+      // 原文单独打一条（fail 那条只说“读不懂”，不给原文）；成功路径一条不落
       console.warn(`[focus-summary] ${model.id} 的回复读不懂，原文前 200 字：${JSON.stringify(output.slice(0, 200))}`);
       fail(`${model.id}'s reply couldn't be read`);
       return;

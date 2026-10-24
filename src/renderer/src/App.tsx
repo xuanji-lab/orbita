@@ -233,6 +233,13 @@ export function App() {
   const startFocus = useCallback(
     (workspaceId: string, minutes: number): void => {
       setWsBrowse(null);
+      // 专注是替代会话列表的左栏视图；设置页是 overlay，归档 / 遗留事项是子视图，
+      // 优先级都高过它（Sidebar 的 filesViewWs 判这三个）——不退掉的话，从设置页 /
+      // 归档页开始专注，左栏会继续停在原地（2026-10-23 实测：只退 overlay 时归档页
+      // 仍然不动）。
+      setOverlay(null);
+      setShowArchived(false);
+      setShowCarryovers(false);
       setSummaryCardClosed(false);
       setSayDismissed(false);
       focus.start(workspaceId, minutes);
@@ -285,7 +292,6 @@ export function App() {
   const focusControl = (
     <FocusControl
       status={focus.status}
-      now={focus.now}
       workspaces={session.workspaces}
       defaultWorkspaceId={session.workspaceId}
       preset={focus.lastPreset}
@@ -374,6 +380,7 @@ export function App() {
         }
         workspaceName={focusWorkspaceName}
         summary={focus.summary}
+        onRetry={focus.retrySummary}
         onEnd={focus.end}
         onAgain={() => {
           const preset = focus.lastPreset ?? { workspaceId: focusRun.workspaceId, minutes: 25 };
