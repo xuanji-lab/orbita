@@ -39,6 +39,7 @@ const FAMILY_LOGOS: Record<ModelFamilyLogo, string> = {
   claude,
   openai,
   xiaomimimo,
+  grok,
 };
 
 const LOGOS: Record<string, string> = {

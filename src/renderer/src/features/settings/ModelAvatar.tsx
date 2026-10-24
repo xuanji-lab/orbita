@@ -8,10 +8,15 @@ import deepseekV41Flash from "../../../../../design-system/assets/model-avatars/
 import deepseekV4Pro from "../../../../../design-system/assets/model-avatars/deepseek-v4-pro.png";
 import glm53Flash from "../../../../../design-system/assets/model-avatars/glm-5.3-flash.png";
 import glm53 from "../../../../../design-system/assets/model-avatars/glm-5.3.png";
+import gptAstra from "../../../../../design-system/assets/model-avatars/gpt-astra.png";
+import gptLuna from "../../../../../design-system/assets/model-avatars/gpt-luna.png";
+import gptSol from "../../../../../design-system/assets/model-avatars/gpt-sol.png";
 import kimiK3 from "../../../../../design-system/assets/model-avatars/kimi-k3.png";
 import kimiK31 from "../../../../../design-system/assets/model-avatars/kimi-k3.1.png";
 import mimoFlash from "../../../../../design-system/assets/model-avatars/mimo-v2.6-flash.png";
 import mimoPro from "../../../../../design-system/assets/model-avatars/mimo-v2.6-pro.png";
+import qwen38Flash from "../../../../../design-system/assets/model-avatars/qwen3.8-flash.png";
+import qwen38Max from "../../../../../design-system/assets/model-avatars/qwen3.8-max.png";
 import step5Preview from "../../../../../design-system/assets/model-avatars/step-5-preview.png";
 import { VendorLogo } from "./VendorLogo";
 
@@ -28,6 +33,11 @@ import { VendorLogo } from "./VendorLogo";
  *   deepseek-v4.1-flash（抹掉封面上的字，鲸鱼标放进金色光环）、deepseek-v4-pro（标题下的
  *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（封面蝴蝶，左下角按封面的细框 + 刻度尺画 Pro / Flash，
  *   不铺底色；字体 Manrope，OFL）。
+ * - gpt-astra / gpt-sol / gpt-luna：developers.openai.com 模型页三张旗舰横幅的无字底图（/images/api/models/
+ *   <id>-texture.webp）——把星系、太阳、月亮抠出来缩到方图约三分之一，放在同图取样的星空底上；
+ *   月亮在原图里被右缘切掉一截，按左半镜像补成整轮（2026-10-25 用户：「月亮和太阳的占比放小一点」）；
+ * - qwen3.8-max / qwen3.8-flash：千问 AI 平台模型市场（qianwenai.com/models）顶部轮播的两张封面
+ *   （绿草几何体、彩色羽流）裁方。
  * 位图按 96px 存：菜单 20px、设置页 18px，Retina 下也有富余。
  */
 const OWN_AVATARS: Record<ModelAvatarKey, string> = {
@@ -44,6 +54,11 @@ const OWN_AVATARS: Record<ModelAvatarKey, string> = {
   "claude-haiku": claudeHaiku,
   "mimo-v2.6-pro": mimoPro,
   "mimo-v2.6-flash": mimoFlash,
+  "gpt-astra": gptAstra,
+  "gpt-sol": gptSol,
+  "gpt-luna": gptLuna,
+  "qwen3.8-max": qwen38Max,
+  "qwen3.8-flash": qwen38Flash,
 };
 
 /**
