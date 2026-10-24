@@ -60,8 +60,9 @@ internal static class Program
     // 空闲 5 分钟回收），0.7.0 起 cdp-* 由**该会话自己的 worker 子进程**执行（可超时杀；
     // 慢命令不再堵住整条桥，宿主侧协议不变），0.7.1 修了「超时杀完 worker、重开同一会话时
     // 读到上一只 Edge 的旧端口」那条自愈路上的 bug（起 Edge 前清端口文件 + 连接重试）。
+    // 0.7.2 只加计量（命令行耗时分解 + 枚举兜底耗时 + 实验用 --align-every），协议与行为未变。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.7.1";
+    private const string Version = "0.7.2";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -155,6 +156,8 @@ internal static class Program
             if (args[i] == "--selftest-session") return RunSessionSelfTest();
             // 浏览器错误页判定的自测（纯函数：不启动任何进程、不碰 Edge）
             if (args[i] == "--selftest-cdp") return RunCdpSelfTest();
+            // 耗时计量的自测（纯函数 + 临时目录里一条真 ping；不启动任何进程、不碰桌面）
+            if (args[i] == "--selftest-metrics") return RunMetricsSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
         }
@@ -173,7 +176,8 @@ internal static class Program
             return 1;
         }
 
-        Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms");
+        Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms"
+            + "，对齐枚举周期：每 " + AlignEveryPolls + " 轮，耗时日志阈值 " + HopLogThresholdMs + "ms");
 
         // 就绪通告：bridge.json 出现 = 命令循环已上线（宿主据此宣布沙箱 running）
         WriteBridgeJson();
@@ -379,6 +383,24 @@ internal static class Program
                 WorkerHost.CommandTimeoutMs = 2500;
                 continue;
             }
+            // 实验缝（2026-10-25 传播延迟实验）：把「每几轮做一次全量枚举」的周期换成 N，
+            // 让同一次真机实验里能对比 16 / 64 / 160 三档。生产（.wsb 的 LogonCommand）只带
+            // --out-dir，不带它，行为与改前逐字一致。**只改计量对比用的周期，默认值不动。**
+            if (flag == "--align-every")
+            {
+                if (i >= args.Length)
+                {
+                    Log("参数 --align-every 缺少值");
+                    return false;
+                }
+                if (!TryParseAlignEvery(args[i], out AlignEveryPolls))
+                {
+                    Log("--align-every 需要 ≥ 1 的整数，实得：" + args[i]);
+                    return false;
+                }
+                i++;
+                continue;
+            }
             if (i >= args.Length)
             {
                 Log("参数 " + flag + " 缺少值");
@@ -428,8 +450,10 @@ internal static class Program
     private static int _nextSeq = 1;
     /** 快路径连续落空的次数（慢路径按它定期对齐） */
     private static int _polls = 0;
-    /** 全量枚举对齐的周期：16 × 250ms ≈ 4s */
-    private const int AlignEveryPolls = 16;
+    /** 全量枚举对齐的默认周期：16 × 250ms ≈ 4s（实验可用 --align-every 覆盖，默认值不许动） */
+    private const int AlignEveryPollsDefault = 16;
+    /** 生效的全量枚举周期。生产路径永远等于 AlignEveryPollsDefault */
+    internal static int AlignEveryPolls = AlignEveryPollsDefault;
 
     private static void CommandLoop()
     {
@@ -447,6 +471,11 @@ internal static class Program
             {
                 // 单轮失败不许弄死循环（映射目录抖动等），记下继续
                 Log("轮询异常：" + ex.Message);
+            }
+            finally
+            {
+                // 计量：下一轮看见命令时，用它算「看见前等了上一轮循环多久」（含 250ms 睡眠与 ReapIdle）
+                _lastPollEndMs = _clock.ElapsedMilliseconds;
             }
             Thread.Sleep(PollIntervalMs);
         }
@@ -467,9 +496,15 @@ internal static class Program
     private static void PollOnce()
     {
         string expected = Path.Combine(_cmdDir, "cmd-" + _nextSeq.ToString("000000") + ReqSuffix);
-        if (File.Exists(expected))
+        // 直探本身的耗时也要记：慢映射目录上 File.Exists 自己就可能要几秒（2026-10-14 实测 8.4s），
+        // 不单独量就分不清「卡在枚举」还是「卡在这条探测上」
+        long probeStart = _clock.ElapsedMilliseconds;
+        bool exists = File.Exists(expected);
+        long probeMs = _clock.ElapsedMilliseconds - probeStart;
+        DateTime seenUtc = DateTime.UtcNow; // 「本进程第一次看见」的墙钟时刻（传播就以它为终点）
+        if (exists)
         {
-            ProcessOne(expected);
+            ProcessOne(expected, probeMs, "快路径", seenUtc, _clock.ElapsedMilliseconds);
             _nextSeq++;
             return;
         }
@@ -484,28 +519,189 @@ internal static class Program
     /** 全量枚举对齐：处理枚举到的每个请求，并按文件名把 _nextSeq 推到已见最大序号之后 */
     private static void AlignFromEnumeration()
     {
+        _alignRounds++;
+        long alignStart = _clock.ElapsedMilliseconds;
         string[] reqs = Directory.GetFiles(_cmdDir, "*" + ReqSuffix);
+        long enumMs = _clock.ElapsedMilliseconds - alignStart; // 只有这一条是目录枚举本身
+        DateTime seenUtc = DateTime.UtcNow;
+        long seenMs = _clock.ElapsedMilliseconds;
         Array.Sort(reqs, StringComparer.Ordinal); // 名字即顺序（宿主命名带递增序号）
         foreach (string reqPath in reqs)
         {
-            ProcessOne(reqPath);
+            ProcessOne(reqPath, -1, "枚举兜底", seenUtc, seenMs);
             string name = Path.GetFileName(reqPath);
             int seen;
             // cmd-000042.req.json → 序号在 [4, 10)
             if (name.Length >= 14 && int.TryParse(name.Substring(4, 6), out seen) && seen >= _nextSeq)
                 _nextSeq = seen + 1;
         }
+        long alignMs = _clock.ElapsedMilliseconds - alignStart;
+        // 这一行回答「全量枚举兜底是不是把单线程轮询整块占住了」：慢映射目录上它一次能跑 8–20s，
+        // 而它跑的时候快路径根本没机会被看一眼。只在到阈值时打。
+        if (alignMs >= HopLogThresholdMs)
+            Log(FormatAlignLine(_alignRounds, _polls, alignMs, enumMs, reqs.Length));
+    }
+
+    // ---- 计量：一次文件往返的耗时分解（只打日志，不参与任何控制流） ----
+    //
+    // 为什么先计量（2026-10-25 真机）：Edge 在连不可路由地址（连接风暴）时，宿主↔guest 的
+    // 一次 ping 往返从 200ms 涨到 15–19s，而对照实验只排除了 worker 的等待。三个候选原因
+    // 都能从这一段日志里读出来，不需要改行为去试：
+    //   ① 全量枚举兜底（AlignFromEnumeration）在慢映射目录上把单线程轮询整块占住——
+    //      看「对齐枚举耗时」那行，以及命令行里「看见前等上一轮循环」有多大；
+    //   ② 跨 VM 的传播延迟本身（host 写 req → guest 看见）——看「传播」；
+    //   ③ 单条命令内部的几次文件操作（读 req / 写 resp / 删 req）在慢盘上各要几秒——看
+    //      「读请求」「回执落盘」，以及直探 File.Exists 与 mtime 查询各自的耗时。
+    // 纪律：这条链路里**没有新增任何让命令变慢的等待**，唯一的额外开销是一次
+    // File.GetLastWriteTimeUtc（它自己的耗时也打进日志，真慢了藏不住）。
+    // 默认只在任一段 ≥ 500ms 时打一行，避免把 bridge.log 刷爆。
+    // 这些日志将来留不留：先留一版（传播延迟是 computer use 的结构性成本，排查下一次
+    // 「沙箱怎么这么慢」时它就是第一手证据）；如果之后证明每次都在 200ms 以下、一行不落，
+    // 再连同 --align-every 一起删。
+
+    /** 单调时钟：所有时长都用它量（墙钟会被 NTP 调，传播那一段需要墙钟，见 PropagateFromMtime） */
+    private static readonly Stopwatch _clock = Stopwatch.StartNew();
+    /** 上一轮 CommandLoop 结束时刻（_clock 口径，毫秒）；-1 = 还没有上一轮 */
+    private static long _lastPollEndMs = -1;
+    /** AlignFromEnumeration 跑了多少轮（日志里的「第 N 轮」） */
+    private static int _alignRounds = 0;
+    /** 耗时日志的打印线：任一段到线就打一行（实验时自测会临时压到 0） */
+    private static int HopLogThresholdMs = 500;
+    /** 传播延迟的可信窗口：超过它只可能是时基问题，不是真的传播 */
+    private const long PropagateTrustedMaxMs = 120000;
+
+    /** 一条命令的耗时分解。字段全是毫秒；-1 = 未知 / 不适用。 */
+    internal sealed class HopReport
+    {
+        public string Command = "";
+        public string Source = "快路径";
+        public long PropagateMs = -1;
+        public string PropagateNote = "未知";
+        public long PollWaitMs = -1;
+        public long ProbeMs = 0;
+        public long MtimeQueryMs = 0;
+        public long ReadMs = 0;
+        public long ExecuteMs = 0;
+        public bool Forwarded = false;
+        public long PersistMs = 0;
+    }
+
+    /**
+     * mtime 法估「传播延迟」。宿主写 req 用 tmp+rename，映射目录里留下的 mtime 就是宿主的写出
+     * 时刻；与 guest 侧第一次看见该文件时的 UtcNow 相减，即 req 写出 → 本进程看见。
+     *
+     * 三种情况这个数不可信，返回 -1 并让 note 说清为什么（日志里就是「传播未知：…」）：
+     *  - mtime 缺失：映射层没带时间戳时 .NET 回 1601-01-01（FAT 是 1980），相减会得到几百万天；
+     *  - mtime 晚于本地时钟：宿主与 guest 的时基不一致，差值没有意义；
+     *  - 差值超过 120s：比宿主侧 45s 命令超时还大，只可能是时基问题。
+     */
+    internal static long PropagateFromMtime(DateTime mtimeUtc, DateTime nowUtc, out string note)
+    {
+        if (mtimeUtc.Year < 1981)
+        {
+            note = "mtime 缺失（" + mtimeUtc.ToString("yyyy-MM-dd") + "）";
+            return -1;
+        }
+        double deltaMs = (nowUtc - mtimeUtc).TotalMilliseconds;
+        if (deltaMs < 0)
+        {
+            note = "时基差 +" + ((long)(-deltaMs)) + "ms（mtime 晚于本地时钟）";
+            return -1;
+        }
+        if (deltaMs > PropagateTrustedMaxMs)
+        {
+            note = "mtime 落后 " + ((long)deltaMs) + "ms，超出 " + (PropagateTrustedMaxMs / 1000) + "s 可信窗口";
+            return -1;
+        }
+        note = "mtime 法";
+        return (long)deltaMs;
+    }
+
+    /** 任一段到线就打（阈值就是打印线：≥ 阈值打，< 阈值不打） */
+    internal static bool HopNeedsLog(long thresholdMs, long[] segments)
+    {
+        for (int i = 0; i < segments.Length; i++)
+        {
+            if (segments[i] >= thresholdMs) return true;
+        }
+        return false;
+    }
+
+    private static string Ms(long ms)
+    {
+        return ms + "ms";
+    }
+
+    /**
+     * 一条命令行。算术上只有两种，取决于传播是否可信：
+     *  - 可信：总 = 传播 + 读请求 + 执行 + 回执落盘（总 = 宿主写出 → 回执落盘）；
+     *    「看见前等上一轮循环」是**传播内部**的细分——两者都从各自的起点量到「看见」，
+     *    相加就是把同一段时间算两遍，所以它只跟在后面、不计入总。
+     *  - 不可信：总 = 轮询等待 + 读请求 + 执行 + 回执落盘，且只能算「本进程内」的下界。
+     */
+    internal static string FormatHopLine(HopReport r)
+    {
+        long inner = r.ReadMs + r.ExecuteMs + r.PersistMs;
+        List<string> parts = new List<string>();
+        if (r.PollWaitMs >= 0 && r.PropagateMs < 0) parts.Add("轮询等待 " + Ms(r.PollWaitMs));
+        parts.Add("读请求 " + Ms(r.ReadMs));
+        parts.Add("执行 " + Ms(r.ExecuteMs) + (r.Forwarded ? "（转发 worker，不是浏览器真干活的耗时）" : ""));
+        parts.Add("回执落盘 " + Ms(r.PersistMs));
+
+        StringBuilder sb = new StringBuilder("命令 " + r.Command + "：");
+        if (r.PropagateMs >= 0)
+        {
+            sb.Append("总 ").Append(Ms(r.PropagateMs + inner)).Append("（宿主写出→回执落盘）＝ ")
+              .Append("传播 ").Append(Ms(r.PropagateMs)).Append("（").Append(r.PropagateNote).Append("） + ");
+        }
+        else
+        {
+            long total = (r.PollWaitMs >= 0 ? r.PollWaitMs : 0) + inner;
+            sb.Append("本进程内 ").Append(Ms(total)).Append("（传播未知：").Append(r.PropagateNote).Append("）＝ ");
+        }
+        sb.Append(string.Join(" + ", parts.ToArray()));
+        if (r.PropagateMs >= 0 && r.PollWaitMs >= 0)
+            sb.Append("；看见前等上一轮循环 ").Append(Ms(r.PollWaitMs)).Append("（细分，已含在传播里，不计入总）");
+        sb.Append("；本轮直探 File.Exists ").Append(Ms(r.ProbeMs))
+          .Append("、mtime 查询 ").Append(Ms(r.MtimeQueryMs))
+          .Append("、来源 ").Append(r.Source);
+        return sb.ToString();
+    }
+
+    /** 枚举兜底那一行（只在到阈值时打）：它是「单线程轮询被整块占住」的直接证据 */
+    internal static string FormatAlignLine(int round, int polls, long alignMs, long enumMs, int visible)
+    {
+        return "对齐枚举耗时 " + Ms(alignMs) + "（第 " + round + " 轮，_polls=" + polls
+            + "，目录可见 " + visible + " 项；其中 Directory.GetFiles " + Ms(enumMs) + "）";
     }
 
     /**
      * 处理一个请求文件：读 → 执行 → 写 resp → 删 req。
      * 读失败（宿主 rename 途中的瞬时点 / 文件被占）**静默下轮**：不写 resp、不删 req、
      * 不弄死循环——下一轮直探同一个名字会再试一次。
+     *
+     * probeMs / source / seenUtc / seenMs 全部只服务计量：probeMs = 本轮直探 File.Exists 的耗时，
+     * source = 快路径还是枚举兜底，seenUtc = 本进程第一次看见它的墙钟时刻（传播的终点），
+     * seenMs = 同一时刻的单调时钟值（算轮询等待）。它们一个都不进控制流。
      */
-    private static void ProcessOne(string reqPath)
+    private static void ProcessOne(string reqPath, long probeMs, string source, DateTime seenUtc, long seenMs)
     {
         string name = Path.GetFileName(reqPath);
         string baseName = name.Substring(0, name.Length - ReqSuffix.Length);
+
+        HopReport hop = new HopReport();
+        hop.Command = baseName;
+        hop.Source = source;
+        hop.ProbeMs = probeMs < 0 ? 0 : probeMs;
+        hop.PollWaitMs = _lastPollEndMs < 0 ? -1 : seenMs - _lastPollEndMs;
+        long mtimeStart = _clock.ElapsedMilliseconds;
+        DateTime mtimeUtc = File.GetLastWriteTimeUtc(reqPath);
+        hop.MtimeQueryMs = _clock.ElapsedMilliseconds - mtimeStart;
+        string note;
+        hop.PropagateMs = PropagateFromMtime(mtimeUtc, seenUtc, out note);
+        hop.PropagateNote = note;
+
+        long readStart = _clock.ElapsedMilliseconds;
         string raw;
         try
         {
@@ -513,15 +709,32 @@ internal static class Program
         }
         catch
         {
+            // 只有在「读本身就很慢」时留一行：连接风暴里这条重试每 250ms 一次，不加条件会刷爆日志
+            long failedMs = _clock.ElapsedMilliseconds - readStart;
+            if (failedMs >= HopLogThresholdMs)
+                Log("命令 " + baseName + "：读 req 失败 " + Ms(failedMs) + "（下轮重试）");
             return; // 宿主 rename 途中的瞬时点，下轮再来
         }
+        hop.ReadMs = _clock.ElapsedMilliseconds - readStart;
         Log("收到命令 " + name);
+        long execStart = _clock.ElapsedMilliseconds;
         string respJson = Execute(raw, baseName);
+        hop.ExecuteMs = _clock.ElapsedMilliseconds - execStart;
         // null = 这条命令已经转给该会话的 worker，回执由后台线程写（慢命令不许占住轮询循环）
+        hop.Forwarded = respJson == null;
+        long persistStart = _clock.ElapsedMilliseconds;
         if (respJson != null)
             AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(respJson));
         // 主命令流里的这一条已受理：立刻删掉，免得下一轮又执行一遍（worker 侧另有自己的 req）
         try { File.Delete(reqPath); } catch { }
+        hop.PersistMs = _clock.ElapsedMilliseconds - persistStart;
+
+        if (HopNeedsLog(HopLogThresholdMs, new long[] {
+            hop.PropagateMs, hop.PollWaitMs, hop.ProbeMs, hop.MtimeQueryMs,
+            hop.ReadMs, hop.ExecuteMs, hop.PersistMs }))
+        {
+            Log(FormatHopLine(hop));
+        }
     }
 
     // ---- 命令执行 ----
@@ -1711,6 +1924,192 @@ internal static class Program
         // 导航超时那一轮的预算：12s（navigate 等回执）+ 18s（重启 + attach + 验过）< 40s
         CheckTrue(failures, ref cases, "导航超时 + 判死重启装得进 worker 的 40s 杀线",
             CdpSession.PageNavigateTimeoutMsForTest + CdpSession.RestartRoomMsForTest <= 40000);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** --align-every 的值：整数且 ≥ 1。生产 .wsb 不带它，默认仍是 AlignEveryPollsDefault */
+    internal static bool TryParseAlignEvery(string raw, out int every)
+    {
+        every = 0;
+        if (raw == null || !int.TryParse(raw, out every)) return false;
+        if (every < 1)
+        {
+            every = 0;
+            return false;
+        }
+        return true;
+    }
+
+    // ---- 耗时计量的自测（--selftest-metrics）-----------------------------------------
+    //
+    // 计量这一刀的产出就是「能读的数字」，所以它自己的口径必须先被钉住：阈值判断、传播的
+    // 可信性判定（mtime 缺失 / 时基差 / 超窗口）、一行日志的算术，以及最要紧的一条——
+    // PollOnce 真跑一次时那行日志真的落出来、传播真的按 mtime 算。前几条是纯函数；最后一条在
+    // 临时目录里跑真实链路（一条 ping：不碰桌面、不起 Edge、不起子进程）。
+    // 可信度只在宿主文件系统上验过（NTFS 临时目录）；映射目录的时间戳行为只能真机看日志——
+    // 所以「传播未知：…」也是一条合法输出，而不是失败。
+
+    private static int RunMetricsSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // 阈值：500ms 就是打印线
+        CheckBool(failures, ref cases, "499ms 不打", false, HopNeedsLog(500, new long[] { 499 }));
+        CheckBool(failures, ref cases, "到线 500ms 就打", true, HopNeedsLog(500, new long[] { 500 }));
+        CheckBool(failures, ref cases, "任一段到线就打", true, HopNeedsLog(500, new long[] { 0, 0, 501, 0 }));
+        CheckBool(failures, ref cases, "全段都小就不打", false, HopNeedsLog(500, new long[] { 0, 499, 12, 3 }));
+        CheckBool(failures, ref cases, "未知段（-1）不算超阈值", false, HopNeedsLog(500, new long[] { -1, 0 }));
+
+        // 传播（mtime 法）的四种可信性
+        DateTime now = new DateTime(2026, 10, 25, 5, 0, 0, DateTimeKind.Utc);
+        string note;
+        CheckNumber(failures, ref cases, "mtime 落后 2500ms → 传播 2500ms", "2500",
+            PropagateFromMtime(now.AddMilliseconds(-2500), now, out note).ToString());
+        CheckString(failures, ref cases, "可信时注明用的是 mtime 法", "mtime 法", note);
+        CheckNumber(failures, ref cases, "mtime 缺失（1601）→ 未知", "-1",
+            PropagateFromMtime(new DateTime(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc), now, out note).ToString());
+        CheckTrue(failures, ref cases, "mtime 缺失的 note 说清是 mtime 缺失",
+            note.IndexOf("mtime 缺失", StringComparison.Ordinal) >= 0);
+        CheckNumber(failures, ref cases, "mtime 晚于本地时钟（时基不一致）→ 未知", "-1",
+            PropagateFromMtime(now.AddMilliseconds(3000), now, out note).ToString());
+        CheckTrue(failures, ref cases, "时基差的 note 点明时基差",
+            note.IndexOf("时基差", StringComparison.Ordinal) >= 0);
+        CheckNumber(failures, ref cases, "差 200s（超可信窗口）→ 未知", "-1",
+            PropagateFromMtime(now.AddMilliseconds(-200000), now, out note).ToString());
+        CheckTrue(failures, ref cases, "超窗口的 note 点明可信窗口",
+            note.IndexOf("可信窗口", StringComparison.Ordinal) >= 0);
+        CheckNumber(failures, ref cases, "差 119s（窗口内最大的可信值）→ 119000", "119000",
+            PropagateFromMtime(now.AddMilliseconds(-119000), now, out note).ToString());
+
+        // 一行日志的算术：传播可信时 总 = 传播 + 读 + 执行 + 落盘（轮询等待不在总和里）
+        HopReport r = new HopReport();
+        r.Command = "cmd-000007";
+        r.PropagateMs = 8100;
+        r.PropagateNote = "mtime 法";
+        r.PollWaitMs = 6400;
+        r.ProbeMs = 310;
+        r.MtimeQueryMs = 12;
+        r.ReadMs = 12;
+        r.ExecuteMs = 120;
+        r.PersistMs = 700;
+        string line = FormatHopLine(r);
+        CheckTrue(failures, ref cases, "可信传播：总 = 传播 + 读 + 执行 + 落盘（8100+12+120+700 = 8932）",
+            line.IndexOf("总 8932ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "可信传播：四段都在同一行里",
+            line.IndexOf("传播 8100ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("读请求 12ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("执行 120ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("回执落盘 700ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "轮询等待作为细分出现，并注明已含在传播里",
+            line.IndexOf("看见前等上一轮循环 6400ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("不计入总", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "直探 / mtime 查询 / 来源都带上（才分得清卡在哪一步）",
+            line.IndexOf("File.Exists 310ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("mtime 查询 12ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("来源 快路径", StringComparison.Ordinal) >= 0);
+
+        // cdp-* 转给 worker 时，执行段不是浏览器真干活的时间，行里必须自己说
+        r.Forwarded = true;
+        CheckTrue(failures, ref cases, "转发 worker 时注明执行是转发耗时",
+            FormatHopLine(r).IndexOf("转发 worker", StringComparison.Ordinal) >= 0);
+        r.Forwarded = false;
+
+        // 传播不可信：总 = 轮询等待 + 读 + 执行 + 落盘（6400+12+120+700 = 7232）
+        r.PropagateMs = -1;
+        r.PropagateNote = "时基差 +3000ms（mtime 晚于本地时钟）";
+        string unknownLine = FormatHopLine(r);
+        CheckTrue(failures, ref cases, "传播未知：明写原因，且总量按轮询等待起算",
+            unknownLine.IndexOf("传播未知：时基差", StringComparison.Ordinal) >= 0
+            && unknownLine.IndexOf("本进程内 7232ms", StringComparison.Ordinal) >= 0
+            && unknownLine.IndexOf("轮询等待 6400ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "传播未知：不再出现「已含在传播里」的细分",
+            unknownLine.IndexOf("看见前等上一轮循环", StringComparison.Ordinal) < 0);
+        r.PollWaitMs = -1;
+        CheckTrue(failures, ref cases, "第一轮没有上一轮就不列轮询等待",
+            FormatHopLine(r).IndexOf("轮询等待", StringComparison.Ordinal) < 0);
+
+        // 枚举那行的形状（猜测 1 的证据格式，钉死）
+        CheckString(failures, ref cases, "枚举兜底那一行的形状",
+            "对齐枚举耗时 18400ms（第 3 轮，_polls=48，目录可见 5 项；其中 Directory.GetFiles 18300ms）",
+            FormatAlignLine(3, 48, 18400, 18300, 5));
+
+        // --align-every：实验用，默认值不许被动
+        int every;
+        CheckTrue(failures, ref cases, "--align-every 16 可用", TryParseAlignEvery("16", out every) && every == 16);
+        CheckTrue(failures, ref cases, "--align-every 160 可用", TryParseAlignEvery("160", out every) && every == 160);
+        CheckTrue(failures, ref cases, "--align-every 0 拒", !TryParseAlignEvery("0", out every));
+        CheckTrue(failures, ref cases, "--align-every -4 拒", !TryParseAlignEvery("-4", out every));
+        CheckTrue(failures, ref cases, "--align-every abc 拒", !TryParseAlignEvery("abc", out every));
+        CheckTrue(failures, ref cases, "--align-every 空串拒", !TryParseAlignEvery("", out every));
+        CheckString(failures, ref cases, "默认枚举周期仍然是每 16 轮", "16",
+            AlignEveryPolls.ToString() + (AlignEveryPolls == AlignEveryPollsDefault ? "" : "（已被覆盖）"));
+
+        // ---- 真链路：临时目录里发一条 ping，确认那行日志真的落出来、传播真的按 mtime 算 ----
+        string dir = Path.Combine(Path.GetTempPath(), "orbita-metrics-selftest-" + Guid.NewGuid().ToString("N"));
+        TextWriter realOut = Console.Out;
+        StringWriter captured = new StringWriter();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            _outDir = dir;
+            _cmdDir = dir;
+            _nextSeq = 1;
+            _polls = 0;
+            _lastPollEndMs = -1;
+            int savedThreshold = HopLogThresholdMs;
+            HopLogThresholdMs = 0; // 只在自测里把打印线压到 0，保证一定有这一行
+            string req1 = Path.Combine(dir, "cmd-000001" + ReqSuffix);
+            File.WriteAllText(req1, "{\"command\":\"ping\"}", new UTF8Encoding(false));
+            // 把 mtime 往回拨 2s：模拟「宿主 2 秒前写好、guest 现在才看见」
+            File.SetLastWriteTimeUtc(req1, DateTime.UtcNow.AddMilliseconds(-2000));
+            Console.SetOut(captured);
+            PollOnce();
+            Console.SetOut(realOut);
+            CheckTrue(failures, ref cases, "真链路：回执落盘",
+                File.Exists(Path.Combine(dir, "cmd-000001" + RespSuffix)));
+            CheckTrue(failures, ref cases, "真链路：req 受理即删", !File.Exists(req1));
+            // 第二条：mtime 在未来（时基不一致），必须报传播未知
+            string req2 = Path.Combine(dir, "cmd-000002" + ReqSuffix);
+            File.WriteAllText(req2, "{\"command\":\"ping\"}", new UTF8Encoding(false));
+            File.SetLastWriteTimeUtc(req2, DateTime.UtcNow.AddMinutes(5));
+            Console.SetOut(captured);
+            PollOnce();
+            Console.SetOut(realOut);
+            HopLogThresholdMs = savedThreshold;
+        }
+        catch (Exception ex)
+        {
+            failures.Add("真链路跑不起来：" + ex.Message);
+        }
+        finally
+        {
+            Console.SetOut(realOut);
+            HopLogThresholdMs = 500;
+            try { Directory.Delete(dir, true); } catch { }
+        }
+        string log = captured.ToString();
+        CheckTrue(failures, ref cases, "真链路：ping 的命令行真的打出来了",
+            log.IndexOf("命令 cmd-000001：", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "真链路：传播按 mtime 算（不是未知）",
+            log.IndexOf("mtime 法", StringComparison.Ordinal) >= 0);
+        // 拨回 2000ms：容 300ms 抖动，读不出来就是时基/时间戳这一环有问题
+        long measured = -1;
+        int at = log.IndexOf("传播 ", StringComparison.Ordinal);
+        if (at >= 0)
+        {
+            int p = at + "传播 ".Length;
+            int start = p;
+            while (p < log.Length && log[p] >= '0' && log[p] <= '9') p++;
+            long parsed;
+            if (p > start && long.TryParse(log.Substring(start, p - start), out parsed)) measured = parsed;
+        }
+        CheckTrue(failures, ref cases, "真链路：传播量级对得上（拨回 2000ms，实测 " + measured + "ms）",
+            measured >= 1900 && measured <= 2400);
+        CheckTrue(failures, ref cases, "真链路：mtime 在未来时报传播未知（时基差）",
+            log.IndexOf("传播未知：时基差", StringComparison.Ordinal) >= 0);
 
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
