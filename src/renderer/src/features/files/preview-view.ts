@@ -109,6 +109,46 @@ export function textLines(text: string): string[] {
   return text.split("\n");
 }
 
+/**
+ * 窗口化时一条显示行最多放多少字符（超出就硬切成多条显示行）。
+ *
+ * 窗口化是**按行**切窗口的，而一行本身无法再窗口化：一行有多长，它的行盒就有多长。
+ * 依据（2026-10-25 实测，面板 540 × 700）：8 MB 一行 → 建 DOM 460 ms + 465 ms 长任务；
+ * 32 MB 一行 → 到屏 1.9 s；按 4,096 字符硬切后同样的 32 MB 一行只要 24 ms、无长任务。
+ * 4,096 远宽于面板（12 px 等宽字在 540 px 里约 45 字符），用户照样要横向滚动——
+ * 它只是把「一条显示行的长度」从无界变成有界，不改文本内容、不插换行符。
+ */
+export const MAX_ROW_CHARS = 4096;
+
+/**
+ * 窗口化正文的显示行：先按 `\n` 切行，再把超过 `maxChars` 的行硬切成多条。
+ * 纯函数（`node --test` 可测）；只影响显示，不动原始文本。
+ *
+ * 切分点落在代理对中间时多带一个码元——否则 emoji / 罕用字会变成两个孤立代理码元，
+ * 渲染成两个替换方块（与主进程那边 UTF-8 截断回退同一类问题）。
+ */
+export function textRows(text: string, maxChars: number = MAX_ROW_CHARS): string[] {
+  const limit = Math.max(1, Math.floor(maxChars));
+  const rows: string[] = [];
+  for (const line of textLines(text)) {
+    if (line.length <= limit) {
+      rows.push(line);
+      continue;
+    }
+    let at = 0;
+    while (at < line.length) {
+      let end = Math.min(line.length, at + limit);
+      if (end < line.length) {
+        const code = line.charCodeAt(end - 1);
+        if (code >= 0xd800 && code <= 0xdbff) end += 1; // 高代理码元：把低代理一起带走
+      }
+      rows.push(line.slice(at, end));
+      at = end;
+    }
+  }
+  return rows;
+}
+
 /** 一帧要渲染的窗口：`[start, end)` 的行，外加顶部 / 底部占位行数 */
 export interface TextWindow {
   totalLines: number;
@@ -177,7 +217,7 @@ export function largeTextNotice(
   return null;
 }
 
-/** 截断提示：`Showing the first 2 MB of 14.3 MB`。 */
+/** 截断提示：`Showing the first 16 MB of 140 MB`。 */
 export function truncatedNotice(shownBytes: number, totalBytes: number, t: Messages): string {
   return t.files.truncated(formatSize(shownBytes), formatSize(totalBytes));
 }

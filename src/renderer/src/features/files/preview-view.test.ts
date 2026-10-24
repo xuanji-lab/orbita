@@ -10,9 +10,11 @@ import {
   HIGHLIGHT_LIMIT,
   largeTextNotice,
   MARKDOWN_LIMIT,
+  MAX_ROW_CHARS,
   textLines,
   textPreviewMode,
   textRenderKind,
+  textRows,
   textWindow,
   truncatedNotice,
   WINDOW_OVERSCAN,
@@ -88,6 +90,71 @@ describe("textLines", () => {
     assert.deepEqual(textLines("a\nb\n"), ["a", "b", ""]);
     assert.deepEqual(textLines(""), [""]);
     assert.deepEqual(textLines("one"), ["one"]);
+  });
+});
+
+describe("textRows（窗口化的显示行：超长单行硬切）", () => {
+  test("短行原样保留，行为与 textLines 一致（末尾换行的空行也在）", () => {
+    assert.deepEqual(textRows("a\nb\n"), ["a", "b", ""]);
+    assert.deepEqual(textRows(""), [""]);
+    assert.deepEqual(textRows("one"), ["one"]);
+  });
+
+  test("恰好 4096 字符仍是一行，多一个字才切", () => {
+    assert.equal(MAX_ROW_CHARS, 4096);
+    assert.deepEqual(textRows("x".repeat(MAX_ROW_CHARS)), ["x".repeat(MAX_ROW_CHARS)]);
+    const over = textRows("x".repeat(MAX_ROW_CHARS + 1));
+    assert.equal(over.length, 2);
+    assert.deepEqual(over.map((row) => row.length), [MAX_ROW_CHARS, 1]);
+  });
+
+  test("10,000 字符的单行切成 3 条，最后一段长度正确，拼回去是原文", () => {
+    const line = "ab".repeat(5_000);
+    const rows = textRows(line);
+    assert.equal(rows.length, Math.ceil(line.length / MAX_ROW_CHARS));
+    assert.equal(rows.length, 3);
+    assert.deepEqual(
+      rows.map((row) => row.length),
+      [MAX_ROW_CHARS, MAX_ROW_CHARS, line.length - 2 * MAX_ROW_CHARS],
+    );
+    assert.equal(rows.join(""), line);
+  });
+
+  test("多条长行：每条各自切，短行不受影响、不合并", () => {
+    const rows = textRows(["short", "y".repeat(5_000), "tail"].join("\n"));
+    assert.equal(rows.length, 1 + 2 + 1);
+    assert.equal(rows[0], "short");
+    assert.equal(rows[rows.length - 1], "tail");
+    // 硬切只是显示分段：拼回去仍是原文（分段不插换行符，原换行已在切行时去掉）
+    assert.equal(rows.join(""), "short" + "y".repeat(5_000) + "tail");
+  });
+
+  test("切分点落在代理对中间时不会劈开 emoji", () => {
+    const line = "a".repeat(MAX_ROW_CHARS - 1) + "😀" + "b";
+    const rows = textRows(line);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0], "a".repeat(MAX_ROW_CHARS - 1) + "😀");
+    assert.equal(rows[1], "b");
+    // 没有孤立代理码元
+    for (const row of rows) {
+      assert.equal(/^[\uD800-\uDBFF]$/.test(row), false);
+      assert.equal(row.endsWith("\uD800"), false);
+    }
+  });
+
+  test("可注入更小的上限（测试 / 将来调参用）", () => {
+    assert.deepEqual(textRows("abcdef", 4), ["abcd", "ef"]);
+    assert.deepEqual(textRows("abcd", 4), ["abcd"]);
+  });
+
+  test("窗口按显示行算：两条 8,192 字符的长行 = 4 条显示行", () => {
+    const rows = textRows(["z".repeat(8_192), "z".repeat(8_192)].join("\n"));
+    assert.equal(rows.length, 4);
+    const w = textWindow(rows.length, 0, 600, 20);
+    assert.equal(w.totalLines, 4);
+    assert.equal(w.start, 0);
+    assert.equal(w.end, 4);
+    assert.equal(w.padTop + (w.end - w.start) + w.padBottom, 4);
   });
 });
 

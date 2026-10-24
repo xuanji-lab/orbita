@@ -1,10 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { textLines, textWindow, type TextWindow } from "./preview-view.ts";
+import { textRows, textWindow, type TextWindow } from "./preview-view.ts";
 
 /**
  * 大文本的窗口化渲染（大文件预览，见 preview-view.ts 的 WINDOW_TEXT_LIMIT）：只把
  * 可视区上下各 WINDOW_OVERSCAN 行放进 DOM，滚动时滑动这个窗口——`main.log`、
  * `.bib`、长 `.tex` 这类 600 KB+ 的文件才不至于整篇建 DOM / 整篇重排。
+ *
+ * 窗口是**按显示行**算的：超过 MAX_ROW_CHARS 的单行先被硬切成多条显示行（`textRows`），
+ * 否则一条 minified JSON 那样几十 MB 的行会把整条行盒一次性建出来——32 MB 单行实测
+ * 到屏 1.9 s，硬切后 24 ms。当前面板没有行号 gutter，所以「显示行」与「原始行」的差别
+ * 只在滚动的总高度上，不影响任何行号语义。
  *
  * **行高必须固定**，所以窗口化一律不折行（`white-space: pre` + 横向滚动，与超过
  * HIGHLIGHT_LIMIT 的代码同一条规矩）：`pre-wrap` 会让一行占多行高，窗口算出来的
@@ -23,12 +28,12 @@ export function WindowedText(props: {
   /** 换文件时重置滚动与窗口（软刷新同文件时不重置，滚动位置要保留） */
   resetKey: string;
 }) {
-  const lines = useMemo(() => textLines(props.text), [props.text]);
+  const rows = useMemo(() => textRows(props.text), [props.text]);
   const [rowHeight, setRowHeight] = useState(0);
-  const [win, setWin] = useState<TextWindow>(() => textWindow(lines.length, 0, 0, 0));
+  const [win, setWin] = useState<TextWindow>(() => textWindow(rows.length, 0, 0, 0));
   const probeRef = useRef<HTMLDivElement | null>(null);
-  const linesRef = useRef(lines);
-  linesRef.current = lines;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const rowHeightRef = useRef(rowHeight);
   rowHeightRef.current = rowHeight;
 
@@ -56,7 +61,7 @@ export function WindowedText(props: {
   useEffect(() => {
     const scroller = props.scroller.current;
     if (scroller !== null) scroller.scrollTop = 0;
-    setWin(textWindow(linesRef.current.length, 0, scroller === null ? 0 : scroller.clientHeight, rowHeightRef.current));
+    setWin(textWindow(rowsRef.current.length, 0, scroller === null ? 0 : scroller.clientHeight, rowHeightRef.current));
   }, [props.scroller, props.resetKey]);
 
   // 滚动 / 容器尺寸变化 → 只挪窗口，不动 DOM 结构
@@ -65,7 +70,7 @@ export function WindowedText(props: {
     if (scroller === null) return;
     const recompute = (): void => {
       const next = textWindow(
-        linesRef.current.length,
+        rowsRef.current.length,
         scroller.scrollTop,
         scroller.clientHeight,
         rowHeightRef.current,
@@ -84,11 +89,11 @@ export function WindowedText(props: {
       scroller.removeEventListener("scroll", recompute);
       observer.disconnect();
     };
-  }, [props.scroller, rowHeight, lines.length]);
+  }, [props.scroller, rowHeight, rows.length]);
 
   // 底部占位用 totalHeight 撑出来，滚动条长度才与全文一致；行块整体 translateY
   // 到 start 的位置，而不是用顶部占位 div——少一个会随滚动重排的兄弟节点。
-  const totalHeight = lines.length * rowHeight;
+  const totalHeight = rows.length * rowHeight;
   return (
     <div className="file-preview-window" style={{ height: totalHeight }}>
       <div className="file-preview-window-probe" ref={probeRef} aria-hidden>
@@ -98,10 +103,10 @@ export function WindowedText(props: {
         className="file-preview-window-lines"
         style={{ transform: `translateY(${win.start * rowHeight}px)` }}
       >
-        {lines.slice(win.start, win.end).map((line, index) => (
+        {rows.slice(win.start, win.end).map((row, index) => (
           // 空行也得占一行：给个空格，否则空 div 没有行盒、高度塌成 0
           <div className="file-preview-window-line" key={win.start + index}>
-            {line === "" ? " " : line}
+            {row === "" ? " " : row}
           </div>
         ))}
       </div>
