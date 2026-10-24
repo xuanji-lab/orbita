@@ -54,28 +54,6 @@ export interface UsageWeekEvent {
 }
 
 /**
- * assistant 记录上的用量形状（pi-protocol `TranscriptItem.usage` 的子集——
- * 只取四项计数；cost / reasoning 与日账本无关，不进契约）。
- */
-export interface UsageCounts {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}
-
-/**
- * 四项相加得到「这次调用花了多少」。**不取 totalTokens**：它是 pi 按自家口径
- * 汇总的（含口径调整的空间），四项相加才是我们说了算的稳定定义；缺席或
- * 非有限的分项按 0 计——一条坏记录不该把整本账打歪。
- */
-export function usageTotalOf(usage: UsageCounts): number {
-  const part = (value: number | undefined): number =>
-    typeof value === "number" && Number.isFinite(value) ? value : 0;
-  return part(usage.input) + part(usage.output) + part(usage.cacheRead) + part(usage.cacheWrite);
-}
-
-/**
  * timestamp → 本地日期键。`timeZone` 缺省用系统时区（主进程算账、renderer 显示，
  * 同一台机器自然一致）；可注入是给测试的——跨午夜 / 跨时区的切天必须可复现，
  * 不能赌跑测试的那台机器设的是哪个时区。

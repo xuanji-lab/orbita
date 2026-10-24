@@ -1,40 +1,74 @@
 /**
- * 每日用量的 IPC —— 四层契约的第 2 层。
+ * 用量的 IPC —— 四层契约的第 2 层。侧栏用量格与价格 · 能力图吃的是同一本任务账本（task-ledger.ts）。
  *
- *   usage:week    renderer 拉最近 7 天（回填在途时可能是全 0，跑完推真值）
- *   usage:event   账本每次变化（模型调用落账 / 回填完成）推一份完整快照
+ *   usage:week         renderer 拉最近 7 天（每天的合计、按型号的分布、折算花费）
+ *   usage:event        账本每次变化（模型调用落账 / 回填完成）推一份完整 7 天快照
+ *   usage:price-chart  价格 · 能力图
  *
- * 启动**不阻塞**：load + backfill 异步跑，注册即返回——初始拉取先拿到空账，
- * 界面画空格；回填完 onChange 推一份真值把格子填上。
+ * 启动**不阻塞**：账本的 load + backfill 异步跑（startTaskLedger）；首次拉取若赶上回填在途，等它落定。
  */
 import { ipcMain } from "electron";
 import { mainWindows } from "../window/main-windows.ts";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { UsageWeekEvent } from "../../shared/usage.ts";
-import type { UsageLedger, UsageBackfillSource } from "./ledger.ts";
+import { dateKeysBack, type UsageDayTotal, type UsageWeekEvent } from "../../shared/usage.ts";
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PriceChartData } from "../../shared/price-chart.ts";
 import type { Provider } from "../../shared/provider.ts";
+import { boardIndexOf, type BoardRow } from "./arena-board.ts";
+import { usageDays } from "./day-summary.ts";
+import { modelGroups } from "./model-groups.ts";
 import { buildPriceChart } from "./price-chart.ts";
 import type { TaskBackfillSource, TaskLedger } from "./task-ledger.ts";
 import arenaSnapshot from "./arena-snapshot.json" with { type: "json" };
 
-export function registerUsageIpc(ledger: UsageLedger, sessions: UsageBackfillSource): void {
-  ipcMain.handle(ipcChannels.usageWeek, () => ledger.week());
+/** 侧栏显示的天数（含今天） */
+const USAGE_WEEK_DAYS = 7;
 
-  ledger.onChange((days) => {
-    const event: UsageWeekEvent = { days };
-    for (const window of mainWindows.list()) {
-      window.webContents.send(ipcChannels.usageEvent, event);
-    }
-  });
+/** 快照里出现过的全部榜单基名（型号口径的兜底匹配要它），建一次 */
+const boardIndex = boardIndexOf(
+  Object.values(arenaSnapshot.categories).map((category) =>
+    category.rows.flatMap((row): BoardRow[] => {
+      const [name, score, lower, upper, samples, rank] = row;
+      return typeof name === "string" &&
+        typeof score === "number" &&
+        typeof lower === "number" &&
+        typeof upper === "number" &&
+        typeof samples === "number" &&
+        typeof rank === "number"
+        ? [[name, score, lower, upper, samples, rank]]
+        : [];
+    }),
+  ),
+);
 
-  void ledger
-    .load()
-    .then(() => ledger.backfill(sessions))
-    .catch((error: unknown) => {
-      console.error("[usage] 日账本装载 / 回填失败，下次启动重试", error);
+/**
+ * 侧栏用量格（usage:week / usage:event）：从任务账本按「天 × 型号」汇总（day-summary.ts）。
+ * 每天的合计与改之前的日账本口径相同（day-summary.test.ts 守着）；悬停一格时按型号列明细与折算花费。
+ */
+export function registerUsageIpc(deps: {
+  ledger: TaskLedger;
+  providers: () => Promise<Provider[]>;
+  catalog: () => Promise<BuiltinProvider[]>;
+}): void {
+  const week = async (): Promise<UsageDayTotal[]> => {
+    await deps.ledger.settled();
+    const [providers, catalog] = await Promise.all([deps.providers(), deps.catalog()]);
+    return usageDays({
+      dates: dateKeysBack(USAGE_WEEK_DAYS, Date.now()),
+      tasks: deps.ledger.tasks(),
+      intent: deps.ledger.intentByDay(),
+      models: modelGroups(providers, catalog, boardIndex),
     });
+  };
+  ipcMain.handle(ipcChannels.usageWeek, week);
+  deps.ledger.onChange(() => {
+    void week()
+      .then((days) => {
+        const event: UsageWeekEvent = { days };
+        for (const window of mainWindows.list()) window.webContents.send(ipcChannels.usageEvent, event);
+      })
+      .catch((error: unknown) => console.error("[usage] 用量格推送失败", error));
+  });
 }
 
 /**

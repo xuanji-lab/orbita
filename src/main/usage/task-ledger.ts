@@ -23,6 +23,11 @@
  * 补写、回填扫描期间又落盘的那几条；重启后 recorder 不会重放旧记录。落盘的话，回填完 seen 里是
  * 最近两周的全部消息 id（开发版约 470KB），每条回复都要整份重写一遍，不值。
  *
+ * ## 意图召回
+ * 意图召回（实验功能，DeepSeek / Proma 管线）不是对话型号，不进任务；但它花的是用户自己的 token，
+ * 侧栏用量格的每日合计算它（与改之前的日账本一致）。所以账本另记一份「日期 → 意图召回的 token」，
+ * 与任务同一套去重、同一次回填。
+ *
  * ## 写入纪律
  * 全部变更走一条写入链（读-改-写互不覆盖），落盘用 writeJsonAtomic。坏文件 / 缺文件 → 空账重来：
  * backfilled 也丢了，回填会重建整本。账本是可以从会话 JSONL 重建的派生数据。
@@ -36,6 +41,7 @@ import { todayKey } from "../../shared/usage.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import { stampedThinkingLevel } from "../../shared/session.ts";
+import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import {
   appendTaskRecord,
   emptyTaskBook,
@@ -71,17 +77,21 @@ export interface BackfillStats {
  * （见 packDay）。任务按下标存，open 指向下标。
  */
 interface LedgerOnDisk {
-  version: 1;
+  /** 2：加了 intent（意图召回按天）。读到 1 当坏文件——回填重建，补上意图召回 */
+  version: 2;
   backfilled: boolean;
   untrustedSessions: number;
   tasks: { s: string; p: string; m: string; l: ThinkingLevel | null; d: Record<string, number[]> }[];
   open: Record<string, number>;
+  intent: Record<string, number[]>;
 }
 
 export class TaskLedger {
   private readonly file: string;
   private readonly timeZone: string | undefined;
   private book: TaskBook = emptyTaskBook();
+  private intent = new Map<string, TokenCounts>();
+  private readonly listeners: (() => void)[] = [];
   private seen = new Map<string, string>();
   private backfilled = false;
   private untrusted = 0;
@@ -124,6 +134,7 @@ export class TaskLedger {
         return;
       }
       this.book = parsed.book;
+      this.intent = parsed.intent;
       this.backfilled = parsed.backfilled;
       this.untrusted = parsed.untrusted;
     });
@@ -141,6 +152,20 @@ export class TaskLedger {
       this.changes += 1;
       this.pruneSeen();
       await this.persist();
+      this.emit();
+    });
+  }
+
+  /** 记一次意图召回的用量（recorder 落 intent-recall 记录的同一处）。去重与 record 同一张表 */
+  recordIntent(item: { id: string; timestamp: number; tokens: TokenCounts }): Promise<void> {
+    return this.runSerialized(async () => {
+      if (this.seen.has(item.id) || tokenSum(item.tokens) === 0) return;
+      this.seen.set(item.id, this.dateKey(item.timestamp));
+      this.addIntent(item.timestamp, item.tokens);
+      this.changes += 1;
+      this.pruneSeen();
+      await this.persist();
+      this.emit();
     });
   }
 
@@ -175,6 +200,14 @@ export class TaskLedger {
           this.seen.set(item.id, this.dateKey(item.timestamp));
           appendTaskRecord(this.book, meta.id, item, this.dateKey);
         }
+        for (const record of raw) {
+          if (record.role !== "intent-recall" || record.usage === undefined || all.has(record.id)) continue;
+          const tokens = usageCountsOfIntent(record.usage);
+          if (tokenSum(tokens) === 0) continue;
+          all.add(record.id);
+          this.seen.set(record.id, this.dateKey(record.timestamp));
+          this.addIntent(record.timestamp, tokens);
+        }
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       this.backfilled = true;
@@ -182,6 +215,7 @@ export class TaskLedger {
       this.changes += 1;
       this.pruneSeen();
       await this.persist();
+      this.emit();
       return { sessions, untrustedSessions: untrusted, ms: Date.now() - started };
     });
   }
@@ -194,6 +228,42 @@ export class TaskLedger {
   /** 全部任务（只读快照）。不排写入链：变更块是同步的，两次链任务之间内存总是整份一致 */
   tasks(): readonly StoredTask[] {
     return this.book.tasks;
+  }
+
+  /** 意图召回按天（日期 → token） */
+  intentByDay(): ReadonlyMap<string, TokenCounts> {
+    return this.intent;
+  }
+
+  /** 账面变化（记一条 / 回填完成）后的通知。listener 抛错只记日志，不传染 */
+  onChange(listener: () => void): void {
+    this.listeners.push(listener);
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[task-ledger] 账本变更监听器抛错", error);
+      }
+    }
+  }
+
+  private addIntent(timestamp: number, tokens: TokenCounts): void {
+    const date = this.dateKey(timestamp);
+    const prev = this.intent.get(date);
+    this.intent.set(
+      date,
+      prev === undefined
+        ? { ...tokens }
+        : {
+            input: prev.input + tokens.input,
+            output: prev.output + tokens.output,
+            cacheRead: prev.cacheRead + tokens.cacheRead,
+            cacheWrite: prev.cacheWrite + tokens.cacheWrite,
+          },
+    );
   }
 
   /** 账面版本：每记一条 / 回填完成加一（load 读盘不算——那之前不会有人来要图） */
@@ -215,7 +285,7 @@ export class TaskLedger {
 
   private async persist(): Promise<void> {
     const file: LedgerOnDisk = {
-      version: 1,
+      version: 2,
       backfilled: this.backfilled,
       untrustedSessions: this.untrusted,
       tasks: this.book.tasks.map((task) => ({
@@ -226,6 +296,7 @@ export class TaskLedger {
         d: Object.fromEntries(Object.entries(task.days).map(([date, day]) => [date, packDay(day)])),
       })),
       open: Object.fromEntries(this.book.open),
+      intent: Object.fromEntries([...this.intent].map(([date, tokens]) => [date, packTokens(tokens)])),
     };
     await writeJsonAtomic(this.file, file);
   }
@@ -238,6 +309,10 @@ export class TaskLedger {
     );
     return next;
   }
+}
+
+function tokenSum(t: TokenCounts): number {
+  return t.input + t.output + t.cacheRead + t.cacheWrite;
 }
 
 function packTokens(t: TokenCounts): number[] {
@@ -264,7 +339,7 @@ function unpackDay(raw: unknown): DayCounts | null {
 /** 解析盘上文件；形状不对返回 null（按空账重建）。坏任务逐条跳过会让 open 的下标错位，所以任务坏一条就整本重建 */
 function parseLedgerFile(
   raw: string,
-): { book: TaskBook; backfilled: boolean; untrusted: number } | null {
+): { book: TaskBook; intent: Map<string, TokenCounts>; backfilled: boolean; untrusted: number } | null {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -273,7 +348,7 @@ function parseLedgerFile(
   }
   if (typeof value !== "object" || value === null) return null;
   const v = value as Record<string, unknown>;
-  if (v["version"] !== 1 || !Array.isArray(v["tasks"])) return null;
+  if (v["version"] !== 2 || !Array.isArray(v["tasks"])) return null;
   const tasks: StoredTask[] = [];
   for (const entry of v["tasks"] as unknown[]) {
     if (typeof entry !== "object" || entry === null) return null;
@@ -296,8 +371,17 @@ function parseLedgerFile(
       if (typeof at === "number" && Number.isInteger(at) && at >= 0 && at < tasks.length) open.set(session, at);
     }
   }
+  const intent = new Map<string, TokenCounts>();
+  if (typeof v["intent"] === "object" && v["intent"] !== null) {
+    for (const [date, packed] of Object.entries(v["intent"] as Record<string, unknown>)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Array.isArray(packed) || packed.length !== 4) return null;
+      if (!packed.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)) return null;
+      const [input = 0, output = 0, cacheRead = 0, cacheWrite = 0] = packed as number[];
+      intent.set(date, { input, output, cacheRead, cacheWrite });
+    }
+  }
   const untrusted = typeof v["untrustedSessions"] === "number" ? v["untrustedSessions"] : 0;
-  return { book: { tasks, open }, backfilled: v["backfilled"] === true, untrusted };
+  return { book: { tasks, open }, intent, backfilled: v["backfilled"] === true, untrusted };
 }
 
 /** 日期键平移 n 天（与日账本同一写法） */
