@@ -949,8 +949,8 @@ internal sealed class CdpSession
      * 不会因为一次事件迟到 / 丢失把整条命令判死。
      *
      * 落成错误页时**立刻**返回 ReadyErrorPage，不空转到 timeoutMs：错误页是导航失败的那一刻
-     * 就 complete 的（2026-10-25 真机：离线时每条导航白等满 20 秒才回）。它是「已经失败」，
-     * 不是「还没到」——再等下去，这个页面也不会变成用户要的那一页。
+     * 就出现的（2026-10-25 真机：离线时每条导航白等满 20 秒才回）。它是「已经失败」，不是
+     * 「还没到」——再等下去，这个页面也不会变成用户要的那一页。
      *
      * 正文只在「complete 但 URL 对不上」时读，且同一个 href 只读一次（重定向到别的路径的
      * 慢站点不该每 300ms 读一遍整页正文）。
@@ -962,15 +962,18 @@ internal sealed class CdpSession
         string checkedHref = null;
         while (DateTime.UtcNow < deadline)
         {
+            // 错误页的判定**不挂在 readyState 上**：chrome-error:// 一旦出现就说明导航已经失败了，
+            // 不必先相信「这个 Chromium 会在哪个时刻把错误页报成 complete」（我们只有真机回执，
+            // 回执里只有「URL 一直对不上」，没有 readyState 的时间线）。
+            string href = expected == null ? null : SafeEvalString("location.href");
+            if (href != null && IsNavErrorPage(href, null)) return ReadyErrorPage;
             bool complete;
             try { complete = EvalString("document.readyState", 5000) == "complete"; }
             catch { complete = false; }
             if (complete)
             {
                 if (expected == null) return ReadyOk;
-                string href = SafeEvalString("location.href");
                 if (UrlMatches(expected, href)) return ReadyOk;
-                if (IsNavErrorPage(href, null)) return ReadyErrorPage;
                 // 正文兜底：Chromium 版本 / 证书拦截页的 scheme 不一定是 chrome-error
                 if (href != checkedHref)
                 {
