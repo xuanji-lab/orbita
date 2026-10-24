@@ -1663,6 +1663,8 @@ export const zh: Messages = {
     tooLarge: (size, limit) => `没有保存：${size} 超过了编辑器 ${limit} 的上限。`,
     agentWriting: "智能体正在写这个文件，回合结束前编辑器只读。",
     agentWrote: "智能体这一轮改过这个文件，回合结束前编辑器只读。",
+    agentOverwriteBanner: "智能体这一轮写过这个文件，而你的改动还没落盘。两边都没有被覆盖——选你要留下的那一版。",
+    useDisk: "用磁盘版本",
     agentMayWrite: "这一轮跑了命令行、终端或 MCP 工具，它们也可能改写这个文件，回合结束前编辑器只读。",
     agentHunks: (count) => `智能体这一轮改了 ${count} 处`,
     undoTurn: "全部撤销",

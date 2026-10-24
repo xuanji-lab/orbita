@@ -37,6 +37,7 @@ import {
   pruneStaleIds,
   syncDecision,
   type AgentWritePhase,
+  type ConflictKind,
   type EditorHunk,
 } from "./editor-collab.ts";
 import {
@@ -134,6 +135,11 @@ export function TexEditorPane(props: {
   const [conflictText, setConflictText] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [savingNow, setSavingNow] = useState(false);
+  /**
+   * 冲突条说的是哪种冲突：盘上变了（disk）/ agent 本轮写过但盘上可能一字未变（agent）。
+   * 后者必须单独一条文案——说「文件在磁盘上被改过了」是假话。
+   */
+  const [conflictKind, setConflictKind] = useState<ConflictKind>("disk");
   /** 改动块清单的展开态（默认展开：这是回合结束后最想知道的事） */
   const [hunksOpen, setHunksOpen] = useState(true);
   /** 现场找不到的块（用户自己改过 / 被删）：标成不可撤，不隐藏 */
@@ -213,6 +219,7 @@ export function TexEditorPane(props: {
           schedulerRef.current?.cancel();
           conflictHashRef.current = contentHash(result.text);
           if (mountedRef.current) {
+            setConflictKind("disk");
             setConflictText(result.text);
             setErrorText(null);
             setPhaseBoth("conflict");
@@ -363,6 +370,7 @@ export function TexEditorPane(props: {
           if (contentHash(preview.text) === savedHashRef.current) return;
           scheduler.cancel();
           conflictHashRef.current = contentHash(preview.text);
+          setConflictKind("disk");
           setConflictText(preview.text);
           setPhaseBoth("conflict");
         })
@@ -436,14 +444,17 @@ export function TexEditorPane(props: {
     const view = viewRef.current;
     if (view === null) return;
     const incoming = contentHash(diskText);
-    // 三种结局的取舍在 editor-collab.ts 的 syncDecision（有表驱动测试）
+    const diskChanged = incoming !== savedHashRef.current;
+    // 取舍在 editor-collab.ts 的 syncDecision（有表驱动测试）
     const snap = snapshot();
     const decision = syncDecision({
-      diskChanged: incoming !== savedHashRef.current,
+      diskChanged,
       conflicted: phaseRef.current === "conflict",
       dirty: snap !== null && snap.hash !== savedHashRef.current,
       // 本轮用户动过（哪怕现在已经改回基线）：agent 也写过 → 不许静默重载（P0）
       editedThisTurn: editedDuringTurnRef.current,
+      // agent 本轮 write/edit 碰过这个文件：哪怕盘上一字未变，也要让用户选（数据没丢 ≠ 没发生事）
+      agentTouched: agentTouchedRef.current,
     });
     if (decision === "nothing" || decision === "wait") return;
     if (decision === "keep") {
@@ -451,6 +462,8 @@ export function TexEditorPane(props: {
       schedulerRef.current?.cancel();
       conflictHashRef.current = incoming;
       if (mountedRef.current) {
+        // 盘上没变（agent 写回的就是基线）时说「文件在磁盘上被改过了」是假话
+        setConflictKind(diskChanged ? "disk" : "agent");
         setConflictText(diskText);
         setErrorText(null);
         setPhaseBoth("conflict");
@@ -506,10 +519,18 @@ export function TexEditorPane(props: {
   pausedRef.current = autosavePaused;
   /** 被闸门拦下的待存改动：解除占位后补一次自动保存 */
   const heldPendingRef = useRef(false);
+  /**
+   * 本轮 agent 的 write/edit 是否碰过这个文件。**必须记下来**：落定时 hold 已经解除，
+   * 而「盘上一字未变」正是因为 agent 写回的就是基线——那时也得让用户选。
+   */
+  const agentTouchedRef = useRef(false);
+  if (hold === "writing" || hold === "done") agentTouchedRef.current = true;
 
-  // 开轮就重置「本轮用户动过」：上一轮的编辑不算这一轮
+  // 开轮就重置「本轮用户动过 / agent 碰过」：上一轮的不算这一轮
   useEffect(() => {
-    if (turnActive) editedDuringTurnRef.current = false;
+    if (!turnActive) return;
+    editedDuringTurnRef.current = false;
+    agentTouchedRef.current = false;
   }, [turnActive]);
 
   // 只读开关：回合边界翻转时重配（重建编辑器会丢光标与撤销历史）
@@ -668,14 +689,18 @@ export function TexEditorPane(props: {
             style={{ flex: "0 0 auto", marginTop: 1 }}
           />
           <span className="tex-editor-banner-text">
-            {conflictText !== null ? t.editor.conflictBanner : t.editor.errorBanner}
+            {conflictText !== null
+              ? conflictKind === "agent"
+                ? t.editor.agentOverwriteBanner
+                : t.editor.conflictBanner
+              : t.editor.errorBanner}
             {errorText !== null && <span className="tex-editor-banner-detail">{errorText}</span>}
           </span>
           <span className="row-trailing tex-editor-banner-acts">
             {conflictText !== null ? (
               <>
                 <button type="button" className="quiet-control" onClick={reloadFromDisk}>
-                  {t.editor.reload}
+                  {conflictKind === "agent" ? t.editor.useDisk : t.editor.reload}
                 </button>
                 <button type="button" className="quiet-control" onClick={keepMine}>
                   {t.editor.keepMine}

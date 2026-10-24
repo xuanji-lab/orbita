@@ -291,24 +291,39 @@ describe("clampCursorLine", () => {
 });
 
 describe("syncDecision —— 回合落定怎么处理盘上的新内容", () => {
-  test("盘上没变：什么都不做（不管脏不脏、有没有冲突）", () => {
-    assert.equal(syncDecision({ diskChanged: false, conflicted: true, dirty: true, editedThisTurn: true }), "nothing");
-    assert.equal(syncDecision({ diskChanged: false, conflicted: false, dirty: true, editedThisTurn: false }), "nothing");
+  const decide = (over: Partial<Parameters<typeof syncDecision>[0]>) =>
+    syncDecision({ diskChanged: false, conflicted: false, dirty: false, editedThisTurn: false, agentTouched: false, ...over });
+
+  test("盘上没变、也没有 agent 写过：什么都不做", () => {
+    assert.equal(decide({ conflicted: true, dirty: true, editedThisTurn: true }), "nothing");
+    assert.equal(decide({ dirty: true }), "nothing");
   });
 
   test("冲突未裁决：等用户（不覆盖他眼前的状态）", () => {
-    assert.equal(syncDecision({ diskChanged: true, conflicted: true, dirty: false, editedThisTurn: false }), "wait");
-    assert.equal(syncDecision({ diskChanged: true, conflicted: true, dirty: true, editedThisTurn: true }), "wait");
+    assert.equal(decide({ diskChanged: true, conflicted: true }), "wait");
+    assert.equal(decide({ diskChanged: true, conflicted: true, dirty: true, editedThisTurn: true, agentTouched: true }), "wait");
   });
 
   test("有未保存改动：只挂冲突条，绝不重载", () => {
-    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: true, editedThisTurn: true }), "keep");
+    assert.equal(decide({ diskChanged: true, dirty: true, editedThisTurn: true, agentTouched: true }), "keep");
     // 用户改完又改回去（文档与基线一致），本轮仍然动过 → 也不能静默重载
-    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: false, editedThisTurn: true }), "keep");
+    assert.equal(decide({ diskChanged: true, editedThisTurn: true }), "keep");
   });
 
   test("干净且本轮没动过：静默重载", () => {
-    assert.equal(syncDecision({ diskChanged: true, conflicted: false, dirty: false, editedThisTurn: false }), "reload");
+    assert.equal(decide({ diskChanged: true }), "reload");
+  });
+
+  test("agent 本轮写过、盘上却没变（写回的就是基线）：用户手里有字也要问", () => {
+    // 父会话复现的那个交错：agent read → 用户打字（只在内存）→ agent 原样 write 回去。
+    // 盘上 sha 全程没变，所以它不是「磁盘冲突」，而是「agent 的写被你的版本取代」——
+    // 必须给冲突条让用户选，不许自动补存。
+    assert.equal(decide({ dirty: true, editedThisTurn: true, agentTouched: true }), "keep");
+    assert.equal(decide({ editedThisTurn: true, agentTouched: true }), "keep");
+    // 用户没动过（干净）→ 没什么可问的，静默走完
+    assert.equal(decide({ agentTouched: true }), "nothing");
+    // agent 没碰过这个文件 → 用户自己的未保存内容照常自动保存
+    assert.equal(decide({ dirty: true, editedThisTurn: true }), "nothing");
   });
 });
 

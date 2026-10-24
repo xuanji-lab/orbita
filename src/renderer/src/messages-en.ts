@@ -1775,6 +1775,9 @@ export const en = {
     /* agent 与本文件同改一个（回合进行中只读 / 回合落定按块撤销） */
     agentWriting: "The agent is writing this file. The editor is read-only until the turn ends.",
     agentWrote: "The agent changed this file this turn. The editor is read-only until the turn ends.",
+    agentOverwriteBanner:
+      "The agent wrote this file this turn and you have changes that aren't on disk. Nothing was overwritten — choose which version to keep.",
+    useDisk: "Use disk version",
     agentMayWrite:
       "This turn ran a shell, terminal or MCP tool, which can also rewrite this file. The editor is read-only until the turn ends.",
     agentHunks: (count: number) => `The agent changed ${count} block${count === 1 ? "" : "s"} this turn`,
