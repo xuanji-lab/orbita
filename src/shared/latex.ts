@@ -108,12 +108,14 @@ export interface LatexResult {
   logTail: string | null;
   /**
    * 超时的具体原因，`status === "timeout"` 时非 null：
-   * - "idle"：日志连续 LATEX_IDLE_TIMEOUT_MS 没有新输出 —— 真卡住了（死循环、
-   *   等交互输入、宏包互锁），下一次基本还会卡住
-   * - "total"：总时长到达 LATEX_TOTAL_TIMEOUT_MS —— 它一直在写日志，只是编不完
-   *   （超大文档 / 机器太慢），下一次可能编得过
+   * - "idle"：日志连续 LATEX_IDLE_TIMEOUT_MS 没有新的落盘变化 —— 可能是长时间
+   *   计算、等交互输入，或真的死循环。**不能据此断言是死循环**：TeX 的 .log 按
+   *   4 KiB 块落盘，合法但耗时的编译可以让 stat 连续几分钟不变（见常量注释）
+   * - "total"：总时长到达 LATEX_TOTAL_TIMEOUT_MS —— 文档在这段时间内没编完；
+   *   日志可能一直在长，也可能根本没写（自定义 recipe）
    *
-   * 两者对模型的下一步动作不同（改源码 vs 换个时间/拆文档），所以不能只报 timeout。
+   * 两者对模型的下一步动作不同（先判断是不是真卡住 vs 拆文档/换机器），
+   * 所以不能只报 timeout。
    */
   timeoutKind: LatexTimeoutKind | null;
 }
@@ -170,15 +172,19 @@ export interface LatexProbeResult {
 }
 
 /**
- * 判「卡住」的静默上限：日志连续这么久没有新输出就终止整棵进程树。
+ * 判「卡住」的静默上限：日志连续这么久没有新的落盘变化就终止整棵进程树。
  *
- * 为什么按日志静默而不是总时长：latexmk 的 stdout 只在最后回一句总结，真正反映
- * 排版进度的信号是引擎不断追加的 .log。**第一次用 xelatex 编中文要建字体缓存，
- * 两分钟以上很常见，但它一直在写日志**——固定 120 秒总超时会把它误杀，
- * 而按静默判就不会。反过来，死循环（`\loop` 忘了 `\repeat`）会连续 90 秒一行
- * 日志都不写，判得又快又准。
+ * **为什么是 300 秒而不是 issue 里写的 90 秒**：90 秒已被真机实测证伪。TeX 把
+ * .log 按 **4 KiB 块** 落盘（不是每行 flush），合法但耗时的编译可以在几十分钟内
+ * 一直看着“没动静”：评审用真 lualatex `\directlua` 文档实测，编译期间 stat
+ * 连续 **105 秒恒为 4096 字节、mtime 不动**，结束时才变；同一文档 idle=590s 时
+ * **256.8 秒成功出 PDF**，idle=90s 时 **93.1 秒被杀并误报“死循环”**。
+ * 所以宁可在 5 分钟后才判卡，也不误杀一次四分钟的合法编译。
+ *
+ * 判活信号仍是日志的增长 / mtime，但结论只能是“没有新输出”，不是“死循环”
+ * （文案与 timeoutKind 都按这个写）；总时长闸（LATEX_TOTAL_TIMEOUT_MS）兜底。
  */
-export const LATEX_IDLE_TIMEOUT_MS = 90_000;
+export const LATEX_IDLE_TIMEOUT_MS = 300_000;
 
 /**
  * 单次编译的总时长上限。静默判定之外的第二道闸：一直有输出也不能永远编下去
@@ -201,22 +207,20 @@ export const LATEX_MAX_ISSUES = 200;
  * 用 `<=` 判；要是按十进制的 16,000,000,000 判，真正的 16 GB 机器会漏过去、
  * 32 GB 机器（34.36e9）也不会被误判。
  */
-export const LATEX_LOW_MEMORY_BYTES = 16 * 1024 ** 3;
+const LOW_MEMORY_BYTES = 16 * 1024 ** 3;
 
 /** 宽内存机（> 16 GiB）同时编译的项目数。两个 latexmk 已经能把笔记本 CPU 吃满 */
-export const LATEX_MAX_CONCURRENT_WIDE = 2;
+const MAX_CONCURRENT_WIDE = 2;
 
 /** 低内存机（≤ 16 GiB）同时编译的项目数：无风扇机型跑两个会降频，宁可拒绝也不排队 */
-export const LATEX_MAX_CONCURRENT_LOW_MEMORY = 1;
+const MAX_CONCURRENT_LOW_MEMORY = 1;
 
 /**
  * 这台机器能同时跑几个编译。判据只有 `os.totalmem()`（不去读硬件型号：同一型号
  * 有不同的内存配置，读型号既不可靠也平台相关）。
  */
 export function latexMaxConcurrent(totalMemoryBytes: number): number {
-  return totalMemoryBytes > LATEX_LOW_MEMORY_BYTES
-    ? LATEX_MAX_CONCURRENT_WIDE
-    : LATEX_MAX_CONCURRENT_LOW_MEMORY;
+  return totalMemoryBytes > LOW_MEMORY_BYTES ? MAX_CONCURRENT_WIDE : MAX_CONCURRENT_LOW_MEMORY;
 }
 
 /** 默认产物目录（相对项目目录）。名字固定成 build/，与 .gitignore 惯例一致 */

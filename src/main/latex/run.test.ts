@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LatexProbe } from "./probe.ts";
 import { LatexRunner } from "./run.ts";
-import { latexMaxConcurrent, type LatexResult, type LatexRunOutcome } from "../../shared/latex.ts";
+import { latexMaxConcurrent, LATEX_IDLE_TIMEOUT_MS, LATEX_TOTAL_TIMEOUT_MS, type LatexResult, type LatexRunOutcome } from "../../shared/latex.ts";
 
 const roots: string[] = [];
 const nodeExe = process.execPath;
@@ -132,7 +132,7 @@ describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () 
     assert.ok(elapsed >= 1_900, `只跑了 ${elapsed}ms，假编译器没按预期写满日志`);
   });
 
-  test("日志静默到点：杀进程树，status timeout + timeoutKind idle，文案区分静默", async () => {
+  test("日志静默到点：杀进程树，status timeout + timeoutKind idle；文案不断言死循环", async () => {
     const dir = plainProject();
     // 只写一行日志就挂住：之后一直没有新输出，就是死循环的样子
     fakeCompiler(dir, [
@@ -151,8 +151,10 @@ describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () 
     assert.equal(result.timeoutKind, "idle");
     assert.ok(elapsed >= 400, `只等了 ${elapsed}ms，静默超时没生效`);
     assert.ok(elapsed < 10_000, `等了 ${elapsed}ms，静默超时没有尽快生效`);
-    assert.match(result.errors[0]?.message ?? "", /日志连续/);
-    assert.match(result.errors[0]?.message ?? "", /死循环/);
+    // 日志按 4 KiB 块落盘，合法但耗时的编译也会长时间不动，所以不能断言“卡住”
+    assert.match(result.errors[0]?.message ?? "", /连续 \d+\.\d 秒没有新的日志输出/);
+    assert.match(result.errors[0]?.message ?? "", /可能是长时间计算/);
+    assert.doesNotMatch(result.errors[0]?.message ?? "", /编译卡住/);
     // 挂死的进程被杀了：runner 手里不再有子进程（cancelAll 是幂等的空转）
     runner.cancelAll();
   });
@@ -167,6 +169,8 @@ describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () 
     assert.equal(result.timeoutKind, "total", "没有日志时不能按静默判卡住");
     assert.ok(elapsed >= 700, `只等了 ${elapsed}ms，总时长闸没生效`);
     assert.match(result.errors[0]?.message ?? "", /总时长上限/);
+    // 日志一份都没生成（自定义 recipe 不写 .log）：文案要说清“没有可用的日志输出”
+    assert.match(result.errors[0]?.message ?? "", /没有可用的日志输出/);
   });
 
   test("日志被轮换（删除）后：按进程存活处理，仍然只在总时长到点被杀", async () => {
@@ -188,6 +192,8 @@ describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () 
     assert.equal(result.status, "timeout");
     assert.equal(result.timeoutKind, "total", "日志消失不等于进程卡住");
     assert.ok(elapsed >= 1_200, `只等了 ${elapsed}ms，说明删除日志后被当成静默提前杀了`);
+    // 见过日志（后来被轮换）：不能反过来说“没有可用的日志输出”
+    assert.doesNotMatch(result.errors[0]?.message ?? "", /没有可用的日志输出/);
   });
 
   test("取消：cancelAll 杀掉在编的进程，回 cancelled 而不是挂着", async () => {
@@ -225,8 +231,8 @@ describe("LatexRunner —— 并发（按内存定上限，满了明确拒绝）
     const second = await runner.compile({ dir: b });
     assert.equal(second.ok, false, "低内存机不允许第二个编译开跑");
     assert.equal(second.ok ? null : second.reason, "busy");
-    assert.match(second.ok ? "" : second.error, /只跑 1 个 LaTeX 编译/);
-    assert.match(second.ok ? "" : second.error, /不要排队/);
+    assert.match(second.ok ? "" : second.error, /at most 1 at a time/);
+    assert.match(second.ok ? "" : second.error, /do not queue/);
     runner.cancelAll();
     assert.equal(resultOf(await first).status, "cancelled");
   });
@@ -242,7 +248,7 @@ describe("LatexRunner —— 并发（按内存定上限，满了明确拒绝）
     const third = await runner.compile({ dir: c });
     assert.equal(third.ok, false);
     assert.equal(third.ok ? null : third.reason, "busy");
-    assert.match(third.ok ? "" : third.error, /2 个 LaTeX 编译/);
+    assert.match(third.ok ? "" : third.error, /at most 2 at a time/);
     runner.cancelAll();
     await Promise.all([first, second]);
   });
@@ -259,6 +265,13 @@ describe("latexMaxConcurrent —— 内存阀值边界", () => {
     assert.equal(latexMaxConcurrent(32 * gib), 2);
     // 十进制的 16 GB 当然也落在 ≤16 GiB 里（要是按 16e9 当阀值，16 GiB 机器反而会漏过）
     assert.equal(latexMaxConcurrent(16_000_000_000), 1);
+  });
+
+  test("默认值：idle 300 秒（90 秒已被实测证伪）、总时长 10 分钟", () => {
+    assert.equal(LATEX_IDLE_TIMEOUT_MS, 300_000);
+    assert.equal(LATEX_TOTAL_TIMEOUT_MS, 600_000);
+    // 总时长闸必须比静默闸长，否则 idle 永远轮不到
+    assert.ok(LATEX_TOTAL_TIMEOUT_MS > LATEX_IDLE_TIMEOUT_MS);
   });
 });
 

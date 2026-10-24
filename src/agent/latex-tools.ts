@@ -75,7 +75,15 @@ export function createLatexTools(
               signal.addEventListener("abort", () => reject(new Error("Stopped")), { once: true }),
             ),
           ]);
-    if (!result.ok) throw new Error(result.error);
+    if (!result.ok) {
+      // 并发被拒是「稍后重试」，参数 / 授权失败是「改请求」——模型的两条路完全不同。
+      // reason 由 shared 的 LatexRejectReason 给出，文案保持英文（与其它工具一致）。
+      const prefix =
+        result.reason === undefined
+          ? "LaTeX request rejected (fix the arguments or the directory and retry): "
+          : "LaTeX is busy (a build is already running — wait for it to finish, do not queue): ";
+      throw new Error(`${prefix}${result.error}`);
+    }
     return { content: [{ type: "text" as const, text: describe(result.result) }], details: undefined };
   };
 
@@ -167,17 +175,19 @@ function describe(result: LatexResult): string {
   } else if (result.status === "no-main-file") {
     lines.push(`LaTeX could not start: no main file was chosen (engine ${result.engine}).`);
   } else if (result.status === "timeout") {
-    // 静默卡住与总时长封顶的下一步不同：前者要改源码，后者可以拆文档或等机器空闲
+    // 静默与总时长封顶的下一步不同：前者要先判断是不是真的卡住，后者可以拆文档/等机器空闲。
+    // 不写“死循环”：日志按 4 KiB 块落盘，合法但耗时的编译也会长时间没有新输出（见 shared 常量注释）。
     const where = `${result.main === "" ? "" : `, main ${result.main}`}`;
+    const totalMinutes = String(LATEX_TOTAL_TIMEOUT_MS / 60_000);
     lines.push(
       result.timeoutKind === "total"
-        ? `LaTeX build hit the total time limit and was killed after ${seconds}s (engine ${result.engine}${where}). ` +
-            "It was still writing log output, so the document is too large or the machine too slow — " +
-            "split the document or retry when the machine is free."
-        : `LaTeX build stalled: no new log output for ${String(LATEX_IDLE_TIMEOUT_MS / 1000)} seconds, killed after ${seconds}s ` +
-            `(engine ${result.engine}${where}). A build that goes silent usually has an infinite ` +
-            "loop (a runaway \\loop, a missing \\end) or a package waiting for input — " +
-            "inspect the partial errors below.",
+        ? `LaTeX build hit the total time limit (${totalMinutes} minutes) and was killed after ${seconds}s ` +
+            `(engine ${result.engine}${where}). The document did not finish in time — split it into ` +
+            "smaller parts or retry when the machine is free."
+        : `LaTeX build produced no new log output for ${String(LATEX_IDLE_TIMEOUT_MS / 1000)} seconds ` +
+            `and was killed after ${seconds}s (engine ${result.engine}${where}). A silent build can be a ` +
+            "long computation, a package waiting for input, or an infinite loop — check the partial " +
+            "errors below before assuming the source is broken.",
     );
   } else if (result.status === "cancelled") {
     lines.push(`LaTeX build was cancelled after ${seconds}s (the app is shutting down or the build was stopped).`);

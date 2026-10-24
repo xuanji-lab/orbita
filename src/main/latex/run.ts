@@ -23,11 +23,12 @@
  *    （无风扇机型两个引擎一起跑会降频，反而更慢）。**满了就明确拒绝，不排队**：
  *    排队会让模型以为工具卡住，也让「一次只跑一个」的降频意图落空。
  *    被拒不是编译结局，走 `{ ok: false, reason }`——那时我们连进程都没起。
- * 5. **超时看日志静默，不看总时长**：日志连续 LATEX_IDLE_TIMEOUT_MS（90 秒）没有
- *    新输出才算卡住，另加 LATEX_TOTAL_TIMEOUT_MS（10 分钟）总时长封顶。第一次
- *    xelatex 编中文要建字体缓存、能跑两分多钟，但它一直在写日志——按总时长判会
- *    误杀。判活信号只认编译产物日志的增长 / mtime：stdout 不能当信号（latexmk
- *    在结束前几乎不说话），日志被轮换或还没生成时按进程存活处理（交给总时长闸）。
+ * 5. **超时看日志静默，不看总时长**：日志连续 LATEX_IDLE_TIMEOUT_MS（300 秒）没有
+ *    新的落盘变化才判卡住，另加 LATEX_TOTAL_TIMEOUT_MS（10 分钟）总时长封顶。
+ *    阈值不是 90 秒：TeX 的 .log 按 4 KiB 块落盘，实测合法的 lualatex 编译可以
+ *    连续 105 秒 stat 不动、最终 256.8 秒成功；90 秒会在 93.1 秒误杀它。
+ *    判活信号只认产物日志的增长 / mtime：stdout 不能当信号（latexmk 在结束前
+ *    几乎不说话），日志被轮换或还没生成时按进程存活处理（交给总时长闸）。
  *
  * 超时 / 取消都杀**整棵进程树**：latexmk 只是 Perl 驱动，真正干活的是 pdflatex /
  * bibtex 子进程；只杀 latexmk 会留下孤立的引擎进程继续占 CPU 与 .aux。
@@ -74,11 +75,13 @@ interface TimeoutInfo {
   silentMs: number;
   /** 从 spawn 到被停的总时长 */
   elapsedMs: number;
+  /** 整个运行期间见过任何候选日志吗。false = 自定义 recipe 没写 .log，文案要说清 */
+  sawLog: boolean;
 }
 
 /** 构造参数只给测试留口：超时值要能在测试里缩到几百毫秒 */
 export interface LatexRunnerOptions {
-  /** 日志静默上限；默认 LATEX_IDLE_TIMEOUT_MS（90 秒） */
+  /** 日志静默上限；默认 LATEX_IDLE_TIMEOUT_MS（300 秒） */
   idleTimeoutMs?: number;
   /** 总时长硬上限；默认 LATEX_TOTAL_TIMEOUT_MS（10 分钟） */
   totalTimeoutMs?: number;
@@ -133,15 +136,16 @@ export class LatexRunner {
       };
     }
     if (this.running >= this.maxConcurrent) {
-      // 明确拒绝：低内存机的第二个编译会跟第一个一起降频，排队只会让两边都慢
+      // 明确拒绝：低内存机的第二个编译会跟第一个一起降频，排队只会让两边都慢。
+      // 文案走给模型的英文，与同项目互斥那条一致；工具侧再按 reason 区分「稍后重试」与「改参数」。
       const memoryGb = this.totalMemoryBytes / 1024 ** 3;
       return {
         ok: false,
         reason: "busy",
         error:
-          this.maxConcurrent === 1
-            ? `本机总内存 ${memoryGb.toFixed(1)} GiB（≤ 16 GiB 的机型只跑 1 个 LaTeX 编译），已有一个在跑；请等它结束后再试，不要排队。`
-            : `本机总内存 ${memoryGb.toFixed(1)} GiB，已有 2 个 LaTeX 编译在跑；请等其中一个结束后再试。`,
+          `LaTeX is busy: ${String(this.maxConcurrent)} build(s) already running on this machine ` +
+          `(${memoryGb.toFixed(1)} GiB total, so at most ${String(this.maxConcurrent)} at a time). ` +
+          "Wait for one to finish, then retry — do not queue.",
       };
     }
     this.active.add(key);
@@ -327,6 +331,7 @@ export class LatexRunner {
       let settled = false;
       let stalled = false;
       let timeout: TimeoutInfo | null = null;
+      let sawLog = false;
       let watcher: ReturnType<typeof setInterval> | null = null;
       let graceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -361,7 +366,7 @@ export class LatexRunner {
       const stall = (kind: LatexTimeoutKind, silentMs: number): void => {
         if (stalled) return;
         stalled = true;
-        timeout = { kind, silentMs, elapsedMs: Date.now() - spawnedAt };
+        timeout = { kind, silentMs, elapsedMs: Date.now() - spawnedAt, sawLog };
         killTree(child);
         // 进程树可能杀不干净（权限 / 句柄）：宽限之后照常回报，别把 agent 的工具调用挂死
         graceTimer = setTimeout(() => {
@@ -390,6 +395,7 @@ export class LatexRunner {
           }
           if (seen.get(path) !== signature) active = true;
           seen.set(path, signature);
+          sawLog = true;
         }
         // 一份日志都不存在时按进程存活处理：沉默的起点还没有依据
         if (active || seen.size === 0) lastActivityAt = now;
@@ -571,17 +577,29 @@ function seconds(ms: number): string {
   return (ms / 1000).toFixed(1);
 }
 
-/** 超时的两句文案：区分「卡住」与「编不完」，模型据此决定改源码还是拆文档 */
+/**
+ * 超时的两句文案：只陈述“我们观察到了什么”，不断言原因。
+ * - idle：没新日志输出。可能是长时间计算、等交互输入，也可能真是死循环——
+ *   日志按 4 KiB 块落盘，合法编译也会长时间不动，所以不能写成“死循环”。
+ * - total：到了总时长上限。日志可能一直在长，也可能根本没写（自定义 recipe），
+ *   所以按 sawLog 分成两句，不说“它一直在写日志”。
+ */
 function timeoutMessage(timeout: TimeoutInfo): string {
   if (timeout.kind === "idle") {
     return (
-      `编译卡住：日志连续 ${seconds(timeout.silentMs)} 秒没有新输出（总用时 ${seconds(timeout.elapsedMs)} 秒），` +
-      "已终止整棵进程树。常见原因是死循环（\\loop 少了 \\repeat）或宏包在等交互输入。"
+      `编译连续 ${seconds(timeout.silentMs)} 秒没有新的日志输出` +
+      "（可能是长时间计算、等待输入，或死循环），已终止整棵进程树。"
+    );
+  }
+  if (!timeout.sawLog) {
+    return (
+      `编译到达总时长上限（用时 ${seconds(timeout.elapsedMs)} 秒），且没有可用的日志输出` +
+      "（自定义 recipe 可能不写 .log），已终止整棵进程树。"
     );
   }
   return (
     `编译到达总时长上限（用时 ${seconds(timeout.elapsedMs)} 秒），已终止整棵进程树：` +
-    "它一直在写日志，只是没编完。拆小文档或稍后重试。"
+    "文档在这段时间内没有编完。拆小文档或稍后重试。"
   );
 }
 
