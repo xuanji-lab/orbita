@@ -5,6 +5,7 @@ import {
   KNOWN_PROVIDERS,
   catalogPreferenceOf,
   knownProviderDefaultName,
+  knownProviderGroup,
   type KnownProvider,
 } from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
@@ -16,6 +17,7 @@ import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import {
+  cardAddress,
   compactTokens,
   connectionDirty,
   hasCredentials,
@@ -762,6 +764,7 @@ export function ProvidersView(props: {
                   <span className="pv-kind-note">{t.providers.knownNote(known.id, known.note)}</span>
                 </span>
               </div>
+              {known.untested === true && <UntestedNotice />}
               <div
                 className="pv-tabs"
                 role="tablist"
@@ -1228,12 +1231,27 @@ export function ProvidersView(props: {
 
 /** catalog 里没有这家时的 kind 兜底由 providers-view-model 的 kindOf 提供——设置页与聊天底栏共用 */
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
+/** 「未实测」说明里「提 PR」指向的仓库首页 */
+const REPO_URL = "https://github.com/xuanji-lab/orbita";
+
+/**
+ * 详情页顶部的「未实测」说明（只给 `untested` 条目）：整句话 + 指向仓库的链接。
+ * 链接走 window.open → 主进程 setWindowOpenHandler，网页进内置浏览器。
+ */
+function UntestedNotice() {
+  const t = useT();
+  return (
+    <div className="pv-untested-bar" role="note">
+      <Icon name="circle-help" size={14} strokeWidth={1.8} />
+      <span>
+        {t.providers.untestedNotice}
+        <a href={REPO_URL} target="_blank" rel="noreferrer">
+          {t.providers.untestedNoticeLink}
+        </a>
+        {t.providers.untestedNoticeEnd}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -1469,6 +1487,7 @@ function ProviderGrid(props: {
 /**
  * 一张厂商卡。大卡：logo、名字、说明、底行（没加过写预填地址，加过写实例名）；小卡一行只留
  * logo、名字与角标。加过的卡右上角「已添加」（多于一个带数字），悬停浮出「+」再加一个。
+ * 还没用真实账号验证过的条目（`untested`）在同一处再挂一枚「未实测」。
  * 卡片本身是 div + role="button"：里面还套着「+」按钮，button 不能嵌 button。
  */
 function ProviderGridCard(props: {
@@ -1482,13 +1501,41 @@ function ProviderGridCard(props: {
   const label = t.providers.knownLabel(known.id, known.label);
   const added = instances.length > 0;
   const custom = known.baseUrl === "";
-  const badge = added ? (
+  const large = props.size === "large";
+  const addedBadge = added ? (
     <span className="pv-added-badge">
       <Icon name="circle-check" size={12} strokeWidth={1.8} />
-      {props.size === "large" && <span>{t.providers.added}</span>}
+      {large && <span>{t.providers.added}</span>}
       {instances.length > 1 && <span className="pv-mono">{instances.length}</span>}
     </span>
   ) : null;
+  // 未实测：图标 + 文字（不只靠颜色）；小卡只留图标，说明进悬停（与「已添加」同一规矩）
+  const untestedBadge =
+    known.untested === true ? (
+      <span
+        className="pv-untested-badge"
+        title={t.providers.untestedTip}
+        {...(large ? {} : { role: "img", "aria-label": t.providers.untested })}
+      >
+        <Icon name="flask-conical" size={11} strokeWidth={1.8} />
+        {large && <span>{t.providers.untested}</span>}
+      </span>
+    ) : null;
+  const badge =
+    addedBadge !== null || untestedBadge !== null ? (
+      <span className="pv-card-marks">
+        {addedBadge}
+        {untestedBadge}
+      </span>
+    ) : null;
+  // 底行：加过写实例名；兼容入口写「填你自己的地址」；浏览器登录的没有要填的地址，写登录方式
+  const foot = added
+    ? instances.map((provider) => provider.displayName).join(" · ")
+    : custom
+      ? t.providers.customUrl
+      : knownProviderGroup(known) === "oauth"
+        ? t.providers.browserLogin
+        : cardAddress(known.baseUrl);
   const more = added ? (
     <button
       type="button"
@@ -1517,7 +1564,7 @@ function ProviderGridCard(props: {
         }
       }}
     >
-      {props.size === "large" ? (
+      {large ? (
         <>
           <span className="pv-vcard-top">
             <span className="pv-logo-tile">
@@ -1529,9 +1576,7 @@ function ProviderGridCard(props: {
             <span className="pv-vcard-name">{label}</span>
             <span className="pv-vcard-note">{t.providers.knownNote(known.id, known.note)}</span>
           </span>
-          <span className="pv-vcard-foot">
-            {added ? instances.map((provider) => provider.displayName).join(" · ") : custom ? t.providers.customUrl : hostOf(known.baseUrl)}
-          </span>
+          <span className="pv-vcard-foot">{foot}</span>
           {more}
         </>
       ) : (

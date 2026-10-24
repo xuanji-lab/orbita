@@ -761,11 +761,18 @@ export const zh: Messages = {
     addAnother: "再添加一个",
     addAnotherTip: (name) => `再添加一个 ${name}（另一个账号或密钥）`,
     customUrl: "填你自己的地址",
+    browserLogin: "浏览器登录",
     catalogGroups: {
       api: "API 服务商",
       plan: "编程套餐订阅",
+      oauth: "浏览器登录订阅",
       custom: "自定义兼容",
     },
+    untested: "未实测",
+    untestedTip: "我们还没用真实账号验证过这家",
+    untestedNotice: "未实测：我们还没用真实账号验证过这家服务商，地址与登录流程可能与其文档不符。遇到问题欢迎",
+    untestedNoticeLink: "提 PR",
+    untestedNoticeEnd: "。",
     // shared 的 note 与 label 本来就是中文
     knownNote: (_id, fallback) => fallback,
     knownLabel: (_id, fallback) => fallback,

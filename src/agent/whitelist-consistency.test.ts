@@ -265,3 +265,60 @@ describe("Kimi K3.1 Pro 在 Kimi 套餐上（目录还没收录，全靠白名�
   });
 });
 
+/**
+ * 会话里真正发请求的协议与地址，必须就是条目自己声明的那一套。
+ *
+ * 起因（2026-10-24 服务商对齐）：目录模型带着自己的 api / baseUrl 进注册（保留合并），我们的
+ * id 又常与 pi 内建 id 同名——条目挂了一个协议或地址不同的 catalogId、或 id 撞上协议不同的
+ * 内建条目时，请求被悄悄改道到目录那边（qwen-token-plan 填 Anthropic 端点时，会话实际拿
+ * openai-completions 去打 /apps/anthropic）。每条取两个型号：本家目录里同协议的第一个
+ * （走「只注册 auth 面」那条路），与一个白名单型号（走补注册那条路）。
+ */
+describe("接入方式一致性 —— 会话里的协议与地址就是条目自己的", () => {
+  test("每个预填了地址的条目：本家目录型号、同名内建条目的型号与白名单型号都按条目的 api / baseUrl 注册", async () => {
+    const piRuntime = await freshRuntime();
+    const piModels = (id: string | undefined) =>
+      piRuntime.getProviders().find((provider) => provider.id === id)?.getModels() ?? [];
+    const checked: string[] = [];
+    for (const known of KNOWN_PROVIDERS) {
+      if (known.baseUrl === "") continue;
+      // 本家目录（catalogId）的全部型号 + 与我们的 id **同名**的 pi 内建条目的型号（qwen-token-plan 的坑）
+      // + 一个白名单型号（走补注册那条路）
+      const ids = new Set([...piModels(known.catalogId), ...piModels(known.id)].map((model) => model.id));
+      ids.add("glm-5.3");
+      for (const modelId of ids) {
+        const model = registerAndResolveModel(
+          await freshRuntime(),
+          {
+            id: known.id,
+            apiKey: "sk-test",
+            baseUrl: known.baseUrl,
+            api: known.api,
+            models: [{ id: modelId }],
+            ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
+            ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
+          },
+          modelId,
+        );
+        assert.ok(model !== undefined, `${known.id}/${modelId}：会话里解析不出这个型号`);
+        if (model.api === known.api) {
+          assert.equal(model.baseUrl, known.baseUrl, `${known.id}/${modelId} 的地址被改道了`);
+        } else {
+          // 多协议网关（OpenCode Go 的 gpt-5.6-luna 走 Responses、minimax-m3 走 Messages）：协议可以与
+          // 条目不同，但协议与地址必须**成对**取自本家目录给这个型号的那一条——不能协议取目录的、
+          // 地址却是条目的（/zen/go/v1/v1/messages 的坑）
+          const pair = piModels(known.catalogId).some(
+            (entry) => entry.id === modelId && entry.api === model.api && entry.baseUrl === model.baseUrl,
+          );
+          assert.ok(pair, `${known.id}/${modelId} 的协议被改道了（${model.api} @ ${model.baseUrl}）`);
+        }
+        checked.push(`${known.id}/${modelId}`);
+      }
+    }
+    // 前提断言：真的核对过条目（不会因为全被跳过而永远为真），且智谱两条与 minimax-m3 在里面
+    assert.ok(checked.length >= 50, `只核对了 ${checked.length} 条`);
+    for (const must of ["zhipu/glm-5.3", "zhipu-coding/glm-5.3", "opencode-go/minimax-m3"]) {
+      assert.ok(checked.includes(must), `${must} 没被核对`);
+    }
+  });
+});
