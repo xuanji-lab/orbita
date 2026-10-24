@@ -1,13 +1,16 @@
 /**
  * `docx:save` 的账：hash 冲突不覆盖、缺失文件不重建、原子写、备份（含保留份数）、
- * 同路径串行。这些是「用户的原稿会不会丢」的全部防线，逐条测。
+ * 同路径串行、写盘前的作者身份。前五条是「用户的原稿会不会丢」的防线，最后一条是
+ * 「文档的作者是不是用户」（issue #275）。
  */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import JSZip from "jszip";
 import { sha256Hex } from "./read.ts";
+import { readZipEntryText } from "./zip.ts";
 import { saveDocxFile } from "./write.ts";
 
 let dir = "";
@@ -160,5 +163,77 @@ describe("saveDocxFile", () => {
     const dirs = await readdir(backupDir);
     assert.equal(dirs.length, 2);
     await mkdir(join(backupDir, dirs[0]!), { recursive: true });
+  });
+});
+
+/** 造一份带 core.xml 的 docx，模拟 renderer 引擎序列化出来的包 */
+async function docxWithCreator(creator: string): Promise<Uint8Array> {
+  const zip = new JSZip();
+  zip.file(
+    "docProps/core.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"` +
+      ` xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"` +
+      ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+      `<dc:creator>${creator}</dc:creator><cp:lastModifiedBy>${creator}</cp:lastModifiedBy>` +
+      `<dcterms:created xsi:type="dcterms:W3CDTF">2026-10-22T15:59:25Z</dcterms:created>` +
+      `<dcterms:modified xsi:type="dcterms:W3CDTF">2026-10-22T15:59:25Z</dcterms:modified>` +
+      `</cp:coreProperties>`,
+  );
+  zip.file("docProps/app.xml", `<?xml version="1.0"?><Properties><Application>stella</Application></Properties>`);
+  zip.file("word/document.xml", `<?xml version="1.0"?><w:document><w:body><w:p/></w:body></w:document>`);
+  return new Uint8Array(await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" }));
+}
+
+describe("saveDocxFile 的作者身份", () => {
+  test("引擎写了工具名：磁盘上变成用户名，回执 hash 与磁盘一致", async () => {
+    const original = await docxWithCreator("Stella");
+    await writeFile(path, original);
+    const result = await saveDocxFile({
+      path,
+      expectedHash: hashOf(original),
+      data: await docxWithCreator("Stella"),
+      authorName: "李四",
+      now: () => Date.UTC(2026, 9, 24, 15, 32, 0),
+    });
+    assert.equal(result.kind, "saved");
+    const disk = await readFile(path);
+    const core = readZipEntryText(new Uint8Array(disk), "docProps/core.xml");
+    assert.ok(core !== null);
+    assert.match(core, /<dc:creator>李四<\/dc:creator>/);
+    assert.match(core, /<cp:lastModifiedBy>李四<\/cp:lastModifiedBy>/);
+    assert.match(core, /<dcterms:modified[^>]*>2026-10-24T15:32:00Z<\/dcterms:modified>/);
+    // 回执的 hash 是**写下去的那份字节**，renderer 拿它当下一次的 expectedHash
+    assert.ok(result.kind === "saved");
+    assert.equal(result.hash, hashOf(new Uint8Array(disk)));
+  });
+
+  test("原文档作者是别人：creator 保持原值，lastModifiedBy 是用户", async () => {
+    const original = await docxWithCreator("张三");
+    await writeFile(path, original);
+    await saveDocxFile({
+      path,
+      expectedHash: hashOf(original),
+      data: await docxWithCreator("张三"),
+      authorName: "李四",
+    });
+    const core = readZipEntryText(new Uint8Array(await readFile(path)), "docProps/core.xml");
+    assert.ok(core !== null);
+    assert.match(core, /<dc:creator>张三<\/dc:creator>/);
+    assert.match(core, /<cp:lastModifiedBy>李四<\/cp:lastModifiedBy>/);
+  });
+
+  test("序列化丢了作者：沿用磁盘上一版的作者", async () => {
+    const original = await docxWithCreator("张三");
+    await writeFile(path, original);
+    await saveDocxFile({
+      path,
+      expectedHash: hashOf(original),
+      data: await docxWithCreator(""),
+      authorName: "李四",
+    });
+    const core = readZipEntryText(new Uint8Array(await readFile(path)), "docProps/core.xml");
+    assert.ok(core !== null);
+    assert.match(core, /<dc:creator>张三<\/dc:creator>/);
   });
 });
