@@ -11,6 +11,7 @@ import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -379,10 +380,13 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     arch: process.arch,
   });
+  // pi 打进 bundle 后会把 Orbita 的 package.json 当成自己的，版本号错了 pi.dev 的目录就是 404（pi-package.ts）
+  const piPackage = piPackageDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
   const agentProcessEnv = {
     ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
     // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
     [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
+    ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
