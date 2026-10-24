@@ -221,6 +221,10 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     // 千问模型市场封面：Max / Flash 各一枚
     assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "own", key: "qwen3.8-max" });
     assert.deepEqual(modelAvatarOf("qwen3.8-flash"), { kind: "own", key: "qwen3.8-flash" });
+    assert.deepEqual(modelAvatarOf("qwen3.8-27b"), { kind: "own", key: "qwen3.8-27b" });
+    // MiniMax：OpenCode 小写、开放平台 MiniMax-M3 同一枚；M3.1 Flash 另一枚
+    for (const id of ["minimax-m3", "MiniMax-M3"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "minimax-m3" }, id);
+    assert.deepEqual(modelAvatarOf("minimax-m3.1-flash"), { kind: "own", key: "minimax-m3.1-flash" });
   });
 
   test("GPT 按产品线各一枚（版本号写在前面）：凡是 Astra / Sol / Luna 共用，Terra 与别的落家族标", () => {
@@ -249,7 +253,7 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("kimi-for-coding"), { kind: "family", logo: "kimi" });
     assert.deepEqual(modelAvatarOf("deepseek-v4-flash"), { kind: "family", logo: "deepseek" });
     assert.deepEqual(modelAvatarOf("qwen3.7-max"), { kind: "family", logo: "qwen" });
-    assert.deepEqual(modelAvatarOf("MiniMax-M3"), { kind: "family", logo: "minimax" });
+    assert.deepEqual(modelAvatarOf("MiniMax-M2.7"), { kind: "family", logo: "minimax" });
     assert.deepEqual(modelAvatarOf("step-3.7-flash"), { kind: "family", logo: "stepfun" });
     assert.deepEqual(modelAvatarOf("o3-mini"), { kind: "family", logo: "openai" });
     for (const id of ["grok-4.7", "grok-4.6"]) assert.deepEqual(modelAvatarOf(id), { kind: "family", logo: "grok" }, id);

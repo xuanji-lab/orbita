@@ -13,9 +13,12 @@ import gptLuna from "../../../../../design-system/assets/model-avatars/gpt-luna.
 import gptSol from "../../../../../design-system/assets/model-avatars/gpt-sol.png";
 import kimiK3 from "../../../../../design-system/assets/model-avatars/kimi-k3.png";
 import kimiK31 from "../../../../../design-system/assets/model-avatars/kimi-k3.1.png";
+import minimaxM3 from "../../../../../design-system/assets/model-avatars/minimax-m3.png";
+import minimaxM31Flash from "../../../../../design-system/assets/model-avatars/minimax-m3.1-flash.png";
 import mimoFlash from "../../../../../design-system/assets/model-avatars/mimo-v2.6-flash.png";
 import mimoPro from "../../../../../design-system/assets/model-avatars/mimo-v2.6-pro.png";
 import qwen38Flash from "../../../../../design-system/assets/model-avatars/qwen3.8-flash.png";
+import qwen3827b from "../../../../../design-system/assets/model-avatars/qwen3.8-27b.png";
 import qwen38Max from "../../../../../design-system/assets/model-avatars/qwen3.8-max.png";
 import step5Preview from "../../../../../design-system/assets/model-avatars/step-5-preview.png";
 import { VendorLogo } from "./VendorLogo";
@@ -37,7 +40,11 @@ import { VendorLogo } from "./VendorLogo";
  *   <id>-texture.webp）——把星系、太阳、月亮抠出来缩到方图约三分之一，放在同图取样的星空底上；
  *   月亮在原图里被右缘切掉一截，按左半镜像补成整轮（2026-10-25 用户：「月亮和太阳的占比放小一点」）；
  * - qwen3.8-max / qwen3.8-flash：千问 AI 平台模型市场（qianwenai.com/models）顶部轮播的两张封面
- *   （绿草几何体、彩色羽流）裁方。
+ *   （绿草几何体、彩色羽流）裁方；
+ * - qwen3.8-27b：千问公众号「Qwen3.8-27B 开源」封面，裁三台设备与地平线（避开标题字）；
+ * - minimax-m3：MiniMax 公众号「M3」封面，裁标题下方的橙色圆与圆环（封面别处都压着字）；
+ * - minimax-m3.1-flash：MiniMax 公众号「M3.1 Flash 开源」封面，背景是虚化的花，把压在上面的白字按周边
+ *   像素扩散抹掉再裁花心。
  * 位图按 96px 存：菜单 20px、设置页 18px，Retina 下也有富余。
  */
 const OWN_AVATARS: Record<ModelAvatarKey, string> = {
@@ -59,6 +66,9 @@ const OWN_AVATARS: Record<ModelAvatarKey, string> = {
   "gpt-luna": gptLuna,
   "qwen3.8-max": qwen38Max,
   "qwen3.8-flash": qwen38Flash,
+  "qwen3.8-27b": qwen3827b,
+  "minimax-m3": minimaxM3,
+  "minimax-m3.1-flash": minimaxM31Flash,
 };
 
 /**

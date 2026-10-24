@@ -404,7 +404,10 @@ export type ModelAvatarKey =
   | "gpt-sol"
   | "gpt-luna"
   | "qwen3.8-max"
-  | "qwen3.8-flash";
+  | "qwen3.8-flash"
+  | "qwen3.8-27b"
+  | "minimax-m3"
+  | "minimax-m3.1-flash";
 
 /** 第一级 · 型号专属头像，按精确 id。按 id 生效、不看服务商：OpenCode Go 上的 kimi-k3.1-pro 一样是它 */
 const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
@@ -429,6 +432,12 @@ const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
   // 千问 AI 平台模型市场（qianwenai.com/models）顶部轮播里两个型号各自的封面
   "qwen3.8-max": "qwen3.8-max",
   "qwen3.8-flash": "qwen3.8-flash",
+  // 公众号推文封面：千问「Qwen3.8-27B 开源」、MiniMax「M3」「M3.1 Flash 开源」。id 只登记各目录里见过的写法
+  // （OpenCode / 基元律动小写，MiniMax 开放平台 MiniMax-M3）
+  "qwen3.8-27b": "qwen3.8-27b",
+  "minimax-m3": "minimax-m3",
+  "MiniMax-M3": "minimax-m3",
+  "minimax-m3.1-flash": "minimax-m3.1-flash",
 };
 
 /**
