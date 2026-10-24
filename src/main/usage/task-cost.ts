@@ -22,6 +22,11 @@
  * 改过档且没记下，这条会话没盖章的部分整段不计——宁缺，不猜。
  * 已知盲区：中途改了又改回原档（high → max → high），最后一档对得上、中间那段会记成 high。
  *
+ * ## 在哪算（2026-10-24 改）
+ * 不再在打开设置页时扫全部会话（开发版 137 条、334MB，冷启动约 1.6s，主进程里解析会和界面
+ * 抢事件循环）：recorder 每落一条 assistant 记录就经 appendTaskRecord 增量记进任务账本
+ * （task-ledger.ts），升级后第一次启动回填一次。图只读账本。
+ *
  * ## 不计的
  * 导入会话（花在别的应用上）；空 error 回答（auto_retry 的失败尝试，store.ts 的谓词）；没有 usage
  * 的记录；分支复制出的前缀（同一条消息 id 只计一次，与日账本同一个去重）。
@@ -57,7 +62,7 @@ function addTokens(a: TokenCounts, b: TokenCounts): TokenCounts {
 }
 
 /** pi 本子里的一次档位变化（时间戳毫秒） */
-interface LevelChange {
+export interface LevelChange {
   at: number;
   level: ThinkingLevel;
 }
@@ -115,8 +120,8 @@ function levelResolver(
 }
 
 /**
- * 一条 assistant 记录里切段与记账要的全部信息（会话扫描后的紧凑形，主进程按会话缓存它，
- * 不必每次请求都重读几百个 JSONL）。level 缺席 = 这一条的档无从可考。
+ * 一条 assistant 记录里切段与记账要的全部信息（落盘那一刻由 recorder 交给任务账本，回填时由
+ * taskRecordsOf 从会话 JSONL 里取）。level 缺席 = 这一条的档无从可考。
  */
 export interface TaskRecord {
   id: string;
@@ -126,11 +131,31 @@ export interface TaskRecord {
   tokens: TokenCounts;
   /** 记录上的 usage.cost.total */
   cost: number;
+  /** 记录时刻（epoch ms）：按本地日期分天记账用 */
+  timestamp: number;
 }
 
 /**
- * 一条会话的原始记录 → 紧凑形。只收带 usage、非空 error 的 assistant 记录；档按
- * levelResolver 定（盖章优先，旧记录按 pi 时间线补，补不了就缺席）。
+ * 一条记录 → 紧凑形。不是带 usage、非空 error 的 assistant 记录返回 null。
+ * level 由调用方给（落盘时就是记录上盖的章；回填时由 levelResolver 补）。
+ */
+export function taskRecordOf(record: SessionRecord, level: ThinkingLevel | undefined): TaskRecord | null {
+  if (record.role !== "assistant" || record.usage === undefined || isEmptyErrorAssistant(record)) return null;
+  const usage = record.usage;
+  return {
+    id: record.id,
+    providerId: record.model.provider,
+    modelId: record.model.id,
+    ...(level === undefined ? {} : { level }),
+    tokens: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite },
+    cost: usage.cost.total,
+    timestamp: record.timestamp,
+  };
+}
+
+/**
+ * 一条会话的原始记录 → 紧凑形（回填用）。档按 levelResolver 定：盖章优先，旧记录按 pi 时间线补，
+ * 补不了就缺席。
  */
 export function taskRecordsOf(
   records: readonly SessionRecord[],
@@ -140,71 +165,97 @@ export function taskRecordsOf(
   const levelOf = levelResolver(records, timeline, metaLevel);
   const out: TaskRecord[] = [];
   for (const record of records) {
-    if (record.role !== "assistant" || record.usage === undefined || isEmptyErrorAssistant(record)) continue;
-    const usage = record.usage;
-    const level = levelOf(record);
-    out.push({
-      id: record.id,
-      providerId: record.model.provider,
-      modelId: record.model.id,
-      ...(level === undefined ? {} : { level }),
-      tokens: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite },
-      cost: usage.cost.total,
-    });
+    const item = taskRecordOf(record, record.role === "assistant" ? levelOf(record) : undefined);
+    if (item !== null) out.push(item);
   }
   return out;
 }
 
-/** 一个任务段 */
-export interface TaskSegment {
-  providerId: string;
-  modelId: string;
-  level: ThinkingLevel;
-  /** 段内全部记录的 token */
+/** 一天里的账：全部 token、记录上自带的花费（cost.total > 0 的那些）、零价记录的 token（要按官方单价折算） */
+export interface DayCounts {
   tokens: TokenCounts;
-  /** 记录上自带的花费（cost.total > 0 的那些）之和 */
   recordedCost: number;
-  /** cost.total 为 0 的记录的 token：要按官方单价折算 */
   unpricedTokens: TokenCounts;
 }
 
+const ZERO_DAY: DayCounts = { tokens: ZERO_TOKENS, recordedCost: 0, unpricedTokens: ZERO_TOKENS };
+
+function addDay(a: DayCounts, b: DayCounts): DayCounts {
+  return {
+    tokens: addTokens(a.tokens, b.tokens),
+    recordedCost: a.recordedCost + b.recordedCost,
+    unpricedTokens: addTokens(a.unpricedTokens, b.unpricedTokens),
+  };
+}
+
 /**
- * 切段（一条会话的记录，按落盘顺序）。`seen` 跨会话共享：分支复制的前缀带着同样的消息 id，
- * 只计第一次见到的那条。档无从可考的记录**断开当前段**且自己不计：它两边的记录不能被
- * 拼成同一个任务。
+ * 一个任务（会话里同一型号 × 同一档的连续一段），**按本地日期分天记账**：价格 · 能力图要每个
+ * 任务的合计（taskTotals）；侧栏用量格将来要「按天、按型号」的汇总，直接从 days 里取，不用改结构。
  */
-export function segmentTasks(records: readonly TaskRecord[], seen: Set<string>): TaskSegment[] {
-  const segments: TaskSegment[] = [];
-  let current: TaskSegment | null = null;
-  for (const record of records) {
-    if (seen.has(record.id)) continue;
-    seen.add(record.id);
-    const level = record.level;
-    if (level === undefined) {
-      current = null;
-      continue;
-    }
-    if (
-      current === null ||
-      current.providerId !== record.providerId ||
-      current.modelId !== record.modelId ||
-      current.level !== level
-    ) {
-      current = {
-        providerId: record.providerId,
-        modelId: record.modelId,
-        level,
-        tokens: ZERO_TOKENS,
-        recordedCost: 0,
-        unpricedTokens: ZERO_TOKENS,
-      };
-      segments.push(current);
-    }
-    current.tokens = addTokens(current.tokens, record.tokens);
-    if (Number.isFinite(record.cost) && record.cost > 0) current.recordedCost += record.cost;
-    else current.unpricedTokens = addTokens(current.unpricedTokens, record.tokens);
+export interface StoredTask {
+  sessionId: string;
+  providerId: string;
+  modelId: string;
+  /**
+   * null = 这一段的档无从可考（盖章之前、pi 时间线又对不上的旧记录）。**照样记账**：token 是真花了的，
+   * 按天的汇总（侧栏用量格）要和日账本对得上；价格 · 能力图按「型号 × 档」画，跳过它们。
+   */
+  level: ThinkingLevel | null;
+  days: Record<string, DayCounts>;
+}
+
+/** 任务账：全部任务（只追加，下标稳定）+ 每条会话当前那一段的下标 */
+export interface TaskBook {
+  tasks: StoredTask[];
+  open: Map<string, number>;
+}
+
+export function emptyTaskBook(): TaskBook {
+  return { tasks: [], open: new Map() };
+}
+
+/**
+ * **切段的唯一实现**：往账里记一条。回填（按会话逐条喂）与落盘时的增量记账走的都是它，两条路径
+ * 因此算出同一本账。去重（同一条消息 id 只计一次）是调用方的事。
+ *
+ * - 与当前段的服务商、型号、档都相同：并进去；否则另起一段。
+ * - 档不可考的记录记进「档 = null」的段：它与前后有档的记录档不同，自然切开——两边不会被拼成
+ *   同一个任务，而 token 仍在账上。
+ * - token 与花费全是 0 的记录不计，也不切段。
+ */
+export function appendTaskRecord(
+  book: TaskBook,
+  sessionId: string,
+  record: TaskRecord,
+  dateOf: (timestamp: number) => string,
+): void {
+  if (tokenTotal(record.tokens) === 0 && !(record.cost > 0)) return;
+  const level = record.level ?? null;
+  const at = book.open.get(sessionId);
+  let task = at === undefined ? undefined : book.tasks[at];
+  if (
+    task === undefined ||
+    task.providerId !== record.providerId ||
+    task.modelId !== record.modelId ||
+    task.level !== level
+  ) {
+    task = { sessionId, providerId: record.providerId, modelId: record.modelId, level, days: {} };
+    book.tasks.push(task);
+    book.open.set(sessionId, book.tasks.length - 1);
   }
-  return segments.filter((segment) => tokenTotal(segment.tokens) > 0);
+  const priced = Number.isFinite(record.cost) && record.cost > 0;
+  const day: DayCounts = {
+    tokens: record.tokens,
+    recordedCost: priced ? record.cost : 0,
+    unpricedTokens: priced ? ZERO_TOKENS : record.tokens,
+  };
+  const date = dateOf(record.timestamp);
+  task.days[date] = addDay(task.days[date] ?? ZERO_DAY, day);
+}
+
+/** 一个任务各天合计 */
+export function taskTotals(task: StoredTask): DayCounts {
+  return Object.values(task.days).reduce(addDay, ZERO_DAY);
 }
 
 /** 按单价（$ / 百万 token）给一堆 token 算钱 */
@@ -218,11 +269,11 @@ function priceTokens(tokens: TokenCounts, rates: ModelCostDecl): number {
   );
 }
 
-/** 一段的花费：自带的 + 零价记录按官方单价折算。有零价 token 而没有单价 → null（未知） */
-export function segmentCost(segment: TaskSegment, rates: ModelCostDecl | null): number | null {
-  if (tokenTotal(segment.unpricedTokens) === 0) return segment.recordedCost;
+/** 一个任务的花费：自带的 + 零价记录按官方单价折算。有零价 token 而没有单价 → null（未知） */
+export function taskCost(totals: DayCounts, rates: ModelCostDecl | null): number | null {
+  if (tokenTotal(totals.unpricedTokens) === 0) return totals.recordedCost;
   if (rates === null) return null;
-  return segment.recordedCost + priceTokens(segment.unpricedTokens, rates);
+  return totals.recordedCost + priceTokens(totals.unpricedTokens, rates);
 }
 
 /** 中位数；空数组 null。偶数个取中间两个的平均 */
@@ -258,13 +309,13 @@ const REFERENCE_PROFILE: PriceChartProfile = (() => {
 })();
 
 /** 用户自己的 token 画像：构成按全部任务的 token 加权，任务量取全部任务 token 量的中位数 */
-export function tokenProfile(segments: readonly TaskSegment[]): PriceChartProfile {
-  const total = segments.reduce((sum, segment) => addTokens(sum, segment.tokens), ZERO_TOKENS);
+export function tokenProfile(totals: readonly DayCounts[]): PriceChartProfile {
+  const total = totals.reduce((sum, task) => addTokens(sum, task.tokens), ZERO_TOKENS);
   const all = tokenTotal(total);
-  const mid = median(segments.map((segment) => tokenTotal(segment.tokens)));
+  const mid = median(totals.map((task) => tokenTotal(task.tokens)));
   if (all === 0 || mid === null) return REFERENCE_PROFILE;
   return {
-    taskCount: segments.length,
+    taskCount: totals.length,
     medianTaskTokens: mid,
     mix: {
       input: total.input / all,

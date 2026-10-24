@@ -4,7 +4,8 @@ import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { Provider } from "../../shared/provider.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { buildPriceChart, type ArenaSnapshot, type PriceChartSources, type SessionScan } from "./price-chart.ts";
+import { buildPriceChart, type ArenaSnapshot, type PriceChartSources } from "./price-chart.ts";
+import { appendTaskRecord, emptyTaskBook, taskRecordsOf } from "./task-cost.ts";
 
 const snapshot: ArenaSnapshot = {
   dataset: "lmarena-ai/leaderboard-dataset",
@@ -104,18 +105,23 @@ const catalog: BuiltinProvider[] = [
   },
 ];
 
-function sources(logs: Record<string, SessionRecord[]>, metas: SessionMeta[], providers: Provider[]): PriceChartSources & { reads: string[] } {
-  const reads: string[] = [];
+/**
+ * 数据源：把会话日志按回填同一套规则（跳过导入会话、createdAt 正序、消息 id 去重、
+ * taskRecordsOf → appendTaskRecord）记成任务账，再交给 buildPriceChart——与 TaskLedger.backfill 同口径。
+ */
+function sources(logs: Record<string, SessionRecord[]>, metas: SessionMeta[], providers: Provider[]): PriceChartSources {
+  const book = emptyTaskBook();
+  const seen = new Set<string>();
+  const native = metas.filter((m) => m.importedFrom === undefined).sort((a, b) => a.createdAt - b.createdAt);
+  for (const m of native) {
+    for (const item of taskRecordsOf(logs[m.id] ?? [], [], m.thinkingLevel)) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      appendTaskRecord(book, m.id, item, () => "2026-10-24");
+    }
+  }
   return {
-    reads,
-    sessions: {
-      list: async () => metas,
-      readRawLog: async (id) => {
-        reads.push(id);
-        return logs[id] ?? [];
-      },
-    },
-    readPiFile: async () => null,
+    tasks: async () => book.tasks,
     providers: async () => providers,
     catalog: async () => catalog,
   };
@@ -139,7 +145,7 @@ describe("buildPriceChart", () => {
   const metas = [meta("s1", 1), meta("s2", 2), meta("s3", 3), meta("s4", 4), meta("s5", 6), meta("imported", 5, { importedFrom: "/x.jsonl" })];
 
   test("实测点：各会话段花费的中位数与样本数；导入会话不计", async () => {
-    const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
+    const data = await buildPriceChart(sources(logs, metas, providers), snapshot);
     const agent = data.categories.find((c) => c.category === "agent");
     const k3 = agent?.points.find((p) => p.modelId === "k3");
     assert.equal(k3?.costBasis, "measured");
@@ -149,7 +155,7 @@ describe("buildPriceChart", () => {
   });
 
   test("榜单没标档的条目：横轴取这个型号全部档位的段（low 0.1、high 0.3、medium 0.2 → 0.2），点的档记 null", async () => {
-    const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
+    const data = await buildPriceChart(sources(logs, metas, providers), snapshot);
     const flash = data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "glm-5.3-flash");
     assert.equal(flash?.thinkingLevel, null);
     assert.equal(flash?.costBasis, "measured");
@@ -166,7 +172,7 @@ describe("buildPriceChart", () => {
         qlogs[`q${i}`] = [qwen(`qa${i}`, 30 + i)];
         qmetas.push(meta(`q${i}`, 10 + i));
       }
-      const { data } = await buildPriceChart(sources(qlogs, qmetas, providers), snapshot);
+      const data = await buildPriceChart(sources(qlogs, qmetas, providers), snapshot);
       return data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "qwen3.8-max");
     };
 
@@ -188,7 +194,7 @@ describe("buildPriceChart", () => {
 
     test("不够门槛又找不到官方单价：定不了横轴，列进缺官方单价", async () => {
       const opusLogs = { o1: [reply("oa", "anthropic-compatible", "claude-opus-5-5", "max", 2)] };
-      const { data } = await buildPriceChart(sources(opusLogs, [meta("o1", 1)], providers), snapshot);
+      const data = await buildPriceChart(sources(opusLogs, [meta("o1", 1)], providers), snapshot);
       const agent = data.categories.find((c) => c.category === "agent");
       assert.ok(!agent?.points.some((p) => p.modelId === "claude-opus-5-5"));
       assert.ok(agent?.unpriced.some((u) => u.modelId === "claude-opus-5-5"));
@@ -196,7 +202,7 @@ describe("buildPriceChart", () => {
   });
 
   test("没用过、有官方单价：估算点（空心）；没用过、也没有单价：缺官方单价", async () => {
-    const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
+    const data = await buildPriceChart(sources(logs, metas, providers), snapshot);
     const agent = data.categories.find((c) => c.category === "agent");
     const qwen = agent?.points.find((p) => p.modelId === "qwen3.8-max");
     assert.equal(qwen?.costBasis, "estimated");
@@ -206,7 +212,7 @@ describe("buildPriceChart", () => {
   });
 
   test("当前分类查不到的已添加型号列为未上榜；换一类就换一批", async () => {
-    const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
+    const data = await buildPriceChart(sources(logs, metas, providers), snapshot);
     const agent = data.categories.find((c) => c.category === "agent");
     assert.deepEqual(
       agent?.unranked.map((u) => u.modelId),
@@ -218,26 +224,27 @@ describe("buildPriceChart", () => {
   });
 
   test("用户一个任务都没有：估算点标 reference（参考画像）", async () => {
-    const { data } = await buildPriceChart(sources({}, [], providers), snapshot);
+    const data = await buildPriceChart(sources({}, [], providers), snapshot);
     assert.equal(data.profile.reference, true);
     const qwen = data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "qwen3.8-max");
     assert.equal(qwen?.costBasis, "reference");
   });
 
   test("套餐服务商在场 → hasPlanProvider；出处带 revision 与署名", async () => {
-    const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
+    const data = await buildPriceChart(sources(logs, metas, providers), snapshot);
     assert.equal(data.hasPlanProvider, true);
     assert.equal(data.source.license, "CC-BY-4.0");
     assert.equal(data.source.revision.length, 40);
   });
 
-  test("缓存：updatedAt 没变的会话不重读", async () => {
-    const src = sources(logs, metas, providers);
-    const cache = new Map<string, SessionScan>();
-    await buildPriceChart(src, snapshot, cache);
-    const first = src.reads.length;
-    await buildPriceChart(src, snapshot, cache);
-    assert.equal(src.reads.length, first);
+  test("档不可考的段（level null）计 token，但不画点、不进估算画像", async () => {
+    const book = emptyTaskBook();
+    appendTaskRecord(book, "x", { id: "u1", providerId: "kimi-coding", modelId: "k3", tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, cost: 5, timestamp: 1 }, () => "2026-10-24");
+    assert.equal(book.tasks[0]?.level, null);
+    const data = await buildPriceChart({ tasks: async () => book.tasks, providers: async () => providers, catalog: async () => catalog }, snapshot);
+    assert.equal(data.profile.reference, true);
+    const k3 = data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "k3");
+    assert.equal(k3, undefined);
   });
 });
 
@@ -250,7 +257,7 @@ describe("一个点 = 型号 × 档：几家服务商、几个别名合成一个
     provider("opencode-go", "opencode-go", [{ id: "kimi-k3" }, { id: "my-private-model" }]),
   ];
   const agentOf = async (logs: Record<string, SessionRecord[]>, metas: SessionMeta[]) => {
-    const { data } = await buildPriceChart(sources(logs, metas, kimiEverywhere), snapshot);
+    const data = await buildPriceChart(sources(logs, metas, kimiEverywhere), snapshot);
     const agent = data.categories.find((c) => c.category === "agent");
     assert.ok(agent !== undefined);
     return agent;
@@ -305,7 +312,7 @@ describe("手写表外的型号（新服务商）：规范化兜底配上榜", (
       provider("xai", "xai", [{ id: "grok-4.7", cost: { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 } }]),
       provider("kimi-coding", "kimi-coding", [{ id: "k3" }]),
     ];
-    const { data } = await buildPriceChart(sources({}, [], xai), snapshot);
+    const data = await buildPriceChart(sources({}, [], xai), snapshot);
     const agent = data.categories.find((c) => c.category === "agent");
     const grok = agent?.points.find((p) => p.modelId === "grok-4.7");
     assert.equal(grok?.thinkingLevel, "xhigh");

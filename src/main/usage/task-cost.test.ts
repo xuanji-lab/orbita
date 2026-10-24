@@ -8,12 +8,26 @@ import {
   median,
   officialRates,
   piThinkingTimeline,
-  segmentCost,
-  segmentTasks,
+  appendTaskRecord,
+  emptyTaskBook,
+  taskCost,
   taskRecordsOf,
+  taskTotals,
   tokenProfile,
+  type StoredTask,
   type TaskRecord,
 } from "./task-cost.ts";
+
+/** 切段：同一会话的记录逐条喂进账本（去重由调用方做，这里用 seen 模拟回填的全量去重） */
+function segmentTasks(records: readonly TaskRecord[], seen: Set<string>, sessionId = "s"): StoredTask[] {
+  const book = emptyTaskBook();
+  for (const record of records) {
+    if (seen.has(record.id)) continue;
+    seen.add(record.id);
+    appendTaskRecord(book, sessionId, record, (ts) => (ts < 1_000 ? "2026-10-23" : "2026-10-24"));
+  }
+  return book.tasks;
+}
 
 /** 一条 assistant 记录：tokens 四项、cost 总价、可选的档章 */
 function reply(
@@ -103,16 +117,39 @@ describe("切段：同一型号 × 同一档的连续一段", () => {
       segments.map((s) => `${s.modelId}/${s.level}`),
       ["m/high", "m/max", "n/max", "m/max"],
     );
-    assert.equal(segments[0]?.recordedCost, 0.02);
+    const first = segments[0];
+    assert.ok(first !== undefined);
+    assert.equal(taskTotals(first).recordedCost, 0.02);
   });
 
-  test("档不可考的记录断开当前段，自己不计", () => {
+  test("档不可考的记录记成档 null 的一段：断开前后（两边不拼成一个任务），token 照样在账上", () => {
     const records: TaskRecord[] = [
       ...recs([reply("a1", 1, "m", { level: "high" })]),
-      { id: "a2", providerId: "p", modelId: "m", tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, cost: 1 },
+      { id: "a2", providerId: "p", modelId: "m", tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, cost: 1, timestamp: 2 },
       ...recs([reply("a3", 3, "m", { level: "high" })]),
     ];
-    assert.equal(segmentTasks(records, new Set()).length, 2);
+    const segments = segmentTasks(records, new Set());
+    assert.deepEqual(segments.map((s) => s.level), ["high", null, "high"]);
+    assert.equal(segments[1] === undefined ? -1 : taskTotals(segments[1]).recordedCost, 1);
+  });
+
+  test("跨天的一段按本地日期分账，合计不变", () => {
+    const [task] = segmentTasks(
+      recs([reply("a1", 500, "m", { level: "high", cost: 1 }), reply("a2", 2_000, "m", { level: "high", cost: 2 })]),
+      new Set(),
+    );
+    assert.ok(task !== undefined);
+    assert.deepEqual(Object.keys(task.days).sort(), ["2026-10-23", "2026-10-24"]);
+    assert.equal(taskTotals(task).recordedCost, 3);
+  });
+
+  test("不同会话各切各的，从不拼接（子会话与父会话各算各的）", () => {
+    const book = emptyTaskBook();
+    const day = () => "2026-10-24";
+    for (const r of recs([reply("p1", 1, "m", { level: "high" })])) appendTaskRecord(book, "parent", r, day);
+    for (const r of recs([reply("c1", 2, "m", { level: "high" })])) appendTaskRecord(book, "child", r, day);
+    for (const r of recs([reply("p2", 3, "m", { level: "high" })])) appendTaskRecord(book, "parent", r, day);
+    assert.deepEqual(book.tasks.map((t) => t.sessionId), ["parent", "child"]);
   });
 
   test("同一条消息 id（分支复制的前缀）只计一次", () => {
@@ -130,8 +167,8 @@ describe("切段：同一型号 × 同一档的连续一段", () => {
       new Set(),
     );
     assert.ok(segment !== undefined);
-    assert.equal(segmentCost(segment, { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 }), 2.5);
-    assert.equal(segmentCost(segment, null), null);
+    assert.equal(taskCost(taskTotals(segment), { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 }), 2.5);
+    assert.equal(taskCost(taskTotals(segment), null), null);
   });
 });
 
@@ -155,7 +192,7 @@ describe("中位数与估算", () => {
       ),
       new Set(),
     );
-    const profile = tokenProfile(segments);
+    const profile = tokenProfile(segments.map(taskTotals));
     assert.equal(profile.reference, false);
     assert.equal(profile.taskCount, 3);
     assert.equal(profile.medianTaskTokens, 200);

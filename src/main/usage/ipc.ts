@@ -7,7 +7,6 @@
  * 启动**不阻塞**：load + backfill 异步跑，注册即返回——初始拉取先拿到空账，
  * 界面画空格；回填完 onChange 推一份真值把格子填上。
  */
-import { readFile } from "node:fs/promises";
 import { ipcMain } from "electron";
 import { mainWindows } from "../window/main-windows.ts";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
@@ -16,7 +15,8 @@ import type { UsageLedger, UsageBackfillSource } from "./ledger.ts";
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PriceChartData } from "../../shared/price-chart.ts";
 import type { Provider } from "../../shared/provider.ts";
-import { buildPriceChart, type PriceChartSources, type SessionScan } from "./price-chart.ts";
+import { buildPriceChart } from "./price-chart.ts";
+import type { TaskBackfillSource, TaskLedger } from "./task-ledger.ts";
 import arenaSnapshot from "./arena-snapshot.json" with { type: "json" };
 
 export function registerUsageIpc(ledger: UsageLedger, sessions: UsageBackfillSource): void {
@@ -38,30 +38,59 @@ export function registerUsageIpc(ledger: UsageLedger, sessions: UsageBackfillSou
 }
 
 /**
- * 「价格 · 能力图」（usage:price-chart）：每次请求现算——读全部非导入会话、pi 本子的档位
- * 时间线、服务商声明与 pi 目录（目录要等 agent 进程报上来，host.listBuiltins 自带 15s 兜底）。
- * 历史会话丢了多少条（pi 时间线与锚点对不上）落一条日志，验收与 PR 描述用。
+ * 任务账本（价格 · 能力图的数据面）开机：读盘，升级后第一次启动回填一次。不阻塞启动；
+ * 回填每扫完一条会话让一次事件循环。recorder 在这之前就可能来记账——都排在同一条写入链上，
+ * load 先跑。
+ */
+export function startTaskLedger(ledger: TaskLedger, source: TaskBackfillSource): void {
+  void ledger
+    .load()
+    .then(() => ledger.backfill(source))
+    .then((stats) => {
+      if (stats === null) return;
+      console.error(
+        `[task-ledger] 回填完成：${stats.sessions} 条有用量的原生会话，其中 ${stats.untrustedSessions} 条的` +
+          `历史档位对不上（记成档不可考，不进图），${ledger.tasks().length} 个任务段，用时 ${stats.ms}ms`,
+      );
+    })
+    .catch((error: unknown) => {
+      console.error("[task-ledger] 任务账本装载 / 回填失败，下次启动重试", error);
+    });
+}
+
+/**
+ * 「价格 · 能力图」（usage:price-chart）：只读任务账本 + 服务商声明 + pi 目录（目录要等 agent
+ * 进程报上来，host.listBuiltins 自带 15s 兜底），不扫会话。首次请求若赶上回填在途，等它落定。
  */
 export function registerPriceChartIpc(deps: {
-  sessions: PriceChartSources["sessions"];
+  ledger: TaskLedger;
   providers: () => Promise<Provider[]>;
   catalog: () => Promise<BuiltinProvider[]>;
 }): void {
-  const sources: PriceChartSources = {
-    sessions: deps.sessions,
-    providers: deps.providers,
-    catalog: deps.catalog,
-    readPiFile: (path) => readFile(path, "utf8").catch(() => null),
-  };
-  // 按会话的扫描缓存：只活在内存里，首次请求读全部会话，之后只重读 updatedAt 变过的
-  const cache = new Map<string, SessionScan>();
+  /**
+   * 上次算好的结果：账本版本、服务商声明（型号与费率）、目录条数都没变就原样返回。
+   * 设置页每挂载一次就请求一次（开发版的 StrictMode 还会挂两次），这一层让重复请求不再重算。
+   */
+  let memo: { key: string; data: PriceChartData } | null = null;
   ipcMain.handle(ipcChannels.usagePriceChart, async (): Promise<PriceChartData> => {
     const started = Date.now();
-    const { data, stats } = await buildPriceChart(sources, arenaSnapshot, cache);
-    console.error(
-      `[price-chart] ${stats.sessions} 条会话，其中 ${stats.untrusted} 条的历史档位对不上（未盖章部分不计），` +
-        `${data.profile.taskCount} 个任务，用时 ${Date.now() - started}ms`,
+    await deps.ledger.settled();
+    const [providers, catalog] = await Promise.all([deps.providers(), deps.catalog()]);
+    const key = [
+      deps.ledger.version(),
+      catalog.length,
+      JSON.stringify(providers.map((p) => [p.id, p.kind, p.endpoint.api, p.models.declared])),
+    ].join("|");
+    if (memo?.key === key) {
+      console.error(`[price-chart] 账本未变，直接返回上次的结果（${Date.now() - started}ms）`);
+      return memo.data;
+    }
+    const data = await buildPriceChart(
+      { tasks: async () => deps.ledger.tasks(), providers: async () => providers, catalog: async () => catalog },
+      arenaSnapshot,
     );
+    memo = { key, data };
+    console.error(`[price-chart] 重算：${data.profile.taskCount} 个任务，用时 ${Date.now() - started}ms`);
     return data;
   });
 }
