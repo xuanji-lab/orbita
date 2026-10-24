@@ -8,8 +8,10 @@ import {
   knownProviderDefaultName,
   knownProviderOf,
   knownProviderGroup,
+  knownAccessFor,
+  knownAccessMethods,
 } from "./known-providers.ts";
-import type { ProviderApi } from "./provider.ts";
+import { PROVIDER_APIS, type ProviderApi } from "./provider.ts";
 
 // 与 validateProvider 的 ID_PATTERN 同一条规则（那边未导出，这里镜像一份；改要同步）
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,64}$/;
@@ -141,6 +143,11 @@ describe("catalogPreferenceOf —— 设置页、菜单与会话装配共用的�
 
   it("带上本家目录与协议；实例协议优先于条目协议", () => {
     assert.deepEqual(catalogPreferenceOf(byId("zhipu-coding")), {
+      api: "openai-completions",
+      catalogId: "zai-coding-cn",
+    });
+    // 已存的老实例（走 Anthropic）按实例自己的协议查
+    assert.deepEqual(catalogPreferenceOf(byId("zhipu-coding"), "anthropic-messages"), {
       api: "anthropic-messages",
       catalogId: "zai-coding-cn",
     });
@@ -210,5 +217,36 @@ describe("未实测 —— 还没用真实账号验证过的条目如实标出",
     ]) {
       assert.ok(ids.has(id), id);
     }
+  });
+});
+
+describe("接入方式 —— 一家可以开着几种协议", () => {
+  it("每条的接入方式：默认那一种在列、排第一；协议合法且不重复（选择器按协议选）；地址是 https", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      const methods = knownAccessMethods(provider);
+      assert.deepEqual(methods[0], { api: provider.api, baseUrl: provider.baseUrl }, provider.id);
+      const apis = methods.map((method) => method.api);
+      assert.equal(new Set(apis).size, apis.length, `${provider.id} 有重复协议`);
+      for (const method of methods) {
+        assert.ok(PROVIDER_APIS.includes(method.api), `${provider.id}：${method.api}`);
+        if (provider.baseUrl !== "") assert.match(method.baseUrl, /^https:\/\//, provider.id);
+      }
+    }
+  });
+
+  it("智谱 Coding Plan：三种都在（官方文档第 5 节），默认跟 pi 的 zai-coding-cn 走 OpenAI Chat", () => {
+    const zhipu = KNOWN_PROVIDERS.find((item) => item.id === "zhipu-coding");
+    assert.ok(zhipu !== undefined);
+    assert.equal(zhipu.api, "openai-completions");
+    assert.equal(zhipu.baseUrl, "https://open.bigmodel.cn/api/coding/paas/v4");
+    assert.equal(knownAccessFor(zhipu, "anthropic-messages")?.baseUrl, "https://open.bigmodel.cn/api/anthropic");
+    assert.equal(knownAccessFor(zhipu, "openai-responses")?.baseUrl, "https://open.bigmodel.cn/api/v1");
+  });
+
+  it("没声明 access 的就是默认一种；没声明的协议查不到", () => {
+    const stepfun = KNOWN_PROVIDERS.find((item) => item.id === "stepfun");
+    assert.ok(stepfun !== undefined);
+    assert.equal(knownAccessMethods(stepfun).length, 1);
+    assert.equal(knownAccessFor(stepfun, "anthropic-messages"), undefined);
   });
 });
