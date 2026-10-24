@@ -3,8 +3,9 @@ import { api } from "../../api";
 import "./providers-view.css";
 import {
   KNOWN_PROVIDERS,
+  accessChoicesFor,
   catalogPreferenceOf,
-  knownAccessMethods,
+  knownAccessFor,
   knownProviderDefaultName,
   knownProviderGroup,
   type KnownProvider,
@@ -342,10 +343,11 @@ export function ProvidersView(props: {
   /**
    * 换接入协议：地址跟着换成这家在这个协议下的官方地址；上一个协议拉来的候选与状态行作废
    * （换了端点，那份清单与「连接成功」都不再成立）。存了才生效，与改地址同一个 Save 条。
+   * 地址跟着当前地址所在的那一组走（存的是 OpenCode Go 的旧写法 zen/go，就换成 zen/go 的）。
    */
   const pickAccess = (api: ProviderApi) => {
     if (known === undefined || api === draft.api) return;
-    const method = knownAccessMethods(known).find((item) => item.api === api);
+    const method = knownAccessFor(known, api, draft);
     if (method === undefined) return;
     setDraft({ ...draft, api, baseUrl: method.baseUrl });
     setDiscovered(null);
@@ -869,9 +871,9 @@ export function ProvidersView(props: {
                 </span>
                 {/* 协议是锁定的事实，不是一个要填的字段：从整行降成标题旁的徽标 */}
                 {/* 协议：这家官方开着几种就给选择器（地址跟着换），只有一种就是锁着的徽标 */}
-                {knownAccessMethods(known).length > 1 ? (
+                {accessChoicesFor(known, draft).length > 1 ? (
                   <AccessPicker
-                    methods={knownAccessMethods(known).map((method) => method.api)}
+                    methods={accessChoicesFor(known, draft).map((method) => method.api)}
                     value={draft.api}
                     onPick={pickAccess}
                   />
@@ -1326,10 +1328,11 @@ const ACCESS_LABELS: Partial<Record<ProviderApi, string>> = {
   "anthropic-messages": "Anthropic Messages",
   "openai-completions": "OpenAI Chat",
   "openai-responses": "OpenAI Responses",
+  "google-generative-ai": "Google Gemini",
 };
 
 /**
- * 接入协议选择器：只给官方开着两种以上协议的条目（智谱 / Kimi / DeepSeek / MiniMax / Z.AI），
+ * 接入协议选择器：只给官方开着两种以上协议的条目（智谱 / Kimi / DeepSeek / MiniMax / Z.AI / OpenCode Go），
  * 与卡片墙的「大 / 小」同款分段钮。选中项用 aria-pressed 表达；说明进悬停（同协议徽标）。
  */
 function AccessPicker(props: { methods: readonly ProviderApi[]; value: ProviderApi; onPick: (api: ProviderApi) => void }) {

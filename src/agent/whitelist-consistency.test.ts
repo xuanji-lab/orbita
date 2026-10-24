@@ -15,10 +15,17 @@ import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { KNOWN_MODELS } from "../shared/known-models.ts";
-import { KNOWN_PROVIDERS, catalogPreferenceOf, knownAccessMethods, type KnownProvider } from "../shared/known-providers.ts";
+import {
+  KNOWN_PROVIDERS,
+  accessFamilyOf,
+  catalogPreferenceOf,
+  endpointHintsOf,
+  knownAccessMethods,
+  type KnownProvider,
+} from "../shared/known-providers.ts";
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
-import { protocolAddress, registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
+import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
 
 /** 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网） */
 async function freshRuntime(): Promise<ModelRuntime> {
@@ -58,8 +65,8 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
       baseUrl: baseUrlOf(known),
       api: known.api,
       models: [{ id: modelId }],
-      ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
-      ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
+      // 与主进程装配会话载荷同一个函数（main/agent/ipc 的 resolveProviderSecrets）
+      ...endpointHintsOf(known, { api: known.api, baseUrl: baseUrlOf(known) }),
     },
     modelId,
   );
@@ -85,20 +92,18 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
 }
 
 /**
- * 会话该用的端点：本家目录描述的就是这家端点（有条目协议、地址都与服务商条目一样——多协议网关
- * OpenCode Go）且收录了这个型号时，协议听型号自己的（minimax-m3 走 Anthropic 协议），地址换成
- * 目录里该协议的（/zen/go，不是 /zen/go/v1）；否则协议、地址都听条目的。
+ * 会话该用的端点：多协议网关（条目声明 protocolPerModel，且地址属于它某组官方端点）的本家目录
+ * 收录了这个型号时，协议听型号自己的（minimax-m3 走 Anthropic 协议），地址取**同一组**里该协议的
+ * （inference/go，不是 inference/go/v1；存的是 zen/go 就是 zen/go）；否则协议、地址都听条目的。
+ * **不看目录里型号的地址**——那会随上游改名漂移（审核 F-2）。
  */
 function expectedEndpoint(known: KnownProvider, modelId: string, runtime: ModelRuntime): { api: string; baseUrl: string } {
   const entry = { api: known.api, baseUrl: baseUrlOf(known) };
-  if (known.catalogId === undefined) return entry;
-  const home = runtime.getModels(known.catalogId);
-  const describes = home.some(
-    (model) => model.api === known.api && model.baseUrl.replace(/\/+$/, "") === entry.baseUrl.replace(/\/+$/, ""),
-  );
-  const own = home.find((model) => model.id === modelId);
-  if (!describes || own === undefined) return entry;
-  return { api: own.api, baseUrl: protocolAddress(known.catalogId, entry, own.api) ?? entry.baseUrl };
+  if (known.catalogId === undefined || known.protocolPerModel !== true) return entry;
+  const family = accessFamilyOf(known, entry);
+  const own = runtime.getModels(known.catalogId).find((model) => model.id === modelId);
+  if (family === undefined || own === undefined) return entry;
+  return { api: own.api, baseUrl: family.find((method) => method.api === own.api)?.baseUrl ?? entry.baseUrl };
 }
 
 function assertAgree(label: string, sides: Sides): void {
@@ -156,32 +161,66 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
           baseUrl: known.baseUrl,
           api: known.api,
           models: declared.map((id) => ({ id })),
-          ...catalogPreferenceOf(known),
+          ...endpointHintsOf(known, known),
         },
         "minimax-m3",
       );
       assert.equal(model?.api, "anthropic-messages", declared.join(","));
-      // Anthropic 客户端自己接 /v1/messages：地址必须是 /zen/go，/zen/go/v1 会变成 /v1/v1/messages → 404
-      assert.equal(model?.baseUrl, "https://opencode.ai/zen/go", declared.join(","));
+      // Anthropic 客户端自己接 /v1/messages：地址必须是 /inference/go，带 /v1 会变成 /v1/v1/messages → 404
+      assert.equal(model?.baseUrl, "https://opencode.ai/inference/go", declared.join(","));
     }
   });
 
-  test("OpenCode Go 换成镜像地址时不猜另一协议的地址：原样用条目的（与修之前一样）", async () => {
+  test("OpenCode Go 换成镜像地址时不猜另一协议的地址：协议与地址全听条目的（295 的规则）", async () => {
     const known = entry("opencode-go");
+    const mirror = { api: known.api, baseUrl: "https://mirror.example/zen/go/v1" };
     const model = registerAndResolveModel(
       await freshRuntime(),
       {
         id: known.id,
         apiKey: "sk-test",
-        baseUrl: "https://mirror.example/zen/go/v1",
-        api: known.api,
+        ...mirror,
         models: [{ id: "minimax-m3" }],
-        ...catalogPreferenceOf(known),
+        ...endpointHintsOf(known, mirror),
       },
       "minimax-m3",
     );
+    assert.equal(model?.api, "openai-completions");
     assert.equal(model?.baseUrl, "https://mirror.example/zen/go/v1");
   });
+
+  /**
+   * 存哪一组的地址，换协议的型号就拿哪一组的地址：已存 zen/go 的老实例不迁移、不坏；照文档填了
+   * 按协议分子路径的也一样。每组取本家目录里每种协议的全部型号（Anthropic / Responses / Chat）。
+   */
+  for (const [label, stored] of [
+    ["inference/go（默认）", "https://opencode.ai/inference/go/v1"],
+    ["zen/go（旧写法）", "https://opencode.ai/zen/go/v1"],
+    ["文档的 /openai/v1 子路径", "https://opencode.ai/inference/go/openai/v1"],
+  ] as const) {
+    test(`OpenCode Go 存的是 ${label}：三种协议的地址都出自同一组`, async () => {
+      const known = entry("opencode-go");
+      const endpoint = { api: known.api, baseUrl: stored };
+      const family = accessFamilyOf(known, endpoint);
+      assert.ok(family !== undefined, label);
+      const home = (await freshRuntime()).getModels("opencode-go");
+      const seen = new Set<string>();
+      for (const own of home) {
+        const model = registerAndResolveModel(
+          await freshRuntime(),
+          { id: known.id, apiKey: "sk-test", ...endpoint, models: [{ id: own.id }], ...endpointHintsOf(known, endpoint) },
+          own.id,
+        );
+        assert.equal(model?.api, own.api, `${label} ${own.id} 协议`);
+        assert.equal(model?.baseUrl, family.find((method) => method.api === own.api)?.baseUrl, `${label} ${own.id} 地址`);
+        seen.add(own.api);
+      }
+      // 前提：三种协议真的都核对到了
+      assert.deepEqual([...seen].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
+      const prefix = stored.replace(/\/(?:openai\/)?v1$/, "");
+      for (const method of family) assert.ok(method.baseUrl.startsWith(prefix), `${label} 混进了别组地址 ${method.baseUrl}`);
+    });
+  }
 
   test("智谱 Coding Plan 的 glm-5.3：本家目录（zai-coding-cn）是 OpenAI 协议，会话仍走条目配的 Anthropic 端点", async () => {
     // 条目默认已跟 pi 改成 OpenAI Chat；这里模拟选了 Anthropic 的实例（含 10-24 之前建的老实例）
@@ -236,10 +275,12 @@ describe("接入方式一致性 —— 会话里的协议与地址就是条目�
     const piModels = (id: string | undefined) =>
       piRuntime.getProviders().find((provider) => provider.id === id)?.getModels() ?? [];
     const checked: string[] = [];
+    const checkedUrls = new Set<string>();
     for (const entry of KNOWN_PROVIDERS) {
       if (entry.baseUrl === "") continue;
       // 用户在详情页选了另一种协议：实例落盘的就是那一种的 api + baseUrl（只有默认那一种也照样核对）
-      for (const method of knownAccessMethods(entry)) {
+      // 别名组（OpenCode Go 的旧写法 zen/go、文档子路径）也照样核对：已存旧地址的实例不能坏
+      for (const method of [knownAccessMethods(entry), ...(entry.accessAliases ?? [])].flat()) {
       const known = { ...entry, api: method.api, baseUrl: method.baseUrl };
       // 本家目录（catalogId）的全部型号 + 与我们的 id **同名**的 pi 内建条目的型号（qwen-token-plan 的坑）
       // + 一个白名单型号（走补注册那条路）
@@ -254,8 +295,7 @@ describe("接入方式一致性 —— 会话里的协议与地址就是条目�
             baseUrl: known.baseUrl,
             api: known.api,
             models: [{ id: modelId }],
-            ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
-            ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
+            ...endpointHintsOf(entry, known),
           },
           modelId,
         );
@@ -263,15 +303,18 @@ describe("接入方式一致性 —— 会话里的协议与地址就是条目�
         if (model.api === known.api) {
           assert.equal(model.baseUrl, known.baseUrl, `${known.id}/${modelId} 的地址被改道了`);
         } else {
-          // 多协议网关（OpenCode Go 的 gpt-5.6-luna 走 Responses、minimax-m3 走 Messages）：协议可以与
-          // 条目不同，但协议与地址必须**成对**取自本家目录给这个型号的那一条——不能协议取目录的、
-          // 地址却是条目的（/zen/go/v1/v1/messages 的坑）
-          const pair = piModels(known.catalogId).some(
-            (entry) => entry.id === modelId && entry.api === model.api && entry.baseUrl === model.baseUrl,
-          );
-          assert.ok(pair, `${known.id}/${modelId} 的协议被改道了（${model.api} @ ${model.baseUrl}）`);
+          // 多协议网关（OpenCode Go 的 gpt-5.6-luna 走 Responses、minimax-m3 走 Messages）：协议取本家
+          // 目录给这个型号的，地址取实例所在那一组里该协议的——不能协议取目录的、地址却是条目的
+          // （/v1/v1/messages 的坑），也不能跳到别的组（存 zen/go 的给了 inference/go）
+          assert.equal(entry.protocolPerModel, true, `${known.id}/${modelId} 的协议被改道了（${model.api}）`);
+          const own = piModels(known.catalogId).find((item) => item.id === modelId);
+          assert.equal(model.api, own?.api, `${known.id}/${modelId} 协议不是目录给它的`);
+          const family = accessFamilyOf(entry, known);
+          const address = family?.find((item) => item.api === model.api)?.baseUrl ?? known.baseUrl;
+          assert.equal(model.baseUrl, address, `${known.id}@${known.baseUrl}/${modelId} 的地址（${model.api}）`);
         }
         checked.push(`${known.id}@${known.api}/${modelId}`);
+        checkedUrls.add(known.baseUrl);
       }
       }
     }
@@ -283,8 +326,12 @@ describe("接入方式一致性 —— 会话里的协议与地址就是条目�
       "zhipu-coding@openai-responses/glm-5.3",
       "kimi-coding@openai-completions/kimi-for-coding",
       "opencode-go@openai-completions/minimax-m3",
+      "opencode-go@anthropic-messages/kimi-k3",
     ]) {
       assert.ok(checked.includes(must), `${must} 没被核对`);
+    }
+    for (const url of ["https://opencode.ai/zen/go/v1", "https://opencode.ai/inference/go/openai/v1"]) {
+      assert.ok(checkedUrls.has(url), `${url} 那一组没被核对`);
     }
   });
 });

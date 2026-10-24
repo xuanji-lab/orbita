@@ -5,6 +5,7 @@ import { getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@ear
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as streamOpenAI } from "@earendil-works/pi-ai/api/openai-completions";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
+import { KNOWN_PROVIDERS, endpointHintsOf } from "../shared/known-providers.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 import {
   hasModelOverrides,
@@ -832,3 +833,87 @@ describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录�
     assert.equal("reasoning_content" in assistantTurn(params), false);
   });
 });
+
+/**
+ * 审核 F-2：多协议网关的判定不能建在「目录里型号的地址」上。pi.dev 在线目录 2026-10 把 opencode-go
+ * 的型号地址整体换成 inference/go，内建快照还是 zen/go；旧判定（目录里有一条与条目地址逐字相等）
+ * 只靠快照里 8 条已下架的 zen/go 旧型号撑着。这里造一份**一条 zen/go 都没有**的目录——就是 pi
+ * 升级快照之后的样子——minimax-m3 仍要走 Anthropic 协议、打到条目所在那一组的 Anthropic 地址。
+ */
+describe("OpenCode Go —— 目录地址漂了，型号的协议与地址不跟着坏", () => {
+  const go = KNOWN_PROVIDERS.find((item) => item.id === "opencode-go");
+  assert.ok(go !== undefined);
+  const inferenceOnly: PiModel[] = [
+    { ...catalogModel("minimax-m3", 512_000, 0.3), api: "anthropic-messages", baseUrl: "https://opencode.ai/inference/go" },
+    { ...catalogModel("claude-haiku-5-5", 200_000, 0.1), api: "anthropic-messages", baseUrl: "https://opencode.ai/inference/go" },
+    { ...catalogModel("gpt-5.6-luna", 272_000, 0.2), api: "openai-responses", baseUrl: "https://opencode.ai/inference/go/v1" },
+    { ...catalogModel("kimi-k3", 256_000, 3), baseUrl: "https://opencode.ai/inference/go/v1" },
+  ] as PiModel[];
+
+  /**
+   * pi 的两种注册语义：只注 auth 面时把条目地址盖到每个目录型号上（协议不动）；带 models 时
+   * 型号上的 ?? 服务商上的（provider-composer 的 modelFromJson）
+   */
+  function piLikeRuntime(catalog: readonly PiModel[]) {
+    let models: PiModel[] = [...catalog];
+    return {
+      registerProvider(_id: string, registration: PiProviderRegistration): void {
+        if (registration.models === undefined) {
+          models = models.map((model) => ({ ...model, baseUrl: registration.baseUrl ?? model.baseUrl }));
+          return;
+        }
+        models = registration.models.map((model) => ({
+          ...model,
+          provider: "opencode-go",
+          api: model.api ?? registration.api ?? "openai-completions",
+          baseUrl: model.baseUrl ?? registration.baseUrl ?? "",
+        })) as PiModel[];
+      },
+      getModel: (_provider: string, id: string) => models.find((model) => model.id === id),
+      getProviders: () => [{ id: "opencode-go", getModels: () => models }],
+    } as unknown as Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">;
+  }
+
+  const resolve = (stored: string, modelId: string) => {
+    const endpoint = { api: "openai-completions", baseUrl: stored };
+    return registerAndResolveModel(
+      piLikeRuntime(inferenceOnly),
+      { id: "opencode-go", apiKey: "sk-x", ...endpoint, models: [{ id: modelId }], ...endpointHintsOf(go, endpoint) },
+      modelId,
+    );
+  };
+
+  for (const [stored, anthropic, chat] of [
+    ["https://opencode.ai/inference/go/v1", "https://opencode.ai/inference/go", "https://opencode.ai/inference/go/v1"],
+    ["https://opencode.ai/zen/go/v1", "https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
+    ["https://opencode.ai/inference/go/openai/v1", "https://opencode.ai/inference/go/anthropic", "https://opencode.ai/inference/go/openai/v1"],
+  ] as const) {
+    test(`存 ${stored}：Anthropic / Responses / Chat 三种型号各走各的协议，地址出自同一组`, () => {
+      for (const id of ["minimax-m3", "claude-haiku-5-5"]) {
+        const model = resolve(stored, id);
+        assert.equal(model?.api, "anthropic-messages", id);
+        assert.equal(model?.baseUrl, anthropic, id);
+      }
+      assert.equal(resolve(stored, "gpt-5.6-luna")?.api, "openai-responses");
+      assert.equal(resolve(stored, "gpt-5.6-luna")?.baseUrl, chat);
+      assert.equal(resolve(stored, "kimi-k3")?.api, "openai-completions");
+      assert.equal(resolve(stored, "kimi-k3")?.baseUrl, chat);
+    });
+  }
+
+  test("自建网关地址：协议与地址全听条目的，不套用 access", () => {
+    const model = resolve("https://my-gateway.example/v1", "minimax-m3");
+    assert.equal(model?.api, "openai-completions");
+    assert.equal(model?.baseUrl, "https://my-gateway.example/v1");
+  });
+
+  test("对照：载荷不带 protocolPerModel / access 时（单协议的家），协议听条目的", () => {
+    const model = registerAndResolveModel(
+      piLikeRuntime(inferenceOnly),
+      { id: "opencode-go", apiKey: "sk-x", api: "openai-completions", baseUrl: "https://opencode.ai/inference/go/v1", models: [{ id: "minimax-m3" }], catalogId: "opencode-go" },
+      "minimax-m3",
+    );
+    assert.equal(model?.api, "openai-completions");
+  });
+});
+
