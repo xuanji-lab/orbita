@@ -292,7 +292,6 @@ export function App() {
   const focusControl = (
     <FocusControl
       status={focus.status}
-      now={focus.now}
       workspaces={session.workspaces}
       defaultWorkspaceId={session.workspaceId}
       preset={focus.lastPreset}
