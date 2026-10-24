@@ -10,6 +10,7 @@
  *    就是这一刀返工五次的起因（2026-10-01）——所以外壳只有一个，谁也不许再拼。
  */
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { modelDisplayName, resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
@@ -19,6 +20,7 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import type { MenuPlacementSide } from "../../shell/menu-position";
+import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
   hasCredentials,
   modelAcceptsImage,
@@ -278,8 +280,8 @@ export function ModelPickerMenu(props: {
  * 模型卡片的左栏：星标 / 全部 / 各厂商（**单选互斥**）。
  *
  * 星标格永远描边、不填实：星形的**填充在这个应用里只有一个意思**——「这个模型已星标」
- * （会话行在用）。选中那一格说的是「现在只看星标」，那是视图状态，走 .option-row 的
- * 选中底（aria-selected），不借填充去说。
+ * （会话行在用）。选中那一格说的是「现在只看星标」，那是视图状态，走左栏当前格的
+ * 底 + 光圈（`.model-rail-cell[aria-selected]`，styles.css），不借填充去说。
  *
  * 不用像设置面那样列「组头」：左栏已经把厂商说了一遍，行里只在副行重复一次。
  */
@@ -295,47 +297,87 @@ export function modelPickerRail(options: {
         左栏只有图标格（2026-10-19 用户：兼容网关也换协议的标，「比较统一」），格宽恒定、
         不随选中字重变——原先给文字格（自建网关实例名）准备的隐藏宽度尺随之删掉。
       */}
-      <button
-        type="button"
-        className="option-row"
-        style={RAIL_CELL}
-        title={options.t.modelMenu.starred}
-        aria-label={options.t.modelMenu.starred}
-        aria-selected={options.scope.kind === "starred"}
+      <RailCell
+        label={options.t.modelMenu.starred}
+        selected={options.scope.kind === "starred"}
         onClick={() => options.onScope({ kind: "starred" })}
       >
         <Icon name="star" size={13} strokeWidth={1.8} />
-      </button>
-      <button
-        type="button"
-        className="option-row"
-        style={RAIL_CELL}
-        title={options.t.menu.all}
-        aria-label={options.t.menu.all}
-        aria-selected={options.scope.kind === "all"}
+      </RailCell>
+      <RailCell
+        label={options.t.menu.all}
+        selected={options.scope.kind === "all"}
         onClick={() => options.onScope(MODEL_SCOPE_ALL)}
       >
         <Icon name="menu" size={13} strokeWidth={1.8} />
-      </button>
+      </RailCell>
       {options.providers.map((provider) => {
         const cell = railVendorCell(provider);
         return (
-          <button
+          <RailCell
             key={provider.id}
-            type="button"
-            className="option-row"
-            style={RAIL_CELL}
-            // 同协议多个网关共用一枚标：实例名靠悬停 title 与读屏 aria-label 区分
-            title={provider.displayName}
-            // 图标格的 VendorLogo 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
-            aria-label={provider.displayName}
-            aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
+            // 同协议多个网关共用一枚标：实例名靠悬停提示与读屏 aria-label 区分
+            label={provider.displayName}
+            selected={options.scope.kind === "provider" && options.scope.id === provider.id}
             onClick={() => options.onScope({ kind: "provider", id: provider.id })}
           >
             <VendorLogo kindId={cell.kindId} label={cell.label} size={14} />
-          </button>
+          </RailCell>
         );
       })}
+    </>
+  );
+}
+
+/** 左栏格子的悬停提示延迟：与 IconButton 同 200ms（同为纯图标控件） */
+const RAIL_TIP_DELAY_MS = 200;
+
+/**
+ * 左栏一格：纯图标，所以名字全靠悬停提示与 aria-label。
+ *
+ * 提示用自绘的 useHoverTooltip，不挂原生 `title`：macOS 原生 tooltip 约两秒才出
+ * （同 IconButton 弃用 title 的理由），而左栏只有标、同协议的网关还共用一枚标——
+ * 「这格是哪家」只能靠悬停回答（2026-10-25 用户：「也看不清是什么 provider」）。
+ * 选中态的光圈在 CSS（`.model-rail-cell[aria-selected="true"]`），状态样式不写 inline。
+ */
+function RailCell(props: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}): React.ReactNode {
+  const tooltip = useHoverTooltip<HTMLButtonElement>(RAIL_TIP_DELAY_MS, true);
+  return (
+    <>
+      <button
+        ref={tooltip.anchorRef}
+        type="button"
+        className="option-row model-rail-cell"
+        style={RAIL_CELL}
+        // 图标格的 VendorLogo / Icon 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
+        aria-label={props.label}
+        aria-selected={props.selected}
+        onClick={props.onClick}
+        onMouseEnter={tooltip.handlers.onMouseEnter}
+        onMouseLeave={tooltip.handlers.onMouseLeave}
+        onFocus={tooltip.handlers.onFocus}
+        onBlur={tooltip.handlers.onBlur}
+      >
+        {props.children}
+      </button>
+      {tooltip.open &&
+        createPortal(
+          <div
+            ref={tooltip.tooltipRef}
+            role="tooltip"
+            className="model-rail-tip"
+            data-placed={tooltip.placement !== null}
+            style={{ top: tooltip.placement?.top ?? 0, left: tooltip.placement?.left ?? 0 }}
+          >
+            {props.label}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

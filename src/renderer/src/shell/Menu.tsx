@@ -163,6 +163,7 @@ export function Menu(props: {
    * 清单在它右边滚。今天只有模型卡片用它——星标 / 全部 / 各厂商的过滤列。
    * 里面是什么由调用方给（本原语不管），但**键盘左右切栏**由这里实现：
    * 焦点在左栏时 `↑↓` 在格间走、`→` 交给清单；焦点在清单时 `←` 回左栏。
+   * 当前格请挂 `aria-selected="true"`：打开（与高度落定）时这里把它带进左栏的视野。
    */
   rail?: React.ReactNode;
   /**
@@ -431,6 +432,12 @@ export function Menu(props: {
   useLayoutEffect(() => {
     if (!open || appliedCap === null) return;
     revealCursor();
+    /*
+     * 左栏同理：厂商多时左栏自己也滚，当前那一格（aria-selected）可能落在栏底只露半截
+     * （2026-10-25 用户：「provider 似乎没有 scroll 到位」）。只在这一道带——打开与高度
+     * 落定时；用户在栏里点的格子本来就在眼前，不需要跟。
+     */
+    railRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
     // revealCursor 只读 ref，不进依赖
   }, [open, appliedCap]);
 
