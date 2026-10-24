@@ -32,15 +32,27 @@ export function WindowedText(props: {
   const rowHeightRef = useRef(rowHeight);
   rowHeightRef.current = rowHeight;
 
-  // 量行高：探针与正文行同一套字体 / 行高，量出来的就是一行的高度
+  // 量行高：探针与正文行同一套字体 / 行高，量出来的就是一行的高度。行高由
+  // `--ui-font-size` 派生，**界面字号一改它就会变**——所以用 ResizeObserver 盯住探针，
+  // 尺寸一变就重新量：总高度（= 行数 × 行高）与 translateY 都按行高算，行高留着旧值
+  // 会让滚动条长度与滚动位置一起漂。
   useLayoutEffect(() => {
     const probe = probeRef.current;
     if (probe === null) return;
-    const measured = probe.getBoundingClientRect().height;
-    if (measured > 0 && Math.abs(measured - rowHeight) > 0.5) setRowHeight(measured);
-  }, [rowHeight, lines.length]);
+    const measure = (): void => {
+      const measured = probe.getBoundingClientRect().height;
+      if (measured <= 0) return;
+      setRowHeight((prev) => (Math.abs(measured - prev) > 0.5 ? measured : prev));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(probe);
+    return () => observer.disconnect();
+  }, []);
 
-  // 换文件：回到顶部，窗口重算（新文件行数不同）
+  // 换文件：回到顶部，窗口重算（新文件行数不同）。
+  // 现实的换文件路径是**重挂载**（FilesPanel 给 FilePreviewPane 挂了 key=path），
+  // 所以这条主要管重置滚动位置；软刷新同一个文件（resetKey 不变）不动窗口与位置。
   useEffect(() => {
     const scroller = props.scroller.current;
     if (scroller !== null) scroller.scrollTop = 0;

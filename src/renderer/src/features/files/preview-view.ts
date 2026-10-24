@@ -150,6 +150,33 @@ export function textWindow(
   return { totalLines: total, start, end, padTop: start, padBottom: total - end };
 }
 
+/**
+ * 大文件提示条的文案（没有提示条时 null）。大文本被截断 / 退化时，用户要知道
+ * 「看到的不是全部」，条上还要有出口（用默认应用打开，由组件补）——所以文案按
+ * 走了哪条路径分开说：
+ * - md 退化：排版形态变了（Markdown → 纯文本），说清「按纯文本显示」；
+ * - 窗口化：txt / 代码的排版没变，变的是「只渲染可见区」，说清这一点。
+ *
+ * md 的 Source 模式不提示：用户自己切到源码看的，不是退化。
+ */
+export function largeTextNotice(
+  previewMode: "markdown" | "code" | "plain",
+  mode: "rendered" | "source",
+  textLength: number,
+  sizeBytes: number,
+  t: Messages,
+): string | null {
+  const kind = textRenderKind(previewMode, mode, textLength);
+  const degradedMd = previewMode === "markdown" && mode === "rendered";
+  if (kind === "windowed") {
+    return degradedMd
+      ? t.files.largeTextPlain(formatSize(sizeBytes))
+      : t.files.largeTextWindowed(formatSize(sizeBytes));
+  }
+  if (kind === "plain" && degradedMd) return t.files.largeTextPlain(formatSize(sizeBytes));
+  return null;
+}
+
 /** 截断提示：`Showing the first 2 MB of 14.3 MB`。 */
 export function truncatedNotice(shownBytes: number, totalBytes: number, t: Messages): string {
   return t.files.truncated(formatSize(shownBytes), formatSize(totalBytes));

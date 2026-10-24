@@ -7,7 +7,7 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
+import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
 import { WindowedText } from "./WindowedText";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
@@ -401,11 +401,6 @@ function PreviewBody(props: {
   }
   return (
     <>
-      {data.truncated && (
-        <div className="file-preview-truncated">
-          <PanelLine>{truncatedNotice(PREVIEW_TEXT_LIMIT, data.size, t)}</PanelLine>
-        </div>
-      )}
       <TextBody
         name={props.name}
         mode={props.mode}
@@ -414,6 +409,10 @@ function PreviewBody(props: {
         size={data.size}
         scroller={props.scroller}
         resetKey={props.resetKey}
+        truncated={
+          data.truncated ? { shownBytes: PREVIEW_TEXT_LIMIT, totalBytes: data.size } : null
+        }
+        onOpenDefault={props.onOpenDefault}
       />
     </>
   );
@@ -434,6 +433,10 @@ function TextBody(props: {
   size: number;
   scroller: RefObject<HTMLDivElement | null>;
   resetKey: string;
+  /** 只读了开头那一段（大于 PREVIEW_TEXT_LIMIT）：与其它提示合并进一条提示带 */
+  truncated: { shownBytes: number; totalBytes: number } | null;
+  /** 大文本提示带尾部的出口（用默认应用打开，与空态同一条 IPC） */
+  onOpenDefault: () => void;
 }) {
   const t = useT();
   const kind = textRenderKind(props.previewMode, props.mode, props.text.length);
@@ -443,18 +446,35 @@ function TextBody(props: {
   if (kind === "highlight") {
     return <HighlightedCode name={props.name} text={props.text} />;
   }
-  // md 退化成纯文本要说明一声（窗口化本身对 txt / bib / tex 是透明的，不提示）；
-  // 两条退化路径（小一些的整篇 `<pre>`、大一些的窗口化）共用同一条提示
-  const notice =
-    props.previewMode === "markdown" && props.mode === "rendered" ? (
-      <div className="file-preview-notice">
-        <PanelLine>{t.files.largeTextPlain(formatSize(props.size))}</PanelLine>
-      </div>
-    ) : null;
+  // 大文本要说明一声、并给出口（出口与空态那条同一条 IPC）。两条退化路径
+  // （小一些的整篇 `<pre>`、大一些的窗口化）共用同一条提示；txt / 代码被窗口化
+  // 时排版没变、只是只渲染可见区，也说一句（大文件里看到的可能不是全部）。
+  // 截断（>2 MB 只读了开头）与退化可能同时成立（3 MB 的 .md）：**合并成一条提示带、
+  // 只留一个出口**，不堆两条一模一样的按钮。
+  const notice = largeTextNotice(
+    props.previewMode,
+    props.mode,
+    props.text.length,
+    props.size,
+    t,
+  );
+  const messages =
+    props.truncated === null
+      ? notice === null
+        ? []
+        : [notice]
+      : [
+          truncatedNotice(props.truncated.shownBytes, props.truncated.totalBytes, t),
+          ...(notice === null ? [] : [notice]),
+        ];
+  const noticeBar =
+    messages.length === 0 ? null : (
+      <LargeTextNotice messages={messages} onOpenDefault={props.onOpenDefault} />
+    );
   if (kind === "windowed") {
     return (
       <>
-        {notice}
+        {noticeBar}
         <WindowedText text={props.text} scroller={props.scroller} resetKey={props.resetKey} />
       </>
     );
@@ -463,7 +483,7 @@ function TextBody(props: {
   // 折行只给 txt / md 源码这类散文式文本
   return (
     <>
-      {notice}
+      {noticeBar}
       <pre className="file-preview-source" data-wrap={props.previewMode === "code" ? "off" : undefined}>
         {props.text}
       </pre>
@@ -495,6 +515,35 @@ function HighlightedCode(props: { name: string; text: string }) {
   return (
     <div className="chat-md">
       <div dangerouslySetInnerHTML={markup} />
+    </div>
+  );
+}
+
+/**
+ * 大文件提示带：若干句说明 + 尾部「用默认应用打开」。
+ *
+ * 截断（>2 MB 只读了开头）、md 退化（>64 KB 按纯文本）、窗口化（>256 KB 只渲染可见区）
+ * 三条路径都用它——提示带上的出口复用空态那条 `api.files.open`，不另写 shell 调用。
+ * 尾部键用文字键而不是 PanelButton：它是提示带里的次级出路，不该和空态的
+ * 主按钮争视觉重量；位置仍钉在行的右血线上（.row-trailing）。
+ */
+function LargeTextNotice(props: { messages: readonly string[]; onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-notice">
+      <div className="file-preview-notice-text">
+        {props.messages.map((message) => (
+          <PanelLine key={message}>{message}</PanelLine>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="file-preview-notice-action row-trailing"
+        onClick={props.onOpenDefault}
+      >
+        <Icon name="external-link" size={12} strokeWidth={1.8} />
+        {t.files.openDefault}
+      </button>
     </div>
   );
 }

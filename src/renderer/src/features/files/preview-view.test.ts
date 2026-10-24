@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { highlighterReady } from "../chat/highlight.ts";
 import {
   HIGHLIGHT_LIMIT,
+  largeTextNotice,
   MARKDOWN_LIMIT,
   textLines,
   textPreviewMode,
@@ -164,5 +165,44 @@ describe("textWindow", () => {
     const w = textWindow(100, 99_999, VIEW, ROW);
     assert.equal(w.start, 0);
     assert.equal(w.end, 100);
+  });
+});
+
+describe("largeTextNotice", () => {
+  const KB = 1024;
+  const MB = KB * 1024;
+
+  test("小文件没有提示条（各种形态都不弹）", () => {
+    assert.equal(largeTextNotice("markdown", "rendered", 10 * KB, 10 * KB, en), null);
+    assert.equal(largeTextNotice("code", "rendered", 10 * KB, 10 * KB, en), null);
+    assert.equal(largeTextNotice("plain", "rendered", 10 * KB, 10 * KB, en), null);
+    // md 恰好在上限上：仍走 MarkdownBlock，不提示
+    assert.equal(largeTextNotice("markdown", "rendered", MARKDOWN_LIMIT, MARKDOWN_LIMIT, en), null);
+  });
+
+  test("md 退化两条路径都说「按纯文本显示」，体积用真实字节数", () => {
+    const plain = en.files.largeTextPlain("100 KB");
+    assert.equal(largeTextNotice("markdown", "rendered", 100 * KB, 100 * KB, en), plain);
+    const windowed = en.files.largeTextPlain("1 MB");
+    assert.equal(largeTextNotice("markdown", "rendered", MB, MB, en), windowed);
+  });
+
+  test("txt / 代码被窗口化时说「只渲染可见区」", () => {
+    const notice = en.files.largeTextWindowed("600 KB");
+    assert.equal(largeTextNotice("plain", "rendered", 600 * KB, 600 * KB, en), notice);
+    assert.equal(largeTextNotice("code", "rendered", 600 * KB, 600 * KB, en), notice);
+  });
+
+  test("md 的 Source 是用户自己切的，不当退化提示", () => {
+    assert.equal(largeTextNotice("markdown", "source", 100 * KB, 100 * KB, en), null);
+    // 但窗口化照旧提示（源码模式下大文件也只渲染可见区）
+    assert.equal(
+      largeTextNotice("markdown", "source", MB, MB, en),
+      en.files.largeTextWindowed("1 MB"),
+    );
+  });
+
+  test("超过高亮上限但未到窗口化阈值的代码：只降级不提示（排版没变，仍是一整块）", () => {
+    assert.equal(largeTextNotice("code", "rendered", HIGHLIGHT_LIMIT + 1, HIGHLIGHT_LIMIT + 1, en), null);
   });
 });
