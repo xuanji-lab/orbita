@@ -49,6 +49,8 @@ import { isRemoteSessionImage, type SandboxProcessInfo } from "./process-list.ts
 /** guest 桥 exe 的文件名（guest-bridge 子代理的产物，宿主只按这个名字找） */
 const GUEST_BRIDGE_EXE = "orbita-guest-bridge.exe";
 const WSB_FILE_NAME = "session.wsb";
+/** 映射进沙箱桌面的打包产物目录名（.wsb 的 MappedFolder 落点 = 桌面下的同名目录） */
+const GUEST_APP_DIR_NAME = "orbita-app";
 /**
  * 等桥通告的 deadline：Windows 11 25H2 真机实测冷启动（含首次拉镜像）可达 105 秒以上，
  * 60 秒会在沙箱还没进桌面时就误报超时。热启动（镜像已缓存）通常在 20 秒内。
@@ -58,6 +60,12 @@ const BRIDGE_READY_TIMEOUT_MS = 180_000;
 const BRIDGE_POLL_INTERVAL_MS = 500;
 /** 沙箱内的固定用户桌面（.wsb 的映射目录只会落在它下面，这是 WSB 的固定行为） */
 const WSB_DESKTOP_USER = "C:\\Users\\WDAGUtilityAccount\\Desktop";
+/**
+ * 打包产物的入口 exe 在 guest 里的路径（冒烟脚本按它 launch）。
+ * 与 .wsb 的映射名同一个常量来源：WSB 没有客机路径参数，落点只能是桌面下的同名目录，
+ * 所以两处都从 GUEST_APP_DIR_NAME 拼——改名字时不会只改一半。
+ */
+export const COMPUTER_USE_GUEST_APP_EXE = `${WSB_DESKTOP_USER}\\${GUEST_APP_DIR_NAME}\\orbita.exe`;
 
 // ── .wsb 生成 ──────────────────────────────────────────────────────────
 
@@ -66,6 +74,16 @@ export interface WsbRenderInput {
   bridgeDir: string;
   /** 宿主的输出目录，读写映射进沙箱（桥写 bridge.json / cmd 响应在这里，宿主轮询读） */
   outputDir: string;
+  /**
+   * 打包产物目录（`<repo>/dist/win-unpacked`，内含 orbita.exe），只读映射到沙箱
+   * `C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app`。
+   *
+   * 只在**调用方确认它存在**时才传（sandbox.ts 的 start() 用 existsSync 判）：
+   * 映射一个不存在的宿主目录会让整个 MappedFolder 失败、沙箱起不来——
+   * 而没出包是开发时的常态，不该因此让人连「看一眼桌面」都用不了。
+   * 真机验收步骤在 scripts/sandbox-ui-smoke.mjs 的头部注释里。
+   */
+  appDir?: string;
 }
 
 function escapeXml(value: string): string {
@@ -115,11 +133,24 @@ export function junctionPathIssue(bridgeDir: string, outputDir: string): string 
  * Default 即启用。**这是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
  * 断网等于没有这个功能；代价是沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
  * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
+ *
+ * appDir（PR5，打包产物冒烟）：多一条**只读**映射，把 `<repo>/dist/win-unpacked` 放到沙箱
+ * 桌面的 orbita-app/ 下。为什么只读：沙箱里跑的是一份待验收的产物，它不该回写宿主的
+ * 打包目录（产物是构建结果，被沙箱改过就没法判断「验的是不是同一份」）。
+ * 为什么用桌面子目录而不是 junction：MappedFolder 落到 <目录名>/ 的规则已经满足需求，
+ * 多建一条 junction 只会再给 cmd 引号规则添一个坑。
  */
 export function renderWsbXml(input: WsbRenderInput): string {
   // 末段名按 Windows 规则切（映射目录落在沙箱桌面 <目录名>/ 下，名字进 junction 命令）
   const bridgeOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.bridgeDir)}`;
   const outOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.outputDir)}`;
+  // 映射目录名写死在 .wsb 里（MappedFolder 没有客机路径参数，落点只能是桌面下的同名目录），
+  // 所以映射的名字与冒烟脚本使用的 guest 路径必须靠同一个常量对上。
+  const appDir = input.appDir;
+  const appMapping =
+    appDir === undefined || appDir === ""
+      ? ""
+      : `\n    <MappedFolder>\n      <HostFolder>${escapeXml(appDir)}</HostFolder>\n      <ReadOnly>true</ReadOnly>\n    </MappedFolder>`;
   const guestCommand = [
     "cmd.exe /c \"",
     `mklink /J ${COMPUTER_USE_GUEST_BRIDGE_DIR} ${bridgeOnDesktop}`,
@@ -141,7 +172,7 @@ export function renderWsbXml(input: WsbRenderInput): string {
     <MappedFolder>
       <HostFolder>${escapeXml(input.outputDir)}</HostFolder>
       <ReadOnly>false</ReadOnly>
-    </MappedFolder>
+    </MappedFolder>${appMapping}
   </MappedFolders>
   <LogonCommand>
     <Command>${escapeXml(guestCommand)}</Command>
@@ -196,6 +227,15 @@ export interface SandboxDeps {
   bridgeDir: string;
   /** WindowsSandbox.exe 绝对路径（index.ts 用 capability.windowsSandboxExePath() 解出） */
   sandboxExePath: string;
+  /**
+   * 打包产物目录（`<repo>/dist/win-unpacked`）。**默认不传**：主进程的沙箱不需要它，
+   * 只有 scripts/sandbox-ui-smoke.mjs（打包版 UI 冒烟）传——把待验收的产物只读映射进
+   * 沙箱桌面的 orbita-app/。
+   *
+   * 不传 / 目录不存在时 .wsb 少一条映射，沙箱照常起（不能因为没出包就连「看一眼桌面」
+   * 都用不了），但日志里会明说「没找到打包产物」。
+   */
+  appDir?: string;
   /** 默认 process.platform，测试可注入。非 win32 时 start() 直接拒——先报平台，再谈文件 */
   platform?: NodeJS.Platform;
   /** 真 spawn 在 index.ts 接线；测试注入假进程。**测试绝不许传真 spawn**（沙箱窗口是用户可见面） */
@@ -358,10 +398,22 @@ export class SandboxController {
       await rm(join(outputDir, COMPUTER_USE_CMD_DIR), { recursive: true, force: true });
       resetGuestCommandSeq();
       const wsbPath = join(this.deps.computerUseDir, WSB_FILE_NAME);
+      // 打包产物映射（可选）：只有目录真的存在才写进 .wsb——映射一个不存在的宿主目录
+      // 会让整个 MappedFolder 失败、沙箱根本起不来。缺产物时把下一步说清楚（写日志，
+      // 因为沙箱本身没错，不该把它挡成启动失败）。
+      const appDir = this.deps.appDir;
+      const appMapped = appDir !== undefined && appDir !== "" && fileExists(appDir);
+      if (appDir !== undefined && appDir !== "" && !appMapped) {
+        this.log(
+          `没有找到打包产物（${appDir}），本次沙箱不带 UI 冒烟映射——` +
+            "要验打包版能否启动渲染，先在仓库根跑 bun run dist:win（出 dist/win-unpacked）再启动沙箱",
+        );
+      }
       await writeTextAtomic(
         wsbPath,
-        renderWsbXml({ bridgeDir: this.deps.bridgeDir, outputDir }),
+        renderWsbXml({ bridgeDir: this.deps.bridgeDir, outputDir, ...(appMapped ? { appDir } : {}) }),
       );
+      if (appMapped) this.log(`打包产物已只读映射进沙箱：${appDir} → ${COMPUTER_USE_GUEST_APP_EXE}`);
 
       // 新架构：启动器 spawn 后很快 exit 0，沙箱活在 Server/RemoteSession/vmwp 里。
       // 基线要在 spawn **之前**记——spawn 之后它们就开始出现
