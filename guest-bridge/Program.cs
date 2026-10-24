@@ -1597,8 +1597,128 @@ internal static class Program
             CdpSession.NavErrorReason("[body.innerText=0]", null));
         CheckString(failures, ref cases, "errorText 是空串时不编造码", null, CdpSession.NavErrorReason("", ""));
 
+        // ── 连接层自愈：挑 target 的规则（2026-10-25 真机三次故障形态的根因之一）──────────
+        // `'Page.navigate' wasn't found` = 会话被挂到了没有 Page 域的 target 上；
+        // 而挂回一个卡死的标签页，会把 Page.enable 拖到 8s 超时（下一条命令又白失败一次）。
+        List<TargetInfo> pages = new List<TargetInfo>();
+        pages.Add(MakeTarget("A", "page", "https://example.com/"));
+        pages.Add(MakeTarget("B", "page", "https://other.example/"));
+        CheckString(failures, ref cases, "挑 target：已知 target 还是 page 就回它（不换模型的标签页）", "B",
+            CdpSession.ChooseTargetId(pages, "B", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 不在了，取第一个 page", "A",
+            CdpSession.ChooseTargetId(pages, "GONE", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 可疑就跳过它", "A",
+            CdpSession.ChooseTargetId(pages, "B", "B"));
+        CheckString(failures, ref cases, "挑 target：没有已知 target 时取第一个", "A",
+            CdpSession.ChooseTargetId(pages, "", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 可疑时改用另一个", "B",
+            CdpSession.ChooseTargetId(pages, "A", "A"));
+        List<TargetInfo> allSuspect = new List<TargetInfo>();
+        allSuspect.Add(MakeTarget("A", "page", "https://example.com/"));
+        CheckString(failures, ref cases, "挑 target：全部可疑时回 null（调用方去新建标签页）", null,
+            CdpSession.ChooseTargetId(allSuspect, "A", "A"));
+
+        List<TargetInfo> mixed = new List<TargetInfo>();
+        mixed.Add(MakeTarget("SW", "service_worker", "https://example.com/sw.js"));
+        mixed.Add(MakeTarget("TAB", "tab", "https://example.com/"));
+        mixed.Add(MakeTarget("ERR", "page", "chrome-error://chromewebdata/"));
+        mixed.Add(MakeTarget("P", "page", "https://example.com/"));
+        CheckString(failures, ref cases, "挑 target：非 page target 一律不挑（'Page.navigate' wasn't found 的来源）", "P",
+            CdpSession.ChooseTargetId(mixed, "", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 是错误页时仍然回它（cdp-nav back 要落在同一页）", "ERR",
+            CdpSession.ChooseTargetId(mixed, "ERR", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 不可用时，错误页不当备选", "P",
+            CdpSession.ChooseTargetId(mixed, "GONE", ""));
+        List<TargetInfo> onlyError = new List<TargetInfo>();
+        onlyError.Add(MakeTarget("ERR", "page", "chrome-error://chromewebdata/"));
+        CheckString(failures, ref cases, "挑 target：只有错误页时回 null", null,
+            CdpSession.ChooseTargetId(onlyError, "", ""));
+        CheckString(failures, ref cases, "挑 target：一个 target 都没有时回 null", null,
+            CdpSession.ChooseTargetId(new List<TargetInfo>(), "", ""));
+        CheckTrue(failures, ref cases, "错误页地址：chrome-error 命中",
+            CdpSession.IsBrowserErrorPageUrl("chrome-error://chromewebdata/"));
+        CheckTrue(failures, ref cases, "错误页地址：大小写不敏感",
+            CdpSession.IsBrowserErrorPageUrl("  CHROME-ERROR://chromewebdata/"));
+        CheckTrue(failures, ref cases, "错误页地址：edge-error 也算",
+            CdpSession.IsBrowserErrorPageUrl("edge-error://chromewebdata/"));
+        CheckTrue(failures, ref cases, "错误页地址：普通页面不算",
+            !CdpSession.IsBrowserErrorPageUrl("https://example.com/")
+            && !CdpSession.IsBrowserErrorPageUrl("about:blank")
+            && !CdpSession.IsBrowserErrorPageUrl(null));
+
+        // ── 连接层自愈：哪些失败可以重发（安全边界比「重试三次」重要得多）──────────────
+        string methodNotFound = "{\"id\":9,\"error\":{\"code\":-32601,\"message\":\"'Page.navigate' wasn't found\"}}";
+        CheckTrue(failures, ref cases, "可重发：'Page.navigate' wasn't found（会话挂错了 target）",
+            CdpSession.IsRetryableChannelReply(methodNotFound));
+        CheckTrue(failures, ref cases, "可重发：Runtime.evaluate 的 wasn't found 也一样（没执行过）",
+            CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"'Runtime.evaluate' wasn't found\"}}"));
+        CheckTrue(failures, ref cases, "可重发：Session not found",
+            CdpSession.IsRetryableChannelReply(staleReply));
+        CheckTrue(failures, ref cases, "可重发：Target closed",
+            CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"Target closed.\"}}"));
+        CheckTrue(failures, ref cases, "可重发：Not attached to an active page",
+            CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"Not attached to an active page\"}}"));
+        CheckTrue(failures, ref cases, "不重发：真实导航结果 net::ERR_NAME_NOT_RESOLVED",
+            !CdpSession.IsRetryableChannelReply("{\"error\":{\"code\":-32000,\"message\":\"net::ERR_NAME_NOT_RESOLVED\"}}"));
+        CheckTrue(failures, ref cases, "不重发：真实导航结果 net::ERR_FAILED",
+            !CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"net::ERR_FAILED\"}}"));
+        CheckTrue(failures, ref cases, "不重发：Invalid URL（真的没打开这一页）",
+            !CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"Cannot navigate to invalid URL\"}}"));
+        CheckTrue(failures, ref cases, "不重发：正常回执",
+            !CdpSession.IsRetryableChannelReply("{\"id\":7,\"result\":{\"frameId\":\"A1\"}}"));
+        CheckTrue(failures, ref cases, "不重发：null 回执", !CdpSession.IsRetryableChannelReply(null));
+
+        CheckTrue(failures, ref cases, "连接层异常：CDP 命令超时",
+            CdpSession.IsChannelFailure("CDP 命令超时（Page.enable，8000ms 内没有回执）"));
+        CheckTrue(failures, ref cases, "连接层异常：CDP 发送失败",
+            CdpSession.IsChannelFailure("CDP 发送失败（Page.navigate）：底层连接已关闭"));
+        CheckTrue(failures, ref cases, "连接层异常：CDP 连接已断开",
+            CdpSession.IsChannelFailure("CDP 连接已断开"));
+        CheckTrue(failures, ref cases, "非连接层：调试端口连不上（OpenSocket 自己已重试 8s）",
+            !CdpSession.IsChannelFailure("沙箱里的 Edge 调试端口 49719 连不上（Unable to connect to the remote server）"));
+        CheckTrue(failures, ref cases, "非连接层：Edge 没有在运行（那是宿主的缓存自愈信号）",
+            !CdpSession.IsChannelFailure("沙箱里的 Edge 没有在运行（或已经退出）"));
+        CheckTrue(failures, ref cases, "非连接层：页面脚本报错",
+            !CdpSession.IsChannelFailure("页面里的脚本报错：Cannot read properties of null"));
+        CheckTrue(failures, ref cases, "非连接层：null", !CdpSession.IsChannelFailure(null));
+
+        CheckTrue(failures, ref cases, "可重发方法：Page.navigate", CdpSession.IsRetryableMethod("Page.navigate"));
+        CheckTrue(failures, ref cases, "可重发方法：Page.enable", CdpSession.IsRetryableMethod("Page.enable"));
+        CheckTrue(failures, ref cases, "可重发方法：Target.attachToTarget", CdpSession.IsRetryableMethod("Target.attachToTarget"));
+        CheckTrue(failures, ref cases, "不可重发：Input.insertText（会打两遍）",
+            !CdpSession.IsRetryableMethod("Input.insertText"));
+        CheckTrue(failures, ref cases, "不可重发：Input.dispatchMouseEvent（会点两下）",
+            !CdpSession.IsRetryableMethod("Input.dispatchMouseEvent"));
+        CheckTrue(failures, ref cases, "不可重发：Runtime.evaluate（脚本可能有副作用）",
+            !CdpSession.IsRetryableMethod("Runtime.evaluate"));
+        CheckTrue(failures, ref cases, "不可重发：DOM.setFileInputFiles",
+            !CdpSession.IsRetryableMethod("DOM.setFileInputFiles"));
+        CheckTrue(failures, ref cases, "不可重发：null", !CdpSession.IsRetryableMethod(null));
+
+        CheckTrue(failures, ref cases, "结构性错误：wasn't found",
+            CdpSession.IsStructuralChannelError("'Page.navigate' wasn't found"));
+        CheckTrue(failures, ref cases, "结构性错误：Session not found",
+            CdpSession.IsStructuralChannelError("Session with given id not found."));
+        CheckTrue(failures, ref cases, "不是结构性错误：普通超时",
+            !CdpSession.IsStructuralChannelError("CDP 命令超时（Page.enable，8000ms 内没有回执）"));
+
+        // 预算与 worker 的杀线：34s 预算 + 6s 收尾 < 40s 杀线（一个在 Cdp.cs，一个在 WorkerHost.cs）
+        CheckTrue(failures, ref cases, "连接层预算 + 收尾余量不越过 worker 的 40s 杀线",
+            CdpSession.ChannelBudgetMsForTest + 6000 <= 40000);
+
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 自测用的 target 构造器（TargetInfo 的字段是 public 的，但造四条写起来太啰嗦） */
+    private static TargetInfo MakeTarget(string id, string type, string url)
+    {
+        TargetInfo info = new TargetInfo();
+        info.Id = id;
+        info.Type = type;
+        info.Url = url;
+        info.Title = "";
+        return info;
     }
 
     /** 统一的自测回执照 JSON（五个 selftest 共用一份形状，跑测试的人不用记五种） */

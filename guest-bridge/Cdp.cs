@@ -68,6 +68,31 @@ internal sealed class CdpSession
     private const int NavUrlInMessageMax = 80;
     /** 截图默认上限宽度（长边），与像素截图同值 */
     private const int ShotMaxWidth = 1280;
+
+    // ── 连接层重试的预算（真机 2026-10-25：一条导航超时之后，紧接着的下一条必失败一次）────
+
+    /**
+     * 一条命令里「丢弃 session → 重连 → 重发」的上限（不含重启 Edge 之后那一次）。
+     * 2 是被观测到的故障形状决定的：现场只需要一次重连就能自愈，第二次留给「重连撞上
+     * 半死的渲染器」那种更坏的现场。再多就只是在同一个坏状态上反复出拳。
+     */
+    private const int MaxChannelRetries = 2;
+
+    /**
+     * 单条命令的连接层总预算。
+     *
+     * worker 的杀线是 CommandTimeoutMs = 40000（见 WorkerHost.cs），它从主桥把 req 写进
+     * 命令目录的那一刻开始算；被杀掉之后连回执都写不出去，模型只会看到一句笼统的
+     * 「没有响应」。所以这里 34s 收手，留 6s 给「挑 target / 写回执 / 映射目录同步抖动」。
+     * 宿主那条线是 70s（COMPUTER_USE_CDP_TIMEOUT_MS），远在 40s 之外，不用管。
+     */
+    private const int ChannelBudgetMs = 34000;
+
+    /** 余下不足这么多就不再重连：一次「重连 + attach + 重发」至少要这么久 */
+    private const int MinRetryRoomMs = 6000;
+
+    /** 重启 Edge（杀进程树 + 冷启动 + attach）至少要先有这么多余量，否则宁可回错也别撞杀线 */
+    private const int RestartRoomMs = 18000;
     /** extract / observe 正文单次上限（resp 是整读整写的文件，超了宿主吃不下） */
     private const int TextLimit = 20000;
 
@@ -86,6 +111,23 @@ internal sealed class CdpSession
     private int _nextId = 0;
     private bool _connecting = false;
 
+    // ── 连接层自愈的状态（每条命令在 Execute 里重置）──────────────────────────────
+    /** 本条命令的连接层重试截止时刻（超过就不再重连 / 重启） */
+    private DateTime _channelDeadline = DateTime.MaxValue;
+    /** 本条命令已经「丢弃 session → 重连」几次 */
+    private int _channelRetries = 0;
+    /** 本条命令是否已经重启过这个会话的 Edge（只重启一次，免得无限杀进程） */
+    private bool _edgeRestarted = false;
+    /**
+     * 本条命令里被判定为「自己坏了」的 target（Page.enable / Page.navigate 在它上面超时、
+     * 或者方法不在它上面）。重连时跳过它、宁可新开一个标签页——真机现场就是卡死的渲染器
+     * 把 Page.enable 拖到 8s 超时，再挂回同一个标签页只是重演一次。
+     */
+    private string _suspectTargetId = "";
+    /** 上次启动用的参数（重启 Edge 时照原样再来一遍：headless 与固定端口都别丢） */
+    private bool _headless = false;
+    private int _launchPort = 0;
+
     public CdpSession(string key)
     {
         Key = key;
@@ -96,6 +138,11 @@ internal sealed class CdpSession
 
     internal string Execute(string command, string raw, string baseName, string cmdDir)
     {
+        // 重试预算与计数**每条命令重置**：一条命令最多烧掉 ChannelBudgetMs，不跨命令累积
+        _channelDeadline = DateTime.UtcNow.AddMilliseconds(ChannelBudgetMs);
+        _channelRetries = 0;
+        _edgeRestarted = false;
+        _suspectTargetId = "";
         try
         {
             if (command == "cdp-start") return Start(raw);
@@ -156,10 +203,13 @@ internal sealed class CdpSession
             return OkWithStatus(true);
         }
 
-        Launch(headless, port);
+        // 记下来：这条重试路径上如果连续失败要重启 Edge，得照原样再起一遍
+        _headless = headless;
+        _launchPort = port;
+        Launch(headless, port, LaunchTimeoutMs);
         try
         {
-            ConnectAndAttach();
+            ConnectAndAttachWithRetry();
         }
         catch
         {
@@ -171,7 +221,8 @@ internal sealed class CdpSession
         return OkWithStatus(true);
     }
 
-    private void Launch(bool headless, int port)
+    /** portWaitMs 是等 DevToolsActivePort 的上限（重启 Edge 时会按剩余预算压低它） */
+    private void Launch(bool headless, int port, int portWaitMs)
     {
         // 测试缝：在宿主上跑 bridge.test.mjs 时绝不能去 Process.Start msedge.exe
         //（那是用户真实的浏览器）。生产不带 --no-browser。
@@ -218,11 +269,12 @@ internal sealed class CdpSession
             }
         }
 
-        string content = ReadPortFile(LaunchTimeoutMs);
+        if (portWaitMs < 3000) portWaitMs = 3000;
+        string content = ReadPortFile(portWaitMs);
         if (content.Length == 0)
         {
             throw new Exception(
-                "Edge 进程起来了，但 " + LaunchTimeoutMs / 1000 + " 秒内没有打开调试端口（"
+                "Edge 进程起来了，但 " + portWaitMs / 1000 + " 秒内没有打开调试端口（"
                 + Path.Combine(_profileDir, "DevToolsActivePort") + " 没出现）。"
                 + "可以再试一次 sandbox_navigate；连续失败就改用 computer_screenshot / computer_click 像素工具");
         }
@@ -348,6 +400,7 @@ internal sealed class CdpSession
         CloseSocket();
         _sessionId = "";
         _targetId = "";
+        _suspectTargetId = "";
         _product = "";
         _port = 0;
         KillOurEdge();
@@ -415,7 +468,7 @@ internal sealed class CdpSession
         if (!IsAlive()) return NotRunningStatus();
         try
         {
-            ConnectAndAttach();
+            ConnectAndAttachWithRetry();
             string href = EvalString("location.href", 5000);
             string title = EvalString("document.title", 5000);
             List<TargetInfo> pages = PageTargets();
@@ -573,30 +626,103 @@ internal sealed class CdpSession
         return message == null || message.Length == 0 ? "未知原因" : message;
     }
 
-    /** 选一个 page target 并 attach（flatten）。优先回到原来那个 target（保持当前标签页），没有就新建一个 */
+    /**
+     * 建连 + attach，失败就按连接层重试规则再来（Status / Tabs 这种直接摸 attach 的路径用它）。
+     *
+     * 为什么 Status 也要重试：真机现场 `cdp-status` 在一轮导航超时之后回的就是
+     * `running:true` + error（通道半死），宿主看到它就没法区分「浏览器好好的、只是上一条命令卡过」
+     * 与「现在还卡着」。重试之后它要么拿到真的状态，要么明说救不回来。
+     */
+    private void ConnectAndAttachWithRetry()
+    {
+        while (true)
+        {
+            try
+            {
+                ConnectAndAttach();
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (!IsChannelFailure(ex.Message)) throw;
+                if (!RecoverChannel("attach", ex.Message, true, _targetId)) throw;
+            }
+        }
+    }
+
+    /**
+     * 选一个 target 并 attach（flatten）。**挑错的代价已经真机付过**：2026-10-25 出现过
+     * `'Page.navigate' wasn't found`（会话被挂到了一个没有 Page 域的 target 上），也出现过
+     * 挂回一个卡死的标签页、把 Page.enable 拖到 8s 超时。所以规则是：
+     *   ① 只认 `type === "page"`（PageTargets 已过滤，ChooseTargetId 再守一次边）；
+     *   ② 已知 target 还在、还是 page、**没被判为可疑**就回到它——模型正在操作的就是它，
+     *      换一个标签页等于把它的上下文挪走（`history.back` 也会落到错的页上）；
+     *   ③ 否则挑第一个不是错误页（`chrome-error://`）的 page；
+     *   ④ 挑不到就**新建一个标签页**，而不是放弃——挑不到时旧标签页也已经不可用了。
+     */
     private void AttachPage()
     {
         List<TargetInfo> pages = PageTargets();
-        TargetInfo chosen = null;
-        // 重连（上一条命令超时后 session 被丢掉）时不能随手拿 pages[0]：那会把模型
-        // 从正在操作的那个标签页换到另一个上。原来那个 target 还在就回到它。
-        for (int i = 0; i < pages.Count; i++)
-        {
-            if (_targetId.Length > 0 && pages[i].Id == _targetId) { chosen = pages[i]; break; }
-        }
-        if (chosen == null) chosen = pages.Count > 0 ? pages[0] : null;
+        string chosen = ChooseTargetId(pages, _targetId, _suspectTargetId);
         if (chosen == null)
         {
-            string created = CallBrowser("Target.createTarget", "{\"url\":\"about:blank\"}", 10000);
-            string newId = Program.ExtractString(created, "targetId");
-            if (newId == null || newId.Length == 0) throw new Exception("Target.createTarget 没有回 targetId");
-            chosen = new TargetInfo();
-            chosen.Id = newId;
-            chosen.Type = "page";
-            chosen.Url = "about:blank";
-            chosen.Title = "";
+            Program.Log("CDP 挑不到可用标签页（page target " + pages.Count + " 个，已知 " + SafeLogId(_targetId)
+                + "，可疑 " + SafeLogId(_suspectTargetId) + "），新建一个");
+            chosen = CreateTarget();
         }
-        Attach(chosen.Id);
+        Attach(chosen);
+    }
+
+    /**
+     * 挑 target 的**纯函数**（自测在宿主上直接验它，不碰 Edge）。
+     * 返回 null = 一个能用的都没有，调用方应该 Target.createTarget。
+     *
+     * 规则见 AttachPage 的注释；`suspectId` 是本条命令里被判定为「自己坏了」的那个。
+     * 已知 target 是错误页时**仍然优先它**：chrome-error 页面是一个正常的 page target，
+     * 往它上面 Page.navigate 就能离开错误页，而换标签页会让 `cdp-nav back` 落到别的页上。
+     * 「不挑错误页」只约束**别的**候选。
+     */
+    internal static string ChooseTargetId(List<TargetInfo> pages, string knownId, string suspectId)
+    {
+        if (pages == null) return null;
+        string fallback = null;
+        for (int i = 0; i < pages.Count; i++)
+        {
+            TargetInfo p = pages[i];
+            if (p == null || p.Id == null || p.Id.Length == 0) continue;
+            if (p.Type != null && p.Type.Length > 0 && p.Type != "page") continue;
+            if (suspectId != null && suspectId.Length > 0 && p.Id == suspectId) continue;
+            if (knownId != null && knownId.Length > 0 && p.Id == knownId) return p.Id;
+            if (fallback == null && !IsBrowserErrorPageUrl(p.Url)) fallback = p.Id;
+        }
+        return fallback;
+    }
+
+    /**
+     * 是不是浏览器的错误页地址（`chrome-error://chromewebdata/`，老版本 / Edge 变体还有
+     * `edge-error://`）。只在**挑别的 target** 时避开它们：从错误页继续操作没有意义。**纯函数**。
+     */
+    internal static bool IsBrowserErrorPageUrl(string url)
+    {
+        if (url == null) return false;
+        string v = url.Trim().ToLowerInvariant();
+        return v.StartsWith("chrome-error://", StringComparison.Ordinal)
+            || v.StartsWith("edge-error://", StringComparison.Ordinal);
+    }
+
+    private string CreateTarget()
+    {
+        string created = CallBrowser("Target.createTarget", "{\"url\":\"about:blank\"}", 10000);
+        string newId = Program.ExtractString(created, "targetId");
+        if (newId == null || newId.Length == 0) throw new Exception("Target.createTarget 没有回 targetId");
+        Program.Log("CDP 新建标签页：target " + newId);
+        return newId;
+    }
+
+    /** 日志里用的 target id（空串写成 none，一行日志看得出版面） */
+    private static string SafeLogId(string id)
+    {
+        return id == null || id.Length == 0 ? "none" : id;
     }
 
     private void Attach(string targetId)
@@ -612,15 +738,9 @@ internal sealed class CdpSession
         _targetId = targetId;
         // Page 域要先 enable 才有事件与 captureScreenshot 的完整能力；每个新 session 一次
         CallSession(_sessionId, "Page.enable", "{}", 8000);
+        // 挂上了就不是可疑 target 了（新标签页里面可能已经是别的东西）
+        if (_suspectTargetId.Length > 0 && _suspectTargetId != targetId) _suspectTargetId = "";
         Program.Log("CDP 已附着 target " + targetId + " session " + sessionId);
-    }
-
-    private sealed class TargetInfo
-    {
-        public string Id = "";
-        public string Type = "";
-        public string Url = "";
-        public string Title = "";
     }
 
     private List<TargetInfo> PageTargets()
@@ -700,25 +820,182 @@ internal sealed class CdpSession
         return CallSession(null, method, paramsJson, timeoutMs);
     }
 
+    /**
+     * 一条 CDP 消息，**带连接层重试**。
+     *
+     * 真机现场（2026-10-25，三次）：一条导航超时之后，该会话的通道就半死了，
+     * 紧接着的下一条命令必失败一次，再下一条才自愈。三种形态：
+     *   ① 重连时 `Page.enable` 在卡死的标签页上超时 8s，整条导航报「连接超时（8 秒内没有回应）」；
+     *   ② 新 session 根本没建成，下一条拿到 `Session with given id not found`；
+     *   ③ 会话被挂到一个没有 Page 域的 target 上，拿到 `'Page.navigate' wasn't found`。
+     * 三种都是**连接层**的坏，命令本身没有错，重来一次就好。所以这里：
+     *
+     *   * 回执层说「会话 / 方法不在这个 target 上」→ 命令根本没执行过，**任何方法都能重发**；
+     *   * 异常（超时 / 发送失败 / 建连失败）→ 不知道命令跑没跑过，只重发幂等名单里的
+     *     （Page.navigate / Page.enable / Target.* 等），`Input.insertText`
+     *     `Runtime.evaluate` `Input.dispatchMouseEvent` 一律不重发；
+     *   * 页面层的真实结果（`net::ERR_*`、脚本报错、选择器没匹配到）**一句都不重发**。
+     *
+     * 重试预算见 ChannelBudgetMs：一条命令总共 34s，不把 worker 的 40s 杀线撞掉。
+     */
     private string CallSession(string sessionId, string method, string paramsJson, int timeoutMs)
     {
-        if (!_connecting) ConnectAndAttach();
-        if (_ws == null || _ws.State != WebSocketState.Open) throw new Exception("CDP 连接已断开");
-        string text = Exchange(sessionId, method, paramsJson, timeoutMs);
-        if (sessionId == null || sessionId.Length == 0) return text;
-        if (!IsStaleSessionError(text)) return text;
-        // attach 自己发命令时（_connecting）不在这里重连：本来就在建连，重入只会害自己
-        if (_connecting) return text;
-        // 这条 flatten session 在 Edge 那边已经没了。真机现场（2026-10-25）：上一条
-        // cdp-nav 的 Page.navigate 超时之后，**紧接着的下一条命令**必回
-        // 「Session with given id not found」，再下一条才自愈——对模型就是「刚才那个
-        // 站点打不开，现在连下一个页面也打不开」。这里当场重连 + 重发一次（session 失效
-        // 意味着这条命令根本没执行过，重发是安全的）。
-        Program.Log("CDP session 已失效（" + method + " 回 Session not found），重连后重发一次");
+        bool sessionLevel = sessionId != null && sessionId.Length > 0;
+        while (true)
+        {
+            string reply = null;
+            Exception failure = null;
+            try
+            {
+                if (!_connecting) ConnectAndAttach();
+                if (_ws == null || _ws.State != WebSocketState.Open) throw new Exception("CDP 连接已断开");
+                // **重连之后要用新的 session**：入参是调用方在重连之前拿到的旧 id；
+                // 而空串绝不能当 session 发出去（那会变成 browser 级命令，Page.navigate 就会
+                // 回 'Page.navigate' wasn't found）。
+                string useSession = null;
+                if (sessionLevel)
+                {
+                    useSession = _sessionId;
+                    if (useSession == null || useSession.Length == 0) throw new Exception("CDP 连接已断开（没有 session）");
+                }
+                reply = Exchange(useSession, method, paramsJson, timeoutMs);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+
+            bool channel = failure == null
+                ? (sessionLevel && IsRetryableChannelReply(reply))
+                : IsChannelFailure(failure.Message);
+            if (!channel)
+            {
+                if (failure != null) throw failure;
+                return reply;
+            }
+
+            string reason = failure != null ? failure.Message : CdpErrorOrNull(reply);
+            // 回执层说「这条命令没执行过」→ 重发安全；异常的话只有幂等方法才能重发
+            bool safeResend = failure == null || IsRetryableMethod(method);
+            if (!RecoverChannel(method, reason, safeResend, sessionLevel ? _targetId : ""))
+            {
+                if (failure != null) throw failure;
+                return reply;
+            }
+            timeoutMs = RetryTimeoutMs(timeoutMs);
+        }
+    }
+
+    /**
+     * 连接层失败之后的重试决策（重连 / 重启 Edge / 放弃）。返回 true = 调用方可以重发。
+     *
+     * 顺序是刻意的：先用「丢弃 session + 重连」赌两次（真机上一次就够），还不行才杀 Edge 进程树
+     * 重拉。**profile 目录一律保留**（登录态在里面）——这与 cdp-stop 的「停即删」不是一回事。
+     */
+    private bool RecoverChannel(string method, string reason, bool safeResend, string currentTarget)
+    {
+        if (_connecting) return false; // 本来就在建连：重入只会害自己
+        if (!safeResend)
+        {
+            Program.Log("CDP " + method + " 连接层失败但不重发（命令可能已经执行过）：" + reason);
+            return false;
+        }
+        if (_channelRetries < MaxChannelRetries && RemainingMs() > MinRetryRoomMs)
+        {
+            _channelRetries++;
+            if (ShouldSuspectTarget(method, reason) && currentTarget != null && currentTarget.Length > 0)
+            {
+                _suspectTargetId = currentTarget;
+                Program.Log("CDP 重连：丢弃旧 session（" + method + " 在 target " + currentTarget + " 上失败："
+                    + reason + "），这个标签页不再用，重试第 " + _channelRetries + " 次");
+            }
+            else
+            {
+                Program.Log("CDP 重连：丢弃旧 session（" + method + " 失败：" + reason
+                    + "），重试第 " + _channelRetries + " 次");
+            }
+            InvalidateSession();
+            return true;
+        }
+        if (!_edgeRestarted && RemainingMs() > RestartRoomMs && RestartEdge(reason))
+        {
+            _edgeRestarted = true;
+            _channelRetries = MaxChannelRetries - 1; // 重启之后只再给一次
+            return true;
+        }
+        Program.Log("CDP 放弃重试（" + method + " 连续失败：" + reason + "，剩余 " + RemainingMs() + "ms）");
+        return false;
+    }
+
+    /**
+     * 该不该把这个标签页判为「自己坏了」。
+     *   * 结构性的（session / target 没了、方法不在它上面）→ 一定是它；
+     *   * 非导航方法在它上面超时（典型是 attach 时的 Page.enable）→ 它的渲染器卡住了；
+     *   * 导航自己超时 → 第一次先留在原标签页（慢站点不代表坏了），第二次才换。
+     */
+    private bool ShouldSuspectTarget(string method, string reason)
+    {
+        if (IsStructuralChannelError(reason)) return true;
+        if (method != "Page.navigate") return true;
+        return _channelRetries >= MaxChannelRetries;
+    }
+
+    /**
+     * 回执里的错误句子。caller 要一句可以进日志 / 人话的原因，不要把整条 JSON 叉进日志。
+     */
+    private string CdpErrorOrNull(string reply)
+    {
+        string message = CdpError(reply);
+        if (message != null) return message;
+        return reply == null ? "没有回执" : ShortUrl(reply, 120);
+    }
+
+    /** 剩余预算（毫秒，不会为负） */
+    private int RemainingMs()
+    {
+        double ms = (_channelDeadline - DateTime.UtcNow).TotalMilliseconds;
+        if (ms < 0) return 0;
+        if (ms > int.MaxValue) return int.MaxValue;
+        return (int)ms;
+    }
+
+    /** 重发时把单次超时压到剩余预算之内（首次尝试的超时不变） */
+    private int RetryTimeoutMs(int requested)
+    {
+        int remaining = RemainingMs();
+        if (remaining < 1500) return 1500;
+        if (requested <= remaining - 1000) return requested;
+        return remaining - 1000;
+    }
+
+    /**
+     * 重启这个会话自己的 Edge：杀进程树、**保留 profile**（登录态），再拉起来。
+     * 只在连续连接层失败之后走（见 RecoverChannel），并且必须在预算内。
+     */
+    private bool RestartEdge(string reason)
+    {
+        Program.Log("CDP 连续连接层失败（" + reason + "），重启会话 " + Key + " 的 Edge：杀进程树、保留 profile"
+            + "（登录态），原端口 " + _port);
         InvalidateSession();
-        ConnectAndAttach();
-        if (_sessionId.Length == 0) return text;
-        return Exchange(_sessionId, method, paramsJson, timeoutMs);
+        KillOurEdge();
+        _targetId = "";
+        _suspectTargetId = "";
+        _port = 0;
+        _product = "";
+        // 等端口文件的窗口按剩余预算压：冷启动实测 2.5s，但也不能让 Launch 吃光预算撞上杀线
+        int wait = RemainingMs() - 9000;
+        if (wait > LaunchTimeoutMs) wait = LaunchTimeoutMs;
+        try
+        {
+            Launch(_headless, _launchPort, wait);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("CDP 重启 Edge 失败（会话 " + Key + "）：" + ex.Message);
+            return false;
+        }
+        Program.Log("CDP 已重启 Edge（会话 " + Key + "，端口 " + _port + "），profile 留在 " + _profileDir);
+        return true;
     }
 
     /** 发一条 CDP 消息并等它自己的回执（只发、不重试、不解释错误） */
@@ -780,6 +1057,98 @@ internal sealed class CdpSession
         if (reply == null) return false;
         return reply.IndexOf("Session with given id not found", StringComparison.OrdinalIgnoreCase) >= 0
             || reply.IndexOf("No target with given id", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /**
+     * 回执是不是「连接层坏了」——可以丢弃 session 重发的那一种。**纯函数**。
+     *
+     * 判据只有一条：这条命令**根本没在这个 target 上执行过**。四种现场：
+     *   * `Session with given id not found` / `No target with given id` —— session 没了（真机形态②）；
+     *   * `'Page.navigate' wasn't found` —— 方法不在这个 target 的域里，会话挂错了地方
+     *     （真机形态③：被挂到了没有 Page 域的 target）；
+     *   * `Target closed` / `Session closed`；
+     *   * `Not attached to an active page`。
+     *
+     * **真实导航结果一律不算**：`net::ERR_*` / `ERR_*` 是 Page.navigate 已经跑完了（页面确实没打开），
+     * 重发只会把同一个失败再等一遍；`Invalid URL` / `Cannot navigate` 同理。
+     */
+    internal static bool IsRetryableChannelReply(string reply)
+    {
+        if (reply == null) return false;
+        // 先排除「真的跑过」：页面层的错误里也可能带 ERR_ 字样
+        if (NavErrorCode(reply) != null) return false;
+        if (reply.IndexOf("Invalid URL", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+        if (reply.IndexOf("Cannot navigate", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+        if (IsStaleSessionError(reply)) return true;
+        if (reply.IndexOf("\"error\":", StringComparison.Ordinal) < 0) return false;
+        return Contains(reply, "wasn't found")
+            || Contains(reply, "Target closed")
+            || Contains(reply, "Session closed")
+            || Contains(reply, "Not attached to an active page");
+    }
+
+    private static bool Contains(string text, string needle)
+    {
+        return text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /**
+     * 结构性的连接层错误（session / target 没了、方法不在这个 target 上）。
+     * 与「超时」的区别：这种失败 100% 说明命令没执行过，而且 100% 说明那个 target 不能再用。**纯函数**。
+     */
+    internal static bool IsStructuralChannelError(string reason)
+    {
+        if (reason == null) return false;
+        if (IsStaleSessionError(reason)) return true;
+        return Contains(reason, "wasn't found")
+            || Contains(reason, "Target closed")
+            || Contains(reason, "Session closed")
+            || Contains(reason, "Not attached to an active page")
+            || Contains(reason, "没有回 sessionId");
+    }
+
+    /**
+     * 异常句子是不是连接层坏了（可以丢弃 session 之后重试）。**纯函数**。
+     *
+     * 刻意**不包括**两类：
+     *   * 「Edge 调试端口连不上」：OpenSocket 自己已经重试了 8s，再重试就是再等 8s 一个死端口；
+     *   * 「Edge 没有在运行」：那是宿主的缓存自愈信号（cdp.ts 的「清缓存重试一次」），
+     *     不能在这层吃掉它。
+     */
+    internal static bool IsChannelFailure(string message)
+    {
+        if (message == null) return false;
+        if (Contains(message, "CDP 命令超时")) return true;
+        if (Contains(message, "CDP 发送超时")) return true;
+        if (Contains(message, "CDP 发送失败")) return true;
+        if (Contains(message, "CDP 连接已断开")) return true;
+        if (Contains(message, "CDP 连接超时")) return true;
+        if (Contains(message, "CDP 连接失败")) return true;
+        return Contains(message, "没有回 sessionId");
+    }
+
+    /**
+     * 超时的命令能不能重发：只有**幂等名单**里的。**纯函数**。
+     *
+     * 为什么不能全重发：超时只说明我们没等到回执，不知道命令跑没跑过。
+     * `Input.insertText` 重发会在输入框里打两遍，`Input.dispatchMouseEvent` 重发会把按钮点两下
+     * （下单 / 删除都可能），`Runtime.evaluate` 重发会让带副作用的脚本跑两遍。
+     * 名单里的这些重发语义上等于「再来一次」，而且它们是每条命令的**入口**：
+     * 导航与 attach（Page.navigate / Page.enable / Target.*）、取样与截图（DOM.getDocument /
+     * DOM.querySelector / Page.captureScreenshot）。
+     */
+    internal static bool IsRetryableMethod(string method)
+    {
+        if (method == null) return false;
+        return method == "Page.navigate"
+            || method == "Page.enable"
+            || method == "Page.captureScreenshot"
+            || method == "Target.getTargets"
+            || method == "Target.createTarget"
+            || method == "Target.attachToTarget"
+            || method == "Browser.setDownloadBehavior"
+            || method == "DOM.getDocument"
+            || method == "DOM.querySelector";
     }
 
     /**
@@ -964,11 +1333,13 @@ internal sealed class CdpSession
         // 只拿它**解释**已经判定的错误页，不拿它判失败——页内下载会回 net::ERR_ABORTED，
         // 那不是导航失败。
         string navErrorText = Program.ExtractJsonString(navReply, "errorText");
-        int ready = WaitForReady(target, timeoutMs);
+        // 重试过的话「等页面加载」也不能再拿满 20s：剩下的预算要留给写回执（worker 的 40s 杀线）
+        int readyTimeoutMs = _channelRetries > 0 ? RetryTimeoutMs(timeoutMs) : timeoutMs;
+        int ready = WaitForReady(target, readyTimeoutMs);
         // 落在浏览器的错误页 = 这一页没有打开。不能报 ok:true：错误页也是「加载完成」的
         // 普通页面，模型拿到 ok 会接着 observe / click 去操作「你似乎未连接到 Internet」。
         if (ready == ReadyErrorPage) return NavFailure(sw, navErrorText);
-        return NavResult(sw, ready == ReadyOk ? null : "页面在 " + timeoutMs + "ms 内没有加载完成，"
+        return NavResult(sw, ready == ReadyOk ? null : "页面在 " + readyTimeoutMs + "ms 内没有加载完成，"
             + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构");
     }
 
@@ -1056,6 +1427,15 @@ internal sealed class CdpSession
         Program.Log("错误页诊断：会话 " + Key + "，抓到码=" + (code == null ? "(无)" : code)
             + "，Page.navigate 的 errorText=" + (navErrorText == null || navErrorText.Length == 0 ? "(无)" : navErrorText)
             + "，取到的内容（前 " + ErrorPageLogChars + " 字）：" + (head.Length == 0 ? "(空)" : head));
+    }
+
+    /**
+     * 连接层重试的总预算（毫秒）。自测用它断言「预算 + 收尾余量 ≤ worker 的 40s 杀线」——
+     * 这两个数字分别在 Cdp.cs 与 WorkerHost.cs，改一个忘了另一个就靠这条断言报。
+     */
+    internal static int ChannelBudgetMsForTest
+    {
+        get { return ChannelBudgetMs; }
     }
 
     /** 错误页正文的取法自测用：不让它悄悄退化成只读 body.innerText */
@@ -1742,7 +2122,7 @@ internal sealed class CdpSession
                 return Fail("没有第 " + index + " 个标签页（当前一共 " + pages.Count + " 个）");
             CloseSocket();
             _sessionId = "";
-            ConnectAndAttach();
+            ConnectAndAttachWithRetry();
             Attach(pages[index].Id);
             pages = PageTargets();
         }
@@ -1774,6 +2154,20 @@ internal sealed class CdpSession
     {
         return new JObj().Bool("ok", false).Str("error", message).ToString();
     }
+}
+
+/**
+ * 一个 CDP target（Target.getTargets 的一条）。
+ *
+ * 从 CdpSession 里提出来是为了让「挑 target 的规则」（CdpSession.ChooseTargetId）能被宿主上的
+ * 自测直接验：那三条规则是纯函数，不启 Edge 也能测。
+ */
+internal sealed class TargetInfo
+{
+    public string Id = "";
+    public string Type = "";
+    public string Url = "";
+    public string Title = "";
 }
 
 /** 极简 JSON 对象构造器：只为了不用手数逗号（手拼 `,,` 是 cupprobe 踩过的坑） */
