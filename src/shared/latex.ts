@@ -30,7 +30,7 @@ export function isLatexEngine(value: unknown): value is LatexEngine {
 
 /**
  * 一次编译的结局。**没有 "busy"**：并发被拒（同项目在编 / 全局已满）不是编译结局，
- * 走 `LatexRunOutcome` 的 `{ ok: false }` 分支——那时我们连 latexmk 都没起，
+ * 走 `LatexRunOutcome` 的 `{ ok: false, reason }` 分支——那时我们连 latexmk 都没起，
  * 把它报成某个 status 会让界面显示一次不存在的编译。
  */
 export type LatexStatus =
@@ -39,6 +39,7 @@ export type LatexStatus =
   | "warning-only"
   /** latexmk 非零退出，或退出 0 但没产出新 PDF */
   | "compile-error"
+  /** 超时被杀。**为什么超时看 `timeoutKind`**：日志静默卡住 vs 总时长封顶 */
   | "timeout"
   /** 被取消（应用退出：runner.cancelAll） */
   | "cancelled"
@@ -105,7 +106,20 @@ export interface LatexResult {
    * 是纯浪费（warnings 已经足够）。
    */
   logTail: string | null;
+  /**
+   * 超时的具体原因，`status === "timeout"` 时非 null：
+   * - "idle"：日志连续 LATEX_IDLE_TIMEOUT_MS 没有新输出 —— 真卡住了（死循环、
+   *   等交互输入、宏包互锁），下一次基本还会卡住
+   * - "total"：总时长到达 LATEX_TOTAL_TIMEOUT_MS —— 它一直在写日志，只是编不完
+   *   （超大文档 / 机器太慢），下一次可能编得过
+   *
+   * 两者对模型的下一步动作不同（改源码 vs 换个时间/拆文档），所以不能只报 timeout。
+   */
+  timeoutKind: LatexTimeoutKind | null;
 }
+
+/** 超时的两种原因，见 LatexResult.timeoutKind */
+export type LatexTimeoutKind = "idle" | "total";
 
 /**
  * 编译请求。`dir` 是**项目目录**（.tex 所在目录）：agent 侧相对会话 cwd 解析，
@@ -119,10 +133,25 @@ export interface LatexCompileRequest {
 }
 
 /**
+ * 并发被拒的原因。**它不是 LatexStatus**（同 LatexStatus 的注释：那时连 latexmk
+ * 都没起），但界面 / 工具要能区分「等一会儿再试」与「参数不对」：
+ * - "same-project"：同一项目已有编译在跑，两次 latexmk 抢同一组 .aux 会互相写坏
+ * - "busy"：全局并发已满。低内存机（≤ 16 GiB）上限是 1，宽内存机是 2。
+ *   **明确拒绝，不排队**：排队会让模型以为工具卡住，且两个 latexmk 在无风扇机型上
+ *   会一起被降频，比直接拒绝慢得多。
+ */
+export type LatexRejectReason = "same-project" | "busy";
+
+/**
  * 编译的对外结局。**并发被拒、目录不存在一类"没开始编"的失败走这里**，
  * 不伪装成一次编译结果（同 LatexStatus 的注释）。
+ *
+ * `reason` 只在「请求本身合法、但当前不能编」时给（并发被拒）；参数 / 授权校验
+ * 失败没有它——那种失败不是「稍后重试」能解决的。
  */
-export type LatexRunOutcome = { ok: true; result: LatexResult } | { ok: false; error: string };
+export type LatexRunOutcome =
+  | { ok: true; result: LatexResult }
+  | { ok: false; error: string; reason?: LatexRejectReason };
 
 /**
  * 探测结果。`latexmk` 是发现的可执行文件：PATH 命中时就是名字本身（spawn 时由
@@ -140,8 +169,22 @@ export interface LatexProbeResult {
   message: string;
 }
 
-/** latexmk 单次编译的硬上限。真实论文（含 bibtex 多轮）通常 10–60 秒量级 */
-export const LATEX_TIMEOUT_MS = 120_000;
+/**
+ * 判「卡住」的静默上限：日志连续这么久没有新输出就终止整棵进程树。
+ *
+ * 为什么按日志静默而不是总时长：latexmk 的 stdout 只在最后回一句总结，真正反映
+ * 排版进度的信号是引擎不断追加的 .log。**第一次用 xelatex 编中文要建字体缓存，
+ * 两分钟以上很常见，但它一直在写日志**——固定 120 秒总超时会把它误杀，
+ * 而按静默判就不会。反过来，死循环（`\loop` 忘了 `\repeat`）会连续 90 秒一行
+ * 日志都不写，判得又快又准。
+ */
+export const LATEX_IDLE_TIMEOUT_MS = 90_000;
+
+/**
+ * 单次编译的总时长上限。静默判定之外的第二道闸：一直有输出也不能永远编下去
+ * （超大文档、递归 \input）。真实论文（含 bibtex 多轮）通常 10–60 秒量级。
+ */
+export const LATEX_TOTAL_TIMEOUT_MS = 10 * 60_000;
 
 /** 失败时回给模型的日志尾巴长度 */
 export const LATEX_LOG_TAIL_LIMIT = 8 * 1024;
@@ -149,8 +192,32 @@ export const LATEX_LOG_TAIL_LIMIT = 8 * 1024;
 /** 日志解析的条目上限（errors / warnings 各自）。坏日志可以有上万条 Overfull */
 export const LATEX_MAX_ISSUES = 200;
 
-/** 全局同时编译的项目数。超过两个 latexmk 会把一台笔记本的 CPU 吃满 */
-export const LATEX_MAX_CONCURRENT = 2;
+/**
+ * 「低内存机」阈值：16 GiB。
+ *
+ * 单位换算写清（这里差一个数量级就是误判）：硬件标称的 16 GB 指 16 GiB =
+ * 16 × 1024³ = 17,179,869,184 字节，而 `os.totalmem()` 报的也是字节——但固件 /
+ * 内核会保留一点，**16 GB 机器实测报值略小于 17.18e9**。所以阈值按 16 GiB 取、
+ * 用 `<=` 判；要是按十进制的 16,000,000,000 判，真正的 16 GB 机器会漏过去、
+ * 32 GB 机器（34.36e9）也不会被误判。
+ */
+export const LATEX_LOW_MEMORY_BYTES = 16 * 1024 ** 3;
+
+/** 宽内存机（> 16 GiB）同时编译的项目数。两个 latexmk 已经能把笔记本 CPU 吃满 */
+export const LATEX_MAX_CONCURRENT_WIDE = 2;
+
+/** 低内存机（≤ 16 GiB）同时编译的项目数：无风扇机型跑两个会降频，宁可拒绝也不排队 */
+export const LATEX_MAX_CONCURRENT_LOW_MEMORY = 1;
+
+/**
+ * 这台机器能同时跑几个编译。判据只有 `os.totalmem()`（不去读硬件型号：同一型号
+ * 有不同的内存配置，读型号既不可靠也平台相关）。
+ */
+export function latexMaxConcurrent(totalMemoryBytes: number): number {
+  return totalMemoryBytes > LATEX_LOW_MEMORY_BYTES
+    ? LATEX_MAX_CONCURRENT_WIDE
+    : LATEX_MAX_CONCURRENT_LOW_MEMORY;
+}
 
 /** 默认产物目录（相对项目目录）。名字固定成 build/，与 .gitignore 惯例一致 */
 export const LATEX_DEFAULT_OUT_DIR = "build";

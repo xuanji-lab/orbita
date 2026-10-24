@@ -19,7 +19,8 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
-  LATEX_TIMEOUT_MS,
+  LATEX_IDLE_TIMEOUT_MS,
+  LATEX_TOTAL_TIMEOUT_MS,
   isLatexEngine,
   type LatexEngine,
   type LatexIssue,
@@ -37,10 +38,10 @@ const MAX_WARNINGS_SHOWN = 10;
 
 /**
  * 工具等回执的上限。**必须比编译本身的硬上限长**：RequestBroker 默认 30 秒，
- * 而一次真实编译可以跑满 LATEX_TIMEOUT_MS（120 秒）——用默认值的话，第 31 秒
+ * 而一次真实编译可以跑满 LATEX_TOTAL_TIMEOUT_MS（10 分钟）——用默认值的话，第 31 秒
  * 工具就拿到「主进程没回执」，可 latexmk 还在跑，模型会以为编译失败了。
  */
-const BROKER_TIMEOUT_MS = LATEX_TIMEOUT_MS + 30_000;
+const BROKER_TIMEOUT_MS = LATEX_TOTAL_TIMEOUT_MS + 30_000;
 
 export interface LatexToolContext {
   /** 会话 cwd：dir 相对路径的解析基准（主进程按同一基准解析并做授权） */
@@ -166,11 +167,17 @@ function describe(result: LatexResult): string {
   } else if (result.status === "no-main-file") {
     lines.push(`LaTeX could not start: no main file was chosen (engine ${result.engine}).`);
   } else if (result.status === "timeout") {
+    // 静默卡住与总时长封顶的下一步不同：前者要改源码，后者可以拆文档或等机器空闲
+    const where = `${result.main === "" ? "" : `, main ${result.main}`}`;
     lines.push(
-      `LaTeX build timed out after ${seconds}s and was killed (engine ${result.engine}` +
-        `${result.main === "" ? "" : `, main ${result.main}`}). ` +
-        "A document that needs longer than this usually has an infinite loop (a runaway \\loop, a missing \\end) " +
-        "or macro package trouble — inspect the partial errors below.",
+      result.timeoutKind === "total"
+        ? `LaTeX build hit the total time limit and was killed after ${seconds}s (engine ${result.engine}${where}). ` +
+            "It was still writing log output, so the document is too large or the machine too slow — " +
+            "split the document or retry when the machine is free."
+        : `LaTeX build stalled: no new log output for ${String(LATEX_IDLE_TIMEOUT_MS / 1000)} seconds, killed after ${seconds}s ` +
+            `(engine ${result.engine}${where}). A build that goes silent usually has an infinite ` +
+            "loop (a runaway \\loop, a missing \\end) or a package waiting for input — " +
+            "inspect the partial errors below.",
     );
   } else if (result.status === "cancelled") {
     lines.push(`LaTeX build was cancelled after ${seconds}s (the app is shutting down or the build was stopped).`);

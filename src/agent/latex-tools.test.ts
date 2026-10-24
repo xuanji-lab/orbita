@@ -41,6 +41,7 @@ function baseResult(overrides: Partial<LatexResult>): LatexResult {
     warnings: [],
     logStale: false,
     logTail: null,
+    timeoutKind: null,
     ...overrides,
   };
 }
@@ -168,13 +169,36 @@ describe("compile_latex —— 失败", () => {
     assert.doesNotMatch(text, /pages/);
   });
 
-  test("超时：说清被杀掉了，指向部分错误", async () => {
+  test("静默超时：说清是日志不再输出、被杀掉了，指向死循环", async () => {
     const text = await runTool({
       ok: true,
-      result: baseResult({ status: "timeout", durationMs: 121_000, errors: [], logTail: null }),
+      result: baseResult({
+        status: "timeout",
+        timeoutKind: "idle",
+        durationMs: 95_200,
+        errors: [],
+        logTail: null,
+      }),
     });
-    assert.match(text, /timed out after 121\.0s and was killed/);
+    assert.match(text, /no new log output for 90 seconds/);
+    assert.match(text, /killed after 95\.2s/);
     assert.match(text, /infinite loop/);
+  });
+
+  test("总时长封顶：与静默卡住的下一步不同（拆文档 / 等机器空闲）", async () => {
+    const text = await runTool({
+      ok: true,
+      result: baseResult({
+        status: "timeout",
+        timeoutKind: "total",
+        durationMs: 600_000,
+        errors: [],
+        logTail: null,
+      }),
+    });
+    assert.match(text, /total time limit/);
+    assert.match(text, /split the document/);
+    assert.doesNotMatch(text, /no new log output/);
   });
 
   test("未安装：给出安装建议，不排错列表", async () => {
