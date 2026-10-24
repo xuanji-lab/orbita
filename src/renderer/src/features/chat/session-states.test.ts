@@ -13,6 +13,7 @@ import {
   compactionBoundaryStatus,
   enqueue,
   enqueueChannelMessage,
+  forgetThinkingObservation,
   markAllIdle,
   mergeSideRecords,
   moveQueued,
@@ -128,6 +129,32 @@ describe("applyAgentEvent —— 每会话一槽", () => {
       level: "medium",
       supported: ["off", "medium", "high"],
     });
+  });
+
+  test("换模型：forgetThinkingObservation 丢掉旧模型的支持集，只动那一条槽", () => {
+    // 实测形状：自定义 id 被 pi 按非推理模型注册，开轮后支持集只有 off；换成 glm-5.3
+    // 前不清的话，菜单会拿这份旧真值渲染新模型（只剩「关」）
+    let states = applyAgentEvent(new Map(), {
+      type: "thinking",
+      sessionId: "A",
+      level: "off",
+      supported: ["off"],
+    });
+    states = applyAgentEvent(states, {
+      type: "thinking",
+      sessionId: "B",
+      level: "low",
+      supported: ["off", "low", "medium", "high"],
+    });
+
+    const next = forgetThinkingObservation(states, "A");
+    assert.equal(next.get("A")?.thinking, null);
+    // 别的会话的槽不动（支持集跟着它自己的模型）
+    assert.deepEqual(next.get("B")?.thinking, { level: "low", supported: ["off", "low", "medium", "high"] });
+
+    // 没有可清的（已清 / 无这条槽）：原引用返回，不造新 Map
+    assert.equal(forgetThinkingObservation(next, "A"), next);
+    assert.equal(forgetThinkingObservation(next, "no-such-session"), next);
   });
 
   test("phase 按槽独立：A turn 与 B idle 并存", () => {

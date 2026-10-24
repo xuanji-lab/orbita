@@ -675,6 +675,25 @@ export function removeIntentAsk(states: SessionStates, requestId: string): Sessi
   return states;
 }
 
+/**
+ * 换模型了：上一条模型的开轮真值（clamp 档 + 支持集）作废。
+ *
+ * 支持集是**模型**的属性，不是会话的——`thinking` 事件只报「这一轮用的模型支持什么」，
+ * 事件里没有模型 id，槽里那份值因此没法自证属于谁。不清的后果实测：会话里先跑过
+ * 自定义 id（`deepseek-v4.1-flash-1017`，pi 按非推理注册 → 支持集只有 `off`），
+ * 再换成白名单只写默认档的 `glm-5.3`，旧模型的 `observed` 盖过目录，菜单只剩「关」。
+ *
+ * 清掉后退回白名单 / 目录（未知就按全量显示），下一轮开跑由新模型的 `thinking`
+ * 事件填真值——这与「未知不替 pi 撒谎」是同一条纪律。没有可清的槽就返回原引用。
+ */
+export function forgetThinkingObservation(states: SessionStates, sessionId: string): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || entry.thinking === null) return states;
+  const next = new Map(states);
+  next.set(sessionId, { ...entry, thinking: null });
+  return next;
+}
+
 /** 发出即画：记下乐观回显的正文块（与 runtime 的回显同款切法）。 */
 export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[]): SessionStates {
   return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks } }));

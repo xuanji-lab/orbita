@@ -13,6 +13,7 @@ import {
   enqueue,
   enqueueChannelMessage,
   createSessionStates,
+  forgetThinkingObservation,
   moveQueued as moveQueuedIn,
   parseCompactCommand,
   removeApproval,
@@ -417,7 +418,7 @@ interface ViewHandle {
   * 迟到的事件必须能纠回正看着的槽 */
   readonly viewedIdRef: Readonly<{ current: string | null }>;
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
-  alignModel(event: { providerId: string; modelId: string }): void;
+  alignModel(event: { sessionId: string; providerId: string; modelId: string }): void;
   alignThinking(event: { level: PiThinkingLevel }): void;
   /** 档位被父会话切档联动改了（主进程已落 meta / runtime）：mode 芯片对齐 */
   alignMode(mode: PermissionMode): void;
@@ -1457,7 +1458,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const handle: ViewHandle = {
       sessionRef,
       viewedIdRef,
-      alignModel: (event) => setModel({ providerId: event.providerId, modelId: event.modelId }),
+      alignModel: (event) => {
+        setModel({ providerId: event.providerId, modelId: event.modelId });
+        // 换模型同时丢掉上一条模型的开轮真值（支持集是模型的属性，见 forgetThinkingObservation）
+        engine.applyStates((prev) => forgetThinkingObservation(prev, event.sessionId));
+      },
       // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
       alignMode: (mode) => setMode(mode),
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
@@ -2321,6 +2326,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         applyNewTaskThinking(modelId);
         return;
       }
+      // 换了模型，上一条模型报的支持集就不再是这条会话的真值（见 forgetThinkingObservation）。
+      // 当场清、不等 model 事件回环：盘上打开的会话冷启动要几秒，那几秒里菜单会拿
+      // 旧模型的支持集渲染新模型（实测只剩「关」）
+      engine.applyStates((prev) => forgetThinkingObservation(prev, id));
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
       // 拿到你刚才给别的会话选的模型
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
