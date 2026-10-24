@@ -26,10 +26,7 @@ import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
-import { FocusControl } from "./shell/focus/FocusControl.tsx";
-import { FocusSummaryCard } from "./shell/focus/FocusSummaryCard.tsx";
-import { focusSayOf } from "./shell/focus/focus-say.ts";
-import { useFocus } from "./shell/focus/use-focus.ts";
+import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { Icon } from "./shell/Icon";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
@@ -202,187 +199,29 @@ export function App() {
   const { session, engine } = useChatSession(providers, t);
 
   // ── 专注模式（原型：focus-proto）──────────────────────────────
-  // 计时住在内存里（用户裁决：关掉重开 = 已结束），App 持有：工具栏左胶囊的
-  // FocusControl、左栏的文件视图与星云的气泡 / 卡片共用同一份状态。
-  const focus = useFocus();
-  /** 浏览态（不计时看一眼工作区文件）；专注开始时退出 */
-  const [wsBrowse, setWsBrowse] = useState<string | null>(null);
-  /** 外部发起的开浮层请求（浏览态的「以此开始专注」/卡片的「再专注一轮」）：token 递增，同源连点也重开 */
-  const focusPickerNonceRef = useRef(0);
-  const [focusPickerRequest, setFocusPickerRequest] = useState<{
-    workspaceId: string;
-    minutes?: number;
-    token: number;
-  } | null>(null);
-  /** 左栏（专注 / 浏览态）双击文件 → 右栏文件面板开预览标签（token 递增，与 reviewFocus 同款） */
-  const fileOpenNonceRef = useRef(0);
-  const [fileOpenRequest, setFileOpenRequest] = useState<{ path: string; token: number } | null>(null);
-  const openFocusFile = useCallback((absPath: string): void => {
-    fileOpenNonceRef.current += 1;
-    setFileOpenRequest({ path: absPath, token: fileOpenNonceRef.current });
-    setRightPanel("files");
+  // 计时、左栏文件视图、星云的气泡 / 卡片与四个出口全在 useFocusShell 里；这里只
+  // 递给它 App 才有的事实（设置页 / 子视图的退场、侧栏开合、右栏面板位、提示音）。
+  const leaveFocusSurfaces = useCallback((): void => {
+    setOverlay(null);
+    setShowArchived(false);
+    setShowCarryovers(false);
   }, []);
-  const openFocusPickerAt = useCallback((workspaceId: string, minutes?: number): void => {
-    focusPickerNonceRef.current += 1;
-    setFocusPickerRequest({ workspaceId, ...(minutes === undefined ? {} : { minutes }), token: focusPickerNonceRef.current });
-  }, []);
-  /** 星云卡片的一次关闭（「关闭（保持专注视图）」）：只藏卡不结束专注；每轮新开时重置 */
-  const [summaryCardClosed, setSummaryCardClosed] = useState(false);
-  /** 「正在整理」气泡的一次关闭（点了 x）：只藏气泡，到点的卡照样弹（focus-say 的口径） */
-  const [sayDismissed, setSayDismissed] = useState(false);
-  const startFocus = useCallback(
-    (workspaceId: string, minutes: number): void => {
-      setWsBrowse(null);
-      setSummaryCardClosed(false);
-      setSayDismissed(false);
-      focus.start(workspaceId, minutes);
-    },
-    [focus],
-  );
-  /** 左栏此刻的文件视图：专注中 = 所选工作区；否则看浏览态；都没有 = 会话列表 */
-  const focusFilesView =
-    focus.status.kind === "off"
-      ? wsBrowse === null
-        ? null
-        : { mode: "browse" as const, workspaceId: wsBrowse }
-      : { mode: "focus" as const, workspaceId: focus.status.run.workspaceId };
-  /**
-   * 左栏双击打开请求只属于当时那个专注 / 浏览工作区：模式结束或换工作区后作废。
-   *
-   * 请求是一次性的，但面板收下后 token 仍留在 App——面板关掉再打开（FilesPanel
-   * 重挂、consumed 的 ref 清空）会再消费一次；那时该工作区的根已经不在 tree.roots 里，
-   * 于是报一句「<文件> 不在这个面板能看到的文件夹里」（2026-10-22 验收 #259 时实测）。
-   * 同一个工作区内重开面板不受影响（workspaceId 没变）。
-   */
-  const focusFilesWorkspaceId = focusFilesView?.workspaceId ?? null;
-  useEffect(() => {
-    setFileOpenRequest(null);
-  }, [focusFilesWorkspaceId]);
-  /** 到点那一拍要响的事：提示音（设置可关）、窗口不在前台时发系统通知、收起的
-   * 侧栏展开（星云要在左下角说话——原型待定 10 的默认做法）。依赖只盯 kind：
-   * done 只发生一次，延长不会重响。 */
-  const focusRun = focus.status.kind === "off" ? null : focus.status.run;
-  useEffect(() => {
-    if (focus.status.kind !== "done" || focusRun === null) return;
-    if (settings.completionSound ?? true) playCompletionChime();
-    if (
-      isWindowInactive({
-        hasFocus: document.hasFocus(),
-        visibilityState: document.visibilityState,
-      })
-    ) {
-      const wsName =
-        session.workspaces.find((item) => item.id === focusRun.workspaceId)?.name ?? t.focus.deletedWorkspace;
-      void api.focus.notifyDone({
-        title: t.focus.notifyTitle,
-        body: t.focus.notifyBody(Math.round(focusRun.totalMs / 60_000), wsName),
-      });
-    }
-    setSidebarCollapsed(false);
-    // settle 那拍读到的闭包值就是真值（settings / session / t 都在本渲染里）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus.status.kind]);
-  const focusControl = (
-    <FocusControl
-      status={focus.status}
-      now={focus.now}
-      workspaces={session.workspaces}
-      defaultWorkspaceId={session.workspaceId}
-      preset={focus.lastPreset}
-      pickerRequest={focusPickerRequest}
-      sessionCountOf={(id) =>
-        rootSessions(session.sessions).filter((meta) => meta.workspaceId === id && !meta.archived).length
-      }
-      onStart={startFocus}
-      onExtend={focus.extend}
-      onEarlyEnd={focus.earlyEnd}
-      onEnd={focus.end}
-    />
-  );
-
-  // ── 星云要说的两句话与那张卡（原型状态 8 / 9；提前结束的问询也是气泡） ──
-  const focusWorkspaceName =
-    (focusRun !== null
-      ? session.workspaces.find((item) => item.id === focusRun.workspaceId)?.name
-      : undefined) ?? t.focus.deletedWorkspace;
-  /** 星云的「正在整理」气泡：起跑后**常驻**（用户验收：只在 running 挂着十秒就闪没了，
-   *  人看不到）——running 转圈、落定换一句诚实的话带关闭键，点 x 才消失；状态机在
-   *  focus-say.ts（纯函数）。ending 相位的问询是另一套，保持原样。 */
-  const sayView = focusSayOf(focus.status, focus.summary, sayDismissed);
-  const settledLine =
-    sayView.kind === "settled"
-      ? sayView.line === "ready"
-        ? t.focus.sayReady
-        : sayView.line === "failed"
-          ? t.focus.summaryFailed
-          : sayView.line === "no-model"
-            ? t.focus.summaryNoModel
-            : t.focus.summaryNoActivity
-      : null;
-  const focusSay =
-    sayView.kind === "running" ? (
-      <div className="usage-say usage-say-focus" role="status" data-edge="end">
-        <Icon name="loader-circle" size={12} spin />
-        <span className="orbita-breath">{t.focus.summarizing}</span>
-      </div>
-    ) : sayView.kind === "settled" ? (
-      <div className="usage-say usage-say-status" role="status" data-edge="end">
-        {sayView.line === "ready" ? <Icon name="check" size={12} strokeWidth={2.2} /> : null}
-        <span>{settledLine}</span>
-        <button
-          type="button"
-          className="usage-say-x"
-          title={t.focus.sayDismiss}
-          aria-label={t.focus.sayDismiss}
-          onClick={() => setSayDismissed(true)}
-        >
-          <Icon name="x" size={11} />
-        </button>
-      </div>
-    ) : focus.status.kind === "ending" && focus.summary.state === "idle" ? (
-      <div className="usage-say usage-say-ask" role="status" data-edge="end">
-        <span>{t.focus.askSummary}</span>
-        <button type="button" className="usage-say-act" onClick={focus.requestSummary}>
-          {t.focus.askYes}
-        </button>
-        <button type="button" className="usage-say-act" onClick={focus.end}>
-          {t.focus.askNo}
-        </button>
-      </div>
-    ) : focus.status.kind === "ending" && focus.summary.state === "running" ? (
-      <div className="usage-say usage-say-focus" role="status" data-edge="end">
-        <Icon name="loader-circle" size={12} spin />
-        <span>{t.focus.summarizing}</span>
-      </div>
-    ) : null;
-  /** 卡片：时间到（总结还没跑完就先出卡转圈）；提前结束点「要」且落定后也出卡 */
-  const focusCardVisible =
-    (focus.status.kind === "done" ||
-      (focus.status.kind === "ending" &&
-        (focus.summary.state === "ready" ||
-          focus.summary.state === "failed" ||
-          focus.summary.state === "none"))) &&
-    !summaryCardClosed;
-  const focusCard =
-    focusCardVisible && focusRun !== null ? (
-      <FocusSummaryCard
-        ending={focus.status.kind === "ending"}
-        minutes={
-          focus.status.kind === "done"
-            ? Math.round(focusRun.totalMs / 60_000)
-            : Math.max(1, Math.round((Date.now() - focusRun.startedAt) / 60_000))
-        }
-        workspaceName={focusWorkspaceName}
-        summary={focus.summary}
-        onEnd={focus.end}
-        onAgain={() => {
-          const preset = focus.lastPreset ?? { workspaceId: focusRun.workspaceId, minutes: 25 };
-          focus.end();
-          openFocusPickerAt(preset.workspaceId, preset.minutes);
-        }}
-        onClose={() => setSummaryCardClosed(true)}
-      />
-    ) : null;
+  const expandSidebar = useCallback((): void => setSidebarCollapsed(false), []);
+  const openFilesPanel = useCallback((): void => setRightPanel("files"), []);
+  const focus = useFocusShell({
+    t,
+    workspaces: session.workspaces,
+    defaultWorkspaceId: session.workspaceId,
+    sessions: session.sessions,
+    completionSound: settings.completionSound ?? true,
+    leaveSurfaces: leaveFocusSurfaces,
+    expandSidebar,
+    openFilesPanel,
+    playChime: playCompletionChime,
+  });
+  /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
+  const focusFilesView = focus.filesView;
+  const fileOpenRequest = focus.fileOpen;
 
   /**
    * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
@@ -688,7 +527,7 @@ export function App() {
   const prevStatesRef = useRef(engine.states);
   /** 专注中（计时里）：完成提醒静音——记未读、不响铃、不弹卡（用户裁决：专注期间
    * 其它会话跑完只记帐，专注结束后铃铛照常可见）。done 之后恢复常觃。 */
-  const focusQuiet = focus.status.kind === "run";
+  const focusQuiet = focus.quiet;
   useEffect(() => {
     const prev = prevStatesRef.current;
     prevStatesRef.current = engine.states;
@@ -1099,7 +938,7 @@ export function App() {
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
           onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
-          focus={focusControl}
+          focus={focus.control}
         />
         <Sidebar
           session={session}
@@ -1120,21 +959,16 @@ export function App() {
           }}
           usagePet={settings.usagePet}
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
-          usageSay={focusSay}
-          usageCard={focusCard}
+          usageSay={focus.say}
+          usageCard={focus.card}
           collapsed={sidebarCollapsed}
           onCollapsedChange={setSidebarCollapsed}
           newTaskSignal={newTaskSignal}
-          filesView={focusFilesView}
-          onBrowseWorkspace={(id) => {
-            setOverlay(null);
-            setShowArchived(false);
-            setShowCarryovers(false);
-            setWsBrowse(id);
-          }}
-          onExitBrowse={() => setWsBrowse(null)}
-          onStartFocusHere={openFocusPickerAt}
-          onOpenFile={openFocusFile}
+          filesView={focus.filesView}
+          onBrowseWorkspace={focus.browseWorkspace}
+          onExitBrowse={focus.exitBrowse}
+          onStartFocusHere={focus.startAt}
+          onOpenFile={focus.openFile}
         />
 
         <main className="pane">

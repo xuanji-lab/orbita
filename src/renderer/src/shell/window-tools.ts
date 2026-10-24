@@ -60,9 +60,6 @@ export const PANEL_MIN_W = 260;
  */
 export const PANEL_CAPSULE_INSET = 8;
 
-/** Windows 自绘窗口键（min · max · close 三枚）占的宽：右端胶囊组整体左让 */
-export const WIN_CTL_W = 118;
-
 /**
  * 对话列（会话胶囊的居中基准 = 这一列）：左缘 = 侧栏右侧（收起 = 卡片内边距），
  * 右缘 = 右栏分隔线（右栏没开 = 卡片右缘）。
@@ -81,7 +78,10 @@ export function conversationColumn(input: {
 
 /**
  * 右端边界：会话胶囊右缘能探到的最右处 = 右栏胶囊左缘（右栏开着 = 分隔线）或
- * 右栏开关胶囊左缘（没开）。Windows 的自绘窗口键在最右，右栏开关整体左让。
+ * 右栏开关胶囊左缘（没开）。
+ *
+ * Windows / Linux 的窗口三键住在品牌行（最上面那一行），不在胶囊行——胶囊行
+ * 不再为它们左让（2026-10-23 实测：旧算法减 126px，1000 宽时胶囊被截到 372）。
  */
 export function rightEdge(input: {
   windowWidth: number;
@@ -91,8 +91,7 @@ export function rightEdge(input: {
 }): number {
   const paneRight = input.windowWidth - LAYER_PAD - RAIL_W - LAYER_PAD;
   if (input.panelOpen) return paneRight - input.panelWidth;
-  const toggleRight = input.windowWidth - LAYER_PAD - (input.platform === "darwin" ? 0 : WIN_CTL_W + 8);
-  return toggleRight - RAIL_W;
+  return input.windowWidth - LAYER_PAD - RAIL_W;
 }
 
 /**

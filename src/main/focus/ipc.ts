@@ -122,7 +122,11 @@ export function registerFocusIpc(
         modelLabel: `${choice.providerId}/${choice.modelId}`,
       };
     } catch (cause) {
-      return { kind: "error", message: cause instanceof Error ? cause.message : String(cause) };
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // agent 侧失败已有 warn（带 requestId / 模型）；这里接住的是素材、密钥、回执超时这类
+      // 主进程自己的失败——不落一条，卡上那句失败就无法归因
+      console.warn(`[focus-summary] 工作区 ${req.workspaceId} 的小结没做成：${message}`);
+      return { kind: "error", message };
     }
   });
 }
