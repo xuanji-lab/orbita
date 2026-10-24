@@ -33,7 +33,14 @@ const ordered = (levels: readonly ThinkingLevel[]) =>
 
 interface Sides {
   ui: { contextWindow: number; maxTokens: number; levels: readonly ThinkingLevel[] | null };
-  runtime: { contextWindow: number; maxTokens: number; levels: ThinkingLevel[] } | undefined;
+  runtime: { contextWindow: number; maxTokens: number; levels: ThinkingLevel[]; api: string; baseUrl: string } | undefined;
+  /** 这家服务商条目配的协议与地址（会话必须照这个发） */
+  endpoint: { api: string; baseUrl: string };
+}
+
+/** 兼容条目没有预填地址（用户自己填），测试里给一个占位 */
+function baseUrlOf(known: KnownProvider): string {
+  return known.baseUrl === "" ? "https://gateway.example/v1" : known.baseUrl;
 }
 
 /** 一个（服务商条目，型号）在两边各算出什么 */
@@ -48,7 +55,7 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
     {
       id: known.id,
       apiKey: "sk-test",
-      baseUrl: known.baseUrl === "" ? "https://gateway.example/v1" : known.baseUrl,
+      baseUrl: baseUrlOf(known),
       api: known.api,
       models: [{ id: modelId }],
       ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
@@ -65,12 +72,38 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
     runtime:
       model === undefined
         ? undefined
-        : { contextWindow: model.contextWindow, maxTokens: model.maxTokens, levels: getSupportedThinkingLevels(model) },
+        : {
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens,
+            levels: getSupportedThinkingLevels(model),
+            api: model.api,
+            baseUrl: model.baseUrl,
+          },
+    endpoint: { api: expectedApi(known, modelId, runtime), baseUrl: baseUrlOf(known) },
   };
+}
+
+/**
+ * 会话该用的协议：本家目录描述的就是这家端点（有条目协议、地址都与服务商条目一样——多协议网关
+ * OpenCode Go）且收录了这个型号时，听型号自己的（minimax-m3 走 Anthropic 协议）；否则听条目的。
+ * 地址永远听条目的。
+ */
+function expectedApi(known: KnownProvider, modelId: string, runtime: ModelRuntime): string {
+  if (known.catalogId === undefined) return known.api;
+  const home = runtime.getModels(known.catalogId);
+  const describes = home.some(
+    (model) => model.api === known.api && model.baseUrl.replace(/\/+$/, "") === baseUrlOf(known).replace(/\/+$/, ""),
+  );
+  const own = home.find((model) => model.id === modelId);
+  return describes && own !== undefined ? own.api : known.api;
 }
 
 function assertAgree(label: string, sides: Sides): void {
   assert.ok(sides.runtime !== undefined, `${label}：会话里解析不出这个型号`);
+  // 协议与地址听服务商条目的：目录只借参数。以前目录条目的 api / baseUrl 会盖掉条目配的，
+  // zhipu-coding 的会话一直悄悄发到 OpenAI 协议的 Coding Plan 端点（2026-10-24 查出）
+  assert.equal(sides.runtime.api, sides.endpoint.api, `${label} 协议`);
+  assert.equal(sides.runtime.baseUrl, sides.endpoint.baseUrl, `${label} 地址`);
   assert.equal(sides.runtime.contextWindow, sides.ui.contextWindow, `${label} 窗口`);
   assert.equal(sides.runtime.maxTokens, sides.ui.maxTokens, `${label} 输出上限`);
   // 菜单说「未知」（null）时按全量显示、开轮后由 thinking 事件纠真——那不是撒谎，不比
@@ -107,6 +140,41 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
     const sides = await bothSides(entry("opencode-go"), "deepseek-v4.1-flash");
     assert.deepEqual(sides.ui.levels, ["off", "low", "high", "max"]);
     assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["off", "low", "high", "max"]);
+  });
+
+  test("OpenCode Go 是多协议网关：minimax-m3 照目录走 Anthropic 协议，声明里混了白名单型号（走补注册）也不变", async () => {
+    for (const declared of [["minimax-m3"], ["minimax-m3", "deepseek-v4.1-flash"]]) {
+      const known = entry("opencode-go");
+      const model = registerAndResolveModel(
+        await freshRuntime(),
+        {
+          id: known.id,
+          apiKey: "sk-test",
+          baseUrl: known.baseUrl,
+          api: known.api,
+          models: declared.map((id) => ({ id })),
+          ...catalogPreferenceOf(known),
+        },
+        "minimax-m3",
+      );
+      assert.equal(model?.api, "anthropic-messages", declared.join(","));
+    }
+  });
+
+  test("智谱 Coding Plan 的 glm-5.3：本家目录（zai-coding-cn）是 OpenAI 协议，会话仍走条目配的 Anthropic 端点", async () => {
+    const sides = await bothSides(entry("zhipu-coding"), "glm-5.3");
+    // 前提：目录条目的协议真的不一样，否则这条测的不是「不被目录改道」
+    const catalogEntry = (await freshRuntime()).getModel("zai-coding-cn", "glm-5.3");
+    assert.equal(catalogEntry?.api, "openai-completions");
+    assert.equal(sides.runtime?.api, "anthropic-messages");
+    assert.equal(sides.runtime?.baseUrl, "https://open.bigmodel.cn/api/anthropic");
+    // 档位表照带（型号能力跟 id 走）
+    assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["low", "high", "max"]);
+  });
+
+  test("按量的智谱：地址是 paas/v4，不被带进 Coding Plan 的 coding/paas/v4", async () => {
+    const sides = await bothSides(entry("zhipu"), "glm-5.3");
+    assert.equal(sides.runtime?.baseUrl, "https://open.bigmodel.cn/api/paas/v4");
   });
 
   test("Claude 订阅的 claude-opus-5：本家目录收录，白名单的档位照样进会话（不再多出 minimal）", async () => {
