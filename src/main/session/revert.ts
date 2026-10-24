@@ -3,8 +3,9 @@
  * 裁枝）、文件（快照还原）三条线在这里汇成一个事务。
  *
  * 顺序是刻意的：**pi 本子先裁**（对账不过就地拒绝，一条文件都不动——宁可回退
- * 失败，不切错位置），文件后还原（单文件失败记 skipped，不砸整批），我们的
- * RevertRecord / UndoRecord 最后追加（它一落盘，界面读到的就是折叠后的新世界）。
+ * 失败，不切错位置），文件后还原（单文件失败记 skipped 并把原因带回界面，不砸
+ * 整批、不静默），我们的 RevertRecord / UndoRecord 最后追加（它一落盘，界面读到
+ * 的就是折叠后的新世界）。
  *
  * 回退不拦截用户手改过的文件（2026-11 用户裁决「直接撤回，不整七七八八的。
  * 但一定要提醒用户」）：确认框里的警示组由 planRevert / planUndo 提供。
@@ -182,7 +183,20 @@ async function resolveRestoreTarget(path: string): Promise<{ target: string; mod
   return { target, mode };
 }
 
-/** 把一批 before 快照写回磁盘。单文件失败记 skipped，不砸整批。 */
+/** 写盘 / 快照失败的原因，给人看的一句话（带系统错误码，便于用户去搜）。 */
+const LOCK_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
+
+function failureReason(fallback: string, cause?: unknown): string {
+  if (!(cause instanceof Error)) return fallback;
+  const code = (cause as { code?: unknown }).code;
+  if (typeof code !== "string") return cause.message === "" ? fallback : cause.message;
+  if (LOCK_CODES.has(code)) return `文件被占用或没有写权限（${code}）`;
+  if (code === "ENOSPC") return `磁盘空间不足（${code}）`;
+  if (code === "ENOENT") return `路径已不存在（${code}）`;
+  return `写盘失败（${code}）`;
+}
+
+/** 把一批 before 快照写回磁盘。单文件失败记 skipped，不砸整批——但原因必须带回去。 */
 async function restoreFiles(
   store: SessionStore,
   id: string,
@@ -192,7 +206,7 @@ async function restoreFiles(
   for (const [path, before] of restores) {
     try {
       if (before.kind === "unrecoverable") {
-        outcomes.push({ path, outcome: "skipped" });
+        outcomes.push({ path, outcome: "skipped", reason: "没有快照（文件过大或不是文本）" });
         continue;
       }
       if (before.kind === "absent") {
@@ -202,7 +216,7 @@ async function restoreFiles(
       }
       const content = await store.snapshots.read(id, before.blob);
       if (content === null) {
-        outcomes.push({ path, outcome: "skipped" });
+        outcomes.push({ path, outcome: "skipped", reason: "快照内容已丢失" });
         continue;
       }
       const { target, mode } = await resolveRestoreTarget(path);
@@ -216,8 +230,10 @@ async function restoreFiles(
       }
       outcomes.push({ path, outcome: "restored" });
     } catch (cause) {
-      console.error("[revert] 还原一个文件失败，记 skipped", path, cause);
-      outcomes.push({ path, outcome: "skipped" });
+      // 失败不能静默：原因随结果回传（轮尾卡 / 回退卡上显示），日志留一份
+      const reason = failureReason("写盘失败", cause);
+      console.error("[revert] 还原一个文件失败，记 skipped：", path, reason, cause);
+      outcomes.push({ path, outcome: "skipped", reason });
     }
   }
   return outcomes;

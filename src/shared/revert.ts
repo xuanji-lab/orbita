@@ -121,6 +121,12 @@ export interface RevertRecord {
 export interface RevertFileOutcome {
   path: string;
   outcome: "restored" | "deleted" | "skipped";
+  /**
+   * skipped 的原因（写盘失败的错误码 / 快照不可用）。**必须回传给用户看**：
+   * 「撤销完成」而文件其实没回去，是这个字段存在之前的静默失败（实机：文件被
+   * 占用 → EBUSY → 只有主进程日志知道）。旧记录没有这个字段，照常解析。
+   */
+  reason?: string;
 }
 
 /** 单轮撤销记录（role: "undo"）。不动对话，轮尾卡片据此挂「已撤销」。 */
@@ -198,7 +204,11 @@ function parseOutcome(raw: unknown): RevertFileOutcome | null {
   if (value["outcome"] !== "restored" && value["outcome"] !== "deleted" && value["outcome"] !== "skipped") {
     return null;
   }
-  return { path: value["path"], outcome: value["outcome"] };
+  // reason 可选（旧记录没有）；在场就必须是非空字符串——半个坏值整条拒掉
+  if ("reason" in value && (typeof value["reason"] !== "string" || value["reason"] === "")) return null;
+  return typeof value["reason"] === "string"
+    ? { path: value["path"], outcome: value["outcome"], reason: value["reason"] }
+    : { path: value["path"], outcome: value["outcome"] };
 }
 
 function parseOutcomes(raw: unknown): readonly RevertFileOutcome[] | null {
