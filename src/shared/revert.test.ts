@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isFileTurnRecord } from "./revert.ts";
+import { isFileTurnRecord, isUndoRecord } from "./revert.ts";
 
 const baseChange = {
   path: "/w/a.ts",
@@ -62,5 +62,28 @@ describe("isFileTurnRecord —— webArtifactsBatch 加法字段", () => {
     strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: -3 }), false);
     strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: "12" }), false);
     strictEqual(isFileTurnRecord({ ...baseRecord, webArtifactsBatch: null }), false);
+  });
+});
+
+describe("isUndoRecord —— reason 加法字段", () => {
+  const undo = {
+    role: "undo",
+    id: "u1",
+    turnId: "t1",
+    restored: [{ path: "/w/a.ts", outcome: "restored" }],
+    timestamp: 1,
+  };
+
+  it("旧记录没有 reason 照常收下（撤销成功不需要理由）", () => {
+    strictEqual(isUndoRecord(undo), true);
+  });
+
+  it("skipped 带原因收下；在场但为空串 / 不是字符串 → 整条拒掉", () => {
+    strictEqual(
+      isUndoRecord({ ...undo, restored: [{ path: "/w/a.ts", outcome: "skipped", reason: "文件被占用或没有写权限（EBUSY）" }] }),
+      true,
+    );
+    strictEqual(isUndoRecord({ ...undo, restored: [{ path: "/w/a.ts", outcome: "skipped", reason: "" }] }), false);
+    strictEqual(isUndoRecord({ ...undo, restored: [{ path: "/w/a.ts", outcome: "skipped", reason: 3 }] }), false);
   });
 });
