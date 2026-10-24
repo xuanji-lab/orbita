@@ -18,7 +18,7 @@
  */
 import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
-import { join, win32 } from "node:path";
+import { join } from "node:path";
 import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_CMD_DIR,
@@ -49,7 +49,7 @@ import { isRemoteSessionImage, type SandboxProcessInfo } from "./process-list.ts
 /** guest 桥 exe 的文件名（guest-bridge 子代理的产物，宿主只按这个名字找） */
 const GUEST_BRIDGE_EXE = "orbita-guest-bridge.exe";
 const WSB_FILE_NAME = "session.wsb";
-/** 映射进沙箱桌面的打包产物目录名（.wsb 的 MappedFolder 落点 = 桌面下的同名目录） */
+/** 映射进沙箱桌面的打包产物目录名（.wsb 的 MappedFolder 落点见 GUEST_APP_SANDBOX_FOLDER） */
 const GUEST_APP_DIR_NAME = "orbita-app";
 /**
  * 等桥通告的 deadline：Windows 11 25H2 真机实测冷启动（含首次拉镜像）可达 105 秒以上，
@@ -61,11 +61,26 @@ const BRIDGE_POLL_INTERVAL_MS = 500;
 /** 沙箱内的固定用户桌面（.wsb 的映射目录只会落在它下面，这是 WSB 的固定行为） */
 const WSB_DESKTOP_USER = "C:\\Users\\WDAGUtilityAccount\\Desktop";
 /**
- * 打包产物的入口 exe 在 guest 里的路径（冒烟脚本按它 launch）。
- * 与 .wsb 的映射名同一个常量来源：WSB 没有客机路径参数，落点只能是桌面下的同名目录，
- * 所以两处都从 GUEST_APP_DIR_NAME 拼——改名字时不会只改一半。
+ * 桥目录在沙箱里的落点（.wsb 的 <SandboxFolder>，写死绝对 guest 路径）。
+ *
+ * **必须显式写**：MappedFolder 没有 SandboxFolder 时，WSB 按**宿主目录名**派生落点
+ * （`...\dist\win-unpacked` → `Desktop\win-unpacked`），与代码里的假设无关。
+ * 2026-10-24 真机咬过：三条映射都缺 SandboxFolder，`launch` 去 Desktop\orbita-app
+ * 找 exe 直接扑空，沙箱侧配置也可能异常导致 LogonCommand 不跑。
  */
-export const COMPUTER_USE_GUEST_APP_EXE = `${WSB_DESKTOP_USER}\\${GUEST_APP_DIR_NAME}\\orbita.exe`;
+const GUEST_BRIDGE_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\bin`;
+/** 输出目录在沙箱里的落点（同上：显式 SandboxFolder） */
+const GUEST_OUT_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\out`;
+/**
+ * 打包产物目录在沙箱里的落点（同上：显式 SandboxFolder）。
+ * COMPUTER_USE_GUEST_APP_EXE 从它拼出来，两边只有一个来源。
+ */
+const GUEST_APP_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\${GUEST_APP_DIR_NAME}`;
+/**
+ * 打包产物的入口 exe 在 guest 里的路径（冒烟脚本按它 launch）。
+ * 与 .wsb 里那条 app 映射的 SandboxFolder 同一个常量来源——改名字时不会只改一半。
+ */
+export const COMPUTER_USE_GUEST_APP_EXE = `${GUEST_APP_SANDBOX_FOLDER}\\orbita.exe`;
 
 // ── .wsb 生成 ──────────────────────────────────────────────────────────
 
@@ -96,38 +111,16 @@ function escapeXml(value: string): string {
 }
 
 /**
- * 映射目录的末段名能不能放进 LogonCommand 里那条不加引号的 junction 命令。
- *
- * 为什么只能查末段名：MappedFolder 没有客机路径参数，映射目录只会落在沙箱桌面的
- * `<目录名>/` 下，所以**末段名**（basename）就是沙箱里那一段；宿主路径前面的空格 / 中文
- * 都不参与那条命令，不该被拦。末段名按 Windows 规则切（win32.basename）：这条名字要进
- * 沙箱内的 junction 命令，真机路径是 `C:\...`，posix basename 在 macOS/Linux 开发机上
- * 切不开它（测试也要在任何平台过）。
- *
- * 为什么不能带空格 / cmd 特殊字符：整条命令包在 `cmd.exe /c "…"` 里，路径再各自套一层
- * 引号会把自己绕死（cmd 的引号规则与 XML 转义叠加），所以 `mklink /J C:\orbita-bridge
- * C:\…\Desktop\my bridge` 会被 cmd 切成两个参数——junction 建不成，桥也就不存在。
- * 以前这条约束只活在注释里（2026-10-14 审查意见 F：让它可执行）。
- *
- * 返回人话错误（带上是哪个目录），没问题回 null。
- */
-export function junctionPathIssue(bridgeDir: string, outputDir: string): string | null {
-  const names = [win32.basename(bridgeDir), win32.basename(outputDir)];
-  const bad = names.find((name) => /[\s&()^|<>%"]/.test(name));
-  if (bad === undefined) return null;
-  return (
-    `映射目录的末段名不能带空格或 cmd 特殊字符：「${bad}」——.wsb 里的 junction 命令不加引号，` +
-    "会被 cmd 切成两个参数。把 guest 桥 / 输出目录放到不含这些字符的路径下再启动。"
-  );
-}
-
-/**
- * 渲染 .wsb。两个坑都处理在明面上：
+ * 渲染 .wsb。三个坑都处理在明面上：
  *  - XML 转义：宿主路径可含空格 / 中文 / &，全部过 escapeXml（含命令串里的 && → &amp;&amp;）；
- *  - 沙箱内路径：MappedFolder 没有客机路径参数，只会落在沙箱桌面 <目录名>/ 下。协议要求
- *    桥从固定路径 C:\orbita-bridge 跑，所以 LogonCommand 先用 junction（mklink /J，免提权）
- *    把桌面映射目录并到固定路径，再启动桥；&& 要 cmd 解释，整条命令包在 cmd.exe /c 里。
- *    （junction + LogonCommand + 桌面落点均已在 Windows 11 25H2 真机验证，2026-10-10。）
+ *  - 沙箱内落点：**每条映射都显式写 <SandboxFolder>**（绝对 guest 路径，写死在常量里）。
+ *    不写的话 WSB 按**宿主目录名**派生落点（`...\dist\win-unpacked` → `Desktop\win-unpacked`），
+ *    代码里假设的路径就全错（2026-10-24 真机：launch 扑空、桥可能压根没起）。
+ *    显式写之后落点与宿主目录名无关，LogonCommand 里那条不加引号的 junction 也就不再
+ *    受宿主末段名的空格 / cmd 特殊字符影响（原来的 junctionPathIssue 闸门因此删掉）。
+ *  - 协议要求桥从固定路径 C:\orbita-bridge 跑，所以 LogonCommand 先用 junction（mklink /J，
+ *    免提权）把 SandboxFolder 并到固定路径，再启动桥；&& 要 cmd 解释，整条命令包在
+ *    cmd.exe /c 里。（junction + LogonCommand + 桌面落点均已在 Windows 11 25H2 真机验证，2026-10-10。）
  *
  * Networking 用 Default（沙箱能上网）：官方 .wsb 文档只定义 Disable / Default 两个值，
  * Default 即启用。**这是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
@@ -135,22 +128,22 @@ export function junctionPathIssue(bridgeDir: string, outputDir: string): string 
  * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
  *
  * appDir（PR5，打包产物冒烟）：多一条**只读**映射，把 `<repo>/dist/win-unpacked` 放到沙箱
- * 桌面的 orbita-app/ 下。为什么只读：沙箱里跑的是一份待验收的产物，它不该回写宿主的
- * 打包目录（产物是构建结果，被沙箱改过就没法判断「验的是不是同一份」）。
- * 为什么用桌面子目录而不是 junction：MappedFolder 落到 <目录名>/ 的规则已经满足需求，
- * 多建一条 junction 只会再给 cmd 引号规则添一个坑。
+ * 桌面的 orbita-app/ 下（SandboxFolder 与 COMPUTER_USE_GUEST_APP_EXE 同源）。
+ * 为什么只读：沙箱里跑的是一份待验收的产物，它不该回写宿主的打包目录（产物是构建结果，
+ * 被沙箱改过就没法判断「验的是不是同一份」）。
+ * 为什么用桌面子目录而不是 junction：SandboxFolder 直接指定落点就够了，多建一条 junction
+ * 只会再给 cmd 引号规则添一个坑。
  */
 export function renderWsbXml(input: WsbRenderInput): string {
-  // 末段名按 Windows 规则切（映射目录落在沙箱桌面 <目录名>/ 下，名字进 junction 命令）
-  const bridgeOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.bridgeDir)}`;
-  const outOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.outputDir)}`;
-  // 映射目录名写死在 .wsb 里（MappedFolder 没有客机路径参数，落点只能是桌面下的同名目录），
-  // 所以映射的名字与冒烟脚本使用的 guest 路径必须靠同一个常量对上。
+  // 映射落点全部走显式 <SandboxFolder>（不靠目录名派生）。junction 的目标同时也是
+  // SandboxFolder——否则「映射落在哪」与「junction 指向哪」会各说一套。
+  const bridgeOnDesktop = GUEST_BRIDGE_SANDBOX_FOLDER;
+  const outOnDesktop = GUEST_OUT_SANDBOX_FOLDER;
   const appDir = input.appDir;
   const appMapping =
     appDir === undefined || appDir === ""
       ? ""
-      : `\n    <MappedFolder>\n      <HostFolder>${escapeXml(appDir)}</HostFolder>\n      <ReadOnly>true</ReadOnly>\n    </MappedFolder>`;
+      : `\n    <MappedFolder>\n      <HostFolder>${escapeXml(appDir)}</HostFolder>\n      <SandboxFolder>${escapeXml(GUEST_APP_SANDBOX_FOLDER)}</SandboxFolder>\n      <ReadOnly>true</ReadOnly>\n    </MappedFolder>`;
   const guestCommand = [
     "cmd.exe /c \"",
     `mklink /J ${COMPUTER_USE_GUEST_BRIDGE_DIR} ${bridgeOnDesktop}`,
@@ -167,10 +160,12 @@ export function renderWsbXml(input: WsbRenderInput): string {
   <MappedFolders>
     <MappedFolder>
       <HostFolder>${escapeXml(input.bridgeDir)}</HostFolder>
+      <SandboxFolder>${escapeXml(GUEST_BRIDGE_SANDBOX_FOLDER)}</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
     <MappedFolder>
       <HostFolder>${escapeXml(input.outputDir)}</HostFolder>
+      <SandboxFolder>${escapeXml(GUEST_OUT_SANDBOX_FOLDER)}</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>${appMapping}
   </MappedFolders>
@@ -376,11 +371,9 @@ export class SandboxController {
         error: `找不到 ${this.deps.sandboxExePath}——Windows 沙箱功能可能未启用，先「检测能力」看开启指引`,
       };
     }
-    // LogonCommand 里那条 junction 命令不加引号（理由见 junctionPathIssue）：末段名带空格 /
-    // cmd 特殊字符的话它会被切坏——宁可不启动，也不落一份跑不起来的 .wsb
+    // 映射落点由 .wsb 的 <SandboxFolder> 写死，与宿主目录末段名无关——这里不再有
+    // 「末段名带空格会切坏 junction」的闸门（路径不再进命令串）
     const outputDir = join(this.deps.computerUseDir, "out");
-    const junctionIssue = junctionPathIssue(this.deps.bridgeDir, outputDir);
-    if (junctionIssue !== null) return { ok: false, error: junctionIssue };
 
     const generation = ++this.generation;
     // 新一局开始：上一局可能还有没走完的收尾链（兜底 / 升级窗口 / 退出轮询），先全清

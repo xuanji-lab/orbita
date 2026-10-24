@@ -9,7 +9,6 @@ import { parseBridgeInfo, waitForBridgeInfo } from "./bridge-ready.ts";
 import { type SandboxProcessInfo } from "./process-list.ts";
 import {
   COMPUTER_USE_GUEST_APP_EXE,
-  junctionPathIssue,
   renderWsbXml,
   SandboxController,
   type SandboxDeps,
@@ -221,6 +220,52 @@ describe("renderWsbXml", () => {
     assert.ok(!command.includes("&&"), "不允许裸 && 留在 XML 里");
   });
 
+  // ── 显式 SandboxFolder（2026-10-24 真机：缺它导致 launch 扑空、桥可能没起）─────
+  //
+  // WSB 对没有 SandboxFolder 的映射按**宿主目录名**派生落点（`...\dist\win-unpacked` →
+  // `Desktop\win-unpacked`），与代码假设的 `Desktop\orbita-app` 无关。所以每条映射都必须
+  // 写死绝对 guest 路径，且 junction 的目标必须就是同一个落点。
+
+  test("每条映射都有 SandboxFolder，且 junction 目标与它一致", () => {
+    const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out", appDir: "C:\\c\\win-unpacked" });
+    const folders = mappedFolders(xml);
+    assert.equal(folders.length, 3);
+    assert.deepEqual(
+      folders.map((folder) => folder.sandbox),
+      [
+        "C:\\Users\\WDAGUtilityAccount\\Desktop\\bin",
+        "C:\\Users\\WDAGUtilityAccount\\Desktop\\out",
+        "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app",
+      ],
+    );
+    // junction 的目标就是 SandboxFolder（bridge / out 两条）
+    const command = /<Command>(.+)<\/Command>/s.exec(xml)?.[1] ?? "";
+    assert.ok(command.includes(`mklink /J C:\\orbita-bridge ${folders[0]?.sandbox ?? ""}`));
+    assert.ok(command.includes(`mklink /J C:\\orbita-out ${folders[1]?.sandbox ?? ""}`));
+  });
+
+  test("落点不随宿主目录名漂移：换名宿主目录，SandboxFolder 不变", () => {
+    // 打包产物宿主目录名是 win-unpacked（不是 orbita-app）：缺 SandboxFolder 时 WSB 会落到
+    // Desktop\win-unpacked，这里锁住「显式写死」这件事
+    const xml = renderWsbXml({ bridgeDir: "C:\\x\\guest-bridge-bin", outputDir: "C:\\y\\cu-out", appDir: "C:\\z\\win-unpacked" });
+    assert.deepEqual(
+      mappedFolders(xml).map((folder) => folder.sandbox),
+      [
+        "C:\\Users\\WDAGUtilityAccount\\Desktop\\bin",
+        "C:\\Users\\WDAGUtilityAccount\\Desktop\\out",
+        "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app",
+      ],
+    );
+  });
+
+  test("bin / out 的 SandboxFolder 与 guest 协议固定路径一致（不然 junction 指着空的）", () => {
+    const folders = mappedFolders(renderWsbXml({ bridgeDir: "C:\\a\\whatever", outputDir: "C:\\b\\whatever" }));
+    // 协议固定路径是 C:\orbita-bridge / C:\orbita-out，由 LogonCommand 的 junction 并过去；
+    // 落点必须在桌面下、末段名分别是 bin / out（junction 命令里写的就是这两个）
+    assert.match(folders[0]?.sandbox ?? "", /^C:\\Users\\WDAGUtilityAccount\\Desktop\\bin$/);
+    assert.match(folders[1]?.sandbox ?? "", /^C:\\Users\\WDAGUtilityAccount\\Desktop\\out$/);
+  });
+
   // ── 打包产物映射（PR5）───────────────────────────────────────────────
   //
   // 这条映射是可选的：没出包时 .wsb 必须少一条 MappedFolder，而不是写一条指向不存在目录的
@@ -231,6 +276,11 @@ describe("renderWsbXml", () => {
     assert.equal(mappedFolders(xml).length, 2);
     assert.ok(!xml.includes("orbita-app"), "没传 appDir 就不该出现打包产物的映射");
     assert.equal(readOnlyFlags(xml).join(","), "true,false");
+    // 少一条映射也不能少 SandboxFolder：桥与 out 仍然必须有显式落点
+    assert.deepEqual(
+      mappedFolders(xml).map((folder) => folder.sandbox),
+      ["C:\\Users\\WDAGUtilityAccount\\Desktop\\bin", "C:\\Users\\WDAGUtilityAccount\\Desktop\\out"],
+    );
   });
 
   test("有打包产物：多一条只读映射，宿主路径转义，LogonCommand 不变", () => {
@@ -239,11 +289,15 @@ describe("renderWsbXml", () => {
     const folders = mappedFolders(xml);
     assert.equal(folders.length, 3, "第三条是打包产物映射");
     assert.deepEqual(folders, [
-      { host: "C:\\a\\bin", readOnly: "true" },
-      { host: "C:\\b\\out", readOnly: "false" },
-      { host: "C:\\Users\\达 玛 &amp; &lt;dev&gt;\\orbita\\dist\\win-unpacked", readOnly: "true" },
+      { host: "C:\\a\\bin", sandbox: "C:\\Users\\WDAGUtilityAccount\\Desktop\\bin", readOnly: "true" },
+      { host: "C:\\b\\out", sandbox: "C:\\Users\\WDAGUtilityAccount\\Desktop\\out", readOnly: "false" },
+      {
+        host: "C:\\Users\\达 玛 &amp; &lt;dev&gt;\\orbita\\dist\\win-unpacked",
+        sandbox: "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app",
+        readOnly: "true",
+      },
     ]);
-    // junction 命令不需要多建一条：MappedFolder 自己就落到桌面的 orbita-app/ 下
+    // LogonCommand 不因为多一条映射而变（app 映射没有要建的 junction）
     const command = /<Command>(.+)<\/Command>/s.exec(xml)?.[1] ?? "";
     assert.ok(command.includes("mklink /J C:\\orbita-bridge"));
     assert.ok(!command.includes("orbita-app"), "打包产物不进 LogonCommand（没有要建的 junction）");
@@ -256,19 +310,24 @@ describe("renderWsbXml", () => {
     }
   });
 
-  test("COMPUTER_USE_GUEST_APP_EXE 与映射名指向同一个目录（两边拼法一致）", () => {
-    // .wsb 没有客机路径参数，落点就是桌面下的同名目录；冒烟脚本用的是这条常量。
-    // 两边改了任一处而没改另一处，沙箱里就会 launch 一个不存在的路径。
+  test("COMPUTER_USE_GUEST_APP_EXE 与 app 映射的 SandboxFolder 指向同一目录（同一个常量拼出来）", () => {
+    // 曾经两边各写一遍：XML 假设 Desktop\\orbita-app，而缺 SandboxFolder 时 WSB 实际落到
+    // Desktop\\win-unpacked，于是 launch 扑空。现在由 SandboxFolder 的目录部分 + 文件名拼出。
+    const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out", appDir: "C:\\repo\\dist\\win-unpacked" });
+    const appFolder = mappedFolders(xml)[2]?.sandbox ?? "";
+    assert.notEqual(appFolder, "", "有产物时必须有 app 的 SandboxFolder");
+    assert.equal(`${appFolder}\\orbita.exe`, COMPUTER_USE_GUEST_APP_EXE);
     assert.match(COMPUTER_USE_GUEST_APP_EXE, /^C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita\.exe$/);
   });
 });
 
-/** 把 .wsb 里的 MappedFolder 抽成 [{host, readOnly}]（顺序即文档顺序） */
-function mappedFolders(xml: string): Array<{ host: string; readOnly: string }> {
-  const result: Array<{ host: string; readOnly: string }> = [];
-  const pattern = /<MappedFolder>\s*<HostFolder>([\s\S]*?)<\/HostFolder>\s*<ReadOnly>([^<]*)<\/ReadOnly>\s*<\/MappedFolder>/g;
+/** 把 .wsb 里的 MappedFolder 抽成 [{host, sandbox, readOnly}]（顺序即文档顺序） */
+function mappedFolders(xml: string): Array<{ host: string; sandbox: string; readOnly: string }> {
+  const result: Array<{ host: string; sandbox: string; readOnly: string }> = [];
+  const pattern =
+    /<MappedFolder>\s*<HostFolder>([\s\S]*?)<\/HostFolder>\s*<SandboxFolder>([\s\S]*?)<\/SandboxFolder>\s*<ReadOnly>([^<]*)<\/ReadOnly>\s*<\/MappedFolder>/g;
   for (const match of xml.matchAll(pattern)) {
-    result.push({ host: match[1] ?? "", readOnly: match[2] ?? "" });
+    result.push({ host: match[1] ?? "", sandbox: match[2] ?? "", readOnly: match[3] ?? "" });
   }
   return result;
 }
@@ -692,45 +751,11 @@ describe("手动截图", () => {
 
 
 
-// ── junction 末段名闸门（审查意见 F）──────────────────────────────────────
+// ── 平台闸门 ──
 //
-// .wsb 里那条 junction 命令不加引号（整条包在 cmd.exe /c "…" 里，路径再套引号会把自己
-// 绕死），所以映射目录的末段名带空格 / cmd 特殊字符就会把命令切坏——以前这条约束只活在
-// 注释里，现在它可执行：start() 在落 .wsb 之前先卡一次。
-// 路径一律用 join() 拼（不写反斜杠字面量）：win32 与 posix 的 basename 都认自己那套分隔符。
-
-describe("junction 末段名闸门", () => {
-  test("junctionPathIssue：干净名字放行；空格 / cmd 特殊字符拦下；只看末段名", () => {
-    const p = (...parts: string[]): string => join(...parts);
-    assert.equal(junctionPathIssue(p("app", "guest-bridge", "bin"), p("u", "orbita", "computer-use", "out")), null);
-    // 宿主路径前面的空格 / 中文不参与那条命令，不该被拦
-    assert.equal(junctionPathIssue(p("Users", "达 玛", "guest-bridge", "bin"), p("Users", "达 玛", "orbita", "out")), null);
-    assert.match(String(junctionPathIssue(p("x", "my bridge"), p("y", "out"))), /my bridge/);
-    assert.match(String(junctionPathIssue(p("x", "bin"), p("y", "my out"))), /my out/);
-    for (const [bridgeDir, outputDir] of [
-      [p("x", "bin & co"), p("y", "out")],
-      [p("x", "bin"), p("y", "a(b)")],
-      [p("x", "a^b"), p("y", "out")],
-      [p("x", "100%done"), p("y", "out")],
-    ] as const) {
-      assert.ok(junctionPathIssue(bridgeDir, outputDir) !== null, `${bridgeDir} / ${outputDir}`);
-    }
-  });
-
-  test("start：末段名带空格 → 人话错误，不 spawn、不落 .wsb、状态停在 off", async () => {
-    const harness = await makeHarness({ bridgeDir: join("some path", "my bridge") });
-    try {
-      const result = await harness.controller.start();
-      assert.equal(result.ok, false);
-      assert.ok(result.ok === false && /my bridge/.test(result.error), result.ok ? "" : result.error);
-      assert.deepEqual(harness.spawned, [], "闸门在 spawn 之前，不该起沙箱进程");
-      assert.equal(existsSync(join(harness.dir, "session.wsb")), false, "不该落 .wsb");
-      assert.deepEqual(harness.controller.status(), { state: "off" });
-    } finally {
-      await harness.close();
-    }
-  });
-});
+// （历史：这里曾有「junction 末段名带空格 / cmd 特殊字符就拦住」的闸门——映射落点靠宿主
+// 目录名派生时才有必要。现在落点由 .wsb 的 <SandboxFolder> 写死，宿主路径不再进命令串，
+// 该闸门与它的测试一并删掉：它能拦的只剩下「连接了不存在的坏路径」这类误报。）
 
 // ── stop 的收尾链：宣布 off 必须有退出证据（2026-10-14 真机咬两次）──────────
 //
