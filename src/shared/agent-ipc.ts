@@ -20,6 +20,7 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -662,6 +663,13 @@ export type AgentCommand =
        * 开关全关时不装配（与 main 行为一致的边界代价，见主进程装配处注释）。
        */
       backfill?: string[];
+      /**
+       * 实验功能「电脑使用」的开关（settings.experimentalFeatures["computer-use"]）。
+       * **主进程从设置装配**（同 pdfCitations）。开着时 runtime 才注册沙箱工具组
+       * （computer_screenshot / click / type / key / scroll）；缺席 = 关——关着时模型
+       * 根本看不到这些工具（不是执行时才拦）。沙箱本身由用户在设置页启停。
+       */
+      computerUse?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -761,6 +769,8 @@ export type AgentCommand =
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
       backfill?: string[];
+      /** 实验功能「电脑使用」的开关，语义同 submit */
+      computerUse?: boolean;
     }
   | {
       /**
@@ -822,6 +832,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 实验功能「电脑使用」的开关，语义同 submit */
+      computerUse?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -855,6 +867,8 @@ export type AgentCommand =
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
+  /** computer use：主进程对 computerUseRequest 的回执（browserResult 同款） */
+  | ({ type: "computerUseResult"; requestId: string } & ComputerUseToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -1022,6 +1036,14 @@ export type AgentEvent =
    * 作用于该会话自己的 agent tab（没有就建）。回 browserResult。
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
+  /**
+   * computer use：agent 的沙箱像素工具请求（screenshot / click / type / key / scroll，
+   * 形状见 shared/computer-use.ts 的 ComputerUseToolRequest）。**沙箱在主进程**
+   * （SandboxController，browserRequest 同一条边界）：agent 进程只剩「工具定义 →
+   * requestId 问答」一层薄包装。沙箱是应用级一份（不按会话分），sessionId 只为信封一致。
+   * 回 computerUseResult。
+   */
+  | { type: "computerUseRequest"; requestId: string; sessionId: string; request: ComputerUseToolRequest }
   /**
    * 终端：agent 的终端工具请求（terminal_open / execute / read / list /
    * interrupt / close，形状见 shared/terminal.ts 的 TerminalToolRequest）。

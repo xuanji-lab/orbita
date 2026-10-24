@@ -24,13 +24,16 @@
  *   - 就绪：桥启动后写 out/bridge.json（tmp+rename）——它出现即代表命令循环已上线。
  *   - 隔离即鉴权：命令目录在宿主用户目录下、沙箱是会话级一次性环境，协议里不再要 token。
  *
- * PR1 范围 = 沙箱生命周期 + renderer 手动「看一眼」截图；pi 工具（agent 驱动）是 PR2/3。
- * preload / renderer 面随 renderer 刀接——契约在此定死，四层照 browser 域的模式铺。
+ * PR1 范围 = 沙箱生命周期 + renderer 手动「看一眼」截图。
+ * PR2 范围 = agent 的像素工具组（截图 / 点击 / 打字 / 按键 / 滚动）：命令经
+ * `computerUseRequest` / `computerUseResult`（agent-ipc.ts 的 requestId 问答，
+ * browserRequest 同款）下发，**只有 agent 进程看得见**——renderer 面照旧只有 PR1 那四个入口。
+ * CDP 浏览器通道是 PR3，不在这里。
  *
  * 调用方：
  *   renderer   → computerUseProbe / Start / Stop / Screenshot（renderer 发起、主进程执行）
  *   主进程     → computerUseStatus（状态机每次迁移推给 renderer，单向）
- *   agent 进程 → PR2/3 才经 request-broker 接进来，本文件先不定义那对通道
+ *   agent 进程 → computerUseRequest / computerUseResult（工具定义 → requestId 问答，薄包装）
  */
 
 export const computerUseChannels = {
@@ -58,6 +61,56 @@ export const COMPUTER_USE_GUEST_OUT_DIR = "C:\\orbita-out";
 export const BRIDGE_INFO_FILE = "bridge.json";
 /** 命令目录名（out 目录下；宿主写 req、桥写 resp 的地方） */
 export const COMPUTER_USE_CMD_DIR = "cmd";
+
+/**
+ * guest 桥认的命令名。**字符串两端的唯一真源**：宿主按它发，桥按它分派
+ * （guest-bridge/Program.cs 的 Execute），改一个字母就是两端脱钩。
+ * 载荷都是扁平的 JSON 对象，形状见各 ComputerUseToolRequest 分支。
+ */
+export const computerUseGuestCommands = {
+  /** 就绪探针：映射文件夹 host→guest 开机后有热身期，桥通告了不代表命令通道已通 */
+  ping: "ping",
+  /** 截沙箱主屏一张，回 JPEG 兄弟文件 + 回图/物理屏两套尺寸 */
+  screenshot: "screenshot",
+  /** 移动指针并按键（SendInput 绝对坐标，沙箱原生物理像素） */
+  click: "click",
+  /** 逐字符 Unicode 注入（KEYEVENTF_UNICODE，中文可用），落在当前焦点窗口 */
+  type: "type",
+  /** 按一个键或一组组合键（键名→VK 的映射表在桥里） */
+  key: "key",
+  /**
+   * 把指针移到某点并滚轮（正数向下）。deltaY 的单位是**滚轮格数**：桥乘 WHEEL_DELTA
+   * 得到 Windows 的 wheel 数据（wheel 正数向上，所以桥取负）。
+   */
+  scroll: "scroll",
+} as const;
+
+export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof typeof computerUseGuestCommands];
+
+/**
+ * 回图的宽度上限（缺省值）。回图会被缩放压成 JPEG——模型要看清按钮与文字，
+ * 但每张图都吃上下文，1280 是这两个约束的折中（renderer 的「看一眼」同值）。
+ * 桥按**长边**缩放，所以它同时是高度上限。
+ */
+export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
+
+/**
+ * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
+ *
+ * **45 秒不是拍脑袋的宽容值**：2026-10-10 真机实测，win+r 弹出「运行」框之后，
+ * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
+ * （触发面只有这类壳对话框；escape / click 后立刻 type 只要 433ms）。桥那边已改成
+ * 序号直探（guest-bridge/Program.cs 的 PollOnce），把黑窗压到 ~8s，但黑窗仍存在。
+ * 15 秒会把一次**真的成功了**的注入判成失败，而模型看到失败会重试——同一个动作做两遍
+ * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
+ * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
+ *
+ * 放在 shared（而不是定义它的 bridge-client）是因为 agent 侧的 computer-tools 也要读它：
+ * broker 的兜底超时必须比这条线更长，否则主进程还在等、agent 先把真成功判成
+ * 「主进程没有回执」（computer-tools.ts 的 BROKER_TIMEOUT_MS）。agent 进程不能
+ * import 主进程模块，跨进程共享的常量只有这里能放。
+ */
+export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
 
 // ── 沙箱状态机 ────────────────────────────────────────────────────────
 
@@ -128,10 +181,98 @@ export type ComputerUseStartResult = { ok: true } | { ok: false; error: string }
 export type ComputerUseStopResult = { ok: true } | { ok: false; error: string };
 
 /**
- * computerUseScreenshot 的回执：guest 桥按 maxWidth 缩放后的 JPEG + 原始桌面尺寸。
- * nativeWidth/Height 是**沙箱桌面**的原始像素（模型换算点击坐标要用它与回图的比值）；
- * takenAt 是宿主收到图的时刻（毫秒），renderer 可拿来判图的新旧。
+ * computerUseScreenshot 的回执：guest 桥按 maxWidth 缩放后的 JPEG + 两套尺寸。
+ * width/Height 是**回图**的像素（模型看到的那张图），nativeWidth/Height 是**沙箱物理屏**
+ * 的像素——模型给的坐标是前者，注入 SendInput 要的是后者，两者靠这一对尺寸换算
+ * （screenshotPointToNative）。takenAt 是宿主收到图的时刻（毫秒），renderer 可拿来判图的新旧。
  */
 export type ComputerUseScreenshotResult =
-  | { ok: true; jpegBase64: string; nativeWidth: number; nativeHeight: number; takenAt: number }
+  | {
+      ok: true;
+      jpegBase64: string;
+      /** 回图尺寸（模型看到的像素） */
+      width: number;
+      height: number;
+      /** 沙箱物理屏尺寸 */
+      nativeWidth: number;
+      nativeHeight: number;
+      takenAt: number;
+    }
   | { ok: false; error: string };
+
+// ── agent 的像素工具组（PR2）───────────────────────────────────────────
+
+/** 鼠标键。缺省 left——绝大多数操作是左键 */
+export type ComputerUseButton = "left" | "right" | "middle";
+
+/**
+ * agent 工具 → 主进程的请求。**坐标一律是沙箱物理屏像素**：换算在工具层做
+ * （computer-tools.ts 拿最近一次截图的几何把模型给的图像坐标还原），主进程与桥
+ * 只认物理像素——这两端不该各自再猜一遍缩放。
+ */
+export type ComputerUseToolRequest =
+  | { action: "screenshot"; maxWidth?: number }
+  | { action: "click"; x: number; y: number; button?: ComputerUseButton; double?: boolean }
+  | { action: "type"; text: string }
+  | { action: "key"; key: string }
+  | { action: "scroll"; x: number; y: number; deltaY: number };
+
+/**
+ * 一张截图的全部几何 + 字节：工具层存下它，把模型随后给的图像坐标换算成物理像素。
+ * data 是 JPEG 的 base64（与 browser_screenshot 同款：pi 的图片块直接吃它）。
+ */
+export interface ComputerUseShot {
+  /** 回图尺寸（模型看到的像素） */
+  width: number;
+  height: number;
+  /** 沙箱物理屏尺寸 */
+  nativeWidth: number;
+  nativeHeight: number;
+  data: string;
+}
+
+/** computerUseRequest 的回执载荷：主进程组装，agent 进程翻成 pi 工具结果（browserResult 同款） */
+export type ComputerUseToolOutcome =
+  | {
+      ok: true;
+      /** 给模型的正文（纯文本：做了什么、屏幕现在什么样、下一步该干什么） */
+      text: string;
+      /** 只有 screenshot 带：回图字节与两套尺寸（工具层换算坐标要靠它） */
+      shot?: ComputerUseShot;
+    }
+  | { ok: false; error: string };
+
+/** 只用到尺寸的那部分几何（换算函数的最小输入，测试与工具层都不必凑齐字节） */
+export interface ComputerUseShotGeometry {
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+}
+
+/**
+ * 回图坐标 → 沙箱物理屏坐标。**越界一律 null，不做猜测性钳制**：
+ * 模型给了图外一个很远的点（比如把 2560 当成图宽）时，悄悄钳到边缘等于替它点了个
+ * 它没打算点的东西；回一句「这张图只有 1280×720」它才知道自己算错了。
+ * 边界值（x == width / y == height）算合法——那是「贴右 / 下边缘」的正常写法，
+ * 四舍五入后落在最后一个像素上。
+ *
+ * 回图与物理屏的比例两个轴各算各的：桥按长边等比缩放，正常两轴同比例，
+ * 但这里不假设——等比是桥的实现细节，不是协议。
+ */
+export function screenshotPointToNative(
+  shot: ComputerUseShotGeometry,
+  x: number,
+  y: number,
+): { x: number; y: number } | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (x < 0 || y < 0 || x > shot.width || y > shot.height) return null;
+  return {
+    x: clamp(Math.round((x * shot.nativeWidth) / shot.width), 0, shot.nativeWidth - 1),
+    y: clamp(Math.round((y * shot.nativeHeight) / shot.height), 0, shot.nativeHeight - 1),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
