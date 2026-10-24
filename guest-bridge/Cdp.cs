@@ -1032,7 +1032,8 @@ internal sealed class CdpSession
         _port = 0;
         _product = "";
         // 等端口文件的窗口按剩余预算压：冷启动实测 2.5s，但也不能让 Launch 吃光预算撞上杀线
-        int wait = RemainingMs() - 9000;
+        //（留 12s 给后面的 attach + 验过；它们自己也会被 Exchange 的预算夹住）
+        int wait = RemainingMs() - 12000;
         if (wait > LaunchTimeoutMs) wait = LaunchTimeoutMs;
         try
         {
@@ -1085,8 +1086,11 @@ internal sealed class CdpSession
             try
             {
                 ConnectAndAttach();
+                int probeMs = RemainingMs() - 2000;
+                if (probeMs > 4000) probeMs = 4000;
+                if (probeMs < 1500) probeMs = 1500;
                 string probe = Exchange(_sessionId, "Runtime.evaluate",
-                    "{\"expression\":\"1\",\"returnByValue\":true}", 4000);
+                    "{\"expression\":\"1\",\"returnByValue\":true}", probeMs);
                 string err = CdpError(probe);
                 if (err == null)
                 {
@@ -1111,6 +1115,11 @@ internal sealed class CdpSession
     /** 发一条 CDP 消息并等它自己的回执（只发、不重试、不解释错误） */
     private string Exchange(string sessionId, string method, string paramsJson, int timeoutMs)
     {
+        // 单条消息也不许活过这条命令的预算：否则一次判死恢复里「8s 端口 + 8s attach + 4s 验过」
+        // 就能把整条命令拖过 worker 的 40s 杀线（杀掉就连回执都写不出去）。
+        int budgetLeft = RemainingMs() - 1200;
+        if (timeoutMs > budgetLeft)
+            timeoutMs = budgetLeft < 1500 ? 1500 : budgetLeft;
         int id = ++_nextId;
         StringBuilder m = new StringBuilder();
         m.Append("{\"id\":").Append(id).Append(",\"method\":\"").Append(method).Append("\",\"params\":").Append(paramsJson);
