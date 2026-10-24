@@ -405,6 +405,18 @@ describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用�
       assert.ok(keys.has(provider.id), `${provider.id} 没有 logo`);
     }
   });
+  test("家族图标的键不被服务商那一行盖掉（LOGOS 先展开 FAMILY_LOGOS，同名键后写的赢）", () => {
+    // 2026-10-24：家族键 doubao 撞上火山方舟服务商的 id doubao，seed-* 型号显示成火山引擎的标
+    const family = /const FAMILY_LOGOS[^{]*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    const familyKeys = [...family.matchAll(/^\s*"?([a-z0-9-]+)"?\s*[:,]/gm)].map((m) => m[1]);
+    assert.ok(familyKeys.length >= 10, "没解析出 FAMILY_LOGOS 的键");
+    const block = /const LOGOS[^{]*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    for (const [, key, value] of block.matchAll(/^\s*"?([a-z0-9-]+)"?\s*:\s*([A-Za-z0-9_]+),/gm)) {
+      if (!familyKeys.includes(key ?? "")) continue;
+      const own = new RegExp(`^\\s*"?${key}"?\\s*(?::\\s*([A-Za-z0-9_]+))?,`, "m").exec(family);
+      assert.equal(value, own?.[1] ?? key, `LOGOS 里的 ${key} 盖掉了同名家族图标`);
+    }
+  });
   test("claude 映射到 claude.svg（橙色），anthropic-compatible 仍是 anthropic.svg", () => {
     assert.match(src, /import claude from "[^"]*vendor-logos\/claude\.svg\?raw"/);
     assert.match(src, /^\s*claude,\s*$/m);

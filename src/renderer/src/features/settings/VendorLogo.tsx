@@ -2,15 +2,18 @@ import anthropic from "../../../../../design-system/assets/vendor-logos/anthropi
 import claude from "../../../../../design-system/assets/vendor-logos/claude.svg?raw";
 import copilot from "../../../../../design-system/assets/vendor-logos/copilot.svg?raw";
 import deepseek from "../../../../../design-system/assets/vendor-logos/deepseek.svg?raw";
+import doubao from "../../../../../design-system/assets/vendor-logos/doubao.svg?raw";
 import gemini from "../../../../../design-system/assets/vendor-logos/gemini.svg?raw";
 import grok from "../../../../../design-system/assets/vendor-logos/grok.svg?raw";
 import kimi from "../../../../../design-system/assets/vendor-logos/kimi.svg?raw";
+import longcat from "../../../../../design-system/assets/vendor-logos/longcat.svg?raw";
 import minimax from "../../../../../design-system/assets/vendor-logos/minimax.svg?raw";
 import openai from "../../../../../design-system/assets/vendor-logos/openai.svg?raw";
 import opencode from "../../../../../design-system/assets/vendor-logos/opencode.svg?raw";
 import openrouter from "../../../../../design-system/assets/vendor-logos/openrouter.svg?raw";
 import qwen from "../../../../../design-system/assets/vendor-logos/qwen.svg?raw";
 import stepfun from "../../../../../design-system/assets/vendor-logos/stepfun.svg?raw";
+import tokenrhythmMark from "../../../../../design-system/assets/vendor-logos/tokenrhythm.png";
 import volcengine from "../../../../../design-system/assets/vendor-logos/volcengine.svg?raw";
 import xiaomimimo from "../../../../../design-system/assets/vendor-logos/xiaomimimo.svg?raw";
 import zai from "../../../../../design-system/assets/vendor-logos/zai.svg?raw";
@@ -39,6 +42,8 @@ const FAMILY_LOGOS: Record<ModelFamilyLogo, string> = {
   claude,
   openai,
   xiaomimimo,
+  "doubao-seed": doubao,
+  longcat,
 };
 
 const LOGOS: Record<string, string> = {
@@ -75,6 +80,11 @@ const LOGOS: Record<string, string> = {
   "openai-codex": openai,
   "github-copilot": copilot,
   xai: grok,
+  /*
+   * 基元律动：官网只发 PNG favicon（浅深两版、alpha 相同）——用 CSS mask 把它染成
+   * currentColor，跟主题文字色走（与 kimi.svg 的处理同一思路，素材来源见目录里 LICENSE）。
+   */
+  tokenrhythm: `<span style="display:block;width:100%;height:100%;background-color:currentColor;-webkit-mask:url(${tokenrhythmMark}) center / contain no-repeat;mask:url(${tokenrhythmMark}) center / contain no-repeat"></span>`,
 };
 
 /** 没有 logo 的条目（以后新加、还没配图的）显示名字首字，不留空框 */

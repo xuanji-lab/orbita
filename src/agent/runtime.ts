@@ -28,7 +28,8 @@ import {
   toBuiltinProvider,
   type PiModel,
 } from "./model-registration.ts";
-import { CATALOG_REFRESH_EVERY_MS, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
+import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
+import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import {
   createToolCallGate,
   describePermissionMode,
@@ -1791,6 +1792,10 @@ async function handle(command: AgentCommand): Promise<void> {
     await listBuiltins();
     return;
   }
+  if (command.type === "refreshCatalogs") {
+    await catalogRefresher.request(command.scope, command.catalogIds);
+    return;
+  }
   if (command.type === "permissionAnswer") {
     // 回答到得比请求晚是正常的；请求早已不在（abort 等）就丢弃，不报错
     pendingPermissions.get(command.requestId)?.(command.answer);
@@ -2099,6 +2104,31 @@ function compactionErrorText(raw: string): string {
   return raw;
 }
 
+/** 单次联网刷新的总时限：pi.dev 慢或连不上时，后台这一趟最多挂这么久 */
+const CATALOG_REFRESH_TIMEOUT_MS = 60_000;
+
+/**
+ * 目录联网刷新：向 pi.dev 拉覆盖层、向基元律动拉它自家的目录，拉完重报一次目录（主进程缓存的是
+ * 最后一份，设置页开着就跟着换）。**只刷主进程经 refreshCatalogs 命令说过的目录**（已添加的
+ * 服务商 / 设置页点开的卡片）——启动时不主动联网，等主进程拉起本进程后送来的那份 added（审核 F-1）。
+ * 失败只记日志：这家继续用旧缓存或内建快照。
+ */
+const catalogRefresher = new CatalogRefresher({
+  refreshPi: (ids) => refreshCatalogs({ ids, signal: AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS) }),
+  refreshTokenrhythm: () => {
+    const cachePath = tokenrhythmCachePath();
+    return fetchTokenrhythmCatalog(
+      cachePath === undefined ? {} : { cachePath, minIntervalMs: CATALOG_REFRESH_EVERY_MS },
+    );
+  },
+  relist: listBuiltins,
+  warn: (message) => console.warn(message),
+});
+// 应用常开不关：之后每 4 小时按最近的 added 再来一趟（每家是否真下载由各自的节流决定）。unref：不为它续命
+setInterval(() => {
+  void catalogRefresher.tick().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
+}, CATALOG_REFRESH_EVERY_MS).unref();
+
 parentPort.on("message", (event) => {
   const command = event.data as AgentCommand;
   void handle(command).catch((error: unknown) => {
@@ -2113,21 +2143,3 @@ parentPort.start?.();
 send({ type: "ready" });
 // 目录不依赖任何 session，启动即报——设置面不必为了填个下拉框等一次往返
 void listBuiltins().catch(() => undefined);
-
-/** 单次联网刷新的总时限：pi.dev 慢或连不上时，后台这一趟最多挂这么久 */
-const CATALOG_REFRESH_TIMEOUT_MS = 60_000;
-
-/**
- * 向 pi.dev 拉目录覆盖层，拉完重报一次目录（主进程缓存的是最后一份，设置页下次打开就是新的）。
- * 先报缓存、后联网：启动不等网络。失败只记日志——这家继续用旧缓存或内建快照。
- */
-async function refreshCatalogsAndRelist(): Promise<void> {
-  const errors = await refreshCatalogs({ signal: AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS) });
-  for (const [id, error] of errors) console.warn(`[catalog] ${id} 的目录没刷新成功，继续用旧的：${error.message}`);
-  await listBuiltins();
-}
-void refreshCatalogsAndRelist().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
-// 应用常开不关：之后每 4 小时再来一趟（每家是否真下载由 pi 的节流决定）。unref：不为它续命
-setInterval(() => {
-  void refreshCatalogsAndRelist().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
-}, CATALOG_REFRESH_EVERY_MS).unref();

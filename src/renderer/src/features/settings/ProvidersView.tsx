@@ -322,6 +322,10 @@ export function ProvidersView(props: {
     const target = KNOWN_PROVIDERS.find((k) => k.id === kindId);
     setView({ kind: "new", kindId });
     resetTransient();
+    // 没添加过的服务商，后台不刷它的目录（审核 F-1）：点开卡片时现拉一次（节流内不拉），
+    // 第一次添加时型号参数与「获取模型」的兜底清单就是目录里最新的。拉完经 builtins 广播进 catalog；
+    // 拉不到不提示——照旧用快照 / 旧缓存，不挡填表
+    if (target?.catalogId !== undefined) void api.provider.refreshCatalog(target.catalogId).catch(() => undefined);
     // 候选池留空，等 Fetch 去问供应商——目录按厂商组织，分不清套餐
     setDraft({
       kind: kindId,

@@ -19,6 +19,8 @@ export type UpsertResult =
 export const providerApi = {
   /** pi 内建 provider 目录：选中名字即拿到官方 baseUrl / 协议 / 模型清单 */
   builtins: (): Promise<BuiltinProvider[]> => ipcRenderer.invoke(ipcChannels.providerBuiltins),
+  /** 「添加」页点开还没保存的卡片：现拉一次这家的目录（节流内不拉）；新目录经 agent 的 builtins 事件广播回来 */
+  refreshCatalog: (catalogId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.providerRefreshCatalog, catalogId),
   list: (): Promise<ProviderDto[]> => ipcRenderer.invoke(ipcChannels.providerList),
   upsert: (input: ProviderUpsertInput): Promise<UpsertResult> =>
     ipcRenderer.invoke(ipcChannels.providerUpsert, input),

@@ -245,5 +245,28 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.equal(modelAvatarOf("beam-free"), undefined);
     assert.equal(modelAvatarOf("my-gateway-model"), undefined);
   });
+
+  test("专属那一层多试一次「去掉末尾的四位日期后缀」（聚合网关带快照日期的 id）", () => {
+    // 基元律动目录里的日期后缀型号用上已有头像
+    assert.deepEqual(modelAvatarOf("deepseek-v4.1-flash-1017"), { kind: "own", key: "deepseek-v4.1-flash" });
+    assert.deepEqual(modelAvatarOf("deepseek-v4-pro-0813"), { kind: "own", key: "deepseek-v4-pro" });
+    // 剥掉后缀也命中不了表的，继续往家族 / 服务商那两级走
+    assert.deepEqual(modelAvatarOf("deepseek-v4-flash-0731"), { kind: "family", logo: "deepseek" });
+    // 防误伤：尾段不是日期的不受影响
+    // （qwen3.6-35b 而不是 qwen3.8-27b：后者在头像 PR 里有了专属头像，拿它当「落家族标」的例子会和那边打架）
+    assert.deepEqual(modelAvatarOf("qwen3.6-35b"), { kind: "family", logo: "qwen" });
+    assert.deepEqual(modelAvatarOf("seed-2.1-pro"), { kind: "family", logo: "doubao-seed" });
+    assert.deepEqual(modelAvatarOf("kimi-k2.7-code"), { kind: "family", logo: "kimi" });
+    // 白名单里真实存在的 -YYMM 后缀（不是日期，是变体号）：剥不动，仍按原 id 匹配
+    assert.deepEqual(modelAvatarOf("step-3.5-flash-2603"), { kind: "family", logo: "stepfun" });
+  });
+
+  test("家族图标补豆包（seed-*）与龙猫（longcat-*）；龙猫以外的模型落在原级", () => {
+    assert.deepEqual(modelAvatarOf("seed-2.1-turbo"), { kind: "family", logo: "doubao-seed" });
+    assert.deepEqual(modelAvatarOf("longcat-2.0"), { kind: "family", logo: "longcat" });
+    assert.deepEqual(modelAvatarOf("longcat-2.5-preview-free"), { kind: "family", logo: "longcat" });
+    // NeoHorse 没有家族标：交第三级用服务商图标（这里应认不出）
+    assert.equal(modelAvatarOf("neohorse-1-9b"), undefined);
+  });
 });
 

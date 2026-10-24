@@ -27,9 +27,13 @@ export interface AgentChild {
   kill(): unknown;
 }
 
+/** 已添加的服务商用到哪几份目录（主进程从 providers.json 算，catalogIdsOfProviders） */
+export type CatalogScope = () => Promise<readonly string[]>;
+
 export class AgentHostCore {
   private readonly forkRuntime: () => AgentChild;
   private readonly onEvent: (event: AgentEvent) => void;
+  private readonly catalogScope: CatalogScope | undefined;
   private child: AgentChild | null = null;
   private ready: Promise<void> | null = null;
   /** pi 报上来的内建目录。runtime 是**先发 ready 再异步建目录**，所以不能只等 ready
@@ -83,9 +87,13 @@ export class AgentHostCore {
   >();
   private focusSummarySeq = 0;
 
-  constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
+  /**
+   * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
+   */
+  constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void, catalogScope?: CatalogScope) {
     this.forkRuntime = forkRuntime;
     this.onEvent = onEvent;
+    this.catalogScope = catalogScope;
   }
 
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
@@ -98,6 +106,8 @@ export class AgentHostCore {
       child.on("message", (message: AgentEvent) => {
         if (message.type === "ready") {
           resolve();
+          // 每次拉起（含崩溃后重拉）都送一份全量：agent 进程不记得上一个自己听过什么
+          this.syncCatalogScope();
           return;
         }
         if (message.type === "builtins") {
@@ -276,6 +286,33 @@ export class AgentHostCore {
       setTimeout(() => resolve(this.builtins), 15_000);
     });
     return this.builtinsArrived;
+  }
+
+  /**
+   * 把「已添加服务商的目录全量」送给 agent 进程：它只联网刷新这些（审核 F-1），并当场按节流补刷。
+   * 服务商列表变了（添加 / 改 / 删 / 登录）由 provider IPC 调。**不 ensure**：进程没起就不为它
+   * 拉起——下次拉起时 ready 那里会送。发完即回，结果走 builtins 广播。
+   */
+  syncCatalogScope(): void {
+    const scope = this.catalogScope;
+    const ready = this.ready;
+    if (scope === undefined || ready === null) return;
+    void Promise.all([ready, scope()])
+      .then(([, catalogIds]) => {
+        // 等的这一会儿进程可能退了又起：那个新进程会在自己的 ready 里送，这里不重复
+        if (this.ready !== ready || this.child === null) return;
+        this.post({ type: "refreshCatalogs", scope: "added", catalogIds: [...catalogIds] });
+      })
+      .catch((error: unknown) => console.warn("[catalog] 目录刷新范围没送出去：", error));
+  }
+
+  /**
+   * 设置页点开一张还没保存的服务商卡片：现拉一次这份目录（agent 侧节流内不拉）。
+   * 要拉起进程：用户正看着这张卡，目录是给他看的。发完即回，新目录走 builtins 广播。
+   */
+  async peekCatalog(catalogId: string): Promise<void> {
+    await this.ensure();
+    this.post({ type: "refreshCatalogs", scope: "peek", catalogIds: [catalogId] });
   }
 
   /**
