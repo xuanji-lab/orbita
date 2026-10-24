@@ -1553,11 +1553,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       ),
     [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript, props.intentRecalls],
   );
-  // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
-  const undoneTurnIds = useMemo(
+  // 被撤销的轮：turnId → 撤销记录。轮尾卡据此挂徽标，并把没还原的文件与原因写出来
+  const undoByTurn = useMemo(
     () =>
-      new Set(
-        records.filter((record) => record.role === "undo").map((record) => record.turnId),
+      new Map(
+        records.filter((record) => record.role === "undo").map((record) => [record.turnId, record]),
       ),
     [records],
   );
@@ -1737,7 +1737,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 channel={props.channel}
                 skills={props.skills}
                 cwd={props.cwd}
-                undoneTurnIds={undoneTurnIds}
+                undoByTurn={undoByTurn}
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
@@ -1756,7 +1756,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 channel={props.channel}
                 skills={props.skills}
                 cwd={props.cwd}
-                undoneTurnIds={undoneTurnIds}
+                undoByTurn={undoByTurn}
                 onUndoTurn={props.onUndoTurn}
                 actionsBusy={props.actionsBusy}
                 onOpenReviewAt={props.onOpenReviewAt}
@@ -2571,9 +2571,9 @@ function EntryView(props: {
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
   skills: SkillMeta[];
-  /** 轮尾卡：会话 cwd（路径显示用）与被撤销的轮 id 集 */
+  /** 轮尾卡：会话 cwd（路径显示用）与被撤销的轮（turnId → 撤销记录） */
   cwd: string | null;
-  undoneTurnIds: ReadonlySet<string>;
+  undoByTurn: ReadonlyMap<string, UndoRecord>;
   /** 单轮撤销入口（轮尾卡的 Undo）；busy 时卡上按钮自己禁用 */
   onUndoTurn: (turnId: string) => void;
   /** 会话在跑 / 排队非空：撤销入口禁用的真值在 ChatViewBody 算好传入 */
@@ -2607,7 +2607,7 @@ function EntryView(props: {
       <FileTurnCard
         record={entry.record}
         cwd={props.cwd}
-        undone={props.undoneTurnIds.has(entry.record.id)}
+        undo={props.undoByTurn.get(entry.record.id) ?? null}
         busy={props.actionsBusy}
         onUndo={props.onUndoTurn}
         onOpenFile={props.onOpenReviewAt}
@@ -2720,7 +2720,7 @@ function TurnRollupLine(props: {
   /** 轮尾卡（成员里可能有 fileTurn 单元——折叠段尾钉着的卡不进 members，但
    * 通道工具切块后的段内仍可能夹着）：与 TranscriptColumn 同名 props 原样转发 */
   cwd: string | null;
-  undoneTurnIds: ReadonlySet<string>;
+  undoByTurn: ReadonlyMap<string, UndoRecord>;
   onUndoTurn: (turnId: string) => void;
   actionsBusy: boolean;
   /** 轮尾卡文件行的「在面板里看」（成员里的 fileTurn 单元用，原样转发） */
@@ -2810,7 +2810,7 @@ function TurnRollupLine(props: {
               channel={props.channel}
               skills={props.skills}
               cwd={props.cwd}
-              undoneTurnIds={props.undoneTurnIds}
+              undoByTurn={props.undoByTurn}
               onUndoTurn={props.onUndoTurn}
               actionsBusy={props.actionsBusy}
               onOpenReviewAt={props.onOpenReviewAt}
