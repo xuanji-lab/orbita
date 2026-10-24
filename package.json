@@ -10,11 +10,12 @@
     "postinstall": "node scripts/ensure-node-pty-helper.mjs",
     "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
+    "build:bridge": "node guest-bridge/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",
+    "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\" \"guest-bridge/*.test.mjs\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
     "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
-    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
+    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && node guest-bridge/build.mjs && electron-vite build && electron-builder --win --publish never",
     "icon": "bash scripts/make-icon.sh",
     "icon:win": "node scripts/make-icon-win.mjs"
   },
@@ -78,6 +79,13 @@
       {
         "from": "build/tray.png",
         "to": "tray.png"
+      },
+      {
+        "from": "guest-bridge/bin",
+        "to": "guest-bridge",
+        "filter": [
+          "orbita-guest-bridge.exe"
+        ]
       }
     ],
     "npmRebuild": false,

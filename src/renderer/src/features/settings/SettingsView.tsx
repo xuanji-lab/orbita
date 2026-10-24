@@ -16,9 +16,19 @@ import type {
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import type { ComputerUseProbeResult, SandboxStatus } from "@shared/computer-use";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
+import {
+  probeBlocksStart,
+  probeVisual,
+  sandboxControl,
+  shotFromResult,
+  shotMeta,
+  statusVisual,
+  type ShotView,
+} from "./computer-use-view.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
@@ -62,6 +72,7 @@ export const SETTINGS_TABS = [
   { id: "migration", icon: "download" },
   { id: "browser", icon: "globe" },
   { id: "voice", icon: "mic" },
+  { id: "computer-use", icon: "monitor" },
   { id: "experimental", icon: "flask-conical" },
 ] as const satisfies readonly { id: string; icon: IconName }[];
 
@@ -85,7 +96,13 @@ export function SettingsView(props: {
   onTab: (tab: SettingsTab) => void;
 }) {
   const t = useT();
-  const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
+  /** 实验功能「电脑使用」（设置原值）：关着时侧栏导航与这一页的内容都藏起来。
+   *  正常操作进不到这个门：App 的 settingsTab 只由侧栏导航行改写，导航行已过滤。
+   *  这里再拦一道是兼容盘上手改 settings.json 的情形——页头与内容各自退回通用页。 */
+  const computerUse = props.settings.experimentalFeatures?.["computer-use"] === true;
+  const active =
+    SETTINGS_TABS.find((tab) => tab.id === props.tab && (tab.id !== "computer-use" || computerUse)) ??
+    SETTINGS_TABS[0];
   /**
    * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
    * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
@@ -136,6 +153,10 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "computer-use" && computerUse ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <ComputerUseView />
         </div>
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
@@ -1650,5 +1671,201 @@ function DataDirectoryRow() {
         </PanelButton>
       </span>
     </SettingRow>
+  );
+}
+
+// ── 设置 › 电脑使用 ──────────────────────────────────────────────────────
+
+/**
+ * 设置 › 电脑使用（PR1）：能力检测、沙箱启停、手动「看一眼」。单独一页而不是
+ * General 里的一行：三组内容与浏览器 / 语音同一档，侧栏入口由 SETTINGS_TABS
+ * 自动长出来。状态不走拉取：主进程每次迁移推 computerUseStatus，冷启动按 off
+ * 画（shared/computer-use.ts 的契约说明——沙箱不跨应用存活）。五态 → 按钮/图标/
+ * 文字的全部换算在 computer-use-view.ts（纯函数层，node --test 直接测）。
+ */
+function ComputerUseView() {
+  const t = useT();
+  const [status, setStatus] = useState<SandboxStatus>({ state: "off" });
+  /** 在途的那次点击。只压自己那颗按钮：starting 的 60 秒里 stop 必须随时可点（取消启动） */
+  const [pending, setPending] = useState<"start" | "stop" | null>(null);
+  /** 这次 start / stop 调用的失败原话。与状态机的 error 是两个来源：这个是主进程的 return 值 */
+  const [actionError, setActionError] = useState<string | null>(null);
+  /** 最近一次探测结果。提升到这里：「启动」要不要置灰看它（平台不对时主进程也会拒） */
+  const [probeResult, setProbeResult] = useState<ComputerUseProbeResult | null>(null);
+
+  // onStatus 返回退订函数，正好作 effect 的清理
+  useEffect(() => api.computerUse.onStatus(setStatus), []);
+
+  const control = sandboxControl(status.state, pending);
+  const visual = statusVisual(status.state, t);
+  /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
+      用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
+      沙箱回到了未启动；下一次动作即清掉。 */
+  const errorLine = actionError ?? (status.state === "error" ? status.message : null);
+
+  const run = (action: "start" | "stop") => {
+    setPending(action);
+    setActionError(null);
+    const call = action === "start" ? api.computerUse.start() : api.computerUse.stop();
+    void call
+      .then((result) => {
+        if (!result.ok) setActionError(result.error);
+      })
+      .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setPending(null));
+  };
+
+  return (
+    <div className="set-page">
+      <ProbeGroup result={probeResult} onResult={setProbeResult} />
+      <SettingGroup label={t.computerUse.sandboxGroup}>
+        <SettingRow
+          name={t.computerUse.sandboxState}
+          info={t.computerUse.sandboxStateInfo}
+          note={
+            errorLine !== null ? (
+              <span role="alert" className="set-row-error">
+                {errorLine}
+              </span>
+            ) : undefined
+          }
+        >
+          <span className="set-inline">
+            {/* 状态徽标：图标 + 文字说话，颜色只是第二信号（tone 是视图层给的 CSS 变量） */}
+            <span className="cu-state">
+              <Icon name={visual.icon} size={14} spin={visual.spin} style={{ color: visual.tone }} />
+              {visual.label}
+            </span>
+            <PanelButton onClick={() => run("start")} disabled={!control.canStart || probeBlocksStart(probeResult)}>
+              <Icon name="play" size={13} /> {t.computerUse.start}
+            </PanelButton>
+            <PanelButton onClick={() => run("stop")} disabled={!control.canStop}>
+              <Icon name="square" size={13} /> {t.computerUse.stop}
+            </PanelButton>
+          </span>
+        </SettingRow>
+      </SettingGroup>
+      <LookGroup canScreenshot={control.canScreenshot} running={status.state === "running"} />
+    </div>
+  );
+}
+
+/**
+ * 能力检测：点按钮才查（全部只读，绝不代跑提权命令）；结果保留到下次检测。
+ * 未就绪时逐条铺开主进程的 guidance（那边已组织成人话，这里只拆行）。
+ */
+function ProbeGroup(props: { result: ComputerUseProbeResult | null; onResult: (result: ComputerUseProbeResult) => void }) {
+  const t = useT();
+  const [failed, setFailed] = useState(false);
+  const [probing, setProbing] = useState(false);
+
+  const run = () => {
+    setProbing(true);
+    setFailed(false);
+    void api.computerUse
+      .probe()
+      .then((next) => {
+        props.onResult(next);
+        setProbing(false);
+      })
+      .catch(() => {
+        setProbing(false);
+        setFailed(true);
+      });
+  };
+
+  const visual = props.result === null ? null : probeVisual(props.result);
+  const note =
+    probing ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {t.computerUse.probing}
+      </span>
+    ) : failed ? (
+      <span role="alert" className="set-row-error">
+        {t.computerUse.probeFailed}
+      </span>
+    ) : visual === null ? (
+      <span className="set-row-hint">{t.computerUse.probeIdle}</span>
+    ) : visual.kind === "ready" ? (
+      // 就绪：绿色只是第二信号，勾与文字已经在说话（.cu-ready 只把图标染绿）
+      <span role="status" className="set-row-note cu-ready">
+        <Icon name="check" size={12} /> {t.computerUse.probeReady}
+      </span>
+    ) : (
+      <span className="set-row-hint">{t.computerUse.probeNotReady}</span>
+    );
+
+  return (
+    <SettingGroup label={t.computerUse.capabilityGroup}>
+      <SettingRow name={t.computerUse.sandboxFeature} info={t.computerUse.sandboxFeatureInfo} note={note}>
+        <PanelButton onClick={run} disabled={probing}>
+          <Icon name="shield-check" size={13} /> {t.computerUse.probe}
+        </PanelButton>
+      </SettingRow>
+      {visual?.kind === "not-ready" && visual.guidance.length > 0 && (
+        <ul className="cu-guidance">
+          {visual.guidance.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+    </SettingGroup>
+  );
+}
+
+/**
+ * 「看一眼」：手动拍一张沙箱桌面。上一张图只活到沙箱离开 running——旧沙箱的图
+ * 留在新一局里会让人误读，PR1 不做跨实例的图缓存（面板切走再回来同样清空）。
+ */
+function LookGroup(props: { canScreenshot: boolean; running: boolean }) {
+  const t = useT();
+  const [shot, setShot] = useState<ShotView>({ kind: "idle" });
+
+  useEffect(() => {
+    if (!props.running) setShot((current) => (current.kind === "idle" ? current : { kind: "idle" }));
+  }, [props.running]);
+
+  const busy = shot.kind === "loading";
+  const capture = () => {
+    setShot({ kind: "loading" });
+    void api.computerUse
+      .screenshot()
+      .then((result) => setShot(shotFromResult(result)))
+      .catch((cause: unknown) =>
+        setShot({ kind: "failed", message: cause instanceof Error ? cause.message : String(cause) }),
+      );
+  };
+
+  return (
+    <SettingGroup label={t.computerUse.shotGroup}>
+      <SettingRow
+        name={t.computerUse.shotRow}
+        info={t.computerUse.shotRowInfo}
+        note={
+          shot.kind === "failed" ? (
+            <span role="alert" className="set-row-error">
+              {shot.message}
+            </span>
+          ) : props.running ? undefined : (
+            <span className="set-row-hint">{t.computerUse.shotNeedsRunning}</span>
+          )
+        }
+      >
+        <PanelButton onClick={capture} disabled={!props.canScreenshot || busy}>
+          {busy ? <Icon name="loader-circle" size={13} spin /> : <Icon name="eye" size={13} />} {" "}
+          {busy ? t.computerUse.shotBusy : t.computerUse.shot}
+        </PanelButton>
+      </SettingRow>
+      {shot.kind === "ok" && (
+        // 图片按内容面宽度缩放；原始桌面尺寸与拍摄时间是机器事实，进元信息条走 mono
+        <figure className="cu-shot">
+          <img src={shot.src} alt={t.computerUse.shotAlt} />
+          <figcaption className="cu-shot-meta">
+            <span>{t.computerUse.shotNativeSize}</span>
+            <code>{shotMeta(shot.width, shot.height, shot.takenAt, t)}</code>
+          </figcaption>
+        </figure>
+      )}
+    </SettingGroup>
   );
 }

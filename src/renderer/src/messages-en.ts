@@ -359,6 +359,43 @@ export const en = {
     handoffBarDone: "Done, hand back",
   },
 
+  /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
+  computerUse: {
+    capabilityGroup: "Capability check",
+    sandboxFeature: "Windows Sandbox",
+    sandboxFeatureInfo:
+      "Computer use works inside a Windows Sandbox — a throwaway copy of Windows the agent drives. Your desktop's keyboard, mouse and files are never touched, and everything inside the sandbox is discarded when it closes.",
+    probe: "Check",
+    probeIdle: "Not checked yet",
+    probing: "Checking…",
+    probeReady: "Sandbox available",
+    probeNotReady: "Not ready — see the steps below",
+    probeFailed: "Couldn't run the check",
+    sandboxGroup: "Sandbox",
+    sandboxState: "State",
+    // "up to three minutes" mirrors BRIDGE_READY_TIMEOUT_MS in src/main/computer-use/sandbox.ts (180s);
+    // change one and the other follows
+    sandboxStateInfo:
+      "Starting waits for the sandbox to register itself (up to three minutes; the first start prepares the base image and takes noticeably longer — if it times out, just retry); stopping closes it and discards everything inside. After an error, Start retries and Stop resets.",
+    states: {
+      off: "Off",
+      starting: "Starting…",
+      running: "Running",
+      stopping: "Stopping…",
+      error: "Error",
+    },
+    start: "Start",
+    stop: "Stop",
+    shotGroup: "Manual screenshot",
+    shotRow: "Sandbox desktop",
+    shotRowInfo: "Grabs a still of the sandbox desktop right now — only when you click, never on its own.",
+    shot: "Take a look",
+    shotBusy: "Capturing…",
+    shotNeedsRunning: "Start the sandbox to take a look",
+    shotNativeSize: "Native size",
+    shotAlt: "Sandbox desktop screenshot",
+  },
+
   drawer: {
     title: "Side chat",
     filter: "Filter tasks…",
@@ -545,6 +582,7 @@ export const en = {
       browser: "Browser",
       voice: "Voice",
       experimental: "Experimental",
+      "computer-use": "Computer use",
     },
     appearance: "Appearance",
     theme: "Theme",

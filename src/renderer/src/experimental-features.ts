@@ -287,4 +287,23 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "computer-use",
+    icon: "monitor",
+    name: { zh: "电脑使用", en: "Computer use" },
+    summary: {
+      zh: "设置里多出「电脑使用」页：检测这台电脑能不能跑沙箱、启动 / 关闭沙箱、手动看一眼沙箱桌面——agent 在沙箱里干活的那部分还在路上。",
+      en: "Adds a Computer use page to Settings: probe whether this machine can run the sandbox, start / stop it, and peek at its desktop — the agent working inside it is still on the way.",
+    },
+    changelog: [
+      {
+        pr: 220,
+        date: "2026-10-12",
+        note: {
+          zh: "首版：能力检测、沙箱启停与手动「看一眼」，先作为沙箱管理的入口。",
+          en: "First version: capability probe, sandbox start / stop and a manual peek — the sandbox management entry for now.",
+        },
+      },
+    ],
+  },
 ];

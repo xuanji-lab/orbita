@@ -77,6 +77,7 @@ import menu from "../../../../design-system/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../design-system/assets/icons/lucide/minus.svg?raw";
+import monitor from "../../../../design-system/assets/icons/lucide/monitor.svg?raw";
 import pencilLine from "../../../../design-system/assets/icons/lucide/pencil-line.svg?raw";
 import play from "../../../../design-system/assets/icons/lucide/play.svg?raw";
 import paperclip from "../../../../design-system/assets/icons/lucide/paperclip.svg?raw";
@@ -210,6 +211,7 @@ const ICONS = {
   "message-circle": messageCircle,
   "message-square": messageSquare,
   mic,
+  monitor,
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   "notebook-pen": notebookPen,
