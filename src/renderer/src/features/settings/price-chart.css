@@ -217,6 +217,31 @@
   left: auto;
   right: calc(100% + 6px);
 }
+/* 左右都放不下时放上面 / 下面（price-chart-model 的 placeLabels 决定方向，离点的边同样 6px） */
+.pc-label.above,
+.pc-label.below {
+  left: 50%;
+  translate: -50% 0;
+}
+.pc-label.above {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.pc-label.below {
+  top: calc(100% + 6px);
+}
+/* 四边都放不下：平时不显示，悬停 / 键盘聚焦时出来（与非前沿点的轻提示同一种行为），不和别的标签叠 */
+.pc-label.off {
+  opacity: 0;
+  transition: opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pc-dot:hover .pc-label.off,
+.pc-dot:focus-visible .pc-label.off {
+  opacity: 1;
+}
+.pc-dot[aria-expanded="true"] .pc-label.off {
+  opacity: 0;
+}
 .pc-label-level {
   margin-left: 4px;
   font-family: var(--font-family-mono);
