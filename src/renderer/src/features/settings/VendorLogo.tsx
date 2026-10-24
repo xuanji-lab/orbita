@@ -2,11 +2,15 @@ import anthropic from "../../../../../design-system/assets/vendor-logos/anthropi
 import claude from "../../../../../design-system/assets/vendor-logos/claude.svg?raw";
 import deepseek from "../../../../../design-system/assets/vendor-logos/deepseek.svg?raw";
 import kimi from "../../../../../design-system/assets/vendor-logos/kimi.svg?raw";
+import minimax from "../../../../../design-system/assets/vendor-logos/minimax.svg?raw";
 import openai from "../../../../../design-system/assets/vendor-logos/openai.svg?raw";
 import opencode from "../../../../../design-system/assets/vendor-logos/opencode.svg?raw";
+import qwen from "../../../../../design-system/assets/vendor-logos/qwen.svg?raw";
 import stepfun from "../../../../../design-system/assets/vendor-logos/stepfun.svg?raw";
+import xiaomimimo from "../../../../../design-system/assets/vendor-logos/xiaomimimo.svg?raw";
 import zai from "../../../../../design-system/assets/vendor-logos/zai.svg?raw";
 import zhipu from "../../../../../design-system/assets/vendor-logos/zhipu.svg?raw";
+import type { ModelFamilyLogo } from "@shared/known-models";
 import { iconMarkup } from "../../shell/icon-markup.ts";
 
 /**
@@ -15,7 +19,25 @@ import { iconMarkup } from "../../shell/icon-markup.ts";
  * 不受「禁裸 hex」约束；单色 logo 用 currentColor，跟着主题的文字色走。
  * 同一厂商的两个条目（智谱按量 / 套餐）共用一枚；两个「兼容」条目用协议方的标。
  */
+/**
+ * 型号家族图标（ModelAvatar 的第二级，按型号 id 前缀认，见 known-models 的 modelAvatarOf）。
+ * 键与 shared 的 ModelFamilyLogo 一一对应，类型保证一枚都不缺。GLM 用 Z.ai 的标
+ * （lobe-icons 的 chatglm 是 ChatGLM 时代的旧标）。
+ */
+const FAMILY_LOGOS: Record<ModelFamilyLogo, string> = {
+  kimi,
+  zai,
+  deepseek,
+  qwen,
+  minimax,
+  stepfun,
+  claude,
+  openai,
+  xiaomimimo,
+};
+
 const LOGOS: Record<string, string> = {
+  ...FAMILY_LOGOS,
   deepseek,
   zhipu,
   "zhipu-coding": zhipu,

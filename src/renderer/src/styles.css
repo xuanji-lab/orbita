@@ -592,6 +592,39 @@
  * 鼠标落在星上时也得亮整行——靶子是「这一行」，不是行里的某一格。
  * 选中盖过 hover 的取舍同 .option-row：持久状态压临时状态，规则放最后。
  */
+/*
+ * 型号头像（原型 4「显示名与头像」，2026-10-24）：模型卡片的行首与设置页的模型列表。
+ * 专属头像（.own）整张图铺满；家族 / 服务商图标放在淡底小方块里。
+ * 模型卡片里**选中改由头像一圈 accent 描边表示**，取代行首的对勾——底色与半粗仍是
+ * .option-row 的选中态给的，描边是第三个信号，不是唯一的那个。
+ */
+.model-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+/* 专属头像自带底色：不要边框占掉一圈像素，用内描边在暗底上勾出边缘 */
+.model-avatar.own {
+  border: 0;
+  outline: 1px solid var(--color-border-subtle);
+  outline-offset: -1px;
+}
+.model-avatar.own img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.option-row[aria-selected="true"] .model-avatar {
+  border-color: transparent;
+  outline-color: transparent;
+  box-shadow: 0 0 0 1.5px var(--color-accent);
+}
+
 .menu-row-tail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

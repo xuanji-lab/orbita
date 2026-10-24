@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
-import { resolveModelDefaults } from "@shared/model-defaults";
+import { modelDisplayName, resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
@@ -26,6 +26,7 @@ import {
   modelPreferenceOf,
   railVendorCell,
 } from "./providers-view-model.ts";
+import { ModelAvatar } from "./ModelAvatar";
 import { VendorLogo } from "./VendorLogo";
 import type { Messages } from "../../messages-en.ts";
 
@@ -307,14 +308,35 @@ export function modelCardItems(options: {
   onSelect: (providerId: string, modelId: string) => void;
 }): MenuItem[] {
   const starredKeys = new Set(options.starred.map((pair) => starKey(pair.providerId, pair.modelId)));
+  /*
+   * 「全部」与「星标」里同一个型号可能来自不同服务商（OpenCode 上的 kimi-k3 与 Kimi 套餐的 k3），
+   * 副行要缀上服务商名；左栏选了某一家时它就在左栏亮着，副行只留 id（原型 4，2026-10-24）。
+   */
+  const showProvider = options.scope.kind !== "provider";
   const rowFor = (provider: ProviderDto, declared: ModelDecl): MenuItem => {
-    const defaults = resolveModelDefaults(options.catalog, declared.id, modelPreferenceOf(provider));
+    const prefer = modelPreferenceOf(provider);
+    const defaults = resolveModelDefaults(options.catalog, declared.id, prefer);
     const context = modelContextText(declared, defaults);
     const isStarred = starredKeys.has(starKey(provider.id, declared.id));
+    const name = modelDisplayName(options.catalog, declared.id, prefer, declared.name);
     return {
       id: starKey(provider.id, declared.id),
-      label: declared.id,
-      subLabel: provider.displayName,
+      label: name,
+      /*
+       * 有显示名：主文字是名字，型号 id 降到副行（等宽：它是机器事实）。
+       * 没有（名字就是 id）：副行不再把 id 写第二遍，照旧写服务商名——行还是两行，
+       * 卡片「定高六行」的尺子不变。
+       */
+      ...(name === declared.id
+        ? { subLabel: provider.displayName }
+        : {
+            subLabel: declared.id,
+            subLabelMono: true,
+            ...(showProvider ? { subLabelTrail: provider.displayName } : {}),
+          }),
+      // 主行换成显示名之后，按 id 与服务商名照样要搜得到
+      searchText: `${declared.id} ${provider.displayName}`,
+      avatar: <ModelAvatar modelId={declared.id} provider={railVendorCell(provider)} size={20} />,
       badge: (
         <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
           <span className="pv-badge" title={options.t.modelMenu.contextWindow}>

@@ -17,7 +17,19 @@ export interface MenuItem {
   subLabelEllipsis?: "tail" | "head";
   /** 副行是机器事实（路径）：mono 字体（设计系统：mono for machine facts） */
   subLabelMono?: boolean;
+  /** 副行的尾巴：跟在副行后面、用正文字体的注脚（模型卡片「全部 / 星标」里的服务商名，副行本体是等宽的型号 id） */
+  subLabelTrail?: string;
+  /**
+   * 搜索时**额外**匹配的文字。模型卡片的主行是显示名（「Kimi K3.1 Pro」），用户照样会按
+   * id（k3.1-pro）或服务商名搜——只匹配 label 的话，换成显示名那天这两种搜法就静默失效了。
+   */
+  searchText?: string;
   icon?: IconName;
+  /**
+   * 行首的头像（模型卡片：型号头像，见 ModelAvatar）。给了它，行首这一格就是头像而不是对勾：
+   * 选中改由头像一圈 accent 描边表示（styles.css 的 .model-avatar），底色与半粗照旧。
+   */
+  avatar?: React.ReactNode;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
   /**
@@ -83,7 +95,7 @@ function filterMenuItems(items: MenuItem[], q: string): MenuItem[] {
       header = item;
     } else {
       all.push(item);
-      if (hit(item.label)) matched.push(item);
+      if (hit(item.label) || (item.searchText !== undefined && hit(item.searchText))) matched.push(item);
     }
   }
   flush();
@@ -712,7 +724,8 @@ function MenuRow(props: {
         // 图标槽 14px：里面的图标就是 13px，16 的槽只是每行白多一道缝。
         // label 和 hint 合用中间这一列（见下面的内层 flex）：hint 太长会把
         // label 挤没，就是这一行的宽度分配方式（2026-09-23 修复）。
-        gridTemplateColumns: "14px minmax(0,1fr) auto",
+        // 有头像的行（模型卡片）首列放 20px 头像，留 2px 给选中的那圈描边
+        gridTemplateColumns: item.avatar === undefined ? "14px minmax(0,1fr) auto" : "22px minmax(0,1fr) auto",
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
@@ -756,7 +769,9 @@ function MenuRow(props: {
           color: item.danger === true ? "var(--color-danger)" : "var(--color-text-secondary)",
         }}
       >
-        {item.checked === true ? (
+        {item.avatar !== undefined ? (
+          item.avatar
+        ) : item.checked === true ? (
           <Icon name="check" size={13} strokeWidth={2} />
         ) : item.icon !== undefined ? (
           <Icon name={item.icon} size={13} strokeWidth={1.8} />
@@ -802,7 +817,18 @@ function MenuRow(props: {
         {item.subLabel !== undefined && (
           <span
             style={{
-              flex: "none",
+              display: "flex",
+              alignItems: "baseline",
+              gap: "var(--space-1)",
+              maxWidth: "100%",
+              minWidth: 0,
+              // 选中行整行半粗（.option-row 的选中态）是给主行的；副行是注脚，不跟着加粗
+              fontWeight: "var(--weight-regular)",
+            }}
+          >
+          <span
+            style={{
+              flex: "0 1 auto",
               maxWidth: "100%",
               minWidth: 0,
               whiteSpace: "nowrap",
@@ -824,6 +850,20 @@ function MenuRow(props: {
             ) : (
               item.subLabel
             )}
+          </span>
+          {item.subLabelTrail !== undefined && (
+            <span
+              style={{
+                flex: "none",
+                whiteSpace: "nowrap",
+                color: "var(--color-text-tertiary)",
+                fontSize: "var(--font-size-xs)",
+                lineHeight: "var(--line-height-ui)",
+              }}
+            >
+              · {item.subLabelTrail}
+            </span>
+          )}
           </span>
         )}
         {item.hint !== undefined && (
