@@ -11,6 +11,7 @@ import {
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
   type ComputerUseStopResult,
+  type EmergencyStopStatus,
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
 
@@ -28,6 +29,9 @@ export const computerUseApi = {
    * 订阅沙箱状态机的每次迁移，返回退订函数。没有拉取通道——沙箱不跨应用存活
    * （shared/computer-use.ts 的契约说明），renderer 冷启动直接按 off 画。
    */
+  /** 急停热键的注册状态（设置页每次挂载问一次；失败时如实说「被占用」） */
+  emergencyStopState: (): Promise<EmergencyStopStatus> =>
+    ipcRenderer.invoke(computerUseChannels.computerUseEmergencyStopState),
   onStatus: (listener: (status: SandboxStatus) => void): (() => void) => {
     const handler = (_event: unknown, status: SandboxStatus): void => listener(status);
     ipcRenderer.on(computerUseChannels.computerUseStatus, handler);

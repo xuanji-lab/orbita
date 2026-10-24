@@ -102,7 +102,14 @@ describe("deriveSessionTitle", () => {
 
 describe("parseSessionMeta", () => {
   it("完整的一条原样解出来", () => {
-    deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual" });
+    deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual", computerUseGrantedAt: null });
+  });
+
+  it("电脑使用授权：毫秒时刻透传，坏值 / 缺席当未授权（宁可多问一次）", () => {
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: 1_700_000_000_000 })?.computerUseGrantedAt, 1_700_000_000_000);
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: null })?.computerUseGrantedAt, null);
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: undefined })?.computerUseGrantedAt, null);
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: "yesterday" })?.computerUseGrantedAt, null);
   });
 
   // 少一条会话，比多一条指向空白的假会话好
@@ -141,6 +148,7 @@ describe("parseSessionMeta", () => {
     deepStrictEqual(parseSessionMeta({ ...valid, junk: 1, nested: { a: 1 } }), {
       ...valid,
       mode: "manual",
+      computerUseGrantedAt: null,
     });
   });
 

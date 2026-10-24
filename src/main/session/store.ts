@@ -620,6 +620,15 @@ export class SessionStore {
     return this.update(id, { mode });
   }
 
+  /**
+   * 电脑使用授权（会话级同意书）：`at` = 允许的时刻，null = 撤销 / 未授权。
+   * 走 update 的写入链（原子写 + 串行）——它与 record / setStats 同一条链，
+   * 不会把别的字段的旧快照冲回去。
+   */
+  setComputerUseGrant(id: string, at: number | null): Promise<void> {
+    return this.update(id, { computerUseGrantedAt: at });
+  }
+
   /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });

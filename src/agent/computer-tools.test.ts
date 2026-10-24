@@ -175,3 +175,50 @@ describe("computer_* 工具", () => {
     await assert.rejects(pending, /设置 › 实验功能 › 电脑使用/);
   });
 });
+
+describe("computer_* 的审计载荷（details.computerUse）", () => {
+  test("五个动作都带 action / args / at；坐标是模型给的截图像素，不是换算后的物理像素", async () => {
+    const { run, answer, sent, takeScreenshot } = setup();
+    await takeScreenshot();
+
+    const click = run("computer_click", { x: 100, y: 200, button: "right" });
+    answer(sent.length - 1, { ok: true, text: "clicked" });
+    const clicked = await click;
+    const clickAudit = (clicked.details as { computerUse: { action: string; args: Record<string, unknown>; at: number } }).computerUse;
+    assert.equal(clickAudit.action, "click");
+    assert.deepEqual(clickAudit.args, { x: 100, y: 200, button: "right" });
+    assert.equal(typeof clickAudit.at, "number");
+
+    const typed = run("computer_type", { text: "hello" });
+    answer(sent.length - 1, { ok: true, text: "typed" });
+    const typedAudit = ((await typed).details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
+    assert.equal(typedAudit.action, "type");
+    // 明文留在 details 与转录里（renderer 默认折叠显示）
+    assert.deepEqual(typedAudit.args, { text: "hello" });
+
+    const key = run("computer_key", { key: "ctrl+a" });
+    answer(sent.length - 1, { ok: true, text: "pressed" });
+    assert.equal(((await key).details as { computerUse: { action: string } }).computerUse.action, "key");
+
+    const scroll = run("computer_scroll", { deltaY: 3, x: 10, y: 20 });
+    answer(sent.length - 1, { ok: true, text: "scrolled" });
+    const scrollAudit = ((await scroll).details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
+    assert.equal(scrollAudit.action, "scroll");
+    assert.deepEqual(scrollAudit.args, { x: 10, y: 20, deltaY: 3 });
+  });
+
+  test("截图：details 记 maxWidth，图仍在 content 里（details 不进模型上下文）", async () => {
+    const { run, answer, sent } = setup();
+    const pending = run("computer_screenshot", {});
+    answer(sent.length - 1, {
+      ok: true,
+      text: "shot",
+      shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "anBlZw==" },
+    });
+    const result = await pending;
+    const audit = (result.details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
+    assert.equal(audit.action, "screenshot");
+    assert.equal(audit.args["maxWidth"], 1280);
+    assert.equal(result.content.some((block) => block.type === "image"), true);
+  });
+});
