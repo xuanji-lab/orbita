@@ -138,6 +138,11 @@ describe("hasModelOverrides —— 补注册的触发条件之一", () => {
     assert.equal(hasModelOverrides([{ id: "m", vision: false }]), true);
     assert.equal(hasModelOverrides([{ id: "m", vision: undefined }]), false);
   });
+
+  test("思考档覆盖也算：目录认识选中 id 时不补注册，用户勾的档就到不了会话", () => {
+    assert.equal(hasModelOverrides([{ id: "m", thinkingLevels: ["high"] }]), true);
+    assert.equal(hasModelOverrides([{ id: "m", thinkingLevels: undefined }]), false);
+  });
 });
 
 describe("vision 覆盖落成 input 模态", () => {
@@ -273,6 +278,53 @@ describe("白名单档位 → pi 的 thinkingLevelMap（openai-completions；移
     const model = registered("deepseek-flash");
     assert.deepEqual(getSupportedThinkingLevels(model), ["off", "low", "high", "max"]);
     assert.equal(await sentEffort(model, "medium"), "high");
+  });
+
+  test("用户勾的档盖过白名单：只勾 high，pi 的支持集收窄到 high，其余档都被夹成 high", async () => {
+    // step-5-preview 白名单是 low / medium / high
+    const entry = toFallbackModels([], [{ id: "step-5-preview", thinkingLevels: ["high"] }], [], {
+      api: "openai-completions",
+    })[0];
+    const model = { ...entry, provider: "p", baseUrl: "https://example.com/v1" } as unknown as PiModel;
+    assert.deepEqual(getSupportedThinkingLevels(model), ["high"]);
+    assert.equal(await sentEffort(model, "low"), "high");
+    assert.equal(await sentEffort(model, "medium"), "high");
+    assert.equal(await sentEffort(model, "off"), "high");
+  });
+
+  test("目录说能关、用户没勾 off：off 被夹走（基元律动 18 个型号的案情）；目录表里的网关取值保留", () => {
+    const catalogEntry = {
+      ...catalogModel("gw-model", 200_000, 1),
+      reasoning: true,
+      thinkingLevelMap: { off: "none", high: "high-effort" },
+    } as unknown as PiModel;
+    const [entry] = toFallbackModels([catalogEntry], [{ id: "gw-model", thinkingLevels: ["low", "high"] }]);
+    const model = { ...entry, provider: "p" } as unknown as PiModel;
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "high"]);
+    assert.equal(model.thinkingLevelMap?.high, "high-effort");
+    assert.equal(model.thinkingLevelMap?.off, null);
+  });
+
+  test("目录不认识的型号（兜底 reasoning:false）：勾了思考档就按能思考注册；只勾 off 按不思考", () => {
+    const [thinking, plain] = toFallbackModels(
+      [],
+      [
+        { id: "novel-a", thinkingLevels: ["low", "max"] },
+        { id: "novel-b", thinkingLevels: ["off"] },
+      ],
+    );
+    const a = { ...thinking, provider: "p" } as unknown as PiModel;
+    const b = { ...plain, provider: "p" } as unknown as PiModel;
+    assert.deepEqual(getSupportedThinkingLevels(a), ["low", "max"]);
+    assert.deepEqual(getSupportedThinkingLevels(b), ["off"]);
+  });
+
+  test("继承（不写 thinkingLevels）时注册结果不变", () => {
+    assert.deepEqual(
+      toFallbackModels([], [{ id: "step-5-preview" }], [], { api: "openai-completions" }),
+      toFallbackModels([], [{ id: "step-5-preview", thinkingLevels: undefined }], [], { api: "openai-completions" }),
+    );
+    assert.deepEqual(getSupportedThinkingLevels(registered("step-5-preview")), ["low", "medium", "high"]);
   });
 
   test("白名单的模态也跟着过线：step-3.5-flash 注册成纯文本，step-5-preview 收图", () => {

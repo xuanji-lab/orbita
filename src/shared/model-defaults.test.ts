@@ -254,6 +254,37 @@ describe("knownParamsFor —— 白名单对（服务商，型号）给出的口
   });
 });
 
+describe("modelThinkingLevels —— 用户覆盖 > 白名单 > 运行时报回 > 目录", () => {
+  const gateway: BuiltinProvider = {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    api: "openai-completions",
+    models: [{ ...entry("kimi-k3", 1_048_576, 131_072, true), supportedThinkingLevels: ["off", "low", "high"] }],
+  };
+  const catalog = [...CATALOG, gateway];
+  const home = { catalogId: "opencode-go", api: "openai-completions" };
+
+  test("覆盖盖过白名单（kimi-k3 白名单是 low/high/max）、运行时报回与目录", () => {
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, ["off", "medium"], home, ["high"]), ["high"]);
+  });
+
+  test("覆盖盖过目录（白名单不认识的型号），且按词汇表顺序给出", () => {
+    const odd: BuiltinProvider = {
+      ...gateway,
+      models: [{ ...entry("odd-model", 128_000, 8_192, false), supportedThinkingLevels: ["off", "low"] }],
+    };
+    assert.deepEqual(modelThinkingLevels("odd-model", [odd], null, home, ["max", "off"]), ["off", "max"]);
+  });
+
+  test("继承（缺省 / 空数组）时行为不变：白名单仍在最前", () => {
+    const inherited = modelThinkingLevels("kimi-k3", catalog, null, home);
+    assert.deepEqual(inherited, ["low", "high", "max"]);
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, null, home, undefined), inherited);
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, null, home, []), inherited);
+  });
+});
+
 describe("lookupCatalogSource —— 连同所在的那一家返回（会话借档位表要从同一家抄）", () => {
   test("同 api 优先时返回的是那一家，不是目录里排第一的", () => {
     const source = lookupCatalogSource(CATALOG, "claude-opus-5", { api: "openai-completions" });

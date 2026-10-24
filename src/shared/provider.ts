@@ -10,6 +10,8 @@
  * （`oauth` 认证方式已随 Claude 订阅登录落地，见 main/provider/oauth.ts）。
  */
 
+import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+
 /** provider 稳定标识；用户可改 displayName，id 不变 */
 export type ProviderId = string;
 
@@ -82,6 +84,13 @@ export interface ModelDecl {
   cost?: ModelCostDecl;
   /** 覆盖声明：true = 可吃图片输入（多模态），false = 强制纯文本；缺省 = 听目录的 */
   vision?: boolean;
+  /**
+   * 覆盖声明：这个型号在这家服务商上**真能用**的思考档（至少一档，按词汇表顺序存）。
+   * 缺省 = 继承（白名单 > 运行时报回 > 目录）。聚合网关的目录常说错——基元律动 25 个型号里
+   * 18 个说能关、实际只有 7 个能关——适配不过来，交给用户自己勾（2026-10-25）。
+   * 菜单与会话注册都认它：不勾的档在注册时标 null，pi 发送前夹走。
+   */
+  thinkingLevels?: ThinkingLevel[];
 }
 
 export interface ProviderEndpoint {
@@ -219,6 +228,17 @@ export function validateProvider(input: unknown): ValidationIssue[] {
       const vision = model["vision"];
       if (vision !== undefined && typeof vision !== "boolean") {
         push(`models.declared[${index}].vision`, "vision must be a boolean");
+      }
+      // 空数组不是「继承」：继承就不写这个字段。一档都没有的型号菜单无档可选、注册后 pi 也无档可夹
+      const levels = model["thinkingLevels"];
+      if (levels !== undefined) {
+        if (!Array.isArray(levels) || levels.length === 0) {
+          push(`models.declared[${index}].thinkingLevels`, "thinkingLevels must be a non-empty array");
+        } else if (!levels.every(isThinkingLevel)) {
+          push(`models.declared[${index}].thinkingLevels`, "thinkingLevels has an unknown level");
+        } else if (new Set(levels).size !== levels.length) {
+          push(`models.declared[${index}].thinkingLevels`, "thinkingLevels has a duplicate level");
+        }
       }
       const cost = model["cost"];
       if (cost !== undefined) {

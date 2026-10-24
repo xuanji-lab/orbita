@@ -5,6 +5,7 @@
 import type { CatalogPreference, ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
+import { THINKING_LEVELS, type ThinkingLevel } from "../../../../shared/thinking.ts";
 import {
   KNOWN_PROVIDERS,
   KNOWN_PROVIDER_GROUPS,
@@ -119,6 +120,42 @@ export function modelPreferenceOf(provider: ProviderDto): CatalogPreference {
 export function modelPreferenceById(providers: readonly ProviderDto[], providerId: string): CatalogPreference {
   const provider = providers.find((item) => item.id === providerId);
   return provider === undefined ? {} : modelPreferenceOf(provider);
+}
+
+/**
+ * 用户在型号弹窗里给这家的这个型号勾的思考档（ModelDecl.thinkingLevels）；没勾 = 继承，
+ * 返回 undefined。与 modelPreferenceById 成对传给 modelThinkingLevels：底栏菜单、新任务起档、
+ * 打开旧会话纠档与子会话默认档都经过它，会话注册读的是同一份声明。
+ */
+export function declaredThinkingLevels(
+  providers: readonly ProviderDto[],
+  providerId: string,
+  modelId: string,
+): ThinkingLevel[] | undefined {
+  return providers
+    .find((item) => item.id === providerId)
+    ?.models.declared.find((model) => model.id === modelId)?.thinkingLevels;
+}
+
+/**
+ * 型号弹窗里从「继承」切到「自定义」时预先勾上的档：继承来的那几档（用户多半只是去掉
+ * 网关不支持的几档）；继承的也不知道（目录与白名单都没说）就全勾，由用户去掉。
+ */
+export function customThinkingSeed(inherited: readonly ThinkingLevel[] | null): ThinkingLevel[] {
+  return [...(inherited ?? THINKING_LEVELS)];
+}
+
+/**
+ * 勾 / 去勾一档，结果按词汇表顺序。**最后一档去不掉**（原样返回）：一档都不剩的型号
+ * 菜单无档可选、会话无档可夹；想回到目录口径走「继承」，不靠「全不勾」暗示
+ * （用户 2026-10-25 定：锁住最后一档，不自动回继承——状态不该被悄悄换掉）。
+ */
+export function toggleThinkingLevel(checked: readonly ThinkingLevel[], level: ThinkingLevel): ThinkingLevel[] {
+  if (checked.includes(level)) {
+    if (checked.length === 1) return [...checked];
+    return THINKING_LEVELS.filter((item) => item !== level && checked.includes(item));
+  }
+  return THINKING_LEVELS.filter((item) => item === level || checked.includes(item));
 }
 
 /**

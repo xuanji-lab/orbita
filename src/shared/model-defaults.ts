@@ -16,7 +16,7 @@
  */
 import type { BuiltinModel, BuiltinProvider } from "./agent-ipc.ts";
 import { knownDisplayName, knownModelParams, type ModelParams } from "./known-models.ts";
-import { clampThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { clampThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "./thinking.ts";
 
 /** 模型接受的输入模态。与 pi `Model["input"]` 同形（pi 只有这两档）。 */
 export type ModelInput = ("text" | "image")[];
@@ -285,6 +285,10 @@ export function defaultThinkingLevel(
  * 三者都没有 = 未知：调用方按「全量显示、不禁用」处理，不替 pi 撒谎——开轮后
  * 由 thinking 事件纠真。
  *
+ * 三级之上还有一级：**用户在型号弹窗里勾的档**（ModelDecl.thinkingLevels，调用方传
+ * `override`）。聚合网关的目录常说错、白名单管不到每家网关，用户亲手勾的最权威——
+ * 会话注册（model-registration）按同一份覆盖收窄 pi 的支持集，菜单与真正发出去的档一致。
+ *
  * `prefer` 从服务商条目取（known-providers 的 catalogPreferenceOf）。缺席 = 不知道是哪家，
  * 按型号的通用口径答。
  */
@@ -293,7 +297,10 @@ export function modelThinkingLevels(
   catalog: readonly BuiltinProvider[],
   observed?: readonly ThinkingLevel[] | null,
   prefer: CatalogPreference = {},
+  override?: readonly ThinkingLevel[],
 ): readonly ThinkingLevel[] | null {
+  // 按词汇表顺序给出：菜单从浅到深排，存盘顺序不可靠（手改的 JSON、老版本写的）
+  if (override !== undefined && override.length > 0) return THINKING_LEVELS.filter((level) => override.includes(level));
   const known = knownParamsFor(catalog, modelId, prefer).thinkingLevels;
   if (known !== undefined) return known;
   if (observed != null) return observed;

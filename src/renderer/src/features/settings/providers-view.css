@@ -1107,6 +1107,54 @@
 .pv-fld.wide {
   grid-template-columns: 96px minmax(0, 1fr);
 }
+/* 多行的字段（型号弹窗的思考档）：标签对齐第一行控件，不对齐整块的中线 */
+.pv-fld.pv-fld-top {
+  align-items: start;
+}
+.pv-fld.pv-fld-top > .pv-lab {
+  padding-top: 4px;
+}
+/* 思考档 · 继承：只读的事实，同 .pv-locked「输入框的形、只读的实」 */
+.pv-levels-inherited {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-3);
+  min-height: var(--control-height-md);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.pv-levels-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+}
+/* 思考档 · 自定义：七档可多选，未勾的是面板底 + 发丝框的小块，勾上的取模式选中色 */
+.pv-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+}
+.pv-levels .chip:not([data-active]) {
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+.pv-levels .chip:not([data-active]):hover {
+  background: var(--option-hover-bg);
+}
+.pv-levels-hint {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
 .pv-fld.stacked {
   grid-template-columns: minmax(0, 1fr);
   gap: 4px;

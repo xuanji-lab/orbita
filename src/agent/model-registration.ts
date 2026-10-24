@@ -180,6 +180,7 @@ export function toFallbackModels(
       ...(decl.cost === undefined ? {} : { cost: { ...decl.cost } }),
       // vision 是覆盖声明：填了才动 input 模态（目录怎么说就怎么的留空不动）
       ...(decl.vision === undefined ? {} : { input: decl.vision ? ["text", "image"] : ["text"] }),
+      ...declaredThinking(base, decl.thinkingLevels),
     };
   });
 }
@@ -350,6 +351,26 @@ function whitelistLevelMap(
   return map;
 }
 
+/**
+ * 用户在型号弹窗里勾的思考档（ModelDecl.thinkingLevels）→ 盖在白名单 / 目录之上的档位表。
+ * 与菜单（shared modelThinkingLevels 的 `override`）同一份覆盖：不勾的档标 null，pi 发送前
+ * 夹进勾选集——菜单只剩「高」而会话照目录发「关」的分裂就是这么防的。
+ *
+ * reasoning 跟着勾选走：pi 对 reasoning:false 的型号只认 off（getSupportedThinkingLevels），
+ * 用户勾了 off 以外的档（目录没收录、借参落兜底 false 的型号）不翻成 true，勾了也发不出去；
+ * 只勾 off = 「这个型号在这家关不掉也开不了」，按不思考注册。
+ */
+function declaredThinking(
+  base: RegisteredModel,
+  levels: readonly ThinkingLevel[] | undefined,
+): Partial<RegisteredModel> {
+  if (levels === undefined || levels.length === 0) return {};
+  return {
+    reasoning: levels.some((level) => level !== "off"),
+    thinkingLevelMap: whitelistLevelMap(base.thinkingLevelMap, levels),
+  };
+}
+
 /** 白名单这一条会不会改变会话里的模型（默认思考档只是偏好，不进 pi 的模型对象） */
 function touchesRuntime(patch: ModelParams): boolean {
   return (
@@ -372,7 +393,8 @@ export function hasModelOverrides(models: readonly ModelDecl[]): boolean {
       model.contextWindow !== undefined ||
       model.maxTokens !== undefined ||
       model.cost !== undefined ||
-      model.vision !== undefined,
+      model.vision !== undefined ||
+      model.thinkingLevels !== undefined,
   );
 }
 
