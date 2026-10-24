@@ -404,6 +404,17 @@ export interface ProviderSecrets {
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+  /**
+   * pi 目录里这家叫什么（`KnownProvider.catalogId`，如 zhipu-coding ↔ zai-coding-cn）。
+   * 官方参数按它去查；缺席 = 目录里没这家（自建网关）。以前靠展开运算符夹带过线，没进契约。
+   */
+  catalogId?: string;
+  /**
+   * 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录了的型号，
+   * 白名单不覆盖——聚合网关会收窄型号能力（OpenCode Go 的 kimi-k3 只开 max 一档），
+   * 型号的通用口径在它那里不成立。目录没收录的型号仍由白名单补。
+   */
+  catalogAuthoritative?: boolean;
 }
 
 /**
