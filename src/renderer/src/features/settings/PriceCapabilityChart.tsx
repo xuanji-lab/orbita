@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { modelDisplayName } from "@shared/model-defaults";
 import type {
@@ -22,7 +22,10 @@ import {
   formatCost,
   formatCostTick,
   formatScore,
+  type LabelRequest,
+  type LabelSide,
   paretoFrontier,
+  placeLabels,
   pointKey,
   popoverPlacement,
   scoreRange,
@@ -37,7 +40,8 @@ import "./price-chart.css";
  *
  * - 一个点 = 型号 × 思考档（同一型号挂几家服务商、写成别名都合成一个，不显示服务商）；头像就是点。实测点实心，估算点虚线空心框；
  *   跑过但不够门槛的也按估算画，悬停里另写一行「实测 n 个任务 $x」。
- * - 横轴对数、纵轴线性；绿线是当前分类的帕累托前沿，前沿上的点带名字，其余悬停 / 聚焦看详情。
+ * - 横轴对数、纵轴线性；实线是当前分类的帕累托前沿（与用量格同色），前沿上的点带名字（放不下的退成
+ *   悬停提示，placeLabels），其余悬停 / 聚焦出轻提示，点击看详情。
  * - 分类用左右按钮循环（默认 Agent 综合），每类各算一条前沿。
  * - 当前分类查不到的型号列「未上榜」，查得到但横轴定不了的列「缺官方单价」，都不硬画进图里。
  *
@@ -153,6 +157,39 @@ export function PriceCapabilityChart(props: {
   const levelOf = (point: PriceChartPoint) =>
     point.thinkingLevel === null ? copy.levelUnlabeled : levelName(point.thinkingLevel, point.modelId);
 
+  /**
+   * 前沿标签各放哪一侧：量出点与标签的像素尺寸交给 placeLabels。useLayoutEffect 在绘制前跑，
+   * 第一帧按默认方向渲染、量完立刻改，不会闪；绘图区尺寸变了（窗口缩放）由 ResizeObserver 触发重算。
+   * 不带依赖数组：显示名、字体、点的位置任何一个变了都要重量；结果不变就不 setState，不会循环。
+   */
+  const [labelSides, setLabelSides] = useState<ReadonlyMap<string, LabelSide | null>>(() => new Map());
+  const [, setAreaSize] = useState("");
+  useEffect(() => {
+    const area = areaRef.current;
+    if (area === null) return;
+    const observer = new ResizeObserver(() => setAreaSize(`${area.clientWidth}x${area.clientHeight}`));
+    observer.observe(area);
+    return () => observer.disconnect();
+  }, [view !== null]);
+  useLayoutEffect(() => {
+    const area = areaRef.current;
+    if (area === null || view === null) return;
+    const dots = [...area.querySelectorAll<HTMLButtonElement>(".pc-dot")];
+    // 按钮用 left / top 百分比定位、translate(-50%, -50%) 居中：offsetLeft / offsetTop 就是点的中心
+    const boxOf = (el: HTMLElement) => ({ x: el.offsetLeft, y: el.offsetTop, r: el.offsetWidth / 2 });
+    const requests: LabelRequest[] = [];
+    for (const point of view.frontier) {
+      const key = pointKey(point);
+      const el = dots.find((d) => d.dataset.key === key);
+      const label = el?.querySelector<HTMLElement>(".pc-label");
+      if (el === undefined || label === null || label === undefined) continue;
+      requests.push({ key, ...boxOf(el), w: label.offsetWidth, h: label.offsetHeight });
+    }
+    const next = placeLabels(requests, dots.map(boxOf), { w: area.clientWidth, h: area.clientHeight });
+    const same = next.size === labelSides.size && [...next].every(([key, side]) => labelSides.get(key) === side);
+    if (!same) setLabelSides(next);
+  });
+
   const badge =
     data === null ? null : data.profile.reference ? copy.referenceBadge : copy.basedOnTasks(data.profile.taskCount);
   const picked = selected === null ? undefined : view?.points.find((p) => pointKey(p) === selected);
@@ -256,6 +293,7 @@ export function PriceCapabilityChart(props: {
                     return (
                       <button
                         key={key}
+                        data-key={key}
                         type="button"
                         className={`pc-dot${onFront ? " frontier" : ""}${point.costBasis === "measured" ? "" : " estimated"}`}
                         style={{ left: `${left}%`, top: `${view.yOf(point.score)}%` }}
@@ -267,7 +305,7 @@ export function PriceCapabilityChart(props: {
                       >
                         {avatar(point, onFront ? 20 : 16)}
                         {onFront ? (
-                          <span className={`pc-label${left > 68 ? " left" : ""}`}>
+                          <span className={`pc-label ${labelSideClass(labelSides, key, left)}`}>
                             {nameOf(point)}
                             <span className="pc-label-level">{levelOf(point)}</span>
                           </span>
@@ -480,6 +518,15 @@ function UnratedChips(props: {
       })}
     </div>
   );
+}
+
+/**
+ * 标签方向对应的类名：还没量过（第一帧）按原来的规则左右二选一；量过之后用 placeLabels 的结果，
+ * null 记成 off——标签平时不显示，悬停 / 聚焦时才出来，与非前沿点的轻提示一样。
+ */
+function labelSideClass(sides: ReadonlyMap<string, LabelSide | null>, key: string, left: number): string {
+  if (!sides.has(key)) return left > 68 ? "left" : "right";
+  return sides.get(key) ?? "off";
 }
 
 /** 图下的型号清单（未上榜 / 缺官方单价）：头像 + 显示名，按型号去重 */

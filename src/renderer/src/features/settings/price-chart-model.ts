@@ -139,3 +139,83 @@ export function popoverPlacement(
     vertical: y < 30 ? "below" : y > 70 ? "above" : "middle",
   };
 }
+
+/** 前沿点的名字标签放在点的哪一侧；null = 四边都放不下，退成悬停提示 */
+export type LabelSide = "right" | "left" | "above" | "below";
+
+/** 一个前沿点的标签：点中心 (x, y) 与点的半边长 r、标签宽高 w × h，全是绘图区内的像素 */
+export interface LabelRequest {
+  key: string;
+  x: number;
+  y: number;
+  r: number;
+  w: number;
+  h: number;
+}
+
+/** 绘图区里的一个点（前沿上的与不在前沿上的都算）：中心与半边长，像素 */
+export interface DotBox {
+  x: number;
+  y: number;
+  r: number;
+}
+
+interface Rect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** 标签在某一侧时的矩形：与 price-chart.css 的 .pc-label 各方向一致（离点的边 gap 像素） */
+function labelRect(label: LabelRequest, side: LabelSide, gap: number): Rect {
+  const { x, y, r, w, h } = label;
+  switch (side) {
+    case "right":
+      return { x0: x + r + gap, y0: y - h / 2, x1: x + r + gap + w, y1: y + h / 2 };
+    case "left":
+      return { x0: x - r - gap - w, y0: y - h / 2, x1: x - r - gap, y1: y + h / 2 };
+    case "above":
+      return { x0: x - w / 2, y0: y - r - gap - h, x1: x + w / 2, y1: y - r - gap };
+    case "below":
+      return { x0: x - w / 2, y0: y + r + gap, x1: x + w / 2, y1: y + r + gap + h };
+  }
+}
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
+
+/**
+ * 前沿点的名字标签各放哪一侧。原来只按横坐标在左右二选一，前沿上的点一挤就叠：集成实例里
+ * 「DeepSeek V4.1 Flash」与「Claude Haiku 5.5」的标签贴在一起，Sonnet 的标签压住旁边 Fable 的点。
+ *
+ * 按前沿顺序逐个放：依次试右、左、上、下（点在右侧 32% 以内时先试左，与原来一致），取第一个
+ * 「不出绘图区、不压任何点、不压已放好的标签」的方向。四边都不行记 null：那个点退成和非前沿点
+ * 一样的悬停提示——名字在「帕累托最优」清单里照样有，不硬叠在一起。
+ */
+export function placeLabels(
+  labels: readonly LabelRequest[],
+  dots: readonly DotBox[],
+  area: { w: number; h: number },
+  gap = 6,
+): Map<string, LabelSide | null> {
+  const dotRects = dots.map((d) => ({ x0: d.x - d.r, y0: d.y - d.r, x1: d.x + d.r, y1: d.y + d.r }));
+  const placed: Rect[] = [];
+  const result = new Map<string, LabelSide | null>();
+  for (const label of labels) {
+    const order: LabelSide[] =
+      label.x > area.w * 0.68 ? ["left", "right", "above", "below"] : ["right", "left", "above", "below"];
+    let chosen: LabelSide | null = null;
+    for (const side of order) {
+      const rect = labelRect(label, side, gap);
+      if (rect.x0 < 0 || rect.y0 < 0 || rect.x1 > area.w || rect.y1 > area.h) continue;
+      if (dotRects.some((d) => overlaps(rect, d)) || placed.some((p) => overlaps(rect, p))) continue;
+      chosen = side;
+      placed.push(rect);
+      break;
+    }
+    result.set(label.key, chosen);
+  }
+  return result;
+}

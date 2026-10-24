@@ -8,6 +8,7 @@ import {
   formatCostTick,
   formatScore,
   paretoFrontier,
+  placeLabels,
   popoverPlacement,
   scoreTicks,
   shouldShowPriceChart,
@@ -98,5 +99,39 @@ describe("点开的详情卡放哪一侧", () => {
     assert.deepEqual(popoverPlacement(80, 50), { side: "left", vertical: "middle" });
     assert.deepEqual(popoverPlacement(40, 10), { side: "right", vertical: "below" });
     assert.deepEqual(popoverPlacement(90, 95), { side: "left", vertical: "above" });
+  });
+});
+
+describe("前沿标签放哪一侧：不出界、不压点、不压别的标签", () => {
+  const area = { w: 600, h: 400 };
+  const label = (key: string, x: number, y: number, w = 120) => ({ key, x, y, r: 12, w, h: 20 });
+  const dot = (x: number, y: number) => ({ x, y, r: 12 });
+
+  test("空旷处放右边；靠右的点先试左边", () => {
+    const sides = placeLabels([label("a", 100, 200), label("b", 500, 200)], [dot(100, 200), dot(500, 200)], area);
+    assert.equal(sides.get("a"), "right");
+    assert.equal(sides.get("b"), "left");
+  });
+
+  test("右边压着别的点（含不在前沿上的点）就换到左边", () => {
+    const sides = placeLabels([label("a", 300, 200)], [dot(300, 200), dot(360, 200)], area);
+    assert.equal(sides.get("a"), "left");
+  });
+
+  test("两个点上下挨着：后放的不压先放的标签", () => {
+    const sides = placeLabels([label("a", 300, 200), label("b", 300, 215)], [dot(300, 200), dot(300, 215)], area);
+    assert.equal(sides.get("a"), "right");
+    assert.equal(sides.get("b"), "left");
+  });
+
+  test("贴着左边、右边又被挡：左边出界，改放上面", () => {
+    const sides = placeLabels([label("a", 40, 200, 60)], [dot(40, 200), dot(90, 200)], area);
+    assert.equal(sides.get("a"), "above");
+  });
+
+  test("四边都放不下记 null（退成悬停提示），不硬叠", () => {
+    const crowd = [dot(300, 200), dot(350, 200), dot(250, 200), dot(300, 160), dot(300, 240)];
+    const sides = placeLabels([label("a", 300, 200)], crowd, area);
+    assert.equal(sides.get("a"), null);
   });
 });
