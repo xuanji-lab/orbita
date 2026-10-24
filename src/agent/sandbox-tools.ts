@@ -81,6 +81,14 @@ const SCOPE =
   "Operates the Edge browser **inside the isolated Windows sandbox** (DOM level, via CDP) — not the user's own " +
   "browser and not Orbita's built-in browser tab. ";
 
+/**
+ * 沙箱桌面归谁：多个会话能同时用工具，但**桌面只有一份**。拿不到时接口会回一句
+ * 「被另一个会话占着」——不写明「不要重试」，模型会立刻再调一次（lease.ts 的等待会更长）。
+ */
+const BUSY =
+  "One session at a time holds the sandbox: if the result says another session is using it, do not retry — " +
+  "wait for that session's turn to end, or ask the user which session should drive the sandbox. ";
+
 const PIXEL_FALLBACK =
   "If this fails with a CDP / browser error, fall back to the pixel tools (computer_screenshot, computer_click, " +
   "computer_type) which drive the sandbox desktop without Edge's debugging port.";
@@ -123,6 +131,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_navigate",
     description:
       SCOPE +
+      BUSY +
       "Open a URL in it and wait for the page to load. Use this for any web task that should happen in the " +
       "sandbox — it starts the sandbox's Edge automatically, so it is the first call of a browser session. " +
       "Accepts \"back\" / \"forward\" for history, and a bare domain such as example.com (https is assumed). " +
@@ -155,6 +164,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_observe",
     description:
       SCOPE +
+      BUSY +
       "Describe the current page: its visible text plus a list of interactive elements, each with a tag, a " +
       "readable text, a selector you can pass to sandbox_click / sandbox_type / sandbox_extract, and its centre " +
       "coordinates. Selectors are positional and expire when the page navigates — observe again after a " +
@@ -191,6 +201,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_click",
     description:
       SCOPE +
+      BUSY +
       "Click an element by the selector sandbox_observe gave you. The click goes through the browser's real input " +
       "pipeline (it scrolls the element into view, then presses and releases at its centre), so hover and focus " +
       "behave as they do for a person. Nothing but what happened comes back: call sandbox_observe afterwards to " +
@@ -228,6 +239,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_type",
     description:
       SCOPE +
+      BUSY +
       "Focus the element with that selector, replace its contents with text, and optionally press Enter to " +
       "submit. Text goes in through the browser's input pipeline as Unicode, so Chinese and symbols work and the " +
       "page's own input events fire. Set clear to false to append instead of replacing (default replaces). " +
@@ -279,6 +291,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_extract",
     description:
       SCOPE +
+      BUSY +
       "Read the visible text of the page, or of one element when you pass a selector from sandbox_observe. " +
       "Long text is cut off at 20000 characters and the result says how long the whole thing was — narrow it " +
       "with a selector when that happens. Use sandbox_observe instead when you need to interact, not just read. " +
@@ -309,6 +322,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_wait",
     description:
       SCOPE +
+      BUSY +
       "Wait inside the sandbox for a selector to appear, or for a fixed number of milliseconds when no selector " +
       "is given. The wait happens in the sandbox (one round trip), so it is much cheaper than observing in a loop. " +
       "The selector wait is capped at 10 s — if it does not appear, check the selector with sandbox_observe rather " +
@@ -351,6 +365,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_screenshot",
     description:
       SCOPE +
+      BUSY +
       "Screenshot the page as it is rendered inside the sandbox browser. Use it when layout or images matter " +
       "(charts, figures, what a page actually looks like) or when the DOM tools cannot answer — for reading text " +
       "sandbox_extract is cheaper and more accurate, and for acting on the page sandbox_observe gives you " +
@@ -376,6 +391,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_upload",
     description:
       SCOPE +
+      BUSY +
       "Attach a file from the user's computer to a file input on the page. path is a path on the host (your " +
       "working directories); the file is first copied into the sandbox's mapped folder, then handed to the " +
       "input — the original file is never modified. Find the input with sandbox_observe (it marks editable " +
@@ -417,6 +433,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_download",
     description:
       SCOPE +
+      BUSY +
       "Click a download link / button and collect the file it produces. The download is written into the " +
       "sandbox's mapped folder, which is a real folder on the host — the result gives you the host paths, and " +
       "you can open them with your file tools (read_pdf, read, …). Click a link that actually downloads " +
@@ -457,6 +474,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     label: "sandbox_tabs",
     description:
       SCOPE +
+      BUSY +
       "List the tabs open in the sandbox browser, or switch to one. A popup or a target=_blank link opens a new " +
       "tab without changing the one you are acting on — list the tabs here, then switch when you actually need " +
       "that page. Selectors belong to one page: after switching, call sandbox_observe again. " +

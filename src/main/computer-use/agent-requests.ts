@@ -35,8 +35,16 @@ export interface ComputerUseGuest {
 
 export async function applyComputerUseRequest(
   controller: ComputerUseGuest,
+  /**
+   * 只用于日志与观测，**不改变任何命令的语义**：沙箱里就一个桌面，同一条 click 无论在谁的
+   * 轮次里都只做一件事——「一个会话同一时间用沙箱」由 computer-use/lease.ts 保证（index.ts
+   * 先 acquire 再调到这里），不在这一层。带上它是因为真机排查要回答「这一下到底是谁发的」：
+   * 租约挡住的是并发，日志回答的是事后归因。
+   */
+  sessionId: string,
   request: ComputerUseToolRequest,
 ): Promise<ComputerUseToolOutcome> {
+  console.log(`[computer-use] ${sessionId} → ${request.action}`);
   try {
     switch (request.action) {
       case "screenshot": {
