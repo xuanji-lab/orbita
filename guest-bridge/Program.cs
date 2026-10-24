@@ -153,6 +153,8 @@ internal static class Program
             if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
             // 会话 id 安全化的自测（纯函数：CDP 会话键直接拼进 profile 目录，这一关失守就是路径穿越）
             if (args[i] == "--selftest-session") return RunSessionSelfTest();
+            // 浏览器错误页判定的自测（纯函数：不启动任何进程、不碰 Edge）
+            if (args[i] == "--selftest-cdp") return RunCdpSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
         }
@@ -232,7 +234,127 @@ internal static class Program
             return 1;
         }
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        // worker 自己的日志落到映射目录：这是宿主**唯一**能看见 guest 内部发生了什么的通道
+        RedirectWorkerLog(outDir, session);
         return WorkerHost.RunWorker(outDir, session, testHooks, parentPid);
+    }
+
+    /**
+     * worker.log 的单文件上限。超了清空重写（长跑的 worker 不能把映射目录撑爆）；
+     * 1 MB 按一行 ~100 字节算是一万行，足够一个会话一局的诊断量。
+     */
+    private const long WorkerLogMaxBytes = 1024 * 1024;
+
+    /**
+     * 把 worker 的 Console 输出（stdout / stderr）接到 `out\worker\<会话>\worker.log`。
+     *
+     * 为什么要它（2026-10-25 真机）：`.wsb` 的 LogonCommand 只把**主桥**的 stdout 重定向进
+     * out\bridge.log；worker 是 Process.Start 起的子进程，它自己的 Console 输出在真机上哪里都
+     * 看不到——「CDP 启动 Edge…」「CDP 端口…」「错误页诊断」「注入失败原因」全部丢掉，宿主侧
+     * 只能靠猜（错误页正文拿不到码，猜了三轮）。现在 worker 自己把输出写进映射目录，
+     * 宿主直接读得到。
+     *
+     * 为什么不是主桥 RedirectStandardOutput + 转发：那是同步管道，父进程不读干子进程就阻塞，
+     * 而主桥是单线程轮询循环（0.7.0 存在的理由就是不许被一条慢命令堵住）。**主桥一个
+     * RedirectStandard* 都没加，没有新增任何同步等待**。
+     *
+     * 每次 worker 启动覆盖重建（每次重启只看这一次的现场，不会与上一具尸体的话搵在一起）。
+     */
+    private static void RedirectWorkerLog(string outDir, string session)
+    {
+        string key = CdpSessions.SafeSessionId(session);
+        string dir = Path.Combine(outDir, WorkerHost.WorkerDirName, key);
+        string path = Path.Combine(dir, "worker.log");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            CappedFileWriter writer = new CappedFileWriter(path, WorkerLogMaxBytes);
+            Console.SetOut(writer);
+            Console.SetError(writer);
+            Log("worker 日志文件：" + path);
+        }
+        catch (Exception ex)
+        {
+            // 落不了盘就退回 stdout（不能因为日志把 worker 弄死，它还有活儿要干）
+            Log("worker 日志文件建不起来（" + path + "）：" + ex.Message + "，退回 stdout");
+        }
+    }
+
+    /**
+     * 写 worker.log 的 TextWriter：只接管 Write(string) / Write(char)——Console.Write / WriteLine
+     * 的所有重载最终都落到这两条（base 的 WriteLine 先 Write(string) 再写换行）。
+     * 超过上限就 dispose 重开（FileMode.Create = 清空），不会在文件里留洞。
+     */
+    private sealed class CappedFileWriter : TextWriter
+    {
+        private readonly string _path;
+        private readonly long _maxBytes;
+        private readonly object _gate = new object();
+        private StreamWriter _inner;
+
+        internal CappedFileWriter(string path, long maxBytes)
+        {
+            _path = path;
+            _maxBytes = maxBytes;
+            _inner = Create(_path);
+        }
+
+        private static StreamWriter Create(string path)
+        {
+            FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            StreamWriter w = new StreamWriter(fs, new UTF8Encoding(false));
+            w.AutoFlush = true; // 被 taskkill 也要留下已经写过的行
+            return w;
+        }
+
+        public override Encoding Encoding
+        {
+            get { return Encoding.UTF8; }
+        }
+
+        public override void Write(string value)
+        {
+            if (value == null) return;
+            lock (_gate)
+            {
+                RotateIfNeeded();
+                _inner.Write(value);
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (_gate)
+            {
+                RotateIfNeeded();
+                _inner.Write(value);
+            }
+        }
+
+        public override void Flush()
+        {
+            lock (_gate)
+            {
+                try { _inner.Flush(); } catch { }
+            }
+        }
+
+        private void RotateIfNeeded()
+        {
+            try
+            {
+                if (_inner.BaseStream.Length < _maxBytes) return;
+            }
+            catch
+            {
+                return;
+            }
+            try { _inner.Dispose(); } catch { }
+            _inner = Create(_path);
+            _inner.Write("[" + DateTime.Now.ToString("HH:mm:ss") + "] [bridge] （日志超过 "
+                + (_maxBytes / 1024) + " KB，已清空重写）\r\n");
+        }
     }
 
     // ---- 参数解析 ----
@@ -1355,7 +1477,131 @@ internal static class Program
         return failures.Count == 0 ? 0 : 1;
     }
 
-    /** 统一的自测回执照 JSON（四个 selftest 共用一份形状，跑测试的人不用记四种） */
+    // ---- 浏览器错误页判定的自测（--selftest-cdp）----------------------------------
+    //
+    // 2026-10-25 真机：沙箱离线时每条 sandbox_navigate 都回 ok:true + 「可能还在渲染」，
+    // 而正文是「你似乎未连接到 Internet」。对模型是假成功——它会接着去 operate 一个错误页，
+    // 而且每次白等满 20 秒。错误页的判定与原因码都是纯函数，在宿主上就能测；
+    // 真机才能验的部分（导航真落在 chrome-error:// 上）交给验收。
+
+    private static int RunCdpSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // 真机回执里的最终 URL（Edge 154）
+        CheckTrue(failures, ref cases, "chrome-error://chromewebdata/ 命中",
+            CdpSession.IsNavErrorPage("chrome-error://chromewebdata/", null));
+        CheckTrue(failures, ref cases, "新标签时的 chrome-error:// 也命中",
+            CdpSession.IsNavErrorPage("chrome-error://", ""));
+        CheckTrue(failures, ref cases, "大小写 / 首尾空白不影响",
+            CdpSession.IsNavErrorPage("  CHROME-ERROR://chromewebdata/\r\n", null));
+        CheckTrue(failures, ref cases, "正常页面不命中（URL）",
+            !CdpSession.IsNavErrorPage("https://example.com/", null));
+        CheckTrue(failures, ref cases, "正常页面不命中（正文里只有普通 error 字样）",
+            !CdpSession.IsNavErrorPage("https://example.com/", "Server error: try again later (500)"));
+        CheckTrue(failures, ref cases, "about:blank / data: / file: 不命中",
+            !CdpSession.IsNavErrorPage("about:blank", "")
+            && !CdpSession.IsNavErrorPage("data:text/html,<h1>hi</h1>", "hi")
+            && !CdpSession.IsNavErrorPage("file:///C:/orbita-out/upload/a.html", "hello"));
+
+        // 正文里的原因码（离线错误页的正文形状，三站点实测）
+        string offline = "你似乎未连接到 Internet\r\n\r\nERR_INTERNET_DISCONNECTED\r\n\r\n请检查你的网络连接";
+        CheckTrue(failures, ref cases, "正文里的 ERR_ 命中", CdpSession.IsNavErrorPage(null, offline));
+        CheckString(failures, ref cases, "抓到 ERR_INTERNET_DISCONNECTED", "ERR_INTERNET_DISCONNECTED",
+            CdpSession.NavErrorCode(offline));
+        CheckString(failures, ref cases, "net::ERR_NAME_NOT_RESOLVED 只献出码", "ERR_NAME_NOT_RESOLVED",
+            CdpSession.NavErrorCode("net::ERR_NAME_NOT_RESOLVED"));
+        CheckString(failures, ref cases, "正文里有多个码时取第一个", "ERR_HTTP_RESPONSE_CODE_FAILURE",
+            CdpSession.NavErrorCode("ERR_HTTP_RESPONSE_CODE_FAILURE\nERR_SSL_VERSION_OR_CIPHER_MISMATCH"));
+        CheckString(failures, ref cases, "大写字母开头的 ERR_ 不是码（NETERR_FOO）", null,
+            CdpSession.NavErrorCode("NETERR_FOO"));
+        CheckString(failures, ref cases, "孤零零的 ERR_ 不是码", null, CdpSession.NavErrorCode("错误光 ERR_ 没有码"));
+        CheckString(failures, ref cases, "没有原因码时回 null", null,
+            CdpSession.NavErrorCode("你似乎未连接到 Internet"));
+        CheckString(failures, ref cases, "null 正文不会崩", null, CdpSession.NavErrorCode(null));
+
+        // 人话：带原因、带下一步、不带内部串
+        string withCode = CdpSession.NavErrorMessage("ERR_INTERNET_DISCONNECTED");
+        CheckTrue(failures, ref cases, "有码：报出原因", withCode.IndexOf("ERR_INTERNET_DISCONNECTED", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "有码：不是「没有拿到内容」",
+            withCode.IndexOf("没有拿到内容", StringComparison.Ordinal) < 0);
+        string noCode = CdpSession.NavErrorMessage(null);
+        CheckTrue(failures, ref cases, "无码：说清没拿到内容", noCode.IndexOf("页面加载失败（没有拿到内容）", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案带下一步（换一个地址）",
+            withCode.IndexOf("换一个", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案带降级工具（computer_screenshot / computer_click）",
+            withCode.IndexOf("computer_screenshot", StringComparison.Ordinal) >= 0
+            && withCode.IndexOf("computer_click", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案不把 chromewebdata 这种内部串甩给模型",
+            withCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0
+            && noCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0);
+
+        // 连接超时也是同一句人话的前半句（不回「CDP 命令超时（Page.navigate，…）」）
+        string timeoutText = CdpSession.NavErrorMessage("连接超时（20000ms 内没有回执）");
+        CheckTrue(failures, ref cases, "超时：说成「页面没有加载：连接超时」",
+            timeoutText.StartsWith("页面没有加载：连接超时", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "超时文案里没有 CDP 内部措辞",
+            timeoutText.IndexOf("Page.navigate", StringComparison.Ordinal) < 0
+            && timeoutText.IndexOf("CDP 命令超时", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "人话不会撑成一屏（< 400 字符）",
+            withCode.Length < 400 && timeoutText.Length < 400);
+
+        // 超时异常的识别（Nav 靠它把内部措辞换成上面那句人话）
+        CheckTrue(failures, ref cases, "CDP 命令超时命中",
+            CdpSession.IsCdpTimeoutMessage("CDP 命令超时（Page.navigate，20000ms 内没有回执）"));
+        CheckTrue(failures, ref cases, "CDP 发送超时也命中", CdpSession.IsCdpTimeoutMessage("CDP 发送超时（Page.navigate）"));
+        CheckTrue(failures, ref cases, "页面脚本报错不算超时",
+            !CdpSession.IsCdpTimeoutMessage("页面里的脚本报错：Cannot read properties of null"));
+        CheckTrue(failures, ref cases, "「Edge 没有在运行」不算超时",
+            !CdpSession.IsCdpTimeoutMessage("沙箱里的 Edge 没有在运行（或已经退出）"));
+        CheckTrue(failures, ref cases, "null 不算超时", !CdpSession.IsCdpTimeoutMessage(null));
+
+        // 失效 session 的识别（真机 2026-10-25：上一条导航超时后，紧接着的下一条必撞它）
+        string staleReply = "{\"id\":7,\"error\":{\"code\":-32001,\"message\":\"Session with given id not found.\"}}";
+        CheckTrue(failures, ref cases, "Session with given id not found 命中", CdpSession.IsStaleSessionError(staleReply));
+        CheckTrue(failures, ref cases, "No target with given id 命中",
+            CdpSession.IsStaleSessionError("{\"error\":{\"message\":\"No target with given id found\"}}"));
+        CheckTrue(failures, ref cases, "正常回执不算失效",
+            !CdpSession.IsStaleSessionError("{\"id\":7,\"result\":{\"frameId\":\"A1\"}}"));
+        CheckTrue(failures, ref cases, "navigation 失败的普通错误不算失效",
+            !CdpSession.IsStaleSessionError("{\"error\":{\"message\":\"net::ERR_NAME_NOT_RESOLVED\"}}"));
+        CheckTrue(failures, ref cases, "null 不算失效", !CdpSession.IsStaleSessionError(null));
+
+        // 错误文案里的 URL 截断（data: URL 真机把一句错误撑成一屏）
+        string longData = "data:text/html;charset=utf-8;base64," + new string('A', 500);
+        string shorted = CdpSession.ShortUrl(longData, 80);
+        CheckTrue(failures, ref cases, "长 URL 截到 80 + …", shorted.Length == 81 && shorted.EndsWith("…", StringComparison.Ordinal));
+        CheckString(failures, ref cases, "短 URL 原样保留", "https://example.com/", CdpSession.ShortUrl("https://example.com/", 80));
+        CheckString(failures, ref cases, "刚好 80 不截", new string('a', 80), CdpSession.ShortUrl(new string('a', 80), 80));
+        CheckString(failures, ref cases, "null URL 回空串", "", CdpSession.ShortUrl(null, 80));
+
+        // 取正文的脚本不能退化成只读 body.innerText：真机就是这样漏掉 ERR_NAME_NOT_RESOLVED 的
+        string dumpJs = CdpSession.ErrorPageDumpScriptForTest;
+        CheckTrue(failures, ref cases, "取正文覆盖 body.innerText / textContent", 
+            dumpJs.IndexOf("innerText", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("textContent", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "取正文覆盖 #main-message / shadow root / outerHTML",
+            dumpJs.IndexOf("main-message", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("shadowRoot", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("outerHTML", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "每路来源都记了字符数（日志要靠它区分「空」与「没码」）",
+            dumpJs.IndexOf("s.length", StringComparison.Ordinal) >= 0);
+
+        // 原因码的第二张牌：Page.navigate 的 errorText（真机错误页 DOM 取不到任何文本时靠它）
+        CheckString(failures, ref cases, "正文空时用 Page.navigate 的 errorText", "ERR_NAME_NOT_RESOLVED",
+            CdpSession.NavErrorReason("", "net::ERR_NAME_NOT_RESOLVED"));
+        CheckString(failures, ref cases, "正文里的码优先（比 errorText 更具体）", "ERR_HTTP_RESPONSE_CODE_FAILURE",
+            CdpSession.NavErrorReason("ERR_HTTP_RESPONSE_CODE_FAILURE", "net::ERR_FAILED"));
+        CheckString(failures, ref cases, "两张牌都没有时回 null", null,
+            CdpSession.NavErrorReason("[body.innerText=0]", null));
+        CheckString(failures, ref cases, "errorText 是空串时不编造码", null, CdpSession.NavErrorReason("", ""));
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 统一的自测回执照 JSON（五个 selftest 共用一份形状，跑测试的人不用记五种） */
     internal static string BuildSelfTestJson(List<string> failures, int cases)
     {
         StringBuilder json = new StringBuilder();
