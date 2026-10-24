@@ -560,8 +560,8 @@ export const en = {
     intentRecall: "Intent recall",
     /** 明细最后一行：当天花费按官方单价折算 */
     cost: (usd: string) => `≈ ${usd} (at official prices)`,
-    /** 有一部分用量找不到单价（含意图召回），没算进去 */
-    costPartial: (usd: string) => `≈ ${usd} (at official prices; some usage has no price)`,
+    /** 花费下面单独一行：有一部分用量找不到单价（含意图召回），没算进去 */
+    costPartial: "Some usage has no price, not counted",
     /** 点一格的效果（格子的悬停 title） */
     pinPetHere: "Click to keep the nebula on this day",
     backToToday: "Click to bring the nebula back to today",
