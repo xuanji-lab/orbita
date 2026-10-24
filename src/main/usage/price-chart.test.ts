@@ -132,9 +132,10 @@ describe("buildPriceChart", () => {
     s2: [reply("b1", "kimi-coding", "k3", "max", 3)],
     s3: [reply("c1", "kimi-coding", "k3", "max", 5)],
     s4: [reply("d1", "opencode-go", "glm-5.3-flash", "low", 0.1), reply("d2", "opencode-go", "glm-5.3-flash", "high", 0.3)],
+    s5: [reply("e1", "opencode-go", "glm-5.3-flash", "medium", 0.2)],
     imported: [reply("z1", "kimi-coding", "k3", "max", 999)],
   };
-  const metas = [meta("s1", 1), meta("s2", 2), meta("s3", 3), meta("s4", 4), meta("imported", 5, { importedFrom: "/x.jsonl" })];
+  const metas = [meta("s1", 1), meta("s2", 2), meta("s3", 3), meta("s4", 4), meta("s5", 6), meta("imported", 5, { importedFrom: "/x.jsonl" })];
 
   test("实测点：各会话段花费的中位数与样本数；导入会话不计", async () => {
     const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
@@ -147,12 +148,51 @@ describe("buildPriceChart", () => {
     assert.equal(k3?.providerId, "kimi-coding");
   });
 
-  test("榜单没标档的条目：横轴取这个型号全部档位的段（low 0.1、high 0.3 → 0.2），点的档记 null", async () => {
+  test("榜单没标档的条目：横轴取这个型号全部档位的段（low 0.1、high 0.3、medium 0.2 → 0.2），点的档记 null", async () => {
     const { data } = await buildPriceChart(sources(logs, metas, providers), snapshot);
     const flash = data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "glm-5.3-flash");
     assert.equal(flash?.thinkingLevel, null);
-    assert.equal(flash?.samples, 2);
+    assert.equal(flash?.costBasis, "measured");
+    assert.equal(flash?.samples, 3);
     assert.ok(Math.abs((flash?.cost ?? 0) - 0.2) < 1e-12);
+  });
+
+  describe("实测门槛：少于 3 个任务按估算画，悬停里另带实测", () => {
+    const qwen = (id: string, cost: number) => reply(id, "opencode-go", "qwen3.8-max", "high", cost);
+    const pointOf = async (taskCount: number) => {
+      const qlogs: Record<string, SessionRecord[]> = {};
+      const qmetas: SessionMeta[] = [];
+      for (let i = 0; i < taskCount; i += 1) {
+        qlogs[`q${i}`] = [qwen(`qa${i}`, 30 + i)];
+        qmetas.push(meta(`q${i}`, 10 + i));
+      }
+      const { data } = await buildPriceChart(sources(qlogs, qmetas, providers), snapshot);
+      return data.categories.find((c) => c.category === "agent")?.points.find((p) => p.modelId === "qwen3.8-max");
+    };
+
+    test("2 个任务：估算点（空心），实测的中位数与任务数随点带上", async () => {
+      const point = await pointOf(2);
+      assert.equal(point?.costBasis, "estimated");
+      assert.equal(point?.samples, 0);
+      assert.deepEqual(point?.measured, { cost: 30.5, samples: 2 });
+      assert.notEqual(point?.cost, 30.5);
+    });
+
+    test("3 个任务：实测中位数画实心点，不再带 measured", async () => {
+      const point = await pointOf(3);
+      assert.equal(point?.costBasis, "measured");
+      assert.equal(point?.samples, 3);
+      assert.equal(point?.cost, 31);
+      assert.equal(point?.measured, undefined);
+    });
+
+    test("不够门槛又找不到官方单价：定不了横轴，列进缺官方单价", async () => {
+      const opusLogs = { o1: [reply("oa", "anthropic-compatible", "claude-opus-5-5", "max", 2)] };
+      const { data } = await buildPriceChart(sources(opusLogs, [meta("o1", 1)], providers), snapshot);
+      const agent = data.categories.find((c) => c.category === "agent");
+      assert.ok(!agent?.points.some((p) => p.modelId === "claude-opus-5-5"));
+      assert.ok(agent?.unpriced.some((u) => u.modelId === "claude-opus-5-5"));
+    });
   });
 
   test("没用过、有官方单价：估算点（空心）；没用过、也没有单价：缺官方单价", async () => {

@@ -149,8 +149,13 @@ function versionKey(version: string | undefined, publishDate: string): string | 
  * 2. 同一档里一条带 harness、一条不带：取不带的（分数出自 Arena 自己的外壳，口径一致）。
  * 3. 仍然并列（不应发生）取名次靠前的。
  *
- * 不同档各留一条：GPT-6 Luna 的 Low / Medium / Max 是三个点。没标档（null）与标了档的
- * 也各算一组——它们在榜上是两个独立条目，混在一起取舍就是猜档。
+ * 4. **同一个 id 在同一个分类里只要有标了档的条目，就丢掉没标档的那条**（用户 2026-10-24
+ *    拍板）：deepseek-v4-pro 在榜上既有 `DeepSeek-V4-Pro (High, 20260813)` 又有不带括号的
+ *    `DeepSeek-V4-Pro`，只留 High——没标档的那条多半是旧版本，画成第二个点只会让人以为同一个
+ *    型号有两种表现。都没标档才保留未标档的那条（GLM-5.3-Flash、MiniMax-M3）。
+ *    丢的是整条，不是把它的分数挪给某个档：那就成了猜档。
+ *
+ * 不同档各留一条：GPT-6 Luna 的 Low / Medium / Max 是三个点。
  */
 export function boardEntriesFor(rows: readonly BoardRow[], modelId: string, publishDate: string): BoardEntry[] {
   const base = boardBaseOf(modelId);
@@ -174,6 +179,8 @@ export function boardEntriesFor(rows: readonly BoardRow[], modelId: string, publ
     list.push({ entry, version: versionKey(parsed.version, publishDate), undated: parsed.version === undefined });
     groups.set(key, list);
   }
+  // 规则 4：有标了档的组，就不要没标档的那组
+  if (groups.size > 1) groups.delete("none");
   const picked: BoardEntry[] = [];
   for (const list of groups.values()) {
     const sorted = [...list].sort((a, b) => {

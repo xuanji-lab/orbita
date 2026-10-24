@@ -124,6 +124,14 @@ async function scanSession(sources: PriceChartSources, meta: SessionMeta): Promi
   return { ...base, records, untrusted: records.some((record) => record.level === undefined) };
 }
 
+/**
+ * 实测点的样本门槛（用户 2026-10-24 拍板）：同一个服务商 × 型号 × 档的实测任务**少于 3 个**时，
+ * 点按估算画（空心、标「估算」），悬停里另写「实测 n 个任务 $x」；满 3 个才用实测中位数画实心点。
+ * 理由：中位数在样本很少时就是那一两个任务本身，单个长任务会把点拉偏——开发版里 Fable 5.1
+ * 只有 1 个任务、$29，画成实心点就像「Fable 每个任务要 $29」，而它只是那一次碰巧很长。
+ */
+const MIN_MEASURED_TASKS = 3;
+
 interface AddedModel {
   provider: Provider;
   modelId: string;
@@ -190,13 +198,15 @@ export async function buildPriceChart(
         const mid = median(measured);
         let cost: number;
         let costBasis: PriceChartPoint["costBasis"];
-        if (mid !== null) {
+        if (mid !== null && measured.length >= MIN_MEASURED_TASKS) {
           cost = mid;
           costBasis = "measured";
         } else if (model.rates !== null) {
+          // 没跑过，或跑过但不够门槛：按估算画；不够门槛的实测随点带上，悬停里另写一行
           cost = estimateTaskCost(model.rates, profile);
           costBasis = profile.reference ? "reference" : "estimated";
         } else {
+          // 估算要官方单价：找不到就定不了横轴（哪怕有一两个实测任务），列进「缺官方单价」
           continue;
         }
         if (!(cost > 0)) continue;
@@ -212,6 +222,7 @@ export async function buildPriceChart(
           cost,
           costBasis,
           samples: costBasis === "measured" ? measured.length : 0,
+          ...(costBasis !== "measured" && mid !== null ? { measured: { cost: mid, samples: measured.length } } : {}),
         });
       }
       if (!anyPriced) unpriced.push(ref);

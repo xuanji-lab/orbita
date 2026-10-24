@@ -72,12 +72,24 @@ describe("boardEntriesFor：同 id × 同档只留一条", () => {
     assert.deepEqual(boardEntriesFor(rows, "qwen3.8-max", "2026-10-23").map((e) => e.name), ["Qwen3.8-Max"]);
   });
 
-  test("没标档与标了档是两组，各留一条（混在一起取舍就是猜档）", () => {
+  test("同一个 id 只要有标了档的条目，就丢掉没标档的那条（deepseek-v4-pro 只留 High）", () => {
     const rows = [row("DeepSeek-V4-Pro (High, 20260813)", 1582, 37), row("DeepSeek-V4-Pro", 1447, 77)];
-    assert.deepEqual(
-      boardEntriesFor(rows, "deepseek-v4-pro", "2026-10-23").map((e) => e.thinking),
-      ["high", null],
-    );
+    assert.deepEqual(boardEntriesFor(rows, "deepseek-v4-pro", "2026-10-23").map((e) => e.name), [
+      "DeepSeek-V4-Pro (High, 20260813)",
+    ]);
+  });
+
+  test("都没标档才保留未标档的那条", () => {
+    const rows = [row("GLM-5.3-Flash", 1475, 35), row("GLM-5.3 (Max)", 1480, 26)];
+    assert.deepEqual(boardEntriesFor(rows, "glm-5.3-flash", "2026-10-23").map((e) => e.thinking), [null]);
+  });
+
+  test("真实快照：deepseek-v4-pro 在六类里都只剩标了档的条目", () => {
+    for (const [category, board] of Object.entries(snapshot.categories)) {
+      const entries = boardEntriesFor(board.rows as BoardRow[], "deepseek-v4-pro", board.publishDate);
+      assert.ok(entries.length > 0, category);
+      assert.ok(entries.every((e) => e.thinking !== null), category);
+    }
   });
 
   test("同档里带 harness 与不带的并存取不带的；只有 harness 那条就照收并带上 harness", () => {
