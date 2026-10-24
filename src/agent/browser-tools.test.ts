@@ -58,7 +58,10 @@ describe("browser_* 工具", () => {
       Object.keys((tools.get(name)!.parameters as { properties: Record<string, unknown> }).properties).sort();
     assert.deepEqual(props("browser_screenshot"), ["region", "save", "tab"]);
     assert.deepEqual(props("browser_observe"), ["maxNodes", "tab"]);
-    assert.deepEqual(props("browser_extract"), ["links", "maxChars", "offset", "tab"]);
+    assert.deepEqual(props("browser_extract"), ["format", "links", "maxChars", "offset", "ref", "tab"]);
+    assert.deepEqual(props("browser_wait_for"), ["selector", "tab", "text", "timeoutMs", "visible"]);
+    assert.deepEqual(props("browser_console_messages"), ["level", "limit"]);
+    assert.deepEqual(props("browser_network_requests"), ["limit", "statusMax", "statusMin", "url"]);
     assert.deepEqual(props("browser_click"), ["element", "ref", "x", "y"]);
     assert.deepEqual(props("browser_type"), ["clear", "element", "ref", "submit", "text"]);
     assert.deepEqual(props("browser_press"), ["key", "repeat"]);
@@ -110,6 +113,37 @@ describe("browser_* 工具", () => {
     await assert.rejects(run("browser_scroll", { direction: "sideways" }), /direction must be/);
   });
 
+  test("browser_console_messages：level 只认五个级别之一，limit 认数字（含字符串数字），缺省不带", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_console_messages", { level: "error", limit: 50 });
+    assert.deepEqual(sent[0]?.["request"], { action: "console", level: "error", limit: 50 });
+    answer(0, { ok: true, text: "…", card });
+    await first;
+    // 不认识的级别当没给；字符串数字认（模型常这么写）
+    const second = run("browser_console_messages", { level: "fatal", limit: "20" });
+    assert.deepEqual(sent[1]?.["request"], { action: "console", limit: 20 });
+    answer(1, { ok: true, text: "…", card });
+    await second;
+    const third = run("browser_console_messages", {});
+    assert.deepEqual(sent[2]?.["request"], { action: "console" });
+    answer(2, { ok: true, text: "…", card });
+    await third;
+  });
+
+  test("browser_network_requests：url 去首尾空白、空串当没给；状态范围闭区间；min > max 当场报错不发请求", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_network_requests", { url: "  api  ", statusMin: 400, limit: 30 });
+    assert.deepEqual(sent[0]?.["request"], { action: "network", url: "api", statusMin: 400, limit: 30 });
+    answer(0, { ok: true, text: "…", card });
+    await first;
+    const second = run("browser_network_requests", { url: "   ", statusMax: 499 });
+    assert.deepEqual(sent[1]?.["request"], { action: "network", statusMax: 499 });
+    answer(1, { ok: true, text: "…", card });
+    await second;
+    await assert.rejects(run("browser_network_requests", { statusMin: 500, statusMax: 400 }), /greater than statusMax/);
+    assert.equal(sent.length, 2);
+  });
+
   test("navigate：back / forward（不分大小写）走历史，不当搜索词", async () => {
     const { sent, answer, run } = setup();
     const pending = run("browser_navigate", { url: " Back " });
@@ -128,6 +162,30 @@ describe("browser_* 工具", () => {
     assert.deepEqual(sent[1]?.["request"], { action: "screenshot" });
     answer(1, { ok: true, text: "Shot", card });
     await second;
+  });
+
+  test("wait_for：只带给了的条件，timeoutMs 夹取后总是上船（主进程不用再猜默认值）", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_wait_for", { selector: " #results ", timeoutMs: 5000 });
+    assert.deepEqual(sent[0]?.["request"], { action: "wait", selector: "#results", timeoutMs: 5000 });
+    answer(0, { ok: true, text: "Appeared", card });
+    await first;
+    // 不给 timeoutMs：默认值上船；visible 只在 true 时上船；text 与 selector 可以一起给
+    const second = run("browser_wait_for", { selector: "#r", text: "3 results", visible: "yes" });
+    assert.deepEqual(sent[1]?.["request"], { action: "wait", selector: "#r", text: "3 results", timeoutMs: 8000 });
+    answer(1, { ok: true, text: "Appeared", card });
+    await second;
+    const third = run("browser_wait_for", { text: "Results", visible: true, timeoutMs: 999_999 });
+    assert.deepEqual(sent[2]?.["request"], { action: "wait", text: "Results", visible: true, timeoutMs: 30_000 });
+    answer(2, { ok: true, text: "Appeared", card });
+    await third;
+  });
+
+  test("wait_for：selector 与 text 都缺省当场报错，不发请求", async () => {
+    const { sent, run } = setup();
+    await assert.rejects(run("browser_wait_for", {}), /Pass selector or text/);
+    await assert.rejects(run("browser_wait_for", { selector: "  " }), /Pass selector or text/);
+    assert.equal(sent.length, 0);
   });
 
   test("browser_tabs：无参上船", async () => {
@@ -167,6 +225,18 @@ describe("browser_* 工具", () => {
     answer(0, { ok: true, text: "…", card });
     await first;
     const second = run("browser_extract", { links: "yes" });
+    assert.deepEqual(sent[1]?.["request"], { action: "extract" });
+    answer(1, { ok: true, text: "…", card });
+    await second;
+  });
+
+  test("extract：format 只认 markdown，ref 去空白后上船（空串与非字符串当没给）", async () => {
+    const { sent, answer, run } = setup();
+    const first = run("browser_extract", { format: "markdown", ref: " e12 " });
+    assert.deepEqual(sent[0]?.["request"], { action: "extract", format: "markdown", ref: "e12" });
+    answer(0, { ok: true, text: "…", card });
+    await first;
+    const second = run("browser_extract", { format: "text", ref: "" });
     assert.deepEqual(sent[1]?.["request"], { action: "extract" });
     answer(1, { ok: true, text: "…", card });
     await second;

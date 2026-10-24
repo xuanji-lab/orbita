@@ -5,6 +5,7 @@ import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
+import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
@@ -39,9 +40,6 @@ import type { Messages } from "../messages-en.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
 export type Overlay = "settings" | null;
-
-/** 窗口窄于这条线就自动折成图标条：288px 的侧栏在 960px 以下会把内容面挤得太瘦。 */
-const COLLAPSE_BREAKPOINT = 960;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -150,6 +148,36 @@ export function Sidebar(props: {
   /** 左下角星云的摆放偏好（settings.usagePet）与改它的回调 */
   usagePet: UsagePetPref | undefined;
   onUsagePetChange: (next: UsagePetPref) => void;
+  /**
+   * 折叠态由 App 持有（2026-10-18 起收起后没有图标条，「窗口工具」组嵌在对话卡
+   * 页头里，那份状态两边共用）。断点自动收起也在 App。
+   */
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
+  /**
+   * 收起态页头「新任务」的信号（nonce 递增）：Sidebar 展开列表后把 TASKS 组跟着
+   * 展开——新任务不能落进一个收着的组里无声无息。0 = 从未发过。
+   */
+  newTaskSignal: number;
+  /**
+   * 左栏此刻换成哪个工作区的文件视图：browse = 不计时地看一眼（工作区行悬停的
+   * 「查看工作区文件」进的），focus = 专注中。null = 正常的会话列表。
+   * 工作区已被移除时这里可能指向不存在的 id——按 null 处理（App 会清）。
+   * 专注键 / 胶囊不在侧栏——住工具栏左胶囊（Toolbar 的 focus 槽，App 注入）。
+   */
+  filesView: { mode: "browse" | "focus"; workspaceId: string } | null;
+  /** 工作区行悬停的「查看工作区文件」 */
+  onBrowseWorkspace: (id: string) => void;
+  /** 浏览态的「返回会话列表」 */
+  onExitBrowse: () => void;
+  /** 浏览态的「以此开始专注」：开专注浮层并预选这个工作区 */
+  onStartFocusHere: (workspaceId: string) => void;
+  /** 双击 / Enter 打开左栏文件预览（绝对路径 → App → 右栏文件面板） */
+  onOpenFile: (absPath: string) => void;
+  /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
+  usageSay: React.ReactNode | null;
+  /** 星云头顶的卡片（专注时间到）；null = 无 */
+  usageCard: React.ReactNode | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -213,11 +241,6 @@ export function Sidebar(props: {
    */
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   /**
-   * 折叠态：窗口跨过断点时自动跟，`panel-left` 随时手动开合。
-   * **手动状态不持久化**——窗口宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
-   */
-  const [collapsed, setCollapsed] = useState(false);
-  /**
    * 分组状态：哪些组折叠着、哪些组点了 Show more 全量铺开。状态本体在
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
    */
@@ -225,13 +248,12 @@ export function Sidebar(props: {
     overrides: new Set<string>(),
     pages: new Map<string, number>(),
   });
+  // 收起态页头点「新任务」（App 发的 nonce 信号）：展开后 TASKS 组跟着展开，
+  // 新会话不落进收着的组里（与工具栏左胶囊「新任务」同一条纪律，信号从 App 来）
   useEffect(() => {
-    const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
-    const sync = () => setCollapsed(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
+    if (props.newTaskSignal === 0) return;
+    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+  }, [props.newTaskSignal]);
   /**
    * 任意会话在跑（含后台与子会话）：用量格的星云碎片 3 倍速——「今在干活」
    * 是全应用的状态，不是当前会话的。phaseOf 读引擎的同步镜像；每次 phase
@@ -254,17 +276,6 @@ export function Sidebar(props: {
     setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(openWorkspaceId)));
   }, [openId, openWorkspaceId]);
 
-  /**
-   * 新建任务顺带退出设置页（wafo 2026-09-03：此前停在 Settings 里点 New Task
-   * 没反应，得再按一次 Settings 才回得去——用户的心智是「新建 = 回到对话」）。
-   */
-  const startNewTask = (): void => {
-    props.onOverlay(null);
-    setCollapsed(false);
-    // 新任务落在 TASKS 里——不能落进一个收着的组里无声无息
-    setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
-    session.newTask();
-  };
   /**
    * 不属于任何工作区的会话。**也包括归属指向已移除工作区的那些**——
    * 移除工作区不该让它的会话从界面上消失，它们只是回到 TASKS 下。
@@ -318,6 +329,30 @@ export function Sidebar(props: {
   };
 
   /**
+   * 左栏的文件视图（浏览 / 专注）：设置页与 Archived / Carryovers 子视图盖着时
+   * 优先让位给它们（那些入口在右栏，不受专注影响）；工作区被移除则回会话列表。
+   */
+  const filesViewWs =
+    props.filesView !== null && !settingsOpen && !props.showArchived && !props.showCarryovers
+      ? (session.workspaces.find((item) => item.id === props.filesView?.workspaceId) ?? null)
+      : null;
+  const filesBody =
+    filesViewWs !== null && props.filesView !== null
+      ? (
+          <WorkspaceFiles
+            mode={props.filesView.mode}
+            workspace={filesViewWs}
+            workspaces={session.workspaces}
+            session={session}
+            openId={openId}
+            onBack={props.onExitBrowse}
+            onStartFocusHere={() => props.onStartFocusHere(filesViewWs.id)}
+            onOpenFile={props.onOpenFile}
+          />
+        )
+      : null;
+
+  /**
    * 拖宽：右移变宽（与右侧面板同一套机制，只是方向相反）。**区间是固定像素 240–400**
    * ——右栏那条「pane 的 1/3–2/3」不管左栏（2026-09-22 wafo 澄清：那一对说的是
    * chat 主区与右栏）；
@@ -353,37 +388,12 @@ export function Sidebar(props: {
     window.addEventListener("pointerup", up, { once: true });
   };
 
-  // —— 折叠态：48px 图标条（RailButton 规格：32px 方块、tooltip 即标签）。
-  // 折叠期间列表不可达，要切会话先展开。Archived / Carryovers / Settings
-  // 不在这里重复摆入口：它们的唯一入口在右栏底部（2026-09-22 裁决），
-  // 折叠态也能点到（右栏不折叠）。
-  if (collapsed) {
-    return (
-      <aside
-        style={{
-          width: 48,
-          flex: "0 0 48px",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 4,
-          padding: "var(--space-2) 0",
-          background: "transparent",
-          overflow: "hidden",
-          transition: "width var(--duration-fast) var(--ease-standard)",
-        }}
-      >
-        {/* 顶栏仍兼窗口拖拽区：48px 里没有 logo 的位置 */}
-        <div className="titlebar" style={{ height: 34, width: "100%" }} />
-        <RailButton icon="panel-left" title={t.sidebar.expand} onClick={() => setCollapsed(false)} />
-        <RailButton
-          icon="plus"
-          title={t.common.newTask}
-          accent
-          onClick={startNewTask}
-        />
-      </aside>
-    );
+  // —— 收起态：什么都不渲染，主区域向左铺满。侧栏开关与新任务住工具栏左胶囊
+  // （shell/Toolbar.tsx），开合不换容器；折叠期间列表不可达，要切会话先展开。
+  // Archived / Carryovers / Settings 的入口本来就只在右栏底部（2026-09-22 裁决），
+  // 右栏不折叠。
+  if (props.collapsed) {
+    return null;
   }
 
   return (
@@ -396,7 +406,9 @@ export function Sidebar(props: {
         display: "flex",
         flexDirection: "column",
         gap: "var(--space-3)",
-        padding: "var(--space-2) var(--space-3)",
+        // 顶部不留白：顶行要坐到卡顶（与 .pane 的页头同一条中心线，对齐红绿灯）；
+        // 底部留白与拖宽热区同步（top: var(--space-3)）
+        padding: "0 var(--space-3) var(--space-2)",
         background: "transparent",
         overflow: "hidden",
         // 拖动中禁过渡：160ms 的宽度动画会让跟手变成拖一根皮筋
@@ -404,36 +416,14 @@ export function Sidebar(props: {
       }}
     >
       {/*
-        顶栏兼作标题栏：`titleBarStyle: "hiddenInset"` 之后这是窗口唯一的可拖区域，
-        macOS 上还要给红黄绿三个键让净空——见 styles.css 的 `.titlebar`。
-        没有 logo：品牌就是衬线体里的小写 orbita（设计系统 *No logo*）。
+        #248 的 Safari 式工具栏之后侧栏没有顶行了（字标与星云同在左下角停机坪）；
+        专注 / 浏览工作区文件时换掉的是模式页签 + 新任务大按钮 + 列表这一整段，
+        左下角的用量格与星云照常在（专注中星云要说话）。
       */}
-      <div
-        className="titlebar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          height: 34,
-          fontFamily: "var(--font-family-brand)",
-          fontSize: 22,
-          fontWeight: 500,
-          lineHeight: 1,
-          letterSpacing: "0.01em",
-          color: "var(--color-text-primary)",
-        }}
-      >
-        orbita
-        <IconButton
-          label={t.sidebar.collapse}
-          title={t.sidebar.collapseTip}
-          size={24}
-          onClick={() => setCollapsed(true)}
-          style={{ marginInlineStart: "auto", color: "var(--color-text-tertiary)" }}
-        >
-          <Icon name="panel-left" size={14} />
-        </IconButton>
-      </div>
-
+      {filesBody !== null ? (
+        filesBody
+      ) : (
+      <>
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
         <ModeChip icon="bot" active>
           {t.sidebar.agentMode}
@@ -442,33 +432,6 @@ export function Sidebar(props: {
           {t.sidebar.orchestrate}
         </ModeChip>
       </div>
-
-      {/* 一屏一个 accent：主操作（新建 / 发送）与模式选中，别处一律中性 */}
-      <button
-        type="button"
-        onClick={startNewTask}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          width: "100%",
-          height: 32,
-          padding: "0 10px",
-          border: 0,
-          borderRadius: "var(--radius-md)",
-          background: "var(--color-accent)",
-          color: "var(--color-accent-fg)",
-          fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-control)",
-          fontWeight: "var(--weight-medium)",
-          cursor: "pointer",
-          transition: "var(--transition-hover)",
-        }}
-      >
-        <Icon name="plus" size={16} />
-        {t.common.newTask}
-      </button>
 
       {/**
         筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
@@ -587,7 +550,7 @@ export function Sidebar(props: {
               // （cwd / 归属跟随它）——不能落进一个收着的组里无声无息
               props.onShowCarryovers(false);
               props.onOverlay(null);
-              setCollapsed(false);
+              props.onCollapsedChange(false);
               const source = session.sessions.find((m) => m.id === item.sourceSessionId);
               setGroups((current) =>
                 source?.workspaceId != null
@@ -729,6 +692,7 @@ export function Sidebar(props: {
                       }}
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
+                      onBrowse={() => props.onBrowseWorkspace(workspace.id)}
                       onOpen={open}
                     />
                   ))
@@ -791,13 +755,15 @@ export function Sidebar(props: {
           </>
         )}
       </div>
+      </>
+      )}
 
       {/**
        * 左下角的 7 天 token 用量格 + 星云能量体：常驻（不是实验功能），
        * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
        * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
        */}
-      <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} />
+      <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} petSay={props.usageSay} petCard={props.usageCard} />
     </aside>
     {/*
       拖宽热区：侧栏与对话面之间那道缝里的 6px，紧贴面的左缘。
@@ -813,7 +779,7 @@ export function Sidebar(props: {
       style={{
         position: "absolute",
         left: `calc(var(--space-3) + ${width}px + var(--space-3) - 6px)`,
-        top: "var(--space-3)",
+        top: "var(--titlebar-row)",
         bottom: "var(--space-3)",
         width: 6,
         cursor: "col-resize",
@@ -852,6 +818,8 @@ function WorkspaceGroup(props: {
   onNewTask: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
+  /** 悬停的「查看工作区文件」 */
+  onBrowse: () => void;
   onOpen: (id: string) => void;
 }) {
   const t = useT();
@@ -915,7 +883,7 @@ function WorkspaceGroup(props: {
             onDoubleClick={() => setEditing(props.workspace.name)}
             style={{
               minWidth: 0,
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -947,7 +915,7 @@ function WorkspaceGroup(props: {
               background: "var(--color-bg-panel)",
               color: "var(--color-text-primary)",
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               outline: "none",
               boxShadow: "var(--focus-ring)",
@@ -955,25 +923,41 @@ function WorkspaceGroup(props: {
           />
         )}
 
-        <IconButton
-          label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
-          title={
-            armed
-              ? t.sidebar.removeArmedTip
-              : t.sidebar.removeTip
-          }
-          size={20}
-          onClick={() => (armed ? props.onRemove() : setArmed(true))}
-          className="reveal workspace-group-remove"
-          style={{
-            borderRadius: "var(--radius-xs)",
-            color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
-            // armed（二次确认已按下）常显，不等 hover——armed 只有 mouseleave 才清
-            opacity: armed ? 1 : undefined,
-          }}
-        >
-          <Icon name="trash-2" size={11} />
-        </IconButton>
+        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
+          {/**
+            悬停动作簇（静止不占位）：「查看工作区文件」（list-tree，zcode 同款）
+            在删除键前面——浏览是常事，删除是两段式。
+          */}
+          <IconButton
+            label={t.focus.browseFiles}
+            title={t.focus.browseFiles}
+            size={20}
+            onClick={props.onBrowse}
+            className="reveal workspace-group-act"
+            style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
+          >
+            <Icon name="list-tree" size={14} strokeWidth={1.8} />
+          </IconButton>
+          <IconButton
+            label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
+            title={
+              armed
+                ? t.sidebar.removeArmedTip
+                : t.sidebar.removeTip
+            }
+            size={20}
+            onClick={() => (armed ? props.onRemove() : setArmed(true))}
+            className="reveal workspace-group-act"
+            style={{
+              borderRadius: "var(--radius-xs)",
+              color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
+              // armed（二次确认已按下）常显，不等 hover——armed 只有 mouseleave 才清
+              opacity: armed ? 1 : undefined,
+            }}
+          >
+            <Icon name="trash-2" size={11} />
+          </IconButton>
+        </span>
 
         <IconButton label={t.sidebar.newTaskInWorkspace} size={26} onClick={props.onNewTask}>
           <Icon name="plus" size={14} />
@@ -1004,7 +988,7 @@ function WorkspaceGroup(props: {
   );
 }
 
-/** 分组标题：机器面的小字用 business/mono，字号 micro，大写加字距 */
+/** 分组标题：UI 字、sm、semibold、secondary，句首大写照原文（设计系统 *Group labels*） */
 function NodeLabel(props: { children: React.ReactNode }) {
   return (
     <span
@@ -1012,11 +996,9 @@ function NodeLabel(props: { children: React.ReactNode }) {
         display: "inline-flex",
         alignItems: "center",
         minHeight: 28,
-        fontFamily: "var(--font-family-business)",
-        fontSize: "var(--font-size-micro)",
-        letterSpacing: "0.06em",
-        textTransform: "uppercase",
-        fontWeight: "var(--weight-bold)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        fontWeight: "var(--weight-semibold)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -1221,7 +1203,7 @@ function NavRow(props: {
         border: 0,
         borderRadius: "var(--radius-sm)",
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         textAlign: "left",
         cursor: disabled ? "not-allowed" : clickable ? "pointer" : "default",
         ...props.style,
@@ -1509,7 +1491,7 @@ function SessionRow(props: {
               session.renameSession(meta.id, value);
             }}
             onCancel={() => setEditing(false)}
-            style={{ height: 22, fontSize: "var(--font-size-control)" }}
+            style={{ height: 22, fontSize: "var(--font-size-base)" }}
           >
             {null}
           </InlineName>
@@ -1607,7 +1589,7 @@ function SessionRow(props: {
             flex: "0 0 auto",
             marginInlineStart: -2,
             fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
             fontWeight: "var(--weight-semibold)",
             lineHeight: 1,
             color: "var(--color-text-secondary)",
@@ -1731,7 +1713,7 @@ function CarryoverPanel(props: {
               textAlign: "left",
               cursor: group.session === null ? "default" : "pointer",
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-control)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--weight-semibold)",
               color:
                 group.session === null
@@ -1813,7 +1795,7 @@ function CarryoverRow(props: {
         <span
           style={{
             display: "block",
-            fontSize: "var(--font-size-control)",
+            fontSize: "var(--font-size-base)",
             color: done ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
             textDecoration: done ? "line-through" : "none",
             whiteSpace: "nowrap",
@@ -1828,8 +1810,8 @@ function CarryoverRow(props: {
             title={item.detail}
             style={{
               display: "block",
-              fontSize: "var(--font-size-micro)",
-              lineHeight: "var(--line-height-caption)",
+              fontSize: "var(--font-size-xs)",
+              lineHeight: "var(--line-height-ui)",
               color: "var(--color-text-tertiary)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -1893,8 +1875,8 @@ function Empty(props: { children: React.ReactNode }) {
       style={{
         margin: "var(--space-2) 0",
         padding: "0 var(--space-1)",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: "var(--line-height-caption)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -1918,8 +1900,8 @@ function ListError(props: { message: string; onRetry: () => void }) {
         alignItems: "baseline",
         gap: 6,
         flexWrap: "wrap",
-        fontSize: "var(--font-size-caption)",
-        lineHeight: "var(--line-height-caption)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
         color: "var(--color-text-secondary)",
       }}
     >
@@ -1938,7 +1920,7 @@ function ListError(props: { message: string; onRetry: () => void }) {
           background: "transparent",
           padding: 0,
           fontFamily: "var(--font-family-base)",
-          fontSize: "var(--font-size-caption)",
+          fontSize: "var(--font-size-sm)",
           color: "var(--color-text-primary)",
           textDecoration: "underline",
           cursor: "pointer",
@@ -1947,46 +1929,6 @@ function ListError(props: { message: string; onRetry: () => void }) {
         {t.common.retry}
       </button>
     </p>
-  );
-}
-
-/**
- * 折叠图标条上的按钮（设计系统 components/navigation/RailButton）：
- * 48px rail 里的 32px 方块，**tooltip 是它唯一的标签**。
- * 当前项用模式选中色（R4-03 修正：明蓝暗黄，图标条当前项同款）；
- * accent 只给 New task 这个主操作。
- */
-function RailButton(props: {
-  icon: IconName;
-  title: string;
-  active?: boolean;
-  accent?: boolean;
-  onClick?: () => void;
-}) {
-  const active = props.active === true;
-  const accent = props.accent === true;
-  return (
-    <button
-      type="button"
-      className="quiet-control rail-btn"
-      title={props.title}
-      aria-label={props.title}
-      aria-pressed={active || accent ? true : undefined}
-      data-accent={accent || undefined}
-      onClick={props.onClick}
-      style={{
-        display: "grid",
-        placeItems: "center",
-        width: 32,
-        height: 32,
-        flex: "0 0 auto",
-        border: 0,
-        borderRadius: "var(--radius-md)",
-        cursor: "pointer",
-      }}
-    >
-      <Icon name={props.icon} size={16} />
-    </button>
   );
 }
 
@@ -2023,7 +1965,7 @@ function ModeChip(props: {
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         fontWeight: "var(--weight-medium)",
         whiteSpace: "nowrap",
       }}

@@ -89,11 +89,11 @@ the English copy; the Chinese copy follows the same voice.
 - **Sentence case everywhere.** "New workspace name", "Remove workspace", "Main workspace". No
   Title Case, no ALL CAPS except acronyms. `ORBITA` appears capitalised only inside prose that names
   the app ("It may have been removed outside ORBITA."); the wordmark itself is lowercase.
-- **Group labels are the one uppercase.** Sidebar node titles, settings section labels, menu group
-  headers, panel group headers and card kickers are written in sentence case in the source and set
-  uppercase by CSS (`text-transform: uppercase`): mono, `--font-size-micro`, `0.06em` tracking,
-  secondary grey (tertiary for card kickers). They name a group; they never stand in for a heading
-  or a button.
+- **Group labels are quiet sentence case.** Sidebar node titles, settings section labels, menu group
+  headers, panel group headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey
+  (tertiary for card kickers), no uppercase, no tracking. They name a group; they never stand in for
+  a heading or a button. (Until 2026-10-14 they were uppercase mono — inherited from the pre-system
+  renderer, never chosen; the mono face is for machine facts, not for titles.)
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
@@ -140,6 +140,15 @@ fill; the selected row takes `--color-bg-active`, the same soft wash as the sele
 `#e7eefd`; the dark tiers share a `.08` yellow wash), plus semibold weight — chosen 2026-08-25 over a
 neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
 background colours per screen.
+
+**Muted surface** (`--color-bg-muted`): the one neutral fill for anything that sits as a block on a
+panel — expandable detail cards (release notes, migration lists), chips and badges, a control's
+resting fill, image placeholders. On light it is a **cool grey `#eef0f2`, not a warm off-white**
+(settled 2026-10-18): the old `#f8f8f5` was 1.06:1 against white and vanished on the warm glass, so
+cards and chips read as bare text; the cool grey matches the text greys and the blue accent. It is
+never the accent wash — `--color-accent-soft` means *selected*, and a release-notes card or a badge
+in that colour reads as chosen. The paper faces keep their own warm `#f4f4ef` (paper is warm on
+purpose); the dark tiers are unaffected.
 
 **Category colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): a shared
 three-colour set — blue for doc-ish, green for sheets, orange-red for slides — that tells file
@@ -217,16 +226,23 @@ paper. Its theme id is `copybook`; a stored `"manuscript"` still parses to it (`
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
-(variable, with Source Han Sans SC) runs the whole interface on a tight 11 → 20px scale, with a
-separate 15px/1.68 track for transcript prose and a mono/tabular face for machine facts. Weights:
-450 body, 500 controls, 600 titles, 650 for tool and card names, 700 for the chat header. Manrope's
+(variable, with Source Han Sans SC) runs the whole interface on **one base size and five roles**
+(18 / 16 / **14** / 12 / 11px, see *Type roles* below) — transcript prose sits on the same 14px base
+with a reading leading (1.75) and a hair of tracking — and a mono/tabular face for machine facts.
+Weights: 450 body, 500 controls, 600 titles, 650 for tool and card names, 700 for the chat header. Manrope's
 400 skeleton reads thin without subpixel antialiasing (off since this system doesn't force greyscale
 smoothing), so body sits at 450 — still one step below the 500 controls weight. Model and
 thinking-level labels in the composer bar are set *italic* at secondary grey — the only italic in
 the UI.
 
-**Layout.** A fixed shell: left sidebar (288px, collapsing to a 48px icon rail), conversation pane,
-a 32px action rail for session actions, right drawer (320px, **closed by default**). Both sidebars
+**Layout.** A fixed shell: a full-width top toolbar (52px, capsules only — see Implementation
+rules), below it left sidebar (288px; collapsing it removes it entirely — no icon rail, the toggle lives
+in the toolbar's left capsule, 2026-10-19), conversation pane,
+a 32px action rail for session actions, right drawer (320px, **closed by default**). Every top row
+(sidebar wordmark, conversation / settings / panel headers, the right rail's first slot) shares one
+height — `--titlebar-row`, 26px — centred on the traffic-light line (macOS lights at y 19–31;
+the row centre and the lights' centre are the same horizontal line, Windows included for cross-platform
+consistency). The window's top chrome is the one regulated toolbar (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
@@ -350,6 +366,57 @@ marks persist in the session meta, so the bar survives a restart.
 
 ## Implementation rules
 
+**Type roles: one base, five sizes, pick by role.** Every size derives from `--ui-font-size`
+(14px); changing it is the only way to scale interface type, and everything follows. Components
+pick a **role**, never a pixel value — bare `px` / `rem` / numeric `font-size` in
+`src/renderer/src` fails `design-tokens.test.ts`. Steps are 2px apart on purpose: a 1px difference
+reads as misalignment, not hierarchy. Separate levels with **weight and colour first**, size last.
+
+| Token | Formula | Default | Roles |
+| --- | --- | ---: | --- |
+| `--font-size-xl` | base + 4 | 18px | Markdown h1, page / conversation titles |
+| `--font-size-lg` | base + 2 | 16px | Markdown h2, settings and panel titles |
+| `--font-size-base` | base | 14px | Body, transcript, composer, buttons, menus, list rows, card titles, Markdown h3–h6 |
+| `--font-size-sm` | base − 2 | 12px | Secondary copy, helper text, descriptions, timestamps, tooltips, quiet chips (composer bar, On / Off segments), group labels (semibold) |
+| `--font-size-xs` | base − 3 | 11px | Badges, counters, very weak metadata |
+
+- **A card uses at most three sizes**: title `base` + semibold, body `base` or `sm`, metadata `xs`.
+  Four sizes in one card is the "type out of control" smell this rule exists to kill.
+- **Markdown**: h1 `xl`, h2 `lg`, h3–h6 `base` distinguished by weight (h1–h4 600, h5 500, h6 450 +
+  secondary colour). Prose leading `--line-height-reading` (1.75), tracking `--tracking-reading`.
+- **Leading** has three values, all unitless: `--line-height-tight` 1.4 (headings), `-ui` 1.5
+  (interface text), `-reading` 1.75 (prose, user bubble). Code, diff, tool output and the terminal are
+  content, not interface: they keep their own values, but as declared tokens (`--line-height-code`,
+  `-code-block`, `--font-size-terminal`, `--line-height-terminal`), never literals. Bare `px` or
+  invented unitless leadings fail `design-tokens.test.ts`; only `0` / `1` (icon alignment) are free.
+- **Exceptions are tokens, not literals**: brand type (`--font-size-slogan`, `-slogan-mark`,
+  `-wordmark`) does not follow the base; em-relative sizes inside Markdown (inline code, citations)
+  follow their parent and are allowed.
+- Learned from ZCode's `text-ui-*` scale (2026-10); our `xs` is base − 3, not − 4 — 10px CJK is
+  below comfortable reading.
+
+**The top toolbar is one regulated zone (顶部工具栏，方案 B v2, 2026-10-19).** The window's top is a
+single 52px toolbar (`.toolbar`, `--titlebar-row`) spanning the full width on the card, outside every
+content card — the whole strip is the drag region and **its direct children are capsules only**
+(`.toolbar-capsule`, the material-chip face: full radius · `--glass-bg` · `--shadow-border`); Windows'
+own min / max / close group (`.win-ctl`) is the one declared exception. Every capsule shares the height
+`--titlebar-capsule` (32 = `--control-height-md`) and sits at `--titlebar-capsule-top` (9) so the capsule
+**centre is the traffic-light centre line, y = 25** (`trafficLightPosition` stays at `{x:18, y:19}`, user
+ruling: move our chrome to the lights, never the lights). Inside capsules everything comes from tokens:
+cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons `--titlebar-icon` (16),
+titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
+Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
+the session capsule (address-bar layout, fixed 480 shrinking to fit, centred on the conversation column,
+min 12 from its neighbours), the right-panel capsule (left edge pinned to the panel divider, width =
+`--right-panel-w`; panel headers portal into it; below 300 the filter collapses to a search cell),
+and the right-panel toggle. Cards start at y=52 — conversation / settings cards have **no header row**
+(session info lives in the session capsule; panel headers live in the right-panel capsule), and the
+sidebar has neither wordmark row nor big New-task button: the wordmark sits at the bottom of the usage
+column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 80 darwin / 12 otherwise;
+session capsule centring and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
+lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
+and the toolbar's direct children are capsules.
+
 **Trailing edges sit on the row's right hem.** A row / card / list item's trailing
 element — a status mark, footnote, count or timestamp — pins its right edge to the row's right
 padding, the same hem the leading element's left edge sits on (depth indent goes left only). Push
@@ -426,7 +493,7 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
 | --- | --- |
 | `styles.css` | The single entry point consumers link. `@import` lines only. |
 | `tokens/colors.css` | Surfaces, text, borders, accent, mode selection, status, chat surfaces + the dark and black themes. |
-| `tokens/typography.css` | Families, the 11→20px UI scale, line heights, weights, tracking. |
+| `tokens/typography.css` | Families, the base + five-role type scale, three leadings, weights, tracking. |
 | `tokens/fonts.css` | `@font-face` for Literata, Manrope, Source Han Serif/Sans SC. |
 | `tokens/spacing.css` | Space scale, radii, control and row heights, layout widths. |
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
@@ -501,7 +568,7 @@ source does not define them.
 - **新会话一律先进首页**：全局/工作区内/图标条/新建菜单的「会话、单 agent」入口都先呈现三卡首页（不立即创建 agent），**首条消息提交才 createAgent + prompt**；编排入口除外（保持原子创建）。
 - **输入框宽度连续性**：首页中卡宽度 = 聊天页内容区宽度（`settings.contentMaxWidth`，默认 1000px）——首页与聊天页的差别只有 slogan/会话卡消失 + 输入框滑落。
 - **首发过渡动画**（R5-05 白名单项）：首条消息发出时 slogan 与会话卡向上淡出、composer 卡向下滑向窗口底部（~240ms），随后聊天页 composer 落位。
-- **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-logo`（36px）品牌级字号。
+- **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-slogan`（36px；打字稿主题 30px）品牌级字号。
 - **模式选中色**（修正 R4-03 的"绿底"）：明主题蓝、暗主题黄——`--color-mode-active-bg` / `--color-mode-active-fg`，用于模式按钮与图标条当前项。
 
 ### 生效规范（摘要）

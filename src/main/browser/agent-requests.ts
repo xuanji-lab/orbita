@@ -4,6 +4,7 @@
  * 观察走 Electron 内建的 CDP（`webContents.debugger`），不引第三方浏览器库：
  *   observe   `Accessibility.getFullAXTree` → page-outline.ts 排成大纲
  *   extract   `Runtime.evaluate` 页内取 innerText 与链接 → page-text.ts 规整分段
+ *   wait      `Runtime.evaluate` 毫秒级探针 + 主进程分段轮询（见 waitFor）
  *   screenshot `Page.captureScreenshot` → 缩放压 JPEG（取帧见 frame-capture.ts）。CDP 截图在隐藏
  *              窗口、后台 tab 都拍得到真内容（2026-09-27 在主进程里实测五种窗口 / 视图状态）；
  *              但后来线上也出现过同一 tab 连续超时——页面活着（extract 秒回）却等不来新帧
@@ -13,23 +14,46 @@
  *              改用 browser_extract / browser_observe。
  * 交互（点击 / 输入 / 按键 / 滚动 / 后退）在 interactions.ts；这里派发，并把「动作之后页面怎么样了」
  * （换页、下载、弹框）统一报给模型。每个 CDP 命令都有超时（cdp.ts）：卡死的页面不能把 agent 的一轮拖死。
+ *
+ * 诊断（browser_console_messages / browser_network_requests）：页面加载成功但内容不对时，模型能读到的
+ * 唯一证据是控制台与网络记录。采集懒打开（第一次调用时才 enable Runtime / Log / Network 三个域，
+ * 见 diagnostics-recorder.ts），缓冲与过滤在纯逻辑的 diagnostics.ts。
  */
 import { nativeImage, type WebContents } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { BrowserToolOutcome, BrowserToolRequest } from "../../shared/browser.ts";
+import {
+  BROWSER_DIAGNOSTICS_BUFFER_LIMIT,
+  BROWSER_DIAGNOSTICS_DEFAULT_LIMIT,
+  type BrowserToolOutcome,
+  type BrowserToolRequest,
+} from "../../shared/browser.ts";
+import {
+  formatWaitResult,
+  parseWaitSample,
+  parseWaitSpec,
+  probeTimeoutMs,
+  waitProbeScript,
+  waitSelectorInvalidFallback,
+  waitUntilHit,
+  type BrowserWaitSample,
+  type BrowserWaitSpec,
+} from "../../shared/browser-wait.ts";
 import { availableDownloadPath } from "./downloads.ts";
 import { resolveAddressOrSearch } from "./address.ts";
 import { looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
 import { pathToFileURL } from "node:url";
 import { formatAxOutline, type AxNode } from "./page-outline.ts";
-import { extractScript, formatExtract, type PageRaw } from "./page-text.ts";
+import { extractScript, formatExtract, SERIALIZE_TREE_FN, SUBTREE_TEXT_FN, type PageRaw } from "./page-text.ts";
+import { collectLinks, type DomNode } from "./dom-markdown.ts";
 import { describeDownload, pageUrl, type BrowserSandbox, type BrowserTab } from "./sandbox.ts";
 import { cdp, delay } from "./cdp.ts";
 import { HostPacer } from "./host-pacer.ts";
 import { describeTabs } from "./user-tabs.ts";
-import { click, goHistory, guardDialogs, press, scroll, typeText, watchPageChange } from "./interactions.ts";
+import { click, goHistory, guardDialogs, normalizeRef, press, releaseRefObjects, resolveRef, scroll, typeText, watchPageChange } from "./interactions.ts";
 import { captureFrame, captureRegion } from "./frame-capture.ts";
 import { fitWithin, regionClip, shotSize, SHOT_MAX_HEIGHT, SHOT_MAX_WIDTH } from "./screenshot-geometry.ts";
+import { BrowserDiagnostics } from "./diagnostics-recorder.ts";
+import { formatConsoleReport, formatNetworkReport } from "./diagnostics.ts";
 
 /** 页面加载最多等这么久；到点不算失败，如实说「还在加载」（慢站的正文往往已经可读） */
 const NAVIGATE_TIMEOUT_MS = 45_000;
@@ -46,16 +70,26 @@ const DOWNLOAD_WAIT_MS = 120_000;
  */
 const pacer = new HostPacer({ minIntervalMs: 1000 });
 
+/** 页面诊断（console / network）的缓冲：进程级一份，每个 tab 一个键，tab 关闭时由 recorder 自己清 */
+const browserDiagnostics = new BrowserDiagnostics();
+
+/** 诊断类动作的请求子集（两者共用一条读取路径） */
+type DiagnosticsRequest =
+  | Extract<BrowserToolRequest, { action: "console" }>
+  | Extract<BrowserToolRequest, { action: "network" }>;
+
 export async function applyBrowserRequest(
   sandbox: BrowserSandbox,
   sessionId: string,
   request: BrowserToolRequest,
 ): Promise<BrowserToolOutcome> {
+  // 任何一次 agent 浏览器请求都刷新这个会话 agent tab 的活跃时间（闲置回收看它）
+  sandbox.noteBrowserRequest(sessionId);
   if (request.action === "tabs") {
     await sandbox.agentTab(sessionId);
     return {
       ok: true,
-      text: describeTabs(sandbox.visibleTabs(sessionId), sandbox.onScreenTabId()),
+      text: withNotice(sandbox.takeTabNotice(sessionId), describeTabs(sandbox.visibleTabs(sessionId), sandbox.onScreenTabId())),
       card: { tabId: "", url: "", title: "" },
     };
   }
@@ -69,7 +103,10 @@ export async function applyBrowserRequest(
       error: `No user tab has the id "${userTabId}" — it may have been closed. Call browser_tabs to see the user's tabs and their ids.`,
     };
   }
-  const tab = userTab ?? (await sandbox.agentTab(sessionId));
+  // 用自己的 tab 时，回收 / 崩溃后的那句提示随这次结果一起发给模型（读用户 tab 不取）。
+  // agentTab() 懒建必有返回，这里没有「拿不到 tab」的路径。
+  const tab = userTab === undefined ? await sandbox.agentTab(sessionId) : userTab;
+  const notice = userTab === undefined ? sandbox.takeTabNotice(sessionId) : null;
   const outcome = await sandbox.runOnTab(tab, async (): Promise<BrowserToolOutcome> => {
     if (!sandbox.isLive(tab)) return { ok: false, error: "The browser tab was closed. Call the tool again to reopen it." };
     const contents = tab.view.webContents;
@@ -91,8 +128,12 @@ export async function applyBrowserRequest(
             : "Your browser tab has no page yet. Call browser_navigate first (or browser_tabs to see what the user has open).",
         };
       }
+      if (request.action === "console" || request.action === "network") {
+        return await readDiagnostics(tab, contents, request);
+      }
       if (request.action === "observe") return await observe(tab, contents, request.maxNodes, !readsUser);
       if (request.action === "extract") return await extract(tab, contents, request);
+      if (request.action === "wait") return await waitFor(tab, contents, request);
       if (request.action === "screenshot") {
         return request.region !== undefined
           ? await zoom(tab, contents, request.region)
@@ -113,10 +154,17 @@ export async function applyBrowserRequest(
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
   });
+  // 回收 / 崩溃的提示接在结果前面：模型先知道旧页面没了，再看这一条的结果
+  const merged: BrowserToolOutcome =
+    notice === null
+      ? outcome
+      : outcome.ok
+        ? { ...outcome, text: [notice, outcome.text].join("\n") }
+        : { ...outcome, error: `${notice} ${outcome.error}` };
   // 这期间下完、还没告诉过 agent 的文件（导航以外触发的，或上一次没等到的）：附在结果末尾
-  if (!outcome.ok) return outcome;
+  if (!merged.ok) return merged;
   const finished = await sandbox.takeFinishedDownloads(tab);
-  return finished.length === 0 ? outcome : { ...outcome, text: [outcome.text, ...finished].join("\n") };
+  return finished.length === 0 ? merged : { ...merged, text: [merged.text, ...finished].join("\n") };
 }
 
 async function handoff(
@@ -292,6 +340,40 @@ async function act(
   return { ok: true, text: lines.join("\n"), card: card(tab, contents) };
 }
 
+/**
+ * 控制台 / 网络诊断：第一次调用时把采集打开（diagnostics-recorder.ts），然后读缓冲。
+ * 只作用于 agent 自己的 tab——用户的 tab 不采集，也不在这里出现（请求里根本没有 tab 参数）。
+ * 采集刚打开的那一次要如实说「只记从现在起的事」，否则空缓冲会被读成「页面没问题」。
+ */
+async function readDiagnostics(
+  tab: BrowserTab,
+  contents: WebContents,
+  request: DiagnosticsRequest,
+): Promise<BrowserToolOutcome> {
+  const { state, justEnabled } = await browserDiagnostics.open(contents);
+  const page = { url: pageUrl(contents), title: contents.getTitle() };
+  const limit = clampInt(request.limit ?? BROWSER_DIAGNOSTICS_DEFAULT_LIMIT, 1, BROWSER_DIAGNOSTICS_BUFFER_LIMIT);
+  if (request.action === "console") {
+    const query = { ...(request.level === undefined ? {} : { level: request.level }), limit };
+    return {
+      ok: true,
+      text: formatConsoleReport(page, state.consoleMessages(request.level), query, justEnabled, state.consoleCount),
+      card: card(tab, contents),
+    };
+  }
+  const query = {
+    ...(request.url === undefined ? {} : { url: request.url }),
+    ...(request.statusMin === undefined ? {} : { statusMin: request.statusMin }),
+    ...(request.statusMax === undefined ? {} : { statusMax: request.statusMax }),
+    limit,
+  };
+  return {
+    ok: true,
+    text: formatNetworkReport(page, state.networkRequests(query), query, justEnabled, state.networkCount),
+    card: card(tab, contents),
+  };
+}
+
 /** withRefs：给可交互节点发引用（自己的 tab）；读「你的」tab 时不发——agent 不操作它 */
 async function observe(
   tab: BrowserTab,
@@ -321,19 +403,154 @@ async function observe(
   return { ok: true, text, card: card(tab, contents) };
 }
 
+/**
+ * browser_wait_for：等页面上某个东西出现。**分段轮询**，不是页内一个长 Promise（MutationObserver +
+ * awaitPromise），两个理由：
+ *
+ * 1. 每次 Runtime.evaluate 都是毫秒级的探针，且每轮的超时夹到「离 deadline 还剩多少」（上限仍是
+ *    cdp.ts 的 10 秒）——「卡死的页面不能把 agent 的一轮拖死」这条护栏不为等待放宽（页内长 Promise
+ *    要它放宽到 timeoutMs，卡死的页面就会把一轮拖到 30 秒）。总时长由这里自己的 deadline 控制
+ *    （≤ WAIT_MAX_TIMEOUT_MS），收尾最多多一个探针下限（250ms）；选择器非法后的降级重等沿用同一个
+ *    deadline，不额外续一个 timeoutMs。
+ * 2. 等待期间页面换文档（点击触发跳转、SPA 重建执行上下文）时，旧文档里的长 Promise 会连同执行
+ *    上下文一起销毁、报错返回；分段探针只把那一轮当「还没到」，下一轮在新文档上接着等。
+ *
+ * 到点没出现**不是工具错误**：如实说「没出现」，让模型自己决定下一步（报错会让它以为工具坏了）。
+ */
+async function waitFor(
+  tab: BrowserTab,
+  contents: WebContents,
+  request: Extract<BrowserToolRequest, { action: "wait" }>,
+): Promise<BrowserToolOutcome> {
+  const parsed = parseWaitSpec(request);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  let { spec, note } = parsed;
+  // deadline 只算一次：选择器非法时降级重等的第二轮沿用它，计时不重启（2026-10-17 评审——第一轮
+  // 探针卡了几秒才报回非法选择器时，重启计时会把总耗时推到接近两倍 timeoutMs，吃掉 broker 的余量）。
+  // 每轮探针也按这个 deadline 夹超时：接近 deadline 的那一轮不会吃满 10 秒命令超时
+  // （2026-10-14 评审）。降级不会改 timeoutMs（waitSelectorInvalidFallback），所以第二轮照用。
+  const deadline = Date.now() + parsed.spec.timeoutMs;
+  const waitOnce = () => waitUntilHit(() => probeWait(contents, spec, deadline), spec, deadline);
+  let outcome = await waitOnce();
+  if ("error" in outcome) {
+    // 选择器非法：同一次等待里还有 text 条件就丢掉选择器重等 text（结果里说明），
+    // 手滑的选择器不该把合法的那一半带走（#225 验收）。丢掉后探针不会再报非法，
+    // 第二道闸主要给类型看，万一真报了，还是选择器非法这一个错。
+    const fallback = waitSelectorInvalidFallback(spec, note);
+    if (!fallback.ok) return { ok: false, error: fallback.error };
+    spec = fallback.spec;
+    note = fallback.note;
+    outcome = await waitOnce();
+    if ("error" in outcome) {
+      return { ok: false, error: `"${String(parsed.spec.selector)}" is not a valid CSS selector.` };
+    }
+  }
+  const page = { url: pageUrl(contents), title: contents.getTitle() };
+  return { ok: true, text: formatWaitResult(page, spec, outcome, note), card: card(tab, contents) };
+}
+
+/** 一次探针。页面没答上来（正在换文档、崩了）回 null——当这一轮没探到，下一轮再说 */
+async function probeWait(
+  contents: WebContents,
+  spec: BrowserWaitSpec,
+  deadline: number,
+): Promise<BrowserWaitSample | { error: "invalid-selector" } | null> {
+  const result = (await cdp(
+    contents,
+    "Runtime.evaluate",
+    { expression: waitProbeScript(spec), returnByValue: true },
+    probeTimeoutMs(deadline),
+  ).catch(() => null)) as { result?: { value?: unknown }; exceptionDetails?: unknown } | null;
+  if (result === null || result.exceptionDetails !== undefined) return null;
+  return parseWaitSample(result.result?.value);
+}
+
 async function extract(
   tab: BrowserTab,
   contents: WebContents,
   request: Extract<BrowserToolRequest, { action: "extract" }>,
 ): Promise<BrowserToolOutcome> {
-  const result = (await cdp(contents, "Runtime.evaluate", {
-    expression: extractScript(request.links === true),
-    returnByValue: true,
-  })) as { result?: { value?: unknown }; exceptionDetails?: unknown };
-  if (result.exceptionDetails !== undefined) throw new Error("The page did not let its text be read.");
-  const raw = asPageRaw(result.result?.value);
+  const markdown = request.format === "markdown";
+  const ref = typeof request.ref === "string" && request.ref.trim() !== "" ? normalizeRef(request.ref) : null;
+  if (ref !== null && tab.owner.kind === "user") {
+    throw new Error(
+      "ref only works on your own tab: browser_observe issues refs for your tab's page, and the user's tab is " +
+        "read-only. Open the page in your own tab, or drop ref to read the whole page.",
+    );
+  }
+  let raw: PageRaw;
+  if (markdown) {
+    const tree = ref === null ? await pageTree(contents) : await subtreeTree(contents, tab, ref);
+    // markdown 模式链接已内联，links: true 时从同一棵树里另收一份（复用页内已取的原料，不再跑一遍 DOM）
+    raw = {
+      text: "",
+      links: request.links === true ? collectLinks(tree.root) : [],
+      tree: tree.root,
+      treeTruncated: tree.truncated,
+    };
+  } else if (ref !== null) {
+    raw = { text: await subtreeText(contents, tab, ref), links: [] };
+  } else {
+    const result = (await cdp(contents, "Runtime.evaluate", {
+      expression: extractScript(request.links === true),
+      returnByValue: true,
+    })) as { result?: { value?: unknown }; exceptionDetails?: unknown };
+    if (result.exceptionDetails !== undefined) throw new Error("The page did not let its text be read.");
+    raw = asPageRaw(result.result?.value);
+  }
   const text = formatExtract({ url: pageUrl(contents), title: contents.getTitle() }, raw, request);
   return { ok: true, text, card: card(tab, contents) };
+}
+
+/** 整页 DOM → 节点树（markdown 模式） */
+async function pageTree(contents: WebContents): Promise<{ root: DomNode | null; truncated: boolean }> {
+  const result = readRecord(
+    await cdp(contents, "Runtime.evaluate", {
+      expression: `(${SERIALIZE_TREE_FN}).call(document.body)`,
+      returnByValue: true,
+    }),
+  );
+  return asTreeResult(result);
+}
+
+/** ref 子树 → 节点树；引用解析复用 interactions.ts 的 resolveRef（与 click / type 同一条路） */
+async function subtreeTree(
+  contents: WebContents,
+  tab: BrowserTab,
+  ref: string,
+): Promise<{ root: DomNode | null; truncated: boolean }> {
+  const objectId = await resolveRef(contents, tab, ref);
+  try {
+    const result = readRecord(
+      await cdp(contents, "Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: SERIALIZE_TREE_FN,
+        returnByValue: true,
+      }),
+    );
+    return asTreeResult(result);
+  } finally {
+    await releaseRefObjects(contents);
+  }
+}
+
+/** ref 子树的可见文字（text 模式 + ref） */
+async function subtreeText(contents: WebContents, tab: BrowserTab, ref: string): Promise<string> {
+  const objectId = await resolveRef(contents, tab, ref);
+  try {
+    const result = readRecord(
+      await cdp(contents, "Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: SUBTREE_TEXT_FN,
+        returnByValue: true,
+      }),
+    );
+    if (result["exceptionDetails"] !== undefined) throw new Error("The page did not let its text be read.");
+    const value = readRecord(result["result"])["value"];
+    return typeof value === "string" ? value : "";
+  } finally {
+    await releaseRefObjects(contents);
+  }
 }
 
 /**
@@ -476,10 +693,50 @@ function asPageRaw(value: unknown): PageRaw {
   return { text, links };
 }
 
+/** 页内脚本的节点树回包 → 校验过的节点树。页面内容是不可信输入，形状先过一道再交给纯函数 */
+function asTreeResult(record: Record<string, unknown>): { root: DomNode | null; truncated: boolean } {
+  if (record["exceptionDetails"] !== undefined) throw new Error("The page did not let its structure be read.");
+  const payload = readRecord(readRecord(record["result"])["value"]);
+  return { root: asDomNode(payload["root"]), truncated: payload["truncated"] === true };
+}
+
+function asDomNode(value: unknown): DomNode | null {
+  const record = readRecord(value);
+  const tag = record["tag"];
+  if (typeof tag !== "string") return null;
+  const node: DomNode = { tag };
+  if (typeof record["text"] === "string") node.text = record["text"];
+  const attrs = readRecord(record["attrs"]);
+  const parsedAttrs: NonNullable<DomNode["attrs"]> = {};
+  if (typeof attrs["href"] === "string") parsedAttrs.href = attrs["href"];
+  if (typeof attrs["alt"] === "string") parsedAttrs.alt = attrs["alt"];
+  if (typeof attrs["src"] === "string") parsedAttrs.src = attrs["src"];
+  if (Object.keys(parsedAttrs).length > 0) node.attrs = parsedAttrs;
+  const children = record["children"];
+  if (Array.isArray(children)) {
+    const parsed: DomNode[] = [];
+    for (const child of children) {
+      const item = asDomNode(child);
+      if (item !== null) parsed.push(item);
+    }
+    node.children = parsed;
+  }
+  return node;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
 function card(tab: BrowserTab, contents: WebContents) {
   return { tabId: tab.id, url: pageUrl(contents), title: contents.getTitle() };
 }
 
 function clampInt(value: number, min: number, max: number): number {
   return Math.min(Math.max(Math.round(Number.isFinite(value) ? value : min), min), max);
+}
+
+/** 把回收 / 崩溃的提示接在正文前面；没有提示就原样返回 */
+function withNotice(notice: string | null, text: string): string {
+  return notice === null ? text : `${notice}\n${text}`;
 }

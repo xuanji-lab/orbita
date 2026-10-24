@@ -35,7 +35,7 @@ export function CarryoverScanCard(props: { drafts: readonly CarryoverDraft[] }) 
         <span style={{ display: "inline-flex", color: "var(--color-text-secondary)" }}>
           <Icon name="list-todo" size={14} />
         </span>
-        <strong style={{ fontSize: "var(--font-size-control)", fontWeight: 600 }}>
+        <strong style={{ fontSize: "var(--font-size-base)", fontWeight: 600 }}>
           {count > 0
             ? t.carryover.itemsToCarry(count)
             : t.carryover.nothingToCarry}
@@ -55,7 +55,7 @@ export function CarryoverScanCard(props: { drafts: readonly CarryoverDraft[] }) 
             <div key={index} style={{ display: "grid", gap: 2, minWidth: 0 }}>
               <span
                 style={{
-                  fontSize: "var(--font-size-chat)",
+                  fontSize: "var(--font-size-base)",
                   fontWeight: "var(--weight-medium)",
                   color: "var(--color-text-primary)",
                   overflowWrap: "anywhere",
@@ -67,8 +67,8 @@ export function CarryoverScanCard(props: { drafts: readonly CarryoverDraft[] }) 
                 <span
                   title={draft.detail}
                   style={{
-                    fontSize: "var(--font-size-micro)",
-                    lineHeight: "var(--line-height-caption)",
+                    fontSize: "var(--font-size-xs)",
+                    lineHeight: "var(--line-height-ui)",
                     color: "var(--color-text-tertiary)",
                     display: "-webkit-box",
                     WebkitLineClamp: 2,

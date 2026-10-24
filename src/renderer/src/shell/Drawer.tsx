@@ -216,7 +216,7 @@ function Picker(props: {
         <>
           {onBack !== null && (
             <PanelIconButton title={t.common.back} onClick={onBack}>
-              <Icon name="chevron-left" size={16} />
+              <Icon name="chevron-left" size={16} strokeWidth={2} />
             </PanelIconButton>
           )}
           <PanelTitle icon="panel-right" title={t.drawer.title} />
@@ -232,7 +232,7 @@ function Picker(props: {
         <>
           <PanelHelp label={t.drawer.helpLabel} text={t.drawer.pickSub} />
           <PanelIconButton title={t.common.newTask} onClick={props.onNew}>
-            <Icon name="plus" size={16} />
+            <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
         </>
       }

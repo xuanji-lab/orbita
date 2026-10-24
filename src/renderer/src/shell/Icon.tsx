@@ -14,6 +14,7 @@ import blend from "../../../../design-system/assets/icons/lucide/blend.svg?raw";
 import bell from "../../../../design-system/assets/icons/lucide/bell.svg?raw";
 import blocks from "../../../../design-system/assets/icons/lucide/blocks.svg?raw";
 import book from "../../../../design-system/assets/icons/lucide/book.svg?raw";
+import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg?raw";
 import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
@@ -59,6 +60,7 @@ import gitFork from "../../../../design-system/assets/icons/lucide/git-fork.svg?
 import gitPullRequest from "../../../../design-system/assets/icons/lucide/git-pull-request.svg?raw";
 import globe from "../../../../design-system/assets/icons/lucide/globe.svg?raw";
 import hardDrive from "../../../../design-system/assets/icons/lucide/hard-drive.svg?raw";
+import history from "../../../../design-system/assets/icons/lucide/history.svg?raw";
 import fileDiff from "../../../../design-system/assets/icons/lucide/file-diff.svg?raw";
 import grid3x3 from "../../../../design-system/assets/icons/lucide/grid-3x3.svg?raw";
 import gripVertical from "../../../../design-system/assets/icons/lucide/grip-vertical.svg?raw";
@@ -70,6 +72,7 @@ import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
 import listFilter from "../../../../design-system/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../design-system/assets/icons/lucide/list-todo.svg?raw";
+import listTree from "../../../../design-system/assets/icons/lucide/list-tree.svg?raw";
 import menu from "../../../../design-system/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
@@ -84,6 +87,7 @@ import pinOff from "../../../../design-system/assets/icons/lucide/pin-off.svg?ra
 import pin from "../../../../design-system/assets/icons/lucide/pin.svg?raw";
 import plug from "../../../../design-system/assets/icons/lucide/plug.svg?raw";
 import power from "../../../../design-system/assets/icons/lucide/power.svg?raw";
+import messageCircle from "../../../../design-system/assets/icons/lucide/message-circle.svg?raw";
 import messageSquareDashed from "../../../../design-system/assets/icons/lucide/message-square-dashed.svg?raw";
 import messageSquare from "../../../../design-system/assets/icons/lucide/message-square.svg?raw";
 import messagesSquare from "../../../../design-system/assets/icons/lucide/messages-square.svg?raw";
@@ -102,6 +106,7 @@ import terminal from "../../../../design-system/assets/icons/lucide/terminal.svg
 import fileText from "../../../../design-system/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../design-system/assets/icons/lucide/trash-2.svg?raw";
 import shieldCheck from "../../../../design-system/assets/icons/lucide/shield-check.svg?raw";
+import waypoints from "../../../../design-system/assets/icons/lucide/waypoints.svg?raw";
 import sliders from "../../../../design-system/assets/icons/lucide/sliders.svg?raw";
 import star from "../../../../design-system/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../design-system/assets/icons/lucide/triangle-alert.svg?raw";
@@ -110,6 +115,9 @@ import user from "../../../../design-system/assets/icons/lucide/user.svg?raw";
 import unlink from "../../../../design-system/assets/icons/lucide/unlink.svg?raw";
 import workflow from "../../../../design-system/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../design-system/assets/icons/lucide/x.svg?raw";
+import zoomIn from "../../../../design-system/assets/icons/lucide/zoom-in.svg?raw";
+import zoomOut from "../../../../design-system/assets/icons/lucide/zoom-out.svg?raw";
+import maximize from "../../../../design-system/assets/icons/lucide/maximize.svg?raw";
 import wrench from "../../../../design-system/assets/icons/lucide/wrench.svg?raw";
 import zap from "../../../../design-system/assets/icons/lucide/zap.svg?raw";
 
@@ -126,6 +134,7 @@ const ICONS = {
   blend,
   blocks,
   book,
+  bookmark,
   "book-open": bookOpen,
   "archive-restore": archiveRestore,
   "arrow-down": arrowDown,
@@ -178,6 +187,7 @@ const ICONS = {
   "git-pull-request": gitPullRequest,
   globe,
   "hard-drive": hardDrive,
+  history,
   "file-diff": fileDiff,
   "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,
@@ -191,11 +201,13 @@ const ICONS = {
   layers,
   "list-filter": listFilter,
   "list-todo": listTodo,
+  "list-tree": listTree,
   // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——
   // 模型卡片左栏的视图开关（2026-10-01）。lucide 完整集里的 `menu`，按设计系统
   // Iconography 那节「拷一份工作子集进来」的做法引入
   menu,
   lock,
+  "message-circle": messageCircle,
   "message-square": messageSquare,
   mic,
   "message-square-dashed": messageSquareDashed,
@@ -219,6 +231,7 @@ const ICONS = {
   "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
+  waypoints,
   sliders,
   star,
   square,
@@ -236,9 +249,22 @@ const ICONS = {
   wrench,
   x,
   zap,
+  // 意图图的缩放组（放大 / 缩小 / 适配）——2026-10-14
+  "zoom-in": zoomIn,
+  "zoom-out": zoomOut,
+  maximize,
 } as const;
 
 export type IconName = keyof typeof ICONS;
+
+/**
+ * 名字是不是本表里登记过的图标。给「名字从外部来」的调用点用（今天的消费者是设置页的
+ * 更新说明：`[icon:名字]` 写在 Release 正文里，白名单只能在这里——**不另建第二份名单**，
+ * 没登记的当没图标处理）。
+ */
+export function isIconName(value: string): value is IconName {
+  return Object.hasOwn(ICONS, value);
+}
 
 /**
  * SVG 源文件里的换行与缩进会原样变成 DOM 文本节点，把承载图标的按钮的 `textContent`

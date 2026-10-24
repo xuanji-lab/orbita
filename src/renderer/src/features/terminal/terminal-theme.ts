@@ -33,6 +33,20 @@ export function readTerminalTheme(): ITheme {
     theme.cursorAccent = cursor;
   }
   if (selection !== "") theme.selectionBackground = selection;
+  // 滚动条滑块：xterm 6 画的是自己的 DOM 滚动条（VS Code 那套），不吃全局
+  // *::-webkit-scrollbar 的细条规则——颜色只能经 theme 喂。口径同全局：thumb 贴
+  // --color-border-default，悬停 / 按住加深一档到 --color-border-strong
+  const thumb = style.getPropertyValue("--color-border-default").trim();
+  const thumbStrong = style.getPropertyValue("--color-border-strong").trim();
+  if (thumb !== "") theme.scrollbarSliderBackground = thumb;
+  if (thumbStrong !== "") {
+    theme.scrollbarSliderHoverBackground = thumbStrong;
+    theme.scrollbarSliderActiveBackground = thumbStrong;
+  }
+  // 定滚动条宽要借 overviewRuler.width，而开了概览标尺 xterm 会在它左缘画一条
+  // overviewRulerBorder（缺省浅灰），暗色下是一根贯穿全高的亮线——我们不用标尺，
+  // 边线一律透明（实测：不设时右缘多出 1px 竖线）
+  theme.overviewRulerBorder = "rgba(0, 0, 0, 0)";
   const ansi = ANSI_ORDER.map((name) => read(`--terminal-ansi-${name}`));
   const brightAnsi = ANSI_ORDER.map((name) => read(`--terminal-ansi-bright-${name}`));
   if (ansi.every((value) => value !== "")) {
@@ -56,6 +70,24 @@ export function readTerminalTheme(): ITheme {
     theme.brightWhite = brightAnsi[7];
   }
   return theme;
+}
+
+/**
+ * 终端的字号 / 行高也从 token 来（`--font-size-terminal` / `--line-height-terminal`，
+ * typography.css 的「内容例外」）：xterm 只吃数字，这里把 CSS 值解成数。
+ * 解不出来（token 缺失 / 不是正数）就回落到 token 的声明值，终端不至于画成 0 号字。
+ */
+export function parseTerminalMetric(raw: string, fallback: number): number {
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function readTerminalMetrics(): { fontSize: number; lineHeight: number } {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    fontSize: parseTerminalMetric(style.getPropertyValue("--font-size-terminal"), 13),
+    lineHeight: parseTerminalMetric(style.getPropertyValue("--line-height-terminal"), 1.25),
+  };
 }
 
 /**

@@ -81,6 +81,27 @@ export const en = {
     source: (source: ReviewSource): string =>
       source === "task" ? "This task" : source === "unstaged" ? "Unstaged" : source === "staged" ? "Staged" : "vs upstream",
     refresh: "Refresh",
+    tabChanges: "Changes",
+    tabExcerpts: "Excerpts",
+    copyPath: "Copy path",
+    excerptsThisTask: "This task",
+    excerptsAll: "All",
+    excerptsSearch: "Search excerpts",
+    excerptsEmpty: "No excerpts yet.",
+    excerptsEmptyHint: "Select text in the conversation and choose Excerpt to keep it here.",
+    excerptsEmptyTask: "Nothing excerpted in this task.",
+    excerptsNoMatch: "No excerpt matches.",
+    excerptsFailed: "Couldn't load excerpts.",
+    excerptOrigin: (title: string, turn: number | undefined): string => (turn === undefined ? title : `${title} · turn ${turn}`),
+    excerptOriginDeleted: "Task deleted",
+    excerptJump: "Go to the original passage",
+    excerptMine: "You",
+    excerptAgent: "Agent",
+    excerptDelete: "Delete",
+    excerptConfirmDelete: "Confirm delete",
+    excerptCancel: "Cancel",
+    excerptExpand: "Expand",
+    excerptCollapse: "Collapse",
     noTask: "Open a task to review its changes.",
     errorTitle: "Couldn't load changes",
     titleNotRepo: "Not a Git repository",
@@ -126,6 +147,13 @@ export const en = {
     restore: "Restore",
   },
 
+  toolbar: {
+    copyId: "Copy session id",
+    copiedId: (id: string) => `Copied ${id}`,
+    /** 专注模式还没落地：planned 的东西显示、禁用、说明为什么（设计系统规矩） */
+    focusPlanned: "Focus mode (coming soon)",
+  },
+
   composer: {
     send: "Send",
     stop: "Stop",
@@ -158,6 +186,10 @@ export const en = {
     pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
     pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     skillNoneInWorkspace: "No skills available in this workspace",
+    /** 意图召回的会话级开关（实验功能 intent-system）：输入框旁的小开关 */
+    intentToggle: "Intent recall",
+    intentToggleOnHint: "Recall runs before each reply in this task",
+    intentToggleOffHint: "No recall in this task — history is still archived",
   },
 
   /** 语音（shared/voice.ts）：输入框的听写 + 设置 › 语音 */
@@ -217,6 +249,14 @@ export const en = {
 
   quote: {
     add: "Quote",
+    copy: "Copy",
+    copyTitle: "Copy the selected text",
+    toolbar: "Selected text actions",
+    excerpt: "Excerpt",
+    excerptTitle: "Save this passage to your excerpts",
+    excerptSaved: "Saved",
+    excerptDuplicate: "Already saved",
+    excerptFailed: "Couldn't save",
     replyPlaceholder: (n: number) => (n === 1 ? "Reply to quote 1…" : `Reply by number — 1. … ${n}. …`),
     number: (n: number) => `Quote ${n}`,
     addTitle: "Quote this in your next message",
@@ -287,6 +327,7 @@ export const en = {
     subSessions: (count: number) => `Sub-sessions (${count})`,
     browser: "Built-in browser",
     bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
+    intent: "Intent graph",
   },
 
   browser: {
@@ -415,6 +456,71 @@ export const en = {
     jumpToSourceTip: "Open the task this came from",
   },
 
+  focus: {
+    /** 闪电键（平时）的 tooltip */
+    keyTitle: "Focus · pick a duration and a workspace",
+    pickerTitle: "Start focusing",
+    pickerSub: "Pick a duration and a workspace; the sidebar becomes that workspace's files.",
+    durationLabel: "Duration",
+    workspaceLabel: "Workspace",
+    minutesUnit: "min",
+    sessionsCount: (count: number) => `${count} session${count === 1 ? "" : "s"}`,
+    noWorkspaces: "No workspaces yet — add one first.",
+    pickerNote: "Five minutes before the end, the chore model starts putting the session in order.",
+    start: "Start focusing",
+    capsuleTitle: (workspace: string) => `Focusing · ${workspace} · click to extend or end early`,
+    endingTitle: (workspace: string) => `Ended early · ${workspace} · click to end focus`,
+    timeUp: "Time's up",
+    menuLabel: "Focusing",
+    remainLabel: (total: number) => `left · ${total} min total`,
+    startedAt: (time: string) => `· started ${time}`,
+    extend: (minutes: number) => `+${minutes} min`,
+    endEarly: "End early",
+    endFocus: "End focus",
+    deletedWorkspace: "(workspace removed)",
+    backToSessions: "Back to sessions",
+    browseHint: "Just browsing — no timer running",
+    startHere: "Focus here",
+    wsSessions: "Sessions in this workspace",
+    newTaskHere: "New task in this workspace",
+    filesTitle: "Files",
+    legendU: "new file",
+    legendM: "modified",
+    badgeU: "Untracked new file",
+    badgeM: "Modified",
+    changeSummary: (changed: number, untracked: number) =>
+      `${changed} file${changed === 1 ? "" : "s"} changed, ${untracked} new`,
+    notRepo: "Not a git repository — no U / M to show",
+    noGit: "git isn't installed on this machine — no U / M to show",
+    workspaceMissing: "This workspace's folder no longer exists on disk.",
+    browseFiles: "Show workspace files",
+    notifyTitle: "Focus session over",
+    // —— 收工小结（星云的气泡与卡片） ——
+    /** 剩 5 分钟 / 提前结束点「要」之后：星云头顶小气泡的正文（缓慢呼吸） */
+    summarizing: "Putting this stretch in order…",
+    /** 整理完的常驻气泡（带对勾 + 关闭键；到点还是会弹卡） */
+    sayReady: "All set — see the recap at the buzzer",
+    sayDismiss: "Got it (the recap still pops at the buzzer)",
+    /** 提前结束的问询气泡 + 两颗键 */
+    askSummary: "Summarize this stretch?",
+    askYes: "Yes",
+    askNo: "No",
+    cardLabel: "Focus wrap-up",
+    cardTitle: "Nice work — take a break",
+    cardKick: (minutes: number, workspace: string) => `Focus over · ${minutes} min · ${workspace}`,
+    cardKickEarly: (minutes: number, workspace: string) => `Ended early · ${minutes} min · ${workspace}`,
+    cardClose: "Close (keep the focus view)",
+    summaryRunning: "The chore model is still putting it in order…",
+    summaryFailed: "The summary didn't come back (the chore model ran into an error).",
+    summaryNoModel: "No chore model configured — no summary this time.",
+    summaryNoActivity: "No session activity in this stretch — nothing to summarize.",
+    summarySource: (sessions: number, model: string) =>
+      `Chore model · read ${sessions} session${sessions === 1 ? "" : "s"} · ${model}`,
+    again: "Another round",
+    notifyBody: (minutes: number, workspace: string) =>
+      `${minutes} min focused on ${workspace} — take a break.`,
+  },
+
   usage: {
     /** 周一基的星期短标（侧栏左下角 7 天用量格下方的字） */
     weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -451,6 +557,21 @@ export const en = {
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
     experimentalCollapse: "Collapse",
+    /* ---------- 意图系统（实验）：实验开关打开才出现的设置区 ---------- */
+    intentTitle: "Intent system",
+    intentBaseUrl: "intent-lab address",
+    intentBaseUrlHint: "A local service you start yourself (`bun run serve` in the intent-lab repo). Orbita never launches it.",
+    intentConnection: "Connection",
+    intentChecking: "Checking…",
+    intentOnline: (model: string, imported: number, ingested: number) =>
+      `Connected · ${model} · ${imported + ingested} Q&As indexed`,
+    intentOffline: "Not reachable — start intent-lab first",
+    intentNewSessionOn: "Recall in new tasks",
+    intentChannel: "Pipeline",
+    intentChannelProma: "Proma",
+    intentChannelDeepseek: "DeepSeek (your own key)",
+    intentChannelHint: "Which service the recall pipeline (gate, understand, scoring, review) calls.",
+    intentChannelMissing: (preset: string) => `The intent-lab config has no \"${preset}\" S3 preset yet — add a same-named endpoint under endpoints, or switch back to Proma`,
     agent: "Agent",
     autoCompact: "Auto-compact",
     /** 说明中间夹着一个 <b>/compact</b>，拆成前后两段 */
@@ -490,6 +611,42 @@ export const en = {
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",
+    // ── 软件更新（设置 › 通用 › 软件更新，UpdateCard.tsx）──────────────────────
+    // 状态行里的机器事实（版本号、MB 数）由组件用等宽字体嵌进文案，所以一条句子
+    // 拆成 lead / mid 两段：`VersionLead <mono>0.2.0</mono> availableMid`。
+    update: {
+      group: "Software update",
+      currentVersion: "Current version",
+      currentNotesMissing: "This version has no release notes.",
+      viewOnGitHub: "View this release on GitHub",
+      updates: "Updates",
+      idleHint: "Checked automatically in the background.",
+      checkNow: "Check now",
+      checking: "Checking for updates…",
+      upToDate: "Up to date",
+      checkAgain: "Check again",
+      versionLead: "Version",
+      availableMid: "is available",
+      whatsNew: "What's new",
+      download: "Download",
+      downloadingLead: "Downloading",
+      downloadingMid: "…",
+      readyMid: "is ready — installs on restart.",
+      restart: "Restart to update",
+      cancel: "Cancel",
+      checkFailed: "Couldn't check for updates. Check your connection.",
+      downloadFailed: "The download didn't finish. Check your connection and try again.",
+      installFailed: "Couldn't start the installer. Try restarting the app.",
+      retry: "Retry",
+      unsupported: "Software updates are only available in the installed app.",
+      unsupportedPlatform: "Automatic updates aren't available on this platform yet. Download new versions from GitHub under Version history below.",
+      history: "Version history",
+      viewAllOnGitHub: "View all versions on GitHub",
+      recentLoading: "Loading…",
+      recentFailed: "Couldn't load",
+      recentEmpty: "No published versions yet.",
+      noEarlierVersions: "No earlier versions yet.",
+    },
     unavailable: "Unavailable",
     openDataDirectory: "Open the data directory",
     reveal: "Reveal",
@@ -978,6 +1135,8 @@ export const en = {
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
     noMessages: "No messages yet. Send the first one to start.",
+    /** 源侧分页：触顶拉更早一页那一行 */
+    loadingOlder: "Loading earlier messages…",
     backToParent: (title: string) => `Back to "${title}"`,
     renameTask: "Rename task",
     scrollToBottom: "Scroll to bottom",
@@ -1015,6 +1174,96 @@ export const en = {
     thinking: "Thinking",
     compacted: "Compacted",
     compacting: "Compacting context…",
+    /* ---------- 意图召回（实验功能 intent-system）：卡片 + 回答前确认 ---------- */
+    recall: {
+      label: "Intent recall",
+      /** 11 格阶段条的格名（顺序即流水线顺序） */
+      stageGate: "Gate",
+      stageUnderstand: "Understand",
+      stageScore: (done: number, total: number) => `Score ${done}/${total}`,
+      stagePassline: (passed: number) => `${passed} passed`,
+      stageReasons: (done: number, total: number) => `Reasons ${done}/${total}`,
+      stageDedup: (after: number, merged: number | null) =>
+        `Dedup → ${after}${merged === null ? "" : ` · merged ${merged}`}`,
+      stageKeeperWriting: (done: number, chars: number) => `Excerpting · ${done} · ${chars} chars`,
+      stageKeeper: (selected: number | null) => `Excerpt${selected === null ? "" : ` · ${selected} picked`}`,
+      stageConfirmAsked: (asked: number) => `Confirm ${asked}`,
+      stageConfirmNone: "Nothing to ask",
+      stageContext: (added: number | null) => `Context${added === null ? "" : ` +${added}`}`,
+      stageAnswer: "Answer",
+      stageEdges: (edges: number | null) => `Edges${edges === null ? "" : ` · ${edges}`}`,
+      /** 运行中的主行：S1 的场景与意图 */
+      sceneLine: (scene: string, want: string) => (want === "" ? scene : `${scene} · ${want}`),
+      /* ---------- 运行卡（四胶囊版，2026-10-14 重写） ---------- */
+      pillUnderstand: "Understand",
+      pillScore: "Score",
+      pillReasons: "Reasons",
+      pillConfirm: "Confirm",
+      detailGate: "Gate checking",
+      detailUnderstand: "Understanding",
+      detailScore: (done: number, total: number, passed: number) =>
+        `Scoring ${done.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} · ${passed} passed`,
+      detailReasons: (done: number, total: number) => `Reasons ${done} / ${total}`,
+      detailKeeper: (done: number, chars: number) => `Excerpting · ${done} · ${chars.toLocaleString("en-US")} chars`,
+      detailSettling: "Wrapping up",
+      confirmWaitingDetail: (n: number) => `${n} unclear — waiting for you below`,
+      /* ---------- 终态卡（收成一行） ---------- */
+      doneStats: (read: string, selected: number) => `Read ${read} · picked ${selected}`,
+      doneConfirmed: (yes: number, asked: number) => `you confirmed ${yes} / ${asked}`,
+      openGraph: "See the graph in the Intent panel",
+      usageTokens: (total: string) => `${total} tokens`,
+      readUnknown: "?",
+      skippedLine: (why: string) => `No intent analysis for this one · ${why}`,
+      cancelled: "Cancelled — this message wasn't answered",
+      failed: "Intent recall failed",
+      askRemainingLine: (n: number) => `${n} more to ask next time`,
+      /** 错误阶段名（error 转录行的「停在：」） */
+      stageNames: {
+        gate: "gate",
+        s1: "understand",
+        s3: "scoring",
+        s4: "review",
+        config: "connect to intent-lab",
+        budget: "time budget",
+      } as Record<string, string>,
+      stoppedAtStage: (stage: string) => `stopped at ${stage}`,
+      unreachable: "intent-lab isn't running — start it with `bun run serve` in the intent-lab repo",
+      unreachableHttp: (status: string) => `intent-lab refused the request (HTTP ${status})`,
+      silent: "intent-lab has been silent for 60 seconds",
+      streamEnded: "the connection to intent-lab ended early",
+      /** 回答前确认卡 */
+      confirm: {
+        title: "Confirm before answering",
+        /** 大字陈述的标签：join 到边是 prediction（「如果对，这次回答会…」），join 不到退回假设原文 */
+        ifRight: "If this is right, this answer will",
+        hypothesis: "My assumption",
+        whyConnected: "Why it connects",
+        whyUncertainLabel: "Why I'm not sure",
+        youSaid: "You said",
+        assistantSaid: "The answer then",
+        /** 摘句窗口：区首 / 区尾的小字提示（点了 = 在辅助对话打开） */
+        moreBefore: (n: number) => `… ${n} more characters before`,
+        moreAfter: (n: number) => `… ${n} more characters after`,
+        /** located=false：摘句不是逐字原文，没法定位置 */
+        excerptNotLocated: "The excerpt isn't verbatim — can't locate it",
+        /** dupCount > 1：会话表头的小字 */
+        askedTimes: (n: number) => `This came up ${n} times`,
+        openInSideChat: "Open in side chat",
+        prevItem: "Previous",
+        nextItem: "Next",
+        editStatement: "Edit",
+        verdictYes: "Right",
+        verdictNo: "Wrong",
+        statementLabel: "Statement (editable)",
+        noteLabel: "Add background",
+        notePlaceholder: "Anything missing? Add a line…",
+        confirmAndAnswer: "Confirm and answer",
+        confirmAndAnswerCount: (done: number, total: number) => `Confirm and answer · ${done} / ${total}`,
+        answerWithoutConfirming: "Answer without confirming",
+        feedbackFailed: "Couldn't deliver your confirmation to intent-lab",
+        feedbackGone: "This recall run has expired — send the message again",
+      },
+    },
     waitingOutput: "(waiting for output…)",
     noOutput: "(no output)",
     branchFromHere: "Branch from here",
@@ -1071,6 +1320,8 @@ export const en = {
     thought: "thought",
     lines: (n: number) => `${n} lines`,
     files: (n: number) => `${n} files`,
+    // Truncation caption in a tool body (tool-body-clamp.ts); both numbers are the ORIGINAL totals
+    bodyTruncated: (lines: number, chars: number) => `Truncated · ${lines} lines, ${chars} chars in total`,
     commands: (n: number) => `${n} commands`,
     matches: (n: number) => `${n} matches`,
     directories: (n: number) => `${n} directories`,
@@ -1453,6 +1704,68 @@ export const en = {
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
+    /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
+    treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
+  },
+
+  /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
+  intentPanel: {
+    title: "Intent",
+    /** 轮选择器（累积图的高亮，不切图） */
+    allRounds: (n: number) => `All · ${n} question${n === 1 ? "" : "s"}`,
+    roundChip: (round: number, when: string) =>
+      when === "" ? `Q${round}` : `Q${round} · ${when}`,
+    roundShort: (round: number) => `Q${round}`,
+    loading: "Loading…",
+    liveBadge: "Recalling…",
+    emptyNoRecall: "No recall for this question yet.",
+    emptyNoTurns: "This task has no intent recall yet.",
+    errorFetch: "Couldn't load the graph from intent-lab.",
+    readUnknown: "?",
+    /** 图区摘要（读的条数可能是 "?"） */
+    summary: (read: number | string, high: number, mid: number) =>
+      `Read ${typeof read === "number" ? read.toLocaleString("en-US") : read} · selected ${high} · unsure ${mid}`,
+    /** 图区顶部的两视图开关 */
+    viewSlots: "By slot",
+    viewQuestions: "By question",
+    /** 图角着色开关：颜色编码的维度 */
+    colorTime: "Time",
+    colorScore: "Relevance",
+    legendEarly: "Earlier",
+    legendMixLow: "Older · weaker",
+    legendMixHigh: "Newer · stronger",
+    colorWeightAria: "Colour by: mix of time and relevance (left = time, right = relevance)",
+    legendLate: "Later",
+    legendLow: "Weaker",
+    legendHigh: "Stronger",
+    legendSolid: "Selected",
+    legendMid: "Unsure",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    zoomFit: "Fit to canvas",
+    legendSpine: "Spine",
+    /** 分隔条 */
+    entriesLabel: "Entries",
+    selectedCount: (n: number) => `selected ${n}`,
+    splitHint: "Drag to resize · double-click to reset",
+    foldList: "Fold entries to the bottom",
+    unfoldList: "Unfold entries",
+    /** 条目行 */
+    youSaid: "You said",
+    answerThen: "The answer then",
+    quote: (q: string) => `“${q}”`,
+    rowYes: "Right",
+    rowNo: "Wrong",
+    openSession: "Open session",
+    /** 打开会话失败（会话已删）：列表顶上的一行说明，点击消失 */
+    sessionNotLocal: "This session is not in Orbita on this machine",
+    earlierRounds: (from: number, to: number) => `Q${from}–${to}`,
+    cardVerdictAsked: "You confirmed",
+    cardVerdictDenied: "You marked wrong · withdrawn",
+    cardVerdictEdited: "You reworded it",
+    cardVerdictSkipped: "Left blank · used as-is",
+    cardVerdictPending: "Waiting for your confirmation",
+    cardVerdictUnasked: "Not asked",
   },
 };
 

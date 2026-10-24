@@ -32,7 +32,11 @@ export function IconButton(props: {
   onClick?: () => void;
   /** 右键透传（同一个按钮挂备选手势时用，如遗留事项的「继续」：左键新开 / 右键续原会话） */
   onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  size?: number;
+  /**
+   * 外框尺寸：px 数，或 CSS 值字符串——顶部栏里的按钮传 "var(--titlebar-control)"
+   * （一处定义，2026-10-19 公共规定），别处继续用数字。
+   */
+  size?: number | string;
   /** soft = 一层极轻的面（设计系统模板里右图标条用的就是它）；默认 ghost 完全透明 */
   variant?: "ghost" | "soft";
   active?: boolean;
@@ -106,8 +110,8 @@ export function IconButton(props: {
               boxShadow: "var(--shadow-popover)",
               color: "var(--color-text-primary)",
               fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-caption)",
-              lineHeight: "var(--line-height-caption)",
+              fontSize: "var(--font-size-sm)",
+              lineHeight: "var(--line-height-ui)",
               pointerEvents: "none",
               // 浮层顶格：高于 Menu 的 portal（40）与 SkillsPanel 的命令条（30）
               zIndex: 70,

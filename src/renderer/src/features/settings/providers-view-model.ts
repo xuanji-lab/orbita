@@ -2,11 +2,12 @@
  * ProvidersView 的纯函数层 —— 弹窗解析 / 费率合并 / 复制 id / 行简报。
  * UI 状态留在组件里，这里只放有边界要守的换算；node --test 可直接加载。
  */
-import type { ModelDefaults } from "@shared/model-defaults";
+import type { CatalogPreference, ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import {
   KNOWN_PROVIDERS,
+  catalogPreferenceOf,
   knownProviderGroup,
   knownProviderOf,
   type KnownProvider,
@@ -105,32 +106,39 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
- * 模型卡片左栏每一格的短名（按传入顺序，键是 provider id）。
- *
- * **不靠「名字是否等于 label」猜用户改没改过名**：#140 把 label 改成纯厂商名（「智谱」），
- * 新建实例的默认名还会带「（按量）/（套餐）」或序号，存量实例沿用旧名（「智谱 Coding
- * Plan」）——按名字猜，几乎每个实例都会被误判成「改过名」，左栏显示完整长名。
- *
- * 规则：
- *   - 目录里认得的厂商一律用它的 short；同一家有多个实例时，第二个起加序号（DS / DS 2），
- *     完整实例名放格子的 title。
- *   - 兼容入口（openai-compatible / anthropic-compatible）用实例名：那是用户自建的网关，
- *     「OAI / OAI 2」说不出是哪个网关，用户起的名字才说得出。
+ * 一个已配置 provider 查型号参数时的偏好（去哪家目录查、协议、目录说不说了算）。
+ * 模型菜单、底栏思考档菜单、子会话默认档共用——与主进程装配会话载荷同一个来源
+ * （catalogPreferenceOf），菜单里能选的档就是会话里真能发出去的档。
  */
-export function railShortNames(providers: readonly ProviderDto[]): Map<string, string> {
-  const names = new Map<string, string>();
-  const seen = new Map<string, number>();
-  for (const provider of providers) {
-    const known = knownProviderOf(provider);
-    if (known.id === "openai-compatible" || known.id === "anthropic-compatible") {
-      names.set(provider.id, provider.displayName);
-      continue;
-    }
-    const count = (seen.get(known.id) ?? 0) + 1;
-    seen.set(known.id, count);
-    names.set(provider.id, count === 1 ? known.short : `${known.short} ${count}`);
-  }
-  return names;
+export function modelPreferenceOf(provider: ProviderDto): CatalogPreference {
+  return catalogPreferenceOf(knownProviderOf(provider), provider.endpoint.api);
+}
+
+/** 按 id 找 provider 再取偏好；找不到（已删的服务商、列表还没加载）就按型号的通用口径答 */
+export function modelPreferenceById(providers: readonly ProviderDto[], providerId: string): CatalogPreference {
+  const provider = providers.find((item) => item.id === providerId);
+  return provider === undefined ? {} : modelPreferenceOf(provider);
+}
+
+/**
+ * 模型卡片左栏一个厂商格的渲染内容：一律厂商 / 协议图标。
+ *
+ * 取代原 `railShortNames` 的文字短名（DS / zhipu / STEP…）。2026-10-19 方案丁原本
+ * 让自建兼容网关留实例名文字；同日用户改判：「即使我的 openai 兼容的 provider 叫
+ * proma，也应该给我加上 openai 的 logo，好让我知道这是 openai 接口的，比较统一」——
+ * 兼容网关显示**协议**的标（openai-compatible → OpenAI，anthropic-compatible →
+ * Anthropic，VendorLogo 的 LOGOS 里本就有这两条映射）。
+ *
+ * 同一家 / 同一协议多个实例共用一枚标、不带序号角标，区别靠格子的 title / aria-label
+ * （实例名）；模型行的副行也写着实例名。
+ */
+export interface RailVendorCell {
+  kindId: string;
+  label: string;
+}
+
+export function railVendorCell(provider: ProviderDto): RailVendorCell {
+  return { kindId: knownProviderOf(provider).id, label: provider.displayName };
 }
 
 /**

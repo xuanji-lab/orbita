@@ -21,8 +21,9 @@ import {
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
+import { knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
@@ -33,6 +34,11 @@ import type { McpStore } from "../mcp/store.ts";
 import { readMcpConfigFile } from "../mcp/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
+import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
+import { intentTurnEnv } from "./intent-env.ts";
+import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
+import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
+import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
 import {
   mergeMcpConfigs,
   resolveServersForWorkspace,
@@ -74,6 +80,7 @@ export async function resolveProviderSecrets(
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
+  const known = knownProviderOf(dto);
   // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
   return {
     id: dto.id,
@@ -82,26 +89,17 @@ export async function resolveProviderSecrets(
     apiKey,
     ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
     /**
-     * 声明的模型 + **我们自己补的参数**（快速适配通道）。用户显式填过的优先，
-     * 其次是白名单，再其次由 runtime 走「pi 目录 → 兜底」。
-     * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
+     * 声明的模型原样过线。型号白名单（known-models.ts）不在这里叠：它要和 pi 目录比
+     * （「目录说了算」的服务商在本家目录命中时不吃白名单），而目录只在 agent 进程里有——
+     * 以前在这里把白名单窗口 / 输出当用户覆盖塞进声明，思考档却塞不进去，菜单与会话
+     * 对同一个型号说两套话。叠加统一在 agent 侧 model-registration 做。
      */
-    models: dto.models.declared.map((decl) => {
-      const patch = knownModelParams(decl.id);
-      return {
-        ...decl,
-        ...(decl.contextWindow === undefined && patch.contextWindow !== undefined
-          ? { contextWindow: patch.contextWindow }
-          : {}),
-        ...(decl.maxTokens === undefined && patch.maxTokens !== undefined
-          ? { maxTokens: patch.maxTokens }
-          : {}),
-      };
-    }),
+    models: dto.models.declared,
     // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
     // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
     // 按条目认（knownProviderOf）而不是按 id：第二个 DeepSeek 实例（deepseek-2）同样吃目录参数
-    ...(knownProviderOf(dto).catalogId === undefined ? {} : { catalogId: knownProviderOf(dto).catalogId }),
+    ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
+    ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
   };
 }
 
@@ -128,6 +126,9 @@ export function registerAgentIpc(
   mcp: McpStore,
   /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
   settings: SettingsStore,
+  /** 意图存档跟踪器（实验功能 intent-system；undefined = 旧测试夹具不传）。submit /
+   *  interrupt 判定要存档时 begin，事件泵在 index.ts 里喂 onEvent */
+  intentIngest?: { begin(sessionId: string, text: string, pasted: readonly string[]): void },
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -196,6 +197,45 @@ export function registerAgentIpc(
     const current = await settings.read();
     return effectiveLanguage(current.theme, current.language);
   };
+
+  /**
+   * 意图系统的开轮装配（实验功能 intent-system）：每轮现读设置与 meta，开关
+   * 关着返回空对象（命令形状与 main 一字不差）。存档跟记也在这一处判。
+   */
+  const readIntentEnv = async (
+    sessionId: string,
+    text: string,
+  ): Promise<{ intent?: IntentTurnContext; backfill?: string[]; ingest: boolean }> => {
+    const current: AppSettings = await settings.read();
+    if (current.experimentalFeatures?.["intent-system"] !== true) return { ingest: false };
+    const effective = effectiveIntentSettings(current.intent);
+    const meta = await sessions.readMeta(sessionId);
+    const detail = meta === null ? null : await sessions.load(sessionId);
+    return intentTurnEnv({
+      experimentOn: true,
+      // 会话级覆写优先，没碰过的跟新会话默认
+      sessionIntentEnabled: meta?.intentEnabled ?? effective.newSessionOn,
+      baseUrl: effective.baseUrl,
+      // 按渠道的模型覆盖（一处常量表；proma 渠道不带字段，跟随服务端配置）
+      models: INTENT_MODELS_BY_CHANNEL[effective.channel],
+      meta: meta === null ? null : { title: meta.title, ...(meta.parentId !== undefined ? { parentId: meta.parentId } : {}) },
+      transcript: detail?.transcript ?? null,
+      text,
+    });
+  };
+
+  // 意图系统的两条拉取通道（探活 / 拉图）：地址每轮现读，改了设置立即生效
+  ipcMain.handle(ipcChannels.intentHealth, async (): Promise<unknown> => {
+    const effective = effectiveIntentSettings((await settings.read()).intent);
+    return getIntentHealth(effective.baseUrl);
+  });
+  ipcMain.handle(
+    ipcChannels.intentEdges,
+    async (_e, sessionId: string, turnId: string): Promise<unknown> => {
+      const effective = effectiveIntentSettings((await settings.read()).intent);
+      return getIntentEdges(effective.baseUrl, sessionId, turnId);
+    },
+  );
 
 
   /**
@@ -350,12 +390,18 @@ export function registerAgentIpc(
   async function submitTurn(input: SubmitAgentInput): Promise<void> {
     const provider = await resolveProviderSecrets(providers, input.providerId);
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
+    // 意图系统（实验）：开关开着才装配（intent / backfill）与存档（ingest）。
+    // 返回空对象时命令与 main 一字不差
+    const intentEnv = await readIntentEnv(input.sessionId, text);
+    if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
+      ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}),
+      ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}),
       ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, {
         skillsDirs: skillDirs(input.workspaceId),
         directories: await readDirectories(input),
@@ -392,7 +438,9 @@ export function registerAgentIpc(
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const intentEnv = await readIntentEnv(input.sessionId, text);
+    if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
@@ -442,6 +490,10 @@ export function registerAgentIpc(
   ipcMain.handle(
     ipcChannels.agentAnswerPermission,
     (_e, requestId: string, answer: PermissionAnswer) => host.answerPermission(requestId, answer),
+  );
+  ipcMain.handle(
+    ipcChannels.agentAnswerIntentConfirm,
+    (_e, requestId: string, decision: IntentConfirmDecision) => host.answerIntentConfirm(requestId, decision),
   );
 
   return { submitTurn };

@@ -1,9 +1,11 @@
-import { useRef, useState } from "react";
+import { createContext, useEffect, useContext, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon, type IconName } from "../shell/Icon";
 import { IconButton } from "./IconButton";
 import { clampRightPanelWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import { usePaneTotalWidth } from "./side-width.ts";
 import { useT } from "../locale.ts";
+import { ToolbarPanelSlotContext } from "./Toolbar";
 
 /**
  * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
@@ -20,6 +22,12 @@ export function RightPanelSlot(props: {
   narrow: boolean;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /**
+   * 把**实际渲染**的宽度（夹过 1/3–2/3 之后）报给调用方——工具栏的右栏胶囊要跟它
+   * 对齐。工具栏原先拿盘上的原始宽度自己算：窗口缩小后右栏被夹窄、胶囊还是旧宽，
+   * 压到会话胶囊与左上角（2026-10-19 用户验收）。宽度只在这里夹一次，别处只读。
+   */
+  onRenderedWidth?: (width: number) => void;
   children: React.ReactNode;
 }) {
   const t = useT();
@@ -34,6 +42,11 @@ export function RightPanelSlot(props: {
    */
   const paneTotal = usePaneTotalWidth(asideRef, !narrow);
   const width = paneTotal > 0 ? clampRightPanelWidth(props.width, paneTotal) : props.width;
+  const renderedWidth = narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width;
+  const onRenderedWidth = props.onRenderedWidth;
+  useEffect(() => {
+    onRenderedWidth?.(renderedWidth);
+  }, [renderedWidth, onRenderedWidth]);
 
   /**
    * 拖宽（4-0）：左移变宽。区间**按 pane 算**——右栏 ∈ [P/3, 2P/3]，
@@ -79,11 +92,13 @@ export function RightPanelSlot(props: {
           "--right-panel-w": `${narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width}px`,
           // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条；
           // 那时壳需要自己的面：设计系统「Floating layers」的实色底 + 发丝边 + popover
-          // 阴影。不用玻璃：没有 blur，半透明的它压在聊天正文上，底下的字会直接漏上来
+          // 阴影。不用玻璃：没有 blur，半透明的它压在聊天正文上，底下的字会直接漏上来。
+          // top 从工具栏下面算（--chrome-height）：.layer 从窗口顶边开始，工具栏是绝对
+          // 定位的，直接 12px 会盖住窗口三键与会话胶囊（2026-10-22 验收实测）
           ...(narrow && open
             ? {
                 position: "absolute",
-                top: "var(--space-3)",
+                top: "calc(var(--chrome-height) + var(--space-3))",
                 bottom: "var(--space-3)",
                 right: "calc(var(--space-3) + 32px + var(--space-3))",
                 background: "var(--color-bg-panel)",
@@ -124,38 +139,44 @@ export function RightPanelSlot(props: {
 }
 
 /**
- * 面板内容的版式骨架：页头（标题行）、内容区（120ms 淡入，contentKey 换帧）、
- * footer 动作区（发丝顶线分隔，只有表单页用）。右栏全部面板共用这一副骨架。
- * 宽度、竖线与开合动画都在 RightPanelSlot（壳）上，这里只管内容怎么排。
+ * 面板内容的版式骨架：内容区（120ms 淡入，contentKey 换帧）+ footer 动作区（发丝
+ * 顶线分隔，只有表单页用）。右栏全部面板共用这一副骨架；宽度、竖线与开合动画都在
+ * RightPanelSlot（壳）上，这里只管内容怎么排。
  *
- * **标题行就是工具行**（2026-10-11 右栏统一，用户选定方案 B「一体标题栏」）：
- * 图标 + 标题（PanelTitle）→ 中段（过滤框 PanelFilter / 终端标签 / 审查范围，
- * 带 `.panel-head-grow` 的占满剩余宽度）→ 说明「?」（PanelHelp）→ 面板动作。
- * 没有第二条工具行，也**没有 ×**——右图标条本身就是开关（同次裁决：全部去掉）。
+ * **页头不住卡里，住工具栏的右栏胶囊**（2026-10-19 方案 B v2）：调用方传给 header /
+ * headerExtra 的内容原样 portal 到工具栏胶囊的宿主（ToolbarPanelSlotContext），
+ * 面板组件不用改写自己的逻辑。配方固定：标题键（PanelTitle）→ 中段（PanelFilter /
+ * 页签 / 选择，吃剩余宽）→ 说明「?」（PanelHelp）→ 动作（PanelIconButton）；
+ * 切面板时胶囊外框不动，只有内容随 contentKey 换帧淡入。
  */
 export function RightPanelFrame(props: {
   /** 页头左段：PanelTitle + 可选的中段控件 */
   header: React.ReactNode;
-  /** 内容切换的 key（换帧触发 120ms fade） */
+  /** 内容切换的 key（换帧触发 120ms fade；页头淡入同一 key） */
   contentKey: string;
   /** 页头最右的动作槽（说明 ?、添加、刷新等） */
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const slot = useContext(ToolbarPanelSlotContext);
   return (
     <div
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr) auto",
+        gridTemplateRows: "minmax(0,1fr) auto",
       }}
     >
-      <header className="titlebar panel-head">
-        {props.header}
-        <span className="panel-head-spacer" aria-hidden="true" />
-        {props.headerExtra}
-      </header>
+      {slot !== null &&
+        createPortal(
+          <div className="cap-panel-content" key={props.contentKey}>
+            {props.header}
+            <span className="cap-grow" aria-hidden="true" />
+            {props.headerExtra}
+          </div>,
+          slot,
+        )}
 
       <div
         key={props.contentKey}
@@ -183,9 +204,8 @@ export function RightPanelFrame(props: {
 }
 
 /**
- * 面板内的 26px 图标方块：就是 IconButton（安静控件配方 + 自绘 tooltip）。
- * 原先这里自己画 hover（onMouseEnter 写 style）、用原生 title——违反「状态样式归 CSS」
- * 与「tooltip 自绘」两条规矩，右栏统一时收口到 IconButton。
+ * 胶囊里的动作格（右栏胶囊最右那几颗）：28 圆格、安静控件配方 + 自绘 tooltip，
+ * 尺寸走 --titlebar-control（2026-10-19 顶部工具栏规定）。
  */
 export function PanelIconButton(props: {
   title: string;
@@ -194,25 +214,73 @@ export function PanelIconButton(props: {
   children: React.ReactNode;
 }) {
   return (
-    <IconButton label={props.title} size={26} disabled={props.disabled} onClick={props.onClick} className="no-drag">
+    <IconButton
+      label={props.title}
+      size="var(--titlebar-control)"
+      disabled={props.disabled}
+      onClick={props.onClick}
+      className="no-drag"
+      style={{ borderRadius: "var(--radius-pill)" }}
+    >
       {props.children}
     </IconButton>
   );
 }
 
-/** 标题行左段：图标 + 标题。六个面板同一种写法（字号 / 字重 / 图标色由 CSS 管） */
-export function PanelTitle(props: { icon: IconName; title: string; tip?: string }) {
-  return (
-    <span className="panel-title" title={props.tip}>
-      <Icon name={props.icon} size={16} />
+/**
+ * 胶囊标题键：面板图标 + 名称（.cap-pt，胶囊内尺寸）。传 onClick 就是开关形态
+ * （button 同配方，aria-expanded 点亮态走 mode 色），文件面板的「文件」标题
+ * （树开关）是第一个消费者。
+ */
+export function PanelTitle(props: {
+  icon: IconName;
+  title: string;
+  tip?: string;
+  /** 给了就是可点开关：渲染 button 而不是 span */
+  onClick?: () => void;
+  /** 开关形态：展开着（点亮态）置 true */
+  ariaExpanded?: boolean;
+  /** 开关形态：禁用（如文件面板没有打开文件时树开关不可点） */
+  disabled?: boolean;
+  /** 开关形态的行尾（如折叠 chevron） */
+  trailing?: React.ReactNode;
+  /** 调用方追加的 class */
+  className?: string;
+}) {
+  const inner = (
+    <>
+      <Icon name={props.icon} size={16} strokeWidth={1.8} />
       <strong>{props.title}</strong>
-    </span>
+      {props.trailing}
+    </>
+  );
+  const className = `cap-pt${props.className === undefined ? "" : ` ${props.className}`}`;
+  if (props.onClick === undefined) {
+    return (
+      <span className={className} title={props.tip}>
+        {inner}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`quiet-control ${className}`}
+      title={props.tip}
+      onClick={props.onClick}
+      aria-expanded={props.ariaExpanded === true}
+      disabled={props.disabled}
+    >
+      {inner}
+    </button>
   );
 }
 
 /**
- * 标题行里的过滤框（方案 B）：浅底胶囊、放大镜 + 输入 + 计数，占满标题与动作之间的空位。
- * Esc 先清词、词空了才冒泡（照旧去关面板）——与各面板原过滤行同一手感。
+ * 胶囊中段的筛选框（.cap-pf，24 高小药丸）：放大镜 + 输入 + 计数，吃剩余宽。
+ * **窄于 300（容器断点，window-tools.ts 对账）收成一个搜索格**；点开筛选框
+ * 占满整颗胶囊（.open 绝对定位铺开，标题键 / 动作格还在下面被盖住），
+ * Esc / 失焦 / ✕ 收回。Esc 先清词、词空了才冒泡（照旧去关面板）。
  */
 export function PanelFilter(props: {
   value: string;
@@ -225,28 +293,65 @@ export function PanelFilter(props: {
   /** 选取模式等需要自己接管键盘时传；不传走默认的 Esc 清词 */
   onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
 }) {
+  const t = useT();
+  /** 窄态点开：筛选框占满胶囊 */
+  const [fill, setFill] = useState(false);
+  const fillInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (fill) fillInputRef.current?.focus();
+  }, [fill]);
+  const esc = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (props.onKeyDown !== undefined) {
+      props.onKeyDown(event);
+      return;
+    }
+    if (event.key === "Escape" && props.value !== "") {
+      event.stopPropagation();
+      props.onChange("");
+    }
+  };
   return (
-    <label className="panel-filter panel-head-grow no-drag">
-      <Icon name="search" size={13} />
-      <input
-        ref={props.inputRef}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (props.onKeyDown !== undefined) {
-            props.onKeyDown(event);
-            return;
-          }
-          if (event.key === "Escape" && props.value !== "") {
-            event.stopPropagation();
-            props.onChange("");
-          }
-        }}
-        placeholder={props.placeholder}
-        aria-label={props.ariaLabel ?? props.placeholder}
-      />
-      {props.count !== undefined && <span className="panel-filter-count">{props.count}</span>}
-    </label>
+    <>
+      <label className={`cap-pf cap-grow cap-pf-full no-drag${fill ? " open" : ""}`}>
+        <Icon name="search" size={14} strokeWidth={1.8} />
+        <input
+          ref={props.inputRef ?? fillInputRef}
+          value={props.value}
+          onChange={(event) => props.onChange(event.target.value)}
+          onKeyDown={(event) => {
+            esc(event);
+            if (event.key === "Escape" && props.value === "") setFill(false);
+          }}
+          onBlur={() => setFill(false)}
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel ?? props.placeholder}
+        />
+        {props.count !== undefined && <span className="cap-count">{props.count}</span>}
+        {fill && (
+          <button
+            type="button"
+            className="quiet-control cap-mini"
+            title={t.common.close}
+            aria-label={t.common.close}
+            onClick={() => setFill(false)}
+          >
+            <Icon name="x" size={14} strokeWidth={2.2} />
+          </button>
+        )}
+      </label>
+      {/* 窄态的搜索格：container query 里换它出场 */}
+      {!fill && (
+        <button
+          type="button"
+          className="quiet-control cap-seg solo cap-pf-collapsed no-drag"
+          title={props.placeholder}
+          aria-label={props.ariaLabel ?? props.placeholder}
+          onClick={() => setFill(true)}
+        >
+          <Icon name="search" size={16} strokeWidth={1.8} />
+        </button>
+      )}
+    </>
   );
 }
 
@@ -256,7 +361,13 @@ export function PanelFilter(props: {
  */
 export function PanelHelp(props: { text: string; label: string }) {
   return (
-    <IconButton label={props.label} title={props.text} size={26} className="no-drag">
+    <IconButton
+      label={props.label}
+      title={props.text}
+      size="var(--titlebar-control)"
+      className="no-drag"
+      style={{ borderRadius: "var(--radius-pill)" }}
+    >
       <Icon name="circle-help" size={15} />
     </IconButton>
   );
@@ -342,7 +453,7 @@ export function PanelButton(props: {
         border: danger ? "1px solid var(--color-danger)" : 0,
         borderRadius: "var(--radius-md)",
         font: "inherit",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         cursor: disabled ? "default" : "pointer",
       }}
     >
@@ -351,14 +462,14 @@ export function PanelButton(props: {
   );
 }
 
-/** 面板里的一行小字（caption/tertiary），说明与空态用。 */
+/** 面板里的一行小字（sm/tertiary），说明与空态用。 */
 export function PanelLine(props: { children: React.ReactNode; danger?: boolean }) {
   return (
     <p
       role={props.danger === true ? "alert" : undefined}
       style={{
         margin: 0,
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: props.danger === true ? "var(--color-danger)" : "var(--color-text-tertiary)",
       }}
     >

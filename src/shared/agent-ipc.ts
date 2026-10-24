@@ -28,6 +28,10 @@ import type {
   ChannelMessageKind,
   ChannelStatus,
 } from "./channel.ts";
+import type { IntentRecallModels } from "./intent-lab.ts";
+import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
+import type { IntentConfirmDecision } from "./intent-confirm.ts";
+import type { IntentRecallRecord } from "./session.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -47,6 +51,16 @@ export const ipcChannels = {
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
   agentAnswerPermission: "agent:answer-permission",
+  /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
+  agentAnswerIntentConfirm: "agent:answer-intent-confirm",
+  /**
+   * 意图系统（实验）的三条主进程 HTTP 通道：
+   * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
+   * - intent:edges —— 某一问的图数据（GET /edges?sessionId=&turnId=），回 IntentEdges | null
+   * renderer 不直连 intent-lab（沙盒里的 fetch 也该有四层契约的边界）。
+   */
+  intentHealth: "intent:health",
+  intentEdges: "intent:edges",
   agentEvent: "agent:event",
   workspaceList: "workspace:list",
   /** 打开原生目录选择器并加为工作区 */
@@ -89,13 +103,24 @@ export const ipcChannels = {
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
   sessionList: "session:list",
+  /**
+   * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
+   * 主进程仍全量读盘 + 折叠，切的是 IPC 传输量与 renderer 渲染量（瓶颈所在）。
+   */
   sessionLoad: "session:load",
+  /** 拉更早的一页（滚动触顶）：载荷 (id, before 记录 id, limit)，回 SessionOlderPage */
+  sessionLoadOlder: "session:load-older",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
   sessionStar: "session:star",
   /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
   sessionSetCompletion: "session:set-completion",
+  /**
+   * 意图召回的会话级开关（实验功能 intent-system）：载荷 (sessionId, boolean)，回 void。
+   * 只落 meta（intentEnabled），下一轮开轮时主进程现读现装配；输入框旁的小开关用。
+   */
+  sessionSetIntentEnabled: "session:set-intent-enabled",
   /**
    * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
    * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
@@ -195,6 +220,20 @@ export const ipcChannels = {
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
   usageEvent: "usage:event",
+  /** 自动更新：拉当前快照（`UpdaterSnapshot`，载荷形状在 shared/updater.ts）。之后的状态变化走 updaterState 推送 */
+  updaterGet: "updater:get",
+  /** 自动更新：手动检查（启动首查与 4h 定时在 main/updater/service.ts） */
+  updaterCheck: "updater:check",
+  /** 自动更新：用户确认后开始下载（autoDownload=false，库不自己下） */
+  updaterDownload: "updater:download",
+  /** 自动更新：取消正在进行的下载，退回 available */
+  updaterCancel: "updater:cancel",
+  /** 自动更新：退出并安装已下载的更新（quitAndInstall，安装前先收掉 agent utility 进程） */
+  updaterInstall: "updater:install",
+  /** 主进程 → renderer 推送：更新状态每次变化推一份完整快照（`UpdaterSnapshot`） */
+  updaterState: "updater:state",
+  /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
+  updaterRecentReleases: "updater:recentReleases",
   /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
   carryoverCreate: "carryover:create",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
@@ -215,6 +254,16 @@ export const ipcChannels = {
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
   reviewDiff: "review:diff",
+  /** 专注模式：一个工作区此刻的 U / M 改动（含增删行数与当前分支名，载荷形状在 shared/focus.ts）。git 只读，与审查面板同一套 git-source */
+  focusChanges: "focus:changes",
+  /** 专注模式：时间到的系统通知（Electron Notification，点按聚焦窗口；载荷 FocusNotifyRequest） */
+  focusNotifyDone: "focus:notify-done",
+  /**
+   * 专注模式：剩 5 分钟起跑的收工小结（载荷 FocusSummaryRequest / FocusSummaryResult）。
+   * 主进程归拢素材（时段内有活动的所有会话 + 所选工作区 U/M），家务活模型在 agent
+   * 进程里独立调用（不开会话、不落盘，同 classifyGreetings 的通道）。
+   */
+  focusSummarize: "focus:summarize",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
@@ -355,6 +404,17 @@ export interface ProviderSecrets {
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+  /**
+   * pi 目录里这家叫什么（`KnownProvider.catalogId`，如 zhipu-coding ↔ zai-coding-cn）。
+   * 官方参数按它去查；缺席 = 目录里没这家（自建网关）。以前靠展开运算符夹带过线，没进契约。
+   */
+  catalogId?: string;
+  /**
+   * 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录了的型号，
+   * 白名单不覆盖——聚合网关会收窄型号能力（OpenCode Go 的 kimi-k3 只开 max 一档），
+   * 型号的通用口径在它那里不成立。目录没收录的型号仍由白名单补。
+   */
+  catalogAuthoritative?: boolean;
 }
 
 /**
@@ -475,6 +535,21 @@ export interface ChannelSpeakInput {
 /** `channel:stop` 的载荷：用户终止这个子会话（语义见 ipcChannels.channelStop 的注释） */
 export type ChannelStopInput = ChannelKey;
 
+/**
+ * 意图系统（实验功能 intent-system）的开轮装配（submit / interrupt 共用）。
+ * **主进程装配**（同 skillsDirs / directories 的纪律）：开关状态、intent-lab 地址、
+ * 渠道与模型选择、会话标题都从设置与 meta 现算，agent 进程只收数据。
+ * 缺席 = 开关关闭或这一轮不召回，runtime 走与 main 完全一致的路径。
+ */
+export interface IntentTurnContext {
+  /** intent-lab 服务地址（settings.intent.baseUrl，缺省 http://127.0.0.1:8723） */
+  baseUrl: string;
+  /** 会话标题（meta.title；没生成就空串，契约允许） */
+  title: string;
+  /** 按渠道解析好的 /recall models 覆盖（INTENT_MODELS_BY_CHANNEL）；缺席 = 不带字段 */
+  models?: IntentRecallModels;
+}
+
 /** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
 renderer 不必为更新通道列的状态徽标拉一份全量账本 */
 export type ChannelEvent =
@@ -585,6 +660,19 @@ export type AgentCommand =
        * 并讲它的用法；缺席 = 关
        */
       pdfCitations?: boolean;
+      /**
+       * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
+       * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
+       * 一致的路径（不调 recall、不发卡片事件）。
+       */
+      intent?: IntentTurnContext;
+      /**
+       * pi 本子还没消化的 user 原话（此前召回失败 / 取消轮留下的尾巴，旧→新）。
+       * 主进程从转录尾部推导（pendingBackfillFromRecords），**与 intent 开关无关**
+       * 地随开轮命令带——prompt 之前逐条 appendMessage 补记，两本账对齐。
+       * 开关全关时不装配（与 main 行为一致的边界代价，见主进程装配处注释）。
+       */
+      backfill?: string[];
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -614,6 +702,18 @@ export type AgentCommand =
       provider: ProviderSecrets;
       modelId: string;
       messages: string[];
+    }
+  | {
+      /**
+       * 专注模式的收工小结：prompt 是主进程归拢好的素材正文（时段内会话流水 + 工作区
+       * U/M），结果经 `focusSummarized` 事件按 requestId 回传。独立小调用，不开会话、
+       * 不落盘；模型与密钥面由主进程解好再发（同 classifyGreetings）。
+       */
+      type: "summarizeFocus";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      prompt: string;
     }
   | {
       /**
@@ -668,6 +768,10 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
+      intent?: IntentTurnContext;
+      /** 待补记的 user 原话尾巴，语义同 submit */
+      backfill?: string[];
     }
   | {
       /**
@@ -819,6 +923,8 @@ export type AgentCommand =
     }
   /** 用户对一次工具审批的回答，按 requestId 对回去 */
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
+  /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
+  | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
   | { type: "dispose"; sessionId: string };
 
 /**
@@ -1030,6 +1136,7 @@ export type AgentEvent =
    * 调用失败或回复读不懂时 throwaway 为 null、error 写原因。
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
+  | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
@@ -1095,4 +1202,32 @@ export type AgentEvent =
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
-  | { type: "failed"; sessionId: string | null; message: string; turn?: true };
+  | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
+  /**
+   * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成
+   * 流水线卡片。纯 ephemeral，不落盘——终态由 intentRecallRecord 承载。
+   */
+  | {
+      type: "intentRecall";
+      sessionId: string;
+      /** 本轮回显 user item 的 id（与 /recall 的 turnId 同一个值） */
+      turnId: string;
+      event: IntentRecallStreamEvent;
+    }
+  /**
+   * 一轮召回的终态记录：主进程落盘（会话 JSONL）并广播。带 usage 时同步进日账本。
+   */
+  | { type: "intentRecallRecord"; sessionId: string; record: IntentRecallRecord }
+  /**
+   * 回答前确认：recall 判定有「拿不准」的边要问用户，卡片浮在输入框上方。
+   * 应答走 agentAnswerIntentConfirm；runtime 侧无超时，停止 / 抢跑时按取消结掉。
+   */
+  | {
+      type: "intentAsk";
+      sessionId: string;
+      requestId: string;
+      runId: string;
+      turnId: string;
+      ask: IntentAskView[];
+    };

@@ -34,3 +34,33 @@ export function mergeTerminals(current: readonly TerminalInfo[], incoming: reado
   }
   return merged;
 }
+
+/** 焦点判定只需要的那几项（DOM 元素的子集，测试里直接造对象） */
+export interface FocusTarget {
+  tagName: string;
+  isContentEditable: boolean;
+  /** input 的 type（button / checkbox 这类不是在打字） */
+  type?: string;
+  readOnly?: boolean;
+}
+
+const NON_TEXT_INPUT_TYPES = new Set(["button", "checkbox", "radio", "range", "color", "file", "submit", "reset", "image"]);
+
+/**
+ * 终端画完快照后要不要抢焦点。**用户正在终端外的输入处打字时不抢**：agent 用
+ * terminal_open / terminal_execute 开出的新 tab 也会挂载这个视图，原先挂载即
+ * focus()，把 composer 里正在打的字截进终端（2026-10-19 用户：「光标会把我打字的
+ * 光标给抢走，有些字出现在 terminal 里面」）。
+ *
+ * 不抢 = 焦点此刻在终端外的可编辑处（textarea / 文本类 input / contenteditable）。
+ * 其余情形照旧给终端焦点：用户点「+」或点 tab（焦点在按钮上）、焦点在 body、
+ * 或焦点本来就在这个终端里。
+ */
+export function shouldTerminalTakeFocus(active: FocusTarget | null, activeIsInsideTerminal: boolean): boolean {
+  if (active === null || activeIsInsideTerminal) return true;
+  if (active.isContentEditable) return false;
+  const tag = active.tagName.toLowerCase();
+  if (tag === "textarea") return active.readOnly === true;
+  if (tag === "input") return active.readOnly === true || NON_TEXT_INPUT_TYPES.has((active.type ?? "text").toLowerCase());
+  return true;
+}

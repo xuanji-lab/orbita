@@ -16,6 +16,9 @@ import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
+import { IntentIngestTracker } from "./agent/intent-ingest.ts";
+import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
+import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
@@ -27,9 +30,13 @@ import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
+import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
 import { UsageLedger } from "./usage/ledger.ts";
 import { registerUsageIpc } from "./usage/ipc.ts";
+import { Updater } from "./updater/service.ts";
+import { registerUpdaterIpc } from "./updater/ipc.ts";
+import { createRecentReleases } from "./updater/recent-releases.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
@@ -40,7 +47,9 @@ import { registerFilesIpc } from "./files/ipc.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
+import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
+import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
@@ -313,6 +322,11 @@ void app.whenReady().then(async () => {
   const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
   const record = createSessionRecorder(sessions, usageLedger);
   registerUsageIpc(usageLedger, sessions);
+  // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
+  // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处。
+  // 同一个实例也喂给专注小结（摘抄是素材之一）
+  const excerpts = new ExcerptStore(join(configDir, "excerpts.jsonl"));
+  registerExcerptIpc(excerpts, sessions);
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
@@ -347,6 +361,7 @@ void app.whenReady().then(async () => {
       ];
     },
     appName: app.getName(),
+    appVersion: app.getVersion(),
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => browserSandbox.dispose());
@@ -494,6 +509,9 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
+    // 在 record 之前喂：与 recorder 各自独立，互不阻塞
+    intentIngest.onEvent(event);
     record(event);
     broadcastAgentEvent(event);
   });
@@ -504,17 +522,52 @@ void app.whenReady().then(async () => {
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
   const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
+  /*
+   * 意图系统（实验功能 intent-system）的主进程三件套：
+   * 1. 存档跟踪器（/ingest）：submit 判定要存档时 begin，事件泵喂 onEvent；
+   * 2. 回退作废钩子（/invalidate）：会话回退成功后把被退轮次的 turnId 送 intent-lab，
+   *    服务端重生的上下文文件覆盖写回会话工作台；
+   * 3. token 记账：intentRecallRecord 的 usage 进日账本（记录本身落会话 JSONL，
+   *    账本可从那回填重建）。三者都只在实验开关开着时生效。
+   */
+  const intentIngest = new IntentIngestTracker({
+    http: { post: (url, body) => postIntentIngest(url, body) },
+    load: async (id) => {
+      const detail = await sessions.load(id);
+      return detail === null ? null : { title: detail.meta.title, transcript: detail.transcript };
+    },
+    readIntent: async () => {
+      const current = await settings.read();
+      if (current.experimentalFeatures?.["intent-system"] !== true) return null;
+      return { baseUrl: effectiveIntentSettings(current.intent).baseUrl };
+    },
+  });
+  const intentOnReverted = async (sessionId: string, turnIds: readonly string[]): Promise<void> => {
+    try {
+      const current = await settings.read();
+      if (current.experimentalFeatures?.["intent-system"] !== true) return;
+      const baseUrl = effectiveIntentSettings(current.intent).baseUrl;
+      const outcome = await postIntentInvalidate(baseUrl, sessionId, turnIds);
+      if (!outcome.ok) {
+        console.error("[intent] 回退后的作废没送成（不影响回退；下一次召回会覆盖写上下文）", outcome.error);
+      }
+    } catch (cause) {
+      console.error("[intent] 回退后的作废抛错（不影响回退）", cause);
+    }
+  };
   registerSessionIpc(
     sessions,
     (id) => {
       agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档的尾账也丢
       browserSandbox.closeSessionTab(id);
+      intentIngest.forget(id);
     },
     agentHost,
     carryovers,
     providers,
     (path) => browserSandbox.openLocalFile(path),
+    intentOnReverted,
   );
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
@@ -555,6 +608,9 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
+  // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
+  // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型（摘抄也是素材）
+  registerFocusIpc(workspaces, sessions, providers, settings, agentHost, excerpts);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
@@ -577,6 +633,7 @@ void app.whenReady().then(async () => {
     skills,
     mcp,
     settings,
+    intentIngest,
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
@@ -595,6 +652,25 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
+
+  /*
+   * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包好的 Windows 应用才接线
+   * （macOS 包未签名公证、装不上，界面说「暂不支持」），
+   * 启动 10s 后首查 + 每 4h 一次 + 设置页的手动检查；autoDownload=false，下载与安装都由
+   * 用户那一下触发。beforeInstall 注入 agentHost.dispose——安装程序要替换应用文件，
+   * agent utility 进程是同一个 electron.exe，压着文件会让 NSIS 静默安装失败；
+   * 下面的 before-quit 里还有同一条 dispose，重入幂等。
+   */
+  const updater = new Updater({
+    packaged: app.isPackaged,
+    platform: process.platform,
+    version: app.getVersion(),
+    beforeInstall: () => agentHost.dispose(),
+  });
+  // 「所有版本」展开体的最近版本列表：纯网络请求 + 内存缓存（10 分钟），
+  // 与更新器接不接线无关——dev 下也照常能用（见 main/updater/recent-releases.ts）
+  registerUpdaterIpc(updater, createRecentReleases());
+  updater.start();
 
   app.on("before-quit", () => {
     appTray?.beginQuit();

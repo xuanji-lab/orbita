@@ -7,6 +7,7 @@ import {
   clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
+  effectiveIntentSettings,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
@@ -119,21 +120,21 @@ describe("clampRightPanelWidth：区间是 pane 的 1/3–2/3（P = chat 主区 
   });
 
   it("pane 小到 P/3 落在地板以下时地板接管（上限仍按 2P/3）", () => {
-    // P = 540：P/3 = 180 < 200 → 下界 200；上界 2P/3 = 360
-    deepStrictEqual(clampRightPanelWidth(100, 540), 200);
-    deepStrictEqual(clampRightPanelWidth(320, 540), 320);
-    deepStrictEqual(clampRightPanelWidth(500, 540), 360);
+    // P = 900：P/3 = 300 > 260；P = 780：P/3 = 260 = 地板 → 下界 260；上界 2P/3 = 520
+    deepStrictEqual(clampRightPanelWidth(100, 780), 260);
+    deepStrictEqual(clampRightPanelWidth(320, 780), 320);
+    deepStrictEqual(clampRightPanelWidth(600, 780), 520);
   });
 
   it("地板压过上限的退化情况：返回地板，宁可挤 chat 也不把右栏收成一条线", () => {
-    // P = 270：上界 2P/3 = 180 < 地板 200
-    deepStrictEqual(clampRightPanelWidth(320, 270), 200);
-    deepStrictEqual(clampRightPanelWidth(100, 270), 200);
+    // P = 360：上界 2P/3 = 240 < 地板 260（2026-10-19 顶部工具栏方案 B v2：右栏最窄 260）
+    deepStrictEqual(clampRightPanelWidth(320, 360), 260);
+    deepStrictEqual(clampRightPanelWidth(100, 360), 260);
   });
 
   it("量不到 P（元素未挂载）时只保地板，不拿假的 P 去夹", () => {
     deepStrictEqual(clampRightPanelWidth(320, 0), 320);
-    deepStrictEqual(clampRightPanelWidth(100, 0), 200);
+    deepStrictEqual(clampRightPanelWidth(100, 0), 260);
     deepStrictEqual(clampRightPanelWidth(320, Number.NaN), 320);
   });
 
@@ -182,8 +183,9 @@ describe("parseSettings 的 rightPanelWidth", () => {
 
   // 右栏的上界依赖当前 pane 宽度（clampRightPanelWidth），存储层判不了：
   // 一个在 4K 屏上存下的 900 在笔记本上越界，但它不是坏值——夹取交给渲染层
-  it("只拦 <200 的坏值，大值留着交给渲染层夹", () => {
-    deepStrictEqual(parseSettings({ rightPanelWidth: 200 }).rightPanelWidth, 200);
+  it("只拦 < 地板（260，2026-10-19 顶部工具栏方案 B v2）的坏值，大值留着交给渲染层夹", () => {
+    deepStrictEqual(parseSettings({ rightPanelWidth: 260 }).rightPanelWidth, 260);
+    deepStrictEqual(parseSettings({ rightPanelWidth: 200 }).rightPanelWidth, undefined);
     deepStrictEqual(parseSettings({ rightPanelWidth: 411.4 }).rightPanelWidth, 411);
     deepStrictEqual(parseSettings({ rightPanelWidth: 150 }).rightPanelWidth, undefined);
     deepStrictEqual(parseSettings({ rightPanelWidth: 900 }).rightPanelWidth, 900);
@@ -633,5 +635,27 @@ describe("parseSettings 的 usagePet（星云钉日期 / 收起）", () => {
     deepStrictEqual(parseUsagePet({ hidden: false }), undefined);
     deepStrictEqual(parseUsagePet({ pinnedDate: "2026-10-09", hidden: false }), { pinnedDate: "2026-10-09" });
     deepStrictEqual(parseUsagePet([]), undefined);
+  });
+});
+
+describe("parseSettings 的 intent（实验功能 intent-system）", () => {
+  it("缺席 = undefined（effectiveIntentSettings 走全缺省）", () => {
+    deepStrictEqual(parseSettings({}).intent, undefined);
+  });
+
+  it("baseUrl 只认 http(s) 且去尾斜杠；channel / newSessionOn 只认真值", () => {
+    deepStrictEqual(
+      parseSettings({ intent: { baseUrl: "http://127.0.0.1:8723/", channel: "deepseek", newSessionOn: false } }).intent,
+      { baseUrl: "http://127.0.0.1:8723", channel: "deepseek", newSessionOn: false },
+    );
+    // 坏 baseUrl 丢掉；坏 channel 当没选过（回 proma 由 effectiveIntentSettings 兑现）
+    deepStrictEqual(parseSettings({ intent: { baseUrl: "ftp://x" } }).intent, undefined);
+    deepStrictEqual(parseSettings({ intent: { channel: "nonsense" } }).intent, undefined);
+  });
+
+  it("effectiveIntentSettings：缺省地址 127.0.0.1:8723、新会话默认开、渠道 proma", () => {
+    const effective = effectiveIntentSettings(undefined);
+    deepStrictEqual(effective, { baseUrl: "http://127.0.0.1:8723", newSessionOn: true, channel: "proma" });
+    deepStrictEqual(effectiveIntentSettings({ baseUrl: "http://localhost:9000//" }).baseUrl, "http://localhost:9000");
   });
 });

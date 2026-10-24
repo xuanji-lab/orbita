@@ -49,6 +49,14 @@ export interface FileEntry {
 export interface FileRootsRequest {
   sessionId: string | null;
   workspaceId: string | null;
+  /**
+   * 专注 / 浏览态的**只读预览根**：左栏正在看的工作区（专注中双击左栏文件树，
+   * 文件面板要能预览它——而面板的根跟着当前会话走，不一定包含这个工作区）。
+   * **主进程从 WorkspaceStore 按 id 解路径**，renderer 只传 id、从不传路径——
+   * 白名单的边界一寸不放宽：多出来的根 = 存储里真实存在的工作区目录本身。
+   * 与 workspaceId 相同时不重复出根。缺席 / 指到不存在的 id = 没有额外根。
+   */
+  extraWorkspaceId?: string | null;
 }
 
 /**
@@ -60,6 +68,12 @@ export interface FileListRequest {
   workspaceId: string | null;
   root: string;
   dir: string;
+  /**
+   * 同 FileRootsRequest.extraWorkspaceId：这次列目录 / 读文件 / 预览的额外预览根。
+   * 白名单在主进程按同一份 resolveFileRoots 现算（fs:list / fs:read / fs:read-pdf /
+   * fs:open 共用），带着它，落在该工作区内的路径才放行。
+   */
+  extraWorkspaceId?: string | null;
 }
 
 /** `fs:list` 的回执：目录在前、同类按名字（locale、大小写不敏感）排；`.` 开头的照列，面板自己决定显不显 */

@@ -161,6 +161,24 @@ export interface BrowserRegion {
 export type BrowserScrollDirection = "up" | "down" | "left" | "right";
 
 /**
+ * 控制台消息级别，从低到高。工具过滤用的是「这个级别及以上」——`level: "error"` 就是只看错误。
+ * 映射：CDP 的 `warning` → warn、`assert` → error、`verbose` → debug，其余非标准类型（table、
+ * group、count…）一律算 log。
+ */
+export type BrowserConsoleLevel = "debug" | "log" | "info" | "warn" | "error";
+
+/**
+ * 页面诊断（browser_console_messages / browser_network_requests）每个 tab 每个域保留的
+ * 最近条数上限，同时也是工具 `limit` 参数的上限。
+ *
+ * 200 条：一次页面加载（含重定向与几个失败 XHR）通常在几十条内，200 足够复盘；再大就只是
+ * 让一次工具结果白占模型上下文。
+ */
+export const BROWSER_DIAGNOSTICS_BUFFER_LIMIT = 200;
+/** 工具 `limit` 的默认值：默认给最近 100 条，要更多由模型显式抬到上限 */
+export const BROWSER_DIAGNOSTICS_DEFAULT_LIMIT = 100;
+
+/**
  * agent 的浏览器工具请求（agent 进程 → 主进程，作用于该会话自己的 agent tab）。
  * 读取类、滚动与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）；
  * 点击、输入、按键会改变页面状态（提交表单、下单、发消息），照写操作过闸。
@@ -172,7 +190,28 @@ export type BrowserToolRequest =
   /** 在 agent tab 的历史里后退 / 前进一步（browser_navigate 的 url 传 back / forward） */
   | { action: "history"; direction: "back" | "forward" }
   | { action: "observe"; maxNodes?: number; tab?: BrowserReadTarget }
-  | { action: "extract"; offset?: number; maxChars?: number; links?: boolean; tab?: BrowserReadTarget }
+  /**
+   * format：markdown 保留结构（标题层级、有序 / 无序列表、链接 `[文字](URL)`、GFM 管道表、强调、代码块），
+   * 默认 text（`document.body.innerText`，行为不变）。markdown 由 DOM 树生成，**CSS 隐藏的内容**
+   * （折叠菜单、弹窗、移动端重复导航）可能一并进来——取舍是「结构完整」优先，工具描述里已向模型说明。
+   * ref：`browser_observe` 大纲里的元素引用，只提取那个元素的子树（页面里只要一块时用），不传就整页。
+   * 两者都照旧对超长内容走 offset / maxChars 分段。
+   */
+  | {
+      action: "extract";
+      offset?: number;
+      maxChars?: number;
+      links?: boolean;
+      format?: "text" | "markdown";
+      ref?: string;
+      tab?: BrowserReadTarget;
+    }
+  /**
+   * 等页面上某个东西出现：CSS 选择器存在（visible 时还要求可见），或正文含某段文字；两个都给了
+   * **任一命中即返回**。到点没出现**不是工具错误**——正常返回「没出现」，让模型自己决定下一步
+   * （报错会让它以为工具坏了）。timeoutMs 的默认与上限由 shared/browser-wait.ts 夹取。
+   */
+  | { action: "wait"; selector?: string; text?: string; visible?: boolean; timeoutMs?: number; tab?: BrowserReadTarget }
   /**
    * save：另存一份原图进会话工作台 screenshots/，结果给路径（默认不存，截图只给模型看）。
    * region：只拍整页截图里的这一块、放大给模型看（小字、图表细节）；放大图的像素不是点击坐标
@@ -190,6 +229,23 @@ export type BrowserToolRequest =
   | { action: "scroll"; direction: BrowserScrollDirection; amount?: number; target?: BrowserTarget }
   /** 列出 agent 看得到的 tab：「你的」tab 与本会话的 agent tab（别的会话的 tab 不列） */
   | { action: "tabs" }
+  /**
+   * 控制台消息（CDP 的 Runtime + Log 域）：页面自己的 console 输出、未捕获异常，以及
+   * 浏览器级错误（请求失败、CORS 拒绝——这类只在 Log 域里）。
+   *
+   * **只读 agent 自己的 tab**：「你的」tab 不采集（`tab` 参数在这里没有意义，故不设）。
+   * `level` 是**最低级别**（含以上），`limit` 取最近若干条。采集在工具第一次被调用时才打开。
+   */
+  | { action: "console"; level?: BrowserConsoleLevel; limit?: number }
+  /**
+   * 网络请求（CDP 的 Network 域）：方法、URL、状态码、MIME 类型，以及加载失败原因
+   * （net::ERR_FAILED、CORS…）。过滤同 console：只读 agent 自己的 tab。
+   *
+   * `url` 是不区分大小写的子串匹配；`statusMin` / `statusMax` 是闭区间状态码范围
+   * （如只要 4xx/5xx 就传 statusMin: 400）。**加载失败的条目没有状态码**：一旦给了
+   * 状态码范围，它们不再匹配（想看失败原因就按 url 过滤或不给状态范围）。
+   */
+  | { action: "network"; url?: string; statusMin?: number; statusMax?: number; limit?: number }
   /** request_user_action：把 tab 交给用户，等用户交还（或取消、或这一轮被停掉） */
   | { action: "handoff"; toolCallId: string; reason: string };
 

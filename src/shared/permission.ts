@@ -101,17 +101,25 @@ export function isChannelTool(toolName: string): boolean {
  * 浏览器读的是外部页面，不是用户的盘，单独立桶。
  *
  * browser_scroll 也在这里：滚动只是往下读，不提交任何东西——翻长页要一屏屏看，每屏问一次不值。
+ * browser_wait_for 同理：等页面自己长出来，不发请求、不改页面。
  * 点击、输入、按键（browser_click / browser_type / browser_press）**不在这里**：它们能提交表单、
  * 下单、发消息，走默认的写操作闸门——plan 拒、manual 问、skip 放。不为它们另立名单：
  * decidePermission 对不认识的工具本来就按有副作用处理。
+ *
+ * browser_console_messages / browser_network_requests 同属这里：页面加载成功但内容空白时，
+ * 它们是模型唯一能自己查清原因的只读证据（JS 报错、XHR 401/403、CORS 被拒）；查完要不要重试
+ * 仍由模型决定，工具本身不提交任何东西。
  */
 export const BROWSER_READ_TOOLS = [
   "browser_navigate",
   "browser_observe",
   "browser_extract",
+  "browser_wait_for",
   "browser_screenshot",
   "browser_tabs",
   "browser_scroll",
+  "browser_console_messages",
+  "browser_network_requests",
 ] as const;
 
 export function isBrowserReadTool(toolName: string): boolean {
@@ -139,7 +147,7 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (mode === "skip") return { behavior: "allow" };
   // 通道三件套：三档一律放行，理由见 CHANNEL_TOOLS 的注释
   if (isChannelTool(toolName)) return { behavior: "allow" };
-  // 浏览器只读四件与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
+  // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问

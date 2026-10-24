@@ -1,0 +1,316 @@
+/*
+ * 「软件更新」分组（UpdateCard.tsx）的私有样式。
+ *
+ * 状态行不新造卡片语言：它就是一行 .set-row——名字在左，状态用「图标 + 文字」讲，
+ * 右 hem 只放当前唯一的主操作。这些值只服务这一个功能，所以住在功能自己的 css 里，
+ * 不进 tokens/（设计系统 *Implementation rules*）。
+ * 状态化样式（hover / 展开 / 出错色）一律写在这里，组件不碰 outline 与 hover 态。
+ */
+
+/* 机器事实：版本号、MB 数——等宽字体，数字跳动时不左右晃 */
+.upd-mono {
+  font-family: var(--font-family-business);
+}
+
+/* 状态行：图标 + 一整块文字（里头嵌的机器事实也在那块文字里）。次级灰是常态，出错才转红 */
+.upd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+/* 图标是自己一项、不被文字挤缩；文字整体是另一项，按普通行内排版——
+   字数不同、窗口窄了要折行，都不该由 flex 一项一项去猜间距（见 UpdateCard.tsx 的注释） */
+.upd-status .orbita-icon {
+  flex: 0 0 auto;
+}
+
+.upd-status[data-tone="error"] {
+  color: var(--color-danger);
+}
+
+/* 下载进度：4px 细轨 + accent 填充——accent 在这里仍是「进行中的主操作」这唯一职责 */
+.upd-progress {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-hover);
+  overflow: hidden;
+}
+
+.upd-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+/* 更新说明：默认折叠，点开是 muted 底的一块（不是新卡）——发布正文按行拆成条目，
+   左侧一条独立的图标轨道（原型版式 B，2026-10-18 用户选定） */
+.upd-notes {
+  grid-column: 1 / -1;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+/* 图标列是一条独立轨道（grid 的第一列），图标垂直居中于对应条目；
+   条目之间的细分隔线画在行间空隙正中，最后一条不画 */
+.upd-notes-rail {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-2);
+}
+
+/* 图标只当条目符号与示意：一律 currentColor + tertiary，不染色、不进 accent。
+   没有图标（或名字没登记）的条目也占着这一格，正文列才不会参差不齐 */
+.upd-note-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  padding: 0 3px;
+  color: var(--color-text-tertiary);
+}
+
+.upd-notes-rail .upd-note-icon:not(:nth-last-child(-n + 2))::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 4px);
+  width: 10px;
+  height: 1px;
+  transform: translateX(-50%);
+  background: var(--color-border-subtle);
+}
+
+/* 安静的文字键（行 2 的「更新内容」展开器、展开体底部的两个 GitHub 外链）：
+   文字形状，不是按钮形状——hover 只提亮字色。三处形状相同，共用一个类 */
+.upd-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+/* 链接版（<a>）：发丝线只留给 hover，静止态与展开器同脸 */
+a.upd-link {
+  text-decoration: none;
+}
+
+.upd-link:hover {
+  color: var(--color-text-primary);
+}
+
+/* 行 2 的「更新内容」展开器也是 .upd-link：展开后箭头翻过来，方向由 aria-expanded 决定 */
+.upd-link[aria-expanded="true"] .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+  transform: rotate(180deg);
+}
+
+/* 「当前版本」行尾：版本号（mono）+ 展开三角，中间留 8px（var(--space-2)）。
+   之前不留 gap、三角盒只有 12px，而图标是 14px——图标溢出盒子压到版本号上，
+   「0.1.15」和三角贴在一起（2026-10-18 用户验收） */
+.upd-current {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+/* 行即开关（「当前版本」「历史版本」）：整行一个按钮，展开体在按钮外面。
+   按钮自己就是 .set-row 那套两列网格的同一份模板，右簇几何不变；hover 走 .quiet-control
+   的配方，内边距拿回来当 hover 底的外扩（左右各 8px，与定稿小样同）、负外边距把内容框
+   钉回原位（同 .login-site-row 那类「在容器留白里铺底」的画法）。行名要 primary，
+   所以把 quiet-control 的次级字色覆盖回来 */
+.upd-disclosure > .upd-row-toggle {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: var(--space-4);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
+  padding: var(--space-2) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+}
+
+/* 展开体：按钮外的一格，撑满整行（说明、版本列表、底部外链都在这一格） */
+.upd-disclosure-body {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 收起时用 hidden（不是不渲染外层）：面板 id 常驻，aria-controls 才总有着落。
+   类选择器的优先级高过 UA 的 [hidden]，要自己把它收起来 */
+.upd-disclosure-body[hidden] {
+  display: none;
+}
+
+/* 行尾的展开三角（主行与历史版本行两处同形）：**不是按钮**——整行才是，
+   它只是这一行的开合指示。图标 14 / stroke 2 按定稿小样；盒宽 var(--space-4)
+   要装得下 14px 的图标（原先 12px 的盒子让图标溢出、贴上左边的文字） */
+.upd-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-4);
+  height: var(--space-5);
+  color: var(--color-text-tertiary);
+}
+
+/* 展开后箭头翻过来，过渡与仓里其它 chevron 同一档（--duration-fast） */
+.upd-caret .orbita-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.upd-row-toggle[aria-expanded="true"] .upd-caret .orbita-icon,
+.upd-recent-row[aria-expanded="true"] .upd-caret .orbita-icon {
+  transform: rotate(180deg);
+}
+
+/* 展开体底部的外链出口（「在 GitHub 上查看本版 / 查看全部版本」）：与展开的内容同宽一行，
+   靠左；它是这一块的尾巴，不占行尾血线 */
+.upd-expand-footer {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+/* 「历史版本」展开的最近版本列表：一行一个版本，**每一行自己也是一条 disclosure**
+   （与主行同一洗底 hover、同一 -8px 探出、同一三角翻转，只是字号与行高压一档） */
+.upd-recent {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+}
+
+.upd-recent-quiet {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+/* 行本身（button 与退化态的 div 共用一份网格：版本 | 标题 | 日期 | 三角） */
+.upd-recent-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto var(--space-4);
+  align-items: baseline;
+  column-gap: var(--space-3);
+  margin: 0 calc(-1 * var(--space-2));
+  padding: var(--space-2) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  /* 显式主色：button 的 UA 默认色是 ButtonText（黑），暗主题下不写就是黑字 */
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.upd-recent-row:hover {
+  background: var(--color-bg-hover);
+}
+
+/* 这一版没有说明：整行不可点、无 hover 底，只留一个与三角同宽的空格保住日期右缘 */
+.upd-recent-row--flat {
+  cursor: default;
+}
+
+.upd-recent-row--flat:hover {
+  background: none;
+}
+
+.upd-recent-void {
+  display: block;
+  width: var(--space-3);
+}
+
+/* 三角列与其它 cell 不同基线（否则会贴在字上） */
+.upd-recent-row > .upd-caret {
+  align-self: center;
+}
+
+.upd-recent-ver {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+
+/* 标题可能很长：一行截断，不把日期顶走；与版本号相同时留空（判同见 shared/updater.ts） */
+.upd-recent-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.upd-recent-date {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 版本行的展开体：比主展开体再退一层——去掉主展开体的洗底与缩进，只留图标列
+   + 10px 缩进（定稿小样），底下补一根发丝线把这段说明与下一行分开 */
+.upd-recent-group {
+  display: grid;
+}
+
+.upd-recent-panel {
+  display: grid;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 0 0 var(--space-3);
+}
+
+.upd-recent-panel[hidden] {
+  display: none;
+}
+
+/* 嵌套的说明块：与主说明同一版式，只是不再铺 muted 底、向左缩 10px（定稿小样） */
+.upd-notes--nested {
+  background: none;
+  padding: 0 0 0 10px;
+}
+
+/* 主 / 次操作的尺寸：颜色与状态照 .btn-accent / .quiet-control 两个配方走，
+   这里只补「带图标的中等行内按钮」这一处局部尺寸，不另立配方 */
+.upd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+}

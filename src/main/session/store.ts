@@ -34,12 +34,15 @@ import {
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
+  SESSION_PAGE_RECORDS,
   sortSessions,
   UNASSIGNED_PROVIDER_ID,
   type SessionCompletion,
   type SessionDetail,
   type SessionMeta,
+  type SessionOlderPage,
   type SessionRecord,
+  type SessionWindowDetail,
 } from "../../shared/session.ts";
 import type { ChannelStore } from "../channel/store.ts";
 import { SnapshotStore } from "./snapshots.ts";
@@ -664,6 +667,11 @@ export class SessionStore {
     return this.update(id, { unread });
   }
 
+  /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮开轮现读 */
+  setIntentEnabled(id: string, enabled: boolean): Promise<void> {
+    return this.update(id, { intentEnabled: enabled });
+  }
+
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });
@@ -819,6 +827,54 @@ export class SessionStore {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
     return { meta, transcript: await this.readLog(id) };
+  }
+
+  /**
+   * 打开一条会话的**尾窗**（IPC 的 session:load 走这条）。
+   *
+   * **主进程仍然全量读盘 + `foldReverts`**（实测 25MB / 2948 条的会话读盘解析折叠
+   * 约 120ms，可接受）——瓶颈是 IPC 传输量与 renderer 的渲染量，那两处才是分页的对象。
+   * 折叠语义一个字不动：切片发生在**生效视图**上（见 `readLog`），回退界碑之后的记录
+   * 本来就不在这条链上。
+   *
+   * 窗口起点对齐到轮边界（`alignToTurnStart`）：从一轮的中间切会把半轮的工具行留在
+   * 窗口开头，renderer 的分组里它们是无主的（用户气泡不在）。
+   *
+   * 要**全量**的消费者照旧走 `load`：导出、回退、intent 归档、read_task。
+   */
+  async loadWindow(id: string, limit: number = SESSION_PAGE_RECORDS): Promise<SessionWindowDetail | null> {
+    const meta = await this.readMeta(id);
+    if (meta === null) return null;
+    const effective = await this.readLog(id);
+    const start = alignToTurnStart(effective, Math.max(0, effective.length - pageRecords(limit)));
+    return {
+      meta,
+      transcript: effective.slice(start),
+      window: { total: effective.length, hasMore: start > 0 },
+    };
+  }
+
+  /**
+   * 再往前一页（renderer 滚动触顶时调）：返回生效视图里 `before` 那条记录之前的一段。
+   *
+   * `before` 是**已加载窗口的第一条记录的 id**（renderer 手里那个），按它在生效视图里
+   * 定位。排不进视图（会话刚被回退 / 删除，窗口已经不对应盘上的世界）就回空页 +
+   * hasMore=false——宁可不给，也不按旧下标切一段可能是别人的历史回去。
+   * 起点同样对齐到轮边界；hasMore 按**对齐后**的起点算（对齐吃掉的那几条下一页还会取到）。
+   */
+  async loadOlder(
+    id: string,
+    before: string,
+    limit: number = SESSION_PAGE_RECORDS,
+  ): Promise<SessionOlderPage> {
+    const effective = await this.readLog(id);
+    const end = effective.findIndex((record) => record.id === before);
+    if (end < 0) {
+      console.error(`[session] 分页锚点在生效视图里找不到（会话可能刚被回退）：${id} / ${before}`);
+      return { records: [], hasMore: false };
+    }
+    const start = alignToTurnStart(effective, Math.max(0, end - pageRecords(limit)));
+    return { records: effective.slice(start, end), hasMore: start > 0 };
   }
 
   /**
@@ -998,6 +1054,45 @@ export class SessionStore {
     }
     return effective;
   }
+}
+
+/** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
+const PAGE_RECORDS_MAX = 2000;
+
+/** 一页的条数：坏值 / 缺席退默认，再夹在 [1, PAGE_RECORDS_MAX] */
+function pageRecords(limit: number): number {
+  if (!Number.isFinite(limit)) return SESSION_PAGE_RECORDS;
+  return Math.min(Math.max(1, Math.floor(limit)), PAGE_RECORDS_MAX);
+}
+
+/**
+ * 轮边界：窗口只能从一条 user 记录（或同级的通道标记）开始。
+ *
+ * `channel-mark` 计入（理由同 `branchRoles`）：它顶替的正是 pi 本子里的一条 user
+ * 消息，renderer 的分组 / 折叠也把它当边界——不从它切，工具栏就同样无主。
+ */
+function isTurnStart(record: SessionRecord | undefined): boolean {
+  return record !== undefined && (record.role === "user" || record.role === "channel-mark");
+}
+
+/**
+ * 把窗口起点对齐到轮边界（源侧分页的切片点，`loadWindow` / `loadOlder` 共用）。
+ *
+ * 从 start 往后找第一条轮边界：半轮的工具行不能留在窗口开头（renderer 的分组里
+ * 它们归到上一个不在窗口里的 user 名下）。往后找不到（窗口里一条 user 都没有，
+ * 例如最后 600 条都在同一轮里）就往回找最近的那条——宁可窗口比一页稍大，
+ * 也不给一段无主的历史。两边都没有（整条会话一条 user 记录也没有）只能按 start 切。
+ */
+function alignToTurnStart(records: readonly SessionRecord[], start: number): number {
+  if (start <= 0) return 0;
+  if (isTurnStart(records[start])) return start;
+  for (let i = start; i < records.length; i += 1) {
+    if (isTurnStart(records[i])) return i;
+  }
+  for (let i = start - 1; i >= 0; i -= 1) {
+    if (isTurnStart(records[i])) return i;
+  }
+  return start;
 }
 
 /** 从记录里推导标题：第一条用户消息的第一行。改名清空时退回它。 */

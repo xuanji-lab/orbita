@@ -21,27 +21,33 @@ import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
-import { InfoTip } from "./InfoTip";
 import { MigrationView } from "./MigrationView";
+import { SettingGroup, SettingRow } from "./SettingRow";
+import { UpdateCard } from "./UpdateCard";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
+  DEFAULT_INTENT_BASE_URL,
+  effectiveIntentSettings,
   type AppSettings,
   type CompactionSetting,
   type ExperimentalFeatureId,
+  type IntentSettings,
   type SettingsPatch,
 } from "@shared/settings";
+import type { IntentHealth } from "@shared/intent-lab";
+import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
 import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
-import { defaultThinkingLevel } from "@shared/model-defaults";
-import { modelThinkingLevels } from "../chat/thinking-choice.ts";
+import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
+import { modelPreferenceById } from "./providers-view-model.ts";
 import { useT } from "../../locale.ts";
 import { playCompletionChime } from "../notify/chime.ts";
 
@@ -96,27 +102,9 @@ export function SettingsView(props: {
         height: "100%",
         minHeight: 0,
         display: "grid",
-        gridTemplateRows: "auto minmax(0,1fr)",
+        gridTemplateRows: "minmax(0,1fr)",
       }}
     >
-      {/* 与聊天页同一个页头形状——同一张卡，页头就该长一样，拖拽区也一样 */}
-      <header
-        className="titlebar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          minWidth: 0,
-          // 页头 48（含 1px 底线）：与右栏标题行（.panel-head）同高，两边底线连成一条
-          height: 48,
-          padding: "0 18px",
-          boxSizing: "border-box",
-          borderBottom: "1px solid var(--color-border-subtle)",
-        }}
-      >
-        <strong style={{ fontSize: "var(--font-size-title)", fontWeight: "var(--weight-bold)" }}>
-          {t.settings.tabs[active.id]}
-        </strong>
-      </header>
 
       {migrationVisited ? (
         // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；
@@ -293,7 +281,12 @@ function General(props: {
     subSessionModel === undefined
       ? null
       : (() => {
-          const supported = modelThinkingLevels(subSessionModel.modelId, catalog);
+          const supported = modelThinkingLevels(
+            subSessionModel.modelId,
+            catalog,
+            null,
+            modelPreferenceById(usable, subSessionModel.providerId),
+          );
           return {
             modelId: subSessionModel.modelId,
             supported,
@@ -524,49 +517,8 @@ function General(props: {
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
       </SettingGroup>
-    </div>
-  );
-}
-
-/**
- * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，mono、micro、大写加字距，
- * Migration 同用）。最后一组的最后一行不画底线（`.set-group:last-child` 那条 CSS）。
- */
-function SettingGroup(props: { label: string; children: React.ReactNode }) {
-  return (
-    <section className="set-group">
-      <span className="section-label">{props.label}</span>
-      {props.children}
-    </section>
-  );
-}
-
-/**
- * 一条设置：左边只有名字（说明收进旁边的 info 悬停），右边是控件与它的效果预览。
- * **直接坐在内容面上，靠发丝线分隔，不套第二张卡**——玻璃已经分了三层，再加一层只会把层级讲糊。
- *
- * `note` 是名字下方可选的一行状态（Data directory 的 Reveal 失败原因）——它不是说明，
- * 是这一次操作的结果，所以常驻、不进悬停。
- */
-function SettingRow(props: {
-  name: string;
-  info?: React.ReactNode;
-  note?: React.ReactNode;
-  /** 挂在整行上（迁移页三步清单跳过来时滚动 / 高亮 / 聚焦用） */
-  rowRef?: React.Ref<HTMLDivElement>;
-  children: React.ReactNode;
-}) {
-  const t = useT();
-  return (
-    <div className="set-row" ref={props.rowRef}>
-      <span className="set-row-head">
-        <span className="set-row-name">
-          {props.name}
-          {props.info !== undefined && <InfoTip label={t.settings.aboutSetting(props.name)}>{props.info}</InfoTip>}
-        </span>
-        {props.note}
-      </span>
-      <div className="set-row-ctl">{props.children}</div>
+      {/* 「软件更新」殿后（2026-10-18 原型定稿）：关于这份安装的事实性信息，看完其余设置才关心它 */}
+      <UpdateCard />
     </div>
   );
 }
@@ -588,9 +540,12 @@ function ExperimentalSettings(props: {
   const language = effectiveLanguage(props.settings.theme, props.settings.language);
   /** 展开哪一张卡的日志（一次至多一张）：默认都收着，只看最近一条 */
   const [openId, setOpenId] = useState<ExperimentalFeatureId | null>(null);
+  // 意图系统（实验）：开关打开才出现设置区（地址 / 渠道 / 连接状态 / 新任务默认）
+  const intentOn = props.settings.experimentalFeatures?.["intent-system"] === true;
   return (
     <div className="set-page">
       <p className="exp-lead">{t.settings.experimentalLead}</p>
+      {intentOn && <IntentSettingsSection settings={props.settings} onChange={props.onChange} />}
       <div className="pv-cards large exp-cards">
         {EXPERIMENTAL_FEATURES.map((feature) => (
           <ExperimentalFeatureCard
@@ -614,6 +569,116 @@ function ExperimentalSettings(props: {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * 意图系统的设置区（实验功能 intent-system，开关打开才渲染）：地址 / 连接状态 /
+ * 渠道二选一 / 新任务默认。连接状态是探活结果（不落盘）：挂载与改地址时各探一次。
+ */
+function IntentSettingsSection(props: {
+  settings: AppSettings;
+  onChange: (patch: SettingsPatch) => void;
+}) {
+  const t = useT();
+  const effective = effectiveIntentSettings(props.settings.intent);
+  const [health, setHealth] = useState<"checking" | IntentHealth | null>("checking");
+  useEffect(() => {
+    setHealth("checking");
+    let cancelled = false;
+    void api.intent.health().then((result) => {
+      if (!cancelled) setHealth(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // 改地址后重探：baseUrl 在依赖里（effective 按它派生）
+  }, [effective.baseUrl]);
+  const patchIntent = (patch: Partial<IntentSettings>): void =>
+    props.onChange({ intent: { ...props.settings.intent, ...patch } });
+  return (
+    <section className="set-group">
+      <h3 className="set-group-title">{t.settings.intentTitle}</h3>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentBaseUrl}</span>
+          <span className="set-row-hint">{t.settings.intentBaseUrlHint}</span>
+        </span>
+        <div className="set-row-ctl">
+          <input
+            className="text-field voice-field"
+            style={{ width: 240 }}
+            value={props.settings.intent?.baseUrl ?? ""}
+            placeholder={DEFAULT_INTENT_BASE_URL}
+            spellCheck={false}
+            onChange={(event) => patchIntent({ baseUrl: event.target.value.trim() })}
+          />
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentConnection}</span>
+        </span>
+        <div className="set-row-ctl">
+          {health === "checking" ? (
+            <span className="set-row-hint">{t.settings.intentChecking}</span>
+          ) : health === null ? (
+            <span className="set-row-hint" style={{ color: "var(--color-danger)" }}>
+              {t.settings.intentOffline}
+            </span>
+          ) : (
+            <span className="set-row-hint">
+              {t.settings.intentOnline(health.main.model, health.qaImported, health.qaIngested)}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentChannel}</span>
+          <span className="set-row-hint">{t.settings.intentChannelHint}</span>
+          {/* 渠道在服务端不可用就就地说（2026-10-15 联调）：/recall 会 400，提示里带上修法 */}
+          {health !== "checking" &&
+            health !== null &&
+            intentChannelUnavailable(effective.channel, health.s3Presets) === true && (
+              <span className="set-row-hint">{t.settings.intentChannelMissing(effective.channel)}</span>
+            )}
+        </span>
+        <div className="set-row-ctl">
+          <span className="set-chips" role="group" aria-label={t.settings.intentChannel}>
+            <Chip
+              active={effective.channel === "proma"}
+              onClick={() => patchIntent({ channel: "proma" })}
+              title={t.settings.intentChannelProma}
+            >
+              {t.settings.intentChannelProma}
+            </Chip>
+            <Chip
+              active={effective.channel === "deepseek"}
+              onClick={() => patchIntent({ channel: "deepseek" })}
+              title={t.settings.intentChannelDeepseek}
+            >
+              {t.settings.intentChannelDeepseek}
+            </Chip>
+          </span>
+        </div>
+      </div>
+      <div className="set-row">
+        <span className="set-row-head">
+          <span className="set-row-name">{t.settings.intentNewSessionOn}</span>
+        </span>
+        <div className="set-row-ctl">
+          <span className="set-chips" role="group" aria-label={t.settings.intentNewSessionOn}>
+            <Chip active={effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: true })}>
+              {t.common.on}
+            </Chip>
+            <Chip active={!effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: false })}>
+              {t.common.off}
+            </Chip>
+          </span>
+        </div>
+      </div>
+    </section>
   );
 }
 

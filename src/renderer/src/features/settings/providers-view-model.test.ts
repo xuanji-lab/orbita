@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
@@ -16,11 +17,11 @@ import {
   parseRateInput,
   parseTokenInput,
   providerCards,
-  railShortNames,
+  railVendorCell,
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
-import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
+import { KNOWN_MODELS } from "../../../../shared/known-models.ts";
 import { en } from "../../messages-en.ts";
 
 describe("parseTokenInput", () => {
@@ -249,10 +250,8 @@ describe("reorderIds —— 拖拽排序：落到目标行的位置，其余行�
 
 describe("modelIdIssue —— 手填模型 id 的形状", () => {
   test("内置目录的每个模型 id 都必须过——校验不能拒绝自家目录的格式", () => {
-    for (const provider of KNOWN_PROVIDERS) {
-      for (const id of Object.keys(provider.modelParams ?? {})) {
-        assert.equal(modelIdIssue(id, en), null, `${provider.id}/${id} 被拦`);
-      }
+    for (const id of Object.keys(KNOWN_MODELS)) {
+      assert.equal(modelIdIssue(id, en), null, `${id} 被拦`);
     }
   });
 
@@ -311,7 +310,7 @@ describe("connectionDirty", () => {
   });
 });
 
-describe("railShortNames —— 模型卡片左栏的短名", () => {
+describe("railVendorCell —— 模型卡片左栏的厂商格：一律图标", () => {
   const dto = (id: string, displayName: string, extra: Partial<ProviderDto> = {}): ProviderDto => ({
     id,
     displayName,
@@ -321,25 +320,69 @@ describe("railShortNames —— 模型卡片左栏的短名", () => {
     ...extra,
   });
 
-  test("认得的厂商用 short，与实例名无关（存量旧名、默认名带后缀都不影响）", () => {
-    const names = railShortNames([
-      dto("zhipu", "智谱（按量）"),
-      dto("zhipu-coding", "智谱 Coding Plan", { endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" } }),
-      dto("deepseek", "DeepSeek"),
-    ]);
-    assert.equal(names.get("zhipu"), "zhipu");
-    assert.equal(names.get("zhipu-coding"), "zhipu-cp");
-    assert.equal(names.get("deepseek"), "DS");
+  test("目录认得的厂商 → 自己的 kindId（与实例名无关）", () => {
+    assert.deepEqual(railVendorCell(dto("deepseek", "DeepSeek")), { kindId: "deepseek", label: "DeepSeek" });
+    assert.deepEqual(
+      railVendorCell(
+        dto("zhipu-coding", "智谱 Coding Plan", {
+          endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
+        }),
+      ),
+      { kindId: "zhipu-coding", label: "智谱 Coding Plan" },
+    );
   });
 
-  test("同一家多个实例：第二个起加序号，按传入顺序", () => {
-    const names = railShortNames([dto("deepseek", "DeepSeek"), dto("deepseek-2", "DeepSeek 2")]);
-    assert.equal(names.get("deepseek"), "DS");
-    assert.equal(names.get("deepseek-2"), "DS 2");
+  test("自建兼容网关 → 协议的标（用户 2026-10-19：叫 proma 也要 openai 的 logo）", () => {
+    assert.deepEqual(railVendorCell(dto("my-gateway", "proma", { kind: "openai-compatible" })), {
+      kindId: "openai-compatible",
+      label: "proma",
+    });
+    assert.deepEqual(
+      railVendorCell(
+        dto("gw", "Anthropic 兼容", {
+          kind: "anthropic-compatible",
+          endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" },
+        }),
+      ),
+      { kindId: "anthropic-compatible", label: "Anthropic 兼容" },
+    );
   });
 
-  test("兼容入口用实例名：用户自建网关，短码说不出是哪个", () => {
-    const names = railShortNames([dto("my-gateway", "公司网关", { kind: "openai-compatible" })]);
-    assert.equal(names.get("my-gateway"), "公司网关");
+  test("没有 kind、id 也认不出：按协议落兼容入口，仍是协议的标", () => {
+    assert.deepEqual(
+      railVendorCell(
+        dto("my-gateway", "公司网关", { endpoint: { baseUrl: "https://example.com", api: "anthropic-messages" } }),
+      ),
+      { kindId: "anthropic-compatible", label: "公司网关" },
+    );
+  });
+
+  test("Claude 官方 OAuth → kindId claude（VendorLogo 给它橙色 Claude 标，与 Anthropic 兼容区分）", () => {
+    assert.deepEqual(
+      railVendorCell(
+        dto("claude", "Claude", { endpoint: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages" } }),
+      ),
+      { kindId: "claude", label: "Claude" },
+    );
+  });
+
+  test("同一家两个实例：同 kindId、label 各自的实例名（悬停 / 读屏靠它区分）", () => {
+    assert.deepEqual(railVendorCell(dto("deepseek-2", "DeepSeek 2")), { kindId: "deepseek", label: "DeepSeek 2" });
+  });
+});
+
+describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用一枚", () => {
+  const src = readFileSync(new URL("./VendorLogo.tsx", import.meta.url), "utf8");
+  test("claude 映射到 claude.svg（橙色），anthropic-compatible 仍是 anthropic.svg", () => {
+    assert.match(src, /import claude from "[^"]*vendor-logos\/claude\.svg\?raw"/);
+    assert.match(src, /^\s*claude,\s*$/m);
+    assert.match(src, /"anthropic-compatible": anthropic,/);
+    assert.match(src, /"openai-compatible": openai,/);
+  });
+  test("claude.svg 是彩色标（自带 Claude 品牌橙），不是 currentColor 单色", () => {
+    const svg = readFileSync(new URL("../../../../../design-system/assets/vendor-logos/claude.svg", import.meta.url), "utf8");
+    // 断言「自带实色」而不写出色值（design-tokens 守卫禁 src 里出现裸 hex）
+    assert.match(svg, /fill="#[0-9a-f]{6}"/i);
+    assert.doesNotMatch(svg, /currentColor/);
   });
 });

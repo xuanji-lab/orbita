@@ -7,6 +7,8 @@ import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
+import { effectiveIntentSettings } from "@shared/settings";
+import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -21,7 +23,16 @@ import {
 import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
+import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
+import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
+import { SessionCapsule } from "./shell/SessionCapsule";
+import { FocusControl } from "./shell/focus/FocusControl.tsx";
+import { FocusSummaryCard } from "./shell/focus/FocusSummaryCard.tsx";
+import { focusSayOf } from "./shell/focus/focus-say.ts";
+import { useFocus } from "./shell/focus/use-focus.ts";
+import { Icon } from "./shell/Icon";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
+import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
@@ -31,14 +42,15 @@ import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
-import type { PdfJump } from "./features/files/PdfView";
+import type { CiteFocusRequest } from "./features/files/cite-focus.ts";
 import { CitationOpenContext } from "./features/chat/citation-context.ts";
 import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
+import type { ExcerptJump } from "./features/review/ExcerptsTab";
+import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
-import { Titlebar } from "./shell/Titlebar";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -160,6 +172,8 @@ export function App() {
 
   /** 右侧面板宽度（4-0 拖宽）：拖动中只改本地，松手才落 settings */
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
+  /** 右栏实际渲染宽（RightPanelSlot 夹过 1/3–2/3 后报上来）：工具栏右栏胶囊只认它 */
+  const [panelRenderedWidth, setPanelRenderedWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
@@ -170,7 +184,229 @@ export function App() {
     if (settings.sidebarWidth !== undefined) setSidebarWidth(settings.sidebarWidth);
   }, [settings.sidebarWidth]);
 
+  /**
+   * 侧栏折叠态（2026-10-18 起由 App 持有）：收起后没有左侧图标条，「窗口工具」组
+   * （侧栏开关 · 新任务）嵌在对话卡页头里（ChatView / SettingsView），与 Sidebar
+   * 共用同一份状态。断点自动收起（960 以下）也在这里；手动开合不持久化——窗口
+   * 宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
+   */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
+    const sync = () => setSidebarCollapsed(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
   const { session, engine } = useChatSession(providers, t);
+
+  // ── 专注模式（原型：focus-proto）──────────────────────────────
+  // 计时住在内存里（用户裁决：关掉重开 = 已结束），App 持有：工具栏左胶囊的
+  // FocusControl、左栏的文件视图与星云的气泡 / 卡片共用同一份状态。
+  const focus = useFocus();
+  /** 浏览态（不计时看一眼工作区文件）；专注开始时退出 */
+  const [wsBrowse, setWsBrowse] = useState<string | null>(null);
+  /** 外部发起的开浮层请求（浏览态的「以此开始专注」/卡片的「再专注一轮」）：token 递增，同源连点也重开 */
+  const focusPickerNonceRef = useRef(0);
+  const [focusPickerRequest, setFocusPickerRequest] = useState<{
+    workspaceId: string;
+    minutes?: number;
+    token: number;
+  } | null>(null);
+  /** 左栏（专注 / 浏览态）双击文件 → 右栏文件面板开预览标签（token 递增，与 reviewFocus 同款） */
+  const fileOpenNonceRef = useRef(0);
+  const [fileOpenRequest, setFileOpenRequest] = useState<{ path: string; token: number } | null>(null);
+  const openFocusFile = useCallback((absPath: string): void => {
+    fileOpenNonceRef.current += 1;
+    setFileOpenRequest({ path: absPath, token: fileOpenNonceRef.current });
+    setRightPanel("files");
+  }, []);
+  const openFocusPickerAt = useCallback((workspaceId: string, minutes?: number): void => {
+    focusPickerNonceRef.current += 1;
+    setFocusPickerRequest({ workspaceId, ...(minutes === undefined ? {} : { minutes }), token: focusPickerNonceRef.current });
+  }, []);
+  /** 星云卡片的一次关闭（「关闭（保持专注视图）」）：只藏卡不结束专注；每轮新开时重置 */
+  const [summaryCardClosed, setSummaryCardClosed] = useState(false);
+  /** 「正在整理」气泡的一次关闭（点了 x）：只藏气泡，到点的卡照样弹（focus-say 的口径） */
+  const [sayDismissed, setSayDismissed] = useState(false);
+  const startFocus = useCallback(
+    (workspaceId: string, minutes: number): void => {
+      setWsBrowse(null);
+      setSummaryCardClosed(false);
+      setSayDismissed(false);
+      focus.start(workspaceId, minutes);
+    },
+    [focus],
+  );
+  /** 左栏此刻的文件视图：专注中 = 所选工作区；否则看浏览态；都没有 = 会话列表 */
+  const focusFilesView =
+    focus.status.kind === "off"
+      ? wsBrowse === null
+        ? null
+        : { mode: "browse" as const, workspaceId: wsBrowse }
+      : { mode: "focus" as const, workspaceId: focus.status.run.workspaceId };
+  /**
+   * 左栏双击打开请求只属于当时那个专注 / 浏览工作区：模式结束或换工作区后作废。
+   *
+   * 请求是一次性的，但面板收下后 token 仍留在 App——面板关掉再打开（FilesPanel
+   * 重挂、consumed 的 ref 清空）会再消费一次；那时该工作区的根已经不在 tree.roots 里，
+   * 于是报一句「<文件> 不在这个面板能看到的文件夹里」（2026-10-22 验收 #259 时实测）。
+   * 同一个工作区内重开面板不受影响（workspaceId 没变）。
+   */
+  const focusFilesWorkspaceId = focusFilesView?.workspaceId ?? null;
+  useEffect(() => {
+    setFileOpenRequest(null);
+  }, [focusFilesWorkspaceId]);
+  /** 到点那一拍要响的事：提示音（设置可关）、窗口不在前台时发系统通知、收起的
+   * 侧栏展开（星云要在左下角说话——原型待定 10 的默认做法）。依赖只盯 kind：
+   * done 只发生一次，延长不会重响。 */
+  const focusRun = focus.status.kind === "off" ? null : focus.status.run;
+  useEffect(() => {
+    if (focus.status.kind !== "done" || focusRun === null) return;
+    if (settings.completionSound ?? true) playCompletionChime();
+    if (
+      isWindowInactive({
+        hasFocus: document.hasFocus(),
+        visibilityState: document.visibilityState,
+      })
+    ) {
+      const wsName =
+        session.workspaces.find((item) => item.id === focusRun.workspaceId)?.name ?? t.focus.deletedWorkspace;
+      void api.focus.notifyDone({
+        title: t.focus.notifyTitle,
+        body: t.focus.notifyBody(Math.round(focusRun.totalMs / 60_000), wsName),
+      });
+    }
+    setSidebarCollapsed(false);
+    // settle 那拍读到的闭包值就是真值（settings / session / t 都在本渲染里）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus.status.kind]);
+  const focusControl = (
+    <FocusControl
+      status={focus.status}
+      now={focus.now}
+      workspaces={session.workspaces}
+      defaultWorkspaceId={session.workspaceId}
+      preset={focus.lastPreset}
+      pickerRequest={focusPickerRequest}
+      sessionCountOf={(id) =>
+        rootSessions(session.sessions).filter((meta) => meta.workspaceId === id && !meta.archived).length
+      }
+      onStart={startFocus}
+      onExtend={focus.extend}
+      onEarlyEnd={focus.earlyEnd}
+      onEnd={focus.end}
+    />
+  );
+
+  // ── 星云要说的两句话与那张卡（原型状态 8 / 9；提前结束的问询也是气泡） ──
+  const focusWorkspaceName =
+    (focusRun !== null
+      ? session.workspaces.find((item) => item.id === focusRun.workspaceId)?.name
+      : undefined) ?? t.focus.deletedWorkspace;
+  /** 星云的「正在整理」气泡：起跑后**常驻**（用户验收：只在 running 挂着十秒就闪没了，
+   *  人看不到）——running 转圈、落定换一句诚实的话带关闭键，点 x 才消失；状态机在
+   *  focus-say.ts（纯函数）。ending 相位的问询是另一套，保持原样。 */
+  const sayView = focusSayOf(focus.status, focus.summary, sayDismissed);
+  const settledLine =
+    sayView.kind === "settled"
+      ? sayView.line === "ready"
+        ? t.focus.sayReady
+        : sayView.line === "failed"
+          ? t.focus.summaryFailed
+          : sayView.line === "no-model"
+            ? t.focus.summaryNoModel
+            : t.focus.summaryNoActivity
+      : null;
+  const focusSay =
+    sayView.kind === "running" ? (
+      <div className="usage-say usage-say-focus" role="status" data-edge="end">
+        <Icon name="loader-circle" size={12} spin />
+        <span className="orbita-breath">{t.focus.summarizing}</span>
+      </div>
+    ) : sayView.kind === "settled" ? (
+      <div className="usage-say usage-say-status" role="status" data-edge="end">
+        {sayView.line === "ready" ? <Icon name="check" size={12} strokeWidth={2.2} /> : null}
+        <span>{settledLine}</span>
+        <button
+          type="button"
+          className="usage-say-x"
+          title={t.focus.sayDismiss}
+          aria-label={t.focus.sayDismiss}
+          onClick={() => setSayDismissed(true)}
+        >
+          <Icon name="x" size={11} />
+        </button>
+      </div>
+    ) : focus.status.kind === "ending" && focus.summary.state === "idle" ? (
+      <div className="usage-say usage-say-ask" role="status" data-edge="end">
+        <span>{t.focus.askSummary}</span>
+        <button type="button" className="usage-say-act" onClick={focus.requestSummary}>
+          {t.focus.askYes}
+        </button>
+        <button type="button" className="usage-say-act" onClick={focus.end}>
+          {t.focus.askNo}
+        </button>
+      </div>
+    ) : focus.status.kind === "ending" && focus.summary.state === "running" ? (
+      <div className="usage-say usage-say-focus" role="status" data-edge="end">
+        <Icon name="loader-circle" size={12} spin />
+        <span>{t.focus.summarizing}</span>
+      </div>
+    ) : null;
+  /** 卡片：时间到（总结还没跑完就先出卡转圈）；提前结束点「要」且落定后也出卡 */
+  const focusCardVisible =
+    (focus.status.kind === "done" ||
+      (focus.status.kind === "ending" &&
+        (focus.summary.state === "ready" ||
+          focus.summary.state === "failed" ||
+          focus.summary.state === "none"))) &&
+    !summaryCardClosed;
+  const focusCard =
+    focusCardVisible && focusRun !== null ? (
+      <FocusSummaryCard
+        ending={focus.status.kind === "ending"}
+        minutes={
+          focus.status.kind === "done"
+            ? Math.round(focusRun.totalMs / 60_000)
+            : Math.max(1, Math.round((Date.now() - focusRun.startedAt) / 60_000))
+        }
+        workspaceName={focusWorkspaceName}
+        summary={focus.summary}
+        onEnd={focus.end}
+        onAgain={() => {
+          const preset = focus.lastPreset ?? { workspaceId: focusRun.workspaceId, minutes: 25 };
+          focus.end();
+          openFocusPickerAt(preset.workspaceId, preset.minutes);
+        }}
+        onClose={() => setSummaryCardClosed(true)}
+      />
+    ) : null;
+
+  /**
+   * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
+   * 再发 nonce 信号让 Sidebar 把 TASKS 组展开（新会话不落进收着的组里）——与侧栏里
+   * 大按钮的 startNewTask 同一条纪律，状态在两棵子树里，只能靠信号带过去。
+   */
+  const newTaskNonceRef = useRef(0);
+  const [newTaskSignal, setNewTaskSignal] = useState(0);
+  const startNewTaskFromTools = (): void => {
+    setOverlay(null);
+    setSidebarCollapsed(false);
+    newTaskNonceRef.current += 1;
+    setNewTaskSignal(newTaskNonceRef.current);
+    session.newTask();
+  };
+  /** 窗口宽（胶囊几何要用：会话胶囊居中于对话列、右栏胶囊钉分隔线） */
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const sync = (): void => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, []);
+  /** 右栏胶囊的宿主（Toolbar 挂好回填；各面板的页头内容 portal 进来） */
+  const [panelSlot, setPanelSlot] = useState<HTMLDivElement | null>(null);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
   const drawerView = useSessionView(engine, "drawer");
 
@@ -190,6 +426,15 @@ export function App() {
   // 已删（2026-10-12 用户裁决）：它总是自己弹出，且把两边对话抽到第三个又长又啰嗦
   // 的地方——沟通回到两边对话流，Sub-sessions 面板变收件箱，不再有任何自动弹出。
   const channelSummaries = useChannelSummaries(channelParentId);
+
+  /**
+   * 工具栏会话胶囊的数据（2026-10-19 方案 B v2：对话卡不再有页头，标题 / id /
+   * 收工 / 子会话芯片 / 父会话面包屑全住这颗胶囊，见 SessionCapsule）。
+   * 标题口径同旧页头：落盘的 meta 标题，没落盘就是「新任务」。
+   */
+  const capsuleTitle = mainOpenMeta?.title ?? t.common.newTask;
+  const capsuleShortId = mainOpenId === "" ? null : mainOpenId.slice(0, 6);
+  const capsuleParentId = mainOpenMeta?.parentId;
 
   /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
   const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
@@ -234,17 +479,54 @@ export function App() {
     setRightPanel("review");
   }, []);
   /**
+   * 摘抄（审查面板 › 摘抄页签）点一条「回到原文」：目标不是当前会话时先切过去，
+   * 跳转请求由主槽 ChatView 在转录加载到那一轮后消费（滚到 + 闪一下）。token 同
+   * reviewFocus 的机制——同一条连点两次也会重新定位。
+   */
+  const [excerptJump, setExcerptJump] = useState<ExcerptJumpRequest | null>(null);
+  const excerptJumpTokenRef = useRef(0);
+  const openExcerpt = useCallback(
+    (jump: ExcerptJump) => {
+      excerptJumpTokenRef.current += 1;
+      setExcerptJump({ ...jump, token: excerptJumpTokenRef.current });
+      if (jump.sessionId !== mainOpenId) void session.openSession(jump.sessionId);
+    },
+    [mainOpenId, session],
+  );
+  /** 摘抄列表的版本：主槽每摘一条 +1，审查面板的摘抄页签据此重拉 */
+  const [excerptRevision, setExcerptRevision] = useState(0);
+  const bumpExcerpts = useCallback(() => setExcerptRevision((value) => value + 1), []);
+  /**
    * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
    * PDF 所在的根、打开预览、滚到原文并高亮。
    */
-  const [citeFocus, setCiteFocus] = useState<PdfJump | null>(null);
+  const [citeFocus, setCiteFocus] = useState<CiteFocusRequest | null>(null);
   const citeFocusTokenRef = useRef(0);
-  const openCitation = useCallback((citation: PdfCitation) => {
-    citeFocusTokenRef.current += 1;
-    setCiteFocus({ citation, token: citeFocusTokenRef.current });
-    setRightPanel("files");
-  }, []);
+  const openCitation = useCallback(
+    (citation: PdfCitation) => {
+      citeFocusTokenRef.current += 1;
+      // 请求带上出生会话戳（主槽此刻的会话，与 FilesPanel 的 sessionId 同一 null 形
+      // 口径）：文件面板只在主槽会话的根里找 PDF，换了会话后旧请求被 cite-focus.ts
+      // 判作废——不会拿旧会话的路径对新会话的根报「打不开」（2026-10-18 跨会话
+      // citeOutside 误报：面板重挂后 consumedCiteRef 归零，旧请求重放）
+      setCiteFocus({
+        citation,
+        token: citeFocusTokenRef.current,
+        session: mainOpenId === "" ? null : mainOpenId,
+      });
+      setRightPanel("files");
+    },
+    [mainOpenId],
+  );
+  // 引用跳转请求是「本次文件面板打开」的一次性请求：面板一旦不再是 files（切到
+  // 别的面板 / 收起，含按会话恢复面板），请求一并作废——否则面板重挂后
+  // consumedCiteRef 归零，旧请求重放会顶开 PDF 标签、重新跳转，等于变相恢复了
+  // 「不随会话恢复」的标签状态。同会话里关面板再开也不再重放：点引用的效力
+  // 随那次面板打开一起结束
+  useEffect(() => {
+    if (rightPanel !== "files") setCiteFocus(null);
+  }, [rightPanel]);
   useEffect(() => {
     const nextMainId = mainOpenId === "" ? null : mainOpenId;
     // 上一拍 id 必须在派发 setState 之前读出来链进局部量：updater 可能被 React
@@ -257,8 +539,29 @@ export function App() {
     subSessionsMainIdRef.current = nextMainId;
   }, [mainOpenId]);
 
+  // 每条会话记住自己离开时右栏开的是哪个面板（right-panel-memory.ts，用户
+  // 2026-10-18：「每个 session，应该记住自己离开的时候，右侧面板是啥」）。切主槽
+  // 会话的那一拍：把离开会话此刻的面板记下，再恢复目标会话记着的面板（没记过 =
+  // 关着）。只记种类、只记在 renderer 内存：文件面板里的标签不跟着恢复（切会话清
+  // 标签的既有设计不变），重启后都从「关着」起步，右栏宽度仍全局共用。首页
+  // （mainOpenId ""）不是会话：不记也不恢复，面板沿用当前值（与改前一致）。抽屉 /
+  // 辅助对话不开转例：右栏面板位属于主槽视图，一律按主槽会话记。
+  // rightPanel 进依赖是为了让切换那一拍读到「离开时」的面板值；面板自身变化时
+  // previous === mainOpenId 早退，自然空跑
+  const panelMemoryRef = useRef<PanelMemory>(new Map());
+  const panelMainIdRef = useRef(mainOpenId);
+  useEffect(() => {
+    const previous = panelMainIdRef.current;
+    panelMainIdRef.current = mainOpenId;
+    if (previous === mainOpenId) return;
+    const sessionOf = (id: string): string | null => (id === "" ? null : id);
+    panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
+    setRightPanel(recallPanel(panelMemoryRef.current, sessionOf(mainOpenId)));
+  }, [mainOpenId, rightPanel]);
+
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
-  // 面板本身也不该继续挂着一条够不到数据的内容）
+  // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
+  // 的 subsessions 若在新主槽下已不合法，由这里兜底关掉
   useEffect(() => {
     if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel(null);
   }, [rightPanel, hasSubSessions]);
@@ -281,20 +584,25 @@ export function App() {
     setSubSessionsNav(SUB_SESSIONS_LIST);
     setRightPanel("subsessions");
   }, []);
-  /** Open as main：主槽换看这条子会话，面板关闭（2.1 裁决） */
+  /** Open as main：主槽换看这条子会话（2.1 裁决「面板关闭」在按会话记忆后泛化为
+   * 「恢复这条会话自己记的面板」——没记过就是关着，首轮行为与裁决原文一致；
+   * 这里不再显式关面板，否则会把离开的那条会话错记成「关着」） */
   const openAsMain = useCallback(
     (childId: string) => {
       void session.openSession(childId);
-      setRightPanel(null);
     },
     [session],
   );
-  /** 子会话头部面包屑「↑ 父标题」：主槽回到父会话（2.2） */
-  const openParent = useCallback(
-    (parentId: string) => {
-      void session.openSession(parentId);
-    },
-    [session],
+  // 意图面板（实验功能）：仍在转录里的 user item id 集（被回退的问不进轮次）与
+  // 「打开会话」出口（与子会话的 openAsMain 同一条路）
+  const intentLiveTurnIds = useMemo(
+    () =>
+      new Set(
+        session.transcript
+          .filter((record): record is Extract<typeof record, { role: "user" }> => record.role === "user")
+          .map((record) => record.id),
+      ),
+    [session.transcript],
   );
   /** 右栏会话层正开着的那条子会话 id——只在面板真的开着时才算「点亮」，见派出卡描边 */
   const litSubSessionId =
@@ -378,6 +686,9 @@ export function App() {
     [engine, session],
   );
   const prevStatesRef = useRef(engine.states);
+  /** 专注中（计时里）：完成提醒静音——记未读、不响铃、不弹卡（用户裁决：专注期间
+   * 其它会话跑完只记帐，专注结束后铃铛照常可见）。done 之后恢复常觃。 */
+  const focusQuiet = focus.status.kind === "run";
   useEffect(() => {
     const prev = prevStatesRef.current;
     prevStatesRef.current = engine.states;
@@ -396,7 +707,7 @@ export function App() {
       const plan = planNotice({
         watched: watchedIds.includes(id),
         windowActive,
-        soundOn: settings.completionSound ?? true,
+        soundOn: focusQuiet ? false : (settings.completionSound ?? true),
       });
       ring ||= plan.sound;
       if (plan.unread) fresh.push(id);
@@ -406,7 +717,8 @@ export function App() {
     const latest = fresh[fresh.length - 1];
     if (latest !== undefined) {
       markUnread(fresh);
-      setNoticeId(latest);
+      // 专注中不弹卡（未读照记，铃铛清单里看得到）；结束后新落定的照常弹
+      if (!focusQuiet) setNoticeId(latest);
     }
     // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -428,6 +740,16 @@ export function App() {
     setDrawerFocus({ tab: id, token: drawerFocusTokenRef.current });
     setRightPanel("drawer");
   };
+  /**
+   * 意图条目的「打开会话」（2026-10-14 用户裁决）：在**辅助对话**（右栏 drawer）里
+   * 打开那条来源会话——主槽不动，右栏从「意图」切过去。存在性在渲染时就判定
+   * （本机会话 id 集传进面板）：不存在的按钮直接禁用并就地说明，不让用户点了才知道。
+   */
+  const intentOpenableIds = useMemo(
+    () => new Set(session.sessions.map((meta) => meta.id)),
+    [session.sessions],
+  );
+
   const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
   const completionNotice =
     noticeMeta === undefined
@@ -505,6 +827,8 @@ export function App() {
   const handlePanel = useCallback((next: RightPanelKind | null) => {
     setRightPanel(next);
   }, []);
+  /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
+  const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
 
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
   // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
@@ -668,6 +992,47 @@ export function App() {
     setShowArchived(next.showArchived);
     setShowCarryovers(next.showCarryovers);
   };
+  /**
+   * 工具栏居中那颗胶囊的内容：设置页 = 标题（只有标题）；会话页 = SessionCapsule；
+   * 首页 = 不渲染。
+   */
+  const sessionSlot =
+    overlay === "settings" ? (
+      <div className="cap-sess">
+        <div className="cap-sc">
+          <strong className="cap-title">{t.settings.tabs[settingsTab]}</strong>
+        </div>
+      </div>
+    ) : mainOpenId === "" && session.opened === null ? null : (
+      <SessionCapsule
+        title={capsuleTitle}
+        shortId={capsuleShortId}
+        onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
+        completion={
+          sessionLifecycle && mainOpenId !== ""
+            ? {
+                state: mainOpenMeta?.completion ?? "open",
+                closing: session.closingScan,
+                busy: session.phase !== "idle",
+                scanless: mainOpenMeta?.piSessionFile == null,
+                onMark: session.startClosingRitual,
+                onSet: (next) => session.setCompletionSession(mainOpenId, next),
+              }
+            : null
+        }
+        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou } : null}
+        onOpenSubSessions={openSubSessionsList}
+        crumb={
+          capsuleParentId !== undefined
+            ? {
+                title: session.sessions.find((meta) => meta.id === capsuleParentId)?.title ?? "",
+                onClick: () => void session.openSession(capsuleParentId),
+              }
+            : null
+        }
+      />
+    );
+
   const railEntries: RailEntry[] = [
     // 遗留事项入口（收尾扫描的下游）挂会话生命周期开关；Archived / Browser / Settings 不挂
     ...(sessionLifecycle
@@ -718,9 +1083,24 @@ export function App() {
       )}
     >
     <CitationOpenContext.Provider value={openCitation}>
+    <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
-      <Titlebar />
       <div className="layer">
+        <Toolbar
+          platform={api.platform === "darwin" ? "darwin" : "other"}
+          sidebarCollapsed={sidebarCollapsed}
+          sidebarWidth={sidebarWidth}
+          onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          onNewTask={startNewTaskFromTools}
+          windowWidth={windowWidth}
+          panelOpen={rightPanel !== null}
+          panelWidth={panelRenderedWidth}
+          narrow={narrow}
+          sessionSlot={sessionSlot}
+          onPanelSlot={setPanelSlot}
+          onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
+          focus={focusControl}
+        />
         <Sidebar
           session={session}
           overlay={overlay}
@@ -740,6 +1120,21 @@ export function App() {
           }}
           usagePet={settings.usagePet}
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
+          usageSay={focusSay}
+          usageCard={focusCard}
+          collapsed={sidebarCollapsed}
+          onCollapsedChange={setSidebarCollapsed}
+          newTaskSignal={newTaskSignal}
+          filesView={focusFilesView}
+          onBrowseWorkspace={(id) => {
+            setOverlay(null);
+            setShowArchived(false);
+            setShowCarryovers(false);
+            setWsBrowse(id);
+          }}
+          onExitBrowse={() => setWsBrowse(null)}
+          onStartFocusHere={openFocusPickerAt}
+          onOpenFile={openFocusFile}
         />
 
         <main className="pane">
@@ -767,10 +1162,11 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
+                bareHeader
                 onOpenReviewAt={openReviewAt}
+                excerptJump={excerptJump}
+                onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
-                onOpenSubSessions={openSubSessionsList}
-                onOpenParent={openParent}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
@@ -781,6 +1177,10 @@ export function App() {
                 onSlashSpace={openTokenPicker}
                 tokenPickResult={tokenPickResult}
                 panelInsert={panelInsert}
+                intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
+                onOpenIntentPanel={openIntentPanel}
+                onOpenSideChat={openInSideChat}
+                intentOpenableIds={intentOpenableIds}
               />
             )}
           </div>
@@ -791,6 +1191,7 @@ export function App() {
             narrow={narrow}
             onWidthChange={setPanelWidth}
             onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+            onRenderedWidth={setPanelRenderedWidth}
           >
             {/* 收起动画期间保持原内容；切换时 key 变化触发 120ms 内容淡入 */}
             <div
@@ -801,13 +1202,22 @@ export function App() {
               }}
             >
               {shownPanel === "files" ? (
-                <FilesPanel session={session} escapeRef={filesEscapeRef} citeFocus={citeFocus} />
+                <FilesPanel
+                session={session}
+                escapeRef={filesEscapeRef}
+                citeFocus={citeFocus}
+                focusWorkspaceId={focusFilesView?.workspaceId ?? null}
+                fileOpen={fileOpenRequest}
+              />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  workspaceId={session.workspaceId}
                   focus={reviewFocus}
                   revision={`${session.fileTurns.length}:${session.reverts.length}:${session.undos.length}:${session.phase}`}
                   cwd={session.cwd}
+                  excerptRevision={excerptRevision}
+                  onJumpExcerpt={openExcerpt}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
@@ -848,6 +1258,20 @@ export function App() {
                     )
                   }
                 />
+              ) : shownPanel === "intent" ? (
+                <IntentPanel
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  turns={session.intentRecalls}
+                  liveRun={session.intentRun}
+                  pendingAsk={
+                    session.intentAsk === null
+                      ? null
+                      : { requestId: session.intentAsk.requestId, ask: session.intentAsk.ask }
+                  }
+                  liveTurnIds={intentLiveTurnIds}
+                  openableSessionIds={intentOpenableIds}
+                  onOpenSession={openInSideChat}
+                />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
                   parentId={channelParentId}
@@ -872,6 +1296,7 @@ export function App() {
           panel={rightPanel}
           onPanel={handlePanel}
           railEntries={railEntries}
+          intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }
@@ -889,6 +1314,7 @@ export function App() {
         />
       </div>
     </div>
+    </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
     </MaterialBoxContext.Provider>
     </PastedTextCollapseContext.Provider>

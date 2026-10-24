@@ -28,7 +28,15 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  */
 
 /** 右栏面板位里放什么（"channels" 随父子会话面板一起删除：沟通回到两边对话流，子会话面板变收件箱） */
-export type RightPanelKind = "files" | "review" | "skills" | "mcp" | "terminal" | "drawer" | "subsessions";
+export type RightPanelKind =
+  | "files"
+  | "review"
+  | "skills"
+  | "mcp"
+  | "terminal"
+  | "drawer"
+  | "subsessions"
+  | "intent";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -51,6 +59,8 @@ export function RightRail(props: {
    * `waiting` 是「在等你」（question + 待审批）的子会话数：右上角角标，为 0 不显示。
    * **入口不自己弹开**（2026-10-12 用户裁决）：需要你看的事用角标说话，不抢面板位。
    */
+  /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
+  intentAvailable: boolean;
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -92,36 +102,19 @@ export function RightRail(props: {
         flexDirection: "column",
         alignItems: "center",
         gap: "var(--space-2)",
-        // 顶行与侧栏字标行同行同高（padding-top 一致），第一个入口与左侧折叠图标对齐
-        padding: "var(--space-2) 0",
+        // 2026-10-19 方案 B v2：顶部没有行级对齐了（右栏开关住工具栏胶囊），
+        // rail 从工具栏下开始，首格离卡顶一个 space-1
+        padding: "var(--space-1) 0 var(--space-2)",
         background: "transparent",
         overflow: "hidden",
       }}
     >
-      {/* 顶部这行兼作拖拽区（.titlebar）；行内住 Files 入口，与左侧折叠图标同行同高
-          （2026-09-22 文件面板加入：顶行让给最常用的 Files，Skills 顺延一格）。
-          paddingInlineStart: 0——豁免 darwin 给 .titlebar 统一加的 66px 红绿灯净空：
-          红绿灯在窗口左上，这条 32px 窄条在最右，让净空会把 icon 推出可视区外
-          （overflow:hidden，A-0 复验 BUG-3）。 */}
-      <span
-        className="titlebar"
-        style={{
-          height: 34,
-          width: "100%",
-          flex: "0 0 auto",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          paddingInlineStart: 0,
-        }}
-      >
-        <RailEntryButton
-          icon="folder"
-          label={t.rail.files}
-          lit={props.panel === "files"}
-          onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
-        />
-      </span>
+      <RailEntryButton
+        icon="folder"
+        label={t.rail.files}
+        lit={props.panel === "files"}
+        onClick={() => props.onPanel(props.panel === "files" ? null : "files")}
+      />
       <RailEntryButton
         icon="file-diff"
         label={t.rail.review}
@@ -147,12 +140,14 @@ export function RightRail(props: {
         lit={props.panel === "terminal"}
         onClick={() => props.onPanel(props.panel === "terminal" ? null : "terminal")}
       />
-      <RailEntryButton
-        icon="panel-right"
-        label={t.rail.sideChat}
-        lit={props.panel === "drawer"}
-        onClick={() => props.onPanel(props.panel === "drawer" ? null : "drawer")}
-      />
+      {props.intentAvailable && (
+        <RailEntryButton
+          icon="waypoints"
+          label={t.rail.intent}
+          lit={props.panel === "intent"}
+          onClick={() => props.onPanel(props.panel === "intent" ? null : "intent")}
+        />
+      )}
       {props.subSessions !== null && (
         <RailEntryButton
           icon="git-fork"
@@ -203,10 +198,11 @@ export function RightRail(props: {
 }
 
 /**
- * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮 =
- * `--glass-bg` + `--shadow-composer`（与面板融合的单层 token，见头注释），
- * 再点已点亮的由调用方表达成收起。badge（铃铛的未读角标）常驻在右上角，
- * 0 / 缺席不渲染。
+ * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮走
+ * `.quiet-control[aria-pressed]` 的 mode 选中底（浅蓝 / 暗档黄，2026-10-19
+ * 方案 B v2 用户点名保留；此前是 inline 的 `--glass-bg` 玻璃白，看不出选中）。
+ * hover 也交给 CSS（quiet-control:hover），不再用 JS 模拟。再点已点亮的由
+ * 调用方表达成收起。badge（铃铛的未读角标）常驻在右上角，0 / 缺席不渲染。
  */
 function RailEntryButton(props: {
   icon: IconName;
@@ -216,13 +212,13 @@ function RailEntryButton(props: {
   /** 未读角标；缺席或 0 不渲染 */
   badge?: number;
 }) {
-  const lit = props.lit;
   return (
     <button
       type="button"
+      className="quiet-control"
       title={props.label}
       aria-label={props.label}
-      aria-pressed={lit}
+      aria-pressed={props.lit}
       onClick={props.onClick}
       style={{
         width: 26,
@@ -231,22 +227,10 @@ function RailEntryButton(props: {
         alignItems: "center",
         justifyContent: "center",
         padding: 0,
-        border: 0,
         cursor: "pointer",
         borderRadius: "var(--radius-sm)",
-        background: lit ? "var(--glass-bg)" : "transparent",
-        boxShadow: lit ? "var(--shadow-composer)" : "none",
-        color: lit ? "var(--color-text-primary)" : "var(--color-text-secondary)",
         // 角标的定位基准
         position: "relative",
-      }}
-      onMouseEnter={(e) => {
-        if (lit) return;
-        e.currentTarget.style.background = "var(--color-bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        if (lit) return;
-        e.currentTarget.style.background = "transparent";
       }}
     >
       <Icon name={props.icon} size={16} />

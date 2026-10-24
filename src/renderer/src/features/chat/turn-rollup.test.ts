@@ -11,6 +11,7 @@ import {
   groupToolUnits,
   groupTurns,
   indexToolResults,
+  rollupLead,
   thinkingDurationText,
   turnStats,
   type TurnGroupUnit,
@@ -81,9 +82,9 @@ describe("groupTurns", () => {
       fold.members.map((member) => member.kind),
       ["thinking", "toolCall"],
     );
-    // key 挂在首成员上（跨渲染稳定），轮耗时 = 段内 timestamp 极差（含正文完成时刻）
+    // key 挂在首成员上（跨渲染稳定）；段耗时 = 成员 timestamp 极差（工具以结果终态为右端）
     assert.equal(fold.key, "turn:a1:0");
-    assert.equal(fold.durationMs, 8000);
+    assert.equal(fold.durationMs, 500);
     // 轮头时间 = 段内最早的 assistant 记录 timestamp（这轮开始流式回复的时刻）
     assert.equal(fold.startedAt, 2000);
   });
@@ -189,10 +190,9 @@ describe("groupTurns", () => {
     assert.deepEqual(fold.members.map((member) => member.kind), ["thinking"]);
   });
 
-  test("两个成员之间的穿插正文收进折叠：折叠外只剩开场与结尾", () => {
-    // BUG-6 回归：旧实现把首成员后的所有正文推到折叠之后，穿插陈述与结尾回复
-    // 混作一堆（注释宣称「原位」，实现是挪位）。正确语义：穿插正文收进折叠，
-    // 展开时回到原相对位置；折叠外只剩首成员前的开场白与末成员后的结尾。
+  test("正文切段：成员之间的穿插正文留在原位，前后各成一个折叠（正文永不折叠，2026-10-18 裁决）", () => {
+    // 取代 BUG-6 的「穿插正文收进折叠」：正文一个都不折叠——text 是分组边界，
+    // 遇正文先收口、正文原样放行，正文之后的成员开新的一段折叠。
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [{ type: "text", text: "开场白" }]),
@@ -206,17 +206,110 @@ describe("groupTurns", () => {
     const view = turnView(records, false);
     assert.deepEqual(
       view.map((entry) => entry.kind),
-      ["user", "text", "turnGroup", "text"],
+      ["user", "text", "turnGroup", "text", "turnGroup", "text"],
     );
-    const fold = foldUnits(view)[0];
-    assert.ok(fold !== undefined);
+    const [first, second] = foldUnits(view);
+    assert.ok(first !== undefined && second !== undefined);
+    // 每段折叠的成员是且只是工具调用——members 类型层已不含 text
+    assert.deepEqual(first.members.map((member) => member.kind), ["toolCall"]);
+    assert.deepEqual(second.members.map((member) => member.kind), ["toolCall"]);
+    // 轮头时间只挂第一个折叠块（含前导正文的首条 assistant 时刻）；后续块不带
+    assert.equal(first.startedAt, 2000);
+    assert.equal(second.startedAt, null);
+    // 各自的段耗时：工具以结果终态为右端
+    assert.equal(first.durationMs, 500);
+    assert.equal(second.durationMs, 500);
+    // 统计按段各自聚合：每段只数自己的工具
+    const results = indexToolResults(records);
+    assert.equal(turnStats(first, results).calls, 1);
+    assert.equal(turnStats(second, results).calls, 1);
+  });
+
+  test("「思考 → 开场白 → 工具 → 正文」：开场白把首条思考单独切成一段——单时间戳段时长为 null（诚实未知，不显示「Worked 0.0s」），后续段口径不变", () => {
+    // 2026-10-18 真机验收反馈：这一段只有一条记录、一个时间戳，极差为 0，
+    // 折叠行曾显示「用时 0.0 秒」——模型实际想了几秒，这个数是编造。
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "thinking", thinking: "先想想" },
+        { type: "text", text: "开场白" },
+      ]),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "r1", toolName: "read", input: {} }]),
+      toolItem({ toolCallId: "r1", timestamp: 3500 }),
+      assistantItem("a3", 4000, [{ type: "text", text: "结论" }]),
+    ];
+    const view = turnView(records, false);
     assert.deepEqual(
-      fold.members.map((member) => member.kind),
-      ["toolCall", "text", "toolCall"],
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "text", "turnGroup", "text"],
     );
-    // 穿插正文不进统计：工具数只数真工具
-    const stats = turnStats(fold, indexToolResults(records));
-    assert.equal(stats.calls, 2);
+    const [first, second] = foldUnits(view);
+    assert.ok(first !== undefined && second !== undefined);
+    // 第一段：只有一个思考块、一个记录级时间戳，跨度量不到 → null；轮头时间照挂首块
+    assert.deepEqual(first.members.map((member) => member.kind), ["thinking"]);
+    assert.equal(first.durationMs, null);
+    assert.equal(first.startedAt, 2000);
+    // 第二段：调用帧 + 结果终态两个时刻，口径不变（仍以结果终态为右端）
+    assert.equal(second.durationMs, 500);
+    assert.equal(second.startedAt, null);
+    // turnStats 原样透传 null——渲染层据此不显示 Worked 段，只留「thought 1」
+    assert.equal(turnStats(first, indexToolResults(records)).durationMs, null);
+  });
+
+  test("只有一条记录的段：思考独占一条记录时 durationMs 为 null，不编造 0.0s", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "thinking", thinking: "想想" }]),
+      assistantItem("a2", 3000, [{ type: "text", text: "正文" }]),
+    ];
+    const fold = foldUnits(turnView(records, false))[0];
+    assert.ok(fold !== undefined);
+    assert.equal(fold.durationMs, null);
+  });
+
+  test("即时工具段（极差不足显示精度 50ms）：durationMs 为 null——「0.0 秒」没有信息量", () => {
+    // write/edit 这类几毫秒落定的工具，极差为正但不足 0.1 秒刻度；同记录
+    // 「思考+工具」段同理（显示的只是工具尾巴，思考时间不在极差里）
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "toolCall", toolCallId: "w1", toolName: "write", input: {} }]),
+      toolItem({ toolCallId: "w1", toolName: "write", timestamp: 2030 }),
+      assistantItem("a2", 3000, [{ type: "text", text: "写好了" }]),
+    ];
+    const fold = foldUnits(turnView(records, false))[0];
+    assert.ok(fold !== undefined);
+    assert.equal(fold.durationMs, null);
+  });
+
+  test("多条记录的段时长口径不变：两个思考来自不同记录，极差为正照显", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "thinking", thinking: "第一段" }]),
+      assistantItem("a2", 3500, [{ type: "thinking", thinking: "第二段" }]),
+    ];
+    const fold = foldUnits(turnView(records, false))[0];
+    assert.ok(fold !== undefined);
+    assert.equal(fold.durationMs, 1500);
+  });
+
+  test("空白 text 块不当边界：不断开折叠、也不落视图", () => {
+    // 流式常产生空 text delta 落块；拿它断开折叠会凭空多出一条统计行
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "toolCall", toolCallId: "r1", toolName: "read", input: {} }]),
+      toolItem({ toolCallId: "r1", timestamp: 2500 }),
+      assistantItem("a2", 3000, [{ type: "text", text: "   " }]),
+      assistantItem("a3", 4000, [{ type: "thinking", thinking: "再想想" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup"],
+    );
+    assert.deepEqual(
+      foldUnits(view)[0]?.members.map((member) => member.kind),
+      ["toolCall", "thinking"],
+    );
   });
 
   test("key 稳定：同一段重复分组 key 不变——展开状态靠它保住", () => {
@@ -352,7 +445,8 @@ describe("turnStats", () => {
       { toolName: "read", count: 2, failed: 0 },
       { toolName: "bash", count: 2, failed: 1 },
     ]);
-    assert.equal(stats.durationMs, 3200 - 1000);
+    // 段耗时 = 成员 timestamp 极差（不含 user，工具以结果终态为右端）
+    assert.equal(stats.durationMs, 3200 - 2000);
   });
 
   test("通道工具（report_to_parent）不进折叠统计——calls/byTool 里没有它（子会话 PR4b）", () => {
@@ -483,5 +577,21 @@ describe("failedFoldKey —— 回合级失败的图标只在失败轮里找折�
 
   test("空视图 null", () => {
     assert.equal(failedFoldKey([]), null);
+  });
+});
+
+describe("rollupLead —— 折叠行的加粗开头由哪一段担任", () => {
+  test("量得到时长：开头是「用时」", () => {
+    assert.equal(rollupLead({ durationMs: 7100, thinkingCount: 1, calls: 1 }), "duration");
+  });
+  test("量不到时长、有思考：思考数顶上（「thought 1」那种单独思考段）", () => {
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 1, calls: 0 }), "thinking");
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 2, calls: 3 }), "thinking");
+  });
+  test("量不到时长、只有工具：工具数顶上（「tools 1 · bash 1」那种即时工具段）", () => {
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 0, calls: 1 }), "tools");
+  });
+  test("什么统计都没有：没有开头", () => {
+    assert.equal(rollupLead({ durationMs: null, thinkingCount: 0, calls: 0 }), null);
   });
 });

@@ -39,7 +39,7 @@ import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
-import { attachmentBlocks, composePromptText } from "../shared/prompt-attachments.ts";
+import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
@@ -48,7 +48,9 @@ import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
+import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
 import { planBranchCut } from "./branch-cut.ts";
+import { withOpencodeSession } from "./opencode-session.ts";
 import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
@@ -77,6 +79,22 @@ import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import {
+  applyRecallEvent,
+  composeAttachmentPrompt,
+  composeIntentPrompt,
+  initialRecallCard,
+  INTENT_GATE_OFF,
+  INTENT_CONTEXT_GUIDELINE,
+  stagesOfCard,
+  type IntentContextFile,
+  type IntentRecallTiming,
+} from "../shared/intent-recall.ts";
+import { intentQuestionText } from "../shared/intent-lab.ts";
+import { runIntentRecall, submitIntentFeedback } from "./intent-recall-client.ts";
+import { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
+import { intentContextPath, writeIntentContextFiles } from "./intent-context-file.ts";
+import type { IntentRecallRecord } from "../shared/session.ts";
 import {
   COMPACTION_DEFAULT,
 } from "../shared/settings.ts";
@@ -356,6 +374,61 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
   }
 }
 
+/** 专注收工小结的硬上限（主进程那头 220 秒兑底，这里先放手）：素材比问候检查大得多 */
+const FOCUS_SUMMARY_TIMEOUT_MS = 180_000;
+
+/**
+ * 专注模式的收工小结（focus-summary.ts）：一次独立的 `completeSimple`，模型与密钥面
+ * 由主进程装好（家务活模型，缺席时主进程已回退到上次使用的模型）。结果经
+ * `focusSummarized` 回执；模型解不出、调用出错、回复读不懂都回 null 并带原因——
+ * 界面上等着这张卡，失败要说出来。
+ */
+async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeFocus" }>): Promise<void> {
+  const fail = (error: string): void => {
+    send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error });
+  };
+  try {
+    const runtime = await ModelRuntime.create({});
+    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
+    if (model === undefined) {
+      fail(`unknown model "${command.provider.id}/${command.modelId}"`);
+      return;
+    }
+    const response = await completeSimple(
+      model,
+      {
+        systemPrompt: FOCUS_SUMMARY_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: command.prompt, timestamp: Date.now() }],
+      },
+      {
+        apiKey: command.provider.apiKey,
+        maxTokens: 2048,
+        timeoutMs: FOCUS_SUMMARY_TIMEOUT_MS,
+        signal: AbortSignal.timeout(FOCUS_SUMMARY_TIMEOUT_MS),
+        onPayload: ccBillingPatch,
+        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") {
+      fail(response.errorMessage ?? `${model.id} returned an error`);
+      return;
+    }
+    let output = "";
+    for (const block of response.content) {
+      if (block.type === "text") output += block.text;
+    }
+    const bullets = parseSummaryReply(output);
+    if (bullets === null) {
+      console.warn(`[focus-summary] ${model.id} 的回复读不懂，原文前 200 字：${JSON.stringify(output.slice(0, 200))}`);
+      fail(`${model.id}'s reply couldn't be read`);
+      return;
+    }
+    send({ type: "focusSummarized", requestId: command.requestId, bullets });
+  } catch (cause) {
+    fail(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 /** 探测的硬上限（主进程那头 60 秒兑底，这里先放手） */
 const PROBE_TIMEOUT_MS = 45_000;
 
@@ -495,12 +568,14 @@ async function setSessionModel(
   modelId: string,
 ): Promise<void> {
   try {
-    const model = registerAndResolveModel(session.modelRuntime, provider, modelId);
+    // 同一套会话头注入（OpenCode Go）：换模型后新模型也要带本会话 id
+    const scoped = withOpencodeSession(provider, sessionId);
+    const model = registerAndResolveModel(session.modelRuntime, scoped, modelId);
     if (model === undefined) {
-      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+      throw new Error(`unknown model "${scoped.id}/${modelId}"`);
     }
     await session.setModel(model);
-    updateLedgerAuth(sessionId, provider);
+    updateLedgerAuth(sessionId, scoped);
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -522,12 +597,15 @@ async function setLedgerModel(
   modelId: string,
 ): Promise<void> {
   try {
+    // 同一套会话头注入，与 setSessionModel 对称：落账的鉴权面（generateTitle 用）也要带
+    // 本会话 id——不包的话，下一次 openTurn 覆盖之前标题调用会发回静态占位头
+    const scoped = withOpencodeSession(provider, sessionId);
     const runtime = await ModelRuntime.create({});
-    const model = registerAndResolveModel(runtime, provider, modelId);
+    const model = registerAndResolveModel(runtime, scoped, modelId);
     if (model === undefined) {
-      throw new Error(`unknown model "${provider.id}/${modelId}"`);
+      throw new Error(`unknown model "${scoped.id}/${modelId}"`);
     }
-    updateLedgerAuth(sessionId, provider);
+    updateLedgerAuth(sessionId, scoped);
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -596,6 +674,8 @@ interface TurnParts {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（OpenedTurn.budget 的透传） */
   budget: TurnImageBudget;
+  /** 意图召回的中止器（OpenedTurn.intentAbort 的透传）：停止 / 抢跑时拆 HTTP 流 */
+  intentAbort: AbortController;
 }
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
@@ -624,6 +704,15 @@ const requestBroker = new RequestBroker((event) => send(event as AgentEvent));
 
 /** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
 const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
+
+/**
+ * 回答前确认的等待编排（实验功能 intent-system）：与 pendingPermissions 同款
+ * 请求-应答。**没有超时**（用户可能去泡杯咖啡再回来点）、**不听 abort**——停止 /
+ * 抢跑 / 删会话必须显式调 settleIntentAsks 把等待按「取消」结掉，否则那一轮
+ * 永远不收尾、running 表的坑永远占着。
+ */
+const intentConfirmWaiter = new IntentConfirmWaiter(send);
+const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle(sessionId);
 
 /**
  * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
@@ -726,6 +815,8 @@ interface OpenedTurn {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
   budget: TurnImageBudget;
+  /** 意图召回的中止器：停止 / 抢跑 / 删会话时拆掉 /recall 的 HTTP 流（无意图时闲置） */
+  intentAbort: AbortController;
 }
 
 /**
@@ -761,11 +852,15 @@ interface TurnImageBudget {
  *   里，压完轮还在，发 idle 会让 renderer 误投递）。
  */
 async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<OpenedTurn> {
+  // OpenCode Go 的会话头按会话注入：配置里的值是占位，pi 自己发的正确值会被它盖掉
+  // （合并顺序：配置头最后覆盖）。标题走 note.headers，所以必须在落账之前包。
+  // 官方 DeepSeek 的 baseUrl 不是 opencode.ai，原对象返回，行为一字不变。
+  const provider = withOpencodeSession(command.provider, command.sessionId);
   const note = ledgerNote(command.sessionId);
   note.mode = command.mode;
-  note.apiKey = command.provider.apiKey;
-  if (command.provider.headers === undefined) delete note.headers;
-  else note.headers = command.provider.headers;
+  note.apiKey = provider.apiKey;
+  if (provider.headers === undefined) delete note.headers;
+  else note.headers = provider.headers;
 
   // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
   const modelRuntime = await ModelRuntime.create({});
@@ -775,9 +870,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 注册与解析的完整规则（auth 面 → 补注册兜底）抽在 model-registration，
    * 会话内换模型（C-4）走同一条路径——两处的「能不能用某个模型」必须是一套真相。
    */
-  const model = registerAndResolveModel(modelRuntime, command.provider, command.modelId);
+  const model = registerAndResolveModel(modelRuntime, provider, command.modelId);
   if (model === undefined) {
-    throw new Error(`unknown model "${command.provider.id}/${command.modelId}"`);
+    throw new Error(`unknown model "${provider.id}/${command.modelId}"`);
   }
 
   /**
@@ -897,6 +992,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 ),
                 TOOL_GUIDELINES,
                 EXPECTED_SECONDS_GUIDELINE,
+                // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
+                // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
+                ...("intent" in command && command.intent !== undefined ? [INTENT_CONTEXT_GUIDELINE] : []),
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
                 QUOTE_GUIDELINE,
@@ -1076,6 +1174,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     pendingRefs: new Map(),
     protectedFloor: Number.MAX_SAFE_INTEGER,
   };
+  // 意图召回的中止器：开轮即建，停止 / 抢跑时由 startTurn 的 abort 回调触发
+  const intentAbort = new AbortController();
   /**
    * MCP 工具。**连接按 (工作区, server) 建**，不是进程级一份——同一个 server 名
    * 在不同工作区往往是不同实例（参数不同、数据不同），共享一份就会静默串号。
@@ -1306,7 +1406,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget };
+  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget, intentAbort };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -1340,7 +1440,12 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
     async () => {
       const opened = await openTurn(command, command.type === "compact");
       return {
-        abort: () => opened.session.abort(),
+        abort: () => {
+          // 意图召回的 HTTP 流不听 pi 的 abort：停轮时一起拆掉，否则 /recall 会
+          // 跑完才被静默判死（确认卡的等待也不听 abort，见 settleIntentAsks）
+          opened.intentAbort.abort();
+          opened.session.abort();
+        },
         dispose: () => opened.session.dispose(),
         unsubscribe: opened.unsubscribe,
         session: opened.session,
@@ -1349,6 +1454,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         tracker: opened.tracker,
         webWatch: opened.webWatch,
         budget: opened.budget,
+        intentAbort: opened.intentAbort,
       };
     },
     async (parts) =>
@@ -1360,6 +1466,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         tracker: parts.tracker,
         webWatch: parts.webWatch,
         budget: parts.budget,
+        intentAbort: parts.intentAbort,
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
@@ -1437,10 +1544,192 @@ async function listBuiltins(): Promise<void> {
  * - 文件引用与粘贴块组装进正文之后；回显块保留块界（粘贴块 / 文件清单各自独立
  *   text 块），显示层按块解析回 chip。
  */
-/** 正文按空行拆块回显（空段丢弃；整条为空保一个空块——纯图消息的形状不变） */
-function splitEchoBlocks(text: string): string[] {
-  const parts = text.split("\n\n").filter((part) => part !== "");
-  return parts.length > 0 ? parts : [""];
+/**
+ * 意图系统（实验功能 intent-system）的轮内闸门：回显之后、调模型之前跑 /recall。
+ *
+ * 三种结局：
+ * - `injection: null` = 这一轮失败 / 取消——
+ *   失败时本轮不回答（卡片终态事件已发，phase idle 由 startTurn 的 finally 兕）；
+ * - `injection: ""` = 开关关闭（command.intent 缺席，见 INTENT_GATE_OFF）/ 门卫跳过 / 空注入：
+ *   照常用原话回答（composeIntentPrompt 直通）；
+ * - 其它字符串 = 交给模型的注入块（附件方式时是交付说明）。
+ *
+ * 事件流（intentRecall）与终态记录（intentRecallRecord）都从这里发出，主进程
+ * 落盘 + 广播 + 记 token 账。上下文文件（服务端作者）覆盖写到会话工作台，
+ * 写失败只记日志不挡回答。
+ */
+async function runIntentGate(
+  command: Extract<AgentCommand, { type: "submit" | "interrupt" }>,
+  intentAbort: AbortController,
+  turnId: string,
+): Promise<{ injection: string | null }> {
+  const intent = command.intent;
+  // 开关关闭不是失败：空注入、照常回答（见 INTENT_GATE_OFF）
+  if (intent === undefined) return INTENT_GATE_OFF;
+  const workbench = command.directories?.workbench ?? null;
+  const startedAt = Date.now();
+  let card = initialRecallCard(turnId, startedAt);
+  const outcome = await runIntentRecall(
+    {
+      baseUrl: intent.baseUrl,
+      sessionId: command.sessionId,
+      turnId,
+      title: intent.title,
+      // 召回的提问与 QA 存档同一口径（intentQuestionText）：引用块原样 + 粘贴文本全文
+      q: intentQuestionText(command.text, command.pasted ?? []),
+      ...(intent.models !== undefined ? { models: intent.models } : {}),
+    },
+    intentAbort.signal,
+    (event) => {
+      card = applyRecallEvent(card, event);
+      send({ type: "intentRecall", sessionId: command.sessionId, turnId, event });
+    },
+  );
+  const base = {
+    role: "intent-recall" as const,
+    id: randomUUID(),
+    turnId,
+    runId: card.runId,
+    timestamp: startedAt,
+    startedAt,
+    scene: card.scene,
+    qaTotal: card.accepted?.qaTotal ?? null,
+    passed: card.progress?.passed ?? null,
+    budgetMs: card.accepted?.budgetMs ?? null,
+    peak: card.accepted?.peak ?? false,
+    summary: card.review?.summary ?? null,
+    selected: card.review?.selected ?? [],
+    ask: card.review?.ask ?? [],
+    ...(card.review !== null && card.review.askRemaining > 0 ? { askRemaining: card.review.askRemaining } : {}),
+    skipped: card.skipped,
+    gateWhy: card.gateWhy,
+  } satisfies Omit<IntentRecallRecord, "status" | "finishedAt" | "timings" | "error" | "halted" | "stages" | "confirm" | "usage">;
+  const sendRecord = (
+    status: "done" | "error" | "cancelled",
+    extra: {
+      finishedAt: number;
+      timings: IntentRecallTiming | null;
+      error: { stage: string; message: string; retryable: boolean } | null;
+      confirm?: IntentRecallRecord["confirm"];
+      halted?: { stage: string; done: number | null; total: number | null } | null;
+      usage?: IntentRecallRecord["usage"];
+    },
+  ): void => {
+    send({
+      type: "intentRecallRecord",
+      sessionId: command.sessionId,
+      record: {
+        ...base,
+        status,
+        stages: stagesOfCard(card, extra.error?.stage ?? extra.halted?.stage ?? null),
+        finishedAt: extra.finishedAt,
+        timings: extra.timings,
+        error: extra.error,
+        halted: extra.halted ?? null,
+        ...(extra.confirm === undefined || extra.confirm === null ? {} : { confirm: extra.confirm }),
+        ...(extra.usage === undefined ? {} : { usage: extra.usage }),
+      },
+    });
+  };
+  if (outcome.kind === "done") {
+    let injection = outcome.injection;
+    let confirm: IntentRecallRecord["confirm"] = null;
+    // 上下文文件（服务端是作者）：覆盖写完再走（几毫秒的本地写，等它换来模型
+    // 一定能读到）；写失败只记日志，注入块退回服务端给的原文（拼进原话）
+    const applyContext = async (context: IntentContextFile): Promise<void> => {
+      if (workbench === null) return;
+      try {
+        await writeIntentContextFiles(workbench, context);
+      } catch (cause) {
+        console.error("[intent-recall] 上下文文件写失败（不挡回答）", cause);
+        return;
+      }
+      injection = composeAttachmentPrompt(intentContextPath(workbench), context.notice, context.added);
+    };
+    if (outcome.context !== null) await applyContext(outcome.context);
+    // 门卫跳过：注入块为空串，回答照常用原话，不等、不弹确认
+    if (outcome.skipped === "gate") {
+      sendRecord("done", { finishedAt: Date.now(), timings: card.timings, error: null });
+      return { injection: "" };
+    }
+    // 回答前确认：needsFeedback 且真有确认项时先不发给模型，把 ask 交给 renderer
+    // 弹卡，等应答再 POST /feedback 换最终注入块。等待无超时；取消走 settleIntentAsks
+    const ask = card.review?.ask ?? [];
+    if (outcome.needsFeedback && ask.length > 0) {
+      const decision = await intentConfirmWaiter.ask(command.sessionId, outcome.runId, turnId, ask);
+      if (decision === "cancelled") {
+        sendRecord("cancelled", { finishedAt: Date.now(), timings: card.timings, error: null });
+        return { injection: null };
+      }
+      const feedback = await submitIntentFeedback(intent.baseUrl, outcome.runId, decision.answers, decision.note);
+      if (!feedback.ok) {
+        // /feedback 失败或 404：不回答，卡片写原因（用户重发即重跑）
+        sendRecord("error", {
+          finishedAt: Date.now(),
+          timings: card.timings,
+          error: { stage: "s4", message: feedback.message, retryable: true },
+          halted: { stage: "s4", done: null, total: null },
+        });
+        return { injection: null };
+      }
+      injection = feedback.injection;
+      if (feedback.context !== null) await applyContext(feedback.context);
+      confirm = {
+        action: decision.action,
+        answers: decision.answers,
+        note: decision.note,
+        edgesWritten: feedback.edgesWritten,
+        ...(feedback.promoted === null ? {} : { promoted: feedback.promoted }),
+      };
+    }
+    sendRecord("done", {
+      finishedAt: Date.now(),
+      timings: card.timings,
+      error: null,
+      ...(confirm === null ? {} : { confirm }),
+      ...(outcome.usage === null ? {} : { usage: outcome.usage }),
+    });
+    return { injection };
+  }
+  const cancelled = outcome.kind === "cancelled";
+  sendRecord(cancelled ? "cancelled" : "error", {
+    finishedAt: Date.now(),
+    timings: null,
+    error: cancelled
+      ? null
+      : { stage: outcome.stage, message: outcome.message, retryable: outcome.retryable },
+    halted: cancelled
+      ? null
+      : {
+          stage: outcome.stage,
+          done: outcome.stage === "s3" ? (card.progress?.done ?? null) : null,
+          total: outcome.stage === "s3" ? (card.progress?.total ?? null) : null,
+        },
+  });
+  return { injection: null };
+}
+
+/**
+ * 两本账对齐（意图系统的核心不变量）：把主进程从转录尾部推导出的未消化 user
+ * 原话逐条补记进 pi 本子。必须在 prompt **之前**——补记的是「此前失败轮留下的
+ * 尾巴」（召回失败 / 取消时原话已回显进 Orbita 转录、但没进 pi 本子），顺序错了
+ * 就插到本轮后面去了。appendMessage 不跑模型、不触发 message_start——回声对账
+ * 不经过这条路径。
+ */
+function flushBackfill(session: AgentSession, texts: readonly string[] | undefined): void {
+  if (texts === undefined || texts.length === 0) return;
+  for (const text of texts) {
+    try {
+      session.sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text }],
+        timestamp: Date.now(),
+      });
+    } catch (cause) {
+      // 补记失败宁可记账继续跑：分支对账会因此拒绝（安全失败），不该让对话开不了
+      console.error("[intent-recall] backfill 补记失败", cause);
+    }
+  }
 }
 
 async function echoAndPrompt(
@@ -1459,16 +1748,31 @@ async function echoAndPrompt(
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
   const promptText = composePromptText(command.text, pasted, files);
-  note.echoed.add(promptText);
+  // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
+  // 纯图片等极端情况下没有文字 item，退回临时 id（recall 卡片照常，只是与转录对不上）
+  let turnId = "";
   // 正文按空行拆成块再回显：句中粘贴胶囊（方案 C）组装后就是 <pasted-text> 块内联
   // 在正文里，拆开才能被显示层按内容认出来（splitUserTextBlocks）。纯正文拆了
   // 再拼回去逐字不变（空行既是拆分符也是拼回符），旧消息行为不动
   for (const progress of opened.adapter.userPrompt(splitEchoBlocks(command.text), images, attachmentBlocks(pasted, files))) {
     // A-1：回显的时间戳留给预检压缩的界碑盖戳用（compactionBoundaryTimestamp）
-    if (progress.type === "item_started") opened.turn.echoedAt = progress.item.timestamp;
+    if (progress.type === "item_started") {
+      opened.turn.echoedAt = progress.item.timestamp;
+      if (turnId === "") turnId = progress.item.id;
+    }
     send({ type: "progress", sessionId: command.sessionId, progress });
   }
-  await opened.session.prompt(promptText, {
+  // 意图闸门（实验功能）：回显之后、调模型之前。失败 / 取消时本轮不回答
+  // （直接返回；轮尾文件账由 startTurn 的 finally 兕）
+  const gate = await runIntentGate(command, opened.intentAbort, turnId === "" ? randomUUID() : turnId);
+  if (gate.injection === null) return;
+  const finalPrompt = composeIntentPrompt(gate.injection, promptText);
+  // 两本账对齐：失败轮留下的 user 尾巴补记进 pi 本子，必须在 prompt 之前
+  flushBackfill(opened.session, command.backfill);
+  // **回声对账记最终发给 pi 的那份**（有意图时是注入块 + 原话）：pi 随后 emit 的
+  // user message_start 是它，命中即丢；转录里落的仍是原话（回显已在上面发生）
+  note.echoed.add(finalPrompt);
+  await opened.session.prompt(finalPrompt, {
     expandPromptTemplates: false,
     ...(images.length > 0 ? { images: forModel(images) } : {}),
   });
@@ -1483,6 +1787,12 @@ async function handle(command: AgentCommand): Promise<void> {
     // 回答到得比请求晚是正常的；请求早已不在（abort 等）就丢弃，不报错
     pendingPermissions.get(command.requestId)?.(command.answer);
     pendingPermissions.delete(command.requestId);
+    return;
+  }
+
+  // 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台
+  if (command.type === "intentConfirmResult") {
+    intentConfirmWaiter.answer(command.requestId, command.decision);
     return;
   }
 
@@ -1520,8 +1830,9 @@ async function handle(command: AgentCommand): Promise<void> {
     // **抢跑语义：中间没有「空闲」**——旧轮收尾不发 idle（preempt），否则 renderer
     // 收到 idle 就投递队首，撞上新轮的 already running，排队项丢失。
     abortCycle(running, command.sessionId, { preempt: true });
-    // 旧轮可能正卡在审批上；不结掉的话下面的 await lifecycle 永远不返回
+    // 旧轮可能正卡在审批 / 意图确认上；不结掉的话下面的 await lifecycle 永远不返回
     settlePendingPermissions(command.sessionId);
+    settleIntentAsks(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
       await startTurn(command, async (opened) => {
@@ -1545,8 +1856,9 @@ async function handle(command: AgentCommand): Promise<void> {
     // 全走 compaction_start / compaction_end 事件那条已接好的链。
     // 抢跑语义同 interrupt：旧轮收尾不发 idle（preempt），中间没有「空闲」可投递。
     abortCycle(running, command.sessionId, { preempt: true });
-    // 理由同 interrupt：卡在审批的旧轮不结就等不到它收尾
+    // 理由同 interrupt：卡在审批 / 意图确认的旧轮不结就等不到它收尾
     settlePendingPermissions(command.sessionId);
+    settleIntentAsks(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
       await startTurn(command, async (opened) => {
@@ -1571,9 +1883,10 @@ async function handle(command: AgentCommand): Promise<void> {
     // 排队消息滞留在 renderer 的本地队列，idle 事件（startTurn 的 finally）到了
     // 自然逐条投递；不替用户清队（排队是用户的意图，停止不该替他放弃）。
     abortCycle(running, command.sessionId);
-    // **审批不听 abort**（见 askPermission）：不在这里结掉的话，停止对「正卡在
-    // 审批上的轮」完全无效——要等用户先回答审批，那个停止才生效
+    // **审批与意图确认都不听 abort**（见 askPermission / IntentConfirmWaiter）：不
+    // 在这里结掉的话，停止对「正卡在等用户点」的轮完全无效
     settlePendingPermissions(command.sessionId);
+    settleIntentAsks(command.sessionId);
     return;
   }
 
@@ -1585,8 +1898,10 @@ async function handle(command: AgentCommand): Promise<void> {
     // 收尾跳过二次 dispose（退订与出表仍做），并等它完全收尾。
     await killCycle(running, command.sessionId);
     ledger.delete(command.sessionId);
-    // 审批 resolve 函数不随会话一起结的话，会把已销毁会话的工具执行闭包整条钉在内存里
+    // 审批 resolve 函数不随会话一起结的话，会把已销毁会话的工具执行闭包整条钉在内存里；
+    // 意图确认的等待同理（它也不听 abort）
     settlePendingPermissions(command.sessionId);
+    settleIntentAsks(command.sessionId);
     return;
   }
 
@@ -1725,6 +2040,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "classifyGreetings") {
     // 不 await：判定是几秒量级的独立调用，不挡住后面进来的命令（与标题同理）
     void classifyGreetings(command);
+    return;
+  }
+  if (command.type === "summarizeFocus") {
+    // 同上：独立小调用（可能到分钟量级），不挡后续命令
+    void summarizeFocus(command);
     return;
   }
   if (command.type === "probeProvider") {

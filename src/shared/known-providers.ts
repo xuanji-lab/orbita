@@ -1,5 +1,3 @@
-import type { ThinkingLevel } from "./thinking.ts";
-
 /**
  * 我们**适配过的** provider 清单 —— 设置面下拉框的真源。
  *
@@ -10,11 +8,13 @@ import type { ThinkingLevel } from "./thinking.ts";
  * 比不给下拉框更坏。
  *
  * 所以这张表只放**我们验证过能接通的**条目，一条一条加。模型参数仍然来自 pi 的目录
- * （`catalogId` 对得上就用它的官方参数），这张表只负责「接入方式」。
+ * （`catalogId` 对得上就用它的官方参数）与型号白名单（known-models.ts，按型号 id 记），
+ * 这张表只负责「接入方式」。
  *
  * 对照 proma：他们的 `channel.ts` 有 24 个 ProviderType，同样是一张手写表——
  * 这部分是干净的，值得学。不该学的是 `fetchModels` 那个 15 分支 switch。
  */
+import type { CatalogPreference } from "./model-defaults.ts";
 import type { ProviderApi } from "./provider.ts";
 
 export interface KnownProvider {
@@ -27,18 +27,6 @@ export interface KnownProvider {
    * 同一厂商在两个分区各有一条时 label 相同，实例的默认名靠 knownProviderDefaultName 区分。
    */
   label: string;
-  /**
-   * 模型卡片左栏那一格里的短名字。**尽量取官方或大家都那么叫的**（2026-10-01 定）：
-   *
-   * - `deepseek` → `DS`（中文圈就这么叫）；`stepfun` → `STEP`（模型线就叫 `step-*`）；
-   *   其余名字长的取词首（`OC` / `ANT` / `OAI`）——这三条是我们自造的，官方没有缩写。
-   * - **智谱那三格直接用条目 id**：`zhipu` / `zhipu-cp` / `zai`。它比任何缩写都短且天然唯一，
-   *   而 `CP` 单独一个指不回智谱（仓里两格都是 Coding Plan），`ZAI` 也分不开国内与国际站。
-   *
-   * 同一家多个实例时第二个起加序号（DS / DS 2），兼容入口用实例名——规则在
-   * providers-view-model.ts 的 `railShortNames`。
-   */
-  short: string;
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
@@ -56,6 +44,17 @@ export interface KnownProvider {
    */
   catalogId?: string;
   /**
+   * **这家的目录说了算**：本家目录（`catalogId`）收录了的型号，参数全按目录，型号白名单
+   * （known-models.ts）不覆盖；目录还没收录的型号仍由白名单补。
+   *
+   * 给聚合网关用：它们会收窄型号能力，型号的通用口径在它那里不成立。实例：Kimi 官方说
+   * kimi-k3 有 low / high / max 三档，OpenCode Go 上只开 max 一档（models.dev 的
+   * opencode-go 条目，models.dev 由 OpenCode 团队维护；pi 目录同口径）。白名单按 id
+   * 全局生效的话，菜单会给出三档，选 low 实际被 pi 夹回 max（2026-10-24 实测）。
+   * 缺省 = 白名单优先于目录（白名单存在的意义就是赶在目录前面纠错）。
+   */
+  catalogAuthoritative?: boolean;
+  /**
    * **这家是按用量计费还是按套餐**。决定用量菜单里该不该有「花了多少钱」那一行。
    *
    * `metered` 说花了多少钱；`plan` 什么都不说——**两句话不能混**。
@@ -66,57 +65,6 @@ export interface KnownProvider {
    * 缺省 = `metered`：不知道的当按量算，那是绝大多数（自建网关也落在这一档）。
    */
   billing?: "metered" | "plan";
-  /**
-   * **快速适配通道：我们自己补的模型参数。**
-   *
-   * pi 的目录每 4 小时从 pi.dev 刷新，但**只能刷到 pi 已经收录的模型**。
-   * 厂商刚上线、或者只在官方 `/models` 里 fetch 得到的型号，目录里没有——
-   * 而用户已经能用了。没这条通道的后果是一个 1M 窗口的模型被当成 128k，
-   * 压缩会提前很多轮就触发。
-   *
-   * **优先于 pi 目录**：它存在的意义就是赶在目录前面，顺带也能纠目录的错。
-   * 代价是它会陈旧——**pi 目录收录且数值正确之后，应当把对应条目删掉**。
-   *
-   * 只写**确知**的字段（官方口径或实测），其余仍由目录 / 兑底补。
-   * 编一个数进去，就是把「1M 显示成 128k」换成「128k 显示成 1M」，更坏。
-   */
-  modelParams?: Record<
-    string,
-    {
-      contextWindow?: number;
-      maxTokens?: number;
-      reasoning?: boolean;
-      /**
-       * 这个型号收不收图片输入（pi 只有 text / image 两档）。
-       *
-       * **只在一个方向上写才有意义：知道它是纯文本时写 `["text"]`。** 不写落兜底的
-       * `["text","image"]`——那是给「不知道」的型号下的赌注（见 model-defaults 的
-       * FALLBACK_MODEL）；能收图的型号不用写（兜底本来就是 image），写了只是多一份会
-       * 与兜底漂移的重复声明。step-3.5-flash 系就是必须写的那类：它是纯文本，不写就
-       * 会把每一次附图都送上去换一个网关 400。
-       */
-      input?: ("text" | "image")[];
-      /** 目录查不到时的档位补丁（同 contextWindow 的角色：主源是目录，这里只补缺） */
-      thinkingLevels?: ThinkingLevel[];
-      /**
-       * 这个型号的**默认思考档**：新任务、换模型、派子会话时，用户没手选（或手选的档
-       * 这个型号不支持）就从这一档起。pi 目录没有这个概念（pi 只有一个全局默认
-       * medium），所以它只能住在白名单里。只填官方口径（厂商文档写明的 API 默认 /
-       * 自家 CLI 默认）；没填的型号退 medium，再按支持集夹取（见 `defaultThinkingLevel`）。
-       * 同时填了 thinkingLevels 时必须落在其中（测试守着）。
-       */
-      defaultThinkingLevel?: ThinkingLevel;
-      /**
-       * 这个型号**只收 adaptive 思考**（`thinking: adaptive` + `output_config.effort`，不认
-       * budget_tokens）——新 Claude 都是。目录收录的型号，注册链从目录条目的
-       * `compat.forceAdaptiveThinking` 借；**目录没收录**（也借不到家族参数）的型号只能在
-       * 这里声明，否则 pi 按老规矩发 budget_tokens，官方 API 不接受。只对 anthropic-messages
-       * 协议的接入有意义；同时要写 thinkingLevels（注册链据此生成档位表，xhigh / max 才能
-       * 作为 effort 原样送到）。
-       */
-      adaptiveThinking?: boolean;
-    }
-  >;
   /** 一句话说明这条什么时候该选 */
   note: string;
   /**
@@ -127,94 +75,18 @@ export interface KnownProvider {
   auth?: "oauth";
 }
 
-type ModelParams = NonNullable<KnownProvider["modelParams"]>[string];
-
-/** DeepSeek 的档位口径：none / low / high / max（none 即 off，没有 medium） */
-const DEEPSEEK_THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "high", "max"];
-
-/** deepseek-flash 与聚合网关写法 deepseek-v4.1-flash 共用（见 deepseek 条目的注释） */
-const DEEPSEEK_FLASH: ModelParams = {
-  contextWindow: 1_000_000,
-  maxTokens: 384_000,
-  reasoning: true,
-  thinkingLevels: DEEPSEEK_THINKING_LEVELS,
-  defaultThinkingLevel: "high",
-};
-
-/**
- * Step 5 Preview：阶跃官方的 `step-5-preview` 与 OpenCode Go 的免费档
- * `step-5-preview-free` 是同一个模型（后者的模型页写的也是「同一模型的限时免费」），
- * 口径一份。
- */
-const STEP_5_PREVIEW: ModelParams = {
-  contextWindow: 1_000_000,
-  maxTokens: 65_536,
-  reasoning: true,
-  thinkingLevels: ["low", "medium", "high"],
-  defaultThinkingLevel: "medium",
-};
-
-/** 能关思考的 claude：off + low→max（没有 minimal），API 与 Claude Code 默认都是 high */
-const CLAUDE_WITH_OFF: ModelParams = {
-  thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
-  defaultThinkingLevel: "high",
-};
-
-/** 思考恒开的 claude（fable 系）：low→max，没有 off，默认 high */
-const CLAUDE_ALWAYS_THINKING: ModelParams = {
-  thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
-  defaultThinkingLevel: "high",
-};
-
-/** Kimi K3：思考恒开，low / high / max，默认 max（k3 与 kimi-k3 共用） */
-const KIMI_K3: ModelParams = {
-  thinkingLevels: ["low", "high", "max"],
-  defaultThinkingLevel: "max",
-};
-
 export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "deepseek",
     label: "DeepSeek",
-    short: "DS",
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
     catalogId: "deepseek",
-    /**
-     * 快速适配通道（2026-09-03，wafo 指出遗漏）：pi 的 deepseek 目录条目
-     * 只有 v4-flash / v4-pro 两个，**vision-exp 没收**——但它是官方三模型之一
-     * （Models & Pricing 页三模型共用同一行规格：1M / 384K），且 /models 拉得回。
-     * 参数另有交叉印证：pi 的 opencode-go 目录收录了同名模型，同为 1M/384K。
-     * pi 的 deepseek 条目补上它之后，这条可删。
-     *
-     * 思考档口径（2026-09-23，源：api-docs.deepseek.com 的 Thinking Mode 指南与 Models &
-     * Pricing）：`reasoning_effort` 只认 none / low / high / max（没有 medium），none 即关；
-     * 「Thinking mode is enabled by default」，省略时默认 high——全系同一口径。
-     *
-     * deepseek-flash（2026-09-10 起的官方 id，指向 V4.1-Flash）：1M 上下文、输出上限 384K、
-     * 可读图。`deepseek-v4.1-flash` 是聚合网关（OpenRouter 等）对同一型号的写法，官方文档
-     * 里没有这个 id——两个键共用一份参数。旧 id deepseek-v4-flash / -vision-exp 已退役但
-     * 仍被接受，请求由 V4.1-Flash 承接，所以思考档口径与它相同。
-     */
-    modelParams: {
-      "deepseek-flash": DEEPSEEK_FLASH,
-      "deepseek-v4.1-flash": DEEPSEEK_FLASH,
-      "deepseek-v4-flash-vision-exp": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        thinkingLevels: DEEPSEEK_THINKING_LEVELS,
-        defaultThinkingLevel: "high",
-      },
-      // 这两个 pi 目录已收录（窗口 / 档位表走目录），白名单只补目录没有的默认档
-      "deepseek-v4-flash": { defaultThinkingLevel: "high" },
-      "deepseek-v4-pro": { defaultThinkingLevel: "high" },
-    },
     note: "DeepSeek 官方 API",
   },
   {
     id: "zhipu",
     label: "智谱",
-    short: "zhipu",
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     catalogId: "zai-coding-cn",
@@ -223,53 +95,26 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "claude",
     label: "Claude",
-    short: "Claude",
     api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     catalogId: "anthropic",
     billing: "plan",
     auth: "oauth",
-    /*
-     * 模型参数不用意气声明：claude 各型号的档位 / 默认档已经在 anthropic-compatible
-     * 条目的 modelParams 里（knownModelParams 按模型 id 跨条目查），这里自接享用。
-     */
+    // claude 各型号的档位 / 默认档在型号白名单里（known-models.ts，按 id 生效），这里不用声明
     note: "Claude Pro / Max 订阅，浏览器登录授权，令牌自动续期",
   },
   {
     id: "zhipu-coding",
     label: "智谱",
-    short: "zhipu-cp",
     api: "anthropic-messages",
     baseUrl: "https://open.bigmodel.cn/api/anthropic",
     catalogId: "zai-coding-cn",
     billing: "plan",
-    modelParams: {
-      /**
-       * pi 的 `zai-coding-cn` 目录里没有 flash（只到 glm-5.3），
-       * 而官方 `/models` 接口 fetch 得到。参数向 glm-5.3 看齐：
-       * 同代同系，官方口径都是 1M 上下文。
-       */
-      "glm-5.3-flash": {
-        contextWindow: 1_000_000,
-        maxTokens: 131_072,
-        reasoning: true,
-        // 目录查不到这个 id（快速通道）：抄 glm-5.3 家族口径，支持集里连 medium 都没有
-        thinkingLevels: ["low", "high", "max"],
-        defaultThinkingLevel: "max",
-      },
-      /*
-       * 默认档（2026-09-23，源：docs.z.ai 的 GLM-5.3 页与 Coding Plan 的 Claude Code 接入页）：
-       * 5.3 全系思考强制开启、只认 low / high / max，省略时默认 max；Anthropic 兼容端点把
-       * medium 折成 high、xhigh 折成 max。glm-5.3 本体走目录，这里只补默认档。
-       */
-      "glm-5.3": { defaultThinkingLevel: "max" },
-    },
     note: "GLM Coding Plan 订阅，走 Anthropic 兼容端点",
   },
   {
     id: "zai",
     label: "Z.AI",
-    short: "zai",
     api: "openai-completions",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     catalogId: "zai",
@@ -280,64 +125,16 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "stepfun",
     label: "阶跃星辰",
-    short: "STEP",
     api: "openai-completions",
     baseUrl: "https://api.stepfun.com/step_plan/v1",
-    // pi 目录未收录 stepfun：参数靠网关 Fetch 或手填，行摘要会如实标注走兜底
+    // pi 目录未收录 stepfun：参数靠型号白名单（known-models.ts）或手填，行摘要会如实标注走兜底
     // **Step Plan 是订阅制**（Credit 月池，platform.stepfun.com/docs/zh/step-plan）
     billing: "plan",
-    /**
-     * 快速适配通道（2026-10-10 按官方文档核对，源：platform.stepfun.com 的
-     * guides/models/* 模型页、step-plan/integrations/reasoning-api 与
-     * api-reference/chat/chat-completion-create）：
-     *   step-5-preview        1M / 最大输出 64k（模型页的「规格速览」两行：
-     *                          最大输入 1M、最大输出 64k——输入与输出共用 1M 窗口）
-     *   step-3.7-flash        256K（198B MoE 旗舰多模态推理）
-     *   step-3.5-flash        256K（196B MoE 旗舰语言推理）
-     *   step-3.5-flash-2603   256K（3.5 的 Agent 优化变体，官方变体页写明
-     *                          「基于 step-3.5-flash」，上下文随基型）
-     * 只有 5-preview 的模型页写了输出上限；3.7 / 3.5 三者的输出侧是「`max_tokens` 默认 INF，
-     * 由上下文封顶」——没有可写的数字，maxTokens 留空（落 8192 兜底，见 FALLBACK_MODEL）。
-     * pi 目录收录 stepfun 之后本块整个可删（目录优先级本来就高于白名单）。
-     *
-     * 思考档（同上）：5-preview 与 3.7-flash 支持 low / medium / high 三档（官方写明 medium
-     * 是「默认推荐」），3.5-flash-2603 只兼容 low / high；**四者都关不掉思考**（没有 off 档），
-     * 所以补 reasoning: true——目录没有它们，不补就落兜底的 false，一档思考都不发。
-     * 3.5-flash（基型）的默认档官方没写，不填，退 medium（在支持集内）；2603 的默认 high
-     * 出自 StepFun 工程师的发布文，不是文档页，半官方。
-     *
-     * 识图（官方模型页的「输入类型」逐字）：5-preview 是文本 / 图片 / 视频，3.7-flash 是
-     * 图片 / 视频，**3.5-flash 与 2603 是纯文本**——后两者写 ["text"] 纠掉兜底的 image，
-     * 否则每一次附图都会被网关 400；前两者收图，不写（兜底就是 image）。
-     */
-    modelParams: {
-      "step-5-preview": STEP_5_PREVIEW,
-      "step-3.7-flash": {
-        contextWindow: 256_000,
-        reasoning: true,
-        thinkingLevels: ["low", "medium", "high"],
-        defaultThinkingLevel: "medium",
-      },
-      "step-3.5-flash": {
-        contextWindow: 256_000,
-        reasoning: true,
-        input: ["text"],
-        thinkingLevels: ["low", "medium", "high"],
-      },
-      "step-3.5-flash-2603": {
-        contextWindow: 256_000,
-        reasoning: true,
-        input: ["text"],
-        thinkingLevels: ["low", "high"],
-        defaultThinkingLevel: "high",
-      },
-    },
     note: "Step Plan 订阅（地址要带到 /v1）",
   },
   {
     id: "kimi-coding",
     label: "Kimi",
-    short: "Kimi",
     /*
      * Kimi 会员（Kimi Code）的编程端点。走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
      * 条目同一个 baseUrl 与协议（客户端接 /v1/messages），模型参数（k3 / k3-256k /
@@ -354,143 +151,29 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   {
     id: "opencode-go",
     label: "OpenCode",
-    short: "OC",
     api: "openai-completions",
     baseUrl: "https://opencode.ai/zen/go/v1",
     catalogId: "opencode-go",
-    // 网关硬要求（缺了 400 MissingSessionID）：会话头用于前缀缓存路由，任意稳定值即可
+    // 聚合网关会收窄型号能力（kimi-k3 只开 max）：目录收录的型号以目录为准，理由见字段注释
+    catalogAuthoritative: true,
+    // 网关硬要求（缺了 400 MissingSessionID）：这是**探活兜底**的占位值——真实会话
+    // 在开轮 / 换模型时由 opencode-session.ts 按会话 id 覆盖它（OpenCode 要求每个会话
+    // 一个稳定 id，共用常量会让路由与前缀缓存失去意义）。
     headers: { "x-opencode-session": "orbita" },
     // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
     billing: "plan",
-    /**
-     * 快速适配通道（2026-10-10）：网关自己的模型清单是
-     * `GET https://opencode.ai/zen/go/v1/models`（当日 45 条，不需要 key），pi 目录只收
-     * 到其中一部分——这里补目录没有、且**走 /chat/completions**（本条目声明的协议）
-     * 的那几条。数字的源是 models.dev 的 opencode-go 元数据（OpenCode 团队自己维护的
-     * 注册表），**不是各家厂商的官方页**——比 stepfun 那块弱一档，但窗口写偏的代价
-     * 只是压缩时机，不写就是 128k 兜底（对 1M 的型号提前 8 倍触发压缩）。pi 目录收录
-     * 之后逐条可删。
-     *
-     * **档位只写有把握的**：声明了 `reasoning: true` 而没写档位时，默认档会落 medium
-     * 并**真的把 reasoning_effort=medium 发出去**——对只认 none / high 之类的模型就是
-     * 400。所以拿不准的宁可只写窗口 / 输出（模型按自己的默认档跑，思考菜单不谎报支持集）。
-     *
-     * 没进这里的两类：① 走 /v1/messages 或 /v1/responses 的型号
-     * （claude-haiku-5-5、qwen3.8-flash、minimax-m2.5、grok-4.6 / 4.7、gpt-6-luna、
-     * muse-spark-1.3-contributor）——参数可能已经按 id 跨表借到了，但本条目声明的是
-     * openai-completions，请求会发到错的端点，要靠 pi 目录收录（目录带逐模型的 api）；
-     * ② 网关有、models.dev 也没元数据的（glm-5、kimi-k2.5、qwen3.5-plus、
-     * mimo-v2-pro / -omni、hy3-preview、omen-alpha）。
-     */
-    modelParams: {
-      // 与 stepfun 条目同一条（同一个模型的免费档，见 STEP_5_PREVIEW 的注释）
-      "step-5-preview-free": STEP_5_PREVIEW,
-      "space-bunny": {
-        contextWindow: 1_048_576,
-        maxTokens: 524_288,
-        reasoning: true,
-        // models.dev 的档位表就是 low → max 五档，medium 在集内（默认档落它，安全）
-        thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
-      },
-      // 这四条 models.dev 没给档位：只写数字，不碰思考（档位只写有把握的，见上）。
-      // longcat 与 mimo 收图（兜底 image 正好），不用写模态；hy4-preview 是**纯文本**
-      // （models.dev 上 4 家 provider 的输入类型一致），写 ["text"] 纠掉兜底的 image——
-      // 不写的话每一次附图都会被网关 400
-      "longcat-2.5-preview-free": { contextWindow: 1_000_000, maxTokens: 131_072 },
-      "mimo-v2.6-flash": { contextWindow: 1_048_576, maxTokens: 131_072 },
-      "mimo-v2.6-pro": { contextWindow: 1_048_576, maxTokens: 131_072 },
-      "hy4-preview": { contextWindow: 1_024_000, maxTokens: 64_000, input: ["text"] },
-    },
     note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
-    short: "ANT",
     api: "anthropic-messages",
     baseUrl: "",
-    modelParams: {
-      // claude 的思考档**按型号**，不按家族一刀切（wafo 2026-09-23；推翻 09-22「claude
-      // 没有 off」——那条对 fable 成立，对其余型号不成立）。源：platform.claude.com 的
-      // thinking / effort 文档与各型号页（2026-09-23 核对）：
-      // - 没有 minimal；xhigh 的显示名叫 Extra。目录按「非显式 null 即支持」会多算出
-      //   minimal——这里按官方档位表纠回来。
-      // - off：sonnet-5 / opus-5 / opus-4-8 / opus-4-6 能关思考；fable-5 / fable-5-1 /
-      //   opus-5-5 思考恒开，关思考的请求被拒。
-      // - opus-4-6 没有 xhigh（官方档位表只到 low / medium / high / max）。
-      // - 默认档：省略 effort 时 API 默认 high，Claude Code 对这几个型号也落 high；
-      //   例外是 opus-5-5（官方默认 medium，2026-09-23 核对）。
-      // 2026-10-10 补：effort 文档写的是「多数型号默认 high，**opus-5-5 与 haiku-5-5**
-      // 默认 medium」——新加的两条照此，其余不动。
-      "claude-sonnet-5": CLAUDE_WITH_OFF,
-      "claude-opus-5": CLAUDE_WITH_OFF,
-      "claude-opus-4-8": CLAUDE_WITH_OFF,
-      "claude-opus-4-6": {
-        thinkingLevels: ["off", "low", "medium", "high", "max"],
-        defaultThinkingLevel: "high",
-      },
-      "claude-fable-5": CLAUDE_ALWAYS_THINKING,
-      "claude-fable-5-1": CLAUDE_ALWAYS_THINKING,
-      /*
-       * pi 目录还没收录 opus-5-5（也借不到家族参数：opus-5-5 ≠ opus-5），不补就落
-       * 128k 兜底、且被当成不能思考。窗口 / 输出上限取官方型号总览（1M / 128K）。
-       */
-      "claude-opus-5-5": {
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
-        defaultThinkingLevel: "medium",
-        // 只收 adaptive + effort（官方：extended / budget 思考在 4.6 之后的型号上不被接受）；
-        // 目录没它，借不到 compat.forceAdaptiveThinking，只能在这里声明
-        adaptiveThinking: true,
-      },
-      /*
-       * claude 5.5 两兄弟（2026-10-10，源：platform.claude.com 的
-       * build-with-claude/effort 与 thinking 文档、models/sonnet-5-5 与 haiku-5-5 页；
-       * pi 目录（0.84.3）只到 claude-sonnet-5，两条都得自己声明——窗口 / 输出 / 档位
-       * 也就都写在这里）：
-       * - 都是 1M 窗口 / 单请求最大 128k 输出、都吃图（图随兜底，不重复声明）；
-       *   effort 五档 low → max，没有 minimal（与其余 claude 同）。
-       * - 都是 adaptive 专用：`thinking: enabled` 带 budget_tokens 直接 400，所以带
-       *   adaptiveThinking（目录没它们，借不到 compat.forceAdaptiveThinking）。
-       * - off：haiku-5-5 能关（官方：`disabled` 在 effort high 及以下有效，xhigh / max
-       *   搭配会 400）；sonnet-5-5 关不掉（`disabled` 400，官方给的最低档是
-       *   `between_tools`「不做前置思考」）——所以前者 off + low→max，后者 low→max。
-       * - 默认档：sonnet-5-5 是 high（官方：high 是 Claude API 的默认），
-       *   haiku-5-5 是 medium（官方 effort 文档写明）。
-       */
-      "claude-sonnet-5-5": {
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
-        defaultThinkingLevel: "high",
-        adaptiveThinking: true,
-      },
-      "claude-haiku-5-5": {
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-        reasoning: true,
-        thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
-        defaultThinkingLevel: "medium",
-        adaptiveThinking: true,
-      },
-      /*
-       * Kimi K3（2026-09-23，源：platform.kimi.ai 的 K3 quickstart 与 Kimi Code 更新日志）：
-       * 思考恒开、关不掉，`reasoning_effort` 只认 low / high / max，省略时默认 max（Kimi
-       * Code 同为 max）。窗口走目录（kimi-coding 收录了 k3）。官方 API id 是 kimi-k3，
-       * 网关常写作 k3——两个键共用一份。
-       */
-      k3: KIMI_K3,
-      "kimi-k3": KIMI_K3,
-    },
     note: "自建网关 / 私有部署，客户端会在你填的地址后接 /v1/messages",
   },
   {
     id: "openai-compatible",
     label: "OpenAI 兼容",
-    short: "OAI",
     api: "openai-completions",
     baseUrl: "",
     note: "自建网关 / 私有部署，地址要带到版本段，客户端接 /chat/completions",
@@ -560,27 +243,16 @@ export function isPlanBilling(provider: ProviderKindSource): boolean {
 }
 
 /**
- * 我们自己补的模型参数。**优先于 pi 目录**（见 `modelParams` 的说明）。
- * 认不得的 id 返回空对象——调用方据此原样走目录 / 兜底。
+ * 这家服务商在查型号参数时的偏好（model-defaults 的 `CatalogPreference`）：去哪家目录查、
+ * 接入协议、目录说不说了算。设置页、底栏菜单与主进程装配会话载荷**从同一个函数取**——
+ * 三处各拼一份，迟早有一处漏了 catalogAuthoritative，菜单与会话就又对同一个型号说两套话。
  *
- * **只按模型 id 查，跨全部条目**：这张表记的是「这个型号的官方口径」，
- * 与它从哪家网关接进来无关。按 (provider, model) 查的老签名会让自建网关
- * （`anthropic-compatible`）吃不到任何补丁——glm-5.3-flash 的 1M 明明在表里，
- * 却因为不是从 `zhipu-coding` 接进来的而显示 128k（wafo 2026-09-21 实测）。
- * 代价是同名 id 只能有一份口径；表里都是确知的官方参数，本就不该分叉。
+ * `api` 取实例自己的协议（新建表单里还没有实例时退条目的）：会话注册按实例协议走。
  */
-export function knownModelParams(modelId: string): {
-  contextWindow?: number;
-  maxTokens?: number;
-  reasoning?: boolean;
-  input?: ("text" | "image")[];
-  thinkingLevels?: ThinkingLevel[];
-  defaultThinkingLevel?: ThinkingLevel;
-  adaptiveThinking?: boolean;
-} {
-  for (const item of KNOWN_PROVIDERS) {
-    const params = item.modelParams?.[modelId];
-    if (params !== undefined) return params;
-  }
-  return {};
+export function catalogPreferenceOf(known: KnownProvider, api: string = known.api): CatalogPreference {
+  return {
+    api,
+    ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
+    ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
+  };
 }

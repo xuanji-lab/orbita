@@ -11,7 +11,6 @@
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
-import { KNOWN_PROVIDERS } from "@shared/known-providers";
 import { resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
@@ -20,7 +19,14 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import type { MenuPlacementSide } from "../../shell/menu-position";
-import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railShortNames } from "./providers-view-model.ts";
+import {
+  hasCredentials,
+  modelAcceptsImage,
+  modelContextText,
+  modelPreferenceOf,
+  railVendorCell,
+} from "./providers-view-model.ts";
+import { VendorLogo } from "./VendorLogo";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -49,8 +55,7 @@ export function useBuiltinCatalog(): BuiltinProvider[] {
 
 /** 某厂商下某个模型的参数兜底（按模型 id 跨目录推断：自建网关没有 catalogId，但它跑的型号在目录里多半有官方口径） */
 function defaultsFor(provider: ProviderDto, catalog: readonly BuiltinProvider[], modelId: string) {
-  const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-  return resolveModelDefaults(catalog, modelId, { catalogId: known?.catalogId, api: known?.api });
+  return resolveModelDefaults(catalog, modelId, modelPreferenceOf(provider));
 }
 
 /**
@@ -105,7 +110,7 @@ const RAIL_CELL: React.CSSProperties = {
   border: 0,
   borderRadius: "var(--radius-sm)",
   fontFamily: "var(--font-family-base)",
-  fontSize: "var(--font-size-micro)",
+  fontSize: "var(--font-size-xs)",
   textAlign: "left",
   cursor: "pointer",
 };
@@ -230,35 +235,12 @@ export function modelPickerRail(options: {
   scope: ModelScope;
   onScope: (scope: ModelScope) => void;
 }): React.ReactNode {
-  const shortNames = railShortNames(options.providers);
   return (
     <>
       {/*
-        左栏的宽度尺：选中那一格是 semibold（.option-row 的选中配方），比常规字重宽——
-        不把「加粗后的宽度」也算进基准的话，切厂商时左栏会自己胖瘦，卡片宽度跟着动
-        （2026-10-01 真机验收量到：379 → 369）。摆一份加粗的全部短名，不可见、不占高。
+        左栏只有图标格（2026-10-19 用户：兼容网关也换协议的标，「比较统一」），格宽恒定、
+        不随选中字重变——原先给文字格（自建网关实例名）准备的隐藏宽度尺随之删掉。
       */}
-      <span
-        aria-hidden
-        style={{
-          height: 0,
-          overflow: "hidden",
-          visibility: "hidden",
-          whiteSpace: "nowrap",
-          fontFamily: "var(--font-family-base)",
-          // 与 RAIL_CELL 同一档（micro）：尺量错了，切厂商时左栏会自己胖瘦
-          fontSize: "var(--font-size-micro)",
-          fontWeight: "var(--weight-semibold)",
-        }}
-      >
-        {options.providers.map((provider) => (
-          // 横向 padding 与 RAIL_CELL 相同：尺比的是「格子整宽」——少算这 16px 的话，
-          // 选中格变 semibold 时左栏还是会胖 1px（pr138 机器验收量到 61.55 → 62.55）
-          <div key={`rail-ruler:${provider.id}`} style={{ padding: "0 var(--space-2)" }}>
-            {shortNames.get(provider.id) ?? provider.displayName}
-          </div>
-        ))}
-      </span>
       <button
         type="button"
         className="option-row"
@@ -281,21 +263,25 @@ export function modelPickerRail(options: {
       >
         <Icon name="menu" size={13} strokeWidth={1.8} />
       </button>
-      {options.providers.map((provider) => (
-        <button
-          key={provider.id}
-          type="button"
-          className="option-row"
-          style={RAIL_CELL}
-          title={provider.displayName}
-          aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
-          onClick={() => options.onScope({ kind: "provider", id: provider.id })}
-        >
-          <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-            {shortNames.get(provider.id) ?? provider.displayName}
-          </span>
-        </button>
-      ))}
+      {options.providers.map((provider) => {
+        const cell = railVendorCell(provider);
+        return (
+          <button
+            key={provider.id}
+            type="button"
+            className="option-row"
+            style={RAIL_CELL}
+            // 同协议多个网关共用一枚标：实例名靠悬停 title 与读屏 aria-label 区分
+            title={provider.displayName}
+            // 图标格的 VendorLogo 自身 aria-hidden，按钮不能只靠图标——补全名给读屏
+            aria-label={provider.displayName}
+            aria-selected={options.scope.kind === "provider" && options.scope.id === provider.id}
+            onClick={() => options.onScope({ kind: "provider", id: provider.id })}
+          >
+            <VendorLogo kindId={cell.kindId} label={cell.label} size={14} />
+          </button>
+        );
+      })}
     </>
   );
 }
@@ -322,11 +308,7 @@ export function modelCardItems(options: {
 }): MenuItem[] {
   const starredKeys = new Set(options.starred.map((pair) => starKey(pair.providerId, pair.modelId)));
   const rowFor = (provider: ProviderDto, declared: ModelDecl): MenuItem => {
-    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    const defaults = resolveModelDefaults(options.catalog, declared.id, {
-      catalogId: known?.catalogId,
-      api: known?.api,
-    });
+    const defaults = resolveModelDefaults(options.catalog, declared.id, modelPreferenceOf(provider));
     const context = modelContextText(declared, defaults);
     const isStarred = starredKeys.has(starKey(provider.id, declared.id));
     return {

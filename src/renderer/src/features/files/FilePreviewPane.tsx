@@ -30,6 +30,8 @@ import { useT } from "../../locale.ts";
 export function FilePreviewPane(props: {
   sessionId: string | null;
   workspaceId: string | null;
+  /** 专注 / 浏览态的额外预览根（FilesPanel 递进来，read / open 全带上） */
+  extraWorkspaceId?: string | null;
   root: string;
   /** 文件绝对路径（标签的 path，同 fs:list 的 dir 语义）；附图模式下是原图引用 */
   path: string;
@@ -43,6 +45,8 @@ export function FilePreviewPane(props: {
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
+  const extraWorkspaceId = props.extraWorkspaceId ?? null;
+  const extra = extraWorkspaceId === null ? {} : { extraWorkspaceId };
   const sentImage = props.sentImage;
   // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
   // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
@@ -58,6 +62,7 @@ export function FilePreviewPane(props: {
     sentImage === undefined,
     sessionId,
     workspaceId,
+    extraWorkspaceId,
     root,
     path,
   );
@@ -96,7 +101,7 @@ export function FilePreviewPane(props: {
   };
 
   const openDefault = (): void => {
-    void api.files.open({ sessionId, workspaceId, root, dir: path }).catch(() => {
+    void api.files.open({ sessionId, workspaceId, ...extra, root, dir: path }).catch(() => {
       // 打开失败不单开一条面板错误态——系统对话框已经在说这件事
     });
   };
@@ -105,7 +110,7 @@ export function FilePreviewPane(props: {
   // 也没有复制路径 / 重读可给（引用不是路径、原图不可变）
   const webPage = sentImage === undefined && isWebPageFile(path);
   const openInBrowser = (): void => {
-    void api.files.openInBrowser({ sessionId, workspaceId, root, dir: path }).catch(() => {
+    void api.files.openInBrowser({ sessionId, workspaceId, ...extra, root, dir: path }).catch(() => {
       // 同 openDefault：失败时浏览器窗口自己显示错误页，面板不另开错误态
     });
   };
@@ -163,11 +168,11 @@ export function FilePreviewPane(props: {
           <div className="file-preview-actions">
             {webPage && (
               <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
-                <Icon name="globe" size={16} />
+                <Icon name="globe" size={16} strokeWidth={1.8} />
               </PanelIconButton>
             )}
             <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
-              <Icon name={copied ? "check" : "copy"} size={16} />
+              <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
             </PanelIconButton>
             <PanelIconButton
               title={t.files.refreshPreview}
@@ -176,7 +181,7 @@ export function FilePreviewPane(props: {
                 if (pdf) setPdfReload((n) => n + 1);
               }}
             >
-              <Icon name="refresh-cw" size={16} spin={loading} />
+              <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
             </PanelIconButton>
           </div>
         )}
@@ -194,7 +199,7 @@ export function FilePreviewPane(props: {
       <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined}>
         {pdf ? (
           <PdfView
-            request={{ sessionId, workspaceId, root, dir: path }}
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
             reloadToken={pdfReload}
           />
@@ -254,6 +259,7 @@ function usePreviewData(
   enabled: boolean,
   sessionId: string | null,
   workspaceId: string | null,
+  extraWorkspaceId: string | null,
   root: string,
   path: string,
 ): { state: LoadState; refreshing: boolean; refresh: () => void } {
@@ -272,7 +278,7 @@ function usePreviewData(
       setState({ status: "loading" });
     }
     api.files
-      .read({ sessionId, workspaceId, root, dir: path })
+      .read({ sessionId, workspaceId, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }), root, dir: path })
       .then((data) => {
         if (requestRef.current !== id) return;
         setState({ status: "ready", data });
@@ -285,7 +291,7 @@ function usePreviewData(
       });
   };
 
-  useEffect(() => load(false), [enabled, sessionId, workspaceId, root, path]);
+  useEffect(() => load(false), [enabled, sessionId, workspaceId, extraWorkspaceId, root, path]);
 
   return { state, refreshing, refresh: () => load(true) };
 }

@@ -8,15 +8,18 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import {
   parseNumstatLine,
+  parseStatusChangedLine,
   parseUntrackedLine,
   type ReviewDiff,
   type ReviewEntry,
   type ReviewList,
   type ReviewSource,
 } from "../../shared/review.ts";
+import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -182,6 +185,122 @@ export async function gitReviewList(
 async function isUntracked(runner: GitRunner, cwd: string, path: string): Promise<boolean> {
   const result = await runner(["ls-files", "--", path], cwd);
   return result.code === 0 && result.stdout.trim() === "";
+}
+
+/** 当前分支短名（`rev-parse --abbrev-ref HEAD`，如 `feat/focus-mode`）；不是仓库 / 分离头 / 出错都 null */
+async function currentBranch(runner: GitRunner, cwd: string): Promise<string | null> {
+  try {
+    const result = await runner(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+    if (result.code !== 0) return null;
+    const name = result.stdout.trim();
+    // 分离头时输出 "HEAD"，不是可读的分支名——不标比标错好
+    return name === "" || name === "HEAD" ? null : name;
+  } catch {
+    return null;
+  }
+}
+
+/** numstat 行级统计的合并型：两条 diff（未暂存 + 已暂存）同路径加在一起 */
+interface LineStat {
+  added: number;
+  removed: number;
+  binary: boolean;
+}
+
+function mergeLineStat(into: Map<string, LineStat>, entries: readonly ReviewEntry[]): void {
+  for (const entry of entries) {
+    const prev = into.get(entry.path) ?? { added: 0, removed: 0, binary: false };
+    into.set(entry.path, {
+      added: prev.added + entry.added,
+      removed: prev.removed + entry.removed,
+      binary: prev.binary || entry.binary,
+    });
+  }
+}
+
+/** XY 有一侧是 A（新增）就是新文件（U），其余已跟踪改动算修改（M） */
+function changeKindOf(xy: string): FocusChangeEntry["kind"] {
+  return xy.includes("A") ? "U" : "M";
+}
+
+/**
+ * `focus:changes` 的 git 侧实现：工作区**尚未提交**的全部改动（VS Code 源代码管理的口径，
+ * 不是审查面板 unstaged 那一档）——`status --porcelain=v2` 一遍拿全量清单，
+ * 行级统计用未暂存 + 已暂存两条 `diff --numstat` 合并，未跟踪文件对着空文件算
+ * （同 `gitReviewList` 的 unstaged 支路，同一条 disk 读盘路）。全部只读。
+ */
+export async function gitWorkdirChanges(
+  runner: GitRunner,
+  cwd: string,
+  readUntracked: UntrackedReader = diskUntrackedReader,
+): Promise<FocusChanges> {
+  let root: string | null;
+  try {
+    root = await repoRoot(runner, cwd);
+  } catch {
+    return { kind: "empty", reason: "no-git" };
+  }
+  if (root === null) return { kind: "empty", reason: "not-repo" };
+
+  // --no-renames：status 不产 `2 <XY> … old\tnew` 改名行，parseStatusChangedLine 只认 `1` 行
+  const status = await runner(
+    ["status", "--porcelain=v2", "--untracked-files=all", "--no-renames"],
+    cwd,
+  );
+  const stats = new Map<string, LineStat>();
+  mergeLineStat(stats, numstatEntries((await runner(diffArgs("unstaged", null, { numstat: true }) ?? [], cwd)).stdout));
+  mergeLineStat(
+    stats,
+    numstatEntries((await runner(["diff", "--cached", "--no-renames", "--numstat"], cwd)).stdout),
+  );
+  // 未跟踪文件不在 git diff 的覆盖面里，行数对着空文件算（读盘，与审查面板同一条路）
+  const untrackedStats = new Map(
+    (await untrackedEntries(cwd, status.stdout, readUntracked)).map((entry) => [
+      entry.path,
+      entry,
+    ]),
+  );
+
+  const entries: FocusChangeEntry[] = [];
+  for (const line of status.stdout.split("\n")) {
+    const untrackedPath = parseUntrackedLine(line);
+    if (untrackedPath !== null) {
+      const fromDisk = untrackedStats.get(untrackedPath);
+      // 读盘失败（刚被删 / 二进制读不了）的未跟踪文件不在 untrackedEntries 里——
+      // status 快照与磁盘现状之间的窗口，不值得报错；行数落 0 但 U 标记保留
+      entries.push({
+        path: untrackedPath,
+        kind: "U",
+        added: fromDisk?.added ?? 0,
+        removed: fromDisk?.removed ?? 0,
+        binary: fromDisk?.binary ?? false,
+      });
+      continue;
+    }
+    const changed = parseStatusChangedLine(line);
+    if (changed === null) continue;
+    const stat = stats.get(changed.path);
+    entries.push({
+      path: changed.path,
+      kind: changeKindOf(changed.xy),
+      added: stat?.added ?? 0,
+      removed: stat?.removed ?? 0,
+      binary: stat?.binary ?? false,
+    });
+  }
+  // git 路径相对于仓库根；树相对于工作区目录。工作区不是仓库根时（嵌在更大的
+  // 仓库里）换算成工作区相对路径，落在工作区之外的改动不归这棵树管，丢掉
+  const cwdRelative = (path: string): string | null => {
+    const rel = relative(cwd, join(root, path));
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
+    return sep === "/" ? rel : rel.split(sep).join("/");
+  };
+  const scoped = [] as FocusChangeEntry[];
+  for (const entry of entries) {
+    const rel = cwdRelative(entry.path);
+    if (rel !== null) scoped.push({ ...entry, path: rel });
+  }
+  return { kind: "ok", branch: await currentBranch(runner, cwd), entries: scoped };
 }
 
 /** `review:diff` 的 git 侧实现（unified diff 原样返回）。 */

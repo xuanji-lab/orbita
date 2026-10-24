@@ -1,0 +1,501 @@
+import "./update-view.css";
+import { Fragment, useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import { historyReleases, recentReleaseTitle, releaseTagUrl } from "@shared/updater";
+import type { RecentRelease, RecentReleasesResult, UpdateNote, UpdaterSnapshot, UpdateState } from "@shared/updater";
+import { api } from "../../api";
+import { Icon, isIconName, type IconName } from "../../shell/Icon";
+import { useT } from "../../locale.ts";
+import { SettingGroup, SettingRow } from "./SettingRow";
+import { formatBytes, progressAmount, progressPercent } from "./update-format.ts";
+
+/**
+ * 设置 › 通用 › 「软件更新」分组（原型定稿 2026-10-18）。
+ *
+ * 七态一行：状态用「图标 + 文字」讲，颜色只是第二信号；行右 hem 只放当前唯一的主操作
+ * （accent 只给「下载」与「重启以安装」这两步真正推进更新的动作）。机器事实（版本号、
+ * MB 数）一律等宽字体。
+ *
+ * 状态不在这里推导：主进程的 Updater 是唯一真值，每次变化推一份**完整快照**
+ * （updater:state），这里整份替换；挂载时先拉一次（updater:get）。
+ *
+ * 「当前版本」与「历史版本」两行行尾都只有一个展开三角，**整行是一个 disclosure 按钮**
+ * （点行上任何位置开合，键盘 Tab + Enter/Space 同样）：点开就在下方就地看内容
+ * （本版说明 / 最近几个版本），GitHub 外链出口放在展开体底部（按钮外面）。
+ * 「当前版本」**无条件可展开**（2026-10-18 用户验收：「首先你得能展开当前版本」）：
+ * 说明是应用内置的（见 CurrentVersionNotesPanel），没写也照旧展开，GitHub 出口仍在。
+ * 三角占 12px（= .upd-btn 的右内边距），尾部文字的右缘因此落在同一条线上。
+ * 「更新」那一行不动：那里有真操作按钮（accent 只给「下载」与「重启以安装」）。
+ *
+ * 两个 GitHub 地址都由快照里的 `releasesUrl` 拼（owner/repo 的真源在 package.json 的
+ * build.publish），最近版本列表走 `updater:recentReleases`（主进程侧 10 分钟缓存），
+ * 界面里不再写第二份仓址。
+ */
+export function UpdateCard() {
+  const t = useT();
+  const x = t.settings.update;
+  const [snapshot, setSnapshot] = useState<UpdaterSnapshot | null>(null);
+  /** 「更新内容」默认收着：一行状态是默认形态，细节想看了再展开 */
+  const [notesOpen, setNotesOpen] = useState(false);
+  /** 「本版更新内容」同样默认收着（两个展开器各管各的：一个是待装的，一个是已装的） */
+  const [currentOpen, setCurrentOpen] = useState(false);
+  /** 「最近几个版本」同样默认收着（点开才去打 GitHub API） */
+  const [recentOpen, setRecentOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.updater
+      .get()
+      .then((loaded) => {
+        if (!cancelled) setSnapshot(loaded);
+      })
+      .catch(() => undefined);
+    const off = api.updater.onState((next) => setSnapshot(next));
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
+  const currentVersion = snapshot?.currentVersion ?? "";
+  // 快照还没到（或桥不在）时不猜：入口置灰、版本号留空，等真值到了再画
+  const supported = snapshot?.support === "supported";
+  const state: UpdateState = snapshot?.state ?? { kind: "idle" };
+  /** 当前这一版的说明（应用内置的那份，见 snapshot 契约；没写是 null） */
+  const currentNotes = snapshot?.currentNotes ?? null;
+  /** Release 页基址；拿不到（publish 没写 owner/repo）就连两个入口一起不画 */
+  const releasesUrl = snapshot?.releasesUrl ?? null;
+  const tagUrl = releasesUrl === null ? null : releaseTagUrl(releasesUrl, currentVersion);
+
+  /** 状态行：图标 + 文字。tone 只有「出错」一档——成功不染色，图标与文字已经是状态 */
+  let statusIcon: IconName | null = null;
+  let statusSpin = false;
+  let statusText: ReactNode = x.idleHint;
+  let statusTone: "quiet" | "error" = "quiet";
+  /** 出错的机器原话进 title：界面上说人话，鼠标停上去能拿到诊断用的原文 */
+  let statusDetail: string | null = null;
+  /** 行底整幅的一格：下载进度条 / 展开的更新内容 */
+  let below: ReactNode = null;
+  /** 更新说明；没有就不显示展开器（原型第 8 条） */
+  let notes: readonly UpdateNote[] | null = null;
+  let action: { label: string; icon?: IconName; accent: boolean; disabled?: boolean; onClick: () => void } = {
+    label: x.checkNow,
+    icon: "refresh-cw",
+    accent: false,
+    disabled: true,
+    onClick: () => undefined,
+  };
+
+  if (!supported) {
+    // 原因不同说的话不同：dev 下是「装好的应用才行」，非 Windows 的包是「本平台暂不支持，去 GitHub 下载」
+    statusText = snapshot?.support === "platform" ? x.unsupportedPlatform : x.unsupported;
+  } else if (state.kind === "idle") {
+    // 出厂形态：只说「后台会自己查」，主操作是手动查一次
+    action = { label: x.checkNow, icon: "refresh-cw", accent: false, onClick: () => void api.updater.check() };
+  } else if (state.kind === "checking") {
+    statusIcon = "loader-circle";
+    statusSpin = true;
+    statusText = x.checking;
+    // 检查中不给第二次点击（按钮留着位置，避免行在检查前后跳一下）
+    action = { label: x.checkNow, accent: false, disabled: true, onClick: () => undefined };
+  } else if (state.kind === "up-to-date") {
+    statusIcon = "circle-check";
+    statusText = x.upToDate;
+    action = { label: x.checkAgain, accent: false, onClick: () => void api.updater.check() };
+  } else if (state.kind === "available") {
+    const release = state.release;
+    statusIcon = "download";
+    statusText = (
+      <>
+        {x.versionLead} <Mono>{release.version}</Mono> {x.availableMid}
+        {release.size === null ? null : (
+          <>
+            {" · "}
+            <Mono>{formatBytes(release.size)}</Mono>
+          </>
+        )}
+      </>
+    );
+    notes = release.releaseNotes;
+    if (notes !== null && notesOpen) below = <ReleaseNotes notes={notes} />;
+    action = { label: x.download, icon: "download", accent: true, onClick: () => void api.updater.download() };
+  } else if (state.kind === "downloading") {
+    statusIcon = "loader-circle";
+    statusSpin = true;
+    statusText = (
+      <>
+        {x.downloadingLead} <Mono>{state.release.version}</Mono>
+        {x.downloadingMid} <Mono>{progressAmount(state.progress.transferred, state.progress.total)}</Mono>
+      </>
+    );
+    const percent = progressPercent(state.progress.percent);
+    below = (
+      <div className="upd-progress" role="progressbar" aria-label={x.updates} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
+        <div className="upd-progress-fill" style={{ width: `${percent}%` }} />
+      </div>
+    );
+    // 取消之后退回 available，安装包留着可再下
+    action = { label: x.cancel, accent: false, onClick: () => void api.updater.cancel() };
+  } else if (state.kind === "downloaded") {
+    statusIcon = "circle-check";
+    statusText = (
+      <>
+        {x.versionLead} <Mono>{state.version}</Mono> {x.readyMid}
+      </>
+    );
+    action = { label: x.restart, icon: "rotate-ccw", accent: true, onClick: () => void api.updater.install() };
+  } else {
+    statusIcon = "triangle-alert";
+    statusTone = "error";
+    statusText =
+      state.stage === "download" ? x.downloadFailed : state.stage === "install" ? x.installFailed : x.checkFailed;
+    statusDetail = state.message;
+    // 重试按失败的那一步走：检查 / 下载 / 安装各自可重入
+    action = {
+      label: x.retry,
+      icon: "refresh-cw",
+      accent: false,
+      onClick: () =>
+        void (state.stage === "download"
+          ? api.updater.download()
+          : state.stage === "install"
+            ? api.updater.install()
+            : api.updater.check()),
+    };
+  }
+
+  return (
+    <SettingGroup label={x.group}>
+      <DisclosureRow
+        name={x.currentVersion}
+        panelId="upd-current-notes"
+        expanded={currentOpen}
+        onToggle={() => setCurrentOpen(!currentOpen)}
+        trailing={
+          <span className="upd-current">
+            <Mono>{currentVersion}</Mono>
+            <Caret />
+          </span>
+        }
+      >
+        <CurrentVersionNotesPanel notes={currentNotes} tagUrl={tagUrl} />
+      </DisclosureRow>
+      <SettingRow
+        name={x.updates}
+        note={
+          <>
+            <span className="upd-status" data-tone={statusTone} title={statusDetail ?? undefined}>
+              {statusIcon !== null && <Icon name={statusIcon} size={13} spin={statusSpin} />}
+              {/*
+               * 状态文字整体包在一个 span 里：**它是普通文字，不是一堆 flex 项**。
+               * .upd-status 是 inline-flex，之前文字、<Mono>、" · " 各自算一个匿名 flex 项，
+               * 项与项之间加 6px 的 gap、而每项首尾的空格被吞掉——于是「is available· 14.8 MB」
+               * （圆点前没了空格）、「Downloading 0.1.16 … 6.3 MB」（省略号前多出 6px）。
+               * 现在字间距只来自文案里的空格，屏幕上的样子与文案逐字一致。
+               */}
+              <span>{statusText}</span>
+            </span>
+            {notes !== null && (
+              <button
+                type="button"
+                className="upd-link"
+                aria-expanded={notesOpen}
+                onClick={() => setNotesOpen(!notesOpen)}
+              >
+                <Icon name="chevron-down" size={12} />
+                {x.whatsNew}
+              </button>
+            )}
+          </>
+        }
+        below={below}
+      >
+        <button
+          type="button"
+          className={action.accent ? "upd-btn btn-accent" : "upd-btn quiet-control"}
+          disabled={action.disabled === true}
+          onClick={action.onClick}
+        >
+          {action.icon !== undefined && <Icon name={action.icon} size={14} />}
+          {action.label}
+        </button>
+      </SettingRow>
+      {releasesUrl !== null && (
+        <DisclosureRow
+          name={x.history}
+          panelId="upd-recent-releases"
+          expanded={recentOpen}
+          onToggle={() => setRecentOpen(!recentOpen)}
+          trailing={<Caret />}
+        >
+          <RecentReleasesList currentVersion={currentVersion} />
+          {/* 更多历史版本去 GitHub：展开体底部的外链出口（与「当前版本」同款） */}
+          <ReleaseFooter url={releasesUrl}>{x.viewAllOnGitHub}</ReleaseFooter>
+        </DisclosureRow>
+      )}
+    </SettingGroup>
+  );
+}
+
+/**
+ * Release 页的入口（展开体底部的「在 GitHub 上查看本版 / 查看全部版本」两处）。
+ *
+ * **外链照仓里现成的走法**：`<a href>` + 拦掉默认行为交给 `window.open`——主进程的
+ * setWindowOpenHandler 把网页送进内置浏览器（index.ts 的 openLink；同 SettingsView 的
+ * PR 号链接）。不为此新开一条 IPC：外链有一条现成的路，再加一条就是两个写入者。
+ */
+function ReleaseLink(props: { url: string; children: ReactNode }) {
+  return (
+    <a
+      className="upd-link"
+      href={props.url}
+      onClick={(event) => {
+        event.preventDefault();
+        window.open(props.url);
+      }}
+    >
+      <Icon name="external-link" size={12} />
+      {props.children}
+    </a>
+  );
+}
+
+/** 展开体底部的外链出口：安静一行，左缘与展开的内容对齐 */
+function ReleaseFooter(props: { url: string; children: ReactNode }) {
+  return (
+    <div className="upd-expand-footer">
+      <ReleaseLink url={props.url}>{props.children}</ReleaseLink>
+    </div>
+  );
+}
+
+/**
+ * 行即开关的一行（「当前版本」「所有版本」）：**整行是一个 disclosure 按钮**，点行上任何
+ * 位置都开合；键盘 Tab 到它、Enter / Space 同样能开合（原生 button 自带的）。
+ *
+ * 展开体在按钮**外面**：里面的 GitHub 外链不能嵌进 button（无效的嵌套交互元素），
+ * 而且 `below` 那一格本来就不属于左名 / 右簇任何一列。面板的 id 常驻（收起时用 `hidden`），
+ * `aria-controls` 才总有着落；收起时不渲染子节点——“点开才拉”的列表因此每次展开重挂载。
+ *
+ * 按钮自己就是 .set-row 那套两列网格的同一份模板：左名 / 右簇的几何与普通行逐像素一致
+ * （右簇仍钉在右血线）。hover 走 .quiet-control 的配方；内边距拿回来当 hover 底的外扩，
+ * 负外边距把内容框钉回原来的位置，所以右缘几何不动。
+ */
+function DisclosureRow(props: {
+  name: string;
+  panelId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  trailing: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="set-row upd-disclosure">
+      <button
+        type="button"
+        className="upd-row-toggle quiet-control"
+        aria-expanded={props.expanded}
+        aria-controls={props.panelId}
+        onClick={props.onToggle}
+      >
+        <span className="set-row-head">
+          <span className="set-row-name">{props.name}</span>
+        </span>
+        <span className="set-row-ctl">{props.trailing}</span>
+      </button>
+      <div className="upd-disclosure-body" id={props.panelId} hidden={!props.expanded}>
+        {props.expanded ? props.children : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 行尾的展开三角：**不是按钮**——整行才是，它只是这一行的开合指示。
+ *
+ * 图标与尺寸按定稿小样（`chevron-down` / 14 / stroke 2）；盒子高 20px，宽取
+ * `var(--space-3)` = `.upd-btn` 的右内边距——尾部文字右缘落在同一条线上，靠的是它。
+ * 展开时翻 180°，过渡与仓里其它 chevron 同一档（`var(--duration-fast)`，定稿小样的 160ms）。
+ */
+function Caret() {
+  return (
+    <span className="upd-caret" aria-hidden="true">
+      <Icon name="chevron-down" size={14} strokeWidth={2} />
+    </span>
+  );
+}
+
+/**
+ * 「当前版本」的展开体：这一版的说明 + 底部的 GitHub 出口。
+ *
+ * 说明是**应用内置的**（package.json 的 build.releaseInfo，随 main bundle 内联，
+ * 见 main/updater/builtin-notes.ts）：离线可用、不发请求——当前版本的说明应用自己知道，
+ * GitHub 只用于「历史版本」与外链（2026-10-18 用户裁决）。没写（发版兑底测试拦着，
+ * 理论上不会发生）就说一句「这一版没有更新说明」，出口仍在底部，行不因此变回点不开。
+ *
+ * 之前那版在这里点开时去拉 updater:recentReleases 找当前版本的那一条，已删：内置说明
+ * 上线后那个远程兑底不再有到达路径，留着是两个真源。
+ */
+function CurrentVersionNotesPanel(props: { notes: readonly UpdateNote[] | null; tagUrl: string | null }) {
+  const x = useT().settings.update;
+  return (
+    <>
+      {props.notes === null ? (
+        <div className="upd-recent-quiet">{x.currentNotesMissing}</div>
+      ) : (
+        <ReleaseNotes notes={props.notes} />
+      )}
+      {props.tagUrl !== null && <ReleaseFooter url={props.tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
+    </>
+  );
+}
+
+/**
+ * 「历史版本」展开体：最近几个版本（主进程打 GitHub API + 10 分钟缓存，见
+ * main/updater/recent-releases.ts）。**点开才拉**——挂载即请求一次，收起再展开是重挂载。
+ *
+ * 四个形态：拉取中 / 失败（一句人话 + 重试）/ 空（仓里只有 Draft 时就是这样）/ 列表。
+ * 失败不画成空列表：「获取失败」与「还没有已发布的版本」是两件事。
+ *
+ * 列表去掉当前版本（纯函数 historyReleases，有测试）：它的说明归「当前版本」那一行管。
+ * 过滤后为空（仓里只发过当前这一版）是另一句话：不是「没有版本」，是「没有更早的」。
+ */
+function RecentReleasesList(props: { currentVersion: string }) {
+  const x = useT().settings.update;
+  const [result, setResult] = useState<RecentReleasesResult | null>(null);
+  /** 重试计数：递增一次就重跑一轮请求（依赖数组把它变成显式触发器） */
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setResult(null);
+    void api.updater
+      .recentReleases()
+      .then((next) => {
+        if (!cancelled) setResult(next);
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ ok: false, message: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  if (result === null) return <div className="upd-recent-quiet">{x.recentLoading}</div>;
+  if (!result.ok) {
+    return (
+      <div className="upd-recent-quiet">
+        <span title={result.message === "" ? undefined : result.message}>{x.recentFailed}</span>
+        <button type="button" className="upd-link" onClick={() => setAttempt(attempt + 1)}>
+          {x.retry}
+        </button>
+      </div>
+    );
+  }
+  if (result.releases.length === 0) return <div className="upd-recent-quiet">{x.recentEmpty}</div>;
+  const releases = historyReleases(result.releases, props.currentVersion);
+  if (releases.length === 0) return <div className="upd-recent-quiet">{x.noEarlierVersions}</div>;
+  return (
+    <div className="upd-recent">
+      {releases.map((release) => (
+        <RecentReleaseRow key={release.tag} release={release} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 「历史版本」列表里的一行：**整行又是一条 disclosure**（与主行同一套交互语言——同一
+ * 洗底 hover、同一 -8px 探出、同一三角翻转，只是字号与行高压一档）：点行上任何位置
+ * 就地展开**那一版**的更新内容（图标列版式照旧），展开体底部是该版的 GitHub 出口。
+ *
+ * **没有说明的版本**（`notes` 为 null）退化成不可点的一行：不画三角、无 hover 底，
+ * 只留一个与三角同宽的空格保持日期右缘对齐（同「当前版本」没有说明时的退化）。一行只
+ * 开自己，与主行、与兄弟行互不影响（各自的 useState）。
+ *
+ * Hmm：行本身就是网格（版本 | 标题 | 日期 | 三角），标题与版本号相同时不画——
+ * 判同在纯函数里（shared/updater.ts 的 recentReleaseTitle，有测试）。
+ */
+function RecentReleaseRow(props: { release: RecentRelease }) {
+  const x = useT().settings.update;
+  const [open, setOpen] = useState(false);
+  const title = recentReleaseTitle(props.release);
+  const notes = props.release.notes;
+  /** 这一版没有可看的说明：不画三角、整行不可点（但行本身还在：版本号 / 标题 / 日期都在） */
+  const flat = notes === null || notes.length === 0;
+  const cells = (
+    <>
+      <span className="upd-recent-ver">{props.release.version}</span>
+      {/* 标题与版本号相同时留空（不重影）；有时带一个「·」当分隔 */}
+      <span className="upd-recent-title">{title === null ? "" : `· ${title}`}</span>
+      <span className="upd-recent-date">{props.release.publishedAt.slice(0, 10)}</span>
+    </>
+  );
+
+  if (flat) {
+    return (
+      <div className="upd-recent-row upd-recent-row--flat">
+        {cells}
+        <span className="upd-recent-void" aria-hidden="true" />
+      </div>
+    );
+  }
+
+  const panelId = `upd-notes-${props.release.tag}`;
+  return (
+    <div className="upd-recent-group">
+      <button
+        type="button"
+        className="upd-recent-row"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen(!open)}
+      >
+        {cells}
+        <Caret />
+      </button>
+      <div className="upd-recent-panel" id={panelId} hidden={!open}>
+        {open ? (
+          <>
+            <ReleaseNotes notes={notes} nested />
+            <ReleaseFooter url={props.release.htmlUrl}>{x.viewOnGitHub}</ReleaseFooter>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** 版本号、字节数这类机器事实：等宽字体（设计系统 *Type roles* 之外的内容档） */
+function Mono(props: { children: ReactNode }) {
+  return <span className="upd-mono">{props.children}</span>;
+}
+
+/**
+ * 更新说明的逐条版式（待装的「更新内容」与已装的「本版更新内容」共用一份）：
+ * 左侧图标列（原型版式 B，2026-10-18 用户选定）。每条占两格——图标列一格、
+ * 正文列一格；图标一律 currentColor + tertiary，只当条目符号。条目之间的细分隔线由
+ * CSS 画在图标轨道上（行间空隙正中），最后一条不画。
+ *
+ * 图标名来自 Release 正文的 `[icon:名字]` 前缀（解析见 main/updater/notes.ts），
+ * **名字不在 Icon.tsx 的表里就当没图标**（发布时写错字不该崩，也不该画一个空图标）：
+ * 那一行的图标格留空，正文列照旧对齐。
+ */
+function ReleaseNotes(props: { notes: readonly UpdateNote[]; nested?: boolean }) {
+  return (
+    <div className={props.nested === true ? "upd-notes upd-notes--nested" : "upd-notes"}>
+      <div className="upd-notes-rail">
+        {props.notes.map((note, index) => (
+          // 说明是静态文本，不会重排，用下标当 key 是安全的
+          <Fragment key={index}>
+            <span className="upd-note-icon">
+              {note.icon !== null && isIconName(note.icon) && <Icon name={note.icon} size={14} />}
+            </span>
+            <span>{note.text}</span>
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}

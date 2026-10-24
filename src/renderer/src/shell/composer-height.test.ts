@@ -6,7 +6,7 @@ import {
   composerBoxHeight,
 } from "./composer-height.ts";
 
-// 实际 token：--line-height-input: 22px，textarea 竖向 padding 2px + 2px
+// 实际 token：--line-height-ui 1.5 × --font-size-base 14px ≈ 21px（此处取整 22 只当示例），textarea 竖向 padding 2px + 2px
 const LINE = 22;
 const PAD = 4;
 const MIN = LINE * COMPOSER_MIN_ROWS + PAD; // 48

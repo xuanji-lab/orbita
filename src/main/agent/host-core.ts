@@ -17,6 +17,7 @@ import type { McpStatus } from "../../shared/mcp.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -75,6 +76,12 @@ export class AgentHostCore {
     { resolve: (result: { ok: boolean; message: string }) => void; reject: (error: Error) => void }
   >();
   private probeSeq = 0;
+  /** 在等的 summarizeFocus 回执（专注收工小结），按 requestId；进程退出全部 reject */
+  private readonly pendingFocusSummaries = new Map<
+    string,
+    { resolve: (bullets: string[]) => void; reject: (error: Error) => void }
+  >();
+  private focusSummarySeq = 0;
 
   constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
     this.forkRuntime = forkRuntime;
@@ -117,6 +124,14 @@ export class AgentHostCore {
           this.pendingGreetings.delete(message.requestId);
           if (message.throwaway === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
           else pending?.resolve(message.throwaway);
+          return;
+        }
+        if (message.type === "focusSummarized") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingFocusSummaries.get(message.requestId);
+          this.pendingFocusSummaries.delete(message.requestId);
+          if (message.bullets === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
+          else pending?.resolve(message.bullets);
           return;
         }
         if (message.type === "providerProbed") {
@@ -174,6 +189,8 @@ export class AgentHostCore {
         this.pendingGreetings.clear();
         for (const pending of this.pendingProbes.values()) pending.reject(new Error(message));
         this.pendingProbes.clear();
+        for (const pending of this.pendingFocusSummaries.values()) pending.reject(new Error(message));
+        this.pendingFocusSummaries.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -334,6 +351,39 @@ export class AgentHostCore {
   }
 
   /**
+   * 专注模式的收工小结：素材正文交给 agent 进程里的家务活模型，等回执（bullets）。
+   * 素材比问候检查大、生成 3–5 条要点可能到分钟量级，兑底放宽到 220 秒（agent 侧
+   * 180 秒先断）——到点时卡片先出「正在整理」，转圈等它。
+   */
+  async summarizeFocus(
+    provider: Extract<AgentCommand, { type: "summarizeFocus" }>["provider"],
+    modelId: string,
+    prompt: string,
+  ): Promise<string[]> {
+    await this.ensure();
+    this.focusSummarySeq += 1;
+    const requestId = `focus-summary-${this.focusSummarySeq}`;
+    return new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingFocusSummaries.has(requestId)) return;
+        this.pendingFocusSummaries.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 220_000);
+      this.pendingFocusSummaries.set(requestId, {
+        resolve: (bullets) => {
+          clearTimeout(timer);
+          resolve(bullets);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "summarizeFocus", requestId, provider, modelId, prompt });
+    });
+  }
+
+  /**
    * 连接探测（Test 的 OAuth 路由）：让 agent 进程用 pi 的客户端（与真会话同源）
    * 发一条小消息。1 分钟没回当失败——网关挂住时不让 Test 按钮一直转。
    */
@@ -385,6 +435,11 @@ export class AgentHostCore {
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
+  }
+
+  /** 意图确认卡的回答（实验功能 intent-system）。同 answerPermission：不 ensure、发完即回。 */
+  answerIntentConfirm(requestId: string, decision: IntentConfirmDecision): void {
+    this.child?.postMessage({ type: "intentConfirmResult", requestId, decision } satisfies AgentCommand);
   }
 
   /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */

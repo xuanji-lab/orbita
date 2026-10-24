@@ -56,6 +56,12 @@ export function useFileTree(
   sessionId: string | null,
   workspaceId: string | null,
   workspaces: readonly Workspace[],
+  /**
+   * 专注 / 浏览态的额外预览根（shared/files.ts 的 extraWorkspaceId）：左栏正在
+   * 看的工作区。给了它，树里多一颗 workspace 根（专注中双击左栏文件 → 面板预览），
+   * 列目录 / 刷新的请求全部带上；主进程按 id 解路径，白名单随请求生效。
+   */
+  extraWorkspaceId: string | null = null,
 ): FileTreeState {
   const [roots, setRoots] = useState<readonly FileRoot[]>([]);
   const [attachmentsRoot, setAttachmentsRoot] = useState<FileRoot | null>(null);
@@ -90,7 +96,7 @@ export function useFileTree(
       if (dirsRef.current.has(dir) || pendingRef.current.has(dir)) return;
       pendingRef.current.add(dir);
       try {
-        const res = await api.files.list({ sessionId, workspaceId, root, dir });
+        const res = await api.files.list({ sessionId, workspaceId, root, dir, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) });
         const next = new Map(dirsRef.current);
         // 键用请求的 dir 而不是回执的 res.dir：回执是 realpath 过的，根路径带 symlink
         // 时两者不同，而渲染与 refresh 都按请求路径查——键错了就永远 Loading
@@ -103,7 +109,7 @@ export function useFileTree(
         pendingRef.current.delete(dir);
       }
     },
-    [sessionId, workspaceId],
+    [sessionId, workspaceId, extraWorkspaceId],
   );
 
   /**
@@ -116,7 +122,9 @@ export function useFileTree(
     setRootsError(null);
     try {
       // sessionId null（新任务没发首条消息）时主进程不出 session 根，面板不用再过滤
-      const { visible, attachments } = splitRoots(await api.files.roots({ sessionId, workspaceId }));
+      const { visible, attachments } = splitRoots(
+        await api.files.roots({ sessionId, workspaceId, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) }),
+      );
       setRoots(visible);
       setAttachmentsRoot(attachments);
       // 每个在盘上的根默认展开第一层：直接拉根目录，缓存 / 在途去重
@@ -128,7 +136,7 @@ export function useFileTree(
     } finally {
       setRootsLoading(false);
     }
-  }, [sessionId, workspaceId, loadDir]);
+  }, [sessionId, workspaceId, extraWorkspaceId, loadDir]);
 
   useEffect(() => {
     generationRef.current += 1;
@@ -142,7 +150,7 @@ export function useFileTree(
       setExpanded(new Set());
     }
     void loadRoots();
-  }, [sessionId, workspaceId, workspaces, loadRoots]);
+  }, [sessionId, workspaceId, extraWorkspaceId, workspaces, loadRoots]);
 
   const toggle = useCallback(
     (root: string, dir: string): void => {
@@ -158,11 +166,11 @@ export function useFileTree(
 
   const reveal = useCallback(
     (root: string, dir: string): void => {
-      api.files.reveal({ sessionId, workspaceId, root, dir }).catch((cause: unknown) => {
+      api.files.reveal({ sessionId, workspaceId, root, dir, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) }).catch((cause: unknown) => {
         setActionError(failMessage(cause));
       });
     },
-    [sessionId, workspaceId],
+    [sessionId, workspaceId, extraWorkspaceId],
   );
 
   /**
@@ -184,14 +192,16 @@ export function useFileTree(
     /** 一轮刷新；代次变了（会话 / 工作区换了）整轮作废 */
     const once = async (): Promise<void> => {
       try {
-        const { visible, attachments } = splitRoots(await api.files.roots({ sessionId, workspaceId }));
+        const { visible, attachments } = splitRoots(
+          await api.files.roots({ sessionId, workspaceId, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) }),
+        );
         if (generationRef.current !== generation) return;
         const results = new Map<string, readonly FileEntry[] | null>();
         let rootFailure: string | null = null;
         await Promise.all(
           refreshTargets(visible, expandedRef.current).map(async ({ root, dir }) => {
             try {
-              const res = await api.files.list({ sessionId, workspaceId, root, dir });
+              const res = await api.files.list({ sessionId, workspaceId, root, dir, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) });
               results.set(dir, res.entries);
             } catch (cause) {
               results.set(dir, null);
@@ -235,7 +245,7 @@ export function useFileTree(
         setRefreshing(false);
       }
     })();
-  }, [sessionId, workspaceId]);
+  }, [sessionId, workspaceId, extraWorkspaceId]);
 
   /**
    * agent 一轮跑完自动刷新：agent 写盘是面板过期的头号来源。**任何会话**的 phase

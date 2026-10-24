@@ -61,13 +61,13 @@ export function ApprovalBar(props: {
         <span style={{ display: "inline-flex", color: "var(--color-text-secondary)" }}>
           <Icon name="shield-check" size={14} />
         </span>
-        <strong style={{ fontSize: "var(--font-size-control)", fontWeight: 600 }}>
+        <strong style={{ fontSize: "var(--font-size-base)", fontWeight: 600 }}>
           {t.approval.run(props.approval.toolName)}
         </strong>
         <span
           style={{
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
             color: "var(--color-text-tertiary)",
             marginInlineStart: "auto",
           }}
@@ -86,7 +86,7 @@ export function ApprovalBar(props: {
             resize: "vertical",
             font: "inherit",
             fontFamily: "var(--font-family-mono)",
-            fontSize: "var(--font-size-micro)",
+            fontSize: "var(--font-size-xs)",
           }}
         />
       ) : (
@@ -126,8 +126,8 @@ const codeStyle: React.CSSProperties = {
   border: 0,
   borderRadius: "var(--radius-md)",
   fontFamily: "var(--font-family-mono)",
-  fontSize: "var(--font-size-micro)",
-  lineHeight: "var(--line-height-micro)",
+  fontSize: "var(--font-size-xs)",
+  lineHeight: "var(--line-height-ui)",
   color: "var(--color-text-primary)",
   whiteSpace: "pre-wrap",
 };
@@ -140,7 +140,7 @@ const buttonStyle: React.CSSProperties = {
   border: 0,
   borderRadius: "var(--radius-md)",
   font: "inherit",
-  fontSize: "var(--font-size-control)",
+  fontSize: "var(--font-size-base)",
   cursor: "pointer",
   transition: "var(--transition-hover)",
 };

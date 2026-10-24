@@ -37,8 +37,8 @@
   box-shadow: var(--shadow-popover);
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
   pointer-events: none;
   transition: opacity var(--duration-fast) var(--ease-standard);
 }

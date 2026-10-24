@@ -554,7 +554,7 @@ export function Menu(props: {
                     background: "var(--color-bg-panel)",
                     color: "var(--color-text-primary)",
                     fontFamily: "var(--font-family-base)",
-                    fontSize: "var(--font-size-control)",
+                    fontSize: "var(--font-size-base)",
                     outline: "none",
                   }}
                 />
@@ -620,7 +620,7 @@ export function Menu(props: {
                     minHeight: "var(--menu-row-height)",
                     padding: "var(--space-2)",
                     fontFamily: "var(--font-family-base)",
-                    fontSize: "var(--font-size-caption)",
+                    fontSize: "var(--font-size-sm)",
                     color: "var(--color-text-tertiary)",
                   }}
                 >
@@ -676,7 +676,7 @@ export const menuFooterRowStyle: React.CSSProperties = {
   borderRadius: "var(--radius-sm)",
   color: "var(--color-text-primary)",
   fontFamily: "var(--font-family-base)",
-  fontSize: "var(--font-size-control)",
+  fontSize: "var(--font-size-base)",
   textAlign: "left",
   cursor: "pointer",
 };
@@ -727,24 +727,23 @@ function MenuRow(props: {
         // danger 只改文字色，不染底——底是选择态的地盘（.option-row）
         ...(item.danger === true && !disabled ? { color: "var(--color-danger)" } : null),
         fontFamily: "var(--font-family-base)",
-        fontSize: "var(--font-size-control)",
+        fontSize: "var(--font-size-base)",
         textAlign: "left",
         // 事实行不是「禁止你点」，光标不该摆出禁止符
         cursor: fact || header ? "default" : disabled ? "not-allowed" : "pointer",
         // 事实行矮一档（xs）：一眼能看出它们不是可点的那一类
         ...(fact ? { minHeight: "var(--control-height-xs)" } : null),
-        // 分组头 = 设置面节标题的同款语言：mono、micro、大写加字距
+        // 分组头 = 设置面节标题的同款语言：UI 字、sm、semibold、secondary
         ...(header
           ? {
               minHeight: "var(--control-height-sm)",
               paddingTop: "var(--space-2)",
-              fontFamily: "var(--font-family-mono)",
-              fontSize: "var(--font-size-micro)",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              // 加粗：模型菜单里组头与模型行同色同高、只差字号和大小写，两家 provider 靠得近时
-              // 分不清哪行是头（2026-09-21 wafo）。仍用二级文字色，不抢模型行的主角位。
-              fontWeight: "var(--weight-bold)",
+              fontFamily: "var(--font-family-base)",
+              fontSize: "var(--font-size-sm)",
+              // 加粗：两家 provider 靠得近时要一眼分出哪行是头（2026-09-21 wafo）——
+              // 去大写后（2026-10-14）只剩字号、字重、颜色三条信号，字重不能省。
+              // 仍用二级文字色，不抢模型行的主角位。
+              fontWeight: "var(--weight-semibold)",
               color: "var(--color-text-secondary)",
             }
           : null),
@@ -787,7 +786,7 @@ function MenuRow(props: {
             flex: "none",
             maxWidth: "100%",
             minWidth: 0,
-            lineHeight: "18px",
+            lineHeight: "var(--line-height-ui)",
             /*
              * 事实行且没有 hint 时，label 是唯一的叙事者：长句（压缩确认那句
              * 「…仍要压缩？」）必须换行说完——省略号切掉一半就成了另一句话。
@@ -811,8 +810,8 @@ function MenuRow(props: {
               textOverflow: "ellipsis",
               color: "var(--color-text-tertiary)",
               // 副行是注脚（模型卡片的厂商名、路径卡片的全路径），比主行退两档
-              fontSize: "var(--font-size-micro)",
-              lineHeight: "16px",
+              fontSize: "var(--font-size-xs)",
+              lineHeight: "var(--line-height-ui)",
               ...(item.subLabelMono === true ? { fontFamily: "var(--font-family-mono)" } : null),
               // 「保尾巴」同 hint：direction rtl 让溢出发生在左侧，内层再隔离回 LTR
               ...(item.subLabelEllipsis === "head"
@@ -835,7 +834,7 @@ function MenuRow(props: {
               overflow: "hidden",
               textOverflow: "ellipsis",
               color: "var(--color-text-tertiary)",
-              fontSize: "var(--font-size-micro)",
+              fontSize: "var(--font-size-xs)",
               whiteSpace: "nowrap",
               // 「保尾巴」的截断：direction: rtl 让溢出发生在左侧（省略号落到头部），
               // text-align 再把它拉回左缘。**不能加 unicode-bidi: plaintext**——

@@ -1,6 +1,14 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { BOTTOM_THRESHOLD_PX, SCROLL_DOWN_THRESHOLD_PX, isAtBottom, isBeyondScrollDown, shouldJumpToEnd } from "./scroll.ts";
+import {
+  BOTTOM_THRESHOLD_PX,
+  OLDER_TRIGGER_PX,
+  SCROLL_DOWN_THRESHOLD_PX,
+  isAtBottom,
+  isBeyondScrollDown,
+  shouldJumpToEnd,
+  shouldLoadOlder,
+} from "./scroll.ts";
 
 describe("isAtBottom", () => {
   test("恰好在底部", () => {
@@ -36,6 +44,15 @@ describe("isBeyondScrollDown", () => {
   test("超过阈值即浮现", () => {
     assert.equal(isBeyondScrollDown(SCROLL_DOWN_THRESHOLD_PX + 1), true);
     assert.equal(isBeyondScrollDown(1200), true);
+  });
+});
+
+describe("shouldLoadOlder（源侧分页的触顶判定）", () => {
+  test("顶到阈值以内（含恰好 200）就拉，超过就不拉", () => {
+    assert.equal(shouldLoadOlder(0), true);
+    assert.equal(shouldLoadOlder(OLDER_TRIGGER_PX), true);
+    assert.equal(shouldLoadOlder(OLDER_TRIGGER_PX + 1), false);
+    assert.equal(shouldLoadOlder(4000), false);
   });
 });
 

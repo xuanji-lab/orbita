@@ -6,14 +6,18 @@ import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
+import { focusApi } from "./api/focus.ts";
 import { importApi } from "./api/import.ts";
+import { intentApi } from "./api/intent.ts";
 import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
 import { settingsApi } from "./api/settings.ts";
 import { terminalApi } from "./api/terminal.ts";
 import { usageApi } from "./api/usage.ts";
+import { updaterApi } from "./api/updater.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { windowApi } from "./api/window.ts";
@@ -23,6 +27,7 @@ import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
 const api = {
   agent: agentApi,
   channel: channelApi,
+  excerpt: excerptApi,
   provider: providerApi,
   session: sessionApi,
   review: reviewApi,
@@ -32,9 +37,12 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  focus: focusApi,
   terminal: terminalApi,
   usage: usageApi,
+  updater: updaterApi,
   import: importApi,
+  intent: intentApi,
   browser: browserApi,
   voice: voiceApi,
   /**

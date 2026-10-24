@@ -201,7 +201,7 @@ export async function watchPageChange<T>(
     contents.off("did-start-navigation", onStart);
     contents.off("did-navigate", onCommit);
     // 引用解析出的页内对象整组释放；页面已经换了的话这条会失败，无所谓
-    await cdp(contents, "Runtime.releaseObjectGroup", { objectGroup: OBJECT_GROUP }).catch(() => undefined);
+    await releaseRefObjects(contents);
   }
 }
 
@@ -210,6 +210,8 @@ export async function watchPageChange<T>(
  * 报给模型——Playwright 的默认同款。不拦的话 Electron 会弹原生模态框：落在用户屏幕上，或者挂在
  * 隐藏的沙盒窗口上没人看得见，页面的脚本线程就此卡住，之后每个工具调用都超时。
  * 新文档靠 addScriptToEvaluateOnNewDocument，当前文档当场补一次；调试器断开（页面崩溃）后重新注册。
+ * 注意：Chromium 150 起 addScriptToEvaluateOnNewDocument 必须先在同 session Page.enable，
+ * 否则返回成功却静默不生效（2026-10-14 隔离实例 A/B 实测）。
  *
  * **从没加载过任何页面的视图跳过**：它还没有渲染进程，任何 CDP 命令（连
  * addScriptToEvaluateOnNewDocument 都算）都不回，只能等超时——2026-09-28 实测：第一次导航前先装护栏，
@@ -218,6 +220,7 @@ export async function watchPageChange<T>(
 export async function guardDialogs(contents: WebContents): Promise<void> {
   if (contents.getURL() === "") return;
   if (!guarded.has(contents) || !contents.debugger.isAttached()) {
+    await cdp(contents, "Page.enable");
     await cdp(contents, "Page.addScriptToEvaluateOnNewDocument", { source: DIALOG_GUARD_JS });
     if (!guarded.has(contents)) contents.debugger.once("detach", () => guarded.delete(contents));
     guarded.add(contents);
@@ -292,11 +295,15 @@ const ENTER_KEY: KeyStroke = { key: "Enter", code: "Enter", keyCode: 13, modifie
 const DELETE_KEY: KeyStroke = { key: "Delete", code: "Delete", keyCode: 46, modifiers: 0, text: "", commands: [] };
 
 /** 模型有时照抄大纲里的整段 `[ref=e12]`：只取引用本身 */
-function normalizeRef(ref: string): string {
+export function normalizeRef(ref: string): string {
   return ref.trim().replace(/^\[?ref=/, "").replace(/\]$/, "");
 }
 
-async function resolveRef(contents: WebContents, tab: InteractiveTab, ref: string): Promise<string> {
+/**
+ * 引用 → 页内对象 id。browser_extract 的 ref 子树提取复用同一条解析路径（同一张反查表、同一套
+ * 「引用作废」文案），不另造一套。用完调 releaseRefObjects 把整组对象放掉。
+ */
+export async function resolveRef(contents: WebContents, tab: InteractiveTab, ref: string): Promise<string> {
   const backendNodeId = tab.refs.byRef.get(ref);
   if (backendNodeId === undefined) {
     throw new Error(
@@ -314,6 +321,11 @@ async function resolveRef(contents: WebContents, tab: InteractiveTab, ref: strin
   const objectId = readRecord(readRecord(resolved)["object"])["objectId"];
   if (typeof objectId !== "string") throw gone;
   return objectId;
+}
+
+/** 释放引用解析出的页内对象（OBJECT_GROUP 整组）；页面已经换了的话这条会失败，忽略即可 */
+export async function releaseRefObjects(contents: WebContents): Promise<void> {
+  await cdp(contents, "Runtime.releaseObjectGroup", { objectGroup: OBJECT_GROUP }).catch(() => undefined);
 }
 
 /** 引用 → 滚进视口后的中心点（CSS 像素）+ 遮挡检查 */

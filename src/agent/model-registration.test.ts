@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
-import { streamSimple as streamOpenAIChat } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as streamOpenAI } from "@earendil-works/pi-ai/api/openai-completions";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import type { ModelDecl } from "../shared/provider.ts";
 import {
@@ -198,69 +198,10 @@ describe("toFallbackModels —— 借参抄档位表（thinkingLevelMap 是模�
     assert.deepEqual(registered?.thinkingLevelMap, withMap.thinkingLevelMap);
   });
 
-  test("目录没有这个 id：不带表（白名单的 thinkingLevels 在 renderer 兜底显示）", () => {
+  test("目录没有、白名单也没有这个 id：不带表（交给 pi 的「无表」规则）", () => {
     const registered = toFallbackModels([], [{ id: "ghost-model" }], [], {}, [])[0];
     assert.notEqual(registered, undefined);
     assert.equal(registered !== undefined && "thinkingLevelMap" in registered, false);
-  });
-});
-
-describe("白名单档位 → pi 的 thinkingLevelMap（openai-completions 那一族）", () => {
-  /** 注册 + 补上 provider 级的 api / baseUrl（真 runtime 的组合层会补齐，替身只存 models） */
-  function registered(id: string, api = "openai-completions"): PiModel {
-    const entry = toFallbackModels([], [{ id }], [], { api }, [])[0];
-    assert.notEqual(entry, undefined);
-    return { ...entry, api, provider: "p", baseUrl: "https://example.com/v1" } as unknown as PiModel;
-  }
-
-  /** pi 真正要发出去的 reasoning_effort：与 anthropic 那个同款，换一个协议入口 */
-  async function sentEffort(model: PiModel, reasoning: string): Promise<unknown> {
-    let captured: Record<string, unknown> | undefined;
-    const events = streamOpenAIChat(
-      model as Model<"openai-completions">,
-      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
-      {
-        apiKey: "sk-test",
-        reasoning: reasoning as never,
-        onPayload: (payload) => {
-          captured = payload as Record<string, unknown>;
-          throw new Error("stop before network");
-        },
-      },
-    );
-    for await (const _event of events) {
-      // 抛错后流以 error 事件收尾
-    }
-    assert.ok(captured !== undefined, "pi 没走到构造请求体");
-    return captured["reasoning_effort"] ?? null;
-  }
-
-  test("菜单的三档就是 pi 认的三档：step-5-preview 的 off / xhigh / max 被夹掉", async () => {
-    const model = registered("step-5-preview");
-    assert.deepEqual(model.thinkingLevelMap, { off: null, minimal: null, xhigh: null, max: null });
-    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high"]);
-    // 真实发出去的：low / medium / high 原样；老会话账里的 off 被夹成能发的 low
-    assert.equal(await sentEffort(model, "low"), "low");
-    assert.equal(await sentEffort(model, "medium"), "medium");
-    assert.equal(await sentEffort(model, "off"), "low");
-    assert.equal(await sentEffort(model, "max"), "high");
-  });
-
-  test("白名单里 xhigh / max 是真档的型号（space-bunny）：它们原样发出去，不再被夹成 high", async () => {
-    const model = registered("space-bunny");
-    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high", "xhigh", "max"]);
-    assert.equal(await sentEffort(model, "xhigh"), "xhigh");
-    assert.equal(await sentEffort(model, "max"), "max");
-  });
-
-  test("白名单没写 medium 的型号（deepseek-flash）：发出去的不会是它会 400 的 medium", async () => {
-    const model = registered("deepseek-flash");
-    assert.deepEqual(getSupportedThinkingLevels(model), ["off", "low", "high", "max"]);
-    assert.equal(await sentEffort(model, "medium"), "high");
-  });
-
-  test("anthropic-messages 的非 adaptive 型号不在这条路上：档位表仍然是空的（要单独核 budget 那两处）", () => {
-    assert.equal("thinkingLevelMap" in registered("glm-5.3-flash", "anthropic-messages"), false);
   });
 });
 
@@ -294,15 +235,6 @@ describe("toFallbackRegistration —— 补注册必须带完整 auth 面", () =
   test("白名单与目录都没有的 id：还是兜底条目", () => {
     const registration = toFallbackRegistration({ ...gateway, models: [{ id: "house-model" }] }, []);
     assert.equal(registration.models?.[0]?.contextWindow, FALLBACK_MODEL.contextWindow);
-  });
-
-  test("白名单的模态也跟着过线：step-5-preview 拿到 1M / 64k / 可收图（目录未收录 stepfun）", () => {
-    const registration = toFallbackRegistration({ ...gateway, models: [{ id: "step-5-preview" }] }, []);
-    const model = registration.models?.[0];
-    assert.equal(model?.contextWindow, 1_000_000);
-    assert.equal(model?.maxTokens, 65_536);
-    assert.equal(model?.reasoning, true);
-    assert.deepEqual(model?.input, ["text", "image"]);
   });
 });
 
@@ -382,6 +314,22 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
     );
     assert.deepEqual(rt.kinds, ["auth", "fallback"]);
     assert.equal(model?.contextWindow, 1_000_000);
+  });
+
+  test("白名单要改模型时补注册：claude-opus-5 的档位进会话；只写了默认档的不补", () => {
+    const opus = { ...catalogModel("claude-opus-5", 1_000_000, 5), reasoning: true } as PiModel;
+    const rt = fakeRuntime([opus, catalogModel("deepseek-v4-flash", 1_000_000, 0.2)]);
+    const model = registerAndResolveModel(cast(rt), { ...wire, models: [{ id: "claude-opus-5" }] }, "claude-opus-5");
+    assert.deepEqual(rt.kinds, ["auth", "fallback"]);
+    assert.ok(model !== undefined);
+    // 白名单 off + low→max：目录没写 minimal 时 pi 会多算出它，现在标成 null
+    assert.equal(model.thinkingLevelMap?.minimal, null);
+    assert.equal(model.thinkingLevelMap?.max, "max");
+
+    // deepseek-v4-flash 的白名单只有默认档（偏好，不进 pi 的模型对象）：不触发补注册
+    const rt2 = fakeRuntime([catalogModel("deepseek-v4-flash", 1_000_000, 0.2)]);
+    registerAndResolveModel(cast(rt2), { ...wire, models: [{ id: "deepseek-v4-flash" }] }, "deepseek-v4-flash");
+    assert.deepEqual(rt2.kinds, ["auth"]);
   });
 
   test("声明里根本没有这个 id：注册了也解析不到——undefined 交调用方报错", () => {
@@ -677,10 +625,14 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
     assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
   });
 
-  test("家族借参（claude-fable-5-1 → claude-fable-5）：思考协议与档位表跟着参数同源", () => {
+  test("家族借参（claude-fable-5-1 → claude-fable-5）：思考协议与档位表跟着参数同源，再按白名单纠", () => {
     const model = resolveOnGateway("anthropic-messages", "claude-fable-5-1");
     assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
-    assert.deepEqual(model?.thinkingLevelMap, fableMap);
+    // 借来的表（fableMap）没写 minimal，pi 按「非显式 null 即支持」会多算出它；白名单按官方
+    // 档位表（low→max）标成 null——菜单里本来就没有 minimal，会话现在也没有
+    assert.deepEqual(model?.thinkingLevelMap, { ...fableMap, minimal: null });
+    assert.ok(model !== undefined);
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("老的 budget 模型不带：claude-sonnet-4-5 仍走 budget_tokens", () => {
@@ -739,5 +691,141 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
     const params = await outgoingParams(sonnet, "medium");
     assert.equal((params.thinking as { type?: string } | undefined)?.type, "enabled");
     assert.equal("output_config" in params, false);
+  });
+});
+
+describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录条目借协议", () => {
+  /** 目录条目替身：compat 取自 pi-ai 0.84.3 的 opencode-go 实际条目 */
+  function directoryModel(id: string, compat: Record<string, unknown>): PiModel {
+    return {
+      id,
+      name: id,
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0.22, output: 0.66, cacheRead: 0.007, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat,
+    } as unknown as PiModel;
+  }
+  const opencodeCatalog = [
+    directoryModel("deepseek-v4-flash", {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: "deepseek",
+    }),
+    directoryModel("glm-5.3", {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+    }),
+  ];
+
+  function register(declaredIds: string[], api = "openai-completions"): PiModel[] {
+    return toFallbackModels(
+      opencodeCatalog,
+      declaredIds.map((id) => ({ id })),
+      [],
+      { api },
+      opencodeCatalog,
+    ) as PiModel[];
+  }
+
+  test("deepseek-v4.1-flash 借到两项思考协议；端点怪癖（supportsStore 等）一个不抄", () => {
+    const [model] = register(["deepseek-v4.1-flash"]);
+    assert.deepEqual(model?.compat, {
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingFormat: "deepseek",
+    });
+  });
+
+  // 真实目录里 glm 条目**没有**思考协议两项（pi-ai 0.84.3 实测）——所以 glm-5.9 借不到
+  // 任何东西，也绝不能把同目录里 deepseek 条目的协议抄过来。替身曾给 glm 造过
+  // thinkingFormat:"zai"，那是目录里不存在的形状，断言跟着说了不存在的行为（验收发现）。
+  test("家族不串味：glm-5.9 借不到协议，更不会抄成 deepseek 的", () => {
+    const [model] = register(["glm-5.9"]);
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  test("没有同族条目就不带：不按 id 猜协议", () => {
+    const [model] = register(["mystery-model-1"]);
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  test("协议不跨 api 借：anthropic-messages 接入时不带 openai-completions 的回传项", () => {
+    const [model] = register(["deepseek-v4.1-flash"], "anthropic-messages");
+    assert.equal(model !== undefined && "compat" in model, false);
+  });
+
+  /** 真正要发出去的请求体：onPayload 里截下后抛错，请求不出进程 */
+  async function outgoing(model: PiModel): Promise<Record<string, unknown>> {
+    let captured: Record<string, unknown> | undefined;
+    const wire = { ...model, provider: "my-gw", api: "openai-completions", baseUrl: "https://gw.example/v1" };
+    const events = streamOpenAI(
+      wire as Model<"openai-completions">,
+      {
+        messages: [
+          { role: "user", content: "跑一下", timestamp: 0 },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }],
+            api: "openai-completions",
+            provider: "my-gw",
+            model: model.id,
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: "toolUse",
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "bash",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        reasoning: "high",
+        onPayload: (payload) => {
+          captured = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    for await (const _event of events) {
+      // 抛错后流以 error 事件收尾，排干即可
+    }
+    assert.ok(captured !== undefined, "pi 没有走到构造请求体那一步");
+    return captured;
+  }
+
+  function assistantTurn(params: Record<string, unknown>): Record<string, unknown> {
+    const messages = params.messages as Array<Record<string, unknown>>;
+    const assistant = messages.find((message) => message.role === "assistant");
+    assert.ok(assistant !== undefined);
+    return assistant;
+  }
+
+  test("缺思考的 assistant 消息回传空 reasoning_content —— 这是那条 400 的直接解", async () => {
+    const [model] = register(["deepseek-v4.1-flash"]);
+    assert.ok(model !== undefined);
+    const params = await outgoing(model);
+    assert.equal(assistantTurn(params).reasoning_content, "");
+    assert.deepEqual(params.thinking, { type: "enabled" });
+  });
+
+  test("对照：不带这一项时同一段历史没有 reasoning_content（证明上一条断的是这一项的效果）", async () => {
+    const [model] = register(["deepseek-v4.1-flash"]);
+    assert.ok(model !== undefined);
+    const { compat: _compat, ...bare } = model;
+    const params = await outgoing(bare as PiModel);
+    assert.equal("reasoning_content" in assistantTurn(params), false);
   });
 });

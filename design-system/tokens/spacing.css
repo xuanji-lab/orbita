@@ -30,6 +30,19 @@
   --list-item-default: 36px;
   --list-item-rich: 48px;
 
+  /* ===== 顶部工具栏（2026-10-19 方案 B v2 → 2026-10-19 修订：Windows 拆两行）=====
+   一处定义、处处自动生效：量在这里；承载在渲染层 styles.css 的 .toolbar 与
+   shell/toolbar.css 的胶囊配方（工具栏的直接子元素：胶囊 + Windows 的 brand row）。
+   行高 52 与胶囊中心 25 的推导对账在 shell/window-tools.ts。 */
+  --titlebar-row: 52px;      /* 胶囊行高（整条横跨窗口，在卡片外） */
+  --titlebar-brand-row: 32px; /* Windows 商标行（商标 + 软件名 + 自绘三键）；macOS 无此行 */
+  --titlebar-capsule: var(--control-height-md); /* 胶囊高（32）：中心钉胶囊行 y=25 */
+  --titlebar-capsule-top: 9px; /* 胶囊上沿 = 25 − 32/2 */
+  --titlebar-control: 28px;  /* 胶囊内的圆格（quiet-control） */
+  --titlebar-field: 24px;    /* 胶囊内嵌的筛选框 / 选择 / 页签 */
+  --titlebar-icon: 16px;     /* 胶囊内的 lucide 图标 */
+  --toolbar-inset: 12px;     /* 左胶囊左缘（darwin 在渲染层覆写为红绿灯右侧 80px） */
+
   /* layout */
   --sidebar-rail-width: 48px;
   --content-max-width: 1000px;

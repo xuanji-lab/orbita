@@ -8,15 +8,48 @@
  */
 
 .usage-meter {
+  flex: 0 0 auto;
+}
+.usage-meter-body {
   position: relative;
   /* 能量体的停机坪：80×48 的云悬在格子上方，云心对准当前格（petLeft） */
   padding-top: 46px;
-  flex: 0 0 auto;
   transition: padding-top var(--duration-enter) var(--ease-out-quint);
+}
+/* 字标与星云同一行：绝对定位在停机坪左端（格子左缘那条线），高度 = 云的 48px
+ * 空域、垂直居中——中心 y 与星云中心（24）同一条水平线。星云移到最左两格
+ * （active ≤ 1）时 data-yield 让位：字标滑到格子行右端、右缘对齐「今天」格
+ * （2026-10-19 用户裁决，替代原先的淡出）；216px = .usage-cells 的定宽。
+ * 星云收起时（停机坪塌掉）回到流里变成格子上方的一小行 */
+.usage-brand {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-wordmark);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.usage-brand[data-yield] {
+  transform: translateX(calc(216px - 100%));
+}
+.usage-meter[data-hidden] .usage-brand {
+  position: static;
+  height: auto;
+  padding: 0 0 4px 2px;
+  transform: none;
 }
 
 /* 星云收起：上方停机坪让给会话列表；星云钻回格子（缩小 + 淡出 + 下沉） */
-.usage-meter[data-hidden] {
+.usage-meter[data-hidden] .usage-meter-body {
   padding-top: 0;
 }
 
@@ -224,7 +257,7 @@
 /* 星期短标：11px 微字（设计系统字阶最小档），今天的加粗正墨 */
 .usage-wd {
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   line-height: 1;
   white-space: nowrap;
   color: var(--color-text-tertiary);
@@ -236,7 +269,7 @@
 
 /*
  * 星云说的话：悬停一格时从云头顶冒出的小气泡（不是浮层 tooltip——跟着星云走）。
- * 字号与格子下的星期同档（micro），尾巴是一个转 45° 的小方块，同底同描边，指向云。
+ * 字号与格子下的星期同档（xs），尾巴是一个转 45° 的小方块，同底同描边，指向云。
  * 默认居中在云上方；靠两端的格子（data-edge）把气泡往里收，尾巴仍对准云心。
  */
 .usage-say {
@@ -250,7 +283,7 @@
   background: var(--color-bg-panel);
   color: var(--color-text-secondary);
   font-family: var(--font-family-base);
-  font-size: var(--font-size-micro);
+  font-size: var(--font-size-xs);
   line-height: 1;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;

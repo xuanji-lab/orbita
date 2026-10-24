@@ -123,8 +123,54 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "composer-blackhole",
   "composer-tetris",
   "pdf-citations",
+  "intent-system",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
+
+/**
+ * 意图系统（实验）的设置面。**只在实验开关 `intent-system` 打开时生效**——关着时
+ * 整条链路不碰：不连服务、不拦消息、不出任何 UI（B0 纪律）。字段全部可选，
+ * 缺席走 DEFAULT_INTENT_SETTINGS；只存用户动过的那几样，连接状态不落盘
+ * （它是每次探活的结果，不是偏好）。
+ */
+export interface IntentSettings {
+  /** intent-lab 服务地址（本机另一进程；Orbita 不负责拉起它） */
+  baseUrl?: string;
+  /** 新会话的意图召回默认开（缺省 true：开了实验功能就是要用）；单会话可随时关 */
+  newSessionOn?: boolean;
+  /** 召回管线渠道（缺省 proma）：Proma 服务端或 DeepSeek 官方（花用户自己的 key） */
+  channel?: "proma" | "deepseek";
+}
+
+export const DEFAULT_INTENT_BASE_URL = "http://127.0.0.1:8723";
+
+/** 坏值回退后的生效值（消费侧都从这取，不各自猜缺省）。 */
+export function effectiveIntentSettings(
+  settings: IntentSettings | undefined,
+): Required<Pick<IntentSettings, "baseUrl" | "newSessionOn" | "channel">> {
+  const baseUrl =
+    typeof settings?.baseUrl === "string" && /^https?:\/\//.test(settings.baseUrl)
+      ? settings.baseUrl.replace(/\/+$/, "")
+    : DEFAULT_INTENT_BASE_URL;
+  return {
+    baseUrl,
+    newSessionOn: settings?.newSessionOn !== false,
+    channel: settings?.channel === "deepseek" ? "deepseek" : "proma",
+  };
+}
+
+/** 设置解析里的 intent 子对象：逐字段校验，坏值丢掉（缺席 = 全走缺省）。 */
+export function parseIntentSettings(raw: unknown): IntentSettings | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const v = raw as Record<string, unknown>;
+  const out: IntentSettings = {};
+  if (typeof v["baseUrl"] === "string" && /^https?:\/\//.test(v["baseUrl"] as string)) {
+    out.baseUrl = (v["baseUrl"] as string).replace(/\/+$/, "");
+  }
+  if (typeof v["newSessionOn"] === "boolean") out.newSessionOn = v["newSessionOn"];
+  if (v["channel"] === "proma" || v["channel"] === "deepseek") out.channel = v["channel"];
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 /** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
 export interface UsagePetPref {
@@ -213,6 +259,11 @@ export interface AppSettings {
   starredModels?: ModelPair[];
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /**
+   * 意图系统（实验功能 intent-system）的设置子对象。**只在实验开关打开时生效**；
+   * 解析与缺省见 IntentSettings / effectiveIntentSettings。
+   */
+  intent?: IntentSettings;
   /**
    * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
    * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
@@ -304,7 +355,7 @@ export const SIDEBAR_WIDTH_DEFAULT = 288;
  * 右栏宽度的硬地板（px）。小窗口保护：窗口再窄，右栏也不能收成一条看不出内容的缝。
  * 它会压过下面按比例算出的上限——挤到 chat 也比右栏消失好。
  */
-const RIGHT_PANEL_WIDTH_FLOOR = 200;
+const RIGHT_PANEL_WIDTH_FLOOR = 260;
 
 /**
  * 把右栏宽度夹进合法区间。**区间是相对 pane 的比例，不是固定像素**——
@@ -316,7 +367,7 @@ const RIGHT_PANEL_WIDTH_FLOOR = 200;
  * 右栏拿多少它就让多少）。区间直接就是 **[P/3, 2P/3]**——这一对本身各占 pane 的
  * 三分之一到三分之二，不需要再换算。
  *
- * 地板与上限撞车（P 小到 2P/3 < 200）时**地板胜出**，见 RIGHT_PANEL_WIDTH_FLOOR。
+ * 地板与上限撞车（P 小到 2P/3 < 260）时**地板胜出**，见 RIGHT_PANEL_WIDTH_FLOOR。
  * `paneTotal` 量不到（元素未挂载，为 0 或非数）时只保地板——不拿一个假的 P 去夹。
  */
 export function clampRightPanelWidth(width: number, paneTotal: number): number {
@@ -395,6 +446,8 @@ export function parseSettings(raw: unknown): AppSettings {
     usagePet?: unknown;
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
+    /** 意图系统（实验）的设置子对象 */
+    intent?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
     experimental?: unknown;
     /** 旧黑洞开关：原样并入 experimentalFeatures["composer-blackhole"] */
@@ -418,6 +471,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
+  const intent = parseIntentSettings(record.intent);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -465,6 +519,7 @@ export function parseSettings(raw: unknown): AppSettings {
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
     ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
+    ...(intent === undefined ? {} : { intent }),
   };
 }
 

@@ -53,7 +53,7 @@
 }
 
 /* 全部 tab 共享一行；面板头下、xterm 区上。超出横向滚动，不换行 */
-.terminal-tabstrip {
+.cap-tabs {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -61,62 +61,12 @@
   overflow-x: auto;
   scrollbar-width: none;
 }
-.terminal-tabstrip::-webkit-scrollbar {
+.cap-tabs::-webkit-scrollbar {
   display: none;
 }
 
-/* tab 是安静控件配方（.quiet-control 供色与选中态）的 tab 形状特化 */
-.terminal-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 26px;
-  padding: 0 4px 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-md);
-  font: inherit;
-  font-size: var(--font-size-caption);
-  white-space: nowrap;
-  flex: 0 0 auto;
-  max-width: 160px;
-}
-/* 选中 tab 与文件面板的标签同一配方（--option-active-bg + 正墨 + semibold），不染 accent */
-.terminal-tab.quiet-control[aria-selected="true"] {
-  background: var(--option-active-bg);
-  color: var(--color-text-primary);
-  font-weight: var(--weight-semibold);
-}
-
-/* tab 上的关闭键：hover / 选中才浮现，平时让位给标题 */
-.terminal-tab .terminal-tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  opacity: 0;
-  flex: 0 0 auto;
-}
-
-.terminal-tab:hover .terminal-tab-close,
-.terminal-tab:focus-within .terminal-tab-close,
-.terminal-tab[aria-selected="true"] .terminal-tab-close {
-  opacity: 1;
-}
-
-.terminal-tab .terminal-tab-close:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
 /* 已退出的 tab 标题降一级：过程结束了，不再和活 tab 抢注意力 */
-.terminal-tab[aria-selected="false"] .terminal-tab.is-exited {
+.cap-tab[aria-selected="false"].is-exited {
   color: var(--color-text-tertiary);
 }
 
@@ -149,3 +99,12 @@
   height: 100%;
 }
 
+
+/*
+ * 滚动条滑块圆角：xterm 6 的滚动条是自己的 DOM（.xterm-scrollable-element > .scrollbar
+ * > .slider），默认方角；按全局细条口径改成胶囊（宽与颜色在 TerminalView /
+ * terminal-theme.ts 里喂给 xterm）
+ */
+.terminal-view .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  border-radius: var(--radius-pill);
+}

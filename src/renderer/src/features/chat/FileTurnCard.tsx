@@ -4,7 +4,7 @@ import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
 import { isWebArtifactFile } from "@shared/files";
-import { splitPathTail } from "./tool-results";
+import { pathParts } from "./path-parts.ts";
 import { RevertPreviewContext } from "./revert-preview.ts";
 
 /**
@@ -15,16 +15,6 @@ import { RevertPreviewContext } from "./revert-preview.ts";
  * 卡片是**落盘事实的投影**（冷启动从 JSONL 重建，不依赖内存）——实时事件与盘上
  * 种子喂的是同一种记录。
  */
-
-/** 路径的显示形：cwd 之内显示相对，之外显示绝对；再拆成 文件名（粗）+ 目录（淡）。 */
-export function pathParts(path: string, cwd: string | null): { name: string; dir: string } {
-  const display =
-    cwd !== null && cwd !== "" && (path === cwd || path.startsWith(`${cwd}/`) || path.startsWith(`${cwd}\\`))
-      ? path.slice(cwd.length + 1)
-      : path;
-  const tail = splitPathTail(display.replaceAll("\\", "/"));
-  return { name: tail.name, dir: tail.dir.replace(/\/$/, "") };
-}
 
 /**
  * 一行增删统计（git stat 读法：+ 绿 − 红）。**为零的一侧不画**（zcode 同款）：
@@ -41,7 +31,7 @@ export function Stats(props: { added: number; removed: number }) {
 }
 
 const SLOT_DIR: React.CSSProperties = {
-  fontSize: "var(--font-size-caption)",
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-tertiary)",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -127,7 +117,7 @@ export function FileTurnCard(props: {
         border: `1px solid ${previewing ? "var(--color-border-strong)" : "var(--color-border-subtle)"}`,
         boxShadow: previewing ? "0 0 0 1px var(--color-border-strong)" : "none",
         borderRadius: "var(--radius-md)",
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
@@ -193,7 +183,7 @@ export function FileTurnCard(props: {
                 padding: "1px var(--space-2)",
                 borderRadius: "var(--radius-pill)",
                 background: "var(--color-bg-muted)",
-                fontSize: "var(--font-size-caption)",
+                fontSize: "var(--font-size-sm)",
                 color: "var(--color-text-tertiary)",
                 flex: "0 0 auto",
               }}
@@ -218,7 +208,7 @@ export function FileTurnCard(props: {
                 background: "transparent",
                 color: props.busy ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
                 font: "inherit",
-                fontSize: "var(--font-size-caption)",
+                fontSize: "var(--font-size-sm)",
                 cursor: props.busy ? "default" : "pointer",
                 flex: "0 0 auto",
               }}
@@ -279,7 +269,7 @@ export function FileTurnCard(props: {
 
 /** 旁路标记的槽位：小字、三级灰，不参与 rtl 折叠（它是固定文案，不是路径）。 */
 const SLOT_MARK: React.CSSProperties = {
-  fontSize: "var(--font-size-caption)",
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-tertiary)",
   whiteSpace: "nowrap",
   flex: "0 0 auto",
@@ -317,7 +307,7 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
     background: "transparent",
     color: "var(--color-text-secondary)",
     font: "inherit",
-    fontSize: "var(--font-size-caption)",
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
     whiteSpace: "nowrap",
   };
@@ -394,7 +384,7 @@ export function RevertMarkView(props: {
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
-          fontSize: "var(--font-size-caption)",
+          fontSize: "var(--font-size-sm)",
           color: "var(--color-text-tertiary)",
         }}
       >
@@ -412,7 +402,7 @@ export function RevertMarkView(props: {
             background: "var(--color-chat-card-bg)",
             border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-md)",
-            fontSize: "var(--font-size-caption)",
+            fontSize: "var(--font-size-sm)",
           }}
         >
           <button

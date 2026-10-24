@@ -101,7 +101,7 @@ export function NoVisionHint() {
         display: "flex",
         alignItems: "center",
         gap: "var(--space-1)",
-        fontSize: "var(--font-size-caption)",
+        fontSize: "var(--font-size-sm)",
         color: "var(--color-text-secondary)",
       }}
     >
