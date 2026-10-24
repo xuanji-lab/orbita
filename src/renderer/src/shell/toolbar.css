@@ -206,6 +206,12 @@
    * 只有 .cap-sc 一个孩子）没写，宽塌成 0、标题只剩 8px 看不见（2026-10-21 发版前验收） */
   width: 100%;
   height: 100%;
+  /* 整颗胶囊豁免拖拽（像 Safari 地址栏本身拖不动窗口）。.titlebar 的 drag 会被继承，
+   * 而拖拽区不把鼠标事件派给页面——:hover 只在指针恰好压到某个按钮（no-drag）时才成立：
+   * 悬停标题 / 短 id 复制键不出现，指针摸到隐形的复制键位置它才冒出来、铅笔陪着一起冒
+   * （2026-10-23 用户：「hover 显示复制 button 的逻辑不对」）。双击标题重命名同因收不到。
+   * 工具栏其余空白仍是拖拽把手 */
+  -webkit-app-region: no-drag;
 }
 /* 让位顺序（窄到哪一档丢哪样；收工键始终在）：
  * ① 短 id 先藏（复制键仍在，悬停给提示）② 子会话芯片只留图标 + 数字 ③ 标题省略 */
@@ -280,7 +286,8 @@
 .cap-hov {
   visibility: hidden;
 }
-.toolbar-capsule:hover .cap-hov {
+.toolbar-capsule:hover .cap-hov,
+.toolbar-capsule:focus-within .cap-hov {
   visibility: visible;
 }
 /* 短 id：等宽（business）· xs · 三级墨 */

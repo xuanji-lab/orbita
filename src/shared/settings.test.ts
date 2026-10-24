@@ -551,7 +551,7 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     );
   });
 
-  it("旧总开关 experimental: true = paper-themes 与 session-lifecycle 都开（黑洞不在其内）", () => {
+  it("旧总开关 experimental: true = paper-themes 与 session-lifecycle 都开", () => {
     deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
       "paper-themes": true,
       "session-lifecycle": true,
@@ -563,46 +563,25 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     deepStrictEqual(parseSettings({ experimental: "yes" }).experimentalFeatures, undefined);
   });
 
-  it("旧黑洞开关 composerBlackhole 原样并入 composer-blackhole", () => {
-    deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, {
-      "composer-blackhole": true,
-    });
-    // false 也并入：用户明确关过这一项，比「从未有过这个键」多一层意思，照原样带走
-    deepStrictEqual(parseSettings({ composerBlackhole: false }).experimentalFeatures, {
-      "composer-blackhole": false,
-    });
-    deepStrictEqual(parseSettings({ composerBlackhole: "on" }).experimentalFeatures, undefined);
-  });
-
   it("新键里已显式给值的项以新键为准，旧键只补缺席的项", () => {
     deepStrictEqual(
       parseSettings({
         experimental: true,
-        composerBlackhole: true,
-        experimentalFeatures: { "session-lifecycle": false, "composer-blackhole": false },
+        experimentalFeatures: { "session-lifecycle": false },
       }).experimentalFeatures,
-      { "paper-themes": true, "session-lifecycle": false, "composer-blackhole": false },
+      { "paper-themes": true, "session-lifecycle": false },
     );
   });
 
-  it("黑洞与俄罗斯方块互斥：盘上手改出两个都开时，以黑洞为准、tetris 当作没开", () => {
+  it("下架的输入框黑洞 / 俄罗斯方块：盘上残留的新旧键都丢掉，不报错", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "composer-blackhole": true, "composer-tetris": true } })
-        .experimentalFeatures,
-      { "composer-blackhole": true },
+      parseSettings({
+        composerBlackhole: true,
+        experimentalFeatures: { "composer-blackhole": true, "composer-tetris": true, "intent-system": true },
+      }).experimentalFeatures,
+      { "intent-system": true },
     );
-  });
-
-  it("互斥只砸「两个都开」：黑洞关着时 tetris 照常能开（也允许反过来单独开黑洞）", () => {
-    deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "composer-blackhole": false, "composer-tetris": true } })
-        .experimentalFeatures,
-      { "composer-blackhole": false, "composer-tetris": true },
-    );
-    deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "composer-tetris": true } }).experimentalFeatures,
-      { "composer-tetris": true },
-    );
+    deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, undefined);
   });
 });
 
