@@ -200,7 +200,10 @@ export class LatexRunner {
     const logStale = picked.stale;
 
     // 陈旧日志里的 Output written 是上一轮的产物位置，不当本次证据（目录候选照样试）
-    const pdfPath = locatePdf(logStale ? null : parsed.output, outDirs, mainBase, plan.dir);
+    const logOutput = logStale ? null : parsed.output;
+    const pdfPath = locatePdf(logOutput, outDirs, mainBase, plan.dir, runStartedAt);
+    // 回 0 却没 PDF 时要知道「其实写出了中间格式」（dvi-only recipe 不是白编）
+    const nonPdfOutput = pdfPath === null ? findNonPdfOutput(logOutput, outDirs, plan.dir) : null;
     // 「这一次写出来的」：mtime 不早于本次 spawn。与「比源码新」是两件事（评审 A1/M4）
     const pdfWrittenAt = pdfPath === null ? null : mtimeOf(pdfPath);
     const pdfFresh = pdfWrittenAt !== null && pdfWrittenAt >= runStartedAt;
@@ -224,13 +227,13 @@ export class LatexRunner {
       }
     } else if (!upToDate) {
       status = "compile-error";
-      errors.push(
-        issue(
-          pdfPath !== null
-            ? `${pdfPath} was not regenerated (it is older than ${plan.mainName}), so this build produced nothing new.`
-            : `latexmk exited with code 0 but no PDF was found (looked in ${outDirs.join(", ")}).`,
-        ),
-      );
+      if (pdfPath !== null) {
+        errors.push(
+          issue(`${pdfPath} was not regenerated (it is older than ${plan.mainName}), so this build produced nothing new.`),
+        );
+      } else {
+        errors.push(issue(missingPdfMessage(nonPdfOutput, outDirs)));
+      }
     } else if (errors.length > 0) {
       // nonstopmode 会带着错继续排版，latexmk 在部分发行版上仍回 0：log 里的错就是事实
       status = "compile-error";
@@ -380,23 +383,76 @@ function outputDirs(plan: LatexPlan): string[] {
  * 随后由 xdvipdfmx 写出同目录同名的 `main.pdf`；把 `.xdv` 当产物交出去，调用方
  * 会拿它当 PDF 打开（xelatex 又是中文主路径，这条踩到的人最多）。所以日志给的
  * 不是 `.pdf` 时，按同目录同名的 `.pdf` 再试一次，再退到候选目录。
+ *
+ * **本次新写的优先**（mtime ≥ 本次 spawn 的时刻）。lualatex 的日志写
+ * `Output written on main.pdf`（名字不带 outdir 前缀），而项目根常有一份上一轮
+ * 留下的 main.pdf；只按「谁存在」挑，就会把根目录那份旧文件当成产物，本次真正
+ * 写出的 build/main.pdf 反被忽略。既然两者都匹配同一个名字，「谁新的」比「谁先被
+ * 列到」可靠。没有新写的（latexmk 判定无事可做、PDF 根本没动）才退回第一个存在的。
  */
 function locatePdf(
   output: string | null,
   dirs: readonly string[],
   mainBase: string,
   dir: string,
+  runStartedAt: number,
 ): string | null {
   const candidates: string[] = [];
-  if (output !== null) {
-    const fromLog = isAbsolute(output) ? output : resolve(dir, output);
-    candidates.push(fromLog);
-    // `…/main.xdv` → `…/main.pdf`：换扩展名而不是拼字符串，路径里有 `.` 的目录也安全
-    const asPdf = `${fromLog.slice(0, fromLog.length - extname(fromLog).length)}.pdf`;
-    if (asPdf !== fromLog) candidates.push(asPdf);
+  for (const fromLog of logOutputCandidates(output, dirs, dir)) {
+    candidates.push(fromLog, withPdfExtension(fromLog));
   }
   for (const candidate of dirs) candidates.push(join(candidate, `${mainBase}.pdf`));
-  return candidates.find(isPdfFile) ?? null;
+  const found = [...new Set(candidates)].filter(isPdfFile);
+  const fresh = found.find((path) => {
+    const mtime = mtimeOf(path);
+    return mtime !== null && mtime >= runStartedAt;
+  });
+  return fresh ?? found[0] ?? null;
+}
+
+/**
+ * 日志里的产物路径 → 磁盘候选。
+ *
+ * 绝对路径就它自己。相对路径分两种：带目录前缀（`build/main.pdf`，pdflatex / xelatex
+ * 带 -outdir 时的写法）按项目目录解析；**裸文件名**（`main.pdf`，lualatex 就这么写）
+ * 既可能在项目目录、也可能在 outdir，所以每个候选目录都试一遍——dirs 里已经含
+ * outDir、argv 里的 -outdir 与主文件目录。
+ */
+function logOutputCandidates(output: string | null, dirs: readonly string[], dir: string): string[] {
+  if (output === null) return [];
+  if (isAbsolute(output)) return [output];
+  if (/[\\/]/.test(output)) return [resolve(dir, output)];
+  return dirs.map((candidate) => join(candidate, output));
+}
+
+/** `…/main.xdv` → `…/main.pdf`；本来就是 .pdf（大小写不敏感）的原样返回 */
+function withPdfExtension(path: string): string {
+  const extension = extname(path);
+  if (extension.toLowerCase() === ".pdf") return path;
+  return `${path.slice(0, path.length - extension.length)}.pdf`;
+}
+
+/**
+ * 本次日志说引擎写出了非 PDF 文件（`Output written on main.dvi`，dvi-only recipe）：
+ * 把它找出来，好让错误文案能说清「编出了东西，只是本应用只收 PDF」。
+ */
+function findNonPdfOutput(output: string | null, dirs: readonly string[], dir: string): string | null {
+  for (const candidate of logOutputCandidates(output, dirs, dir)) {
+    if (!existsSync(candidate)) continue;
+    if (extname(candidate).toLowerCase() !== ".pdf") return candidate;
+  }
+  return null;
+}
+
+/**
+ * 「回 0 却没有 PDF」到底该说什么。区别很重要：dvi-only 的 recipe 确实编出了东西，
+ * 文案要让用户知道不是白编，而不是让他以为引擎什么都没干。
+ */
+function missingPdfMessage(nonPdfOutput: string | null, dirs: readonly string[]): string {
+  if (nonPdfOutput === null) {
+    return `latexmk exited with code 0 but no PDF was found (looked in ${dirs.join(", ")}).`;
+  }
+  return `latexmk exited with code 0 and wrote ${nonPdfOutput}, which is not a PDF — only PDF output is returned (DVI / XDV are intermediate formats). Use pdflatex / xelatex / lualatex, or check the PDF conversion step.`;
 }
 
 /** 存在且扩展名是 .pdf（大小写不敏感）。`.xdv` / `.dvi` 是中间产物，不是给用户开的 PDF */
