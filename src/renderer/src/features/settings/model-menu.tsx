@@ -11,7 +11,6 @@
  */
 import { useEffect, useState } from "react";
 import type { BuiltinProvider } from "@shared/agent-ipc";
-import { KNOWN_PROVIDERS } from "@shared/known-providers";
 import { resolveModelDefaults } from "@shared/model-defaults";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
@@ -20,7 +19,13 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import type { MenuPlacementSide } from "../../shell/menu-position";
-import { hasCredentials, kindOf, modelAcceptsImage, modelContextText, railVendorCell } from "./providers-view-model.ts";
+import {
+  hasCredentials,
+  modelAcceptsImage,
+  modelContextText,
+  modelPreferenceOf,
+  railVendorCell,
+} from "./providers-view-model.ts";
 import { VendorLogo } from "./VendorLogo";
 import type { Messages } from "../../messages-en.ts";
 
@@ -50,8 +55,7 @@ export function useBuiltinCatalog(): BuiltinProvider[] {
 
 /** 某厂商下某个模型的参数兜底（按模型 id 跨目录推断：自建网关没有 catalogId，但它跑的型号在目录里多半有官方口径） */
 function defaultsFor(provider: ProviderDto, catalog: readonly BuiltinProvider[], modelId: string) {
-  const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-  return resolveModelDefaults(catalog, modelId, { catalogId: known?.catalogId, api: known?.api });
+  return resolveModelDefaults(catalog, modelId, modelPreferenceOf(provider));
 }
 
 /**
@@ -304,11 +308,7 @@ export function modelCardItems(options: {
 }): MenuItem[] {
   const starredKeys = new Set(options.starred.map((pair) => starKey(pair.providerId, pair.modelId)));
   const rowFor = (provider: ProviderDto, declared: ModelDecl): MenuItem => {
-    const known = KNOWN_PROVIDERS.find((k) => k.id === kindOf(provider));
-    const defaults = resolveModelDefaults(options.catalog, declared.id, {
-      catalogId: known?.catalogId,
-      api: known?.api,
-    });
+    const defaults = resolveModelDefaults(options.catalog, declared.id, modelPreferenceOf(provider));
     const context = modelContextText(declared, defaults);
     const isStarred = starredKeys.has(starKey(provider.id, declared.id));
     return {

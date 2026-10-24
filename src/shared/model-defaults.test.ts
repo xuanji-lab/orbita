@@ -5,7 +5,10 @@ import {
   FALLBACK_MODEL,
   FALLBACK_THINKING_LEVEL,
   defaultThinkingLevel,
+  knownParamsFor,
   lookupCatalogModel,
+  lookupCatalogSource,
+  modelThinkingLevels,
   resolveModelDefaults,
 } from "./model-defaults.ts";
 
@@ -198,5 +201,57 @@ describe("defaultThinkingLevel —— 白名单默认档 > medium，再按支持
 
   test("支持集未知时不夹——主进程派子会话拿不到目录，交给 pi 发送前按同规则夹", () => {
     assert.equal(defaultThinkingLevel("no-such-model", undefined), "medium");
+  });
+});
+
+describe("knownParamsFor —— 白名单对（服务商，型号）给出的口径", () => {
+  // OpenCode Go 的目录切片：收录了 kimi-k3（这家只开 max），没收录 deepseek-v4.1-flash
+  const opencode: BuiltinProvider = {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    api: "openai-completions",
+    models: [{ ...entry("kimi-k3", 1_048_576, 131_072, true), supportedThinkingLevels: ["max"] }],
+  };
+  const catalog = [...CATALOG, opencode];
+  const authoritative = { catalogId: "opencode-go", api: "openai-completions", catalogAuthoritative: true };
+
+  test("普通服务商：按型号 id 取白名单", () => {
+    assert.deepEqual(knownParamsFor(catalog, "kimi-k3", { catalogId: "kimi-coding" }).thinkingLevels, [
+      "low",
+      "high",
+      "max",
+    ]);
+  });
+
+  test("「目录说了算」且本家目录收录了：不吃白名单，菜单按目录显示 max 一档", () => {
+    assert.deepEqual(knownParamsFor(catalog, "kimi-k3", authoritative), {});
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, null, authoritative), ["max"]);
+  });
+
+  test("「目录说了算」但本家目录没收录：白名单照样补（目录还没跟上的新型号）", () => {
+    assert.equal(knownParamsFor(catalog, "deepseek-v4.1-flash", authoritative).contextWindow, 1_000_000);
+    assert.deepEqual(modelThinkingLevels("deepseek-v4.1-flash", catalog, null, authoritative), [
+      "off",
+      "low",
+      "high",
+      "max",
+    ]);
+  });
+
+  test("标了「目录说了算」却没有 catalogId：无从判断本家，按白名单答", () => {
+    assert.equal(knownParamsFor(catalog, "kimi-k3", { catalogAuthoritative: true }).thinkingLevels?.length, 3);
+  });
+});
+
+describe("lookupCatalogSource —— 连同所在的那一家返回（会话借档位表要从同一家抄）", () => {
+  test("同 api 优先时返回的是那一家，不是目录里排第一的", () => {
+    const source = lookupCatalogSource(CATALOG, "claude-opus-5", { api: "openai-completions" });
+    assert.equal(source?.provider.id, "mirror-gateway");
+    assert.equal(source?.model.contextWindow, 200_000);
+  });
+
+  test("本家命中返回本家", () => {
+    assert.equal(lookupCatalogSource(CATALOG, "k3", { catalogId: "kimi-coding" })?.provider.id, "kimi-coding");
   });
 });

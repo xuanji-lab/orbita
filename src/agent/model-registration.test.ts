@@ -198,7 +198,7 @@ describe("toFallbackModels —— 借参抄档位表（thinkingLevelMap 是模�
     assert.deepEqual(registered?.thinkingLevelMap, withMap.thinkingLevelMap);
   });
 
-  test("目录没有这个 id：不带表（白名单的 thinkingLevels 在 renderer 兜底显示）", () => {
+  test("目录没有、白名单也没有这个 id：不带表（交给 pi 的「无表」规则）", () => {
     const registered = toFallbackModels([], [{ id: "ghost-model" }], [], {}, [])[0];
     assert.notEqual(registered, undefined);
     assert.equal(registered !== undefined && "thinkingLevelMap" in registered, false);
@@ -314,6 +314,22 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
     );
     assert.deepEqual(rt.kinds, ["auth", "fallback"]);
     assert.equal(model?.contextWindow, 1_000_000);
+  });
+
+  test("白名单要改模型时补注册：claude-opus-5 的档位进会话；只写了默认档的不补", () => {
+    const opus = { ...catalogModel("claude-opus-5", 1_000_000, 5), reasoning: true } as PiModel;
+    const rt = fakeRuntime([opus, catalogModel("deepseek-v4-flash", 1_000_000, 0.2)]);
+    const model = registerAndResolveModel(cast(rt), { ...wire, models: [{ id: "claude-opus-5" }] }, "claude-opus-5");
+    assert.deepEqual(rt.kinds, ["auth", "fallback"]);
+    assert.ok(model !== undefined);
+    // 白名单 off + low→max：目录没写 minimal 时 pi 会多算出它，现在标成 null
+    assert.equal(model.thinkingLevelMap?.minimal, null);
+    assert.equal(model.thinkingLevelMap?.max, "max");
+
+    // deepseek-v4-flash 的白名单只有默认档（偏好，不进 pi 的模型对象）：不触发补注册
+    const rt2 = fakeRuntime([catalogModel("deepseek-v4-flash", 1_000_000, 0.2)]);
+    registerAndResolveModel(cast(rt2), { ...wire, models: [{ id: "deepseek-v4-flash" }] }, "deepseek-v4-flash");
+    assert.deepEqual(rt2.kinds, ["auth"]);
   });
 
   test("声明里根本没有这个 id：注册了也解析不到——undefined 交调用方报错", () => {
@@ -609,10 +625,14 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
     assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
   });
 
-  test("家族借参（claude-fable-5-1 → claude-fable-5）：思考协议与档位表跟着参数同源", () => {
+  test("家族借参（claude-fable-5-1 → claude-fable-5）：思考协议与档位表跟着参数同源，再按白名单纠", () => {
     const model = resolveOnGateway("anthropic-messages", "claude-fable-5-1");
     assert.deepEqual(model?.compat, { forceAdaptiveThinking: true });
-    assert.deepEqual(model?.thinkingLevelMap, fableMap);
+    // 借来的表（fableMap）没写 minimal，pi 按「非显式 null 即支持」会多算出它；白名单按官方
+    // 档位表（low→max）标成 null——菜单里本来就没有 minimal，会话现在也没有
+    assert.deepEqual(model?.thinkingLevelMap, { ...fableMap, minimal: null });
+    assert.ok(model !== undefined);
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("老的 budget 模型不带：claude-sonnet-4-5 仍走 budget_tokens", () => {

@@ -21,7 +21,7 @@ import {
   reorderIds,
   urlSuffix,
 } from "./providers-view-model.ts";
-import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
+import { KNOWN_MODELS } from "../../../../shared/known-models.ts";
 import { en } from "../../messages-en.ts";
 
 describe("parseTokenInput", () => {
@@ -250,10 +250,8 @@ describe("reorderIds —— 拖拽排序：落到目标行的位置，其余行�
 
 describe("modelIdIssue —— 手填模型 id 的形状", () => {
   test("内置目录的每个模型 id 都必须过——校验不能拒绝自家目录的格式", () => {
-    for (const provider of KNOWN_PROVIDERS) {
-      for (const id of Object.keys(provider.modelParams ?? {})) {
-        assert.equal(modelIdIssue(id, en), null, `${provider.id}/${id} 被拦`);
-      }
+    for (const id of Object.keys(KNOWN_MODELS)) {
+      assert.equal(modelIdIssue(id, en), null, `${id} 被拦`);
     }
   });
 
