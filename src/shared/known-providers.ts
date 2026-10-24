@@ -7,15 +7,27 @@
  * 把 41 个原样倒出来，用户选中「Z.AI Coding CN」却发现协议不对、模型对不上，
  * 比不给下拉框更坏。
  *
- * 所以这张表只放**我们验证过能接通的**条目，一条一条加。模型参数仍然来自 pi 的目录
- * （`catalogId` 对得上就用它的官方参数）与型号白名单（known-models.ts，按型号 id 记），
- * 这张表只负责「接入方式」。
+ * 所以这张表一条一条手写「接入方式」：协议、预填地址、计费口径。模型参数仍然来自 pi 的目录
+ * （`catalogId` 对得上就用它的官方参数）与型号白名单（known-models.ts，按型号 id 记）。
+ * 我们用真实账号跑通过的条目不带标记；照厂商文档与 Proma 开源版的默认端点补齐、还没有账号
+ * 验证过的条目标 `untested`，界面上如实写「未实测」，欢迎有账号的人提 PR 摘掉它。
  *
  * 对照 proma：他们的 `channel.ts` 有 24 个 ProviderType，同样是一张手写表——
  * 这部分是干净的，值得学。不该学的是 `fetchModels` 那个 15 分支 switch。
  */
 import type { CatalogPreference } from "./model-defaults.ts";
 import type { ProviderApi } from "./provider.ts";
+
+/**
+ * 一种接入方式：协议 + 这家在这个协议下的地址。同一家常同时开着几种协议（智谱 Coding Plan
+ * 的文档就并列了 Anthropic Messages / OpenAI Chat / OpenAI Responses 三个 Base URL），
+ * 我们不替用户把它绑死在其中一个上（2026-10-24 用户：「根据官方的 doc 去，允许两种多种协议
+ * 才对，而不是你非要把它绑在其中一个端点上」）。
+ */
+export interface KnownAccess {
+  api: ProviderApi;
+  baseUrl: string;
+}
 
 export interface KnownProvider {
   /** 我们的稳定 id，也是用户看到的 identifier */
@@ -30,6 +42,15 @@ export interface KnownProvider {
   api: ProviderApi;
   /** 预填的 baseUrl。空串表示必须用户自己填（兼容格式的通用入口） */
   baseUrl: string;
+  /**
+   * **官方支持的全部接入方式**（含默认那一种，即上面的 `api` + `baseUrl`）。只收厂商文档
+   * 写明、且 pi 有对应 api 实现的；每条在注释里写出处 URL 与查证日期。缺省 = 只有默认一种。
+   *
+   * 默认取哪一种：有 catalogId 的跟 pi 内建目录里这家的协议走（2026-10-24 用户：「协议就跟
+   * pi 对齐吧」）——pi 的型号参数与思考回传格式是按那条路调的。只影响**新建**实例：已存的
+   * 实例协议与地址落在 providers.json 里，原样保留，不迁移。
+   */
+  access?: readonly KnownAccess[];
   /**
    * **这家网关要求的额外请求头**，随 endpoint 持久化，真实会话与测试 / 发现同源带上。
    * 现在只有 OpenCode Go 的会话头——它的网关缺这个头直接 400（无法高效路由）。
@@ -68,11 +89,18 @@ export interface KnownProvider {
   /** 一句话说明这条什么时候该选 */
   note: string;
   /**
-   * 这一条不用 API key，而是浏览器 OAuth 登录（目前只有 Anthropic 一家：
-   * Claude Pro / Max 订阅，凭据自动续期，见 main/provider/oauth.ts）。
-   * 设置面对这种条目不画密钥框，只给登录按钮；upsert 时 scheme 落 oauth。
+   * 这一条不用 API key，而是浏览器登录订阅：Claude（我们手写的流程，main/provider/oauth.ts）
+   * 与 ChatGPT（Codex）/ GitHub Copilot / xAI（复用 pi 自带的流程，main/provider/oauth-flows.ts）。
+   * 凭据落我们自己的密钥库，自动续期。设置面对这种条目不画密钥框，只给登录按钮；
+   * upsert 时 scheme 落 oauth。
    */
   auth?: "oauth";
+  /**
+   * **还没用真实账号验证过**：地址、协议与登录流程只照厂商文档与 Proma 开源版的默认值填，
+   * 我们手里没有账号跑通过一轮。设置页据此给卡片挂「未实测」徽标、详情页顶部写一句说明。
+   * 实测通过后删掉这一行即可——徽标与说明跟着消失。
+   */
+  untested?: true;
 }
 
 export const KNOWN_PROVIDERS: KnownProvider[] = [
@@ -81,6 +109,12 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     label: "DeepSeek",
     api: "openai-completions",
     baseUrl: "https://api.deepseek.com",
+    // 出处：https://api-docs.deepseek.com/（Your First API Call 表格：base_url (OpenAI) 与
+    // base_url (Anthropic)），2026-10-24 查证
+    access: [
+      { api: "openai-completions", baseUrl: "https://api.deepseek.com" },
+      { api: "anthropic-messages", baseUrl: "https://api.deepseek.com/anthropic" },
+    ],
     catalogId: "deepseek",
     note: "DeepSeek 官方 API",
   },
@@ -89,34 +123,161 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     label: "智谱",
     api: "openai-completions",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    // 出处（2026-10-24 查证）：OpenAI 兼容 https://docs.bigmodel.cn/cn/guide/develop/openai/introduction.md、
+    // Claude API 兼容 https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md、
+    // Response API 兼容 https://docs.bigmodel.cn/cn/guide/develop/responses/introduction.md
+    // （「Response API 的基址是 /api/v1，不是对话补全使用的 /api/paas/v4」）
+    access: [
+      { api: "openai-completions", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
+      { api: "anthropic-messages", baseUrl: "https://open.bigmodel.cn/api/anthropic" },
+      { api: "openai-responses", baseUrl: "https://open.bigmodel.cn/api/v1" },
+    ],
     catalogId: "zai-coding-cn",
     note: "智谱开放平台标准 API（按 token 计费）",
   },
+  /*
+   * ── 以下 API 条目对齐 Proma 开源版的厂商清单（只取事实：厂商与端点），全部 `untested`。
+   *
+   * **协议跟 pi 的目录走，不跟 Proma 走。** Proma 的 Agent 内核是 Claude Agent SDK，只会说
+   * Anthropic 协议，所以它把能接的厂商都接在 `/anthropic` 端点上；我们跑的是 pi，pi 的目录
+   * 给这几家维护的是 OpenAI 兼容端点（型号参数、思考回传格式都按那条路调过）。而且协议
+   * 对不上会真出事：目录模型在会话里带着自己的 api / baseUrl 注册（agent/model-registration
+   * 的保留合并），我们的 id 又常与 pi 内建 id 同名（xiaomi、qwen-token-plan）——挂了一个
+   * 协议不同的 catalogId，请求就被悄悄改道到目录的协议上。一致性测试
+   * （agent/whitelist-consistency.test.ts）对每条都核对「会话里的协议与地址就是条目自己的」。
+   *
+   * pi 目录里没有的厂商（通义千问 DashScope、火山方舟）照 Proma 的默认端点与协议填，不挂
+   * catalogId，型号参数照样能按型号 id 跨目录借。
+   */
   {
-    id: "claude",
-    label: "Claude",
+    id: "anthropic",
+    label: "Anthropic",
     api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     catalogId: "anthropic",
-    billing: "plan",
-    auth: "oauth",
-    // claude 各型号的档位 / 默认档在型号白名单里（known-models.ts，按 id 生效），这里不用声明
-    note: "Claude Pro / Max 订阅，浏览器登录授权，令牌自动续期",
+    untested: true,
+    note: "Anthropic 官方 API，按 key 计费（订阅登录见下方 Claude）",
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    catalogId: "openai",
+    untested: true,
+    note: "OpenAI 官方 API，走 Responses 协议",
+  },
+  {
+    id: "google",
+    label: "Google",
+    api: "google-generative-ai",
+    // pi 的 Gemini 客户端直接在 baseUrl 后接 /models/<id>:streamGenerateContent，版本段要带上
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    catalogId: "google",
+    untested: true,
+    note: "Gemini API（AI Studio 的 key）",
+  },
+  {
+    id: "kimi-api",
+    label: "Kimi",
+    api: "openai-completions",
+    baseUrl: "https://api.moonshot.cn/v1",
+    // 出处：https://platform.kimi.com/docs/api/overview「协议兼容性」表（Chat Completions 与
+    // Responses 同在 /v1，Messages 在 /anthropic），2026-10-24 查证
+    access: [
+      { api: "openai-completions", baseUrl: "https://api.moonshot.cn/v1" },
+      { api: "openai-responses", baseUrl: "https://api.moonshot.cn/v1" },
+      { api: "anthropic-messages", baseUrl: "https://api.moonshot.cn/anthropic" },
+    ],
+    catalogId: "moonshotai-cn",
+    untested: true,
+    note: "Kimi 开放平台按量 API",
+  },
+  {
+    id: "minimax",
+    label: "MiniMax",
+    api: "anthropic-messages",
+    baseUrl: "https://api.minimaxi.com/anthropic",
+    /*
+     * 出处（2026-10-24 查证）：Anthropic SDK https://platform.minimaxi.com/docs/api-reference/text-anthropic-api.md、
+     * OpenAI SDK https://platform.minimaxi.com/docs/api-reference/text-openai-api.md、
+     * Responses https://platform.minimaxi.com/docs/api-reference/responses-create.md（POST /v1/responses）。
+     * 文档现在写的主机是 api.minimax.cn（文档站也从 platform.minimaxi.com 跳到 platform.minimax.cn）；
+     * 这里沿用 pi 目录（minimax-cn）的 api.minimaxi.com——两个主机同一套路径，当天都应答（无 key 回 401）。
+     */
+    access: [
+      { api: "anthropic-messages", baseUrl: "https://api.minimaxi.com/anthropic" },
+      { api: "openai-completions", baseUrl: "https://api.minimaxi.com/v1" },
+      { api: "openai-responses", baseUrl: "https://api.minimaxi.com/v1" },
+    ],
+    catalogId: "minimax-cn",
+    untested: true,
+    // 按量与编程包共用这个端点（计费跟着 key 走），放 API 区、按量口径：不确定时宁可多显示一行估价
+    note: "API 与编程包共用一个端点，计费跟着 key 走",
+  },
+  {
+    id: "xiaomi",
+    label: "小米 MiMo",
+    api: "openai-completions",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    catalogId: "xiaomi",
+    untested: true,
+    note: "小米 MiMo 开放平台 API，走 OpenAI 兼容端点",
+  },
+  {
+    id: "qwen",
+    label: "通义千问",
+    api: "openai-completions",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    untested: true,
+    note: "阿里云百炼 DashScope，OpenAI 兼容模式",
+  },
+  {
+    id: "doubao-api",
+    label: "火山方舟",
+    api: "openai-completions",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    untested: true,
+    note: "火山引擎方舟模型 API（按 token 计费）",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    api: "openai-completions",
+    baseUrl: "https://openrouter.ai/api/v1",
+    catalogId: "openrouter",
+    untested: true,
+    note: "聚合网关，一个 key 调用多家模型",
   },
   {
     id: "zhipu-coding",
     label: "智谱",
-    api: "anthropic-messages",
-    baseUrl: "https://open.bigmodel.cn/api/anthropic",
+    // 默认跟 pi 的 zai-coding-cn 走 OpenAI Chat（/api/coding/paas/v4）。2026-10-24 之前默认是
+    // Anthropic（/api/anthropic）——那时建的实例照旧走 Anthropic，不迁移
+    api: "openai-completions",
+    baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+    // 出处：https://docs.bigmodel.cn/cn/coding-plan/quick-start.md 第 5 节「接入端点说明」，
+    // 2026-10-24 查证
+    access: [
+      { api: "openai-completions", baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4" },
+      { api: "anthropic-messages", baseUrl: "https://open.bigmodel.cn/api/anthropic" },
+      { api: "openai-responses", baseUrl: "https://open.bigmodel.cn/api/v1" },
+    ],
     catalogId: "zai-coding-cn",
     billing: "plan",
-    note: "GLM Coding Plan 订阅，走 Anthropic 兼容端点",
+    note: "GLM Coding Plan 订阅",
   },
   {
     id: "zai",
     label: "Z.AI",
     api: "openai-completions",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
+    // 出处：https://docs.z.ai/devpack/quick-start.md 第 5 节「Endpoint Guide」，2026-10-24 查证
+    access: [
+      { api: "openai-completions", baseUrl: "https://api.z.ai/api/coding/paas/v4" },
+      { api: "anthropic-messages", baseUrl: "https://api.z.ai/api/anthropic" },
+      { api: "openai-responses", baseUrl: "https://api.z.ai/api/v1" },
+    ],
     catalogId: "zai",
     // 端点就是 `/coding/paas/`——与国内站 Coding Plan 同一套餐制
     billing: "plan",
@@ -136,17 +297,22 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     id: "kimi-coding",
     label: "Kimi",
     /*
-     * Kimi 会员（Kimi Code）的编程端点。走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
+     * Kimi 会员（Kimi Code）的编程端点。默认走 Anthropic 兼容协议——与 pi 内建的 kimi-coding
      * 条目同一个 baseUrl 与协议（客户端接 /v1/messages），模型参数（k3 / k3-256k /
-     * kimi-for-coding）直接继承它的目录。不走 OpenAI 兼容的 /coding/v1：那条路要靠
-     * pi-ai 补丁把 api.kimi.com 认成 Moonshot 才不发 developer 角色，Anthropic 协议
-     * 没有这个问题。
+     * kimi-for-coding）直接继承它的目录。OpenAI 兼容的 /coding/v1 也能选：pi-ai 补丁
+     * （patches/ 下）把 api.kimi.com 认成 Moonshot，不发它不认的 developer 角色。
      */
     api: "anthropic-messages",
     baseUrl: "https://api.kimi.com/coding",
+    // 出处：https://www.kimi.com/en/help/kimi-code/models（「Kimi Code API supports both OpenAI
+    // and Anthropic protocols」两个 Base URL），2026-10-24 查证
+    access: [
+      { api: "anthropic-messages", baseUrl: "https://api.kimi.com/coding" },
+      { api: "openai-completions", baseUrl: "https://api.kimi.com/coding/v1" },
+    ],
     catalogId: "kimi-coding",
     billing: "plan",
-    note: "Kimi Code 会员订阅，走 Anthropic 兼容端点",
+    note: "Kimi Code 会员订阅",
   },
   {
     id: "opencode-go",
@@ -165,6 +331,109 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {
+    id: "zhipu-coding-team",
+    label: "智谱团队版",
+    api: "anthropic-messages",
+    // 与个人版同一个端点。pi 目录的 zai-coding-cn 是 OpenAI 协议的另一个端点，挂上它请求会被
+    // 改道过去（个人版 zhipu-coding 现在就是这样，见一致性测试里的已知例外）：不挂 catalogId
+    baseUrl: "https://open.bigmodel.cn/api/anthropic",
+    billing: "plan",
+    untested: true,
+    note: "GLM Coding Plan 团队版，团队凭据登录",
+  },
+  {
+    id: "qwen-token-plan",
+    label: "通义千问",
+    api: "openai-completions",
+    baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    catalogId: "qwen-token-plan-cn",
+    billing: "plan",
+    untested: true,
+    note: "通义千问 Token Plan 订阅，走 OpenAI 兼容端点",
+  },
+  {
+    id: "xiaomi-token-plan",
+    label: "小米 MiMo",
+    api: "openai-completions",
+    baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+    catalogId: "xiaomi-token-plan-cn",
+    billing: "plan",
+    untested: true,
+    note: "小米 MiMo Token Plan 订阅",
+  },
+  {
+    id: "doubao",
+    label: "火山方舟",
+    api: "openai-completions",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    billing: "plan",
+    untested: true,
+    note: "火山方舟 Coding Plan 订阅；只能用套餐授权的型号",
+  },
+  {
+    id: "ark-coding-plan",
+    label: "火山方舟 Agent",
+    api: "anthropic-messages",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/plan",
+    billing: "plan",
+    untested: true,
+    note: "火山方舟 Agent Plan 订阅",
+  },
+  {
+    id: "claude",
+    label: "Claude",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    catalogId: "anthropic",
+    billing: "plan",
+    auth: "oauth",
+    // claude 各型号的档位 / 默认档在型号白名单里（known-models.ts，按 id 生效），这里不用声明
+    note: "Claude Pro / Max 订阅，令牌自动续期",
+  },
+  /*
+   * 以下三家的登录流程、续期与请求鉴权都复用 pi 自带的实现（pi-ai 的 OAuth 流程），凭据落
+   * 我们自己的密钥库。我们没有这三家的账号，全部 `untested`。
+   *
+   * id 与 pi 内建 id 一致**不是巧合，是必须**：pi 的客户端按 `model.provider` 认 Copilot
+   * （动态请求头、Claude 型号走 Bearer），会话又用我们的 id 注册——第一个实例的 id 就是条目 id。
+   */
+  {
+    id: "openai-codex",
+    label: "ChatGPT",
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    catalogId: "openai-codex",
+    billing: "plan",
+    auth: "oauth",
+    untested: true,
+    note: "ChatGPT Plus / Pro 订阅，用 Codex 额度",
+  },
+  {
+    id: "github-copilot",
+    label: "GitHub Copilot",
+    // 多协议网关：目录里的 Claude 型号走 Messages、GPT 新型号走 Responses，注册时按型号各走各的；
+    // 目录外手加的型号落这里写的协议（/chat/completions 在 Copilot 上对所有型号都开着）
+    api: "openai-completions",
+    // 个人版的地址；企业 / 商业账号的真实地址写在令牌里（proxy-ep），会话装配时按令牌改写
+    baseUrl: "https://api.individual.githubcopilot.com",
+    catalogId: "github-copilot",
+    billing: "plan",
+    auth: "oauth",
+    untested: true,
+    note: "Copilot 订阅，用 Copilot 额度调用多家模型",
+  },
+  {
+    id: "xai",
+    label: "xAI",
+    api: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    catalogId: "xai",
+    billing: "plan",
+    auth: "oauth",
+    untested: true,
+    note: "SuperGrok / X Premium 订阅",
+  },
+  {
     id: "anthropic-compatible",
     label: "Anthropic 兼容",
     api: "anthropic-messages",
@@ -178,19 +447,43 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "",
     note: "自建网关 / 私有部署，地址要带到版本段，客户端接 /chat/completions",
   },
+  {
+    id: "openai-responses-compatible",
+    label: "OpenAI Responses 兼容",
+    api: "openai-responses",
+    baseUrl: "",
+    untested: true,
+    note: "走 Responses 协议的自建网关，客户端接 /responses",
+  },
 ];
 
 /**
- * 「添加服务商」目录的三个分区：按量计费的官方 API / 套餐订阅 / 自建的兼容网关。
- * **从条目已有的字段推出来，不另立字段**：没有预填地址（baseUrl 为空）= 兼容入口；
- * 套餐计费 = 订阅；其余 = API。新加条目只要 billing 与 baseUrl 写对，分区自动跟着对。
+ * 「添加服务商」目录的四个分区：按量计费的官方 API / 套餐订阅 / 浏览器登录的订阅 /
+ * 自建的兼容网关。**从条目已有的字段推出来，不另立字段**：浏览器登录（auth 为 oauth）=
+ * 登录订阅；没有预填地址（baseUrl 为空）= 兼容入口；套餐计费 = 套餐订阅；其余 = API。
+ * 新加条目只要 auth / billing / baseUrl 写对，分区自动跟着对。
+ *
+ * 登录订阅单列一区（2026-10-24 用户裁决）：只有 Claude 一家时它挤在套餐区里，登录类一多，
+ * 「填 key」与「点登录」混在一区，用户得点进去才知道要哪一种。
  */
-export type KnownProviderGroup = "api" | "plan" | "custom";
+export type KnownProviderGroup = "api" | "plan" | "oauth" | "custom";
+
+/** 卡片墙上分区的先后 */
+export const KNOWN_PROVIDER_GROUPS: readonly KnownProviderGroup[] = ["api", "plan", "oauth", "custom"];
 
 export function knownProviderGroup(provider: KnownProvider): KnownProviderGroup {
+  if (provider.auth === "oauth") return "oauth";
   if (provider.baseUrl === "") return "custom";
   return provider.billing === "plan" ? "plan" : "api";
 }
+
+/** 默认名里补的区别词：同名条目分在哪个区，就补哪个区的计费口径 */
+const GROUP_SUFFIX: Record<KnownProviderGroup, string> = {
+  api: "按量",
+  plan: "套餐",
+  oauth: "订阅",
+  custom: "兼容",
+};
 
 /**
  * 新建实例时预填的名字。label 在目录里有分区标题兜着；出了目录（服务商列表、模型菜单）
@@ -199,7 +492,19 @@ export function knownProviderGroup(provider: KnownProvider): KnownProviderGroup 
 export function knownProviderDefaultName(provider: KnownProvider): string {
   const collides = KNOWN_PROVIDERS.some((item) => item.id !== provider.id && item.label === provider.label);
   if (!collides) return provider.label;
-  return `${provider.label}（${knownProviderGroup(provider) === "plan" ? "套餐" : "按量"}）`;
+  return `${provider.label}（${GROUP_SUFFIX[knownProviderGroup(provider)]}）`;
+}
+
+/** 这家的全部接入方式；没声明 `access` 的就是默认那一种。默认的那一种永远排第一 */
+export function knownAccessMethods(provider: KnownProvider): readonly KnownAccess[] {
+  const methods = provider.access ?? [{ api: provider.api, baseUrl: provider.baseUrl }];
+  const first = methods.find((method) => method.api === provider.api && method.baseUrl === provider.baseUrl);
+  return first === undefined ? methods : [first, ...methods.filter((method) => method !== first)];
+}
+
+/** 选中某个协议时用的地址：这家声明了这个协议就用它的，没有就 undefined（调用方保留原地址） */
+export function knownAccessFor(provider: KnownProvider, api: ProviderApi): KnownAccess | undefined {
+  return knownAccessMethods(provider).find((method) => method.api === api);
 }
 
 /** knownProviderOf 要的最小形状：Provider / ProviderDto 天然满足 */
@@ -207,6 +512,13 @@ export interface ProviderKindSource {
   id: string;
   kind?: string;
   endpoint: { api: ProviderApi };
+}
+
+/** 认不出条目时按协议落到哪个兼容入口 */
+function compatibleKindFor(api: ProviderApi): string {
+  if (api === "anthropic-messages") return "anthropic-compatible";
+  if (api === "openai-responses") return "openai-responses-compatible";
+  return "openai-compatible";
 }
 
 function knownById(id: string): KnownProvider | undefined {
@@ -218,7 +530,7 @@ function knownById(id: string): KnownProvider | undefined {
  *   1. 显式的 `kind`（新建 / 复制时写入）；
  *   2. id 本身就是条目 id（第一个实例），或去掉 `-2` / `-copy` / `-copy3` 后缀后是——
  *      老数据没有 kind，第二个实例与副本只能靠 id 的生成规则（nextFreeId / nextCopyId）认回来；
- *   3. 都不是：按协议落到两个「兼容」条目之一。
+ *   3. 都不是：按协议落到「兼容」条目之一（Anthropic / OpenAI Responses / 其余一律 OpenAI 兼容）。
  * 永远有答案：调用方不必再处理「认不出来」。
  */
 export function knownProviderOf(provider: ProviderKindSource): KnownProvider {
@@ -226,9 +538,7 @@ export function knownProviderOf(provider: ProviderKindSource): KnownProvider {
   if (explicit !== undefined) return explicit;
   const byId = knownById(provider.id) ?? knownById(provider.id.replace(/-(?:\d+|copy\d*)$/, ""));
   if (byId !== undefined) return byId;
-  const compatible = knownById(
-    provider.endpoint.api === "anthropic-messages" ? "anthropic-compatible" : "openai-compatible",
-  );
+  const compatible = knownById(compatibleKindFor(provider.endpoint.api));
   if (compatible === undefined) throw new Error("KNOWN_PROVIDERS 缺少兼容条目");
   return compatible;
 }

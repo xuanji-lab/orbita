@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
 import type { ProviderDto } from "../../../../shared/provider.ts";
 import {
+  cardAddress,
   compactTokens,
   connectionDirty,
   hasCredentials,
@@ -22,6 +23,7 @@ import {
   urlSuffix,
 } from "./providers-view-model.ts";
 import { KNOWN_MODELS } from "../../../../shared/known-models.ts";
+import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
 import { en } from "../../messages-en.ts";
 
 describe("parseTokenInput", () => {
@@ -140,10 +142,10 @@ describe("providerCards —— 模型服务的卡片墙", () => {
     assert.equal(cardOf(groups, "openai-compatible")?.instances.length, 0);
   });
 
-  test("分区顺序固定 API → 套餐 → 自定义；仅显示已添加时空区整个不返回", () => {
+  test("分区顺序固定 API → 套餐 → 浏览器登录 → 自定义；仅显示已添加时空区整个不返回", () => {
     assert.deepEqual(
       providerCards([], { query: "", onlyAdded: false, textOf: text }).map((entry) => entry.group),
-      ["api", "plan", "custom"],
+      ["api", "plan", "oauth", "custom"],
     );
     const onlyAdded = providerCards([dto("proma")], { query: "", onlyAdded: true, textOf: text });
     assert.deepEqual(onlyAdded.map((entry) => entry.group), ["custom"]);
@@ -285,11 +287,33 @@ describe("urlSuffix", () => {
     assert.equal(urlSuffix("anthropic-messages"), "/v1/messages");
     assert.equal(urlSuffix("openai-completions"), "/chat/completions");
   });
+  test("Responses 协议接 /responses，Gemini 原生接 /models（型号随会话变，不写进来）", () => {
+    assert.equal(urlSuffix("openai-responses"), "/responses");
+    assert.equal(urlSuffix("google-generative-ai"), "/models");
+    assert.equal(urlSuffix("openai-codex-responses"), "/codex/responses");
+  });
+});
+
+describe("cardAddress —— 卡片底行的预填地址", () => {
+  test("去掉协议头与尾斜杠，路径保留：同一主机上的几条接入要分得出来", () => {
+    assert.equal(cardAddress("https://ark.cn-beijing.volces.com/api/v3"), "ark.cn-beijing.volces.com/api/v3");
+    assert.equal(cardAddress("https://ark.cn-beijing.volces.com/api/plan/"), "ark.cn-beijing.volces.com/api/plan");
+    assert.equal(cardAddress("https://api.deepseek.com"), "api.deepseek.com");
+  });
+  test("不是合法 URL 的原样返回，不抛", () => {
+    assert.equal(cardAddress("not a url"), "not a url");
+  });
 });
 
 describe("connectionDirty", () => {
   const saved = { displayName: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4" };
   const draft = { ...saved, apiKey: "" };
+
+  test("换了接入协议算改动——Kimi 的 Chat 与 Responses 同在 /v1，地址不变也要出 Save 条", () => {
+    const kimi = { displayName: "Kimi", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" };
+    assert.equal(connectionDirty({ ...kimi, apiKey: "" }, kimi, null), false);
+    assert.equal(connectionDirty({ ...kimi, api: "openai-responses", apiKey: "" }, kimi, null), true);
+  });
 
   test("原样未动、key 留空：没有改动", () => {
     assert.equal(connectionDirty(draft, saved, null), false);
@@ -373,6 +397,14 @@ describe("railVendorCell —— 模型卡片左栏的厂商格：一律图标", 
 
 describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用一枚", () => {
   const src = readFileSync(new URL("./VendorLogo.tsx", import.meta.url), "utf8");
+  test("每个目录条目都配了标（没配的会退成名字首字，新加条目时容易漏）", () => {
+    const block = /const LOGOS[^{]*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    const keys = new Set([...block.matchAll(/^\s*"?([a-z0-9-]+)"?\s*[:,]/gm)].map((m) => m[1]));
+    assert.ok(keys.size >= 10, "没解析出 LOGOS 的键");
+    for (const provider of KNOWN_PROVIDERS) {
+      assert.ok(keys.has(provider.id), `${provider.id} 没有 logo`);
+    }
+  });
   test("claude 映射到 claude.svg（橙色），anthropic-compatible 仍是 anthropic.svg", () => {
     assert.match(src, /import claude from "[^"]*vendor-logos\/claude\.svg\?raw"/);
     assert.match(src, /^\s*claude,\s*$/m);

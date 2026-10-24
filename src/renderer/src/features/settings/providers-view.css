@@ -225,6 +225,26 @@
   color: var(--color-text-tertiary);
 }
 
+/* 设备码行（Copilot / xAI）：一句话 + 码本身（等宽、加重，用户要照着手输）+ 复制 */
+.pv-oauth-code {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.pv-oauth-code-value {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+}
+
 /* 风险披露行：与状态行同款两栏位（左空标签），弱视觉但不藏 */
 .pv-oauth-hint {
   color: var(--color-text-tertiary);
@@ -676,6 +696,31 @@
 .pv-added-badge .orbita-icon {
   color: var(--color-success);
 }
+/* 卡片右上角的角标并排（已添加 + 未实测） */
+.pv-card-marks {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+/* 未实测：与「已添加」同尺寸，虚线描边、不铺底——是一句提醒，不是一个状态 */
+.pv-untested-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.pv-untested-badge .orbita-icon {
+  color: var(--color-text-tertiary);
+}
 /* 再加一个：悬停或键盘聚焦才浮出 */
 .pv-card-more {
   display: grid;
@@ -774,6 +819,32 @@
 .pv-kind-note {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+/* 未实测条目详情页顶部的说明：图标 + 整句话 + 链接，安静但明确 */
+.pv-untested-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.pv-untested-bar .orbita-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--color-info);
+}
+.pv-untested-bar a {
+  color: var(--color-info);
+  text-decoration: none;
+}
+.pv-untested-bar a:hover {
+  text-decoration: underline;
 }
 .pv-tabs {
   display: flex;

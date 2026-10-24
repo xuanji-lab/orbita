@@ -22,6 +22,9 @@ function catalogModel(id: string, contextWindow: number, inputCost: number): PiM
   return {
     id,
     name: id,
+    // 目录条目都带协议与地址（pi 的 Model 必填）；默认 OpenAI Chat，要别的协议的用例自己覆盖
+    api: "openai-completions",
+    baseUrl: "https://catalog.example/v1",
     contextWindow,
     // 目录条目都带 input（pi 的 Model 必填）；默认纯文本，要图片的用例自己覆盖
     input: ["text"],

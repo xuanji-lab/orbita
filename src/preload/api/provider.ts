@@ -4,7 +4,12 @@
  * 注意 API 形状：明文密钥只有 renderer → main 这一个方向，回来的永远是 ProviderDto。
  */
 import { ipcRenderer } from "electron";
-import { ipcChannels, type BuiltinProvider, type OauthLoginInput } from "../../shared/agent-ipc.ts";
+import {
+  ipcChannels,
+  type BuiltinProvider,
+  type OauthDeviceCode,
+  type OauthLoginInput,
+} from "../../shared/agent-ipc.ts";
 import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 
 export type UpsertResult =
@@ -33,11 +38,19 @@ export const providerApi = {
   /** 显示明文密钥（用户点眼睛时才调，不随 list 下发） */
   reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
   /**
-   * Claude OAuth 登录：主进程开系统浏览器并等回调，返回时 provider 已连凭据落盘。
-   * promise 会挂着等用户在浏览器里完成授权（上限 10 分钟）。
+   * 浏览器登录订阅（Claude / ChatGPT / GitHub Copilot / xAI）：主进程开系统浏览器并等授权，
+   * 返回时 provider 已连凭据落盘。promise 会挂着等用户完成授权（上限 10–15 分钟）。
    */
   oauthLogin: (input: OauthLoginInput): Promise<UpsertResult> =>
     ipcRenderer.invoke(ipcChannels.providerOauthLogin, input),
+  /** 取消进行中的登录（按 provider id）；oauthLogin 随即以「登录已取消」失败返回 */
+  oauthCancel: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.providerOauthCancel, id),
+  /** 设备码到了（Copilot / xAI）：设置页把码显示出来。返回取消订阅 */
+  onOauthDeviceCode: (listener: (code: OauthDeviceCode) => void): (() => void) => {
+    const handler = (_e: unknown, code: OauthDeviceCode) => listener(code);
+    ipcRenderer.on(ipcChannels.providerOauthDeviceCode, handler);
+    return () => ipcRenderer.removeListener(ipcChannels.providerOauthDeviceCode, handler);
+  },
   discover: (input: {
     baseUrl: string;
     api: string;

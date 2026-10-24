@@ -7,6 +7,7 @@ import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import {
   KNOWN_PROVIDERS,
+  KNOWN_PROVIDER_GROUPS,
   catalogPreferenceOf,
   knownProviderGroup,
   knownProviderOf,
@@ -205,10 +206,30 @@ export function compactTokens(n: number): string {
 
 /**
  * 客户端会接在 Base URL 后面的路径——显示成 URL 框尾的灰字，代替原来那句
- * 「The client appends /chat/completions」。两种协议各一个口径，与 pi 的请求路径一致。
+ * 「The client appends /chat/completions」。每种协议一个口径，与 pi 的请求路径一致
+ * （Gemini 原生协议接的是 `/models/<型号>:streamGenerateContent`，型号随会话变，只写到 /models）。
  */
 export function urlSuffix(api: ProviderApi): string {
-  return api === "anthropic-messages" ? "/v1/messages" : "/chat/completions";
+  if (api === "anthropic-messages") return "/v1/messages";
+  if (api === "openai-responses") return "/responses";
+  // pi 的 Codex 客户端在 baseUrl 后接 /codex/responses（openai-codex-responses.ts 的 resolveCodexUrl）
+  if (api === "openai-codex-responses") return "/codex/responses";
+  if (api === "google-generative-ai") return "/models";
+  return "/chat/completions";
+}
+
+/**
+ * 卡片底行的预填地址：去掉协议头与尾斜杠，**保留路径**。同一主机上常挂着几条不同的接入
+ * （火山方舟的 /api/v3 与 /api/plan、智谱的 /api/paas/v4 与 /api/anthropic），只写主机
+ * 的话几张卡底行一模一样，看不出区别。不是合法 URL 的原样返回。
+ */
+export function cardAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname}`.replace(/\/+$/, "");
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -218,12 +239,14 @@ export function urlSuffix(api: ProviderApi): string {
  * 草稿（`revealedKey`），原样未动也不算改动，改了一个字才算。
  */
 export function connectionDirty(
-  draft: { displayName: string; baseUrl: string; apiKey: string },
-  saved: { displayName: string; baseUrl: string },
+  draft: { displayName: string; baseUrl: string; apiKey: string; api?: string },
+  saved: { displayName: string; baseUrl: string; api?: string },
   revealedKey: string | null,
 ): boolean {
   if (draft.displayName !== saved.displayName) return true;
   if (draft.baseUrl !== saved.baseUrl) return true;
+  // 换了接入协议：Kimi 的 Chat 与 Responses 同在 /v1，地址不变也算改动
+  if (draft.api !== undefined && saved.api !== undefined && draft.api !== saved.api) return true;
   return draft.apiKey !== "" && draft.apiKey !== revealedKey;
 }
 
@@ -234,7 +257,7 @@ export interface ProviderCard {
 }
 
 /**
- * 卡片墙按分区（API / 套餐 / 自定义）排好、过滤好的内容。纯函数：搜索与「仅显示已添加」
+ * 卡片墙按分区（API / 套餐 / 浏览器登录 / 自定义）排好、过滤好的内容。纯函数：搜索与「仅显示已添加」
  * 都在这里判，组件只管画。
  *
  * - 实例按 `knownProviderOf` 归卡：同一家的第二个实例（deepseek-2）也归 DeepSeek，
@@ -268,8 +291,7 @@ export function providerCards(
       ];
       return haystack.some((text) => text.toLowerCase().includes(query));
     });
-  const groups: KnownProviderGroup[] = ["api", "plan", "custom"];
-  return groups
+  return KNOWN_PROVIDER_GROUPS
     .map((group) => ({ group, cards: cards.filter((card) => knownProviderGroup(card.known) === group) }))
     .filter((entry) => entry.cards.length > 0);
 }

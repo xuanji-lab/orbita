@@ -20,15 +20,33 @@ import type { ReviewSource } from "../../shared/review.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
-  claude: "Claude Pro / Max subscription — log in with your browser, tokens renew automatically",
-  "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
+  claude: "Claude Pro / Max subscription, tokens renew automatically",
+  "zhipu-coding": "GLM Coding Plan subscription",
   zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
   stepfun: "Step Plan subscription (the URL must include /v1)",
-  "kimi-coding": "Kimi Code membership, via the Anthropic-compatible endpoint",
+  "kimi-coding": "Kimi Code membership",
   "opencode-go": "OpenCode Go subscription — one key for open models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
     "Self-hosted gateway / private deployment; include the version segment, the client appends /chat/completions",
+  anthropic: "Anthropic official API, billed per key (for subscription login see Claude below)",
+  openai: "OpenAI official API, via the Responses protocol",
+  google: "Gemini API (an AI Studio key)",
+  "kimi-api": "Kimi open platform pay-as-you-go API",
+  minimax: "API and coding plan share one endpoint; billing follows the key",
+  xiaomi: "Xiaomi MiMo open platform API, via the OpenAI-compatible endpoint",
+  qwen: "Alibaba Cloud Model Studio (DashScope), OpenAI-compatible mode",
+  "doubao-api": "Volcengine Ark model API (billed per token)",
+  openrouter: "Aggregating gateway — one key for models from many vendors",
+  "zhipu-coding-team": "GLM Coding Plan for teams, sign in with team credentials",
+  "qwen-token-plan": "Qwen Token Plan subscription, via the OpenAI-compatible endpoint",
+  "xiaomi-token-plan": "Xiaomi MiMo Token Plan subscription",
+  doubao: "Volcengine Ark Coding Plan subscription; only the models the plan grants",
+  "ark-coding-plan": "Volcengine Ark Agent Plan subscription",
+  "openai-responses-compatible": "Self-hosted gateway on the Responses protocol; the client appends /responses",
+  "openai-codex": "ChatGPT Plus / Pro subscription, uses your Codex quota",
+  "github-copilot": "Copilot subscription — models from many vendors on your Copilot quota",
+  xai: "SuperGrok / X Premium subscription",
 };
 
 const KNOWN_LABELS: Record<string, string> = {
@@ -38,6 +56,15 @@ const KNOWN_LABELS: Record<string, string> = {
   claude: "Claude",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
+  xiaomi: "Xiaomi MiMo",
+  "xiaomi-token-plan": "Xiaomi MiMo",
+  qwen: "Qwen",
+  "qwen-token-plan": "Qwen",
+  "doubao-api": "Volcengine Ark",
+  doubao: "Volcengine Ark",
+  "ark-coding-plan": "Volcengine Ark Agent",
+  "zhipu-coding-team": "Zhipu Team",
+  "openai-responses-compatible": "OpenAI Responses-compatible",
 };
 
 /** 听写厂商的英文自称（voice 段的 failures / connecting / testOk 插值用） */
@@ -780,14 +807,20 @@ export const en = {
     pasteKey: "Paste your API key",
     hideKey: "Hide key",
     showKey: "Show key",
-    // —— Claude 订阅登录（oauth 目录条目专用）——
-    oauthAccount: "Claude account",
-    oauthLoginButton: "Log in with Claude",
+    // —— 浏览器登录订阅（oauth 目录条目专用：Claude / ChatGPT / GitHub Copilot / xAI）——
+    // 厂商名已经在详情头上了；标签栏只有 76px，「GitHub Copilot account」会折成三行
+    oauthAccount: "Account",
+    oauthLoginButton: (vendor: string) => `Log in with ${vendor}`,
     oauthRelogin: "Log in again",
     oauthWaiting: "Waiting for authorization in the browser…",
     oauthLoggedIn: (account: string | null) => (account === null ? "Logged in" : `Logged in as ${account}`),
-    oauthLoggedOut: "Not logged in — log in to draw on your Claude Pro / Max subscription",
-    oauthNote: "Opens the browser to claude.ai · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins",
+    oauthLoggedOut: (vendor: string) => `Not logged in — log in to draw on your ${vendor} subscription`,
+    oauthNote: (host: string) =>
+      `Opens the browser to ${host} · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins`,
+    /** 设备码登录（Copilot / xAI）：网页已经打开，用户要把码输进去 */
+    oauthDeviceCode: "Enter this code on the page that opened",
+    oauthCopyCode: "Copy code",
+    oauthCancel: "Cancel login",
     oauthRisk:
       "Subscription quota via third-party clients is currently tolerated but can be revoked at any time; use an API key instead if that concerns you",
     test: "Test",
@@ -807,8 +840,11 @@ export const en = {
     editModel: (id: string) => `Edit ${id}`,
     removeModel: (id: string) => `Remove ${id}`,
     apiFormatTip: "API format · set by the provider preset · to switch protocol, add a different entry",
+    /** 多协议条目的协议选择器（KnownProvider.access） */
+    accessLabel: "API format",
+    accessTip: "This provider officially supports several protocols · switching also switches the URL · takes effect after Save",
     urlSuffixTip: "The client appends this path",
-    /** 「添加服务商」目录的三个分区标题（knownProviderGroup） */
+    /** 「添加服务商」目录的四个分区标题（knownProviderGroup） */
     /** 模型服务卡片墙的工具条与卡片 */
     searchProviders: "Search providers, URLs or your own names",
     onlyAdded: "Added only",
@@ -819,11 +855,21 @@ export const en = {
     addAnother: "Add another",
     addAnotherTip: (name: string) => `Add another ${name} (a second account or key)`,
     customUrl: "Your own URL",
+    /** 浏览器登录订阅的卡片底行：没有要填的地址，写登录方式 */
+    browserLogin: "Browser login",
     catalogGroups: {
       api: "API providers",
       plan: "Coding plans",
+      oauth: "Browser-login subscriptions",
       custom: "Custom compatible",
     },
+    /** 还没用真实账号验证过的目录条目（KnownProvider.untested） */
+    untested: "Untested",
+    untestedTip: "We haven't verified this provider with a real account yet",
+    untestedNotice:
+      "Untested: we haven't verified this provider with a real account yet, so its URL and login flow may not match its docs. Ran into a problem? ",
+    untestedNoticeLink: "Pull requests welcome",
+    untestedNoticeEnd: ".",
     /** 目录卡的说明：shared 的 note 是中文，英文界面在这里给英文；查不到退回 shared 原文 */
     knownNote: (id: string, fallback: string) => KNOWN_NOTES[id] ?? fallback,
     /** 目录卡的名字：只有带描述性中文的几条要换（「Anthropic 兼容」），厂商名原样 */
