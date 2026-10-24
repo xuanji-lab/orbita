@@ -13,7 +13,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { KNOWN_MODELS } from "../shared/known-models.ts";
 import { KNOWN_PROVIDERS, catalogPreferenceOf, type KnownProvider } from "../shared/known-providers.ts";
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
@@ -123,3 +124,58 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
     assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["off", "low", "medium", "high", "xhigh", "max"]);
   });
 });
+
+/** pi 真正要发出去的请求体：onPayload 里截下后抛错，请求不出进程 */
+async function outgoingPayload(model: Model<"anthropic-messages">, reasoning: "low" | "high" | "max"): Promise<Record<string, unknown>> {
+  let captured: Record<string, unknown> | undefined;
+  const events = streamSimple(
+    model,
+    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    {
+      apiKey: "sk-test",
+      reasoning,
+      onPayload: (payload) => {
+        captured = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    },
+  );
+  for await (const _event of events) {
+    // 抛错后流以 error 事件收尾，排干即可
+  }
+  assert.ok(captured !== undefined, "pi 没有走到构造请求体那一步");
+  return captured;
+}
+
+describe("Kimi K3.1 Pro 在 Kimi 套餐上（目录还没收录，全靠白名单）", () => {
+  test("会话里拿到 1M / 131072，选的档以 adaptive + effort 原样送到——不是被无视的 budget_tokens", async () => {
+    const known = KNOWN_PROVIDERS.find((provider) => provider.id === "kimi-coding");
+    assert.ok(known !== undefined && known.api === "anthropic-messages");
+    const runtime = await freshRuntime();
+    // 前提：目录真的没收录（收录了的话这条测的就是目录，不是白名单）
+    assert.equal(runtime.getModel("kimi-coding", "k3.1-pro"), undefined);
+    const model = registerAndResolveModel(
+      runtime,
+      {
+        id: known.id,
+        apiKey: "sk-test",
+        baseUrl: known.baseUrl,
+        api: known.api,
+        models: [{ id: "k3.1-pro" }],
+        ...catalogPreferenceOf(known),
+      },
+      "k3.1-pro",
+    );
+    assert.ok(model !== undefined);
+    assert.equal(model.contextWindow, 1_048_576);
+    assert.equal(model.maxTokens, 131_072);
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "high", "max"]);
+    const anthropicModel = { ...model, api: "anthropic-messages" } as Model<"anthropic-messages">;
+    for (const level of ["low", "high", "max"] as const) {
+      const payload = await outgoingPayload(anthropicModel, level);
+      assert.deepEqual(payload["output_config"], { effort: level }, `${level} 档的 effort`);
+      assert.equal((payload["thinking"] as { type?: string } | undefined)?.type, "adaptive", `${level} 档的 thinking`);
+    }
+  });
+});
+

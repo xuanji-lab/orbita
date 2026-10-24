@@ -79,10 +79,20 @@ describe("默认思考档（wafo 2026-09-23：重启落模型默认档）", () =
     }
   });
 
-  test("同一型号的两种写法共用一份口径：deepseek-flash / deepseek-v4.1-flash，k3 / kimi-k3", () => {
+  test("同一型号的两种写法共用一份口径：deepseek-flash / deepseek-v4.1-flash，K3.1 Pro 的四个 id", () => {
     assert.deepEqual(knownModelParams("deepseek-v4.1-flash"), knownModelParams("deepseek-flash"));
-    assert.deepEqual(knownModelParams("kimi-k3"), knownModelParams("k3"));
-    assert.equal(knownModelParams("k3").defaultThinkingLevel, "max");
+    for (const id of ["k3.1-pro-highspeed", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      assert.deepEqual(knownModelParams(id), knownModelParams("k3.1-pro"), id);
+    }
+  });
+
+  test("K3 两处默认档不同：Kimi Code 的 k3 / k3-256k 默认 high，开放平台的 kimi-k3 默认 max", () => {
+    assert.equal(knownModelParams("k3").defaultThinkingLevel, "high");
+    assert.equal(knownModelParams("k3-256k").defaultThinkingLevel, "high");
+    assert.equal(knownModelParams("kimi-k3").defaultThinkingLevel, "max");
+    for (const id of ["k3", "k3-256k", "kimi-k3"]) {
+      assert.deepEqual(knownModelParams(id).thinkingLevels, ["low", "high", "max"], id);
+    }
   });
 
   test("claude-opus-4-6 没有 xhigh（官方档位表只到 low/medium/high/max），能关思考", () => {
@@ -167,5 +177,28 @@ describe("opencode-go 网关上目录还没收录的型号（models.dev 元数�
     for (const [modelId, params] of Object.entries(KNOWN_MODELS)) {
       if (params.input !== undefined) assert.deepEqual(params.input, ["text"], modelId);
     }
+  });
+});
+
+describe("Kimi K3.1 Pro 与 K2.8 Preview（2026-10-24 按开放平台 quickstart 与 Kimi Code 型号表）", () => {
+  test("K3.1 Pro：1M 窗口、输出默认 131072、三档思考默认 max、只收 adaptive", () => {
+    const k31 = knownModelParams("k3.1-pro");
+    assert.equal(k31.contextWindow, 1_048_576);
+    assert.equal(k31.maxTokens, 131_072);
+    assert.equal(k31.reasoning, true);
+    assert.deepEqual(k31.thinkingLevels, ["low", "high", "max"]);
+    assert.equal(k31.defaultThinkingLevel, "max");
+    // Kimi 的 Anthropic 端点只认 output_config.effort；不声明 adaptive，选的档发不出去
+    assert.equal(k31.adaptiveThinking, true);
+    // 原生识图：不写 input，落兜底 image
+    assert.equal("input" in k31, false);
+  });
+
+  test("kimi-for-coding（K2.8 Preview）：1M、三档默认 max；输出上限官方没写就不写", () => {
+    const k28 = knownModelParams("kimi-for-coding");
+    assert.equal(k28.contextWindow, 1_048_576);
+    assert.deepEqual(k28.thinkingLevels, ["low", "high", "max"]);
+    assert.equal(k28.defaultThinkingLevel, "max");
+    assert.equal("maxTokens" in k28, false);
   });
 });
