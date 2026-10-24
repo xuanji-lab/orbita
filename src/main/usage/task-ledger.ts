@@ -57,7 +57,6 @@ import { readFile } from "node:fs/promises";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import { headStringField, scanJsonlLines, timeSlicer } from "../jsonl-scan.ts";
 import { isNotFound } from "../fs-errors.ts";
-import { todayKey } from "../../shared/usage.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
@@ -391,7 +390,8 @@ export class TaskLedger {
   }
 
   private pruneSeen(): void {
-    const floor = shiftDateKey(todayKey(Date.now(), this.timeZone), -SEEN_WINDOW_DAYS);
+    // 每条 record 都跑：今天用构造时建好的 dateFormat（与 todayKey 同一格式），平移用模块级的 UTC 格式化器
+    const floor = shiftDateKey(this.dateKey(Date.now()), -SEEN_WINDOW_DAYS);
     for (const [id, date] of this.seen) {
       if (date < floor) this.seen.delete(id);
     }
@@ -552,14 +552,17 @@ function parseLedgerFile(raw: string): {
   };
 }
 
+/** shiftDateKey 的格式化器：只建一次（pruneSeen 每条 record 都调，见 dateFormat 的注释） */
+const UTC_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  timeZone: "UTC",
+});
+
 /** 日期键平移 n 天（与日账本同一写法） */
 function shiftDateKey(key: string, days: number): string {
   const [y, m, d] = key.split("-").map(Number);
   if (y === undefined || m === undefined || d === undefined) return key;
-  return new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(y, m - 1, d + days)));
+  return UTC_DATE_FORMAT.format(new Date(Date.UTC(y, m - 1, d + days)));
 }

@@ -200,6 +200,22 @@ describe("TaskLedger", () => {
     assert.equal(ledger.untrustedSessions(), 1);
   });
 
+  test("去重表只留最近 14 天：窗口内的重复 id 跳过，窗口外的旧 id 被剪掉（pruneSeen 用建好的格式化器）", async () => {
+    const ledger = new TaskLedger(join(dir, "seen.json"), { timeZone: TZ });
+    await ledger.load();
+    await ledger.backfill(source({}, []));
+    const now = Date.now();
+    const recent = taskRecordOf(reply("r1", now - 86_400_000, "glm-5.3", "max"), "max")!;
+    const old = taskRecordOf(reply("o1", now - 30 * 86_400_000, "glm-5.3", "max"), "max")!;
+    await ledger.record("a", recent);
+    await ledger.record("a", recent);
+    await ledger.record("a", old); // 记进账，但它的日期在窗口外，这一次 prune 就剪掉
+    await ledger.record("a", old);
+    const input = ledger.tasks().reduce((n, task) => n + Object.values(task.days).reduce((m, day) => m + day.tokens.input, 0), 0);
+    // recent 一次 + old 两次（第二次已不在去重表里）= 3 × 100 input
+    assert.equal(input, 300);
+  });
+
   test("意图召回：按天记、按 id 去重、读盘后还在", async () => {
     const file = join(dir, "t.json");
     const ledger = new TaskLedger(file, { timeZone: TZ });
