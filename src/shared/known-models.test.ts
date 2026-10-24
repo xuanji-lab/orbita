@@ -222,9 +222,9 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "own", key: "qwen3.8-max" });
     assert.deepEqual(modelAvatarOf("qwen3.8-flash"), { kind: "own", key: "qwen3.8-flash" });
     assert.deepEqual(modelAvatarOf("qwen3.8-27b"), { kind: "own", key: "qwen3.8-27b" });
-    // MiniMax：OpenCode 小写、开放平台 MiniMax-M3 同一枚；M3.1 Flash 另一枚
-    for (const id of ["minimax-m3", "MiniMax-M3"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "minimax-m3" }, id);
+    // MiniMax 只有 M3.1 Flash 一枚；M3 落家族标（用户 2026-10-25 不要它的专属头像）
     assert.deepEqual(modelAvatarOf("minimax-m3.1-flash"), { kind: "own", key: "minimax-m3.1-flash" });
+    for (const id of ["minimax-m3", "MiniMax-M3"]) assert.deepEqual(modelAvatarOf(id), { kind: "family", logo: "minimax" }, id);
   });
 
   test("GPT 按产品线各一枚（版本号写在前面）：凡是 Astra / Sol / Luna 共用，Terra 与别的落家族标", () => {
