@@ -255,6 +255,7 @@ export async function buildPriceChart(
       points,
       unranked,
       unpriced,
+      unratedLevels: [],
     });
   }
 

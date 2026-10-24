@@ -79,6 +79,21 @@ export interface PriceChartModelRef {
   modelId: string;
 }
 
+/**
+ * 用过、但当前分类的榜单没评这一档：这个型号在榜上有条目，只是没有这一档（用户用 Fable 5.1 的
+ * 高档发过消息，榜单只评了最高档）。有花费、没有分数——**不借别的档的分、不画点**，单列一组。
+ */
+export interface PriceChartUnratedLevel {
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+  /** 这一档的实测任务数（各服务商合计，不受实测门槛限制） */
+  samples: number;
+  /** 这一档各任务花费的中位数，美元 */
+  cost: number;
+  /** 榜单在当前分类评过的档（悬停 / 点开时写「榜单只评了：最高」） */
+  ratedLevels: ThinkingLevel[];
+}
+
 export interface PriceChartCategoryData {
   category: PriceChartCategory;
   unit: PriceChartScoreUnit;
@@ -89,6 +104,8 @@ export interface PriceChartCategoryData {
   unranked: PriceChartModelRef[];
   /** 上了榜、但既没有实测花费也找不到官方单价，横轴没法定：列出来提示去填费率 */
   unpriced: PriceChartModelRef[];
+  /** 用过、但榜单没评的档（按型号 × 档去重；整个型号不在榜上的进 unranked，两组不重复） */
+  unratedLevels: PriceChartUnratedLevel[];
 }
 
 /** 估算用的 token 画像：构成是占比（四项和为 1），medianTaskTokens 是全部任务 token 量的中位数 */
