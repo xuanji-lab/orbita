@@ -16,9 +16,10 @@ import {
   type PriceChartModelRef,
   type PriceChartPoint,
   type PriceChartScoreUnit,
+  type PriceChartUnratedLevel,
 } from "../../shared/price-chart.ts";
 import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
-import type { ThinkingLevel } from "../../shared/thinking.ts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/thinking.ts";
 import { boardBaseOf, boardEntriesFor, boardIndexOf, type BoardRow } from "./arena-board.ts";
 import {
   estimateTaskCost,
@@ -90,6 +91,29 @@ const groupKey = (base: string | undefined, modelId: string): string =>
 
 const costKey = (base: string, level: ThinkingLevel | "any") => `${base}\u0000${level}`;
 
+/**
+ * 用过、但当前分类的榜单没评的档（用户 2026-10-24 拍板，方案 b）：这个型号在榜上有条目，只是没有
+ * 这一档——有花费、没有分数。只要这一档有实测任务（任意数量，不受实测门槛限制）就列出来。
+ *
+ * **不借分数、不画点**：拿最高档的分给高档用，等于替 Arena 编一个它没测过的数；图上的每个点都必须
+ * 是榜单真评过的「型号 × 档」。榜单条目是没标档的那种（GLM-5.3-Flash）时不列：那个点的横轴本来就
+ * 取这个型号全部档位的任务，没有被漏掉的档。
+ */
+function unratedOf(
+  modelId: string,
+  entries: readonly { thinking: ThinkingLevel | null }[],
+  used: ReadonlySet<ThinkingLevel> | undefined,
+  costsOf: (level: ThinkingLevel) => readonly number[],
+): PriceChartUnratedLevel[] {
+  if (used === undefined || entries.some((entry) => entry.thinking === null)) return [];
+  const rated = THINKING_LEVELS.filter((level) => entries.some((entry) => entry.thinking === level));
+  return THINKING_LEVELS.filter((level) => used.has(level) && !rated.includes(level)).flatMap((level) => {
+    const costs = costsOf(level);
+    const mid = median(costs);
+    return mid === null ? [] : [{ modelId, thinkingLevel: level, samples: costs.length, cost: mid, ratedLevels: rated }];
+  });
+}
+
 export async function buildPriceChart(sources: PriceChartSources, snapshot: ArenaSnapshot): Promise<PriceChartData> {
   const [providers, catalog, stored] = await Promise.all([sources.providers(), sources.catalog(), sources.tasks()]);
   // 档不可考的段（level null）计 token、不进图，也不进估算画像——与改账本之前的口径一致
@@ -119,6 +143,8 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     list.push(value);
     costs.set(k, list);
   };
+  /** 每个型号实测过哪些档（「用过、但榜单没评的档」要它） */
+  const usedLevels = new Map<string, Set<ThinkingLevel>>();
   for (const { task, totals } of tasks) {
     const base = boardBaseOf(task.modelId, index);
     if (base === undefined || task.level === null) continue;
@@ -126,6 +152,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     if (cost === null || cost <= 0) continue;
     push(costKey(base, task.level), cost);
     push(costKey(base, "any"), cost);
+    usedLevels.set(base, (usedLevels.get(base) ?? new Set()).add(task.level));
   }
   const profile = tokenProfile(tasks.map((t) => t.totals));
 
@@ -137,6 +164,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     const points: PriceChartPoint[] = [];
     const unranked: PriceChartModelRef[] = [];
     const unpriced: PriceChartModelRef[] = [];
+    const unratedLevels: PriceChartUnratedLevel[] = [];
     for (const group of groups.values()) {
       const ref = { modelId: group.modelId };
       const entries = group.base === undefined ? [] : boardEntriesFor(rows, group.modelId, board.publishDate, index);
@@ -178,6 +206,10 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
         });
       }
       if (!anyPriced) unpriced.push(ref);
+      const base = group.base;
+      unratedLevels.push(
+        ...unratedOf(group.modelId, entries, usedLevels.get(base), (level) => costs.get(costKey(base, level)) ?? []),
+      );
     }
     categories.push({
       category: category satisfies PriceChartCategory,
@@ -186,7 +218,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
       points,
       unranked,
       unpriced,
-      unratedLevels: [],
+      unratedLevels,
     });
   }
 

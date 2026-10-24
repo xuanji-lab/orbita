@@ -23,6 +23,7 @@ const snapshot: ArenaSnapshot = {
         ["Qwen3.8-Max", 0.0113, 0.005, 0.017, 100, 25],
         ["Claude Opus 5.5 (Max)", 0.2077, 0.18, 0.23, 100, 1],
         ["Grok 4.7 (xHigh)", 0.05, 0.04, 0.06, 100, 6],
+        ["Claude Fable 5.1 (Max)", 0.1394, 0.12, 0.16, 100, 4],
       ],
     },
     webdev: {
@@ -319,5 +320,55 @@ describe("手写表外的型号（新服务商）：规范化兜底配上榜", (
     assert.equal(grok?.boardName, "Grok 4.7 (xHigh)");
     const webdev = data.categories.find((c) => c.category === "webdev");
     assert.ok(webdev?.unranked.some((u) => u.modelId === "grok-4.7"));
+  });
+});
+
+describe("用过、但榜单没评的档：单列一组，不借分、不画点", () => {
+  const fable = [
+    provider("anthropic-compatible", "anthropic-compatible", [{ id: "claude-fable-5-1" }, { id: "my-private-model" }]),
+    provider("claude", "claude", [{ id: "claude-fable-5-1" }]),
+  ];
+  const agentOf = async (logs: Record<string, SessionRecord[]>, metas: SessionMeta[]) => {
+    const data = await buildPriceChart(sources(logs, metas, fable), snapshot);
+    const agent = data.categories.find((c) => c.category === "agent");
+    assert.ok(agent !== undefined);
+    return agent;
+  };
+
+  test("有档无分：榜单只评了最高，用户的高档任务进这一组（1 个任务也算），不出点", async () => {
+    const agent = await agentOf({ a: [reply("a1", "anthropic-compatible", "claude-fable-5-1", "high", 3)] }, [meta("a", 1)]);
+    assert.deepEqual(agent.unratedLevels, [
+      { modelId: "claude-fable-5-1", thinkingLevel: "high", samples: 1, cost: 3, ratedLevels: ["max"] },
+    ]);
+    assert.ok(!agent.points.some((p) => p.thinkingLevel === "high"));
+    assert.ok(!agent.unranked.some((u) => u.modelId === "claude-fable-5-1"));
+  });
+
+  test("同一个型号 × 档在两家服务商下合并成一项（任务数相加、取合并后的中位数）", async () => {
+    const agent = await agentOf(
+      {
+        a: [reply("a1", "anthropic-compatible", "claude-fable-5-1", "high", 2)],
+        b: [reply("b1", "claude", "claude-fable-5-1", "high", 4)],
+      },
+      [meta("a", 1), meta("b", 2)],
+    );
+    assert.equal(agent.unratedLevels.length, 1);
+    assert.equal(agent.unratedLevels[0]?.samples, 2);
+    assert.equal(agent.unratedLevels[0]?.cost, 3);
+  });
+
+  test("整个型号不在榜上：进未上榜，不进这一组（两组不重复）", async () => {
+    const agent = await agentOf({ a: [reply("a1", "anthropic-compatible", "my-private-model", "high", 2)] }, [meta("a", 1)]);
+    assert.ok(agent.unranked.some((u) => u.modelId === "my-private-model"));
+    assert.deepEqual(agent.unratedLevels, []);
+  });
+
+  test("榜单评过的档不进这一组；榜单条目没标档的型号也不进（那个点已经包了全部档位）", async () => {
+    const maxOnly = await agentOf({ a: [reply("a1", "anthropic-compatible", "claude-fable-5-1", "max", 2)] }, [meta("a", 1)]);
+    assert.deepEqual(maxOnly.unratedLevels, []);
+    // glm-5.3-flash 在夹具榜单上是没标档的 GLM-5.3-Flash：用户的 high 已经算在那个点的横轴里
+    const flashLogs = { f: [reply("f1", "opencode-go", "glm-5.3-flash", "high", 1)] };
+    const data = await buildPriceChart(sources(flashLogs, [meta("f", 1)], providers), snapshot);
+    assert.deepEqual(data.categories.find((c) => c.category === "agent")?.unratedLevels, []);
   });
 });
