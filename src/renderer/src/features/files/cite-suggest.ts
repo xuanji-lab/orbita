@@ -5,8 +5,15 @@
  *
  * 支持的命令是**显式名单**，不是 `\cite.*` 正则：`\citeindextrue`、`\defcitealias`
  * 这类同样以「cite」开头的命令不该弹文献列表，误报一次就会往导言区插一个 key。
- * 名单覆盖 natbib（citep / citet / citealp / citealt / citeauthor / citeyear）与
- * biblatex（parencite / textcite / autocite / footcite）两族。
+ * 名单覆盖 natbib（citep / citet / citealp / citealt / citeauthor / citeyear，连正式
+ * 的大写写法 Cite / CiteA / CiteN 与复数 cites / parencites / textcites）、biblatex
+ * （parencite / textcite / autocite / footcite / footcitetext）与 AASTeX 的
+ * shortcite / supercite。
+ *
+ * **已知取舍**：`\begin{comment}` 环境里与 `\verb` 里面的 `\cite` 仍会弹候选——
+ * 判断它们要真的理解环境栈（`\begin` / `\end` 配对）与 `\verb` 的分隔符扫描，
+ * 而代价只是「在一个不会编译的地方弹了一个列表」。`%` 行注释是唯一会骗到人的
+ * 情形（一整行都不编译），所以只认它。
  */
 import { CITE_MAX_SUGGESTIONS, type CiteEntry } from "../../../../shared/cite.ts";
 
@@ -35,9 +42,21 @@ export const CITE_COMMANDS = [
   "autocite",
   "Autocite",
   "footcite",
+  "footcitetext",
   "smartcite",
   "fullcite",
   "nocite",
+  // natbib 的正式大写写法（`\Cite` 是 citet 的别名，`\CiteA` / `\CiteN` 是
+  // textual / numeric 两种模式），以及复数形式（一次引多篇）
+  "Cite",
+  "cites",
+  "parencites",
+  "textcites",
+  "citeA",
+  "citeN",
+  // AASTeX 的短引用 / 上标引用
+  "shortcite",
+  "supercite",
 ] as const;
 
 /**
@@ -134,9 +153,23 @@ export function citeDetail(entry: CiteEntry): string {
 }
 
 /**
- * 候选行的补充说明（选中时才显示）：作者 + 来源 .bib。来源文件是「同 key 出现在两份
- * 文件里」时唯一的线索——去重规则是「先出现者为准」，用户得能看见它选了哪一份。
+ * 接受候选时插入的文本：key 后面**补上 `}`**，除非那里已经有一个（用户先打了右括号
+ * 再回头选候选，就不能补出 `}}`）。编辑器没有 closeBrackets，不补的话每选一次都要
+ * 自己再敲一个右括号。
+ */
+export function citeInsertion(key: string, nextChar: string | undefined): string {
+  return nextChar === "}" ? key : `${key}}`;
+}
+
+/**
+ * 候选行的补充说明（选中时才显示）：**完整标题** + 作者 + 来源 .bib。
+ *
+ * 标题在候选行里只占一行，右栏又只有三百来像素宽，长标题会被省略号截断（评审 F2）；
+ * 这里给全文，截断就不再是信息丢失。来源文件是「同 key 出现在两份文件里」时唯一
+ * 的线索——去重规则是「先出现者为准」，用户得能看见它选了哪一份。
  */
 export function citeInfo(entry: CiteEntry): string {
-  return [entry.author, entry.file].filter((part): part is string => part !== null && part !== "").join("\n");
+  return [entry.title, entry.author, entry.file]
+    .filter((part): part is string => part !== null && part !== "")
+    .join("\n");
 }

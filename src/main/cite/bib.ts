@@ -206,22 +206,17 @@ function readValue(
  */
 export function mergeBibEntries(
   files: readonly { path: string; entries: readonly CiteEntry[] }[],
-): { entries: CiteEntry[]; duplicates: number } {
+): CiteEntry[] {
   const byKey = new Map<string, CiteEntry>();
-  let duplicates = 0;
   for (const file of files) {
     for (const entry of file.entries) {
       // 大小写不同的同一个 key 在 BibTeX 里是不同的 key（它区分大小写），但引用时
       // 几乎总是同一个意思；按原文比较，只把完全相同的当重复
-      if (byKey.has(entry.key)) {
-        duplicates += 1;
-        continue;
-      }
+      if (byKey.has(entry.key)) continue;
       byKey.set(entry.key, { ...entry, file: file.path });
     }
   }
-  const entries = [...byKey.values()].sort(compareKeys);
-  return { entries, duplicates };
+  return [...byKey.values()].sort(compareKeys);
 }
 
 /** key 排序：先比小写形式，相同再比原样（`A` / `a` 两个 key 不会因大小写抖动顺序） */

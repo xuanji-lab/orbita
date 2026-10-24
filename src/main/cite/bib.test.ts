@@ -154,8 +154,8 @@ describe("mergeBibEntries —— 多文件合并", () => {
       { path: "refs/a.bib", entries: [entry("dup", "From A"), entry("a-only", "A")] },
       { path: "refs/b.bib", entries: [entry("dup", "From B"), entry("b-only", "B")] },
     ]);
-    assert.equal(merged.duplicates, 1);
-    const dup = merged.entries.find((item) => item.key === "dup");
+    assert.deepEqual(merged.map((item) => item.key), ["a-only", "b-only", "dup"]);
+    const dup = merged.find((item) => item.key === "dup");
     assert.equal(dup?.title, "From A");
     assert.equal(dup?.file, "refs/a.bib");
   });
@@ -164,11 +164,11 @@ describe("mergeBibEntries —— 多文件合并", () => {
     const merged = mergeBibEntries([
       { path: "x.bib", entries: [entry("zeta", "Z"), entry("Alpha", "A"), entry("alpha", "a"), entry("beta", "B")] },
     ]);
-    assert.deepEqual(merged.entries.map((item) => item.key), ["Alpha", "alpha", "beta", "zeta"]);
+    assert.deepEqual(merged.map((item) => item.key), ["Alpha", "alpha", "beta", "zeta"]);
   });
 
   test("没有文件时是空库", () => {
-    assert.deepEqual(mergeBibEntries([]), { entries: [], duplicates: 0 });
+    assert.deepEqual(mergeBibEntries([]), []);
   });
 });
 

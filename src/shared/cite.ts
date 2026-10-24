@@ -35,18 +35,32 @@ export interface CiteEntry {
 
 /**
  * 一个 .bib 文件的扫描账。**坏条目和坏文件分开记**：前者是「这个文件里有 3 条
- * 不完整」，跳过就完事；后者是「这份文件读不了 / 整份解析不了」，用户要知道补全
- * 里少了它。两者都在问题抽屉里给一条 warning，都不阻塞编译。
+ * 不完整」，跳过就完事；后者是「这份文件读不了」，用户要知道补全里少了它。两者都在
+ * 问题抽屉里给一条 warning，都不阻塞编译。
+ *
+ * 没有「解析出了几条」这个字段：除了解析器自己，没人读它（消费者纪律：不留没人用的
+ * 计数）。条数要看的话，`entries` 里按 `file` 分组就是了。
  */
 export interface CiteBibFile {
   /** 相对项目目录的路径，正斜杠 */
   path: string;
-  /** 解析出的条目数（去重前） */
-  entries: number;
   /** 跳过的坏条目数（缺 key、括号不闭合、字段没有值…） */
   bad: number;
   /** 整份文件读不了时的一句话（给问题抽屉）；正常时 null */
   error: string | null;
+}
+
+/** 一份 .bib 为什么没读：体积超限，或撞上了「最多读多少份」 */
+export type CiteSkipReason = "too-large" | "too-many-files";
+
+/**
+ * 没读的 .bib。**上限不许静默丢文件**：论文仓 `figures/` 放两千张图是常态，
+ * 一份 `refs/ok.bib` 被扫漏了却什么都不说，用户只会看到「补全里少了条目」。
+ */
+export interface CiteSkippedBib {
+  /** 相对项目目录的路径，正斜杠 */
+  path: string;
+  reason: CiteSkipReason;
 }
 
 /**
@@ -57,8 +71,13 @@ export interface CiteLibrary {
   entries: CiteEntry[];
   /** 扫到的 .bib 文件（按路径排序）；没有 .bib 时是空数组 */
   files: CiteBibFile[];
-  /** 被丢弃的重复 key 条数（同 key 多份定义）。只在诊断 / 测试里读，界面不展示计数 */
-  duplicates: number;
+  /** 因上限 / 体积没读的 .bib（路径 + 原因）；界面汇总成一条 warning */
+  skipped: CiteSkippedBib[];
+  /**
+   * 有目录或深度没进去看（扫到预算上限）：可能还有 .bib 根本没被发现，
+   * 数不出是哪几份。与 `skipped` 一起构成「补全可能不全」的完整信号。
+   */
+  truncated: boolean;
 }
 
 /**

@@ -225,18 +225,24 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
         boxShadow: "var(--shadow-popover)",
         color: "var(--color-text-primary)",
       },
-      // key 是机器事实：等宽、sm 档；列表高度封顶（再长就该多打两个字）
-      ".cm-tooltip-autocomplete > ul": {
+      // key 是机器事实：等宽、sm 档；列表高度封顶（再长就该多打两个字）。
+      // 宽度也封顶（评审 F2）：一条长标题曾把弹层撑到窗口边缘、后半截被硬裁在词中间。
+      // 420px 是 1440 窗口下的上限；li 的省略号来自 CM 自己的 baseTheme，
+      // 全文在补充说明（info）里给——那里不受这一行宽度的限制。
+      // **选择器要带 `.cm-tooltip`**：baseTheme 写的是 `.cm-tooltip.cm-tooltip-autocomplete > ul`
+      // （两道类 + 元素），少写一道就比它弱，max-width 与行距会被静默盖掉（实测踩过）
+      ".cm-tooltip.cm-tooltip-autocomplete > ul": {
         fontFamily: "var(--font-family-mono)",
         fontSize: "var(--font-size-sm)",
         maxHeight: "16em",
+        maxWidth: "min(420px, 92vw)",
       },
-      ".cm-tooltip-autocomplete > ul > li": {
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
         padding: "var(--space-1) var(--space-2)",
         lineHeight: "var(--line-height-ui)",
       },
       // 选中行：与列表选中同一套（淡底 + 墨色不变），不引入第四种强调色
-      ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
         backgroundColor: "var(--color-bg-active)",
         color: "var(--color-text-primary)",
       },

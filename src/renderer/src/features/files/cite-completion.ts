@@ -12,6 +12,7 @@
  */
 import {
   autocompletion,
+  insertCompletionText,
   type Completion,
   type CompletionContext,
   type CompletionResult,
@@ -19,7 +20,7 @@ import {
 } from "@codemirror/autocomplete";
 import type { Extension } from "@codemirror/state";
 import type { CiteEntry } from "../../../../shared/cite.ts";
-import { citeArgumentBefore, citeDetail, citeInfo, suggestCites } from "./cite-suggest.ts";
+import { citeArgumentBefore, citeDetail, citeInfo, citeInsertion, suggestCites } from "./cite-suggest.ts";
 
 /**
  * 往回看多远找 `\cite{`：一行长的引用列表（几十个 key）也在这个窗口里。
@@ -52,6 +53,15 @@ function complete(library: readonly CiteEntry[], context: CompletionContext): Co
     // 「key — 标题 (年)」：破折号写在 detail 里（CodeMirror 只给我们 label + detail 两格）
     detail: `— ${citeDetail(entry)}`,
     ...(citeInfo(entry) === "" ? {} : { info: citeInfo(entry) }),
+    // 接受时把 `}` 补上（除非光标后已经有一个）：编辑器没有 closeBrackets，
+    // 不补的话每选一次候选都要自己再敲右括号
+    apply: (view, _completion, from, to) => {
+      const next = view.state.sliceDoc(to, to + 1);
+      view.dispatch({
+        ...insertCompletionText(view.state, citeInsertion(entry.key, next === "" ? undefined : next), from, to),
+        userEvent: "input.complete",
+      });
+    },
   }));
   if (options.length === 0) return null;
   return { from: start + arg.from, options, filter: false };

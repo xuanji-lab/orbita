@@ -8,7 +8,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { CiteEntry } from "../../../../shared/cite.ts";
-import { citeArgumentBefore, citeDetail, citeInfo, suggestCites } from "./cite-suggest.ts";
+import { citeArgumentBefore, citeDetail, citeInfo, citeInsertion, suggestCites } from "./cite-suggest.ts";
 
 const entry = (key: string, patch: Partial<CiteEntry> = {}): CiteEntry => ({
   key,
@@ -52,6 +52,28 @@ describe("citeArgumentBefore —— 认不认得出 \\cite 现场", () => {
     assert.deepEqual(citeArgumentBefore("\\Citet*{doe"), { from: 8, query: "doe" });
     assert.deepEqual(citeArgumentBefore("\\textcite{doe"), { from: 10, query: "doe" });
     assert.deepEqual(citeArgumentBefore("\\nocite{"), { from: 8, query: "" });
+  });
+
+  test("评审 F4 补的命令：natbib 大写 / 复数写法与 AASTeX", () => {
+    // 每条都只验「认出来 + 替换点对」：名单里的命令不该互相抢（\cite 不能吃掉 \cites）
+    for (const command of [
+      "Cite",
+      "cites",
+      "parencites",
+      "textcites",
+      "citeA",
+      "citeN",
+      "shortcite",
+      "supercite",
+      "footcitetext",
+    ]) {
+      const text = `\\${command}{doe`;
+      assert.deepEqual(
+        citeArgumentBefore(text),
+        { from: text.length - 3, query: "doe" },
+        `命令 \\${command} 没被认出来`,
+      );
+    }
   });
 
   test("一行一个 key 的长引用：换行后继续给候选", () => {
@@ -137,9 +159,20 @@ describe("候选行的显示", () => {
     assert.equal(citeDetail(entry("c", { type: "misc", year: "1999" })), "misc (1999)");
   });
 
-  test("info 是作者 + 来源文件（同 key 出现在两份 .bib 里时唯一的线索）", () => {
-    assert.equal(citeInfo(entry("a", { author: "Doe, John", file: "refs/a.bib" })), "Doe, John\nrefs/a.bib");
+  test("info 是标题 + 作者 + 来源文件（标题在行里会被省略号截断，这里给全文）", () => {
+    assert.equal(
+      citeInfo(entry("a", { title: "Deep Learning", author: "Doe, John", file: "refs/a.bib" })),
+      "Deep Learning\nDoe, John\nrefs/a.bib",
+    );
     assert.equal(citeInfo(entry("b", { file: "refs/b.bib" })), "refs/b.bib");
     assert.equal(citeInfo(entry("c", { author: null, file: "" })), "");
+  });
+
+  test("接受候选时补右括号；后面已经有一个就不重复（评审 F3）", () => {
+    assert.equal(citeInsertion("vaswani2017", undefined), "vaswani2017}");
+    assert.equal(citeInsertion("vaswani2017", "}"), "vaswani2017");
+    // 后面是逗号（\cite{a,b} 继续写第二个 key）或空白，都要补
+    assert.equal(citeInsertion("vaswani2017", ","), "vaswani2017}");
+    assert.equal(citeInsertion("vaswani2017", " "), "vaswani2017}");
   });
 });
