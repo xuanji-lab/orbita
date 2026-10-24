@@ -221,7 +221,9 @@ describe("planRevert / executeRevert", () => {
     assert.deepEqual(plan.restore, []);
     assert.deepEqual(plan.deletes, []);
     const outcomes = await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
-    assert.deepEqual(outcomes, [{ path: join(lab, "big.txt"), outcome: "skipped" }]);
+    assert.deepEqual(outcomes, [
+      { path: join(lab, "big.txt"), outcome: "skipped", reason: "没有快照（文件过大或不是文本）" },
+    ]);
     assert.equal((await readFile(join(lab, "big.txt"), "utf8")).length, big.length);
   });
 
@@ -318,6 +320,35 @@ describe("planUndo / executeUndo", () => {
     assert.deepEqual(plan.userModified, []); // 磁盘 v2 == t2 after v2
     await executeUndo({ store, host: fakeHost([]) }, ID, "t2");
     assert.equal(await readFile(join(lab, "a.ts"), "utf8"), "v1\n");
+  });
+
+  test("撤销时一个文件写不进去：其余照常还原，失败项带原因回传并落盘", async () => {
+    // 目标路径被一个目录占着：rename 落到目录上必然失败（不依赖文件锁，跨平台）
+    const blocked = join(lab, "blocked.txt");
+    await writeFile(join(lab, "a.ts"), "v1\n", "utf8");
+    await mkdir(blocked);
+    await store.record(ID, userItem("u1", "q1", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [
+      { path: join(lab, "a.ts"), before: "v0\n", after: "v1\n", added: 1, removed: 1 },
+      { path: blocked, before: "old\n", after: "agent\n", added: 1, removed: 1 },
+    ]);
+    const outcomes = await executeUndo({ store, host: fakeHost([]) }, ID, "t1");
+    const byPath = new Map(outcomes.map((entry) => [entry.path, entry]));
+    assert.equal(byPath.get(join(lab, "a.ts"))?.outcome, "restored");
+    assert.equal(byPath.get(blocked)?.outcome, "skipped");
+    // 原因不能空：它就是用户唯一能看到的那句话（带系统错误码，便于去搜）
+    const reason = byPath.get(blocked)?.reason ?? "";
+    assert.match(reason, /E[A-Z]+/);
+    // 落盘后读回（renderer 读的是 readLog 的这条记录，不是 IPC 返回值）
+    const detail = await store.load(ID);
+    const undo = detail?.transcript.find((record) => record.role === "undo");
+    assert.equal(undo?.role, "undo");
+    const reRead = undo?.role === "undo" ? undo.restored.find((entry) => entry.path === blocked) : undefined;
+    assert.equal(reRead?.reason, reason);
+    // 成功的那个文件确实回去了；被占住的那个保持现状
+    assert.equal(await readFile(join(lab, "a.ts"), "utf8"), "v0\n");
+    assert.equal((await stat(blocked)).isDirectory(), true);
   });
 
   test("撤销通知的正文点名文件与「不再在盘上」", () => {

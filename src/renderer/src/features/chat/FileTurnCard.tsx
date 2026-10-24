@@ -2,7 +2,7 @@ import { useContext, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
-import type { FileTurnView, RevertRecord } from "@shared/revert";
+import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import { isWebArtifactFile } from "@shared/files";
 import { pathParts } from "./path-parts.ts";
 import { RevertPreviewContext } from "./revert-preview.ts";
@@ -53,7 +53,8 @@ const SLOT_DIR: React.CSSProperties = {
 export function FileTurnCard(props: {
   record: FileTurnView;
   cwd: string | null;
-  undone: boolean;
+  /** 这一轮的单轮撤销记录（没撤销过 = null）：徽标、按钮、失败原因都看它 */
+  undo: UndoRecord | null;
   busy: boolean;
   onUndo: (turnId: string) => void;
   /** 点文件行 → 右侧审查面板打开并定位该文件的 diff */
@@ -63,6 +64,10 @@ export function FileTurnCard(props: {
 }) {
   const t = useT();
   const preview = useContext(RevertPreviewContext);
+  const undone = props.undo !== null;
+  // 撤销没全成：skipped 的每条都带原因（写盘失败 / 没有快照）。必须写在卡上——
+  // 只落主进程日志等于没告过用户（实机：文件被占用，确认栏照常关闭、卡上写「已撤销」）
+  const undoFailed = (props.undo?.restored ?? []).filter((entry) => entry.outcome === "skipped");
   // 撤销预演中的那一轮：描边加重 + 自动展开，底部确认栏说的就是这张卡里的文件
   const previewing = preview?.kind === "undo" && preview.turnId === props.record.id;
   const [open, setOpen] = useState(false);
@@ -174,23 +179,43 @@ export function FileTurnCard(props: {
           </span>
         )}
         {undoable &&
-          (props.undone ? (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "1px var(--space-2)",
-                borderRadius: "var(--radius-pill)",
-                background: "var(--color-bg-muted)",
-                fontSize: "var(--font-size-sm)",
-                color: "var(--color-text-tertiary)",
-                flex: "0 0 auto",
-              }}
-            >
-              <Icon name="check" size={11} strokeWidth={1.8} />
-              {t.chat.fileCardUndone}
-            </span>
+          (undone ? (
+            undoFailed.length > 0 ? (
+              // 部分文件还在原地：不能说「已撤销」——徽标如实写「撤销未完成」
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "1px var(--space-2)",
+                  border: "1px solid var(--color-border-subtle)",
+                  borderRadius: "var(--radius-pill)",
+                  fontSize: "var(--font-size-sm)",
+                  color: "var(--color-text-primary)",
+                  flex: "0 0 auto",
+                }}
+              >
+                <Icon name="triangle-alert" size={11} strokeWidth={1.8} />
+                {t.chat.fileCardUndoIncomplete}
+              </span>
+            ) : (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "1px var(--space-2)",
+                  borderRadius: "var(--radius-pill)",
+                  background: "var(--color-bg-muted)",
+                  fontSize: "var(--font-size-sm)",
+                  color: "var(--color-text-tertiary)",
+                  flex: "0 0 auto",
+                }}
+              >
+                <Icon name="check" size={11} strokeWidth={1.8} />
+                {t.chat.fileCardUndone}
+              </span>
+            )
           ) : (
             <button
               type="button"
@@ -218,6 +243,28 @@ export function FileTurnCard(props: {
             </button>
           ))}
       </div>
+      {/* 撤销没成的文件：原因直接写在卡上，收起态也看得见（静默失败是这个 bug 的全部） */}
+      {undoFailed.length > 0 && (
+        <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+          {undoFailed.map((entry) => {
+            const parts = pathParts(entry.path, props.cwd);
+            return (
+              <div
+                key={entry.path}
+                className="file-turn-undo-failed"
+                style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}
+              >
+                <span style={{ color: "var(--color-text-primary)", flex: "0 0 auto", display: "inline-flex" }}>
+                  <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
+                </span>
+                <span style={{ minWidth: 0, color: "var(--color-text-primary)" }}>
+                  {t.chat.fileCardUndoFailed(parts.name, entry.reason ?? t.chat.revertOutcome("skipped"))}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {/* 收起态也露出网页行（用户裁决）：文件账里的与旁路的都直接可见、可点 */}
       {hasWeb && !shown && webSection(false)}
       {shown && (
@@ -470,8 +517,10 @@ export function RevertMarkView(props: {
                     <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>{name.name}</span>
                     {name.dir !== "" && <span style={SLOT_DIR}>{name.dir}</span>}
                   </span>
-                  <span style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}>
-                    {t.chat.revertOutcome(entry.outcome)}
+                  <span style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)", minWidth: 0, textAlign: "right" }}>
+                    {entry.outcome === "skipped" && entry.reason !== undefined
+                      ? `${t.chat.revertOutcome("skipped")} · ${entry.reason}`
+                      : t.chat.revertOutcome(entry.outcome)}
                   </span>
                 </button>
               );

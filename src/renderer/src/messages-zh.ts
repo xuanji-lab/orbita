@@ -1276,7 +1276,7 @@ export const zh: Messages = {
       outcome === "restored" ? "已恢复" : outcome === "deleted" ? "已删除" : "未还原",
     revertRestored: (n: number) => `还原了 ${n} 个文件`,
     revertDeleted: (n: number) => `删除 ${n} 个`,
-    revertSkipped: (n: number) => `${n} 个没还原（无快照）`,
+    revertSkipped: (n: number) => `${n} 个没还原`,
     revertedHere: "已回退——对话从这里重新来过",
     undoTitle: "撤销文件改动",
     undoConfirm: "撤销改动",
@@ -1290,6 +1290,9 @@ export const zh: Messages = {
     fileCardUndo: "撤销",
     fileCardUndoHint: "撤销这一轮的文件改动——对话不动",
     fileCardUndone: "已撤销",
+    // 撤销没全成：文件仍停在 agent 改完的样子，原因（系统错误码）必须写在脸上
+    fileCardUndoIncomplete: "撤销未完成",
+    fileCardUndoFailed: (name, reason) => `撤销失败：${name} —— ${reason}`,
     fileCardWebPage: "网页",
     openInOrbita: "在 orbita 打开",
     revealArtifact: "打开文件位置",

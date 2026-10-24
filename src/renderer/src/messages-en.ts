@@ -1412,7 +1412,7 @@ export const en = {
       outcome === "restored" ? "Restored" : outcome === "deleted" ? "Deleted" : "Not restored",
     revertRestored: (n: number) => `${n} file${n === 1 ? "" : "s"} restored`,
     revertDeleted: (n: number) => `${n} deleted`,
-    revertSkipped: (n: number) => `${n} not restored (no snapshot)`,
+    revertSkipped: (n: number) => `${n} not restored`,
     revertedHere: "Reverted — the conversation continued from here",
     undoTitle: "Undo file changes",
     undoConfirm: "Undo changes",
@@ -1427,6 +1427,9 @@ export const en = {
     fileCardUndo: "Undo",
     fileCardUndoHint: "Undo this round's file changes — the conversation stays",
     fileCardUndone: "Undone",
+    // 撤销没全成：文件仍停在 agent 改完的样子，原因（系统错误码）必须写在脸上
+    fileCardUndoIncomplete: "Undo incomplete",
+    fileCardUndoFailed: (name: string, reason: string) => `Undo failed: ${name} — ${reason}`,
     fileCardWebPage: "Web page",
     openInOrbita: "Open in orbita",
     revealArtifact: "Show in folder",
