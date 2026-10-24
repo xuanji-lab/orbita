@@ -15,6 +15,7 @@
  */
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
 import type { ModelParams } from "../shared/known-models.ts";
 import {
@@ -167,8 +168,12 @@ export function toFallbackModels(
       known === undefined
         ? borrowedModel(decl.id, patch, declaredAdaptive, current, catalog, prefer, catalogModels)
         : withKnownParams(known, patch, declaredAdaptive, sameEndpoint || entryApi === undefined ? known.api : entryApi);
+    // 多协议网关里协议与条目不同的型号，地址换成该协议的（见 protocolAddress）
+    const address =
+      endpoint === undefined || base.api === undefined ? undefined : protocolAddress(prefer.catalogId, endpoint, base.api);
     return {
       ...base,
+      ...(address === undefined ? {} : { baseUrl: address }),
       name: decl.name ?? base.name,
       contextWindow: decl.contextWindow ?? base.contextWindow,
       maxTokens: decl.maxTokens ?? base.maxTokens,
@@ -224,6 +229,30 @@ function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: b
 /** 地址比较用：去掉尾部斜杠（用户填的与目录写的常差这一个字符） */
 function sameUrl(a: string, b: string): boolean {
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
+/**
+ * 多协议网关上「另一种协议」的地址。OpenCode Go 一个网关两种协议：OpenAI 协议在
+ * `https://opencode.ai/zen/go/v1`，Anthropic 协议在 `https://opencode.ai/zen/go`——Anthropic
+ * 客户端自己会接 `/v1/messages`。条目只能填一个地址（OpenAI 那个），所以 minimax-m3 / claude-*
+ * 这些 Anthropic 协议的型号要换成目录里该协议的地址，否则请求打到 `/zen/go/v1/v1/messages`
+ * → 404（2026-10-24 实测；main 上也是这样，pi 合并注册时把条目地址盖到了每个型号上）。
+ *
+ * 只认 pi 内建快照里的地址表（按协议各一个），且**条目填的就是网关原地址**时才换：用户改成
+ * 镜像地址时我们不知道镜像的另一协议在哪，原样不动（与修之前一样，不更坏）。
+ * 用内建快照而不是运行时的目录：同 id 注册之后，运行时里的型号地址已经被条目地址盖掉了。
+ */
+export function protocolAddress(
+  catalogId: string | undefined,
+  entry: { api: string; baseUrl: string },
+  api: string,
+): string | undefined {
+  if (catalogId === undefined || api === entry.api) return undefined;
+  const models = builtinProviders().find((provider) => provider.id === catalogId)?.getModels() ?? [];
+  const addressOf = (target: string) => models.find((model) => model.api === target)?.baseUrl;
+  const entryAddress = addressOf(entry.api);
+  if (entryAddress === undefined || !sameUrl(entryAddress, entry.baseUrl)) return undefined;
+  return addressOf(api);
 }
 
 /**
@@ -457,7 +486,13 @@ export function registerAndResolveModel(
   // 白名单要改动的型号（窗口 / 输出 / 能否思考 / 档位）也得补注册：只注 auth 面的话
   // getModel 返回目录原值，白名单在设置页里显示、到会话里不生效
   const whitelisted = provider.models.some((decl) => touchesRuntime(knownParamsFor(catalog, decl.id, prefer)));
-  if (model === undefined || hasModelOverrides(provider.models) || whitelisted) {
+  // 多协议网关里有型号要换地址（OpenCode Go 的 Anthropic 协议型号）：只注 auth 面的话 pi 会把
+  // 条目地址盖到每个型号上，必须带 models 补注册，型号上的地址才算数（见 protocolAddress）
+  const readdressed = provider.models.some((decl) => {
+    const registered = runtime.getModel(provider.id, decl.id);
+    return registered !== undefined && protocolAddress(provider.catalogId, provider, registered.api) !== undefined;
+  });
+  if (model === undefined || hasModelOverrides(provider.models) || whitelisted || readdressed) {
     /**
      * **拿哪家的目录条目去保留合并：按 catalogId，不是按我们自己的 id。**
      *

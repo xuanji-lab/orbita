@@ -18,7 +18,7 @@ import { KNOWN_MODELS } from "../shared/known-models.ts";
 import { KNOWN_PROVIDERS, catalogPreferenceOf, type KnownProvider } from "../shared/known-providers.ts";
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
-import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
+import { protocolAddress, registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
 
 /** 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网） */
 async function freshRuntime(): Promise<ModelRuntime> {
@@ -79,23 +79,26 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
             api: model.api,
             baseUrl: model.baseUrl,
           },
-    endpoint: { api: expectedApi(known, modelId, runtime), baseUrl: baseUrlOf(known) },
+    // 期望值按没注册过的目录算：注册之后运行时里的同 id 服务商已被我们的条目替换
+    endpoint: expectedEndpoint(known, modelId, await freshRuntime()),
   };
 }
 
 /**
- * 会话该用的协议：本家目录描述的就是这家端点（有条目协议、地址都与服务商条目一样——多协议网关
- * OpenCode Go）且收录了这个型号时，听型号自己的（minimax-m3 走 Anthropic 协议）；否则听条目的。
- * 地址永远听条目的。
+ * 会话该用的端点：本家目录描述的就是这家端点（有条目协议、地址都与服务商条目一样——多协议网关
+ * OpenCode Go）且收录了这个型号时，协议听型号自己的（minimax-m3 走 Anthropic 协议），地址换成
+ * 目录里该协议的（/zen/go，不是 /zen/go/v1）；否则协议、地址都听条目的。
  */
-function expectedApi(known: KnownProvider, modelId: string, runtime: ModelRuntime): string {
-  if (known.catalogId === undefined) return known.api;
+function expectedEndpoint(known: KnownProvider, modelId: string, runtime: ModelRuntime): { api: string; baseUrl: string } {
+  const entry = { api: known.api, baseUrl: baseUrlOf(known) };
+  if (known.catalogId === undefined) return entry;
   const home = runtime.getModels(known.catalogId);
   const describes = home.some(
-    (model) => model.api === known.api && model.baseUrl.replace(/\/+$/, "") === baseUrlOf(known).replace(/\/+$/, ""),
+    (model) => model.api === known.api && model.baseUrl.replace(/\/+$/, "") === entry.baseUrl.replace(/\/+$/, ""),
   );
   const own = home.find((model) => model.id === modelId);
-  return describes && own !== undefined ? own.api : known.api;
+  if (!describes || own === undefined) return entry;
+  return { api: own.api, baseUrl: protocolAddress(known.catalogId, entry, own.api) ?? entry.baseUrl };
 }
 
 function assertAgree(label: string, sides: Sides): void {
@@ -158,7 +161,26 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
         "minimax-m3",
       );
       assert.equal(model?.api, "anthropic-messages", declared.join(","));
+      // Anthropic 客户端自己接 /v1/messages：地址必须是 /zen/go，/zen/go/v1 会变成 /v1/v1/messages → 404
+      assert.equal(model?.baseUrl, "https://opencode.ai/zen/go", declared.join(","));
     }
+  });
+
+  test("OpenCode Go 换成镜像地址时不猜另一协议的地址：原样用条目的（与修之前一样）", async () => {
+    const known = entry("opencode-go");
+    const model = registerAndResolveModel(
+      await freshRuntime(),
+      {
+        id: known.id,
+        apiKey: "sk-test",
+        baseUrl: "https://mirror.example/zen/go/v1",
+        api: known.api,
+        models: [{ id: "minimax-m3" }],
+        ...catalogPreferenceOf(known),
+      },
+      "minimax-m3",
+    );
+    assert.equal(model?.baseUrl, "https://mirror.example/zen/go/v1");
   });
 
   test("智谱 Coding Plan 的 glm-5.3：本家目录（zai-coding-cn）是 OpenAI 协议，会话仍走条目配的 Anthropic 端点", async () => {
