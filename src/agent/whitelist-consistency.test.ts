@@ -47,7 +47,12 @@ function baseUrlOf(known: KnownProvider): string {
 }
 
 /** 一个（服务商条目，型号）在两边各算出什么 */
-async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> {
+async function bothSides(
+  known: KnownProvider,
+  modelId: string,
+  /** 用户在型号弹窗里勾的档（ModelDecl.thinkingLevels）；缺省 = 继承 */
+  thinkingLevels?: ThinkingLevel[],
+): Promise<Sides> {
   // 设置页的目录快照来自一个没注册过任何东西的运行时（runtime.ts 的 listBuiltins 同款）
   const catalog = (await freshRuntime()).getProviders().map(toBuiltinProvider);
   const prefer = catalogPreferenceOf(known);
@@ -60,7 +65,7 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
       apiKey: "sk-test",
       baseUrl: baseUrlOf(known),
       api: known.api,
-      models: [{ id: modelId }],
+      models: [{ id: modelId, ...(thinkingLevels === undefined ? {} : { thinkingLevels }) }],
       ...(known.catalogId === undefined ? {} : { catalogId: known.catalogId }),
       ...(known.catalogAuthoritative === true ? { catalogAuthoritative: true } : {}),
     },
@@ -71,7 +76,7 @@ async function bothSides(known: KnownProvider, modelId: string): Promise<Sides> 
       contextWindow: defaults.contextWindow,
       maxTokens: defaults.maxTokens,
       image: defaults.input.includes("image"),
-      levels: modelThinkingLevels(modelId, catalog, null, prefer),
+      levels: modelThinkingLevels(modelId, catalog, null, prefer, thinkingLevels),
     },
     runtime:
       model === undefined
@@ -139,6 +144,21 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
     assert.ok(known !== undefined, id);
     return known;
   };
+
+  test("用户勾的思考档两边都盖过白名单与目录：菜单只剩勾的，会话的支持集也只剩勾的", async () => {
+    const cases: Array<[string, string, ThinkingLevel[]]> = [
+      ["opencode-go", "kimi-k3", ["high"]], // 目录说了算的网关（目录给 max）
+      ["kimi-coding", "kimi-k3", ["off", "max"]], // 白名单是 low/high/max
+      ["claude", "claude-opus-5", ["low", "xhigh"]], // 本家目录 + 白名单 + adaptive
+      ["openai-compatible", "glm-5.3", ["low"]], // 自建网关跨目录借参
+      ["openai-compatible", "never-heard-of-it", ["medium", "high"]], // 目录与白名单都不认识
+    ];
+    for (const [providerId, modelId, levels] of cases) {
+      const sides = await bothSides(entry(providerId), modelId, levels);
+      assert.deepEqual(sides.ui.levels, levels, `${providerId}/${modelId} 菜单`);
+      assertAgree(`${providerId}/${modelId}（覆盖）`, sides);
+    }
+  });
 
   test("OpenCode Go 的 kimi-k3：目录说了算，两边都只有 max（白名单的三档不适用于这家网关）", async () => {
     const sides = await bothSides(entry("opencode-go"), "kimi-k3");
