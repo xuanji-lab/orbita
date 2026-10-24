@@ -145,7 +145,6 @@ describe("buildPriceChart", () => {
     assert.equal(k3?.samples, 3);
     assert.equal(k3?.cost, 3); // 段花费 2、3、5 → 中位数 3
     assert.equal(k3?.thinkingLevel, "max");
-    assert.equal(k3?.providerId, "kimi-coding");
   });
 
   test("榜单没标档的条目：横轴取这个型号全部档位的段（low 0.1、high 0.3、medium 0.2 → 0.2），点的档记 null", async () => {
@@ -202,7 +201,7 @@ describe("buildPriceChart", () => {
     assert.equal(qwen?.costBasis, "estimated");
     assert.equal(qwen?.samples, 0);
     assert.ok((qwen?.cost ?? 0) > 0);
-    assert.deepEqual(agent?.unpriced, [{ providerId: "anthropic-compatible", modelId: "claude-opus-5-5" }]);
+    assert.deepEqual(agent?.unpriced, [{ modelId: "claude-opus-5-5" }]);
   });
 
   test("当前分类查不到的已添加型号列为未上榜；换一类就换一批", async () => {
@@ -238,5 +237,63 @@ describe("buildPriceChart", () => {
     const first = src.reads.length;
     await buildPriceChart(src, snapshot, cache);
     assert.equal(src.reads.length, first);
+  });
+});
+
+describe("一个点 = 型号 × 档：几家服务商、几个别名合成一个", () => {
+  const rate = (n: number) => ({ input: n, output: n, cacheRead: n, cacheWrite: n });
+  // 两家以上服务商 + 别名：Kimi Code 的 k3、Anthropic 兼容的 kimi-k3、OpenCode Go 的 kimi-k3
+  const kimiEverywhere = [
+    provider("kimi-coding", "kimi-coding", [{ id: "k3", cost: rate(1) }]),
+    provider("anthropic-compatible", "anthropic-compatible", [{ id: "kimi-k3", cost: rate(9) }, { id: "my-private-model" }]),
+    provider("opencode-go", "opencode-go", [{ id: "kimi-k3" }, { id: "my-private-model" }]),
+  ];
+  const agentOf = async (logs: Record<string, SessionRecord[]>, metas: SessionMeta[]) => {
+    const { data } = await buildPriceChart(sources(logs, metas, kimiEverywhere), snapshot);
+    const agent = data.categories.find((c) => c.category === "agent");
+    assert.ok(agent !== undefined);
+    return agent;
+  };
+
+  test("两家服务商 + 一个别名合成一个点，代表 id 取最先添加的那个；未上榜也按型号去重", async () => {
+    const agent = await agentOf({}, []);
+    const kimi = agent.points.filter((p) => p.boardName === "Kimi K3 (Max)");
+    assert.equal(kimi.length, 1);
+    assert.equal(kimi[0]?.modelId, "k3");
+    assert.deepEqual(agent.unranked, [{ modelId: "my-private-model" }]);
+  });
+
+  test("几家单价不同：按服务商列表顺序取第一个查得到的（先添加的 Kimi Code 自填 $1）", async () => {
+    const logs = { s: [reply("x", "kimi-coding", "k3", "max", 1)] };
+    const agent = await agentOf(logs, [meta("s", 1)]);
+    const kimi = agent.points.find((p) => p.boardName === "Kimi K3 (Max)");
+    // 估算 = 单价按画像构成加权 × 任务 token 中位数；四项单价都是 1，加权后就是 1 $/M
+    assert.ok(kimi !== undefined);
+    assert.ok(Math.abs(kimi.cost - 11_100 / 1_000_000) < 1e-12);
+  });
+
+  test("任务跨服务商、跨别名合在一起：各 1 个、合计 3 个就画实测中位数", async () => {
+    const logs = {
+      a: [reply("a1", "kimi-coding", "k3", "max", 1)],
+      b: [reply("b1", "anthropic-compatible", "kimi-k3", "max", 2)],
+      c: [reply("c1", "opencode-go", "kimi-k3", "max", 4)],
+    };
+    const agent = await agentOf(logs, [meta("a", 1), meta("b", 2), meta("c", 3)]);
+    const kimi = agent.points.filter((p) => p.boardName === "Kimi K3 (Max)");
+    assert.equal(kimi.length, 1);
+    assert.equal(kimi[0]?.costBasis, "measured");
+    assert.equal(kimi[0]?.samples, 3);
+    assert.equal(kimi[0]?.cost, 2);
+  });
+
+  test("合计只有 2 个：仍按估算画，实测随点带上", async () => {
+    const logs = {
+      a: [reply("a1", "kimi-coding", "k3", "max", 1)],
+      b: [reply("b1", "anthropic-compatible", "kimi-k3", "max", 2)],
+    };
+    const agent = await agentOf(logs, [meta("a", 1), meta("b", 2)]);
+    const kimi = agent.points.find((p) => p.boardName === "Kimi K3 (Max)");
+    assert.equal(kimi?.costBasis, "estimated");
+    assert.deepEqual(kimi?.measured, { cost: 1.5, samples: 2 });
   });
 });

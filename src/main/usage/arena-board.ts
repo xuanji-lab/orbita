@@ -104,7 +104,7 @@ function parseBoardName(name: string): ParsedBoardName {
  * Orbita 型号 id 对应的榜单基名。先精确匹配，再取路径最后一段的小写（聚合网关写成
  * `z-ai/glm-5.3`、`openai/gpt-5.6-sol`）。查不到 = 这个型号不在任何榜上。
  */
-function boardBaseOf(modelId: string): string | undefined {
+export function boardBaseOf(modelId: string): string | undefined {
   const candidates = [modelId, (modelId.split("/").pop() ?? modelId).toLowerCase()];
   for (const candidate of candidates) {
     for (const [base, ids] of Object.entries(BOARD_MODEL_IDS)) {

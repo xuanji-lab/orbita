@@ -20,7 +20,7 @@ import {
 import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
 import { stampedThinkingLevel, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { boardEntriesFor, type BoardRow } from "./arena-board.ts";
+import { boardBaseOf, boardEntriesFor, type BoardRow } from "./arena-board.ts";
 import {
   estimateTaskCost,
   median,
@@ -125,21 +125,38 @@ async function scanSession(sources: PriceChartSources, meta: SessionMeta): Promi
 }
 
 /**
- * 实测点的样本门槛（用户 2026-10-24 拍板）：同一个服务商 × 型号 × 档的实测任务**少于 3 个**时，
- * 点按估算画（空心、标「估算」），悬停里另写「实测 n 个任务 $x」；满 3 个才用实测中位数画实心点。
- * 理由：中位数在样本很少时就是那一两个任务本身，单个长任务会把点拉偏——开发版里 Fable 5.1
- * 只有 1 个任务、$29，画成实心点就像「Fable 每个任务要 $29」，而它只是那一次碰巧很长。
+ * 实测点的样本门槛（用户 2026-10-24 拍板）：同一个型号 × 档的实测任务（各服务商、各别名合计）
+ * **少于 3 个**时，点按估算画（空心、标「估算」），悬停里另写「实测 n 个任务 $x」；满 3 个才用
+ * 实测中位数画实心点。理由：中位数在样本很少时就是那一两个任务本身，单个长任务会把点拉偏——
+ * 开发版里 Fable 5.1 只有 1 个任务、$29，画成实心点就像「Fable 每个任务要 $29」，而它只是
+ * 那一次碰巧很长。
  */
 const MIN_MEASURED_TASKS = 3;
 
-interface AddedModel {
-  provider: Provider;
+/**
+ * 一个型号：同一条榜单基名下的全部已添加（服务商，id）。**一个点 = 型号 × 档**（用户 2026-10-24：
+ * 「其实只要看得出模型的数据就好了，不关心它有多少个服务商」）——k3 挂在 Kimi Code、kimi-k3
+ * 挂在 Anthropic 兼容，合成一个 Kimi K3。不在任何榜上的 id 各自成组（只进「未上榜」）。
+ */
+interface ModelGroup {
+  /** 榜单基名；不在榜上的 id 为 undefined */
+  base: string | undefined;
+  /** 代表 id：服务商列表里最先添加的那个（显示名与头像按它取） */
   modelId: string;
+  /**
+   * 这个型号的官方单价：成员按服务商列表的顺序逐个用 officialRates 查（用户自填 > 本家目录 >
+   * 全目录），**取第一个查得到的**。几家查到的价不同时以先添加的那家为准——同一个型号的官方价
+   * 本该是一个数，不同多半是某家目录或用户自填有偏差，取哪个都要有个确定的规则。
+   */
   rates: ModelCostDecl | null;
 }
 
-const key = (providerId: string, modelId: string, level: ThinkingLevel | "any") =>
-  `${providerId}\u0000${modelId}\u0000${level}`;
+const groupKey = (modelId: string): string => {
+  const base = boardBaseOf(modelId);
+  return base === undefined ? `id:${modelId}` : `base:${base}`;
+};
+
+const costKey = (base: string, level: ThinkingLevel | "any") => `${base}\u0000${level}`;
 
 export async function buildPriceChart(
   sources: PriceChartSources,
@@ -151,17 +168,20 @@ export async function buildPriceChart(
     sources.catalog(),
     scanTasks(sources, cache),
   ]);
-  const added: AddedModel[] = providers.flatMap((provider) => {
+  const groups = new Map<string, ModelGroup>();
+  for (const provider of providers) {
     const prefer = catalogPreferenceOf(knownProviderOf(provider), provider.endpoint.api);
-    return provider.models.declared.map((decl) => ({
-      provider,
-      modelId: decl.id,
-      rates: officialRates(catalog, decl.id, prefer, decl.cost),
-    }));
-  });
-  const ratesByModel = new Map(added.map((m) => [`${m.provider.id}\u0000${m.modelId}`, m.rates]));
+    for (const decl of provider.models.declared) {
+      const k = groupKey(decl.id);
+      const group = groups.get(k) ?? { base: boardBaseOf(decl.id), modelId: decl.id, rates: null };
+      group.rates ??= officialRates(catalog, decl.id, prefer, decl.cost);
+      groups.set(k, group);
+    }
+  }
 
-  // 每个（服务商，型号，档）与（服务商，型号，任意档）的各段花费
+  // 每个（型号，档）与（型号，任意档）的各段花费——各服务商、各别名的任务合在一起。
+  // 零价记录（套餐 / 订阅）按这个型号的官方单价折算，与估算同一个价。
+  // 任务来自哪家服务商不论（包括现在已经删掉的那家）：花的是这个型号。
   const costs = new Map<string, number[]>();
   const push = (k: string, value: number) => {
     const list = costs.get(k) ?? [];
@@ -169,11 +189,12 @@ export async function buildPriceChart(
     costs.set(k, list);
   };
   for (const segment of scanned.segments) {
-    const rates = ratesByModel.get(`${segment.providerId}\u0000${segment.modelId}`) ?? null;
-    const cost = segmentCost(segment, rates);
+    const base = boardBaseOf(segment.modelId);
+    if (base === undefined) continue;
+    const cost = segmentCost(segment, groups.get(`base:${base}`)?.rates ?? null);
     if (cost === null || cost <= 0) continue;
-    push(key(segment.providerId, segment.modelId, segment.level), cost);
-    push(key(segment.providerId, segment.modelId, "any"), cost);
+    push(costKey(base, segment.level), cost);
+    push(costKey(base, "any"), cost);
   }
   const profile = tokenProfile(scanned.segments);
 
@@ -185,25 +206,25 @@ export async function buildPriceChart(
     const points: PriceChartPoint[] = [];
     const unranked: PriceChartModelRef[] = [];
     const unpriced: PriceChartModelRef[] = [];
-    for (const model of added) {
-      const ref = { providerId: model.provider.id, modelId: model.modelId };
-      const entries = boardEntriesFor(rows, model.modelId, board.publishDate);
-      if (entries.length === 0) {
+    for (const group of groups.values()) {
+      const ref = { modelId: group.modelId };
+      const entries = group.base === undefined ? [] : boardEntriesFor(rows, group.modelId, board.publishDate);
+      if (group.base === undefined || entries.length === 0) {
         unranked.push(ref);
         continue;
       }
       let anyPriced = false;
       for (const entry of entries) {
-        const measured = costs.get(key(model.provider.id, model.modelId, entry.thinking ?? "any")) ?? [];
+        const measured = costs.get(costKey(group.base, entry.thinking ?? "any")) ?? [];
         const mid = median(measured);
         let cost: number;
         let costBasis: PriceChartPoint["costBasis"];
         if (mid !== null && measured.length >= MIN_MEASURED_TASKS) {
           cost = mid;
           costBasis = "measured";
-        } else if (model.rates !== null) {
+        } else if (group.rates !== null) {
           // 没跑过，或跑过但不够门槛：按估算画；不够门槛的实测随点带上，悬停里另写一行
-          cost = estimateTaskCost(model.rates, profile);
+          cost = estimateTaskCost(group.rates, profile);
           costBasis = profile.reference ? "reference" : "estimated";
         } else {
           // 估算要官方单价：找不到就定不了横轴（哪怕有一两个实测任务），列进「缺官方单价」
