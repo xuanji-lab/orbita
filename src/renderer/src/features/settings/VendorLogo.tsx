@@ -44,6 +44,7 @@ const FAMILY_LOGOS: Record<ModelFamilyLogo, string> = {
   xiaomimimo,
   "doubao-seed": doubao,
   longcat,
+  grok,
 };
 
 const LOGOS: Record<string, string> = {

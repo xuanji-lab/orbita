@@ -8,10 +8,17 @@ import deepseekV41Flash from "../../../../../design-system/assets/model-avatars/
 import deepseekV4Pro from "../../../../../design-system/assets/model-avatars/deepseek-v4-pro.png";
 import glm53Flash from "../../../../../design-system/assets/model-avatars/glm-5.3-flash.png";
 import glm53 from "../../../../../design-system/assets/model-avatars/glm-5.3.png";
+import gptAstra from "../../../../../design-system/assets/model-avatars/gpt-astra.png";
+import gptLuna from "../../../../../design-system/assets/model-avatars/gpt-luna.png";
+import gptSol from "../../../../../design-system/assets/model-avatars/gpt-sol.png";
 import kimiK3 from "../../../../../design-system/assets/model-avatars/kimi-k3.png";
 import kimiK31 from "../../../../../design-system/assets/model-avatars/kimi-k3.1.png";
+import minimaxM31Flash from "../../../../../design-system/assets/model-avatars/minimax-m3.1-flash.png";
 import mimoFlash from "../../../../../design-system/assets/model-avatars/mimo-v2.6-flash.png";
 import mimoPro from "../../../../../design-system/assets/model-avatars/mimo-v2.6-pro.png";
+import qwen38Flash from "../../../../../design-system/assets/model-avatars/qwen3.8-flash.png";
+import qwen3827b from "../../../../../design-system/assets/model-avatars/qwen3.8-27b.png";
+import qwen38Max from "../../../../../design-system/assets/model-avatars/qwen3.8-max.png";
 import step5Preview from "../../../../../design-system/assets/model-avatars/step-5-preview.png";
 import { VendorLogo } from "./VendorLogo";
 
@@ -26,8 +33,20 @@ import { VendorLogo } from "./VendorLogo";
  * - 公众号封面（推文在微信列表里显示的封面图，不是正文里的图；原件与裁切脚本在本地登记页
  *   docs/model-avatars/tools/）：kimi-k3（磁感线）、glm-5.3（数字三角）、glm-5.3-flash（光锥）、
  *   deepseek-v4.1-flash（抹掉封面上的字，鲸鱼标放进金色光环）、deepseek-v4-pro（标题下的
- *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（封面蝴蝶，左下角按封面的细框 + 刻度尺画 Pro / Flash，
- *   不铺底色；字体 Manrope，OFL）。
+ *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（两只蝴蝶，不写字——2026-10-25 用户：「上一版的作为 pro，
+ *   当前版的作为 flash，然后把 pro 和 flash 的字体移除掉」：Pro 用 V2.6 横幅里的正面蝴蝶（橙色翼尖），抹掉压在左翼的
+ *   「v2.6」；Flash 用 V2.6 推文封面的侧面蓝翼蝴蝶。两枚靠颜色与姿态区分，16px 下也分得开，原来的 Pro / Flash
+ *   字样在 20px 以下读不出）。
+ * - gpt-astra / gpt-sol / gpt-luna：developers.openai.com 模型页三张旗舰横幅的无字底图（/images/api/models/
+ *   <id>-texture.webp）——把星系、太阳、月亮抠出来缩到方图约三分之一，放在同图取样的星空底上；
+ *   月亮在原图里被右缘切掉一截，按左半镜像补成整轮（2026-10-25 用户：「月亮和太阳的占比放小一点」）；
+ * - qwen3.8-max / qwen3.8-flash：千问 AI 平台模型市场（qianwenai.com/models）顶部轮播的两张封面
+ *   （绿草几何体、彩色羽流）裁方，正中贴白色千问标（与 DeepSeek 两枚贴鲸鱼同一做法；标宽约方图的 74%——46% 时用户嫌太小、比过 58 / 66 / 74% 后选了 74%，
+ *   下方一层柔和投影——Flash 的底是浅色，纯白标会糊进去）；
+ * - qwen3.8-27b：千问公众号「Qwen3.8-27B 开源」正文头图（2048×1152，推文封面是 2.35:1 裁过的、会切掉设备上下沿），
+ *   裁出完整的三台设备与地平线（避开右边的标题字）；
+ * - minimax-m3.1-flash：MiniMax 公众号「M3.1 Flash 开源」封面，背景是虚化的花，把压在上面的白字按周边
+ *   像素扩散抹掉再裁花心。
  * 位图按 96px 存：菜单 20px、设置页 18px，Retina 下也有富余。
  */
 const OWN_AVATARS: Record<ModelAvatarKey, string> = {
@@ -44,6 +63,13 @@ const OWN_AVATARS: Record<ModelAvatarKey, string> = {
   "claude-haiku": claudeHaiku,
   "mimo-v2.6-pro": mimoPro,
   "mimo-v2.6-flash": mimoFlash,
+  "gpt-astra": gptAstra,
+  "gpt-sol": gptSol,
+  "gpt-luna": gptLuna,
+  "qwen3.8-max": qwen38Max,
+  "qwen3.8-flash": qwen38Flash,
+  "qwen3.8-27b": qwen3827b,
+  "minimax-m3.1-flash": minimaxM31Flash,
 };
 
 /**

@@ -399,7 +399,14 @@ export type ModelAvatarKey =
   | "claude-sonnet"
   | "claude-haiku"
   | "mimo-v2.6-pro"
-  | "mimo-v2.6-flash";
+  | "mimo-v2.6-flash"
+  | "gpt-astra"
+  | "gpt-sol"
+  | "gpt-luna"
+  | "qwen3.8-max"
+  | "qwen3.8-flash"
+  | "qwen3.8-27b"
+  | "minimax-m3.1-flash";
 
 /** 第一级 · 型号专属头像，按精确 id。按 id 生效、不看服务商：OpenCode Go 上的 kimi-k3.1-pro 一样是它 */
 const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
@@ -421,14 +428,29 @@ const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
   "mimo-v2.6-pro": "mimo-v2.6-pro",
   "mimo-v2.6-pro-ultraspeed": "mimo-v2.6-pro",
   "mimo-v2.6-flash": "mimo-v2.6-flash",
+  // 千问 AI 平台模型市场（qianwenai.com/models）顶部轮播里两个型号各自的封面
+  "qwen3.8-max": "qwen3.8-max",
+  "qwen3.8-flash": "qwen3.8-flash",
+  // 公众号推文封面：千问「Qwen3.8-27B 开源」、MiniMax「M3.1 Flash 开源」（M3 用户不要专属头像，落家族标）
+  "qwen3.8-27b": "qwen3.8-27b",
+  "minimax-m3.1-flash": "minimax-m3.1-flash",
 };
 
-/** 第一级（续）· Claude 按产品线各一枚，认前缀：新出的 claude-opus-* 不用逐个登记 */
-const MODEL_AVATAR_PREFIXES: readonly (readonly [prefix: string, avatar: ModelAvatarKey])[] = [
-  ["claude-fable-", "claude-fable"],
-  ["claude-opus-", "claude-opus"],
-  ["claude-sonnet-", "claude-sonnet"],
-  ["claude-haiku-", "claude-haiku"],
+/**
+ * 第一级（续）· 按产品线各一枚：新出的版本不用逐个登记。
+ * - Claude 认前缀（claude-opus-*）。
+ * - GPT 的产品线写在版本号后面（gpt-6-luna、gpt-5.6-luna、gpt-6.1-sol），按「gpt-版本-产品线」整段认；
+ *   产品线后面只许跟连字符或结尾——gpt-6-solar 这类不会被认成 Sol。Terra 官方只有带字的小图标、
+ *   没有无字原图（2026-10-24），不做专属头像，落到 OpenAI 家族标。
+ */
+const MODEL_AVATAR_LINES: readonly (readonly [pattern: RegExp, avatar: ModelAvatarKey])[] = [
+  [/^claude-fable-/, "claude-fable"],
+  [/^claude-opus-/, "claude-opus"],
+  [/^claude-sonnet-/, "claude-sonnet"],
+  [/^claude-haiku-/, "claude-haiku"],
+  [/^gpt-\d+(?:\.\d+)?-astra(?:-|$)/, "gpt-astra"],
+  [/^gpt-\d+(?:\.\d+)?-sol(?:-|$)/, "gpt-sol"],
+  [/^gpt-\d+(?:\.\d+)?-luna(?:-|$)/, "gpt-luna"],
 ];
 
 /** 家族图标的厂商标键（renderer 的 VendorLogo 按它取 svg，类型保证一个都不缺） */
@@ -445,7 +467,8 @@ export type ModelFamilyLogo =
   // 不叫 doubao：那是火山方舟服务商条目的 id（VendorLogo 的 LOGOS 里 doubao → 火山引擎的标），
   // 同名会被服务商那一行盖掉，seed-* 型号就显示成火山方舟的山形标
   | "doubao-seed"
-  | "longcat";
+  | "longcat"
+  | "grok";
 
 /**
  * 第二级 · 家族图标，按 id 前缀（小写比）。聚合网关与自建网关里最有用的一级：一家网关里的
@@ -465,6 +488,8 @@ const MODEL_FAMILY_PREFIXES: readonly (readonly [pattern: RegExp, logo: ModelFam
   // 豆包的模型 id 前缀是 seed（火山方舟的 Seed 系列），龙猫用自家名
   [/^seed-/, "doubao-seed"],
   [/^longcat-/, "longcat"],
+  // Grok 用 xAI 的斜线标（与 xAI 服务商同一枚）
+  [/^grok-/, "grok"],
 ];
 
 export type ModelAvatarRef = { kind: "own"; key: ModelAvatarKey } | { kind: "family"; logo: ModelFamilyLogo };
@@ -488,7 +513,7 @@ export function modelAvatarOf(modelId: string): ModelAvatarRef | undefined {
     return { kind: "own", key: dated };
   }
   const id = modelId.toLowerCase();
-  const line = MODEL_AVATAR_PREFIXES.find(([prefix]) => id.startsWith(prefix));
+  const line = MODEL_AVATAR_LINES.find(([pattern]) => pattern.test(id));
   if (line !== undefined) return { kind: "own", key: line[1] };
   const family = MODEL_FAMILY_PREFIXES.find(([pattern]) => pattern.test(id));
   return family === undefined ? undefined : { kind: "family", logo: family[1] };

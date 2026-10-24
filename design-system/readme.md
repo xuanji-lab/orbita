@@ -490,6 +490,17 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
   `arrow-up` = send, `bell` = the unread notifications list (bottom of the action rail).
 - **No emoji, no Unicode glyphs as icons, no icon font, no PNG icons.** The renderer source ships no
   raster images at all.
+- **One raster exception: model avatars** (`assets/model-avatars/`). An avatar identifies a specific model
+  — it is brand artwork, not an icon, so the icon rules above do not apply to it. Rules:
+  - Rendered only through `ModelAvatar` (rounded square, sized by the caller: 32 in the model card,
+    20 in the composer chip, 24 in the settings list). Never as a UI glyph, never recoloured.
+  - Stored at 96×96 PNG (or SVG); check it at 96 / 32 / 20 / 16 px before adding — at 16 px it must still
+    tell siblings apart (no lettering that only reads at 96).
+  - Every file is listed in `assets/model-avatars/NOTICE` with its source, date and what was changed.
+    No entry, no file. Used only to identify the model it belongs to.
+  - A model without its own avatar falls back to its family mark, then to the provider mark — both
+    from `assets/vendor-logos/` (SVG). Vendor marks stay vector; a vendor that only publishes a raster
+    mark may ship one PNG rendered as a `currentColor` mask, noted in `vendor-logos/LICENSE`.
 
 ## Index
 

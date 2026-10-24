@@ -218,6 +218,24 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     // 阶跃官方 id 与 OpenCode Go 的免费档是同一个模型
     for (const id of ["step-5-preview", "step-5-preview-free"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "step-5-preview" }, id);
     assert.deepEqual(modelAvatarOf("mimo-v2.6-flash"), { kind: "own", key: "mimo-v2.6-flash" });
+    // 千问模型市场封面：Max / Flash 各一枚
+    assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "own", key: "qwen3.8-max" });
+    assert.deepEqual(modelAvatarOf("qwen3.8-flash"), { kind: "own", key: "qwen3.8-flash" });
+    assert.deepEqual(modelAvatarOf("qwen3.8-27b"), { kind: "own", key: "qwen3.8-27b" });
+    // MiniMax 只有 M3.1 Flash 一枚；M3 落家族标（用户 2026-10-25 不要它的专属头像）
+    assert.deepEqual(modelAvatarOf("minimax-m3.1-flash"), { kind: "own", key: "minimax-m3.1-flash" });
+    for (const id of ["minimax-m3", "MiniMax-M3"]) assert.deepEqual(modelAvatarOf(id), { kind: "family", logo: "minimax" }, id);
+  });
+
+  test("GPT 按产品线各一枚（版本号写在前面）：凡是 Astra / Sol / Luna 共用，Terra 与别的落家族标", () => {
+    assert.deepEqual(modelAvatarOf("gpt-6-astra"), { kind: "own", key: "gpt-astra" });
+    for (const id of ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "gpt-sol" }, id);
+    for (const id of ["gpt-6-luna", "gpt-5.6-luna", "GPT-6-Luna"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "gpt-luna" }, id);
+    // 产品线后面只许连字符或结尾：别把 solar / lunar 认成 Sol / Luna
+    assert.deepEqual(modelAvatarOf("gpt-6-solar"), { kind: "family", logo: "openai" });
+    assert.deepEqual(modelAvatarOf("gpt-6-lunar-mini"), { kind: "family", logo: "openai" });
+    assert.deepEqual(modelAvatarOf("gpt-5.6-terra"), { kind: "family", logo: "openai" });
+    assert.deepEqual(modelAvatarOf("gpt-5.5"), { kind: "family", logo: "openai" });
   });
 
   test("Claude 按产品线各一枚，认前缀——新出的型号不用逐个登记", () => {
@@ -234,10 +252,11 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("k2.9"), { kind: "family", logo: "kimi" });
     assert.deepEqual(modelAvatarOf("kimi-for-coding"), { kind: "family", logo: "kimi" });
     assert.deepEqual(modelAvatarOf("deepseek-v4-flash"), { kind: "family", logo: "deepseek" });
-    assert.deepEqual(modelAvatarOf("qwen3.8-max"), { kind: "family", logo: "qwen" });
-    assert.deepEqual(modelAvatarOf("MiniMax-M3"), { kind: "family", logo: "minimax" });
+    assert.deepEqual(modelAvatarOf("qwen3.7-max"), { kind: "family", logo: "qwen" });
+    assert.deepEqual(modelAvatarOf("MiniMax-M2.7"), { kind: "family", logo: "minimax" });
     assert.deepEqual(modelAvatarOf("step-3.7-flash"), { kind: "family", logo: "stepfun" });
-    assert.deepEqual(modelAvatarOf("gpt-6-astra"), { kind: "family", logo: "openai" });
+    assert.deepEqual(modelAvatarOf("o3-mini"), { kind: "family", logo: "openai" });
+    for (const id of ["grok-4.7", "grok-4.6"]) assert.deepEqual(modelAvatarOf(id), { kind: "family", logo: "grok" }, id);
     assert.deepEqual(modelAvatarOf("mimo-v2.5"), { kind: "family", logo: "xiaomimimo" });
   });
 
