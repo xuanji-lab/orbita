@@ -176,6 +176,13 @@ describe("toBuiltinModel —— 目录条目瘦身给设置面", () => {
     });
     assert.equal("tiers" in model.cost, false);
   });
+
+  test("目录名过线给菜单当显示名；名字就是 id 本身时不带（那不是名字）", () => {
+    const named = { ...catalogModel("k3", 1_048_576, 3), name: "Kimi K3" } as unknown as PiModel;
+    assert.equal(toBuiltinModel(named).name, "Kimi K3");
+    const bare = { ...catalogModel("kimi-for-coding", 1_048_576, 1), name: "kimi-for-coding" } as unknown as PiModel;
+    assert.equal("name" in toBuiltinModel(bare), false);
+  });
 });
 
 describe("toFallbackModels —— 借参抄档位表（thinkingLevelMap 是模型能力，跟 id 走）", () => {

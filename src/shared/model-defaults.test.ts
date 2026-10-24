@@ -8,6 +8,7 @@ import {
   knownParamsFor,
   lookupCatalogModel,
   lookupCatalogSource,
+  modelDisplayName,
   modelThinkingLevels,
   resolveModelDefaults,
 } from "./model-defaults.ts";
@@ -264,3 +265,50 @@ describe("lookupCatalogSource —— 连同所在的那一家返回（会话借�
     assert.equal(lookupCatalogSource(CATALOG, "k3", { catalogId: "kimi-coding" })?.provider.id, "kimi-coding");
   });
 });
+
+describe("modelDisplayName —— 声明里的名字 > 白名单 > 目录名 > id", () => {
+  const named = (id: string, name: string) => ({ ...entry(id, 1_000_000, 128_000, true), name });
+  const catalog: BuiltinProvider[] = [
+    { id: "anthropic", name: "Anthropic", baseUrl: "", api: "anthropic-messages", models: [named("claude-opus-5", "Claude Opus 5")] },
+    {
+      id: "kimi-coding",
+      name: "Kimi Coding",
+      baseUrl: "",
+      api: "anthropic-messages",
+      models: [named("k3", "Kimi K3"), named("kimi-for-coding", "Kimi K2.7 Code")],
+    },
+    { id: "github-copilot", name: "Copilot", baseUrl: "", api: "openai-completions", models: [named("k3", "Copilot K3")] },
+  ];
+
+  test("目录有名字就用目录的；偏好的那家先查", () => {
+    assert.equal(modelDisplayName(catalog, "k3", { catalogId: "kimi-coding" }), "Kimi K3");
+    assert.equal(modelDisplayName(catalog, "k3", { catalogId: "github-copilot" }), "Copilot K3");
+  });
+
+  test("白名单在目录前面：kimi-for-coding 目录还叫 K2.7 Code，Kimi Code 里早已是 K2.8 Preview", () => {
+    assert.equal(modelDisplayName(catalog, "kimi-for-coding", { catalogId: "kimi-coding" }), "Kimi K2.8 Preview");
+  });
+
+  test("声明里的名字（用户起的 / 厂商 /models 给的）最权威；空白不算名字", () => {
+    assert.equal(modelDisplayName(catalog, "kimi-for-coding", {}, "我的 Kimi"), "我的 Kimi");
+    assert.equal(modelDisplayName(catalog, "k3", { catalogId: "kimi-coding" }, "  "), "Kimi K3");
+  });
+
+  test("目录名只认精确 id：不借 Claude 家族的名字（否则 opus-5-5 会叫成「Claude Opus 5」）", () => {
+    assert.equal(modelDisplayName(catalog, "claude-opus-5-9", { catalogId: "anthropic" }), "claude-opus-5-9");
+  });
+
+  test("目录里的名字就是 id 本身时不算名字，落到 id；谁都不认识的 id 原样返回", () => {
+    const bare: BuiltinProvider[] = [
+      { id: "x", name: "X", baseUrl: "", api: "openai-completions", models: [named("my-model", "my-model")] },
+    ];
+    assert.equal(modelDisplayName(bare, "my-model"), "my-model");
+    assert.equal(modelDisplayName([], "some-gateway-model"), "some-gateway-model");
+  });
+
+  test("K3.1 目录还没收录：四个 id 都有显示名", () => {
+    assert.equal(modelDisplayName([], "k3.1-pro"), "Kimi K3.1 Pro");
+    assert.equal(modelDisplayName([], "kimi-k3.1-pro-highspeed"), "Kimi K3.1 Pro Highspeed");
+  });
+});
+

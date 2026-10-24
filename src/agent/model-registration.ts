@@ -331,6 +331,8 @@ export function toBuiltinProvider(provider: PiProvider): BuiltinProvider {
 export function toBuiltinModel(model: PiModel): BuiltinModel {
   return {
     id: model.id,
+    // 目录名就是 id 本身时不带（pi.dev 的 kimi-for-coding 就是）：那不是名字
+    ...(model.name !== "" && model.name !== model.id ? { name: model.name } : {}),
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     // 图片能力跟着参数一起过 IPC：设置页要拿它下图片徽标与「Inherit」的实际含义
