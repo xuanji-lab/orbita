@@ -409,11 +409,30 @@ export function Menu(props: {
    *
    * 打开时也跑一次：清单长时卡片直接停在**当前模型**那一行，而不是从头开始。
    */
+  const revealCursor = () =>
+    listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
   useLayoutEffect(() => {
     if (!open) return;
-    listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+    revealCursor();
     // visible.length 也在依赖里：过滤/搜索后光标落在另一行上，得重新把它带进视野
   }, [open, active, visible.length]);
+
+  /**
+   * 面板高度**落定之后**再带一次。
+   *
+   * 上面那一道在刚打开时污不上力：首帧 `position` 还是 null，面板没有 height / maxHeight
+   * （在量自然高度），清单没被限高，自然无处可滚；等 positionMenu 的 setPosition 把高度写上，
+   * [open, active, visible.length] 一个没变，它不再跑——长清单里打勾行留在视野外
+   * （2026-10-25 实测：OpenCode 36 个型号、当前型号在 y≈1733，打开后 scrollTop 仍是 0）。
+   * 所以按**已写上的高度**触发：每次打开必经 null → cap（close 把 position 清回 null），
+   * 之后只有高度再变（窗口变矮、尺寸落定）才再跑。键盘上下不动高度，不经这里。
+   */
+  const appliedCap = position === null ? null : position.cap;
+  useLayoutEffect(() => {
+    if (!open || appliedCap === null) return;
+    revealCursor();
+    // revealCursor 只读 ref，不进依赖
+  }, [open, appliedCap]);
 
   const choose = (item: MenuItem) => {
     if (item.keepOpen !== true) close();
