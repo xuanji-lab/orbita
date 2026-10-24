@@ -11,7 +11,7 @@ import {
 import type { ProviderCardSize } from "@shared/settings";
 import { modelDisplayName, resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
 import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
-import type { BuiltinProvider } from "@shared/agent-ipc";
+import type { BuiltinProvider, OauthDeviceCode } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
@@ -41,6 +41,7 @@ import { ModelAvatar } from "./ModelAvatar";
 import { PriceCapabilityChart } from "./PriceCapabilityChart";
 import { shouldShowPriceChart } from "./price-chart-model.ts";
 import { VendorLogo } from "./VendorLogo";
+import { ipcErrorText } from "../../utils/ipc-error.ts";
 
 /**
  * Provider 设置面 —— 两层：**卡片墙**（每个目录条目一张卡，加过的挂「已添加」角标，顶部搜索 /
@@ -81,8 +82,12 @@ export function ProvidersView(props: {
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   /** 正在跑的 guard 动作是不是 Test——按钮的转圈 / disabled 只认这个，不比对 status 文案 */
   const [testing, setTesting] = useState(false);
-  /** Claude OAuth 登录进行中：等浏览器回调，可能长达几分钟 */
+  /** 浏览器登录进行中：等浏览器回调 / 设备码授权，可能长达十几分钟 */
   const [loggingIn, setLoggingIn] = useState(false);
+  /** 设备码登录（Copilot / xAI）要用户在网页里输入的码；只在登录进行中显示 */
+  const [deviceCode, setDeviceCode] = useState<OauthDeviceCode | null>(null);
+  /** 这次登录是用户自己点了取消：结束时不报红（那不是错误） */
+  const oauthCancelled = useRef(false);
   const [revealed, setRevealed] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
@@ -146,6 +151,9 @@ export function ProvidersView(props: {
     void api.provider.builtins().then(setCatalog).catch(() => setCatalog([]));
   }, []);
 
+  // 设备码由主进程推过来（登录流程跑在主进程，码到了才知道）
+  useEffect(() => api.provider.onOauthDeviceCode(setDeviceCode), []);
+
   // 弹窗开着时 Escape 关闭（与点遮罩 / Cancel 同语义）
   useEffect(() => {
     if (editor === null) return;
@@ -172,8 +180,11 @@ export function ProvidersView(props: {
   const editingId = view.kind === "detail" ? selectedId : null;
   const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
-  /** 这张目录卡走 OAuth 登录（目前只有 Claude 订阅）：表单不画密钥框，画登录钮 */
+  /** 这张目录卡走浏览器登录（Claude / ChatGPT / GitHub Copilot / xAI）：表单不画密钥框，画登录钮 */
   const oauthEntry = known?.auth === "oauth";
+  /** 登录文案里的厂商名（「登录 ChatGPT」）与会打开的授权站点（悬停说明） */
+  const vendorName = known === undefined ? "" : t.providers.knownLabel(known.id, known.label);
+  const oauthHost = known === undefined ? "" : (OAUTH_HOSTS[known.id] ?? "");
   const oauthLoggedIn = editing?.auth.scheme === "oauth" && editing.auth.loggedIn;
   const showForm = (view.kind === "detail" && editing !== undefined) || (isNew && known !== undefined);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
@@ -409,16 +420,21 @@ export function ProvidersView(props: {
   };
 
   /**
-   * Claude OAuth 登录：登录即保存。主进程起回调服务器 + 开系统浏览器，授权完成
-   * 回来时 provider 连凭据已落盘——这里只负责切视图与展示结果。令牌全程不进 renderer。
+   * 浏览器登录（Claude / ChatGPT / GitHub Copilot / xAI）：登录即保存。主进程跑完整流程
+   * （回调服务器或设备码 + 系统浏览器），授权完成回来时 provider 连凭据已落盘——这里只负责
+   * 切视图与展示结果。令牌全程不进 renderer。
    */
-  const loginClaude = async (): Promise<void> => {
+  const loginOauth = async (): Promise<void> => {
     if (loggingIn || known === undefined) return;
     setLoggingIn(true);
-    setStatus({ tone: "busy", text: t.providers.oauthWaiting });
+    setDeviceCode(null);
+    oauthCancelled.current = false;
+    // 账号行自己在转圈写「等待浏览器里完成授权…」，状态行不再重复一遍
+    setStatus(null);
     try {
       const result = await api.provider.oauthLogin({
         id: draft.id.trim(),
+        kind: known.id,
         displayName: draft.displayName.trim() || knownProviderDefaultName(known),
         ...(isNew ? { create: true, models: draft.models } : {}),
       });
@@ -439,10 +455,17 @@ export function ProvidersView(props: {
       const account = updated?.auth.scheme === "oauth" ? updated.auth.account : null;
       setStatus({ tone: "ok", text: t.providers.oauthLoggedIn(account) });
     } catch (cause) {
-      setStatus({ tone: "bad", text: cause instanceof Error ? cause.message : String(cause) });
+      setStatus(oauthCancelled.current ? null : { tone: "bad", text: ipcErrorText(cause) });
     } finally {
       setLoggingIn(false);
+      setDeviceCode(null);
     }
+  };
+
+  /** 叫停进行中的登录：主进程关掉回调服务器 / 停止轮询，oauthLogin 以「登录已取消」返回 */
+  const cancelOauth = (): void => {
+    oauthCancelled.current = true;
+    void api.provider.oauthCancel(draft.id.trim());
   };
 
   /** 行内单模型测试：状态收在行内（图标转圈 / 结果徽标），不动布局。
@@ -903,6 +926,7 @@ export function ProvidersView(props: {
                     </span>
                   </div>
                   {oauthEntry ? (
+                    <>
                     <div className="pv-fld">
                       <label>{t.providers.oauthAccount}</label>
                       <div className="pv-krow">
@@ -915,31 +939,57 @@ export function ProvidersView(props: {
                           ) : oauthLoggedIn && editing?.auth.scheme === "oauth" ? (
                             <>
                               <Icon name="circle-check" size={14} strokeWidth={1.8} />
-                              <span title={t.providers.oauthNote}>
+                              <span title={t.providers.oauthNote(oauthHost)}>
                                 {t.providers.oauthLoggedIn(editing.auth.account)}
                               </span>
                             </>
                           ) : (
-                            <span className="pv-oauth-out" title={t.providers.oauthNote}>
-                              {t.providers.oauthLoggedOut}
+                            <span className="pv-oauth-out" title={t.providers.oauthNote(oauthHost)}>
+                              {t.providers.oauthLoggedOut(vendorName)}
                             </span>
                           )}
                         </span>
-                        <button
-                          type="button"
-                          className={oauthLoggedIn ? "pv-btn line" : "pv-btn accent"}
-                          disabled={loggingIn}
-                          onClick={() => void loginClaude()}
-                        >
-                          <Icon name="external-link" size={13} strokeWidth={1.8} />
-                          {oauthLoggedIn ? t.providers.oauthRelogin : t.providers.oauthLoginButton}
-                        </button>
+                        {/* 等待中这颗钮换成「取消登录」：设备码要等十几分钟，得能叫停 */}
+                        {loggingIn ? (
+                          <button type="button" className="pv-btn line" onClick={cancelOauth}>
+                            <Icon name="x" size={13} strokeWidth={1.8} />
+                            {t.providers.oauthCancel}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={oauthLoggedIn ? "pv-btn line" : "pv-btn accent"}
+                            onClick={() => void loginOauth()}
+                          >
+                            <Icon name="external-link" size={13} strokeWidth={1.8} />
+                            {oauthLoggedIn ? t.providers.oauthRelogin : t.providers.oauthLoginButton(vendorName)}
+                          </button>
+                        )}
                         <button type="button" className="pv-btn line" disabled={testing} onClick={() => void test()}>
                           <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
                           {testing ? t.providers.testing : t.providers.test}
                         </button>
                       </div>
                     </div>
+                    {loggingIn && deviceCode !== null && deviceCode.id === draft.id.trim() && (
+                      <div className="pv-fld">
+                        <span />
+                        <span className="pv-oauth-code">
+                          <span>{t.providers.oauthDeviceCode}</span>
+                          <span className="pv-oauth-code-value pv-mono">{deviceCode.userCode}</span>
+                          <button
+                            type="button"
+                            className="pv-btn icon"
+                            aria-label={t.providers.oauthCopyCode}
+                            title={t.providers.oauthCopyCode}
+                            onClick={() => void navigator.clipboard.writeText(deviceCode.userCode).catch(() => undefined)}
+                          >
+                            <Icon name="copy" size={14} strokeWidth={1.8} />
+                          </button>
+                        </span>
+                      </div>
+                    )}
+                    </>
                   ) : (
                     <div className="pv-fld">
                       <label htmlFor="pv-key">{t.providers.apiKey}</label>
@@ -1230,6 +1280,14 @@ export function ProvidersView(props: {
 }
 
 /** catalog 里没有这家时的 kind 兜底由 providers-view-model 的 kindOf 提供——设置页与聊天底栏共用 */
+
+/** 浏览器登录会打开的授权站点（悬停说明里写给用户看：点了之后浏览器会去哪） */
+const OAUTH_HOSTS: Record<string, string> = {
+  claude: "claude.ai",
+  "openai-codex": "auth.openai.com",
+  "github-copilot": "github.com",
+  xai: "accounts.x.ai",
+};
 
 /** 「未实测」说明里「提 PR」指向的仓库首页 */
 const REPO_URL = "https://github.com/xuanji-lab/orbita";

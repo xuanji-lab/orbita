@@ -69,9 +69,10 @@ export interface KnownProvider {
   /** 一句话说明这条什么时候该选 */
   note: string;
   /**
-   * 这一条不用 API key，而是浏览器 OAuth 登录（目前只有 Anthropic 一家：
-   * Claude Pro / Max 订阅，凭据自动续期，见 main/provider/oauth.ts）。
-   * 设置面对这种条目不画密钥框，只给登录按钮；upsert 时 scheme 落 oauth。
+   * 这一条不用 API key，而是浏览器登录订阅：Claude（我们手写的流程，main/provider/oauth.ts）
+   * 与 ChatGPT（Codex）/ GitHub Copilot / xAI（复用 pi 自带的流程，main/provider/oauth-flows.ts）。
+   * 凭据落我们自己的密钥库，自动续期。设置面对这种条目不画密钥框，只给登录按钮；
+   * upsert 时 scheme 落 oauth。
    */
   auth?: "oauth";
   /**
@@ -314,6 +315,49 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     auth: "oauth",
     // claude 各型号的档位 / 默认档在型号白名单里（known-models.ts，按 id 生效），这里不用声明
     note: "Claude Pro / Max 订阅，令牌自动续期",
+  },
+  /*
+   * 以下三家的登录流程、续期与请求鉴权都复用 pi 自带的实现（pi-ai 的 OAuth 流程），凭据落
+   * 我们自己的密钥库。我们没有这三家的账号，全部 `untested`。
+   *
+   * id 与 pi 内建 id 一致**不是巧合，是必须**：pi 的客户端按 `model.provider` 认 Copilot
+   * （动态请求头、Claude 型号走 Bearer），会话又用我们的 id 注册——第一个实例的 id 就是条目 id。
+   */
+  {
+    id: "openai-codex",
+    label: "ChatGPT",
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    catalogId: "openai-codex",
+    billing: "plan",
+    auth: "oauth",
+    untested: true,
+    note: "ChatGPT Plus / Pro 订阅，用 Codex 额度",
+  },
+  {
+    id: "github-copilot",
+    label: "GitHub Copilot",
+    // 多协议网关：目录里的 Claude 型号走 Messages、GPT 新型号走 Responses，注册时按型号各走各的；
+    // 目录外手加的型号落这里写的协议（/chat/completions 在 Copilot 上对所有型号都开着）
+    api: "openai-completions",
+    // 个人版的地址；企业 / 商业账号的真实地址写在令牌里（proxy-ep），会话装配时按令牌改写
+    baseUrl: "https://api.individual.githubcopilot.com",
+    catalogId: "github-copilot",
+    billing: "plan",
+    auth: "oauth",
+    untested: true,
+    note: "Copilot 订阅，用 Copilot 额度调用多家模型",
+  },
+  {
+    id: "xai",
+    label: "xAI",
+    api: "openai-responses",
+    baseUrl: "https://api.x.ai/v1",
+    catalogId: "xai",
+    billing: "plan",
+    auth: "oauth",
+    untested: true,
+    note: "SuperGrok / X Premium 订阅",
   },
   {
     id: "anthropic-compatible",

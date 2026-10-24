@@ -225,6 +225,26 @@
   color: var(--color-text-tertiary);
 }
 
+/* 设备码行（Copilot / xAI）：一句话 + 码本身（等宽、加重，用户要照着手输）+ 复制 */
+.pv-oauth-code {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.pv-oauth-code-value {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+}
+
 /* 风险披露行：与状态行同款两栏位（左空标签），弱视觉但不藏 */
 .pv-oauth-hint {
   color: var(--color-text-tertiary);

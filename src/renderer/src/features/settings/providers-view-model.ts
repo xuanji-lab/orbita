@@ -211,7 +211,9 @@ export function compactTokens(n: number): string {
  */
 export function urlSuffix(api: ProviderApi): string {
   if (api === "anthropic-messages") return "/v1/messages";
-  if (api === "openai-responses" || api === "openai-codex-responses") return "/responses";
+  if (api === "openai-responses") return "/responses";
+  // pi 的 Codex 客户端在 baseUrl 后接 /codex/responses（openai-codex-responses.ts 的 resolveCodexUrl）
+  if (api === "openai-codex-responses") return "/codex/responses";
   if (api === "google-generative-ai") return "/models";
   return "/chat/completions";
 }

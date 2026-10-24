@@ -290,6 +290,7 @@ describe("urlSuffix", () => {
   test("Responses 协议接 /responses，Gemini 原生接 /models（型号随会话变，不写进来）", () => {
     assert.equal(urlSuffix("openai-responses"), "/responses");
     assert.equal(urlSuffix("google-generative-ai"), "/models");
+    assert.equal(urlSuffix("openai-codex-responses"), "/codex/responses");
   });
 });
 
