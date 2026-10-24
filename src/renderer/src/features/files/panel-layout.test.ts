@@ -200,6 +200,38 @@ describe("decideFocusDrop", () => {
     );
   });
 
+  it("C8 Home 双根：同一路径两颗 workspace 根（Home + 专注额外根）→ 不收、不藏", () => {
+    // Home 会话的 workspaceId 是 null，把 home 目录加成工作区后专注它：roots.ts 照样 push
+    // 额外根，白名单里同一路径有两颗 workspace 根；掉的是额外那颗，Home 那颗还在。
+    deepStrictEqual(
+      decideFocusDrop({
+        previousWorkspaceId: "focus",
+        nextWorkspaceId: null,
+        previousDone: false,
+        nextDone: false,
+        sessionWorkspaceId: null,
+        workspaces: [workspaceIdPath("focus", "/home")],
+        roots: [rootFact("workspace", "/home"), rootFact("workspace", "/home")],
+      }),
+      { rootPath: null },
+    );
+  });
+
+  it("C8 Home 单根：同路径只有一颗 workspace 根（它就是额外根）→ 仍然收", () => {
+    deepStrictEqual(
+      decideFocusDrop({
+        previousWorkspaceId: "focus",
+        nextWorkspaceId: null,
+        previousDone: false,
+        nextDone: false,
+        sessionWorkspaceId: null,
+        workspaces: [workspaceIdPath("focus", "/e2e/vault")],
+        roots: [rootFact("workspace", "/e2e/Home"), rootFact("workspace", "/e2e/vault")],
+      }),
+      { rootPath: "/e2e/vault" },
+    );
+  });
+
   it("C8 会话自己的工作区：失去的根就是会话的根 → 不收", () => {
     deepStrictEqual(
       leavingFocus({

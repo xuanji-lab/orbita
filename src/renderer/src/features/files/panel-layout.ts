@@ -161,7 +161,8 @@ const NO_DROP: FocusDropDecision = { rootPath: null };
  *
  * **收的口径**：只收「这一轮结束后真正失去白名单」的根。失去的根若仍被另一条幸存根
  * 占着（会话自己的根 / 会话的工作区 / 附加目录 / 附件副本），标签照旧读得动，不收——
- * 专注的工作区恰好也是会话附加目录就是这种（C8）。
+ * 专注的工作区恰好也是会话附加目录就是这种（C8）。Home 会话专注 home 目录时，同一路径
+ * 会出现两颗 workspace 根（Home + 专注额外根），掉的是额外那颗、Home 那颗还在，也不收。
  *
  * 判的是**路径相等**，不是包含：主进程的白名单是 `roots.some((root) => root.path ===
  * req.root)`（main/files/list.ts），失去的根即便落在某个幸存根**里面**，请求带的
@@ -177,7 +178,8 @@ export function decideFocusDrop(input: {
   nextWorkspaceId: string | null;
   previousDone: boolean;
   nextDone: boolean;
-  /** 会话自己落脚的根（工作区 id）：它恰好是失去的那个时，那颗根不随专注消失 */
+  /** 会话自己落脚的根（工作区 id）：它恰好是失去的那个时，那颗根不随专注消失。
+   *  Home 会话为 null——同路径两颗 workspace 根由下面「两颗根」那条自行认出 */
   sessionWorkspaceId: string | null;
   /** 工作区表：失去的根的路径按 id 从这里解（对不上 = 刚被删，按无事发生处理） */
   workspaces: readonly { id: string; path: string }[];
@@ -193,14 +195,16 @@ export function decideFocusDrop(input: {
   if (lost === null) return NO_DROP;
   const lostRootPath = input.workspaces.find((workspace) => workspace.id === lost)?.path ?? null;
   if (lostRootPath === null) return NO_DROP;
-  const survives = input.roots.some(
-    (root) =>
-      root.path === lostRootPath &&
-      // 同路径的 workspace 根有两个来路：会话自己的（继续留在白名单）与专注带进来的
-      // 额外根（随这一轮消失）。后者的 id 与会话的工作区不同，摘掉；前者不能摘。
-      (root.kind !== "workspace" || lost === input.sessionWorkspaceId),
-  );
-  return survives ? NO_DROP : { rootPath: lostRootPath };
+  // 同路径的其它种类根（会话自己的根 / 附加目录 / 附件副本）不随专注消失，标签仍读得动
+  const atPath = input.roots.filter((root) => root.path === lostRootPath);
+  if (atPath.some((root) => root.kind !== "workspace")) return NO_DROP;
+  // 同路径的 workspace 根有两颗 = 会话自己的那颗 + 专注带进来的额外根（roots.ts 只要
+  // extraWorkspaceId !== workspaceId 就 push 额外根）。Home 会话最典型：workspaceId 是
+  // null，把用户 home 目录加成工作区后专注它，白名单里就有两颗同路径的 workspace 根；
+  // 结束专注掉的是额外那颗，会话自己的 Home 根还在——标签照旧可读。
+  if (atPath.filter((root) => root.kind === "workspace").length >= 2) return NO_DROP;
+  // 只剩一颗：它就是额外根，失去后不可读——除非会话自己的工作区正是它（同一颗，不消失）
+  return lost === input.sessionWorkspaceId ? NO_DROP : { rootPath: lostRootPath };
 }
 
 /**
