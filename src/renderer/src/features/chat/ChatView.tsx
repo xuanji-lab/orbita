@@ -129,7 +129,7 @@ import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
-import { modelThinkingLevels } from "./thinking-choice.ts";
+import { modelThinkingLevels, resolveThinkingChip } from "./thinking-choice.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
@@ -2205,6 +2205,9 @@ function ComposerBar(props: {
   const thinkingSupported =
     session.model === null ? null : modelThinkingLevels(session.model.modelId, catalog, session.thinkingSupported);
   const thinkingMenuLevels = thinkingSupported ?? THINKING_LEVELS;
+  // 芯片那一格：文字与 title 必须出自同一份支持集（否则会出现「中」配「这个模型
+  // 不支持思考」的自相矛盾，见 resolveThinkingChip）。文字报的是**真正会生效**的档
+  const thinkingChip = resolveThinkingChip({ level: session.thinkingLevel, supported: thinkingSupported });
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
   // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集
   // 真只有 off）才有的形状。不支持的档单独禁用并说明，可用的照常可选
@@ -2365,15 +2368,11 @@ function ComposerBar(props: {
           <Chip
             active={open}
             fixedWidth={84}
-            title={
-              thinkingSupported !== null && thinkingSupported.every((level) => level === "off")
-                ? t.chat.thinkingOffTip
-                : t.chat.thinkingTip
-            }
+            title={thinkingChip.offOnly ? t.chat.thinkingOffTip : t.chat.thinkingTip}
             onClick={toggle}
             chevron
           >
-            {t.thinkingLevel(session.thinkingLevel, session.model?.modelId)}
+            {t.thinkingLevel(thinkingChip.level, session.model?.modelId)}
           </Chip>
         )}
       />

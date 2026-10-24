@@ -1,8 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { BuiltinProvider } from "../../../../shared/agent-ipc.ts";
-import type { ThinkingLevel } from "../../../../shared/thinking.ts";
-import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../../../shared/thinking.ts";
+import { modelThinkingLevels, resolveThinkingChip, resolveThinkingLevel } from "./thinking-choice.ts";
 
 /** 目录条目替身：只填这两个函数用得到的字段 */
 function entry(id: string, supportedThinkingLevels?: ThinkingLevel[]) {
@@ -101,5 +101,55 @@ describe("resolveThinkingLevel —— 手选（若仍受支持）> 这个型号�
       resolveThinkingLevel({ modelId: "no-such-model", supported: ["low", "high", "max"], picked: null }),
       "high",
     );
+  });
+});
+
+describe("resolveThinkingChip —— 芯片文字与 title 出自同一份支持集", () => {
+  test("自定义 id 落成只支持 off（pi 按非推理注册）：文字退成「关」，title 才说「不支持思考」", () => {
+    // 复现实测：deepseek-v4.1-flash-1017 的支持集是 ["off"]，而意图档还停在 medium——
+    // 修前文字显示「中」、title 说「这个模型不支持思考」，同一枚芯片两句话互斥
+    assert.deepEqual(resolveThinkingChip({ level: "medium", supported: ["off"] }), {
+      level: "off",
+      offOnly: true,
+    });
+  });
+
+  test("支持集不含意图档：显示 pi 会夹到的那一档（先往深）", () => {
+    assert.deepEqual(resolveThinkingChip({ level: "medium", supported: ["low", "high", "max"] }), {
+      level: "high",
+      offOnly: false,
+    });
+  });
+
+  test("支持集含意图档：原样显示，title 也不下「不支持」的结论", () => {
+    assert.deepEqual(resolveThinkingChip({ level: "max", supported: ["low", "high", "max"] }), {
+      level: "max",
+      offOnly: false,
+    });
+  });
+
+  test("支持集未知（null）：不替 pi 做主，文字保持意图档、title 也不说不支持", () => {
+    assert.deepEqual(resolveThinkingChip({ level: "xhigh", supported: null }), {
+      level: "xhigh",
+      offOnly: false,
+    });
+  });
+
+  test("任意档 × 任意支持集：说了「不支持思考」时文字必然是「关」", () => {
+    const sets: (readonly ThinkingLevel[] | null)[] = [
+      null,
+      [],
+      ["off"],
+      ["low", "high", "max"],
+      ["off", "low", "medium", "high"],
+      THINKING_LEVELS,
+    ];
+    for (const level of THINKING_LEVELS) {
+      for (const supported of sets) {
+        const chip = resolveThinkingChip({ level, supported });
+        if (chip.offOnly) assert.equal(chip.level, "off");
+        if (supported !== null && supported.length > 0) assert.ok(supported.includes(chip.level));
+      }
+    }
   });
 });
