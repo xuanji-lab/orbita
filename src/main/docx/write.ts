@@ -8,6 +8,8 @@
  * 2. **原子写**：临时文件 + rename（`atomic-write.ts`）。半截 docx 比没有 docx 难查得多。
  * 3. **同路径串行**：自动保存与 Ctrl+S 可能同时在途，两条 rename 交叉会让后写的输掉。
  *    按 realpath 排一条队列，后来的等前一个写完再判 hash。
+ * 4. **写盘前改作者**（issue #275）：engine 的序列化器会把上游工具名写进 core/app.xml，
+ *    这里在落盘前换成用户本人（`metadata.ts`）；原文档的 creator 是别人时保持原值。
  *
  * 备份：每次覆盖前把**磁盘上的上一版**原样复制进应用数据目录（`docx-backups/`），
  * 每个文件一个子目录、保留最近 keepBackups 份。它不进工作区——工作区是用户的，
@@ -18,6 +20,7 @@ import { basename, join } from "node:path";
 import { DOCX_MAX_BYTES, type DocxSaveResult } from "../../shared/docx.ts";
 import { writeBytesAtomic } from "../atomic-write.ts";
 import { sha256Hex } from "./read.ts";
+import { stampDocxAuthor, systemUserName } from "./metadata.ts";
 
 export interface DocxSaveOptions {
   path: string;
@@ -27,6 +30,8 @@ export interface DocxSaveOptions {
   backupDir?: string;
   /** 每个文件保留几份上一版；默认 5 */
   keepBackups?: number;
+  /** 写进文档的作者名；缺席 = 系统账户名（见 systemUserName） */
+  authorName?: string;
   /** 测试注入 */
   now?: () => number;
 }
@@ -105,13 +110,21 @@ export async function saveDocxFile(options: DocxSaveOptions): Promise<DocxSaveRe
       backupPath = await writeBackup(path, current, options.backupDir, keep, now);
     }
 
-    await writeBytesAtomic(path, data);
+    // 作者身份在写盘前套用：engine 的序列化器会把上游工具名写进 core/app.xml，
+    // 而磁盘上的上一版是「原作者是谁」的权威（见 metadata.ts）
+    const stamped = stampDocxAuthor(data, {
+      name: options.authorName ?? systemUserName(),
+      now: now(),
+      previous: current,
+    });
+
+    await writeBytesAtomic(path, stamped);
     const written = await stat(path);
     return {
       kind: "saved",
       size: written.size,
       modifiedAt: written.mtimeMs,
-      hash: sha256Hex(data),
+      hash: sha256Hex(stamped),
       backupPath,
     };
   });
