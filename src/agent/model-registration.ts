@@ -188,6 +188,7 @@ function withKnownParams(known: PiModel, patch: ModelParams, declaredAdaptive: b
     ...(patch.contextWindow === undefined ? {} : { contextWindow: patch.contextWindow }),
     ...(patch.maxTokens === undefined ? {} : { maxTokens: patch.maxTokens }),
     ...(patch.reasoning === undefined ? {} : { reasoning: patch.reasoning }),
+    ...(patch.input === undefined ? {} : { input: [...patch.input] }),
     ...(patch.thinkingLevels === undefined
       ? {}
       : { thinkingLevelMap: whitelistLevelMap(known.thinkingLevelMap, patch.thinkingLevels) }),
@@ -287,6 +288,7 @@ function touchesRuntime(patch: ModelParams): boolean {
     patch.contextWindow !== undefined ||
     patch.maxTokens !== undefined ||
     patch.reasoning !== undefined ||
+    patch.input !== undefined ||
     patch.thinkingLevels !== undefined ||
     patch.adaptiveThinking === true
   );

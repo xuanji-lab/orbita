@@ -200,13 +200,15 @@ export function resolveModelDefaults(
         : "catalog-family"
       : patch.contextWindow !== undefined ||
           patch.maxTokens !== undefined ||
-          patch.reasoning !== undefined
+          patch.reasoning !== undefined ||
+          patch.input !== undefined
         ? "known"
         : "fallback";
   return {
     contextWindow: patch.contextWindow ?? entry?.contextWindow ?? FALLBACK_MODEL.contextWindow,
     maxTokens: patch.maxTokens ?? entry?.maxTokens ?? FALLBACK_MODEL.maxTokens,
-    input: [...(entry?.input ?? FALLBACK_MODEL.input)],
+    // 白名单也能纠模态：目录没收的纯文本型号靠它说「不收图」，别让兜底的 image 把图送上去
+    input: [...(patch.input ?? entry?.input ?? FALLBACK_MODEL.input)],
     reasoning: patch.reasoning ?? entry?.reasoning ?? FALLBACK_MODEL.reasoning,
     cost: { ...(entry?.cost ?? FALLBACK_MODEL.cost) },
     source,

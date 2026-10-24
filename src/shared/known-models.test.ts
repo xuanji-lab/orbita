@@ -1,6 +1,7 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { KNOWN_MODELS, knownModelParams } from "./known-models.ts";
+import { defaultThinkingLevel } from "./model-defaults.ts";
 
 describe("型号白名单 —— 按模型 id 记官方口径", () => {
   it("取得到，且只含确知字段（stepfun 官方页没写输出上限）", () => {
@@ -87,5 +88,84 @@ describe("默认思考档（wafo 2026-09-23：重启落模型默认档）", () =
   test("claude-opus-4-6 没有 xhigh（官方档位表只到 low/medium/high/max），能关思考", () => {
     assert.deepEqual(knownModelParams("claude-opus-4-6").thinkingLevels, ["off", "low", "medium", "high", "max"]);
     assert.equal(knownModelParams("claude-sonnet-5").defaultThinkingLevel, "high");
+  });
+});
+
+// ── 以下移植自 #180（@XIAOZF99，2026-10-10），白名单从服务商条目挪到 known-models 后改了取法 ──
+
+describe("claude 5.5（2026-10-10 按官方 effort / thinking 文档）", () => {
+  test("都 1M / 128k、五档、adaptive 专用；sonnet 关不掉，haiku 能关且默认 medium", () => {
+    const sonnet = knownModelParams("claude-sonnet-5-5");
+    assert.equal(sonnet.contextWindow, 1_000_000);
+    assert.equal(sonnet.maxTokens, 128_000);
+    assert.equal(sonnet.reasoning, true);
+    assert.equal(sonnet.adaptiveThinking, true);
+    assert.deepEqual(sonnet.thinkingLevels, ["low", "medium", "high", "xhigh", "max"]);
+    assert.equal(sonnet.defaultThinkingLevel, "high");
+
+    const haiku = knownModelParams("claude-haiku-5-5");
+    assert.equal(haiku.contextWindow, 1_000_000);
+    assert.equal(haiku.adaptiveThinking, true);
+    assert.equal(haiku.thinkingLevels?.includes("off"), true);
+    assert.equal(haiku.defaultThinkingLevel, "medium");
+  });
+});
+
+describe("step 的型号口径（2026-10-10 按官方模型页与 API 参考核对）", () => {
+  test("step-5-preview：1M 窗口、最大输出 64k、三档思考", () => {
+    const params = knownModelParams("step-5-preview");
+    assert.equal(params.contextWindow, 1_000_000);
+    assert.equal(params.maxTokens, 65_536);
+    assert.equal(params.reasoning, true);
+    assert.deepEqual(params.thinkingLevels, ["low", "medium", "high"]);
+    assert.equal(params.defaultThinkingLevel, "medium");
+  });
+
+  test("识图只纠纯文本：3.5 系（含 2603）写 [\"text\"]，能收图的型号不写（落兜底 image）", () => {
+    assert.deepEqual(knownModelParams("step-3.5-flash").input, ["text"]);
+    assert.deepEqual(knownModelParams("step-3.5-flash-2603").input, ["text"]);
+    assert.equal("input" in knownModelParams("step-3.7-flash"), false);
+    assert.equal("input" in knownModelParams("step-5-preview"), false);
+  });
+
+  test("档位按型号：2603 只兼容 low / high，其余三条是 low / medium / high", () => {
+    assert.deepEqual(knownModelParams("step-3.5-flash-2603").thinkingLevels, ["low", "high"]);
+    assert.deepEqual(knownModelParams("step-3.7-flash").thinkingLevels, ["low", "medium", "high"]);
+    assert.deepEqual(knownModelParams("step-5-preview").thinkingLevels, ["low", "medium", "high"]);
+  });
+});
+
+describe("opencode-go 网关上目录还没收录的型号（models.dev 元数据）", () => {
+  test("step-5-preview-free 与 stepfun 的 step-5-preview 同一条口径（同一个模型的免费档）", () => {
+    assert.deepEqual(knownModelParams("step-5-preview-free"), knownModelParams("step-5-preview"));
+    assert.equal(knownModelParams("step-5-preview-free").defaultThinkingLevel, "medium");
+  });
+
+  test("目录没收的新型号拿到窗口 / 输出——不再是 128k / 8k 兜底", () => {
+    assert.equal(knownModelParams("space-bunny").contextWindow, 1_048_576);
+    assert.equal(knownModelParams("space-bunny").maxTokens, 524_288);
+    assert.equal(knownModelParams("mimo-v2.6-pro").contextWindow, 1_048_576);
+    assert.equal(knownModelParams("longcat-2.5-preview-free").maxTokens, 131_072);
+    assert.equal(knownModelParams("hy4-preview").maxTokens, 64_000);
+  });
+
+  test("模态同样只纠纯文本：hy4-preview 写 [\"text\"]，收图的型号不写（落兜底 image）", () => {
+    assert.deepEqual(knownModelParams("hy4-preview").input, ["text"]);
+    assert.equal("input" in knownModelParams("mimo-v2.6-flash"), false);
+    assert.equal("input" in knownModelParams("longcat-2.5-preview-free"), false);
+  });
+
+  test("档位只写有把握的：拿不准的型号不声明 reasoning（声明了就会默认发 medium，可能 400）", () => {
+    assert.equal("reasoning" in knownModelParams("mimo-v2.6-pro"), false);
+    assert.equal("reasoning" in knownModelParams("hy4-preview"), false);
+    assert.deepEqual(knownModelParams("space-bunny").thinkingLevels, ["low", "medium", "high", "xhigh", "max"]);
+    // 默认档落 medium，在支持集内——不会把用户送到一个发不出去的档
+    assert.equal(defaultThinkingLevel("space-bunny", knownModelParams("space-bunny").thinkingLevels), "medium");
+  });
+
+  test("声明了模态的只能是纯文本：能收图的型号不写 input（写了只会与兜底漂移）", () => {
+    for (const [modelId, params] of Object.entries(KNOWN_MODELS)) {
+      if (params.input !== undefined) assert.deepEqual(params.input, ["text"], modelId);
+    }
   });
 });
