@@ -1625,8 +1625,10 @@ internal static class Program
         mixed.Add(MakeTarget("P", "page", "https://example.com/"));
         CheckString(failures, ref cases, "挑 target：非 page target 一律不挑（'Page.navigate' wasn't found 的来源）", "P",
             CdpSession.ChooseTargetId(mixed, "", ""));
-        CheckString(failures, ref cases, "挑 target：已知 target 是错误页时仍然回它（cdp-nav back 要落在同一页）", "ERR",
+        CheckString(failures, ref cases, "挑 target：已知 target 是错误页也不挑（第二轮真机：错误页上继续没意义）", "P",
             CdpSession.ChooseTargetId(mixed, "ERR", ""));
+        CheckString(failures, ref cases, "挑 target：刚超时的 target 即使还是已知 target 也剔掉（坏连两条的根因）", "B",
+            CdpSession.ChooseTargetId(pages, "A", "A"));
         CheckString(failures, ref cases, "挑 target：已知 target 不可用时，错误页不当备选", "P",
             CdpSession.ChooseTargetId(mixed, "GONE", ""));
         List<TargetInfo> onlyError = new List<TargetInfo>();
@@ -1682,8 +1684,9 @@ internal static class Program
             !CdpSession.IsChannelFailure("页面里的脚本报错：Cannot read properties of null"));
         CheckTrue(failures, ref cases, "非连接层：null", !CdpSession.IsChannelFailure(null));
 
-        CheckTrue(failures, ref cases, "可重发方法：Page.navigate", CdpSession.IsRetryableMethod("Page.navigate"));
         CheckTrue(failures, ref cases, "可重发方法：Page.enable", CdpSession.IsRetryableMethod("Page.enable"));
+        CheckTrue(failures, ref cases, "不重发：Page.navigate（导航超时 = 判死重启，不是重发）",
+            !CdpSession.IsRetryableMethod("Page.navigate"));
         CheckTrue(failures, ref cases, "可重发方法：Target.attachToTarget", CdpSession.IsRetryableMethod("Target.attachToTarget"));
         CheckTrue(failures, ref cases, "不可重发：Input.insertText（会打两遍）",
             !CdpSession.IsRetryableMethod("Input.insertText"));
@@ -1705,6 +1708,9 @@ internal static class Program
         // 预算与 worker 的杀线：34s 预算 + 6s 收尾 < 40s 杀线（一个在 Cdp.cs，一个在 WorkerHost.cs）
         CheckTrue(failures, ref cases, "连接层预算 + 收尾余量不越过 worker 的 40s 杀线",
             CdpSession.ChannelBudgetMsForTest + 6000 <= 40000);
+        // 导航超时那一轮的预算：12s（navigate 等回执）+ 18s（重启 + attach + 验过）< 40s
+        CheckTrue(failures, ref cases, "导航超时 + 判死重启装得进 worker 的 40s 杀线",
+            CdpSession.PageNavigateTimeoutMsForTest + CdpSession.RestartRoomMsForTest <= 40000);
 
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
