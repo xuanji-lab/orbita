@@ -1456,6 +1456,18 @@ internal static class Program
         CheckString(failures, ref cases, "刚好 80 不截", new string('a', 80), CdpSession.ShortUrl(new string('a', 80), 80));
         CheckString(failures, ref cases, "null URL 回空串", "", CdpSession.ShortUrl(null, 80));
 
+        // 取正文的脚本不能退化成只读 body.innerText：真机就是这样漏掉 ERR_NAME_NOT_RESOLVED 的
+        string dumpJs = CdpSession.ErrorPageDumpScriptForTest;
+        CheckTrue(failures, ref cases, "取正文覆盖 body.innerText / textContent", 
+            dumpJs.IndexOf("innerText", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("textContent", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "取正文覆盖 #main-message / shadow root / outerHTML",
+            dumpJs.IndexOf("main-message", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("shadowRoot", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("outerHTML", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "每路来源都记了字符数（日志要靠它区分「空」与「没码」）",
+            dumpJs.IndexOf("s.length", StringComparison.Ordinal) >= 0);
+
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
     }

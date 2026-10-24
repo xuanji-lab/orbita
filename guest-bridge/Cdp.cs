@@ -62,6 +62,8 @@ internal sealed class CdpSession
      */
     private const int ErrorCodeWaitMs = 2000;
     private const int ErrorCodePollMs = 300;
+    /** 错误页的诊断日志只打这么多字（一整行日志，读的时候不用翻页） */
+    private const int ErrorPageLogChars = 120;
     /** 错误文案里回显 URL 的上限：data: / 长查询串会把一句话撑成一屏（真机见过几百字符） */
     private const int NavUrlInMessageMax = 80;
     /** 截图默认上限宽度（长边），与像素截图同值 */
@@ -975,7 +977,10 @@ internal sealed class CdpSession
     {
         string href = SafeEvalString("location.href", 3000);
         string title = SafeEvalString("document.title", 3000);
-        return new JObj().Bool("ok", false).Str("error", NavErrorMessage(WaitForErrorCode()))
+        string dump;
+        string code = WaitForErrorCode(out dump);
+        LogErrorPageEvidence(code, dump);
+        return new JObj().Bool("ok", false).Str("error", NavErrorMessage(code))
             .Str("url", href).Str("title", title).Num("ms", sw.ElapsedMilliseconds).ToString();
     }
 
@@ -993,31 +998,96 @@ internal sealed class CdpSession
      * 「页面加载失败（没有拿到内容）」，而正文其实稍后就有 ERR_NAME_NOT_RESOLVED。
      * 为什么要设上限：错误页的 DOM 是本地资源，正常一两帧（<300ms）就好；等超过 2s 说明
      * 这一页根本不会渲染正文，再等就是把「省下的 20 秒」还回去了。
+     *
+     * `lastDump` 交回最后一次读到的内容（包含了每路来源的长度），供诊断日志用。
      */
-    private string WaitForErrorCode()
+    private string WaitForErrorCode(out string lastDump)
     {
+        lastDump = "";
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(ErrorCodeWaitMs);
         while (true)
         {
-            string code = NavErrorCode(ReadPageText());
+            lastDump = ReadErrorPageDump();
+            string code = NavErrorCode(lastDump);
             if (code != null) return code;
             if (DateTime.UtcNow >= deadline) return null;
             Thread.Sleep(ErrorCodePollMs);
         }
     }
 
-    /** 读页面可见正文（截断 4000 字符）：错误页的原因码就在里面，不需要整页 */
-    private string ReadPageText()
+    /**
+     * 真的机上错误页取到的证据，单独一行日志（**只走错误页路径**，不吵）。
+     *
+     * 为什么要它：真机第一次修这里时「页面明明在（status 里能看到 chrome-error://），
+     * 正文却一个字也读不到」，靠猜改了两轮。这行日志把「取不到」与「取到了但没码」分开：
+     * 每路来源的字符数都在 dump 开头（`[body.innerText=0] [html.outerHTML=18302] …`）。
+     */
+    private void LogErrorPageEvidence(string code, string dump)
+    {
+        string head = dump == null ? "" : dump.Replace("\r", " ").Replace("\n", " ");
+        if (head.Length > ErrorPageLogChars) head = head.Substring(0, ErrorPageLogChars);
+        Program.Log("错误页诊断：会话 " + Key + "，抓到码=" + (code == null ? "(无)" : code)
+            + "，取到的内容（前 " + ErrorPageLogChars + " 字）：" + (head.Length == 0 ? "(空)" : head));
+    }
+
+    /** 错误页正文的取法自测用：不让它悄悄退化成只读 body.innerText */
+    internal static string ErrorPageDumpScriptForTest
+    {
+        get { return ErrorPageDumpJs; }
+    }
+
+    /**
+     * 错误页的取正文脚本：**多路都取**，不等只取一个地方。
+     *
+     * 2026-10-25 真机：错误页确实在（status 里看到 chrome-error://chromewebdata/、title 是主机名），
+     * 但 `document.body.innerText` 一个字也没读到，于是 ERR_NAME_NOT_RESOLVED 白白丢了。
+     * Chromium 的错误页 UI 不必落在 body 的普通文本里（自定义元素 / 隐藏到渲染后才可见 / 只存于源码），
+     * 所以这里把能拿到的都拿上，任一处有码即可：innerText → textContent →#main-message
+     * → 打开 shadow root 的正文 → 整页 outerHTML。
+     *
+     * 每路开头先写一个 `[来源=字符数]`：真机日志里能一眼看出是「空」还是「有文本但没码」。
+     * 总长封顶 60000（头尾各留一段，错误文案不会被截掉）。
+     */
+    private const string ErrorPageDumpJs = @"
+(function(){
+  var parts=[];
+  function add(label,text){
+    var s=text||'';
+    parts.push('['+label+'='+s.length+']');
+    if(s.length>0) parts.push(s);
+  }
+  var body=document.body, root=document.documentElement;
+  try{ add('body.innerText', body?body.innerText:''); }catch(e){}
+  try{ add('body.textContent', body?body.textContent:''); }catch(e){}
+  try{ add('html.innerText', root?root.innerText:''); }catch(e){}
+  try{ var m=document.getElementById('main-message'); add('main-message', m?m.innerText:''); }catch(e){}
+  var shadow='';
+  try{
+    var all=document.querySelectorAll('*'), n=all.length>500?500:all.length;
+    for(var i=0;i<n;i++){
+      var sr=all[i].shadowRoot;
+      if(!sr) continue;
+      try{ var t=sr.textContent; if(t) shadow+=t+' '; }catch(e2){}
+    }
+  }catch(e){}
+  add('shadow', shadow);
+  try{ add('html.outerHTML', root?root.outerHTML:''); }catch(e){}
+  var out=parts.join(' ');
+  if(out.length>60000) out=out.substring(0,58000)+' '+out.substring(out.length-2000);
+  return out;
+})()";
+
+    /** 读错误页的全部可用取径（已截断）：原因码只关心那一串字，不关心排版 */
+    private string ReadErrorPageDump()
     {
         try
         {
-            return EvalString("(function(){var b=document.body;var t=b?(b.innerText||b.textContent||''):'';"
-                + "return t.substring(0,4000);})()", 3000);
+            return EvalString(ErrorPageDumpJs, 4000);
         }
         catch
         {
-            // 错误页也可能在换上下文的一瞬间不响应：正文拿不到就按「没有拿到内容」报，
-            // 不要因为拿不到原因码就把「这是错误页」这个判定一起丢掉。
+            // 错误页也可能在换上下文的一瞬间不响应：这轮拿不到就交给下一轮（窗口内会重试），
+            // 不要把「这是错误页」这个判定一起丢掉。
             return "";
         }
     }
@@ -1089,7 +1159,7 @@ internal sealed class CdpSession
                 if (href != checkedHref)
                 {
                     checkedHref = href;
-                    if (IsNavErrorPage(null, ReadPageText())) return ReadyErrorPage;
+                    if (IsNavErrorPage(null, ReadErrorPageDump())) return ReadyErrorPage;
                 }
             }
             Thread.Sleep(300);
