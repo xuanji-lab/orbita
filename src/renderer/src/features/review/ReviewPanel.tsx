@@ -332,7 +332,7 @@ export function ReviewPanel(props: {
       ) : list.kind !== "ok" ? (
         <EmptyState
           title={reviewEmptyTitle(list, t)}
-          detail={reviewEmptyText(list, t)}
+          detail={reviewEmptyText(list, t, source)}
           danger={list.kind === "error"}
         />
       ) : (

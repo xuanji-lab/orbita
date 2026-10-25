@@ -40,6 +40,31 @@ export interface PreviewLimits {
 
 const DEFAULT_LIMITS: PreviewLimits = { text: PREVIEW_TEXT_LIMIT, image: PREVIEW_IMAGE_LIMIT };
 
+/**
+ * 截断时退掉末尾被切一半的 UTF-8 序列，返回「最后一个完整字符之后」的字节长度。
+ *
+ * 按字节截断（`min(size, limit)`）会正好切在多字节字符中间，`TextDecoder` 只能把它
+ * 补成 `U+FFFD`——CJK 文件在边界上就多一个乱码方块（2026-10-25 实测：8 MB 中文
+ * 文件截到 2 MB，末字符即 `U+FFFD`）。UTF-8 的一个序列是「首字节说明长度 + 最多 3 个
+ * 续字节（0x80–0xBF）」，所以从末尾往回最多看 4 个字节就能判断最后那个序列是否完整：
+ * 不完整就从它的首字节处截掉（最多少 3 个字节）。数据本身非法（长度够但字节不合法）
+ * 不在这里修，交给 TextDecoder 的默认行为。
+ */
+function completeUtf8End(buf: Buffer): number {
+  let start = buf.length - 1;
+  let continuations = 0;
+  while (start >= 0 && continuations < 3 && ((buf[start] ?? 0) & 0xc0) === 0x80) {
+    start -= 1;
+    continuations += 1;
+  }
+  // 整段都是续字节：那不是「末尾被切」造成的，别动它
+  if (start < 0) return buf.length;
+  const lead = buf[start] ?? 0;
+  const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  if (need === 1) return buf.length; // 末尾是 ASCII，天然完整
+  return buf.length - start >= need ? buf.length : start;
+}
+
 /** 名字里「扩展名」那一段：取最后一个 `.` 之后的部分，小写；无扩展名 / 点文件回空串 */
 function extOf(path: string): string {
   const base = path.split(/[\\/]/).pop() ?? "";
@@ -93,8 +118,10 @@ export async function readPreview(path: string, limits: PreviewLimits = DEFAULT_
   if (binary) {
     return { kind: "binary", size, modifiedAt };
   }
-  const text = new TextDecoder("utf-8").decode(head);
-  return { kind: "text", text, truncated: size > limits.text, size, modifiedAt };
+  const truncated = size > limits.text;
+  const end = truncated ? completeUtf8End(head) : head.length;
+  const text = new TextDecoder("utf-8").decode(head.subarray(0, end));
+  return { kind: "text", text, truncated, size, modifiedAt };
 }
 
 /**

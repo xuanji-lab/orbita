@@ -1840,6 +1840,10 @@ export const en = {
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
+    /** 大 md 退化：不再跑 MarkdownBlock，按等宽原文看 */
+    largeTextPlain: (size: string) => `Large file (${size}) — showing plain text`,
+    /** 大文本窗口化：排版没变，只是只渲染可见区（提示条上带「用默认应用打开」） */
+    largeTextWindowed: (size: string) => `Large file (${size}) — rendering the visible lines only`,
     pdfFailed: "Couldn't open this PDF:",
     pdfPassword: "This PDF is password-protected and can't be previewed.",
     citeNotFound: (page: number) =>
