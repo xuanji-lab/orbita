@@ -176,7 +176,11 @@ export async function gitReviewList(
   }
 
   if (source === "unstaged") {
-    const status = await runner(["status", "--porcelain=v2", "--untracked-files=all"], cwd);
+    // 路径口径必须是「工作区相对」：`git diff` 用 --relative 强制，`status` 没有这个参数，
+    // 它由 `status.relativePaths` 配置决定（默认 true，但用户可设 false）。不显式钉死，
+    // 子目录工作区会遇到「diff 是 a.txt、status 是 sub/a.txt / ../x」的两套路径，
+    // 行数全 0、工作区外的改动也会混进来（2026-10-25 合作者实测）。
+    const status = await runner(["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all"], cwd);
     const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
     const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, readUntracked))];
     if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd };
@@ -255,8 +259,9 @@ export async function gitWorkdirChanges(
   if (root === null) return { kind: "empty", reason: "not-repo" };
 
   // --no-renames：status 不产 `2 <XY> … old\tnew` 改名行，parseStatusChangedLine 只认 `1` 行
+  // -c status.relativePaths=true：与上面审查面板同一条路径口径（用户配置可能是 false）。
   const status = await runner(
-    ["status", "--porcelain=v2", "--untracked-files=all", "--no-renames"],
+    ["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all", "--no-renames"],
     cwd,
   );
   const stats = new Map<string, LineStat>();
