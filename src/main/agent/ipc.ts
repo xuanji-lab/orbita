@@ -25,7 +25,7 @@ import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
-import { COMPACTION_DEFAULT, effectiveAllowNetwork, effectiveLanguage, type Language } from "../../shared/settings.ts";
+import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "../session/store.ts";
@@ -50,7 +50,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
-import { turnFields } from "./turn-fields.ts";
+import { computerUseTurnContext, turnFields } from "./turn-fields.ts";
 import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
@@ -204,14 +204,10 @@ export function registerAgentIpc(
    * 电脑使用每轮现读：实验开关决定**工具组注册**（关着时沙箱工具根本不进会话），
    * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。两个事实
    * 来自同一份设置、同一次 `settings.read()`：不另开一套读写，也不会两轮之间漂移。
+   * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是唯一读设置的、要 electron 的地方）。
    */
-  const readComputerUse = async (): Promise<ComputerUseTurnContext> => {
-    const current = await settings.read();
-    return {
-      enabled: current.experimentalFeatures?.["computer-use"] === true,
-      allowNetwork: effectiveAllowNetwork(current),
-    };
-  };
+  const readComputerUse = async (): Promise<ComputerUseTurnContext> =>
+    computerUseTurnContext(await settings.read());
 
   /** 署名语言同样每轮现读：换主题 / 改语言，下一轮的署名就跟上（规则在 shared 的 effectiveLanguage） */
   const readAttributionLanguage = async (): Promise<Language> => {

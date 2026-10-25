@@ -11,8 +11,25 @@ import type {
   TurnDirectories,
   CompactAgentInput,
 } from "../../shared/agent-ipc.ts";
-import type { CompactionSetting, Language } from "../../shared/settings.ts";
+import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
+import { effectiveAllowNetwork } from "../../shared/settings.ts";
 import type { McpServer } from "../../shared/mcp.ts";
+
+/**
+ * 电脑使用的开轮现场：实验开关 + 沙箱出网，**从同一份设置值**一次算出。
+ *
+ * 抽成纯函数是为了能被 `node --test` 钉住：真正的读取点 `readComputerUse()` 在
+ * ipc.ts 里（要 electron，起不来），而这层映射——「哪个开关管注册、哪个值管提示词、
+ * 老 settings.json 缺字段时兑什么缺省」——恰好是最容易改坏的部分。读一次、算一次，
+ * 仍然是 ipc.ts 那一份读，没有第二套读写。
+ */
+export function computerUseTurnContext(settings: AppSettings | undefined): ComputerUseTurnContext {
+  return {
+    enabled: settings?.experimentalFeatures?.["computer-use"] === true,
+    // 缺省允许（effectiveAllowNetwork）：老 settings.json 没这个键 = 与开关做出来之前一样
+    allowNetwork: effectiveAllowNetwork(settings),
+  };
+}
 
 export function turnFields(
   input: SubmitAgentInput | CompactAgentInput,
