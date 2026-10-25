@@ -2545,12 +2545,6 @@ function UsageRing(props: {
           hint: row.value,
           fact: true,
         }))),
-    ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
-      id: row.label,
-      label: row.label,
-      hint: row.value,
-      fact: true,
-    })),
     // 压缩次数：0 次不出这一行（没压过就没什么可报的）
     ...(compactions > 0
       ? [
