@@ -25,6 +25,23 @@
 **行为守卫**：`src/agent/kimi-compat-patch.test.ts`（`stream` + 假 fetch 断言首条消息角色，
 同文件另有一条标准 OpenAI 端点仍用 `developer` 的反向断言）。
 
+## @earendil-works/pi-ai — 错误带明确的 4xx 不重试
+
+`dist/utils/retry.js`（`isRetryableAssistantError`）：在额度名单之后、可重试正则之前插一道
+`hasNonRetryableClientStatus`——错误文本里能确定的 HTTP 状态码（`API error (403):`、开头的
+`403 Forbidden`、`HTTP 403` / `status 403`）全是 4xx 且不是 408 / 429 时判为不可重试。
+认不出状态码、混有非 4xx 状态码、或文本说的是限流 / 过载时不改原判。
+
+**为什么（2026-10-24）**：原判只看正则，`server.?error` 命中 OpenCode 写在永久错误体里的
+`"type":"server_error"`——403「Model access is disabled」、400「Model is unavailable.」被当临时故障，
+按 retry-policy 的 8 次指数退避重试约 4 分钟，前 5 次界面不显示，用户看到一直「回应中」。
+patch 在 pi-ai 而不在 Orbita 侧：AgentSession 的 `_isRetryableError` 是私有方法、没有注入点；
+订阅 `auto_retry_start` 再 `abortRetry()` 会把真错误换成 "Retry cancelled"，且盖不住压缩的
+`retryAssistantCall`。这一个函数是两条重试路径的共同判据。
+
+**行为守卫**：`src/agent/retry-4xx-patch.test.ts`（纯判定 + 真 AgentSession 走 faux provider，
+含 502 仍重试的对照组）。pi 升级后若原生按状态码判，删掉这段 patch。
+
 ## @earendil-works/pi-coding-agent — 公开入口导出 `resolveToCwd`
 
 `dist/index.js` / `dist/index.d.ts`：追加一行 `export { resolveToCwd } from "./core/tools/path-utils.js"`。

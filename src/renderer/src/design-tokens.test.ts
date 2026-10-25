@@ -349,3 +349,22 @@ describe("design-tokens —— 渲染层不许有裸 hex 颜色", () => {
     }
   });
 });
+
+// 设计系统 readme「Iconography」：型号头像是唯一的位图例外，每个文件都要在 NOTICE 里登记来源
+// （「No entry, no file」）。只看文件名是否出现在 NOTICE 的条目行里，不校验来源文字本身。
+describe("型号头像：每个文件都在 model-avatars/NOTICE 里登记", () => {
+  test("目录里的 png / svg 全部有条目", () => {
+    const dir = join(REPO_ROOT, "design-system/assets/model-avatars");
+    const notice = readFileSync(join(dir, "NOTICE"), "utf8");
+    const listed = new Set(
+      notice
+        .split("\n")
+        .filter((line) => /^[a-z0-9.-]+\.(png|svg)/.test(line))
+        .flatMap((line) => (line.split(" — ")[0] ?? "").split(" / ").map((name) => name.trim())),
+    );
+    const files = readdirSync(dir).filter((name) => [".png", ".svg"].includes(extname(name)));
+    assert.ok(files.length > 0, "没找到头像文件");
+    const missing = files.filter((name) => !listed.has(name));
+    assert.deepEqual(missing, [], `这些头像没有在 NOTICE 里登记：${missing.join(", ")}`);
+  });
+});

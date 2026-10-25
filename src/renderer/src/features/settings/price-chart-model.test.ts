@@ -1,0 +1,137 @@
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  costRange,
+  costTicks,
+  cycleCategory,
+  formatCost,
+  formatCostTick,
+  formatScore,
+  paretoFrontier,
+  placeLabels,
+  popoverPlacement,
+  scoreTicks,
+  shouldShowPriceChart,
+} from "./price-chart-model.ts";
+
+const providerWith = (...ids: string[]) => ({ models: { declared: ids.map((id) => ({ id })) } });
+
+describe("显示门槛：所有服务商加起来 ≥ 2 个型号", () => {
+  test("0 / 1 个不显示，2 个显示；跨服务商合计", () => {
+    assert.equal(shouldShowPriceChart([]), false);
+    assert.equal(shouldShowPriceChart([providerWith("k3")]), false);
+    assert.equal(shouldShowPriceChart([providerWith(), providerWith("k3")]), false);
+    assert.equal(shouldShowPriceChart([providerWith("k3"), providerWith("glm-5.3")]), true);
+  });
+});
+
+describe("帕累托前沿", () => {
+  test("只留比所有更便宜的点分数都高的", () => {
+    const pts = [
+      { id: "cheap-low", cost: 0.1, score: 1300 },
+      { id: "cheap-high", cost: 0.2, score: 1400 },
+      { id: "dominated", cost: 0.5, score: 1350 },
+      { id: "pricey-best", cost: 2, score: 1500 },
+    ];
+    assert.deepEqual(paretoFrontier(pts).map((p) => p.id), ["cheap-low", "cheap-high", "pricey-best"]);
+  });
+
+  test("同价只留分最高的；空输入空输出", () => {
+    const pts = [
+      { id: "a", cost: 1, score: 10 },
+      { id: "b", cost: 1, score: 20 },
+    ];
+    assert.deepEqual(paretoFrontier(pts).map((p) => p.id), ["b"]);
+    assert.deepEqual(paretoFrontier([]), []);
+  });
+
+  test("分数相同、更贵的不进前沿", () => {
+    const pts = [
+      { id: "a", cost: 1, score: 10 },
+      { id: "b", cost: 2, score: 10 },
+    ];
+    assert.deepEqual(paretoFrontier(pts).map((p) => p.id), ["a"]);
+  });
+});
+
+describe("坐标轴", () => {
+  test("对数轴至少跨一个数量级，刻度走 1-2-5", () => {
+    const range = costRange([0.76]);
+    assert.ok(Math.log10(range.max) - Math.log10(range.min) >= 1 - 1e-9);
+    const ticks = costTicks({ min: 0.3, max: 40 });
+    assert.deepEqual(ticks, [0.5, 1, 2, 5, 10, 20]);
+  });
+
+  test("刻度太密时去掉 2 档", () => {
+    const ticks = costTicks({ min: 0.001, max: 100 });
+    assert.ok(ticks.length <= 12);
+    assert.ok(!ticks.includes(0.2));
+    assert.ok(ticks.includes(0.5) && ticks.includes(1));
+  });
+
+  test("线性轴刻度大约 5 格、步长 1-2-5", () => {
+    assert.deepEqual(scoreTicks({ min: 1470, max: 1510 }), [1470, 1480, 1490, 1500, 1510]);
+  });
+});
+
+describe("分类循环与格式", () => {
+  test("六类左右循环，默认第一类是 Agent 综合", () => {
+    assert.equal(cycleCategory("agent", -1), "instruction_following");
+    assert.equal(cycleCategory("instruction_following", 1), "agent");
+    assert.equal(cycleCategory("agent", 1), "overall");
+  });
+
+  test("成本与分数", () => {
+    assert.equal(formatCost(29.16), "$29");
+    assert.equal(formatCost(2.233), "$2.23");
+    assert.equal(formatCost(0.7585), "$0.76");
+    assert.equal(formatCost(0.03123), "$0.031");
+    assert.equal(formatScore(1480.74, "rating"), "1481");
+    assert.deepEqual([0.05, 0.1, 1, 20].map(formatCostTick), ["$0.05", "$0.1", "$1", "$20"]);
+    assert.equal(formatScore(0.0157, "net-improvement"), "+1.6%");
+    assert.equal(formatScore(-0.0177, "net-improvement"), "−1.8%");
+  });
+});
+
+describe("点开的详情卡放哪一侧", () => {
+  test("靠右翻到左边，靠上往下、靠下往上，中间居中", () => {
+    assert.deepEqual(popoverPlacement(20, 50), { side: "right", vertical: "middle" });
+    assert.deepEqual(popoverPlacement(80, 50), { side: "left", vertical: "middle" });
+    assert.deepEqual(popoverPlacement(40, 10), { side: "right", vertical: "below" });
+    assert.deepEqual(popoverPlacement(90, 95), { side: "left", vertical: "above" });
+  });
+});
+
+describe("前沿标签放哪一侧：不出界、不压点、不压别的标签", () => {
+  const area = { w: 600, h: 400 };
+  const label = (key: string, x: number, y: number, w = 120) => ({ key, x, y, r: 12, w, h: 20 });
+  const dot = (x: number, y: number) => ({ x, y, r: 12 });
+
+  test("空旷处放右边；靠右的点先试左边", () => {
+    const sides = placeLabels([label("a", 100, 200), label("b", 500, 200)], [dot(100, 200), dot(500, 200)], area);
+    assert.equal(sides.get("a"), "right");
+    assert.equal(sides.get("b"), "left");
+  });
+
+  test("右边压着别的点（含不在前沿上的点）就换到左边", () => {
+    const sides = placeLabels([label("a", 300, 200)], [dot(300, 200), dot(360, 200)], area);
+    assert.equal(sides.get("a"), "left");
+  });
+
+  test("两个点上下挨着：后放的不压先放的标签", () => {
+    const sides = placeLabels([label("a", 300, 200), label("b", 300, 215)], [dot(300, 200), dot(300, 215)], area);
+    assert.equal(sides.get("a"), "right");
+    assert.equal(sides.get("b"), "left");
+  });
+
+  test("贴着左边、右边又被挡：左边出界，改放上面", () => {
+    const sides = placeLabels([label("a", 40, 200, 60)], [dot(40, 200), dot(90, 200)], area);
+    assert.equal(sides.get("a"), "above");
+  });
+
+  test("四边都放不下记 null（退成悬停提示），不硬叠", () => {
+    const crowd = [dot(300, 200), dot(350, 200), dot(250, 200), dot(300, 160), dot(300, 240)];
+    const sides = placeLabels([label("a", 300, 200)], crowd, area);
+    assert.equal(sides.get("a"), null);
+  });
+});
