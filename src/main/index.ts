@@ -652,7 +652,6 @@ void app.whenReady().then(async () => {
   // 第三个参数是额度缓存的目录（<userData>/quota-cache.json）；缓存模块自己不在顶层读 app。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost, configDir);
-  registerProviderIpc(providers, agentHost);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
   registerPriceChartIpc({
