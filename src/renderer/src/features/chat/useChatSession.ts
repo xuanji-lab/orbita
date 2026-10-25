@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { flushAllDocx } from "../docx/docx-flush.ts";
+import { flushAllDocx, flushAllDocxForLeave } from "../docx/docx-flush.ts";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
@@ -2143,7 +2143,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。完成与否不回写：
    * 新单完成 ≠ 遗留办结，勾选留给用户（不猜）。
    */
-  const startCarryoverTask = useCallback(
+  const startCarryoverNow = useCallback(
     (item: Carryover): void => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -2170,6 +2170,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine, model, cwd, workspaceId, reset, submitTurn],
   );
+
+  const startCarryoverTask = useCallback(
+    (item: Carryover): void => {
+      // 同 newTask：这条也会 reset 掉右栏面板
+      void flushAllDocxForLeave().then((outcome) => {
+        if (outcome.ok) startCarryoverNow(item);
+      });
+    },
+    [startCarryoverNow],
+  );
+
 
   /**
    * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
@@ -2229,19 +2240,30 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
 
-  /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
+  /**
+   * 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底。
+   * **清槽 = 右栏文件面板整片换掉**，打开着的 docx 随之卸载：先让它的待存改动
+   * 落盘，失败就不清槽（提示在 docx 视图里）。评审 2b：这条不走 openSession，
+   * 原来直接 reset() 就把字丢了。
+   */
   const newTask = useCallback(() => {
-    reset();
-    setCwd(null);
-    setWorkspaceId(null);
+    void flushAllDocxForLeave().then((outcome) => {
+      if (!outcome.ok) return;
+      reset();
+      setCwd(null);
+      setWorkspaceId(null);
+    });
   }, [reset]);
 
-  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次 */
+  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次。闸门同 newTask */
   const newTaskIn = useCallback(
     (workspace: Workspace) => {
-      reset();
-      setCwd(workspace.path);
-      setWorkspaceId(workspace.id);
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        reset();
+        setCwd(workspace.path);
+        setWorkspaceId(workspace.id);
+      });
     },
     [reset],
   );

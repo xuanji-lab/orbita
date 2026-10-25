@@ -21,7 +21,7 @@ import {
   orderEntriesByType,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
-import { flushAllDocx, flushDocxAt } from "../docx/docx-flush.ts";
+import { flushAllDocxForLeave, flushDocxForLeave } from "../docx/docx-flush.ts";
 import {
   attachmentName,
   collectSentAttachments,
@@ -143,8 +143,11 @@ export function FilesPanel(props: {
     if (lostRoot === null) return;
     const next = dropTabsAtRoot(tabs, activePath, lostRoot);
     if (next.tabs.length === tabs.length) return;
-    // 掉标签 = 可能卸载正在编辑的 docx：先让它落盘再掉
-    void flushDocxAt(activePath).then(() => {
+    // 掉标签 = 可能卸载正在编辑的 docx：先让它落盘再掉。**落盘失败就不掉**
+    // （评审 2d：这里原本不看 outcome.ok，等于替用户扔掉那份标签）；提示由
+    // docx 视图自己挂出来，标签留着让用户改完权限再重试。
+    void flushDocxForLeave(activePath).then((outcome) => {
+      if (!outcome.ok) return;
       setTabs(next.tabs);
       setActivePath(next.activePath);
       if (next.activePath === null) setTreeOn(false);
@@ -195,16 +198,31 @@ export function FilesPanel(props: {
   // 同理清掉：错误属于旧会话里那次点击，带进新会话就是张冠李戴的常驻红字
   // （2026-10-18 修的 citeOutside 跨会话残留）
   useEffect(() => {
-    // 换会话 / 换工作区 = 整片换掉旧面板，打开着的 docx 随之卸载。openSession 已经
-    // 在切换前闸过一次（失败就不切），这里再兜一道覆盖不经过它的路径；换完之后
-    // 旧标签没有意义，照旧清掉。
-    void flushAllDocx();
-    setTabs([]);
-    setActivePath(null);
-    setCollapsedGroups(new Set());
-    setTreeOn(false);
-    setActionError(null);
-    setJump(null);
+    /*
+     * 换会话 / 换工作区 = 整片换掉旧面板，打开着的 docx 随之卸载。
+     * `openSession` / `newTask` / `newTaskIn` 已经在切换前闸过一次（失败就不切）；
+     * 这里再兜一道覆盖不经过它们的路径（删会话、工作区变动…）。
+     * **先 await 再清标签**（评审 2b：原来是 `void flush` 后立刻清，flush 还没跑完
+     * 组件就卸载了）；清不掉说明还有改动没落盘，那就把标签留着——提示在 docx 视图里，
+     * 用户改完权限还能回来接着存。
+     */
+    let alive = true;
+    const clear = (): void => {
+      setTabs([]);
+      setActivePath(null);
+      setCollapsedGroups(new Set());
+      setTreeOn(false);
+      setActionError(null);
+      setJump(null);
+    };
+    void flushAllDocxForLeave().then((outcome) => {
+      if (!alive) return;
+      if (!outcome.ok) return;
+      clear();
+    });
+    return () => {
+      alive = false;
+    };
   }, [sessionId, workspaceId]);
 
   // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
@@ -241,7 +259,7 @@ export function FilesPanel(props: {
    * 切标签 / 关标签都会让还没落盘的字无声消失（2026-10-24 评审复现）。
    */
   const leaveActive = (next: () => void): void => {
-    void flushDocxAt(activePath).then((outcome) => {
+    void flushDocxForLeave(activePath).then((outcome) => {
       if (outcome.ok) next();
     });
   };
@@ -279,7 +297,12 @@ export function FilesPanel(props: {
    * 双击 / Enter 同一动作（标签复用，幂等）。浮层里点了文件 = 挑选完成：浮层
    * 自动收起——窄侧事实来自 ResizeObserver 的缓存，不在这里量宽度做显示判定 */
   const openFile = (root: FileRoot, path: string): void => {
-    if (path === activePath) return;
+    if (path === activePath) {
+      // 再点已激活的文件 = 从浮层里挑完了：收起树（2026-10-11 的既有行为，
+      // 加切走闸门时一度被 `return` 吞掉——评审 R4）
+      if (narrowRef.current) setTreeOn(false);
+      return;
+    }
     leaveActive(() => {
       setTabs((prev) => openTab(prev, root.path, path));
       setActivePath(path);
@@ -290,7 +313,10 @@ export function FilesPanel(props: {
   /** 单击附图行 = 打开 / 激活附图标签：身份用原图引用（同一张图复用同一个标签），
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
-    if (ref === activePath) return;
+    if (ref === activePath) {
+      if (narrowRef.current) setTreeOn(false);
+      return;
+    }
     leaveActive(() => {
       setTabs((prev) => openTab(prev, "", ref, name));
       setActivePath(ref);

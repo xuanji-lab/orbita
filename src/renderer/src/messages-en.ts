@@ -1738,6 +1738,16 @@ export const en = {
     /** 覆盖前的上一版落在应用数据目录（不进工作区） */
     backupHint: "The previous version is copied into orbita's app data folder first, so you can go back to it.",
     saveAnyway: "Save anyway",
+    /** 离场被拒：这次保存是「要切走」逼出来的，失败就等于切走会丢字 */
+    leaveBlocked: "These edits aren't saved yet, so leaving now would lose them. Retry the save, then switch.",
+    /** 关窗口被 beforeunload 拦下、flush 又没成功 */
+    unloadBlocked: "There are unsaved edits and the save failed, so closing was blocked. Retry, or close anyway and lose them.",
+    /** 关窗口/刷新被拦下但已经存好：不再自动关（分不清关窗与重载），给一句反馈 */
+    unloadSaved: "Your edits are saved now — close or reload again when you're ready.",
+    /** 写盘被权限 / 占用挡住（EPERM / EACCES / EBUSY 的人话版） */
+    writeBlocked: "This file can't be written: it is read-only, or another program is holding it open.",
+    retrySave: "Retry save",
+    closeAnyway: "Close anyway",
     savedWithBackup: (path: string) => `Save (previous version: ${path})`,
     /** 挂载前的页数粗估：先问，不要先冻住面板 */
     oversizeEstimate: (estimate: number, limit: number) =>
