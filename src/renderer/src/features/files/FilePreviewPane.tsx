@@ -8,7 +8,7 @@ import { highlightBlock, highlighterReady, langFromPath } from "../chat/highligh
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { isEditableTexFile } from "./editor-state.ts";
-import { TexEditorPane, type TexEditorHandle } from "./TexEditorPane.tsx";
+import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./TexEditorPane.tsx";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FileListRequest, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
@@ -60,6 +60,8 @@ export function FilePreviewPane(props: {
     onDirtyChange: (path: string, dirty: boolean) => void;
     onSaved?: () => void;
     onError: (path: string, message: string) => void;
+    /** agent 与本文件同改一个文件的边界（只读 / 重载 / 按块撤销） */
+    collab?: EditorCollabView;
   };
 }) {
   const t = useT();
@@ -264,6 +266,7 @@ export function FilePreviewPane(props: {
               props.editor?.onSaved?.();
             }}
             onError={props.editor?.onError ?? noopError}
+            {...(props.editor?.collab === undefined ? {} : { collab: props.editor.collab })}
           />
         ) : sentImage === undefined ? (
           <PreviewBody

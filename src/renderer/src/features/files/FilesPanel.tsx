@@ -39,6 +39,8 @@ import {
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import { closeDecision } from "./editor-state.ts";
+import { useEditorCollab } from "./useEditorCollab.ts";
+import type { EditorHunk } from "./editor-collab.ts";
 import type { FlushOutcome, TexEditorHandle } from "./TexEditorPane.tsx";
 import {
   closeTab,
@@ -55,13 +57,28 @@ import {
 import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
-import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
+import type { FileEntryKind, FileListRequest, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
 import type { LatexFileContext } from "@shared/latex";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
 /** 占位 Session 组（还没有会话）的折叠键：真实根的键是绝对路径，常量撞不上 */
 const PLACEHOLDER_SESSION_GROUP = "session";
+
+/** 没有改动块时的常量：`[]` 每次新建会让编辑器的效果每帧跑一遍 */
+const EMPTY_HUNKS: readonly EditorHunk[] = [];
+
+/** 同步请求按 samePath 取（树里拼的 `/` 与主进程给的 `\` 是同一个文件） */
+function syncFor(
+  sync: ReadonlyMap<string, { token: number; text: string }>,
+  path: string,
+  same: (a: string, b: string) => boolean,
+): { token: number; text: string } | null {
+  for (const [key, value] of sync) {
+    if (same(key, path)) return value;
+  }
+  return null;
+}
 
 /**
  * 文件面板（设计稿 files-panel (b) 形态）：三组根——Session（本会话工作台，唯一随
@@ -206,6 +223,8 @@ export function FilesPanel(props: {
    * 切标签不靠这里：旧编辑器卸载时会自己把文本抓下来再写（配「切走不丢字」）。
    */
   const editorsRef = useRef(new Map<string, TexEditorHandle>());
+  /** 登记表版本号：编辑器挂 / 卸时加一（agent 回合中途新挂上来的文件要补一份快照） */
+  const [editorsVersion, setEditorsVersion] = useState(0);
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
   /** 编辑器事件造成的可见提示（关标签撞冲突 / 编译前保存失败），不静默 */
   const [editorNotice, setEditorNotice] = useState<string | null>(null);
@@ -213,6 +232,7 @@ export function FilesPanel(props: {
   const registerEditor = useCallback((path: string, handle: TexEditorHandle | null): void => {
     if (handle === null) editorsRef.current.delete(path);
     else editorsRef.current.set(path, handle);
+    setEditorsVersion((version) => version + 1);
   }, []);
 
   const handleEditorDirty = useCallback((path: string, dirty: boolean): void => {
@@ -234,6 +254,56 @@ export function FilesPanel(props: {
     setEditorNotice(null);
     latex.refresh();
   }, [latex]);
+
+  /**
+   * 按路径拼一份 fs:read 请求（与预览同一个 root / 白名单口径）。
+   * 附图标签（root 空串、name 有值）不走 fs:read，返回 null——它不可能是要编辑的 .tex。
+   *
+   * **不在标签里的文件也要能读**：布局 B / 自动并排的左块是项目主文件（`splitLeftPath`
+   * 不进标签队列），只认标签会让那块的落定重载与改动块全部失效（P2）。没有标签时按
+   * 根归属拼请求——文件必须落在某个真实存在的根内，白名单口径不变。
+   */
+  const readRequestFor = useCallback(
+    (path: string): FileListRequest | null => {
+      const tab = tabs.find((item) => samePath(item.path, path));
+      if (tab !== undefined) {
+        if (tab.name !== undefined) return null;
+        return {
+          sessionId,
+          workspaceId,
+          ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+          root: tab.root,
+          dir: tab.path,
+        };
+      }
+      const owner = tree.roots.find((root) => root.exists && pathWithin(root.path, path));
+      if (owner === undefined) return null;
+      return {
+        sessionId,
+        workspaceId,
+        ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+        root: owner.path,
+        dir: path,
+      };
+    },
+    [tabs, tree.roots, sessionId, workspaceId, focusWorkspaceId],
+  );
+
+  /**
+   * agent 与本面板打开的文件同改一个文件的安全边界：回合进行中只读、回合落定从磁盘重载、
+   * 本轮改动按块可撤。数据全从 session 的既有事件来（transcript 的工具调用 + phase）。
+   */
+  const collab = useEditorCollab({
+    sessionId,
+    phase: session.phase,
+    transcript: session.transcript,
+    // agent 的工具路径按真正跑活的那个目录解析：没选工作区时落在 defaultCwd
+    cwd: session.cwd ?? session.defaultCwd,
+    editors: editorsRef,
+    editorsVersion,
+    requestFor: readRequestFor,
+  });
+
   /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
   const [problemsOpen, setProblemsOpen] = useState(false);
   const latexGroups = useMemo(
@@ -1089,6 +1159,16 @@ export function FilesPanel(props: {
                     onDirtyChange: handleEditorDirty,
                     onSaved: handleEditorSaved,
                     onError: handleEditorError,
+                    // agent 与本文件同改一个文件：只读 / 重载 / 按块撤销（按左块路径取）。
+                    // 写过的文件用 writePhase 定文案；本轮只要出现 shell / 终端 / MCP，
+                    // 打开的文件一律按「可能被写」占位（看不见它写了哪个文件）
+                    collab: {
+                      hold: collab.writePhase(leftPath ?? activeTab.path) ?? (collab.mayWrite ? "possible" : null),
+                      turnActive: session.phase === "turn",
+                      hunks: collab.hunks.get(leftPath ?? activeTab.path) ?? EMPTY_HUNKS,
+                      onUndone: (ids) => collab.dropHunks(leftPath ?? activeTab.path, ids),
+                      sync: syncFor(collab.sync, leftPath ?? activeTab.path, samePath),
+                    },
                   }}
                 />
               </div>
