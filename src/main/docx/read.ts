@@ -67,7 +67,7 @@ async function classify(bytes: Uint8Array): Promise<{ invalid: DocxInvalidReason
  * 大小判定在读之前：50 MB 的文件整个读进内存再丢掉没有意义。
  */
 export async function readDocxFile(path: string, limit: number = DOCX_MAX_BYTES): Promise<DocxOpenResult> {
-  let stats;
+  let stats: Awaited<ReturnType<typeof stat>>;
   try {
     stats = await stat(path);
   } catch (error) {

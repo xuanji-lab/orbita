@@ -216,6 +216,13 @@ function DocxSurface(props: {
   const [backupPath, setBackupPath] = useState<string | null>(null);
   /** 保存失败的原始信息：状态栏只写一句「保存失败」，细节放提示条（长报错不挤工具栏） */
   const [saveDetail, setSaveDetail] = useState<string | null>(null);
+  /** 因为要离开这份文档才去保存、结果没成功：切走会被拒，必须明说「切走会丢字」 */
+  const [leaveBlocked, setLeaveBlocked] = useState(false);
+  /**
+   * 关窗口 / 刷新被自己的 beforeunload 拦下之后的状态：
+   * `saved` = 改动已经存好（再关一次就安全）；`blocked` = 没存成（给重试 / 强制关闭）。
+   */
+  const [unloadState, setUnloadState] = useState<"none" | "saved" | "blocked">("none");
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   /** 磁盘内容的 hash：保存时的冲突判据，保存成功后更新 */
@@ -223,6 +230,21 @@ function DocxSurface(props: {
   /** 打开时的文档事实：保存前比对，判「会不会整份重排」 */
   const baselineRef = useRef<ReturnType<typeof docxFacts> | null>(null);
   const dirtyRef = useRef(false);
+  /**
+   * **独立于引擎的待存标志**（第二轮评审的阻断 1）。引擎的 `save()` 先把基线提交、
+   * 再把字节交给宿主去写；写盘失败（EPERM / 冲突）时它已经认为自己是干净的，于是
+   * 「有没有待存改动」如果只问 `hasPendingChanges()`，第二次问就会答「没有」——
+   * 闸门放行、字永久丢失、状态还显示「未改动」。
+   * 所以：用户一改就置位；**只有写盘成功**（或用户明确放弃 / 撤销回上一次成功写盘的
+   * 内容且上一次确实成功）才清。
+   */
+  const pendingRef = useRef(false);
+  /** 上一次写盘是否成功：决定「引擎说干净」能不能信 */
+  const lastWriteOkRef = useRef(true);
+  /** 连续自动重试次数（写盘失败后按退避重试，别无限敲同一扇打不开的门） */
+  const autoRetryRef = useRef(0);
+  /** beforeunload 被拦下后的「强制关闭」：这一次不再拦 */
+  const forceCloseRef = useRef(false);
   /**
    * 改动计数。保存期间用户还能继续打字（引擎不锁输入），一次「旧快照」保存成功
    * 不能把状态说成「已保存」——落盘的是改动发生之前的那一版。所以每次改动 +1，
@@ -243,7 +265,9 @@ function DocxSurface(props: {
   const conflictRef = useRef(false);
   /** 最新一版保存 / flush：键盘监听、定时器与登记表都经过它们，闭包不会读到旧的 state */
   const saveRef = useRef<(kind: "auto" | "manual") => void>(() => undefined);
-  const flushRef = useRef<() => Promise<DocxFlushOutcome>>(async () => ({ ok: true }));
+  const flushRef = useRef<(cause: "manual" | "leave") => Promise<DocxFlushOutcome>>(async () => ({
+    ok: true,
+  }));
 
   const getView = (): EditorView | null => viewRef.current;
 
@@ -342,6 +366,9 @@ function DocxSurface(props: {
   const markDirty = useCallback(() => {
     editSeqRef.current += 1;
     dirtyRef.current = true;
+    pendingRef.current = true;
+    // 又改了：上一次关窗口/刷新被拦下时的那句反馈已经过时，收掉
+    setUnloadState((prev) => (prev === "none" ? prev : "none"));
     // 已经是 dirty 就返回同一个对象（React 跳过这次更新）：否则每敲一个字都整树重渲染
     setSaveState((prev) => (prev.kind === "dirty" ? prev : { kind: "dirty" }));
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
@@ -367,15 +394,19 @@ function DocxSurface(props: {
   }, []);
 
   /**
-   * 还有没有没落盘的东西。**两个来源取或**：自己的脏标记（用户一敲键就置位）
-   * 与引擎自己的 `hasPendingChanges()`（权威，但迟到）。只信自己也信不过：
-   * `Input.insertText` / 输入法组字 / 程序化写入都不产生 keydown，脏标记会漏；
-   * 只信引擎则要等 0.7–1.5 s，切走那一下仍然丢字。
+   * 还有没有没落盘的东西。**两个来源取或**：`pendingRef`（用户一敲键就置位，
+   * 只有写盘成功才清）与引擎的 `hasPendingChanges()`（迟到，且写盘失败后会误报干净）。
+   * 只信自己会漏（`Input.insertText` / 输入法 / 程序化写入不产生 keydown）；
+   * 只信引擎则既慢又会漏掉写盘失败的那一版。
    */
   const hasUnsaved = (): boolean => {
-    if (dirtyRef.current) return true;
+    if (pendingRef.current || dirtyRef.current) return true;
     return editorRef.current?.hasPendingChanges() ?? false;
   };
+
+  /** 写盘失败后的自动重试间隔（用户多半是去改文件权限 / 关掉占用的程序） */
+  const AUTO_RETRY_MS = 5000;
+  const AUTO_RETRY_LIMIT = 5;
 
   /** 真正落盘的那一步：判定重排 → 提示 → 序列化 → 写盘（冲突是值不是异常） */
   const performSave = useCallback(
@@ -385,10 +416,16 @@ function DocxSurface(props: {
       if (!hasUnsaved()) return { ok: true };
       if (conflictRef.current) return { ok: false, reason: "conflict" };
       if (oversizeRef.current) return { ok: false, reason: "failed" };
-      // 撤销回到磁盘上的那一份：没有待序列化的改动，就不用写盘，状态也退回「未改动」
-      if (!ref.hasPendingChanges()) {
+      /*
+       * 「撤销回到磁盘上的那一份」这条捷径**只在最后一次写盘成功时才可信**。
+       * 写盘失败之后引擎也会说 hasPendingChanges=false（它在交给宿主之前就提交了
+       * 基线），照它清标志就是评审复现的那条永久丢字路径。
+       */
+      if (lastWriteOkRef.current && !ref.hasPendingChanges()) {
+        pendingRef.current = false;
         dirtyRef.current = false;
         setSaveState({ kind: "clean" });
+        setLeaveBlocked(false);
         return { ok: true };
       }
 
@@ -439,6 +476,11 @@ function DocxSurface(props: {
         confirmedRef.current = false;
         setGate(null);
         setSaveDetail(null);
+        setLeaveBlocked(false);
+        setUnloadState((prev) => (prev === "blocked" ? prev : "none"));
+        lastWriteOkRef.current = true;
+        autoRetryRef.current = 0;
+        pendingRef.current = false;
         if (editSeqRef.current === seqAtStart && !ref.hasPendingChanges()) {
           dirtyRef.current = false;
           setSaveState({ kind: "saved", at: result.modifiedAt });
@@ -456,7 +498,21 @@ function DocxSurface(props: {
       } catch (cause: unknown) {
         const message = cause instanceof Error ? cause.message : String(cause);
         setSaveState({ kind: "failed", message: t.docx.saveFailed });
-        setSaveDetail(message);
+        // 权限 / 占用是最常见的写盘失败：说一句人话，原始报错留给 title（评审只要求
+        // 「中文提示」，但把 EPERM 直接摊在脸上等于没解释）
+        setSaveDetail(/EPERM|EACCES|EBUSY/.test(message) ? t.docx.writeBlocked : message);
+        // 写盘没成功：待存标志必须留着（引擎已经认为干净了，见 pendingRef 的注释）
+        pendingRef.current = true;
+        lastWriteOkRef.current = false;
+        // 有限次的自动重试：用户多半正在改权限 / 关占用的程序，别让他非按一次 Ctrl+S
+        if (autoRetryRef.current < AUTO_RETRY_LIMIT) {
+          autoRetryRef.current += 1;
+          if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+          timerRef.current = window.setTimeout(() => {
+            timerRef.current = null;
+            saveRef.current("auto");
+          }, AUTO_RETRY_MS);
+        }
         return { ok: false, reason: "failed" };
       }
     },
@@ -481,14 +537,26 @@ function DocxSurface(props: {
    * 保存期间又改了的话（引擎不锁输入）再排一次，最多三轮——三轮还没干净就是
    * 真有问题，交给调用方「别切走」。
    */
-  const flushNow = useCallback(async (): Promise<DocxFlushOutcome> => {
-    for (let round = 0; round < 3; round += 1) {
-      const outcome = await enqueueSave("manual");
-      if (!outcome.ok) return outcome;
-      if (!hasUnsaved()) return { ok: true };
-    }
-    return hasUnsaved() ? { ok: false, reason: "failed" } : { ok: true };
-  }, [enqueueSave]);
+  const flushNow = useCallback(
+    async (cause: "manual" | "leave" = "manual"): Promise<DocxFlushOutcome> => {
+      for (let round = 0; round < 3; round += 1) {
+        const outcome = await enqueueSave("manual");
+        if (!outcome.ok) {
+          // 「因为要切走才保存」失败：必须让用户看见「切走会丢字」，否则他会以为
+          // 只是普通保存报错，继续点别的文件/面板
+          if (cause === "leave") setLeaveBlocked(true);
+          return outcome;
+        }
+        if (!hasUnsaved()) return { ok: true };
+      }
+      if (hasUnsaved()) {
+        if (cause === "leave") setLeaveBlocked(true);
+        return { ok: false, reason: "failed" };
+      }
+      return { ok: true };
+    },
+    [enqueueSave],
+  );
 
   saveRef.current = (kind) => {
     void enqueueSave(kind);
@@ -498,8 +566,8 @@ function DocxSurface(props: {
   // 登记给「切标签 / 关标签 / 切会话 / 关窗口」的闸门（docx-flush.ts）
   useEffect(() => {
     return registerDocxFlush(request.dir, {
-      flush: () => flushRef.current(),
-      pending: () => dirtyRef.current || (editorRef.current?.hasPendingChanges() ?? false),
+      flush: (cause) => flushRef.current(cause),
+      pending: () => hasUnsaved(),
     });
   }, [request.dir]);
 
@@ -562,11 +630,23 @@ function DocxSurface(props: {
    */
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent): void => {
-      if (!dirtyRef.current && !(editorRef.current?.hasPendingChanges() ?? false)) return;
+      if (forceCloseRef.current) return;
+      if (!hasUnsaved()) return;
       event.preventDefault();
       event.returnValue = "";
-      void flushNow().then((outcome) => {
-        if (outcome.ok) window.close();
+      void flushNow("leave").then((outcome) => {
+        if (outcome.ok) {
+          /*
+           * **不自动 window.close()**：beforeunload 分不清「用户在关窗口」与「页面
+           * 在重载」（dev 的 Ctrl+R 也会走这里），自动 close 会在重载时把整个窗口关掉
+           * ——实测过。存好之后只给一句反馈，用户再关一次 / 再刷一次就安全了。
+           */
+          setUnloadState("saved");
+          return;
+        }
+        // 关不掉也不能「零反馈」（评审 R2）：把「没保存成功、关闭被拦下」摆出来，
+        // 并给一条明确放弃的出口
+        setUnloadState("blocked");
       });
     };
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -692,6 +772,63 @@ function DocxSurface(props: {
               }}
             >
               {t.docx.dismiss}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {leaveBlocked && conflict === null && (
+        <div className="docx-note" data-tone="danger" role="alert">
+          <Icon name="triangle-alert" size={14} />
+          <span>{t.docx.leaveBlocked}</span>
+          <div className="docx-note-actions">
+            <button
+              className="quiet-control docx-note-button"
+              data-primary=""
+              onClick={() => {
+                void flushNow("manual");
+              }}
+            >
+              {t.docx.retrySave}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {unloadState === "saved" && (
+        <div className="docx-note" role="status">
+          <Icon name="check" size={14} />
+          <span>{t.docx.unloadSaved}</span>
+        </div>
+      )}
+
+      {unloadState === "blocked" && (
+        <div className="docx-note" data-tone="danger" role="alert">
+          <Icon name="octagon-x" size={14} />
+          <span>{t.docx.unloadBlocked}</span>
+          <div className="docx-note-actions">
+            <button
+              className="quiet-control docx-note-button"
+              data-primary=""
+              onClick={() => {
+                void flushNow("manual").then((outcome) => {
+                  if (!outcome.ok) return;
+                  forceCloseRef.current = true;
+                  window.close();
+                });
+              }}
+            >
+              {t.docx.retrySave}
+            </button>
+            <button
+              className="quiet-control docx-note-button"
+              onClick={() => {
+                // 明确放弃：用户点过这一下之后，关窗口不再被拦
+                forceCloseRef.current = true;
+                window.close();
+              }}
+            >
+              {t.docx.closeAnyway}
             </button>
           </div>
         </div>
