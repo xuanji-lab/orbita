@@ -3,8 +3,22 @@
  *
  * **门控**：只有打包好的 Windows 应用才接线（`updateSupport`，见 state.ts；macOS 包未签名公证、
  * 装不上，本版不接）——dev 实例没有任何可更新的安装，检查只会
- * 往日志里灌网络错误。feed 地址不写在这里：`package.json` 的 `build.publish` 在打包时
- * 烘焙进 `resources/app-update.yml`，库自己去读。
+ * 往日志里灌网络错误。
+ *
+ * **更新源**：owner/repo 仍以 `package.json` 的 `build.publish` 为唯一真源；但读取方式
+ * 换成了 GitHub REST API + 发布资产端点（`github-api-provider.ts`）。原因是 electron-updater
+ * 自带的 GitHub provider 要先访问 `github.com/.../releases.atom`，而部分网络只拦网页域名、
+ * `api.github.com` 仍通（issue #283）——同一份 Release，不引入镜像源。
+ * `build.publish` 仍会在打包时写进 `resources/app-update.yml`，这里用 setFeedURL 覆盖
+ * provider；取不到 owner/repo 时退回库自己读 app-update.yml 的行为。
+ *
+ * **网络**：元数据请求经共享 GitHub 客户端（`github-client.ts`，与「历史版本」列表同一个
+ * 实例：同一套缓存与限流记录）；它的 transport 是 `github-net.ts` 的 Electron net，挂在
+ * electron-updater 自己的 session（分区 `electron-updater`）上——下载器也在那个 session，
+ * 所以 `HTTPS_PROXY` / `HTTP_PROXY` 对检查、下载、历史版本列表同时生效（应用时机见 index.ts）。
+ *
+ * **下载**：库自带的下载器单连接、一断就从 0 重来；这里换成 4MB 分段、最多 6 段并行、
+ * 每段从已写字节续传（见 resilient-executor.ts），下完按 latest.yml 的 sha512 校验。
  *
  * **节奏**（沿用参考实现 Proma，去掉它的「等 agent 空闲再装」调度）：启动 10s 后首查，
  * 之后每 4h 一次；手动检查同一条路。`autoDownload=false`——发现新版本只进 `available`，
@@ -27,8 +41,12 @@ import type {
   UpdateSupport,
 } from "../../shared/updater.ts";
 import { builtinNotes } from "./builtin-notes.ts";
+import { failureKindOf } from "./failure.ts";
+import { GitHubApiProvider } from "./github-api-provider.ts";
+import type { GitHubClient } from "./github-client.ts";
 import { appNotesOf } from "./notes.ts";
-import { releasesUrl } from "./releases-url.ts";
+import { publishTarget, releasesUrl } from "./releases-url.ts";
+import { installResilientDownload } from "./resilient-executor.ts";
 import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
 
 /** 启动后延迟首查：错开启动时那一串磁盘 / 网络活动，别和界面首帧抢 */
@@ -45,6 +63,8 @@ export interface UpdaterOptions {
   version: string;
   /** 安装前的收尾：把 agent utility 进程收掉（见文件头） */
   beforeInstall: () => void;
+  /** 共享 GitHub 客户端（与「历史版本」列表同一个实例，见 github-client.ts） */
+  github: GitHubClient;
 }
 
 /** 更新说明：只认打包时写进 latest.yml 的纯文本；退回到 Release 页正文时不显示（见 notes.ts 的 appNotesOf） */
@@ -73,6 +93,7 @@ export class Updater {
   private readonly support: UpdateSupport;
   private readonly version: string;
   private readonly beforeInstall: () => void;
+  private readonly github: GitHubClient;
   private readonly listeners = new Set<(snapshot: UpdaterSnapshot) => void>();
   private state: UpdateState = { kind: "idle" };
   /**
@@ -97,6 +118,7 @@ export class Updater {
     this.support = updateSupport(options.packaged, options.platform);
     this.version = options.version;
     this.beforeInstall = options.beforeInstall;
+    this.github = options.github;
   }
 
   /** 当前快照。renderer 挂载时拉一次，之后靠 updater:state 推送 */
@@ -116,7 +138,7 @@ export class Updater {
   }
 
   /** 接线 electron-updater 并排上两次自动检查。dev（未打包）下什么都不做。 */
-  start(): void {
+  async start(): Promise<void> {
     if (this.support !== "supported") {
       console.info(
         this.support === "unpackaged"
@@ -134,6 +156,25 @@ export class Updater {
     // 库不自己下载、也不在退出时顺手安装：两步都要用户点（见文件头）
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
+
+    // 读取方式换成 GitHub API（见 github-api-provider.ts）：网页域名被拦时也能检查更新。
+    // owner/repo 仍来自 build.publish；取不到就不覆盖，让库照 app-update.yml 走。
+    // 下载器必须在 setFeedURL 前换：provider 的 runtimeOptions 在 setFeedURL 时
+    // 捕获 httpExecutor，晚一步换，provider 还会拿旧的。
+    installResilientDownload(autoUpdater);
+    const target = publishTarget();
+    if (target === null) {
+      console.warn("[更新] build.publish 里没有 owner/repo，更新源沿用打包时的 app-update.yml");
+    } else {
+      autoUpdater.setFeedURL({
+        provider: "custom",
+        updateProvider: GitHubApiProvider,
+        owner: target.owner,
+        repo: target.repo,
+        // 与「历史版本」列表共用：同一套网络 / 代理 / 缓存 / 限流记录
+        client: this.github,
+      });
+    }
 
     autoUpdater.on("checking-for-update", () => this.apply({ type: "check-started" }));
     autoUpdater.on("update-available", (info) => this.apply({ type: "available", release: releaseOf(info) }));
@@ -245,11 +286,18 @@ export class Updater {
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[更新] ${stageLabel(stage)}失败：`, message);
-    this.apply({ type: "failed", stage, message });
+    const failure = failureKindOf(error);
+    console.error(`[更新] ${stageLabel(stage)}失败（${failure}）：`, message);
+    if (failure === "rate-limit") {
+      // 同一本限流账（检查更新 + 历史版本列表共用）：记下来，支持时一眼看出是配额还是网络
+      console.warn("[更新] GitHub 限流记录：", JSON.stringify(this.github.rateLimit()));
+    }
+    this.apply({ type: "failed", stage, failure, message });
   }
 
-  /** 状态机对无关动作返回同一个引用：据此跳过广播 */
+  /**
+   * 状态机对无关动作返回同一个引用：据此跳过广播
+   */
   private apply(action: UpdaterAction): void {
     const next = reduceUpdater(this.state, action);
     if (next === this.state) return;

@@ -14,6 +14,7 @@
  */
 import type {
   UpdateDownloadProgress,
+  UpdateFailureKind,
   UpdateNote,
   UpdateRelease,
   UpdateStage,
@@ -44,7 +45,7 @@ export type UpdaterAction =
   | { type: "progress"; progress: UpdateDownloadProgress }
   | { type: "download-cancelled" }
   | { type: "downloaded"; version: string }
-  | { type: "failed"; stage: UpdateStage; message: string };
+  | { type: "failed"; stage: UpdateStage; failure: UpdateFailureKind; message: string };
 
 /** 更新说明逐条相比：解析一次就得到一份新数组，不比内容的话「同一次检查的同一个答案」会被当成两份 */
 function sameNotes(a: readonly UpdateNote[] | null, b: readonly UpdateNote[] | null): boolean {
@@ -126,7 +127,7 @@ export function reduceUpdater(state: UpdateState, action: UpdaterAction): Update
       // （第二次时「正在下载」的标记已经清掉，会算成 check）：**先到的那条更准**，
       // 同一条消息不许把已有的 error 换个阶段显示
       if (state.kind === "error" && state.message === action.message) return state;
-      return { kind: "error", stage: action.stage, message: action.message };
+      return { kind: "error", stage: action.stage, failure: action.failure, message: action.message };
   }
 }
 

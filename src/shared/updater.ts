@@ -67,6 +67,16 @@ export interface UpdateNote {
 export type UpdateStage = "check" | "download" | "install";
 
 /**
+ * 失败的原因分类——界面按它补一句人话，机器原文仍然只进 title。
+ *
+ * 分档的依据是用户能做的事不同：网络不可达要检查网络 / 代理；404 与限流要等；
+ * 服务器 5xx 不是本机的问题。更新只访问 GitHub 的 API 与发布资产域名
+ * （`api.github.com` / `release-assets.githubusercontent.com`，见 main/updater/github-api-provider.ts），
+ * 被拦、断网、代理没通都落在 `network` 这一档。
+ */
+export type UpdateFailureKind = "network" | "not-found" | "rate-limit" | "server" | "unknown";
+
+/**
  * 更新状态机的状态。**每个状态都把界面要画的东西带齐**（版本号、大小、进度），
  * renderer 不做推导。
  *
@@ -81,7 +91,7 @@ export type UpdateState =
   | { kind: "available"; release: UpdateRelease }
   | { kind: "downloading"; release: UpdateRelease; progress: UpdateDownloadProgress }
   | { kind: "downloaded"; version: string }
-  | { kind: "error"; stage: UpdateStage; message: string };
+  | { kind: "error"; stage: UpdateStage; failure: UpdateFailureKind; message: string };
 
 /** `updater:get` / `updater:state` 的载荷：整份快照 */
 export interface UpdaterSnapshot {

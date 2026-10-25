@@ -59,12 +59,12 @@ describe("reduceUpdater —— 主链", () => {
     const available = reduceUpdater({ kind: "checking" }, { type: "up-to-date", version: "0.1.15" });
     assert.deepEqual(available, { kind: "up-to-date", version: "0.1.15" });
 
-    const failed = reduceUpdater(available, { type: "failed", stage: "check", message: "ETIMEDOUT" });
-    assert.deepEqual(failed, { kind: "error", stage: "check", message: "ETIMEDOUT" });
+    const failed = reduceUpdater(available, { type: "failed", stage: "check", failure: "network", message: "ETIMEDOUT" });
+    assert.deepEqual(failed, { kind: "error", stage: "check", failure: "network", message: "ETIMEDOUT" });
   });
 
   test("失败后可重新检查：error → checking → available（重试路径）", () => {
-    const error: UpdateState = { kind: "error", stage: "download", message: "socket hang up" };
+    const error: UpdateState = { kind: "error", stage: "download", failure: "network", message: "socket hang up" };
     const checking = reduceUpdater(error, { type: "check-started" });
     assert.deepEqual(checking, { kind: "checking" });
   });
@@ -75,8 +75,8 @@ describe("reduceUpdater —— 粘性规则", () => {
     const downloaded: UpdateState = { kind: "downloaded", version: "0.2.0" };
     assert.equal(reduceUpdater(downloaded, { type: "check-started" }), downloaded);
     assert.equal(reduceUpdater(downloaded, { type: "up-to-date", version: "0.2.0" }), downloaded);
-    assert.equal(reduceUpdater(downloaded, { type: "failed", stage: "check", message: "x" }), downloaded);
-    assert.equal(reduceUpdater(downloaded, { type: "failed", stage: "download", message: "x" }), downloaded);
+    assert.equal(reduceUpdater(downloaded, { type: "failed", stage: "check", failure: "unknown", message: "x" }), downloaded);
+    assert.equal(reduceUpdater(downloaded, { type: "failed", stage: "download", failure: "unknown", message: "x" }), downloaded);
   });
 
   test("已下载 0.2.0，更新源又给出 0.2.0（发布重发）→ 保留已下载的那份", () => {
@@ -106,7 +106,7 @@ describe("reduceUpdater —— 粘性规则", () => {
     assert.equal(reduceUpdater(downloading, { type: "check-started" }), downloading);
     assert.equal(reduceUpdater(downloading, { type: "up-to-date", version: "0.2.0" }), downloading);
     assert.equal(reduceUpdater(downloading, { type: "available", release: release("0.3.0") }), downloading);
-    assert.equal(reduceUpdater(downloading, { type: "failed", stage: "check", message: "x" }), downloading);
+    assert.equal(reduceUpdater(downloading, { type: "failed", stage: "check", failure: "unknown", message: "x" }), downloading);
   });
 
   test("下载失败（stage=download）确实会中断下载 → error", () => {
@@ -115,8 +115,8 @@ describe("reduceUpdater —— 粘性规则", () => {
       release: release("0.2.0"),
       progress: { percent: 30, transferred: 1, total: 2, bytesPerSecond: 3 },
     };
-    const next = reduceUpdater(downloading, { type: "failed", stage: "download", message: "socket hang up" });
-    assert.deepEqual(next, { kind: "error", stage: "download", message: "socket hang up" });
+    const next = reduceUpdater(downloading, { type: "failed", stage: "download", failure: "network", message: "socket hang up" });
+    assert.deepEqual(next, { kind: "error", stage: "download", failure: "network", message: "socket hang up" });
   });
 
   test("取消下载 → 退回同一份 available（大小与更新说明都不丢）", () => {
@@ -157,15 +157,16 @@ describe("reduceUpdater —— 状态不变就返回同一个引用（广播去�
     assert.equal(reduceUpdater(once, { type: "progress", progress }), once);
     assert.notEqual(reduceUpdater(once, { type: "progress", progress: { ...progress, percent: 43 } }), once);
 
-    const error = reduceUpdater(once, { type: "failed", stage: "download", message: "socket hang up" });
-    assert.equal(reduceUpdater(error, { type: "failed", stage: "download", message: "socket hang up" }), error);
+    const error = reduceUpdater(once, { type: "failed", stage: "download", failure: "network", message: "socket hang up" });
+    assert.equal(reduceUpdater(error, { type: "failed", stage: "download", failure: "network", message: "socket hang up" }), error);
     // 同一条错误被库报两次（事件 + rejection）时，第二次算出的阶段可能是 check：
     // 先到的那条（download）要留住，否则界面把「下载失败」说成「检查失败」
-    assert.equal(reduceUpdater(error, { type: "failed", stage: "check", message: "socket hang up" }), error);
+    assert.equal(reduceUpdater(error, { type: "failed", stage: "check", failure: "network", message: "socket hang up" }), error);
     // 换了一条错误就照实更新
-    assert.deepEqual(reduceUpdater(error, { type: "failed", stage: "check", message: "ETIMEDOUT" }), {
+    assert.deepEqual(reduceUpdater(error, { type: "failed", stage: "check", failure: "network", message: "ETIMEDOUT" }), {
       kind: "error",
       stage: "check",
+      failure: "network",
       message: "ETIMEDOUT",
     });
   });
