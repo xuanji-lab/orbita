@@ -1177,6 +1177,13 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 工作区列表变了（主进程写完盘广播）：新建 / 添加 / 改名 / 移除 / 挂摘附加目录都发。
+ * renderer 收到就重读 `workspace:list`——侧栏、技能分组、新建任务的工作区选择器
+ * 共用这份列表，等下一次整页重载才出现就是「建了但看不见」（2026-10-24 探针实测）。
+ * 没有 sessionId：归属是全局事实，不属于哪条会话（同 skillsChanged）。
+ */
+| { type: "workspacesChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
