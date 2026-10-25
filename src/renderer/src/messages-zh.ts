@@ -1701,6 +1701,23 @@ export const zh: Messages = {
     xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
     xlsxBroken: "这个工作簿读不开——可能已经损坏。",
     xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
+    /* ---------- .pptx 只读大纲（契约见 shared/pptx.ts） ---------- */
+    pptxSlides: "幻灯片",
+    pptxOutline: "大纲",
+    pptxSlideLabel: (number, layout) =>
+      layout === "" ? `第 ${number} 页` : `第 ${number} 页 · ${layout}`,
+    pptxUntitled: "无标题",
+    pptxTables: "表格",
+    pptxNotes: "备注",
+    pptxEmptySlide: "这一页没有文字",
+    pptxPictures: (count) => `这一页有 ${count} 张图片，用默认应用打开看`,
+    pptxTextTruncated: (limit) => `这一页的文字被截断在 ${grouped(limit)} 字`,
+    pptxDeckTruncated: (shown, total) => `只解析了前 ${grouped(shown)} 页，共 ${grouped(total)} 页`,
+    pptxReadOnly: "只读",
+    pptxEmpty: "这份演示文稿没有幻灯片",
+    pptxPassword: "这份演示文稿有密码保护，或者不是真正的 .pptx 文件。",
+    pptxBroken: "这份演示文稿读不开——可能已经损坏。",
+    pptUnsupported: "旧版 .ppt 演示文稿看不了预览，用默认应用打开。",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,
   },

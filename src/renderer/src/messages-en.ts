@@ -1856,6 +1856,26 @@ export const en = {
     xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
     xlsxBroken: "Couldn't read this workbook — it may be damaged.",
     xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
+    /* ---------- .pptx 只读大纲（pptx.ts 契约） ---------- */
+    pptxSlides: "Slides",
+    pptxOutline: "Outline",
+    /** 页列表的坐标：页码 + 版式名（版式读不到时只留页码） */
+    pptxSlideLabel: (number: number, layout: string) =>
+      layout === "" ? `Slide ${number}` : `Slide ${number} · ${layout}`,
+    pptxUntitled: "Untitled",
+    pptxTables: "Tables",
+    pptxNotes: "Notes",
+    pptxEmptySlide: "No text on this slide",
+    pptxPictures: (count: number) =>
+      `${plural(count, "image")} on this slide — open it with the default app to see`,
+    pptxTextTruncated: (limit: number) => `Text on this slide is cut at ${grouped(limit)} characters`,
+    pptxDeckTruncated: (shown: number, total: number) =>
+      `Parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    pptxReadOnly: "Read-only",
+    pptxEmpty: "This presentation has no slides",
+    pptxPassword: "This presentation is password-protected, or it isn't a real .pptx file.",
+    pptxBroken: "Couldn't read this presentation — it may be damaged.",
+    pptUnsupported: "Old .ppt presentations can't be previewed — open it with the default app.",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },

@@ -10,9 +10,11 @@ import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
 import { isLegacyXlsFile, isXlsxFile } from "@shared/xlsx";
+import { isLegacyPptFile, isPptxFile } from "@shared/pptx";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
 import { XlsxView } from "../xlsx/XlsxView";
+import { PptxView } from "../pptx/PptxView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
@@ -59,6 +61,10 @@ export function FilePreviewPane(props: {
   const xlsx = sentImage === undefined && isXlsxFile(path);
   const legacyXls = sentImage === undefined && isLegacyXlsFile(path);
   const [xlsxReload, setXlsxReload] = useState(0);
+  // .pptx 走只读大纲（页序 / 标题 / 要点 / 表格 / 备注，不渲染）；旧版 .ppt 明说不支持
+  const pptx = sentImage === undefined && isPptxFile(path);
+  const legacyPpt = sentImage === undefined && isLegacyPptFile(path);
+  const [pptxReload, setPptxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -186,6 +192,7 @@ export function FilePreviewPane(props: {
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
                 if (xlsx) setXlsxReload((n) => n + 1);
+                if (pptx) setPptxReload((n) => n + 1);
               }}
             >
               <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
@@ -203,7 +210,7 @@ export function FilePreviewPane(props: {
           </Chip>
         </div>
       )}
-      <div className="file-preview-body" data-kind={pdf ? "pdf" : xlsx ? "xlsx" : undefined}>
+      <div className="file-preview-body" data-kind={pdf ? "pdf" : xlsx ? "xlsx" : pptx ? "pptx" : undefined}>
         {pdf ? (
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
@@ -216,6 +223,14 @@ export function FilePreviewPane(props: {
             reloadToken={xlsxReload}
             onOpenDefault={openDefault}
           />
+        ) : pptx ? (
+          <PptxView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={pptxReload}
+            onOpenDefault={openDefault}
+          />
+        ) : legacyPpt ? (
+          <LegacyPptPreview onOpenDefault={openDefault} />
         ) : legacyXls ? (
           <LegacyXlsPreview onOpenDefault={openDefault} />
         ) : sentImage === undefined ? (
@@ -478,6 +493,24 @@ function LegacyXlsPreview(props: { onOpenDefault: () => void }) {
     <div className="file-preview-empty">
       <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
       <PanelLine>{t.files.xlsUnsupported}</PanelLine>
+      <PanelButton onClick={props.onOpenDefault}>
+        <Icon name="external-link" size={14} />
+        {t.files.openDefault}
+      </PanelButton>
+    </div>
+  );
+}
+
+/**
+ * 旧版二进制演示文稿（.ppt）：与 .xls 同理——说清是这个格式不支持（.ppt 是 OLE2
+ * 复合文档，不是 zip + OOXML，大纲通道读不了），并给「用默认应用打开」这个出口。
+ */
+function LegacyPptPreview(props: { onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-empty">
+      <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+      <PanelLine>{t.files.pptUnsupported}</PanelLine>
       <PanelButton onClick={props.onOpenDefault}>
         <Icon name="external-link" size={14} />
         {t.files.openDefault}

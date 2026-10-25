@@ -3537,6 +3537,231 @@ body {
 }
 
 /*
+ * ===== .pptx 只读大纲（features/pptx/PptxView.tsx，契约 shared/pptx.ts） =====
+ * 不画幻灯片：版式 / 字体 / 图片读不全，照 HTML 硬画一版用户会以为原文件坏了。
+ * 这里只有大纲——左边页列表（页码 + 版式名 + 标题），右边该页的标题 / 多级要点 /
+ * 表格 / 备注。只读，没有任何输入控件。
+ */
+.file-preview-body[data-kind="pptx"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.pptx-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 窄面板（右栏最窄 ~320）把页列表叠到上方：两栏并排时正文只剩一百来像素 */
+  container-type: inline-size;
+}
+.pptx-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pptx-toolbar-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.pptx-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* 行尾元素：右缘钉在工具行的右内边距上（设计系统「行尾血线」） */
+.pptx-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.pptx-split {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 页列表：页码 + 版式名是定位坐标，标题是「这页在讲什么」 */
+.pptx-slide-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 0 0 184px;
+  min-width: 0;
+  padding: var(--space-2);
+  overflow-y: auto;
+  border-right: 1px solid var(--color-border-subtle);
+}
+.pptx-slide-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+}
+.pptx-slide-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.pptx-slide-row[aria-pressed="true"] .pptx-slide-label {
+  color: var(--color-text-primary);
+}
+/* 标题二级行：very weak metadata 一档；超长截断，页码坐标不被长标题挤走 */
+.pptx-slide-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.pptx-outline {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+.pptx-outline-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+/* 要点：行内缩进由 TSX 按 level 给（layout 值，不是字号），符号是 4px 圆点不是字 */
+.pptx-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.pptx-line {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-primary);
+}
+.pptx-bullet {
+  flex: 0 0 auto;
+  width: 4px;
+  height: 4px;
+  margin-top: 0.72em;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+}
+.pptx-line-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pptx-section {
+  margin-top: var(--space-4);
+}
+/* 分区小标题：设计系统的 group label（sm / semibold / secondary） */
+.pptx-section-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.pptx-table-wrap {
+  overflow-x: auto;
+}
+/* 表格只还原行列与文字：边框用发丝线，不猜表头（PowerPoint 的表没有 thead 语义） */
+.pptx-table {
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.pptx-table td {
+  max-width: 32ch;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+/* 备注是散文，按 reading leading 排；保留原稿里的换行 */
+.pptx-notes {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* 图片 / 截断这两条是「与原稿不一样」的地方，必须说出来 */
+.pptx-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pptx-empty-line {
+  margin: var(--space-4) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+/* 底部提示条：只读 + 页数上限；与 xlsx 的底条同一配方 */
+.pptx-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.pptx-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+/* 读不开时的技术副行（异常原文） */
+.pptx-detail {
+  margin: 0;
+  max-width: 48ch;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+@container (max-width: 420px) {
+  .pptx-split {
+    flex-direction: column;
+  }
+  .pptx-slide-list {
+    flex: 0 0 auto;
+    max-height: 38%;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边

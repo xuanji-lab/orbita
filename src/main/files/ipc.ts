@@ -15,12 +15,14 @@ import {
   type FsEntryFact,
 } from "../../shared/files.ts";
 import { isXlsxFile, type XlsxPreview, type XlsxReadRequest } from "../../shared/xlsx.ts";
+import { isPptxFile, type PptxPreview, type PptxReadRequest } from "../../shared/pptx.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { readPdfFile, readPreview } from "./read.ts";
 import { readXlsxInWorker } from "../xlsx/service.ts";
+import { readPptx } from "../pptx/read.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -89,6 +91,20 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isXlsxFile(path)) throw new Error(`Not an .xlsx file: ${path}`);
     return readXlsxInWorker(path, req.sheet ?? 0);
+  });
+
+  /**
+   * 读一份 .pptx 的只读大纲（同白名单，外加只认 .pptx）。扩展名判定同样用 realpath
+   * 之后的路径——改名成 foo.pptx 的软链接指向别的文件一样被拒。
+   *
+   * **不跑 worker**：这里只解 zip 读文本（jszip 的异步解压本身会让出事件循环），
+   * 一份 20 页的演示文稿实测几十毫秒；与 xlsx 的 ExcelJS 整本建模不是一回事。
+   */
+  ipcMain.handle(ipcChannels.fsReadPptx, async (_event, req: PptxReadRequest): Promise<PptxPreview> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isPptxFile(path)) throw new Error(`Not a .pptx file: ${path}`);
+    return readPptx(path);
   });
 
   /**
