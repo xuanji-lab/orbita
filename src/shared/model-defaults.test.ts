@@ -5,7 +5,11 @@ import {
   FALLBACK_MODEL,
   FALLBACK_THINKING_LEVEL,
   defaultThinkingLevel,
+  knownParamsFor,
   lookupCatalogModel,
+  lookupCatalogSource,
+  modelDisplayName,
+  modelThinkingLevels,
   resolveModelDefaults,
 } from "./model-defaults.ts";
 
@@ -164,6 +168,15 @@ describe("resolveModelDefaults —— 白名单 > 目录 > 兜底", () => {
     assert.equal(defaults.source, "catalog");
   });
 
+  test("白名单也能纠模态：纯文本的 step-3.5-flash 不给 image（目录里没有它，否则会落兜底的 image）", () => {
+    // 移植自 #180（@XIAOZF99）
+    const defaults = resolveModelDefaults(CATALOG, "step-3.5-flash");
+    assert.deepEqual(defaults.input, ["text"]);
+    assert.equal(defaults.source, "known");
+    // 白名单与目录都不知道的型号仍然赌 image——静默剥图比网关 400 更坏
+    assert.deepEqual(resolveModelDefaults(CATALOG, "step-9-flash").input, ["text", "image"]);
+  });
+
   test("两边都没有：落兜底，且 input 带 image——图片被静默剥掉比网关 400 更坏", () => {
     const defaults = resolveModelDefaults(CATALOG, "my-gateway-model");
     assert.equal(defaults.contextWindow, FALLBACK_MODEL.contextWindow);
@@ -200,3 +213,133 @@ describe("defaultThinkingLevel —— 白名单默认档 > medium，再按支持
     assert.equal(defaultThinkingLevel("no-such-model", undefined), "medium");
   });
 });
+
+describe("knownParamsFor —— 白名单对（服务商，型号）给出的口径", () => {
+  // OpenCode Go 的目录切片：收录了 kimi-k3（这家只开 max），没收录 deepseek-v4.1-flash
+  const opencode: BuiltinProvider = {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    api: "openai-completions",
+    models: [{ ...entry("kimi-k3", 1_048_576, 131_072, true), supportedThinkingLevels: ["max"] }],
+  };
+  const catalog = [...CATALOG, opencode];
+  const authoritative = { catalogId: "opencode-go", api: "openai-completions", catalogAuthoritative: true };
+
+  test("普通服务商：按型号 id 取白名单", () => {
+    assert.deepEqual(knownParamsFor(catalog, "kimi-k3", { catalogId: "kimi-coding" }).thinkingLevels, [
+      "low",
+      "high",
+      "max",
+    ]);
+  });
+
+  test("「目录说了算」且本家目录收录了：不吃白名单，菜单按目录显示 max 一档", () => {
+    assert.deepEqual(knownParamsFor(catalog, "kimi-k3", authoritative), {});
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, null, authoritative), ["max"]);
+  });
+
+  test("「目录说了算」但本家目录没收录：白名单照样补（目录还没跟上的新型号）", () => {
+    assert.equal(knownParamsFor(catalog, "deepseek-v4.1-flash", authoritative).contextWindow, 1_000_000);
+    assert.deepEqual(modelThinkingLevels("deepseek-v4.1-flash", catalog, null, authoritative), [
+      "off",
+      "low",
+      "high",
+      "max",
+    ]);
+  });
+
+  test("标了「目录说了算」却没有 catalogId：无从判断本家，按白名单答", () => {
+    assert.equal(knownParamsFor(catalog, "kimi-k3", { catalogAuthoritative: true }).thinkingLevels?.length, 3);
+  });
+});
+
+describe("modelThinkingLevels —— 用户覆盖 > 白名单 > 运行时报回 > 目录", () => {
+  const gateway: BuiltinProvider = {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    api: "openai-completions",
+    models: [{ ...entry("kimi-k3", 1_048_576, 131_072, true), supportedThinkingLevels: ["off", "low", "high"] }],
+  };
+  const catalog = [...CATALOG, gateway];
+  const home = { catalogId: "opencode-go", api: "openai-completions" };
+
+  test("覆盖盖过白名单（kimi-k3 白名单是 low/high/max）、运行时报回与目录", () => {
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, ["off", "medium"], home, ["high"]), ["high"]);
+  });
+
+  test("覆盖盖过目录（白名单不认识的型号），且按词汇表顺序给出", () => {
+    const odd: BuiltinProvider = {
+      ...gateway,
+      models: [{ ...entry("odd-model", 128_000, 8_192, false), supportedThinkingLevels: ["off", "low"] }],
+    };
+    assert.deepEqual(modelThinkingLevels("odd-model", [odd], null, home, ["max", "off"]), ["off", "max"]);
+  });
+
+  test("继承（缺省 / 空数组）时行为不变：白名单仍在最前", () => {
+    const inherited = modelThinkingLevels("kimi-k3", catalog, null, home);
+    assert.deepEqual(inherited, ["low", "high", "max"]);
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, null, home, undefined), inherited);
+    assert.deepEqual(modelThinkingLevels("kimi-k3", catalog, null, home, []), inherited);
+  });
+});
+
+describe("lookupCatalogSource —— 连同所在的那一家返回（会话借档位表要从同一家抄）", () => {
+  test("同 api 优先时返回的是那一家，不是目录里排第一的", () => {
+    const source = lookupCatalogSource(CATALOG, "claude-opus-5", { api: "openai-completions" });
+    assert.equal(source?.provider.id, "mirror-gateway");
+    assert.equal(source?.model.contextWindow, 200_000);
+  });
+
+  test("本家命中返回本家", () => {
+    assert.equal(lookupCatalogSource(CATALOG, "k3", { catalogId: "kimi-coding" })?.provider.id, "kimi-coding");
+  });
+});
+
+describe("modelDisplayName —— 声明里的名字 > 白名单 > 目录名 > id", () => {
+  const named = (id: string, name: string) => ({ ...entry(id, 1_000_000, 128_000, true), name });
+  const catalog: BuiltinProvider[] = [
+    { id: "anthropic", name: "Anthropic", baseUrl: "", api: "anthropic-messages", models: [named("claude-opus-5", "Claude Opus 5")] },
+    {
+      id: "kimi-coding",
+      name: "Kimi Coding",
+      baseUrl: "",
+      api: "anthropic-messages",
+      models: [named("k3", "Kimi K3"), named("kimi-for-coding", "Kimi K2.7 Code")],
+    },
+    { id: "github-copilot", name: "Copilot", baseUrl: "", api: "openai-completions", models: [named("k3", "Copilot K3")] },
+  ];
+
+  test("目录有名字就用目录的；偏好的那家先查", () => {
+    assert.equal(modelDisplayName(catalog, "k3", { catalogId: "kimi-coding" }), "Kimi K3");
+    assert.equal(modelDisplayName(catalog, "k3", { catalogId: "github-copilot" }), "Copilot K3");
+  });
+
+  test("白名单在目录前面：kimi-for-coding 目录还叫 K2.7 Code，Kimi Code 里早已是 K2.8 Preview", () => {
+    assert.equal(modelDisplayName(catalog, "kimi-for-coding", { catalogId: "kimi-coding" }), "Kimi K2.8 Preview");
+  });
+
+  test("声明里的名字（用户起的 / 厂商 /models 给的）最权威；空白不算名字", () => {
+    assert.equal(modelDisplayName(catalog, "kimi-for-coding", {}, "我的 Kimi"), "我的 Kimi");
+    assert.equal(modelDisplayName(catalog, "k3", { catalogId: "kimi-coding" }, "  "), "Kimi K3");
+  });
+
+  test("目录名只认精确 id：不借 Claude 家族的名字（否则 opus-5-5 会叫成「Claude Opus 5」）", () => {
+    assert.equal(modelDisplayName(catalog, "claude-opus-5-9", { catalogId: "anthropic" }), "claude-opus-5-9");
+  });
+
+  test("目录里的名字就是 id 本身时不算名字，落到 id；谁都不认识的 id 原样返回", () => {
+    const bare: BuiltinProvider[] = [
+      { id: "x", name: "X", baseUrl: "", api: "openai-completions", models: [named("my-model", "my-model")] },
+    ];
+    assert.equal(modelDisplayName(bare, "my-model"), "my-model");
+    assert.equal(modelDisplayName([], "some-gateway-model"), "some-gateway-model");
+  });
+
+  test("K3.1 目录还没收录：四个 id 都有显示名", () => {
+    assert.equal(modelDisplayName([], "k3.1-pro"), "Kimi K3.1 Pro");
+    assert.equal(modelDisplayName([], "kimi-k3.1-pro-highspeed"), "Kimi K3.1 Pro Highspeed");
+  });
+});
+

@@ -12,7 +12,7 @@
  *   失败尾巴，这轮不带就会漏补记。
  */
 import { parseChannelPrompt } from "../../shared/channel.ts";
-import { isClosingScanText } from "../../shared/closing-scan.ts";
+import { isClosingScanText } from "../../shared/wrapup-scan.ts";
 import { pendingBackfillFromRecords } from "../../shared/intent-recall.ts";
 import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
 import type { IntentRecallModels } from "../../shared/intent-lab.ts";
