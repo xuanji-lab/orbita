@@ -81,13 +81,20 @@ export interface CiteLibrary {
 }
 
 /**
- * renderer 的引用通道 —— IPC 四层契约的第 1 层。只有一个方法：读一次文献库。
- * 补全需要的是「现在盘上有什么」，缓存让用户看不见刚加的条目，所以不在这里做
- * 缓存——调用方按项目文件的 mtime 决定什么时候再问。
+ * renderer 的引用通道 —— IPC 四层契约的第 1 层。
+ *
+ * 三个方法各管一件事：读盘（library）、联网（search）、写回（save）。**联网只在
+ * `search` 里发生**，而且只在用户点「查找」时被调用一次：没有启动时预取、没有后台
+ * 轮询、没有「猜用户在找什么」。补全需要的是「现在盘上有什么」，缓存让用户看不见刚
+ * 加的条目，所以 library 不做缓存——调用方按项目文件的 mtime 决定什么时候再问。
  */
 export const citeChannels = {
   /** 当前文件所属项目的文献库（不在 LaTeX 项目里时 found:false） */
   library: "cite:library",
+  /** 在线检索一条文献（Crossref / arXiv；主进程 8 秒超时、10 分钟内存缓存） */
+  search: "cite:search",
+  /** 把选中的检索结果追加进项目的 .bib，回写到哪个文件与生成的 key */
+  save: "cite:save",
 } as const;
 
 /** 授权上下文：与 `latex:project` 同一个形状，主进程按同一道白名单核 */
@@ -101,3 +108,69 @@ export type CiteLibraryOutcome = { found: false } | { found: true; library: Cite
 
 /** 补全列表最多给多少条：几百条文献的弹层滚不动，输入更多字自然会缩小范围 */
 export const CITE_MAX_SUGGESTIONS = 60;
+
+/** 一份 .bib 都没有时新建的文件名（论文仓最常见的约定：`\bibliography{refs}`） */
+export const CITE_PREFERRED_BIB = "refs.bib";
+
+/* ------------------------------ 在线检索 ------------------------------ */
+
+/** 在线检索的来源：两个不需要 key 的公共接口 */
+export type CiteSearchSource = "crossref" | "arxiv";
+
+/**
+ * 一条候选文献 —— 检索结果的**数据面**，不是一条已排好版的 BibTeX。
+ *
+ * 分成数据面与排版面是为了把「从接口拿到什么」和「写进 .bib 长什么样」分开：
+ * 前者随接口变（字段缺、类型多），后者只随 BibTeX 的规则变。排版在主进程做
+ * （`main/cite/entry.ts`），renderer 只负责显示与选择。
+ */
+export interface CiteCandidate {
+  source: CiteSearchSource;
+  /** 标题纯文本：HTML 标签与实体已还原、空白已折叠 */
+  title: string;
+  /** 作者，显示形（`Given Family`）；接口没给作者时是空数组 */
+  authors: string[];
+  /** 四位年份；接口没有年份时 null */
+  year: string | null;
+  /** 期刊 / 会议 / 预印本站点（Crossref 的 container-title，arXiv 固定 "arXiv"） */
+  venue: string | null;
+  doi: string | null;
+  /** arXiv 编号（不带 `arXiv:` 前缀、不带版本号后缀） */
+  arxivId: string | null;
+  /** 条目类型：已经按 BibTeX 的词归一（不是接口自己的 type 字符串） */
+  type: "article" | "inproceedings" | "misc";
+  volume: string | null;
+  pages: string | null;
+  /** arXiv 的 primary category（`cs.CL`）；Crossref 记录没有这一项 */
+  primaryClass: string | null;
+}
+
+/** 检索的一句话请求：标题 / DOI / arXiv 编号都由主进程自己认 */
+export interface CiteSearchRequest {
+  query: string;
+}
+
+/** 检索失败的分类：界面据此给不同的一句中文，而不是把网络栈的原文糊上去 */
+export type CiteSearchFailure = "empty-query" | "timeout" | "offline" | "rate-limited" | "not-found" | "failed";
+
+/** `ok:true` 且 `results` 为空 = 确实没查到（不是失败）；失败才走 `ok:false` */
+export type CiteSearchOutcome =
+  | { ok: true; results: CiteCandidate[] }
+  | { ok: false; reason: CiteSearchFailure; detail: string };
+
+/** 写 .bib 的请求：候选 + 当前文件上下文（授权与 fs:* / latex:* 同一道） */
+export interface CiteSaveRequest {
+  context: CiteFileContext;
+  candidate: CiteCandidate;
+}
+
+/**
+ * 写 .bib 的结局。成功时回**写到哪个文件**（相对项目目录，正斜杠）与生成的 key——
+ * 界面要显示「已写入 refs.bib」，编辑器也要拿 key 拼 `\cite{…}`。
+ *
+ * `conflict` 是「读-改-写」之间文件被别人改过：这时**一个字都没写**，用户自己决定
+ * 要不要重试（重试会基于新内容重新分配 key）。
+ */
+export type CiteSaveOutcome =
+  | { ok: true; path: string; key: string; created: boolean }
+  | { ok: false; reason: "outside-project" | "conflict" | "read-failed" | "write-failed" | "too-large"; detail: string };

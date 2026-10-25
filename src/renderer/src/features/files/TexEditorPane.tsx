@@ -31,6 +31,8 @@ import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
 import type { CiteEntry } from "@shared/cite";
+import type { LatexFileContext } from "@shared/latex";
+import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
 import {
   latexEditorExtensions,
   agentMarkEffect,
@@ -179,6 +181,8 @@ export function TexEditorPane(props: {
   const [conflictKind, setConflictKind] = useState<ConflictKind>("disk");
   /** 右键菜单：打开位置 + 被右键的那一行（行号 1 基）与将要引用的文字 */
   const [menu, setMenu] = useState<{ x: number; y: number; line: number; text: string } | null>(null);
+  /** 「查找文献…」面板打开在右键那个点上；null = 关着 */
+  const [citeSearch, setCiteSearch] = useState<{ x: number; y: number } | null>(null);
   /** 改动块清单的展开态（默认展开：这是回合结束后最想知道的事） */
   const [hunksOpen, setHunksOpen] = useState(true);
   /** 现场找不到的块（用户自己改过 / 被删）：标成不可撤，不隐藏 */
@@ -572,6 +576,38 @@ export function TexEditorPane(props: {
   const turnActiveRef = useRef(turnActive);
   turnActiveRef.current = turnActive;
   const editedDuringTurnRef = useRef(false);
+
+  /**
+   * 「查找文献」面板的文件上下文（与 `fs:*` / `latex:*` 同一个形状）：主进程据此
+   * 从「根 + 当前文件」找到项目目录并核白名单，renderer 手里给不出别的目录。
+   */
+  const citeContext: LatexFileContext = {
+    sessionId: props.request.sessionId,
+    workspaceId: props.request.workspaceId,
+    ...(props.request.extraWorkspaceId === undefined
+      ? {}
+      : { extraWorkspaceId: props.request.extraWorkspaceId }),
+    root: props.request.root,
+    path: props.request.dir,
+  };
+
+  /**
+   * 面板选中一条后：在光标处插入 `\cite{key}`。写 .bib 已经成功了，插入只是第二半；
+   * 编辑器这一轮被 agent 占着（只读）时插不进去，返回 false 让面板如实说一声。
+   */
+  const insertCitation = (key: string): boolean => {
+    const view = viewRef.current;
+    if (view === null || readOnly) return false;
+    const pos = view.state.selection.main.head;
+    const text = `\\cite{${key}}`;
+    view.dispatch({
+      changes: { from: pos, insert: text },
+      selection: { anchor: pos + text.length },
+      userEvent: "input.complete",
+    });
+    view.focus();
+    return true;
+  };
   /**
    * 自动保存的闸门。**整个回合都不写盘**（不只是 agent 已经写过之后）：P0 的时间线是
    * 「用户先打字 → 1.5 s 自动保存落盘 → agent 用自己读到的旧内容覆盖」，暂停必须从
@@ -760,6 +796,17 @@ export function TexEditorPane(props: {
                 },
               },
             ]),
+        {
+          // 在线检索：面板自己联网、自己写 .bib，这里只把「开在哪里」交下去
+          id: "find-reference",
+          label: t.citeSearch.menu,
+          icon: "book-open" as const,
+          onSelect: () => {
+            const point = { x: menu.x, y: menu.y };
+            setMenu(null);
+            setCiteSearch(point);
+          },
+        },
       ];
 
   const openContextMenu = (event: React.MouseEvent<HTMLDivElement>): void => {
@@ -783,6 +830,14 @@ export function TexEditorPane(props: {
         items={contextMenuItems}
         onClose={() => setMenu(null)}
       />
+      {citeSearch !== null && (
+        <CiteSearchPanel
+          position={citeSearch}
+          context={citeContext}
+          onInsert={insertCitation}
+          onClose={() => setCiteSearch(null)}
+        />
+      )}
       {readOnly && (
         <div className="tex-editor-banner" data-tone="info" role="status">
           <Icon
