@@ -73,6 +73,8 @@ const ALLOWED_LATIN = new Set([
   "latexmk",
   "tlmgr",
   "tex",
+  // 文献库的文件类型（「一份 .bib」「refs 里的 .bib」——同 tex 一类，是用户照抄的字面量）
+  "bib",
   // SyncTeX 双向定位：命令名与它的产品名（用户照抄 / 发行版自带的写法）
   "SyncTeX",
   "synctex",

@@ -216,6 +216,57 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
       ".cm-sync-line": {
         backgroundColor: "var(--color-accent-soft)",
       },
+      // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
+      // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来
+      ".cm-tooltip": {
+        backgroundColor: "var(--color-bg-panel)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
+        color: "var(--color-text-primary)",
+      },
+      // key 是机器事实：等宽、sm 档；列表高度封顶（再长就该多打两个字）。
+      // 宽度也封顶（评审 F2）：一条长标题曾把弹层撑到窗口边缘、后半截被硬裁在词中间。
+      // 420px 是 1440 窗口下的上限；li 的省略号来自 CM 自己的 baseTheme，
+      // 全文在补充说明（info）里给——那里不受这一行宽度的限制。
+      // **选择器要带 `.cm-tooltip`**：baseTheme 写的是 `.cm-tooltip.cm-tooltip-autocomplete > ul`
+      // （两道类 + 元素），少写一道就比它弱，max-width 与行距会被静默盖掉（实测踩过）
+      ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+        fontFamily: "var(--font-family-mono)",
+        fontSize: "var(--font-size-sm)",
+        maxHeight: "16em",
+        maxWidth: "min(420px, 92vw)",
+      },
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+        padding: "var(--space-1) var(--space-2)",
+        lineHeight: "var(--line-height-ui)",
+      },
+      // 选中行：与列表选中同一套（淡底 + 墨色不变），不引入第四种强调色
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+        backgroundColor: "var(--color-bg-active)",
+        color: "var(--color-text-primary)",
+      },
+      // 命中的那段字只加粗，不画下划线（下划线在等宽小字里挤成一团）
+      ".cm-completionMatchedText": {
+        textDecoration: "none",
+        fontWeight: "650",
+      },
+      // 标题是散文不是机器事实：换回界面字面，退到第三档墨色
+      ".cm-completionDetail": {
+        marginLeft: "var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontStyle: "normal",
+        color: "var(--color-text-tertiary)",
+      },
+      // 选中项的补充说明（作者 + 来源 .bib），两行之间要真的换行
+      ".cm-tooltip.cm-completionInfo": {
+        padding: "var(--space-1) var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
+        whiteSpace: "pre-line",
+        maxWidth: "28em",
+      },
       ".cm-panels": {
         backgroundColor: "var(--color-bg-panel)",
         color: "var(--color-text-primary)",

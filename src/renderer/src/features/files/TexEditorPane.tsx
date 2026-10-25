@@ -30,6 +30,7 @@ import { Icon } from "../../shell/Icon";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
+import type { CiteEntry } from "@shared/cite";
 import {
   latexEditorExtensions,
   agentMarkEffect,
@@ -39,6 +40,7 @@ import {
   syncLineEffect,
 } from "./latex-editor.ts";
 import { formatSize } from "./tree-view.ts";
+import { citeCompletion } from "./cite-completion.ts";
 import {
   clampCursorLine,
   locateBlock,
@@ -61,6 +63,8 @@ import {
 
 /** 没有改动块时的常量：每次新 `[]` 会让依赖它的效果每帧重跑 */
 const NO_HUNKS: readonly EditorHunk[] = [];
+/** 文献库还没到（或不在项目里）时的同一份空库：常量身份，补全来源每次现读 */
+const NO_CITE: readonly CiteEntry[] = [];
 
 /** 停手多久自动保存（设计稿的 1.5 s） */
 const AUTOSAVE_MS = 1500;
@@ -135,6 +139,12 @@ export function TexEditorPane(props: {
    * 同一个 token 只跳一次；行号 1 基，越界贴到末行（syncFromDisk 同一条纪律）。
    */
   reveal?: { line: number; token: number } | null;
+  /**
+   * 项目文献库（`\cite{` 的候选）。缺席 / 空数组时补全不弹——不在 LaTeX 项目里的
+   * .tex 就是这种情形。往下传的是**最新一份**而不是挂载时的快照：库可能比编辑器
+   * 晚到（IPC 在飞），重挂编辑器会丢光标与撤销历史。
+   */
+  cite?: readonly CiteEntry[];
 }) {
   const t = useT();
   const path = props.request.dir;
@@ -142,6 +152,12 @@ export function TexEditorPane(props: {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const mountedRef = useRef(true);
+  /**
+   * 补全的来源读这个 ref：库比编辑器晚到、换项目后重扫，都不必重建编辑器——
+   * 重建会丢光标、撤销历史与滚动位置。
+   */
+  const citeRef = useRef<readonly CiteEntry[]>(props.cite ?? NO_CITE);
+  citeRef.current = props.cite ?? NO_CITE;
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
   const savedHashRef = useRef(contentHash(props.initialText));
   const eolRef = useRef<LineEnding>(detectLineEnding(props.initialText));
@@ -349,6 +365,7 @@ export function TexEditorPane(props: {
               }
             }
           }),
+          citeCompletion(() => citeRef.current),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
       }),
