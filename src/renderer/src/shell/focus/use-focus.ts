@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { FocusSummaryResult } from "@shared/focus";
-import {
-  SUMMARY_LEAD_MS,
-  startFocusRun,
-  extendFocusRun,
-  shouldStartSummary,
-  type FocusRun,
-} from "./focus-timer.ts";
+import { focusClockAction, startFocusRun, extendFocusRun, type FocusRun } from "./focus-timer.ts";
 
 /**
  * 专注计时的 hook（App 持有，工具栏左胶囊的 FocusControl 与左栏的文件视图共用）。
@@ -15,7 +9,7 @@ import {
  * - **状态不落盘**（用户裁决：关掉应用重开 = 已结束）——它只活在这里的 useState。
  * - **不向外暴露每秒跳动的 `now`**：App 只在相位变化时重渲染；秒针住在
  *   FocusControl 本地（`perf(focus)`：原来每秒 setNow 把整棵 App 提起来重画）。
- *   到点转 done 靠 endsAt 上的一个 setTimeout。四个相位：
+ *   到点转 done / T-5 起跑小结由下面那个每秒对墙上时间的 effect 决定。四个相位：
  *   `run`（在跑）/ `ending`（提前结束、等用户决定要不要总结，计时停）/
  *   `done`（时间到）/ `off`。
  * - **收工小结**（PR B）：run 相位剩 5 分钟自动起跑（原型状态 8）；ending 相位
@@ -65,20 +59,6 @@ export function useFocus(): FocusApi {
   const [summary, setSummary] = useState<FocusSummary>({ state: "idle" });
   const [lastPreset, setLastPreset] = useState<{ workspaceId: string; minutes: number } | null>(null);
 
-  // 到点转 done：在 endsAt 上排一个 setTimeout（原来搭每秒那一拍的顺风车）。
-  // status 换了（开始 / 延长）就清掉重排，延长不会提前收工。
-  useEffect(() => {
-    if (status.kind !== "run") return;
-    const run = status.run;
-    const delay = run.endsAt - Date.now();
-    if (delay <= 0) {
-      setStatus({ kind: "done", run });
-      return;
-    }
-    const timer = window.setTimeout(() => setStatus({ kind: "done", run }), delay);
-    return () => window.clearTimeout(timer);
-  }, [status]);
-
   /** 起跑小结（唯一入口：run 相位自动 / ending 相位用户点「要」） */
   const fire = useCallback((run: FocusRun): void => {
     setSummary({ state: "running" });
@@ -90,19 +70,43 @@ export function useFocus(): FocusApi {
       });
   }, []);
 
-  // 自动起跑：剩 5 分钟（shouldStartSummary 也含到点之后——补跑）。按
-  // endsAt − SUMMARY_LEAD_MS 排一个 setTimeout，相位变化（开始 / 延长）时重排；
-  // 进窗口时若还没起跑（补跑）就立刻起跑——语义与原来逐秒判断一致，只是不再
-  // 靠每秒跳动的 now。
+  /**
+   * 专注时钟：run 相位每秒对一次**墙上时间**（`Date.now()`），只在跨过 T-5 / 到点
+   * 时才 setState（`focusClockAction`，纯函数带测试）——剩下的拍子连一次渲染都不花，
+   * `perf(focus)` 的省电结论不变。
+   *
+   * 为什么不再按截止时刻排一次性 `setTimeout`：定时器算的是「还要过多久」，电脑
+   * 合盖睡眠期间它不走，睡多久到点就晚多久（合盖一夜，回来才响）。现在定时器只是
+   * 叫醒：合盖期间 interval 也不跑，但醒来后第一拍（或 `visibilitychange` /
+   * window `focus`）立刻对表，越过 T-5 就补跑小结、越过 endsAt 就转 done。
+   *
+   * endsAt 上那个一次性 timeout 是**后台兜底**，不是判断依据：窗口藏起来时 Chromium
+   * 会把 1 秒 interval 降到约一分钟一拍，到点通知会晚最多一分钟；这个定时器到点只
+   * 调一次 check（判断仍看墙上时间），所以睡眠越过它也不会错。窗口在后台到点照样转
+   * done 并发系统通知（App 那一侧看 `isWindowInactive`）。
+   */
   useEffect(() => {
-    if (status.kind !== "run" || summary.state !== "idle") return;
+    if (status.kind !== "run") return;
     const run = status.run;
-    if (shouldStartSummary(run, Date.now())) {
-      fire(run);
-      return;
-    }
-    const timer = window.setTimeout(() => fire(run), run.endsAt - SUMMARY_LEAD_MS - Date.now());
-    return () => window.clearTimeout(timer);
+    const check = (): void => {
+      const action = focusClockAction(run, Date.now(), summary.state === "idle");
+      if (action.startSummary) fire(run);
+      if (action.finish) setStatus({ kind: "done", run });
+    };
+    check();
+    const ticker = window.setInterval(check, 1000);
+    const backstop = window.setTimeout(check, Math.max(0, run.endsAt - Date.now()));
+    const onWake = (): void => {
+      if (document.visibilityState !== "hidden") check();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      window.clearInterval(ticker);
+      window.clearTimeout(backstop);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
   }, [status, summary.state, fire]);
 
   const start = useCallback((workspaceId: string, minutes: number): void => {
