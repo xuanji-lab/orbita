@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fileRootLabel, isWebArtifactFile, isWebPageFile, sortFileEntries, type FileEntry } from "./files.ts";
+import { fileRootLabel, isWebArtifactFile, isWebPageFile, PREVIEW_TEXT_LIMIT, sortFileEntries, type FileEntry } from "./files.ts";
 
 const entry = (name: string, kind: FileEntry["kind"]): FileEntry => ({ name, kind, modifiedAt: 0 });
 
@@ -53,5 +53,11 @@ describe("isWebArtifactFile（轮尾网页产物：卡片行与轮内扫描同�
   it("只收 html / htm / svg，不认 xhtml（那是浏览器那套表）", () => {
     for (const name of ["report.html", "a/b/INDEX.HTM", "chart.SVG"]) strictEqual(isWebArtifactFile(name), true, name);
     for (const name of ["page.xhtml", "notes.md", "html", "page.html.bak"]) strictEqual(isWebArtifactFile(name), false, name);
+  });
+});
+
+describe("PREVIEW_TEXT_LIMIT", () => {
+  it("16 MB：窗口化之后它只保护整份文本进 JS 堆 / 一次 IPC，不再是渲染上限", () => {
+    strictEqual(PREVIEW_TEXT_LIMIT, 16 * 1024 * 1024);
   });
 });
