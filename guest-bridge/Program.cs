@@ -60,8 +60,9 @@ internal static class Program
     // 空闲 5 分钟回收），0.7.0 起 cdp-* 由**该会话自己的 worker 子进程**执行（可超时杀；
     // 慢命令不再堵住整条桥，宿主侧协议不变），0.7.1 修了「超时杀完 worker、重开同一会话时
     // 读到上一只 Edge 的旧端口」那条自愈路上的 bug（起 Edge 前清端口文件 + 连接重试）。
+    // 0.7.2 只加计量（命令行耗时分解 + 枚举兜底耗时 + 实验用 --align-every），协议与行为未变。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.7.1";
+    private const string Version = "0.7.2";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -153,6 +154,10 @@ internal static class Program
             if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
             // 会话 id 安全化的自测（纯函数：CDP 会话键直接拼进 profile 目录，这一关失守就是路径穿越）
             if (args[i] == "--selftest-session") return RunSessionSelfTest();
+            // 浏览器错误页判定的自测（纯函数：不启动任何进程、不碰 Edge）
+            if (args[i] == "--selftest-cdp") return RunCdpSelfTest();
+            // 耗时计量的自测（纯函数 + 临时目录里一条真 ping；不启动任何进程、不碰桌面）
+            if (args[i] == "--selftest-metrics") return RunMetricsSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
         }
@@ -171,7 +176,8 @@ internal static class Program
             return 1;
         }
 
-        Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms");
+        Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms"
+            + "，对齐枚举周期：每 " + AlignEveryPolls + " 轮，耗时日志阈值 " + HopLogThresholdMs + "ms");
 
         // 就绪通告：bridge.json 出现 = 命令循环已上线（宿主据此宣布沙箱 running）
         WriteBridgeJson();
@@ -232,7 +238,127 @@ internal static class Program
             return 1;
         }
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        // worker 自己的日志落到映射目录：这是宿主**唯一**能看见 guest 内部发生了什么的通道
+        RedirectWorkerLog(outDir, session);
         return WorkerHost.RunWorker(outDir, session, testHooks, parentPid);
+    }
+
+    /**
+     * worker.log 的单文件上限。超了清空重写（长跑的 worker 不能把映射目录撑爆）；
+     * 1 MB 按一行 ~100 字节算是一万行，足够一个会话一局的诊断量。
+     */
+    private const long WorkerLogMaxBytes = 1024 * 1024;
+
+    /**
+     * 把 worker 的 Console 输出（stdout / stderr）接到 `out\worker\<会话>\worker.log`。
+     *
+     * 为什么要它（2026-10-25 真机）：`.wsb` 的 LogonCommand 只把**主桥**的 stdout 重定向进
+     * out\bridge.log；worker 是 Process.Start 起的子进程，它自己的 Console 输出在真机上哪里都
+     * 看不到——「CDP 启动 Edge…」「CDP 端口…」「错误页诊断」「注入失败原因」全部丢掉，宿主侧
+     * 只能靠猜（错误页正文拿不到码，猜了三轮）。现在 worker 自己把输出写进映射目录，
+     * 宿主直接读得到。
+     *
+     * 为什么不是主桥 RedirectStandardOutput + 转发：那是同步管道，父进程不读干子进程就阻塞，
+     * 而主桥是单线程轮询循环（0.7.0 存在的理由就是不许被一条慢命令堵住）。**主桥一个
+     * RedirectStandard* 都没加，没有新增任何同步等待**。
+     *
+     * 每次 worker 启动覆盖重建（每次重启只看这一次的现场，不会与上一具尸体的话搵在一起）。
+     */
+    private static void RedirectWorkerLog(string outDir, string session)
+    {
+        string key = CdpSessions.SafeSessionId(session);
+        string dir = Path.Combine(outDir, WorkerHost.WorkerDirName, key);
+        string path = Path.Combine(dir, "worker.log");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            CappedFileWriter writer = new CappedFileWriter(path, WorkerLogMaxBytes);
+            Console.SetOut(writer);
+            Console.SetError(writer);
+            Log("worker 日志文件：" + path);
+        }
+        catch (Exception ex)
+        {
+            // 落不了盘就退回 stdout（不能因为日志把 worker 弄死，它还有活儿要干）
+            Log("worker 日志文件建不起来（" + path + "）：" + ex.Message + "，退回 stdout");
+        }
+    }
+
+    /**
+     * 写 worker.log 的 TextWriter：只接管 Write(string) / Write(char)——Console.Write / WriteLine
+     * 的所有重载最终都落到这两条（base 的 WriteLine 先 Write(string) 再写换行）。
+     * 超过上限就 dispose 重开（FileMode.Create = 清空），不会在文件里留洞。
+     */
+    private sealed class CappedFileWriter : TextWriter
+    {
+        private readonly string _path;
+        private readonly long _maxBytes;
+        private readonly object _gate = new object();
+        private StreamWriter _inner;
+
+        internal CappedFileWriter(string path, long maxBytes)
+        {
+            _path = path;
+            _maxBytes = maxBytes;
+            _inner = Create(_path);
+        }
+
+        private static StreamWriter Create(string path)
+        {
+            FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            StreamWriter w = new StreamWriter(fs, new UTF8Encoding(false));
+            w.AutoFlush = true; // 被 taskkill 也要留下已经写过的行
+            return w;
+        }
+
+        public override Encoding Encoding
+        {
+            get { return Encoding.UTF8; }
+        }
+
+        public override void Write(string value)
+        {
+            if (value == null) return;
+            lock (_gate)
+            {
+                RotateIfNeeded();
+                _inner.Write(value);
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (_gate)
+            {
+                RotateIfNeeded();
+                _inner.Write(value);
+            }
+        }
+
+        public override void Flush()
+        {
+            lock (_gate)
+            {
+                try { _inner.Flush(); } catch { }
+            }
+        }
+
+        private void RotateIfNeeded()
+        {
+            try
+            {
+                if (_inner.BaseStream.Length < _maxBytes) return;
+            }
+            catch
+            {
+                return;
+            }
+            try { _inner.Dispose(); } catch { }
+            _inner = Create(_path);
+            _inner.Write("[" + DateTime.Now.ToString("HH:mm:ss") + "] [bridge] （日志超过 "
+                + (_maxBytes / 1024) + " KB，已清空重写）\r\n");
+        }
     }
 
     // ---- 参数解析 ----
@@ -255,6 +381,24 @@ internal static class Program
             {
                 WorkerHost.TestHooks = true;
                 WorkerHost.CommandTimeoutMs = 2500;
+                continue;
+            }
+            // 实验缝（2026-10-25 传播延迟实验）：把「每几轮做一次全量枚举」的周期换成 N，
+            // 让同一次真机实验里能对比 16 / 64 / 160 三档。生产（.wsb 的 LogonCommand）只带
+            // --out-dir，不带它，行为与改前逐字一致。**只改计量对比用的周期，默认值不动。**
+            if (flag == "--align-every")
+            {
+                if (i >= args.Length)
+                {
+                    Log("参数 --align-every 缺少值");
+                    return false;
+                }
+                if (!TryParseAlignEvery(args[i], out AlignEveryPolls))
+                {
+                    Log("--align-every 需要 ≥ 1 的整数，实得：" + args[i]);
+                    return false;
+                }
+                i++;
                 continue;
             }
             if (i >= args.Length)
@@ -306,8 +450,10 @@ internal static class Program
     private static int _nextSeq = 1;
     /** 快路径连续落空的次数（慢路径按它定期对齐） */
     private static int _polls = 0;
-    /** 全量枚举对齐的周期：16 × 250ms ≈ 4s */
-    private const int AlignEveryPolls = 16;
+    /** 全量枚举对齐的默认周期：16 × 250ms ≈ 4s（实验可用 --align-every 覆盖，默认值不许动） */
+    private const int AlignEveryPollsDefault = 16;
+    /** 生效的全量枚举周期。生产路径永远等于 AlignEveryPollsDefault */
+    internal static int AlignEveryPolls = AlignEveryPollsDefault;
 
     private static void CommandLoop()
     {
@@ -325,6 +471,11 @@ internal static class Program
             {
                 // 单轮失败不许弄死循环（映射目录抖动等），记下继续
                 Log("轮询异常：" + ex.Message);
+            }
+            finally
+            {
+                // 计量：下一轮看见命令时，用它算「看见前等了上一轮循环多久」（含 250ms 睡眠与 ReapIdle）
+                _lastPollEndMs = _clock.ElapsedMilliseconds;
             }
             Thread.Sleep(PollIntervalMs);
         }
@@ -345,9 +496,15 @@ internal static class Program
     private static void PollOnce()
     {
         string expected = Path.Combine(_cmdDir, "cmd-" + _nextSeq.ToString("000000") + ReqSuffix);
-        if (File.Exists(expected))
+        // 直探本身的耗时也要记：慢映射目录上 File.Exists 自己就可能要几秒（2026-10-14 实测 8.4s），
+        // 不单独量就分不清「卡在枚举」还是「卡在这条探测上」
+        long probeStart = _clock.ElapsedMilliseconds;
+        bool exists = File.Exists(expected);
+        long probeMs = _clock.ElapsedMilliseconds - probeStart;
+        DateTime seenUtc = DateTime.UtcNow; // 「本进程第一次看见」的墙钟时刻（传播就以它为终点）
+        if (exists)
         {
-            ProcessOne(expected);
+            ProcessOne(expected, probeMs, "快路径", seenUtc, _clock.ElapsedMilliseconds);
             _nextSeq++;
             return;
         }
@@ -362,28 +519,189 @@ internal static class Program
     /** 全量枚举对齐：处理枚举到的每个请求，并按文件名把 _nextSeq 推到已见最大序号之后 */
     private static void AlignFromEnumeration()
     {
+        _alignRounds++;
+        long alignStart = _clock.ElapsedMilliseconds;
         string[] reqs = Directory.GetFiles(_cmdDir, "*" + ReqSuffix);
+        long enumMs = _clock.ElapsedMilliseconds - alignStart; // 只有这一条是目录枚举本身
+        DateTime seenUtc = DateTime.UtcNow;
+        long seenMs = _clock.ElapsedMilliseconds;
         Array.Sort(reqs, StringComparer.Ordinal); // 名字即顺序（宿主命名带递增序号）
         foreach (string reqPath in reqs)
         {
-            ProcessOne(reqPath);
+            ProcessOne(reqPath, -1, "枚举兜底", seenUtc, seenMs);
             string name = Path.GetFileName(reqPath);
             int seen;
             // cmd-000042.req.json → 序号在 [4, 10)
             if (name.Length >= 14 && int.TryParse(name.Substring(4, 6), out seen) && seen >= _nextSeq)
                 _nextSeq = seen + 1;
         }
+        long alignMs = _clock.ElapsedMilliseconds - alignStart;
+        // 这一行回答「全量枚举兜底是不是把单线程轮询整块占住了」：慢映射目录上它一次能跑 8–20s，
+        // 而它跑的时候快路径根本没机会被看一眼。只在到阈值时打。
+        if (alignMs >= HopLogThresholdMs)
+            Log(FormatAlignLine(_alignRounds, _polls, alignMs, enumMs, reqs.Length));
+    }
+
+    // ---- 计量：一次文件往返的耗时分解（只打日志，不参与任何控制流） ----
+    //
+    // 为什么先计量（2026-10-25 真机）：Edge 在连不可路由地址（连接风暴）时，宿主↔guest 的
+    // 一次 ping 往返从 200ms 涨到 15–19s，而对照实验只排除了 worker 的等待。三个候选原因
+    // 都能从这一段日志里读出来，不需要改行为去试：
+    //   ① 全量枚举兜底（AlignFromEnumeration）在慢映射目录上把单线程轮询整块占住——
+    //      看「对齐枚举耗时」那行，以及命令行里「看见前等上一轮循环」有多大；
+    //   ② 跨 VM 的传播延迟本身（host 写 req → guest 看见）——看「传播」；
+    //   ③ 单条命令内部的几次文件操作（读 req / 写 resp / 删 req）在慢盘上各要几秒——看
+    //      「读请求」「回执落盘」，以及直探 File.Exists 与 mtime 查询各自的耗时。
+    // 纪律：这条链路里**没有新增任何让命令变慢的等待**，唯一的额外开销是一次
+    // File.GetLastWriteTimeUtc（它自己的耗时也打进日志，真慢了藏不住）。
+    // 默认只在任一段 ≥ 500ms 时打一行，避免把 bridge.log 刷爆。
+    // 这些日志将来留不留：先留一版（传播延迟是 computer use 的结构性成本，排查下一次
+    // 「沙箱怎么这么慢」时它就是第一手证据）；如果之后证明每次都在 200ms 以下、一行不落，
+    // 再连同 --align-every 一起删。
+
+    /** 单调时钟：所有时长都用它量（墙钟会被 NTP 调，传播那一段需要墙钟，见 PropagateFromMtime） */
+    private static readonly Stopwatch _clock = Stopwatch.StartNew();
+    /** 上一轮 CommandLoop 结束时刻（_clock 口径，毫秒）；-1 = 还没有上一轮 */
+    private static long _lastPollEndMs = -1;
+    /** AlignFromEnumeration 跑了多少轮（日志里的「第 N 轮」） */
+    private static int _alignRounds = 0;
+    /** 耗时日志的打印线：任一段到线就打一行（实验时自测会临时压到 0） */
+    private static int HopLogThresholdMs = 500;
+    /** 传播延迟的可信窗口：超过它只可能是时基问题，不是真的传播 */
+    private const long PropagateTrustedMaxMs = 120000;
+
+    /** 一条命令的耗时分解。字段全是毫秒；-1 = 未知 / 不适用。 */
+    internal sealed class HopReport
+    {
+        public string Command = "";
+        public string Source = "快路径";
+        public long PropagateMs = -1;
+        public string PropagateNote = "未知";
+        public long PollWaitMs = -1;
+        public long ProbeMs = 0;
+        public long MtimeQueryMs = 0;
+        public long ReadMs = 0;
+        public long ExecuteMs = 0;
+        public bool Forwarded = false;
+        public long PersistMs = 0;
+    }
+
+    /**
+     * mtime 法估「传播延迟」。宿主写 req 用 tmp+rename，映射目录里留下的 mtime 就是宿主的写出
+     * 时刻；与 guest 侧第一次看见该文件时的 UtcNow 相减，即 req 写出 → 本进程看见。
+     *
+     * 三种情况这个数不可信，返回 -1 并让 note 说清为什么（日志里就是「传播未知：…」）：
+     *  - mtime 缺失：映射层没带时间戳时 .NET 回 1601-01-01（FAT 是 1980），相减会得到几百万天；
+     *  - mtime 晚于本地时钟：宿主与 guest 的时基不一致，差值没有意义；
+     *  - 差值超过 120s：比宿主侧 45s 命令超时还大，只可能是时基问题。
+     */
+    internal static long PropagateFromMtime(DateTime mtimeUtc, DateTime nowUtc, out string note)
+    {
+        if (mtimeUtc.Year < 1981)
+        {
+            note = "mtime 缺失（" + mtimeUtc.ToString("yyyy-MM-dd") + "）";
+            return -1;
+        }
+        double deltaMs = (nowUtc - mtimeUtc).TotalMilliseconds;
+        if (deltaMs < 0)
+        {
+            note = "时基差 +" + ((long)(-deltaMs)) + "ms（mtime 晚于本地时钟）";
+            return -1;
+        }
+        if (deltaMs > PropagateTrustedMaxMs)
+        {
+            note = "mtime 落后 " + ((long)deltaMs) + "ms，超出 " + (PropagateTrustedMaxMs / 1000) + "s 可信窗口";
+            return -1;
+        }
+        note = "mtime 法";
+        return (long)deltaMs;
+    }
+
+    /** 任一段到线就打（阈值就是打印线：≥ 阈值打，< 阈值不打） */
+    internal static bool HopNeedsLog(long thresholdMs, long[] segments)
+    {
+        for (int i = 0; i < segments.Length; i++)
+        {
+            if (segments[i] >= thresholdMs) return true;
+        }
+        return false;
+    }
+
+    private static string Ms(long ms)
+    {
+        return ms + "ms";
+    }
+
+    /**
+     * 一条命令行。算术上只有两种，取决于传播是否可信：
+     *  - 可信：总 = 传播 + 读请求 + 执行 + 回执落盘（总 = 宿主写出 → 回执落盘）；
+     *    「看见前等上一轮循环」是**传播内部**的细分——两者都从各自的起点量到「看见」，
+     *    相加就是把同一段时间算两遍，所以它只跟在后面、不计入总。
+     *  - 不可信：总 = 轮询等待 + 读请求 + 执行 + 回执落盘，且只能算「本进程内」的下界。
+     */
+    internal static string FormatHopLine(HopReport r)
+    {
+        long inner = r.ReadMs + r.ExecuteMs + r.PersistMs;
+        List<string> parts = new List<string>();
+        if (r.PollWaitMs >= 0 && r.PropagateMs < 0) parts.Add("轮询等待 " + Ms(r.PollWaitMs));
+        parts.Add("读请求 " + Ms(r.ReadMs));
+        parts.Add("执行 " + Ms(r.ExecuteMs) + (r.Forwarded ? "（转发 worker，不是浏览器真干活的耗时）" : ""));
+        parts.Add("回执落盘 " + Ms(r.PersistMs));
+
+        StringBuilder sb = new StringBuilder("命令 " + r.Command + "：");
+        if (r.PropagateMs >= 0)
+        {
+            sb.Append("总 ").Append(Ms(r.PropagateMs + inner)).Append("（宿主写出→回执落盘）＝ ")
+              .Append("传播 ").Append(Ms(r.PropagateMs)).Append("（").Append(r.PropagateNote).Append("） + ");
+        }
+        else
+        {
+            long total = (r.PollWaitMs >= 0 ? r.PollWaitMs : 0) + inner;
+            sb.Append("本进程内 ").Append(Ms(total)).Append("（传播未知：").Append(r.PropagateNote).Append("）＝ ");
+        }
+        sb.Append(string.Join(" + ", parts.ToArray()));
+        if (r.PropagateMs >= 0 && r.PollWaitMs >= 0)
+            sb.Append("；看见前等上一轮循环 ").Append(Ms(r.PollWaitMs)).Append("（细分，已含在传播里，不计入总）");
+        sb.Append("；本轮直探 File.Exists ").Append(Ms(r.ProbeMs))
+          .Append("、mtime 查询 ").Append(Ms(r.MtimeQueryMs))
+          .Append("、来源 ").Append(r.Source);
+        return sb.ToString();
+    }
+
+    /** 枚举兜底那一行（只在到阈值时打）：它是「单线程轮询被整块占住」的直接证据 */
+    internal static string FormatAlignLine(int round, int polls, long alignMs, long enumMs, int visible)
+    {
+        return "对齐枚举耗时 " + Ms(alignMs) + "（第 " + round + " 轮，_polls=" + polls
+            + "，目录可见 " + visible + " 项；其中 Directory.GetFiles " + Ms(enumMs) + "）";
     }
 
     /**
      * 处理一个请求文件：读 → 执行 → 写 resp → 删 req。
      * 读失败（宿主 rename 途中的瞬时点 / 文件被占）**静默下轮**：不写 resp、不删 req、
      * 不弄死循环——下一轮直探同一个名字会再试一次。
+     *
+     * probeMs / source / seenUtc / seenMs 全部只服务计量：probeMs = 本轮直探 File.Exists 的耗时，
+     * source = 快路径还是枚举兜底，seenUtc = 本进程第一次看见它的墙钟时刻（传播的终点），
+     * seenMs = 同一时刻的单调时钟值（算轮询等待）。它们一个都不进控制流。
      */
-    private static void ProcessOne(string reqPath)
+    private static void ProcessOne(string reqPath, long probeMs, string source, DateTime seenUtc, long seenMs)
     {
         string name = Path.GetFileName(reqPath);
         string baseName = name.Substring(0, name.Length - ReqSuffix.Length);
+
+        HopReport hop = new HopReport();
+        hop.Command = baseName;
+        hop.Source = source;
+        hop.ProbeMs = probeMs < 0 ? 0 : probeMs;
+        hop.PollWaitMs = _lastPollEndMs < 0 ? -1 : seenMs - _lastPollEndMs;
+        long mtimeStart = _clock.ElapsedMilliseconds;
+        DateTime mtimeUtc = File.GetLastWriteTimeUtc(reqPath);
+        hop.MtimeQueryMs = _clock.ElapsedMilliseconds - mtimeStart;
+        string note;
+        hop.PropagateMs = PropagateFromMtime(mtimeUtc, seenUtc, out note);
+        hop.PropagateNote = note;
+
+        long readStart = _clock.ElapsedMilliseconds;
         string raw;
         try
         {
@@ -391,15 +709,32 @@ internal static class Program
         }
         catch
         {
+            // 只有在「读本身就很慢」时留一行：连接风暴里这条重试每 250ms 一次，不加条件会刷爆日志
+            long failedMs = _clock.ElapsedMilliseconds - readStart;
+            if (failedMs >= HopLogThresholdMs)
+                Log("命令 " + baseName + "：读 req 失败 " + Ms(failedMs) + "（下轮重试）");
             return; // 宿主 rename 途中的瞬时点，下轮再来
         }
+        hop.ReadMs = _clock.ElapsedMilliseconds - readStart;
         Log("收到命令 " + name);
+        long execStart = _clock.ElapsedMilliseconds;
         string respJson = Execute(raw, baseName);
+        hop.ExecuteMs = _clock.ElapsedMilliseconds - execStart;
         // null = 这条命令已经转给该会话的 worker，回执由后台线程写（慢命令不许占住轮询循环）
+        hop.Forwarded = respJson == null;
+        long persistStart = _clock.ElapsedMilliseconds;
         if (respJson != null)
             AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(respJson));
         // 主命令流里的这一条已受理：立刻删掉，免得下一轮又执行一遍（worker 侧另有自己的 req）
         try { File.Delete(reqPath); } catch { }
+        hop.PersistMs = _clock.ElapsedMilliseconds - persistStart;
+
+        if (HopNeedsLog(HopLogThresholdMs, new long[] {
+            hop.PropagateMs, hop.PollWaitMs, hop.ProbeMs, hop.MtimeQueryMs,
+            hop.ReadMs, hop.ExecuteMs, hop.PersistMs }))
+        {
+            Log(FormatHopLine(hop));
+        }
     }
 
     // ---- 命令执行 ----
@@ -1355,7 +1690,443 @@ internal static class Program
         return failures.Count == 0 ? 0 : 1;
     }
 
-    /** 统一的自测回执照 JSON（四个 selftest 共用一份形状，跑测试的人不用记四种） */
+    // ---- 浏览器错误页判定的自测（--selftest-cdp）----------------------------------
+    //
+    // 2026-10-25 真机：沙箱离线时每条 sandbox_navigate 都回 ok:true + 「可能还在渲染」，
+    // 而正文是「你似乎未连接到 Internet」。对模型是假成功——它会接着去 operate 一个错误页，
+    // 而且每次白等满 20 秒。错误页的判定与原因码都是纯函数，在宿主上就能测；
+    // 真机才能验的部分（导航真落在 chrome-error:// 上）交给验收。
+
+    private static int RunCdpSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // 真机回执里的最终 URL（Edge 154）
+        CheckTrue(failures, ref cases, "chrome-error://chromewebdata/ 命中",
+            CdpSession.IsNavErrorPage("chrome-error://chromewebdata/", null));
+        CheckTrue(failures, ref cases, "新标签时的 chrome-error:// 也命中",
+            CdpSession.IsNavErrorPage("chrome-error://", ""));
+        CheckTrue(failures, ref cases, "大小写 / 首尾空白不影响",
+            CdpSession.IsNavErrorPage("  CHROME-ERROR://chromewebdata/\r\n", null));
+        CheckTrue(failures, ref cases, "正常页面不命中（URL）",
+            !CdpSession.IsNavErrorPage("https://example.com/", null));
+        CheckTrue(failures, ref cases, "正常页面不命中（正文里只有普通 error 字样）",
+            !CdpSession.IsNavErrorPage("https://example.com/", "Server error: try again later (500)"));
+        CheckTrue(failures, ref cases, "about:blank / data: / file: 不命中",
+            !CdpSession.IsNavErrorPage("about:blank", "")
+            && !CdpSession.IsNavErrorPage("data:text/html,<h1>hi</h1>", "hi")
+            && !CdpSession.IsNavErrorPage("file:///C:/orbita-out/upload/a.html", "hello"));
+
+        // 正文里的原因码（离线错误页的正文形状，三站点实测）
+        string offline = "你似乎未连接到 Internet\r\n\r\nERR_INTERNET_DISCONNECTED\r\n\r\n请检查你的网络连接";
+        CheckTrue(failures, ref cases, "正文里的 ERR_ 命中", CdpSession.IsNavErrorPage(null, offline));
+        CheckString(failures, ref cases, "抓到 ERR_INTERNET_DISCONNECTED", "ERR_INTERNET_DISCONNECTED",
+            CdpSession.NavErrorCode(offline));
+        CheckString(failures, ref cases, "net::ERR_NAME_NOT_RESOLVED 只献出码", "ERR_NAME_NOT_RESOLVED",
+            CdpSession.NavErrorCode("net::ERR_NAME_NOT_RESOLVED"));
+        CheckString(failures, ref cases, "正文里有多个码时取第一个", "ERR_HTTP_RESPONSE_CODE_FAILURE",
+            CdpSession.NavErrorCode("ERR_HTTP_RESPONSE_CODE_FAILURE\nERR_SSL_VERSION_OR_CIPHER_MISMATCH"));
+        CheckString(failures, ref cases, "大写字母开头的 ERR_ 不是码（NETERR_FOO）", null,
+            CdpSession.NavErrorCode("NETERR_FOO"));
+        CheckString(failures, ref cases, "孤零零的 ERR_ 不是码", null, CdpSession.NavErrorCode("错误光 ERR_ 没有码"));
+        CheckString(failures, ref cases, "没有原因码时回 null", null,
+            CdpSession.NavErrorCode("你似乎未连接到 Internet"));
+        CheckString(failures, ref cases, "null 正文不会崩", null, CdpSession.NavErrorCode(null));
+
+        // 人话：带原因、带下一步、不带内部串
+        string withCode = CdpSession.NavErrorMessage("ERR_INTERNET_DISCONNECTED");
+        CheckTrue(failures, ref cases, "有码：报出原因", withCode.IndexOf("ERR_INTERNET_DISCONNECTED", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "有码：不是「没有拿到内容」",
+            withCode.IndexOf("没有拿到内容", StringComparison.Ordinal) < 0);
+        string noCode = CdpSession.NavErrorMessage(null);
+        CheckTrue(failures, ref cases, "无码：说清没拿到内容", noCode.IndexOf("页面加载失败（没有拿到内容）", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案带下一步（换一个地址）",
+            withCode.IndexOf("换一个", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案带降级工具（computer_screenshot / computer_click）",
+            withCode.IndexOf("computer_screenshot", StringComparison.Ordinal) >= 0
+            && withCode.IndexOf("computer_click", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "文案不把 chromewebdata 这种内部串甩给模型",
+            withCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0
+            && noCode.IndexOf("chromewebdata", StringComparison.Ordinal) < 0);
+
+        // 连接超时也是同一句人话的前半句（不回「CDP 命令超时（Page.navigate，…）」）
+        string timeoutText = CdpSession.NavErrorMessage("连接超时（20000ms 内没有回执）");
+        CheckTrue(failures, ref cases, "超时：说成「页面没有加载：连接超时」",
+            timeoutText.StartsWith("页面没有加载：连接超时", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "超时文案里没有 CDP 内部措辞",
+            timeoutText.IndexOf("Page.navigate", StringComparison.Ordinal) < 0
+            && timeoutText.IndexOf("CDP 命令超时", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "人话不会撑成一屏（< 400 字符）",
+            withCode.Length < 400 && timeoutText.Length < 400);
+
+        // 超时异常的识别（Nav 靠它把内部措辞换成上面那句人话）
+        CheckTrue(failures, ref cases, "CDP 命令超时命中",
+            CdpSession.IsCdpTimeoutMessage("CDP 命令超时（Page.navigate，20000ms 内没有回执）"));
+        CheckTrue(failures, ref cases, "CDP 发送超时也命中", CdpSession.IsCdpTimeoutMessage("CDP 发送超时（Page.navigate）"));
+        CheckTrue(failures, ref cases, "页面脚本报错不算超时",
+            !CdpSession.IsCdpTimeoutMessage("页面里的脚本报错：Cannot read properties of null"));
+        CheckTrue(failures, ref cases, "「Edge 没有在运行」不算超时",
+            !CdpSession.IsCdpTimeoutMessage("沙箱里的 Edge 没有在运行（或已经退出）"));
+        CheckTrue(failures, ref cases, "null 不算超时", !CdpSession.IsCdpTimeoutMessage(null));
+
+        // 失效 session 的识别（真机 2026-10-25：上一条导航超时后，紧接着的下一条必撞它）
+        string staleReply = "{\"id\":7,\"error\":{\"code\":-32001,\"message\":\"Session with given id not found.\"}}";
+        CheckTrue(failures, ref cases, "Session with given id not found 命中", CdpSession.IsStaleSessionError(staleReply));
+        CheckTrue(failures, ref cases, "No target with given id 命中",
+            CdpSession.IsStaleSessionError("{\"error\":{\"message\":\"No target with given id found\"}}"));
+        CheckTrue(failures, ref cases, "正常回执不算失效",
+            !CdpSession.IsStaleSessionError("{\"id\":7,\"result\":{\"frameId\":\"A1\"}}"));
+        CheckTrue(failures, ref cases, "navigation 失败的普通错误不算失效",
+            !CdpSession.IsStaleSessionError("{\"error\":{\"message\":\"net::ERR_NAME_NOT_RESOLVED\"}}"));
+        CheckTrue(failures, ref cases, "null 不算失效", !CdpSession.IsStaleSessionError(null));
+
+        // 错误文案里的 URL 截断（data: URL 真机把一句错误撑成一屏）
+        string longData = "data:text/html;charset=utf-8;base64," + new string('A', 500);
+        string shorted = CdpSession.ShortUrl(longData, 80);
+        CheckTrue(failures, ref cases, "长 URL 截到 80 + …", shorted.Length == 81 && shorted.EndsWith("…", StringComparison.Ordinal));
+        CheckString(failures, ref cases, "短 URL 原样保留", "https://example.com/", CdpSession.ShortUrl("https://example.com/", 80));
+        CheckString(failures, ref cases, "刚好 80 不截", new string('a', 80), CdpSession.ShortUrl(new string('a', 80), 80));
+        CheckString(failures, ref cases, "null URL 回空串", "", CdpSession.ShortUrl(null, 80));
+
+        // 取正文的脚本不能退化成只读 body.innerText：真机就是这样漏掉 ERR_NAME_NOT_RESOLVED 的
+        string dumpJs = CdpSession.ErrorPageDumpScriptForTest;
+        CheckTrue(failures, ref cases, "取正文覆盖 body.innerText / textContent", 
+            dumpJs.IndexOf("innerText", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("textContent", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "取正文覆盖 #main-message / shadow root / outerHTML",
+            dumpJs.IndexOf("main-message", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("shadowRoot", StringComparison.Ordinal) >= 0
+            && dumpJs.IndexOf("outerHTML", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "每路来源都记了字符数（日志要靠它区分「空」与「没码」）",
+            dumpJs.IndexOf("s.length", StringComparison.Ordinal) >= 0);
+
+        // 原因码的第二张牌：Page.navigate 的 errorText（真机错误页 DOM 取不到任何文本时靠它）
+        CheckString(failures, ref cases, "正文空时用 Page.navigate 的 errorText", "ERR_NAME_NOT_RESOLVED",
+            CdpSession.NavErrorReason("", "net::ERR_NAME_NOT_RESOLVED"));
+        CheckString(failures, ref cases, "正文里的码优先（比 errorText 更具体）", "ERR_HTTP_RESPONSE_CODE_FAILURE",
+            CdpSession.NavErrorReason("ERR_HTTP_RESPONSE_CODE_FAILURE", "net::ERR_FAILED"));
+        CheckString(failures, ref cases, "两张牌都没有时回 null", null,
+            CdpSession.NavErrorReason("[body.innerText=0]", null));
+        CheckString(failures, ref cases, "errorText 是空串时不编造码", null, CdpSession.NavErrorReason("", ""));
+
+        // ── 连接层自愈：挑 target 的规则（2026-10-25 真机三次故障形态的根因之一）──────────
+        // `'Page.navigate' wasn't found` = 会话被挂到了没有 Page 域的 target 上；
+        // 而挂回一个卡死的标签页，会把 Page.enable 拖到 8s 超时（下一条命令又白失败一次）。
+        List<TargetInfo> pages = new List<TargetInfo>();
+        pages.Add(MakeTarget("A", "page", "https://example.com/"));
+        pages.Add(MakeTarget("B", "page", "https://other.example/"));
+        CheckString(failures, ref cases, "挑 target：已知 target 还是 page 就回它（不换模型的标签页）", "B",
+            CdpSession.ChooseTargetId(pages, "B", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 不在了，取第一个 page", "A",
+            CdpSession.ChooseTargetId(pages, "GONE", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 可疑就跳过它", "A",
+            CdpSession.ChooseTargetId(pages, "B", "B"));
+        CheckString(failures, ref cases, "挑 target：没有已知 target 时取第一个", "A",
+            CdpSession.ChooseTargetId(pages, "", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 可疑时改用另一个", "B",
+            CdpSession.ChooseTargetId(pages, "A", "A"));
+        List<TargetInfo> allSuspect = new List<TargetInfo>();
+        allSuspect.Add(MakeTarget("A", "page", "https://example.com/"));
+        CheckString(failures, ref cases, "挑 target：全部可疑时回 null（调用方去新建标签页）", null,
+            CdpSession.ChooseTargetId(allSuspect, "A", "A"));
+
+        List<TargetInfo> mixed = new List<TargetInfo>();
+        mixed.Add(MakeTarget("SW", "service_worker", "https://example.com/sw.js"));
+        mixed.Add(MakeTarget("TAB", "tab", "https://example.com/"));
+        mixed.Add(MakeTarget("ERR", "page", "chrome-error://chromewebdata/"));
+        mixed.Add(MakeTarget("P", "page", "https://example.com/"));
+        CheckString(failures, ref cases, "挑 target：非 page target 一律不挑（'Page.navigate' wasn't found 的来源）", "P",
+            CdpSession.ChooseTargetId(mixed, "", ""));
+        CheckString(failures, ref cases, "挑 target：已知 target 是错误页也不挑（第二轮真机：错误页上继续没意义）", "P",
+            CdpSession.ChooseTargetId(mixed, "ERR", ""));
+        CheckString(failures, ref cases, "挑 target：刚超时的 target 即使还是已知 target 也剔掉（坏连两条的根因）", "B",
+            CdpSession.ChooseTargetId(pages, "A", "A"));
+        CheckString(failures, ref cases, "挑 target：已知 target 不可用时，错误页不当备选", "P",
+            CdpSession.ChooseTargetId(mixed, "GONE", ""));
+        List<TargetInfo> onlyError = new List<TargetInfo>();
+        onlyError.Add(MakeTarget("ERR", "page", "chrome-error://chromewebdata/"));
+        CheckString(failures, ref cases, "挑 target：只有错误页时回 null", null,
+            CdpSession.ChooseTargetId(onlyError, "", ""));
+        CheckString(failures, ref cases, "挑 target：一个 target 都没有时回 null", null,
+            CdpSession.ChooseTargetId(new List<TargetInfo>(), "", ""));
+        CheckTrue(failures, ref cases, "错误页地址：chrome-error 命中",
+            CdpSession.IsBrowserErrorPageUrl("chrome-error://chromewebdata/"));
+        CheckTrue(failures, ref cases, "错误页地址：大小写不敏感",
+            CdpSession.IsBrowserErrorPageUrl("  CHROME-ERROR://chromewebdata/"));
+        CheckTrue(failures, ref cases, "错误页地址：edge-error 也算",
+            CdpSession.IsBrowserErrorPageUrl("edge-error://chromewebdata/"));
+        CheckTrue(failures, ref cases, "错误页地址：普通页面不算",
+            !CdpSession.IsBrowserErrorPageUrl("https://example.com/")
+            && !CdpSession.IsBrowserErrorPageUrl("about:blank")
+            && !CdpSession.IsBrowserErrorPageUrl(null));
+
+        // ── 连接层自愈：哪些失败可以重发（安全边界比「重试三次」重要得多）──────────────
+        string methodNotFound = "{\"id\":9,\"error\":{\"code\":-32601,\"message\":\"'Page.navigate' wasn't found\"}}";
+        CheckTrue(failures, ref cases, "可重发：'Page.navigate' wasn't found（会话挂错了 target）",
+            CdpSession.IsRetryableChannelReply(methodNotFound));
+        CheckTrue(failures, ref cases, "可重发：Runtime.evaluate 的 wasn't found 也一样（没执行过）",
+            CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"'Runtime.evaluate' wasn't found\"}}"));
+        CheckTrue(failures, ref cases, "可重发：Session not found",
+            CdpSession.IsRetryableChannelReply(staleReply));
+        CheckTrue(failures, ref cases, "可重发：Target closed",
+            CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"Target closed.\"}}"));
+        CheckTrue(failures, ref cases, "可重发：Not attached to an active page",
+            CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"Not attached to an active page\"}}"));
+        CheckTrue(failures, ref cases, "不重发：真实导航结果 net::ERR_NAME_NOT_RESOLVED",
+            !CdpSession.IsRetryableChannelReply("{\"error\":{\"code\":-32000,\"message\":\"net::ERR_NAME_NOT_RESOLVED\"}}"));
+        CheckTrue(failures, ref cases, "不重发：真实导航结果 net::ERR_FAILED",
+            !CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"net::ERR_FAILED\"}}"));
+        CheckTrue(failures, ref cases, "不重发：Invalid URL（真的没打开这一页）",
+            !CdpSession.IsRetryableChannelReply("{\"error\":{\"message\":\"Cannot navigate to invalid URL\"}}"));
+        CheckTrue(failures, ref cases, "不重发：正常回执",
+            !CdpSession.IsRetryableChannelReply("{\"id\":7,\"result\":{\"frameId\":\"A1\"}}"));
+        CheckTrue(failures, ref cases, "不重发：null 回执", !CdpSession.IsRetryableChannelReply(null));
+
+        CheckTrue(failures, ref cases, "连接层异常：CDP 命令超时",
+            CdpSession.IsChannelFailure("CDP 命令超时（Page.enable，8000ms 内没有回执）"));
+        CheckTrue(failures, ref cases, "连接层异常：CDP 发送失败",
+            CdpSession.IsChannelFailure("CDP 发送失败（Page.navigate）：底层连接已关闭"));
+        CheckTrue(failures, ref cases, "连接层异常：CDP 连接已断开",
+            CdpSession.IsChannelFailure("CDP 连接已断开"));
+        CheckTrue(failures, ref cases, "非连接层：调试端口连不上（OpenSocket 自己已重试 8s）",
+            !CdpSession.IsChannelFailure("沙箱里的 Edge 调试端口 49719 连不上（Unable to connect to the remote server）"));
+        CheckTrue(failures, ref cases, "非连接层：Edge 没有在运行（那是宿主的缓存自愈信号）",
+            !CdpSession.IsChannelFailure("沙箱里的 Edge 没有在运行（或已经退出）"));
+        CheckTrue(failures, ref cases, "非连接层：页面脚本报错",
+            !CdpSession.IsChannelFailure("页面里的脚本报错：Cannot read properties of null"));
+        CheckTrue(failures, ref cases, "非连接层：null", !CdpSession.IsChannelFailure(null));
+
+        CheckTrue(failures, ref cases, "可重发方法：Page.enable", CdpSession.IsRetryableMethod("Page.enable"));
+        CheckTrue(failures, ref cases, "不重发：Page.navigate（导航超时 = 判死重启，不是重发）",
+            !CdpSession.IsRetryableMethod("Page.navigate"));
+        CheckTrue(failures, ref cases, "可重发方法：Target.attachToTarget", CdpSession.IsRetryableMethod("Target.attachToTarget"));
+        CheckTrue(failures, ref cases, "不可重发：Input.insertText（会打两遍）",
+            !CdpSession.IsRetryableMethod("Input.insertText"));
+        CheckTrue(failures, ref cases, "不可重发：Input.dispatchMouseEvent（会点两下）",
+            !CdpSession.IsRetryableMethod("Input.dispatchMouseEvent"));
+        CheckTrue(failures, ref cases, "不可重发：Runtime.evaluate（脚本可能有副作用）",
+            !CdpSession.IsRetryableMethod("Runtime.evaluate"));
+        CheckTrue(failures, ref cases, "不可重发：DOM.setFileInputFiles",
+            !CdpSession.IsRetryableMethod("DOM.setFileInputFiles"));
+        CheckTrue(failures, ref cases, "不可重发：null", !CdpSession.IsRetryableMethod(null));
+
+        CheckTrue(failures, ref cases, "结构性错误：wasn't found",
+            CdpSession.IsStructuralChannelError("'Page.navigate' wasn't found"));
+        CheckTrue(failures, ref cases, "结构性错误：Session not found",
+            CdpSession.IsStructuralChannelError("Session with given id not found."));
+        CheckTrue(failures, ref cases, "不是结构性错误：普通超时",
+            !CdpSession.IsStructuralChannelError("CDP 命令超时（Page.enable，8000ms 内没有回执）"));
+
+        // 预算与 worker 的杀线：34s 预算 + 6s 收尾 < 40s 杀线（一个在 Cdp.cs，一个在 WorkerHost.cs）
+        CheckTrue(failures, ref cases, "连接层预算 + 收尾余量不越过 worker 的 40s 杀线",
+            CdpSession.ChannelBudgetMsForTest + 6000 <= 40000);
+        // 导航超时那一轮的预算：12s（navigate 等回执）+ 18s（重启 + attach + 验过）< 40s
+        CheckTrue(failures, ref cases, "导航超时 + 判死重启装得进 worker 的 40s 杀线",
+            CdpSession.PageNavigateTimeoutMsForTest + CdpSession.RestartRoomMsForTest <= 40000);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** --align-every 的值：整数且 ≥ 1。生产 .wsb 不带它，默认仍是 AlignEveryPollsDefault */
+    internal static bool TryParseAlignEvery(string raw, out int every)
+    {
+        every = 0;
+        if (raw == null || !int.TryParse(raw, out every)) return false;
+        if (every < 1)
+        {
+            every = 0;
+            return false;
+        }
+        return true;
+    }
+
+    // ---- 耗时计量的自测（--selftest-metrics）-----------------------------------------
+    //
+    // 计量这一刀的产出就是「能读的数字」，所以它自己的口径必须先被钉住：阈值判断、传播的
+    // 可信性判定（mtime 缺失 / 时基差 / 超窗口）、一行日志的算术，以及最要紧的一条——
+    // PollOnce 真跑一次时那行日志真的落出来、传播真的按 mtime 算。前几条是纯函数；最后一条在
+    // 临时目录里跑真实链路（一条 ping：不碰桌面、不起 Edge、不起子进程）。
+    // 可信度只在宿主文件系统上验过（NTFS 临时目录）；映射目录的时间戳行为只能真机看日志——
+    // 所以「传播未知：…」也是一条合法输出，而不是失败。
+
+    private static int RunMetricsSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // 阈值：500ms 就是打印线
+        CheckBool(failures, ref cases, "499ms 不打", false, HopNeedsLog(500, new long[] { 499 }));
+        CheckBool(failures, ref cases, "到线 500ms 就打", true, HopNeedsLog(500, new long[] { 500 }));
+        CheckBool(failures, ref cases, "任一段到线就打", true, HopNeedsLog(500, new long[] { 0, 0, 501, 0 }));
+        CheckBool(failures, ref cases, "全段都小就不打", false, HopNeedsLog(500, new long[] { 0, 499, 12, 3 }));
+        CheckBool(failures, ref cases, "未知段（-1）不算超阈值", false, HopNeedsLog(500, new long[] { -1, 0 }));
+
+        // 传播（mtime 法）的四种可信性
+        DateTime now = new DateTime(2026, 10, 25, 5, 0, 0, DateTimeKind.Utc);
+        string note;
+        CheckNumber(failures, ref cases, "mtime 落后 2500ms → 传播 2500ms", "2500",
+            PropagateFromMtime(now.AddMilliseconds(-2500), now, out note).ToString());
+        CheckString(failures, ref cases, "可信时注明用的是 mtime 法", "mtime 法", note);
+        CheckNumber(failures, ref cases, "mtime 缺失（1601）→ 未知", "-1",
+            PropagateFromMtime(new DateTime(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc), now, out note).ToString());
+        CheckTrue(failures, ref cases, "mtime 缺失的 note 说清是 mtime 缺失",
+            note.IndexOf("mtime 缺失", StringComparison.Ordinal) >= 0);
+        CheckNumber(failures, ref cases, "mtime 晚于本地时钟（时基不一致）→ 未知", "-1",
+            PropagateFromMtime(now.AddMilliseconds(3000), now, out note).ToString());
+        CheckTrue(failures, ref cases, "时基差的 note 点明时基差",
+            note.IndexOf("时基差", StringComparison.Ordinal) >= 0);
+        CheckNumber(failures, ref cases, "差 200s（超可信窗口）→ 未知", "-1",
+            PropagateFromMtime(now.AddMilliseconds(-200000), now, out note).ToString());
+        CheckTrue(failures, ref cases, "超窗口的 note 点明可信窗口",
+            note.IndexOf("可信窗口", StringComparison.Ordinal) >= 0);
+        CheckNumber(failures, ref cases, "差 119s（窗口内最大的可信值）→ 119000", "119000",
+            PropagateFromMtime(now.AddMilliseconds(-119000), now, out note).ToString());
+
+        // 一行日志的算术：传播可信时 总 = 传播 + 读 + 执行 + 落盘（轮询等待不在总和里）
+        HopReport r = new HopReport();
+        r.Command = "cmd-000007";
+        r.PropagateMs = 8100;
+        r.PropagateNote = "mtime 法";
+        r.PollWaitMs = 6400;
+        r.ProbeMs = 310;
+        r.MtimeQueryMs = 12;
+        r.ReadMs = 12;
+        r.ExecuteMs = 120;
+        r.PersistMs = 700;
+        string line = FormatHopLine(r);
+        CheckTrue(failures, ref cases, "可信传播：总 = 传播 + 读 + 执行 + 落盘（8100+12+120+700 = 8932）",
+            line.IndexOf("总 8932ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "可信传播：四段都在同一行里",
+            line.IndexOf("传播 8100ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("读请求 12ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("执行 120ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("回执落盘 700ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "轮询等待作为细分出现，并注明已含在传播里",
+            line.IndexOf("看见前等上一轮循环 6400ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("不计入总", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "直探 / mtime 查询 / 来源都带上（才分得清卡在哪一步）",
+            line.IndexOf("File.Exists 310ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("mtime 查询 12ms", StringComparison.Ordinal) >= 0
+            && line.IndexOf("来源 快路径", StringComparison.Ordinal) >= 0);
+
+        // cdp-* 转给 worker 时，执行段不是浏览器真干活的时间，行里必须自己说
+        r.Forwarded = true;
+        CheckTrue(failures, ref cases, "转发 worker 时注明执行是转发耗时",
+            FormatHopLine(r).IndexOf("转发 worker", StringComparison.Ordinal) >= 0);
+        r.Forwarded = false;
+
+        // 传播不可信：总 = 轮询等待 + 读 + 执行 + 落盘（6400+12+120+700 = 7232）
+        r.PropagateMs = -1;
+        r.PropagateNote = "时基差 +3000ms（mtime 晚于本地时钟）";
+        string unknownLine = FormatHopLine(r);
+        CheckTrue(failures, ref cases, "传播未知：明写原因，且总量按轮询等待起算",
+            unknownLine.IndexOf("传播未知：时基差", StringComparison.Ordinal) >= 0
+            && unknownLine.IndexOf("本进程内 7232ms", StringComparison.Ordinal) >= 0
+            && unknownLine.IndexOf("轮询等待 6400ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "传播未知：不再出现「已含在传播里」的细分",
+            unknownLine.IndexOf("看见前等上一轮循环", StringComparison.Ordinal) < 0);
+        r.PollWaitMs = -1;
+        CheckTrue(failures, ref cases, "第一轮没有上一轮就不列轮询等待",
+            FormatHopLine(r).IndexOf("轮询等待", StringComparison.Ordinal) < 0);
+
+        // 枚举那行的形状（猜测 1 的证据格式，钉死）
+        CheckString(failures, ref cases, "枚举兜底那一行的形状",
+            "对齐枚举耗时 18400ms（第 3 轮，_polls=48，目录可见 5 项；其中 Directory.GetFiles 18300ms）",
+            FormatAlignLine(3, 48, 18400, 18300, 5));
+
+        // --align-every：实验用，默认值不许被动
+        int every;
+        CheckTrue(failures, ref cases, "--align-every 16 可用", TryParseAlignEvery("16", out every) && every == 16);
+        CheckTrue(failures, ref cases, "--align-every 160 可用", TryParseAlignEvery("160", out every) && every == 160);
+        CheckTrue(failures, ref cases, "--align-every 0 拒", !TryParseAlignEvery("0", out every));
+        CheckTrue(failures, ref cases, "--align-every -4 拒", !TryParseAlignEvery("-4", out every));
+        CheckTrue(failures, ref cases, "--align-every abc 拒", !TryParseAlignEvery("abc", out every));
+        CheckTrue(failures, ref cases, "--align-every 空串拒", !TryParseAlignEvery("", out every));
+        CheckString(failures, ref cases, "默认枚举周期仍然是每 16 轮", "16",
+            AlignEveryPolls.ToString() + (AlignEveryPolls == AlignEveryPollsDefault ? "" : "（已被覆盖）"));
+
+        // ---- 真链路：临时目录里发一条 ping，确认那行日志真的落出来、传播真的按 mtime 算 ----
+        string dir = Path.Combine(Path.GetTempPath(), "orbita-metrics-selftest-" + Guid.NewGuid().ToString("N"));
+        TextWriter realOut = Console.Out;
+        StringWriter captured = new StringWriter();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            _outDir = dir;
+            _cmdDir = dir;
+            _nextSeq = 1;
+            _polls = 0;
+            _lastPollEndMs = -1;
+            int savedThreshold = HopLogThresholdMs;
+            HopLogThresholdMs = 0; // 只在自测里把打印线压到 0，保证一定有这一行
+            string req1 = Path.Combine(dir, "cmd-000001" + ReqSuffix);
+            File.WriteAllText(req1, "{\"command\":\"ping\"}", new UTF8Encoding(false));
+            // 把 mtime 往回拨 2s：模拟「宿主 2 秒前写好、guest 现在才看见」
+            File.SetLastWriteTimeUtc(req1, DateTime.UtcNow.AddMilliseconds(-2000));
+            Console.SetOut(captured);
+            PollOnce();
+            Console.SetOut(realOut);
+            CheckTrue(failures, ref cases, "真链路：回执落盘",
+                File.Exists(Path.Combine(dir, "cmd-000001" + RespSuffix)));
+            CheckTrue(failures, ref cases, "真链路：req 受理即删", !File.Exists(req1));
+            // 第二条：mtime 在未来（时基不一致），必须报传播未知
+            string req2 = Path.Combine(dir, "cmd-000002" + ReqSuffix);
+            File.WriteAllText(req2, "{\"command\":\"ping\"}", new UTF8Encoding(false));
+            File.SetLastWriteTimeUtc(req2, DateTime.UtcNow.AddMinutes(5));
+            Console.SetOut(captured);
+            PollOnce();
+            Console.SetOut(realOut);
+            HopLogThresholdMs = savedThreshold;
+        }
+        catch (Exception ex)
+        {
+            failures.Add("真链路跑不起来：" + ex.Message);
+        }
+        finally
+        {
+            Console.SetOut(realOut);
+            HopLogThresholdMs = 500;
+            try { Directory.Delete(dir, true); } catch { }
+        }
+        string log = captured.ToString();
+        CheckTrue(failures, ref cases, "真链路：ping 的命令行真的打出来了",
+            log.IndexOf("命令 cmd-000001：", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "真链路：传播按 mtime 算（不是未知）",
+            log.IndexOf("mtime 法", StringComparison.Ordinal) >= 0);
+        // 拨回 2000ms：容 300ms 抖动，读不出来就是时基/时间戳这一环有问题
+        long measured = -1;
+        int at = log.IndexOf("传播 ", StringComparison.Ordinal);
+        if (at >= 0)
+        {
+            int p = at + "传播 ".Length;
+            int start = p;
+            while (p < log.Length && log[p] >= '0' && log[p] <= '9') p++;
+            long parsed;
+            if (p > start && long.TryParse(log.Substring(start, p - start), out parsed)) measured = parsed;
+        }
+        CheckTrue(failures, ref cases, "真链路：传播量级对得上（拨回 2000ms，实测 " + measured + "ms）",
+            measured >= 1900 && measured <= 2400);
+        CheckTrue(failures, ref cases, "真链路：mtime 在未来时报传播未知（时基差）",
+            log.IndexOf("传播未知：时基差", StringComparison.Ordinal) >= 0);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 自测用的 target 构造器（TargetInfo 的字段是 public 的，但造四条写起来太啰嗦） */
+    private static TargetInfo MakeTarget(string id, string type, string url)
+    {
+        TargetInfo info = new TargetInfo();
+        info.Id = id;
+        info.Type = type;
+        info.Url = url;
+        info.Title = "";
+        return info;
+    }
+
+    /** 统一的自测回执照 JSON（五个 selftest 共用一份形状，跑测试的人不用记五种） */
     internal static string BuildSelfTestJson(List<string> failures, int cases)
     {
         StringBuilder json = new StringBuilder();

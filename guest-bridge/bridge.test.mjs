@@ -134,7 +134,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.7.1");
+      assert.equal(info.version, "0.7.2");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -188,6 +188,10 @@ test(
       // 循环还活着：再发一个正常命令验证
       writeRequest(cmdDir, "cmd-000005", JSON.stringify({ seq: 5, command: "screenshot", maxWidth: 640 }));
       assert.ok(await waitForFile(path.join(cmdDir, "cmd-000005.resp.json")), "坏命令之后循环应继续工作");
+
+      // 启动行必须报出枚举周期与计量阈值：父会话读实验日志时，靠这一行确认跑的是哪一档
+      assert.match(bridgeLog, /对齐枚举周期：每 16 轮/, `启动行应报出枚举周期。桥日志：\n${bridgeLog}`);
+      assert.match(bridgeLog, /耗时日志阈值 500ms/, "启动行应报出计量阈值");
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));
@@ -636,6 +640,47 @@ test(
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
     assert.ok(parsed.cases >= 12, `用例数应 >= 12，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 浏览器错误页判定的纯函数自测（--selftest-cdp）──────────────────────────────────
+//
+// 离线时错误页也是一个「加载完成」的普通页面，旧行为因此回 ok:true + 「可能还在渲染」——
+// 对模型是假成功，而且每次白等满 20 秒。判定与原因码都是纯函数，宿主上就能测；
+// 「导航真的落在 chrome-error:// 上」只有沙箱验收能验。
+
+test(
+  "浏览器错误页 selftest：chrome-error:// 与正文 ERR_ 码命中、正常页面不命中、码/人话/URL 截断/失效 session 都对得上",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-cdp"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 30, `用例数应 >= 30，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 耗时计量的纯函数自测（--selftest-metrics）──────────────────────────────────
+//
+// 计量这一刀的产出就是「能读的数字」，所以先钉住它自己的口径：阈值、mtime 法传播的可信性
+// 判定（缺失 / 时基差 / 超窗口）、一行日志的算术（传播可信时总 = 传播 + 读 + 执行 + 落盘，
+// 轮询等待是传播内部的细分、**不计入总**），再在临时目录里跑一条真 ping 确认那行真的落出来。
+// 全程不碰桌面、不起 Edge、不起子进程。
+
+test(
+  "耗时计量 selftest：阈值 / 传播可信性 / 一行日志的算术 / --align-every / 真链路真的落一行",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-metrics"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    // 自测里会临时把打印线压到 0，命令行日志会落到 stdout；JSON 是最后一行
+    const jsonLine = r.stdout.trim().split(/\r?\n/).pop();
+    const parsed = JSON.parse(jsonLine);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 30, `用例数应 >= 30，实际 ${parsed.cases}`);
   },
 );
 

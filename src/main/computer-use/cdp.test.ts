@@ -191,6 +191,30 @@ describe("CdpSession：动作 → cdp-* 命令", () => {
       2,
     );
   });
+
+  test("导航落在浏览器错误页（桥回 ok:false）：那句人话原样到模型面前，不被打补丁、不重试", async () => {
+    // 桥侧的判定与文案由 `orbita-guest-bridge.exe --selftest-cdp` 锁住（纯函数）；
+    // 这里只锁宿主这一层：ok:false 不能被吞成 ok:true，也不能被改写成别的意思。
+    const guestError =
+      "页面没有加载：ERR_INTERNET_DISCONNECTED（沙箱可能没有出网、宿主机没联网，或这个地址不可达）。" +
+      "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。" +
+      "仍要操作当前界面时改用 computer_screenshot / computer_click 像素工具。";
+    const { guest, calls } = fakeGuest({
+      running: true,
+      replies: { [computerUseGuestCommands.cdpNav]: () => ({ ok: false, error: guestError }) },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-navigate", url: "https://example.com/" });
+
+    assert.equal(outcome.ok, false, "错误页不能报成打开成功");
+    // 文案里已带降级工具：browserFailure 不能再叠一遍英文那一段（叠了就是两句不同的话）
+    assert.equal(outcome.ok ? "" : outcome.error, guestError);
+    assert.equal(
+      calls.filter((call) => call.command === computerUseGuestCommands.cdpNav).length,
+      1,
+      "错误页不是「没有在运行」：宿主不该自动重试（那会让模型再等一整轮超时）",
+    );
+  });
 });
 
 describe("sandbox_* 回执翻成人话", () => {
