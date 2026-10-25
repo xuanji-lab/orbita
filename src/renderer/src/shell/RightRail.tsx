@@ -177,6 +177,11 @@ export function RightRail(props: {
           badge={props.bell.count}
         />
       </span>
+      {/* 完成提醒卡的唯一渲染口：开关与数据住在右栏（completionNotice），卡片自己
+          portal 进主槽的 `.pane-pop-host`（与铃铛同一套宿主）；host 没挂上时不画。 */}
+      {props.completionNotice !== null && (
+        <CompletionCard host={props.popHost} {...props.completionNotice} />
+      )}
       {bellOpen && (
         <BellCard
           host={props.popHost}
