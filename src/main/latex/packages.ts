@@ -67,6 +67,11 @@ export interface PackageDistro {
   tool: string | null;
   /** 安装命令要不要 sudo */
   sudo: boolean;
+  /**
+   * 找到了可执行文件但它跑不起来（起不来 / 非零退出 / 版本输出为空）。
+   * 与「根本没装」是两件事：前者要说「命令出错了」，后者才说「没找到 tlmgr」。
+   */
+  broken: boolean;
 }
 
 export interface LatexPackageLookup {
@@ -197,21 +202,27 @@ export function createLatexPackageLookup(
   const detect = (path: string | null): Promise<PackageDistro> => {
     if (distro !== null) return distro;
     distro = (async (): Promise<PackageDistro> => {
+      let broken = false;
       const tlmgr = await findTool("tlmgr", deps, path);
       if (tlmgr !== null) {
         const outcome = await runTool(deps, tlmgr, ["--version"]);
-        if (outcome !== null && outcome.code === 0) {
-          return { distro: "texlive", tool: tlmgr, sudo: needsSudo(deps.platform, tlmgr, deps.realpath) };
+        // 退出码 0 **还不够**：TeX Live 的 tlmgr.bat 在 tlpkg 缺失时最后一条是
+        // `if not exist … goto :eof`，cmd 会照样回 0 而 stdout 是空的（真机实测：
+        // 只把 bat 复制到别处就会这样）。没有版本输出就等于没跑成。
+        if (outcome !== null && outcome.code === 0 && outcome.stdout.trim() !== "") {
+          return { distro: "texlive", tool: tlmgr, sudo: needsSudo(deps.platform, tlmgr, deps.realpath), broken: false };
         }
+        broken = true;
       }
       const mpm = await findTool("mpm", deps, path);
       if (mpm !== null) {
         const outcome = await runTool(deps, mpm, ["--version"]);
-        if (outcome !== null && outcome.code === 0) {
-          return { distro: "miktex", tool: mpm, sudo: false };
+        if (outcome !== null && outcome.code === 0 && outcome.stdout.trim() !== "") {
+          return { distro: "miktex", tool: mpm, sudo: false, broken: false };
         }
+        broken = true;
       }
-      return { distro: null, tool: null, sudo: false };
+      return { distro: null, tool: null, sudo: false, broken };
     })();
     return distro;
   };
@@ -239,7 +250,8 @@ export function createLatexPackageLookup(
 
     const env = await detect(latexmkPath);
     if (env.distro === null || env.tool === null) {
-      return { ...empty, installed, reason: "no-tools" };
+      // 工具在却跑不起来 → 说「命令出错」，别让用户以为没装发行版
+      return { ...empty, installed, reason: env.broken ? "tool-error" : "no-tools" };
     }
 
     // 失败也分两种：命令没跑成（tool-error）vs 跑成了但没有包认领这个文件（not-found）
@@ -356,6 +368,43 @@ async function runTool(
   return outcome;
 }
 
+/** 一次命令调用的形状（.bat 要借 cmd；判它走哪条路是纯函数，可单测） */
+export interface CommandInvocation {
+  file: string;
+  args: string[];
+  /** true = 让 Node 原样拼命令行（.bat 的引号必须由我们自己控制） */
+  windowsVerbatimArguments: boolean;
+}
+
+/**
+ * 一条命令该怎么起。Windows 上 tlmgr 是 .bat（TeX Live 的安装器给的就是批处理）：
+ * execFile 起不了它，必须借 cmd。这里唯一的难点是**路径带空格时的引号形状**
+ * （MiKTeX 默认装在用户的 AppData 下、TeX Live 也可能装进 `Program Files`，
+ * 用户名带空格很常见）：
+ *
+ *   cmd /d /s /c ""C:\path with space\tlmgr.bat" --version"
+ *
+ * `/s` 会剥掉 `/c` 之后整串的**外层**引号，所以整条命令自己再包一层；少了这层，
+ * 空格把 .bat 路径拆成两个词（实测报「'…\Program' 不是内部或外部命令」）。
+ * `windowsVerbatimArguments` 让 Node 原样拼这条命令行——默认它会再给参数补引号，
+ * 补完再被 /s 剥一次，正好回到引号错位。
+ *
+ * 参数已经在 LOOKUPABLE / 包名白名单里筛过，没有空格与引号，所以直接拼。
+ */
+export function commandInvocation(
+  command: string,
+  argv: readonly string[],
+  platform: NodeJS.Platform,
+): CommandInvocation {
+  const bat = platform === "win32" && /\.(?:bat|cmd)$/i.test(command);
+  if (!bat) return { file: command, args: [...argv], windowsVerbatimArguments: false };
+  return {
+    file: "cmd.exe",
+    args: ["/d", "/s", "/c", `""${command}" ${argv.join(" ")}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
 /** 生产依赖：真盘 + 真 execFile */
 function realDeps(): PackageDeps {
   return {
@@ -371,28 +420,15 @@ function realDeps(): PackageDeps {
     },
     run: (command, argv) =>
       new Promise((resolvePromise) => {
-        // Windows 上 tlmgr 是 .bat（TeX Live 的安装器给的就是批处理）：execFile 起不了，
-        // 必须借 cmd。参数已经过 LOOKUPABLE 白名单，没有可被 cmd 解释的字符。
-        //
-        // **路径带空格时的引号形状**（MiKTeX 默认装在用户的 AppData 下、TeX Live 也可能
-        // 装进 `Program Files`，用户名带空格很常见）：
-        //   cmd /d /s /c ""C:\path with space\tlmgr.bat" --version"
-        // `/s` 会剥掉 `/c` 之后整串的**外层**引号，所以整条命令自己再包一层；少了这层，
-        // 空格把 .bat 路径拆成两个词（实测报「'…\Program' 不是内部或外部命令」），
-        // 反查就静默失效了。
-        // windowsVerbatimArguments：默认 Node 会给每个参数补引号，补完再被 /s 剥一次，
-        // 正好回到引号错位——这里让 Node 原样拼这条命令行。
-        const bat = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(command);
-        const file = bat ? "cmd.exe" : command;
-        const args = bat ? ["/d", "/s", "/c", `""${command}" ${argv.join(" ")}"`] : argv;
+        const invocation = commandInvocation(command, argv, process.platform);
         execFile(
-          file,
-          args,
+          invocation.file,
+          invocation.args,
           {
             timeout: LOOKUP_TIMEOUT_MS,
             windowsHide: true,
             maxBuffer: LOOKUP_OUTPUT_LIMIT,
-            windowsVerbatimArguments: bat,
+            windowsVerbatimArguments: invocation.windowsVerbatimArguments,
           },
           (error, stdout, stderr) => {
             if (error === null) {

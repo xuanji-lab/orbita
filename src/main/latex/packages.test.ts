@@ -233,6 +233,16 @@ describe("createLatexPackageLookup —— TeX Live", () => {
     assert.equal(tooling.calls.some((call) => call.includes("a&b")), false);
   });
 
+  test("tlmgr.bat 退出 0 但版本输出为空（坏安装）→ tool-error，不是未知包", async () => {
+    const tooling = fakeDeps({
+      files: TL_FILES,
+      replies: { [`${tl("tlmgr")} --version`]: OK("") },
+    });
+    const lookup = createLatexPackageLookup(async () => tl("latexmk"), tooling.deps);
+    const [resolved] = await lookup.resolve(["ctexart.cls"]);
+    assert.equal(resolved?.reason, "tool-error");
+  });
+
   test("tlmgr 在但 search 非零退出 → tool-error（不是 not-found，也不是 no-tools）", async () => {
     const tooling = texlive({
       [`${tl("tlmgr")} search --file /ctexart.cls`]: { code: 3, stdout: "", stderr: "boom", spawnError: null },
@@ -288,7 +298,7 @@ describe("createLatexPackageLookup —— MiKTeX", () => {
 
 describe("createLatexPackageLookup —— 批量", () => {
   test("7 个缺包全部有结果（并发反查，不留「正在反查」的死角）", async () => {
-    const replies: Record<string, PackageRunResult | undefined> = { [`${tl("tlmgr")} --version`]: OK("") };
+    const replies: Record<string, PackageRunResult | undefined> = { [`${tl("tlmgr")} --version`]: OK("tlmgr revision 74241") };
     for (let index = 0; index < 7; index += 1) {
       replies[`${tl("tlmgr")} search --file /p${index}.sty`] = OK(`pkg-${index}:
 	x/p${index}.sty
@@ -303,7 +313,7 @@ describe("createLatexPackageLookup —— 批量", () => {
   });
 
   test("超过上限的名字明确标 not-looked-up（界面不许一直转圈）", async () => {
-    const tooling = fakeDeps({ files: TL_FILES, replies: { [`${tl("tlmgr")} --version`]: OK("") } });
+    const tooling = fakeDeps({ files: TL_FILES, replies: { [`${tl("tlmgr")} --version`]: OK("tlmgr revision 74241") } });
     const lookup = createLatexPackageLookup(async () => tl("latexmk"), tooling.deps);
     const names = Array.from({ length: 22 }, (_, index) => `p${index}.sty`);
     const out = await lookup.resolve(names);
@@ -316,7 +326,7 @@ describe("createLatexPackageLookup —— 批量", () => {
     const tooling = fakeDeps({
       files: TL_FILES,
       replies: {
-        [`${tl("tlmgr")} --version`]: OK(""),
+        [`${tl("tlmgr")} --version`]: OK("tlmgr revision 74241"),
         [`${tl("tlmgr")} search --file /a.sty`]: OK("pkg-a:\n\tx/a.sty\n"),
         [`${tl("tlmgr")} search --file /b.cls`]: OK("pkg-b:\n\tx/b.cls\n"),
       },
