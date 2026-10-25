@@ -550,6 +550,16 @@ internal static class Uia
         job.Body = body;
         lock (Gate)
         {
+            // 线程意外死掉（未捕获的异常 / 运行时把后台线程停了）：_worker 还挂着，但再没人消费
+            // 队列——不在这里换一条，后面每条命令都要白等满一个 timeout。ref 映射属于死掉的单元，
+            // 一并作废（下一次 uia-act 会回「ref 已失效」）。
+            if (_worker != null && !_worker.IsAlive)
+            {
+                Program.Log("UIA：STA 线程已经退出，重启一条（旧 ref 映射作废）");
+                _generation++;
+                _worker = null;
+                _refs = new Dictionary<long, List<IntPtr>>();
+            }
             if (_worker == null)
             {
                 _worker = new Thread(WorkerLoop);

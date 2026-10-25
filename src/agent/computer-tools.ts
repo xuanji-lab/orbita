@@ -413,13 +413,11 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         );
       }
       if (rawAction === "list") {
-        const maxItems = numberOf(args["maxItems"]);
+        // 描述里写的是 default 60，所以这里**总是**显式下发：不写的话桥的缺省是 200，
+        // 模型看到一句「default 60」却收到 200 行，工具描述就成了假话。
+        const maxItems = numberOf(args["maxItems"]) ?? 60;
         const result = await call(
-          {
-            action: "uia-list",
-            window: target,
-            ...(maxItems === undefined ? {} : { maxItems: Math.round(maxItems) }),
-          },
+          { action: "uia-list", window: target, maxItems: Math.round(maxItems) },
           signal,
         );
         return { content: [{ type: "text" as const, text: result.text }], details: undefined };

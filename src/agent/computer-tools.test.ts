@@ -247,10 +247,10 @@ describe("computer_* 工具", () => {
 });
 
 describe("computer_uia 工具（UIA 车道）", () => {
-  test("list：window 原样下发；没给 maxItems 就不编字段（吃桥的缺省值）", async () => {
+  test("list：window 原样下发；没给 maxItems 就按描述里的默认 60 显式下发", async () => {
     const { sent, run, answer } = setup();
     const pending = run("computer_uia", { action: "list", window: " 记事本 " });
-    assert.deepEqual(sent[0]?.["request"], { action: "uia-list", window: "记事本" });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-list", window: "记事本", maxItems: 60 });
     answer(0, { ok: true, text: "1 · button \"Close\" · supports invoke" });
     const result = await pending;
     assert.deepEqual(result.content, [{ type: "text", text: "1 · button \"Close\" · supports invoke" }]);
