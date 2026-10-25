@@ -13,20 +13,33 @@ import type {
   ComputerUseGuestCommand,
   ComputerUseScreenshotResult,
   ComputerUseToolRequest,
+  ComputerUseWindowListResult,
+  ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
 import type { GuestCommandResult } from "./sandbox.ts";
+
+interface WindowShotFields {
+  hwnd?: number;
+  title?: string;
+  maxWidth?: number;
+}
 
 interface Calls {
   screenshot: number[];
   commands: Array<{ command: ComputerUseGuestCommand; fields: Record<string, unknown> }>;
+  windowShots: WindowShotFields[];
+  /** 每次 listWindows 收到的超时（未传 = undefined） */
+  listWindows: Array<number | undefined>;
 }
 
 function fakeGuest(options: {
   shot?: ComputerUseScreenshotResult;
+  windowShot?: ComputerUseWindowShotResult;
+  windowList?: ComputerUseWindowListResult;
   commandResult?: GuestCommandResult;
   throwOn?: "screenshot" | "command";
 }): { guest: ComputerUseGuest; calls: Calls } {
-  const calls: Calls = { screenshot: [], commands: [] };
+  const calls: Calls = { screenshot: [], commands: [], windowShots: [], listWindows: [] };
   const guest: ComputerUseGuest = {
     async screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult> {
       if (options.throwOn === "screenshot") throw new Error("文件协议炸了");
@@ -47,6 +60,45 @@ function fakeGuest(options: {
       if (options.throwOn === "command") throw new Error("文件协议炸了");
       calls.commands.push({ command, fields });
       return options.commandResult ?? { ok: true };
+    },
+    async windowShot(fields): Promise<ComputerUseWindowShotResult> {
+      calls.windowShots.push(fields);
+      return (
+        options.windowShot ?? {
+          ok: true,
+          jpegBase64: "d2luZG93",
+          width: 800,
+          height: 600,
+          nativeWidth: 800,
+          nativeHeight: 600,
+          hwnd: 4321,
+          title: "Edge - 新建标签页",
+          restoredFromMinimized: false,
+          takenAt: 2,
+        }
+      );
+    },
+    async listWindows(timeoutMs?: number): Promise<ComputerUseWindowListResult> {
+      calls.listWindows.push(timeoutMs);
+      return (
+        options.windowList ?? {
+          ok: true,
+          windows: [
+            {
+              hwnd: 4321,
+              title: "Edge - 新建标签页",
+              process: "msedge",
+              className: "Chrome_WidgetWin_1",
+              x: 0,
+              y: 0,
+              w: 800,
+              h: 600,
+              minimized: false,
+              visible: true,
+            },
+          ],
+        }
+      );
     },
   };
   return { guest, calls };
@@ -120,5 +172,89 @@ describe("applyComputerUseRequest", () => {
       ok: false,
       error: "文件协议炸了",
     });
+  });
+});
+
+describe("applyComputerUseRequest：按窗口截图（win-shot / win-list，桥 0.9.0）", () => {
+  test("window 是数字：下发 hwnd（hwnd 优先于 title），回执带窗口几何与「坐标不能用于点击」", async () => {
+    const { guest, calls } = fakeGuest({});
+    const outcome = await run(guest, { action: "screenshot", maxWidth: 640, window: 4321 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.deepEqual(calls.windowShots, [{ hwnd: 4321, maxWidth: 640 }]);
+    // 整桌面那条路径一个字都不该被碰
+    assert.deepEqual(calls.screenshot, []);
+    assert.deepEqual(outcome.shot, {
+      width: 800,
+      height: 600,
+      nativeWidth: 800,
+      nativeHeight: 600,
+      data: "d2luZG93",
+    });
+    assert.match(outcome.text, /window "Edge - 新建标签页" \(hwnd 4321\)/);
+    assert.match(outcome.text, /covering it do not matter/);
+    assert.match(outcome.text, /do not pass them to computer_click/);
+    assert.equal(calls.listWindows.length, 0, "成功时不该去列窗口");
+  });
+
+  test("window 是字符串：按标题下发 title；最小化恢复要在正文里说清楚", async () => {
+    const { guest, calls } = fakeGuest({
+      windowShot: {
+        ok: true,
+        jpegBase64: "d2luZG93",
+        width: 400,
+        height: 300,
+        nativeWidth: 800,
+        nativeHeight: 600,
+        hwnd: 7,
+        title: "记事本",
+        restoredFromMinimized: true,
+        takenAt: 3,
+      },
+    });
+    const outcome = await run(guest, { action: "screenshot", window: "记事" });
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls.windowShots, [{ title: "记事" }]);
+    if (outcome.ok) assert.match(outcome.text, /had been minimized and has been restored/);
+  });
+
+  test("拍不到：桥的人话原样带出（hwnd 路径不列候选——那就是那个窗口本身拍不到）", async () => {
+    const { guest, calls } = fakeGuest({
+      windowShot: { ok: false, error: "这个窗口拍不到（…）——改用整桌面截图或 computer_screenshot" },
+    });
+    const outcome = await run(guest, { action: "screenshot", window: 9 });
+    assert.deepEqual(outcome, { ok: false, error: "这个窗口拍不到（…）——改用整桌面截图或 computer_screenshot" });
+    assert.deepEqual(calls.listWindows, []);
+  });
+
+  test("按标题拍不到：保留原话并追加候选窗口（模型下一步要传 hwnd 或换标题）", async () => {
+    const { guest, calls } = fakeGuest({
+      windowShot: { ok: false, error: "没找到标题包含「不存在的」的窗口" },
+    });
+    const outcome = await run(guest, { action: "screenshot", window: "不存在的" });
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) return;
+    assert.match(outcome.error, /^没找到标题包含「不存在的」的窗口/, "原话必须在前，不得改写");
+    assert.match(outcome.error, /Windows you can capture right now/);
+    assert.match(outcome.error, /hwnd 4321 "Edge - 新建标签页" \(msedge\)/);
+    // 列候选有独立预算：不能吃默认 45s（那条路刚白等过一次）
+    assert.deepEqual(calls.listWindows, [5_000]);
+  });
+
+  test("列候选自己失败：不影响原错误（不能让「列失败」顶掉真正的失败原因）", async () => {
+    const { guest } = fakeGuest({
+      windowShot: { ok: false, error: "没找到那个窗口" },
+      windowList: { ok: false, error: "桥死了" },
+    });
+    const outcome = await run(guest, { action: "screenshot", window: "x" });
+    assert.deepEqual(outcome, { ok: false, error: "没找到那个窗口" });
+  });
+
+  test("不带 window 的 screenshot 仍然走整桌面那条路（没被新分支吃掉）", async () => {
+    const { guest, calls } = fakeGuest({});
+    const outcome = await run(guest, { action: "screenshot" });
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls.windowShots, []);
+    assert.equal(calls.screenshot.length, 1);
   });
 });

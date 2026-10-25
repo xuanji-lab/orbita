@@ -50,6 +50,7 @@ function fakeClock(): LeaseClock & { advance(ms: number): void } {
 }
 
 const SCREENSHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 1280 };
+const WINDOW_SHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 1280, window: 4321 };
 const NAVIGATE: ComputerUseToolRequest = { action: "sandbox-navigate", url: "https://example.com" };
 
 const titled = (titles: Record<string, string>) => async (sessionId: string) => titles[sessionId] ?? "";
@@ -154,5 +155,46 @@ describe("接线：桌面键被硬上限收回后只拦一条", () => {
     const outcome = await dispatcher.dispatch("A", SCREENSHOT);
     assert.equal(outcome.ok, true);
     assert.deepEqual(calls, ["pixels:A"]);
+  });
+});
+
+describe("接线：按窗口截图不占桌面租约（多会话各拍各的窗口）", () => {
+  test("A 持桌面时 B 的窗口截图照常下发，不进队列，桌面仍归 A", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲", B: "任务乙" });
+    await lease.acquire("desktop:exclusive", "A", "任务甲");
+    const outcome = await dispatcher.dispatch("B", WINDOW_SHOT);
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls, ["pixels:B"]);
+    // PrintWindow 读窗口自己的 surface：不需要、也没有偷偷拿到桌面键
+    assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A");
+    assert.equal(lease.queueDepth("desktop:exclusive"), 0);
+  });
+
+  test("桌面空闲时窗口截图也不留下桌面租约（不占就是一次都不碰）", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲" });
+    const outcome = await dispatcher.dispatch("A", WINDOW_SHOT);
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls, ["pixels:A"]);
+    assert.equal(lease.owner("desktop:exclusive"), null);
+  });
+
+  test("硬上限收回的标记不会被窗口截图吃掉：下一条真正的像素命令仍收到终态错误", async () => {
+    const { dispatcher, calls } = setup({ A: "任务甲" });
+    dispatcher.noteHoldExpired("A");
+    const window = await dispatcher.dispatch("A", WINDOW_SHOT);
+    assert.equal(window.ok, true, "窗口截图不碰桌面，不该被别人的收回事件拦下");
+
+    const blocked = await dispatcher.dispatch("A", SCREENSHOT);
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.match(blocked.error, /15 分钟/);
+    assert.deepEqual(calls, ["pixels:A"]);
+  });
+
+  test("整桌面截图仍然申请桌面租约（回归：新分支没有把老的路径一起放过）", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲" });
+    const outcome = await dispatcher.dispatch("A", SCREENSHOT);
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls, ["pixels:A"]);
+    assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A", "整桌面截图必须持桌面键");
   });
 });

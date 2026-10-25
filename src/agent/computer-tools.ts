@@ -159,15 +159,43 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "for you). **Start here and come back here after every action**: this image is the only way you can see " +
       "the sandbox, and the coordinates you pass to computer_click / computer_scroll are pixels of this image. " +
       "The image is scaled down (its size is in the result); do not assume it is the physical screen size. " +
+      "**Pass window (part of a window title) or hwnd to capture only that window**: that works even when other " +
+      "windows cover it and it does not take focus, so it is the cheap way to check on a window you are not " +
+      "driving. A window image's pixels are window pixels, not desktop pixels: take a normal screenshot (no " +
+      "window) before clicking. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
       "start it in Settings › Experimental features › Computer use; do not retry.",
-    parameters: { type: "object", properties: {}, required: [] } as never,
-    async execute(_toolCallId, _params, signal) {
-      const result = await call({ action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, signal);
+    parameters: {
+      type: "object",
+      properties: {
+        window: {
+          type: "string",
+          description:
+            "Part of the target window's title (case-insensitive). Captures only that window, even if covered.",
+        },
+        hwnd: {
+          type: "number",
+          description: "Target window handle (wins over window). Comes from a previous window screenshot result.",
+        },
+      },
+      required: [],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const hwnd = numberOf(args["hwnd"]);
+      const title = typeof args["window"] === "string" ? args["window"].trim() : "";
+      const target = hwnd !== undefined ? hwnd : title === "" ? undefined : title;
+      const request: ComputerUseToolRequest =
+        target === undefined
+          ? { action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }
+          : { action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH, window: target };
+      const result = await call(request, signal);
       const shot = result.shot;
       if (shot === undefined) throw new Error("截图回执里没有图（主进程与契约不一致）");
-      lastShot = shot;
+      // 只拍窗口时**不更新** lastShot：那张图的原点是窗口左上角，而 click 要的是整屏物理像素。
+      // 更新了它，下一次 computer_click 会看起来「成功」却点到另一个地方——静默错位比报错更坏。
+      if (target === undefined) lastShot = shot;
       return {
         content: [
           { type: "text" as const, text: result.text },

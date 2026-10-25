@@ -30,6 +30,8 @@ import {
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
   type ComputerUseStopResult,
+  type ComputerUseWindowListResult,
+  type ComputerUseWindowShotResult,
   type SandboxState,
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
@@ -38,6 +40,8 @@ import { probe as probeCapability } from "./capability.ts";
 import {
   fetchGuestScreenshot,
   fetchGuestShot,
+  fetchGuestWindowList,
+  fetchGuestWindowShot,
   pingGuest,
   resetGuestCommandSeq,
   sendGuestCommand,
@@ -529,6 +533,61 @@ export class SandboxController {
         nativeHeight: shot.nativeHeight,
         takenAt: Date.now(),
       };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 按**窗口**截一张（桥 0.9.0 的 win-shot）。与 screenshot 的区别只在「拍谁」：
+   * 这里只拍目标窗口自己的 surface，被别的窗口遮住也拍得到（PrintWindow），目标最小化时
+   * 桥会先 SW_SHOWNOACTIVATE 恢复、等一帧再拍。
+   *
+   * **不占桌面租约**：这条路径不改焦点、不往桌面注入任何输入，也不依赖「屏幕上现在是什么」，
+   * 所以 dispatch.ts 让它在别人持着 desktop:exclusive 时照常下发。
+   *
+   * 失败原话带出（尤其是桥那句「这个窗口拍不到（…）——改用整桌面截图或 computer_screenshot」）：
+   * 宿主不改写它，模型靠那一句决定要不要换路。
+   */
+  async windowShot(
+    options: { hwnd?: number; title?: string; maxWidth?: number },
+  ): Promise<ComputerUseWindowShotResult> {
+    const gate = this.notRunning("按窗口截图");
+    if (gate !== null) return gate;
+    const fields: Record<string, unknown> = { maxWidth: clampMaxWidth(options.maxWidth) };
+    if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
+    if (options.title !== undefined && options.title.trim() !== "") fields["title"] = options.title.trim();
+    try {
+      const shot = await fetchGuestWindowShot(this.outDir(), fields, this.deps.guestTimeoutMs);
+      return {
+        ok: true,
+        jpegBase64: Buffer.from(shot.jpeg).toString("base64"),
+        width: shot.width,
+        height: shot.height,
+        nativeWidth: shot.nativeWidth,
+        nativeHeight: shot.nativeHeight,
+        hwnd: shot.hwnd,
+        title: shot.title,
+        restoredFromMinimized: shot.restoredFromMinimized,
+        takenAt: Date.now(),
+      };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 可截图的顶层窗口列表（win-list）。只读、不抢焦点。
+   *
+   * timeoutMs 可覆写：它开在「按标题拍窗口失败」的收尾路上（agent-requests.ts 拿它列候选），
+   * 那条路已经白等过一次超时，不能再用 45s 把模型的下一次机会一起吃掉。
+   */
+  async listWindows(timeoutMs?: number): Promise<ComputerUseWindowListResult> {
+    const gate = this.notRunning("窗口列表");
+    if (gate !== null) return gate;
+    try {
+      const windows = await fetchGuestWindowList(this.outDir(), timeoutMs);
+      return { ok: true, windows };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }

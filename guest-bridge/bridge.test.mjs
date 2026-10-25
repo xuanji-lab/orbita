@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.8.4");
+      assert.equal(info.version, "0.9.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -783,6 +783,51 @@ test(
     assert.ok(parsed.cases >= 8, `用例数应 >= 8，实际 ${parsed.cases}`);
   },
 );
+
+// ── 按窗口截图（win-list / win-shot，0.9.0）────────────────────────────────────
+//
+// 为什么要它：整桌面截图要排队（desktop:exclusive），而 PrintWindow 读窗口自己的 surface，
+// 被别的窗口完全遮住也拍得到（真沙箱实测逐像素一致）。这条能力一旦回一张黑图而报成功，
+// 模型会对着黑屏「操作」——所以黑帧判定的边界比截图本身更值得测。
+//
+// 纯函数部分在宿主上就能测（--selftest-shot）：枚举过滤、标题匹配、黑帧阈值、缩放。
+// 真机才验的部分（能不能列出 Edge / 遮挡下能不能拍 / 最小化恢复）交给沙箱验收。
+
+test(
+  "按窗口截图 selftest：过滤 / 标题匹配 / 黑帧判定 / 缩放都是纯函数（不启进程、不碰桌面）",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-shot"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 30, `用例数应 >= 30，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test("win-list / win-shot 进命令清单，黑帧自检与最小化恢复不是可选项（源码级，不真截图）", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+  assert.match(src, /command == "win-list"/, "Execute 里必须分派 win-list");
+  assert.match(src, /command == "win-shot"/, "Execute 里必须分派 win-shot");
+  assert.match(src, /--selftest-shot/, "纯函数自测要能从命令行跑到");
+
+  const shot = fs.readFileSync(path.join(scriptDir, "WinShot.cs"), "utf8");
+  // 遮挡下拍得到，靠的就是 PW_RENDERFULLCONTENT
+  assert.match(shot, /PW_RENDERFULLCONTENT/);
+  // 返回值不可信（Chromium flags=0 回 TRUE 但全黑）：必须做黑帧自检 + 重试一次
+  assert.match(shot, /LooksBlack\(mean, blackRatio\)/);
+  assert.match(shot, /for \(int attempt = 0; attempt < 2; attempt\+\+\)/);
+  // 最小化窗口只允许用 SW_SHOWNOACTIVATE 恢复（抢焦点会打扰正在操作的人）
+  assert.match(shot, /SW_SHOWNOACTIVATE/);
+  assert.ok(shot.indexOf("SW_SHOWNOACTIVATE") < shot.indexOf("Capture(hwnd, flags"), "先恢复再拍");
+  // 拍不到时给模型一句能照着换路的人话，且不许把黑图当成功回
+  assert.match(shot, /computer_screenshot/);
+  assert.match(shot, /这个窗口拍不到/);
+});
 
 // ── 会话 id 安全化的纯函数自测（--selftest-session）────────────────────────────────
 //

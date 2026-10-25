@@ -4,13 +4,19 @@
  * 这一层从 index.ts 里拆出来，只为一件事：让「sandbox_* 在别人持桌面时照常下发」这条
  * 回归能被测到。它不碰 electron、不碰沙箱，下发函数是注入的——测试数调用次数就够了。
  *
- * 键的选法（v1.5-2）：
+ * 键的选法（v1.5-2 / 0.9.0）：
  *   computer_*  → desktop:exclusive  像素工具共用唯一一块屏幕与前台焦点，必须排队
+ *   screenshot + window → **不要租约**  按窗口截图（PrintWindow）读窗口自己的 surface，
+ *                          被遮挡也拍得到、不抢焦点，所以多个会话可以各拍各的窗口
  *   sandbox_*   → browser:<session>  每会话自己的 Edge，永远立刻可用，不占桌面
  *
  * **硬上限的收尾也在这里**：桌面键被 15 分钟强制收回之后，那个会话的下一条命令不该因为
  * 「锁空着」就静默拿到——它已经在一个被判为「占得太久」的轮次里，要让它把这句话转告用户。
  * 只拦一条，说清楚就摘掉标记（否则这个会话以后再也用不了沙箱）。
+ *
+ * 窗口截图不进这条拦截：它不碰桌面，被收回的也只是一把它没用过的锁。拦截标记留着，
+ * 下一条真正的像素命令再消费——「你的桌面操作权被收回了」这句话不能因为中间插了一张
+ * 窗口图就消失。
  */
 import {
   COMPUTER_USE_DESKTOP_KEY,
@@ -18,6 +24,7 @@ import {
   browserKey,
   computerUseLeaseErrors,
   isSandboxBrowserAction,
+  isWindowScreenshotRequest,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
 } from "../../shared/computer-use.ts";
@@ -49,6 +56,14 @@ export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): Co
     sessionId: string,
     request: ComputerUseToolRequest,
   ): Promise<ComputerUseToolOutcome> => {
+    // 按窗口截图**不占桌面租约**：PrintWindow 读的是目标窗口自己的合成 surface，
+    // 被别人完全遮住也拍得到（2026-10-25 真沙箱实测与可见时逐像素一致），也不移动焦点、
+    // 不改变前后台。它和「唯一一块屏幕」没有冲突，所以不进队列——这正是本 PR 的产品收益：
+    // 多个会话可以同时各拍各的窗口，而不是抢同一个 desktop:exclusive。
+    // 放在过期标记之前：这张图不碰桌面，不该被「上一轮占了太久」拦掉一把它没用过的锁。
+    if (isWindowScreenshotRequest(request)) {
+      return await deps.runPixels(sessionId, request);
+    }
     const browser = isSandboxBrowserAction(request.action);
     const key = browser ? browserKey(sessionId) : COMPUTER_USE_DESKTOP_KEY;
     if (expiredSessions.has(sessionId)) {

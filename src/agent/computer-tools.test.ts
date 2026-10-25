@@ -101,6 +101,70 @@ describe("computer_* 工具", () => {
     ]);
   });
 
+  test("screenshot + window：按窗口下发，图交给模型，但**不覆盖**最近一次整桌面截图的几何", async () => {
+    const { sent, run, answer, takeScreenshot } = setup();
+    await takeScreenshot(); // 桌面几何：1280×720 → 屏 2560×1440
+
+    const pending = run("computer_screenshot", { hwnd: 4321 });
+    assert.deepEqual(sent[1]?.["request"], { action: "screenshot", maxWidth: 1280, window: 4321 });
+    answer(1, {
+      ok: true,
+      text: "Screenshot of the window …",
+      // 窗口自己的几何：400×300 的图对 400×300 的窗口（比例 1:1）
+      shot: { width: 400, height: 300, nativeWidth: 400, nativeHeight: 300, data: "d2luZG93" },
+    });
+    const result = await pending;
+    assert.deepEqual(result.content[1], { type: "image", data: "d2luZG93", mimeType: "image/jpeg" });
+
+    // 点击仍按整桌面的比例换算：窗口图的 400×300 没有把比例偷换掉
+    const click = run("computer_click", { x: 100, y: 200 });
+    assert.deepEqual(sent[2]?.["request"], { action: "click", x: 200, y: 400 });
+    answer(2, { ok: true, text: "Sent a left click at (200, 400) on the sandbox desktop." });
+    await click;
+
+    // 标题两端空白去掉；hwnd 优先于 window
+    const byTitle = run("computer_screenshot", { window: "  Edge  " });
+    assert.deepEqual(sent[3]?.["request"], { action: "screenshot", maxWidth: 1280, window: "Edge" });
+    answer(3, {
+      ok: true,
+      text: "window",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "ZQ==" },
+    });
+    await byTitle;
+
+    const both = run("computer_screenshot", { window: "Edge", hwnd: 77 });
+    assert.deepEqual(sent[4]?.["request"], { action: "screenshot", maxWidth: 1280, window: 77 });
+    answer(4, {
+      ok: true,
+      text: "window",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "ZQ==" },
+    });
+    await both;
+
+    // 空 window / 没给 window = 整桌面截图（不能把空串当成一个要匹配的标题）
+    const desktopAgain = run("computer_screenshot", { window: "   " });
+    assert.deepEqual(sent[5]?.["request"], { action: "screenshot", maxWidth: 1280 });
+    answer(5, {
+      ok: true,
+      text: "desktop",
+      shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "ZQ==" },
+    });
+    await desktopAgain;
+  });
+
+  test("只拍过窗口时点击照样拒绝：窗口图的坐标不能当桌面像素用", async () => {
+    const { sent, run, answer } = setup();
+    const pending = run("computer_screenshot", { window: "Edge" });
+    assert.deepEqual(sent[0]?.["request"], { action: "screenshot", maxWidth: 1280, window: "Edge" });
+    answer(0, {
+      ok: true,
+      text: "window",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "ZQ==" },
+    });
+    await pending;
+    await assert.rejects(run("computer_click", { x: 10, y: 20 }), /computer_screenshot first/);
+  });
+
   test("没截图就点击 / 滚动：当场拒绝，并指名先调 computer_screenshot", async () => {
     const { sent, run } = setup();
     await assert.rejects(run("computer_click", { x: 10, y: 20 }), /computer_screenshot first/);

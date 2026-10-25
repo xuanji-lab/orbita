@@ -12,8 +12,9 @@
 //      JPEG 是同名 .jpg 兄弟文件），然后删掉 req；宿主读完响应后负责清理 resp/jpg。
 //      这条通道的一条行为都没改：它就是没有 TCP 时的唯一通道，也是升级/降级时的安全网。
 //
-// 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入），
-// 以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP 语义命令，实现在 Cdp.cs 的 CdpSession）。
+// 命令：ping（就绪探针）、screenshot（截主屏）、win-list / win-shot（按窗口截图，WinShot.cs）、
+// click / type / key / scroll（SendInput 注入），以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP
+// 语义命令，实现在 Cdp.cs 的 CdpSession）。
 // CDP 的 WebSocket 只在 guest 内（桥 ↔ 同机 Edge 的 127.0.0.1 端口），不过映射目录。
 //
 // ⚠ 0.7.0 起 **cdp-* 由该会话自己的 worker 子进程执行**（WorkerHost.cs）：桥是单线程轮询，
@@ -42,7 +43,9 @@
 //
 // 编译：node build.mjs（用 Windows 自带的 .NET Framework 4.x csc.exe，零第三方依赖）。
 // 约束：单 exe、单进程、无持久化——沙箱每次重置即消失，不需要任何清理逻辑。
-//   源码两个文件：Program.cs（文件协议与像素命令）+ Cdp.cs（浏览器通道），一起用 build.mjs 编。
+//   源码五个文件：Program.cs（文件协议与像素命令）+ Cdp.cs（浏览器通道）+
+//   WorkerHost.cs / TcpChannel.cs（worker 与 TCP 通道）+ WinShot.cs（按窗口截图），
+//   一起用 build.mjs 编。
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 
 using System;
@@ -79,8 +82,12 @@ internal static class Program
     // 0.8.4 把「关防火墙」提到**开始监听之前**（那个「是否允许」的提示框是 Windows 在程序第一次
     //   开始监听入站时弹的，之后再关防火墙收不回它，还抢焦点），并在监听后起一条 ~2s 的短任务
     //   把可能已经弹出的那个框收掉（枚举顶层窗口 → 精确匹配 → WM_CLOSE，只做一次）。
+    // 0.9.0 多了 **win-list / win-shot**（WinShot.cs）：按**窗口**截图。PrintWindow 读的是
+    //   窗口自己的 surface，被别的窗口遮住也拍得到（真沙箱实测逐像素一致），所以宿主侧的
+    //   窗口截图路径**不占桌面租约**——多个会话可以各拍各的窗口。黑帧自检与最小化恢复见
+    //   WinShot.cs 的文件头。screenshot（整桌面）与输入注入一条行为都没变。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.8.4";
+    private const string Version = "0.9.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -197,6 +204,8 @@ internal static class Program
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
             // TCP 通道的自测（本进程里起监听、127.0.0.1 连回来；不启 Edge、不碰桌面）
             if (args[i] == "--selftest-tcp") return TcpChannel.RunSelfTest();
+            // 按窗口截图的纯函数自测（过滤 / 标题匹配 / 黑帧判定 / 缩放；不启进程、不碰桌面）
+            if (args[i] == "--selftest-shot") return WinShot.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -856,6 +865,10 @@ internal static class Program
         // 桥通告了不代表命令通道已通——宿主必须等到 ping 应答才能宣布 running
         if (command == "ping") return "{\"ok\":true}";
         if (command == "screenshot") return ExecuteScreenshot(raw, baseName);
+        // 按窗口截图（0.9.0）：win-list 列可截图的顶层窗口，win-shot 拍其中一个
+        //（PrintWindow，被遮挡也拍得到；实现在 WinShot.cs）
+        if (command == "win-list") return WinShot.ExecuteList();
+        if (command == "win-shot") return WinShot.ExecuteShot(raw, baseName);
         if (command == "click") return ExecuteClick(raw);
         if (command == "type") return ExecuteType(raw);
         if (command == "key") return ExecuteKey(raw);
@@ -2395,7 +2408,7 @@ internal static class Program
         if (!same) failures.Add(name + "：期待 " + ShowValue(expected) + "，实得 " + ShowValue(actual));
     }
 
-    private static void CheckNumber(List<string> failures, ref int cases, string name, string expected, string actual)
+    internal static void CheckNumber(List<string> failures, ref int cases, string name, string expected, string actual)
     {
         cases++;
         bool same = expected == null ? actual == null : string.Equals(expected, actual, StringComparison.Ordinal);
@@ -2455,15 +2468,9 @@ internal static class Program
             }
             finally { g.Dispose(); }
 
-            outW = nativeW;
-            outH = nativeH;
-            int longEdge = Math.Max(nativeW, nativeH);
-            if (longEdge > maxWidth)
-            {
-                double scale = (double)maxWidth / longEdge;
-                outW = Math.Max(1, (int)Math.Round(nativeW * scale));
-                outH = Math.Max(1, (int)Math.Round(nativeH * scale));
-            }
+            // 缩放规则与窗口截图（win-shot）共用一份纯函数：两处算出不同的图宽，
+            // 模型给的坐标就会莫名其妙地偏
+            WinShot.FitLongEdge(nativeW, nativeH, maxWidth, out outW, out outH);
 
             Bitmap target = full;
             if (outW != nativeW || outH != nativeH)

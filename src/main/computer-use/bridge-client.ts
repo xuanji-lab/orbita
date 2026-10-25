@@ -30,6 +30,7 @@ import {
   computerUseGuestCommands,
   computerUseGuestTimeoutMs,
   GUEST_COMMAND_TIMEOUT_MS,
+  type ComputerUseWindowInfo,
   type GuestTcpChannel,
 } from "../../shared/computer-use.ts";
 import { parseBridgeInfo } from "./bridge-ready.ts";
@@ -51,6 +52,108 @@ export interface GuestScreenshot {
 export interface GuestShot {
   jpeg: Uint8Array;
   resp: Record<string, unknown>;
+}
+
+/** win-shot 的回执（字段已验过类型与正负；hwnd 是窗口句柄，title 是那个窗口的标题） */
+export interface GuestWindowShot {
+  jpeg: Uint8Array;
+  width: number;
+  height: number;
+  /** 窗口自己的物理像素尺寸（不是屏幕尺寸——坐标不能混用） */
+  nativeWidth: number;
+  nativeHeight: number;
+  hwnd: number;
+  title: string;
+  restoredFromMinimized: boolean;
+}
+
+/**
+ * 向 guest 桥要一张**窗口**截图（win-shot）。与 fetchGuestScreenshot 同一条通道、同一道
+ * 文件名闸门，但几何是**窗口自己的**物理像素。
+ *
+ * 失败时错误原话抛出——尤其是桥那句「这个窗口拍不到（…）——改用整桌面截图或
+ * computer_screenshot」：那是模型唯一的换路指示，宿主**不得**改写成别的意思。
+ */
+export async function fetchGuestWindowShot(
+  outDir: string,
+  fields: Record<string, unknown>,
+  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
+): Promise<GuestWindowShot> {
+  const shot = await fetchGuestShot(outDir, computerUseGuestCommands.winShot, fields, timeoutMs);
+  const resp = shot.resp;
+  const nativeWidth = resp.nativeWidth;
+  const nativeHeight = resp.nativeHeight;
+  const width = resp.width;
+  const height = resp.height;
+  const hwnd = resp.hwnd;
+  const title = resp.title;
+  if (
+    typeof nativeWidth !== "number" ||
+    typeof nativeHeight !== "number" ||
+    nativeWidth <= 0 ||
+    nativeHeight <= 0 ||
+    typeof width !== "number" ||
+    typeof height !== "number" ||
+    width <= 0 ||
+    height <= 0 ||
+    typeof hwnd !== "number" ||
+    hwnd <= 0 ||
+    typeof title !== "string"
+  ) {
+    throw new Error(
+      "guest 桥的窗口截图响应缺字段（width / height / nativeWidth / nativeHeight / hwnd / title / jpeg）",
+    );
+  }
+  return {
+    jpeg: shot.jpeg,
+    width,
+    height,
+    nativeWidth,
+    nativeHeight,
+    hwnd,
+    title,
+    restoredFromMinimized: resp.restoredFromMinimized === true,
+  };
+}
+
+/**
+ * win-list：只读枚举可截图的顶层窗口。每一项都按契约验一遍（字段缺了就跳过那一条，
+ * 不把半成品窗口交给调用方——模型靠 hwnd 指窗口，半个窗口比没有更危险）。
+ */
+export async function fetchGuestWindowList(
+  outDir: string,
+  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
+): Promise<ComputerUseWindowInfo[]> {
+  const resp = await sendGuestCommand(outDir, computerUseGuestCommands.winList, {}, timeoutMs);
+  const list = resp.windows;
+  if (!Array.isArray(list)) {
+    throw new Error("guest 桥的窗口列表响应缺 windows 数组");
+  }
+  const windows: ComputerUseWindowInfo[] = [];
+  for (const item of list) {
+    if (typeof item !== "object" || item === null) continue;
+    const row = item as Record<string, unknown>;
+    const hwnd = row.hwnd;
+    const title = row.title;
+    if (typeof hwnd !== "number" || hwnd <= 0 || typeof title !== "string") continue;
+    windows.push({
+      hwnd,
+      title,
+      process: typeof row.process === "string" ? row.process : "",
+      className: typeof row.className === "string" ? row.className : "",
+      x: numberOr(row.x, 0),
+      y: numberOr(row.y, 0),
+      w: numberOr(row.w, 0),
+      h: numberOr(row.h, 0),
+      minimized: row.minimized === true,
+      visible: row.visible !== false,
+    });
+  }
+  return windows;
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 /**
