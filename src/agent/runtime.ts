@@ -44,6 +44,7 @@ import {
 } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { nonInteractivePrefixFor } from "./shell-env.ts";
+import { createObservedBashTool, killObservedChildren } from "./bash-observe.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
@@ -1276,6 +1277,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
   const customTools = [
+    // bash 按名字覆盖 pi 的内建版本（registry 先建内建表、再按名字合并自定义工具）。
+    // 目的是补上「命令早退、但后台后代还活着」那条提示（./bash-observe.ts）；
+    // **定义仍从 settingsManager 现读 prefix / shellPath**，否则非交互前缀会被悄悄丢掉。
+    // ENABLED_BUILTIN_TOOLS 里的 `bash` 不用动——名字没变，registry 用它选中我们这份。
+    createObservedBashTool(command.cwd, services.settingsManager),
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
@@ -2217,6 +2223,28 @@ const catalogRefresher = new CatalogRefresher({
 setInterval(() => {
   void catalogRefresher.tick().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
 }, CATALOG_REFRESH_EVERY_MS).unref();
+
+/**
+ * bash 子进程是我们自己 spawn 的（没有走 pi 的 detached 登记），进程退出时得自己收。
+ *
+ * 为什么挂在进程收尾而不是 `command.type === "dispose"`：后者是「删一条会话」，
+ * 登记表是整个 utility 进程一份，在那里调会把别的会话正在跑的命令一起杀掉。
+ * 这里补的是 pi 内建实现在它自己的 SIGTERM/SIGHUP 里做的那件事（killTrackedDetachedChildren）
+ * ——我们接管执行后那条链路不在了，不补就是「应用退出、dev server 还占着端口」。
+ *
+ * 装了信号 handler 就得自己退出：Node 有监听者时不再默认终止，不 `process.exit`
+ * 的话主进程 `child.kill()` 之后进程会挂住。
+ */
+function installObservedChildCleanup(): void {
+  process.on("exit", killObservedChildren);
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      killObservedChildren();
+      process.exit(0);
+    });
+  }
+}
+installObservedChildCleanup();
 
 parentPort.on("message", (event) => {
   const command = event.data as AgentCommand;
