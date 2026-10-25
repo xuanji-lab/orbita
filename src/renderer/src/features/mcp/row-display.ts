@@ -40,6 +40,46 @@ export function headIconKind(status: McpStatus, summary: InstanceSummary): McpSt
 }
 
 /**
+ * 卡片此刻该显示的状态。**Reload 进行中时非 disabled 的行一律转 connecting**：
+ * 实时状态还没回来，不装作不变（配置可能已经变了，旧状态是谎话）。
+ *
+ * 单独提出来是因为这个换算以前写在面板组件里，与下面的文案映射一起漏了 connecting
+ * 这一档：慢 server（npx 首次装包常见几十秒）正在连的时候卡片写「还没连上」，
+ * 用户以为配置错了（2026-10-25 实测）。
+ */
+export function displayedStatus(status: McpStatus, reloading: boolean): McpStatus {
+  return reloading && status.kind !== "disabled" ? { kind: "connecting" } : status;
+}
+
+/**
+ * 头行状态文案的语义。**纯函数**：只判状态属于哪一档，本地化文案在渲染层取
+ * （row-display 不 import locale，理由同 tool-chips：算与渲染分开）。
+ * connecting 必须自成一档——它与 idle 都是「还没就绪」，但对用户是两件事：
+ * 一个在等，一个是没开始。
+ */
+export type StatusTextSpec =
+  | { kind: "tools"; count: number }
+  | { kind: "failed" }
+  | { kind: "disabled" }
+  | { kind: "connecting" }
+  | { kind: "idle" };
+
+export function statusTextSpec(status: McpStatus): StatusTextSpec {
+  switch (status.kind) {
+    case "ready":
+      return { kind: "tools", count: status.tools.length };
+    case "failed":
+      return { kind: "failed" };
+    case "disabled":
+      return { kind: "disabled" };
+    case "connecting":
+      return { kind: "connecting" };
+    case "idle":
+      return { kind: "idle" };
+  }
+}
+
+/**
  * 实例状态行（卡内独占一行，不挤头行——320px 抽屉的宽度预算决定的）。
  * null = 不显示：没有实例（还没连过），或全灭（卡片错误块接管，不重复说一遍）。
  */

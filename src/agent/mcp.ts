@@ -97,8 +97,15 @@ export class McpHub {
   private readonly idleMs: number;
   private readonly sweepMs: number;
   private sweepTimer: NodeJS.Timeout | null = null;
-  /** 回收真的拆掉了实例后调一次（runtime 挂它给面板推新快照——不然面板上还是陈旧的就绪）。 */
-  onIdleDrop: (() => void) | null = null;
+  /**
+   * 实例状态**真的变了**就调一次（进表 = connecting / 落地 = ready|failed / 被拆 = 不再有）。
+   * runtime 挂它给面板推新快照——否则面板只能等下一轮开机或手动 Reload 才知道
+   * 那台慢 server 还在连、或者已经连上了（2026-10-25 A8：连接期间面板写着「还没连上」）。
+   *
+   * 只在**状态转换**上调：一轮开机 N 台就 2N 条，主进程只把它当缓存回执、renderer
+   * 每个事件重拉一次 `mcp:list`，这个量级面板吃得住；再多就是给 UI 白送工作。
+   */
+  onChange: (() => void) | null = null;
 
   constructor(options: { idleMs?: number; sweepMs?: number } = {}) {
     this.idleMs = options.idleMs ?? SCOPE_IDLE_MS;
@@ -267,7 +274,11 @@ export class McpHub {
     await Promise.all(
       doomedInstances.map((instance) => this.drop(this.key(instance.scope, instance.serverName), instance)),
     );
-    if (doomedInstances.length > 0) this.onIdleDrop?.();
+  }
+
+  /** 状态变了：推一拍。拆表 / 落地都在这里收口，别在调用点各写一次（会漏）。 */
+  private notifyChange(): void {
+    this.onChange?.();
   }
 
   private key(scope: string, serverName: string): string {
@@ -306,6 +317,9 @@ export class McpHub {
       pending: Promise.resolve(),
     };
     this.instances.set(key, instance);
+    // 进表这一拍就是「连接中」——慢 server（npx 首次装包）可能几十秒，
+    // 这段时间面板该说「正在连接」，不是停在上一拍的「还没连上」
+    this.notifyChange();
     instance.pending = this.connectInstance(key, instance, generation);
     await instance.pending;
   }
@@ -324,7 +338,10 @@ export class McpHub {
       // 表里还是自己就顺手把表项删掉：留着就是永远 connecting 的僵尸——ensure 看到
       // key 已在不重连、清扫器看到 connecting 不回收，只剩手动 Reload 能救（PR #163 评审复现）。
       if (generation !== this.generation || this.instances.get(key) !== instance) {
-        if (this.instances.get(key) === instance) this.instances.delete(key);
+        if (this.instances.get(key) === instance) {
+          this.instances.delete(key);
+          this.notifyChange();
+        }
         await connected.client.close().catch(() => undefined);
         return;
       }
@@ -333,12 +350,14 @@ export class McpHub {
       instance.status = { kind: "ready", tools: connected.tools.map((tool) => tool.name) };
       // 闲置计时从「能用了」起算，不从「开始连」算——连接慢不该让刚连上的实例立刻被回收
       this.touch(instance.scope);
+      this.notifyChange();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       instance.status = { kind: "failed", message };
       console.error(
         `[mcp] ${instance.serverName}（工作区 ${instance.label === "" ? "无" : instance.label}）连不上：${message}`,
       );
+      this.notifyChange();
     }
   }
 
@@ -351,6 +370,8 @@ export class McpHub {
     if (instance === undefined) return;
     if (expected !== undefined && instance !== expected) return;
     this.instances.delete(key);
+    // 拆掉（闲置回收 / 热重载 / 配置变了）：面板得知道那台不再就绪
+    this.notifyChange();
     await instance.client?.close().catch(() => undefined);
   }
 

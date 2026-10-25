@@ -335,7 +335,7 @@ describe("McpHub 的闲置回收", () => {
     const pidFile = join(dir, "child.pid");
     const hub = new McpHub({ idleMs: 1000, sweepMs: 50 });
     let notified = 0;
-    hub.onIdleDrop = () => {
+    hub.onChange = () => {
       notified += 1;
     };
     await hub.ensure("w1", { demo: tagged("w1", { ORBITA_MCP_FIXTURE_PID_FILE: pidFile }) }, "");
@@ -345,9 +345,8 @@ describe("McpHub 的闲置回收", () => {
 
     assert.ok(await waitDead(pid), `子进程 ${pid} 在闲置超时后 10 秒内没有退出`);
     assert.deepEqual(hub.toolsFor("w1"), []);
-    // 等通知到位再断言：清扫的 drop 先删表项再 close 子进程，waitDead 一看见子进程
-    // 死就往下走，而 onIdleDrop 在 close 的 promise 落定后才调——CI 上这两个事件之间
-    // 能隔出几百毫秒（Windows runner 红过一次：子退了、表空了、通知还没跑到）
+    // 等通知到位再断言：清扫先删表项再 close 子进程（notifyChange 在删表那一拍），
+    // waitDead 一看见子进程死就往下走，别抢在通知前断言
     const notifyDeadline = Date.now() + 10_000;
     while (notified < 1 && Date.now() < notifyDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -357,6 +356,40 @@ describe("McpHub 的闲置回收", () => {
     assert.equal(statuses.get("demo"), "idle");
     await hub.dispose();
     await rm(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * A8：面板靠这条事件链从「连接中」走到工具数。以前只在「一轮开机之后」推一拍
+   * （且只在闲置回收时补一拍），连接中的那几十秒面板根本不知道——它写「还没连上」。
+   */
+  test("连接状态一变就推快照：先 connecting，再 ready", async () => {
+    const hub = new McpHub();
+    const kinds: string[] = [];
+    hub.onChange = () => {
+      const row = hub.describe().find((server) => server.name === "demo");
+      if (row !== undefined) kinds.push(row.status.kind);
+    };
+    await hub.ensure("w1", { demo: tagged("w1") }, "");
+    assert.ok(
+      kinds.includes("connecting"),
+      `连接期间必须有一拍 connecting（面板靠它说「连接中」），实际 ${JSON.stringify(kinds)}`,
+    );
+    assert.equal(kinds.at(-1), "ready");
+    await hub.dispose();
+    // 拆干净之后最后那一拍是「不再有实例」——describe() 里回到 idle
+    assert.equal(kinds.at(-1), "idle");
+  });
+
+  test("连不上也推一拍 failed（面板立刻出红字与原因，不必等下一轮）", async () => {
+    const hub = new McpHub();
+    const kinds: string[] = [];
+    hub.onChange = () => {
+      const row = hub.describe().find((server) => server.name === "broken");
+      if (row !== undefined) kinds.push(row.status.kind);
+    };
+    await hub.ensure("w1", { broken: { transport: "stdio", command: "definitely-not-a-real-command-xyz", args: [] } }, "");
+    assert.deepEqual(kinds, ["connecting", "failed"]);
+    await hub.dispose();
   });
 
   test("活跃的工作区不被回收：开机与调用都刷新闲置计时", async () => {

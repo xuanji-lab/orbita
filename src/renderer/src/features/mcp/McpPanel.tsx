@@ -17,7 +17,7 @@ import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
 import type { SkillsState } from "../skills/useSkills";
 import type { McpServer, McpStatus, McpInstanceInfo, McpServerInfo } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
-import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
+import { headIconKind, statusLine, statusTextSpec, summarizeInstances, displayedStatus } from "./row-display.ts";
 import { mcpToken, type TokenPickerControl } from "../../shell/panel-token.ts";
 import { useT } from "../../locale.ts";
 
@@ -110,9 +110,8 @@ export function McpPanel(props: {
     }
   };
 
-  // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
-  const statusOf = (status: McpStatus): McpStatus =>
-    reloading && status.kind !== "disabled" ? { kind: "connecting" } : status;
+  // Reload 期间：非 disabled 行都转 connecting（换算在 row-display.displayedStatus，有测试）
+  const statusOf = (status: McpStatus): McpStatus => displayedStatus(status, reloading);
 
   /** Retry 与页头 Reload 同一路（简报 2：不新增契约），忙的时候两处按钮一起禁用 */
   const runReload = (): void => {
@@ -769,17 +768,25 @@ function StatusIcon(props: { kind: McpStatus["kind"] }) {
   );
 }
 
+/**
+ * 卡片头行的状态文案。**五档各自说话**：ready 给工具数、failed 红字、disabled、
+ * connecting 说「连接中」、idle 才是「还没连上」。以前 connecting 落到最后一档，
+ * 正在连的 server（npx 首次装包几十秒）看上去像没连上（2026-10-25 A8）。
+ */
 function StatusText(props: { status: McpStatus }) {
   const t = useT();
   const { status } = props;
+  const spec = statusTextSpec(status);
   const text =
-    status.kind === "ready"
-      ? t.mcp.tools(status.tools.length)
-      : status.kind === "failed"
+    spec.kind === "tools"
+      ? t.mcp.tools(spec.count)
+      : spec.kind === "failed"
         ? t.common.failed
-        : status.kind === "disabled"
+        : spec.kind === "disabled"
           ? t.mcp.disabled
-          : t.mcp.notConnected;
+          : spec.kind === "connecting"
+            ? t.mcp.connecting
+            : t.mcp.notConnected;
   return (
     <span
       className="mcp-status-text"
