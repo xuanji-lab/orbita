@@ -1700,6 +1700,7 @@ export const zh: Messages = {
     xlsxEmpty: "这张表是空的",
     xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
     xlsxBroken: "这个工作簿读不开——可能已经损坏。",
+    xlsxHiddenOnly: "这个工作簿的表全部被隐藏了。在 Excel 里右键工作表标签可以取消隐藏。",
     xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
     /* ---------- .pptx 只读大纲（契约见 shared/pptx.ts） ---------- */
     pptxSlides: "幻灯片",

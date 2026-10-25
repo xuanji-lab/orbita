@@ -219,12 +219,16 @@ export function FilePreviewPane(props: {
           />
         ) : xlsx ? (
           <XlsxView
+            // 换文件按路径重挂载：表号回到第一张，也不会拿旧表号先发一次多余请求
+            key={path}
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={xlsxReload}
             onOpenDefault={openDefault}
           />
         ) : pptx ? (
           <PptxView
+            // 与 XlsxView 同一条纪律：换文件按路径重挂载，页号回到第 1 页
+            key={path}
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={pptxReload}
             onOpenDefault={openDefault}

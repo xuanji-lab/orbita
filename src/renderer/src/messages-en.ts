@@ -1855,6 +1855,7 @@ export const en = {
     xlsxEmpty: "This sheet is empty",
     xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
     xlsxBroken: "Couldn't read this workbook — it may be damaged.",
+    xlsxHiddenOnly: "Every sheet in this workbook is hidden. Right-click a sheet tab in Excel to unhide one.",
     xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
     /* ---------- .pptx 只读大纲（pptx.ts 契约） ---------- */
     pptxSlides: "Slides",

@@ -99,6 +99,8 @@ const ALLOWED_LATIN = new Set([
   // 演示文稿文件的扩展名（.pptx 大纲的说明文案里点名格式）
   "pptx",
   "ppt",
+  // 其他应用的名字（隐藏表的提示要让用户知道去哪里取消隐藏）
+  "Excel",
   // MCP 配置的字段名与变量名（用户要照抄进 mcp.json 的字面量）
   "workspaces",
   "workspaceFolder",

@@ -74,8 +74,11 @@ export type XlsxPreview =
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number }
   | {
       kind: "unreadable";
-      /** password：OLE2 容器（加密工作簿，或旧版 .xls 改了后缀）；corrupt：解不开的 zip / 坏的 XML */
-      reason: "password" | "corrupt";
+      /**
+       * password：OLE2 容器（加密工作簿，或旧版 .xls 改了后缀）；corrupt：解不开的 zip / 坏的 XML；
+       * hidden：工作簿里没有任何**可见**工作表（全部被隐藏，或只有图表页）
+       */
+      reason: "password" | "corrupt" | "hidden";
       /** 技术细节（异常原文），渲染层只在副行里给，不指望它可读 */
       detail: string;
       size: number;

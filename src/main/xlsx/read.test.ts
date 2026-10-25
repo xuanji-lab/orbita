@@ -42,6 +42,17 @@ async function sampleWorkbook(path: string): Promise<void> {
   first.getCell("F2").numFmt = "0.00%";
   first.getCell("G2").value = { error: "#DIV/0!" };
   first.getCell("H2").value = { formula: "SUM(B2:B4)" }; // 没有缓存值（Excel 没算过就存盘）
+  // 日期：ExcelJS 把墙钟时间塞在 UTC 字段里（见 dateText 注释）
+  first.getCell("I2").value = new Date("2024-03-05T00:00:00Z");
+  first.getCell("I2").numFmt = "yyyy-mm-dd";
+  first.getCell("J2").value = new Date("2024-03-05T14:30:00Z");
+  first.getCell("J2").numFmt = "yyyy-mm-dd hh:mm";
+  first.getCell("K2").value = 45000; // 序列号，带日期格式 → 2023-03-15
+  first.getCell("K2").numFmt = "yyyy-mm-dd";
+  first.getCell("L2").value = true;
+  first.getCell("M2").value = { text: "链接文字", hyperlink: "https://example.com" };
+  first.getCell("N2").value = { formula: "B2*2", result: 240 };
+  first.getCell("O2").value = { sharedFormula: "N2", result: 240 };
   first.views = [{ state: "frozen", xSplit: 1, ySplit: 2, topLeftCell: "B3" }];
 
   const second = workbook.addWorksheet("明细");
@@ -132,12 +143,12 @@ describe("readXlsxPreview", () => {
   test("裁剪：整表计数照实，数据只给前 maxRows × maxCols，合并区跟着裁", async () => {
     const path = join(dir, "book.xlsx");
     await sampleWorkbook(path);
-    // 报表是 4 行 × 8 列，这里只给 2 行 × 2 列
+    // 报表是 4 行 × 15 列，这里只给 2 行 × 2 列
     const result = await readXlsxPreview(path, { maxRows: 2, maxCols: 2 });
     assert.ok(result.kind === "workbook");
     const sheet = result.sheet;
     assert.equal(sheet.rowCount, 4);
-    assert.equal(sheet.colCount, 8);
+    assert.equal(sheet.colCount, 15);
     assert.equal(sheet.rows.length, 2);
     assert.equal(sheet.rows[0]?.length, 2);
     // A1:D1 裁成 A1:B1；A2:A3 裁完只剩一格（1×1 的合并区没有意义，丢掉）
@@ -196,5 +207,122 @@ describe("readXlsxPreview", () => {
 
   test("目录不是文件：抛错（调用方的错，不是文件的错）", async () => {
     await assert.rejects(readXlsxPreview(dir), /Not a file/);
+  });
+});
+
+describe("readXlsxPreview —— 日期", () => {
+  test("整天：按墙钟显示，不按时区平移（UTC+8 上曾显示成 08:00）", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    assert.equal(result.sheet.rows[1]?.[8]?.text, "2024-03-05");
+  });
+
+  test("带时间：14:30 就是 14:30（曾显示成 22:30）", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    assert.equal(result.sheet.rows[1]?.[9]?.text, "2024-03-05 14:30");
+  });
+
+  test("日期序列号：45000 带日期格式 → 2023-03-15", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    assert.equal(result.sheet.rows[1]?.[10]?.text, "2023-03-15");
+  });
+});
+
+describe("readXlsxPreview —— 其它值形态", () => {
+  test("布尔显示 TRUE / FALSE（Excel 的写法），不是 true / false", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    assert.equal(result.sheet.rows[1]?.[11]?.text, "TRUE");
+  });
+
+  test("超链接：显示链接文字，不是 URL 也不是对象", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    assert.equal(result.sheet.rows[1]?.[12]?.text, "链接文字");
+  });
+
+  test("共享公式：从格也带出翻译后的公式文本与缓存值", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    const master = result.sheet.rows[1]?.[13];
+    assert.equal(master?.text, "240");
+    assert.equal(master?.formula, "B2*2");
+    const clone = result.sheet.rows[1]?.[14];
+    assert.equal(clone?.text, "240");
+    assert.equal(typeof clone?.formula, "string");
+  });
+});
+
+describe("readXlsxPreview —— 隐藏表", () => {
+  /** 三张表：可见 / 隐藏 / 非常隐藏，最后再一张可见 */
+  async function hiddenWorkbook(path: string): Promise<void> {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet("可见一").addRow(["one"]);
+    const hidden = workbook.addWorksheet("隐藏的");
+    hidden.addRow(["secret"]);
+    hidden.state = "hidden";
+    const veryHidden = workbook.addWorksheet("也隐藏");
+    veryHidden.addRow(["deeper secret"]);
+    veryHidden.state = "veryHidden";
+    workbook.addWorksheet("可见二").addRow(["two"]);
+    await workbook.xlsx.writeFile(path);
+  }
+
+  test("隐藏表不出标签、也不能被切到：下标只数可见的表", async () => {
+    const path = join(dir, "hidden.xlsx");
+    await hiddenWorkbook(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "workbook");
+    assert.deepEqual(
+      result.sheets.map((sheet) => sheet.name),
+      ["可见一", "可见二"],
+    );
+    // 表号 1 落在第二张**可见**表上（不是被隐藏的那张）
+    const second = await readXlsxPreview(path, { sheet: 1 });
+    assert.ok(second.kind === "workbook");
+    assert.equal(second.sheet.name, "可见二");
+    assert.equal(second.sheet.rows[0]?.[0]?.text, "two");
+  });
+
+  test("全部隐藏：给可读结论，不摊开隐藏内容", async () => {
+    const path = join(dir, "all-hidden.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    const hidden = workbook.addWorksheet("秘密");
+    hidden.addRow(["secret"]);
+    hidden.state = "hidden";
+    await workbook.xlsx.writeFile(path);
+    const result = await readXlsxPreview(path);
+    assert.ok(result.kind === "unreadable");
+    assert.equal(result.reason, "hidden");
+  });
+});
+
+describe("readXlsxPreview —— 表号容错", () => {
+  test("NaN / 小数 / 负数都夹成范围内的整数", async () => {
+    const path = join(dir, "book.xlsx");
+    await sampleWorkbook(path);
+    const nan = await readXlsxPreview(path, { sheet: Number.NaN });
+    assert.ok(nan.kind === "workbook");
+    assert.equal(nan.active, 0);
+    const fraction = await readXlsxPreview(path, { sheet: 1.7 });
+    assert.ok(fraction.kind === "workbook");
+    assert.equal(fraction.active, 1);
+    const negative = await readXlsxPreview(path, { sheet: -3 });
+    assert.ok(negative.kind === "workbook");
+    assert.equal(negative.active, 0);
   });
 });

@@ -27,78 +27,103 @@ export function XlsxView(props: {
   onOpenDefault: () => void;
 }) {
   const t = useT();
-  const { request } = props;
+  // 换文件由 FilePreviewPane 的 key={path} 重挂载解决，这里不用再「重置表号」——
+  // 否则旧文件那张表的号会先发一次请求，新文件再发一次，同一个工作簿白解析两遍
   const [sheet, setSheet] = useState(0);
-  // 换文件：回到第一张表（与 FilePreviewPane 的「换文件一律先看 Rendered」同一理由）
-  useEffect(() => setSheet(0), [request.root, request.dir]);
-  const state = useXlsxPreview(request, sheet, props.reloadToken);
-
-  if (state.status === "loading") {
-    return (
-      <div className="file-preview-loading">
-        <Icon name="loader-circle" size={14} spin />
-        {t.common.loading}
-      </div>
-    );
-  }
-  if (state.status === "error") {
-    return (
-      <div className="file-preview-error">
-        <PanelLine danger>{state.message}</PanelLine>
-      </div>
-    );
-  }
-
+  const state = useXlsxPreview(props.request, sheet, props.reloadToken);
   const data = state.data;
-  if (data.kind === "too-large") {
-    return (
-      <div className="file-preview-empty">
-        <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>{t.files.tooLarge(formatSize(data.size), formatSize(data.limit))}</PanelLine>
-        <OpenDefaultButton onClick={props.onOpenDefault} />
-      </div>
-    );
-  }
-  if (data.kind === "unreadable") {
-    return (
-      <div className="file-preview-empty">
-        <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>{data.reason === "password" ? t.files.xlsxPassword : t.files.xlsxBroken}</PanelLine>
-        {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
-        <p className="xlsx-detail" title={data.detail}>
-          {data.detail}
-        </p>
-        <OpenDefaultButton onClick={props.onOpenDefault} />
-      </div>
-    );
+
+  // 还没有任何数据（首次打开）：只能给一行「正在载入…」——此时没有标签可留
+  if (data === null) {
+    return state.error !== null ? <XlsxError message={state.error} /> : <XlsxLoading />;
   }
 
+  const workbook = data.kind === "workbook" ? data : null;
+  // 切表中的高亮跟着「点的那张」走，而不是上一份回执的 active
+  const active = workbook === null ? 0 : state.loading ? sheet : workbook.active;
   return (
     <div className="xlsx-view">
-      <div className="xlsx-toolbar">
-        {data.sheets.length > 1 && (
-          <div className="xlsx-sheets" role="tablist" aria-label={t.files.xlsxSheets}>
-            {data.sheets.map((tab, index) => (
-              <Chip
-                key={`${index}:${tab.name}`}
-                active={index === data.active}
-                title={tab.name}
-                onClick={() => setSheet(index)}
-              >
-                {tab.name}
-              </Chip>
-            ))}
+      {/*
+       * 工具栏与表标签在加载期间**不卸载**：切表时标签还在，用户看得见自己点的是哪张，
+       * 也能接着点别的（后发的请求按 token 丢弃先回的）。首次打开没有标签可留，
+       * 那种情况在上面的早返回里。
+       */}
+      {workbook !== null && (
+        <div className="xlsx-toolbar">
+          {workbook.sheets.length > 1 && (
+            <div className="xlsx-sheets" role="group" aria-label={t.files.xlsxSheets}>
+              {workbook.sheets.map((tab, index) => (
+                <Chip
+                  key={`${index}:${tab.name}`}
+                  active={index === active}
+                  title={tab.name}
+                  onClick={() => setSheet(index)}
+                >
+                  {tab.name}
+                </Chip>
+              ))}
+            </div>
+          )}
+          <div className="xlsx-toolbar-actions row-trailing">
+            <PanelButton onClick={props.onOpenDefault}>
+              <Icon name="external-link" size={14} />
+              {t.files.openDefault}
+            </PanelButton>
           </div>
-        )}
-        <div className="xlsx-toolbar-actions">
-          <PanelButton onClick={props.onOpenDefault}>
-            <Icon name="external-link" size={14} />
-            {t.files.openDefault}
-          </PanelButton>
         </div>
-      </div>
-      <XlsxGrid sheet={data.sheet} />
-      <XlsxFooter sheet={data.sheet} />
+      )}
+      {state.error !== null ? (
+        <XlsxError message={state.error} />
+      ) : state.loading ? (
+        // 加载落在网格区里：工具栏与标签保持原样，只是内容在等
+        <XlsxLoading />
+      ) : data.kind === "too-large" ? (
+        <div className="file-preview-empty">
+          <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+          <PanelLine>{t.files.tooLarge(formatSize(data.size), formatSize(data.limit))}</PanelLine>
+          <OpenDefaultButton onClick={props.onOpenDefault} />
+        </div>
+      ) : data.kind === "unreadable" ? (
+        <div className="file-preview-empty">
+          <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+          <PanelLine>{unreadableMessage(data.reason, t)}</PanelLine>
+          {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
+          <p className="xlsx-detail" title={data.detail}>
+            {data.detail}
+          </p>
+          <OpenDefaultButton onClick={props.onOpenDefault} />
+        </div>
+      ) : (
+        <>
+          <XlsxGrid sheet={data.sheet} />
+          <XlsxFooter sheet={data.sheet} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 读不开的三种原因各说各的人话；技术原文留给 detail 副行 */
+function unreadableMessage(reason: "password" | "corrupt" | "hidden", t: ReturnType<typeof useT>): string {
+  if (reason === "password") return t.files.xlsxPassword;
+  if (reason === "hidden") return t.files.xlsxHiddenOnly;
+  return t.files.xlsxBroken;
+}
+
+function XlsxLoading() {
+  const t = useT();
+  return (
+    <div className="file-preview-loading">
+      <Icon name="loader-circle" size={14} spin />
+      {t.common.loading}
+    </div>
+  );
+}
+
+function XlsxError(props: { message: string }) {
+  return (
+    <div className="file-preview-error">
+      <PanelLine danger>{props.message}</PanelLine>
     </div>
   );
 }
@@ -272,6 +297,9 @@ function XlsxFooter(props: { sheet: XlsxSheet }) {
   const frozen = props.sheet.frozen;
   const frozenRows = Math.min(frozen.rows, shownRows);
   const frozenCols = Math.min(frozen.cols, shownCols);
+  const hasFrozen = frozenRows > 0 || frozenCols > 0;
+  // 没有要说的就不画这条：空 footer 会白占一行高（评审在 #341 指出的 17px）
+  if (!truncated && !hasFrozen) return null;
   return (
     <div className="xlsx-footer">
       {truncated && (
@@ -279,42 +307,47 @@ function XlsxFooter(props: { sheet: XlsxSheet }) {
           {t.files.xlsxTruncated(shownRows, shownCols, props.sheet.rowCount, props.sheet.colCount)}
         </span>
       )}
-      {frozenRows > 0 || frozenCols > 0 ? (
+      {hasFrozen && (
         <span className="xlsx-notice">
           <Icon name="lock" size={11} />
           {t.files.xlsxFrozen(frozenRows, frozenCols)}
         </span>
-      ) : null}
+      )}
     </div>
   );
 }
 
-type XlsxState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: XlsxPreview };
+type XlsxState = {
+  /** 最近一次成功的回执：切表 / 刷新期间留着，工具栏与标签因此不会闪掉 */
+  data: XlsxPreview | null;
+  loading: boolean;
+  error: string | null;
+};
 
 const failMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 
 /**
  * 预览的数据半边：文件 / 表号 / 刷新 token 变就重拉。竞态按 token 丢弃过期响应——
  * 快速连点工作表标签时，后发的先回也只有它落账。
+ *
+ * **旧数据不清空**：加载期间 `data` 留着上一份回执（`loading: true`），工具栏与表标签
+ * 因此一直在；只有第一次打开时 data 才是 null（那时给一行「正在载入…」）。
  */
 function useXlsxPreview(request: FileListRequest, sheet: number, reloadToken: number): XlsxState {
-  const [state, setState] = useState<XlsxState>({ status: "loading" });
+  const [state, setState] = useState<XlsxState>({ data: null, loading: true, error: null });
   const token = useRef(0);
   const { sessionId, workspaceId, extraWorkspaceId, root, dir } = request;
   const extra = extraWorkspaceId ?? null;
   useEffect(() => {
     const id = ++token.current;
-    setState({ status: "loading" });
+    setState((prev) => ({ data: prev.data, loading: true, error: null }));
     api.files
       .readXlsx({ sessionId, workspaceId, ...(extra === null ? {} : { extraWorkspaceId: extra }), root, dir, sheet })
       .then((data) => {
-        if (token.current === id) setState({ status: "ready", data });
+        if (token.current === id) setState({ data, loading: false, error: null });
       })
       .catch((cause: unknown) => {
-        if (token.current === id) setState({ status: "error", message: failMessage(cause) });
+        if (token.current === id) setState((prev) => ({ data: prev.data, loading: false, error: failMessage(cause) }));
       });
   }, [sessionId, workspaceId, extra, root, dir, sheet, reloadToken]);
   return state;

@@ -3406,12 +3406,11 @@ body {
   min-width: 0;
   overflow-x: auto;
 }
-/* 行尾元素：右缘钉在工具行的右内边距上（设计系统「行尾血线」） */
+/* 行尾元素：右缘钉在工具行的右内边距上——用 .row-trailing 推右（组件里已挂），
+   这里只管它内部怎么排 */
 .xlsx-toolbar-actions {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
-  margin-left: auto;
 }
 .xlsx-scroll {
   flex: 1 1 auto;
@@ -3474,6 +3473,11 @@ body {
   text-decoration: underline dotted var(--color-text-tertiary);
   text-underline-offset: 2px;
 }
+/* 加载落在网格区里：给一行内边距，不占满、不挤走工具栏 */
+.xlsx-view > .file-preview-loading {
+  padding: var(--space-3);
+}
+
 /* 列标 / 行号：两轴都钉住（滚动时始终看得见坐标），所以自带实色底 */
 .xlsx-table thead th {
   position: sticky;
@@ -3489,7 +3493,6 @@ body {
   position: sticky;
   left: 0;
   z-index: 1;
-  min-width: 44px;
   background: var(--color-bg-panel);
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
