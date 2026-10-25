@@ -3,6 +3,9 @@
  * 开轮命令的公共字段。workspaceName 的透传是 scope 指引（store-tools）的
  * 主进程侧接线——缺席时彻底不进命令对象（「翻不出名字」与「无工作区」两态
  * 靠 workspaceId 区分，不能靠键在不在猜）。
+ *
+ * computerUse 从 boolean 长成「开关 + 沙箱出网」的现场（2026-10-25）：模型需要知道
+ * 沙箱这次有没有网，才能不把「网页打不开」当成网站的错去反复重试。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -30,7 +33,7 @@ const environment = {
   gitAttribution: true,
   attributionLanguage: "en" as const,
   pdfCitations: false,
-  computerUse: false,
+  computerUse: { enabled: true, allowNetwork: true },
 };
 
 describe("turnFields", () => {
@@ -71,6 +74,14 @@ describe("turnFields", () => {
   test("resume 为 null（新会话）：piSessionFile 键彻底不出现——runtime 据此新建、主进程据此等 created", () => {
     const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
     assert.equal("piSessionFile" in fields, false);
+  });
+
+  test("computerUse 整份透传：开关与沙箱出网两个事实都在命令里（模型的提示词靠它们分叉）", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
+      ...environment,
+      computerUse: { enabled: true, allowNetwork: false },
+    });
+    assert.deepEqual(fields.computerUse, { enabled: true, allowNetwork: false });
   });
 });
 

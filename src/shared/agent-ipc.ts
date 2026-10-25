@@ -526,6 +526,27 @@ export interface ChannelSpeakInput {
 export type ChannelStopInput = ChannelKey;
 
 /**
+ * 电脑使用（computer use）的开轮现场（submit / interrupt / compact 共用）。**主进程从设置
+ * 现读装配**（同 pdfCitations 的纪律）：agent 进程不读设置文件，只收数据。
+ *
+ * 由原来的 `computerUse: boolean` 长成对象，是因为模型还需要知道**沙箱这次有没有出网**：
+ * 设置里关掉出网后任何网页都打不开，而模型只能从 Chromium 的
+ * `ERR_INTERNET_DISCONNECTED` 里猜原因，于是反复重试导航。这个事实只有主进程知道
+ * （settings.computerUse.allowNetwork，经 effectiveAllowNetwork 兑缺省），所以随开轮命令
+ * 带过来——**同一个设置、同一次读取**，不另开一套设置通道。
+ */
+export interface ComputerUseTurnContext {
+  /** 实验开关 settings.experimentalFeatures["computer-use"]：开着才注册沙箱工具组 */
+  enabled: boolean;
+  /**
+   * 沙箱是否允许出网（`effectiveAllowNetwork`，**缺席即允许**）。false = 宿主渲染的 .wsb
+   * 带 `<Networking>Disable</Networking>`，网页打不开是设置造成的，不是网站的问题。
+   * 只在 enabled 为 true 时有意义（开关关着时沙箱工具根本不注册）。
+   */
+  allowNetwork: boolean;
+}
+
+/**
  * 意图系统（实验功能 intent-system）的开轮装配（submit / interrupt 共用）。
  * **主进程装配**（同 skillsDirs / directories 的纪律）：开关状态、intent-lab 地址、
  * 渠道与模型选择、会话标题都从设置与 meta 现算，agent 进程只收数据。
@@ -665,11 +686,11 @@ export type AgentCommand =
       backfill?: string[];
       /**
        * 实验功能「电脑使用」的开关（settings.experimentalFeatures["computer-use"]）。
-       * **主进程从设置装配**（同 pdfCitations）。开着时 runtime 才注册沙箱工具组
-       * （computer_screenshot / click / type / key / scroll）；缺席 = 关——关着时模型
-       * 根本看不到这些工具（不是执行时才拦）。沙箱本身由用户在设置页启停。
+       * **主进程从设置装配**（同 pdfCitations）。enabled 为 true 时 runtime 才注册沙箱工具组
+       * （computer_* / sandbox_*）；缺席 = 关——关着时模型根本看不到这些工具（不是执行时才拦）。
+       * allowNetwork 决定提示词里要不要讲「这次沙箱不能上网」。沙箱本身由用户在设置页启停。
        */
-      computerUse?: boolean;
+      computerUse?: ComputerUseTurnContext;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -769,8 +790,8 @@ export type AgentCommand =
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
       backfill?: string[];
-      /** 实验功能「电脑使用」的开关，语义同 submit */
-      computerUse?: boolean;
+      /** 电脑使用：实验开关 + 沙箱出网，语义同 submit */
+      computerUse?: ComputerUseTurnContext;
     }
   | {
       /**
@@ -832,8 +853,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
-      /** 实验功能「电脑使用」的开关，语义同 submit */
-      computerUse?: boolean;
+      /** 电脑使用：实验开关 + 沙箱出网，语义同 submit */
+      computerUse?: ComputerUseTurnContext;
     }
   | { type: "listBuiltins" }
   /**
