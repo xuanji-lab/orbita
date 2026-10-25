@@ -38,6 +38,7 @@ export const COMPUTER_USE_TOOL_NAMES = [
   "computer_type",
   "computer_key",
   "computer_scroll",
+  "computer_uia",
 ] as const;
 
 /** 交互类工具共同的底线：沙箱里也是用户的环境，别替用户做不可逆的事 */
@@ -344,7 +345,118 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     },
   };
 
-  return [screenshot, click, type, key, scroll];
+  const uia: ToolDefinition = {
+    name: "computer_uia",
+    label: "computer_uia",
+    description:
+      SCOPE +
+      "Drive a window's controls through UI Automation instead of pixels: list them, then invoke a button, set an " +
+      "input's text, select a list/tab item, or move focus. **This does not need the window in the foreground and " +
+      "does not take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
+      "the right way to drive a background window. Start with action \"list\" (read-only) to get refs and names, then " +
+      "act on one by ref (or name). A ref belongs to the latest list of that window; re-list after the window changes " +
+      "(page navigation, a new dialog). Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
+      "documents — sets the value directly, no IME needed), selection (list items, tab items), focus (only this one " +
+      "moves the keyboard focus). If a control does not support the action you asked for, the result says which ones " +
+      "it supports: fall back to computer_click / computer_type on pixels for those. Window and hwnd come from " +
+      "computer_screenshot or a previous result. " +
+      CONSEQUENCES +
+      " " +
+      HANDOFF_HINT,
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "invoke", "setValue", "selection", "focus"],
+          description:
+            "list = read the window's controls (read-only); the rest act on the control given by ref or name.",
+        },
+        window: {
+          type: "string",
+          description: "Part of the target window's title (case-insensitive). Needed with hwnd absent.",
+        },
+        hwnd: {
+          type: "number",
+          description: "Target window handle (wins over window). Comes from a previous screenshot/result.",
+        },
+        ref: {
+          type: "number",
+          description: "Control ref from the latest list of that window. Wins over name.",
+        },
+        name: {
+          type: "string",
+          description: "Part of the control's accessible name (case-insensitive). Exact match preferred.",
+        },
+        value: {
+          type: "string",
+          description: "New text for action setValue (empty string clears the field).",
+        },
+        maxItems: {
+          type: "number",
+          description: "How many controls list returns (default 60).",
+        },
+      },
+      required: ["action"],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const spelled = typeof args["action"] === "string" ? args["action"].trim().toLowerCase() : "";
+      // setValue 的规范写法是小驼峰：比较前先还原（否则它会被当成未知动作拒掉）
+      const rawAction = spelled === "setvalue" ? "setValue" : spelled;
+      const hwnd = numberOf(args["hwnd"]);
+      const title = typeof args["window"] === "string" ? args["window"].trim() : "";
+      const target = hwnd !== undefined ? hwnd : title === "" ? undefined : title;
+      if (target === undefined) {
+        throw new Error(
+          "Pass window (part of the target window's title) or hwnd — take one from computer_screenshot or a previous result.",
+        );
+      }
+      if (rawAction === "list") {
+        const maxItems = numberOf(args["maxItems"]);
+        const result = await call(
+          {
+            action: "uia-list",
+            window: target,
+            ...(maxItems === undefined ? {} : { maxItems: Math.round(maxItems) }),
+          },
+          signal,
+        );
+        return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      }
+      if (rawAction !== "invoke" && rawAction !== "setValue" && rawAction !== "selection" && rawAction !== "focus") {
+        throw new Error('action must be one of: list, invoke, setValue, selection, focus.');
+      }
+      const ref = numberOf(args["ref"]);
+      const name = typeof args["name"] === "string" ? args["name"].trim() : "";
+      if (ref === undefined && name === "") {
+        throw new Error(
+          "Pass ref (from the latest list of that window) or name (part of the control's accessible name).",
+        );
+      }
+      if (ref !== undefined && (!Number.isInteger(ref) || ref <= 0)) {
+        throw new Error("ref must be a positive integer from the latest list of that window.");
+      }
+      const value = args["value"];
+      if (rawAction === "setValue" && typeof value !== "string") {
+        throw new Error("setValue needs value: the text to write into the control (empty string clears it).");
+      }
+      const result = await call(
+        {
+          action: "uia-act",
+          window: target,
+          ...(ref === undefined ? {} : { ref: Math.round(ref) }),
+          ...(name === "" ? {} : { name }),
+          perform: rawAction,
+          ...(typeof value === "string" ? { value } : {}),
+        },
+        signal,
+      );
+      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+    },
+  };
+
+  return [screenshot, click, type, key, scroll, uia];
 }
 
 /** 模型偶尔把数字写成字符串（"120"）：认；其余一律当没给 */

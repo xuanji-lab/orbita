@@ -65,7 +65,19 @@ async function waitFor<T>(read: () => T | null, timeoutMs = 2_000): Promise<T> {
   }
 }
 
-type BridgeReq = { seq: number; command: string; maxWidth?: number; hwnd?: number; title?: string };
+type BridgeReq = {
+  seq: number;
+  command: string;
+  maxWidth?: number;
+  hwnd?: number;
+  title?: string;
+  maxItems?: number;
+  ref?: number;
+  name?: string;
+  action?: string;
+  value?: string;
+  timeoutMs?: number;
+};
 type BridgeAnswer = { resp: Record<string, unknown>; jpg?: Buffer };
 /** null = 装死不应答（模拟死桥；req 文件留着不删，与真桥死亡时的现场一致） */
 type Responder = (req: BridgeReq) => BridgeAnswer | null;
@@ -908,6 +920,155 @@ describe("按窗口截图", () => {
       }
       const listRequests = harness.requests.filter((r) => r.command === "win-list");
       assert.equal(listRequests.length, 1);
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// ── UIA 车道（uia-list / uia-act，桥 0.10.0）──────────────────────
+//
+// 控制器这一层只是字段搬运：选项 → 桥认的字段名、回执 → 带 ok 的联合类型。搬错一个字段
+// 名字（action / perform、title / window）桥就不认识，模型拿到一句全指向别处的话。
+
+describe("UIA 车道", () => {
+  test("不在 running → 两条命令都直接拒绝（不白等 45 秒）", async () => {
+    const harness = await makeHarness();
+    try {
+      const list = await harness.controller.uiaList({ hwnd: 1 });
+      assert.equal(list.ok, false);
+      assert.ok(list.ok === false && /没有在运行/.test(list.error));
+      const act = await harness.controller.uiaAct({ hwnd: 1, ref: 1, perform: "invoke" });
+      assert.equal(act.ok, false);
+      assert.ok(act.ok === false && /没有在运行/.test(act.error));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("uia-list 经文件协议：hwnd / maxItems 原样下发，标题去空白，回执按契约带回", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) =>
+          req.command === "ping"
+            ? { resp: { ok: true } }
+            : {
+                resp: {
+                  ok: true,
+                  hwnd: 4321,
+                  window: { title: "记事本", className: "Notepad" },
+                  items: [
+                    {
+                      ref: 1,
+                      name: "文本编辑器",
+                      controlType: "document",
+                      automationId: "15",
+                      className: "Edit",
+                      x: 10,
+                      y: 40,
+                      w: 700,
+                      h: 500,
+                      patterns: ["value"],
+                      enabled: true,
+                      offscreen: false,
+                    },
+                  ],
+                  truncated: false,
+                },
+              },
+      });
+      await startPromise;
+
+      const byHwnd = await harness.controller.uiaList({ hwnd: 4321, maxItems: 60 });
+      assert.equal(byHwnd.ok, true);
+      if (byHwnd.ok) {
+        assert.equal(byHwnd.hwnd, 4321);
+        assert.equal(byHwnd.items[0]?.controlType, "document");
+        assert.deepEqual(byHwnd.items[0]?.patterns, ["value"]);
+        assert.equal(byHwnd.truncated, false);
+      }
+      const requests = harness.requests.filter((r) => r.command === "uia-list");
+      assert.equal(requests[0]?.hwnd, 4321);
+      assert.equal(requests[0]?.maxItems, 60);
+      assert.equal(requests[0]?.title, undefined, "没给 title 就不该编一个空串出来");
+
+      await harness.controller.uiaList({ title: " 记事 " });
+      const byTitle = harness.requests.filter((r) => r.command === "uia-list")[1];
+      assert.equal(byTitle?.title, "记事", "标题两端空白要去掉，否则永远匹配不上");
+      assert.equal(byTitle?.hwnd, undefined);
+      assert.equal(byTitle?.maxItems, undefined, "没给 maxItems 就吃桥的缺省值");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("uia-act：perform → action、ref / name / value / timeoutMs 原样下发；autoSetFocus 的降级原因带回", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) =>
+          req.command === "ping"
+            ? { resp: { ok: true } }
+            : {
+                resp: {
+                  ok: true,
+                  hwnd: req.hwnd ?? 9,
+                  action: req.action ?? "setValue",
+                  usedPattern: "value",
+                  name: "搜索",
+                  controlType: "edit",
+                  focused: false,
+                  autoSetFocus: false,
+                  autoSetFocusWarning: "AutoSetFocus 关不掉——可能抢焦点",
+                  elapsedMs: 17,
+                },
+              },
+      });
+      await startPromise;
+
+      const reply = await harness.controller.uiaAct({
+        hwnd: 9,
+        perform: "setValue",
+        name: "搜索",
+        value: "orbita",
+        timeoutMs: 1500,
+      });
+      assert.equal(reply.ok, true);
+      if (reply.ok) {
+        assert.equal(reply.action, "setValue");
+        assert.equal(reply.usedPattern, "value");
+        assert.equal(reply.autoSetFocus, false);
+        assert.match(reply.autoSetFocusWarning ?? "", /可能抢焦点/);
+        assert.equal(reply.elapsedMs, 17);
+      }
+      const request = harness.requests.find((r) => r.command === "uia-act");
+      assert.equal(request?.action, "setValue", "契约里的 perform 在桥上叫 action");
+      assert.equal(request?.hwnd, 9);
+      assert.equal(request?.name, "搜索");
+      assert.equal(request?.value, "orbita");
+      assert.equal(request?.timeoutMs, 1500);
+      assert.equal(request?.ref, undefined);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("uia-act 失败：桥的人话原样带出（不支持模式时点名它支持什么）", async () => {
+    const harness = await makeHarness();
+    const human = "这个控件不支持 invoke（edit，它支持：value）——改用 computer_click / computer_type 的像素路径";
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) => (req.command === "ping" ? { resp: { ok: true } } : { resp: { ok: false, error: human } }),
+      });
+      await startPromise;
+      assert.deepEqual(await harness.controller.uiaAct({ hwnd: 1, ref: 3, perform: "invoke" }), {
+        ok: false,
+        error: human,
+      });
     } finally {
       await harness.close();
     }

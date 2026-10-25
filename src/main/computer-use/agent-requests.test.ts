@@ -13,6 +13,8 @@ import type {
   ComputerUseGuestCommand,
   ComputerUseScreenshotResult,
   ComputerUseToolRequest,
+  ComputerUseUiaActResult,
+  ComputerUseUiaListResult,
   ComputerUseWindowListResult,
   ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
@@ -24,22 +26,42 @@ interface WindowShotFields {
   maxWidth?: number;
 }
 
+interface UiaListFields {
+  hwnd?: number;
+  title?: string;
+  maxItems?: number;
+}
+
+interface UiaActFields {
+  hwnd?: number;
+  title?: string;
+  ref?: number;
+  name?: string;
+  perform: string;
+  value?: string;
+  timeoutMs?: number;
+}
+
 interface Calls {
   screenshot: number[];
   commands: Array<{ command: ComputerUseGuestCommand; fields: Record<string, unknown> }>;
   windowShots: WindowShotFields[];
   /** 每次 listWindows 收到的超时（未传 = undefined） */
   listWindows: Array<number | undefined>;
+  uiaLists: UiaListFields[];
+  uiaActs: UiaActFields[];
 }
 
 function fakeGuest(options: {
   shot?: ComputerUseScreenshotResult;
   windowShot?: ComputerUseWindowShotResult;
   windowList?: ComputerUseWindowListResult;
+  uiaList?: ComputerUseUiaListResult;
+  uiaAct?: ComputerUseUiaActResult;
   commandResult?: GuestCommandResult;
   throwOn?: "screenshot" | "command";
 }): { guest: ComputerUseGuest; calls: Calls } {
-  const calls: Calls = { screenshot: [], commands: [], windowShots: [], listWindows: [] };
+  const calls: Calls = { screenshot: [], commands: [], windowShots: [], listWindows: [], uiaLists: [], uiaActs: [] };
   const guest: ComputerUseGuest = {
     async screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult> {
       if (options.throwOn === "screenshot") throw new Error("文件协议炸了");
@@ -97,6 +119,63 @@ function fakeGuest(options: {
               visible: true,
             },
           ],
+        }
+      );
+    },
+    async uiaList(fields): Promise<ComputerUseUiaListResult> {
+      calls.uiaLists.push(fields);
+      return (
+        options.uiaList ?? {
+          ok: true,
+          hwnd: 4321,
+          window: { title: "Untitled - Notepad", className: "Notepad" },
+          items: [
+            {
+              ref: 1,
+              name: "Text editor",
+              controlType: "document",
+              automationId: "15",
+              className: "Edit",
+              x: 10,
+              y: 40,
+              w: 700,
+              h: 500,
+              patterns: ["value"],
+              enabled: true,
+              offscreen: false,
+            },
+            {
+              ref: 2,
+              name: "Close",
+              controlType: "button",
+              automationId: "Close",
+              className: "Button",
+              x: 730,
+              y: 0,
+              w: 45,
+              h: 30,
+              patterns: ["invoke"],
+              enabled: true,
+              offscreen: false,
+            },
+          ],
+          truncated: false,
+        }
+      );
+    },
+    async uiaAct(fields): Promise<ComputerUseUiaActResult> {
+      calls.uiaActs.push(fields);
+      return (
+        options.uiaAct ?? {
+          ok: true,
+          hwnd: 4321,
+          action: fields.perform,
+          usedPattern: fields.perform === "setValue" ? "value" : "invoke",
+          name: "Close",
+          controlType: "button",
+          focused: fields.perform === "focus",
+          autoSetFocus: true,
+          elapsedMs: 7,
         }
       );
     },
@@ -256,5 +335,112 @@ describe("applyComputerUseRequest：按窗口截图（win-shot / win-list，桥 
     assert.equal(outcome.ok, true);
     assert.deepEqual(calls.windowShots, []);
     assert.equal(calls.screenshot.length, 1);
+  });
+});
+
+describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0）", () => {
+  test("uia-list：窗口数字 = hwnd、maxItems 原样下发；正文带 ref / patterns / 几何与「不占桌面」", async () => {
+    const { guest, calls } = fakeGuest({});
+    const outcome = await run(guest, { action: "uia-list", window: 4321, maxItems: 60 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.deepEqual(calls.uiaLists, [{ hwnd: 4321, maxItems: 60 }]);
+    assert.deepEqual(calls.uiaActs, []);
+    assert.match(outcome.text, /window "Untitled - Notepad" \(hwnd 4321\): 2 listed/);
+    // 每一行都要让模型能直接拿去 act：ref、控件类型、名字、支持的模式
+    assert.match(outcome.text, /1 · document "Text editor" · supports value/);
+    assert.match(outcome.text, /2 · button "Close" · supports invoke/);
+    assert.match(outcome.text, /at 730,0 45×30 id=Close/);
+    assert.match(outcome.text, /does not need the foreground/);
+    assert.match(outcome.text, /refs belong to the latest list/);
+  });
+
+  test("uia-list：标题片段原样下发；截断时告诉模型调大 maxItems；空列表给一句人话", async () => {
+    const truncated = fakeGuest({
+      uiaList: {
+        ok: true,
+        hwnd: 7,
+        window: { title: "记事本", className: "Notepad" },
+        items: [],
+        truncated: true,
+      },
+    });
+    const outcome = await run(truncated.guest, { action: "uia-list", window: "记事", maxItems: 1 });
+    assert.deepEqual(truncated.calls.uiaLists, [{ title: "记事", maxItems: 1 }]);
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) {
+      assert.match(outcome.text, /raise maxItems/);
+      assert.match(outcome.text, /No actionable controls were found/);
+    }
+  });
+
+  test("uia-list 失败：桥的人话原样带出（不改写成「没有响应」之类）", async () => {
+    const human = "没找到标题包含「不存在的」的窗口——先用 win-list 看现在有哪些窗口";
+    const { guest } = fakeGuest({ uiaList: { ok: false, error: human } });
+    assert.deepEqual(await run(guest, { action: "uia-list", window: "不存在的" }), { ok: false, error: human });
+  });
+
+  test("uia-act：perform / ref / name / value / timeoutMs 都原样到控制器；正文点明模式与不抢前台", async () => {
+    const { guest, calls } = fakeGuest({});
+    const outcome = await run(guest, {
+      action: "uia-act",
+      window: 4321,
+      ref: 2,
+      perform: "invoke",
+      timeoutMs: 1500,
+    });
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls.uiaActs, [{ hwnd: 4321, ref: 2, perform: "invoke", timeoutMs: 1500 }]);
+    if (outcome.ok) {
+      assert.match(outcome.text, /Invoked "Close" \(button\) in window hwnd 4321/);
+      assert.match(outcome.text, /pattern invoke, 7ms/);
+      assert.match(outcome.text, /did not need the foreground/);
+      assert.match(outcome.text, /computer_screenshot \(window 4321\)/);
+    }
+
+    const typed = fakeGuest({});
+    await run(typed.guest, { action: "uia-act", window: "记事本", name: "Text editor", perform: "setValue", value: "hello" });
+    assert.deepEqual(typed.calls.uiaActs, [
+      { title: "记事本", name: "Text editor", perform: "setValue", value: "hello" },
+    ]);
+  });
+
+  test("uia-act focus：明说键盘焦点被移动了（这是唯一一次有意抢焦点）", async () => {
+    const { guest } = fakeGuest({});
+    const outcome = await run(guest, { action: "uia-act", window: 1, ref: 1, perform: "focus" });
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) assert.match(outcome.text, /You asked for focus, so the keyboard focus moved/);
+  });
+
+  test("uia-act 关不掉 AutoSetFocus：正文追加「可能抢焦点」的警告，不把成功说成失败", async () => {
+    const { guest } = fakeGuest({
+      uiaAct: {
+        ok: true,
+        hwnd: 9,
+        action: "invoke",
+        usedPattern: "invoke",
+        name: "OK",
+        controlType: "button",
+        focused: false,
+        autoSetFocus: false,
+        autoSetFocusWarning: "AutoSetFocus 关不掉（这个系统的 UIA 客户端没有 IUIAutomation2）——可能抢焦点",
+        elapsedMs: 12,
+      },
+    });
+    const outcome = await run(guest, { action: "uia-act", window: 9, name: "OK", perform: "invoke" });
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) {
+      assert.match(outcome.text, /^Invoked "OK"/, "成功这件事必须还在第一句");
+      assert.match(outcome.text, /Warning: AutoSetFocus 关不掉/);
+    }
+  });
+
+  test("uia-act 失败：不支持模式的文案（点名支持什么 + 像素退路）原话带出", async () => {
+    const human = "这个控件不支持 invoke（edit，它支持：value）。改用 computer_click / computer_type 的像素路径";
+    const { guest } = fakeGuest({ uiaAct: { ok: false, error: human } });
+    assert.deepEqual(await run(guest, { action: "uia-act", window: 1, ref: 3, perform: "invoke" }), {
+      ok: false,
+      error: human,
+    });
   });
 });

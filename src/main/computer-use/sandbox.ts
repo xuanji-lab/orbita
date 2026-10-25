@@ -30,6 +30,9 @@ import {
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
   type ComputerUseStopResult,
+  type ComputerUseUiaActResult,
+  type ComputerUseUiaAction,
+  type ComputerUseUiaListResult,
   type ComputerUseWindowListResult,
   type ComputerUseWindowShotResult,
   type SandboxState,
@@ -40,6 +43,8 @@ import { probe as probeCapability } from "./capability.ts";
 import {
   fetchGuestScreenshot,
   fetchGuestShot,
+  fetchGuestUiaAct,
+  fetchGuestUiaList,
   fetchGuestWindowList,
   fetchGuestWindowShot,
   pingGuest,
@@ -588,6 +593,63 @@ export class SandboxController {
     try {
       const windows = await fetchGuestWindowList(this.outDir(), timeoutMs);
       return { ok: true, windows };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 列出一个窗口里可动作的控件（桥 0.10.0 的 uia-list）。只读、不抢焦点。
+   *
+   * **不占桌面租约**：这条路径只读目标窗口自己的控件树（UIA），不改焦点、不往桌面注入
+   * 任何输入（dispatch.ts 因此直接下发）。失败时桥给的人话原样带出。
+   */
+  async uiaList(options: {
+    hwnd?: number;
+    title?: string;
+    maxItems?: number;
+  }): Promise<ComputerUseUiaListResult> {
+    const gate = this.notRunning("UIA 控件列表");
+    if (gate !== null) return gate;
+    const fields: Record<string, unknown> = {};
+    if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
+    if (options.title !== undefined && options.title.trim() !== "") fields["title"] = options.title.trim();
+    if (options.maxItems !== undefined) fields["maxItems"] = options.maxItems;
+    try {
+      const reply = await fetchGuestUiaList(this.outDir(), fields);
+      return { ok: true, ...reply };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。**不占桌面租约**，理由见 uiaList 与
+   * dispatch.ts：AutoSetFocus 关掉之后它不移动前台焦点，也就不和别的会话抢那块屏幕。
+   *
+   * 回执里的 autoSetFocus 是桥读回来的真值；false 时调用方要把「可能抢了焦点」告诉模型。
+   */
+  async uiaAct(options: {
+    hwnd?: number;
+    title?: string;
+    ref?: number;
+    name?: string;
+    perform: ComputerUseUiaAction;
+    value?: string;
+    timeoutMs?: number;
+  }): Promise<ComputerUseUiaActResult> {
+    const gate = this.notRunning("UIA 控件操作");
+    if (gate !== null) return gate;
+    const fields: Record<string, unknown> = { action: options.perform };
+    if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
+    if (options.title !== undefined && options.title.trim() !== "") fields["title"] = options.title.trim();
+    if (options.ref !== undefined) fields["ref"] = options.ref;
+    if (options.name !== undefined && options.name !== "") fields["name"] = options.name;
+    if (options.value !== undefined) fields["value"] = options.value;
+    if (options.timeoutMs !== undefined) fields["timeoutMs"] = options.timeoutMs;
+    try {
+      const reply = await fetchGuestUiaAct(this.outDir(), fields);
+      return { ok: true, ...reply };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }

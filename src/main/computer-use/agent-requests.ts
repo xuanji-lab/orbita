@@ -22,14 +22,17 @@ import {
   type ComputerUseScreenshotResult,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
+  type ComputerUseUiaAction,
+  type ComputerUseUiaActResult,
+  type ComputerUseUiaListResult,
   type ComputerUseWindowListResult,
   type ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
 import type { GuestCommandResult } from "./sandbox.ts";
 
 /**
- * 这一层真正要的那两个能力。**收窄成接口而不是直接吃 SandboxController**：
- * 回执组装是纯翻译，测试注入一个只有这两个方法的假沙箱就够，不必起状态机、
+ * 这一层真正要的那几个能力。**收窄成接口而不是直接吃 SandboxController**：
+ * 回执组装是纯翻译，测试注入一个只有这几个方法的假沙箱就够，不必起状态机、
  * 不必碰文件协议（SandboxController 结构上满足它，生产环境直接传实例）。
  */
 export interface ComputerUseGuest {
@@ -47,6 +50,26 @@ export interface ComputerUseGuest {
   }): Promise<ComputerUseWindowShotResult>;
   /** 可截图的顶层窗口列表（win-list）。按标题拍失败时用它把候选窗口告诉模型 */
   listWindows(timeoutMs?: number): Promise<ComputerUseWindowListResult>;
+  /**
+   * 列出一个窗口里可动作的控件（桥 0.10.0 的 uia-list）。只读、不抢焦点。
+   * 失败时 error 是桥的人话（「没找到标题包含…的窗口」/「目标窗口没有响应（UIA 调用超时…）」），
+   * 这一层**不改写**。
+   */
+  uiaList(options: {
+    hwnd?: number;
+    title?: string;
+    maxItems?: number;
+  }): Promise<ComputerUseUiaListResult>;
+  /** 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。不抢前台，所以不占桌面租约 */
+  uiaAct(options: {
+    hwnd?: number;
+    title?: string;
+    ref?: number;
+    name?: string;
+    perform: ComputerUseUiaAction;
+    value?: string;
+    timeoutMs?: number;
+  }): Promise<ComputerUseUiaActResult>;
 }
 
 /**
@@ -140,6 +163,25 @@ export async function applyComputerUseRequest(
             "(positive = down). Take a screenshot to see the new position.",
         };
       }
+      // ── UIA 车道（桥 0.10.0）：按控件动作，不按坐标、不抢前台 ─────────────
+      case "uia-list": {
+        const size = request.maxItems === undefined ? {} : { maxItems: request.maxItems };
+        const reply = await controller.uiaList({ ...targetOf(request.window), ...size });
+        if (!reply.ok) return { ok: false, error: reply.error };
+        return { ok: true, text: uiaListText(reply) };
+      }
+      case "uia-act": {
+        const reply = await controller.uiaAct({
+          ...targetOf(request.window),
+          ...(request.ref === undefined ? {} : { ref: request.ref }),
+          ...(request.name === undefined ? {} : { name: request.name }),
+          perform: request.perform,
+          ...(request.value === undefined ? {} : { value: request.value }),
+          ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+        });
+        if (!reply.ok) return { ok: false, error: reply.error };
+        return { ok: true, text: uiaActText(reply) };
+      }
       // sandbox_* 动作走 CDP 通道（main/computer-use/cdp.ts），不经过这一层：
       // 它们要一条常驻的 CdpSession（socket / 标签页 / 自动起 Edge），而这里只认沙箱状态机。
       // index.ts 按 isSandboxBrowserAction 分流；走到这里说明分流漏了，宁可报错也不要静默。
@@ -213,4 +255,104 @@ async function candidateLine(controller: ComputerUseGuest): Promise<string> {
     rows.join("; ") +
     ". Pass one of these hwnds, or part of one of these titles, as window."
   );
+}
+
+/**
+ * 请求里的 window → 桥要的 hwnd / title 两个字段（数字 = hwnd，字符串 = 标题片段）。
+ * 空的字符串也照发：让桥回「没找到标题包含「」的窗口」比宿主静默丢掉它更不容易错。
+ */
+function targetOf(window: string | number | undefined): { hwnd?: number; title?: string } {
+  if (window === undefined) return {};
+  return typeof window === "number" ? { hwnd: window } : { title: window };
+}
+
+/**
+ * uia-list 回执 → 给模型读的文本。
+ *
+ * 一行一个控件（标题行先给窗口与命中数）：模型要拿 ref 或 name 去 uia-act，所以这两个字段
+ * 必须在前；patterns / 可用性 / offscreen 决定它该用哪个动作、要不要先滚动。
+ * **不输出 JSON**：模型已经能把一行行的「ref · 类型 · 名字」对上去，多一层括号只是多烧 token。
+ */
+function uiaListText(reply: {
+  hwnd: number;
+  window: { title: string; className: string };
+  items: readonly {
+    ref: number;
+    name: string;
+    controlType: string;
+    automationId: string;
+    className: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    patterns: readonly string[];
+    enabled: boolean;
+    offscreen: boolean;
+  }[];
+  truncated: boolean;
+}): string {
+  const title = reply.window.title === "" ? "(no title)" : reply.window.title;
+  const lines = reply.items.map((item) => {
+    const name = item.name === "" ? `(automationId ${item.automationId})` : `"${item.name}"`;
+    const patterns = item.patterns.length === 0 ? "focus only" : item.patterns.join("/");
+    const flags: string[] = [];
+    if (!item.enabled) flags.push("disabled");
+    if (item.offscreen) flags.push("offscreen");
+    const id = item.automationId === "" ? "" : ` id=${item.automationId}`;
+    const state = flags.length === 0 ? "" : `, ${flags.join(", ")}`;
+    return (
+      `${item.ref} · ${item.controlType} ${name} · supports ${patterns}${state} · ` +
+      `at ${item.x},${item.y} ${item.w}×${item.h}${id}`
+    );
+  });
+  const header =
+    `UI Automation controls in window "${title}" (hwnd ${reply.hwnd}): ${reply.items.length} listed` +
+    (reply.truncated ? " (there are more — raise maxItems to see them)" : "") +
+    ". Lines are: ref · control type \"name\" · supported patterns · position/size · automationId.";
+  const body = lines.length === 0 ? "No actionable controls were found in this window." : lines.join("\n");
+  const tail =
+    "Act on one with computer_uia (action invoke / setValue / selection / focus, and ref or name). " +
+    "These actions go straight into the control: the window does not need the foreground, so the sandbox " +
+    "desktop is not taken over and another session can keep using it. Re-list after the window changes — " +
+    "refs belong to the latest list. Controls that support no pattern above can only be driven through " +
+    "computer_click / computer_type (pixels).";
+  return `${header}\n${body}\n\n${tail}`;
+}
+
+/** uia-act 成功回执 → 给模型读的文本（含 AutoSetFocus 降级时的抢焦点警告） */
+function uiaActText(reply: {
+  hwnd: number;
+  action: string;
+  usedPattern: string;
+  name: string;
+  controlType: string;
+  focused: boolean;
+  autoSetFocus: boolean;
+  autoSetFocusWarning?: string;
+  elapsedMs: number;
+}): string {
+  const name = reply.name === "" ? "(unnamed control)" : `"${reply.name}"`;
+  const verb =
+    reply.action === "focus"
+      ? "Moved keyboard focus to"
+      : reply.action === "setValue"
+        ? "Set the text of"
+        : reply.action === "selection"
+          ? "Selected"
+          : "Invoked";
+  const head =
+    `${verb} ${name} (${reply.controlType}${reply.focused ? ", now focused" : ""}) in window hwnd ${reply.hwnd} ` +
+    `through UI Automation (pattern ${reply.usedPattern}, ${reply.elapsedMs}ms). ` +
+    (reply.action === "focus"
+      ? "You asked for focus, so the keyboard focus moved."
+      : "The window did not need the foreground, so the sandbox desktop was not taken over.") +
+    " Take a computer_screenshot (window " +
+    reply.hwnd +
+    ") to see what changed.";
+  if (reply.autoSetFocus) return head;
+  const warning =
+    reply.autoSetFocusWarning ??
+    "AutoSetFocus could not be turned off on this system, so this action may have brought the window to the foreground.";
+  return `${head}\n\nWarning: ${warning}`;
 }

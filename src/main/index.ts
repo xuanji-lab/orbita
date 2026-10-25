@@ -586,8 +586,10 @@ void app.whenReady().then(async () => {
    * computer_* / sandbox_* 下发前的唯一入口：按动作选资源键（桌面独占 / 每会话浏览器），
    * 要不到就回一句人话，要到了才下发。键的选择与硬上限的收尾都在 dispatch.ts 里——
    * 这样「sandbox_* 在别人持桌面时照常下发」这条回归才有地方可测（它不碰 electron）。
-   * 按窗口截图（computer_screenshot + window）**不取任何键**：PrintWindow 读窗口自己的
-   * surface，被遮挡也能拍、不抢焦点（理由见 dispatch.ts 与 shared/computer-use.ts）。
+   * 按窗口截图（computer_screenshot + window）与 UIA 车道（uia-list / uia-act）**不取任何键**：
+   * 前者读窗口自己的 surface，被遮挡也能拍、不抢焦点；后者直接调控件的 UIA 模式，AutoSetFocus
+   * 关掉之后不移动前台焦点。两条都不依赖「屏幕上现在是什么」，所以不占桌面独占（理由见
+   * dispatch.ts 与 shared/computer-use.ts）。
    *
    * 标题只是文案素材：拿不到锁时的错误要说出**占用者是谁**，不然模型无法转告用户
    * （「被占据了」而不说是谁，用户也没法处置）。读不出 meta（会话刚建、已删）就退成空串，

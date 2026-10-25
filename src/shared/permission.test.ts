@@ -146,8 +146,10 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
     for (const tool of COMPUTER_USE_READ_TOOLS) assert.equal(isReadOnlyTool(tool), false, tool);
   });
 
-  test("点击 / 打字 / 按键 / 滚动真注入鼠标键盘，照写操作过闸：plan 拒、manual 问、skip 放", () => {
-    for (const tool of ["computer_click", "computer_type", "computer_key", "computer_scroll"]) {
+  test("点击 / 打字 / 按键 / 滚动 / UIA 动作真的动沙箱，照写操作过闸：plan 拒、manual 问、skip 放", () => {
+    // computer_uia 既能列控件（只读）也能 invoke / setValue（写）：审批按**工具**给，
+    // 不按参数给，所以它整件走写操作闸门——宁可让 list 也问一次，不能把写动作漏成免审批。
+    for (const tool of ["computer_click", "computer_type", "computer_key", "computer_scroll", "computer_uia"]) {
       assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
       assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
       assert.equal(decidePermission("skip", tool).behavior, "allow", tool);

@@ -52,6 +52,8 @@ function fakeClock(): LeaseClock & { advance(ms: number): void } {
 const SCREENSHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 1280 };
 const WINDOW_SHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 1280, window: 4321 };
 const NAVIGATE: ComputerUseToolRequest = { action: "sandbox-navigate", url: "https://example.com" };
+const UIA_LIST: ComputerUseToolRequest = { action: "uia-list", window: 4321 };
+const UIA_ACT: ComputerUseToolRequest = { action: "uia-act", window: 4321, ref: 2, perform: "invoke" };
 
 const titled = (titles: Record<string, string>) => async (sessionId: string) => titles[sessionId] ?? "";
 
@@ -196,5 +198,51 @@ describe("接线：按窗口截图不占桌面租约（多会话各拍各的窗�
     assert.equal(outcome.ok, true);
     assert.deepEqual(calls, ["pixels:A"]);
     assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A", "整桌面截图必须持桌面键");
+  });
+});
+
+describe("接线：UIA 车道不占桌面租约（写操作也不抢前台）", () => {
+  test("A 持桌面时 B 的 uia-act / uia-list 照常下发，不进队列，桌面仍归 A", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲", B: "任务乙" });
+    await lease.acquire("desktop:exclusive", "A", "任务甲");
+    const act = await dispatcher.dispatch("B", UIA_ACT);
+    const list = await dispatcher.dispatch("B", UIA_LIST);
+    assert.deepEqual([act.ok, list.ok], [true, true]);
+    assert.deepEqual(calls, ["pixels:B", "pixels:B"]);
+    // AutoSetFocus 关掉之后不移动前台焦点：没有偷偷拿到桌面键，也没有排队
+    assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A");
+    assert.equal(lease.queueDepth("desktop:exclusive"), 0);
+  });
+
+  test("桌面空闲时 UIA 请求也不留下桌面租约（不占就是一次都不碰）", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲" });
+    await dispatcher.dispatch("A", UIA_LIST);
+    await dispatcher.dispatch("A", UIA_ACT);
+    assert.deepEqual(calls, ["pixels:A", "pixels:A"]);
+    assert.equal(lease.owner("desktop:exclusive"), null);
+  });
+
+  test("硬上限收回的标记不会被 UIA 吃掉：下一条真正的像素命令仍收到终态错误", async () => {
+    const { dispatcher, calls } = setup({ A: "任务甲" });
+    dispatcher.noteHoldExpired("A");
+    const uia = await dispatcher.dispatch("A", UIA_ACT);
+    assert.equal(uia.ok, true, "UIA 不碰桌面，不该被别人的收回事件拦下");
+
+    const blocked = await dispatcher.dispatch("A", SCREENSHOT);
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.match(blocked.error, /15 分钟/);
+    assert.deepEqual(calls, ["pixels:A"]);
+  });
+
+  test("像素输入仍然必须持桌面键（UIA 的分流没把 click / type / key / scroll 一起放过）", async () => {
+    const { clock, lease, dispatcher, calls } = setup({ A: "任务甲", B: "任务乙" });
+    await lease.acquire("desktop:exclusive", "A", "任务甲");
+    const click = dispatcher.dispatch("B", { action: "click", x: 1, y: 2 });
+    await flush();
+    assert.equal(lease.queueDepth("desktop:exclusive"), 1, "像素路径必须排队等待");
+    clock.advance(30_000); // 等不到就让假时钟到点，收尾这条 promise（不然测试进程挂着不退出）
+    const outcome = await click;
+    assert.equal(outcome.ok, false);
+    assert.deepEqual(calls, [], "拿不到桌面键，像素命令一次都不许下发");
   });
 });

@@ -40,11 +40,11 @@ const setup = () => {
 };
 
 describe("computer_* 工具", () => {
-  test("五个工具一个不少；截图是免审批的只读件，其余四件照写操作过闸", () => {
+  test("六个工具一个不少；截图是免审批的只读件，其余五件照写操作过闸", () => {
     const { tools } = setup();
     assert.deepEqual([...tools.keys()].sort(), [...COMPUTER_USE_TOOL_NAMES].sort());
     // 只读桶里也有 sandbox_* 的读取件（见 sandbox-tools.test.ts），这里只查像素组自己：
-    // 五个里只有 screenshot 免审批，其余四件真注入键鼠。
+    // 六个里只有 screenshot 免审批，其余五件真的动沙箱（键鼠或 UIA 模式）。
     assert.equal((COMPUTER_USE_READ_TOOLS as readonly string[]).includes("computer_screenshot"), true);
     for (const name of COMPUTER_USE_TOOL_NAMES) {
       assert.equal(
@@ -243,5 +243,68 @@ describe("computer_* 工具", () => {
       error: "沙箱没有在运行（当前状态：off），沙箱操作不可用——先在「设置 › 实验功能 › 电脑使用」里启动沙箱",
     });
     await assert.rejects(pending, /设置 › 实验功能 › 电脑使用/);
+  });
+});
+
+describe("computer_uia 工具（UIA 车道）", () => {
+  test("list：window 原样下发；没给 maxItems 就不编字段（吃桥的缺省值）", async () => {
+    const { sent, run, answer } = setup();
+    const pending = run("computer_uia", { action: "list", window: " 记事本 " });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-list", window: "记事本" });
+    answer(0, { ok: true, text: "1 · button \"Close\" · supports invoke" });
+    const result = await pending;
+    assert.deepEqual(result.content, [{ type: "text", text: "1 · button \"Close\" · supports invoke" }]);
+  });
+
+  test("list：给了 maxItems 就取整下发；纯数字 hwnd 优先于 window 标题", async () => {
+    const { sent, run, answer } = setup();
+    const pending = run("computer_uia", { action: "list", hwnd: 4321, window: "Edge", maxItems: 60.4 });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-list", window: 4321, maxItems: 60 });
+    answer(0, { ok: true, text: "ok" });
+    await pending;
+  });
+
+  test("act：perform 与 ref / name / value 各就各位", async () => {
+    const { sent, run, answer } = setup();
+    const byRef = run("computer_uia", { action: "invoke", hwnd: 4321, ref: 2 });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-act", window: 4321, ref: 2, perform: "invoke" });
+    answer(0, { ok: true, text: "Invoked" });
+    await byRef;
+
+    const byName = run("computer_uia", { action: "setValue", hwnd: 7, name: " Search ", value: "orbita" });
+    assert.deepEqual(sent[1]?.["request"], {
+      action: "uia-act",
+      window: 7,
+      name: "Search",
+      perform: "setValue",
+      value: "orbita",
+    });
+    answer(1, { ok: true, text: "Set" });
+    await byName;
+
+    // 空字符串是合法 value（清空输入框），不能被当成「没给」
+    const clear = run("computer_uia", { action: "setValue", hwnd: 7, ref: 1, value: "" });
+    assert.deepEqual(sent[2]?.["request"], { action: "uia-act", window: 7, ref: 1, perform: "setValue", value: "" });
+    answer(2, { ok: true, text: "Cleared" });
+    await clear;
+  });
+
+  test("参数缺了当场拒绝：不说清要怎么指窗口 / 控件，模型会乱猜", async () => {
+    const { run } = setup();
+    await assert.rejects(run("computer_uia", { action: "list" }), /Pass window .* or hwnd/);
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1 }), /Pass ref .* or name/);
+    await assert.rejects(run("computer_uia", { action: "setValue", hwnd: 1, ref: 1 }), /setValue needs value/);
+    await assert.rejects(run("computer_uia", { action: "click", hwnd: 1, ref: 1 }), /action must be one of/);
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: 0 }), /ref must be a positive integer/);
+  });
+
+  test("主进程的错误原话带出（含「改用 computer_click / computer_type 的像素路径」）", async () => {
+    const { run, answer } = setup();
+    const pending = run("computer_uia", { action: "invoke", hwnd: 1, ref: 3 });
+    answer(0, {
+      ok: false,
+      error: "这个控件不支持 invoke（edit，它支持：value）。改用 computer_click / computer_type 的像素路径",
+    });
+    await assert.rejects(pending, /改用 computer_click \/ computer_type 的像素路径/);
   });
 });

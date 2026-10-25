@@ -30,6 +30,10 @@ import {
   computerUseGuestCommands,
   computerUseGuestTimeoutMs,
   GUEST_COMMAND_TIMEOUT_MS,
+  type ComputerUseUiaActReply,
+  type ComputerUseUiaAction,
+  type ComputerUseUiaItem,
+  type ComputerUseUiaListReply,
   type ComputerUseWindowInfo,
   type GuestTcpChannel,
 } from "../../shared/computer-use.ts";
@@ -154,6 +158,111 @@ export async function fetchGuestWindowList(
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * uia-list：列出一个窗口里可动作的控件（桥 0.10.0）。只读、不抢焦点。
+ *
+ * 每一项都按契约验一遍（缺字段的那一条跳过）：模型靠 ref / name 指控件，
+ * 半条记录比没有更危险——它会拿着一个不存在的 ref 去 uia-act。
+ * 失败时桥的人话原话抛出（「这个控件不支持…」「目标窗口没有响应（UIA 调用超时…）」），
+ * 宿主不改写：那是模型唯一的下一步指示。
+ */
+export async function fetchGuestUiaList(
+  outDir: string,
+  fields: Record<string, unknown>,
+  timeoutMs: number = computerUseGuestTimeoutMs(computerUseGuestCommands.uiaList),
+): Promise<ComputerUseUiaListReply> {
+  const resp = await sendGuestCommand(outDir, computerUseGuestCommands.uiaList, fields, timeoutMs);
+  const hwnd = resp.hwnd;
+  if (typeof hwnd !== "number" || hwnd <= 0) {
+    throw new Error("guest 桥的 UIA 控件列表响应缺 hwnd");
+  }
+  const windowRaw = resp.window;
+  const window =
+    typeof windowRaw === "object" && windowRaw !== null
+      ? {
+          title: stringOr((windowRaw as Record<string, unknown>).title, ""),
+          className: stringOr((windowRaw as Record<string, unknown>).className, ""),
+        }
+      : { title: "", className: "" };
+  const list = resp.items;
+  if (!Array.isArray(list)) {
+    throw new Error("guest 桥的 UIA 控件列表响应缺 items 数组");
+  }
+  const items: ComputerUseUiaItem[] = [];
+  for (const entry of list) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const row = entry as Record<string, unknown>;
+    const ref = row.ref;
+    if (typeof ref !== "number" || !Number.isInteger(ref) || ref <= 0) continue;
+    const patterns: string[] = [];
+    if (Array.isArray(row.patterns)) {
+      for (const pattern of row.patterns) {
+        if (typeof pattern === "string" && pattern !== "") patterns.push(pattern);
+      }
+    }
+    items.push({
+      ref,
+      name: stringOr(row.name, ""),
+      controlType: stringOr(row.controlType, ""),
+      automationId: stringOr(row.automationId, ""),
+      className: stringOr(row.className, ""),
+      x: numberOr(row.x, 0),
+      y: numberOr(row.y, 0),
+      w: numberOr(row.w, 0),
+      h: numberOr(row.h, 0),
+      patterns,
+      enabled: row.enabled !== false,
+      offscreen: row.offscreen === true,
+    });
+  }
+  return { hwnd, window, items, truncated: resp.truncated === true };
+}
+
+/** uia-act 的四个动作（与契约 ComputerUseUiaAction 同一份；桥里有一份必须逐字一致的名字） */
+const UIA_ACTIONS: readonly string[] = ["invoke", "setValue", "selection", "focus"];
+
+/**
+ * uia-act：对一个控件执行 UIA 模式（桥 0.10.0）。
+ *
+ * 回执里 `autoSetFocus` 是**真值**（桥把 IUIAutomation2 的开关置 false 后读回确认）：
+ * false 意味着这一次动作可能把窗口带到前台，上层要把这句警告交给模型。
+ */
+export async function fetchGuestUiaAct(
+  outDir: string,
+  fields: Record<string, unknown>,
+  timeoutMs: number = computerUseGuestTimeoutMs(computerUseGuestCommands.uiaAct),
+): Promise<ComputerUseUiaActReply> {
+  const resp = await sendGuestCommand(outDir, computerUseGuestCommands.uiaAct, fields, timeoutMs);
+  const hwnd = resp.hwnd;
+  const action = resp.action;
+  const usedPattern = resp.usedPattern;
+  if (typeof hwnd !== "number" || hwnd <= 0) throw new Error("guest 桥的 UIA 动作响应缺 hwnd");
+  if (typeof action !== "string" || !UIA_ACTIONS.includes(action)) {
+    throw new Error("guest 桥的 UIA 动作响应缺 action（或动作名不认识）");
+  }
+  if (typeof usedPattern !== "string" || usedPattern === "") {
+    throw new Error("guest 桥的 UIA 动作响应缺 usedPattern");
+  }
+  const reply: ComputerUseUiaActReply = {
+    hwnd,
+    action: action as ComputerUseUiaAction,
+    usedPattern,
+    name: stringOr(resp.name, ""),
+    controlType: stringOr(resp.controlType, ""),
+    focused: resp.focused === true,
+    autoSetFocus: resp.autoSetFocus !== false,
+    elapsedMs: numberOr(resp.elapsedMs, 0),
+  };
+  if (typeof resp.autoSetFocusWarning === "string" && resp.autoSetFocusWarning !== "") {
+    reply.autoSetFocusWarning = resp.autoSetFocusWarning;
+  }
+  return reply;
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
 }
 
 /**
