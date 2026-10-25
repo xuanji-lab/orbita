@@ -55,10 +55,10 @@ import {
   type FileTab,
 } from "./panel-layout.ts";
 import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
-import type { PdfJump } from "./PdfView";
+import type { PdfJump, PdfSyncJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileListRequest, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import type { LatexFileContext } from "@shared/latex";
+import type { LatexFileContext, LatexSyncFailure } from "@shared/latex";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -474,6 +474,8 @@ export function FilesPanel(props: {
     setTreeOn(false);
     setActionError(null);
     setJump(null);
+    setPdfSync(null);
+    setReveal(null);
     setEditorNotice(null);
   }, [sessionId, workspaceId]);
 
@@ -663,6 +665,138 @@ export function FilesPanel(props: {
     if (narrowRef.current) setTreeOn(false);
   };
 
+  /**
+   * 主进程给的路径是 Windows 原生反斜杠，树里拼的标签路径是正斜杠：同一个文件按字符串
+   * 比会开出第二个标签（验收实测：从 PDF 双击回源码后出现两个 intro.tex）。按 samePath
+   * 复用已开的那个标签，别让同文件活在两处。
+   */
+  const resolveTabPath = useCallback(
+    (path: string): string => tabs.find((tab) => samePath(tab.path, path))?.path ?? path,
+    [tabs],
+  );
+
+  /** 一次定位失败的提示：每种 reason 都要说出下一步该做什么，不静默 */
+  const syncFailureText = useCallback(
+    (outcome: LatexSyncFailure): string => {
+      switch (outcome.reason) {
+        case "no-pdf":
+          return t.latex.syncNoPdf;
+        case "no-synctex":
+          return t.latex.syncNoSynctex;
+        case "no-result":
+          return t.latex.syncNotFound;
+        case "outside-project":
+          return t.latex.syncOutside;
+        case "not-installed":
+          return t.latex.syncNotInstalled;
+        case "failed":
+          return t.latex.syncFailed(outcome.detail ?? "");
+      }
+    },
+    [t],
+  );
+
+  /**
+   * 源码 → PDF（编辑器右键「在 PDF 中定位」）。
+   * 项目 PDF 已经在屏上时**只闪落点、不换标签**：并排布局里切到 PDF 标签会把左半从
+   * 正在看的源码换成主文件——用户刚点的行会从眼前消失。
+   */
+  const locateInPdf = useCallback(
+    (sourcePath: string, line: number): void => {
+      const pdfPath = latex.project?.pdf?.path ?? null;
+      if (pdfPath === null) {
+        setEditorNotice(t.latex.syncNoPdf);
+        return;
+      }
+      const context = readRequestFor(sourcePath);
+      const root = context?.root ?? activeTab?.root ?? null;
+      if (root === null) return;
+      setEditorNotice(null);
+      void api.latex
+        .synctexForward({
+          sessionId,
+          workspaceId,
+          ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+          root,
+          path: sourcePath,
+          line,
+          column: 1,
+        })
+        .then((outcome) => {
+          if (!outcome.ok) {
+            setEditorNotice(syncFailureText(outcome));
+            return;
+          }
+          syncTokenRef.current += 1;
+          setPdfSync({ rect: outcome.rect, token: syncTokenRef.current });
+          if (leftIsProjectPdf || splitOn) return;
+          const pdfTab = resolveTabPath(pdfPath);
+          setTabs((prev) => openTab(prev, root, pdfTab));
+          switchTo(pdfTab);
+        })
+        .catch((cause: unknown) => {
+          setEditorNotice(syncFailureText({ ok: false, reason: "failed", detail: failMessage(cause) }));
+        });
+    },
+    [activeTab, focusWorkspaceId, latex.project, leftIsProjectPdf, readRequestFor, resolveTabPath, sessionId, splitOn, switchTo, syncFailureText, t, workspaceId],
+  );
+
+  /**
+   * PDF → 源码（PDF 双击 / Ctrl+单击）。目标已经在左半 / 已经是激活标签时只定位不换
+   * 标签；否则开它的标签再滚过去（对话为主的布局里，这一步先把 PDF 标签换成源码）。
+   */
+  const locateSource = useCallback(
+    (pdfPath: string, point: { page: number; x: number; y: number }): void => {
+      const root = activeTab?.root ?? null;
+      if (root === null) return;
+      setEditorNotice(null);
+      void api.latex
+        .synctexReverse({
+          sessionId,
+          workspaceId,
+          ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+          root,
+          path: pdfPath,
+          page: point.page,
+          x: point.x,
+          y: point.y,
+        })
+        .then((outcome) => {
+          if (!outcome.ok) {
+            setEditorNotice(syncFailureText(outcome));
+            return;
+          }
+          syncTokenRef.current += 1;
+          const sourceTab = resolveTabPath(outcome.file);
+          setReveal({ path: sourceTab, line: outcome.line, token: syncTokenRef.current });
+          const showing = splitLeftPath ?? activeTab?.path ?? null;
+          if (showing !== null && samePath(showing, outcome.file)) return;
+          setTabs((prev) => openTab(prev, root, sourceTab));
+          switchTo(sourceTab);
+        })
+        .catch((cause: unknown) => {
+          setEditorNotice(syncFailureText({ ok: false, reason: "failed", detail: failMessage(cause) }));
+        });
+    },
+    [activeTab, focusWorkspaceId, resolveTabPath, sessionId, splitLeftPath, switchTo, syncFailureText, workspaceId],
+  );
+
+  /** 编辑器右键「引用到对话」：选中文字优先，没有选区时是那一行（空行不引） */
+  const quoteEditorText = useCallback(
+    (path: string, text: string, line: number): void => {
+      const body = text.trim();
+      if (body === "") return;
+      session.addQuote({
+        text: body,
+        messageId: `tex:${path}:${line}:${Date.now()}`,
+        role: "assistant",
+        filePath: path,
+      });
+      document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+    },
+    [session],
+  );
+
   // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
   // 裁决（含「请求属于别的会话 → 作废」——面板重挂后旧会话的请求不会拿新会话的
   // 根重判、报出无关的 citeOutside，2026-10-18 修），这里只按结论改 state；
@@ -670,6 +804,12 @@ export function FilesPanel(props: {
   const citeFocus = props.citeFocus ?? null;
   const consumedCiteRef = useRef<number | null>(null);
   const [jump, setJump] = useState<PdfJump | null>(null);
+  /** SyncTeX 正向查找的落点（源码右键「在 PDF 中定位」）：交给显示项目 PDF 的那块 */
+  const [pdfSync, setPdfSync] = useState<PdfSyncJump | null>(null);
+  /** SyncTeX 反向查找的落点（PDF 双击）：要打开 / 滚到的源码行 */
+  const [reveal, setReveal] = useState<{ path: string; line: number; token: number } | null>(null);
+  /** 两类跳转共用的单调 token：同一行连查两次也要重放高亮 */
+  const syncTokenRef = useRef(0);
   useEffect(() => {
     if (citeFocus === null) return;
     const outcome = decideCiteFocus({
@@ -1154,6 +1294,11 @@ export function FilesPanel(props: {
                   // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
                   pdfPreview={leftIsProjectPdf}
                   pdfReloadToken={leftIsProjectPdf ? latex.pdfReloadToken : 0}
+                  // SyncTeX：左半显示的就是项目 PDF 时，落点框与双击反查都给它
+                  syncJump={leftIsProjectPdf ? pdfSync : null}
+                  {...(leftIsProjectPdf
+                    ? { onLocatePdf: (point: { page: number; x: number; y: number }) => locateSource(leftPath ?? activeTab.path, point) }
+                    : {})}
                   editor={{
                     register: registerEditor,
                     onDirtyChange: handleEditorDirty,
@@ -1169,6 +1314,15 @@ export function FilesPanel(props: {
                       onUndone: (ids) => collab.dropHunks(leftPath ?? activeTab.path, ids),
                       sync: syncFor(collab.sync, leftPath ?? activeTab.path, samePath),
                     },
+                    // 源码 ↔ PDF（SyncTeX）：右键定位（只对 LaTeX 项目出现）+ 反查回来的落点
+                    ...(latex.project === null
+                      ? {}
+                      : { onForwardSync: (line: number) => locateInPdf(leftPath ?? activeTab.path, line) }),
+                    onQuote: (text, line) => quoteEditorText(leftPath ?? activeTab.path, text, line),
+                    reveal:
+                      reveal !== null && samePath(reveal.path, leftPath ?? activeTab.path)
+                        ? { line: reveal.line, token: reveal.token }
+                        : null,
                   }}
                 />
               </div>
@@ -1188,6 +1342,8 @@ export function FilesPanel(props: {
                     }
                     pdfPreview
                     pdfReloadToken={latex.pdfReloadToken}
+                    syncJump={pdfSync}
+                    onLocatePdf={(point: { page: number; x: number; y: number }) => locateSource(splitPdfPath, point)}
                   />
                 </div>
               )}

@@ -1728,6 +1728,13 @@ export const zh: Messages = {
     quoteWarning: "编译告警",
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
+    /* ---------- SyncTeX 双向定位（源码 ↔ PDF） ---------- */
+    syncNoPdf: "还没有 PDF——先编译一次再定位。",
+    syncNoSynctex: "这份 PDF 里没有 SyncTeX 数据。重新编译一次就能跳转（编译时会自动带上 -synctex）。",
+    syncNotFound: "PDF 里没有这一处的位置记录。源码改过之后要先重新编译。",
+    syncOutside: "这一点落在项目之外的文件上（系统宏包），不是你能打开的源码。",
+    syncNotInstalled: "这台电脑上没有找到 synctex 命令，TeX 发行版可能缺组件。",
+    syncFailed: (detail) => `SyncTeX 出错：${detail}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
@@ -1740,6 +1747,8 @@ export const zh: Messages = {
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
   editor: {
     aria: "LaTeX 源码编辑器",
+    locateInPdf: "在 PDF 中定位",
+    quoteLine: "引用到对话",
     saved: "已保存",
     unsaved: "未保存",
     saving: "保存中…",

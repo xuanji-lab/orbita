@@ -73,6 +73,10 @@ const ALLOWED_LATIN = new Set([
   "latexmk",
   "tlmgr",
   "tex",
+  // SyncTeX 双向定位：命令名与它的产品名（用户照抄 / 发行版自带的写法）
+  "SyncTeX",
+  "synctex",
+  "TeX",
   "Claude",
   "Code",
   // Claude 订阅的档位名（产品自称，不译）与登录域名

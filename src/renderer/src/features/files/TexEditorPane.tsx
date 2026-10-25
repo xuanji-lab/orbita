@@ -27,8 +27,17 @@ import { EditorView } from "@codemirror/view";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { ContextMenu } from "../../shell/ContextMenu";
+import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
-import { latexEditorExtensions, agentMarkEffect, readOnlyCompartment, readOnlyExtensions } from "./latex-editor.ts";
+import {
+  latexEditorExtensions,
+  agentMarkEffect,
+  clearSyncLineEffect,
+  readOnlyCompartment,
+  readOnlyExtensions,
+  syncLineEffect,
+} from "./latex-editor.ts";
 import { formatSize } from "./tree-view.ts";
 import {
   clampCursorLine,
@@ -114,6 +123,18 @@ export function TexEditorPane(props: {
   onError?: (path: string, message: string) => void;
   /** agent 与本文件的互动（只读、重载、按块撤销）；缺席 = 没有论文工作台的接线 */
   collab?: EditorCollabView;
+  /**
+   * 右键菜单「在 PDF 中定位」：把这一行交给外层做 SyncTeX 正向查找。
+   * 缺席 = 这个文件不属于 LaTeX 项目，菜单里不出这一项。
+   */
+  onForwardSync?: (line: number) => void;
+  /** 右键菜单「引用到对话」：选中文字（没有选区时是这一行）放进输入框 */
+  onQuote?: (text: string, line: number) => void;
+  /**
+   * 外部要求跳到某一行并高亮（PDF 双击 / Ctrl+单击的结果）。token 单调递增，
+   * 同一个 token 只跳一次；行号 1 基，越界贴到末行（syncFromDisk 同一条纪律）。
+   */
+  reveal?: { line: number; token: number } | null;
 }) {
   const t = useT();
   const path = props.request.dir;
@@ -140,6 +161,8 @@ export function TexEditorPane(props: {
    * 后者必须单独一条文案——说「文件在磁盘上被改过了」是假话。
    */
   const [conflictKind, setConflictKind] = useState<ConflictKind>("disk");
+  /** 右键菜单：打开位置 + 被右键的那一行（行号 1 基）与将要引用的文字 */
+  const [menu, setMenu] = useState<{ x: number; y: number; line: number; text: string } | null>(null);
   /** 改动块清单的展开态（默认展开：这是回合结束后最想知道的事） */
   const [hunksOpen, setHunksOpen] = useState(true);
   /** 现场找不到的块（用户自己改过 / 被删）：标成不可撤，不隐藏 */
@@ -356,6 +379,29 @@ export function TexEditorPane(props: {
     // 只在挂载 / 卸载时跑：initialText 是「打开这一刻的盘上内容」，换文件会换 key 重挂
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
+
+  // PDF → 源码的落点：选中这一行、滚到视口中间、铺一条短暂的底色。
+  // 依赖只有 token：同一次定位在重渲染时不该再抢一次滚动条。
+  const reveal = props.reveal ?? null;
+  useEffect(() => {
+    if (reveal === null) return;
+    const view = viewRef.current;
+    if (view === null) return;
+    const line = view.state.doc.line(clampCursorLine(reveal.line, view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: line.from, head: line.to },
+      effects: [
+        EditorView.scrollIntoView(line.from, { y: "center" }),
+        syncLineEffect(line.from),
+      ],
+    });
+    view.focus();
+    const timer = window.setTimeout(() => {
+      viewRef.current?.dispatch({ effects: clearSyncLineEffect() });
+    }, 2000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.token]);
 
   // 脏状态下盯一眼盘上内容：用户停手不打字时，外部改动也要能看见
   useEffect(() => {
@@ -661,8 +707,65 @@ export function TexEditorPane(props: {
     return () => root.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  /**
+   * 右键：把光标位置换算成行号（不移动光标、不动选区）。菜单里的「在 PDF 中定位」
+   * 用被右键的那一行；「引用到对话」优先用选区原文，没有选区就是这一行。
+   * 没有可给的菜单项时完全不拦右键（不抢浏览器 / CodeMirror 自己的行为）。
+   */
+  const contextMenuItems: MenuItem[] = menu === null
+    ? []
+    : [
+        ...(props.onForwardSync === undefined
+          ? []
+          : [
+              {
+                id: "sync-forward",
+                label: t.editor.locateInPdf,
+                icon: "pin" as const,
+                onSelect: () => {
+                  const line = menu.line;
+                  setMenu(null);
+                  props.onForwardSync?.(line);
+                },
+              },
+            ]),
+        ...(props.onQuote === undefined
+          ? []
+          : [
+              {
+                id: "quote",
+                label: t.editor.quoteLine,
+                icon: "quote" as const,
+                onSelect: () => {
+                  const { text, line } = menu;
+                  setMenu(null);
+                  props.onQuote?.(text, line);
+                },
+              },
+            ]),
+      ];
+
+  const openContextMenu = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (props.onForwardSync === undefined && props.onQuote === undefined) return;
+    const view = viewRef.current;
+    if (view === null) return;
+    event.preventDefault();
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.head;
+    const target = view.state.doc.lineAt(pos);
+    const selection = view.state.selection.main;
+    // 只有点在选区**里面**才引选区：之前在别处留下的选区不该把这一行的右键引成另一段
+    const insideSelection = !selection.empty && pos >= selection.from && pos <= selection.to;
+    const text = insideSelection ? view.state.sliceDoc(selection.from, selection.to) : target.text;
+    setMenu({ x: event.clientX, y: event.clientY, line: target.number, text });
+  };
+
   return (
-    <div className="tex-editor" ref={rootRef}>
+    <div className="tex-editor" ref={rootRef} onContextMenu={openContextMenu}>
+      <ContextMenu
+        position={menu === null ? null : { x: menu.x, y: menu.y }}
+        items={contextMenuItems}
+        onClose={() => setMenu(null)}
+      />
       {readOnly && (
         <div className="tex-editor-banner" data-tone="info" role="status">
           <Icon
