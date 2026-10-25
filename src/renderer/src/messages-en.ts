@@ -1735,15 +1735,28 @@ export const en = {
     noProblems: "No problems",
     errorCount: (n: number) => (n === 1 ? "1 error" : `${n} errors`),
     warningCount: (n: number) => (n === 1 ? "1 warning" : `${n} warnings`),
+    pendingCount: (n: number) => (n === 1 ? "1 waiting for you" : `${n} waiting for you`),
     missingPackage: (name: string) => `Missing package ${name}`,
+    engineWaiting: "The engine is waiting for you to confirm an install before the build can continue",
     installInTerminal: "Install in terminal",
-    installTip: (command: string) => `Fill \`${command}\` into the visible terminal — you press Enter`,
+    installTip: (command: string, sudo: boolean) =>
+      sudo
+        ? `Fill \`${command}\` into the visible terminal — you type the sudo password and press Enter`
+        : `Fill \`${command}\` into the visible terminal — you press Enter`,
+    installThenRecompile: "Compile again once it is installed (nothing recompiles on its own)",
+    packageLookingUp: "Looking up the package name…",
+    packageAlreadyInstalled:
+      "This machine can already find that file — the log may be stale, or the engine uses a different TeX tree",
+    packageNoTool: "tlmgr / mpm was not found, so the owning package cannot be looked up",
+    packageUnknown: (file: string) =>
+      `Unknown package — nothing in your TeX distribution claims ${file}; search for that file name`,
     handToAgent: "Hand to agent",
     handToAgentTip: "Add it to the quote box; nothing is sent until you send it",
     quoteError: "Compile error",
     quoteWarning: "Compile warning",
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
+    quotePending: "Waiting for install confirmation",
     /* ---------- SyncTeX (source ↔ PDF) ---------- */
     syncNoPdf: "No PDF yet — compile once, then jump.",
     syncNoSynctex: "This PDF has no SyncTeX data. Compile it again to enable jumping (the build passes -synctex for you).",

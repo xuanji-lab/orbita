@@ -9,7 +9,7 @@
  *
  * 纯函数、无 IO：run.ts 负责按 outDir 拼 .log 路径并读出来，这里只认文本。
  */
-import { LATEX_MAX_ISSUES, type LatexIssue, type LatexIssueKind } from "../../shared/latex.ts";
+import { LATEX_MAX_ISSUES, miktexPendingOf, type LatexIssue, type LatexIssueKind } from "../../shared/latex.ts";
 
 export interface ParsedLatexLog {
   errors: LatexIssue[];
@@ -74,6 +74,9 @@ function normalizeFile(value: string): string {
 function classify(message: string, prefixed: boolean): LatexIssueKind | "info" | null {
   if (message.startsWith("!")) return "error";
   if (/^(?:Overfull|Underfull) \\[hv]box/.test(message)) return "layout";
+  // MiKTeX 在等用户确认安装 / 造字：不是 TeX 的错，但也不能丢——界面要把它
+  // 单独说成「引擎在等你确认」，而不是让用户对着卡住的编译条猜
+  if (miktexPendingOf(message)) return "warning";
   // 告警先于「带前缀即错」的兑底：`./main.tex:12: LaTeX Warning: …` 也是带前缀的
   if (/^(?:LaTeX|LaTeX Font|Package\s+\S+|Class\s+\S+|pdfTeX|XeTeX|LuaTeX)\s+(?:Warning|warning):/.test(message)) {
     return "warning";

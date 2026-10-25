@@ -63,6 +63,10 @@ const ALLOWED_LATIN = new Set([
   "latexmk",
   "tlmgr",
   "tex",
+  // 缺宏包安装：MiKTeX 的包管理器与提权命令（用户照抄进终端的字面量）
+  "mpm",
+  "MiKTeX",
+  "sudo",
   // SyncTeX 双向定位：命令名与它的产品名（用户照抄 / 发行版自带的写法）
   "SyncTeX",
   "synctex",

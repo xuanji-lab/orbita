@@ -2938,6 +2938,9 @@ body {
 }
 .latex-problem {
   display: flex;
+  /* 窄面板（右栏 340）里动作组挤不下就换到下一行、靠右钉住（.row-trailing 的 margin-left
+     在换行后仍然生效）；不换行的话消息列只剩一百来像素，包名会被拆成三行 */
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 6px;
   padding: 5px var(--space-2);
@@ -2959,9 +2962,31 @@ body {
   color: var(--color-text-tertiary);
 }
 .latex-problem-msg {
-  flex: 1 1 auto;
+  display: flex;
+  /* 基线 160：包名（ctexart.cls）+ 「缺少宏包」四个字在最窄的面板里也占不到两行 */
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* 缺包行的第二行：反查进度 / 未知包 / 本机已有——弱一档的小字，不抢主行 */
+.latex-problem-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 点过「在终端安装」后的提示条：住在文件面板体顶部（编译条只在有打开的标签时出现，
+   而切到终端再回来标签已经重置——提示不能跟着它一起消失） */
+.latex-install-notice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
 }
 .latex-problem-acts {
   display: inline-flex;

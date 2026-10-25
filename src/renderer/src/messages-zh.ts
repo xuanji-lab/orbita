@@ -1625,15 +1625,26 @@ export const zh: Messages = {
     noProblems: "无问题",
     errorCount: (n) => `${n} 个错误`,
     warningCount: (n) => `${n} 个警告`,
+    pendingCount: (n) => `${n} 个等待确认`,
     missingPackage: (name) => `缺少宏包 ${name}`,
+    engineWaiting: "引擎在等你确认安装，确认后编译才会继续",
     installInTerminal: "在终端安装",
-    installTip: (command) => `把 \`${command}\` 填进可见终端，回车由你按`,
+    installTip: (command, sudo) =>
+      sudo
+        ? `把 \`${command}\` 填进可见终端；sudo 密码由你自己输入，回车由你按`
+        : `把 \`${command}\` 填进可见终端，回车由你按`,
+    installThenRecompile: "装好后再编译一次（不会自动重编）",
+    packageLookingUp: "正在反查包名…",
+    packageAlreadyInstalled: "本机已能定位到这个文件：日志可能是旧的，或引擎用的是另一套 TeX 树",
+    packageNoTool: "没找到 tlmgr / mpm，无法反查所属宏包",
+    packageUnknown: (file) => `未知包：没查到 ${file} 属于哪个包，请在 TeX 发行版里搜索这个文件名`,
     handToAgent: "交给智能体",
     handToAgentTip: "放进输入框的引用，发送由你决定",
     quoteError: "编译错误",
     quoteWarning: "编译告警",
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
+    quotePending: "等待确认安装",
     /* ---------- SyncTeX 双向定位（源码 ↔ PDF） ---------- */
     syncNoPdf: "还没有 PDF——先编译一次再定位。",
     syncNoSynctex: "这份 PDF 里没有 SyncTeX 数据。重新编译一次就能跳转（编译时会自动带上 -synctex）。",

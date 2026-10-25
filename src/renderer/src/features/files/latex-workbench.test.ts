@@ -11,11 +11,11 @@ import {
   formatDuration,
   formatElapsed,
   groupLatexIssues,
-  installCommand,
   isFailedStatus,
   issueLocation,
   latexBarState,
   missingPackageOf,
+  packageLabel,
   pdfStale,
   shortcutLabel,
 } from "./latex-workbench.ts";
@@ -105,9 +105,16 @@ describe("missingPackageOf", () => {
     assert.equal(missingPackageOf("Font T1-xxx not found"), null);
     assert.equal(missingPackageOf("LaTeX Warning: Citation `lewis2020' undefined"), null);
   });
+});
 
-  test("安装命令按包名拼（不改写用户终端）", () => {
-    assert.equal(installCommand("ctex"), "tlmgr install ctex");
+describe("packageLabel", () => {
+  test("反查命中就用包名（文件名不是包名）", () => {
+    assert.equal(packageLabel("ctexart.cls", "ctex"), "ctex");
+  });
+
+  test("没命中就如实显示文件名（不把文件名冒充成包名）", () => {
+    assert.equal(packageLabel("doesnotexistxyz.sty", null), "doesnotexistxyz.sty");
+    assert.equal(packageLabel("booktabs.sty", ""), "booktabs.sty");
   });
 });
 
@@ -151,9 +158,23 @@ describe("groupLatexIssues", () => {
       warnings: [],
       layout: [],
       packages: [],
+      pending: [],
       errorCount: 0,
       warningCount: 0,
     });
+  });
+
+  test("MiKTeX 在等确认的行单独成组，不算告警（编译卡住 ≠ 告警）", () => {
+    const groups = groupLatexIssues(
+      [],
+      [
+        issue("warning", null, null, "miktex-makepk: The package foo wants to be installed."),
+        issue("warning", "main.tex", 4, "Citation 'x' undefined"),
+      ],
+    );
+    assert.equal(groups.pending.length, 1);
+    assert.equal(groups.warnings.length, 1);
+    assert.equal(groups.warningCount, 1);
   });
 });
 

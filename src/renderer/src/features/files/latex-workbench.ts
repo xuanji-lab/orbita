@@ -6,6 +6,9 @@
  * PDF mtime、日志条目）由主进程给，这里只决定「按钮该是什么样」。
  */
 import type { LatexIssue, LatexStatus } from "@shared/latex";
+// 值导入走相对路径（带 .ts）：`node --test` 不认 vite / tsconfig 的 @shared 别名，
+// 类型导入会被剥掉所以无所谓，函数导入会在加载时就找不到模块。
+import { miktexPendingOf } from "../../../../shared/latex.ts";
 
 /**
  * 编译条的显示态（原型场景 1 / 3）：
@@ -71,7 +74,9 @@ export interface LatexIssueGroups {
   layout: LatexIssue[];
   /** 缺宏包单列：它有自己的动作（在终端安装） */
   packages: MissingPackage[];
-  /** 计数：错误含缺宏包，告警不含版式 */
+  /** MiKTeX 在等用户确认安装（编译看起来卡住了）；与缺宏包分开说 */
+  pending: LatexIssue[];
+  /** 计数：错误含缺宏包，告警不含版式；pending 两边都不算 */
   errorCount: number;
   warningCount: number;
 }
@@ -122,11 +127,18 @@ export function groupLatexIssues(
     warnings: [],
     layout: [],
     packages: [],
+    pending: [],
     errorCount: 0,
     warningCount: 0,
   };
   const seenPackages = new Set<string>();
   const take = (issue: LatexIssue): void => {
+    // 「引擎在等你确认」先认领：这类行的原文常常也带着别的关键词，混进告警里
+    // 就失去了「卡住不是崩了」那层意思
+    if (miktexPendingOf(issue.message)) {
+      groups.pending.push(issue);
+      return;
+    }
     const missing = missingPackageOf(issue.message);
     if (missing !== null) {
       if (seenPackages.has(missing.packageName)) return;
@@ -149,6 +161,7 @@ export function groupLatexIssues(
   groups.errors = dedupe(groups.errors);
   groups.warnings = dedupe(groups.warnings);
   groups.layout = dedupe(groups.layout);
+  groups.pending = dedupe(groups.pending);
   groups.errorCount = groups.errors.length + groups.packages.length;
   groups.warningCount = groups.warnings.length;
   return groups;
@@ -186,7 +199,11 @@ export function issueLocation(issue: { file: string | null; line: number | null 
   return issue.line === null ? issue.file : `${issue.file}:${issue.line}`;
 }
 
-/** `tlmgr install <pkg>`；macOS / Linux 的 BasicTeX 装在系统目录才需要 sudo（由终端里的人自己加） */
-export function installCommand(packageName: string): string {
-  return `tlmgr install ${packageName}`;
+/**
+ * 缺包的显示名：反查命中了就用包名，没命中就**如实显示文件名**。
+ * 界面的「未知包」文案单独说，不在这里把文件名冒充成包名。
+ */
+export function packageLabel(missing: string, packageName: string | null): string {
+  if (packageName !== null && packageName !== "") return packageName;
+  return missing;
 }
