@@ -145,4 +145,16 @@ describe("parseLatexLog —— 边界", () => {
     assert.equal(parsed.warnings.length, 3);
     assert.ok(parsed.warnings.every((issue) => issue.kind === "warning"));
   });
+
+  test("MiKTeX 在等用户确认的行不能丢（抽屉靠它说「引擎卡在等你」）", () => {
+    const parsed = parseLatexLog(
+      [
+        "miktex-makepk: The package foo wants to be installed.",
+        "Do you want to install the package `foo'?",
+        "! LaTeX Error: File `foo.sty' not found.",
+      ].join("\n"),
+    );
+    assert.equal(parsed.errors.length, 1);
+    assert.equal(parsed.warnings.length, 2);
+  });
 });

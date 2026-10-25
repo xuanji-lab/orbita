@@ -758,6 +758,18 @@ export function App() {
    */
   const [pendingTerminalInput, setPendingTerminalInput] = useState<{ text: string; token: number } | null>(null);
   const terminalInputTokenRef = useRef(0);
+  /**
+   * 缺宏包「在终端安装」之后的提示（文件面板顶部一行）。住在 App 而不是文件面板：点安装
+   * 会把右栏切到终端，文件面板随之卸载——提示放面板里会正好在最该出现时丢掉。
+   * 下一次编译开始时清掉（装没装好，编译那一下会说明）。
+   */
+  const [latexInstallNotice, setLatexInstallNotice] = useState(false);
+  // 换会话 / 换工作区就不再是「刚在这个项目里装了包」——提示跟着那一次编译走
+  const latexNoticeScope = `${session.sessionId ?? ""}|${session.workspaceId ?? ""}`;
+  useEffect(() => {
+    setLatexInstallNotice(false);
+  }, [latexNoticeScope]);
+
   const runInTerminal = useCallback((text: string): void => {
     terminalInputTokenRef.current += 1;
     setPendingTerminalInput({ text, token: terminalInputTokenRef.current });
@@ -1351,6 +1363,9 @@ export function App() {
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
                 fileOpen={fileOpenRequest}
                 onRunInTerminal={runInTerminal}
+                onPackageInstalled={() => setLatexInstallNotice(true)}
+                onCompileRun={() => setLatexInstallNotice(false)}
+                installNotice={latexInstallNotice}
                 paperLayout={paperMode}
                 autoSplit={autoSplit}
                 onTogglePaperLayout={togglePaperLayout}

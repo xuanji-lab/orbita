@@ -14,6 +14,8 @@ import {
   type LatexForwardRequest,
   type LatexProjectOutcome,
   type LatexProbeResult,
+  type LatexPackageQuery,
+  type LatexResolvedPackage,
   type LatexReverseOutcome,
   type LatexReverseRequest,
   type LatexRunOutcome,
@@ -39,4 +41,7 @@ export const latexApi = {
   /** PDF 页面坐标 → 源码行（SyncTeX 反向） */
   synctexReverse: (req: LatexReverseRequest): Promise<LatexReverseOutcome> =>
     ipcRenderer.invoke(latexChannels.synctexReverse, req),
+  /** 缺的文件名 → 发行版包名与安装命令（未知包时 packageName/command 为 null） */
+  packages: (req: LatexPackageQuery): Promise<LatexResolvedPackage[]> =>
+    ipcRenderer.invoke(latexChannels.packages, req),
 } as const;
