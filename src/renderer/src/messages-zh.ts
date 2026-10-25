@@ -1730,6 +1730,13 @@ export const zh: Messages = {
     quoteMissingPackage: "缺少宏包",
   },
 
+  /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
+  paper: {
+    chatTitle: "对话",
+    toPaper: "稿件为主：源码和 PDF 并排，对话收到右边一栏",
+    toChat: "回到对话为主",
+  },
+
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
   editor: {
     aria: "LaTeX 源码编辑器",

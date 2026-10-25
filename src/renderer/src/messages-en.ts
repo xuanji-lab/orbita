@@ -1883,6 +1883,13 @@ export const en = {
     quoteMissingPackage: "Missing package",
   },
 
+  /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
+  paper: {
+    chatTitle: "Chat",
+    toPaper: "Paper first — sources and PDF side by side, chat moves to the right column",
+    toChat: "Back to chat first",
+  },
+
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
   editor: {
     aria: "LaTeX source editor",

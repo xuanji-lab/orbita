@@ -937,6 +937,58 @@ body {
   height: 100%;
 }
 
+/*
+ * ===== 布局 B「稿件为主」（features/files/paper-layout.ts） =====
+ * 对话卡的位置换成稿件工作台：DOM 顺序不变（主槽 = 对话、右栏位 = 文件面板），
+ * 用 row-reverse 把两者**视觉上对调**——组件实例留在原地，切布局时不重挂编辑器
+ * 与对话（未保存的输入、滚动位置都还在）。分栏线从面板左缘改到对话卡的左缘。
+ * 对话栏宽由 App 注入 --paper-chat-w（常量在 paper-layout.ts）。
+ */
+.pane[data-layout="paper"] {
+  flex-direction: row-reverse;
+}
+.pane[data-layout="paper"] .pane-main {
+  flex: 0 0 var(--paper-chat-w, 340px);
+  width: var(--paper-chat-w, 340px);
+  min-width: 0;
+  border-left: 1px solid var(--color-border-default);
+}
+.pane[data-layout="paper"] .right-panel-slot.open {
+  flex: 1 1 auto;
+  width: auto;
+  border-left: 0;
+}
+.pane[data-layout="paper"] .right-panel-slot .right-panel-slot-inner {
+  width: 100%;
+}
+
+/* 页头画在卡里（RightPanelFrame 的 inline，布局 B）：内容与工具栏胶囊同款配方，
+ * 高度对齐全站胶囊；下面是编译条 / 文件内容 */
+.panel-inline-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--titlebar-capsule);
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-sizing: border-box;
+}
+.panel-inline-head button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+}
+.panel-inline-head .cap-pt {
+  padding: 0 8px 0 2px;
+}
+.panel-inline-head .cap-tab {
+  padding: 0 var(--space-2);
+  width: auto;
+}
+
 /* 竖线即分界；把手骑在竖线上 */
 .right-panel-slot-resizer {
   position: absolute;
@@ -3149,6 +3201,28 @@ body {
   min-height: 0;
   min-width: 0;
   height: 100%;
+}
+
+/*
+ * 稿件区：单标签（一块）与「源码 + PDF 并排」（两块）。左块在两种形态下都是
+ * **同一个组件位置**（外面这层容器只是从「撑满」变成「两块对分」），切布局不会
+ * 让编辑器重挂。并排的两块各拿一半，中间一条发丝线。
+ */
+.files-panel-panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.files-panel-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.files-panel-panes.split .files-panel-pane + .files-panel-pane {
+  border-left: 1px solid var(--color-border-subtle);
 }
 
 /* ---------- 论文工作台：编译条 + 问题抽屉（LaTeX 项目） ----------

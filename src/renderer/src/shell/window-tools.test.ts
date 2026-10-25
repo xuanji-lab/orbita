@@ -27,6 +27,7 @@ import {
   TRAFFIC_LIGHT_Y,
   conversationColumn,
   leftCapsuleX,
+  paperColumns,
   rightEdge,
   sessionCapsule,
 } from "./window-tools.ts";
@@ -350,4 +351,22 @@ test("会话胶囊豁免拖拽：拖拽区收不到悬停，铅笔 / 复制键�
   const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
   assert.match(css, /\.cap-sess \{[^}]*-webkit-app-region:\s*no-drag/s, "整颗会话胶囊 no-drag，:hover 才会在标题 / 短 id 上成立");
   assert.match(css, /\.toolbar-capsule:hover \.cap-hov,\s*\.toolbar-capsule:focus-within \.cap-hov \{\s*visibility:\s*visible/, "键盘焦点进胶囊时也显形");
+});
+
+test("布局 B 的横向分区：对话栏钉右缘 340，工作台吃掉其余；侧栏展开时工作台从侧栏右缘起", () => {
+  // 1920 窗口、侧栏收起：pane 右缘 = 1920 − 12 − 32 − 12 = 1864，对话栏 = 1524..1864
+  const wide = paperColumns({ windowWidth: 1920, sidebarCollapsed: true, sidebarWidth: 288 });
+  assert.deepEqual(wide.chat, { left: 1524, right: 1864 });
+  assert.deepEqual(wide.workbench, { left: 12, right: 1524 });
+
+  // 侧栏展开：工作台从侧栏右缘 + 留白起（对话栏宽度不变）
+  const withSidebar = paperColumns({ windowWidth: 1920, sidebarCollapsed: false, sidebarWidth: 288 });
+  assert.equal(withSidebar.workbench.left, 12 + 288 + 12);
+  assert.equal(withSidebar.chat.right - withSidebar.chat.left, 340);
+  assert.equal(withSidebar.workbench.right, withSidebar.chat.left);
+
+  // 窄窗口：对话栏不越过 pane 左缘（workbench 宽度不为负）
+  const narrow = paperColumns({ windowWidth: 700, sidebarCollapsed: true, sidebarWidth: 288 });
+  assert.ok(narrow.workbench.right >= narrow.workbench.left);
+  assert.equal(narrow.chat.right - narrow.chat.left <= 340, true);
 });
