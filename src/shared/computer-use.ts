@@ -150,6 +150,18 @@ export const computerUseGuestCommands = {
    * 所以这条路径不占桌面租约（见 isWindowScreenshotRequest）。
    */
   winShot: "win-shot",
+  /**
+   * 列出某个窗口里的可交互控件（桥 0.10.0）：`{hwnd?, title?, maxItems?}`。只读、不抢焦点。
+   * 走 UI Automation（UIA）而不是像素：UIA 直接读那个窗口的控件树，不需要它在前台。
+   * 回执见 ComputerUseUiaListResult。
+   */
+  uiaList: "uia-list",
+  /**
+   * 对一个控件执行 UIA 模式（桥 0.10.0）：`{hwnd?, title?, ref?, name?, action, value?, timeoutMs?}`。
+   * action = invoke / setValue / selection / focus。**不抢前台**（桥把 IUIAutomation2 的
+   * AutoSetFocus 置 false），所以这条路径不占桌面租约（见 isUiaRequest）。
+   */
+  uiaAct: "uia-act",
   /** 移动指针并按键（SendInput 绝对坐标，沙箱原生物理像素） */
   click: "click",
   /** 逐字符 Unicode 注入（KEYEVENTF_UNICODE，中文可用），落在当前焦点窗口 */
@@ -652,6 +664,135 @@ export type ComputerUseWindowListResult =
   | { ok: true; windows: ComputerUseWindowInfo[] }
   | { ok: false; error: string };
 
+// ── UI Automation 车道（uia-list / uia-act，桥 0.10.0）──────────────────────
+//
+// 为什么需要它：像素输入（click / type / key / scroll）走 SendInput，那是**全局输入**——
+// 抢焦点、打到当前前台窗口，多个会话只能靠 desktop:exclusive 串行。UIA 换了一条入口：
+// 针对某个窗口/控件直接调它的模式（InvokePattern / ValuePattern / SelectionItemPattern），
+// 不需要那个窗口在前台。于是「在后台窗口里点一个按钮」不再需要独占整块桌面。
+//
+// 三个必须处理的坑（实现都在 guest-bridge/Uia.cs）：
+//   ① IUIAutomation 默认 AutoSetFocus = true：一调用模式就把目标窗口带到前台。宿主侧
+//      无法代关，所以桥在 COM 层把 IUIAutomation2 的 AutoSetFocus 置 false 并**读回确认**；
+//      关不掉时（极老的系统 / QI 失败）回执里的 autoSetFocus 为 true，宿主会把「可能抢焦点」
+//      写进给模型的正文。
+//   ② UIA 调用会阻塞在跨进程消息上（目标进程忙就卡住），而这是 CPU 级阻塞，没有超时 API
+//      能打断。桥把每次 UIA 调用放进一条独立的 STA 线程，等 COMPUTER_USE_UIA_TIMEOUT_MS
+//      就放弃那条线程（后台线程，不拖住桥也不拖住命令循环），下一次命令起一条新的。
+//   ③ 不支持模式的控件只能退回像素输入。失败文案必须点名它支持哪些模式，并告诉模型
+//      「改用 computer_click / computer_type 的像素路径」——它看不见 UI，不会自己想到。
+
+/**
+ * UIA 动作。**这是动作而不是像素坐标**：invoke = InvokePattern（按钮/链接/菜单项），
+ * setValue = ValuePattern（输入框/文档），selection = SelectionItemPattern（列表/标签项），
+ * focus = Element.SetFocus（唯一一个**有意**移动键盘焦点的动作，模型点了它才做）。
+ *
+ * 「点击」不在这里：UIA 的 InvokePattern 是「执行这个控件的默认动作」，比在坐标上按下
+ * 更稳（不依赖控件位置、不被遮挡影响）。需要真的按坐标就仍用 computer_click。
+ */
+export type ComputerUseUiaAction = "invoke" | "setValue" | "selection" | "focus";
+
+/**
+ * uia-list 的一项：一个**可动作**的控件。字段名与 guest 的 UiaItemInfo 序列化结果一一对应。
+ * 坐标是**屏幕物理像素**（窗口被移动到哪都行，模型不需要它；它给的是可读定位信息）。
+ */
+export interface ComputerUseUiaItem {
+  /** 稳定序号（同一窗口内按遍历顺序从 1 起）。uia-act 用它或 name 指定目标 */
+  ref: number;
+  /** 控件的可读名字（UIA Name；空串只在有 automationId 时出现） */
+  name: string;
+  /** 控件类型的小写名（button / edit / list-item / tab-item / menu-item…） */
+  controlType: string;
+  /** 开发者给控件的 id（浏览器里常空，Win32 应用里常是控件 id） */
+  automationId: string;
+  /** 窗口类名（诊断用） */
+  className: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 这个控件实际支持的动作（只列本车道能执行的三条：invoke / value / selectionItem）。focus 恒可用，不列 */
+  patterns: string[];
+  enabled: boolean;
+  /** 控件不在可见区域（滚动到它 / 切到那个标签页之后才可动作） */
+  offscreen: boolean;
+}
+
+/** uia-list 回执里的窗口信息（从 UIA 根元素读，读不到时用 Win32 标题兜底） */
+export interface ComputerUseUiaWindowInfo {
+  title: string;
+  className: string;
+}
+
+/**
+ * uia-list 的**回执载荷**（成功那一支）。宿主侧控制器把它包成带 ok 的联合类型
+ * （ComputerUseUiaListResult），与按窗口截图同形。
+ */
+export interface ComputerUseUiaListReply {
+  hwnd: number;
+  window: ComputerUseUiaWindowInfo;
+  items: ComputerUseUiaItem[];
+  /** 命中的控件超过 maxItems，后面的没回（模型可以调大 maxItems，或者按 name 直接动作） */
+  truncated: boolean;
+}
+
+/** uia-act 的回执载荷（成功那一支） */
+export interface ComputerUseUiaActReply {
+  hwnd: number;
+  /** 执行的动作（与请求里的 perform 一致；桥回显便于日志对号） */
+  action: ComputerUseUiaAction;
+  /** 真正用到的模式：invoke / value / selectionItem / focus（focus 动作没有模式，回 focus） */
+  usedPattern: string;
+  /** 目标控件的可读名字 */
+  name: string;
+  controlType: string;
+  /** 这次动作**是否**请求了键盘焦点。只有 action=focus 才是 true */
+  focused: boolean;
+  /**
+   * AutoSetFocus 是否已成功关掉。true = 已关（不会因为这次调用把窗口带到前台）；
+   * false = 关不掉（降级），这一次可能抢了焦点。模型需要知道这件事。
+   */
+  autoSetFocus: boolean;
+  /**
+   * AutoSetFocus 关不掉时桥给的原因（人话）。缺省 = 已关掉，没有这句。
+   * 不是错误：动作照样做了，只是这一次可能抢了焦点，模型要被告知。
+   */
+  autoSetFocusWarning?: string;
+  elapsedMs: number;
+}
+
+/** uia-list 的完整回执（控制器层：桥的人话原样放在 error 里，不改写） */
+export type ComputerUseUiaListResult =
+  | ({ ok: true } & ComputerUseUiaListReply)
+  | { ok: false; error: string };
+
+/** uia-act 的完整回执（同上） */
+export type ComputerUseUiaActResult =
+  | ({ ok: true } & ComputerUseUiaActReply)
+  | { ok: false; error: string };
+
+/**
+ * UIA 调用的看门狗上限（毫秒，桥的默认值；guest-bridge/Uia.cs 里有同一个数字）。
+ *
+ * 5 秒不是「一条命令的预算」（那条是 GUEST_COMMAND_TIMEOUT_MS = 45s，要容纳文件协议
+ * 的传播），而是**跨进程 UIA 调用的上限**：本机控件树的一轮读取是毫秒级，5 秒还没回来
+ * 就说明目标进程忙着 / 卡在模态框上，再等也不会好。超时后桥放弃那条 STA 线程、继续服务
+ * 后续命令——所以模型看到的是一句「目标窗口没有响应」，而不是整条桥没反应。
+ */
+export const COMPUTER_USE_UIA_TIMEOUT_MS = 5_000;
+
+/**
+ * 这条请求是不是走 UIA 车道（uia-list / uia-act）。
+ *
+ * 宿主拿它决定**要不要桌面租约**——与按窗口截图同一条理由，只是方向相反：窗口截图是
+ * 「只读也不占」，UIA 是「**写也不占**」。UIA 的模式调用直接进目标控件，不需要那个窗口在前台、
+ * 不移动前台焦点（AutoSetFocus 被关掉），所以两个会话可以各自驱动各自的窗口。
+ * 像素输入（click / type / key / scroll）仍然必须持 desktop:exclusive：它们共用唯一一个前台焦点。
+ */
+export function isUiaRequest(request: ComputerUseToolRequest): boolean {
+  return request.action === "uia-list" || request.action === "uia-act";
+}
+
 // ── agent 的像素工具组（PR2）───────────────────────────────────────────
 
 /** 鼠标键。缺省 left——绝大多数操作是左键 */
@@ -679,6 +820,27 @@ export type ComputerUseToolRequest =
   | { action: "type"; text: string }
   | { action: "key"; key: string }
   | { action: "scroll"; x: number; y: number; deltaY: number }
+  // ── UIA 车道（桥 0.10.0）：按控件动作，不按坐标、不抢前台 ──────────────
+  //
+  // 字段名与 guest 命令一致（window = hwnd 数字或标题片段，ref 来自上一次 uia-list）。
+  // **不占桌面租约**（isUiaRequest）：这是整个车道的意义，别在接线层又把它塞进队列。
+  /** 列出窗口里的可动作控件。只读、不抢焦点 */
+  | { action: "uia-list"; window?: string | number; maxItems?: number }
+  /**
+   * 对一个控件执行 UIA 模式。ref 与 name 至少给一个（ref 优先，且必须是同一窗口里
+   * uia-list 回执的那个序号）；perform 是动作，不是像素坐标。
+   */
+  | {
+      action: "uia-act";
+      window?: string | number;
+      ref?: number;
+      name?: string;
+      perform: ComputerUseUiaAction;
+      /** setValue 的新值（可以直接清空：value: ""）；其余动作忽略 */
+      value?: string;
+      /** 桥的看门狗上限（缺省 COMPUTER_USE_UIA_TIMEOUT_MS） */
+      timeoutMs?: number;
+    }
   // ── sandbox_* 浏览器工具（PR3）。**动作名带 `sandbox-` 前缀**：像素组的
   // screenshot / click / type 已经占用了那几个动词，同一个联合里不能重名。
   // 每个动作由主进程翻成一条 cdp-* guest 命令（一次文件往返）。
