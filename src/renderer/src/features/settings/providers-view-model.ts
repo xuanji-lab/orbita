@@ -2,11 +2,14 @@
  * ProvidersView 的纯函数层 —— 弹窗解析 / 费率合并 / 复制 id / 行简报。
  * UI 状态留在组件里，这里只放有边界要守的换算；node --test 可直接加载。
  */
-import type { ModelDefaults } from "@shared/model-defaults";
+import type { CatalogPreference, ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
+import { THINKING_LEVELS, type ThinkingLevel } from "../../../../shared/thinking.ts";
 import {
   KNOWN_PROVIDERS,
+  KNOWN_PROVIDER_GROUPS,
+  catalogPreferenceOf,
   knownProviderGroup,
   knownProviderOf,
   type KnownProvider,
@@ -105,6 +108,57 @@ export function kindOf(provider: ProviderDto): string {
 }
 
 /**
+ * 一个已配置 provider 查型号参数时的偏好（去哪家目录查、协议、目录说不说了算）。
+ * 模型菜单、底栏思考档菜单、子会话默认档共用——与主进程装配会话载荷同一个来源
+ * （catalogPreferenceOf），菜单里能选的档就是会话里真能发出去的档。
+ */
+export function modelPreferenceOf(provider: ProviderDto): CatalogPreference {
+  return catalogPreferenceOf(knownProviderOf(provider), provider.endpoint.api);
+}
+
+/** 按 id 找 provider 再取偏好；找不到（已删的服务商、列表还没加载）就按型号的通用口径答 */
+export function modelPreferenceById(providers: readonly ProviderDto[], providerId: string): CatalogPreference {
+  const provider = providers.find((item) => item.id === providerId);
+  return provider === undefined ? {} : modelPreferenceOf(provider);
+}
+
+/**
+ * 用户在型号弹窗里给这家的这个型号勾的思考档（ModelDecl.thinkingLevels）；没勾 = 继承，
+ * 返回 undefined。与 modelPreferenceById 成对传给 modelThinkingLevels：底栏菜单、新任务起档、
+ * 打开旧会话纠档与子会话默认档都经过它，会话注册读的是同一份声明。
+ */
+export function declaredThinkingLevels(
+  providers: readonly ProviderDto[],
+  providerId: string,
+  modelId: string,
+): ThinkingLevel[] | undefined {
+  return providers
+    .find((item) => item.id === providerId)
+    ?.models.declared.find((model) => model.id === modelId)?.thinkingLevels;
+}
+
+/**
+ * 型号弹窗里从「继承」切到「自定义」时预先勾上的档：继承来的那几档（用户多半只是去掉
+ * 网关不支持的几档）；继承的也不知道（目录与白名单都没说）就全勾，由用户去掉。
+ */
+export function customThinkingSeed(inherited: readonly ThinkingLevel[] | null): ThinkingLevel[] {
+  return [...(inherited ?? THINKING_LEVELS)];
+}
+
+/**
+ * 勾 / 去勾一档，结果按词汇表顺序。**最后一档去不掉**（原样返回）：一档都不剩的型号
+ * 菜单无档可选、会话无档可夹；想回到目录口径走「继承」，不靠「全不勾」暗示
+ * （用户 2026-10-25 定：锁住最后一档，不自动回继承——状态不该被悄悄换掉）。
+ */
+export function toggleThinkingLevel(checked: readonly ThinkingLevel[], level: ThinkingLevel): ThinkingLevel[] {
+  if (checked.includes(level)) {
+    if (checked.length === 1) return [...checked];
+    return THINKING_LEVELS.filter((item) => item !== level && checked.includes(item));
+  }
+  return THINKING_LEVELS.filter((item) => item === level || checked.includes(item));
+}
+
+/**
  * 模型卡片左栏一个厂商格的渲染内容：一律厂商 / 协议图标。
  *
  * 取代原 `railShortNames` 的文字短名（DS / zhipu / STEP…）。2026-10-19 方案丁原本
@@ -123,6 +177,43 @@ export interface RailVendorCell {
 
 export function railVendorCell(provider: ProviderDto): RailVendorCell {
   return { kindId: knownProviderOf(provider).id, label: provider.displayName };
+}
+
+/**
+ * 模型卡片左栏的选中态。
+ *
+ * 用 provider 实例 id，不用 kind：同一个 kind 可以有两个实例（两把 key 的自建网关），
+ * 而右栏列的是实例。星标是**跨厂商**的一维，所以自成一档，不跟厂商交集
+ * （交集会造出空集：星标里恰好没有某家的模型时，用户对着两格都亮着的地方看到空卡片）。
+ * 住在这里而不是 model-menu.tsx：打开时的初始值要能被 node --test 直接测（.tsx 加载不了）。
+ */
+export type ModelScope =
+  | { kind: "all" }
+  | { kind: "starred" }
+  | { kind: "provider"; id: string };
+
+/** 「全部」在状态里的值。没有当前型号时的初始态，也是搜索时的复位目标 */
+export const MODEL_SCOPE_ALL: ModelScope = { kind: "all" };
+
+/**
+ * 模型卡片**每次打开**时左栏落在哪一格：当前型号所属的那家服务商。
+ *
+ * 同一个型号常挂在好几家下（Kimi K3 在 Kimi Code、OpenCode、基元律动都有），芯片只写型号名，
+ * 用户靠这张卡认「现在走的是哪家」和「这家还有什么可选」——停在「全部」时这两件事都要
+ * 自己去翻（2026-10-25 用户：「model 选择卡不会自动定位到那个 provider 和那个模型」）。
+ *
+ * 没有当前型号（新任务还没选）、或那家已不在可用清单里（被删 / 没 key）：回「全部」。
+ * 只看服务商在不在、不要求它仍声明着这个型号——型号被删时「全部」里同样没有打勾的行，
+ * 而落在那家至少还回答了「这家还有什么」。
+ */
+export function openingModelScope(
+  providers: readonly ProviderDto[],
+  selected: { providerId: string } | null,
+): ModelScope {
+  if (selected === null) return MODEL_SCOPE_ALL;
+  return providers.some((p) => p.id === selected.providerId)
+    ? { kind: "provider", id: selected.providerId }
+    : MODEL_SCOPE_ALL;
 }
 
 /**
@@ -189,10 +280,30 @@ export function compactTokens(n: number): string {
 
 /**
  * 客户端会接在 Base URL 后面的路径——显示成 URL 框尾的灰字，代替原来那句
- * 「The client appends /chat/completions」。两种协议各一个口径，与 pi 的请求路径一致。
+ * 「The client appends /chat/completions」。每种协议一个口径，与 pi 的请求路径一致
+ * （Gemini 原生协议接的是 `/models/<型号>:streamGenerateContent`，型号随会话变，只写到 /models）。
  */
 export function urlSuffix(api: ProviderApi): string {
-  return api === "anthropic-messages" ? "/v1/messages" : "/chat/completions";
+  if (api === "anthropic-messages") return "/v1/messages";
+  if (api === "openai-responses") return "/responses";
+  // pi 的 Codex 客户端在 baseUrl 后接 /codex/responses（openai-codex-responses.ts 的 resolveCodexUrl）
+  if (api === "openai-codex-responses") return "/codex/responses";
+  if (api === "google-generative-ai") return "/models";
+  return "/chat/completions";
+}
+
+/**
+ * 卡片底行的预填地址：去掉协议头与尾斜杠，**保留路径**。同一主机上常挂着几条不同的接入
+ * （火山方舟的 /api/v3 与 /api/plan、智谱的 /api/paas/v4 与 /api/anthropic），只写主机
+ * 的话几张卡底行一模一样，看不出区别。不是合法 URL 的原样返回。
+ */
+export function cardAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname}`.replace(/\/+$/, "");
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -202,12 +313,14 @@ export function urlSuffix(api: ProviderApi): string {
  * 草稿（`revealedKey`），原样未动也不算改动，改了一个字才算。
  */
 export function connectionDirty(
-  draft: { displayName: string; baseUrl: string; apiKey: string },
-  saved: { displayName: string; baseUrl: string },
+  draft: { displayName: string; baseUrl: string; apiKey: string; api?: string },
+  saved: { displayName: string; baseUrl: string; api?: string },
   revealedKey: string | null,
 ): boolean {
   if (draft.displayName !== saved.displayName) return true;
   if (draft.baseUrl !== saved.baseUrl) return true;
+  // 换了接入协议：Kimi 的 Chat 与 Responses 同在 /v1，地址不变也算改动
+  if (draft.api !== undefined && saved.api !== undefined && draft.api !== saved.api) return true;
   return draft.apiKey !== "" && draft.apiKey !== revealedKey;
 }
 
@@ -218,7 +331,7 @@ export interface ProviderCard {
 }
 
 /**
- * 卡片墙按分区（API / 套餐 / 自定义）排好、过滤好的内容。纯函数：搜索与「仅显示已添加」
+ * 卡片墙按分区（API / 套餐 / 浏览器登录 / 自定义）排好、过滤好的内容。纯函数：搜索与「仅显示已添加」
  * 都在这里判，组件只管画。
  *
  * - 实例按 `knownProviderOf` 归卡：同一家的第二个实例（deepseek-2）也归 DeepSeek，
@@ -252,8 +365,7 @@ export function providerCards(
       ];
       return haystack.some((text) => text.toLowerCase().includes(query));
     });
-  const groups: KnownProviderGroup[] = ["api", "plan", "custom"];
-  return groups
+  return KNOWN_PROVIDER_GROUPS
     .map((group) => ({ group, cards: cards.filter((card) => knownProviderGroup(card.known) === group) }))
     .filter((entry) => entry.cards.length > 0);
 }

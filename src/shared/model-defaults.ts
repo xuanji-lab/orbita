@@ -15,8 +15,8 @@
  * 判定，两边不会对同一个模型说出两个上下文窗口。
  */
 import type { BuiltinModel, BuiltinProvider } from "./agent-ipc.ts";
-import { knownModelParams } from "./known-providers.ts";
-import { clampThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { knownDisplayName, knownModelParams, type ModelParams } from "./known-models.ts";
+import { clampThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "./thinking.ts";
 
 /** 模型接受的输入模态。与 pi `Model["input"]` 同形（pi 只有这两档）。 */
 export type ModelInput = ("text" | "image")[];
@@ -44,7 +44,7 @@ export const FALLBACK_MODEL = {
  *
  * `source` 只回答「这组数字的主来源」，给 UI 判断要不要说「走的是兜底」：
  * - `catalog` / `catalog-family`：pi 目录命中（精确 id / Claude 家族借参）
- * - `known`：目录没有，我们自己的白名单（`KNOWN_PROVIDERS.modelParams`）有
+ * - `known`：目录没有，我们自己的型号白名单（known-models.ts）有
  * - `fallback`：两边都没有，落 `FALLBACK_MODEL`
  *
  * 白名单优先于目录（它存在的意义就是赶在目录前面纠错），但**目录命中时 source 仍记
@@ -60,10 +60,34 @@ export interface ModelDefaults {
   source: "catalog" | "catalog-family" | "known" | "fallback";
 }
 
-/** 查目录时的偏好：这家在 pi 目录里的 id，以及接入协议（同家 > 同协议 > 其余）。 */
+/**
+ * 查目录时的偏好：这家在 pi 目录里的 id，以及接入协议（同家 > 同协议 > 其余）。
+ * 从服务商条目取用 known-providers 的 `catalogPreferenceOf`，不要各处自己拼。
+ */
 export interface CatalogPreference {
   catalogId?: string;
   api?: string;
+  /** 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录的型号不吃白名单 */
+  catalogAuthoritative?: boolean;
+}
+
+/**
+ * 白名单对这个（服务商，型号）给出的口径。只有一种情况不生效：服务商「目录说了算」且
+ * 本家目录收录了这个 id——聚合网关收窄了型号能力，型号的通用口径在它那里不成立。
+ *
+ * **设置页、底栏菜单与会话注册都经过这里**：三处对同一个型号必须说同一句话。
+ * 默认思考档不走这里（那是偏好不是能力，按支持集夹取即可，见 `defaultThinkingLevel`）。
+ */
+export function knownParamsFor(
+  catalog: readonly BuiltinProvider[],
+  modelId: string,
+  prefer: CatalogPreference = {},
+): ModelParams {
+  if (prefer.catalogAuthoritative === true && prefer.catalogId !== undefined) {
+    const home = catalog.find((provider) => provider.id === prefer.catalogId);
+    if (home?.models.some((model) => model.id === modelId) === true) return {};
+  }
+  return knownModelParams(modelId);
 }
 
 /**
@@ -115,10 +139,24 @@ export function lookupCatalogModel(
   modelId: string,
   prefer: CatalogPreference = {},
 ): BuiltinModel | undefined {
+  return lookupCatalogSource(catalog, modelId, prefer)?.model;
+}
+
+/**
+ * 同 `lookupCatalogModel`，连同条目所在的那一家一起返回。会话注册借档位表时要从**同一家**
+ * 的原始条目抄：同一个 id 在不同网关上档位不同（deepseek-v4-flash 在 deepseek 目录能关
+ * 思考、在 Anthropic 协议的网关上不能），只按 id 抄第一条，菜单与会话就各拿各的
+ * （2026-10-24 一致性测试抓到）。
+ */
+export function lookupCatalogSource(
+  catalog: readonly BuiltinProvider[],
+  modelId: string,
+  prefer: CatalogPreference = {},
+): { provider: BuiltinProvider; model: BuiltinModel } | undefined {
   const home =
     prefer.catalogId === undefined ? undefined : catalog.find((p) => p.id === prefer.catalogId);
   const homeExact = home?.models.find((m) => m.id === modelId);
-  if (homeExact !== undefined) return homeExact;
+  if (home !== undefined && homeExact !== undefined) return { provider: home, model: homeExact };
 
   // 同 api 的厂商排前面：精确扫描与家族扫描共用这一份排序结果
   const ordered = [...catalog].sort((a, b) => {
@@ -127,25 +165,55 @@ export function lookupCatalogModel(
   });
   for (const provider of ordered) {
     const hit = provider.models.find((m) => m.id === modelId);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) return { provider, model: hit };
   }
 
   const familyKey = claudeFamilyKey(modelId);
   if (familyKey === undefined) return undefined;
   const homeFamily = home === undefined ? undefined : findFamilyModel(home.models, familyKey);
-  if (homeFamily !== undefined) return homeFamily;
+  if (home !== undefined && homeFamily !== undefined) return { provider: home, model: homeFamily };
   for (const provider of ordered) {
     const hit = findFamilyModel(provider.models, familyKey);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) return { provider, model: hit };
   }
   return undefined;
 }
 
 /**
+ * 型号的显示名：模型菜单与设置页模型列表的主文字（id 降到次行）。
+ *
+ * 顺序：**声明里的名字**（用户在编辑框里起的、或拉取列表时厂商 /models 给的）> 白名单 >
+ * 目录名 > id 原文。用户 / 厂商亲口说的名字最权威；白名单在目录前面，因为它就是为纠目录
+ * 而写的（kimi-for-coding 目录里还叫 K2.7 Code）。
+ *
+ * 目录名**只认精确 id**，不走 lookupCatalogSource 的 Claude 家族兜底：家族借的是参数口径，
+ * 借名字就会把 claude-opus-5-5 叫成「Claude Opus 5」。偏好的那家先查，再按 api 同的先查全目录。
+ */
+export function modelDisplayName(
+  catalog: readonly BuiltinProvider[],
+  modelId: string,
+  prefer: CatalogPreference = {},
+  declaredName?: string,
+): string {
+  const declared = declaredName?.trim();
+  if (declared !== undefined && declared !== "") return declared;
+  const known = knownDisplayName(modelId);
+  if (known !== undefined) return known;
+  const home = prefer.catalogId === undefined ? undefined : catalog.find((p) => p.id === prefer.catalogId);
+  const rank = (provider: BuiltinProvider) =>
+    provider === home ? 0 : prefer.api !== undefined && provider.api === prefer.api ? 1 : 2;
+  for (const provider of [...catalog].sort((a, b) => rank(a) - rank(b))) {
+    const name = provider.models.find((m) => m.id === modelId)?.name;
+    if (name !== undefined && name !== "" && name !== modelId) return name;
+  }
+  return modelId;
+}
+
+/**
  * 一个模型 id 的生效参数基线：**白名单 > pi 目录 > 兜底**（用户手填在调用方那一层）。
  *
- * 白名单（`KNOWN_PROVIDERS.modelParams`）也按 id 跨全表查：它记的是「这个型号的官方
- * 口径」，与从哪家网关接进来无关。
+ * 白名单（known-models.ts）按型号 id 查：它记的是「这个型号的官方口径」，与从哪家
+ * 网关接进来无关——「目录说了算」的服务商除外（`knownParamsFor`）。
  */
 export function resolveModelDefaults(
   catalog: readonly BuiltinProvider[],
@@ -153,7 +221,7 @@ export function resolveModelDefaults(
   prefer: CatalogPreference = {},
 ): ModelDefaults {
   const entry = lookupCatalogModel(catalog, modelId, prefer);
-  const patch = knownModelParams(modelId);
+  const patch = knownParamsFor(catalog, modelId, prefer);
   const exact = entry !== undefined && entry.id === modelId;
   const source: ModelDefaults["source"] =
     entry !== undefined
@@ -162,13 +230,15 @@ export function resolveModelDefaults(
         : "catalog-family"
       : patch.contextWindow !== undefined ||
           patch.maxTokens !== undefined ||
-          patch.reasoning !== undefined
+          patch.reasoning !== undefined ||
+          patch.input !== undefined
         ? "known"
         : "fallback";
   return {
     contextWindow: patch.contextWindow ?? entry?.contextWindow ?? FALLBACK_MODEL.contextWindow,
     maxTokens: patch.maxTokens ?? entry?.maxTokens ?? FALLBACK_MODEL.maxTokens,
-    input: [...(entry?.input ?? FALLBACK_MODEL.input)],
+    // 白名单也能纠模态：目录没收的纯文本型号靠它说「不收图」，别让兜底的 image 把图送上去
+    input: [...(patch.input ?? entry?.input ?? FALLBACK_MODEL.input)],
     reasoning: patch.reasoning ?? entry?.reasoning ?? FALLBACK_MODEL.reasoning,
     cost: { ...(entry?.cost ?? FALLBACK_MODEL.cost) },
     source,
@@ -196,4 +266,43 @@ export function defaultThinkingLevel(
     knownModelParams(modelId).defaultThinkingLevel ?? FALLBACK_THINKING_LEVEL,
     supported,
   );
+}
+
+/**
+ * 这个型号（在这家服务商上）的支持档位集，`null` = 三处都不知道。设置页、底栏思考档
+ * 菜单、子会话默认档共用；会话注册（model-registration）与它是同一套口径，
+ * agent 侧的一致性测试逐个型号比对两边。来源三级：
+ *
+ *   白名单 thinkingLevels（人工确证的口径，赶在其余两级前面纠错——例：目录查不到
+ *   的快速通道模型如 glm-5.3-flash，或目录给出错误支持集的情形）。经 knownParamsFor
+ *   取：「目录说了算」的服务商（OpenCode Go）在本家目录命中时不吃白名单，
+ *   与会话注册（model-registration）是同一个判定
+ *   > observed（开轮事件回的真值，含 clamp 事实；调用方传 session.thinkingSupported）
+ *   > 目录（BuiltinModel.supportedThinkingLevels，agent 进程在 pi 旁算好过线），
+ *   按 lookupCatalogModel 的顺序找条目：本家 > 同协议 > 其余 > Claude 家族——与会话借参
+ *   的来源是同一条。以前取整个目录里第一个同 id 的条目，谁排前面算谁
+ *
+ * 三者都没有 = 未知：调用方按「全量显示、不禁用」处理，不替 pi 撒谎——开轮后
+ * 由 thinking 事件纠真。
+ *
+ * 三级之上还有一级：**用户在型号弹窗里勾的档**（ModelDecl.thinkingLevels，调用方传
+ * `override`）。聚合网关的目录常说错、白名单管不到每家网关，用户亲手勾的最权威——
+ * 会话注册（model-registration）按同一份覆盖收窄 pi 的支持集，菜单与真正发出去的档一致。
+ *
+ * `prefer` 从服务商条目取（known-providers 的 catalogPreferenceOf）。缺席 = 不知道是哪家，
+ * 按型号的通用口径答。
+ */
+export function modelThinkingLevels(
+  modelId: string,
+  catalog: readonly BuiltinProvider[],
+  observed?: readonly ThinkingLevel[] | null,
+  prefer: CatalogPreference = {},
+  override?: readonly ThinkingLevel[],
+): readonly ThinkingLevel[] | null {
+  // 按词汇表顺序给出：菜单从浅到深排，存盘顺序不可靠（手改的 JSON、老版本写的）
+  if (override !== undefined && override.length > 0) return THINKING_LEVELS.filter((level) => override.includes(level));
+  const known = knownParamsFor(catalog, modelId, prefer).thinkingLevels;
+  if (known !== undefined) return known;
+  if (observed != null) return observed;
+  return lookupCatalogModel(catalog, modelId, prefer)?.supportedThinkingLevels ?? null;
 }
