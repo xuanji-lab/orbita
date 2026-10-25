@@ -1763,6 +1763,30 @@ export const en = {
     truncated: "The project has more files than the scan reads — some .bib entries may be missing from completions",
   },
 
+  /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */
+  citeSearch: {
+    menu: "Find reference…",
+    title: "Find a reference",
+    placeholder: "Title, DOI or arXiv ID",
+    search: "Search",
+    searching: "Searching…",
+    /* 结果行的来源列（两个公共接口的名字，不译） */
+    crossref: "Crossref",
+    arxiv: "arXiv",
+    empty: "No match. Try different words, or paste a DOI or arXiv ID.",
+    offline: "No network. Check the connection or proxy, then try again.",
+    timeout: "Search timed out (8s). The network may be slow or blocked.",
+    rateLimited: "Too many requests — the service is throttling us. Wait a moment and try again.",
+    notFound: "No record for this DOI or arXiv ID.",
+    failed: (detail: string) => `Search failed: ${detail}`,
+    written: (path: string) => `Saved to ${path}`,
+    inserted: (key: string) => `Inserted \\cite{${key}}`,
+    insertBlocked: "Saved, but the editor is read-only until the turn ends.",
+    conflict: (path: string) => `Not saved: ${path} changed while you were choosing. Pick again to re-key it.`,
+    writeFailed: (detail: string) => `Not saved: ${detail}`,
+    outside: "This file is not inside a LaTeX project.",
+  },
+
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
   paper: {
     chatTitle: "Chat",
@@ -1775,6 +1799,7 @@ export const en = {
     aria: "LaTeX source editor",
     locateInPdf: "Show in PDF",
     quoteLine: "Quote to chat",
+    findReference: "Find reference…",
     saved: "Saved",
     unsaved: "Unsaved",
     saving: "Saving…",

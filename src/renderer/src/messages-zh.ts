@@ -1653,6 +1653,30 @@ export const zh: Messages = {
     truncated: "项目文件超出扫描上限，可能还有 .bib 没读到，补全可能不全",
   },
 
+  /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */
+  citeSearch: {
+    menu: "查找文献…",
+    title: "查找文献",
+    placeholder: "标题、DOI 或 arXiv 编号",
+    search: "查找",
+    searching: "查找中…",
+    /* 结果行的来源列（两个公共接口的名字，不译） */
+    crossref: "Crossref",
+    arxiv: "arXiv",
+    empty: "没有找到。换个说法，或直接粘贴 DOI 或 arXiv 编号。",
+    offline: "连不上网络。检查网络或代理后再试。",
+    timeout: "查找超时（8 秒）。网络太慢或被挡下了。",
+    rateLimited: "请求太频繁，服务方在限速。等一会儿再试。",
+    notFound: "没有这个 DOI 或 arXiv 编号的记录。",
+    failed: (detail) => `查找失败：${detail}`,
+    written: (path) => `已写入 ${path}`,
+    inserted: (key) => `已插入 \\cite{${key}}`,
+    insertBlocked: "已写入，但编辑器在这个回合结束前是只读的。",
+    conflict: (path) => `没有写入：${path} 在你挑选期间被改过了。再选一次会按新内容重新分配引用键。`,
+    writeFailed: (detail) => `没有写入：${detail}`,
+    outside: "这个文件不在 LaTeX 项目里。",
+  },
+
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
   paper: {
     chatTitle: "对话",
@@ -1665,6 +1689,7 @@ export const zh: Messages = {
     aria: "LaTeX 源码编辑器",
     locateInPdf: "在 PDF 中定位",
     quoteLine: "引用到对话",
+    findReference: "查找文献…",
     saved: "已保存",
     unsaved: "未保存",
     saving: "保存中…",
