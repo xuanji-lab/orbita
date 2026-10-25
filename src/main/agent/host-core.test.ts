@@ -244,6 +244,34 @@ describe("内建 provider 目录的到达时机（债务 B #2）", () => {
     assert.deepEqual(await ctx.host.listBuiltins(), providers);
     assert.equal(ctx.forks(), 1);
   });
+
+  test("目录刷新后再报一次：缓存换成新的，并交给 onEvent 广播（窗口不用刷新）", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const model = (id: string) => ({
+      id,
+      contextWindow: 1_000_000,
+      maxTokens: 8_192,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+    });
+    const first = [{ id: "anthropic", name: "Anthropic", baseUrl: "https://a", api: "anthropic-messages", models: [model("old")] }];
+    const refreshed = [{ ...first[0]!, models: [model("old"), { ...model("claude-opus-5-5"), name: "Claude Opus 5.5" }] }];
+    const pending = ctx.host.listBuiltins();
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "builtins", providers: first });
+    await pending;
+    ctx.child().emit({ type: "builtins", providers: refreshed });
+    assert.deepEqual(await ctx.host.listBuiltins(), refreshed);
+    assert.deepEqual(
+      ctx.events.filter((event) => event.type === "builtins"),
+      [
+        { type: "builtins", providers: first },
+        { type: "builtins", providers: refreshed },
+      ],
+    );
+  });
 });
 
 describe("disposeSession —— 会话释放（刀 0-4 债务 A）", () => {
@@ -567,5 +595,129 @@ describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽
     const { host, child } = await runningHost();
     const pending = host.mcpReload();
     await assert.rejects(Promise.all([pending, Promise.resolve().then(() => child().exitWith(1))]), /exited/);
+  });
+});
+
+describe("choreComplete（收尾清单按反馈改写）", () => {
+  test("不是会话里的一轮：命令不带 sessionId、不碰任何会话；回执只结发起方，不广播（没有 thinking / model 事件可被输入卡对齐）", async () => {
+    const child = new FakeChild();
+    const events: AgentEvent[] = [];
+    const host = new AgentHostCore(() => child, (event) => events.push(event));
+    const pending = host.choreComplete(TURN_FIELDS.provider, "flash", "sys", "prompt");
+    child.emit({ type: "ready" });
+    await flush();
+    const commands = child.posted.filter((command) => command.type !== "listBuiltins");
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0]?.type, "choreComplete");
+    assert.equal("sessionId" in (commands[0] ?? {}), false);
+    const command = commands[0] as Extract<AgentCommand, { type: "choreComplete" }>;
+    child.emit({ type: "choreCompleted", requestId: command.requestId, text: "```json\n{}\n```" });
+    assert.equal(await pending, "```json\n{}\n```");
+    assert.equal(events.length, 0);
+  });
+
+  test("失败回执 reject 带原因；进程退出 reject", async () => {
+    const child = new FakeChild();
+    const host = new AgentHostCore(() => child, () => undefined);
+    const failed = host.choreComplete(TURN_FIELDS.provider, "m", "s", "p");
+    child.emit({ type: "ready" });
+    await flush();
+    const command = child.posted.find((c) => c.type === "choreComplete") as Extract<AgentCommand, { type: "choreComplete" }>;
+    child.emit({ type: "choreCompleted", requestId: command.requestId, text: null, error: "401" });
+    await assert.rejects(failed, /401/);
+    const late = host.choreComplete(TURN_FIELDS.provider, "m", "s", "p");
+    await flush();
+    child.exitWith(1);
+    await assert.rejects(late, /exited/);
+  });
+});
+
+describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F-1）", () => {
+  function scopedHost(scope: () => Promise<readonly string[]>) {
+    let child!: FakeChild;
+    const host = new AgentHostCore(
+      () => {
+        child = new FakeChild();
+        return child;
+      },
+      () => undefined,
+      scope,
+    );
+    return { host, child: () => child };
+  }
+  const refreshes = (child: FakeChild) => child.posted.filter((command) => command.type === "refreshCatalogs");
+
+  test("进程拉起（ready）后送一份 added 全量；崩溃重拉后再送一份", async () => {
+    let ids: string[] = ["deepseek"];
+    const ctx = scopedHost(async () => ids);
+    void ctx.host.listBuiltins().catch(() => undefined);
+    const first = ctx.child();
+    assert.deepEqual(refreshes(first), [], "ready 之前不送");
+    first.emit({ type: "ready" });
+    await flush();
+    assert.deepEqual(refreshes(first), [{ type: "refreshCatalogs", scope: "added", catalogIds: ["deepseek"] }]);
+
+    first.exitWith(1);
+    ids = ["deepseek", "tokenrhythm"];
+    void ctx.host.listBuiltins().catch(() => undefined);
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    assert.notEqual(ctx.child(), first);
+    assert.deepEqual(refreshes(ctx.child()), [
+      { type: "refreshCatalogs", scope: "added", catalogIds: ["deepseek", "tokenrhythm"] },
+    ]);
+  });
+
+  test("服务商列表变了：送新的全量；进程没起时不为它拉起", async () => {
+    let ids: string[] = [];
+    let forks = 0;
+    let child!: FakeChild;
+    const host = new AgentHostCore(
+      () => {
+        forks += 1;
+        child = new FakeChild();
+        return child;
+      },
+      () => undefined,
+      async () => ids,
+    );
+    host.syncCatalogScope();
+    await flush();
+    assert.equal(forks, 0, "没起的进程不拉起：下次拉起时 ready 会送");
+
+    void host.listBuiltins().catch(() => undefined);
+    child.emit({ type: "ready" });
+    await flush();
+    ids = ["tokenrhythm"];
+    host.syncCatalogScope();
+    await flush();
+    assert.deepEqual(refreshes(child).map((command) => command.type === "refreshCatalogs" && command.catalogIds), [
+      [],
+      ["tokenrhythm"],
+    ]);
+  });
+
+  test("peek：点开卡片时拉起进程，只送那一份", async () => {
+    const ctx = scopedHost(async () => []);
+    const peek = ctx.host.peekCatalog("tokenrhythm");
+    ctx.child().emit({ type: "ready" });
+    await peek;
+    await flush();
+    // 两条谁先到无所谓：agent 侧排队串行（CatalogRefresher）
+    const sent = refreshes(ctx.child()).map((command) => JSON.stringify(command)).sort();
+    assert.deepEqual(sent, [
+      JSON.stringify({ type: "refreshCatalogs", scope: "added", catalogIds: [] }),
+      JSON.stringify({ type: "refreshCatalogs", scope: "peek", catalogIds: ["tokenrhythm"] }),
+    ]);
+  });
+
+  test("没给 catalogScope（测试 / 裸跑）：一条刷新命令都不送", async () => {
+    const ctx = await freshHost();
+    void ctx.host.listBuiltins().catch(() => undefined);
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.host.syncCatalogScope();
+    await flush();
+    assert.deepEqual(refreshes(ctx.child()), []);
   });
 });

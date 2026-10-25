@@ -30,6 +30,7 @@ import {
 import { FilePreviewPane } from "./FilePreviewPane";
 import {
   closeTab,
+  dropTabsAtRoot,
   fileTabName,
   openTab,
   panelLayoutAttrs,
@@ -126,6 +127,25 @@ export function FilesPanel(props: {
   } | null>(null);
   const focusWorkspaceId = props.focusWorkspaceId ?? null;
   const tree = useFileTree(sessionId, workspaceId, session.workspaces, focusWorkspaceId);
+
+  // 专注 / 浏览态结束（或换到另一个工作区）：之前那个额外根失去 fs:read 白名单
+  // （roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的标签会重新读一次、
+  // 变成常驻「不是这条会话允许的根目录之一」（2026-10-22 发版前验收实测）。
+  // 与换会话 / 换工作区清标签同一条纪律，只收掉 root 恰是那个工作区路径的标签；
+  // 会话自己就在该工作区时（会话根包含它）标签仍可读，不动。
+  const previousFocusRef = useRef<string | null>(focusWorkspaceId);
+  useEffect(() => {
+    const previous = previousFocusRef.current;
+    previousFocusRef.current = focusWorkspaceId;
+    if (previous === null || previous === focusWorkspaceId || session.workspaceId === previous) return;
+    const lostRoot = session.workspaces.find((workspace) => workspace.id === previous)?.path ?? null;
+    if (lostRoot === null) return;
+    const next = dropTabsAtRoot(tabs, activePath, lostRoot);
+    if (next.tabs.length === tabs.length) return;
+    setTabs(next.tabs);
+    setActivePath(next.activePath);
+    if (next.activePath === null) setTreeOn(false);
+  }, [focusWorkspaceId, session.workspaceId, session.workspaces, tabs, activePath]);
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，

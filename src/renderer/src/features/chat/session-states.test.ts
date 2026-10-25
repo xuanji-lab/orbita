@@ -27,9 +27,12 @@ import {
   seedFromDisk,
   setOlderLoading,
   setEntryPhase,
+  observedThinkingFor,
+  sameModel,
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
+  compactionCount,
 } from "./session-states.ts";
 import { en } from "../../messages-en.ts";
 
@@ -99,35 +102,92 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.deepEqual(texts(states, "A"), ["甲一"]);
   });
 
-  test("thinking 事件进自己会话的槽：clamp 真值与支持集各归各", () => {
+  test("thinking 事件进自己会话的槽：clamp 真值、支持集与报它的型号各归各", () => {
     let states = applyAgentEvent(new Map(), {
       type: "thinking",
       sessionId: "A",
+      providerId: "kimi-coding",
+      modelId: "k3",
       level: "low",
       supported: ["minimal", "low", "medium", "high"],
     });
     states = applyAgentEvent(states, {
       type: "thinking",
       sessionId: "B",
+      providerId: "p",
+      modelId: "plain",
       level: "off",
       supported: ["off"],
     });
     assert.deepEqual(states.get("A")?.thinking, {
+      providerId: "kimi-coding",
+      modelId: "k3",
       level: "low",
       supported: ["minimal", "low", "medium", "high"],
     });
-    assert.deepEqual(states.get("B")?.thinking, { level: "off", supported: ["off"] });
-    // 后到的真值整体覆盖先到的（换模型后支持集变了）
+    assert.deepEqual(states.get("B")?.thinking, { providerId: "p", modelId: "plain", level: "off", supported: ["off"] });
+    // 后到的真值整体覆盖先到的（换模型后支持集变了，型号也跟着换）
     states = applyAgentEvent(states, {
       type: "thinking",
       sessionId: "A",
-      level: "medium",
-      supported: ["off", "medium", "high"],
+      providerId: "opencode-go",
+      modelId: "kimi-k3",
+      level: "max",
+      supported: ["max"],
     });
     assert.deepEqual(states.get("A")?.thinking, {
-      level: "medium",
-      supported: ["off", "medium", "high"],
+      providerId: "opencode-go",
+      modelId: "kimi-k3",
+      level: "max",
+      supported: ["max"],
     });
+  });
+
+  describe("observedThinkingFor：运行时报回的支持集只对报它的型号成立", () => {
+    const kimiCoding = { providerId: "kimi-coding", modelId: "k3" };
+    const opencodeK3 = { providerId: "opencode-go", modelId: "kimi-k3" };
+    const reported = (model: { providerId: string; modelId: string }, supported: readonly ("low" | "medium" | "high" | "max")[]) =>
+      applyAgentEvent(new Map(), { type: "thinking", sessionId: "A", ...model, level: supported[0] ?? "max", supported })
+        .get("A")?.thinking ?? null;
+
+    it("同一型号：生效", () => {
+      assert.deepEqual(observedThinkingFor(reported(kimiCoding, ["low", "medium", "high"]), kimiCoding), ["low", "medium", "high"]);
+    });
+
+    it("切到别的型号还没开轮：不生效（用户复现：kimi-coding/k3 的三档跟到了 opencode-go/kimi-k3）", () => {
+      assert.equal(observedThinkingFor(reported(kimiCoding, ["low", "medium", "high"]), opencodeK3), null);
+    });
+
+    it("同一个型号 id、不同服务商：不生效", () => {
+      const sameIdOtherProvider = { providerId: "opencode-go", modelId: "k3" };
+      assert.equal(observedThinkingFor(reported(kimiCoding, ["low", "medium", "high"]), sameIdOtherProvider), null);
+    });
+
+    it("新型号开轮报回后：又生效", () => {
+      let states = applyAgentEvent(new Map(), {
+        type: "thinking",
+        sessionId: "A",
+        ...kimiCoding,
+        level: "high",
+        supported: ["low", "medium", "high"],
+      });
+      assert.equal(observedThinkingFor(states.get("A")?.thinking ?? null, opencodeK3), null);
+      states = applyAgentEvent(states, { type: "thinking", sessionId: "A", ...opencodeK3, level: "max", supported: ["max"] });
+      assert.deepEqual(observedThinkingFor(states.get("A")?.thinking ?? null, opencodeK3), ["max"]);
+    });
+
+    it("没报过 / 没有当前型号：null", () => {
+      assert.equal(observedThinkingFor(null, kimiCoding), null);
+      assert.equal(observedThinkingFor(reported(kimiCoding, ["high"]), null), null);
+    });
+  });
+
+  test("sameModel：服务商与型号 id 都对上才算同一个", () => {
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, { providerId: "a", modelId: "m" }), true);
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, { providerId: "b", modelId: "m" }), false);
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, { providerId: "a", modelId: "n" }), false);
+    assert.equal(sameModel(null, { providerId: "a", modelId: "m" }), false);
+    assert.equal(sameModel({ providerId: "a", modelId: "m" }, null), false);
   });
 
   test("phase 按槽独立：A turn 与 B idle 并存", () => {
@@ -1043,7 +1103,7 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
 describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", () => {
   /** 尾窗种子：窗口 = [u3, a3]，外面还有更早的 */
   const tailSeed = (): SessionStates =>
-    seedFromDisk(new Map(), "A", [userItem("u3", 3000), userItem("u4", 4000)], null, { hasMore: true });
+    seedFromDisk(new Map(), "A", [userItem("u3", 3000), userItem("u4", 4000)], null, { hasMore: true, compactionsBefore: 0 });
 
   test("并进前面：顺序不乱（更早的在前）、锚点移到新页头一条、hasMore 跟着回执走", () => {
     const seeded = tailSeed();
@@ -1070,6 +1130,29 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
     assert.equal(next.get("A")?.window.hasMore, false);
   });
 
+  test("压缩次数：窗口外的界碑算进总数；拉进更早一页时从窗口外挪进窗口，总数不变", () => {
+    // 窗口里一块界碑，窗口外还有两块
+    const seeded = seedFromDisk(new Map(), "A", [compacted("c3", 2500), userItem("u3", 3000)], null, {
+      hasMore: true,
+      compactionsBefore: 2,
+    });
+    assert.equal(compactionCount(seeded.get("A")!), 3);
+    // 更早一页带回其中一块
+    const next = prependOlder(seeded, "A", [compacted("c2", 1500), userItem("u2", 2000)], { hasMore: true });
+    assert.equal(next.get("A")?.window.compactionsBefore, 1);
+    assert.equal(next.get("A")?.compactions.length, 2);
+    assert.equal(compactionCount(next.get("A")!), 3);
+    // 实时压缩：事件进槽，总数 +1
+    const live = applyAgentEvent(next, { type: "compaction", sessionId: "A", record: compacted("c4", 5000) });
+    assert.equal(compactionCount(live.get("A")!), 4);
+  });
+
+  test("压缩次数：不给分页信息（全量种子）时只数窗口里的，空槽为 0", () => {
+    const seeded = seedFromDisk(new Map(), "A", [compacted("c1", 1500), userItem("u1", 2000)]);
+    assert.equal(compactionCount(seeded.get("A")!), 1);
+    assert.equal(compactionCount(EMPTY_ENTRY), 0);
+  });
+
   test("空页（锚点对不上盘）：记录不动、hasMore 归假、锚点保持", () => {
     const seeded = tailSeed();
     const next = prependOlder(seeded, "A", [], { hasMore: false });
@@ -1079,7 +1162,7 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
   });
 
   test("侧记录一起前置：界碑 / 通道标记 / 轮尾账 / 意图卡进各自的桶", () => {
-    const seeded = seedFromDisk(new Map(), "A", [userItem("u5", 5000)], null, { hasMore: true });
+    const seeded = seedFromDisk(new Map(), "A", [userItem("u5", 5000)], null, { hasMore: true, compactionsBefore: 0 });
     const fileTurn: FileTurnRecord = {
       role: "file-turn",
       id: "f1",

@@ -27,6 +27,19 @@ export function createTaskTools(broker: RequestBroker, sessionId: string): ToolD
       "to its parent, not the process — reading the process back would spend the context the sub-session exists " +
       'to save. It names the record file; read that, or use "rounds", only if you really need the process. ' +
       "Prefix matching is scoped to the current workspace.",
+    // promptSnippet 缺席时 pi 不把工具列进系统提示的 Available tools（system-prompt.ts 的
+    // visibleTools 只认带 snippet 的）——read_task 原先就这样只活在工具 schema 里，
+    // 模型查完 RAG / 记忆库 / chats 搜索就以为看过聊天记录了（2026-10-23 用户：「read task
+    // 完全没有意识到可以调用」）。guidelines 讲清两件事：别的任务的原文只有它读得到；
+    // 消息里的 <referenced_task> 是用户拖进来的指针（shared/task-ref.ts），该读就读
+    promptSnippet:
+      "Read the transcript of another task (conversation) in this app: the only way to see what was actually said there",
+    promptGuidelines: [
+      "When the user refers to another task or an earlier conversation in this app (\"the other task\", \"what we discussed before\", \"the sub-session\", a task title or id), read it with read_task before answering. " +
+        "Memory notes, RAG / knowledge-base search and saved chat exports (for example a search with source \"chats\") are summaries or separate corpora: they do not show this app's task transcripts, so a hit there does not mean you have read the conversation.",
+      'A user message may begin with <referenced_task id="…" title="…" /> lines: tasks the user dragged into the message. ' +
+        "Call read_task with that exact id to read each one you need (the overview first, then specific rounds) instead of guessing what it contains.",
+    ],
     parameters: {
       type: "object",
       properties: {

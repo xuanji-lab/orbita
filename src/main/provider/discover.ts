@@ -12,6 +12,9 @@
  *
  * 这两条都是**协议级**的处理，不是按厂商特判：任何 anthropic 兼容网关都适用，
  * 任何「200 包错误」的网关都适用。厂商差异仍然只是 baseUrl 与鉴权头。
+ *
+ * Gemini 原生协议（google-generative-ai）也是一条协议分支：鉴权头是 `x-goog-api-key`
+ * （带上 Bearer 反而会被当成 OAuth 令牌拒掉），清单条目是 `name: "models/<id>"`。
  */
 import { anthropicOauthHeaders, isClaudeOauthToken } from "./oauth.ts";
 
@@ -21,10 +24,10 @@ export interface DiscoveredModels {
   message: string;
 }
 
-/** 各家 /models 的响应形状不统一，这里只取 id。 */
+/** 各家 /models 的响应形状不统一，这里只取 id（Gemini 只给 `name: "models/<id>"`）。 */
 interface ModelsResponse {
   data?: Array<{ id?: unknown }>;
-  models?: Array<{ id?: unknown } | string>;
+  models?: Array<{ id?: unknown; name?: unknown } | string>;
   /** 「200 包错误」的网关会带这些 */
   code?: unknown;
   msg?: unknown;
@@ -38,7 +41,16 @@ export function resolveModelsUrl(baseUrl: string, api: string): string {
   // 用户可能直接填了完整对话端点；同级替换即可
   if (/\/v\d+\/messages$/.test(base)) return base.replace(/\/messages$/, "/models");
   if (api === "anthropic-messages") return `${base}/v1/models`;
+  // Gemini 默认一页 50 条，一次要够（官方上限 1000）
+  if (api === "google-generative-ai") return `${base}/models?pageSize=1000`;
   return `${base}/models`;
+}
+
+/** 条目 → 模型 id：有 id 用 id；只有 name 的（Gemini）去掉 `models/` 前缀 */
+function modelIdOf(entry: { id?: unknown; name?: unknown } | string): unknown {
+  if (typeof entry === "string") return entry;
+  if (entry.id !== undefined) return entry.id;
+  return typeof entry.name === "string" ? entry.name.replace(/^models\//, "") : undefined;
 }
 
 /**
@@ -60,7 +72,7 @@ export function parseModelsBody(payload: ModelsResponse, httpOk: boolean): Disco
 
   const raw = payload.data ?? payload.models ?? [];
   const models = raw
-    .map((entry) => (typeof entry === "string" ? entry : entry.id))
+    .map(modelIdOf)
     .filter((id): id is string => typeof id === "string" && id.trim() !== "");
 
   if (models.length === 0) {
@@ -100,6 +112,21 @@ export async function discoverModels(input: {
     : { ok: false, models: [], message: `Could not reach ${url}: ${second.reason}` };
 }
 
+/** 列模型请求的鉴权头：按协议（与令牌形态）分，不按厂商 */
+export function modelsAuthHeaders(api: string, apiKey: string): Record<string, string> {
+  // Gemini 的 API key 只认 x-goog-api-key；带上 Authorization 会被当成 OAuth 令牌校验而 401
+  if (api === "google-generative-ai") return { "x-goog-api-key": apiKey };
+  // OAuth 访问令牌（sk-ant-oat）不能当 api key 用：上游只认 Bearer + oauth beta，
+  // 多带 x-api-key 反而会被判「非 Claude Code 请求」——所以这条分支里两个旧头都不带
+  if (isClaudeOauthToken(apiKey)) return anthropicOauthHeaders(apiKey);
+  // 两种鉴权头都带上：不同网关认不同的那一个，而多带一个从不出错
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+  };
+}
+
 type FetchAttempt =
   | { kind: "ok"; result: DiscoveredModels }
   | { kind: "unreachable"; reason: string };
@@ -113,16 +140,7 @@ async function attemptModelsFetch(
   try {
     const response = await fetch(url, {
       headers: {
-        // OAuth 访问令牌（sk-ant-oat）不能当 api key 用：上游只认 Bearer + oauth beta，
-        // 多带 x-api-key 反而会被判「非 Claude Code 请求」——所以这条分支里两个旧头都不带
-        ...(isClaudeOauthToken(input.apiKey)
-          ? anthropicOauthHeaders(input.apiKey)
-          : {
-              // 两种鉴权头都带上：不同网关认不同的那一个，而多带一个从不出错
-              Authorization: `Bearer ${input.apiKey}`,
-              "x-api-key": input.apiKey,
-              "anthropic-version": "2023-06-01",
-            }),
+        ...modelsAuthHeaders(input.api, input.apiKey),
         Accept: "application/json",
         ...(input.headers ?? {}),
       },

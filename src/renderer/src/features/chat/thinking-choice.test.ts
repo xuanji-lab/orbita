@@ -2,7 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { BuiltinProvider } from "../../../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../../../shared/thinking.ts";
-import { modelThinkingLevels, resolveThinkingLevel } from "./thinking-choice.ts";
+import { modelThinkingLevels } from "../../../../shared/model-defaults.ts";
+import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 
 /** 目录条目替身：只填这两个函数用得到的字段 */
 function entry(id: string, supportedThinkingLevels?: ThinkingLevel[]) {
@@ -101,5 +102,42 @@ describe("resolveThinkingLevel —— 手选（若仍受支持）> 这个型号�
       resolveThinkingLevel({ modelId: "no-such-model", supported: ["low", "high", "max"], picked: null }),
       "high",
     );
+  });
+});
+
+describe("reconcileThinkingLevel —— 会话账里的档过一遍这个型号（移植自 PR 180）", () => {
+  test("会话记着 off，而这个型号关不掉思考（step-5-preview 三档）：退它的默认档 medium", () => {
+    const supported = modelThinkingLevels("step-5-preview", []);
+    assert.deepEqual(supported, ["low", "medium", "high"]);
+    assert.equal(reconcileThinkingLevel("off", "step-5-preview", supported), "medium");
+    // 已经是它能发的档就不动
+    assert.equal(reconcileThinkingLevel("low", "step-5-preview", supported), "low");
+  });
+
+  test("上一个型号留下的 minimal / xhigh / max 同样纠回默认档", () => {
+    const supported = modelThinkingLevels("step-3.7-flash", []);
+    for (const stale of ["minimal", "xhigh", "max"] as const) {
+      assert.equal(reconcileThinkingLevel(stale, "step-3.7-flash", supported), "medium");
+    }
+  });
+
+  test("按服务商算支持集：OpenCode Go 上的 kimi-k3 只有 max，旧会话记的 low 纠成 max", () => {
+    const opencode: BuiltinProvider = {
+      id: "opencode-go",
+      name: "OpenCode Go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      api: "openai-completions",
+      models: [entry("kimi-k3", ["max"])],
+    };
+    const prefer = { catalogId: "opencode-go", api: "openai-completions", catalogAuthoritative: true };
+    const supported = modelThinkingLevels("kimi-k3", [opencode], null, prefer);
+    assert.deepEqual(supported, ["max"]);
+    assert.equal(reconcileThinkingLevel("low", "kimi-k3", supported), "max");
+    // 同一个 kimi-k3 不在「目录说了算」的服务商上：low 是它能发的档，不动
+    assert.equal(reconcileThinkingLevel("low", "kimi-k3", modelThinkingLevels("kimi-k3", [opencode])), "low");
+  });
+
+  test("支持集未知（null）时原样保留——不替用户否决，pi 发送前按同规则夹", () => {
+    assert.equal(reconcileThinkingLevel("xhigh", "no-such-model", null), "xhigh");
   });
 });

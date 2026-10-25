@@ -46,6 +46,38 @@ export function contextRing(stats: AgentStats | null, t: Messages): ContextRing 
   };
 }
 
+/**
+ * 一圈 = 一个上下文窗口（Apple 健身圆环式，wafo 2026-10-24 裁决）。
+ *
+ * - 没压缩过：只有最外圈，弧 = 当前用量；
+ * - 压缩 1 次：最外圈画满（用完的那一窗），里圈是当前用量；
+ * - 压缩 2 次起：内圈收掉，只剩最外圈显示当前用量，中间写「第几个窗口」
+ *   = 压缩次数 + 1（2 次 → 3）。两位数照写，贴边可以接受。
+ *
+ * 上限 2 圈是实测后的裁决：20px 外径、线宽 2、圈隙 1 时三圈在 Retina 上勉强分得清，
+ * 但 1× 屏糊成靶心，最里圈半径只有 3、看不出进度（wafo 2026-10-24 23:26「第三圈直接就是数字 3」）。
+ */
+export const NESTED_RING_LIMIT = 2;
+
+export interface RingLayers {
+  /** 画满的圈数（从外往里），当前用量画在紧接着的下一圈 */
+  full: number;
+  /** 中间的数字；null = 不写（还在套圈的档位） */
+  label: string | null;
+}
+
+export function ringLayers(compactions: number): RingLayers {
+  const count = Math.max(0, Math.floor(compactions));
+  if (count < NESTED_RING_LIMIT) return { full: count, label: null };
+  return { full: 0, label: String(count + 1) };
+}
+
+/**
+ * 压缩过几次之后建议收尾（标记完成、剩下的事留到新会话）。
+ * 第三次压缩的时候摘要已经是摘要的摘要——与其再压，不如带着遗留事项换一条会话（wafo 2026-10-24）。
+ */
+export const WRAP_UP_AFTER_COMPACTIONS = 2;
+
 /** 分项里的一行。`value` 是机器事实，界面用 mono 字体显示 */
 export interface UsageRow {
   label: string;

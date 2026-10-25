@@ -17,7 +17,19 @@ export interface MenuItem {
   subLabelEllipsis?: "tail" | "head";
   /** 副行是机器事实（路径）：mono 字体（设计系统：mono for machine facts） */
   subLabelMono?: boolean;
+  /** 副行的尾巴：跟在副行后面、用正文字体的注脚（模型卡片「全部 / 星标」里的服务商名，副行本体是等宽的型号 id） */
+  subLabelTrail?: string;
+  /**
+   * 搜索时**额外**匹配的文字。模型卡片的主行是显示名（「Kimi K3.1 Pro」），用户照样会按
+   * id（k3.1-pro）或服务商名搜——只匹配 label 的话，换成显示名那天这两种搜法就静默失效了。
+   */
+  searchText?: string;
   icon?: IconName;
+  /**
+   * 行首的头像（模型卡片：型号头像，见 ModelAvatar）。给了它，行首这一格就是头像而不是对勾：
+   * 选中改由头像一圈 accent 描边表示（styles.css 的 .model-avatar），底色与半粗照旧。
+   */
+  avatar?: React.ReactNode;
   /** 右侧的说明。菜单项自己解释后果，比事后弹一个确认框好 */
   hint?: string;
   /**
@@ -90,7 +102,7 @@ function filterMenuItems(items: MenuItem[], q: string): MenuItem[] {
       header = item;
     } else {
       all.push(item);
-      if (hit(item.label)) matched.push(item);
+      if (hit(item.label) || (item.searchText !== undefined && hit(item.searchText))) matched.push(item);
     }
   }
   flush();
@@ -158,6 +170,7 @@ export function Menu(props: {
    * 清单在它右边滚。今天只有模型卡片用它——星标 / 全部 / 各厂商的过滤列。
    * 里面是什么由调用方给（本原语不管），但**键盘左右切栏**由这里实现：
    * 焦点在左栏时 `↑↓` 在格间走、`→` 交给清单；焦点在清单时 `←` 回左栏。
+   * 当前格请挂 `aria-selected="true"`：打开（与高度落定）时这里把它带进左栏的视野。
    */
   rail?: React.ReactNode;
   /**
@@ -404,11 +417,36 @@ export function Menu(props: {
    *
    * 打开时也跑一次：清单长时卡片直接停在**当前模型**那一行，而不是从头开始。
    */
+  const revealCursor = () =>
+    listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
   useLayoutEffect(() => {
     if (!open) return;
-    listRef.current?.querySelector<HTMLElement>('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+    revealCursor();
     // visible.length 也在依赖里：过滤/搜索后光标落在另一行上，得重新把它带进视野
   }, [open, active, visible.length]);
+
+  /**
+   * 面板高度**落定之后**再带一次。
+   *
+   * 上面那一道在刚打开时污不上力：首帧 `position` 还是 null，面板没有 height / maxHeight
+   * （在量自然高度），清单没被限高，自然无处可滚；等 positionMenu 的 setPosition 把高度写上，
+   * [open, active, visible.length] 一个没变，它不再跑——长清单里打勾行留在视野外
+   * （2026-10-25 实测：OpenCode 36 个型号、当前型号在 y≈1733，打开后 scrollTop 仍是 0）。
+   * 所以按**已写上的高度**触发：每次打开必经 null → cap（close 把 position 清回 null），
+   * 之后只有高度再变（窗口变矮、尺寸落定）才再跑。键盘上下不动高度，不经这里。
+   */
+  const appliedCap = position === null ? null : position.cap;
+  useLayoutEffect(() => {
+    if (!open || appliedCap === null) return;
+    revealCursor();
+    /*
+     * 左栏同理：厂商多时左栏自己也滚，当前那一格（aria-selected）可能落在栏底只露半截
+     * （2026-10-25 用户：「provider 似乎没有 scroll 到位」）。只在这一道带——打开与高度
+     * 落定时；用户在栏里点的格子本来就在眼前，不需要跟。
+     */
+    railRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    // revealCursor 只读 ref，不进依赖
+  }, [open, appliedCap]);
 
   const choose = (item: MenuItem) => {
     if (item.keepOpen !== true) close();
@@ -719,7 +757,8 @@ function MenuRow(props: {
         // 图标槽 14px：里面的图标就是 13px，16 的槽只是每行白多一道缝。
         // label 和 hint 合用中间这一列（见下面的内层 flex）：hint 太长会把
         // label 挤没，就是这一行的宽度分配方式（2026-09-23 修复）。
-        gridTemplateColumns: "14px minmax(0,1fr) auto",
+        // 有头像的行（模型卡片）首列放 32px 头像，留 2px 给选中的那圈描边
+        gridTemplateColumns: item.avatar === undefined ? "14px minmax(0,1fr) auto" : "34px minmax(0,1fr) auto",
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
@@ -763,7 +802,9 @@ function MenuRow(props: {
           color: item.danger === true ? "var(--color-danger)" : "var(--color-text-secondary)",
         }}
       >
-        {item.checked === true ? (
+        {item.avatar !== undefined ? (
+          item.avatar
+        ) : item.checked === true ? (
           <Icon name="check" size={13} strokeWidth={2} />
         ) : item.icon !== undefined ? (
           <Icon name={item.icon} size={13} strokeWidth={1.8} />
@@ -809,7 +850,18 @@ function MenuRow(props: {
         {item.subLabel !== undefined && (
           <span
             style={{
-              flex: "none",
+              display: "flex",
+              alignItems: "baseline",
+              gap: "var(--space-1)",
+              maxWidth: "100%",
+              minWidth: 0,
+              // 选中行整行半粗（.option-row 的选中态）是给主行的；副行是注脚，不跟着加粗
+              fontWeight: "var(--weight-regular)",
+            }}
+          >
+          <span
+            style={{
+              flex: "0 1 auto",
               maxWidth: "100%",
               minWidth: 0,
               whiteSpace: "nowrap",
@@ -831,6 +883,20 @@ function MenuRow(props: {
             ) : (
               item.subLabel
             )}
+          </span>
+          {item.subLabelTrail !== undefined && (
+            <span
+              style={{
+                flex: "none",
+                whiteSpace: "nowrap",
+                color: "var(--color-text-tertiary)",
+                fontSize: "var(--font-size-xs)",
+                lineHeight: "var(--line-height-ui)",
+              }}
+            >
+              · {item.subLabelTrail}
+            </span>
+          )}
           </span>
         )}
         {item.hint !== undefined && (

@@ -76,6 +76,41 @@ export function closeTab(
 }
 
 /**
+ * 丢掉「根已经不在了」的标签（专注 / 浏览态结束或换工作区）。
+ *
+ * 预览的 fs:read 只认会话根 + extraWorkspaceId（shared/files.ts）：专注一结束，
+ * 之前那个额外根就从白名单里消失，留着的标签会重新读一次并变成常驻报错卡
+ * （2026-10-22 发版前验收实测）。与「换会话 / 换工作区清标签」同一条纪律——
+ * 旧的根在新形态里没有意义。
+ *
+ * 只丢 root 恰好是这一次失去的根的标签：同一工作区里的会话根、工作台根不受影响。
+ * 丢的若是激活标签，激活它在原队列里右边的第一个幸存者，没有就退左边（同 closeTab
+ * 的相邻语义）；全丢完 = 没有激活文件。
+ */
+export function dropTabsAtRoot(
+  tabs: readonly FileTab[],
+  activePath: string | null,
+  root: string,
+): CloseTabResult {
+  const next = tabs.filter((tab) => tab.root !== root);
+  if (next.length === tabs.length) return { tabs: [...tabs], activePath };
+  if (activePath === null || next.some((tab) => tab.path === activePath)) {
+    return { tabs: next, activePath };
+  }
+  const index = tabs.findIndex((tab) => tab.path === activePath);
+  if (index === -1) return { tabs: next, activePath };
+  for (let at = index + 1; at < tabs.length; at++) {
+    const candidate = tabs[at];
+    if (candidate !== undefined && candidate.root !== root) return { tabs: next, activePath: candidate.path };
+  }
+  for (let at = index - 1; at >= 0; at--) {
+    const candidate = tabs[at];
+    if (candidate !== undefined && candidate.root !== root) return { tabs: next, activePath: candidate.path };
+  }
+  return { tabs: next, activePath: null };
+}
+
+/**
  * 拉窄即折叠：树开着时面板被拉窄（任何幅度）→ 收起树。
  *
  * 为什么不用「跨 640px 断点」判：面板宽度的夹取下界是 pane 的 1/3
