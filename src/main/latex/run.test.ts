@@ -8,7 +8,7 @@
  */
 import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LatexProbe } from "./probe.ts";
@@ -301,6 +301,203 @@ describe("LatexRunner —— 产物定位（M2）", () => {
     assert.equal(result.pdfFresh, true);
     assert.equal(result.logStale, false);
     assert.equal(result.logTail, null);
+  });
+});
+
+/*
+ * xelatex 的日志写的是 `.xdv`（它先出 XDV，再由 xdvipdfmx 转 PDF）。把 XDV 当产物
+ * 交给调用方，打开的就是一个 .xdv——中文主路径上人人都踩。
+ */
+describe("LatexRunner —— 只把 .pdf 当产物（xelatex 的 .xdv）", () => {
+  test("日志写 Output written on build/main.xdv，且两个文件都在：返回同目录同名的 .pdf", async () => {
+    const dir = project({ "main.tex": "\\documentclass{ctexart}" });
+    writeFileSync(
+      join(dir, "fake-xelatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        // 真 xelatex 的顺序：先写 XDV，日志记 XDV，再由 xdvipdfmx 写 PDF
+        'writeFileSync(join(out, "main.xdv"), "XDV");',
+        'writeFileSync(join(out, "main.pdf"), "%PDF-1.5 fake\\n");',
+        'writeFileSync(join(out, "main.log"), "Output written on build/main.xdv (1 page, 516 bytes).\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-xelatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.pdf, join(resolve(dir), "build", "main.pdf"));
+    assert.equal(result.pages, 1);
+    assert.equal(result.pdfFresh, true);
+  });
+
+  test("只有 .xdv、没有 .pdf：不返回 .xdv（否则调用方拿中间格式当 PDF）", async () => {
+    const dir = project({ "main.tex": "\\documentclass{ctexart}" });
+    writeFileSync(
+      join(dir, "fake-xelatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        'writeFileSync(join(out, "main.xdv"), "XDV");',
+        'writeFileSync(join(out, "main.log"), "Output written on build/main.xdv (1 page, 516 bytes).\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-xelatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.pdf, null);
+    assert.equal(result.pdfFresh, false);
+    // 回 0 却没有 PDF 是假成功，得说清楚（不能悄悄交个 .xdv 蒙混过关）
+    assert.equal(result.status, "compile-error");
+    assert.ok(
+      result.errors.some((issue) => issue.message.includes("main.xdv") && /not a PDF/.test(issue.message)),
+      result.errors.map((issue) => issue.message).join(" | "),
+    );
+  });
+
+  test("大写 .PDF 也算 PDF", async () => {
+    const dir = project({ "main.tex": "\\documentclass{ctexart}" });
+    writeFileSync(
+      join(dir, "fake-xelatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        'writeFileSync(join(out, "main.PDF"), "%PDF-1.5 fake\\n");',
+        'writeFileSync(join(out, "main.log"), "Output written on build/main.PDF (1 page, 9 bytes).\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-xelatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok");
+    assert.ok(result.pdf !== null && result.pdf.endsWith("main.PDF"), `拿到的是 ${String(result.pdf)}`);
+  });
+});
+
+/*
+ * lualatex 的日志写 `Output written on main.pdf`（名字不带 -outdir 前缀）。项目根又有
+ * 一份上一轮的 main.pdf 时，“先列到谁就是谁”会把旧文件当产物，本次新写的
+ * build/main.pdf 反被丢掉。
+ */
+describe("LatexRunner —— 日志裸文件名与「本次新写」优先", () => {
+  const OLD = (): Date => new Date(Date.now() - 60_000);
+
+  test("根目录旧 main.pdf + build 本次新写：返回 build/main.pdf 且判 ok", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    // 上一轮留在根目录的 PDF：比本次编译开始早一分钟（不能靠“刚好慢一拍”碰巧过）
+    writeFileSync(join(dir, "main.pdf"), "%PDF-1.4 old\n", "utf8");
+    utimesSync(join(dir, "main.pdf"), OLD(), OLD());
+    writeFileSync(
+      join(dir, "fake-lualatex.mjs"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        // lualatex 的真实写法：产物名就是 main.pdf，不带 outdir 前缀
+        'writeFileSync(join(out, "main.log"), "Output written on main.pdf (2 pages, 9 bytes).\\n");',
+        'writeFileSync(join(out, "main.pdf"), "%PDF-1.5 new\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-lualatex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok", result.errors.map((issue) => issue.message).join(" | "));
+    assert.equal(result.pdf, join(resolve(dir), "build", "main.pdf"));
+    assert.equal(result.pages, 2);
+    assert.equal(result.pdfFresh, true);
+  });
+
+  test("本次新写的是根目录那份：压过先被列到的 build/ 旧 PDF（新写的优先，不是顺序优先）", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    mkdirSync(join(dir, "build"), { recursive: true });
+    writeFileSync(join(dir, "build", "main.pdf"), "%PDF-1.4 old\n", "utf8");
+    utimesSync(join(dir, "build", "main.pdf"), OLD(), OLD());
+    // 不传 -outdir 的 recipe：本次产物落在主文件旁边
+    writeFileSync(
+      join(dir, "fake-compiler.mjs"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'writeFileSync(join(dir, "main.log"), "Output written on main.pdf (1 page, 9 bytes).\\n");',
+        'writeFileSync(join(dir, "main.pdf"), "%PDF-1.5 new\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-compiler.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.pdf, join(resolve(dir), "main.pdf"));
+    assert.equal(result.pdfFresh, true);
+  });
+
+  test("dvi-only recipe（回 0 只写出 main.dvi）：不交 DVI，但文案要说清「编出了非 PDF」", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    writeFileSync(
+      join(dir, "fake-latex.mjs"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'writeFileSync(join(dir, "main.log"), "Output written on main.dvi (1 page, 100 bytes).\\n");',
+        'writeFileSync(join(dir, "main.dvi"), "DVI");',
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    writeFileSync(
+      join(dir, ".orbita", "latex.json"),
+      JSON.stringify({ recipe: [nodeExe, join(dir, "fake-latex.mjs"), "%DIR%"] }),
+      "utf8",
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.pdf, null);
+    assert.equal(result.status, "compile-error");
+    const messages = result.errors.map((issue) => issue.message).join(" | ");
+    assert.match(messages, /main\.dvi/, messages);
+    assert.match(messages, /not a PDF/, messages);
   });
 });
 
