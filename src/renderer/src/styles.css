@@ -563,7 +563,9 @@
 /* 菜单里的那一条：吃满行的左右内边距（行自己已有 padding），行下留一小段呼吸 */
 .menu-progress {
   margin: 0 var(--space-2) var(--space-1);
+}
 
+/*
  * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
  * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
  * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold
