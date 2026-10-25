@@ -2,10 +2,15 @@
  * 会话回退 / 单轮撤销的主进程编排 —— 对话（readLog 折叠）、pi 本子（agent 进程
  * 裁枝）、文件（快照还原）三条线在这里汇成一个事务。
  *
- * 顺序是刻意的：**pi 本子先裁**（对账不过就地拒绝，一条文件都不动——宁可回退
- * 失败，不切错位置），文件后还原（单文件失败记 skipped 并把原因带回界面，不砸
+ * 回退的顺序是刻意的：**pi 本子先裁**（对账不过就地拒绝，一条文件都不动——宁可
+ * 回退失败，不切错位置），文件后还原（单文件失败记 skipped 并把原因带回界面，不砸
  * 整批、不静默），我们的 RevertRecord / UndoRecord 最后追加（它一落盘，界面读到
  * 的就是折叠后的新世界）。
+ *
+ * 单轮撤销只有一处相反：pi 的告知**在还原之后**再写（见 executeUndo）。撤销通知是
+ * 一句陈述，不是裁枝位置；它的文案必须带真实结果（哪几个文件没还原、为什么），
+ * 而结果只有做完才知道。先写通知就只能写「已撤除」——模型以为盘上已经回去，
+ * 实际被占用/快照丢失的文件原地不动（A5）。
  *
  * 回退不拦截用户手改过的文件（2026-11 用户裁决「直接撤回，不整七七八八的。
  * 但一定要提醒用户」）：确认框里的警示组由 planRevert / planUndo 提供。
@@ -317,17 +322,51 @@ export async function planUndo(store: SessionStore, id: string, turnId: string):
   };
 }
 
-/** 撤销通知的正文（进 pi 上下文，模型由此知道那轮改动没了）。 */
-export function undoNotice(turn: FileTurnRecord): string {
-  const paths = turn.changes.map((change) => change.path).join(", ");
+/**
+ * 撤销通知的正文（进 pi 上下文，模型由此知道那轮改动没了）。
+ *
+ * 必须按**真实执行结果**写：部分文件没还原时不能只说「已撤除」，否则模型的上下文
+ * 与磁盘相反——它会以为文件已回退、于是谎报完成或按错误的前提继续改（A5）。
+ * 全成功时的文案与引入 outcomes 之前逐字一致（模型侧既有措辞不动）。
+ */
+export function undoNotice(turn: FileTurnRecord, outcomes: readonly RevertFileOutcome[]): string {
+  const failed = outcomes.filter((entry) => entry.outcome === "skipped");
+  const done = outcomes.filter((entry) => entry.outcome !== "skipped");
+  if (failed.length === 0) {
+    const paths = turn.changes.map((change) => change.path).join(", ");
+    return (
+      "The user undid the agent's changes to the following files from an earlier round, " +
+      `restoring them to their state before that round: ${paths}. ` +
+      "Those changes are no longer on disk — do not assume they are still present."
+    );
+  }
+  const first = failed[0];
+  const reason = first?.reason ?? "未知原因";
+  const firstPath = first?.path ?? "";
+  const failedPaths = failed.map((entry) => entry.path).join(", ");
+  const failedPart =
+    `另有 ${failed.length} 个文件未还原：${firstPath} —— ${reason}。` +
+    "这些文件仍是 agent 改动后的内容，不要以为它们已经回退" +
+    (failed.length > 1 ? `；未还原清单：${failedPaths}。` : "。");
+  if (done.length === 0) {
+    return `用户撤销了 agent 在更早一轮对这些文件的改动，但没有一个文件还原成功。${failedPart}`;
+  }
   return (
     "The user undid the agent's changes to the following files from an earlier round, " +
-    `restoring them to their state before that round: ${paths}. ` +
-    "Those changes are no longer on disk — do not assume they are still present."
+    `restoring them to their state before that round: ${done.map((entry) => entry.path).join(", ")}. ` +
+    "Those changes are no longer on disk — do not assume they are still present. " +
+    failedPart
   );
 }
 
-/** 执行单轮撤销：pi 本子追加告知 → 文件还原到该轮之前 → 落 UndoRecord。 */
+/**
+ * 执行单轮撤销：文件还原到该轮之前 → 落 UndoRecord → pi 本子追加告知。
+ *
+ * 与回退相反，pi 的告知放在还原之后：通知文案要写真实结果（失败文件与原因），
+ * 而结果只有还原做完才知道（A5）。界面的撤销按钮在轮次进行中是禁用的，agent 侧
+ * 「会话正在跑」仍是兜底；真落到那条兜底上时文件已经还原、UndoRecord 也已落盘，
+ * 所以错误文案必须说清「盘上已经改了，只是没通知到模型」，不能让它读成「撤销失败」。
+ */
 export async function executeUndo(deps: RevertDeps, id: string, turnId: string): Promise<RevertFileOutcome[]> {
   const meta = await deps.store.readMeta(id);
   if (meta === null) throw new Error(`session ${id} not found`);
@@ -335,16 +374,9 @@ export async function executeUndo(deps: RevertDeps, id: string, turnId: string):
     throw new Error("This task predates resumable sessions and can be read but not undone");
   }
   const { turn } = await locateTurn(deps.store, id, turnId);
-  // pi 先落通知：失败就地抛，文件一条不动
-  await deps.host.editPiBook({
-    type: "undoPiBook",
-    sessionId: id,
-    sourcePiSessionFile: meta.piSessionFile,
-    cwd: meta.cwd,
-    notice: undoNotice(turn),
-  });
   const restores = planRestores([turn]);
   const outcomes = await restoreFiles(deps.store, id, restores);
+  // 账先落：文件已经按结果变了，界面必须如实显示（含失败原因）；通知书写不成也不改这个事实
   await deps.store.record(id, {
     role: "undo",
     id: randomUUID(),
@@ -352,5 +384,18 @@ export async function executeUndo(deps: RevertDeps, id: string, turnId: string):
     restored: outcomes,
     timestamp: Date.now(),
   });
+  try {
+    await deps.host.editPiBook({
+      type: "undoPiBook",
+      sessionId: id,
+      sourcePiSessionFile: meta.piSessionFile,
+      cwd: meta.cwd,
+      notice: undoNotice(turn, outcomes),
+    });
+  } catch (cause) {
+    console.error("[revert] 撤销已改盘并落账，但没能把告知写进 pi 本子：", id, turnId, cause);
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(`Files were restored, but the agent was not told about the undo: ${detail}`);
+  }
   return outcomes;
 }
