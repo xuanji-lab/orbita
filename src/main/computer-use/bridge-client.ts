@@ -117,6 +117,9 @@ function parseResp(raw: string): Resp | null {
 //   1. 从 out/bridge.json 读出通道（老桥没有 port → null → 纯文件协议，行为与改动前一致）；
 //   2. 把建连从命令路径里拿出去：**后台探活**（见 PROBE_DELAYS_MS 那一节），命令永不为
 //      「通道还没好」等时间——真机开局那次 10 秒就是被同步建连 + 冷却吃掉的；
+//   2b. 每条命令发送前在同一条连接上打一发 ping（见 probeLink）：真沙箱里宿主→guest 的 TCP
+//      是**间歇可达**的（2026-10-25 真机：ICMP 与 TCP 都忽通忽不通，同一段 60 秒里连 8 次
+//      全没到 guest）。所以 TCP 只能当机会型加速器：探活不过就这一条命令改走文件，不报错。
 //   3. 探活失败用短退避再试一轮，全失败才进 10s 冷却；冷却结束后自动再起一轮；
 //   4. 把「已发出去但没等到回执」与「根本没发出去」分开：前者**不许重放**（一次点击不能
 //      变成两下），后者可以安全、透明地回退。
@@ -311,6 +314,11 @@ interface TcpChannelState {
   failureLines: number;
   /** 上一次失败原因（日志预算：后文只在原因变了才记） */
   lastFailure: string;
+  /** 连续探活失败次数（成功一次就归零；到 2 次进冷却） */
+  probeFailures: number;
+  /** 探活失败日志的去重账：上次的原因与时刻 */
+  probeLogReason: string;
+  probeLogAt: number;
 }
 
 let tcpState: TcpChannelState | null = null;
@@ -357,6 +365,9 @@ async function channelStateFor(outDir: string): Promise<TcpChannelState> {
       totalAttempts: 0,
       failureLines: 0,
       lastFailure: "",
+      probeFailures: 0,
+      probeLogReason: "",
+      probeLogAt: 0,
     };
   }
   const state = tcpState;
@@ -386,6 +397,25 @@ function logChannel(state: TcpChannelState, line: string): void {
 const PROBE_DELAYS_MS = [0, 500, 1_000, 2_000] as const;
 /** 失败原因全额记录的行数预算：之后只在原因变了时再记（否则 TCP 一直不可用时日志会无限长） */
 const PROBE_FAILURE_LOG_LINES = 8;
+
+// ── 每条命令发送前的连接探活 ─────────────────────────────────────────────────
+//
+// 真沙箱里宿主→guest 的 TCP 是**间歇可达**的（2026-10-25 真机三轮 + 独立的 netecho 监听共同证实：
+// 同一段 60 秒里 ICMP 与 TCP 都忽通忽不通，gate.accept 心跳里「已接入 0 条」而宿主连了 8 次）。
+// 两端代码都改不动这件事，所以 TCP 降级成**机会型加速器**：发正式命令前先在这条连接上打一发
+// ping（健康时 0–1ms），回执没来就说明这条连接已经不可信——**这一条命令干脆不出 TCP**，
+// 直接走文件协议（不报错、不重放、不进冷却），命令语义与纯文件协议完全一样。
+
+/**
+ * 探活一发的预算。**必须容得下 guest 里排在前面的一条大命令**（Execute 是串行闸门，
+ * 实测截图 463ms），否则会把一条健康的连接误判成死的；1.5s 与建连预算同档。
+ * 宁可偶尔丢一条健康连接（代价：这条命令走文件 + 后台重连），也不要把一条命令发进黑洞。
+ */
+const TCP_PROBE_TIMEOUT_MS = 1_500;
+/** 连续几次探活失败才进冷却：一次失败只丢这条连接，下一条命令照常重连并再探 */
+const PROBE_FAILURES_BEFORE_COOLDOWN = 2;
+/** 探活失败日志的去重窗口：同一原因 10s 内只打一行（间歇性丢包会反复触发） */
+const PROBE_LOG_DEDUPE_MS = 10_000;
 
 /** 排一次探活；已有排程 / 正在试 / 已经有连接时什么都不做 */
 function armProbe(state: TcpChannelState): void {
@@ -538,6 +568,34 @@ function decodeJpegInline(value: unknown): Uint8Array | undefined {
 }
 
 /**
+ * 在一条现成的连接上打一发 ping。返回 null = 健康；否则是给人看的原因（超时 / 连接被关）。
+ *
+ * 为什么值得多花一跳：连接「看着还在、其实已经半开」时，正式命令会被写进黑洞——宿主只能
+ * 等到命令预算耗尽再报「没有响应」，模型于是重试同一个动作。一发 0–1ms 的 ping 把它变成
+ * 「这一条命令改走文件」，用户只看到这一次慢一点。
+ */
+async function probeLink(link: GuestTcpLink): Promise<string | null> {
+  try {
+    const message = await link.request(computerUseGuestCommands.ping, {}, TCP_PROBE_TIMEOUT_MS);
+    const resp = parseTcpResp(message["resp"]);
+    if (resp === null) return "探活回执缺 resp";
+    if (resp.ok !== true) return "探活回执 ok 不是 true";
+    return null;
+  } catch (cause) {
+    return cause instanceof Error ? cause.message : String(cause);
+  }
+}
+
+/** 探活失败那一行：**同一原因 10s 内只打一次**（间歇丢包会反复触发，不能刷屏） */
+function logProbeFallback(state: TcpChannelState, reason: string): void {
+  const now = Date.now();
+  if (state.probeLogReason === reason && now - state.probeLogAt < PROBE_LOG_DEDUPE_MS) return;
+  state.probeLogReason = reason;
+  state.probeLogAt = now;
+  console.log(`[computer-use] 通道：TCP 探活失败（${reason}），本条命令改走文件`);
+}
+
+/**
  * 连接不可用了（在飞回执丢了 / 写不出去）：丢掉连接、进冷却、**后台**排一轮重连。
  * 命令路径永不在这里等——下一个命令直接用文件协议。
  */
@@ -593,6 +651,34 @@ async function sendGuestCommandOverTcp(
     logChannel(state, "文件（TCP 还没连上，后台探活中）");
     return { kind: "fallback", reason: "TCP 通道未就绪（后台探活中）" };
   }
+
+  // ── 发送前的连接探活（真沙箱里 TCP 间歇可达，见 TCP_PROBE_TIMEOUT_MS 的注释）──
+  // 失败就**不带这条命令上路**：不出 TCP 就不存在「发出去没回执」的重放问题，
+  // 直接 fallback 走文件协议——本次命令不报错、不重放、不进冷却。
+  const unhealthy = await probeLink(link);
+  if (unhealthy !== null) {
+    link.close();
+    state.link = null;
+    state.probeFailures += 1;
+    logProbeFallback(state, unhealthy);
+    // 丢掉的连接在**后台**重连一条：网络恢复之后，下一条命令就能重新用上 TCP
+    // （不在这里等：这条命令已经决定走文件协议了）。
+    armProbe(state);
+    if (state.probeFailures >= PROBE_FAILURES_BEFORE_COOLDOWN) {
+      // 连续两次：这次不是抖动，进冷却（这期间命令直接走文件），冷却结束再后台重连
+      state.probeFailures = 0;
+      state.cooldownUntil = Date.now() + BRIDGE_TCP_COOLDOWN_MS;
+      state.channel = null; // 重读 bridge.json：桥重启会换端口 / 令牌
+      logChannel(
+        state,
+        `文件（TCP 连续探活失败：${unhealthy}；${Math.round(BRIDGE_TCP_COOLDOWN_MS / 1000)}s 后后台重连）`,
+      );
+      armProbe(state);
+    }
+    return { kind: "fallback", reason: `TCP 探活失败：${unhealthy}` };
+  }
+  state.probeFailures = 0;
+
   try {
     const message = await link.request(command, fields, timeoutMs);
     const resp = parseTcpResp(message["resp"]);
@@ -612,10 +698,7 @@ async function sendGuestCommandOverTcp(
       return { kind: "fallback", reason: failure.message };
     }
     // 已经发出去了：**不重放**——宁可报一次错，也不能让一次点击悄悄变成两下
-    logChannel(
-      state,
-      `文件（${command} 的 TCP 回执丢了：${failure.message}；下一条命令起走文件）`,
-    );
+    logChannel(state, `TCP 回执丢失（${command}：${failure.message}），下一条命令起走文件`);
     return { kind: "failed", error: new Error(tcpChannelFailureMessage(command, failure, timeoutMs)) };
   }
 }

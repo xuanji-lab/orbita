@@ -338,10 +338,12 @@ interface FakeTcpGuestOptions {
   token: string;
   /** 收到命令后怎么回；缺省回 {ok:true} */
   handler?: (req: FakeTcpRequest) => { resp: Record<string, unknown>; jpeg?: Uint8Array };
-  /** 收到命令后装死（不回执）：验读超时 */
+  /** 非 ping 命令收到后装死（不回执）：验读超时。ping 仍照常回（那是宿主每条命令前的探活） */
   silent?: boolean;
-  /** 收到命令就掐断连接：验「发出去了但回执丢了」 */
-  dropOnCommand?: boolean;
+  /** 非 ping 命令收到就掐断连接：验「发出去了但回执丢了」（探活仍然是通的） */
+  dropNonPing?: boolean;
+  /** 握手成功之后**连 ping 也不回**：验「连接看着还在、实际已经死了」→ 本条命令改走文件 */
+  muteAfterGreeting?: boolean;
   /** 前 N 次握手回 hello-fail（模拟「guest 网卡还没就绪」）：验短退避重试 */
   failHellos?: number;
   /** 收下连接但永远不回 hello：模拟握手卡住（验命令不被探活拖慢） */
@@ -406,7 +408,15 @@ async function startFakeTcpGuest(options: FakeTcpGuestOptions): Promise<FakeTcpG
           fields: (message["fields"] as Record<string, unknown> | undefined) ?? {},
         };
         requests.push(req);
-        if (options.dropOnCommand === true) {
+        // 宿主每条命令发送前都会在这条连接上打一发 ping（探活）：假 guest 默认也要回，
+        // 否则所有用例都会变成「探活失败 → 走文件」。muteAfterGreeting 例外，那是专门验它的。
+        if (req.command === "ping" && options.muteAfterGreeting !== true) {
+          socket.write(`${JSON.stringify({ id: req.id, resp: { ok: true } })}
+`);
+          continue;
+        }
+        if (options.muteAfterGreeting === true) continue;
+        if (options.dropNonPing === true) {
           socket.destroy();
           return;
         }
@@ -493,7 +503,8 @@ describe("bridge-client（TCP 通道）", () => {
       assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       const resp = await sendGuestCommand(dir, "key", { key: "ctrl+a" });
       assert.deepEqual(resp, { ok: true, echo: "key", got: "ctrl+a" });
-      assert.equal(guest.requests.length, 1);
+      // 两条：发送前的探活 ping + 正式命令
+      assert.deepEqual(guest.requests.map((r) => r.command), ["ping", "key"]);
       assert.equal(guest.connections, 1);
       // 走的是 TCP：宿主没有往映射目录里写 req
       assert.deepEqual(await readdir(join(dir, COMPUTER_USE_CMD_DIR)).catch(() => []), []);
@@ -515,7 +526,8 @@ describe("bridge-client（TCP 通道）", () => {
       await sendGuestCommand(dir, "ping", {});
       await sendGuestCommand(dir, "ping", {});
       assert.equal(guest.connections, 1);
-      assert.equal(guest.requests.length, 3);
+      // 3 条命令 = 3 发探活 + 3 发正式命令
+      assert.equal(guest.requests.length, 6);
     } finally {
       await guest.close();
       resetGuestCommandSeq();
@@ -534,12 +546,14 @@ describe("bridge-client（TCP 通道）", () => {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
       assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       const [first, second] = await Promise.all([
-        sendGuestCommand(dir, "ping", {}),
+        sendGuestCommand(dir, "cdp-status", {}),
         sendGuestCommand(dir, "screenshot-stats", {}),
       ]);
-      assert.equal(first["command"], "ping");
+      assert.equal(first["command"], "cdp-status");
       assert.equal(second["command"], "screenshot-stats");
       assert.equal(guest.connections, 1);
+      // 2 条命令 = 2 发探活 + 2 发正式命令
+      assert.equal(guest.requests.length, 4);
     } finally {
       await guest.close();
       resetGuestCommandSeq();
@@ -597,7 +611,7 @@ describe("bridge-client（TCP 通道）", () => {
         assert.match(message, /截图|screenshot/);
         return true;
       });
-      assert.equal(guest.requests.length, 1, "命令确实发出去了");
+      assert.equal(guest.requests.length, 2, "探活 + 正式命令都确实发出去了");
       // 冷却窗口内：直接走文件协议，不再去撞那条已经扭断的连接
       const resp = await sendGuestCommand(dir, "ping", {});
       assert.deepEqual(resp, { ok: true, via: "file" });
@@ -613,7 +627,7 @@ describe("bridge-client（TCP 通道）", () => {
   test("回执丢了（连接被掐）→ 报通道中断，且**不重放**（不会让一次点击变两下）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
     resetGuestCommandSeq();
-    const guest = await startFakeTcpGuest({ token: "t", dropOnCommand: true });
+    const guest = await startFakeTcpGuest({ token: "t", dropNonPing: true });
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
@@ -671,7 +685,7 @@ describe("bridge-client（TCP 通道）", () => {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
       assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       await assert.rejects(sendGuestCommand(dir, "key", { key: "hyper+x" }), /不认识的按键名：hyper/);
-      assert.equal(guest.requests.length, 1);
+      assert.deepEqual(guest.requests.map((r) => r.command), ["ping", "key"], "探活一通，正式命令一通");
     } finally {
       await guest.close();
       resetGuestCommandSeq();
@@ -705,13 +719,13 @@ describe("bridge-client（TCP 通道）", () => {
   test("bridge.json 换成新桥的通告后，parseBridgeInfo 拿到的是新端口与新令牌", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
     resetGuestCommandSeq();
-    const deadGuest = await startFakeTcpGuest({ token: "old", dropOnCommand: true });
+    const deadGuest = await startFakeTcpGuest({ token: "old", dropNonPing: true });
     const freshGuest = await startFakeTcpGuest({ token: "new" });
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true } }));
     try {
       await writeBridgeJson(dir, { port: deadGuest.port, token: "old" });
       assert.ok(await waitForTcpLink(dir, deadGuest), "后台探活应把 TCP 连上");
-      await assert.rejects(sendGuestCommand(dir, "ping", {}), /命令通道中断/);
+      await assert.rejects(sendGuestCommand(dir, "screenshot-stats", {}), /命令通道中断/);
       // 桥重启：新通告、新端口、新令牌（冷却期间命令走文件协议，冷却后重新读通告）
       await writeBridgeJson(dir, { port: freshGuest.port, token: "new" });
       const parsed = parseBridgeInfo(await readFile(join(dir, "bridge.json"), "utf8"));
@@ -780,7 +794,7 @@ describe("bridge-client（TCP 后台探活）", () => {
         await sendGuestCommand(dir, "ping", {});
       });
       assert.equal(bridge.requests.length, 1, "只有通告刚出现的那条走文件协议");
-      assert.equal(guest.requests.length, 1, "退避重试连上之后，下一条命令走 TCP");
+      assert.equal(guest.requests.length, 2, "退避重试连上之后，下一条命令走 TCP（探活 + 正式）");
       const joined = lines.join("\n");
       assert.match(joined, /通道：TCP 连接失败（第 1 次）：.*握手失败：桥回 hello-fail/, "每次尝试的失败原因都要留在日志里");
       assert.match(joined, /通道：TCP 127\.0\.0\.1:\d+（第 2 次尝试后）/, "连上时要写明第几次尝试");
@@ -802,8 +816,104 @@ describe("bridge-client（TCP 后台探活）", () => {
       for (let i = 0; i < 5; i += 1) await sendGuestCommand(dir, "ping", {});
       await sleep(600); // 足够跨过一轮退避窗口
       assert.equal(guest.connections, 1, "连上之后不许再建新连接");
-      assert.equal(guest.requests.length, 5);
+      assert.equal(guest.requests.length, 10, "5 条命令 = 5 发探活 + 5 发正式命令");
     } finally {
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── 发送前的连接探活（真沙箱里宿主→guest 的 TCP 间歇可达）────────────────
+//
+// 真机现场（2026-10-25）：握手成功的连接可能几秒后就不通了，而 guest 的 accept 心跳显示
+// 「已接入 0 条」——SYN 根本没到。两端代码都改不动这件事，所以 TCP 只当机会型加速器：
+// 每条命令发送前先在这条连接上打一发 ping，回执没来就让**这一条命令**改走文件协议。
+
+describe("bridge-client（发送前探活）", () => {
+  test("探活没回执 → 本条命令改走文件并成功（不报错、不重放）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-health-"));
+    resetGuestCommandSeq();
+    // 握手照旧成功，但之后连 ping 都不回：连接「看着还在、其实已经不通了」
+    const guest = await startFakeTcpGuest({ token: "t", muteAfterGreeting: true });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "握手本身仍然成功（这是真机那种「通着通着就不通」）");
+      const { value, lines } = await captureLog(async () => sendGuestCommand(dir, "screenshot-stats", {}));
+      assert.deepEqual(value, { ok: true, via: "file" }, "探活失败只让这一条命令改走文件，不报错");
+      assert.equal(bridge.requests.length, 1, "命令确实走文件协议跑完了");
+      // 关键：正式命令**没有**被发进 TCP（探活先倒下了），所以不存在重放
+      assert.deepEqual(guest.requests.map((r) => r.command), ["ping"]);
+      const joined = lines.join("\n");
+      assert.match(joined, /通道：TCP 探活失败（.*），本条命令改走文件/, "日志要能看出为什么这条走了文件");
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("探活失败日志 10s 内同一原因只打一行（间歇丢包不刷屏）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-health-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t", muteAfterGreeting: true });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest));
+      const { lines } = await captureLog(async () => {
+        // 第 1 条：探活失败 → 丢连接（不进冷却）；后台会重连，所以第 2 条也能再撞一次探活
+        await sendGuestCommand(dir, "screenshot-stats", {});
+        const deadline = Date.now() + 3000;
+        while (guest.connections < 2 && Date.now() < deadline) await sleep(10);
+        await sleep(50);
+        await sendGuestCommand(dir, "screenshot-stats", {});
+      });
+      const probeLines = lines.filter((line) => line.includes("TCP 探活失败"));
+      assert.equal(probeLines.length, 1, `同一原因 10s 内只打一行，实际 ${probeLines.length} 行：\n${lines.join("\n")}`);
+      assert.equal(bridge.requests.length, 2, "两条命令都靠文件协议跑完");
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("连续两次探活失败才进冷却：冷却期内不再发探活、不再重连", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-health-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t", muteAfterGreeting: true });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest));
+      // 第 1 次探活失败：只丢这条连接，不进冷却（后台会自己重连一条）
+      await sendGuestCommand(dir, "screenshot-stats", {});
+      assert.equal(bridge.requests.length, 1);
+      const deadline = Date.now() + 3000;
+      while (guest.connections < 2 && Date.now() < deadline) await sleep(10);
+      await sleep(80); // 等后台那条连接握手完（回环上一跳）
+      assert.equal(guest.connections, 2, "探活失败后应在后台重连一条");
+      // 第 2 次探活失败 → 连续两次，进冷却
+      await sendGuestCommand(dir, "screenshot-stats", {});
+      assert.equal(bridge.requests.length, 2);
+      const connections = guest.connections;
+      const requests = guest.requests.length;
+      // 冷却期内：命令直接走文件协议，既不发探活也不重连
+      await sendGuestCommand(dir, "screenshot-stats", {});
+      assert.equal(bridge.requests.length, 3);
+      assert.equal(guest.connections, connections, "冷却期内不该再建连");
+      assert.equal(
+        guest.requests.length,
+        requests,
+        `冷却期内不该再发探活（新增：${JSON.stringify(guest.requests.slice(requests).map((r) => r.command))}）`,
+      );
+    } finally {
+      bridge.stop();
       await guest.close();
       resetGuestCommandSeq();
       await rm(dir, { recursive: true, force: true });
