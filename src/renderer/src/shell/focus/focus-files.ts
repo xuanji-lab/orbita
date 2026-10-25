@@ -46,10 +46,11 @@ export function changeSummary(entries: readonly FocusChangeEntry[]): { changed: 
 }
 
 /** 增删行数文案（悬停才出现）：`+42 −7`，只有一侧就只写一侧；二进制没有行级统计；
- * 超大未跟踪文件只判了二进制、没数行 → 「行数未知」（不能拿 +0 冒充没改动） */
-export function formatChangeLines(entry: FocusChangeEntry): string {
+ * 超大未跟踪文件只判了二进制、没数行 → 用调用方给的文案（`t.focus.linesUnknown`），
+ * 不在这里写死中文（英文界面会露出中文），也不拿 +0 冒充没改动 */
+export function formatChangeLines(entry: FocusChangeEntry, linesUnknown: string): string {
   if (entry.binary) return "";
-  if (entry.lineCountUnknown === true) return "行数未知";
+  if (entry.lineCountUnknown === true) return linesUnknown;
   const parts: string[] = [];
   if (entry.added > 0) parts.push(`+${entry.added}`);
   if (entry.removed > 0) parts.push(`\u2212${entry.removed}`);

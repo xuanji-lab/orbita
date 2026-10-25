@@ -7,7 +7,6 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { open, readFile, stat } from "node:fs/promises";
 import { createTwoFilesPatch } from "diff";
 import {
   parseNumstatLine,
@@ -19,6 +18,12 @@ import {
   type ReviewSource,
 } from "../../shared/review.ts";
 import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
+import {
+  diskUntrackedProbe,
+  untrackedLineStat,
+  type UntrackedLineStat,
+  type UntrackedProbe,
+} from "./untracked-lines.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,19 +71,6 @@ function numstatEntries(stdout: string): ReviewEntry[] {
   return entries;
 }
 
-/** 未跟踪文件的读盘面（测试注入假货）：null = 读不了 / 不是文件（跳过）。 */
-export type UntrackedReader = (path: string) => Promise<Buffer | null>;
-
-const diskUntrackedReader: UntrackedReader = async (path) => {
-  try {
-    const info = await stat(path);
-    if (!info.isFile()) return null;
-    return await readFile(path);
-  } catch {
-    return null;
-  }
-};
-
 /**
  * status 的路径默认就是工作区相对（git 1.5.4 起），但工作区之外的改动会带 `../` 前缀
  * ——不归这棵树管（与 `git diff --relative` 的排除口径一致）。git 只输出 `/` 分隔。
@@ -87,30 +79,31 @@ function insideWorkspace(path: string): boolean {
   return path !== ".." && !path.startsWith("../");
 }
 
-/** 未跟踪文件（porcelain v2 的 `? ` 行）：行数对着空文件算，二进制标 binary。 */
+/**
+ * 未跟踪文件（porcelain v2 的 `? ` 行）：行数对着空文件算，二进制标 binary。
+ * 数行数与专注左栏共用 untrackedLineStat —— 同一文件两边给同一个数，且都吃
+ * size+mtime 缓存（以前这里整份读文件 + 造 diff 数 `+`：50 MB 要 1 秒）。
+ */
 async function untrackedEntries(
   cwd: string,
   statusStdout: string,
-  read: UntrackedReader = diskUntrackedReader,
+  probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<ReviewEntry[]> {
   const entries: ReviewEntry[] = [];
   for (const line of statusStdout.split("\n")) {
     const path = parseUntrackedLine(line);
     if (path === null || !insideWorkspace(path)) continue;
-    const bytes = await read(`${cwd}/${path}`);
+    const lineStat = await untrackedLineStat(`${cwd}/${path}`, probe);
     // 刚被删 / 读不了：跳过——status 快照与磁盘现状之间的窗口，不值得报错
-    if (bytes === null) continue;
-    if (bytes.includes(0)) {
-      entries.push({ path, added: 0, removed: 0, binary: true });
-      continue;
-    }
-    const content = bytes.toString("utf8");
-    const patch = createTwoFilesPatch("/dev/null", path, "", content);
-    let added = 0;
-    for (const line2 of patch.split("\n")) {
-      if (line2.startsWith("+") && !line2.startsWith("+++")) added += 1;
-    }
-    entries.push({ path, added, removed: 0, binary: false });
+    if (lineStat === null) continue;
+    entries.push({
+      path,
+      added: lineStat.added,
+      removed: 0,
+      binary: lineStat.binary,
+      // 只在真未知时带上字段：超限文件 added 是 0，但 UI 不能拿 +0 冒充没改动
+      ...(lineStat.lineCountUnknown === true ? { lineCountUnknown: true } : {}),
+    });
   }
   return entries;
 }
@@ -149,12 +142,12 @@ function diffArgs(
   return null;
 }
 
-/** `review:list` 的 git 侧实现。readUntracked 只为测试注入（未跟踪文件的读盘面）。 */
+/** `review:list` 的 git 侧实现。probe 只为测试注入（未跟踪文件的读盘面）。 */
 export async function gitReviewList(
   runner: GitRunner,
   cwd: string,
   source: ReviewSource,
-  readUntracked: UntrackedReader = diskUntrackedReader,
+  probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<ReviewList> {
   let root: string | null;
   try {
@@ -182,7 +175,7 @@ export async function gitReviewList(
     // 行数全 0、工作区外的改动也会混进来（2026-10-25 合作者实测）。
     const status = await runner(["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all"], cwd);
     const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
-    const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, readUntracked))];
+    const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, probe))];
     if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd };
     // 同一路径可能两处出现（已改 + 未跟踪不会同路径；稳妥起见去重保序）
     const seen = new Set<string>();
@@ -240,120 +233,10 @@ function changeKindOf(xy: string): FocusChangeEntry["kind"] {
 }
 
 /**
- * 单文件行数统计的上限：1 MB。超过就只读开头判二进制、不数行（UI 显示「行数未知」）。
- * 理由：数行要把全文读进内存再 split，而专注左栏 30 秒问一遍全部未跟踪文件——
- * 生成物 / 日志 / 数据动辄几十 MB，为悬停才看的一个数字读它们是这条路径最贵的一步；
- * 1 MB 覆盖源码文本的绝大多数，越线的文件多半本来也不是「数行数」的对象。
- */
-const FOCUS_LINE_COUNT_MAX_BYTES = 1024 * 1024;
-
-/** 判二进制只需开头这么多字节（git 的二进制嗅探同样只看前 8000 字节） */
-const FOCUS_BINARY_SNIFF_BYTES = 8 * 1024;
-
-/** 未跟踪文件的面（专注扫描的注入点）：stat 定缓存键，read 按大小决定读全文还是读头 */
-export interface UntrackedFileStat {
-  size: number;
-  mtimeMs: number;
-}
-
-export interface UntrackedProbe {
-  stat(path: string): Promise<UntrackedFileStat | null>;
-  /** maxBytes = null → 读全文；否则只读开头这么多字节 */
-  read(path: string, maxBytes: number | null): Promise<Buffer | null>;
-}
-
-const diskUntrackedProbe: UntrackedProbe = {
-  async stat(path) {
-    try {
-      const info = await stat(path);
-      return info.isFile() ? { size: info.size, mtimeMs: info.mtimeMs } : null;
-    } catch {
-      return null;
-    }
-  },
-  async read(path, maxBytes) {
-    try {
-      if (maxBytes === null) return await readFile(path);
-      const handle = await open(path, "r");
-      try {
-        const buffer = Buffer.alloc(maxBytes);
-        const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-        return buffer.subarray(0, bytesRead);
-      } finally {
-        await handle.close();
-      }
-    } catch {
-      return null;
-    }
-  },
-};
-
-/** 未跟踪文件的行级统计（专注扫描的一行；lineCountUnknown 见 FOCUS_LINE_COUNT_MAX_BYTES） */
-interface UntrackedLineStat {
-  added: number;
-  binary: boolean;
-  lineCountUnknown?: boolean;
-}
-
-/**
- * 未跟踪文件行数的缓存：键 = 绝对路径 + size + mtimeMs。专注左栏每 30 秒问一遍
- * 全部未跟踪文件，而文件大多没变——不缓存时每轮把 29 MB 全文读一遍（实测 300 个
- * 文件约 0.3 s）。size 与 mtime 都没动就复用上次的结论，只花一次 stat。
- * 容量上限 2000 是防无界增长的闸：超了按 LRU 淘汰最久没被问到的。
- */
-const UNTRACKED_LINE_CACHE_LIMIT = 2000;
-const untrackedLineCache = new Map<string, UntrackedLineStat>();
-
-function rememberUntrackedLine(key: string, lineStat: UntrackedLineStat): UntrackedLineStat {
-  // 命中也要先删再塞：Map 的迭代顺序 = 插入顺序，队首永远是最久没被问到的
-  untrackedLineCache.delete(key);
-  untrackedLineCache.set(key, lineStat);
-  while (untrackedLineCache.size > UNTRACKED_LINE_CACHE_LIMIT) {
-    const oldest = untrackedLineCache.keys().next().value;
-    if (oldest === undefined) break;
-    untrackedLineCache.delete(oldest);
-  }
-  return lineStat;
-}
-
-/**
- * 「对着空文件算」的行数：与 `createTwoFilesPatch("", content)` 的 `+` 行数同口径
- * （末尾换行不额外算一行），但不跑 diff 算法——这条路径上每轮几百个文件，纯计数只扫一遍。
- */
-function countLines(content: string): number {
-  if (content === "") return 0;
-  const lines = content.split("\n");
-  return content.endsWith("\n") ? lines.length - 1 : lines.length;
-}
-
-/** 一个未跟踪文件的行级统计；null = 读不了（刚被删 / 不是文件） */
-async function untrackedLineStat(
-  path: string,
-  probe: UntrackedProbe,
-): Promise<UntrackedLineStat | null> {
-  const info = await probe.stat(path);
-  if (info === null) return null;
-  const key = `${path}\u0000${info.size}\u0000${info.mtimeMs}`;
-  const hit = untrackedLineCache.get(key);
-  if (hit !== undefined) return rememberUntrackedLine(key, hit);
-
-  const oversized = info.size > FOCUS_LINE_COUNT_MAX_BYTES;
-  // 二进制判定与行数统计共用这一次读盘：小文件读一次全文（既判 NUL 又数行）；
-  // 大文件只读头 8 KB，NUL 在开头都没有就按文本处理、行数记「未知」
-  const bytes = await probe.read(path, oversized ? FOCUS_BINARY_SNIFF_BYTES : null);
-  if (bytes === null) return null;
-  if (bytes.includes(0)) return rememberUntrackedLine(key, { added: 0, binary: true });
-  if (oversized) {
-    return rememberUntrackedLine(key, { added: 0, binary: false, lineCountUnknown: true });
-  }
-  return rememberUntrackedLine(key, { added: countLines(bytes.toString("utf8")), binary: false });
-}
-
-/**
  * `focus:changes` 的 git 侧实现：工作区**尚未提交**的全部改动（VS Code 源代码管理的口径，
  * 不是审查面板 unstaged 那一档）——`status --porcelain=v2` 一遍拿全量清单，
  * 行级统计用未暂存 + 已暂存两条 `diff --numstat` 合并，未跟踪文件对着空文件算
- * （行数按 size+mtime 缓存，超大文件只读头不数行，见 untrackedLineStat）。全部只读。
+ * （与审查面板共用 untrackedLines：size+mtime 缓存，超大文件只读头不数行）。全部只读。
  */
 export async function gitWorkdirChanges(
   runner: GitRunner,
@@ -430,7 +313,7 @@ export async function gitReviewDiff(
   cwd: string,
   source: ReviewSource,
   path: string,
-  readUntracked: UntrackedReader = diskUntrackedReader,
+  probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<ReviewDiff> {
   const upstream = source === "branch" ? await upstreamName(runner, cwd) : null;
   const args = diffArgs(source, upstream, { path });
@@ -441,7 +324,8 @@ export async function gitReviewDiff(
   // 被说成「与基线一致」。列表侧（untrackedEntries）把它算全量新增，正文侧同口径：
   // 读盘对着空文件造一份 diff（带 NUL 的按 binary 处理，同列表侧）。
   if (diff === "" && source === "unstaged" && (await isUntracked(runner, cwd, path))) {
-    const bytes = await readUntracked(`${cwd}/${path}`);
+    // 正文要全文（这里已经在展开单个文件的按需路径上，不是 30 秒轮询）
+    const bytes = await probe.read(`${cwd}/${path}`, null);
     if (bytes !== null) {
       if (bytes.includes(0)) return { diff: null, binary: true, restored: false };
       diff = createTwoFilesPatch("/dev/null", path, "", bytes.toString("utf8"));

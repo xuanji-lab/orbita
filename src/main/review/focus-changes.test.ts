@@ -8,7 +8,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStatusChangedLine } from "../../shared/review.ts";
-import { gitWorkdirChanges, realGitRunner, type GitRunner, type UntrackedProbe } from "./git-source.ts";
+import { gitWorkdirChanges, realGitRunner, type GitRunner } from "./git-source.ts";
+import type { UntrackedProbe } from "./untracked-lines.ts";
 
 interface FakeFile {
   bytes: Buffer;
@@ -39,7 +40,7 @@ function fakeProbe(files: Map<string, FakeFile>, counter?: { reads: number; head
 function untrackedRunner(statusLines: readonly string[]): GitRunner {
   return fakeGit({
     "rev-parse --show-toplevel": { stdout: "/w\n" },
-    "status --porcelain=v2 --untracked-files=all --no-renames": { stdout: statusLines.join("\n") },
+    "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": { stdout: statusLines.join("\n") },
     "diff --no-renames --relative --numstat": { stdout: "" },
     "diff --cached --no-renames --relative --numstat": { stdout: "" },
     "rev-parse --abbrev-ref HEAD": { stdout: "main\n" },

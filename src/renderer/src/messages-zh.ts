@@ -75,6 +75,8 @@ export const zh: Messages = {
     restoredEmpty: "与基线一致——没有可展示的差异。",
     noBaseline: "无基线",
     binary: "二进制",
+    /** 未跟踪文件超过行数上限（与专注左栏同口径）：不拿 +0 冒充没改动 */
+    linesUnknown: "行数未知",
   },
   common: {
     more: "更多",
@@ -451,6 +453,8 @@ export const zh: Messages = {
     legendM: "已修改",
     badgeU: "未跟踪的新文件",
     badgeM: "已修改",
+    /** 未跟踪文件超过行数上限：悬停只写这一句，不显示 +0 */
+    linesUnknown: "行数未知",
     changeSummary: (changed: number, untracked: number) =>
       `改动 ${changed} 个文件，其中 ${untracked} 个新文件`,
     notRepo: "这个文件夹不是版本库，没有 U / M 可标",
