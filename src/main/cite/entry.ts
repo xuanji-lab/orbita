@@ -6,7 +6,8 @@
  * renderer 手里的旧快照。
  *
  * 三件容易被做错的事，都在这里做对：
- * 1. **转义**：`&` `%` `_` `#` `$` 在 BibTeX 里都有语法意义。标题里一个没转义的
+ * 1. **转义**：`&` `%` `_` `#` `$` `^` `~` 与落单的花括号在 BibTeX / LaTeX 里都有
+ *    语法意义。标题里一个没转义的
  *    `&` 会让整份 .bib 编译失败，而且报错指向别的条目（`%` 更糟：它注释掉这一行
  *    剩下的部分）。已经转义过的（`\%`）不重复加反斜杠。
  * 2. **HTML 实体与标签**：Crossref 的标题真的带 `<i>`、`&amp;`、`<sub>`。逐字塞进
@@ -14,7 +15,7 @@
  * 3. **key 去重**：`vaswani2017attention` 已经存在时再加 a / b 后缀。同一篇文献在
  *    两个 .bib 里各有一份是常态，静默重名会让 `\cite` 指向不确定的那一条。
  */
-import type { CiteCandidate } from "../../shared/cite.ts";
+import type { CiteAuthor, CiteCandidate } from "../../shared/cite.ts";
 import { cleanTitle } from "./search.ts";
 
 /**
@@ -59,27 +60,76 @@ const STOPWORDS = new Set([
   "we",
 ]);
 
-/** 字段值里的特殊字符：前有反斜杠的已经是转义形式，不再加一层 */
+/**
+ * 字段值里的特殊字符：前有反斜杠的已经是转义形式，不再加一层。
+ *
+ * `^` 与 `~` 也得转（评审 F8）：`O(n^2)` 里的 `^` 在 LaTeX 里是上标，原样进 .bib
+ * 会让整篇编译报 Missing $；`~` 是非断行空格，在标题里会把词粘在一起。散花括号在
+ * `balanceBraces` 里单独处理（那里要看配对，不能逐个替换）。
+ */
 const SPECIAL = /(?<!\\)([&%_#$])/g;
 
-/** 一段文字 → BibTeX 字段值（不含外层花括号） */
+/** `^` / `~` 没有「字面量本身」的写法，必须换成命令 */
 export function escapeBib(raw: string): string {
-  return cleanTitle(raw).replace(SPECIAL, "\\$1");
+  return balanceBraces(cleanTitle(raw))
+    .replace(SPECIAL, "\\$1")
+    .replace(/(?<!\\)\^/g, "\\textasciicircum{}")
+    .replace(/(?<!\\)~/g, "\\textasciitilde{}");
+}
+
+/**
+ * 落单的 `}` / `{` 也要转义（`a}b` 会让字段提前结束，`{GPU` 会让后面全变成大小写
+ * 保护串）。**配对的保留**：`{GPU}` / `{\"o}` 是有意义的大小写保护与重音写法。
+ */
+function balanceBraces(text: string): string {
+  const out: string[] = [];
+  /** 还没关上的 `{` 在 out 里的位置：最后补反斜杠时就按这些下标改 */
+  const unclosed: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "\\") {
+      // `\{` / `\}` 是转义写法：原样带走两个字符
+      out.push(ch, text[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (ch === "{") {
+      unclosed.push(out.length);
+      out.push(ch);
+      continue;
+    }
+    if (ch === "}") {
+      if (unclosed.length === 0) {
+        out.push("\\}");
+        continue;
+      }
+      unclosed.pop();
+      out.push(ch);
+      continue;
+    }
+    out.push(ch ?? "");
+  }
+  // 没关上的 `{` 逐个转义（从后往前改，前面元素的下标不漂）
+  for (const index of unclosed.reverse()) out[index] = "\\{";
+  return out.join("");
 }
 
 /** `Family, Given and …`：BibTeX 的 `and` 分隔、姓在前 */
-export function bibAuthors(authors: readonly string[]): string {
+export function bibAuthors(authors: readonly CiteAuthor[]): string {
   return authors.map(bibAuthor).join(" and ");
 }
 
-function bibAuthor(name: string): string {
-  const clean = cleanTitle(name);
-  // 已经是 `Family, Given` 的写法就照原样（Crossref 之外的数据源常这样给）
-  if (clean.includes(",")) return escapeBib(clean);
-  const parts = clean.split(" ").filter((part) => part !== "");
-  if (parts.length < 2) return escapeBib(clean);
-  const family = parts[parts.length - 1] ?? "";
-  return escapeBib(`${family}, ${parts.slice(0, -1).join(" ")}`);
+/**
+ * 一位作者 → `Family, Given`。**直接拼给定的 given / family**，不再从显示串里
+ * 猜姓（评审 F7：`García Márquez, Gabriel` 曾经被拍平成 `Márquez, Gabriel García`）。
+ * 只有一边时就用那一边（机构作者）。
+ */
+function bibAuthor(author: CiteAuthor): string {
+  const family = escapeBib(author.family);
+  const given = escapeBib(author.given);
+  if (family === "") return given;
+  if (given === "") return family;
+  return `${family}, ${given}`;
 }
 
 /**
@@ -88,11 +138,19 @@ function bibAuthor(name: string): string {
  * 引擎 / 换个编辑器就会出现两种写法，同一条文献被引用两次。
  */
 export function bibKeyBase(candidate: CiteCandidate): string {
-  const surname = asciiWord(firstSurname(candidate.authors[0] ?? ""));
+  const first = candidate.authors[0];
+  // 姓优先用 family（Crossref 的结构化字段）；arXiv 只给整名，那里把最后一个词当姓
+  const surname = asciiWord(first === undefined ? "" : first.family !== "" ? first.family : lastWord(first.given));
   const year = /\d{4}/.exec(candidate.year ?? "")?.[0] ?? "nd";
   const word = titleWord(candidate.title);
   const base = `${surname === "" ? "anon" : surname}${year}${word}`;
   return base === "" ? "ref" : base;
+}
+
+/** 只有整名可用时的姓：空白分开的最后一个词 */
+function lastWord(name: string): string {
+  const parts = name.split(/\s+/).filter((part) => part !== "");
+  return parts[parts.length - 1] ?? "";
 }
 
 /** 在已有 key 之上找一个不重名的：base → basea → baseb … */
@@ -107,15 +165,6 @@ export function uniqueBibKey(base: string, existingKeys: Iterable<string>): stri
     const candidate = `${base}${n}`;
     if (!taken.has(candidate)) return candidate;
   }
-}
-
-/** 第一作者的姓：`Family, Given` 取逗号前，`Given Family` 取末尾一词 */
-function firstSurname(author: string): string {
-  const clean = cleanTitle(author);
-  const comma = clean.indexOf(",");
-  if (comma >= 0) return clean.slice(0, comma);
-  const parts = clean.split(" ").filter((part) => part !== "");
-  return parts[parts.length - 1] ?? "";
 }
 
 function titleWord(title: string): string {

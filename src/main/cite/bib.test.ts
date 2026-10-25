@@ -2,8 +2,9 @@
  * BibTeX 解析器的回归网 —— 夹具用的都是**真实论文里会出现的写法**：
  * 花括号嵌套、跨行字段、`#` 拼接、`@string` 宏、括号条目、以及一条坏条目。
  *
- * 抛物线只测「补全需要的事实」：key / type / title / author / year 解析得对不对，
- * 坏条目有没有被跳过并计数，以及一个坏条目不能吃掉后面的好条目。
+ * 这里测「补全与去重需要的事实」：key / type / title / author / year，以及 DOI 与
+ * eprint（写 .bib 前判断「这篇是不是已经在库里」要用）；坏条目有没有被跳过并计数，
+ * 以及一个坏条目不能吃掉后面的好条目。
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,6 +18,7 @@ describe("parseBibtex —— 基本字段", () => {
   title   = {Attention Is All You Need},
   journal = {NeurIPS},
   year    = {2017},
+  doi     = {10.5555/3295222.3295349},
 }
 `;
     const { entries, bad } = parseBibtex(source);
@@ -28,8 +30,16 @@ describe("parseBibtex —— 基本字段", () => {
       title: "Attention Is All You Need",
       author: "Vaswani, Ashish and Shazeer, Noam",
       year: "2017",
+      doi: "10.5555/3295222.3295349",
+      eprint: null,
       file: "",
     });
+  });
+
+  test("doi 与 eprint 也解析出来（去重要用），没有时是 null", () => {
+    const parsed = parseBibtex("@misc{a, eprint = {1706.03762}, archivePrefix = {arXiv}}");
+    assert.equal(parsed.entries[0]?.eprint, "1706.03762");
+    assert.equal(parsed.entries[0]?.doi, null);
   });
 
   test("花括号嵌套：大小写保护的大括号从显示文本里去掉", () => {
@@ -134,6 +144,8 @@ describe("parseBibtex —— 坏条目", () => {
       title: null,
       author: null,
       year: null,
+      doi: null,
+      eprint: null,
       file: "",
     });
   });
@@ -146,6 +158,8 @@ describe("mergeBibEntries —— 多文件合并", () => {
     title,
     author: null,
     year,
+    doi: null,
+    eprint: null,
     file: "",
   });
 

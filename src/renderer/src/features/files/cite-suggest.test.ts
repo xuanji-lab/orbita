@@ -16,6 +16,8 @@ const entry = (key: string, patch: Partial<CiteEntry> = {}): CiteEntry => ({
   title: null,
   author: null,
   year: null,
+  doi: null,
+  eprint: null,
   file: "refs.bib",
   ...patch,
 });

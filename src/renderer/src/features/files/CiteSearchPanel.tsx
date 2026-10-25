@@ -11,12 +11,16 @@
  *   没有防抖自动搜索——`cite:search` 只会被一次明确的动作调用。
  * - **选择与写入分两次 IPC**：检索结果只是候选；写盘要走 `cite:save` 的白名单与
  *   expectedHash，冲突时界面必须说「没写入」，不能装作成功了。
- * - **键盘可用**：↑↓ 移动、Enter 取当前（没选过就是第一条）、Esc 关闭。鼠标只是
- *   另一条路，不是唯一的路。
+ * - **键盘可用**：↑↓ 移动并把它滚进可视区、Enter 取当前（没选过就是第一条）、
+ *   Esc 关闭。鼠标只是另一条路，不是唯一的路。
+ * - **迟到的回包不许上屏**：每次请求带一份 query 快照与序号，回包时输入已经变了就
+ *   整个丢掉——否则「输入显示 B、列表是 A 的结果、回车把 A 写进 .bib」是必然的
+ *   （评审 F1）。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
+  CiteAuthor,
   CiteCandidate,
   CiteFileContext,
   CiteSaveOutcome,
@@ -26,6 +30,7 @@ import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon.tsx";
 import { placeMenu } from "../../shell/menu-position.ts";
+import { isStaleResponse } from "./cite-search.ts";
 
 /** 面板先按这个宽度量位置；内容再长也不会把它撑宽（标题走省略号） */
 const PANEL_WIDTH = 420;
@@ -58,6 +63,12 @@ export function CiteSearchPanel(props: {
   const [results, setResults] = useState<CiteCandidate[]>([]);
   const [active, setActive] = useState(0);
   const [notice, setNotice] = useState<Notice | null>(null);
+  /** 结果列表容器与当前输入：键盘移动要把选中行滚进可视区（评审 F13） */
+  const resultsRef = useRef<HTMLDivElement>(null);
+  /** 当前输入的最新值：回包比对用它（state 在闭包里会过期） */
+  const queryRef = useRef("");
+  /** 请求序号：新的输入 / 新的查找都会 +1，旧的回包据此作废（评审 F1） */
+  const requestSeqRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -112,14 +123,19 @@ export function CiteSearchPanel(props: {
   const search = useCallback((): void => {
     const text = query.trim();
     if (text === "" || phase === "searching") return;
+    const seq = requestSeqRef.current + 1;
+    requestSeqRef.current = seq;
+    // 查询快照：回包时拿它跟「此刻输入框里的字」比（评审 F1）
+    const requested = text;
     setPhase("searching");
     setNotice(null);
     setResults([]);
     setActive(0);
     void api.cite
-      .search({ query: text })
+      .search({ query: requested })
       .then((outcome: CiteSearchOutcome) => {
         if (!mountedRef.current) return;
+        if (isStaleResponse(queryRef.current, requested, seq, requestSeqRef.current)) return;
         setPhase("idle");
         if (!outcome.ok) {
           setNotice({ tone: "error", text: failedText(outcome) });
@@ -127,10 +143,19 @@ export function CiteSearchPanel(props: {
         }
         setResults(outcome.results);
         setActive(0);
-        if (outcome.results.length === 0) setNotice({ tone: "warn", text: t.citeSearch.empty });
+        if (outcome.results.length === 0) {
+          setNotice({ tone: "warn", text: t.citeSearch.empty });
+        } else if (outcome.partial !== null) {
+          // 一个来源没答上来：结果只有另一个来源的，必须说出来（评审 F2）
+          setNotice({
+            tone: "warn",
+            text: t.citeSearch.partial(outcome.partial === "arxiv" ? t.citeSearch.arxiv : t.citeSearch.crossref),
+          });
+        }
       })
       .catch((cause: unknown) => {
         if (!mountedRef.current) return;
+        if (isStaleResponse(queryRef.current, requested, seq, requestSeqRef.current)) return;
         setPhase("idle");
         setNotice({ tone: "error", text: t.citeSearch.failed(failMessage(cause)) });
       });
@@ -152,11 +177,13 @@ export function CiteSearchPanel(props: {
           }
           const inserted = props.onInsert(outcome.key);
           setResults([]);
+          // reused = 库里已经有同一篇（同 DOI / arXiv 号），没有写盘、直接复用 key
+          const head = outcome.reused ? t.citeSearch.reused(outcome.path) : t.citeSearch.written(outcome.path);
           setNotice({
             tone: inserted ? "ok" : "warn",
             text: inserted
-              ? `${t.citeSearch.written(outcome.path)} · ${t.citeSearch.inserted(outcome.key)}`
-              : `${t.citeSearch.written(outcome.path)} · ${t.citeSearch.insertBlocked}`,
+              ? `${head} · ${t.citeSearch.inserted(outcome.key)}`
+              : `${head} · ${t.citeSearch.insertBlocked}`,
           });
         })
         .catch((cause: unknown) => {
@@ -227,11 +254,21 @@ export function CiteSearchPanel(props: {
    * 却是另一篇文献（验收实测）。清空之后回车退化成「查找」，语义总是单义的。
    */
   const onQueryChange = (value: string): void => {
+    queryRef.current = value;
+    // 作废在飞的请求：它回来时输入已经变了，写回屏幕只会让「看到的」与「会写进去的」分家
+    requestSeqRef.current += 1;
     setQuery(value);
     setResults([]);
     setNotice(null);
     setActive(0);
+    setPhase("idle");
   };
+
+  /** 键盘选中行必须可见：结果比面板高时，↓ 到窗口外等于没选中（评审 F13） */
+  useEffect(() => {
+    const row = resultsRef.current?.querySelectorAll<HTMLElement>(".cite-search-row")[active];
+    row?.scrollIntoView({ block: "nearest" });
+  }, [active, results]);
 
   return createPortal(
     <div
@@ -274,7 +311,7 @@ export function CiteSearchPanel(props: {
         </button>
       </div>
       {results.length > 0 && (
-        <div className="cite-search-results" role="listbox" aria-label={t.citeSearch.title}>
+        <div ref={resultsRef} className="cite-search-results" role="listbox" aria-label={t.citeSearch.title}>
           {results.map((candidate, index) => (
             <button
               key={`${candidate.source}:${candidate.doi ?? candidate.arxivId ?? candidate.title}:${String(index)}`}
@@ -313,12 +350,18 @@ export function CiteSearchPanel(props: {
   );
 }
 
+/** 一位作者的显示形：`Given Family`（缺一边就只显示那一边） */
+function authorName(author: CiteAuthor): string {
+  return [author.given, author.family].filter((part) => part !== "").join(" ");
+}
+
 /** 一行「作者 · 年 · 刊物」：缺哪项就少哪项，不补占位符 */
 function metaLine(candidate: CiteCandidate): string {
+  const names = candidate.authors.map(authorName).filter((name) => name !== "");
   const authors =
-    candidate.authors.length > 3
-      ? `${candidate.authors.slice(0, 3).join(", ")} +${String(candidate.authors.length - 3)}`
-      : candidate.authors.join(", ");
+    names.length > 3
+      ? `${names.slice(0, 3).join(", ")} +${String(names.length - 3)}`
+      : names.join(", ");
   return [authors, candidate.year ?? "", candidate.venue ?? ""].filter((part) => part !== "").join(" · ");
 }
 

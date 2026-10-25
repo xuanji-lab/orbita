@@ -1915,6 +1915,8 @@ export const en = {
     timeout: "Search timed out (8s). The network may be slow or blocked.",
     rateLimited: "Too many requests — the service is throttling us. Wait a moment and try again.",
     notFound: "No record for this DOI or arXiv ID.",
+    partial: (source: string) => `${source} did not answer (timeout or throttled) — these results are from the other source.`,
+    reused: (path: string) => `Already in ${path}`,
     failed: (detail: string) => `Search failed: ${detail}`,
     written: (path: string) => `Saved to ${path}`,
     inserted: (key: string) => `Inserted \\cite{${key}}`,

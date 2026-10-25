@@ -29,8 +29,10 @@ export interface ParsedBib {
 }
 
 /**
- * 补全只认这五个字段（type 是条目头）。其余字段解析出来也丢掉——留着它们只会让
- * 一次扫描多出几 MB 的字符串，没人读。
+ * 解析出来的字段：补全要的五个（type 是条目头）+ `doi` / `eprint`。
+ * **后两个是去重用的**：同一个 DOI 被检索面板选两次时，靠它们认出「库里已经有这篇」，
+ * 不再追一份重复条目（评审 F6）。其余字段解析出来也丢掉——留着它们只会让一次扫描
+ * 多出几 MB 的字符串，没人读。
  */
 interface RawEntry {
   type: string;
@@ -38,6 +40,8 @@ interface RawEntry {
   title: string | null;
   author: string | null;
   year: string | null;
+  doi: string | null;
+  eprint: string | null;
 }
 
 /** 一次条目扫描的结局：跳过 / 正常 / 坏；`next` 永远是下一次扫描的起点 */
@@ -77,6 +81,8 @@ export function parseBibtex(source: string): ParsedBib {
         title: scan.entry.title,
         author: scan.entry.author,
         year: scan.entry.year,
+        doi: scan.entry.doi,
+        eprint: scan.entry.eprint,
         // file 由扫描层（library.ts）填：解析器不知道自己在哪个文件里
         file: "",
       });
@@ -134,7 +140,11 @@ function scanEntry(source: string, at: number, macros: Map<string, string>): Sca
   const fields = new Map<string, string>();
   if (source[i] === close) {
     // `@misc{key}`：没有字段也算一条（有人用它占位），但没有可显示的内容
-    return { kind: "entry", next: i + 1, entry: { type, key, title: null, author: null, year: null } };
+    return {
+      kind: "entry",
+      next: i + 1,
+      entry: { type, key, title: null, author: null, year: null, doi: null, eprint: null },
+    };
   }
   i += 1; // 吃掉 key 后的逗号
 
@@ -242,6 +252,8 @@ function toRaw(type: string, key: string, fields: Map<string, string>): RawEntry
     title: emptyToNull(fields.get("title")),
     author: emptyToNull(fields.get("author")),
     year: emptyToNull(year),
+    doi: emptyToNull(fields.get("doi")),
+    eprint: emptyToNull(fields.get("eprint")),
   };
 }
 

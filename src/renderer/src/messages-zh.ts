@@ -1762,6 +1762,8 @@ export const zh: Messages = {
     timeout: "查找超时（8 秒）。网络太慢或被挡下了。",
     rateLimited: "请求太频繁，服务方在限速。等一会儿再试。",
     notFound: "没有这个 DOI 或 arXiv 编号的记录。",
+    partial: (source) => `${source} 没答上来（超时或被限流），这次只有另一个来源的结果。`,
+    reused: (path) => `${path} 里已经有这一篇`,
     failed: (detail) => `查找失败：${detail}`,
     written: (path) => `已写入 ${path}`,
     inserted: (key) => `已插入 \\cite{${key}}`,

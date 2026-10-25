@@ -29,6 +29,10 @@ export interface CiteEntry {
   author: string | null;
   /** 年份（`year`，没有时取 `date` 的前四位）；没有时 null */
   year: string | null;
+  /** DOI（原样，用于「这篇已经在库中了」的去重）；没有该字段时 null */
+  doi: string | null;
+  /** arXiv 编号（`eprint` 字段，去掉 `arXiv:` 前缀）；没有时 null */
+  eprint: string | null;
   /** 来源文件：相对项目目录的路径，**正斜杠**（Windows 上也一样，界面直接显示） */
   file: string;
 }
@@ -118,6 +122,18 @@ export const CITE_PREFERRED_BIB = "refs.bib";
 export type CiteSearchSource = "crossref" | "arxiv";
 
 /**
+ * 一位作者。**分开存 given / family 而不是拍平成一个显示串**：BibTeX 要的是
+ * `Family, Given`，而「García Márquez, Gabriel」这种复姓一拍平就会变成
+ * 「Márquez, Gabriel García」（评审 F7）。界面要显示时自己拼。
+ */
+export interface CiteAuthor {
+  /** 名（没有时是空串；机构作者只有一个名字时放在这里） */
+  given: string;
+  /** 姓（机构作者只有全名时放在 `given` 或 `family` 都算，见 `bibAuthor`） */
+  family: string;
+}
+
+/**
  * 一条候选文献 —— 检索结果的**数据面**，不是一条已排好版的 BibTeX。
  *
  * 分成数据面与排版面是为了把「从接口拿到什么」和「写进 .bib 长什么样」分开：
@@ -128,8 +144,8 @@ export interface CiteCandidate {
   source: CiteSearchSource;
   /** 标题纯文本：HTML 标签与实体已还原、空白已折叠 */
   title: string;
-  /** 作者，显示形（`Given Family`）；接口没给作者时是空数组 */
-  authors: string[];
+  /** 作者；接口没给作者时是空数组 */
+  authors: CiteAuthor[];
   /** 四位年份；接口没有年份时 null */
   year: string | null;
   /** 期刊 / 会议 / 预印本站点（Crossref 的 container-title，arXiv 固定 "arXiv"） */
@@ -155,7 +171,15 @@ export type CiteSearchFailure = "empty-query" | "timeout" | "offline" | "rate-li
 
 /** `ok:true` 且 `results` 为空 = 确实没查到（不是失败）；失败才走 `ok:false` */
 export type CiteSearchOutcome =
-  | { ok: true; results: CiteCandidate[] }
+  | {
+      ok: true;
+      results: CiteCandidate[];
+      /**
+       * 有一个来源没答上来（超时 / 限流）：结果只是另一个来源的。**不许无声降级**——
+       * 标题检索时 arXiv 被 4 秒短超时切掉，界面得能说一句「这次只有 Crossref」。
+       */
+      partial: CiteSearchSource | null;
+    }
   | { ok: false; reason: CiteSearchFailure; detail: string };
 
 /** 写 .bib 的请求：候选 + 当前文件上下文（授权与 fs:* / latex:* 同一道） */
@@ -172,5 +196,13 @@ export interface CiteSaveRequest {
  * 要不要重试（重试会基于新内容重新分配 key）。
  */
 export type CiteSaveOutcome =
-  | { ok: true; path: string; key: string; created: boolean }
+  | {
+      ok: true;
+      path: string;
+      key: string;
+      /** 这份 .bib 是这次新建的 */
+      created: boolean;
+      /** 库里已经有同一篇（按 DOI / arXiv 号命中）：没有写盘，直接复用了它的 key */
+      reused: boolean;
+    }
   | { ok: false; reason: "outside-project" | "conflict" | "read-failed" | "write-failed" | "too-large"; detail: string };

@@ -14,7 +14,10 @@ function candidate(patch: Partial<CiteCandidate> = {}): CiteCandidate {
   return {
     source: "crossref",
     title: "Attention Is All You Need",
-    authors: ["Ashish Vaswani", "Noam Shazeer"],
+    authors: [
+      { given: "Ashish", family: "Vaswani" },
+      { given: "Noam", family: "Shazeer" },
+    ],
     year: "2017",
     venue: "Advances in Neural Information Processing Systems",
     doi: "10.5555/3295222.3295349",
@@ -36,6 +39,17 @@ describe("escapeBib —— 字段值里的语法字符", () => {
     assert.equal(escapeBib("50\\% done"), "50\\% done");
   });
 
+  test("上标 / 非断行空格也转义（O(n^2) 原样进 .bib 会 Missing $）", () => {
+    assert.equal(escapeBib("O(n^2) and 50~Hz"), "O(n\\textasciicircum{}2) and 50\\textasciitilde{}Hz");
+  });
+
+  test("落单的花括号转义，配对的原样留着（大小写保护 / 重音写法）", () => {
+    assert.equal(escapeBib("a}b"), "a\\}b");
+    assert.equal(escapeBib("{GPU story"), "\\{GPU story");
+    assert.equal(escapeBib("The {GPU} story"), "The {GPU} story");
+    assert.equal(escapeBib("a {b} c"), "a {b} c");
+  });
+
   test("HTML 实体与标签先还原再转义（Crossref 会给标记）", () => {
     assert.equal(escapeBib("Fast &amp; Slow: <i>a</i> study"), "Fast \\& Slow: a study");
   });
@@ -46,21 +60,27 @@ describe("escapeBib —— 字段值里的语法字符", () => {
 });
 
 describe("bibAuthors —— 姓在前、and 分隔", () => {
-  test("Given Family → Family, Given", () => {
-    assert.equal(bibAuthors(["Ashish Vaswani", "Noam Shazeer"]), "Vaswani, Ashish and Shazeer, Noam");
+  test("按结构化 given / family 拼，不从显示串里猜姓", () => {
+    assert.equal(
+      bibAuthors([
+        { given: "Ashish", family: "Vaswani" },
+        { given: "Noam", family: "Shazeer" },
+      ]),
+      "Vaswani, Ashish and Shazeer, Noam",
+    );
   });
 
-  test("已经是 Family, Given 的原样", () => {
-    assert.equal(bibAuthors(["Vaswani, Ashish"]), "Vaswani, Ashish");
+  test("复姓不被拍平（评审 F7：García Márquez, Gabriel 曾变成 Márquez, Gabriel García）", () => {
+    assert.equal(bibAuthors([{ given: "Gabriel", family: "García Márquez" }]), "García Márquez, Gabriel");
   });
 
-  test("单名（机构作者）原样；两词的机构名按 Given Family 拆（BibTeX 本身就这么理解）", () => {
-    assert.equal(bibAuthors(["OpenAI"]), "OpenAI");
-    assert.equal(bibAuthors(["OpenAI", "Google Brain"]), "OpenAI and Brain, Google");
+  test("机构作者只有一边时就用那一边", () => {
+    assert.equal(bibAuthors([{ given: "OpenAI", family: "" }]), "OpenAI");
+    assert.equal(bibAuthors([{ given: "", family: "Google Brain" }]), "Google Brain");
   });
 
   test("名字里的特殊字符照样转义", () => {
-    assert.equal(bibAuthors(["A&B, C"]), "A\\&B, C");
+    assert.equal(bibAuthors([{ given: "C", family: "A&B" }]), "A\\&B, C");
   });
 });
 
@@ -73,10 +93,17 @@ describe("bibKeyBase —— 第一作者姓 + 年 + 标题第一个实词", () =
     assert.equal(bibKeyBase(candidate({ title: "The Theory of Everything" })), "vaswani2017theory");
   });
 
-  test("重音去掉（García → garcia）", () => {
+  test("重音去掉、复姓连写（García Márquez → garciamarquez），姓取 family", () => {
     assert.equal(
-      bibKeyBase(candidate({ authors: ["José García"], title: "On Things" })),
-      "garcia2017things",
+      bibKeyBase(candidate({ authors: [{ given: "José", family: "García Márquez" }], title: "On Things" })),
+      "garciamarquez2017things",
+    );
+  });
+
+  test("只有整名（arXiv）时末尾一词当姓", () => {
+    assert.equal(
+      bibKeyBase(candidate({ authors: [{ given: "Gabriel García Márquez", family: "" }], title: "On Things" })),
+      "marquez2017things",
     );
   });
 

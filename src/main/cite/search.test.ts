@@ -121,7 +121,11 @@ describe("parseCrossrefWorks —— 真的接口形状", () => {
     assert.equal(results.length, 2);
     const [first, second] = results;
     assert.equal(first?.title, "Attention is All You Need & More");
-    assert.deepEqual(first?.authors, ["Ashish Vaswani", "Google Brain"]);
+    assert.deepEqual(first?.authors, [
+      { given: "Ashish", family: "Vaswani" },
+      // 机构作者：Crossref 只给 name，落在 given 里
+      { given: "Google Brain", family: "" },
+    ]);
     assert.equal(first?.year, "2017");
     assert.equal(first?.venue, "Advances in Neural Information Processing Systems");
     assert.equal(first?.type, "inproceedings");
@@ -159,7 +163,10 @@ describe("parseArxivFeed —— Atom", () => {
     const [first, second] = results;
     assert.equal(first?.title, "Attention Is All You Need");
     assert.equal(first?.arxivId, "1706.03762");
-    assert.deepEqual(first?.authors, ["Ashish Vaswani", "Noam Shazeer"]);
+    assert.deepEqual(first?.authors, [
+      { given: "Ashish", family: "Vaswani" },
+      { given: "Noam", family: "Shazeer" },
+    ]);
     assert.equal(first?.year, "2017");
     assert.equal(first?.primaryClass, "cs.CL");
     assert.equal(first?.doi, "10.48550/arXiv.1706.03762");
@@ -189,6 +196,7 @@ describe("searchCite —— 失败分类与缓存", () => {
     assert.ok(outcome.ok);
     // Crossref 两条（两条没有标题的被丢掉）+ arXiv 两条
     assert.equal(outcome.results.length, 4);
+    assert.equal(outcome.partial, null);
     assert.equal(urls.length, 2);
     // 两个来源各有一条同名论文（本样本标题不同，先确认都留下了）
     assert.equal(outcome.results.filter((item) => item.source === "arxiv").length, 2);
@@ -242,6 +250,51 @@ describe("searchCite —— 失败分类与缓存", () => {
     const outcome = await searchCite("partial failure probe", { request });
     assert.ok(outcome.ok);
     assert.equal(outcome.results.length, 2);
+    // 失败的那一侧要点名：界面据此说「这次只有 arXiv」（评审 F2）
+    assert.equal(outcome.partial, "crossref");
+  });
+
+  test("arXiv 用短语检索（`all:word AND …` 对正常标题会返回 0 条）", async () => {
+    const urls: string[] = [];
+    const request: CiteHttpRequest = (url) => {
+      urls.push(url);
+      return Promise.resolve(respond(url.includes("arxiv") ? ARXIV_BODY : CROSSREF_BODY));
+    };
+    await searchCite("phrase query probe", { request });
+    const arxivUrl = urls.find((url) => url.includes("arxiv")) ?? "";
+    assert.match(arxivUrl, /search_query=all:%22phrase%20query%20probe%22/);
+    assert.doesNotMatch(arxivUrl, /\+AND\+/);
+  });
+
+  test("arXiv 那侧超时：Crossref 的结果照常回来，并标 partial=arxiv（评审 F2）", async () => {
+    const request: CiteHttpRequest = (url) => {
+      if (!url.includes("arxiv")) return Promise.resolve(respond(CROSSREF_BODY));
+      const error = new Error("The operation was aborted due to timeout");
+      error.name = "TimeoutError";
+      return Promise.reject(error);
+    };
+    const started = Date.now();
+    const outcome = await searchCite("attention text search probe", { request });
+    assert.ok(outcome.ok);
+    assert.equal(outcome.partial, "arxiv");
+    assert.equal(outcome.results.length, 2);
+    assert.equal(outcome.results.every((item) => item.source === "crossref"), true);
+    // 注入的 request 立刻返回，这里只确认没有等到 8 秒的主超时
+    assert.ok(Date.now() - started < 2000);
+  });
+
+  test("缓存命中也要带上 partial：否则第二次查就不再提示「只有一侧」", async () => {
+    const request: CiteHttpRequest = (url) => {
+      if (!url.includes("arxiv")) return Promise.resolve(respond(CROSSREF_BODY));
+      const error = new Error("timeout");
+      error.name = "TimeoutError";
+      return Promise.reject(error);
+    };
+    const first = await searchCite("attention cache partial probe", { request });
+    const second = await searchCite("attention cache partial probe", { request });
+    assert.ok(first.ok && second.ok);
+    assert.equal(first.partial, "arxiv");
+    assert.equal(second.partial, "arxiv");
   });
 
   test("DOI 404 → not-found", async () => {
@@ -261,6 +314,7 @@ describe("searchCite —— 失败分类与缓存", () => {
     const doi = await searchCite("10.1145/one", { request });
     assert.ok(doi.ok);
     assert.equal(doi.results.length, 1);
+    assert.equal(doi.partial, null);
     assert.match(urls[0] ?? "", /api\.crossref\.org\/works\/10\.1145%2Fone$/);
 
     const arxiv = await searchCite("2401.99999", { request });

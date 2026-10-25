@@ -22,10 +22,19 @@ import type {
   CiteCandidate,
   CiteSearchFailure,
   CiteSearchOutcome,
+  CiteSearchSource,
 } from "../../shared/cite.ts";
 
 /** 一次查询的墙钟上限：8 秒还拿不到，用户已经以为它卡死了 */
 const TIMEOUT_MS = 8000;
+
+/**
+ * 标题检索里 **arXiv 那一侧**的短超时。arXiv 的 API 时不时整段不可达（DNS 指到
+ * 连不上的边节点），而 Crossref 通常 1 秒内就答。用同一个 8 秒会变成「两个来源都
+ * 在等最慢的那个」，用户等 8 秒只拿到 Crossref 还不知道为什么——4 秒切掉它，
+ * 并在结果里标 `partial` 说「这次只有 Crossref」。
+ */
+const TEXT_ARXIV_TIMEOUT_MS = 4000;
 
 /** 缓存活多久（同一条查询在面板里反复触发时省下网络往返） */
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -45,7 +54,7 @@ export interface CiteHttpResponse {
   body: string;
 }
 
-/** 网络出口（测试注入）。`signal` 由调用方给（8 秒超时） */
+/** 网络出口（测试注入）。`signal` 由调用方给（8 秒 / 标题检索的 arXiv 侧 4 秒） */
 export type CiteHttpRequest = (url: string, signal: AbortSignal) => Promise<CiteHttpResponse>;
 
 export interface CiteSearchDeps {
@@ -105,6 +114,8 @@ function stripArxivVersion(id: string): string {
 interface CacheSlot {
   at: number;
   results: CiteCandidate[];
+  /** 当初有没有一侧没答上来：缓存的正是「只有 Crossref」那份结果，提示要跟着走 */
+  partial: CiteSearchSource | null;
 }
 
 /** 进程内缓存：只存成功的结果，失败让用户能立刻重试 */
@@ -124,16 +135,18 @@ export async function searchCite(rawQuery: string, deps: CiteSearchDeps = {}): P
   const now = deps.now?.() ?? Date.now();
 
   const hit = cache.get(key);
-  if (hit !== undefined && now - hit.at < CACHE_TTL_MS) return { ok: true, results: hit.results };
+  if (hit !== undefined && now - hit.at < CACHE_TTL_MS) {
+    return { ok: true, results: hit.results, partial: hit.partial };
+  }
 
   const outcome = await run(plan, deps.request ?? fetchText);
-  if (outcome.ok) remember(key, now, outcome.results);
+  if (outcome.ok) remember(key, now, outcome.results, outcome.partial);
   return outcome;
 }
 
-function remember(key: string, at: number, results: CiteCandidate[]): void {
+function remember(key: string, at: number, results: CiteCandidate[], partial: CiteSearchSource | null): void {
   cache.delete(key);
-  cache.set(key, { at, results });
+  cache.set(key, { at, results, partial });
   // 先删最早插入的那条（Map 保序）：满了就丢最旧的
   while (cache.size > MAX_CACHE_ENTRIES) {
     const oldest = cache.keys().next();
@@ -163,7 +176,7 @@ async function byDoi(doi: string, request: CiteHttpRequest): Promise<CiteSearchO
   const candidate = crossrefCandidate(record(parsed)?.message);
   return candidate === null
     ? { ok: false, reason: "not-found", detail: doi }
-    : { ok: true, results: [candidate] };
+    : { ok: true, results: [candidate], partial: null };
 }
 
 /** arXiv 编号直达：`id_list` 一次取回一条 */
@@ -182,7 +195,7 @@ async function byArxivId(id: string, request: CiteHttpRequest): Promise<CiteSear
   const results = parseArxivFeed(response.body);
   return results.length === 0
     ? { ok: false, reason: "not-found", detail: id }
-    : { ok: true, results };
+    : { ok: true, results, partial: null };
 }
 
 /**
@@ -199,7 +212,7 @@ async function byText(text: string, request: CiteHttpRequest): Promise<CiteSearc
       if (statusFailure !== null) throw new HttpStatusError(statusFailure);
       return parseCrossrefWorks(response.body);
     }),
-    withTimeout(request, arxivUrl).then((response) => {
+    withTimeout(request, arxivUrl, TEXT_ARXIV_TIMEOUT_MS).then((response) => {
       const statusFailure = statusProblem(response.status);
       if (statusFailure !== null) throw new HttpStatusError(statusFailure);
       return parseArxivFeed(response.body);
@@ -217,15 +230,20 @@ async function byText(text: string, request: CiteHttpRequest): Promise<CiteSearc
   if (crossref.status === "fulfilled") crossref.value.forEach(push);
   if (arxiv.status === "fulfilled") arxiv.value.forEach(push);
 
-  if (results.length > 0) return { ok: true, results };
+  const partial = crossref.status === "rejected" ? "crossref" : arxiv.status === "rejected" ? "arxiv" : null;
+  if (results.length > 0) return { ok: true, results, partial };
   // 都没结果：至少有一个来源答了「就是没有」，这次查询是成功的空结果
-  if (crossref.status === "fulfilled" || arxiv.status === "fulfilled") return { ok: true, results: [] };
+  if (crossref.status === "fulfilled" || arxiv.status === "fulfilled") return { ok: true, results: [], partial };
   return failed(crossref.status === "rejected" ? crossref.reason : arxiv.reason);
 }
 
-/** 带 8 秒超时地发一次请求。`AbortSignal.timeout` 的报错名是 TimeoutError */
-async function withTimeout(request: CiteHttpRequest, url: string): Promise<CiteHttpResponse> {
-  return request(url, AbortSignal.timeout(TIMEOUT_MS));
+/** 带超时地发一次请求。`AbortSignal.timeout` 的报错名是 TimeoutError */
+async function withTimeout(
+  request: CiteHttpRequest,
+  url: string,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<CiteHttpResponse> {
+  return request(url, AbortSignal.timeout(timeoutMs));
 }
 
 /** 非 2xx 的统一分类。2xx 返回 null */
@@ -326,9 +344,8 @@ function crossrefCandidate(value: unknown): CiteCandidate | null {
   const title = cleanTitle(firstString(item.title));
   if (title === "") return null;
 
-  const authors = authorList(item.author).map(({ given, family }) =>
-    family === "" ? given : given === "" ? family : `${given} ${family}`,
-  );
+  // 不再拍平成显示串：`Family, Given` 由排版层按 given / family 直接拼（评审 F7）
+  const authors = authorList(item.author);
   return {
     source: "crossref",
     title,
@@ -370,9 +387,12 @@ export function parseArxivFeed(body: string): CiteCandidate[] {
     const id = arxivIdOf(tagText(block, "id"));
     const title = cleanTitle(tagText(block, "title"));
     if (id === null || title === "") continue;
+    // arXiv 只给整名：末尾一词当姓（`Gabriel García Márquez` → family `Márquez`）。
+    // 这是数据源能给的极限，不是我们不拆——结构化字段只有 Crossref 有。
     const authors = [...block.matchAll(/<author\b[^>]*>([\s\S]*?)<\/author>/g)]
       .map((match) => cleanTitle(tagText(match[1] ?? "", "name")))
-      .filter((name) => name !== "");
+      .filter((name) => name !== "")
+      .map(splitName);
     out.push({
       source: "arxiv",
       title,
@@ -405,6 +425,14 @@ function arxivIdOf(raw: string): string | null {
 }
 
 /** `<published>2017-06-12T17:57:16Z</published>` → `2017` */
+/** arXiv / 纯文本整名 → given / family（末尾一词当姓） */
+function splitName(name: string): { given: string; family: string } {
+  const parts = name.split(" ").filter((part) => part !== "");
+  if (parts.length === 0) return { given: "", family: "" };
+  if (parts.length === 1) return { given: name, family: "" };
+  return { given: parts.slice(0, -1).join(" "), family: parts[parts.length - 1] ?? "" };
+}
+
 function arxivYear(raw: string): string | null {
   return /\d{4}/.exec(raw)?.[0] ?? null;
 }
@@ -426,11 +454,17 @@ function tagText(block: string, name: string): string {
   return (cdata === null ? inner : (cdata[1] ?? "")).trim();
 }
 
-/** arXiv 的 `search_query`：每个词一个 `all:` 条件，用 AND 串起来（官方语法） */
+/**
+ * arXiv 的 `search_query`：**整个短语加引号**（`all:"attention is all you need"`）。
+ *
+ * 以前是把每个词写成 `all:word` 再用 `+AND+` 串起来——arXiv 的 AND 语义很严，冠词
+ * 与介词也各算一个条件，于是「Attention is all you need」这种正常标题返回 0 条，
+ * arXiv 那一半等于不存在（只有来源列空着，用户看不出为什么）。短语检索能命中；
+ * 词与词之间的空格按 %20 编码（`+` 在这里会被当成条件分隔符）。
+ */
 function arxivSearchQuery(text: string): string {
-  const words = text.split(/\s+/).filter((word) => word !== "").slice(0, 10);
-  const clauses = words.map((word) => `all:${encodeURIComponent(word)}`);
-  return `search_query=${clauses.join("+AND+")}`;
+  const phrase = text.split(/\s+/).filter((word) => word !== "").slice(0, 16).join(" ");
+  return `search_query=all:${encodeURIComponent(`"${phrase}"`)}`;
 }
 
 /* ------------------------------- 公共小件 ------------------------------- */
