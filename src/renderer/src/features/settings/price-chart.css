@@ -199,6 +199,10 @@
 .pc-dot.estimated .model-avatar {
   opacity: 0.55;
 }
+/* 借分点：点线框——榜单没评这一档，纵轴借的是最高评测档的分（不进前沿，所以没有绿圈） */
+.pc-dot.borrowed {
+  border: 1.5px dotted var(--color-text-secondary);
+}
 .pc-label {
   position: absolute;
   top: 50%;
@@ -245,6 +249,11 @@
 .pc-label-level {
   margin-left: 4px;
   font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+/* 借分点的后缀：正文字体（中文用等宽字体会被拉开） */
+.pc-label-tag {
+  margin-left: 6px;
   color: var(--color-text-tertiary);
 }
 
@@ -374,6 +383,10 @@
   border: 1.5px dashed var(--color-text-tertiary);
   background: transparent;
 }
+.pc-sw.borrowed {
+  border: 1.5px dotted var(--color-text-secondary);
+  background: transparent;
+}
 .pc-ln {
   width: 16px;
   border-top: 1px dashed var(--color-border-strong);
@@ -497,18 +510,4 @@
 }
 .pc-source a:hover {
   color: var(--color-text-secondary);
-}
-
-/* 「用过、但榜单没评的档」：与其余两组同一种 chip，可点开写出榜单评过的档 */
-.pc-chip-button {
-  font-family: inherit;
-  cursor: pointer;
-}
-.pc-chip-button:hover {
-  border-color: var(--color-border-strong);
-  color: var(--color-text-primary);
-}
-.pc-chip-meta {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }

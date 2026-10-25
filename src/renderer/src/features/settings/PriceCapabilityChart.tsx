@@ -7,7 +7,6 @@ import type {
   PriceChartModelRef,
   PriceChartPoint,
   PriceChartScoreUnit,
-  PriceChartUnratedLevel,
 } from "@shared/price-chart";
 import type { ProviderDto } from "@shared/provider";
 import type { ThinkingLevel } from "@shared/thinking";
@@ -44,6 +43,8 @@ import "./price-chart.css";
  *   悬停提示，placeLabels），其余悬停 / 聚焦出轻提示，点击看详情。
  * - 分类用左右按钮循环（默认 Agent 综合），每类各算一条前沿。
  * - 当前分类查不到的型号列「未上榜」，查得到但横轴定不了的列「缺官方单价」，都不硬画进图里。
+ * - 用过、但榜单没评的档借同型号最高评测档的分（用户 2026-10-25：「用 max 顶替」）：点线框标出、
+ *   不进前沿，图下写一句为什么（榜单没评 = 不值得单独测，做任务推荐用评过的档）。
  *
  * 数据由主进程现算（usage:price-chart）。服务商的型号清单一变就重拉。
  */
@@ -108,7 +109,9 @@ export function PriceCapabilityChart(props: {
   const view = useMemo(() => {
     if (current === null) return null;
     const points = current.points;
-    const frontier = paretoFrontier(points);
+    // 借分点不进前沿：分不是这一档自己的（契约 PriceChartPoint.scoreFrom）
+    const frontier = paretoFrontier(points.filter((p) => p.scoreFrom === undefined));
+    const borrowing = points.some((p) => p.scoreFrom !== undefined || (p.folded?.length ?? 0) > 0);
     const frontierKeys = new Set(frontier.map(pointKey));
     const x = costRange(points.map((p) => p.cost));
     const y = scoreRange(points.map((p) => p.score), current.unit);
@@ -123,7 +126,7 @@ export function PriceCapabilityChart(props: {
     const levelLines = [...byModel.values()]
       .filter((list) => list.length > 1)
       .map((list) => [...list].sort((a, b) => a.cost - b.cost));
-    return { points, frontier, frontierKeys, x, y, xOf, yOf, levelLines };
+    return { points, frontier, frontierKeys, borrowing, x, y, xOf, yOf, levelLines };
   }, [current]);
 
   /**
@@ -156,6 +159,13 @@ export function PriceCapabilityChart(props: {
   const levelName = (level: ThinkingLevel, modelId: string) => t.thinkingLevel(level, modelId);
   const levelOf = (point: PriceChartPoint) =>
     point.thinkingLevel === null ? copy.levelUnlabeled : levelName(point.thinkingLevel, point.modelId);
+  /** 借分点在档名后缀一句「借「最高」档的分」（无障碍名与悬停提示用） */
+  const borrowedOf = (point: PriceChartPoint) =>
+    point.scoreFrom === undefined ? null : copy.borrowedTag(levelName(point.scoreFrom, point.modelId));
+  const tagOf = (point: PriceChartPoint) => {
+    const borrowed = borrowedOf(point);
+    return borrowed === null ? levelOf(point) : `${levelOf(point)} · ${borrowed}`;
+  };
 
   /**
    * 前沿标签各放哪一侧：量出点与标签的像素尺寸交给 placeLabels。useLayoutEffect 在绘制前跑，
@@ -295,9 +305,9 @@ export function PriceCapabilityChart(props: {
                         key={key}
                         data-key={key}
                         type="button"
-                        className={`pc-dot${onFront ? " frontier" : ""}${point.costBasis === "measured" ? "" : " estimated"}`}
+                        className={`pc-dot${onFront ? " frontier" : ""}${point.costBasis === "measured" ? "" : " estimated"}${point.scoreFrom === undefined ? "" : " borrowed"}`}
                         style={{ left: `${left}%`, top: `${view.yOf(point.score)}%` }}
-                        aria-label={`${nameOf(point)} · ${levelOf(point)}`}
+                        aria-label={`${nameOf(point)} · ${tagOf(point)}`}
                         aria-expanded={open}
                         aria-controls={open ? "pc-pop" : undefined}
                         // 按钮原生支持 Enter / 空格触发 click：键盘焦点到点上就能打开
@@ -314,6 +324,7 @@ export function PriceCapabilityChart(props: {
                           <span className={`pc-hint${left > 68 ? " left" : ""}`} aria-hidden="true">
                             {nameOf(point)}
                             <span className="pc-label-level">{levelOf(point)}</span>
+                            {point.scoreFrom !== undefined && <span className="pc-label-tag">{borrowedOf(point)}</span>}
                           </span>
                         )}
                       </button>
@@ -326,6 +337,7 @@ export function PriceCapabilityChart(props: {
                       unit={current.unit}
                       name={nameOf(picked)}
                       level={levelOf(picked)}
+                      levelName={(level) => levelName(level, picked.modelId)}
                       avatar={avatar(picked, 14)}
                     />
                   )}
@@ -341,6 +353,12 @@ export function PriceCapabilityChart(props: {
                   <span className="pc-sw estimated" />
                   {copy.legendEstimated}
                 </span>
+                {view.borrowing && (
+                  <span className="pc-li">
+                    <span className="pc-sw borrowed" />
+                    {copy.legendBorrowed}
+                  </span>
+                )}
                 <span className="pc-li">
                   <span className="pc-ln" />
                   {copy.legendLevels}
@@ -384,14 +402,8 @@ export function PriceCapabilityChart(props: {
             avatar={avatar}
             title={copy.unpricedTip}
           />
-          <UnratedChips
-            items={current.unratedLevels}
-            nameOf={nameOf}
-            levelName={levelName}
-            avatar={avatar}
-          />
-
           <div className="pc-notes">
+            {view.borrowing && <span>{copy.borrowNote}</span>}
             <span>{copy.explainer}</span>
             {data?.hasPlanProvider === true && <span>{copy.planNote}</span>}
           </div>
@@ -427,6 +439,7 @@ function PointDetail(props: {
   unit: PriceChartScoreUnit;
   name: string;
   level: string;
+  levelName: (level: ThinkingLevel) => string;
   avatar: React.ReactNode;
 }) {
   const copy = useT().providers.priceChart;
@@ -450,6 +463,9 @@ function PointDetail(props: {
         <span>{copy.tipScore}</span>
         <span className="pc-mono">{formatScore(point.score, props.unit)}</span>
       </div>
+      {point.scoreFrom !== undefined && (
+        <div className="pc-tip-note">{copy.tipBorrowed(props.levelName(point.scoreFrom))}</div>
+      )}
       <div className="pc-tip-row">
         <span>{copy.tipCost}</span>
         <span>
@@ -466,56 +482,15 @@ function PointDetail(props: {
       {point.measured !== undefined && (
         <div className="pc-tip-note">{copy.tipMeasuredFew(point.measured.samples, formatCost(point.measured.cost))}</div>
       )}
+      {point.folded?.map((item) => (
+        <div key={item.thinkingLevel} className="pc-tip-note">
+          {copy.tipFolded(props.levelName(item.thinkingLevel), item.samples, formatCost(item.cost))}
+        </div>
+      ))}
       <div className="pc-tip-row">
         <span>{copy.tipBoard}</span>
         <span className="pc-mono">{point.boardName}</span>
       </div>
-    </div>
-  );
-}
-
-/**
- * 用过、但榜单没评的档：头像 + 显示名 · 档、实测 n 个任务 · 中位数 $x。悬停（title）或点一下展开写出
- * 榜单评过哪几档（「榜单只评了：最高」）。与「未上榜」「缺官方单价」同一种样式，按型号 × 档去重。
- * 不画点：没分数就没有纵坐标，借别的档的分等于替 Arena 编数（主进程 unratedOf 的注释）。
- */
-function UnratedChips(props: {
-  items: readonly PriceChartUnratedLevel[];
-  nameOf: (ref: PriceChartModelRef) => string;
-  levelName: (level: ThinkingLevel, modelId: string) => string;
-  avatar: (ref: PriceChartModelRef, size: number) => React.ReactNode;
-}) {
-  const copy = useT().providers.priceChart;
-  const [open, setOpen] = useState<string | null>(null);
-  if (props.items.length === 0) return null;
-  return (
-    <div className="pc-chips">
-      <span className="pc-chips-label">
-        <Icon name="circle-dashed" size={13} />
-        {copy.unrated}
-      </span>
-      {props.items.map((item) => {
-        const key = `${item.modelId}\u0000${item.thinkingLevel}`;
-        const rated = copy.ratedOnly(item.ratedLevels.map((level) => props.levelName(level, item.modelId)).join("、"));
-        const expanded = open === key;
-        return (
-          <button
-            key={key}
-            type="button"
-            className="pc-chip pc-chip-button"
-            title={rated}
-            aria-expanded={expanded}
-            onClick={() => setOpen(expanded ? null : key)}
-          >
-            {props.avatar(item, 14)}
-            <span>
-              {props.nameOf(item)} · {props.levelName(item.thinkingLevel, item.modelId)}
-            </span>
-            <span className="pc-chip-meta">{copy.unratedMeasured(item.samples, formatCost(item.cost))}</span>
-            {expanded && <span className="pc-chip-meta">{rated}</span>}
-          </button>
-        );
-      })}
     </div>
   );
 }
