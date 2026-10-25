@@ -303,6 +303,37 @@ describe("ProviderStore · OAuth（Claude 订阅）", () => {
     await assert.rejects(() => failing.resolveOauthApiKey("claude"), /invalid_grant/);
   });
 
+  test("续期按目录条目分派：第二个 Copilot 实例也报 github-copilot；flowData 落盘、续期时原样交给流程", async () => {
+    const kinds: string[] = [];
+    let sawFlowData: unknown;
+    const s = new ProviderStore(dir, secrets, {
+      refreshOauth: async (old, kind) => {
+        kinds.push(kind);
+        sawFlowData = old.flowData;
+        return { ...old, accessToken: "tid=2;proxy-ep=proxy.individual.githubcopilot.com", expiresAt: Date.now() + 1800_000 };
+      },
+    });
+    await upsertOauth({
+      id: "github-copilot-2",
+      kind: "github-copilot",
+      displayName: "Copilot",
+      endpoint: { baseUrl: "https://api.individual.githubcopilot.com", api: "openai-completions" },
+    });
+    await s.saveOauthCredential(
+      "github-copilot-2",
+      credential({ expiresAt: Date.now() - 1, flowData: { enterpriseUrl: "corp.ghe.com", availableModelIds: ["gpt-5.2"] } }),
+    );
+    const fresh = await s.resolveOauthCredential("github-copilot-2");
+    assert.deepEqual(kinds, ["github-copilot"]);
+    assert.deepEqual(sawFlowData, { enterpriseUrl: "corp.ghe.com", availableModelIds: ["gpt-5.2"] });
+    assert.equal(fresh?.accessToken, "tid=2;proxy-ep=proxy.individual.githubcopilot.com");
+    // 落盘的那份也带着 flowData（下次续期还要用）
+    assert.deepEqual((await s.readOauthCredential("github-copilot-2"))?.flowData, {
+      enterpriseUrl: "corp.ghe.com",
+      availableModelIds: ["gpt-5.2"],
+    });
+  });
+
   test("损坏的凭据密文当没有（换机器后 safeStorage 解不开），列表不拉挂", async () => {
     await upsertOauth();
     await store.saveOauthCredential("claude", credential());

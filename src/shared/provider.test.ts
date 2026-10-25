@@ -121,6 +121,23 @@ describe("validateProvider", () => {
     }
   });
 
+  test("thinkingLevels 是档位覆盖：缺省 = 继承、非空已知档合法；空数组 / 未知档名 / 重复 / 非数组都拒", () => {
+    const withLevels = (levels: unknown) => ({
+      ...(validInput() as object),
+      models: { declared: [{ id: "m", thinkingLevels: levels }] },
+    });
+    assert.deepEqual(fieldsOf({ ...(validInput() as object), models: { declared: [{ id: "m" }] } }), []);
+    assert.deepEqual(fieldsOf(withLevels(["high"])), []);
+    assert.deepEqual(fieldsOf(withLevels(["off", "low", "max"])), []);
+    for (const bad of [[], ["ultra"], ["high", "High"], ["high", "high"], "high", null]) {
+      assert.deepEqual(
+        fieldsOf(withLevels(bad)),
+        ["models.declared[0].thinkingLevels"],
+        `应拒绝 thinkingLevels=${JSON.stringify(bad)}`,
+      );
+    }
+  });
+
   test("contextWindow / maxTokens 必须是正有限数：0、负数、NaN、字符串都拒", () => {
     for (const bad of [0, -128000, Number.NaN, "200000"]) {
       for (const field of ["contextWindow", "maxTokens"]) {
