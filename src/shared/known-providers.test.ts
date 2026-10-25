@@ -345,12 +345,16 @@ describe("地址分组 —— OpenCode Go 的 inference/go、旧写法 zen/go、
 });
 
 describe("knownProviderQuota —— 谁有可查的额度", () => {
-  it("只有 DeepSeek 声明了余额（公开文档接口）", () => {
+  it("DeepSeek 是余额（公开文档接口）；五家订阅是套餐窗口（控制台 / 网关路由）", () => {
     assert.equal(knownProviderQuota(p("deepseek")), "balance");
+    for (const id of ["zhipu-coding", "zai", "kimi-coding", "opencode-go", "stepfun"]) {
+      assert.equal(knownProviderQuota(p(id)), "plan-windows", id);
+    }
   });
 
   it("其余条目缺省是 none（整块不渲染，不留「—」）", () => {
-    for (const id of ["zhipu", "zhipu-coding", "zai", "kimi-coding", "stepfun", "opencode-go"]) {
+    // 智谱标准 API（按量）没有实证过的余额端点：不声张，不猜
+    for (const id of ["zhipu", "claude"]) {
       assert.equal(knownProviderQuota(p(id)), "none", id);
     }
   });

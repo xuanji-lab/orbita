@@ -25,6 +25,7 @@ import {
   quotaProblemText,
   snapshotOf,
   usedPercent,
+  windowLabel,
   windowValueText,
 } from "./quota-view.ts";
 
@@ -74,13 +75,16 @@ export function QuotaBlock(props: {
   const failure = result !== null && result.status === "error" ? result.reason : null;
   const now = Date.now();
 
-  /** 鉴权 / 不支持：说清是哪种不通，**不给按钮**让用户反复点（要改的是上面那把钥匙） */
+  /**
+   * 鉴权 / 不支持 / 没订阅：说清是哪种不通，**不给按钮**让用户反复点——
+   * 钥匙错要去改钥匙，没订阅要去订阅，重试都不会变。
+   */
   const problemLine =
     failure === null ? null : (
       <div className="q-line" data-tone={failure === "auth" ? "danger" : undefined}>
-        <Icon name={failure === "unsupported" ? "info" : "triangle-alert"} size={14} />
+        <Icon name={failure === "unsupported" || failure === "no-plan" ? "info" : "triangle-alert"} size={14} />
         <span>{quotaProblemText(failure, t, props.hasKey)}</span>
-        {failure === "auth" || failure === "unsupported" ? null : (
+        {failure === "auth" || failure === "unsupported" || failure === "no-plan" ? null : (
           <button type="button" className="q-retry" disabled={busy} onClick={() => void load(true)}>
             {t.quota.checkNow}
           </button>
@@ -171,7 +175,7 @@ function QuotaFacts(props: { snapshot: QuotaSnapshot; now: number }) {
             return (
               <div className="q-win" key={window.id} data-tone={percent >= 100 ? "spent" : undefined}>
                 <div className="q-win-top">
-                  <span className="q-label">{window.label}</span>
+                  <span className="q-label">{windowLabel(window, t)}</span>
                   <span className="q-value">{windowValueText(window, now, t)}</span>
                 </div>
                 <span className="quota-bar q-bar" aria-hidden data-spent={percent >= 100 ? "true" : undefined}>

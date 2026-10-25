@@ -296,6 +296,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     ],
     catalogId: "zai-coding-cn",
     billing: "plan",
+    quota: "plan-windows",
     note: "GLM Coding Plan 订阅",
   },
   {
@@ -312,6 +313,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogId: "zai",
     // 端点就是 `/coding/paas/`——与国内站 Coding Plan 同一套餐制
     billing: "plan",
+    quota: "plan-windows",
     note: "智谱国际站的 GLM Coding Plan，与国内站账号不通用",
   },
   {
@@ -322,6 +324,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     // pi 目录未收录 stepfun：参数靠型号白名单（known-models.ts）或手填，行摘要会如实标注走兜底
     // **Step Plan 是订阅制**（Credit 月池，platform.stepfun.com/docs/zh/step-plan）
     billing: "plan",
+    quota: "plan-windows",
     note: "Step Plan 订阅（地址要带到 /v1）",
   },
   {
@@ -343,6 +346,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     ],
     catalogId: "kimi-coding",
     billing: "plan",
+    quota: "plan-windows",
     note: "Kimi Code 会员订阅",
   },
   {
@@ -391,6 +395,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     headers: { "x-opencode-session": "orbita" },
     // OpenCode Go 是月费订阅（opencode.ai/go：$10/月，额度制）；按量计费的是 Zen，不是这个端点
     billing: "plan",
+    quota: "plan-windows",
     note: "OpenCode Go 订阅——一个 key 调用多家开源模型（DeepSeek / MiniMax…）",
   },
   {

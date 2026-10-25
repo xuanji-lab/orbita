@@ -25,6 +25,17 @@ export function formatMoney(credits: QuotaCredits): string {
   return code === "" ? credits.amount : `${credits.amount} ${code}`;
 }
 
+/**
+ * 窗口名。**两处（设置页的额度块与环菜单行）必须用这一个函数**：
+ * 智谱 / Kimi 都没给人读的标签，只给了 type / unit / duration 这类机器字段，
+ * 我们猜出的语义类别存在 `kind` 里——已知就取本地化文案（中文界面不能出现英文），
+ * 认不出（`custom` / 旧快照）才用厂商原文 `label`。
+ */
+export function windowLabel(window: QuotaWindow, t: Messages): string {
+  if (window.kind === undefined || window.kind === "custom") return window.label;
+  return t.quota.windowKind[window.kind];
+}
+
 /** 已用百分比取整并夹到 0–100：厂商给小数，界面不显示 62.4% */
 export function usedPercent(window: QuotaWindow): number {
   return Math.max(0, Math.min(100, Math.round(window.usedPercent)));
@@ -78,6 +89,9 @@ export function failureText(reason: QuotaFailure, t: Messages): string {
       return t.quota.reasonProtocol;
     case "unsupported":
       return t.quota.reasonUnsupported;
+    case "no-plan":
+      // 不是故障：这账号就是没订阅套餐。页脚里也只能用同一句话，不能现编一句短话
+      return t.quota.noPlan;
     case "network":
       return t.quota.reasonNetwork;
   }
@@ -126,6 +140,8 @@ export function creditsBreakdownText(credits: QuotaCredits, t: Messages): string
 export function quotaProblemText(failure: QuotaFailure, t: Messages, hasKey?: boolean): string {
   if (failure === "auth") return hasKey === false ? t.quota.authMissing : t.quota.authRejected;
   if (failure === "unsupported") return t.quota.teamUnsupported;
+  // 「没订阅」与「团队账号」是两件事，不能共用一句文案
+  if (failure === "no-plan") return t.quota.noPlan;
   return t.quota.failedAlone(failureText(failure, t));
 }
 
@@ -197,8 +213,8 @@ export function quotaMenuItems(
   for (const window of snapshot.windows) {
     items.push({
       id: `quota-${window.id}`,
-      // 厂商原文标签，不翻译；条在行下，吃满卡片内边距
-      label: window.label,
+      // 窗口名与设置页同一份口径（见 windowLabel）
+      label: windowLabel(window, t),
       hint: windowValueText(window, now, t),
       fact: true,
       progress: progressOf(window),
