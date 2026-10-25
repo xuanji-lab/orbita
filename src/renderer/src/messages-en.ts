@@ -1549,6 +1549,7 @@ export const en = {
     authRejected: "The provider rejected this API key (401). Update it above, then try again.",
     teamUnsupported: "Team accounts aren't supported. Sign in with a personal account to see quota here.",
     noPlan: "This account has no subscription.",
+    consoleOnly: "Balance is only available in this gateway's web console.",
     reasonAuth: "key rejected",
     reasonNetwork: "network error",
     reasonProtocol: "unexpected response",

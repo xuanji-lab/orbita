@@ -4,7 +4,7 @@
  */
 import { ipcMain, shell } from "electron";
 import { ipcChannels, type OauthDeviceCode, type OauthLoginInput } from "../../shared/agent-ipc.ts";
-import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota } from "../../shared/known-providers.ts";
+import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota, knownQuotaSourceOf } from "../../shared/known-providers.ts";
 import type { OauthCredential, ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 import { quotaIsStale, type QuotaFailure, type QuotaQuery, type QuotaResult } from "../../shared/quota.ts";
 import { resolveProviderSecrets } from "../agent/ipc.ts";
@@ -218,8 +218,8 @@ export function registerProviderIpc(
 
     const result = await probeQuota({
       probe,
-      // 传**目录条目 id** 而不是存储行的 kind：老数据没有 kind，第二个实例也只能靠 id 认回来
-      kind: knownProviderOf(provider).id,
+      // 传**额度来源条目的 id**（general 兼容条目按 baseUrl 兜底认到的那家），探针靠它分派
+      kind: knownQuotaSourceOf(provider)?.id ?? knownProviderOf(provider).id,
       baseUrl: provider.endpoint.baseUrl,
       apiKey,
     });

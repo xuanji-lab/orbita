@@ -77,7 +77,14 @@ export interface QuotaSnapshot {
  * `unsupported` = 这家就是查不了（团队账号、未接入）；
  * `no-plan` = 账号没订阅套餐（能查、但不是故障——别把它说成「格式变了」）。
  */
-export type QuotaFailure = "auth" | "unsupported" | "no-plan" | "network" | "protocol";
+export type QuotaFailure =
+  | "auth"
+  | "unsupported"
+  | "no-plan"
+  /** 平台**不给 API 查**：余额只在网页控制台里（tokenrhythm 的 /api/me 只认控制台会话） */
+  | "console-only"
+  | "network"
+  | "protocol";
 
 export type QuotaResult =
   | { status: "ok"; snapshot: QuotaSnapshot; fromCache: boolean }

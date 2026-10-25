@@ -777,3 +777,43 @@ describe("probeQuota —— StepFun（真实信封：没订阅 = no-plan，不�
     assert.deepEqual(await probeQuota(stepfunInput()), { status: "error", reason: "network", cached: null });
   });
 });
+
+/* ---------------- 基元律动：余额只在控制台 ---------------- */
+
+const tokenrhythmInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput => ({
+  probe: "balance",
+  kind: "tokenrhythm",
+  baseUrl: "https://tokenrhythm.studio/v1",
+  apiKey: "sk-tr",
+  ...overrides,
+});
+
+describe("probeQuota —— 基元律动（/api/me 只认控制台会话）", () => {
+  test("真实情况：API key 打 /api/me 回 401 → console-only，不是「钥匙错了」", async () => {
+    const stub = stubFetch(() => new Response(JSON.stringify({ code: "UNAUTHORIZED", message: "未认证或登录已过期" }), { status: 401 }));
+    assert.deepEqual(await probeQuota(tokenrhythmInput()), { status: "error", reason: "console-only", cached: null });
+    assert.equal(stub.calls[0]?.url, "https://tokenrhythm.studio/api/me");
+    assert.equal(headersOf(stub.calls[0]).Authorization, "Bearer sk-tr");
+  });
+
+  test("若哪天给了余额：data.balance + currency → credits", async () => {
+    stubFetch(() => okBody({ data: { balance: "12.50", currency: "cny" } }));
+    const result = await probeQuota(tokenrhythmInput());
+    assert.equal(result.status, "ok");
+    if (result.status === "ok") assert.deepEqual(result.snapshot.credits, { amount: "12.50", currency: "CNY" });
+  });
+
+  test("认不出的形状 → protocol，且只打字段名", async () => {
+    const original = console.warn;
+    const logged: unknown[][] = [];
+    console.warn = (...args: unknown[]) => { logged.push(args); };
+    try {
+      stubFetch(() => okBody({ foo: 1 }));
+      assert.deepEqual(await probeQuota(tokenrhythmInput()), { status: "error", reason: "protocol", cached: null });
+    } finally {
+      console.warn = original;
+    }
+    assert.ok(logged.length > 0);
+    assert.ok(!JSON.stringify(logged).includes("12.50"), "不打印值");
+  });
+});

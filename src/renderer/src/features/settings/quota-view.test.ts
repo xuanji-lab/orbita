@@ -172,6 +172,12 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
 });
 
 describe("失败文案——「没订阅」与「团队账号」是两句话", () => {
+  test("console-only 说「只能在网页控制台查看」，不冒充钥匙错", () => {
+    assert.match(quotaProblemText("console-only", zh), /控制台/);
+    assert.match(quotaProblemText("console-only", en), /console/i);
+    assert.notEqual(quotaProblemText("console-only", zh), quotaProblemText("auth", zh));
+  });
+
   test("no-plan 走 noPlan，不混进 teamUnsupported", () => {
     assert.equal(quotaProblemText("no-plan", zh), "这个账号没有订阅套餐。");
     assert.equal(quotaProblemText("no-plan", en), "This account has no subscription.");

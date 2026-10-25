@@ -1391,6 +1391,7 @@ export const zh: Messages = {
     authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
     teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
     noPlan: "这个账号没有订阅套餐。",
+    consoleOnly: "这个网关的余额只能在网页控制台查看。",
     reasonAuth: "密钥无效",
     reasonNetwork: "网络错误",
     reasonProtocol: "返回格式变了",

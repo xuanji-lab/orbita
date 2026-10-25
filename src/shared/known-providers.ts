@@ -530,6 +530,12 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogAuthoritative: true,
     untested: true,
     note: "聚合网关，一个 key 调用多家模型；型号清单与参数跟着它自己的目录走，计费按各厂官方美元单价",
+    /*
+     * 余额：只有控制台接口 `GET /api/me` 疑似带余额（对无效 Bearer 回 401，说明要凭据）；
+     * 官方文档没写余额 API（只说「调用次数与用量出现在用户中心」）。先按余额接，
+     * 真实响应待用 key 验证后收紧解析。
+     */
+    quota: "balance",
   },
   {
     id: "anthropic-compatible",
@@ -675,7 +681,8 @@ export function endpointHintsOf(
 export interface ProviderKindSource {
   id: string;
   kind?: string;
-  endpoint: { api: ProviderApi };
+  /** baseUrl 可选：额度按地址兜底时要它；其余判定只看 kind / id */
+  endpoint: { api: ProviderApi; baseUrl?: string };
 }
 
 /** 认不出条目时按协议落到哪个兼容入口 */
@@ -735,8 +742,30 @@ export function isPlanBilling(provider: ProviderKindSource): boolean {
  * 第二个实例（`deepseek-2`）也只能靠 id 认回来——只看 kind 会让这些实例的额度块凭空消失。
  * 能力本身逐条写在条目上（`quota`），这里只负责找到那条。
  */
+/**
+ * 额度能力的**来源条目**：通常是 knownProviderOf 认到的那条；用户把网关配成通用兼容条目
+ * （kind = openai-compatible、baseUrl 指向那家）时，按 baseUrl 的 origin 再找一次同类目。
+ *
+ * 为什么单独一个函数：探针要按条目的 id 分派（`deepseek` / `tokenrhythm` …），只拿
+ * `quota` 不够——`knownProviderOf` 对通用条目返回的是兼容条目，它的 id 会把探针带进 default。
+ */
+export function knownQuotaSourceOf(provider: ProviderKindSource): KnownProvider | undefined {
+  const entry = knownProviderOf(provider);
+  if (entry.quota !== undefined && entry.quota !== "none") return entry;
+  const baseUrl = provider.endpoint?.baseUrl;
+  if (typeof baseUrl !== "string" || baseUrl === "") return undefined;
+  let origin: string | null = null;
+  try { origin = new URL(baseUrl).origin; } catch { origin = null; }
+  if (origin === null) return undefined;
+  return KNOWN_PROVIDERS.find((item) => {
+    if (item.quota === undefined || item.quota === "none") return false;
+    try { return new URL(item.baseUrl).origin === origin; } catch { return false; }
+  });
+}
+
+/** 这家能不能查额度、查哪一类。认不得的一律 `none`。 */
 export function knownProviderQuota(provider: ProviderKindSource): QuotaProbe {
-  return knownProviderOf(provider).quota ?? "none";
+  return knownQuotaSourceOf(provider)?.quota ?? "none";
 }
 
 /**

@@ -97,6 +97,8 @@ export function failureText(reason: QuotaFailure, t: Messages): string {
       return t.quota.reasonProtocol;
     case "unsupported":
       return t.quota.reasonUnsupported;
+    case "console-only":
+      return t.quota.consoleOnly;
     case "no-plan":
       // 不是故障：这账号就是没订阅套餐。页脚里也只能用同一句话，不能现编一句短话
       return t.quota.noPlan;
@@ -165,6 +167,7 @@ export function creditsBreakdownText(credits: QuotaCredits, t: Messages): string
 export function quotaProblemText(failure: QuotaFailure, t: Messages, hasKey?: boolean): string {
   if (failure === "auth") return hasKey === false ? t.quota.authMissing : t.quota.authRejected;
   if (failure === "unsupported") return t.quota.teamUnsupported;
+  if (failure === "console-only") return t.quota.consoleOnly;
   // 「没订阅」与「团队账号」是两件事，不能共用一句文案
   if (failure === "no-plan") return t.quota.noPlan;
   return t.quota.failedAlone(failureText(failure, t));
@@ -215,14 +218,20 @@ export function quotaMenuItems(
       label: failure === null ? t.quota.notCheckedYet : quotaProblemText(failure, t),
       fact: true,
     });
-    items.push({
-      id: "quota-check",
-      label: busy ? t.quota.checking : t.quota.checkNow,
-      icon: "refresh-cw",
-      keepOpen: true,
-      disabled: busy,
-      onSelect: onCheckNow,
-    });
+    /*
+     * 不给「立即查询」的两种：鉴权（要去改钥匙）与控制台限定（要去网页看）。
+     * 「没订阅」仍然给——用户订阅完回来点一下就有值了。
+     */
+    if (failure !== "auth" && failure !== "console-only") {
+      items.push({
+        id: "quota-check",
+        label: busy ? t.quota.checking : t.quota.checkNow,
+        icon: "refresh-cw",
+        keepOpen: true,
+        disabled: busy,
+        onSelect: onCheckNow,
+      });
+    }
     return items;
   }
 
