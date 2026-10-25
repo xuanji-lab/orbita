@@ -350,3 +350,9 @@ test("会话胶囊容器显式铺满 + 标题钉中栏：设置页只有标题�
   assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size[^}]*width:\s*100%/s);
   assert.match(css, /\.cap-sess \.cap-sc \{[^}]*grid-column:\s*2/s);
 });
+
+test("会话胶囊豁免拖拽：拖拽区收不到悬停，铅笔 / 复制键只在指针压到隐形按钮上时才显形", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  assert.match(css, /\.cap-sess \{[^}]*-webkit-app-region:\s*no-drag/s, "整颗会话胶囊 no-drag，:hover 才会在标题 / 短 id 上成立");
+  assert.match(css, /\.toolbar-capsule:hover \.cap-hov,\s*\.toolbar-capsule:focus-within \.cap-hov \{\s*visibility:\s*visible/, "键盘焦点进胶囊时也显形");
+});

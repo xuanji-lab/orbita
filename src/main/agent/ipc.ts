@@ -23,11 +23,12 @@ import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
+import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
 import type { ProviderStore } from "../provider/store.ts";
+import { oauthRequestAuth } from "../provider/oauth-flows.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
@@ -65,49 +66,46 @@ export async function resolveProviderSecrets(
 ): Promise<ProviderSecrets> {
   const dto = (await providers.list()).find((p) => p.id === providerId);
   if (!dto) throw new Error(`unknown provider "${providerId}"`);
-  // OAuth 访问令牌优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
+  const known = knownProviderOf(dto);
+  // OAuth 凭据优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
   // 续期失败不能静默拿旧 token 硬发一轮——换成一句用户能行动的话
-  let apiKey = await providers.resolveOauthApiKey(providerId).catch((cause: unknown) => {
+  const credential = await providers.resolveOauthCredential(providerId).catch((cause: unknown) => {
     throw new Error(
-      `Claude 登录已失效，请到设置 › 模型服务里重新登录（${
+      `${known.label} 登录已失效，请到设置 › 模型服务里重新登录（${
         cause instanceof Error ? cause.message : String(cause)
       }）`,
     );
   });
-  if (apiKey === null) {
-    apiKey = await providers.resolveApiKey(providerId);
-  }
+  // 凭据 → 请求鉴权：多数就是令牌本身；Copilot 的令牌里还写着这个账号该打的地址（proxy-ep）
+  const oauth = credential === null ? null : await oauthRequestAuth(known.id, credential);
+  const apiKey = oauth?.apiKey ?? (await providers.resolveApiKey(providerId));
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
+  const headers =
+    dto.endpoint.headers === undefined && oauth?.headers === undefined
+      ? undefined
+      : { ...dto.endpoint.headers, ...oauth?.headers };
+  const baseUrl = oauth?.baseUrl ?? dto.endpoint.baseUrl;
   // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
   return {
     id: dto.id,
     api: dto.endpoint.api,
-    baseUrl: dto.endpoint.baseUrl,
+    baseUrl,
     apiKey,
-    ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
+    ...(headers === undefined ? {} : { headers }),
     /**
-     * 声明的模型 + **我们自己补的参数**（快速适配通道）。用户显式填过的优先，
-     * 其次是白名单，再其次由 runtime 走「pi 目录 → 兜底」。
-     * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
+     * 声明的模型原样过线。型号白名单（known-models.ts）不在这里叠：它要和 pi 目录比
+     * （「目录说了算」的服务商在本家目录命中时不吃白名单），而目录只在 agent 进程里有——
+     * 以前在这里把白名单窗口 / 输出当用户覆盖塞进声明，思考档却塞不进去，菜单与会话
+     * 对同一个型号说两套话。叠加统一在 agent 侧 model-registration 做。
      */
-    models: dto.models.declared.map((decl) => {
-      const patch = knownModelParams(decl.id);
-      return {
-        ...decl,
-        ...(decl.contextWindow === undefined && patch.contextWindow !== undefined
-          ? { contextWindow: patch.contextWindow }
-          : {}),
-        ...(decl.maxTokens === undefined && patch.maxTokens !== undefined
-          ? { maxTokens: patch.maxTokens }
-          : {}),
-      };
-    }),
+    models: dto.models.declared,
     // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
     // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
     // 按条目认（knownProviderOf）而不是按 id：第二个 DeepSeek 实例（deepseek-2）同样吃目录参数
-    ...(knownProviderOf(dto).catalogId === undefined ? {} : { catalogId: knownProviderOf(dto).catalogId }),
+    // 多协议网关（OpenCode Go）还带上实例地址所在那一组官方端点：型号各走各的协议时地址从那里取
+    ...endpointHintsOf(known, { api: dto.endpoint.api, baseUrl }),
   };
 }
 
@@ -422,6 +420,13 @@ export function registerAgentIpc(
       }),
     });
     await settleFirstTurn(input, piSessionFile);
+    // 遗留清单「继续」开的轮：记下这条会话在接着做哪条遗留事项（收尾确认时自动标做完）。
+    // 必须在 settleFirstTurn 之后：新会话的 meta 在那里才建出来
+    if (input.carryoverId !== undefined) {
+      await sessions.addResumedCarryover(input.sessionId, input.carryoverId).catch((error: unknown) => {
+        console.error("[carryover] 记不下接着做的遗留事项（不影响发送）", error);
+      });
+    }
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
