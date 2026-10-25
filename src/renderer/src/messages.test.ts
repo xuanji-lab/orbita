@@ -186,13 +186,6 @@ describe("messages —— 中英两张表", () => {
     deepStrictEqual(offenders, []);
   });
 
-  test("行数未知的文案：英文界面不露中文（0.1.16 之前是写死的中文）", () => {
-    const cjk = /[\u4e00-\u9fff]/;
-    // 专注左栏（悬停）与审查面板各一条；英文表里不能出现汉字
-    deepStrictEqual([cjk.test(en.focus.linesUnknown), cjk.test(en.review.linesUnknown)], [false, false]);
-    deepStrictEqual([zh.focus.linesUnknown, zh.review.linesUnknown], ["行数未知", "行数未知"]);
-  });
-
   test("首页批语落当天日期：中文「阅 月.日」，英文照美式缩写（Sept，不写 Sep）", () => {
     deepStrictEqual(
       [zh.chat.homeMark(9, 25), en.chat.homeMark(9, 25), en.chat.homeMark(3, 1), en.chat.homeMark(12, 31)],

@@ -175,7 +175,6 @@ function clockOf(at: number): string {
 /**
  * 素材 → 给模型的正文。段落：时段与工作区头、各会话流水、工作区改动清单。
  * 改动行带 U / M 与行数（模型点名用），路径取仓库相对路径的尾两段更容易对上号。
- * 超大未跟踪文件的行数未知（lineCountUnknown）——如实写「行数未知」，不拿 +0 冒充。
  */
 export function buildSummaryPrompt(material: SummaryMaterial, startedAt: number, until: number): string {
   const minutes = Math.max(1, Math.round((until - startedAt) / 60_000));
@@ -201,9 +200,7 @@ export function buildSummaryPrompt(material: SummaryMaterial, startedAt: number,
             const tail = entry.path.split("/").slice(-2).join("/");
             const stat = entry.binary
               ? "（二进制）"
-              : entry.lineCountUnknown === true
-                ? "（行数未知）"
-                : `（+${entry.added}${entry.removed > 0 ? ` \u2212${entry.removed}` : ""}）`;
+              : `（+${entry.added}${entry.removed > 0 ? ` \u2212${entry.removed}` : ""}）`;
             return `${entry.kind} ${tail}${stat}`;
           }),
           ...(material.changeEntries.length > 24
