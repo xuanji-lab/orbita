@@ -2078,8 +2078,56 @@ internal static class Program
         CheckTrue(failures, ref cases, "分段日志：错误页那段单独出来（2s 正文窗口是排查重点）",
             failedLine.IndexOf("错误页正文窗口 2010ms（7 轮）", StringComparison.Ordinal) >= 0);
 
+        // ── 等就绪的节奏（2026-10-25：warm 导航 343ms 几乎全是固定 sleep）───────────────
+        // 前几轮密、之后 400ms 封顶；总预算仍是 timeoutMs，慢站点一秒不少。
+        int[] expectedPolls = new int[] { 40, 60, 100, 150, 250, 400, 400, 400 };
+        bool sequenceOk = true;
+        for (int i = 0; i < expectedPolls.Length; i++)
+        {
+            if (CdpSession.ReadyPollIntervalMs(i) != expectedPolls[i]) sequenceOk = false;
+        }
+        CheckTrue(failures, ref cases, "等就绪间隔：40 / 60 / 100 / 150 / 250 之后 400ms 封顶", sequenceOk);
+        bool monotone = true;
+        for (int i = 1; i < 200; i++)
+        {
+            if (CdpSession.ReadyPollIntervalMs(i) < CdpSession.ReadyPollIntervalMs(i - 1)) monotone = false;
+            if (CdpSession.ReadyPollIntervalMs(i) > 400) monotone = false;
+        }
+        CheckTrue(failures, ref cases, "等就绪间隔：单调不减且永不超过 400ms（不会越等越稀导致漏掉已就绪）", monotone);
+        // 已经好了的页面（真机 warm 情形：一直就绪）必须在 ~200ms 内被看见：首睡 100 + 前两轮间隔
+        CheckTrue(failures, ref cases, "等就绪：首探 100ms 内就到位（页面已经好了就不该再等一轮 300ms）",
+            CdpSession.FirstReadySleepMsFor("https://example.com/", "about:blank") <= 100);
+        CheckTrue(failures, ref cases, "等就绪：慢站点仍有 20s 预算（20s 内能排到很多轮，不是只探 8 次）",
+            SumPollBudget(20000) >= 40);
+
+        // 首睡分档：同 URL 重新加载 / 历史前进后退没有 URL 兜底，必须留 300ms
+        CheckTrue(failures, ref cases, "首睡：back/forward（expected=null）仍是 300ms",
+            CdpSession.FirstReadySleepMsFor(null, "https://example.com/") == 300);
+        CheckTrue(failures, ref cases, "首睡：目标是另一个 URL 时 100ms",
+            CdpSession.FirstReadySleepMsFor("https://b.example/", "https://a.example/") == 100);
+        CheckTrue(failures, ref cases, "首睡：重新加载同一个 URL 时仍要 300ms（旧页面也是 complete + 同一个 URL）",
+            CdpSession.FirstReadySleepMsFor("https://a.example/page", "https://a.example/page") == 300
+            && CdpSession.FirstReadySleepMsFor("https://a.example/page/", "https://a.example/page") == 300);
+        CheckTrue(failures, ref cases, "首睡：读不到当前 URL 时走快档（不崩）",
+            CdpSession.FirstReadySleepMsFor("https://a.example/", null) == 100
+            && CdpSession.FirstReadySleepMsFor("https://a.example/", "") == 100);
+
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 自测用：一段预算里能排进多少轮轮询（间隔序列对得上 CdpSession.ReadyPollIntervalMs） */
+    private static int SumPollBudget(int budgetMs)
+    {
+        int rounds = 0;
+        int spent = 0;
+        while (spent < budgetMs)
+        {
+            spent += CdpSession.ReadyPollIntervalMs(rounds);
+            rounds++;
+            if (rounds > 1000) break;
+        }
+        return rounds;
     }
 
     /** --align-every 的值：整数且 ≥ 1。生产 .wsb 不带它，默认仍是 AlignEveryPollsDefault */

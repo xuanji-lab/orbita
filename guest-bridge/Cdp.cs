@@ -1433,7 +1433,7 @@ internal sealed class CdpSession
             }
             NavTiming historyTiming = new NavTiming();
             long historyStartMs = sw.ElapsedMilliseconds;
-            int moved = WaitForReady(null, timeoutMs, historyTiming);
+            int moved = WaitForReady(null, timeoutMs, historyTiming, null);
             historyTiming.ReadyMs = sw.ElapsedMilliseconds - historyStartMs;
             return NavResult(sw, moved == ReadyOk ? null : "历史" + (lower == "back" ? "后退" : "前进") + "后页面在 "
                 + timeoutMs + "ms 内没有加载完成（可能已经没有上一页 / 下一页）", historyTiming);
@@ -1441,6 +1441,10 @@ internal sealed class CdpSession
 
         string target = NormalizeUrl(url);
         NavTiming timing = new NavTiming();
+        // 导航前的当前 URL：**只用来决定首睡长度**（同一个 URL 重新加载时没有 URL 兜底，
+        // 见 FirstReadySleepMsFor）。读不到当「不知道」，走快档——真机上第一探看到的还是旧页面，
+        // URL 对不上目标，照样继续等。
+        string beforeHref = SafeEvalString("location.href", ReadyEvalTimeoutMs);
         // navigate 的回执等待单独压（理由见 PageNavigateTimeoutMs）：只有它卡死时才等满
         int replyTimeoutMs = timeoutMs < PageNavigateTimeoutMs ? timeoutMs : PageNavigateTimeoutMs;
         if (replyTimeoutMs < timeoutMs)
@@ -1492,7 +1496,7 @@ internal sealed class CdpSession
         // 重试过的话「等页面加载」也不能再拿满 20s：剩下的预算要留给写回执（worker 的 40s 杀线）
         int readyTimeoutMs = _channelRetries > 0 ? RetryTimeoutMs(timeoutMs) : timeoutMs;
         long readyStartMs = sw.ElapsedMilliseconds;
-        int ready = WaitForReady(target, readyTimeoutMs, timing);
+        int ready = WaitForReady(target, readyTimeoutMs, timing, beforeHref);
         timing.ReadyMs = sw.ElapsedMilliseconds - readyStartMs;
         // 落在浏览器的错误页 = 这一页没有打开。不能报 ok:true：错误页也是「加载完成」的
         // 普通页面，模型拿到 ok 会接着 observe / click 去操作「你似乎未连接到 Internet」。
@@ -1828,18 +1832,18 @@ internal sealed class CdpSession
      * 正文只在「complete 但 URL 对不上」时读，且同一个 href 只读一次（重定向到别的路径的
      * 慢站点不该每一轮读一遍整页正文）。
      */
-    private int WaitForReady(string expected, int timeoutMs)
-    {
-        return WaitForReady(expected, timeoutMs, null);
-    }
-
-    /** timing 只服务计量，判定顺序一个字未改（错误页判定仍然**先于** readyState） */
-    private int WaitForReady(string expected, int timeoutMs, NavTiming timing)
+    /**
+     * timing / currentHref 只服务计量与首睡长度，**判定顺序一个字未改**：错误页判定仍然
+     * **先于** readyState，正文兜底仍然只在「complete 但 URL 对不上」时读、同一个 href 只读一次。
+     * 变的只有两处等待：首睡从固定 300ms 改成两档（见 FirstReadySleepMsFor），轮询从固定
+     * 300ms 改成前密后疏（见 ReadyPollIntervalMs）——总预算仍是 timeoutMs（慢站点一秒不少）。
+     */
+    private int WaitForReady(string expected, int timeoutMs, NavTiming timing, string currentHref)
     {
         Stopwatch clock = Stopwatch.StartNew();
-        long sleepStartMs = clock.ElapsedMilliseconds;
-        Thread.Sleep(300); // 让 navigate 真正开始（否则第一轮读到的还是旧页面的 complete）
-        if (timing != null) timing.FirstSleepMs = clock.ElapsedMilliseconds - sleepStartMs;
+        int firstSleepMs = FirstReadySleepMsFor(expected, currentHref);
+        if (timing != null) timing.FirstSleepMs = firstSleepMs;
+        Thread.Sleep(firstSleepMs); // 让 navigate 真正开始（否则第一轮读到的还是旧页面的 complete）
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         string checkedHref = null;
         int round = 0;
@@ -1852,7 +1856,7 @@ internal sealed class CdpSession
             // 错误页的判定**不挂在 readyState 上**：chrome-error:// 一旦出现就说明导航已经失败了，
             // 不必先相信「这个 Chromium 会在哪个时刻把错误页报成 complete」（我们只有真机回执，
             // 回执里只有「URL 一直对不上」，没有 readyState 的时间线）。
-            string href = expected == null ? null : SafeEvalString("location.href", 3000);
+            string href = expected == null ? null : SafeEvalString("location.href", ReadyEvalTimeoutMs);
             if (href != null && IsNavErrorPage(href, null))
             {
                 result = ReadyErrorPage;
@@ -1860,7 +1864,7 @@ internal sealed class CdpSession
             else
             {
                 bool complete;
-                try { complete = EvalString("document.readyState", 5000) == "complete"; }
+                try { complete = EvalString("document.readyState", ReadyEvalTimeoutMs) == "complete"; }
                 catch { complete = false; }
                 if (complete)
                 {
@@ -1881,14 +1885,52 @@ internal sealed class CdpSession
                 timing.DumpReads = dumpReads;
             }
             if (result >= 0) return result;
-            if (timing != null) timing.ReadySleepMs += ReadyPollIntervalMs;
-            Thread.Sleep(ReadyPollIntervalMs);
+            int waitMs = ReadyPollIntervalMs(round);
+            if (timing != null) timing.ReadySleepMs += waitMs;
+            Thread.Sleep(waitMs);
         }
         return ReadyTimeout;
     }
 
-    /** 等就绪的轮询间隔（每轮之后 sleep 这么久；一轮只有两条 CDP 消息，见 NavTiming） */
-    private const int ReadyPollIntervalMs = 300;
+    /** 等就绪轮询里单次 Runtime.evaluate 的超时（真卡住由外层 timeoutMs 与 12s 判死兜底） */
+    private const int ReadyEvalTimeoutMs = 1500;
+
+    /**
+     * 等就绪的轮询间隔（**纯函数**，自测断言序列与上限）。
+     *
+     * 为什么不是固定 300ms：一轮只有两条 CDP 消息（真机 cdp-status 量过：两条 eval 加
+     * Target.getTargets 一共 4ms），间隔里除了这 4ms 全是白等。已经加载好的页面应该**立刻**
+     * 返回（真机 warm 导航 343ms 里最大的一块就是这个固定睡眠）；慢站点靠的是总预算
+     * （timeoutMs 默认 20s），不是靠探得勤。所以：前几轮密（40/60/100/150/250），之后 400ms 封顶。
+     */
+    internal static int ReadyPollIntervalMs(int round)
+    {
+        if (round <= 0) return 40;
+        if (round == 1) return 60;
+        if (round == 2) return 100;
+        if (round == 3) return 150;
+        if (round == 4) return 250;
+        return 400;
+    }
+
+    /** 首睡的两档（见 FirstReadySleepMsFor） */
+    private const int ReadyFirstSleepFastMs = 100;
+    private const int ReadyFirstSleepSlowMs = 300;
+
+    /**
+     * 导航之后的第一探要等多久（**纯函数**）。为什么分两档：
+     *   ① 目标是**另一个** URL：URL 比对本身就是兜底——首探看到的是旧页面（URL 对不上目标），
+     *      不会误判成「已就绪」，所以可以短（100ms）。旧行为一律 300ms，而真机 warm 导航
+     *      343ms 里最大的一块就是它；
+     *   ② 目标是**当前这一个** URL（重新加载同一页）/ back / forward：没有这个兜底（旧页面的
+     *      readyState 也是 complete、URL 也一样），必须留 300ms 让导航真的开始。语义不动。
+     */
+    internal static int FirstReadySleepMsFor(string expected, string currentHref)
+    {
+        if (expected == null) return ReadyFirstSleepSlowMs;
+        if (UrlMatches(expected, currentHref)) return ReadyFirstSleepSlowMs;
+        return ReadyFirstSleepFastMs;
+    }
 
     // ── 浏览器错误页的判定（纯函数：自测在宿主上直接验，不碰 Edge）──────────────────
 
@@ -1984,7 +2026,7 @@ internal sealed class CdpSession
             && message.IndexOf("超时", StringComparison.Ordinal) >= 0;
     }
 
-    private bool UrlMatches(string expected, string actual)
+    internal static bool UrlMatches(string expected, string actual)
     {
         if (actual == null) return false;
         string a = TrimSlash(expected);
@@ -1996,7 +2038,7 @@ internal sealed class CdpSession
         return false;
     }
 
-    private string TrimSlash(string value)
+    internal static string TrimSlash(string value)
     {
         string v = value.Trim();
         while (v.Length > 0 && v[v.Length - 1] == '/') v = v.Substring(0, v.Length - 1);
