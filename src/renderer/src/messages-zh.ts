@@ -1590,6 +1590,19 @@ export const zh: Messages = {
     tooLarge: (size, limit) => `太大，没法预览（${size}，上限 ${limit}）`,
     emptyFile: "空文件",
     truncated: (shown, total) => `只显示了前 ${shown}，共 ${total}`,
+    /** 分段预览（>16 MB 的文本按行从主进程取）：提示带说清体积与总行数 */
+    rangeNotice: (size, lines) => `文件较大（${size}），按行分段显示（共 ${lines} 行）`,
+    /** 日志类文件默认打开末尾（.log / 名字里带 log） */
+    rangeOpenedAtEnd: "日志文件，已打开末尾",
+    rangeJumpHead: "开头",
+    rangeJumpTail: "结尾",
+    rangeJumpMiddle: "50%",
+    /** 长行退出：单行超过上限（PREVIEW_MAX_LINE_BYTES）没法按行分段，退回前 16 MB + 长行硬切 */
+    rangeLongLine: (limit) => `有超长单行（超过 ${limit}），没法按行分段；下面是前 16 MB`,
+    /** 行数超过 1.8 M（约 200 MB 日志）：原生滚动条映射不了，如实给用默认应用打开 */
+    rangeTooManyLines: (lines) => `行数太多（超过 ${lines.toLocaleString()} 行），应用内不浏览全文`,
+    /** 打开期间文件被替换 / 追写过：索引里的位置不再可信，重新索引 */
+    rangeStale: "文件在打开期间被改过，重新加载一下",
     /** 大 md 退化：不再跑 MarkdownBlock，按等宽原文看 */
     largeTextPlain: (size) => `文件较大（${size}），按纯文本显示`,
     /** 大文本窗口化：排版没变，只是只渲染可见区（提示条上带「用默认应用打开」） */

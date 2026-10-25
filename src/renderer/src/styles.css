@@ -2850,15 +2850,40 @@ body {
 .file-preview-notice {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-3);
+  /* 窄面板里一行放不下（分段预览有四个出口）时三个出口换到下一行，
+     而不是把说明列挤成一字一行 */
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   margin-bottom: var(--space-2);
 }
-/* 说明列：折行只在列内发生，不把尾部动作键挤走 */
+/* 说明列：折行只在列内发生，不把尾部动作键挤走；宽度不被动作组枪光 */
 .file-preview-notice-text {
   display: flex;
+  flex: 1 1 160px;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
+}
+/* 提示带的一组出口（分段预览有四个）：整组钉在行的右血线上，组内按 token 分隔 */
+.file-preview-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+/*
+ * 分段预览的提示带钉在滚动容器顶部：日志默认打开末尾，提示带留在普通流里就落在
+ * 几千万像素之外——“已打开末尾”与「开头 / 50% / 结尾」四个出口一个也看不到。
+ * 负的 top / margin / 负横向 margin 把身体内边距让回去，所以静止态看起来与普通
+ * 提示带同位置、同宽度，滑动后才变成一条压在内容上的带子。
+ */
+.file-preview-notice[data-sticky="true"] {
+  position: sticky;
+  top: calc(-1 * var(--space-3));
+  z-index: 1;
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  background: var(--color-bg-panel);
 }
 /* 文字键而不是 PanelButton：提示条里的次级出路，不与空态的主按钮争重量。
    静止态就可见——它是出路，不是悬停才出的动作 */

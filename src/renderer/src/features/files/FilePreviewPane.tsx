@@ -7,9 +7,11 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
+import { largeTextNotice, textPreviewMode, textRenderKind } from "./preview-view";
 import { WindowedText } from "./WindowedText";
-import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { RangeTextPreview } from "./RangeTextPreview";
+import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
+import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
 import { useExperimentalFeature } from "../../experimental.ts";
@@ -78,6 +80,8 @@ export function FilePreviewPane(props: {
   useEffect(() => setMode("rendered"), [root, path]);
 
   const [copied, setCopied] = useState(false);
+  // 分段预览（>16 MB）也要能被「刷新」顶一下：文件没变时 mtime 不变，光靠 props 看不出来
+  const [textReload, setTextReload] = useState(0);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1500);
@@ -183,6 +187,7 @@ export function FilePreviewPane(props: {
               onClick={() => {
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
+                else setTextReload((n) => n + 1);
               }}
             >
               <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
@@ -211,6 +216,12 @@ export function FilePreviewPane(props: {
           <PreviewBody
             name={name}
             resetKey={path}
+            sessionId={sessionId}
+            workspaceId={workspaceId}
+            extraWorkspaceId={extraWorkspaceId}
+            root={root}
+            path={path}
+            reloadKey={textReload}
             scroller={bodyRef}
             mode={mode}
             previewMode={previewMode}
@@ -344,6 +355,13 @@ function PreviewBody(props: {
   name: string;
   /** 换文件时窗口化渲染要重置滚动与窗口（软刷新同文件不重置） */
   resetKey: string;
+  sessionId: string | null;
+  workspaceId: string | null;
+  extraWorkspaceId: string | null;
+  root: string;
+  path: string;
+  /** 「刷新」计数器：分段预览靠它重新索引 */
+  reloadKey: number;
   scroller: RefObject<HTMLDivElement | null>;
   mode: "rendered" | "source";
   previewMode: "markdown" | "code" | "plain";
@@ -399,6 +417,27 @@ function PreviewBody(props: {
   if (data.text === "") {
     return <EmptyPreview message={t.files.emptyFile} onOpenDefault={props.onOpenDefault} />;
   }
+  // > PREVIEW_TEXT_LIMIT：不再只给前 16 MB，改成按行向主进程要窗口（主进程按文件大小
+  // 与行数自己决定能不能分段；分段不了它会回长行 / 行数过多的明确结果，由它退回去）
+  if (data.truncated) {
+    return (
+      <RangeTextPreview
+        sessionId={props.sessionId}
+        workspaceId={props.workspaceId}
+        extraWorkspaceId={props.extraWorkspaceId}
+        root={props.root}
+        path={props.path}
+        name={props.name}
+        size={data.size}
+        modifiedAt={data.modifiedAt}
+        headText={data.text}
+        scroller={props.scroller}
+        resetKey={props.resetKey}
+        reloadKey={props.reloadKey}
+        onOpenDefault={props.onOpenDefault}
+      />
+    );
+  }
   return (
     <>
       <TextBody
@@ -409,9 +448,6 @@ function PreviewBody(props: {
         size={data.size}
         scroller={props.scroller}
         resetKey={props.resetKey}
-        truncated={
-          data.truncated ? { shownBytes: PREVIEW_TEXT_LIMIT, totalBytes: data.size } : null
-        }
         onOpenDefault={props.onOpenDefault}
       />
     </>
@@ -433,8 +469,6 @@ function TextBody(props: {
   size: number;
   scroller: RefObject<HTMLDivElement | null>;
   resetKey: string;
-  /** 只读了开头那一段（大于 PREVIEW_TEXT_LIMIT）：与其它提示合并进一条提示带 */
-  truncated: { shownBytes: number; totalBytes: number } | null;
   /** 大文本提示带尾部的出口（用默认应用打开，与空态同一条 IPC） */
   onOpenDefault: () => void;
 }) {
@@ -449,8 +483,6 @@ function TextBody(props: {
   // 大文本要说明一声、并给出口（出口与空态那条同一条 IPC）。两条退化路径
   // （小一些的整篇 `<pre>`、大一些的窗口化）共用同一条提示；txt / 代码被窗口化
   // 时排版没变、只是只渲染可见区，也说一句（大文件里看到的可能不是全部）。
-  // 截断（超过 PREVIEW_TEXT_LIMIT 只读了开头）与退化可能同时成立（3 MB 的 .md）：**合并成一条提示带、
-  // 只留一个出口**，不堆两条一模一样的按钮。
   const notice = largeTextNotice(
     props.previewMode,
     props.mode,
@@ -458,18 +490,12 @@ function TextBody(props: {
     props.size,
     t,
   );
-  const messages =
-    props.truncated === null
-      ? notice === null
-        ? []
-        : [notice]
-      : [
-          truncatedNotice(props.truncated.shownBytes, props.truncated.totalBytes, t),
-          ...(notice === null ? [] : [notice]),
-        ];
   const noticeBar =
-    messages.length === 0 ? null : (
-      <LargeTextNotice messages={messages} onOpenDefault={props.onOpenDefault} />
+    notice === null ? null : (
+      <PreviewNotice
+        messages={[notice]}
+        actions={[{ label: t.files.openDefault, icon: "external-link", onClick: props.onOpenDefault }]}
+      />
     );
   if (kind === "windowed") {
     return (
@@ -520,45 +546,8 @@ function HighlightedCode(props: { name: string; text: string }) {
 }
 
 /**
- * 大文件提示带：若干句说明 + 尾部「用默认应用打开」。
- *
- * 截断（>2 MB 只读了开头）、md 退化（>64 KB 按纯文本）、窗口化（>256 KB 只渲染可见区）
- * 三条路径都用它——提示带上的出口复用空态那条 `api.files.open`，不另写 shell 调用。
- * 尾部键用文字键而不是 PanelButton：它是提示带里的次级出路，不该和空态的
- * 主按钮争视觉重量；位置仍钉在行的右血线上（.row-trailing）。
+ * 代码高亮：复用聊天 CodeBlock.tsx 的同一套机制（shiki 就绪是异步的，未就绪先
+ * 无色渲染；`useMemo` 按 html 字符串稳定 `{ __html }` 对象引用，避免 React 19
+ * 按对象身份重写 innerHTML）。包一层 `.chat-md`：`pre.shiki` 的双主题着色
+ * （含暗 / 黑主题翻色）就定义在这个作用域下，见 styles.css。
  */
-function LargeTextNotice(props: { messages: readonly string[]; onOpenDefault: () => void }) {
-  const t = useT();
-  return (
-    <div className="file-preview-notice">
-      <div className="file-preview-notice-text">
-        {props.messages.map((message) => (
-          <PanelLine key={message}>{message}</PanelLine>
-        ))}
-      </div>
-      <button
-        type="button"
-        className="file-preview-notice-action row-trailing"
-        onClick={props.onOpenDefault}
-      >
-        <Icon name="external-link" size={12} strokeWidth={1.8} />
-        {t.files.openDefault}
-      </button>
-    </div>
-  );
-}
-
-/** binary / too-large / 空文件的空态：一句说明 + 用默认应用打开 */
-function EmptyPreview(props: { message: string; onOpenDefault: () => void }) {
-  const t = useT();
-  return (
-    <div className="file-preview-empty">
-      <Icon name="file" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-      <PanelLine>{props.message}</PanelLine>
-      <PanelButton onClick={props.onOpenDefault}>
-        <Icon name="external-link" size={14} />
-        {t.files.openDefault}
-      </PanelButton>
-    </div>
-  );
-}
