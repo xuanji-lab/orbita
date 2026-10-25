@@ -64,23 +64,11 @@ test("changeSummary：总数与新文件数", () => {
 });
 
 test("formatChangeLines：两侧 / 单侧 / 零 / 二进制", () => {
-  assert.equal(formatChangeLines(entry("a", "M", 42, 7), ""), "+42 \u22127");
-  assert.equal(formatChangeLines(entry("a", "U", 86, 0), ""), "+86");
-  assert.equal(formatChangeLines(entry("a", "M", 0, 5), ""), "\u22125");
-  assert.equal(formatChangeLines(entry("a", "M", 0, 0), ""), "");
-  assert.equal(formatChangeLines(entry("a", "M", 10, 2, true), ""), "");
-});
-
-test("formatChangeLines：超大未跟踪文件的文案由调用方按界面语言给（不写死中文），不拿 +0 冒充", () => {
-  // 超过单文件上限只判了二进制、没数行 → 用调用方传进来的那句（t.focus.linesUnknown）
-  const big = { ...entry("big.dat", "U", 0, 0), lineCountUnknown: true };
-  assert.equal(formatChangeLines(big, "行数未知"), "行数未知");
-  assert.equal(formatChangeLines(big, "line count unavailable"), "line count unavailable");
-  // 二进制仍是空串：binary 优先，不额外说「行数未知」
-  assert.equal(
-    formatChangeLines({ ...entry("big.bin", "U", 0, 0, true), lineCountUnknown: true }, "行数未知"),
-    "",
-  );
+  assert.equal(formatChangeLines(entry("a", "M", 42, 7)), "+42 \u22127");
+  assert.equal(formatChangeLines(entry("a", "U", 86, 0)), "+86");
+  assert.equal(formatChangeLines(entry("a", "M", 0, 5)), "\u22125");
+  assert.equal(formatChangeLines(entry("a", "M", 0, 0)), "");
+  assert.equal(formatChangeLines(entry("a", "M", 10, 2, true)), "");
 });
 
 test("joinRel 与 changeIndexOf", () => {

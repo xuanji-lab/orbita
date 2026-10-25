@@ -28,8 +28,6 @@ export interface ReviewEntry {
   removed: number;
   /** 二进制（git numstat 的 `-`）：没有行级统计，也不出 diff 正文 */
   binary: boolean;
-  /** 未跟踪文件超过行数上限（与专注左栏同口径）：added 是 0 但**不是**「没改动」，UI 显示「行数未知」 */
-  lineCountUnknown?: boolean;
   /** task 来源专用：基线与磁盘现状已一致（回退 / 撤销之后），列表标「已还原」 */
   restored?: boolean;
   /** task 来源专用：快照不可用（超限 / 非 utf8 / blob 丢失），出不了基线 diff */
