@@ -33,12 +33,19 @@ export function reviewSourceLabel(source: ReviewSource, t: Messages): string {
   return t.review.source(source);
 }
 
-/** 空态 / 错误的一句话。 */
-export function reviewEmptyText(list: Extract<ReviewList, { kind: "empty" | "error" }>, t: Messages): string {
+/**
+ * 空态 / 错误的说明句。no-changes 的标题已经是「还没有改动」，说明句不能再说
+ * 一遍——用带来源的 detail（与 entries.length === 0 那条分支同一句）。
+ */
+export function reviewEmptyText(
+  list: Extract<ReviewList, { kind: "empty" | "error" }>,
+  t: Messages,
+  source: ReviewSource,
+): string {
   if (list.kind === "error") return list.message;
   switch (list.reason) {
     case "no-changes":
-      return t.review.emptyNoChanges;
+      return t.review.emptyNoChangesDetail(source);
     case "not-repo":
       return t.review.emptyNotRepo;
     case "no-git":
