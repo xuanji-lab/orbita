@@ -4,7 +4,9 @@
  * **沙箱与文件协议全在主进程**（SandboxController，browserRequest 同一条边界）：
  * agent 进程不碰沙箱、不碰 out/cmd，它那边只剩「工具定义 → requestId 问答」一层薄包装。
  * 沙箱是应用级一份（不按会话分）——多个会话同时使唤它时，事件按到达顺序注入，这正是
- * 「一个桌面」的语义。
+ * 「一个桌面」的语义。**浏览器车道不同**：sandbox_* 在 v1.5-1 起按会话各用一个 Edge 实例
+ * （main/computer-use/cdp.ts），会话 id 在那里是路由键，不只是日志。宿主侧仍然按轮拿租约，
+ * 本刀不动租约的资源切分。
  *
  * **坐标换算不在这里**：模型给的是它看到的那张截图的像素，换算在工具层做
  * （agent/computer-tools.ts 存下最近一次截图的几何），到这一层全是沙箱物理像素。
@@ -35,8 +37,16 @@ export interface ComputerUseGuest {
 
 export async function applyComputerUseRequest(
   controller: ComputerUseGuest,
+  /**
+   * 只用于日志与观测，**不改变任何命令的语义**：沙箱里就一个桌面，同一条 click 无论在谁的
+   * 轮次里都只做一件事——「一个会话同一时间用沙箱」由 computer-use/lease.ts 保证（index.ts
+   * 先 acquire 再调到这里），不在这一层。带上它是因为真机排查要回答「这一下到底是谁发的」：
+   * 租约挡住的是并发，日志回答的是事后归因。
+   */
+  sessionId: string,
   request: ComputerUseToolRequest,
 ): Promise<ComputerUseToolOutcome> {
+  console.log(`[computer-use] ${sessionId} → ${request.action}`);
   try {
     switch (request.action) {
       case "screenshot": {

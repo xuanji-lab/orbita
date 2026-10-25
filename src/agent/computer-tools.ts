@@ -49,6 +49,23 @@ const HANDOFF_HINT =
   "The sandbox is isolated: it has no sign-in state of the user's and you cannot solve a CAPTCHA in it. " +
   "If a page needs either, stop and tell the user what to do — do not guess credentials.";
 
+/**
+ * 分工与抢占：这两句进**每个** computer_* 的描述，因为模型看不到 UI、也想不到「另一个会话
+ * 正占着这个桌面」。不写的话它会用像素工具做网页任务（慢且脆），或者在被占用时立刻重试
+ * （正是 lease.ts 最不该发生的事）。
+ */
+const SCOPE =
+  "Use this for **desktop GUI tasks** on the sandbox desktop. For web pages prefer the sandbox_* tools (DOM " +
+  "level, they drive the sandbox's Edge) or the host browser_* tools — they are faster and steadier than " +
+  "pixels. ";
+
+const BUSY =
+  "The sandbox desktop belongs to **one session at a time** (pixel tools share the single screen and the " +
+  "foreground focus): if the result says another session holds it, do not retry — wait for that session's " +
+  "turn to end, or ask the user which session should drive the sandbox. **The sandbox_* web tools do not " +
+  "queue**: each session drives its own Edge instance, so for web tasks use sandbox_* instead of waiting on " +
+  "the desktop. ";
+
 /** 「先截图」的拒绝语：模型只有这一条路看见沙箱，说清楚它该先干什么 */
 const NEEDS_SCREENSHOT =
   "No screenshot yet in this turn: call computer_screenshot first. Coordinates are pixels of that image, " +
@@ -136,6 +153,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     name: "computer_screenshot",
     label: "computer_screenshot",
     description:
+      SCOPE +
+      BUSY +
       "Take a screenshot of the Windows sandbox desktop (an isolated copy of Windows that the user started " +
       "for you). **Start here and come back here after every action**: this image is the only way you can see " +
       "the sandbox, and the coordinates you pass to computer_click / computer_scroll are pixels of this image. " +
@@ -163,6 +182,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     name: "computer_click",
     label: "computer_click",
     description:
+      SCOPE +
+      BUSY +
       "Click a point on the sandbox desktop, by x, y pixels of your latest computer_screenshot. It moves the " +
       "pointer there and presses — whatever is under that point receives it, so take a screenshot first and " +
       "click on what you actually see. Nothing but the fact that it was sent comes back: take another " +
@@ -211,6 +232,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     name: "computer_type",
     label: "computer_type",
     description:
+      SCOPE +
+      BUSY +
       "Type text into whatever has focus on the sandbox desktop. **Click the target first** with " +
       "computer_click — a window or dialog that just opened does not always have focus, and text typed into " +
       "an unfocused desktop is silently dropped. " +
@@ -238,6 +261,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     name: "computer_key",
     label: "computer_key",
     description:
+      SCOPE +
+      BUSY +
       "Press a key or a key combination on the sandbox desktop: enter, tab, escape, backspace, delete, home, " +
       "end, pageup, pagedown, up / down / left / right, f1–f12, ctrl+a, alt+f4, ctrl+shift+s… " +
       "It goes to the focused window — click the window first. Take a screenshot afterwards to confirm. " +
@@ -266,6 +291,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     name: "computer_scroll",
     label: "computer_scroll",
     description:
+      SCOPE +
+      BUSY +
       "Scroll at a point on the sandbox desktop, by x, y pixels of your latest computer_screenshot. The point " +
       "decides which pane scrolls — pass the x, y of the list or page you mean (omitted = the middle of the " +
       "screen). deltaY is a number of wheel notches: positive scrolls down, negative up (3 is about nine " +

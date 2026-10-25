@@ -17,6 +17,7 @@ import { join, win32 } from "node:path";
 import {
   COMPUTER_USE_CMD_DIR,
   computerUseGuestCommands,
+  computerUseGuestTimeoutMs,
   GUEST_COMMAND_TIMEOUT_MS,
 } from "../../shared/computer-use.ts";
 
@@ -56,8 +57,9 @@ export function isPlainScreenshotFileName(name: string): boolean {
 }
 
 /**
- * 桥不应答时的放弃线已上提到 shared/computer-use.ts 的 GUEST_COMMAND_TIMEOUT_MS
- * （agent 侧的 broker 兜底也要读它，注释与理由在那边）。
+ * 桥不应答时的放弃线已上提到 shared/computer-use.ts，**按命令类分两条**：
+ * 像素 / 桌面命令 GUEST_COMMAND_TIMEOUT_MS（45s），浏览器命令 COMPUTER_USE_CDP_TIMEOUT_MS（70s）。
+ * 取哪条由 computerUseGuestTimeoutMs 决定（agent 侧的 broker 兜底也按它排，注释与理由在那边）。
  */
 
 /** 等响应文件的轮询节奏（映射文件夹同步即时，这只是读盘节奏） */
@@ -146,15 +148,40 @@ async function sendGuestCommandRaw(
     }
     if (Date.now() >= deadline) {
       await cleanup();
-      throw new Error(`guest 桥 ${timeoutMs}ms 内没有响应（${command} 超时）`);
+      throw new Error(guestTimeoutMessage(command, timeoutMs));
     }
     await sleep(RESP_POLL_INTERVAL_MS);
   }
 }
 
 /**
+ * 桥不应答时的那句话。**必须能照着做**：模型看不见 UI，一句「没有响应」它只能重试同一个动作。
+ *
+ * 浏览器命令与像素命令的下一步不同（前者能查会话状态、能退回像素工具；后者只能先截图看桌面），
+ * 所以按命令分两支。两句话都没有「没有在运行 / 没有启动」这类字眼：宿主靠那两个词做
+ * 「缓存过期」自愈（cdp.ts 的 isNotRunning），超时不是那个语义，不该触发重试。
+ */
+export function guestTimeoutMessage(command: string, timeoutMs: number): string {
+  // 测试里会传 300ms 这种值：不足一秒就按毫秒说，别把预算写成「超时 0s」
+  const budget = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+  if (command.startsWith("cdp-")) {
+    return (
+      `沙箱里的浏览器没有响应（${command} 超时 ${budget}）——可能是浏览器卡住了：` +
+      "用 cdp-status 确认会话状态，或改用 computer_screenshot / computer_click 像素工具"
+    );
+  }
+  return (
+    `沙箱里的桌面没有响应（${command} 超时 ${budget}）——也许是沙箱卡住了或正在重置：` +
+    "先用 computer_screenshot 确认桌面状态，必要时重启沙箱"
+  );
+}
+
+/**
  * 通用命令往返：写 req → 等 resp → 清理。回执是桥给的扁平 JSON（`ok` 已保证为 true）。
  * 所有失败以 Error 抛出（消息已是人话，调用方直接展示）。
+ *
+ * 超时缺省按**命令类**取（`computerUseGuestTimeoutMs`）：cdp-* 要容下 guest 里 40s 的
+ * worker 杀线 + 那句话走回宿主的一跳（实测 8–19s），像素命令仍是 45s。
  *
  * 截图那条单独走 fetchGuestScreenshot：它除了 resp 还要读同名 .jpg 兄弟文件。
  */
@@ -162,7 +189,7 @@ export async function sendGuestCommand(
   outDir: string,
   command: string,
   fields: Record<string, unknown> = {},
-  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
+  timeoutMs: number = computerUseGuestTimeoutMs(command),
 ): Promise<Record<string, unknown>> {
   const { resp, cmdDir, baseName } = await sendGuestCommandRaw(outDir, command, fields, timeoutMs);
   await rm(join(cmdDir, `${baseName}.req.json`), { force: true }).catch(() => {});
@@ -180,7 +207,8 @@ export async function pingGuest(outDir: string, timeoutMs: number): Promise<void
 }
 
 /**
- * 向 guest 桥要一张截图。所有失败都以 Error 抛出（消息已是人话，调用方直接展示）：
+ * 向 guest 桥要一张**桌面**截图（像素路径，固定用 45s 那条线）。
+ * 所有失败都以 Error 抛出（消息已是人话，调用方直接展示）：
  * 超时 / 桥回的错误命令响应 / 响应缺字段 / 文件名非法 / JPEG 缺失。
  */
 export async function fetchGuestScreenshot(
@@ -224,7 +252,7 @@ export async function fetchGuestShot(
   outDir: string,
   command: string,
   fields: Record<string, unknown>,
-  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
+  timeoutMs: number = computerUseGuestTimeoutMs(command),
 ): Promise<GuestShot> {
   const { resp, cmdDir, baseName } = await sendGuestCommandRaw(outDir, command, fields, timeoutMs);
 

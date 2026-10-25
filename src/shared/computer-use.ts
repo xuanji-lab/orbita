@@ -106,6 +106,10 @@ export const computerUseGuestCommands = {
   screenshotStats: "screenshot-stats",
 
   // ── CDP 浏览器通道（PR3）：一条命令内部 3~4 条 CDP 消息，但只算**一次**文件往返 ──
+  // 0.6.0 起这些命令都认一个**可选**的 `session`（字符串）：缺省 `default`，桥按它选那个会话
+  // 自己的 Edge 实例（各自的 --user-data-dir 与调试端口）。上限 COMPUTER_USE_BROWSER_MAX，
+  // 空闲 COMPUTER_USE_BROWSER_IDLE_MS 后自动回收。只有 `cdp-status` 不带 session 时是
+  // 「汇总所有会话」的形态；其余命令（含 cdp-stop）都只落在一个实例上。
   /** 起沙箱内的 Edge 并等到 CDP 可用（幂等）。端口取 0 让系统分配，桥读 DevToolsActivePort */
   cdpStart: "cdp-start",
   /** 只停桥自己启动的那个 Edge 进程树（按记录的 pid；绝不按镜像名杀） */
@@ -137,11 +141,71 @@ export const computerUseGuestCommands = {
 export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof typeof computerUseGuestCommands];
 
 /**
- * 沙箱里那份 Edge 的 profile 目录（guest 绝对路径）。**每次沙箱一次性**：不映射到宿主，
- * 沙箱销毁即丢——登录态不跨会话，这是产品语义（与 Operator 的 ephemeral VM 同构）。
- * 桥的 cdp-start 在 guest 里建它；宿主不读它，只把它写进错误文案。
+ * 每会话一个 Edge 时 profile 的**根目录**（guest 绝对路径）：每个实例落在
+ * `<root>\<安全化后的会话 id>`（见 safeBrowserSessionId）。
+ *
+ * **每次沙箱一次性**：不映射到宿主，沙箱销毁即丢——登录态不跨会话，这是产品语义
+ * （与 Operator 的 ephemeral VM 同构）。桥的 cdp-start 在 guest 里建它，宿主不读它。
+ *
+ * v1.5-1 之前是所有会话共用一个 `C:\orbita-browser\profile`；改成按会话分目录不是
+ * 「整理目录」，而是隔离的**实现**：共用 profile 时两个 Edge 实例会互相抢锁（Chromium 的
+ * SingletonLock），第二个根本起不来。
  */
-export const COMPUTER_USE_GUEST_BROWSER_PROFILE = "C:\\orbita-browser\\profile";
+export const COMPUTER_USE_BROWSER_PROFILE_ROOT = "C:\\orbita-browser\\sessions";
+
+/**
+ * 沙箱里同时最多几个浏览器实例（一个会话一个 Edge）。
+ *
+ * 4 不是拍脑袋：sandbox guest 空载占 0.9–1.2GB，每个 Edge 约 0.4GB，.wsb 的配额给到 4GB
+ * （sandbox.ts 的 `<MemoryInMB>4096</MemoryInMB>`）。上限由**桥**执行（它才知道真实活着的实例），
+ * 宿主这一侧只在「缓存说已经到上限」时去问一次真值，见 cdp.ts 的 pruneAgainstBridge。
+ */
+export const COMPUTER_USE_BROWSER_MAX = 4;
+
+/**
+ * 空闲回收线：某个会话的浏览器这么久没被碰过，桥自动 cdp-stop 并删掉它的 profile 目录。
+ *
+ * 为什么要有它：模型想事情、等用户审批时 Edge 一直占着 ~0.4GB；4 个实例的上限下，一个
+ * 忘了收尾的会话会把名额吃死（后面来的会话只收到「先 cdp-stop 一个」，而它没有可停的）。
+ * 5 分钟是「一轮里正常的停顿」与「这个会话其实不用了」之间的折中（与租约 idle 同量级）。
+ */
+export const COMPUTER_USE_BROWSER_IDLE_MS = 5 * 60_000;
+
+/**
+ * 不传 `session` 时用的会话键。单 agent（只有一个会话）走的就是它——所有 `cdp-*` 命令
+ * 不带上 session 字段时的行为与 v1.5-1 之前**完全一致**，这是向后兼容的那条线。
+ */
+export const COMPUTER_USE_DEFAULT_BROWSER_SESSION = "default";
+
+/**
+ * 会话 id → 目录名 / 桥侧键。**两端必须逐字一致**（宿主 cdp.ts 与 guest-bridge/Cdp.cs 各有一份）：
+ * 只允许 `[A-Za-z0-9_-]`，其余一律换成 `_`，最长 48 字符；空 / 缺省回落 `default`。
+ *
+ * 为什么不能直接用会话 id：它会被拼进 `C:\orbita-browser\sessions\<id>`——一个带 `..` 或
+ * `\` 的 id 就能把 profile 目录指到 guest 的任意位置（profile 目录里全是可执行配置）。
+ * 反过来，宿主缓存也用同一个键：两边归一化规则不一致的话，两个宿主会话可能在桥侧撞成
+ * 同一个浏览器，而宿主以为各自独立。
+ */
+export function safeBrowserSessionId(raw: string | null | undefined): string {
+  if (typeof raw !== "string" || raw.length === 0) return COMPUTER_USE_DEFAULT_BROWSER_SESSION;
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48);
+  return safe === "" ? COMPUTER_USE_DEFAULT_BROWSER_SESSION : safe;
+}
+
+/**
+ * 浏览器实例层面的错误文案（**给模型读的**：它看不见 UI，也不会自己想到「4 个名额用完了」）。
+ * 文案里的数字从常量来，别在别处再写一遍「4」——改上限时只有一处要改。
+ */
+export const computerUseBrowserErrors = {
+  /** 第 5 个实例被拒（桥是执行者；宿主在缓存到上限时提前用同一句话拦下） */
+  tooMany: (max: number): string =>
+    `沙箱里同时最多 ${max} 个浏览器，先 cdp-stop 一个再开新的（不用的实例在空闲 ` +
+    `${Math.round(COMPUTER_USE_BROWSER_IDLE_MS / 60_000)} 分钟后会自动回收）。` +
+    "如果你只是要换一个页面，用 sandbox_navigate 打开它即可，不必再起一个实例。",
+  /** 按会话停不掉（停沙箱的收尾路径）：只记日志，不让模型/用户看到一句没头没尾的报错 */
+  stopFailed: (session: string, cause: string): string =>
+    `按会话停浏览器失败（会话 ${session}）：${cause}。沙箱销毁会带走整个进程树，不影响后续操作。`,
+} as const;
 
 /**
  * 上传文件的落点（guest 绝对路径）。宿主先把用户给的文件拷进这里（映射目录的宿主侧就是
@@ -163,7 +227,7 @@ export const COMPUTER_USE_GUEST_DOWNLOAD_DIR = "C:\\orbita-out\\downloads";
 export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
 
 /**
- * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
+ * 桥不应答时的放弃线（主进程等一条 **像素 / 桌面** guest 命令的上限）。
  *
  * **45 秒不是拍脑袋的宽容值**：2026-10-10 真机实测，win+r 弹出「运行」框之后，
  * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
@@ -173,12 +237,208 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
  * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
  *
+ * **浏览器命令（`cdp-*`）不用这条线**，它有自己的 `COMPUTER_USE_CDP_TIMEOUT_MS`：那边
+ * guest 里还有一条 40 秒的 worker 杀线，错误文案再走回宿主又要一跳（真机满载实测 8–19s）。
+ * 一条命令走哪条线由 `computerUseGuestTimeoutMs` 决定，别在调用点各写一份。
+ *
  * 放在 shared（而不是定义它的 bridge-client）是因为 agent 侧的 computer-tools 也要读它：
  * broker 的兜底超时必须比这条线更长，否则主进程还在等、agent 先把真成功判成
  * 「主进程没有回执」（computer-tools.ts 的 BROKER_TIMEOUT_MS）。agent 进程不能
  * import 主进程模块，跨进程共享的常量只有这里能放。
  */
 export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
+
+/**
+ * 浏览器命令（`cdp-*`）的放弃线。**比像素那条长，不是宽容，是两条线要对得上**。
+ *
+ * 0.7.0 起 CDP 由该会话自己的 worker 子进程执行，主桥 **40 秒**没有回执就把它连 Edge
+ * 一起 taskkill（guest-bridge/WorkerHost.cs 的 CommandTimeoutMs），并回一句带下一步的
+ * 人话。但从那一刻起，**那句话还要走回宿主**：2026-10-25 真机满载实测（Edge 卡在
+ * 不可路由地址时），宿主→guest / guest→宿主**每一跳都要 8–19 秒**。
+ * 于是最坏情况下那句人话落在宿主时，距 host 写 req 已经过了：
+ *     9s（req 可见）+ 40s（杀线）+ 10s（resp 可见）≈ **59s**。
+ * 45 秒会在 40s 杀线之前就放弃——模型只看到一句笼统的「没有响应」，看不见
+ * 「通道已重启」，也不知道下一步做什么（2026-10-25 真机就是这样把那句人话丢掉的）。
+ *
+ * 70 秒 = 40（杀线）+ 19（实测最坏一跳）+ 11 余量。
+ * **下游兜底必须比它长**：agent 侧 sandbox_* 的 broker 85s、sandbox_navigate 155s
+ * （见 sandbox-tools.ts）。改这一条时三条一起看。
+ */
+export const COMPUTER_USE_CDP_TIMEOUT_MS = 70_000;
+
+/**
+ * 一条 guest 命令的放弃线：`cdp-*` 走 CDP 线，其余（像素 / 桌面）走 45s。
+ *
+ * 纯函数、唯一一份规则：`bridge-client` 的默认值与 `SandboxController` 的四个下发口
+ * 都从它取；调用点只负责「测试注入的覆盖值优先」。
+ */
+export function computerUseGuestTimeoutMs(command: string): number {
+  return command.startsWith("cdp-") ? COMPUTER_USE_CDP_TIMEOUT_MS : GUEST_COMMAND_TIMEOUT_MS;
+}
+
+// ── 沙箱租约（按资源切分：桌面独占 + 每会话浏览器）────────────────────
+
+/**
+ * 沙箱里真正稀缺的东西**不是整台机器，而是那块桌面**：像素工具（截图 / 点击 / 打字 / 按键 /
+ * 滚动）动的是唯一一块屏幕与唯一一个前台焦点，两个会话交错就是 A 的文字落进 B 的框。
+ *
+ * 浏览器通道（`sandbox_*`）从每会话一个 Edge 起就不再共享了：A 的 cdp-nav 只换 A 自己那个
+ * 实例的页面，碰不到 B 的。所以它不该去排桌面的队——否则「网页任务并行」等于没做，
+ * 一个会话在网页上的长轮次会把所有会话的浏览器操作串起来。
+ *
+ * 于是租约按**资源键**切分：
+ *   desktop:exclusive  桌面独占（像素 / 前台 / 整屏截图），数值见 COMPUTER_USE_LEASE
+ *   browser:<session>  每会话一把（自己的浏览器永远立即可用，不排队、不设 idle / 硬上限）
+ * 每个键独立持有者、独立队列、独立计时；revoke 仍然一次清掉所有键（沙箱没了，谁都用不了）。
+ */
+export const COMPUTER_USE_DESKTOP_KEY = "desktop:exclusive";
+
+/** 浏览器键的前缀（lease.ts 靠它选策略；两端字符串必须一致） */
+export const COMPUTER_USE_BROWSER_KEY_PREFIX = "browser:";
+
+/**
+ * 会话 → 它的浏览器资源键。
+ *
+ * 用**原始会话 id**，不用 safeBrowserSessionId 归一化后的桥侧键：那个键会把非法字符换成 `_`
+ * 并截到 48 字，两个不同的宿主会话（`a/b` 与 `a_b`）会撞成同一个键，于是两个会话又被串到
+ * 一把租约上——正是这一层要拆开的东西。空 id 退回 default（与桥的缺省会话同义）。
+ */
+export function browserKey(sessionId: string): string {
+  const raw = sessionId.trim() === "" ? COMPUTER_USE_DEFAULT_BROWSER_SESSION : sessionId;
+  return COMPUTER_USE_BROWSER_KEY_PREFIX + raw;
+}
+
+/**
+ * 桌面键的数值。
+ *
+ * 桌面是**一份**（一块屏幕、一个前台焦点），而 agent 会话可以是**多个**（主会话 + 它派出的
+ * 子会话真并发）。命令在 guest 桥里串行，但两条独立动作序列会任意交错：A 点框 → B 点另一个框
+ * → A `computer_type`，文字进了 B 的框；A 用自己截图的坐标去点、屏幕已被 B 换掉 → 点错元素。
+ * 两边都收到「成功」——这是零归属的并发，不是资源竞争。所以桌面对外是一个**独占租约**：
+ * 拿到才下发，拿不到就给模型一句人话。数值定在这里（而不是 lease.ts 里）是因为两侧都要读：
+ * 租约自己判超时，工具描述要告诉模型「会被占用」且不要重试。
+ */
+export const COMPUTER_USE_LEASE = {
+  /**
+   * 等别人让出沙箱的上限。比一条 guest 命令的 GUEST_COMMAND_TIMEOUT_MS 短一点：
+   * 对方向前是一个正常动作时，等它做完比当场失败更接近用户的意图（子会话一次截图 3 秒）；
+   * 再长就不值了——模型的耐心有限，等不到就该让它停手。
+   */
+  waitMs: 30_000,
+  /** 排队者的上限。**满了直接拒绝，不排队**：无限队列只会把「等不到」变成「排到天荒地老」 */
+  queueLimit: 8,
+  /**
+   * 最后一次续期之后多久算「放手了」。持有者每下发一条命令就续期一次，所以这条线只在
+   * **持有者静默**时才到点（模型在想、在等审批、会话被搁置）。60s 是「一轮里正常的停顿」
+   * 与「这个会话其实不会再用」之间的折中。
+   */
+  idleMs: 60_000,
+  /**
+   * 单次持有的硬上限。**不看续期**：一个会话若不停地截图（每张都在续期），光靠 idle 线
+   * 永远放不掉，别的会话会饿死。15 分钟到点强制收回，持有者下一条命令拿到终态错误。
+   */
+  holdMaxMs: 15 * 60_000,
+} as const;
+
+/**
+ * 浏览器键的数值：**不排队、不限时**。
+ *
+ * 键里带着会话 id，持有者只可能是它自己——所以 acquire 永远立刻成功（同会话幂等的续期），
+ * 既没有 30 秒等待，也没有「占得太久」的硬上限（一个跑长网页任务的会话没有占着任何别人的
+ * 东西）。idle 也不设：浏览器自己是否回收由桥的 COMPUTER_USE_BROWSER_IDLE_MS 管，租约只记
+ * 归属，不替它决定生命周期。
+ */
+export const COMPUTER_USE_BROWSER_LEASE = {
+  waitMs: 0,
+  queueLimit: 0,
+  idleMs: null,
+  holdMaxMs: null,
+} as const;
+
+/**
+ * 租约错误。文案是**给模型读的**：它看不见 UI，也不会自己想到「另一个会话占着」——
+ * 不写清楚它会立刻重试，而重试正好是这里最不该做的事（对方还在用）。
+ */
+export const computerUseLeaseErrors = {
+  /** 等不到（超时） */
+  timeout: (holderTitle: string): string =>
+    `沙箱桌面的操作权现在在另一个会话手里${holderSuffix(holderTitle)}，等了 ${COMPUTER_USE_LEASE.waitMs / 1000} 秒没等到。` +
+    "不要重试：这一侧继续调 computer_* / sandbox_* 只会再等一轮。等对方那一轮结束后再试，或者请用户确认现在该由谁来操作沙箱。",
+  /** 队列满 */
+  queueFull: (holderTitle: string, queueLimit: number): string =>
+    `沙箱桌面的操作权在另一个会话手里${holderSuffix(holderTitle)}，排队等它的会话已经排到上限（${queueLimit} 个）。` +
+    "不要重试：请用户先让其它会话停下来，或者自己确认该由谁来操作沙箱。",
+  /** 硬上限到点 */
+  holdExpired: (holdMinutes: number): string =>
+    `这个会话连续占用沙箱桌面已经超过 ${holdMinutes} 分钟，操作权被强制收回，这条命令没有下发。` +
+    "不要重试：告诉用户沙箱刚才被收回，如果还要继续，让用户决定下一次由谁来操作。",
+  /** 沙箱被停 / 进 error */
+  revoked: (reason: string): string =>
+    `沙箱已经关闭（${reason}），操作权全部作废，这条命令没有下发。` +
+    "不要重试：先在「设置 › 实验功能 › 电脑使用」里重新启动沙箱，再从头开始。",
+  /**
+   * 不排队的资源被另一个会话持有。浏览器键按会话切分，正常走不到这里；这条只兜
+   * 「调用方给错了键」的编程错误——仍然给一句模型能转告用户的话，而不是抛异常。
+   */
+  busy: (holderTitle: string): string =>
+    `这个通道现在归另一个会话${holderSuffix(holderTitle)}，本操作不排队，这条命令没有下发。` +
+    "不要重试：等对方那一轮结束后再试。",
+} as const;
+
+/** 文案里带占用者名字的尾巴（没有标题的会话——刚建、还没起名的——只报 id 少了信息量，就退成一句不带名字的话） */
+function holderSuffix(title: string): string {
+  const trimmed = title.trim();
+  return trimmed === "" ? "" : `（「${trimmed}」）`;
+}
+
+/**
+ * 取租约的结果。**ok:false 时 error 已经是可以直接交给模型的话**（同上文的理由），
+ * 调用方不必再拼一遍。
+ */
+export type ComputerUseLeaseResult = { ok: true } | { ok: false; error: string };
+
+// ── 租约审计（归属、等待与持有时长，决定后续路线用真实数据）──────────────
+
+/**
+ * 一条租约账：**每次** acquired / released / rejected 记一条（内存、进程生命周期内）。
+ *
+ * 为什么记 `waitedMs` 与 `heldMs` 两个时长而不是只记事件：v1.5-2 要回答的是
+ * 「桌面到底挤不挤」——排了多久、占了多久，决定后面是继续拆资源、还是把像素工具也搬到
+ * 每会话实例里。只有事件计数回答不了这个问题。
+ */
+export interface ComputerUseLeaseAuditRecord {
+  kind: "acquired" | "released" | "rejected";
+  /** 资源键（desktop:exclusive 或 browser:<session>） */
+  key: string;
+  sessionId: string;
+  /** 从调用 acquire 到真正拿到手的毫秒数（立刻拿到为 0；released / rejected 带当初的等待） */
+  waitedMs: number;
+  /** 持有到放手的毫秒数（acquired / rejected 为 0） */
+  heldMs: number;
+  /** 记账时刻的队列深度（不含持有者） */
+  queueDepth: number;
+  /** 记账时刻（epoch ms） */
+  at: number;
+}
+
+/** 按 key 聚合的租约统计（stats() 的返回项） */
+export interface ComputerUseLeaseKeyStats {
+  key: string;
+  /** 成功拿到手的次数 */
+  acquired: number;
+  /** 放手的次数（主动 / idle / 硬上限 / revoke） */
+  released: number;
+  /** 被拒的次数（超时 / 队列满 / 不排队的资源被占） */
+  rejected: number;
+  /** 平均等待（只算真正拿到手的那些） */
+  averageWaitMs: number;
+  /** 平均持有（只算已放手的那些） */
+  averageHeldMs: number;
+  /** 此刻的队列深度（不含持有者） */
+  queueDepth: number;
+  /** 此刻的持有者会话 id（没有就是 null） */
+  owner: string | null;
+}
 
 // ── 沙箱状态机 ────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ import { RequestBroker } from "./request-broker.ts";
 import { SANDBOX_BROWSER_TOOL_NAMES, createSandboxBrowserTools } from "./sandbox-tools.ts";
 import { COMPUTER_USE_READ_TOOLS, decidePermission } from "../shared/permission.ts";
 import {
-  GUEST_COMMAND_TIMEOUT_MS,
+  COMPUTER_USE_CDP_TIMEOUT_MS,
   type ComputerUseShot,
   type ComputerUseToolOutcome,
 } from "../shared/computer-use.ts";
@@ -97,12 +97,26 @@ describe("sandbox_* 工具注册", () => {
 });
 
 describe("sandbox_* → computerUseRequest", () => {
+  test("broker 兜底比主进程的浏览器命令线更长：否则主进程还在等，agent 先判「失联」", async () => {
+    const { requestOf, timeouts } = setup();
+    await requestOf("sandbox_observe", {});
+    const timeout = timeouts[timeouts.length - 1] ?? 0;
+    assert.ok(
+      timeout > COMPUTER_USE_CDP_TIMEOUT_MS,
+      `broker（${timeout}ms）必须长于主进程等一条 cdp 命令的 ${COMPUTER_USE_CDP_TIMEOUT_MS}ms`,
+    );
+  });
+
   test("navigate：url 去空白、走 sandbox-navigate，broker 等待给两次 guest 命令留余量", async () => {
     const { requestOf, timeouts } = setup();
     const request = await requestOf("sandbox_navigate", { url: "  example.com  " });
     assert.deepEqual(request, { action: "sandbox-navigate", url: "example.com" });
     const timeout = timeouts[timeouts.length - 1];
-    assert.ok((timeout ?? 0) >= GUEST_COMMAND_TIMEOUT_MS * 2, `导航等待应覆盖 cdp-start + cdp-nav，实际 ${timeout}`);
+    // cdp-start 与 cdp-nav 都走浏览器命令那条线（70s），两跳都要容下
+    assert.ok(
+      (timeout ?? 0) >= COMPUTER_USE_CDP_TIMEOUT_MS * 2,
+      `导航等待应覆盖 cdp-start + cdp-nav（各 ${COMPUTER_USE_CDP_TIMEOUT_MS}ms），实际 ${timeout}`,
+    );
   });
 
   test("navigate：空 url 当场拒绝，不发请求", async () => {
@@ -212,7 +226,7 @@ describe("sandbox_* → computerUseRequest", () => {
       dir: "run1",
     });
     const timeout = timeouts[timeouts.length - 1];
-    assert.ok((timeout ?? 0) > GUEST_COMMAND_TIMEOUT_MS, `下载要留出 20s 落盘等待，实际 ${timeout}`);
+    assert.ok((timeout ?? 0) > COMPUTER_USE_CDP_TIMEOUT_MS, `下载要留出 20s 落盘等待，实际 ${timeout}`);
   });
 
   test("tabs：list / switch 的 op 与 index 下发；非法 op 当场拒绝", async () => {

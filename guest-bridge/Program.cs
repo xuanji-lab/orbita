@@ -8,8 +8,12 @@
 //   宿主读完响应后负责清理 resp/jpg。
 //
 // 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入），
-// 以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP 语义命令，实现在文件末尾的 CdpSession）。
+// 以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP 语义命令，实现在 Cdp.cs 的 CdpSession）。
 // CDP 的 WebSocket 只在 guest 内（桥 ↔ 同机 Edge 的 127.0.0.1 端口），不过映射目录。
+//
+// ⚠ 0.7.0 起 **cdp-* 由该会话自己的 worker 子进程执行**（WorkerHost.cs）：桥是单线程轮询，
+//   一条卡住的导航 / 截图会把整条桥堵死（队头阻塞），而一个会话的浏览器卡住不该拖累别的会话。
+//   所以主桥只做转写 + 后台等待，超时就把 worker 连它的 Edge 一起杀掉。宿主侧协议**未变**。
 //
 // 轮询：**直探下一个序号的文件名**（File.Exists），不是目录枚举——映射文件夹的目录枚举
 //   会被 RDP 驱动器重定向的缓存卡住（win+r 后 ~20s 看不见新文件，2026-10-14 真机实测）。
@@ -51,9 +55,13 @@ internal static class Program
 {
     // ---- 协议常量：与宿主侧（Orbita 主进程）严格对齐，一个字母都不能差 ----
     // ⚠ 0.4.0 起多了 cdp-*（浏览器通道），0.5.0 起多了 launch / kill / screenshot-stats
-    //（打包版 UI 冒烟：在沙箱里启动一份只读映射进来的 orbita.exe 并用像素统计判断它渲染没渲染）。
+    //（打包版 UI 冒烟：在沙箱里启动一份只读映射进来的 orbita.exe 并用像素统计判断它渲染没渲染），
+    // 0.6.0 起**一个会话一个 Edge 实例**（cdp-* 带 session 字段，各自 profile / 端口，上限 4，
+    // 空闲 5 分钟回收），0.7.0 起 cdp-* 由**该会话自己的 worker 子进程**执行（可超时杀；
+    // 慢命令不再堵住整条桥，宿主侧协议不变），0.7.1 修了「超时杀完 worker、重开同一会话时
+    // 读到上一只 Edge 的旧端口」那条自愈路上的 bug（起 Edge 前清端口文件 + 连接重试）。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.5.0";
+    private const string Version = "0.7.1";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
     private const string RespSuffix = ".resp.json";   // 桥写：执行结果
@@ -134,12 +142,19 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        // worker 入口：同一个 exe、另一条命令流（0.7.0）。必须在 ParseArgs 之前分流——
+        // 它不写 bridge.json、不读 cmd\ 的主命令流，参数也与主桥不同。
+        if (args.Length > 0 && args[0] == "--cdp-worker") return RunWorkerMode(args);
         // 测试专用入口（宿主上跑 bridge.test.mjs）：只验 JSON 取值器，不碰协议、不碰桌面。
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--selftest-json") return RunJsonSelfTest();
             // 打包产物冒烟的路径闸门自测（纯函数：不启动任何进程、不碰桌面）
             if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
+            // 会话 id 安全化的自测（纯函数：CDP 会话键直接拼进 profile 目录，这一关失守就是路径穿越）
+            if (args[i] == "--selftest-session") return RunSessionSelfTest();
+            // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
+            if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -165,6 +180,61 @@ internal static class Program
         return 0;
     }
 
+    /** out 目录（映射文件夹的 guest 侧根）：worker 目录、启动通告都落在它下面 */
+    internal static string OutDir
+    {
+        get { return _outDir; }
+    }
+
+    /** 主命令目录（out\cmd）：宿主的文件协议入口，也是回执的落点 */
+    internal static string CmdDir
+    {
+        get { return _cmdDir; }
+    }
+
+    /**
+     * worker 入口（0.7.0）：`--cdp-worker <outDir> <session> [--no-browser] [--test-hooks] [--parent-pid N]`。
+     *
+     * 与主桥共用同一个 exe，但**不做**主桥的任何事：不写 bridge.json、不读 cmd\、不碰输入注入。
+     * `--no-browser` 必须由主桥传下来——真正会 Process.Start msedge.exe 的是这个进程。
+     */
+    private static int RunWorkerMode(string[] args)
+    {
+        string outDir = args.Length > 1 ? args[1] : "";
+        string session = args.Length > 2 ? args[2] : "";
+        if (outDir.Length == 0 || session.Length == 0)
+        {
+            Log("--cdp-worker 需要 <outDir> <session>");
+            return 1;
+        }
+        bool testHooks = false;
+        int parentPid = 0;
+        for (int i = 3; i < args.Length; i++)
+        {
+            if (args[i] == "--no-browser")
+            {
+                BrowserDisabled = true;
+                continue;
+            }
+            if (args[i] == "--test-hooks")
+            {
+                testHooks = true;
+                WorkerHost.TestHooks = true;
+                continue;
+            }
+            if (args[i] == "--parent-pid" && i + 1 < args.Length)
+            {
+                int.TryParse(args[i + 1], out parentPid);
+                i++;
+                continue;
+            }
+            Log("worker 收到未知参数：" + args[i]);
+            return 1;
+        }
+        try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        return WorkerHost.RunWorker(outDir, session, testHooks, parentPid);
+    }
+
     // ---- 参数解析 ----
 
     private static bool ParseArgs(string[] args)
@@ -177,6 +247,14 @@ internal static class Program
             if (flag == "--no-browser")
             {
                 BrowserDisabled = true;
+                continue;
+            }
+            // 测试缝（只有 --selftest-worker 起子桥时带）：认 worker-* 命令，并把一条 worker
+            // 命令的放弃线缩到 2.5s（自测不能等 40 秒）。生产（.wsb 的 LogonCommand）永不带它。
+            if (flag == "--test-hooks")
+            {
+                WorkerHost.TestHooks = true;
+                WorkerHost.CommandTimeoutMs = 2500;
                 continue;
             }
             if (i >= args.Length)
@@ -238,6 +316,10 @@ internal static class Program
             try
             {
                 PollOnce();
+                // 空闲浏览器实例的回收：每轮都看一眼（没有 worker 时立刻返回）。
+                // 放在这里而不是命令里：一只空闲的 Edge 没有任何命令会经过它，
+                // 不在循环里主动看就永远不会被收。0.7.0 起回收的是「worker + 它的 Edge + profile」。
+                WorkerHost.ReapIdle();
             }
             catch (Exception ex)
             {
@@ -313,7 +395,10 @@ internal static class Program
         }
         Log("收到命令 " + name);
         string respJson = Execute(raw, baseName);
-        AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(respJson));
+        // null = 这条命令已经转给该会话的 worker，回执由后台线程写（慢命令不许占住轮询循环）
+        if (respJson != null)
+            AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(respJson));
+        // 主命令流里的这一条已受理：立刻删掉，免得下一轮又执行一遍（worker 侧另有自己的 req）
         try { File.Delete(reqPath); } catch { }
     }
 
@@ -336,8 +421,13 @@ internal static class Program
         if (command == "kill") return ExecuteKill(raw);
         if (command == "screenshot-stats") return ExecuteScreenshotStats(raw);
         // CDP 浏览器通道（PR3）：一条语义命令 = 一次文件往返，内部可以有多条 CDP 消息。
-        // 实现在文件末尾的 CdpSession；它自己管 Edge 进程与 WebSocket 的生命周期。
-        if (command.Length > 4 && command.Substring(0, 4) == "cdp-") return CdpSession.Execute(command, raw, baseName, _cmdDir);
+        // 实现在 Cdp.cs；0.6.0 起一个会话一个实例；**0.7.0 起交给该会话自己的 worker 子进程**
+        //（WorkerHost.cs 按 session 字段路由，不传就是 default，与改动前同一份行为）。
+        // 返回 null = 已经交给后台等待线程，回执由它写。
+        if (command.Length > 4 && command.Substring(0, 4) == "cdp-") return WorkerHost.Execute(command, raw, baseName);
+        // 测试缝：worker 层的命令（只有 --test-hooks 的桥认它们，生产永远到不了这一行）
+        if (WorkerHost.TestHooks && WorkerHost.IsWorkerTestCommand(command))
+            return WorkerHost.Execute(command, raw, baseName);
         return "{\"ok\":false,\"error\":\"未知命令：" + JsonEscape(command) + "\"}";
     }
 
@@ -1195,20 +1285,7 @@ internal static class Program
         CheckBool(failures, ref cases, "缺失布尔", false, ExtractBool("{\"a\":\"b\"}", "nope"));
         CheckBool(failures, ref cases, "字符串里的 true 不算", false, ExtractBool("{\"text\":\"dryRun: true\"}", "dryRun"));
 
-        StringBuilder json = new StringBuilder();
-        json.Append("{\"ok\":").Append(failures.Count == 0 ? "true" : "false").Append(",\"cases\":").Append(cases);
-        if (failures.Count > 0)
-        {
-            json.Append(",\"failures\":[");
-            for (int i = 0; i < failures.Count; i++)
-            {
-                if (i > 0) json.Append(",");
-                json.Append(JsonQuote(failures[i]));
-            }
-            json.Append("]");
-        }
-        json.Append("}");
-        Console.WriteLine(json.ToString());
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -1238,6 +1315,49 @@ internal static class Program
             GuestPathRejection("C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\resources\\app.asar"));
         CheckReject(failures, ref cases, "相对路径拒绝", "拒绝", GuestPathRejection("orbita-app\\orbita.exe"));
 
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    // ---- 会话 id 安全化自测（--selftest-session）----------------------------------
+    //
+    // 会话 id 会被拼成 `C:\orbita-browser\sessions\<键>`——它是**外部输入**（宿主给的 session
+    // 字段），而 profile 目录里全是可执行配置。带 `..` 或 `\` 的 id 就能把目录指到 guest 的
+    // 任意位置。这一关是纯函数，在宿主上就能测，不必起沙箱、更不必起 Edge。
+    //
+    // 充分一条：实例上限的文案（模型只有这句话能照着做）。它跟宿主的
+    // computerUseBrowserErrors.tooMany 同义，两边都在模型看得见的路径上。
+
+    private static int RunSessionSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        CheckString(failures, ref cases, "缺省（null）回落 default", "default", CdpSessions.SafeSessionId(null));
+        CheckString(failures, ref cases, "空串回落 default", "default", CdpSessions.SafeSessionId(""));
+        CheckString(failures, ref cases, "会话 UUID 原样保留", "5408f95e-cc30-4689-a8bb-3abfdc4ff044",
+            CdpSessions.SafeSessionId("5408f95e-cc30-4689-a8bb-3abfdc4ff044"));
+        CheckString(failures, ref cases, "下划线 / 减号 / 大小写都是合法字符", "A-b_1", CdpSessions.SafeSessionId("A-b_1"));
+        CheckString(failures, ref cases, "空格换下划线", "a_b", CdpSessions.SafeSessionId("a b"));
+        CheckString(failures, ref cases, "路径分隔符与 .. 全部换掉", "______x", CdpSessions.SafeSessionId("..\\..\\x"));
+        CheckString(failures, ref cases, "正斜杠也换掉", "a_b", CdpSessions.SafeSessionId("a/b"));
+        CheckString(failures, ref cases, "中文（多字节）换下划线", "__", CdpSessions.SafeSessionId("中文"));
+        CheckString(failures, ref cases, "冒号（盘符）换掉", "C__x", CdpSessions.SafeSessionId("C:\\x"));
+        CheckString(failures, ref cases, "超长截到 48 字符", new string('a', 48), CdpSessions.SafeSessionId(new string('a', 60)));
+        CheckString(failures, ref cases, "全非法字符不回 default（不能和默认会话撞）", "___", CdpSessions.SafeSessionId("///"));
+        CheckString(failures, ref cases, "首尾空格也不放过", "_x_", CdpSessions.SafeSessionId(" x "));
+
+        string tooMany = CdpSessions.TooManyMessage();
+        CheckTrue(failures, ref cases, "上限文案点明 4 个", tooMany.IndexOf("最多 4 个", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "上限文案给出下一步（cdp-stop）", tooMany.IndexOf("cdp-stop", StringComparison.Ordinal) >= 0);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 统一的自测回执照 JSON（四个 selftest 共用一份形状，跑测试的人不用记四种） */
+    internal static string BuildSelfTestJson(List<string> failures, int cases)
+    {
         StringBuilder json = new StringBuilder();
         json.Append("{\"ok\":").Append(failures.Count == 0 ? "true" : "false").Append(",\"cases\":").Append(cases);
         if (failures.Count > 0)
@@ -1251,8 +1371,13 @@ internal static class Program
             json.Append("]");
         }
         json.Append("}");
-        Console.WriteLine(json.ToString());
-        return failures.Count == 0 ? 0 : 1;
+        return json.ToString();
+    }
+
+    internal static void CheckTrue(List<string> failures, ref int cases, string name, bool condition)
+    {
+        cases++;
+        if (!condition) failures.Add(name + "：不成立");
     }
 
     /** expectKind：null = 应放行；"拒绝" = 应被拦（只断言倾向，不断言整句文案） */

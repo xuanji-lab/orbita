@@ -63,6 +63,32 @@ async function waitForFile(filePath, timeoutMs = 15_000) {
   return true;
 }
 
+/**
+ * 收尾：按 `<out>/worker/<会话>/worker.json` 里记下的 pid 逐个清掉 worker。
+ *
+ * 为什么测试也要做：桥被 kill 之后，worker 是它的子进程——正常情况下 worker 会在 ~2s 内
+ * 发现父进程没了就自己退（WorkerHost.cs 的 ParentGone），但测试进程不该赌那 2 秒，
+ * 而且残留的 worker 会去轮询一个已被删掉的临时目录。**只杀 worker.json 里的 pid**（仓规）。
+ */
+function killLeftoverWorkers(outDir) {
+  let names;
+  try {
+    names = fs.readdirSync(path.join(outDir, "worker"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    try {
+      const info = JSON.parse(fs.readFileSync(path.join(outDir, "worker", name, "worker.json"), "utf8"));
+      if (Number.isInteger(info.pid) && info.pid > 0) {
+        spawnSync("taskkill", ["/PID", String(info.pid), "/T", "/F"], { windowsHide: true });
+      }
+    } catch {
+      // 桥已经把它撤掉了（worker.json 不在了）：没有可杀的
+    }
+  }
+}
+
 test("build.mjs 编译出 exe", { skip: !isWindows && "仅在 Windows 上运行" }, async () => {
   const r = spawnSync(process.execPath, [buildScript], { encoding: "utf8" });
   assert.equal(r.status, 0, `build.mjs 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
@@ -108,7 +134,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.5.0");
+      assert.equal(info.version, "0.7.1");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -394,22 +420,46 @@ test(
       assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
 
       // 没起过 Edge：status 报 running:false 并给出下一步（不启动任何进程）
+      // 不带 session = **汇总**形态（宿主在缓存到上限时靠它拿真值）
       const status = await ask({ command: "cdp-status" });
       assert.equal(status.ok, true);
       assert.equal(status.running, false);
-      assert.match(status.hint, /computer_screenshot/, "要告诉模型可以退回像素工具");
+      assert.equal(status.count, 0, "还没有任何会话实例");
+      assert.deepEqual(status.sessions, []);
 
-      // stop 幂等：没起过也回 ok
-      assert.deepEqual(await ask({ command: "cdp-stop" }), { ok: true });
+      // 带 session = 那个会话自己：回执里回显**安全化之后**的键。
+      // 没起过也是 ok:true + running:false（宿主靠 running 决定要不要 cdp-start；status 是查询不是命令）
+      const one = await ask({ command: "cdp-status", session: "agent-1" });
+      assert.equal(one.ok, true);
+      assert.equal(one.running, false);
+      assert.equal(one.session, "agent-1");
+      assert.match(one.hint, /computer_screenshot/, "要告诉模型可以退回像素工具");
+      const sanitized = await ask({ command: "cdp-status", session: "..\\..\\evil / x" });
+      assert.equal(sanitized.session, "______evil___x", "会话键进 profile 目录前必须安全化");
 
-      // 参数校验失败都发生在「碰 CDP」之前
-      const noUrl = await ask({ command: "cdp-nav" });
+      // stop 幂等：没起过也回 ok（并且说是 default 会话、已经停过）
+      const stopDefault = await ask({ command: "cdp-stop" });
+      assert.equal(stopDefault.ok, true);
+      assert.equal(stopDefault.session, "default");
+      assert.equal(stopDefault.alreadyStopped, true);
+      const stopOne = await ask({ command: "cdp-stop", session: "agent-1" });
+      assert.equal(stopOne.ok, true);
+      assert.equal(stopOne.session, "agent-1");
+
+      // 参数校验失败都发生在「碰 CDP」之前（带 session 也一样）
+      const noUrl = await ask({ command: "cdp-nav", session: "agent-1" });
       assert.equal(noUrl.ok, false);
       assert.match(noUrl.error, /需要 url/);
 
-      const noSelector = await ask({ command: "cdp-click" });
+      const noSelector = await ask({ command: "cdp-click", session: "agent-1" });
       assert.equal(noSelector.ok, false);
       assert.match(noSelector.error, /需要 selector/);
+
+      // 没起过这个会话的浏览器：报「没有在运行」并给出降级指引（宿主靠这句话自愈）
+      const notRunning = await ask({ command: "cdp-observe", session: "agent-2" });
+      assert.equal(notRunning.ok, false);
+      assert.match(notRunning.error, /没有在运行/);
+      assert.match(notRunning.error, /computer_screenshot/);
 
       const noText = await ask({ command: "cdp-type", selector: "#q" });
       assert.equal(noText.ok, false);
@@ -432,16 +482,21 @@ test(
       assert.equal(badOp.ok, false);
       assert.match(badOp.error, /list 或 switch/);
 
-      const unknown = await ask({ command: "cdp-eval", expression: "1+1" });
+      const unknown = await ask({ command: "cdp-eval", expression: "1+1", session: "agent-1" });
       assert.equal(unknown.ok, false);
       assert.match(unknown.error, /未知的 CDP 命令/);
 
       // 会去起 Edge 的命令：cdp-start 被测试缝挡住；其余命令报「浏览器没在运行」
       // （宿主那边会先自动 cdp-start，所以这句只在自动拉起也失败时才会被模型看到）
-      const start = await ask({ command: "cdp-start" });
+      const start = await ask({ command: "cdp-start", session: "agent-3" });
       assert.equal(start.ok, false, "cdp-start 在 --no-browser 下不许成功");
       assert.match(start.error, /测试模式/);
       assert.match(start.error, /computer_screenshot/, "错误里要有降级指引");
+
+      // 启动失败不占名额：下一次发同一个会话的命令仍然按「没在运行」报，而不是「已起过」
+      const afterFailedStart = await ask({ command: "cdp-status", session: "agent-3" });
+      assert.equal(afterFailedStart.running, false);
+      assert.equal(afterFailedStart.session, "agent-3");
 
       for (const body of [
         { command: "cdp-nav", url: "https://example.com/" },
@@ -464,10 +519,73 @@ test(
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));
+      killLeftoverWorkers(outDir);
       fs.rmSync(outDir, { recursive: true, force: true });
     }
   },
 );
+
+// ── worker 层（v1.5-3）：cdp-* 由该会话自己的可杀 worker 子进程执行 ────────────────
+//
+// 为什么这一层只能靠自测证：它的全部能力都是「进程能起来、能到点被杀、崩了能再起」，
+// 纯函数测不到；而真机验收（沙箱 + Edge）太贵，且在这里碰 msedge 是红线。
+// `--selftest-worker` 自己起一个子桥（--no-browser --test-hooks），再扮演宿主发命令：
+//   ① worker 被拉起并应答 worker-ping（pid 与 worker.json 一致）
+//   ② 转发超时（worker-hang 睡 60s）→ 主桥 taskkill，回执是「没有响应（<命令> 超时）」
+//   ③ 超时后下一条命令拉起新 worker；把新 worker 打死，下一条还能拉起
+//   ④ worker-stop → worker 自己退出（不是被 taskkill 带走的）
+//   ⑤ 没有 worker 时汇总 cdp-status 只回 0 个、不拉新进程
+
+test(
+  "worker 层 selftest：拉起 / 超时被杀 / 崩了能重启 / 自己退出（全程不碰 Edge）",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 180_000 },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-worker"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 150_000,
+    });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    // 只解析最后一行：万一自测进程自己也往 stdout 写了一条日志，不该把整份回执打坏
+    const line = (r.stdout ?? "").trim().split(/\r?\n/).filter((text) => text.length > 0).pop();
+    const parsed = JSON.parse(line);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 12, `用例数应 >= 12，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+    console.log(`    worker 自测：${parsed.cases} 条断言全过`);
+  },
+);
+
+// ── 超时杀 worker 之后的自愈（v1.5-3 真机第一轮的 bug）─────────────────────────
+//
+// 现场：40s 超时杀 worker 只杀进程树、不删 profile（故意的：登录态要留），于是
+// `<profile>\DevToolsActivePort` 里还留着上一只 Edge 的端口。新 Edge 起来后
+// WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，把旧端口当成新端口 →
+// 下一条 cdp-start 回「Unable to connect to the remote server」，模型既看不懂也修不了。
+//
+// 修复的两半都要钉住：
+//   ① 起 Edge **之前**清掉旧端口文件（顺序错了等于没修）——纯函数行为由
+//      `--selftest-worker` 的 ⑥ 那组断言覆盖；
+//   ② 连不上要在 guest 内重试，最后回一句带下一步的人话，而不是把 .NET 的裸错误扔给模型。
+// 真 Edge 只能在沙箱里验（宿主上碰 msedge 是红线），所以这里锁源码里的顺序与文案。
+
+test("超时杀 worker 后的自愈：起 Edge 前清旧端口文件，连不上在 guest 内重试", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+
+  const clearAt = src.indexOf("ClearStalePortFile(_profileDir)");
+  const startAt = src.indexOf("Process.Start(new ProcessStartInfo(edge, args))");
+  assert.ok(clearAt > 0, "Launch() 里应当清旧端口文件");
+  assert.ok(startAt > 0, "Launch() 里应当启动 Edge");
+  assert.ok(clearAt < startAt, "清端口文件必须排在 Process.Start 之前——晚了就是把旧端口当新端口用");
+
+  // 连接要重试（不是一次 HttpGet 失败就抛），且重试前重读端口文件
+  assert.match(src, /ConnectRetryMs/);
+  assert.match(src, /RefreshPortFromFile\(\)/);
+  // 最终失败也要给模型一句能照着做的：裸的 "Unable to connect to the remote server" 不算
+  assert.match(src, /稍后重试一次 sandbox_navigate/);
+  assert.match(src, /computer_screenshot \/ computer_click 像素工具/);
+});
 
 // ── 注入失败文案（B）────────────────────────────────────────────────────
 //
@@ -499,6 +617,25 @@ test(
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
     assert.ok(parsed.cases >= 8, `用例数应 >= 8，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 会话 id 安全化的纯函数自测（--selftest-session）────────────────────────────────
+//
+// 会话 id 是**外部输入**（宿主给的 session 字段），而它会被拼进 `C:\orbita-browser\sessions\<键>`。
+// 没这层闸门，一个带 `..` 的 id 就能把 profile 目录指到 guest 的任意位置。
+// 纯函数，宿主上就能测，不必起沙箱、更不必起 Edge。
+
+test(
+  "会话 id 安全化 selftest：只留 [A-Za-z0-9_-]、截断 48、空串回 default、上限文案可照做",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-session"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 12, `用例数应 >= 12，实际 ${parsed.cases}`);
   },
 );
 

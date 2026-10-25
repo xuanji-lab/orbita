@@ -1,5 +1,12 @@
 // Orbita guest bridge —— 沙箱内 Edge 的 CDP 通道（桥版本 0.4.0 新增）。
 //
+// 0.6.0 起**一个会话一个实例**：CdpSession 是每个会话自己的 Edge（各自的 --user-data-dir 与
+// --remote-debugging-port=0）。0.7.0 起执行者换成**该会话自己的 worker 子进程**（WorkerHost.cs）：
+// 一个 worker 进程里只有一个 CdpSession，因而这里不再需要会话表 / 空闲回收——上来的是
+// 「会话」这件事已经由「哪个 worker 进程」表达了，worker 被杀 = 它的 Edge 一起死。
+// CdpSessions 因此只剩纯函数与常量：会话 id 安全化（两边必须逐字一致）、命令名白名单、
+// 实例上限那句话、profile 目录的路径与删除。
+//
 // 为什么是「语义原子命令」而不是裸 CDP 转发：
 //   ① CDP 是事件驱动的（导航完成是 Page.loadEventFired 事件，不是 navigate 的回执），
 //      文件协议没有流，裸转发就得在 guest 里造一个可回放的事件缓冲；
@@ -34,12 +41,11 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-internal static class CdpSession
+internal sealed class CdpSession
 {
     // ── 沙箱内的固定路径（与 shared/computer-use.ts 的常量严格一致）────────────────
     private const string EdgePathX86 = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
     private const string EdgePathX64 = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
-    private const string ProfileDir = @"C:\orbita-browser\profile";
     private const string UploadRoot = @"C:\orbita-out\upload";
     private const string DownloadRoot = @"C:\orbita-out\downloads";
 
@@ -54,24 +60,34 @@ internal static class CdpSession
     /** extract / observe 正文单次上限（resp 是整读整写的文件，超了宿主吃不下） */
     private const int TextLimit = 20000;
 
-    // ── 会话状态：只有一份（应用级一个沙箱，沙箱里一个浏览上下文）────────────────
-    private static ClientWebSocket _ws;
-    private static string _sessionId = "";
-    private static string _targetId = "";
-    private static int _port = 0;
-    private static string _product = "";
-    private static Process _edge;
-    private static int _nextId = 0;
-    private static bool _connecting = false;
+    // ── 会话状态：**一个实例一个会话**（v1.5-1 起；一个 worker 进程只有它）────────────────
+    /** 安全化之后的会话键（等于 profile 目录名）。诊断日志与回执里的 session 字段都用它 */
+    internal readonly string Key;
+    /** 这个会话的 profile 目录（guest 绝对路径，C:\orbita-browser\sessions\<Key>） */
+    private readonly string _profileDir;
+    private ClientWebSocket _ws;
+    /** CDP 的 flatten sessionId（不是我们的会话键；同名不同物，别混） */
+    private string _sessionId = "";
+    private string _targetId = "";
+    private int _port = 0;
+    private string _product = "";
+    private Process _edge;
+    private int _nextId = 0;
+    private bool _connecting = false;
 
-    // ── 入口：命令循环把 cdp-* 分派到这里 ────────────────────────────────────────
+    public CdpSession(string key)
+    {
+        Key = key;
+        _profileDir = CdpSessions.ProfileDir(key);
+    }
 
-    public static string Execute(string command, string raw, string baseName, string cmdDir)
+    // ── 入口：worker（或没有 worker 时的临时实例）按命令分派 ─────────────────────
+
+    internal string Execute(string command, string raw, string baseName, string cmdDir)
     {
         try
         {
             if (command == "cdp-start") return Start(raw);
-            if (command == "cdp-stop") return Stop();
             if (command == "cdp-status") return Status();
             if (command == "cdp-nav") return Nav(raw);
             if (command == "cdp-observe") return Observe(raw);
@@ -95,7 +111,7 @@ internal static class CdpSession
     }
 
     /** 把底层异常翻成模型能照着做的句子（裸异常名对模型没有信息量） */
-    private static string Describe(string command, string message)
+    private string Describe(string command, string message)
     {
         if (message != null && message.IndexOf("没有在运行", StringComparison.Ordinal) >= 0) return message;
         return "沙箱里的浏览器命令 " + command + " 失败：" + message;
@@ -103,7 +119,20 @@ internal static class CdpSession
 
     // ── cdp-start ────────────────────────────────────────────────────────────────
 
-    private static string Start(string raw)
+    /**
+     * 等 CDP 连接就绪的期限与节奏。
+     *
+     * **必须重试**：超时杀掉 worker 之后重开同一个会话时，profile 里可能还留着上一只 Edge 的
+     * DevToolsActivePort（ClearStalePortFile 会先删它，但删不掉 / Edge 自己写一半都可能留下旧端口），
+     * 于是第一条命令去连一个死端口，.NET 只回一句「Unable to connect to the remote server」
+     * ——模型看不懂也修不了（2026-10-25 真机就这么挂在超时之后的自愈路上）。
+     * 这种「端口还没就绪」的阶段在 guest 内轮询掉，别把异常扔给模型。
+     * 8s 与 LaunchTimeoutMs 加起来仍在主桥的 40s 命令线之下。
+     */
+    private const int ConnectRetryMs = 8000;
+    private const int ConnectRetryIntervalMs = 400;
+
+    private string Start(string raw)
     {
         bool headless = Program.ExtractBool(raw, "headless");
         int port = ReadInt(raw, "port", 0, 0, 65535);
@@ -131,7 +160,7 @@ internal static class CdpSession
         return OkWithStatus(true);
     }
 
-    private static void Launch(bool headless, int port)
+    private void Launch(bool headless, int port)
     {
         // 测试缝：在宿主上跑 bridge.test.mjs 时绝不能去 Process.Start msedge.exe
         //（那是用户真实的浏览器）。生产不带 --no-browser。
@@ -145,8 +174,22 @@ internal static class CdpSession
                 "沙箱里没有找到 msedge.exe（找过 Program Files (x86) 与 Program Files 两处）。"
                 + "CDP 通道在这个沙箱里用不了：请改用 computer_screenshot / computer_click 像素工具操作网页");
         }
-        Directory.CreateDirectory(ProfileDir);
+        try
+        {
+            Directory.CreateDirectory(_profileDir);
+        }
+        catch (Exception ex)
+        {
+            // profile 目录建不起来 = 这个会话的浏览器必定起不来，说清楚是哪条路、下一步做什么
+            throw new Exception("沙箱里的浏览器 profile 目录建不起来：" + _profileDir + "（" + ex.Message + "）。"
+                + "这个会话的浏览器用不了：先 cdp-stop 这个会话，再 sandbox_navigate 重试；连续失败就改用 computer_screenshot 像素工具");
+        }
         string args = BuildArgs(port, headless, false);
+        // 开场之前先清掉**上一只 Edge 留下的端口文件**：超时杀 worker 只杀进程树（不删 profile，
+        // 免得把登录态一起扔了），而 DevToolsActivePort 会活下来。留着它的后果：新 Edge 刚起来、
+        // WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，然后把**旧端口**当成本次端口，
+        // 之后去连一个死 socket——真机 2026-10-25 的「cdp-start 失败：Unable to connect to the remote server」。
+        ClearStalePortFile(_profileDir);
         Program.Log("CDP 启动 Edge：" + edge + " " + args);
         _edge = Process.Start(new ProcessStartInfo(edge, args));
         if (_edge == null) throw new Exception("启动 msedge.exe 失败（进程没有起来）");
@@ -169,23 +212,65 @@ internal static class CdpSession
         {
             throw new Exception(
                 "Edge 进程起来了，但 " + LaunchTimeoutMs / 1000 + " 秒内没有打开调试端口（"
-                + Path.Combine(ProfileDir, "DevToolsActivePort") + " 没出现）。"
+                + Path.Combine(_profileDir, "DevToolsActivePort") + " 没出现）。"
                 + "可以再试一次 sandbox_navigate；连续失败就改用 computer_screenshot / computer_click 像素工具");
         }
         string[] lines = content.Replace("\r", "").Split('\n');
         string portText = lines.Length > 0 ? lines[0].Trim() : "";
-        int parsed;
-        if (!int.TryParse(portText, out parsed) || parsed <= 0)
+        int parsed = ParsePortFileContent(content);
+        if (parsed <= 0)
             throw new Exception("DevToolsActivePort 的首行不是端口号（读到「" + portText + "」）——这个 Edge 版本的端口文件格式不同");
         _port = parsed;
         Program.Log("CDP 端口 " + _port + "（来自 DevToolsActivePort）");
     }
 
-    private static string BuildArgs(int port, bool headless, bool noSandbox)
+    /**
+     * 端口文件正文 → 端口（首行）。不能解析回 0。**纯函数**：自测在宿主上直接验它，不碰 Edge。
+     * 格式固定是「端口\n/devtools/browser/<id>」。
+     */
+    internal static int ParsePortFileContent(string content)
+    {
+        if (content == null) return 0;
+        string[] lines = content.Replace("\r", "").Split('\n');
+        string portText = lines.Length > 0 ? lines[0].Trim() : "";
+        int port;
+        if (!int.TryParse(portText, out port) || port <= 0 || port > 65535) return 0;
+        return port;
+    }
+
+    /**
+     * 起 Edge **之前**删掉旧的 DevToolsActivePort。返回 true = 现在可以放心起了（文件不在）。
+     *
+     * 为什么不能只靠「新 Edge 会重写它」：写是晚于我们读的。旧文件在场时，新 Edge 刚被拉起、
+     * 还没监听，等待循环却已经把旧端口交回去了。**删不掉不算失败**（记日志，继续起）——
+     * 后面的连接重试与重读端口文件是第二道防线。
+     */
+    internal static bool ClearStalePortFile(string profileDir)
+    {
+        string path = Path.Combine(profileDir, "DevToolsActivePort");
+        try
+        {
+            if (!File.Exists(path)) return true;
+            File.Delete(path);
+            if (File.Exists(path))
+            {
+                Program.Log("旧的 DevToolsActivePort 删不掉（还在）：" + path);
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Program.Log("删除旧的 DevToolsActivePort 失败（" + path + "）：" + ex.Message);
+            return false;
+        }
+    }
+
+    private string BuildArgs(int port, bool headless, bool noSandbox)
     {
         StringBuilder a = new StringBuilder();
         a.Append("--remote-debugging-port=").Append(port).Append(" ");
-        a.Append("--user-data-dir=\"").Append(ProfileDir).Append("\" ");
+        a.Append("--user-data-dir=\"").Append(_profileDir).Append("\" ");
         a.Append("--no-first-run --no-default-browser-check ");
         a.Append("--disable-sync --disable-background-networking --disable-component-update ");
         a.Append("--disable-features=msEdgeFirstRunExperience,msEdgeSidebarV2,msEdgeWelcomePage ");
@@ -197,21 +282,21 @@ internal static class CdpSession
         return a.ToString();
     }
 
-    private static string EdgePath()
+    private string EdgePath()
     {
         if (File.Exists(EdgePathX86)) return EdgePathX86;
         if (File.Exists(EdgePathX64)) return EdgePathX64;
         return null;
     }
 
-    private static bool PortFileReady()
+    private bool PortFileReady()
     {
-        try { return File.Exists(Path.Combine(ProfileDir, "DevToolsActivePort")); }
+        try { return File.Exists(Path.Combine(_profileDir, "DevToolsActivePort")); }
         catch { return false; }
     }
 
     /** 等 DevToolsActivePort 出现（true = 出现）。进程秒退时提前返回 false */
-    private static bool WaitForPortFile(int timeoutMs)
+    private bool WaitForPortFile(int timeoutMs)
     {
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
@@ -223,9 +308,9 @@ internal static class CdpSession
         return PortFileReady();
     }
 
-    private static string ReadPortFile(int timeoutMs)
+    private string ReadPortFile(int timeoutMs)
     {
-        string path = Path.Combine(ProfileDir, "DevToolsActivePort");
+        string path = Path.Combine(_profileDir, "DevToolsActivePort");
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         string content = "";
         while (DateTime.UtcNow < deadline)
@@ -244,9 +329,10 @@ internal static class CdpSession
         return content;
     }
 
-    // ── cdp-stop：只停我们自己启动的那一个进程树 ─────────────────────────────────
+    // ── 停一个会话（worker 收到 worker-stop / 被主桥杀掉之前调它）─────────────────
 
-    private static string Stop()
+    /** 清连接、清状态、杀我们自己起的那个进程树。不删 profile 目录（那个由主桥在收尾时删） */
+    internal void Shutdown()
     {
         CloseSocket();
         _sessionId = "";
@@ -254,7 +340,12 @@ internal static class CdpSession
         _product = "";
         _port = 0;
         KillOurEdge();
-        return new JObj().Bool("ok", true).ToString();
+    }
+
+    /** 是否还在跑我们起的 Edge：worker 用它判断「启动失败不占着这个 worker」 */
+    internal bool HasLiveProcess()
+    {
+        return _edge != null && !_edge.HasExited;
     }
 
     /**
@@ -263,7 +354,7 @@ internal static class CdpSession
      * **绝不按镜像名杀**（沙箱里可能还有用户自己开的 Edge，宿主上更是别人的应用）。
      * /T 是必须的：msedge.exe 只是父进程，renderer / gpu 都是子进程，单杀父进程会留孤儿。
      */
-    private static void KillOurEdge()
+    private void KillOurEdge()
     {
         Process edge = _edge;
         _edge = null;
@@ -274,7 +365,7 @@ internal static class CdpSession
         if (pid > 0) RunQuiet("taskkill.exe", "/PID " + pid + " /T /F");
     }
 
-    private static void RunQuiet(string file, string args)
+    private void RunQuiet(string file, string args)
     {
         try
         {
@@ -290,7 +381,7 @@ internal static class CdpSession
         }
     }
 
-    private static void CloseSocket()
+    private void CloseSocket()
     {
         ClientWebSocket ws = _ws;
         _ws = null;
@@ -298,7 +389,7 @@ internal static class CdpSession
         try { ws.Dispose(); } catch { }
     }
 
-    private static bool IsAlive()
+    private bool IsAlive()
     {
         if (_edge == null || _edge.HasExited) return false;
         if (_ws != null && _ws.State == WebSocketState.Open) return true;
@@ -308,11 +399,11 @@ internal static class CdpSession
 
     // ── cdp-status ───────────────────────────────────────────────────────────────
 
-    private static string Status()
+    private string Status()
     {
         if (!IsAlive())
         {
-            return new JObj().Bool("ok", true).Bool("running", false).Num("port", _port)
+            return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
                 .Str("hint", "沙箱里的 Edge 没有在运行。sandbox_navigate 会自动把它拉起来；"
                     + "如果拉不起来，改用 computer_screenshot / computer_click 像素工具").ToString();
         }
@@ -322,21 +413,21 @@ internal static class CdpSession
             string href = EvalString("location.href", 5000);
             string title = EvalString("document.title", 5000);
             List<TargetInfo> pages = PageTargets();
-            JObj o = new JObj().Bool("ok", true).Bool("running", true).Num("port", _port)
+            JObj o = new JObj().Bool("ok", true).Str("session", Key).Bool("running", true).Num("port", _port)
                 .Str("product", _product).Str("url", href).Str("title", title)
                 .Num("active", ActiveIndex(pages)).Raw("tabs", TabsJson(pages));
             return o.ToString();
         }
         catch (Exception ex)
         {
-            return new JObj().Bool("ok", true).Bool("running", false).Num("port", _port)
+            return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
                 .Str("error", ex.Message).ToString();
         }
     }
 
-    private static string OkWithStatus(bool alreadyRunning)
+    private string OkWithStatus(bool alreadyRunning)
     {
-        JObj o = new JObj().Bool("ok", true).Num("port", _port).Str("product", _product)
+        JObj o = new JObj().Bool("ok", true).Str("session", Key).Num("port", _port).Str("product", _product)
             .Bool("alreadyRunning", alreadyRunning);
         try
         {
@@ -352,7 +443,7 @@ internal static class CdpSession
 
     // ── WebSocket 连接与 target 附着 ─────────────────────────────────────────────
 
-    private static void ConnectAndAttach()
+    private void ConnectAndAttach()
     {
         if (_ws != null && _ws.State == WebSocketState.Open && _sessionId.Length > 0) return;
         if (_edge == null || _edge.HasExited)
@@ -363,14 +454,7 @@ internal static class CdpSession
         try
         {
             if (_port <= 0) throw new Exception("不知道 CDP 端口（DevToolsActivePort 没读到）");
-            string version = HttpGet("http://127.0.0.1:" + _port + "/json/version", 5000);
-            string wsUrl = Program.ExtractString(version, "webSocketDebuggerUrl");
-            if (wsUrl == null || wsUrl.Length == 0)
-                throw new Exception("Edge 的 /json/version 里没有 webSocketDebuggerUrl（端口 " + _port + " 可能被别的进程占了）");
-            _product = Program.ExtractString(version, "Browser");
-            CloseSocket();
-            _ws = Connect(wsUrl, 5000);
-            Program.Log("CDP 已连接：" + wsUrl + " product=" + _product);
+            OpenSocket();
             AttachPage();
         }
         finally
@@ -379,8 +463,97 @@ internal static class CdpSession
         }
     }
 
+    /**
+     * 拿 browser 级 WebSocket（/json/version → webSocketDebuggerUrl → 连接）。
+     *
+     * **连不上就重试**（理由见 ConnectRetryMs）：真机上这只 Edge 可能刚被重新拉起、
+     * 端口文件里还是上一只的旧端口，或监听还没就绪。这两种都是秒级自愈的，
+     * 不该变成模型看到的一句「Unable to connect to the remote server」。
+     * 每次重试前**重读端口文件**：旧端口 → 新端口的切换就靠它。
+     */
+    private void OpenSocket()
+    {
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(ConnectRetryMs);
+        while (true)
+        {
+            string version;
+            try
+            {
+                version = HttpGet("http://127.0.0.1:" + _port + "/json/version", 5000);
+            }
+            catch (Exception ex)
+            {
+                if (RetryConnection(ex, deadline)) continue;
+                throw new Exception("沙箱里的 Edge 调试端口 " + _port + " 连不上（" + BaseMessage(ex) + "）。"
+                    + "可能是 Edge 刚重启、调试端口还没就绪：稍后重试一次 sandbox_navigate；"
+                    + "连续失败就改用 computer_screenshot / computer_click 像素工具");
+            }
+            string wsUrl = Program.ExtractString(version, "webSocketDebuggerUrl");
+            if (wsUrl == null || wsUrl.Length == 0)
+                throw new Exception("Edge 的 /json/version 里没有 webSocketDebuggerUrl（端口 " + _port + " 可能被别的进程占了）");
+            _product = Program.ExtractString(version, "Browser");
+            CloseSocket();
+            try
+            {
+                _ws = Connect(wsUrl, 5000);
+            }
+            catch (Exception ex)
+            {
+                if (RetryConnection(ex, deadline)) continue;
+                throw;
+            }
+            Program.Log("CDP 已连接：" + wsUrl + " product=" + _product);
+            return;
+        }
+    }
+
+    /**
+     * 一次连接失败之后：还能等就重读端口、睡一下、回 true（调用方 continue）；
+     * 超期限回 false（调用方报错）；**Edge 已经退了就直接说「没有在运行」**——宿主的
+     * 缓存自愈就是按这句话触发的。
+     */
+    private bool RetryConnection(Exception cause, DateTime deadline)
+    {
+        if (_edge == null || _edge.HasExited)
+            throw new Exception("沙箱里的浏览器没有在运行（Edge 在等调试端口时退出了）。"
+                + "先 sandbox_navigate 把它重新拉起来；连续失败就改用 computer_screenshot / computer_click 像素工具");
+        if (DateTime.UtcNow >= deadline) return false;
+        RefreshPortFromFile();
+        Program.Log("CDP 连接还没就绪（" + BaseMessage(cause) + "），" + ConnectRetryIntervalMs
+            + "ms 后重试（端口 " + _port + "）");
+        Thread.Sleep(ConnectRetryIntervalMs);
+        return true;
+    }
+
+    /** 重读端口文件：上次读到的可能是上一只 Edge 留下的旧端口（换了就跟着改，并记一笔） */
+    private void RefreshPortFromFile()
+    {
+        try
+        {
+            string path = Path.Combine(_profileDir, "DevToolsActivePort");
+            if (!File.Exists(path)) return;
+            int port = ParsePortFileContent(File.ReadAllText(path));
+            if (port <= 0 || port == _port) return;
+            Program.Log("CDP 端口从 " + _port + " 改成 " + port + "（端口文件被新的 Edge 重写过）");
+            _port = port;
+        }
+        catch
+        {
+            // 端口文件可能正被写一半，下一轮再读
+        }
+    }
+
+    /** 底层异常取最内层原因（WebException 自己的 Message 只有「远程服务器返回错误」这类套话） */
+    private static string BaseMessage(Exception ex)
+    {
+        if (ex == null) return "未知原因";
+        Exception inner = ex.GetBaseException();
+        string message = inner == null ? ex.Message : inner.Message;
+        return message == null || message.Length == 0 ? "未知原因" : message;
+    }
+
     /** 选一个 page target 并 attach（flatten）；没有就新建一个 */
-    private static void AttachPage()
+    private void AttachPage()
     {
         List<TargetInfo> pages = PageTargets();
         TargetInfo chosen = pages.Count > 0 ? pages[0] : null;
@@ -398,7 +571,7 @@ internal static class CdpSession
         Attach(chosen.Id);
     }
 
-    private static void Attach(string targetId)
+    private void Attach(string targetId)
     {
         string attached = CallBrowser(
             "Target.attachToTarget",
@@ -422,7 +595,7 @@ internal static class CdpSession
         public string Title = "";
     }
 
-    private static List<TargetInfo> PageTargets()
+    private List<TargetInfo> PageTargets()
     {
         string reply = CallBrowser("Target.getTargets", "{}", 8000);
         List<TargetInfo> all = ParseTargets(reply);
@@ -438,7 +611,7 @@ internal static class CdpSession
      * 解析 Target.getTargets 的 reply。没有 JSON 库，按 `"targetId":"` 切块再逐字段取：
      * 一个 targetInfo 的字段顺序是 targetId → type → title → url，块内取不会串到下一个。
      */
-    private static List<TargetInfo> ParseTargets(string reply)
+    private List<TargetInfo> ParseTargets(string reply)
     {
         List<TargetInfo> list = new List<TargetInfo>();
         string marker = "\"targetId\":\"";
@@ -463,7 +636,7 @@ internal static class CdpSession
         return list;
     }
 
-    private static int ActiveIndex(List<TargetInfo> pages)
+    private int ActiveIndex(List<TargetInfo> pages)
     {
         for (int i = 0; i < pages.Count; i++)
         {
@@ -472,7 +645,7 @@ internal static class CdpSession
         return pages.Count > 0 ? 0 : -1;
     }
 
-    private static string TabsJson(List<TargetInfo> pages)
+    private string TabsJson(List<TargetInfo> pages)
     {
         StringBuilder sb = new StringBuilder("[");
         int active = ActiveIndex(pages);
@@ -489,17 +662,17 @@ internal static class CdpSession
 
     // ── CDP 调用核心 ─────────────────────────────────────────────────────────────
 
-    private static string Call(string method, string paramsJson, int timeoutMs)
+    private string Call(string method, string paramsJson, int timeoutMs)
     {
         return CallSession(_sessionId, method, paramsJson, timeoutMs);
     }
 
-    private static string CallBrowser(string method, string paramsJson, int timeoutMs)
+    private string CallBrowser(string method, string paramsJson, int timeoutMs)
     {
         return CallSession(null, method, paramsJson, timeoutMs);
     }
 
-    private static string CallSession(string sessionId, string method, string paramsJson, int timeoutMs)
+    private string CallSession(string sessionId, string method, string paramsJson, int timeoutMs)
     {
         if (!_connecting) ConnectAndAttach();
         if (_ws == null || _ws.State != WebSocketState.Open) throw new Exception("CDP 连接已断开");
@@ -541,7 +714,7 @@ internal static class CdpSession
      * 读**一整条** WebSocket 消息：截图回执会被拆成多帧（真机实测 5 帧、最大帧 16KB），
      * 只读一次就是半截 JSON。循环到 EndOfMessage 再拼。
      */
-    private static string ReceiveMessage(int timeoutMs)
+    private string ReceiveMessage(int timeoutMs)
     {
         ClientWebSocket ws = _ws;
         if (ws == null) return null;
@@ -581,7 +754,7 @@ internal static class CdpSession
         }
     }
 
-    private static bool HasId(string json, int id)
+    private bool HasId(string json, int id)
     {
         string needle = "\"id\":" + id;
         int i = json.IndexOf(needle, StringComparison.Ordinal);
@@ -592,7 +765,7 @@ internal static class CdpSession
         return c == ',' || c == '}' || c == ' ' || c == '\r' || c == '\n';
     }
 
-    private static string BaseMessage(Task task)
+    private string BaseMessage(Task task)
     {
         try
         {
@@ -602,7 +775,7 @@ internal static class CdpSession
         return "未知原因";
     }
 
-    private static ClientWebSocket Connect(string wsUrl, int timeoutMs)
+    private ClientWebSocket Connect(string wsUrl, int timeoutMs)
     {
         ClientWebSocket ws = new ClientWebSocket();
         ws.Options.Proxy = null;                       // 关键 1：别让系统代理吃掉 127.0.0.1
@@ -626,7 +799,7 @@ internal static class CdpSession
 
     // ── 小工具：HTTP（loopback）──────────────────────────────────────────────────
 
-    private static string HttpGet(string url, int timeoutMs)
+    private string HttpGet(string url, int timeoutMs)
     {
         HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
         req.Timeout = timeoutMs;
@@ -640,7 +813,7 @@ internal static class CdpSession
 
     // ── 求值 helper ──────────────────────────────────────────────────────────────
 
-    private static string Eval(string expression, int timeoutMs)
+    private string Eval(string expression, int timeoutMs)
     {
         string reply = Call("Runtime.evaluate",
             "{\"expression\":" + Program.JsonQuote(expression) + ",\"returnByValue\":true}", timeoutMs);
@@ -649,21 +822,21 @@ internal static class CdpSession
         return reply;
     }
 
-    private static string EvalString(string expression, int timeoutMs)
+    private string EvalString(string expression, int timeoutMs)
     {
         string reply = Eval(expression, timeoutMs);
         string value = Program.ExtractJsonString(reply, "value");
         return value == null ? "" : value;
     }
 
-    private static bool EvalBool(string expression, int timeoutMs)
+    private bool EvalBool(string expression, int timeoutMs)
     {
         string reply = Eval(expression, timeoutMs);
         return reply.IndexOf("\"value\":true", StringComparison.Ordinal) >= 0;
     }
 
     /** CDP 回执里的 error.message（没有 error 回 null）。裸异常对模型没有信息量，要带 message */
-    private static string CdpError(string reply)
+    private string CdpError(string reply)
     {
         if (reply == null) return "没有回执";
         if (reply.IndexOf("\"error\":{", StringComparison.Ordinal) < 0) return null;
@@ -673,7 +846,7 @@ internal static class CdpSession
 
     // ── cdp-nav ──────────────────────────────────────────────────────────────────
 
-    private static string Nav(string raw)
+    private string Nav(string raw)
     {
         string url = Program.ExtractJsonString(raw, "url");
         if (url == null || url.Trim().Length == 0) return Fail("cdp-nav 需要 url 字段");
@@ -704,7 +877,7 @@ internal static class CdpSession
             + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构");
     }
 
-    private static string NavResult(Stopwatch sw, string warning)
+    private string NavResult(Stopwatch sw, string warning)
     {
         string href = EvalString("location.href", 8000);
         string title = EvalString("document.title", 8000);
@@ -714,7 +887,7 @@ internal static class CdpSession
     }
 
     /** 裸域名补协议（与 browser_navigate 的语义一致：裸域名按 https） */
-    private static string NormalizeUrl(string url)
+    private string NormalizeUrl(string url)
     {
         string lower = url.ToLowerInvariant();
         if (lower.StartsWith("http://") || lower.StartsWith("https://") || lower.StartsWith("file:")
@@ -730,7 +903,7 @@ internal static class CdpSession
      * 而「加载完了」本来就有一个可轮询的真值（readyState）。轮询多几条 CDP 消息，换来的是
      * 不会因为一次事件迟到 / 丢失把整条命令判死。
      */
-    private static bool WaitForReady(string expected, int timeoutMs)
+    private bool WaitForReady(string expected, int timeoutMs)
     {
         Thread.Sleep(300); // 让 navigate 真正开始（否则第一轮读到的还是旧页面的 complete）
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -750,7 +923,7 @@ internal static class CdpSession
         return false;
     }
 
-    private static bool UrlMatches(string expected, string actual)
+    private bool UrlMatches(string expected, string actual)
     {
         if (actual == null) return false;
         string a = TrimSlash(expected);
@@ -762,7 +935,7 @@ internal static class CdpSession
         return false;
     }
 
-    private static string TrimSlash(string value)
+    private string TrimSlash(string value)
     {
         string v = value.Trim();
         while (v.Length > 0 && v[v.Length - 1] == '/') v = v.Substring(0, v.Length - 1);
@@ -779,7 +952,7 @@ internal static class CdpSession
      * 桥再把它拼成合法 JSON。为什么不直接让 JS 返回 JSON：桥没有 JSON 库，嵌套的
      * `\"value\":\"{\\\"a\\\"…}\"` 用 ExtractString 取不出来。平面编码 + 桥侧重拼最省事。
      */
-    private static string Observe(string raw)
+    private string Observe(string raw)
     {
         int maxElements = ReadInt(raw, "maxElements", 120, 10, 400);
         string js = ObserveJs.Replace("__MAX__", maxElements.ToString());
@@ -868,7 +1041,7 @@ internal static class CdpSession
 
     // ── cdp-click ────────────────────────────────────────────────────────────────
 
-    private static string Click(string raw)
+    private string Click(string raw)
     {
         string selector = Program.ExtractJsonString(raw, "selector");
         if (selector == null || selector.Trim().Length == 0)
@@ -890,7 +1063,7 @@ internal static class CdpSession
     }
 
     /** 滚动到元素可见并回它的中心点 / 标签 / 文本；没匹配到回 null��JS 侧分开返回（避免多一次往返） */
-    private static string ResolvePoint(string selector)
+    private string ResolvePoint(string selector)
     {
         string js = "(function(){var el=document.querySelector(" + Program.JsonQuote(selector) + ");"
             + "if(!el) return 'NOTFOUND';"
@@ -904,7 +1077,7 @@ internal static class CdpSession
         return result;
     }
 
-    private static void DispatchClick(int x, int y)
+    private void DispatchClick(int x, int y)
     {
         Call("Input.dispatchMouseEvent", "{\"type\":\"mouseMoved\",\"x\":" + x + ",\"y\":" + y + "}", 5000);
         string press = "{\"type\":\"mousePressed\",\"x\":" + x + ",\"y\":" + y + ",\"button\":\"left\",\"clickCount\":1}";
@@ -915,7 +1088,7 @@ internal static class CdpSession
 
     // ── cdp-type ─────────────────────────────────────────────────────────────────
 
-    private static string TypeText(string raw)
+    private string TypeText(string raw)
     {
         string selector = Program.ExtractJsonString(raw, "selector");
         string text = Program.ExtractJsonString(raw, "text");
@@ -953,7 +1126,7 @@ internal static class CdpSession
         return new JObj().Bool("ok", true).Str("value", value).Bool("submitted", submitted).ToString();
     }
 
-    private static void DispatchEnter()
+    private void DispatchEnter()
     {
         Call("Input.dispatchKeyEvent",
             "{\"type\":\"keyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13,\"nativeVirtualKeyCode\":13,\"text\":\"\\r\"}",
@@ -965,7 +1138,7 @@ internal static class CdpSession
 
     // ── cdp-extract ──────────────────────────────────────────────────────────────
 
-    private static string ExtractText(string raw)
+    private string ExtractText(string raw)
     {
         string selector = Program.ExtractJsonString(raw, "selector");
         string js;
@@ -994,7 +1167,7 @@ internal static class CdpSession
 
     // ── cdp-wait ─────────────────────────────────────────────────────────────────
 
-    private static string WaitFor(string raw)
+    private string WaitFor(string raw)
     {
         string selector = Program.ExtractJsonString(raw, "selector");
         string msText = Program.ExtractNumber(raw, "ms");
@@ -1032,7 +1205,7 @@ internal static class CdpSession
 
     // ── cdp-shot ─────────────────────────────────────────────────────────────────
 
-    private static string Shot(string raw, string baseName, string cmdDir)
+    private string Shot(string raw, string baseName, string cmdDir)
     {
         int maxWidth = ReadInt(raw, "maxWidth", ShotMaxWidth, 320, 4096);
         string reply = Call("Page.captureScreenshot", "{\"format\":\"jpeg\",\"quality\":70}", 25000);
@@ -1090,7 +1263,7 @@ internal static class CdpSession
 
     // ── cdp-upload ───────────────────────────────────────────────────────────────
 
-    private static string Upload(string raw)
+    private string Upload(string raw)
     {
         string selector = Program.ExtractJsonString(raw, "selector");
         string path = Program.ExtractJsonString(raw, "path");
@@ -1124,7 +1297,7 @@ internal static class CdpSession
 
     // ── cdp-download ─────────────────────────────────────────────────────────────
 
-    private static string Download(string raw)
+    private string Download(string raw)
     {
         string selector = Program.ExtractJsonString(raw, "selector");
         string dir = Program.ExtractJsonString(raw, "dir");
@@ -1187,7 +1360,7 @@ internal static class CdpSession
 
     // ── cdp-tabs ─────────────────────────────────────────────────────────────────
 
-    private static string Tabs(string raw)
+    private string Tabs(string raw)
     {
         string op = Program.ExtractString(raw, "op");
         if (op == null || op.Length == 0) op = "list";
@@ -1214,7 +1387,7 @@ internal static class CdpSession
 
     // ── 通用小工具 ───────────────────────────────────────────────────────────────
 
-    private static int ReadInt(string raw, string field, int fallback, int min, int max)
+    private int ReadInt(string raw, string field, int fallback, int min, int max)
     {
         string text = Program.ExtractNumber(raw, field);
         int value;
@@ -1224,63 +1397,155 @@ internal static class CdpSession
         return value;
     }
 
-    private static long ParseLong(string text, long fallback)
+    private long ParseLong(string text, long fallback)
     {
         long value;
         if (text == null || !long.TryParse(text, out value)) return fallback;
         return value;
     }
 
-    private static string Fail(string message)
+    private string Fail(string message)
     {
         return new JObj().Bool("ok", false).Str("error", message).ToString();
     }
+}
 
-    /** 极简 JSON 对象构造器：只为了不用手数逗号（手拼 `,,` 是 cupprobe 踩过的坑） */
-    private sealed class JObj
+/** 极简 JSON 对象构造器：只为了不用手数逗号（手拼 `,,` 是 cupprobe 踩过的坑） */
+internal sealed class JObj
+{
+    private readonly StringBuilder _sb = new StringBuilder("{");
+    private bool _first = true;
+
+    private void Next(string key)
     {
-        private readonly StringBuilder _sb = new StringBuilder("{");
-        private bool _first = true;
+        if (!_first) _sb.Append(",");
+        _first = false;
+        _sb.Append(Program.JsonQuote(key)).Append(":");
+    }
 
-        private void Next(string key)
-        {
-            if (!_first) _sb.Append(",");
-            _first = false;
-            _sb.Append(Program.JsonQuote(key)).Append(":");
-        }
+    public JObj Str(string key, string value)
+    {
+        Next(key);
+        _sb.Append(Program.JsonQuote(value == null ? "" : value));
+        return this;
+    }
 
-        public JObj Str(string key, string value)
-        {
-            Next(key);
-            _sb.Append(Program.JsonQuote(value == null ? "" : value));
-            return this;
-        }
+    public JObj Num(string key, long value)
+    {
+        Next(key);
+        _sb.Append(value);
+        return this;
+    }
 
-        public JObj Num(string key, long value)
-        {
-            Next(key);
-            _sb.Append(value);
-            return this;
-        }
+    public JObj Bool(string key, bool value)
+    {
+        Next(key);
+        _sb.Append(value ? "true" : "false");
+        return this;
+    }
 
-        public JObj Bool(string key, bool value)
-        {
-            Next(key);
-            _sb.Append(value ? "true" : "false");
-            return this;
-        }
+    /** 已经序列化好的 JSON 片段（数组 / 嵌套对象） */
+    public JObj Raw(string key, string json)
+    {
+        Next(key);
+        _sb.Append(json == null ? "null" : json);
+        return this;
+    }
 
-        /** 已经序列化好的 JSON 片段（数组 / 嵌套对象） */
-        public JObj Raw(string key, string json)
-        {
-            Next(key);
-            _sb.Append(json == null ? "null" : json);
-            return this;
-        }
+    public override string ToString()
+    {
+        return _sb.ToString() + "}";
+    }
+}
 
-        public override string ToString()
+/**
+ * CDP 侧的两个纯函数与常量（0.7.0 起不再是「会话注册表」）。
+ *
+ * 0.6.0 之前这里是一张会话表：按 session 路由、执行 4 个实例的上限、空闲回收。
+ * 0.7.0 把执行搬进了**每会话一个 worker 子进程**（WorkerHost.cs）之后，那张表就由
+ * 「哪个 worker 进程」本身表达了——资源上限也在主桥（谁负责拉 worker，谁计数）。
+ * 留在这里的只有：命令名白名单（主桥据此判「未知的 CDP 命令」）、会话 id 安全化
+ * （**与宿主 shared/computer-use.ts 的 safeBrowserSessionId 逐字一致**）、上限那句话
+ * （模型看得见的文案，自测断言它）、以及删 profile 目录。
+ */
+internal static class CdpSessions
+{
+    /** 与 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_MAX 同值（桥是执行者，宿主只是转述） */
+    internal const int MaxBrowsers = 4;
+
+    /** 与 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_IDLE_MS 同值 */
+    internal const int IdleReapMs = 5 * 60 * 1000;
+
+    /** 与 COMPUTER_USE_DEFAULT_BROWSER_SESSION 同值 */
+    private const string DefaultKey = "default";
+
+    /** 会话 id 进目录名之前截断到这么长（Windows 路径长度 + 可读性的折中） */
+    private const int MaxKeyLength = 48;
+
+    internal static bool IsKnown(string command)
+    {
+        return command == "cdp-start" || command == "cdp-stop" || command == "cdp-status"
+            || command == "cdp-nav" || command == "cdp-observe" || command == "cdp-click"
+            || command == "cdp-type" || command == "cdp-extract" || command == "cdp-wait"
+            || command == "cdp-shot" || command == "cdp-upload" || command == "cdp-download"
+            || command == "cdp-tabs";
+    }
+
+    /**
+     * 上限文案。**自测断言它**提到 cdp-stop 与「最多 4 个」——模型只有这句话能照着做：
+     * 它看不见 UI，也不知道还有几个实例、该停哪一个。宿主 cdp.ts 里有一份同义的中文
+     * （computerUseBrowserErrors.tooMany），两边都在模型看得见的路径上。
+     */
+    internal static string TooManyMessage()
+    {
+        return "沙箱里同时最多 " + MaxBrowsers + " 个浏览器，先 cdp-stop 一个再开新的（不用的实例在空闲 "
+            + (IdleReapMs / 60000) + " 分钟后自动回收）";
+    }
+
+    /** 会话键 → profile 目录（两边同一个规则：C:\orbita-browser\sessions\<键>） */
+    internal static string ProfileDir(string key)
+    {
+        return System.IO.Path.Combine(@"C:\orbita-browser\sessions", key);
+    }
+
+    /**
+     * 删掉一个会话的 profile 目录（显式 stop / 空闲回收）。**删不掉只记日志**：
+     * Edge 刚被杀时文件句柄可能还没全放开，删不动是常态；残留目录不占名额，
+     * 下次同会话启动时会被自己复用。
+     */
+    internal static void DeleteProfile(string key)
+    {
+        string dir = ProfileDir(key);
+        try
         {
-            return _sb.ToString() + "}";
+            if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true);
         }
+        catch (Exception ex)
+        {
+            Program.Log("删除 profile 目录失败（" + dir + "）：" + ex.Message);
+        }
+    }
+
+    /**
+     * 安全化（与 shared/computer-use.ts 的 safeBrowserSessionId **逐字一致**）：
+     * 只允许 `[A-Za-z0-9_-]`，其余换 `_`，最长 48；空 / 缺省回落 `default`。
+     *
+     * 为什么必须有这一关：键会拼进 `C:\orbita-browser\sessions\<键>`——带 `..` 或 `\`
+     * 的会话 id 能把 profile 目录指到 guest 的任意位置（那目录里全是可执行配置）。
+     * 同时它也是「两个宿主会话不会在桥侧撞成同一个浏览器」的保证，以及 worker 目录名
+     * （`out\worker\<键>`）与命令文件名前缀的来源。
+     */
+    internal static string SafeSessionId(string raw)
+    {
+        if (raw == null || raw.Length == 0) return DefaultKey;
+        StringBuilder sb = new StringBuilder(MaxKeyLength);
+        for (int i = 0; i < raw.Length && sb.Length < MaxKeyLength; i++)
+        {
+            char c = raw[i];
+            bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                || c == '_' || c == '-';
+            sb.Append(ok ? c : '_');
+        }
+        return sb.Length == 0 ? DefaultKey : sb.ToString();
     }
 }

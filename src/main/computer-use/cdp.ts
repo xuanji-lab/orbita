@@ -19,10 +19,14 @@
 import { copyFile, mkdir, readdir, stat } from "node:fs/promises";
 import { join, win32 } from "node:path";
 import {
+  COMPUTER_USE_BROWSER_MAX,
+  COMPUTER_USE_BROWSER_PROFILE_ROOT,
   COMPUTER_USE_GUEST_DOWNLOAD_DIR,
   COMPUTER_USE_GUEST_UPLOAD_DIR,
   COMPUTER_USE_SHOT_MAX_WIDTH,
+  computerUseBrowserErrors,
   computerUseGuestCommands,
+  safeBrowserSessionId,
   type ComputerUseGuestCommand,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
@@ -59,8 +63,10 @@ function browserFailure(cause: unknown): string {
 }
 
 /**
- * 一局沙箱里的浏览器会话。应用级单例（沙箱是应用级一份，不按会话分）：
- * 多个会话同时使唤它时，命令按到达顺序执行——这正是「一个沙箱」的语义。
+ * 沙箱里每个会话各自一份浏览器（v1.5-1：一个会话一个 Edge，不再共用一个实例）。
+ *
+ * 宿主这一层仍然是**按会话路由的那一层**：会话键由 safeBrowserSessionId 归一化（与 guest 桥
+ * 逐字一致），每条 `cdp-*` 命令都带上 `session` 字段。桥不知道「宿主会话」是什么，它只认这个键。
  *
  * `outDir` 是**宿主侧**的映射输出目录（`<userData>/computer-use/out`）：上传落
  * `out/upload`、下载落 `out/downloads`，与 guest 的 `C:\orbita-out` 是同一份目录。
@@ -69,38 +75,72 @@ export class CdpSession {
   private readonly guest: CdpGuest;
   private readonly outDir: string;
   /**
-   * 这一局里 Edge 起没起。**只是缓存**：桥自己知道真相（cdp-status）。
-   * 缓存过期（沙箱重启 / 用户关掉了 Edge 窗口）时，命令会报「没有在运行」，
+   * 这一局里「哪些会话的 Edge 起过」。**只是缓存**：桥自己知道真相（cdp-status）。
+   * 键是归一化之后的会话键（与桥一致），值只是存在与否。
+   *
+   * 缓存过期（桥侧空闲回收了 / 用户关掉了 Edge 窗口）时命令会报「没有在运行」，
    * call() 清掉它重试一次——所以这里不需要任何生命周期钩子。
    */
-  private started = false;
+  private readonly started = new Set<string>();
 
   constructor(guest: CdpGuest, outDir: string) {
     this.guest = guest;
     this.outDir = outDir;
   }
 
-  /** 起 Edge（幂等，桥那边已起就直接回现状）。只有 navigate 会走它 */
-  private async ensureStarted(): Promise<void> {
-    if (this.started) return;
-    const status = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStatus, {});
+  /**
+   * 起一个会话的 Edge（幂等，桥那边已起就直接回现状）。只有 navigate 会走它。
+   *
+   * **上限在宿主这一侧提前判**只是为了给模型一句能照着做的话：桥才是执行者（它才知道
+   * 真实活着的实例数，而且会按空闲回收）。所以只在「缓存说已经到上限」时去问一次真值——
+   * 不问就拦会误杀（桥刚回收了 4 个里面的一两个，宿主的缓存还不知道）。
+   */
+  private async ensureStarted(session: string): Promise<void> {
+    if (this.started.has(session)) return;
+    if (this.started.size >= COMPUTER_USE_BROWSER_MAX) await this.pruneAgainstBridge();
+    const status = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStatus, { session });
     if (!status.ok) throw new Error(status.error);
     if (status.resp.running === true) {
-      this.started = true;
+      this.started.add(session);
       return;
     }
-    const start = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStart, {});
+    console.log(`[computer-use] 会话 ${session} 拉起沙箱浏览器（profile 在 guest 的 ${COMPUTER_USE_BROWSER_PROFILE_ROOT}\\${session}）`);
+    const start = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStart, { session });
     if (!start.ok) throw new Error(start.error);
-    this.started = true;
+    this.started.add(session);
   }
 
-  /** 要求已经打开过页面：任何非导航命令都先过这一关（不去替模型起一个 about:blank） */
-  private async ensureOpen(): Promise<void> {
-    if (this.started) return;
+  /**
+   * 按**桥的真值**修剪宿主缓存（cdp-status 不带 session = 汇总所有会话）。
+   * 真到上限就回一句模型能照着做的话（先 cdp-stop 一个）；否则把已经不在的会话从缓存里剔掉，
+   * 让这一次启动能真的走下去。
+   */
+  private async pruneAgainstBridge(): Promise<void> {
     const status = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStatus, {});
     if (!status.ok) throw new Error(status.error);
+    const live = new Set<string>();
+    const sessions = status.resp["sessions"];
+    if (Array.isArray(sessions)) {
+      for (const item of sessions) {
+        if (typeof item !== "object" || item === null) continue;
+        const record = item as Record<string, unknown>;
+        if (record["running"] !== true) continue;
+        if (typeof record["session"] === "string") live.add(record["session"]);
+      }
+    }
+    for (const key of [...this.started]) if (!live.has(key)) this.started.delete(key);
+    if (live.size >= COMPUTER_USE_BROWSER_MAX) {
+      throw new Error(computerUseBrowserErrors.tooMany(COMPUTER_USE_BROWSER_MAX));
+    }
+  }
+
+  /** 要求这个会话已经打开过页面：任何非导航命令都先过这一关（不去替模型起一个 about:blank） */
+  private async ensureOpen(session: string): Promise<void> {
+    if (this.started.has(session)) return;
+    const status = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStatus, { session });
+    if (!status.ok) throw new Error(status.error);
     if (status.resp.running === true) {
-      this.started = true;
+      this.started.add(session);
       return;
     }
     throw new Error(
@@ -110,57 +150,71 @@ export class CdpSession {
   }
 
   private async send(
+    session: string,
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const resp = await this.guest.guestCommandReply(command, fields);
+    // **每条 cdp-* 都带 session**：桥按它选实例，缺省 `default`（向后兼容单浏览器行为）
+    const resp = await this.guest.guestCommandReply(command, { ...fields, session });
     if (!resp.ok) throw new Error(resp.error);
     return resp.resp;
   }
 
   /**
-   * 发一条 CDP 命令。
+   * 发一条 CDP 命令（按会话）。
    *   mode "nav"  → 没起就先 cdp-start（模型不需要知道有这一步）
    *   mode "open" → 没起就报「先 sandbox_navigate」（不替模型起空白页）
-   * 命令报「没有在运行」时清缓存重试**一次**：场景是沙箱重启 / 用户关掉了 Edge 窗口，
-   * 缓存还是旧的；不重试的话模型会收到一条本可以自愈的失败。
+   * 命令报「没有在运行」时清缓存重试**一次**：场景是沙箱重启 / 用户关掉了 Edge 窗口 /
+   * 桥把空闲实例回收了，缓存还是旧的；不重试的话模型会收到一条本可以自愈的失败。
    */
   async call(
+    sessionId: string,
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
     mode: "nav" | "open",
   ): Promise<Record<string, unknown>> {
-    if (mode === "nav") await this.ensureStarted();
-    else await this.ensureOpen();
+    const session = safeBrowserSessionId(sessionId);
+    if (mode === "nav") await this.ensureStarted(session);
+    else await this.ensureOpen(session);
     try {
-      return await this.send(command, fields);
+      return await this.send(session, command, fields);
     } catch (cause: unknown) {
       if (!isNotRunning(cause)) throw cause;
-      this.started = false;
-      if (mode === "nav") await this.ensureStarted();
-      else await this.ensureOpen();
-      return await this.send(command, fields);
+      this.started.delete(session);
+      if (mode === "nav") await this.ensureStarted(session);
+      else await this.ensureOpen(session);
+      return await this.send(session, command, fields);
     }
   }
 
   /**
-   * 停掉沙箱里的 Edge（只杀桥自己记录的那个进程树）。**尽力而为**：用户停沙箱时
-   * fire-and-forget 调一次，让 Edge 在 VM 拆掉之前自己收尾；桥已经死了就算了，
-   * VM 销毁会带走整个进程树。调用后缓存置为「没起」，下次 navigate 会重新拉起。
+   * 停掉**所有我们起过的**沙箱浏览器（只杀桥自己记录的那些进程树）。**尽力而为**：用户停沙箱时
+   * fire-and-forget 调一次，让 Edge 在 VM 拆掉之前自己收尾；桥已经死了就算了，VM 销毁会带走
+   * 整个进程树。调用后缓存清空，下次 navigate 会重新拉起。
+   *
+   * 按会话逐个停（而不是发一条全局 stop）：桥那边「停哪个」就是 session 字段决定的，
+   * 宿主缓存里记着哪几个会话真的起过，不需要猜。
    */
-  async stop(): Promise<void> {
-    this.started = false;
-    try {
-      await this.guest.guestCommandReply(computerUseGuestCommands.cdpStop, {});
-    } catch {
-      // 停沙箱的过程中桥不响应是常态，不打扰用户
+  async stopAll(): Promise<void> {
+    const sessions = [...this.started];
+    this.started.clear();
+    for (const session of sessions) {
+      try {
+        await this.guest.guestCommandReply(computerUseGuestCommands.cdpStop, { session });
+      } catch (cause: unknown) {
+        // 停沙箱的过程中桥不响应是常态：只留一条日志（文案里已写明沙箱销毁会兜底）
+        console.warn(
+          `[computer-use] ${computerUseBrowserErrors.stopFailed(session, cause instanceof Error ? cause.message : String(cause))}`,
+        );
+      }
     }
   }
 
   /** 页面截图（走兄弟 .jpg，回执里只有文件名；字节经 IPC 送出去是 base64） */
-  async shot(maxWidth: number): Promise<{ jpeg: Uint8Array; resp: Record<string, unknown> }> {
-    await this.ensureOpen();
-    const result = await this.guest.guestShot(computerUseGuestCommands.cdpShot, { maxWidth });
+  async shot(sessionId: string, maxWidth: number): Promise<{ jpeg: Uint8Array; resp: Record<string, unknown> }> {
+    const session = safeBrowserSessionId(sessionId);
+    await this.ensureOpen(session);
+    const result = await this.guest.guestShot(computerUseGuestCommands.cdpShot, { maxWidth, session });
     if (!result.ok) throw new Error(result.error);
     return { jpeg: result.jpeg, resp: result.resp };
   }
@@ -253,12 +307,20 @@ export class CdpSession {
  */
 export async function applySandboxBrowserRequest(
   cdp: CdpSession,
+  /**
+   * 发起这次请求的 agent 会话。**这一层不再只是日志素材**：sandbox_* 按会话各用一个浏览器
+   * 实例（v1.5-1），会话 id 经 safeBrowserSessionId 归一化后就是桥侧的路由键。
+   * 缺省 / 空串回落到 `default`——单会话场景与改动前的行为一致。
+   */
+  sessionId: string,
   request: ComputerUseToolRequest,
 ): Promise<ComputerUseToolOutcome> {
+  const session = safeBrowserSessionId(sessionId);
   try {
     switch (request.action) {
       case "sandbox-navigate": {
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpNav,
           {
             url: request.url,
@@ -281,6 +343,7 @@ export async function applySandboxBrowserRequest(
       }
       case "sandbox-observe": {
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpObserve,
           request.maxElements === undefined ? {} : { maxElements: request.maxElements },
           "open",
@@ -306,7 +369,7 @@ export async function applySandboxBrowserRequest(
         };
       }
       case "sandbox-click": {
-        const resp = await cdp.call(computerUseGuestCommands.cdpClick, { selector: request.selector }, "open");
+        const resp = await cdp.call(session, computerUseGuestCommands.cdpClick, { selector: request.selector }, "open");
         const tag = text(resp["tag"]);
         const label = text(resp["text"]);
         return {
@@ -320,6 +383,7 @@ export async function applySandboxBrowserRequest(
       }
       case "sandbox-type": {
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpType,
           {
             selector: request.selector,
@@ -343,6 +407,7 @@ export async function applySandboxBrowserRequest(
       }
       case "sandbox-extract": {
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpExtract,
           request.selector === undefined ? {} : { selector: request.selector },
           "open",
@@ -369,7 +434,7 @@ export async function applySandboxBrowserRequest(
         if (request.selector !== undefined) fields["selector"] = request.selector;
         if (request.ms !== undefined) fields["ms"] = request.ms;
         if (request.timeoutMs !== undefined) fields["timeoutMs"] = request.timeoutMs;
-        const resp = await cdp.call(computerUseGuestCommands.cdpWait, fields, "open");
+        const resp = await cdp.call(session, computerUseGuestCommands.cdpWait, fields, "open");
         const appeared = resp["appeared"] === true;
         const waitedMs = number(resp["waitedMs"]);
         const waited = waitedMs === undefined ? "a while" : `${waitedMs} ms`;
@@ -392,7 +457,7 @@ export async function applySandboxBrowserRequest(
       }
       case "sandbox-screenshot": {
         const maxWidth = request.maxWidth ?? COMPUTER_USE_SHOT_MAX_WIDTH;
-        const shot = await cdp.shot(maxWidth);
+        const shot = await cdp.shot(session, maxWidth);
         const width = number(shot.resp["width"]);
         const height = number(shot.resp["height"]);
         const nativeWidth = number(shot.resp["nativeWidth"]);
@@ -419,6 +484,7 @@ export async function applySandboxBrowserRequest(
       case "sandbox-upload": {
         const prepared = await cdp.prepareUpload(request.path);
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpUpload,
           { selector: request.selector, path: prepared.guestPath },
           "open",
@@ -435,6 +501,7 @@ export async function applySandboxBrowserRequest(
       case "sandbox-download": {
         const target = await cdp.prepareDownload(request.dir);
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpDownload,
           { selector: request.selector, dir: target.guestDir },
           "open",
@@ -461,6 +528,7 @@ export async function applySandboxBrowserRequest(
         // 切换标签页会改「当前页面」，所以没起过浏览器时也要求先 navigate（不开空白页）
         const op = request.op ?? "list";
         const resp = await cdp.call(
+          session,
           computerUseGuestCommands.cdpTabs,
           { op, ...(request.index === undefined ? {} : { index: request.index }) },
           "open",

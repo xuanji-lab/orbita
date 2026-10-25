@@ -52,7 +52,9 @@ function fakeGuest(options: {
   return { guest, calls };
 }
 
-const run = (guest: ComputerUseGuest, request: ComputerUseToolRequest) => applyComputerUseRequest(guest, request);
+/** sessionId 只进日志（不改变命令）：这一层不关心它是什么，测试里固定一个 */
+const run = (guest: ComputerUseGuest, request: ComputerUseToolRequest) =>
+  applyComputerUseRequest(guest, "s1", request);
 
 describe("applyComputerUseRequest", () => {
   test("screenshot：正文带两套尺寸与「动手前先看屏幕」的指引，shot 带上图与几何", async () => {
