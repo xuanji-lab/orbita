@@ -240,7 +240,8 @@ internal static class Program
     }
 
     /**
-     * worker 入口（0.7.0）：`--cdp-worker <outDir> <session> [--no-browser] [--test-hooks] [--parent-pid N]`。
+     * worker 入口（0.7.0）：`--cdp-worker <outDir> <session> [--no-browser] [--test-hooks] [--parent-pid N]
+     * [--worker-cmd-dir <目录>]`。
      *
      * 与主桥共用同一个 exe，但**不做**主桥的任何事：不写 bridge.json、不读 cmd\、不碰输入注入。
      * `--no-browser` 必须由主桥传下来——真正会 Process.Start msedge.exe 的是这个进程。
@@ -256,8 +257,15 @@ internal static class Program
         }
         bool testHooks = false;
         int parentPid = 0;
+        string cmdDir = null;
         for (int i = 3; i < args.Length; i++)
         {
+            if (args[i] == "--worker-cmd-dir" && i + 1 < args.Length)
+            {
+                cmdDir = args[i + 1];
+                i++;
+                continue;
+            }
             if (args[i] == "--no-browser")
             {
                 BrowserDisabled = true;
@@ -281,7 +289,7 @@ internal static class Program
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
         // worker 自己的日志落到映射目录：这是宿主**唯一**能看见 guest 内部发生了什么的通道
         RedirectWorkerLog(outDir, session);
-        return WorkerHost.RunWorker(outDir, session, testHooks, parentPid);
+        return WorkerHost.RunWorker(outDir, session, testHooks, parentPid, cmdDir);
     }
 
     /**
@@ -1782,6 +1790,24 @@ internal static class Program
         CheckString(failures, ref cases, "超长截到 48 字符", new string('a', 48), CdpSessions.SafeSessionId(new string('a', 60)));
         CheckString(failures, ref cases, "全非法字符不回 default（不能和默认会话撞）", "___", CdpSessions.SafeSessionId("///"));
         CheckString(failures, ref cases, "首尾空格也不放过", "_x_", CdpSessions.SafeSessionId(" x "));
+
+        // ── worker 命令目录的位置（真机 2026-10-25：这一跳留在映射目录里白等 2.3s）──────
+        // 只有真机的 out 目录（C:\orbita-out）才把命令目录挪到 guest 本地盘；别的挂载点
+        //（宿主上跑自测的临时目录）保持 0.7.x 的布局，测试才能互不干扰。
+        CheckTrue(failures, ref cases, "out 目录识别：C:\\orbita-out 命中",
+            CdpSessions.IsGuestOutDir("C:\\orbita-out"));
+        CheckTrue(failures, ref cases, "out 目录识别：大小写与尾斜杠不影响",
+            CdpSessions.IsGuestOutDir("c:\\ORBITA-OUT\\") && CdpSessions.IsGuestOutDir("C:\\orbita-out\\"));
+        CheckTrue(failures, ref cases, "out 目录识别：临时目录 / 空值不命中",
+            !CdpSessions.IsGuestOutDir(Path.Combine(Path.GetTempPath(), "orbita-x"))
+            && !CdpSessions.IsGuestOutDir(null) && !CdpSessions.IsGuestOutDir(""));
+        CheckString(failures, ref cases, "worker 命令目录（本地盘）：C:\\orbita-browser\\worker\\<键>",
+            "C:\\orbita-browser\\worker\\t1", CdpSessions.WorkerCmdDirPath("C:\\orbita-out", "t1", true));
+        CheckString(failures, ref cases, "worker 命令目录（回落）：<out>\\worker\\<键>\\cmd",
+            "C:\\orbita-out\\worker\\t1\\cmd", CdpSessions.WorkerCmdDirPath("C:\\orbita-out", "t1", false));
+        CheckString(failures, ref cases, "worker 命令目录（宿主自测）：临时 out 目录下仍是映射布局",
+            Path.Combine(Path.GetTempPath(), "orbita-probe", "worker", "t1", "cmd"),
+            CdpSessions.WorkerCmdDir(Path.Combine(Path.GetTempPath(), "orbita-probe"), "t1"));
 
         string tooMany = CdpSessions.TooManyMessage();
         CheckTrue(failures, ref cases, "上限文案点明 4 个", tooMany.IndexOf("最多 4 个", StringComparison.Ordinal) >= 0);

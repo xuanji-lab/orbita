@@ -297,6 +297,7 @@ internal static class WorkerHost
         CleanupWorkerFiles(worker.CmdDir, workerBase);
         CleanupWorkerFiles(worker.CmdDir, null);
         CleanupWorkerInfo(worker);
+        CdpSessions.DeleteWorkerCmdDir(worker.CmdDir);
         CdpSessions.DeleteProfile(key);
         return new JObj().Bool("ok", true).Str("session", key).ToString();
     }
@@ -392,6 +393,7 @@ internal static class WorkerHost
             Forget(worker.Key, worker.Pid);
             CleanupWorkerFiles(worker.CmdDir, null);
             CleanupWorkerInfo(worker);
+            CdpSessions.DeleteWorkerCmdDir(worker.CmdDir);
             CdpSessions.DeleteProfile(worker.Key);
         }
     }
@@ -405,15 +407,19 @@ internal static class WorkerHost
     private static WorkerHandle StartWorker(string key)
     {
         string dir = Path.Combine(Program.OutDir, WorkerDirName, key);
-        string cmdDir = Path.Combine(dir, "cmd");
+        // 命令目录可能在 guest 本地盘（见 CdpSessions.WorkerCmdDir）：只用它本身，不再假定它在 dir 下面
+        string cmdDir = CdpSessions.WorkerCmdDir(Program.OutDir, key);
         try
         {
+            Directory.CreateDirectory(dir);
             Directory.CreateDirectory(cmdDir);
         }
         catch (Exception ex)
         {
             throw new Exception("worker 目录建不起来（" + cmdDir + "）：" + ex.Message);
         }
+        if (!string.Equals(cmdDir, Path.Combine(dir, "cmd"), StringComparison.OrdinalIgnoreCase))
+            Program.Log("worker 命令目录在 guest 本地盘：" + cmdDir + "（不经映射文件夹，避开重定向的元数据缓存）");
         // 上一局的残留（同会话重启 / 桥被重启过）：先清空，新 worker 的序号从 1 起。
         // 不清的话它的直探会撞上旧 req，把一条上辈子的命令再执行一遍。
         CleanupWorkerFiles(cmdDir, null);
@@ -422,6 +428,8 @@ internal static class WorkerHost
         StringBuilder args = new StringBuilder();
         args.Append("--cdp-worker ").Append(QuoteArg(Program.OutDir)).Append(" ").Append(QuoteArg(key));
         args.Append(" --parent-pid ").Append(Process.GetCurrentProcess().Id.ToString());
+        // 命令目录由主桥选定（本地盘 / 回落映射目录），worker 不许自己再算一遍
+        args.Append(" --worker-cmd-dir ").Append(QuoteArg(cmdDir));
         // 测试模式必须传下去：worker 才是真正会 Process.Start msedge.exe 的那个进程
         if (Program.BrowserDisabled) args.Append(" --no-browser");
         if (TestHooks) args.Append(" --test-hooks");
@@ -770,9 +778,9 @@ internal static class WorkerHost
 
     // ── worker 入口：`--cdp-worker <outDir> <session>` ─────────────────────────
 
-    internal static int RunWorker(string outDir, string session, bool testHooks, int parentPid)
+    internal static int RunWorker(string outDir, string session, bool testHooks, int parentPid, string cmdDir)
     {
-        WorkerRuntime runtime = new WorkerRuntime(outDir, session, testHooks, parentPid);
+        WorkerRuntime runtime = new WorkerRuntime(outDir, session, testHooks, parentPid, cmdDir);
         return runtime.Run();
     }
 
@@ -793,12 +801,13 @@ internal static class WorkerHost
         private CdpSession _cdp;
         private int _polls = 0;
 
-        internal WorkerRuntime(string outDir, string session, bool testHooks, int parentPid)
+        internal WorkerRuntime(string outDir, string session, bool testHooks, int parentPid, string cmdDir)
         {
             _outDir = outDir;
             _key = CdpSessions.SafeSessionId(session);
             _dir = Path.Combine(outDir, WorkerDirName, _key);
-            _cmdDir = Path.Combine(_dir, "cmd");
+            // 老主桥不带 --worker-cmd-dir：回落到 0.7.x 的位置（部署错配时仍能干活）
+            _cmdDir = cmdDir != null && cmdDir.Trim().Length > 0 ? cmdDir : Path.Combine(_dir, "cmd");
             _testHooks = testHooks;
             _parentPid = parentPid;
         }
@@ -1152,6 +1161,54 @@ internal static class WorkerHost
                 CdpSession.ClearStalePortFile(profileDir));
             Program.CheckTrue(failures, ref cases, "⑥ 清掉之后读不出任何端口（新 Edge 写的才是真值）",
                 CdpSession.ParsePortFileContent(TryReadText(portPath)) == 0);
+
+            // ⑦ --worker-cmd-dir：worker 只认主桥给的那一个目录。
+            //
+            // 真机上主桥会把这一跳放到 guest 本地盘（C:\orbita-browser\worker\<键>），
+            // 避开映射文件夹的元数据缓存；自测里换成另一个临时目录，证明的是同一件事：
+            // **命令从给定目录进、回执往给定目录出**，而 out\worker\<键>\cmd 一个字都不写。
+            // 这一段起的是真 worker 进程（--no-browser，不碰 Edge），不经过主桥。
+            string altCmdDir = Path.Combine(tmp, "alt-local", "st");
+            Directory.CreateDirectory(altCmdDir);
+            Process alt = null;
+            try
+            {
+                ProcessStartInfo altInfo = new ProcessStartInfo(ExecutablePath(),
+                    "--cdp-worker " + QuoteArg(tmp) + " st --no-browser --test-hooks"
+                    + " --worker-cmd-dir " + QuoteArg(altCmdDir));
+                altInfo.UseShellExecute = false;
+                altInfo.CreateNoWindow = true;
+                altInfo.RedirectStandardOutput = true;
+                altInfo.RedirectStandardError = true;
+                alt = Process.Start(altInfo);
+                if (alt != null)
+                {
+                    // 两个流都要读干（不读会卡住子进程的管道）
+                    alt.BeginOutputReadLine();
+                    alt.BeginErrorReadLine();
+                }
+                bool up = alt != null && WaitForFile(Path.Combine(tmp, WorkerDirName, "st", "worker.json"), 15000);
+                Program.CheckTrue(failures, ref cases, "⑦ 给了 --worker-cmd-dir 也能起来（worker.json 照旧在 out\\worker\\<会话>）", up);
+                string altName = "st-cmd-000001";
+                Program.AtomicWrite(Path.Combine(altCmdDir, altName + ReqSuffix),
+                    Encoding.UTF8.GetBytes("{\"command\":\"worker-ping\",\"session\":\"st\"}"));
+                bool answered = WaitForFile(Path.Combine(altCmdDir, altName + RespSuffix), 15000);
+                string altResp = answered ? TryReadText(Path.Combine(altCmdDir, altName + RespSuffix)) : null;
+                Program.CheckTrue(failures, ref cases, "⑦ 命令从给定的命令目录进、回执也写回那里",
+                    altResp != null && altResp.IndexOf("\"ok\":true", StringComparison.Ordinal) >= 0);
+                Program.CheckTrue(failures, ref cases, "⑦ 映射目录下那个 cmd\\ 没被用来收命令",
+                    !File.Exists(Path.Combine(tmp, WorkerDirName, "st", "cmd", altName + ReqSuffix))
+                    && !File.Exists(Path.Combine(tmp, WorkerDirName, "st", "cmd", altName + RespSuffix)));
+            }
+            finally
+            {
+                if (alt != null)
+                {
+                    try { if (!alt.HasExited) alt.Kill(); } catch { }
+                    try { alt.WaitForExit(5000); } catch { }
+                    try { alt.Dispose(); } catch { }
+                }
+            }
         }
         catch (Exception ex)
         {

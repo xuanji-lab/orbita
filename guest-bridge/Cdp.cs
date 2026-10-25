@@ -2620,6 +2620,74 @@ internal static class CdpSessions
             + (IdleReapMs / 60000) + " 分钟后自动回收）";
     }
 
+    /** 桥在 guest 里的 out 目录（.wsb 把宿主的 computerUseDir 映射到这里；与 LogonCommand 的 junction 一致） */
+    internal const string GuestOutDir = @"C:\orbita-out";
+
+    /**
+     * guest 本地的 worker 命令目录根。与 profile 同源（`C:\orbita-browser`）：那里**不是**
+     * 映射文件夹，文件系统操作不经过 RDP 驱动器重定向。
+     */
+    internal const string LocalWorkerRoot = @"C:\orbita-browser\worker";
+
+    /**
+     * 这个会话的 worker 命令目录（桥与 worker 之间那一跳）。
+     *
+     * 为什么真机上必须挪出映射目录（2026-10-25，两侧各自的证据）：
+     *   worker 的回执里写着 `"ms":343`（它自己量的导航），而宿主等到的是 2652ms——那 2.3s
+     *   在 worker 写完回执之后；反过来，桥写进 req 之后 worker 侧也要 0.2–0.9s 才看见。
+     *   映射文件夹走 RDP 驱动器重定向，元数据（包括「这个文件不存在」）是缓存过的，
+     *   刚写出来的文件在一两秒内看不见。这一跳是 guest 里两个进程之间的事，没有任何理由
+     *   经过一张重定向的盘。
+     *
+     * 回落：本地目录建不出来（权限 / 盘满）就回到 `out\worker\<键>\cmd`——行为与 0.7.x
+     * 逐字一致，只是慢。日志里会说清用的是哪一个。
+     */
+    internal static string WorkerCmdDir(string outDir, string key)
+    {
+        if (!IsGuestOutDir(outDir)) return WorkerCmdDirPath(outDir, key, false); // 宿主自测 / 别的挂载点
+        string mapped = WorkerCmdDirPath(outDir, key, false);
+        string local = WorkerCmdDirPath(outDir, key, true);
+        try
+        {
+            System.IO.Directory.CreateDirectory(local);
+            return local;
+        }
+        catch (Exception ex)
+        {
+            Program.Log("worker 命令目录建不到本地盘（" + local + "：" + ex.Message + "），回落到映射目录 " + mapped);
+            return mapped;
+        }
+    }
+
+    /** 两个候选位置（**纯函数**，不做任何 IO；自测直接验字符串）：local 与否只决定根目录 */
+    internal static string WorkerCmdDirPath(string outDir, string key, bool local)
+    {
+        if (local) return System.IO.Path.Combine(LocalWorkerRoot, key);
+        return System.IO.Path.Combine(System.IO.Path.Combine(outDir, "worker", key), "cmd");
+    }
+
+    /** 是不是真机的 out 目录（只有它才把 worker 的命令目录挪到本地盘）。**纯函数** */
+    internal static bool IsGuestOutDir(string outDir)
+    {
+        if (outDir == null) return false;
+        string value = outDir.Trim().TrimEnd('\\', '/');
+        return string.Equals(value, GuestOutDir, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /** 删掉一个会话的本地 worker 命令目录（stop / 空闲回收）。删不掉只记日志，下次启动会复用 */
+    internal static void DeleteWorkerCmdDir(string dir)
+    {
+        if (dir == null || dir.Length == 0) return;
+        try
+        {
+            if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("删除 worker 命令目录失败（" + dir + "）：" + ex.Message);
+        }
+    }
+
     /** 会话键 → profile 目录（两边同一个规则：C:\orbita-browser\sessions\<键>） */
     internal static string ProfileDir(string key)
     {
