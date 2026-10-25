@@ -1,4 +1,5 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
+import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -135,6 +136,21 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["第四问", "第三问", "第二问"]);
   });
 
+  test("收尾扫描的机器提问不进 recentQueries", async () => {
+    await store.ensureSession(meta());
+    await store.record(ID, userItem("真问题"));
+    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
+  });
+
+  test("收尾扫描轮压过的权限档不写回会话 meta（审核 F-4）", async () => {
+    // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
+    await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
+    await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
+    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    assert.equal((await store.load(ID))?.meta.mode, "skip");
+  });
+
   test("列表按 updatedAt 倒序——新的在前", async () => {
     await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
     await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));
@@ -268,6 +284,27 @@ describe("SessionStore", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     await store.setCompletion(ID, "done");
     assert.equal((await store.load(ID))?.meta.closedAt, first);
+  });
+
+  // 遗留事项闭环：继续开出的会话记下它接的是哪条；收尾确认时取走（交给调用方标做完）并清空
+  test("addResumedCarryover 去重；confirmWrapup 追加收尾记录、翻完成状态、取走在做的遗留事项", async () => {
+    await store.ensureSession(meta({ starred: true }));
+    await store.addResumedCarryover(ID, "c1");
+    await store.addResumedCarryover(ID, "c1");
+    await store.addResumedCarryover(ID, "c2");
+    assert.deepEqual((await store.load(ID))?.meta.resumedCarryovers, ["c1", "c2"]);
+    const wrapup = { id: "w1", at: 5, throughTurn: 3, items: [] };
+    assert.deepEqual(await store.confirmWrapup(ID, wrapup, "done_with_todos"), { resumed: ["c1", "c2"] });
+    const after = (await store.load(ID))?.meta;
+    assert.equal(after?.resumedCarryovers, undefined);
+    assert.deepEqual(after?.wrapups, [wrapup]);
+    assert.equal(after?.completion, "done_with_todos");
+    assert.equal(after?.starred, true);
+    // 重开后再确认：收尾记录累加，在做的已清空
+    await store.setCompletion(ID, "open");
+    assert.deepEqual(await store.confirmWrapup(ID, { ...wrapup, id: "w2", throughTurn: 5 }, "done"), { resumed: [] });
+    assert.deepEqual((await store.load(ID))?.meta.wrapups?.map((w) => w.id), ["w1", "w2"]);
+    assert.equal(await store.confirmWrapup("00000000-0000-4000-8000-000000000000", wrapup, "done"), null);
   });
 
   // 与 setStarred 同一条语义：meta 不在就悄悄不做
@@ -1159,6 +1196,37 @@ describe("SessionStore · 窗口分页", () => {
     const detail = await store.loadWindow(ID, 25);
     assert.equal(detail?.transcript[0]?.role, "channel-mark");
     assert.equal(detail?.transcript[0]?.id, "k1");
+  });
+
+  test("compactionsBefore 只数窗口之前、生效视图里的压缩界碑", async () => {
+    const boundary = (id: string, timestamp: number): SessionRecord => ({
+      role: "compacted",
+      id,
+      summary: "## Goal",
+      tokensBefore: 90_000,
+      timestamp,
+    });
+    // 界碑与 user 一样是轮首；前 140 轮里插两块，尾窗里再插一块
+    const records = Array.from({ length: 240 }, (_, n) => [
+      ...(n === 30 ? [boundary("c30", 1029)] : []),
+      ...(n === 90 ? [boundary("c90", 1089)] : []),
+      ...(n === 200 ? [boundary("c200", 1199)] : []),
+      ...turnBlock(n, 3),
+    ]).flat();
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.hasMore, true);
+    assert.equal(detail?.window.compactionsBefore, 2);
+    assert.equal(detail?.transcript.filter((record) => record.role === "compacted").length, 1);
+  });
+
+  test("短会话整份进窗：compactionsBefore 为 0", async () => {
+    await seedLog(ID, [
+      { role: "compacted", id: "c1", summary: "s", tokensBefore: 1, timestamp: 999 },
+      ...turnBlock(0, 2),
+    ]);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.compactionsBefore, 0);
   });
 
   test("短会话不足一窗：全量返回，hasMore 为假", async () => {

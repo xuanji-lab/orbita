@@ -12,6 +12,9 @@ import {
   formatSpeed,
   recordAssistantStart,
   replySpeed,
+  ringLayers,
+  NESTED_RING_LIMIT,
+  WRAP_UP_AFTER_COMPACTIONS,
   streamingStart,
   usageBreakdown,
 } from "./stats-format.ts";
@@ -199,5 +202,39 @@ describe("usageBreakdown / formatSpeed —— 中文（小学作业）", () => {
       ["输入", "输出", "缓存读取", "缓存写入", "合计", "上下文"],
     );
     assert.equal(formatSpeed(41.6, zh), "42 tok/s");
+  });
+});
+
+describe("ringLayers —— 一圈一个上下文窗口，塞不下就写数字", () => {
+  test("没压缩过：只有最外圈，中间空", () => {
+    assert.deepEqual(ringLayers(0), { full: 0, label: null });
+  });
+
+  test("压缩 1 次：外圈画满，当前用量在里圈，不写数字", () => {
+    assert.deepEqual(ringLayers(1), { full: 1, label: null });
+  });
+
+  test("压缩 2 次起：内圈收掉，中间写第几个窗口（次数 + 1），两位数照写", () => {
+    assert.equal(NESTED_RING_LIMIT, 2);
+    assert.deepEqual(ringLayers(2), { full: 0, label: "3" });
+    assert.deepEqual(ringLayers(3), { full: 0, label: "4" });
+    assert.deepEqual(ringLayers(11), { full: 0, label: "12" });
+  });
+
+  test("脏输入不画出负圈或小数圈", () => {
+    assert.deepEqual(ringLayers(-1), { full: 0, label: null });
+    assert.deepEqual(ringLayers(1.7), { full: 1, label: null });
+  });
+
+  test("建议收尾的门槛在第三次压缩之前", () => {
+    assert.equal(WRAP_UP_AFTER_COMPACTIONS, 2);
+  });
+});
+
+describe("压缩次数文案", () => {
+  test("中英都有，英文单复数分开", () => {
+    assert.equal(zh.stats.compactedTimes(3), "3 次");
+    assert.equal(en.stats.compactedTimes(1), "1 time");
+    assert.equal(en.stats.compactedTimes(2), "2 times");
   });
 });

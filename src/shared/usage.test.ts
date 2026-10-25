@@ -8,7 +8,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { dateKeysBack, localDateKey, usageTotalOf } from "./usage.ts";
+import { dateKeysBack, localDateKey } from "./usage.ts";
 
 /** 2026-10-08 16:00:00 UTC：上海已是 10-09 零点后，纽约还在 10-08 中午 */
 const TS = Date.UTC(2026, 9, 8, 16, 0, 0);
@@ -34,23 +34,6 @@ describe("localDateKey —— 本地日期键", () => {
     // 美东 2026-11-01 凌晨回拨：这天只有 25 小时。切换点前后都该落在同一天
     assert.equal(localDateKey(Date.UTC(2026, 10, 1, 4, 0, 0), "America/New_York"), "2026-11-01");
     assert.equal(localDateKey(Date.UTC(2026, 10, 1, 9, 0, 0), "America/New_York"), "2026-11-01");
-  });
-});
-
-describe("usageTotalOf —— 四项相加", () => {
-  test("input + output + cacheRead + cacheWrite", () => {
-    assert.equal(usageTotalOf({ input: 100, output: 20, cacheRead: 300, cacheWrite: 5 }), 425);
-  });
-
-  test("缺席的分项按 0", () => {
-    assert.equal(usageTotalOf({}), 0);
-    assert.equal(usageTotalOf({ input: 7 }), 7);
-    assert.equal(usageTotalOf({ cacheWrite: 3 }), 3);
-  });
-
-  test("非有限的分项按 0，不把整本账打歪", () => {
-    assert.equal(usageTotalOf({ input: Number.NaN, output: 10 }), 10);
-    assert.equal(usageTotalOf({ input: Number.POSITIVE_INFINITY }), 0);
   });
 });
 

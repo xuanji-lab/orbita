@@ -4,6 +4,7 @@ import {
   closeTab,
   crumbSegments,
   crumbSegmentsFromRoot,
+  dropTabsAtRoot,
   fileTabName,
   openTab,
   panelLayoutAttrs,
@@ -74,6 +75,45 @@ describe("closeTab", () => {
 
   it("关不存在的标签：无事发生", () => {
     deepStrictEqual(closeTab(tabs, "/ws/a.ts", "/ws/ghost.ts"), { tabs, activePath: "/ws/a.ts" });
+  });
+});
+
+describe("dropTabsAtRoot", () => {
+  const focus = (path: string): FileTab => tab(path, "/focus");
+
+  it("只丢掉那个根的标签，会话根的标签留着", () => {
+    const tabs = [tab("/ws/a.ts"), focus("/focus/a.ts"), tab("/ws/b.ts")];
+    deepStrictEqual(dropTabsAtRoot(tabs, "/ws/a.ts", "/focus"), {
+      tabs: [tab("/ws/a.ts"), tab("/ws/b.ts")],
+      activePath: "/ws/a.ts",
+    });
+  });
+
+  it("丢的是激活标签：激活右邻", () => {
+    const tabs = [tab("/ws/a.ts"), focus("/focus/a.ts"), tab("/ws/b.ts")];
+    deepStrictEqual(dropTabsAtRoot(tabs, "/focus/a.ts", "/focus"), {
+      tabs: [tab("/ws/a.ts"), tab("/ws/b.ts")],
+      activePath: "/ws/b.ts",
+    });
+  });
+
+  it("右边没有幸存者时退左边；全丢完 = 没有激活文件", () => {
+    const tabs = [tab("/ws/a.ts"), focus("/focus/a.ts"), focus("/focus/b.ts")];
+    deepStrictEqual(dropTabsAtRoot(tabs, "/focus/a.ts", "/focus"), {
+      tabs: [tab("/ws/a.ts")],
+      activePath: "/ws/a.ts",
+    });
+    deepStrictEqual(dropTabsAtRoot([focus("/focus/a.ts")], "/focus/a.ts", "/focus"), {
+      tabs: [],
+      activePath: null,
+    });
+  });
+
+  it("没有该根的标签：原样返回（不改传入数组）", () => {
+    const tabs = [tab("/ws/a.ts")];
+    const result = dropTabsAtRoot(tabs, "/ws/a.ts", "/focus");
+    deepStrictEqual(result, { tabs, activePath: "/ws/a.ts" });
+    deepStrictEqual(tabs, [tab("/ws/a.ts")]);
   });
 });
 

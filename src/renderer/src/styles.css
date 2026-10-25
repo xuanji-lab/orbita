@@ -533,6 +533,43 @@
 }
 
 /*
+ * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
+ * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
+ * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold
+ * 对图标无效，只剩一层淡底——玄上 .08 的黄几乎看不出（2026-10-25 用户：「看不清是什么
+ * provider - 没有光圈」）。inset：左栏 overflow 会裁掉外扩的环。
+ * 特异度 (0,3,0) 压过 `.option-row:hover`，选中格悬停时环不掉。
+ */
+.option-row.model-rail-cell[aria-selected="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+  box-shadow: inset 0 0 0 1px var(--color-mode-active-fg);
+}
+
+/* 左栏格子的悬停提示：与 IconButton 的单行 caption 同一套（z-index 同档 70，高于 Menu 的 40） */
+.model-rail-tip {
+  position: fixed;
+  z-index: 70;
+  max-width: 240px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* 首帧定位前不显形，免得先闪在左上角再跳（同 material-path-tip） */
+.model-rail-tip[data-placed="false"] {
+  opacity: 0;
+}
+
+/*
  * 会话行最左侧的三节竖条（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `bar` /
  * 铃铛清单 BellCard）：取代上一版的渐变带（动效太耗 GPU，低端 Windows /
  * MacBook 不友好）与未读浅底。**静态，无任何动效**。
@@ -592,6 +629,43 @@
  * 鼠标落在星上时也得亮整行——靶子是「这一行」，不是行里的某一格。
  * 选中盖过 hover 的取舍同 .option-row：持久状态压临时状态，规则放最后。
  */
+/*
+ * 型号头像（原型 4「显示名与头像」，2026-10-24）：模型卡片的行首与设置页的模型列表。
+ * 专属头像（.own）整张图铺满；家族 / 服务商图标放在淡底小方块里。
+ * 模型卡片里**选中改由头像一圈 accent 描边表示**，取代行首的对勾——底色与半粗仍是
+ * .option-row 的选中态给的，描边是第三个信号，不是唯一的那个。
+ */
+.model-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+/*
+ * 专属头像自带底色：不要边框占掉一圈像素，用内描边勾出边缘。取 strong 档：浅色头像
+ * （GLM-5.3 的米白、K3 的浅灰）放在明主题的浅底上，subtle 那一档几乎看不见轮廓
+ * （2026-10-24 用户：「可能加个细边框好一些」）。
+ */
+.model-avatar.own {
+  border: 0;
+  outline: 1px solid var(--color-border-strong);
+  outline-offset: -1px;
+}
+.model-avatar.own img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.option-row[aria-selected="true"] .model-avatar {
+  border-color: transparent;
+  outline-color: transparent;
+  box-shadow: 0 0 0 1.5px var(--color-accent);
+}
+
 .menu-row-tail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -681,14 +755,29 @@ body {
  * the app shell and content pane run borderless）。**暗档除外**——地面实色
  * （.layer/.pane 的覆写在 .pane 规则之后），玻璃只留给浮层。
  */
+/*
+ * 窗口 chrome（工具栏）实际占的高度——**一份真源**：.layer 的顶部留白（内容从工具栏
+ * 下面开始）与窄窗右栏覆盖层的 top 都从这里取。工具栏本身是绝对定位的
+ * （.toolbar inset-inline:0; top:0），Windows / Linux 多一行 brand row（32 + 52），
+ * macOS 单行 52。覆盖层若直接从 .layer 顶边算 12px，就会压在工具栏上、把窗口三键
+ * 与会话胶囊盖住（2026-10-22 发版前验收实测）。
+ */
+:root {
+  --chrome-height: var(--titlebar-row);
+}
+
+:root[data-platform="win32"],
+:root[data-platform="linux"] {
+  --chrome-height: calc(var(--titlebar-brand-row) + var(--titlebar-row));
+}
+
 .layer {
   height: 100%;
   position: relative;
   display: flex;
   gap: var(--space-3);
-  /* 顶部不留白：工具栏（Toolbar，绝对定位横跨整宽）住在卡上，卡片从它下面开始。
-     Windows 两行（brand row 32 + 胶囊行 52 = 84）由 .layer 的 data-platform 覆写。 */
-  padding: var(--titlebar-row) var(--space-3) var(--space-3);
+  /* 顶部不留白：工具栏（Toolbar，绝对定位横跨整宽）住在卡上，卡片从它下面开始 */
+  padding: var(--chrome-height) var(--space-3) var(--space-3);
   background: var(--glass-bg);
   border: 0;
   border-radius: 0;
@@ -710,12 +799,6 @@ body {
   height: auto;
   flex: 1;
   min-height: 0;
-}
-
-/* Windows / Linux：工具栏拆两行（brand row 32 + 胶囊行 52），卡片让到 84 下面 */
-:root[data-platform="win32"] .layer,
-:root[data-platform="linux"] .layer {
-  padding-top: calc(var(--titlebar-brand-row) + var(--titlebar-row));
 }
 
 .titlebar {
@@ -933,14 +1016,317 @@ body {
 
 /* ===== 聊天面板：行级 hover / 悬停浮现 ===== */
 
-/* CarryoverChecklist 的行内编辑提示：铅笔恒渲染，hover 到那一行才现形——
-   用 display 不用 opacity/visibility，静止态不占「可见元素」的位置 */
-.carryover-pencil {
-  display: none;
+/* 收尾确认卡（WrapupCard，原型 8 方案 A）。铅笔与行尾按钮恒渲染、hover 到那一行才现形——
+   用 display 不用 opacity/visibility，静止态不占「可见元素」的位置；行尾按钮列宽恒定，
+   悬停不推挤正文 */
+.wrapup-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  color: var(--color-text-primary);
 }
-
-.carryover-row:hover .carryover-pencil {
+.wrapup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+}
+.wrapup-head strong {
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.wrapup-intro {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.wrapup-list {
+  min-height: 0;
+  max-height: 46vh;
+  /* 行的悬停底色向两侧各伸出 --space-2（负外边距）：滚动容器同样外扩、内衬回来，
+     否则伸出的那一截被当成横向溢出，底部冒出一条横向滚动条 */
+  margin: 0 calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+  overflow-x: hidden;
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.wrapup-busy-list {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.wrapup-group {
+  display: grid;
+  gap: 2px;
+}
+.wrapup-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.wrapup-group-note {
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.wrapup-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 56px;
+  gap: var(--space-2);
+  align-items: start;
+  padding: 6px var(--space-2);
+  margin: 0 calc(-1 * var(--space-2));
+  border-radius: var(--radius-md);
+}
+.wrapup-row:hover {
+  background: var(--color-bg-hover);
+}
+.wrapup-lead {
   display: inline-flex;
+  height: 22px;
+  align-items: center;
+  color: var(--color-text-tertiary);
+}
+.wrapup-row[data-group="done"] .wrapup-lead {
+  color: var(--color-text-secondary);
+}
+.wrapup-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 22px;
+}
+.wrapup-title-btn {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.wrapup-pencil {
+  display: none;
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.wrapup-row:hover .wrapup-pencil {
+  display: inline-flex;
+}
+.wrapup-tag {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.wrapup-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.wrapup-turns {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.wrapup-turns:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+.wrapup-mono {
+  font-family: var(--font-family-mono);
+}
+.wrapup-detail {
+  margin: 2px 0 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.wrapup-trail {
+  display: none;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.wrapup-row:hover .wrapup-trail,
+.wrapup-row:focus-within .wrapup-trail {
+  display: inline-flex;
+}
+.wrapup-edit {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.wrapup-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.wrapup-add:hover {
+  color: var(--color-text-secondary);
+}
+.wrapup-sep {
+  height: 1px;
+  margin: 2px 0;
+  background: var(--color-border-subtle);
+}
+.wrapup-said {
+  display: grid;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-chat-muted-bg);
+  font-size: var(--font-size-sm);
+}
+.wrapup-said-who {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.wrapup-busy,
+.wrapup-applied {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.wrapup-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: nowrap;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.wrapup-undo:hover {
+  color: var(--color-text-primary);
+}
+.wrapup-feedback {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+.wrapup-feedback-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  outline: none;
+  field-sizing: content;
+  max-height: 120px;
+}
+.wrapup-feedback-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.wrapup-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-tertiary);
+}
+.wrapup-send[data-ready] {
+  background: var(--color-text-primary);
+  color: var(--color-bg-panel);
+  cursor: pointer;
+}
+.wrapup-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.wrapup-btn {
+  height: var(--control-height-md);
+  padding: 0 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.wrapup-btn:hover {
+  color: var(--color-text-primary);
+}
+.wrapup-primary {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+.wrapup-primary:hover {
+  color: var(--color-accent-fg);
 }
 
 /* 折叠行共用骨架（CollapseRow：ToolCard / ThinkingCard）：hover 淡底，disabled 时
@@ -1377,7 +1763,7 @@ body {
  * overflow: hidden 是要害：页脚（确认卡 + 输入卡）高到把中间行挤成 0 时，里面滚动区的
  * 上下 padding 仍会撑出 ~48px、溢出到页脚那一行底下——页脚后画、盖在上面，于是消息流
  * 最底下那截（召回运行卡的细节行）和确认卡的标题叠在一起（用户 2026-10-14 23:27 截图）。
- * 外壳自己裁掉，滚动段再挤也不越界。舷窗（BlackholeBox）只读这层的上沿，不受影响。
+ * 外壳自己裁掉，滚动段再挤也不越界。
  */
 .chat-scroll-seg {
   position: relative;
