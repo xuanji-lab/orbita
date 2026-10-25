@@ -439,6 +439,19 @@ describe("TranscriptAdapter · 工具结果", () => {
     assert.equal(item.isError, true);
   });
 
+  test("空 content 的中间帧 → 空正文，不要退化成 JSON 字符串", () => {
+    // 真机现象：pi 的第一帧 partial 是 `{content: []}`，之前的实现见到「块数为 0」就
+    // 落到 JSON.stringify，活尾里于是出现一行 `{"content":[]}`。
+    const { frames } = replay([
+      { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },
+      { type: "tool_execution_update", toolCallId: "c", toolName: "bash", args: {}, partialResult: { content: [] } },
+    ]);
+    const updated = frames.find((frame) => frame.type === "item_updated");
+    assert.ok(updated !== undefined);
+    if (updated?.type !== "item_updated" || updated.item.role !== "tool") return;
+    assert.deepEqual(updated.item.content, []);
+  });
+
   test("流式中间态：start 后是 running，update 不改变终态前的身份", () => {
     const { frames } = replay([
       { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },

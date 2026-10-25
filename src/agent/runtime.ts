@@ -38,6 +38,7 @@ import {
 } from "./permission.ts";
 import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
+import { nonInteractivePrefixFor } from "./shell-env.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
@@ -80,6 +81,8 @@ import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { createObservedBashTool, killObservedChildren } from "./bash-observe.ts";
+import { createBashHandleTools } from "./bash-sessions.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -771,10 +774,19 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  *
  * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
  * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
+ *
+ * 后两句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
+ * 用 bash 跑——要看、要打断就走 terminal_*。
+ *
+ * 句柄那一句：长命令不再无限阻塞——到签到点会交还控制权并返回 sessionId，
+ * 模型必须知道这三个工具存在，否则它会以为「命令就这么没了」。P3 会重写整段。
  */
 const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
+  "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
+  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway. ` +
+  "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
+  "A long command that really has to run in bash is detached at its 5-minute check-in and returns a sessionId: " +
+  "keep going, then follow it with bash_poll using a large waitSeconds (do not poll in a tight loop) and call bash_stop when you have seen enough.";
 
 /**
  * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
@@ -1150,6 +1162,25 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     if (shellPath !== undefined) services.settingsManager.applyOverrides({ shellPath });
   }
   /**
+   * 非交互环境前缀，与上面那条同一个口径（用户显式设过就不盖）。
+   *
+   * 治「命令在等人」：分页器（`git log` 进 less）、凭据提示（`git push` / `gh`）、
+   * 交互确认——这些命令在无 TTY 的 bash 里会一直等，实测有跑过 3.7 小时不收尾的。
+   * 路线是改环境不改命令（codex / dsh 已如此），理由与 pi 的接线点见 ./shell-env.ts。
+   *
+   * **顺序有讲究**：读 `getShellPath()` 必须在上一条 applyOverrides 之后——前缀按
+   * **最终生效的** shell 算。用探测前那个旧值（通常是 undefined）会在用户把 shellPath
+   * 设成 PowerShell 的机器上仍然判成 POSIX，`export` 那一行于是把每条命令弄成语法错误。
+   *
+   * 已知边界：pi 只把这个前缀给 **bash** 工具，`powershell` 工具不受影响（它自己就是
+   * 非交互探测式调用，没有分页器与 TTY 提示这回事）。
+   */
+  if (services.settingsManager.getShellCommandPrefix() === undefined) {
+    // 非 POSIX shell（cmd / PowerShell）拿到的是空串：不填，等于这台机器行为不变
+    const prefix = nonInteractivePrefixFor(services.settingsManager.getShellPath());
+    if (prefix !== "") services.settingsManager.applyOverrides({ shellCommandPrefix: prefix });
+  }
+  /**
    * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。
    *
    * 因为 pi 的 system prompt 里有一条规则：**有 bash 而 grep / find / ls 一个都不在**时，
@@ -1240,6 +1271,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
   const customTools = [
+    // bash 按名字覆盖 pi 的内建版本（registry 先建内建表、再按名字合并自定义工具）。
+    // 目的是签到点交还句柄（./bash-observe.ts）；**定义仍从 settingsManager 现读
+    // prefix / shellPath**，否则非交互前缀会被悄悄丢掉。ENABLED_BUILTIN_TOOLS 里的
+    // `bash` 不用动——名字没变，registry 用它选中我们这份。
+    createObservedBashTool(command.cwd, services.settingsManager, { owner: command.sessionId }),
+    // 句柄三件：poll / stop / list。会话表在 agent 进程里，进程退出时由
+    // installBashChildCleanup 一并收掉
+    ...createBashHandleTools(command.sessionId),
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
@@ -2181,6 +2220,27 @@ const catalogRefresher = new CatalogRefresher({
 setInterval(() => {
   void catalogRefresher.tick().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
 }, CATALOG_REFRESH_EVERY_MS).unref();
+
+/**
+ * bash 子进程是我们自己 spawn 的（没有走 pi 的 detached 登记），进程退出时得自己收。
+ *
+ * 为什么挂在进程收尾而不是 `command.type === "dispose"`：后者是「删一条会话」，
+ * 登记表里还有别的会话正在跑的命令；在这里收的是「整个 utility 进程要没了」——
+ * 不补就是应用退出、dev server 还占着端口。
+ *
+ * 装了信号 handler 就得自己退出：Node 有监听者时不再默认终止，不 `process.exit`
+ * 的话主进程 `child.kill()` 之后进程会挂住。
+ */
+function installBashChildCleanup(): void {
+  process.on("exit", killObservedChildren);
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      killObservedChildren();
+      process.exit(0);
+    });
+  }
+}
+installBashChildCleanup();
 
 parentPort.on("message", (event) => {
   const command = event.data as AgentCommand;
