@@ -44,6 +44,8 @@ export interface PptxSlide {
   notes: string;
   /** 图片数量：只报数，让「这页为什么没有文字」有个诚实的解释 */
   pictureCount: number;
+  /** 原文件里这页是隐藏页（`<p:sld show="0">`）；仍计入页数，列表上标注 */
+  hidden: boolean;
   /** 这一页的文字超过了单页上限，已截断 */
   truncated: boolean;
 }
@@ -62,14 +64,19 @@ export type PptxPreview =
       slideCount: number;
       /** 页数超过上限、只解析了前 `PPTX_MAX_SLIDES` 页 */
       truncated: boolean;
+      /** 解析成本预算（单页 / 全包字符与节点）超限，后面的页没有解析 */
+      budgetLimited: boolean;
       size: number;
       modifiedAt: number;
     }
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number }
   | {
       kind: "unreadable";
-      /** password：OLE2 容器（加密演示文稿，或旧版 .ppt 改了后缀）；corrupt：解不开的 zip / 缺件 / 坏的 XML */
-      reason: "password" | "corrupt";
+      /**
+       * password：OLE2 容器（加密演示文稿，或旧版 .ppt 改了后缀）；corrupt：解不开的 zip / 缺件 / 坏的 XML；
+       * timeout：解析超过 worker 的总时限（极端构造包）；complex：worker 内存上限或解析崩溃
+       */
+      reason: "password" | "corrupt" | "timeout" | "complex";
       /** 技术细节（异常原文），渲染层只在副行里给，不指望它可读 */
       detail: string;
       size: number;

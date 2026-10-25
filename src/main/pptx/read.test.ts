@@ -78,6 +78,15 @@ function layout(name: string): string {
   return `${XML}<p:sldLayout ${NS} type="titleOnly" preserve="1"><p:cSld name="${name}"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld></p:sldLayout>`;
 }
 
+/** 版式：标题占 idx 0（无 idx）、副标题 idx 1、正文 obj idx 2 —— 用于标题归属测试 */
+function layoutWithTitleSlots(name: string): string {
+  return `${XML}<p:sldLayout ${NS} type="title"><p:cSld name="${name}"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>${shape(
+    2,
+    "title",
+    "",
+  )}<p:sp><p:nvSpPr><p:cNvPr id="9" name="Sub"/><p:cNvSpPr/><p:nvPr><p:ph type="subTitle" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="10" name="Content"/><p:cNvSpPr/><p:nvPr><p:ph type="obj" idx="2"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/></p:txBody></p:sp></p:spTree></p:cSld></p:sldLayout>`;
+}
+
 function presentation(ids: string[]): string {
   return `${XML}<p:presentation ${NS}><p:sldIdLst>${ids
     .map((relId, index) => `<p:sldId id="${256 + index}" r:id="${relId}"/>`)
@@ -328,11 +337,7 @@ describe("readPptx", () => {
       '<p:sp><p:nvSpPr><p:cNvPr id="4" name="Subtitle 2"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>副标题</a:t></a:r></a:p></p:txBody></p:sp>';
     const content =
       '<p:sp><p:nvSpPr><p:cNvPr id="5" name="Content 3"/><p:cNvSpPr/><p:nvPr><p:ph idx="2"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>正文</a:t></a:r></a:p></p:txBody></p:sp>';
-    const layoutWithSlots = `${XML}<p:sldLayout ${NS} type="title"><p:cSld name="Title Slide"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>${shape(
-      2,
-      "title",
-      "",
-    )}<p:sp><p:nvSpPr><p:cNvPr id="9" name="Sub"/><p:cNvSpPr/><p:nvPr><p:ph type="subTitle" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="10" name="Content"/><p:cNvSpPr/><p:nvPr><p:ph type="obj" idx="2"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/></p:txBody></p:sp></p:spTree></p:cSld></p:sldLayout>`;
+    const layoutWithSlots = layoutWithTitleSlots("Title Slide");
     await writeZip(path, {
       "ppt/presentation.xml": presentation(["rId2"]),
       "ppt/_rels/presentation.xml.rels": rels([
@@ -354,6 +359,176 @@ describe("readPptx", () => {
       ],
     );
     assert.equal(result.slides[0]?.layoutName, "Title Slide");
+  });
+
+  test("纯文本框绝不能变成页标题；压在真标题上也不降级真标题", async () => {
+    const path = join(dir, "textbox-title.pptx");
+    const textbox = shape(4, "", para("普通文本框"));
+    const realTitle = shape(2, "title", para("真标题"));
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(textbox + realTitle),
+      "ppt/slides/_rels/slide1.xml.rels": rels([
+        { id: "rId1", type: LAYOUT_TYPE, target: "../slideLayouts/slideLayout1.xml" },
+      ]),
+      // 版式的标题占 idx 0（无 idx 就是 0）——纯文本框过去正是被这个键误伤
+      "ppt/slideLayouts/slideLayout1.xml": layoutWithTitleSlots("Title Slide"),
+    });
+    const result = await readPptx(path);
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides[0]?.title, "真标题");
+    assert.deepEqual(
+      result.slides[0]?.body.map((paragraph) => [paragraph.text, paragraph.bullet]),
+      [["普通文本框", false]],
+    );
+  });
+
+  test("纯文本框独占一页时标题为空，而不是变成页标题", async () => {
+    const path = join(dir, "textbox-only.pptx");
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(shape(4, "", para("只有文本框"))),
+      "ppt/slides/_rels/slide1.xml.rels": rels([
+        { id: "rId1", type: LAYOUT_TYPE, target: "../slideLayouts/slideLayout1.xml" },
+      ]),
+      "ppt/slideLayouts/slideLayout1.xml": layoutWithTitleSlots("Title Slide"),
+    });
+    const result = await readPptx(path);
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides[0]?.title, "");
+    assert.deepEqual(
+      result.slides[0]?.body.map((paragraph) => paragraph.text),
+      ["只有文本框"],
+    );
+  });
+
+  test("占位符 idx=0 省略 type：从版式解析成标题", async () => {
+    const path = join(dir, "placeholder-title.pptx");
+    const placeholderTitle =
+      '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph idx="0"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>继承来的标题</a:t></a:r></a:p></p:txBody></p:sp>';
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(placeholderTitle),
+      "ppt/slides/_rels/slide1.xml.rels": rels([
+        { id: "rId1", type: LAYOUT_TYPE, target: "../slideLayouts/slideLayout1.xml" },
+      ]),
+      "ppt/slideLayouts/slideLayout1.xml": layoutWithTitleSlots("Title Slide"),
+    });
+    const result = await readPptx(path);
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides[0]?.title, "继承来的标题");
+    assert.deepEqual(result.slides[0]?.body, []);
+  });
+
+  test("表格合并：gridSpan / hMerge 不把后面的列挤错位，rowSpan / vMerge 留占位", async () => {
+    const path = join(dir, "merged.pptx");
+    const mergedTable = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Table 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol/><a:gridCol/></a:tblGrid>
+      <a:tr h="370840"><a:tc gridSpan="2"><a:txBody><a:p><a:r><a:t>合并标题</a:t></a:r></a:p></a:txBody><a:tcPr gridSpan="2"/></a:tc><a:tc hMerge="1"><a:txBody><a:p/></a:txBody><a:tcPr hMerge="1"/></a:tc></a:tr>
+      <a:tr h="370840"><a:tc rowSpan="2"><a:txBody><a:p><a:r><a:t>跨行</a:t></a:r></a:p></a:txBody><a:tcPr rowSpan="2"/></a:tc><a:tc><a:txBody><a:p><a:r><a:t>右上</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr>
+      <a:tr h="370840"><a:tc vMerge="1"><a:txBody><a:p/></a:txBody><a:tcPr vMerge="1"/></a:tc><a:tc><a:txBody><a:p><a:r><a:t>右下</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr>
+      </a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(shape(2, "title", para("表")) + mergedTable),
+    });
+    const result = await readPptx(path);
+    assert.ok(result.kind === "deck");
+    assert.deepEqual(result.slides[0]?.tables, [
+      {
+        rows: [
+          ["合并标题", ""],
+          ["跨行", "右上"],
+          ["", "右下"],
+        ],
+      },
+    ]);
+  });
+
+  test('隐藏页：show="0" 仍计入页数，但标 hidden', async () => {
+    const path = join(dir, "hidden.pptx");
+    const hiddenSlide = `${XML}<p:sld ${NS} show="0"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>${shape(
+      2,
+      "title",
+      para("隐藏页"),
+    )}</p:spTree></p:cSld></p:sld>`;
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2", "rId3"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+        { id: "rId3", type: SLIDE_TYPE, target: "slides/slide2.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(shape(2, "title", para("正常页"))),
+      "ppt/slides/slide2.xml": hiddenSlide,
+    });
+    const result = await readPptx(path);
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides.length, 2);
+    assert.equal(result.slides[0]?.hidden, false);
+    assert.equal(result.slides[1]?.hidden, true);
+  });
+
+  test("命名空间前缀换成 x:/y: 的合法文件仍能读（按本地名匹配）", async () => {
+    const path = join(dir, "prefixed.pptx");
+    const xns =
+      'xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:y="http://schemas.openxmlformats.org/presentationml/2006/main"';
+    const prefixedPresentation = `${XML}<y:presentation ${xns}><y:sldIdLst><y:sldId id="256" rel:id="rId2"/></y:sldIdLst></y:presentation>`;
+    const prefixedSlide = `${XML}<y:sld ${xns}><y:cSld><y:spTree><y:nvGrpSpPr/><y:grpSpPr/><y:sp><y:nvSpPr><y:cNvPr id="2" name="T"/><y:cNvSpPr/><y:nvPr><y:ph type="title"/></y:nvPr></y:nvSpPr><y:spPr/><y:txBody><x:bodyPr/><x:p><x:r><x:rPr/><x:t>前缀无关</x:t></x:r></x:p></y:txBody></y:sp></y:spTree></y:cSld></y:sld>`;
+    await writeZip(path, {
+      "ppt/presentation.xml": prefixedPresentation,
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": prefixedSlide,
+    });
+    const result = await readPptx(path);
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides[0]?.title, "前缀无关");
+  });
+
+  test("解析预算：单页 XML 超字符上限就停，标 budgetLimited", async () => {
+    const path = join(dir, "big-part.pptx");
+    const huge = "x".repeat(200_000);
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(shape(2, "title", para(huge))),
+    });
+    const result = await readPptx(path, { maxPartChars: 5_000 });
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides.length, 0);
+    assert.equal(result.slideCount, 1);
+    assert.equal(result.truncated, true);
+    assert.equal(result.budgetLimited, true);
+  });
+
+  test("解析预算：单页节点数超上限同样停", async () => {
+    const path = join(dir, "many-nodes.pptx");
+    const many = Array.from({ length: 300 }, () => "<a:p/>").join("");
+    await writeZip(path, {
+      "ppt/presentation.xml": presentation(["rId2"]),
+      "ppt/_rels/presentation.xml.rels": rels([
+        { id: "rId2", type: SLIDE_TYPE, target: "slides/slide1.xml" },
+      ]),
+      "ppt/slides/slide1.xml": slide(shape(2, "title", para("T") + many)),
+    });
+    const result = await readPptx(path, { maxPartNodes: 100 });
+    assert.ok(result.kind === "deck");
+    assert.equal(result.slides.length, 0);
+    assert.equal(result.budgetLimited, true);
   });
 
   test("太大：不读内容，回 too-large 与上限", async () => {

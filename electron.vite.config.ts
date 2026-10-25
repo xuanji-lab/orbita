@@ -76,6 +76,13 @@ export default defineConfig({
            * 与 agent / terminal 两个进程入口同一个做法：各占一个文件。
            */
           "xlsx-worker": resolve(__dirname, "src/main/xlsx/worker.ts"),
+          /**
+           * `.pptx` 解析的 worker 线程入口（`new Worker(join(__dirname,
+           * "pptx-worker.js"))`，见 src/main/pptx/service.ts）。解析成本由文件内容
+           * 决定（评审构造包 0.9 MB 能解出 600 MB+ 的 XML），留在主进程就是窗口假死 /
+           * 堆爆掉；与 xlsx-worker 同一个做法。
+           */
+          "pptx-worker": resolve(__dirname, "src/main/pptx/worker.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包

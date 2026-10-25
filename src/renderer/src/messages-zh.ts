@@ -1713,10 +1713,17 @@ export const zh: Messages = {
     pptxPictures: (count) => `这一页有 ${count} 张图片，用默认应用打开看`,
     pptxTextTruncated: (limit) => `这一页的文字被截断在 ${grouped(limit)} 字`,
     pptxDeckTruncated: (shown, total) => `只解析了前 ${grouped(shown)} 页，共 ${grouped(total)} 页`,
+    pptxBudgetLimited: (shown, total) =>
+      shown === 0
+        ? "文件太大，大纲读不了，用默认应用打开。"
+        : `文件太大，只解析了前 ${grouped(shown)} 页（共 ${grouped(total)} 页）`,
+    pptxHidden: "隐藏",
     pptxReadOnly: "只读",
     pptxEmpty: "这份演示文稿没有幻灯片",
     pptxPassword: "这份演示文稿有密码保护，或者不是真正的 .pptx 文件。",
     pptxBroken: "这份演示文稿读不开——可能已经损坏。",
+    pptxTimeout: "这份演示文稿解析超时，用默认应用打开。",
+    pptxComplex: "这份演示文稿太复杂，大纲读不了，用默认应用打开。",
     pptUnsupported: "旧版 .ppt 演示文稿看不了预览，用默认应用打开。",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,

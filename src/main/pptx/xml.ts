@@ -20,6 +20,18 @@ export interface XmlElement {
   text: string;
 }
 
+/**
+ * 标签的本地名（去掉命名空间前缀）。
+ *
+ * **匹配一律按本地名**：命名空间前缀是书写者的自由，合法文件可以把 `a:`/`p:`
+ * 换成 `x:`/`y:`（OOXML 只规定命名空间 URI）。按字面前缀比会把这种文件判成
+ * corrupt，而它其实是好的。
+ */
+export function localNameOf(name: string): string {
+  const colon = name.indexOf(":");
+  return colon === -1 ? name : name.slice(colon + 1);
+}
+
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
   lt: "<",
@@ -29,8 +41,8 @@ const NAMED_ENTITIES: Record<string, string> = {
   nbsp: " ",
 };
 
-/** 实体解码；未知实体原样保留（比吞掉安全） */
-export function decodeEntities(text: string): string {
+/** 实体解码；未知实体原样保留（比吞掉安全）。只在本模块内用（建树时的文本/属性） */
+function decodeEntities(text: string): string {
   return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (whole, entity: string) => {
     if (entity.startsWith("#")) {
       const code =
@@ -79,9 +91,10 @@ export function parseXml(xml: string): XmlElement {
     const name = match[3];
     if (name === undefined) continue; // 注释 / PI / DOCTYPE，不建节点
     if (match[2] === "/") {
-      // 从栈顶往下找同名元素再弹：坏 XML 里多出来的闭合标签不该把整棵树带偏
+      // 从栈顶往下找同本地名的元素再弹：坏 XML 里多出来的闭合标签不该把整棵树带偏
+      const closing = localNameOf(name);
       for (let index = stack.length - 1; index > 0; index--) {
-        if (stack[index]?.name === name) {
+        if (localNameOf(stack[index]?.name ?? "") === closing) {
           stack.length = index;
           break;
         }
@@ -101,12 +114,13 @@ export function parseXml(xml: string): XmlElement {
   return document;
 }
 
-/** 子树里所有同名元素（深度优先、文档顺序） */
+/** 子树里所有同名元素（深度优先、文档顺序）；按本地名匹配，忽略命名空间前缀 */
 export function descendants(element: XmlElement, name: string): XmlElement[] {
+  const wanted = localNameOf(name);
   const found: XmlElement[] = [];
   const walk = (node: XmlElement): void => {
     for (const child of node.children) {
-      if (child.name === name) found.push(child);
+      if (localNameOf(child.name) === wanted) found.push(child);
       walk(child);
     }
   };
@@ -115,15 +129,35 @@ export function descendants(element: XmlElement, name: string): XmlElement[] {
 }
 
 export function firstDescendant(element: XmlElement, name: string): XmlElement | undefined {
+  const wanted = localNameOf(name);
   for (const child of element.children) {
-    if (child.name === name) return child;
-    const nested = firstDescendant(child, name);
+    if (localNameOf(child.name) === wanted) return child;
+    const nested = firstDescendant(child, wanted);
     if (nested !== undefined) return nested;
   }
   return undefined;
 }
 
-/** 元素的直接子元素（按名字过滤；不给名字就是全部子元素） */
+/** 元素的直接子元素（按本地名过滤；不给名字就是全部子元素） */
 export function childrenNamed(element: XmlElement, name?: string): XmlElement[] {
-  return name === undefined ? element.children : element.children.filter((child) => child.name === name);
+  if (name === undefined) return element.children;
+  const wanted = localNameOf(name);
+  return element.children.filter((child) => localNameOf(child.name) === wanted);
+}
+
+/**
+ * 元素总数，最多数到 cap（超过就停）。解析成本护栏：一页里几十万个节点不该被
+ * 建完树才算账——超限的页由调用方整页标截断、不再解析。
+ */
+export function countElements(element: XmlElement, cap: number): number {
+  let count = 0;
+  const stack: XmlElement[] = [...element.children];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) break;
+    count++;
+    if (count > cap) return count;
+    for (const child of node.children) stack.push(child);
+  }
+  return count;
 }

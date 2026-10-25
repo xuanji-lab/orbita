@@ -1871,10 +1871,18 @@ export const en = {
     pptxTextTruncated: (limit: number) => `Text on this slide is cut at ${grouped(limit)} characters`,
     pptxDeckTruncated: (shown: number, total: number) =>
       `Parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    /** 解析成本预算超限：后面的页没有解析（文件内容太大，不是页数上限） */
+    pptxBudgetLimited: (shown: number, total: number) =>
+      shown === 0
+        ? "This file is too large to outline — open it with the default app."
+        : `This file is too large to outline fully — parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    pptxHidden: "Hidden",
     pptxReadOnly: "Read-only",
     pptxEmpty: "This presentation has no slides",
     pptxPassword: "This presentation is password-protected, or it isn't a real .pptx file.",
     pptxBroken: "Couldn't read this presentation — it may be damaged.",
+    pptxTimeout: "This presentation takes too long to outline — open it with the default app.",
+    pptxComplex: "This presentation is too complex to outline — open it with the default app.",
     pptUnsupported: "Old .ppt presentations can't be previewed — open it with the default app.",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,

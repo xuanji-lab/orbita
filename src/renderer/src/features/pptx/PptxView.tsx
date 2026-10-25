@@ -28,6 +28,7 @@ export function PptxView(props: {
   const { request } = props;
   const state = usePptxPreview(request, props.reloadToken);
   const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLElement | null>(null);
 
   // 换文件：回到第一页（页号对另一份演示文稿没有意义）
   useEffect(() => setActive(0), [request.root, request.dir]);
@@ -59,10 +60,18 @@ export function PptxView(props: {
     );
   }
   if (data.kind === "unreadable") {
+    const message =
+      data.reason === "password"
+        ? t.files.pptxPassword
+        : data.reason === "timeout"
+          ? t.files.pptxTimeout
+          : data.reason === "complex"
+            ? t.files.pptxComplex
+            : t.files.pptxBroken;
     return (
       <div className="file-preview-empty">
         <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>{data.reason === "password" ? t.files.pptxPassword : t.files.pptxBroken}</PanelLine>
+        <PanelLine>{message}</PanelLine>
         {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
         <p className="pptx-detail" title={data.detail}>
           {data.detail}
@@ -72,10 +81,15 @@ export function PptxView(props: {
     );
   }
   if (data.slides.length === 0) {
+    // 0 页有两种：真空演示文稿 / 第一页就超出解析成本（构造包）。
+    // 后者不能说「没有幻灯片」——文件里有页，只是大纲读不动。
+    const budgetBlocked = data.budgetLimited && data.slideCount > 0;
     return (
       <div className="file-preview-empty">
         <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>{t.files.pptxEmpty}</PanelLine>
+        <PanelLine>
+          {budgetBlocked ? t.files.pptxBudgetLimited(0, data.slideCount) : t.files.pptxEmpty}
+        </PanelLine>
         <OpenDefaultButton onClick={props.onOpenDefault} />
       </div>
     );
@@ -84,6 +98,25 @@ export function PptxView(props: {
   const index = Math.min(active, data.slides.length - 1);
   const slide = data.slides[index];
   if (slide === undefined) return null;
+
+  // roving tabindex：300 个分页键不该全在 Tab 序里。Tab 只停在当前页，
+  // ↑↓ / Home / End 在列表内移动选中并带着焦点走（与常见 tablist 一致）
+  const moveTo = (target: number): void => {
+    const next = Math.max(0, Math.min(data.slides.length - 1, target));
+    setActive(next);
+    listRef.current?.querySelectorAll<HTMLButtonElement>(".pptx-slide-row")[next]?.focus();
+  };
+  const onSlideKey = (event: React.KeyboardEvent<HTMLButtonElement>, current: number): void => {
+    const target =
+      event.key === "ArrowDown" ? current + 1 :
+      event.key === "ArrowUp" ? current - 1 :
+      event.key === "Home" ? 0 :
+      event.key === "End" ? data.slides.length - 1 :
+      null;
+    if (target === null) return;
+    event.preventDefault();
+    moveTo(target);
+  };
 
   return (
     <div className="pptx-view">
@@ -101,16 +134,21 @@ export function PptxView(props: {
       </div>
       <div className="pptx-split">
         {/* 页列表：页码 + 版式名是定位用的坐标，标题是「这页在讲什么」 */}
-        <nav className="pptx-slide-list" aria-label={t.files.pptxSlides}>
+        <nav className="pptx-slide-list" aria-label={t.files.pptxSlides} ref={listRef}>
           {data.slides.map((item, itemIndex) => (
             <button
               key={`${item.number}:${itemIndex}`}
               type="button"
               className="option-row pptx-slide-row"
               aria-pressed={itemIndex === index}
+              tabIndex={itemIndex === index ? 0 : -1}
               onClick={() => setActive(itemIndex)}
+              onKeyDown={(event) => onSlideKey(event, itemIndex)}
             >
-              <span className="pptx-slide-label">{t.files.pptxSlideLabel(item.number, item.layoutName)}</span>
+              <span className="pptx-slide-label">
+                {t.files.pptxSlideLabel(item.number, item.layoutName)}
+                {item.hidden && <span className="pptx-slide-hidden">{t.files.pptxHidden}</span>}
+              </span>
               <span className="pptx-slide-title">{item.title === "" ? t.files.pptxUntitled : item.title}</span>
             </button>
           ))}
@@ -141,7 +179,9 @@ export function PptxView(props: {
         </span>
         {data.truncated && (
           <span className="pptx-notice">
-            {t.files.pptxDeckTruncated(data.slides.length, data.slideCount)}
+            {data.budgetLimited
+              ? t.files.pptxBudgetLimited(data.slides.length, data.slideCount)
+              : t.files.pptxDeckTruncated(data.slides.length, data.slideCount)}
           </span>
         )}
       </div>
