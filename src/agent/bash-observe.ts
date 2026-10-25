@@ -17,6 +17,11 @@
  * 它救的是实测那批「跑 30 分钟以上、最长 3.7 小时」的探针命令：模型当时看不到任何
  * 异常，只能干等或反复问你。
  *
+ * 第三件：**到点不再无条件杀**。到 `timeout` 时先看证据（最近有没有输出、进程树
+ * 有没有涨 CPU），有进展就按 10 分钟一档延长，最多两次，再往上被封在
+ * `COMMAND_TIMEOUT_HARD_MAX_SECONDS`；没进展才照旧杀。理由与阈值取舍见
+ * `ExtensionOptions` 上方那段注释。
+ *
  * **与 pi 的 `createLocalShellOperations` 逐条对齐**：超时解析、错误文案、spawn 参数、
  * 杀树、结束后等待方式。错误字符串必须逐字一致——pi 靠
  * `err.message === "aborted"` 与 `err.message.startsWith("timeout:")` 翻译成
@@ -32,7 +37,9 @@ import {
   type BashOperations,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { createStallWatcher, type StallWatchOptions } from "./bash-stall.ts";
+import { COMMAND_TIMEOUT_HARD_MAX_SECONDS } from "../shared/permission.ts";
+import { createStallWatcher, STALL_CPU_DELTA_MS, type StallWatchOptions } from "./bash-stall.ts";
+import { readTreeCpuMs } from "./proc-tree.ts";
 
 /**
  * pi 的 `ShellConfig` 没从包根导出（只导出 `getShellConfig`）。用它的返回类型代替：
@@ -48,6 +55,53 @@ const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
  * 每来一块数据就重新计时：还在写就继续等，静下来了才收尾。
  */
 const EXIT_STDIO_GRACE_MS = 100;
+
+/* ------------------------------------------------------------------ *
+ * 到点延长：证据与阈值
+ * ------------------------------------------------------------------ */
+
+/**
+ * 每次延长给多久。10 分钟：长到足以让一条真的在干活的构建 / 安装跨过它的慢段，
+ * 又短到即使判错了（把停滞当成在干活）也不会让模型干等十几分钟。
+ */
+const EXTEND_BY_MS = 600_000;
+/**
+ * 最多延长几次。两次 + 每档 10 分钟 = 在声明的超时之外最多再给 20 分钟，
+ * 仍然封在 `COMMAND_TIMEOUT_HARD_MAX_SECONDS`(60 分钟) 之内。
+ */
+const MAX_EXTENSIONS = 2;
+/**
+ * 「最近有输出」的窗口。**为什么用「最近有输出」而不是「整段都静默」**：
+ * 长构建 / 长安装的输出是脉冲式的——编译一批吐几行，接着几分钟细致地链接、打包。
+ * 「整段都没输出」这种判据会把最典型的合法长任务判成停滞；而「到点前一分钟还在吐字」
+ * 已经足以说明它没死。静止不动的真卡死命令（探针脚本、等 CSI 的交互程序）在这个窗口里
+ * 一块数据都没有，照样会被杀。
+ */
+const EXTEND_RECENT_OUTPUT_MS = 120_000;
+
+/**
+ * 到点决策的可注入参数（同 `StallWatchOptions` 的模式：线上用默认值，测试把 10 分钟、
+ * 60 分钟压到毫秒级，否则这条路径根本测不了）。
+ */
+export interface ExtensionOptions {
+  /** 每次延长的毫秒数，默认 `EXTEND_BY_MS`。 */
+  extendByMs?: number;
+  /** 最多延长几次，默认 `MAX_EXTENSIONS`。 */
+  maxExtensions?: number;
+  /** 「最近有输出」的窗口，默认 `EXTEND_RECENT_OUTPUT_MS`。 */
+  recentOutputMs?: number;
+  /**
+   * 绝对天花板（从命令开始算的总时长），默认 `COMMAND_TIMEOUT_HARD_MAX_SECONDS * 1000`。
+   * **为什么是绝对天花板，而不是 `timeout × 2`**：与声明值无关的硬边界才拦得住
+   * 「每一档都有证据所以一直延」的链条；`timeout × 2` 会随声明值水涨船高，
+   * 声明 2900 秒的命令就能跑到 5800 秒，把权限层的上限整个架空。
+   */
+  hardMaxMs?: number;
+  /** CPU 增长阈值，默认复用停滞判据的 `STALL_CPU_DELTA_MS`(100ms)。 */
+  cpuDeltaMs?: number;
+  /** 进程树 CPU 采样实现（测试注入用），默认 `readTreeCpuMs`。 */
+  sampleCpuMs?: (pid: number) => Promise<number | null>;
+}
 
 /**
  * 本进程 spawn 出去的 shell 登记表（模块级：`killObservedChildren` 要在进程收尾时
@@ -307,6 +361,22 @@ function waitForChildProcessOutcome(child: ChildProcess): Promise<WaitOutcome> {
   });
 }
 
+/**
+ * 延长记录。走 `onData`，与后代存活提示、停滞提示同一风格：模型和用户都能看见
+ * 「这次为什么没被杀、下一档到什么时候」，而不是无声地多跑十分钟。
+ */
+function extensionNotice(
+  deadlineSeconds: number,
+  nextDeadlineSeconds: number,
+  index: number,
+  max: number,
+): string {
+  return (
+    `\n[orbita] 已到 ${deadlineSeconds} 秒上限，但命令仍在输出/消耗 CPU，` +
+    `延长至 ${nextDeadlineSeconds} 秒（第 ${index}/${max} 次）。\n`
+  );
+}
+
 /** 后代存活提示（中文，与仓库其它注释 / 文案一致）。只追加一次，进工具结果。 */
 function descendantsNotice(pid: number): string {
   return (
@@ -325,7 +395,16 @@ export function createObservedBashOperations(
   resolveShellConfig: () => ShellConfig,
   /** 停滞观察的阈值与采样实现：默认值即线上行为，测试用来把 30s/60s 压到毫秒级 */
   stallOptions: StallWatchOptions = {},
+  /** 到点延长的阈值与采样实现：默认值即线上行为，测试把 10 分钟 / 60 分钟压到毫秒级 */
+  extensionOptions: ExtensionOptions = {},
 ): BashOperations {
+  const extendByMs = extensionOptions.extendByMs ?? EXTEND_BY_MS;
+  const maxExtensions = extensionOptions.maxExtensions ?? MAX_EXTENSIONS;
+  const recentOutputMs = extensionOptions.recentOutputMs ?? EXTEND_RECENT_OUTPUT_MS;
+  const hardMaxMs = extensionOptions.hardMaxMs ?? COMMAND_TIMEOUT_HARD_MAX_SECONDS * 1000;
+  const cpuDeltaMs = extensionOptions.cpuDeltaMs ?? STALL_CPU_DELTA_MS;
+  const sampleCpuMs = extensionOptions.sampleCpuMs ?? readTreeCpuMs;
+
   return {
     exec: async (command, cwd, { onData, signal, timeout, env }) => {
       const timeoutMs = resolveTimeoutMs(timeout);
@@ -339,6 +418,8 @@ export function createObservedBashOperations(
         throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
       }
 
+      // 「跑了多久」从 spawn 前一刻算起：到点报告的超时秒数必须是真的跑过的时长
+      const startedAt = Date.now();
       const commandFromStdin = shellConfig.commandTransport === "stdin";
       const child = spawn(
         shellConfig.shell,
@@ -373,32 +454,139 @@ export function createObservedBashOperations(
           ? null
           : createStallWatcher(record.pid, (notice) => onData(Buffer.from(notice, "utf8")), stallOptions);
 
+      /** 命令真的吐过字才置位：**不要把 spawn 本身算成「有输出」**，否则短超时永远有「输出的证据」。 */
+      let lastOutputAt: number | undefined;
+      /** 上一次采到的（或 stall watcher 采到的）进程树 CPU，作为「有没有涨」的基线。 */
+      let knownCpuMs: number | null = null;
+      let extensions = 0;
+      let timedOut = false;
+      /** 到点杀时报告的真实时长（秒）：不能再用最初声明的 `timeout`，那是一句假话。 */
+      let timeoutSeconds = 0;
+      /** 当前期限的绝对时刻，延长时只往后推迟，封在 `startedAt + hardMaxMs`。 */
+      let deadlineAt = startedAt + (timeoutMs ?? 0);
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      /** 命令已经收尾（`waitForChildProcessOutcome` 已 resolve）：异步决策不再动手。 */
+      let finished = false;
+
       const forward = (chunk: Buffer) => {
+        lastOutputAt = Date.now();
         stall?.noteData();
         onData(chunk);
       };
       child.stdout?.on("data", forward);
       child.stderr?.on("data", forward);
 
-      let timedOut = false;
-      let timeoutHandle: NodeJS.Timeout | undefined;
+      const clearDeadline = () => {
+        if (timeoutHandle !== undefined) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = undefined;
+        }
+      };
+
+      const armDeadline = () => {
+        clearDeadline();
+        // 定时器一个就够：延长时重挂到新期限，不做轮询；finally 里统一清掉
+        timeoutHandle = setTimeout(() => {
+          void onDeadline();
+        }, Math.max(0, deadlineAt - Date.now()));
+      };
+
+      const killForTimeout = () => {
+        timedOut = true;
+        // 报「到点时的累计期限」，而不是最初声明的值：延长过以后，
+        // 「timed out after 1800 seconds」就是一句假话。也不用测量延迟后的 elapsed——
+        // 我们自己的 CPU 采样（Windows 约 1s）不该算成命令跑过的时间。
+        timeoutSeconds = Math.max(1, Math.round((deadlineAt - startedAt) / 1000));
+        if (child.pid !== undefined) killProcessTree(child.pid);
+      };
+
+      /**
+       * 这次到点，进程树是不是还在烧 CPU。只看「现在 - 最近一次已知值」，
+       * 拿不到基线 / 采不到 / 树变小（pid 复用、中间层退出）一律判「没证据」——
+       * 与停滞判据同一条原则：宁可漏报延长，不可凭猜测续命。
+       */
+      const hasCpuProgress = async (pid: number): Promise<boolean> => {
+        // 基线只能来自「此前真采过的一次数值」（停滞观察器在静默 30s/90s 时采的那两次，
+        // 或我们上一次到点时的采样）。**没有基线就不采**：单次数值证明不了「在涨」，
+        // 而 Windows 一次快照要 1s，花它去猜没有意义。
+        const known = knownCpuMs ?? stall?.lastCpuMs() ?? null;
+        if (known === null) return false;
+        let current: number | null;
+        try {
+          current = await sampleCpuMs(pid);
+        } catch {
+          current = null;
+        }
+        if (current === null) return false;
+        knownCpuMs = current;
+        if (!(current - known > 0)) return false;
+        return current - known >= cpuDeltaMs;
+      };
+
+      /**
+       * 到点决策（不再「到点即杀」）。顺序按成本：先判不能延长的硬条件，再看输出
+       * （零成本），最后才采进程树 CPU（Windows 一次约 1s，utility 进程所有会话共用）。
+       *
+       * **声明值也延长**（刻意的取舍）：模型自己填 `timeout: 600` 也会在到点时按证据延
+       * 长。杀掉一条在干活的命令比多花十分钟更亏，而延长是可见的（模型能看到那条记录），
+       * 总时长又封在 `hardMaxMs` 里——所以宁可多给一档，不要扔掉已经跑了一半的活。
+       */
+      const onDeadline = async () => {
+        timeoutHandle = undefined;
+        if (finished) return;
+        const totalMs = Date.now() - startedAt;
+        // 1) 天花板与次数先用完就用完：不再看证据，直接杀
+        if (totalMs >= hardMaxMs || extensions >= maxExtensions) {
+          killForTimeout();
+          return;
+        }
+        // 2) 证据：最近有输出，或进程树还在涨 CPU
+        const outputFresh = lastOutputAt !== undefined && Date.now() - lastOutputAt <= recentOutputMs;
+        const pid = child.pid;
+        const cpuBusy = !outputFresh && pid !== undefined ? await hasCpuProgress(pid) : false;
+        // 采样期间命令自己结束了，或被 abort 了：交给收尾逻辑，不要在这里延长 / 杀
+        if (finished || signal?.aborted === true) return;
+        if (!outputFresh && !cpuBusy) {
+          killForTimeout();
+          return;
+        }
+        // 3) 延长：计数 +1，期限取「当前 + 一档」与天花板里更早的那个
+        const previousDeadline = deadlineAt;
+        const nextDeadline = Math.min(previousDeadline + extendByMs, startedAt + hardMaxMs);
+        // 期限已经推不动（定时器比 deadline 早醒几毫秒、天花板已到）→ 不假装延长，直接杀
+        if (!(nextDeadline > previousDeadline)) {
+          killForTimeout();
+          return;
+        }
+        extensions += 1;
+        deadlineAt = nextDeadline;
+        armDeadline();
+        onData(
+          Buffer.from(
+            extensionNotice(
+              Math.round((previousDeadline - startedAt) / 1000),
+              Math.round((deadlineAt - startedAt) / 1000),
+              extensions,
+              maxExtensions,
+            ),
+            "utf8",
+          ),
+        );
+      };
+
       const onAbort = () => {
         if (child.pid !== undefined) killProcessTree(child.pid);
       };
 
       try {
-        if (timeoutMs !== undefined) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            if (child.pid !== undefined) killProcessTree(child.pid);
-          }, timeoutMs);
-        }
+        if (timeoutMs !== undefined) armDeadline();
         if (signal !== undefined) {
           if (signal.aborted) onAbort();
           else signal.addEventListener("abort", onAbort, { once: true });
         }
 
         const outcome = await waitForChildProcessOutcome(child);
+        finished = true;
         if (outcome.reason === "grace" && record !== undefined) {
           const descendants = await findLiveDescendants(record.pid);
           if (descendants.length > 0) {
@@ -409,11 +597,12 @@ export function createObservedBashOperations(
 
         // 顺序与 pi 一致：先看 abort，再看 timeout（两者可能同时成立，文案以 abort 为准）
         if (signal?.aborted) throw new Error("aborted");
-        if (timedOut) throw new Error(`timeout:${timeout}`);
+        if (timedOut) throw new Error(`timeout:${timeoutSeconds}`);
         return { exitCode: outcome.exitCode };
       } finally {
+        finished = true;
         if (stall !== null) stall.stop();
-        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+        clearDeadline();
         if (signal !== undefined) signal.removeEventListener("abort", onAbort);
         // 有活后代的条目留着（应用退出还要补刀）；其余立刻删，登记表不随调用次数增长
         if (record !== undefined && record.descendants.length === 0) {

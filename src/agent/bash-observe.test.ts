@@ -102,6 +102,18 @@ function longRunningWithOwnPid(pidFile: string): string {
   );
 }
 
+/**
+ * 一条「记下自己的 pid、每 100ms 吐一行、永不自己结束」的命令。
+ * 到点延长的测试要同时满足两个条件：有稳定输出（证据一成立），以及被杀后能被探测到死亡。
+ */
+function tickingWithOwnPid(pidFile: string): string {
+  const target = pidFile.replace(/\\/g, "/");
+  return (
+    `node -e "require('node:fs').writeFileSync(process.argv[1], String(process.pid));` +
+    `let i=0;setInterval(()=>{console.log('tick',++i)},100)" "${target}"`
+  );
+}
+
 const observedOps = (): BashOperations => createObservedBashOperations(() => getShellConfig());
 
 describe("与 pi 内建执行后端差分", () => {
@@ -280,6 +292,182 @@ describe("停滞提示（只提示、绝不杀）", () => {
       assert.doesNotMatch(output, /\[orbita\]/);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("到点决策：有进展就延长，没进展照旧杀", () => {
+  /**
+   * 线上是 10 分钟一档 / 最多两次 / 60 分钟天花板，测试等不起，全部压到毫秒级。
+   * 写法与 `fastStall` 同一个模式：只动阈值，不动判据。
+   */
+  const fastExtend = { extendByMs: 1_000, maxExtensions: 5, recentOutputMs: 5_000 };
+
+  test("有进展：一直吐字 → 不抛 timeout、退出码 0，输出里有延长记录", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-extend-"));
+    try {
+      // 32 拍 ≈ 3.2 秒：初始超时 1 秒，靠不断延长活到自然结束
+      const command =
+        'node -e "let i=0;const t=setInterval(()=>{console.log(\'tick\',++i);if(i>=32){clearInterval(t)}},100)"';
+      const ops = createObservedBashOperations(() => getShellConfig(), {}, {
+        ...fastExtend,
+        hardMaxMs: 10_000,
+        // 输出证据已经成立，不应再花一次进程表快照；真采样就返回「判不了」
+        sampleCpuMs: async () => null,
+      });
+      const startedAt = Date.now();
+      const { exitCode, output } = await run(ops, command, { cwd: dir, timeout: 1 });
+      const elapsed = Date.now() - startedAt;
+      assert.equal(exitCode, 0, `延长不是失败：命令自己跑完了（实测 ${elapsed}ms）`);
+      assert.ok(elapsed >= 3_000, `必须真的活过初始的 1 秒（实测 ${elapsed}ms）`);
+      assert.match(output, /tick 32/);
+      assert.match(
+        output,
+        /\[orbita\] 已到 1 秒上限，但命令仍在输出\/消耗 CPU，延长至 2 秒（第 1\/5 次）/,
+      );
+    } finally {
+      await rmTemp(dir);
+    }
+  });
+
+  test("没进展：不吐字、CPU 也不涨 → 照旧杀，秒数是实际跑过的时长", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-extend-"));
+    const pidFile = join(dir, "pid.txt");
+    try {
+      const chunks: Buffer[] = [];
+      const ops = createObservedBashOperations(() => getShellConfig(), {}, {
+        ...fastExtend,
+        // 恒定值 = 没有增长：这正是「真卡死」在 CPU 上的样子
+        sampleCpuMs: async () => 0,
+      });
+      const pending = ops.exec(longRunningWithOwnPid(pidFile), dir, {
+        onData: (chunk) => chunks.push(chunk),
+        timeout: 1,
+      });
+      // 先挂断言再等 pid：不挂的话 1 秒后的拒绝会变成 unhandled rejection
+      const rejection = assert.rejects(pending, { message: "timeout:1" });
+      const pid = await waitForPid(pidFile, 2_800);
+      await rejection;
+      assert.ok(await waitForDeath(pid), `超时后 pid ${pid} 仍然活着`);
+      assert.doesNotMatch(Buffer.concat(chunks).toString("utf8"), /\[orbita\] 已到/);
+    } finally {
+      await rmTemp(dir);
+    }
+  });
+
+  test("次数上限：maxExtensions=1，延长一次后到点仍被杀", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-extend-"));
+    const pidFile = join(dir, "pid.txt");
+    try {
+      const ops = createObservedBashOperations(() => getShellConfig(), {}, {
+        extendByMs: 1_000,
+        maxExtensions: 1,
+        recentOutputMs: 5_000,
+        hardMaxMs: 60_000,
+        sampleCpuMs: async () => null,
+      });
+      const chunks: Buffer[] = [];
+      const pending = ops.exec(tickingWithOwnPid(pidFile), dir, {
+        onData: (chunk) => chunks.push(chunk),
+        timeout: 1,
+      });
+      // 1s 到点延长到 2s，2s 到点次数已用完 → 杀，报实际时长 2 秒
+      const rejection = assert.rejects(pending, { message: "timeout:2" });
+      const pid = await waitForPid(pidFile, 2_800);
+      await rejection;
+      assert.ok(await waitForDeath(pid), `次数用完后 pid ${pid} 仍然活着`);
+      const output = Buffer.concat(chunks).toString("utf8");
+      assert.match(output, /延长至 2 秒（第 1\/1 次）/);
+      assert.doesNotMatch(output, /第 2\/1 次/);
+    } finally {
+      await rmTemp(dir);
+    }
+  });
+
+  test("天花板：HARD_MAX 封顶，一直有输出也照样到点被杀", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-extend-"));
+    const pidFile = join(dir, "pid.txt");
+    try {
+      const ops = createObservedBashOperations(() => getShellConfig(), {}, {
+        // 一档 60 秒、次数几乎无限：只有天花板能拦住它
+        extendByMs: 60_000,
+        maxExtensions: 100,
+        recentOutputMs: 5_000,
+        hardMaxMs: 2_400,
+        sampleCpuMs: async () => null,
+      });
+      const chunks: Buffer[] = [];
+      const startedAt = Date.now();
+      const pending = ops.exec(tickingWithOwnPid(pidFile), dir, {
+        onData: (chunk) => chunks.push(chunk),
+        timeout: 1,
+      });
+      // 1s 到点被延长到天花板（2.4s）为止，此后下一次到点直接杀
+      const rejection = assert.rejects(pending, { message: "timeout:2" });
+      const pid = await waitForPid(pidFile, 2_000);
+      await rejection;
+      const elapsed = Date.now() - startedAt;
+      assert.ok(elapsed >= 2_300, `必须跑到天花板才被杀（实测 ${elapsed}ms）`);
+      assert.ok(await waitForDeath(pid), `到达天花板后 pid ${pid} 仍然活着`);
+      // 延长目标被天花板截住：报的是 2 秒，而不是「当前 + 60 秒」
+      assert.match(Buffer.concat(chunks).toString("utf8"), /延长至 2 秒（第 1\/100 次）/);
+    } finally {
+      await rmTemp(dir);
+    }
+  });
+
+  test("abort 与到点同时发生 → aborted 优先，不看证据", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-extend-"));
+    const pidFile = join(dir, "pid.txt");
+    try {
+      const controller = new AbortController();
+      const ops = createObservedBashOperations(() => getShellConfig(), {}, {
+        ...fastExtend,
+        hardMaxMs: 10_000,
+        sampleCpuMs: async () => null,
+      });
+      const pending = ops.exec(tickingWithOwnPid(pidFile), dir, {
+        onData: () => {},
+        timeout: 1,
+        signal: controller.signal,
+      });
+      const rejection = assert.rejects(pending, { message: "aborted" });
+      const pid = await waitForPid(pidFile, 2_000);
+      // 掐在到点那一刻：无论谁先跑，文案都必须是 aborted
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      controller.abort();
+      await rejection;
+      assert.ok(await waitForDeath(pid), `abort 后 pid ${pid} 仍然活着`);
+    } finally {
+      await rmTemp(dir);
+    }
+  });
+
+  test("没有新输出、但进程树还在涨 CPU → 仍延长（证据二）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-extend-"));
+    try {
+      let sampled = 0;
+      const sampleCpuMs = async (): Promise<number | null> => {
+        sampled += 400;
+        return sampled;
+      };
+      const ops = createObservedBashOperations(
+        () => getShellConfig(),
+        // 快速停滞观察：它在静默 100ms/300ms 时先采两次，正好给延长决策留下基线
+        { quietMs: 100, confirmMs: 200, sampleCpuMs },
+        { extendByMs: 1_500, maxExtensions: 5, recentOutputMs: 200, hardMaxMs: 10_000, sampleCpuMs },
+      );
+      // 完全静默地跑 2.5 秒：输出证据不成立，只有 CPU 在涨
+      const { exitCode, output } = await run(ops, 'node -e "setTimeout(() => {}, 2500)"', {
+        cwd: dir,
+        timeout: 1,
+      });
+      assert.equal(exitCode, 0, "靠 CPU 证据延长，命令自己跑完后退出码仍是 0");
+      assert.match(output, /\[orbita\] 已到 1 秒上限/);
+      // CPU 一直在涨 → 停滞判据不成立，不该出现「本命令有 N 秒无输出」的提示
+      assert.doesNotMatch(output, /本命令有 \d+ 秒无输出/);
+    } finally {
+      await rmTemp(dir);
     }
   });
 });

@@ -99,6 +99,14 @@ export interface StallWatcher {
   noteData(): void;
   /** 命令结束（`finally`）必须调用：清掉定时器，否则 Node 进程不退出。 */
   stop(): void;
+  /**
+   * 最近一次成功的进程树 CPU 采样（毫秒），一次都没采到返回 `null`。
+   *
+   * 只读快照，**不改变观察器语义**：到点延长（见 `./bash-observe.ts`）需要一个
+   * 「此前某个时刻的 CPU」作基线，而观察器在静默 30s/90s 时已经采过两次——
+   * 复用它，就不必为了拿一次基线在每条命令上额外付一次进程表快照（Windows 约 1s）。
+   */
+  lastCpuMs(): number | null;
 }
 
 /**
@@ -120,6 +128,8 @@ export function createStallWatcher(
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
   let lastDataAt = Date.now();
+  /** 最近一次成功的采样值，只给 `lastCpuMs()` 读，不参与判定。 */
+  let lastSampleMs: number | null = null;
   /** S0 已取：此后任何输出都说明它在动，放弃整条命令的观察（也保证最多两次采样）。 */
   let armed = false;
 
@@ -145,7 +155,9 @@ export function createStallWatcher(
 
   const sample = async (): Promise<number | null> => {
     try {
-      return await sampleCpuMs(pid);
+      const value = await sampleCpuMs(pid);
+      if (value !== null) lastSampleMs = value;
+      return value;
     } catch {
       // 采样失败 = 判不了；绝不让它影响命令本身
       return null;
@@ -201,5 +213,8 @@ export function createStallWatcher(
       scheduleQuiet();
     },
     stop,
+    lastCpuMs() {
+      return lastSampleMs;
+    },
   };
 }
