@@ -31,12 +31,17 @@ import {
 import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
 import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import {
+  commandTimeoutNotice,
   createToolCallGate,
   describePermissionMode,
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
+import {
+  COMMAND_TIMEOUT_DEFAULT_SECONDS,
+  COMMAND_TIMEOUT_FLOOR_SECONDS,
+  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+} from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { nonInteractivePrefixFor } from "./shell-env.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
@@ -767,23 +772,23 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
 /**
  * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
  * 给慢命令带上 60 秒这种小值（2026-10-01 统计：60s ×128、30s ×27、10s ×12），
- * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉——短命令不受影响，只要求慢命令
- * 别自己设短超时。
+ * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉。
  *
- * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
- * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
+ * 三档数字全部来自 permission 层的常量（同一份真源）：不填不再等于「无上限」——闸门给
+ * 默认值（`DEFAULT`），声明值封顶 `HARD_MAX`，低于 `FLOOR` 的会被抬上来。最后一句必须
+ * 留着：达到上限时 pi 是**杀进程**，活真的会被扔掉，模型需要知道这件事可能发生。
  *
- * 后两句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
- * 用 bash 跑——bash 没有默认超时，又不给人看中途输出，模型只能等到它自己退出（实测
- * 有跑过 3.7 小时的）；要看、要打断就走 terminal_*。真要在 bash 里跑长任务则要求显式
- * 给 timeout：前者讲「别给慢命令短超时」，这里讲「无上限的长任务要自己设上限」。
+ * 后一句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
+ * 用 bash 跑——不给人看中途输出，模型只能等它自己退出（实测有跑过 3.7 小时的），
+ * 而 bash 的上限是「兜底」不是「使用方式」。要看、要打断就走 terminal_*。
  */
 const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway. ` +
-  "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
-  "If a long task really has to run in bash, pass an explicit timeout in seconds: bash has no default timeout, so a command that never exits blocks the turn.";
-
+  "For commands that may take a while (installing dependencies, builds, tests), you may omit timeout: " +
+  `bash/powershell then run under a default ${COMMAND_TIMEOUT_DEFAULT_SECONDS}-second cap. ` +
+  `If you know it needs longer, pass an explicit timeout in seconds (at most ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}); ` +
+  `values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
+  "A command that reaches its cap is killed and its progress is lost — do not rely on a command outliving its timeout. " +
+  "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash.";
 /**
  * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
  * 模型可以用 `expected_seconds` 告诉 UI「这条预计要跑多久」——**只影响界面**
@@ -1015,6 +1020,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
             });
+            // 命令**到点被杀**时诚实地讲一句（permission.ts 的 commandTimeoutNotice）：默认上限
+            // 是我们补的，模型不知道有它，不告诉它就会原样重发同一条、再等一轮超时。
+            // 只改 content，不动 isError——被杀确实是失败。
+            pi.on("tool_result", (event) => commandTimeoutNotice(event));
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。

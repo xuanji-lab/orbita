@@ -8,15 +8,19 @@
  * 包装的路子当时还写错了（`createAgentSession` 的 `tools` 是**名字白名单**，
  * 不是工具对象数组，传对象进去等于一个工具都没装上）。
  *
- * 这层因此只剩一件事：把「模式 + 用户回答」翻成 pi 的 ToolCallEventResult。
+ * 这层因此只剩一件事：把「模式 + 用户回答」翻成 pi 的 ToolCallEventResult——外加同一条
+ * 边界上的命令超时闸门（入参侧夹紧 / 补默认，结果侧把「被上限杀掉了」说给模型听）。
  */
 import {
   decidePermission,
+  COMMAND_TIMEOUT_DEFAULT_SECONDS,
   COMMAND_TIMEOUT_FLOOR_SECONDS,
+  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
 import { isAbsolute, relative, resolve } from "node:path";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
 /**
@@ -120,32 +124,127 @@ const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 
 /**
- * 模型自填的命令超时**下限**（秒）：低于它的 `timeout` 抬到它，不填就不动。
+ * 命令超时闸门的**入参侧**：把 `timeout` 夹进 [FLOOR, HARD_MAX]，不填补 DEFAULT。
  *
- * pi 的 bash 工具**没有系统超时**（`MAX_TIMEOUT_SECONDS` 是 2147483.647 秒，约 24 天），
- * 唯一的秒表就是 schema 里那个可选 `timeout` 参数——**由模型自己填**。它会填一个保守的
- * 小值（2026-10-01 统计全部会话：60s ×128、30s ×27、10s ×12；2026-10-04 复查，填过的共
- * 1,812 次），于是慢命令被自己的秒表拦腰砍掉：全仓 grep、依赖安装、构建、测试在 Windows 上
- * 本来就慢。**代价不是「命令失败」，是白等一分钟再重试**——进程重开、环境重热、从头再跑。
- * 系统提示词里那句「不要传 timeout」拦不住，所以这里兜底。
+ * 背景两件事，方向相反，所以是三档数而不是一个数：
  *
- * **只升不降**：不填 = 不设超时，那是**最宽**的选择，抬它反而变窄；填得比下限大
- * （900s）是模型自己的判断，尊重它。非法值（≤ 0 / 非有限数）不在这里修——
- * pi 自己会报「Invalid timeout」，我们不替它做第二套校验。
+ * 1. **模型会自伤**：pi 的 bash 没有系统超时，唯一的秒表是 schema 里那个可选 `timeout`，
+ *    由模型自己填。它常填保守的小值（2026-10-01 统计：60s ×128、30s ×27、10s ×12），
+ *    慢命令被自己的秒表拦腰砍掉，代价是白等一分钟再从头跑。→ 抬到 FLOOR。
+ * 2. **不填 = 无上限**：实测最近 60 个会话里 12 次 bash 跑过 30 分钟（最长 3.7 小时），
+ *    这 12 次吃掉全部 bash 墙上时间的 41%，其中大半是永不退出的探针 / 实例脚本。
+ *    → 不填补 DEFAULT，声明值封顶 HARD_MAX。
  *
- * 常量本体在 shared/permission.ts（闸门与 renderer 的「上限」显示同源：闸门改的是
- * clone、不回写入参，显示若不套同一条规则，模型填 60 时界面说「上限 1:00」、
- * 实际跑在 10 分钟上）。提示词那段话也引它：同一个数有两处真源的话，改了常量提示词还说着旧数。
+ * **非法值不修**（≤0 / 非有限数 / 字符串 / null）：pi 自己会报 `Invalid timeout`，
+ * 我们不替它做第二套校验——原样放过去让 pi 报错，模型才知道自己填错了。
+ *
+ * 返回本次决定（`effective` = 真正会用的秒数，`declared` = 模型是否自己给了合法值）。
+ * 决定要留到 `tool_result` 才能用：到点被杀的证据只在结果里，而那时入参对象早没了。
+ * 常量本体在 shared/permission.ts（renderer 的「上限」显示与提示词都引它）。
  */
-
-/** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。闸门内部用，行为经 `createToolCallGate` 测。 */
-function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
-  if (!COMMAND_TOOLS.has(toolName)) return;
-  const timeout = input["timeout"];
-  if (typeof timeout !== "number" || !Number.isFinite(timeout)) return;
-  if (timeout > 0 && timeout < COMMAND_TIMEOUT_FLOOR_SECONDS) {
-    input["timeout"] = COMMAND_TIMEOUT_FLOOR_SECONDS;
+function boundCommandTimeout(
+  toolName: string,
+  input: Record<string, unknown>,
+): CommandTimeoutDecision | null {
+  if (!COMMAND_TOOLS.has(toolName)) return null;
+  const raw = input["timeout"];
+  if (raw === undefined) {
+    input["timeout"] = COMMAND_TIMEOUT_DEFAULT_SECONDS;
+    return { effective: COMMAND_TIMEOUT_DEFAULT_SECONDS, declared: false };
   }
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return null;
+  const effective = Math.min(Math.max(raw, COMMAND_TIMEOUT_FLOOR_SECONDS), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  input["timeout"] = effective;
+  return { effective, declared: true };
+}
+
+/**
+ * 一次命令调用实际用的超时（夹紧 / 补默认之后），以及「模型说没说」。
+ * 默认值是我们补的，模型对此一无所知——到点被杀时它有资格被告知（见
+ * `commandTimeoutNotice`）。
+ */
+export interface CommandTimeoutDecision {
+  /** 真正交给 pi 的秒数 */
+  effective: number;
+  /** 模型自己给了合法值（false = 我们补的默认值，或我们夹的上限） */
+  declared: boolean;
+}
+
+/**
+ * 在途命令的超时决定（toolCallId → 决定）。
+ *
+ * 为什么需要这张表：`tool_call` 里算出的决定，到 `tool_result` 时入参对象已经不可靠
+ * （pi 传的是另一份 `input`，而我们需要知道的是「这个数是不是我们替它定的」）。
+ * 只在**放行**时才写入——被拒的调用 pi 直接走 `immediate` 分支、不会触发 `tool_result`，
+ * 写进去就永远没人取（长跑进程里无限增长的坑）。
+ */
+const commandTimeouts = new Map<string, CommandTimeoutDecision>();
+
+/** 取走一次命令的决定（取用即删：这张表是「在途」表，不是历史）。 */
+export function takeCommandTimeoutDecision(toolCallId: string): CommandTimeoutDecision | undefined {
+  const decision = commandTimeouts.get(toolCallId);
+  commandTimeouts.delete(toolCallId);
+  return decision;
+}
+
+/** pi 的 `tool_result` 事件里我们用得上的部分（与 `ToolCallLike` 同一套窄声明）。 */
+export interface ToolResultLike {
+  toolCallId: string;
+  toolName: string;
+  content: (TextContent | ImageContent)[];
+  isError: boolean;
+}
+
+/** 我们返回给 pi 的替换：只改 content，`isError` 保持它自己的判断（被杀确实是失败）。 */
+export interface ToolResultPatch {
+  content: (TextContent | ImageContent)[];
+}
+
+/** pi 的 bash / powershell 超时错误尾巴（bash.js：`Command timed out after ${timeoutSecs} seconds`）。 */
+const TIMEOUT_ERROR_PATTERN = /Command timed out after (\d+) seconds/;
+
+/**
+ * 命令超时闸门的**结果侧**：被我们设的上限杀掉时，把「活被扔了」这件事说给模型听。
+ *
+ * 为什么必须有这一句：pi 的超时只能**杀进程**（做不到 dsh / ZCode 那样转后台），而被杀
+ * 命令的进度全部作废；结果是模型自己补的默认值时，它甚至不知道自己有 30 分钟的上限，
+ * 只会看到一条「Command timed out」然后原样重试同一条命令——再来 30 分钟，同样失败。
+ *
+ * 只在两种情况下开口：**默认值是我们补的**（模型不知道有这么个上限），或**被我们夹到了
+ * HARD_MAX**（模型说的是更大，实际只有 3600）。模型自己声明的合法值照它说的执行、失败是
+ * 它自己的判断，不啰嗦。
+ *
+ * 无论说不说，取用后条目都删掉——`tool_result` 是这个 toolCallId 的最后一站。
+ */
+export function commandTimeoutNotice(event: ToolResultLike): ToolResultPatch | undefined {
+  const decision = takeCommandTimeoutDecision(event.toolCallId);
+  if (!COMMAND_TOOLS.has(event.toolName)) return undefined;
+  if (decision === undefined) return undefined;
+  if (!event.isError) return undefined;
+  if (decision.declared && decision.effective !== COMMAND_TIMEOUT_HARD_MAX_SECONDS) return undefined;
+  const hit = TIMEOUT_ERROR_PATTERN.exec(textOf(event.content));
+  if (hit === null) return undefined;
+  const seconds = hit[1];
+  return {
+    content: [
+      ...event.content,
+      {
+        type: "text",
+        text:
+          `\n\n[orbita] 这条命令在 ${seconds} 秒上限处被终止，输出不完整，先前的进度可能已经丢失。` +
+          `若任务本身确实需要更久，请在调用时显式传 timeout（秒，最多 ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}），` +
+          "或改用 terminal_* 工具。",
+      },
+    ],
+  };
+}
+
+/** 结果的文本部分（图片块没有文字，跳过）。 */
+function textOf(content: (TextContent | ImageContent)[]): string {
+  return content
+    .filter((block): block is TextContent => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
 }
 
 /**
@@ -238,6 +337,11 @@ export interface PiExtensionApi {
     event: "tool_call",
     handler: (event: ToolCallLike) => ToolCallGateResult | Promise<ToolCallGateResult>,
   ): void;
+  /** 工具执行完（含失败）触发；返回 content 替换掉工具结果原文（上游契约 ToolResultEventResult） */
+  on(
+    event: "tool_result",
+    handler: (event: ToolResultLike) => ToolResultPatch | undefined,
+  ): void;
   on(
     event: "before_agent_start",
     handler: (event: { systemPrompt: string }) => { systemPrompt: string } | void,
@@ -270,9 +374,12 @@ export type ContextBudgetMessage = ContextMessage;
  *
  * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
  *
- * 顺序上讲一句：参数兜底（`raiseCommandTimeout`）跑在**所有早退之前**，而用户在审批卡片里
+ * 顺序上讲一句：参数兜底（`boundCommandTimeout`）跑在**所有早退之前**，而用户在审批卡片里
  * 改的入参跑在**最后**——两条都是原地改，含义不同：兜底是防模型失手，人工明确填的秒表
  * 是当事人自己的选择，不以兜底覆盖它。
+ *
+ * 超时决定只在**放行**那条路上记账（给 `tool_result` 侧的 `commandTimeoutNotice` 用）：
+ * 被拒的调用不执行、也不会触发 `tool_result`，记了没人取。
  */
 export function createToolCallGate(
   getMode: () => PermissionMode,
@@ -283,11 +390,18 @@ export function createToolCallGate(
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
     // 放行）就漏掉了——而那正是模型填小超时的场景。
-    raiseCommandTimeout(event.toolName, event.input);
+    const timeout = boundCommandTimeout(event.toolName, event.input);
+    // 记下「这条命令会跑多久、是不是我们替它定的」，tool_result 侧要靠它说话
+    const recordTimeout = () => {
+      if (timeout !== null) commandTimeouts.set(event.toolCallId, timeout);
+    };
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
     if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);
-    if (decision.behavior === "allow") return {};
+    if (decision.behavior === "allow") {
+      recordTimeout();
+      return {};
+    }
     if (decision.behavior === "deny") return { block: true, reason: decision.message };
 
     const answer = await ask(event);
@@ -299,6 +413,7 @@ export function createToolCallGate(
       for (const key of Object.keys(event.input)) delete event.input[key];
       Object.assign(event.input, answer.input as Record<string, unknown>);
     }
+    recordTimeout();
     return {};
   };
 }

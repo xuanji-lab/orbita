@@ -33,14 +33,31 @@ export function atMostManual(mode: PermissionMode): PermissionMode {
 }
 
 /**
- * bash / powershell 的 timeout 下限（秒）：模型自填的小值会被权限闸门抬到这里
- * （只升不降；闸门改的是 pi 传进来的入参对象、不回写会话记录，完整理由见
- * `src/agent/permission.ts`）。**放 shared 是为了 UI 同源**：renderer 的「上限」
- * 显示读的是模型原始入参，不套同一条规则的话，模型填 60 时界面说「上限 1:00」、
- * 实际跑在 10 分钟上——界面对用户撒谎。规则与闸门一字不差：不填不动、填大尊重、
- * 非法（≤0 / 非有限数）不修。
+ * bash / powershell 的 timeout 三档数（秒）。闸门（`src/agent/permission.ts`）与
+ * renderer 的「上限」显示（`tool-results.ts`）读同一份：闸门改的是 pi 传进来的入参对象、
+ * 不回写会话记录，显示若不套同一条规则，模型填 60 时界面说「上限 1:00」、实际跑在
+ * 10 分钟上——界面对用户撒谎。
+ *
+ * - `FLOOR`（600）：**下限**。模型自填的小值抬到这里——它常填 60s / 30s / 10s，
+ *   慢命令被自己的秒表砍掉，代价是白等一分钟再从头跑。
+ * - `DEFAULT`（1800）：**模型不填时的上限**。pi 的 bash 没有系统超时（唯一可设的是
+ *   那个可选 `timeout` 参数，2147483 秒 ≈ 24 天），不填等于允许一条命令跑到天荒地老：
+ *   实测最近 60 个会话里 12 次 bash 跑过 30 分钟（最长 3.7 小时），吃掉全部 bash 墙上
+ *   时间的 41%。所以「不填」从此也是 30 分钟封顶。
+ * - `HARD_MAX`（3600）：**声明值的天花板**。模型（或人在审批卡片里）说要更久，最多到这里。
+ *
+ * **为什么默认值比 dsh / ZCode 的 120s 大得多**：它们到点**不杀进程**，只把控制权交还、
+ * 转后台任务接着跑；我们只有 pi 的 `timeout`，到点就是 `killProcessTree`，活直接扔了
+ * （dsh 的复盘原话：被前台超时杀掉的命令，其工作全部作废，是长构建失败最常见的原因）。
+ * 既然代价是「扔掉正在干的活」，窗口就得给足；而合法的长命令确实存在——实测里 44 分钟
+ * 那条是验收脚本，自己声明了 `timeout=2900`。所以：不填 30 分钟、声明最多 60 分钟。
+ *
+ * 非法值（≤0 / 非有限数 / 字符串 / null）**不在这里修**：pi 自己会报 `Invalid timeout`，
+ * 我们不替它做第二套校验。三处（闸门、显示、提示词）的规则必须一字不差。
  */
 export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
+export const COMMAND_TIMEOUT_DEFAULT_SECONDS = 1800;
+export const COMMAND_TIMEOUT_HARD_MAX_SECONDS = 3600;
 
 export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hint: string }> = {
   plan: { label: "Plan", hint: "Read-only. Writing and shell are refused." },

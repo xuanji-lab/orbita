@@ -1,7 +1,19 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createToolCallGate, type ToolCallLike } from "./permission.ts";
-import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import {
+  commandTimeoutNotice,
+  createToolCallGate,
+  takeCommandTimeoutDecision,
+  type ToolCallLike,
+  type ToolResultLike,
+} from "./permission.ts";
+import {
+  COMMAND_TIMEOUT_DEFAULT_SECONDS,
+  COMMAND_TIMEOUT_FLOOR_SECONDS,
+  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+  type PermissionAnswer,
+  type PermissionMode,
+} from "../shared/permission.ts";
 
 function gateFor(mode: PermissionMode, answer?: PermissionAnswer) {
   const asked: ToolCallLike[] = [];
@@ -17,6 +29,11 @@ function gateFor(mode: PermissionMode, answer?: PermissionAnswer) {
 
 function event(toolName: string, input: Record<string, unknown> = {}): ToolCallLike {
   return { toolCallId: "c1", toolName, input };
+}
+
+/** 取走闸门记下的决定（取用即删，顺带把「表不会长住」也验了） */
+function takeDecision(toolCallId: string) {
+  return takeCommandTimeoutDecision(toolCallId);
 }
 
 describe("createToolCallGate", () => {
@@ -85,14 +102,14 @@ describe("createToolCallGate", () => {
 });
 
 /**
- * 命令超时兜底。背景：pi 的 bash 工具没有系统超时（上限 2147483.647 秒），唯一的时间是
- * 模型自己填的 `timeout`。它经常填保守的小值（60s / 30s / 10s，2026-10-01 统计），
- * 慢命令就被自己的秒表砍掉——白等一分钟再重试。
+ * 命令超时闸门。背景：pi 的 bash 工具没有系统超时（上限 2147483.647 秒），唯一的时间是
+ * 模型自己填的 `timeout`。两个方向都要管：它经常填保守的小值（60s / 30s / 10s，2026-10-01
+ * 统计），慢命令就被自己的秒表砍掉；不填则**完全无上限**（实测有命令跑 3.7 小时）。
  *
- * 抬升函数不导出（消费者纪律：测试不算真实调用点），全部经闸门测——顺带连「跑在
+ * 夹紧函数不导出（消费者纪律：测试不算真实调用点），全部经闸门测——顺带连「跑在
  * 早退之前」的顺序也一起被钉住。
  */
-describe("命令超时兜底（经 createToolCallGate）", () => {
+describe("命令超时闸门（经 createToolCallGate）", () => {
   /** 只看 `timeout` 一个键，其余原样返回，断言好写。skip 档直达放行，input 被原地抬 */
   async function clampedTimeout(toolName: string, timeout: unknown): Promise<unknown> {
     const { gate } = gateFor("skip");
@@ -113,14 +130,37 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
     assert.equal(await clampedTimeout("powershell", 10), 600);
   });
 
-  test("不填不动——不设超时是最宽的选择，抬它反而变窄", async () => {
-    assert.equal(await clampedTimeout("bash", undefined), undefined);
+  test("不填 → 补默认上限（本 PR 的行为变更：不填不再是无上限）", async () => {
+    assert.equal(await clampedTimeout("bash", undefined), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+    assert.equal(await clampedTimeout("powershell", undefined), COMMAND_TIMEOUT_DEFAULT_SECONDS);
   });
 
-  test("填得比下限大就尊重模型自己的判断", async () => {
+  test("填得比下限大就尊重模型自己的判断（不超过天花板上限）", async () => {
     assert.equal(await clampedTimeout("bash", 600), 600);
     assert.equal(await clampedTimeout("bash", 900), 900);
-    assert.equal(await clampedTimeout("bash", 120000), 120000);
+    assert.equal(await clampedTimeout("bash", 2900), 2900, "实测 44 分钟的验收脚本自己声明了 2900");
+    assert.equal(await clampedTimeout("bash", COMMAND_TIMEOUT_HARD_MAX_SECONDS), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  });
+
+  test("填得比天花板大 → 夹到 HARD_MAX（声明 120000 秒，实际只给 3600）", async () => {
+    assert.equal(await clampedTimeout("bash", 99999), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+    assert.equal(await clampedTimeout("bash", 120000), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  });
+
+  test("默认值与模型声明值能区分（tool_result 侧靠这个决定要不要说话）", async () => {
+    const { gate } = gateFor("skip");
+
+    const absent = { toolCallId: "absent", toolName: "bash", input: { command: "x" } };
+    await gate(absent);
+    assert.deepEqual(takeDecision("absent"), { effective: COMMAND_TIMEOUT_DEFAULT_SECONDS, declared: false });
+
+    const declared = { toolCallId: "declared", toolName: "bash", input: { command: "x", timeout: 900 } };
+    await gate(declared);
+    assert.deepEqual(takeDecision("declared"), { effective: 900, declared: true });
+
+    const tooBig = { toolCallId: "tooBig", toolName: "bash", input: { command: "x", timeout: 99999 } };
+    await gate(tooBig);
+    assert.deepEqual(takeDecision("tooBig"), { effective: COMMAND_TIMEOUT_HARD_MAX_SECONDS, declared: true });
   });
 
   test("非法值不在这里修：pi 自己会报 Invalid timeout，不替它做第二套校验", async () => {
@@ -131,9 +171,32 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
     assert.equal(await clampedTimeout("bash", null), null);
   });
 
-  test("只动命令类工具：read 带上同名字段不碰", async () => {
+  test("只动命令类工具：read 带上同名字段不碰，也不记账", async () => {
     assert.equal(await clampedTimeout("read", 5), 5);
     assert.equal(await clampedTimeout("mcp__fs__read", 5), 5);
+
+    const { gate } = gateFor("skip");
+    await gate({ toolCallId: "notCommand", toolName: "read", input: { path: "a.ts", timeout: 5 } });
+    assert.equal(takeDecision("notCommand"), undefined);
+  });
+
+  test("被拒的调用不记账——它不会执行、也不会触发 tool_result，记了没人取（会长住）", async () => {
+    const plan = createToolCallGate(() => "plan", async () => ({ behavior: "allow" }));
+    await plan({ toolCallId: "blockedByPlan", toolName: "bash", input: { command: "x" } });
+    assert.equal(takeDecision("blockedByPlan"), undefined);
+
+    const guarded = createToolCallGate(
+      () => "skip",
+      async () => ({ behavior: "allow" }),
+      ["/secrets"],
+      "/work",
+    );
+    await guarded({ toolCallId: "blockedByPath", toolName: "bash", input: { command: "cat /secrets/a" } });
+    assert.equal(takeDecision("blockedByPath"), undefined);
+
+    const denied = createToolCallGate(() => "manual", async () => ({ behavior: "deny", message: "no" }));
+    await denied({ toolCallId: "deniedByUser", toolName: "bash", input: { command: "x" } });
+    assert.equal(takeDecision("deniedByUser"), undefined);
   });
 
   /**
@@ -176,5 +239,88 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
     const e = event("bash", { command: "bun run test", timeout: 60 });
     await gate(e);
     assert.equal(e.input["timeout"], 30);
+  });
+});
+
+/**
+ * 结果侧的诚实交代：达到上限时 pi 是**杀进程**（做不到 dsh / ZCode 那样转后台），
+ * 命令的进度全部作废。默认上限是我们补的、模型不知道有它，所以到点被杀必须说一句，
+ * 否则它只会原样重发同一条、再等一轮超时。
+ */
+describe("命令超时结果的交代（commandTimeoutNotice）", () => {
+  const timedOut = (toolCallId: string, seconds: number, toolName = "bash"): ToolResultLike => ({
+    toolCallId,
+    toolName,
+    isError: true,
+    content: [{ type: "text", text: `partial output\n\nCommand timed out after ${seconds} seconds` }],
+  });
+
+  /** 过一遍闸门，把「这条命令会跑多久、是不是我们替它定的」记进去（真实链路的顺序） */
+  async function gateCommand(toolCallId: string, input: Record<string, unknown>, toolName = "bash"): Promise<void> {
+    const { gate } = gateFor("skip");
+    await gate({ toolCallId, toolName, input });
+  }
+
+  test("默认值被杀 → 追加一段中文说明，报出的秒数是 pi 实际报的那个", async () => {
+    const id = "noticeDefault";
+    await gateCommand(id, { command: "bun run dev" });
+    const patch = commandTimeoutNotice(timedOut(id, COMMAND_TIMEOUT_DEFAULT_SECONDS));
+    assert.ok(patch, "补的默认值到点被杀，必须说话");
+    const appended = patch.content[1];
+    assert.equal(appended?.type, "text");
+    assert.match(appended?.type === "text" ? appended.text : "", /\[orbita\].*1800 秒上限处被终止/);
+    assert.match(appended?.type === "text" ? appended.text : "", /timeout/);
+    assert.equal(patch.content[0]?.type, "text", "原输出留在前面，不替换");
+    assert.equal("isError" in patch, false, "不改 isError：被杀确实是失败");
+  });
+
+  test("powershell 同一条", async () => {
+    const id = "noticePowerShell";
+    await gateCommand(id, { command: "bun run test" }, "powershell");
+    assert.ok(commandTimeoutNotice(timedOut(id, COMMAND_TIMEOUT_DEFAULT_SECONDS, "powershell")));
+  });
+
+  test("模型自己声明了 900 被杀 → 不说（那是它自己的判断）", async () => {
+    const id = "noticeDeclared";
+    await gateCommand(id, { command: "x", timeout: 900 });
+    assert.equal(commandTimeoutNotice(timedOut(id, 900)), undefined);
+  });
+
+  test("声明超过天花板（被夹到 HARD_MAX）被杀 → 说，并报出实际的 3600", async () => {
+    const id = "noticeClamped";
+    await gateCommand(id, { command: "x", timeout: 99999 });
+    const patch = commandTimeoutNotice(timedOut(id, COMMAND_TIMEOUT_HARD_MAX_SECONDS));
+    assert.ok(patch);
+    const appended = patch.content[1];
+    assert.match(appended?.type === "text" ? appended.text : "", /3600 秒上限处被终止/);
+  });
+
+  test("非超时的错误不说；而且条目取用即删，不会再被第二次命中", async () => {
+    const id = "noticeOtherError";
+    await gateCommand(id, { command: "x" });
+    const failed = {
+      toolCallId: id,
+      toolName: "bash",
+      isError: true,
+      content: [{ type: "text" as const, text: "Command exited with code 1" }],
+    };
+    assert.equal(commandTimeoutNotice(failed), undefined);
+    assert.equal(commandTimeoutNotice(timedOut(id, COMMAND_TIMEOUT_DEFAULT_SECONDS)), undefined, "条目已被取走");
+  });
+
+  test("不在表里（未经闸门的调用、或已取过）→ 不说", () => {
+    assert.equal(commandTimeoutNotice(timedOut("neverGated", 1800)), undefined);
+  });
+
+  test("被拒的调用没有记录 → 即便文本碰巧像超时也不说", async () => {
+    const plan = createToolCallGate(() => "plan", async () => ({ behavior: "allow" }));
+    await plan({ toolCallId: "blockedNotice", toolName: "bash", input: { command: "x" } });
+    assert.equal(commandTimeoutNotice(timedOut("blockedNotice", 1800)), undefined);
+  });
+
+  test("isError 为 false 的普通结果不说（文本里出现同句可能是命令自己 echo 的）", async () => {
+    const id = "noticeNotError";
+    await gateCommand(id, { command: "x" });
+    assert.equal(commandTimeoutNotice({ ...timedOut(id, 1800), isError: false }), undefined);
   });
 });

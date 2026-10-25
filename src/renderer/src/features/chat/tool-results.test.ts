@@ -4,7 +4,11 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
 import { composeChannelPrompt } from "../../../../shared/channel.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
+import {
+  COMMAND_TIMEOUT_DEFAULT_SECONDS,
+  COMMAND_TIMEOUT_FLOOR_SECONDS,
+  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+} from "../../../../shared/permission.ts";
 import {
   answerText,
   branchAnchorEntries,
@@ -1736,10 +1740,12 @@ describe("expectedSecondsOf / timeoutSecondsOf", () => {
     assert.equal(expectedSecondsOf({ command: "sleep 40", timeout: 600, expected_seconds: 40 }), 40);
     assert.equal(timeoutSecondsOf({ command: "x", timeout: 600, expected_seconds: 40 }), 600);
   });
-  test("timeout 套闸门同一条下限规则：比下限小抬到下限、填大尊重、不填不动、非法不修", () => {
+  test("timeout 套闸门同一条规则：不填补默认上限、比下限小抬到下限、填大尊重、超天花板夹住、非法不修", () => {
     assert.equal(timeoutSecondsOf({ command: "x", timeout: 60 }), COMMAND_TIMEOUT_FLOOR_SECONDS, "模型填 60，实际跑在下限上，显示也得说下限");
     assert.equal(timeoutSecondsOf({ command: "x", timeout: 900 }), 900);
-    assert.equal(timeoutSecondsOf({ command: "x" }), null, "不填 = 不设超时，不显示上限");
+    // 行为变更（2026-10-25）：不填不再是「无上限」，闸门会补 1800；界面继续说 null 就是撒谎
+    assert.equal(timeoutSecondsOf({ command: "x" }), COMMAND_TIMEOUT_DEFAULT_SECONDS, "不填 = 跑在默认上限上");
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 99999 }), COMMAND_TIMEOUT_HARD_MAX_SECONDS, "超过天花板实际只跑 3600");
     assert.equal(timeoutSecondsOf({ command: "x", timeout: -5 }), null);
     assert.equal(timeoutSecondsOf({ command: "x", timeout: "600" }), null, "字符串数字不猜");
   });
