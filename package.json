@@ -73,7 +73,8 @@
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/exceljs/**"
     ],
     "extraResources": [
       {

@@ -1855,6 +1855,7 @@ export const en = {
     xlsxEmpty: "This sheet is empty",
     xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
     xlsxBroken: "Couldn't read this workbook — it may be damaged.",
+    xlsxHiddenOnly: "Every sheet in this workbook is hidden. Right-click a sheet tab in Excel to unhide one.",
     xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,

@@ -91,12 +91,18 @@ function numberText(value: number, numFmt: string | undefined): string {
   return String(Number(value.toPrecision(15)));
 }
 
-/** 日期：Excel 的日期格是墙钟时间，按本地分量排；整天的不带时分 */
+/**
+ * 日期：Excel 的日期格是**墙钟时间**，ExcelJS 把它塞在 Date 的 UTC 字段里（实测：
+ * 表里写 2024-03-05 14:30，读回来是 `2024-03-05T14:30:00.000Z`，本地时区是 +08 时
+ * `getHours()` 会给 22:30）。所以必须用 `getUTC*` 读，用本地 getter 会把每个日期按
+ * 时区平移——UTC+8 上全体 +8 小时，连「整天」的日期都会变成 08:00。
+ * 整天的不带时分。
+ */
 function dateText(value: Date): string {
   const pad = (n: number): string => String(n).padStart(2, "0");
-  const day = `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
-  const hours = value.getHours();
-  const minutes = value.getMinutes();
+  const day = `${value.getUTCFullYear()}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`;
+  const hours = value.getUTCHours();
+  const minutes = value.getUTCMinutes();
   if (hours === 0 && minutes === 0) return day;
   return `${day} ${pad(hours)}:${pad(minutes)}`;
 }
@@ -256,13 +262,27 @@ export async function readXlsxPreview(path: string, options: XlsxReadOptions = {
     return { kind: "unreadable", reason: "corrupt", detail: failMessage(cause), size, modifiedAt };
   }
 
-  const worksheets = workbook.worksheets;
+  // 隐藏表（hidden / veryHidden）不上标签、不读数据：用户在 Excel 里把一张表藏起来，
+  // 就是不想它出现在眼前；预览不能把它俩又摊开。下标也只数可见的那几张。
+  const worksheets = workbook.worksheets.filter((worksheet) => (worksheet.state ?? "visible") === "visible");
   const first = worksheets[0];
   if (first === undefined) {
-    // 只有图表页（chartsheet）的工作簿解得出 workbook，却没有一张可预览的表
-    return { kind: "unreadable", reason: "corrupt", detail: "The workbook has no worksheet", size, modifiedAt };
+    // 没有任何可见工作表：可能是只有图表页（chartsheet），也可能全部被隐藏
+    return {
+      kind: "unreadable",
+      reason: workbook.worksheets.length === 0 ? "corrupt" : "hidden",
+      detail:
+        workbook.worksheets.length === 0
+          ? "The workbook has no worksheet"
+          : `All ${workbook.worksheets.length} worksheets are hidden`,
+      size,
+      modifiedAt,
+    };
   }
-  const active = Math.min(Math.max(options.sheet ?? 0, 0), worksheets.length - 1);
+  // 请求里的表号可能是 NaN / 小数 / 负数（renderer 传什么都不信）：夹成范围内的整数
+  const requested = options.sheet ?? 0;
+  const index = Number.isFinite(requested) ? Math.trunc(requested) : 0;
+  const active = Math.min(Math.max(index, 0), worksheets.length - 1);
   const target = worksheets[active] ?? first;
   return {
     kind: "workbook",

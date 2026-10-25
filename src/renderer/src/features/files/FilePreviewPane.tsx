@@ -212,6 +212,8 @@ export function FilePreviewPane(props: {
           />
         ) : xlsx ? (
           <XlsxView
+            // 换文件按路径重挂载：表号回到第一张，也不会拿旧表号先发一次多余请求
+            key={path}
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={xlsxReload}
             onOpenDefault={openDefault}

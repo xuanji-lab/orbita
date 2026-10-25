@@ -1700,6 +1700,7 @@ export const zh: Messages = {
     xlsxEmpty: "这张表是空的",
     xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
     xlsxBroken: "这个工作簿读不开——可能已经损坏。",
+    xlsxHiddenOnly: "这个工作簿的表全部被隐藏了。在 Excel 里右键工作表标签可以取消隐藏。",
     xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,
