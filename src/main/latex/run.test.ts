@@ -8,7 +8,7 @@
  */
 import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LatexProbe } from "./probe.ts";
@@ -51,6 +51,19 @@ function probe(available = true): LatexProbe {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+
+/** 给等结果的用例加一个硬截止，坏了要报错而不是把测试挂死 */
+async function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
 
 /** 挂死的 node 进程：不写任何日志，测总时长闸与取消用，不烧 CPU */
 const HANG = ["-e", "setTimeout(() => undefined, 60000)"];
@@ -104,32 +117,44 @@ describe("LatexRunner —— 拒绝路径", () => {
 });
 
 describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () => {
-  test("日志一直在写就不算卡住：慢编译（模拟首次 xelatex 建字体缓存）不被误杀", async () => {
+  test("日志持续增长就不算卡住：时钟只在日志增长时前进，结果与宿主负载无关", async () => {
     const dir = plainProject();
-    // 每 100ms 写一行日志、忙等 100ms，共 2 秒——比缩小的 1.2 秒静默阀持久得多
-    // （整机跑全量测试时进程会被 OS 调度延迟，阀值留的余量要大于一次调度停顿）
+    // 编译器只挂着等 .stop；日志由测试进程写、时间由注入时钟推。
+    // 两者在同一个同步回合里完成，看门狗无论何时 tick 都只能看到“刚有增长”，
+    // 永远不会累计出静默——不再依赖墙钟余量，也不受子进程调度延迟影响。
     fakeCompiler(dir, [
-      'import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";',
+      'import { existsSync, mkdirSync, writeFileSync } from "node:fs";',
       'import { join } from "node:path";',
       "const dir = process.argv[2];",
       'mkdirSync(join(dir, "build"), { recursive: true });',
-      'const log = join(dir, "build", "main.log");',
-      "for (let i = 0; i < 20; i += 1) {",
-      '  appendFileSync(log, `[${i}] 建字体缓存…\\n`);',
-      "  const end = Date.now() + 100;",
-      "  while (Date.now() < end) { /* 忙等，模拟引擎在排版 */ }",
-      "}",
+      'const stop = join(dir, ".stop");',
+      "while (!existsSync(stop)) await new Promise((done) => setTimeout(done, 10));",
+      'writeFileSync(join(dir, "build", "main.log"), "Output written on build/main.pdf (2 pages, 9 bytes).\\n");',
       'writeFileSync(join(dir, "build", "main.pdf"), "%PDF-1.4 fake\\n");',
-      'appendFileSync(log, "Output written on build/main.pdf (2 pages, 9 bytes).\\n");',
     ]);
-    const runner = new LatexRunner(probe(), { idleTimeoutMs: 1_200, totalTimeoutMs: 30_000, pollIntervalMs: 50 });
-    const started = Date.now();
-    const result = resultOf(await runner.compile({ dir }));
-    const elapsed = Date.now() - started;
+    let clock = 0;
+    const runner = new LatexRunner(probe(), {
+      idleTimeoutMs: 5_000,
+      totalTimeoutMs: 600_000,
+      pollIntervalMs: 10,
+      now: () => clock,
+    });
+    const pending = runner.compile({ dir });
+    await sleep(100);
+    mkdirSync(join(dir, "build"), { recursive: true });
+    const log = join(dir, "build", "main.log");
+    // 20 次增长、每次逻辑时间 +4 秒（< 5 秒静默阀），累计推过 80 秒：
+    // 若看门狗不认增长，第一次静默判断就会在第 2 步之后杀掉它
+    for (let i = 0; i < 20; i += 1) {
+      appendFileSync(log, `[${String(i)}] 建字体缓存…\n`);
+      clock += 4_000;
+      await sleep(5);
+    }
+    writeFileSync(join(dir, ".stop"), "");
+    const result = resultOf(await withDeadline(pending, 20_000, "编译没有在 20 秒内结束"));
     assert.equal(result.status, "ok");
     assert.equal(result.timeoutKind, null);
     assert.equal(result.pages, 2);
-    assert.ok(elapsed >= 1_900, `只跑了 ${elapsed}ms，假编译器没按预期写满日志`);
   });
 
   test("日志静默到点：杀进程树，status timeout + timeoutKind idle；文案不断言死循环", async () => {
@@ -173,25 +198,40 @@ describe("LatexRunner —— 超时（日志静默与总时长两道闸）", () 
     assert.match(result.errors[0]?.message ?? "", /没有可用的日志输出/);
   });
 
-  test("日志被轮换（删除）后：按进程存活处理，仍然只在总时长到点被杀", async () => {
+  test("日志被轮换（删除）不等于卡住：静默不累计，只在总时长到点被杀", async () => {
     const dir = plainProject();
-    fakeCompiler(dir, [
-      'import { mkdirSync, rmSync, writeFileSync } from "node:fs";',
-      'import { join } from "node:path";',
-      "const dir = process.argv[2];",
-      'mkdirSync(join(dir, "build"), { recursive: true });',
-      'const log = join(dir, "build", "main.log");',
-      'writeFileSync(log, "round one\\n");',
-      "setTimeout(() => rmSync(log, { force: true }), 300);",
-      "setTimeout(() => undefined, 60000);",
-    ]);
-    const runner = new LatexRunner(probe(), { idleTimeoutMs: 400, totalTimeoutMs: 1_200, pollIntervalMs: 50 });
-    const started = Date.now();
-    const result = resultOf(await runner.compile({ dir }));
-    const elapsed = Date.now() - started;
+    // 编译器只挂着；日志与时间都由测试驱动，不靠“删日志耗时 300ms”去和静默阀赛跑
+    fakeCompiler(dir, ["setTimeout(() => undefined, 60000);"]);
+    let clock = 0;
+    const runner = new LatexRunner(probe(), {
+      idleTimeoutMs: 5_000,
+      totalTimeoutMs: 120_000,
+      pollIntervalMs: 10,
+      now: () => clock,
+    });
+    let settled = false;
+    const pending = runner.compile({ dir });
+    void pending.then(() => {
+      settled = true;
+    });
+    await sleep(100);
+    mkdirSync(join(dir, "build"), { recursive: true });
+    const log = join(dir, "build", "main.log");
+    writeFileSync(log, "round one\n");
+    clock += 2_000; // 先让看门狗看到一次增长
+    await sleep(50);
+    rmSync(log, { force: true }); // 轮换：日志消失
+    clock = 20_000; // 逻辑上已超过 idle，但一份日志都不存在
+    await sleep(100);
+    assert.equal(settled, false, "日志被删不能当成静默杀掉");
+    // 继续推逻辑时间直到总时长闸到点：无论 spawn 落在哪个逻辑时刻，都能超过总时长
+    for (let i = 0; i < 50 && !settled; i += 1) {
+      clock += 200_000;
+      await sleep(20);
+    }
+    const result = resultOf(await withDeadline(pending, 20_000, "总时长闸没有在 20 秒内杀掉进程"));
     assert.equal(result.status, "timeout");
-    assert.equal(result.timeoutKind, "total", "日志消失不等于进程卡住");
-    assert.ok(elapsed >= 1_200, `只等了 ${elapsed}ms，说明删除日志后被当成静默提前杀了`);
+    assert.equal(result.timeoutKind, "total", "日志消失不等于进程卡住，只能由总时长闸收尾");
     // 见过日志（后来被轮换）：不能反过来说“没有可用的日志输出”
     assert.doesNotMatch(result.errors[0]?.message ?? "", /没有可用的日志输出/);
   });
