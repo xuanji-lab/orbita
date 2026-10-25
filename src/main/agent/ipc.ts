@@ -190,6 +190,14 @@ export function registerAgentIpc(
   const readCompaction = async (): Promise<CompactionSetting> =>
     (await settings.read()).compaction ?? COMPACTION_DEFAULT;
 
+  /**
+   * 命令超时的硬上限同款每轮现读（设置改动下一轮即生效）。缺席 = 不带字段，
+   * runtime 的 `commandTimeoutPolicy` 落回 3600——**不在这里预先算三档**：
+   * 推导是 shared 的一处真源，主进程只负责把用户的原始选择送过去。
+   */
+  const readCommandTimeoutMax = async (): Promise<number | undefined> =>
+    (await settings.read()).commandTimeoutMaxSeconds;
+
   /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
   const readGitAttribution = async (): Promise<boolean> =>
     (await settings.read()).gitAttribution ?? true;
@@ -413,6 +421,7 @@ export function registerAgentIpc(
         directories: await readDirectories(input),
         mcpServers: await readMcpServers(input.workspaceId),
         compaction: await readCompaction(),
+        commandTimeoutMaxSeconds: await readCommandTimeoutMax(),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
         workspaceName: await workspaceNameOf(input.workspaceId),
@@ -453,12 +462,12 @@ export function registerAgentIpc(
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), commandTimeoutMaxSeconds: await readCommandTimeoutMax(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), commandTimeoutMaxSeconds: await readCommandTimeoutMax(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 

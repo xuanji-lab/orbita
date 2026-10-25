@@ -638,6 +638,15 @@ export const en = {
     completionSoundAria: "Completion sound",
     completionSoundInfo:
       "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
+    commandTimeout: "Command timeout cap",
+    commandTimeoutAria: "Command timeout cap",
+    commandTimeoutInfo:
+      "How long a single bash / powershell command may run before it is stopped · at the cap the agent checks for progress first, then extends or kills · pick 10 seconds to try the timeout behaviour right away",
+    commandTimeout10s: "10s",
+    commandTimeout10m: "10m",
+    commandTimeout30m: "30m",
+    commandTimeout1h: "1h",
+    commandTimeout4h: "4h",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",

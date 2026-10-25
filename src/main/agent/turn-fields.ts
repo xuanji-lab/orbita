@@ -27,6 +27,8 @@ export function turnFields(
     directories: TurnDirectories;
     mcpServers: Record<string, McpServer>;
     compaction: CompactionSetting;
+    /** 命令超时的硬上限（秒）：缺席 = 3600，由 runtime 的 `commandTimeoutPolicy` 推导三档 */
+    commandTimeoutMaxSeconds?: number;
     gitAttribution: boolean;
     attributionLanguage: Language;
     /** 实验功能「PDF 引用」的开关（settings.experimentalFeatures）：开着才注册 cite_pdf；缺席 = 关 */
@@ -34,10 +36,10 @@ export function turnFields(
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "commandTimeoutMaxSeconds" | "gitAttribution" | "attributionLanguage" | "pdfCitations"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
-  const { workspaceName, ...rest } = environment;
+  const { workspaceName, commandTimeoutMaxSeconds, ...rest } = environment;
   return {
     sessionId: input.sessionId,
     cwd: input.cwd,
@@ -52,6 +54,9 @@ export function turnFields(
     attachmentsDir,
     protectedPaths,
     ...rest,
+    // 用户没改过这个设置时**键彻底不出现**（不是 undefined 盖着）：主进程与 agent 两端都把
+    // 「缺席」当 3600 读，这两种形状在行为上相同，但不让 undefined 跟着命令上传输
+    ...(commandTimeoutMaxSeconds === undefined ? {} : { commandTimeoutMaxSeconds }),
     // 续会话的唯一通路：把 pi 自己的本子还给它（runtime 的 SessionManager.open）。
     // 缺了它 runtime 每轮都新建本子——模型看不到前文，created 事件还会把 meta 改指到
     // 新本子上，回退从此对不上账（2026-10-11 抽出本模块时漏过这一行的事故）

@@ -45,6 +45,8 @@ export function atMostManual(mode: PermissionMode): PermissionMode {
  *   实测最近 60 个会话里 12 次 bash 跑过 30 分钟（最长 3.7 小时），吃掉全部 bash 墙上
  *   时间的 41%。所以「不填」从此也是 30 分钟封顶。
  * - `HARD_MAX`（3600）：**声明值的天花板**。模型（或人在审批卡片里）说要更久，最多到这里。
+ *   它同时是**策略函数的默认输入**：设置项 `commandTimeoutMaxSeconds` 可把它换掉（默认仍
+ *   3600），三档随之上收敛——见 `commandTimeoutPolicy`。
  *
  * **为什么默认值比 dsh / ZCode 的 120s 大得多**：它们到点**不杀进程**，只把控制权交还、
  * 转后台任务接着跑；我们只有 pi 的 `timeout`，到点就是 `killProcessTree`，活直接扔了
@@ -58,6 +60,65 @@ export function atMostManual(mode: PermissionMode): PermissionMode {
 export const COMMAND_TIMEOUT_FLOOR_SECONDS = 600;
 export const COMMAND_TIMEOUT_DEFAULT_SECONDS = 1800;
 export const COMMAND_TIMEOUT_HARD_MAX_SECONDS = 3600;
+
+/**
+ * 用户在设置里能给「硬上限」填的合法区间（秒，整数）：`[10, 86400]`。
+ *
+ * **下限 10 秒**：这个旋钮是为了让「验超时」不用改源码，但再小就不是策略而是事故了——
+ * 5 秒的上限连 `bun run typecheck` 都跑不完，选择它就等于选择让每条命令都失败，
+ * 而且失败得毫无线索（命令被杀、输出为空）。10 秒刚好够 `sleep 30` 这类验收探针
+ * 必然超时，又不至于让正常的 `ls` 都活不下来。
+ *
+ * **上限 86400 秒（一天）**：超过一天的「上限」等于没有上限——回落到默认的
+ * 3600 比接受一个假的上限诚实。
+ *
+ * 这是**设置项的合法区间**，不是运行时的夹取区间：越界的值在 `parseSettings` 里
+ * 直接丢掉（读回缺席语义），不修成最近值。`commandTimeoutPolicy` 用同一个判断
+ * 兜住「没经过 parseSettings 的调用方」（测试、旧夹具）。
+ */
+export const COMMAND_TIMEOUT_SETTING_MIN_SECONDS = 10;
+export const COMMAND_TIMEOUT_SETTING_MAX_SECONDS = 86400;
+
+/** 设置项的值是否合法（整数、落在区间内）。非法值由调用方丢掉，不夹取。 */
+export function isCommandTimeoutMaxSeconds(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= COMMAND_TIMEOUT_SETTING_MIN_SECONDS &&
+    value <= COMMAND_TIMEOUT_SETTING_MAX_SECONDS
+  );
+}
+
+/** 命令超时的三档策略（秒）。三档都从用户设的上限推导，见 `commandTimeoutPolicy`。 */
+export interface CommandTimeoutPolicy {
+  floorSeconds: number;
+  defaultSeconds: number;
+  hardMaxSeconds: number;
+}
+
+/**
+ * 把「用户设置的上限」换算成闸门与界面共用的三档。**一处真源**：`src/agent/permission.ts`
+ * 的闸门、`runtime.ts` 的钩子、renderer 的「上限」显示都走这个函数，谁都不许自己
+ * 拿常量拼一份——拼出来的规则一旦漂，界面就会对用户撒谎（见上面三档常量的注释）。
+ *
+ * **地板与默认值都跟着上限收敛**：设成 10 秒时若地板仍是 600，闸门会先把「不填」
+ * 补成 600、把声明值抬到 600，上限 10 秒等于没生效——那正是这个设置项要消灭的处境
+ * （用户要能不改源码就验出超时）。所以 `floor = min(FLOOR, hardMax)`、
+ * `default = min(DEFAULT, hardMax)`：上限永远是真的上限，下面的两档只是它的从属。
+ *
+ * 缺席 / 非法（非数、非整数、越界）→ 全套用出厂常量，与「用户没设过」同一行为。
+ * 只认合法整数、坏值丢掉（不修成最近值）与 `settings.ts` 的白名单纪律一致。
+ */
+export function commandTimeoutPolicy(hardMaxSetting?: number): CommandTimeoutPolicy {
+  const hardMaxSeconds = isCommandTimeoutMaxSeconds(hardMaxSetting)
+    ? hardMaxSetting
+    : COMMAND_TIMEOUT_HARD_MAX_SECONDS;
+  return {
+    floorSeconds: Math.min(COMMAND_TIMEOUT_FLOOR_SECONDS, hardMaxSeconds),
+    defaultSeconds: Math.min(COMMAND_TIMEOUT_DEFAULT_SECONDS, hardMaxSeconds),
+    hardMaxSeconds,
+  };
+}
 
 export const PERMISSION_MODE_LABELS: Record<PermissionMode, { label: string; hint: string }> = {
   plan: { label: "Plan", hint: "Read-only. Writing and shell are refused." },

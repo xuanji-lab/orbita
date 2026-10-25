@@ -407,14 +407,14 @@ function descendantsNotice(pid: number): string {
  * `progress` 不是猜出来的：它来自到点决策时看过的证据（最近有输出 / 进程树还在涨 CPU）。
  * 有进展被杀 → 值得换个更长 timeout 或拆片重试；全程没动 → 同样的坑再等多久都一样。
  */
-function capNotice(seconds: number, progress: boolean): string {
+function capNotice(seconds: number, progress: boolean, maxSeconds: number): string {
   return (
     `\n[orbita] kind=cap seconds=${seconds} progress=${progress ? "yes" : "no"} | ` +
     `The command was killed at the ${seconds}s limit. ` +
     (progress
       ? "It was still producing output or using CPU when it was killed, so it was making progress and that work is now lost. " +
         "If the task really needs longer, retry with an explicit timeout (seconds, at most " +
-        `${COMMAND_TIMEOUT_HARD_MAX_SECONDS}), split it into smaller steps, or use the terminal_* tools.`
+        `${maxSeconds}), split it into smaller steps, or use the terminal_* tools.`
       : "It had been silent with no CPU growth for a while, so a longer timeout would likely wait the same way. " +
         "Split the command into smaller steps, or use the terminal_* tools to watch it.") +
     "\n"
@@ -535,7 +535,7 @@ export function createObservedBashOperations(
         timeoutSeconds = Math.max(1, Math.round((deadlineAt - startedAt) / 1000));
         // 先落这句话再杀：onData 是同步的，它一定在命令结束之前进结果；
         // 模型据此知道「是撞上限死的、死时有没有在干活」
-        onData(Buffer.from(capNotice(timeoutSeconds, progress), "utf8"));
+        onData(Buffer.from(capNotice(timeoutSeconds, progress, Math.round(hardMaxMs / 1000)), "utf8"));
         if (child.pid !== undefined) killProcessTree(child.pid);
       };
 
@@ -669,10 +669,21 @@ export interface BashToolSettings {
  * pi 装配会话时（`_buildRuntime`）从 settingsManager 现读的，我们用自己的定义盖掉它，
  * 就绕过了那次读取。漏传 prefix 等于把「非交互前缀」悄悄丢掉——登录 shell 的初始化
  * 不再执行，表现为昨天还能跑的命令今天 `command not found`，**而且没有任何报错**。
+ *
+ * `extensionOptions` 只有到点延长用得上：上限是策略（设置项可改），延长的绝对天花板
+ * 必须跟着同一个上限走，否则设成 10 秒的命令还能凭「有输出」续到 10 分钟。
  */
-export function createObservedBashTool(cwd: string, settings: BashToolSettings): ToolDefinition {
+export function createObservedBashTool(
+  cwd: string,
+  settings: BashToolSettings,
+  extensionOptions: ExtensionOptions = {},
+): ToolDefinition {
   const definition = createBashToolDefinition(cwd, {
-    operations: createObservedBashOperations(() => getShellConfig(settings.getShellPath())),
+    operations: createObservedBashOperations(
+      () => getShellConfig(settings.getShellPath()),
+      {},
+      extensionOptions,
+    ),
     commandPrefix: settings.getShellCommandPrefix(),
     shellPath: settings.getShellPath(),
   });

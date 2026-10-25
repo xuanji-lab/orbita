@@ -11,6 +11,7 @@ import {
   COMMAND_TIMEOUT_DEFAULT_SECONDS,
   COMMAND_TIMEOUT_FLOOR_SECONDS,
   COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+  type CommandTimeoutPolicy,
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
@@ -373,5 +374,65 @@ describe("命令超时结果的交代（commandTimeoutNotice）", () => {
     const id = "noticeNotError";
     await gateCommand(id, { command: "x" });
     assert.equal(commandTimeoutNotice({ ...timedOut(id, 1800), isError: false }), undefined);
+  });
+});
+
+/**
+ * 上限是**策略**（设置项 `commandTimeoutMaxSeconds`），不是物理常量。
+ * 这一组把「用户把上限调到 10 秒就能直接验超时」钉死在闸门上：地板与默认值都跟着
+ * 上限收敛，否则 600 秒的地板会把 10 秒的设置顶回去，设置项等于没生效。
+ */
+describe("命令超时策略随用户设置（createToolCallGate 的 policy）", () => {
+  const tiny: CommandTimeoutPolicy = { floorSeconds: 10, defaultSeconds: 10, hardMaxSeconds: 10 };
+  const wide: CommandTimeoutPolicy = { floorSeconds: 600, defaultSeconds: 1800, hardMaxSeconds: 14400 };
+
+  /** 过一遍带策略的闸门，返回最终写回入参的 timeout（skip 档直达放行） */
+  async function timeoutUnder(policy: CommandTimeoutPolicy, input: Record<string, unknown>): Promise<number | undefined> {
+    const gate = createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [], process.cwd(), policy);
+    await gate({ toolCallId: "policy", toolName: "bash", input });
+    const value = input["timeout"];
+    return typeof value === "number" ? value : undefined;
+  }
+
+  test("上限 10 秒：不填 → 10（默认值跟着收敛，不是 1800）", async () => {
+    const input: Record<string, unknown> = { command: "bun run build" };
+    assert.equal(await timeoutUnder(tiny, input), 10);
+    assert.deepEqual(takeDecision("policy"), { effective: 10, declared: false });
+  });
+
+  test("上限 10 秒：模型声明 900 → 10（夹到策略上限）", async () => {
+    assert.equal(await timeoutUnder(tiny, { command: "bun run build", timeout: 900 }), 10);
+    const input: Record<string, unknown> = { command: "bun run build", timeout: 900 };
+    await timeoutUnder(tiny, input);
+    assert.deepEqual(takeDecision("policy"), { effective: 10, declared: true });
+  });
+
+  test("上限 10 秒：sleep 2000 → 10（自述时长不能反把上限抬回去）", async () => {
+    assert.equal(await timeoutUnder(tiny, { command: "sleep 2000" }), 10);
+  });
+
+  test("上限 4 小时：声明 99999 → 14400（天花板换成设置值）", async () => {
+    assert.equal(await timeoutUnder(wide, { command: "x", timeout: 99999 }), 14400);
+    const input: Record<string, unknown> = { command: "x", timeout: 99999 };
+    await timeoutUnder(wide, input);
+    assert.deepEqual(takeDecision("policy"), { effective: 14400, declared: true });
+  });
+
+  test("上限 4 小时：声明 9000 原样尊重；不填仍是 1800", async () => {
+    assert.equal(await timeoutUnder(wide, { command: "x", timeout: 9000 }), 9000);
+    assert.equal(await timeoutUnder(wide, { command: "x" }), 1800);
+  });
+
+  test("被杀时的散文说策略上限，不是写死的 3600", async () => {
+    const input: Record<string, unknown> = { command: "x", timeout: 99999 };
+    await timeoutUnder(wide, input);
+    const patch = commandTimeoutNotice(
+      { toolCallId: "policy", toolName: "bash", isError: true, content: [{ type: "text", text: "Command timed out after 14400 seconds" }] },
+      wide,
+    );
+    assert.ok(patch);
+    const text = patch.content[1]?.type === "text" ? patch.content[1].text : "";
+    assert.match(text, /clamped to 14400s/);
+    assert.match(text, /at most 14400\)/);
   });
 });

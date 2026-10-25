@@ -4,6 +4,7 @@ import {
   atMostManual,
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
+  commandTimeoutPolicy,
   decidePermission,
   DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
@@ -155,5 +156,26 @@ describe("atMostManual（收尾扫描轮与遗留事项开出的新会话首轮�
         assert.notDeepEqual(decidePermission(atMostManual(mode), tool), { behavior: "allow" }, `${mode} / ${tool}`);
       }
     }
+  });
+});
+
+describe("commandTimeoutPolicy（命令超时的三档：上限是策略，不是物理常量）", () => {
+  test("缺席 / 非法 → 出厂三档（3600 / 1800 / 600）", () => {
+    const factory = { floorSeconds: 600, defaultSeconds: 1800, hardMaxSeconds: 3600 };
+    assert.deepEqual(commandTimeoutPolicy(), factory);
+    for (const bad of [0, -5, "600", Number.NaN, 1.5, 999999, 9, 86401]) {
+      assert.deepEqual(commandTimeoutPolicy(bad as never), factory, String(bad));
+    }
+  });
+
+  test("地板与默认值跟着上限收敛：10 秒不会被地板 600 顶回去", () => {
+    // 这一条就是设置项存在的理由——设成 10 秒必须真的按 10 秒跑，否则「不改源码验超时」不成立
+    assert.deepEqual(commandTimeoutPolicy(10), { floorSeconds: 10, defaultSeconds: 10, hardMaxSeconds: 10 });
+    assert.deepEqual(commandTimeoutPolicy(600), { floorSeconds: 600, defaultSeconds: 600, hardMaxSeconds: 600 });
+    assert.deepEqual(commandTimeoutPolicy(1800), { floorSeconds: 600, defaultSeconds: 1800, hardMaxSeconds: 1800 });
+  });
+
+  test("上限大于出厂值时只抬高天花板，地板与默认值不动", () => {
+    assert.deepEqual(commandTimeoutPolicy(14400), { floorSeconds: 600, defaultSeconds: 1800, hardMaxSeconds: 14400 });
   });
 });

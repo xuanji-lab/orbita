@@ -5,6 +5,7 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { commandTimeoutPolicy } from "@shared/permission";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
@@ -37,6 +38,7 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { CommandTimeoutPolicyContext } from "./features/chat/command-timeout-context.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -1063,6 +1065,8 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
+    {/* 命令超时的三档策略（上限是设置项，不是常量）：工具行的「/ 上限」与闸门同一套规则 */}
+    <CommandTimeoutPolicyContext.Provider value={commandTimeoutPolicy(settings.commandTimeoutMaxSeconds)}>
     <CitationOpenContext.Provider value={openCitation}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
@@ -1297,6 +1301,7 @@ export function App() {
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
+    </CommandTimeoutPolicyContext.Provider>
     </PastedTextCollapseContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>

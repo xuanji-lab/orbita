@@ -73,3 +73,19 @@ describe("turnFields", () => {
   });
 });
 
+
+describe("turnFields 的命令超时上限（设置项 commandTimeoutMaxSeconds）", () => {
+  test("有值：透传进命令（runtime 的 commandTimeoutPolicy 靠它算三档）", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
+      ...environment,
+      commandTimeoutMaxSeconds: 10,
+    });
+    assert.equal(fields.commandTimeoutMaxSeconds, 10);
+  });
+
+  test("缺席：键彻底不出现，不是 undefined 盖着——主进程与 agent 两端都把缺席当 3600", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
+    assert.equal("commandTimeoutMaxSeconds" in fields, false);
+    assert.equal(fields.compaction, environment.compaction);
+  });
+});

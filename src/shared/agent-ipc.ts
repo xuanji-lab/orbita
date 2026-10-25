@@ -712,6 +712,12 @@ export type AgentCommand =
        */
       compaction?: CompactionSetting;
       /**
+       * 命令超时的硬上限（秒，设置项 `commandTimeoutMaxSeconds`）。**主进程从设置装配**
+       * （同 compaction）：runtime 不读设置文件，只收数据，交给 `commandTimeoutPolicy`
+       * 推出闸门 / 界面 / 提示词共用的三档。缺席 / 非法 = 3600（同上位口径）。
+       */
+      commandTimeoutMaxSeconds?: number;
+      /**
        * commit / PR 的 Orbita 标识开关。**主进程从设置装配**（同 compaction）：
        * runtime 不读设置文件，只收数据，每轮拼进 system prompt。
        * 缺席 = 开启（与设置契约同一口径）。
@@ -842,6 +848,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;
+      /** 命令超时的硬上限（秒），语义同 submit：缺席 = 3600 */
+      commandTimeoutMaxSeconds?: number;
       /** commit / PR 的 Orbita 标识开关，语义同 submit */
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
@@ -907,6 +915,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
       compaction?: CompactionSetting;
+      /** 命令超时的硬上限（秒），语义同 submit（压缩轮也可能被工具调用触发） */
+      commandTimeoutMaxSeconds?: number;
       /** 压缩轮自己不提交，但开轮装配是同一份（turnFields），语义同 submit */
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */

@@ -645,3 +645,21 @@ describe("parseSettings 的 intent（实验功能 intent-system）", () => {
     deepStrictEqual(effectiveIntentSettings({ baseUrl: "http://localhost:9000//" }).baseUrl, "http://localhost:9000");
   });
 });
+
+describe("parseSettings 的 commandTimeoutMaxSeconds（命令超时上限）", () => {
+  it("合法整数原样保留（区间 [10, 86400]）", () => {
+    deepStrictEqual(parseSettings({ commandTimeoutMaxSeconds: 10 }).commandTimeoutMaxSeconds, 10);
+    deepStrictEqual(parseSettings({ commandTimeoutMaxSeconds: 3600 }).commandTimeoutMaxSeconds, 3600);
+    deepStrictEqual(parseSettings({ commandTimeoutMaxSeconds: 86400 }).commandTimeoutMaxSeconds, 86400);
+  });
+
+  it("缺席不落键（= 3600，默认值不写进用户的文件）", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }).commandTimeoutMaxSeconds, undefined);
+  });
+
+  it("坏值丢掉而不是修成最近值：越界 / 小数 / 非数 / 字符串都不落键", () => {
+    for (const bad of [0, -5, 9, 86401, 1.5, Number.NaN, "600", null, true]) {
+      deepStrictEqual(parseSettings({ commandTimeoutMaxSeconds: bad }).commandTimeoutMaxSeconds, undefined, String(bad));
+    }
+  });
+});

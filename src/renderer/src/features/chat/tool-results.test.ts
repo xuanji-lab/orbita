@@ -2009,3 +2009,31 @@ describe("bash 通知行：合并（一个工具行最多一条次行、最多�
     assert.deepEqual(mergeBashNotices([]), { extended: null, process: null, cap: null });
   });
 });
+
+/**
+ * 上限是策略（设置项 `commandTimeoutMaxSeconds`）：界面必须用闸门那份同一个 policy 算，
+ * 否则用户把上限调到 10 分钟，界面还在说「上限 1:00:00」——界面对用户撒谎。
+ */
+describe("timeoutSecondsOf 跟随策略（上限是设置项，不是常量）", () => {
+  const tiny = { floorSeconds: 10, defaultSeconds: 10, hardMaxSeconds: 10 };
+  const wide = { floorSeconds: 600, defaultSeconds: 1800, hardMaxSeconds: 14400 };
+
+  test("上限 10 秒：不填 / 填小 / 填大 / 自述时长全部显示 10", () => {
+    assert.equal(timeoutSecondsOf({ command: "x" }, tiny), 10);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 1 }, tiny), 10);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 900 }, tiny), 10);
+    assert.equal(timeoutSecondsOf({ command: "sleep 2000" }, tiny), 10, "自述时长不能反把上限抬回去");
+  });
+
+  test("上限 4 小时：天花板换成 14400，默认值仍是 1800", () => {
+    assert.equal(timeoutSecondsOf({ command: "x" }, wide), 1800);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 99999 }, wide), 14400);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 9000 }, wide), 9000, "上限之内原样尊重");
+    assert.equal(timeoutSecondsOf({ command: "sleep 20000" }, wide), 14400, "自述 20000+60 → 夹到 14400");
+  });
+
+  test("缺席 policy = 出厂三档（与闸门的默认参数一致）", () => {
+    assert.equal(timeoutSecondsOf({ command: "x" }), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+    assert.equal(timeoutSecondsOf({ command: "x", timeout: 99999 }), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  });
+});

@@ -70,14 +70,17 @@ export const COMMAND_DECLARED_GRACE_SECONDS = 60;
  * 正是 shared/permission.ts 注释里警告的「界面对用户撒谎」。
  *
  * +60 是给命令自身收尾留的余量（`sleep 2000` 到 2000 秒整才返回，两边都按整秒计数，
- * 贴边会差一个采样周期）；封顶仍走同一个 `HARD_MAX`，否则「声明一个巨大的 sleep」
- * 就成了绕过上限的后门。
+ * 贴边会差一个采样周期）；封顶走 `hardMaxSeconds`（由调用方传入策略上限，
+ * 缺省是出厂常量）——否则「声明一个巨大的 sleep」就成了绕过上限的后门。
  */
-export function declaredCommandTimeout(command: unknown): number | null {
+export function declaredCommandTimeout(
+  command: unknown,
+  hardMaxSeconds: number = COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+): number | null {
   if (typeof command !== "string") return null;
   const seconds = declaredCommandSeconds(command);
   if (seconds === null) return null;
-  return Math.min(seconds + COMMAND_DECLARED_GRACE_SECONDS, COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  return Math.min(seconds + COMMAND_DECLARED_GRACE_SECONDS, hardMaxSeconds);
 }
 
 export function declaredCommandSeconds(command: string): number | null {

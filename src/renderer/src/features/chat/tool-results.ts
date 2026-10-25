@@ -23,9 +23,8 @@ import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert"
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 import {
-  COMMAND_TIMEOUT_DEFAULT_SECONDS,
-  COMMAND_TIMEOUT_FLOOR_SECONDS,
-  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+  commandTimeoutPolicy,
+  type CommandTimeoutPolicy,
 } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { declaredCommandTimeout } from "../../../../shared/bash-declared-seconds.ts";
@@ -892,18 +891,25 @@ export function expectedSecondsOf(input: unknown): number | null {
  * 规则一字不差：不填 → DEFAULT（本 PR 的行为变更：不填不再是「无上限」）；填了 →
  * min(max(raw, FLOOR), HARD_MAX)；非法（≤0 / 非有限数 / 字符串数字不猜）→ null（不替 pi 做
  * 第二套校验，那种调用本来就会报 Invalid timeout、不会真跑）。
+ *
+ * 三档值来自 `policy`——**用户设的上限是策略**，界面必须用闸门那份同一个 policy 算
+ * （`commandTimeoutPolicy` 一处真源），否则上限调到 10 分钟时界面还在说上限 1 小时。
  */
-export function timeoutSecondsOf(input: unknown): number | null {
+export function timeoutSecondsOf(
+  input: unknown,
+  policy: CommandTimeoutPolicy = commandTimeoutPolicy(),
+): number | null {
   if (typeof input !== "object" || input === null) return null;
   const record = input as Record<string, unknown>;
   const value = record["timeout"];
   if (value === undefined) {
     // `sleep 2000` 这类「命令自述时长」由闸门换算成 min(N+60, HARD_MAX)，界面必须同一个
-    // 函数算，否则显示 30:00、实际跑 34:20（界面撒谎）。
-    return declaredCommandTimeout(record["command"]) ?? COMMAND_TIMEOUT_DEFAULT_SECONDS;
+    // 函数算，否则显示 30:00、实际跑 34:20（界面撒谎）。自述值同样要过策略上限。
+    const declared = declaredCommandTimeout(record["command"], policy.hardMaxSeconds);
+    return declared === null ? policy.defaultSeconds : Math.min(declared, policy.hardMaxSeconds);
   }
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  return Math.min(Math.max(value, COMMAND_TIMEOUT_FLOOR_SECONDS), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  return Math.min(Math.max(value, policy.floorSeconds), policy.hardMaxSeconds);
 }
 
 function secondsFieldOf(input: unknown, key: string): number | null {

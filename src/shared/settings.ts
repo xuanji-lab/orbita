@@ -4,7 +4,11 @@
  * 范围刻意只有主题一项。设置面从极少的 tab 起步、但 UI 第一天就落（guideline §六）；
  * 字段等有真实消费者再加，不提前占位。
  */
-import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import {
+  isCommandTimeoutMaxSeconds,
+  PERMISSION_MODES,
+  type PermissionMode,
+} from "./permission.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -210,6 +214,17 @@ export interface AppSettings {
    * 只认布尔，同 gitAttribution 的纪律。
    */
   collapsePastedText?: boolean;
+  /**
+   * 命令超时的**硬上限**（秒）：模型 / 人在审批卡片里声明再久，最多到这里；
+   * 地板与默认值也跟着它收敛（见 `commandTimeoutPolicy`）。**缺席 = 3600**。
+   *
+   * 为什么它是设置项而不是物理常量：上限是**策略**。验收「超时」这件事本身不该靠
+   * 改源码——设成 10 秒就能直接验到「到点先看证据再杀」的整条链。
+   *
+   * 只认合法整数（`[10, 86400]`）：坏值**丢掉**（回到缺席语义），不修成最近值——
+   * 同 gitAttribution 只认布尔的纪律。改动下一轮对话即生效（主进程每轮现读）。
+   */
+  commandTimeoutMaxSeconds?: number;
   /**
    * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
    * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
@@ -428,6 +443,7 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     sidebarWidth?: unknown;
     compaction?: unknown;
+    commandTimeoutMaxSeconds?: unknown;
     collapsePastedText?: unknown;
     completionSound?: unknown;
     gitAttribution?: unknown;
@@ -485,6 +501,11 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),
     ...(compaction === undefined ? {} : { compaction }),
+    // 命令超时上限：只认合法整数，越界 / 非数 / 小数一律丢掉（缺席 = 3600）。
+    // 合法区间与策略函数共用同一个判断（shared/permission.ts），不在这里重抄边界
+    ...(isCommandTimeoutMaxSeconds(record.commandTimeoutMaxSeconds)
+      ? { commandTimeoutMaxSeconds: record.commandTimeoutMaxSeconds }
+      : {}),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
     // 只会让设置面显示的状态和实际行为对不上
     ...(typeof record.gitAttribution === "boolean"

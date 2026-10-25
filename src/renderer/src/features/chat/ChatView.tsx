@@ -25,6 +25,7 @@ import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
 import { clampToolBody } from "./tool-body-clamp.ts";
+import { CommandTimeoutPolicyContext } from "./command-timeout-context.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
@@ -3772,6 +3773,8 @@ function ToolLine(props: {
   skills: SkillMeta[];
 }) {
   const t = useT();
+  // 命令超时的三档（用户设置推导）：闸门与这里必须同一份，否则「/ 上限」会对用户撒谎
+  const timeoutPolicy = useContext(CommandTimeoutPolicyContext);
   const [open, setOpen] = useState(false);
   const { result } = props;
   const failed = result?.status === "error";
@@ -3792,7 +3795,7 @@ function ToolLine(props: {
   }, [shellActive]);
   const runStart = shellActive ? toolStartAt(props.toolCallId) : null;
   const expectedSeconds = shell ? expectedSecondsOf(props.input) : null;
-  const limitSeconds = shell ? timeoutSecondsOf(props.input) : null;
+  const limitSeconds = shell ? timeoutSecondsOf(props.input, timeoutPolicy) : null;
   // 自动展开的账：用户手动碰过折叠就不再自动改（尊重人）；autoOpened 记「这次
   // 展开是自动的」，跑完只有自动开的才自动收。两个都是 ref——这些是过程状态，
   // 不参与渲染，不值得每次跳秒重算。

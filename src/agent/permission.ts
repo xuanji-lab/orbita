@@ -12,10 +12,9 @@
  * 边界上的命令超时闸门（入参侧夹紧 / 补默认，结果侧把「被上限杀掉了」说给模型听）。
  */
 import {
+  commandTimeoutPolicy,
   decidePermission,
-  COMMAND_TIMEOUT_DEFAULT_SECONDS,
-  COMMAND_TIMEOUT_FLOOR_SECONDS,
-  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+  type CommandTimeoutPolicy,
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
@@ -153,26 +152,33 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
  * 返回本次决定（`effective` = 真正会用的秒数，`declared` = 模型是否自己给了合法值）。
  * 决定要留到 `tool_result` 才能用：到点被杀的证据只在结果里，而那时入参对象早没了。
  * 常量本体在 shared/permission.ts（renderer 的「上限」显示与提示词都引它）。
+ *
+ * 三档值来自 `policy`（用户设置推导，见 shared 的 `commandTimeoutPolicy`），不是常量本身：
+ * 上限是策略，不是物理常量——设成 10 秒就得真按 10 秒跑。
  */
 function boundCommandTimeout(
   toolName: string,
   input: Record<string, unknown>,
+  policy: CommandTimeoutPolicy,
 ): CommandTimeoutDecision | null {
   if (!COMMAND_TOOLS.has(toolName)) return null;
   const raw = input["timeout"];
   if (raw === undefined) {
-    // 「命令自述时长」的换算（`min(N + 60, HARD_MAX)`）与 renderer 的「上限」显示共用
+    // 「命令自述时长」的换算（`min(N + 60, hardMax)`）与 renderer 的「上限」显示共用
     // 同一个纯函数：规则若只在闸门里，界面就会把 `sleep 2000` 显示成默认的 30:00。
-    const selfDeclared = declaredCommandTimeout(input["command"]);
+    // 自述时长仍要过一遍策略上限：上限调到 10 秒时，`sleep 2000` 不能靠自己写的数字
+    // 反把上限抬回去（否则设置项就绕过了一半）。
+    const selfDeclared = declaredCommandTimeout(input["command"], policy.hardMaxSeconds);
     if (selfDeclared !== null) {
-      input["timeout"] = selfDeclared;
-      return { effective: selfDeclared, declared: false };
+      const effective = Math.min(selfDeclared, policy.hardMaxSeconds);
+      input["timeout"] = effective;
+      return { effective, declared: false };
     }
-    input["timeout"] = COMMAND_TIMEOUT_DEFAULT_SECONDS;
-    return { effective: COMMAND_TIMEOUT_DEFAULT_SECONDS, declared: false };
+    input["timeout"] = policy.defaultSeconds;
+    return { effective: policy.defaultSeconds, declared: false };
   }
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return null;
-  const effective = Math.min(Math.max(raw, COMMAND_TIMEOUT_FLOOR_SECONDS), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  const effective = Math.min(Math.max(raw, policy.floorSeconds), policy.hardMaxSeconds);
   input["timeout"] = effective;
   return { effective, declared: true };
 }
@@ -230,8 +236,12 @@ const TIMEOUT_ERROR_PATTERN = /Command timed out after (\d+) seconds/;
  * 只会看到一条「Command timed out」然后原样重试同一条命令——再来 30 分钟，同样失败。
  *
  * 只在两种情况下开口：**默认值是我们补的**（模型不知道有这么个上限），或**被我们夹到了
- * HARD_MAX**（模型说的是更大，实际只有 3600）。模型自己声明的合法值照它说的执行、失败是
+ * 策略上限**（模型说的是更大，实际只有那么多）。模型自己声明的合法值照它说的执行、失败是
  * 它自己的判断，不啰嗦。
+ *
+ * `policy` 要由**同一个开轮闭包**传进来（runtime 每轮建一个 gate，因此 `tool_result` 钩子
+ * 闭包里也带着同一个）：散文里的「最多 N 秒」若写死在常量上，用户把上限调到 10 分钟后，
+ * 模型会被告知一个不存在的 60 分钟上限。
  *
  * 文案走 `[orbita] kind=cap seconds=… declared=… | <英文散文>` 契约（竖线之前给渲染层
  * 解析，竖线之后给模型看）。它与执行层那条 `kind=cap seconds=… progress=…` 共用
@@ -240,18 +250,21 @@ const TIMEOUT_ERROR_PATTERN = /Command timed out after (\d+) seconds/;
  *
  * 无论说不说，取用后条目都删掉——`tool_result` 是这个 toolCallId 的最后一站。
  */
-export function commandTimeoutNotice(event: ToolResultLike): ToolResultPatch | undefined {
+export function commandTimeoutNotice(
+  event: ToolResultLike,
+  policy: CommandTimeoutPolicy = commandTimeoutPolicy(),
+): ToolResultPatch | undefined {
   const decision = takeCommandTimeoutDecision(event.toolCallId);
   if (!COMMAND_TOOLS.has(event.toolName)) return undefined;
   if (decision === undefined) return undefined;
   if (!event.isError) return undefined;
-  if (decision.declared && decision.effective !== COMMAND_TIMEOUT_HARD_MAX_SECONDS) return undefined;
+  if (decision.declared && decision.effective !== policy.hardMaxSeconds) return undefined;
   const hit = TIMEOUT_ERROR_PATTERN.exec(textOf(event.content));
   if (hit === null) return undefined;
   const seconds = hit[1];
   // 散文里补一句「这个上限是谁定的」：模型自己填的合法值不会走到这里，所以只有两种来路
   const origin = decision.declared
-    ? `You asked for a longer timeout than the hard maximum, so it was clamped to ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}s.`
+    ? `You asked for a longer timeout than the hard maximum, so it was clamped to ${policy.hardMaxSeconds}s.`
     : "This call did not pass timeout, so the limit was applied for it (a default cap, or one derived from the command).";
   return {
     content: [
@@ -262,7 +275,7 @@ export function commandTimeoutNotice(event: ToolResultLike): ToolResultPatch | u
           `\n\n[orbita] kind=cap seconds=${seconds} declared=${decision.declared ? "yes" : "no"} | ` +
           `The command was terminated at the ${seconds}s limit; the output is incomplete and work done ` +
           `before the kill may be lost. ${origin} If the task really needs longer, pass timeout ` +
-          `explicitly (seconds, at most ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}), or use the terminal_* tools instead.`,
+          `explicitly (seconds, at most ${policy.hardMaxSeconds}), or use the terminal_* tools instead.`,
       },
     ],
   };
@@ -415,11 +428,13 @@ export function createToolCallGate(
   ask: PermissionAsk,
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
+  /** 命令超时的三档（用户设置推导，见 shared 的 `commandTimeoutPolicy`）；缺省 = 出厂策略 */
+  policy: CommandTimeoutPolicy = commandTimeoutPolicy(),
 ) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
     // 放行）就漏掉了——而那正是模型填小超时的场景。
-    const timeout = boundCommandTimeout(event.toolName, event.input);
+    const timeout = boundCommandTimeout(event.toolName, event.input, policy);
     // 记下「这条命令会跑多久、是不是我们替它定的」，tool_result 侧要靠它说话
     const recordTimeout = () => {
       if (timeout !== null) commandTimeouts.set(event.toolCallId, timeout);

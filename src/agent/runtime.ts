@@ -38,9 +38,8 @@ import {
   type PiExtensionApi,
 } from "./permission.ts";
 import {
-  COMMAND_TIMEOUT_DEFAULT_SECONDS,
-  COMMAND_TIMEOUT_FLOOR_SECONDS,
-  COMMAND_TIMEOUT_HARD_MAX_SECONDS,
+  commandTimeoutPolicy,
+  type CommandTimeoutPolicy,
 } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { nonInteractivePrefixFor } from "./shell-env.ts";
@@ -782,12 +781,15 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  * 后一句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
  * 用 bash 跑——不给人看中途输出，模型只能等它自己退出（实测有跑过 3.7 小时的），
  * 而 bash 的上限是「兜底」不是「使用方式」。要看、要打断就走 terminal_*。
+ *
+ * 三档数字从 `policy` 现取而**不是常量**：上限是策略（设置项 `commandTimeoutMaxSeconds`），
+ * 用户调到 10 秒时还把「默认 30 分钟」告诉模型，模型就会按一个不存在的额度安排命令。
  */
-const TOOL_GUIDELINES =
+const toolGuidelines = (policy: CommandTimeoutPolicy): string =>
   "For commands that may take a while (installing dependencies, builds, tests), you may omit timeout: " +
-  `bash/powershell then run under a default ${COMMAND_TIMEOUT_DEFAULT_SECONDS}-second cap. ` +
-  `If you know it needs longer, pass an explicit timeout in seconds (at most ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}); ` +
-  `values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
+  `bash/powershell then run under a default ${policy.defaultSeconds}-second cap. ` +
+  `If you know it needs longer, pass an explicit timeout in seconds (at most ${policy.hardMaxSeconds}); ` +
+  `values under ${policy.floorSeconds} seconds are raised to ${policy.floorSeconds}. ` +
   "A command that reaches its cap is killed and its progress is lost — do not rely on a command outliving its timeout. " +
   "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash.";
 /**
@@ -954,11 +956,17 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
   // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
   const currentMode = () => ledgerNote(command.sessionId).mode;
+  /**
+   * 本轮的命令超时三档（用户设置推导）。**一轮一个**：闸门、`tool_result` 钩子与
+   * 提示词段落闭包带同一份——分头推导就会出现「闸门按 10 秒杀、界面说 60 分钟」。
+   */
+  const timeoutPolicy = commandTimeoutPolicy(command.commandTimeoutMaxSeconds);
   const gate = createToolCallGate(
     currentMode,
     askPermission(command.sessionId),
     command.protectedPaths,
     command.cwd,
+    timeoutPolicy,
   );
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
@@ -1024,7 +1032,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // 命令**到点被杀**时诚实地讲一句（permission.ts 的 commandTimeoutNotice）：默认上限
             // 是我们补的，模型不知道有它，不告诉它就会原样重发同一条、再等一轮超时。
             // 只改 content，不动 isError——被杀确实是失败。
-            pi.on("tool_result", (event) => commandTimeoutNotice(event));
+            pi.on("tool_result", (event) => commandTimeoutNotice(event, timeoutPolicy));
             // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
             // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
             // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
@@ -1057,7 +1065,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   command.workspaceId === null ? null : { name: command.workspaceName },
                   command.cwd,
                 ),
-                TOOL_GUIDELINES,
+                toolGuidelines(timeoutPolicy),
                 EXPECTED_SECONDS_GUIDELINE,
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
@@ -1281,7 +1289,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 目的是补上「命令早退、但后台后代还活着」那条提示（./bash-observe.ts）；
     // **定义仍从 settingsManager 现读 prefix / shellPath**，否则非交互前缀会被悄悄丢掉。
     // ENABLED_BUILTIN_TOOLS 里的 `bash` 不用动——名字没变，registry 用它选中我们这份。
-    createObservedBashTool(command.cwd, services.settingsManager),
+    createObservedBashTool(command.cwd, services.settingsManager, {
+      // 到点延长的绝对天花板跟随本轮策略：上限设成 10 秒时，「有输出」不能把它续到 10 分钟
+      hardMaxMs: timeoutPolicy.hardMaxSeconds * 1000,
+    }),
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）

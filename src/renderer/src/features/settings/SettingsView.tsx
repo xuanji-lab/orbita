@@ -28,6 +28,7 @@ import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
+import { COMMAND_TIMEOUT_HARD_MAX_SECONDS } from "@shared/permission";
 import {
   COMPACTION_DEFAULT,
   DEFAULT_INTENT_BASE_URL,
@@ -197,6 +198,25 @@ function inheritedRow(fallback: InheritedFallback): MenuItem {
 
 type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
+/**
+ * 命令超时上限的预设档位（秒 → 文案键）。
+ *
+ * **只给预设、不做自由输入框**：上限是策略旋钮，一旦允许输入就得在设置面再搭一套
+ * 校验 UI（0 / 负数 / 小数 / 字符串）；五个档位把两头都堵住了——10 秒验超时，
+ * 4 小时跑长构建。文案键用字面量联合而不是 `keyof`：那两个表类型互推，
+ * `keyof` 会把拼写错误静默变成可选项。
+ */
+const COMMAND_TIMEOUT_CHOICES: ReadonlyArray<{
+  seconds: number;
+  label: "commandTimeout10s" | "commandTimeout10m" | "commandTimeout30m" | "commandTimeout1h" | "commandTimeout4h";
+}> = [
+  { seconds: 10, label: "commandTimeout10s" },
+  { seconds: 600, label: "commandTimeout10m" },
+  { seconds: 1800, label: "commandTimeout30m" },
+  { seconds: 3600, label: "commandTimeout1h" },
+  { seconds: 14400, label: "commandTimeout4h" },
+];
+
 function General(props: {
   settings: AppSettings;
   providers: readonly ProviderDto[];
@@ -240,6 +260,8 @@ function General(props: {
   const pastedCollapse = props.settings.collapsePastedText ?? true;
   // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
   const completionSound = props.settings.completionSound ?? true;
+  // 命令超时上限：缺席 = 1 小时（出厂值，也是默认高亮的那一档）
+  const commandTimeoutMax = props.settings.commandTimeoutMaxSeconds ?? COMMAND_TIMEOUT_HARD_MAX_SECONDS;
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -512,6 +534,22 @@ function General(props: {
             <Chip active={!completionSound} onClick={() => props.onChange({ completionSound: false })}>
               {t.common.off}
             </Chip>
+          </span>
+        </SettingRow>
+        <SettingRow name={t.settings.commandTimeout} info={t.settings.commandTimeoutInfo}>
+          {/* 只给预设档位、不做自由输入：上限是个策略旋钮，坏值（0 / 负数 / 小数）
+              一旦能输入，就得在设置面再造一套校验 UI。设小了用 10 秒直接验超时，
+              想跑长命令就选 4 小时——两头都有出口，不需要输入框 */}
+          <span className="set-chips" role="group" aria-label={t.settings.commandTimeoutAria}>
+            {COMMAND_TIMEOUT_CHOICES.map((choice) => (
+              <Chip
+                key={choice.seconds}
+                active={commandTimeoutMax === choice.seconds}
+                onClick={() => props.onChange({ commandTimeoutMaxSeconds: choice.seconds })}
+              >
+                {t.settings[choice.label]}
+              </Chip>
+            ))}
           </span>
         </SettingRow>
       </SettingGroup>
