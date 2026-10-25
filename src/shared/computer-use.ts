@@ -139,6 +139,17 @@ export const computerUseGuestCommands = {
   ping: "ping",
   /** 截沙箱主屏一张，回 JPEG 兄弟文件 + 回图/物理屏两套尺寸 */
   screenshot: "screenshot",
+  /**
+   * 列出可截图的顶层窗口（桥 0.9.0）：`{windows:[{hwnd,title,process,className,x,y,w,h,minimized,visible}]}`。
+   * 只读、不抢焦点。用途是让模型/宿主知道「该拍哪个窗口」——按标题匹配失败时宿主用它列候选。
+   */
+  winList: "win-list",
+  /**
+   * 按**窗口**截图（桥 0.9.0）：`{hwnd?, title?, maxWidth?}`，hwnd 优先，否则标题包含匹配。
+   * PrintWindow(PW_RENDERFULLCONTENT) 读窗口自己的 surface：**被别的窗口遮住也拍得到**，
+   * 所以这条路径不占桌面租约（见 isWindowScreenshotRequest）。
+   */
+  winShot: "win-shot",
   /** 移动指针并按键（SendInput 绝对坐标，沙箱原生物理像素） */
   click: "click",
   /** 逐字符 Unicode 注入（KEYEVENTF_UNICODE，中文可用），落在当前焦点窗口 */
@@ -354,6 +365,10 @@ export function computerUseGuestTimeoutMs(command: string): number {
  *   desktop:exclusive  桌面独占（像素 / 前台 / 整屏截图），数值见 COMPUTER_USE_LEASE
  *   browser:<session>  每会话一把（自己的浏览器永远立即可用，不排队、不设 idle / 硬上限）
  * 每个键独立持有者、独立队列、独立计时；revoke 仍然一次清掉所有键（沙箱没了，谁都用不了）。
+ *
+ * **按窗口截图（screenshot + window，桥 0.9.0）不占任何租约**：PrintWindow 读窗口自己的
+ * surface，被遮挡也能拍、不抢焦点（isWindowScreenshotRequest 上有实测数据）。把它塞进
+ * desktop:exclusive 等于让「各拍各的窗口」重新排队，而那正是这一刀要解开的瓶颈。
  */
 export const COMPUTER_USE_DESKTOP_KEY = "desktop:exclusive";
 
@@ -592,6 +607,51 @@ export type ComputerUseScreenshotResult =
     }
   | { ok: false; error: string };
 
+// ── 按窗口截图（win-list / win-shot，桥 0.9.0）────────────────────────────
+
+/** win-list 的一项（字段名与 guest 的 WindowInfo 一一对应）。坐标是**屏幕**物理像素 */
+export interface ComputerUseWindowInfo {
+  /** 窗口句柄（传给 win-shot 的 hwnd）。原生指针在 64 位进程里可能超过 32 位，一律按 number 存 */
+  hwnd: number;
+  title: string;
+  /** 进程名（受保护进程读不到时为空串，但窗口照样能拍） */
+  process: string;
+  className: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minimized: boolean;
+  visible: boolean;
+}
+
+/**
+ * 按窗口截图的回执。几何语义与整桌面截图**刻意同形**（width/height = 回图像素，
+ * nativeWidth/Height = 窗口物理像素），但坐标**不能**混用：这里的 native 是窗口自己的
+ * 坐标系，computer_click 要的是整屏的物理像素。所以工具层不会拿它更新「最近一次截图」的
+ * 几何（详见 computer-tools.ts 的 window 分支）。
+ */
+export type ComputerUseWindowShotResult =
+  | {
+      ok: true;
+      jpegBase64: string;
+      width: number;
+      height: number;
+      nativeWidth: number;
+      nativeHeight: number;
+      hwnd: number;
+      title: string;
+      /** 目标最小化过、已被 ShowWindow(SW_SHOWNOACTIVATE) 恢复（不抢焦点） */
+      restoredFromMinimized: boolean;
+      takenAt: number;
+    }
+  | { ok: false; error: string };
+
+/** win-list 的回执（失败时 error 已经是给模型读的人话） */
+export type ComputerUseWindowListResult =
+  | { ok: true; windows: ComputerUseWindowInfo[] }
+  | { ok: false; error: string };
+
 // ── agent 的像素工具组（PR2）───────────────────────────────────────────
 
 /** 鼠标键。缺省 left——绝大多数操作是左键 */
@@ -603,7 +663,18 @@ export type ComputerUseButton = "left" | "right" | "middle";
  * 只认物理像素——这两端不该各自再猜一遍缩放。
  */
 export type ComputerUseToolRequest =
-  | { action: "screenshot"; maxWidth?: number }
+  | {
+      action: "screenshot";
+      maxWidth?: number;
+      /**
+       * 只拍这一个窗口（桥 0.9.0）：数字 = hwnd（win-list 回执里的那个），字符串 = 标题的
+       * 不区分大小写包含匹配。缺省 = 整块桌面（与改动前逐字同行为）。
+       *
+       * **这条路径不占桌面租约**：PrintWindow 读窗口自己的 surface，被遮挡也拍得到、不抢焦点，
+       * 所以多个会话可以各拍各的窗口（desktop:exclusive 仍归整桌面截图与像素输入）。
+       */
+      window?: string | number;
+    }
   | { action: "click"; x: number; y: number; button?: ComputerUseButton; double?: boolean }
   | { action: "type"; text: string }
   | { action: "key"; key: string }
@@ -643,6 +714,22 @@ export type ComputerUseToolRequest =
  */
 export function isSandboxBrowserAction(action: ComputerUseToolRequest["action"]): boolean {
   return action.startsWith("sandbox-");
+}
+
+/**
+ * 这条请求是不是**按窗口**截图（screenshot + window 字段）。
+ *
+ * 宿主拿它决定**要不要桌面租约**：整桌面截图与像素输入共用唯一一块屏幕与前台焦点，必须排队；
+ * 而按窗口截图走 PrintWindow——读的是那个窗口自己的合成 surface，别人的窗口挡着也拍得到，
+ * 也不移动焦点、不改变前后台（2026-10-25 真沙箱实测：被 900×700 不透明窗口完全遮住的 Edge
+ * 拍出来与可见时逐像素一致）。所以它**不占** desktop:exclusive，多个会话可以同时各拍各的。
+ *
+ * 唯一的共享副作用是「目标最小化时要先恢复」：ShowWindow(SW_SHOWNOACTIVATE) 会让那个窗口
+ * 重新出现在桌面上（不抢焦点）。这是 win-shot 能拍到最小化窗口的前提，权衡下仍然值得——
+ * 否则最小化的窗口就只能回「拍不到」。
+ */
+export function isWindowScreenshotRequest(request: ComputerUseToolRequest): boolean {
+  return request.action === "screenshot" && request.window !== undefined;
 }
 
 /**
