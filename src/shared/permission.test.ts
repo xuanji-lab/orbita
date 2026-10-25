@@ -160,7 +160,7 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
     }
   });
 
-  test("写入四件单独成桶：五件工具合起来才是预算口径，两桶互不重叠", () => {
+  test("写件单独成桶：两桶合起来才是预算口径，互不重叠", () => {
     for (const tool of COMPUTER_USE_WRITE_TOOLS) {
       assert.equal(isComputerUseWriteTool(tool), true, tool);
       assert.equal(isComputerUseReadTool(tool), false, tool);
@@ -176,6 +176,31 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
     }
     assert.equal(isComputerUseWriteTool("bash"), false);
     assert.equal(isComputerUseTool("bash"), false);
+  });
+
+  test("写桶覆盖三条车道的写动作：像素四件 + 网页五件 + UIA，一个都不漏", () => {
+    // 名字是真源：各自在 computer-tools.ts / sandbox-tools.ts 的工具定义里。漏一个的后果
+    // 不是「少问一次」——它同时绕过会话授权、两级预算与急停撤销，三道闸一起失效
+    // （2026-10 修：链上新增的 6 件曾全在名单外）。
+    const all = [
+      "computer_click",
+      "computer_type",
+      "computer_key",
+      "computer_scroll",
+      "sandbox_navigate",
+      "sandbox_click",
+      "sandbox_type",
+      "sandbox_upload",
+      "sandbox_download",
+      "computer_uia",
+    ];
+    for (const tool of all) {
+      assert.equal(isComputerUseWriteTool(tool), true, `${tool} 应在写桶里`);
+      assert.equal(isComputerUseTool(tool), true, `${tool} 应计入预算`);
+      assert.equal(isComputerUseReadTool(tool), false, `${tool} 不应同时是只读`);
+    }
+    // 名单恰好是这十件：多一个少一个都要在这里显式改（防静默漂移）
+    assert.deepEqual([...COMPUTER_USE_WRITE_TOOLS].sort(), [...all].sort());
   });
 });
 

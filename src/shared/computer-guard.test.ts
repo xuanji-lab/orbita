@@ -186,3 +186,84 @@ describe("computer-guard —— 预算两级（按轮重置的边界）", () => 
     }
   });
 });
+
+describe("computer-guard —— 语义分档（不是工具名硬凑）", () => {
+  test("D2 输入类：sandbox_type 与 computer_type 同义，破坏词一样命中", () => {
+    for (const text of ["format d: /q", "diskpart", "shutdown /s /t 0", "taskkill /F /PID 1"]) {
+      const risk = describeComputerUseRisk({ tool: "sandbox_type", args: { selector: "#q", text } });
+      assert.equal(risk?.rule, "command", `「${text}」应命中输入类`);
+      assert.equal(risk?.level, "confirm");
+      assert.match(risk?.message ?? "", /sandbox_type/);
+    }
+    // 普通输入照样静默
+    assert.equal(describeComputerUseRisk({ tool: "sandbox_type", args: { selector: "#q", text: "你好" } }), null);
+    // text 缺了 / 不是字符串：没有可判的东西
+    assert.equal(describeComputerUseRisk({ tool: "sandbox_type", args: { selector: "#q" } }), null);
+  });
+
+  test("computer_uia：setValue 送文本走 D2，list / invoke / selection / focus 不套输入类", () => {
+    const risky = describeComputerUseRisk({
+      tool: "computer_uia",
+      args: { action: "setValue", hwnd: 7, ref: 1, value: "format c:" },
+    });
+    assert.equal(risky?.rule, "command");
+    assert.match(risky?.message ?? "", /computer_uia/);
+
+    // 清空输入框（value 是空串）合法且不命中
+    assert.equal(
+      describeComputerUseRisk({ tool: "computer_uia", args: { action: "setValue", hwnd: 7, ref: 1, value: "" } }),
+      null,
+    );
+    // 非输入动作：没有「送进去的字」，不套 D2
+    for (const action of ["list", "invoke", "selection", "focus"]) {
+      assert.equal(
+        describeComputerUseRisk({ tool: "computer_uia", args: { action, hwnd: 7, ref: 1 } }),
+        null,
+        action,
+      );
+    }
+    // 就算 invoke 带着一个像破坏词的 name，也不是输入动作——name 是指控件的标签
+    assert.equal(
+      describeComputerUseRisk({ tool: "computer_uia", args: { action: "invoke", name: "shutdown /s" } }),
+      null,
+    );
+  });
+
+  test("sandbox_click 收选择器不收坐标：D3 不适用（不会被当成同点连点）", () => {
+    for (let prior = 0; prior < COMPUTER_USE_REPEAT_LIMIT + 2; prior += 1) {
+      assert.equal(
+        describeComputerUseRisk({
+          tool: "sandbox_click",
+          args: { selector: "#submit" },
+          priorSamePointClicks: prior,
+        }),
+        null,
+        `此前 ${prior} 次也不该命中`,
+      );
+    }
+    // 带 x/y 也不会被 computer_click 的分支误认：工具名不同
+    assert.equal(
+      describeComputerUseRisk({
+        tool: "sandbox_click",
+        args: { selector: "#submit", x: 10, y: 10 },
+        priorSamePointClicks: COMPUTER_USE_REPEAT_LIMIT,
+      }),
+      null,
+    );
+  });
+
+  test("文件进出 / 换页：规则词表里没有「文件类」，当前不弹破坏性确认卡（靠写闸门与预算）", () => {
+    // 这条测试钉住的是**取舍**：upload / download 有价值单独确认，但三类规则
+    // （key / command / repeat）的卡片文案在 renderer 按这三类分派，新立一类会渲染错。
+    // 哪天补了文件类规则与文案，这条测试要跟着改。
+    assert.equal(
+      describeComputerUseRisk({ tool: "sandbox_upload", args: { selector: "input[file]", path: "C:\a.txt" } }),
+      null,
+    );
+    assert.equal(
+      describeComputerUseRisk({ tool: "sandbox_download", args: { selector: "#export", dir: "run1" } }),
+      null,
+    );
+    assert.equal(describeComputerUseRisk({ tool: "sandbox_navigate", args: { url: "https://example.com" } }), null);
+  });
+});

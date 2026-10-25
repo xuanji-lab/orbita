@@ -5,6 +5,9 @@
  *
  *   1. **这一步要不要额外确认**（D1 组合键黑名单 / D2 破坏词 / D3 同点连点）——
  *      `describeComputerUseRisk`。命中是「弹确认卡」，**不是拒绝**：用户点头后照常执行。
+ *      判定按**语义**而不是工具名：往输入控件里送文本的都走 D2（computer_type /
+ *      sandbox_type / computer_uia 的 setValue），带危险组合键的走 D1（computer_key），
+ *      带坐标的连点走 D3（computer_click）。
  *   2. **本轮的预算还剩多少**（60 次软限 / 90 次或 20 分钟硬限）——
  *      `judgeComputerUseBudget`。两级行为不同：软限返回人话错误让模型收尾，硬限中断本轮。
  *   3. **授权被撤销后回给模型什么话** —— `COMPUTER_USE_REVOKED_MESSAGE`（唯一一份文案）。
@@ -75,7 +78,8 @@ const DANGEROUS_KEY_SET: ReadonlySet<string> = new Set(
 // ── D2 破坏词 ─────────────────────────────────────────────────────────
 
 /**
- * 命令行破坏动作（`computer_type` 的文本）。**匹配的是「打进去的字」**，不是执行结果——
+ * 命令行破坏动作（**往输入控件里送的字**：computer_type / sandbox_type 的 text，
+ * computer_uia setValue 的 value）。**匹配的是「打进去的字」**，不是执行结果——
  * 沙箱里模型常打开 cmd 做事，这些词一旦出现在输入里就值得让用户看一眼。
  *
  * 每条都写清它拦的是什么：
@@ -137,7 +141,7 @@ export function countNearbyClicks(
 export type ComputerUseRiskRule = "key" | "command" | "repeat";
 
 export interface ComputerUseRiskInput {
-  /** 工具名（computer_key / computer_type / computer_click） */
+  /** 工具名（写桶里的 computer_* / sandbox_*，见 COMPUTER_USE_WRITE_TOOLS） */
   tool: string;
   /** 工具的入参（pi 原样给的那份） */
   args: Record<string, unknown>;
@@ -159,10 +163,31 @@ export interface ComputerUseRisk {
 }
 
 /**
+ * 一次调用里「要送进输入控件的那段字」；不是输入类动作就返回 null。
+ *
+ * 语义分档而不是工具名硬凑：
+ *   - computer_type / sandbox_type 都是「往焦点 / 选择器指向的输入框里送文本」，同一个风险；
+ *   - computer_uia 只有 setValue 在送文本（invoke / selection / focus 是点控件、改选中 / 焦点，
+ *     list 只读控件树）；value 允许空串（清空输入框）——空串不命中任何破坏词，照常返回。
+ */
+function typedText(input: ComputerUseRiskInput): string | null {
+  if (input.tool === "computer_type" || input.tool === "sandbox_type") {
+    const text = input.args["text"];
+    return typeof text === "string" ? text : null;
+  }
+  if (input.tool === "computer_uia" && input.args["action"] === "setValue") {
+    const value = input.args["value"];
+    return typeof value === "string" ? value : null;
+  }
+  return null;
+}
+
+/**
  * 判定一次 computer_* 调用有没有值得单独确认的东西。**纯函数**：同一份入参永远同一结论。
  *
  * 返回 null = 没有可判定的风险（safe）。返回对象 = 弹确认卡；用户允许后照常执行。
- * 只认三个工具：click（D3）/ key（D1）/ type（D2）；其余（screenshot / scroll）恒定 null。
+ * 按语义认三类：key（D1，computer_key）/ 送文本进输入控件（D2，computer_type /
+ * sandbox_type / computer_uia setValue）/ 同坐标连点（D3，computer_click）。
  */
 export function describeComputerUseRisk(input: ComputerUseRiskInput): ComputerUseRisk | null {
   if (input.tool === "computer_key") {
@@ -183,9 +208,8 @@ export function describeComputerUseRisk(input: ComputerUseRiskInput): ComputerUs
     return null;
   }
 
-  if (input.tool === "computer_type") {
-    const text = input.args["text"];
-    if (typeof text !== "string") return null;
+  const text = typedText(input);
+  if (text !== null) {
     const hit = destructiveText(text);
     if (hit === null) return null;
     return {
@@ -193,10 +217,14 @@ export function describeComputerUseRisk(input: ComputerUseRiskInput): ComputerUs
       rule: "command",
       detail: hit,
       message:
-        `computer_type is about to type a destructive command (${hit}). Confirm this with the user before it runs.`,
+        `${input.tool} is about to send a destructive command (${hit}) into an input control. ` +
+        "Confirm this with the user before it runs.",
     };
   }
 
+  // D3 只认**坐标**：computer_click 的 x/y 是截图像素，连点同一点是「卡在循环里」的当场证据。
+  // sandbox_click 收的是 CSS 选择器、computer_uia 收的是控件 ref / name——没有坐标可比，
+  // 「同一点」这个概念不成立，所以它们不套 D3。它们仍然被写闸门（授权 / 撤销）与预算管着。
   if (input.tool === "computer_click") {
     const prior = input.priorSamePointClicks ?? 0;
     // 第 N 次起确认：此前已有 LIMIT-1 次，加上这一次正好第 LIMIT 次
@@ -212,6 +240,16 @@ export function describeComputerUseRisk(input: ComputerUseRiskInput): ComputerUs
     };
   }
 
+  // 剩下的写工具（sandbox_navigate / sandbox_click / sandbox_upload / sandbox_download /
+  // computer_uia 的非 setValue 动作）没有 D1/D2/D3 可判的当场证据：
+  //   - sandbox_click：选择器点击，没有坐标（D3 不适用）；命中元素是不是「删除」不可知
+  //     （引导页的 UNTRUSTED 说明与这里的边界一致）；
+  //   - sandbox_upload / download：文件进出确实值得看一眼，但规则词表只有 key / command /
+  //     repeat 三类，renderer 的卡片就按这三类出文案（ApprovalBar）。新立「file」类会掉进
+  //     repeat 分支渲染出 `第 NaN 次点击同一坐标`——要么改渲染层，要么这里不造半成品。
+  //     当前口径：这两件**不走破坏性确认卡**，但被写闸门（plan 拒 / manual 逐次问 /
+  //     skip 的会话授权）与预算管住，不会在用户没点头时静默执行；
+  //   - sandbox_navigate：换页本身无 D1/D2/D3 证据（去处是否危险不可知）。
   return null;
 }
 

@@ -135,10 +135,11 @@ export function isBrowserReadTool(toolName: string): boolean {
  * sandbox_wait 也在这里：它只是等某个选择器出现（或等一段时间），不改变页面、不注入
  * 输入；plan 档下「等页面加载完再看」同样是只读规划的一部分。
  *
- * 其余写件（computer_click / type / key / scroll，sandbox_navigate / click / type /
- * upload / download）**不在这里**：它们真往沙箱里注入鼠标键盘事件或改变页面状态，能提交
- * 表单、删文件、关窗口，走默认的写操作闸门（plan 拒 / manual 问 / skip 放）——与
- * browser_click / browser_type / browser_press 同一待遇，不为它们另立名单。
+ * 其余写件**不在这里**，它们收在 COMPUTER_USE_WRITE_TOOLS（下面那只桶）里：
+ * 像素四件（computer_click / type / key / scroll）与网页五件（sandbox_navigate / click /
+ * type / upload / download）真往沙箱里注入鼠标键盘事件、改变页面状态或搬文件，能提交
+ * 表单、删文件、关窗口。三档判定仍是默认写闸门（plan 拒 / manual 问 / skip 放），
+ * 另外在 skip 档还要过一道本会话授权（见写桶的注释）。
  */
 export const COMPUTER_USE_READ_TOOLS = [
   "computer_screenshot",
@@ -153,11 +154,26 @@ export function isComputerUseReadTool(toolName: string): boolean {
 }
 
 /**
- * computer use 的写入四件：点击 / 打字 / 按键 / 滚动。真往沙箱里注入输入事件。
+ * computer use 的写件：**凡能改变沙箱状态、往沙箱里送输入、或让文件进出的工具**都在这里。
+ * 名单按「有没有副作用」判，不按车道判——像素（computer_*）、网页 CDP（sandbox_*）、
+ * UIA（computer_uia）三条车道的写动作同一待遇。
  *
- * 这四件**不在只读桶里**（三档判定仍走默认写闸门：plan 拒、manual 逐次问、skip 放），
+ * 这十件**不在只读桶里**（三档判定仍走默认写闸门：plan 拒、manual 逐次问、skip 放），
  * 单独立桶是因为 skip 档下它们还要过一道「本会话授权」：默认档是 skip，没有这道闸，
- * agent 在用户什么都没同意的情况下就能操作沙箱（2026-10 终审裁决）。
+ * agent 在用户什么都没同意的情况下就能操作沙箱（2026-10 终审裁决）。同一只桶同时是
+ * 预算（60 / 90 次）与急停撤销的判定口径——名单漏一个，那个工具就同时绕过三道闸。
+ *
+ * 分组与理由：
+ *   - 像素四件 computer_click / type / key / scroll：往唯一一块桌面注入鼠标键盘事件；
+ *   - 网页五件 sandbox_navigate / click / type / upload / download：换页面、点元素、往输入框
+ *     打字、把宿主机文件送进页面、把页面下载物落到宿主机。沙箱隔离不改变「它做了用户没
+ *     点头的事」这一点；
+ *   - computer_uia：按控件动作（invoke / setValue / selection / focus），直接改窗口里的控件
+ *     状态。它的 `list` 只读控件树，**名单是工具级的、不含参数**，所以 list 也跟着走写闸门。
+ *     **这是刻意选保守的一侧**：按参数分档要把 args 穿进 `decidePermission`（三档语义的
+ *     唯一出处）、写闸门的三处判定与预算口径，并重新裁决「plan 档下 list 算不算只读」——
+ *     那是另一件事。多问一次（skip 档下仅会话第一张卡，授权后不再问）比把 invoke 漏成
+ *     免审批便宜得多。
  * 授权与破坏性确认的判定在 `src/agent/permission.ts` 的闸门里，规则在
  * `src/shared/computer-guard.ts`。
  */
@@ -166,6 +182,12 @@ export const COMPUTER_USE_WRITE_TOOLS = [
   "computer_type",
   "computer_key",
   "computer_scroll",
+  "sandbox_navigate",
+  "sandbox_click",
+  "sandbox_type",
+  "sandbox_upload",
+  "sandbox_download",
+  "computer_uia",
 ] as const;
 
 export function isComputerUseWriteTool(toolName: string): boolean {

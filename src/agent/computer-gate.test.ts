@@ -250,3 +250,65 @@ describe("电脑使用：两级预算", () => {
     }
   });
 });
+
+describe("电脑使用：网页车道与 UIA 车道的写工具同样过闸", () => {
+  test("skip + 未授权：sandbox_type 的会话卡带上 D2 风险（不再无卡直执行）", async () => {
+    const { gate, asked } = computerGate({ mode: "skip", answers: [{ behavior: "allow" }] });
+    assert.deepEqual(await gate(event("sandbox_type", { selector: "#q", text: "format d: /q" })), {});
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0]?.scope, "session");
+    assert.equal((asked[0]?.risk)?.rule, "command");
+  });
+
+  test("skip + 未授权：sandbox_click 也要会话卡（选择器点击没有 D3，但仍是写动作）", async () => {
+    const { gate, asked } = computerGate({ mode: "skip" });
+    assert.deepEqual(await gate(event("sandbox_click", { selector: "#submit" })), {});
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0]?.scope, "session");
+    assert.equal(asked[0]?.risk, undefined);
+  });
+
+  test("computer_uia 按工具分档（不按参数）：list 也走会话卡，授权后 invoke 不再问", async () => {
+    const { gate, asked } = computerGate({ mode: "skip" });
+    assert.deepEqual(await gate(event("computer_uia", { action: "list", hwnd: 7 })), {});
+    assert.equal(asked.length, 1, "list 是只读动作，但名单是工具级——宁可多问这一次");
+    assert.equal(asked[0]?.scope, "session");
+    assert.deepEqual(await gate(event("computer_uia", { action: "invoke", hwnd: 7, ref: 1 })), {});
+    assert.equal(asked.length, 1, "同一会话只问一次");
+  });
+
+  test("急停撤销后：sandbox_* 与 computer_uia 一律直接拒，sandbox_observe 仍可看", async () => {
+    const { gate, asked } = computerGate({ mode: "skip", state: "revoked" });
+    for (const [tool, input] of [
+      ["sandbox_click", { selector: "#submit" }],
+      ["sandbox_type", { selector: "#q", text: "hi" }],
+      ["sandbox_upload", { selector: "input[file]", path: "C:\a.txt" }],
+      ["sandbox_download", { selector: "#export", dir: "run1" }],
+      ["sandbox_navigate", { url: "https://example.com" }],
+      ["computer_uia", { action: "invoke", hwnd: 7, ref: 1 }],
+    ] as const) {
+      const blocked = await gate(event(tool, input));
+      assert.equal(blocked.block, true, tool);
+      assert.match(blocked.reason ?? "", /revoked|emergency stop/i, tool);
+    }
+    assert.deepEqual(asked, []);
+    assert.deepEqual(await gate(event("sandbox_observe")), {});
+    // list 是只读动作，但按工具分档：撤销后同样拒（保守一侧，见 COMPUTER_USE_WRITE_TOOLS 注释）
+    assert.equal((await gate(event("computer_uia", { action: "list", hwnd: 7 }))).block, true);
+  });
+
+  test("预算口径覆盖新增写工具：60 次截图之后 sandbox_click 撞软限", async () => {
+    const { gate } = computerGate({ state: "granted", now: () => 1_000 });
+    for (let i = 1; i <= 60; i += 1) {
+      assert.deepEqual(await gate(event("computer_screenshot")), {}, `第 ${i} 次应放行`);
+    }
+    for (const [tool, input] of [
+      ["sandbox_click", { selector: "#submit" }],
+      ["computer_uia", { action: "invoke", hwnd: 7, ref: 1 }],
+    ] as const) {
+      const soft = await gate(event(tool, input));
+      assert.equal(soft.block, true, tool);
+      assert.match(soft.reason ?? "", /budget/i, tool);
+    }
+  });
+});
