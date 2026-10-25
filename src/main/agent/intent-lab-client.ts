@@ -35,11 +35,21 @@ export async function getIntentEdges(
 }
 
 /**
+ * /ingest 的完整端点。**两种入参都收**：服务地址（`http://host:port`）与已经带
+ * `/ingest` 的完整 URL。调用方历史上两种都给过——再拼一次就是 `POST /ingest/ingest`
+ * 的 404（2026-10-24 探针实测：每轮存档全丢，界面无感）。路径只在这里拼。
+ */
+export function ingestEndpoint(url: string): string {
+  const trimmed = url.replace(/\/+$/, "");
+  return trimmed.endsWith("/ingest") ? trimmed : `${trimmed}/ingest`;
+}
+
+/**
  * POST /ingest：本轮回答正常结束后存档 QA（q = 意图口径原话，a = 助手该轮最后一段
  * 文字）。失败抛给调用方（调用方只记日志，不影响界面——存档是养分，不是链路）。
  */
-export async function postIntentIngest(baseUrl: string, row: unknown): Promise<void> {
-  const response = await fetch(`${baseUrl}/ingest`, {
+export async function postIntentIngest(url: string, row: unknown): Promise<void> {
+  const response = await fetch(ingestEndpoint(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(row),
