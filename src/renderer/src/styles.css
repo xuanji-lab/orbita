@@ -570,8 +570,9 @@
    * 停在 1022，而条原来到 1030。两边都要和文字同起同止（858..1022）。
    */
   margin: 0 calc(var(--space-2) * 2) var(--space-1) calc(var(--space-2) * 2 + 14px);
+}
 
-
+/*
  * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
  * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
  * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold
