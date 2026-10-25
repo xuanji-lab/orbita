@@ -2348,7 +2348,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 播种回去，用户看到的就是「切了没同步」。runtime 的 setLedgerModel 本就为
    * 「没在跑」的会话而设：校验 + `model` 事件回环落 meta，与活会话同一条真源。
    * 换了不发言就切走会丢选择的旧裁决由此作废——现在选择当场落盘。
-   * pi 的切换对正在跑的轮无效、下一轮生效——正在跑的轮照旧，写的和跑的不会再对不上。
+   * **轮在跑也发这条 IPC**（bug A11）：不发的话 runtime 不会发 model 事件，
+   * 会话 meta 停在旧值，重开/重启就回旧模型。跑着的这一轮不受影响——runtime
+   * 只校验 + 落 meta，不在在跑的 pi 会话上调 setModel（那会原地改
+   * agent.state.model，重试或工具后的下一次调用跟着换，出现一轮两模）；
+   * 下一条 submit 显式带上新模型，真正的生效点在那里。
    *
    * 思考档跟着模型走（用户裁决 wafo 2026-09-23）：本槽没有会话（新任务槽）按
    * 「手选 > 新模型的默认档」重算；有会话则当前档新模型仍支持就保留，不支持
@@ -2381,19 +2385,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
       // 拿到你刚才给别的会话选的模型
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
-      if (currentPhase() === "idle") {
-        // 闲着就注入（校验 + 落 meta + model 事件回环）；跑着只改显示——
-        // 无状态下注入就是下一轮 submit 带上的新值，不需要欠账冲账。
-        // currentPhase 只认本槽活会话（sessionRef）：盘上打开的会话恒判 idle，
-        // 若它其实正在后台跑（通道投递开的轮），runtime 侧自然走 setSessionModel
-        // 的在跑路径——两条路都是正解
-        void api.agent
-          .setModel(id, providerId, modelId)
-          .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
-      }
+      // 校验 + 落 meta + model 事件回环。**不看相位**：meta 必须跟上用户的选择，
+      // 否则切走再回来 / 重启会回旧模型（A11）。currentPhase 只认本槽活会话，
+      // 盘上打开但后台在跑的会话这里恒判 idle——两条路都在 agent 侧同一条校验与落账
+      void api.agent
+        .setModel(id, providerId, modelId)
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
       if (switched !== null) applySessionThinking(id, switched);
     },
-    [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
+    [engine, catalog, opened, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
 
   const changeMode = useCallback(
