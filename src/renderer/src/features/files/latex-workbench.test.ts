@@ -16,6 +16,7 @@ import {
   latexBarState,
   missingPackageOf,
   packageLabel,
+  packageNoteKind,
   pdfStale,
   shortcutLabel,
 } from "./latex-workbench.ts";
@@ -104,6 +105,41 @@ describe("missingPackageOf", () => {
   test("缺字体不是缺宏包（tlmgr 装不了）", () => {
     assert.equal(missingPackageOf("Font T1-xxx not found"), null);
     assert.equal(missingPackageOf("LaTeX Warning: Citation `lewis2020' undefined"), null);
+  });
+});
+
+describe("packageNoteKind —— 没查到包名的几种原因必须分开", () => {
+  const entry = (patch: Partial<import("../../../../shared/latex.ts").LatexResolvedPackage>) => ({
+    missing: "a.sty",
+    packageName: null,
+    command: null,
+    sudo: false,
+    installed: false,
+    distro: null,
+    reason: null,
+    ...patch,
+  });
+
+  test("还在查（没有结果）≠ 查完了没查到", () => {
+    assert.equal(packageNoteKind(undefined), "looking-up");
+    assert.equal(packageNoteKind(entry({ reason: "not-found", distro: "texlive" })), "unknown");
+  });
+
+  test("文件名不合法不能被说成「没找到 tlmgr / mpm」", () => {
+    assert.equal(packageNoteKind(entry({ reason: "invalid-name", distro: null })), "invalid-name");
+    assert.equal(packageNoteKind(entry({ reason: "no-tools", distro: null })), "no-tools");
+    assert.equal(packageNoteKind(entry({ reason: "tool-error", distro: "texlive" })), "tool-error");
+    assert.equal(packageNoteKind(entry({ reason: "not-looked-up" })), "not-looked-up");
+  });
+
+  test("有包名就补第二行；本机已有时优先说「已能定位到」", () => {
+    assert.equal(packageNoteKind(entry({ packageName: "ctex", reason: null })), "none");
+    assert.equal(
+      packageNoteKind(entry({ packageName: "ctex", installed: true, reason: null })),
+      "installed",
+    );
+    // 本机已有、但反查也失败：先说「本机已能定位到这个文件」，原因不重要
+    assert.equal(packageNoteKind(entry({ installed: true, reason: "no-tools" })), "installed");
   });
 });
 

@@ -754,6 +754,11 @@ export function App() {
    * 下一次编译开始时清掉（装没装好，编译那一下会说明）。
    */
   const [latexInstallNotice, setLatexInstallNotice] = useState(false);
+  // 换会话 / 换工作区就不再是「刚在这个项目里装了包」——提示跟着那一次编译走
+  const latexNoticeScope = `${session.sessionId ?? ""}|${session.workspaceId ?? ""}`;
+  useEffect(() => {
+    setLatexInstallNotice(false);
+  }, [latexNoticeScope]);
 
   const runInTerminal = useCallback((text: string): void => {
     terminalInputTokenRef.current += 1;

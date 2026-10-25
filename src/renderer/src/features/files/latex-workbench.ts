@@ -5,7 +5,7 @@
  * 与 IPC，`node --test` 加载不了；这里全是输入 → 输出，直接可测。事实（项目目录、
  * PDF mtime、日志条目）由主进程给，这里只决定「按钮该是什么样」。
  */
-import type { LatexIssue, LatexStatus } from "@shared/latex";
+import type { LatexIssue, LatexResolvedPackage, LatexStatus } from "@shared/latex";
 // 值导入走相对路径（带 .ts）：`node --test` 不认 vite / tsconfig 的 @shared 别名，
 // 类型导入会被剥掉所以无所谓，函数导入会在加载时就找不到模块。
 import { miktexPendingOf } from "../../../../shared/latex.ts";
@@ -206,4 +206,38 @@ export function issueLocation(issue: { file: string | null; line: number | null 
 export function packageLabel(missing: string, packageName: string | null): string {
   if (packageName !== null && packageName !== "") return packageName;
   return missing;
+}
+
+/**
+ * 缺包行第二行该说哪一句。**这里是「原因 → 文案」的唯一裁决点**，界面只做查表：
+ * 把「文件名不合法」「没有 tlmgr / mpm」「命令出错」「真·未知包」「这次没查」混成
+ * 一句「没找到 tlmgr」，会让一台装着 TeX Live 的机器被劝去装一个不存在的工具
+ * （评审抓到的就是这一条）。
+ */
+export type PackageNoteKind =
+  | "looking-up"
+  | "installed"
+  | "none"
+  | "invalid-name"
+  | "no-tools"
+  | "tool-error"
+  | "not-looked-up"
+  | "unknown";
+
+export function packageNoteKind(resolution: LatexResolvedPackage | undefined): PackageNoteKind {
+  if (resolution === undefined) return "looking-up";
+  if (resolution.installed) return "installed";
+  if (resolution.packageName !== null) return "none";
+  switch (resolution.reason) {
+    case "invalid-name":
+      return "invalid-name";
+    case "no-tools":
+      return "no-tools";
+    case "tool-error":
+      return "tool-error";
+    case "not-looked-up":
+      return "not-looked-up";
+    default:
+      return "unknown";
+  }
 }

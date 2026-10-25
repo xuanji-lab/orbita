@@ -17,6 +17,7 @@ import type { LatexIssue, LatexResolvedPackage } from "@shared/latex";
 import {
   issueLocation,
   packageLabel,
+  packageNoteKind,
   type LatexIssueGroups,
   type MissingPackage,
 } from "./latex-workbench.ts";
@@ -147,18 +148,32 @@ export function LatexProblems(props: {
 }
 
 /**
- * 缺包行的第二行说明（小号弱色）。三种情况各自说人话：
- * 还在查 / 本机其实有 / 查不到所属包（再分「没有发行版工具」与「包本身不在发行版里」）。
+ * 缺包行的第二行说明（小号弱色）。原因的分类在 latex-workbench.ts 的
+ * `packageNoteKind`（纯函数、有测试），这里只把分类翻成文案。
  */
 function packageNote(
   pkg: MissingPackage,
   resolution: LatexResolvedPackage | undefined,
   t: ReturnType<typeof useT>,
 ): string | null {
-  if (resolution === undefined) return t.latex.packageLookingUp;
-  if (resolution.installed) return t.latex.packageAlreadyInstalled;
-  if (resolution.packageName !== null) return null;
-  return resolution.distro === null ? t.latex.packageNoTool : t.latex.packageUnknown(pkg.missing);
+  switch (packageNoteKind(resolution)) {
+    case "looking-up":
+      return t.latex.packageLookingUp;
+    case "installed":
+      return t.latex.packageAlreadyInstalled;
+    case "none":
+      return null;
+    case "invalid-name":
+      return t.latex.packageInvalidName;
+    case "no-tools":
+      return t.latex.packageNoTool;
+    case "tool-error":
+      return t.latex.packageToolError;
+    case "not-looked-up":
+      return t.latex.packageNotLookedUp;
+    case "unknown":
+      return t.latex.packageUnknown(pkg.missing);
+  }
 }
 
 function toItem(issue: LatexIssue | MissingPackage, level: ProblemLevel): ProblemItem {

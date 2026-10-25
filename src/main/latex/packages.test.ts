@@ -15,6 +15,7 @@ import {
   needsSudo,
   parseMpmFind,
   parseTlmgrSearch,
+  pickPackage,
   type PackageDeps,
   type PackageRunResult,
 } from "./packages.ts";
@@ -92,6 +93,21 @@ describe("parseMpmFind", () => {
   });
 });
 
+describe("pickPackage", () => {
+  test("多个包都包含同一文件时，跳过 latex-dev 的镜像包", () => {
+    // 真机 tlmgr 的输出顺序：dev 在前
+    assert.equal(pickPackage(["latex-tools-dev", "tools"]), "tools");
+    assert.equal(pickPackage(["latex", "latex-base-dev"]), "latex");
+  });
+
+  test("只有一个就取它；没有就是 null", () => {
+    assert.equal(pickPackage(["ctex"]), "ctex");
+    assert.equal(pickPackage([]), null);
+    // 全带 -dev（罕见）也不至于没有结果
+    assert.equal(pickPackage(["only-dev"]), "only-dev");
+  });
+});
+
 describe("isLookupableFile", () => {
   test("只放行 x.sty / x.cls（名字会进命令行）", () => {
     assert.equal(isLookupableFile("ctexart.cls"), true);
@@ -114,6 +130,11 @@ describe("installCommandFor", () => {
   test("认不出发行版就不给命令（不猜 tlmgr）", () => {
     assert.equal(installCommandFor(null, "ctex", false), null);
     assert.equal(installCommandFor("texlive", "", false), null);
+  });
+
+  test("包名形状不对就不给命令（纵深防御）", () => {
+    assert.equal(installCommandFor("texlive", "ctex;curl$IFS", false), null);
+    assert.equal(installCommandFor("miktex", "a b", false), null);
   });
 });
 
@@ -161,6 +182,7 @@ describe("createLatexPackageLookup —— TeX Live", () => {
       sudo: false,
       installed: false,
       distro: "texlive",
+      reason: null,
     });
     // 查询用的是「路径结尾」形态：/ctexart.cls
     assert.ok(tooling.calls.includes(`${tl("tlmgr")} search --file /ctexart.cls`));
@@ -176,6 +198,8 @@ describe("createLatexPackageLookup —— TeX Live", () => {
     assert.equal(resolved?.packageName, null);
     assert.equal(resolved?.command, null);
     assert.equal(resolved?.distro, "texlive");
+    // 命令跑成了但没人认领 → not-found；不能说成「没装 tlmgr」
+    assert.equal(resolved?.reason, "not-found");
   });
 
   test("kpsewhich 已经能定位到 → 包名照给，但不给安装命令", async () => {
@@ -196,6 +220,27 @@ describe("createLatexPackageLookup —— TeX Live", () => {
     assert.equal(resolved?.distro, null);
     assert.equal(resolved?.packageName, null);
     assert.equal(resolved?.command, null);
+    assert.equal(resolved?.reason, "no-tools");
+  });
+
+  test("文件名不合法 → reason 是 invalid-name，与「没装工具」分开", async () => {
+    const tooling = texlive({});
+    const lookup = createLatexPackageLookup(async () => tl("latexmk"), tooling.deps);
+    const [resolved] = await lookup.resolve(["a&b.sty"]);
+    assert.equal(resolved?.reason, "invalid-name");
+    assert.equal(resolved?.distro, null);
+    // 而且根本没起命令
+    assert.equal(tooling.calls.some((call) => call.includes("a&b")), false);
+  });
+
+  test("tlmgr 在但 search 非零退出 → tool-error（不是 not-found，也不是 no-tools）", async () => {
+    const tooling = texlive({
+      [`${tl("tlmgr")} search --file /ctexart.cls`]: { code: 3, stdout: "", stderr: "boom", spawnError: null },
+    });
+    const lookup = createLatexPackageLookup(async () => tl("latexmk"), tooling.deps);
+    const [resolved] = await lookup.resolve(["ctexart.cls"]);
+    assert.equal(resolved?.reason, "tool-error");
+    assert.equal(resolved?.distro, "texlive");
   });
 
   test("同一文件只查一次（重编十遍不该起十遍 tlmgr）", async () => {
@@ -242,6 +287,31 @@ describe("createLatexPackageLookup —— MiKTeX", () => {
 });
 
 describe("createLatexPackageLookup —— 批量", () => {
+  test("7 个缺包全部有结果（并发反查，不留「正在反查」的死角）", async () => {
+    const replies: Record<string, PackageRunResult | undefined> = { [`${tl("tlmgr")} --version`]: OK("") };
+    for (let index = 0; index < 7; index += 1) {
+      replies[`${tl("tlmgr")} search --file /p${index}.sty`] = OK(`pkg-${index}:
+	x/p${index}.sty
+`);
+    }
+    const tooling = fakeDeps({ files: TL_FILES, replies });
+    const lookup = createLatexPackageLookup(async () => tl("latexmk"), tooling.deps);
+    const names = Array.from({ length: 7 }, (_, index) => `p${index}.sty`);
+    const out = await lookup.resolve(names);
+    assert.equal(out.length, 7);
+    assert.deepEqual(out.map((entry) => entry.packageName), names.map((_, index) => `pkg-${index}`));
+  });
+
+  test("超过上限的名字明确标 not-looked-up（界面不许一直转圈）", async () => {
+    const tooling = fakeDeps({ files: TL_FILES, replies: { [`${tl("tlmgr")} --version`]: OK("") } });
+    const lookup = createLatexPackageLookup(async () => tl("latexmk"), tooling.deps);
+    const names = Array.from({ length: 22 }, (_, index) => `p${index}.sty`);
+    const out = await lookup.resolve(names);
+    assert.equal(out.length, 22);
+    const skipped = out.filter((entry) => entry.reason === "not-looked-up");
+    assert.equal(skipped.length, 2);
+  });
+
   test("顺序与请求一致、重复名字只算一条", async () => {
     const tooling = fakeDeps({
       files: TL_FILES,

@@ -1748,6 +1748,9 @@ export const en = {
     packageAlreadyInstalled:
       "This machine can already find that file — the log may be stale, or the engine uses a different TeX tree",
     packageNoTool: "tlmgr / mpm was not found, so the owning package cannot be looked up",
+    packageInvalidName: "Invalid file name — it is not a .sty / .cls name, so nothing was looked up",
+    packageToolError: "The lookup command did not run (failed to start or errored), so no package was found",
+    packageNotLookedUp: "Not looked up this time (too many missing files, or the lookup channel failed)",
     packageUnknown: (file: string) =>
       `Unknown package — nothing in your TeX distribution claims ${file}; search for that file name`,
     handToAgent: "Hand to agent",

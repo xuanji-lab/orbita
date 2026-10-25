@@ -319,14 +319,37 @@ export function FilesPanel(props: {
       return;
     }
     let cancelled = false;
+    /**
+     * 每个名字都要有一条结局——即使是「没查」也要说清楚，**界面不许永远停在
+     * 「正在反查包名…」**（主进程只回它查过的那些，通道也可能整个失败）。
+     */
+    const fill = (
+      list: readonly LatexResolvedPackage[],
+      reason: LatexResolvedPackage["reason"],
+    ): ReadonlyMap<string, LatexResolvedPackage> => {
+      const byName = new Map(list.map((entry) => [entry.missing, entry]));
+      for (const name of missing) {
+        if (byName.has(name)) continue;
+        byName.set(name, {
+          missing: name,
+          packageName: null,
+          command: null,
+          sudo: false,
+          installed: false,
+          distro: null,
+          reason,
+        });
+      }
+      return byName;
+    };
     void api.latex
       .packages({ ...latexContext, missing })
       .then((list) => {
-        if (!cancelled) setResolvedPackages(new Map(list.map((entry) => [entry.missing, entry])));
+        if (!cancelled) setResolvedPackages(fill(list, "not-looked-up"));
       })
       .catch(() => {
-        // 通道失败就当作「查不到」：行上仍显示文件名，不把抽屉变成错误报告
-        if (!cancelled) setResolvedPackages(new Map());
+        // 通道失败：行上仍显示文件名 + 一句「这次没查成」，不把抽屉变成错误报告
+        if (!cancelled) setResolvedPackages(fill([], "tool-error"));
       });
     return () => {
       cancelled = true;

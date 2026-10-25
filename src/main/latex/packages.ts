@@ -34,6 +34,7 @@ import { delimiter, dirname, join } from "node:path";
 import {
   LATEX_MAX_PACKAGE_LOOKUPS,
   type LatexPackageDistro,
+  type LatexPackageReason,
   type LatexResolvedPackage,
 } from "../../shared/latex.ts";
 
@@ -76,6 +77,13 @@ export interface LatexPackageLookup {
 /** `x.sty` / `x.cls`，其余一律不碰。名字来自日志，不能让它变成命令参数的注入面 */
 const LOOKUPABLE = /^[A-Za-z0-9][A-Za-z0-9._+-]*\.(?:sty|cls)$/i;
 
+/**
+ * 包名的形状（tlmgr / mpm 的包名：字母数字加 `._+-`，没有空白）。反查结果也要过这一关：
+ * 包名虽然来自本地 tlpdb、理论上不是攻击面，但 `parseTlmgrSearch` 只要「顶格且带冒号」，
+ * 一条畸形的库行（`ctex;curl$IFS…:`）就能穿过去进到拼命令的那一步——纵深防御不嫌多。
+ */
+const PACKAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+
 export function isLookupableFile(missing: string): boolean {
   return LOOKUPABLE.test(missing.trim());
 }
@@ -87,7 +95,7 @@ export function isLookupableFile(missing: string): boolean {
  *   	texmf-dist/tex/latex/ctex/ctexart.cls
  *
  * 包名是顶格、以冒号结尾的那几行（缩进行是路径）。tlmgr 自己的错误 / 提示
- * （`tlmgr.pl: …`）带空格，用「名字里不许有空白」挡掉。
+ * （`tlmgr.pl: …`）带空格——包名形状校验（PACKAGE_NAME）会把它们和任何畸形行一起挡掉。
  */
 export function parseTlmgrSearch(stdout: string): string[] {
   const names: string[] = [];
@@ -95,7 +103,7 @@ export function parseTlmgrSearch(stdout: string): string[] {
     const line = raw.trim();
     if (!line.endsWith(":")) continue;
     const name = line.slice(0, -1).trim();
-    if (name === "" || /\s/.test(name)) continue;
+    if (!PACKAGE_NAME.test(name)) continue;
     names.push(name);
   }
   return [...new Set(names)];
@@ -112,7 +120,7 @@ export function parseMpmFind(stdout: string): string[] {
     if (line === "") continue;
     const prefixed = /^package\s*:\s*(\S+)$/i.exec(line);
     const name = prefixed === null ? line : (prefixed[1] ?? "");
-    if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(name)) continue;
+    if (!PACKAGE_NAME.test(name)) continue;
     names.push(name);
   }
   return [...new Set(names)];
@@ -120,7 +128,8 @@ export function parseMpmFind(stdout: string): string[] {
 
 /** 安装命令。sudo 只加前缀，**不代替用户输密码**（终端里的人自己输） */
 export function installCommandFor(distro: LatexPackageDistro, packageName: string, sudo: boolean): string | null {
-  if (packageName === "" || distro === null) return null;
+  // 包名过不了形状校验就**不给命令**：拼进终端的字符串不接受可疑字符
+  if (distro === null || !PACKAGE_NAME.test(packageName)) return null;
   const prefix = sudo ? "sudo " : "";
   return distro === "miktex" ? `${prefix}mpm --install=${packageName}` : `${prefix}tlmgr install ${packageName}`;
 }
@@ -216,6 +225,9 @@ export function createLatexPackageLookup(
       sudo: false,
       installed: false,
       distro: null,
+      // 白名单不过时**必须说出来是哪一种**：旧版把它和「没装 tlmgr」混成一个 null，
+      // 界面对着一台装着 TeX Live 的机器说「没找到 tlmgr」，用户会去装不存在的工具
+      reason: "invalid-name",
     };
     if (!isLookupableFile(name)) return empty;
 
@@ -227,15 +239,23 @@ export function createLatexPackageLookup(
 
     const env = await detect(latexmkPath);
     if (env.distro === null || env.tool === null) {
-      return { ...empty, installed };
+      return { ...empty, installed, reason: "no-tools" };
     }
 
-    const names =
+    // 失败也分两种：命令没跑成（tool-error）vs 跑成了但没有包认领这个文件（not-found）
+    const lookup =
       env.distro === "miktex"
         ? await mpmLookup(deps, env.tool, name)
         : await tlmgrLookup(deps, env.tool, name);
-    const packageName = names[0] ?? null;
-    if (packageName === null) return { ...empty, installed, distro: env.distro };
+    const packageName = pickPackage(lookup.names);
+    if (packageName === null) {
+      return {
+        ...empty,
+        installed,
+        distro: env.distro,
+        reason: lookup.ok ? "not-found" : "tool-error",
+      };
+    }
     return {
       missing: name,
       packageName,
@@ -244,41 +264,85 @@ export function createLatexPackageLookup(
       sudo: env.sudo,
       installed,
       distro: env.distro,
+      reason: null,
     };
   };
 
   return {
     async resolve(missing: readonly string[]): Promise<LatexResolvedPackage[]> {
       const wanted = [...new Set(missing.map((name) => name.trim()))].filter((name) => name !== "");
-      const capped = wanted.slice(0, LATEX_MAX_PACKAGE_LOOKUPS);
       const latexmkPath = await latexmk().catch(() => null);
-      const out: LatexResolvedPackage[] = [];
-      for (const name of capped) {
+      const asked = wanted.slice(0, LATEX_MAX_PACKAGE_LOOKUPS);
+      // 上限之外的名字也各给一条明确结局，界面才不会永远停在「正在反查」
+      const rest: LatexResolvedPackage[] = wanted.slice(LATEX_MAX_PACKAGE_LOOKUPS).map((name) => ({
+        missing: name,
+        packageName: null,
+        command: null,
+        sudo: false,
+        installed: false,
+        distro: null,
+        reason: "not-looked-up",
+      }));
+      // 并发三：一条 tlmgr 起一个 Perl（本机 3–4 秒），串行时三个缺包要 12 秒；
+      // 三并发既把等待压到一条的量级，又不会一次摊开一堆进程
+      const resolved = await mapWithConcurrency(asked, 3, async (name) => {
         const cached = cache.get(name);
-        if (cached !== undefined) {
-          out.push(cached);
-          continue;
-        }
-        const resolved = await lookupOne(name, latexmkPath);
-        cache.set(name, resolved);
-        out.push(resolved);
-      }
-      return out;
+        if (cached !== undefined) return cached;
+        const entry = await lookupOne(name, latexmkPath);
+        cache.set(name, entry);
+        return entry;
+      });
+      return [...resolved, ...rest];
     },
   };
 }
 
-async function tlmgrLookup(deps: PackageDeps, tool: string, name: string): Promise<string[]> {
-  // 前导斜杠让 tlmgr 按「路径结尾」匹配：`/ctexart.cls`，不会命中 `myctexart.cls.bak`
-  const outcome = await runTool(deps, tool, ["search", "--file", `/${name}`]);
-  if (outcome === null || outcome.code !== 0) return [];
-  return parseTlmgrSearch(outcome.stdout);
+/** 有并发上限的 map：结果顺序与输入一致 */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await run(items[index] as T);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
-async function mpmLookup(deps: PackageDeps, tool: string, name: string): Promise<string[]> {
+/**
+ * 多个包都包含这个文件时挑一个。TeX Live 的 `*-dev` 是 latex-dev 树里的镜像：
+ * `tabularx.sty` 同时属于 `tools` 与 `latex-tools-dev`，真机实测 tlmgr 把 dev 排前面——
+ * 照着装会装进开发树。优先非 `-dev`，其余按 tlmgr 给的顺序。
+ */
+export function pickPackage(names: readonly string[]): string | null {
+  return names.find((name) => !/-dev$/i.test(name)) ?? names[0] ?? null;
+}
+
+interface NameLookup {
+  names: string[];
+  /** 命令本身跑成了吗——false 与「跑成但没命中」是两件事（前者可能是 tlmgr 起不来） */
+  ok: boolean;
+}
+
+async function tlmgrLookup(deps: PackageDeps, tool: string, name: string): Promise<NameLookup> {
+  // 前导斜杠让 tlmgr 按「路径结尾」匹配：`/ctexart.cls`，不会命中 `myctexart.cls.bak`
+  const outcome = await runTool(deps, tool, ["search", "--file", `/${name}`]);
+  if (outcome === null || outcome.code !== 0) return { names: [], ok: false };
+  return { names: parseTlmgrSearch(outcome.stdout), ok: true };
+}
+
+async function mpmLookup(deps: PackageDeps, tool: string, name: string): Promise<NameLookup> {
   const outcome = await runTool(deps, tool, [`--find-file=${name}`]);
-  if (outcome === null || outcome.code !== 0) return [];
-  return parseMpmFind(outcome.stdout);
+  if (outcome === null || outcome.code !== 0) return { names: [], ok: false };
+  return { names: parseMpmFind(outcome.stdout), ok: true };
 }
 
 /** 跑一条反查命令；起不来 / 超时回 null（反查失败不该变成一条异常） */
@@ -309,13 +373,27 @@ function realDeps(): PackageDeps {
       new Promise((resolvePromise) => {
         // Windows 上 tlmgr 是 .bat（TeX Live 的安装器给的就是批处理）：execFile 起不了，
         // 必须借 cmd。参数已经过 LOOKUPABLE 白名单，没有可被 cmd 解释的字符。
+        //
+        // **路径带空格时的引号形状**（MiKTeX 默认装在用户的 AppData 下、TeX Live 也可能
+        // 装进 `Program Files`，用户名带空格很常见）：
+        //   cmd /d /s /c ""C:\path with space\tlmgr.bat" --version"
+        // `/s` 会剥掉 `/c` 之后整串的**外层**引号，所以整条命令自己再包一层；少了这层，
+        // 空格把 .bat 路径拆成两个词（实测报「'…\Program' 不是内部或外部命令」），
+        // 反查就静默失效了。
+        // windowsVerbatimArguments：默认 Node 会给每个参数补引号，补完再被 /s 剥一次，
+        // 正好回到引号错位——这里让 Node 原样拼这条命令行。
         const bat = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(command);
         const file = bat ? "cmd.exe" : command;
-        const args = bat ? ["/d", "/s", "/c", command, ...argv] : argv;
+        const args = bat ? ["/d", "/s", "/c", `""${command}" ${argv.join(" ")}"`] : argv;
         execFile(
           file,
           args,
-          { timeout: LOOKUP_TIMEOUT_MS, windowsHide: true, maxBuffer: LOOKUP_OUTPUT_LIMIT },
+          {
+            timeout: LOOKUP_TIMEOUT_MS,
+            windowsHide: true,
+            maxBuffer: LOOKUP_OUTPUT_LIMIT,
+            windowsVerbatimArguments: bat,
+          },
           (error, stdout, stderr) => {
             if (error === null) {
               resolvePromise({ code: 0, stdout, stderr, spawnError: null });

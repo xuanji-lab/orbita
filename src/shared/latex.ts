@@ -327,6 +327,17 @@ export interface LatexPackageQuery extends LatexFileContext {
 export type LatexPackageDistro = "texlive" | "miktex" | null;
 
 /**
+ * 没给出包名的原因。**三种原因必须分开**——它们的下一步完全不同：
+ * - `invalid-name`：日志里的名字不是 `x.sty` / `x.cls` 形状，我们根本没拿去查；
+ * - `no-tools`：这台机器上没有 tlmgr / mpm，装不了也查不了；
+ * - `tool-error`：工具在，但命令起不来 / 超时 / 非零退出（这次没查成）；
+ * - `not-found`：命令正常跑完，发行版里没有包认领这个文件（真·未知包）；
+ * - `not-looked-up`：名字太多（超过 LATEX_MAX_PACKAGE_LOOKUPS）没有查，或通道失败。
+ * 反查成功时（packageName 非 null）为 null。
+ */
+export type LatexPackageReason = "invalid-name" | "no-tools" | "tool-error" | "not-found" | "not-looked-up";
+
+/**
  * 一个缺文件的反查结果。**每一项都要能单独成句**：界面可能只拿到 packageName=null
  * 的那一半（未知包），也可能命中「本机其实已经有这个文件」。
  */
@@ -345,10 +356,15 @@ export interface LatexResolvedPackage {
   /** kpsewhich 已能定位到这个文件：日志可能是旧的，或引擎用的是另一个 TeX 树 */
   installed: boolean;
   distro: LatexPackageDistro;
+  /** packageName 为 null 时说明是哪一种失败；成功时为 null（见 LatexPackageReason） */
+  reason: LatexPackageReason | null;
 }
 
-/** 一次反查最多处理几个文件：真实文档一次编译缺一两个，多出来的多半是级联噪声 */
-export const LATEX_MAX_PACKAGE_LOOKUPS = 5;
+/**
+ * 一次反查最多处理几个文件：真实文档一次编译缺一两个。上限留得比常见需求宽（并发只有三，
+ * 不会一次起一堆 Perl），超过的部分明确标成 `not-looked-up`，**不许界面一直转圈**。
+ */
+export const LATEX_MAX_PACKAGE_LOOKUPS = 20;
 
 /**
  * 「引擎在等用户确认安装」的日志行 —— MiKTeX 的按需装包 / 造字（mktexpk 家族）
