@@ -97,7 +97,7 @@ describe("gitWorkdirChanges", () => {
   test("U / M 分类：未跟踪与暂存新增都是 U，修改是 M；两条 numstat 同路径合并", async () => {
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/w\n" },
-      "status --porcelain=v2 --untracked-files=all --no-renames": {
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": {
         stdout: [
           "? new.txt",
           "1 M. N... 1 2 3 a b staged.ts",
@@ -135,7 +135,7 @@ describe("gitWorkdirChanges", () => {
   test("读不了盘的未跟踪文件：U 保留、行数 0；分支拿不到 → null", async () => {
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/w\n" },
-      "status --porcelain=v2 --untracked-files=all --no-renames": { stdout: "? gone-new.txt\n" },
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": { stdout: "? gone-new.txt\n" },
       "diff --no-renames --relative --numstat": { stdout: "" },
       "diff --cached --no-renames --relative --numstat": { stdout: "" },
       "rev-parse --abbrev-ref HEAD": { code: 128, stdout: "" },
@@ -154,7 +154,7 @@ describe("gitWorkdirChanges", () => {
     // 这些不归这棵树管（同 git diff --relative 的排除口径）
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/repo\n" },
-      "status --porcelain=v2 --untracked-files=all --no-renames": {
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": {
         stdout: [
           "1 .M N... 1 2 3 a b ../outside.ts",
           "? ../outside-new.txt",
@@ -325,6 +325,8 @@ describe("gitWorkdirChanges × 子目录工作区（真 git）", () => {
     await realGitRunner(["config", "user.email", "test@orbita.local"], repo);
     await realGitRunner(["config", "user.name", "orbita-test"], repo);
     await realGitRunner(["config", "core.autocrlf", "false"], repo);
+    // 钉死 false 配置：status 必须被 -c status.relativePaths=true 拉回工作区相对路径。
+    await realGitRunner(["config", "status.relativePaths", "false"], repo);
     await writeFile(join(sub, "a.txt"), "x\n", "utf8");
     await writeFile(join(repo, "outside.txt"), "o\n", "utf8");
     await realGitRunner(["add", "-A"], repo);

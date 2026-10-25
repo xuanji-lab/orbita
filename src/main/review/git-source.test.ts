@@ -59,7 +59,7 @@ describe("gitReviewList", () => {
   test("unstaged：numstat + 未跟踪合并、去重", async () => {
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/w\n" },
-      "status --porcelain=v2 --untracked-files=all": { stdout: "? new.txt\n? bin.dat\n# branch.oid abc\n" },
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": { stdout: "? new.txt\n? bin.dat\n# branch.oid abc\n" },
       "diff --no-renames --relative --numstat": { stdout: "2\t1\tsrc/a.ts\n0\t5\tgone.md\n" },
     });
     // 假读盘：new.txt 两行文本；bin.dat 带 NUL → binary；读不到的路径跳过
@@ -124,7 +124,7 @@ describe("gitReviewList", () => {
   test("unstaged：工作区之外的路径（../ 前缀）不进列表——与 diff --relative 的排除口径一致", async () => {
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/repo\n" },
-      "status --porcelain=v2 --untracked-files=all": {
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": {
         stdout: "? ../outside-new.txt\n? inside.txt\n",
       },
       "diff --no-renames --relative --numstat": { stdout: "1\t0\tinside.ts\n" },
@@ -140,7 +140,7 @@ describe("gitReviewList", () => {
     const calls: string[] = [];
     const outputs: Record<string, string> = {
       "rev-parse --show-toplevel": "/w\n",
-      "status --porcelain=v2 --untracked-files=all": "",
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": "",
       "rev-parse --abbrev-ref @{upstream}": "origin/main\n",
     };
     const runner: GitRunner = async (args) => {
@@ -288,6 +288,10 @@ describe("git 来源 × 子目录工作区（真 git）", () => {
     await realGitRunner(["config", "user.email", "test@orbita.local"], repo);
     await realGitRunner(["config", "user.name", "orbita-test"], repo);
     await realGitRunner(["config", "core.autocrlf", "false"], repo);
+    // 用户可能把 status.relativePaths 设成 false：status 会退回仓库根相对路径。
+    // 两条 status 命令必须用 `-c status.relativePaths=true` 钉死，否则子目录工作区
+    // 会与 `diff --relative` 的两套路径打架（2026-10-25 合作者实测）。
+    await realGitRunner(["config", "status.relativePaths", "false"], repo);
     await writeFile(join(sub, "a.txt"), "x\n", "utf8");
     await writeFile(join(repo, "outside.txt"), "o\n", "utf8");
     await realGitRunner(["add", "-A"], repo);
