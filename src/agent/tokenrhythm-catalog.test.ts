@@ -283,6 +283,13 @@ describe("官方美元单价 —— 复用 officialRates，日期后缀去掉再
     assert.ok(glm.input > 0 && glm.output > 0);
     const deepseek = tokenrhythmOfficialRates(catalog, "deepseek-v4-flash-0731");
     assert.ok(deepseek.input > 0 && deepseek.output > 0);
+    // 快照里没有 deepseek-v4.1-flash 的非零价：去后缀后落到型号白名单的官方价（DeepSeek 峰时价）
+    assert.deepEqual(tokenrhythmOfficialRates(catalog, "deepseek-v4.1-flash-1017"), {
+      input: 0.3,
+      output: 1.2,
+      cacheRead: 0.006,
+      cacheWrite: 0,
+    });
   });
 });
 

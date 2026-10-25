@@ -1,3 +1,4 @@
+import type { ModelCostDecl } from "./provider.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -59,6 +60,16 @@ export interface ModelParams {
    * 作为 effort 原样送到）。
    */
   adaptiveThinking?: boolean;
+  /**
+   * 厂商的**官方按量单价**（美元 / 百万 token）。只给用量侧查「官方单价」用（价格 · 能力图的横轴、
+   * 套餐折算、基元律动的官方价，见 main/usage/task-cost 的 officialRates），**不进会话注册**——
+   * 套餐与网关的真实计费不是它。
+   *
+   * 与其余字段相反，它**排在全部目录之后**：价格会变，pi 目录联网刷新跟得上，白名单跟不上；这里只补
+   * 「没有任何目录给出非零单价」的 id（厂商改了型号 id、目录快照还没收录）。目录收录之后删掉。
+   * 有峰谷价的厂商记峰时价（宁可估高，不把花费藏起来），注释里写明。
+   */
+  officialCost?: ModelCostDecl;
 }
 
 /** DeepSeek 的档位口径：none / low / high / max（none 即 off，没有 medium） */
@@ -71,6 +82,14 @@ const DEEPSEEK_FLASH: ModelParams = {
   reasoning: true,
   thinkingLevels: DEEPSEEK_THINKING_LEVELS,
   defaultThinkingLevel: "high",
+  /*
+   * 出处：https://api-docs.deepseek.com/quick_start/pricing（2026-10-25 查证）——deepseek-flash
+   * （DeepSeek-V4.1-Flash-1017）峰时：缓存命中 $0.006、未命中 $0.3、输出 $1.2；谷时减半。峰时是
+   * UTC 周一至周五 01:00–04:00 与 06:00–10:00（北京 / 新加坡 9–12 点、14–18 点，正好是工作时间），
+   * 记峰时价。pi.dev 在线目录的 deepseek 条目同为这一组数；随应用分发的目录快照还没有 deepseek-flash
+   * 这个 id（只有退役的 deepseek-v4-flash 与旧价），没添加 DeepSeek 服务商、目录不联网刷新时就缺价。
+   */
+  officialCost: { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
 };
 
 /**
