@@ -1715,8 +1715,8 @@ export const zh: Messages = {
     pptxDeckTruncated: (shown, total) => `只解析了前 ${grouped(shown)} 页，共 ${grouped(total)} 页`,
     pptxBudgetLimited: (shown, total) =>
       shown === 0
-        ? "文件太大，大纲读不了，用默认应用打开。"
-        : `文件太大，只解析了前 ${grouped(shown)} 页（共 ${grouped(total)} 页）`,
+        ? "这份演示文稿的内容超出了大纲的解析上限，用默认应用打开。"
+        : `内容超出解析上限，只解析了前 ${grouped(shown)} 页（共 ${grouped(total)} 页）`,
     pptxHidden: "隐藏",
     pptxReadOnly: "只读",
     pptxEmpty: "这份演示文稿没有幻灯片",

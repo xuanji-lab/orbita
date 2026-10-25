@@ -192,6 +192,30 @@ describe("messages —— 中英两张表", () => {
     deepStrictEqual(offenders, []);
   });
 
+  test("pptx 超解析预算不说「文件太大」：体积超限才用 tooLarge 的文案", () => {
+    // 0.9 MB 的构造包是「内容量」超了，不是文件体积超了；两件事必须说成两件事
+    deepStrictEqual(
+      [zh.files.pptxBudgetLimited(0, 40), zh.files.pptxBudgetLimited(12, 40)],
+      [
+        "这份演示文稿的内容超出了大纲的解析上限，用默认应用打开。",
+        "内容超出解析上限，只解析了前 12 页（共 40 页）",
+      ],
+    );
+    deepStrictEqual(
+      [en.files.pptxBudgetLimited(0, 40), en.files.pptxBudgetLimited(12, 40)],
+      [
+        "This presentation has more content than the outline can parse — open it with the default app.",
+        "More content than the outline can parse — parsed the first 12 of 40 slides",
+      ],
+    );
+    // 真正的体积超限（>50 MB）保留原文案
+    deepStrictEqual(
+      [zh.files.pptxBudgetLimited(0, 40).includes("文件太大"), en.files.pptxBudgetLimited(0, 40).includes("too large")],
+      [false, false],
+    );
+    deepStrictEqual([zh.files.tooLarge("60 MB", "50 MB").includes("太大"), en.files.tooLarge("60 MB", "50 MB").includes("Too large")], [true, true]);
+  });
+
   test("首页批语落当天日期：中文「阅 月.日」，英文照美式缩写（Sept，不写 Sep）", () => {
     deepStrictEqual(
       [zh.chat.homeMark(9, 25), en.chat.homeMark(9, 25), en.chat.homeMark(3, 1), en.chat.homeMark(12, 31)],

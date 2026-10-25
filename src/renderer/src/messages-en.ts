@@ -1871,11 +1871,11 @@ export const en = {
     pptxTextTruncated: (limit: number) => `Text on this slide is cut at ${grouped(limit)} characters`,
     pptxDeckTruncated: (shown: number, total: number) =>
       `Parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
-    /** 解析成本预算超限：后面的页没有解析（文件内容太大，不是页数上限） */
+    /** 解析成本预算超限：后面的页没有解析（内容量太大，不是文件体积；文件体积有 tooLarge） */
     pptxBudgetLimited: (shown: number, total: number) =>
       shown === 0
-        ? "This file is too large to outline — open it with the default app."
-        : `This file is too large to outline fully — parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+        ? "This presentation has more content than the outline can parse — open it with the default app."
+        : `More content than the outline can parse — parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
     pptxHidden: "Hidden",
     pptxReadOnly: "Read-only",
     pptxEmpty: "This presentation has no slides",
