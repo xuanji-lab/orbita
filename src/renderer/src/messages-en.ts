@@ -148,6 +148,8 @@ export const en = {
     restoredEmpty: "Identical to the baseline — nothing to show.",
     noBaseline: "No baseline",
     binary: "Binary",
+    /** 未跟踪文件超过行数上限（与专注左栏同口径）：不拿 +0 冒充没改动 */
+    linesUnknown: "Count unknown",
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
@@ -512,6 +514,8 @@ export const en = {
     legendM: "modified",
     badgeU: "Untracked new file",
     badgeM: "Modified",
+    /** 未跟踪文件超过行数上限：悬停只写这一句，不显示 +0 */
+    linesUnknown: "line count unavailable",
     changeSummary: (changed: number, untracked: number) =>
       `${changed} file${changed === 1 ? "" : "s"} changed, ${untracked} new`,
     notRepo: "Not a git repository — no U / M to show",
