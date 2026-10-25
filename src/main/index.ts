@@ -639,8 +639,14 @@ void app.whenReady().then(async () => {
   void workspaces.ensureHome().catch((error: unknown) => {
     console.error("[main] 建不了 Home 目录，Home 任务的文件可能落不了盘", error);
   });
-  // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
-  registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
+  // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）；
+  // 列表写盘后一律广播：侧栏 / 技能分组 / 任务表单读的是同一份 workspace:list，
+  // 不广播的话从其它入口（探针、另一窗口）建的工作区要整页重载才看得见
+  registerWorkspaceIpc(
+    workspaces,
+    (id) => skills.removeWorkspace(id),
+    () => broadcastAgentEvent({ type: "workspacesChanged" }),
+  );
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读

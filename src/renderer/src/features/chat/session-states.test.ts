@@ -334,6 +334,14 @@ describe("乐观 turn 的失败归位（revertOptimisticTurn）", () => {
   });
 });
 
+test("全局广播事件（workspacesChanged / skillsChanged）不进任何会话槽", () => {
+  // 这两条没有 sessionId：它们只驱动 hook 里的列表重读，归约器不得凭空造槽——
+  // 造了的话侧栏会多出一个 id 为 undefined 的空会话槽
+  const states = applyAgentEvent(new Map(), { type: "workspacesChanged" });
+  assert.equal(states.size, 0);
+  assert.equal(applyAgentEvent(states, { type: "skillsChanged" }), states);
+});
+
 test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批、无重试", () => {
   assert.equal(EMPTY_ENTRY.phase, "idle");
   assert.deepEqual(EMPTY_ENTRY.approvals, []);

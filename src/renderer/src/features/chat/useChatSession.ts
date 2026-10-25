@@ -974,12 +974,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
         // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
         if (event.type === "phase") deliverNext(event.sessionId);
+        // 工作区列表变了（主进程建 / 改 / 删 / 挂摘目录后广播）：重读一次性事实。
+        // 不重读的话，从别的入口写的工作区要整页重载才在侧栏露面（2026-10-24 探针）
+        if (event.type === "workspacesChanged") refreshWorkspaces();
       });
     return () => {
       off();
       coalescer.dispose();
     };
-  }, [applyStates, deliverNext, refreshSessions]);
+  }, [applyStates, deliverNext, refreshSessions, refreshWorkspaces]);
 
   /**
    * 子会话 PR4a：子→父投递。通道消息落账 + 广播是主进程的事（`applyChannelSend` /
