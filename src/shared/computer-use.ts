@@ -13,16 +13,21 @@
  * **有意放开的攻击面**：沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
  * 别把它当成「防网络的隔离层」。将来考虑加一个开关（禁出网 = 只做本地桌面自动化）。
  *
- * 宿主↔guest 协议 v1（宿主在 src/main/computer-use/ 实现，guest 桥是独立 exe，两边必须严格一致）：
- *   - 通道 = **映射文件夹里的文件对**，不走网络。反面教材：宿主防火墙把宿主↔沙箱的 TCP 当
- *     不可测（2026-10-10 真机：ICMP 通、TCP 被丢，且随每次启动时好时坏；guest 回连方向更是
- *     稳定被丢），加防火墙规则要提权弹窗，本地优先不接受。而 .wsb 读写映射文件夹双向实时同步、
- *     每次都可靠。
- *   - 命令：宿主写 out/cmd/<名字>.req.json（tmp+rename 原子写）→ 桥轮询执行 →
+ * 宿主↔guest 协议（宿主在 src/main/computer-use/ 实现，guest 桥是独立 exe，两边必须严格一致）：
+ *   - 通道 = **TCP 优先，文件回退**（0.8.0 起）。文件协议原来是唯一通道：宿主防火墙曾把
+ *     宿主↔沙箱的 TCP 当不可测（2026-10-10 真机：ICMP 通、TCP 被丢），而 .wsb 读写映射
+ *     文件夹双向实时同步、每次都可靠。但它**每一跳**传播实测 2.9–7.5 秒（2026-10-25 真机
+ *     计量），于是每个沙箱工具都天然背 8–10 秒的下限；同一天的隔离沙箱实验里宿主→guest 的
+ *     TCP 是握手 30ms、小包中位 1ms、64KB 往返 2–6ms，两侧都不用动防火墙。所以命令优先走
+ *     TCP，文件协议**一条行为都没删**：它是老桥的唯一通道，也是 TCP 不可用时的回退。
+ *   - TCP 命令：【bridge.json 通告 port / token / ipv4】→ 宿主连进 guest → 首行 hello + 令牌
+ *     → 之后一行一条 {id, command, fields} / {id, resp, jpegBase64?}。详见 bridgeTcpHello。
+ *   - 文件协议：宿主写 out/cmd/<名字>.req.json（tmp+rename 原子写）→ 桥轮询执行 →
  *     写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件，先于 resp 落盘）→ 删 req；
  *     宿主读完响应后负责清理 resp / jpg。
  *   - 就绪：桥启动后写 out/bridge.json（tmp+rename）——它出现即代表命令循环已上线。
- *   - 隔离即鉴权：命令目录在宿主用户目录下、沙箱是会话级一次性环境，协议里不再要 token。
+ *   - 鉴权：文件协议靠隔离（命令目录在宿主用户目录下、沙箱是一次性环境）；TCP 靠
+ *     bridge.json 里的随机令牌——同一个沙箱里还跑着 agent 打开的网页，端口不是口令。
  *
  * PR1 范围 = 沙箱生命周期 + renderer 手动「看一眼」截图。
  * PR2 范围 = agent 的像素工具组（截图 / 点击 / 打字 / 按键 / 滚动）：命令经
@@ -64,6 +69,65 @@ export const COMPUTER_USE_GUEST_OUT_DIR = "C:\\orbita-out";
 export const BRIDGE_INFO_FILE = "bridge.json";
 /** 命令目录名（out 目录下；宿主写 req、桥写 resp 的地方） */
 export const COMPUTER_USE_CMD_DIR = "cmd";
+
+// ── guest 桥的 TCP 命令通道（桥 0.8.0 起；文件协议降级为启动握手与回退通道）────
+//
+// 为什么加它：文件协议**每一跳**的传播实测 2.9–7.5 秒（2026-10-25 真机计量，而 guest
+// 内部处理只有毫秒级），所以一次 sandbox_navigate 天然就是 8–10 秒。而宿主→guest 的
+// TCP 在同一天的 一次性沙箱实测里完全可用：首次握手 30ms、20 次小包 RTT 中位 1ms、
+// 10 次 64KB 往返 2–6ms（回程正是截图方向）、空闲 5s 后重连 2ms，且**两侧都不用动
+// 防火墙规则**。所以命令优先走 TCP。
+//
+// 但文件协议**一条现有行为都不删**：它是老桥（没有下面这三个字段）的唯一通道，也是
+// TCP 不可用时的回退通道。两条通道的回执形状完全一样，上层语义一个字都不用改。
+
+/** bridge.json 的 TCP 扩展字段名。三个都齐才算可用；缺一个 = 老桥，纯文件协议 */
+export const bridgeTcpFields = {
+  /** 桥在 guest 里监听的端口（TcpListener 绑 0 = 系统分配，每次启动都不同） */
+  port: "port",
+  /** 每次启动随机生成的十六进制令牌（32 字符）：同一个沙箱里还有别的进程，端口不能当口令 */
+  token: "token",
+  /** 桥所在机器的全部非回环 IPv4（宿主按通告顺序逐个试连，全失败就回退文件协议） */
+  ipv4: "ipv4",
+} as const;
+
+/**
+ * 一条连接上的行协议（一行一条 JSON，UTF-8，`\n` 结尾）：
+ *
+ *   1. 首行 `{"t":"hello","token":"<token>"}`；桥回 `{"t":"hello-ok"}` 才算握手成功，
+ *      回 `{"t":"hello-fail"}` 并立刻断开 = 首行不是 hello / 令牌不符。握手之前桥不接受任何命令。
+ *   2. 命令 `{"id":<n>,"command":"<cmd>","fields":{...}}`——`fields` 与文件协议里那份同形，
+ *      桥把整行原样交给同一个 Execute，所以两条通道的回执逐字一致。
+ *   3. 回执 `{"id":<n>,"resp":{...}}`；截图的 JPEG 内联在 `jpegBase64`（resp 里的 `jpeg`
+ *      字段照旧保留，与文件协议逐字一致，只是它指向的那个文件被桥读完即删）。
+ *
+ * 一条连接上可以连续发多条命令（按 id 对号），断开连接不影响桥本身继续跑文件协议。
+ */
+export const bridgeTcpHello = {
+  type: "hello",
+  ok: "hello-ok",
+  fail: "hello-fail",
+} as const;
+
+/** bridge.json 里通告的 TCP 通道（`parseBridgeInfo` 解析；缺任一字段 = undefined = 走文件） */
+export interface GuestTcpChannel {
+  port: number;
+  token: string;
+  ipv4: string[];
+}
+
+/** 连一个候选地址（含 hello 握手）的预算：多网卡逐个试，全部失败就回退文件协议 */
+export const BRIDGE_TCP_CONNECT_TIMEOUT_MS = 1_500;
+
+/**
+ * TCP 失败后的冷却窗口：这期间所有命令直接走文件协议。
+ *
+ * 为什么不每条命令都重试：TCP 不可用（防火墙规则被改、网卡还没起来）时，每条命令都要
+ * 先白等 1.5s × 候选地址个数——比文件协议本身还慢，而 TCP 挂在半路时一次截图就能卡到
+ * 命令预算耗尽。10s 是「沙箱网络刚起来 / 刚挂掉」的粒度：够长到不拖慢一串命令，够短到
+ * 网络恢复后的下一次操作就能用上 TCP。
+ */
+export const BRIDGE_TCP_COOLDOWN_MS = 10_000;
 
 /**
  * guest 桥认的命令名。**字符串两端的唯一真源**：宿主按它发，桥按它分派
