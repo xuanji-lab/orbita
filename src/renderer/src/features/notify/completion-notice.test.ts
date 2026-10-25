@@ -1,6 +1,8 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  completionNoticeItems,
+  mergeNoticeIds,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
@@ -42,6 +44,57 @@ describe("settledSessions", () => {
       settledSessions(map({ a: slot("turn"), b: slot("turn") }), map({ a: slot("idle"), b: slot("idle") })),
       ["a", "b"],
     );
+  });
+});
+
+describe("completionNoticeItems（聚合卡的行序）", () => {
+  const row = (id: string, failed: boolean, updatedAt: number) => ({ id, title: id, failed, updatedAt });
+
+  it("空输入：空数组（不弹卡）", () => {
+    deepStrictEqual(completionNoticeItems([]), []);
+  });
+
+  it("单条：原样返回（单条卡外观不变）", () => {
+    const one = row("a", false, 10);
+    deepStrictEqual(completionNoticeItems([one]), [one]);
+    deepStrictEqual(completionNoticeItems([row("b", true, 3)]).map((item) => item.id), ["b"]);
+  });
+
+  it("多条无失败：按 updatedAt 降序（刚完成的在上）", () => {
+    const items = completionNoticeItems([row("old", false, 1), row("new", false, 30), row("mid", false, 20)]);
+    deepStrictEqual(items.map((item) => item.id), ["new", "mid", "old"]);
+  });
+
+  it("失败优先：失败整体在前，同类里仍按 updatedAt 降序", () => {
+    const items = completionNoticeItems([
+      row("ok-new", false, 90),
+      row("f-old", true, 5),
+      row("ok-old", false, 10),
+      row("f-new", true, 40),
+    ]);
+    deepStrictEqual(items.map((item) => item.id), ["f-new", "f-old", "ok-new", "ok-old"]);
+  });
+
+  it("不改原数组", () => {
+    const input = [row("a", false, 1), row("b", true, 2)];
+    completionNoticeItems(input);
+    deepStrictEqual(input.map((item) => item.id), ["a", "b"]);
+  });
+});
+
+describe("mergeNoticeIds（卡开着时后来落定的会话并进来）", () => {
+  it("空卡：新批原样成为卡的内容", () => {
+    deepStrictEqual(mergeNoticeIds([], ["a", "b"]), ["a", "b"]);
+  });
+
+  it("已有再并：保留原顺序、新 id 接在后面、重复的不加", () => {
+    deepStrictEqual(mergeNoticeIds(["a"], ["b", "a", "c"]), ["a", "b", "c"]);
+  });
+
+  it("没有新增：原数组引用不变（不白重渲染）", () => {
+    const current = ["a", "b"];
+    strictEqual(mergeNoticeIds(current, ["b", "a"]), current);
+    strictEqual(mergeNoticeIds(current, []), current);
   });
 });
 

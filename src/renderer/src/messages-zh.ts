@@ -265,6 +265,12 @@ export const zh: Messages = {
   notice: {
     finished: "任务完成",
     failed: "任务出错停下了",
+    /** 多条聚合卡：同拍完成 N 条时卡头那句 */
+    manyFinished: (count: number) => `${count} 个任务完成`,
+    manyFinishedWithFailure: (count: number, failed: number) => `${count} 个任务完成，${failed} 个出错`,
+    manyFailed: (count: number) => `${count} 个任务出错停下了`,
+    /** 聚合卡里失败那一行的标记文字（配三角图标，不只靠颜色） */
+    failedFlag: "出错",
     openNow: "打开",
     sideChat: "辅助对话",
     later: "稍后",
