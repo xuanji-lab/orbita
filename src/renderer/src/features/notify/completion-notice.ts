@@ -41,6 +41,50 @@ export function settledSessions(
   return settled;
 }
 
+/**
+ * 完成卡上的一行：这条会话的名字、是否失败、这一轮最后写入的时刻（排序用）。
+ *
+ * 同拍多条落定时**一张卡列出全部**（用户裁决 2026-10-25：「多个任务完成，都要提醒
+ * 才对」）。以前只弹一条——早期是取落定数组的最后一项（那个顺序来自 engine.states
+ * 的 Map 迭代顺序，与谁真跑完无关，等于掷骰子），后来试过「失败优先取一条」，还是
+ * 丢信息：同拍完成三个任务，用户只被告知一个。
+ */
+export interface CompletionNoticeEntry {
+  id: string;
+  /** 会话标题；空串由卡片按「新任务」占位显示 */
+  title: string;
+  failed: boolean;
+  updatedAt: number;
+}
+
+/**
+ * 完成卡的行序：**失败的在前**（出错的更该先看到），同类按 `updatedAt` 降序
+ * （刚完成的在上）。不改原数组；单条原样返回、空输入返回空数组。
+ *
+ * `updatedAt` 打平时保留输入顺序（Array#sort 稳定）——同一批输入永远给同一个顺序。
+ */
+export function completionNoticeItems<T extends { failed: boolean; updatedAt: number }>(
+  entries: readonly T[],
+): T[] {
+  return [...entries].sort(
+    (a, b) => Number(b.failed) - Number(a.failed) || b.updatedAt - a.updatedAt,
+  );
+}
+
+/**
+ * 把新落定的一批 id 并进卡上已有的那批：卡还开着时后来的会话也列上去（用户 2026-10-25：
+ * 「多个任务完成，都要提醒」）。没有新增时**原封不动返回原数组**（引用不变），
+ * 否则每次 phase 事件都会让卡重渲染一次。
+ *
+ * 为什么要并而不是靠「同一次渲染里多条」：phase 事件是逐条 IPC 到的、又不进合帧器，
+ * 两条会话前后脚跑完不会落在同一次 setState 里——按「同拍」算的话卡上几乎永远只有一条。
+ */
+export function mergeNoticeIds(current: readonly string[], incoming: readonly string[]): readonly string[] {
+  const known = new Set(current);
+  const added = incoming.filter((id) => !known.has(id));
+  return added.length === 0 ? current : [...current, ...added];
+}
+
 export interface NoticePlan {
   /** 响提示音 */
   sound: boolean;

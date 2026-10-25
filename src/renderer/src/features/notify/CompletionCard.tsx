@@ -2,6 +2,15 @@ import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 
+/** 卡片上的一行：一条刚跑完（或跑挂）的会话 */
+export interface CompletionNoticeItem {
+  id: string;
+  /** 会话标题；空串按「新任务」占位显示 */
+  title: string;
+  /** 这一轮以失败收尾（重试耗尽等）：竖条红、行尾出错标记 */
+  failed: boolean;
+}
+
 /**
  * 后台会话跑完的提醒卡（用户 2026-10-10）：在主槽（ChatView 那张卡）的右上角弹出，
  * 问用户这条结果怎么看——
@@ -9,6 +18,11 @@ import { useT } from "../../locale.ts";
  * - 马上看：主槽换成这条会话（取代当前 ChatView）；
  * - 辅助对话：在右侧辅助对话里打开它，当前对话不动；
  * - 稍后（×）：收起卡片，侧栏那一行保持未读。
+ *
+ * **多条聚合**（用户 2026-10-25 裁决）：「多个任务完成，都要提醒才对」——同一拍有多条
+ * 会话落定时只弹**一张**卡，把全部都列出来（失败的在前，同类刚完成的在上，行序由
+ * completionNoticeItems 算好传进来），点某一行就在主槽打开它。单条时仍是原来那张紧凑
+ * 两行卡（竖条 + 名字 + ×；下一行「打开 · 辅助对话」），外观与文案不变。
  *
  * **层级**（用户 2026-10-10 第三轮）：它属于内容面（`.pane`）里的一层，不是挂在窗口上、
  * 骑在右栏与内容面之间的浮层——portal 进主槽的弹出宿主（`.pane-pop-host`），守
@@ -20,30 +34,42 @@ import { useT } from "../../locale.ts";
 export function CompletionCard(props: {
   /** 弹出宿主（主槽里的 `.pane-pop-host`）。null = 还没挂载，先不画 */
   host: HTMLElement | null;
-  title: string;
-  /** 这一轮以失败收尾（重试耗尽等）：kicker 换成出错的说法，图标换警示 */
-  failed: boolean;
-  onOpenNow: () => void;
-  onSideChat: () => void;
+  /** 同拍落定的会话（≥1 条，已按「失败在前、同类新的在上」排好） */
+  items: readonly CompletionNoticeItem[];
+  /** 主槽打开这条会话（单条卡是「打开」，多条的某一行也走这里） */
+  onOpen: (id: string) => void;
+  /** 在辅助对话里打开（只在单条卡上出现：当前对话不动） */
+  onSideChat: (id: string) => void;
+  /** 稍后：收起卡片，未读留在侧栏 */
   onLater: () => void;
 }) {
   const t = useT();
   if (props.host === null) return null;
-  const kicker = props.failed ? t.notice.failed : t.notice.finished;
-  const title = props.title === "" ? t.common.newTask : props.title;
-  return createPortal(
-    // 紧凑两行（2026-10-12 用户选的 B）：竖条 + 会话名 + ×；下一行「打开 · 辅助对话」。
-    // 「任务完成 / 出错」不再占一行：竖条颜色（绿 / 红，与侧栏同款）给第一信号，
-    // 文字进 aria-label 与悬停 title；× 就是原来的「稍后」（收起、保持未读）
-    <div className="pane-pop completion-card" role="status" aria-live="polite" aria-label={`${kicker}：${title}`}>
+  const first = props.items[0];
+  if (first === undefined) return null;
+  const single = props.items.length === 1;
+  const failedCount = props.items.filter((item) => item.failed).length;
+  const summary = single
+    ? first.failed
+      ? t.notice.failed
+      : t.notice.finished
+    : failedCount === 0
+      ? t.notice.manyFinished(props.items.length)
+      : failedCount === props.items.length
+        ? t.notice.manyFailed(failedCount)
+        : t.notice.manyFinishedWithFailure(props.items.length, failedCount);
+  const titleOf = (item: CompletionNoticeItem): string => (item.title === "" ? t.common.newTask : item.title);
+  /** 单条卡沿用两行紧凑版：竖条 + 名字 + ×，下一行「打开 · 辅助对话」 */
+  const singleBody = single ? (
+    <>
       <div className="completion-card-row">
-        <span className="status-bar" data-fill={props.failed ? "failed" : "done"} title={kicker} aria-hidden="true">
+        <span className="status-bar" data-fill={first.failed ? "failed" : "done"} title={summary} aria-hidden="true">
           <i />
           <i />
           <i />
         </span>
-        <span className="completion-card-title" title={props.title}>
-          {title}
+        <span className="completion-card-title" title={first.title}>
+          {titleOf(first)}
         </span>
         <button
           type="button"
@@ -56,14 +82,65 @@ export function CompletionCard(props: {
         </button>
       </div>
       <div className="completion-card-actions">
-        <button type="button" className="completion-card-link" data-primary title={t.notice.openNowTip} onClick={props.onOpenNow}>
+        <button
+          type="button"
+          className="completion-card-link"
+          data-primary
+          title={t.notice.openNowTip}
+          onClick={() => props.onOpen(first.id)}
+        >
           {t.notice.openNow}
         </button>
         <span className="completion-card-dot" aria-hidden="true">·</span>
-        <button type="button" className="completion-card-link" title={t.notice.sideChatTip} onClick={props.onSideChat}>
+        <button type="button" className="completion-card-link" title={t.notice.sideChatTip} onClick={() => props.onSideChat(first.id)}>
           {t.notice.sideChat}
         </button>
       </div>
+    </>
+  ) : null;
+  return createPortal(
+    <div
+      className={single ? "pane-pop completion-card" : "pane-pop completion-card completion-card-many"}
+      role="status"
+      aria-live="polite"
+      aria-label={single ? `${summary}：${titleOf(first)}` : summary}
+    >
+      {single ? singleBody : (
+        <>
+          <div className="completion-card-head">{summary}</div>
+          <div className="completion-card-list">
+            {props.items.map((item) => (
+              // 整行就是一个「打开」：行序已排好（失败在前、新的在上），行尾出错标记
+              // 是图标 + 文字（颜色只是第二信号）
+              <button
+                key={item.id}
+                type="button"
+                className="completion-card-item"
+                title={item.title === "" ? t.common.newTask : `${titleOf(item)} · ${t.notice.openNowTip}`}
+                onClick={() => props.onOpen(item.id)}
+              >
+                <span className="status-bar" data-fill={item.failed ? "failed" : "done"} aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span className="completion-card-title">{titleOf(item)}</span>
+                {item.failed && (
+                  <span className="completion-card-flag">
+                    <Icon name="triangle-alert" size={11} strokeWidth={2} />
+                    {t.notice.failedFlag}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          <div className="completion-card-actions">
+            <button type="button" className="completion-card-link" title={t.notice.laterTip} onClick={props.onLater}>
+              {t.notice.later}
+            </button>
+          </div>
+        </>
+      )}
     </div>,
     props.host,
   );

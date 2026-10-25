@@ -319,6 +319,10 @@ export const en = {
   notice: {
     finished: "Task finished",
     failed: "Task stopped with an error",
+    manyFinished: (count: number) => `${count} tasks finished`,
+    manyFinishedWithFailure: (count: number, failed: number) => `${count} tasks finished, ${failed} failed`,
+    manyFailed: (count: number) => `${count} tasks stopped with an error`,
+    failedFlag: "Failed",
     openNow: "Open",
     sideChat: "Side chat",
     later: "Later",
