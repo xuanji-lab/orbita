@@ -89,6 +89,14 @@ export interface LatexRunnerOptions {
   pollIntervalMs?: number;
   /** 本机总内存（字节）；默认 os.totalmem()。测试注入，覆盖 ≤16 GiB 与 >16 GiB */
   totalMemoryBytes?: number;
+  /**
+   * 看门狗用的时钟；默认 Date.now。**只影响超时判定**，不参与产物 mtime 比较
+   * （pdfFresh 要拿文件系统时间戳比，不能跟着假时钟走）。
+   *
+   * 测试注入它的理由：日志增长与时间前进在同一个同步回合里完成，看门狗无论何时
+   * tick 都只能看到「刚有增长」，于是结果不再取决于宿主负载 / 子进程调度。
+   */
+  now?: () => number;
 }
 
 export class LatexRunner {
@@ -99,6 +107,8 @@ export class LatexRunner {
   /** 这台机器允许的同时编译数：构造时按总内存定死（运行中内存不会变） */
   private readonly maxConcurrent: number;
   private readonly totalMemoryBytes: number;
+  /** 看门狗时钟（注入点）。spawn 时刻与每次 tick 都用它算静默 / 总时长 */
+  private readonly now: () => number;
   /** 正在编的项目（规范化后的目录）：同项目互斥的唯一真源 */
   private readonly active = new Set<string>();
   /** 正在跑的 latexmk 进程（key = 项目）。取消与退出清理都认它 */
@@ -114,6 +124,7 @@ export class LatexRunner {
     this.pollIntervalMs = options.pollIntervalMs ?? 1_000;
     this.totalMemoryBytes = options.totalMemoryBytes ?? totalmem();
     this.maxConcurrent = latexMaxConcurrent(this.totalMemoryBytes);
+    this.now = options.now ?? Date.now;
   }
 
   /**
@@ -347,7 +358,7 @@ export class LatexRunner {
       });
       this.children.set(key, child);
 
-      const spawnedAt = Date.now();
+      const spawnedAt = this.now();
       let lastActivityAt = spawnedAt;
       let stderr = "";
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -366,7 +377,7 @@ export class LatexRunner {
       const stall = (kind: LatexTimeoutKind, silentMs: number): void => {
         if (stalled) return;
         stalled = true;
-        timeout = { kind, silentMs, elapsedMs: Date.now() - spawnedAt, sawLog };
+        timeout = { kind, silentMs, elapsedMs: this.now() - spawnedAt, sawLog };
         killTree(child);
         // 进程树可能杀不干净（权限 / 句柄）：宽限之后照常回报，别把 agent 的工具调用挂死
         graceTimer = setTimeout(() => {
@@ -384,7 +395,7 @@ export class LatexRunner {
         if (settled) return;
         // 已经自己退出了：等 close 事件，别把「刚好在这时结束」误报成超时
         if (child.exitCode !== null || child.signalCode !== null) return;
-        const now = Date.now();
+        const now = this.now();
         let active = false;
         for (const path of logPaths) {
           const signature = logSignature(path);
