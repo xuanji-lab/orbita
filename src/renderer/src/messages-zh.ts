@@ -1684,6 +1684,10 @@ export const zh: Messages = {
     tooLarge: (size, limit) => `太大，没法预览（${size}，上限 ${limit}）`,
     emptyFile: "空文件",
     truncated: (shown, total) => `只显示了前 ${shown}，共 ${total}`,
+    /** 大 md 退化：不再跑 MarkdownBlock，按等宽原文看 */
+    largeTextPlain: (size) => `文件较大（${size}），按纯文本显示`,
+    /** 大文本窗口化：排版没变，只是只渲染可见区（提示条上带「用默认应用打开」） */
+    largeTextWindowed: (size) => `文件较大（${size}），只渲染可见区域`,
     pdfFailed: "这个 PDF 打不开：",
     pdfPassword: "这个 PDF 有密码保护，没法预览。",
     citeNotFound: (page) => `第 ${page} 页上已经找不到被引的那段了。文件可能在引用之后改过。`,
