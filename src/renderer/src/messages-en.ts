@@ -75,6 +75,8 @@ const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
 export const en = {
+  /** 花费的显示币种（utils/money.ts）：数据一律美元，英文界面原样显示 */
+  currency: { symbol: "$", perUsd: 1 },
   common: {
     more: "More",
     cancel: "Cancel",

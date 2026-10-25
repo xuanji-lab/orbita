@@ -147,8 +147,8 @@ export function SettingsView(props: {
         <ProvidersView
           onChange={props.onProvidersChange}
           onSessionsChanged={props.onImported}
-          cardSize={props.settings.providerCardSize ?? "large"}
-          onCardSize={(providerCardSize) => props.onSettingsChange({ providerCardSize })}
+          page={props.settings.providersPage ?? {}}
+          onPage={(providersPage) => props.onSettingsChange({ providersPage })}
         />
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>

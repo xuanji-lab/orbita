@@ -31,6 +31,11 @@ const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入"
  * - 省略号跟原型用单个「…」（菜单项「移到…」、进行中「正在载入…」）。
  */
 export const zh: Messages = {
+  /**
+   * 花费的显示币种（utils/money.ts）：数据一律美元，中文界面按人民币显示（用户 2026-10-25）。
+   * 汇率：中国外汇交易中心受权公布的 2026-10-23 人民币汇率中间价，1 美元 = 6.7180 元。
+   */
+  currency: { symbol: "¥", perUsd: 6.718 },
   review: {
     title: "审查",
     source: (source) =>

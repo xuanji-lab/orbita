@@ -51,12 +51,26 @@ import "./price-chart.css";
 export function PriceCapabilityChart(props: {
   providers: readonly ProviderDto[];
   catalog: readonly BuiltinProvider[];
+  /**
+   * 停在哪个分类（AppSettings.priceChartCategory，缺席 = Agent 综合）。用户 2026-10-25：切到别的榜单、
+   * 离开再回来又回到「Agent 综合」，偏偏这一类很多型号没分数——所以记住，切换即落设置。
+   */
+  category: PriceChartCategory;
+  onCategory: (category: PriceChartCategory) => void;
 }) {
   const t = useT();
   const copy = t.providers.priceChart;
+  const money = t.currency;
   const [data, setData] = useState<PriceChartData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [category, setCategory] = useState<PriceChartCategory>("agent");
+  // 本地先切（不等设置写盘回来），同时落设置；设置那边变了（别的窗口）跟着走
+  const [category, setCategoryState] = useState<PriceChartCategory>(props.category);
+  useEffect(() => setCategoryState(props.category), [props.category]);
+  const setCategory = (next: (current: PriceChartCategory) => PriceChartCategory) => {
+    const value = next(category);
+    setCategoryState(value);
+    props.onCategory(value);
+  };
   /**
    * 点开的那个点（pointKey）。用户验收 2026-10-24：「hover 显示效果不是很好，点击显示就好了」——
    * 详情改成点击固定显示；点空白处、按 Esc、再点同一个点就关。悬停只剩 CSS 的轻提示（显示名 + 档）。
@@ -108,7 +122,8 @@ export function PriceCapabilityChart(props: {
   const current = data?.categories.find((c) => c.category === category) ?? null;
   const view = useMemo(() => {
     if (current === null) return null;
-    const points = current.points;
+    // 整张图在入口处换算成显示币种：横轴范围与刻度在显示币种里取整（¥0.5、¥1、¥2），标签直接拼前缀
+    const points = current.points.map((point) => inCurrency(point, money.perUsd));
     // 借分点不进前沿：分不是这一档自己的（契约 PriceChartPoint.scoreFrom）
     const frontier = paretoFrontier(points.filter((p) => p.scoreFrom === undefined));
     const borrowing = points.some((p) => p.scoreFrom !== undefined || (p.folded?.length ?? 0) > 0);
@@ -127,7 +142,7 @@ export function PriceCapabilityChart(props: {
       .filter((list) => list.length > 1)
       .map((list) => [...list].sort((a, b) => a.cost - b.cost));
     return { points, frontier, frontierKeys, borrowing, x, y, xOf, yOf, levelLines };
-  }, [current]);
+  }, [current, money.perUsd]);
 
   /**
    * 点不带服务商（一个点 = 型号 × 档）：显示名的偏好与头像第三级兜底，借最先声明了这个 id 的那家——
@@ -291,7 +306,7 @@ export function PriceCapabilityChart(props: {
                   ))}
                   {costTicks(view.x).map((v) => (
                     <span key={`xl${v}`} className="pc-tick x" style={{ left: `${view.xOf(v)}%` }}>
-                      {formatCostTick(v)}
+                      {formatCostTick(v, money.symbol)}
                     </span>
                   ))}
                   {view.points.length === 0 && <span className="pc-empty">{copy.noPoints}</span>}
@@ -385,7 +400,7 @@ export function PriceCapabilityChart(props: {
                     </span>
                     <span className="pc-best-val row-trailing">
                       <span className="pc-best-s">{formatScore(point.score, current.unit)}</span>
-                      <span className="pc-best-c">{formatCost(point.cost)}</span>
+                      <span className="pc-best-c">{formatCost(point.cost, money.symbol)}</span>
                     </span>
                   </div>
                 ))}
@@ -442,7 +457,9 @@ function PointDetail(props: {
   levelName: (level: ThinkingLevel) => string;
   avatar: React.ReactNode;
 }) {
-  const copy = useT().providers.priceChart;
+  const t = useT();
+  const copy = t.providers.priceChart;
+  const symbol = t.currency.symbol;
   const { point } = props;
   const place = popoverPlacement(props.at.x, props.at.y);
   return (
@@ -469,7 +486,7 @@ function PointDetail(props: {
       <div className="pc-tip-row">
         <span>{copy.tipCost}</span>
         <span>
-          <span className="pc-mono">{formatCost(point.cost)}</span>
+          <span className="pc-mono">{formatCost(point.cost, symbol)}</span>
           <span className="pc-tip-basis">
             {point.costBasis === "measured"
               ? copy.tipMeasured(point.samples)
@@ -480,11 +497,11 @@ function PointDetail(props: {
         </span>
       </div>
       {point.measured !== undefined && (
-        <div className="pc-tip-note">{copy.tipMeasuredFew(point.measured.samples, formatCost(point.measured.cost))}</div>
+        <div className="pc-tip-note">{copy.tipMeasuredFew(point.measured.samples, formatCost(point.measured.cost, symbol))}</div>
       )}
       {point.folded?.map((item) => (
         <div key={item.thinkingLevel} className="pc-tip-note">
-          {copy.tipFolded(props.levelName(item.thinkingLevel), item.samples, formatCost(item.cost))}
+          {copy.tipFolded(props.levelName(item.thinkingLevel), item.samples, formatCost(item.cost, symbol))}
         </div>
       ))}
       <div className="pc-tip-row">
@@ -493,6 +510,16 @@ function PointDetail(props: {
       </div>
     </div>
   );
+}
+
+/** 一个点换算成显示币种（数据是美元，见 utils/money.ts）：花费、不够门槛的实测、并进来的档一起换 */
+function inCurrency(point: PriceChartPoint, perUsd: number): PriceChartPoint {
+  return {
+    ...point,
+    cost: point.cost * perUsd,
+    ...(point.measured === undefined ? {} : { measured: { ...point.measured, cost: point.measured.cost * perUsd } }),
+    ...(point.folded === undefined ? {} : { folded: point.folded.map((item) => ({ ...item, cost: item.cost * perUsd })) }),
+  };
 }
 
 /**

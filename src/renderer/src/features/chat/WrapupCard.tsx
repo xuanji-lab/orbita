@@ -4,6 +4,7 @@ import { IconButton } from "../../shell/IconButton";
 import { useT } from "../../locale.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import { formatCost } from "../settings/price-chart-model.ts";
+import { shownAmount } from "../../utils/money.ts";
 import { useDictation } from "../voice/useDictation.ts";
 import { DictationStatus } from "../voice/DictationStatus.tsx";
 import type { WrapupDraft, WrapupEntry, WrapupPlan, WrapupReviseResult } from "@shared/wrapup";
@@ -163,7 +164,7 @@ export function WrapupCard(props: {
                   <span>{props.nameOf(totals.modelId)}</span>
                   <span className="wrapup-mono">{formatTokens(wrapupTokenTotal(totals.tokens))} token</span>
                   {totals.officialCost !== null && totals.officialCost > 0 && (
-                    <span className="wrapup-mono">≈ {formatCost(totals.officialCost)}</span>
+                    <span className="wrapup-mono">≈ {formatCost(shownAmount(totals.officialCost, t.currency), t.currency.symbol)}</span>
                   )}
                 </>
               )}
