@@ -332,7 +332,7 @@ export function ReviewPanel(props: {
       ) : list.kind !== "ok" ? (
         <EmptyState
           title={reviewEmptyTitle(list, t)}
-          detail={reviewEmptyText(list, t)}
+          detail={reviewEmptyText(list, t, source)}
           danger={list.kind === "error"}
         />
       ) : (
@@ -428,6 +428,11 @@ export function ReviewPanel(props: {
                     ) : entry.binary ? (
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.binary}
+                      </span>
+                    ) : entry.lineCountUnknown === true ? (
+                      /* 未跟踪文件超过行数上限：与左栏同口径，不拿 +0 冒充没改动 */
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
+                        {t.review.linesUnknown}
                       </span>
                     ) : (
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
