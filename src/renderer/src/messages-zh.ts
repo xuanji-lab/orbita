@@ -31,6 +31,11 @@ const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入"
  * - 省略号跟原型用单个「…」（菜单项「移到…」、进行中「正在载入…」）。
  */
 export const zh: Messages = {
+  /**
+   * 花费的显示币种（utils/money.ts）：数据一律美元，中文界面按人民币显示（用户 2026-10-25）。
+   * 汇率：中国外汇交易中心受权公布的 2026-10-23 人民币汇率中间价，1 美元 = 6.7180 元。
+   */
+  currency: { symbol: "¥", perUsd: 6.718 },
   review: {
     title: "审查",
     source: (source) =>
@@ -840,6 +845,7 @@ export const zh: Messages = {
       legendMeasured: "实测 · 你的任务中位数",
       legendEstimated: "估算 · 官方单价 × 你的 token 构成",
       legendLevels: "虚线 = 同一型号的不同档位",
+      legendBorrowed: "点线框 = 榜单没评的档，借最高评测档的分",
       legendFrontier: "实线 = 帕累托前沿",
       frontierTitle: "帕累托最优",
       frontierNote: "前沿上的点：再往上找更高分，就要花更多钱。",
@@ -850,13 +856,15 @@ export const zh: Messages = {
       tipReference: "估算 · 参考画像",
       tipMeasuredFew: (samples: number, cost: string) => `实测 ${samples} 个任务 ${cost} · 样本太少，按估算画`,
       tipBoard: "榜单条目",
+      borrowedTag: (level: string) => `借「${level}」档的分`,
+      tipBorrowed: (level: string) => `榜单没评这一档，分数借「${level}」档的；不进帕累托前沿`,
+      tipFolded: (level: string, samples: number, cost: string) =>
+        `「${level}」档并在这一点：榜单没评、借这一档的分；实测 ${samples} 个任务 ${cost}，样本太少按估算画`,
       levelUnlabeled: "榜单未标档",
       unranked: "未上榜（当前分类查不到）",
       unpriced: "缺官方单价",
       unpricedTip: "在这个型号的设置里填上费率，就能画进图里",
-      unrated: "用过、但榜单没评的档",
-      unratedMeasured: (samples: number, cost: string) => `实测 ${samples} 个任务 · 中位数 ${cost}`,
-      ratedOnly: (levels: string) => `榜单只评了：${levels}`,
+      borrowNote: "榜单没评的档借同型号评过的最高档的分（点线框）。榜单没评，说明这一档不值得单独测——做任务推荐用榜单评过的档。",
       explainer: "一个任务 = 收尾时确认的一件「做完的事」：花费是那几轮的合计，算给那几轮里 token 最多的型号 × 档；子会话交回结果算一件。没收尾确认过的会话不进实测。",
       planNote: "套餐与订阅按官方单价折算。",
       source: (date: string, revision: string) =>

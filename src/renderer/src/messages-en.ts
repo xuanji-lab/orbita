@@ -36,13 +36,10 @@ const KNOWN_NOTES: Record<string, string> = {
   minimax: "API and coding plan share one endpoint; billing follows the key",
   xiaomi: "Xiaomi MiMo open platform API, via the OpenAI-compatible endpoint",
   qwen: "Alibaba Cloud Model Studio (DashScope), OpenAI-compatible mode",
-  "doubao-api": "Volcengine Ark model API (billed per token)",
   openrouter: "Aggregating gateway — one key for models from many vendors",
   "zhipu-coding-team": "GLM Coding Plan for teams, sign in with team credentials",
   "qwen-token-plan": "Qwen Token Plan subscription, via the OpenAI-compatible endpoint",
   "xiaomi-token-plan": "Xiaomi MiMo Token Plan subscription",
-  doubao: "Volcengine Ark Coding Plan subscription; only the models the plan grants",
-  "ark-coding-plan": "Volcengine Ark Agent Plan subscription",
   "openai-responses-compatible": "Self-hosted gateway on the Responses protocol; the client appends /responses",
   "openai-codex": "ChatGPT Plus / Pro subscription, uses your Codex quota",
   "github-copilot": "Copilot subscription — models from many vendors on your Copilot quota",
@@ -60,9 +57,6 @@ const KNOWN_LABELS: Record<string, string> = {
   "xiaomi-token-plan": "Xiaomi MiMo",
   qwen: "Qwen",
   "qwen-token-plan": "Qwen",
-  "doubao-api": "Volcengine Ark",
-  doubao: "Volcengine Ark",
-  "ark-coding-plan": "Volcengine Ark Agent",
   "zhipu-coding-team": "Zhipu Team",
   tokenrhythm: "TokenRhythm",
   "openai-responses-compatible": "OpenAI Responses-compatible",
@@ -81,6 +75,8 @@ const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
 export const en = {
+  /** 花费的显示币种（utils/money.ts）：数据一律美元，英文界面原样显示 */
+  currency: { symbol: "$", perUsd: 1 },
   common: {
     more: "More",
     cancel: "Cancel",
@@ -947,6 +943,7 @@ export const en = {
       legendMeasured: "Measured · median of your tasks",
       legendEstimated: "Estimate · official price × your token mix",
       legendLevels: "Dashed line = same model, other levels",
+      legendBorrowed: "Dotted = a level the board didn't rate, scored as the top rated level",
       legendFrontier: "Solid line = Pareto frontier",
       frontierTitle: "Pareto optimal",
       frontierNote: "Above the frontier, a higher score costs more.",
@@ -958,14 +955,16 @@ export const en = {
       tipMeasuredFew: (samples: number, cost: string) =>
         `Measured ${samples} task${samples === 1 ? "" : "s"} ${cost} · too few to plot, shown as an estimate`,
       tipBoard: "Leaderboard entry",
+      borrowedTag: (level: string) => `scored as ${level}`,
+      tipBorrowed: (level: string) => `The board didn't rate this level; the score is ${level}'s. Kept off the Pareto frontier.`,
+      tipFolded: (level: string, samples: number, cost: string) =>
+        `${level} shares this point: not rated, borrows this score; measured ${samples} task${samples === 1 ? "" : "s"} ${cost}, too few, so estimated`,
       levelUnlabeled: "level not on board",
       unranked: "Not on this board",
       unpriced: "No official price",
       unpricedTip: "Fill in this model's rates in its settings to place it on the chart",
-      unrated: "Used, but the board didn't rate this level",
-      unratedMeasured: (samples: number, cost: string) =>
-        `measured ${samples} task${samples === 1 ? "" : "s"} · median ${cost}`,
-      ratedOnly: (levels: string) => `The board only rated: ${levels}`,
+      borrowNote:
+        "Levels the board didn't rate borrow the model's top rated level's score (dotted). The board skipping a level means it wasn't worth testing on its own — for real tasks, prefer the levels the board rated.",
       explainer:
         "A task is one thing you confirmed as done when wrapping up a session: its cost is those turns added up, counted toward the model and thinking level that used the most tokens in them. A sub-session that reports back counts as one task. Sessions never wrapped up are not measured.",
       planNote: "Plans and subscriptions are converted at official prices.",
