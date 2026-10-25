@@ -62,6 +62,18 @@ describe("scrollLineForJump —— 开头 / 50% / 结尾", () => {
     assert.equal(scrollLineForJump(5, 20, "tail"), 0);
     assert.equal(scrollLineForJump(0, 20, "tail"), 0);
   });
+
+  test("跳转后的首行与跳转目标一致（显式取窗的参数由这两个纯函数算出）", () => {
+    // 真机量到的行高 18.59375 px；跳转设完 scrollTop 后还要自己算一次首行，
+    // 不能只等 scroll 事件（真机上程序化滚动不一定派发它）
+    const rowHeight = 18.59375;
+    for (const total of [300, 1_120_000, 1_800_000]) {
+      for (const jump of ["head", "middle", "tail"] as const) {
+        const line = scrollLineForJump(total, 34, jump);
+        assert.equal(lineAtScroll(line * rowHeight, rowHeight), line, `${jump} / ${total}`);
+      }
+    }
+  });
 });
 
 describe("lineAtScroll / visibleLineCount —— 滚动映射", () => {

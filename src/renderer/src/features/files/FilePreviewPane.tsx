@@ -544,10 +544,3 @@ function HighlightedCode(props: { name: string; text: string }) {
     </div>
   );
 }
-
-/**
- * 代码高亮：复用聊天 CodeBlock.tsx 的同一套机制（shiki 就绪是异步的，未就绪先
- * 无色渲染；`useMemo` 按 html 字符串稳定 `{ __html }` 对象引用，避免 React 19
- * 按对象身份重写 innerHTML）。包一层 `.chat-md`：`pre.shiki` 的双主题着色
- * （含暗 / 黑主题翻色）就定义在这个作用域下，见 styles.css。
- */

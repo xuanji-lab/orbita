@@ -70,7 +70,9 @@ export function RangeTextPreview(props: {
   const [index, setIndex] = useState<IndexState>({ status: "loading" });
   const [win, setWin] = useState<CachedWindow | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const { probeRef, rowHeight } = useRowHeight();
+  // 行块容器：量行高时用「整块高度 / 行数」（单个元素离视口远时 rect 会被吸附成整数）
+  const linesRef = useRef<HTMLDivElement | null>(null);
+  const { probeRef, rowHeight } = useRowHeight(linesRef);
 
   const cacheRef = useRef<Map<number, CachedWindow>>(new Map());
   const genRef = useRef(0);
@@ -219,12 +221,21 @@ export function RangeTextPreview(props: {
     };
   }, [index, rowHeight, props.scroller]);
 
+  /**
+   * 跳开头 / 50% / 结尾：设完 `scrollTop` **显式要一次窗**。
+   *
+   * 只靠 scroll 事件是不够的：程序化改 `scrollTop` 在 Electron / 某些主题下不一定派发
+   * scroll（真机实测：点「开头」后 scrollTop 已是 0，行窗却停在末尾六秒不动）。用户
+   * 点按钮走的也是这条路径，所以跟初始落位一样直接调 `loadRef`。它幂等：窗口已盖住
+   * 可视区就直接返回，滚动事件再来一次也不会多发请求。用户滚轮仍走监听。
+   */
   const jump = (where: RangeJump): void => {
     if (index.status !== "ready") return;
     const scroller = props.scroller.current;
     if (scroller === null || rowHeight <= 0) return;
     const rows = visibleLineCount(scroller.clientHeight, rowHeight);
     scroller.scrollTop = scrollLineForJump(index.totalLines, rows, where) * rowHeight;
+    loadRef.current(lineAtScroll(scroller.scrollTop, rowHeight), rows);
   };
 
   if (index.status === "loading") {
@@ -297,6 +308,7 @@ export function RangeTextPreview(props: {
         </div>
         <div
           className="file-preview-window-lines"
+          ref={linesRef}
           style={{ transform: `translateY(${(win === null ? 0 : win.start) * rowHeight}px)` }}
         >
           {(win === null ? [] : win.lines).map((line, at) => (

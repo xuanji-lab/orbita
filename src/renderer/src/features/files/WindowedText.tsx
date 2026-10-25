@@ -30,7 +30,9 @@ export function WindowedText(props: {
   resetKey: string;
 }) {
   const rows = useMemo(() => textRows(props.text), [props.text]);
-  const { probeRef, rowHeight } = useRowHeight();
+  // 行块容器：量行高时用「整块高度 / 行数」（单个元素离视口远时 rect 会被吸附成整数）
+  const linesRef = useRef<HTMLDivElement | null>(null);
+  const { probeRef, rowHeight } = useRowHeight(linesRef);
   const [win, setWin] = useState<TextWindow>(() => textWindow(rows.length, 0, 0, 0));
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
@@ -83,6 +85,7 @@ export function WindowedText(props: {
       </div>
       <div
         className="file-preview-window-lines"
+        ref={linesRef}
         style={{ transform: `translateY(${win.start * rowHeight}px)` }}
       >
         {rows.slice(win.start, win.end).map((row, index) => (

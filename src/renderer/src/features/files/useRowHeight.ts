@@ -4,37 +4,55 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
  * 量一行代码文本的高度（窗口化渲染共用的那一份）。
  *
  * 行高由 CSS 决定（`--font-size-sm` × `--line-height-code-block`，随界面字号缩放），
- * 所以调用方把探针 div 渲染在自己的内容里、用 `probeRef` 挂上，量一次；行高变了
- * 整个窗口都会错位（总高度、translateY 都按行高算），因此用 ResizeObserver 盯住探针。
+ * 而总高度、`translateY`、滚动位置 ↔ 行号全靠它——差一像素，滚到文件中部就会差出几百行，
+ * 所以这里必须量准。三处容易量错的地方（都踩过）：
  *
- * 探针必须是**一行**、且与正文行同一套字体 / 行高，量出来的值才等于一行的高度——
- * 样式见 `.file-preview-window-probe`。`rowHeight === 0` 表示还没量出来，调用方此时
- * 只渲染首屏 + overscan，绝不先全渲染再收。
+ * 1. **不能量单个元素**：元素离视口很远时（分段预览默认落在 100 万行文件的末尾，
+ *    `translateY` 把探针推到两千万像素之外），Chromium 会把它的 rect 吸附成整数
+ *    ——同一个探针，在顶部量到 18.59375，在末尾量到 18（实测）。差 0.59 px/行
+ *    乘以一百万行就是几万行。
+ * 2. **量整块再除以行数**：`rowsRef` 指向的是装着当前窗口所有行的容器（`.file-preview-window-lines`），
+ *    它的高度 = 行数 × 行高，吸附误差（≤1 px）被行数除掉：600 行时误差 0.002 px/行。
+ * 3. **探针不一定在首帧就在**，也**不一定第一帧就量得准**（窗口还没到、容器高度为 0）：
+ *    所以每次渲染都看一眼，节点换了就改挂观察器，拿到更准的值就更新。
  *
- * **探针不一定在首帧就在**：分段预览（RangeTextPreview）在行索引回来之前渲染的是
- * 加载态，探针要等索引就绪才出现。所以这里不能只在挂载时量一次——每次渲染都看一眼
- * 探针，第一次拿到节点时才挂观察器（换成别的节点时改挂新的）。
+ * `rowHeight === 0` 表示还没量出来，调用方此时只渲染空的高度容器。
  */
-export function useRowHeight(): { probeRef: RefObject<HTMLDivElement | null>; rowHeight: number } {
+export function useRowHeight(sampleRef?: RefObject<HTMLElement | null>): {
+  probeRef: RefObject<HTMLDivElement | null>;
+  rowHeight: number;
+} {
   const [rowHeight, setRowHeight] = useState(0);
   const probeRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
-  const observedRef = useRef<Element | null>(null);
+  const observedRef = useRef<Element[]>([]);
 
   useLayoutEffect(() => {
     const probe = probeRef.current;
-    if (probe === null || observedRef.current === probe) return;
+    if (probe === null) return;
+    const sample = sampleRef?.current ?? null;
+    const targets = sample === null ? [probe] : [probe, sample];
+    const same =
+      observedRef.current.length === targets.length &&
+      targets.every((node, at) => observedRef.current[at] === node);
+
     const measure = (): void => {
-      const measured = probe.getBoundingClientRect().height;
-      if (measured <= 0) return;
+      const rows = sample?.childElementCount ?? 0;
+      // 两行以上才用整块平均：一行时吸附误差没法被除掉
+      const fromBlock = sample !== null && rows >= 2 ? sample.getBoundingClientRect().height / rows : 0;
+      const measured = fromBlock > 0 ? fromBlock : probe.getBoundingClientRect().height;
+      if (!(measured > 0)) return;
       setRowHeight((prev) => (Math.abs(measured - prev) > 0.5 ? measured : prev));
     };
+    // 节点没换也要量一次：上一次可能是在行还很少 / 位置很远的时候量的
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(probe);
+    if (same) return;
+
     observerRef.current?.disconnect();
+    const observer = new ResizeObserver(measure);
+    for (const node of targets) observer.observe(node);
     observerRef.current = observer;
-    observedRef.current = probe;
+    observedRef.current = targets;
   });
 
   useEffect(() => () => observerRef.current?.disconnect(), []);
