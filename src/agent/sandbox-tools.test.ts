@@ -16,7 +16,7 @@ import {
   type ComputerUseToolOutcome,
 } from "../shared/computer-use.ts";
 
-const setup = () => {
+const setup = (allowNetwork = true) => {
   const sent: Record<string, unknown>[] = [];
   const timeouts: Array<number | undefined> = [];
   const broker = new RequestBroker((event) => sent.push(event as Record<string, unknown>));
@@ -27,7 +27,9 @@ const setup = () => {
     return original(event as never, ...(timeoutMs === undefined ? [] : [timeoutMs]));
   }) as typeof broker.request;
 
-  const tools = new Map(createSandboxBrowserTools(broker, "session-1").map((tool) => [tool.name, tool]));
+  const tools = new Map(
+    createSandboxBrowserTools(broker, "session-1", allowNetwork).map((tool) => [tool.name, tool]),
+  );
   const answer = (index: number, outcome: ComputerUseToolOutcome): void =>
     broker.resolve(String(sent[index]?.["requestId"]), outcome);
   const run = (name: string, params: unknown) =>
@@ -243,5 +245,78 @@ describe("sandbox_* → computerUseRequest", () => {
       /Stopped/,
     );
     assert.equal(sent.length, 0);
+  });
+});
+
+describe("沙箱出网开关（allowNetwork）——设置→模型这条链的末端", () => {
+  /** 拿到被拒绝的错误的原文（这里比的是**一个字的差异都不能有**，正则不够） */
+  const rejection = async (pending: Promise<unknown>): Promise<string> => {
+    try {
+      await pending;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    assert.fail("应该被拒绝，实际成功了");
+  };
+
+  // guest 桥从 Chromium 错误页里抠出来的那几条原文（见 main/computer-use/cdp.test.ts 的夹具）
+  const NET_ERROR =
+    "页面没有加载：ERR_INTERNET_DISCONNECTED（沙箱可能没有出网、宿主机没联网，或这个地址不可达）。" +
+    "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。";
+
+  test("关掉出网：十个描述末尾都拼上「这是设置不是网站」，并给出设置路径与恢复方式", () => {
+    const { tools } = setup(false);
+    for (const [name, tool] of tools) {
+      assert.match(tool.description, /no outbound network/, name);
+      assert.match(tool.description, /Settings › Experimental features › Computer use/, name);
+      assert.match(tool.description, /\"Allow network access\" is off/, name);
+      assert.match(tool.description, /Do not retry the navigation/, name);
+      // 描述的第一句仍是「这是哪个浏览器」：拼在末尾，不能打乱原有的开场
+      assert.match(tool.description, /^Operates the Edge browser/, name);
+    }
+  });
+
+  test("开着出网（缺省）：描述里没有那句噪音，与改动前逐字一致", () => {
+    const { tools } = setup(true);
+    for (const [name, tool] of tools) {
+      assert.doesNotMatch(tool.description, /no outbound network/, name);
+      assert.doesNotMatch(tool.description, /Allow network access/, name);
+    }
+  });
+
+  test("关掉出网 + 网络类错误：补上确定句，并保留 guest 的原话（不吞码）", async () => {
+    for (const code of ["ERR_INTERNET_DISCONNECTED", "ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION_REFUSED"]) {
+      const { runWith } = setup(false);
+      const message = await rejection(
+        runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: `页面没有加载：${code}（原因不明）` }),
+      );
+      assert.match(message, new RegExp(code), code);
+      assert.match(message, /不允许出网/, code);
+      assert.match(message, /这是设置，不是网站的问题/, code);
+      assert.match(message, /允许沙箱出网/, code);
+    }
+  });
+
+  test("关掉出网 + 网络类错误的事件：确定句接在原话后面，原文一个字不动", async () => {
+    const { runWith } = setup(false);
+    const message = await rejection(runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: NET_ERROR }));
+    assert.ok(message.startsWith(NET_ERROR), "guest 的原话必须完整留在前面");
+    assert.ok(message.length > NET_ERROR.length);
+  });
+
+  test("关掉出网 + 非网络类错误：一个字都不改（网站 500 / ERR_ABORTED 不是设置问题）", async () => {
+    for (const original of [
+      "选择器「#gone」没有匹配到元素",
+      "页面没有加载：ERR_ABORTED（导航被中止）",
+      "页面没有加载：ERR_HTTP_RESPONSE_CODE_FAILURE（状态码 500）",
+    ]) {
+      const { runWith } = setup(false);
+      assert.equal(await rejection(runWith("sandbox_click", { selector: "#x" }, { ok: false, error: original })), original);
+    }
+  });
+
+  test("开着出网 + 网络类错误：原话原样交给模型——断网可能是宿主机 / 网站，不是设置", async () => {
+    const { runWith } = setup(true);
+    assert.equal(await rejection(runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: NET_ERROR })), NET_ERROR);
   });
 });

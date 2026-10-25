@@ -15,9 +15,14 @@
  * navigate 走默认写闸门（plan 拒 / manual 问 / skip 放）。**PR4 的确认卡接在
  * 写动作的审批处**——request 里已经带 `element`（一句人话，审批卡上给用户看它，
  * 而不是一个没有意义的 `#submit`），接的时候不用改协议。
+ *
+ * **沙箱有没有出网**由主进程随开轮命令告诉这一层（`allowNetwork`）：关掉出网时，
+ * 每个描述的末尾都拼一段「网页打不开是设置造成的」、网络类错误也改成确定句——那两段
+ * 只在关掉时存在，开着时模型看到的一个字都不变（computer-network.ts）。
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
+import { networkFailureError, sandboxNetworkNote } from "./computer-network.ts";
 import {
   COMPUTER_USE_BROWSER_IDLE_MS,
   COMPUTER_USE_BROWSER_MAX,
@@ -107,7 +112,12 @@ const INSTANCES =
   `sandbox_navigate then starts a fresh one with an empty profile). If the limit is reached, close another ` +
   `session's browser first — this tool says which. `;
 
-export function createSandboxBrowserTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
+export function createSandboxBrowserTools(
+  broker: RequestBroker,
+  sessionId: string,
+  /** 沙箱这次是否允许出网（主进程的 settings.computerUse.allowNetwork）：只影响描述与失败文案 */
+  allowNetwork: boolean,
+): ToolDefinition[] {
   /**
    * 发请求并等回执；**这一轮被停掉（signal abort）就立刻放手**——pi 等工具返回才结束一轮，
    * 不放手的话「停止」按钮会失灵（browser-tools.ts / computer-tools.ts 同款）。
@@ -131,7 +141,7 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
               signal.addEventListener("abort", () => reject(new Error("Stopped")), { once: true }),
             ),
           ]);
-    if (!result.ok) throw new Error(result.error);
+    if (!result.ok) throw new Error(networkFailureError(result.error, allowNetwork));
     return result;
   };
 
@@ -523,7 +533,13 @@ export function createSandboxBrowserTools(broker: RequestBroker, sessionId: stri
     },
   };
 
-  return [navigate, observe, click, type, extract, wait, screenshot, upload, download, tabs];
+  // 关掉出网时，把「这是设置，不是网站」拼到**每个**描述的末尾：一处拼漏，模型就可能
+  // 在那个工具上把一个设置的错当成网站的错。开着时 note 是空串、原样返回（零变化）
+  const tools = [navigate, observe, click, type, extract, wait, screenshot, upload, download, tabs];
+  const note = sandboxNetworkNote(allowNetwork);
+  return note === ""
+    ? tools
+    : tools.map((tool) => ({ ...tool, description: `${tool.description}\n\n${note}` }));
 }
 
 /** 模型偶尔把数字写成字符串（"120"）：认；其余一律当没给 */
