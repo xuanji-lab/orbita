@@ -41,6 +41,7 @@ import {
   pingGuest,
   resetGuestCommandSeq,
   sendGuestCommand,
+  startGuestTcpProbe,
 } from "./bridge-client.ts";
 import { waitForBridgeInfo, type BridgeInfo } from "./bridge-ready.ts";
 import { isRemoteSessionImage, type SandboxProcessInfo } from "./process-list.ts";
@@ -447,6 +448,9 @@ export class SandboxController {
       }
       // 通告 ≠ 能干活：映射文件夹 host→guest 方向开机后有 ~20 秒热身期（2026-10-10 实测），
       // 必须经命令通道 ping 通才算就绪。「running」的定义 = 桥真的能执行命令。
+      // 先让 TCP 通道在**后台**开始连（桥 0.8.0）：真机上通告到了、guest 的网卡可能还要几秒
+      // 才就绪，后台探活会短退避重试；它不等、不阻塞，也不影响下面的 ping（ping 没连上就走文件协议）。
+      await startGuestTcpProbe(outputDir);
       // ping 用启动阶段的剩余预算（与等通告共享同一个 deadline）。
       const pinged = await this.pingWithCancel(outputDir, remainingMs(), generation);
       if (!pinged) {

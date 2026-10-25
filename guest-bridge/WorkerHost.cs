@@ -61,8 +61,12 @@ internal static class WorkerHost
     private const int KillWaitMs = 3000;
     /** 汇总 cdp-status 时问单个 worker 的上限（卡住的 worker 不该把汇总拖到天荒地老） */
     private const int AggregateStatusTimeoutMs = 3000;
-    /** 把 worker 的截图搬回主 cmd\ 目录的重试窗口（映射文件夹同步有抖动） */
-    private const int ShotCopyWaitMs = 2000;
+    /**
+     * 把 worker 的截图搬回主 cmd\\ 目录的重试窗口。**只有回执里点了名（cdp-shot）才会走到这里**，
+     * 而且 worker 是先写 jpg 再写 resp，正常一次就命中；窗口只给「映射目录的元数据还没刷新」
+     * 那种回落现场留余量。
+     */
+private const int ShotCopyWaitMs = 2000;
 
     /**
      * 一条 worker 命令的放弃线（杀线）。
@@ -185,12 +189,25 @@ internal static class WorkerHost
      */
     private static void CompleteInBackground(WorkerHandle worker, string command, string workerBase, string hostBaseName)
     {
+        Stopwatch clock = Stopwatch.StartNew();
         string respText = WaitWorkerResp(worker, workerBase, CommandTimeoutMs);
+        long waitMs = clock.ElapsedMilliseconds;
         if (respText != null)
         {
-            // 顺序与桥自己的协议一致：**截图先落盘、resp 后落盘**
-            CopyShotBack(worker.CmdDir, workerBase);
+            long visibleStartMs = clock.ElapsedMilliseconds;
+            DateTime respMtimeUtc = DateTime.MinValue;
+            try { respMtimeUtc = File.GetLastWriteTimeUtc(Path.Combine(worker.CmdDir, workerBase + RespSuffix)); }
+            catch { }
+            string visibleNote;
+            long visibleMs = Program.PropagateFromMtime(respMtimeUtc, DateTime.UtcNow, out visibleNote);
+            visibleMs -= clock.ElapsedMilliseconds - visibleStartMs; // 去掉上面这次 stat 自己的耗时（负数不算）
+            if (visibleMs < 0) visibleMs = 0;
+            // 顺序与桥自己的协议一致：**截图先落盘、resp 后落盘**；有没有图看 resp（见 CopySiblingFileIfAny）
+            long copyMs = CopySiblingFileIfAny(worker.CmdDir, Program.CmdDir, respText, workerBase);
+            long writeStartMs = clock.ElapsedMilliseconds;
             WriteHostResp(hostBaseName, respText);
+            long writeMs = clock.ElapsedMilliseconds - writeStartMs;
+            LogBridgeHop(command, waitMs, visibleMs, visibleNote, copyMs, writeMs);
             if (HasExited(worker))
             {
                 Forget(worker.Key, worker.Pid);
@@ -217,6 +234,27 @@ internal static class WorkerHost
                 + "已重启该会话的浏览器通道——可以用 cdp-status 确认，或改用像素工具"));
         }
         CleanupWorkerFiles(worker.CmdDir, workerBase);
+    }
+
+    /**
+     * 桥侧的一行耗时：等 worker 回执多久，其中「worker 写出 → 本进程看见」占多少。
+     *
+     * 为什么要它（2026-10-25 真机）：宿主看到一条 warm 导航 2649ms，而 worker 自己的回执
+     * 里 ms=343——那 2.3s 卡在 worker 写完回执之后。两个候选只能用这一行分开：
+     *   ① 回执落在 `out\worker\<会话>\cmd`（映射目录，走 RDP 驱动器重定向）——
+     *      `WaitWorkerResp` 的 File.Exists 拿到的是缓存过的旧答案，文件其实早就写好了；
+     *   ② 回执写本身很慢（那就是 worker 侧那一行里的「回执落盘」）。
+     * 只打日志，不加任何等待。
+     */
+    private static void LogBridgeHop(string command, long waitMs, long visibleMs, string visibleNote,
+        long copyMs, long writeMs)
+    {
+        if (!Program.HopNeedsLog(Program.HopLogLineMs, new long[] { waitMs, copyMs, writeMs })) return;
+        StringBuilder sb = new StringBuilder("worker 回执 ").Append(command).Append("：等 ").Append(waitMs)
+            .Append("ms（其中 worker 写出→本进程看见 ").Append(visibleMs).Append("ms，").Append(visibleNote)
+            .Append("；轮询节奏 ").Append(RespPollIntervalMs).Append("ms） + 搬图 ").Append(copyMs)
+            .Append("ms + 写宿主回执 ").Append(writeMs).Append("ms");
+        Program.Log(sb.ToString());
     }
 
     /**
@@ -261,6 +299,7 @@ internal static class WorkerHost
         CleanupWorkerFiles(worker.CmdDir, workerBase);
         CleanupWorkerFiles(worker.CmdDir, null);
         CleanupWorkerInfo(worker);
+        CdpSessions.DeleteWorkerCmdDir(worker.CmdDir);
         CdpSessions.DeleteProfile(key);
         return new JObj().Bool("ok", true).Str("session", key).ToString();
     }
@@ -356,6 +395,7 @@ internal static class WorkerHost
             Forget(worker.Key, worker.Pid);
             CleanupWorkerFiles(worker.CmdDir, null);
             CleanupWorkerInfo(worker);
+            CdpSessions.DeleteWorkerCmdDir(worker.CmdDir);
             CdpSessions.DeleteProfile(worker.Key);
         }
     }
@@ -369,15 +409,19 @@ internal static class WorkerHost
     private static WorkerHandle StartWorker(string key)
     {
         string dir = Path.Combine(Program.OutDir, WorkerDirName, key);
-        string cmdDir = Path.Combine(dir, "cmd");
+        // 命令目录可能在 guest 本地盘（见 CdpSessions.WorkerCmdDir）：只用它本身，不再假定它在 dir 下面
+        string cmdDir = CdpSessions.WorkerCmdDir(Program.OutDir, key);
         try
         {
+            Directory.CreateDirectory(dir);
             Directory.CreateDirectory(cmdDir);
         }
         catch (Exception ex)
         {
             throw new Exception("worker 目录建不起来（" + cmdDir + "）：" + ex.Message);
         }
+        if (!string.Equals(cmdDir, Path.Combine(dir, "cmd"), StringComparison.OrdinalIgnoreCase))
+            Program.Log("worker 命令目录在 guest 本地盘：" + cmdDir + "（不经映射文件夹，避开重定向的元数据缓存）");
         // 上一局的残留（同会话重启 / 桥被重启过）：先清空，新 worker 的序号从 1 起。
         // 不清的话它的直探会撞上旧 req，把一条上辈子的命令再执行一遍。
         CleanupWorkerFiles(cmdDir, null);
@@ -386,6 +430,8 @@ internal static class WorkerHost
         StringBuilder args = new StringBuilder();
         args.Append("--cdp-worker ").Append(QuoteArg(Program.OutDir)).Append(" ").Append(QuoteArg(key));
         args.Append(" --parent-pid ").Append(Process.GetCurrentProcess().Id.ToString());
+        // 命令目录由主桥选定（本地盘 / 回落映射目录），worker 不许自己再算一遍
+        args.Append(" --worker-cmd-dir ").Append(QuoteArg(cmdDir));
         // 测试模式必须传下去：worker 才是真正会 Process.Start msedge.exe 的那个进程
         if (Program.BrowserDisabled) args.Append(" --no-browser");
         if (TestHooks) args.Append(" --test-hooks");
@@ -526,11 +572,43 @@ internal static class WorkerHost
         return TryReadText(path);
     }
 
-    /** cdp-shot 的 JPEG 从 worker 目录搬到主 cmd\ 目录（同名；resp 里引用的名字因此不用改） */
-    private static void CopyShotBack(string workerCmdDir, string workerBase)
+    /**
+     * 回执里点了名的兄弟文件（cdp-shot 的 jpg）搬回主 cmd 目录；**没有就一步都不走**。
+     *
+     * 判据是 **resp 字段**，不是命令名：
+     *   * 协议里「这条命令有没有一张要搬的图」的唯一权威就是回执的 `jpeg` 字段；
+     *   * 命令名白名单会在下一个产文件的命令上重新踩一遍这个坑；
+     *   * 反过来「先探文件在不在」也不行——映射目录上探一次就可能几秒，而这正是要省的。
+     * 以后真有命令产出别的兄弟文件，在这里按字段名登记，而不是放宽成无条件搬。
+     *
+     * 返回搬图耗时（日志里的「搬图 Xms」；跳过时是 0，也照打——下次一眼能看出有没有白等）。
+     *
+     * 真机 2026-10-25：这里原来对**每条**命令都无条件调 CopyShotBack，而它在等一张只有
+     * cdp-shot 才会产生的 jpg，于是等满 ShotCopyWaitMs：
+     *   worker 回执 cdp-start：等 3290ms + 搬图 2057ms + 写宿主回执 3ms
+     *   worker 回执 cdp-nav  ：等 203ms  + 搬图 2102ms + 写宿主回执 3ms
+     * cdp-start / cdp-nav / cdp-status 全部白付 2 秒——那 2.6 秒的主项就是它。
+     */
+    internal static long CopySiblingFileIfAny(string workerCmdDir, string hostCmdDir, string respText, string workerBase)
+    {
+        string jpegName = Program.ExtractJsonString(respText, "jpeg");
+        if (jpegName == null || jpegName.Length == 0) return 0; // 这条命令没有兄弟文件
+        Stopwatch clock = Stopwatch.StartNew();
+        CopyShotBack(workerCmdDir, hostCmdDir, workerBase);
+        return clock.ElapsedMilliseconds;
+    }
+
+    /**
+     * cdp-shot 的 JPEG 从 worker 目录搬到主 cmd\ 目录（**同名**：resp 里引用的名字因此不用改）。
+     *
+     * 目标名仍按我们自己的 workerBase 拼，不采信 resp 里的字符串（那是 guest 自己写的内容；
+     * 路径只能由我们这边的序号决定）。窗口只服务「图已经在、元数据还没刷新」这种现场
+     *（命令目录回落到映射目录时就是那样），正常一次就命中：worker 是先写 jpg 再写 resp 的。
+     */
+    internal static void CopyShotBack(string workerCmdDir, string hostCmdDir, string workerBase)
     {
         string src = Path.Combine(workerCmdDir, workerBase + ShotSuffix);
-        string dst = Path.Combine(Program.CmdDir, workerBase + ShotSuffix);
+        string dst = Path.Combine(hostCmdDir, workerBase + ShotSuffix);
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(ShotCopyWaitMs);
         while (DateTime.UtcNow < deadline)
         {
@@ -734,9 +812,9 @@ internal static class WorkerHost
 
     // ── worker 入口：`--cdp-worker <outDir> <session>` ─────────────────────────
 
-    internal static int RunWorker(string outDir, string session, bool testHooks, int parentPid)
+    internal static int RunWorker(string outDir, string session, bool testHooks, int parentPid, string cmdDir)
     {
-        WorkerRuntime runtime = new WorkerRuntime(outDir, session, testHooks, parentPid);
+        WorkerRuntime runtime = new WorkerRuntime(outDir, session, testHooks, parentPid, cmdDir);
         return runtime.Run();
     }
 
@@ -757,12 +835,13 @@ internal static class WorkerHost
         private CdpSession _cdp;
         private int _polls = 0;
 
-        internal WorkerRuntime(string outDir, string session, bool testHooks, int parentPid)
+        internal WorkerRuntime(string outDir, string session, bool testHooks, int parentPid, string cmdDir)
         {
             _outDir = outDir;
             _key = CdpSessions.SafeSessionId(session);
             _dir = Path.Combine(outDir, WorkerDirName, _key);
-            _cmdDir = Path.Combine(_dir, "cmd");
+            // 老主桥不带 --worker-cmd-dir：回落到 0.7.x 的位置（部署错配时仍能干活）
+            _cmdDir = cmdDir != null && cmdDir.Trim().Length > 0 ? cmdDir : Path.Combine(_dir, "cmd");
             _testHooks = testHooks;
             _parentPid = parentPid;
         }
@@ -840,6 +919,13 @@ internal static class WorkerHost
         {
             string name = Path.GetFileName(reqPath);
             string baseName = name.Substring(0, name.Length - ReqSuffix.Length);
+            // 计量：只服务日志，一段都不进控制流（时钟与方法见 Program 的文件往返计量）
+            Stopwatch clock = Stopwatch.StartNew();
+            DateTime reqMtimeUtc = DateTime.MinValue;
+            try { reqMtimeUtc = File.GetLastWriteTimeUtc(reqPath); }
+            catch { }
+            DateTime seenUtc = DateTime.UtcNow;
+            long mtimeQueryMs = clock.ElapsedMilliseconds;
             string raw;
             try
             {
@@ -849,7 +935,9 @@ internal static class WorkerHost
             {
                 return false; // 对端 rename 途中的瞬时点，下轮再来
             }
+            long readMs = clock.ElapsedMilliseconds - mtimeQueryMs;
 
+            long execStartMs = clock.ElapsedMilliseconds;
             string command = Program.ExtractString(raw, "command");
             string resp;
             if (command == null)
@@ -900,10 +988,35 @@ internal static class WorkerHost
             {
                 resp = Fail("未知命令：" + command);
             }
+            long execMs = clock.ElapsedMilliseconds - execStartMs;
 
+            long persistStartMs = clock.ElapsedMilliseconds;
             Program.AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(resp));
+            long persistMs = clock.ElapsedMilliseconds - persistStartMs;
             try { File.Delete(reqPath); } catch { }
+            LogWorkerHop(command, reqMtimeUtc, seenUtc, mtimeQueryMs, readMs, execMs, persistMs);
             return true;
+        }
+
+        /**
+         * worker 侧的一行耗时：req 看见延迟 / 读 / 执行 / 回执落盘。
+         *
+         * req 看见延迟用 mtime 法（桥写 req → 本进程看见）：桥与 worker 都在 guest 里，时基相同，
+         * 这个差值是可信的。2026-10-25 真机：一条导航宿主量到 2649ms，而 worker 回执里 ms=343
+         * ——那 2.3s 只能在这两跳里（桥写 req / worker 写回执），这一行就是来指认到底是哪一跳。
+         */
+        private void LogWorkerHop(string command, DateTime reqMtimeUtc, DateTime seenUtc, long mtimeQueryMs,
+            long readMs, long execMs, long persistMs)
+        {
+            string seenNote;
+            long seenMs = Program.PropagateFromMtime(reqMtimeUtc, seenUtc, out seenNote);
+            if (!Program.HopNeedsLog(Program.HopLogLineMs, new long[] { seenMs, readMs, execMs, persistMs })) return;
+            StringBuilder sb = new StringBuilder("worker 命令 ").Append(command).Append("：");
+            sb.Append("req 看见延迟 ").Append(seenMs >= 0 ? seenMs + "ms" : "未知")
+              .Append("（").Append(seenNote).Append("） + 读 ").Append(readMs).Append("ms（mtime 查询 ")
+              .Append(mtimeQueryMs).Append("ms） + 执行 ").Append(execMs).Append("ms + 回执落盘 ")
+              .Append(persistMs).Append("ms（命令目录 ").Append(_cmdDir).Append("）");
+            Program.Log(sb.ToString());
         }
 
         /**
@@ -1082,6 +1195,90 @@ internal static class WorkerHost
                 CdpSession.ClearStalePortFile(profileDir));
             Program.CheckTrue(failures, ref cases, "⑥ 清掉之后读不出任何端口（新 Edge 写的才是真值）",
                 CdpSession.ParsePortFileContent(TryReadText(portPath)) == 0);
+
+            // ⑦ --worker-cmd-dir：worker 只认主桥给的那一个目录。
+            //
+            // 真机上主桥会把这一跳放到 guest 本地盘（C:\orbita-browser\worker\<键>），
+            // 避开映射文件夹的元数据缓存；自测里换成另一个临时目录，证明的是同一件事：
+            // **命令从给定目录进、回执往给定目录出**，而 out\worker\<键>\cmd 一个字都不写。
+            // 这一段起的是真 worker 进程（--no-browser，不碰 Edge），不经过主桥。
+            string altCmdDir = Path.Combine(tmp, "alt-local", "st");
+            Directory.CreateDirectory(altCmdDir);
+            Process alt = null;
+            try
+            {
+                ProcessStartInfo altInfo = new ProcessStartInfo(ExecutablePath(),
+                    "--cdp-worker " + QuoteArg(tmp) + " st --no-browser --test-hooks"
+                    + " --worker-cmd-dir " + QuoteArg(altCmdDir));
+                altInfo.UseShellExecute = false;
+                altInfo.CreateNoWindow = true;
+                altInfo.RedirectStandardOutput = true;
+                altInfo.RedirectStandardError = true;
+                alt = Process.Start(altInfo);
+                if (alt != null)
+                {
+                    // 两个流都要读干（不读会卡住子进程的管道）
+                    alt.BeginOutputReadLine();
+                    alt.BeginErrorReadLine();
+                }
+                bool up = alt != null && WaitForFile(Path.Combine(tmp, WorkerDirName, "st", "worker.json"), 15000);
+                Program.CheckTrue(failures, ref cases, "⑦ 给了 --worker-cmd-dir 也能起来（worker.json 照旧在 out\\worker\\<会话>）", up);
+                string altName = "st-cmd-000001";
+                Program.AtomicWrite(Path.Combine(altCmdDir, altName + ReqSuffix),
+                    Encoding.UTF8.GetBytes("{\"command\":\"worker-ping\",\"session\":\"st\"}"));
+                bool answered = WaitForFile(Path.Combine(altCmdDir, altName + RespSuffix), 15000);
+                string altResp = answered ? TryReadText(Path.Combine(altCmdDir, altName + RespSuffix)) : null;
+                Program.CheckTrue(failures, ref cases, "⑦ 命令从给定的命令目录进、回执也写回那里",
+                    altResp != null && altResp.IndexOf("\"ok\":true", StringComparison.Ordinal) >= 0);
+                Program.CheckTrue(failures, ref cases, "⑦ 映射目录下那个 cmd\\ 没被用来收命令",
+                    !File.Exists(Path.Combine(tmp, WorkerDirName, "st", "cmd", altName + ReqSuffix))
+                    && !File.Exists(Path.Combine(tmp, WorkerDirName, "st", "cmd", altName + RespSuffix)));
+            }
+            finally
+            {
+                if (alt != null)
+                {
+                    try { if (!alt.HasExited) alt.Kill(); } catch { }
+                    try { alt.WaitForExit(5000); } catch { }
+                    try { alt.Dispose(); } catch { }
+                }
+            }
+
+            // ⑧ 搬图只看 resp：不产图的命令一步都不走。
+            //
+            // 真机 2026-10-25：这里原来对每条命令都无条件等一张只有 cdp-shot 才会产生的 jpg，
+            // 于是 cdp-start / cdp-nav / cdp-status 全部白付 2 秒（日志里「搬图 2057ms」）。
+            // 这两条断言钉的是「判据是 resp 字段」与「命中就立刻 copy、名字不变」。
+            string sibWorkerDir = Path.Combine(tmp, "sib-worker");
+            string sibHostDir = Path.Combine(tmp, "sib-host");
+            Directory.CreateDirectory(sibWorkerDir);
+            Directory.CreateDirectory(sibHostDir);
+            string noJpegResp = "{\"ok\":true,\"session\":\"st\",\"url\":\"https://example.com/\"}";
+            long idleCopyMs = CopySiblingFileIfAny(sibWorkerDir, sibHostDir, noJpegResp, "st-cmd-000009");
+            Program.CheckTrue(failures, ref cases, "⑧ 回执里没有 jpeg：搬图 0ms（不再白等 2s 窗口）",
+                idleCopyMs < 50);
+            Program.CheckTrue(failures, ref cases, "⑧ 回执里没有 jpeg：宿主目录里什么都没多出来",
+                Directory.GetFiles(sibHostDir).Length == 0);
+            Program.CheckTrue(failures, ref cases, "⑧ 空 jpeg 字段 / 缺 resp 也算没有图",
+                CopySiblingFileIfAny(sibWorkerDir, sibHostDir, "{\"ok\":true,\"jpeg\":\"\"}", "st-cmd-000009") == 0
+                && CopySiblingFileIfAny(sibWorkerDir, sibHostDir, null, "st-cmd-000009") == 0
+                && Directory.GetFiles(sibHostDir).Length == 0);
+
+            byte[] jpegBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0xFF, 0xD9 };
+            string shotBase = "st-cmd-000010";
+            File.WriteAllBytes(Path.Combine(sibWorkerDir, shotBase + ShotSuffix), jpegBytes);
+            string shotResp = "{\"ok\":true,\"jpeg\":\"" + shotBase + ".jpg\",\"width\":640}";
+            long shotCopyMs = CopySiblingFileIfAny(sibWorkerDir, sibHostDir, shotResp, shotBase);
+            string shotDst = Path.Combine(sibHostDir, shotBase + ShotSuffix);
+            byte[] copied = File.Exists(shotDst) ? File.ReadAllBytes(shotDst) : new byte[0];
+            bool sameBytes = copied.Length == jpegBytes.Length;
+            for (int i = 0; sameBytes && i < jpegBytes.Length; i++)
+            {
+                if (copied[i] != jpegBytes[i]) sameBytes = false;
+            }
+            Program.CheckTrue(failures, ref cases, "⑧ cdp-shot 的 jpg 仍被搬回宿主目录（名字不变、内容一致）",
+                File.Exists(shotDst) && sameBytes);
+            Program.CheckTrue(failures, ref cases, "⑧ 图已经在时一次就命中（不等窗口）", shotCopyMs < 500);
         }
         catch (Exception ex)
         {

@@ -1,11 +1,16 @@
 // Orbita guest bridge —— 跑在 Windows Sandbox 内的极简命令执行器。
 //
-// 通道 = 映射文件夹里的文件，不是网络：
-//   宿主防火墙把宿主↔沙箱的 TCP 当成不可测的（2026-10-10 真机：ICMP 通、TCP 被丢，
-//   且随每次沙箱启动时好时坏），而 .wsb 读写映射文件夹双向实时同步、每次都可靠。
-//   所以：宿主把命令写进 out/cmd/<名字>.req.json（tmp+rename），桥轮询执行，
-//   结果写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件），然后删掉 req。
-//   宿主读完响应后负责清理 resp/jpg。
+// 通道 = **两条，一条语义**（0.8.0）。
+//
+//   ① TCP（优先）：桥在 guest 里监听一个系统分配的端口，把 port / token / ipv4 通告到
+//      bridge.json；宿主主动连进来，一行一条 JSON（TcpChannel.cs）。为什么换：文件协议
+//      每一跳传播实测 2.9–7.5 秒（guest 内部只有毫秒级），而 2026-10-25 的隔离沙箱实验里
+//      宿主→guest 的 TCP 是握手 30ms、小包中位 1ms、64KB 往返 2–6ms，两侧都不用动防火墙。
+//   ② 文件（回退 + 老宿主）：宿主防火墙曾把宿主↔沙箱的 TCP 当成不可测（2026-10-10 真机：
+//      ICMP 通、TCP 被丢），而 .wsb 读写映射文件夹双向实时同步、每次都可靠。宿主把命令写进
+//      out/cmd/<名字>.req.json（tmp+rename），桥轮询执行，结果写 <名字>.resp.json（截图的
+//      JPEG 是同名 .jpg 兄弟文件），然后删掉 req；宿主读完响应后负责清理 resp/jpg。
+//      这条通道的一条行为都没改：它就是没有 TCP 时的唯一通道，也是升级/降级时的安全网。
 //
 // 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入），
 // 以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP 语义命令，实现在 Cdp.cs 的 CdpSession）。
@@ -61,12 +66,42 @@ internal static class Program
     // 慢命令不再堵住整条桥，宿主侧协议不变），0.7.1 修了「超时杀完 worker、重开同一会话时
     // 读到上一只 Edge 的旧端口」那条自愈路上的 bug（起 Edge 前清端口文件 + 连接重试）。
     // 0.7.2 只加计量（命令行耗时分解 + 枚举兜底耗时 + 实验用 --align-every），协议与行为未变。
+    // 0.8.0 多了一条 **TCP 命令通道**（TcpChannel.cs）：bridge.json 里通告 port / token / ipv4，
+    //   宿主优先走它（文件协议每一跳 2.9–7.5s，TCP 只有毫秒级）。文件轮询循环与全部命令语义
+    //   一个字都没改——它仍是老宿主的唯一通道、也是 TCP 不可用时的回退通道。
+    // 0.8.1 修监听的结构性缺陷：accept 线程只管收连接（握手/命令/日志全在每条连接自己的线程里），
+    //   hello 读 1s 硬超时，backlog 64，接入与心跳各有日志。文件协议与命令语义**未变**。
+    // 0.8.2 启动时自己建一条防火墙入站允许规则：真机上「TCP 间歇不可达」的真因就是沙箱弹了
+    //   防火墙提示、没人点「允许」（点了立刻 4ms 就通）。
+    // 0.8.3 按**程序路径**的规则在真机被证明不放行（netsh 成功、连接仍全超时——桥从 junction
+    //   出来的路径启动，镜像路径对不上），改成按**端口**放行 + 关掉沙箱内防火墙兜底；
+    //   结果写进 bridge.json 的 fwAllowed / fwStateOff，宿主据此解释「为什么连不上」。
+    // 0.8.4 把「关防火墙」提到**开始监听之前**（那个「是否允许」的提示框是 Windows 在程序第一次
+    //   开始监听入站时弹的，之后再关防火墙收不回它，还抢焦点），并在监听后起一条 ~2s 的短任务
+    //   把可能已经弹出的那个框收掉（枚举顶层窗口 → 精确匹配 → WM_CLOSE，只做一次）。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.7.2";
+    private const string Version = "0.8.4";
     private const string CmdDirName = "cmd";          // out 下的命令目录
-    private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
-    private const string RespSuffix = ".resp.json";   // 桥写：执行结果
+    internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
+    internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
     private const int PollIntervalMs = 250;           // 命令轮询间隔
+
+    // TCP 行协议的握手标记（与 shared/computer-use.ts 的 bridgeTcpHello 严格一致，一个字母都不能差）
+    internal const string TcpHelloType = "hello";
+    internal const string TcpHelloOkType = "hello-ok";
+    internal const string TcpHelloFailType = "hello-fail";
+
+    /**
+     * 命令执行的串行闸门：文件轮询线程与每条 TCP 连接线程共用这一把锁。
+     *
+     * 为什么必须有：CdpSession 的状态在两个通道里是同一份（同一个会话的端口 / 标签页），
+     * 两条命令并行进 Execute 就是互相踩。文件协议原本靠「单线程轮询」天然串行，加了 TCP
+     * 就不再天然了——锁是这件事唯一便宜的保证。
+     *
+     * 锁只包 Execute 本身（cdp-* 在锁里只是投递 + 返回 null），等 worker 回执在锁外：
+     * 否则一条 40 秒的导航会把别的会话（以及文件协议）整块堵住，正是 0.7.0 要消灭的队头阻塞。
+     */
+    internal static readonly object ExecuteGate = new object();
 
     private static string _outDir = "";
     private static string _cmdDir = "";
@@ -160,6 +195,8 @@ internal static class Program
             if (args[i] == "--selftest-metrics") return RunMetricsSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
+            // TCP 通道的自测（本进程里起监听、127.0.0.1 连回来；不启 Edge、不碰桌面）
+            if (args[i] == "--selftest-tcp") return TcpChannel.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -178,6 +215,10 @@ internal static class Program
 
         Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms"
             + "，对齐枚举周期：每 " + AlignEveryPolls + " 轮，耗时日志阈值 " + HopLogThresholdMs + "ms");
+
+        // TCP 命令行通道：起不来只记一行日志，文件协议照旧是主路
+        // 必须在通告之前——bridge.json 里带了端口才代表 TCP 可用（宿主靠这个字段判断）
+        TcpChannel.Start();
 
         // 就绪通告：bridge.json 出现 = 命令循环已上线（宿主据此宣布沙箱 running）
         WriteBridgeJson();
@@ -199,7 +240,8 @@ internal static class Program
     }
 
     /**
-     * worker 入口（0.7.0）：`--cdp-worker <outDir> <session> [--no-browser] [--test-hooks] [--parent-pid N]`。
+     * worker 入口（0.7.0）：`--cdp-worker <outDir> <session> [--no-browser] [--test-hooks] [--parent-pid N]
+     * [--worker-cmd-dir <目录>]`。
      *
      * 与主桥共用同一个 exe，但**不做**主桥的任何事：不写 bridge.json、不读 cmd\、不碰输入注入。
      * `--no-browser` 必须由主桥传下来——真正会 Process.Start msedge.exe 的是这个进程。
@@ -215,8 +257,15 @@ internal static class Program
         }
         bool testHooks = false;
         int parentPid = 0;
+        string cmdDir = null;
         for (int i = 3; i < args.Length; i++)
         {
+            if (args[i] == "--worker-cmd-dir" && i + 1 < args.Length)
+            {
+                cmdDir = args[i + 1];
+                i++;
+                continue;
+            }
             if (args[i] == "--no-browser")
             {
                 BrowserDisabled = true;
@@ -240,7 +289,7 @@ internal static class Program
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
         // worker 自己的日志落到映射目录：这是宿主**唯一**能看见 guest 内部发生了什么的通道
         RedirectWorkerLog(outDir, session);
-        return WorkerHost.RunWorker(outDir, session, testHooks, parentPid);
+        return WorkerHost.RunWorker(outDir, session, testHooks, parentPid, cmdDir);
     }
 
     /**
@@ -375,6 +424,13 @@ internal static class Program
                 BrowserDisabled = true;
                 continue;
             }
+            // 测试缝（只有宿主上的 bridge.test.mjs 带）：**不跑 netsh**。宿主机上改用户防火墙
+            // 是红线，而集成测试要起真桥。生产（.wsb 的 LogonCommand）永不带它。
+            if (flag == "--no-firewall")
+            {
+                TcpChannel.SkipFirewallForSelfTest();
+                continue;
+            }
             // 测试缝（只有 --selftest-worker 起子桥时带）：认 worker-* 命令，并把一条 worker
             // 命令的放弃线缩到 2.5s（自测不能等 40 秒）。生产（.wsb 的 LogonCommand）永不带它。
             if (flag == "--test-hooks")
@@ -428,11 +484,53 @@ internal static class Program
 
     // ---- 就绪通告 ----
 
+    /**
+     * 就绪通告。0.8.0 起多三个 TCP 字段（port / token / ipv4）——**三个齐了宿主的 TCP 才可用**，
+     * 缺一个它就当老桥、只走文件协议，所以监听没起来时一个都不写。
+     *
+     * 令牌明文写在这里是**有意的**：bridge.json 在宿主自己的目录里（沙箱经映射文件夹只读/读写它），
+     * 宿主拿它当口令；日志里则绝不打（日志会进 PR、进截图）。
+     */
     private static void WriteBridgeJson()
     {
-        string json = "{\"version\":\"" + Version + "\",\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + "}";
-        AtomicWrite(Path.Combine(_outDir, "bridge.json"), Encoding.UTF8.GetBytes(json));
-        Log("已就绪（bridge.json 已通告）");
+        StringBuilder json = new StringBuilder();
+        json.Append("{\"version\":").Append(JsonQuote(Version))
+            .Append(",\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id)
+            // 防火墙放行结果：false 时宿主要能说清「连不上是因为沙箱防火墙没放行」，
+            // 而不是继续盲猜网络。fwStateOff = 是否干脆把沙箱防火墙关掉了（兜底那条路）。
+            // 老宿主不认识这两个字段，忽略即可。
+            .Append(TcpChannel.FirewallField(TcpChannel.FirewallAllowed))
+            .Append(TcpChannel.FirewallStateField(TcpChannel.FirewallDisabled));
+        if (TcpChannel.Port > 0 && TcpChannel.Token.Length > 0)
+        {
+            json.Append(",\"port\":").Append(TcpChannel.Port)
+                .Append(",\"token\":").Append(JsonQuote(TcpChannel.Token))
+                .Append(",\"ipv4\":").Append(TcpChannel.IPv4Json(TcpChannel.LocalIPv4()));
+        }
+        json.Append("}");
+        AtomicWrite(Path.Combine(_outDir, "bridge.json"), Encoding.UTF8.GetBytes(json.ToString()));
+        Log("已就绪（bridge.json 已通告"
+            + (TcpChannel.Port > 0 ? "，TCP 端口 " + TcpChannel.Port : "，仅文件协议") + "）");
+    }
+
+    /**
+     * 自测用：把 out / cmd 目录指到一个临时目录（只有 --selftest-tcp 走它）。
+     * TCP 自测要跑**真的** Execute 与**真的**文件协议各一条，两者都需要这两个目录。
+     */
+    internal static void UseDirsForSelfTest(string outDir)
+    {
+        _outDir = outDir;
+        _cmdDir = Path.Combine(outDir, CmdDirName);
+        _nextSeq = 1;
+        _polls = 0;
+        _lastPollEndMs = -1;
+        Directory.CreateDirectory(_cmdDir);
+    }
+
+    /** 自测用：跑一轮文件轮询（PollOnce 是私有实现，自测不复制一份） */
+    internal static void PollOnceForSelfTest()
+    {
+        PollOnce();
     }
 
     // tmp + rename 原子写：对端可能在任何时刻读，不许读到半截文件
@@ -632,6 +730,12 @@ internal static class Program
         return ms + "ms";
     }
 
+    /** 耗时日志的打印线（worker 侧的计量与桥的文件往返用同一个阈值） */
+    internal static int HopLogLineMs
+    {
+        get { return HopLogThresholdMs; }
+    }
+
     /**
      * 一条命令行。算术上只有两种，取决于传播是否可信：
      *  - 可信：总 = 传播 + 读请求 + 执行 + 回执落盘（总 = 宿主写出 → 回执落盘）；
@@ -718,7 +822,12 @@ internal static class Program
         hop.ReadMs = _clock.ElapsedMilliseconds - readStart;
         Log("收到命令 " + name);
         long execStart = _clock.ElapsedMilliseconds;
-        string respJson = Execute(raw, baseName);
+        string respJson;
+        // TCP 通道的命令在别的线程上执行：两个通道共用一把锁（理由见 ExecuteGate）
+        lock (ExecuteGate)
+        {
+            respJson = Execute(raw, baseName);
+        }
         hop.ExecuteMs = _clock.ElapsedMilliseconds - execStart;
         // null = 这条命令已经转给该会话的 worker，回执由后台线程写（慢命令不许占住轮询循环）
         hop.Forwarded = respJson == null;
@@ -739,7 +848,7 @@ internal static class Program
 
     // ---- 命令执行 ----
 
-    private static string Execute(string raw, string baseName)
+    internal static string Execute(string raw, string baseName)
     {
         string command = ExtractString(raw, "command");
         if (command == null) return "{\"ok\":false,\"error\":\"请求里缺 command 字段\"}";
@@ -1682,6 +1791,24 @@ internal static class Program
         CheckString(failures, ref cases, "全非法字符不回 default（不能和默认会话撞）", "___", CdpSessions.SafeSessionId("///"));
         CheckString(failures, ref cases, "首尾空格也不放过", "_x_", CdpSessions.SafeSessionId(" x "));
 
+        // ── worker 命令目录的位置（真机 2026-10-25：这一跳留在映射目录里白等 2.3s）──────
+        // 只有真机的 out 目录（C:\orbita-out）才把命令目录挪到 guest 本地盘；别的挂载点
+        //（宿主上跑自测的临时目录）保持 0.7.x 的布局，测试才能互不干扰。
+        CheckTrue(failures, ref cases, "out 目录识别：C:\\orbita-out 命中",
+            CdpSessions.IsGuestOutDir("C:\\orbita-out"));
+        CheckTrue(failures, ref cases, "out 目录识别：大小写与尾斜杠不影响",
+            CdpSessions.IsGuestOutDir("c:\\ORBITA-OUT\\") && CdpSessions.IsGuestOutDir("C:\\orbita-out\\"));
+        CheckTrue(failures, ref cases, "out 目录识别：临时目录 / 空值不命中",
+            !CdpSessions.IsGuestOutDir(Path.Combine(Path.GetTempPath(), "orbita-x"))
+            && !CdpSessions.IsGuestOutDir(null) && !CdpSessions.IsGuestOutDir(""));
+        CheckString(failures, ref cases, "worker 命令目录（本地盘）：C:\\orbita-browser\\worker\\<键>",
+            "C:\\orbita-browser\\worker\\t1", CdpSessions.WorkerCmdDirPath("C:\\orbita-out", "t1", true));
+        CheckString(failures, ref cases, "worker 命令目录（回落）：<out>\\worker\\<键>\\cmd",
+            "C:\\orbita-out\\worker\\t1\\cmd", CdpSessions.WorkerCmdDirPath("C:\\orbita-out", "t1", false));
+        CheckString(failures, ref cases, "worker 命令目录（宿主自测）：临时 out 目录下仍是映射布局",
+            Path.Combine(Path.GetTempPath(), "orbita-probe", "worker", "t1", "cmd"),
+            CdpSessions.WorkerCmdDir(Path.Combine(Path.GetTempPath(), "orbita-probe"), "t1"));
+
         string tooMany = CdpSessions.TooManyMessage();
         CheckTrue(failures, ref cases, "上限文案点明 4 个", tooMany.IndexOf("最多 4 个", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "上限文案给出下一步（cdp-stop）", tooMany.IndexOf("cdp-stop", StringComparison.Ordinal) >= 0);
@@ -1925,8 +2052,108 @@ internal static class Program
         CheckTrue(failures, ref cases, "导航超时 + 判死重启装得进 worker 的 40s 杀线",
             CdpSession.PageNavigateTimeoutMsForTest + CdpSession.RestartRoomMsForTest <= 40000);
 
+        // ── 导航分段计量（2026-10-25 真机：warm 导航总 2649ms，worker 回执自报 ms=343）────────
+        // 分段日志的规矩：任一段 ≥ 200ms 或整条 ≥ 500ms 才打一行。快导航不能刷日志，
+        // 慢导航必须把「哪一段慢」写进 worker.log——这几条钉的是阈值与文本。
+        CdpSession.NavTiming fast = new CdpSession.NavTiming();
+        fast.NavigateMs = 8;
+        fast.ReadyMs = 110;
+        fast.FirstSleepMs = 100;
+        fast.RecordReadyRound(2, 4);
+        fast.ReadySleepMs = 60;
+        fast.ResultMs = 3;
+        CheckTrue(failures, ref cases, "分段日志：快导航（每段 < 200ms、整条 < 500ms）一行都不打",
+            !CdpSession.NavTraceNeeded(fast, 121));
+        CdpSession.NavTiming slowReady = new CdpSession.NavTiming();
+        slowReady.NavigateMs = 8;
+        slowReady.ReadyMs = 2410;
+        slowReady.FirstSleepMs = 300;
+        slowReady.RecordReadyRound(5, 12);
+        slowReady.ReadySleepMs = 1500;
+        slowReady.ResultMs = 3;
+        CheckTrue(failures, ref cases, "分段日志：某一段 ≥ 200ms 就打（等就绪 2410ms）",
+            CdpSession.NavTraceNeeded(slowReady, 2445));
+        CdpSession.NavTiming spread = new CdpSession.NavTiming();
+        spread.NavigateMs = 150;
+        spread.ReadyMs = 150;
+        spread.ResultMs = 150;
+        CheckTrue(failures, ref cases, "分段日志：每段都 < 200ms 但整条 ≥ 500ms 也打",
+            CdpSession.NavTraceNeeded(spread, 600));
+        CheckTrue(failures, ref cases, "分段日志：timing 为 null 时不打（不崩）",
+            !CdpSession.NavTraceNeeded(null, 9999));
+        string slowLine = CdpSession.FormatNavSegmentLine("cdp-nav", slowReady, 2445);
+        CheckTrue(failures, ref cases, "分段日志：三个分段都写出来（navigate / 等就绪 / 取回执）",
+            slowLine.StartsWith("cdp-nav 分段：", StringComparison.Ordinal)
+            && slowLine.IndexOf("Page.navigate 回执 8ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("等就绪 2410ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("取 url/title 3ms", StringComparison.Ordinal) >= 0
+            && slowLine.EndsWith("= 2445ms", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "分段日志：等就绪带首睡 / 轮数 / eval / sleep（能分清是固定睡眠还是轮询）",
+            slowLine.IndexOf("首睡 300ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("5 轮", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("eval 12ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("sleep 1500ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "分段日志：没走过的分段（错误页窗口）不写出来",
+            slowLine.IndexOf("错误页正文窗口", StringComparison.Ordinal) < 0);
+        CdpSession.NavTiming failedNav = new CdpSession.NavTiming();
+        failedNav.NavigateMs = 10;
+        failedNav.ReadyMs = 320;
+        failedNav.RecordErrorDump(7, 2010);
+        failedNav.ResultMs = 4;
+        string failedLine = CdpSession.FormatNavSegmentLine("cdp-nav", failedNav, 2350);
+        CheckTrue(failures, ref cases, "分段日志：错误页那段单独出来（2s 正文窗口是排查重点）",
+            failedLine.IndexOf("错误页正文窗口 2010ms（7 轮）", StringComparison.Ordinal) >= 0);
+
+        // ── 等就绪的节奏（2026-10-25：warm 导航 343ms 几乎全是固定 sleep）───────────────
+        // 前几轮密、之后 400ms 封顶；总预算仍是 timeoutMs，慢站点一秒不少。
+        int[] expectedPolls = new int[] { 40, 60, 100, 150, 250, 400, 400, 400 };
+        bool sequenceOk = true;
+        for (int i = 0; i < expectedPolls.Length; i++)
+        {
+            if (CdpSession.ReadyPollIntervalMs(i) != expectedPolls[i]) sequenceOk = false;
+        }
+        CheckTrue(failures, ref cases, "等就绪间隔：40 / 60 / 100 / 150 / 250 之后 400ms 封顶", sequenceOk);
+        bool monotone = true;
+        for (int i = 1; i < 200; i++)
+        {
+            if (CdpSession.ReadyPollIntervalMs(i) < CdpSession.ReadyPollIntervalMs(i - 1)) monotone = false;
+            if (CdpSession.ReadyPollIntervalMs(i) > 400) monotone = false;
+        }
+        CheckTrue(failures, ref cases, "等就绪间隔：单调不减且永不超过 400ms（不会越等越稀导致漏掉已就绪）", monotone);
+        // 已经好了的页面（真机 warm 情形：一直就绪）必须在 ~200ms 内被看见：首睡 100 + 前两轮间隔
+        CheckTrue(failures, ref cases, "等就绪：首探 100ms 内就到位（页面已经好了就不该再等一轮 300ms）",
+            CdpSession.FirstReadySleepMsFor("https://example.com/", "about:blank") <= 100);
+        CheckTrue(failures, ref cases, "等就绪：慢站点仍有 20s 预算（20s 内能排到很多轮，不是只探 8 次）",
+            SumPollBudget(20000) >= 40);
+
+        // 首睡分档：同 URL 重新加载 / 历史前进后退没有 URL 兜底，必须留 300ms
+        CheckTrue(failures, ref cases, "首睡：back/forward（expected=null）仍是 300ms",
+            CdpSession.FirstReadySleepMsFor(null, "https://example.com/") == 300);
+        CheckTrue(failures, ref cases, "首睡：目标是另一个 URL 时 100ms",
+            CdpSession.FirstReadySleepMsFor("https://b.example/", "https://a.example/") == 100);
+        CheckTrue(failures, ref cases, "首睡：重新加载同一个 URL 时仍要 300ms（旧页面也是 complete + 同一个 URL）",
+            CdpSession.FirstReadySleepMsFor("https://a.example/page", "https://a.example/page") == 300
+            && CdpSession.FirstReadySleepMsFor("https://a.example/page/", "https://a.example/page") == 300);
+        CheckTrue(failures, ref cases, "首睡：读不到当前 URL 时走快档（不崩）",
+            CdpSession.FirstReadySleepMsFor("https://a.example/", null) == 100
+            && CdpSession.FirstReadySleepMsFor("https://a.example/", "") == 100);
+
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 自测用：一段预算里能排进多少轮轮询（间隔序列对得上 CdpSession.ReadyPollIntervalMs） */
+    private static int SumPollBudget(int budgetMs)
+    {
+        int rounds = 0;
+        int spent = 0;
+        while (spent < budgetMs)
+        {
+            spent += CdpSession.ReadyPollIntervalMs(rounds);
+            rounds++;
+            if (rounds > 1000) break;
+        }
+        return rounds;
     }
 
     /** --align-every 的值：整数且 ≥ 1。生产 .wsb 不带它，默认仍是 AlignEveryPollsDefault */
@@ -2161,7 +2388,7 @@ internal static class Program
             failures.Add(name + "：实际" + (allowed ? "放行" : "拦下（" + rejection + "）"));
     }
 
-    private static void CheckString(List<string> failures, ref int cases, string name, string expected, string actual)
+    internal static void CheckString(List<string> failures, ref int cases, string name, string expected, string actual)
     {
         cases++;
         bool same = expected == null ? actual == null : string.Equals(expected, actual, StringComparison.Ordinal);

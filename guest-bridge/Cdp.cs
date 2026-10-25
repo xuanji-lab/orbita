@@ -70,6 +70,12 @@ internal sealed class CdpSession
      */
     private const int ErrorCodeWaitMs = 2000;
     private const int ErrorCodePollMs = 300;
+    /**
+     * 导航分段日志的两条打印线（只影响日志，不影响任何等待）：任一段 ≥ 200ms 或整条 ≥ 500ms
+     * 才打一行。快导航（真机上 ~340ms 的那条）一行都不留。
+     */
+    private const int NavTraceSegmentMs = 200;
+    private const int NavTraceTotalMs = 500;
     /** 错误页的诊断日志只打这么多字（一整行日志，读的时候不用翻页） */
     private const int ErrorPageLogChars = 120;
     /** 错误文案里回显 URL 的上限：data: / 长查询串会把一句话撑成一屏（真机见过几百字符） */
@@ -1425,18 +1431,27 @@ internal sealed class CdpSession
                 // 导航会把执行上下文销毁，Runtime.evaluate 可能就在那一刻回不来了；
                 // 这是正常现场，不要因为历史前进/后退把整条命令判死
             }
-            int moved = WaitForReady(null, timeoutMs);
+            NavTiming historyTiming = new NavTiming();
+            long historyStartMs = sw.ElapsedMilliseconds;
+            int moved = WaitForReady(null, timeoutMs, historyTiming, null);
+            historyTiming.ReadyMs = sw.ElapsedMilliseconds - historyStartMs;
             return NavResult(sw, moved == ReadyOk ? null : "历史" + (lower == "back" ? "后退" : "前进") + "后页面在 "
-                + timeoutMs + "ms 内没有加载完成（可能已经没有上一页 / 下一页）");
+                + timeoutMs + "ms 内没有加载完成（可能已经没有上一页 / 下一页）", historyTiming);
         }
 
         string target = NormalizeUrl(url);
+        NavTiming timing = new NavTiming();
+        // 导航前的当前 URL：**只用来决定首睡长度**（同一个 URL 重新加载时没有 URL 兜底，
+        // 见 FirstReadySleepMsFor）。读不到当「不知道」，走快档——真机上第一探看到的还是旧页面，
+        // URL 对不上目标，照样继续等。
+        string beforeHref = SafeEvalString("location.href", ReadyEvalTimeoutMs);
         // navigate 的回执等待单独压（理由见 PageNavigateTimeoutMs）：只有它卡死时才等满
         int replyTimeoutMs = timeoutMs < PageNavigateTimeoutMs ? timeoutMs : PageNavigateTimeoutMs;
         if (replyTimeoutMs < timeoutMs)
             Program.Log("CDP 导航的回执等待压到 " + replyTimeoutMs + "ms（timeoutMs=" + timeoutMs
                 + "，留出判死重启的预算）");
         string navReply;
+        long callStartMs = sw.ElapsedMilliseconds;
         try
         {
             navReply = Call("Page.navigate", "{\"url\":" + Program.JsonQuote(target) + "}", replyTimeoutMs);
@@ -1470,6 +1485,7 @@ internal sealed class CdpSession
                 return NavFailureReceipt(sw, NavErrorMessage("连接超时（浏览器在 " + againSeconds + " 秒内没有回应）"));
             }
         }
+        timing.NavigateMs = sw.ElapsedMilliseconds - callStartMs;
         string navError = CdpError(navReply);
         if (navError != null) return Fail("无法打开这个网址（" + ShortUrl(target, NavUrlInMessageMax) + "）：" + navError);
         // Page.navigate 在导航**提交前**就失败时自己带一份原因码（net::ERR_NAME_NOT_RESOLVED）。
@@ -1479,12 +1495,14 @@ internal sealed class CdpSession
         string navErrorText = Program.ExtractJsonString(navReply, "errorText");
         // 重试过的话「等页面加载」也不能再拿满 20s：剩下的预算要留给写回执（worker 的 40s 杀线）
         int readyTimeoutMs = _channelRetries > 0 ? RetryTimeoutMs(timeoutMs) : timeoutMs;
-        int ready = WaitForReady(target, readyTimeoutMs);
+        long readyStartMs = sw.ElapsedMilliseconds;
+        int ready = WaitForReady(target, readyTimeoutMs, timing, beforeHref);
+        timing.ReadyMs = sw.ElapsedMilliseconds - readyStartMs;
         // 落在浏览器的错误页 = 这一页没有打开。不能报 ok:true：错误页也是「加载完成」的
         // 普通页面，模型拿到 ok 会接着 observe / click 去操作「你似乎未连接到 Internet」。
-        if (ready == ReadyErrorPage) return NavFailure(sw, navErrorText);
+        if (ready == ReadyErrorPage) return NavFailure(sw, navErrorText, timing);
         return NavResult(sw, ready == ReadyOk ? null : "页面在 " + readyTimeoutMs + "ms 内没有加载完成，"
-            + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构");
+            + "可能还在渲染。可以先 sandbox_wait 一下，或 sandbox_observe 看看当前结构", timing);
     }
 
     /**
@@ -1493,24 +1511,31 @@ internal sealed class CdpSession
      *
      * 不回 `chrome-error://chromewebdata/` 这种内部串：模型只会照着它去猜一个不存在的页面。
      */
-    private string NavFailure(Stopwatch sw, string navErrorText)
+    private string NavFailure(Stopwatch sw, string navErrorText, NavTiming timing)
     {
+        long metaStartMs = sw.ElapsedMilliseconds;
         string href = SafeEvalString("location.href", 3000);
         string title = SafeEvalString("document.title", 3000);
+        if (timing != null) timing.ResultMs = sw.ElapsedMilliseconds - metaStartMs;
         // 先看 Page.navigate 自带的 errorText：导航一失败它就在手上了，而错误页正文往往根本
         // 拿不到（真机 2026-10-25）。既然码已经有了，就**只读一次**正文留证据，不为抠码再等 2s。
         string code = NavErrorCode(navErrorText);
         string dump;
+        long dumpStartMs = sw.ElapsedMilliseconds;
         if (code != null)
         {
             dump = ReadErrorPageDump();
+            if (timing != null) timing.RecordErrorDump(1, sw.ElapsedMilliseconds - dumpStartMs);
         }
         else
         {
-            dump = WaitForErrorDump();
+            int rounds = 0;
+            dump = WaitForErrorDump(ref rounds);
+            if (timing != null) timing.RecordErrorDump(rounds, sw.ElapsedMilliseconds - dumpStartMs);
             code = NavErrorReason(dump, navErrorText);
         }
         LogErrorPageEvidence(code, dump, navErrorText);
+        LogNavTrace(timing, sw.ElapsedMilliseconds);
         return new JObj().Bool("ok", false).Str("error", NavErrorMessage(code))
             .Str("url", href).Str("title", title).Num("ms", sw.ElapsedMilliseconds).ToString();
     }
@@ -1544,12 +1569,14 @@ internal sealed class CdpSession
      * 为什么要设上限：错误页的 DOM 是本地资源，正常一两帧（<300ms）就好；等超过 2s 说明
      * 这一页根本不会渲染正文（该换路，而不是加时间），再等就是把「省下的 20 秒」还回去了。
      */
-    private string WaitForErrorDump()
+    private string WaitForErrorDump(ref int rounds)
     {
+        rounds = 0;
         string dump = "";
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(ErrorCodeWaitMs);
         while (true)
         {
+            rounds++;
             dump = ReadErrorPageDump();
             if (NavErrorCode(dump) != null) return dump;
             if (DateTime.UtcNow >= deadline) return dump;
@@ -1664,10 +1691,18 @@ internal sealed class CdpSession
 
     private string NavResult(Stopwatch sw, string warning)
     {
+        return NavResult(sw, warning, null);
+    }
+
+    private string NavResult(Stopwatch sw, string warning, NavTiming timing)
+    {
+        long readStartMs = sw.ElapsedMilliseconds;
         string href = EvalString("location.href", 8000);
         string title = EvalString("document.title", 8000);
+        if (timing != null) timing.ResultMs = sw.ElapsedMilliseconds - readStartMs;
         JObj o = new JObj().Bool("ok", true).Str("url", href).Str("title", title).Num("ms", sw.ElapsedMilliseconds);
         if (warning != null) o.Str("warning", warning);
+        LogNavTrace(timing, sw.ElapsedMilliseconds);
         return o.ToString();
     }
 
@@ -1687,6 +1722,103 @@ internal sealed class CdpSession
     private const int ReadyErrorPage = 2;
 
     /**
+     * 一条导航的分段耗时。**只用于日志，不参与任何控制流**（-1 = 这一段没跑）。
+     *
+     * 为什么要有它（2026-10-25 真机）：宿主量到「Edge 已起好之后的导航」整条 2649ms，
+     * 而 worker 回执里 ms=343 —— 时间不在导航里，可日志只有一个总数，猜不出在哪一段。
+     * 分段之后下一次慢就能直接读出来：是 Page.navigate 的回执、是等就绪的轮询
+     * （首睡 / 轮数 / eval 自身 / sleep），还是错误页正文那 2s 窗口。
+     */
+    internal sealed class NavTiming
+    {
+        /** Page.navigate 从发出到回执（含首次 attach / Page.enable 的开销） */
+        internal long NavigateMs = -1;
+        /** WaitForReady 整段 */
+        internal long ReadyMs = -1;
+        /** 等就绪的首睡（让 navigate 真的开始） */
+        internal long FirstSleepMs = -1;
+        /** 等就绪打了几轮 */
+        internal int ReadyRounds;
+        /** 轮询里 Runtime.evaluate 自己占的 ms（不含 sleep） */
+        internal long ReadyEvalMs;
+        /** 轮询里 sleep 的总和 */
+        internal long ReadySleepMs;
+        /** 「complete 但 URL 对不上」时读了几次整页正文 */
+        internal int DumpReads;
+        /** 错误页正文窗口（WaitForErrorDump） */
+        internal long ErrorDumpMs = -1;
+        internal int ErrorDumpRounds;
+        /** 回执里 url / title 的读取 */
+        internal long ResultMs = -1;
+
+        internal void RecordErrorDump(int rounds, long ms)
+        {
+            ErrorDumpRounds = rounds;
+            ErrorDumpMs = ms;
+        }
+
+        internal void RecordReadyRound(int round, long evalMs)
+        {
+            ReadyRounds = round;
+            ReadyEvalMs += evalMs;
+        }
+    }
+
+    /**
+     * 是不是该为这条导航留一行分段日志：任一段 ≥ 200ms 或整条 ≥ 500ms。**纯函数**
+     *（自测在宿主上直接验；阈值与 Program 的文件往返计量同一套规矩）。
+     */
+    internal static bool NavTraceNeeded(NavTiming timing, long totalMs)
+    {
+        if (timing == null) return false;
+        long[] segments = new long[] {
+            timing.NavigateMs, timing.ReadyMs, timing.ErrorDumpMs, timing.ResultMs };
+        if (Program.HopNeedsLog(NavTraceSegmentMs, segments)) return true;
+        return totalMs >= NavTraceTotalMs;
+    }
+
+    /**
+     * 一行分段日志。**纯函数**（自测直接验文本）。格式：
+     * `cdp-nav 分段：Page.navigate 回执 8ms + 等就绪 2410ms（首睡 300ms + 5 轮 / eval 12ms
+     *  / sleep 1500ms）+ 取 url/title 3ms = 2445ms`
+     */
+    internal static string FormatNavSegmentLine(string command, NavTiming timing, long totalMs)
+    {
+        StringBuilder sb = new StringBuilder(command).Append(" 分段：");
+        bool first = true;
+        if (timing.NavigateMs >= 0)
+            AppendSegment(sb, ref first, "Page.navigate 回执 " + timing.NavigateMs + "ms");
+        if (timing.ReadyMs >= 0)
+        {
+            StringBuilder detail = new StringBuilder("（首睡 ").Append(timing.FirstSleepMs).Append("ms + ")
+                .Append(timing.ReadyRounds).Append(" 轮 / eval ").Append(timing.ReadyEvalMs)
+                .Append("ms / sleep ").Append(timing.ReadySleepMs).Append("ms");
+            if (timing.DumpReads > 0) detail.Append(" / 正文兜底 ").Append(timing.DumpReads).Append(" 次");
+            detail.Append("）");
+            AppendSegment(sb, ref first, "等就绪 " + timing.ReadyMs + "ms" + detail.ToString());
+        }
+        if (timing.ErrorDumpMs >= 0)
+            AppendSegment(sb, ref first, "错误页正文窗口 " + timing.ErrorDumpMs + "ms（" + timing.ErrorDumpRounds + " 轮）");
+        if (timing.ResultMs >= 0)
+            AppendSegment(sb, ref first, "取 url/title " + timing.ResultMs + "ms");
+        return sb.Append(" = ").Append(totalMs).Append("ms").ToString();
+    }
+
+    private static void AppendSegment(StringBuilder sb, ref bool first, string text)
+    {
+        if (!first) sb.Append(" + ");
+        sb.Append(text);
+        first = false;
+    }
+
+    /** 到线才打：快导航一行都不留（理由同 NavTraceNeeded） */
+    private void LogNavTrace(NavTiming timing, long totalMs)
+    {
+        if (!NavTraceNeeded(timing, totalMs)) return;
+        Program.Log(FormatNavSegmentLine("cdp-nav", timing, totalMs) + "（会话 " + Key + "）");
+    }
+
+    /**
      * 等 page readyState === 'complete' 且 URL 对上（expected == null 就只看 readyState）。
      *
      * 为什么不用 Page.loadEventFired：事件没有 id，要和普通回执混在一条 socket 上抢读；
@@ -1698,37 +1830,106 @@ internal sealed class CdpSession
      * 「还没到」——再等下去，这个页面也不会变成用户要的那一页。
      *
      * 正文只在「complete 但 URL 对不上」时读，且同一个 href 只读一次（重定向到别的路径的
-     * 慢站点不该每 300ms 读一遍整页正文）。
+     * 慢站点不该每一轮读一遍整页正文）。
      */
-    private int WaitForReady(string expected, int timeoutMs)
+    /**
+     * timing / currentHref 只服务计量与首睡长度，**判定顺序一个字未改**：错误页判定仍然
+     * **先于** readyState，正文兜底仍然只在「complete 但 URL 对不上」时读、同一个 href 只读一次。
+     * 变的只有两处等待：首睡从固定 300ms 改成两档（见 FirstReadySleepMsFor），轮询从固定
+     * 300ms 改成前密后疏（见 ReadyPollIntervalMs）——总预算仍是 timeoutMs（慢站点一秒不少）。
+     */
+    private int WaitForReady(string expected, int timeoutMs, NavTiming timing, string currentHref)
     {
-        Thread.Sleep(300); // 让 navigate 真正开始（否则第一轮读到的还是旧页面的 complete）
+        Stopwatch clock = Stopwatch.StartNew();
+        int firstSleepMs = FirstReadySleepMsFor(expected, currentHref);
+        if (timing != null) timing.FirstSleepMs = firstSleepMs;
+        Thread.Sleep(firstSleepMs); // 让 navigate 真正开始（否则第一轮读到的还是旧页面的 complete）
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         string checkedHref = null;
+        int round = 0;
+        int dumpReads = 0;
         while (DateTime.UtcNow < deadline)
         {
+            round++;
+            long evalStartMs = clock.ElapsedMilliseconds;
+            int result = -1; // -1 = 还没有结论，继续轮询
             // 错误页的判定**不挂在 readyState 上**：chrome-error:// 一旦出现就说明导航已经失败了，
             // 不必先相信「这个 Chromium 会在哪个时刻把错误页报成 complete」（我们只有真机回执，
             // 回执里只有「URL 一直对不上」，没有 readyState 的时间线）。
-            string href = expected == null ? null : SafeEvalString("location.href", 3000);
-            if (href != null && IsNavErrorPage(href, null)) return ReadyErrorPage;
-            bool complete;
-            try { complete = EvalString("document.readyState", 5000) == "complete"; }
-            catch { complete = false; }
-            if (complete)
+            string href = expected == null ? null : SafeEvalString("location.href", ReadyEvalTimeoutMs);
+            if (href != null && IsNavErrorPage(href, null))
             {
-                if (expected == null) return ReadyOk;
-                if (UrlMatches(expected, href)) return ReadyOk;
-                // 正文兜底：Chromium 版本 / 证书拦截页的 scheme 不一定是 chrome-error
-                if (href != checkedHref)
+                result = ReadyErrorPage;
+            }
+            else
+            {
+                bool complete;
+                try { complete = EvalString("document.readyState", ReadyEvalTimeoutMs) == "complete"; }
+                catch { complete = false; }
+                if (complete)
                 {
-                    checkedHref = href;
-                    if (IsNavErrorPage(null, ReadErrorPageDump())) return ReadyErrorPage;
+                    if (expected == null) result = ReadyOk;
+                    else if (UrlMatches(expected, href)) result = ReadyOk;
+                    // 正文兜底：Chromium 版本 / 证书拦截页的 scheme 不一定是 chrome-error
+                    else if (href != checkedHref)
+                    {
+                        checkedHref = href;
+                        dumpReads++;
+                        if (IsNavErrorPage(null, ReadErrorPageDump())) result = ReadyErrorPage;
+                    }
                 }
             }
-            Thread.Sleep(300);
+            if (timing != null)
+            {
+                timing.RecordReadyRound(round, clock.ElapsedMilliseconds - evalStartMs);
+                timing.DumpReads = dumpReads;
+            }
+            if (result >= 0) return result;
+            int waitMs = ReadyPollIntervalMs(round);
+            if (timing != null) timing.ReadySleepMs += waitMs;
+            Thread.Sleep(waitMs);
         }
         return ReadyTimeout;
+    }
+
+    /** 等就绪轮询里单次 Runtime.evaluate 的超时（真卡住由外层 timeoutMs 与 12s 判死兜底） */
+    private const int ReadyEvalTimeoutMs = 1500;
+
+    /**
+     * 等就绪的轮询间隔（**纯函数**，自测断言序列与上限）。
+     *
+     * 为什么不是固定 300ms：一轮只有两条 CDP 消息（真机 cdp-status 量过：两条 eval 加
+     * Target.getTargets 一共 4ms），间隔里除了这 4ms 全是白等。已经加载好的页面应该**立刻**
+     * 返回（真机 warm 导航 343ms 里最大的一块就是这个固定睡眠）；慢站点靠的是总预算
+     * （timeoutMs 默认 20s），不是靠探得勤。所以：前几轮密（40/60/100/150/250），之后 400ms 封顶。
+     */
+    internal static int ReadyPollIntervalMs(int round)
+    {
+        if (round <= 0) return 40;
+        if (round == 1) return 60;
+        if (round == 2) return 100;
+        if (round == 3) return 150;
+        if (round == 4) return 250;
+        return 400;
+    }
+
+    /** 首睡的两档（见 FirstReadySleepMsFor） */
+    private const int ReadyFirstSleepFastMs = 100;
+    private const int ReadyFirstSleepSlowMs = 300;
+
+    /**
+     * 导航之后的第一探要等多久（**纯函数**）。为什么分两档：
+     *   ① 目标是**另一个** URL：URL 比对本身就是兜底——首探看到的是旧页面（URL 对不上目标），
+     *      不会误判成「已就绪」，所以可以短（100ms）。旧行为一律 300ms，而真机 warm 导航
+     *      343ms 里最大的一块就是它；
+     *   ② 目标是**当前这一个** URL（重新加载同一页）/ back / forward：没有这个兜底（旧页面的
+     *      readyState 也是 complete、URL 也一样），必须留 300ms 让导航真的开始。语义不动。
+     */
+    internal static int FirstReadySleepMsFor(string expected, string currentHref)
+    {
+        if (expected == null) return ReadyFirstSleepSlowMs;
+        if (UrlMatches(expected, currentHref)) return ReadyFirstSleepSlowMs;
+        return ReadyFirstSleepFastMs;
     }
 
     // ── 浏览器错误页的判定（纯函数：自测在宿主上直接验，不碰 Edge）──────────────────
@@ -1825,7 +2026,7 @@ internal sealed class CdpSession
             && message.IndexOf("超时", StringComparison.Ordinal) >= 0;
     }
 
-    private bool UrlMatches(string expected, string actual)
+    internal static bool UrlMatches(string expected, string actual)
     {
         if (actual == null) return false;
         string a = TrimSlash(expected);
@@ -1837,7 +2038,7 @@ internal sealed class CdpSession
         return false;
     }
 
-    private string TrimSlash(string value)
+    internal static string TrimSlash(string value)
     {
         string v = value.Trim();
         while (v.Length > 0 && v[v.Length - 1] == '/') v = v.Substring(0, v.Length - 1);
@@ -2417,6 +2618,74 @@ internal static class CdpSessions
     {
         return "沙箱里同时最多 " + MaxBrowsers + " 个浏览器，先 cdp-stop 一个再开新的（不用的实例在空闲 "
             + (IdleReapMs / 60000) + " 分钟后自动回收）";
+    }
+
+    /** 桥在 guest 里的 out 目录（.wsb 把宿主的 computerUseDir 映射到这里；与 LogonCommand 的 junction 一致） */
+    internal const string GuestOutDir = @"C:\orbita-out";
+
+    /**
+     * guest 本地的 worker 命令目录根。与 profile 同源（`C:\orbita-browser`）：那里**不是**
+     * 映射文件夹，文件系统操作不经过 RDP 驱动器重定向。
+     */
+    internal const string LocalWorkerRoot = @"C:\orbita-browser\worker";
+
+    /**
+     * 这个会话的 worker 命令目录（桥与 worker 之间那一跳）。
+     *
+     * 为什么真机上必须挪出映射目录（2026-10-25，两侧各自的证据）：
+     *   worker 的回执里写着 `"ms":343`（它自己量的导航），而宿主等到的是 2652ms——那 2.3s
+     *   在 worker 写完回执之后；反过来，桥写进 req 之后 worker 侧也要 0.2–0.9s 才看见。
+     *   映射文件夹走 RDP 驱动器重定向，元数据（包括「这个文件不存在」）是缓存过的，
+     *   刚写出来的文件在一两秒内看不见。这一跳是 guest 里两个进程之间的事，没有任何理由
+     *   经过一张重定向的盘。
+     *
+     * 回落：本地目录建不出来（权限 / 盘满）就回到 `out\worker\<键>\cmd`——行为与 0.7.x
+     * 逐字一致，只是慢。日志里会说清用的是哪一个。
+     */
+    internal static string WorkerCmdDir(string outDir, string key)
+    {
+        if (!IsGuestOutDir(outDir)) return WorkerCmdDirPath(outDir, key, false); // 宿主自测 / 别的挂载点
+        string mapped = WorkerCmdDirPath(outDir, key, false);
+        string local = WorkerCmdDirPath(outDir, key, true);
+        try
+        {
+            System.IO.Directory.CreateDirectory(local);
+            return local;
+        }
+        catch (Exception ex)
+        {
+            Program.Log("worker 命令目录建不到本地盘（" + local + "：" + ex.Message + "），回落到映射目录 " + mapped);
+            return mapped;
+        }
+    }
+
+    /** 两个候选位置（**纯函数**，不做任何 IO；自测直接验字符串）：local 与否只决定根目录 */
+    internal static string WorkerCmdDirPath(string outDir, string key, bool local)
+    {
+        if (local) return System.IO.Path.Combine(LocalWorkerRoot, key);
+        return System.IO.Path.Combine(System.IO.Path.Combine(outDir, "worker", key), "cmd");
+    }
+
+    /** 是不是真机的 out 目录（只有它才把 worker 的命令目录挪到本地盘）。**纯函数** */
+    internal static bool IsGuestOutDir(string outDir)
+    {
+        if (outDir == null) return false;
+        string value = outDir.Trim().TrimEnd('\\', '/');
+        return string.Equals(value, GuestOutDir, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /** 删掉一个会话的本地 worker 命令目录（stop / 空闲回收）。删不掉只记日志，下次启动会复用 */
+    internal static void DeleteWorkerCmdDir(string dir)
+    {
+        if (dir == null || dir.Length == 0) return;
+        try
+        {
+            if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("删除 worker 命令目录失败（" + dir + "）：" + ex.Message);
+        }
     }
 
     /** 会话键 → profile 目录（两边同一个规则：C:\orbita-browser\sessions\<键>） */
