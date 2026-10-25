@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
-import type { McpInstanceInfo } from "@shared/mcp";
+import { displayedStatus, headIconKind, statusLine, statusTextSpec, summarizeInstances } from "./row-display.ts";
+import type { McpInstanceInfo, McpStatus } from "@shared/mcp";
 
 function inst(workspace: string, kind: "ready" | "failed" | "idle" | "connecting" | "disabled"): McpInstanceInfo {
   const status: McpInstanceInfo["status"] =
@@ -55,5 +55,49 @@ describe("summarizeInstances / headIconKind / statusLine", () => {
     assert.equal(statusLine(only), null);
     const mixed = summarizeInstances([inst("paper3", "ready"), inst("写稿", "disabled")]);
     assert.deepEqual(statusLine(mixed), { total: 1, ready: 1, failed: [] });
+  });
+});
+
+describe("statusTextSpec —— 卡片头行文案的语义档", () => {
+  test("ready 出工具数（不是「就绪」二字：用户要看的是会什么）", () => {
+    assert.deepEqual(statusTextSpec({ kind: "ready", tools: ["a", "b"] }), { kind: "tools", count: 2 });
+  });
+
+  test("connecting 自成一档——以前它落到 notConnected，正在连看着像没连上（A8）", () => {
+    assert.deepEqual(statusTextSpec({ kind: "connecting" }), { kind: "connecting" });
+    assert.notDeepEqual(statusTextSpec({ kind: "connecting" }), statusTextSpec({ kind: "idle" }));
+  });
+
+  test("其余三档各自对得上", () => {
+    assert.deepEqual(statusTextSpec({ kind: "failed", message: "boom" }), { kind: "failed" });
+    assert.deepEqual(statusTextSpec({ kind: "disabled" }), { kind: "disabled" });
+    assert.deepEqual(statusTextSpec({ kind: "idle" }), { kind: "idle" });
+  });
+});
+
+describe("displayedStatus —— Reload 期间的状态换算", () => {
+  const cases: McpStatus[] = [
+    { kind: "idle" },
+    { kind: "connecting" },
+    { kind: "ready", tools: ["a"] },
+    { kind: "failed", message: "boom" },
+  ];
+
+  test("reloading 时非 disabled 一律转 connecting（旧状态是谎话）", () => {
+    for (const status of cases) {
+      assert.equal(displayedStatus(status, true).kind, "connecting", `reloading 下 ${status.kind} 应转 connecting`);
+    }
+  });
+
+  test("停用行不转：它是用户关的，重连也不连它", () => {
+    assert.equal(displayedStatus({ kind: "disabled" }, true).kind, "disabled");
+  });
+
+  test("不 reload 时原样返回（引用同一对象，不该白造新对象）", () => {
+    for (const status of cases) {
+      assert.equal(displayedStatus(status, false), status);
+    }
+    const disabled: McpStatus = { kind: "disabled" };
+    assert.equal(displayedStatus(disabled, false), disabled);
   });
 });

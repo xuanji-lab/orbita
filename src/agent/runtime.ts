@@ -735,8 +735,13 @@ const running = new Map<string, CycleSlot<TurnParts>>();
  * 每条会话各拉一份 `npx some-server` 会让子进程数量随会话线性增长。
  */
 const mcpHub = new McpHub();
-// 闲置工作区的实例被回收后，主进程缓存的状态就陈旧了（显示就绪但进程已退）——推新快照
-mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
+/**
+ * 状态真的变了就推一拍：进表（连接中）/ 落地（就绪或失败）/ 被拆（闲置回收、热重载）。
+ * **主进程只缓存最后一次快照**，不推面板就不会变：只推「一轮开机之后」那一拍的话，
+ * 慢 server（npx 首次装包几十秒）在连接期间面板写着「还没连上」，闲置回收后
+ * 又停在陈旧的就绪态（2026-10-25 A8）。
+ */
+mcpHub.onChange = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
  * bash 可执行文件路径探测。**进程级缓存**——pi 每轮都会重跑 `getShellConfig()`，而 Git
  * 不在默认安装位置的机器上那一步是 `spawnSync("where", …)`（本机多轮实测 50~85ms，同步、
