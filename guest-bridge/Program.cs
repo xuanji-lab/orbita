@@ -71,8 +71,11 @@ internal static class Program
     //   一个字都没改——它仍是老宿主的唯一通道、也是 TCP 不可用时的回退通道。
     // 0.8.1 修监听的结构性缺陷：accept 线程只管收连接（握手/命令/日志全在每条连接自己的线程里），
     //   hello 读 1s 硬超时，backlog 64，接入与心跳各有日志。文件协议与命令语义**未变**。
+    // 0.8.2 启动时自己建一条防火墙入站允许规则（TcpChannel.EnsureFirewallRule）：真机上「TCP
+    //   间歇不可达」的真因就是沙箱弹了防火墙提示、没人点「允许」（点了立刻 4ms 就通）。结果写进
+    //   bridge.json 的 fwAllowed，宿主据此解释「为什么连不上」。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.8.1";
+    private const string Version = "0.8.2";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -408,6 +411,13 @@ internal static class Program
                 BrowserDisabled = true;
                 continue;
             }
+            // 测试缝（只有宿主上的 bridge.test.mjs 带）：**不跑 netsh**。宿主机上改用户防火墙
+            // 是红线，而集成测试要起真桥。生产（.wsb 的 LogonCommand）永不带它。
+            if (flag == "--no-firewall")
+            {
+                TcpChannel.SkipFirewallForSelfTest();
+                continue;
+            }
             // 测试缝（只有 --selftest-worker 起子桥时带）：认 worker-* 命令，并把一条 worker
             // 命令的放弃线缩到 2.5s（自测不能等 40 秒）。生产（.wsb 的 LogonCommand）永不带它。
             if (flag == "--test-hooks")
@@ -472,7 +482,10 @@ internal static class Program
     {
         StringBuilder json = new StringBuilder();
         json.Append("{\"version\":").Append(JsonQuote(Version))
-            .Append(",\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id);
+            .Append(",\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id)
+            // 防火墙放行结果：false 时宿主要能说清「连不上是因为沙箱防火墙没放行」，
+            // 而不是继续盲猜网络。老宿主不认识这个字段，忽略即可。
+            .Append(TcpChannel.FirewallField(TcpChannel.FirewallAllowed));
         if (TcpChannel.Port > 0 && TcpChannel.Token.Length > 0)
         {
             json.Append(",\"port\":").Append(TcpChannel.Port)
@@ -2236,7 +2249,7 @@ internal static class Program
             failures.Add(name + "：实际" + (allowed ? "放行" : "拦下（" + rejection + "）"));
     }
 
-    private static void CheckString(List<string> failures, ref int cases, string name, string expected, string actual)
+    internal static void CheckString(List<string> failures, ref int cases, string name, string expected, string actual)
     {
         cases++;
         bool same = expected == null ? actual == null : string.Equals(expected, actual, StringComparison.Ordinal);

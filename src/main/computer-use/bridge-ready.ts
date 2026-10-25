@@ -22,6 +22,12 @@ export interface BridgeInfo {
   pid: number;
   /** TCP 命令通道；undefined = 没有（老桥 / 监听没起来 / 字段不全） */
   tcp?: GuestTcpChannel;
+  /**
+   * 桥自报的防火墙放行结果（0.8.2 起）：false = 桥自己没建成入站允许规则，沙箱会弹
+   * 「是否允许访问」的提示，没人点「允许」时入站 TCP 全被丢。宿主据此把「连不上」说清楚。
+   * undefined = 老桥没这个字段。
+   */
+  fwAllowed?: boolean;
 }
 
 /**
@@ -54,10 +60,12 @@ export function parseBridgeInfo(raw: string): BridgeInfo | null {
   const pid = record["pid"];
   if (typeof version !== "string" || version === "") return null;
   const tcp = parseTcpChannel(record);
+  const fwAllowed = record["fwAllowed"];
   return {
     version,
     pid: typeof pid === "number" && Number.isInteger(pid) ? pid : 0,
     ...(tcp === undefined ? {} : { tcp }),
+    ...(typeof fwAllowed === "boolean" ? { fwAllowed } : {}),
   };
 }
 

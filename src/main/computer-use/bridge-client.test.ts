@@ -448,13 +448,15 @@ async function startFakeTcpGuest(options: FakeTcpGuestOptions): Promise<FakeTcpG
 async function writeBridgeJson(
   outDir: string,
   tcp: { port: number; token: string; ipv4?: string[] } | null,
+  fwAllowed?: boolean,
 ): Promise<void> {
-  const body: Record<string, unknown> = { version: tcp === null ? "0.7.2" : "0.8.0", pid: 4321 };
+  const body: Record<string, unknown> = { version: tcp === null ? "0.7.2" : "0.8.2", pid: 4321 };
   if (tcp !== null) {
     body["port"] = tcp.port;
     body["token"] = tcp.token;
     body["ipv4"] = tcp.ipv4 ?? ["127.0.0.1"];
   }
+  if (fwAllowed !== undefined) body["fwAllowed"] = fwAllowed;
   await writeFile(join(outDir, "bridge.json"), JSON.stringify(body), "utf8");
 }
 
@@ -915,6 +917,50 @@ describe("bridge-client（发送前探活）", () => {
     } finally {
       bridge.stop();
       await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── 防火墙状态（0.8.2）────────────────────────────────────────────────────
+//
+// 真机 2026-10-25 的结论：沙箱弹出「Windows 防火墙已阻止…orbita-guest-bridge」的提示，
+// 没人点「允许」时入站 TCP 全被丢（宿主 8 次全超时、guest 心跳「已接入 0 条」），点完立刻通。
+// 桥现在会自己建入站允许规则并把结果写进 bridge.json 的 fwAllowed；宿主据此把「连不上」说清楚。
+
+describe("bridge-client（防火墙状态）", () => {
+  test("bridge.json 的 fwAllowed 被解析出来（老桥没有这个字段 → undefined）", () => {
+    const withField = parseBridgeInfo(
+      JSON.stringify({ version: "0.8.2", pid: 1, port: 5, token: "t", ipv4: ["127.0.0.1"], fwAllowed: false }),
+    );
+    assert.equal(withField?.fwAllowed, false);
+    const withoutField = parseBridgeInfo(JSON.stringify({ version: "0.8.1", pid: 1 }));
+    assert.equal(withoutField?.fwAllowed, undefined);
+  });
+
+  test("fwAllowed=false 且连不上：日志说清「沙箱防火墙未放行」，只解释一次，命令照常温", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-fw-"));
+    resetGuestCommandSeq();
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      // 端口连不上 + 桥自报防火墙没放行（沙箱里那个「允许/取消」没人点的现场）
+      await writeBridgeJson(dir, { port: 9, token: "t" }, false);
+      const { value, lines } = await captureLog(async () => {
+        const resp = await sendGuestCommand(dir, "ping", {});
+        // 后台探活会在这条命令之后失败（命令本身不等它）
+        await sleep(300);
+        await sendGuestCommand(dir, "ping", {});
+        await sleep(300);
+        return resp;
+      });
+      assert.deepEqual(value, { ok: true, via: "file" }, "命令语义不变：走文件协议照样成功");
+      const hints = lines.filter((line) => line.includes("沙箱防火墙未放行"));
+      assert.equal(hints.length, 1, `防火墙提示只解释一次，实际 ${hints.length} 行：\n${lines.join("\n")}`);
+      assert.match(hints[0] ?? "", /fwAllowed=false/);
+      assert.match(hints[0] ?? "", /点「允许」/);
+    } finally {
+      bridge.stop();
       resetGuestCommandSeq();
       await rm(dir, { recursive: true, force: true });
     }

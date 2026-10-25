@@ -26,6 +26,14 @@
 // 随机生成 32 位十六进制。为什么要有令牌：同一个沙箱里跑着 agent 打开的网页，端口不是口令，
 // 没有令牌任何本地进程都能发 computer_click。**日志里绝不打令牌真值**（它会进 PR / 截图）。
 //
+// 0.8.2 修「TCP 间歇不可达」的真因（2026-10-25 真机 + 用户截图）：沙箱里弹了 Windows 防火墙
+//   提示（「Windows 防火墙已阻止…orbita-guest-bridge 的某些功能」，[允许]/[取消]），没人点
+//   「允许」入站 TCP 就全被丢——宿主 8 次连接全超时、guest 心跳「已接入 0 条」，点了之后
+//   同一个端口 4ms 就通。现在桥**启动时自己建一条入站允许规则**（netsh，不弹窗、不等待人）：
+//     · 尽力而为：失败只记一句人话、把 fwAllowed=false 写进 bridge.json，桥与文件协议照常工作；
+//     · 一定在 TcpListener.Start() **之前**做完，宿主第一次探活就不会撞上「已监听但被防火墙丢」；
+//     · 不碰任何提权/弹窗逻辑（沙箱里以 WDAGUtilityAccount 跑，按推断不需要 UAC）。
+//
 // 0.8.1 修一条结构性缺陷（真机三轮挖出来的）：「第一条连接建立后，监听再也不接新连接」。
 //   现场是宿主连上并复用之后，从外部对同一个 ip:port 连 30 次全部超时，guest 日志里除了
 //   「监听」+ 那一次「握手成功」什么都没有——即 accept 循环不再取连接。现在把职责钉死：
@@ -86,6 +94,14 @@ internal static class TcpChannel
     /** 已接入的连接总数 / 当前活跃连接数（只记账与心跳日志用；int 读写本身是原子的） */
     private static int _accepted = 0;
     private static int _active = 0;
+    /** 本次启动的防火墙放行结果（写进 bridge.json，宿主据此解释「为什么连不上」） */
+    private static bool _fwAllowed = false;
+    /** 自测开关：宿主上**绝不**真跑 netsh（那是在改用户机器的防火墙） */
+    private static bool _fwSkip = false;
+    /** 入站规则名：固定，重跑时靠它判断「已经放行过」 */
+    internal const string FirewallRuleName = "orbita-guest-bridge";
+    /** netsh 的上限：放行是尽力而为，绝不许把桥的启动拖住 */
+    private const int FirewallTimeoutMs = 5000;
     private static int _port = 0;
     private static string _token = "";
     /** TCP 命令的全局序号（多连接共用，文件名不许撞） */
@@ -111,6 +127,9 @@ internal static class TcpChannel
      */
     internal static bool Start()
     {
+        // **先放行再监听**：顺序反了的话，宿主第一次探活会撞在「已监听但被防火墙丢包」的窗口里，
+        // 而沙箱还会弹一个等人去点的提示（真机上就是它让 TCP 看起来「间歇可用」）。
+        _fwAllowed = EnsureFirewallRule();
         try
         {
             _token = NewToken();
@@ -257,6 +276,190 @@ internal static class TcpChannel
                 Interlocked.Decrement(ref _active);
                 try { client.Close(); } catch { }
             }
+        }
+    }
+
+    // ---- 防火墙放行（0.8.2）-------------------------------------------------------
+    //
+    // 真沙箱里第一次监听入站端口时，Windows 会弹「是否允许…访问此应用？」的防火墙提示；
+    // 没人点「允许」时**所有入站 TCP 都被丢**（SYN 连回答都没有），宿主看到的就是「连接超时」。
+    // 2026-10-25 真机：同一个 ip:port，点「允许」之前 8 次全超时、guest 心跳「已接入 0 条」，
+    // 点完之后 4ms 就通。所以桥自己建一条入站允许规则，把「等人点」这件事彻底去掉。
+    //
+    // 三条纪律：
+    //   ① 尽力而为：失败只记一句人话，桥与文件协议照常工作（TCP 只是加速器）；
+    //   ② 不弹窗：UseShellExecute=false + CreateNoWindow（也就不经过 Shell / UAC）；
+    //   ③ 幂等：先 `show rule` 看一眼，已有同名规则就不再 add（netsh 允同名重复，重跑会堆规则）。
+
+    /** 本进程 exe 的绝对路径（规则按程序放行，比按端口放行精确） */
+    private static string CurrentExePath()
+    {
+        try
+        {
+            return System.Reflection.Assembly.GetExecutingAssembly().Location;
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    /**
+     * `netsh advfirewall firewall add rule` 的参数串（纯函数，自测直接验它）。
+     *
+     * 为什么 program= 外面一定有引号：安装路径可能带空格，而 Windows 的 argv 解析会把
+     * `program="C:\A B\x.exe"` 合成一个 token `program=C:\A B\x.exe`，netsh 正好吃这个形状。
+     */
+    internal static string BuildAddRuleArgs(string exePath)
+    {
+        return "advfirewall firewall add rule name=\"" + FirewallRuleName + "\""
+            + " dir=in action=allow program=\"" + exePath + "\" enable=yes profile=any";
+    }
+
+    /** `netsh advfirewall firewall show rule name=...` 的参数串（纯函数） */
+    internal static string BuildShowRuleArgs()
+    {
+        return "advfirewall firewall show rule name=\"" + FirewallRuleName + "\"";
+    }
+
+    /**
+     * 要不要再 add 一条（纯函数）：show 成功 = 规则已在，跳过；show 失败但输出里已经出现规则名
+     * （不同语言版本的输出/退出码差异）也算在。这样重跑桥不会把同名规则堆一坨。
+     */
+    internal static bool ShouldAddRule(int showExitCode, string showOutput)
+    {
+        if (showExitCode == 0) return false;
+        if (showOutput != null && showOutput.IndexOf(FirewallRuleName, StringComparison.OrdinalIgnoreCase) >= 0)
+            return false;
+        return true;
+    }
+
+    /** bridge.json 里的 fwAllowed 字段片段（纯函数，自测直接验它） */
+    internal static string FirewallField(bool allowed)
+    {
+        return ",\"fwAllowed\":" + (allowed ? "true" : "false");
+    }
+
+    /** 自测：不真的跑 netsh（宿主上改用户防火墙是红线） */
+    internal static void SkipFirewallForSelfTest()
+    {
+        _fwSkip = true;
+    }
+
+    /** 放行结果（写进 bridge.json）。false 也可能只是「netsh 没成」，不代表桥不可用。 */
+    internal static bool FirewallAllowed
+    {
+        get { return _fwAllowed; }
+    }
+
+    /** 建入站允许规则；任何失败都只记日志（返回 false），绝不抛 */
+    private static bool EnsureFirewallRule()
+    {
+        if (_fwSkip)
+        {
+            Log("防火墙：自测跳过放行（不跑 netsh）");
+            _fwAllowed = true;
+            return true;
+        }
+        string exePath = CurrentExePath();
+        if (exePath.Length == 0)
+        {
+            Log("防火墙：自动放行失败（取不到本进程 exe 路径）——TCP 通道需要用户在弹出的提示里点「允许」，否则只走文件协议");
+            return false;
+        }
+        try
+        {
+            NetShellResult shown = RunNetsh(BuildShowRuleArgs());
+            if (!ShouldAddRule(shown.Code, shown.Output))
+            {
+                Log("防火墙：入站规则 " + FirewallRuleName + " 已存在，跳过");
+                return true;
+            }
+            NetShellResult added = RunNetsh(BuildAddRuleArgs(exePath));
+            if (added.Code == 0)
+            {
+                Log("防火墙：已放行 " + FirewallRuleName + "（入站任意 profile）");
+                return true;
+            }
+            Log("防火墙：自动放行失败（netsh 退出码 " + added.Code + "：" + FirstLine(added.Output)
+                + "）——TCP 通道需要用户在弹出的提示里点「允许」，否则只走文件协议");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log("防火墙：自动放行失败（" + ex.Message
+                + "）——TCP 通道需要用户在弹出的提示里点「允许」，否则只走文件协议");
+            return false;
+        }
+    }
+
+    /** netsh 的输出只取第一行（多行会挤满 bridge.log，看原因第一行就够） */
+    private static string FirstLine(string text)
+    {
+        if (text == null) return "";
+        string trimmed = text.Trim();
+        int at = trimmed.IndexOfAny(new char[] { '\r', '\n' });
+        string line = at < 0 ? trimmed : trimmed.Substring(0, at);
+        if (line.Length > 200) line = line.Substring(0, 200) + "…";
+        return line;
+    }
+
+    private sealed class NetShellResult
+    {
+        internal int Code = -1;
+        internal string Output = "";
+    }
+
+    /**
+     * 跑一次 netsh 并等它退出。**用一条后台线程 + Join 上限**把它框住：
+     * 放行是尽力而为，netsh 万一卡住也绝不能把桥的启动拖死（否则文件协议也跟着起不来）。
+     */
+    private static NetShellResult RunNetsh(string args)
+    {
+        NetShellResult result = new NetShellResult();
+        Thread runner = new Thread(delegate() { RunNetshInto(args, result); });
+        runner.IsBackground = true;
+        runner.Name = "orbita-firewall";
+        runner.Start();
+        if (!runner.Join(FirewallTimeoutMs))
+        {
+            result.Code = -1;
+            result.Output = "netsh " + FirewallTimeoutMs + "ms 内没有退出";
+        }
+        return result;
+    }
+
+    private static void RunNetshInto(string args, NetShellResult result)
+    {
+        try
+        {
+            // 用绝对路径：UseShellExecute=false 时进程搜索会先看当前目录，别让一个同名 exe 顶掉系统 netsh
+            string netsh = Path.Combine(Environment.SystemDirectory, "netsh.exe");
+            ProcessStartInfo psi = new ProcessStartInfo(netsh, args);
+            psi.UseShellExecute = false; // 不经过 Shell：不弹窗、不弹 UAC
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            using (Process process = Process.Start(psi))
+            {
+                // 先读完两个流再等退出（顺序反了会互相卡住）
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                if (!process.WaitForExit(FirewallTimeoutMs))
+                {
+                    try { process.Kill(); } catch { }
+                    result.Code = -1;
+                    result.Output = "netsh " + FirewallTimeoutMs + "ms 内没有退出";
+                    return;
+                }
+                result.Code = process.ExitCode;
+                result.Output = (stdout + "\n" + stderr).Trim();
+            }
+        }
+        catch (Exception ex)
+        {
+            result.Code = -1;
+            result.Output = ex.Message;
         }
     }
 
@@ -565,6 +768,8 @@ internal static class TcpChannel
         {
             Directory.CreateDirectory(dir);
             Program.UseDirsForSelfTest(dir);
+            // 宿主上**绝不**真跑 netsh（那是在改用户机器的防火墙）：只关掉它，纯逻辑照测
+            SkipFirewallForSelfTest();
             Console.SetOut(captured);
             bool started = Start();
             Console.SetOut(realOut);
@@ -573,6 +778,40 @@ internal static class TcpChannel
             Program.CheckTrue(failures, ref cases, "令牌是 32 位十六进制", IsHex32(Token));
             Program.CheckTrue(failures, ref cases, "bridge.json 的 ipv4 字段是数组（本机可能没有非回环地址）",
                 IPv4Json(LocalIPv4()).StartsWith("[", StringComparison.Ordinal));
+
+            // ---- 防火墙放行（0.8.2）：只验拼装与幂等判断，宿主上不跑 netsh ----
+            string exe = "C:" + Path.DirectorySeparatorChar + "orbita-bridge" + Path.DirectorySeparatorChar
+                + "orbita-guest-bridge.exe";
+            string addArgs = BuildAddRuleArgs(exe);
+            Program.CheckTrue(failures, ref cases, "放行参数：规则名 / 方向 / 动作 / 启用 / profile 都对",
+                addArgs.IndexOf("advfirewall firewall add rule name=\"" + FirewallRuleName + "\"",
+                    StringComparison.Ordinal) == 0
+                && addArgs.IndexOf(" dir=in ", StringComparison.Ordinal) > 0
+                && addArgs.IndexOf(" action=allow ", StringComparison.Ordinal) > 0
+                && addArgs.IndexOf(" enable=yes ", StringComparison.Ordinal) > 0
+                && addArgs.EndsWith(" profile=any", StringComparison.Ordinal));
+            Program.CheckTrue(failures, ref cases, "放行参数：程序路径带引号且指向本 exe",
+                addArgs.IndexOf("program=\"" + exe + "\"", StringComparison.Ordinal) > 0);
+            Program.CheckTrue(failures, ref cases, "放行参数：引号只有两对（名字 + 路径），路径里的反斜杠不被转义",
+                CountChar(addArgs, '"') == 4 && addArgs.IndexOf("\\\\", StringComparison.Ordinal) < 0);
+            string spaced = BuildAddRuleArgs("C:" + Path.DirectorySeparatorChar + "Program Files"
+                + Path.DirectorySeparatorChar + "orbita app" + Path.DirectorySeparatorChar + "orbita-guest-bridge.exe");
+            Program.CheckTrue(failures, ref cases, "放行参数：路径带空格时引号仍然整段包住路径",
+                spaced.IndexOf("program=\"C:" + Path.DirectorySeparatorChar + "Program Files"
+                    + Path.DirectorySeparatorChar + "orbita app" + Path.DirectorySeparatorChar
+                    + "orbita-guest-bridge.exe\"", StringComparison.Ordinal) > 0);
+            Program.CheckString(failures, ref cases, "查询参数：按规则名查",
+                "advfirewall firewall show rule name=\"" + FirewallRuleName + "\"", BuildShowRuleArgs());
+            Program.CheckTrue(failures, ref cases, "幂等：show 成功 = 规则已在，不再 add",
+                !ShouldAddRule(0, "Rule orbita-guest-bridge"));
+            Program.CheckTrue(failures, ref cases, "幂等：show 失败且输出里没有规则名 → 要加",
+                ShouldAddRule(1, "没有与指定条件相匹配的规则。"));
+            Program.CheckTrue(failures, ref cases, "幂等：show 失败但输出里已有规则名 → 不加",
+                !ShouldAddRule(1, "orbita-guest-bridge"));
+            Program.CheckString(failures, ref cases, "fwAllowed 字段片段（true）", ",\"fwAllowed\":true",
+                FirewallField(true));
+            Program.CheckString(failures, ref cases, "fwAllowed 字段片段（false）", ",\"fwAllowed\":false",
+                FirewallField(false));
             if (!started) return Finish(failures, cases, dir, captured);
 
             // ① 错误令牌：必须被拒、且收不到任何命令回执
@@ -739,6 +978,17 @@ internal static class TcpChannel
         try { Directory.Delete(dir, true); } catch { }
         Console.WriteLine(Program.BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** 数一个字符出现几次（验引号配对的纯函数） */
+    private static int CountChar(string text, char needle)
+    {
+        int count = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == needle) count++;
+        }
+        return count;
     }
 
     private static int MaxSeq()

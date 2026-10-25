@@ -319,6 +319,10 @@ interface TcpChannelState {
   /** 探活失败日志的去重账：上次的原因与时刻 */
   probeLogReason: string;
   probeLogAt: number;
+  /** 桥自报的防火墙放行结果（bridge.json 的 fwAllowed；undefined = 老桥没这个字段） */
+  fwAllowed: boolean | undefined;
+  /** 第一次连不上时已经解释过防火墙了吗（只解释一次，不刷屏） */
+  fwHintLogged: boolean;
 }
 
 let tcpState: TcpChannelState | null = null;
@@ -334,12 +338,20 @@ function closeTcpState(): void {
   if (state.link !== null) state.link.close();
 }
 
-async function readTcpChannel(outDir: string): Promise<GuestTcpChannel | null> {
+/** bridge.json 里我们关心的两件事：TCP 通道，以及它自报的防火墙状态 */
+interface BridgeTcpInfo {
+  channel: GuestTcpChannel | null;
+  fwAllowed: boolean | undefined;
+}
+
+async function readTcpChannel(outDir: string): Promise<BridgeTcpInfo> {
   try {
     const raw = await readFile(join(outDir, BRIDGE_INFO_FILE), "utf8");
-    return parseBridgeInfo(raw)?.tcp ?? null;
+    const info = parseBridgeInfo(raw);
+    return { channel: info?.tcp ?? null, fwAllowed: info?.fwAllowed };
   } catch {
-    return null; // 桥还没写通告 / 映射目录还没同步：当老桥，走文件协议
+    // 桥还没写通告 / 映射目录还没同步：当老桥，走文件协议
+    return { channel: null, fwAllowed: undefined };
   }
 }
 
@@ -368,10 +380,16 @@ async function channelStateFor(outDir: string): Promise<TcpChannelState> {
       probeFailures: 0,
       probeLogReason: "",
       probeLogAt: 0,
+      fwAllowed: undefined,
+      fwHintLogged: false,
     };
   }
   const state = tcpState;
-  if (state.channel === null) state.channel = await readTcpChannel(outDir);
+  if (state.channel === null) {
+    const tcp = await readTcpChannel(outDir);
+    state.channel = tcp.channel;
+    state.fwAllowed = tcp.fwAllowed;
+  }
   if (state.channel !== null && state.link === null) armProbe(state);
   return state;
 }
@@ -446,7 +464,12 @@ async function runProbe(state: TcpChannelState): Promise<void> {
     armProbe(state); // 冷却还没过（提前触发了）：靠回冷却末尾
     return;
   }
-  const channel = state.channel ?? (state.channel = await readTcpChannel(state.outDir));
+  if (state.channel === null) {
+    const tcp = await readTcpChannel(state.outDir);
+    state.channel = tcp.channel;
+    state.fwAllowed = tcp.fwAllowed;
+  }
+  const channel = state.channel;
   if (tcpState !== state) return;
   if (channel === null) {
     logChannel(state, "文件（TCP 不可用：bridge.json 里没有 port / token / ipv4）");
@@ -478,6 +501,15 @@ async function runProbe(state: TcpChannelState): Promise<void> {
     return;
   }
 
+  // 桥说它自己没放行防火墙：那「连不上」几乎必然是沙箱弹的那个提示没人点（2026-10-25 真机）。
+  // 只解释第一次，后面照常走文件协议——不在这里做任何「等用户点」的假设。
+  if (state.fwAllowed === false && !state.fwHintLogged) {
+    state.fwHintLogged = true;
+    console.log(
+      "[computer-use] 通道：TCP 连不上，且沙箱防火墙未放行（bridge.json 的 fwAllowed=false）——" +
+        "用户需要在沙箱里点「允许」；在点之前一律走文件协议",
+    );
+  }
   logProbeFailure(state, opened.reason);
   const nextDelay = PROBE_DELAYS_MS[state.burstAttempts];
   if (nextDelay !== undefined) {

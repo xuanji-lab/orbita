@@ -7,6 +7,9 @@
 // 输入命令（click / type / key / scroll）的参数校验与键名→VK 映射；
 // 轮询的序号直探与全量对齐（跳号 / 迟到 / 半截）。
 //
+// ⚠ **红线 2**：所有 spawn 都带 `--no-firewall`——0.8.2 起桥启动时会用 netsh 建入站防火墙规则，
+//   那是改用户机器的系统设置；宿主上的测试只验逻辑，绝不真跑它（selftest 里也有同样的开关）。
+//
 // ⚠ **红线**：输入命令在宿主上跑就是劫持用户真实的鼠标键盘。所以这个文件里所有
 // click / type / key / scroll 请求一律带 `dryRun: true`（桥只解析不注入），并且
 // 第一个探针用的是「就算 dryRun 被忽略也没有任何副作用」的空文本 type——
@@ -122,7 +125,8 @@ test(
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-test-"));
     const cmdDir = path.join(outDir, "cmd");
 
-    const bridge = spawn(exePath, ["--out-dir", outDir], {
+    // --no-firewall：宿主上绝不真跑 netsh（那会改用户机器的防火墙规则）
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-firewall"], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -135,12 +139,14 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.8.1");
+      assert.equal(info.version, "0.8.2");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
       assert.match(info.token, /^[0-9a-f]{32}$/, "令牌应是 32 位十六进制");
       assert.ok(Array.isArray(info.ipv4), "bridge.json 应带 ipv4 数组");
+      // 0.8.2：防火墙放行结果（宿主要能据此说清「连不上是因为沙箱防火墙没放行」）
+      assert.equal(typeof info.fwAllowed, "boolean", "bridge.json 应带布尔 fwAllowed");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
       // ---- ping 命令（宿主就绪探针）----
@@ -265,7 +271,7 @@ test(
     assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-tcp-test-"));
     const cmdDir = path.join(outDir, "cmd");
-    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-firewall"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let bridgeLog = "";
     bridge.stdout.on("data", (d) => (bridgeLog += d));
     bridge.stderr.on("data", (d) => (bridgeLog += d));
@@ -363,7 +369,7 @@ test(
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-input-test-"));
     const cmdDir = path.join(outDir, "cmd");
 
-    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-firewall"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let bridgeLog = "";
     bridge.stdout.on("data", (d) => (bridgeLog += d));
     bridge.stderr.on("data", (d) => (bridgeLog += d));
@@ -479,7 +485,7 @@ test(
     const respPath = (seq) => path.join(cmdDir, name(seq) + ".resp.json");
     const readResp = (seq) => JSON.parse(fs.readFileSync(respPath(seq), "utf8"));
 
-    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-firewall"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let bridgeLog = "";
     bridge.stdout.on("data", (d) => (bridgeLog += d));
     bridge.stderr.on("data", (d) => (bridgeLog += d));
@@ -555,7 +561,7 @@ test(
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-cdp-test-"));
     const cmdDir = path.join(outDir, "cmd");
 
-    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-browser"], {
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-browser", "--no-firewall"], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -853,7 +859,7 @@ test(
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-launch-test-"));
     const cmdDir = path.join(outDir, "cmd");
 
-    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-firewall"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let bridgeLog = "";
     bridge.stdout.on("data", (d) => (bridgeLog += d));
     bridge.stderr.on("data", (d) => (bridgeLog += d));
