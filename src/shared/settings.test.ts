@@ -529,6 +529,16 @@ describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", 
   });
 });
 
+describe("parseSettings 的 priceChartCategory（价格 · 能力图停在哪个分类）", () => {
+  it("认得的分类留下；不认识的（以后删了某个榜单）与缺席一样，回到默认 Agent 综合", () => {
+    deepStrictEqual(parseSettings({ priceChartCategory: "coding" }).priceChartCategory, "coding");
+    deepStrictEqual(parseSettings({ priceChartCategory: "webdev" }).priceChartCategory, "webdev");
+    deepStrictEqual("priceChartCategory" in parseSettings({ priceChartCategory: "vision" }), false);
+    deepStrictEqual("priceChartCategory" in parseSettings({ priceChartCategory: 3 }), false);
+    deepStrictEqual("priceChartCategory" in parseSettings({}), false);
+  });
+});
+
 describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
   it("缺席 = 键不在：全部默认关，不为此落一个空对象", () => {
     deepStrictEqual("experimentalFeatures" in parseSettings({}), false);

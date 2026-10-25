@@ -5,6 +5,7 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -278,6 +279,11 @@ export interface AppSettings {
    */
   providerCardSize?: ProviderCardSize;
   /**
+   * 价格 · 能力图停在哪个分类（右上角左右切换）。缺席 = Agent 综合。用户 2026-10-25：离开设置页再回来
+   * 又回到「Agent 综合」，偏偏这一类很多型号没分数——切到哪类就记住哪类。
+   */
+  priceChartCategory?: PriceChartCategory;
+  /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
@@ -441,6 +447,7 @@ export function parseSettings(raw: unknown): AppSettings {
     starredModels?: unknown;
     usagePet?: unknown;
     providerCardSize?: unknown;
+    priceChartCategory?: unknown;
     experimentalFeatures?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
@@ -505,6 +512,10 @@ export function parseSettings(raw: unknown): AppSettings {
     // 不认识的尺寸当没选过（缺席 = large）
     ...(record.providerCardSize === "large" || record.providerCardSize === "small"
       ? { providerCardSize: record.providerCardSize }
+      : {}),
+    // 不认识的分类（以后删了某个榜单）当没选过，回到默认
+    ...((PRICE_CHART_CATEGORIES as readonly unknown[]).includes(record.priceChartCategory)
+      ? { priceChartCategory: record.priceChartCategory as PriceChartCategory }
       : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
