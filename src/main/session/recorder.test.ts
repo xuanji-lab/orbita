@@ -364,6 +364,28 @@ describe("recorder 的 model 事件（C-4）", () => {
     assert.equal(detail?.meta.modelId, "m2");
     assert.deepEqual(detail?.transcript, []);
   });
+
+  /**
+   * A11：轮内切模型不再只改芯片。renderer 轮内也发 setModel，runtime 回一条
+   * `model` 事件——meta 必须**在轮结束前**就变成新值（重开 / 重启读它）。
+   * 同时守住 meta 写入链：切完之后落下的 assistant 记录不能把模型冲回旧值。
+   */
+  test("轮在跑时到达的 model 事件立即落 meta，随后落盘的 assistant 记录不把它冲回旧值", async () => {
+    record(progress({ type: "item_started", item: user }));
+    await settleUntil(transcriptLanded(1));
+    record({ type: "model", sessionId: ID, providerId: "other", modelId: "m2" });
+    await settleUntil(async () => (await store.load(ID))?.meta.modelId === "m2");
+    // 轮还没结束：此时读 meta 就应该是新值（验收断言的就是这一拍）
+    assert.equal((await store.load(ID))?.meta.providerId, "other");
+    assert.equal((await store.load(ID))?.meta.modelId, "m2");
+
+    record(progress({ type: "item_finished", item: assistant("complete") }));
+    await settleUntil(transcriptLanded(2));
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.providerId, "other");
+    assert.equal(detail?.meta.modelId, "m2");
+    assert.equal(detail?.transcript.length, 2);
+  });
 });
 
 describe("recorder 给 assistant 记录盖本轮生效的思考档（价格 · 能力图的「型号 × 档」）", () => {

@@ -603,42 +603,21 @@ async function generateSessionTitle(
 }
 
 /**
- * 会话内换模型（C-4），**轮在跑**的路径：注册 + 解析目标模型（与 openTurn 同一条
- * 装配路径），然后 `session.setModel`——pi 自己校验 auth、把 model_change 落进它的
- * 本子、clamp thinking。**不传 persist**：全局默认模型是 pi TUI 的概念，会话内切换
- * 不该改写用户磁盘上的全局设置。生效边界是 pi 定的：当前轮用旧模型跑完
- * （run 启动时快照），下一次 prompt 起新模型——无状态模型下就是下一次 open 时
- * 主进程装配的新 provider/modelId。
- */
-async function setSessionModel(
-  session: AgentSession,
-  sessionId: string,
-  provider: ProviderSecrets,
-  modelId: string,
-): Promise<void> {
-  try {
-    // 同一套会话头注入（OpenCode Go）：换模型后新模型也要带本会话 id
-    const scoped = withOpencodeSession(provider, sessionId);
-    const model = registerAndResolveModel(session.modelRuntime, scoped, modelId);
-    if (model === undefined) {
-      throw new Error(`unknown model "${scoped.id}/${modelId}"`);
-    }
-    await session.setModel(model);
-    updateLedgerAuth(sessionId, scoped);
-    send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    // 操作级失败（无 key / 未知模型）：红字报给用户，chip 与 meta 都不动
-    send({ type: "failed", sessionId, message });
-  }
-}
-
-/**
- * 会话内换模型，**没在跑**的路径（无状态模型的常态）：不持有 AgentSession，
- * 自建一次性 ModelRuntime 做同一套「注册 + 解析」校验——「能不能用某个模型」
- * 两条路必须是同一套真相。成功只发 `model` 事件（主进程落 meta，下一次
- * open 自然用新装配）；失败发 `failed`。pi 本子里没有 model_change 记录也
- * 成立：每轮 open 都显式解析并传入 model，不依赖本子恢复。
+ * 会话内换模型（C-4）：**只校验 + 落账 + 发 `model` 事件**，不碰在跑的 pi 会话。
+ *
+ * 成功的事件由主进程 recorder 落 meta（与新建会话同一条 `SessionStore.setModel`），
+ * 下一次 open 显式装配新 provider/modelId——无状态模型下这就是“生效”的唯一点。
+ *
+ * **为什么不在轮内 `session.setModel`**（A11）：pi 的 setModel 原地改
+ * `agent.state.model`，且有工具往返 / 重试时下一次调用会读它（
+ * prepareNextTurnWithContext）——轮内注入会让同一轮的后半段换模型，重试循环
+ * 甚至会出现“一轮两模”。用户切模型时已发出的请求照旧跑完；下一条 submit /
+ * interrupt 自带新模型（renderer 的 turn 载荷），那也是新值真正上线的时刻。
+ * pi 本子里没有 model_change 记录也成立：每轮 open 都显式解析并传入 model，
+ * 不依赖本子恢复；分支继承 / 重开播种读的是我们自己的 meta。
+ *
+ * 不传 persist（pi 的全局默认模型是 pi TUI 的概念）：会话内切换不改写用户磁盘
+ * 上的全局设置。
  */
 async function setLedgerModel(
   sessionId: string,
@@ -646,7 +625,7 @@ async function setLedgerModel(
   modelId: string,
 ): Promise<void> {
   try {
-    // 同一套会话头注入，与 setSessionModel 对称：落账的鉴权面（generateTitle 用）也要带
+    // 同一套会话头注入（OpenCode Go）：落账的鉴权面（generateTitle 用）也要带
     // 本会话 id——不包的话，下一次 openTurn 覆盖之前标题调用会发回静态占位头
     const scoped = withOpencodeSession(provider, sessionId);
     const runtime = await createModelRuntime();
@@ -658,6 +637,7 @@ async function setLedgerModel(
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
+    // 操作级失败（无 key / 未知模型）：红字报给用户，chip 与 meta 都不动
     send({ type: "failed", sessionId, message });
   }
 }
@@ -1980,14 +1960,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "setModel") {
     // 会话内换模型（C-4）。fire-and-forget：成功经 `model` 事件、失败经 `failed`
     // 事件回传，主进程与 renderer 都靠事件对齐，这一跳不等结果。
-    // 轮在跑：落 pi 本子（model_change）；不在跑：只校验 + 落账——下一次 open
-    // 的装配本来就用主进程的新 provider/modelId。
-    const current = running.get(command.sessionId);
-    if (current?.opened != null) {
-      void setSessionModel(current.opened.session, command.sessionId, command.provider, command.modelId);
-    } else {
-      void setLedgerModel(command.sessionId, command.provider, command.modelId);
-    }
+    // **在跑与不在跑同一条路**：只校验 + 落账 + 发事件，不碰在跑的 pi 会话——
+    // pi 的 setModel 会原地改 agent.state.model，轮内注入会让重试 / 工具往返
+    // 后的下一次调用跟着换模型（一轮两模）。下一条 submit 自带新值，open 时
+    // 显式装配；meta 由 recorder 从 `model` 事件落盘（A11）。
+    void setLedgerModel(command.sessionId, command.provider, command.modelId);
     return;
   }
   if (command.type === "generateTitle") {
