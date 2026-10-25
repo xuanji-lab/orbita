@@ -53,6 +53,8 @@ import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
 import {
+  completionNoticeItems,
+  mergeNoticeIds,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
@@ -651,7 +653,12 @@ export function App() {
    * completion-notice.ts；侧栏竖条与右下角铃铛清单都从 sessionRunState 读同一份
    * 状态。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
    */
-  const [noticeId, setNoticeId] = useState<string | null>(null);
+  /**
+   * 完成卡此刻列的那一批会话（同拍一起落定的全部，失败在前、新的在上）。空数组 = 不弹。
+   * 以前只存一个 id：同拍完成几条时只提醒一条，丢信息（用户 2026-10-25 裁决：
+   * 「多个任务完成，都要提醒才对」——一张卡全列出来）。
+   */
+  const [noticeIds, setNoticeIds] = useState<readonly string[]>([]);
   const [drawerFocus, setDrawerFocus] = useState<{ tab: string; token: number } | null>(null);
   const drawerFocusTokenRef = useRef(0);
   /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
@@ -712,11 +719,14 @@ export function App() {
     }
     // 同拍多条只响一声
     if (ring) playCompletionChime();
-    const latest = fresh[fresh.length - 1];
-    if (latest !== undefined) {
+    if (fresh.length > 0) {
+      // 未读整批标上
       markUnread(fresh);
-      // 专注中不弹卡（未读照记，铃铛清单里看得到）；结束后新落定的照常弹
-      if (!focusQuiet) setNoticeId(latest);
+      // 专注中不弹卡（未读照记，铃铛清单里看得到）；结束后新落定的照常弹。
+      // 卡还开着就把新落定的并进去：phase 事件是逐条 IPC 到的，两条会话
+      // 前后脚跑完不可能落在同一次渲染里，靠「同拍」聚合会几乎永远只有一条
+      // （用户要求的是「多个任务完成，都要提醒」）。
+      if (!focusQuiet) setNoticeIds((current) => mergeNoticeIds(current, fresh));
     }
     // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -728,7 +738,8 @@ export function App() {
       session.sessions.some((meta) => meta.id === id && meta.unread != null),
     );
     if (hit.length > 0) clearUnreadOf(hit);
-    setNoticeId((current) => (current !== null && watchedIds.includes(current) ? null : current));
+    // 看着的那条从卡上退下；卡上其余各条留着（她们还是未读）
+    setNoticeIds((current) => current.filter((id) => !watchedIds.includes(id)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedKey]);
   /** 在辅助对话里打开一条会话（当前主槽不动）：提醒卡与铃铛清单共用 */
@@ -748,23 +759,37 @@ export function App() {
     [session.sessions],
   );
 
-  const noticeMeta = noticeId === null ? undefined : session.sessions.find((meta) => meta.id === noticeId);
+  /**
+   * 完成卡的内容：把 noticeIds 现算成行（会话可能已被删掉——不在列表里的直接跳过，
+   * 整批都消失了就不弹）。行序：失败在前、同类 updatedAt 降序。
+   */
+  const noticeItems = useMemo(
+    () =>
+      completionNoticeItems(
+        noticeIds.flatMap((id) => {
+          const meta = session.sessions.find((candidate) => candidate.id === id);
+          if (meta === undefined) return [];
+          return [{ id, title: meta.title, failed: session.turnErrorOf(id) !== null, updatedAt: meta.updatedAt }];
+        }),
+      ),
+    [noticeIds, session.sessions, session.turnErrorOf],
+  );
   const completionNotice =
-    noticeMeta === undefined
+    noticeItems.length === 0
       ? null
       : {
-          title: noticeMeta.title,
-          failed: session.turnErrorOf(noticeMeta.id) !== null,
-          onOpenNow: () => {
-            setNoticeId(null);
+          items: noticeItems.map(({ id, title, failed }) => ({ id, title, failed })),
+          // 点开其中一条：主槽换成它，整张卡收起（其余各条仍是未读，铃铛里看得到）
+          onOpen: (id: string) => {
+            setNoticeIds([]);
             setOverlay(null);
-            void session.openSession(noticeMeta.id);
+            void session.openSession(id);
           },
-          onSideChat: () => {
-            setNoticeId(null);
-            openInSideChat(noticeMeta.id);
+          onSideChat: (id: string) => {
+            setNoticeIds([]);
+            openInSideChat(id);
           },
-          onLater: () => setNoticeId(null),
+          onLater: () => setNoticeIds([]),
         };
 
   /**

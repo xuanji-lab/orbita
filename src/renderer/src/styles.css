@@ -2429,6 +2429,56 @@ body {
   color: var(--color-text-tertiary);
 }
 
+/*
+ * 多条聚合（用户 2026-10-25）：一张卡列出同拍落定的全部会话。卡头一句总数，
+ * 下面每行一条（整行就是「打开」），行尾是失败的图标 + 文字。
+ */
+.completion-card-many {
+  /* 列名字要多一点横向空间，但仍是紧凑卡（单条卡 220 不变） */
+  width: 260px;
+}
+
+.completion-card-head {
+  /* 与名字左缘对齐：竖条 3px + 间距 8px */
+  padding-left: 11px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.completion-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.completion-card-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-family-base);
+}
+
+.completion-card-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.completion-card-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
 .completion-card-actions {
   display: flex;
   align-items: center;
