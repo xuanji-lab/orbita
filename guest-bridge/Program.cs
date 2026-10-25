@@ -69,8 +69,10 @@ internal static class Program
     // 0.8.0 多了一条 **TCP 命令通道**（TcpChannel.cs）：bridge.json 里通告 port / token / ipv4，
     //   宿主优先走它（文件协议每一跳 2.9–7.5s，TCP 只有毫秒级）。文件轮询循环与全部命令语义
     //   一个字都没改——它仍是老宿主的唯一通道、也是 TCP 不可用时的回退通道。
+    // 0.8.1 修监听的结构性缺陷：accept 线程只管收连接（握手/命令/日志全在每条连接自己的线程里），
+    //   hello 读 1s 硬超时，backlog 64，接入与心跳各有日志。文件协议与命令语义**未变**。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.8.0";
+    private const string Version = "0.8.1";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果

@@ -135,7 +135,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.8.0");
+      assert.equal(info.version, "0.8.1");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -317,6 +317,18 @@ ${bridgeLog}`);
 ${bridgeLog}`);
       assert.deepEqual(JSON.parse(fs.readFileSync(fileResp, "utf8")), { ok: true });
 
+      // ---- 并发连接：第一条保持不断时，第二条仍要能握手、能跑命令 ----
+      // 0.8.1 修的就是这条：真机上第一条连接建立后，监听再也不接新连接（连 SYN 都不回）。
+      const parallel = await openTcpClient(info.port);
+      try {
+        parallel.send(JSON.stringify({ t: "hello", token: info.token }));
+        assert.deepEqual(await parallel.next(), { t: "hello-ok" }, "另一条连接同时存在时也要能握手");
+        parallel.send(JSON.stringify({ id: 1, command: "ping", fields: {} }));
+        assert.deepEqual((await parallel.next()).resp, { ok: true }, "第二条连接也要能跑命令");
+      } finally {
+        parallel.close();
+      }
+
       // ---- 断开之后监听仍在：重连 + 握手 + 命令 ----
       client.close();
       const again = await openTcpClient(info.port);
@@ -330,6 +342,8 @@ ${bridgeLog}`);
       assert.ok(!bridgeLog.includes(info.token), "bridge.log 里不许出现令牌真值");
       assert.match(bridgeLog, /TCP 通道已监听：0\.0\.0\.0:\d+/, "启动时应报出监听端口");
       assert.match(bridgeLog, /TCP 握手成功/, "握手结果应有一行日志");
+      // 接入行：现场靠它区分「SYN 没到达」与「到了但没被 accept」
+      assert.match(bridgeLog, /TCP 接入（#\d+）：127\.0\.0\.1:\d+/, "每条连接被 accept 后都要留一行接入日志");
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));

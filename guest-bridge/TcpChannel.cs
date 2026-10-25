@@ -1,4 +1,4 @@
-// Orbita guest bridge —— TCP 命令通道（0.8.0）。
+// Orbita guest bridge —— TCP 命令通道（0.8.1）。
 //
 // 为什么加这一条：文件协议**每一跳**的传播实测 2.9–7.5 秒（2026-10-25 真机计量；guest 内部
 // 处理只有毫秒级），一次 sandbox_navigate 天然 8–10 秒。同一天的一次性沙箱实验里，宿主→guest
@@ -26,8 +26,22 @@
 // 随机生成 32 位十六进制。为什么要有令牌：同一个沙箱里跑着 agent 打开的网页，端口不是口令，
 // 没有令牌任何本地进程都能发 computer_click。**日志里绝不打令牌真值**（它会进 PR / 截图）。
 //
+// 0.8.1 修一条结构性缺陷（真机三轮挖出来的）：「第一条连接建立后，监听再也不接新连接」。
+//   现场是宿主连上并复用之后，从外部对同一个 ip:port 连 30 次全部超时，guest 日志里除了
+//   「监听」+ 那一次「握手成功」什么都没有——即 accept 循环不再取连接。现在把职责钉死：
+//     · accept 线程**只做** accept → 记账 → 交给一条独立线程 → 立刻回去 accept；
+//       不读 hello、不发命令、不写日志（日志写向映射目录，同样可能被卡住）；
+//     · 一条连接的一生（握手 + 命令循环 + 关闭）全部在那条线程里；
+//     · hello 读有硬超时 1s（宿主只等 1.5s）：连上来却不说话的对端会被立刻关掉，
+//       绝不把一条线程挂在它身上；
+//     · backlog 给到 64：accept 被系统短暂挂住时，宿主侧 connect() 也不至于被丢 SYN；
+//     · 每条连接结束都关掉 socket / reader / stream 并减活跃计数。
+//   日志：进入连接的第一件事是「TCP 接入（#N）：<对端>」，另有一条 60s 心跳线程单独打
+//   「accept 循环心跳：已接入 N 条，当前活跃 M 条」——有了这两行，现场才能区分
+//   「SYN 没到达」（宿主侧连不上、guest 没有接入行）与「到了没被 accept」（没有接入行但有心跳）。
+//
 // 测试缝：--selftest-tcp 在本进程里起监听、用 127.0.0.1 连回来，验握手、往返、64KB 大载荷、
-// 串行与断线重连。不启 Edge、不碰桌面（宿主上跑得起来）。
+// 串行、并发连接、不发 hello 就断、断线后监听仍在。不启 Edge、不碰桌面（宿主上跑得起来）。
 
 using System;
 using System.Collections.Generic;
@@ -41,8 +55,18 @@ using System.Threading;
 
 internal static class TcpChannel
 {
-    /** 握手阶段等首行的上限：连上却不说话的对端不该占着线程 */
-    private const int HandshakeTimeoutMs = 3000;
+    /**
+     * 握手阶段等首行的上限。
+     *
+     * **1 秒**，不是 3 秒：宿主连一个候选地址（含握手）只等 1.5s（shared/computer-use.ts 的
+     * BRIDGE_TCP_CONNECT_TIMEOUT_MS），它放弃之后这条连接就该立刻被关掉。留 3 秒会让每条
+     * 被放弃的连接多在 guest 里挂 2 秒——真机那串「首次失败」正是这么攒出来的嫌疑之一。
+     */
+    private const int HelloReadTimeoutMs = 1000;
+    /** 监听 backlog：accept 被系统短暂挂住时，宿主的 connect() 也不该被丢 SYN */
+    private const int ListenBacklog = 64;
+    /** 心跳间隔：只用来证明 accept 循环还活着（心跳线程单独跑，绝不占 accept 线程） */
+    private const int HeartbeatIntervalMs = 60000;
     /** 一行 JSON 的上限（回执里内联 base64 截图，但请求里没有二进制；8MB 已经远超需要） */
     private const int MaxLineChars = 8 * 1024 * 1024;
     /** 一条 TCP 命令自己的序号前缀：与宿主的 cmd-000001 分开，免得清理逻辑互相踩 */
@@ -59,6 +83,9 @@ internal static class TcpChannel
     private static TcpListener _listener;
     /** 自测收尾时置 true：Accept 被 Stop() 打断是正常退出，不该记一行「失败」 */
     private static bool _stopping = false;
+    /** 已接入的连接总数 / 当前活跃连接数（只记账与心跳日志用；int 读写本身是原子的） */
+    private static int _accepted = 0;
+    private static int _active = 0;
     private static int _port = 0;
     private static string _token = "";
     /** TCP 命令的全局序号（多连接共用，文件名不许撞） */
@@ -88,14 +115,21 @@ internal static class TcpChannel
         {
             _token = NewToken();
             TcpListener listener = new TcpListener(IPAddress.Any, 0);
-            listener.Start();
+            listener.Start(ListenBacklog);
             _listener = listener;
             _port = ((IPEndPoint)listener.LocalEndpoint).Port;
             Thread accept = new Thread(AcceptLoop);
             accept.IsBackground = true;
             accept.Name = "orbita-tcp-accept";
             accept.Start();
-            Log("TCP 通道已监听：0.0.0.0:" + _port + "，本机 IPv4：" + JoinIPv4(LocalIPv4()));
+            // 心跳是**另一条**线程：accept 线程一行日志都不写（写映射目录的日志也可能被卡住），
+            // 而「循环还活着吗」恰恰是 0.8.1 那个现场唯一没被记录下来的事情。
+            Thread beat = new Thread(HeartbeatLoop);
+            beat.IsBackground = true;
+            beat.Name = "orbita-tcp-heartbeat";
+            beat.Start();
+            Log("TCP 通道已监听：0.0.0.0:" + _port + "，backlog " + ListenBacklog
+                + "，本机 IPv4：" + JoinIPv4(LocalIPv4()));
             return true;
         }
         catch (Exception ex)
@@ -178,15 +212,26 @@ internal static class TcpChannel
 
     // ---- 接受连接 ----
 
+    /**
+     * accept 循环：**只做**「收一条 → 交给一条独立线程 → 立刻回去收下一条」。
+     *
+     * 三条纪律（0.8.1，真机三轮挖出来的结构性缺陷）：
+     *   ① 这里绝不读 hello、绝不执行命令：一条连接活多久都不该影响还能不能接新连接；
+     *   ② 这里绝不写日志：日志写向映射目录，一次慢写就会把 accept 卡住；
+     *   ③ 这里的任何异常都不许终止循环：连线程都开不出来也只关这一条连接。
+     * 心跳线程（HeartbeatLoop）负责证明这个循环还活着，日志里分得清「没到达」和「到了没被 accept」。
+     */
     private static void AcceptLoop()
     {
         TcpListener listener = _listener;
         while (true)
         {
             TcpClient client;
+            int seq;
             try
             {
                 client = listener.AcceptTcpClient();
+                seq = Interlocked.Increment(ref _accepted);
             }
             catch (Exception ex)
             {
@@ -196,42 +241,81 @@ internal static class TcpChannel
                 Thread.Sleep(200);
                 continue;
             }
-            Thread worker = new Thread(delegate() { ServeClient(client); });
-            worker.IsBackground = true;
-            worker.Name = "orbita-tcp-client";
-            worker.Start();
+            Interlocked.Increment(ref _active);
+            try
+            {
+                // 一条连接一条线程：握手与整条命令循环都在里面（绝不回到 accept 线程上做）
+                Thread worker = new Thread(delegate() { ServeClient(client, seq); });
+                worker.IsBackground = true;
+                worker.Name = "orbita-tcp-client";
+                worker.Start();
+            }
+            catch (Exception ex)
+            {
+                // 极端情况下线程都开不出来：只关这一条连接，监听继续（绝不让 accept 循环死掉）
+                Log("TCP 连接线程启动失败：" + ex.Message);
+                Interlocked.Decrement(ref _active);
+                try { client.Close(); } catch { }
+            }
+        }
+    }
+
+    /** 心跳：只证明 accept 循环还活着 + 当前有多少条连接（60s 一行，不占 accept 线程） */
+    private static void HeartbeatLoop()
+    {
+        while (true)
+        {
+            Thread.Sleep(HeartbeatIntervalMs);
+            if (_stopping) return;
+            try
+            {
+                Log("accept 循环心跳：已接入 " + _accepted + " 条，当前活跃 " + _active + " 条");
+            }
+            catch
+            {
+                // 日志写不出去也不能弄死心跳线程
+            }
         }
     }
 
     /**
-     * 一条连接的一生：握手 → 循环收发 → 断开。
-     * 任何异常都只影响这一条连接（finally 里关 socket），桥与文件协议不受影响。
+     * 一条连接的一生：接入 → 握手 → 循环收发 → 断开。
+     *
+     * 全程在这条连接**自己的线程**里（accept 线程不知道这条连接活多久）。三条硬约束：
+     *   · 接入第一件事就记一行「TCP 接入（#N）：<对端>」——现场靠它区分「SYN 没到达」与
+     *     「到了但没被 accept」；
+     *   · hello 读有 **1s** 硬超时：宿主 1.5s 就放弃，这条连接必须随它一起消失，不许挂着；
+     *   · finally 里关掉 reader / stream / socket 并减活跃计数——上一个客户端断开之后，
+     *     监听必须还能接下一个（0.8.1 修的正是这条）。
      */
-    private static void ServeClient(TcpClient client)
+    private static void ServeClient(TcpClient client, int seq)
     {
         string source = "?";
         try
         {
             IPEndPoint remote = client.Client.RemoteEndPoint as IPEndPoint;
-            if (remote != null) source = remote.Address.ToString();
+            if (remote != null) source = remote.Address + ":" + remote.Port;
         }
         catch { }
 
+        string tag = "TCP 接入（#" + seq + "）：" + source;
+        bool handshook = false;
         NetworkStream stream = null;
         StreamReader reader = null;
         try
         {
+            Log(tag);
             // 命令是一行一行的：不让 Nagle 把行攒起来（那会平白加 40ms，正是要消灭的成本）
             client.NoDelay = true;
             stream = client.GetStream();
-            // 握手阶段必须有超时：连上却不发首行的对端不许占着线程
-            client.ReceiveTimeout = HandshakeTimeoutMs;
+            // 握手阶段的硬超时：连上却不发首行的对端不许占着线程
+            client.ReceiveTimeout = HelloReadTimeoutMs;
             reader = new StreamReader(stream, new UTF8Encoding(false));
 
             string first = reader.ReadLine();
             if (first == null)
             {
-                Log("TCP 连接没发首行就断了：" + source);
+                Log(tag + "：还没发首行就断了");
                 return;
             }
             string rejection = HandshakeRejection(first);
@@ -239,9 +323,11 @@ internal static class TcpChannel
             {
                 // 只说原因，**不打令牌真值**（日志会进 PR / 截图）
                 Log("TCP 握手失败（" + source + "）：" + rejection + "，已断开，不接受任何命令");
+                handshook = true; // 已经回过 hello-fail，不必再按「握手超时」解释一次
                 WriteLine(stream, "{\"t\":" + Program.JsonQuote(Program.TcpHelloFailType) + "}");
                 return;
             }
+            handshook = true;
             Log("TCP 握手成功：" + source);
             WriteLine(stream, "{\"t\":" + Program.JsonQuote(Program.TcpHelloOkType) + "}");
             // 之后就是宿主掌控节奏：没有命令时读阻塞在这里（连接断开时 ReadLine 会回 null）。
@@ -276,13 +362,19 @@ internal static class TcpChannel
         }
         catch (Exception ex)
         {
-            Log("TCP 连接异常（" + source + "）：" + ex.Message);
+            // 握手超时（宿主 1.5s 放弃 → 它先关连接，或我们先到 1s）与其它异常分开说，
+            // 因为它们在真机上是完全不同的事：前者是正常的建连竞争，后者才是 bug。
+            if (!handshook)
+                Log(tag + "：" + HelloReadTimeoutMs + "ms 内没等到 hello（" + ex.Message + "），关连接");
+            else
+                Log("TCP 连接异常（" + source + "）：" + ex.Message);
         }
         finally
         {
             try { if (reader != null) reader.Dispose(); } catch { }
             try { if (stream != null) stream.Dispose(); } catch { }
             try { client.Close(); } catch { }
+            Interlocked.Decrement(ref _active);
         }
     }
 
@@ -538,6 +630,75 @@ internal static class TcpChannel
                 Program.CheckTrue(failures, ref cases, "序号跨连接单调（文件名不撞）", MaxSeq() >= 5);
             }
             finally { again.Close(); }
+
+            // ⑧ 并发连接：两条**同时**握手都要成功，且各自能跑一条命令。
+            //    0.8.1 的结构性缺陷就是「一次只能服务一条连接」——真机上第一条连上之后，
+            //    第二条连 SYN-ACK 都收不到。两条同时活着是最直接的回归用例。
+            SelfTestClient first = SelfTestClient.Connect(Port);
+            SelfTestClient second = SelfTestClient.Connect(Port);
+            try
+            {
+                CheckString(failures, ref cases, "并发连接 A 握手成功", Program.TcpHelloOkType, first.Hello(Token));
+                CheckString(failures, ref cases, "并发连接 B 握手成功", Program.TcpHelloOkType, second.Hello(Token));
+                Program.CheckTrue(failures, ref cases, "并发连接 A 能跑命令",
+                    Program.ExtractBool(first.Request("ping", null), "ok"));
+                Program.CheckTrue(failures, ref cases, "并发连接 B 能跑命令",
+                    Program.ExtractBool(second.Request("ping", null), "ok"));
+
+                // ⑨ 已有一条（其实是两条）连接在用时，**第三条**仍要能握手成功：
+                //    明确钉死「不是一次一条」，而不是靠「上一条刚好断了」蒙对。
+                SelfTestClient third = SelfTestClient.Connect(Port);
+                try
+                {
+                    CheckString(failures, ref cases, "前两条都活着时第三条仍能握手", Program.TcpHelloOkType,
+                        third.Hello(Token));
+                    Program.CheckTrue(failures, ref cases, "第三条也能跑命令",
+                        Program.ExtractBool(third.Request("ping", null), "ok"));
+                }
+                finally { third.Close(); }
+            }
+            finally
+            {
+                first.Close();
+                second.Close();
+            }
+
+            // ⑩ 连上之后不发 hello 直接断开（= 宿主 1.5s 放弃那个现场）：监听照旧能接新的
+            SelfTestClient mute = SelfTestClient.Connect(Port);
+            mute.Close();
+            SelfTestClient afterMute = SelfTestClient.Connect(Port);
+            try
+            {
+                CheckString(failures, ref cases, "不发 hello 就断之后，仍能握手", Program.TcpHelloOkType,
+                    afterMute.Hello(Token));
+                Program.CheckTrue(failures, ref cases, "不发 hello 就断之后，仍能跑命令",
+                    Program.ExtractBool(afterMute.Request("ping", null), "ok"));
+            }
+            finally { afterMute.Close(); }
+
+            // ⑪ 连上但一直不说话：服务端必须在 hello 超时（1s）后自己关掉这条连接。
+            //    宿主只等 1.5s——guest 把线程挂在一条被放弃的连接上，正是「监听被占住」的另一半。
+            SelfTestClient silent = SelfTestClient.Connect(Port);
+            try
+            {
+                Stopwatch wait = Stopwatch.StartNew();
+                bool closed = silent.AtEnd();
+                long waitedMs = wait.ElapsedMilliseconds;
+                Program.CheckTrue(failures, ref cases, "不发 hello 的连接会被服务端关掉", closed);
+                Program.CheckTrue(failures, ref cases,
+                    "关掉得够快（hello 超时 1s，实测 " + waitedMs + "ms）", waitedMs >= 700 && waitedMs <= 3500);
+            }
+            finally { silent.Close(); }
+
+            // ⑫ 这一串之后监听仍在：再来一条能握手、能跑命令
+            SelfTestClient last = SelfTestClient.Connect(Port);
+            try
+            {
+                CheckString(failures, ref cases, "以上全部之后监听仍然健康", Program.TcpHelloOkType, last.Hello(Token));
+                Program.CheckTrue(failures, ref cases, "以上全部之后仍能跑命令",
+                    Program.ExtractBool(last.Request("ping", null), "ok"));
+            }
+            finally { last.Close(); }
 
             // ⑦ 回退通道还在：文件协议的一条 ping 照旧落盘、照旧删 req
             string req = Path.Combine(Program.CmdDir, "cmd-000001" + Program.ReqSuffix);
