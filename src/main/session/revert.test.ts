@@ -333,13 +333,21 @@ describe("planUndo / executeUndo", () => {
       { path: join(lab, "a.ts"), before: "v0\n", after: "v1\n", added: 1, removed: 1 },
       { path: blocked, before: "old\n", after: "agent\n", added: 1, removed: 1 },
     ]);
-    const outcomes = await executeUndo({ store, host: fakeHost([]) }, ID, "t1");
+    const commands: AgentCommand[] = [];
+    const outcomes = await executeUndo({ store, host: fakeHost(commands) }, ID, "t1");
     const byPath = new Map(outcomes.map((entry) => [entry.path, entry]));
     assert.equal(byPath.get(join(lab, "a.ts"))?.outcome, "restored");
     assert.equal(byPath.get(blocked)?.outcome, "skipped");
     // 原因不能空：它就是用户唯一能看到的那句话（带系统错误码，便于去搜）
     const reason = byPath.get(blocked)?.reason ?? "";
     assert.match(reason, /E[A-Z]+/);
+    // 给 pi 的告知必须带失败项：模型上下文里不能是「已撤除」（否则它会谎报完成）
+    const notice = noticeOf(commands[0]);
+    assert.ok(notice.includes(blocked), "通知里要点名没还原的文件");
+    assert.ok(notice.includes(reason), "通知里要带失败原因");
+    assert.ok(notice.includes("1 个文件未还原"));
+    assert.ok(notice.includes(join(lab, "a.ts")), "成功的文件照常列在通知里");
+    assert.ok(!notice.includes(`未还原清单`), "只有一个失败文件时不重复贴清单");
     // 落盘后读回（renderer 读的是 readLog 的这条记录，不是 IPC 返回值）
     const detail = await store.load(ID);
     const undo = detail?.transcript.find((record) => record.role === "undo");
@@ -351,15 +359,63 @@ describe("planUndo / executeUndo", () => {
     assert.equal((await stat(blocked)).isDirectory(), true);
   });
 
-  test("撤销通知的正文点名文件与「不再在盘上」", () => {
-    const notice = undoNotice({
+  test("撤销通知的正文点名文件与「不再在盘上」（全成功文案不变）", () => {
+    const turn: FileTurnRecord = {
       role: "file-turn",
       id: "t",
       timestamp: 1,
       changes: [{ path: "/w/a.ts", before: { kind: "absent" }, after: { kind: "text", blob: "x" }, added: 1, removed: 0 }],
-    });
+    };
+    const notice = undoNotice(turn, [{ path: "/w/a.ts", outcome: "deleted" }]);
+    // 逐字一致：模型侧的既有措辞不动，只有失败时才追加说明
+    assert.equal(
+      notice,
+      "The user undid the agent's changes to the following files from an earlier round, " +
+        "restoring them to their state before that round: /w/a.ts. " +
+        "Those changes are no longer on disk — do not assume they are still present.",
+    );
+  });
+
+  test("撤销通知：部分失败写明数量、第一个失败文件与原因", () => {
+    const turn: FileTurnRecord = {
+      role: "file-turn",
+      id: "t",
+      timestamp: 1,
+      changes: [
+        { path: "/w/a.ts", before: { kind: "text", blob: "x" }, after: { kind: "text", blob: "y" }, added: 1, removed: 1 },
+        { path: "/w/b.ts", before: { kind: "text", blob: "x" }, after: { kind: "text", blob: "y" }, added: 1, removed: 1 },
+        { path: "/w/c.ts", before: { kind: "text", blob: "x" }, after: { kind: "text", blob: "y" }, added: 1, removed: 1 },
+      ],
+    };
+    const notice = undoNotice(turn, [
+      { path: "/w/a.ts", outcome: "restored" },
+      { path: "/w/b.ts", outcome: "skipped", reason: "文件被占用或没有写权限（EBUSY）" },
+      { path: "/w/c.ts", outcome: "skipped", reason: "快照内容已丢失" },
+    ]);
+    assert.ok(notice.includes("2 个文件未还原"));
+    assert.ok(notice.includes("/w/b.ts"));
+    assert.ok(notice.includes("EBUSY"));
+    assert.ok(notice.includes("未还原清单：/w/b.ts, /w/c.ts"));
+    assert.ok(notice.includes("/w/a.ts"), "还原成功的文件仍然点名");
+    assert.ok(
+      notice.includes("restoring them to their state before that round: /w/a.ts. Those changes are no longer on disk"),
+      "「不在盘上」只针对成功的文件",
+    );
+  });
+
+  test("撤销通知：一个都没还原时不写「不在盘上」", () => {
+    const turn: FileTurnRecord = {
+      role: "file-turn",
+      id: "t",
+      timestamp: 1,
+      changes: [{ path: "/w/a.ts", before: { kind: "unrecoverable" }, after: { kind: "text", blob: "y" }, added: 1, removed: 1 }],
+    };
+    const notice = undoNotice(turn, [
+      { path: "/w/a.ts", outcome: "skipped", reason: "没有快照（文件过大或不是文本）" },
+    ]);
+    assert.ok(notice.includes("1 个文件未还原"));
     assert.ok(notice.includes("/w/a.ts"));
-    assert.ok(notice.includes("no longer on disk"));
+    assert.ok(!notice.includes("no longer on disk"), "全失败时不能说文件已经回退");
   });
 
   test("撤销记录落盘后：readLog 里轮尾账还在（对话不动），undo 标记在场", async () => {
