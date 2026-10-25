@@ -61,8 +61,12 @@ internal static class WorkerHost
     private const int KillWaitMs = 3000;
     /** 汇总 cdp-status 时问单个 worker 的上限（卡住的 worker 不该把汇总拖到天荒地老） */
     private const int AggregateStatusTimeoutMs = 3000;
-    /** 把 worker 的截图搬回主 cmd\ 目录的重试窗口（映射文件夹同步有抖动） */
-    private const int ShotCopyWaitMs = 2000;
+    /**
+     * 把 worker 的截图搬回主 cmd\\ 目录的重试窗口。**只有回执里点了名（cdp-shot）才会走到这里**，
+     * 而且 worker 是先写 jpg 再写 resp，正常一次就命中；窗口只给「映射目录的元数据还没刷新」
+     * 那种回落现场留余量。
+     */
+private const int ShotCopyWaitMs = 2000;
 
     /**
      * 一条 worker 命令的放弃线（杀线）。
@@ -198,10 +202,8 @@ internal static class WorkerHost
             long visibleMs = Program.PropagateFromMtime(respMtimeUtc, DateTime.UtcNow, out visibleNote);
             visibleMs -= clock.ElapsedMilliseconds - visibleStartMs; // 去掉上面这次 stat 自己的耗时（负数不算）
             if (visibleMs < 0) visibleMs = 0;
-            // 顺序与桥自己的协议一致：**截图先落盘、resp 后落盘**
-            long copyStartMs = clock.ElapsedMilliseconds;
-            CopyShotBack(worker.CmdDir, workerBase);
-            long copyMs = clock.ElapsedMilliseconds - copyStartMs;
+            // 顺序与桥自己的协议一致：**截图先落盘、resp 后落盘**；有没有图看 resp（见 CopySiblingFileIfAny）
+            long copyMs = CopySiblingFileIfAny(worker.CmdDir, Program.CmdDir, respText, workerBase);
             long writeStartMs = clock.ElapsedMilliseconds;
             WriteHostResp(hostBaseName, respText);
             long writeMs = clock.ElapsedMilliseconds - writeStartMs;
@@ -570,11 +572,43 @@ internal static class WorkerHost
         return TryReadText(path);
     }
 
-    /** cdp-shot 的 JPEG 从 worker 目录搬到主 cmd\ 目录（同名；resp 里引用的名字因此不用改） */
-    private static void CopyShotBack(string workerCmdDir, string workerBase)
+    /**
+     * 回执里点了名的兄弟文件（cdp-shot 的 jpg）搬回主 cmd 目录；**没有就一步都不走**。
+     *
+     * 判据是 **resp 字段**，不是命令名：
+     *   * 协议里「这条命令有没有一张要搬的图」的唯一权威就是回执的 `jpeg` 字段；
+     *   * 命令名白名单会在下一个产文件的命令上重新踩一遍这个坑；
+     *   * 反过来「先探文件在不在」也不行——映射目录上探一次就可能几秒，而这正是要省的。
+     * 以后真有命令产出别的兄弟文件，在这里按字段名登记，而不是放宽成无条件搬。
+     *
+     * 返回搬图耗时（日志里的「搬图 Xms」；跳过时是 0，也照打——下次一眼能看出有没有白等）。
+     *
+     * 真机 2026-10-25：这里原来对**每条**命令都无条件调 CopyShotBack，而它在等一张只有
+     * cdp-shot 才会产生的 jpg，于是等满 ShotCopyWaitMs：
+     *   worker 回执 cdp-start：等 3290ms + 搬图 2057ms + 写宿主回执 3ms
+     *   worker 回执 cdp-nav  ：等 203ms  + 搬图 2102ms + 写宿主回执 3ms
+     * cdp-start / cdp-nav / cdp-status 全部白付 2 秒——那 2.6 秒的主项就是它。
+     */
+    internal static long CopySiblingFileIfAny(string workerCmdDir, string hostCmdDir, string respText, string workerBase)
+    {
+        string jpegName = Program.ExtractJsonString(respText, "jpeg");
+        if (jpegName == null || jpegName.Length == 0) return 0; // 这条命令没有兄弟文件
+        Stopwatch clock = Stopwatch.StartNew();
+        CopyShotBack(workerCmdDir, hostCmdDir, workerBase);
+        return clock.ElapsedMilliseconds;
+    }
+
+    /**
+     * cdp-shot 的 JPEG 从 worker 目录搬到主 cmd\ 目录（**同名**：resp 里引用的名字因此不用改）。
+     *
+     * 目标名仍按我们自己的 workerBase 拼，不采信 resp 里的字符串（那是 guest 自己写的内容；
+     * 路径只能由我们这边的序号决定）。窗口只服务「图已经在、元数据还没刷新」这种现场
+     *（命令目录回落到映射目录时就是那样），正常一次就命中：worker 是先写 jpg 再写 resp 的。
+     */
+    internal static void CopyShotBack(string workerCmdDir, string hostCmdDir, string workerBase)
     {
         string src = Path.Combine(workerCmdDir, workerBase + ShotSuffix);
-        string dst = Path.Combine(Program.CmdDir, workerBase + ShotSuffix);
+        string dst = Path.Combine(hostCmdDir, workerBase + ShotSuffix);
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(ShotCopyWaitMs);
         while (DateTime.UtcNow < deadline)
         {
@@ -1209,6 +1243,42 @@ internal static class WorkerHost
                     try { alt.Dispose(); } catch { }
                 }
             }
+
+            // ⑧ 搬图只看 resp：不产图的命令一步都不走。
+            //
+            // 真机 2026-10-25：这里原来对每条命令都无条件等一张只有 cdp-shot 才会产生的 jpg，
+            // 于是 cdp-start / cdp-nav / cdp-status 全部白付 2 秒（日志里「搬图 2057ms」）。
+            // 这两条断言钉的是「判据是 resp 字段」与「命中就立刻 copy、名字不变」。
+            string sibWorkerDir = Path.Combine(tmp, "sib-worker");
+            string sibHostDir = Path.Combine(tmp, "sib-host");
+            Directory.CreateDirectory(sibWorkerDir);
+            Directory.CreateDirectory(sibHostDir);
+            string noJpegResp = "{\"ok\":true,\"session\":\"st\",\"url\":\"https://example.com/\"}";
+            long idleCopyMs = CopySiblingFileIfAny(sibWorkerDir, sibHostDir, noJpegResp, "st-cmd-000009");
+            Program.CheckTrue(failures, ref cases, "⑧ 回执里没有 jpeg：搬图 0ms（不再白等 2s 窗口）",
+                idleCopyMs < 50);
+            Program.CheckTrue(failures, ref cases, "⑧ 回执里没有 jpeg：宿主目录里什么都没多出来",
+                Directory.GetFiles(sibHostDir).Length == 0);
+            Program.CheckTrue(failures, ref cases, "⑧ 空 jpeg 字段 / 缺 resp 也算没有图",
+                CopySiblingFileIfAny(sibWorkerDir, sibHostDir, "{\"ok\":true,\"jpeg\":\"\"}", "st-cmd-000009") == 0
+                && CopySiblingFileIfAny(sibWorkerDir, sibHostDir, null, "st-cmd-000009") == 0
+                && Directory.GetFiles(sibHostDir).Length == 0);
+
+            byte[] jpegBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0xFF, 0xD9 };
+            string shotBase = "st-cmd-000010";
+            File.WriteAllBytes(Path.Combine(sibWorkerDir, shotBase + ShotSuffix), jpegBytes);
+            string shotResp = "{\"ok\":true,\"jpeg\":\"" + shotBase + ".jpg\",\"width\":640}";
+            long shotCopyMs = CopySiblingFileIfAny(sibWorkerDir, sibHostDir, shotResp, shotBase);
+            string shotDst = Path.Combine(sibHostDir, shotBase + ShotSuffix);
+            byte[] copied = File.Exists(shotDst) ? File.ReadAllBytes(shotDst) : new byte[0];
+            bool sameBytes = copied.Length == jpegBytes.Length;
+            for (int i = 0; sameBytes && i < jpegBytes.Length; i++)
+            {
+                if (copied[i] != jpegBytes[i]) sameBytes = false;
+            }
+            Program.CheckTrue(failures, ref cases, "⑧ cdp-shot 的 jpg 仍被搬回宿主目录（名字不变、内容一致）",
+                File.Exists(shotDst) && sameBytes);
+            Program.CheckTrue(failures, ref cases, "⑧ 图已经在时一次就命中（不等窗口）", shotCopyMs < 500);
         }
         catch (Exception ex)
         {
