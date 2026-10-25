@@ -14,6 +14,7 @@ import {
   PANEL_CAPSULE_INSET,
   LAYER_PAD,
   RAIL_W,
+  SESSION_GAP,
   WIN_CTL_W,
   conversationColumn,
   leftCapsuleX,
@@ -84,6 +85,19 @@ export function Toolbar(props: {
     // 只挂一次：胶囊的三个格都是常驻 / 受控替换，量的是同一颗胶囊的内容
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // 右栏开关胶囊：右缘与卡片右缘齐（Windows 时三键已上行，不再左让）
+  const toggleRight = props.windowWidth - LAYER_PAD;
+  const toggleLeft = toggleRight - RAIL_W;
+  // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
+  // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
+  const panelW =
+    (props.narrow ? RIGHT_PANEL_WIDTH_DEFAULT : props.panelWidth) - 2 * PANEL_CAPSULE_INSET;
+  // 窄窗覆盖层不占布局宽（conversationColumn 不扣它），但它的胶囊仍在工具栏右端。
+  // 会话胶囊必须停在这颗胶囊左边，否则侧栏一收起（<960）胶囊就突然长到 476、压住右栏胶囊
+  // （2026-10-22 验收：940/900/820 下重叠 102/122/162px）
+  const narrowPanelLeft =
+    props.narrow && props.panelOpen ? toggleLeft - PANEL_CAPSULE_INSET - panelW : null;
+  const narrowLimit = narrowPanelLeft === null ? null : narrowPanelLeft - SESSION_GAP;
   const col = conversationColumn({
     windowWidth: props.windowWidth,
     sidebarCollapsed: props.sidebarCollapsed,
@@ -100,21 +114,11 @@ export function Toolbar(props: {
   const sess = sessionCapsule({
     windowWidth: props.windowWidth,
     colLeft: col.left,
-    colRight: col.right,
+    colRight: narrowLimit === null ? col.right : Math.min(col.right, narrowLimit),
     leftCapRight: left + leftW,
-    rightLimit: limit,
+    rightLimit: narrowLimit === null ? limit : Math.min(limit, narrowLimit),
   });
-  // 右栏开关胶囊：右缘与卡片右缘齐（Windows 让过自绘窗口键）
-  // 右栏开关胶囊：右缘与卡片右缘齐（Windows 时三键已上行，不再左让）
-  const toggleRight = props.windowWidth - LAYER_PAD;
-  const toggleLeft = toggleRight - RAIL_W;
-  // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
-  // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
-  const panelW =
-    (props.narrow ? RIGHT_PANEL_WIDTH_DEFAULT : props.panelWidth) - 2 * PANEL_CAPSULE_INSET;
-  const panelLeft = props.narrow
-    ? toggleLeft - PANEL_CAPSULE_INSET - panelW
-    : col.right + PANEL_CAPSULE_INSET;
+  const panelLeft = narrowPanelLeft ?? col.right + PANEL_CAPSULE_INSET;
 
   return (
     <div className="titlebar toolbar" data-platform={props.platform}>

@@ -90,9 +90,8 @@ function ImageLayer(props: { images: readonly Extract<ComposerMaterial, { kind: 
   );
 }
 
-/** 模型看不了图的一句话提示：跟在截图行下面，图标 + 文字（颜色是第二信号）。
- *  黑洞排布（BlackholeBox）也用它——它是材料的状态，跟排布无关 */
-export function NoVisionHint() {
+/** 模型看不了图的一句话提示：跟在截图行下面，图标 + 文字（颜色是第二信号） */
+function NoVisionHint() {
   const t = useT();
   return (
     <div
@@ -149,11 +148,8 @@ function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "f
  * 原生 title：原生要一秒多才出，且在胶囊行上时隐时现不可靠（同 IconButton 弃用
  * title 的理由）。路径是机器事实，mono 字体；长路径换行不截断——看全正是它的存在
  * 理由。键盘路径不给：胶囊本身不是焦点停点，与原生 title 时代一致。
- *
- * 黑洞排布也用这颗胶囊（输入框里带移除键、已发送消息的快照里只读——不给 onRemove），
- * 所以吃的是名字 / 路径 / 种类，不是整条材料。
  */
-export function FileChip(props: {
+function FileChip(props: {
   name: string;
   path: string;
   kind: "file" | "dir";
@@ -236,7 +232,7 @@ export function FileChip(props: {
  * 限高内部滚动。「还有 N 条 / 收起」跨两列占整行。行内仍是 D/E 的规矩：正文不预截
  * 交给 CSS 省略、注脚贴右缘、动作键绝对定位不占位。
  */
-export function QuoteCard(props: {
+function QuoteCard(props: {
   quotes: readonly Extract<ComposerMaterial, { kind: "quote" }>[];
   jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
 }) {

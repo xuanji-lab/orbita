@@ -101,3 +101,18 @@ describe("read_task（B-1）", () => {
     await assert.rejects(pending, /No task matches/);
   });
 });
+
+describe("read_task 进系统提示（pi 只列带 promptSnippet 的工具）", () => {
+  test("有 snippet：缺了它工具不进 Available tools，模型想不起来用", () => {
+    const { tool } = setup();
+    assert.ok((tool?.promptSnippet ?? "").trim() !== "");
+  });
+  test("guidelines 讲清 RAG / 记忆 / chats 不是转录，并教模型读 <referenced_task> 的 id", () => {
+    const { tool } = setup();
+    const text = (tool?.promptGuidelines ?? []).join("\n");
+    assert.match(text, /read_task/);
+    assert.match(text, /RAG|memory/i);
+    assert.match(text, /source "chats"/);
+    assert.match(text, /<referenced_task id=/);
+  });
+});

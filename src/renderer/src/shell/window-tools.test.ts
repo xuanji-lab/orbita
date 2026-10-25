@@ -303,3 +303,51 @@ test("会话胶囊窄时逐级让位、不重叠：中栏可缩、两侧保内�
   assert.match(css, /\.cap-title \{[^}]*min-width:\s*0/s, "flex 子项不设 min-width:0 省略号不生效");
   assert.match(css, /@container \(max-width: 380px\) \{\s*\.cap-sess \.cap-sid \{\s*display:\s*none/, "第一档：短 id 先藏");
 });
+
+test("窄窗右栏覆盖层从工具栏下面开始——不压住窗口三键与会话胶囊", () => {
+  const css = readSource(join(RENDERER_SRC, "styles.css"));
+  const slot = readSource(join(RENDERER_SRC, "shell/RightPanel.tsx"));
+  // 工具栏高度只有一份真源：.layer 的顶部留白与覆盖层的 top 都从这里取。
+  // 工具栏是绝对定位的（住在 .layer 里、top:0），覆盖层若从 .layer 顶边算 12px
+  // 就会压在它上面（2026-10-22 验收：900px 窗口下最小化 / 最大化被终端面板盖死）。
+  assert.match(css, /:root \{\s*--chrome-height:\s*var\(--titlebar-row\)/, "macOS 单行：--chrome-height = 胶囊行");
+  assert.match(
+    css,
+    /:root\[data-platform="win32"\],\s*:root\[data-platform="linux"\]\s*\{\s*--chrome-height:\s*calc\(var\(--titlebar-brand-row\) \+ var\(--titlebar-row\)\)/,
+    "Windows / Linux 两行：加 brand row",
+  );
+  assert.match(css, /\.layer \{[^}]*padding:\s*var\(--chrome-height\) var\(--space-3\) var\(--space-3\)/s, ".layer 顶部留白同源");
+  assert.match(slot, /top:\s*"calc\(var\(--chrome-height\) \+ var\(--space-3\)\)"/, "覆盖层 top 要让开工具栏");
+  assert.doesNotMatch(slot, /top:\s*"var\(--space-3\)"/, "旧值会盖住工具栏");
+});
+
+test("窄窗右栏胶囊不与会话胶囊重叠：会话胶囊的右限要让开它", () => {
+  const toolbar = readSource(join(RENDERER_SRC, "shell/Toolbar.tsx"));
+  // 窄窗覆盖层不占布局宽（conversationColumn 不扣它），但胶囊仍画在工具栏右端。
+  // 侧栏一收起（<960）会话胶囊会突然长到 476，压住右栏胶囊（2026-10-22 验收实测）。
+  assert.match(toolbar, /const narrowPanelLeft\s*=/, "先算窄窗右栏胶囊左缘");
+  assert.match(
+    toolbar,
+    /colRight:\s*narrowLimit === null \? col\.right : Math\.min\(col\.right, narrowLimit\)/,
+    "对话列右缘要让开右栏胶囊",
+  );
+  assert.match(
+    toolbar,
+    /rightLimit:\s*narrowLimit === null \? limit : Math\.min\(limit, narrowLimit\)/,
+    "会话胶囊右限要让开右栏胶囊",
+  );
+  assert.doesNotMatch(toolbar, /panelLeft = props\.narrow\s*\?/, "panelLeft 不再单算一套窄窗分支");
+});
+
+test("会话胶囊容器显式铺满 + 标题钉中栏：设置页只有标题一个孩子也不塌、居中", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  // container-type: inline-size 下元素宽不随内容撑开，没有显式宽就塌成 0
+  assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size[^}]*width:\s*100%/s);
+  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*grid-column:\s*2/s);
+});
+
+test("会话胶囊豁免拖拽：拖拽区收不到悬停，铅笔 / 复制键只在指针压到隐形按钮上时才显形", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  assert.match(css, /\.cap-sess \{[^}]*-webkit-app-region:\s*no-drag/s, "整颗会话胶囊 no-drag，:hover 才会在标题 / 短 id 上成立");
+  assert.match(css, /\.toolbar-capsule:hover \.cap-hov,\s*\.toolbar-capsule:focus-within \.cap-hov \{\s*visibility:\s*visible/, "键盘焦点进胶囊时也显形");
+});

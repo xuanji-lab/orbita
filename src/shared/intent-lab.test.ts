@@ -15,7 +15,7 @@ import {
   intentChannelUnavailable,
   type IntentHealth,
 } from "./intent-lab.ts";
-import { CLOSING_SCAN_PROMPT } from "./closing-scan.ts";
+import { LEGACY_CLOSING_SCAN_PROMPT as CLOSING_SCAN_PROMPT } from "./wrapup-scan.ts";
 import type { SessionRecord } from "./session.ts";
 
 const HEALTH_7 = {

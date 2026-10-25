@@ -37,8 +37,6 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
-import { MaterialBoxContext } from "./shell/BlackholeBox.tsx";
-import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -246,6 +244,18 @@ export function App() {
         ? null
         : { mode: "browse" as const, workspaceId: wsBrowse }
       : { mode: "focus" as const, workspaceId: focus.status.run.workspaceId };
+  /**
+   * 左栏双击打开请求只属于当时那个专注 / 浏览工作区：模式结束或换工作区后作废。
+   *
+   * 请求是一次性的，但面板收下后 token 仍留在 App——面板关掉再打开（FilesPanel
+   * 重挂、consumed 的 ref 清空）会再消费一次；那时该工作区的根已经不在 tree.roots 里，
+   * 于是报一句「<文件> 不在这个面板能看到的文件夹里」（2026-10-22 验收 #259 时实测）。
+   * 同一个工作区内重开面板不受影响（workspaceId 没变）。
+   */
+  const focusFilesWorkspaceId = focusFilesView?.workspaceId ?? null;
+  useEffect(() => {
+    setFileOpenRequest(null);
+  }, [focusFilesWorkspaceId]);
   /** 到点那一拍要响的事：提示音（设置可关）、窗口不在前台时发系统通知、收起的
    * 侧栏展开（星云要在左下角说话——原型待定 10 的默认做法）。依赖只盯 kind：
    * done 只发生一次，延长不会重响。 */
@@ -969,11 +979,7 @@ export function App() {
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
-  // 实验功能逐项开关（会话生命周期挂在其中）：关着时右栏底部的遗留事项
-  // 入口不渲染；showCarryovers 的本地状态可能残留（开着面板去设置里关了开关），
-  // 在传给 Sidebar 的路上一并压掉——开关关了，这个子视图就不该再出得来
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  const sessionLifecycle = experimentalFeatures["session-lifecycle"] === true;
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -997,7 +1003,7 @@ export function App() {
         shortId={capsuleShortId}
         onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
         completion={
-          sessionLifecycle && mainOpenId !== ""
+          mainOpenId !== ""
             ? {
                 state: mainOpenMeta?.completion ?? "open",
                 closing: session.closingScan,
@@ -1022,17 +1028,13 @@ export function App() {
     );
 
   const railEntries: RailEntry[] = [
-    // 遗留事项入口（收尾扫描的下游）挂会话生命周期开关；Archived / Browser / Settings 不挂
-    ...(sessionLifecycle
-      ? [
-          {
-            icon: "list-todo" as const,
-            label: t.app.carryoversEntry(openCarryoverCount),
-            lit: railSubviewLit(subviewState, "carryovers"),
-            onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-          },
-        ]
-      : []),
+    // 遗留事项入口（收尾扫描的下游）
+    {
+      icon: "list-todo" as const,
+      label: t.app.carryoversEntry(openCarryoverCount),
+      lit: railSubviewLit(subviewState, "carryovers"),
+      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
+    },
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
@@ -1061,15 +1063,6 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
-    {/* 输入框材料盒：开关 × 主题（只在浅 / 黛 / 玄）× 黑洞与俄罗斯方块的互斥优先级，
-        在这里用 materialBoxStyle 算一次，输入框与转录都读它 */}
-    <MaterialBoxContext.Provider
-      value={materialBoxStyle(
-        experimentalFeatures["composer-blackhole"] === true,
-        experimentalFeatures["composer-tetris"] === true,
-        resolvedTheme,
-      )}
-    >
     <CitationOpenContext.Provider value={openCitation}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
@@ -1096,7 +1089,7 @@ export function App() {
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
           showArchived={showArchived}
-          showCarryovers={showCarryovers && sessionLifecycle}
+          showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
@@ -1304,7 +1297,6 @@ export function App() {
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
-    </MaterialBoxContext.Provider>
     </PastedTextCollapseContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>

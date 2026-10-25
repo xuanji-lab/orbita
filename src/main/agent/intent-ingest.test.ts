@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { IntentIngestTracker, type IngestDeps, type IngestHttp } from "./intent-ingest.ts";
-import { CLOSING_SCAN_PROMPT } from "../../shared/closing-scan.ts";
+import { LEGACY_CLOSING_SCAN_PROMPT as CLOSING_SCAN_PROMPT } from "../../shared/wrapup-scan.ts";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 
