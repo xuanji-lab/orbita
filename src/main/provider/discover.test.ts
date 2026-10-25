@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { parseModelsBody, resolveModelsUrl, discoverModels } from "./discover.ts";
+import { parseModelsBody, resolveModelsUrl, discoverModels, modelsAuthHeaders } from "./discover.ts";
 
 /**
  * 两组用例锁的都是**实测出来的真实行为**（2026-08-25 探测智谱 Coding Plan）：
@@ -128,5 +128,27 @@ describe("discoverModels 的鉴权头口径（Claude OAuth 令牌不是 api key�
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("Gemini 原生协议（google-generative-ai）", () => {
+  test("清单地址一次要够一页；鉴权只带 x-goog-api-key——带 Bearer 会被当 OAuth 令牌拒掉", () => {
+    assert.equal(
+      resolveModelsUrl("https://generativelanguage.googleapis.com/v1beta", "google-generative-ai"),
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+    );
+    assert.deepEqual(modelsAuthHeaders("google-generative-ai", "AIza-k"), { "x-goog-api-key": "AIza-k" });
+  });
+
+  test("清单条目只有 name: models/<id>：去前缀当 id", () => {
+    const result = parseModelsBody(
+      { models: [{ name: "models/gemini-2.5-pro" }, { name: "models/gemini-2.5-flash" }] },
+      true,
+    );
+    assert.deepEqual(result.models, ["gemini-2.5-pro", "gemini-2.5-flash"]);
+  });
+
+  test("其它协议的鉴权头不变", () => {
+    assert.equal(modelsAuthHeaders("openai-responses", "sk-x").Authorization, "Bearer sk-x");
   });
 });

@@ -27,7 +27,7 @@ import { ToolbarPanelSlotContext } from "../../shell/Toolbar";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
-import { ModelPickerMenu } from "../settings/model-menu";
+import { modelChipParts, ModelPickerMenu } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
 import { useParentChannels } from "./useChannelMessages";
 import {
@@ -468,11 +468,21 @@ function SubSessionControls(props: {
           starred={props.starredModels}
           onToggleStar={props.onToggleStarModel}
           onSelect={chooseModel}
-          trigger={({ open, toggle }) => (
-            <Chip active={open} chevron title={t.chat.modelTip} onClick={toggle}>
-              {view.model?.modelId ?? t.chat.noModel}
-            </Chip>
-          )}
+          trigger={({ open, toggle }) => {
+            // 与输入卡的模型芯片同一口径：头像 + 显示名，服务商与 id 进悬停提示
+            const parts = view.model === null ? null : modelChipParts(view.usable, view.catalog, view.model);
+            return (
+              <Chip
+                active={open}
+                chevron
+                title={parts === null ? t.chat.modelTip : `${parts.name} · ${parts.detail}\n${t.chat.modelTip}`}
+                onClick={toggle}
+                leading={parts?.avatar}
+              >
+                {parts?.name ?? t.chat.noModel}
+              </Chip>
+            );
+          }}
         />
       )}
       {error !== null && (

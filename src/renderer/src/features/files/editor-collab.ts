@@ -295,10 +295,15 @@ export function clampCursorLine(line: number, lineCount: number): number {
 
 /**
  * 回合落定时怎么处理盘上的新内容。四种结局的取舍都写在这里，编辑器只执行：
- * - nothing：盘上还是基线（这一轮没改到它，或改完又改回去了）
+ * - nothing：没有交错要处理（盘上还是基线，也没有「agent 写过 + 用户手里有字」）
  * - wait：用户还没裁决上一处冲突——不替他改状态，冲突条留着
- * - keep：编辑器有未保存改动 → 只挂冲突条，**一个字都不写**（用户的字优先）
- * - reload：编辑器干净 → 静默重载到盘上那一份
+ * - keep：只挂冲突条，**一个字都不写**（用户的字优先，由用户选写回还是丢弃）
+ * - reload：编辑器干净且用户本轮没动过 → 静默重载到盘上那一份
+ *
+ * 为什么 keep 不能只看「盘上变没变」：agent 用 `write` 把它读到的原样写回去时，盘上内容
+ * 与基线**一模一样**（用户的字只在内存里）。只看 diskChanged 会走 nothing，随后被暂停
+ * 的自动保存补存用户的版本——agent 的那一次写就被无声取代了。所以「本轮 agent 碰过这个
+ * 文件 + 用户手里有字」本身就是一种冲突：**给用户看，让他选**。
  */
 export type SyncDecision = "nothing" | "wait" | "keep" | "reload";
 
@@ -312,11 +317,25 @@ export function syncDecision(input: {
    * 的——只看 dirty 会静默重载，把用户的字冲掉。动过就按「不覆盖」处理。
    */
   editedThisTurn: boolean;
+  /**
+   * 本轮 agent 的 `write` / `edit` 碰过这个文件（正在写或写完了）。它让「盘上没变」也
+   * 构不成「没发生什么事」：agent 写的那一版可能恰好与基线相同。
+   */
+  agentTouched: boolean;
 }): SyncDecision {
-  if (!input.diskChanged) return "nothing";
+  const userHoldsText = input.dirty || input.editedThisTurn;
+  if (!input.diskChanged && !(input.agentTouched && userHoldsText)) return "nothing";
   if (input.conflicted) return "wait";
-  return input.dirty || input.editedThisTurn ? "keep" : "reload";
+  if (userHoldsText) return "keep";
+  return "reload";
 }
+
+/**
+ * 冲突条上那句话说的是哪种冲突：
+ * - disk：盘上内容与编辑器基线不同（外部改过 / agent 写了别的版本）
+ * - agent：agent 本轮写过这个文件，用户手里还有没落盘的字——盘上可能一字未变
+ */
+export type ConflictKind = "disk" | "agent";
 
 /**
  * 一次撤销要 dispatch 的多处改动：**按位置排序并丢掉重叠的那些**。

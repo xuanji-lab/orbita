@@ -1,0 +1,71 @@
+Model avatars in this directory identify the model they belong to. They are cropped or lightly
+edited from the model makers' own published artwork; the artwork and marks remain the property
+of their respective owners and are used here only to identify each model. Orbita claims no rights
+in them. If you own one of these images and want it removed or replaced, open an issue.
+
+Rules for this directory: design-system/readme.md, "Iconography" (model avatars).
+Each entry: file — models it is used for — source — what was changed. Retrieved 2026-10-24/25.
+
+kimi-k3.1.png — kimi-k3.1-pro, k3.1-pro (+ highspeed)
+  Source: Moonshot AI, Kimi K3.1 launch blog header artwork (kimi.com blog).
+  Changes: blog header and its calligraphy layer composited, cropped to a square.
+
+kimi-k3.png — kimi-k3, k3, k3-256k
+  Source: Kimi WeChat Official Account post cover, "Kimi K3：智能的新前沿".
+  Changes: cropped to the magnetic field lines, surrounding elements removed.
+
+claude-fable.svg / claude-opus.svg / claude-sonnet.svg / claude-haiku.svg — claude-<line>-*
+  Source: Anthropic, platform.claude.com documentation illustrations
+  (/images/dashboard-discovery/head.svg, cursor.svg, bubble.svg, bird.svg).
+  Changes: background colour added inside the SVG.
+
+glm-5.3.png — glm-5.3
+  Source: Zhipu AI WeChat Official Account post cover, "GLM-5.3".
+  Changes: cropped to the numeric triangle.
+
+glm-5.3-flash.png — glm-5.3-flash
+  Source: Zhipu AI WeChat Official Account post cover, "GLM-5.3-Flash".
+  Changes: cropped to the light cone.
+
+deepseek-v4.1-flash.png — deepseek-v4.1-flash, deepseek-flash
+  Source: DeepSeek WeChat Official Account post cover, "DeepSeek V4.1 Flash".
+  Changes: cover text removed; the whale mark enlarged and placed inside the gold ring.
+
+deepseek-v4-pro.png — deepseek-v4-pro
+  Source: DeepSeek WeChat Official Account post cover, "DeepSeek-V4-Pro 正式版上线".
+  Changes: the wave below the title cropped; the same whale mark placed in the centre.
+
+step-5-preview.png — step-5-preview, step-5-preview-free
+  Source: StepFun WeChat Official Account post cover, "阶跃 Step 5 Preview 权重开放，技术博客同步上线".
+  Changes: cropped to the large "5".
+
+mimo-v2.6-pro.png — mimo-v2.6-pro (+ ultraspeed)
+  Source: Xiaomi MiMo V2.6 banner, platform.xiaomimimo.com.
+  Changes: the "v2.6" lettering on the left wing removed; cropped to the butterfly.
+
+mimo-v2.6-flash.png — mimo-v2.6-flash
+  Source: Xiaomi MiMo WeChat Official Account post cover, "V2.6".
+  Changes: cropped to the butterfly; the "V2.6" lettering in the top-left corner removed.
+
+gpt-astra.png / gpt-sol.png / gpt-luna.png — gpt-<version>-astra / -sol / -luna
+  Source: OpenAI, developers.openai.com/api/docs/models flagship banners
+  (/images/api/models/gpt-6-astra-texture.webp, gpt-6.1-sol-texture.webp, gpt-6-luna-texture.webp).
+  Changes: galaxy / sun / moon cut out and scaled to about a third of the square on a starfield
+  sampled from the same image; the moon's cropped edge completed by mirroring its other half.
+
+qwen3.8-max.png / qwen3.8-flash.png — qwen3.8-max, qwen3.8-flash
+  Source: Alibaba Cloud Qwen AI platform model market, www.qianwenai.com/models, carousel covers
+  (img.alicdn.com/imgextra/i1/O1CN01e45X8J1XWuOyKxyrc_!!6000000002932-2-tps-1764-732.png,
+   img.alicdn.com/imgextra/i3/O1CN01MzdmtH3Lw9L5CGEC_!!6000000003244-0-tps-2560-1440.jpg).
+  Changes: cropped to a square; the Qwen mark (from vendor-logos/qwen.svg, filled white) placed in
+  the centre with a soft shadow.
+
+qwen3.8-27b.png — qwen3.8-27b
+  Source: Qwen WeChat Official Account post "刚刚，Qwen3.8-27B 开源了！"
+  (mp.weixin.qq.com/s/Ttv5cMD5p6DkUQWyoOsqCA), header image.
+  Changes: cropped to the three devices and the horizon.
+
+minimax-m3.1-flash.png — minimax-m3.1-flash
+  Source: MiniMax WeChat Official Account post "MiniMax M3.1 Flash开源，上线72小时处理Token超过100万亿"
+  (mp.weixin.qq.com/s/uqZpu1NYy7Iwn2Aj9OKL1g), cover.
+  Changes: text over the flower removed; cropped to the flower.

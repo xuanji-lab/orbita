@@ -1,18 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import "./providers-view.css";
-import { KNOWN_PROVIDERS, knownProviderDefaultName, type KnownProvider } from "@shared/known-providers";
+import {
+  KNOWN_PROVIDERS,
+  accessChoicesFor,
+  catalogPreferenceOf,
+  knownAccessFor,
+  knownProviderDefaultName,
+  knownProviderGroup,
+  type KnownProvider,
+} from "@shared/known-providers";
 import type { ProviderCardSize } from "@shared/settings";
-import { resolveModelDefaults, type ModelDefaults } from "@shared/model-defaults";
-import type { ModelDecl, ProviderDto, ValidationIssue } from "@shared/provider";
-import type { BuiltinProvider } from "@shared/agent-ipc";
+import {
+  knownParamsFor,
+  modelDisplayName,
+  modelThinkingLevels,
+  resolveModelDefaults,
+  type ModelDefaults,
+} from "@shared/model-defaults";
+import { THINKING_LEVELS, type ThinkingLevel } from "@shared/thinking";
+import type { ModelDecl, ProviderApi, ProviderDto, ValidationIssue } from "@shared/provider";
+import type { BuiltinProvider, OauthDeviceCode } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import {
+  cardAddress,
   compactTokens,
   connectionDirty,
+  customThinkingSeed,
   hasCredentials,
   kindOf,
   mergeModelCost,
@@ -25,12 +42,18 @@ import {
   parseTokenInput,
   providerCards,
   reorderIds,
+  toggleThinkingLevel,
   type ProviderCard,
   urlSuffix,
 } from "./providers-view-model.ts";
 import { assignEntries, assignHint, assignPreview, type AssignPreview } from "./providers-assign.ts";
 import { useT } from "../../locale.ts";
+import { ModelAvatar } from "./ModelAvatar";
+import { PriceCapabilityChart } from "./PriceCapabilityChart";
+import { shouldShowPriceChart } from "./price-chart-model.ts";
+import { useBuiltinCatalog } from "./model-menu";
 import { VendorLogo } from "./VendorLogo";
+import { ipcErrorText } from "../../utils/ipc-error.ts";
 
 /**
  * Provider 设置面 —— 两层：**卡片墙**（每个目录条目一张卡，加过的挂「已添加」角标，顶部搜索 /
@@ -71,8 +94,12 @@ export function ProvidersView(props: {
   const [status, setStatus] = useState<{ tone: "ok" | "bad" | "busy"; text: string } | null>(null);
   /** 正在跑的 guard 动作是不是 Test——按钮的转圈 / disabled 只认这个，不比对 status 文案 */
   const [testing, setTesting] = useState(false);
-  /** Claude OAuth 登录进行中：等浏览器回调，可能长达几分钟 */
+  /** 浏览器登录进行中：等浏览器回调 / 设备码授权，可能长达十几分钟 */
   const [loggingIn, setLoggingIn] = useState(false);
+  /** 设备码登录（Copilot / xAI）要用户在网页里输入的码；只在登录进行中显示 */
+  const [deviceCode, setDeviceCode] = useState<OauthDeviceCode | null>(null);
+  /** 这次登录是用户自己点了取消：结束时不报红（那不是错误） */
+  const oauthCancelled = useRef(false);
   const [revealed, setRevealed] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 正等待二次确认删除的模型 id；一次只有一条，点别的行的 trash 就换成那条 */
@@ -86,7 +113,8 @@ export function ProvidersView(props: {
   /** 模型弹窗：isNew = 新增（弹窗内填 id），否则编辑 id 指向的已启用模型 */
   const [editor, setEditor] = useState<{ isNew: boolean; id: string | null } | null>(null);
   /** pi 内建目录，按 catalogId 取官方模型清单——离线就有，不用打网络 */
-  const [catalog, setCatalog] = useState<BuiltinProvider[]>([]);
+  // 与模型菜单同一个钩子：目录刷新后的广播也收（useBuiltinCatalog）
+  const catalog = useBuiltinCatalog();
   /** 拖拽排序中的厂商行 id；null = 没在拖 */
   const [dragId, setDragId] = useState<string | null>(null);
   /** 小框高亮的目标行：框住谁，松手就落到谁的位置 */
@@ -132,9 +160,8 @@ export function ProvidersView(props: {
     void refresh();
   }, [refresh]);
 
-  useEffect(() => {
-    void api.provider.builtins().then(setCatalog).catch(() => setCatalog([]));
-  }, []);
+  // 设备码由主进程推过来（登录流程跑在主进程，码到了才知道）
+  useEffect(() => api.provider.onOauthDeviceCode(setDeviceCode), []);
 
   // 弹窗开着时 Escape 关闭（与点遮罩 / Cancel 同语义）
   useEffect(() => {
@@ -162,17 +189,22 @@ export function ProvidersView(props: {
   const editingId = view.kind === "detail" ? selectedId : null;
   const editing = editingId === null ? undefined : providers?.find((p) => p.id === editingId);
   const known = KNOWN_PROVIDERS.find((k) => k.id === draft.kind);
-  /** 这张目录卡走 OAuth 登录（目前只有 Claude 订阅）：表单不画密钥框，画登录钮 */
+  /** 这张目录卡走浏览器登录（Claude / ChatGPT / GitHub Copilot / xAI）：表单不画密钥框，画登录钮 */
   const oauthEntry = known?.auth === "oauth";
+  /** 登录文案里的厂商名（「登录 ChatGPT」）与会打开的授权站点（悬停说明） */
+  const vendorName = known === undefined ? "" : t.providers.knownLabel(known.id, known.label);
+  const oauthHost = known === undefined ? "" : (OAUTH_HOSTS[known.id] ?? "");
   const oauthLoggedIn = editing?.auth.scheme === "oauth" && editing.auth.loggedIn;
   const showForm = (view.kind === "detail" && editing !== undefined) || (isNew && known !== undefined);
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
   /**
    * 这个模型 id 的生效参数基线（白名单 > pi 目录 > 兜底）。**按 id 跨目录查**：
    * 自建网关没有 catalogId，但它跑的 claude-opus-5 / k3 / glm-5.3 都有官方口径。
+   * 偏好与会话注册同源（catalogPreferenceOf）：「目录说了算」的服务商这里也不吃白名单。
    */
   const modelDefaults = (target: KnownProvider | undefined, id: string): ModelDefaults =>
-    resolveModelDefaults(catalog, id, { catalogId: target?.catalogId, api: target?.api });
+    // 按草稿选中的协议查（会话注册按实例协议走；同一型号在两种协议下档位可能不同）
+    resolveModelDefaults(catalog, id, target === undefined ? {} : catalogPreferenceOf(target, draft.api));
   /** 某个已适配 provider 在 pi 目录里的模型 id 清单（Fetch 的兜底候选池） */
   const catalogIds = (target: KnownProvider | undefined): string[] =>
     target?.catalogId === undefined
@@ -198,6 +230,8 @@ export function ProvidersView(props: {
       id: provider.id,
       displayName: provider.displayName,
       baseUrl: provider.endpoint.baseUrl,
+      // 实例落盘的协议（老实例可能不是条目现在的默认，原样保留）
+      api: provider.endpoint.api,
       models: provider.models.declared.map((m) => ({ ...m })),
       apiKey: "",
     });
@@ -297,6 +331,10 @@ export function ProvidersView(props: {
     const target = KNOWN_PROVIDERS.find((k) => k.id === kindId);
     setView({ kind: "new", kindId });
     resetTransient();
+    // 没添加过的服务商，后台不刷它的目录（审核 F-1）：点开卡片时现拉一次（节流内不拉），
+    // 第一次添加时型号参数与「获取模型」的兜底清单就是目录里最新的。拉完经 builtins 广播进 catalog；
+    // 拉不到不提示——照旧用快照 / 旧缓存，不挡填表
+    if (target?.catalogId !== undefined) void api.provider.refreshCatalog(target.catalogId).catch(() => undefined);
     // 候选池留空，等 Fetch 去问供应商——目录按厂商组织，分不清套餐
     setDraft({
       kind: kindId,
@@ -310,9 +348,24 @@ export function ProvidersView(props: {
             ? knownProviderDefaultName(target)
             : `${knownProviderDefaultName(target)} ${instancesOfKind(target.id).length + 1}`,
       baseUrl: target?.baseUrl ?? "",
+      api: target?.api ?? "openai-completions",
       models: [],
       apiKey: "",
     });
+  };
+
+  /**
+   * 换接入协议：地址跟着换成这家在这个协议下的官方地址；上一个协议拉来的候选与状态行作废
+   * （换了端点，那份清单与「连接成功」都不再成立）。存了才生效，与改地址同一个 Save 条。
+   * 地址跟着当前地址所在的那一组走（存的是 OpenCode Go 的旧写法 zen/go，就换成 zen/go 的）。
+   */
+  const pickAccess = (api: ProviderApi) => {
+    if (known === undefined || api === draft.api) return;
+    const method = knownAccessFor(known, api, draft);
+    if (method === undefined) return;
+    setDraft({ ...draft, api, baseUrl: method.baseUrl });
+    setDiscovered(null);
+    setStatus(null);
   };
 
   /**
@@ -358,7 +411,7 @@ export function ProvidersView(props: {
     guard(t.providers.fetchingModels, async () => {
       const result = await api.provider.discover({
         baseUrl: draft.baseUrl.trim(),
-        api: known?.api ?? "openai-completions",
+        api: draft.api,
         ...withKey(),
         ...withHeaders(),
       });
@@ -384,7 +437,7 @@ export function ProvidersView(props: {
     try {
       await guard(t.providers.testingConnection, async () => {
         const result = await api.provider.test({
-          api: known?.api ?? "openai-completions",
+          api: draft.api,
           baseUrl: draft.baseUrl.trim(),
           modelId: draft.models[0]?.id ?? "",
           ...withKey(),
@@ -398,16 +451,21 @@ export function ProvidersView(props: {
   };
 
   /**
-   * Claude OAuth 登录：登录即保存。主进程起回调服务器 + 开系统浏览器，授权完成
-   * 回来时 provider 连凭据已落盘——这里只负责切视图与展示结果。令牌全程不进 renderer。
+   * 浏览器登录（Claude / ChatGPT / GitHub Copilot / xAI）：登录即保存。主进程跑完整流程
+   * （回调服务器或设备码 + 系统浏览器），授权完成回来时 provider 连凭据已落盘——这里只负责
+   * 切视图与展示结果。令牌全程不进 renderer。
    */
-  const loginClaude = async (): Promise<void> => {
+  const loginOauth = async (): Promise<void> => {
     if (loggingIn || known === undefined) return;
     setLoggingIn(true);
-    setStatus({ tone: "busy", text: t.providers.oauthWaiting });
+    setDeviceCode(null);
+    oauthCancelled.current = false;
+    // 账号行自己在转圈写「等待浏览器里完成授权…」，状态行不再重复一遍
+    setStatus(null);
     try {
       const result = await api.provider.oauthLogin({
         id: draft.id.trim(),
+        kind: known.id,
         displayName: draft.displayName.trim() || knownProviderDefaultName(known),
         ...(isNew ? { create: true, models: draft.models } : {}),
       });
@@ -428,10 +486,17 @@ export function ProvidersView(props: {
       const account = updated?.auth.scheme === "oauth" ? updated.auth.account : null;
       setStatus({ tone: "ok", text: t.providers.oauthLoggedIn(account) });
     } catch (cause) {
-      setStatus({ tone: "bad", text: cause instanceof Error ? cause.message : String(cause) });
+      setStatus(oauthCancelled.current ? null : { tone: "bad", text: ipcErrorText(cause) });
     } finally {
       setLoggingIn(false);
+      setDeviceCode(null);
     }
+  };
+
+  /** 叫停进行中的登录：主进程关掉回调服务器 / 停止轮询，oauthLogin 以「登录已取消」返回 */
+  const cancelOauth = (): void => {
+    oauthCancelled.current = true;
+    void api.provider.oauthCancel(draft.id.trim());
   };
 
   /** 行内单模型测试：状态收在行内（图标转圈 / 结果徽标），不动布局。
@@ -440,7 +505,7 @@ export function ProvidersView(props: {
   const testModel = (id: string) => {
     setModelTests((prev) => ({ ...prev, [id]: { tone: "busy", text: t.providers.testing } }));
     api.provider
-      .test({ api: known?.api ?? "openai-completions", baseUrl: draft.baseUrl.trim(), modelId: id, ...withKey(), ...withHeaders() })
+      .test({ api: draft.api, baseUrl: draft.baseUrl.trim(), modelId: id, ...withKey(), ...withHeaders() })
       .then((result) => {
         setModelTests((prev) => ({ ...prev, [id]: { tone: result.ok ? "ok" : "bad", text: result.message } }));
         if (result.ok) dismissLater(id);
@@ -534,7 +599,8 @@ export function ProvidersView(props: {
         displayName: draft.displayName.trim(),
         endpoint: {
           baseUrl: draft.baseUrl.trim(),
-          api: known?.api ?? "openai-completions",
+          // 选中的接入协议（多协议条目由选择器定，其余就是条目协议 / 实例原协议）
+          api: draft.api,
           ...(endpointHeaders === undefined ? {} : { headers: endpointHeaders }),
         },
         models: { declared: draft.models },
@@ -582,7 +648,7 @@ export function ProvidersView(props: {
           displayName: `${name} (copy)`,
           endpoint: {
             baseUrl,
-            api: known?.api ?? editing.endpoint.api,
+            api: draft.api,
             ...(editing.endpoint.headers === undefined ? {} : { headers: editing.endpoint.headers }),
           },
           models: {
@@ -612,6 +678,7 @@ export function ProvidersView(props: {
       id,
       displayName: `${name} (copy)`,
       baseUrl,
+      api: draft.api,
       models: draft.models.map((m) => ({ ...m })),
       apiKey: "",
     });
@@ -665,7 +732,7 @@ export function ProvidersView(props: {
     (editing !== undefined &&
       connectionDirty(
         draft,
-        { displayName: editing.displayName, baseUrl: editing.endpoint.baseUrl },
+        { displayName: editing.displayName, baseUrl: editing.endpoint.baseUrl, api: editing.endpoint.api },
         revealedKey,
       ));
 
@@ -716,6 +783,7 @@ export function ProvidersView(props: {
         {view.kind === "grid" && providers !== null && (
           <ProviderGrid
             providers={sorted}
+            catalog={catalog}
             banner={assignBanner}
             query={query}
             onQuery={setQuery}
@@ -752,6 +820,7 @@ export function ProvidersView(props: {
                   <span className="pv-kind-note">{t.providers.knownNote(known.id, known.note)}</span>
                 </span>
               </div>
+              {known.untested === true && <UntestedNotice />}
               <div
                 className="pv-tabs"
                 role="tablist"
@@ -816,7 +885,16 @@ export function ProvidersView(props: {
                   {draft.displayName || (isNew ? t.providers.newProvider : editing?.displayName)}
                 </span>
                 {/* 协议是锁定的事实，不是一个要填的字段：从整行降成标题旁的徽标 */}
-                <ApiFormatBadge api={known.api} />
+                {/* 协议：这家官方开着几种就给选择器（地址跟着换），只有一种就是锁着的徽标 */}
+                {accessChoicesFor(known, draft).length > 1 ? (
+                  <AccessPicker
+                    methods={accessChoicesFor(known, draft).map((method) => method.api)}
+                    value={draft.api}
+                    onPick={pickAccess}
+                  />
+                ) : (
+                  <ApiFormatBadge api={draft.api} />
+                )}
                 <span className="pv-headend">
                   {isNew ? null : confirmRemove ? (
                     <>
@@ -880,7 +958,7 @@ export function ProvidersView(props: {
                     <span className="pv-fld-stack">
                       <UrlField
                         value={draft.baseUrl}
-                        suffix={urlSuffix(known.api)}
+                        suffix={urlSuffix(draft.api)}
                         invalid={issueFor("endpoint.baseUrl") !== undefined}
                         onChange={(baseUrl) => setDraft({ ...draft, baseUrl })}
                       />
@@ -890,6 +968,7 @@ export function ProvidersView(props: {
                     </span>
                   </div>
                   {oauthEntry ? (
+                    <>
                     <div className="pv-fld">
                       <label>{t.providers.oauthAccount}</label>
                       <div className="pv-krow">
@@ -902,31 +981,57 @@ export function ProvidersView(props: {
                           ) : oauthLoggedIn && editing?.auth.scheme === "oauth" ? (
                             <>
                               <Icon name="circle-check" size={14} strokeWidth={1.8} />
-                              <span title={t.providers.oauthNote}>
+                              <span title={t.providers.oauthNote(oauthHost)}>
                                 {t.providers.oauthLoggedIn(editing.auth.account)}
                               </span>
                             </>
                           ) : (
-                            <span className="pv-oauth-out" title={t.providers.oauthNote}>
-                              {t.providers.oauthLoggedOut}
+                            <span className="pv-oauth-out" title={t.providers.oauthNote(oauthHost)}>
+                              {t.providers.oauthLoggedOut(vendorName)}
                             </span>
                           )}
                         </span>
-                        <button
-                          type="button"
-                          className={oauthLoggedIn ? "pv-btn line" : "pv-btn accent"}
-                          disabled={loggingIn}
-                          onClick={() => void loginClaude()}
-                        >
-                          <Icon name="external-link" size={13} strokeWidth={1.8} />
-                          {oauthLoggedIn ? t.providers.oauthRelogin : t.providers.oauthLoginButton}
-                        </button>
+                        {/* 等待中这颗钮换成「取消登录」：设备码要等十几分钟，得能叫停 */}
+                        {loggingIn ? (
+                          <button type="button" className="pv-btn line" onClick={cancelOauth}>
+                            <Icon name="x" size={13} strokeWidth={1.8} />
+                            {t.providers.oauthCancel}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={oauthLoggedIn ? "pv-btn line" : "pv-btn accent"}
+                            onClick={() => void loginOauth()}
+                          >
+                            <Icon name="external-link" size={13} strokeWidth={1.8} />
+                            {oauthLoggedIn ? t.providers.oauthRelogin : t.providers.oauthLoginButton(vendorName)}
+                          </button>
+                        )}
                         <button type="button" className="pv-btn line" disabled={testing} onClick={() => void test()}>
                           <Icon name={testing ? "loader-circle" : "zap"} size={13} spin={testing} />
                           {testing ? t.providers.testing : t.providers.test}
                         </button>
                       </div>
                     </div>
+                    {loggingIn && deviceCode !== null && deviceCode.id === draft.id.trim() && (
+                      <div className="pv-fld">
+                        <span />
+                        <span className="pv-oauth-code">
+                          <span>{t.providers.oauthDeviceCode}</span>
+                          <span className="pv-oauth-code-value pv-mono">{deviceCode.userCode}</span>
+                          <button
+                            type="button"
+                            className="pv-btn icon"
+                            aria-label={t.providers.oauthCopyCode}
+                            title={t.providers.oauthCopyCode}
+                            onClick={() => void navigator.clipboard.writeText(deviceCode.userCode).catch(() => undefined)}
+                          >
+                            <Icon name="copy" size={14} strokeWidth={1.8} />
+                          </button>
+                        </span>
+                      </div>
+                    )}
+                    </>
                   ) : (
                     <div className="pv-fld">
                       <label htmlFor="pv-key">{t.providers.apiKey}</label>
@@ -1066,6 +1171,12 @@ export function ProvidersView(props: {
                 ) : (
                   draft.models.map((model) => {
                     const defaults = modelDefaults(known, model.id);
+                    const displayName = modelDisplayName(
+                      catalog,
+                      model.id,
+                      known === undefined ? {} : catalogPreferenceOf(known),
+                      model.name,
+                    );
                     const badge = modelContextText(model, defaults);
                     const tested = modelTests[model.id];
                     const busy = tested?.tone === "busy";
@@ -1077,8 +1188,19 @@ export function ProvidersView(props: {
                       >
                         <div className="pv-mrow">
                           <span className="pv-grow">
-                            {model.name !== undefined && <span className="pv-mname">{model.name}</span>}
-                            <span className={`pv-mid${model.name !== undefined ? " dim" : ""}`} title={model.id}>
+                            {/*
+                              行首型号头像 + 显示名为主文字、id 跟在后面（原型 4，2026-10-24）。
+                              显示名与模型卡片同一个口径（modelDisplayName）：声明里的名字 > 白名单 > 目录名 > id；
+                              名字就是 id 时不重复写两遍。
+                            */}
+                            <ModelAvatar
+                              modelId={model.id}
+                              provider={{ kindId: draft.kind, label: draft.displayName || (known?.label ?? draft.kind) }}
+                              // 24px：单行 36px 行高的三分之二，再大要把行撑高（2026-10-24 用户：原来的 18px 太小）
+                              size={24}
+                            />
+                            {displayName !== model.id && <span className="pv-mname">{displayName}</span>}
+                            <span className={`pv-mid${displayName !== model.id ? " dim" : ""}`} title={model.id}>
                               {model.id}
                             </span>
                             <span
@@ -1186,6 +1308,7 @@ export function ProvidersView(props: {
         <div className="pv-modal-root">
           <ModelDialog
             known={known}
+            api={draft.api}
             catalog={catalog}
             decl={editorDecl}
             existingIds={draft.models.map((m) => m.id)}
@@ -1201,12 +1324,70 @@ export function ProvidersView(props: {
 
 /** catalog 里没有这家时的 kind 兜底由 providers-view-model 的 kindOf 提供——设置页与聊天底栏共用 */
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
+/** 浏览器登录会打开的授权站点（悬停说明里写给用户看：点了之后浏览器会去哪） */
+const OAUTH_HOSTS: Record<string, string> = {
+  claude: "claude.ai",
+  "openai-codex": "auth.openai.com",
+  "github-copilot": "github.com",
+  xai: "accounts.x.ai",
+};
+
+/** 「未实测」说明里「提 PR」指向的仓库首页 */
+const REPO_URL = "https://github.com/xuanji-lab/orbita";
+
+/**
+ * 详情页顶部的「未实测」说明（只给 `untested` 条目）：整句话 + 指向仓库的链接。
+ * 链接走 window.open → 主进程 setWindowOpenHandler，网页进内置浏览器。
+ */
+function UntestedNotice() {
+  const t = useT();
+  return (
+    <div className="pv-untested-bar" role="note">
+      <Icon name="circle-help" size={14} strokeWidth={1.8} />
+      <span>
+        {t.providers.untestedNotice}
+        <a href={REPO_URL} target="_blank" rel="noreferrer">
+          {t.providers.untestedNoticeLink}
+        </a>
+        {t.providers.untestedNoticeEnd}
+      </span>
+    </div>
+  );
+}
+
+/** 接入协议的显示名：协议名是专名，中英文界面同一写法；悬停里另有 pi 的 api id */
+const ACCESS_LABELS: Partial<Record<ProviderApi, string>> = {
+  "anthropic-messages": "Anthropic Messages",
+  "openai-completions": "OpenAI Chat",
+  "openai-responses": "OpenAI Responses",
+  "google-generative-ai": "Google Gemini",
+};
+
+/**
+ * 接入协议选择器：只给官方开着两种以上协议的条目（智谱 / Kimi / DeepSeek / MiniMax / Z.AI / OpenCode Go），
+ * 与卡片墙的「大 / 小」同款分段钮。选中项用 aria-pressed 表达；说明进悬停（同协议徽标）。
+ */
+function AccessPicker(props: { methods: readonly ProviderApi[]; value: ProviderApi; onPick: (api: ProviderApi) => void }) {
+  const t = useT();
+  const tip = useSettingTip<HTMLSpanElement>(t.providers.accessTip);
+  return (
+    <>
+      <span className="pv-seg pv-access" role="group" aria-label={t.providers.accessLabel} {...tip.anchor}>
+        {props.methods.map((api) => (
+          <button
+            key={api}
+            type="button"
+            aria-pressed={props.value === api}
+            title={api}
+            onClick={() => props.onPick(api)}
+          >
+            {ACCESS_LABELS[api] ?? api}
+          </button>
+        ))}
+      </span>
+      {tip.layer}
+    </>
+  );
 }
 
 /**
@@ -1349,6 +1530,8 @@ function AssignView(props: {
  */
 function ProviderGrid(props: {
   providers: readonly ProviderDto[];
+  /** pi 内建目录：价格 · 能力图的显示名要它（modelDisplayName） */
+  catalog: readonly BuiltinProvider[];
   /** 分配模型的提示条（没有就是 null） */
   banner: React.ReactNode;
   query: string;
@@ -1425,6 +1608,13 @@ function ProviderGrid(props: {
             </div>
           </section>
         ))}
+        {/*
+          价格 · 能力图挂在卡片墙下面（原型 7，2026-10-24 裁决）：没有单独入口；所有服务商加起来
+          ≥ 2 个型号才出现。吃的是全部服务商，不是筛过的卡片——「仅显示已添加」与搜索都不影响它。
+        */}
+        {shouldShowPriceChart(props.providers) && (
+          <PriceCapabilityChart providers={props.providers} catalog={props.catalog} />
+        )}
       </div>
     </div>
   );
@@ -1433,6 +1623,7 @@ function ProviderGrid(props: {
 /**
  * 一张厂商卡。大卡：logo、名字、说明、底行（没加过写预填地址，加过写实例名）；小卡一行只留
  * logo、名字与角标。加过的卡右上角「已添加」（多于一个带数字），悬停浮出「+」再加一个。
+ * 还没用真实账号验证过的条目（`untested`）在同一处再挂一枚「未实测」。
  * 卡片本身是 div + role="button"：里面还套着「+」按钮，button 不能嵌 button。
  */
 function ProviderGridCard(props: {
@@ -1446,13 +1637,41 @@ function ProviderGridCard(props: {
   const label = t.providers.knownLabel(known.id, known.label);
   const added = instances.length > 0;
   const custom = known.baseUrl === "";
-  const badge = added ? (
+  const large = props.size === "large";
+  const addedBadge = added ? (
     <span className="pv-added-badge">
       <Icon name="circle-check" size={12} strokeWidth={1.8} />
-      {props.size === "large" && <span>{t.providers.added}</span>}
+      {large && <span>{t.providers.added}</span>}
       {instances.length > 1 && <span className="pv-mono">{instances.length}</span>}
     </span>
   ) : null;
+  // 未实测：图标 + 文字（不只靠颜色）；小卡只留图标，说明进悬停（与「已添加」同一规矩）
+  const untestedBadge =
+    known.untested === true ? (
+      <span
+        className="pv-untested-badge"
+        title={t.providers.untestedTip}
+        {...(large ? {} : { role: "img", "aria-label": t.providers.untested })}
+      >
+        <Icon name="flask-conical" size={11} strokeWidth={1.8} />
+        {large && <span>{t.providers.untested}</span>}
+      </span>
+    ) : null;
+  const badge =
+    addedBadge !== null || untestedBadge !== null ? (
+      <span className="pv-card-marks">
+        {addedBadge}
+        {untestedBadge}
+      </span>
+    ) : null;
+  // 底行：加过写实例名；兼容入口写「填你自己的地址」；浏览器登录的没有要填的地址，写登录方式
+  const foot = added
+    ? instances.map((provider) => provider.displayName).join(" · ")
+    : custom
+      ? t.providers.customUrl
+      : knownProviderGroup(known) === "oauth"
+        ? t.providers.browserLogin
+        : cardAddress(known.baseUrl);
   const more = added ? (
     <button
       type="button"
@@ -1481,7 +1700,7 @@ function ProviderGridCard(props: {
         }
       }}
     >
-      {props.size === "large" ? (
+      {large ? (
         <>
           <span className="pv-vcard-top">
             <span className="pv-logo-tile">
@@ -1493,9 +1712,7 @@ function ProviderGridCard(props: {
             <span className="pv-vcard-name">{label}</span>
             <span className="pv-vcard-note">{t.providers.knownNote(known.id, known.note)}</span>
           </span>
-          <span className="pv-vcard-foot">
-            {added ? instances.map((provider) => provider.displayName).join(" · ") : custom ? t.providers.customUrl : hostOf(known.baseUrl)}
-          </span>
+          <span className="pv-vcard-foot">{foot}</span>
           {more}
         </>
       ) : (
@@ -1594,6 +1811,8 @@ function FetchPanel(props: {
  */
 function ModelDialog(props: {
   known: KnownProvider;
+  /** 实例（草稿）选中的协议：查型号参数按它，与详情页的模型行同源 */
+  api: ProviderApi;
   catalog: BuiltinProvider[];
   decl: ModelDecl | undefined;
   existingIds: readonly string[];
@@ -1605,10 +1824,7 @@ function ModelDialog(props: {
   const isNew = props.decl === undefined;
   // 与模型行同一条推断（按 id 跨目录）：行上显示 1M、弹窗却写 Inherit (128000) 是说两句话
   const defaultsOf = (id: string): ModelDefaults =>
-    resolveModelDefaults(props.catalog, id, {
-      catalogId: props.known.catalogId,
-      api: props.known.api,
-    });
+    resolveModelDefaults(props.catalog, id, catalogPreferenceOf(props.known, props.api));
   const [idValue, setIdValue] = useState(props.decl?.id ?? "");
   const [name, setName] = useState(props.decl?.name ?? "");
   const [ctxText, setCtxText] = useState(props.decl?.contextWindow?.toString() ?? "");
@@ -1618,6 +1834,8 @@ function ModelDialog(props: {
   const [vision, setVision] = useState<"inherit" | "on" | "off">(
     props.decl?.vision === true ? "on" : props.decl?.vision === false ? "off" : "inherit",
   );
+  // 思考档：null = 继承（白名单 > 目录），数组 = 用户勾的档（至少一档，按词汇表顺序）
+  const [thinking, setThinking] = useState<ThinkingLevel[] | null>(props.decl?.thinkingLevels ?? null);
   const [idIssue, setIdIssue] = useState<string | null>(null);
   const [fieldIssue, setFieldIssue] = useState<string | null>(null);
 
@@ -1631,6 +1849,12 @@ function ModelDialog(props: {
     activeDefaults.source === "catalog" || activeDefaults.source === "catalog-family";
   // 三档里的 Inherit 到底继承了什么：图标 + 悬停写出来，不然用户只能靠猜
   const inheritImage = activeDefaults.input.includes("image");
+  // 继承时菜单会显示的档：与底栏菜单同一个函数，只是不带覆盖、也没有运行时报回（弹窗里没有会话）
+  const activeId = isNew ? idValue.trim().toLowerCase() : (props.decl?.id ?? "");
+  const activePrefer = catalogPreferenceOf(props.known, props.api);
+  const inheritedLevels = activeId === "" ? null : modelThinkingLevels(activeId, props.catalog, null, activePrefer);
+  const inheritedLevelsSource =
+    knownParamsFor(props.catalog, activeId, activePrefer).thinkingLevels === undefined ? "catalog" : "known";
   // 模型弹窗头上的来源徽标：原来弹窗底部那句「Source: …」收成一枚徽标，整句进悬停
   const source = t.providers.sourceBadges[activeDefaults.source];
   const sourceTip = useSettingTip<HTMLSpanElement>(
@@ -1671,6 +1895,7 @@ function ModelDialog(props: {
     if (cost !== undefined) decl.cost = cost;
     if (vision === "on") decl.vision = true;
     if (vision === "off") decl.vision = false;
+    if (thinking !== null) decl.thinkingLevels = thinking;
     props.onApply(decl);
   };
 
@@ -1765,6 +1990,71 @@ function ModelDialog(props: {
               </Chip>
             </div>
           </div>
+          <div className="pv-fld wide pv-fld-top">
+            <span className="pv-lab">{t.providers.thinkingLevels}</span>
+            <div className="pv-fld-stack">
+              <div role="group" aria-label={t.providers.thinkingLevels} className="pv-inline tight">
+                <Chip
+                  active={thinking === null}
+                  title={inheritedLevels === null ? undefined : t.providers.inheritThinkingTip}
+                  onClick={() => setThinking(null)}
+                >
+                  {t.providers.inherit}
+                </Chip>
+                <Chip
+                  active={thinking !== null}
+                  onClick={() => setThinking((current) => current ?? customThinkingSeed(inheritedLevels))}
+                >
+                  {t.providers.custom}
+                </Chip>
+              </div>
+              {thinking === null ? (
+                <div className="pv-levels-inherited">
+                  {inheritedLevels === null ? (
+                    <span>{t.providers.thinkingUnknown}</span>
+                  ) : (
+                    <>
+                      <span>{inheritedLevels.map((level) => t.thinkingLevel(level, activeId)).join(" · ")}</span>
+                      <span className="pv-levels-source">
+                        <Icon name="book-open" size={11} strokeWidth={1.8} />
+                        {t.providers.sourceBadges[inheritedLevelsSource].label}
+                      </span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div role="group" aria-label={t.providers.custom} className="pv-levels">
+                    {THINKING_LEVELS.map((level) => {
+                      const checked = thinking.includes(level);
+                      // 最后一档锁住：去不掉，悬停说明怎么回到目录口径
+                      const last = checked && thinking.length === 1;
+                      return (
+                        <Chip
+                          key={level}
+                          icon={checked ? "check" : undefined}
+                          active={checked}
+                          disabled={last}
+                          title={last ? t.providers.lastThinkingLevelTip : undefined}
+                          onClick={() => setThinking(toggleThinkingLevel(thinking, level))}
+                        >
+                          {t.thinkingLevel(level, activeId)}
+                        </Chip>
+                      );
+                    })}
+                  </div>
+                  <span className="pv-levels-hint">
+                    {t.providers.customThinkingHint}
+                    {inheritedLevels !== null &&
+                      ` ${t.providers.customThinkingFrom(
+                        t.providers.sourceBadges[inheritedLevelsSource].label,
+                        inheritedLevels.map((level) => t.thinkingLevel(level, activeId)).join(" · "),
+                      )}`}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
           <div className="pv-grid2">
             <UnitField
               id="pv-model-ctx"
@@ -1814,6 +2104,7 @@ function ModelDialog(props: {
               setCinText("");
               setCoutText("");
               setVision("inherit");
+              setThinking(null);
             }}
           >
             <Icon name="rotate-ccw" size={13} strokeWidth={1.8} /> {t.common.reset}
@@ -1889,5 +2180,13 @@ function Line(props: { tone: "ok" | "bad" | "busy"; children: React.ReactNode })
 }
 
 function emptyDraft() {
-  return { kind: "", id: "", displayName: "", baseUrl: "", models: [] as ModelDecl[], apiKey: "" };
+  return {
+    kind: "",
+    id: "",
+    displayName: "",
+    baseUrl: "",
+    api: "openai-completions" as ProviderApi,
+    models: [] as ModelDecl[],
+    apiKey: "",
+  };
 }
