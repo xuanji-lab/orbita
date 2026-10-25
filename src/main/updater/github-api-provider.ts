@@ -11,26 +11,26 @@
  * **更新源没有变**：owner/repo 仍来自 package.json 的 `build.publish`（见 releases-url.ts），
  * 不做镜像、不留第二份真源。这里只是把「怎么读 Release」从网页换到 GitHub 自己的 API。
  *
- * 三条实现约束：
- * - latest.yml 与安装包都从 `releases/assets/<id>` 取，必须带
- *   `Accept: application/octet-stream` 才会返回文件（否则 API 返回 JSON 元数据）；
- * - 资产地址不带扩展名，`findFile` 的 `.exe` 过滤会落到 `files[0]`（latest.yml 里只有
- *   一个安装包，成立）；缓存文件名因此由 `info.url` 回退（electron-updater 已有这条路径）；
- * - 差分下载的 blockmap 也用资产端点：新版 blockmap 在本次 Release 里按文件名找，旧版去
- *   `releases/tags/v<旧版本>` 找。任何一步找不到就抛错，库会退回完整下载——不会装坏。
+ * 四条实现约束：
+ *
+ * 1. **所有请求都经共享客户端**（github-client.ts）：同一套网络 / 代理 / 缓存 / 限流记录，
+ *    与「历史版本」列表是同一个实例。
+ * 2. **`latest.yml` 里的文件名一律不改写**。`UpdateInfo.files[].url` 保持发布资产的原名
+ *    （`orbita-0.1.16-win-x64-setup.exe`），资产端点地址只在 `resolveFiles()` 里给到
+ *    `ResolvedUpdateFileInfo.url`。以前在检查更新阶段就把文件名换成 `releases/assets/<id>`，
+ *    库拿不到 `.exe` 后缀，缓存文件名退成资产编号（下载下来叫 `668422282`，NSIS 装不上）。
+ * 3. **资产端点必须带 `Accept: application/octet-stream`**，否则 GitHub 回 JSON 元数据。
+ *    `fileExtraDownloadHeaders` 管库的下载与 blockmap；差分下载的 Range 请求是库写死
+ *    通配 Accept 的（`DifferentialDownloader.createRequestOptions`），由下载器
+ *    （resilient-executor.ts）按地址把资产头补回去。实测不带这个头，资产端点回
+ *    **206 + JSON**，分段长度对得上、内容对不上，要等 sha512 才失败。
+ * 4. **差分下载的 blockmap 也用资产端点**：新版在本次 Release 里按「安装包名.blockmap」找，
+ *    旧版去 `releases/tags/v<旧版本>` 找。任何一步找不到就抛错，库会退回完整下载——不会装坏。
  */
 import type { ResolvedUpdateFileInfo, UpdateFileInfo, UpdateInfo } from "electron-updater";
-import { Provider, getFileList, parseUpdateInfo, resolveFiles } from "electron-updater/out/providers/Provider.js";
+import { parseUpdateInfo, resolveFiles, Provider } from "electron-updater/out/providers/Provider.js";
 import type { ProviderRuntimeOptions } from "electron-updater/out/providers/Provider.js";
-
-/** GitHub REST API。与网页域名分开：这是本 provider 存在的理由 */
-const API_ORIGIN = "https://api.github.com";
-
-/** 读 JSON 元数据（releases/latest、releases/tags/...） */
-const JSON_ACCEPT = "application/vnd.github+json";
-
-/** 读发布资产（latest.yml、安装包、blockmap）：不带这个头，API 只会回 JSON 元数据 */
-const ASSET_ACCEPT = "application/octet-stream";
+import { API_ORIGIN, GitHubClient } from "./github-client.ts";
 
 /** API 只给得出这几个字段；其余（body / html_url）用不上，不声明 */
 interface GitHubAsset {
@@ -71,34 +71,36 @@ function asRelease(value: unknown): GitHubRelease {
   return { tag_name: value.tag_name, assets };
 }
 
-/** 从 setFeedURL 的 options 里取仓址：唯一真源是 package.json 的 build.publish（见 releases-url.ts） */
-function repositoryOf(options: unknown): { owner: string; repo: string } {
+/** setFeedURL 的 options：仓址 + 共享客户端（service.ts 注入，「历史版本」列表用的是同一个） */
+function repositoryOf(options: unknown): { owner: string; repo: string; client: GitHubClient } {
   if (!isRecord(options)) throw new Error("GitHub API provider 缺少 owner / repo。");
-  const { owner, repo } = options;
+  const { owner, repo, client } = options;
   if (typeof owner !== "string" || owner === "" || typeof repo !== "string" || repo === "") {
     throw new Error("GitHub API provider 缺少 owner / repo。");
   }
-  return { owner, repo };
+  if (!(client instanceof GitHubClient)) {
+    throw new Error("GitHub API provider 缺少共享 GitHub 客户端（见 github-client.ts）。");
+  }
+  return { owner, repo, client };
 }
 
 export class GitHubApiProvider extends Provider<UpdateInfo> {
   private readonly base: string;
-  /** 本次检查的那份 Release：latest.yml 的资产映射与 blockmap 查找都从这里来 */
-  private release: GitHubRelease | null = null;
-  /** 资产 URL → 文件名：getBlockMapFiles 只拿得到 URL，靠这张表找回安装包名 */
-  private readonly namesByAssetUrl = new Map<string, string>();
-  /** 旧版本的 Release（差分下载才用；按 tag 缓存，一次下载最多问一次） */
-  private readonly releasesByTag = new Map<string, GitHubRelease>();
+  private readonly client: GitHubClient;
+  /** 本次检查的那份 Release 的资产表（按文件名 / 按解析后的资产地址各一份） */
+  private assetsByName = new Map<string, GitHubAsset>();
+  private assetsByUrl = new Map<string, GitHubAsset>();
 
   constructor(options: unknown, _updater: unknown, runtimeOptions: ProviderRuntimeOptions) {
     super(runtimeOptions);
-    const { owner, repo } = repositoryOf(options);
+    const { owner, repo, client } = repositoryOf(options);
     this.base = `${API_ORIGIN}/repos/${owner}/${repo}`;
+    this.client = client;
   }
 
   /** 下载安装包 / blockmap 时统一带资产头；否则 API 回 JSON */
   override get fileExtraDownloadHeaders(): Record<string, string> {
-    return { accept: ASSET_ACCEPT };
+    return { accept: "application/octet-stream" };
   }
 
   /** GitHub 的资产走对象存储（重定向后是签名 URL），多段 Range 合并请求不可靠（同库的 GitHubProvider） */
@@ -107,17 +109,17 @@ export class GitHubApiProvider extends Provider<UpdateInfo> {
   }
 
   async getLatestVersion(): Promise<UpdateInfo> {
-    const release = asRelease(await this.fetchJson(`${this.base}/releases/latest`));
-    this.release = release;
-    this.namesByAssetUrl.clear();
-    const byName = new Map<string, GitHubAsset>();
+    // 用户点「检查更新」就该真的问一次：版本发现不走缓存
+    const release = asRelease(await this.client.getJson(`${this.base}/releases/latest`, { cache: false }));
+    this.assetsByName = new Map();
+    this.assetsByUrl = new Map();
     for (const asset of release.assets) {
-      byName.set(asset.name, asset);
-      this.namesByAssetUrl.set(this.assetUrl(asset.id).href, asset.name);
+      this.assetsByName.set(asset.name, asset);
+      this.assetsByUrl.set(this.assetUrl(asset.id).href, asset);
     }
 
     const channelFile = `${this.getDefaultChannelName()}.yml`;
-    const channelAsset = byName.get(channelFile);
+    const channelAsset = this.assetsByName.get(channelFile);
     if (channelAsset === undefined) {
       throw tagged(
         new Error(`${release.tag_name} 里没有 ${channelFile}（发布产物没传全）。`),
@@ -125,18 +127,30 @@ export class GitHubApiProvider extends Provider<UpdateInfo> {
       );
     }
 
-    const raw = await this.httpRequest(this.assetUrl(channelAsset.id), { accept: ASSET_ACCEPT });
-    if (raw === null) {
+    const raw = await this.client.getAsset(this.assetUrl(channelAsset.id));
+    if (raw === "") {
       throw tagged(new Error(`${channelFile} 是空的。`), "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND");
     }
-    const info = parseUpdateInfo(raw, channelFile, this.assetUrl(channelAsset.id));
-    const files = getFileList(info).map((file) => this.toAssetFile(file, byName));
-    return { ...info, files };
+    // files 保持 latest.yml 里的原名（约束 2）：资产地址在 resolveFiles 里才出现
+    return parseUpdateInfo(raw, channelFile, this.assetUrl(channelAsset.id));
   }
 
+  /**
+   * 文件名 → 资产端点。`info` 原样带出（库用 `info.url` 推缓存文件名、比对已下载的包），
+   * `url` 才是真正下载时用的地址。
+   *
+   * 注：URL 末段是资产编号，`findFile` 的 `.exe` 过滤会落到 `files[0]`（latest.yml 里
+   * 只有一个安装包，成立；本区分支也只接线 Windows NSIS 安装包）。
+   */
   resolveFiles(updateInfo: UpdateInfo): ResolvedUpdateFileInfo[] {
-    // 文件地址在 getLatestVersion 里已经换成绝对资产地址；base 只是让相对地址也有个家
-    return resolveFiles(updateInfo, new URL(`${this.base}/releases/assets/`));
+    // base 只是让相对地址也有个家；地址由 pathTransformer 换成资产编号
+    return resolveFiles(updateInfo, new URL(`${this.base}/releases/assets/`), (name) => {
+      const asset = this.assetsByName.get(name);
+      if (asset === undefined) {
+        throw tagged(new Error(`Release 里没有更新文件 ${name}。`), "ERR_UPDATER_ASSET_NOT_FOUND");
+      }
+      return String(asset.id);
+    });
   }
 
   /**
@@ -144,51 +158,28 @@ export class GitHubApiProvider extends Provider<UpdateInfo> {
    * 旧版去 `releases/tags/v<旧版本>` 找同名文件。找不到就抛——库退回完整下载。
    */
   override async getBlockMapFiles(baseUrl: URL, oldVersion: string, newVersion: string): Promise<URL[]> {
-    const fileName = this.namesByAssetUrl.get(baseUrl.href);
-    if (fileName === undefined || this.release === null) {
+    const asset = this.assetsByUrl.get(baseUrl.href);
+    if (asset === undefined) {
       throw tagged(new Error("找不到本次发布对应的安装包资产。"), "ERR_UPDATER_ASSET_NOT_FOUND");
     }
-    const newBlock = this.release.assets.find((asset) => asset.name === `${fileName}.blockmap`);
+    const newBlock = this.assetsByName.get(`${asset.name}.blockmap`);
     if (newBlock === undefined) {
-      throw tagged(new Error(`本次发布没有 ${fileName}.blockmap。`), "ERR_UPDATER_ASSET_NOT_FOUND");
+      throw tagged(new Error(`本次发布没有 ${asset.name}.blockmap。`), "ERR_UPDATER_ASSET_NOT_FOUND");
     }
 
-    const oldRelease = await this.releaseOfTag(`v${oldVersion}`);
-    const oldFileName = fileName.replace(newVersion, oldVersion);
-    const oldBlock = oldRelease.assets.find((asset) => asset.name === `${oldFileName}.blockmap`);
+    const oldTag = `v${oldVersion}`;
+    const oldRelease = asRelease(
+      await this.client.getJson(`${this.base}/releases/tags/${encodeURIComponent(oldTag)}`),
+    );
+    const oldFileName = asset.name.replace(newVersion, oldVersion);
+    const oldBlock = oldRelease.assets.find((entry) => entry.name === `${oldFileName}.blockmap`);
     if (oldBlock === undefined) {
-      throw tagged(new Error(`v${oldVersion} 没有 ${oldFileName}.blockmap。`), "ERR_UPDATER_ASSET_NOT_FOUND");
+      throw tagged(new Error(`${oldTag} 没有 ${oldFileName}.blockmap。`), "ERR_UPDATER_ASSET_NOT_FOUND");
     }
     return [this.assetUrl(oldBlock.id), this.assetUrl(newBlock.id)];
   }
 
-  private toAssetFile(file: UpdateFileInfo, byName: Map<string, GitHubAsset>): UpdateFileInfo {
-    const asset = byName.get(file.url);
-    if (asset === undefined) {
-      throw tagged(new Error(`Release 里没有更新文件 ${file.url}。`), "ERR_UPDATER_ASSET_NOT_FOUND");
-    }
-    return { ...file, url: this.assetUrl(asset.id).href };
-  }
-
-  private async releaseOfTag(tag: string): Promise<GitHubRelease> {
-    const cached = this.releasesByTag.get(tag);
-    if (cached !== undefined) return cached;
-    const release = asRelease(await this.fetchJson(`${this.base}/releases/tags/${encodeURIComponent(tag)}`));
-    this.releasesByTag.set(tag, release);
-    return release;
-  }
-
   private assetUrl(id: number): URL {
     return new URL(`${this.base}/releases/assets/${id}`);
-  }
-
-  private async fetchJson(url: string): Promise<unknown> {
-    const raw = await this.httpRequest(new URL(url), { accept: JSON_ACCEPT });
-    if (raw === null) throw new Error(`GitHub API 返回空响应：${url}`);
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      throw new Error(`GitHub API 返回的不是 JSON：${url}`);
-    }
   }
 }

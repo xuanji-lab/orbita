@@ -10,13 +10,20 @@
  *    所有分段直接请求它——不这么做的话，177MB 分成几十段就是几十次 API 请求，会撞上
  *    GitHub 未认证的 60 次/小时限额。签名过期（403）时清掉缓存重新解析一次。
  *
- * 这里只 override `download()`（完整安装包走它）；差分下载的 blockmap 仍走库原有的
- * `downloadToBuffer` / Range 逻辑。
+ * 这里只 override `download()`（完整安装包走它）；差分下载的 blockmap 与 Range 请求仍走库
+ * 原有的 `downloadToBuffer` / `DifferentialDownloader`。**但库在差分下载里把请求头写死成
+ * 通配 Accept**（`DifferentialDownloader.createRequestOptions`），而资产端点收到这个头回的是
+ * **206 + JSON 元数据**：分段长度对得上、内容不对，要等 sha512 才失败（返工前实测的
+ * 「增量更新被 GitHub 回成 JSON，退回下整包 177MB」）。所以这里重写 `createRequest()`：
+ * 凡是发往 `api.github.com/releases/assets/<id>` 的请求，把 Accept 改回
+ * `application/octet-stream`（规则见 github-client.ts 的 withAssetAccept）。
  */
-import { net, session, type IncomingMessage, type Session } from "electron";
+import { net, session, type ClientRequest, type IncomingMessage, type Session } from "electron";
 import type { AppUpdater } from "electron-updater";
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor.js";
 import { NET_SESSION_NAME } from "electron-updater/out/electronHttpExecutor.js";
+import type { RequestOptions } from "node:http";
+import { isGitHubAssetUrl, withAssetAccept } from "./github-client.ts";
 import {
   downloadFile,
   DownloadChecksumError,
@@ -56,9 +63,9 @@ function isRedirect(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-/** GitHub 的发布资产端点：只有它需要先解析 302 */
+/** GitHub 的发布资产端点：只有它需要先解析 302，也只有它要强制资产头 */
 function needsRedirectResolution(url: URL): boolean {
-  return url.hostname === "api.github.com" && url.pathname.includes("/releases/assets/");
+  return isGitHubAssetUrl(url);
 }
 
 /**
@@ -247,6 +254,14 @@ class ElectronRangeTransport implements RangeTransport {
  * runtimeOptions 在 setFeedURL 时捕获 `httpExecutor`，晚一步换，provider 还在用旧的。
  */
 export class ResilientElectronHttpExecutor extends ElectronHttpExecutor {
+  /**
+   * 差分下载 / blockmap / 退回单连接下载都从这里造请求。库把 Accept 写死成通配符（见文件头），
+   * 这里按地址把资产头补回去——比改库源码少一份维护面，也不会漏掉 `readRemoteBytes` 那一类。
+   */
+  override createRequest(options: RequestOptions, callback: (response: IncomingMessage) => void): ClientRequest {
+    return super.createRequest(withAssetAccept(options), callback);
+  }
+
   override async download(url: URL, destination: string, options: DownloadOptions): Promise<string> {
     try {
       await downloadFile(new ElectronRangeTransport(), {

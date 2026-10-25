@@ -12,9 +12,10 @@
  * `build.publish` 仍会在打包时写进 `resources/app-update.yml`，这里用 setFeedURL 覆盖
  * provider；取不到 owner/repo 时退回库自己读 app-update.yml 的行为。
  *
- * **代理**：electron-updater 用自己的 Electron session，不读 `HTTPS_PROXY`。启动时如果
- * 环境里有这个变量，就给那个 session 设 proxyRules（见 proxy.ts）——给系统代理没开、
- * 只能显式走代理的机器一条出口；没配就维持默认（跟随系统代理）。
+ * **网络**：元数据请求经共享 GitHub 客户端（`github-client.ts`，与「历史版本」列表同一个
+ * 实例：同一套缓存与限流记录）；它的 transport 是 `github-net.ts` 的 Electron net，挂在
+ * electron-updater 自己的 session（分区 `electron-updater`）上——下载器也在那个 session，
+ * 所以 `HTTPS_PROXY` / `HTTP_PROXY` 对检查、下载、历史版本列表同时生效（应用时机见 index.ts）。
  *
  * **下载**：库自带的下载器单连接、一断就从 0 重来；这里换成 4MB 分段、最多 6 段并行、
  * 每段从已写字节续传（见 resilient-executor.ts），下完按 latest.yml 的 sha512 校验。
@@ -29,9 +30,7 @@
  * 要替换应用文件，而 utility 进程是同一个 electron.exe，压着文件会让 NSIS 静默安装失败。
  * app.quit() 触发的 before-quit 里还有同一条 dispose，重入幂等。
  */
-import { session } from "electron";
 import { CancellationToken, autoUpdater } from "electron-updater";
-import { NET_SESSION_NAME } from "electron-updater/out/electronHttpExecutor.js";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
 import type {
   UpdateNote,
@@ -44,8 +43,8 @@ import type {
 import { builtinNotes } from "./builtin-notes.ts";
 import { failureKindOf } from "./failure.ts";
 import { GitHubApiProvider } from "./github-api-provider.ts";
+import type { GitHubClient } from "./github-client.ts";
 import { appNotesOf } from "./notes.ts";
-import { hasProxySetting, proxyRulesOf } from "./proxy.ts";
 import { publishTarget, releasesUrl } from "./releases-url.ts";
 import { installResilientDownload } from "./resilient-executor.ts";
 import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
@@ -64,6 +63,8 @@ export interface UpdaterOptions {
   version: string;
   /** 安装前的收尾：把 agent utility 进程收掉（见文件头） */
   beforeInstall: () => void;
+  /** 共享 GitHub 客户端（与「历史版本」列表同一个实例，见 github-client.ts） */
+  github: GitHubClient;
 }
 
 /** 更新说明：只认打包时写进 latest.yml 的纯文本；退回到 Release 页正文时不显示（见 notes.ts 的 appNotesOf） */
@@ -92,6 +93,7 @@ export class Updater {
   private readonly support: UpdateSupport;
   private readonly version: string;
   private readonly beforeInstall: () => void;
+  private readonly github: GitHubClient;
   private readonly listeners = new Set<(snapshot: UpdaterSnapshot) => void>();
   private state: UpdateState = { kind: "idle" };
   /**
@@ -116,6 +118,7 @@ export class Updater {
     this.support = updateSupport(options.packaged, options.platform);
     this.version = options.version;
     this.beforeInstall = options.beforeInstall;
+    this.github = options.github;
   }
 
   /** 当前快照。renderer 挂载时拉一次，之后靠 updater:state 推送 */
@@ -144,7 +147,6 @@ export class Updater {
       );
       return;
     }
-    await this.applyProxy();
     autoUpdater.logger = {
       info: (message?: unknown) => console.info("[更新:库]", message),
       warn: (message?: unknown) => console.warn("[更新:库]", message),
@@ -169,6 +171,8 @@ export class Updater {
         updateProvider: GitHubApiProvider,
         owner: target.owner,
         repo: target.repo,
+        // 与「历史版本」列表共用：同一套网络 / 代理 / 缓存 / 限流记录
+        client: this.github,
       });
     }
 
@@ -284,36 +288,16 @@ export class Updater {
     const message = error instanceof Error ? error.message : String(error);
     const failure = failureKindOf(error);
     console.error(`[更新] ${stageLabel(stage)}失败（${failure}）：`, message);
+    if (failure === "rate-limit") {
+      // 同一本限流账（检查更新 + 历史版本列表共用）：记下来，支持时一眼看出是配额还是网络
+      console.warn("[更新] GitHub 限流记录：", JSON.stringify(this.github.rateLimit()));
+    }
     this.apply({ type: "failed", stage, failure, message });
   }
 
   /**
-   * 环境里有 HTTPS_PROXY / HTTP_PROXY 时，把它应用到 electron-updater 自己的 session。
-   * 没配就什么都不做——库默认跟随系统代理，保持用户原来的行为。
-   *
-   * 代理值不写日志（可能带内网地址）；只报「设上了 / 没设上」。
+   * 状态机对无关动作返回同一个引用：据此跳过广播
    */
-  private async applyProxy(): Promise<void> {
-    const rules = proxyRulesOf(process.env);
-    if (rules === null) {
-      // 配了却用不上（带账号密码 / 协议不认识）：不能静默直连，否则用户以为代理已生效
-      if (hasProxySetting(process.env)) {
-        console.warn(
-          "[更新] HTTPS_PROXY / HTTP_PROXY 的值不能当更新出口（无法解析、协议不认识，或带账号密码），继续直连",
-        );
-      }
-      return;
-    }
-    try {
-      await session.fromPartition(NET_SESSION_NAME, { cache: false }).setProxy({ proxyRules: rules });
-      console.info("[更新] 更新出口已按 HTTPS_PROXY / HTTP_PROXY 设置代理");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn("[更新] HTTPS_PROXY / HTTP_PROXY 没能应用到更新出口，继续直连：", message);
-    }
-  }
-
-  /** 状态机对无关动作返回同一个引用：据此跳过广播 */
   private apply(action: UpdaterAction): void {
     const next = reduceUpdater(this.state, action);
     if (next === this.state) return;

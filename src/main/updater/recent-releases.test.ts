@@ -12,6 +12,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import packageJson from "../../../package.json" with { type: "json" };
+import { GitHubClient, type GitHubTransport } from "./github-client.ts";
 import { createRecentReleases, notesFromChannelFile, parseRecentReleases } from "./recent-releases.ts";
 import { releasesApiUrl } from "./releases-url.ts";
 
@@ -46,16 +47,30 @@ const LATEST_YML = [
   "",
 ].join("\n");
 
-/** 按地址作答的 fetch 替身：列表端点给 JSON，latest.yml 给原文；没登记的地址 404 */
-function stubFetch(calls: string[], routes: Record<string, { status?: number; body: unknown }>): typeof fetch {
-  return async (input) => {
-    const url = String(input);
-    calls.push(url);
-    const route = Object.entries(routes).find(([prefix]) => url.startsWith(prefix))?.[1];
-    if (route === undefined) return new Response("not found", { status: 404 });
+/**
+ * 共享客户端的 transport 替身：列表端点给 JSON，latest.yml 给原文；没登记的地址 404。
+ * 网络请求由 GitHubClient 发出（缓存 / 限流都在它那里），这里只负责作答。
+ */
+function stubTransport(
+  calls: string[],
+  routes: Record<string, { status?: number; body: unknown }>,
+): GitHubTransport {
+  return async ({ url }) => {
+    calls.push(url.href);
+    const route = Object.entries(routes).find(([prefix]) => url.href.startsWith(prefix))?.[1];
+    if (route === undefined) return { status: 404, headers: {}, body: "not found" };
     const body = typeof route.body === "string" ? route.body : JSON.stringify(route.body);
-    return new Response(body, { status: route.status ?? 200 });
+    return { status: route.status ?? 200, headers: {}, body };
   };
+}
+
+/** 每个用例一套客户端：缓存是共享的，不能跨用例串味 */
+function clientOf(
+  calls: string[],
+  routes: Record<string, { status?: number; body: unknown }>,
+  now?: () => number,
+): GitHubClient {
+  return new GitHubClient({ transport: stubTransport(calls, routes), now });
 }
 
 const API = "https://api.github.com/repos/a/b/releases";
@@ -137,10 +152,10 @@ describe("notesFromChannelFile —— latest.yml → 软件里的说明", () => 
   });
 });
 
-describe("createRecentReleases —— 缓存与失败", () => {
+describe("createRecentReleases —— 共享客户端、缓存与失败", () => {
   test("打到 API 端点（带 per_page），再拉这一版的 latest.yml：说明来自 yml，Release 正文不进来", async () => {
     const calls: string[] = [];
-    const recent = createRecentReleases({ endpoint: () => API, call: stubFetch(calls, ROUTES) });
+    const recent = createRecentReleases({ endpoint: () => API, client: clientOf(calls, ROUTES) });
     const result = await recent.recent();
     assert.equal(result.ok, true);
     assert.deepEqual(result.ok ? result.releases[0]?.notes : null, [
@@ -154,26 +169,34 @@ describe("createRecentReleases —— 缓存与失败", () => {
 
   test("这一版没传 latest.yml（404）：那一行没有说明，列表照常，且照常缓存", async () => {
     const calls: string[] = [];
-    const recent = createRecentReleases({ endpoint: () => API, call: stubFetch(calls, { [API]: { body: [ENTRY] } }) });
+    const recent = createRecentReleases({
+      endpoint: () => API,
+      client: clientOf(calls, { [API]: { body: [ENTRY] } }),
+    });
     const first = await recent.recent();
     assert.equal(first.ok ? first.releases[0]?.notes : "x", null);
     await recent.recent();
     assert.equal(calls.length, 2, "404 是确定的「没有」，第二次应命中缓存");
   });
 
-  test("latest.yml 网络层失败：那一行没有说明，但不缓存——下次展开再试", async () => {
+  test("latest.yml 网络层失败：那一行没有说明，且只有它不缓存——下次展开再拉", async () => {
     const calls: string[] = [];
-    const flaky: typeof fetch = async (input) => {
-      calls.push(String(input));
-      if (String(input) === YML_URL) throw new Error("socket hang up");
-      return new Response(JSON.stringify([ENTRY]), { status: 200 });
+    const flaky: GitHubTransport = async ({ url }) => {
+      calls.push(url.href);
+      if (url.href === YML_URL) throw new Error("socket hang up");
+      return { status: 200, headers: {}, body: JSON.stringify([ENTRY]) };
     };
-    const recent = createRecentReleases({ endpoint: () => API, call: flaky });
+    const recent = createRecentReleases({
+      endpoint: () => API,
+      client: new GitHubClient({ transport: flaky }),
+    });
     const first = await recent.recent();
     assert.equal(first.ok, true);
     assert.equal(first.ok ? first.releases[0]?.notes : "x", null);
     await recent.recent();
-    assert.equal(calls.length, 4, "有一份是网络失败就不缓存，第二次整套重拉");
+    // 列表原文在共享客户端缓存里（10 分钟），失败的 latest.yml 不进缓存：第二次只重拉它
+    assert.equal(calls.length, 3, "失败的说明不缓存，下次展开只重拉那一份");
+    assert.equal(calls.filter((url) => url === YML_URL).length, 2);
   });
 
   test("成功结果缓存 10 分钟：窗口内再点不打 API，过期后再打", async () => {
@@ -181,7 +204,7 @@ describe("createRecentReleases —— 缓存与失败", () => {
     let clock = 0;
     const recent = createRecentReleases({
       endpoint: () => API,
-      call: stubFetch(calls, ROUTES),
+      client: clientOf(calls, ROUTES, () => clock),
       now: () => clock,
     });
     await recent.recent();
@@ -196,7 +219,7 @@ describe("createRecentReleases —— 缓存与失败", () => {
     const calls: string[] = [];
     const recent = createRecentReleases({
       endpoint: () => API,
-      call: stubFetch(calls, { [API]: { status: 403, body: { message: "rate limited" } } }),
+      client: clientOf(calls, { [API]: { status: 403, body: { message: "rate limited" } } }),
     });
     const first = await recent.recent();
     assert.equal(first.ok, false);
@@ -208,14 +231,16 @@ describe("createRecentReleases —— 缓存与失败", () => {
   test("根形状不对（非数组）落成 ok:false", async () => {
     const recent = createRecentReleases({
       endpoint: () => API,
-      call: stubFetch([], { [API]: { body: { message: "Not Found" } } }),
+      client: new GitHubClient({
+        transport: stubTransport([], { [API]: { body: { message: "Not Found" } } }),
+      }),
     });
     const result = await recent.recent();
     assert.equal(result.ok, false);
   });
 
   test("没有配置发布源时不给兜底地址，直接说清楚", async () => {
-    const recent = createRecentReleases({ endpoint: () => null, call: stubFetch([], {}) });
+    const recent = createRecentReleases({ endpoint: () => null, client: clientOf([], {}) });
     const result = await recent.recent();
     assert.equal(result.ok, false);
   });
@@ -223,9 +248,11 @@ describe("createRecentReleases —— 缓存与失败", () => {
   test("网络异常落成 ok:false，不抛给调用方", async () => {
     const recent = createRecentReleases({
       endpoint: () => API,
-      call: async () => {
-        throw new Error("ENOTFOUND api.github.com");
-      },
+      client: new GitHubClient({
+        transport: async () => {
+          throw new Error("ENOTFOUND api.github.com");
+        },
+      }),
     });
     const result = await recent.recent();
     assert.equal(result.ok, false);
