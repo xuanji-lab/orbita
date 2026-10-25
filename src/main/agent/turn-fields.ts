@@ -5,6 +5,7 @@
  */
 import type {
   AgentCommand,
+  ComputerUseTurnContext,
   ProviderSecrets,
   SubmitAgentInput,
   TurnDirectories,
@@ -31,8 +32,9 @@ export function turnFields(
     attributionLanguage: Language;
     /** 实验功能「PDF 引用」的开关（settings.experimentalFeatures）：开着才注册 cite_pdf；缺席 = 关 */
     pdfCitations: boolean;
-    /** 实验功能「电脑使用」的开关（settings.experimentalFeatures）：开着才注册沙箱工具组；缺席 = 关 */
-    computerUse: boolean;
+    /** 实验功能「电脑使用」的现场（settings.experimentalFeatures）：开着才注册沙箱工具组；
+     * 其中 allowNetwork 是「这次沙箱有没有出网」——只在开着时有意义 */
+    computerUse: ComputerUseTurnContext;
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
