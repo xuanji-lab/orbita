@@ -64,11 +64,14 @@ describe("judgeStall：两段式判据的边界", () => {
 });
 
 describe("stallNotice：文案只说看到的事实，不宣布卡死", () => {
-  test("静默时长、采样窗口、CPU 阈值都来自判定结果", () => {
+  test("静默时长、采样窗口、CPU 阈值都来自判定结果，契约段与散文段都在", () => {
     const text = stallNotice({ quietSeconds: 92, confirmSeconds: 60, cpuLimitMs: 100, cpuDeltaMs: 3 });
-    assert.match(text, /\[orbita\] 本命令有 92 秒无输出/);
-    assert.match(text, /采样 60 秒，CPU 增长 < 100ms/);
-    assert.match(text, /可考虑中止它，或改用 terminal_\*/);
+    // 竖线之前是渲染层解析的契约：三个数字都带单位，cpu_delta 是实测值
+    assert.match(text, /\[orbita\] kind=stalled quiet=92s sampled=60s cpu_delta=3ms \| /);
+    // 竖线之后是给模型的整句：阈值（不是实测）与「可以怎么办」都保留
+    assert.match(text, /No output for 92s/);
+    assert.match(text, /less than 100ms/);
+    assert.match(text, /stop it or use the terminal_\* tools/);
     // 「已卡死」这类结论系统层面证明不了，文案里不许出现
     assert.doesNotMatch(text, /卡死/);
     assert.ok(text.startsWith("\n") && text.endsWith("\n"), "与后代提示同一种行内追加形态");
@@ -91,7 +94,7 @@ describe("createStallWatcher：复位、放弃、清理", () => {
     await settle(120);
     watcher.stop();
     assert.equal(notices.length, 1);
-    assert.match(notices[0] ?? "", /无输出/);
+    assert.match(notices[0] ?? "", /\[orbita\] kind=stalled quiet=\d+s /);
     assert.equal(calls, 2, "判定只采样两次");
   });
 

@@ -53,6 +53,8 @@ import {
   liveTailLines,
   expectedSecondsOf,
   formatRunClock,
+  mergeBashNotices,
+  parseBashNotices,
   quietNoticeSeconds,
   shellAutoExpand,
   stripTrailingBlankLines,
@@ -65,6 +67,7 @@ import {
   splitPathTail,
   streamingThinkingKey,
   summarizeToolResult,
+  summaryOfText,
   editDiffStats,
   editGroupFileCount,
   thinkingDurationText,
@@ -3591,6 +3594,13 @@ const SLOT = {
 } satisfies Record<string, React.CSSProperties>;
 
 /**
+ * 次行的左缩进：与折叠行行首的**工具名左缘相切**（按钮内边距 10 + 图标 14 + 间隙 8）。
+ * 次行整块长在 `ToolLine` 内部，不是转录列表的兄弟节点——否则折叠时说明会变成孤儿
+ * （`bash-notice-ui-v4.html`）：它是这一行的补充，不是一条独立的记录。
+ */
+const NOTICE_INDENT = 32;
+
+/**
  * 行首 label 的亮度是**时间态**：进行中 secondary 半粗（比正文暗一档，全场唯一在动），
  * 状态落定整行退到 tertiary——完成的都是过去时，行与行不再争层次。
  * 失败红是语义色，不参与档位，由调用方另行覆盖。
@@ -3810,6 +3820,18 @@ function ToolLine(props: {
     setOpen((value) => !value);
   };
 
+  // ── bash 通知行（`[orbita] kind=…`）：三个槽位的输入 ──
+  // 行尾（extended）与次行（descendants / stalled）**折叠着也要能读**，所以 shell 行的
+  // 正文总要拼一次。useMemo 钉在结果对象上：落定后只算一次；跑着的帧本来就每帧都变
+  // （活尾也要正文），没有额外代价。解析器会把 `[orbita]` 行从显示用正文里摘掉，
+  // **会话记录与模型看到的文本不动**。
+  const shellBody = useMemo(
+    () => (shell && result !== undefined ? toolResultText(result, t) : ""),
+    [shell, result, t],
+  );
+  const parsedNotice = useMemo(() => parseBashNotices(shellBody), [shellBody]);
+  const notices = useMemo(() => mergeBashNotices(parsedNotice.notices), [parsedNotice]);
+
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
   // 样式走（红色 triangle-alert + 可展开看错误），不能被派出卡/标记行的「成功
@@ -3860,7 +3882,14 @@ function ToolLine(props: {
     typeof (props.input as Record<string, unknown>)["path"] === "string"
       ? skillForReadPath((props.input as Record<string, unknown>)["path"] as string, props.skills)
       : null;
-  const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
+  const summary =
+    mcp !== null
+      ? summarizeMcpResult(result, t)
+      : // shell 行的量词要算在**解析后的正文**上：`[orbita]` 行已经不在展开体里了，
+        // 拿原文数行/字数会与用户看到的正文对不上（只有通知的静默命令会成「1 行」）
+        shell && result !== undefined
+        ? summaryOfText(parsedNotice.body, t)
+        : summarizeToolResult(result, t);
   const callSummary = toolCallSummary(props.toolName, props.input);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
   // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
@@ -3884,7 +3913,11 @@ function ToolLine(props: {
   // 跑着的 shell 的活尾预览（shellActive）。活跃轮的组行默认铺开，一轮几十个工具时
   // 这条 join 会随每一帧流式更新重跑几十遍，全是白付的分配；落定的成员行更不必说。
   const needBody = open || shellActive;
-  const rawBody = needBody && result !== undefined ? toolResultText(result, t) : "";
+  const rawBody = shell
+    ? parsedNotice.body
+    : needBody && result !== undefined
+      ? toolResultText(result, t)
+      : "";
   // 「已 N 秒无输出」的输出帧时钟：live 的 partial 每来一帧就是一段新文本，rawBody 变了
   // 就算「有输出」。比对放在这里（rawBody 只有到这里才算得出），ref 声明在上面 hooks 区
   // ——本组件中间有按 toolName 早退的分支，hook 不能出现在它们后面。跳秒重渲染时文本没变，
@@ -3937,6 +3970,48 @@ function ToolLine(props: {
   // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
   // 展开时藏起（展开体本身就是完整活尾，别显两遍）
   const tailPreview = shellActive && !open ? tailPreviewLines(rawBody) : [];
+
+  // ── 三个槽位的文案（设计裁决：同一行最多一条次行、最多一条 cap）──
+  // 失败 / 已中断的行不给次行：命令已经死了，没有待定动作；行尾的结果词与红图标
+  // 已经说完了，再挂一句只是留白。
+  const processNotice = failed || interrupted ? null : notices.process;
+  const stalledNotice = processNotice?.stalled ?? null;
+  const noticePrimary =
+    processNotice === null
+      ? null
+      : processNotice.pid !== undefined
+        ? t.chat.bashStillRunning
+        : stalledNotice?.quiet !== undefined
+          ? t.chat.bashStalled(String(stalledNotice.quiet))
+          : t.chat.bashStalledPlain;
+  // 次行尾部的补充：进程事实在前（结果变了），静默只是「它没在动」。静默合并进
+  // 进程那句时不再重复「采样 N 秒」——主句已经够长，完整证据在正文里。
+  const noticeTails: string[] = [];
+  if (processNotice !== null) {
+    if (processNotice.pid !== undefined) {
+      noticeTails.push(t.chat.bashPid(String(processNotice.pid)));
+      if (stalledNotice !== null) {
+        noticeTails.push(
+          stalledNotice.quiet !== undefined
+            ? t.chat.bashQuietNoCpu(formatRunClock(stalledNotice.quiet * 1000))
+            : t.chat.bashStalledPlain,
+        );
+      }
+    } else if (stalledNotice?.sampled !== undefined) {
+      noticeTails.push(t.chat.bashStalledSampled(String(stalledNotice.sampled)));
+    }
+  }
+  // 展开体那句人话：撞上限被截断不占次行，原因在这里讲，机器原文
+  // （`Command timed out after N seconds`）在下面的输出块里。
+  const cap = notices.cap;
+  const capNote =
+    cap === null || cap.seconds === undefined
+      ? null
+      : cap.progress === false
+        ? t.chat.bashCapSilent(formatRunClock(cap.seconds * 1000))
+        : cap.progress === true
+          ? t.chat.bashCapProgress(formatRunClock(cap.seconds * 1000))
+          : t.chat.bashCapUnknown(formatRunClock(cap.seconds * 1000));
 
   // 外部能力芯片行（2026-09-27 两轮裁决）：skill 使用与 MCP 调用的身份收进一枚
   // 药丸芯片（图标 + 类型词 + 名字），与输入框附件 chip / 引用 chip 同族——「外部
@@ -4076,10 +4151,17 @@ function ToolLine(props: {
         {/* 运行中 shell 的时钟（已跑多久 / 上限）与预计——「像卡死」的正解：让时间说话。
             active 已含「中断不算运行」（PR 168），被中断的 bash 这里拿不到时钟 */}
         {runClock !== null && <span style={SLOT.status}>{runClock}</span>}
+        {/* 到点有进展 → 执行层延长过期限：行尾只说「延长到几点」（机器事实），
+            理由与证据不在这里重复 */}
+        {notices.extended?.to !== undefined && (
+          <span style={SLOT.status}>{t.chat.bashExtendedTo(formatRunClock(notices.extended.to * 1000))}</span>
+        )}
         {runExpected !== null && <span style={SLOT.status}>{runExpected}</span>}
         {/* 长时间没有输出：执行层那条「疑似停滞」提示（见 bash-stall.ts）是给模型的，
-            这一条是给人的——同一种状态，两个读者 */}
-        {quietSeconds !== null && (
+            这一条是给人的——同一种状态，两个读者。
+            **次行已经在说同一件事时这枚让位**：次行带着采样证据（「92 秒无输出…采样 61 秒」），
+            而这里是一秒一跳的实时值，两个并排会一起走、越走越远，读起来自相矛盾。 */}
+        {quietSeconds !== null && stalledNotice === null && (
           <span style={SLOT.status}>{t.chat.quietFor(formatRunClock(quietSeconds * 1000))}</span>
         )}
         {/* 已中断（无结果帧且永不回来）：静止的中性状态词——不再呼吸、不假装在跑 */}
@@ -4111,6 +4193,48 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
+      {/* 次行（同一行最多一条）：一句人话 + 你或许要动手的事。12px、次级色，缩进对齐
+          工具名；颜色只落在图标上（warning 是状态信号，不是文字颜色）。 */}
+      {noticePrimary !== null && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 6,
+            marginTop: 2,
+            marginLeft: NOTICE_INDENT,
+            minWidth: 0,
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-ui)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <span
+            style={{
+              flex: "0 0 auto",
+              display: "inline-flex",
+              position: "relative",
+              top: 1,
+              color: "var(--color-warning)",
+            }}
+          >
+            <Icon
+              name={processNotice?.pid !== undefined ? "circle-dot" : "clock"}
+              size={12}
+              strokeWidth={1.8}
+            />
+          </span>
+          <span style={{ minWidth: 0 }}>
+            {noticePrimary}
+            {noticeTails.length > 0 && (
+              <span style={{ color: "var(--color-text-tertiary)" }}>
+                {" · "}
+                {noticeTails.join(" · ")}
+              </span>
+            )}
+          </span>
+        </div>
+      )}
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
           不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
           活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套
@@ -4139,6 +4263,18 @@ function ToolLine(props: {
       {open && expandable && diff !== null && <DiffView diff={diff} />}
       {open && expandable && diff === null && fileView !== null && (
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
+      )}
+      {open && expandable && diff === null && fileView === null && capNote !== null && (
+        <div
+          style={{
+            marginLeft: RAIL_X,
+            color: "var(--color-text-secondary)",
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-ui)",
+          }}
+        >
+          {capNote}
+        </div>
       )}
       {open && expandable && diff === null && fileView === null && (
         <PlainToolBody

@@ -75,14 +75,18 @@ export function judgeStall(samples: StallSamples): StallVerdict | null {
 }
 
 /**
- * 提示文案：与后代存活提示同一个通道（`onData`）、同一种 `[orbita]` 风格、同一句话
- * 说清「看到了什么」与「可以怎么办」。不说「已卡死」——判据证明不了。
+ * 提示文案：与后代存活提示同一个通道（`onData`）、同一种 `[orbita]` 契约。
+ * `cpu_delta` 是**实测**差值（毫秒），散文里说的 `< cpuLimitMs` 是**阈值**——
+ * 两个数字都保留，模型才分得清「离阈值有多远」与「阈值是多少」。
+ * 不说「已卡死」——判据证明不了；能做的事写清（停掉 / 改用 terminal_*）。
  */
 export function stallNotice(verdict: StallVerdict): string {
   return (
-    `\n[orbita] 本命令有 ${verdict.quietSeconds} 秒无输出，进程这段时间也没消耗 CPU` +
-    `（采样 ${verdict.confirmSeconds} 秒，CPU 增长 < ${verdict.cpuLimitMs}ms）。` +
-    "若它在等输入、等网络或死锁，可考虑中止它，或改用 terminal_*。\n"
+    `\n[orbita] kind=stalled quiet=${verdict.quietSeconds}s sampled=${verdict.confirmSeconds}s ` +
+    `cpu_delta=${verdict.cpuDeltaMs}ms | ` +
+    `No output for ${verdict.quietSeconds}s, and the process tree used less than ${verdict.cpuLimitMs}ms ` +
+    `of CPU over a ${verdict.confirmSeconds}s sample. It may be waiting for input or the network, ` +
+    "deadlocked, or just slow. If it is not making progress, stop it or use the terminal_* tools.\n"
   );
 }
 

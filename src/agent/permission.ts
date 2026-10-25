@@ -214,6 +214,11 @@ const TIMEOUT_ERROR_PATTERN = /Command timed out after (\d+) seconds/;
  * HARD_MAX**（模型说的是更大，实际只有 3600）。模型自己声明的合法值照它说的执行、失败是
  * 它自己的判断，不啰嗦。
  *
+ * 文案走 `[orbita] kind=cap seconds=… declared=… | <英文散文>` 契约（竖线之前给渲染层
+ * 解析，竖线之后给模型看）。它与执行层那条 `kind=cap seconds=… progress=…` 共用
+ * `kind`，但回答不同的问题：这条说「上限是谁定的」，那条说「被杀时有没有在干活」。
+ * 两条共存，界面合成一句。
+ *
  * 无论说不说，取用后条目都删掉——`tool_result` 是这个 toolCallId 的最后一站。
  */
 export function commandTimeoutNotice(event: ToolResultLike): ToolResultPatch | undefined {
@@ -225,15 +230,20 @@ export function commandTimeoutNotice(event: ToolResultLike): ToolResultPatch | u
   const hit = TIMEOUT_ERROR_PATTERN.exec(textOf(event.content));
   if (hit === null) return undefined;
   const seconds = hit[1];
+  // 散文里补一句「这个上限是谁定的」：模型自己填的合法值不会走到这里，所以只有两种来路
+  const origin = decision.declared
+    ? `You asked for a longer timeout than the hard maximum, so it was clamped to ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}s.`
+    : "This call did not pass timeout, so our default limit applied.";
   return {
     content: [
       ...event.content,
       {
         type: "text",
         text:
-          `\n\n[orbita] 这条命令在 ${seconds} 秒上限处被终止，输出不完整，先前的进度可能已经丢失。` +
-          `若任务本身确实需要更久，请在调用时显式传 timeout（秒，最多 ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}），` +
-          "或改用 terminal_* 工具。",
+          `\n\n[orbita] kind=cap seconds=${seconds} declared=${decision.declared ? "yes" : "no"} | ` +
+          `The command was terminated at the ${seconds}s limit; the output is incomplete and work done ` +
+          `before the kill may be lost. ${origin} If the task really needs longer, pass timeout ` +
+          `explicitly (seconds, at most ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}), or use the terminal_* tools instead.`,
       },
     ],
   };

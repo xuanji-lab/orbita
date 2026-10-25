@@ -31,6 +31,8 @@ import {
   intraLineTokens,
   interruptedToolCallIds,
   liveTailLines,
+  mergeBashNotices,
+  parseBashNotices,
   parseDiffLines,
   parseEditDiff,
   parseGrepLine,
@@ -52,6 +54,7 @@ import {
   mcpFailureLead,
   summarizeMcpResult,
   summarizeToolResult,
+  summaryOfText,
   thinkingDurationText,
   thinkingPreview,
   toolCallSummary,
@@ -1887,5 +1890,116 @@ describe("运行时钟文案（en / zh）", () => {
     assert.equal(zh.chat.expectedAbout("40 秒"), "预计约 40 秒");
     assert.equal(en.chat.slowerThanExpected, "slower than expected");
     assert.equal(zh.chat.slowerThanExpected, "比预计慢");
+  });
+});
+
+describe("bash 通知行：解析（[orbita] kind=…）", () => {
+  test("四种 kind 各解析成结构化对象，正文只剩命令自己的输出", () => {
+    const text = [
+      "build started",
+      "[orbita] kind=stalled quiet=92s sampled=61s cpu_delta=3ms | No output for 92s.",
+      "[orbita] kind=extended from=600s to=1200s count=1 max=2 | Deadline extended.",
+      "[orbita] kind=descendants pid=105624 | A descendant is still running.",
+      "[orbita] kind=cap seconds=1800 progress=yes | Killed at the limit.",
+    ].join("\n");
+    const parsed = parseBashNotices(text);
+    assert.deepEqual(parsed.notices, [
+      { kind: "stalled", quiet: 92, sampled: 61, cpuDelta: 3 },
+      { kind: "extended", from: 600, to: 1200, count: 1, max: 2 },
+      { kind: "descendants", pid: 105624 },
+      { kind: "cap", seconds: 1800, declared: undefined, progress: true },
+    ]);
+    assert.equal(parsed.body, "build started");
+  });
+
+  test("cap 的 declared=no 解析成布尔假，不认识的值整行留在正文", () => {
+    const declared = parseBashNotices("[orbita] kind=cap seconds=1800 declared=no | …");
+    assert.deepEqual(declared.notices, [{ kind: "cap", seconds: 1800, declared: false, progress: undefined }]);
+    const badValue = "[orbita] kind=cap seconds=1800 declared=maybe | …";
+    assert.deepEqual(parseBashNotices(badValue), { notices: [], body: badValue }, "值不合格 → 原样保留");
+  });
+
+  test("未知 kind、坏掉的格式行原样留在正文里（宁可显示原文，不静默吞掉）", () => {
+    const text = [
+      "out",
+      "[orbita] kind=future-thing foo=1 | unknown",
+      "[orbita] no kind here",
+      "[orbita] kind=stalled quiet=92 | missing unit",
+      "[orbita] kind=stalled quiet=92s unexpected=1 | extra key",
+      "tail",
+    ].join("\n");
+    const parsed = parseBashNotices(text);
+    assert.deepEqual(parsed.notices, []);
+    assert.equal(parsed.body, text, "一条都没命中时正文一个字节都不动");
+  });
+
+  test("CRLF：行首照样锚定，剥掉之后不留空坡", () => {
+    const text = "out\r\n\r\n[orbita] kind=extended from=1s to=2s count=1 max=5 | x\r\nmore\r\n";
+    const parsed = parseBashNotices(text);
+    assert.deepEqual(parsed.notices, [{ kind: "extended", from: 1, to: 2, count: 1, max: 5 }]);
+    assert.equal(parsed.body, "out\nmore\n");
+  });
+
+  test("只认行首：命令自己输出里的 [orbita] 字样不被误伤（含句中与缩进）", () => {
+    const text = ["echoed [orbita] kind=cap seconds=1 progress=yes | x", "  [orbita] kind=cap | x"].join("\n");
+    assert.deepEqual(parseBashNotices(text), { notices: [], body: text });
+  });
+
+  test("多条通知之间的空行收拢成一行，首尾空白行去掉", () => {
+    const text = [
+      "",
+      "[orbita] kind=stalled quiet=30s sampled=60s cpu_delta=0ms | a",
+      "",
+      "",
+      "[orbita] kind=extended from=1s to=2s count=1 max=2 | b",
+      "",
+    ].join("\n");
+    const parsed = parseBashNotices(text);
+    assert.equal(parsed.notices.length, 2);
+    assert.equal(parsed.body, "");
+  });
+});
+
+describe("bash 通知行：折叠行的量词", () => {
+  test("行数 / 字数算在解析后的正文上，通知行不计；只剩通知时是「没有输出」", () => {
+    const parsed = parseBashNotices(
+      "[orbita] kind=stalled quiet=30s sampled=60s cpu_delta=0ms | x" +
+        "\nout\nerr\n",
+    );
+    assert.equal(summaryOfText(parsed.body, zh), zh.chat.lines(2));
+    const silent = parseBashNotices("[orbita] kind=stalled quiet=30s sampled=60s cpu_delta=0ms | x\n");
+    assert.equal(summaryOfText(silent.body, en), en.chat.noOutputShort);
+  });
+});
+
+describe("bash 通知行：合并（一个工具行最多一条次行、最多一条 cap）", () => {
+  test("留了进程 + 疑似停滞 → 一条次行，进程事实在前、静默作补充", () => {
+    const view = mergeBashNotices([
+      { kind: "stalled", quiet: 200, sampled: 61 },
+      { kind: "descendants", pid: 20488 },
+    ]);
+    assert.deepEqual(view.process, { pid: 20488, stalled: { quiet: 200, sampled: 61, cpuDelta: undefined } });
+  });
+
+  test("cap 两条合成一条：seconds 取带 progress 的那条（那才是被杀那一刻的真实期限）", () => {
+    const view = mergeBashNotices([
+      { kind: "cap", seconds: 1800, declared: false },
+      { kind: "cap", seconds: 1740, progress: true },
+    ]);
+    assert.deepEqual(view.cap, { seconds: 1740, progress: true, declared: false });
+  });
+
+  test("只有 declared 那条（powershell 超时）也能用；重复 extended 取最远的那次", () => {
+    const view = mergeBashNotices([
+      { kind: "cap", seconds: 3600, declared: true },
+      { kind: "extended", from: 600, to: 1200, count: 1, max: 2 },
+      { kind: "extended", from: 1200, to: 1800, count: 2, max: 2 },
+    ]);
+    assert.deepEqual(view.cap, { seconds: 3600, progress: undefined, declared: true });
+    assert.deepEqual(view.extended, { to: 1800, count: 2, max: 2 });
+  });
+
+  test("没有通知时三个槽位都是 null", () => {
+    assert.deepEqual(mergeBashNotices([]), { extended: null, process: null, cap: null });
   });
 });

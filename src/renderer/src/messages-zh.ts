@@ -1322,6 +1322,17 @@ export const zh: Messages = {
     slowerThanExpected: "比预计慢",
     // 运行中 shell 长时间没有输出（时长走 formatRunClock，与时钟同一个 m:ss 形态）
     quietFor: (duration) => `无输出 ${duration}`,
+    // bash 通知行（工具结果里的 `[orbita] kind=…`）：行尾 / 次行 / 展开体三个槽位
+    bashExtendedTo: (clock) => `已延长 ${clock}`,
+    bashStillRunning: "后台还有进程在跑",
+    bashPid: (pid) => `pid ${pid}`,
+    bashStalled: (seconds) => `${seconds} 秒无输出，也没消耗 CPU`,
+    bashStalledPlain: "一直没输出，也没消耗 CPU",
+    bashQuietNoCpu: (clock) => `已 ${clock} 无输出、无 CPU`,
+    bashStalledSampled: (seconds) => `采样 ${seconds} 秒`,
+    bashCapProgress: (clock) => `在 ${clock} 上限处被终止；期间一直在输出，进度已丢失。`,
+    bashCapSilent: (clock) => `在 ${clock} 上限处被终止；全程零输出、零 CPU，所以没有重试。`,
+    bashCapUnknown: (clock) => `在 ${clock} 上限处被终止，输出不完整。`,
     tokensApprox: (before) => `约 ${before} token`,
     tokensArrow: (before, after) => `${before} → ${after} token`,
     chars: (n) => `${n} 字`,

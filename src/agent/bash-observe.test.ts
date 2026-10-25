@@ -204,7 +204,8 @@ describe("后代存活提示（本 PR 唯一新增行为）", () => {
         cwd: dir,
       });
       assert.match(output, /early/);
-      assert.match(output, /\[orbita\] 命令已返回，但仍有后代进程在运行/);
+      assert.match(output, /\[orbita\] kind=descendants pid=\d+ \| /);
+      assert.match(output, /descendant processes are still running/);
       // 如实记录现状：这一版**不修**晚到输出丢失，只是告诉模型「还有东西在跑」
       assert.doesNotMatch(output, /LATE_OUTPUT/);
     } finally {
@@ -257,8 +258,8 @@ describe("停滞提示（只提示、绝不杀）", () => {
       const elapsed = Date.now() - startedAt;
       const output = Buffer.concat(chunks).toString("utf8");
       assert.equal(exitCode, 0, "提示不得改变退出码——本 PR 不杀任何进程");
-      assert.match(output, /\[orbita\] 本命令有 \d+ 秒无输出/);
-      assert.match(output, /CPU 增长 < 100ms/);
+      assert.match(output, /\[orbita\] kind=stalled quiet=\d+s sampled=\d+s cpu_delta=\d+ms \| /);
+      assert.match(output, /used less than 100ms/);
       assert.ok(elapsed >= 5_000, `命令必须真的跑完（实测 ${elapsed}ms）`);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -323,7 +324,7 @@ describe("到点决策：有进展就延长，没进展照旧杀", () => {
       assert.match(output, /tick 32/);
       assert.match(
         output,
-        /\[orbita\] 已到 1 秒上限，但命令仍在输出\/消耗 CPU，延长至 2 秒（第 1\/5 次）/,
+        /\[orbita\] kind=extended from=1s to=2s count=1 max=5 \| /,
       );
     } finally {
       await rmTemp(dir);
@@ -349,7 +350,10 @@ describe("到点决策：有进展就延长，没进展照旧杀", () => {
       const pid = await waitForPid(pidFile, 2_800);
       await rejection;
       assert.ok(await waitForDeath(pid), `超时后 pid ${pid} 仍然活着`);
-      assert.doesNotMatch(Buffer.concat(chunks).toString("utf8"), /\[orbita\] 已到/);
+      const output = Buffer.concat(chunks).toString("utf8");
+      assert.doesNotMatch(output, /kind=extended/);
+      // 到点被杀时也要说清「当时有没有进展」——这条是 progress=no
+      assert.match(output, /\[orbita\] kind=cap seconds=1 progress=no \| /);
     } finally {
       await rmTemp(dir);
     }
@@ -377,8 +381,10 @@ describe("到点决策：有进展就延长，没进展照旧杀", () => {
       await rejection;
       assert.ok(await waitForDeath(pid), `次数用完后 pid ${pid} 仍然活着`);
       const output = Buffer.concat(chunks).toString("utf8");
-      assert.match(output, /延长至 2 秒（第 1\/1 次）/);
-      assert.doesNotMatch(output, /第 2\/1 次/);
+      assert.match(output, /kind=extended from=1s to=2s count=1 max=1 \| /);
+      assert.doesNotMatch(output, /count=2 max=1/);
+      // 一直在吐字 → 被杀时是有进展的，秒数取被杀那一刻的累计期限（延长后的 2 秒）
+      assert.match(output, /\[orbita\] kind=cap seconds=2 progress=yes \| /);
     } finally {
       await rmTemp(dir);
     }
@@ -410,7 +416,9 @@ describe("到点决策：有进展就延长，没进展照旧杀", () => {
       assert.ok(elapsed >= 2_300, `必须跑到天花板才被杀（实测 ${elapsed}ms）`);
       assert.ok(await waitForDeath(pid), `到达天花板后 pid ${pid} 仍然活着`);
       // 延长目标被天花板截住：报的是 2 秒，而不是「当前 + 60 秒」
-      assert.match(Buffer.concat(chunks).toString("utf8"), /延长至 2 秒（第 1\/100 次）/);
+      const output = Buffer.concat(chunks).toString("utf8");
+      assert.match(output, /kind=extended from=1s to=2s count=1 max=100 \| /);
+      assert.match(output, /kind=cap seconds=2 progress=yes \| /);
     } finally {
       await rmTemp(dir);
     }
@@ -463,9 +471,9 @@ describe("到点决策：有进展就延长，没进展照旧杀", () => {
         timeout: 1,
       });
       assert.equal(exitCode, 0, "靠 CPU 证据延长，命令自己跑完后退出码仍是 0");
-      assert.match(output, /\[orbita\] 已到 1 秒上限/);
+      assert.match(output, /\[orbita\] kind=extended from=1s to=/);
       // CPU 一直在涨 → 停滞判据不成立，不该出现「本命令有 N 秒无输出」的提示
-      assert.doesNotMatch(output, /本命令有 \d+ 秒无输出/);
+      assert.doesNotMatch(output, /kind=stalled/);
     } finally {
       await rmTemp(dir);
     }

@@ -1462,6 +1462,19 @@ export const en = {
     slowerThanExpected: "slower than expected",
     // 运行中 shell 长时间没有输出（时长走 formatRunClock，与时钟同一个 m:ss 形态）
     quietFor: (duration: string) => `no output for ${duration}`,
+    // bash 通知行（工具结果里的 `[orbita] kind=…`）：行尾 / 次行 / 展开体三个槽位
+    bashExtendedTo: (clock: string) => `extended ${clock}`,
+    bashStillRunning: "A process is still running in the background",
+    bashPid: (pid: string) => `pid ${pid}`,
+    bashStalled: (seconds: string) => `no output for ${seconds}s and no CPU used`,
+    bashStalledPlain: "no output and no CPU used",
+    bashQuietNoCpu: (clock: string) => `idle for ${clock}, no CPU used`,
+    bashStalledSampled: (seconds: string) => `sampled ${seconds}s`,
+    bashCapProgress: (clock: string) =>
+      `Killed at the ${clock} limit; it was still producing output, so part of that work is lost.`,
+    bashCapSilent: (clock: string) =>
+      `Killed at the ${clock} limit; it produced no output and used no CPU, so retrying would wait the same.`,
+    bashCapUnknown: (clock: string) => `Killed at the ${clock} limit; the output is incomplete.`,
     tokensApprox: (before: string) => `~${before} tokens`,
     tokensArrow: (before: string, after: string) => `${before} → ${after} tokens`,
     // 工具结果摘要

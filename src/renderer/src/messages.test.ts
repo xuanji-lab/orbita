@@ -44,6 +44,9 @@ const ALLOWED_LATIN = new Set([
   "mcp",
   // 计量单位（与原型「42 tok/s」一致；复数形式同属一个单位词）
   "token",
+  // 技术名：运行中 shell 的进程标识与处理器占用（开发者一看就懂的缩写，不译）
+  "pid",
+  "CPU",
   "tok",
   "tokens",
   // 通用缩写：代码托管与模型的 ID

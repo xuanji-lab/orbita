@@ -971,6 +971,227 @@ export function stripTrailingBlankLines(text: string): string {
   return lines.join("\n");
 }
 
+// ── bash 通知行（`[orbita] kind=…` 契约）──
+
+/**
+ * 执行层追加进工具结果的一行通知，**契约部分解析成结构化对象**。
+ *
+ * 语法（生产者：`agent/bash-observe.ts`、`agent/bash-stall.ts`、`agent/permission.ts`）：
+ *
+ * ```
+ * [orbita] kind=<名字> <key=value…> | <给模型看的一句英文散文>
+ * ```
+ *
+ * **竖线之前是契约，竖线之后是散文**：渲染层只解析前半段，散文改字不影响解析。
+ * 整行必须独占一行（行首锚定）——命令自己的输出里出现 `[orbita]` 字样不该被误伤。
+ *
+ * 字段全部可选：缺字段就是「生产者没说」，渲染层自己退让（宁可不显示数字，不编造）。
+ * 布尔字段（`declared` / `progress`）由契约里的 `yes` / `no` 解析而来——它们问的是
+ * 是 / 否，不该在类型里留一个字符串。
+ */
+export type BashNotice =
+  | { kind: "descendants"; pid?: number }
+  | { kind: "stalled"; quiet?: number; sampled?: number; cpuDelta?: number }
+  | { kind: "extended"; from?: number; to?: number; count?: number; max?: number }
+  | { kind: "cap"; seconds?: number; declared?: boolean; progress?: boolean };
+
+type BashNoticeKind = BashNotice["kind"];
+
+/**
+ * 每个 kind 允许出现的键，以及值的形状（解析即校验，见 `parseBashNoticeLine`）：
+ * - `null`：纯数字；
+ * - `"s"` / `"ms"`：数字 + 单位；
+ * - `"yes"`：`yes` / `no`。
+ *
+ * **不在这张表里的键 = 格式坏掉**，整行原样留在正文里。宁可让用户看到一行机器话，
+ * 也不要静默吞掉——生产者加了字段却没人更新解析时，界面上的原文就是唯一的告警。
+ */
+const NOTICE_FIELDS: Record<BashNoticeKind, Readonly<Record<string, string | null>>> = {
+  descendants: { pid: null },
+  stalled: { quiet: "s", sampled: "s", cpu_delta: "ms" },
+  extended: { from: "s", to: "s", count: null, max: null },
+  cap: { seconds: null, declared: "yes", progress: "yes" },
+};
+
+const NOTICE_HEAD = /^\[orbita\]\s+kind=([a-z]+)(?=\s|\||$)/;
+
+function isBashNoticeKind(value: string): value is BashNoticeKind {
+  return Object.prototype.hasOwnProperty.call(NOTICE_FIELDS, value);
+}
+
+/** 一个字段的原文 → 数字 / 布尔；`null` = 不认识这个键或值不合格（整行判格式坏掉）。 */
+function noticeFieldValue(kind: BashNoticeKind, key: string, raw: string): number | boolean | null {
+  const shape = NOTICE_FIELDS[kind][key];
+  if (shape === undefined) return null;
+  if (shape === "yes") {
+    if (raw === "yes") return true;
+    if (raw === "no") return false;
+    return null;
+  }
+  const match = (shape === null ? /^(\d+(?:\.\d+)?)$/ : new RegExp(`^(\\d+(?:\\.\\d+)?)${shape}$`)).exec(raw);
+  if (match === null) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 解析一行。不是本契约的行（不在行首、kind 不认识、键值不合格、重复键）一律返回
+ * `null`——调用方把它原样留在正文里。
+ */
+function parseBashNoticeLine(line: string): BashNotice | null {
+  const head = NOTICE_HEAD.exec(line);
+  if (head === null) return null;
+  const kind = head[1] ?? "";
+  if (!isBashNoticeKind(kind)) return null;
+  const rest = line.slice(head[0].length);
+  const bar = rest.indexOf("|");
+  const contract = (bar === -1 ? rest : rest.slice(0, bar)).trim();
+  const values = new Map<string, number | boolean>();
+  if (contract !== "") {
+    for (const token of contract.split(/\s+/)) {
+      const eq = token.indexOf("=");
+      if (eq <= 0) return null;
+      const key = token.slice(0, eq);
+      if (values.has(key)) return null;
+      const value = noticeFieldValue(kind, key, token.slice(eq + 1));
+      if (value === null) return null;
+      values.set(key, value);
+    }
+  }
+  const num = (key: string): number | undefined => {
+    const value = values.get(key);
+    return typeof value === "number" ? value : undefined;
+  };
+  const flag = (key: string): boolean | undefined => {
+    const value = values.get(key);
+    return typeof value === "boolean" ? value : undefined;
+  };
+  switch (kind) {
+    case "descendants":
+      return { kind, pid: num("pid") };
+    case "stalled":
+      return { kind, quiet: num("quiet"), sampled: num("sampled"), cpuDelta: num("cpu_delta") };
+    case "extended":
+      return { kind, from: num("from"), to: num("to"), count: num("count"), max: num("max") };
+    case "cap":
+      return { kind, seconds: num("seconds"), declared: flag("declared"), progress: flag("progress") };
+  }
+}
+
+/**
+ * 通知行被拆掉之后收拢空行：**只碰通知行紧邻的空行**（生产者自己带了首尾换行，
+ * 不一起拿掉就会在输出块里留下空坡），其余空行是用户的输出结构，一个字不动。
+ * 两遍单向扫：每一行通知把左右两侧连续的空行标记成一并删除。
+ */
+function dropBlankLinesAroundNotices(lines: { text: string; keep: boolean }[]): void {
+  for (let i = 0; i < lines.length; i += 1) {
+    const entry = lines[i];
+    if (entry === undefined || entry.keep) continue;
+    for (let j = i - 1; j >= 0; j -= 1) {
+      const before = lines[j];
+      if (before === undefined || !before.keep || before.text.trim() !== "") break;
+      before.keep = false;
+    }
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const after = lines[j];
+      if (after === undefined || !after.keep || after.text.trim() !== "") break;
+      after.keep = false;
+    }
+  }
+}
+
+/**
+ * 从工具结果文本里拆出通知行：返回结构化通知 + **去掉这些行的正文**。
+ *
+ * 只改显示用的正文，会话记录与工具结果文本原样不动——模型必须还能看到整句机器话。
+ * 没有一条通知命中时正文原样返回（**一个字节都不动**，包括 CRLF）：解析器不该在
+ * 普通输出上留下指纹。
+ */
+export function parseBashNotices(text: string): { notices: BashNotice[]; body: string } {
+  if (!text.includes("[orbita]")) return { notices: [], body: text };
+  const notices: BashNotice[] = [];
+  const lines: { text: string; keep: boolean }[] = [];
+  let removed = false;
+  for (const line of text.split(/\r?\n/)) {
+    const notice = parseBashNoticeLine(line);
+    if (notice === null) {
+      lines.push({ text: line, keep: true });
+      continue;
+    }
+    notices.push(notice);
+    lines.push({ text: line, keep: false });
+    removed = true;
+  }
+  if (!removed) return { notices: [], body: text };
+  dropBlankLinesAroundNotices(lines);
+  return {
+    notices,
+    body: lines
+      .filter((line) => line.keep)
+      .map((line) => line.text)
+      .join("\n"),
+  };
+}
+
+/**
+ * 三个槽位的合并结果。**同一个工具行最多一条次行、最多一条 cap**：两条同义警报
+ * 并排，用户会都不看（设计裁决，见 `bash-notice-ui-v4.html`）。
+ */
+export interface BashNoticeView {
+  /** 行尾的状态词：已延长到哪一档（多次延长取**最远**的那次）。 */
+  extended: { to?: number; count?: number; max?: number } | null;
+  /** 次行：留了进程的事实在前（结果变了），静默只是「它没在动」，作补充。 */
+  process: { pid?: number; stalled?: { quiet?: number; sampled?: number; cpuDelta?: number } } | null;
+  /** 撞上限被截断：`progress`（当时有没有进展）与 `declared`（上限是谁定的）合成一条。 */
+  cap: { seconds?: number; progress?: boolean; declared?: boolean } | null;
+}
+
+/**
+ * 合并规则（纯函数）：
+ * - `descendants` + `stalled` → 同一条次行（进程事实在前，静默作补充）；
+ * - `extended` 有多次 → 只留最远的那次；
+ * - `cap` 有两条（执行层说「当时有没有进展」、权限层说「上限是谁定的」）→ 一条，
+ *   `seconds` 以 **带 `progress` 的那条为准**（它才是被杀那一刻的真实期限）。
+ */
+export function mergeBashNotices(notices: readonly BashNotice[]): BashNoticeView {
+  const view: BashNoticeView = { extended: null, process: null, cap: null };
+  for (const notice of notices) {
+    switch (notice.kind) {
+      case "descendants":
+        view.process = { ...view.process, pid: notice.pid ?? view.process?.pid };
+        break;
+      case "stalled":
+        view.process = {
+          ...view.process,
+          stalled: {
+            quiet: notice.quiet ?? view.process?.stalled?.quiet,
+            sampled: notice.sampled ?? view.process?.stalled?.sampled,
+            cpuDelta: notice.cpuDelta ?? view.process?.stalled?.cpuDelta,
+          },
+        };
+        break;
+      case "extended":
+        view.extended = {
+          to: notice.to ?? view.extended?.to,
+          count: notice.count ?? view.extended?.count,
+          max: notice.max ?? view.extended?.max,
+        };
+        break;
+      case "cap": {
+        const previous = view.cap ?? {};
+        const seconds = notice.progress !== undefined ? (notice.seconds ?? previous.seconds) : previous.seconds;
+        view.cap = {
+          seconds: seconds ?? notice.seconds,
+          progress: notice.progress ?? previous.progress,
+          declared: notice.declared ?? previous.declared,
+        };
+        break;
+      }
+    }
+  }
+  return view;
+}
+
 /**
  * 自动展开判定（纯函数，驱动方拿着它在每秒重算）：模型给了 expected 且达阈值 →
  * **开跑就展**（一秒都不让用户盯着静止的行）；没给或没达 → 已运行时长达阈值再展。
@@ -1149,13 +1370,22 @@ export function summarizeToolResult(result: ToolTranscriptItem | undefined, t: M
   if (result === undefined) return null;
   if (result.status === "running") return t.common.running;
   if (result.status === "error") return t.common.failed;
-  const text = result.content
-    .map((block) => (block.type === "text" ? block.text : "[image]"))
-    .join("\n")
-    .trim();
-  if (text === "") return t.chat.noOutputShort;
-  const lines = text.split("\n").length;
-  return lines > 1 ? t.chat.lines(lines) : t.chat.chars(text.length);
+  return summaryOfText(
+    result.content.map((block) => (block.type === "text" ? block.text : "[image]")).join("\n"),
+    t,
+  );
+}
+
+/**
+ * 一段文本的摘要（行数 / 字数 / 空）。**两个消费者**：工具结果的折叠摘要，以及 shell
+ * 行按 `parseBashNotices` 的 `body` 重算的摘要（`[orbita]` 行不在展开体里，也不该
+ * 计进行数）。
+ */
+export function summaryOfText(text: string, t: Messages): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return t.chat.noOutputShort;
+  const lines = trimmed.split("\n").length;
+  return lines > 1 ? t.chat.lines(lines) : t.chat.chars(trimmed.length);
 }
 
 /** MCP 工具的入参摘要（4-5）：不认识的工具没有专用摘要器，退回 JSON 一行

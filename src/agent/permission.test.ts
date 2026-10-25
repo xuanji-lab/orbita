@@ -261,15 +261,18 @@ describe("命令超时结果的交代（commandTimeoutNotice）", () => {
     await gate({ toolCallId, toolName, input });
   }
 
-  test("默认值被杀 → 追加一段中文说明，报出的秒数是 pi 实际报的那个", async () => {
+  test("默认值被杀 → 追加一段说明，报出的秒数是 pi 实际报的那个", async () => {
     const id = "noticeDefault";
     await gateCommand(id, { command: "bun run dev" });
     const patch = commandTimeoutNotice(timedOut(id, COMMAND_TIMEOUT_DEFAULT_SECONDS));
     assert.ok(patch, "补的默认值到点被杀，必须说话");
     const appended = patch.content[1];
     assert.equal(appended?.type, "text");
-    assert.match(appended?.type === "text" ? appended.text : "", /\[orbita\].*1800 秒上限处被终止/);
-    assert.match(appended?.type === "text" ? appended.text : "", /timeout/);
+    const text = appended?.type === "text" ? appended.text : "";
+    // 契约段：seconds 取 pi 报的那个，declared=no（模型没说过 timeout，默认值是我们补的）
+    assert.match(text, /\[orbita\] kind=cap seconds=1800 declared=no \| /);
+    assert.match(text, /did not pass timeout/);
+    assert.match(text, /pass timeout explicitly/);
     assert.equal(patch.content[0]?.type, "text", "原输出留在前面，不替换");
     assert.equal("isError" in patch, false, "不改 isError：被杀确实是失败");
   });
@@ -292,7 +295,10 @@ describe("命令超时结果的交代（commandTimeoutNotice）", () => {
     const patch = commandTimeoutNotice(timedOut(id, COMMAND_TIMEOUT_HARD_MAX_SECONDS));
     assert.ok(patch);
     const appended = patch.content[1];
-    assert.match(appended?.type === "text" ? appended.text : "", /3600 秒上限处被终止/);
+    const text = appended?.type === "text" ? appended.text : "";
+    // 被夹到 HARD_MAX：declared=yes，散文里说清「你要的更大，被夹到 3600」
+    assert.match(text, /\[orbita\] kind=cap seconds=3600 declared=yes \| /);
+    assert.match(text, /clamped to 3600s/);
   });
 
   test("非超时的错误不说；而且条目取用即删，不会再被第二次命中", async () => {

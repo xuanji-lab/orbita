@@ -22,6 +22,12 @@
  * `COMMAND_TIMEOUT_HARD_MAX_SECONDS`；没进展才照旧杀。理由与阈值取舍见
  * `ExtensionOptions` 上方那段注释。
  *
+ * **提示行的契约**：所有提示都是 `[orbita] kind=<名字> <key=value…> | <英文散文>`，
+ * 独占一行。竖线之前是渲染层解析的契约（`renderer/features/chat/tool-results.ts`
+ * 的 `parseBashNotices`），竖线之后是给模型的整句解释（改字不影响界面）。
+ * 提示仍然进工具结果：**会话记录与模型看到的文本一个字不少**，只是界面把它收进
+ * 「行尾 / 次行 / 展开体」三个槽位，不再混在 stdout 里当一行机器话。
+ *
  * **与 pi 的 `createLocalShellOperations` 逐条对齐**：超时解析、错误文案、spawn 参数、
  * 杀树、结束后等待方式。错误字符串必须逐字一致——pi 靠
  * `err.message === "aborted"` 与 `err.message.startsWith("timeout:")` 翻译成
@@ -362,8 +368,9 @@ function waitForChildProcessOutcome(child: ChildProcess): Promise<WaitOutcome> {
 }
 
 /**
- * 延长记录。走 `onData`，与后代存活提示、停滞提示同一风格：模型和用户都能看见
- * 「这次为什么没被杀、下一档到什么时候」，而不是无声地多跑十分钟。
+ * 延长记录。走 `onData`，与后代存活提示、停滞提示、超时提示同一套契约：
+ * `[orbita] kind=… <key=value…> | <给模型看的一句英文>`——竖线之前给渲染层解析，
+ * 竖线之后是散文（整句仍然是模型的自救依据）。
  */
 function extensionNotice(
   deadlineSeconds: number,
@@ -372,16 +379,45 @@ function extensionNotice(
   max: number,
 ): string {
   return (
-    `\n[orbita] 已到 ${deadlineSeconds} 秒上限，但命令仍在输出/消耗 CPU，` +
-    `延长至 ${nextDeadlineSeconds} 秒（第 ${index}/${max} 次）。\n`
+    `\n[orbita] kind=extended from=${deadlineSeconds}s to=${nextDeadlineSeconds}s count=${index} max=${max} | ` +
+    `The command reached its ${deadlineSeconds}s limit while it was still producing output or using CPU, ` +
+    `so the deadline was extended to ${nextDeadlineSeconds}s (extension ${index}/${max}). ` +
+    "Nothing to do yet; the result will follow when the command finishes or the deadline is reached again.\n"
   );
 }
 
-/** 后代存活提示（中文，与仓库其它注释 / 文案一致）。只追加一次，进工具结果。 */
+/**
+ * 后代存活提示。只追加一次，进工具结果。散文部分保留原来的自救信息：晚到输出不在
+ * 本次结果里、服务 / 探针改用 terminal_*。
+ */
 function descendantsNotice(pid: number): string {
   return (
-    `\n[orbita] 命令已返回，但仍有后代进程在运行（pid ${pid}）。` +
-    "晚到的输出不会出现在本次结果里；若它是服务或探针，请改用 terminal_* 或显式停止。\n"
+    `\n[orbita] kind=descendants pid=${pid} | ` +
+    `The command already returned, but descendant processes are still running (pid ${pid}). ` +
+    "Output they write from now on is not part of this result. If this is a server or a probe, " +
+    "use the terminal_* tools instead, or stop it explicitly.\n"
+  );
+}
+
+/**
+ * 到点被杀的提示。与 `permission.ts` 的 `kind=cap seconds=… declared=…` **共存**：
+ * 那条讲「上限是谁定的」（默认值 / 被夹紧），这条讲「当时有没有进展」——渲染层
+ * 合成一句，模型两条都能看到。
+ *
+ * `progress` 不是猜出来的：它来自到点决策时看过的证据（最近有输出 / 进程树还在涨 CPU）。
+ * 有进展被杀 → 值得换个更长 timeout 或拆片重试；全程没动 → 同样的坑再等多久都一样。
+ */
+function capNotice(seconds: number, progress: boolean): string {
+  return (
+    `\n[orbita] kind=cap seconds=${seconds} progress=${progress ? "yes" : "no"} | ` +
+    `The command was killed at the ${seconds}s limit. ` +
+    (progress
+      ? "It was still producing output or using CPU when it was killed, so it was making progress and that work is now lost. " +
+        "If the task really needs longer, retry with an explicit timeout (seconds, at most " +
+        `${COMMAND_TIMEOUT_HARD_MAX_SECONDS}), split it into smaller steps, or use the terminal_* tools.`
+      : "It had been silent with no CPU growth for a while, so a longer timeout would likely wait the same way. " +
+        "Split the command into smaller steps, or use the terminal_* tools to watch it.") +
+    "\n"
   );
 }
 
@@ -491,12 +527,15 @@ export function createObservedBashOperations(
         }, Math.max(0, deadlineAt - Date.now()));
       };
 
-      const killForTimeout = () => {
+      const killForTimeout = (progress: boolean) => {
         timedOut = true;
         // 报「到点时的累计期限」，而不是最初声明的值：延长过以后，
         // 「timed out after 1800 seconds」就是一句假话。也不用测量延迟后的 elapsed——
         // 我们自己的 CPU 采样（Windows 约 1s）不该算成命令跑过的时间。
         timeoutSeconds = Math.max(1, Math.round((deadlineAt - startedAt) / 1000));
+        // 先落这句话再杀：onData 是同步的，它一定在命令结束之前进结果；
+        // 模型据此知道「是撞上限死的、死时有没有在干活」
+        onData(Buffer.from(capNotice(timeoutSeconds, progress), "utf8"));
         if (child.pid !== undefined) killProcessTree(child.pid);
       };
 
@@ -535,9 +574,11 @@ export function createObservedBashOperations(
         timeoutHandle = undefined;
         if (finished) return;
         const totalMs = Date.now() - startedAt;
-        // 1) 天花板与次数先用完就用完：不再看证据，直接杀
+        // 1) 天花板与次数先用完就用完：不再看证据，直接杀（「最近有没有输出」是零成本的，
+        //    只看它来回答「当时有没有进展」——不为这句话再花一次进程表快照）
         if (totalMs >= hardMaxMs || extensions >= maxExtensions) {
-          killForTimeout();
+          const outputFresh = lastOutputAt !== undefined && Date.now() - lastOutputAt <= recentOutputMs;
+          killForTimeout(outputFresh);
           return;
         }
         // 2) 证据：最近有输出，或进程树还在涨 CPU
@@ -547,7 +588,7 @@ export function createObservedBashOperations(
         // 采样期间命令自己结束了，或被 abort 了：交给收尾逻辑，不要在这里延长 / 杀
         if (finished || signal?.aborted === true) return;
         if (!outputFresh && !cpuBusy) {
-          killForTimeout();
+          killForTimeout(false);
           return;
         }
         // 3) 延长：计数 +1，期限取「当前 + 一档」与天花板里更早的那个
@@ -555,7 +596,7 @@ export function createObservedBashOperations(
         const nextDeadline = Math.min(previousDeadline + extendByMs, startedAt + hardMaxMs);
         // 期限已经推不动（定时器比 deadline 早醒几毫秒、天花板已到）→ 不假装延长，直接杀
         if (!(nextDeadline > previousDeadline)) {
-          killForTimeout();
+          killForTimeout(true);
           return;
         }
         extensions += 1;
