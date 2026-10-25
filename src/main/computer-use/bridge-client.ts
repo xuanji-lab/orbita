@@ -111,12 +111,13 @@ function parseResp(raw: string): Resp | null {
   return parsed as Resp;
 }
 
-// ── TCP 命令通道（桥 0.8.0）：优先走它，任何一步失败都回退文件协议 ────────────
+// ── TCP 命令通道（桥 0.8.0）：优先走它，没就绪就走文件协议 ──────────────────
 //
 // 协议与常量在 shared/computer-use.ts（bridgeTcpFields / bridgeTcpHello）。这里的职责只有：
 //   1. 从 out/bridge.json 读出通道（老桥没有 port → null → 纯文件协议，行为与改动前一致）；
-//   2. 多网卡逐个连（每个 1.5s 含握手），成功就复用这条连接；
-//   3. 失败进 10s 冷却，这期间直接走文件协议——不在每条命令上反复撞超时；
+//   2. 把建连从命令路径里拿出去：**后台探活**（见 PROBE_DELAYS_MS 那一节），命令永不为
+//      「通道还没好」等时间——真机开局那次 10 秒就是被同步建连 + 冷却吃掉的；
+//   3. 探活失败用短退避再试一轮，全失败才进 10s 冷却；冷却结束后自动再起一轮；
 //   4. 把「已发出去但没等到回执」与「根本没发出去」分开：前者**不许重放**（一次点击不能
 //      变成两下），后者可以安全、透明地回退。
 
@@ -296,15 +297,33 @@ interface TcpChannelState {
   channel: GuestTcpChannel | null;
   link: GuestTcpLink | null;
   cooldownUntil: number;
-  /** 上一次打出来的通道日志（同一个结论不重复刷屏）；空串 = 还没打过 */
+  /** 上一次打出来的通道选择日志（同一个结论不重复刷屏）；空串 = 还没打过 */
   loggedChannel: string;
+  /** 已排上的探活定时器（非空 = 不再排第二个） */
+  probeTimer: NodeJS.Timeout | null;
+  /** 正在试（一次只跑一个，不并发撞同一个端口） */
+  probing: boolean;
+  /** 本轮短退避已试了几次（成功后 / 进冷却后归零） */
+  burstAttempts: number;
+  /** 从开局算起的累计尝试次数（日志里的「第 N 次尝试后」）；成功也不归零 */
+  totalAttempts: number;
+  /** 已原样记过几次失败原因（日志预算，见 logProbeFailure） */
+  failureLines: number;
+  /** 上一次失败原因（日志预算：后文只在原因变了才记） */
+  lastFailure: string;
 }
 
 let tcpState: TcpChannelState | null = null;
 
 function closeTcpState(): void {
-  if (tcpState !== null && tcpState.link !== null) tcpState.link.close();
+  const state = tcpState;
   tcpState = null;
+  if (state === null) return;
+  if (state.probeTimer !== null) {
+    clearTimeout(state.probeTimer);
+    state.probeTimer = null;
+  }
+  if (state.link !== null) state.link.close();
 }
 
 async function readTcpChannel(outDir: string): Promise<GuestTcpChannel | null> {
@@ -318,15 +337,31 @@ async function readTcpChannel(outDir: string): Promise<GuestTcpChannel | null> {
 
 /**
  * 取（或建）通道状态。`channel` 为空时**每次都重读 bridge.json**：那是宿主本地的一张小文件，
- * 代价可忽略，而好处是桥重启换了端口 / 老桥升级成 0.8.0 后下一条命令就能用上 TCP。
+ * 代价可忽略，而好处是桥重启换了端口 / 老桥升级成 0.8.0 的下一条命令就能用上 TCP。
+ *
+ * 这里**只读本地文件、不碰网络**：TCP 建连一律交给后台探活（armProbe）。命令永远不为
+ * 「通道还没好」付时间——真机开局那次 10 秒就是被同步建连 + 冷却吃掉的（2026-10-25）。
  */
 async function channelStateFor(outDir: string): Promise<TcpChannelState> {
   if (tcpState === null || tcpState.outDir !== outDir) {
     closeTcpState();
-    tcpState = { outDir, channel: null, link: null, cooldownUntil: 0, loggedChannel: "" };
+    tcpState = {
+      outDir,
+      channel: null,
+      link: null,
+      cooldownUntil: 0,
+      loggedChannel: "",
+      probeTimer: null,
+      probing: false,
+      burstAttempts: 0,
+      totalAttempts: 0,
+      failureLines: 0,
+      lastFailure: "",
+    };
   }
   const state = tcpState;
   if (state.channel === null) state.channel = await readTcpChannel(outDir);
+  if (state.channel !== null && state.link === null) armProbe(state);
   return state;
 }
 
@@ -337,50 +372,155 @@ function logChannel(state: TcpChannelState, line: string): void {
   console.log(`[computer-use] 通道：${line}`);
 }
 
-/** 连一个地址（含 TCP 握手）；超时 / 出错都回 null（换下一个地址） */
-function connectOnce(address: string, port: number, timeoutMs: number): Promise<Socket | null> {
-  return new Promise<Socket | null>((resolve) => {
+// ── 后台探活（命令不等它）─────────────────────────────────────────────────────
+//
+// 真机第一轮的两个教训（2026-10-25，沙箱 21209ms 起）：
+//  ① 桥通告 bridge.json 之后，guest 的网卡/路由还要几秒才真的能连（通告那一刻连不上不是监听没起）；
+//  ② 旧策略「首次失败就 10s 冷却」把开局那几条命令全送给了每跳 6 秒的文件协议。
+//
+// 所以：建连从命令路径里拿出去，改成后台探活；命令到了没连上就直接走文件协议（不阻塞）。
+// 探活失败用短退避再试一轮（间隔 0 / 500ms / 1s / 2s，合计约 3.5s——正好盖住「网卡刚起来」那个窗口），
+// 这一轮全失败才进 10s 冷却；冷却结束后**自动再起一轮**，直到连上。
+
+/** 一轮探活的启动间隔（毫秒，从第一发算起）；长度 = 一轮最多试几次 */
+const PROBE_DELAYS_MS = [0, 500, 1_000, 2_000] as const;
+/** 失败原因全额记录的行数预算：之后只在原因变了时再记（否则 TCP 一直不可用时日志会无限长） */
+const PROBE_FAILURE_LOG_LINES = 8;
+
+/** 排一次探活；已有排程 / 正在试 / 已经有连接时什么都不做 */
+function armProbe(state: TcpChannelState): void {
+  if (state.probeTimer !== null || state.probing || state.link !== null) return;
+  const waitMs = Math.max(state.cooldownUntil - Date.now(), 0);
+  const timer = setTimeout(() => {
+    state.probeTimer = null;
+    void runProbe(state);
+  }, waitMs);
+  // 探活不许拖住进程退出（测试里尤其明显）
+  timer.unref();
+  state.probeTimer = timer;
+}
+
+/** 失败原因：前几次逐条记（看得出是超时 / 拒绝 / 握手被拒），之后只在换了原因时记 */
+function logProbeFailure(state: TcpChannelState, reason: string): void {
+  if (state.failureLines < PROBE_FAILURE_LOG_LINES || reason !== state.lastFailure) {
+    console.log(`[computer-use] 通道：TCP 连接失败（第 ${state.totalAttempts} 次）：${reason}`);
+    state.failureLines += 1;
+    state.lastFailure = reason;
+  }
+}
+
+/** 一趟探活：连一次（多网卡逐个试在 connectTcpLink 里）；成功就换回 TCP，失败就退避或进冷却 */
+async function runProbe(state: TcpChannelState): Promise<void> {
+  if (tcpState !== state || state.probing || state.link !== null) return;
+  if (Date.now() < state.cooldownUntil) {
+    armProbe(state); // 冷却还没过（提前触发了）：靠回冷却末尾
+    return;
+  }
+  const channel = state.channel ?? (state.channel = await readTcpChannel(state.outDir));
+  if (tcpState !== state) return;
+  if (channel === null) {
+    logChannel(state, "文件（TCP 不可用：bridge.json 里没有 port / token / ipv4）");
+    return;
+  }
+
+  state.probing = true;
+  state.burstAttempts += 1;
+  state.totalAttempts += 1;
+  let opened: { link: GuestTcpLink; address: string } | { reason: string };
+  try {
+    opened = await connectTcpLink(channel);
+  } catch (cause) {
+    opened = { reason: cause instanceof Error ? cause.message : String(cause) };
+  } finally {
+    state.probing = false;
+  }
+  if (tcpState !== state) {
+    // 这一局已经被 reset（停沙箱 / 换目录）：把刚建好的连接丢掉，别再改状态
+    if ("link" in opened) opened.link.close();
+    return;
+  }
+
+  if ("link" in opened) {
+    state.link = opened.link;
+    state.burstAttempts = 0;
+    state.cooldownUntil = 0;
+    logChannel(state, `TCP ${opened.address}（第 ${state.totalAttempts} 次尝试后）`);
+    return;
+  }
+
+  logProbeFailure(state, opened.reason);
+  const nextDelay = PROBE_DELAYS_MS[state.burstAttempts];
+  if (nextDelay !== undefined) {
+    const timer = setTimeout(() => {
+      state.probeTimer = null;
+      void runProbe(state);
+    }, nextDelay);
+    timer.unref();
+    state.probeTimer = timer;
+    return;
+  }
+  // 一轮都没成：进冷却，冷却结束后自动再起一轮（后台，命令照旧走文件协议）
+  state.burstAttempts = 0;
+  state.cooldownUntil = Date.now() + BRIDGE_TCP_COOLDOWN_MS;
+  state.channel = null; // 重读 bridge.json：桥可能重启换端口 / 换令牌
+  logChannel(
+    state,
+    `文件（TCP 暂时连不上：${opened.reason}；${Math.round(BRIDGE_TCP_COOLDOWN_MS / 1000)}s 后后台再试）`,
+  );
+  armProbe(state);
+}
+
+/** 连接结果：失败要带「为什么」（超时 / 拒绝 / 握手被拒——排障时这三个完全不是同一件事） */
+type ConnectOutcome = { ok: true; socket: Socket } | { ok: false; reason: string };
+
+/** 连一个地址（含 TCP 握手）；超时 / 出错带回原因（换下一个地址） */
+function connectOnce(address: string, port: number, timeoutMs: number): Promise<ConnectOutcome> {
+  return new Promise<ConnectOutcome>((resolve) => {
     const socket = connect({ host: address, port });
     let timer: NodeJS.Timeout | undefined;
     let settled = false;
-    const finish = (value: Socket | null): void => {
+    const finish = (outcome: ConnectOutcome): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
       socket.removeListener("error", onError);
-      if (value === null) socket.destroy();
-      resolve(value);
+      if (!outcome.ok) socket.destroy();
+      resolve(outcome);
     };
-    const onError = (): void => finish(null);
+    const onError = (cause: Error): void => {
+      const code = (cause as Error & { code?: string }).code;
+      finish({ ok: false, reason: `连接失败：${code ?? cause.message}` });
+    };
     socket.once("error", onError);
     socket.once("connect", () => {
       // 建连成功之后错误交给 GuestTcpLink；这里留一个空监听，保证 await 期间不会因无监听而抛
       socket.on("error", () => {});
-      finish(socket);
+      finish({ ok: true, socket });
     });
-    timer = setTimeout(() => finish(null), timeoutMs);
+    timer = setTimeout(() => finish({ ok: false, reason: `连接超时（${timeoutMs}ms）` }), timeoutMs);
+    timer.unref();
   });
 }
 
-/** 按 bridge.json 的 ipv4 顺序逐个连（每个 1.5s 含握手）；全失败回原因，调用方回退文件协议 */
+/** 按 bridge.json 的 ipv4 顺序逐个连（每个 1.5s 含握手）；全失败回原因 */
 async function connectTcpLink(
   channel: GuestTcpChannel,
 ): Promise<{ link: GuestTcpLink; address: string } | { reason: string }> {
   const reasons: string[] = [];
   for (const address of channel.ipv4) {
-    const socket = await connectOnce(address, channel.port, BRIDGE_TCP_CONNECT_TIMEOUT_MS);
-    if (socket === null) {
-      reasons.push(`${address}:${channel.port} 连不上`);
+    const outcome = await connectOnce(address, channel.port, BRIDGE_TCP_CONNECT_TIMEOUT_MS);
+    if (!outcome.ok) {
+      reasons.push(`${address}:${channel.port} ${outcome.reason}`);
       continue;
     }
-    const link = new GuestTcpLink(socket);
+    const link = new GuestTcpLink(outcome.socket);
     try {
       await link.handshake(channel.token, BRIDGE_TCP_CONNECT_TIMEOUT_MS);
       return { link, address: `${address}:${channel.port}` };
     } catch (cause) {
       link.close();
       const why = cause instanceof Error ? cause.message : String(cause);
-      reasons.push(`${address}:${channel.port} ${why}`);
+      reasons.push(`${address}:${channel.port} 握手失败：${why}`);
     }
   }
   return { reason: reasons.length === 0 ? "bridge.json 的 ipv4 是空的" : reasons.join("；") };
@@ -397,16 +537,16 @@ function decodeJpegInline(value: unknown): Uint8Array | undefined {
   return new Uint8Array(Buffer.from(value, "base64"));
 }
 
-/** 进冷却：这一小段时间所有命令直接走文件协议（理由见 BRIDGE_TCP_COOLDOWN_MS） */
-function enterCooldown(state: TcpChannelState): void {
+/**
+ * 连接不可用了（在飞回执丢了 / 写不出去）：丢掉连接、进冷却、**后台**排一轮重连。
+ * 命令路径永不在这里等——下一个命令直接用文件协议。
+ */
+function failChannel(state: TcpChannelState): void {
+  state.link = null;
+  state.burstAttempts = 0;
   state.cooldownUntil = Date.now() + BRIDGE_TCP_COOLDOWN_MS;
-  state.channel = null; // 下次重读 bridge.json：桥重启会换端口 / 换令牌
-}
-
-function tcpUnavailable(state: TcpChannelState, reason: string): TcpAttempt {
-  enterCooldown(state);
-  logChannel(state, `文件（TCP 不可用：${reason}；${Math.round(BRIDGE_TCP_COOLDOWN_MS / 1000)}s 内不再试）`);
-  return { kind: "fallback", reason };
+  state.channel = null; // 下次重读 bridge.json（桥重启会换端口 / 令牌）
+  armProbe(state);
 }
 
 /**
@@ -421,6 +561,21 @@ export function tcpChannelFailureMessage(command: string, failure: TcpFailure, t
   );
 }
 
+/**
+ * 提前排一次后台探活（沙箱启动链在 bridge.json 就绪那一刻调一次）。
+ *
+ * 为什么不让它等到第一条命令：真机上通告一到就可以试连，而开局那条 ping 往往正好落在
+ * 「guest 网卡还没就绪」的窗口里——早开始早连上，且它**不阻塞任何命令**（只读本地
+ * bridge.json + 排一个定时器）。老桥（没有 tcp 字段）时什么都不做。
+ */
+export async function startGuestTcpProbe(outDir: string): Promise<void> {
+  await channelStateFor(outDir);
+}
+
+/**
+ * 命令路径里的通道选择：**只做三件事**——读通道状态、看有没有现成的连接、发出去。
+ * 没连上就立刻走文件协议（不在命令里建连、不等冷却），这是本刀最关键的一条纪律。
+ */
 async function sendGuestCommandOverTcp(
   outDir: string,
   command: string,
@@ -428,23 +583,16 @@ async function sendGuestCommandOverTcp(
   timeoutMs: number,
 ): Promise<TcpAttempt> {
   const state = await channelStateFor(outDir);
-  const channel = state.channel;
-  if (channel === null) {
+  if (state.channel === null) {
     logChannel(state, "文件（TCP 不可用：bridge.json 里没有 port / token / ipv4）");
     return { kind: "fallback", reason: "老桥（bridge.json 无 TCP 字段）" };
   }
-  if (Date.now() < state.cooldownUntil) {
-    const left = Math.ceil((state.cooldownUntil - Date.now()) / 1000);
-    logChannel(state, `文件（TCP 冷却中，${left}s 后再试）`);
-    return { kind: "fallback", reason: "TCP 冷却中" };
-  }
-  if (state.link === null) {
-    const opened = await connectTcpLink(channel);
-    if ("reason" in opened) return tcpUnavailable(state, opened.reason);
-    state.link = opened.link;
-    logChannel(state, `TCP ${opened.address}`);
-  }
   const link = state.link;
+  if (link === null) {
+    // 探活在后台跑；这条命令不为它等一秒（等它就会把 45s 预算拿去填建连）
+    logChannel(state, "文件（TCP 还没连上，后台探活中）");
+    return { kind: "fallback", reason: "TCP 通道未就绪（后台探活中）" };
+  }
   try {
     const message = await link.request(command, fields, timeoutMs);
     const resp = parseTcpResp(message["resp"]);
@@ -456,18 +604,17 @@ async function sendGuestCommandOverTcp(
       cause instanceof TcpFailure
         ? cause
         : new TcpFailure("closed", cause instanceof Error ? cause.message : String(cause));
-    state.link = null;
     link.close();
-    enterCooldown(state);
+    failChannel(state);
     if (failure.kind === "undispatched") {
       // 没发出去：这条命令可以安全地走文件协议（上层拿到的结果与纯文件协议完全一样）
-      logChannel(state, `文件（TCP 不可用：${failure.message}；${Math.round(BRIDGE_TCP_COOLDOWN_MS / 1000)}s 内不再试）`);
+      logChannel(state, `文件（TCP 不可用：${failure.message}；后台重连中）`);
       return { kind: "fallback", reason: failure.message };
     }
     // 已经发出去了：**不重放**——宁可报一次错，也不能让一次点击悄悄变成两下
     logChannel(
       state,
-      `文件（${command} 的 TCP 回执丢了：${failure.message}；下一条命令起 ${Math.round(BRIDGE_TCP_COOLDOWN_MS / 1000)}s 内走文件）`,
+      `文件（${command} 的 TCP 回执丢了：${failure.message}；下一条命令起走文件）`,
     );
     return { kind: "failed", error: new Error(tcpChannelFailureMessage(command, failure, timeoutMs)) };
   }

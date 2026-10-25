@@ -10,6 +10,7 @@ import {
   isPlainScreenshotFileName,
   resetGuestCommandSeq,
   sendGuestCommand,
+  startGuestTcpProbe,
 } from "./bridge-client.ts";
 import { parseBridgeInfo } from "./bridge-ready.ts";
 import {
@@ -341,6 +342,10 @@ interface FakeTcpGuestOptions {
   silent?: boolean;
   /** 收到命令就掐断连接：验「发出去了但回执丢了」 */
   dropOnCommand?: boolean;
+  /** 前 N 次握手回 hello-fail（模拟「guest 网卡还没就绪」）：验短退避重试 */
+  failHellos?: number;
+  /** 收下连接但永远不回 hello：模拟握手卡住（验命令不被探活拖慢） */
+  hangHello?: boolean;
 }
 
 interface FakeTcpGuest {
@@ -354,7 +359,7 @@ interface FakeTcpGuest {
 async function startFakeTcpGuest(options: FakeTcpGuestOptions): Promise<FakeTcpGuest> {
   const requests: FakeTcpRequest[] = [];
   const sockets = new Set<Socket>();
-  const state = { connections: 0 };
+  const state = { connections: 0, failedHellos: 0 };
   const server = createServer((socket) => {
     state.connections += 1;
     sockets.add(socket);
@@ -373,6 +378,15 @@ async function startFakeTcpGuest(options: FakeTcpGuestOptions): Promise<FakeTcpG
         if (line === "") continue;
         const message = JSON.parse(line) as Record<string, unknown>;
         if (message["t"] === "hello") {
+          // 装死：收下连接但不回 hello（握手超时那一档）
+          if (options.hangHello === true) continue;
+          // 前 N 次回 hello-fail：模拟「网卡刚起来，通告先到」
+          if (state.failedHellos < (options.failHellos ?? 0)) {
+            state.failedHellos += 1;
+            socket.write(`${JSON.stringify({ t: "hello-fail" })}\n`);
+            socket.end();
+            return;
+          }
           if (message["token"] !== options.token) {
             socket.write(`${JSON.stringify({ t: "hello-fail" })}\n`);
             socket.end();
@@ -434,6 +448,38 @@ async function writeBridgeJson(
   await writeFile(join(outDir, "bridge.json"), JSON.stringify(body), "utf8");
 }
 
+/**
+ * 等后台探活把 TCP 连上。建连**不在命令路径里**（那是本刀的纪律），所以测试先像启动链一样
+ * 排一次探活（`startGuestTcpProbe`），再等 guest 接受连接。
+ */
+async function waitForTcpLink(outDir: string, guest: FakeTcpGuest, timeoutMs = 3000): Promise<boolean> {
+  await startGuestTcpProbe(outDir);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (guest.connections > 0) {
+      await sleep(30); // 给握手一点时间（回环上一跳，几十微秒）
+      return true;
+    }
+    await sleep(5);
+  }
+  return false;
+}
+
+/** 临时接管 console.log（验通道日志：同一轮里只关心宿主自己打的那几行） */
+async function captureLog<T>(run: () => Promise<T>): Promise<{ value: T; lines: string[] }> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "));
+  };
+  try {
+    const value = await run();
+    return { value, lines };
+  } finally {
+    console.log = original;
+  }
+}
+
 describe("bridge-client（TCP 通道）", () => {
   test("握手成功 → 走 TCP：字段原样到 guest、回执回传、映射目录里一个文件都没有", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
@@ -444,6 +490,7 @@ describe("bridge-client（TCP 通道）", () => {
     });
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t0ken" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       const resp = await sendGuestCommand(dir, "key", { key: "ctrl+a" });
       assert.deepEqual(resp, { ok: true, echo: "key", got: "ctrl+a" });
       assert.equal(guest.requests.length, 1);
@@ -463,6 +510,7 @@ describe("bridge-client（TCP 通道）", () => {
     const guest = await startFakeTcpGuest({ token: "t" });
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       await sendGuestCommand(dir, "ping", {});
       await sendGuestCommand(dir, "ping", {});
       await sendGuestCommand(dir, "ping", {});
@@ -484,6 +532,7 @@ describe("bridge-client（TCP 通道）", () => {
     });
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       const [first, second] = await Promise.all([
         sendGuestCommand(dir, "ping", {}),
         sendGuestCommand(dir, "screenshot-stats", {}),
@@ -541,6 +590,7 @@ describe("bridge-client（TCP 通道）", () => {
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       await assert.rejects(fetchGuestScreenshot(dir, 1280, 300), (cause: unknown) => {
         const message = cause instanceof Error ? cause.message : String(cause);
         assert.match(message, /没有响应/, "超时文案与文件协议同一套（下一步该怎么试完全一样）");
@@ -567,6 +617,7 @@ describe("bridge-client（TCP 通道）", () => {
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       await assert.rejects(sendGuestCommand(dir, "click", { x: 10, y: 20 }), (cause: unknown) => {
         const message = cause instanceof Error ? cause.message : String(cause);
         assert.match(message, /命令通道中断/);
@@ -596,6 +647,7 @@ describe("bridge-client（TCP 通道）", () => {
     });
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       const shot = await fetchGuestScreenshot(dir, 640);
       assert.deepEqual(Array.from(shot.jpeg), Array.from(FAKE_JPEG));
       assert.equal(shot.width, 640);
@@ -617,6 +669,7 @@ describe("bridge-client（TCP 通道）", () => {
     });
     try {
       await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
       await assert.rejects(sendGuestCommand(dir, "key", { key: "hyper+x" }), /不认识的按键名：hyper/);
       assert.equal(guest.requests.length, 1);
     } finally {
@@ -657,6 +710,7 @@ describe("bridge-client（TCP 通道）", () => {
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true } }));
     try {
       await writeBridgeJson(dir, { port: deadGuest.port, token: "old" });
+      assert.ok(await waitForTcpLink(dir, deadGuest), "后台探活应把 TCP 连上");
       await assert.rejects(sendGuestCommand(dir, "ping", {}), /命令通道中断/);
       // 桥重启：新通告、新端口、新令牌（冷却期间命令走文件协议，冷却后重新读通告）
       await writeBridgeJson(dir, { port: freshGuest.port, token: "new" });
@@ -671,6 +725,86 @@ describe("bridge-client（TCP 通道）", () => {
       bridge.stop();
       await deadGuest.close();
       await freshGuest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── TCP 后台探活（真机第一轮的修正）────────────────────────────────────────
+//
+// 真实现场（2026-10-25，沙箱 21209ms 起）：bridge.json 一到宿主就同步建连，但 guest 的网卡
+// 还要几秒才就绪；旧策略「首次失败 → 10s 冷却」把开局那几条命令全送给了每跳 6 秒的文件协议。
+// 现在：建连从命令路径里拿出去，后台探活 + 短退避重试；命令到了没连上就直接走文件协议。
+
+describe("bridge-client（TCP 后台探活）", () => {
+  test("探活不阻塞命令：握手还挂着时命令立刻走文件协议，探活自己在后台跑", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-probe-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t", hangHello: true });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      const started = Date.now();
+      const resp = await sendGuestCommand(dir, "ping", {});
+      const elapsed = Date.now() - started;
+      assert.deepEqual(resp, { ok: true, via: "file" });
+      assert.equal(bridge.requests.length, 1);
+      // 探活的握手预算是 1.5s：这条命令绝不许把它算进自己的耗时
+      assert.ok(elapsed < 800, `命令不该等探活，实测 ${elapsed}ms`);
+      assert.ok(await waitForTcpLink(dir, guest, 500), "探活应在后台自己跑起来（连上了，握手挂着）");
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("首轮失败按短退避再试：第 2 次连上就换回 TCP，日志写明第几次尝试与失败原因", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-probe-"));
+    resetGuestCommandSeq();
+    // 第一次握手回 hello-fail（= 通告先到、网卡还没就绪），之后正常
+    const guest = await startFakeTcpGuest({ token: "t", failHellos: 1 });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      const { lines } = await captureLog(async () => {
+        // 通告刚出现：通道还没连上，这条走文件协议（但不该慢）
+        await sendGuestCommand(dir, "ping", {});
+        // 退避后（500ms）第二次尝试应连上
+        const deadline = Date.now() + 3000;
+        while (guest.connections < 2 && Date.now() < deadline) await sleep(10);
+        await sleep(50);
+        // 这一条应当已经走 TCP
+        await sendGuestCommand(dir, "ping", {});
+      });
+      assert.equal(bridge.requests.length, 1, "只有通告刚出现的那条走文件协议");
+      assert.equal(guest.requests.length, 1, "退避重试连上之后，下一条命令走 TCP");
+      const joined = lines.join("\n");
+      assert.match(joined, /通道：TCP 连接失败（第 1 次）：.*握手失败：桥回 hello-fail/, "每次尝试的失败原因都要留在日志里");
+      assert.match(joined, /通道：TCP 127\.0\.0\.1:\d+（第 2 次尝试后）/, "连上时要写明第几次尝试");
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("探活不做无谓的重试：已经连上就不再建连（连接复用）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-probe-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t" });
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      assert.ok(await waitForTcpLink(dir, guest), "后台探活应把 TCP 连上");
+      for (let i = 0; i < 5; i += 1) await sendGuestCommand(dir, "ping", {});
+      await sleep(600); // 足够跨过一轮退避窗口
+      assert.equal(guest.connections, 1, "连上之后不许再建新连接");
+      assert.equal(guest.requests.length, 5);
+    } finally {
+      await guest.close();
       resetGuestCommandSeq();
       await rm(dir, { recursive: true, force: true });
     }
