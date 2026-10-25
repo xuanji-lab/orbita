@@ -26,6 +26,8 @@ import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
+import { QuotaCache } from "./provider/quota-cache.ts";
+import { quotaHintOf, type QuotaExhaustedHint } from "../shared/quota.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
@@ -378,6 +380,37 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+  /*
+   * 额度缓存只建一份：provider 的额度查询（registerProviderIpc）与 failed 事件的
+   * 额度补丁读同一份 `<userData>/quota-cache.json`。
+   */
+  const quotaCache = new QuotaCache(configDir);
+  /**
+   * 给这条会话的失败找一个「额度窗口用尽」的提示。
+   *
+   * 判据只有缓存快照（`quotaHintOf`），**不按厂商文案匹配**——各家措辞不同，
+   * 匹配表一定会漏，还会把「钥匙错」误判成「额度用尽」。缓存过期 / 从没查过 /
+   * 窗口没满都返回 null：宁可不解释，也不编。
+   *
+   * **它不能拿来判定失败原因**：缓存只说明「这个窗口满了」这个事实，不说明本次
+   * 失败是它造成的——「钥匙过期 + 恰好有个窗口满了」时主因是 401。要判定原因就
+   * 得按厂商文案做匹配，那是我们明确拒绝的做法。所以渲染层把它放在厂商原文
+   * 之后的副行，写成「账户额度：…」而不是「失败原因：…」。
+   *
+   * **全程不抛**：读盘出错只是少一句提示，不该把这条失败事件本身弄丢——
+   * 用户至少还看得到厂商原文。
+   */
+  const quotaHintFor = async (sessionId: string): Promise<QuotaExhaustedHint | null> => {
+    try {
+      const meta = await sessions.readMeta(sessionId);
+      if (meta === null) return null;
+      const snapshot = (await quotaCache.read())[meta.providerId] ?? null;
+      return quotaHintOf(snapshot, Date.now());
+    } catch (cause) {
+      console.error("[quota] 失败事件补额度提示时读缓存出错", sessionId, cause);
+      return null;
+    }
+  };
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -525,6 +558,25 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 回合级失败补一句额度提示：额度快照只在主进程的缓存文件里，agent 进程与
+    // renderer 都看不见——补数据只能在这一跳做。判据是快照本身（某个窗口已满且
+    // 重置时刻在未来），不是厂商文案；补不上就原样广播。
+    // 读 meta / 缓存是异步的，这条失败可能比紧随的 phase(idle) 晚到 renderer：
+    // 不影响正确性——turnError 槽在 idle 上不清理（见 session-states.ts）。
+    // **已知风险**：用户若在这几毫秒里开始了新一轮，这条晚到的失败会挂到新一轮上
+    // （非 idle 的 phase 会清标注，但清除发生在这条之前）。读盘只有毫秒级，目前接受；
+    // 以后若这里变成网络请求，必须加序号 / phase 守卫再广播。
+    if (event.type === "failed" && event.turn === true && event.sessionId !== null) {
+      const turnFailed = event;
+      const sessionId = event.sessionId;
+      void quotaHintFor(sessionId).then((quota) => {
+        const out = quota === null ? turnFailed : { ...turnFailed, quota };
+        intentIngest.onEvent(out);
+        record(out);
+        broadcastAgentEvent(out);
+      });
+      return;
+    }
     // 内建目录（启动时一次，pi.dev 刷新后再一次）：不属于任何会话，不落账、不进意图存档，只转给窗口
     if (event.type === "builtins") {
       broadcastAgentEvent(event);
@@ -649,9 +701,10 @@ void app.whenReady().then(async () => {
   // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型（摘抄也是素材）
   registerFocusIpc(workspaces, sessions, providers, settings, agentHost, excerpts);
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
-  // 第三个参数是额度缓存的目录（<userData>/quota-cache.json）；缓存模块自己不在顶层读 app。
+  // 第三个参数是额度缓存实例（<userData>/quota-cache.json）：额度查询与 failed 事件的
+  // 额度补丁读同一份；缓存模块自己不在顶层读 app。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
-  registerProviderIpc(providers, agentHost, configDir);
+  registerProviderIpc(providers, agentHost, quotaCache);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
   registerPriceChartIpc({

@@ -914,7 +914,24 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     });
     const entry = states.get("A");
     assert.equal(entry?.phase, "idle");
-    assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
+    assert.deepEqual(entry?.turnError, { message: "重试 3 次后仍失败：fetch failed" });
+  });
+
+  test("failed(turn) 带额度提示：结构化事实原样进槽，句子留给渲染层", () => {
+    const quota = { kind: "5h" as const, label: "5-hour window", resetsAt: 1_900_000_000_000 };
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, {
+      type: "failed",
+      sessionId: "A",
+      message: "429 {\"error\":\"insufficient_quota\"}",
+      turn: true,
+      quota,
+    });
+    // 原文与事实都在：主进程不做文案，槽里也不存拼好的句子
+    assert.deepEqual(states.get("A")?.turnError, {
+      message: "429 {\"error\":\"insufficient_quota\"}",
+      quota,
+    });
   });
 
   test("failed 不带 turn：槽里不产生标注（操作级失败走全局红字），归位照旧", () => {
@@ -934,7 +951,7 @@ describe("turnError —— 回合失败标注的进出槽", () => {
       turn: true,
     });
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.equal(states.get("A")?.turnError, "重试 3 次后仍失败：fetch failed");
+    assert.deepEqual(states.get("A")?.turnError, { message: "重试 3 次后仍失败：fetch failed" });
   });
 
   test("新一轮开跑即清：phase turn / compaction 与乐观置 turn 都算", () => {

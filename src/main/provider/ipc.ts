@@ -4,7 +4,7 @@
  */
 import { ipcMain, shell } from "electron";
 import { ipcChannels, type OauthDeviceCode, type OauthLoginInput } from "../../shared/agent-ipc.ts";
-import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota } from "../../shared/known-providers.ts";
+import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota, knownQuotaSourceOf } from "../../shared/known-providers.ts";
 import type { OauthCredential, ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
 import { quotaIsStale, type QuotaFailure, type QuotaQuery, type QuotaResult } from "../../shared/quota.ts";
 import { resolveProviderSecrets } from "../agent/ipc.ts";
@@ -48,7 +48,15 @@ async function resolveKey(
   return store.resolveApiKey(providerId);
 }
 
-export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, quotaDir?: string): void {
+/**
+ * `quotaCache` 由主进程传入（同一个实例还给 `failed` 事件的额度补丁用）：缓存是
+ * 「上次看到的事实」，两处只能读同一份文件、同一个形状。
+ */
+export function registerProviderIpc(
+  store: ProviderStore,
+  host?: AgentHostCore,
+  quotaCache?: QuotaCache,
+): void {
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
 
   ipcMain.handle(
@@ -175,9 +183,9 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
    *   - `> 24h` 的旧值当作没有——一周前的余额比「不知道」更容易误导。
    * 密钥只在主进程用一次，不进任何返回值。
    */
-  const quotaCache = quotaDir === undefined ? null : new QuotaCache(quotaDir);
+  const quotaStore = quotaCache ?? null;
   ipcMain.handle(ipcChannels.providerQuota, async (_event, query: QuotaQuery): Promise<QuotaResult> => {
-    if (quotaCache === null) return { status: "none" };
+    if (quotaStore === null) return { status: "none" };
     const provider = (await store.list()).find((item) => item.id === query.providerId);
     if (provider === undefined) return { status: "none" };
 
@@ -185,7 +193,7 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
     if (probe === "none") return { status: "none" };
 
     const now = Date.now();
-    const stored = (await quotaCache.read())[query.providerId] ?? null;
+    const stored = (await quotaStore.read())[query.providerId] ?? null;
     const cached = stored !== null && !quotaIsStale(stored.fetchedAt, now) ? stored : null;
 
     const last = quotaProbeState.get(query.providerId);
@@ -210,8 +218,8 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
 
     const result = await probeQuota({
       probe,
-      // 传**目录条目 id** 而不是存储行的 kind：老数据没有 kind，第二个实例也只能靠 id 认回来
-      kind: knownProviderOf(provider).id,
+      // 传**额度来源条目的 id**（general 兼容条目按 baseUrl 兜底认到的那家），探针靠它分派
+      kind: knownQuotaSourceOf(provider)?.id ?? knownProviderOf(provider).id,
       baseUrl: provider.endpoint.baseUrl,
       apiKey,
     });
@@ -219,7 +227,7 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
     if (result.status === "ok") {
       quotaProbeState.set(query.providerId, { at: now, failed: false });
       try {
-        await quotaCache.write(query.providerId, result.snapshot);
+        await quotaStore.write(query.providerId, result.snapshot);
       } catch (cause) {
         // 落盘失败不该让「已经拿到的余额」显示不出来；下次打开会重新探
         console.error("[provider] 额度缓存写入失败", cause);

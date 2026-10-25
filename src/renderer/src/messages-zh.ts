@@ -1373,6 +1373,9 @@ export const zh: Messages = {
       mcp: "MCP 每月",
     },
     resetsIn: (duration) => `${duration} 后重置`,
+    // 额度事实只作副行：缓存说明不了这次失败是谁造成的，不能冒充原因
+    exhausted: (label, duration) => `账户额度：${label}窗口已用尽 · ${duration} 后重置`,
+    exhaustedNoReset: (label) => `账户额度：${label}窗口已用尽`,
     justNow: "刚刚",
     minutesAgo: (n) => `${n} 分钟前`,
     hoursAgo: (n) => `${n} 小时前`,
@@ -1388,6 +1391,7 @@ export const zh: Messages = {
     authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
     teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
     noPlan: "这个账号没有订阅套餐。",
+    consoleOnly: "这个网关的余额只能在网页控制台查看。",
     reasonAuth: "密钥无效",
     reasonNetwork: "网络错误",
     reasonProtocol: "返回格式变了",

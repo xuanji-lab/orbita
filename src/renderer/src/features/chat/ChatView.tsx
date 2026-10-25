@@ -5,6 +5,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
+import type { TurnFailure } from "./session-states.ts";
 import {
   ChannelFromChildPill,
   ChannelFromParentBubble,
@@ -125,7 +126,7 @@ import {
 } from "./stats-format";
 import { isPlanBilling, knownProviderQuota } from "@shared/known-providers";
 import type { QuotaResult } from "@shared/quota";
-import { quotaMenuItems } from "../settings/quota-view.ts";
+import { quotaMenuItems, quotaExhaustedText } from "../settings/quota-view.ts";
 import { deriveWorkspaceName } from "@shared/workspace";
 import { modelCardFooter, modelChipParts, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
@@ -1536,7 +1537,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   marks: readonly ChannelMarkRecord[];
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
-  turnError: string | null;
+  turnError: TurnFailure | null;
   loadingHistory: boolean;
   /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
   loadingOlder: boolean;
@@ -1848,7 +1849,27 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{props.turnError}</Notice>
+          <Notice tone="bad">
+            {/*
+             * 厂商原文永远是第一行——原文就是证据，也是这条红字的「原因」。
+             * 额度事实只能当副行：缓存只说明「某个窗口满了」，不说明这次失败是它
+             * 造成的（钥匙过期 + 恰好窗口满时，主因是 401）。把它摆在前面会让用户
+             * 去等 2 小时而不是换 key。
+             */}
+            <span>{props.turnError.message}</span>
+            {props.turnError.quota !== undefined && (
+              <span
+                style={{
+                  display: "block",
+                  marginTop: "var(--space-1)",
+                  color: "var(--color-text-secondary)",
+                  fontSize: "var(--font-size-sm)",
+                }}
+              >
+                {quotaExhaustedText(props.turnError.quota, Date.now(), t)}
+              </span>
+            )}
+          </Notice>
         </div>
       )}
       {props.phase === "turn" &&

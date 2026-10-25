@@ -732,6 +732,59 @@ async function probeStepfun(origin: string, apiKey: string): Promise<QuotaResult
   return { status: "ok", snapshot: outcome.snapshot, fromCache: false };
 }
 
+
+/* ------------------------------------------------------------------ *
+ * 基元律动（tokenrhythm.studio）：网关账户余额
+ * ------------------------------------------------------------------ */
+
+/**
+ * 官方文档**没有**余额 API（只写「调用次数与上游可确认的 Token 用量会出现在用户中心和调用日志」）。
+ * 唯一像账户接口的是 `GET /api/me`：无凭据与错凭据都回 401（`UNAUTHORIZED`），说明它要凭据；
+ * 它是不是认 API key 还是只认控制台会话，待用真实 key 验证。
+ *
+ * 解析先保守：只认能配上「一个带币种的余额」的字段（`balance` / `remaining` / `quota` /
+ * `credits`，可套在 `data` 里），认不出就 protocol，并且只打字段名（不打印值）。
+ */
+export function parseTokenrhythmAccount(body: unknown, fetchedAt: number): ParseOutcome {
+  const record = asRecord(body);
+  if (record === null) return { ok: false, reason: "protocol" };
+  const data = asRecord(record.data) ?? record;
+
+  const pickAmount = (source: Record<string, unknown>): string | undefined => {
+    for (const key of ["balance", "remaining", "quota", "credits", "amount"]) {
+      const raw = source[key];
+      if (typeof raw === "string" && raw.trim() !== "") return raw.trim();
+      if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+    }
+    return undefined;
+  };
+  const amount = pickAmount(data);
+  if (amount === undefined) {
+    console.warn("[quota] tokenrhythm 未识别的响应字段", Object.keys(record), Object.keys(data));
+    return { ok: false, reason: "protocol" };
+  }
+  const currency = (asString(data.currency) ?? asString(data.currencyCode) ?? "CNY").toUpperCase();
+  return { ok: true, snapshot: { credits: { amount, currency }, windows: [], fetchedAt } };
+}
+
+async function probeTokenrhythm(origin: string, apiKey: string): Promise<QuotaResult> {
+  const attempt = await fetchJson(`${origin}/api/me`, {
+    Authorization: `Bearer ${apiKey}`,
+    Accept: "application/json",
+  });
+  /*
+   * 实测（2026-10-26，真实 key）：`/api/me` 对**推理用的 API key** 回 401——它认的是网页控制台的
+   * 登录会话，不是 key。官方文档也只说「调用次数与用量出现在用户中心和调用日志」。
+   * 所以这里不是「钥匙错了」，而是「这个平台没给 API 查」：归 console-only，界面照实说。
+   */
+  if (!attempt.ok) {
+    return failure(attempt.reason === "auth" ? "console-only" : attempt.reason);
+  }
+  const outcome = parseTokenrhythmAccount(attempt.body, Date.now());
+  if (!outcome.ok) return failure(outcome.reason);
+  return { status: "ok", snapshot: outcome.snapshot, fromCache: false };
+}
+
 /* ------------------------------------------------------------------ *
  * 分发
  * ------------------------------------------------------------------ */
@@ -752,8 +805,15 @@ export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
   }
 
   if (input.probe === "balance") {
-    // 余额类今天只有 DeepSeek 一家声明；其余条目声明了 balance 也算「说了但没接」
-    return input.kind === "deepseek" ? probeDeepseek(origin, input.apiKey) : failure("unsupported");
+    // 余额类：按条目逐个接（声明了 balance 但这里没分支 = 说了没接，归 unsupported）
+    switch (input.kind) {
+      case "deepseek":
+        return probeDeepseek(origin, input.apiKey);
+      case "tokenrhythm":
+        return probeTokenrhythm(origin, input.apiKey);
+      default:
+        return failure("unsupported");
+    }
   }
 
   switch (input.kind) {
@@ -767,6 +827,8 @@ export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
       return probeOpenCode(origin, input.apiKey);
     case "stepfun":
       return probeStepfun(origin, input.apiKey);
+    case "tokenrhythm":
+      return probeTokenrhythm(origin, input.apiKey);
     default:
       // 能力声明了但这家还没接：不猜端点
       return failure("unsupported");
