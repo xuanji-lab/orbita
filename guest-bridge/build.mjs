@@ -65,6 +65,9 @@ const args = [
   path.join(scriptDir, "TcpChannel.cs"),
   // 按窗口截图（0.9.0）：win-list / win-shot + 黑帧自检与过滤的纯函数
   path.join(scriptDir, "WinShot.cs"),
+  // UI Automation 车道（0.10.0）：uia-list / uia-act + 手写 COM interop、STA 看门狗
+  // （不引 UIAutomationClient.dll：那是 .NET 的包装，不暴露 AutoSetFocus）
+  path.join(scriptDir, "Uia.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);

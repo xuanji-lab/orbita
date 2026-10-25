@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.9.0");
+      assert.equal(info.version, "0.10.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -827,6 +827,74 @@ test("win-list / win-shot 进命令清单，黑帧自检与最小化恢复不是
   // 拍不到时给模型一句能照着换路的人话，且不许把黑图当成功回
   assert.match(shot, /computer_screenshot/);
   assert.match(shot, /这个窗口拍不到/);
+});
+
+// ── UIA 车道（uia-list / uia-act，0.10.0）────────────────────────────────────────
+//
+// 为什么需要它：像素输入（SendInput）是全局输入，多会话只能靠桌面租约串行；UIA 按控件
+// 调模式，不需要窗口在前台。这条车道最容易出「静默错」的两处是：AutoSetFocus 没关掉
+// （换了条路抢焦点）与 UIA 调用卡死整条桥（CPU 级阻塞）。前者由 COM 层关开关并读回确认，
+// 后者由独立 STA 线程 + 看门狗兜住——两者都不能在宿主上跑，所以这里分两半验：
+//   ① 纯函数用 --selftest-uia（ref 编号 / 动作→模式 / 参数校验 / 超时与降级文案）；
+//   ② COM 调用链、超时是否真的不拖死桥、能否真的点中按钮，只能真机（沙箱）验收。
+
+test(
+  "UIA 纯函数 selftest：ref 编号 / 动作→模式 / 参数校验 / 超时与降级文案（不启 COM、不碰桌面）",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-uia"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 60, `用例数应 >= 60，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test(
+  "UIA 客户端自检：COM 客户端拿得到、AutoSetFocus 关掉并读回（只建 in-proc 对象，不取任何窗口）",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 60_000 },
+  () => {
+    // 这条路径是 COM interop 唯一的硬风险面（CLSID / IID / vtable 槽），纯函数测不到它；
+    // 但它只动我们自己的 in-proc 客户端对象、不取窗口、不调任何模式，所以在宿主上跑是安全的。
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-uia-client"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 45_000,
+    });
+    assert.equal(r.status, 0, `UIA 客户端自检应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const line = (r.stdout ?? "").trim().split(/\r?\n/).filter((text) => text.length > 0).pop();
+    const parsed = JSON.parse(line);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.equal(parsed.autoSetFocus, true, "Win8+ 的 CUIAutomation8 必须能把 AutoSetFocus 关掉");
+  },
+);
+
+test("UIA 车道的三条硬纪律写进源码：AutoSetFocus 关+读回、STA 看门狗、不支持模式退回像素", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
+  // ① AutoSetFocus：必须真的写下去，并且读回确认（put 成功不等于生效）
+  assert.match(src, /SlotPutAutoSetFocus/, "必须调 put_AutoSetFocus");
+  assert.match(src, /SlotGetAutoSetFocus/, "必须读回 get_AutoSetFocus 确认");
+  assert.ok(
+    src.indexOf("put_AutoSetFocus") >= 0 && src.indexOf("SlotGetAutoSetFocus") >= 0,
+    "关掉与读回两半都要在",
+  );
+  // ② 看门狗：STA 线程 + 到点放弃线程（不能 Join 死等，也不能阻塞命令循环）
+  assert.match(src, /SetApartmentState\(ApartmentState\.STA\)/);
+  assert.match(src, /IsBackground = true/);
+  assert.match(src, /目标窗口没有响应（UIA 调用超时/);
+  assert.match(src, /_generation\+\+/, "超时必须让当前 STA 线程作废（否则下一条命令还排在它后面）");
+  // ③ 不支持的模式要给人话 + 像素退路，不能静默失败
+  assert.match(src, /这个控件不支持 /);
+  assert.match(src, /computer_click \/ computer_type 的像素路径/);
+  // UIA 调用绝不能在主命令线程上直接跑（那就是把桥堵死）
+  assert.match(src, /Run\(delegate/);
 });
 
 // ── 会话 id 安全化的纯函数自测（--selftest-session）────────────────────────────────
