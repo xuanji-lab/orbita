@@ -464,8 +464,9 @@ export type ModelFamilyLogo =
   | "claude"
   | "openai"
   | "xiaomimimo"
-  // 不叫 doubao：那是火山方舟服务商条目的 id（VendorLogo 的 LOGOS 里 doubao → 火山引擎的标），
-  // 同名会被服务商那一行盖掉，seed-* 型号就显示成火山方舟的山形标
+  // 不叫 doubao：2026-10-24 它撞上过火山方舟服务商条目的 id（VendorLogo 的 LOGOS 里服务商那一行
+  // 盖掉同名家族键，seed-* 型号显示成火山引擎的山形标）。条目 2026-10-25 下架后键名照旧不改回去：
+  // 家族键与服务商 id 共用一张 LOGOS 表，doubao 这种厂商名随时可能再被服务商条目占用
   | "doubao-seed"
   | "longcat"
   | "grok";

@@ -542,12 +542,12 @@ describe("缓存与拉取退回", () => {
 });
 
 describe("与服务商条目的对接", () => {
-  test("条目存在：catalogId 指向自建目录、目录说了算、未实测、按量计费、两种接入方式", () => {
+  test("条目存在：catalogId 指向自建目录、目录说了算、已实测（不挂「未实测」）、按量计费、两种接入方式", () => {
     const known = KNOWN_PROVIDERS.find((provider) => provider.id === TOKENRHYTHM_CATALOG_ID);
     assert.ok(known !== undefined);
     assert.equal(known.catalogId, TOKENRHYTHM_CATALOG_ID);
     assert.equal(known.catalogAuthoritative, true);
-    assert.equal(known.untested, true);
+    assert.equal(known.untested, undefined);
     assert.notEqual(known.billing, "plan");
     assert.deepEqual(
       known.access?.map((access) => [access.api, access.baseUrl]),
