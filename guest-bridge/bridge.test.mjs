@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.8.2");
+      assert.equal(info.version, "0.8.3");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -147,6 +147,7 @@ test(
       assert.ok(Array.isArray(info.ipv4), "bridge.json 应带 ipv4 数组");
       // 0.8.2：防火墙放行结果（宿主要能据此说清「连不上是因为沙箱防火墙没放行」）
       assert.equal(typeof info.fwAllowed, "boolean", "bridge.json 应带布尔 fwAllowed");
+      assert.equal(typeof info.fwStateOff, "boolean", "bridge.json 应带布尔 fwStateOff（是否关掉了沙箱防火墙）");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
       // ---- ping 命令（宿主就绪探针）----

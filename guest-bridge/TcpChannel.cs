@@ -94,14 +94,6 @@ internal static class TcpChannel
     /** 已接入的连接总数 / 当前活跃连接数（只记账与心跳日志用；int 读写本身是原子的） */
     private static int _accepted = 0;
     private static int _active = 0;
-    /** 本次启动的防火墙放行结果（写进 bridge.json，宿主据此解释「为什么连不上」） */
-    private static bool _fwAllowed = false;
-    /** 自测开关：宿主上**绝不**真跑 netsh（那是在改用户机器的防火墙） */
-    private static bool _fwSkip = false;
-    /** 入站规则名：固定，重跑时靠它判断「已经放行过」 */
-    internal const string FirewallRuleName = "orbita-guest-bridge";
-    /** netsh 的上限：放行是尽力而为，绝不许把桥的启动拖住 */
-    private const int FirewallTimeoutMs = 5000;
     private static int _port = 0;
     private static string _token = "";
     /** TCP 命令的全局序号（多连接共用，文件名不许撞） */
@@ -127,9 +119,6 @@ internal static class TcpChannel
      */
     internal static bool Start()
     {
-        // **先放行再监听**：顺序反了的话，宿主第一次探活会撞在「已监听但被防火墙丢包」的窗口里，
-        // 而沙箱还会弹一个等人去点的提示（真机上就是它让 TCP 看起来「间歇可用」）。
-        _fwAllowed = EnsureFirewallRule();
         try
         {
             _token = NewToken();
@@ -137,6 +126,9 @@ internal static class TcpChannel
             listener.Start(ListenBacklog);
             _listener = listener;
             _port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            // 端口知道了才放行（0.8.3）：按端口的规则不依赖 exe 路径，junction / 映射路径坑不到它。
+            // 顺序仍是「监听 → 放行 → 写 bridge.json」：宿主看见通告时，入站已经放开。
+            OpenInboundForPort(_port);
             Thread accept = new Thread(AcceptLoop);
             accept.IsBackground = true;
             accept.Name = "orbita-tcp-accept";
@@ -279,47 +271,64 @@ internal static class TcpChannel
         }
     }
 
-    // ---- 防火墙放行（0.8.2）-------------------------------------------------------
+    // ---- 防火墙放行（0.8.3）-------------------------------------------------------
     //
     // 真沙箱里第一次监听入站端口时，Windows 会弹「是否允许…访问此应用？」的防火墙提示；
     // 没人点「允许」时**所有入站 TCP 都被丢**（SYN 连回答都没有），宿主看到的就是「连接超时」。
-    // 2026-10-25 真机：同一个 ip:port，点「允许」之前 8 次全超时、guest 心跳「已接入 0 条」，
-    // 点完之后 4ms 就通。所以桥自己建一条入站允许规则，把「等人点」这件事彻底去掉。
+    // 2026-10-25 真机两轮：
+    //   ① 只按**程序路径**加规则（0.8.2）：netsh 返回成功、fwAllowed=true，但宿主 8 次连接仍全超时
+    //      —— 桥是从一张 mklink /J 出来的路径启动的，Windows 记的镜像路径可能是 junction 目标，
+    //      程序规则匹配不上；
+    //   ② 用户手动点「允许」之后，同一个 ip:port **4ms** 就连通。
+    // 所以改成**按端口**放行（不依赖路径，最不容易被 junction 坑到），再加一道确定性兜底：
+    // 在沙箱里直接把防火墙关掉（一次性 VM、只跟宿主通信，用户已裁决可以接受）。
     //
     // 三条纪律：
-    //   ① 尽力而为：失败只记一句人话，桥与文件协议照常工作（TCP 只是加速器）；
-    //   ② 不弹窗：UseShellExecute=false + CreateNoWindow（也就不经过 Shell / UAC）；
-    //   ③ 幂等：先 `show rule` 看一眼，已有同名规则就不再 add（netsh 允同名重复，重跑会堆规则）。
+    //   ① 端口知道了才放行（TcpListener.Start() → 取端口 → 建规则 → 才算监听可用）；
+    //   ② 尽力而为：两步都失败也只记人话日志、把结果写进 bridge.json，桥与文件协议照常工作；
+    //   ③ 不弹窗、不提权：UseShellExecute=false + CreateNoWindow，整次调用框在 5s 上限里。
 
-    /** 本进程 exe 的绝对路径（规则按程序放行，比按端口放行精确） */
-    private static string CurrentExePath()
+    /** 规则名前缀：端口规则叫 orbita-guest-bridge-<port>，一局沙箱里端口唯一 */
+    internal const string FirewallRuleName = "orbita-guest-bridge";
+    /** 确定性兜底：在沙箱里关掉防火墙（一次性 VM；只在 guest 进程里执行，宿主永不碰） */
+    internal const string FirewallOffArgs = "advfirewall set allprofiles state off";
+    /** netsh 的上限：放行是尽力而为，绝不许把桥的启动拖住 */
+    private const int FirewallTimeoutMs = 5000;
+
+    /** 本次启动的入站放行结果（端口规则或关防火墙任一成功 = true），写进 bridge.json */
+    private static bool _fwAllowed = false;
+    /** 防火墙是否真的被关掉了（bridge.json 的 fwStateOff，用于解释「为什么能连上」） */
+    private static bool _fwStateOff = false;
+    /** 自测开关：宿主上**绝不**真跑 netsh（那是在改用户机器的防火墙） */
+    private static bool _fwSkip = false;
+    /** 诊断路径只打一次（重连不会重跑防火墙，但自测会多次 Start） */
+    private static bool _fwDiagnosticsLogged = false;
+
+    /** 端口规则名：带端口，避免上一局残留的同名规则被误判成「已存在」 */
+    internal static string PortRuleName(int port)
     {
-        try
-        {
-            return System.Reflection.Assembly.GetExecutingAssembly().Location;
-        }
-        catch
-        {
-            return "";
-        }
+        return FirewallRuleName + "-" + port;
     }
 
     /**
-     * `netsh advfirewall firewall add rule` 的参数串（纯函数，自测直接验它）。
+     * `netsh advfirewall firewall add rule` 的端口放行参数串（纯函数，自测直接验它）。
      *
-     * 为什么 program= 外面一定有引号：安装路径可能带空格，而 Windows 的 argv 解析会把
-     * `program="C:\A B\x.exe"` 合成一个 token `program=C:\A B\x.exe`，netsh 正好吃这个形状。
+     * 为什么按端口而不是按程序：桥的 exe 是从一张 mklink /J 出来的目录启动的
+     * （C:\orbita-bridge → 沙箱桌面的 bin\），Windows 记的镜像路径可能与参数里的字面路径不同，
+     * 程序规则就匹配不上（2026-10-25 真机：程序规则 netsh 返回成功，连接仍全超时）。
+     * 端口规则不依赖路径。
      */
-    internal static string BuildAddRuleArgs(string exePath)
+    internal static string BuildPortRuleArgs(int port)
     {
-        return "advfirewall firewall add rule name=\"" + FirewallRuleName + "\""
-            + " dir=in action=allow program=\"" + exePath + "\" enable=yes profile=any";
+        return "advfirewall firewall add rule name=\"" + PortRuleName(port) + "\""
+            + " dir=in action=allow protocol=TCP localport=" + port
+            + " profile=any enable=yes";
     }
 
     /** `netsh advfirewall firewall show rule name=...` 的参数串（纯函数） */
-    internal static string BuildShowRuleArgs()
+    internal static string BuildShowRuleArgs(string ruleName, bool verbose)
     {
-        return "advfirewall firewall show rule name=\"" + FirewallRuleName + "\"";
+        return "advfirewall firewall show rule name=\"" + ruleName + "\"" + (verbose ? " verbose" : "");
     }
 
     /**
@@ -340,57 +349,132 @@ internal static class TcpChannel
         return ",\"fwAllowed\":" + (allowed ? "true" : "false");
     }
 
+    /** bridge.json 里的 fwStateOff 字段片段（纯函数） */
+    internal static string FirewallStateField(bool off)
+    {
+        return ",\"fwStateOff\":" + (off ? "true" : "false");
+    }
+
     /** 自测：不真的跑 netsh（宿主上改用户防火墙是红线） */
     internal static void SkipFirewallForSelfTest()
     {
         _fwSkip = true;
     }
 
-    /** 放行结果（写进 bridge.json）。false 也可能只是「netsh 没成」，不代表桥不可用。 */
+    /**
+     * 入站是否已放行 = 端口规则建成 **或** 防火墙已关闭（取其一即够）。
+     * false 只代表「两条路都没成」，不代表桥不可用（文件协议照旧）。
+     */
     internal static bool FirewallAllowed
     {
         get { return _fwAllowed; }
     }
 
-    /** 建入站允许规则；任何失败都只记日志（返回 false），绝不抛 */
-    private static bool EnsureFirewallRule()
+    /** 沙箱内防火墙是否被关掉（写进 bridge.json，解释「为什么这次能连上」） */
+    internal static bool FirewallDisabled
+    {
+        get { return _fwStateOff; }
+    }
+
+    /**
+     * 放行本端口：先按端口建规则，再**无条件**执行一次「关掉沙箱防火墙」作为确定性兜底。
+     *
+     * 为什么兜底是无条件的：0.8.2 的教训是「netsh 返回 0 ≠ 真放行」——按程序路径加规则时
+     * netst 成功、fwAllowed=true，宿主照样连不上。判据是「宿主第一次探活就成功」，
+     * 所以这里宁可两步都做（一次沙箱生命周期里几毫秒的 netsh，代价可忽略）。
+     */
+    internal static bool OpenInboundForPort(int port)
     {
         if (_fwSkip)
         {
             Log("防火墙：自测跳过放行（不跑 netsh）");
             _fwAllowed = true;
+            _fwStateOff = false;
             return true;
         }
-        string exePath = CurrentExePath();
-        if (exePath.Length == 0)
+        LogPathsForDiagnostics();
+        bool byPort = EnsureRule(PortRuleName(port), BuildPortRuleArgs(port));
+        bool off = DisableFirewall();
+        _fwStateOff = off;
+        _fwAllowed = byPort || off;
+        Log("防火墙：" + (_fwAllowed ? "入站已放行" : "未能放行")
+            + "（端口规则 " + (byPort ? "成功" : "失败") + "，关闭防火墙 " + (off ? "成功" : "失败") + "）");
+        return _fwAllowed;
+    }
+
+    /** 加一条规则（已有同名就跳过）；返回是否「这条规则确定在」 */
+    private static bool EnsureRule(string ruleName, string addArgs)
+    {
+        NetShellResult shown = RunNetsh(BuildShowRuleArgs(ruleName, false));
+        if (!ShouldAddRule(shown.Code, shown.Output))
         {
-            Log("防火墙：自动放行失败（取不到本进程 exe 路径）——TCP 通道需要用户在弹出的提示里点「允许」，否则只走文件协议");
-            return false;
+            Log("防火墙：入站规则 " + ruleName + " 已存在，跳过");
+            return true;
         }
+        NetShellResult added = RunNetsh(addArgs);
+        if (added.Code == 0)
+        {
+            Log("防火墙：已添加入站规则 " + ruleName + "（任意 profile，本端口 TCP 入站）");
+            // 回读一次：证明规则真的在（0.8.2 的教训就是「netsh 返回 0 ≠ 真的放行」）
+            NetShellResult verbose = RunNetsh(BuildShowRuleArgs(ruleName, true));
+            Log("防火墙：规则回读（第一行）— " + FirstLine(verbose.Output));
+            return true;
+        }
+        Log("防火墙：添加入站规则失败（" + ruleName + "，netsh 退出码 " + added.Code + "："
+            + FirstLine(added.Output) + "）");
+        return false;
+    }
+
+    /** 兜底：在沙箱里关掉防火墙（一次性 VM，只与宿主通信） */
+    private static bool DisableFirewall()
+    {
+        NetShellResult result = RunNetsh(FirewallOffArgs);
+        if (result.Code == 0)
+        {
+            Log("防火墙：已在沙箱内关闭（一次性 VM，仅与宿主通信；这样 TCP 通道不必等用户点允许）");
+            return true;
+        }
+        Log("防火墙：关闭失败（netsh 退出码 " + result.Code + "：" + FirstLine(result.Output)
+            + "）——TCP 通道可能需要用户在弹出的提示里点「允许」，否则只走文件协议");
+        return false;
+    }
+
+    /**
+     * 把三个可能不一致的「本进程 exe 路径」打进日志：真机上要确认 junction 到底让哪个路径生效
+     * （.NET Framework 4.x 没有 Environment.ProcessPath，所以用等价的三个来源）。
+     */
+    private static void LogPathsForDiagnostics()
+    {
+        if (_fwDiagnosticsLogged) return;
+        _fwDiagnosticsLogged = true;
+        string mainModule = "?";
         try
         {
-            NetShellResult shown = RunNetsh(BuildShowRuleArgs());
-            if (!ShouldAddRule(shown.Code, shown.Output))
-            {
-                Log("防火墙：入站规则 " + FirewallRuleName + " 已存在，跳过");
-                return true;
-            }
-            NetShellResult added = RunNetsh(BuildAddRuleArgs(exePath));
-            if (added.Code == 0)
-            {
-                Log("防火墙：已放行 " + FirewallRuleName + "（入站任意 profile）");
-                return true;
-            }
-            Log("防火墙：自动放行失败（netsh 退出码 " + added.Code + "：" + FirstLine(added.Output)
-                + "）——TCP 通道需要用户在弹出的提示里点「允许」，否则只走文件协议");
-            return false;
+            mainModule = Process.GetCurrentProcess().MainModule.FileName;
         }
         catch (Exception ex)
         {
-            Log("防火墙：自动放行失败（" + ex.Message
-                + "）——TCP 通道需要用户在弹出的提示里点「允许」，否则只走文件协议");
-            return false;
+            mainModule = "?(" + ex.Message + ")";
         }
+        string entry = "?";
+        try
+        {
+            System.Reflection.Assembly asm = System.Reflection.Assembly.GetEntryAssembly();
+            entry = asm == null ? "?（无入口程序集）" : asm.Location;
+        }
+        catch (Exception ex)
+        {
+            entry = "?(" + ex.Message + ")";
+        }
+        string argv0 = "?";
+        try
+        {
+            string[] argv = Environment.GetCommandLineArgs();
+            if (argv.Length > 0) argv0 = argv[0];
+        }
+        catch { }
+        Log("防火墙：路径诊断 — MainModule=" + mainModule + "；EntryAssembly=" + entry
+            + "；CommandLine[0]=" + argv0);
     }
 
     /** netsh 的输出只取第一行（多行会挤满 bridge.log，看原因第一行就够） */
@@ -779,39 +863,45 @@ internal static class TcpChannel
             Program.CheckTrue(failures, ref cases, "bridge.json 的 ipv4 字段是数组（本机可能没有非回环地址）",
                 IPv4Json(LocalIPv4()).StartsWith("[", StringComparison.Ordinal));
 
-            // ---- 防火墙放行（0.8.2）：只验拼装与幂等判断，宿主上不跑 netsh ----
-            string exe = "C:" + Path.DirectorySeparatorChar + "orbita-bridge" + Path.DirectorySeparatorChar
-                + "orbita-guest-bridge.exe";
-            string addArgs = BuildAddRuleArgs(exe);
-            Program.CheckTrue(failures, ref cases, "放行参数：规则名 / 方向 / 动作 / 启用 / profile 都对",
-                addArgs.IndexOf("advfirewall firewall add rule name=\"" + FirewallRuleName + "\"",
+            // ---- 防火墙放行（0.8.3）：只验拼装与幂等判断，宿主上不跑 netsh ----
+            string addArgs = BuildPortRuleArgs(49686);
+            Program.CheckTrue(failures, ref cases, "端口规则：按端口而不是按程序路径（junction 坑不到）",
+                addArgs.IndexOf("advfirewall firewall add rule name=\"" + PortRuleName(49686) + "\"",
                     StringComparison.Ordinal) == 0
-                && addArgs.IndexOf(" dir=in ", StringComparison.Ordinal) > 0
+                && addArgs.IndexOf(" program=", StringComparison.Ordinal) < 0);
+            Program.CheckTrue(failures, ref cases, "端口规则：方向 / 动作 / 协议 / 端口 / profile / enable 都对",
+                addArgs.IndexOf(" dir=in ", StringComparison.Ordinal) > 0
                 && addArgs.IndexOf(" action=allow ", StringComparison.Ordinal) > 0
-                && addArgs.IndexOf(" enable=yes ", StringComparison.Ordinal) > 0
-                && addArgs.EndsWith(" profile=any", StringComparison.Ordinal));
-            Program.CheckTrue(failures, ref cases, "放行参数：程序路径带引号且指向本 exe",
-                addArgs.IndexOf("program=\"" + exe + "\"", StringComparison.Ordinal) > 0);
-            Program.CheckTrue(failures, ref cases, "放行参数：引号只有两对（名字 + 路径），路径里的反斜杠不被转义",
-                CountChar(addArgs, '"') == 4 && addArgs.IndexOf("\\\\", StringComparison.Ordinal) < 0);
-            string spaced = BuildAddRuleArgs("C:" + Path.DirectorySeparatorChar + "Program Files"
-                + Path.DirectorySeparatorChar + "orbita app" + Path.DirectorySeparatorChar + "orbita-guest-bridge.exe");
-            Program.CheckTrue(failures, ref cases, "放行参数：路径带空格时引号仍然整段包住路径",
-                spaced.IndexOf("program=\"C:" + Path.DirectorySeparatorChar + "Program Files"
-                    + Path.DirectorySeparatorChar + "orbita app" + Path.DirectorySeparatorChar
-                    + "orbita-guest-bridge.exe\"", StringComparison.Ordinal) > 0);
+                && addArgs.IndexOf(" protocol=TCP ", StringComparison.Ordinal) > 0
+                && addArgs.IndexOf(" localport=49686 ", StringComparison.Ordinal) > 0
+                && addArgs.IndexOf(" profile=any ", StringComparison.Ordinal) > 0
+                && addArgs.EndsWith(" enable=yes", StringComparison.Ordinal));
+            Program.CheckTrue(failures, ref cases, "端口规则：名字里的端口与实际端口一致（一局一规则，不撞旧残留）",
+                PortRuleName(1) == "orbita-guest-bridge-1" && PortRuleName(65535) == "orbita-guest-bridge-65535");
+            Program.CheckTrue(failures, ref cases, "端口规则：引号只有一对（规则名），没有转义反斜杠",
+                CountChar(addArgs, '"') == 2 && addArgs.IndexOf("\\\\", StringComparison.Ordinal) < 0);
             Program.CheckString(failures, ref cases, "查询参数：按规则名查",
-                "advfirewall firewall show rule name=\"" + FirewallRuleName + "\"", BuildShowRuleArgs());
+                "advfirewall firewall show rule name=\"" + PortRuleName(49686) + "\"",
+                BuildShowRuleArgs(PortRuleName(49686), false));
+            Program.CheckString(failures, ref cases, "查询参数：verbose 回读",
+                "advfirewall firewall show rule name=\"" + PortRuleName(49686) + "\" verbose",
+                BuildShowRuleArgs(PortRuleName(49686), true));
+            Program.CheckString(failures, ref cases, "兜底：在沙箱里关掉防火墙的参数",
+                "advfirewall set allprofiles state off", FirewallOffArgs);
             Program.CheckTrue(failures, ref cases, "幂等：show 成功 = 规则已在，不再 add",
-                !ShouldAddRule(0, "Rule orbita-guest-bridge"));
+                !ShouldAddRule(0, "Rule orbita-guest-bridge-49686"));
             Program.CheckTrue(failures, ref cases, "幂等：show 失败且输出里没有规则名 → 要加",
                 ShouldAddRule(1, "没有与指定条件相匹配的规则。"));
             Program.CheckTrue(failures, ref cases, "幂等：show 失败但输出里已有规则名 → 不加",
-                !ShouldAddRule(1, "orbita-guest-bridge"));
+                !ShouldAddRule(1, "orbita-guest-bridge-49686"));
             Program.CheckString(failures, ref cases, "fwAllowed 字段片段（true）", ",\"fwAllowed\":true",
                 FirewallField(true));
             Program.CheckString(failures, ref cases, "fwAllowed 字段片段（false）", ",\"fwAllowed\":false",
                 FirewallField(false));
+            Program.CheckString(failures, ref cases, "fwStateOff 字段片段（true）", ",\"fwStateOff\":true",
+                FirewallStateField(true));
+            Program.CheckString(failures, ref cases, "fwStateOff 字段片段（false）", ",\"fwStateOff\":false",
+                FirewallStateField(false));
             if (!started) return Finish(failures, cases, dir, captured);
 
             // ① 错误令牌：必须被拒、且收不到任何命令回执

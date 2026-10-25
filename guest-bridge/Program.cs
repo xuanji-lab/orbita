@@ -71,11 +71,13 @@ internal static class Program
     //   一个字都没改——它仍是老宿主的唯一通道、也是 TCP 不可用时的回退通道。
     // 0.8.1 修监听的结构性缺陷：accept 线程只管收连接（握手/命令/日志全在每条连接自己的线程里），
     //   hello 读 1s 硬超时，backlog 64，接入与心跳各有日志。文件协议与命令语义**未变**。
-    // 0.8.2 启动时自己建一条防火墙入站允许规则（TcpChannel.EnsureFirewallRule）：真机上「TCP
-    //   间歇不可达」的真因就是沙箱弹了防火墙提示、没人点「允许」（点了立刻 4ms 就通）。结果写进
-    //   bridge.json 的 fwAllowed，宿主据此解释「为什么连不上」。
+    // 0.8.2 启动时自己建一条防火墙入站允许规则：真机上「TCP 间歇不可达」的真因就是沙箱弹了
+    //   防火墙提示、没人点「允许」（点了立刻 4ms 就通）。
+    // 0.8.3 按**程序路径**的规则在真机被证明不放行（netsh 成功、连接仍全超时——桥从 junction
+    //   出来的路径启动，镜像路径对不上），改成按**端口**放行 + 无条件关掉沙箱内防火墙兜底；
+    //   结果写进 bridge.json 的 fwAllowed / fwStateOff，宿主据此解释「为什么连不上」。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.8.2";
+    private const string Version = "0.8.3";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -484,8 +486,10 @@ internal static class Program
         json.Append("{\"version\":").Append(JsonQuote(Version))
             .Append(",\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id)
             // 防火墙放行结果：false 时宿主要能说清「连不上是因为沙箱防火墙没放行」，
-            // 而不是继续盲猜网络。老宿主不认识这个字段，忽略即可。
-            .Append(TcpChannel.FirewallField(TcpChannel.FirewallAllowed));
+            // 而不是继续盲猜网络。fwStateOff = 是否干脆把沙箱防火墙关掉了（兜底那条路）。
+            // 老宿主不认识这两个字段，忽略即可。
+            .Append(TcpChannel.FirewallField(TcpChannel.FirewallAllowed))
+            .Append(TcpChannel.FirewallStateField(TcpChannel.FirewallDisabled));
         if (TcpChannel.Port > 0 && TcpChannel.Token.Length > 0)
         {
             json.Append(",\"port\":").Append(TcpChannel.Port)
