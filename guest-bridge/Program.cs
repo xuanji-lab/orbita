@@ -74,10 +74,13 @@ internal static class Program
     // 0.8.2 启动时自己建一条防火墙入站允许规则：真机上「TCP 间歇不可达」的真因就是沙箱弹了
     //   防火墙提示、没人点「允许」（点了立刻 4ms 就通）。
     // 0.8.3 按**程序路径**的规则在真机被证明不放行（netsh 成功、连接仍全超时——桥从 junction
-    //   出来的路径启动，镜像路径对不上），改成按**端口**放行 + 无条件关掉沙箱内防火墙兜底；
+    //   出来的路径启动，镜像路径对不上），改成按**端口**放行 + 关掉沙箱内防火墙兜底；
     //   结果写进 bridge.json 的 fwAllowed / fwStateOff，宿主据此解释「为什么连不上」。
+    // 0.8.4 把「关防火墙」提到**开始监听之前**（那个「是否允许」的提示框是 Windows 在程序第一次
+    //   开始监听入站时弹的，之后再关防火墙收不回它，还抢焦点），并在监听后起一条 ~2s 的短任务
+    //   把可能已经弹出的那个框收掉（枚举顶层窗口 → 精确匹配 → WM_CLOSE，只做一次）。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.8.3";
+    private const string Version = "0.8.4";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果

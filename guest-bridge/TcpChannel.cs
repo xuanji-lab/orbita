@@ -58,6 +58,7 @@ using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -119,6 +120,9 @@ internal static class TcpChannel
      */
     internal static bool Start()
     {
+        // **关防火墙必须在开始监听之前**：那个「是否允许…」的框是 Windows 在程序第一次开始监听
+        // 入站时弹的；等它弹出来之后再关防火墙不会把框收回去，框会留在桌面上抢焦点。
+        PrepareFirewallBeforeListen();
         try
         {
             _token = NewToken();
@@ -126,9 +130,11 @@ internal static class TcpChannel
             listener.Start(ListenBacklog);
             _listener = listener;
             _port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            // 端口知道了才放行（0.8.3）：按端口的规则不依赖 exe 路径，junction / 映射路径坑不到它。
-            // 顺序仍是「监听 → 放行 → 写 bridge.json」：宿主看见通告时，入站已经放开。
-            OpenInboundForPort(_port);
+            // 端口知道了才建端口规则（belt-and-braces：防火墙通常已经被上一步关掉）。
+            // 顺序：关防火墙 → 监听 → 端口规则 → 写 bridge.json（宿主看见通告时入站已放开）。
+            AddPortRuleAfterListen();
+            // 万一某些机器上仍然弹了那个框：监听后起一条 ~2s 的短任务把它收掉（只做一次）
+            ArmFirewallPromptSweep();
             Thread accept = new Thread(AcceptLoop);
             accept.IsBackground = true;
             accept.Name = "orbita-tcp-accept";
@@ -271,22 +277,23 @@ internal static class TcpChannel
         }
     }
 
-    // ---- 防火墙放行（0.8.3）-------------------------------------------------------
+    // ---- 防火墙放行（0.8.4）-------------------------------------------------------
     //
-    // 真沙箱里第一次监听入站端口时，Windows 会弹「是否允许…访问此应用？」的防火墙提示；
-    // 没人点「允许」时**所有入站 TCP 都被丢**（SYN 连回答都没有），宿主看到的就是「连接超时」。
-    // 2026-10-25 真机两轮：
-    //   ① 只按**程序路径**加规则（0.8.2）：netsh 返回成功、fwAllowed=true，但宿主 8 次连接仍全超时
-    //      —— 桥是从一张 mklink /J 出来的路径启动的，Windows 记的镜像路径可能是 junction 目标，
-    //      程序规则匹配不上；
-    //   ② 用户手动点「允许」之后，同一个 ip:port **4ms** 就连通。
-    // 所以改成**按端口**放行（不依赖路径，最不容易被 junction 坑到），再加一道确定性兜底：
-    // 在沙箱里直接把防火墙关掉（一次性 VM、只跟宿主通信，用户已裁决可以接受）。
+    // 真沙箱里的两个现象（2026-10-25 真机，两轮）：
+    //   ① 只按**程序路径**加规则（0.8.2）：netsh 返回成功、fwAllowed=true，宿主 8 次连接仍全超时
+    //      —— 桥从一张 mklink /J 出来的路径启动，镜像路径可能与规则里的字面路径对不上；
+    //   ② 「是否允许… orbita-guest-bridge」那个框**还在弹**（用户拍的第二张截图）：
+    //      它是 Windows 在程序**第一次开始监听**入站时弹的（InboundUserNotification），
+    //      在它之后关防火墙不会把框收回去——框会一直留在沙箱桌面上，还抢焦点（干扰像素工具）。
+    //
+    // 所以顺序改成（0.8.4）：**先关防火墙 → 再开始监听** → 取端口 → 建端口规则（belt-and-braces）
+    // → 写 bridge.json。关掉之后才开始监听，就不该再有那个提示。万一某些机器上仍然弹了，
+    // 监听之后起一条 ~2s 的短任务，把它收掉（枚举顶层窗口，精确匹配再 PostMessage(WM_CLOSE)）。
     //
     // 三条纪律：
-    //   ① 端口知道了才放行（TcpListener.Start() → 取端口 → 建规则 → 才算监听可用）；
-    //   ② 尽力而为：两步都失败也只记人话日志、把结果写进 bridge.json，桥与文件协议照常工作；
-    //   ③ 不弹窗、不提权：UseShellExecute=false + CreateNoWindow，整次调用框在 5s 上限里。
+    //   ① 尽力而为：每一步失败都只记人话日志，桥与文件协议照常工作；
+    //   ② 不弹窗、不提权：UseShellExecute=false + CreateNoWindow，整次调用框在 5s 上限里；
+    //   ③ 只碰**沙箱内**我们自己的桌面窗口（宿主进程永不执行这些代码，`--no-firewall` 也会关掉它）。
 
     /** 规则名前缀：端口规则叫 orbita-guest-bridge-<port>，一局沙箱里端口唯一 */
     internal const string FirewallRuleName = "orbita-guest-bridge";
@@ -294,15 +301,61 @@ internal static class TcpChannel
     internal const string FirewallOffArgs = "advfirewall set allprofiles state off";
     /** netsh 的上限：放行是尽力而为，绝不许把桥的启动拖住 */
     private const int FirewallTimeoutMs = 5000;
+    /** 关弹框的延迟：给 Windows 弹框留一点时间（它在监听那一刻弹） */
+    private const int FirewallPromptDelayMs = 2000;
+    /** WM_CLOSE */
+    private const uint WM_CLOSE = 0x0010;
 
     /** 本次启动的入站放行结果（端口规则或关防火墙任一成功 = true），写进 bridge.json */
     private static bool _fwAllowed = false;
     /** 防火墙是否真的被关掉了（bridge.json 的 fwStateOff，用于解释「为什么能连上」） */
     private static bool _fwStateOff = false;
-    /** 自测开关：宿主上**绝不**真跑 netsh（那是在改用户机器的防火墙） */
+    /** 自测开关：宿主上**绝不**真跑 netsh、绝不碰桌面窗口 */
     private static bool _fwSkip = false;
-    /** 诊断路径只打一次（重连不会重跑防火墙，但自测会多次 Start） */
+    /** 诊断路径只打一次 */
     private static bool _fwDiagnosticsLogged = false;
+    /** 弹框兜底只做一次（判据是「别等、别重试超过一次」） */
+    private static int _fwPromptSweepArmed = 0;
+
+    // ---- 那个提示框的长相（纯函数，自测直接验）----
+
+    /**
+     * 是不是 Windows 的「是否允许…访问此应用」防火墙提示。
+     *
+     * 三个条件（前两个是硬条件，后两个满足其一即可）：
+     *   · 类名必须是 `#32770`（Win32 标准对话框）——否则可能误关 Security 应用主窗口；
+     *   · 标题命中一组多语言关键字（中文 / 英文 / 通用），**或**正文（子控件文本）里出现
+     *     `orbita-guest-bridge`（程序名是最不容易被本地化/改版弄丢的信号）。
+     */
+    internal static bool IsFirewallPrompt(string className, string title, string body)
+    {
+        if (!string.Equals(className, "#32770", StringComparison.Ordinal)) return false;
+        if (LooksLikeFirewallTitle(title)) return true;
+        if (body == null) return false;
+        return body.IndexOf("orbita-guest-bridge", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /** 提示框标题的多语言关键字（Windows 安全中心 / Windows Security Alert / 安全警报 …） */
+    internal static bool LooksLikeFirewallTitle(string title)
+    {
+        if (title == null || title.Trim().Length == 0) return false;
+        string[] needles = new string[]
+        {
+            "Windows 安全中心",
+            "Windows 安全性",
+            "Windows Security Alert",
+            "Windows Security",
+            "Windows Defender 防火墙",
+            "Windows Defender Firewall",
+            "安全警报",
+            "防火墙",
+        };
+        for (int i = 0; i < needles.Length; i++)
+        {
+            if (title.IndexOf(needles[i], StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        }
+        return false;
+    }
 
     /** 端口规则名：带端口，避免上一局残留的同名规则被误判成「已存在」 */
     internal static string PortRuleName(int port)
@@ -313,10 +366,8 @@ internal static class TcpChannel
     /**
      * `netsh advfirewall firewall add rule` 的端口放行参数串（纯函数，自测直接验它）。
      *
-     * 为什么按端口而不是按程序：桥的 exe 是从一张 mklink /J 出来的目录启动的
-     * （C:\orbita-bridge → 沙箱桌面的 bin\），Windows 记的镜像路径可能与参数里的字面路径不同，
-     * 程序规则就匹配不上（2026-10-25 真机：程序规则 netsh 返回成功，连接仍全超时）。
-     * 端口规则不依赖路径。
+     * 为什么按端口而不是按程序：桥的 exe 是从一张 mklink /J 出来的目录启动的，Windows 记的
+     * 镜像路径可能与参数里的字面路径不同，程序规则就匹配不上（真机：netsh 成功、连接仍超时）。
      */
     internal static string BuildPortRuleArgs(int port)
     {
@@ -355,15 +406,15 @@ internal static class TcpChannel
         return ",\"fwStateOff\":" + (off ? "true" : "false");
     }
 
-    /** 自测：不真的跑 netsh（宿主上改用户防火墙是红线） */
+    /** 自测：不真的跑 netsh、也不去关窗口（宿主上的红线） */
     internal static void SkipFirewallForSelfTest()
     {
         _fwSkip = true;
     }
 
     /**
-     * 入站是否已放行 = 端口规则建成 **或** 防火墙已关闭（取其一即够）。
-     * false 只代表「两条路都没成」，不代表桥不可用（文件协议照旧）。
+     * 入站是否已放行 = 防火墙已关闭 **或** 端口规则建成（取其一即够）。
+     * false 只代表两条路都没成，不代表桥不可用（文件协议照旧）。
      */
     internal static bool FirewallAllowed
     {
@@ -377,29 +428,34 @@ internal static class TcpChannel
     }
 
     /**
-     * 放行本端口：先按端口建规则，再**无条件**执行一次「关掉沙箱防火墙」作为确定性兜底。
+     * 监听**之前**的一步：打路径诊断 + 关掉沙箱防火墙。
      *
-     * 为什么兜底是无条件的：0.8.2 的教训是「netsh 返回 0 ≠ 真放行」——按程序路径加规则时
-     * netst 成功、fwAllowed=true，宿主照样连不上。判据是「宿主第一次探活就成功」，
-     * 所以这里宁可两步都做（一次沙箱生命周期里几毫秒的 netsh，代价可忽略）。
+     * 为什么必须在监听之前（0.8.4 的关键）：那个「是否允许…」的框是 Windows 在程序第一次
+     * 开始监听入站端口时弹的；等它弹出来之后关防火墙**不会**把框收回去，框会一直留在桌面上，
+     * 还抢焦点（对像素工具是干扰源）。先关防火墙，监听时就不会有提示。
      */
-    internal static bool OpenInboundForPort(int port)
+    private static void PrepareFirewallBeforeListen()
     {
         if (_fwSkip)
         {
-            Log("防火墙：自测跳过放行（不跑 netsh）");
+            Log("防火墙：自测跳过放行（不跑 netsh、不碰窗口）");
             _fwAllowed = true;
             _fwStateOff = false;
-            return true;
+            return;
         }
         LogPathsForDiagnostics();
-        bool byPort = EnsureRule(PortRuleName(port), BuildPortRuleArgs(port));
-        bool off = DisableFirewall();
-        _fwStateOff = off;
-        _fwAllowed = byPort || off;
+        _fwStateOff = DisableFirewall();
+    }
+
+    /** 监听之后的一步：端口规则（belt-and-braces；防火墙通常已经被关掉） */
+    private static void AddPortRuleAfterListen()
+    {
+        if (_fwSkip) return;
+        bool byPort = EnsureRule(PortRuleName(_port), BuildPortRuleArgs(_port));
+        _fwAllowed = byPort || _fwStateOff;
         Log("防火墙：" + (_fwAllowed ? "入站已放行" : "未能放行")
-            + "（端口规则 " + (byPort ? "成功" : "失败") + "，关闭防火墙 " + (off ? "成功" : "失败") + "）");
-        return _fwAllowed;
+            + "（关闭防火墙 " + (_fwStateOff ? "成功" : "失败")
+            + "；端口规则 " + (byPort ? "成功" : "失败") + "）");
     }
 
     /** 加一条规则（已有同名就跳过）；返回是否「这条规则确定在」 */
@@ -431,12 +487,118 @@ internal static class TcpChannel
         NetShellResult result = RunNetsh(FirewallOffArgs);
         if (result.Code == 0)
         {
-            Log("防火墙：已在沙箱内关闭（一次性 VM，仅与宿主通信；这样 TCP 通道不必等用户点允许）");
+            Log("防火墙：已在沙箱内关闭（一次性 VM，仅与宿主通信；这样开始监听时不会弹「是否允许」）");
             return true;
         }
         Log("防火墙：关闭失败（netsh 退出码 " + result.Code + "：" + FirstLine(result.Output)
-            + "）——TCP 通道可能需要用户在弹出的提示里点「允许」，否则只走文件协议");
+            + "）——可能会弹「是否允许」的提示，TCP 通道在用户点「允许」之前只走文件协议");
         return false;
+    }
+
+    // ---- 弹框兜底：关掉那个「是否允许…」的提示（0.8.4）---------------------------
+    //
+    // 顺序调整之后理论上不该再弹；但对「某些机器上 InboundUserNotification 先于防火墙状态生效」
+    // 这种我们控制不了的情况留一手：监听之后起一条 ~2s 的短任务，枚举顶层窗口找那个框，
+    // 精确匹配后 PostMessage(WM_CLOSE)。**只做一次、不等待、不重试**——找不到就算了。
+    // 这是沙箱内我们自己的桌面（一次性 VM，桌面本来就整块交给 agent），不碰宿主窗口。
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    /** 监听之后调一次：排一条 ~2s 的短任务去收掉可能已经弹出来的防火墙提示 */
+    private static void ArmFirewallPromptSweep()
+    {
+        if (_fwSkip) return;
+        if (Interlocked.CompareExchange(ref _fwPromptSweepArmed, 1, 0) != 0) return;
+        Thread sweeper = new Thread(delegate() { SweepFirewallPrompt(); });
+        sweeper.IsBackground = true;
+        sweeper.Name = "orbita-fw-dialog";
+        sweeper.Start();
+    }
+
+    private static void SweepFirewallPrompt()
+    {
+        try
+        {
+            Thread.Sleep(FirewallPromptDelayMs);
+            List<IntPtr> hits = new List<IntPtr>();
+            List<string> titles = new List<string>();
+            EnumWindows(delegate(IntPtr hwnd, IntPtr lParam)
+            {
+                try
+                {
+                    if (!IsWindowVisible(hwnd)) return true;
+                    string title = WindowTextOf(hwnd);
+                    string body = ChildTextOf(hwnd);
+                    if (!IsFirewallPrompt(ClassNameOf(hwnd), title, body)) return true;
+                    hits.Add(hwnd);
+                    titles.Add(title.Trim().Length == 0 ? "（无标题）" : title.Trim());
+                }
+                catch
+                {
+                    // 单个窗口查不到就跳过，继续枚举
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            for (int i = 0; i < hits.Count; i++)
+            {
+                PostMessage(hits[i], WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                Log("防火墙：已关闭系统弹框「" + titles[i] + "」（它会影响沙箱内焦点）");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("防火墙：关弹框失败（" + ex.Message + "）");
+        }
+    }
+
+    private static string ClassNameOf(IntPtr hwnd)
+    {
+        StringBuilder buffer = new StringBuilder(256);
+        int length = GetClassName(hwnd, buffer, buffer.Capacity);
+        return length > 0 ? buffer.ToString(0, length) : "";
+    }
+
+    private static string WindowTextOf(IntPtr hwnd)
+    {
+        StringBuilder buffer = new StringBuilder(512);
+        int length = GetWindowText(hwnd, buffer, buffer.Capacity);
+        return length > 0 ? buffer.ToString(0, length) : "";
+    }
+
+    /** 子控件文本拼起来（提示框的正文在 Static 控件里，含程序名 orbita-guest-bridge） */
+    private static string ChildTextOf(IntPtr hwnd)
+    {
+        StringBuilder parts = new StringBuilder();
+        EnumChildWindows(hwnd, delegate(IntPtr child, IntPtr lParam)
+        {
+            try
+            {
+                string text = WindowTextOf(child);
+                if (text.Length > 0) parts.Append(text).Append('\n');
+            }
+            catch { }
+            return true;
+        }, IntPtr.Zero);
+        return parts.ToString();
     }
 
     /**
@@ -902,6 +1064,22 @@ internal static class TcpChannel
                 FirewallStateField(true));
             Program.CheckString(failures, ref cases, "fwStateOff 字段片段（false）", ",\"fwStateOff\":false",
                 FirewallStateField(false));
+            // ---- 弹框识别（0.8.4）：只验匹配条件，宿主上不枚举窗口 ----
+            Program.CheckTrue(failures, ref cases, "弹框：中文标题命中（Windows 安全中心）",
+                IsFirewallPrompt("#32770", "Windows 安全中心", ""));
+            Program.CheckTrue(failures, ref cases, "弹框：英文标题命中（Windows Security Alert）",
+                IsFirewallPrompt("#32770", "Windows Security Alert", ""));
+            Program.CheckTrue(failures, ref cases, "弹框：标题没命中但正文带程序名也命中（最不怕本地化）",
+                IsFirewallPrompt("#32770", "某个提示",
+                    "Windows 防火墙已阻止所有公用网络和专用网络上的 orbita-guest-bridge 的某些功能。"));
+            Program.CheckTrue(failures, ref cases, "弹框：正文大小写不敏感",
+                IsFirewallPrompt("#32770", "", "Blocked ORBITA-GUEST-BRIDGE"));
+            Program.CheckTrue(failures, ref cases, "弹框：类名不是 #32770 一律不碰（别误关 Security 应用主窗口）",
+                !IsFirewallPrompt("ApplicationFrameWindow", "Windows 安全中心", "orbita-guest-bridge"));
+            Program.CheckTrue(failures, ref cases, "弹框：无关的标准对话框不碰",
+                !IsFirewallPrompt("#32770", "确认删除", "确实要删除这个文件吗？"));
+            Program.CheckTrue(failures, ref cases, "弹框：空标题空正文不碰", !IsFirewallPrompt("#32770", "", ""));
+
             if (!started) return Finish(failures, cases, dir, captured);
 
             // ① 错误令牌：必须被拒、且收不到任何命令回执

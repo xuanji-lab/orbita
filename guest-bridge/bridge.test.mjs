@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.8.3");
+      assert.equal(info.version, "0.8.4");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
