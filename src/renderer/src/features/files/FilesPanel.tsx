@@ -28,6 +28,16 @@ import {
   type SentFileRef,
 } from "./sent-attachments.ts";
 import { FilePreviewPane } from "./FilePreviewPane";
+import { LatexBuildBar } from "./LatexBuildBar";
+import { LatexProblems, type ProblemItem } from "./LatexProblems";
+import {
+  groupLatexIssues,
+  isFailedStatus,
+  issueLocation,
+  latexBarState,
+  pdfStale,
+} from "./latex-workbench.ts";
+import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import {
   closeTab,
   dropTabsAtRoot,
@@ -44,7 +54,8 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import { pathTail, pathWithin } from "../../../../shared/path.ts";
+import type { LatexFileContext } from "@shared/latex";
+import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
 /** 占位 Session 组（还没有会话）的折叠键：真实根的键是绝对路径，常量撞不上 */
@@ -90,6 +101,11 @@ export function FilesPanel(props: {
    * 同一个文件连点两次也重新激活。null = 没有请求
    */
   fileOpen?: { path: string; token: number } | null;
+  /**
+   * 把一条命令填进可见终端（编译条「在终端安装」）：App 切到终端面板并粘贴，
+   * 回车仍由用户按——缺宏包的安装可能需要 sudo / 管理员密码，agent 不替用户提权。
+   */
+  onRunInTerminal?: (command: string) => void;
 }) {
   const t = useT();
   const session = props.session;
@@ -146,6 +162,95 @@ export function FilesPanel(props: {
     setActivePath(next.activePath);
     if (next.activePath === null) setTreeOn(false);
   }, [focusWorkspaceId, session.workspaceId, session.workspaces, tabs, activePath]);
+
+  /**
+   * 论文工作台：当前文件属于 LaTeX 项目时，标签行下方多一条编译条、面板底部多个
+   * 问题抽屉；其余文件完全无感（项目探测走主进程，不在这里读盘）。
+   *
+   * 授权上下文与 fs:read 同形（root + path），所以附图标签（path 是原图引用、
+   * root 是空串）直接跳过——它不可能是 LaTeX 项目里的文件。
+   */
+  const latexContext = useMemo<LatexFileContext | null>(() => {
+    if (activeTab === null || activeTab.name !== undefined) return null;
+    return {
+      sessionId,
+      workspaceId,
+      ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+      root: activeTab.root,
+      path: activeTab.path,
+    };
+  }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
+  const latex = useLatexWorkbench(latexContext);
+  /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const latexGroups = useMemo(
+    () => groupLatexIssues(latex.last?.errors ?? [], latex.last?.warnings ?? []),
+    [latex.last],
+  );
+  const latexState = latexBarState({
+    running: latex.running,
+    lastStatus: latex.last?.status ?? null,
+    stale: pdfStale(latex.project?.pdf?.modifiedAt ?? null, latex.project?.sourceModifiedAt ?? null),
+    hasPdf: latex.project?.pdf !== null && latex.project !== undefined,
+  });
+  /** 当前标签是不是这个项目编译出来的 PDF（PDF 标签的预览豁免与编译后重载都认它） */
+  const latexPdfActive =
+    activeTab !== null && latex.project?.pdf != null && samePath(latex.project.pdf.path, activeTab.path);
+  useEffect(() => {
+    if (latex.last !== null && isFailedStatus(latex.last.status)) setProblemsOpen(true);
+  }, [latex.last]);
+
+  // 切文件 / 换项目：抽屉收起（上一份问题不属于新文件）
+  useEffect(() => {
+    setProblemsOpen(false);
+  }, [latexContext?.path]);
+
+  /**
+   * 编译快捷键（Ctrl/Cmd+B）。**不抢终端与输入框**：终端里的 Ctrl+B 是 readline 的
+   * backward-char（vim 里是翻页），在输入框里它也不是编译——那两个场景直接放过。
+   */
+  useEffect(() => {
+    if (latex.project === null) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (event.key.toLowerCase() !== "b") return;
+      const target = event.target;
+      if (target instanceof Element && target.closest(".xterm") !== null) return;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      event.preventDefault();
+      if (latex.running) return;
+      latex.compile();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [latex.project, latex.running, latex.compile]);
+
+  /**
+   * 一条编译问题 → 输入框引用。走现有的引用通道（TextQuote）：用户自己按发送才发。
+   * `filePath` 让 chip 的注脚显示文件名（而不是「agent 说的」）——它不是历史消息的
+   * 片段，是一条工具事实。
+   */
+  const handProblemToAgent = (item: ProblemItem): void => {
+    const prefix =
+      item.level === "error"
+        ? t.latex.quoteError
+        : item.level === "warning"
+          ? t.latex.quoteWarning
+          : item.level === "layout"
+            ? t.latex.quoteLayout
+            : t.latex.quoteMissingPackage;
+    const loc = issueLocation(item);
+    session.addQuote({
+      text: `${prefix} · ${loc === "" ? item.message : `${loc} · ${item.message}`}`,
+      messageId: `latex:${item.file ?? ""}:${item.line ?? 0}:${item.message}`,
+      role: "assistant",
+      ...(item.file === null ? {} : { filePath: item.file }),
+    });
+    document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+  };
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
@@ -626,6 +731,22 @@ export function FilesPanel(props: {
         onClose={() => setMenu(null)}
         items={menu === null ? [] : [referenceItem(menu)]}
       />
+      {/* 论文工作台：编译条（项目内才在）+ 文件内容 + 问题抽屉。三者同住一个
+          纵向 flex，抽屉钉在面板底部；非 LaTeX 文件只多一层无副作用的包裹 */}
+      <div className="files-workbench">
+        {latex.project !== null && (
+          <LatexBuildBar
+            project={latex.project}
+            probe={latex.probe}
+            state={latexState}
+            last={latex.last}
+            startedAt={latex.startedAt}
+            onCompile={latex.compile}
+            onCancel={latex.cancel}
+            onSelectEngine={latex.selectEngine}
+            onSelectMain={latex.selectMain}
+          />
+        )}
       {/* body 是 container query 的查询容器（styles.css 裁决 solo / 隐藏 / 浮层 /
           并排四种形态），layout 是它的直接内容层——@container 查不到容器自己，
           两层不能合并。遮罩只在「浮层」形态显示（CSS 管），点击收起树 */}
@@ -708,9 +829,25 @@ export function FilesPanel(props: {
               {...(activeTab.name !== undefined ? { sentImage: { name: activeTab.name } } : {})}
               // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
               jump={jump !== null && jump.citation.path === activeTab.path ? jump : null}
+              // 论文工作台：项目里的 PDF 走预览（不受「PDF 引用」实验开关管——
+              // 刚编出来的 PDF 是编译条的直接产物）；编译成功后按 mtime 重载。
+              // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
+              pdfPreview={latexPdfActive}
+              pdfReloadToken={latexPdfActive ? latex.pdfReloadToken : 0}
             />
           )}
         </div>
+      </div>
+        {latex.project !== null && (
+          <LatexProblems
+            groups={latexGroups}
+            open={problemsOpen}
+            onToggle={() => setProblemsOpen((open) => !open)}
+            onHandToAgent={handProblemToAgent}
+            onInstall={(command) => props.onRunInTerminal?.(command)}
+          />
+        )}
+        {latex.error !== null && <p className="latex-error">{latex.error}</p>}
       </div>
     </RightPanelFrame>
   );

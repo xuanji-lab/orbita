@@ -613,6 +613,18 @@ export function App() {
    * 消费完就清。
    */
   const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
+  /**
+   * 文件面板「在终端安装」：把一条命令**填进可见终端**（以粘贴方式进 xterm，
+   * 不回车）。缺宏包的 tlmgr 可能要 sudo / 管理员密码，回车与提权都留给用户。
+   * token 单调递增：同一命令连点两次也重新粘贴一次。
+   */
+  const [pendingTerminalInput, setPendingTerminalInput] = useState<{ text: string; token: number } | null>(null);
+  const terminalInputTokenRef = useRef(0);
+  const runInTerminal = useCallback((text: string): void => {
+    terminalInputTokenRef.current += 1;
+    setPendingTerminalInput({ text, token: terminalInputTokenRef.current });
+    setRightPanel("terminal");
+  }, []);
   useEffect(
     () =>
       api.terminal.onEvent((event) => {
@@ -1189,6 +1201,7 @@ export function App() {
                 citeFocus={citeFocus}
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
                 fileOpen={fileOpenRequest}
+                onRunInTerminal={runInTerminal}
               />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
@@ -1219,6 +1232,8 @@ export function App() {
                   cwd={session.cwd}
                   activateId={pendingTerminal}
                   onActivated={() => setPendingTerminal(null)}
+                  pendingInput={pendingTerminalInput}
+                  onInputDone={() => setPendingTerminalInput(null)}
                 />
               ) : shownPanel === "drawer" ? (
                 <Drawer

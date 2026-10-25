@@ -29,11 +29,21 @@ export function TerminalPanel(props: {
    */
   activateId: string | null;
   onActivated: () => void;
+  /**
+   * 一次性粘贴（文件面板的「在终端安装」）：命令已填好，**不回车**——tlmgr 可能
+   * 要管理员密码，提权与执行都由终端前的人决定。token 单调递增，同一文本连点
+   * 两次也重新粘贴。
+   */
+  pendingInput?: { text: string; token: number } | null;
+  /** 粘贴完成（面板清掉信号，避免切 tab 后又贴一次） */
+  onInputDone?: () => void;
 }) {
   const t = useT();
   /** 现存终端（创建顺序即 tab 顺序）；pendingIds 是视图还在创建中的（info 未回） */
   const [tabs, setTabs] = useState<TerminalInfo[]>([]);
   const [pendingIds, setPendingIds] = useState<string[]>([]);
+  /** 挂载时的那次 list 回来了吗：待粘贴的命令要等它才能判「有没有活终端」 */
+  const [listed, setListed] = useState(false);
   /**
    * 选中的 tab。null = 「落最后一个」：关掉当前 tab 后自然落到余下最后一个，
    * 不必在 setState 的 updater 里读列表（StrictMode 双跑不安全）。
@@ -87,9 +97,13 @@ export function TerminalPanel(props: {
         const existing = await api.terminal.list();
         if (cancelled) return;
         setTabs(existing);
+        setListed(true);
         if (existing.length === 0) openTerminal();
       } catch {
-        if (!cancelled) openTerminal();
+        if (!cancelled) {
+          setListed(true);
+          openTerminal();
+        }
       }
     })();
     // 运行期不重拉 list：新 tab 只由本面板的动作产生，exit 由 exitRef 兜住
@@ -117,6 +131,25 @@ export function TerminalPanel(props: {
     setActiveId(props.activateId);
     props.onActivated();
   }, [props.activateId, props.onActivated]);
+
+  /**
+   * 「在终端安装」的落点保证：待粘贴的命令只对**活着的**终端有意义。
+   *
+   * 面板刚挂载、用户把 tab 全关了、或现有 tab 全部已退出时，走与「+」同一条
+   * `openTerminal`（不新造第二条创建路径）；有活终端但不在前台就切过去。
+   * 必须等挂载时那次 list 回来再判，否则会与「空列表自动开一个」抢着开两个。
+   * 这是干净状态下的回归点：修复前只切了面板，命令落在一个不存在的 tab 上。
+   */
+  useEffect(() => {
+    if (props.pendingInput == null || !listed) return;
+    if (pendingIds.length > 0) return; // 已有一次创建在途，等它
+    const live = tabs.find((tab) => tab.exited === null);
+    if (live === undefined) {
+      openTerminal();
+      return;
+    }
+    setActiveId(live.terminalId);
+  }, [props.pendingInput, listed, pendingIds, tabs, openTerminal]);
 
   /**
    * **收养 agent 开的终端**（PR2 线上故障的根因，2026-10-10）。
@@ -187,6 +220,8 @@ export function TerminalPanel(props: {
               exited={tabs.find((tab) => tab.terminalId === id)?.exited ?? null}
               active={id === active}
               onCreated={promoteTerminal}
+              paste={id === active ? (props.pendingInput ?? null) : null}
+              onPasted={() => props.onInputDone?.()}
             />
           ))}
         </div>

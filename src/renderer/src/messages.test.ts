@@ -68,6 +68,11 @@ const ALLOWED_LATIN = new Set([
   "DeepSeek",
   "deepseek",
   "endpoints",
+  // 排版工具链的名字（用户照抄的字面量：发行版 / 构建器 / 包管理器 / 文件类型）
+  "LaTeX",
+  "latexmk",
+  "tlmgr",
+  "tex",
   "Claude",
   "Code",
   // Claude 订阅的档位名（产品自称，不译）与登录域名

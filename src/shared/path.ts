@@ -29,6 +29,19 @@ export function pathTail(path: string): string {
 }
 
 /**
+ * 两个绝对路径是否指同一个文件：分隔符归一（渲染端拼 `/`、主进程走 node:path 拼 `\`），
+ * Windows 形路径大小写不敏感。不 resolve `.` / `..`——喂进来的都是两端各自拼好的绝对路径。
+ */
+export function samePath(a: string, b: string): boolean {
+  const win = looksLikeWindowsPath(a) || looksLikeWindowsPath(b);
+  const normalize = (value: string): string => {
+    const folded = win ? value.toLowerCase() : value;
+    return (win ? folded.replace(/[\\/]+/g, "/") : folded).replace(/\/+$/, "");
+  };
+  return normalize(a) === normalize(b);
+}
+
+/**
  * `child` 是不是 `parent` 本身或其子孙，**按路径段判**（`/ws/a` 不算 `/ws/ab` 的父）。
  * 两种分隔符都认——父子可能一边是原生反斜杠、一边是渲染端拼的正斜杠；这里的喂入面
  * （renderer 的键、展示层的 `~` 缩写）不会出现「POSIX 名字里带 `\`」的形态，双前缀

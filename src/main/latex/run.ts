@@ -35,6 +35,7 @@ import {
   type LatexCompileRequest,
   type LatexEngine,
   type LatexIssue,
+  type LatexProbeResult,
   type LatexResult,
   type LatexRunOutcome,
   type LatexStatus,
@@ -120,6 +121,26 @@ export class LatexRunner {
       this.cancelled.add(key);
       killTree(child);
     }
+  }
+
+  /**
+   * 取消**一个项目**的编译（编译条的「取消」）。没有在跑的编译就回 false。
+   * 与 cancelAll 同一套语义：杀整棵进程树，等着的 compile() 以 cancelled 结局收尾
+   * ——不是抛错，界面据此显示「已取消」而不是一次失败的编译。
+   */
+  cancel(dirInput: string): boolean {
+    const dir = resolve(dirInput);
+    const key = projectKey(dir);
+    if (!this.active.has(key)) return false;
+    this.cancelled.add(key);
+    const child = this.children.get(key);
+    if (child !== undefined) killTree(child);
+    return true;
+  }
+
+  /** 本机 latexmk / 引擎探测（缓存由 createLatexProbe 管，界面点开 chip 时现问） */
+  probeEnvironment(): Promise<LatexProbeResult> {
+    return this.probe.probe();
   }
 
   private async build(
