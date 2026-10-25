@@ -7,6 +7,7 @@ import {
   catalogPreferenceOf,
   isPlanBilling,
   knownProviderDefaultName,
+  knownProviderQuota,
   knownProviderOf,
   knownProviderGroup,
   knownAccessFor,
@@ -340,5 +341,27 @@ describe("地址分组 —— OpenCode Go 的 inference/go、旧写法 zen/go、
     assert.deepEqual(endpointHintsOf(zhipu, { api: "anthropic-messages", baseUrl: "https://open.bigmodel.cn/api/anthropic" }), {
       catalogId: "zai-coding-cn",
     });
+  });
+});
+
+describe("knownProviderQuota —— 谁有可查的额度", () => {
+  it("只有 DeepSeek 声明了余额（公开文档接口）", () => {
+    assert.equal(knownProviderQuota(p("deepseek")), "balance");
+  });
+
+  it("其余条目缺省是 none（整块不渲染，不留「—」）", () => {
+    for (const id of ["zhipu", "zhipu-coding", "zai", "kimi-coding", "stepfun", "opencode-go"]) {
+      assert.equal(knownProviderQuota(p(id)), "none", id);
+    }
+  });
+
+  it("老数据没有 kind / 第二个实例：靠 id 认回来，额度块不会凭空消失", () => {
+    assert.equal(knownProviderQuota(p("deepseek-2")), "balance");
+    assert.equal(knownProviderQuota(p("my-ds", { kind: "deepseek" })), "balance");
+  });
+
+  it("认不得的（自建网关）当 none", () => {
+    assert.equal(knownProviderQuota(p("my-own-gateway")), "none");
+    assert.equal(knownProviderQuota(p("gw", { api: "anthropic-messages" })), "none");
   });
 });

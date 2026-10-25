@@ -55,6 +55,13 @@ export interface MenuItem {
    * 而这些行从来不是一件事。数字用 mono 字体（设计系统：mono for machine facts）。
    */
   fact?: boolean;
+  /**
+   * 事实行下面那条 3px 进度（0–1，向「已用」方向长）。**只给额度窗口**用：
+   * 悬停即开的菜单里一条满宽的条比一句百分比更快读懂，而菜单项本身只能画一行文字。
+   * 颜色不在这里说：轨道与填充由 `MenuRow` 统一取文字色，`>= 1` 才算 danger——
+   * 条是第二信号，数字（`62% used`）才是第一信号。
+   */
+  progress?: number;
   /** 分组头：菜单里一节的小标题（如模型菜单的厂商名）。不可选、不抢焦点，样式同设置面的节标题 */
   header?: boolean;
   /** 破坏性动作：danger 色。**只给真的会丢东西的那一项** */
@@ -935,10 +942,29 @@ function MenuRow(props: {
    * 浏览器会把内层拆出去，点击行为跟着乱。整行的底由外面这一层给（见 styles.css 的
    * .menu-row-tail）——鼠标落在星上时，亮的是整行，不是只有一半。
    */
-  if (item.trailing === undefined) return row;
+  /*
+   * 行底下那条进度（额度窗口用）。它是**行的兄弟**而不是行里的一列：条要吃满卡片
+   * 左右内边距，而行内部有图标槽与 hint 列，塞进去就只能在文字列里拐个弯。
+   *
+   * 颜色与几何全部交给 styles.css 的 `.quota-bar`（与设置页的额度块共用同一条）：
+   * 这里只给**运行时值**（宽度）与一个布尔属性（是否用尽），不写字面色值。
+   */
+  const progress = item.progress === undefined ? null : Math.max(0, Math.min(1, item.progress));
+  const body =
+    progress === null ? (
+      row
+    ) : (
+      <div style={{ display: "grid" }}>
+        {row}
+        <span className="quota-bar menu-progress" aria-hidden data-spent={progress >= 1 ? "true" : undefined}>
+          <i style={{ width: `${progress * 100}%` }} />
+        </span>
+      </div>
+    );
+  if (item.trailing === undefined) return body;
   return (
     <div className="menu-row-tail" data-cursor={props.cursor} data-current={item.checked === true}>
-      {row}
+      {body}
       {item.trailing}
     </div>
   );

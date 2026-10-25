@@ -17,6 +17,7 @@
  */
 import type { CatalogPreference } from "./model-defaults.ts";
 import type { ProviderApi } from "./provider.ts";
+import type { QuotaProbe } from "./quota.ts";
 
 /**
  * 一种接入方式：协议 + 这家在这个协议下的地址。同一家常同时开着几种协议（智谱 Coding Plan
@@ -102,6 +103,19 @@ export interface KnownProvider {
    * 缺省 = `metered`：不知道的当按量算，那是绝大多数（自建网关也落在这一档）。
    */
   billing?: "metered" | "plan";
+  /**
+   * **这家能不能查账号额度，以及查的是哪一类**。缺省 = `none`（整块不渲染）。
+   *
+   * 与 `billing` 分开：`billing` 说的是「按量还是包月」，`quota` 说的是「能不能问厂商要额度」。
+   *
+   * ⚠ 这些端点里**多数是厂商网页控制台的内部接口**（智谱 / Z.AI 的 `quota/limit`、
+   * Kimi 的 `usages`、OpenCode 的 `zen/go/v1/usage`、StepFun 的 `step_plan/v1/usage`），
+   * 不是公开契约：厂商改版就静默失效，团队账号还走不通。所以能力必须在这里**逐家声明**，
+   * 失败时整块隐藏 + 说清原因，**绝不显示 0**——「查不到」和「没钱了」是两句话。
+   *
+   * 唯一的公开文档接口是 DeepSeek 的 `GET /user/balance`（api-docs.deepseek.com，Bearer）。
+   */
+  quota?: QuotaProbe;
   /** 一句话说明这条什么时候该选 */
   note: string;
   /**
@@ -132,6 +146,7 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
       { api: "anthropic-messages", baseUrl: "https://api.deepseek.com/anthropic" },
     ],
     catalogId: "deepseek",
+    quota: "balance",
     note: "DeepSeek 官方 API",
   },
   {
@@ -706,6 +721,17 @@ export function catalogIdsOfProviders(providers: readonly ProviderKindSource[]):
  */
 export function isPlanBilling(provider: ProviderKindSource): boolean {
   return knownProviderOf(provider).billing === "plan";
+}
+
+/**
+ * 这家能不能查额度、查哪一类。**认不得的一律 `none`**（自建网关没有可查的账号余额）。
+ *
+ * 与 `isPlanBilling` 同一个入口（`knownProviderOf`）而不是只看 `kind`：老数据没有 kind，
+ * 第二个实例（`deepseek-2`）也只能靠 id 认回来——只看 kind 会让这些实例的额度块凭空消失。
+ * 能力本身逐条写在条目上（`quota`），这里只负责找到那条。
+ */
+export function knownProviderQuota(provider: ProviderKindSource): QuotaProbe {
+  return knownProviderOf(provider).quota ?? "none";
 }
 
 /**

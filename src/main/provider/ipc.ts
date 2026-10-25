@@ -4,8 +4,9 @@
  */
 import { ipcMain, shell } from "electron";
 import { ipcChannels, type OauthDeviceCode, type OauthLoginInput } from "../../shared/agent-ipc.ts";
-import { KNOWN_PROVIDERS } from "../../shared/known-providers.ts";
+import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota } from "../../shared/known-providers.ts";
 import type { OauthCredential, ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
+import { quotaIsStale, type QuotaFailure, type QuotaQuery, type QuotaResult } from "../../shared/quota.ts";
 import { resolveProviderSecrets } from "../agent/ipc.ts";
 import type { AgentHostCore } from "../agent/host-core.ts";
 import { runClaudeLogin } from "./oauth.ts";
@@ -13,10 +14,25 @@ import { isPiOauthKind, modelsFromCredential, runPiOauthLogin } from "./oauth-fl
 import { discoverModels, type DiscoveredModels } from "./discover.ts";
 import { testConnection, type ConnectionTestResult } from "./test-connection.ts";
 import { ProviderStore, ProviderValidationError } from "./store.ts";
+import { QuotaCache } from "./quota-cache.ts";
+import { probeQuota } from "./quota.ts";
 
 export type UpsertResult =
   | { ok: true; provider: ProviderDto }
   | { ok: false; issues: ValidationIssue[] };
+
+/**
+ * 额度的刷新节奏（decisions 12）：成功后 60s 内复用，失败后退 15s。
+ * **绝不做后台定时轮询**——只有界面打开时才问。节流状态放模块级 Map：
+ * 它描述的是「这个 provider 最近一次被打是什么时候」，与窗口实例无关。
+ */
+const QUOTA_OK_REUSE_MS = 60_000;
+const QUOTA_FAIL_BACKOFF_MS = 15_000;
+
+/** 最近一次探测的结果：成功只要时间，失败多记一个原因（退避期间直接回它） */
+type QuotaProbeState = { at: number } & ({ failed: false } | { failed: true; reason: QuotaFailure });
+
+const quotaProbeState = new Map<string, QuotaProbeState>();
 
 /** 密钥来源：表单里刚输入的优先，否则取已存的（api_key 或 OAuth 访问令牌——后者会自动续期，
  *  续期失败会抛错：调用方把它转成「请重新登录」而不是当成没有密钥） */
@@ -32,7 +48,7 @@ async function resolveKey(
   return store.resolveApiKey(providerId);
 }
 
-export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore): void {
+export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, quotaDir?: string): void {
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
 
   ipcMain.handle(
@@ -148,6 +164,73 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore):
     // 只认目录表里有的 id：renderer 不能借这条通道让 agent 进程去拉任意目录
     if (!KNOWN_PROVIDERS.some((known) => known.catalogId === catalogId)) return;
     await host?.peekCatalog(catalogId);
+  });
+
+  /**
+   * 账号额度（余额 / 套餐窗口）。
+   *
+   * 流程：能力声明 → 缓存 → 节流 → 探活 → 落盘。三条界线：
+   *   - capability `none` 直接回 none：界面整块不渲染，不留空块；
+   *   - 失败**保留上一次成功的快照**（`cached`），不覆盖成 0；
+   *   - `> 24h` 的旧值当作没有——一周前的余额比「不知道」更容易误导。
+   * 密钥只在主进程用一次，不进任何返回值。
+   */
+  const quotaCache = quotaDir === undefined ? null : new QuotaCache(quotaDir);
+  ipcMain.handle(ipcChannels.providerQuota, async (_event, query: QuotaQuery): Promise<QuotaResult> => {
+    if (quotaCache === null) return { status: "none" };
+    const provider = (await store.list()).find((item) => item.id === query.providerId);
+    if (provider === undefined) return { status: "none" };
+
+    const probe = knownProviderQuota(provider);
+    if (probe === "none") return { status: "none" };
+
+    const now = Date.now();
+    const stored = (await quotaCache.read())[query.providerId] ?? null;
+    const cached = stored !== null && !quotaIsStale(stored.fetchedAt, now) ? stored : null;
+
+    const last = quotaProbeState.get(query.providerId);
+    if (query.refresh !== true && last !== undefined) {
+      if (!last.failed && cached !== null && now - last.at < QUOTA_OK_REUSE_MS) {
+        return { status: "ok", snapshot: cached, fromCache: true };
+      }
+      if (last.failed && now - last.at < QUOTA_FAIL_BACKOFF_MS) {
+        return { status: "error", reason: last.reason, cached };
+      }
+    }
+
+    let apiKey: string | null;
+    try {
+      apiKey = await resolveKey(store, undefined, query.providerId);
+    } catch (cause) {
+      // OAuth 续期失败：与钥匙不对同类（用户要做的是重新登录 / 换钥匙）
+      console.error("[provider] 额度探测：密钥解析失败", cause);
+      quotaProbeState.set(query.providerId, { at: now, failed: true, reason: "auth" });
+      return { status: "error", reason: "auth", cached };
+    }
+
+    const result = await probeQuota({
+      probe,
+      // 传**目录条目 id** 而不是存储行的 kind：老数据没有 kind，第二个实例也只能靠 id 认回来
+      kind: knownProviderOf(provider).id,
+      baseUrl: provider.endpoint.baseUrl,
+      apiKey,
+    });
+
+    if (result.status === "ok") {
+      quotaProbeState.set(query.providerId, { at: now, failed: false });
+      try {
+        await quotaCache.write(query.providerId, result.snapshot);
+      } catch (cause) {
+        // 落盘失败不该让「已经拿到的余额」显示不出来；下次打开会重新探
+        console.error("[provider] 额度缓存写入失败", cause);
+      }
+      return result;
+    }
+    if (result.status === "error") {
+      quotaProbeState.set(query.providerId, { at: now, failed: true, reason: result.reason });
+      return { status: "error", reason: result.reason, cached };
+    }
+    return { status: "none" };
   });
 
   ipcMain.handle(ipcChannels.providerReorder, (_event, ids: string[]): Promise<void> =>

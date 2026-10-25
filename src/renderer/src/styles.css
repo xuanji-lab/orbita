@@ -533,6 +533,39 @@
 }
 
 /*
+ * 额度条——设置页的额度块（QuotaBlock）与底栏环菜单里的窗行**共用这一条**。
+ * 几何（3px / --radius-xs）与颜色（轨道 = 墨色 12% 混色、填充 = 次级文字色）只在这里写一份：
+ * 两个面一旦各写一份，改一处就漂。两个面自己只管外边距（`.q-bar` / `.menu-progress`）。
+ *
+ * 方向只有「已用」：宽度由 JS 给（宽度是运行时值），**颜色由 `data-spent` 决定**——
+ * 只有真的用尽（>= 100%）才借 --color-danger，那时数字也同时变红；不到 100% 只有墨色。
+ */
+.quota-bar {
+  display: block;
+  position: relative;
+  height: 3px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  overflow: hidden;
+}
+
+.quota-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-text-secondary);
+}
+
+.quota-bar[data-spent="true"] > i {
+  background: var(--color-danger);
+}
+
+/* 菜单里的那一条：吃满行的左右内边距（行自己已有 padding），行下留一小段呼吸 */
+.menu-progress {
+  margin: 0 var(--space-2) var(--space-1);
+}
+
+/*
  * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
  * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
  * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold
