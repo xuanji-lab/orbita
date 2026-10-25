@@ -19,6 +19,7 @@ import {
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
+import { declaredCommandTimeout } from "../shared/bash-declared-seconds.ts";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ContextMessage } from "./image-byte-budget.ts";
@@ -138,6 +139,17 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
  * **非法值不修**（≤0 / 非有限数 / 字符串 / null）：pi 自己会报 `Invalid timeout`，
  * 我们不替它做第二套校验——原样放过去让 pi 报错，模型才知道自己填错了。
  *
+ * **命令自述的时长优先于默认值**（`sleep 2000` / `timeout 2000 …`）：不填 timeout 时先问
+ * `declaredCommandSeconds`。不这么做的话，纯 `sleep 2000` 到 30 分钟既没输出也没 CPU，
+ * 没有任何「进展证据」，会被当成挂死的探针砍掉——而它把答案写在了自己命令里。
+ * 取 `min(N + 60, HARD_MAX)`：+60 是给命令自身收尾留的余量（`sleep 2000` 在 2000 秒
+ * 整才返回，闸门与 pi 的秒表都按整秒计数，贴边会差一个采样周期），封顶仍走同一个
+ * `HARD_MAX`，否则「声明一个巨大 sleep」就成了绕过上限的后门。
+ * **不按命令名豁免**：命令名可以被 `bash -c`、变量、`;` 拼接绕过，且挂死的探针伪装成
+ * `sleep` 太容易；只认「整条命令就是 `sleep N` / `timeout N …`」这一可判定的形态，
+ * 判不出来就退回默认上限（见 `bash-declared-seconds.ts`）。
+ * 闸门推算出来的值一律记 `declared: false`：模型没说过这个数，到点被杀时它有权被告知。
+ *
  * 返回本次决定（`effective` = 真正会用的秒数，`declared` = 模型是否自己给了合法值）。
  * 决定要留到 `tool_result` 才能用：到点被杀的证据只在结果里，而那时入参对象早没了。
  * 常量本体在 shared/permission.ts（renderer 的「上限」显示与提示词都引它）。
@@ -149,6 +161,13 @@ function boundCommandTimeout(
   if (!COMMAND_TOOLS.has(toolName)) return null;
   const raw = input["timeout"];
   if (raw === undefined) {
+    // 「命令自述时长」的换算（`min(N + 60, HARD_MAX)`）与 renderer 的「上限」显示共用
+    // 同一个纯函数：规则若只在闸门里，界面就会把 `sleep 2000` 显示成默认的 30:00。
+    const selfDeclared = declaredCommandTimeout(input["command"]);
+    if (selfDeclared !== null) {
+      input["timeout"] = selfDeclared;
+      return { effective: selfDeclared, declared: false };
+    }
     input["timeout"] = COMMAND_TIMEOUT_DEFAULT_SECONDS;
     return { effective: COMMAND_TIMEOUT_DEFAULT_SECONDS, declared: false };
   }
@@ -233,7 +252,7 @@ export function commandTimeoutNotice(event: ToolResultLike): ToolResultPatch | u
   // 散文里补一句「这个上限是谁定的」：模型自己填的合法值不会走到这里，所以只有两种来路
   const origin = decision.declared
     ? `You asked for a longer timeout than the hard maximum, so it was clamped to ${COMMAND_TIMEOUT_HARD_MAX_SECONDS}s.`
-    : "This call did not pass timeout, so our default limit applied.";
+    : "This call did not pass timeout, so the limit was applied for it (a default cap, or one derived from the command).";
   return {
     content: [
       ...event.content,

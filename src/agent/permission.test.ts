@@ -135,6 +135,51 @@ describe("命令超时闸门（经 createToolCallGate）", () => {
     assert.equal(await clampedTimeout("powershell", undefined), COMMAND_TIMEOUT_DEFAULT_SECONDS);
   });
 
+  /** 命令形态 × 是否填 timeout：返回闸门最终写回的秒数 */
+  async function timeoutForCommand(command: string, timeout?: unknown): Promise<unknown> {
+    const { gate } = gateFor("skip");
+    const input: Record<string, unknown> = { command };
+    if (timeout !== undefined) input["timeout"] = timeout;
+    await gate({ toolCallId: "c1", toolName: "bash", input });
+    return input["timeout"];
+  }
+
+  /**
+   * 命令自述的时长（`sleep N` / `timeout N …`）：不填 timeout 时按它给窗口，+60 秒收尾。
+   * 背景：纯 sleep 既不吐字也不吃 CPU，到默认 30 分钟没有任何「进展证据」会被判成
+   * 挂死的探针砍掉——而它把答案写在了自己命令里。
+   */
+  test("命令自述时长：sleep 2000 → 2060（N + 60 收尾余量）", async () => {
+    assert.equal(await timeoutForCommand("sleep 2000"), 2060);
+    assert.equal(await timeoutForCommand("timeout 2000 bun run build"), 2060);
+  });
+
+  test("命令自述时长超过天花板 → 仍夹到 HARD_MAX（不成为绕过上限的后门）", async () => {
+    assert.equal(await timeoutForCommand("sleep 7200"), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+    assert.equal(await timeoutForCommand("sleep 3600"), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
+  });
+
+  test("命令自述的短时长不被 FLOOR 抬回 600（sleep 30 实测只要 90 秒）", async () => {
+    assert.equal(await timeoutForCommand("sleep 30"), 90);
+    assert.equal(await timeoutForCommand("sleep 30s"), 90);
+  });
+
+  test("模型显式声明时不动：timeout 900 + sleep 2000 仍是 900（那是它自己的选择）", async () => {
+    assert.equal(await timeoutForCommand("sleep 2000", 900), 900);
+  });
+
+  test("复合 / 包装形态不享受自述时长 → 仍是默认上限", async () => {
+    assert.equal(await timeoutForCommand("bash -c 'sleep 2000'"), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+    assert.equal(await timeoutForCommand("cd x && sleep 2000"), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+    assert.equal(await timeoutForCommand("sleep 30; echo ok"), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+  });
+
+  test("闸门推算的自述时长算 declared: false——模型没说过这个数，到点被杀该被告知", async () => {
+    const { gate } = gateFor("skip");
+    await gate({ toolCallId: "selfDeclared", toolName: "bash", input: { command: "sleep 2000" } });
+    assert.deepEqual(takeDecision("selfDeclared"), { effective: 2060, declared: false });
+  });
+
   test("填得比下限大就尊重模型自己的判断（不超过天花板上限）", async () => {
     assert.equal(await clampedTimeout("bash", 600), 600);
     assert.equal(await clampedTimeout("bash", 900), 900);

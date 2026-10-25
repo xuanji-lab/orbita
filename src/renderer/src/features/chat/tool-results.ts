@@ -28,6 +28,7 @@ import {
   COMMAND_TIMEOUT_HARD_MAX_SECONDS,
 } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
+import { declaredCommandTimeout } from "../../../../shared/bash-declared-seconds.ts";
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
@@ -894,8 +895,13 @@ export function expectedSecondsOf(input: unknown): number | null {
  */
 export function timeoutSecondsOf(input: unknown): number | null {
   if (typeof input !== "object" || input === null) return null;
-  const value = (input as Record<string, unknown>)["timeout"];
-  if (value === undefined) return COMMAND_TIMEOUT_DEFAULT_SECONDS;
+  const record = input as Record<string, unknown>;
+  const value = record["timeout"];
+  if (value === undefined) {
+    // `sleep 2000` 这类「命令自述时长」由闸门换算成 min(N+60, HARD_MAX)，界面必须同一个
+    // 函数算，否则显示 30:00、实际跑 34:20（界面撒谎）。
+    return declaredCommandTimeout(record["command"]) ?? COMMAND_TIMEOUT_DEFAULT_SECONDS;
+  }
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
   return Math.min(Math.max(value, COMMAND_TIMEOUT_FLOOR_SECONDS), COMMAND_TIMEOUT_HARD_MAX_SECONDS);
 }

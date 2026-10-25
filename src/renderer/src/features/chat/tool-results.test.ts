@@ -1750,6 +1750,12 @@ describe("expectedSecondsOf / timeoutSecondsOf", () => {
     assert.equal(timeoutSecondsOf({ command: "x", timeout: 900 }), 900);
     // 行为变更（2026-10-25）：不填不再是「无上限」，闸门会补 1800；界面继续说 null 就是撒谎
     assert.equal(timeoutSecondsOf({ command: "x" }), COMMAND_TIMEOUT_DEFAULT_SECONDS, "不填 = 跑在默认上限上");
+    // 命令自述的时长（sleep N / timeout N …）：闸门把它换算成 min(N+60, HARD_MAX)，
+    // 界面必须用同一个函数，否则显示 30:00、实际跑 34:20（界面撒谎）。
+    assert.equal(timeoutSecondsOf({ command: "sleep 2000" }), 2060, "自述 2000 秒 → 2060（含 60 秒收尾余量）");
+    assert.equal(timeoutSecondsOf({ command: "sleep 7200" }), COMMAND_TIMEOUT_HARD_MAX_SECONDS, "超过天花板 → 封顶，不做绕过上限的后门");
+    assert.equal(timeoutSecondsOf({ command: "sleep 2000", timeout: 900 }), 900, "模型显式声明优先，自述时长不覆盖它");
+    assert.equal(timeoutSecondsOf({ command: "bash -c 'sleep 2000'" }), COMMAND_TIMEOUT_DEFAULT_SECONDS, "被包一层就退回默认：认不出来不猜");
     assert.equal(timeoutSecondsOf({ command: "x", timeout: 99999 }), COMMAND_TIMEOUT_HARD_MAX_SECONDS, "超过天花板实际只跑 3600");
     assert.equal(timeoutSecondsOf({ command: "x", timeout: -5 }), null);
     assert.equal(timeoutSecondsOf({ command: "x", timeout: "600" }), null, "字符串数字不猜");
