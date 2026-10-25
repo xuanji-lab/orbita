@@ -185,12 +185,27 @@ internal static class WorkerHost
      */
     private static void CompleteInBackground(WorkerHandle worker, string command, string workerBase, string hostBaseName)
     {
+        Stopwatch clock = Stopwatch.StartNew();
         string respText = WaitWorkerResp(worker, workerBase, CommandTimeoutMs);
+        long waitMs = clock.ElapsedMilliseconds;
         if (respText != null)
         {
+            long visibleStartMs = clock.ElapsedMilliseconds;
+            DateTime respMtimeUtc = DateTime.MinValue;
+            try { respMtimeUtc = File.GetLastWriteTimeUtc(Path.Combine(worker.CmdDir, workerBase + RespSuffix)); }
+            catch { }
+            string visibleNote;
+            long visibleMs = Program.PropagateFromMtime(respMtimeUtc, DateTime.UtcNow, out visibleNote);
+            visibleMs -= clock.ElapsedMilliseconds - visibleStartMs; // 去掉上面这次 stat 自己的耗时（负数不算）
+            if (visibleMs < 0) visibleMs = 0;
             // 顺序与桥自己的协议一致：**截图先落盘、resp 后落盘**
+            long copyStartMs = clock.ElapsedMilliseconds;
             CopyShotBack(worker.CmdDir, workerBase);
+            long copyMs = clock.ElapsedMilliseconds - copyStartMs;
+            long writeStartMs = clock.ElapsedMilliseconds;
             WriteHostResp(hostBaseName, respText);
+            long writeMs = clock.ElapsedMilliseconds - writeStartMs;
+            LogBridgeHop(command, waitMs, visibleMs, visibleNote, copyMs, writeMs);
             if (HasExited(worker))
             {
                 Forget(worker.Key, worker.Pid);
@@ -217,6 +232,27 @@ internal static class WorkerHost
                 + "已重启该会话的浏览器通道——可以用 cdp-status 确认，或改用像素工具"));
         }
         CleanupWorkerFiles(worker.CmdDir, workerBase);
+    }
+
+    /**
+     * 桥侧的一行耗时：等 worker 回执多久，其中「worker 写出 → 本进程看见」占多少。
+     *
+     * 为什么要它（2026-10-25 真机）：宿主看到一条 warm 导航 2649ms，而 worker 自己的回执
+     * 里 ms=343——那 2.3s 卡在 worker 写完回执之后。两个候选只能用这一行分开：
+     *   ① 回执落在 `out\worker\<会话>\cmd`（映射目录，走 RDP 驱动器重定向）——
+     *      `WaitWorkerResp` 的 File.Exists 拿到的是缓存过的旧答案，文件其实早就写好了；
+     *   ② 回执写本身很慢（那就是 worker 侧那一行里的「回执落盘」）。
+     * 只打日志，不加任何等待。
+     */
+    private static void LogBridgeHop(string command, long waitMs, long visibleMs, string visibleNote,
+        long copyMs, long writeMs)
+    {
+        if (!Program.HopNeedsLog(Program.HopLogLineMs, new long[] { waitMs, copyMs, writeMs })) return;
+        StringBuilder sb = new StringBuilder("worker 回执 ").Append(command).Append("：等 ").Append(waitMs)
+            .Append("ms（其中 worker 写出→本进程看见 ").Append(visibleMs).Append("ms，").Append(visibleNote)
+            .Append("；轮询节奏 ").Append(RespPollIntervalMs).Append("ms） + 搬图 ").Append(copyMs)
+            .Append("ms + 写宿主回执 ").Append(writeMs).Append("ms");
+        Program.Log(sb.ToString());
     }
 
     /**
@@ -840,6 +876,13 @@ internal static class WorkerHost
         {
             string name = Path.GetFileName(reqPath);
             string baseName = name.Substring(0, name.Length - ReqSuffix.Length);
+            // 计量：只服务日志，一段都不进控制流（时钟与方法见 Program 的文件往返计量）
+            Stopwatch clock = Stopwatch.StartNew();
+            DateTime reqMtimeUtc = DateTime.MinValue;
+            try { reqMtimeUtc = File.GetLastWriteTimeUtc(reqPath); }
+            catch { }
+            DateTime seenUtc = DateTime.UtcNow;
+            long mtimeQueryMs = clock.ElapsedMilliseconds;
             string raw;
             try
             {
@@ -849,7 +892,9 @@ internal static class WorkerHost
             {
                 return false; // 对端 rename 途中的瞬时点，下轮再来
             }
+            long readMs = clock.ElapsedMilliseconds - mtimeQueryMs;
 
+            long execStartMs = clock.ElapsedMilliseconds;
             string command = Program.ExtractString(raw, "command");
             string resp;
             if (command == null)
@@ -900,10 +945,35 @@ internal static class WorkerHost
             {
                 resp = Fail("未知命令：" + command);
             }
+            long execMs = clock.ElapsedMilliseconds - execStartMs;
 
+            long persistStartMs = clock.ElapsedMilliseconds;
             Program.AtomicWrite(Path.Combine(_cmdDir, baseName + RespSuffix), Encoding.UTF8.GetBytes(resp));
+            long persistMs = clock.ElapsedMilliseconds - persistStartMs;
             try { File.Delete(reqPath); } catch { }
+            LogWorkerHop(command, reqMtimeUtc, seenUtc, mtimeQueryMs, readMs, execMs, persistMs);
             return true;
+        }
+
+        /**
+         * worker 侧的一行耗时：req 看见延迟 / 读 / 执行 / 回执落盘。
+         *
+         * req 看见延迟用 mtime 法（桥写 req → 本进程看见）：桥与 worker 都在 guest 里，时基相同，
+         * 这个差值是可信的。2026-10-25 真机：一条导航宿主量到 2649ms，而 worker 回执里 ms=343
+         * ——那 2.3s 只能在这两跳里（桥写 req / worker 写回执），这一行就是来指认到底是哪一跳。
+         */
+        private void LogWorkerHop(string command, DateTime reqMtimeUtc, DateTime seenUtc, long mtimeQueryMs,
+            long readMs, long execMs, long persistMs)
+        {
+            string seenNote;
+            long seenMs = Program.PropagateFromMtime(reqMtimeUtc, seenUtc, out seenNote);
+            if (!Program.HopNeedsLog(Program.HopLogLineMs, new long[] { seenMs, readMs, execMs, persistMs })) return;
+            StringBuilder sb = new StringBuilder("worker 命令 ").Append(command).Append("：");
+            sb.Append("req 看见延迟 ").Append(seenMs >= 0 ? seenMs + "ms" : "未知")
+              .Append("（").Append(seenNote).Append("） + 读 ").Append(readMs).Append("ms（mtime 查询 ")
+              .Append(mtimeQueryMs).Append("ms） + 执行 ").Append(execMs).Append("ms + 回执落盘 ")
+              .Append(persistMs).Append("ms（命令目录 ").Append(_cmdDir).Append("）");
+            Program.Log(sb.ToString());
         }
 
         /**

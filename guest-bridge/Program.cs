@@ -722,6 +722,12 @@ internal static class Program
         return ms + "ms";
     }
 
+    /** 耗时日志的打印线（worker 侧的计量与桥的文件往返用同一个阈值） */
+    internal static int HopLogLineMs
+    {
+        get { return HopLogThresholdMs; }
+    }
+
     /**
      * 一条命令行。算术上只有两种，取决于传播是否可信：
      *  - 可信：总 = 传播 + 读请求 + 执行 + 回执落盘（总 = 宿主写出 → 回执落盘）；
@@ -2019,6 +2025,58 @@ internal static class Program
         // 导航超时那一轮的预算：12s（navigate 等回执）+ 18s（重启 + attach + 验过）< 40s
         CheckTrue(failures, ref cases, "导航超时 + 判死重启装得进 worker 的 40s 杀线",
             CdpSession.PageNavigateTimeoutMsForTest + CdpSession.RestartRoomMsForTest <= 40000);
+
+        // ── 导航分段计量（2026-10-25 真机：warm 导航总 2649ms，worker 回执自报 ms=343）────────
+        // 分段日志的规矩：任一段 ≥ 200ms 或整条 ≥ 500ms 才打一行。快导航不能刷日志，
+        // 慢导航必须把「哪一段慢」写进 worker.log——这几条钉的是阈值与文本。
+        CdpSession.NavTiming fast = new CdpSession.NavTiming();
+        fast.NavigateMs = 8;
+        fast.ReadyMs = 110;
+        fast.FirstSleepMs = 100;
+        fast.RecordReadyRound(2, 4);
+        fast.ReadySleepMs = 60;
+        fast.ResultMs = 3;
+        CheckTrue(failures, ref cases, "分段日志：快导航（每段 < 200ms、整条 < 500ms）一行都不打",
+            !CdpSession.NavTraceNeeded(fast, 121));
+        CdpSession.NavTiming slowReady = new CdpSession.NavTiming();
+        slowReady.NavigateMs = 8;
+        slowReady.ReadyMs = 2410;
+        slowReady.FirstSleepMs = 300;
+        slowReady.RecordReadyRound(5, 12);
+        slowReady.ReadySleepMs = 1500;
+        slowReady.ResultMs = 3;
+        CheckTrue(failures, ref cases, "分段日志：某一段 ≥ 200ms 就打（等就绪 2410ms）",
+            CdpSession.NavTraceNeeded(slowReady, 2445));
+        CdpSession.NavTiming spread = new CdpSession.NavTiming();
+        spread.NavigateMs = 150;
+        spread.ReadyMs = 150;
+        spread.ResultMs = 150;
+        CheckTrue(failures, ref cases, "分段日志：每段都 < 200ms 但整条 ≥ 500ms 也打",
+            CdpSession.NavTraceNeeded(spread, 600));
+        CheckTrue(failures, ref cases, "分段日志：timing 为 null 时不打（不崩）",
+            !CdpSession.NavTraceNeeded(null, 9999));
+        string slowLine = CdpSession.FormatNavSegmentLine("cdp-nav", slowReady, 2445);
+        CheckTrue(failures, ref cases, "分段日志：三个分段都写出来（navigate / 等就绪 / 取回执）",
+            slowLine.StartsWith("cdp-nav 分段：", StringComparison.Ordinal)
+            && slowLine.IndexOf("Page.navigate 回执 8ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("等就绪 2410ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("取 url/title 3ms", StringComparison.Ordinal) >= 0
+            && slowLine.EndsWith("= 2445ms", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "分段日志：等就绪带首睡 / 轮数 / eval / sleep（能分清是固定睡眠还是轮询）",
+            slowLine.IndexOf("首睡 300ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("5 轮", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("eval 12ms", StringComparison.Ordinal) >= 0
+            && slowLine.IndexOf("sleep 1500ms", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "分段日志：没走过的分段（错误页窗口）不写出来",
+            slowLine.IndexOf("错误页正文窗口", StringComparison.Ordinal) < 0);
+        CdpSession.NavTiming failedNav = new CdpSession.NavTiming();
+        failedNav.NavigateMs = 10;
+        failedNav.ReadyMs = 320;
+        failedNav.RecordErrorDump(7, 2010);
+        failedNav.ResultMs = 4;
+        string failedLine = CdpSession.FormatNavSegmentLine("cdp-nav", failedNav, 2350);
+        CheckTrue(failures, ref cases, "分段日志：错误页那段单独出来（2s 正文窗口是排查重点）",
+            failedLine.IndexOf("错误页正文窗口 2010ms（7 轮）", StringComparison.Ordinal) >= 0);
 
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
