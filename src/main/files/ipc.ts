@@ -8,6 +8,9 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   isPdfFile,
   isWebPageFile,
+  type FileLineIndex,
+  type FileLines,
+  type FileLinesRequest,
   type FileListRequest,
   type FilePreview,
   type PdfFile,
@@ -18,6 +21,7 @@ import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
+import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
 
 /**
@@ -65,6 +69,26 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     return readPreview(path);
   });
+
+  /**
+   * 行索引（分段预览的第一步）：先过与 fs:list 同一道的 root/dir 白名单，再扫文件建
+   * 检查点。令牌 `indexId` 只回给这份文件——`fs:read-lines` 只认令牌、不收路径，
+   * 所以白名单只在这里过一遍就够，不存在绕过它的第二条路。
+   */
+  ipcMain.handle(
+    ipcChannels.fsLineIndex,
+    async (_event, req: FileListRequest): Promise<FileLineIndex> => {
+      const roots = await resolveFileRoots(workspaces, sessions, req);
+      const path = await whitelistedPath(roots, req);
+      return buildLineIndex(path);
+    },
+  );
+
+  /** 按行读一段（令牌来自 fs:line-index，不信任 renderer 传的任何路径） */
+  ipcMain.handle(
+    ipcChannels.fsReadLines,
+    (_event, req: FileLinesRequest): Promise<FileLines> => readLines(req),
+  );
 
   /**
    * 读 PDF 字节给预览面板（同白名单，外加只认 .pdf——判定用 realpath 之后的路径，

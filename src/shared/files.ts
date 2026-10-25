@@ -123,6 +123,94 @@ export type FilePreview =
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
 
 /**
+ * `fs:line-index` 的请求：与 `fs:list` / `fs:read` 同一道白名单（`root` 必须是
+ * `fs:roots` 回过的，`dir` 就是文件路径、realpath 后必须在 root 之内）。
+ */
+export type FileLineIndexRequest = FileListRequest;
+
+/**
+ * 行索引的回执（`fs:line-index`）：大于 PREVIEW_TEXT_LIMIT 的文本可能比一次 IPC 装得下的
+ * 大得多，renderer 于是只问「这个文件有多少行」、随后按行窗口向主进程要内容。
+ *
+ * `indexId` 是主进程铸的**不透明令牌**，`fs:read-lines` 只认它、不接受路径：令牌只发给
+ * 刚过完白名单的文件，renderer 没有任何办法拿它去读别的东西。缓存键是
+ * `realpath + size + mtimeMs`（LRU 3）——文件一改，旧令牌自然失效。
+ *
+ * 两种「不做分段」的结果不是错误，而是明确的能力边界，renderer 各有退路：
+ * - `long-line`：单行超过 PREVIEW_MAX_LINE_BYTES。分段是按行窗口化的，而**一条行本身
+ *   无法再窗口化**——退回「前 PREVIEW_TEXT_LIMIT + 长行硬切」那条路；
+ * - `too-many-lines`：行数超过 PREVIEW_MAX_INDEXED_LINES。Chromium 的原生滚动高度上限
+ *   是 33,554,430 px，1.8 M 行 × 18.6 px 正好贴边，再往上滚动条就没法映射了——
+ *   如实给「用默认应用打开」，不假装能浏览。
+ */
+export type FileLineIndex =
+  | {
+      kind: "ok";
+      indexId: string;
+      totalLines: number;
+      size: number;
+      modifiedAt: number;
+    }
+  /** 空文件（0 字节）：没有行可读，面板给空态 */
+  | { kind: "empty"; size: number; modifiedAt: number }
+  /** 开头 8 KB 有 NUL 字节：文件在 fs:read 之后变成了二进制（改名 / 被重写），不读内容 */
+  | { kind: "binary"; size: number; modifiedAt: number }
+  /** 单行超过 PREVIEW_MAX_LINE_BYTES：一条行没法再窗口化，退回去看前 PREVIEW_TEXT_LIMIT */
+  | { kind: "long-line"; size: number; modifiedAt: number }
+  | { kind: "too-many-lines"; limit: number; size: number; modifiedAt: number };
+
+/**
+ * `fs:read-lines` 的请求：一个索引令牌 + 要第几行起的几行。**没有路径**——令牌已经
+ * 绑定了白名单校验过的文件，多传一条路径只会多一个可被伪造的入口。
+ * `startLine` / `count` 都由主进程夹到合法范围（负数、越界、非整数一律夹取）。
+ */
+export interface FileLinesRequest {
+  indexId: string;
+  startLine: number;
+  count: number;
+}
+
+/**
+ * `fs:read-lines` 的回执。行按 `\n` 切（`\r\n` 的 `\r` 已去掉），末尾换行**不**多出
+ * 一个空行（`"a\nb\n"` 是 2 行，与 `wc -l` 的口径一致，日志末尾不会挂一条空白行）。
+ *
+ * `stale` = 索引建好之后文件的大小或 mtime 变了（被替换 / 追加）：不猜内容，让 renderer
+ * 重新索引。二进制与太小 / 太多行都在 `fs:line-index` 那一步就挡掉了，走不到这条通道。
+ */
+export type FileLines =
+  | {
+      kind: "text";
+      lines: string[];
+      /** 这批行的首行行号（0 起；主进程夹取后的真实值） */
+      startLine: number;
+      totalLines: number;
+      size: number;
+      modifiedAt: number;
+    }
+  | { kind: "stale"; size: number; modifiedAt: number };
+
+/**
+ * 每次 `fs:read-lines` 最多给多少行（主进程夹取的上限）：一份 600 行的窗口在
+ * 18.6 px 行高下是 11,000 px，比最长的桌面还高，滚一次窗口不会露出空白；
+ * 同时它把一次 IPC 的载荷压在几十 KB（一条 200 字符的行约 200 B）。
+ */
+export const PREVIEW_LINES_PER_READ = 600;
+
+/**
+ * 行索引最多记多少行（1.8 M）：Chromium 的原生滚动高度是 33,554,430 px，按
+ * 18.59 px 一行算出 1,804,650 行——超过这个数滚动条就无法映射到全文位置了。
+ * 取 1.8 M 留一点余量（约 200 MB 的常规日志），再大的文件给「用默认应用打开」。
+ */
+export const PREVIEW_MAX_INDEXED_LINES = 1_800_000;
+
+/**
+ * 分段预览能容忍的单行字节上限（64 KB）：分段是按行窗口化的，一行再长也只能整条渲染，
+ * 而一条 8 MB 的行建 DOM 就要 460 ms（PR #279 实测）。超过它的文件退回
+ * 「前 PREVIEW_TEXT_LIMIT + 长行硬切」，那是长行唯一可行的渲染方式。
+ */
+export const PREVIEW_MAX_LINE_BYTES = 64 * 1024;
+
+/**
  * 网页类文件：浏览器能直接渲染、在内置浏览器里打开有意义的那几种。文件面板据此给「在内置
  * 浏览器打开」，agent 的 browser_navigate 打开本地文件也只认这几种（main/browser/local-file.ts）。
  */

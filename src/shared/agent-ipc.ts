@@ -205,6 +205,18 @@ export const ipcChannels = {
    * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
    */
   fsReadPdf: "fs:read-pdf",
+  /**
+   * 建一个文件的行索引（同 root/dir 白名单，回 `FileLineIndex`，files.ts）：大于
+   * PREVIEW_TEXT_LIMIT 的文本走「按行分段预览」时，renderer 先问这份文件有多少行。
+   * 主进程按 8 MB 分块扫换行、逐块让出事件循环，索引按 path+size+mtime 缓存（LRU 3），
+   * 回一个只能读这个文件的 `indexId` 令牌。文件太大 / 单行太长 / 二进制各有明确结果。
+   */
+  fsLineIndex: "fs:line-index",
+  /**
+   * 按行读一段（回 `FileLines`）：载荷只有 `indexId` + `startLine` + `count`，**不接受
+   * 路径**——令牌已绑定白名单校验过的文件。文件在索引之后变过就回 `stale`，不猜内容。
+   */
+  fsReadLines: "fs:read-lines",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
   fsOpen: "fs:open",
   /**
