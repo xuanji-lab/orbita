@@ -1460,6 +1460,8 @@ export const en = {
     limitLabel: (clock: string) => `limit ${clock}`,
     expectedAbout: (duration: string) => `expected ~${duration}`,
     slowerThanExpected: "slower than expected",
+    // 运行中 shell 长时间没有输出（时长走 formatRunClock，与时钟同一个 m:ss 形态）
+    quietFor: (duration: string) => `no output for ${duration}`,
     tokensApprox: (before: string) => `~${before} tokens`,
     tokensArrow: (before: string, after: string) => `${before} → ${after} tokens`,
     // 工具结果摘要

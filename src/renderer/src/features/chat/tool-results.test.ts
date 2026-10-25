@@ -37,6 +37,8 @@ import {
   readTaskCard,
   formatToolDuration,
   recordToolFrame,
+  quietNoticeSeconds,
+  SHELL_QUIET_NOTICE_MS,
   shellAutoExpand,
   tailPreviewLines,
   stripTrailingBlankLines,
@@ -1764,6 +1766,25 @@ describe("expectedSecondsOf / timeoutSecondsOf", () => {
   });
   test("整数与浮点都收（预计 1.5 秒也是认真的估计）", () => {
     assert.equal(expectedSecondsOf({ expected_seconds: 1.5 }), 1.5);
+  });
+});
+
+describe("quietNoticeSeconds（运行中 shell 的「无输出」标注）", () => {
+  test("阈值：20 秒起报，正好卡在阈值上也算", () => {
+    assert.equal(SHELL_QUIET_NOTICE_MS, 20_000);
+    assert.equal(quietNoticeSeconds(20_000, 0, 0), 20);
+    assert.equal(quietNoticeSeconds(19_999, 0, 0), null);
+  });
+  test("以最后一帧输出为准，输出帧之后重新计时", () => {
+    assert.equal(quietNoticeSeconds(30_000, 5_000, 0), 25);
+    assert.equal(quietNoticeSeconds(24_000, 5_000, 0), null, "距最后一帧才 19 秒，不报");
+  });
+  test("还没有输出帧时退回起跑时刻", () => {
+    assert.equal(quietNoticeSeconds(25_000, null, 0), 25);
+  });
+  test("两个起点都没有（旧会话重开）→ 不显示，不猜时长", () => {
+    assert.equal(quietNoticeSeconds(90_000, null, null), null);
+    assert.equal(quietNoticeSeconds(Number.NaN, 0, 0), null);
   });
 });
 

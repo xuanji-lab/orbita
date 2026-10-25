@@ -915,6 +915,32 @@ export function formatRunClock(ms: number): string {
 }
 
 /**
+ * 「已 N 秒无输出」的阈值（毫秒）。20 秒：普通快命令的间隙远小于它（P90 ≈ 6.3s），
+ * 又不至于让用户盯着一动不动的行干等到 30 秒才看到一句解释。
+ * 与执行层 30s/90s 的停滞判定无关——那是给模型的提示，这是给人的；两者可以同时出现。
+ */
+export const SHELL_QUIET_NOTICE_MS = 20_000;
+
+/**
+ * 静默提示的判定（纯函数，驱动方每秒重算一遍）。
+ *
+ * 起点取「最后一帧输出到达的时刻」；没有输出帧（还在等第一块）就退回起跑时刻，
+ * 两个都没有（旧会话重开、没记到起点）返回 null——宁可不显示，也不报一个假时长。
+ * 返回的是**秒**，格式化仍走 `formatRunClock`，不另造一套时长格式。
+ */
+export function quietNoticeSeconds(
+  now: number,
+  lastOutputAt: number | null,
+  runStart: number | null,
+): number | null {
+  const since = lastOutputAt ?? runStart;
+  if (since === null || !Number.isFinite(now) || !Number.isFinite(since)) return null;
+  const quietMs = now - since;
+  if (!(quietMs >= SHELL_QUIET_NOTICE_MS)) return null;
+  return Math.floor(quietMs / 1000);
+}
+
+/**
  * 折叠行下的活尾预览：让「它在动」不展开也看得见。取末尾最多 keep 个**非空**行
  * （尾部空行是噪音），每行截到 maxChars——预览是信号不是正文，长行以「…」收口。
  * 从尾往前找，返回按原顺序排列。

@@ -53,6 +53,7 @@ import {
   liveTailLines,
   expectedSecondsOf,
   formatRunClock,
+  quietNoticeSeconds,
   shellAutoExpand,
   stripTrailingBlankLines,
   tailPreviewLines,
@@ -3787,6 +3788,10 @@ function ToolLine(props: {
   // 不参与渲染，不值得每次跳秒重算。
   const userToggled = useRef(false);
   const autoOpened = useRef(false);
+  /** 最后一帧输出到达的时刻（见下面 rawBody 处）；null = 还没见过输出帧 */
+  const lastOutputAt = useRef<number | null>(null);
+  /** 上一帧看到的 rawBody 文本，用来判断「输出帧变了」 */
+  const lastBody = useRef("");
   useEffect(() => {
     if (!shellActive) {
       // 跑完了：自动展开的自动收回去；用户碰过的保持用户的选择
@@ -3880,6 +3885,14 @@ function ToolLine(props: {
   // 这条 join 会随每一帧流式更新重跑几十遍，全是白付的分配；落定的成员行更不必说。
   const needBody = open || shellActive;
   const rawBody = needBody && result !== undefined ? toolResultText(result, t) : "";
+  // 「已 N 秒无输出」的输出帧时钟：live 的 partial 每来一帧就是一段新文本，rawBody 变了
+  // 就算「有输出」。比对放在这里（rawBody 只有到这里才算得出），ref 声明在上面 hooks 区
+  // ——本组件中间有按 toolName 早退的分支，hook 不能出现在它们后面。跳秒重渲染时文本没变，
+  // 这里什么都不写；没有输出帧时 quietNoticeSeconds 会退回起跑时刻。
+  if (rawBody !== lastBody.current) {
+    lastBody.current = rawBody;
+    if (rawBody !== "") lastOutputAt.current = Date.now();
+  }
   // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
   const body = live ? liveTailLines(rawBody) : rawBody;
   // 工具结果里的 image 块（read_pdf 页图 / read 读图）内联展示给用户——模型看得见
@@ -3909,12 +3922,17 @@ function ToolLine(props: {
       ? formatRunClock(Math.max(0, now - runStart)) +
         (limitSeconds !== null ? ` / ${t.chat.limitLabel(formatRunClock(limitSeconds * 1000))}` : "")
       : null;
+  // 静默标注：只报时长，不新增颜色语义、不自动展开折叠（用户没要，就不许替他动界面）
+  const quietSeconds = shellActive ? quietNoticeSeconds(now, lastOutputAt.current, runStart) : null;
   const runExpected = (() => {
     if (!shellActive || expectedSeconds === null) return null;
     const about = t.chat.expectedAbout(formatThinkingDuration(expectedSeconds * 1000, t));
     // 起点没记到就没有时钟可比，「比预计慢」判断不了——只报预计，不猜
     if (runStart === null) return about;
-    return now - runStart >= expectedSeconds * 1000 ? t.chat.slowerThanExpected : about;
+    if (now - runStart < expectedSeconds * 1000) return about;
+    // 「无输出 N 秒」是更具体的同一条坏消息，两条并排只是噪音：慢话让位给静默话，
+    // 「预计约 X」作为上下文留着（它说的是目标，不是警报）
+    return quietSeconds !== null ? about : t.chat.slowerThanExpected;
   })();
   // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
   // 展开时藏起（展开体本身就是完整活尾，别显两遍）
@@ -4059,6 +4077,11 @@ function ToolLine(props: {
             active 已含「中断不算运行」（PR 168），被中断的 bash 这里拿不到时钟 */}
         {runClock !== null && <span style={SLOT.status}>{runClock}</span>}
         {runExpected !== null && <span style={SLOT.status}>{runExpected}</span>}
+        {/* 长时间没有输出：执行层那条「疑似停滞」提示（见 bash-stall.ts）是给模型的，
+            这一条是给人的——同一种状态，两个读者 */}
+        {quietSeconds !== null && (
+          <span style={SLOT.status}>{t.chat.quietFor(formatRunClock(quietSeconds * 1000))}</span>
+        )}
         {/* 已中断（无结果帧且永不回来）：静止的中性状态词——不再呼吸、不假装在跑 */}
         {interrupted && <span style={SLOT.status}>{t.chat.toolInterrupted}</span>}
         {/* shell 类的执行耗时（落定后显示）——慢命令不展开也讲清楚花在哪 */}

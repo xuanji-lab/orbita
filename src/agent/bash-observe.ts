@@ -12,6 +12,11 @@
  * 自己看到的是半份结果，并且还有东西在跑。提示走 `options.onData`，自然落进工具结果，
  * 不需要 toolCallId 关联、不需要新 IPC、不改协议。
  *
+ * 第二件观察：命令长时间没输出、进程也没消耗 CPU 时，在返回前补一句「疑似停滞
+ * （只提示，不杀）」——判据与文案见 `./bash-stall.ts`，进程树 CPU 采样见 `./proc-tree.ts`。
+ * 它救的是实测那批「跑 30 分钟以上、最长 3.7 小时」的探针命令：模型当时看不到任何
+ * 异常，只能干等或反复问你。
+ *
  * **与 pi 的 `createLocalShellOperations` 逐条对齐**：超时解析、错误文案、spawn 参数、
  * 杀树、结束后等待方式。错误字符串必须逐字一致——pi 靠
  * `err.message === "aborted"` 与 `err.message.startsWith("timeout:")` 翻译成
@@ -27,6 +32,7 @@ import {
   type BashOperations,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { createStallWatcher, type StallWatchOptions } from "./bash-stall.ts";
 
 /**
  * pi 的 `ShellConfig` 没从包根导出（只导出 `getShellConfig`）。用它的返回类型代替：
@@ -51,11 +57,6 @@ const EXIT_STDIO_GRACE_MS = 100;
 interface ObservedChild {
   pid: number;
   spawnedAt: number;
-  /**
-   * 最后一块输出的时间戳。本 PR 不消费，留给下一个 PR 做「输出停了多久」的判断
-   * （超时预警要用它区分「在跑」和「卡住」）。
-   */
-  lastDataAt: number;
   /** 宽限路径上探到的活后代：Windows 上父进程没了 `taskkill /T` 就找不到它们，退出时逐个补刀 */
   descendants: number[];
 }
@@ -322,6 +323,8 @@ function descendantsNotice(pid: number): string {
  */
 export function createObservedBashOperations(
   resolveShellConfig: () => ShellConfig,
+  /** 停滞观察的阈值与采样实现：默认值即线上行为，测试用来把 30s/60s 压到毫秒级 */
+  stallOptions: StallWatchOptions = {},
 ): BashOperations {
   return {
     exec: async (command, cwd, { onData, signal, timeout, env }) => {
@@ -360,11 +363,18 @@ export function createObservedBashOperations(
       const record: ObservedChild | undefined =
         child.pid === undefined
           ? undefined
-          : { pid: child.pid, spawnedAt: Date.now(), lastDataAt: Date.now(), descendants: [] };
+          : { pid: child.pid, spawnedAt: Date.now(), descendants: [] };
       if (record !== undefined) observedChildren.set(record.pid, record);
 
+      // 停滞观察：**只提示、绝不杀**。定时器由 finally 里的 stop() 收干净——
+      // 命令结束还留一个 90 秒的 setTimeout，Node 进程就退不出去。
+      const stall =
+        record === undefined
+          ? null
+          : createStallWatcher(record.pid, (notice) => onData(Buffer.from(notice, "utf8")), stallOptions);
+
       const forward = (chunk: Buffer) => {
-        if (record !== undefined) record.lastDataAt = Date.now();
+        stall?.noteData();
         onData(chunk);
       };
       child.stdout?.on("data", forward);
@@ -402,6 +412,7 @@ export function createObservedBashOperations(
         if (timedOut) throw new Error(`timeout:${timeout}`);
         return { exitCode: outcome.exitCode };
       } finally {
+        if (stall !== null) stall.stop();
         if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
         if (signal !== undefined) signal.removeEventListener("abort", onAbort);
         // 有活后代的条目留着（应用退出还要补刀）；其余立刻删，登记表不随调用次数增长

@@ -229,6 +229,61 @@ describe("后代存活提示（本 PR 唯一新增行为）", () => {
   });
 });
 
+describe("停滞提示（只提示、绝不杀）", () => {
+  /** 阈值压到毫秒级：线上是 30s 静默 + 60s 确认窗口，测试等不起，判据本身由纯函数测试覆盖 */
+  const fastStall = { quietMs: 200, confirmMs: 400, cpuDeltaMs: 100 };
+
+  test("合法静默也会提示，这是可接受代价：sleep 不吐字、CPU 也不涨", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-stall-"));
+    try {
+      const chunks: Buffer[] = [];
+      const ops = createObservedBashOperations(() => getShellConfig(), fastStall);
+      // 真正在跑、只是不吐字（sleep 的形态；用 node 是为了跨平台且与 shell 种类无关）
+      const command = 'node -e "setTimeout(() => {}, 6000)"';
+      const startedAt = Date.now();
+      const { exitCode } = await ops.exec(command, dir, { onData: (chunk) => chunks.push(chunk) });
+      const elapsed = Date.now() - startedAt;
+      const output = Buffer.concat(chunks).toString("utf8");
+      assert.equal(exitCode, 0, "提示不得改变退出码——本 PR 不杀任何进程");
+      assert.match(output, /\[orbita\] 本命令有 \d+ 秒无输出/);
+      assert.match(output, /CPU 增长 < 100ms/);
+      assert.ok(elapsed >= 5_000, `命令必须真的跑完（实测 ${elapsed}ms）`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("一直在吐字的命令不提示（静默计时随每块输出复位）", async () => {    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-stall-"));
+    try {
+      const ops = createObservedBashOperations(() => getShellConfig(), fastStall);
+      const command =
+        'node -e "let i=0;const t=setInterval(()=>{console.log(\'tick\',++i);if(i>=10){clearInterval(t)}},150)"';
+      const { output, exitCode } = await run(ops, command, { cwd: dir });
+      assert.equal(exitCode, 0);
+      assert.match(output, /tick 10/);
+      assert.doesNotMatch(output, /\[orbita\]/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("CPU 在跑的静默命令（死循环式忙等）不提示——这就是两个信号必须联合的原因", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-stall-"));
+    try {
+      const ops = createObservedBashOperations(() => getShellConfig(), fastStall);
+      // 不吐字、但一直在烧 CPU：只看「无输出」会误报，加上 CPU 增量才不会
+      const command = 'node -e "const t=Date.now();while(Date.now()-t<8000){}"';
+      const startedAt = Date.now();
+      const { output, exitCode } = await run(ops, command, { cwd: dir });
+      assert.equal(exitCode, 0);
+      assert.ok(Date.now() - startedAt >= 7_000, "命令真的跑满了 8 秒");
+      assert.doesNotMatch(output, /\[orbita\]/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("接线：自定义 bash 定义不丢设置里的 prefix", () => {
   /**
    * pi 内建 bash 的 `commandPrefix` 是会话装配时从 settingsManager 现读的；
