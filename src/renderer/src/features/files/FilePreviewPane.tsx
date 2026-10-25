@@ -13,6 +13,7 @@ import { isDocxFile } from "@shared/docx";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
 import { DocxView } from "../docx/DocxView";
+import { flushDocxForLeave } from "../docx/docx-flush.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
@@ -182,9 +183,19 @@ export function FilePreviewPane(props: {
             <PanelIconButton
               title={t.files.refreshPreview}
               onClick={() => {
+                // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
+                // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
+                // 屏幕上的字和未落盘的改动一起消失）
+                if (docx) {
+                  void flushDocxForLeave(path).then((outcome) => {
+                    if (!outcome.ok) return;
+                    refresh();
+                    setDocxReload((n) => n + 1);
+                  });
+                  return;
+                }
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
-                if (docx) setDocxReload((n) => n + 1);
               }}
             >
               <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />

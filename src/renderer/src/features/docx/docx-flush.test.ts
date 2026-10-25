@@ -2,7 +2,9 @@ import { deepStrictEqual } from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   flushAllDocx,
+  flushAllDocxForLeave,
   flushDocxAt,
+  flushDocxForLeave,
   hasPendingDocx,
   registerDocxFlush,
   type DocxFlushOutcome,
@@ -84,6 +86,36 @@ describe("docx 切走前的 flush 登记表", () => {
     offB();
     offC();
     deepStrictEqual(await flushAllDocx(), ok);
+  });
+
+  test("ForLeave：没有待存改动就不调用 flush（不把一次点击变成异步等待）", async () => {
+    let calls = 0;
+    const off = registerDocxFlush("/f/idle.docx", {
+      flush: async () => {
+        calls += 1;
+        return ok;
+      },
+      pending: () => false,
+    });
+    deepStrictEqual(await flushDocxForLeave("/f/idle.docx"), ok);
+    deepStrictEqual(calls, 0);
+    deepStrictEqual(await flushAllDocxForLeave(), ok);
+    deepStrictEqual(calls, 0);
+    off();
+  });
+
+  test("ForLeave：有待存改动才真的 flush，并把 cause 传成 leave", async () => {
+    const causes: string[] = [];
+    const off = registerDocxFlush("/g/dirty.docx", {
+      flush: async (cause) => {
+        causes.push(cause);
+        return { ok: false, reason: "failed" };
+      },
+      pending: () => true,
+    });
+    deepStrictEqual(await flushDocxForLeave("/g/dirty.docx"), { ok: false, reason: "failed" });
+    deepStrictEqual(causes, ["leave"]);
+    off();
   });
 
   test("hasPendingDocx 是同步的：任一份待存就是 true", () => {

@@ -1624,6 +1624,12 @@ export const zh: Messages = {
     },
     backupHint: "上一版会先复制进 orbita 的应用数据目录，可以退回去。",
     saveAnyway: "仍然保存",
+    leaveBlocked: "还有改动没保存成功——现在切走会丢字。先重试保存，再切。",
+    unloadBlocked: "还有改动没保存成功，关闭被拦下了。可以重试保存，或者明确放弃后关闭。",
+    unloadSaved: "改动已经存好了——再关一次（或再刷新一次）就安全了。",
+    writeBlocked: "这个文件写不进去：它现在是只读的，或者正被别的程序占用。",
+    retrySave: "重试保存",
+    closeAnyway: "放弃并关闭",
     savedWithBackup: (path) => `保存（上一版：${path}）`,
     oversizeEstimate: (estimate, limit) =>
       `大约 ${estimate} 页，超过应用内编辑的上限（${limit} 页）。在这里打开可能让面板卡住一阵。`,
