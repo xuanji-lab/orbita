@@ -25,15 +25,17 @@ import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
  *
  * 最后两句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
  * 用 bash 跑——bash 不给人看中途输出、也不能打断；要看、要打断就走 terminal_*。
- * 真要在 bash 里跑长任务则要求显式给 timeout：前者讲「别给慢命令短超时」，这里讲
- * 「没有上限的长任务要自己设上限」。
+ *
+ * 句柄那一句：长命令不再无限阴塞——到签到点会交还控制权并返回 sessionId，
+ * 模型必须知道这三个工具存在，否则它会以为「命令就这么没了」。P3 会重写整段。
  */
 const TOOL_GUIDELINES =
   "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
   `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
   `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that. ` +
   "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
-  "If a long task really has to run in bash, pass an explicit timeout in seconds: a command you expect to outlast the default limit above must raise it.";
+  "If a long command really has to run in bash it is detached at its 5-minute check-in and returns a sessionId: " +
+  "keep going, then follow it with bash_poll using a large waitSeconds (do not poll in a tight loop) and call bash_stop when you have seen enough.";
 
 const EXPECTED_SECONDS_GUIDELINE =
   "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
