@@ -80,6 +80,9 @@ const MARK_MONTHS = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug
 const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
+/** 计数的写法：千分位，与 Excel 的行号习惯一致（20000 → 20,000） */
+const grouped = (count: number): string => count.toLocaleString("en-US");
+
 export const en = {
   common: {
     more: "More",
@@ -1841,6 +1844,18 @@ export const en = {
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
+    /* ---------- .xlsx 只读预览（xlsx.ts 契约） ---------- */
+    xlsxSheets: "Sheets",
+    /** 裁剪提示：整表多大、面板给了多少 */
+    xlsxTruncated: (rows: number, cols: number, totalRows: number, totalCols: number) =>
+      `Showing ${grouped(rows)} rows × ${grouped(cols)} columns of ${grouped(totalRows)} × ${grouped(totalCols)}`,
+    /** 冻结窗格提示：原文件冻了，预览不冻 */
+    xlsxFrozen: (rows: number, cols: number) =>
+      `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
+    xlsxEmpty: "This sheet is empty",
+    xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
+    xlsxBroken: "Couldn't read this workbook — it may be damaged.",
+    xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },

@@ -9,8 +9,10 @@ import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { HIGHLIGHT_LIMIT, textPreviewMode, truncatedNotice } from "./preview-view";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { isLegacyXlsFile, isXlsxFile } from "@shared/xlsx";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { XlsxView } from "../xlsx/XlsxView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
@@ -53,6 +55,10 @@ export function FilePreviewPane(props: {
   const pdfCitations = useExperimentalFeature("pdf-citations");
   const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // .xlsx 走自己的结构化预览（只读 + 外部打开）；旧版 .xls 靠 EmptyPreview 明说不支持
+  const xlsx = sentImage === undefined && isXlsxFile(path);
+  const legacyXls = sentImage === undefined && isLegacyXlsFile(path);
+  const [xlsxReload, setXlsxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -179,6 +185,7 @@ export function FilePreviewPane(props: {
               onClick={() => {
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
+                if (xlsx) setXlsxReload((n) => n + 1);
               }}
             >
               <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
@@ -196,13 +203,21 @@ export function FilePreviewPane(props: {
           </Chip>
         </div>
       )}
-      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined}>
+      <div className="file-preview-body" data-kind={pdf ? "pdf" : xlsx ? "xlsx" : undefined}>
         {pdf ? (
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
             reloadToken={pdfReload}
           />
+        ) : xlsx ? (
+          <XlsxView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={xlsxReload}
+            onOpenDefault={openDefault}
+          />
+        ) : legacyXls ? (
+          <LegacyXlsPreview onOpenDefault={openDefault} />
         ) : sentImage === undefined ? (
           <PreviewBody
             name={name}
@@ -448,6 +463,25 @@ function HighlightedCode(props: { name: string; text: string }) {
   return (
     <div className="chat-md">
       <div dangerouslySetInnerHTML={markup} />
+    </div>
+  );
+}
+
+/**
+ * 旧版二进制工作簿（.xls）：fs:read 只给「二进制」，但一句「没法预览」不够——说清
+ * 是这个格式不支持（.xls 是 OLE2 复合文档，ExcelJS 与预览通道都不读它），并给
+ * 「用默认应用打开」这个出口。
+ */
+function LegacyXlsPreview(props: { onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-empty">
+      <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+      <PanelLine>{t.files.xlsUnsupported}</PanelLine>
+      <PanelButton onClick={props.onOpenDefault}>
+        <Icon name="external-link" size={14} />
+        {t.files.openDefault}
+      </PanelButton>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import type {
   FsEntryFact,
   PdfFile,
 } from "../../shared/files.ts";
+import type { XlsxPreview, XlsxReadRequest } from "../../shared/xlsx.ts";
 
 export const filesApi = {
   /** 这条会话的根清单（工作台 / 工作区 / 附加目录），顺序固定、每次现算 */
@@ -26,6 +27,8 @@ export const filesApi = {
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
   /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf；实验功能「PDF 引用」） */
   readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
+  /** 读一份 .xlsx 的结构化预览（同白名单，且须是 .xlsx；只读，不含任何写入口） */
+  readXlsx: (req: XlsxReadRequest): Promise<XlsxPreview> => ipcRenderer.invoke(ipcChannels.fsReadXlsx, req),
   /** 用系统默认应用打开 dir（同白名单） */
   open: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpen, req),
   /** 在内置浏览器「你的」tab 打开网页文件（同白名单，且须是网页文件） */

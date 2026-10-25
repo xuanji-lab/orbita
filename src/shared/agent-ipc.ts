@@ -201,6 +201,12 @@ export const ipcChannels = {
    */
   fsRead: "fs:read",
   /**
+   * 读一份 `.xlsx` 给面板的结构化预览（同 root/dir 白名单，且 realpath 后须是 `.xlsx`）。
+   * 回 `XlsxPreview`（xlsx.ts）：整表计数 + 裁剪到 2000 行 × 50 列的值、合并区间、冻结行列。
+   * 解析跑在 worker 线程（main/xlsx/service.ts）：大工作簿的同步解析不能占主进程的事件循环
+   */
+  fsReadXlsx: "fs:read-xlsx",
+  /**
    * 读一个 PDF 的字节给预览面板渲染（同 root/dir 白名单，回 `PdfFile`，files.ts）。
    * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
    */

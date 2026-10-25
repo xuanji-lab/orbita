@@ -3371,6 +3371,172 @@ body {
 }
 
 /*
+ * ===== .xlsx 只读预览（features/xlsx/XlsxView.tsx，契约 shared/xlsx.ts） =====
+ * 不画 Excel：列宽 / 字体 / 底色 / 条件格式读不全，照 HTML 表画出来用户会以为原文件
+ * 坏了。这里只有「结构化数据」——列标（A/B/C）+ 行号（1/2/3）当坐标系（对照原文件
+ * 定位用），数值右对齐 + 等宽数字，合并区按跨行跨列画成一个格。内容是数据不是散文，
+ * 所以用等宽面、一档 sm 字号；行高 24（与 --control-height-xs 同档）。
+ */
+.file-preview-body[data-kind="xlsx"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.xlsx-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.xlsx-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 工作表标签：多表时横向滚动，永不把右侧的「用默认应用打开」挤出视野 */
+.xlsx-sheets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+/* 行尾元素：右缘钉在工具行的右内边距上（设计系统「行尾血线」） */
+.xlsx-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.xlsx-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+/*
+ * 行高与行号槽宽走变量：TSX 按 ROW_HEIGHT=24 算滚动窗口、用 colgroup 按数据给每列
+ * 定宽（xlsxColumnWidths）。**行高两边必须一致**：XlsxView.tsx 的 ROW_HEIGHT 与这里
+ * 的 --xlsx-row-height 成对改。固定列宽 + table-layout: fixed 才能让「换渲染窗口」
+ * 不重算整表宽度（auto 布局下每次重排都要把首帧那笔账再付一遍）。
+ */
+.xlsx-table {
+  --xlsx-gutter-width: 52px;
+  --xlsx-row-height: 24px;
+  table-layout: fixed;
+  width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+/* 发丝网格：只画右与下，格子自己不带外框 */
+.xlsx-table th,
+.xlsx-table td {
+  height: var(--xlsx-row-height);
+  padding: 0 var(--space-2);
+  text-align: left;
+  vertical-align: middle;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 占位行（没画的那几百行）：只负责高度，不画边框、不吃指针 */
+.xlsx-spacer td {
+  height: auto;
+  padding: 0;
+  border: 0;
+}
+/* 值一格：超长文本截断（完整内容在 title），横向不折行——50 列并排才有表的形状 */
+.xlsx-cell-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xlsx-table td[data-num="true"] {
+  text-align: right;
+}
+/* 错误值（#DIV/0! 这类）：坏掉的公式是故障，给危险色 */
+.xlsx-table td[data-error="true"] {
+  color: var(--color-danger);
+}
+/* 公式格：格子里是缓存值，公式在 tooltip——虚线底是「这里有第二种读法」的提示，
+   不是装饰（同一格在 Excel 里点进去看到的是公式） */
+.xlsx-table td[data-formula="true"] .xlsx-cell-text {
+  text-decoration: underline dotted var(--color-text-tertiary);
+  text-underline-offset: 2px;
+}
+/* 列标 / 行号：两轴都钉住（滚动时始终看得见坐标），所以自带实色底 */
+.xlsx-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg-panel);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  text-align: center;
+}
+.xlsx-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 44px;
+  background: var(--color-bg-panel);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  text-align: right;
+}
+.xlsx-table thead .xlsx-gutter {
+  z-index: 3;
+}
+/* 窗口化由 TSX 负责（只渲染可见的几十行 + 上下各 OVERSCAN 行，未渲染的行用占位行
+   搅住高度）。这里**不再加 content-visibility**：在 10 万格的表上它比不用还慢（实测
+   首帧 8.2s，去掉后 0.6s） */
+/* 底部提示条：裁剪与冻结是「与原文件不一样」的两处，必须说出来 */
+.xlsx-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.xlsx-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.xlsx-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  padding: var(--space-4);
+}
+/* 读不开时的技术副行（异常原文）：读得懂的人据此判断文件是不是真坏了 */
+.xlsx-detail {
+  margin: 0;
+  max-width: 48ch;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/*
  * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
  * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
  * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边

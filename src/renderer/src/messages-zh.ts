@@ -2,6 +2,9 @@ import type { Messages } from "./messages-en.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 
+/** 计数的写法：千分位（与英文表同一种写法，20000 → 20,000） */
+const grouped = (count: number): string => count.toLocaleString("en-US");
+
 const THINKING_ZH: Record<ThinkingLevel, string> = {
   off: "关",
   minimal: "极低",
@@ -1688,6 +1691,16 @@ export const zh: Messages = {
     pdfPassword: "这个 PDF 有密码保护，没法预览。",
     citeNotFound: (page) => `第 ${page} 页上已经找不到被引的那段了。文件可能在引用之后改过。`,
     citeOutside: (name) => `${name} 不在这条任务能看到的文件夹里，这里打不开。`,
+    /* ---------- .xlsx 只读预览（契约见 shared/xlsx.ts） ---------- */
+    xlsxSheets: "工作表",
+    xlsxTruncated: (rows, cols, totalRows, totalCols) =>
+      `只显示前 ${grouped(rows)} 行 × ${grouped(cols)} 列，整表共 ${grouped(totalRows)} 行 × ${grouped(totalCols)} 列`,
+    xlsxFrozen: (rows, cols) =>
+      `原文件冻结了${rows > 0 ? `前 ${rows} 行` : ""}${rows > 0 && cols > 0 ? "、" : ""}${cols > 0 ? `前 ${cols} 列` : ""}；这里的预览可以自由滚动`,
+    xlsxEmpty: "这张表是空的",
+    xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
+    xlsxBroken: "这个工作簿读不开——可能已经损坏。",
+    xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,
   },

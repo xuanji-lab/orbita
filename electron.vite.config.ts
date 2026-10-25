@@ -69,6 +69,13 @@ export default defineConfig({
           index: resolve(__dirname, "src/main/index.ts"),
           "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
           "terminal-runtime": resolve(__dirname, "src/terminal/runtime.ts"),
+          /**
+           * `.xlsx` 解析的 worker 线程入口（主进程 `new Worker(join(__dirname,
+           * "xlsx-worker.js"))`，见 src/main/xlsx/service.ts）。ExcelJS 解大工作簿有
+           * 一段秒级的同步解析，留在主进程里就是窗口假死，所以单独一个入口——
+           * 与 agent / terminal 两个进程入口同一个做法：各占一个文件。
+           */
+          "xlsx-worker": resolve(__dirname, "src/main/xlsx/worker.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包
