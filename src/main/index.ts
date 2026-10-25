@@ -50,6 +50,8 @@ import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
+import { LatexRunner } from "./latex/run.ts";
+import { applyLatexRequest } from "./latex/agent-requests.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -477,6 +479,19 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // LaTeX：agent 的 compile_latex——latexmk 进程与 .log 解析都在主进程（terminalRequest
+    // 同一条边界）。同样任何路径都回执，否则那次工具调用会永远等下去
+    if (event.type === "latexRequest") {
+      void applyLatexRequest(latex, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerLatex(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerLatex(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "readTaskRequest") {
       void applyReadTask(sessions, event, workspaces, channels)
         .then((result) => agentHost.answerReadTask(event.requestId, result))
@@ -663,6 +678,8 @@ void app.whenReady().then(async () => {
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();
   registerTerminalIpc(terminals);
+  // LaTeX 编译：latexmk 进程、.log 解析、并发记账都在主进程（当前唯一消费者是 agent 工具）
+  const latex = new LatexRunner();
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -725,6 +742,8 @@ void app.whenReady().then(async () => {
     agentHost.dispose();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
+    // 在编的 latexmk 同样是进程树：不杀就会留下孤儿引擎进程继续占 CPU 与 .aux
+    latex.cancelAll();
   });
 
   /**
