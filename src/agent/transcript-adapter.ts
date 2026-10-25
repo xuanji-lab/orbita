@@ -125,9 +125,11 @@ function toToolDetails(result: unknown): ToolTranscriptItem["details"] {
 }
 
 function toToolContent(result: unknown): ToolContent[] {
+  // 形态对但为空（pi 的第一帧 partial 就是 `{content: []}`）→ 空正文，**不要**退到下面的
+  // JSON.stringify：那会把 `{"content":[]}` 当成命令输出贴在活尾里（真机上看到过）。
+  // 「形态对」的判据是 `content` 是数组，不看里面有没有块。
   if (isRecord(result) && Array.isArray(result.content)) {
-    const blocks = result.content.filter(isToolContent);
-    if (blocks.length > 0) return blocks;
+    return result.content.filter(isToolContent);
   }
   if (typeof result === "string") return [{ type: "text", text: result }];
   if (result === undefined || result === null) return [];
