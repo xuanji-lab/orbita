@@ -206,6 +206,12 @@ export const ipcChannels = {
    * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
    */
   fsReadPdf: "fs:read-pdf",
+  /**
+   * 编辑器写回一个文本文件（同 root/dir 白名单，回 `FileWriteResult`，files.ts）。
+   * 请求带 `expectedHash`：写前重读比对，盘上被外部改过就回 conflict、不动盘——
+   * renderer 不能用一个迟到的编辑器覆盖 agent / 用户刚写下的内容。
+   */
+  fsWrite: "fs:write",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
   fsOpen: "fs:open",
   /**

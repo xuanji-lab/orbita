@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
@@ -38,6 +38,8 @@ import {
   pdfStale,
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
+import { closeDecision } from "./editor-state.ts";
+import type { FlushOutcome, TexEditorHandle } from "./TexEditorPane.tsx";
 import {
   closeTab,
   dropTabsAtRoot,
@@ -181,6 +183,41 @@ export function FilesPanel(props: {
     };
   }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
   const latex = useLatexWorkbench(latexContext);
+
+  /**
+   * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
+   * 先 ask 它存盘；编译前必须把未落盘的改动写完——否则编的是盘上的旧版。
+   * 切标签不靠这里：旧编辑器卸载时会自己把文本抓下来再写（配「切走不丢字」）。
+   */
+  const editorsRef = useRef(new Map<string, TexEditorHandle>());
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
+  /** 编辑器事件造成的可见提示（关标签撞冲突 / 编译前保存失败），不静默 */
+  const [editorNotice, setEditorNotice] = useState<string | null>(null);
+
+  const registerEditor = useCallback((path: string, handle: TexEditorHandle | null): void => {
+    if (handle === null) editorsRef.current.delete(path);
+    else editorsRef.current.set(path, handle);
+  }, []);
+
+  const handleEditorDirty = useCallback((path: string, dirty: boolean): void => {
+    setDirtyPaths((current) => {
+      if (current.has(path) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const handleEditorError = useCallback((path: string, message: string): void => {
+    setEditorNotice(`${pathTail(path) || path}：${message}`);
+  }, []);
+
+  /** 保存成功的统一回调：清掉旧提示，并让编译条立刻看到「源码比 PDF 新」 */
+  const handleEditorSaved = useCallback((): void => {
+    setEditorNotice(null);
+    latex.refresh();
+  }, [latex]);
   /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
   const [problemsOpen, setProblemsOpen] = useState(false);
   const latexGroups = useMemo(
@@ -206,6 +243,26 @@ export function FilesPanel(props: {
   }, [latexContext?.path]);
 
   /**
+   * 编译前强制保存：未落盘的改动先写盘，编译用的就是你眼前这一版（原型场景 1 第 5 步 / 场景 4）。
+   * 冲突或写盘失败时**不编**：编出来的 PDF 会对应一份你不知道内容的源码，比不编更误导。
+   * 只 flush 当前挂载的编辑器（其它标签在切走时已经保存过），但保存链是串行的，不会交错。
+   */
+  const compile = latex.compile;
+  const compileWithSave = useCallback((): void => {
+    void (async () => {
+      const outcomes: FlushOutcome[] = await Promise.all(
+        [...editorsRef.current.values()].map((handle) => handle.flush()),
+      );
+      if (outcomes.includes("conflict")) {
+        setEditorNotice(t.editor.conflictBlocksCompile);
+        return;
+      }
+      if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
+      compile();
+    })();
+  }, [compile, t]);
+
+  /**
    * 编译快捷键（Ctrl/Cmd+B）。**不抢终端与输入框**：终端里的 Ctrl+B 是 readline 的
    * backward-char（vim 里是翻页），在输入框里它也不是编译——那两个场景直接放过。
    */
@@ -218,15 +275,17 @@ export function FilesPanel(props: {
       if (target instanceof Element && target.closest(".xterm") !== null) return;
       if (target instanceof HTMLElement) {
         const tag = target.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        // 源码编辑器里的 Ctrl+B 不当输入法 / 加粗用：那是 LaTeX 项目，编译才是它该做的事
+        if (target.isContentEditable && target.closest(".tex-editor") === null) return;
       }
       event.preventDefault();
       if (latex.running) return;
-      latex.compile();
+      compileWithSave();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [latex.project, latex.running, latex.compile]);
+  }, [latex.project, latex.running, compileWithSave]);
 
   /**
    * 一条编译问题 → 输入框引用。走现有的引用通道（TextQuote）：用户自己按发送才发。
@@ -302,6 +361,7 @@ export function FilesPanel(props: {
     setTreeOn(false);
     setActionError(null);
     setJump(null);
+    setEditorNotice(null);
   }, [sessionId, workspaceId]);
 
   // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
@@ -331,12 +391,89 @@ export function FilesPanel(props: {
 
   /** 关闭一个标签；关掉最后一个 = 回纯树，treeOn 一并复位——之后从 solo 点开
    * 文件不会突然顶着浮层 / 并排列（树的展开理由随最后一个文件消失） */
-  const closeOne = (path: string): void => {
+  /** 真的把标签拿掉（保存已确认 / 本来不脏） */
+  const applyClose = (path: string): void => {
     const next = closeTab(tabs, activePath, path);
     setTabs(next.tabs);
     setActivePath(next.activePath);
     if (next.activePath === null) setTreeOn(false);
   };
+
+  /**
+   * 关闭一个标签；有未保存内容时**先存再关**（自动保存的 1.5 s 没到就按 ✕ 不该丢字）。
+   * 卡在冲突上时不关：替用户选「重载还是保留」是丢改动，停下来让他自己裁。
+   * 保存失败也不关，标签留着、错误在编辑器里。
+   */
+  const closeOne = (path: string): void => {
+    const handle = editorsRef.current.get(path);
+    const decision = closeDecision({
+      dirty: handle?.isDirty() ?? false,
+      conflicted: handle?.conflicted() ?? false,
+    });
+    if (decision === "block") {
+      setEditorNotice(t.editor.resolveConflictFirst);
+      return;
+    }
+    if (decision === "save" && handle !== undefined) {
+      void handle.flush().then((outcome) => {
+        if (outcome === "saved" || outcome === "clean") applyClose(path);
+        else setEditorNotice(t.editor.resolveConflictFirst);
+      });
+      return;
+    }
+    applyClose(path);
+  };
+
+  /**
+   * 把当前激活标签滚进可视区。正常切换 / 新开由下面的 effect 管；**被拦下的切换**
+   * 不经过 effect（activePath 与 tabs.length 都没变），而浏览器点击已把被点的标签
+   * 滚进了视口——必须手动滚回去，否则用户眼前是那个并没切过去的标签，会以为切换成功了。
+   */
+  const scrollActiveTabIntoView = useCallback((): void => {
+    const bar = tabsBarRef.current;
+    const tab = activeTabRef.current;
+    if (bar === null || tab === null) return;
+    // 用视口矩形换算成「滚动内容坐标」：标签的 offsetParent 不一定是滚动容器
+    // （.cap-tabs 没有 position），offsetLeft 是相对 toolbar 的，直接喂给
+    // tabScrollTarget 会把它当成已可见（实测：真正左溢出 91px 时 offsetLeft
+    // 恰好等于 scrollLeft，target 被判成 null）。
+    const barRect = bar.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const target = tabScrollTarget(
+      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
+      { offsetLeft: tabRect.left - barRect.left + bar.scrollLeft, offsetWidth: tabRect.width },
+    );
+    if (target !== null) bar.scrollTo({ left: target });
+  }, []);
+
+  /**
+   * 切换激活标签前的保存闸：当前编辑器脏就先 flush，**冲突 / 写盘失败时不切走**。
+   * 切走会让 TexEditorPane 卸载，而卸载时的兜底保存一旦撞上冲突，那份未保存文本
+   * 就再也拿不回来了（验收实测的丢字路径）。flush 成功后由这里统一 setActivePath；
+   * 本来干净 / 没有编辑器就直接切。
+   */
+  const switchTo = useCallback(
+    (next: string | null): void => {
+      if (next === activePath) return;
+      const current = activePath === null ? undefined : editorsRef.current.get(activePath);
+      if (current === undefined || !current.isDirty()) {
+        setActivePath(next);
+        return;
+      }
+      void current.flush().then((outcome) => {
+        if (outcome === "saved" || outcome === "clean") {
+          setActivePath(next);
+          return;
+        }
+        setEditorNotice(t.editor.resolveConflictBeforeSwitch);
+        // 点击已经把被点的标签滚进视口（浏览器对聚焦元素的默认行为）；把可视区
+        // 拉回真正的激活标签，否则看起来像已经切过去了。
+        // 延到下一帧：浏览器的「聚焦滚动」排在点击处理器之后，当场 scrollTo 会被它盖掉
+        window.requestAnimationFrame(() => scrollActiveTabIntoView());
+      });
+    },
+    [activePath, scrollActiveTabIntoView, t],
+  );
 
   // 预览打开时 Esc 关当前激活标签（原型同语义）；没有激活标签回报「没处理」，
   // 让 App 继续把 Esc 用在关面板上。由 App 的全局监听派发过来（见 props.escapeRef）
@@ -358,7 +495,7 @@ export function FilesPanel(props: {
    * 自动收起——窄侧事实来自 ResizeObserver 的缓存，不在这里量宽度做显示判定 */
   const openFile = (root: FileRoot, path: string): void => {
     setTabs((prev) => openTab(prev, root.path, path));
-    setActivePath(path);
+    switchTo(path);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -366,7 +503,7 @@ export function FilesPanel(props: {
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
     setTabs((prev) => openTab(prev, "", ref, name));
-    setActivePath(ref);
+    switchTo(ref);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -397,7 +534,7 @@ export function FilesPanel(props: {
     }
     setActionError(null);
     setTabs((prev) => openTab(prev, outcome.root, path));
-    setActivePath(path);
+    switchTo(path);
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
   }, [citeFocus, sessionId, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
@@ -425,15 +562,8 @@ export function FilesPanel(props: {
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
   // 重跑一次也只是无事发生
   useEffect(() => {
-    const bar = tabsBarRef.current;
-    const tab = activeTabRef.current;
-    if (bar === null || tab === null) return;
-    const target = tabScrollTarget(
-      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
-      { offsetLeft: tab.offsetLeft, offsetWidth: tab.offsetWidth },
-    );
-    if (target !== null) bar.scrollTo({ left: target });
-  }, [activePath, tabs.length]);
+    scrollActiveTabIntoView();
+  }, [activePath, tabs.length, scrollActiveTabIntoView]);
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
@@ -655,6 +785,7 @@ export function FilesPanel(props: {
                 {tabs.map((tab) => {
                   const name = tab.name ?? fileTabName(tab.path);
                   const active = tab.path === activePath;
+                  const dirty = dirtyPaths.has(tab.path);
                   return (
                     <div
                       key={tab.path}
@@ -664,11 +795,11 @@ export function FilesPanel(props: {
                       aria-selected={active}
                       className="cap-tab no-drag"
                       title={tab.path}
-                      onClick={() => setActivePath(tab.path)}
+                      onClick={() => switchTo(tab.path)}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        setActivePath(tab.path);
+                        switchTo(tab.path);
                       }}
                     >
                       <Icon
@@ -677,20 +808,29 @@ export function FilesPanel(props: {
                         style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}
                       />
                       <span className="files-tab-name">{name}</span>
-                      {/* ✕ 停在标签内（button 不能套 button，标签本体是 div）：点击
+                      {/* 未保存圆点（原型场景 1 第 3 步）：脏的时候占 ✕ 的位置，鼠标
+                          悬停标签时让位给 ✕——同一个槽位两个状态，不额外占宽。
+                          ✕ 停在标签内（button 不能套 button，标签本体是 div）：点击
                           只关这一个标签，不要顺带触发标签的激活 */}
-                      <button
-                        type="button"
-                        className="files-tab-close"
-                        title={t.files.closeTab}
-                        aria-label={`${t.files.closeTab} ${name}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          closeOne(tab.path);
-                        }}
-                      >
-                        <Icon name="x" size={10} strokeWidth={2.4} />
-                      </button>
+                      <span className="files-tab-tail">
+                        {dirty && (
+                          <span className="files-tab-dirty" title={t.editor.unsaved}>
+                            <Icon name="circle-dot" size={12} strokeWidth={2} />
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className={`files-tab-close${dirty ? " is-dirty" : ""}`}
+                          title={t.files.closeTab}
+                          aria-label={`${t.files.closeTab} ${name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            closeOne(tab.path);
+                          }}
+                        >
+                          <Icon name="x" size={10} strokeWidth={2.4} />
+                        </button>
+                      </span>
                     </div>
                   );
                 })}
@@ -741,7 +881,7 @@ export function FilesPanel(props: {
             state={latexState}
             last={latex.last}
             startedAt={latex.startedAt}
-            onCompile={latex.compile}
+            onCompile={compileWithSave}
             onCancel={latex.cancel}
             onSelectEngine={latex.selectEngine}
             onSelectMain={latex.selectMain}
@@ -834,6 +974,12 @@ export function FilesPanel(props: {
               // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
               pdfPreview={latexPdfActive}
               pdfReloadToken={latexPdfActive ? latex.pdfReloadToken : 0}
+              editor={{
+                register: registerEditor,
+                onDirtyChange: handleEditorDirty,
+                onSaved: handleEditorSaved,
+                onError: handleEditorError,
+              }}
             />
           )}
         </div>
@@ -848,6 +994,7 @@ export function FilesPanel(props: {
           />
         )}
         {latex.error !== null && <p className="latex-error">{latex.error}</p>}
+        {editorNotice !== null && <p className="latex-error">{editorNotice}</p>}
       </div>
     </RightPanelFrame>
   );
