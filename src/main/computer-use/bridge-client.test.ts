@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   fetchGuestScreenshot,
+  fetchGuestUiaAct,
+  fetchGuestUiaList,
+  fetchGuestWindowList,
+  fetchGuestWindowShot,
   guestTimeoutMessage,
   isPlainScreenshotFileName,
   resetGuestCommandSeq,
@@ -962,6 +966,308 @@ describe("bridge-client（防火墙状态）", () => {
     } finally {
       bridge.stop();
       resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── 按窗口截图（win-shot / win-list，桥 0.9.0）──────────────────────────────
+//
+// 这两条命令的错误原话是模型唯一的换路指示（「这个窗口拍不到…——改用整桌面截图或
+// computer_screenshot」），所以这一层只验两件事：字段原样到桥上、回执按契约验过再交出去。
+
+describe("窗口截图（win-shot / win-list）", () => {
+  test("win-shot 全链：hwnd / title / maxWidth 到桥，JPEG 与窗口几何回来，文件清干净", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, (req) => ({
+      resp: {
+        ok: true,
+        hwnd: req.hwnd ?? 999,
+        title: "记事本 - 未命名",
+        restoredFromMinimized: true,
+        nativeWidth: 800,
+        nativeHeight: 600,
+        width: 640,
+        height: 480,
+        jpeg: `cmd-${String(req.seq).padStart(6, "0")}.jpg`,
+      },
+      jpg: FAKE_JPEG,
+    }));
+    try {
+      const shot = await fetchGuestWindowShot(dir, { hwnd: 4321, maxWidth: 640 });
+      assert.deepEqual(Array.from(shot.jpeg), Array.from(FAKE_JPEG));
+      assert.equal(shot.hwnd, 4321);
+      assert.equal(shot.title, "记事本 - 未命名");
+      assert.equal(shot.restoredFromMinimized, true);
+      assert.equal(shot.nativeWidth, 800);
+      assert.equal(shot.width, 640);
+      assert.equal(bridge.requests[0]?.command, "win-shot");
+      assert.equal(bridge.requests[0]?.hwnd, 4321);
+      assert.equal(bridge.requests[0]?.maxWidth, 640);
+      const left = await readdir(join(dir, COMPUTER_USE_CMD_DIR));
+      assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("win-shot 拍不到：桥的人话原话抛出（不改写成超时 / 缺字段）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const human =
+      "这个窗口拍不到（可能被最小化后无法恢复 / 显卡合成方式不支持按窗口截取）——改用整桌面截图或 computer_screenshot";
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: false, error: human } }));
+    try {
+      await assert.rejects(fetchGuestWindowShot(dir, { hwnd: 1 }), new RegExp("拍不到"));
+      await assert.rejects(fetchGuestWindowShot(dir, { hwnd: 1 }), new RegExp("computer_screenshot"));
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("win-shot 回执缺字段：报缺字段，不把 undefined 当尺寸交给上层", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, (req) => ({
+      resp: { ok: true, width: 640, height: 480, jpeg: `cmd-${String(req.seq).padStart(6, "0")}.jpg` },
+      jpg: FAKE_JPEG,
+    }));
+    try {
+      await assert.rejects(fetchGuestWindowShot(dir, { hwnd: 1 }), /缺字段/);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("win-list：windows 数组按契约解析；没有 hwnd 的条目跳过；桥报错原话抛出", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({
+      resp: {
+        ok: true,
+        windows: [
+          { hwnd: 11, title: "Edge", process: "msedge", className: "Chrome_WidgetWin_1", x: 1, y: 2, w: 3, h: 4, minimized: false, visible: true },
+          { title: "半条记录" },
+        ],
+      },
+    }));
+    try {
+      const windows = await fetchGuestWindowList(dir);
+      assert.equal(windows.length, 1);
+      assert.deepEqual(windows[0], {
+        hwnd: 11,
+        title: "Edge",
+        process: "msedge",
+        className: "Chrome_WidgetWin_1",
+        x: 1,
+        y: 2,
+        w: 3,
+        h: 4,
+        minimized: false,
+        visible: true,
+      });
+      assert.equal(bridge.requests[0]?.command, "win-list");
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    const failing = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const failingBridge = startFakeBridge(failing, () => ({ resp: { ok: false, error: "window 列表失败：桌面没就绪" } }));
+    try {
+      await assert.rejects(fetchGuestWindowList(failing), /桌面没就绪/);
+    } finally {
+      failingBridge.stop();
+      await rm(failing, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── UIA 车道（uia-list / uia-act，桥 0.10.0）──────────────────────────────
+//
+// 这一层只做两件事：字段原样到桥上、回执按契约验过再交出去。桥的人话（「它支持：value」
+// 「目标窗口没有响应（UIA 调用超时…）」）必须原话抛出——宿主改写那句话，模型就不知道下一步。
+
+describe("UIA 车道（uia-list / uia-act）", () => {
+  test("uia-list 全链：hwnd / title / maxItems 原样下发，半条记录跳过，文件清干净", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({
+      resp: {
+        ok: true,
+        hwnd: 4321,
+        window: { title: "记事本", className: "Notepad" },
+        items: [
+          {
+            ref: 1,
+            name: "文本编辑器",
+            controlType: "document",
+            automationId: "15",
+            className: "Edit",
+            x: 10,
+            y: 40,
+            w: 700,
+            h: 500,
+            patterns: ["value"],
+            enabled: true,
+            offscreen: false,
+          },
+          { ref: 0, name: "坏记录" },
+          { name: "没有 ref" },
+        ],
+        truncated: true,
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaList(dir, { hwnd: 4321, maxItems: 60 });
+      assert.equal(reply.hwnd, 4321);
+      assert.deepEqual(reply.window, { title: "记事本", className: "Notepad" });
+      assert.equal(reply.items.length, 1, "ref 缺失 / 非法的半条记录必须跳过");
+      assert.deepEqual(reply.items[0], {
+        ref: 1,
+        name: "文本编辑器",
+        controlType: "document",
+        automationId: "15",
+        className: "Edit",
+        x: 10,
+        y: 40,
+        w: 700,
+        h: 500,
+        patterns: ["value"],
+        enabled: true,
+        offscreen: false,
+      });
+      assert.equal(reply.truncated, true);
+      assert.equal(bridge.requests[0]?.command, "uia-list");
+      assert.equal(bridge.requests[0]?.hwnd, 4321);
+      assert.equal(bridge.requests[0]?.maxItems, 60);
+      const left = await readdir(join(dir, COMPUTER_USE_CMD_DIR));
+      assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-list 缺 items / 缺 hwnd：报缺字段，不把半张表交给上层", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, hwnd: 1 } }));
+    try {
+      await assert.rejects(fetchGuestUiaList(dir, { hwnd: 1 }), /缺 items/);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+    const dir2 = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge2 = startFakeBridge(dir2, () => ({ resp: { ok: true, items: [] } }));
+    try {
+      await assert.rejects(fetchGuestUiaList(dir2, { hwnd: 1 }), /缺 hwnd/);
+    } finally {
+      bridge2.stop();
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-list 失败：桥的人话原话抛出（超时文案里要能搜到「UIA 调用超时」）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const human = "目标窗口没有响应（UIA 调用超时：uia-list 在 5 秒内没有返回）——先用 computer_screenshot 看一眼";
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: false, error: human } }));
+    try {
+      await assert.rejects(fetchGuestUiaList(dir, { hwnd: 1 }), new RegExp("UIA 调用超时"));
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-act 全链：action / ref / value / timeoutMs 到桥，回执解析成契约形状", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, (req) => ({
+      resp: {
+        ok: true,
+        hwnd: req.hwnd ?? 1,
+        action: req.action ?? "invoke",
+        usedPattern: "invoke",
+        name: "关闭",
+        controlType: "button",
+        focused: false,
+        autoSetFocus: true,
+        elapsedMs: 12,
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaAct(dir, {
+        hwnd: 4321,
+        action: "invoke",
+        ref: 2,
+        timeoutMs: 1500,
+      });
+      assert.deepEqual(reply, {
+        hwnd: 4321,
+        action: "invoke",
+        usedPattern: "invoke",
+        name: "关闭",
+        controlType: "button",
+        focused: false,
+        autoSetFocus: true,
+        elapsedMs: 12,
+      });
+      assert.equal(bridge.requests[0]?.command, "uia-act");
+      assert.equal(bridge.requests[0]?.["action"], "invoke");
+      assert.equal(bridge.requests[0]?.["ref"], 2);
+      assert.equal(bridge.requests[0]?.["timeoutMs"], 1500);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-act 关不掉 AutoSetFocus：autoSetFocus=false 与原因一起带出（不是错误）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({
+      resp: {
+        ok: true,
+        hwnd: 9,
+        action: "setValue",
+        usedPattern: "value",
+        name: "搜索",
+        controlType: "edit",
+        focused: false,
+        autoSetFocus: false,
+        autoSetFocusWarning: "AutoSetFocus 关不掉（这个系统的 UIA 客户端没有 IUIAutomation2）——可能抢焦点",
+        elapsedMs: 30,
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaAct(dir, { hwnd: 9, action: "setValue", name: "搜索", value: "orbita" });
+      assert.equal(reply.autoSetFocus, false);
+      assert.match(reply.autoSetFocusWarning ?? "", /AutoSetFocus 关不掉/);
+      assert.equal(reply.usedPattern, "value");
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-act 回执缺字段 / 动作名不认识：报缺字段，不把 undefined 当动作", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, hwnd: 1, action: "click" } }));
+    try {
+      await assert.rejects(fetchGuestUiaAct(dir, { hwnd: 1, action: "invoke" }), /缺 action/);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-act 失败：桥的不支持文案原话抛出", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const human = "这个控件不支持 invoke（edit，它支持：value）——改用 computer_click / computer_type 的像素路径";
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: false, error: human } }));
+    try {
+      await assert.rejects(fetchGuestUiaAct(dir, { hwnd: 1, action: "invoke", ref: 1 }), /不支持 invoke/);
+      await assert.rejects(fetchGuestUiaAct(dir, { hwnd: 1, action: "invoke", ref: 1 }), /computer_click/);
+    } finally {
+      bridge.stop();
       await rm(dir, { recursive: true, force: true });
     }
   });

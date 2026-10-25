@@ -4,11 +4,14 @@ import {
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   COMPUTER_USE_READ_TOOLS,
+  COMPUTER_USE_WRITE_TOOLS,
   decidePermission,
   DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
   isChannelTool,
   isComputerUseReadTool,
+  isComputerUseTool,
+  isComputerUseWriteTool,
   USER_ACTION_TOOL,
   isReadOnlyTool,
   PERMISSION_MODES,
@@ -146,13 +149,58 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
     for (const tool of COMPUTER_USE_READ_TOOLS) assert.equal(isReadOnlyTool(tool), false, tool);
   });
 
-  test("点击 / 打字 / 按键 / 滚动真注入鼠标键盘，照写操作过闸：plan 拒、manual 问、skip 放", () => {
-    for (const tool of ["computer_click", "computer_type", "computer_key", "computer_scroll"]) {
+  test("点击 / 打字 / 按键 / 滚动 / UIA 动作真的动沙箱，照写操作过闸：plan 拒、manual 问、skip 放", () => {
+    // computer_uia 既能列控件（只读）也能 invoke / setValue（写）：审批按**工具**给，
+    // 不按参数给，所以它整件走写操作闸门——宁可让 list 也问一次，不能把写动作漏成免审批。
+    for (const tool of ["computer_click", "computer_type", "computer_key", "computer_scroll", "computer_uia"]) {
       assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
       assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
       assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
       assert.equal(isComputerUseReadTool(tool), false, tool);
     }
+  });
+
+  test("写件单独成桶：两桶合起来才是预算口径，互不重叠", () => {
+    for (const tool of COMPUTER_USE_WRITE_TOOLS) {
+      assert.equal(isComputerUseWriteTool(tool), true, tool);
+      assert.equal(isComputerUseReadTool(tool), false, tool);
+      assert.equal(isComputerUseTool(tool), true, tool);
+      // 档位判定不受新桶影响：仍是默认写闸门
+      assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
+      assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
+      assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
+    }
+    for (const tool of COMPUTER_USE_READ_TOOLS) {
+      assert.equal(isComputerUseWriteTool(tool), false, tool);
+      assert.equal(isComputerUseTool(tool), true, tool);
+    }
+    assert.equal(isComputerUseWriteTool("bash"), false);
+    assert.equal(isComputerUseTool("bash"), false);
+  });
+
+  test("写桶覆盖三条车道的写动作：像素四件 + 网页五件 + UIA，一个都不漏", () => {
+    // 名字是真源：各自在 computer-tools.ts / sandbox-tools.ts 的工具定义里。漏一个的后果
+    // 不是「少问一次」——它同时绕过会话授权、两级预算与急停撤销，三道闸一起失效
+    // （2026-10 修：链上新增的 6 件曾全在名单外）。
+    const all = [
+      "computer_click",
+      "computer_type",
+      "computer_key",
+      "computer_scroll",
+      "sandbox_navigate",
+      "sandbox_click",
+      "sandbox_type",
+      "sandbox_upload",
+      "sandbox_download",
+      "computer_uia",
+    ];
+    for (const tool of all) {
+      assert.equal(isComputerUseWriteTool(tool), true, `${tool} 应在写桶里`);
+      assert.equal(isComputerUseTool(tool), true, `${tool} 应计入预算`);
+      assert.equal(isComputerUseReadTool(tool), false, `${tool} 不应同时是只读`);
+    }
+    // 名单恰好是这十件：多一个少一个都要在这里显式改（防静默漂移）
+    assert.deepEqual([...COMPUTER_USE_WRITE_TOOLS].sort(), [...all].sort());
   });
 });
 

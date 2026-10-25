@@ -21,6 +21,8 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
+import type { ComputerUseRisk } from "./computer-guard.ts";
+import type { EmergencyStopBroadcast } from "./computer-use.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -51,6 +53,12 @@ export const ipcChannels = {
   agentSetThinkingLevel: "agent:set-thinking-level",
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
+  /**
+   * 会话级电脑使用授权的撤销 / 授予（用户点会话头的撤销，或急停）。**主进程落 meta 并转发
+   * 给 agent 进程**：meta 是持久真源（下一轮开机种子），agent 进程的账本是当前轮立即生效的那份。
+   * 授予的正常路径不在这里——闸门知道用户点了什么，经 `computerUseGrant` 事件回来。
+   */
+  agentSetComputerUseGrant: "agent:set-computer-use-grant",
   agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
@@ -670,6 +678,13 @@ export type AgentCommand =
        * 根本看不到这些工具（不是执行时才拦）。沙箱本身由用户在设置页启停。
        */
       computerUse?: boolean;
+      /**
+       * 本会话是否已被用户授权操作沙箱（SessionMeta.computerUseGrantedAt 的时刻；null / 缺席
+       * = 未授权）。**主进程每轮从 meta 装配**——agent 进程的账本只在首次见到这条会话时
+       * 拿它当种子，之后以内存账本为准（轮中授予 / 撤销要当场生效，不能被一次迟到的
+       * meta 读覆盖）。
+       */
+      computerUseGrantedAt?: number | null;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -771,6 +786,13 @@ export type AgentCommand =
       backfill?: string[];
       /** 实验功能「电脑使用」的开关，语义同 submit */
       computerUse?: boolean;
+      /**
+       * 本会话是否已被用户授权操作沙箱（SessionMeta.computerUseGrantedAt 的时刻；null / 缺席
+       * = 未授权）。**主进程每轮从 meta 装配**——agent 进程的账本只在首次见到这条会话时
+       * 拿它当种子，之后以内存账本为准（轮中授予 / 撤销要当场生效，不能被一次迟到的
+       * meta 读覆盖）。
+       */
+      computerUseGrantedAt?: number | null;
     }
   | {
       /**
@@ -834,6 +856,13 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 实验功能「电脑使用」的开关，语义同 submit */
       computerUse?: boolean;
+      /**
+       * 本会话是否已被用户授权操作沙箱（SessionMeta.computerUseGrantedAt 的时刻；null / 缺席
+       * = 未授权）。**主进程每轮从 meta 装配**——agent 进程的账本只在首次见到这条会话时
+       * 拿它当种子，之后以内存账本为准（轮中授予 / 撤销要当场生效，不能被一次迟到的
+       * meta 读覆盖）。
+       */
+      computerUseGrantedAt?: number | null;
     }
   | { type: "listBuiltins" }
   /**
@@ -904,6 +933,11 @@ export type AgentCommand =
       notice: string;
     }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
+  /**
+   * 撤销 / 授予本会话的电脑使用授权（用户点会话头的撤销、急停，或主进程在 meta 上改完
+   * 之后对齐 agent 账本）。**当前轮立即生效**：闸门每次调用现场读账本。
+   */
+  | { type: "setComputerUseGrant"; sessionId: string; granted: boolean }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
    * **对正在跑的轮无效**：pi 在轮启动时快照模型，当前轮用旧模型跑完，
@@ -1207,6 +1241,18 @@ export type AgentEvent =
       requestId: string;
       toolName: string;
       input: unknown;
+      /**
+       * `"session"` = 会话授权卡（「本次会话允许 agent 操作沙箱？」），不是普通逐次审批；
+       * 缺席 / `"call"` = 普通审批（manual 档的逐次问，或破坏性动作的确认）。
+       * renderer 按它换卡面与按钮文案——「允许」在 session 卡上意味着整条会话放行。
+       */
+      scope?: "call" | "session";
+      /**
+       * D1/D2/D3 命中时的确认信息（B1 规则在 shared/computer-guard.ts）。有值时卡面必须
+       * 说清「将要按 alt+f4 / 将要输入 format d: / 同一坐标第 5 次」，否则用户只是在
+       * 盲点「允许」。命中不是拒绝：用户点头后照常执行。
+       */
+      risk?: ComputerUseRisk;
     }
   /**
    * 回合级失败的标记（如重试耗尽）：true = 这一轮没跑成，renderer 把文案标注进
@@ -1214,6 +1260,17 @@ export type AgentEvent =
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
   | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  /**
+   * 电脑使用授权的变更（agent 闸门在用户点「本次会话允许」后发；主进程落 meta 并广播）。
+   * `at` = 允许的时刻，null = 撤销。renderer 用它更新会话头的授权标识。
+   */
+  | { type: "computerUseGrant"; sessionId: string; granted: boolean; at: number | null }
+  /**
+   * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
+   * 同款：主进程借同一条广播通道）。收到它就复位授权标识、给一条「已急停」提示。
+   * **沙箱不关**——现场留着给用户看。
+   */
+  | ({ type: "computerUseEmergencyStop" } & EmergencyStopBroadcast)
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

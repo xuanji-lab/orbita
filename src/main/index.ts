@@ -3,7 +3,7 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
-import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, globalShortcut, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -55,6 +55,7 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
 import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
@@ -578,14 +579,15 @@ void app.whenReady().then(async () => {
     },
     join(configDir, "computer-use", "out"),
   );
-  // 用户停沙箱时先把里面的浏览器逐个会话停掉（best effort、不等待：不能用一串浏览器命令
-  // 拖住停沙箱按钮）。桥已经死了就算了，VM 销毁会带走整个进程树。
-  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } });
 
   /**
    * computer_* / sandbox_* 下发前的唯一入口：按动作选资源键（桌面独占 / 每会话浏览器），
    * 要不到就回一句人话，要到了才下发。键的选择与硬上限的收尾都在 dispatch.ts 里——
    * 这样「sandbox_* 在别人持桌面时照常下发」这条回归才有地方可测（它不碰 electron）。
+   * 按窗口截图（computer_screenshot + window）与 UIA 车道（uia-list / uia-act）**不取任何键**：
+   * 前者读窗口自己的 surface，被遮挡也能拍、不抢焦点；后者直接调控件的 UIA 模式，AutoSetFocus
+   * 关掉之后不移动前台焦点。两条都不依赖「屏幕上现在是什么」，所以不占桌面独占（理由见
+   * dispatch.ts 与 shared/computer-use.ts）。
    *
    * 标题只是文案素材：拿不到锁时的错误要说出**占用者是谁**，不然模型无法转告用户
    * （「被占据了」而不说是谁，用户也没法处置）。读不出 meta（会话刚建、已删）就退成空串，
@@ -600,10 +602,54 @@ void app.whenReady().then(async () => {
     runPixels: (sessionId, request) => applyComputerUseRequest(computerUse, sessionId, request),
     runBrowser: (sessionId, request) => applySandboxBrowserRequest(cdp, sessionId, request),
   });
+  /**
+   * 急停热键（computer use PR4）：`Control+Alt+Shift+Escape`。沙箱窗口在前台时用户够不到
+   * Orbita 的停止按钮，这个热键必须真的能注册上——注册失败（被别的应用占用）时
+   * 设置页会如实显示「不可用」，不假装保护存在。
+   *
+   * 按下后三件事（顺序即语义）：
+   *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
+   *   2. 撤销它们的电脑使用授权（落 meta + 推 agent 账本，闸门从此直接拒）；
+   *   3. 广播给 renderer 显示「已急停」。
+   * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
+   *
+   * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
+   * （与 mcpIpc / delegate 的 TDZ 说明同一条约定）。
+   */
+  /**
+   * 热键注册早于 `phases` / `agentHost` 的创建（它们在下面）。启动那几毫秒里按下热键
+   * 不能去碰还没初始化的 const（TDZ 会抛 ReferenceError）：置位前按键直接忽略——
+   * 那时也没有轮可停。
+   */
+  let emergencyStopReady = false;
+  const emergencyStop = createEmergencyStop({
+    register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
+    unregister: (accelerator) => globalShortcut.unregister(accelerator),
+    onTrigger: () => {
+      if (!emergencyStopReady) return;
+      const at = Date.now();
+      const runningSessions = [...phases.entries()]
+        .filter(([, phase]) => phase !== "idle")
+        .map(([id]) => id);
+      for (const sessionId of runningSessions) {
+        void sessions.setComputerUseGrant(sessionId, null).catch(() => undefined);
+        agentHost.setComputerUseGrant(sessionId, false);
+        agentHost.abortIfRunning(sessionId);
+        // 与 IPC 撤销路径同一份事件：renderer 的授权标识立即复位
+        broadcastAgentEvent({ type: "computerUseGrant", sessionId, granted: false, at: null });
+      }
+      broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
+    },
+  });
+  // 与急停控制器一起注册（IPC 只能注册一次）：hooks 是 PR3 的停沙箱收尾——用户停沙箱时先把
+  // 里面的浏览器逐个会话停掉（best effort、不等待：不能用一串浏览器命令拖住停沙箱按钮；
+  // 桥已经死了就算了，VM 销毁会带走整个进程树）。
+  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } }, emergencyStop);
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -664,6 +710,12 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 电脑使用授权（PR4）：闸门是唯一知道用户点了什么的层，它把「允许」经事件报回来，
+    // 主进程负责落 meta（下一轮开机的种子）。**不 return**：事件还要广播给 renderer
+    // 更新会话头的授权标识。写盘失败不该卡住事件转发（授权在当前轮已由账本兑现）。
+    if (event.type === "computerUseGrant") {
+      void sessions.setComputerUseGrant(event.sessionId, event.at).catch(() => undefined);
+    }
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") {
       browserSandbox.cancelSessionHandoff(event.sessionId);
@@ -784,6 +836,8 @@ void app.whenReady().then(async () => {
     record(event);
     broadcastAgentEvent(event);
   });
+  // 急停热键此时可以真正干活了（phases / agentHost 都已就绪）
+  emergencyStopReady = true;
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -974,6 +1028,8 @@ void app.whenReady().then(async () => {
             .join("；"),
       );
     }
+    // 全局热键显式注销（Electron 退出时也会清，但释放时机不该靠它）
+    emergencyStop.dispose();
   });
 
   /**

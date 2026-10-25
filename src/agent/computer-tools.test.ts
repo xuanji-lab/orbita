@@ -40,11 +40,11 @@ const setup = () => {
 };
 
 describe("computer_* 工具", () => {
-  test("五个工具一个不少；截图是免审批的只读件，其余四件照写操作过闸", () => {
+  test("六个工具一个不少；截图是免审批的只读件，其余五件照写操作过闸", () => {
     const { tools } = setup();
     assert.deepEqual([...tools.keys()].sort(), [...COMPUTER_USE_TOOL_NAMES].sort());
     // 只读桶里也有 sandbox_* 的读取件（见 sandbox-tools.test.ts），这里只查像素组自己：
-    // 五个里只有 screenshot 免审批，其余四件真注入键鼠。
+    // 六个里只有 screenshot 免审批，其余五件真的动沙箱（键鼠或 UIA 模式）。
     assert.equal((COMPUTER_USE_READ_TOOLS as readonly string[]).includes("computer_screenshot"), true);
     for (const name of COMPUTER_USE_TOOL_NAMES) {
       assert.equal(
@@ -99,6 +99,70 @@ describe("computer_* 工具", () => {
       { type: "text", text: "Screenshot of the sandbox desktop: the image is 1280×720." },
       { type: "image", data: "anBlZw==", mimeType: "image/jpeg" },
     ]);
+  });
+
+  test("screenshot + window：按窗口下发，图交给模型，但**不覆盖**最近一次整桌面截图的几何", async () => {
+    const { sent, run, answer, takeScreenshot } = setup();
+    await takeScreenshot(); // 桌面几何：1280×720 → 屏 2560×1440
+
+    const pending = run("computer_screenshot", { hwnd: 4321 });
+    assert.deepEqual(sent[1]?.["request"], { action: "screenshot", maxWidth: 1280, window: 4321 });
+    answer(1, {
+      ok: true,
+      text: "Screenshot of the window …",
+      // 窗口自己的几何：400×300 的图对 400×300 的窗口（比例 1:1）
+      shot: { width: 400, height: 300, nativeWidth: 400, nativeHeight: 300, data: "d2luZG93" },
+    });
+    const result = await pending;
+    assert.deepEqual(result.content[1], { type: "image", data: "d2luZG93", mimeType: "image/jpeg" });
+
+    // 点击仍按整桌面的比例换算：窗口图的 400×300 没有把比例偷换掉
+    const click = run("computer_click", { x: 100, y: 200 });
+    assert.deepEqual(sent[2]?.["request"], { action: "click", x: 200, y: 400 });
+    answer(2, { ok: true, text: "Sent a left click at (200, 400) on the sandbox desktop." });
+    await click;
+
+    // 标题两端空白去掉；hwnd 优先于 window
+    const byTitle = run("computer_screenshot", { window: "  Edge  " });
+    assert.deepEqual(sent[3]?.["request"], { action: "screenshot", maxWidth: 1280, window: "Edge" });
+    answer(3, {
+      ok: true,
+      text: "window",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "ZQ==" },
+    });
+    await byTitle;
+
+    const both = run("computer_screenshot", { window: "Edge", hwnd: 77 });
+    assert.deepEqual(sent[4]?.["request"], { action: "screenshot", maxWidth: 1280, window: 77 });
+    answer(4, {
+      ok: true,
+      text: "window",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "ZQ==" },
+    });
+    await both;
+
+    // 空 window / 没给 window = 整桌面截图（不能把空串当成一个要匹配的标题）
+    const desktopAgain = run("computer_screenshot", { window: "   " });
+    assert.deepEqual(sent[5]?.["request"], { action: "screenshot", maxWidth: 1280 });
+    answer(5, {
+      ok: true,
+      text: "desktop",
+      shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "ZQ==" },
+    });
+    await desktopAgain;
+  });
+
+  test("只拍过窗口时点击照样拒绝：窗口图的坐标不能当桌面像素用", async () => {
+    const { sent, run, answer } = setup();
+    const pending = run("computer_screenshot", { window: "Edge" });
+    assert.deepEqual(sent[0]?.["request"], { action: "screenshot", maxWidth: 1280, window: "Edge" });
+    answer(0, {
+      ok: true,
+      text: "window",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "ZQ==" },
+    });
+    await pending;
+    await assert.rejects(run("computer_click", { x: 10, y: 20 }), /computer_screenshot first/);
   });
 
   test("没截图就点击 / 滚动：当场拒绝，并指名先调 computer_screenshot", async () => {
@@ -179,5 +243,115 @@ describe("computer_* 工具", () => {
       error: "沙箱没有在运行（当前状态：off），沙箱操作不可用——先在「设置 › 实验功能 › 电脑使用」里启动沙箱",
     });
     await assert.rejects(pending, /设置 › 实验功能 › 电脑使用/);
+  });
+});
+
+describe("computer_uia 工具（UIA 车道）", () => {
+  test("list：window 原样下发；没给 maxItems 就按描述里的默认 60 显式下发", async () => {
+    const { sent, run, answer } = setup();
+    const pending = run("computer_uia", { action: "list", window: " 记事本 " });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-list", window: "记事本", maxItems: 60 });
+    answer(0, { ok: true, text: "1 · button \"Close\" · supports invoke" });
+    const result = await pending;
+    assert.deepEqual(result.content, [{ type: "text", text: "1 · button \"Close\" · supports invoke" }]);
+  });
+
+  test("list：给了 maxItems 就取整下发；纯数字 hwnd 优先于 window 标题", async () => {
+    const { sent, run, answer } = setup();
+    const pending = run("computer_uia", { action: "list", hwnd: 4321, window: "Edge", maxItems: 60.4 });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-list", window: 4321, maxItems: 60 });
+    answer(0, { ok: true, text: "ok" });
+    await pending;
+  });
+
+  test("act：perform 与 ref / name / value 各就各位", async () => {
+    const { sent, run, answer } = setup();
+    const byRef = run("computer_uia", { action: "invoke", hwnd: 4321, ref: 2 });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-act", window: 4321, ref: 2, perform: "invoke" });
+    answer(0, { ok: true, text: "Invoked" });
+    await byRef;
+
+    const byName = run("computer_uia", { action: "setValue", hwnd: 7, name: " Search ", value: "orbita" });
+    assert.deepEqual(sent[1]?.["request"], {
+      action: "uia-act",
+      window: 7,
+      name: "Search",
+      perform: "setValue",
+      value: "orbita",
+    });
+    answer(1, { ok: true, text: "Set" });
+    await byName;
+
+    // 空字符串是合法 value（清空输入框），不能被当成「没给」
+    const clear = run("computer_uia", { action: "setValue", hwnd: 7, ref: 1, value: "" });
+    assert.deepEqual(sent[2]?.["request"], { action: "uia-act", window: 7, ref: 1, perform: "setValue", value: "" });
+    answer(2, { ok: true, text: "Cleared" });
+    await clear;
+  });
+
+  test("参数缺了当场拒绝：不说清要怎么指窗口 / 控件，模型会乱猜", async () => {
+    const { run } = setup();
+    await assert.rejects(run("computer_uia", { action: "list" }), /Pass window .* or hwnd/);
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1 }), /Pass ref .* or name/);
+    await assert.rejects(run("computer_uia", { action: "setValue", hwnd: 1, ref: 1 }), /setValue needs value/);
+    await assert.rejects(run("computer_uia", { action: "click", hwnd: 1, ref: 1 }), /action must be one of/);
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: 0 }), /ref must be a positive integer/);
+  });
+
+  test("主进程的错误原话带出（含「改用 computer_click / computer_type 的像素路径」）", async () => {
+    const { run, answer } = setup();
+    const pending = run("computer_uia", { action: "invoke", hwnd: 1, ref: 3 });
+    answer(0, {
+      ok: false,
+      error: "这个控件不支持 invoke（edit，它支持：value）。改用 computer_click / computer_type 的像素路径",
+    });
+    await assert.rejects(pending, /改用 computer_click \/ computer_type 的像素路径/);
+  });
+});
+
+describe("computer_* 的审计载荷（details.computerUse）", () => {
+  test("五个动作都带 action / args / at；坐标是模型给的截图像素，不是换算后的物理像素", async () => {
+    const { run, answer, sent, takeScreenshot } = setup();
+    await takeScreenshot();
+
+    const click = run("computer_click", { x: 100, y: 200, button: "right" });
+    answer(sent.length - 1, { ok: true, text: "clicked" });
+    const clicked = await click;
+    const clickAudit = (clicked.details as { computerUse: { action: string; args: Record<string, unknown>; at: number } }).computerUse;
+    assert.equal(clickAudit.action, "click");
+    assert.deepEqual(clickAudit.args, { x: 100, y: 200, button: "right" });
+    assert.equal(typeof clickAudit.at, "number");
+
+    const typed = run("computer_type", { text: "hello" });
+    answer(sent.length - 1, { ok: true, text: "typed" });
+    const typedAudit = ((await typed).details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
+    assert.equal(typedAudit.action, "type");
+    // 明文留在 details 与转录里（renderer 默认折叠显示）
+    assert.deepEqual(typedAudit.args, { text: "hello" });
+
+    const key = run("computer_key", { key: "ctrl+a" });
+    answer(sent.length - 1, { ok: true, text: "pressed" });
+    assert.equal(((await key).details as { computerUse: { action: string } }).computerUse.action, "key");
+
+    const scroll = run("computer_scroll", { deltaY: 3, x: 10, y: 20 });
+    answer(sent.length - 1, { ok: true, text: "scrolled" });
+    const scrollAudit = ((await scroll).details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
+    assert.equal(scrollAudit.action, "scroll");
+    assert.deepEqual(scrollAudit.args, { x: 10, y: 20, deltaY: 3 });
+  });
+
+  test("截图：details 记 maxWidth，图仍在 content 里（details 不进模型上下文）", async () => {
+    const { run, answer, sent } = setup();
+    const pending = run("computer_screenshot", {});
+    answer(sent.length - 1, {
+      ok: true,
+      text: "shot",
+      shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "anBlZw==" },
+    });
+    const result = await pending;
+    const audit = (result.details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
+    assert.equal(audit.action, "screenshot");
+    assert.equal(audit.args["maxWidth"], 1280);
+    assert.equal(result.content.some((block) => block.type === "image"), true);
   });
 });

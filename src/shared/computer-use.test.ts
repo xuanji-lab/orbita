@@ -8,7 +8,13 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { COMPUTER_USE_SHOT_MAX_WIDTH, screenshotPointToNative } from "./computer-use.ts";
+import {
+  COMPUTER_USE_SHOT_MAX_WIDTH,
+  COMPUTER_USE_UIA_TIMEOUT_MS,
+  isUiaRequest,
+  isWindowScreenshotRequest,
+  screenshotPointToNative,
+} from "./computer-use.ts";
 
 /** 回图 1280×720，物理屏 2560×1440（长边缩一半的常见情形） */
 const scaled = { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440 };
@@ -52,5 +58,46 @@ describe("screenshotPointToNative", () => {
 
   test("回图宽度上限是 1280（工具层按它压图省上下文）", () => {
     assert.equal(COMPUTER_USE_SHOT_MAX_WIDTH, 1280);
+  });
+});
+
+describe("isWindowScreenshotRequest（租约分流的唯一判据）", () => {
+  test("整桌面截图：false（仍要 desktop:exclusive）", () => {
+    assert.equal(isWindowScreenshotRequest({ action: "screenshot" }), false);
+    assert.equal(isWindowScreenshotRequest({ action: "screenshot", maxWidth: 1280 }), false);
+  });
+
+  test("screenshot + window（标题或 hwnd）：true（不占桌面）", () => {
+    assert.equal(isWindowScreenshotRequest({ action: "screenshot", window: "Edge" }), true);
+    assert.equal(isWindowScreenshotRequest({ action: "screenshot", window: 4321, maxWidth: 640 }), true);
+    // 空串也是「给了 window」：宿主要照常下发，让桥回一句「没找到这个窗口」，
+    // 而不是悄悄退成整桌面截图（那会拍到用户没要的画面）
+    assert.equal(isWindowScreenshotRequest({ action: "screenshot", window: "" }), true);
+  });
+
+  test("像素输入与浏览器动作：false（各有各的租约）", () => {
+    assert.equal(isWindowScreenshotRequest({ action: "click", x: 1, y: 2 }), false);
+    assert.equal(isWindowScreenshotRequest({ action: "type", text: "x" }), false);
+    assert.equal(isWindowScreenshotRequest({ action: "sandbox-navigate", url: "https://example.com" }), false);
+  });
+});
+
+describe("isUiaRequest（UIA 车道不占桌面租约的判据）", () => {
+  test("uia-list / uia-act：true（不抢前台，所以不排队）", () => {
+    assert.equal(isUiaRequest({ action: "uia-list", window: 4321 }), true);
+    assert.equal(isUiaRequest({ action: "uia-list", window: "Edge" }), true);
+    assert.equal(isUiaRequest({ action: "uia-act", perform: "invoke", ref: 3 }), true);
+    assert.equal(isUiaRequest({ action: "uia-act", perform: "setValue", name: "Search", value: "orbita" }), true);
+  });
+
+  test("像素输入 / 整桌面截图 / 窗口截图 / 浏览器：都不是 UIA 车道", () => {
+    assert.equal(isUiaRequest({ action: "click", x: 1, y: 2 }), false);
+    assert.equal(isUiaRequest({ action: "screenshot" }), false);
+    assert.equal(isUiaRequest({ action: "screenshot", window: 7 }), false);
+    assert.equal(isUiaRequest({ action: "sandbox-click", selector: "#a" }), false);
+  });
+
+  test("看门狗 5 秒：比 guest 命令的 45 秒短一个量级，它管的是跨进程调用而不是整条通道", () => {
+    assert.equal(COMPUTER_USE_UIA_TIMEOUT_MS, 5_000);
   });
 });

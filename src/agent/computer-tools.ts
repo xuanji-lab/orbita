@@ -22,6 +22,7 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   GUEST_COMMAND_TIMEOUT_MS,
   screenshotPointToNative,
+  type ComputerUseAudit,
   type ComputerUseButton,
   type ComputerUseShotGeometry,
   type ComputerUseToolOutcome,
@@ -38,6 +39,7 @@ export const COMPUTER_USE_TOOL_NAMES = [
   "computer_type",
   "computer_key",
   "computer_scroll",
+  "computer_uia",
 ] as const;
 
 /** 交互类工具共同的底线：沙箱里也是用户的环境，别替用户做不可逆的事 */
@@ -92,6 +94,17 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
    * 发请求并等回执；**这一轮被停掉（signal abort）就立刻放手**——pi 等工具返回才结束
    * 一轮，不放手的话「停止」按钮会失灵（browser-tools.ts 同款）。
    */
+  /**
+   * 审计载荷（details.computerUse）：动作 + 模型给的原始入参 + 时刻。**只给 UI 与
+   * 日志**，不入模型上下文。入参记的是模型给的那份（图像坐标 / 原文本），不是换算后
+   * 下发到 guest 的那份——回看的人要的是「它以为自己点了哪里、打了什么」。
+   */
+  const audit = (args: Record<string, unknown>, action: ComputerUseAudit["action"]): ComputerUseAudit => ({
+    action,
+    args,
+    at: Date.now(),
+  });
+
   const call = async (
     request: ComputerUseToolRequest,
     signal: AbortSignal | undefined,
@@ -159,21 +172,49 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "for you). **Start here and come back here after every action**: this image is the only way you can see " +
       "the sandbox, and the coordinates you pass to computer_click / computer_scroll are pixels of this image. " +
       "The image is scaled down (its size is in the result); do not assume it is the physical screen size. " +
+      "**Pass window (part of a window title) or hwnd to capture only that window**: that works even when other " +
+      "windows cover it and it does not take focus, so it is the cheap way to check on a window you are not " +
+      "driving. A window image's pixels are window pixels, not desktop pixels: take a normal screenshot (no " +
+      "window) before clicking. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
       "start it in Settings › Experimental features › Computer use; do not retry.",
-    parameters: { type: "object", properties: {}, required: [] } as never,
-    async execute(_toolCallId, _params, signal) {
-      const result = await call({ action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, signal);
+    parameters: {
+      type: "object",
+      properties: {
+        window: {
+          type: "string",
+          description:
+            "Part of the target window's title (case-insensitive). Captures only that window, even if covered.",
+        },
+        hwnd: {
+          type: "number",
+          description: "Target window handle (wins over window). Comes from a previous window screenshot result.",
+        },
+      },
+      required: [],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const hwnd = numberOf(args["hwnd"]);
+      const title = typeof args["window"] === "string" ? args["window"].trim() : "";
+      const target = hwnd !== undefined ? hwnd : title === "" ? undefined : title;
+      const request: ComputerUseToolRequest =
+        target === undefined
+          ? { action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }
+          : { action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH, window: target };
+      const result = await call(request, signal);
       const shot = result.shot;
       if (shot === undefined) throw new Error("截图回执里没有图（主进程与契约不一致）");
-      lastShot = shot;
+      // 只拍窗口时**不更新** lastShot：那张图的原点是窗口左上角，而 click 要的是整屏物理像素。
+      // 更新了它，下一次 computer_click 会看起来「成功」却点到另一个地方——静默错位比报错更坏。
+      if (target === undefined) lastShot = shot;
       return {
         content: [
           { type: "text" as const, text: result.text },
           { type: "image" as const, data: shot.data, mimeType: "image/jpeg" as const },
         ],
-        details: undefined,
+        details: { computerUse: audit({ maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, "screenshot") },
       };
     },
   };
@@ -224,7 +265,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         },
         signal,
       );
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        details: { computerUse: audit({ x, y, ...(button === undefined ? {} : { button }), ...(args["double"] === true ? { double: true } : {}) }, "click") },
+      };
     },
   };
 
@@ -253,7 +297,11 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const text = (params as Record<string, unknown> | undefined)?.["text"];
       if (typeof text !== "string") throw new Error("text is required");
       const result = await call({ action: "type", text }, signal);
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        // 明文留在 details / 转录（JSONL 保留明文）；renderer 默认折叠显示
+        details: { computerUse: audit({ text }, "type") },
+      };
     },
   };
 
@@ -283,7 +331,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const keyName = (params as Record<string, unknown> | undefined)?.["key"];
       if (typeof keyName !== "string" || keyName.trim() === "") throw new Error("key is required");
       const result = await call({ action: "key", key: keyName.trim() }, signal);
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        details: { computerUse: audit({ key: keyName.trim() }, "key") },
+      };
     },
   };
 
@@ -311,12 +362,131 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const deltaY = numberOf(args["deltaY"]);
       if (deltaY === undefined) throw new Error("deltaY is required (positive scrolls down).");
       const notches = Math.round(deltaY);
-      const result = await call({ action: "scroll", ...scrollTarget(args), deltaY: notches }, signal);
+      const target = scrollTarget(args);
+      const result = await call({ action: "scroll", ...target, deltaY: notches }, signal);
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        // 入参里没有 x/y = 滚屏幕正中（工具层的缺省），审计照实记缺省
+        details: {
+          computerUse: audit(
+            { ...(numberOf(args["x"]) === undefined ? {} : { x: numberOf(args["x"]) }), ...(numberOf(args["y"]) === undefined ? {} : { y: numberOf(args["y"]) }), deltaY: notches },
+            "scroll",
+          ),
+        },
+      };
+    },
+  };
+
+  const uia: ToolDefinition = {
+    name: "computer_uia",
+    label: "computer_uia",
+    description:
+      SCOPE +
+      "Drive a window's controls through UI Automation instead of pixels: list them, then invoke a button, set an " +
+      "input's text, select a list/tab item, or move focus. **This does not need the window in the foreground and " +
+      "does not take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
+      "the right way to drive a background window. Start with action \"list\" (read-only) to get refs and names, then " +
+      "act on one by ref (or name). A ref belongs to the latest list of that window; re-list after the window changes " +
+      "(page navigation, a new dialog). Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
+      "documents — sets the value directly, no IME needed), selection (list items, tab items), focus (only this one " +
+      "moves the keyboard focus). If a control does not support the action you asked for, the result says which ones " +
+      "it supports: fall back to computer_click / computer_type on pixels for those. Window and hwnd come from " +
+      "computer_screenshot or a previous result. " +
+      CONSEQUENCES +
+      " " +
+      HANDOFF_HINT,
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "invoke", "setValue", "selection", "focus"],
+          description:
+            "list = read the window's controls (read-only); the rest act on the control given by ref or name.",
+        },
+        window: {
+          type: "string",
+          description: "Part of the target window's title (case-insensitive). Needed with hwnd absent.",
+        },
+        hwnd: {
+          type: "number",
+          description: "Target window handle (wins over window). Comes from a previous screenshot/result.",
+        },
+        ref: {
+          type: "number",
+          description: "Control ref from the latest list of that window. Wins over name.",
+        },
+        name: {
+          type: "string",
+          description: "Part of the control's accessible name (case-insensitive). Exact match preferred.",
+        },
+        value: {
+          type: "string",
+          description: "New text for action setValue (empty string clears the field).",
+        },
+        maxItems: {
+          type: "number",
+          description: "How many controls list returns (default 60).",
+        },
+      },
+      required: ["action"],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const spelled = typeof args["action"] === "string" ? args["action"].trim().toLowerCase() : "";
+      // setValue 的规范写法是小驼峰：比较前先还原（否则它会被当成未知动作拒掉）
+      const rawAction = spelled === "setvalue" ? "setValue" : spelled;
+      const hwnd = numberOf(args["hwnd"]);
+      const title = typeof args["window"] === "string" ? args["window"].trim() : "";
+      const target = hwnd !== undefined ? hwnd : title === "" ? undefined : title;
+      if (target === undefined) {
+        throw new Error(
+          "Pass window (part of the target window's title) or hwnd — take one from computer_screenshot or a previous result.",
+        );
+      }
+      if (rawAction === "list") {
+        // 描述里写的是 default 60，所以这里**总是**显式下发：不写的话桥的缺省是 200，
+        // 模型看到一句「default 60」却收到 200 行，工具描述就成了假话。
+        const maxItems = numberOf(args["maxItems"]) ?? 60;
+        const result = await call(
+          { action: "uia-list", window: target, maxItems: Math.round(maxItems) },
+          signal,
+        );
+        return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      }
+      if (rawAction !== "invoke" && rawAction !== "setValue" && rawAction !== "selection" && rawAction !== "focus") {
+        throw new Error('action must be one of: list, invoke, setValue, selection, focus.');
+      }
+      const ref = numberOf(args["ref"]);
+      const name = typeof args["name"] === "string" ? args["name"].trim() : "";
+      if (ref === undefined && name === "") {
+        throw new Error(
+          "Pass ref (from the latest list of that window) or name (part of the control's accessible name).",
+        );
+      }
+      if (ref !== undefined && (!Number.isInteger(ref) || ref <= 0)) {
+        throw new Error("ref must be a positive integer from the latest list of that window.");
+      }
+      const value = args["value"];
+      if (rawAction === "setValue" && typeof value !== "string") {
+        throw new Error("setValue needs value: the text to write into the control (empty string clears it).");
+      }
+      const result = await call(
+        {
+          action: "uia-act",
+          window: target,
+          ...(ref === undefined ? {} : { ref: Math.round(ref) }),
+          ...(name === "" ? {} : { name }),
+          perform: rawAction,
+          ...(typeof value === "string" ? { value } : {}),
+        },
+        signal,
+      );
       return { content: [{ type: "text" as const, text: result.text }], details: undefined };
     },
   };
 
-  return [screenshot, click, type, key, scroll];
+  return [screenshot, click, type, key, scroll, uia];
 }
 
 /** 模型偶尔把数字写成字符串（"120"）：认；其余一律当没给 */

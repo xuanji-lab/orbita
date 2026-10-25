@@ -38,6 +38,12 @@ export const agentApi = {
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   setModel: (sessionId: string, providerId: string, modelId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetModel, sessionId, providerId, modelId),
+  /**
+   * 撤销 / 授予本会话的电脑使用授权（会话头入口、急停）。主进程落 meta 并推给 agent 进程：
+   * **当前轮的下一次 computer_* 就按新值判**，不必等下一轮。
+   */
+  setComputerUseGrant: (sessionId: string, granted: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentSetComputerUseGrant, sessionId, granted),
   /** 回答一次工具审批 */
   answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerPermission, requestId, answer),

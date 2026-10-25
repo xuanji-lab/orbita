@@ -63,6 +63,11 @@ const args = [
   path.join(scriptDir, "WorkerHost.cs"),
   // TCP 命令通道（0.8.0）：监听 + 行协议 + 握手；文件协议是它的回退通道
   path.join(scriptDir, "TcpChannel.cs"),
+  // 按窗口截图（0.9.0）：win-list / win-shot + 黑帧自检与过滤的纯函数
+  path.join(scriptDir, "WinShot.cs"),
+  // UI Automation 车道（0.10.0）：uia-list / uia-act + 手写 COM interop、STA 看门狗
+  // （不引 UIAutomationClient.dll：那是 .NET 的包装，不暴露 AutoSetFocus）
+  path.join(scriptDir, "Uia.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);
