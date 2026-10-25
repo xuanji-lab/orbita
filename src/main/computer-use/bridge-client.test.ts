@@ -1,6 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +11,7 @@ import {
   resetGuestCommandSeq,
   sendGuestCommand,
 } from "./bridge-client.ts";
+import { parseBridgeInfo } from "./bridge-ready.ts";
 import {
   COMPUTER_USE_CDP_TIMEOUT_MS,
   COMPUTER_USE_CMD_DIR,
@@ -315,6 +317,362 @@ describe("截图文件名闸门", () => {
         bridge.stop();
         await rm(dir, { recursive: true, force: true });
       }
+    }
+  });
+});
+
+// ── TCP 命令通道（桥 0.8.0）──────────────────────────────────────────────────
+//
+// 真机上的契约：宿主主动连进 guest，一条连接复用到底；文件协议是回退通道。
+// 这里用 node 的 net 起一个假 guest（与 guest-bridge/TcpChannel.cs 同一套行协议），
+// 把「什么时候走 TCP、什么时候回退、回退之后上层拿到什么」全部钉死——不需要沙箱。
+
+interface FakeTcpRequest {
+  id: number;
+  command: string;
+  fields: Record<string, unknown>;
+}
+
+interface FakeTcpGuestOptions {
+  token: string;
+  /** 收到命令后怎么回；缺省回 {ok:true} */
+  handler?: (req: FakeTcpRequest) => { resp: Record<string, unknown>; jpeg?: Uint8Array };
+  /** 收到命令后装死（不回执）：验读超时 */
+  silent?: boolean;
+  /** 收到命令就掐断连接：验「发出去了但回执丢了」 */
+  dropOnCommand?: boolean;
+}
+
+interface FakeTcpGuest {
+  port: number;
+  connections: number;
+  requests: FakeTcpRequest[];
+  close(): Promise<void>;
+}
+
+/** 假 guest：一行一条 JSON，先握手再收命令（与 guest-bridge/TcpChannel.cs 同一套） */
+async function startFakeTcpGuest(options: FakeTcpGuestOptions): Promise<FakeTcpGuest> {
+  const requests: FakeTcpRequest[] = [];
+  const sockets = new Set<Socket>();
+  const state = { connections: 0 };
+  const server = createServer((socket) => {
+    state.connections += 1;
+    sockets.add(socket);
+    socket.setEncoding("utf8");
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+    let buffer = "";
+    let greeted = false;
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      for (;;) {
+        const at = buffer.indexOf("\n");
+        if (at < 0) break;
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + 1);
+        if (line === "") continue;
+        const message = JSON.parse(line) as Record<string, unknown>;
+        if (message["t"] === "hello") {
+          if (message["token"] !== options.token) {
+            socket.write(`${JSON.stringify({ t: "hello-fail" })}\n`);
+            socket.end();
+            return;
+          }
+          greeted = true;
+          socket.write(`${JSON.stringify({ t: "hello-ok" })}\n`);
+          continue;
+        }
+        if (!greeted) {
+          socket.destroy();
+          return;
+        }
+        const req: FakeTcpRequest = {
+          id: typeof message["id"] === "number" ? message["id"] : -1,
+          command: typeof message["command"] === "string" ? message["command"] : "",
+          fields: (message["fields"] as Record<string, unknown> | undefined) ?? {},
+        };
+        requests.push(req);
+        if (options.dropOnCommand === true) {
+          socket.destroy();
+          return;
+        }
+        if (options.silent === true) continue;
+        const reply = options.handler?.(req) ?? { resp: { ok: true } };
+        const frame: Record<string, unknown> = { id: req.id, resp: reply.resp };
+        if (reply.jpeg !== undefined) frame["jpegBase64"] = Buffer.from(reply.jpeg).toString("base64");
+        socket.write(`${JSON.stringify(frame)}\n`);
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+  return {
+    port,
+    get connections() {
+      return state.connections;
+    },
+    requests,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+/** 写一份 bridge.json（`tcp` 传 null 就是老桥：只有 version / pid） */
+async function writeBridgeJson(
+  outDir: string,
+  tcp: { port: number; token: string; ipv4?: string[] } | null,
+): Promise<void> {
+  const body: Record<string, unknown> = { version: tcp === null ? "0.7.2" : "0.8.0", pid: 4321 };
+  if (tcp !== null) {
+    body["port"] = tcp.port;
+    body["token"] = tcp.token;
+    body["ipv4"] = tcp.ipv4 ?? ["127.0.0.1"];
+  }
+  await writeFile(join(outDir, "bridge.json"), JSON.stringify(body), "utf8");
+}
+
+describe("bridge-client（TCP 通道）", () => {
+  test("握手成功 → 走 TCP：字段原样到 guest、回执回传、映射目录里一个文件都没有", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({
+      token: "t0ken",
+      handler: (req) => ({ resp: { ok: true, echo: req.command, got: req.fields["key"] } }),
+    });
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t0ken" });
+      const resp = await sendGuestCommand(dir, "key", { key: "ctrl+a" });
+      assert.deepEqual(resp, { ok: true, echo: "key", got: "ctrl+a" });
+      assert.equal(guest.requests.length, 1);
+      assert.equal(guest.connections, 1);
+      // 走的是 TCP：宿主没有往映射目录里写 req
+      assert.deepEqual(await readdir(join(dir, COMPUTER_USE_CMD_DIR)).catch(() => []), []);
+    } finally {
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("同一条连接复用：多条命令只建一次连（连接成本不是每条命令都付）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t" });
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      await sendGuestCommand(dir, "ping", {});
+      await sendGuestCommand(dir, "ping", {});
+      await sendGuestCommand(dir, "ping", {});
+      assert.equal(guest.connections, 1);
+      assert.equal(guest.requests.length, 3);
+    } finally {
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("并发请求在同一条连接上按 id 对号（不是串行排队）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({
+      token: "t",
+      handler: (req) => ({ resp: { ok: true, command: req.command } }),
+    });
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      const [first, second] = await Promise.all([
+        sendGuestCommand(dir, "ping", {}),
+        sendGuestCommand(dir, "screenshot-stats", {}),
+      ]);
+      assert.equal(first["command"], "ping");
+      assert.equal(second["command"], "screenshot-stats");
+      assert.equal(guest.connections, 1);
+    } finally {
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("令牌不符 → 透明回退文件协议：上层拿到一样的回执，TCP 侧一条命令都没收到", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "right-token" });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "wrong-token" });
+      const resp = await sendGuestCommand(dir, "ping", {});
+      assert.deepEqual(resp, { ok: true, via: "file" });
+      assert.equal(guest.requests.length, 0);
+      assert.equal(bridge.requests.length, 1);
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("端口连不上 → 回退文件协议（命令照样成功）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      // 127.0.0.1:9 通常没在监听 —— 连接会被立刻拒（不需要等 1.5s 超时）
+      await writeBridgeJson(dir, { port: 9, token: "t" });
+      const resp = await sendGuestCommand(dir, "ping", {});
+      assert.deepEqual(resp, { ok: true, via: "file" });
+      assert.equal(bridge.requests.length, 1);
+    } finally {
+      bridge.stop();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("TCP 读超时 → 报「没有响应」，并进冷却：下一条命令直接回到文件协议", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t", silent: true });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      await assert.rejects(fetchGuestScreenshot(dir, 1280, 300), (cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        assert.match(message, /没有响应/, "超时文案与文件协议同一套（下一步该怎么试完全一样）");
+        assert.match(message, /截图|screenshot/);
+        return true;
+      });
+      assert.equal(guest.requests.length, 1, "命令确实发出去了");
+      // 冷却窗口内：直接走文件协议，不再去撞那条已经扭断的连接
+      const resp = await sendGuestCommand(dir, "ping", {});
+      assert.deepEqual(resp, { ok: true, via: "file" });
+      assert.equal(bridge.requests.length, 1);
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("回执丢了（连接被掐）→ 报通道中断，且**不重放**（不会让一次点击变两下）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({ token: "t", dropOnCommand: true });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      await assert.rejects(sendGuestCommand(dir, "click", { x: 10, y: 20 }), (cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        assert.match(message, /命令通道中断/);
+        assert.match(message, /click/);
+        assert.match(message, /computer_screenshot/, "要告诉模型下一步做什么");
+        return true;
+      });
+      assert.equal(bridge.requests.length, 0, "已发出的命令不许经文件协议重放");
+      assert.deepEqual(await readdir(join(dir, COMPUTER_USE_CMD_DIR)).catch(() => []), []);
+    } finally {
+      bridge.stop();
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("jpegBase64 还原成 Uint8Array（截图不经过映射目录）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({
+      token: "t",
+      handler: () => ({
+        resp: { ok: true, nativeWidth: 2560, nativeHeight: 1440, width: 640, height: 360, jpeg: "tcp-000001.jpg" },
+        jpeg: FAKE_JPEG,
+      }),
+    });
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      const shot = await fetchGuestScreenshot(dir, 640);
+      assert.deepEqual(Array.from(shot.jpeg), Array.from(FAKE_JPEG));
+      assert.equal(shot.width, 640);
+      assert.equal(shot.nativeWidth, 2560);
+      assert.deepEqual(await readdir(join(dir, COMPUTER_USE_CMD_DIR)).catch(() => []), []);
+    } finally {
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("guest 回 ok:false → 原话抛出（那是命令失败，不是通道失败，不回退也不重试）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const guest = await startFakeTcpGuest({
+      token: "t",
+      handler: () => ({ resp: { ok: false, error: "不认识的按键名：hyper" } }),
+    });
+    try {
+      await writeBridgeJson(dir, { port: guest.port, token: "t" });
+      await assert.rejects(sendGuestCommand(dir, "key", { key: "hyper+x" }), /不认识的按键名：hyper/);
+      assert.equal(guest.requests.length, 1);
+    } finally {
+      await guest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("老桥兼容：bridge.json 只有 version / pid（或 TCP 字段不全）→ 纯文件协议", async () => {
+    const variants: Array<{ port: number; token: string } | null> = [
+      null,
+      { port: 50000, token: "" },
+      { port: Number.NaN, token: "t" },
+    ];
+    for (const tcp of variants) {
+      const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+      resetGuestCommandSeq();
+      const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+      try {
+        await writeBridgeJson(dir, tcp);
+        const resp = await sendGuestCommand(dir, "ping", {});
+        assert.deepEqual(resp, { ok: true, via: "file" }, JSON.stringify(tcp));
+        assert.equal(bridge.requests.length, 1);
+      } finally {
+        bridge.stop();
+        resetGuestCommandSeq();
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("bridge.json 换成新桥的通告后，parseBridgeInfo 拿到的是新端口与新令牌", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-tcp-"));
+    resetGuestCommandSeq();
+    const deadGuest = await startFakeTcpGuest({ token: "old", dropOnCommand: true });
+    const freshGuest = await startFakeTcpGuest({ token: "new" });
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true } }));
+    try {
+      await writeBridgeJson(dir, { port: deadGuest.port, token: "old" });
+      await assert.rejects(sendGuestCommand(dir, "ping", {}), /命令通道中断/);
+      // 桥重启：新通告、新端口、新令牌（冷却期间命令走文件协议，冷却后重新读通告）
+      await writeBridgeJson(dir, { port: freshGuest.port, token: "new" });
+      const parsed = parseBridgeInfo(await readFile(join(dir, "bridge.json"), "utf8"));
+      assert.equal(parsed?.tcp?.port, freshGuest.port);
+      assert.equal(parsed?.tcp?.token, "new");
+      assert.deepEqual(parsed?.tcp?.ipv4, ["127.0.0.1"]);
+      const resp = await sendGuestCommand(dir, "ping", {});
+      assert.deepEqual(resp, { ok: true }, "冷却中：这条走文件协议");
+      assert.equal(bridge.requests.length, 1);
+    } finally {
+      bridge.stop();
+      await deadGuest.close();
+      await freshGuest.close();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

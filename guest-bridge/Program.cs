@@ -1,11 +1,16 @@
 // Orbita guest bridge —— 跑在 Windows Sandbox 内的极简命令执行器。
 //
-// 通道 = 映射文件夹里的文件，不是网络：
-//   宿主防火墙把宿主↔沙箱的 TCP 当成不可测的（2026-10-10 真机：ICMP 通、TCP 被丢，
-//   且随每次沙箱启动时好时坏），而 .wsb 读写映射文件夹双向实时同步、每次都可靠。
-//   所以：宿主把命令写进 out/cmd/<名字>.req.json（tmp+rename），桥轮询执行，
-//   结果写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件），然后删掉 req。
-//   宿主读完响应后负责清理 resp/jpg。
+// 通道 = **两条，一条语义**（0.8.0）。
+//
+//   ① TCP（优先）：桥在 guest 里监听一个系统分配的端口，把 port / token / ipv4 通告到
+//      bridge.json；宿主主动连进来，一行一条 JSON（TcpChannel.cs）。为什么换：文件协议
+//      每一跳传播实测 2.9–7.5 秒（guest 内部只有毫秒级），而 2026-10-25 的隔离沙箱实验里
+//      宿主→guest 的 TCP 是握手 30ms、小包中位 1ms、64KB 往返 2–6ms，两侧都不用动防火墙。
+//   ② 文件（回退 + 老宿主）：宿主防火墙曾把宿主↔沙箱的 TCP 当成不可测（2026-10-10 真机：
+//      ICMP 通、TCP 被丢），而 .wsb 读写映射文件夹双向实时同步、每次都可靠。宿主把命令写进
+//      out/cmd/<名字>.req.json（tmp+rename），桥轮询执行，结果写 <名字>.resp.json（截图的
+//      JPEG 是同名 .jpg 兄弟文件），然后删掉 req；宿主读完响应后负责清理 resp/jpg。
+//      这条通道的一条行为都没改：它就是没有 TCP 时的唯一通道，也是升级/降级时的安全网。
 //
 // 命令：ping（就绪探针）、screenshot（截主屏）、click / type / key / scroll（SendInput 注入），
 // 以及 PR3 的 cdp-*（沙箱内 Edge 的 CDP 语义命令，实现在 Cdp.cs 的 CdpSession）。
@@ -61,12 +66,32 @@ internal static class Program
     // 慢命令不再堵住整条桥，宿主侧协议不变），0.7.1 修了「超时杀完 worker、重开同一会话时
     // 读到上一只 Edge 的旧端口」那条自愈路上的 bug（起 Edge 前清端口文件 + 连接重试）。
     // 0.7.2 只加计量（命令行耗时分解 + 枚举兜底耗时 + 实验用 --align-every），协议与行为未变。
+    // 0.8.0 多了一条 **TCP 命令通道**（TcpChannel.cs）：bridge.json 里通告 port / token / ipv4，
+    //   宿主优先走它（文件协议每一跳 2.9–7.5s，TCP 只有毫秒级）。文件轮询循环与全部命令语义
+    //   一个字都没改——它仍是老宿主的唯一通道、也是 TCP 不可用时的回退通道。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.7.2";
+    private const string Version = "0.8.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
-    private const string ReqSuffix = ".req.json";     // 宿主写：命令请求
-    private const string RespSuffix = ".resp.json";   // 桥写：执行结果
+    internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
+    internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
     private const int PollIntervalMs = 250;           // 命令轮询间隔
+
+    // TCP 行协议的握手标记（与 shared/computer-use.ts 的 bridgeTcpHello 严格一致，一个字母都不能差）
+    internal const string TcpHelloType = "hello";
+    internal const string TcpHelloOkType = "hello-ok";
+    internal const string TcpHelloFailType = "hello-fail";
+
+    /**
+     * 命令执行的串行闸门：文件轮询线程与每条 TCP 连接线程共用这一把锁。
+     *
+     * 为什么必须有：CdpSession 的状态在两个通道里是同一份（同一个会话的端口 / 标签页），
+     * 两条命令并行进 Execute 就是互相踩。文件协议原本靠「单线程轮询」天然串行，加了 TCP
+     * 就不再天然了——锁是这件事唯一便宜的保证。
+     *
+     * 锁只包 Execute 本身（cdp-* 在锁里只是投递 + 返回 null），等 worker 回执在锁外：
+     * 否则一条 40 秒的导航会把别的会话（以及文件协议）整块堵住，正是 0.7.0 要消灭的队头阻塞。
+     */
+    internal static readonly object ExecuteGate = new object();
 
     private static string _outDir = "";
     private static string _cmdDir = "";
@@ -160,6 +185,8 @@ internal static class Program
             if (args[i] == "--selftest-metrics") return RunMetricsSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
             if (args[i] == "--selftest-worker") return WorkerHost.RunSelfTest();
+            // TCP 通道的自测（本进程里起监听、127.0.0.1 连回来；不启 Edge、不碰桌面）
+            if (args[i] == "--selftest-tcp") return TcpChannel.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -178,6 +205,10 @@ internal static class Program
 
         Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms"
             + "，对齐枚举周期：每 " + AlignEveryPolls + " 轮，耗时日志阈值 " + HopLogThresholdMs + "ms");
+
+        // TCP 命令行通道：起不来只记一行日志，文件协议照旧是主路
+        // 必须在通告之前——bridge.json 里带了端口才代表 TCP 可用（宿主靠这个字段判断）
+        TcpChannel.Start();
 
         // 就绪通告：bridge.json 出现 = 命令循环已上线（宿主据此宣布沙箱 running）
         WriteBridgeJson();
@@ -428,11 +459,48 @@ internal static class Program
 
     // ---- 就绪通告 ----
 
+    /**
+     * 就绪通告。0.8.0 起多三个 TCP 字段（port / token / ipv4）——**三个齐了宿主的 TCP 才可用**，
+     * 缺一个它就当老桥、只走文件协议，所以监听没起来时一个都不写。
+     *
+     * 令牌明文写在这里是**有意的**：bridge.json 在宿主自己的目录里（沙箱经映射文件夹只读/读写它），
+     * 宿主拿它当口令；日志里则绝不打（日志会进 PR、进截图）。
+     */
     private static void WriteBridgeJson()
     {
-        string json = "{\"version\":\"" + Version + "\",\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + "}";
-        AtomicWrite(Path.Combine(_outDir, "bridge.json"), Encoding.UTF8.GetBytes(json));
-        Log("已就绪（bridge.json 已通告）");
+        StringBuilder json = new StringBuilder();
+        json.Append("{\"version\":").Append(JsonQuote(Version))
+            .Append(",\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id);
+        if (TcpChannel.Port > 0 && TcpChannel.Token.Length > 0)
+        {
+            json.Append(",\"port\":").Append(TcpChannel.Port)
+                .Append(",\"token\":").Append(JsonQuote(TcpChannel.Token))
+                .Append(",\"ipv4\":").Append(TcpChannel.IPv4Json(TcpChannel.LocalIPv4()));
+        }
+        json.Append("}");
+        AtomicWrite(Path.Combine(_outDir, "bridge.json"), Encoding.UTF8.GetBytes(json.ToString()));
+        Log("已就绪（bridge.json 已通告"
+            + (TcpChannel.Port > 0 ? "，TCP 端口 " + TcpChannel.Port : "，仅文件协议") + "）");
+    }
+
+    /**
+     * 自测用：把 out / cmd 目录指到一个临时目录（只有 --selftest-tcp 走它）。
+     * TCP 自测要跑**真的** Execute 与**真的**文件协议各一条，两者都需要这两个目录。
+     */
+    internal static void UseDirsForSelfTest(string outDir)
+    {
+        _outDir = outDir;
+        _cmdDir = Path.Combine(outDir, CmdDirName);
+        _nextSeq = 1;
+        _polls = 0;
+        _lastPollEndMs = -1;
+        Directory.CreateDirectory(_cmdDir);
+    }
+
+    /** 自测用：跑一轮文件轮询（PollOnce 是私有实现，自测不复制一份） */
+    internal static void PollOnceForSelfTest()
+    {
+        PollOnce();
     }
 
     // tmp + rename 原子写：对端可能在任何时刻读，不许读到半截文件
@@ -718,7 +786,12 @@ internal static class Program
         hop.ReadMs = _clock.ElapsedMilliseconds - readStart;
         Log("收到命令 " + name);
         long execStart = _clock.ElapsedMilliseconds;
-        string respJson = Execute(raw, baseName);
+        string respJson;
+        // TCP 通道的命令在别的线程上执行：两个通道共用一把锁（理由见 ExecuteGate）
+        lock (ExecuteGate)
+        {
+            respJson = Execute(raw, baseName);
+        }
         hop.ExecuteMs = _clock.ElapsedMilliseconds - execStart;
         // null = 这条命令已经转给该会话的 worker，回执由后台线程写（慢命令不许占住轮询循环）
         hop.Forwarded = respJson == null;
@@ -739,7 +812,7 @@ internal static class Program
 
     // ---- 命令执行 ----
 
-    private static string Execute(string raw, string baseName)
+    internal static string Execute(string raw, string baseName)
     {
         string command = ExtractString(raw, "command");
         if (command == null) return "{\"ok\":false,\"error\":\"请求里缺 command 字段\"}";

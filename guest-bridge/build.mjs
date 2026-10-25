@@ -61,6 +61,8 @@ const args = [
   path.join(scriptDir, "Cdp.cs"),
   // 可杀的 CDP worker（0.7.0）：主桥路由 + worker 进程本体 + worker 层自测
   path.join(scriptDir, "WorkerHost.cs"),
+  // TCP 命令通道（0.8.0）：监听 + 行协议 + 握手；文件协议是它的回退通道
+  path.join(scriptDir, "TcpChannel.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);

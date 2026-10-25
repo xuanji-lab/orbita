@@ -16,6 +16,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,8 +135,12 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.7.2");
+      assert.equal(info.version, "0.8.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
+      // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
+      assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
+      assert.match(info.token, /^[0-9a-f]{32}$/, "令牌应是 32 位十六进制");
+      assert.ok(Array.isArray(info.ipv4), "bridge.json 应带 ipv4 数组");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
       // ---- ping 命令（宿主就绪探针）----
@@ -195,6 +200,140 @@ test(
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ── TCP 命令通道（0.8.0）：宿主主动连进 guest，一条连接复用到底 ──────────────
+//
+// 真机的理由：文件协议每一跳 2.9–7.5 秒，TCP 只有毫秒级。这里在宿主机上起真桥、
+// 用 127.0.0.1 走真行协议，验「握手 → 命令 → 截图内联 → 断线重连」，同时确认文件协议
+// （回退通道）与 TCP 并存、一条行为都没退化。
+
+/** 极小的行协议客户端（与宿主 bridge-client.ts 的 TCP 侧同一套语义） */
+function openTcpClient(port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    let buffer = "";
+    const waiters = [];
+    const inbox = [];
+    const deliver = (line) => {
+      const message = JSON.parse(line);
+      const waiter = waiters.shift();
+      if (waiter) waiter(message);
+      else inbox.push(message);
+    };
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      for (;;) {
+        const at = buffer.indexOf("\n");
+        if (at < 0) break;
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + 1);
+        if (line !== "") deliver(line);
+      }
+    });
+    socket.on("error", reject);
+    socket.once("connect", () => {
+      resolve({
+        socket,
+        send: (line) => socket.write(line + "\n"),
+        next: (timeoutMs = 5000) =>
+          new Promise((res, rej) => {
+            if (inbox.length > 0) {
+              res(inbox.shift());
+              return;
+            }
+            const timer = setTimeout(() => rej(new Error("等回执超时")), timeoutMs);
+            waiters.push((message) => {
+              clearTimeout(timer);
+              res(message);
+            });
+          }),
+        close: () => socket.destroy(),
+      });
+    });
+  });
+}
+
+test(
+  "TCP 通道：握手 / 命令 / 截图内联 / 断线重连，且与文件协议并存",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-tcp-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    try {
+      const infoPath = path.join(outDir, "bridge.json");
+      assert.ok(await waitForFile(infoPath), `桥应写出 bridge.json。桥日志：
+${bridgeLog}`);
+      const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+
+      // ---- 错误令牌：被拒，且收不到任何命令回执 ----
+      const wrong = await openTcpClient(info.port);
+      wrong.send(JSON.stringify({ t: "hello", token: "0".repeat(32) }));
+      const rejected = await wrong.next();
+      assert.equal(rejected.t, "hello-fail", "错令牌应回 hello-fail");
+      wrong.close();
+
+      // ---- 正确令牌：握手 + ping ----
+      const client = await openTcpClient(info.port);
+      client.send(JSON.stringify({ t: "hello", token: info.token }));
+      assert.deepEqual(await client.next(), { t: "hello-ok" }, "正确令牌应握手成功");
+      client.send(JSON.stringify({ id: 1, command: "ping", fields: {} }));
+      const pong = await client.next();
+      assert.equal(pong.id, 1);
+      assert.deepEqual(pong.resp, { ok: true });
+
+      // ---- 截图：JPEG 内联在回执里，映射目录里不留产物 ----
+      client.send(JSON.stringify({ id: 2, command: "screenshot", fields: { maxWidth: 320 } }));
+      const shot = await client.next();
+      assert.equal(shot.resp.ok, true, "TCP 截图应成功（宿主机有桌面会话）");
+      assert.ok(typeof shot.jpegBase64 === "string" && shot.jpegBase64.length > 100, "回执应内联 jpegBase64");
+      const jpeg = Buffer.from(shot.jpegBase64, "base64");
+      assert.equal(jpeg[0], 0xff, "内联 JPEG 魔数首字节");
+      assert.equal(jpeg[1], 0xd8, "内联 JPEG 魔数次字节");
+      const size = jpegSize(jpeg);
+      assert.deepEqual(size, { width: shot.resp.width, height: shot.resp.height }, "内联 JPEG 尺寸应与 resp 一致");
+      assert.ok(!fs.existsSync(path.join(cmdDir, shot.resp.jpeg)), "TCP 路径读完应删掉那张 jpg");
+
+      // ---- 两条命令不读回执就连发：按 id 对号、都成功 ----
+      client.send(JSON.stringify({ id: 3, command: "ping", fields: {} }));
+      client.send(JSON.stringify({ id: 4, command: "ping", fields: {} }));
+      assert.equal((await client.next()).id, 3);
+      assert.equal((await client.next()).id, 4);
+
+      // ---- 文件协议（回退通道）在同一进程里照旧工作 ----
+      writeRequest(cmdDir, "cmd-000001", JSON.stringify({ seq: 1, command: "ping" }));
+      const fileResp = path.join(cmdDir, "cmd-000001.resp.json");
+      assert.ok(await waitForFile(fileResp), `文件协议应与 TCP 并存。桥日志：
+${bridgeLog}`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(fileResp, "utf8")), { ok: true });
+
+      // ---- 断开之后监听仍在：重连 + 握手 + 命令 ----
+      client.close();
+      const again = await openTcpClient(info.port);
+      again.send(JSON.stringify({ t: "hello", token: info.token }));
+      assert.deepEqual(await again.next(), { t: "hello-ok" }, "断开重连应握手成功");
+      again.send(JSON.stringify({ id: 1, command: "ping", fields: {} }));
+      assert.deepEqual((await again.next()).resp, { ok: true });
+      again.close();
+
+      // 日志里不许出现令牌真值（它会被贴进 PR / 截图）
+      assert.ok(!bridgeLog.includes(info.token), "bridge.log 里不许出现令牌真值");
+      assert.match(bridgeLog, /TCP 通道已监听：0\.0\.0\.0:\d+/, "启动时应报出监听端口");
+      assert.match(bridgeLog, /TCP 握手成功/, "握手结果应有一行日志");
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      killLeftoverWorkers(outDir);
       fs.rmSync(outDir, { recursive: true, force: true });
     }
   },
