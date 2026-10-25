@@ -394,6 +394,19 @@ export const en = {
     shotNeedsRunning: "Start the sandbox to take a look",
     shotNativeSize: "Native size",
     shotAlt: "Sandbox desktop screenshot",
+    /* Composer-bar grant chip (session-level consent; click toggles grant / revoke) */
+    grantChip: "Computer use",
+    grantChipOn: "This session may drive the sandbox · click to revoke (takes effect in the current turn)",
+    grantChipOff: "This session is not authorized to drive the sandbox · click to allow (takes effect in the current turn)",
+    /* Emergency stop hotkey (Settings › Security group) and the stop notice */
+    emergencyGroup: "Safety",
+    emergencyHotkey: "Emergency stop hotkey",
+    emergencyHotkeyInfo:
+      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. **It does not close the sandbox** — the screen stays for you to look at. Re-authorize to use computer use again.",
+    emergencyRegistered: "Registered and available",
+    emergencyUnavailable: (error: string) => `Unavailable: ${error}. Close the app holding this shortcut and restart Orbita.`,
+    emergencyStopped:
+      "Emergency stop: this turn was stopped and this session's computer-use grant was revoked. The sandbox is still open.",
   },
 
   drawer: {
@@ -1367,6 +1380,10 @@ export const en = {
     tools: (n: number) => `tools ${n}`,
     failedCount: (n: number) => `${n} failed`,
     toolInterrupted: "Interrupted · not run",
+    /* computer_type input is collapsed by default: it is the literal text the agent typed */
+    typedChars: (count: number) => `typed ${count} characters`,
+    showInput: "Show input",
+    hideInput: "Hide input",
     interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
     toolSearch: "Search",
@@ -1526,6 +1543,19 @@ export const en = {
     deny: "Deny",
     stopEditing: "Stop editing",
     editInput: "Edit input",
+    /* Session grant card for computer use (not an ordinary approval: allow = the whole session) */
+    sessionTitle: "Let the agent drive the sandbox?",
+    sessionBody:
+      "It will see the sandbox screen and click, type and press keys inside it. The sandbox desktop is shared app-wide: there is only one screen, and other sessions can drive it too — you are allowing this session to act. Destructive actions (delete, format, close a window) still stop and ask you separately.",
+    allowSession: "Allow for this session",
+    /* Destructive-action confirmation (D1/D2/D3): not a refusal — allowing it runs the step */
+    riskTitle: "This step may be hard to undo. Confirm?",
+    riskKeys: (detail: string) => `About to press ${detail}`,
+    riskCommand: (detail: string) => `About to type a destructive command: ${detail}`,
+    riskRepeat: (count: number) => `About to click the same spot for the ${count}. time (±4px)`,
+    riskHint: "Inputs that match a guard rule stop before they run; you can cancel or allow.",
+    allowRisk: "Run it anyway",
+    cancelRisk: "Cancel",
   },
 
   carryover: {

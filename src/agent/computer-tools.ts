@@ -22,6 +22,7 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   GUEST_COMMAND_TIMEOUT_MS,
   screenshotPointToNative,
+  type ComputerUseAudit,
   type ComputerUseButton,
   type ComputerUseShotGeometry,
   type ComputerUseToolOutcome,
@@ -93,6 +94,17 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
    * 发请求并等回执；**这一轮被停掉（signal abort）就立刻放手**——pi 等工具返回才结束
    * 一轮，不放手的话「停止」按钮会失灵（browser-tools.ts 同款）。
    */
+  /**
+   * 审计载荷（details.computerUse）：动作 + 模型给的原始入参 + 时刻。**只给 UI 与
+   * 日志**，不入模型上下文。入参记的是模型给的那份（图像坐标 / 原文本），不是换算后
+   * 下发到 guest 的那份——回看的人要的是「它以为自己点了哪里、打了什么」。
+   */
+  const audit = (args: Record<string, unknown>, action: ComputerUseAudit["action"]): ComputerUseAudit => ({
+    action,
+    args,
+    at: Date.now(),
+  });
+
   const call = async (
     request: ComputerUseToolRequest,
     signal: AbortSignal | undefined,
@@ -202,7 +214,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
           { type: "text" as const, text: result.text },
           { type: "image" as const, data: shot.data, mimeType: "image/jpeg" as const },
         ],
-        details: undefined,
+        details: { computerUse: audit({ maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, "screenshot") },
       };
     },
   };
@@ -253,7 +265,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         },
         signal,
       );
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        details: { computerUse: audit({ x, y, ...(button === undefined ? {} : { button }), ...(args["double"] === true ? { double: true } : {}) }, "click") },
+      };
     },
   };
 
@@ -282,7 +297,11 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const text = (params as Record<string, unknown> | undefined)?.["text"];
       if (typeof text !== "string") throw new Error("text is required");
       const result = await call({ action: "type", text }, signal);
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        // 明文留在 details / 转录（JSONL 保留明文）；renderer 默认折叠显示
+        details: { computerUse: audit({ text }, "type") },
+      };
     },
   };
 
@@ -312,7 +331,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const keyName = (params as Record<string, unknown> | undefined)?.["key"];
       if (typeof keyName !== "string" || keyName.trim() === "") throw new Error("key is required");
       const result = await call({ action: "key", key: keyName.trim() }, signal);
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        details: { computerUse: audit({ key: keyName.trim() }, "key") },
+      };
     },
   };
 
@@ -340,8 +362,18 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const deltaY = numberOf(args["deltaY"]);
       if (deltaY === undefined) throw new Error("deltaY is required (positive scrolls down).");
       const notches = Math.round(deltaY);
-      const result = await call({ action: "scroll", ...scrollTarget(args), deltaY: notches }, signal);
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      const target = scrollTarget(args);
+      const result = await call({ action: "scroll", ...target, deltaY: notches }, signal);
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        // 入参里没有 x/y = 滚屏幕正中（工具层的缺省），审计照实记缺省
+        details: {
+          computerUse: audit(
+            { ...(numberOf(args["x"]) === undefined ? {} : { x: numberOf(args["x"]) }), ...(numberOf(args["y"]) === undefined ? {} : { y: numberOf(args["y"]) }), deltaY: notches },
+            "scroll",
+          ),
+        },
+      };
     },
   };
 

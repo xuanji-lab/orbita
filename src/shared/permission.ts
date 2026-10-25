@@ -153,6 +153,31 @@ export function isComputerUseReadTool(toolName: string): boolean {
 }
 
 /**
+ * computer use 的写入四件：点击 / 打字 / 按键 / 滚动。真往沙箱里注入输入事件。
+ *
+ * 这四件**不在只读桶里**（三档判定仍走默认写闸门：plan 拒、manual 逐次问、skip 放），
+ * 单独立桶是因为 skip 档下它们还要过一道「本会话授权」：默认档是 skip，没有这道闸，
+ * agent 在用户什么都没同意的情况下就能操作沙箱（2026-10 终审裁决）。
+ * 授权与破坏性确认的判定在 `src/agent/permission.ts` 的闸门里，规则在
+ * `src/shared/computer-guard.ts`。
+ */
+export const COMPUTER_USE_WRITE_TOOLS = [
+  "computer_click",
+  "computer_type",
+  "computer_key",
+  "computer_scroll",
+] as const;
+
+export function isComputerUseWriteTool(toolName: string): boolean {
+  return (COMPUTER_USE_WRITE_TOOLS as readonly string[]).includes(toolName);
+}
+
+/** 工具组全体（读取 + 写入）：预算按这个口径计——截图也吃上下文，必须计入 */
+export function isComputerUseTool(toolName: string): boolean {
+  return isComputerUseReadTool(toolName) || isComputerUseWriteTool(toolName);
+}
+
+/**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
  * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
  * 将来复用这个名字。

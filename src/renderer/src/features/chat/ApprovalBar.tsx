@@ -31,6 +31,24 @@ export function ApprovalBar(props: {
 
   const answer = (value: PermissionAnswer) => props.onAnswer(props.approval.requestId, value);
 
+  /**
+   * 卡片的三种形态（2026-10 computer use PR4）：
+   *   - session：会话授权卡（允许 = 整条会话放行，不是这一次）
+   *   - risk：破坏性动作确认（D1 组合键 / D2 破坏词 / D3 同点连点）——保留入参预览，
+   *     「仍要执行」= 用户看过之后照常执行
+   *   - 其余：普通逐次审批（manual 档）
+   */
+  const scope = props.approval.scope ?? "call";
+  const risk = props.approval.risk;
+  const riskText =
+    risk === undefined
+      ? null
+      : risk.rule === "key"
+        ? t.approval.riskKeys(risk.detail)
+        : risk.rule === "command"
+          ? t.approval.riskCommand(risk.detail)
+          : t.approval.riskRepeat(Number(risk.detail));
+
   const allow = () => {
     if (!editing) return answer({ behavior: "allow" });
     try {
@@ -62,7 +80,11 @@ export function ApprovalBar(props: {
           <Icon name="shield-check" size={14} />
         </span>
         <strong style={{ fontSize: "var(--font-size-base)", fontWeight: 600 }}>
-          {t.approval.run(props.approval.toolName)}
+          {scope === "session"
+            ? t.approval.sessionTitle
+            : riskText !== null
+              ? t.approval.riskTitle
+              : t.approval.run(props.approval.toolName)}
         </strong>
         <span
           style={{
@@ -75,6 +97,20 @@ export function ApprovalBar(props: {
           {t.approval.keys}
         </span>
       </div>
+
+      {scope === "session" && (
+        <p style={{ margin: 0, fontSize: "var(--font-size-sm)", lineHeight: "var(--line-height-ui)", color: "var(--color-text-secondary)" }}>
+          {t.approval.sessionBody}
+        </p>
+      )}
+      {riskText !== null && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          <strong style={{ fontSize: "var(--font-size-sm)", fontWeight: 600, color: "var(--color-text-primary)" }}>
+            {riskText}
+          </strong>
+          <span style={{ fontSize: "var(--font-size-xs)", color: "var(--color-text-tertiary)" }}>{t.approval.riskHint}</span>
+        </div>
+      )}
 
       {editing ? (
         <textarea
@@ -95,18 +131,22 @@ export function ApprovalBar(props: {
 
       <div style={{ display: "flex", gap: "var(--space-2)" }}>
         <button ref={allowRef} type="button" onClick={allow} style={{ ...buttonStyle, ...primaryStyle }}>
-          {t.approval.allow}
+          {scope === "session" ? t.approval.allowSession : risk !== undefined ? t.approval.allowRisk : t.approval.allow}
         </button>
         <button
           type="button"
           onClick={() => answer({ behavior: "deny", message: "Denied by the user." })}
           style={buttonStyle}
         >
-          {t.approval.deny}
+          {risk !== undefined && scope !== "session" ? t.approval.cancelRisk : t.approval.deny}
         </button>
-        <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
-          {editing ? t.approval.stopEditing : t.approval.editInput}
-        </button>
+        {/* 会话授权卡不提供「改参数」：允许的是整条会话，改这一步的入参没有意义
+            （闸门也不会采纳这张卡上的编辑） */}
+        {scope !== "session" && (
+          <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
+            {editing ? t.approval.stopEditing : t.approval.editInput}
+          </button>
+        )}
       </div>
     </section>
   );

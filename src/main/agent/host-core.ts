@@ -433,6 +433,14 @@ export class AgentHostCore {
     this.post({ type: "setModel", sessionId, provider, modelId });
   }
 
+  /**
+   * 对齐 agent 账本里的电脑使用授权（照 disposeSession：**不 ensure**）。
+   * 进程没起的话下一轮开机本来就从 meta 播种，这里发不发都一样；为撤销去拉起一个进程是倒置。
+   */
+  setComputerUseGrant(sessionId: string, granted: boolean): void {
+    this.child?.postMessage({ type: "setComputerUseGrant", sessionId, granted } satisfies AgentCommand);
+  }
+
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
@@ -558,6 +566,15 @@ export class AgentHostCore {
   async abort(sessionId: string): Promise<void> {
     await this.ensure();
     this.post({ type: "abort", sessionId });
+  }
+
+  /**
+   * 只停已经在跑的轮，**不 ensure**（急停热键与「停止」按钮的区别就在这里）：
+   * 用户按急停是为了停下，不是为了把一个已经退出的 agent 进程重新拉起来。
+   * 进程没起 = 没有轮在跑，静默返回。
+   */
+  abortIfRunning(sessionId: string): void {
+    this.child?.postMessage({ type: "abort", sessionId } satisfies AgentCommand);
   }
 
   /** 手动压缩上下文。**发完即回**（续轮）：忙碌态与界碑走 compaction 事件链。首轮开机时等 created */

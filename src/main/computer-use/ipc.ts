@@ -12,9 +12,11 @@ import {
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
   type ComputerUseStopResult,
+  type EmergencyStopStatus,
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
 import type { SandboxController } from "./sandbox.ts";
+import type { EmergencyStopController } from "./emergency-stop.ts";
 
 /**
  * 停沙箱前的收尾钩子（可选）。PR3 用它把沙箱里的 Edge 先停掉：`cdp-stop` 只杀我们自己
@@ -25,7 +27,15 @@ export interface ComputerUseIpcHooks {
   beforeStop?: () => void;
 }
 
-export function registerComputerUseIpc(controller: SandboxController, hooks: ComputerUseIpcHooks = {}): void {
+export function registerComputerUseIpc(
+  controller: SandboxController,
+  hooks: ComputerUseIpcHooks = {},
+  /**
+   * 急停热键的控制器（optional：旧测试 / 未接线的场景没有它）。设置页问注册状态，
+   * 失败时如实显示「被占用」，不假装保护存在。
+   */
+  emergencyStop?: EmergencyStopController,
+): void {
   ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
   ipcMain.handle(
     computerUseChannels.computerUseStart,
@@ -39,6 +49,15 @@ export function registerComputerUseIpc(controller: SandboxController, hooks: Com
     computerUseChannels.computerUseScreenshot,
     (_event, maxWidth: unknown): Promise<ComputerUseScreenshotResult> =>
       controller.screenshot(typeof maxWidth === "number" ? maxWidth : undefined),
+  );
+  ipcMain.handle(
+    computerUseChannels.computerUseEmergencyStopState,
+    (): EmergencyStopStatus =>
+      emergencyStop?.status() ?? {
+        accelerator: "",
+        registered: false,
+        error: "急停没有接线（主进程未注册热键）",
+      },
   );
 }
 

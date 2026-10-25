@@ -4,11 +4,14 @@ import {
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   COMPUTER_USE_READ_TOOLS,
+  COMPUTER_USE_WRITE_TOOLS,
   decidePermission,
   DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
   isChannelTool,
   isComputerUseReadTool,
+  isComputerUseTool,
+  isComputerUseWriteTool,
   USER_ACTION_TOOL,
   isReadOnlyTool,
   PERMISSION_MODES,
@@ -155,6 +158,24 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
       assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
       assert.equal(isComputerUseReadTool(tool), false, tool);
     }
+  });
+
+  test("写入四件单独成桶：五件工具合起来才是预算口径，两桶互不重叠", () => {
+    for (const tool of COMPUTER_USE_WRITE_TOOLS) {
+      assert.equal(isComputerUseWriteTool(tool), true, tool);
+      assert.equal(isComputerUseReadTool(tool), false, tool);
+      assert.equal(isComputerUseTool(tool), true, tool);
+      // 档位判定不受新桶影响：仍是默认写闸门
+      assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
+      assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
+      assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
+    }
+    for (const tool of COMPUTER_USE_READ_TOOLS) {
+      assert.equal(isComputerUseWriteTool(tool), false, tool);
+      assert.equal(isComputerUseTool(tool), true, tool);
+    }
+    assert.equal(isComputerUseWriteTool("bash"), false);
+    assert.equal(isComputerUseTool("bash"), false);
   });
 });
 
