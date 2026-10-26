@@ -46,6 +46,7 @@ import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.
 import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
+import { applyCacheRetentionPatch } from "./cache-retention.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
@@ -1276,6 +1277,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 订阅车道改写的落点补全（cc-billing-stream.ts）：压缩 / 分支摘要绕过主循环的
   // before_provider_request，包一层 streamFunction 把改写给到每一条出站请求
   applyBillingStreamPatch(session);
+  // Claude 官方直连的主会话用 1 小时提示缓存，子会话与网关保持 pi 默认（cache-retention.ts）
+  applyCacheRetentionPatch(session, role);
   // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
   // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
   // 「换模型后支持集变了」——芯片每次开轮自我纠真。
