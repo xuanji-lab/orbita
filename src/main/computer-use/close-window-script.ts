@@ -8,6 +8,13 @@
  * （vmwp + vmmemWindowsSandbox 各 ~3.5GB），泄漏攒多了会报「与该服务器建立的会话太多」，
  * 新沙箱都起不来。所以「替用户按下 Ok」不是锦上添花，是收尾必须的一步。
  *
+ * 为什么找按钮要**两步**（先 Children 再 Descendants），2026-10-27 真机验收：
+ * 原来的 `RootElement.FindAll(Descendants, byPid)` 在一次运行里 15 轮全部落空（每轮 2s，共 35s），
+ * 而窗口与那个 `name='Ok'` 的按钮都在——同一个 pid 先取**顶层窗口**（`TreeScope.Children`），
+ * 再在窗口内找按钮（`Descendants` + Name/ControlType 条件）第一次就 Invoke 成功。
+ * 全树 Descendants 这条路径在真机上会周期性返回 0 个元素，不能再当主路；两步查询还额外
+ * 把搜索范围限在这只沙箱的窗口子树内（不会扫到用户桌面）。
+ *
  * 为什么要**轮询**而不是睡一觉再找：
  * 2026-10-24 真机复现两次——关窗后只等 1200ms 就枚举，确认框还没画出来，UIA 落空、
  * 回退到键盘兜底；而用户当时前台是微信，前台 PID 守卫（正确地）拒绝发键 → exit 2 →
@@ -64,23 +71,28 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     //    （沙箱的框默认按钮是 Ok，Close 只是某些版本的叫法）。
     "$orbitaOkNames = @('Ok', 'OK', 'ok', 'Yes', ([string][char]0x786E + [string][char]0x5B9A), ([string][char]0x662F))",
     "$orbitaCloseNames = @('Close', ([string][char]0x5173 + [string][char]0x95ED))",
+    // TWO-STEP LOOKUP: first the top-level windows owned by this pid (TreeScope.Children of the
+    // desktop), then the buttons inside those windows (TreeScope.Descendants).
+    // A single RootElement.FindAll(Descendants, byPid) intermittently returned zero elements on
+    // real machines (2026-10-27 acceptance: 15 rounds missed the Ok button while the window was
+    // right there; the two-step query hit it on the first round). Walking Children first also keeps
+    // the search inside this sandbox's own window subtree instead of scanning the whole desktop.
     "function Find-OrbitaButton {",
     "  param([string[]]$Names)",
-    "  $found = $null",
     "  try {",
-    "    $elements = $orbitaAutomation::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $orbitaByPid)",
-    "    foreach ($element in $elements) {",
-    "      try {",
-    "        $current = $element.Current",
-    // 50000 = ControlType.Button：只认按钮，别去 Invoke 一个同名文本框
-    "        if ($current.ControlType.Id -ne 50000) { continue }",
-    "        if ($Names -notcontains $current.Name) { continue }",
-    "        $found = $element",
-    "        break",
-    "      } catch { continue }",
+    "    $windows = $orbitaAutomation::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $orbitaByPid)",
+    "    foreach ($window in $windows) {",
+    "      foreach ($name in $Names) {",
+    "        try {",
+    "          $nameCondition = New-Object System.Windows.Automation.PropertyCondition($orbitaAutomation::NameProperty, $name)",
+    "          $condition = New-Object System.Windows.Automation.AndCondition($orbitaButtonType, $nameCondition)",
+    "          $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)",
+    "          if ($null -ne $button) { return $button }",
+    "        } catch { continue }",
+    "      }",
     "    }",
-    "  } catch { $found = $null }",
-    "  return $found",
+    "  } catch { }",
+    "  return $null",
     "}",
     "$orbitaUiaReady = $false",
     "try {",
@@ -88,6 +100,8 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "  Add-Type -AssemblyName UIAutomationTypes",
     "  $orbitaAutomation = [System.Windows.Automation.AutomationElement]",
     "  $orbitaByPid = New-Object System.Windows.Automation.PropertyCondition($orbitaAutomation::ProcessIdProperty, $target)",
+    // ControlType.Button：只认按钮（别去 Invoke 一个同名文本框）
+    "  $orbitaButtonType = New-Object System.Windows.Automation.PropertyCondition($orbitaAutomation::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)",
     "  $orbitaUiaReady = $true",
     "} catch { $orbitaUiaReady = $false }",
     "$invoked = $false",
@@ -107,7 +121,9 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "        $okPattern.Invoke()",
     "        $invoked = $true",
     "      } catch { $invoked = $false }",
-    "      if ($invoked) { break }",
+    // 命中的是第几轮：stdout 一行诊断（生产的 spawnSync 是 stdio ignore，看不见；
+    // 真机排查 / 验收脚本收它会报「第 1 轮就命中」还是「拖到第 12 轮」）
+    "      if ($invoked) { Write-Output \"orbita-close-round=$round\"; break }",
     "    }",
     "    if ($null -eq $closeCandidate) { $closeCandidate = Find-OrbitaButton -Names $orbitaCloseNames }",
     "  }",

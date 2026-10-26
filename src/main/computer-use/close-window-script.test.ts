@@ -56,8 +56,25 @@ describe("buildCloseSandboxWindowScript", () => {
     assert.ok(script.includes("[char]0x662F"), "「是」= U+662F");
     assert.ok(script.includes("[char]0x5173"), "「关」= U+5173");
     assert.ok(script.includes("[char]0x95ED"), "「闭」= U+95ED");
-    // 只认按钮（ControlType.Id 50000），别把同名文本框 Invoke 了
-    assert.ok(script.includes("$current.ControlType.Id -ne 50000"));
+    // 只认按钮（ControlType.Button），别把同名文本框 Invoke 了；名字用 PropertyCondition 比较，
+    // 不再枚举整棵树的每个元素
+    assert.ok(script.includes("[System.Windows.Automation.ControlType]::Button"), "只认按钮，别去 Invoke 同名文本框");
+    assert.ok(script.includes("System.Windows.Automation.AndCondition"), "名字 + 控件类一次性下推给 UIA");
+
+    // 两步查询：先取该 pid 的顶层窗口（Children），再在窗口内找（Descendants）——
+    // 全树 Descendants 在真机上周期性返回 0 个元素（2026-10-27：15 轮全落空）
+    assert.ok(
+      script.includes("FindAll([System.Windows.Automation.TreeScope]::Children, $orbitaByPid)"),
+      "第一步：顶层窗口按 pid 取（Children）",
+    );
+    assert.ok(
+      script.includes("$window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)"),
+      "第二步：在窗口内 Descendants 找按钮",
+    );
+    assert.ok(
+      !script.includes("RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants"),
+      "不要再全树 Descendants（就是它在真机上落空）",
+    );
 
     // 优先级：Ok 一族在轮询里直接按；Close 一族先记着，整轮落空之后才按
     const okSearch = script.indexOf("Find-OrbitaButton -Names $orbitaOkNames");
