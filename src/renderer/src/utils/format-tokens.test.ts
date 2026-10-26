@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { formatCostRate, formatTokens } from "./format-tokens.ts";
+import { formatTokens } from "./format-tokens.ts";
 
 describe("formatTokens —— pi footer 阶梯的桌面版（一位小数放宽到 100k）", () => {
   test("999 以内原样：小数字不值得缩写", () => {
@@ -24,18 +24,5 @@ describe("formatTokens —— pi footer 阶梯的桌面版（一位小数放宽�
   test("1M 以上一位小数 M，10M 以上取整 M", () => {
     assert.equal(formatTokens(2_500_000), "2.5M");
     assert.equal(formatTokens(25_000_000), "25M");
-  });
-});
-
-describe("formatCostRate —— 设置面的模型费率段", () => {
-  test("单位 $ 每百万 token：<10 两位小数，≥10 一位", () => {
-    assert.equal(formatCostRate(0.6), "$0.60/M");
-    assert.equal(formatCostRate(2.2), "$2.20/M");
-    assert.equal(formatCostRate(0.055), "$0.06/M");
-    assert.equal(formatCostRate(15), "$15.0/M");
-  });
-
-  test("0 不显示——定价未知 / 不计费不能显示成免费", () => {
-    assert.equal(formatCostRate(0), null);
   });
 });

@@ -5,10 +5,13 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { UsageDayTotal, UsageWeekEvent } from "../../shared/usage.ts";
+import type { PriceChartData } from "../../shared/price-chart.ts";
 
 export const usageApi = {
   /** 最近 7 天（含今天，旧的在前，缺的天为 0）。回填在途时可能全 0，随后有推送纠真 */
   week: (): Promise<UsageDayTotal[]> => ipcRenderer.invoke(ipcChannels.usageWeek),
+  /** 价格 · 能力图：主进程现算（读全部会话），设置 › 模型服务的卡片墙下面用 */
+  priceChart: (): Promise<PriceChartData> => ipcRenderer.invoke(ipcChannels.usagePriceChart),
   onEvent: (listener: (event: UsageWeekEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: UsageWeekEvent) => listener(event);
     ipcRenderer.on(ipcChannels.usageEvent, handler);

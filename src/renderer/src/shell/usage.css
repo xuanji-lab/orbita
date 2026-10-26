@@ -314,6 +314,50 @@
 .usage-say[data-edge="end"]::after {
   left: calc(100% - 14px);
 }
+/* 悬停一格的明细（按型号 + 意图召回 + 折算花费）：总量那行照旧，下面一行一个型号 */
+.usage-say-total {
+  white-space: nowrap;
+}
+.usage-say-rows {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border-subtle);
+  min-width: 168px;
+  line-height: var(--line-height-ui);
+}
+.usage-say-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.usage-say-name {
+  min-width: 0;
+  /* 气泡在「今天」那格向左展开，侧栏里只有约 230px：名字封顶 132px，整个气泡不超过约 210px */
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.usage-say-num {
+  margin-left: auto;
+  padding-left: 8px;
+  font-family: var(--font-family-mono);
+}
+.usage-say-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-xs);
+}
+.usage-say-cost {
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
 @keyframes usage-say-in {
   from {
     opacity: 0;
