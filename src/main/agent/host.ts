@@ -5,12 +5,20 @@
 import { join } from "node:path";
 import { utilityProcess } from "electron";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { AgentHostCore } from "./host-core.ts";
+import { AgentHostCore, type CatalogScope } from "./host-core.ts";
 
 export class AgentHost extends AgentHostCore {
-  /** env：agent 进程的环境变量（主进程挂上随包的 rg / fd，见 search-bins.ts） */
-  constructor(runtimePath: string, env: Record<string, string | undefined>, onEvent: (event: AgentEvent) => void) {
-    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent);
+  /**
+   * env：agent 进程的环境变量（主进程挂上随包的 rg / fd，见 search-bins.ts）。
+   * catalogScope：已添加服务商用到的目录（目录联网刷新只刷这些，见 host-core syncCatalogScope）
+   */
+  constructor(
+    runtimePath: string,
+    env: Record<string, string | undefined>,
+    onEvent: (event: AgentEvent) => void,
+    catalogScope: CatalogScope,
+  ) {
+    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, catalogScope);
   }
 }
 

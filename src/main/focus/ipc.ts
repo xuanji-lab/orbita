@@ -12,7 +12,6 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   FocusChangeEntry,
   FocusChanges,
-  FocusNotifyRequest,
   FocusSummaryRequest,
   FocusSummaryResult,
 } from "../../shared/focus.ts";
@@ -25,6 +24,7 @@ import { resolveProviderSecrets } from "../agent/ipc.ts";
 import { gitWorkdirChanges, realGitRunner } from "../review/git-source.ts";
 import { ExcerptStore } from "../excerpt/store.ts";
 import { buildSummaryMaterial, buildSummaryPrompt, pickActiveSessions } from "./summary-source.ts";
+import { normalizeFocusNotify } from "./notify.ts";
 
 export function registerFocusIpc(
   workspaces: WorkspaceStore,
@@ -47,7 +47,10 @@ export function registerFocusIpc(
     }
   });
 
-  ipcMain.handle(ipcChannels.focusNotifyDone, async (_event, req: FocusNotifyRequest): Promise<void> => {
+  ipcMain.handle(ipcChannels.focusNotifyDone, async (_event, raw: unknown): Promise<void> => {
+    // renderer 传什么都不可信：非对象 / 空标题 / 空正文直接不发（超长截断）
+    const req = normalizeFocusNotify(raw);
+    if (req === null) return;
     // 时间到的提醒是「把人叫回来」：点通知聚焦主窗口（多窗口时聚焦最近使用的那张——
     // 专注是单窗口里的事，第一张就是我们自己的）
     const notice = new Notification({ title: req.title, body: req.body });

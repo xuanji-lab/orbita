@@ -58,8 +58,8 @@ import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelP
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
-import { defaultThinkingLevel } from "@shared/model-defaults";
-import { modelThinkingLevels } from "../chat/thinking-choice.ts";
+import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
+import { declaredThinkingLevels, modelPreferenceById } from "./providers-view-model.ts";
 import { useT } from "../../locale.ts";
 import { playCompletionChime } from "../notify/chime.ts";
 
@@ -171,8 +171,8 @@ export function SettingsView(props: {
         <ProvidersView
           onChange={props.onProvidersChange}
           onSessionsChanged={props.onImported}
-          cardSize={props.settings.providerCardSize ?? "large"}
-          onCardSize={(providerCardSize) => props.onSettingsChange({ providerCardSize })}
+          page={props.settings.providersPage ?? {}}
+          onPage={(providersPage) => props.onSettingsChange({ providersPage })}
         />
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -305,7 +305,13 @@ function General(props: {
     subSessionModel === undefined
       ? null
       : (() => {
-          const supported = modelThinkingLevels(subSessionModel.modelId, catalog);
+          const supported = modelThinkingLevels(
+            subSessionModel.modelId,
+            catalog,
+            null,
+            modelPreferenceById(usable, subSessionModel.providerId),
+            declaredThinkingLevels(usable, subSessionModel.providerId, subSessionModel.modelId),
+          );
           return {
             modelId: subSessionModel.modelId,
             supported,
@@ -576,12 +582,7 @@ function ExperimentalSettings(props: {
             onToggleLog={() => setOpenId(openId === feature.id ? null : feature.id)}
             onSwitch={(value) =>
               props.onChange({
-                experimentalFeatures: {
-                  [feature.id]: value,
-                  // 互斥的项连带关掉（黑洞 ↔ 俄罗斯方块）：两个都开没有定义的行为，
-                  // 与其让 parseSettings 静默裁决，不如打开的这一制替用户关上另一个
-                  ...(value && feature.exclusiveWith !== undefined ? { [feature.exclusiveWith]: false } : {}),
-                },
+                experimentalFeatures: { [feature.id]: value },
               })
             }
           />
