@@ -20,6 +20,19 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "skip";
 
 /**
+ * 把档压到不高于「询问」（manual）：skip → manual；plan 比询问更严，原样留着（不放宽）。
+ *
+ * 用在两处不是用户亲手发起的开轮（审核 F-4，2026-10-25 用户拍板）：
+ * - **收尾扫描轮**：只该回看对话，提示词也写明不调工具；万一模型还是去调，弹审批。
+ * - **从遗留事项「继续」开出的新会话**：种子里的 detail 常带上一个会话里的绝对路径，「放行」档
+ *   下智能体会照着往用户真实目录写（PR 320 验收时往 ~/Orbita/TRX50服务器/ 写了两次）。新会话从
+ *   询问起步，用户自己再切。
+ */
+export function atMostManual(mode: PermissionMode): PermissionMode {
+  return mode === "skip" ? "manual" : mode;
+}
+
+/**
  * bash / powershell 的 timeout 下限（秒）：模型自填的小值会被权限闸门抬到这里
  * （只升不降；闸门改的是 pi 传进来的入参对象、不回写会话记录，完整理由见
  * `src/agent/permission.ts`）。**放 shared 是为了 UI 同源**：renderer 的「上限」

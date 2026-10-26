@@ -3,11 +3,18 @@
  * 开轮命令的公共字段。workspaceName 的透传是 scope 指引（store-tools）的
  * 主进程侧接线——缺席时彻底不进命令对象（「翻不出名字」与「无工作区」两态
  * 靠 workspaceId 区分，不能靠键在不在猜）。
+ *
+ * computerUse 从 boolean 长成「开关 + 沙箱出网」的现场（2026-10-25）：模型需要知道
+ * 沙箱这次有没有网，才能不把「网页打不开」当成网站的错去反复重试。
+ *
+ * 设置 → 命令那段映射（`computerUseTurnContext`）同样在这里钉：真正的读取点
+ * `readComputerUse()` 在 ipc.ts（要 electron，起不来），所以「哪个开关管注册、
+ * 老 settings.json 缺字段兑什么缺省」只能在这层测。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { turnFields } from "./turn-fields.ts";
-import type { CompactionSetting } from "../../shared/settings.ts";
+import { computerUseTurnContext, turnFields } from "./turn-fields.ts";
+import type { AppSettings, CompactionSetting } from "../../shared/settings.ts";
 
 const input = {
   sessionId: "s1",
@@ -30,7 +37,7 @@ const environment = {
   gitAttribution: true,
   attributionLanguage: "en" as const,
   pdfCitations: false,
-  computerUse: false,
+  computerUse: { enabled: true, allowNetwork: true },
 };
 
 describe("turnFields", () => {
@@ -71,6 +78,74 @@ describe("turnFields", () => {
   test("resume 为 null（新会话）：piSessionFile 键彻底不出现——runtime 据此新建、主进程据此等 created", () => {
     const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], environment);
     assert.equal("piSessionFile" in fields, false);
+  });
+
+  test("computerUse 整份透传：开关与沙箱出网两个事实都在命令里（模型的提示词靠它们分叉）", () => {
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
+      ...environment,
+      computerUse: { enabled: true, allowNetwork: false },
+    });
+    assert.deepEqual(fields.computerUse, { enabled: true, allowNetwork: false });
+  });
+});
+
+/**
+ * 设置 → 开轮命令这段映射。ipc.ts 里那一行就是
+ * `computerUseTurnContext(await settings.read())`，所以钉住这个纯函数 = 钉住
+ * `readComputerUse()` 的行为；submit / interrupt / compact 三条命令都由 turnFields
+ * 的产物铺底（`{ ...turnFields(...) }`），字段形状由 AgentCommand 的类型约束
+ * （三处都是 ComputerUseTurnContext，typecheck 把关）。
+ */
+describe("computerUseTurnContext（设置 → 命令）", () => {
+  /** 设置夹具：只给与电脑使用有关的键，其余取默认（theme / drawer 是 AppSettings 的必填项） */
+  const settings = (value: { experimentalFeatures?: Record<string, boolean>; computerUse?: { allowNetwork: boolean } }): AppSettings =>
+    ({ theme: "system", drawer: { width: 320, docked: [] }, ...value }) as AppSettings;
+
+  test("开着且允许出网：enabled 与 allowNetwork 各自取自己的键", () => {
+    assert.deepEqual(
+      computerUseTurnContext(settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: true } })),
+      { enabled: true, allowNetwork: true },
+    );
+  });
+
+  test("开着但禁出网：这正是要告诉模型的那一对值", () => {
+    assert.deepEqual(
+      computerUseTurnContext(settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: false } })),
+      { enabled: true, allowNetwork: false },
+    );
+  });
+
+  test("功能开关关着：enabled 为 false，allowNetwork 仍如实反映设置（工具不注册，但字段不留谎）", () => {
+    assert.deepEqual(computerUseTurnContext(settings({ computerUse: { allowNetwork: false } })), {
+      enabled: false,
+      allowNetwork: false,
+    });
+    // 其它实验开关开着不算「电脑使用开着」
+    assert.deepEqual(computerUseTurnContext(settings({ experimentalFeatures: { "pdf-citations": true } })), {
+      enabled: false,
+      allowNetwork: true,
+    });
+  });
+
+  test("computerUse 字段缺席（老 settings.json）：enabled 关、allowNetwork 按缺省允许（#329 的 effectiveAllowNetwork）", () => {
+    assert.deepEqual(computerUseTurnContext(settings({ experimentalFeatures: { "computer-use": true } })), {
+      enabled: true,
+      allowNetwork: true,
+    });
+    assert.deepEqual(computerUseTurnContext(settings({})), { enabled: false, allowNetwork: true });
+    // 整份设置都读不到（store 空 / 坏文件被兜成 undefined）也不能变成「禁出网」
+    assert.deepEqual(computerUseTurnContext(undefined), { enabled: false, allowNetwork: true });
+  });
+
+  test("设置值一路进到命令：turnFields 拿到的就是这份现场，不二次解释", () => {
+    const context = computerUseTurnContext(
+      settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: false } }),
+    );
+    const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
+      ...environment,
+      computerUse: context,
+    });
+    assert.deepEqual(fields.computerUse, { enabled: true, allowNetwork: false });
   });
 });
 

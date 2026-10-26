@@ -9,9 +9,12 @@
  * 序号而不是枚举目录）全写在本文件与那几个模块的注释里，加上 commit 历史——调研笔记不进仓，
  * 外部贡献者拿不到，所以别在注释里引用仓外的文档。
  *
- * 出网：.wsb 的 <Networking> 用 Default（沙箱能上网）。v1 要的就是网页自动化，所以这是
+ * 出网：.wsb 的 <Networking> 缺省是 Default（沙箱能上网）。v1 要的就是网页自动化，所以这是
  * **有意放开的攻击面**：沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
- * 别把它当成「防网络的隔离层」。将来考虑加一个开关（禁出网 = 只做本地桌面自动化）。
+ * 别把它当成「防网络的隔离层」。设置 › 实验功能 › 电脑使用 里有「允许沙箱出网」开关
+ * （缺省值见 COMPUTER_USE_DEFAULT_ALLOW_NETWORK，即开）：关掉后 .wsb 渲染成
+ * <Networking>Disable</Networking>，沙箱里只剩本地桌面自动化。.wsb 只在启动时渲染一次，
+ * 所以这个改动**只对下一次启动生效**，运行中的 VM 仍按它启动时的设置（设置页常驻一行说明这件事）。
  *
  * 宿主↔guest 协议 v1（宿主在 src/main/computer-use/ 实现，guest 桥是独立 exe，两边必须严格一致）：
  *   - 通道 = **映射文件夹里的文件对**，不走网络。反面教材：宿主防火墙把宿主↔沙箱的 TCP 当
@@ -225,6 +228,18 @@ export const COMPUTER_USE_GUEST_DOWNLOAD_DIR = "C:\\orbita-out\\downloads";
  * 桥按**长边**缩放，所以它同时是高度上限。
  */
 export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
+
+/**
+ * 沙箱是否允许出网的**缺省值**（= 允许）。**全栈唯一来源**：
+ * `shared/settings.ts` 的 `effectiveAllowNetwork`（读设置时的兜底）、主进程控制器
+ * （没注入 getter / 读失败 / 读超时）、`renderWsbXml`（不传 allowNetwork）与渲染层
+ * （开关的当前值）都从它取值；改默认只改这里。测试也断言「缺省 === 这个常量」而不是字面 true。
+ *
+ * v1 的 computer use 就是「沙箱里的网页自动化」，断网等于没有这个功能，所以默认开；
+ * 开关是给只想让 agent 操作本地桌面 / 文件的人收紧攻击面的：关掉后宿主渲染的 .wsb
+ * 写 `<Networking>Disable</Networking>`（官方只定义 Disable / Default 两个值）。
+ */
+export const COMPUTER_USE_DEFAULT_ALLOW_NETWORK = true;
 
 /**
  * 桥不应答时的放弃线（主进程等一条 **像素 / 桌面** guest 命令的上限）。

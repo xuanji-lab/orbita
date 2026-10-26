@@ -86,6 +86,10 @@
         "filter": [
           "orbita-guest-bridge.exe"
         ]
+      },
+      {
+        "from": "node_modules/@earendil-works/pi-coding-agent/package.json",
+        "to": "pi-coding-agent/package.json"
       }
     ],
     "npmRebuild": false,

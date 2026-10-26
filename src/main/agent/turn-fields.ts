@@ -5,13 +5,31 @@
  */
 import type {
   AgentCommand,
+  ComputerUseTurnContext,
   ProviderSecrets,
   SubmitAgentInput,
   TurnDirectories,
   CompactAgentInput,
 } from "../../shared/agent-ipc.ts";
-import type { CompactionSetting, Language } from "../../shared/settings.ts";
+import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
+import { effectiveAllowNetwork } from "../../shared/settings.ts";
 import type { McpServer } from "../../shared/mcp.ts";
+
+/**
+ * 电脑使用的开轮现场：实验开关 + 沙箱出网，**从同一份设置值**一次算出。
+ *
+ * 抽成纯函数是为了能被 `node --test` 钉住：真正的读取点 `readComputerUse()` 在
+ * ipc.ts 里（要 electron，起不来），而这层映射——「哪个开关管注册、哪个值管提示词、
+ * 老 settings.json 缺字段时兑什么缺省」——恰好是最容易改坏的部分。读一次、算一次，
+ * 仍然是 ipc.ts 那一份读，没有第二套读写。
+ */
+export function computerUseTurnContext(settings: AppSettings | undefined): ComputerUseTurnContext {
+  return {
+    enabled: settings?.experimentalFeatures?.["computer-use"] === true,
+    // 缺省允许（effectiveAllowNetwork）：老 settings.json 没这个键 = 与开关做出来之前一样
+    allowNetwork: effectiveAllowNetwork(settings),
+  };
+}
 
 export function turnFields(
   input: SubmitAgentInput | CompactAgentInput,
@@ -31,8 +49,9 @@ export function turnFields(
     attributionLanguage: Language;
     /** 实验功能「PDF 引用」的开关（settings.experimentalFeatures）：开着才注册 cite_pdf；缺席 = 关 */
     pdfCitations: boolean;
-    /** 实验功能「电脑使用」的开关（settings.experimentalFeatures）：开着才注册沙箱工具组；缺席 = 关 */
-    computerUse: boolean;
+    /** 实验功能「电脑使用」的现场（settings.experimentalFeatures）：开着才注册沙箱工具组；
+     * 其中 allowNetwork 是「这次沙箱有没有出网」——只在开着时有意义 */
+    computerUse: ComputerUseTurnContext;
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
