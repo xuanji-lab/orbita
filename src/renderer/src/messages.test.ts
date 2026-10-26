@@ -33,8 +33,11 @@ const ALLOWED_LATIN = new Set([
   "GIF",
   "WebP",
   "MB",
-  // 文档格式名（PDF 预览与引用）
+  // 文档格式名（PDF 预览与引用、docx 轻量编辑）
   "PDF",
+  "docx",
+  // 其他应用的名字（docx 只读 / 密码提示里指的就是 Word）
+  "Word",
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",

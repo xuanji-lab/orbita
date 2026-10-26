@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { flushAllDocx, flushAllDocxForLeave } from "../docx/docx-flush.ts";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
@@ -2093,7 +2094,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 「打开后接着发消息」的编排（遗留事项续跑原会话）要等它，否则 submit 先行
    * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
    */
-  const openSession = useCallback(
+  const openSessionNow = useCallback(
     (id: string): Promise<void> => {
       if (id === sessionRef.current) return Promise.resolve();
       engine.setError(null);
@@ -2164,6 +2165,19 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
+   * 切会话 = 把两栏整片换掉，打开着的 docx 会随之卸载。先让它们把待存改动落盘；
+   * 任何一份失败（要确认整份重排 / 磁盘被外部改过 / 写盘失败）就**不切走**——
+   * 提示由 docx 视图自己挂出来（2026-10-24 评审：切会话会丢字）。
+   */
+  const openSession = useCallback(
+    (id: string): Promise<void> => {
+      if (id === sessionRef.current) return Promise.resolve();
+      return flushAllDocx().then((outcome) => (outcome.ok ? openSessionNow(id) : undefined));
+    },
+    [openSessionNow],
+  );
+
+  /**
    * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
    * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
    * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
@@ -2171,7 +2185,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 遗留事项（meta.resumedCarryovers），收尾确认时那条自动标为做完（2026-10-24 用户：
    * 遗留事项的后续之前「没有设计」）。
    */
-  const startCarryoverTask = useCallback(
+  const startCarryoverNow = useCallback(
     (item: Carryover): void => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -2205,6 +2219,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine, model, mode, cwd, workspaceId, reset, submitTurn],
   );
+
+  const startCarryoverTask = useCallback(
+    (item: Carryover): void => {
+      // 同 newTask：这条也会 reset 掉右栏面板
+      void flushAllDocxForLeave().then((outcome) => {
+        if (outcome.ok) startCarryoverNow(item);
+      });
+    },
+    [startCarryoverNow],
+  );
+
 
   /**
    * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
@@ -2264,19 +2289,30 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
 
-  /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
+  /**
+   * 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底。
+   * **清槽 = 右栏文件面板整片换掉**，打开着的 docx 随之卸载：先让它的待存改动
+   * 落盘，失败就不清槽（提示在 docx 视图里）。评审 2b：这条不走 openSession，
+   * 原来直接 reset() 就把字丢了。
+   */
   const newTask = useCallback(() => {
-    reset();
-    setCwd(null);
-    setWorkspaceId(null);
+    void flushAllDocxForLeave().then((outcome) => {
+      if (!outcome.ok) return;
+      reset();
+      setCwd(null);
+      setWorkspaceId(null);
+    });
   }, [reset]);
 
-  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次 */
+  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次。闸门同 newTask */
   const newTaskIn = useCallback(
     (workspace: Workspace) => {
-      reset();
-      setCwd(workspace.path);
-      setWorkspaceId(workspace.id);
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        reset();
+        setCwd(workspace.path);
+        setWorkspaceId(workspace.id);
+      });
     },
     [reset],
   );

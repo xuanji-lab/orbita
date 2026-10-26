@@ -3345,6 +3345,131 @@ body {
   padding: 0;
   overflow: hidden;
 }
+
+/*
+ * docx 轻量编辑（features/docx/DocxView.tsx，issue #273）：预览体让出滚动与内边距——
+ * 分页与滚动由引擎自己的画布承担（它按 fit-width 适配面板宽度），这一层只管高度。
+ * 工具栏是应用自己的四个按钮 + 保存，不是引擎的工具栏（showToolbar=false）：
+ * 这一刀只做改字 / 粗斜下划线 / 撤销重做，不把表格、图片、样式管理器铺出来。
+ */
+.file-preview-body[data-kind="docx"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.docx-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.docx-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.docx-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border-radius: var(--radius-sm);
+}
+.docx-bar-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: var(--space-3);
+  margin: 0 var(--space-1);
+  background: var(--color-border-subtle);
+}
+/*
+ * 保存状态贴在行的右血线上（.row-trailing 推到右缘），保存键在它之后。
+ * **窄面板里报错不能把保存键挤出工具栏**：状态是这一行唯一可伸缩的一段，
+ * 超长（原始 IPC 报错经常很长）从尾部省略，全文在 title 里；失败细节另走提示条。
+ */
+.docx-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  padding: 0 var(--space-2);
+}
+.docx-status[data-kind="failed"] {
+  color: var(--color-danger);
+}
+/* 保真闸门 / 冲突 / 超限的提示条：坐在工具栏与页面之间，不盖住正文（不用模态） */
+.docx-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  margin: var(--space-2) var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-ui);
+}
+.docx-note[data-tone="danger"] {
+  color: var(--color-text-primary);
+}
+/* 只是个告知（目录页码已对齐）：不用警告黄，与旁边的普通次要文字同色 */
+.docx-note[data-tone="info"] > .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+.docx-note > svg,
+.docx-note > .orbita-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--color-warning);
+}
+.docx-note[data-tone="danger"] > .orbita-icon {
+  color: var(--color-danger);
+}
+.docx-note-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.docx-note-button {
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+.docx-note-button[data-primary] {
+  color: var(--color-accent);
+}
+.docx-page-area {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  margin-top: var(--space-2);
+}
+.docx-page-area > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 引擎的纸张背景跟面板底色区分开：编辑面是浅灰底、纸是白的（与 PDF 预览同一读法） */
+.docx-page-area .folio-root {
+  background: var(--color-bg-muted);
+}
 .pdf-view {
   flex: 1 1 auto;
   min-height: 0;

@@ -1704,6 +1704,57 @@ export const zh: Messages = {
     treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,
   },
 
+  /* ---------- docx 轻量编辑（issue #273）：工具栏、保存状态、保真闸门 ---------- */
+  docx: {
+    bold: "粗体",
+    italic: "斜体",
+    underline: "下划线",
+    undo: "撤销",
+    redo: "重做",
+    clean: "未改动",
+    unsaved: "未保存",
+    saving: "正在保存…",
+    saved: "已保存",
+    saveFailed: "保存失败",
+    conflictShort: "磁盘上的文件已变",
+    conflictChanged: "打开之后，磁盘上的这个文件被改过。本次没有写入任何内容。",
+    conflictMissing: "磁盘上的这个文件已被删除。本次没有写入任何内容。",
+    reload: "重新读盘",
+    dismiss: "知道了",
+    repackLead: (reasons) => `本次保存会把整份文档重新生成（${reasons}）。`,
+    repackReason: {
+      structure: "段落或表格有增减",
+      image: "插入了新图片",
+      numbering: "新增了编号定义",
+      engine: "编辑器报告要整份重写",
+    },
+    backupHint: "上一版会先复制进 orbita 的应用数据目录，可以退回去。",
+    saveAnyway: "仍然保存",
+    leaveBlocked: "还有改动没保存成功——现在切走会丢字。先重试保存，再切。",
+    unloadBlocked: "还有改动没保存成功，关闭被拦下了。可以重试保存，或者明确放弃后关闭。",
+    unloadSaved: "改动已经存好了——再关一次（或再刷新一次）就安全了。",
+    writeBlocked: "这个文件写不进去：它现在是只读的，或者正被别的程序占用。",
+    retrySave: "重试保存",
+    closeAnyway: "放弃并关闭",
+    savedWithBackup: (path) => `保存（上一版：${path}）`,
+    oversizeEstimate: (estimate, limit) =>
+      `大约 ${estimate} 页，超过应用内编辑的上限（${limit} 页）。在这里打开可能让面板卡住一阵。`,
+    openAnyway: "仍然打开",
+    oversize: (limit, pages) => `这份文档有 ${pages} 页，超过应用内编辑的上限（${limit} 页）：这里只读，要改请在 Word 里改。`,
+    tooLarge: (size, limit) => `太大，这里打不开（${size}，上限 ${limit}）`,
+    invalid: {
+      password: "这份文档有密码保护。请在 Word 里去掉密码再保存一次。",
+      "not-docx": "这个文件不是 Word 文档。",
+      corrupt: "这个文件已损坏——不是能读的 docx 包。",
+      missing: "这个文件已经不在磁盘上了——在 orbita 之外被删除或改名了。",
+    },
+    /* 目录页码自愈（issue #276）：保存时按屏幕上这一份分页改写目录里的页码 */
+    tocNoLayout: "分页还没排好，目录页码这次没有更新。",
+    tocHealed: (n) => `目录页码已更新 ${n} 条。`,
+    tocMissed: (n) => `目录有 ${n} 条没定位到，页码保持原样。`,
+    tocStatic: (n) => `静态目录已更新 ${n} 条页码，用 Word 打开后转成域更稳。`,
+  },
+
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "意图",

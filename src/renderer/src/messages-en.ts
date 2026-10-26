@@ -1848,6 +1848,70 @@ export const en = {
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },
 
+  /* ---------- docx 轻量编辑（issue #273）：工具栏、保存状态、保真闸门 ---------- */
+  docx: {
+    bold: "Bold",
+    italic: "Italic",
+    underline: "Underline",
+    undo: "Undo",
+    redo: "Redo",
+    /** 刚打开、还没动过：磁盘上的这一份就是屏幕上的这一份 */
+    clean: "No changes",
+    unsaved: "Not saved",
+    saving: "Saving…",
+    saved: "Saved",
+    saveFailed: "Couldn't save",
+    /** 工具栏状态栏的短写；完整说明在下面的提示条里 */
+    conflictShort: "File changed on disk",
+    conflictChanged: "This file changed on disk after you opened it. Nothing was written.",
+    conflictMissing: "This file was deleted on disk. Nothing was written.",
+    reload: "Reload from disk",
+    dismiss: "Dismiss",
+    /** 保真闸门：这次保存会整份重新生成文档，先把原因说清楚 */
+    repackLead: (reasons: string) => `This save rewrites the whole document (${reasons}).`,
+    repackReason: {
+      structure: "paragraphs or tables changed",
+      image: "a new image was added",
+      numbering: "a new numbering definition was added",
+      engine: "the editor reports a full rewrite",
+    },
+    /** 覆盖前的上一版落在应用数据目录（不进工作区） */
+    backupHint: "The previous version is copied into orbita's app data folder first, so you can go back to it.",
+    saveAnyway: "Save anyway",
+    /** 离场被拒：这次保存是「要切走」逼出来的，失败就等于切走会丢字 */
+    leaveBlocked: "These edits aren't saved yet, so leaving now would lose them. Retry the save, then switch.",
+    /** 关窗口被 beforeunload 拦下、flush 又没成功 */
+    unloadBlocked: "There are unsaved edits and the save failed, so closing was blocked. Retry, or close anyway and lose them.",
+    /** 关窗口/刷新被拦下但已经存好：不再自动关（分不清关窗与重载），给一句反馈 */
+    unloadSaved: "Your edits are saved now — close or reload again when you're ready.",
+    /** 写盘被权限 / 占用挡住（EPERM / EACCES / EBUSY 的人话版） */
+    writeBlocked: "This file can't be written: it is read-only, or another program is holding it open.",
+    retrySave: "Retry save",
+    closeAnyway: "Close anyway",
+    savedWithBackup: (path: string) => `Save (previous version: ${path})`,
+    /** 挂载前的页数粗估：先问，不要先冻住面板 */
+    oversizeEstimate: (estimate: number, limit: number) =>
+      `About ${estimate} pages — beyond the in-app limit (${limit}). Opening it here can freeze the panel for a while.`,
+    openAnyway: "Open anyway",
+    /** 页数超过 DOCX_MAX_PAGES：只读，改去 Word */
+    oversize: (limit: number, pages: number) =>
+      `This document has ${pages} pages — the in-app editor stops at ${limit}. It is read-only here; edit it in Word.`,
+    tooLarge: (size: string, limit: string) => `Too large to open here (${size} — the limit is ${limit})`,
+    invalid: {
+      password: "This document is password-protected. Remove the password in Word and save again.",
+      "not-docx": "This file isn't a Word document.",
+      corrupt: "This file is damaged — it isn't a readable .docx package.",
+      missing: "This file isn't on disk anymore — it was deleted or renamed outside orbita.",
+    },
+    /* 目录页码自愈（issue #276）：保存时按屏幕上这一份分页改写目录里的页码 */
+    tocNoLayout: "Pagination isn't ready yet, so the contents page numbers weren't updated.",
+    tocHealed: (n: number) => `Updated ${n} contents page number${n === 1 ? "" : "s"}.`,
+    tocMissed: (n: number) =>
+      `Couldn't locate ${n} contents entr${n === 1 ? "y" : "ies"}; their page numbers were left as they were.`,
+    tocStatic: (n: number) =>
+      `Updated ${n} page number${n === 1 ? "" : "s"} in a static contents list — convert it to a field in Word for a lasting fix.`,
+  },
+
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "Intent",

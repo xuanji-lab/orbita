@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listDirectory } from "./list.ts";
+import { listDirectory, whitelistedTargetPath } from "./list.ts";
 import type { FileListRequest, FileRoot } from "../../shared/files.ts";
 
 let dir = "";
@@ -108,6 +108,48 @@ describe("listDirectory", () => {
     await assert.rejects(
       () => listDirectory(roots, req(rootDir, join(rootDir, "nope"))),
       /目录不存在/,
+    );
+  });
+});
+
+describe("whitelistedTargetPath —— 写通道（允许目标文件已经不在了）", () => {
+  test("存在的文件：照旧 realpath 后返回", async () => {
+    const target = join(rootDir, "b.txt");
+    const result = await whitelistedTargetPath(roots, req(rootDir, target));
+    assert.deepEqual(result, { path: await realpath(target) });
+  });
+
+  test("文件被外部删掉、父目录还在：仍给出可写路径（不抛「目录不存在」）", async () => {
+    const target = join(rootDir, "gone.docx");
+    const result = await whitelistedTargetPath(roots, req(rootDir, target));
+    assert.equal("path" in result, true);
+    assert.ok("path" in result);
+    assert.equal(result.path, join(await realpath(rootDir), "gone.docx"));
+  });
+
+  test("整棵目录被删：回 missing（不替用户重建目录）", async () => {
+    const result = await whitelistedTargetPath(roots, req(rootDir, join(rootDir, "no-such-dir", "a.docx")));
+    assert.deepEqual(result, { missing: true });
+  });
+
+  test("根不在白名单里：拒绝", async () => {
+    await assert.rejects(whitelistedTargetPath(roots, req(join(dir, "elsewhere"), join(dir, "elsewhere", "a.docx"))));
+  });
+
+  test("文件不存在、路径借 .. 逃出根：拒绝", async () => {
+    const outside = join(rootDir, "..", "escape.docx");
+    await assert.rejects(whitelistedTargetPath(roots, req(rootDir, outside)), /不在允许的根之内/);
+  });
+
+  test("根目录本身不存在：拒绝（根的身份不对，不是「文件没了」）", async () => {
+    // 根必须在 fs:roots 回过的清单里，再被外部删掉——这才是「根目录不存在」这一支
+    const goneRoot = join(dir, "vanished-root");
+    await mkdir(goneRoot);
+    const withGone: FileRoot[] = [...roots, { kind: "attached", label: "gone", path: goneRoot, exists: true }];
+    await rm(goneRoot, { recursive: true, force: true });
+    await assert.rejects(
+      whitelistedTargetPath(withGone, req(goneRoot, join(goneRoot, "a.docx"))),
+      /根目录不存在/,
     );
   });
 });

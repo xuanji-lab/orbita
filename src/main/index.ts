@@ -48,6 +48,7 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerDocxIpc } from "./docx/ipc.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
@@ -643,6 +644,8 @@ void app.whenReady().then(async () => {
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
+  // docx 轻量编辑（docx:open / docx:save）：白名单同上，上一版备份放 userData 里
+  registerDocxIpc(workspaces, sessions, join(configDir, "docx-backups"));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，

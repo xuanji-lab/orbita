@@ -61,6 +61,7 @@ import {
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
+import { flushAllDocxForLeave } from "./features/docx/docx-flush.ts";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -88,7 +89,27 @@ export function App() {
   /** 中卡盖着哪个面（聊天 / 设置）——与右侧面板是**两个独立状态**，不是一个枚举 */
   const [overlay, setOverlay] = useState<Overlay>(null);
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
-  const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
+  const [rightPanel, setRightPanelRaw] = useState<RightPanelKind | null>(null);
+  /**
+   * 右栏切换（含收起）的唯一入口。**离开「文件」面板 = FilesPanel 卸载 = 打开着的
+   * docx 编辑器卸载**：先把待存改动落盘；失败就**不切**（评审 2a：「打字后点审查改动」
+   * 曾经把字和视图一起丢掉，零提示）。提示由 docx 视图自己挂出来。
+   * 没有待存改动时 `flushAllDocxForLeave` 同步放行，普通切面板不会变慢。
+   */
+  const setRightPanel = useCallback(
+    (next: RightPanelKind | null | ((current: RightPanelKind | null) => RightPanelKind | null)): void => {
+      const target = typeof next === "function" ? next(rightPanel) : next;
+      if (target === "files" || target === rightPanel) {
+        setRightPanelRaw(target);
+        return;
+      }
+      void flushAllDocxForLeave().then((outcome) => {
+        if (outcome.ok) setRightPanelRaw(target);
+      });
+    },
+    [rightPanel],
+  );
+
   /**
    * Archived / Carryovers 两个子视图的开关（入口在右栏底部，2026-09-22 裁决）。
    * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。两者互斥：点一个退另一个。
