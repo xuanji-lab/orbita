@@ -30,7 +30,7 @@ export function isLatexEngine(value: unknown): value is LatexEngine {
 
 /**
  * 一次编译的结局。**没有 "busy"**：并发被拒（同项目在编 / 全局已满）不是编译结局，
- * 走 `LatexRunOutcome` 的 `{ ok: false }` 分支——那时我们连 latexmk 都没起，
+ * 走 `LatexRunOutcome` 的 `{ ok: false, reason }` 分支——那时我们连 latexmk 都没起，
  * 把它报成某个 status 会让界面显示一次不存在的编译。
  */
 export type LatexStatus =
@@ -39,6 +39,7 @@ export type LatexStatus =
   | "warning-only"
   /** latexmk 非零退出，或退出 0 但没产出新 PDF */
   | "compile-error"
+  /** 超时被杀。**为什么超时看 `timeoutKind`**：日志静默卡住 vs 总时长封顶 */
   | "timeout"
   /** 被取消（应用退出：runner.cancelAll） */
   | "cancelled"
@@ -105,7 +106,22 @@ export interface LatexResult {
    * 是纯浪费（warnings 已经足够）。
    */
   logTail: string | null;
+  /**
+   * 超时的具体原因，`status === "timeout"` 时非 null：
+   * - "idle"：日志连续 LATEX_IDLE_TIMEOUT_MS 没有新的落盘变化 —— 可能是长时间
+   *   计算、等交互输入，或真的死循环。**不能据此断言是死循环**：TeX 的 .log 按
+   *   4 KiB 块落盘，合法但耗时的编译可以让 stat 连续几分钟不变（见常量注释）
+   * - "total"：总时长到达 LATEX_TOTAL_TIMEOUT_MS —— 文档在这段时间内没编完；
+   *   日志可能一直在长，也可能根本没写（自定义 recipe）
+   *
+   * 两者对模型的下一步动作不同（先判断是不是真卡住 vs 拆文档/换机器），
+   * 所以不能只报 timeout。
+   */
+  timeoutKind: LatexTimeoutKind | null;
 }
+
+/** 超时的两种原因，见 LatexResult.timeoutKind */
+export type LatexTimeoutKind = "idle" | "total";
 
 /**
  * 编译请求。`dir` 是**项目目录**（.tex 所在目录）：agent 侧相对会话 cwd 解析，
@@ -119,10 +135,25 @@ export interface LatexCompileRequest {
 }
 
 /**
+ * 并发被拒的原因。**它不是 LatexStatus**（同 LatexStatus 的注释：那时连 latexmk
+ * 都没起），但界面 / 工具要能区分「等一会儿再试」与「参数不对」：
+ * - "same-project"：同一项目已有编译在跑，两次 latexmk 抢同一组 .aux 会互相写坏
+ * - "busy"：全局并发已满。低内存机（≤ 16 GiB）上限是 1，宽内存机是 2。
+ *   **明确拒绝，不排队**：排队会让模型以为工具卡住，且两个 latexmk 在无风扇机型上
+ *   会一起被降频，比直接拒绝慢得多。
+ */
+export type LatexRejectReason = "same-project" | "busy";
+
+/**
  * 编译的对外结局。**并发被拒、目录不存在一类"没开始编"的失败走这里**，
  * 不伪装成一次编译结果（同 LatexStatus 的注释）。
+ *
+ * `reason` 只在「请求本身合法、但当前不能编」时给（并发被拒）；参数 / 授权校验
+ * 失败没有它——那种失败不是「稍后重试」能解决的。
  */
-export type LatexRunOutcome = { ok: true; result: LatexResult } | { ok: false; error: string };
+export type LatexRunOutcome =
+  | { ok: true; result: LatexResult }
+  | { ok: false; error: string; reason?: LatexRejectReason };
 
 /**
  * 探测结果。`latexmk` 是发现的可执行文件：PATH 命中时就是名字本身（spawn 时由
@@ -140,8 +171,26 @@ export interface LatexProbeResult {
   message: string;
 }
 
-/** latexmk 单次编译的硬上限。真实论文（含 bibtex 多轮）通常 10–60 秒量级 */
-export const LATEX_TIMEOUT_MS = 120_000;
+/**
+ * 判「卡住」的静默上限：日志连续这么久没有新的落盘变化就终止整棵进程树。
+ *
+ * **为什么是 300 秒而不是 issue 里写的 90 秒**：90 秒已被真机实测证伪。TeX 把
+ * .log 按 **4 KiB 块** 落盘（不是每行 flush），合法但耗时的编译可以在几十分钟内
+ * 一直看着“没动静”：评审用真 lualatex `\directlua` 文档实测，编译期间 stat
+ * 连续 **105 秒恒为 4096 字节、mtime 不动**，结束时才变；同一文档 idle=590s 时
+ * **256.8 秒成功出 PDF**，idle=90s 时 **93.1 秒被杀并误报“死循环”**。
+ * 所以宁可在 5 分钟后才判卡，也不误杀一次四分钟的合法编译。
+ *
+ * 判活信号仍是日志的增长 / mtime，但结论只能是“没有新输出”，不是“死循环”
+ * （文案与 timeoutKind 都按这个写）；总时长闸（LATEX_TOTAL_TIMEOUT_MS）兜底。
+ */
+export const LATEX_IDLE_TIMEOUT_MS = 300_000;
+
+/**
+ * 单次编译的总时长上限。静默判定之外的第二道闸：一直有输出也不能永远编下去
+ * （超大文档、递归 \input）。真实论文（含 bibtex 多轮）通常 10–60 秒量级。
+ */
+export const LATEX_TOTAL_TIMEOUT_MS = 10 * 60_000;
 
 /** 失败时回给模型的日志尾巴长度 */
 export const LATEX_LOG_TAIL_LIMIT = 8 * 1024;
@@ -149,8 +198,30 @@ export const LATEX_LOG_TAIL_LIMIT = 8 * 1024;
 /** 日志解析的条目上限（errors / warnings 各自）。坏日志可以有上万条 Overfull */
 export const LATEX_MAX_ISSUES = 200;
 
-/** 全局同时编译的项目数。超过两个 latexmk 会把一台笔记本的 CPU 吃满 */
-export const LATEX_MAX_CONCURRENT = 2;
+/**
+ * 「低内存机」阈值：16 GiB。
+ *
+ * 单位换算写清（这里差一个数量级就是误判）：硬件标称的 16 GB 指 16 GiB =
+ * 16 × 1024³ = 17,179,869,184 字节，而 `os.totalmem()` 报的也是字节——但固件 /
+ * 内核会保留一点，**16 GB 机器实测报值略小于 17.18e9**。所以阈值按 16 GiB 取、
+ * 用 `<=` 判；要是按十进制的 16,000,000,000 判，真正的 16 GB 机器会漏过去、
+ * 32 GB 机器（34.36e9）也不会被误判。
+ */
+const LOW_MEMORY_BYTES = 16 * 1024 ** 3;
+
+/** 宽内存机（> 16 GiB）同时编译的项目数。两个 latexmk 已经能把笔记本 CPU 吃满 */
+const MAX_CONCURRENT_WIDE = 2;
+
+/** 低内存机（≤ 16 GiB）同时编译的项目数：无风扇机型跑两个会降频，宁可拒绝也不排队 */
+const MAX_CONCURRENT_LOW_MEMORY = 1;
+
+/**
+ * 这台机器能同时跑几个编译。判据只有 `os.totalmem()`（不去读硬件型号：同一型号
+ * 有不同的内存配置，读型号既不可靠也平台相关）。
+ */
+export function latexMaxConcurrent(totalMemoryBytes: number): number {
+  return totalMemoryBytes > LOW_MEMORY_BYTES ? MAX_CONCURRENT_WIDE : MAX_CONCURRENT_LOW_MEMORY;
+}
 
 /** 默认产物目录（相对项目目录）。名字固定成 build/，与 .gitignore 惯例一致 */
 export const LATEX_DEFAULT_OUT_DIR = "build";
