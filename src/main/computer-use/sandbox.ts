@@ -54,7 +54,7 @@ import {
   startGuestTcpProbe,
 } from "./bridge-client.ts";
 import { waitForBridgeInfo, type BridgeInfo } from "./bridge-ready.ts";
-import { isRemoteSessionImage, type SandboxProcessInfo } from "./process-list.ts";
+import { isRemoteSessionImage, isSandboxMemoryImage, type SandboxProcessInfo } from "./process-list.ts";
 
 /** guest 桥 exe 的文件名（guest-bridge 子代理的产物，宿主只按这个名字找） */
 const GUEST_BRIDGE_EXE = "orbita-guest-bridge.exe";
@@ -327,6 +327,19 @@ export interface SandboxDeps {
    */
   gracefulCloseMs?: number;
   /**
+   * stop() 的观察窗口（只在接了 listSandboxProcesses 时生效）：新架构下 stop 那一刻
+   * 「基线差集」为空不代表没有沙箱——VM 可能晚几秒才出现（2026-10-27 的泄漏就是这个时序）。
+   * 窗口内一直为空才算「真的没有要等的」。默认 10_000；测试传小值。
+   */
+  stopSettleMs?: number;
+  /** 收尾轮询节奏，默认 500ms；测试传小值（只在 observation 路径上生效） */
+  stopObserveIntervalMs?: number;
+  /**
+   * stopping 的总预算，默认 90_000。超了还没确认退出就转 error（消息里写清还剩什么、
+   * 怎么手动清），**不假装 off**——那会让「未启动」和「VM 还在吃 3~6GB」同时成立。
+   */
+  stopTotalTimeoutMs?: number;
+  /**
    * 观测沙箱侧进程（镜像名 + PID），只读。
    *
    * 2026-10-23（Windows 更新后的新沙箱架构）实测：`WindowsSandbox.exe` 只是启动器——
@@ -362,6 +375,30 @@ const STOP_ESCALATION_MS = 5_000;
  * 也算在内）会卡在窗口上直接超时，白等一轮才退回强杀。
  */
 const STOP_GRACEFUL_MS = 25_000;
+/**
+ * stop() 的**观察窗口**（只在接了 `listSandboxProcesses` 时生效）。
+ *
+ * 2026-10-27 真机验收咬一次：3 次停止里 1 次泄漏——`stop()` 10ms 就报 off，60 秒后
+ * `RemoteSession` / `Server` / `vmwp` / `vmmemWindowsSandbox` 全在、窗口还开着。根因是
+ * 新架构下启动器在 starting 阶段就 exit 0，`stop()` 时 child 已经是 null；而那一刻
+ * `newSandboxPids()` 恰好还没看到任何进程（VM 正在起），于是「一只都没起来」被当成
+ * 「没有要等的证据」立刻宣布 off。
+ *
+ * 所以空列表**不能**当即结论：要么连续 STOP_QUIET_ROUNDS 轮、间隔 STOP_OBSERVE_INTERVAL_MS
+ * 都为空，要么看满这个窗口。窗口内一旦出现进程就转入正常收尾链（关窗 → 强杀 → 升级）。
+ */
+const STOP_SETTLE_MS = 10_000;
+/** 观察窗口 / 收尾轮询的节奏（读一次 tasklist 约 50~200ms，500ms 不会把 CPU 打满） */
+const STOP_OBSERVE_INTERVAL_MS = 500;
+/** 观察窗口内连续这么多轮都为空，才允许把「空」当结论（单次空可能是 VM 还没起来） */
+const STOP_QUIET_ROUNDS = 3;
+/**
+ * stopping 的总预算：超过它还没确认退出就转 error，**不假装 off**。
+ * 90 秒 = 观察窗口 10s + 优雅关窗 25s + 强杀 3s + 升级 5s + 真机 VM 收尾的抖动余量。
+ * 转 error 时把「还剩哪些 PID / 怎么手动清」写进消息——UI 上「未启动」而 VM 还在吃
+ * 3~6GB，比报一个错坑得多（攒几次会报「与该服务器建立的会话太多」，新沙箱都起不来）。
+ */
+const STOP_TOTAL_TIMEOUT_MS = 90_000;
 /** 退出确认的轮询节奏：exit 事件是主路径，这个是兜底信号（二者取先到） */
 const EXIT_POLL_INTERVAL_MS = 250;
 /**
@@ -533,8 +570,10 @@ export class SandboxController {
 
   async stop(): Promise<ComputerUseStopResult> {
     if (this.state === "off" || this.state === "stopping") return { ok: true };
-    if (this.state === "error") {
-      // error 是可恢复态：清理干净回 off，让「停止」同时充当复位按钮
+    if (this.state === "error" && !this.canObserveSandboxProcesses()) {
+      // error 是可恢复态：清理干净回 off，让「停止」同时充当复位按钮。
+      // 但**能观测沙箱进程时不能这么直接**：启动失败只杀了启动器，VM 可能已经起来
+      // （Server / RemoteSession / vmwp），直接转 off 就是又一个「UI 干净、VM 还活着」。
       this.cleanup();
       this.transition("off");
       return { ok: true };
@@ -901,8 +940,15 @@ export class SandboxController {
 
   private killOrphans(processes: readonly SandboxProcessInfo[]): void {
     if (processes.length === 0) return;
+    // vmmemWindowsSandbox 只观测不杀：它不是控制台进程，taskkill 打不动，等 VM 自己收尾
+    // （它的存在恰恰是「VM 还在」的强证据，留在 waitNoNewSandboxProcesses 的名单里）。
+    const killable = processes.filter((process) => !isSandboxMemoryImage(process.image));
+    if (killable.length === 0) {
+      this.log(`剩下的是 VM 内存进程（${processes.map((p) => p.pid).join(", ")}），只等它自己消失，不 taskkill`);
+      return;
+    }
     const killTreeByPid = this.deps.killTreeByPid;
-    const pids = processes.map((process) => process.pid);
+    const pids = killable.map((process) => process.pid);
     if (killTreeByPid === undefined) {
       this.log(`宿主里还有沙箱进程 ${pids.join(", ")}，但没有接 killTreeByPid，杀不了——按 PID 手动结束它`);
       return;
@@ -921,69 +967,123 @@ export class SandboxController {
    * **但 VM 不退**——vmwp.exe + vmmemWindowsSandbox（3.4GB）留了两分钟以上，
    * 而 vmwp 自己 taskkill 是拒绝访问。等于「关窗但泄漏 VM」。
    *
-   * 与旧路径同一条纪律：**宣布 off 必须有退出证据**。
+   * 与旧路径同一条纪律：**宣布 off 必须有退出证据**。2026-10-27 又咬一次：`pids` 首次为 0
+   * 就宣布 off，而那一刻 VM 正在起——60 秒后 Server / RemoteSession / vmwp / vmmem 全在、
+   * 窗口还开着。所以现在多一层「观察窗口」：空列表要连续几轮 + 看满窗口才算结论。
    */
   private async stopOrphans(generation: number): Promise<void> {
     const isCurrent = (): boolean => generation === this.generation && this.phase() === "stopping";
-    let pids = this.newSandboxPids();
-    if (pids.length === 0) {
-      // 一只都没起来（或已经被系统回收）：没有要等的证据，直接收尾
-      if (isCurrent()) this.transition("off");
+    const deadline = Date.now() + (this.deps.stopTotalTimeoutMs ?? STOP_TOTAL_TIMEOUT_MS);
+    const remaining = (): number => Math.max(deadline - Date.now(), 1);
+
+    // a. 观察窗口：新架构下启动器 exit 0 之后 VM 才慢慢出现，第一次看是空的不能当结论
+    const appeared = await this.waitForSandboxProcesses(generation);
+    if (!isCurrent()) return;
+    if (!appeared) {
+      // 连续 STOP_QUIET_ROUNDS 轮 + 看满窗口都为空：这才是「没有要等的证据」
+      this.transition("off");
       return;
     }
+
+    // b. 优雅关窗（强杀会把 VM 留给宿主）
     if (this.closeSandboxWindowGracefully()) {
-      const gracefulMs = this.deps.gracefulCloseMs ?? STOP_GRACEFUL_MS;
-      if (await this.waitPidsGone(pids, gracefulMs, generation)) {
+      const gracefulMs = Math.min(this.deps.gracefulCloseMs ?? STOP_GRACEFUL_MS, remaining());
+      if (await this.waitNoNewSandboxProcesses(gracefulMs, generation)) {
         if (isCurrent()) this.transition("off");
         return;
       }
       if (!isCurrent()) return;
       // 优雅关闭没生效（窗口卡住 / 用户拒绝 / 没接 closeSandboxWindow）：退回强杀链
-      pids = this.newSandboxPids();
-      if (pids.length === 0) {
+      const left = this.newSandboxPids();
+      if (left.length === 0) {
         this.transition("off");
         return;
       }
-      this.log(`优雅关闭 ${gracefulMs}ms 没等到沙箱退出（pid ${pids.join(", ")}），退回强杀`);
+      this.log(`优雅关闭 ${gracefulMs}ms 没等到沙箱退出（pid ${left.join(", ")}），退回强杀`);
     }
+
+    // c. 强杀 → 等 → 升级再杀 → 再等
     this.killOrphans(this.newSandboxProcesses());
-    if (await this.waitPidsGone(pids, this.deps.killFallbackMs ?? STOP_FALLBACK_MS, generation)) {
+    const fallbackMs = Math.min(this.deps.killFallbackMs ?? STOP_FALLBACK_MS, remaining());
+    if (await this.waitNoNewSandboxProcesses(fallbackMs, generation)) {
       if (isCurrent()) this.transition("off");
       return;
     }
     if (!isCurrent()) return;
     // 升级：重新取一次差集——上一轮杀的过程中可能有新进程接上来（RemoteSession 会重起）
-    pids = this.newSandboxPids();
+    const pids = this.newSandboxPids();
     if (pids.length === 0) {
       this.transition("off");
       return;
     }
     this.log(`沙箱进程 ${pids.join(", ")} 没有退出，升级：再按 PID 杀一次进程树`);
     this.killOrphans(this.newSandboxProcesses());
-    if (await this.waitPidsGone(pids, this.deps.killEscalationMs ?? STOP_ESCALATION_MS, generation)) {
+    const escalationMs = Math.min(this.deps.killEscalationMs ?? STOP_ESCALATION_MS, remaining());
+    if (await this.waitNoNewSandboxProcesses(escalationMs, generation)) {
       if (isCurrent()) this.transition("off");
       return;
     }
     if (!isCurrent()) return;
-    this.log(
-      `沙箱进程可能未退出：${pids.join(", ")}——状态收尾为 off，但宿主里可能留着孤儿 VM：` +
-        "任务管理器里若见 WindowsSandboxRemoteSession / vmwp 占着内存，按 PID 手动结束它",
+
+    // d. 剩下的预算只观测、不再重复杀（vmwp 拒绝访问，反复 taskkill 没意义）
+    const idleMs = remaining();
+    this.log(`沙箱进程还没退出（pid ${this.newSandboxPids().join(", ")}），再等 ${idleMs}ms 看它会不会自己收尾`);
+    if (await this.waitNoNewSandboxProcesses(idleMs, generation)) {
+      if (isCurrent()) this.transition("off");
+      return;
+    }
+    if (!isCurrent()) return;
+
+    // e. 总预算到点还在：**不假装 off**。留一句能照做的清理指引（UI 上「未启动」而 VM 还在吃
+    //    3~6GB，比报一个错坑得多）。
+    const left = this.newSandboxPids();
+    const leftText = left.length === 0 ? "（观测不到具体 PID）" : left.join(", ");
+    this.log(`沙箱进程可能未退出：${leftText}——状态转 error，宿主里可能留着孤儿 VM`);
+    this.transition(
+      "error",
+      `沙箱没有按预期关闭（还剩进程 ${leftText}）。宿主里可能留着孤儿 VM（每个约 3~6GB）：` +
+        "在任务管理器里结束 WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，" +
+        "或重启电脑；确认干净后再点一次「停止」复位这个状态。",
     );
-    this.transition("off");
   }
 
-  /** 等到这批 PID 全部消失（true）或窗口到点（false）；换了一局就立刻放弃 */
-  private async waitPidsGone(pids: readonly number[], timeoutMs: number, generation: number): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    const alive = (): number => {
-      const current = new Set(this.newSandboxPids());
-      return pids.reduce((count, pid) => (current.has(pid) ? count + 1 : count), 0);
-    };
+  /**
+   * 观察窗口：等到我们这只沙箱的进程出现（true），或看满窗口 + 连续 STOP_QUIET_ROUNDS 轮为空（false）。
+   * 换了一局（generation 变了）立刻返回 false，调用方用 isCurrent() 收手。
+   */
+  private async waitForSandboxProcesses(generation: number): Promise<boolean> {
+    const settleMs = this.deps.stopSettleMs ?? STOP_SETTLE_MS;
+    const intervalMs = this.deps.stopObserveIntervalMs ?? STOP_OBSERVE_INTERVAL_MS;
+    const deadline = Date.now() + settleMs;
+    let quietRounds = 0;
     for (;;) {
-      if (alive() === 0) return true;
-      if (Date.now() >= deadline || generation !== this.generation) return false;
-      await sleep(Math.min(EXIT_POLL_INTERVAL_MS, Math.max(deadline - Date.now(), 1)));
+      if (generation !== this.generation) return false;
+      if (this.newSandboxPids().length > 0) return true;
+      quietRounds += 1;
+      // 两个条件都要满足：连续几轮空（排除单次采样落空）+ 看满窗口（排除 VM 还没起来）
+      if (quietRounds >= STOP_QUIET_ROUNDS && Date.now() >= deadline) return false;
+      await sleep(Math.min(intervalMs, Math.max(deadline - Date.now(), 1)));
     }
+  }
+
+  /**
+   * 等到「启动后新出现的沙箱进程」**全部**消失（true）或窗口到点（false）；换了一局就立刻放弃。
+   * 比「等指定 PID 消失」严格：收尾过程中新接上来的进程（RemoteSession 会重起）也算未退完。
+   */
+  private async waitNoNewSandboxProcesses(timeoutMs: number, generation: number): Promise<boolean> {
+    const intervalMs = this.deps.stopObserveIntervalMs ?? STOP_OBSERVE_INTERVAL_MS;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (generation !== this.generation || this.phase() !== "stopping") return false;
+      if (this.newSandboxPids().length === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(Math.min(intervalMs, Math.max(deadline - Date.now(), 1)));
+    }
+  }
+
+  /** 有没有观测沙箱侧进程的能力（没有就只能把 child 退出当唯一证据，回到旧行为） */
+  private canObserveSandboxProcesses(): boolean {
+    return this.deps.listSandboxProcesses !== undefined;
   }
 
   /**
@@ -1022,9 +1122,23 @@ export class SandboxController {
       this.failLocal(`沙箱窗口在 guest 桥就绪前就关闭了（exit code ${code}）`);
       return;
     }
-    if (this.state === "stopping" || this.state === "running") {
+    if (this.state === "stopping") {
+      this.clearTimers();
+      this.cleanup();
+      if (this.canObserveSandboxProcesses()) {
+        // child 退出只是「启动器 / 旧架构进程」的退出证据——新架构下 VM 活在 Server /
+        // RemoteSession / vmwp / vmmem 里，还得按基线差集确认整条链退出（stopOrphans
+        // 内部带观察窗口与 90 秒总预算，超时转 error 而不是假装 off）。
+        // 2026-10-27：只把 child 退出当证据，导致「stop 10ms 就 off、60s 后 VM 全在」。
+        void this.stopOrphans(generation);
+        return;
+      }
       // stopping = 我们 kill 的正常收尾（这里就是「确认退出」的那一下）；
       // running = 用户自己关了沙箱窗口
+      this.transition("off");
+      return;
+    }
+    if (this.state === "running") {
       this.clearTimers();
       this.cleanup();
       this.transition("off");
@@ -1081,6 +1195,14 @@ export class SandboxController {
   private onEscalationDeadline(child: SandboxProcess): void {
     this.escalationTimer = null;
     if (this.child !== child) return; // 第二个窗口里退出了 / 换了一局
+    if (this.canObserveSandboxProcesses()) {
+      // 能观测就不能直接宣布 off：child 杀不死的时候 VM 往往正活着（vmwp 拒绝访问），
+      // 交给同一条收尾链（观察 → 关窗 → 强杀 → 升级 → 超时转 error）。
+      this.child = null;
+      this.cleanup();
+      void this.stopOrphans(this.generation);
+      return;
+    }
     const pid = child.pid ?? "未知";
     this.log(
       `沙箱进程（pid ${pid}）在升级杀之后仍未退出——状态收尾为 off，但宿主里可能留着孤儿 VM：` +

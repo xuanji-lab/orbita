@@ -4,7 +4,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { isRemoteSessionImage, isSandboxImage, parseSandboxProcesses } from "./process-list.ts";
+import { isRemoteSessionImage, isSandboxImage, isSandboxMemoryImage, parseSandboxProcesses } from "./process-list.ts";
 
 const csv = [
   '"Image Name","PID","Session Name","Session#","Mem Usage"',
@@ -13,6 +13,8 @@ const csv = [
   '"WindowsSandboxServer.exe","6040","Console","1","78,112 K"',
   '"WindowsSandboxRemoteSession.exe","6152","Console","1","52,304 K"',
   '"vmwp.exe","7204","Services","0","2,451,880 K"',
+  // VM 内存进程：只用来盯「VM 真的没了」，不算可杀进程
+  '"vmmemWindowsSandbox","7300","Services","0","3,482,112 K"',
   // tasklist 在部分版本上把 Image Name 截到 25 字符：RemoteSession 会丢尾巴
   '"WindowsSandboxRemoteSessi","8008","Console","1","1,024 K"',
   // 名字相近但不属于沙箱侧
@@ -27,9 +29,19 @@ describe("parseSandboxProcesses", () => {
       { image: "WindowsSandboxServer.exe", pid: 6040 },
       { image: "WindowsSandboxRemoteSession.exe", pid: 6152 },
       { image: "vmwp.exe", pid: 7204 },
+      // VM 内存进程也算沙箱侧（它是「VM 还在」的证据），但只观测不杀，见下一条
+      { image: "vmmemWindowsSandbox", pid: 7300 },
       // tasklist 截断到 25 字符的那一行也要认出来（否则挑不到窗口去发 WM_CLOSE）
       { image: "WindowsSandboxRemoteSessi", pid: 8008 },
     ]);
+  });
+
+  test("vmmemWindowsSandbox 只观测不杀：认得出它是内存进程，且不肯它进 kill 名单", () => {
+    assert.equal(isSandboxMemoryImage("vmmemWindowsSandbox"), true);
+    assert.equal(isSandboxMemoryImage("VMMEMWINDOWSSANDBOX.EXE"), true);
+    assert.equal(isSandboxMemoryImage("vmwp.exe"), false);
+    assert.equal(isSandboxMemoryImage("WindowsSandboxServer.exe"), false);
+    assert.equal(isSandboxMemoryImage("vmmem"), false, "WSL 的 vmmem 不是我们这只沙箱");
   });
 
   test("镜像名要带得住：能挑出 RemoteSession（窗口）而不是 Server / vmwp", () => {

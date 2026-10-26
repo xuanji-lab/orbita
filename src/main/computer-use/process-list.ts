@@ -14,11 +14,16 @@
  * `WindowsSandboxRemoteSession.exe`（32 字符）就会被切成 `WindowsSandboxRemoteSessi`，
  * 全名相等会静默漏掉它——那正是最占内存、最该被杀的那个。
  *
- * 前缀只用于两个长名字；`vmwp` 短得能被别人前缀命中（如 vmwpctl），它只认精确值。
+ * 前缀只用于长名字；`vmwp` 短得能被别人前缀命中（如 vmwpctl），它只认精确值。
+ *
+ * `vmmemWindowsSandbox` 是 **VM 的内存进程**，只用来盯着「VM 真的没了」（2026-10-27 验收：
+ * 它和 vmwp 一起活到最后）。它**不能杀**（不是控制台进程，taskkill 没意义），见
+ * isSandboxMemoryImage / killOrphans 的过滤。
  */
 const SERVER_STEM = "windowssandboxserver";
 const REMOTE_SESSION_STEM = "windowssandboxremotesession";
-const SANDBOX_IMAGE_PREFIXES = [SERVER_STEM, REMOTE_SESSION_STEM];
+const MEMORY_STEM = "vmmemwindowssandbox";
+const SANDBOX_IMAGE_PREFIXES = [SERVER_STEM, REMOTE_SESSION_STEM, MEMORY_STEM];
 const SANDBOX_IMAGE_EXACT = ["vmwp"];
 /**
  * 截断容忍的下限：观察到的那半截至少这么长，才允许反过来用「它是长名的前缀」判。
@@ -49,6 +54,15 @@ export function isSandboxImage(imageName: string): boolean {
  */
 export function isRemoteSessionImage(imageName: string): boolean {
   return matchesStem(imageName.toLowerCase().replace(/\.exe$/, ""), REMOTE_SESSION_STEM);
+}
+
+/**
+ * 是不是 VM 的内存进程（`vmmemWindowsSandbox`）。**只观测、绝不杀**：
+ * taskkill 打不动它（不是控制台进程），而它的存在就是「VM 还没关掉」的最强证据。
+ * stop 的收尾链把它算进「等它消失」的名单，但剔除在 kill 名单之外。
+ */
+export function isSandboxMemoryImage(imageName: string): boolean {
+  return matchesStem(imageName.toLowerCase().replace(/\.exe$/, ""), MEMORY_STEM);
 }
 
 /** 前缀相等（含 tasklist 的 25 字符截断容忍；截断只对够长的半截有效，否则启动器会被误认） */

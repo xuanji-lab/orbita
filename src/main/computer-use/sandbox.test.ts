@@ -60,13 +60,23 @@ class FakeSandboxProcess implements SandboxProcess {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function waitFor<T>(read: () => T | null, timeoutMs = 2_000): Promise<T> {
+/**
+ * 轮询到条件成立。**不要用固定 sleep 等状态机**：全量跑时多 worker 并发，50ms 可能在
+ * 被测代码挂上定时器之前就用完（2026-10-27：同树连跑 4 次 fail 1/3/0/2，单文件 5/5 全绿）。
+ */
+async function waitFor<T>(
+  read: () => T | null,
+  options: number | { timeoutMs?: number; intervalMs?: number; what?: string } = 2_000,
+): Promise<T> {
+  const timeoutMs = typeof options === "number" ? options : (options.timeoutMs ?? 2_000);
+  const intervalMs = typeof options === "number" ? 10 : (options.intervalMs ?? 10);
+  const what = typeof options === "number" ? undefined : options.what;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();
     if (value !== null) return value;
-    if (Date.now() > deadline) throw new Error("waitFor 超时");
-    await sleep(10);
+    if (Date.now() > deadline) throw new Error(`waitFor 超时${what === undefined ? "" : `：${what}`}`);
+    await sleep(intervalMs);
   }
 }
 
@@ -680,12 +690,46 @@ describe("沙箱状态机（假进程 + 真 bridge.json 通告）", () => {
       await mkdir(join(harness.dir, "out"), { recursive: true });
       await writeFile(join(harness.dir, "out", BRIDGE_INFO_FILE), '{"version":"old","pid":1}', "utf8");
       const startPromise = harness.controller.start();
-      await sleep(50); // 让 start() 先跑完清理与 spawn
+      // 等 start() 真的跑到 spawn（在此之前它还在异步建目录 / 清旧文件），不靠固定 sleep
+      await waitFor(() => harness.spawnedWsb[0] ?? null, { what: "start() 跑到 spawn" });
       // 死通告应已被删除；此时不 announce 就不会就绪——状态应停在 starting
       assert.equal(harness.controller.status().state, "starting");
       harness.announceBridge();
       assert.deepEqual(await startPromise, { ok: true });
       assert.equal(harness.controller.status().state, "running");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("启动失败后就留下 VM：stop 不再直接抹成 off，而是先确认进程退出", async () => {
+    // 启动超时只杀掉启动器，VM 可能已经起来（Server / RemoteSession）——直接从 error 转 off
+    // 就是又一个「UI 干凈、VM 还活着」（同 2026-10-27 的泄漏类）。
+    let alive: SandboxProcessInfo[] = [];
+    const closed: number[] = [];
+    const harness = await makeHarness({
+      readyTimeoutMs: 150,
+      stopObserveIntervalMs: 10,
+      gracefulCloseMs: 200,
+      listSandboxProcesses: () => alive,
+      closeSandboxWindow: (pid) => {
+        closed.push(pid);
+        alive = []; // 关窗后整条链自己退
+      },
+    });
+    try {
+      const result = await harness.controller.start();
+      assert.equal(result.ok, false);
+      assert.equal(harness.controller.status().state, "error");
+      // 启动失败之后才出现 VM 进程（真机就是这样：launcher 先退，VM 后起）
+      alive = [
+        { image: "WindowsSandboxServer.exe", pid: 7100 },
+        { image: "WindowsSandboxRemoteSession.exe", pid: 7101 },
+      ];
+      assert.deepEqual(await harness.controller.stop(), { ok: true });
+      assert.equal(harness.controller.status().state, "stopping", "有进程可观测时不许直接 off");
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 2_000);
+      assert.deepEqual(closed, [7101], "去关 RemoteSession 的窗，而不是抹掉状态了事");
     } finally {
       await harness.close();
     }
@@ -725,7 +769,15 @@ describe("沙箱状态机（假进程 + 真 bridge.json 通告）", () => {
     try {
       const startPromise = harness.controller.start();
       harness.announceBridge({ respond: null }); // ping 永远不会应答，停在握手阶段
-      await sleep(200); // 等通告被消费、进入 ping
+      // 等 ping 的 req 真的落盘（= 通告已消费、进入握手），不靠固定 sleep。
+      // 注意不能等 harness.requests：respond === null 时那个应答器直接不启动，没人读文件。
+      await waitFor(
+        () =>
+          existsSync(join(harness.dir, "out", COMPUTER_USE_CMD_DIR, "cmd-000001.req.json"))
+            ? true
+            : null,
+        { timeoutMs: 5_000, what: "ping 落盘" },
+      );
       const stopPromise = harness.controller.stop();
       const result = await startPromise;
       assert.equal(result.ok, false);
@@ -772,7 +824,7 @@ describe("沙箱状态机（假进程 + 真 bridge.json 通告）", () => {
     const harness = await makeHarness();
     try {
       const startPromise = harness.controller.start();
-      await sleep(50); // 等 start() 进入轮询
+      await waitFor(() => harness.spawned[0] ?? null, { what: "start() 跑到 spawn" });
       requireProc(harness).emitExit(1);
       const result = await startPromise;
       assert.equal(result.ok, false);
@@ -787,7 +839,7 @@ describe("沙箱状态机（假进程 + 真 bridge.json 通告）", () => {
     const harness = await makeHarness();
     try {
       const startPromise = harness.controller.start();
-      await sleep(50); // 等 start() 进入轮询
+      await waitFor(() => harness.spawned[0] ?? null, { what: "start() 跑到 spawn" });
       const stopPromise = harness.controller.stop();
       const result = await startPromise;
       assert.equal(result.ok, false);
@@ -818,7 +870,7 @@ describe("沙箱状态机（假进程 + 真 bridge.json 通告）", () => {
     const harness = await makeHarness();
     try {
       const startPromise = harness.controller.start();
-      await sleep(50);
+      await waitFor(() => harness.spawned[0] ?? null, { what: "start() 跑到 spawn" });
       requireProc(harness).emitError(new Error("ENOENT"));
       const result = await startPromise;
       assert.equal(result.ok, false);
@@ -1347,7 +1399,9 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
       await waitFor(() => harness.spawned[0] ?? null);
       // 新架构的现实：启动器 0 秒退出，桥还在正常启动
       requireProc(harness).emitExit(0);
-      await sleep(20);
+      await waitFor(() => (harness.logs.some((line) => /启动器已退出/.test(line)) ? true : null), {
+        what: "启动器退出被记账",
+      });
       assert.equal(harness.controller.status().state, "starting", "启动器退出不该被当成窗口被关");
       assert.ok(
         harness.logs.some((line) => /启动器已退出/.test(line)),
@@ -1366,7 +1420,7 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
     const harness = await makeHarness({ listSandboxProcesses: () => [] });
     try {
       const startPromise = harness.controller.start();
-      await sleep(50);
+      await waitFor(() => harness.spawned[0] ?? null, { what: "start() 跑到 spawn" });
       requireProc(harness).emitExit(3);
       const result = await startPromise;
       assert.equal(result.ok, false);
@@ -1412,12 +1466,14 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
     }
   });
 
-  test("④ stop 且 PID 一直不消失：升级再杀一次 → 留痕 → off", async () => {
+  test("④ stop 且 PID 一直不消失：升级再杀一次 → 到预算转 error，不假装 off", async () => {
     let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
     const killed: number[] = [];
     const harness = await makeHarness({
       killFallbackMs: 40,
       killEscalationMs: 40,
+      stopObserveIntervalMs: 10,
+      stopTotalTimeoutMs: 400,
       listSandboxProcesses: () => alive, // 装死：taskkill 打不动
       killTreeByPid: (pid) => killed.push(pid),
     });
@@ -1433,13 +1489,127 @@ describe("新沙箱架构：启动器退出与基线差集收尾", () => {
       assert.deepEqual(await startPromise, { ok: true });
 
       await harness.controller.stop();
-      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 3_000);
+      await waitFor(() => (harness.controller.status().state === "error" ? true : null), 3_000);
       assert.deepEqual(killed, [4100, 4100], "兜底窗口没消失 → 升级再杀一次");
       assert.ok(
         harness.logs.some((line) => /可能未退出/.test(line)),
-        `收尾要留痕，不能静默 off：${harness.logs.join(" | ")}`,
+        `收尾要留痕，不能静默：${harness.logs.join(" | ")}`,
       );
-      assert.ok(harness.logs.some((line) => /手动结束/.test(line)), "痕迹要带上「怎么收拾」");
+      const status = harness.controller.status();
+      assert.equal(status.state, "error", "VM 还在就不许宣布 off（UI 干净、机器里留着 3~6GB）");
+      assert.ok(status.state === "error" && /4100/.test(status.message), status.state === "error" ? status.message : "");
+      assert.ok(status.state === "error" && /任务管理器/.test(status.message), "错误里要给一句能照做的清理指引");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("⑤ race：stop 时一只都没看到，VM 200ms 后才出现 → 不许宣布 off，随后收干净才 off", async () => {
+    // 2026-10-27 真机泄漏的时序：启动器 exit 0 → stop() 时基线差集为空 → VM 随后起来。
+    let alive: SandboxProcessInfo[] = [];
+    const killed: number[] = [];
+    const harness = await makeHarness({
+      stopSettleMs: 2_000,
+      stopObserveIntervalMs: 20,
+      gracefulCloseMs: 200,
+      killFallbackMs: 200,
+      killEscalationMs: 200,
+      stopTotalTimeoutMs: 3_000,
+      listSandboxProcesses: () => alive,
+      closeSandboxWindow: () => {
+        // 关窗后整条链自己退（真机 9~12s，这里立刻模拟）
+        alive = [];
+      },
+      killTreeByPid: (pid) => {
+        killed.push(pid);
+        alive = alive.filter((process) => process.pid !== pid);
+      },
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      requireProc(harness).emitExit(0); // 启动器走了，此时还没有任何沙箱侧进程
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+
+      await harness.controller.stop();
+      // stop() 刚回来时差集还是空的：绝不能在 VM 出现前就宣布 off
+      await sleep(100);
+      assert.equal(harness.controller.status().state, "stopping", "空列表不能当即结论（这就是泄漏的入口）");
+
+      // VM 现在才起来
+      alive = [
+        { image: "WindowsSandboxServer.exe", pid: 5100 },
+        { image: "WindowsSandboxRemoteSession.exe", pid: 5101 },
+        { image: "vmwp.exe", pid: 5102 },
+        { image: "vmmemWindowsSandbox", pid: 5103 },
+      ];
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 3_000);
+      assert.deepEqual(killed, [], "有 RemoteSession 就走优雅关窗，不强杀");
+      assert.ok(
+        harness.logs.some((line) => /关闭沙箱窗口（pid 5101/.test(line)),
+        `要认出来晚到的 VM 并去关它的窗口：${harness.logs.join(" | ")}`,
+      );
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("⑥ 观察窗口真的是空的：连续几轮 + 看满窗口之后才 off（不是第一次就 off）", async () => {
+    const harness = await makeHarness({
+      stopSettleMs: 150,
+      stopObserveIntervalMs: 20,
+      listSandboxProcesses: () => [], // 一直没有进程
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      requireProc(harness).emitExit(0);
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+
+      await harness.controller.stop();
+      await sleep(80);
+      assert.equal(harness.controller.status().state, "stopping", "窗口没看满不许 off");
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 2_000);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("⑦ vmmemWindowsSandbox 只观测不杀：只剩它时等它消失，不向它发 taskkill", async () => {
+    let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
+    const killed: number[] = [];
+    const harness = await makeHarness({
+      stopObserveIntervalMs: 10,
+      killFallbackMs: 40,
+      killEscalationMs: 40,
+      stopTotalTimeoutMs: 600,
+      listSandboxProcesses: () => alive,
+      killTreeByPid: (pid) => {
+        killed.push(pid);
+        alive = alive.filter((process) => process.pid !== pid);
+      },
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      alive = [
+        { image: "vmwp.exe", pid: 1000 },
+        { image: "vmwp.exe", pid: 6100 },
+        { image: "vmmemWindowsSandbox", pid: 6101 },
+      ];
+      requireProc(harness).emitExit(0);
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+
+      await harness.controller.stop();
+      // 只剩 VM 内存进程：不该对它 taskkill，要接着等
+      await sleep(120);
+      assert.deepEqual(killed, [6100], "只杀可杀的（vmwp），vmmem 不碰");
+      assert.equal(harness.controller.status().state, "stopping", "VM 内存进程还在 = VM 还没关，接着等");
+      alive = [{ image: "vmwp.exe", pid: 1000 }]; // VM 自己收尾了
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 2_000);
     } finally {
       await harness.close();
     }
@@ -1503,7 +1673,7 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
     }
   });
 
-  test("② 关了窗但 PID 不消失 → 退回强杀升级链，最后留痕 off", async () => {
+  test("② 关了窗但 PID 不消失 → 退回强杀升级链，最后转 error（不假装 off）", async () => {
     const closed: number[] = [];
     const killed: number[] = [];
     let alive: SandboxProcessInfo[] = [{ image: "vmwp.exe", pid: 1000 }];
@@ -1511,6 +1681,8 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
       killFallbackMs: 40,
       killEscalationMs: 40,
       gracefulCloseMs: 40,
+      stopObserveIntervalMs: 10,
+      stopTotalTimeoutMs: 400,
       listSandboxProcesses: () => alive, // 装死：窗口不理会关窗确认，taskkill 也打不动
       closeSandboxWindow: (pid) => closed.push(pid),
       killTreeByPid: (pid) => killed.push(pid),
@@ -1524,7 +1696,7 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
       });
 
       await harness.controller.stop();
-      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 3_000);
+      await waitFor(() => (harness.controller.status().state === "error" ? true : null), 3_000);
       assert.deepEqual(closed, [4300]);
       assert.deepEqual(killed, [4300, 4300], "优雅关闭没生效 → 兜底强杀 + 升级再杀一次");
       assert.ok(harness.logs.some((line) => /退回强杀/.test(line)), harness.logs.join(" | "));
