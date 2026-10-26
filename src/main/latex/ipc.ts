@@ -20,7 +20,9 @@ import {
   type LatexFileContext,
   type LatexForwardOutcome,
   type LatexForwardRequest,
+  type LatexPackageQuery,
   type LatexProjectOutcome,
+  type LatexResolvedPackage,
   type LatexReverseOutcome,
   type LatexReverseRequest,
   type LatexRunOutcome,
@@ -31,6 +33,7 @@ import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
 import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
+import { createLatexPackageLookup } from "./packages.ts";
 import type { LatexRunner } from "./run.ts";
 
 export function registerLatexIpc(
@@ -38,6 +41,10 @@ export function registerLatexIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
 ): void {
+  // 反查只在渲染层点开问题抽屉时用到；它与具体项目无关（看的是本机 TeX 树），
+  // 但入口照旧先过一遍白名单——不让这条通道变成「没有授权也能起外部命令」。
+  const packages = createLatexPackageLookup(async () => (await runner.probeEnvironment()).latexmk);
+
   ipcMain.handle(latexChannels.probe, () => runner.probeEnvironment());
 
   ipcMain.handle(latexChannels.project, async (_event, req: LatexFileContext): Promise<LatexProjectOutcome> => {
@@ -75,6 +82,20 @@ export function registerLatexIpc(
         return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
       }
       return { ok: true, project: describeLatexProject(located.dir) };
+    },
+  );
+
+  /**
+   * 缺的文件名 → 包名 / 安装命令。反查不到不是错误：返回的每一项都自带
+   * `packageName: null`，界面据此说「未知包」。
+   */
+  ipcMain.handle(
+    latexChannels.packages,
+    async (_event, req: LatexPackageQuery): Promise<LatexResolvedPackage[]> => {
+      const located = await locateLatexProject(req, workspaces, sessions);
+      if (located === null) return [];
+      const missing = Array.isArray(req.missing) ? req.missing.filter((name) => typeof name === "string") : [];
+      return packages.resolve(missing);
     },
   );
 

@@ -59,7 +59,7 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump, PdfSyncJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileListRequest, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import type { LatexFileContext, LatexIssue, LatexSyncFailure } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexResolvedPackage, LatexSyncFailure } from "@shared/latex";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -126,6 +126,14 @@ export function FilesPanel(props: {
    * 回车仍由用户按——缺宏包的安装可能需要 sudo / 管理员密码，agent 不替用户提权。
    */
   onRunInTerminal?: (command: string) => void;
+  /**
+   * 点过「在终端安装」/ 开始编译：安装提示要活过面板切换（点安装会把右栏切到终端，
+   * 本面板会被卸载），所以状态住在 App，这里只报事件。
+   */
+  onPackageInstalled?: () => void;
+  onCompileRun?: () => void;
+  /** 面板顶部那条「装好后再编译一次」（住 App，见 onPackageInstalled） */
+  installNotice?: boolean;
   /**
    * 布局 B（稿件为主）：稿件工作台占主位、对话收进右侧一栏。页头跟着画在卡里
    * （inline），源码与 PDF 并排。由 App 的 paper-layout.ts 裁决后传进来。
@@ -341,6 +349,75 @@ export function FilesPanel(props: {
     () => groupLatexIssues(latex.last?.errors ?? [], [...(latex.last?.warnings ?? []), ...bibIssues]),
     [latex.last, bibIssues],
   );
+
+  /**
+   * 缺宏包反查：日志只给出文件名（`ctexart.cls`），而安装要的是包名（`ctex`）。
+   * 反查在主进程做（要起 kpsewhich / tlmgr / mpm，见 main/latex/packages.ts），
+   * 这里只负责把结果贴回那一行。**反查失败不阻塞抽屉**：没结果就显示「正在反查」
+   * 或「未知包」，问题本身照常可见。
+   *
+   * 依赖是「缺哪些文件名」拼成的字符串而不是数组/对象：日志每次解析都是新数组，
+   * 拿它当依赖会让抽屉每渲染一次就发一次 IPC。
+   */
+  const missingKey = latexGroups.packages.map((item) => item.missing).join("\u0000");
+  const [resolvedPackages, setResolvedPackages] = useState<ReadonlyMap<string, LatexResolvedPackage>>(
+    new Map(),
+  );
+  useEffect(() => {
+    const missing = missingKey === "" ? [] : missingKey.split("\u0000");
+    if (missing.length === 0 || latexContext === null) {
+      setResolvedPackages((current) => (current.size === 0 ? current : new Map()));
+      return;
+    }
+    let cancelled = false;
+    /**
+     * 每个名字都要有一条结局——即使是「没查」也要说清楚，**界面不许永远停在
+     * 「正在反查包名…」**（主进程只回它查过的那些，通道也可能整个失败）。
+     */
+    const fill = (
+      list: readonly LatexResolvedPackage[],
+      reason: LatexResolvedPackage["reason"],
+    ): ReadonlyMap<string, LatexResolvedPackage> => {
+      const byName = new Map(list.map((entry) => [entry.missing, entry]));
+      for (const name of missing) {
+        if (byName.has(name)) continue;
+        byName.set(name, {
+          missing: name,
+          packageName: null,
+          command: null,
+          sudo: false,
+          installed: false,
+          distro: null,
+          reason,
+        });
+      }
+      return byName;
+    };
+    void api.latex
+      .packages({ ...latexContext, missing })
+      .then((list) => {
+        if (!cancelled) setResolvedPackages(fill(list, "not-looked-up"));
+      })
+      .catch(() => {
+        // 通道失败：行上仍显示文件名 + 一句「这次没查成」，不把抽屉变成错误报告
+        if (!cancelled) setResolvedPackages(fill([], "tool-error"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [missingKey, latexContext]);
+
+  /**
+   * 点过「在终端安装」：提醒装完再编一次（我们不会自动重编）。状态在 App——本面板
+   * 会被右栏切到终端时卸载，放这里会正好在提示该出现的时候丢掉。
+   */
+  const installPackage = useCallback(
+    (command: string): void => {
+      props.onPackageInstalled?.();
+      props.onRunInTerminal?.(command);
+    },
+    [props.onPackageInstalled, props.onRunInTerminal],
+  );
   const latexState = latexBarState({
     running: latex.running,
     lastStatus: latex.last?.status ?? null,
@@ -393,6 +470,7 @@ export function FilesPanel(props: {
    */
   const compile = latex.compile;
   const compileWithSave = useCallback((): void => {
+    props.onCompileRun?.();
     void (async () => {
       const outcomes: FlushOutcome[] = await Promise.all(
         [...editorsRef.current.values()].map((handle) => handle.flush()),
@@ -404,7 +482,7 @@ export function FilesPanel(props: {
       if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
       compile();
     })();
-  }, [compile, t]);
+  }, [compile, props.onCompileRun, t]);
 
   /**
    * 编译快捷键（Ctrl/Cmd+B）。**不抢终端与输入框**：终端里的 Ctrl+B 是 readline 的
@@ -438,13 +516,15 @@ export function FilesPanel(props: {
    */
   const handProblemToAgent = (item: ProblemItem): void => {
     const prefix =
-      item.level === "error"
-        ? t.latex.quoteError
-        : item.level === "warning"
-          ? t.latex.quoteWarning
-          : item.level === "layout"
-            ? t.latex.quoteLayout
-            : t.latex.quoteMissingPackage;
+      item.level === "pending"
+        ? t.latex.quotePending
+        : item.level === "error"
+          ? t.latex.quoteError
+          : item.level === "warning"
+            ? t.latex.quoteWarning
+            : item.level === "layout"
+              ? t.latex.quoteLayout
+              : t.latex.quoteMissingPackage;
     const loc = issueLocation(item);
     session.addQuote({
       text: `${prefix} · ${loc === "" ? item.message : `${loc} · ${item.message}`}`,
@@ -1235,6 +1315,15 @@ export function FilesPanel(props: {
           并排四种形态），layout 是它的直接内容层——@container 查不到容器自己，
           两层不能合并。遮罩只在「浮层」形态显示（CSS 管），点击收起树 */}
       <div className="files-panel-body" ref={bodyRef}>
+        {/* 点过「在终端安装」之后：提醒装完再编一次（我们不自动重编）。住在面板体里而不是
+            编译条里——切到终端面板再回来时标签已重置，编译条根本不显示；这条提示要
+            在「用户回到文件面板」这一刻仍然在。 */}
+        {props.installNotice === true && (
+          <p className="latex-install-notice">
+            <Icon name="corner-down-left" size={12} />
+            {t.latex.installThenRecompile}
+          </p>
+        )}
         <div
           className="files-panel-layout"
           data-file={layoutAttrs["data-file"]}
@@ -1390,7 +1479,8 @@ export function FilesPanel(props: {
             open={problemsOpen}
             onToggle={() => setProblemsOpen((open) => !open)}
             onHandToAgent={handProblemToAgent}
-            onInstall={(command) => props.onRunInTerminal?.(command)}
+            resolved={resolvedPackages}
+            onInstall={installPackage}
           />
         )}
         {latex.error !== null && <p className="latex-error">{latex.error}</p>}
