@@ -79,6 +79,7 @@ import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
+import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   applyRecallEvent,
@@ -674,6 +675,15 @@ interface LedgerNote {
   echoed: Set<string>;
   /** 标题在途标记：连发两条消息也只生成一次，失败后下一条自然重试 */
   titleInFlight: boolean;
+  /**
+   * 电脑使用授权的本进程账本。**undefined = 还没从盘上播过种**（这条会话本进程首次开机），
+   * `"granted"` = 用户在会话卡 / 会话头里同意过，`"revoked"` = 撤销 / 急停过。
+   *
+   * 为什么不用布尔：gate 要区分「从未问过」（manual 档常态，每次问就行）与「被撤销」
+   * （必须直接拒，不再弹卡）。播种只在首次见到这条会话时做——轮中的授予 / 撤销要
+   * 当场生效，不能被一次迟到的 meta 读覆盖。
+   */
+  computerUseGrant?: "granted" | "denied" | "revoked";
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
@@ -907,6 +917,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const provider = withOpencodeSession(command.provider, command.sessionId);
   const note = ledgerNote(command.sessionId);
   note.mode = command.mode;
+  // 电脑使用授权：**只在首次见到这条会话时**从盘上播种（进程重启后重建账本）。
+  // 轮中的授予 / 撤销已经写进账本，每轮拿 meta 覆盖会让撤销晚一轮生效。
+  if (note.computerUseGrant === undefined && command.computerUseGrantedAt != null) {
+    note.computerUseGrant = "granted";
+  }
   note.apiKey = provider.apiKey;
   if (provider.headers === undefined) delete note.headers;
   else note.headers = provider.headers;
@@ -940,11 +955,42 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
   // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
   const currentMode = () => ledgerNote(command.sessionId).mode;
+  /**
+   * 电脑使用护栏（PR4）的三个外部事实：
+   *   - 授权状态读账本（跨轮且轮中即时）；
+   *   - 用户允许后写账本 + 回主进程落 meta（`computerUseGrant` 事件）；
+   *   - 硬限中断走现成的 abort 链（与「停止」同一套：abortCycle + 结清挂起的审批）。
+   *     **不关沙箱**：保留现场是刻意的（关沙箱是另一个动作）。
+   */
+  const setComputerUseGrant = (granted: boolean): void => {
+    ledgerNote(command.sessionId).computerUseGrant = granted ? "granted" : "revoked";
+    send({
+      type: "computerUseGrant",
+      sessionId: command.sessionId,
+      granted,
+      at: granted ? Date.now() : null,
+    });
+  };
   const gate = createToolCallGate(
     currentMode,
     askPermission(command.sessionId),
     command.protectedPaths,
     command.cwd,
+    {
+      grantState: () => ledgerNote(command.sessionId).computerUseGrant ?? "none",
+      grant: () => setComputerUseGrant(true),
+      // 拒绝会话卡：只记本进程账本（不落 meta），同一会话后续不再弹同一张卡
+      deny: () => {
+        ledgerNote(command.sessionId).computerUseGrant = "denied";
+      },
+      abort: (reason: string) => {
+        abortCycle(running, command.sessionId);
+        settlePendingPermissions(command.sessionId);
+        settleIntentAsks(command.sessionId);
+        // 中断原因进日志：用户看到的是「轮突然停了」，得有一条能对上的记录
+        console.warn(`[computer-use] 预算硬限中断 ${command.sessionId}: ${reason}`);
+      },
+    },
   );
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
@@ -1025,6 +1071,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
                   // 都会停下来等它批准，plan 档下更是直接被拒
                   ...TERMINAL_TOOL_NAMES,
+                  // computer use 工具组：同样不列的话模型不知道 manual 档下每次点击都
+                  // 会停下来等批准、plan 档下更是直接被拒。**开关关着时不列**：那时它们
+                  // 根本没注册，说给模型听就是一句假话
+                  ...(command.computerUse === true ? COMPUTER_USE_TOOL_NAMES : []),
                   // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
@@ -1251,6 +1301,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // computer use（PR2）：Windows 沙箱桌面上的像素工具组（截图 / 点击 / 打字 / 按键 /
+    // 滚动）。**挂在实验功能「电脑使用」开关后面**（缺席 = 关）：关着时工具根本不注册，
+    // 模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf 的纪律）。
+    // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
+    ...(command.computerUse === true ? createComputerUseTools(requestBroker, command.sessionId) : []),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
@@ -1972,6 +2027,12 @@ async function handle(command: AgentCommand): Promise<void> {
     ledgerNote(command.sessionId).mode = command.mode;
     return;
   }
+  if (command.type === "setComputerUseGrant") {
+    // 会话头的撤销 / 重新授权、急停：主进程已经落了 meta，这里只对齐账本。
+    // **不 send 回主进程**（那会让主进程自己写自己），广播由主进程的 IPC handler 负责。
+    ledgerNote(command.sessionId).computerUseGrant = command.granted ? "granted" : "revoked";
+    return;
+  }
   if (command.type === "setModel") {
     // 会话内换模型（C-4）。fire-and-forget：成功经 `model` 事件、失败经 `failed`
     // 事件回传，主进程与 renderer 都靠事件对齐，这一跳不等结果。
@@ -2046,6 +2107,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "terminalResult") {
     // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "computerUseResult") {
+    // computer use 工具的回执：同 terminalResult，形状即契约（ok 双分支，截图多一个 shot）
     requestBroker.resolve(command.requestId, command);
     return;
   }

@@ -61,3 +61,20 @@ describe("describePermissionMode", () => {
     match(describePermissionMode("plan", []), /Refused outright: bash, edit, write\./);
   });
 });
+
+describe("describePermissionMode —— 电脑使用（computer use PR4）", () => {
+  it("组注册了才讲：授权、破坏性确认、预算三件事都要让模型知道", () => {
+    const text = describePermissionMode("skip", ["computer_screenshot", "computer_click"]);
+    match(text, /session grant/i);
+    match(text, /Destructive actions/i);
+    match(text, /budget of 60 actions/i);
+    match(text, /90 or 20 minutes/);
+    // 撤权 / 拒绝之后不许重试——这句话是模型最需要的一句
+    match(text, /do not retry/i);
+  });
+
+  it("组没注册（实验开关关着）时一句都不讲：不描述不存在的工具", () => {
+    doesNotMatch(describePermissionMode("skip"), /session grant/i);
+    doesNotMatch(describePermissionMode("skip", ["read_task"]), /budget of/i);
+  });
+});

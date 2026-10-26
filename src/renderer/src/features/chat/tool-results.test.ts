@@ -1595,6 +1595,24 @@ describe("toolCallSummary —— 受管浏览器", () => {
     assert.equal(toolCallSummary("browser_wait_for", { selector: "#results", text: "3 results" }), '#results or "3 results"');
     assert.equal(toolCallSummary("browser_wait_for", { timeoutMs: 8000 }), null);
   });
+
+  test("电脑使用：点击 / 滚动说坐标（字符串数字也认），打字取头部截断，按键说键名，截图没有可摘的", () => {
+    assert.equal(toolCallSummary("computer_click", { x: 100, y: 200 }), "100, 200");
+    // 模型偶尔把数字写成字符串（工具层 numberOf 认，摘要同样认）
+    assert.equal(toolCallSummary("computer_click", { x: "100", y: "200" }), "100, 200");
+    // 半个坐标没有意义（工具层的纪律），不编造
+    assert.equal(toolCallSummary("computer_click", { x: 100 }), null);
+    // 滚动缺省落点 = 屏幕正中，没有值得摘的；给了坐标才说
+    assert.equal(toolCallSummary("computer_scroll", { deltaY: 3 }), null);
+    assert.equal(toolCallSummary("computer_scroll", { deltaY: 3, x: 640, y: 360 }), "640, 360");
+    // 打字：压平后头部 40 字，长了收「…」（全文在展开的入参里）
+    assert.equal(toolCallSummary("computer_type", { text: "hello world" }), "hello world");
+    const long = "a".repeat(60);
+    assert.equal(toolCallSummary("computer_type", { text: long }), `${"a".repeat(40)}…`);
+    assert.equal(toolCallSummary("computer_type", { text: "line1\nline2  line3" }), "line1 line2 line3");
+    assert.equal(toolCallSummary("computer_key", { key: "ctrl+a" }), "ctrl+a");
+    assert.equal(toolCallSummary("computer_screenshot", {}), null);
+  });
 });
 
 describe("toolCallSummary —— delegate（子会话 PR4a）", () => {

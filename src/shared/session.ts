@@ -431,6 +431,19 @@ export interface SessionMeta {
   /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */
   mode: PermissionMode;
   /**
+   * 用户允许 agent 在**这条会话**里操作沙箱的时刻（毫秒）。缺席 / null = 从未授权。
+   *
+   * 为什么不进 settings：同意书是「这次会话」的，不是应用偏好——换一条会话必须重新问。
+   * 与实验开关 `experimentalFeatures["computer-use"]` 正交：那个决定工具存不存在，
+   * 这个决定工具存在时能不能动手。开关关掉 = 工具不注册 = 授权自然失效；
+   * **不删字段**，重开开关后仍尊重用户上次的同意（避免来回开关反复弹窗）。
+   *
+   * 写入者：agent 进程闸门在用户点「本次会话允许」后经 `computerUseGrant` 事件回主进程落盘
+   * （gate 是唯一知道用户点了什么的层）；撤销走 IPC `agentSetComputerUseGrant` 或急停。
+   * 每轮 submit / interrupt / compact 随载荷带给 agent 进程当种子（`computerUseGrantedAt`）。
+   */
+  computerUseGrantedAt?: number | null;
+  /**
    * 最后一次用的思考档，同 mode 的理由：重开不静默换档。**缺省退 "medium"**——
    * 这个字段落地之前存的会话，实际跑的就是 pi 的默认 medium，退 "off" 才是改写历史。
    */
@@ -759,6 +772,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     stats: parseAgentStats(value["stats"]),
     // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
+    // 电脑使用授权：坏值当作从未授权（宁可多问一次，不可静默放行）
+    computerUseGrantedAt: num(value["computerUseGrantedAt"]),
     // 思考档坏值退 medium（老会话实际跑的那一档），理由见字段注释
     thinkingLevel: parseThinkingLevel(value["thinkingLevel"]),
     // 导入标记：非导入会话缺席（空串/null 都当没有，str 的规则）

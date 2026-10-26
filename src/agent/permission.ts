@@ -13,9 +13,21 @@
 import {
   decidePermission,
   COMMAND_TIMEOUT_FLOOR_SECONDS,
+  isComputerUseTool,
+  isComputerUseWriteTool,
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
+import {
+  COMPUTER_USE_DENIED_MESSAGE,
+  COMPUTER_USE_HARD_LIMIT,
+  COMPUTER_USE_REVOKED_MESSAGE,
+  COMPUTER_USE_SOFT_LIMIT,
+  countNearbyClicks,
+  describeComputerUseRisk,
+  judgeComputerUseBudget,
+  type ComputerUseRisk,
+} from "../shared/computer-guard.ts";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
@@ -91,6 +103,22 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
         "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
     );
   }
+  /**
+   * 电脑使用：闸门对模型是**不可见**的（审批只拦在 tool_call 上），不讲的话模型会在
+   * skip 档第一次点击时撞上「会话授权卡」却不知为何，撤权后还会反复重试。只在这组
+   * 工具真的注册了时讲（实验开关关着时它们根本不存在，说了是假话）。
+   */
+  if (extraToolNames.some((tool) => isComputerUseTool(tool))) {
+    lines.push(
+      "Computer use: the four input actions (computer_click / computer_type / computer_key / computer_scroll) need " +
+        `the user's session grant in Skip mode — the first one asks them once, and a denial means those tools refuse ` +
+        `for the rest of the session. Destructive actions (closing or locking windows, format/delete commands, ` +
+        `clicking the same spot five times) stop for a separate confirmation even after the grant. A denied or ` +
+        `revoked grant is final: do not retry, summarize instead. Each turn has a budget of ` +
+        `${COMPUTER_USE_SOFT_LIMIT} actions (hard stop at ${COMPUTER_USE_HARD_LIMIT} or 20 minutes); when it runs out, ` +
+        "summarize what is left instead of retrying.",
+    );
+  }
   lines.push(
     "Immutable in every mode: task session files (transcripts and their metadata) can never be " +
       "written by any tool. Do not attempt it, including via shell commands — describe the change " +
@@ -105,6 +133,46 @@ export interface ToolCallLike {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
+  /**
+   * 这次问用户的卡是什么性质：`"session"` = 会话授权（「本次会话允许操作沙箱？」），
+   * 缺席 / `"call"` = 普通逐次审批或破坏性确认。**由闸门决定，不由 renderer 猜**——
+   * 同一张卡上「允许」的含义不同：session 卡的允许是整条会话放行。
+   */
+  scope?: "call" | "session";
+  /** D1/D2/D3 命中的确认信息；卡面必须说清将要发生什么（shared/computer-guard.ts 产） */
+  risk?: ComputerUseRisk;
+}
+
+/**
+ * 电脑使用在闸门里的三个外部事实（runtime 注入；测试直接给假值）。
+ * **闸门不认识运行中的轮**——硬限要中断本轮，那是 runtime 的事，所以只能回调。
+ */
+/**
+ * 授权的三态。**「从未问过」与「用户撤回了」必须分开**：manual 档下没授权是常态（每次
+ * 问就行），而被撤销（急停 / 点撤销）之后必须直接拒绝——再弹一张卡去点「允许」，撤销就
+ * 只是换了个人点而已。
+ */
+export type ComputerUseGrantState = "none" | "granted" | "denied" | "revoked";
+
+/**
+ * 电脑使用在闸门里的几个外部事实（runtime 注入；测试直接给假值）。
+ * **闸门不认识运行中的轮**——硬限要中断本轮，那是 runtime 的事，所以只能回调。
+ */
+export interface ComputerUseGateHooks {
+  /** 本会话当前的授权状态（runtime 的跨轮账本字段；进程重启后从 meta 重新播种） */
+  grantState: () => ComputerUseGrantState;
+  /** 用户点了「本次会话允许」：写账本 + 回主进程落 meta（当前轮立即生效） */
+  grant: () => void;
+  /**
+   * 用户在会话卡上拒绝了：记「本会话不再问」——否则下一次写工具又弹同一张卡，
+   * 用户得点三十次拒绝。**不落 meta**（拒绝是本次进程里的决定；重启后重新问一次
+   * 是合理的，也很少见）。
+   */
+  deny: () => void;
+  /** 硬限（第 91 次 / 满 20 分钟）：中断本轮。runtime 接 abortCycle + settlePendingPermissions */
+  abort: (message: string) => void;
+  /** 时钟。缺省 Date.now；测试注入固定值，让 20 分钟边界可测（不 sleep 20 分钟） */
+  now?: () => number;
 }
 
 /** pi 的 tool_call 处理结果 */
@@ -279,26 +347,148 @@ export function createToolCallGate(
   ask: PermissionAsk,
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
+  /**
+   * 电脑使用的护栏钩子（computer use PR4）。**不传 = 关闭这一层**（旧测试与
+   * 未开实验功能的会话）：闸门行为与 PR3 一字不差。
+   *
+   * 一轮一份 gate（runtime 的开轮装配），所以下面的计数天然是**按轮重置**的。
+   */
+  computer?: ComputerUseGateHooks,
 ) {
+  /**
+   * 本轮已尝试的 computer_* 次数（预算口径见 shared/computer-guard.ts：截图也计入）。
+   * **软限挡下的重试也计数**：那正是硬限要接住的情况（第 91 次中断）。
+   */
+  let computerCalls = 0;
+  /** 本轮第一次 computer_* 的时刻；null = 还没开始（20 分钟从这一步起算，不是从开轮） */
+  let computerStartedAt: number | null = null;
+  /** 本轮已执行的点击坐标（D3 同点连点判定用；**只在放行之后**记，被挡下的不算） */
+  const clicks: { x: number; y: number }[] = [];
+  const clock = computer?.now ?? (() => Date.now());
+  /** 是不是电脑使用工具组的成员（截图 + 写入四件）：预算按这个口径计 */
+  const isComputer = (name: string): boolean => computer !== undefined && isComputerUseTool(name);
+
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
     // 放行）就漏掉了——而那正是模型填小超时的场景。
     raiseCommandTimeout(event.toolName, event.input);
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
     if (refusal !== null) return { block: true, reason: refusal };
-    const decision = decidePermission(getMode(), event.toolName);
-    if (decision.behavior === "allow") return {};
+
+    const mode = getMode();
+    const decision = decidePermission(mode, event.toolName);
     if (decision.behavior === "deny") return { block: true, reason: decision.message };
 
-    const answer = await ask(event);
-    if (answer.behavior === "deny") {
-      return { block: true, reason: answer.message ?? "Denied by the user." };
+    /** 放行前的最后一道：预算。两级都不放行，硬限额外中断本轮 */
+    const budgetRefusal = (): ToolCallGateResult | null => {
+      if (!isComputer(event.toolName)) return null;
+      const now = clock();
+      const verdict = judgeComputerUseBudget({
+        count: computerCalls,
+        startedAt: computerStartedAt,
+        now,
+      });
+      // 每一次尝试都计数（含被软限挡下的重试）：第 91 次要能中断本轮
+      computerCalls += 1;
+      if (computerStartedAt === null) computerStartedAt = now;
+      if (verdict.level === "ok") return null;
+      if (verdict.level === "hard") computer?.abort(verdict.message);
+      return { block: true, reason: verdict.message };
+    };
+
+    /** 真正放行：记点击历史（预算已在 budgetRefusal 里记过），然后交还给 pi */
+    const allow = (): ToolCallGateResult => {
+      if (isComputer(event.toolName)) {
+        if (event.toolName === "computer_click") {
+          const x = numberOf(event.input["x"]);
+          const y = numberOf(event.input["y"]);
+          if (x !== undefined && y !== undefined) clicks.push({ x, y });
+        }
+      }
+      return {};
+    };
+
+    // 此前落在同一点的点击数（D3 的当场证据）。坐标不完整 = 0：没有落点就没有连点
+    const clickX = numberOf(event.input["x"]);
+    const clickY = numberOf(event.input["y"]);
+    const risk =
+      computer !== undefined && isComputerUseWriteTool(event.toolName)
+        ? describeComputerUseRisk({
+            tool: event.toolName,
+            args: event.input,
+            priorSamePointClicks:
+              event.toolName === "computer_click" && clickX !== undefined && clickY !== undefined
+                ? countNearbyClicks(clicks, clickX, clickY)
+                : 0,
+          })
+        : null;
+
+    /** 拒绝口径：撤销过的一律直接拒（不再弹卡），没授权过的按「用户没同意」 */
+    const state = computer?.grantState() ?? "granted";
+
+    // 急停 / 撤销 / 用户拒绝过会话卡之后：本会话后续写工具一律拒绝。**ask 之前判**——
+    // 再给用户弹一张卡去点「允许」，撤销就只是换了个人点而已（急停的意义是停下，
+    // 不是再问一次）。重新授权走会话头的授权入口（IPC），下一次调用就按 granted 走。
+    if (computer !== undefined && isComputerUseWriteTool(event.toolName) && (state === "revoked" || state === "denied")) {
+      return {
+        block: true,
+        reason: state === "denied" ? COMPUTER_USE_DENIED_MESSAGE : COMPUTER_USE_REVOKED_MESSAGE,
+      };
     }
-    if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
-      // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
-      for (const key of Object.keys(event.input)) delete event.input[key];
-      Object.assign(event.input, answer.input as Record<string, unknown>);
+
+    /**
+     * 会话授权（skip 档的洞）：默认档是 skip，四件写工具在那里本该零确认直接注入。
+     * 第一次调用时问一次「本次会话允许 agent 操作沙箱？」，允许就记在账本 + meta 上；
+     * 拒绝则本会话后续写工具一律人话拒绝（截图仍可看——它是只读）。
+     *
+     * manual 档不弹这张卡：用户已经选择了「每次都要问」，再挂一张「本会话全允许」与
+     * 那个选择自相矛盾。plan 档在上面的 deny 就结束了。
+     */
+    if (computer !== undefined && isComputerUseWriteTool(event.toolName) && mode === "skip" && state !== "granted") {
+      const answer = await ask({ ...event, scope: "session", ...(risk === null ? {} : { risk }) });
+      if (answer.behavior === "deny") {
+        computer.deny();
+        return { block: true, reason: COMPUTER_USE_DENIED_MESSAGE };
+      }
+      // session 卡上已经把这些风险写在正文里了（risk 随卡下发），允许即确认这一次
+      computer.grant();
+      return budgetRefusal() ?? allow();
     }
-    return {};
+
+    if (decision.behavior === "ask") {
+      // manual 档的逐次问：破坏性风险附在同一张卡上，不连弹两次
+      const answer = await ask({ ...event, ...(risk === null ? {} : { risk }) });
+      if (answer.behavior === "deny") {
+        return { block: true, reason: answer.message ?? "Denied by the user." };
+      }
+      if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
+        // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, answer.input as Record<string, unknown>);
+      }
+      return budgetRefusal() ?? allow();
+    }
+
+    // 已授权 / 无关工具的破坏性确认：命中就弹，skip 档也弹、已授权也弹
+    if (risk !== null) {
+      const answer = await ask({ ...event, scope: "call", risk });
+      if (answer.behavior === "deny") {
+        return { block: true, reason: answer.message ?? "Denied by the user." };
+      }
+      // 确认卡也能改入参（比如把 format d: 改成别的东西再放行）：与 manual 支同一套
+      if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, answer.input as Record<string, unknown>);
+      }
+    }
+
+    return budgetRefusal() ?? allow();
   };
+}
+
+/** 数字入参：模型偶尔把数字写成字符串（computer-tools.ts 的 numberOf 同口径） */
+function numberOf(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
 }

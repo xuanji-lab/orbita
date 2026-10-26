@@ -334,6 +334,55 @@ export const zh: Messages = {
     handoffBarDone: "完成，交还",
   },
 
+  /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
+  computerUse: {
+    capabilityGroup: "能力检测",
+    sandboxFeature: "沙箱功能",
+    sandboxFeatureInfo:
+      "电脑使用在沙箱里干活——一个一次性的隔离系统，智能体在里面操作网页，你的桌面键鼠与文件都不会被碰；沙箱关闭时里面的一切随之丢弃。",
+    probe: "检测能力",
+    probeIdle: "还没检测过",
+    probing: "检测中…",
+    probeReady: "沙箱可用",
+    probeNotReady: "还未就绪，按下方的步骤手动开启",
+    probeFailed: "检测没跑成",
+    sandboxGroup: "沙箱",
+    sandboxState: "状态",
+    // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；
+    // 改那边就要改这里（冷启动实测可达 105s+，首次还要制备基础镜像）
+    sandboxStateInfo:
+      "启动要等沙箱回头注册（最多三分钟；首次启动要制备基础镜像，明显更慢，等超了直接重试即可）；关闭会丢掉沙箱里的一切。出错之后，「启动」可以直接重试，「关闭」会复位回未启动。",
+    states: {
+      off: "未启动",
+      starting: "启动中…",
+      running: "运行中",
+      stopping: "关闭中…",
+      error: "出错",
+    },
+    start: "启动",
+    stop: "关闭",
+    shotGroup: "手动截图",
+    shotRow: "沙箱桌面",
+    shotRowInfo: "现在就拍一张沙箱桌面的截图——只在你点击时拍，绝不自动拍。",
+    shot: "看一眼",
+    shotBusy: "拍摄中…",
+    shotNeedsRunning: "沙箱启动后才能看一眼",
+    shotNativeSize: "原始尺寸",
+    shotAlt: "沙箱桌面截图",
+    /* 输入框底栏的授权芯片（会话级同意书；点击在授权 / 撤销之间切换） */
+    grantChip: "电脑使用",
+    grantChipOn: "本次会话已允许操作沙箱 · 点击撤销（当前轮立即生效）",
+    grantChipOff: "本会话还没有授权操作沙箱 · 点击授予（当前轮立即生效）",
+    /* 急停热键（设置页「安全」组）与急停提示 */
+    emergencyGroup: "安全",
+    emergencyHotkey: "急停热键",
+    emergencyHotkeyInfo:
+      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。**不关闭沙箱**——现场留着给你看。要再用需要重新授权。",
+    emergencyRegistered: "已注册，随时可用",
+    emergencyUnavailable: (error) => `不可用：${error}。请关掉占用这个快捷键的应用后重启本应用。`,
+    emergencyStopped: "已急停：这一轮已经停下，本会话的电脑使用授权已撤销。沙箱没有关闭，画面还在。",
+  },
+
   drawer: {
     title: "辅助对话",
     filter: "过滤任务…",
@@ -511,6 +560,7 @@ export const zh: Messages = {
       browser: "浏览器",
       voice: "语音",
       experimental: "实验功能",
+      "computer-use": "电脑使用",
     },
     appearance: "外观",
     theme: "主题",
@@ -1306,6 +1356,10 @@ export const zh: Messages = {
     tools: (n) => `工具 ${n}`,
     failedCount: (n) => `${n} 个失败`,
     toolInterrupted: "已中断 · 未执行",
+    /* computer_type 的入参文本默认折叠：它是模型打进去的原文，可能含隐私 / 凭据 */
+    typedChars: (count) => `输入了 ${count} 个字符`,
+    showInput: "展开输入",
+    hideInput: "收起输入",
     interruptedCount: (n) => `${n} 个已中断`,
     toolRead: "读取",
     toolSearch: "搜索",
@@ -1460,6 +1514,19 @@ export const zh: Messages = {
     deny: "拒绝",
     stopEditing: "结束编辑",
     editInput: "改参数",
+    /* 电脑使用的会话授权卡（不是普通审批：允许 = 整条会话放行） */
+    sessionTitle: "允许智能体操作沙箱？",
+    sessionBody:
+      "它会看见沙箱的屏幕，并在里面点击、输入、按键。沙箱桌面是应用级共享的：同一时间只有一块屏幕，其它会话也能操作它——你在这里同意的是「这条会话可以动手」。删除、格式化、关窗这类破坏性动作仍会单独再问你一次。",
+    allowSession: "本次会话允许",
+    /* 破坏性动作的确认卡（D1/D2/D3）：不是拒绝，点了仍要执行就放行 */
+    riskTitle: "这一步可能会不可逆，确认？",
+    riskKeys: (detail) => `即将按下组合键 ${detail}`,
+    riskCommand: (detail) => `即将输入一条破坏性命令：${detail}`,
+    riskRepeat: (count) => `即将第 ${count} 次点击同一坐标（±4 像素）`,
+    riskHint: "命中规则的输入与按键会在执行前停下来问你；可以取消，也可以放行。",
+    allowRisk: "仍要执行",
+    cancelRisk: "取消",
   },
 
   carryover: {

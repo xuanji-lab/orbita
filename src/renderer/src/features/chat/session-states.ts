@@ -17,6 +17,7 @@ import {
 import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
+import type { ComputerUseRisk } from "@shared/computer-guard";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
 import type {
@@ -39,6 +40,13 @@ export interface PendingApproval {
   requestId: string;
   toolName: string;
   input: unknown;
+  /**
+   * `"session"` = 会话授权卡（「本次会话允许 agent 操作沙箱？」），缺席 / `"call"` =
+   * 普通逐次审批或破坏性确认。**「允许」在两种卡上含义不同**，卡面与回调都要分开。
+   */
+  scope?: "call" | "session";
+  /** D1/D2/D3 命中的确认信息：卡面必须说清「将要按 alt+f4」之类，不能只给一个允许按钮 */
+  risk?: ComputerUseRisk;
 }
 
 /**
@@ -331,7 +339,13 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ...entry,
       approvals: [
         ...entry.approvals,
-        { requestId: event.requestId, toolName: event.toolName, input: event.input },
+        {
+          requestId: event.requestId,
+          toolName: event.toolName,
+          input: event.input,
+          ...(event.scope === undefined ? {} : { scope: event.scope }),
+          ...(event.risk === undefined ? {} : { risk: event.risk }),
+        },
       ],
     }));
   }

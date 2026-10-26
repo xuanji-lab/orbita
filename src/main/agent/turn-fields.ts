@@ -31,10 +31,18 @@ export function turnFields(
     attributionLanguage: Language;
     /** 实验功能「PDF 引用」的开关（settings.experimentalFeatures）：开着才注册 cite_pdf；缺席 = 关 */
     pdfCitations: boolean;
+    /** 实验功能「电脑使用」的开关（settings.experimentalFeatures）：开着才注册沙箱工具组；缺席 = 关 */
+    computerUse: boolean;
+    /**
+     * 本会话的电脑使用授权时刻（SessionMeta.computerUseGrantedAt）；null / 缺席 = 未授权。
+     * **每轮从 meta 装配**：agent 进程只在首次见到这条会话时拿它当种子（进程重启后重建账本），
+     * 轮中的授予 / 撤销以 agent 内存账本为准。
+     */
+    computerUseGrantedAt?: number | null;
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "computerUse" | "computerUseGrantedAt"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
   const { workspaceName, ...rest } = environment;

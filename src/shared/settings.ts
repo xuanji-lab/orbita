@@ -122,6 +122,7 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
   "pdf-citations",
   "intent-system",
+  "computer-use",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
@@ -290,7 +291,10 @@ export interface AppSettings {
    * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
    * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
    *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
-   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
+   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）；
+   * - `computer-use`：设置里的「电脑使用」页——能力检测、沙箱启停与手动「看一眼」。
+   *   关着只藏入口：不占侧栏一格，页面也进不去；沙箱进程不在其管控下常驻，
+   *   开了入口就回来。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
    * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。

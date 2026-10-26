@@ -5,9 +5,10 @@
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, globalShortcut, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
@@ -56,6 +57,13 @@ import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { windowsSandboxExePath } from "./computer-use/capability.ts";
+import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
+import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
+import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
+import { SandboxController } from "./computer-use/sandbox.ts";
+import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -375,9 +383,186 @@ void app.whenReady().then(async () => {
   registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => browserSandbox.dispose());
 
+  /*
+   * computer use v1（PR1 主进程部分）：Windows 沙箱生命周期 + 手动「看一眼」截图。
+   * guest 桥目录：开发 = 仓库 guest-bridge/bin（bun run build:bridge 出 exe），
+   * 打包 = resources/guest-bridge（electron-builder extraResources，见 package.json）。
+   * spawnSandbox 只在这里真接——测试全走假进程，沙箱窗口是用户可见面。
+   */
+  const sandboxExePath = windowsSandboxExePath();
+  /**
+   * 按 PID 杀整棵沙箱进程树（`taskkill /T /F`，与 spawnSandbox 里那套同一份火力）。
+   * 抽成独立函数是因为 stop() 的收尾链在「第一次 kill 没确认退出」时还要再打一次；
+   * 那时手上只有 pid，没有 child 对象。
+   * onFailure 只在第一次 kill 用（那里还拿得到 child，可以退回单进程杀）；升级那次不传，
+   * 失败交给收尾链的下一个窗口留痕迹。
+   */
+  const killTreeByPid = (pid: number, onFailure?: () => void): void => {
+    try {
+      const taskkill = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", () => onFailure?.());
+      taskkill.on("exit", (code) => {
+        if (code !== 0) onFailure?.();
+      });
+    } catch {
+      onFailure?.();
+    }
+  };
+
+  /**
+   * 现在宿主上有哪些沙箱侧进程（**只观测，不杀**）。
+   *
+   * 三类镜像名来自 2026-10-23 真机实测：新沙箱架构下 WindowsSandbox.exe 只是启动器，
+   * 沙箱本体活在 WindowsSandboxServer / WindowsSandboxRemoteSession / vmwp 里。
+   * 控制器拿「启动前基线」做差集，才知道哪些是我们这只（而不是同机上别人的沙箱）；
+   * 带镜像名是为了挑出 RemoteSession 去**优雅关窗**（只认 PID 的话发不了 WM_CLOSE）。
+   * 只读 tasklist；杀仍走 killTreeByPid（taskkill /T /F）——不按镜像名杀（仓规）。
+   */
+  const listSandboxProcesses = (): SandboxProcessInfo[] => {
+    if (process.platform !== "win32") return [];
+    try {
+      const listed = spawnSync("tasklist", ["/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+      });
+      if (listed.status !== 0 || typeof listed.stdout !== "string") return [];
+      return parseSandboxProcesses(listed.stdout);
+    } catch {
+      // 观测失败当成「看不见」：宁可走旧路径，也不让启动 / 关闭被观测拖坐
+      return [];
+    }
+  };
+
+  /**
+   * 关掉沙箱窗口（等价用户点 X 并按下确认框的 Ok）。**不能改成 taskkill。**
+   *
+   * 2026-10-23 真机验收：直接 taskkill 能杀掉 Server / RemoteSession，但 VM 不退——
+   * vmwp.exe + vmmemWindowsSandbox（各 ~3.5GB）继续占着内存，vmwp 自己 taskkill 是拒绝访问，
+   * 不带 /F 打 RemoteSession 则完全无效（它不是控制台进程）；泄漏攒多了会报
+   * 「与该服务器建立的会话太多」，新沙箱都起不来。
+   * 而走「关窗 → 替用户按 Ok」的路子，9~12 秒内整条链自行退出、VM 内存释放。
+   *
+   * 脚本本体在 close-window-script.ts（纯 ASCII，带前台 PID 护栏）；这里只负责跑它。
+   * 20 秒超时：脚本内部最多轮询 6s 找确认框 + 激活 0.5s + 确认 0.8s，剩下是系统关 VM 的时间。
+   * 失败不抛：控制器看到 throw 会退回强杀链（宁可退化成旧行为，不能坐视 VM 泄漏）。
+   * 但退出码要留痕——别把「用户正在用别的应用、脚本守规矩没发键」和「确认框压根没按到」
+   * 混成一句「关窗失败」，真机排查时要能一眼分清是哪条路断的（见脚本头部的码表）。
+   */
+  const closeSandboxWindow = (pid: number): void => {
+    if (process.platform !== "win32") return;
+    const result = spawnSync(
+      "powershell",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)],
+      { stdio: "ignore", windowsHide: true, timeout: 20_000 },
+    );
+    if (result.status === 0) return;
+    const reason =
+      result.status === 2
+        ? "前台不是这只沙箱，守规矩没发键"
+        : result.status === 3
+          ? "确认框没按到 Ok"
+          : result.error !== undefined
+            ? `脚本没跑起来（${result.error.message}）`
+            : `脚本异常退出（signal ${String(result.signal)}）`;
+    console.warn(`[computer-use] 关窗脚本退出码 ${String(result.status)}（${reason}），交由强杀兜底（pid ${pid}）`);
+  };
+
+  const computerUse = new SandboxController({
+    computerUseDir: join(configDir, "computer-use"),
+    bridgeDir: app.isPackaged
+      ? join(process.resourcesPath, "guest-bridge")
+      : join(app.getAppPath(), "guest-bridge", "bin"),
+    sandboxExePath,
+    /**
+     * 沙箱进程适配。**关闭必须杀整棵树**：spawn 出来的 WindowsSandbox.exe 是 launcher，
+     * 看得见的沙箱窗口是它的子进程 WindowsSandboxClient.exe——只杀 launcher 会留下
+     * 孤儿窗口，VM 一拆它就弹「与沙盒的连接已丢失 0x80072746」（2026-10-12 实测）。
+     * taskkill /T 是异步火力覆盖（同 terminal/runtime.ts 的杀树纪律）；它起不来 /
+     * 失败时退回单进程杀——宁可退化回孤儿窗口，也不能让「关闭」本身失效。
+     */
+    spawnSandbox: (wsbPath) => {
+      const child = spawn(sandboxExePath, [wsbPath], { stdio: "ignore" });
+      const killChild = child.kill.bind(child);
+      const killTree = (): boolean => {
+        const pid = child.pid;
+        if (pid === undefined) return killChild();
+        killTreeByPid(pid, () => {
+          try {
+            killChild();
+          } catch {
+            // 进程已退出
+          }
+        });
+        return true;
+      };
+      return Object.assign(child, { kill: killTree });
+    },
+    // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
+    killTreeByPid,
+    /**
+     * 观测沙箱侧进程（只读，不杀）。
+     *
+     * 2026-10-23（Windows 更新后的新沙箱架构）实测：`WindowsSandbox.exe` 只是启动器——
+     * spawn 后 **0 秒就以 code 0 退出**，把 VM 交给 `WindowsSandboxServer`；真正占着 ~2.5GB
+     * 的是 `WindowsSandboxServer.exe` / `WindowsSandboxRemoteSession.exe` / `vmwp.exe`。
+     * 于是 stop 时 child 早就为 null、没有 PID 可杀（第二天主会话得手动 taskkill /T /F 清）。
+     * 这里只提供「现在有哪些沙箱侧进程」的观测，由控制器拿**启动前基线**做差集认出我们
+     * 自己那只；杀掉仍然走上面的 killTreeByPid（taskkill /T /F）——**不按镜像名杀**（仓规）。
+     */
+    listSandboxProcesses,
+    // 优雅关窗：强杀窗口会把 VM 留给宿主（真机实测 3.4GB 不释放），见 closeSandboxWindow 的注释
+    closeSandboxWindow,
+    onStatus: broadcastComputerUseStatus,
+  });
+  /**
+   * 急停热键（computer use PR4）：`Control+Alt+Shift+Escape`。沙箱窗口在前台时用户够不到
+   * Orbita 的停止按钮，这个热键必须真的能注册上——注册失败（被别的应用占用）时
+   * 设置页会如实显示「不可用」，不假装保护存在。
+   *
+   * 按下后三件事（顺序即语义）：
+   *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
+   *   2. 撤销它们的电脑使用授权（落 meta + 推 agent 账本，闸门从此直接拒）；
+   *   3. 广播给 renderer 显示「已急停」。
+   * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
+   *
+   * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
+   * （与 mcpIpc / delegate 的 TDZ 说明同一条约定）。
+   */
+  /**
+   * 热键注册早于 `phases` / `agentHost` 的创建（它们在下面）。启动那几毫秒里按下热键
+   * 不能去碰还没初始化的 const（TDZ 会抛 ReferenceError）：置位前按键直接忽略——
+   * 那时也没有轮可停。
+   */
+  let emergencyStopReady = false;
+  const emergencyStop = createEmergencyStop({
+    register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
+    unregister: (accelerator) => globalShortcut.unregister(accelerator),
+    onTrigger: () => {
+      if (!emergencyStopReady) return;
+      const at = Date.now();
+      const runningSessions = [...phases.entries()]
+        .filter(([, phase]) => phase !== "idle")
+        .map(([id]) => id);
+      for (const sessionId of runningSessions) {
+        void sessions.setComputerUseGrant(sessionId, null).catch(() => undefined);
+        agentHost.setComputerUseGrant(sessionId, false);
+        agentHost.abortIfRunning(sessionId);
+        // 与 IPC 撤销路径同一份事件：renderer 的授权标识立即复位
+        broadcastAgentEvent({ type: "computerUseGrant", sessionId, granted: false, at: null });
+      }
+      broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
+    },
+  });
+  registerComputerUseIpc(computerUse, emergencyStop);
+
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -445,6 +630,12 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 电脑使用授权（PR4）：闸门是唯一知道用户点了什么的层，它把「允许」经事件报回来，
+    // 主进程负责落 meta（下一轮开机的种子）。**不 return**：事件还要广播给 renderer
+    // 更新会话头的授权标识。写盘失败不该卡住事件转发（授权在当前轮已由账本兑现）。
+    if (event.type === "computerUseGrant") {
+      void sessions.setComputerUseGrant(event.sessionId, event.at).catch(() => undefined);
+    }
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
     if (event.type === "failed" && event.sessionId === null) phases.clear();
@@ -471,6 +662,20 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerTerminal(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // computer use：agent 的沙箱像素工具（截图 / 点击 / 打字 / 按键 / 滚动）——沙箱在主进程
+    // （SandboxController）。沙箱是应用级一份，不按会话分（sessionId 只为信封一致）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    if (event.type === "computerUseRequest") {
+      void applyComputerUseRequest(computerUse, event.request)
+        .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerComputerUse(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
@@ -537,6 +742,8 @@ void app.whenReady().then(async () => {
     broadcastAgentEvent(event);
     // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
   }, async () => catalogIdsOfProviders(await providers.load()));
+  // 急停热键此时可以真正干活了（phases / agentHost 都已就绪）
+  emergencyStopReady = true;
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -725,6 +932,10 @@ void app.whenReady().then(async () => {
     agentHost.dispose();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
+    // 沙箱是我们 spawn 的：应用退出时一并带走，别给用户留一个连不上宿主的孤儿沙箱窗口
+    computerUse.dispose();
+    // 全局热键显式注销（Electron 退出时也会清，但释放时机不该靠它）
+    emergencyStop.dispose();
   });
 
   /**

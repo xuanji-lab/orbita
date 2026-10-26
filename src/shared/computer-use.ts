@@ -1,0 +1,327 @@
+/**
+ * computer use（Windows 沙箱隔离环境）契约 —— IPC 四层的第 1 层。
+ *
+ * 定位（2026-10 终审裁决）：v1 的 computer use = **Windows Sandbox 里的网页自动化**。
+ * agent 的输入注入发生在沙箱会话内部（guest 桥），宿主完全不碰用户桌面的焦点与键鼠。
+ * 隔离路线 = 一份 .wsb（Anthropic demo 的 Windows 同构）：MappedFolder 把 guest 桥只读映射
+ * 进去、把输出目录读写映射进去，LogonCommand 先建 junction 再启动桥——具体生成在
+ * src/main/computer-use/sandbox.ts。设计取舍（为什么不走网络、为什么是文件协议、为什么直探
+ * 序号而不是枚举目录）全写在本文件与那几个模块的注释里，加上 commit 历史——调研笔记不进仓，
+ * 外部贡献者拿不到，所以别在注释里引用仓外的文档。
+ *
+ * 出网：.wsb 的 <Networking> 用 Default（沙箱能上网）。v1 要的就是网页自动化，所以这是
+ * **有意放开的攻击面**：沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
+ * 别把它当成「防网络的隔离层」。将来考虑加一个开关（禁出网 = 只做本地桌面自动化）。
+ *
+ * 宿主↔guest 协议 v1（宿主在 src/main/computer-use/ 实现，guest 桥是独立 exe，两边必须严格一致）：
+ *   - 通道 = **映射文件夹里的文件对**，不走网络。反面教材：宿主防火墙把宿主↔沙箱的 TCP 当
+ *     不可测（2026-10-10 真机：ICMP 通、TCP 被丢，且随每次启动时好时坏；guest 回连方向更是
+ *     稳定被丢），加防火墙规则要提权弹窗，本地优先不接受。而 .wsb 读写映射文件夹双向实时同步、
+ *     每次都可靠。
+ *   - 命令：宿主写 out/cmd/<名字>.req.json（tmp+rename 原子写）→ 桥轮询执行 →
+ *     写 <名字>.resp.json（截图的 JPEG 是同名 .jpg 兄弟文件，先于 resp 落盘）→ 删 req；
+ *     宿主读完响应后负责清理 resp / jpg。
+ *   - 就绪：桥启动后写 out/bridge.json（tmp+rename）——它出现即代表命令循环已上线。
+ *   - 隔离即鉴权：命令目录在宿主用户目录下、沙箱是会话级一次性环境，协议里不再要 token。
+ *
+ * PR1 范围 = 沙箱生命周期 + renderer 手动「看一眼」截图。
+ * PR2 范围 = agent 的像素工具组（截图 / 点击 / 打字 / 按键 / 滚动）：命令经
+ * `computerUseRequest` / `computerUseResult`（agent-ipc.ts 的 requestId 问答，
+ * browserRequest 同款）下发，**只有 agent 进程看得见**——renderer 面照旧只有 PR1 那四个入口。
+ * CDP 浏览器通道是 PR3，不在这里。
+ *
+ * 调用方：
+ *   renderer   → computerUseProbe / Start / Stop / Screenshot（renderer 发起、主进程执行）
+ *   主进程     → computerUseStatus（状态机每次迁移推给 renderer，单向）
+ *   agent 进程 → computerUseRequest / computerUseResult（工具定义 → requestId 问答，薄包装）
+ */
+
+export const computerUseChannels = {
+  /** 能力探测（全部只读）：Windows 版本、沙箱功能状态、可执行文件在不在。不就绪时结果里给手动开启指引 */
+  computerUseProbe: "computer-use:probe",
+  /** 生成 .wsb 并启动沙箱；状态机 off→starting，bridge.json 就绪→running，超时→error */
+  computerUseStart: "computer-use:start",
+  /** 停止沙箱（杀掉我们 spawn 的 WindowsSandbox.exe，沙箱内全部状态丢弃）。幂等 */
+  computerUseStop: "computer-use:stop",
+  /** 对沙箱桌面截一张（guest 桥执行），maxWidth 控制回图宽度 */
+  computerUseScreenshot: "computer-use:screenshot",
+  /** 主进程 → renderer：沙箱状态机每次迁移推一次最新 SandboxStatus */
+  computerUseStatus: "computer-use:status",
+  /**
+   * 急停热键的注册状态（renderer 发起、主进程回答）。**注册失败必须让用户看见**：
+   * `globalShortcut.register` 被占用时返回 false 而不是抛错，不 surface 的话用户
+   * 以为自己有保护。设置页每次挂载问一次。
+   */
+  computerUseEmergencyStopState: "computer-use:emergency-stop-state",
+} as const;
+
+export type ComputerUseChannel = (typeof computerUseChannels)[keyof typeof computerUseChannels];
+
+// ── 协议常量（宿主与 guest 桥共用的数字/路径，改动即破坏两端）──────────────
+
+/** guest 桥在沙箱内的落点（.wsb 用 junction 把映射目录并到这里，协议按这个路径执行） */
+export const COMPUTER_USE_GUEST_BRIDGE_DIR = "C:\\orbita-bridge";
+/** 输出目录在沙箱内的落点（读写映射：桥写在这里，沙箱销毁后宿主目录里仍在——产物回传通道） */
+export const COMPUTER_USE_GUEST_OUT_DIR = "C:\\orbita-out";
+/** 桥的地址通告文件名（落在 out 目录下；宿主轮询它等桥上线） */
+export const BRIDGE_INFO_FILE = "bridge.json";
+/** 命令目录名（out 目录下；宿主写 req、桥写 resp 的地方） */
+export const COMPUTER_USE_CMD_DIR = "cmd";
+
+/**
+ * guest 桥认的命令名。**字符串两端的唯一真源**：宿主按它发，桥按它分派
+ * （guest-bridge/Program.cs 的 Execute），改一个字母就是两端脱钩。
+ * 载荷都是扁平的 JSON 对象，形状见各 ComputerUseToolRequest 分支。
+ */
+export const computerUseGuestCommands = {
+  /** 就绪探针：映射文件夹 host→guest 开机后有热身期，桥通告了不代表命令通道已通 */
+  ping: "ping",
+  /** 截沙箱主屏一张，回 JPEG 兄弟文件 + 回图/物理屏两套尺寸 */
+  screenshot: "screenshot",
+  /** 移动指针并按键（SendInput 绝对坐标，沙箱原生物理像素） */
+  click: "click",
+  /** 逐字符 Unicode 注入（KEYEVENTF_UNICODE，中文可用），落在当前焦点窗口 */
+  type: "type",
+  /** 按一个键或一组组合键（键名→VK 的映射表在桥里） */
+  key: "key",
+  /**
+   * 把指针移到某点并滚轮（正数向下）。deltaY 的单位是**滚轮格数**：桥乘 WHEEL_DELTA
+   * 得到 Windows 的 wheel 数据（wheel 正数向上，所以桥取负）。
+   */
+  scroll: "scroll",
+} as const;
+
+export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof typeof computerUseGuestCommands];
+
+/**
+ * 回图的宽度上限（缺省值）。回图会被缩放压成 JPEG——模型要看清按钮与文字，
+ * 但每张图都吃上下文，1280 是这两个约束的折中（renderer 的「看一眼」同值）。
+ * 桥按**长边**缩放，所以它同时是高度上限。
+ */
+export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
+
+/**
+ * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
+ *
+ * **45 秒不是拍脑袋的宽容值**：2026-10-10 真机实测，win+r 弹出「运行」框之后，
+ * 映射文件夹的目录枚举缓存会卡住，宿主刚写进的 req 在 guest 侧 8–20 秒才可见
+ * （触发面只有这类壳对话框；escape / click 后立刻 type 只要 433ms）。桥那边已改成
+ * 序号直探（guest-bridge/Program.cs 的 PollOnce），把黑窗压到 ~8s，但黑窗仍存在。
+ * 15 秒会把一次**真的成功了**的注入判成失败，而模型看到失败会重试——同一个动作做两遍
+ * 比多等 30 秒坑得多（真机第一轮就是这么把 type 判失败的）。
+ * 超过 45 秒没响应仍然算失败：那时桥大概率真的死了。
+ *
+ * 放在 shared（而不是定义它的 bridge-client）是因为 agent 侧的 computer-tools 也要读它：
+ * broker 的兜底超时必须比这条线更长，否则主进程还在等、agent 先把真成功判成
+ * 「主进程没有回执」（computer-tools.ts 的 BROKER_TIMEOUT_MS）。agent 进程不能
+ * import 主进程模块，跨进程共享的常量只有这里能放。
+ */
+export const GUEST_COMMAND_TIMEOUT_MS = 45_000;
+
+// ── 急停 ──────────────────────────────────────────────────────────────
+
+/**
+ * 急停热键的当前状态。`registered=false` 时 error 必须是一句用户能行动的话
+ * （「快捷键被占用」），不能只在控制台留一行。
+ */
+export interface EmergencyStopStatus {
+  /** 键位字符串（设置页展示） */
+  accelerator: string;
+  registered: boolean;
+  error: string | null;
+}
+
+/**
+ * 主进程 → renderer 的急停广播：按下了热键、这一轮已中断、这些会话的授权已撤销。
+ * 走 `agentEvent` 同一条广播（AgentEvent 的 `computerUseEmergencyStop`），
+ * 界面据此把授权标识复位并给一条「已急停」提示。**不关沙箱**——保留现场。
+ */
+export interface EmergencyStopBroadcast {
+  at: number;
+  /** 被中断并撤销授权的会话 id（当时正在跑的）；空数组 = 没有会话在跑 */
+  sessionIds: string[];
+}
+
+// ── 沙箱状态机 ────────────────────────────────────────────────────────
+
+export type SandboxState = "off" | "starting" | "running" | "stopping" | "error";
+
+/**
+ * 沙箱状态机的一帧。迁移：
+ *   off → start() → starting → guest 桥 bridge.json 就绪 → running
+ *                            ↘ 超时没等到通告 / spawn 失败 → error
+ *   running → stop() / 用户关掉沙箱窗口 → (stopping) → off
+ *   error → stop() 回 off，或直接 start() 重试。
+ * 应用每次启动都从 off 开始（沙箱不跨应用存活），renderer 冷启动可直接按 off 画。
+ */
+export type SandboxStatus =
+  | { state: "off" }
+  | { state: "starting"; startedAt: number }
+  | { state: "running"; startedAt: number; bridgeVersion: string }
+  | { state: "stopping" }
+  | { state: "error"; message: string };
+
+// ── 能力探测（全部只读；绝不自动执行提权命令）────────────────────────────
+
+/**
+ * Windows 版本档位（reg query 的 EditionID 归一化）。沙箱只有 Pro / Enterprise / Education 有
+ * （官方明确 Home 不支持）；未知归 unknown，按不支持处理并如实告诉用户。
+ */
+export type WindowsEdition = "pro" | "enterprise" | "education" | "home" | "unknown";
+
+/** 「Windows 沙箱」可选功能的状态——由 WindowsSandbox.exe 存在性推导（非提权进程查不了 DISM，错误 740）；unknown 留作契约兼容，当前实现不产出 */
+export type SandboxFeatureState = "enabled" | "disabled" | "unknown";
+
+/**
+ * 虚拟化（Hyper-V 所需的 VT-x / AMD-V）在不在。
+ *
+ * 为什么要单独探这一项：BIOS/UEFI 里虚拟化被关的机器上，功能启用、exe 也在，但
+ * WindowsSandbox.exe 一跑就退——只读探测报 ready、start 才失败，而失败现场（沙箱窗口
+ * 一闪而过 / 一条没头没尾的退出码）对用户没有信息量。读 Win32_ComputerSystem 的
+ * HypervisorPresent 是**非提权、瞬时**的信号（禁 wmic：24H2+ 已可选移除）。
+ *   present  = 虚拟化在（含已在跑 Hyper-V）
+ *   absent   = 被 BIOS/UEFI 关了，沙箱起不来
+ *   unknown  = 查不成（PowerShell 不在 / 超时 / 输出不认识）——**不阻塞**：unknown 只是
+ *             少一条信号，不能让探测把能用的机器判死。
+ */
+export type HypervisorState = "present" | "absent" | "unknown";
+
+/** computerUseProbe 的结果。guidance 是给用户看的手动操作指引（弹窗文案），ready 时为 null */
+export interface ComputerUseProbeResult {
+  /** 是不是 Windows（非 Windows 平台一切免谈） */
+  platformOk: boolean;
+  edition: WindowsEdition;
+  /** 版本档位支持沙箱（pro / enterprise / education） */
+  editionOk: boolean;
+  featureState: SandboxFeatureState;
+  /** WindowsSandbox.exe 存在（System32 下） */
+  sandboxExeFound: boolean;
+  /** 虚拟化在不在（BIOS 关 VT-x 的机器会栽在这里）。unknown = 查不成，不阻塞 */
+  hypervisorState: HypervisorState;
+  /** 四项全过（hypervisorState 为 unknown 也算过）。false 时看 guidance */
+  ready: boolean;
+  /** 不能就绪时的手动操作指引（含「启用或关闭 Windows 功能」路径与提权命令文本——只给文案，绝不代跑） */
+  guidance: string | null;
+}
+
+// ── 四个 IPC 入口的载荷 ───────────────────────────────────────────────
+
+export type ComputerUseStartResult = { ok: true } | { ok: false; error: string };
+
+export type ComputerUseStopResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * computerUseScreenshot 的回执：guest 桥按 maxWidth 缩放后的 JPEG + 两套尺寸。
+ * width/Height 是**回图**的像素（模型看到的那张图），nativeWidth/Height 是**沙箱物理屏**
+ * 的像素——模型给的坐标是前者，注入 SendInput 要的是后者，两者靠这一对尺寸换算
+ * （screenshotPointToNative）。takenAt 是宿主收到图的时刻（毫秒），renderer 可拿来判图的新旧。
+ */
+export type ComputerUseScreenshotResult =
+  | {
+      ok: true;
+      jpegBase64: string;
+      /** 回图尺寸（模型看到的像素） */
+      width: number;
+      height: number;
+      /** 沙箱物理屏尺寸 */
+      nativeWidth: number;
+      nativeHeight: number;
+      takenAt: number;
+    }
+  | { ok: false; error: string };
+
+// ── agent 的像素工具组（PR2）───────────────────────────────────────────
+
+/** 鼠标键。缺省 left——绝大多数操作是左键 */
+export type ComputerUseButton = "left" | "right" | "middle";
+
+/**
+ * agent 工具 → 主进程的请求。**坐标一律是沙箱物理屏像素**：换算在工具层做
+ * （computer-tools.ts 拿最近一次截图的几何把模型给的图像坐标还原），主进程与桥
+ * 只认物理像素——这两端不该各自再猜一遍缩放。
+ */
+export type ComputerUseToolRequest =
+  | { action: "screenshot"; maxWidth?: number }
+  | { action: "click"; x: number; y: number; button?: ComputerUseButton; double?: boolean }
+  | { action: "type"; text: string }
+  | { action: "key"; key: string }
+  | { action: "scroll"; x: number; y: number; deltaY: number };
+
+/**
+ * 一张截图的全部几何 + 字节：工具层存下它，把模型随后给的图像坐标换算成物理像素。
+ * data 是 JPEG 的 base64（与 browser_screenshot 同款：pi 的图片块直接吃它）。
+ */
+export interface ComputerUseShot {
+  /** 回图尺寸（模型看到的像素） */
+  width: number;
+  height: number;
+  /** 沙箱物理屏尺寸 */
+  nativeWidth: number;
+  nativeHeight: number;
+  data: string;
+}
+
+/** computerUseRequest 的回执载荷：主进程组装，agent 进程翻成 pi 工具结果（browserResult 同款） */
+export type ComputerUseToolOutcome =
+  | {
+      ok: true;
+      /** 给模型的正文（纯文本：做了什么、屏幕现在什么样、下一步该干什么） */
+      text: string;
+      /** 只有 screenshot 带：回图字节与两套尺寸（工具层换算坐标要靠它） */
+      shot?: ComputerUseShot;
+    }
+  | { ok: false; error: string };
+
+/**
+ * 一次 computer_* 调用的审计载荷（pi 工具结果的 `details.computerUse`）。
+ *
+ * **只给 UI 与日志、不入模型上下文**（pi 对 details 的通路就是这样）；模型看到的是
+ * 工具结果正文。字段刻意只留「发生了什么」：动作名、模型给的原始入参、时刻。
+ * 坐标是**模型看到的截图像素**（不是物理像素）——审计要回答的是「它点了图里的哪里」，
+ * 换算后的物理像素对回看的人没有意义。
+ *
+ * 转录本身（tool call + result 记录）已经是审计主通道，这里补的是 renderer 不解析
+ * 正文也能画的一层结构化摘要（browser 的 details.browser.handoff 同款）。
+ */
+export interface ComputerUseAudit {
+  action: ComputerUseToolRequest["action"];
+  /** 模型给的原始入参（未换算、未改写） */
+  args: Record<string, unknown>;
+  /** 调用发起的时刻（毫秒） */
+  at: number;
+}
+
+/** 只用到尺寸的那部分几何（换算函数的最小输入，测试与工具层都不必凑齐字节） */
+export interface ComputerUseShotGeometry {
+  width: number;
+  height: number;
+  nativeWidth: number;
+  nativeHeight: number;
+}
+
+/**
+ * 回图坐标 → 沙箱物理屏坐标。**越界一律 null，不做猜测性钳制**：
+ * 模型给了图外一个很远的点（比如把 2560 当成图宽）时，悄悄钳到边缘等于替它点了个
+ * 它没打算点的东西；回一句「这张图只有 1280×720」它才知道自己算错了。
+ * 边界值（x == width / y == height）算合法——那是「贴右 / 下边缘」的正常写法，
+ * 四舍五入后落在最后一个像素上。
+ *
+ * 回图与物理屏的比例两个轴各算各的：桥按长边等比缩放，正常两轴同比例，
+ * 但这里不假设——等比是桥的实现细节，不是协议。
+ */
+export function screenshotPointToNative(
+  shot: ComputerUseShotGeometry,
+  x: number,
+  y: number,
+): { x: number; y: number } | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (x < 0 || y < 0 || x > shot.width || y > shot.height) return null;
+  return {
+    x: clamp(Math.round((x * shot.nativeWidth) / shot.width), 0, shot.nativeWidth - 1),
+    y: clamp(Math.round((y * shot.nativeHeight) / shot.height), 0, shot.nativeHeight - 1),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}

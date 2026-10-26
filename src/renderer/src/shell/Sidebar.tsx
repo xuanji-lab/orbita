@@ -179,6 +179,8 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
+  // 电脑使用开关：关着时设置导航不列这一页（内容侧的门在 SettingsView 里，两处同源）
+  const computerUse = useExperimentalFeature("computer-use");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -556,7 +558,7 @@ export function Sidebar(props: {
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
-            {SETTINGS_TABS.map((tab) => (
+            {SETTINGS_TABS.filter((tab) => tab.id !== "computer-use" || computerUse).map((tab) => (
               <NavRow
                 key={tab.id}
                 icon={tab.icon}
