@@ -39,7 +39,7 @@ import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
 import { intentTurnEnv } from "./intent-env.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
-import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
+import type { ComputerUseTurnContext, IntentTurnContext } from "../../shared/agent-ipc.ts";
 import {
   mergeMcpConfigs,
   resolveServersForWorkspace,
@@ -51,7 +51,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
-import { turnFields } from "./turn-fields.ts";
+import { computerUseTurnContext, turnFields } from "./turn-fields.ts";
 import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
@@ -199,11 +199,13 @@ export function registerAgentIpc(
     (await settings.read()).experimentalFeatures?.["pdf-citations"] === true;
 
   /**
-   * 实验功能「电脑使用」的开关同款每轮现读；缺席 = 关。它管的是**工具组注册**
-   * （关着时沙箱工具根本不进会话），不是「执行时再拒绝」——开关一拨，下一轮即生效。
+   * 电脑使用每轮现读：实验开关决定**工具组注册**（关着时沙箱工具根本不进会话），
+   * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。两个事实
+   * 来自同一份设置、同一次 `settings.read()`：不另开一套读写，也不会两轮之间漂移。
+   * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是唯一读设置的、要 electron 的地方）。
    */
-  const readComputerUse = async (): Promise<boolean> =>
-    (await settings.read()).experimentalFeatures?.["computer-use"] === true;
+  const readComputerUse = async (): Promise<ComputerUseTurnContext> =>
+    computerUseTurnContext(await settings.read());
 
   /**
    * 本会话的电脑使用授权时刻。**从 meta 读**（持久真源），每轮随开轮命令带给 agent 进程
