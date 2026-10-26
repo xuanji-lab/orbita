@@ -20,6 +20,12 @@ export function RightPanelSlot(props: {
   open: boolean;
   width: number;
   narrow: boolean;
+  /**
+   * 铺满主区（布局 B「稿件为主」）：稿件工作台取代对话卡的位置、对话收到右侧一栏，
+   * 这时右栏位不再是「固定宽的侧栏」，宽度由 `.pane[data-layout="paper"]` 的
+   * flex 分配，拖宽热区也不该存在（左缘已是卡片外沿）。宽度仍算、仍报，只是不生效。
+   */
+  fill?: boolean;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
   /**
@@ -32,6 +38,7 @@ export function RightPanelSlot(props: {
 }) {
   const t = useT();
   const { narrow, open } = props;
+  const fill = props.fill === true;
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
   const [resizing, setResizing] = useState(false);
@@ -86,7 +93,7 @@ export function RightPanelSlot(props: {
   return (
     <aside
       ref={asideRef}
-      className={`right-panel-slot${open ? " open" : ""}${resizing ? " dragging" : ""}`}
+      className={`right-panel-slot${open ? " open" : ""}${fill ? " fill" : ""}${resizing ? " dragging" : ""}`}
       style={
         {
           "--right-panel-w": `${narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width}px`,
@@ -112,8 +119,8 @@ export function RightPanelSlot(props: {
         } as React.CSSProperties
       }
     >
-      {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320 */}
-      {!narrow && (
+      {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320。布局 B 里没有竖线也没有固定宽 */}
+      {!narrow && !fill && (
         <span
           onPointerDown={startResize}
           onDoubleClick={() =>
@@ -157,26 +164,45 @@ export function RightPanelFrame(props: {
   /** 页头最右的动作槽（说明 ?、添加、刷新等） */
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
+  /**
+   * 页头**画在卡里**（稿件工作台的布局 B）：那时工作台占的是对话卡的主位，不在右栏
+   * 胶囊的位置上（那一格被「对话」胶囊占了，见 shell/Toolbar）。默认 false = 页头
+   * portal 到工具栏的右栏胶囊（方案 B v2 的常态）。
+   */
+  inline?: boolean;
   children: React.ReactNode;
 }) {
   const slot = useContext(ToolbarPanelSlotContext);
+  const inline = props.inline === true;
   return (
     <div
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateRows: "minmax(0,1fr) auto",
+        gridTemplateRows: inline ? "auto minmax(0,1fr) auto" : "minmax(0,1fr) auto",
       }}
     >
-      {slot !== null &&
-        createPortal(
-          <div className="cap-panel-content" key={props.contentKey}>
-            {props.header}
-            <span className="cap-grow" aria-hidden="true" />
-            {props.headerExtra}
-          </div>,
-          slot,
-        )}
+      {/* 所有子元素都带 key：布局 A / B 切换时多出 / 少掉一行页头，不带 key 的话
+          按位置对账会把内容层（编辑器、PDF）整棵重挂，未保存的输入与滚动位置
+          一起丢掉——页头是页头，内容层必须留在原地 */}
+      {inline ? (
+        <div className="panel-inline-head" key="__head" aria-label={props.contentKey}>
+          {props.header}
+          <span className="cap-grow" aria-hidden="true" />
+          {props.headerExtra}
+        </div>
+      ) : null}
+      {!inline && slot !== null
+        ? createPortal(
+            <div className="cap-panel-content" key={props.contentKey}>
+              {props.header}
+              <span className="cap-grow" aria-hidden="true" />
+              {props.headerExtra}
+            </div>,
+            slot,
+            "cap-head",
+          )
+        : null}
 
       <div
         key={props.contentKey}
@@ -188,6 +214,7 @@ export function RightPanelFrame(props: {
 
       {props.footer !== undefined && (
         <footer
+          key="footer"
           style={{
             borderTop: "1px solid var(--color-border-subtle)",
             padding: "var(--space-3) var(--space-4)",

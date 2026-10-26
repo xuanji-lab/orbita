@@ -937,6 +937,58 @@ body {
   height: 100%;
 }
 
+/*
+ * ===== 布局 B「稿件为主」（features/files/paper-layout.ts） =====
+ * 对话卡的位置换成稿件工作台：DOM 顺序不变（主槽 = 对话、右栏位 = 文件面板），
+ * 用 row-reverse 把两者**视觉上对调**——组件实例留在原地，切布局时不重挂编辑器
+ * 与对话（未保存的输入、滚动位置都还在）。分栏线从面板左缘改到对话卡的左缘。
+ * 对话栏宽由 App 注入 --paper-chat-w（常量在 paper-layout.ts）。
+ */
+.pane[data-layout="paper"] {
+  flex-direction: row-reverse;
+}
+.pane[data-layout="paper"] .pane-main {
+  flex: 0 0 var(--paper-chat-w, 340px);
+  width: var(--paper-chat-w, 340px);
+  min-width: 0;
+  border-left: 1px solid var(--color-border-default);
+}
+.pane[data-layout="paper"] .right-panel-slot.open {
+  flex: 1 1 auto;
+  width: auto;
+  border-left: 0;
+}
+.pane[data-layout="paper"] .right-panel-slot .right-panel-slot-inner {
+  width: 100%;
+}
+
+/* 页头画在卡里（RightPanelFrame 的 inline，布局 B）：内容与工具栏胶囊同款配方，
+ * 高度对齐全站胶囊；下面是编译条 / 文件内容 */
+.panel-inline-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--titlebar-capsule);
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-sizing: border-box;
+}
+.panel-inline-head button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+}
+.panel-inline-head .cap-pt {
+  padding: 0 8px 0 2px;
+}
+.panel-inline-head .cap-tab {
+  padding: 0 var(--space-2);
+  width: auto;
+}
+
 /* 竖线即分界；把手骑在竖线上 */
 .right-panel-slot-resizer {
   position: absolute;
@@ -3149,6 +3201,320 @@ body {
   min-height: 0;
   min-width: 0;
   height: 100%;
+}
+
+/*
+ * 稿件区：单标签（一块）与「源码 + PDF 并排」（两块）。左块在两种形态下都是
+ * **同一个组件位置**（外面这层容器只是从「撑满」变成「两块对分」），切布局不会
+ * 让编辑器重挂。并排的两块各拿一半，中间一条发丝线。
+ */
+.files-panel-panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.files-panel-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.files-panel-panes.split .files-panel-pane + .files-panel-pane {
+  border-left: 1px solid var(--color-border-subtle);
+}
+
+/* ---------- 论文工作台：编译条 + 问题抽屉（LaTeX 项目） ----------
+ * 面板内容变成「编译条 / 文件内容 / 问题抽屉」三段的纵向 flex：
+ * 编译条与抽屉都不滚（抽屉自己的列表滚），中间的文件内容吃剩余高度。
+ * 非 LaTeX 文件只有中间一段，几何与改动前一致。 */
+.files-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.files-workbench > .files-panel-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.latex-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* 编译键：安静态是文字按钮，dirty 态换成 accent 主按钮（.btn-accent）。
+   几何独立于两种配方：24 高、内边距 8，与胶囊里的 chip 齐平 */
+.latex-compile {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.latex-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-status-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* 抽屉：默认一行；展开后列表自己有上限，不把文件内容挤没 */
+.latex-problems {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.latex-problems-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0;
+  font-size: var(--font-size-sm);
+  text-align: left;
+}
+.latex-problems-head:disabled {
+  cursor: default;
+}
+.latex-problem-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+}
+.latex-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.latex-count.err {
+  color: var(--color-danger);
+}
+.latex-count.warn {
+  color: var(--color-warning);
+}
+.latex-problem-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+.latex-problem {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.latex-problem:hover {
+  background: var(--option-hover-bg);
+}
+.latex-problem[data-level="layout"] {
+  color: var(--color-text-secondary);
+}
+.latex-problem-loc {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-problem-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.latex-problem-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.latex-problem-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.latex-error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+/* ---------- 源码编辑器（.tex 标签，PR4） ----------
+ * 编辑器吃满预览体：body 让出内边距与滚动（滚动在 CodeMirror 的 .cm-scroller 里，
+ * 行号槽跟着滚）；上下是冲突/错误条与状态行，都不随正文滚。
+ * 语法着色只引用 token——五个变量在这里声明，深浅主题、纸面主题自动跟随；
+ * accent 保留给主操作，所以命令靠字重而不是颜色区分。 */
+.file-preview-body[data-kind="tex"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.tex-editor {
+  --tex-cmd: var(--color-text-primary);
+  --tex-argument: var(--color-text-secondary);
+  --tex-math: var(--color-info);
+  --tex-number: var(--color-text-secondary);
+  --tex-comment: var(--color-text-tertiary);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--color-bg-panel);
+}
+.tex-editor-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.tex-editor-host .cm-editor {
+  height: 100%;
+}
+.tex-editor-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-secondary);
+}
+.tex-editor-status[data-phase="dirty"] .tex-editor-save-state {
+  color: var(--color-warning);
+}
+.tex-editor-status[data-phase="conflict"] .tex-editor-save-state,
+.tex-editor-status[data-phase="error"] .tex-editor-save-state {
+  color: var(--color-danger);
+}
+/* 保存中的转圈：CSS 转，不引图标组件（状态行只有 11px） */
+.tex-editor-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--color-border-strong);
+  border-top-color: var(--color-text-secondary);
+  border-radius: 50%;
+  animation: tex-editor-spin 0.8s linear infinite;
+}
+@keyframes tex-editor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 冲突 / 保存失败条：颜色只是第二信号，图标与文字已在说同一件事 */
+.tex-editor-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.tex-editor-banner[data-tone="warning"] .tex-editor-banner-icon {
+  color: var(--color-warning);
+}
+.tex-editor-banner[data-tone="danger"] .tex-editor-banner-icon {
+  color: var(--color-danger);
+}
+.tex-editor-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tex-editor-banner-detail {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+.tex-editor-banner-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.tex-editor-banner-acts .quiet-control {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+/* 标签上的未保存圆点：与 ✕ 共用同一个 16px 槽位（CSS 负责悬停换位） */
+.files-tab-tail {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+.files-tab-tail .files-tab-close {
+  position: absolute;
+  inset: 0;
+}
+.files-tab-dirty {
+  display: grid;
+  place-items: center;
+  color: var(--color-warning);
+}
+.cap-tab:hover .files-tab-dirty {
+  display: none;
+}
+/* 脏标签默认只露圆点；✕ 悬停才出现（含当前选中的标签——否则选中的脏标签
+   永远显示 ✕，圆点等于不存在）。选择器比重与上面 .cap-tab[aria-selected] 那条对齐 */
+.cap-tab .files-tab-close.is-dirty,
+.cap-tab[aria-selected="true"] .files-tab-close.is-dirty {
+  opacity: 0;
+}
+.cap-tab:hover .files-tab-close.is-dirty,
+.cap-tab[aria-selected="true"]:hover .files-tab-close.is-dirty,
+.cap-tab:focus-within .files-tab-close.is-dirty {
+  opacity: 1;
 }
 
 /*

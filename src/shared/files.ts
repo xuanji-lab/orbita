@@ -123,6 +123,56 @@ export type FilePreview =
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
 
 /**
+ * 编辑器写盘（`fs:write`）的请求。`dir` 是文件绝对路径，白名单与 fs:read 同一道
+ * （root 必须是 fs:roots 回过的、路径 realpath 后必须在 root 之内）。
+ *
+ * `expectedHash` 是编辑器最后一次读到 / 写成功时那份磁盘文本的指纹（contentHash）：
+ * 主进程**写前重读一次**，指纹对不上就是「编辑期间被外部改过」——回 conflict，不动盘。
+ * 用内容指纹而不是 mtime，是为了让「自身保存」和「外部原样重写」都不算冲突（mtime 会变，
+ * 内容没变）；也避开 Windows / 网络盘 mtime 粒度与时钟偏差。**null = 用户已明确选择
+ * 「保留我的」**：跳过冲突检查直接写（这是唯一的强制覆盖入口，界面上要有对应的动作）。
+ */
+export interface FileWriteRequest extends FileListRequest {
+  text: string;
+  expectedHash: string | null;
+}
+
+/**
+ * `fs:write` 的回执。
+ * - written：已落盘，回新的指纹与 mtime（调用方据此刷新「已保存」基线）
+ * - conflict：盘上内容与 expectedHash 不符，**没有写**；回当前全文供「重新加载」直接用，
+ *   省一次 fs:read（也避免两次读之间又变了一次）
+ * - too-large：超过编辑器写盘上限，不写（这种文件本来也不该在编辑器里打开）
+ */
+export type FileWriteResult =
+  | { kind: "written"; modifiedAt: number; hash: string; size: number }
+  | { kind: "conflict"; text: string; modifiedAt: number; hash: string; size: number }
+  | { kind: "too-large"; limit: number; size: number };
+
+/** 编辑器写盘上限（4 MB）：比文本预览上限宽松（预览只读开头，写盘是全量回写），但仍有界 */
+export const EDITOR_WRITE_LIMIT = 4 * 1024 * 1024;
+
+/**
+ * 内容指纹（FNV-1a 的两个 32 位变体拼成 16 位十六进制）。**只用于「盘上内容还是不是
+ * 编辑器手里那份」的相等判定**，不是安全哈希：没有对手会构造碰撞，2^-64 的偶然碰撞
+ * 概率远低于其它失效模式。两端共用同一函数（renderer 侧算基线、主进程写前重读比对），
+ * 所以它必须留在 shared（renderer 没有 node:crypto）。
+ *
+ * 按 UTF-16 code unit 进位：同一段文本在两侧都是同一个 JS 字符串（IPC 结构化克隆），
+ * 不受编码 / BOM 差异影响——BOM 本身是文本里的一个字符，两边都看得见。
+ */
+export function contentHash(text: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ code, 0x85ebca6b) >>> 0;
+  }
+  return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
+}
+
+/**
  * 网页类文件：浏览器能直接渲染、在内置浏览器里打开有意义的那几种。文件面板据此给「在内置
  * 浏览器打开」，agent 的 browser_navigate 打开本地文件也只认这几种（main/browser/local-file.ts）。
  */

@@ -1848,6 +1848,72 @@ export const en = {
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },
 
+  /* ---------- 论文工作台的编译条 + 问题抽屉（LaTeX 项目） ---------- */
+  latex: {
+    aria: "LaTeX build",
+    engineTip: "Engine — lists what this machine has; picking one writes .orbita/latex.json",
+    engineAuto: "auto",
+    mainTip: "Main file for this project",
+    noMain: "Choose main file",
+    compile: "Compile",
+    compileTip: (shortcut: string) => `Compile (${shortcut})`,
+    cancel: "Cancel",
+    cancelTip: "Stop this build (the whole process tree)",
+    idleUpToDate: "PDF is up to date",
+    idleNoPdf: "No PDF yet",
+    dirty: "Sources changed — the PDF is out of date",
+    running: (elapsed: string) => `Building… ${elapsed}`,
+    success: (pages: number, duration: string) => `Succeeded · ${pages} pages · ${duration}`,
+    successNoPages: (duration: string) => `Succeeded · ${duration}`,
+    failed: (errors: string, duration: string) => `Failed · ${errors} · ${duration}`,
+    failedShort: (duration: string) => `Failed · ${duration}`,
+    cancelled: "Build cancelled",
+    notInstalled: "latexmk was not found on this machine",
+    noMainFile: "Pick a main .tex file to compile this project",
+    stalePdf: (time: string) => `still showing the ${time} build`,
+    problems: "Problems",
+    noProblems: "No problems",
+    errorCount: (n: number) => (n === 1 ? "1 error" : `${n} errors`),
+    warningCount: (n: number) => (n === 1 ? "1 warning" : `${n} warnings`),
+    missingPackage: (name: string) => `Missing package ${name}`,
+    installInTerminal: "Install in terminal",
+    installTip: (command: string) => `Fill \`${command}\` into the visible terminal — you press Enter`,
+    handToAgent: "Hand to agent",
+    handToAgentTip: "Add it to the quote box; nothing is sent until you send it",
+    quoteError: "Compile error",
+    quoteWarning: "Compile warning",
+    quoteLayout: "Layout warning",
+    quoteMissingPackage: "Missing package",
+  },
+
+  /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
+  paper: {
+    chatTitle: "Chat",
+    toPaper: "Paper first — sources and PDF side by side, chat moves to the right column",
+    toChat: "Back to chat first",
+  },
+
+  /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
+  editor: {
+    aria: "LaTeX source editor",
+    saved: "Saved",
+    unsaved: "Unsaved",
+    saving: "Saving…",
+    saveFailed: "Couldn't save",
+    conflictState: "Conflict",
+    cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
+    conflictBanner: "This file changed on disk while you were editing. Nothing was overwritten.",
+    errorBanner: "Couldn't save this file.",
+    conflictAfterClose: "Not saved: the file changed on disk while you were editing. Reopen the tab to resolve it.",
+    conflictBlocksCompile: "Not compiled: resolve the file conflict first — the editor's copy and the disk disagree.",
+    resolveConflictFirst: "Resolve the file conflict first (reload from disk or keep mine).",
+    resolveConflictBeforeSwitch:
+      "Not switched: resolve this file's conflict first — switching would lose what you haven't saved.",
+    reload: "Reload from disk",
+    keepMine: "Keep mine",
+    tooLarge: (size: string, limit: string) => `Not saved: ${size} is over the ${limit} editor limit.`,
+  },
+
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
   intentPanel: {
     title: "Intent",

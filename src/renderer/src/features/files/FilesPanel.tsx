@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
@@ -28,6 +28,18 @@ import {
   type SentFileRef,
 } from "./sent-attachments.ts";
 import { FilePreviewPane } from "./FilePreviewPane";
+import { LatexBuildBar } from "./LatexBuildBar";
+import { LatexProblems, type ProblemItem } from "./LatexProblems";
+import {
+  groupLatexIssues,
+  isFailedStatus,
+  issueLocation,
+  latexBarState,
+  pdfStale,
+} from "./latex-workbench.ts";
+import { useLatexWorkbench } from "./useLatexWorkbench.ts";
+import { closeDecision } from "./editor-state.ts";
+import type { FlushOutcome, TexEditorHandle } from "./TexEditorPane.tsx";
 import {
   closeTab,
   decideFocusDrop,
@@ -45,7 +57,8 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import { pathTail, pathWithin } from "../../../../shared/path.ts";
+import type { LatexFileContext } from "@shared/latex";
+import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
 /** 占位 Session 组（还没有会话）的折叠键：真实根的键是绝对路径，常量撞不上 */
@@ -97,6 +110,27 @@ export function FilesPanel(props: {
    * 同一个文件连点两次也重新激活。null = 没有请求
    */
   fileOpen?: { path: string; token: number } | null;
+  /**
+   * 把一条命令填进可见终端（编译条「在终端安装」）：App 切到终端面板并粘贴，
+   * 回车仍由用户按——缺宏包的安装可能需要 sudo / 管理员密码，agent 不替用户提权。
+   */
+  onRunInTerminal?: (command: string) => void;
+  /**
+   * 布局 B（稿件为主）：稿件工作台占主位、对话收进右侧一栏。页头跟着画在卡里
+   * （inline），源码与 PDF 并排。由 App 的 paper-layout.ts 裁决后传进来。
+   */
+  paperLayout?: boolean;
+  /**
+   * 布局 A 的大屏自动并排（窗口 ≥ 1800、项目有 PDF）：只并排，不改页头位置与侧栏。
+   */
+  autoSplit?: boolean;
+  /** 切换布局的按钮（住在文件页头的右端——两种布局里是同一个位置） */
+  onTogglePaperLayout?: () => void;
+  /**
+   * 项目里有 PDF（可以并排）：报给 App——布局 A 的自动并排与「并排前把右栏拉宽」
+   * 都要先知道这一点，而项目事实住在本面板里。
+   */
+  onPaperReady?: (ready: boolean) => void;
 }) {
   const t = useT();
   const session = props.session;
@@ -201,6 +235,179 @@ export function FilesPanel(props: {
    */
   const shownTab = activeTab !== null && activeTab.root === focusDrop.rootPath ? null : activeTab;
 
+  /**
+   * 论文工作台：当前文件属于 LaTeX 项目时，标签行下方多一条编译条、面板底部多个
+   * 问题抽屉；其余文件完全无感（项目探测走主进程，不在这里读盘）。
+   *
+   * 授权上下文与 fs:read 同形（root + path），所以附图标签（path 是原图引用、
+   * root 是空串）直接跳过——它不可能是 LaTeX 项目里的文件。
+   */
+  const latexContext = useMemo<LatexFileContext | null>(() => {
+    if (activeTab === null || activeTab.name !== undefined) return null;
+    return {
+      sessionId,
+      workspaceId,
+      ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
+      root: activeTab.root,
+      path: activeTab.path,
+    };
+  }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
+  const latex = useLatexWorkbench(latexContext);
+
+  /**
+   * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
+   * 先 ask 它存盘；编译前必须把未落盘的改动写完——否则编的是盘上的旧版。
+   * 切标签不靠这里：旧编辑器卸载时会自己把文本抓下来再写（配「切走不丢字」）。
+   */
+  const editorsRef = useRef(new Map<string, TexEditorHandle>());
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set());
+  /** 编辑器事件造成的可见提示（关标签撞冲突 / 编译前保存失败），不静默 */
+  const [editorNotice, setEditorNotice] = useState<string | null>(null);
+
+  const registerEditor = useCallback((path: string, handle: TexEditorHandle | null): void => {
+    if (handle === null) editorsRef.current.delete(path);
+    else editorsRef.current.set(path, handle);
+  }, []);
+
+  const handleEditorDirty = useCallback((path: string, dirty: boolean): void => {
+    setDirtyPaths((current) => {
+      if (current.has(path) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const handleEditorError = useCallback((path: string, message: string): void => {
+    setEditorNotice(`${pathTail(path) || path}：${message}`);
+  }, []);
+
+  /** 保存成功的统一回调：清掉旧提示，并让编译条立刻看到「源码比 PDF 新」 */
+  const handleEditorSaved = useCallback((): void => {
+    setEditorNotice(null);
+    latex.refresh();
+  }, [latex]);
+  /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const latexGroups = useMemo(
+    () => groupLatexIssues(latex.last?.errors ?? [], latex.last?.warnings ?? []),
+    [latex.last],
+  );
+  const latexState = latexBarState({
+    running: latex.running,
+    lastStatus: latex.last?.status ?? null,
+    stale: pdfStale(latex.project?.pdf?.modifiedAt ?? null, latex.project?.sourceModifiedAt ?? null),
+    hasPdf: latex.project?.pdf !== null && latex.project !== undefined,
+  });
+  useEffect(() => {
+    if (latex.last !== null && isFailedStatus(latex.last.status)) setProblemsOpen(true);
+  }, [latex.last]);
+
+  // 切文件 / 换项目：抽屉收起（上一份问题不属于新文件）
+  useEffect(() => {
+    setProblemsOpen(false);
+  }, [latexContext?.path]);
+
+  /**
+   * 论文工作台的两种布局（paper-layout.ts）：B 的并排是主位天然形态；A 在宽屏
+   * （≥1800）也自动并排。并排的右半永远是**这个项目的 PDF**，左半是激活标签——
+   * 激活标签本身就是 PDF 时，左半换成项目主文件（原型：左源码右 PDF）。
+   */
+  const projectPdfPath = latex.project?.pdf?.path ?? null;
+  const splitWanted = props.paperLayout === true || props.autoSplit === true;
+  const mainSourcePath =
+    latex.project !== null && latex.project.main !== null
+      ? `${latex.project.dir}${/[\\/]$/.test(latex.project.dir) ? "" : "/"}${latex.project.main}`
+      : null;
+  const splitPdfPath = splitWanted ? projectPdfPath : null;
+  const activeIsPdf =
+    activeTab !== null && splitPdfPath !== null && samePath(activeTab.path, splitPdfPath);
+  const splitLeftPath = activeIsPdf ? mainSourcePath : (activeTab?.path ?? null);
+  const splitOn =
+    splitPdfPath !== null && splitLeftPath !== null && !samePath(splitLeftPath, splitPdfPath);
+  /** 左栏真正显示的文件：不并排时就是激活标签（含「激活标签是 PDF」那种单栏） */
+  const leftPath = splitOn ? splitLeftPath : (activeTab?.path ?? null);
+  /** 左栏显示的是不是项目 PDF（决定它要不要走 PDF 预览与编译后重载） */
+  const leftIsProjectPdf =
+    leftPath !== null && projectPdfPath !== null && samePath(leftPath, projectPdfPath);
+
+  // 项目有 PDF 才谈得上并排（App 据此决定 A 的自动并排与右栏宽度）
+  const paperReady = latex.project !== null && latex.project.pdf !== null;
+  const reportPaperReady = props.onPaperReady;
+  useEffect(() => {
+    reportPaperReady?.(paperReady);
+  }, [paperReady, reportPaperReady]);
+
+  /**
+   * 编译前强制保存：未落盘的改动先写盘，编译用的就是你眼前这一版（原型场景 1 第 5 步 / 场景 4）。
+   * 冲突或写盘失败时**不编**：编出来的 PDF 会对应一份你不知道内容的源码，比不编更误导。
+   * 只 flush 当前挂载的编辑器（其它标签在切走时已经保存过），但保存链是串行的，不会交错。
+   */
+  const compile = latex.compile;
+  const compileWithSave = useCallback((): void => {
+    void (async () => {
+      const outcomes: FlushOutcome[] = await Promise.all(
+        [...editorsRef.current.values()].map((handle) => handle.flush()),
+      );
+      if (outcomes.includes("conflict")) {
+        setEditorNotice(t.editor.conflictBlocksCompile);
+        return;
+      }
+      if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
+      compile();
+    })();
+  }, [compile, t]);
+
+  /**
+   * 编译快捷键（Ctrl/Cmd+B）。**不抢终端与输入框**：终端里的 Ctrl+B 是 readline 的
+   * backward-char（vim 里是翻页），在输入框里它也不是编译——那两个场景直接放过。
+   */
+  useEffect(() => {
+    if (latex.project === null) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (event.key.toLowerCase() !== "b") return;
+      const target = event.target;
+      if (target instanceof Element && target.closest(".xterm") !== null) return;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        // 源码编辑器里的 Ctrl+B 不当输入法 / 加粗用：那是 LaTeX 项目，编译才是它该做的事
+        if (target.isContentEditable && target.closest(".tex-editor") === null) return;
+      }
+      event.preventDefault();
+      if (latex.running) return;
+      compileWithSave();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [latex.project, latex.running, compileWithSave]);
+
+  /**
+   * 一条编译问题 → 输入框引用。走现有的引用通道（TextQuote）：用户自己按发送才发。
+   * `filePath` 让 chip 的注脚显示文件名（而不是「agent 说的」）——它不是历史消息的
+   * 片段，是一条工具事实。
+   */
+  const handProblemToAgent = (item: ProblemItem): void => {
+    const prefix =
+      item.level === "error"
+        ? t.latex.quoteError
+        : item.level === "warning"
+          ? t.latex.quoteWarning
+          : item.level === "layout"
+            ? t.latex.quoteLayout
+            : t.latex.quoteMissingPackage;
+    const loc = issueLocation(item);
+    session.addQuote({
+      text: `${prefix} · ${loc === "" ? item.message : `${loc} · ${item.message}`}`,
+      messageId: `latex:${item.file ?? ""}:${item.line ?? 0}:${item.message}`,
+      role: "assistant",
+      ...(item.file === null ? {} : { filePath: item.file }),
+    });
+    document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+  };
+
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
   // 只问文件引用——附图按原图引用走 session.attachment 读，没有 stat 这回事。
@@ -251,6 +458,7 @@ export function FilesPanel(props: {
     setTreeOn(false);
     setActionError(null);
     setJump(null);
+    setEditorNotice(null);
   }, [sessionId, workspaceId]);
 
   // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
@@ -263,29 +471,149 @@ export function FilesPanel(props: {
   // styles.css 的 container query 裁决，这里只更新状态
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const narrowRef = useRef(false);
+  /** 最近一次量到的面板宽（退出 B 后判断「最终是并排窄列还是浮层」用） */
+  const bodyWidthRef = useRef(0);
   useEffect(() => {
     const el = bodyRef.current;
     if (el === null) return;
     let lastWidth: number | null = null;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? 0;
-      // 首帧只记宽、不动作：面板挂载时不该把已经开着的树折掉
+      // 首帧只记宽、不动作（lastWidth === null）：面板挂载时不该把已经开着的树折掉
       if (shouldCollapseOnNarrow(lastWidth, width)) setTreeOn(false);
       lastWidth = width;
+      bodyWidthRef.current = width;
       narrowRef.current = width < TREE_BREAKPOINT;
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
+  /**
+   * 布局 B 里文件树自动收起：树占掉 224 以后，并排的两块只剩 280–300——正是原型里
+   * 判「三块都读不了」的那个形态（B 的原型画面本来也没有树）。退出 B 时恢复**进 B
+   * 之前**的开合态（与侧栏同一套记忆纪律）；布局 A 的宽屏自动并排不跟——那里宽度够。
+   * B 里要看树随时点「文件」展开。
+   *
+   * 恢复要等宽度落定：退出 B 的面板宽是 200ms 过渡出来的，期间「拉窄即折叠」会不断
+   * 折树（那是布局切换不是用户拉窄，不跟它抢）。过渡结束后再看最终宽度：宽（树是并排
+   * 窄列）才放回来，窄（树只能浮层）不自动弹——那是又一层盖在内容上的面，交给用户自己点。
+   */
+  const treeOnRef = useRef(treeOn);
+  treeOnRef.current = treeOn;
+  const treeBeforePaperRef = useRef<boolean | null>(null);
+  const restoreTreeTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (props.paperLayout === true) {
+      if (restoreTreeTimerRef.current !== null) {
+        window.clearTimeout(restoreTreeTimerRef.current);
+        restoreTreeTimerRef.current = null;
+      }
+      if (treeBeforePaperRef.current === null) treeBeforePaperRef.current = treeOnRef.current;
+      setTreeOn(false);
+      return;
+    }
+    const before = treeBeforePaperRef.current;
+    if (before === null) return;
+    treeBeforePaperRef.current = null;
+    if (!before) return;
+    restoreTreeTimerRef.current = window.setTimeout(() => {
+      restoreTreeTimerRef.current = null;
+      if (bodyWidthRef.current >= TREE_BREAKPOINT) setTreeOn(true);
+    }, 520);
+    return () => {
+      if (restoreTreeTimerRef.current !== null) {
+        window.clearTimeout(restoreTreeTimerRef.current);
+        restoreTreeTimerRef.current = null;
+      }
+    };
+  }, [props.paperLayout]);
+
   /** 关闭一个标签；关掉最后一个 = 回纯树，treeOn 一并复位——之后从 solo 点开
    * 文件不会突然顶着浮层 / 并排列（树的展开理由随最后一个文件消失） */
-  const closeOne = (path: string): void => {
+  /** 真的把标签拿掉（保存已确认 / 本来不脏） */
+  const applyClose = (path: string): void => {
     const next = closeTab(tabs, activePath, path);
     setTabs(next.tabs);
     setActivePath(next.activePath);
     if (next.activePath === null) setTreeOn(false);
   };
+
+  /**
+   * 关闭一个标签；有未保存内容时**先存再关**（自动保存的 1.5 s 没到就按 ✕ 不该丢字）。
+   * 卡在冲突上时不关：替用户选「重载还是保留」是丢改动，停下来让他自己裁。
+   * 保存失败也不关，标签留着、错误在编辑器里。
+   */
+  const closeOne = (path: string): void => {
+    const handle = editorsRef.current.get(path);
+    const decision = closeDecision({
+      dirty: handle?.isDirty() ?? false,
+      conflicted: handle?.conflicted() ?? false,
+    });
+    if (decision === "block") {
+      setEditorNotice(t.editor.resolveConflictFirst);
+      return;
+    }
+    if (decision === "save" && handle !== undefined) {
+      void handle.flush().then((outcome) => {
+        if (outcome === "saved" || outcome === "clean") applyClose(path);
+        else setEditorNotice(t.editor.resolveConflictFirst);
+      });
+      return;
+    }
+    applyClose(path);
+  };
+
+  /**
+   * 把当前激活标签滚进可视区。正常切换 / 新开由下面的 effect 管；**被拦下的切换**
+   * 不经过 effect（activePath 与 tabs.length 都没变），而浏览器点击已把被点的标签
+   * 滚进了视口——必须手动滚回去，否则用户眼前是那个并没切过去的标签，会以为切换成功了。
+   */
+  const scrollActiveTabIntoView = useCallback((): void => {
+    const bar = tabsBarRef.current;
+    const tab = activeTabRef.current;
+    if (bar === null || tab === null) return;
+    // 用视口矩形换算成「滚动内容坐标」：标签的 offsetParent 不一定是滚动容器
+    // （.cap-tabs 没有 position），offsetLeft 是相对 toolbar 的，直接喂给
+    // tabScrollTarget 会把它当成已可见（实测：真正左溢出 91px 时 offsetLeft
+    // 恰好等于 scrollLeft，target 被判成 null）。
+    const barRect = bar.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const target = tabScrollTarget(
+      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
+      { offsetLeft: tabRect.left - barRect.left + bar.scrollLeft, offsetWidth: tabRect.width },
+    );
+    if (target !== null) bar.scrollTo({ left: target });
+  }, []);
+
+  /**
+   * 切换激活标签前的保存闸：当前编辑器脏就先 flush，**冲突 / 写盘失败时不切走**。
+   * 切走会让 TexEditorPane 卸载，而卸载时的兜底保存一旦撞上冲突，那份未保存文本
+   * 就再也拿不回来了（验收实测的丢字路径）。flush 成功后由这里统一 setActivePath；
+   * 本来干净 / 没有编辑器就直接切。
+   */
+  const switchTo = useCallback(
+    (next: string | null): void => {
+      if (next === activePath) return;
+      const current = activePath === null ? undefined : editorsRef.current.get(activePath);
+      if (current === undefined || !current.isDirty()) {
+        setActivePath(next);
+        return;
+      }
+      void current.flush().then((outcome) => {
+        if (outcome === "saved" || outcome === "clean") {
+          setActivePath(next);
+          return;
+        }
+        setEditorNotice(t.editor.resolveConflictBeforeSwitch);
+        // 点击已经把被点的标签滚进视口（浏览器对聚焦元素的默认行为）；把可视区
+        // 拉回真正的激活标签，否则看起来像已经切过去了。
+        // 延到下一帧：浏览器的「聚焦滚动」排在点击处理器之后，当场 scrollTo 会被它盖掉
+        window.requestAnimationFrame(() => scrollActiveTabIntoView());
+      });
+    },
+    [activePath, scrollActiveTabIntoView, t],
+  );
 
   // 预览打开时 Esc 关当前激活标签（原型同语义）；没有激活标签回报「没处理」，
   // 让 App 继续把 Esc 用在关面板上。由 App 的全局监听派发过来（见 props.escapeRef）
@@ -307,7 +635,7 @@ export function FilesPanel(props: {
    * 自动收起——窄侧事实来自 ResizeObserver 的缓存，不在这里量宽度做显示判定 */
   const openFile = (root: FileRoot, path: string): void => {
     setTabs((prev) => openTab(prev, root.path, path));
-    setActivePath(path);
+    switchTo(path);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -315,7 +643,7 @@ export function FilesPanel(props: {
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
     setTabs((prev) => openTab(prev, "", ref, name));
-    setActivePath(ref);
+    switchTo(ref);
     if (narrowRef.current) setTreeOn(false);
   };
 
@@ -346,7 +674,7 @@ export function FilesPanel(props: {
     }
     setActionError(null);
     setTabs((prev) => openTab(prev, outcome.root, path));
-    setActivePath(path);
+    switchTo(path);
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
   }, [citeFocus, sessionId, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
@@ -374,15 +702,8 @@ export function FilesPanel(props: {
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
   // 重跑一次也只是无事发生
   useEffect(() => {
-    const bar = tabsBarRef.current;
-    const tab = activeTabRef.current;
-    if (bar === null || tab === null) return;
-    const target = tabScrollTarget(
-      { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
-      { offsetLeft: tab.offsetLeft, offsetWidth: tab.offsetWidth },
-    );
-    if (target !== null) bar.scrollTo({ left: target });
-  }, [activePath, tabs.length]);
+    scrollActiveTabIntoView();
+  }, [activePath, tabs.length, scrollActiveTabIntoView]);
 
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
@@ -563,6 +884,7 @@ export function FilesPanel(props: {
 
   return (
     <RightPanelFrame
+      inline={props.paperLayout === true}
       header={
         <>
           {/* 「文件」标题本身就是文件树开关（原型裁决）：树开着时呈点亮态（选中行
@@ -604,6 +926,7 @@ export function FilesPanel(props: {
                 {tabs.map((tab) => {
                   const name = tab.name ?? fileTabName(tab.path);
                   const active = tab.path === activePath;
+                  const dirty = dirtyPaths.has(tab.path);
                   return (
                     <div
                       key={tab.path}
@@ -613,11 +936,11 @@ export function FilesPanel(props: {
                       aria-selected={active}
                       className="cap-tab no-drag"
                       title={tab.path}
-                      onClick={() => setActivePath(tab.path)}
+                      onClick={() => switchTo(tab.path)}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        setActivePath(tab.path);
+                        switchTo(tab.path);
                       }}
                     >
                       <Icon
@@ -626,20 +949,29 @@ export function FilesPanel(props: {
                         style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}
                       />
                       <span className="files-tab-name">{name}</span>
-                      {/* ✕ 停在标签内（button 不能套 button，标签本体是 div）：点击
+                      {/* 未保存圆点（原型场景 1 第 3 步）：脏的时候占 ✕ 的位置，鼠标
+                          悬停标签时让位给 ✕——同一个槽位两个状态，不额外占宽。
+                          ✕ 停在标签内（button 不能套 button，标签本体是 div）：点击
                           只关这一个标签，不要顺带触发标签的激活 */}
-                      <button
-                        type="button"
-                        className="files-tab-close"
-                        title={t.files.closeTab}
-                        aria-label={`${t.files.closeTab} ${name}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          closeOne(tab.path);
-                        }}
-                      >
-                        <Icon name="x" size={10} strokeWidth={2.4} />
-                      </button>
+                      <span className="files-tab-tail">
+                        {dirty && (
+                          <span className="files-tab-dirty" title={t.editor.unsaved}>
+                            <Icon name="circle-dot" size={12} strokeWidth={2} />
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className={`files-tab-close${dirty ? " is-dirty" : ""}`}
+                          title={t.files.closeTab}
+                          aria-label={`${t.files.closeTab} ${name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            closeOne(tab.path);
+                          }}
+                        >
+                          <Icon name="x" size={10} strokeWidth={2.4} />
+                        </button>
+                      </span>
                     </div>
                   );
                 })}
@@ -669,6 +1001,22 @@ export function FilesPanel(props: {
           <PanelIconButton title={t.files.attach} onClick={attach}>
             <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
+          {/* 两种布局的切换键（同一个位置：页头最右）：布局 A 只在论文项目里出现
+              （布局 B 是为稿件工作台做的）；布局 B 里**总是**在——否则在 B 里打开一个
+              非项目文件后再也点不回去（只能靠快捷键退出） */}
+          {(latex.project !== null || props.paperLayout === true) &&
+            props.onTogglePaperLayout !== undefined && (
+            <PanelIconButton
+              title={props.paperLayout === true ? t.paper.toChat : t.paper.toPaper}
+              onClick={props.onTogglePaperLayout}
+            >
+              <Icon
+                name={props.paperLayout === true ? "panel-right" : "maximize"}
+                size={16}
+                strokeWidth={1.8}
+              />
+            </PanelIconButton>
+          )}
         </>
       }
     >
@@ -680,6 +1028,22 @@ export function FilesPanel(props: {
         onClose={() => setMenu(null)}
         items={menu === null ? [] : [referenceItem(menu)]}
       />
+      {/* 论文工作台：编译条（项目内才在）+ 文件内容 + 问题抽屉。三者同住一个
+          纵向 flex，抽屉钉在面板底部；非 LaTeX 文件只多一层无副作用的包裹 */}
+      <div className="files-workbench">
+        {latex.project !== null && (
+          <LatexBuildBar
+            project={latex.project}
+            probe={latex.probe}
+            state={latexState}
+            last={latex.last}
+            startedAt={latex.startedAt}
+            onCompile={compileWithSave}
+            onCancel={latex.cancel}
+            onSelectEngine={latex.selectEngine}
+            onSelectMain={latex.selectMain}
+          />
+        )}
       {/* body 是 container query 的查询容器（styles.css 裁决 solo / 隐藏 / 浮层 /
           并排四种形态），layout 是它的直接内容层——@container 查不到容器自己，
           两层不能合并。遮罩只在「浮层」形态显示（CSS 管），点击收起树 */}
@@ -748,23 +1112,76 @@ export function FilesPanel(props: {
           </div>
           {/* 浮层形态的遮罩：常驻渲染，显隐由 container query 管（与树同源） */}
           <div className="files-panel-backdrop" aria-hidden="true" onClick={() => setTreeOn(false)} />
+          {/* 稿件区：单标签，或并排的两块。左块在两种形态下是**同一个组件位置**
+              （只外面多一层 flex 容器），切布局不会把编辑器重挂。
+              C9：这一拍要收的标签（focusDrop）整块都不渲染——并排的两块请求的是
+              同一个根的白名单，只挡左块等于让右块拿刚失效的根再读一次 */}
           {shownTab !== null && (
-            <FilePreviewPane
-              key={shownTab.path}
-              sessionId={sessionId}
-              workspaceId={workspaceId}
-              extraWorkspaceId={focusWorkspaceId}
-              root={shownTab.root}
-              path={shownTab.path}
-              rootLabel={
-                tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
-              }
-              {...(shownTab.name !== undefined ? { sentImage: { name: shownTab.name } } : {})}
-              // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
-              jump={jump !== null && jump.citation.path === shownTab.path ? jump : null}
-            />
+            <div className={`files-panel-panes${splitOn ? " split" : ""}`}>
+              <div className="files-panel-pane">
+                <FilePreviewPane
+                  key={`left:${leftPath ?? shownTab.path}`}
+                  sessionId={sessionId}
+                  workspaceId={workspaceId}
+                  extraWorkspaceId={focusWorkspaceId}
+                  root={shownTab.root}
+                  path={leftPath ?? shownTab.path}
+                  rootLabel={
+                    tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
+                  }
+                  {...(leftPath === shownTab.path && shownTab.name !== undefined
+                    ? { sentImage: { name: shownTab.name } }
+                    : {})}
+                  // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上；
+                  // 并排时的左块若换成了主文件，旧跳转也不属于它
+                  jump={leftPath === shownTab.path && jump !== null && jump.citation.path === shownTab.path ? jump : null}
+                  // 论文工作台：项目里的 PDF 走预览（不受「PDF 引用」实验开关管——
+                  // 刚编出来的 PDF 是编译条的直接产物）；编译成功后按 mtime 重载。
+                  // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
+                  pdfPreview={leftIsProjectPdf}
+                  pdfReloadToken={leftIsProjectPdf ? latex.pdfReloadToken : 0}
+                  editor={{
+                    register: registerEditor,
+                    onDirtyChange: handleEditorDirty,
+                    onSaved: handleEditorSaved,
+                    onError: handleEditorError,
+                  }}
+                />
+              </div>
+              {splitOn && splitPdfPath !== null && (
+                <div className="files-panel-pane">
+                  {/* 右块：项目的 PDF。它不属于标签队列（标签仍是用户打开的那些），
+                      所以不接跳转、不接编辑器，只在编译成功后重载 */}
+                  <FilePreviewPane
+                    key={`pdf:${splitPdfPath}`}
+                    sessionId={sessionId}
+                    workspaceId={workspaceId}
+                    extraWorkspaceId={focusWorkspaceId}
+                    root={shownTab.root}
+                    path={splitPdfPath}
+                    rootLabel={
+                      tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
+                    }
+                    pdfPreview
+                    pdfReloadToken={latex.pdfReloadToken}
+                  />
+                </div>
+              )}
+            </div>
           )}
         </div>
+      </div>
+        {latex.project !== null && (
+          <LatexProblems
+            groups={latexGroups}
+            open={problemsOpen}
+            onToggle={() => setProblemsOpen((open) => !open)}
+            onHandToAgent={handProblemToAgent}
+            onInstall={(command) => props.onRunInTerminal?.(command)}
+          />
+        )}
+        {latex.error !== null && <p className="latex-error">{latex.error}</p>}
+        {editorNotice !== null && <p className="latex-error">{editorNotice}</p>}
       </div>
     </RightPanelFrame>
   );

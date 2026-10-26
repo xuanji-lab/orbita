@@ -21,6 +21,7 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
+import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -205,6 +206,12 @@ export const ipcChannels = {
    * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
    */
   fsReadPdf: "fs:read-pdf",
+  /**
+   * 编辑器写回一个文本文件（同 root/dir 白名单，回 `FileWriteResult`，files.ts）。
+   * 请求带 `expectedHash`：写前重读比对，盘上被外部改过就回 conflict、不动盘——
+   * renderer 不能用一个迟到的编辑器覆盖 agent / 用户刚写下的内容。
+   */
+  fsWrite: "fs:write",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
   fsOpen: "fs:open",
   /**
@@ -955,6 +962,8 @@ export type AgentCommand =
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
+  /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
+  | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
@@ -1131,6 +1140,13 @@ export type AgentEvent =
    * 回 terminalResult。
    */
   | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
+   * LaTeX：agent 的 compile_latex 请求（形状见 shared/latex.ts 的 LatexCompileRequest）。
+   * **编译在主进程**（latex/run.ts，terminalRequest 同一条边界）：latexmk 是外部进程、
+   * 产物落在项目目录、并发状态按项目记账——这些都只该有一份，在 agent 进程里再做一遍
+   * 就是第二个真源。回 latexResult
+   */
+  | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、

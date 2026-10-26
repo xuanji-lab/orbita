@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fileRootLabel, isWebArtifactFile, isWebPageFile, PREVIEW_TEXT_LIMIT, sortFileEntries, type FileEntry } from "./files.ts";
+import { contentHash, fileRootLabel, isWebArtifactFile, isWebPageFile, PREVIEW_TEXT_LIMIT, sortFileEntries, type FileEntry } from "./files.ts";
 
 const entry = (name: string, kind: FileEntry["kind"]): FileEntry => ({ name, kind, modifiedAt: 0 });
 
@@ -53,6 +53,25 @@ describe("isWebArtifactFile（轮尾网页产物：卡片行与轮内扫描同�
   it("只收 html / htm / svg，不认 xhtml（那是浏览器那套表）", () => {
     for (const name of ["report.html", "a/b/INDEX.HTM", "chart.SVG"]) strictEqual(isWebArtifactFile(name), true, name);
     for (const name of ["page.xhtml", "notes.md", "html", "page.html.bak"]) strictEqual(isWebArtifactFile(name), false, name);
+  });
+});
+
+describe("contentHash（编辑器写盘的冲突判定指纹）", () => {
+  it("同一段文本恒得同一个 16 位十六进制；不同文本不同", () => {
+    const a = contentHash("\\section{Intro}\nHello\n");
+    strictEqual(a.length, 16);
+    strictEqual(a, contentHash("\\section{Intro}\nHello\n"));
+    strictEqual(a === contentHash("\\section{Intro}\nHello!"), false);
+  });
+
+  it("CRLF 与 LF 是两份内容（保存保留换行才不会被当成「没改」）", () => {
+    strictEqual(contentHash("a\r\nb") === contentHash("a\nb"), false);
+  });
+
+  it("空文本也有稳定指纹；开头多一个空格就是另一份内容", () => {
+    strictEqual(contentHash("").length, 16);
+    strictEqual(contentHash(" a") === contentHash("a"), false);
+    strictEqual(contentHash("section") === contentHash("\\section"), false);
   });
 });
 
