@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  atMostManual,
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   COMPUTER_USE_READ_TOOLS,
@@ -135,8 +136,8 @@ describe("浏览器只读四件（BROWSER_READ_TOOLS）", () => {
   });
 });
 
-describe("沙箱截图（COMPUTER_USE_READ_TOOLS）", () => {
-  test("三档一律放行：它只向沙箱要一张图，不往沙箱里送任何输入", () => {
+describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
+  test("三档一律放行：它们只向沙箱要图 / 要文本，不往沙箱里送任何输入", () => {
     for (const tool of COMPUTER_USE_READ_TOOLS) {
       for (const mode of PERMISSION_MODES) {
         assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode} ${tool}`);
@@ -160,6 +161,22 @@ describe("交接（USER_ACTION_TOOL）", () => {
   test("三档一律放行：它本身就是在问用户", () => {
     for (const mode of PERMISSION_MODES) {
       assert.deepEqual(decidePermission(mode, USER_ACTION_TOOL), { behavior: "allow" }, mode);
+    }
+  });
+});
+
+describe("atMostManual（收尾扫描轮与遗留事项开出的新会话首轮，审核 F-4）", () => {
+  test("放行压成询问；询问、计划原样（计划更严，不放宽）", () => {
+    assert.equal(atMostManual("skip"), "manual");
+    assert.equal(atMostManual("manual"), "manual");
+    assert.equal(atMostManual("plan"), "plan");
+  });
+
+  test("压过之后写类工具一律不再直接放行：要么问、要么拒", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of MUTATING) {
+        assert.notDeepEqual(decidePermission(atMostManual(mode), tool), { behavior: "allow" }, `${mode} / ${tool}`);
+      }
     }
   });
 });

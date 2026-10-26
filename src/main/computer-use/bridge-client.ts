@@ -31,6 +31,15 @@ export interface GuestScreenshot {
 }
 
 /**
+ * 一条「带 JPEG 兄弟文件」的命令的回执（像素截图与页面截图共用同一条通道）。
+ * resp 是桥给的**其余扁平字段**（url / title / 尺寸…），调用方按自己的命令验字段。
+ */
+export interface GuestShot {
+  jpeg: Uint8Array;
+  resp: Record<string, unknown>;
+}
+
+/**
 /**
  * resp 里的 jpeg 字段必须是**纯文件名**（`cmd-000001.jpg` 这种），不许带目录、不许有 `..`。
  *
@@ -179,13 +188,17 @@ export async function fetchGuestScreenshot(
   maxWidth: number,
   timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
 ): Promise<GuestScreenshot> {
-  const { resp, cmdDir, baseName } = await sendGuestCommandRaw(outDir, computerUseGuestCommands.screenshot, { maxWidth }, timeoutMs);
+  const shot = await fetchGuestShot(
+    outDir,
+    computerUseGuestCommands.screenshot,
+    { maxWidth },
+    timeoutMs,
+  );
 
-  const nativeWidth = resp.nativeWidth;
-  const nativeHeight = resp.nativeHeight;
-  const width = resp.width;
-  const height = resp.height;
-  const jpegName = resp.jpeg;
+  const nativeWidth = shot.resp.nativeWidth;
+  const nativeHeight = shot.resp.nativeHeight;
+  const width = shot.resp.width;
+  const height = shot.resp.height;
   if (
     typeof nativeWidth !== "number" ||
     typeof nativeHeight !== "number" ||
@@ -194,11 +207,30 @@ export async function fetchGuestScreenshot(
     typeof width !== "number" ||
     typeof height !== "number" ||
     width <= 0 ||
-    height <= 0 ||
-    typeof jpegName !== "string" ||
-    jpegName === ""
+    height <= 0
   ) {
     throw new Error("guest 桥的截图响应缺字段（width / height / nativeWidth / nativeHeight / jpeg）");
+  }
+
+  return { jpeg: shot.jpeg, width, height, nativeWidth, nativeHeight };
+}
+
+/**
+ * 带同名 `.jpg` 兄弟文件的命令（像素截图与 cdp-shot 共用）：resp 里只放**纯文件名**，
+ * 二进制不进 JSON。读盘前过 isPlainScreenshotFileName 那道闸门（resp 是整条协议里唯一的
+ * 不可信输入，被换掉的 guest 可以回一个 `..\..\Users\<me>\.ssh\id_ed25519`）。
+ */
+export async function fetchGuestShot(
+  outDir: string,
+  command: string,
+  fields: Record<string, unknown>,
+  timeoutMs: number = GUEST_COMMAND_TIMEOUT_MS,
+): Promise<GuestShot> {
+  const { resp, cmdDir, baseName } = await sendGuestCommandRaw(outDir, command, fields, timeoutMs);
+
+  const jpegName = resp.jpeg;
+  if (typeof jpegName !== "string" || jpegName === "") {
+    throw new Error(`guest 桥的 ${command} 响应缺 jpeg 字段（应是兄弟文件名）`);
   }
   // 路径穿越闸门：读盘之前先卡死（理由见 isPlainScreenshotFileName）
   if (!isPlainScreenshotFileName(jpegName)) {
@@ -224,5 +256,5 @@ export async function fetchGuestScreenshot(
   await rm(join(cmdDir, `${baseName}.resp.json`), { force: true }).catch(() => {});
   await rm(jpgPath, { force: true }).catch(() => {});
 
-  return { jpeg: new Uint8Array(jpeg), width, height, nativeWidth, nativeHeight };
+  return { jpeg: new Uint8Array(jpeg), resp };
 }

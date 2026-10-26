@@ -18,7 +18,6 @@ import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
-  ModelRuntime,
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
@@ -29,6 +28,8 @@ import {
   toBuiltinProvider,
   type PiModel,
 } from "./model-registration.ts";
+import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
+import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import {
   createToolCallGate,
   describePermissionMode,
@@ -79,6 +80,7 @@ import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
+import { createSandboxBrowserTools, SANDBOX_BROWSER_TOOL_NAMES } from "./sandbox-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   applyRecallEvent,
@@ -302,7 +304,7 @@ async function resolveChoreModel(
   payload: NonNullable<Extract<AgentCommand, { type: "generateTitle" }>["model"]>,
 ): Promise<ResolvedChoreModel | null> {
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, payload.provider, payload.modelId);
     if (model === undefined) {
       console.warn(`[title] 指定的 ${payload.provider.id}/${payload.modelId} 解析不到，退回会话模型`);
@@ -332,7 +334,7 @@ async function classifyGreetings(command: Extract<AgentCommand, { type: "classif
     send({ type: "greetingsClassified", requestId: command.requestId, throwaway: null, error });
   };
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, command.provider, command.modelId);
     if (model === undefined) {
       fail(`unknown model "${command.provider.id}/${command.modelId}"`);
@@ -389,7 +391,7 @@ async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeF
     send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error });
   };
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, command.provider, command.modelId);
     if (model === undefined) {
       fail(`unknown model "${command.provider.id}/${command.modelId}"`);
@@ -430,6 +432,54 @@ async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeF
   }
 }
 
+/** 家务活小调用的硬上限（主进程那头 150 秒兜底，这里先放手） */
+const CHORE_TIMEOUT_MS = 120_000;
+
+/**
+ * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
+ * 这里只调模型、把回复的 text 块拼起来交回去——**不解析**：解析规则与 prompt 是同一份契约，
+ * 都在 shared/wrapup-scan.ts，主进程收到原文后解析。失败回 null 带原因。
+ */
+async function choreComplete(command: Extract<AgentCommand, { type: "choreComplete" }>): Promise<void> {
+  const fail = (error: string): void => {
+    send({ type: "choreCompleted", requestId: command.requestId, text: null, error });
+  };
+  try {
+    const runtime = await createModelRuntime();
+    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
+    if (model === undefined) {
+      fail(`unknown model "${command.provider.id}/${command.modelId}"`);
+      return;
+    }
+    const response = await completeSimple(
+      model,
+      {
+        systemPrompt: command.system,
+        messages: [{ role: "user", content: command.prompt, timestamp: Date.now() }],
+      },
+      {
+        apiKey: command.provider.apiKey,
+        maxTokens: 8192,
+        timeoutMs: CHORE_TIMEOUT_MS,
+        signal: AbortSignal.timeout(CHORE_TIMEOUT_MS),
+        onPayload: ccBillingPatch,
+        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
+      },
+    );
+    if (response.stopReason === "error") {
+      fail(response.errorMessage ?? `${model.id} returned an error`);
+      return;
+    }
+    let output = "";
+    for (const block of response.content) {
+      if (block.type === "text") output += block.text;
+    }
+    send({ type: "choreCompleted", requestId: command.requestId, text: output });
+  } catch (cause) {
+    fail(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 /** 探测的硬上限（主进程那头 60 秒兑底，这里先放手） */
 const PROBE_TIMEOUT_MS = 45_000;
 
@@ -444,7 +494,7 @@ async function probeProvider(command: Extract<AgentCommand, { type: "probeProvid
     send({ type: "providerProbed", requestId: command.requestId, ok, message });
   };
   try {
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, command.provider, command.modelId);
     if (model === undefined) {
       reply(false, `unknown model "${command.provider.id}/${command.modelId}"`);
@@ -601,7 +651,7 @@ async function setLedgerModel(
     // 同一套会话头注入，与 setSessionModel 对称：落账的鉴权面（generateTitle 用）也要带
     // 本会话 id——不包的话，下一次 openTurn 覆盖之前标题调用会发回静态占位头
     const scoped = withOpencodeSession(provider, sessionId);
-    const runtime = await ModelRuntime.create({});
+    const runtime = await createModelRuntime();
     const model = registerAndResolveModel(runtime, scoped, modelId);
     if (model === undefined) {
       throw new Error(`unknown model "${scoped.id}/${modelId}"`);
@@ -863,8 +913,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   if (provider.headers === undefined) delete note.headers;
   else note.headers = provider.headers;
 
-  // provider 经内存注册交给 pi，不写 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
-  const modelRuntime = await ModelRuntime.create({});
+  // provider 经内存注册交给 pi，不读也不写 ~/.pi/agent 的 models.json / auth.json（提案 §2.2「内核读 Provider 不读文件」）
+  const modelRuntime = await createModelRuntime();
   /**
    * **选中的模型必须显式解析并传给会话**。不传的话 pi 自己挑默认模型——实测会挑到
    * 一个完全不相干的 provider（UI 里选的从来不是会话里跑的那个，存量 bug）。
@@ -980,7 +1030,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   // computer use 工具组：同样不列的话模型不知道 manual 档下每次点击都
                   // 会停下来等批准、plan 档下更是直接被拒。**开关关着时不列**：那时它们
                   // 根本没注册，说给模型听就是一句假话
-                  ...(command.computerUse === true ? COMPUTER_USE_TOOL_NAMES : []),
+                  ...(command.computerUse === true
+                    ? [...COMPUTER_USE_TOOL_NAMES, ...SANDBOX_BROWSER_TOOL_NAMES]
+                    : []),
                   // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
                 ]),
@@ -1212,6 +1264,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf 的纪律）。
     // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
     ...(command.computerUse === true ? createComputerUseTools(requestBroker, command.sessionId) : []),
+    // sandbox_*（PR3）：沙箱里那份 Edge 的 DOM 级工具（navigate / observe / click / type /
+    // extract / wait / screenshot / upload / download）。与像素组同一个实验开关——它们
+    // 操作的是同一个沙箱，分开两个开关只会让模型看到半套工具。写动作的 element 字段是
+    // 给 PR4 确认卡用的（审批卡上给用户看一句人话，而不是一个选择器）。
+    ...(command.computerUse === true ? createSandboxBrowserTools(requestBroker, command.sessionId) : []),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
@@ -1239,10 +1296,17 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   applyBillingStreamPatch(session);
   // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
   // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
-  // 「换模型后支持集变了」——芯片每次开轮自我纠真
+  // 「换模型后支持集变了」——芯片每次开轮自我纠真。
+  // 带上型号：supported 只对它成立，renderer 切型号后靠它判过期（见 AgentEvent 注释）。
+  // 型号取 session.model（与 getAvailableThinkingLevels 同源），缺了才退到本轮解析的 model
+  const thinkingModel = (): { providerId: string; modelId: string } => {
+    const current = session.model ?? model;
+    return { providerId: current.provider, modelId: current.id };
+  };
   send({
     type: "thinking",
     sessionId: command.sessionId,
+    ...thinkingModel(),
     level: session.thinkingLevel,
     supported: session.getAvailableThinkingLevels(),
   });
@@ -1302,6 +1366,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       send({
         type: "thinking",
         sessionId: command.sessionId,
+        ...thinkingModel(),
         level: event.level,
         supported: session.getAvailableThinkingLevels(),
       });
@@ -1529,11 +1594,11 @@ function undoPiBookCommand(command: Extract<AgentCommand, { type: "undoPiBook" }
 }
 
 /**
- * pi 内建 provider 目录 → 我们的 BuiltinProvider。
- * agentDir 指向一个不存在的路径：只要 pi 的内建目录，不去读用户的 ~/.pi/agent 配置。
+ * pi 内建 provider 目录 → 我们的 BuiltinProvider。读的是内建快照 + 本地缓存的 pi.dev 覆盖层，
+ * 不联网、不读用户的 ~/.pi/agent（createModelRuntime）。
  */
 async function listBuiltins(): Promise<void> {
-  const runtime = await ModelRuntime.create({});
+  const runtime = await createModelRuntime();
   // 映射跟注册时的跨目录推断共用一份（toBuiltinProvider）：设置页看到的目录快照
   // 必须与 agent 借参数时用的是同一份，否则两边会对同一个模型说出两个窗口。
   send({ type: "builtins", providers: runtime.getProviders().map(toBuiltinProvider) });
@@ -1791,6 +1856,10 @@ async function echoAndPrompt(
 async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "listBuiltins") {
     await listBuiltins();
+    return;
+  }
+  if (command.type === "refreshCatalogs") {
+    await catalogRefresher.request(command.scope, command.catalogIds);
     return;
   }
   if (command.type === "permissionAnswer") {
@@ -2067,6 +2136,11 @@ async function handle(command: AgentCommand): Promise<void> {
     void probeProvider(command);
     return;
   }
+  if (command.type === "choreComplete") {
+    // 同上：独立小调用，不挡后续命令
+    void choreComplete(command);
+    return;
+  }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——
   // 曾经这里是无 if 的兜底（新命令会静默销毁会话），那是事故的形状
   command satisfies never;
@@ -2105,6 +2179,31 @@ function compactionErrorText(raw: string): string {
   }
   return raw;
 }
+
+/** 单次联网刷新的总时限：pi.dev 慢或连不上时，后台这一趟最多挂这么久 */
+const CATALOG_REFRESH_TIMEOUT_MS = 60_000;
+
+/**
+ * 目录联网刷新：向 pi.dev 拉覆盖层、向基元律动拉它自家的目录，拉完重报一次目录（主进程缓存的是
+ * 最后一份，设置页开着就跟着换）。**只刷主进程经 refreshCatalogs 命令说过的目录**（已添加的
+ * 服务商 / 设置页点开的卡片）——启动时不主动联网，等主进程拉起本进程后送来的那份 added（审核 F-1）。
+ * 失败只记日志：这家继续用旧缓存或内建快照。
+ */
+const catalogRefresher = new CatalogRefresher({
+  refreshPi: (ids) => refreshCatalogs({ ids, signal: AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS) }),
+  refreshTokenrhythm: () => {
+    const cachePath = tokenrhythmCachePath();
+    return fetchTokenrhythmCatalog(
+      cachePath === undefined ? {} : { cachePath, minIntervalMs: CATALOG_REFRESH_EVERY_MS },
+    );
+  },
+  relist: listBuiltins,
+  warn: (message) => console.warn(message),
+});
+// 应用常开不关：之后每 4 小时按最近的 added 再来一趟（每家是否真下载由各自的节流决定）。unref：不为它续命
+setInterval(() => {
+  void catalogRefresher.tick().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
+}, CATALOG_REFRESH_EVERY_MS).unref();
 
 parentPort.on("message", (event) => {
   const command = event.data as AgentCommand;

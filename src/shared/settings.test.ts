@@ -520,12 +520,27 @@ describe("parseSettings 的 starredModels（模型星标）", () => {
   });
 });
 
-describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", () => {
-  it("large / small 留下，其余当没选过（缺席 = large）", () => {
-    deepStrictEqual(parseSettings({ providerCardSize: "small" }).providerCardSize, "small");
-    deepStrictEqual(parseSettings({ providerCardSize: "large" }).providerCardSize, "large");
-    deepStrictEqual("providerCardSize" in parseSettings({ providerCardSize: "huge" }), false);
-    deepStrictEqual("providerCardSize" in parseSettings({}), false);
+describe("parseSettings 的 providersPage（模型服务页的界面记忆）", () => {
+  it("卡片尺寸、仅显示已添加、价格图分类：认得的留下，不认识的当没选过", () => {
+    deepStrictEqual(
+      parseSettings({ providersPage: { cardSize: "small", onlyAdded: true, chartCategory: "coding" } }).providersPage,
+      { cardSize: "small", onlyAdded: true, chartCategory: "coding" },
+    );
+    deepStrictEqual(
+      parseSettings({ providersPage: { cardSize: "huge", onlyAdded: "yes", chartCategory: "vision" } }).providersPage,
+      undefined,
+    );
+    deepStrictEqual("providersPage" in parseSettings({}), false);
+    deepStrictEqual("providersPage" in parseSettings({ providersPage: {} }), false);
+  });
+
+  it("旧的顶层 providerCardSize 迁进来（新位置优先），解析产物不再带旧键", () => {
+    const migrated = parseSettings({ providerCardSize: "small" });
+    deepStrictEqual(migrated.providersPage, { cardSize: "small" });
+    deepStrictEqual("providerCardSize" in migrated, false);
+    deepStrictEqual(parseSettings({ providerCardSize: "small", providersPage: { cardSize: "large" } }).providersPage, {
+      cardSize: "large",
+    });
   });
 });
 
@@ -537,9 +552,9 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
 
   it("逐项只认布尔；不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "paper-themes": true, "session-lifecycle": false } })
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": false } })
         .experimentalFeatures,
-      { "paper-themes": true, "session-lifecycle": false },
+      { "paper-themes": true, "pdf-citations": false },
     );
     // computer-use（电脑使用页的开关，2026-10-12 挂进实验区）同表同规矩：布尔记账、缺席 = 关
     deepStrictEqual(
@@ -556,11 +571,18 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     );
   });
 
-  it("旧总开关 experimental: true = paper-themes 与 session-lifecycle 都开（黑洞不在其内）", () => {
+  it("旧总开关 experimental: true = paper-themes 开（会话生命周期已转正，不再有开关）", () => {
     deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
       "paper-themes": true,
-      "session-lifecycle": true,
     });
+  });
+
+  it("转正的 session-lifecycle：盘上残留的键开着关着都丢掉，不产生任何效果", () => {
+    deepStrictEqual(parseSettings({ experimentalFeatures: { "session-lifecycle": true } }).experimentalFeatures, undefined);
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "paper-themes": true } }).experimentalFeatures,
+      { "paper-themes": true },
+    );
   });
 
   it("旧总开关 false / 非布尔：不产生任何逐项键", () => {
@@ -568,46 +590,25 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     deepStrictEqual(parseSettings({ experimental: "yes" }).experimentalFeatures, undefined);
   });
 
-  it("旧黑洞开关 composerBlackhole 原样并入 composer-blackhole", () => {
-    deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, {
-      "composer-blackhole": true,
-    });
-    // false 也并入：用户明确关过这一项，比「从未有过这个键」多一层意思，照原样带走
-    deepStrictEqual(parseSettings({ composerBlackhole: false }).experimentalFeatures, {
-      "composer-blackhole": false,
-    });
-    deepStrictEqual(parseSettings({ composerBlackhole: "on" }).experimentalFeatures, undefined);
-  });
-
   it("新键里已显式给值的项以新键为准，旧键只补缺席的项", () => {
     deepStrictEqual(
       parseSettings({
         experimental: true,
-        composerBlackhole: true,
-        experimentalFeatures: { "session-lifecycle": false, "composer-blackhole": false },
+        experimentalFeatures: { "paper-themes": false },
       }).experimentalFeatures,
-      { "paper-themes": true, "session-lifecycle": false, "composer-blackhole": false },
+      { "paper-themes": false },
     );
   });
 
-  it("黑洞与俄罗斯方块互斥：盘上手改出两个都开时，以黑洞为准、tetris 当作没开", () => {
+  it("下架的输入框黑洞 / 俄罗斯方块：盘上残留的新旧键都丢掉，不报错", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "composer-blackhole": true, "composer-tetris": true } })
-        .experimentalFeatures,
-      { "composer-blackhole": true },
+      parseSettings({
+        composerBlackhole: true,
+        experimentalFeatures: { "composer-blackhole": true, "composer-tetris": true, "intent-system": true },
+      }).experimentalFeatures,
+      { "intent-system": true },
     );
-  });
-
-  it("互斥只砸「两个都开」：黑洞关着时 tetris 照常能开（也允许反过来单独开黑洞）", () => {
-    deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "composer-blackhole": false, "composer-tetris": true } })
-        .experimentalFeatures,
-      { "composer-blackhole": false, "composer-tetris": true },
-    );
-    deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "composer-tetris": true } }).experimentalFeatures,
-      { "composer-tetris": true },
-    );
+    deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, undefined);
   });
 });
 

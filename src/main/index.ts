@@ -3,6 +3,8 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
+import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
+import { catalogIdsOfProviders } from "../shared/known-providers.ts";
 import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +13,7 @@ import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
@@ -25,6 +28,7 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
@@ -33,8 +37,8 @@ import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
-import { UsageLedger } from "./usage/ledger.ts";
-import { registerUsageIpc } from "./usage/ipc.ts";
+import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
+import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
@@ -59,6 +63,8 @@ import { buildCloseSandboxWindowScript } from "./computer-use/close-window-scrip
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
+import { applySandboxBrowserRequest, CdpSession } from "./computer-use/cdp.ts";
+import { isSandboxBrowserAction } from "../shared/computer-use.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -324,11 +330,16 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
-  // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
-  // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
-  const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
-  const record = createSessionRecorder(sessions, usageLedger);
-  registerUsageIpc(usageLedger, sessions);
+  // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
+  // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
+  // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
+  const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
+  const record = createSessionRecorder(sessions, taskLedger);
+  startTaskLedger(taskLedger, {
+    list: () => sessions.list(),
+    readUsageLog: (id) => sessions.readUsageLog(id),
+    readPiTimeline: (path) => readPiThinkingTimeline(path),
+  });
   // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
   // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处。
   // 同一个实例也喂给专注小结（摘抄是素材之一）
@@ -508,7 +519,24 @@ void app.whenReady().then(async () => {
     closeSandboxWindow,
     onStatus: broadcastComputerUseStatus,
   });
-  registerComputerUseIpc(computerUse);
+  /**
+   * CDP 浏览器通道（PR3）：沙箱里那份 Edge 的会话级状态。
+   *
+   * 宿主这一侧只持有「起没起」的缓存与上传/下载的落点——WebSocket、标签页、选择器表全在
+   * guest 桥里（沙箱是应用级一份，所以这里也只有一个）。outDir 与 SandboxController 的
+   * 映射输出目录是同一个：`<userData>/computer-use/out` ↔ guest 的 `C:\orbita-out`。
+   * 用闭包转一道而不是直接传 controller：CdpGuest 只需要两个方法，测试注入假桥足够。
+   */
+  const cdp = new CdpSession(
+    {
+      guestCommandReply: (command, fields) => computerUse.guestCommandReply(command, fields),
+      guestShot: (command, fields) => computerUse.guestShot(command, fields),
+    },
+    join(configDir, "computer-use", "out"),
+  );
+  // 用户停沙箱时先把里面的 Edge 停掉（best effort、不等待：不能用一条浏览器命令拖住
+  // 停沙箱按钮）。桥已经死了就算了，VM 销毁会带走整个进程树。
+  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stop(); } });
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
@@ -522,7 +550,14 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     arch: process.arch,
   });
-  const agentProcessEnv = existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : { ...process.env };
+  // pi 打进 bundle 后会把 Orbita 的 package.json 当成自己的，版本号错了 pi.dev 的目录就是 404（pi-package.ts）
+  const piPackage = piPackageDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+  const agentProcessEnv = {
+    ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
+    // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
+    [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
+    ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
+  };
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -605,11 +640,16 @@ void app.whenReady().then(async () => {
         );
       return;
     }
-    // computer use：agent 的沙箱像素工具（截图 / 点击 / 打字 / 按键 / 滚动）——沙箱在主进程
-    // （SandboxController）。沙箱是应用级一份，不按会话分（sessionId 只为信封一致）。
-    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
+    // computer use：agent 的沙箱工具。
+    //   computer_*（PR2）→ 像素注入，走 SandboxController；
+    //   sandbox_*（PR3）→ 沙箱内 Edge 的 CDP 语义命令，走 CdpSession。
+    // 两条通道都**只有 agent 进程看得见**（renderer 面只有 PR1 那四个入口）。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去。
     if (event.type === "computerUseRequest") {
-      void applyComputerUseRequest(computerUse, event.request)
+      void (isSandboxBrowserAction(event.request.action)
+        ? applySandboxBrowserRequest(cdp, event.request)
+        : applyComputerUseRequest(computerUse, event.request)
+      )
         .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
@@ -667,12 +707,18 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 内建目录（启动时一次，pi.dev 刷新后再一次）：不属于任何会话，不落账、不进意图存档，只转给窗口
+    if (event.type === "builtins") {
+      broadcastAgentEvent(event);
+      return;
+    }
     // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
     // 在 record 之前喂：与 recorder 各自独立，互不阻塞
     intentIngest.onEvent(event);
     record(event);
     broadcastAgentEvent(event);
-  });
+    // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
+  }, async () => catalogIdsOfProviders(await providers.load()));
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -727,6 +773,21 @@ void app.whenReady().then(async () => {
     (path) => browserSandbox.openLocalFile(path),
     intentOnReverted,
   );
+  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
+  registerWrapupIpc({
+    sessions,
+    carryovers,
+    providers,
+    settings,
+    host: agentHost,
+    catalog: () => agentHost.listBuiltins(),
+    // 确认的做完的事记进任务账本（价格图的主会话任务）
+    onConfirmed: (sessionId, wrapup) => {
+      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
+        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
+      });
+    },
+  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -772,6 +833,14 @@ void app.whenReady().then(async () => {
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
+  // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
+  registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
+  registerPriceChartIpc({
+    ledger: taskLedger,
+    providers: () => providers.load(),
+    catalog: () => agentHost.listBuiltins(),
+    sessions: () => sessions.list(),
+  });
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();

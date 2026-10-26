@@ -18,7 +18,7 @@
  */
 import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
-import { join, win32 } from "node:path";
+import { join } from "node:path";
 import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_CMD_DIR,
@@ -38,6 +38,7 @@ import { writeTextAtomic } from "../atomic-write.ts";
 import { probe as probeCapability } from "./capability.ts";
 import {
   fetchGuestScreenshot,
+  fetchGuestShot,
   pingGuest,
   resetGuestCommandSeq,
   sendGuestCommand,
@@ -48,6 +49,8 @@ import { isRemoteSessionImage, type SandboxProcessInfo } from "./process-list.ts
 /** guest 桥 exe 的文件名（guest-bridge 子代理的产物，宿主只按这个名字找） */
 const GUEST_BRIDGE_EXE = "orbita-guest-bridge.exe";
 const WSB_FILE_NAME = "session.wsb";
+/** 映射进沙箱桌面的打包产物目录名（.wsb 的 MappedFolder 落点见 GUEST_APP_SANDBOX_FOLDER） */
+const GUEST_APP_DIR_NAME = "orbita-app";
 /**
  * 等桥通告的 deadline：Windows 11 25H2 真机实测冷启动（含首次拉镜像）可达 105 秒以上，
  * 60 秒会在沙箱还没进桌面时就误报超时。热启动（镜像已缓存）通常在 20 秒内。
@@ -57,6 +60,27 @@ const BRIDGE_READY_TIMEOUT_MS = 180_000;
 const BRIDGE_POLL_INTERVAL_MS = 500;
 /** 沙箱内的固定用户桌面（.wsb 的映射目录只会落在它下面，这是 WSB 的固定行为） */
 const WSB_DESKTOP_USER = "C:\\Users\\WDAGUtilityAccount\\Desktop";
+/**
+ * 桥目录在沙箱里的落点（.wsb 的 <SandboxFolder>，写死绝对 guest 路径）。
+ *
+ * **必须显式写**：MappedFolder 没有 SandboxFolder 时，WSB 按**宿主目录名**派生落点
+ * （`...\dist\win-unpacked` → `Desktop\win-unpacked`），与代码里的假设无关。
+ * 2026-10-24 真机咬过：三条映射都缺 SandboxFolder，`launch` 去 Desktop\orbita-app
+ * 找 exe 直接扑空，沙箱侧配置也可能异常导致 LogonCommand 不跑。
+ */
+const GUEST_BRIDGE_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\bin`;
+/** 输出目录在沙箱里的落点（同上：显式 SandboxFolder） */
+const GUEST_OUT_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\out`;
+/**
+ * 打包产物目录在沙箱里的落点（同上：显式 SandboxFolder）。
+ * COMPUTER_USE_GUEST_APP_EXE 从它拼出来，两边只有一个来源。
+ */
+const GUEST_APP_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\${GUEST_APP_DIR_NAME}`;
+/**
+ * 打包产物的入口 exe 在 guest 里的路径（冒烟脚本按它 launch）。
+ * 与 .wsb 里那条 app 映射的 SandboxFolder 同一个常量来源——改名字时不会只改一半。
+ */
+export const COMPUTER_USE_GUEST_APP_EXE = `${GUEST_APP_SANDBOX_FOLDER}\\orbita.exe`;
 
 // ── .wsb 生成 ──────────────────────────────────────────────────────────
 
@@ -65,6 +89,16 @@ export interface WsbRenderInput {
   bridgeDir: string;
   /** 宿主的输出目录，读写映射进沙箱（桥写 bridge.json / cmd 响应在这里，宿主轮询读） */
   outputDir: string;
+  /**
+   * 打包产物目录（`<repo>/dist/win-unpacked`，内含 orbita.exe），只读映射到沙箱
+   * `C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app`。
+   *
+   * 只在**调用方确认它存在**时才传（sandbox.ts 的 start() 用 existsSync 判）：
+   * 映射一个不存在的宿主目录会让整个 MappedFolder 失败、沙箱起不来——
+   * 而没出包是开发时的常态，不该因此让人连「看一眼桌面」都用不了。
+   * 真机验收步骤在 scripts/sandbox-ui-smoke.mjs 的头部注释里。
+   */
+  appDir?: string;
 }
 
 function escapeXml(value: string): string {
@@ -77,48 +111,39 @@ function escapeXml(value: string): string {
 }
 
 /**
- * 映射目录的末段名能不能放进 LogonCommand 里那条不加引号的 junction 命令。
- *
- * 为什么只能查末段名：MappedFolder 没有客机路径参数，映射目录只会落在沙箱桌面的
- * `<目录名>/` 下，所以**末段名**（basename）就是沙箱里那一段；宿主路径前面的空格 / 中文
- * 都不参与那条命令，不该被拦。末段名按 Windows 规则切（win32.basename）：这条名字要进
- * 沙箱内的 junction 命令，真机路径是 `C:\...`，posix basename 在 macOS/Linux 开发机上
- * 切不开它（测试也要在任何平台过）。
- *
- * 为什么不能带空格 / cmd 特殊字符：整条命令包在 `cmd.exe /c "…"` 里，路径再各自套一层
- * 引号会把自己绕死（cmd 的引号规则与 XML 转义叠加），所以 `mklink /J C:\orbita-bridge
- * C:\…\Desktop\my bridge` 会被 cmd 切成两个参数——junction 建不成，桥也就不存在。
- * 以前这条约束只活在注释里（2026-10-14 审查意见 F：让它可执行）。
- *
- * 返回人话错误（带上是哪个目录），没问题回 null。
- */
-export function junctionPathIssue(bridgeDir: string, outputDir: string): string | null {
-  const names = [win32.basename(bridgeDir), win32.basename(outputDir)];
-  const bad = names.find((name) => /[\s&()^|<>%"]/.test(name));
-  if (bad === undefined) return null;
-  return (
-    `映射目录的末段名不能带空格或 cmd 特殊字符：「${bad}」——.wsb 里的 junction 命令不加引号，` +
-    "会被 cmd 切成两个参数。把 guest 桥 / 输出目录放到不含这些字符的路径下再启动。"
-  );
-}
-
-/**
- * 渲染 .wsb。两个坑都处理在明面上：
+ * 渲染 .wsb。三个坑都处理在明面上：
  *  - XML 转义：宿主路径可含空格 / 中文 / &，全部过 escapeXml（含命令串里的 && → &amp;&amp;）；
- *  - 沙箱内路径：MappedFolder 没有客机路径参数，只会落在沙箱桌面 <目录名>/ 下。协议要求
- *    桥从固定路径 C:\orbita-bridge 跑，所以 LogonCommand 先用 junction（mklink /J，免提权）
- *    把桌面映射目录并到固定路径，再启动桥；&& 要 cmd 解释，整条命令包在 cmd.exe /c 里。
- *    （junction + LogonCommand + 桌面落点均已在 Windows 11 25H2 真机验证，2026-10-10。）
+ *  - 沙箱内落点：**每条映射都显式写 <SandboxFolder>**（绝对 guest 路径，写死在常量里）。
+ *    不写的话 WSB 按**宿主目录名**派生落点（`...\dist\win-unpacked` → `Desktop\win-unpacked`），
+ *    代码里假设的路径就全错（2026-10-24 真机：launch 扑空、桥可能压根没起）。
+ *    显式写之后落点与宿主目录名无关，LogonCommand 里那条不加引号的 junction 也就不再
+ *    受宿主末段名的空格 / cmd 特殊字符影响（原来的 junctionPathIssue 闸门因此删掉）。
+ *  - 协议要求桥从固定路径 C:\orbita-bridge 跑，所以 LogonCommand 先用 junction（mklink /J，
+ *    免提权）把 SandboxFolder 并到固定路径，再启动桥；&& 要 cmd 解释，整条命令包在
+ *    cmd.exe /c 里。（junction + LogonCommand + 桌面落点均已在 Windows 11 25H2 真机验证，2026-10-10。）
  *
  * Networking 用 Default（沙箱能上网）：官方 .wsb 文档只定义 Disable / Default 两个值，
  * Default 即启用。**这是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
  * 断网等于没有这个功能；代价是沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
  * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
+ *
+ * appDir（PR5，打包产物冒烟）：多一条**只读**映射，把 `<repo>/dist/win-unpacked` 放到沙箱
+ * 桌面的 orbita-app/ 下（SandboxFolder 与 COMPUTER_USE_GUEST_APP_EXE 同源）。
+ * 为什么只读：沙箱里跑的是一份待验收的产物，它不该回写宿主的打包目录（产物是构建结果，
+ * 被沙箱改过就没法判断「验的是不是同一份」）。
+ * 为什么用桌面子目录而不是 junction：SandboxFolder 直接指定落点就够了，多建一条 junction
+ * 只会再给 cmd 引号规则添一个坑。
  */
 export function renderWsbXml(input: WsbRenderInput): string {
-  // 末段名按 Windows 规则切（映射目录落在沙箱桌面 <目录名>/ 下，名字进 junction 命令）
-  const bridgeOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.bridgeDir)}`;
-  const outOnDesktop = `${WSB_DESKTOP_USER}\\${win32.basename(input.outputDir)}`;
+  // 映射落点全部走显式 <SandboxFolder>（不靠目录名派生）。junction 的目标同时也是
+  // SandboxFolder——否则「映射落在哪」与「junction 指向哪」会各说一套。
+  const bridgeOnDesktop = GUEST_BRIDGE_SANDBOX_FOLDER;
+  const outOnDesktop = GUEST_OUT_SANDBOX_FOLDER;
+  const appDir = input.appDir;
+  const appMapping =
+    appDir === undefined || appDir === ""
+      ? ""
+      : `\n    <MappedFolder>\n      <HostFolder>${escapeXml(appDir)}</HostFolder>\n      <SandboxFolder>${escapeXml(GUEST_APP_SANDBOX_FOLDER)}</SandboxFolder>\n      <ReadOnly>true</ReadOnly>\n    </MappedFolder>`;
   const guestCommand = [
     "cmd.exe /c \"",
     `mklink /J ${COMPUTER_USE_GUEST_BRIDGE_DIR} ${bridgeOnDesktop}`,
@@ -135,12 +160,14 @@ export function renderWsbXml(input: WsbRenderInput): string {
   <MappedFolders>
     <MappedFolder>
       <HostFolder>${escapeXml(input.bridgeDir)}</HostFolder>
+      <SandboxFolder>${escapeXml(GUEST_BRIDGE_SANDBOX_FOLDER)}</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
     <MappedFolder>
       <HostFolder>${escapeXml(input.outputDir)}</HostFolder>
+      <SandboxFolder>${escapeXml(GUEST_OUT_SANDBOX_FOLDER)}</SandboxFolder>
       <ReadOnly>false</ReadOnly>
-    </MappedFolder>
+    </MappedFolder>${appMapping}
   </MappedFolders>
   <LogonCommand>
     <Command>${escapeXml(guestCommand)}</Command>
@@ -175,6 +202,19 @@ export interface SandboxProcess {
  */
 export type GuestCommandResult = { ok: true } | { ok: false; error: string };
 
+/**
+ * 带**回执载荷**的 guest 命令结果（CDP 通道要读 resp 里的 port / running / text / elements）。
+ * 与 GuestCommandResult 的区别只是多了 resp：像素命令的语义是「事件已送出」，没什么可读的。
+ */
+export type GuestCommandReply =
+  | { ok: true; resp: Record<string, unknown> }
+  | { ok: false; error: string };
+
+/** 带 JPEG 兄弟文件的 guest 命令结果（cdp-shot 与像素截图共用） */
+export type GuestShotReply =
+  | { ok: true; jpeg: Uint8Array; resp: Record<string, unknown> }
+  | { ok: false; error: string };
+
 export interface SandboxDeps {
   /** userData/computer-use：session.wsb 与 out/（读写映射的宿主侧）都落这里 */
   computerUseDir: string;
@@ -182,6 +222,15 @@ export interface SandboxDeps {
   bridgeDir: string;
   /** WindowsSandbox.exe 绝对路径（index.ts 用 capability.windowsSandboxExePath() 解出） */
   sandboxExePath: string;
+  /**
+   * 打包产物目录（`<repo>/dist/win-unpacked`）。**默认不传**：主进程的沙箱不需要它，
+   * 只有 scripts/sandbox-ui-smoke.mjs（打包版 UI 冒烟）传——把待验收的产物只读映射进
+   * 沙箱桌面的 orbita-app/。
+   *
+   * 不传 / 目录不存在时 .wsb 少一条映射，沙箱照常起（不能因为没出包就连「看一眼桌面」
+   * 都用不了），但日志里会明说「没找到打包产物」。
+   */
+  appDir?: string;
   /** 默认 process.platform，测试可注入。非 win32 时 start() 直接拒——先报平台，再谈文件 */
   platform?: NodeJS.Platform;
   /** 真 spawn 在 index.ts 接线；测试注入假进程。**测试绝不许传真 spawn**（沙箱窗口是用户可见面） */
@@ -322,11 +371,9 @@ export class SandboxController {
         error: `找不到 ${this.deps.sandboxExePath}——Windows 沙箱功能可能未启用，先「检测能力」看开启指引`,
       };
     }
-    // LogonCommand 里那条 junction 命令不加引号（理由见 junctionPathIssue）：末段名带空格 /
-    // cmd 特殊字符的话它会被切坏——宁可不启动，也不落一份跑不起来的 .wsb
+    // 映射落点由 .wsb 的 <SandboxFolder> 写死，与宿主目录末段名无关——这里不再有
+    // 「末段名带空格会切坏 junction」的闸门（路径不再进命令串）
     const outputDir = join(this.deps.computerUseDir, "out");
-    const junctionIssue = junctionPathIssue(this.deps.bridgeDir, outputDir);
-    if (junctionIssue !== null) return { ok: false, error: junctionIssue };
 
     const generation = ++this.generation;
     // 新一局开始：上一局可能还有没走完的收尾链（兜底 / 升级窗口 / 退出轮询），先全清
@@ -344,10 +391,22 @@ export class SandboxController {
       await rm(join(outputDir, COMPUTER_USE_CMD_DIR), { recursive: true, force: true });
       resetGuestCommandSeq();
       const wsbPath = join(this.deps.computerUseDir, WSB_FILE_NAME);
+      // 打包产物映射（可选）：只有目录真的存在才写进 .wsb——映射一个不存在的宿主目录
+      // 会让整个 MappedFolder 失败、沙箱根本起不来。缺产物时把下一步说清楚（写日志，
+      // 因为沙箱本身没错，不该把它挡成启动失败）。
+      const appDir = this.deps.appDir;
+      const appMapped = appDir !== undefined && appDir !== "" && fileExists(appDir);
+      if (appDir !== undefined && appDir !== "" && !appMapped) {
+        this.log(
+          `没有找到打包产物（${appDir}），本次沙箱不带 UI 冒烟映射——` +
+            "要验打包版能否启动渲染，先在仓库根跑 bun run dist:win（出 dist/win-unpacked）再启动沙箱",
+        );
+      }
       await writeTextAtomic(
         wsbPath,
-        renderWsbXml({ bridgeDir: this.deps.bridgeDir, outputDir }),
+        renderWsbXml({ bridgeDir: this.deps.bridgeDir, outputDir, ...(appMapped ? { appDir } : {}) }),
       );
+      if (appMapped) this.log(`打包产物已只读映射进沙箱：${appDir} → ${COMPUTER_USE_GUEST_APP_EXE}`);
 
       // 新架构：启动器 spawn 后很快 exit 0，沙箱活在 Server/RemoteSession/vmwp 里。
       // 基线要在 spawn **之前**记——spawn 之后它们就开始出现
@@ -476,6 +535,51 @@ export class SandboxController {
         this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
       );
       return { ok: true };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * CDP 命令的通用下发（PR3 的 sandbox_* 工具组走它）。与 guestCommand 同一道闸门：
+   * 只有 running 才发得出去。**回执载荷原样带回**（cdp 层自己读 port / running / text 等字段）。
+   */
+  async guestCommandReply(
+    command: ComputerUseGuestCommand,
+    fields: Record<string, unknown>,
+  ): Promise<GuestCommandReply> {
+    const gate = this.notRunning("沙箱里的浏览器操作");
+    if (gate !== null) return gate;
+    try {
+      const resp = await sendGuestCommand(
+        this.outDir(),
+        command,
+        fields,
+        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+      );
+      return { ok: true, resp };
+    } catch (cause: unknown) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 带 JPEG 兄弟文件的 CDP 命令（cdp-shot）。与 screenshot 同一道闸门、同一套文件名闸门。
+   */
+  async guestShot(
+    command: ComputerUseGuestCommand,
+    fields: Record<string, unknown>,
+  ): Promise<GuestShotReply> {
+    const gate = this.notRunning("沙箱里的浏览器操作");
+    if (gate !== null) return gate;
+    try {
+      const shot = await fetchGuestShot(
+        this.outDir(),
+        command,
+        fields,
+        this.deps.guestTimeoutMs ?? GUEST_COMMAND_TIMEOUT_MS,
+      );
+      return { ok: true, jpeg: shot.jpeg, resp: shot.resp };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }

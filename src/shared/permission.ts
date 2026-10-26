@@ -20,6 +20,19 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "skip";
 
 /**
+ * 把档压到不高于「询问」（manual）：skip → manual；plan 比询问更严，原样留着（不放宽）。
+ *
+ * 用在两处不是用户亲手发起的开轮（审核 F-4，2026-10-25 用户拍板）：
+ * - **收尾扫描轮**：只该回看对话，提示词也写明不调工具；万一模型还是去调，弹审批。
+ * - **从遗留事项「继续」开出的新会话**：种子里的 detail 常带上一个会话里的绝对路径，「放行」档
+ *   下智能体会照着往用户真实目录写（PR 320 验收时往 ~/Orbita/TRX50服务器/ 写了两次）。新会话从
+ *   询问起步，用户自己再切。
+ */
+export function atMostManual(mode: PermissionMode): PermissionMode {
+  return mode === "skip" ? "manual" : mode;
+}
+
+/**
  * bash / powershell 的 timeout 下限（秒）：模型自填的小值会被权限闸门抬到这里
  * （只升不降；闸门改的是 pi 传进来的入参对象、不回写会话记录，完整理由见
  * `src/agent/permission.ts`）。**放 shared 是为了 UI 同源**：renderer 的「上限」
@@ -127,16 +140,26 @@ export function isBrowserReadTool(toolName: string): boolean {
 }
 
 /**
- * computer use 的只读一件：`computer_screenshot`。三档一律放行。
+ * computer use 的只读件：`computer_screenshot`（沙箱桌面）+ `sandbox_observe` /
+ * `sandbox_extract` / `sandbox_screenshot`（沙箱里的网页）。三档一律放行。
  *
- * 它只向沙箱要一张图，不往沙箱里送任何输入，也不碰用户的文件与 shell；plan 档下
+ * 它们只向沙箱要图 / 要文本，不往沙箱里送任何输入，也不碰用户的文件与 shell；plan 档下
  * 「先看一眼屏幕再规划」本就是规划的一部分，manual 档下看一眼也弹审批只会让人烦。
+ * sandbox_wait 也在这里：它只是等某个选择器出现（或等一段时间），不改变页面、不注入
+ * 输入；plan 档下「等页面加载完再看」同样是只读规划的一部分。
  *
- * 其余四件（computer_click / type / key / scroll）**不在这里**：它们真往沙箱里注入
- * 鼠标键盘事件，能提交表单、删文件、关窗口，走默认的写操作闸门（plan 拒 / manual 问 /
- * skip 放）——与 browser_click / browser_type / browser_press 同一待遇，不为它们另立名单。
+ * 其余写件（computer_click / type / key / scroll，sandbox_navigate / click / type /
+ * upload / download）**不在这里**：它们真往沙箱里注入鼠标键盘事件或改变页面状态，能提交
+ * 表单、删文件、关窗口，走默认的写操作闸门（plan 拒 / manual 问 / skip 放）——与
+ * browser_click / browser_type / browser_press 同一待遇，不为它们另立名单。
  */
-export const COMPUTER_USE_READ_TOOLS = ["computer_screenshot"] as const;
+export const COMPUTER_USE_READ_TOOLS = [
+  "computer_screenshot",
+  "sandbox_observe",
+  "sandbox_extract",
+  "sandbox_screenshot",
+  "sandbox_wait",
+] as const;
 
 export function isComputerUseReadTool(toolName: string): boolean {
   return (COMPUTER_USE_READ_TOOLS as readonly string[]).includes(toolName);

@@ -9,6 +9,9 @@
  * 指数退避是 pi 的原生行为——原先拍平它的两段 patch 已随本文件撤销（见
  * patches/README.md 与提交历史），这里不再 patch、只注入参数。
  *
+ * 「哪些错误该重试」不在这里：那是 pi-ai 的 isRetryableAssistantError，Orbita 只能经
+ * patch 改它（错误带明确的 4xx 除 408 / 429 不重试，见 patches/README.md）。
+ *
  * 纯模块：不 import pi（与 branch-cut.ts 同一纪律），由 runtime.ts 消费、
  * retry-policy.test.ts 守卫。
  */

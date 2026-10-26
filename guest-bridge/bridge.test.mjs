@@ -70,6 +70,24 @@ test("build.mjs 编译出 exe", { skip: !isWindows && "仅在 Windows 上运行"
 });
 
 test(
+  "JSON 取值器 selftest：Chromium 的 /json/version spaced 写法与转义都要吃",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    // 这段测的是真机验收抓到的第一个 bug：/json/version 是 `"key": "value"`（冒号后有空格），
+    // 旧取值器只认紧凑写法，cdp-start 拿不到 webSocketDebuggerUrl。selftest 还覆盖
+    // 转义序列（引号 / 反斜杠 / 换行 / \uXXXX）——cdp-observe / cdp-extract 的正文缺尾巴就是它。
+    // 纯函数用例，不需要沙箱、不碰桌面。
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-json"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 20, `用例数应 >= 20，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test(
   "桥就绪通告 + screenshot 命令全链 + 错误命令",
   { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
   async () => {
@@ -90,7 +108,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.3.0");
+      assert.equal(info.version, "0.5.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
@@ -339,6 +357,118 @@ test(
 );
 
 
+// ── CDP 命令：参数校验 / 错误文案 / 测试模式下不碰 Edge ─────────────────────
+//
+// ⚠ **红线**：快路径的 cdp-nav / cdp-observe 在真机上会 Process.Start msedge.exe——
+// 在宿主上跑就是拉起用户真实的浏览器。所以这一组全部用桥的 `--no-browser` 测试缝
+// （启动 Edge 那一步直接报错），验的是分派、参数校验与人话错误，不碰任何进程。
+// 真机路径（起 Edge / WS / 截图 / 上传下载）只能由沙箱里的验收覆盖，这里如实不测。
+
+test(
+  "cdp-*：分派与参数校验；--no-browser 下绝不启动 Edge",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-cdp-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-browser"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    let seq = 0;
+    const ask = async (body) => {
+      seq += 1;
+      const name = "cmd-" + String(seq).padStart(6, "0");
+      writeRequest(cmdDir, name, JSON.stringify({ seq, ...body }));
+      const respPath = path.join(cmdDir, name + ".resp.json");
+      assert.ok(await waitForFile(respPath), `应收到响应。桥日志：\n${bridgeLog}`);
+      return JSON.parse(fs.readFileSync(respPath, "utf8"));
+    };
+
+    try {
+      assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
+
+      // 没起过 Edge：status 报 running:false 并给出下一步（不启动任何进程）
+      const status = await ask({ command: "cdp-status" });
+      assert.equal(status.ok, true);
+      assert.equal(status.running, false);
+      assert.match(status.hint, /computer_screenshot/, "要告诉模型可以退回像素工具");
+
+      // stop 幂等：没起过也回 ok
+      assert.deepEqual(await ask({ command: "cdp-stop" }), { ok: true });
+
+      // 参数校验失败都发生在「碰 CDP」之前
+      const noUrl = await ask({ command: "cdp-nav" });
+      assert.equal(noUrl.ok, false);
+      assert.match(noUrl.error, /需要 url/);
+
+      const noSelector = await ask({ command: "cdp-click" });
+      assert.equal(noSelector.ok, false);
+      assert.match(noSelector.error, /需要 selector/);
+
+      const noText = await ask({ command: "cdp-type", selector: "#q" });
+      assert.equal(noText.ok, false);
+      assert.match(noText.error, /需要 text/);
+
+      const noWait = await ask({ command: "cdp-wait" });
+      assert.equal(noWait.ok, false);
+      assert.match(noWait.error, /selector 或 ms/);
+
+      const badUploadDir = await ask({ command: "cdp-upload", selector: "#f", path: "C:\\Windows\\win.ini" });
+      assert.equal(badUploadDir.ok, false);
+      assert.match(badUploadDir.error, /只接受/);
+      assert.match(badUploadDir.error, /orbita-out/);
+
+      const badDownloadDir = await ask({ command: "cdp-download", selector: "#f", dir: "C:\\Windows\\Temp" });
+      assert.equal(badDownloadDir.ok, false);
+      assert.match(badDownloadDir.error, /orbita-out/);
+
+      const badOp = await ask({ command: "cdp-tabs", op: "delete" });
+      assert.equal(badOp.ok, false);
+      assert.match(badOp.error, /list 或 switch/);
+
+      const unknown = await ask({ command: "cdp-eval", expression: "1+1" });
+      assert.equal(unknown.ok, false);
+      assert.match(unknown.error, /未知的 CDP 命令/);
+
+      // 会去起 Edge 的命令：cdp-start 被测试缝挡住；其余命令报「浏览器没在运行」
+      // （宿主那边会先自动 cdp-start，所以这句只在自动拉起也失败时才会被模型看到）
+      const start = await ask({ command: "cdp-start" });
+      assert.equal(start.ok, false, "cdp-start 在 --no-browser 下不许成功");
+      assert.match(start.error, /测试模式/);
+      assert.match(start.error, /computer_screenshot/, "错误里要有降级指引");
+
+      for (const body of [
+        { command: "cdp-nav", url: "https://example.com/" },
+        { command: "cdp-observe" },
+        { command: "cdp-shot" },
+        { command: "cdp-extract" },
+      ]) {
+        const resp = await ask(body);
+        assert.equal(resp.ok, false, `${body.command} 在 --no-browser 下不许成功`);
+        assert.match(resp.error, /没有在运行/, `${body.command} 应报浏览器未启动：${JSON.stringify(resp)}`);
+        assert.match(resp.error, /computer_screenshot/, `${body.command} 的错误里要有降级指引`);
+      }
+
+      // 循环还活着（CDP 分支报错不能弄死命令循环）
+      const ping = await ask({ command: "ping" });
+      assert.deepEqual(ping, { ok: true });
+
+      // 没留下任何 jpg 兄弟文件（截图命令在测试缝下根本没跑）
+      assert.deepEqual(fs.readdirSync(cmdDir).filter((f) => f.endsWith(".jpg")), []);
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
+
 // ── 注入失败文案（B）────────────────────────────────────────────────────
 //
 // 真机在垂死 / 未就绪的沙箱里拿到「SendInput 只送达 0/4（错误码 5）」，模型只能看见一个
@@ -353,3 +483,131 @@ test("注入失败文案：错误码 5 带人话解释（模型看得到的就�
   // 文案要接进异常消息里，不能只定义不用
   assert.match(src, /个事件（" \+ DescribeSendInputError/);
 });
+
+// ── launch 路径闸门的纯函数自测（--selftest-launch）────────────────────────────
+//
+// launch 能 Process.Start 任意 exe，边界就是那道路径闸门；它是纯函数，宿主上就能测，
+// 不必起沙箱、更不必真启动一份打包版（在宿主上真启动打包版属于红线）。
+
+test(
+  "launch 路径闸门 selftest：只放行沙箱桌面下的 .exe，.. / 大小写 / 相对路径都被判对",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-launch"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 8, `用例数应 >= 8，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 打包产物冒烟的三条命令：参数校验与错误路径（不启动、不杀任何真进程）───────────
+//
+// ⚠ **红线**：launch 真成功就是在宿主上拉起一个 exe。所以这一组：
+//   - launch 一律走 dryRun（桥只校验路径，不启动进程）；
+//   - 真启动的路径用**沙箱里才存在**的路径去撞（宿主上没有 C:\Users\WDAGUtilityAccount），
+//     于是它必然停在「沙箱里没有这个文件」——不启动任何东西，却能把成功前置的校验跑完；
+//   - kill 只碰一个几乎不可能存在的 pid，并且一律带 dryRun 或者根本不存在。
+
+test(
+  "launch / kill / screenshot-stats：参数校验与错误路径；宿主上不启动任何进程",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-launch-test-"));
+    const cmdDir = path.join(outDir, "cmd");
+
+    const bridge = spawn(exePath, ["--out-dir", outDir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    const guestExe = "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita.exe";
+    let seq = 0;
+    const ask = async (body) => {
+      seq += 1;
+      const name = "cmd-" + String(seq).padStart(6, "0");
+      writeRequest(cmdDir, name, JSON.stringify({ seq, ...body }));
+      const respPath = path.join(cmdDir, name + ".resp.json");
+      assert.ok(await waitForFile(respPath), `应收到响应。桥日志：\n${bridgeLog}`);
+      return JSON.parse(fs.readFileSync(respPath, "utf8"));
+    };
+
+    try {
+      assert.ok(await waitForFile(path.join(outDir, "bridge.json")), "桥应就绪");
+
+      // ---- launch：参数校验 ----
+      const noPath = await ask({ command: "launch", dryRun: true });
+      assert.equal(noPath.ok, false);
+      assert.match(noPath.error, /需要 path 字段/);
+
+      const outside = await ask({ command: "launch", path: "C:\\Windows\\System32\\cmd.exe", dryRun: true });
+      assert.equal(outside.ok, false, "桌面之外的路径不许放行");
+      assert.match(outside.error, /只允许沙箱桌面下/);
+
+      const traversal = await ask({
+        command: "launch",
+        path: "C:\\Users\\WDAGUtilityAccount\\Desktop\\..\\..\\Windows\\System32\\cmd.exe",
+        dryRun: true,
+      });
+      assert.equal(traversal.ok, false, ".. 穿越回桌面之外要拦下");
+
+      const notExe = await ask({
+        command: "launch",
+        path: "C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\resources\\app.asar",
+        dryRun: true,
+      });
+      assert.equal(notExe.ok, false);
+      assert.match(notExe.error, /只启动 \.exe/);
+
+      // 路径合法但文件不存在（宿主上没有 WDAGUtilityAccount）→ 人话错误，**不启动任何东西**
+      const missing = await ask({ command: "launch", path: guestExe, dryRun: true });
+      assert.equal(missing.ok, false);
+      assert.match(missing.error, /沙箱里没有这个文件/);
+      assert.match(missing.error, /dist\/win-unpacked/, "错误里要写出下一步（先出包）");
+
+      // ---- kill：参数校验与幂等 ----
+      const noPid = await ask({ command: "kill" });
+      assert.equal(noPid.ok, false);
+      assert.match(noPid.error, /整数 pid/);
+
+      const zeroPid = await ask({ command: "kill", pid: 0 });
+      assert.equal(zeroPid.ok, false, "pid 0 是拒绝值（不能变成「杀当前进程组」之类）");
+
+      const negative = await ask({ command: "kill", pid: -5 });
+      assert.equal(negative.ok, false);
+
+      // 不存在的 pid：幂等成功，并且**没有任何东西被杀**（dryRun 也拦一道）
+      const gone = await ask({ command: "kill", pid: 4_000_000, dryRun: true });
+      assert.equal(gone.ok, true, JSON.stringify(gone));
+      assert.equal(gone.alreadyGone, true);
+
+      // ---- screenshot-stats：字段与边界 ----
+      const stats = await ask({ command: "screenshot-stats", maxWidth: 320 });
+      assert.equal(stats.ok, true, JSON.stringify(stats));
+      assert.ok(Number.isInteger(stats.width) && stats.width > 0);
+      assert.ok(Number.isInteger(stats.height) && stats.height > 0);
+      assert.ok(Math.max(stats.width, stats.height) <= 320, `长边应 ≤ 320，实际 ${stats.width}x${stats.height}`);
+      for (const key of ["mean", "stdDev", "blackRatio", "whiteRatio"]) {
+        assert.equal(typeof stats[key], "number", `${key} 应是数字`);
+        assert.ok(stats[key] >= 0, `${key} 不该是负数`);
+      }
+      assert.ok(stats.mean <= 255, "mean 是亮度，不该超过 255");
+      assert.ok(stats.blackRatio <= 1 && stats.whiteRatio <= 1, "占比不该超过 1");
+      assert.ok(stats.blackRatio + stats.whiteRatio <= 1.0001, "黑与非黑互斥：两者之和不该超过 1");
+      assert.ok(Number.isInteger(stats.distinctColors) && stats.distinctColors >= 1);
+
+      const badWidth = await ask({ command: "screenshot-stats", maxWidth: 0 });
+      assert.equal(badWidth.ok, false);
+      assert.match(badWidth.error, /maxWidth 必须是正整数/);
+
+      // 循环还活着
+      assert.deepEqual(await ask({ command: "ping" }), { ok: true });
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);

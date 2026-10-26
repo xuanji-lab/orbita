@@ -6,6 +6,9 @@ import assert from "node:assert/strict";
 import type { FocusChangeEntry } from "../../shared/focus.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import {
+  CLIP_ASSISTANT,
+  CLIP_TOOL_INPUT,
+  CLIP_USER,
   SUMMARY_MAX_LINES,
   SUMMARY_MAX_SESSIONS,
   buildSummaryMaterial,
@@ -73,7 +76,35 @@ describe("extractSessionLines", () => {
     const lines = extractSessionLines(many, T0, T1);
     assert.equal(lines.length, SUMMARY_MAX_LINES);
     assert.ok(lines[0]!.length < 220, "单行要被截短");
-    assert.match(lines[0]!, /……$/);
+    assert.match(lines[lines.length - 1]!, /……$/);
+  });
+  test("超过行数上限时留最近的 N 行：最早的丢掉，最后一条在", () => {
+    const records = Array.from({ length: 100 }, (_, i) => user(`第 ${i + 1} 句`, T0 + i + 1));
+    const lines = extractSessionLines(records, T0, T1);
+    assert.equal(lines.length, SUMMARY_MAX_LINES);
+    assert.equal(lines[lines.length - 1], `用户：第 100 句`);
+    // 100 行里只留最后 60 → 第 1 句（以及第 40 句之前的）都不在
+    assert.equal(lines[0], `用户：第 41 句`);
+    assert.ok(!lines.some((line) => line === "用户：第 1 句"));
+  });
+  test("各角色截断宽度：用户 200 / 助手 300 / 工具入参 120", () => {
+    const long = "字".repeat(500);
+    const lines = extractSessionLines(
+      [
+        user(long, T0 + 1),
+        assistant(T0 + 2, [
+          { type: "text", text: long },
+          { type: "toolCall", toolCallId: "c1", toolName: "read_task", input: { note: long } },
+        ]),
+      ],
+      T0,
+      T1,
+    );
+    assert.equal(lines[0]!.length, "用户：".length + CLIP_USER + "……".length);
+    assert.equal(lines[1]!.length, "助手：".length + CLIP_ASSISTANT + "……".length);
+    // 工具入参是 JSON 串：{"note":"字…"}，按 120 字截断后再拼「……」
+    assert.ok(lines[2]!.startsWith("调用工具 read_task：{\"note\":\""));
+    assert.equal(lines[2]!.length, "调用工具 read_task：".length + CLIP_TOOL_INPUT + "……".length);
   });
 });
 
@@ -137,6 +168,18 @@ describe("buildSummaryMaterial + buildSummaryPrompt", () => {
     assert.equal(lines.filter((line) => line.startsWith("摘抄：")).length, 1);
     // 只有摘抄、没有流水的会话（silent）也能进素材——活动就是活动
     assert.ok(material.sessions.some((session) => session.title === "任务-silent"));
+  });
+
+  test("工作区改动段落说明这是「此刻全部未提交改动」（可能含专注前就有的）", () => {
+    const material = buildSummaryMaterial(inputs, {
+      workspaceNames: new Map([["ws-1", "orbita"]]),
+      workspaceName: "orbita",
+      branch: null,
+      changeEntries: changes,
+      startedAt: T0,
+      until: T1,
+    });
+    assert.match(buildSummaryPrompt(material, T0, T1), /这是此刻工作区全部未提交改动，可能含专注开始前就有的/);
   });
 
   test("全空 → hasActivity false（回 no-activity 的依据）", () => {

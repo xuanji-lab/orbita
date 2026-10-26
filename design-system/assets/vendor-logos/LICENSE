@@ -5,6 +5,10 @@ only to identify each provider.
 
 Local modifications: <title>, width/height and inline style attributes removed;
 kimi.svg recolours the white "K" to currentColor so it reads on light themes.
+tokenrhythm.png is 基元律动's own favicon (token-rhythm-favicon-light.png,
+https://tokenrhythm.studio, fetched 2026-10-24): the site ships it as a light and
+a dark PNG whose alpha channels are identical, so we ship one file and let the
+renderer colour it with currentColor via a CSS mask.
 
 MIT License
 
