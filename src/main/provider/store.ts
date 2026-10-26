@@ -9,8 +9,8 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
-import { KNOWN_PROVIDERS } from "../../shared/known-providers.ts";
-import { refreshClaudeCredential } from "./oauth.ts";
+import { KNOWN_PROVIDERS, knownProviderOf } from "../../shared/known-providers.ts";
+import { refreshOauthCredential } from "./oauth-flows.ts";
 import {
   maskSecret,
   normalizeBaseUrl,
@@ -33,9 +33,12 @@ export interface SecretsPort {
   delete(account: string): Promise<void>;
 }
 
-/** 续期端口：默认实现直连 Anthropic token 端点；测试注入假网络。 */
+/**
+ * 续期端口：默认按目录条目分派（Claude 直连 Anthropic token 端点，ChatGPT / Copilot / xAI
+ * 交给 pi 的流程，见 oauth-flows.ts）；测试注入假网络。`kind` 是目录条目 id。
+ */
 export interface OauthDeps {
-  refreshOauth?: (credential: OauthCredential) => Promise<OauthCredential>;
+  refreshOauth?: (credential: OauthCredential, kind: string) => Promise<OauthCredential>;
 }
 
 export class ProviderValidationError extends Error {
@@ -62,7 +65,7 @@ export class ProviderStore {
   private cache: Provider[] | null = null;
   /** 进行中的 OAuth 续期（按密钥库 account 合并并发）：上游轮换 refresh token，
    * 两路并发各拿旧的去换会把后到的一路变成 invalid_grant（sub2api #1035 的事故） */
-  private readonly oauthInflight = new Map<string, Promise<string>>();
+  private readonly oauthInflight = new Map<string, Promise<OauthCredential>>();
 
   // 注：不用 TS 参数属性（constructor(private x: T)）——Node 的类型剥离不支持它，
   // 测试直接加载 .ts 时会 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX。见 AGENTS.md「必须遵守」。
@@ -220,20 +223,30 @@ export class ProviderStore {
    * 「请重新登录」，不能静默拿旧 token 硬发一轮。
    */
   async resolveOauthApiKey(id: ProviderId): Promise<string | null> {
+    return (await this.resolveOauthCredential(id))?.accessToken ?? null;
+  }
+
+  /**
+   * 同 resolveOauthApiKey，但交回整份（续期过的）凭据：Copilot 的请求地址写在令牌里、
+   * 由流程的 toAuth 解出来，装配会话要的不只是令牌本身（见 agent/ipc 的 resolveProviderSecrets）。
+   */
+  async resolveOauthCredential(id: ProviderId): Promise<OauthCredential | null> {
     const provider = (await this.load()).find((p) => p.id === id);
     if (!provider || provider.auth.scheme !== "oauth") return null;
     const account = provider.auth.secretRef.account;
     const credential = await this.readCredentialBy(account);
     if (credential === null) return null;
-    if (credential.expiresAt > Date.now()) return credential.accessToken;
+    if (credential.expiresAt > Date.now()) return credential;
     // 同一 account 的并发续期合并成一次（检查与登记之间无 await，不会漏登记）
     const inflight = this.oauthInflight.get(account);
     if (inflight !== undefined) return inflight;
-    const refresh = this.oauthDeps.refreshOauth ?? refreshClaudeCredential;
+    const refresh = this.oauthDeps.refreshOauth ?? ((stale, kind) => refreshOauthCredential(kind, stale));
+    // 哪家的流程按目录条目认（第二个实例 openai-codex-2 也走 Codex 的续期）
+    const kind = knownProviderOf(provider).id;
     const task = (async () => {
-      const fresh = await refresh(credential);
+      const fresh = await refresh(credential, kind);
       await this.secrets.set(account, JSON.stringify(fresh));
-      return fresh.accessToken;
+      return fresh;
     })().finally(() => {
       this.oauthInflight.delete(account);
     });
@@ -280,11 +293,13 @@ export class ProviderStore {
       ) {
         return null;
       }
+      const flowData = parsed.flowData;
       return {
         accessToken: parsed.accessToken,
         refreshToken: parsed.refreshToken,
         expiresAt: parsed.expiresAt,
         accountEmail: typeof parsed.accountEmail === "string" ? parsed.accountEmail : null,
+        ...(typeof flowData === "object" && flowData !== null && !Array.isArray(flowData) ? { flowData } : {}),
       };
     } catch {
       return null;

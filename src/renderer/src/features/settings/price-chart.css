@@ -1,0 +1,513 @@
+/* 价格 · 能力图（PriceCapabilityChart.tsx）：卡片墙下面，与分区之间一条细线隔开。
+   「前沿」一律用 --color-nebula（侧栏用量格的那个颜色，每个主题各一种——用户 2026-10-24：
+   「帕累托的那条折线的颜色能不能继承主题里的用量格的颜色」）：折线、前沿点描边、图例那段线、
+   「帕累托最优」的图标。估算点的虚线框与同型号连线是灰色系，与它分得开。 */
+.pc-block {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.pc-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.pc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+.pc-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.pc-switch button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.pc-cat {
+  min-width: 96px;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.pc-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* —— 图区：左图右栏 —— */
+.pc-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 236px;
+  gap: var(--space-5);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .pc-wrap {
+    grid-template-columns: 1fr;
+  }
+}
+.pc-main {
+  min-width: 0;
+}
+
+/* 绘图框：左边留刻度、下边留刻度与轴名；所有坐标都是 .pc-area 内的百分比 */
+.pc-plot {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  min-height: 240px;
+}
+.pc-area {
+  position: absolute;
+  left: 52px;
+  right: 16px;
+  top: 22px;
+  bottom: 42px;
+}
+.pc-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.pc-gridline {
+  stroke: var(--color-border-subtle);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.pc-levelline {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  vector-effect: non-scaling-stroke;
+}
+.pc-frontier {
+  fill: none;
+  stroke: var(--color-nebula);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.pc-tick {
+  position: absolute;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pc-tick.y {
+  right: calc(100% + 8px);
+  translate: 0 -50%;
+}
+.pc-tick.x {
+  top: calc(100% + 6px);
+  translate: -50% 0;
+}
+.pc-axis-x,
+.pc-axis-y {
+  position: absolute;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.pc-axis-x {
+  left: 52px;
+  right: 16px;
+  bottom: 0;
+  text-align: center;
+}
+.pc-axis-y {
+  left: 0;
+  top: 0;
+}
+.pc-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* 点：型号头像。前沿上的大一号 + 绿圈 + 名字；其余淡一些，悬停 / 聚焦出详情 */
+.pc-dot {
+  position: absolute;
+  translate: -50% -50%;
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.78;
+  z-index: 2;
+  transition: opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pc-dot:hover,
+.pc-dot:focus-visible {
+  opacity: 1;
+  z-index: 5;
+}
+.pc-dot.frontier {
+  opacity: 1;
+  z-index: 3;
+  border: 1.5px solid var(--color-nebula);
+}
+/* 估算点：虚线空心框，头像减淡——没跑过，横轴是算出来的 */
+.pc-dot.estimated {
+  border: 1.5px dashed var(--color-text-tertiary);
+}
+.pc-dot.estimated.frontier {
+  border-color: var(--color-nebula);
+}
+.pc-dot.estimated .model-avatar {
+  opacity: 0.55;
+}
+/* 借分点：点线框——榜单没评这一档，纵轴借的是最高评测档的分（不进前沿，所以没有绿圈） */
+.pc-dot.borrowed {
+  border: 1.5px dotted var(--color-text-secondary);
+}
+.pc-label {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 6px);
+  translate: 0 -50%;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pc-label.left {
+  left: auto;
+  right: calc(100% + 6px);
+}
+/* 左右都放不下时放上面 / 下面（price-chart-model 的 placeLabels 决定方向，离点的边同样 6px） */
+.pc-label.above,
+.pc-label.below {
+  left: 50%;
+  translate: -50% 0;
+}
+.pc-label.above {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.pc-label.below {
+  top: calc(100% + 6px);
+}
+/* 四边都放不下：平时不显示，悬停 / 键盘聚焦时出来（与非前沿点的轻提示同一种行为），不和别的标签叠 */
+.pc-label.off {
+  opacity: 0;
+  transition: opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pc-dot:hover .pc-label.off,
+.pc-dot:focus-visible .pc-label.off {
+  opacity: 1;
+}
+.pc-dot[aria-expanded="true"] .pc-label.off {
+  opacity: 0;
+}
+.pc-label-level {
+  margin-left: 4px;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+/* 借分点的后缀：正文字体（中文用等宽字体会被拉开） */
+.pc-label-tag {
+  margin-left: 6px;
+  color: var(--color-text-tertiary);
+}
+
+/* 点开的点：一圈中性描边（选中不是主操作，不用 accent），详情卡关之前一直在 */
+.pc-dot[aria-expanded="true"] {
+  opacity: 1;
+  z-index: 6;
+  box-shadow: 0 0 0 2px var(--color-text-secondary);
+}
+
+/* 悬停 / 键盘聚焦的轻提示：只给不在前沿上的点（前沿上的已经带名字），纯 CSS，不占 JS 状态 */
+.pc-hint {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 6px);
+  translate: 0 -50%;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pc-hint.left {
+  left: auto;
+  right: calc(100% + 6px);
+}
+.pc-dot:hover .pc-hint,
+.pc-dot:focus-visible .pc-hint {
+  opacity: 1;
+}
+.pc-dot[aria-expanded="true"] .pc-hint {
+  opacity: 0;
+}
+
+/* 点开的详情卡：钉在点旁边（left / top 是点的百分比坐标），水平方向用 transform、垂直方向用
+   translate 各管一轴，两个类叠起来不互相覆盖 */
+.pc-pop {
+  position: absolute;
+  z-index: 8;
+  min-width: 220px;
+  max-width: 300px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  display: grid;
+  gap: 2px;
+}
+.pc-pop.right {
+  transform: translateX(16px);
+}
+.pc-pop.left {
+  transform: translateX(calc(-100% - 16px));
+}
+.pc-pop.middle {
+  translate: 0 -50%;
+}
+.pc-pop.below {
+  translate: 0 14px;
+}
+.pc-pop.above {
+  translate: 0 calc(-100% - 14px);
+}
+.pc-tip-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.pc-tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.pc-tip-row > span:first-child {
+  flex: none;
+  white-space: nowrap;
+}
+.pc-tip-row > span:last-child {
+  text-align: right;
+  color: var(--color-text-primary);
+}
+.pc-tip-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pc-tip-basis {
+  margin-left: 6px;
+  color: var(--color-text-tertiary);
+}
+.pc-mono {
+  font-family: var(--font-family-mono);
+}
+
+/* 图例 */
+.pc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pc-li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pc-sw {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+}
+.pc-sw.estimated {
+  border: 1.5px dashed var(--color-text-tertiary);
+  background: transparent;
+}
+.pc-sw.borrowed {
+  border: 1.5px dotted var(--color-text-secondary);
+  background: transparent;
+}
+.pc-ln {
+  width: 16px;
+  border-top: 1px dashed var(--color-border-strong);
+}
+.pc-pf {
+  width: 16px;
+  border-top: 1.5px solid var(--color-nebula);
+}
+
+/* 右栏：帕累托最优 */
+.pc-best {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.pc-best-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.pc-best-head .icon,
+.pc-best-head svg {
+  color: var(--color-nebula);
+}
+.pc-best-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pc-best-row:first-of-type {
+  border-top: 0;
+}
+.pc-best-name {
+  display: grid;
+  min-width: 0;
+}
+.pc-best-n {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.pc-best-l,
+.pc-best-c {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pc-best-val {
+  display: grid;
+  justify-items: end;
+}
+.pc-best-s,
+.pc-best-c {
+  font-family: var(--font-family-mono);
+}
+.pc-best-s {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.pc-best-sub {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 图下：未上榜 / 缺官方单价 */
+.pc-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.pc-chips-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.pc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.pc-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.pc-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pc-source a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-strong);
+  text-underline-offset: 2px;
+}
+.pc-source a:hover {
+  color: var(--color-text-secondary);
+}

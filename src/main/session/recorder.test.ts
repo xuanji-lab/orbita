@@ -365,3 +365,48 @@ describe("recorder 的 model 事件（C-4）", () => {
     assert.deepEqual(detail?.transcript, []);
   });
 });
+
+describe("recorder 给 assistant 记录盖本轮生效的思考档（价格 · 能力图的「型号 × 档」）", () => {
+  const assistantAt = (id: string, timestamp: number) => ({ ...assistant("complete"), id, timestamp });
+  const thinking = (level: "low" | "high" | "xhigh" | "max"): AgentEvent => ({
+    type: "thinking",
+    sessionId: ID,
+    providerId: "p",
+    modelId: "m",
+    level,
+    supported: ["low", "high", "max"],
+  });
+  const rawLevels = async () =>
+    (await store.readRawLog(ID)).map((r) => (r.role === "assistant" && "thinkingLevel" in r ? r.thinkingLevel : "absent"));
+
+  test("没收到过 thinking 事件（进程刚起、老夹具）：不盖，字段缺席，记录照落", async () => {
+    record(progress({ type: "item_finished", item: assistant("complete") }));
+    await settleUntil(transcriptLanded(1));
+    assert.deepEqual(await rawLevels(), ["absent"]);
+  });
+
+  test("盖的是开轮事件报的 clamp 后真值，不是 meta 里用户点的档", async () => {
+    // meta 里是 medium（用户点的），runtime 夹成 high 推回来
+    record(thinking("high"));
+    record(progress({ type: "item_finished", item: assistant("complete") }));
+    await settleUntil(transcriptLanded(1));
+    assert.deepEqual(await rawLevels(), ["high"]);
+  });
+
+  test("会话中途切档：每条记录盖各自那一轮的档；thinking 事件本身不落 transcript", async () => {
+    record(thinking("low"));
+    record(progress({ type: "item_finished", item: assistantAt("a1", 2000) }));
+    await settleUntil(transcriptLanded(1));
+    record(thinking("max"));
+    record(progress({ type: "item_finished", item: assistantAt("a2", 3000) }));
+    await settleUntil(transcriptLanded(2));
+    assert.deepEqual(await rawLevels(), ["low", "max"]);
+  });
+
+  test("别的会话的 thinking 事件不串档", async () => {
+    record({ type: "thinking", sessionId: "other", providerId: "p", modelId: "m", level: "max", supported: ["max"] });
+    record(progress({ type: "item_finished", item: assistant("complete") }));
+    await settleUntil(transcriptLanded(1));
+    assert.deepEqual(await rawLevels(), ["absent"]);
+  });
+});
