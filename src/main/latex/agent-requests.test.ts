@@ -36,6 +36,7 @@ const OK_RESULT: LatexResult = {
   warnings: [],
   logStale: false,
   logTail: null,
+  timeoutKind: null,
 };
 
 /** 记录 runner 实际收到的请求 */
