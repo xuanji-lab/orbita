@@ -12,8 +12,10 @@
  *     一个 tab 装不下）。可新开可关，但至少留一个——它是登录入口。
  *   - agent tab：每个用过浏览器的会话一个（agentTab），agent 的工具只作用于自己会话的 tab。
  *   所有 tab 都挂在窗口里、铺满同一块区域；**显示哪个只是 z 序**（重新 addChildView 置顶）。
- *   其余 tab 在下面照常加载、照常渲染——agent 在后台操作自己的 tab 不抢用户的屏幕，
+ *   agent 的 tab 在下面照常加载、照常渲染——agent 在后台操作自己的 tab 不抢用户的屏幕，
  *   截图也拍得到（没挂进窗口或 setVisible(false) 的视图不绘制，截出来是空的）。
+ *   用户的 tab 没显示时不绘制、显示中的允许后台节流，agent 读它时临时恢复（tab-painting.ts：
+ *   压在下面的页面动画曾让 4 个渲染进程 + GPU 常驻满转，2026-10-26）。
  *
  * 生命周期：
  *   - 懒创建：第一次 open 或第一次 agent 请求才建窗口；agent 建窗不显示窗口。
@@ -63,6 +65,7 @@ import {
   type AgentTabReclaimReason,
 } from "./agent-tab-ledger.ts";
 import { placeInUserTab } from "./user-tabs.ts";
+import { tabPaint } from "./tab-painting.ts";
 import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
 import type { ShotGeometry } from "./screenshot-geometry.ts";
 
@@ -166,6 +169,8 @@ export class BrowserSandbox {
   /** 最近显示过的用户 tab：地球入口回到它，新链接判断「空白页复用」也看它 */
   private lastUserTabId = "";
   private shownTabId = "";
+  /** 每个 tab 当前实际生效的后台节流值（视图建时是 PAGE_PREFERENCES 的 false）。paint 只在值变了时才调，见 paint 的注释 */
+  private readonly throttled = new WeakMap<BrowserTab, boolean>();
   /** 页面开出的弹窗子窗口：dispose 时一并收掉 */
   private readonly popups = new Set<BrowserWindow>();
   private quitting = false;
@@ -473,11 +478,15 @@ export class BrowserSandbox {
     // 排队与执行期间这个 tab 算「忙」：回收要跳过它（导航、交接可能跑很久）
     tab.pending += 1;
     if (tab.owner.kind === "agent") this.ledger.setBusy(tab.owner.sessionId, true);
+    // 没显示的用户 tab 被 agent 读：操作期间恢复绘制，否则截图拍不到帧
+    this.paint(tab);
     const run = tab.queue.then(operation, operation);
     tab.queue = run.catch(() => undefined);
     const settle = (): void => {
       tab.pending -= 1;
       if (tab.owner.kind === "agent" && tab.pending === 0) this.ledger.setBusy(tab.owner.sessionId, false);
+      // 读完收回去；截图时 frame-capture 关掉的节流也在这里按规则复原
+      this.paint(tab);
     };
     void run.then(settle, settle);
     return run;
@@ -687,6 +696,7 @@ export class BrowserSandbox {
     // 先垫到最底层：新 agent tab 不盖住用户正在看的那一页
     window.contentView.addChildView(view, 0);
     this.layout();
+    this.paint(tab);
 
     const contents = view.webContents;
     contents.on("did-navigate", (_event, _url, httpResponseCode) => {
@@ -824,7 +834,10 @@ export class BrowserSandbox {
     tab.view.webContents.loadURL(url).catch(() => undefined);
   }
 
-  /** 显示某个 tab：把它的视图置顶（重新 addChildView 就是置顶）。其余 tab 留在下面照常渲染 */
+  /**
+   * 显示某个 tab：把它的视图置顶（重新 addChildView 就是置顶）。agent 的 tab 留在下面照常渲染，
+   * 用户的 tab 让出前台后停止绘制（tab-painting.ts）
+   */
   private show(tabId: string): void {
     const tab = this.tabs.get(tabId);
     const window = this.window;
@@ -832,8 +845,34 @@ export class BrowserSandbox {
     this.shownTabId = tabId;
     if (tab.owner.kind === "user") this.lastUserTabId = tabId;
     window.contentView.addChildView(tab.view);
+    for (const each of this.tabs.values()) this.paint(each);
     this.layout();
     this.push();
+  }
+
+  /** 按 tab-painting.ts 的规则设这个 tab 的绘制与节流；视图可能恰好正被关掉，失败不抛 */
+  private paint(tab: BrowserTab): void {
+    if (this.tabs.get(tab.id) !== tab) return;
+    const plan = tabPaint({ owner: tab.owner.kind, shown: tab.id === this.shownTabId, busy: tab.pending > 0 });
+    try {
+      const contents = tab.view.webContents;
+      if (contents.isDestroyed()) return;
+      /*
+       * 两条实测出来的规矩（2026-10-26，Electron 43）：
+       * 1. setBackgroundThrottling **只在值变了时调**。对一个已经藏起来的视图再调一次（哪怕值没变），
+       *    它就重新开始出帧——页面仍报 hidden，却以约 170 帧 / 秒不限速地画（推断：Electron 在这个
+       *    接口里对已隐藏的 widget 补了一次 WasShown）。
+       * 2. 先开节流再藏；反过来就撞上第 1 条。
+       */
+      if (plan.visible && !tab.view.getVisible()) tab.view.setVisible(true);
+      if (this.throttled.get(tab) !== plan.throttle) {
+        contents.setBackgroundThrottling(plan.throttle);
+        this.throttled.set(tab, plan.throttle);
+      }
+      if (!plan.visible && tab.view.getVisible()) tab.view.setVisible(false);
+    } catch (cause) {
+      console.error("[browser] 设置 tab 绘制状态失败", cause);
+    }
   }
 
   private layout(): void {
