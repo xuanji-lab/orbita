@@ -161,8 +161,20 @@ export interface FsEntryFact {
   size: number | null;
 }
 
-/** 文本预览最多读的字节数（2 MB）：再大的日志 / 数据文件只读开头，截断如实标出 */
-export const PREVIEW_TEXT_LIMIT = 2 * 1024 * 1024;
+/**
+ * 文本预览最多读的字节数（16 MB）：再大的日志 / 数据文件只读开头，截断如实标出。
+ *
+ * 这个上限现在的含义已经变了：窗口化（`WINDOW_TEXT_LIMIT`）之后它**不再是渲染上限**
+ * （DOM 里最多只有可视区附近那几百行），它只保护两件事——整份文本进 renderer 的 JS
+ * 堆（保留内存约 1.2× 文件体积），以及一次 IPC 结构化克隆的耗时。
+ *
+ * 依据（2026-10-25 实测，Electron 43 + 同一套窗口化 DOM，page cache 热读、窗口可见）：
+ * 16 MB 在 harness 里首帧 21–26 ms，真应用里点击→首帧 64 ms（外壳那一段是不随体积
+ * 增长的常数），renderer 堆 +20 MB，无长任务；32 MB 也稳（harness 39–48 ms / +40 MB），
+ * 但慢机按 2–3× 折价后 32 MB 就要 100+ ms，所以默认取 16 MB 给慢机留余量。
+ * 超过它的文件面板给「用默认应用打开」。
+ */
+export const PREVIEW_TEXT_LIMIT = 16 * 1024 * 1024;
 
 /** 图片预览上限（20 MB）：base64 过 IPC 再进 <img>，再大就不读 */
 export const PREVIEW_IMAGE_LIMIT = 20 * 1024 * 1024;

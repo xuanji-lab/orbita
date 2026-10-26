@@ -22,10 +22,20 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
+import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { SessionWrapup } from "../../shared/wrapup.ts";
+import { isClosingScanText } from "../../shared/wrapup-scan.ts";
+
+/** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
+function isMachinePrompt(record: SessionRecord): boolean {
+  if (record.role !== "user") return false;
+  const text = record.content.find((block) => block.type === "text");
+  return text !== undefined && text.type === "text" && isClosingScanText(text.text);
+}
 import {
   childSessions,
   deriveSessionTitle,
@@ -449,9 +459,10 @@ export class SessionStore {
         }
       }
       // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致。
+      // 收尾扫描的机器提问不是用户的提问，不进最近提问（首页卡上会冒出一行「【Orbita 收尾扫描】」）
       if (item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text") {
+        if (text !== undefined && text.type === "text" && !isClosingScanText(text.text)) {
           changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);
         }
       }
@@ -667,6 +678,42 @@ export class SessionStore {
   }
 
   /**
+   * 收尾确认（session:wrapup-confirm）：一次 meta 写入里追加收尾记录、翻完成状态、取走这条会话
+   * 在接着做的遗留事项 id（返回给调用方去标做完）。会话不存在返回 null。
+   * 完成状态的翻法同 setCompletion：同态不刷新关闭时刻。
+   */
+  confirmWrapup(
+    id: string,
+    wrapup: SessionWrapup,
+    completion: Exclude<SessionCompletion, "open">,
+  ): Promise<{ resumed: string[] } | null> {
+    return this.queueMeta(id, async () => {
+      const meta = await this.readMeta(id);
+      if (meta === null) return null;
+      const resumed = meta.resumedCarryovers ?? [];
+      const same = (meta.completion ?? "open") === completion;
+      const next: SessionMeta = {
+        ...meta,
+        wrapups: [...(meta.wrapups ?? []), wrapup],
+        completion,
+        closedAt: same ? (meta.closedAt ?? Date.now()) : Date.now(),
+      };
+      delete next.resumedCarryovers;
+      await writeJsonAtomic(this.metaPath(id), next);
+      return { resumed };
+    });
+  }
+
+  /** 记下这条会话在接着做某条遗留事项（遗留清单的「继续」）；重复的 id 不再记 */
+  addResumedCarryover(id: string, carryoverId: string): Promise<void> {
+    return this.update(id, (meta) =>
+      (meta.resumedCarryovers ?? []).includes(carryoverId)
+        ? null
+        : { resumedCarryovers: [...(meta.resumedCarryovers ?? []), carryoverId] },
+    );
+  }
+
+  /**
    * 未读标记（后台跑完还没看，2026-10-10 落盘）：`{ at, failed }` 标未读，null 清。
    * at / failed 由 renderer 在落定那一刻铸——什么时候跑完的、是不是挂了，是落定时
    * 的事实不是写盘时的事实。不做幂等判断：renderer 只在标 / 清那两次调，重复写
@@ -735,7 +782,7 @@ export class SessionStore {
         pinned: false,
         archived: false,
         // 分支的新会话带着前缀里的最近提问——它的历史是真的，卡片不该显示空槽
-        recentQueries: recentQueriesFromRecords(prefix),
+        recentQueries: recentQueriesFromRecords(prefix.filter((record) => !isMachinePrompt(record))),
         // A-2（2026-09-17 裁决）：聚合前缀的 tokens/cost——「这条分支此前花了多少」
         // 是真实历史。**contextUsage 恒为 null**：pi 那本是裁过的，余量算不出来，
         // UI 如实显示「未知」，等它自己跑一轮就有真值
@@ -859,7 +906,12 @@ export class SessionStore {
     return {
       meta,
       transcript: effective.slice(start),
-      window: { total: effective.length, hasMore: start > 0 },
+      window: {
+        total: effective.length,
+        hasMore: start > 0,
+        // 窗口之前的压缩界碑：用量环的「第几个窗口」要数全量，尾窗外的不能漏
+        compactionsBefore: effective.slice(0, start).filter((record) => record.role === "compacted").length,
+      },
     };
   }
 
@@ -985,6 +1037,39 @@ export class SessionStore {
    */
   readRawLog(id: string): Promise<SessionRecord[]> {
     return this.readLogEntries(id);
+  }
+
+  /**
+   * 只读用量相关的记录：assistant 与 intent-recall，按盘上顺序，不做回退折叠（与 readRawLog 同口径——
+   * 回退不抹掉已经花掉的 token）。任务账本回填专用（审核 F-3）：**流式按行读、按行首的 role 粗筛**，
+   * 工具结果这类几 MB 的大行不解码不解析，内存只跟留下的小行走（见 main/jsonl-scan.ts）。
+   * 行首看不到 role 的行保守地整行解析，解析后再按 role 精筛，所以结果与
+   * `readRawLog` 再筛这两种 role 逐条一致。读失败返回空，与 readLogEntries 同一兜底。
+   */
+  async readUsageLog(id: string): Promise<SessionRecord[]> {
+    const records: SessionRecord[] = [];
+    try {
+      await scanJsonlLines(
+        this.logPath(id),
+        (head) => {
+          const role = headStringField(head, "role");
+          return role === undefined || role === "assistant" || role === "intent-recall";
+        },
+        (line) => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            return; // 半截行跳过
+          }
+          const role = (parsed as { role?: unknown } | null)?.role;
+          if (role === "assistant" || role === "intent-recall") records.push(parsed as SessionRecord);
+        },
+      );
+    } catch {
+      return [];
+    }
+    return records;
   }
 
   /**

@@ -14,3 +14,53 @@ index b1beb1a..ceaddc7 100644
      const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
      const isCloudflareWorkersAI = provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
      const isCloudflareAiGateway = provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index 65c7c9e..ebc8c26 100644
+--- a/dist/utils/retry.js
++++ b/dist/utils/retry.js
+@@ -154,6 +154,35 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
+         await callbacks?.onRetryAttemptStart?.();
+     }
+ }
++// [orbita patch] 错误文本里能确定的 HTTP 状态码。只认三种明确写法，认不出就不改原判：
++// 「API error (403):」、开头的「403 Forbidden / 400 {...}」、「HTTP 403 / status 403 / status=403」。
++const HTTP_STATUS_IN_ERROR_PATTERNS = [
++    /\((\d{3})\)\s*:/g,
++    /^(\d{3})(?=[\s:])/g,
++    /\b(?:HTTP|status(?:\s+code)?)[\s=:]*(\d{3})\b/gi,
++];
++// 4xx 里仍属临时性的：408 请求超时、429 限流
++const RETRYABLE_CLIENT_STATUSES = new Set([408, 429]);
++// 有网关把限流 / 过载写成 400 / 403，文本这么说时仍交给原判（宁可多重试）
++const CLIENT_STATUS_THROTTLE_PATTERN = /rate.?limit|too many requests|overloaded/i;
++/**
++ * [orbita patch] 错误带明确的 4xx（除 408 / 429）时为真：请求本身被拒，重发也一样。
++ * OpenCode 把 403「Model access is disabled」、400「Model is unavailable.」的错误体写成
++ * `"type":"server_error"`，原判被 `server.?error` 命中，永久错误按指数退避重试到上限。
++ * 出现任何非 4xx 的状态码（如外层 400 包着上游 502）或文本说的是限流，都不在此拦下。
++ */
++function hasNonRetryableClientStatus(errorMessage) {
++    const statuses = [];
++    for (const pattern of HTTP_STATUS_IN_ERROR_PATTERNS) {
++        for (const match of errorMessage.matchAll(pattern))
++            statuses.push(Number(match[1]));
++    }
++    if (statuses.length === 0)
++        return false;
++    if (CLIENT_STATUS_THROTTLE_PATTERN.test(errorMessage))
++        return false;
++    return statuses.every((status) => status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUSES.has(status));
++}
+ /**
+  * Classifies whether a failed assistant message looks like a transient provider
+  * or transport error, so callers can decide if the last assistant turn should be
+@@ -169,6 +198,8 @@ export function isRetryableAssistantError(message) {
+     const errorMessage = message.errorMessage;
+     if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage))
+         return false;
++    if (hasNonRetryableClientStatus(errorMessage))
++        return false;
+     return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
+ }
+ //# sourceMappingURL=retry.js.map
+\ No newline at end of file
