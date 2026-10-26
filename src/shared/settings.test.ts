@@ -8,6 +8,8 @@ import {
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
   effectiveIntentSettings,
+  effectiveAllowNetwork,
+  parseComputerUse,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
@@ -16,6 +18,7 @@ import {
   SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "./computer-use.ts";
 
 describe("parseSettings", () => {
   it("四档主题都认（含 black 手动档）", () => {
@@ -663,5 +666,36 @@ describe("parseSettings 的 intent（实验功能 intent-system）", () => {
     const effective = effectiveIntentSettings(undefined);
     deepStrictEqual(effective, { baseUrl: "http://127.0.0.1:8723", newSessionOn: true, channel: "proma" });
     deepStrictEqual(effectiveIntentSettings({ baseUrl: "http://localhost:9000//" }).baseUrl, "http://localhost:9000");
+  });
+});
+
+describe("parseSettings 的 computerUse（沙箱出网开关）", () => {
+  it("缺席 = 不落键（effectiveAllowNetwork 兜 shared 的缺省常量，老 settings.json 行为不变）", () => {
+    deepStrictEqual(parseSettings({}).computerUse, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite", computerUse: { other: 1 } }).computerUse, undefined);
+    // **不写字面 true**：缺省值只有 shared/computer-use.ts 一处来源（渲染层与主进程控制器同源），
+    // 改默认时这条断言跟着变，而不是在这里再硬编码一遍把漂移挡住
+    deepStrictEqual(effectiveAllowNetwork(undefined), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+    deepStrictEqual(effectiveAllowNetwork({}), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+  });
+
+  it("合法值原样保留，两个方向都认", () => {
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: false } }).computerUse, { allowNetwork: false });
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: true } }).computerUse, { allowNetwork: true });
+    deepStrictEqual(effectiveAllowNetwork({ computerUse: { allowNetwork: false } }), false);
+  });
+
+  it("类型不对当缺席：手改出的字符串 / 数字不能让沙箱悄悄断网", () => {
+    // "false" 在 JS 里是真值：当真值用会让「关掉」变成「开着」，当假值用会让手滑的字符串直接断网。
+    // 这条纪律与 gitAttribution 一样——只认布尔
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: "false" } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: 0 } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: "off" }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: null }).computerUse, undefined);
+    deepStrictEqual(effectiveAllowNetwork({ computerUse: undefined }), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+  });
+
+  it("只认识的键留下，同一个子对象里的未知字段丢掉", () => {
+    deepStrictEqual(parseComputerUse({ allowNetwork: true, proxy: "http://x" }), { allowNetwork: true });
   });
 });

@@ -397,6 +397,14 @@ export const en = {
     probeFailed: "Couldn't run the check",
     sandboxGroup: "Sandbox",
     sandboxState: "State",
+    /** 沙箱出网开关（.wsb 的 Networking）。info 是可悬停的完整解释，below 是常驻的生效时机—— */
+    /** 「运行中改了就以为坏了」是这一行最大的误读风险，不能只靠 hover 提示说清 */
+    allowNetwork: "Allow network access",
+    allowNetworkInfo:
+      "Off keeps everything in the sandbox off the network — pages can't load, so web automation needs it on; local desktop automation still works.",
+    allowNetworkBelow:
+      "Takes effect the next time the sandbox starts; a running sandbox keeps the setting it started with.",
+    allowNetworkAria: "Sandbox network access",
     // "up to three minutes" mirrors BRIDGE_READY_TIMEOUT_MS in src/main/computer-use/sandbox.ts (180s);
     // change one and the other follows
     sandboxStateInfo:

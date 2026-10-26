@@ -766,6 +766,17 @@ a.exp-pr:hover {
   padding-bottom: 0;
 }
 
+/* 行底的一句常驻说明（SettingRow 的 below 那一格）：跨完两列，紧贴上面一行。
+   用在「改动什么时候生效」这类会被误读的时机上——不能只靠 info 的 hover 说清。
+   负外边距抵消一部分行间距：它是上一行的补句，不该与控件再隔一整格 */
+.cu-hint {
+  grid-column: 1 / -1;
+  margin: calc(-1 * var(--space-2)) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
 /* 「看一眼」的截图框：登录网站面板同一套配方（面板色 + 发丝框 + 大圆角），
    图片按内容面宽度缩放，元信息条压在图下沿 */
 .cu-shot {

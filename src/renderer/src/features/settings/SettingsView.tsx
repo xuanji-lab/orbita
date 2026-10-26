@@ -21,6 +21,8 @@ import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import {
+  allowNetworkEnabled,
+  allowNetworkPatch,
   probeBlocksStart,
   probeVisual,
   sandboxControl,
@@ -156,7 +158,8 @@ export function SettingsView(props: {
         </div>
       ) : props.tab === "computer-use" && computerUse ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          <ComputerUseView />
+          {/* 出网开关读写同一份设置（App 的 changeSettings → api.settings.set），不另开通道 */}
+          <ComputerUseView settings={props.settings} onChange={props.onSettingsChange} />
         </div>
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
@@ -1684,7 +1687,7 @@ function DataDirectoryRow() {
  * 画（shared/computer-use.ts 的契约说明——沙箱不跨应用存活）。五态 → 按钮/图标/
  * 文字的全部换算在 computer-use-view.ts（纯函数层，node --test 直接测）。
  */
-function ComputerUseView() {
+function ComputerUseView(props: { settings: AppSettings; onChange: (patch: SettingsPatch) => void }) {
   const t = useT();
   const [status, setStatus] = useState<SandboxStatus>({ state: "off" });
   /** 在途的那次点击。只压自己那颗按钮：starting 的 60 秒里 stop 必须随时可点（取消启动） */
@@ -1699,6 +1702,8 @@ function ComputerUseView() {
 
   const control = sandboxControl(status.state, pending);
   const visual = statusVisual(status.state, t);
+  /** 出网开关：缺席 = 允许（UI 自己兜缺省，否则新用户看到 Off、沙箱实际在联网） */
+  const allowNetwork = allowNetworkEnabled(props.settings);
   /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
@@ -1743,6 +1748,24 @@ function ComputerUseView() {
             <PanelButton onClick={() => run("stop")} disabled={!control.canStop}>
               <Icon name="square" size={13} /> {t.computerUse.stop}
             </PanelButton>
+          </span>
+        </SettingRow>
+        {/* 生效时机常驻在行底：运行中点了「关」而沙箱还在联网，用户会以为坏了——
+            这件事不能只住在 hover 里 */}
+        <SettingRow
+          name={t.computerUse.allowNetwork}
+          info={t.computerUse.allowNetworkInfo}
+          below={<p className="cu-hint">{t.computerUse.allowNetworkBelow}</p>}
+        >
+          {/* 设计系统里没有 Switch，开关就用两个 Chip（与设置页其它布尔项同一个形状）。
+              按钮不因沙箱状态置灰：改的是下次启动时读的 .wsb，运行中也可以先改好 */}
+          <span className="set-chips" role="group" aria-label={t.computerUse.allowNetworkAria}>
+            <Chip active={allowNetwork} onClick={() => props.onChange(allowNetworkPatch(true))}>
+              {t.common.on}
+            </Chip>
+            <Chip active={!allowNetwork} onClick={() => props.onChange(allowNetworkPatch(false))}>
+              {t.common.off}
+            </Chip>
           </span>
         </SettingRow>
       </SettingGroup>

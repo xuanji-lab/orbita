@@ -4,7 +4,12 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BRIDGE_INFO_FILE, COMPUTER_USE_CMD_DIR, type SandboxStatus } from "../../shared/computer-use.ts";
+import {
+  BRIDGE_INFO_FILE,
+  COMPUTER_USE_CMD_DIR,
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  type SandboxStatus,
+} from "../../shared/computer-use.ts";
 import { parseBridgeInfo, waitForBridgeInfo } from "./bridge-ready.ts";
 import { type SandboxProcessInfo } from "./process-list.ts";
 import {
@@ -348,6 +353,38 @@ describe("renderWsbXml", () => {
     assert.equal(`${appFolder}\\orbita.exe`, COMPUTER_USE_GUEST_APP_EXE);
     assert.match(COMPUTER_USE_GUEST_APP_EXE, /^C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita\.exe$/);
   });
+
+  // ── 出网开关（设置 › 实验功能 › 电脑使用）───────────────────────────
+  //
+  // 官方 .wsb schema 只定义 Networking 的两个值：Disable / Default。Default 是有意放开的
+  // 攻击面（网页自动化需要它），Disable 是给「只让 agent 操作本地桌面」的人收紧用的。
+
+  test("allowNetwork：不传 / true → Default，false → Disable", () => {
+    const base = { bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out" };
+    // 缺省值从 shared 的常量推，不写字面值：三处消费者（渲染层 / effectiveAllowNetwork /
+    // 控制器）与它同源，改默认时这条断言跟着变，行为也就跟着变
+    const expected = COMPUTER_USE_DEFAULT_ALLOW_NETWORK ? "Default" : "Disable";
+    assert.ok(
+      renderWsbXml(base).includes(`<Networking>${expected}</Networking>`),
+      "不传时必须跟 shared 的缺省常量一致（缺省为开：默认关会让网页自动化看起来坏了）",
+    );
+    assert.ok(renderWsbXml({ ...base, allowNetwork: true }).includes("<Networking>Default</Networking>"));
+    assert.ok(renderWsbXml({ ...base, allowNetwork: false }).includes("<Networking>Disable</Networking>"));
+    assert.ok(!renderWsbXml({ ...base, allowNetwork: false }).includes("Default"), "关掉时不能留一个 Default 在文档里");
+  });
+
+  test("出网开关不动元素顺序：Networking 仍在 MemoryInMB 之前，且仍是合法 XML", () => {
+    // 顺序错了 WSB 直接报「配置文件格式错误」——这是最贵的一种错（起不来才说）
+    for (const allowNetwork of [true, false]) {
+      const xml = renderWsbXml({ bridgeDir: "C:\\a\\bin", outputDir: "C:\\b\\out", allowNetwork });
+      const networkAt = xml.indexOf("<Networking>");
+      const memoryAt = xml.indexOf("<MemoryInMB>");
+      const foldersAt = xml.indexOf("<MappedFolders>");
+      assert.ok(networkAt > 0 && memoryAt > networkAt && foldersAt > memoryAt);
+      assert.equal(mappedFolders(xml).length, 2, "开关不该影响映射条数");
+      assertLegalWsb(xml);
+    }
+  });
 });
 
 /** 把 .wsb 里的 MappedFolder 抽成 [{host, sandbox, readOnly}]（顺序即文档顺序） */
@@ -452,6 +489,119 @@ describe("打包产物映射（appDir）", () => {
       assert.ok(!harness.logs.some((line) => line.includes("没有找到打包产物")), "没传就不要碎碎念");
       harness.announceBridge();
       assert.deepEqual(await startPromise, { ok: true });
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// ── 出网开关：控制器在 start() 读一次、写进 .wsb ─────────────────────────
+//
+// renderWsbXml 是纯函数（上面已测）；这里测控制器真的把设置读进来、并且**只在启动时**
+// 读一次——运行中改设置不影响已经在跑的 VM（.wsb 早已交给 WSB）。
+describe("沙箱出网开关（allowNetwork）", () => {
+  const readWsb = async (harness: Harness): Promise<string> => readFile(join(harness.dir, "session.wsb"), "utf8");
+
+  test("不注入 getter（主进程之外的调用方 / 测试默认）= shared 的缺省常量", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      const expected = COMPUTER_USE_DEFAULT_ALLOW_NETWORK ? "Default" : "Disable";
+      assert.ok((await readWsb(harness)).includes(`<Networking>${expected}</Networking>`));
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("getter 返回 false → Disable，启动照常成功（断网不影响沙箱自身起得来）", async () => {
+    const harness = await makeHarness({ allowNetwork: async () => false });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      assert.ok((await readWsb(harness)).includes("<Networking>Disable</Networking>"));
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true }, "关掉出网不该挡住启动路径");
+      assert.equal(harness.controller.status().state, "running");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("每次启动各读一次：改了设置，下一局才生效", async () => {
+    let allow = false;
+    const harness = await makeHarness({ allowNetwork: () => allow });
+    try {
+      const first = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      assert.ok((await readWsb(harness)).includes("<Networking>Disable</Networking>"));
+      harness.announceBridge();
+      assert.deepEqual(await first, { ok: true });
+
+      // 运行中改设置：这一局的 .wsb 不该被重写（没有「自动重启」这回事）
+      allow = true;
+      assert.ok((await readWsb(harness)).includes("<Networking>Disable</Networking>"), "运行中不许改 .wsb");
+
+      await harness.controller.stop();
+      // 「宣布 off 必须有退出证据」：假进程手动发 exit（与其它 stop 用例同一个写法）
+      requireProc(harness).emitExit(0);
+      assert.equal(harness.controller.status().state, "off");
+
+      const second = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[1] ?? null);
+      assert.ok((await readWsb(harness)).includes("<Networking>Default</Networking>"), "下一局读新值");
+      harness.announceBridge();
+      assert.deepEqual(await second, { ok: true });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("读设置抛错：按缺省启动并留日志，不把沙箱挡在门外", async () => {
+    const harness = await makeHarness({
+      allowNetwork: () => {
+        throw new Error("settings.json 读不动");
+      },
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      const expected = COMPUTER_USE_DEFAULT_ALLOW_NETWORK ? "Default" : "Disable";
+      assert.ok((await readWsb(harness)).includes(`<Networking>${expected}</Networking>`));
+      assert.ok(
+        harness.logs.some((line) => line.includes("读出网开关失败")),
+        `日志里应留下原因：\n${harness.logs.join("\n")}`,
+      );
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("getter 悬挂：到了上限就按缺省启动，状态机不会永远停在 starting", async () => {
+    // 读设置在启动路径上、且在 deadline 建立之前：没有上限的话状态机就卡死在 starting，
+    // 而 UI 那边 start 的 promise 也永远不 resolve。上限把它变成「最差 2 秒后照常启动」。
+    const harness = await makeHarness({
+      allowNetwork: () => new Promise<boolean>(() => undefined),
+      allowNetworkTimeoutMs: 30,
+    });
+    try {
+      const startedAt = Date.now();
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawnedWsb[0] ?? null);
+      assert.ok(Date.now() - startedAt < 2_000, "上限 30ms 时不该等满 2 秒");
+      const expected = COMPUTER_USE_DEFAULT_ALLOW_NETWORK ? "Default" : "Disable";
+      assert.ok((await readWsb(harness)).includes(`<Networking>${expected}</Networking>`));
+      assert.ok(
+        harness.logs.some((line) => line.includes("超过 30ms 没有返回")),
+        `日志里应说明是按缺省放行的：\n${harness.logs.join("\n")}`,
+      );
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true }, "悬挂不该把启动卡死");
+      assert.equal(harness.controller.status().state, "running");
     } finally {
       await harness.close();
     }

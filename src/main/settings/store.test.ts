@@ -109,4 +109,39 @@ describe("SettingsStore", () => {
       mode: "skip",
     });
   });
+
+  /**
+   * computerUse 目前只有 allowNetwork 一项，补丁是**整对象回写**（AppSettings 的注释里写明：
+   * 加第二项时必须像 drawer / lastUsed 那样按键合并）。这条测试锁的是「今天这条路径真的能
+   * 往返」——写 false 落盘、读出 false、新实例仍 false、与主题互不干扰、改回 true 落盘 true。
+   * 将来加第二项时如果忘了按键合并，这里会先红。
+   */
+  test("computerUse 往返：写 false → 落盘 → 重建实例仍 false → 改主题不冲掉它 → 改回 true", async () => {
+    assert.deepEqual(await store.write({ computerUse: { allowNetwork: false } }), {
+      theme: DEFAULT_SETTINGS.theme,
+      drawer: DEFAULT_SETTINGS.drawer,
+      computerUse: { allowNetwork: false },
+    });
+    assert.deepEqual((await store.read()).computerUse, { allowNetwork: false });
+
+    // 落盘的是可移植 JSON，用户手改得动（"false" 字符串会被解析层当缺席，不是这里的事）
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.deepEqual(raw["computerUse"], { allowNetwork: false });
+
+    // 另一边换个实例从盘上读：缓存不是唯一真相
+    assert.deepEqual((await new SettingsStore(dir).read()).computerUse, { allowNetwork: false });
+
+    // 与其它键互不干扰：改主题不该把 computerUse 冲掉（整对象 patch 的边界就在这里）
+    await store.write({ theme: "graphite" });
+    const afterTheme = await store.read();
+    assert.equal(afterTheme.theme, "graphite");
+    assert.deepEqual(afterTheme.computerUse, { allowNetwork: false });
+    assert.deepEqual((await new SettingsStore(dir).read()).computerUse, { allowNetwork: false });
+
+    // 改回开：落盘也是 true
+    await store.write({ computerUse: { allowNetwork: true } });
+    assert.deepEqual((await store.read()).computerUse, { allowNetwork: true });
+    const rawAfter = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.deepEqual(rawAfter["computerUse"], { allowNetwork: true });
+  });
 });

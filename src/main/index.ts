@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
+import { effectiveAllowNetwork, effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
@@ -504,6 +504,12 @@ void app.whenReady().then(async () => {
       };
       return Object.assign(child, { kill: killTree });
     },
+    /**
+     * 沙箱出网（设置 › 实验功能 › 电脑使用）。**每次启动读一次**：.wsb 只在 start() 里渲染，
+     * 运行中的 VM 改不了网络，所以这里不做推送、不自动重启（重启会砸掉正在跑的网页自动化）。
+     * 读的是同一个 SettingsStore（有缓存），不新开一套读写。
+     */
+    allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
     // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
     killTreeByPid,
     /**

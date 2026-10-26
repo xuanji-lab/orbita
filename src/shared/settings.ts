@@ -6,6 +6,7 @@
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "./computer-use.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -171,6 +172,44 @@ export function parseIntentSettings(raw: unknown): IntentSettings | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/**
+ * 电脑使用（沙箱）的设置子对象。**只在实验开关 `computer-use` 打开时有界面**；
+ * 解析与缺省见 `parseComputerUse` / `effectiveAllowNetwork`。
+ *
+ * 目前只有一项，所以设置页整块回写（`SettingsPatch.computerUse` 是整对象）。
+ * 将来加第二项时要在 SettingsStore.write 里按键合并（同 drawer / lastUsed），
+ * 否则一次只改一项的补丁会把另一项冲掉。
+ */
+export interface ComputerUseSettings {
+  /**
+   * 沙箱是否允许出网。**缺席 = 允许**：老 settings.json 没这个键，行为与开关做出来之前一模一样
+   * （网页自动化是 computer use 的主场景，默认关会让功能看起来坏了）。
+   * 关掉 = .wsb 的 `<Networking>Disable</Networking>`，沙箱只能做本地桌面自动化。
+   * 改动**下次启动沙箱时才生效**：.wsb 只在 start() 里渲染一次，运行中的 VM 不重启不改配置。
+   */
+  allowNetwork: boolean;
+}
+
+/**
+ * 沙箱出网的生效值：只认布尔，缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_ALLOW_NETWORK`）。
+ * **兜底走 shared 的常量，不写 true**：主进程控制器与渲染层读的是同一个源，
+ * 改默认只改那一处（否则三处各自硬编码，行为今天对、将来会漂）。
+ */
+export function effectiveAllowNetwork(settings: { computerUse?: ComputerUseSettings } | undefined): boolean {
+  return settings?.computerUse?.allowNetwork ?? COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+}
+
+/**
+ * computerUse 子对象的解析：**只认布尔**。
+ * 整段缺席、不是对象、`allowNetwork` 不是布尔（手改出 "false" 字符串 / 0）一律当作没设置——
+ * 「缺席 = 允许」与「坏值 = 允许」是同一个行为，不为坏值落一个假值到盘上。
+ */
+export function parseComputerUse(raw: unknown): ComputerUseSettings | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const value = (raw as { allowNetwork?: unknown }).allowNetwork;
+  return typeof value === "boolean" ? { allowNetwork: value } : undefined;
+}
+
 /** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
 export interface UsagePetPref {
   pinnedDate?: string;
@@ -258,6 +297,8 @@ export interface AppSettings {
   starredModels?: ModelPair[];
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /** 电脑使用（沙箱）的设置。缺席 = 沙箱允许出网（见 ComputerUseSettings）。 */
+  computerUse?: ComputerUseSettings;
   /**
    * 意图系统（实验功能 intent-system）的设置子对象。**只在实验开关打开时生效**；
    * 解析与缺省见 IntentSettings / effectiveIntentSettings。
@@ -484,6 +525,8 @@ export function parseSettings(raw: unknown): AppSettings {
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
+    /** 电脑使用（沙箱）的设置子对象 */
+    computerUse?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
@@ -507,6 +550,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
+  const computerUse = parseComputerUse(record.computerUse);
   const intent = parseIntentSettings(record.intent);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
   return {
@@ -553,6 +597,7 @@ export function parseSettings(raw: unknown): AppSettings {
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
     ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
+    ...(computerUse === undefined ? {} : { computerUse }),
     ...(intent === undefined ? {} : { intent }),
   };
 }

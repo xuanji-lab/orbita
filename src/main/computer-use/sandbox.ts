@@ -22,6 +22,7 @@ import { join } from "node:path";
 import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_CMD_DIR,
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
   computerUseGuestCommands,
@@ -108,6 +109,14 @@ export interface WsbRenderInput {
    * 真机验收步骤在 scripts/sandbox-ui-smoke.mjs 的头部注释里。
    */
   appDir?: string;
+  /**
+   * 沙箱是否允许出网。**缺省 = COMPUTER_USE_DEFAULT_ALLOW_NETWORK**（与开关做出来之前一致）。
+   * false → `<Networking>Disable</Networking>`：沙箱里没有网络，只能做本地桌面自动化。
+   * 只在这里转成 WSB 的两个字面值（官方 schema 只定义 Disable / Default，没有第三个）；
+   * 缺省值本身在 shared/computer-use.ts——渲染层、effectiveAllowNetwork、控制器缺省分支
+   * 都读同一份，改默认只改那里。
+   */
+  allowNetwork?: boolean;
 }
 
 /**
@@ -139,9 +148,17 @@ function escapeXml(value: string): string {
  *    cmd.exe /c 里。（junction + LogonCommand + 桌面落点均已在 Windows 11 25H2 真机验证，2026-10-10。）
  *
  * Networking 用 Default（沙箱能上网）：官方 .wsb 文档只定义 Disable / Default 两个值，
- * Default 即启用。**这是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
+ * Default 即启用。**Default 是有意放开的攻击面**——v1 的 computer use 就是「沙箱里的网页自动化」，
  * 断网等于没有这个功能；代价是沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
- * 别把沙箱当成「防网络的隔离层」。将来考虑加开关（禁出网 = 只做本地桌面自动化）。
+ * 别把沙箱当成「防网络的隔离层」。想收紧的人可以在设置里关掉出网（`allowNetwork: false`
+ * → Disable），那时沙箱只能做本地桌面自动化。
+ *
+ * **为什么是 .wsb 的 Networking 而不是宿主防火墙规则**：这台 VM 的网络由 WSB 自己按 .wsb 配置
+ * 建，禁出网就是 schema 的一个字面值；宿主侧加防火墙规则要提权弹窗、要按 VM 的虚拟网卡认
+ * （每局可能变），还可能在别的沙箱 / 用户自己的 VM 上误伤（仓规：不按镜像名杀，同理不对
+ * 别人的网络下手）。代价是这个开关**只在启动沙箱时生效**：.wsb 只在 start() 里渲染一次，
+ * 运行中的 VM 改不了网络——所以 UI 上写明「下次启动时生效」，不做自动重启（重启会砸掉
+ * 正在跑的网页自动化，且一次 VM 冷启动真机实测可达 105 秒）。
  *
  * MemoryInMB = 4096：v1.5-1 起一个会话一个 Edge（最多 4 个实例）。10/23 真机实测，
  * 沙箱 guest 空载就占 0.9–1.2GB，每个 Edge 约 0.4GB——4 个实例叠加已经超过 2.5GB。
@@ -165,6 +182,9 @@ export function renderWsbXml(input: WsbRenderInput): string {
     appDir === undefined || appDir === ""
       ? ""
       : `\n    <MappedFolder>\n      <HostFolder>${escapeXml(appDir)}</HostFolder>\n      <SandboxFolder>${escapeXml(GUEST_APP_SANDBOX_FOLDER)}</SandboxFolder>\n      <ReadOnly>true</ReadOnly>\n    </MappedFolder>`;
+  // 出网开关直接落在官方 schema 的两个字面值上；元素顺序不动（Networking 在 MemoryInMB 之前，
+  // 顺序错了 WSB 直接报配置文件格式错误）。缺省取 shared 的常量，与控制器 / 设置页同源
+  const networking = (input.allowNetwork ?? COMPUTER_USE_DEFAULT_ALLOW_NETWORK) ? "Default" : "Disable";
   const guestCommand = [
     "cmd.exe /c \"",
     `mklink /J ${COMPUTER_USE_GUEST_BRIDGE_DIR} ${bridgeOnDesktop}`,
@@ -177,7 +197,7 @@ export function renderWsbXml(input: WsbRenderInput): string {
   ].join(" ");
   return `<?xml version="1.0" encoding="utf-8"?>
 <Configuration>
-  <Networking>Default</Networking>
+  <Networking>${networking}</Networking>
   <MemoryInMB>${WSB_MEMORY_IN_MB}</MemoryInMB>
   <MappedFolders>
     <MappedFolder>
@@ -253,6 +273,24 @@ export interface SandboxDeps {
    * 都用不了），但日志里会明说「没找到打包产物」。
    */
   appDir?: string;
+  /**
+   * 沙箱是否允许出网（每次 start() 读一次，写进 .wsb）。缺省 = COMPUTER_USE_DEFAULT_ALLOW_NETWORK
+   * ——测试不注入时走与开关做出来之前完全一致的行为。允许返回 Promise：settings.read() 是异步的，
+   * index.ts 里就是直接接它（SettingsStore 有缓存，命中时几乎零成本）。
+   *
+   * **只在 start() 读一次**：运行中改设置不影响已经在跑的 VM（.wsb 早已交给 WSB），
+   * UI 上写明「下次启动沙箱时生效」。
+   */
+  allowNetwork?: () => boolean | Promise<boolean>;
+  /**
+   * 读 allowNetwork 的上限，缺省 2_000ms。超时按缺省（允许）并留日志。
+   *
+   * 为什么要有顶：这次读取卡在 start() 的启动路径上、且在 `deadline` 建立之前——
+   * getter 悬挂（settings.read() 碰上被锁住的文件、未来换成远程读）会让状态机永远停在
+   * starting 且没有任何兜底计时。一个上限把「starting 一定有 deadline」变成不变式。
+   * 2 秒：读写一次本地 JSON 正常是毫秒级，2 秒已经足够宽容。测试传小值验超时路径。
+   */
+  allowNetworkTimeoutMs?: number;
   /** 默认 process.platform，测试可注入。非 win32 时 start() 直接拒——先报平台，再谈文件 */
   platform?: NodeJS.Platform;
   /** 真 spawn 在 index.ts 接线；测试注入假进程。**测试绝不许传真 spawn**（沙箱窗口是用户可见面） */
@@ -326,6 +364,11 @@ const STOP_ESCALATION_MS = 5_000;
 const STOP_GRACEFUL_MS = 25_000;
 /** 退出确认的轮询节奏：exit 事件是主路径，这个是兜底信号（二者取先到） */
 const EXIT_POLL_INTERVAL_MS = 250;
+/**
+ * 读取出网开关的上限（见 deps.allowNetworkTimeoutMs 的理由）。
+ * 2 秒：读一次本地 settings.json 正常是毫秒级，2 秒已足够宽容，超了就是真出事了。
+ */
+const ALLOW_NETWORK_READ_TIMEOUT_MS = 2_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -429,7 +472,12 @@ export class SandboxController {
       }
       await writeTextAtomic(
         wsbPath,
-        renderWsbXml({ bridgeDir: this.deps.bridgeDir, outputDir, ...(appMapped ? { appDir } : {}) }),
+        renderWsbXml({
+          bridgeDir: this.deps.bridgeDir,
+          outputDir,
+          ...(appMapped ? { appDir } : {}),
+          allowNetwork: await this.allowNetwork(),
+        }),
       );
       if (appMapped) this.log(`打包产物已只读映射进沙箱：${appDir} → ${COMPUTER_USE_GUEST_APP_EXE}`);
 
@@ -750,6 +798,40 @@ export class SandboxController {
   }
 
   // ── 内部 ──
+
+  /**
+   * 这一局要不要出网。没注入 / 读失败 / 读超时都按缺省（COMPUTER_USE_DEFAULT_ALLOW_NETWORK，
+   * 即允许）——读不动设置不该让沙箱起不来，默认方向是功能可用。
+   *
+   * 上限见 deps.allowNetworkTimeoutMs：这里是启动路径，不能无上限地等。
+   */
+  private async allowNetwork(): Promise<boolean> {
+    const read = this.deps.allowNetwork;
+    if (read === undefined) return COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+    const timeoutMs = this.deps.allowNetworkTimeoutMs ?? ALLOW_NETWORK_READ_TIMEOUT_MS;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      // race 会给两个输入都挂上处理回调：超时之后 getter 才 reject 也不会变成 unhandledRejection
+      const outcome = await Promise.race([
+        Promise.resolve(read()),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        }),
+      ]);
+      if (outcome === "timeout") {
+        this.log(`读出网开关超过 ${timeoutMs}ms 没有返回，本次按缺省启动（允许出网）`);
+        return COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+      }
+      return outcome ?? COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+    } catch (cause: unknown) {
+      this.log(
+        `读出网开关失败（${cause instanceof Error ? cause.message : String(cause)}），本次按缺省启动（允许出网）`,
+      );
+      return COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
 
   /** 读写映射的宿主侧输出目录（桥的 bridge.json 与 cmd/ 都在它下面） */
   private outDir(): string {

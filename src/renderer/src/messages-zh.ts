@@ -348,6 +348,13 @@ export const zh: Messages = {
     probeFailed: "检测没跑成",
     sandboxGroup: "沙箱",
     sandboxState: "状态",
+    // info 是可悬停的完整解释，below 是常驻的生效时机：运行中点了「关」而沙箱还在联网，
+    // 用户会以为坏了——这件事必须看得见，不能只靠 hover
+    allowNetwork: "允许沙箱出网",
+    allowNetworkInfo:
+      "关掉后沙箱里的进程不能上网，网页打不开，所以网页自动化需要开着；只操作本地桌面 / 文件时可以关。",
+    allowNetworkBelow: "改动在下次启动沙箱时生效；正在运行的沙箱仍按启动时的设置。",
+    allowNetworkAria: "沙箱网络访问",
     // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；
     // 改那边就要改这里（冷启动实测可达 105s+，首次还要制备基础镜像）
     sandboxStateInfo:
