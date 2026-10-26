@@ -3,14 +3,17 @@
  * SettingsView.tsx 顶部 `import "./settings-view.css"`（照 providers-view.css 的先例）。
  */
 
-/* ===== 分组标题（General 的 Section 与 Migration 的段落共用）=====
- * 与侧栏节点标题同一个处理：UI 字（Manrope）、sm、semibold、secondary，句首大写照原文。
- * 设计系统 *Content fundamentals › Group labels*。 */
+/* ===== 设置分组标题（General 的分组、模型服务卡片墙的分区、详情页的「模型」）=====
+ * lg（16px）、semibold、主文字色。2026-10-24 用户：分组标题「文字太小了，不清楚……都加大加粗
+ * 字号，像 Proma 一样」（Proma 的 SECTION_TITLE_CLASS 是 text-base font-semibold text-foreground）。
+ * 原来是侧栏节点标题那一档（sm、secondary），在设置页里压不住下面 base 字号的卡片名与行名——
+ * 标题比它统领的内容还小。设计系统 *Content fundamentals › Group labels* 同步改了这一条。 */
 .section-label {
   font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-lg);
   font-weight: var(--weight-semibold);
-  color: var(--color-text-secondary);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
 }
 
 /* ===== General 页的行与分组（SettingsView.tsx 的 SettingGroup / SettingRow）=====
@@ -29,7 +32,7 @@
 }
 
 .set-group > .section-label {
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 
 .set-row {

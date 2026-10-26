@@ -106,6 +106,11 @@ export interface SessionEntry {
     hasMore: boolean;
     /** 更早的一页在途：顶部指示 + 防重（快速连续触顶只发一次） */
     loading: boolean;
+    /**
+     * 窗口之前还有几条压缩界碑（主进程数的，见 `SessionWindow.compactionsBefore`）。
+     * 拉进更早一页时，那页里的界碑从这里挪进 `compactions`——两者之和恒为会话的压缩次数。
+     */
+    compactionsBefore: number;
   };
   /**
    * 压缩界碑单独记账，**不进 pi 的归约器**——它不是消息，归约器不认识。
@@ -157,8 +162,10 @@ export interface SessionEntry {
   /**
    * 思考档真值（clamp 后的事实 + 模型支持集）。null = 还没开过轮——芯片显示
    * meta 里的意图档，下一轮并跑时 runtime 的第一次推送会填上真值。ephemeral，不落盘。
+   * providerId / modelId 是报这组真值的型号：切型号后它就过期了，**读一律走
+   * observedThinkingFor**，不直接拿 supported（切型号不清这里，按型号判过期）。
    */
-  thinking: { level: PiThinkingLevel; supported: readonly PiThinkingLevel[] } | null;
+  thinking: ObservedThinking | null;
   approvals: PendingApproval[];
   /**
    * 轮尾文件账（revert.ts，与 marks 同一条纪律）：不进归约器，卡片层直接消费；
@@ -186,6 +193,36 @@ export interface SessionEntry {
   pendingEcho: { blocks: readonly string[] } | null;
 }
 
+/** 一份运行时报回的思考档真值，连同报它的型号 */
+export interface ObservedThinking {
+  providerId: string;
+  modelId: string;
+  level: PiThinkingLevel;
+  supported: readonly PiThinkingLevel[];
+}
+
+/**
+ * 当前型号可用的「运行时报回的支持集」：真值是别的型号报的（会话里切过型号、
+ * 还没用新型号开过轮）就当没有，返回 null 让调用方回落白名单 / 目录。
+ * 服务商也要对上——同一个型号 id 在两家的支持集可以不同（Kimi Coding 的 k3 三档、
+ * OpenCode Go 的 kimi-k3 只开 max）。
+ */
+export function observedThinkingFor(
+  observed: ObservedThinking | null,
+  model: { providerId: string; modelId: string } | null,
+): readonly PiThinkingLevel[] | null {
+  if (observed === null || !sameModel(observed, model)) return null;
+  return observed.supported;
+}
+
+/** 两个型号引用是不是同一个（服务商 + 型号 id 都要对上）；任一侧为 null 不算 */
+export function sameModel(
+  a: { providerId: string; modelId: string } | null,
+  b: { providerId: string; modelId: string } | null,
+): boolean {
+  return a !== null && b !== null && a.providerId === b.providerId && a.modelId === b.modelId;
+}
+
 /** 全部会话的槽。**不可变**：每个事件产出新 Map，没变的槽保持同一引用。 */
 export type SessionStates = ReadonlyMap<string, SessionEntry>;
 
@@ -196,7 +233,7 @@ export function createSessionStates(): SessionStates {
 /** 空槽是常量：首页/无选中时用它兜底，避免每次渲染新建 TranscriptState。 */
 export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
-  window: { firstId: null, hasMore: false, loading: false },
+  window: { firstId: null, hasMore: false, loading: false, compactionsBefore: 0 },
   compactions: [],
   marks: [],
   phase: "idle",
@@ -289,7 +326,12 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   if (event.type === "thinking") {
     return update(states, event.sessionId, (entry) => ({
       ...entry,
-      thinking: { level: event.level, supported: event.supported },
+      thinking: {
+        providerId: event.providerId,
+        modelId: event.modelId,
+        level: event.level,
+        supported: event.supported,
+      },
     }));
   }
   if (event.type === "permission") {
@@ -464,7 +506,7 @@ export function seedFromDisk(
   sessionId: string,
   transcript: readonly SessionRecord[],
   stats: AgentStats | null = null,
-  page?: { hasMore: boolean },
+  page?: { hasMore: boolean; compactionsBefore: number },
 ): SessionStates {
   // 界碑与通道标记都不进 pi 的归约器（它们不是模型消息，归约器不认识）——分开记账，
   // 显示时由 mergeSideRecords 按时间插回往来流；实时与历史从是同一条显示路径。
@@ -478,6 +520,7 @@ export function seedFromDisk(
       firstId: transcript[0]?.id ?? null,
       hasMore: page?.hasMore ?? false,
       loading: false,
+      compactionsBefore: page?.compactionsBefore ?? 0,
     },
     compactions,
     marks,
@@ -581,8 +624,18 @@ export function prependOlder(
       firstId: fresh[0]?.id ?? entry.window.firstId,
       hasMore: page.hasMore,
       loading: false,
+      // 这页里的界碑已经进了 compactions：从「窗口之前」的数里挪走，总数不变
+      compactionsBefore: Math.max(0, entry.window.compactionsBefore - older.compactions.length),
     },
   });
+}
+
+/**
+ * 会话一共压缩过几次 = 已加载窗口里的界碑 + 窗口之前的界碑。
+ * 回退折叠在主进程做完了，这里数到的就是当前生效视图的口径。
+ */
+export function compactionCount(entry: Pick<SessionEntry, "compactions" | "window">): number {
+  return entry.compactions.length + entry.window.compactionsBefore;
 }
 
 /**

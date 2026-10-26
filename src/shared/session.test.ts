@@ -112,6 +112,22 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: "yesterday" })?.computerUseGrantedAt, null);
   });
 
+  it("收尾记录与在做的遗留事项：好的留下，坏条目逐条丢，空了就缺席", () => {
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const item = { title: "修登录", turns: [1, 2], providerId: "p", modelId: "m", level: "high", tokens: zero, recordedCost: 0.1, unpricedTokens: zero };
+    const good = { id: "w1", at: 1, throughTurn: 2, items: [item] };
+    const parsed = parseSessionMeta({
+      ...valid,
+      wrapups: [good, { ...good, id: "w2", items: [{ ...item, turns: [3, 1] }] }, { id: "w3" }],
+      resumedCarryovers: ["c1", "c1", 7, ""],
+    });
+    deepStrictEqual(parsed?.wrapups, [good]);
+    deepStrictEqual(parsed?.resumedCarryovers, ["c1"]);
+    const empty = parseSessionMeta({ ...valid, wrapups: [{ id: "bad" }], resumedCarryovers: [] });
+    strictEqual(empty !== null && "wrapups" in empty, false);
+    strictEqual(empty !== null && "resumedCarryovers" in empty, false);
+  });
+
   // 少一条会话，比多一条指向空白的假会话好
   it("缺关键字段返回 null，让调用方跳过这条", () => {
     for (const key of ["id", "cwd", "providerId", "modelId", "createdAt"]) {
