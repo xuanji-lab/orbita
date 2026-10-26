@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PermissionAnswer } from "@shared/permission";
 import { Icon } from "../../shell/Icon";
+import { approvalCardShape } from "./approval-card.ts";
 import type { PendingApproval } from "./session-states.ts";
 import { useT } from "../../locale.ts";
 
@@ -37,8 +38,9 @@ export function ApprovalBar(props: {
    *   - risk：破坏性动作确认（D1 组合键 / D2 破坏词 / D3 同点连点）——保留入参预览，
    *     「仍要执行」= 用户看过之后照常执行
    *   - 其余：普通逐次审批（manual 档）
+   * 形态判定在 approval-card.ts（纯函数，带测试）——会话卡优先，且不摆「改参数」。
    */
-  const scope = props.approval.scope ?? "call";
+  const shape = approvalCardShape(props.approval);
   const risk = props.approval.risk;
   const riskText =
     risk === undefined
@@ -80,7 +82,7 @@ export function ApprovalBar(props: {
           <Icon name="shield-check" size={14} />
         </span>
         <strong style={{ fontSize: "var(--font-size-base)", fontWeight: 600 }}>
-          {scope === "session"
+          {shape.kind === "session"
             ? t.approval.sessionTitle
             : riskText !== null
               ? t.approval.riskTitle
@@ -98,7 +100,7 @@ export function ApprovalBar(props: {
         </span>
       </div>
 
-      {scope === "session" && (
+      {shape.kind === "session" && (
         <p style={{ margin: 0, fontSize: "var(--font-size-sm)", lineHeight: "var(--line-height-ui)", color: "var(--color-text-secondary)" }}>
           {t.approval.sessionBody}
         </p>
@@ -131,18 +133,18 @@ export function ApprovalBar(props: {
 
       <div style={{ display: "flex", gap: "var(--space-2)" }}>
         <button ref={allowRef} type="button" onClick={allow} style={{ ...buttonStyle, ...primaryStyle }}>
-          {scope === "session" ? t.approval.allowSession : risk !== undefined ? t.approval.allowRisk : t.approval.allow}
+          {shape.kind === "session" ? t.approval.allowSession : shape.kind === "risk" ? t.approval.allowRisk : t.approval.allow}
         </button>
         <button
           type="button"
           onClick={() => answer({ behavior: "deny", message: "Denied by the user." })}
           style={buttonStyle}
         >
-          {risk !== undefined && scope !== "session" ? t.approval.cancelRisk : t.approval.deny}
+          {shape.kind === "risk" ? t.approval.cancelRisk : t.approval.deny}
         </button>
         {/* 会话授权卡不提供「改参数」：允许的是整条会话，改这一步的入参没有意义
-            （闸门也不会采纳这张卡上的编辑） */}
-        {scope !== "session" && (
+            （闸门也不会采纳这张卡上的编辑）。判定在 approval-card.ts 的 canEditArgs。 */}
+        {shape.canEditArgs && (
           <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
             {editing ? t.approval.stopEditing : t.approval.editInput}
           </button>

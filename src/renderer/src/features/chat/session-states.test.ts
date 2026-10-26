@@ -208,6 +208,36 @@ describe("applyAgentEvent —— 每会话一槽", () => {
   });
 
   /**
+   * 卡面靠这两个可选字段分型（见 approval-card.ts）：会话授权卡 vs 逐次审批 / 破坏性确认。
+   * **归约器不许顺手丢掉它们**——丢了就会话卡退化成逐次卡，而它实际放行整条会话。
+   */
+  test("scope 与 risk 原样进 PendingApproval（缺席时不假造键）", () => {
+    const sessionAsk: Extract<AgentEvent, { type: "permission" }> = {
+      type: "permission",
+      sessionId: "A",
+      requestId: "A:tc1",
+      toolName: "bash",
+      input: { command: "ls src" },
+      scope: "session",
+      risk: { level: "confirm", rule: "command", detail: "format", message: "destructive" },
+    };
+    let states = applyAgentEvent(new Map(), sessionAsk);
+    assert.deepEqual(states.get("A")?.approvals[0], {
+      requestId: "A:tc1",
+      toolName: "bash",
+      input: { command: "ls src" },
+      scope: "session",
+      risk: { level: "confirm", rule: "command", detail: "format", message: "destructive" },
+    });
+
+    states = applyAgentEvent(states, permission("A", "A:tc2"));
+    const plain = states.get("A")?.approvals[1];
+    assert.deepEqual(plain, { requestId: "A:tc2", toolName: "bash", input: { command: "ls src" } });
+    assert.equal("scope" in (plain ?? {}), false);
+    assert.equal("risk" in (plain ?? {}), false);
+  });
+
+  /**
    * 审批不听 abort（pi 是 await beforeToolCall 之后才查 signal），所以停止 / 抢跑时
    * runtime 会把挂起的审批按拒绝结清。卡片必须跟着消失，否则用户会去回答一个
    * runtime 那边已经不存在的请求（点了没任何事发生）。

@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import { permissionEvent, type PermissionEvent } from "./permission-event.ts";
 import {
   registerAndResolveModel,
   toBuiltinProvider,
@@ -809,17 +810,15 @@ const EXPECTED_SECONDS_GUIDELINE =
  * 否则那一轮永远不会收尾（interrupt 还会卡在 `await lifecycle` 上）。
  */
 function askPermission(sessionId: string) {
-  return (request: { toolCallId: string; toolName: string; input: unknown }) =>
+  // 入参就是闸门（src/agent/permission.ts）传来的那份：scope / risk 缺席 = 普通逐次审批。
+  // 类型直接取契约里那条事件，少抄一份字段定义，也让契约加字段时这里编译不过。
+  return (request: { toolCallId: string } & Omit<PermissionEvent, "type" | "sessionId" | "requestId">) =>
     new Promise<PermissionAnswer>((resolve) => {
       const requestId = `${sessionId}:${request.toolCallId}`;
       pendingPermissions.set(requestId, resolve);
-      send({
-        type: "permission",
-        sessionId,
-        requestId,
-        toolName: request.toolName,
-        input: request.input,
-      });
+      // 拼事件走 permissionEvent：scope / risk 从这里到 renderer 一路都不能丢
+      // （丢了 session 卡会退化成逐次卡，而它实际放行整条会话）
+      send(permissionEvent({ sessionId, requestId, toolName: request.toolName, input: request.input, scope: request.scope, risk: request.risk }));
     });
 }
 
