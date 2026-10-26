@@ -82,12 +82,15 @@ describe("分类循环与格式", () => {
   });
 
   test("成本与分数", () => {
-    assert.equal(formatCost(29.16), "$29");
-    assert.equal(formatCost(2.233), "$2.23");
-    assert.equal(formatCost(0.7585), "$0.76");
-    assert.equal(formatCost(0.03123), "$0.031");
+    assert.equal(formatCost(29.16, "$"), "$29");
+    assert.equal(formatCost(2.233, "$"), "$2.23");
+    assert.equal(formatCost(0.7585, "$"), "$0.76");
+    assert.equal(formatCost(0.03123, "$"), "$0.031");
+    // 显示币种由调用方给：图在入口处整体换算成人民币，这里只拼前缀
+    assert.equal(formatCost(6.718, "¥"), "¥6.72");
     assert.equal(formatScore(1480.74, "rating"), "1481");
-    assert.deepEqual([0.05, 0.1, 1, 20].map(formatCostTick), ["$0.05", "$0.1", "$1", "$20"]);
+    assert.deepEqual([0.05, 0.1, 1, 20].map((v) => formatCostTick(v, "$")), ["$0.05", "$0.1", "$1", "$20"]);
+    assert.deepEqual([0.5, 2, 50].map((v) => formatCostTick(v, "¥")), ["¥0.5", "¥2", "¥50"]);
     assert.equal(formatScore(0.0157, "net-improvement"), "+1.6%");
     assert.equal(formatScore(-0.0177, "net-improvement"), "−1.8%");
   });

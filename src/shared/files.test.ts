@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { contentHash, fileRootLabel, isWebArtifactFile, isWebPageFile, sortFileEntries, type FileEntry } from "./files.ts";
+import { contentHash, fileRootLabel, isWebArtifactFile, isWebPageFile, PREVIEW_TEXT_LIMIT, sortFileEntries, type FileEntry } from "./files.ts";
 
 const entry = (name: string, kind: FileEntry["kind"]): FileEntry => ({ name, kind, modifiedAt: 0 });
 
@@ -72,5 +72,11 @@ describe("contentHash（编辑器写盘的冲突判定指纹）", () => {
     strictEqual(contentHash("").length, 16);
     strictEqual(contentHash(" a") === contentHash("a"), false);
     strictEqual(contentHash("section") === contentHash("\\section"), false);
+  });
+});
+
+describe("PREVIEW_TEXT_LIMIT", () => {
+  it("16 MB：窗口化之后它只保护整份文本进 JS 堆 / 一次 IPC，不再是渲染上限", () => {
+    strictEqual(PREVIEW_TEXT_LIMIT, 16 * 1024 * 1024);
   });
 });

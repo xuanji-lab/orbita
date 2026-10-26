@@ -294,7 +294,7 @@ export function urlSuffix(api: ProviderApi): string {
 
 /**
  * 卡片底行的预填地址：去掉协议头与尾斜杠，**保留路径**。同一主机上常挂着几条不同的接入
- * （火山方舟的 /api/v3 与 /api/plan、智谱的 /api/paas/v4 与 /api/anthropic），只写主机
+ * （智谱的 /api/paas/v4、/api/coding/paas/v4 与 /api/anthropic），只写主机
  * 的话几张卡底行一模一样，看不出区别。不是合法 URL 的原样返回。
  */
 export function cardAddress(url: string): string {
