@@ -74,6 +74,9 @@ const MARK_MONTHS = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug
 const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
+/** 计数的写法：千分位，与 Excel 的行号习惯一致（20000 → 20,000） */
+const grouped = (count: number): string => count.toLocaleString("en-US");
+
 export const en = {
   /** 花费的显示币种（utils/money.ts）：数据一律美元，英文界面原样显示 */
   currency: { symbol: "$", perUsd: 1 },
@@ -1844,6 +1847,47 @@ export const en = {
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
+    /* ---------- .xlsx 只读预览（xlsx.ts 契约） ---------- */
+    xlsxSheets: "Sheets",
+    /** 裁剪提示：整表多大、面板给了多少 */
+    xlsxTruncated: (rows: number, cols: number, totalRows: number, totalCols: number) =>
+      `Showing ${grouped(rows)} rows × ${grouped(cols)} columns of ${grouped(totalRows)} × ${grouped(totalCols)}`,
+    /** 冻结窗格提示：原文件冻了，预览不冻 */
+    xlsxFrozen: (rows: number, cols: number) =>
+      `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
+    xlsxEmpty: "This sheet is empty",
+    xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
+    xlsxBroken: "Couldn't read this workbook — it may be damaged.",
+    xlsxHiddenOnly: "Every sheet in this workbook is hidden. Right-click a sheet tab in Excel to unhide one.",
+    xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
+    /* ---------- .pptx 只读大纲（pptx.ts 契约） ---------- */
+    pptxSlides: "Slides",
+    pptxOutline: "Outline",
+    /** 页列表的坐标：页码 + 版式名（版式读不到时只留页码） */
+    pptxSlideLabel: (number: number, layout: string) =>
+      layout === "" ? `Slide ${number}` : `Slide ${number} · ${layout}`,
+    pptxUntitled: "Untitled",
+    pptxTables: "Tables",
+    pptxNotes: "Notes",
+    pptxEmptySlide: "No text on this slide",
+    pptxPictures: (count: number) =>
+      `${plural(count, "image")} on this slide — open it with the default app to see`,
+    pptxTextTruncated: (limit: number) => `Text on this slide is cut at ${grouped(limit)} characters`,
+    pptxDeckTruncated: (shown: number, total: number) =>
+      `Parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    /** 解析成本预算超限：后面的页没有解析（内容量太大，不是文件体积；文件体积有 tooLarge） */
+    pptxBudgetLimited: (shown: number, total: number) =>
+      shown === 0
+        ? "This presentation has more content than the outline can parse — open it with the default app."
+        : `More content than the outline can parse — parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    pptxHidden: "Hidden",
+    pptxReadOnly: "Read-only",
+    pptxEmpty: "This presentation has no slides",
+    pptxPassword: "This presentation is password-protected, or it isn't a real .pptx file.",
+    pptxBroken: "Couldn't read this presentation — it may be damaged.",
+    pptxTimeout: "This presentation takes too long to outline — open it with the default app.",
+    pptxComplex: "This presentation is too complex to outline — open it with the default app.",
+    pptUnsupported: "Old .ppt presentations can't be previewed — open it with the default app.",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
   },

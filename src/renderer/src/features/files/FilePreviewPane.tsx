@@ -10,8 +10,12 @@ import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
 import { WindowedText } from "./WindowedText";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FilePreview } from "@shared/files";
+import { isLegacyXlsFile, isXlsxFile } from "@shared/xlsx";
+import { isLegacyPptFile, isPptxFile } from "@shared/pptx";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { XlsxView } from "../xlsx/XlsxView";
+import { PptxView } from "../pptx/PptxView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
@@ -54,6 +58,14 @@ export function FilePreviewPane(props: {
   const pdfCitations = useExperimentalFeature("pdf-citations");
   const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // .xlsx 走自己的结构化预览（只读 + 外部打开）；旧版 .xls 靠 EmptyPreview 明说不支持
+  const xlsx = sentImage === undefined && isXlsxFile(path);
+  const legacyXls = sentImage === undefined && isLegacyXlsFile(path);
+  const [xlsxReload, setXlsxReload] = useState(0);
+  // .pptx 走只读大纲（页序 / 标题 / 要点 / 表格 / 备注，不渲染）；旧版 .ppt 明说不支持
+  const pptx = sentImage === undefined && isPptxFile(path);
+  const legacyPpt = sentImage === undefined && isLegacyPptFile(path);
+  const [pptxReload, setPptxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -183,6 +195,8 @@ export function FilePreviewPane(props: {
               onClick={() => {
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
+                if (xlsx) setXlsxReload((n) => n + 1);
+                if (pptx) setPptxReload((n) => n + 1);
               }}
             >
               <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
@@ -200,13 +214,37 @@ export function FilePreviewPane(props: {
           </Chip>
         </div>
       )}
-      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined} ref={bodyRef}>
+      <div
+        className="file-preview-body"
+        data-kind={pdf ? "pdf" : xlsx ? "xlsx" : pptx ? "pptx" : undefined}
+        ref={bodyRef}
+      >
         {pdf ? (
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
             reloadToken={pdfReload}
           />
+        ) : xlsx ? (
+          <XlsxView
+            // 换文件按路径重挂载：表号回到第一张，也不会拿旧表号先发一次多余请求
+            key={path}
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={xlsxReload}
+            onOpenDefault={openDefault}
+          />
+        ) : pptx ? (
+          <PptxView
+            // 与 XlsxView 同一条纪律：换文件按路径重挂载，页号回到第 1 页
+            key={path}
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={pptxReload}
+            onOpenDefault={openDefault}
+          />
+        ) : legacyPpt ? (
+          <LegacyPptPreview onOpenDefault={openDefault} />
+        ) : legacyXls ? (
+          <LegacyXlsPreview onOpenDefault={openDefault} />
         ) : sentImage === undefined ? (
           <PreviewBody
             name={name}
@@ -515,6 +553,43 @@ function HighlightedCode(props: { name: string; text: string }) {
   return (
     <div className="chat-md">
       <div dangerouslySetInnerHTML={markup} />
+    </div>
+  );
+}
+
+/**
+ * 旧版二进制工作簿（.xls）：fs:read 只给「二进制」，但一句「没法预览」不够——说清
+ * 是这个格式不支持（.xls 是 OLE2 复合文档，ExcelJS 与预览通道都不读它），并给
+ * 「用默认应用打开」这个出口。
+ */
+function LegacyXlsPreview(props: { onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-empty">
+      <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+      <PanelLine>{t.files.xlsUnsupported}</PanelLine>
+      <PanelButton onClick={props.onOpenDefault}>
+        <Icon name="external-link" size={14} />
+        {t.files.openDefault}
+      </PanelButton>
+    </div>
+  );
+}
+
+/**
+ * 旧版二进制演示文稿（.ppt）：与 .xls 同理——说清是这个格式不支持（.ppt 是 OLE2
+ * 复合文档，不是 zip + OOXML，大纲通道读不了），并给「用默认应用打开」这个出口。
+ */
+function LegacyPptPreview(props: { onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-empty">
+      <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+      <PanelLine>{t.files.pptUnsupported}</PanelLine>
+      <PanelButton onClick={props.onOpenDefault}>
+        <Icon name="external-link" size={14} />
+        {t.files.openDefault}
+      </PanelButton>
     </div>
   );
 }

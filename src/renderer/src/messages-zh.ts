@@ -2,6 +2,9 @@ import type { Messages } from "./messages-en.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 
+/** 计数的写法：千分位（与英文表同一种写法，20000 → 20,000） */
+const grouped = (count: number): string => count.toLocaleString("en-US");
+
 const THINKING_ZH: Record<ThinkingLevel, string> = {
   off: "关",
   minimal: "极低",
@@ -1700,6 +1703,41 @@ export const zh: Messages = {
     pdfPassword: "这个 PDF 有密码保护，没法预览。",
     citeNotFound: (page) => `第 ${page} 页上已经找不到被引的那段了。文件可能在引用之后改过。`,
     citeOutside: (name) => `${name} 不在这条任务能看到的文件夹里，这里打不开。`,
+    /* ---------- .xlsx 只读预览（契约见 shared/xlsx.ts） ---------- */
+    xlsxSheets: "工作表",
+    xlsxTruncated: (rows, cols, totalRows, totalCols) =>
+      `只显示前 ${grouped(rows)} 行 × ${grouped(cols)} 列，整表共 ${grouped(totalRows)} 行 × ${grouped(totalCols)} 列`,
+    xlsxFrozen: (rows, cols) =>
+      `原文件冻结了${rows > 0 ? `前 ${rows} 行` : ""}${rows > 0 && cols > 0 ? "、" : ""}${cols > 0 ? `前 ${cols} 列` : ""}；这里的预览可以自由滚动`,
+    xlsxEmpty: "这张表是空的",
+    xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
+    xlsxBroken: "这个工作簿读不开——可能已经损坏。",
+    xlsxHiddenOnly: "这个工作簿的表全部被隐藏了。在 Excel 里右键工作表标签可以取消隐藏。",
+    xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
+    /* ---------- .pptx 只读大纲（契约见 shared/pptx.ts） ---------- */
+    pptxSlides: "幻灯片",
+    pptxOutline: "大纲",
+    pptxSlideLabel: (number, layout) =>
+      layout === "" ? `第 ${number} 页` : `第 ${number} 页 · ${layout}`,
+    pptxUntitled: "无标题",
+    pptxTables: "表格",
+    pptxNotes: "备注",
+    pptxEmptySlide: "这一页没有文字",
+    pptxPictures: (count) => `这一页有 ${count} 张图片，用默认应用打开看`,
+    pptxTextTruncated: (limit) => `这一页的文字被截断在 ${grouped(limit)} 字`,
+    pptxDeckTruncated: (shown, total) => `只解析了前 ${grouped(shown)} 页，共 ${grouped(total)} 页`,
+    pptxBudgetLimited: (shown, total) =>
+      shown === 0
+        ? "这份演示文稿的内容超出了大纲的解析上限，用默认应用打开。"
+        : `内容超出解析上限，只解析了前 ${grouped(shown)} 页（共 ${grouped(total)} 页）`,
+    pptxHidden: "隐藏",
+    pptxReadOnly: "只读",
+    pptxEmpty: "这份演示文稿没有幻灯片",
+    pptxPassword: "这份演示文稿有密码保护，或者不是真正的 .pptx 文件。",
+    pptxBroken: "这份演示文稿读不开——可能已经损坏。",
+    pptxTimeout: "这份演示文稿解析超时，用默认应用打开。",
+    pptxComplex: "这份演示文稿太复杂，大纲读不了，用默认应用打开。",
+    pptUnsupported: "旧版 .ppt 演示文稿看不了预览，用默认应用打开。",
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name) => `${name} 不在这个面板能看到的文件夹里，这里打不开。`,
   },

@@ -67,6 +67,15 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "PPTX 工具行：用默认应用打开钉在右血线",
+    row: ".pptx-toolbar",
+    leading: ".pptx-toolbar-title",
+    trailing: ".pptx-toolbar-actions",
+    // .pptx-toolbar 的横向内边距 var(--space-3)；没有打开 pptx 时跳过
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
+  {
     name: "Skills·行：归属点阵钉在右血线",
     row: ".skill-row",
     leading: ".skill-row-main",

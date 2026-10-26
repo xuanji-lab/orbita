@@ -14,11 +14,15 @@ import {
   type FileRootsRequest,
   type FsEntryFact,
 } from "../../shared/files.ts";
+import { isXlsxFile, type XlsxPreview, type XlsxReadRequest } from "../../shared/xlsx.ts";
+import { isPptxFile, type PptxPreview, type PptxReadRequest } from "../../shared/pptx.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { readPdfFile, readPreview } from "./read.ts";
+import { readXlsxInWorker } from "../xlsx/service.ts";
+import { readPptxInWorker } from "../pptx/service.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -75,6 +79,33 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
     return readPdfFile(path);
+  });
+
+  /**
+   * 读一份 .xlsx 的结构化预览（同白名单，外加只认 .xlsx）。**解析在 worker 线程里**：
+   * 大工作簿的解压 + 建模型有一段秒级的同步计算，主进程直接读会把窗口卡住（见
+   * main/xlsx/service.ts 顶注释）。扩展名判定同样用 realpath 之后的路径。
+   */
+  ipcMain.handle(ipcChannels.fsReadXlsx, async (_event, req: XlsxReadRequest): Promise<XlsxPreview> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isXlsxFile(path)) throw new Error(`Not an .xlsx file: ${path}`);
+    return readXlsxInWorker(path, req.sheet ?? 0);
+  });
+
+  /**
+   * 读一份 .pptx 的只读大纲（同白名单，外加只认 .pptx）。扩展名判定同样用 realpath
+   * 之后的路径——改名成 foo.pptx 的软链接指向别的文件一样被拒。
+   *
+   * **解析在一次性 worker 线程里**（含堆上限与总超时，见 main/pptx/service.ts 顶注释）：
+   * 解压成本由文件内容决定，0.9 MB 的构造包能解出几百 MB XML，留在主进程就是
+   * 卡顿 / OOM。
+   */
+  ipcMain.handle(ipcChannels.fsReadPptx, async (_event, req: PptxReadRequest): Promise<PptxPreview> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isPptxFile(path)) throw new Error(`Not a .pptx file: ${path}`);
+    return readPptxInWorker(path);
   });
 
   /**
