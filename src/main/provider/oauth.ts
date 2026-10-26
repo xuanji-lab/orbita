@@ -273,6 +273,8 @@ export interface LoginPorts {
   fetchImpl?: FetchLike;
   /** 用户在浏览器里逗留的上限；到点未回调就放弃（默认 10 分钟） */
   timeoutMs?: number;
+  /** 用户在设置页点了取消：不再等回调，关掉回调服务器 */
+  signal?: AbortSignal;
 }
 
 /** 完整登录：PKCE → 回调服务器 → 浏览器授权 → 换令牌 → 问账号邮箱。 */
@@ -289,7 +291,12 @@ export async function runClaudeLogin(ports: LoginPorts): Promise<OauthCredential
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), timeout);
       }),
+      new Promise<null>((resolve) => {
+        if (ports.signal?.aborted === true) resolve(null);
+        ports.signal?.addEventListener("abort", () => resolve(null), { once: true });
+      }),
     ]);
+    if (ports.signal?.aborted === true) throw new Error("登录已取消");
     if (result === null) throw new Error("登录没有在时限内完成（浏览器授权后需要回到本机回调）");
     const credential = await exchangeCodeForCredential(
       { code: result.code, verifier, state: result.state, redirectUri: server.redirectUri },

@@ -8,7 +8,6 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parseSessionUnread,
   transcriptToMarkdown,
-  type CarryoverDraft,
   type CarryoverStatus,
   type SessionCompletion,
   type SessionOlderPage,
@@ -126,10 +125,6 @@ export function registerSessionIpc(
   );
   // —— 遗留事项（收尾仪式）三通道。store 铸 id/status/时间戳，renderer 不猜 ——
   ipcMain.handle(ipcChannels.carryoverList, () => carryovers.list());
-  ipcMain.handle(
-    ipcChannels.carryoverCreate,
-    (_event, sessionId: string, drafts: CarryoverDraft[]) => carryovers.append(sessionId, drafts),
-  );
   ipcMain.handle(
     ipcChannels.carryoverSetStatus,
     (_event, id: string, status: CarryoverStatus) => carryovers.setStatus(id, status),

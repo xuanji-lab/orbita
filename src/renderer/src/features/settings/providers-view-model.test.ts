@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import type { ModelDefaults } from "../../../../shared/model-defaults.ts";
 import type { ProviderDto } from "../../../../shared/provider.ts";
 import {
+  cardAddress,
   compactTokens,
   connectionDirty,
+  customThinkingSeed,
+  declaredThinkingLevels,
   hasCredentials,
   mergeModelCost,
   modelAcceptsImage,
@@ -14,13 +17,17 @@ import {
   kindOf,
   nextCopyId,
   nextFreeId,
+  MODEL_SCOPE_ALL,
+  openingModelScope,
   parseRateInput,
   parseTokenInput,
   providerCards,
   railVendorCell,
   reorderIds,
+  toggleThinkingLevel,
   urlSuffix,
 } from "./providers-view-model.ts";
+import { KNOWN_MODELS } from "../../../../shared/known-models.ts";
 import { KNOWN_PROVIDERS } from "../../../../shared/known-providers.ts";
 import { en } from "../../messages-en.ts";
 
@@ -140,10 +147,10 @@ describe("providerCards —— 模型服务的卡片墙", () => {
     assert.equal(cardOf(groups, "openai-compatible")?.instances.length, 0);
   });
 
-  test("分区顺序固定 API → 套餐 → 自定义；仅显示已添加时空区整个不返回", () => {
+  test("分区顺序固定 API → 套餐 → 浏览器登录 → 自定义；仅显示已添加时空区整个不返回", () => {
     assert.deepEqual(
       providerCards([], { query: "", onlyAdded: false, textOf: text }).map((entry) => entry.group),
-      ["api", "plan", "custom"],
+      ["api", "plan", "oauth", "custom"],
     );
     const onlyAdded = providerCards([dto("proma")], { query: "", onlyAdded: true, textOf: text });
     assert.deepEqual(onlyAdded.map((entry) => entry.group), ["custom"]);
@@ -250,10 +257,8 @@ describe("reorderIds —— 拖拽排序：落到目标行的位置，其余行�
 
 describe("modelIdIssue —— 手填模型 id 的形状", () => {
   test("内置目录的每个模型 id 都必须过——校验不能拒绝自家目录的格式", () => {
-    for (const provider of KNOWN_PROVIDERS) {
-      for (const id of Object.keys(provider.modelParams ?? {})) {
-        assert.equal(modelIdIssue(id, en), null, `${provider.id}/${id} 被拦`);
-      }
+    for (const id of Object.keys(KNOWN_MODELS)) {
+      assert.equal(modelIdIssue(id, en), null, `${id} 被拦`);
     }
   });
 
@@ -287,11 +292,33 @@ describe("urlSuffix", () => {
     assert.equal(urlSuffix("anthropic-messages"), "/v1/messages");
     assert.equal(urlSuffix("openai-completions"), "/chat/completions");
   });
+  test("Responses 协议接 /responses，Gemini 原生接 /models（型号随会话变，不写进来）", () => {
+    assert.equal(urlSuffix("openai-responses"), "/responses");
+    assert.equal(urlSuffix("google-generative-ai"), "/models");
+    assert.equal(urlSuffix("openai-codex-responses"), "/codex/responses");
+  });
+});
+
+describe("cardAddress —— 卡片底行的预填地址", () => {
+  test("去掉协议头与尾斜杠，路径保留：同一主机上的几条接入要分得出来", () => {
+    assert.equal(cardAddress("https://ark.cn-beijing.volces.com/api/v3"), "ark.cn-beijing.volces.com/api/v3");
+    assert.equal(cardAddress("https://ark.cn-beijing.volces.com/api/plan/"), "ark.cn-beijing.volces.com/api/plan");
+    assert.equal(cardAddress("https://api.deepseek.com"), "api.deepseek.com");
+  });
+  test("不是合法 URL 的原样返回，不抛", () => {
+    assert.equal(cardAddress("not a url"), "not a url");
+  });
 });
 
 describe("connectionDirty", () => {
   const saved = { displayName: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4" };
   const draft = { ...saved, apiKey: "" };
+
+  test("换了接入协议算改动——Kimi 的 Chat 与 Responses 同在 /v1，地址不变也要出 Save 条", () => {
+    const kimi = { displayName: "Kimi", baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" };
+    assert.equal(connectionDirty({ ...kimi, apiKey: "" }, kimi, null), false);
+    assert.equal(connectionDirty({ ...kimi, api: "openai-responses", apiKey: "" }, kimi, null), true);
+  });
 
   test("原样未动、key 留空：没有改动", () => {
     assert.equal(connectionDirty(draft, saved, null), false);
@@ -375,6 +402,26 @@ describe("railVendorCell —— 模型卡片左栏的厂商格：一律图标", 
 
 describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用一枚", () => {
   const src = readFileSync(new URL("./VendorLogo.tsx", import.meta.url), "utf8");
+  test("每个目录条目都配了标（没配的会退成名字首字，新加条目时容易漏）", () => {
+    const block = /const LOGOS[^{]*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    const keys = new Set([...block.matchAll(/^\s*"?([a-z0-9-]+)"?\s*[:,]/gm)].map((m) => m[1]));
+    assert.ok(keys.size >= 10, "没解析出 LOGOS 的键");
+    for (const provider of KNOWN_PROVIDERS) {
+      assert.ok(keys.has(provider.id), `${provider.id} 没有 logo`);
+    }
+  });
+  test("家族图标的键不被服务商那一行盖掉（LOGOS 先展开 FAMILY_LOGOS，同名键后写的赢）", () => {
+    // 2026-10-24：家族键 doubao 撞上火山方舟服务商的 id doubao，seed-* 型号显示成火山引擎的标
+    const family = /const FAMILY_LOGOS[^{]*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    const familyKeys = [...family.matchAll(/^\s*"?([a-z0-9-]+)"?\s*[:,]/gm)].map((m) => m[1]);
+    assert.ok(familyKeys.length >= 10, "没解析出 FAMILY_LOGOS 的键");
+    const block = /const LOGOS[^{]*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    for (const [, key, value] of block.matchAll(/^\s*"?([a-z0-9-]+)"?\s*:\s*([A-Za-z0-9_]+),/gm)) {
+      if (!familyKeys.includes(key ?? "")) continue;
+      const own = new RegExp(`^\\s*"?${key}"?\\s*(?::\\s*([A-Za-z0-9_]+))?,`, "m").exec(family);
+      assert.equal(value, own?.[1] ?? key, `LOGOS 里的 ${key} 盖掉了同名家族图标`);
+    }
+  });
   test("claude 映射到 claude.svg（橙色），anthropic-compatible 仍是 anthropic.svg", () => {
     assert.match(src, /import claude from "[^"]*vendor-logos\/claude\.svg\?raw"/);
     assert.match(src, /^\s*claude,\s*$/m);
@@ -386,5 +433,58 @@ describe("VendorLogo 的标映射：Claude OAuth 与 Anthropic 兼容不共用�
     // 断言「自带实色」而不写出色值（design-tokens 守卫禁 src 里出现裸 hex）
     assert.match(svg, /fill="#[0-9a-f]{6}"/i);
     assert.doesNotMatch(svg, /currentColor/);
+  });
+});
+
+describe("openingModelScope —— 模型卡片每次打开时左栏落在哪一格", () => {
+  const dto = (id: string, models: string[]): ProviderDto => ({
+    id,
+    displayName: id,
+    endpoint: { baseUrl: "https://example.com", api: "openai-completions" },
+    models: { declared: models.map((m) => ({ id: m })) },
+    auth: { scheme: "none" },
+  });
+  // 同一个型号挂在两家：芯片只写型号名，卡片得替用户说清是哪一家
+  const providers = [dto("kimi-code", ["kimi-k3"]), dto("opencode-go", ["kimi-k3", "glm-5"])];
+
+  test("当前型号所属的那家 → 落在那家（同型号挂两家时按 providerId 认，不按型号认）", () => {
+    assert.deepEqual(openingModelScope(providers, { providerId: "opencode-go" }), {
+      kind: "provider",
+      id: "opencode-go",
+    });
+    assert.deepEqual(openingModelScope(providers, { providerId: "kimi-code" }), { kind: "provider", id: "kimi-code" });
+  });
+
+  test("还没选型号（新任务） → 全部", () => {
+    assert.equal(openingModelScope(providers, null), MODEL_SCOPE_ALL);
+  });
+
+  test("那家已被删 / 没 key（不在可用清单里） → 全部", () => {
+    assert.equal(openingModelScope(providers, { providerId: "deepseek" }), MODEL_SCOPE_ALL);
+    assert.equal(openingModelScope([], { providerId: "kimi-code" }), MODEL_SCOPE_ALL);
+  });
+});
+
+describe("型号思考档覆盖（弹窗的勾选逻辑与按服务商取声明）", () => {
+  test("切到自定义：预勾继承来的那几档；继承也未知就全勾", () => {
+    assert.deepEqual(customThinkingSeed(["off", "low", "high"]), ["off", "low", "high"]);
+    assert.deepEqual(customThinkingSeed(null), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("勾 / 去勾按词汇表顺序；最后一档去不掉", () => {
+    assert.deepEqual(toggleThinkingLevel(["high"], "off"), ["off", "high"]);
+    assert.deepEqual(toggleThinkingLevel(["max", "low"], "medium"), ["low", "medium", "max"]);
+    assert.deepEqual(toggleThinkingLevel(["off", "high"], "off"), ["high"]);
+    assert.deepEqual(toggleThinkingLevel(["high"], "high"), ["high"]);
+  });
+
+  test("declaredThinkingLevels：按（服务商，型号）取声明；没写 / 找不到 = 继承", () => {
+    const provider = {
+      id: "tokenrhythm",
+      models: { declared: [{ id: "kimi-k3", thinkingLevels: ["high"] }, { id: "glm-5.3" }] },
+    } as unknown as ProviderDto;
+    assert.deepEqual(declaredThinkingLevels([provider], "tokenrhythm", "kimi-k3"), ["high"]);
+    assert.equal(declaredThinkingLevels([provider], "tokenrhythm", "glm-5.3"), undefined);
+    assert.equal(declaredThinkingLevels([provider], "other", "kimi-k3"), undefined);
   });
 });
