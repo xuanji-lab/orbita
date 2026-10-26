@@ -1655,7 +1655,7 @@ export const en = {
     /* Session grant card for computer use (not an ordinary approval: allow = the whole session) */
     sessionTitle: "Let the agent drive the sandbox?",
     sessionBody:
-      "It will see the sandbox screen and click, type and press keys inside it. The sandbox desktop is shared app-wide: there is only one screen, and other sessions can drive it too — you are allowing this session to act. Destructive actions (delete, format, close a window) still stop and ask you separately.",
+      "It will see the sandbox screen and click, type and press keys inside it. The sandbox desktop is shared app-wide: there is only one screen, and other sessions can drive it too — you are allowing this session to act. Destructive actions (delete, format, close a window) still stop for confirmation: before this session is allowed the risk is written on this card, and after that they ask you separately.",
     allowSession: "Allow for this session",
     /* Destructive-action confirmation (D1/D2/D3): not a refusal — allowing it runs the step */
     riskTitle: "This step may be hard to undo. Confirm?",
