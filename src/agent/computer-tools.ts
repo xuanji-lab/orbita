@@ -161,7 +161,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "The image is scaled down (its size is in the result); do not assume it is the physical screen size. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
-      "start it in Settings › Experimental features › Computer use; do not retry.",
+      "start it in Settings › Experimental › Computer use; do not retry.",
     parameters: { type: "object", properties: {}, required: [] } as never,
     async execute(_toolCallId, _params, signal) {
       const result = await call({ action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, signal);

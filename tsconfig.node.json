@@ -15,5 +15,18 @@
     "resolveJsonModule": true,
     "composite": true
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "src/agent/**/*", "src/terminal/**/*", "electron.vite.config.ts"]
+  // 两张界面文案表也列进 node 项目：agent 的提示词（computer-network.ts）写着「设置 › …」
+  // 这条路径，它的测试要拿界面上的真实标签逐字比对，防止两边界各自漂移（真机验收发现过
+  // 提示词写「Experimental features」而页签叫「Experimental」）。只是 typecheck 视图，
+  // agent 运行时**不** import 它们。
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "src/shared/**/*",
+    "src/agent/**/*",
+    "src/terminal/**/*",
+    "src/renderer/src/messages-en.ts",
+    "src/renderer/src/messages-zh.ts",
+    "electron.vite.config.ts"
+  ]
 }

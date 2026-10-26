@@ -14,6 +14,32 @@ import {
   networkFailureError,
   sandboxNetworkNote,
 } from "./computer-network.ts";
+import { en } from "../renderer/src/messages-en.ts";
+import { zh } from "../renderer/src/messages-zh.ts";
+
+/**
+ * 提示词里写的那条设置路径，**从界面文案表拼出来**。
+ *
+ * 上一版的教训：文案里写的是「Settings › Experimental features › Computer use ›
+ * "Allow network access"」，而设置页的页签其实叫 `Experimental`、分组叫 `Sandbox`——
+ * 模型把这串英文原样转述给中文用户，用户照着找会对不上界面（真机验收里发现的）。
+ * 写死一份字符串副本就会再次漂移，所以这里直接拿 `en` / `zh` 拼，
+ * 改文案时测试会跟着响。
+ */
+const EN_ALLOW_NETWORK_PATH = [
+  en.common.settings,
+  en.settings.tabs.experimental,
+  en.settings.tabs["computer-use"],
+  en.computerUse.sandboxGroup,
+  `"${en.computerUse.allowNetwork}"`,
+].join(" › ");
+
+const ZH_ALLOW_NETWORK_PATH = [
+  zh.common.settings,
+  zh.settings.tabs.experimental,
+  zh.settings.tabs["computer-use"],
+  zh.computerUse.allowNetwork,
+].join(" › ");
 
 describe("提示词与工具描述", () => {
   test("开着出网：描述那段是空串，system prompt 也是空串（一个字的噪音都不加）", () => {
@@ -33,14 +59,13 @@ describe("提示词与工具描述", () => {
     assert.match(guideline, /Do not retry a failed sandbox_navigate/);
     assert.match(guideline, /turning it on applies the next time the sandbox starts/);
     assert.match(guideline, /Local desktop and file work in the sandbox is unaffected/);
-    // 设置路径要能照着找到那一行（与设置页文案同一路径）
-    assert.match(guideline, /Settings › Experimental features › Computer use/);
-    assert.match(guideline, /Allow network access/);
+    // 设置路径要能照着找到那一行（从界面文案表拼，见 EN_ALLOW_NETWORK_PATH）
+    assert.ok(guideline.includes(EN_ALLOW_NETWORK_PATH), `system prompt 里要有设置路径：${EN_ALLOW_NETWORK_PATH}`);
   });
 
   test("描述那段：设置路径 + 「别重试导航」+ 宿主机工具要有用户同意", () => {
     const note = sandboxNetworkNote(false);
-    assert.match(note, /Settings › Experimental features › Computer use/);
+    assert.ok(note.includes(EN_ALLOW_NETWORK_PATH), `工具描述里要有设置路径：${EN_ALLOW_NETWORK_PATH}`);
     assert.match(note, /Do not retry the navigation/);
     assert.match(note, /only if the user agrees — use the host browser_\* tools/);
   });
@@ -84,5 +109,38 @@ describe("networkFailureError", () => {
     ]) {
       assert.equal(networkFailureError(original, false), original, original);
     }
+  });
+});
+
+describe("设置路径与真实界面标签一致", () => {
+  const note = sandboxNetworkNote(false);
+  const guideline = computerUseNetworkGuideline({ enabled: true, allowNetwork: false });
+  const failure = networkFailureError("页面没有加载：ERR_INTERNET_DISCONNECTED", false);
+
+  test("英文两段用 en 表的页签 / 分组 / 开关名，不自己翻译", () => {
+    for (const [where, text] of [
+      ["工具描述", note],
+      ["system prompt", guideline],
+    ] as const) {
+      assert.ok(text.includes(EN_ALLOW_NETWORK_PATH), `${where} 缺设置路径：${EN_ALLOW_NETWORK_PATH}`);
+      // 上一版的错名字不能再回来（界面上的页签叫 Experimental，没有 features）
+      assert.ok(!text.includes("Experimental features"), `${where} 还在用界面上不存在的旧名`);
+    }
+  });
+
+  test("中文确定句用 zh 表的同一行（三处标签必须一字不差）", () => {
+    assert.ok(failure.includes(ZH_ALLOW_NETWORK_PATH), `缺中文设置路径：${ZH_ALLOW_NETWORK_PATH}`);
+    // 分开检查各级，排版改动不会让这条测试静默变弱
+    assert.ok(failure.includes(zh.settings.tabs.experimental));
+    assert.ok(failure.includes(zh.settings.tabs["computer-use"]));
+    assert.ok(failure.includes(zh.computerUse.allowNetwork));
+    assert.ok(!failure.includes("实验性功能"), "中文里没有「实验性功能」这个词");
+  });
+
+  test("中英两份路径引用的是同一个开关：装修名就一起挂", () => {
+    // 两边都能拼出路径本身就是契约（表里少一个键，这行就不成立）
+    assert.notEqual(EN_ALLOW_NETWORK_PATH, ZH_ALLOW_NETWORK_PATH);
+    assert.ok(EN_ALLOW_NETWORK_PATH.includes(en.computerUse.allowNetwork));
+    assert.ok(ZH_ALLOW_NETWORK_PATH.includes(zh.computerUse.allowNetwork));
   });
 });

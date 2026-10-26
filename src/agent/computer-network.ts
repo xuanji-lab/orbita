@@ -22,7 +22,7 @@ import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
  * 写英文是跟其它工具描述一致——模型读工具描述的语言不是用户界面语言。
  */
 const SANDBOX_NO_NETWORK =
-  "**This sandbox has no outbound network** (Settings › Experimental features › Computer use › Sandbox › " +
+  "**This sandbox has no outbound network** (Settings › Experimental › Computer use › Sandbox › " +
   "\"Allow network access\" is off): pages will not load, and that is the setting — not the site, not the URL, " +
   "and not your selectors. Do not retry the navigation or try other addresses, and do not blame the page. " +
   "Desktop and file work in the sandbox is unaffected. If the task really needs the web, ask the user to turn " +
@@ -60,8 +60,8 @@ export function computerUseNetworkGuideline(computerUse: ComputerUseTurnContext 
   if (computerUse.allowNetwork) return "";
   return [
     "<orbita-sandbox-network>",
-    "The Windows sandbox is set to **no outbound network** (the user turned off Settings › Experimental " +
-      "features › Computer use › Sandbox › \"Allow network access\"). Web pages in it will not load: that is " +
+    "The Windows sandbox is set to **no outbound network** (the user turned off Settings › Experimental › " +
+      "Computer use › Sandbox › \"Allow network access\"). Web pages in it will not load: that is " +
       "the setting, not the site. Do not retry a failed sandbox_navigate, do not try other URLs to see whether " +
       "the network is back, and do not silently move the same web task to another tool. Tell the user the " +
       "sandbox has no network and that turning it on applies the next time the sandbox starts. Local desktop " +

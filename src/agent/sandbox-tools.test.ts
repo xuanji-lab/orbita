@@ -282,7 +282,7 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
     const { tools } = setup(false);
     for (const [name, tool] of tools) {
       assert.match(tool.description, /no outbound network/, name);
-      assert.match(tool.description, /Settings › Experimental features › Computer use/, name);
+      assert.match(tool.description, /Settings › Experimental › Computer use › Sandbox/, name);
       assert.match(tool.description, /\"Allow network access\" is off/, name);
       assert.match(tool.description, /Do not retry the navigation/, name);
       // 描述的第一句仍是「这是哪个浏览器」：拼在末尾，不能打乱原有的开场
