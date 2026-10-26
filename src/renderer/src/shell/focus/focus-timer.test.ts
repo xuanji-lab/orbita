@@ -16,6 +16,7 @@ import {
   resolvePickerWorkspace,
   shouldStartSummary,
   startFocusRun,
+  summaryWindowOf,
   wheelIndex,
 } from "./focus-timer.ts";
 
@@ -121,5 +122,24 @@ describe("resolvePickerWorkspace：工作区晚到也要有有效选择", () => 
     assert.equal(resolvePickerWorkspace("ws-gone", "ws-gone", "ws-a", ids), "ws-a");
     assert.equal(resolvePickerWorkspace("ws-gone", "ws-gone", "ws-gone", ids), "ws-a");
     assert.equal(resolvePickerWorkspace("ws-gone", "ws-gone", "ws-gone", []), null);
+  });
+});
+
+describe("summaryWindowOf：素材窗口在起跑时冻结", () => {
+  test("正常路径：窗口 = [专注开始, 起跑那一刻]，带所选工作区", () => {
+    const run = startFocusRun(1_000_000, "ws-1", 25);
+    assert.deepEqual(summaryWindowOf(run, 20 * 60_000 + 1_000_000), {
+      startedAt: 1_000_000,
+      until: 20 * 60_000 + 1_000_000,
+      workspaceId: "ws-1",
+    });
+  });
+
+  test("边界：窗口只认起跑那一刻，重试沿用旧值（拿重试时刻重算就会拖长）", () => {
+    const run = startFocusRun(0, "ws-1", 25);
+    const fired = summaryWindowOf(run, 20 * 60_000);
+    assert.equal(fired.until, 20 * 60_000);
+    // 错误做法：拿之后某一刻重算，until 跟着变——重试读的就是另一段素材了
+    assert.equal(summaryWindowOf(run, 40 * 60_000).until, 40 * 60_000);
   });
 });

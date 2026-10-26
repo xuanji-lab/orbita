@@ -480,6 +480,8 @@ export const zh: Messages = {
     cardClose: "关闭（保持专注视图）",
     summaryRunning: "家务活模型还在整理…",
     summaryFailed: "总结没写成（家务活模型出了错）。",
+    /** 失败态那颗键：沿同一次素材窗口重发（只由用户点） */
+    summaryRetry: "重试",
     summaryNoModel: "还没配家务活模型，这次没有总结。",
     summaryNoActivity: "这段时间没有会话活动，没什么可总结的。",
     summarySource: (sessions: number, model: string) => `家务活模型整理 · 读了 ${sessions} 个会话 · ${model}`,
