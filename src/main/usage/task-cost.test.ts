@@ -247,6 +247,33 @@ describe("官方单价", () => {
   test("哪儿都没有：null", () => {
     assert.equal(officialRates(catalog, "claude-opus-5-5", {}, undefined), null);
   });
+
+  describe("型号白名单的官方价：只补目录全都缺价的 id，排在全部目录之后", () => {
+    // 2026-10-25 用户问「DeepSeek V4.1 Flash 显示缺官方单价是什么意思」：deepseek-flash 挂在自建网关下，
+    // 随应用分发的目录快照没有这个 id（只有退役的 deepseek-v4-flash），DeepSeek 目录又不联网刷新
+    const flashPeak = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
+
+    test("目录里谁都没有 deepseek-flash：取白名单的峰时官方价（自建网关、聚合网关写法都一样）", () => {
+      assert.deepEqual(officialRates(catalog, "deepseek-flash", { api: "openai-completions" }, undefined), flashPeak);
+      assert.deepEqual(officialRates(catalog, "deepseek-v4.1-flash", {}, undefined), flashPeak);
+    });
+
+    test("目录有非零价就用目录（联网刷新跟得上调价）；用户自填仍最优先", () => {
+      const refreshed: BuiltinProvider[] = [
+        ...catalog,
+        { id: "deepseek", name: "DeepSeek", baseUrl: "", api: "openai-completions", models: [model("deepseek-flash", [0.31, 1.25, 0.007, 0])] },
+      ];
+      assert.equal(officialRates(refreshed, "deepseek-flash", {}, undefined)?.input, 0.31);
+      assert.equal(officialRates(catalog, "deepseek-flash", {}, { input: 9, output: 9, cacheRead: 9, cacheWrite: 9 })?.input, 9);
+    });
+
+    test("目录里只有套餐零价：零价不算数，落到白名单", () => {
+      const planOnly: BuiltinProvider[] = [
+        { id: "qwen-token-plan-cn", name: "plan", baseUrl: "", api: "openai-completions", models: [model("deepseek-v4.1-flash", [0, 0, 0, 0])] },
+      ];
+      assert.deepEqual(officialRates(planOnly, "deepseek-v4.1-flash", {}, undefined), flashPeak);
+    });
+  });
 });
 
 describe("chartTasks：子会话整条一件，算给 token 最多的型号 × 档", () => {

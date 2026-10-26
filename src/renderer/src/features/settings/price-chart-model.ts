@@ -100,17 +100,20 @@ export function scoreTicks(range: AxisRange): number[] {
   return out;
 }
 
-/** 每任务成本：≥ 10 美元不带小数，≥ 1 两位，< 1 两位有效数字（$0.031） */
-export function formatCost(cost: number): string {
-  if (cost >= 10) return `$${cost.toFixed(0)}`;
-  if (cost >= 1) return `$${cost.toFixed(2)}`;
-  if (cost >= 0.1) return `$${cost.toFixed(2)}`;
-  return `$${cost.toPrecision(2)}`;
+/**
+ * 每任务成本：≥ 10 不带小数，≥ 1 两位，< 1 两位有效数字（¥0.21、$0.031）。`amount` 已经是显示币种
+ * （图在入口处整体换算，见 PriceCapabilityChart；数据本身是美元，utils/money.ts）。
+ */
+export function formatCost(amount: number, symbol: string): string {
+  if (amount >= 10) return `${symbol}${amount.toFixed(0)}`;
+  if (amount >= 1) return `${symbol}${amount.toFixed(2)}`;
+  if (amount >= 0.1) return `${symbol}${amount.toFixed(2)}`;
+  return `${symbol}${amount.toPrecision(2)}`;
 }
 
-/** 横轴刻度：1-2-5 的整值不带多余的零（$0.05、$1、$20） */
-export function formatCostTick(value: number): string {
-  return `$${Number(value.toPrecision(1))}`;
+/** 横轴刻度：1-2-5 的整值不带多余的零（¥0.5、¥1、¥20）；刻度在显示币种里取整 */
+export function formatCostTick(value: number, symbol: string): string {
+  return `${symbol}${Number(value.toPrecision(1))}`;
 }
 
 /** 分数：Bradley-Terry 取整；net improvement 显示成带符号的百分比（0.0157 → +1.6%） */

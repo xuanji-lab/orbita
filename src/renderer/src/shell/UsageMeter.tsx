@@ -18,6 +18,7 @@ import {
 import type { UsagePetPref } from "@shared/settings";
 import type { UsageDayTotal } from "@shared/usage";
 import { ModelAvatar } from "../features/settings/ModelAvatar";
+import { formatMoney } from "../utils/money.ts";
 
 /**
  * 侧栏左下角的 7 天 token 用量格 + 星云能量体。
@@ -174,18 +175,11 @@ function DayBreakdown(props: { day: UsageDayTotal }) {
           <span className="usage-say-num">{formatTokens(day.intentTokens)}</span>
         </div>
       )}
-      {day.cost !== null && <div className="usage-say-cost">{t.usage.cost(formatUsd(day.cost.usd))}</div>}
+      {day.cost !== null && <div className="usage-say-cost">{t.usage.cost(formatMoney(day.cost.usd, t.currency))}</div>}
       {/* 「部分缺单价」单独一行：接在花费那行后面会把气泡撑宽，「今天」那格的气泡向左展开会出侧栏 */}
       {day.cost?.partial === true && <div className="usage-say-cost">{t.usage.costPartial}</div>}
     </div>
   );
-}
-
-/** 花费：≥ $1 两位小数，< $1 两位有效数字（$0.031） */
-function formatUsd(usd: number): string {
-  if (usd >= 1) return `$${usd.toFixed(2)}`;
-  if (usd === 0) return "$0";
-  return `$${usd.toPrecision(2)}`;
 }
 
 /** 悬停时星云说的那句：当天总量，零用量说「没有用量」 */

@@ -1188,6 +1188,7 @@ export function App() {
                 escapeRef={filesEscapeRef}
                 citeFocus={citeFocus}
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
+                focusDone={focus.status.kind === "done"}
                 fileOpen={fileOpenRequest}
               />
               ) : shownPanel === "review" ? (

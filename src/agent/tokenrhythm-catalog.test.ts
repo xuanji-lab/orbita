@@ -283,6 +283,13 @@ describe("官方美元单价 —— 复用 officialRates，日期后缀去掉再
     assert.ok(glm.input > 0 && glm.output > 0);
     const deepseek = tokenrhythmOfficialRates(catalog, "deepseek-v4-flash-0731");
     assert.ok(deepseek.input > 0 && deepseek.output > 0);
+    // 快照里没有 deepseek-v4.1-flash 的非零价：去后缀后落到型号白名单的官方价（DeepSeek 峰时价）
+    assert.deepEqual(tokenrhythmOfficialRates(catalog, "deepseek-v4.1-flash-1017"), {
+      input: 0.3,
+      output: 1.2,
+      cacheRead: 0.006,
+      cacheWrite: 0,
+    });
   });
 });
 
@@ -542,12 +549,12 @@ describe("缓存与拉取退回", () => {
 });
 
 describe("与服务商条目的对接", () => {
-  test("条目存在：catalogId 指向自建目录、目录说了算、未实测、按量计费、两种接入方式", () => {
+  test("条目存在：catalogId 指向自建目录、目录说了算、已实测（不挂「未实测」）、按量计费、两种接入方式", () => {
     const known = KNOWN_PROVIDERS.find((provider) => provider.id === TOKENRHYTHM_CATALOG_ID);
     assert.ok(known !== undefined);
     assert.equal(known.catalogId, TOKENRHYTHM_CATALOG_ID);
     assert.equal(known.catalogAuthoritative, true);
-    assert.equal(known.untested, true);
+    assert.equal(known.untested, undefined);
     assert.notEqual(known.billing, "plan");
     assert.deepEqual(
       known.access?.map((access) => [access.api, access.baseUrl]),

@@ -3220,8 +3220,39 @@ body {
   overflow-y: auto;
   padding: var(--space-3);
 }
-.file-preview-truncated {
+/*
+ * 大文件提示带（截断 / md 退化 / 窗口化三条路径共用）：若干句说明 + 尾部
+ * 「用默认应用打开」。说明占满左侧、可多行，动作键用 .row-trailing 钉在右血线。
+ */
+.file-preview-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
   margin-bottom: var(--space-2);
+}
+/* 说明列：折行只在列内发生，不把尾部动作键挤走 */
+.file-preview-notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 文字键而不是 PanelButton：提示条里的次级出路，不与空态的主按钮争重量。
+   静止态就可见——它是出路，不是悬停才出的动作 */
+.file-preview-notice-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.file-preview-notice-action:hover {
+  color: var(--color-text-primary);
 }
 .file-preview-loading {
   display: flex;
@@ -3269,6 +3300,38 @@ body {
 .file-preview-source[data-wrap="off"] {
   white-space: pre;
   overflow-wrap: normal;
+}
+/*
+ * 大文本窗口化（WindowedText.tsx）：外层高度 = 总行数 × 行高，坐实全文的滚动长度；
+ * 里面只有可视区 ±WINDOW_OVERSCAN 行，靠 translateY 摆到 start 的位置。
+ * 行高由 CSS 决定（字号要跟界面字号缩放），组件首帧量一次隐形探针——探针必须是
+ * 一行、且与正文行同一套字体 / 行高，量出来的值才等于一行的高度。
+ * 行块一律不折行：折行会让一行占多行高，窗口位置就与排版对不上。
+ */
+.file-preview-window {
+  position: relative;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-code-block);
+  color: var(--color-text-primary);
+}
+.file-preview-window-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+}
+.file-preview-window-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  min-width: 100%;
+}
+.file-preview-window-line {
+  white-space: pre;
 }
 
 /*
