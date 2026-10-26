@@ -95,6 +95,10 @@
       {
         "from": "build/tray.png",
         "to": "tray.png"
+      },
+      {
+        "from": "node_modules/@earendil-works/pi-coding-agent/package.json",
+        "to": "pi-coding-agent/package.json"
       }
     ],
     "npmRebuild": false,

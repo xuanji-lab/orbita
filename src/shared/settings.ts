@@ -5,6 +5,7 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -119,9 +120,6 @@ export interface ModelPair {
  */
 export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
-  "session-lifecycle",
-  "composer-blackhole",
-  "composer-tetris",
   "pdf-citations",
   "intent-system",
 ] as const;
@@ -276,10 +274,11 @@ export interface AppSettings {
    */
   browserDownloadDir?: string;
   /**
-   * 设置 › 模型服务的厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，
-   * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
+   * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
+   * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
+   * 页面上每个开关只发自己那个键。
    */
-  providerCardSize?: ProviderCardSize;
+  providersPage?: ProvidersPageSettings;
   /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
@@ -287,28 +286,43 @@ export interface AppSettings {
    * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
    * 开了就回来。
    *
-   * 四项各自的语义：
+   * 各项的语义：
    * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
-   * - `session-lifecycle`：星标 / 完成标记 / 收尾扫描与遗留事项的全部入口；
-   * - `composer-blackhole`：输入框黑洞——开启后截图 / 文件 / 目录不再叠成两行，
-   *   而是被吸进输入框中心、从舷窗掉进上方看不见的盒子堆起来；只在基础三套主题
-   *   （浅 / 黛 / 玄）生效，判定在渲染层 blackhole-layout.ts 的 materialBoxStyle；
-   * - `composer-tetris`：俄罗斯方块——同一只盒子的另一种形态：材料不演黑洞特效，
-   *   从盒子上缘随机落下（确定性种子）。**与 composer-blackhole 互斥**：设置页打开
-   *   一个会连带关掉另一个（experimental-features.ts 的 exclusiveWith）；盘上手改出
-   *   两个都开时 parseSettings 以黑洞为准、丢掉 tetris（见 parseExperimentalFeatures）。
    * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
    *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
    *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
-   * - 旧总开关 `experimental: true` 等价于 paper-themes 与 session-lifecycle 都开；
-   * - 旧 `composerBlackhole` 原样并入 composer-blackhole 一项。
+   * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。
+   *
+   * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
+   * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
+   * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
+   * 解析时直接丢，下一次写入从盘上带走。
+   *
+   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻）：盘上残留的 `session-lifecycle`
+   * 不在表里，解析时丢掉，开着关着都不再有任何效果。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
 
 export type ProviderCardSize = "large" | "small";
+
+/** 设置 › 模型服务这一页的界面记忆（AppSettings.providersPage）；每个键缺席都是默认值 */
+export interface ProvidersPageSettings {
+  /**
+   * 厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，small 只留 logo、名字与角标。
+   * 2026-10-25 之前存在顶层 `providerCardSize`，读的时候迁过来（parseSettings）。
+   */
+  cardSize?: ProviderCardSize;
+  /** 卡片墙只显示已添加的服务商。缺席 = 全部显示 */
+  onlyAdded?: boolean;
+  /**
+   * 价格 · 能力图停在哪个分类。缺席 = Agent 综合。用户 2026-10-25：离开再回来又回到「Agent 综合」，
+   * 偏偏这一类很多型号没分数——切到哪类就记住哪类。
+   */
+  chartCategory?: PriceChartCategory;
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
@@ -417,6 +431,24 @@ function parseWidth(value: unknown): number {
 }
 
 /**
+ * 模型服务页的界面记忆：认得的值留下，不认识的当没选过（缺席 = 默认）。卡片尺寸先看新位置，
+ * 没有再读旧的顶层 providerCardSize——选过「小」的用户升级后不用重选。全空返回 undefined，不落空对象。
+ */
+function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPageSettings | undefined {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const size = record.cardSize ?? legacyCardSize;
+  const page: ProvidersPageSettings = {
+    ...(size === "large" || size === "small" ? { cardSize: size } : {}),
+    ...(typeof record.onlyAdded === "boolean" ? { onlyAdded: record.onlyAdded } : {}),
+    // 不认识的分类（以后删了某个榜单）当没选过，回到默认
+    ...((PRICE_CHART_CATEGORIES as readonly unknown[]).includes(record.chartCategory)
+      ? { chartCategory: record.chartCategory as PriceChartCategory }
+      : {}),
+  };
+  return Object.keys(page).length === 0 ? undefined : page;
+}
+
+/**
  * 从磁盘上的任意 JSON 解出设置。
  *
  * **只认识的字段留下，别的一律丢掉**，坏值退回默认。理由是这个文件在用户目录里、
@@ -444,14 +476,14 @@ export function parseSettings(raw: unknown): AppSettings {
     browserDownloadDir?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
+    providersPage?: unknown;
+    /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
-    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes + session-lifecycle 都开 */
+    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
     experimental?: unknown;
-    /** 旧黑洞开关：原样并入 experimentalFeatures["composer-blackhole"] */
-    composerBlackhole?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -472,6 +504,7 @@ export function parseSettings(raw: unknown): AppSettings {
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
   const intent = parseIntentSettings(record.intent);
+  const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -508,10 +541,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
-    // 不认识的尺寸当没选过（缺席 = large）
-    ...(record.providerCardSize === "large" || record.providerCardSize === "small"
-      ? { providerCardSize: record.providerCardSize }
-      : {}),
+    ...(providersPage === undefined ? {} : { providersPage }),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
@@ -532,7 +562,6 @@ export function parseSettings(raw: unknown): AppSettings {
 function parseExperimentalFeatures(record: {
   experimentalFeatures?: unknown;
   experimental?: unknown;
-  composerBlackhole?: unknown;
 }): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
   const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
   const raw = record.experimentalFeatures;
@@ -542,21 +571,10 @@ function parseExperimentalFeatures(record: {
       if (typeof value === "boolean") out[id] = value;
     }
   }
-  // 旧总开关：true = 当年挂在它后面的两项都照常开（黑洞另有自己的旧键）。
+  // 旧总开关：true = 当年挂在它后面的 paper-themes 照常开（另一项会话生命周期已转正）。
   // 新键里已显式给值的项以新键为准（??=）
   if (record.experimental === true) {
     out["paper-themes"] ??= true;
-    out["session-lifecycle"] ??= true;
-  }
-  // 旧黑洞开关原样并入：用户逃过的是「这一项」，不是「总开关 + 这一项」
-  if (typeof record.composerBlackhole === "boolean") {
-    out["composer-blackhole"] ??= record.composerBlackhole;
-  }
-  // 黑洞与俄罗斯方块互斥（两种材料盒形态，同一时刻只能有一种）。设置页的开关已经
-  // 连带关掉对方，这里兜住手改的盘：两个都开时以黑洞为准（先落盘的既有功能优先），
-  // tetris 当作没开——下一次任何设置写入都会把这个裁决写回盘上
-  if (out["composer-blackhole"] === true && out["composer-tetris"] === true) {
-    delete out["composer-tetris"];
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }

@@ -80,6 +80,11 @@ export const ipcChannels = {
   /** 从 attachedDirs 移除一条；不在列表里不报错 */
   workspaceDetachDir: "workspace:detach-dir",
   providerBuiltins: "provider:builtins",
+  /**
+   * 「添加」页点开一张还没保存的服务商卡片：现拉一次这家的目录（节流内不拉），
+   * 拉完的新目录经 `builtins` 事件广播回来。发完即回，不等网络。
+   */
+  providerRefreshCatalog: "provider:refresh-catalog",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
@@ -89,6 +94,14 @@ export const ipcChannels = {
    * 不进 renderer——登录本身就是保存。
    */
   providerOauthLogin: "provider:oauth-login",
+  /** 取消进行中的浏览器登录（参数：provider id）。设备码流程要等十几分钟，得能叫停 */
+  providerOauthCancel: "provider:oauth-cancel",
+  /**
+   * 主进程 → renderer 推送：设备码登录（GitHub Copilot / xAI）要用户在浏览器里输入的
+   * 验证码。载荷 OauthDeviceCode；登录结束（成功 / 失败 / 取消）不另推，以 oauthLogin 的
+   * 返回为准。
+   */
+  providerOauthDeviceCode: "provider:oauth-device-code",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   /**
@@ -232,6 +245,8 @@ export const ipcChannels = {
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
   usageEvent: "usage:event",
+  /** 「价格 · 能力图」的数据（载荷形状在 shared/price-chart.ts）：分数快照 × 已添加型号 × 本地每任务成本，主进程现算。回 `PriceChartData` */
+  usagePriceChart: "usage:price-chart",
   /** 自动更新：拉当前快照（`UpdaterSnapshot`，载荷形状在 shared/updater.ts）。之后的状态变化走 updaterState 推送 */
   updaterGet: "updater:get",
   /** 自动更新：手动检查（启动首查与 4h 定时在 main/updater/service.ts） */
@@ -246,8 +261,18 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
-  carryoverCreate: "carryover:create",
+  /**
+   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
+   * （会话不存在 / 没有新轮次时 null）。
+   */
+  sessionWrapupPlan: "session:wrapup-plan",
+  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
+  sessionWrapupRevise: "session:wrapup-revise",
+  /**
+   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
+   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
+   */
+  sessionWrapupConfirm: "session:wrapup-confirm",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
@@ -329,8 +354,16 @@ export const ipcChannels = {
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
 
 /**
- * pi 内建 provider 目录里的一条。目录由 pi 维护、每 4 小时从 pi.dev 刷新覆盖层，
- * 我们零维护——用户选中名字就拿到官方 baseUrl / 协议 / 模型清单。
+ * 主进程交给 agent 进程的环境变量：pi.dev 目录覆盖层的缓存文件（Orbita 自己的数据目录里）。
+ * 缺席（单测、裸跑 runtime）时目录缓存只留在内存，不落盘——绝不退回 pi CLI 的 ~/.pi/agent。
+ */
+export const CATALOG_CACHE_ENV = "ORBITA_MODEL_CATALOG_CACHE";
+
+/**
+ * pi 内建 provider 目录里的一条。目录由 pi 维护，我们零维护——用户选中名字就拿到官方
+ * baseUrl / 协议 / 模型清单。内建快照随 pi 版本发布；agent 进程启动时与之后每 4 小时，
+ * 再为预置服务商用到的那几份目录向 pi.dev 拉一次覆盖层（src/agent/model-catalog.ts），
+ * 所以新型号不必等 pi 发版。
  */
 export interface BuiltinProvider {
   id: string;
@@ -346,6 +379,12 @@ export interface BuiltinProvider {
  */
 export interface BuiltinModel {
   id: string;
+  /**
+   * 目录里的显示名（「Kimi K3」「Claude Opus 4.6」）。菜单与设置页的主文字按「声明里的名字 >
+   * 白名单 > 这里 > id」取（model-defaults 的 modelDisplayName）。目录名就是 id 本身时不带
+   * （pi.dev 的 kimi-for-coding 就是这样）——那不是名字。
+   */
+  name?: string;
   contextWindow: number;
   maxTokens: number;
   /**
@@ -416,6 +455,27 @@ export interface ProviderSecrets {
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+  /**
+   * pi 目录里这家叫什么（`KnownProvider.catalogId`，如 zhipu-coding ↔ zai-coding-cn）。
+   * 官方参数按它去查；缺席 = 目录里没这家（自建网关）。以前靠展开运算符夹带过线，没进契约。
+   */
+  catalogId?: string;
+  /**
+   * 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录了的型号，
+   * 白名单不覆盖——聚合网关会收窄型号能力（OpenCode Go 的 kimi-k3 只开 max 一档），
+   * 型号的通用口径在它那里不成立。目录没收录的型号仍由白名单补。
+   */
+  catalogAuthoritative?: boolean;
+  /**
+   * 多协议网关（`KnownProvider.protocolPerModel`）：本家目录收录的型号各走目录给它的协议。
+   * 只在实例地址属于这家某组官方端点时为 true（known-providers 的 endpointHintsOf）。
+   */
+  protocolPerModel?: boolean;
+  /**
+   * 实例地址所在那一组官方端点，按协议各一个地址（存的是旧写法 zen/go，这里就是 zen/go 那组）。
+   * 与 protocolPerModel 同进同出：型号的协议与条目不同时，地址从这里取。
+   */
+  access?: { api: string; baseUrl: string }[];
 }
 
 /**
@@ -425,11 +485,25 @@ export interface ProviderSecrets {
  */
 export interface OauthLoginInput {
   id: string;
+  /**
+   * 走哪家的登录流程 = 目录条目 id（`claude` / `openai-codex` / `github-copilot` / `xai`）。
+   * 也决定新建时落盘的 kind 与默认 endpoint。
+   */
+  kind: string;
   displayName: string;
   /** 新建时 true（id 撞名拒绝）；已有 provider 重登录时缺省 */
   create?: boolean;
   /** 仅 create 时生效：登录后启用的模型清单（一般空，登录后用 Fetch 拉取） */
   models?: ModelDecl[];
+}
+
+/** 设备码登录要用户在浏览器里输入的码（providerOauthDeviceCode 的载荷） */
+export interface OauthDeviceCode {
+  /** 哪个 provider 的登录（OauthLoginInput.id） */
+  id: string;
+  userCode: string;
+  /** 输入验证码的页面（主进程已经替用户打开过一次） */
+  verificationUri: string;
 }
 
 /**
@@ -475,6 +549,11 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
+  /**
+   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
+   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
+   */
+  carryoverId?: string;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -718,6 +797,18 @@ export type AgentCommand =
     }
   | {
       /**
+       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
+       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
+       */
+      type: "choreComplete";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      system: string;
+      prompt: string;
+    }
+  | {
+      /**
        * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
        * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
        * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
@@ -836,6 +927,15 @@ export type AgentCommand =
       pdfCitations?: boolean;
     }
   | { type: "listBuiltins" }
+  /**
+   * 目录联网刷新（pi.dev 覆盖层 + 基元律动自家目录）**只针对给出的目录 id**——
+   * agent 进程自己不知道用户添加了哪些服务商，没收到 `added` 之前一份也不拉。
+   * - `added`：已添加服务商用到的全部目录（主进程每次拉起 agent 进程、服务商列表变了都送一份全量）；
+   *   替换后台 4 小时循环的刷新范围，并当场按节流补刷一次；
+   * - `peek`：设置页点开一张还没保存的卡片，只刷这几份、不进 4 小时循环。
+   * 每份目录各自节流（4 小时内拉过就不拉）；有刷新动作就重报一次 `builtins`。
+   */
+  | { type: "refreshCatalogs"; scope: "added" | "peek"; catalogIds: string[] }
   /**
    * 热重载（1-1）：把现有 MCP 连接全拆，下一轮开机按新配置重建。**不送 servers**——
    * 配置本来就每轮由主进程现读现解析（开轮命令里的 `mcpServers`），这里再送一份
@@ -1138,6 +1238,8 @@ export type AgentEvent =
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
+  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
+  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
@@ -1151,10 +1253,17 @@ export type AgentEvent =
    * 我们传的意图档可能被模型能力裁剪（不支持的就近落档），芯片必须显示这个值
    * 而不是用户点的那一档。supported 是 pi 算的支持集（可能含我们菜单外的 xhigh /
    * max——菜单只放 5 档，这不矛盾：菜单管「能选什么」，supported 管「它支持什么」）。
+   *
+   * providerId / modelId 是**报这组真值的型号**（与 `model` 事件同口径：pi 的
+   * model.provider / model.id）。supported 只对这个型号成立——会话切到别的型号
+   * （含同名型号换服务商：kimi-coding/k3 → opencode-go/kimi-k3）后，renderer 必须
+   * 按它判出这份真值已过期、回落目录，而不是拿上一个型号的集合画菜单。
    */
   | {
       type: "thinking";
       sessionId: string;
+      providerId: string;
+      modelId: string;
       level: PiThinkingLevel;
       supported: readonly PiThinkingLevel[];
     }
