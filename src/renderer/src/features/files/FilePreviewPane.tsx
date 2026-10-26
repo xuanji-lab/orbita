@@ -8,12 +8,13 @@ import { highlightBlock, highlighterReady, langFromPath } from "../chat/highligh
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { isEditableTexFile } from "./editor-state.ts";
-import { TexEditorPane, type TexEditorHandle } from "./TexEditorPane.tsx";
+import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./TexEditorPane.tsx";
 import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
 import { WindowedText } from "./WindowedText";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FileListRequest, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
-import { PdfView, type PdfJump } from "./PdfView";
+import type { CiteEntry } from "@shared/cite";
+import { PdfView, type PdfJump, type PdfSyncJump } from "./PdfView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
@@ -52,6 +53,10 @@ export function FilePreviewPane(props: {
   pdfPreview?: boolean;
   /** 外部要求重载 PDF（编译成功后自增）：按 mtime 重读，失败时不增、保留旧 PDF */
   pdfReloadToken?: number;
+  /** SyncTeX 正向查找的落点（源码右键「在 PDF 中定位」）；只在项目 PDF 上生效 */
+  syncJump?: PdfSyncJump | null;
+  /** PDF 双击 / Ctrl+单击 → 外层反查源码。缺席 = 这份 PDF 不接反查 */
+  onLocatePdf?: (point: { page: number; x: number; y: number }) => void;
   /**
    * 论文工作台：把编辑器的把手 / 脏状态交给 FilesPanel（编译前保存、标签圆点都靠它）。
    * 缺席时编辑器照常能改能自动保存，只是外层拿不到把手。
@@ -61,6 +66,16 @@ export function FilePreviewPane(props: {
     onDirtyChange: (path: string, dirty: boolean) => void;
     onSaved?: () => void;
     onError: (path: string, message: string) => void;
+    /** agent 与本文件同改一个文件的边界（只读 / 重载 / 按块撤销） */
+    collab?: EditorCollabView;
+    /** 右键「在 PDF 中定位」（SyncTeX 正向查找）；缺席 = 不出这一项 */
+    onForwardSync?: (line: number) => void;
+    /** 右键「引用到对话」：把这一行 / 选区放进输入框 */
+    onQuote?: (text: string, line: number) => void;
+    /** PDF 反查回来的落点：滚到这一行并短暂高亮 */
+    reveal?: { line: number; token: number } | null;
+    /** 项目文献库：`\cite{` 的候选（不在 LaTeX 项目里时缺席） */
+    cite?: readonly CiteEntry[];
   };
 }) {
   const t = useT();
@@ -255,6 +270,8 @@ export function FilePreviewPane(props: {
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
             reloadToken={pdfReload + (props.pdfReloadToken ?? 0)}
+            syncJump={props.syncJump ?? null}
+            {...(props.onLocatePdf === undefined ? {} : { onLocate: props.onLocatePdf })}
           />
         ) : editorInitial !== null ? (
           <TexEditorPane
@@ -269,6 +286,11 @@ export function FilePreviewPane(props: {
               props.editor?.onSaved?.();
             }}
             onError={props.editor?.onError ?? noopError}
+            {...(props.editor?.collab === undefined ? {} : { collab: props.editor.collab })}
+            {...(props.editor?.onForwardSync === undefined ? {} : { onForwardSync: props.editor.onForwardSync })}
+            {...(props.editor?.onQuote === undefined ? {} : { onQuote: props.editor.onQuote })}
+            reveal={props.editor?.reveal ?? null}
+            {...(props.editor?.cite === undefined ? {} : { cite: props.editor.cite })}
           />
         ) : sentImage === undefined ? (
           <PreviewBody

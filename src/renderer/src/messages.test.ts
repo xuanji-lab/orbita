@@ -73,6 +73,22 @@ const ALLOWED_LATIN = new Set([
   "latexmk",
   "tlmgr",
   "tex",
+  // 文献库的文件类型（「一份 .bib」「refs 里的 .bib」——同 tex 一类，是用户照抄的字面量）
+  "bib",
+  // 在线检索的两个公共接口名与 DOI 这个编号体系的缩写（用户输入 / 照抄的字面量）
+  "DOI",
+  "arXiv",
+  "Crossref",
+  // BibTeX 的引用命令（界面上给出「已插入 \cite{…}」，用户照着核对）
+  "cite",
+  // 缺宏包安装：MiKTeX 的包管理器与提权命令（用户照抄进终端的字面量）
+  "mpm",
+  "MiKTeX",
+  "sudo",
+  // SyncTeX 双向定位：命令名与它的产品名（用户照抄 / 发行版自带的写法）
+  "SyncTeX",
+  "synctex",
+  "TeX",
   "Claude",
   "Code",
   // Claude 订阅的档位名（产品自称，不译）与登录域名

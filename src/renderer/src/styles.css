@@ -3324,6 +3324,9 @@ body {
 }
 .latex-problem {
   display: flex;
+  /* 窄面板（右栏 340）里动作组挤不下就换到下一行、靠右钉住（.row-trailing 的 margin-left
+     在换行后仍然生效）；不换行的话消息列只剩一百来像素，包名会被拆成三行 */
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 6px;
   padding: 5px var(--space-2);
@@ -3345,9 +3348,31 @@ body {
   color: var(--color-text-tertiary);
 }
 .latex-problem-msg {
-  flex: 1 1 auto;
+  display: flex;
+  /* 基线 160：包名（ctexart.cls）+ 「缺少宏包」四个字在最窄的面板里也占不到两行 */
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* 缺包行的第二行：反查进度 / 未知包 / 本机已有——弱一档的小字，不抢主行 */
+.latex-problem-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 点过「在终端安装」后的提示条：住在文件面板体顶部（编译条只在有打开的标签时出现，
+   而切到终端再回来标签已经重置——提示不能跟着它一起消失） */
+.latex-install-notice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
 }
 .latex-problem-acts {
   display: inline-flex;
@@ -3459,6 +3484,10 @@ body {
 .tex-editor-banner[data-tone="danger"] .tex-editor-banner-icon {
   color: var(--color-danger);
 }
+/* info = 「agent 正在写，先别动」：不是错误，一个锁形图标已经说完了，不着色 */
+.tex-editor-banner[data-tone="info"] .tex-editor-banner-icon {
+  color: var(--color-text-secondary);
+}
 .tex-editor-banner-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -3482,6 +3511,235 @@ body {
   padding: 0 8px;
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
+}
+
+/* agent 本轮的改动块（可单块撤 / 整轮撤）：住在编辑器与状态行之间，可滚 */
+.tex-editor-hunks {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+}
+.tex-editor-hunks-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary);
+}
+.tex-editor-hunks-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.tex-editor-hunks-title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.tex-editor-hunks-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.tex-editor-hunks-acts .quiet-control {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+.tex-editor-hunks-toggle {
+  padding: 0 6px;
+}
+.tex-editor-hunk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  list-style: none;
+}
+.tex-editor-hunk {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 26px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.tex-editor-hunk:hover {
+  background: var(--color-bg-hover);
+}
+.tex-editor-hunk[data-stale="true"] .tex-editor-hunk-preview,
+.tex-editor-hunk[data-stale="true"] .tex-editor-hunk-delta {
+  color: var(--color-text-tertiary);
+}
+.tex-editor-hunk-goto {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tex-editor-hunk-delta {
+  display: inline-flex;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.tex-editor-hunk-add {
+  color: var(--color-success);
+}
+.tex-editor-hunk-del {
+  color: var(--color-danger);
+}
+.tex-editor-hunk-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.tex-editor-hunk-stale {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-hunk .quiet-control {
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+}
+
+/*
+ * 「查找文献」面板（在线检索 → 追加 .bib → 光标处插入 \cite）：一张 portal 出来的
+ * 浮层，配方与右键菜单同一套（.glass-card .glass-float .menu-panel），只是内容是一行
+ * 输入 + 一列结果。行尾的来源列（Crossref / arXiv）贴右并用等宽字——它是机器事实，
+ * 与标题、作者这些「读」的内容分开。
+ */
+.cite-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  overflow-y: auto;
+}
+.cite-search-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cite-search-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.cite-search-spinner {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  animation: cite-search-spin 0.9s linear infinite;
+}
+@keyframes cite-search-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cite-search-form {
+  display: flex;
+  gap: var(--space-2);
+}
+.cite-search-submit {
+  flex: 0 0 auto;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.cite-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.cite-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-base);
+  text-align: left;
+}
+.cite-search-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cite-search-row-title {
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-search-row-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-search-row-source {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.cite-search-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.cite-search-notice-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.cite-search-notice[data-tone="ok"] .cite-search-notice-icon {
+  color: var(--color-success);
+}
+.cite-search-notice[data-tone="warn"] .cite-search-notice-icon {
+  color: var(--color-warning);
+}
+.cite-search-notice[data-tone="error"] .cite-search-notice-icon {
+  color: var(--color-danger);
+}
+.cite-search-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* 标签上的未保存圆点：与 ✕ 共用同一个 16px 槽位（CSS 负责悬停换位） */
@@ -3797,6 +4055,36 @@ body {
   border-radius: 2px;
   background: var(--color-citation-mark);
   mix-blend-mode: multiply;
+}
+
+/*
+ * SyncTeX 落点（源码 → PDF，PdfView.tsx）：短暂出现再淡出——一次定位不该在页面上
+ * 留下一个常驻标记，下一次定位用新的 token 重新播一遍。层在引用高亮之上（3 > 2），
+ * 不吃指针，翻页 / 选中文字都不受影响。
+ */
+.pdf-sync-mark {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
+  animation: pdf-sync-flash 2.4s ease-out forwards;
+}
+
+@keyframes pdf-sync-flash {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 /*

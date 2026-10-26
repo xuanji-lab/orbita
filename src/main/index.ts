@@ -53,6 +53,7 @@ import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { LatexRunner } from "./latex/run.ts";
 import { applyLatexRequest } from "./latex/agent-requests.ts";
 import { registerLatexIpc } from "./latex/ipc.ts";
+import { registerCiteIpc } from "./cite/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -683,6 +684,8 @@ void app.whenReady().then(async () => {
   // 的编译条共用同一个 runner——两边看到的是同一次编译）
   const latex = new LatexRunner();
   registerLatexIpc(latex, workspaces, sessions);
+  // 引用补全：读项目里的 .bib（只读盘、与编译同一道白名单与同一个项目目录）
+  registerCiteIpc(workspaces, sessions);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,

@@ -14,8 +14,9 @@
  * - **软换行**开启：右栏通常只有几百像素宽，不折行会逼着横向滚动读源码；
  * - 行号、当前行高亮、括号匹配、搜索（Ctrl/Cmd+F）。
  */
-import { EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import {
+  Decoration,
   drawSelection,
   EditorView,
   highlightActiveLine,
@@ -24,6 +25,7 @@ import {
   keymap,
   lineNumbers,
   rectangularSelection,
+  type DecorationSet,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
@@ -39,6 +41,83 @@ import { tags } from "@lezer/highlight";
 
 /** LaTeX 语言：stex 词法器（命令 / 注释 / 数学模式 / 环境名） */
 export const latexLanguage = StreamLanguage.define(stex);
+
+/**
+ * 只读开关。agent 正在写这个文件时整块关掉：`readOnly` 挡的是所有会改文档的事务
+ * （含粘贴与 Ctrl+Z），`editable(false)` 再让光标与输入框从 DOM 上消失——两者都要，
+ * 只有前者时看着还能打字、后者的拦截在拖放上又不够。
+ *
+ * 做成 Compartment 是因为「回合进行中」是个随时翻转的外部状态，
+ * 而重建编辑器会丢掉光标与撤销历史。
+ */
+export const readOnlyCompartment = new Compartment();
+
+export function readOnlyExtensions(readOnly: boolean): Extension[] {
+  return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
+}
+
+/** 换掉「agent 改动块」的高亮范围（每次回合落定 / 每撤一块算一次） */
+const setAgentMarks = StateEffect.define<DecorationSet>();
+
+/**
+ * agent 本轮新增的行的底色。**用 StateField 而不是静态 facet**：用户继续编辑时，
+ * 底色要跟着文字走（`map(tr.changes)`），否则一次回车就把高亮错到别处去。
+ */
+const agentMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    let next = marks.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(setAgentMarks)) next = effect.value;
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** 把一组字符区间换成「agent 改动」高亮事务（区间可以不按顺序给） */
+export function agentMarkEffect(ranges: readonly { from: number; to: number }[]): StateEffect<DecorationSet> {
+  const sorted = [...ranges].filter((range) => range.to > range.from).sort((a, b) => a.from - b.from);
+  return setAgentMarks.of(
+    Decoration.set(
+      sorted.map((range) => Decoration.mark({ class: "cm-agent-hunk" }).range(range.from, range.to)),
+      true,
+    ),
+  );
+}
+
+/** 换掉「SyncTeX 定位到的那一行」的高亮范围（PDF 双击 / 右键在 PDF 中定位的结果） */
+const setSyncLine = StateEffect.define<DecorationSet>();
+
+/**
+ * 与 agentMarks 同一套 StateField（用户一打字就跟着文字走，不会错行）：
+ * **整行底色**用 line 装饰而不是 mark——定位的是「这一行」，不是某段文字。
+ */
+const syncLineMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    let next = marks.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(setSyncLine)) next = effect.value;
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * 高亮一行。行装饰（Decoration.line）的区间**必须是零长**（CodeMirror 的硬约束：
+ * 传 from..to 会抛 "Line decoration ranges must be zero-length" 并掀翻整个编辑器），
+ * 只接受行的起点；1 基行号的换算在调用方。
+ */
+export function syncLineEffect(from: number): StateEffect<DecorationSet> {
+  return setSyncLine.of(Decoration.set([Decoration.line({ class: "cm-sync-line" }).range(from)], true));
+}
+
+/** 清掉定位高亮（TexEditorPane 在 2 秒后发这发，短暂停留是为了让人看见「跳到哪了」） */
+export function clearSyncLineEffect(): StateEffect<DecorationSet> {
+  return setSyncLine.of(Decoration.none);
+}
 
 /**
  * 语法着色只写 token，不写颜色值：深浅主题、纸面主题都按同一份 CSS 变量走。
@@ -75,6 +154,9 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
     EditorView.lineWrapping,
     latexLanguage,
     syntaxHighlighting(latexHighlight),
+    readOnlyCompartment.of(readOnlyExtensions(false)),
+    agentMarks,
+    syncLineMarks,
     search({ top: true }),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of((update) => {
@@ -123,6 +205,67 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
       },
       ".cm-searchMatch.cm-searchMatch-selected": {
         backgroundColor: "var(--color-bg-active)",
+      },
+      // agent 本轮新增的行：成功色的很低一档（同一色也用于 git additions / 编辑器徽标）。
+      // 只铺新增的行，上下文行不涂——「改了哪儿」不能被涂成「改了五行」
+      ".cm-agent-hunk": {
+        backgroundColor: "var(--color-success-soft)",
+        borderRadius: "2px",
+      },
+      // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的落点框同色系）
+      ".cm-sync-line": {
+        backgroundColor: "var(--color-accent-soft)",
+      },
+      // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
+      // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来
+      ".cm-tooltip": {
+        backgroundColor: "var(--color-bg-panel)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
+        color: "var(--color-text-primary)",
+      },
+      // key 是机器事实：等宽、sm 档；列表高度封顶（再长就该多打两个字）。
+      // 宽度也封顶（评审 F2）：一条长标题曾把弹层撑到窗口边缘、后半截被硬裁在词中间。
+      // 420px 是 1440 窗口下的上限；li 的省略号来自 CM 自己的 baseTheme，
+      // 全文在补充说明（info）里给——那里不受这一行宽度的限制。
+      // **选择器要带 `.cm-tooltip`**：baseTheme 写的是 `.cm-tooltip.cm-tooltip-autocomplete > ul`
+      // （两道类 + 元素），少写一道就比它弱，max-width 与行距会被静默盖掉（实测踩过）
+      ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+        fontFamily: "var(--font-family-mono)",
+        fontSize: "var(--font-size-sm)",
+        maxHeight: "16em",
+        maxWidth: "min(420px, 92vw)",
+      },
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+        padding: "var(--space-1) var(--space-2)",
+        lineHeight: "var(--line-height-ui)",
+      },
+      // 选中行：与列表选中同一套（淡底 + 墨色不变），不引入第四种强调色
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+        backgroundColor: "var(--color-bg-active)",
+        color: "var(--color-text-primary)",
+      },
+      // 命中的那段字只加粗，不画下划线（下划线在等宽小字里挤成一团）
+      ".cm-completionMatchedText": {
+        textDecoration: "none",
+        fontWeight: "650",
+      },
+      // 标题是散文不是机器事实：换回界面字面，退到第三档墨色
+      ".cm-completionDetail": {
+        marginLeft: "var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontStyle: "normal",
+        color: "var(--color-text-tertiary)",
+      },
+      // 选中项的补充说明（作者 + 来源 .bib），两行之间要真的换行
+      ".cm-tooltip.cm-completionInfo": {
+        padding: "var(--space-1) var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
+        whiteSpace: "pre-line",
+        maxWidth: "28em",
       },
       ".cm-panels": {
         backgroundColor: "var(--color-bg-panel)",

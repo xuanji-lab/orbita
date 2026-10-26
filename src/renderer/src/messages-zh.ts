@@ -1731,15 +1731,72 @@ export const zh: Messages = {
     noProblems: "无问题",
     errorCount: (n) => `${n} 个错误`,
     warningCount: (n) => `${n} 个警告`,
+    pendingCount: (n) => `${n} 个等待确认`,
     missingPackage: (name) => `缺少宏包 ${name}`,
+    engineWaiting: "引擎在等你确认安装，确认后编译才会继续",
     installInTerminal: "在终端安装",
-    installTip: (command) => `把 \`${command}\` 填进可见终端，回车由你按`,
+    installTip: (command, sudo) =>
+      sudo
+        ? `把 \`${command}\` 填进可见终端；sudo 密码由你自己输入，回车由你按`
+        : `把 \`${command}\` 填进可见终端，回车由你按`,
+    installThenRecompile: "装好后再编译一次（不会自动重编）",
+    packageLookingUp: "正在反查包名…",
+    packageAlreadyInstalled: "本机已能定位到这个文件：日志可能是旧的，或引擎用的是另一套 TeX 树",
+    packageNoTool: "没找到 tlmgr / mpm，无法反查所属宏包",
+    packageInvalidName: "文件名不合法：没有按宏包文件名去反查",
+    packageToolError: "反查命令没跑成（起不来或出错），这次没能查到所属宏包",
+    packageNotLookedUp: "这次没有反查（缺的文件太多，或反查通道不可用）",
+    packageUnknown: (file) => `未知包：没查到 ${file} 属于哪个包，请在 TeX 发行版里搜索这个文件名`,
     handToAgent: "交给智能体",
     handToAgentTip: "放进输入框的引用，发送由你决定",
     quoteError: "编译错误",
     quoteWarning: "编译告警",
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
+    quotePending: "等待确认安装",
+    /* ---------- SyncTeX 双向定位（源码 ↔ PDF） ---------- */
+    syncNoPdf: "还没有 PDF——先编译一次再定位。",
+    syncNoSynctex: "这份 PDF 里没有 SyncTeX 数据。重新编译一次就能跳转（编译时会自动带上 -synctex）。",
+    syncNotFound: "PDF 里没有这一处的位置记录。源码改过之后要先重新编译。",
+    syncOutside: "这一点落在项目之外的文件上（系统宏包），不是你能打开的源码。",
+    syncNotInstalled: "这台电脑上没有找到 synctex 命令，TeX 发行版可能缺组件。",
+    syncFailed: (detail) => `SyncTeX 出错：${detail}`,
+  },
+
+  /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
+  cite: {
+    // 抽屉的定位列已经写着文件名，消息里不再重复
+    badEntries: (count) => `有 ${count} 条格式不对，已跳过`,
+    unreadable: (detail) => `读不了这个文件：${detail}`,
+    /* 上限 / 体积挡下的文件：补全可能不全，必须说出来 */
+    skipped: (count) => `有 ${count} 份 .bib 没读（太大或太多），补全可能不全`,
+    truncated: "项目文件超出扫描上限，可能还有 .bib 没读到，补全可能不全",
+  },
+
+  /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */
+  citeSearch: {
+    menu: "查找文献…",
+    title: "查找文献",
+    placeholder: "标题、DOI 或 arXiv 编号",
+    search: "查找",
+    searching: "查找中…",
+    /* 结果行的来源列（两个公共接口的名字，不译） */
+    crossref: "Crossref",
+    arxiv: "arXiv",
+    empty: "没有找到。换个说法，或直接粘贴 DOI 或 arXiv 编号。",
+    offline: "连不上网络。检查网络或代理后再试。",
+    timeout: "查找超时（8 秒）。网络太慢或被挡下了。",
+    rateLimited: "请求太频繁，服务方在限速。等一会儿再试。",
+    notFound: "没有这个 DOI 或 arXiv 编号的记录。",
+    partial: (source) => `${source} 没答上来（超时或被限流），这次只有另一个来源的结果。`,
+    reused: (path) => `${path} 里已经有这一篇`,
+    failed: (detail) => `查找失败：${detail}`,
+    written: (path) => `已写入 ${path}`,
+    inserted: (key) => `已插入 \\cite{${key}}`,
+    insertBlocked: "已写入，但编辑器在这个回合结束前是只读的。",
+    conflict: (path) => `没有写入：${path} 在你挑选期间被改过了。再选一次会按新内容重新分配引用键。`,
+    writeFailed: (detail) => `没有写入：${detail}`,
+    outside: "这个文件不在 LaTeX 项目里。",
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
@@ -1752,6 +1809,9 @@ export const zh: Messages = {
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
   editor: {
     aria: "LaTeX 源码编辑器",
+    locateInPdf: "在 PDF 中定位",
+    quoteLine: "引用到对话",
+    findReference: "查找文献…",
     saved: "已保存",
     unsaved: "未保存",
     saving: "保存中…",
@@ -1767,6 +1827,17 @@ export const zh: Messages = {
     reload: "重新加载",
     keepMine: "保留我的",
     tooLarge: (size, limit) => `没有保存：${size} 超过了编辑器 ${limit} 的上限。`,
+    agentWriting: "智能体正在写这个文件，回合结束前编辑器只读。",
+    agentWrote: "智能体这一轮改过这个文件，回合结束前编辑器只读。",
+    agentOverwriteBanner: "智能体这一轮写过这个文件，而你的改动还没落盘。两边都没有被覆盖——选你要留下的那一版。",
+    useDisk: "用磁盘版本",
+    agentMayWrite: "这一轮跑了命令行、终端或 MCP 工具，它们也可能改写这个文件，回合结束前编辑器只读。",
+    agentHunks: (count) => `智能体这一轮改了 ${count} 处`,
+    undoTurn: "全部撤销",
+    undoHunk: "撤销",
+    hunkEdited: "已被改动，不可撤销",
+    hunksShow: "展开改动块",
+    hunksHide: "收起改动块",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

@@ -1875,15 +1875,74 @@ export const en = {
     noProblems: "No problems",
     errorCount: (n: number) => (n === 1 ? "1 error" : `${n} errors`),
     warningCount: (n: number) => (n === 1 ? "1 warning" : `${n} warnings`),
+    pendingCount: (n: number) => (n === 1 ? "1 waiting for you" : `${n} waiting for you`),
     missingPackage: (name: string) => `Missing package ${name}`,
+    engineWaiting: "The engine is waiting for you to confirm an install before the build can continue",
     installInTerminal: "Install in terminal",
-    installTip: (command: string) => `Fill \`${command}\` into the visible terminal — you press Enter`,
+    installTip: (command: string, sudo: boolean) =>
+      sudo
+        ? `Fill \`${command}\` into the visible terminal — you type the sudo password and press Enter`
+        : `Fill \`${command}\` into the visible terminal — you press Enter`,
+    installThenRecompile: "Compile again once it is installed (nothing recompiles on its own)",
+    packageLookingUp: "Looking up the package name…",
+    packageAlreadyInstalled:
+      "This machine can already find that file — the log may be stale, or the engine uses a different TeX tree",
+    packageNoTool: "tlmgr / mpm was not found, so the owning package cannot be looked up",
+    packageInvalidName: "Invalid file name — it is not a .sty / .cls name, so nothing was looked up",
+    packageToolError: "The lookup command did not run (failed to start or errored), so no package was found",
+    packageNotLookedUp: "Not looked up this time (too many missing files, or the lookup channel failed)",
+    packageUnknown: (file: string) =>
+      `Unknown package — nothing in your TeX distribution claims ${file}; search for that file name`,
     handToAgent: "Hand to agent",
     handToAgentTip: "Add it to the quote box; nothing is sent until you send it",
     quoteError: "Compile error",
     quoteWarning: "Compile warning",
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
+    quotePending: "Waiting for install confirmation",
+    /* ---------- SyncTeX (source ↔ PDF) ---------- */
+    syncNoPdf: "No PDF yet — compile once, then jump.",
+    syncNoSynctex: "This PDF has no SyncTeX data. Compile it again to enable jumping (the build passes -synctex for you).",
+    syncNotFound: "The PDF has no record for this spot. Recompile after editing the source.",
+    syncOutside: "This spot belongs to a file outside the project (a system package), not your source.",
+    syncNotInstalled: "The synctex command was not found. Your TeX distribution may be missing a component.",
+    syncFailed: (detail: string) => `SyncTeX failed: ${detail}`,
+  },
+
+  /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
+  cite: {
+    // 抽屉的定位列已经写着文件名，消息里不再重复（重复会把 300px 的面板挤成三行）
+    badEntries: (count: number) => `Skipped ${count} malformed ${count === 1 ? "entry" : "entries"}`,
+    unreadable: (detail: string) => `Couldn't read this file: ${detail}`,
+    /* 上限 / 体积挡下的文件：补全可能不全，必须说出来 */
+    skipped: (count: number) => `Not read: ${count} .bib ${count === 1 ? "file" : "files"} (too large or too many) — completions may be incomplete`,
+    truncated: "The project has more files than the scan reads — some .bib entries may be missing from completions",
+  },
+
+  /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */
+  citeSearch: {
+    menu: "Find reference…",
+    title: "Find a reference",
+    placeholder: "Title, DOI or arXiv ID",
+    search: "Search",
+    searching: "Searching…",
+    /* 结果行的来源列（两个公共接口的名字，不译） */
+    crossref: "Crossref",
+    arxiv: "arXiv",
+    empty: "No match. Try different words, or paste a DOI or arXiv ID.",
+    offline: "No network. Check the connection or proxy, then try again.",
+    timeout: "Search timed out (8s). The network may be slow or blocked.",
+    rateLimited: "Too many requests — the service is throttling us. Wait a moment and try again.",
+    notFound: "No record for this DOI or arXiv ID.",
+    partial: (source: string) => `${source} did not answer (timeout or throttled) — these results are from the other source.`,
+    reused: (path: string) => `Already in ${path}`,
+    failed: (detail: string) => `Search failed: ${detail}`,
+    written: (path: string) => `Saved to ${path}`,
+    inserted: (key: string) => `Inserted \\cite{${key}}`,
+    insertBlocked: "Saved, but the editor is read-only until the turn ends.",
+    conflict: (path: string) => `Not saved: ${path} changed while you were choosing. Pick again to re-key it.`,
+    writeFailed: (detail: string) => `Not saved: ${detail}`,
+    outside: "This file is not inside a LaTeX project.",
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
@@ -1896,6 +1955,9 @@ export const en = {
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
   editor: {
     aria: "LaTeX source editor",
+    locateInPdf: "Show in PDF",
+    quoteLine: "Quote to chat",
+    findReference: "Find reference…",
     saved: "Saved",
     unsaved: "Unsaved",
     saving: "Saving…",
@@ -1912,6 +1974,20 @@ export const en = {
     reload: "Reload from disk",
     keepMine: "Keep mine",
     tooLarge: (size: string, limit: string) => `Not saved: ${size} is over the ${limit} editor limit.`,
+    /* agent 与本文件同改一个（回合进行中只读 / 回合落定按块撤销） */
+    agentWriting: "The agent is writing this file. The editor is read-only until the turn ends.",
+    agentWrote: "The agent changed this file this turn. The editor is read-only until the turn ends.",
+    agentOverwriteBanner:
+      "The agent wrote this file this turn and you have changes that aren't on disk. Nothing was overwritten — choose which version to keep.",
+    useDisk: "Use disk version",
+    agentMayWrite:
+      "This turn ran a shell, terminal or MCP tool, which can also rewrite this file. The editor is read-only until the turn ends.",
+    agentHunks: (count: number) => `The agent changed ${count} block${count === 1 ? "" : "s"} this turn`,
+    undoTurn: "Undo all",
+    undoHunk: "Undo",
+    hunkEdited: "Edited since — cannot undo",
+    hunksShow: "Show blocks",
+    hunksHide: "Hide blocks",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

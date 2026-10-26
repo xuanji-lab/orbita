@@ -10,8 +10,14 @@ import {
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
   type LatexFileContext,
+  type LatexForwardOutcome,
+  type LatexForwardRequest,
   type LatexProjectOutcome,
   type LatexProbeResult,
+  type LatexPackageQuery,
+  type LatexResolvedPackage,
+  type LatexReverseOutcome,
+  type LatexReverseRequest,
   type LatexRunOutcome,
 } from "../../shared/latex.ts";
 
@@ -29,4 +35,13 @@ export const latexApi = {
   /** 把引擎 / 主文件选择写进项目 `.orbita/latex.json` */
   configure: (req: LatexConfigureRequest): Promise<LatexConfigureOutcome> =>
     ipcRenderer.invoke(latexChannels.configure, req),
+  /** 源码行 → PDF 位置（SyncTeX 正向；失败时 reason 说明是哪一种） */
+  synctexForward: (req: LatexForwardRequest): Promise<LatexForwardOutcome> =>
+    ipcRenderer.invoke(latexChannels.synctexForward, req),
+  /** PDF 页面坐标 → 源码行（SyncTeX 反向） */
+  synctexReverse: (req: LatexReverseRequest): Promise<LatexReverseOutcome> =>
+    ipcRenderer.invoke(latexChannels.synctexReverse, req),
+  /** 缺的文件名 → 发行版包名与安装命令（未知包时 packageName/command 为 null） */
+  packages: (req: LatexPackageQuery): Promise<LatexResolvedPackage[]> =>
+    ipcRenderer.invoke(latexChannels.packages, req),
 } as const;
