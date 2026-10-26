@@ -45,6 +45,7 @@ import type { EditorHunk } from "./editor-collab.ts";
 import type { FlushOutcome, TexEditorHandle } from "./TexEditorPane.tsx";
 import {
   closeTab,
+  decideFocusDrop,
   dropTabsAtRoot,
   fileTabName,
   openTab,
@@ -117,6 +118,12 @@ export function FilesPanel(props: {
    */
   focusWorkspaceId?: string | null;
   /**
+   * 专注时间已到（useFocus 的 done 相位）：左栏的专注视图还在、额外根也还在，
+   * 但这一轮专注结束了——该工作区的预览标签按「结束专注」同一纪律收掉。
+   * 与 focusWorkspaceId 分开传：id 不变，光看它分不出 run → done 这一拍
+   */
+  focusDone?: boolean;
+  /**
    * 左栏文件树的双击打开请求（与 citeFocus 同一套消费模式）：token 单调递增，
    * 同一个文件连点两次也重新激活。null = 没有请求
    */
@@ -186,26 +193,73 @@ export function FilesPanel(props: {
     kind: FileEntryKind;
   } | null>(null);
   const focusWorkspaceId = props.focusWorkspaceId ?? null;
+  const focusDone = props.focusDone === true;
   const tree = useFileTree(sessionId, workspaceId, session.workspaces, focusWorkspaceId);
 
-  // 专注 / 浏览态结束（或换到另一个工作区）：之前那个额外根失去 fs:read 白名单
-  // （roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的标签会重新读一次、
-  // 变成常驻「不是这条会话允许的根目录之一」（2026-10-22 发版前验收实测）。
-  // 与换会话 / 换工作区清标签同一条纪律，只收掉 root 恰是那个工作区路径的标签；
-  // 会话自己就在该工作区时（会话根包含它）标签仍可读，不动。
+  // 专注 / 浏览态结束（或换到另一个工作区）、以及专注到点（run → done）：之前那个
+  // 额外根失去 fs:read 白名单（roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的
+  // 标签会重新读一次、变成常驻「不是这条会话允许的根目录之一」（2026-10-22 发版前
+  // 验收实测）。与换会话 / 换工作区清标签同一条纪律，只收掉 root 恰是那个工作区路径
+  // 的标签；失去的根仍是白名单里的另一条（会话自己的根 / 会话的工作区 / 附加目录）时
+  // 标签仍可读，不动——专注的工作区恰好也是会话附加目录就是这种（#267 C8）。
+  //
+  // done 这一拍不一样：左栏专注视图与额外根都还在，focusWorkspaceId 一个字节也不变，
+  // 原先只看 id 的 effect 不触发——2026-10-23 验收 files.scope.done 实测 done 后
+  // tabCount=1，点「结束专注」才归零。但这一轮专注已经结束了，预览标签按「结束专注」
+  // 同一纪律收掉：同时盯 focusDone，用 panel-layout 的纯函数裁决该收哪个根——只在
+  // 真正的相位变化上给出路径，effect 依赖里有 tabs 也不会反复收。
+  //
+  // 「收哪个」不只看相位：失去的根若同时是会话附加目录（C8），标签仍读得动，不收。
   const previousFocusRef = useRef<string | null>(focusWorkspaceId);
+  const previousFocusDoneRef = useRef(focusDone);
+  // 渲染期就读这两只 ref：它们只在下面的 effect 里写，读到的就是「上一次提交的专注
+  // 相位」——正是判「这一拍刚失去根」要的那份。判决本身是纯函数，effect 用同一份输入
+  // 再算一次，两边不会分叉。
+  const focusDrop = decideFocusDrop({
+    previousWorkspaceId: previousFocusRef.current,
+    nextWorkspaceId: focusWorkspaceId,
+    previousDone: previousFocusDoneRef.current,
+    nextDone: focusDone,
+    sessionWorkspaceId: session.workspaceId,
+    workspaces: session.workspaces,
+    roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+  });
   useEffect(() => {
-    const previous = previousFocusRef.current;
+    // 判决用更新前的 ref（与渲染期同一份输入），然后记下这一拍
+    const drop = decideFocusDrop({
+      previousWorkspaceId: previousFocusRef.current,
+      nextWorkspaceId: focusWorkspaceId,
+      previousDone: previousFocusDoneRef.current,
+      nextDone: focusDone,
+      sessionWorkspaceId: session.workspaceId,
+      workspaces: session.workspaces,
+      roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+    });
     previousFocusRef.current = focusWorkspaceId;
-    if (previous === null || previous === focusWorkspaceId || session.workspaceId === previous) return;
-    const lostRoot = session.workspaces.find((workspace) => workspace.id === previous)?.path ?? null;
-    if (lostRoot === null) return;
-    const next = dropTabsAtRoot(tabs, activePath, lostRoot);
+    previousFocusDoneRef.current = focusDone;
+    if (drop.rootPath === null) return;
+    const next = dropTabsAtRoot(tabs, activePath, drop.rootPath);
     if (next.tabs.length === tabs.length) return;
     setTabs(next.tabs);
     setActivePath(next.activePath);
     if (next.activePath === null) setTreeOn(false);
-  }, [focusWorkspaceId, session.workspaceId, session.workspaces, tabs, activePath]);
+  }, [
+    focusWorkspaceId,
+    focusDone,
+    session.workspaceId,
+    session.workspaces,
+    tree.roots,
+    tree.attachmentsRoot,
+    tabs,
+    activePath,
+  ]);
+
+  /**
+   * 这一拍要收的标签先不渲染（C9）：读取 effect 是子组件的、先于上面收标签的 effect
+   * 跑，渲染出来就会拿刚失效的根再读一次（界面无报错，主进程日志多一条被拒记录）。
+   * 挡的是同一个判决、同一个根，effect 在下一拍把状态也收掉。
+   */
+  const shownTab = activeTab !== null && activeTab.root === focusDrop.rootPath ? null : activeTab;
 
   /**
    * 论文工作台：当前文件属于 LaTeX 项目时，标签行下方多一条编译条、面板底部多个
@@ -1389,26 +1443,28 @@ export function FilesPanel(props: {
           {/* 浮层形态的遮罩：常驻渲染，显隐由 container query 管（与树同源） */}
           <div className="files-panel-backdrop" aria-hidden="true" onClick={() => setTreeOn(false)} />
           {/* 稿件区：单标签，或并排的两块。左块在两种形态下是**同一个组件位置**
-              （只外面多一层 flex 容器），切布局不会把编辑器重挂 */}
-          {activeTab !== null && (
+              （只外面多一层 flex 容器），切布局不会把编辑器重挂。
+              C9：这一拍要收的标签（focusDrop）整块都不渲染——并排的两块请求的是
+              同一个根的白名单，只挡左块等于让右块拿刚失效的根再读一次 */}
+          {shownTab !== null && (
             <div className={`files-panel-panes${splitOn ? " split" : ""}`}>
               <div className="files-panel-pane">
                 <FilePreviewPane
-                  key={`left:${leftPath ?? activeTab.path}`}
+                  key={`left:${leftPath ?? shownTab.path}`}
                   sessionId={sessionId}
                   workspaceId={workspaceId}
                   extraWorkspaceId={focusWorkspaceId}
-                  root={activeTab.root}
-                  path={leftPath ?? activeTab.path}
+                  root={shownTab.root}
+                  path={leftPath ?? shownTab.path}
                   rootLabel={
-                    tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
+                    tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
                   }
-                  {...(leftPath === activeTab.path && activeTab.name !== undefined
-                    ? { sentImage: { name: activeTab.name } }
+                  {...(leftPath === shownTab.path && shownTab.name !== undefined
+                    ? { sentImage: { name: shownTab.name } }
                     : {})}
                   // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上；
                   // 并排时的左块若换成了主文件，旧跳转也不属于它
-                  jump={leftPath === activeTab.path && jump !== null && jump.citation.path === activeTab.path ? jump : null}
+                  jump={leftPath === shownTab.path && jump !== null && jump.citation.path === shownTab.path ? jump : null}
                   // 论文工作台：项目里的 PDF 走预览（不受「PDF 引用」实验开关管——
                   // 刚编出来的 PDF 是编译条的直接产物）；编译成功后按 mtime 重载。
                   // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
@@ -1417,7 +1473,7 @@ export function FilesPanel(props: {
                   // SyncTeX：左半显示的就是项目 PDF 时，落点框与双击反查都给它
                   syncJump={leftIsProjectPdf ? pdfSync : null}
                   {...(leftIsProjectPdf
-                    ? { onLocatePdf: (point: { page: number; x: number; y: number }) => locateSource(leftPath ?? activeTab.path, point) }
+                    ? { onLocatePdf: (point: { page: number; x: number; y: number }) => locateSource(leftPath ?? shownTab.path, point) }
                     : {})}
                   editor={{
                     register: registerEditor,
@@ -1428,21 +1484,21 @@ export function FilesPanel(props: {
                     // 写过的文件用 writePhase 定文案；本轮只要出现 shell / 终端 / MCP，
                     // 打开的文件一律按「可能被写」占位（看不见它写了哪个文件）
                     collab: {
-                      hold: collab.writePhase(leftPath ?? activeTab.path) ?? (collab.mayWrite ? "possible" : null),
+                      hold: collab.writePhase(leftPath ?? shownTab.path) ?? (collab.mayWrite ? "possible" : null),
                       turnActive: session.phase === "turn",
-                      hunks: collab.hunks.get(leftPath ?? activeTab.path) ?? EMPTY_HUNKS,
-                      onUndone: (ids) => collab.dropHunks(leftPath ?? activeTab.path, ids),
-                      sync: syncFor(collab.sync, leftPath ?? activeTab.path, samePath),
+                      hunks: collab.hunks.get(leftPath ?? shownTab.path) ?? EMPTY_HUNKS,
+                      onUndone: (ids) => collab.dropHunks(leftPath ?? shownTab.path, ids),
+                      sync: syncFor(collab.sync, leftPath ?? shownTab.path, samePath),
                     },
                     // 源码 ↔ PDF（SyncTeX）：右键定位（只对 LaTeX 项目出现）+ 反查回来的落点
                     ...(latex.project === null
                       ? {}
-                      : { onForwardSync: (line: number) => locateInPdf(leftPath ?? activeTab.path, line) }),
-                    onQuote: (text, line) => quoteEditorText(leftPath ?? activeTab.path, text, line),
+                      : { onForwardSync: (line: number) => locateInPdf(leftPath ?? shownTab.path, line) }),
+                    onQuote: (text, line) => quoteEditorText(leftPath ?? shownTab.path, text, line),
                     // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
                     ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
                     reveal:
-                      reveal !== null && samePath(reveal.path, leftPath ?? activeTab.path)
+                      reveal !== null && samePath(reveal.path, leftPath ?? shownTab.path)
                         ? { line: reveal.line, token: reveal.token }
                         : null,
                   }}
@@ -1457,10 +1513,10 @@ export function FilesPanel(props: {
                     sessionId={sessionId}
                     workspaceId={workspaceId}
                     extraWorkspaceId={focusWorkspaceId}
-                    root={activeTab.root}
+                    root={shownTab.root}
                     path={splitPdfPath}
                     rootLabel={
-                      tree.roots.find((r) => r.path === activeTab.root)?.label ?? pathTail(activeTab.root)
+                      tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
                     }
                     pdfPreview
                     pdfReloadToken={latex.pdfReloadToken}
