@@ -37,6 +37,7 @@ export function registerComputerUseIpc(
   emergencyStop?: EmergencyStopController,
 ): void {
   ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
+  ipcMain.handle(computerUseChannels.computerUseStatusGet, (): SandboxStatus => controller.status());
   ipcMain.handle(
     computerUseChannels.computerUseStart,
     (): Promise<ComputerUseStartResult> => controller.start(),

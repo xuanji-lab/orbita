@@ -59,6 +59,11 @@ export const computerUseChannels = {
   /** 主进程 → renderer：沙箱状态机每次迁移推一次最新 SandboxStatus */
   computerUseStatus: "computer-use:status",
   /**
+   * renderer 发起、主进程回答：**当前**状态（不依赖迁移推送）。
+   * 设置页每次挂载拉一次——沙盒是应用级的，页面切走再回来时不能按 off 画。
+   */
+  computerUseStatusGet: "computer-use:status-get",
+  /**
    * 急停热键的注册状态（renderer 发起、主进程回答）。**注册失败必须让用户看见**：
    * `globalShortcut.register` 被占用时返回 false 而不是抛错，不 surface 的话用户
    * 以为自己有保护。设置页每次挂载问一次。

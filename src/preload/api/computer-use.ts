@@ -26,8 +26,15 @@ export const computerUseApi = {
   screenshot: (maxWidth?: number): Promise<ComputerUseScreenshotResult> =>
     ipcRenderer.invoke(computerUseChannels.computerUseScreenshot, maxWidth),
   /**
-   * 订阅沙箱状态机的每次迁移，返回退订函数。没有拉取通道——沙箱不跨应用存活
-   * （shared/computer-use.ts 的契约说明），renderer 冷启动直接按 off 画。
+   * 取当前状态（挂载时拉一次）。**为什么需要它**：沙盒是应用级的，不随设置页卸载；
+   * 而这里只订阅状态迁移的推送——用户离开设置页再回来（组件重挂载）时，初始 state 是 off，
+   * 之后没有新的迁移可听，于是徽标永远按未启动画：停不掉正在跑的沙盒，点启动还会报
+   * 「沙箱已经在运行」（2026-10-27 真机 P1，稳定复现 3/3）。
+   * 这**不违背**「沙箱不跨应用存活」：应用活着但页面切走时，状态真实存在于主进程。
+   */
+  status: (): Promise<SandboxStatus> => ipcRenderer.invoke(computerUseChannels.computerUseStatusGet),
+  /**
+   * 订阅沙箱状态机的每次迁移，返回退订函数。
    */
   /** 急停热键的注册状态（设置页每次挂载问一次；失败时如实说「被占用」） */
   emergencyStopState: (): Promise<EmergencyStopStatus> =>

@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_UIA_TIMEOUT_MS,
+  computerUseChannels,
   isUiaRequest,
   isWindowScreenshotRequest,
   screenshotPointToNative,
@@ -99,5 +100,19 @@ describe("isUiaRequest（UIA 车道不占桌面租约的判据）", () => {
 
   test("看门狗 5 秒：比 guest 命令的 45 秒短一个量级，它管的是跨进程调用而不是整条通道", () => {
     assert.equal(COMPUTER_USE_UIA_TIMEOUT_MS, 5_000);
+  });
+});
+
+describe("computerUseChannels（IPC 契约真源）", () => {
+  test("每个通道值唯一、都带 computer-use: 前缀（复制粘贴改错会在这里红）", () => {
+    const values = Object.values(computerUseChannels);
+    assert.equal(new Set(values).size, values.length);
+    for (const value of values) assert.match(value, /^computer-use:/);
+  });
+
+  test("有「取当前状态」通道——只靠迁移推送会让重挂载的设置页永远按 off 画", () => {
+    // 2026-10-27 真机 P1：沙盒在跑时离开设置页再回来，徽标显示未启动、
+    // 停止按钮灰、点启动报「沙箱已经在运行」，用户从 UI 停不掉。
+    assert.equal(computerUseChannels.computerUseStatusGet, "computer-use:status-get");
   });
 });

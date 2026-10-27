@@ -1697,8 +1697,14 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   /** 最近一次探测结果。提升到这里：「启动」要不要置灰看它（平台不对时主进程也会拒） */
   const [probeResult, setProbeResult] = useState<ComputerUseProbeResult | null>(null);
 
-  // onStatus 返回退订函数，正好作 effect 的清理
-  useEffect(() => api.computerUse.onStatus(setStatus), []);
+  // onStatus 返回退订函数，正好作 effect 的清理；
+  // 挂载时再拉一次当前值——沙盒是应用级的，离开设置页再回来时组件重挂载，
+  // 只靠迁移推送会一直按 off 画（停不掉正在跑的沙盒）。
+  useEffect(() => {
+    const unsubscribe = api.computerUse.onStatus(setStatus);
+    void api.computerUse.status().then(setStatus);
+    return unsubscribe;
+  }, []);
 
   const control = sandboxControl(status.state, pending);
   const visual = statusVisual(status.state, t);
