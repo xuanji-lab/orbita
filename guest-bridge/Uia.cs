@@ -1056,13 +1056,20 @@ internal static class Uia
         string badTimeout = NormalizeTimeout(Program.ExtractNumber(raw, "timeoutMs"), out timeoutMs);
         if (badTimeout != null) return Fail(badTimeout);
 
+        // 应用级准入（0.11.0）：目标窗口属于谁？观察模式，不拒，只标注进回执。
+        // 在 STA 线程之外算（进程表快照与 UIA 无关），结果作为字符串交给 BuildActJson 拼进 JSON。
+        Admission.Decision admit = Admission.JudgeWindow(hwnd.ToInt64(), Admission.Snapshot(),
+            Admission.Roots(), Admission.MergeAllowExe(Program.ExtractString(raw, "allowExe")));
+        Admission.Log("uia-act", admit);
+        string admitJson = Admission.JsonFields(admit);
+
         bool timedOut;
         string json;
         try
         {
             json = Run(delegate
             {
-                return BuildActJson(hwnd, action, hasRef, refNo, hasName, name, value);
+                return BuildActJson(hwnd, action, hasRef, refNo, hasName, name, value, admitJson);
             }, timeoutMs, out timedOut);
         }
         catch (Exception ex)
@@ -1075,7 +1082,7 @@ internal static class Uia
     }
 
     private static string BuildActJson(IntPtr hwnd, string action, bool hasRef, int refNo, bool hasName,
-        string name, string value)
+        string name, string value, string admitJson)
     {
         Stopwatch clock = Stopwatch.StartNew();
         IntPtr automation = EnsureAutomation();
@@ -1162,7 +1169,8 @@ internal static class Uia
                 .Append(",\"controlType\":").Append(Program.JsonQuote(controlType))
                 .Append(",\"focused\":").Append(focused ? "true" : "false")
                 .Append(",\"autoSetFocus\":").Append(warning == null ? "true" : "false")
-                .Append(",\"elapsedMs\":").Append(clock.ElapsedMilliseconds);
+                .Append(",\"elapsedMs\":").Append(clock.ElapsedMilliseconds)
+                .Append(admitJson);
             if (warning != null) json.Append(",\"autoSetFocusWarning\":").Append(Program.JsonQuote(warning));
             json.Append("}");
             Program.Log("uia-act hwnd " + hwnd.ToInt64() + " " + action + " → 「" + targetName + "」（"

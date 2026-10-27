@@ -9,6 +9,14 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import {
+  COMPUTER_USE_CONFINED_WRITE_TOOLS,
+  COMPUTER_USE_ESCAPING_WRITE_TOOLS,
+  COMPUTER_USE_READ_TOOLS,
+  computerUseWriteTier,
+} from "../shared/permission.ts";
+import { COMPUTER_USE_TOOL_NAMES } from "./computer-tools.ts";
+import { SANDBOX_BROWSER_TOOL_NAMES } from "./sandbox-tools.ts";
 
 function event(toolName: string, input: Record<string, unknown> = {}): ToolCallLike {
   return { toolCallId: `c-${toolName}`, toolName, input };
@@ -127,6 +135,95 @@ describe("电脑使用：会话授权（skip 档的洞）", () => {
     assert.equal((await gate(event("computer_click", { x: 1, y: 1 }))).block, true);
     setState("granted");
     assert.deepEqual(await gate(event("computer_click", { x: 1, y: 1 })), {});
+  });
+});
+
+describe("电脑使用：写件分档（沙箱内一次性授权 / 逸出逐次确认）", () => {
+  /**
+   * **表驱动 + 名字真源**：工具名不在这里手抄，而是从两处工具定义列表（computer-tools.ts /
+   * sandbox-tools.ts）取——以后加一件写工具、忘了归类，这条测试当场红，而不是等它在
+   * skip 档免审批跑一次。写件两档之外只剩只读件，正好覆盖全部 computer use 工具。
+   */
+  test("每一件写工具都被分档，一件不漏：写件两档 ∪ 读件 = 全部工具名", () => {
+    const classified = new Set<string>();
+    for (const tool of COMPUTER_USE_CONFINED_WRITE_TOOLS) classified.add(tool);
+    for (const tool of COMPUTER_USE_ESCAPING_WRITE_TOOLS) classified.add(tool);
+    assert.equal(
+      classified.size,
+      COMPUTER_USE_CONFINED_WRITE_TOOLS.length + COMPUTER_USE_ESCAPING_WRITE_TOOLS.length,
+      "两档之间有重叠",
+    );
+
+    for (const tool of [...COMPUTER_USE_TOOL_NAMES, ...SANDBOX_BROWSER_TOOL_NAMES]) {
+      const tier = computerUseWriteTier(tool);
+      const readOnly = (COMPUTER_USE_READ_TOOLS as readonly string[]).includes(tool);
+      assert.equal(
+        tier !== null || readOnly,
+        true,
+        `${tool} 既不是读件也没有分档——新增 computer use 工具必须归到 confined / escaping`,
+      );
+      assert.equal(tier !== null && readOnly, false, `${tool} 不能同时是读件与写件`);
+    }
+  });
+
+  test("skip + 未授权 + 沙箱内写件：一次会话卡之后不再问（旧行为，别弄坏）", async () => {
+    const { gate, asked, grants } = computerGate({ mode: "skip" });
+    for (const tool of COMPUTER_USE_CONFINED_WRITE_TOOLS) {
+      await gate(event(tool, tool === "sandbox_navigate" ? { url: "https://example.com" } : {}));
+    }
+    assert.equal(asked.length, 1, "沙箱内的写件只花一次会话授权");
+    assert.equal(asked[0]?.scope, "session");
+    assert.deepEqual(grants, [true]);
+  });
+
+  test("skip + 已授权 + 逸出件（upload / download）：**每一次**都弹卡，scope 是 call", async () => {
+    const { gate, asked, grants } = computerGate({ mode: "skip", state: "granted" });
+    await gate(event("sandbox_upload", { path: "C:\\Users\\me\\a.txt", selector: "input[type=file]" }));
+    await gate(event("sandbox_upload", { path: "C:\\Users\\me\\b.txt", selector: "input[type=file]" }));
+    await gate(event("sandbox_download", { selector: "a.download" }));
+    assert.equal(asked.length, 3, "会话授权覆盖不了把宿主文件带出 / 带进边界");
+    for (const request of asked) assert.equal(request.scope, "call");
+    assert.deepEqual(grants, [], "逸出件不触发会话授权");
+  });
+
+  test("skip + 未授权 + 逸出件：直接逐次确认，**不**先弹会话卡", async () => {
+    const { gate, asked, grants } = computerGate({ mode: "skip" });
+    assert.deepEqual(await gate(event("sandbox_download", { selector: "a.download" })), {});
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0]?.scope, "call", "不上会话卡：授权不覆盖逸出，先问这一次就够");
+    assert.deepEqual(grants, []);
+  });
+
+  test("逸出件被拒绝：这一次拦下，不影响后续沙箱内动作", async () => {
+    const { gate, asked } = computerGate({ mode: "skip", answers: [{ behavior: "deny" }] });
+    const blocked = await gate(event("sandbox_upload", { path: "C:\\Users\\me\\a.txt" }));
+    assert.equal(blocked.block, true);
+    assert.equal(asked.length, 1);
+    // 下一件沙箱内点击：没有会话授权过，所以仍要一次会话卡（跟逸出件的拒绝无关）
+    assert.deepEqual(await gate(event("computer_click", { x: 1, y: 1 })), {});
+    assert.equal(asked.length, 2);
+    assert.equal(asked[1]?.scope, "session");
+  });
+
+  test("manual 档 + 逸出件：照旧逐次问（普通卡），不另弹会话卡", async () => {
+    const { gate, asked, grants } = computerGate({ mode: "manual" });
+    for (const tool of COMPUTER_USE_ESCAPING_WRITE_TOOLS) {
+      assert.deepEqual(await gate(event(tool, {})), {});
+    }
+    assert.equal(asked.length, COMPUTER_USE_ESCAPING_WRITE_TOOLS.length);
+    for (const request of asked) assert.equal(request.scope, undefined);
+    assert.deepEqual(grants, []);
+  });
+
+  test("撤销 / 拒绝之后逸出件直接拒：不再弹卡去点允许", async () => {
+    const revoked = computerGate({ mode: "skip", state: "revoked" });
+    assert.equal((await revoked.gate(event("sandbox_upload", { path: "x" }))).block, true);
+    assert.deepEqual(revoked.asked, []);
+
+    const denied = computerGate({ mode: "skip", state: "denied" });
+    const blocked = await denied.gate(event("sandbox_download", { selector: "a" }));
+    assert.equal(blocked.block, true);
+    assert.deepEqual(denied.asked, []);
   });
 });
 

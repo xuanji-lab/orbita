@@ -10,7 +10,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import { effectiveAllowNetwork, effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
+import {
+  effectiveAllowNetwork,
+  effectiveGuestAllowExe,
+  effectiveLanguage,
+  type Language,
+  type ThemePreference,
+} from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
@@ -510,6 +516,12 @@ void app.whenReady().then(async () => {
      * 读的是同一个 SettingsStore（有缓存），不新开一套读写。
      */
     allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
+    /**
+     * 应用级准入白名单（intra-guest 判定用）：内置 msedge.exe ∪ 设置里的 allowedApps。
+     * **每条做准入判定的命令现读一次**（不写 .wsb、不用重启沙箱）：改设置下一条点击就生效。
+     * SettingsStore 有缓存，命中时只是一次对象读取。
+     */
+    allowedApps: async () => effectiveGuestAllowExe(await settings.read()),
     // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
     killTreeByPid,
     /**

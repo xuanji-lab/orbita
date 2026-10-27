@@ -9,6 +9,7 @@ import {
   COMPACTION_PERCENT,
   effectiveIntentSettings,
   effectiveAllowNetwork,
+  effectiveGuestAllowExe,
   parseComputerUse,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
@@ -697,5 +698,40 @@ describe("parseSettings 的 computerUse（沙箱出网开关）", () => {
 
   it("只认识的键留下，同一个子对象里的未知字段丢掉", () => {
     deepStrictEqual(parseComputerUse({ allowNetwork: true, proxy: "http://x" }), { allowNetwork: true });
+  });
+});
+
+describe("parseSettings 的 computerUse.allowedApps（应用级准入白名单）", () => {
+  it("缺席 = 不落键；生效值只拿内置默认（msedge.exe）", () => {
+    deepStrictEqual(parseSettings({}).computerUse, undefined);
+    deepStrictEqual(effectiveGuestAllowExe(undefined), ["msedge.exe"]);
+    deepStrictEqual(effectiveGuestAllowExe({ computerUse: {} }), ["msedge.exe"]);
+    deepStrictEqual(effectiveGuestAllowExe({ computerUse: { allowNetwork: false } }), ["msedge.exe"]);
+  });
+
+  it("规范化：去空白、取路径末段、小写、去重；用户项追加在内置默认之后", () => {
+    deepStrictEqual(
+      parseSettings({ computerUse: { allowedApps: ["  NotePad.EXE ", "C:\\Windows\\System32\\calc.exe", "notepad.exe"] } })
+        .computerUse,
+      { allowedApps: ["notepad.exe", "calc.exe"] },
+    );
+    deepStrictEqual(
+      effectiveGuestAllowExe({ computerUse: { allowedApps: ["notepad.exe"] } }),
+      ["msedge.exe", "notepad.exe"],
+    );
+  });
+
+  it("坏值丢掉：不带 .exe 的名字、非字符串、空表都不落键（空表 = 只用内置默认）", () => {
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: ["notepad", 42, "", null] } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: [] } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: "notepad.exe" } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: [".exe"] } }).computerUse, undefined);
+  });
+
+  it("两键可以只写一个：只写白名单时出网仍按缺省（允许），两处都不留谎", () => {
+    deepStrictEqual(parseComputerUse({ allowedApps: ["notepad.exe"] }), { allowedApps: ["notepad.exe"] });
+    deepStrictEqual(parseComputerUse({ allowNetwork: false }), { allowNetwork: false });
+    deepStrictEqual(effectiveAllowNetwork({ computerUse: { allowedApps: ["notepad.exe"] } }), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+    deepStrictEqual(parseComputerUse({ allowedApps: ["notepad.exe"], proxy: "http://x" }), { allowedApps: ["notepad.exe"] });
   });
 });

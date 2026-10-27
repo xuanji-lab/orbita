@@ -18,6 +18,7 @@
  */
 import {
   computerUseGuestCommands,
+  type ComputerUseAdmission,
   type ComputerUseGuestCommand,
   type ComputerUseScreenshotResult,
   type ComputerUseToolOutcome,
@@ -128,7 +129,8 @@ export async function applyComputerUseRequest(
           ok: true,
           text:
             `Sent a ${kind} at (${request.x}, ${request.y}) on the sandbox desktop. It has been delivered — ` +
-            "take a screenshot to see what it did.",
+            "take a screenshot to see what it did." +
+            admissionNote(outcome.admission, sessionId),
         };
       }
       case "type": {
@@ -160,7 +162,8 @@ export async function applyComputerUseRequest(
           ok: true,
           text:
             `Scrolled by ${request.deltaY} wheel notch(es) at (${request.x}, ${request.y}) on the sandbox desktop ` +
-            "(positive = down). Take a screenshot to see the new position.",
+            "(positive = down). Take a screenshot to see the new position." +
+            admissionNote(outcome.admission, sessionId),
         };
       }
       // ── UIA 车道（桥 0.10.0）：按控件动作，不按坐标、不抢前台 ─────────────
@@ -320,6 +323,29 @@ function uiaListText(reply: {
   return `${header}\n${body}\n\n${tail}`;
 }
 
+/**
+ * 应用级准入给模型的一句话（桥 0.11.0 的观察模式）。**只在回执里，不改变行为**：
+ * 这一轮不拒任何目标，只是让「这一下打在了谁身上」在回执和日志里可见。
+ *
+ * 为什么要写给模型看：它后面的动作是按「我点的是自己那只 Edge」推断的，如果实际点的是
+ * notepad.exe，接着的截图/断言会全都对不上——这句话让它能自己发现目标错了。
+ */
+function admissionNote(admission: ComputerUseAdmission | undefined, sessionId: string): string {
+  if (admission === undefined) return "";
+  const target = admission.targetExe === "" ? "(unknown process)" : admission.targetExe;
+  console.log(
+    `[computer-use] ${sessionId} admission=${admission.admission} targetExe=${target}` +
+      (admission.targetPid === undefined ? "" : ` pid=${admission.targetPid}`),
+  );
+  const tail =
+    admission.admission === "bypassed"
+      ? "the target is outside the sandbox session's own process tree; this turn only observes and logs it (nothing is blocked)"
+      : admission.admission === "unknown"
+        ? "no target window could be resolved at that point"
+        : "the target belongs to the sandbox session's own browser / process tree";
+  return ` Admission (guest-side): "admission":"${admission.admission}","targetExe":"${target}" — ${tail}.`;
+}
+
 /** uia-act 成功回执 → 给模型读的文本（含 AutoSetFocus 降级时的抢焦点警告） */
 function uiaActText(reply: {
   hwnd: number;
@@ -330,6 +356,7 @@ function uiaActText(reply: {
   focused: boolean;
   autoSetFocus: boolean;
   autoSetFocusWarning?: string;
+  admission?: ComputerUseAdmission;
   elapsedMs: number;
 }): string {
   const name = reply.name === "" ? "(unnamed control)" : `"${reply.name}"`;
@@ -349,7 +376,8 @@ function uiaActText(reply: {
       : "The window did not need the foreground, so the sandbox desktop was not taken over.") +
     " Take a computer_screenshot (window " +
     reply.hwnd +
-    ") to see what changed.";
+    ") to see what changed." +
+    admissionNote(reply.admission, "uia-act");
   if (reply.autoSetFocus) return head;
   const warning =
     reply.autoSetFocusWarning ??

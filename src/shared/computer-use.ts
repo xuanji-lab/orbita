@@ -339,6 +339,87 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  */
 export const COMPUTER_USE_DEFAULT_ALLOW_NETWORK = true;
 
+// ── 应用级准入（guest 桥内判定）────────────────────────────────────────
+
+/**
+ * 一次输入动作**打在谁身上**的判定结果。判定只能在 guest 里做：Windows Sandbox 是完整 VM，
+ * guest 的进程在宿主任务管理器里看不到、PID 不可跨边界映射。所以桥拿目标 hwnd →
+ * `GetWindowThreadProcessId` 得到 guest 内 PID → 对照「自己启动的进程树」与 exe 白名单。
+ *
+ * - `owned`：在我们自己起的进程树里（桥的 worker → 该会话的 Edge）。
+ * - `allowlisted`：不在树里，但 exe 在白名单里（缺省只有 msedge.exe——Edge 的网络进程 /
+ *   launcher 可能被重新拉成树的旁支，靠树判会误报）。
+ * - `bypassed`：两者都不是。**本轮观察模式：不拒**，只在回执与 bridge.log 里标记。
+ *   先量清楚模型实际会点哪些 exe，再决定要不要拒——「沙箱内任意应用都算安全」是合理的产品
+ *   假设，因为 VM 是一次性的。
+ * - `unknown`：拿不到目标窗口 / 进程（点在桌面上、窗口刚关）。不是拒绝，也不是放行。
+ */
+export const COMPUTER_USE_ADMISSION_VERDICTS = ["owned", "allowlisted", "bypassed", "unknown"] as const;
+export type ComputerUseAdmissionVerdict = (typeof COMPUTER_USE_ADMISSION_VERDICTS)[number];
+
+/** 桥下发给回执、宿主再抬到工具回执里的准入信息 */
+export interface ComputerUseAdmission {
+  admission: ComputerUseAdmissionVerdict;
+  /** 目标窗口所属进程的 exe 名（notepad.exe）；`unknown` 时是空串 */
+  targetExe: string;
+  /** guest 内 PID（不跨边界，只在 guest 里有意义）；`unknown` 时缺省 */
+  targetPid?: number;
+}
+
+/**
+ * 准入白名单的**内置默认**：只认沙箱里的 Edge。**全栈唯一来源**：设置解析的兜底
+ * （`shared/settings.ts` 的 `effectiveGuestAllowExe`）、控制器下发给桥的字段、桥自己的
+ * 兜底（guest-bridge/Admission.cs 的 DefaultAllowExe）都从这里对齐。
+ *
+ * 为什么 Edge 需要显式放行：树判定靠父链，而 Edge 的 launcher / 网络进程有机率被重新
+ * 拉起或重新挂父，父链断了就落到 `bypassed`——它不是逸出风险，是自家浏览器。
+ */
+export const COMPUTER_USE_DEFAULT_ALLOWED_APPS = ["msedge.exe"] as const;
+
+/**
+ * exe 名的规范化：去空白、只取路径末段、小写、只认 `*.exe`。
+ * 取末段是为了让手写的设置（`C:\\Program Files\\...\\notepad.exe`）也能用；
+ * 坏值返 null（解析层丢掉，不落盘一个永远匹配不上的名字）。
+ */
+export function normalizeGuestAppName(value: string): string | null {
+  const base = value.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const name = base.trim().toLowerCase();
+  if (!/^[a-z0-9._-]+\.exe$/.test(name)) return null;
+  return name;
+}
+
+/**
+ * 真正下发给桥的白名单 = 内置默认 ∪ 用户设置（规范化、去重、保序）。
+ * 用户加的是**追加**，不是替换：拿掉 msedge.exe 得改默认常量，不该靠手删设置做到。
+ */
+export function mergeGuestAllowExe(userList: readonly string[] | undefined): string[] {
+  const out: string[] = [...COMPUTER_USE_DEFAULT_ALLOWED_APPS];
+  for (const entry of userList ?? []) {
+    const name = normalizeGuestAppName(entry);
+    if (name !== null && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/**
+ * 从桥的回执里读准入信息。字段不齐 / 值不认识返 null（老桥没有这些字段，回执行为不变）。
+ * 只认 shared 里的四个 verdict——桥以后加新值，这里要先改，不能让它静默流进 UI。
+ */
+export function parseComputerUseAdmission(resp: Record<string, unknown>): ComputerUseAdmission | null {
+  const verdict = resp["admission"];
+  if (typeof verdict !== "string" || !(COMPUTER_USE_ADMISSION_VERDICTS as readonly string[]).includes(verdict)) {
+    return null;
+  }
+  const targetExe = typeof resp["targetExe"] === "string" ? resp["targetExe"] : "";
+  const pid = resp["targetPid"];
+  const targetPid = typeof pid === "number" && Number.isFinite(pid) ? pid : undefined;
+  return {
+    admission: verdict as ComputerUseAdmissionVerdict,
+    targetExe,
+    ...(targetPid === undefined ? {} : { targetPid }),
+  };
+}
+
 /**
  * 桥不应答时的放弃线（主进程等一条 guest 命令的上限）。
  *
@@ -808,6 +889,8 @@ export interface ComputerUseUiaActReply {
    * 不是错误：动作照样做了，只是这一次可能抢了焦点，模型要被告知。
    */
   autoSetFocusWarning?: string;
+  /** 应用级准入（桥的观察模式）：目标控件所在窗口的进程不一定是我们的。缺省 = 老桥没这一项 */
+  admission?: ComputerUseAdmission;
   elapsedMs: number;
 }
 

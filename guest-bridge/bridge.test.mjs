@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.10.0");
+      assert.equal(info.version, "0.11.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -394,17 +394,29 @@ test(
       assert.equal(probe.ok, true);
       assert.equal(probe.dryRun, true, "dryRun 没被桥认——后面的注入类请求一律不发（宿主上注入是红线）");
 
-      // ---- click ----
-      assert.deepEqual(await ask({ command: "click", x: 120, y: 340, dryRun: true }), {
-        ok: true,
-        dryRun: true,
-        x: 120,
-        y: 340,
-        button: "left",
-        double: false,
-      });
+      // ---- click（dryRun 回执多了应用级准入字段，见 0.11.0）----
+      const click = await ask({ command: "click", x: 120, y: 340, dryRun: true });
+      assert.equal(click.ok, true);
+      assert.equal(click.dryRun, true);
+      assert.equal(click.x, 120);
+      assert.equal(click.y, 340);
+      assert.equal(click.button, "left");
+      assert.equal(click.double, false);
+      // 准入判定是观察模式：任何 verdict 都放行，但字段本身必须齐（宿主靠它们拼回执）
+      assert.ok(
+        ["owned", "allowlisted", "bypassed", "unknown"].includes(click.admission),
+        `admission 应为四个 verdict 之一，实得 ${JSON.stringify(click.admission)}`,
+      );
+      assert.equal(typeof click.targetExe, "string");
+      assert.equal(typeof click.targetPid, "number");
       const right = await ask({ command: "click", x: 5, y: 6, button: "right", double: true, dryRun: true });
-      assert.deepEqual(right, { ok: true, dryRun: true, x: 5, y: 6, button: "right", double: true });
+      assert.equal(right.ok, true);
+      assert.equal(right.dryRun, true);
+      assert.equal(right.x, 5);
+      assert.equal(right.y, 6);
+      assert.equal(right.button, "right");
+      assert.equal(right.double, true);
+      assert.ok(["owned", "allowlisted", "bypassed", "unknown"].includes(right.admission));
       const noX = await ask({ command: "click", y: 6, dryRun: true });
       assert.equal(noX.ok, false);
       assert.match(noX.error, /整数 x 与 y/);
@@ -438,14 +450,14 @@ test(
       assert.equal(noText.ok, false);
       assert.match(noText.error, /text 字段/);
 
-      // ---- scroll ----
-      assert.deepEqual(await ask({ command: "scroll", x: 10, y: 20, deltaY: -3, dryRun: true }), {
-        ok: true,
-        dryRun: true,
-        x: 10,
-        y: 20,
-        deltaY: -3,
-      });
+      // ---- scroll（与 click 同一条准入路径：滚动作用于指针下面的窗口）----
+      const scroll = await ask({ command: "scroll", x: 10, y: 20, deltaY: -3, dryRun: true });
+      assert.equal(scroll.ok, true);
+      assert.equal(scroll.dryRun, true);
+      assert.equal(scroll.x, 10);
+      assert.equal(scroll.y, 20);
+      assert.equal(scroll.deltaY, -3);
+      assert.ok(["owned", "allowlisted", "bypassed", "unknown"].includes(scroll.admission));
       const zeroDelta = await ask({ command: "scroll", x: 1, y: 2, deltaY: 0, dryRun: true });
       assert.equal(zeroDelta.ok, false);
       assert.match(zeroDelta.error, /deltaY 不能是 0/);
@@ -913,6 +925,25 @@ test(
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
     assert.ok(parsed.cases >= 12, `用例数应 >= 12，实际 ${parsed.cases}`);
+  },
+);
+
+// ── 应用级准入的纯函数自测（--selftest-admission）────────────────────────────────
+//
+// 判定只能在 guest 里做（Windows Sandbox 是完整 VM，guest 进程在宿主任务管理器里看不到、
+// PID 不跨边界映射）。纯函数部分——父链判定、白名单匹配、回执 JSON 片段——用假 pid 树 +
+// 假白名单在宿主上就能测，**不需要沙箱、不碰任何真实窗口**。
+test(
+  "应用级准入 selftest：假 pid 树 + 假白名单（owned / allowlisted / bypassed / unknown）",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    const r = spawnSync(exePath, ["--selftest-admission"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true);
+    assert.ok(parsed.cases >= 20, `用例数应覆盖父链 / 白名单 / 回执片段，实得 ${parsed.cases}`);
   },
 );
 

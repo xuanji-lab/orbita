@@ -13,6 +13,7 @@
 import {
   decidePermission,
   COMMAND_TIMEOUT_FLOOR_SECONDS,
+  isComputerUseEscapingTool,
   isComputerUseTool,
   isComputerUseWriteTool,
   type PermissionAnswer,
@@ -112,11 +113,13 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
     lines.push(
       "Computer use: the four input actions (computer_click / computer_type / computer_key / computer_scroll) need " +
         `the user's session grant in Skip mode — the first one asks them once, and a denial means those tools refuse ` +
-        `for the rest of the session. Destructive actions (closing or locking windows, format/delete commands, ` +
-        `clicking the same spot five times) stop for a separate confirmation even after the grant. A denied or ` +
-        `revoked grant is final: do not retry, summarize instead. Each turn has a budget of ` +
-        `${COMPUTER_USE_SOFT_LIMIT} actions (hard stop at ${COMPUTER_USE_HARD_LIMIT} or 20 minutes); when it runs out, ` +
-        "summarize what is left instead of retrying.",
+        `for the rest of the session. Actions that carry data across the sandbox boundary (sandbox_upload, ` +
+        `sandbox_download) are confirmed **every single time**, even after that grant: they are asked per call, ` +
+        `so treat each one as a question that may be answered with no. Destructive actions (closing or locking ` +
+        `windows, format/delete commands, clicking the same spot five times) stop for a separate confirmation ` +
+        `even after the grant. A denied or revoked grant is final: do not retry, summarize instead. Each turn ` +
+        `has a budget of ${COMPUTER_USE_SOFT_LIMIT} actions (hard stop at ${COMPUTER_USE_HARD_LIMIT} or 20 minutes); ` +
+        "when it runs out, summarize what is left instead of retrying.",
     );
   }
   lines.push(
@@ -425,6 +428,14 @@ export function createToolCallGate(
 
     /** 拒绝口径：撤销过的一律直接拒（不再弹卡），没授权过的按「用户没同意」 */
     const state = computer?.grantState() ?? "granted";
+    /**
+     * 这件工具能不能把宿主的东西带进 / 带出沙箱（shared/permission.ts 的分档）。
+     * **逸出档不吃会话授权**：它每次都要当事人点头——「本次会话允许操作沙箱」不等于
+     * 「允许把宿主机文件交出去」。manual 档它本来就逐次问（decidePermission 的 ask），
+     * 这一支只补 skip 档：那里 decidePermission 直接 allow，会话授权又只问一次，
+     * 不加这一道它就成了免审批。
+     */
+    const escaping = isComputerUseEscapingTool(event.toolName);
 
     // 急停 / 撤销 / 用户拒绝过会话卡之后：本会话后续写工具一律拒绝。**ask 之前判**——
     // 再给用户弹一张卡去点「允许」，撤销就只是换了个人点而已（急停的意义是停下，
@@ -437,14 +448,18 @@ export function createToolCallGate(
     }
 
     /**
-     * 会话授权（skip 档的洞）：默认档是 skip，四件写工具在那里本该零确认直接注入。
+     * 会话授权（skip 档的洞）：默认档是 skip，沙箱内的写工具在那里本该零确认直接注入。
      * 第一次调用时问一次「本次会话允许 agent 操作沙箱？」，允许就记在账本 + meta 上；
      * 拒绝则本会话后续写工具一律人话拒绝（截图仍可看——它是只读）。
      *
      * manual 档不弹这张卡：用户已经选择了「每次都要问」，再挂一张「本会话全允许」与
      * 那个选择自相矛盾。plan 档在上面的 deny 就结束了。
+     *
+     * **逸出档（upload / download）不走这张卡**：会话授权覆盖不了「把宿主文件交出去」，
+     * 它们走下面的逐次确认。不在这里先花掉用户的一次点头，也不把「会话授权」记成一个
+     * 它本来就不需要的状态。
      */
-    if (computer !== undefined && isComputerUseWriteTool(event.toolName) && mode === "skip" && state !== "granted") {
+    if (computer !== undefined && isComputerUseWriteTool(event.toolName) && mode === "skip" && state !== "granted" && !escaping) {
       const answer = await ask({ ...event, scope: "session", ...(risk === null ? {} : { risk }) });
       if (answer.behavior === "deny") {
         computer.deny();
@@ -463,6 +478,23 @@ export function createToolCallGate(
       }
       if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
         // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, answer.input as Record<string, unknown>);
+      }
+      return budgetRefusal() ?? allow();
+    }
+
+    /**
+     * 逸出档的逐次确认（skip 档；manual 在上面那一支已经问过了）。**即使会话授权已给**
+     * 也照问——授权说的是「沙箱里随便点」，不是「把宿主的东西带出边界」。scope 是 call：
+     * 这一次的允许只覆盖这一次调用。
+     */
+    if (escaping) {
+      const answer = await ask({ ...event, scope: "call", ...(risk === null ? {} : { risk }) });
+      if (answer.behavior === "deny") {
+        return { block: true, reason: answer.message ?? "Denied by the user." };
+      }
+      if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
         for (const key of Object.keys(event.input)) delete event.input[key];
         Object.assign(event.input, answer.input as Record<string, unknown>);
       }

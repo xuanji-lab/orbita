@@ -9,11 +9,16 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  COMPUTER_USE_ADMISSION_VERDICTS,
+  COMPUTER_USE_DEFAULT_ALLOWED_APPS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_UIA_TIMEOUT_MS,
   computerUseChannels,
   isUiaRequest,
   isWindowScreenshotRequest,
+  mergeGuestAllowExe,
+  normalizeGuestAppName,
+  parseComputerUseAdmission,
   screenshotPointToNative,
 } from "./computer-use.ts";
 
@@ -114,5 +119,50 @@ describe("computerUseChannels（IPC 契约真源）", () => {
     // 2026-10-27 真机 P1：沙盒在跑时离开设置页再回来，徽标显示未启动、
     // 停止按钮灰、点启动报「沙箱已经在运行」，用户从 UI 停不掉。
     assert.equal(computerUseChannels.computerUseStatusGet, "computer-use:status-get");
+  });
+});
+
+describe("应用级准入契约（桥 0.11.0 的观察模式）", () => {
+  test("正常回执：四个字段读出来，targetPid 缺席也不假造", () => {
+    assert.deepEqual(
+      parseComputerUseAdmission({ admission: "bypassed", targetExe: "notepad.exe", targetPid: 400 }),
+      { admission: "bypassed", targetExe: "notepad.exe", targetPid: 400 },
+    );
+    assert.deepEqual(parseComputerUseAdmission({ admission: "owned", targetExe: "msedge.exe" }), {
+      admission: "owned",
+      targetExe: "msedge.exe",
+    });
+  });
+
+  test("老桥 / 缺字段 / 不认识的 verdict 一律当没有（不让新值静默流进 UI）", () => {
+    assert.equal(parseComputerUseAdmission({ ok: true }), null);
+    assert.equal(parseComputerUseAdmission({ admission: "trusted", targetExe: "x.exe" }), null);
+    assert.equal(parseComputerUseAdmission({ admission: 1, targetExe: "x.exe" }), null);
+    // targetExe 不是字符串就回空串（verdict 本身仍然是有效信息）
+    assert.deepEqual(parseComputerUseAdmission({ admission: "unknown" }), { admission: "unknown", targetExe: "" });
+  });
+
+  test("四个 verdict 是契约：桥、宿主、将来要拒的模式都认这同一张表", () => {
+    assert.deepEqual([...COMPUTER_USE_ADMISSION_VERDICTS], ["owned", "allowlisted", "bypassed", "unknown"]);
+  });
+
+  test("exe 名规范化：末段、小写、只认 .exe；坏值 null", () => {
+    assert.equal(normalizeGuestAppName(" Notepad.EXE "), "notepad.exe");
+    assert.equal(normalizeGuestAppName(String.raw`C:\Windows\System32\calc.exe`), "calc.exe");
+    assert.equal(normalizeGuestAppName("C:/Tools/app.exe"), "app.exe");
+    assert.equal(normalizeGuestAppName("notepad"), null);
+    assert.equal(normalizeGuestAppName(".exe"), null);
+    assert.equal(normalizeGuestAppName("we ird.exe"), null);
+  });
+
+  test("下发白名单 = 内置 msedge.exe ∪ 用户项（规范化去重、默认在前）", () => {
+    assert.deepEqual([...COMPUTER_USE_DEFAULT_ALLOWED_APPS], ["msedge.exe"]);
+    assert.deepEqual(mergeGuestAllowExe(undefined), ["msedge.exe"]);
+    assert.deepEqual(mergeGuestAllowExe([]), ["msedge.exe"]);
+    assert.deepEqual(mergeGuestAllowExe(["notepad.exe", "MSEDGE.EXE", "bad", "calc.exe"]), [
+      "msedge.exe",
+      "notepad.exe",
+      "calc.exe",
+    ]);
   });
 });

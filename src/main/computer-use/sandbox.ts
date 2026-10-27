@@ -26,6 +26,9 @@ import {
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
   computerUseGuestCommands,
+  mergeGuestAllowExe,
+  parseComputerUseAdmission,
+  type ComputerUseAdmission,
   type ComputerUseGuestCommand,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -242,7 +245,16 @@ export interface SandboxProcess {
  * 「事件已送出」，屏幕变成什么样要看下一张截图。**不进 shared/**：它不过进程边界，
  * 跨边界的那份是 shared/computer-use.ts 的 ComputerUseToolOutcome。
  */
-export type GuestCommandResult = { ok: true } | { ok: false; error: string };
+export type GuestCommandResult =
+  | {
+      ok: true;
+      /**
+       * 应用级准入（桥 0.11.0）：这一下打在了哪个 guest 进程上。只有做准入判定的命令
+       * （click / scroll）带；老桥 / 没有目标窗口时不带（`unknown` 也在桥那边给了）。
+       */
+      admission?: ComputerUseAdmission;
+    }
+  | { ok: false; error: string };
 
 /**
  * 带**回执载荷**的 guest 命令结果（CDP 通道要读 resp 里的 port / running / text / elements）。
@@ -291,6 +303,16 @@ export interface SandboxDeps {
    * 2 秒：读写一次本地 JSON 正常是毫秒级，2 秒已经足够宽容。测试传小值验超时路径。
    */
   allowNetworkTimeoutMs?: number;
+  /**
+   * 沙箱里的**应用级准入白名单**（设置 › 电脑使用 的 `allowedApps`，缺省 = 只认 msedge.exe）。
+   * 控制器把 `effectiveGuestAllowExe(await settings.read())` 的结果交下来，注入到
+   * click / scroll / uia-act 三条命令的 `allowExe` 字段里，由桥在 guest 内判定。
+   *
+   * **每条做准入判定的命令现读一次**（SettingsStore 有缓存，命中时几乎零成本）：
+   * 与 allowNetwork 不同，这张表不写进 .wsb，改了下一条命令就生效。
+   * 读失败 / 没注入按内置默认——准入是观察模式，读不动设置不该让输入命令发不出去。
+   */
+  allowedApps?: () => readonly string[] | Promise<readonly string[]>;
   /** 默认 process.platform，测试可注入。非 win32 时 start() 直接拒——先报平台，再谈文件 */
   platform?: NodeJS.Platform;
   /** 真 spawn 在 index.ts 接线；测试注入假进程。**测试绝不许传真 spawn**（沙箱窗口是用户可见面） */
@@ -734,6 +756,8 @@ export class SandboxController {
     if (options.name !== undefined && options.name !== "") fields["name"] = options.name;
     if (options.value !== undefined) fields["value"] = options.value;
     if (options.timeoutMs !== undefined) fields["timeoutMs"] = options.timeoutMs;
+    // UIA 直接对控件动作（不按坐标），但目标窗口是同一个问题：它属于谁？同样的准入素材。
+    fields["allowExe"] = await this.guestAllowExe();
     try {
       const reply = await fetchGuestUiaAct(this.outDir(), fields);
       return { ok: true, ...reply };
@@ -755,13 +779,20 @@ export class SandboxController {
     const gate = this.notRunning("沙箱操作");
     if (gate !== null) return gate;
     try {
-      await sendGuestCommand(
+      // 像素点击 / 滚动要带「打在谁身上」的判定素材：坐标 → hwnd → guest 内 PID →
+      // 「是不是我们起的进程 / 在白名单里」只能在 guest 里做（PID 不跨 VM 边界）。
+      // type / key 没有目标坐标，不带（打到前台焦点，本轮不在准入范围内）。
+      if (command === computerUseGuestCommands.click || command === computerUseGuestCommands.scroll) {
+        fields["allowExe"] = await this.guestAllowExe();
+      }
+      const resp = await sendGuestCommand(
         this.outDir(),
         command,
         fields,
         this.deps.guestTimeoutMs,
       );
-      return { ok: true };
+      const admission = parseComputerUseAdmission(resp);
+      return { ok: true, ...(admission === null ? {} : { admission }) };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
@@ -869,6 +900,24 @@ export class SandboxController {
       return COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 下发给桥的准入白名单（逗号分隔，桥按自己收到的那份 ∪ 内置默认再规范化一次）。
+   * 读设置失败 / 没注入 getter 都按内置默认：观察模式下这是「谁知道得少」的一侧，
+   * 不会误放行比默认更多的东西，也不会让命令发不出去。
+   */
+  private async guestAllowExe(): Promise<string> {
+    const read = this.deps.allowedApps;
+    try {
+      const list = read === undefined ? undefined : await read();
+      return mergeGuestAllowExe(list).join(",");
+    } catch (cause: unknown) {
+      this.log(
+        `读准入白名单失败（${cause instanceof Error ? cause.message : String(cause)}），本次只认内置默认`,
+      );
+      return mergeGuestAllowExe(undefined).join(",");
     }
   }
 

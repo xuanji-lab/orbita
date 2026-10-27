@@ -167,12 +167,57 @@ export function isComputerUseReadTool(toolName: string): boolean {
 }
 
 /**
+ * computer use 写件的**档**：按「副作用能不能逸出沙箱」分两档。
+ *
+ * 判据（一句话）：**扔进一次性 VM 就消失的副作用 = 沙箱内；把宿主的东西带进 / 带出这道
+ * 边界的 = 逸出。** 沙箱是一次性的完整 VM，VM 销毁之后沙箱里点过的按钮、打过的字、改过的
+ * 页面都不复存在；而 `sandbox_upload` 把用户宿主机的文件内容读进沙箱交给一个网页、
+ * `sandbox_download` 把沙箱里的下载物落进宿主的下载目录——这两件的结果跨过了边界，
+ * 不会随着 VM 消失。前者值得一次会话授权，后者每次都要当事人点头。
+ *
+ * 分档只改**确认的频率**，不改三档判定：两档都还是写操作（plan 拒 / manual 问 / skip 放），
+ * 也都还在同一份预算（60 / 90 次）与急停撤销的口径里。
+ *
+ * 新增写工具时必须归到这两档之一——`src/agent/computer-gate.test.ts` 用工具名真源
+ * （`COMPUTER_USE_TOOL_NAMES` + `SANDBOX_BROWSER_TOOL_NAMES`）表驱动核对，漏归类会当场红。
+ */
+export const COMPUTER_USE_WRITE_TIERS = {
+  /** 副作用留在一次性 VM 里：VM 一扔就没了，跳过档下一张会话授权卡就够 */
+  confined: [
+    "computer_click",
+    "computer_type",
+    "computer_key",
+    "computer_scroll",
+    "sandbox_navigate",
+    "sandbox_click",
+    "sandbox_type",
+    /**
+     * sandbox_tabs 是 list / switch 两个参数动作：list 只读、switch 换活动标签页（仍在 VM 里）。
+     * 与 computer_uia 同一条口径——**名单是工具级的、不含参数**，所以整体走写闸门。
+     * 它此前不在这两档里（名单是后加工具时漏的），于是同时绕过了会话授权、预算与急停撤销；
+     * 分类测试（computer-gate.test.ts）就是为了让下一次漏归类当场红。
+     */
+    "sandbox_tabs",
+    "computer_uia",
+  ],
+  /** 能把宿主的东西带进 / 带出沙箱：逐次确认，会话授权也覆盖不了它 */
+  escaping: ["sandbox_upload", "sandbox_download"],
+} as const;
+
+/** 沙箱内的写件（像素四件 + 网页导航 / 点击 / 打字 + UIA 动作） */
+export const COMPUTER_USE_CONFINED_WRITE_TOOLS = COMPUTER_USE_WRITE_TIERS.confined;
+
+/** 能逸出沙箱的写件：上传（宿主 → 沙箱）与下载（沙箱 → 宿主） */
+export const COMPUTER_USE_ESCAPING_WRITE_TOOLS = COMPUTER_USE_WRITE_TIERS.escaping;
+
+/**
  * computer use 的写件：**凡能改变沙箱状态、往沙箱里送输入、或让文件进出的工具**都在这里。
  * 名单按「有没有副作用」判，不按车道判——像素（computer_*）、网页 CDP（sandbox_*）、
- * UIA（computer_uia）三条车道的写动作同一待遇。
+ * UIA（computer_uia）三条车道的写动作同一待遇；**内部再按能否逸出分两档**
+ * （COMPUTER_USE_WRITE_TIERS 的判据写在上面）。
  *
- * 这十件**不在只读桶里**（三档判定仍走默认写闸门：plan 拒、manual 逐次问、skip 放），
- * 单独立桶是因为 skip 档下它们还要过一道「本会话授权」：默认档是 skip，没有这道闸，
+ * 这些**不在只读桶里**（三档判定仍走默认写闸门：plan 拒、manual 逐次问、skip 放），
+ * 单独立桶是因为 skip 档下沙箱内的写件还要过一道「本会话授权」：默认档是 skip，没有这道闸，
  * agent 在用户什么都没同意的情况下就能操作沙箱（2026-10 终审裁决）。同一只桶同时是
  * 预算（60 / 90 次）与急停撤销的判定口径——名单漏一个，那个工具就同时绕过三道闸。
  *
@@ -180,7 +225,8 @@ export function isComputerUseReadTool(toolName: string): boolean {
  *   - 像素四件 computer_click / type / key / scroll：往唯一一块桌面注入鼠标键盘事件；
  *   - 网页五件 sandbox_navigate / click / type / upload / download：换页面、点元素、往输入框
  *     打字、把宿主机文件送进页面、把页面下载物落到宿主机。沙箱隔离不改变「它做了用户没
- *     点头的事」这一点；
+ *     点头的事」这一点；其中 upload / download **跨过了沙箱边界**，见分档注释。
+ *     sandbox_tabs（list / switch）同在写桶里，理由见分档表里它的那条注释；
  *   - computer_uia：按控件动作（invoke / setValue / selection / focus），直接改窗口里的控件
  *     状态。它的 `list` 只读控件树，**名单是工具级的、不含参数**，所以 list 也跟着走写闸门。
  *     **这是刻意选保守的一侧**：按参数分档要把 args 穿进 `decidePermission`（三档语义的
@@ -191,20 +237,28 @@ export function isComputerUseReadTool(toolName: string): boolean {
  * `src/shared/computer-guard.ts`。
  */
 export const COMPUTER_USE_WRITE_TOOLS = [
-  "computer_click",
-  "computer_type",
-  "computer_key",
-  "computer_scroll",
-  "sandbox_navigate",
-  "sandbox_click",
-  "sandbox_type",
-  "sandbox_upload",
-  "sandbox_download",
-  "computer_uia",
+  ...COMPUTER_USE_CONFINED_WRITE_TOOLS,
+  ...COMPUTER_USE_ESCAPING_WRITE_TOOLS,
 ] as const;
 
 export function isComputerUseWriteTool(toolName: string): boolean {
   return (COMPUTER_USE_WRITE_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
+ * 这件写工具能不能逸出沙箱。**逐次确认**的判定口径，只在这里认一次名字：
+ * 闸门（src/agent/permission.ts）与测试都调它，别在别处重新列一遍名单。
+ * 不是写件返回 false（读件与无关工具都不进逐次确认这条支路）。
+ */
+export function isComputerUseEscapingTool(toolName: string): boolean {
+  return (COMPUTER_USE_ESCAPING_WRITE_TOOLS as readonly string[]).includes(toolName);
+}
+
+/** 写件的档；不是 computer use 写件返回 null（调用方据此区分「不在写桶里」与「逸出档」） */
+export function computerUseWriteTier(toolName: string): "confined" | "escaping" | null {
+  if (isComputerUseEscapingTool(toolName)) return "escaping";
+  if ((COMPUTER_USE_CONFINED_WRITE_TOOLS as readonly string[]).includes(toolName)) return "confined";
+  return null;
 }
 
 /** 工具组全体（读取 + 写入）：预算按这个口径计——截图也吃上下文，必须计入 */

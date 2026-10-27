@@ -91,8 +91,12 @@ internal static class Program
     //   抢焦点——桥在 COM 层把 IUIAutomation2 的 AutoSetFocus 置 false 并读回确认；UIA 调用放在
     //   专用 STA 线程上，5 秒看门狗超时就放弃那条线程（不拖死桥）。于是宿主的 UIA 路径
     //   **也不占桌面租约**。像素输入（SendInput）一条行为都没变，仍然必须独占桌面。
+    // 0.11.0 多了**应用级准入**（Admission.cs）：click / scroll / uia-act 先把目标窗口解析成
+    //   guest 内 pid，判它是不是我们自己起的进程（或 exe 在白名单里），结果写进回执与
+    //   bridge.log（`admission` / `targetExe`）。**观察模式：bypassed 不拒**——先把模型实际会点
+    //   哪些 exe 量清楚。纯判定有 --selftest-admission，不需要沙箱。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.10.0";
+    private const string Version = "0.11.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -217,10 +221,15 @@ internal static class Program
             // UIA 客户端自检：只建 in-proc 客户端、关 AutoSetFocus 并读回（不取窗口、不调模式）。
             // 验的是 CLSID / IID / vtable 槽这三件纯函数测不到的东西；不碰用户桌面。
             if (args[i] == "--selftest-uia-client") return Uia.RunClientSelfTest();
+            // 应用级准入的纯函数自测（假 pid 树 + 假白名单；不碰真实窗口、不起进程）
+            if (args[i] == "--selftest-admission") return Admission.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
         try { SetProcessDPIAware(); } catch { } // 拿物理像素而不是 DPI 缩放后的逻辑像素
+
+        // 应用级准入的树根之一：桥自己。worker / Edge 在下面各自登记（WorkerHost.cs）
+        Admission.RegisterRoot(Process.GetCurrentProcess().Id);
 
         _cmdDir = Path.Combine(_outDir, CmdDirName);
         try
@@ -979,6 +988,8 @@ internal static class Program
             info.WorkingDirectory = Path.GetDirectoryName(path);
             Process started = Process.Start(info);
             if (started == null) throw new InvalidOperationException("进程没有起来（Process.Start 返回 null）");
+            // 我们自己拉的进程也算准入树根（沙箱里的打包产物冒烟会用它）
+            Admission.RegisterRoot(started.Id);
             int pid = started.Id;
             // 句柄我们不需要：调完就放，进程本身继续跑（kill 按 pid 找它）
             started.Dispose();
@@ -1263,9 +1274,17 @@ internal static class Program
             return "{\"ok\":false,\"error\":\"button 只能是 left / right / middle，收到：" + JsonEscape(button) + "\"}";
         bool dbl = ExtractBool(raw, "double");
 
+        // 应用级准入（0.11.0）：这一点下面是哪个进程？观察模式，不拒，只标注。
+        // dryRun 也判——它是只读的（WindowFromPoint + 进程表快照），而宿主上的测试正是靠
+        // dryRun 看到这条回执的（绝不为了看准入信息而真注入一次点击）。
+        Admission.Decision admit = Admission.JudgePoint(x, y, Admission.Snapshot(), Admission.Roots(),
+            Admission.MergeAllowExe(ExtractString(raw, "allowExe")));
+        Admission.Log("click", admit);
+
         if (ExtractBool(raw, "dryRun"))
             return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y
-                + ",\"button\":\"" + JsonEscape(button) + "\",\"double\":" + (dbl ? "true" : "false") + "}";
+                + ",\"button\":\"" + JsonEscape(button) + "\",\"double\":" + (dbl ? "true" : "false")
+                + Admission.JsonFields(admit) + "}";
 
         try
         {
@@ -1279,7 +1298,7 @@ internal static class Program
             }
             SendInputs(inputs.ToArray());
             Log("点击 (" + x + ", " + y + ") " + button + (dbl ? " ×2" : ""));
-            return "{\"ok\":true}";
+            return "{\"ok\":true" + Admission.JsonFields(admit) + "}";
         }
         catch (Exception ex)
         {
@@ -1401,8 +1420,14 @@ internal static class Program
         if (deltaY == 0)
             return "{\"ok\":false,\"error\":\"deltaY 不能是 0\"}";
 
+        // 滚动作用于**指针下面的窗口**（见下面的注释），所以它的目标判定与点击同一条路
+        Admission.Decision admit = Admission.JudgePoint(x, y, Admission.Snapshot(), Admission.Roots(),
+            Admission.MergeAllowExe(ExtractString(raw, "allowExe")));
+        Admission.Log("scroll", admit);
+
         if (ExtractBool(raw, "dryRun"))
-            return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y + ",\"deltaY\":" + deltaY + "}";
+            return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y + ",\"deltaY\":" + deltaY
+                + Admission.JsonFields(admit) + "}";
 
         try
         {
@@ -1412,7 +1437,7 @@ internal static class Program
             inputs[1] = MouseInput(0, 0, MOUSEEVENTF_WHEEL, wheelData);
             SendInputs(inputs);
             Log("滚动 (" + x + ", " + y + ") deltaY=" + deltaY);
-            return "{\"ok\":true}";
+            return "{\"ok\":true" + Admission.JsonFields(admit) + "}";
         }
         catch (Exception ex)
         {

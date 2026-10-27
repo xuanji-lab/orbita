@@ -237,6 +237,36 @@ describe("applyComputerUseRequest", () => {
     ]);
   });
 
+  test("准入信息进回执正文：bypassed 要说清「打在了谁身上」且明说不拦；没有字段时正文一字不变", async () => {
+    const bypassed = fakeGuest({
+      commandResult: {
+        ok: true,
+        admission: { admission: "bypassed", targetExe: "notepad.exe", targetPid: 400 },
+      },
+    });
+    const outcome = await run(bypassed.guest, { action: "click", x: 200, y: 400 });
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) {
+      assert.match(outcome.text, /"admission":"bypassed","targetExe":"notepad.exe"/);
+      assert.match(outcome.text, /only observes and logs it/);
+      // 原有那句不能丢：模型仍要知道「去截图看结果」
+      assert.match(outcome.text, /take a screenshot/);
+    }
+
+    const owned = fakeGuest({
+      commandResult: { ok: true, admission: { admission: "owned", targetExe: "msedge.exe" } },
+    });
+    const own = await run(owned.guest, { action: "scroll", x: 1, y: 2, deltaY: 1 });
+    if (own.ok) assert.match(own.text, /"admission":"owned","targetExe":"msedge.exe"/);
+
+    // 老桥（回执没有 admission）：正文与以前完全一样，不多一个字
+    const plain = fakeGuest({});
+    const before = await run(plain.guest, { action: "click", x: 200, y: 400 });
+    if (before.ok) {
+      assert.equal(before.text.includes("Admission (guest-side)"), false);
+    }
+  });
+
   test("guest 命令失败：错误原话带出，不吞成成功", async () => {
     const { guest } = fakeGuest({ commandResult: { ok: false, error: "不认识的按键名：hyper" } });
     const outcome = await run(guest, { action: "key", key: "hyper+x" });

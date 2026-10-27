@@ -6,7 +6,7 @@
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
-import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "./computer-use.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, mergeGuestAllowExe, normalizeGuestAppName } from "./computer-use.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -186,8 +186,24 @@ export interface ComputerUseSettings {
    * （网页自动化是 computer use 的主场景，默认关会让功能看起来坏了）。
    * 关掉 = .wsb 的 `<Networking>Disable</Networking>`，沙箱只能做本地桌面自动化。
    * 改动**下次启动沙箱时才生效**：.wsb 只在 start() 里渲染一次，运行中的 VM 不重启不改配置。
+   *
+   * **可选**：加了 `allowedApps` 之后，只写白名单的补丁不该被迫顺手写一个出网值；缺席时
+   * `effectiveAllowNetwork` 按缺省（允许）兜底，与老文件的语义一字不变。
    */
-  allowNetwork: boolean;
+  allowNetwork?: boolean;
+  /**
+   * 应用级准入的 exe 白名单（追加在内置默认 msedge.exe 之上）。缺省 / 空表 = 只认 Edge——
+   * 空白名单就是出厂状态，不需要写入任何东西。
+   *
+   * 用途见 shared/computer-use.ts 的 `COMPUTER_USE_ADMISSION_VERDICTS`：桥在 guest 里判
+   * 「这一下打的是不是我们自己起的进程」，不在树里但 exe 在这张表里也算放行。本轮是
+   * **观察模式**：既不在树里也不在白名单里时仍不拒，只把 `admission:"bypassed"` 写进回执
+   * 与 bridge.log——先把模型实际点的 exe 量清楚，再决定要不要拒。
+   *
+   * 本 PR 不提供设置页入口（默认值就能跑）：想加就手改 settings.json，下一条输入命令即生效
+   * （控制器每条做准入判定的命令现读一次设置）。
+   */
+  allowedApps?: string[];
 }
 
 /**
@@ -200,14 +216,44 @@ export function effectiveAllowNetwork(settings: { computerUse?: ComputerUseSetti
 }
 
 /**
- * computerUse 子对象的解析：**只认布尔**。
- * 整段缺席、不是对象、`allowNetwork` 不是布尔（手改出 "false" 字符串 / 0）一律当作没设置——
- * 「缺席 = 允许」与「坏值 = 允许」是同一个行为，不为坏值落一个假值到盘上。
+ * 下发给 guest 桥的准入白名单（内置 msedge.exe ∪ 设置里的 allowedApps，已规范化去重）。
+ * 与 `effectiveAllowNetwork` 同一个位置、同一条纪律：消费侧不各自拼默认值。
+ */
+export function effectiveGuestAllowExe(
+  settings: { computerUse?: ComputerUseSettings } | undefined,
+): string[] {
+  return mergeGuestAllowExe(settings?.computerUse?.allowedApps);
+}
+
+/**
+ * computerUse 子对象的解析：`allowNetwork` 只认布尔，`allowedApps` 只认能规范化的 exe 名字。
+ * 两样都没给出可用的值时返回 undefined（整段缺席 / 全是坏值 = 没设置）。
+ *
+ * `allowNetwork` 缺席是**允许**（老文件没有这个键）；`allowedApps` 缺席 = 只用内置默认。
+ * 手改出来的 `"false"` / 数字一律当作没设置——与其它字段同一条纪律，不落假值到盘上。
  */
 export function parseComputerUse(raw: unknown): ComputerUseSettings | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const value = (raw as { allowNetwork?: unknown }).allowNetwork;
-  return typeof value === "boolean" ? { allowNetwork: value } : undefined;
+  const record = raw as { allowNetwork?: unknown; allowedApps?: unknown };
+  const allowedApps = parseAllowedApps(record.allowedApps);
+  const hasNetwork = typeof record.allowNetwork === "boolean";
+  if (!hasNetwork && allowedApps === undefined) return undefined;
+  return {
+    ...(hasNetwork ? { allowNetwork: record.allowNetwork as boolean } : {}),
+    ...(allowedApps === undefined ? {} : { allowedApps }),
+  };
+}
+
+/** exe 名单：逐项规范化，坏值丢掉，按规范化后的名字去重；空表返回 undefined（不落空数组） */
+function parseAllowedApps(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const name = normalizeGuestAppName(entry);
+    if (name !== null && !out.includes(name)) out.push(name);
+  }
+  return out.length === 0 ? undefined : out;
 }
 
 /** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
