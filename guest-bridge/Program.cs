@@ -203,6 +203,9 @@ internal static class Program
             if (args[i] == "--selftest-session") return RunSessionSelfTest();
             // 浏览器错误页判定的自测（纯函数：不启动任何进程、不碰 Edge）
             if (args[i] == "--selftest-cdp") return RunCdpSelfTest();
+            // 前台还原判定 + 起 Edge 参数的自测（纯函数：注入假的 GetForegroundWindow，
+            // 不启动任何进程、不碰桌面）
+            if (args[i] == "--selftest-foreground") return RunForegroundSelfTest();
             // 耗时计量的自测（纯函数 + 临时目录里一条真 ping；不启动任何进程、不碰桌面）
             if (args[i] == "--selftest-metrics") return RunMetricsSelfTest();
             // worker 层的自测（起真进程、不碰 Edge）：拉起 / 超时被杀 / 崩了能重启 / 自己退出
@@ -1840,6 +1843,154 @@ internal static class Program
         string tooMany = CdpSessions.TooManyMessage();
         CheckTrue(failures, ref cases, "上限文案点明 4 个", tooMany.IndexOf("最多 4 个", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "上限文案给出下一步（cdp-stop）", tooMany.IndexOf("cdp-stop", StringComparison.Ordinal) >= 0);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
+    }
+
+    // ---- 前台还原判定的自测（--selftest-foreground）--------------------------------
+    //
+    // 判据是「回执那一刻 GetForegroundWindow() == 起 Edge 之前那个窗口」，不是「我们调过
+    // SetForegroundWindow」。所以把 read / raise 两个委托换成脚本化的假实现就能在宿主上测完整逻辑，
+    // 真机只验「它真的把前台还回去了」。
+    //
+    // 真机事实（2026-10-27 Windows Sandbox / Edge 154，探针在会话工作台）：
+    //   起第二只 Edge 会在 +326ms 与 +740ms **各抢一次**前台；SetForegroundWindow(prev) 两次都成功；
+    //   STARTUPINFO 的 SW_SHOWNOACTIVATE 仍会抢；只对 Edge 窗口 ShowWindow(SW_SHOWNOACTIVATE) 不改前台。
+    // 那个「第二波」就是为什么判定要连续几轮稳定，而不是一次成功就收工。
+
+    private static int RunForegroundSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // ① 没被抢过：一次都不置前
+        ForegroundStats idle = new ForegroundStats();
+        idle.Prev = 100;
+        idle.Final = 100;
+        long[] alreadyThere = new long[] { 100, 100, 100, 100, 100, 100 };
+        int readsA = 0;
+        int raisesA = 0;
+        bool okA = Foreground.Settle(100, delegate { return alreadyThere[Math.Min(readsA++, alreadyThere.Length - 1)]; },
+            delegate(long h) { raisesA++; return true; }, 2, 8, null, idle);
+        CheckTrue(failures, ref cases, "没被抢：判成功", okA);
+        CheckTrue(failures, ref cases, "没被抢：一次置前都不试", raisesA == 0);
+        CheckTrue(failures, ref cases, "没被抢：不动 Steals / Raises / RaiseFailures",
+            idle.Steals == 0 && idle.Raises == 0 && idle.RaiseFailures == 0);
+        CheckTrue(failures, ref cases, "没被抢：Final 保持 prev", idle.Final == 100);
+
+        // ② 一次抢占 + 抢回来（真机第一波）：判成功，且记下「有过窗口期」
+        ForegroundStats once = new ForegroundStats();
+        once.Prev = 100;
+        long[] onceSeq = new long[] { 100, 999, 100, 100, 100 };
+        int ra = 0;
+        int rb = 0;
+        bool okB = Foreground.Settle(100, delegate { return onceSeq[Math.Min(ra++, onceSeq.Length - 1)]; },
+            delegate(long h) { rb++; return true; }, 2, 8, null, once);
+        CheckTrue(failures, ref cases, "一次抢占：判成功", okB);
+        CheckTrue(failures, ref cases, "一次抢占：Steals / Raises 各 1（供回执里的 foregroundStolen）",
+            once.Steals == 1 && once.Raises == 1);
+        CheckTrue(failures, ref cases, "一次抢占：End 在 prev 上", once.Final == 100);
+
+        // ③ 第二波（真机 +740ms）：第一波由等待端口文件时的 Poll 接住，第二波由回执前的 Settle 接住
+        ForegroundStats second = new ForegroundStats();
+        second.Prev = 100;
+        long[] wave1 = new long[] { 999, 100 };
+        int w1 = 0;
+        Foreground.Poll(100, delegate { return wave1[Math.Min(w1++, wave1.Length - 1)]; },
+            delegate(long h) { return true; }, second);
+        CheckTrue(failures, ref cases, "第一波：Poll 抢回并复读一次", second.Steals == 1 && second.Final == 100);
+        long[] wave2 = new long[] { 999, 100, 100 };
+        int w2 = 0;
+        bool okC = Foreground.Settle(100, delegate { return wave2[Math.Min(w2++, wave2.Length - 1)]; },
+            delegate(long h) { return true; }, 2, 12, null, second);
+        CheckTrue(failures, ref cases, "第二波：回执前的 Settle 再接住一次并判成功", okC && second.Steals == 2);
+        // 只验一轮就收工的写法（stableRounds=1）会当场判定成功——这正是要避开的假成功
+        ForegroundStats naive = new ForegroundStats();
+        naive.Prev = 100;
+        Foreground.Settle(100, delegate { return 100; }, delegate(long h) { return true; }, 1, 1, null, naive);
+        CheckTrue(failures, ref cases, "stableRounds=1 时一轮就收工：抓不到第二波，所以 Launch 全程都要 Poll",
+            naive.Final == 100 && naive.Steals == 0);
+
+        // ④ 永远抢不回来：判失败，而且预算用尽（不无限循环）
+        ForegroundStats stuck = new ForegroundStats();
+        stuck.Prev = 100;
+        int raisesD = 0;
+        bool okD = Foreground.Settle(100, delegate { return 999; },
+            delegate(long h) { raisesD++; return true; }, 2, 5, null, stuck);
+        CheckTrue(failures, ref cases, "抢不回来：判失败（不假装成功）", !okD);
+        CheckTrue(failures, ref cases, "抢不回来：置前次数 = 轮数上限（有预算，不无限转）", raisesD == 5);
+        CheckTrue(failures, ref cases, "抢不回来：Steals 与 Raises 都记下来", stuck.Steals == 5 && stuck.Raises == 5);
+
+        // ⑤ 置前 API 返回 false 但窗口其实回来了：判据是 GetForegroundWindow，不是 API 返回值
+        ForegroundStats apiLies = new ForegroundStats();
+        apiLies.Prev = 100;
+        bool inFront = false;
+        bool okE = Foreground.Settle(100,
+            delegate { return inFront ? 100 : 999; },
+            delegate(long h) { inFront = true; return false; }, 2, 6, null, apiLies);
+        CheckTrue(failures, ref cases, "API 返回 false 但前台真的回来了：仍判成功", okE);
+        CheckTrue(failures, ref cases, "API 返回 false：RaiseFailures 记下来（日志要能看出置前不顺手）",
+            apiLies.RaiseFailures == 1);
+
+        // ⑤b 窗口期时长（日志里那句「前台离开它约 Xms」的数字）：TickCount 粒度 15.6ms 会把
+        //     十几毫秒的窗口期读成 0，所以用 DateTime.Ticks（100ns）
+        ForegroundStats windowed = new ForegroundStats();
+        windowed.Prev = 100;
+        windowed.FirstStealTick = new DateTime(2026, 10, 27, 12, 0, 0, 0).Ticks;
+        windowed.RestoredTick = windowed.FirstStealTick + 37 * TimeSpan.TicksPerMillisecond;
+        CheckTrue(failures, ref cases, "窗口期：37ms 被算成 37（不被 TickCount 粒度抹成 0）", windowed.WindowMs() == 37);
+        ForegroundStats noWindow = new ForegroundStats();
+        CheckTrue(failures, ref cases, "窗口期：没被抢过时为 0", noWindow.WindowMs() == 0);
+
+        // ⑥ 起 Edge 之前就没有前台窗口（真机：沙箱刚登录时 GetForegroundWindow()=0）
+        ForegroundStats none = new ForegroundStats();
+        none.Prev = 0;
+        int raisesF = 0;
+        bool okF = Foreground.Settle(0, delegate { return 777; },
+            delegate(long h) { raisesF++; return true; }, 2, 6, null, none);
+        CheckTrue(failures, ref cases, "先前台为 0：判成功（没有可还原的对象），且不去抢", okF && raisesF == 0);
+        CheckTrue(failures, ref cases, "先前台为 0：不把「有新窗口」记成被抢", none.Steals == 0);
+
+        // ⑦ Poll 的语义（等待端口文件时每 15ms 调的就是它）
+        ForegroundStats pollStats = new ForegroundStats();
+        pollStats.Prev = 100;
+        int pollReads = 0;
+        long[] pollSeq = new long[] { 555, 100 };
+        long after = Foreground.Poll(100, delegate { return pollSeq[Math.Min(pollReads++, pollSeq.Length - 1)]; },
+            delegate(long h) { return true; }, pollStats);
+        CheckTrue(failures, ref cases, "Poll：被抢时置前后复读一次，返回复读值", after == 100 && pollReads == 2);
+        CheckTrue(failures, ref cases, "Poll：Samples 记 2 次采样", pollStats.Samples == 2);
+
+        // ⑧ 常量：采样够密、稳定轮数不只是一轮、预算远小于主桥 40s 命令线
+        CheckTrue(failures, ref cases, "采样间隔 10–40ms（压得住窗口期，也不烧 CPU）",
+            Foreground.PollMs >= 10 && Foreground.PollMs <= 40);
+        CheckTrue(failures, ref cases, "稳定轮数 ≥ 2（真机第二波抢前台要能被接住）", Foreground.StableRounds >= 2);
+        CheckTrue(failures, ref cases, "收尾预算 ≤ 5s（叠在启动 2.5s 上仍在主桥 40s 线内）",
+            Foreground.SettleBudgetMs <= 5000);
+
+        // ⑨ 起 Edge 的参数（BuildArgs）：cdp-start 现在故意不占前台，就得关掉 Chromium 的后台降频
+        CdpSession probe = new CdpSession("selftest-fg");
+        string normal = probe.BuildArgsForTest(0, false, false);
+        CheckTrue(failures, ref cases, "参数：关掉后台定时器降频（非前台窗口的 1Hz 节流）",
+            normal.IndexOf("--disable-background-timer-throttling", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "参数：关掉 renderer 后台化",
+            normal.IndexOf("--disable-renderer-backgrounding", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "参数：关掉「窗口被遮住 → 降频」",
+            normal.IndexOf("--disable-backgrounding-occluded-windows", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "参数：不带 --headless（像素车道要看得见的窗口）",
+            normal.IndexOf("--headless", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "参数：不带 --no-sandbox（只给重试那条路）",
+            normal.IndexOf("--no-sandbox", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "参数：仍然落在 about:blank（后续命令自己导航）",
+            normal.EndsWith("about:blank", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "参数：端口与 profile 目录都在",
+            normal.IndexOf("--remote-debugging-port=0", StringComparison.Ordinal) >= 0
+            && normal.IndexOf("--user-data-dir=\"", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "参数：headless 只由参数控制",
+            probe.BuildArgsForTest(0, true, false).IndexOf("--headless=new", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "参数：重试路径才带 --no-sandbox",
+            probe.BuildArgsForTest(0, false, true).IndexOf("--no-sandbox", StringComparison.Ordinal) >= 0);
 
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;

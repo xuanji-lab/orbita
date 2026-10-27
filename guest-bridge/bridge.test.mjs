@@ -935,6 +935,29 @@ test(
   },
 );
 
+// ── 前台还原判定的纯函数自测（--selftest-foreground）────────────────────────────
+//
+// cdp-start 起 Edge 会把前台抢走，而另一个会话可能正用 SendInput 打字（脏输入）。
+// 修法是「回执之前把前台还回去」，判据是 GetForegroundWindow() == 起 Edge 之前的窗口。
+// 把 read / raise 换成脚本化的假实现，整条判定逻辑在宿主上就能测（不启 Edge、不碰桌面）：
+// 没被抢 / 一次抢占 / 第二波 / 抢不回来 / API 说 false 但窗口回来了 / 先前台为 0 /
+// 以及 BuildArgs 里为「故意的非前台窗口」加的抗降频开关。
+
+test(
+  "前台还原 selftest：判定看 GetForegroundWindow、第二波也要接住、抢不回来不假装成功、BuildArgs 带抗降频开关",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-foreground"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 25, `用例数应 >= 25，实际 ${parsed.cases}`);
+  },
+);
+
 // ── 耗时计量的纯函数自测（--selftest-metrics）──────────────────────────────────
 //
 // 计量这一刀的产出就是「能读的数字」，所以先钉住它自己的口径：阈值、mtime 法传播的可信性

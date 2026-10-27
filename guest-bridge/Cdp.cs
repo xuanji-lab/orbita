@@ -25,6 +25,12 @@
 //   ③ 跳过所有没有 id 的消息：Page.enable 之后事件会插在回复之间，「下一次读到的就是
 //      回复」这个假设在开启任何 domain 之后立刻失效。
 //
+// 0.11.0 起**起 Edge 不留下被抢走的前台**（Foreground）：浏览车道与像素车道并行时，
+//   会话 B 的 cdp-start 弹出 Edge 会抢走前台，而会话 A 正在用 SendInput 打字——那些字符
+//   落进了 B 的网页（脏输入）。现在 cdp-start（含重启那条路）在回执之前把前台还给
+//   起 Edge 之前的那个窗口，并在回执里给出 prevForeground / foregroundRestored。
+//   真机实测与三条路的选择理由写在文件末尾的 Foreground 类头部。
+//
 // 编译约束不变：csc v4.0.30319 = C# 5（禁字符串插值 / ?. / out var / using 声明 / 枚举）。
 // 全程同步 .Wait(ms)：桥本来就是 while(true) 轮询循环，铺 async 状态机没有收益。
 
@@ -37,6 +43,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Net;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -142,6 +149,13 @@ internal sealed class CdpSession
     /** 上次启动用的参数（重启 Edge 时照原样再来一遍：headless 与固定端口都别丢） */
     private bool _headless = false;
     private int _launchPort = 0;
+    /**
+     * 本次起 Edge 的前台守卫（null = headless，没有新窗口）。
+     * **每条命令重置**：Launch 里重新快照，FinishForeground 里给出判定。
+     */
+    private ForegroundStats _foreground;
+    /** 起 Edge 之前的前台窗口（0 = 当时沙箱里没有前台窗口） */
+    private long _foregroundPrev;
 
     public CdpSession(string key)
     {
@@ -233,8 +247,59 @@ internal sealed class CdpSession
             KillOurEdge();
             throw;
         }
+        // 回执之前把前台还回去**并验过**（连 Edge 那段时间也可能再被抢一次）
+        FinishForeground("cdp-start", Foreground.SettleBudgetMs);
         if (url != null && url.Trim().Length > 0) return Nav(raw);
-        return OkWithStatus(true);
+        // 这条路上我们**刚起了**一只 Edge：alreadyRunning 必须是 false。旧代码在这里也写死 true，
+        // 于是「全新启动」与「已经在跑」在回执里长得一模一样——而前台字段（foregroundStolen 等）
+        // 要靠它区分「这次有没有新窗口、有没有抢过前台」。
+        return OkWithStatus(false);
+    }
+
+    /**
+     * 回执之前的前台收尾：在预算内等到「连续几轮前台都 == prev」，并把结果记在 _foreground 上。
+     *
+     * 为什么不把浏览器失败当成命令失败：Edge 确实起来了，前台没还回去是另一个会话的输入安全问题
+     * （像素车道）。把 cdp-start 判成失败会让宿主/模型去重试一个已经可用的浏览器，
+     * 还可能把模型推向像素车道——而那正是被污染的那条。所以回执里 **foregroundRestored:false +
+     * foregroundError** 明说，日志里也留一行，绝不写成 true。
+     */
+    private void FinishForeground(string where, int budgetMs)
+    {
+        if (_foreground == null) return; // headless：没有新窗口
+        if (_foregroundPrev == 0)
+        {
+            _foreground.Restored = true; // 没有可还原的对象（沙箱刚登录时就是 0）
+            Program.Log("CDP " + where + "：起 Edge 之前沙箱里没有前台窗口，无需还原（起之后的前台 hwnd "
+                + _foreground.Final + "）");
+            return;
+        }
+        bool restored = Foreground.SettleInGuest(_foreground, budgetMs);
+        _foreground.Restored = restored;
+        if (restored)
+        {
+            if (_foreground.Steals > 0)
+            {
+                // 「已派发未验证」那一半：发生过抢占 → 中间有一个窗口期，那一刻的像素输入可能落进新窗口。
+                // 只记这一行与回执字段，**不改**像素命令的回执语义（那是另一个 PR）。
+                // 窗口期 = 上一次采样（15ms 前）到这里被抢回来：我们只能看到「检测到 → 抢回」这一段，
+                // 真正的起点在两次采样之间，所以报**上界**（采样间隔 + 检测到抢回的反应时间），
+                // 而不是报一个看起来很精确的 0ms。
+                long windowUpperMs = _foreground.WindowMs() + Foreground.PollMs;
+                Program.Log("CDP " + where + " 曾短暂抢走前台 " + _foreground.Steals + " 次（起之前 hwnd "
+                    + _foregroundPrev + "，已还原；前台离开它不超过 " + windowUpperMs + "ms"
+                    + "，即一个采样间隔 " + Foreground.PollMs + "ms 内被发现）："
+                    + "那段时间的像素输入（computer_type / computer_click）可能落进了新窗口（已派发未验证）");
+            }
+            else
+            {
+                Program.Log("CDP " + where + " 没有抢前台（起之前 hwnd " + _foregroundPrev + " 一直是前台）");
+            }
+            return;
+        }
+        Program.Log("CDP " + where + " 前台**没有还回去**：起之前 hwnd " + _foregroundPrev + "，现在 hwnd "
+            + _foreground.Final + "（置前尝试 " + _foreground.Raises + " 次，失败 " + _foreground.RaiseFailures
+            + " 次）——像素输入可能落在 Edge 上");
     }
 
     /** portWaitMs 是等 DevToolsActivePort 的上限（重启 Edge 时会按剩余预算压低它） */
@@ -263,6 +328,20 @@ internal sealed class CdpSession
                 + "这个会话的浏览器用不了：先 cdp-stop 这个会话，再 sandbox_navigate 重试；连续失败就改用 computer_screenshot 像素工具");
         }
         string args = BuildArgs(port, headless, false);
+        // 起 Edge 之前记下前台窗口：新 Edge 的窗口会把它抢走（真机 +326ms 与 +740ms 各一次），
+        // 而另一个会话可能正用 SendInput 打字。headless 不建窗口，不必付这份开销。
+        if (!headless)
+        {
+            _foregroundPrev = Foreground.Current();
+            _foreground = new ForegroundStats();
+            _foreground.Prev = _foregroundPrev;
+            _foreground.Final = _foregroundPrev;
+        }
+        else
+        {
+            _foregroundPrev = 0;
+            _foreground = null;
+        }
         // 开场之前先清掉**上一只 Edge 留下的端口文件**：超时杀 worker 只杀进程树（不删 profile，
         // 免得把登录态一起扔了），而 DevToolsActivePort 会活下来。留着它的后果：新 Edge 刚起来、
         // WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，然后把**旧端口**当成本次端口，
@@ -355,10 +434,22 @@ internal sealed class CdpSession
         a.Append("--disable-features=msEdgeFirstRunExperience,msEdgeSidebarV2,msEdgeWelcomePage ");
         a.Append("--disable-gpu ");
         a.Append("--window-size=1366,900 ");
+        // 0.11.0 起这只 Edge 的窗口**故意不再占前台**（cdp-start 会把前台还给先前台窗口）。
+        // Chromium 对被遮住 / 非前台的窗口会降频：定时器变 1Hz、renderer 被标记为 backgrounded。
+        // 那会让 cdp-wait 的 readyState 轮询、页面动画与「加载完成」判定变慢，看起来像“卡死”。
+        // 这三个开关就是自动化工具（Puppeteer / Playwright）为同一件事加的，这里跟着加。
+        a.Append("--disable-background-timer-throttling --disable-renderer-backgrounding ");
+        a.Append("--disable-backgrounding-occluded-windows ");
         if (headless) a.Append("--headless=new ");
         if (noSandbox) a.Append("--no-sandbox ");
         a.Append("about:blank");
         return a.ToString();
+    }
+
+    /** 自测用：BuildArgs 吃实例字段（profile 目录），宿主上用一个临时会话实例就能验参数 */
+    internal string BuildArgsForTest(int port, bool headless, bool noSandbox)
+    {
+        return BuildArgs(port, headless, noSandbox);
     }
 
     private string EdgePath()
@@ -374,16 +465,19 @@ internal sealed class CdpSession
         catch { return false; }
     }
 
-    /** 等 DevToolsActivePort 出现（true = 出现）。进程秒退时提前返回 false */
+    /** 等 DevToolsActivePort 出现（true = 出现）。进程秒退时提前返回 false。
+     *  等待期间每 15ms 盯一次前台（见 Foreground）：Edge 窗口就是在这儿抢走前台的。 */
     private bool WaitForPortFile(int timeoutMs)
     {
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
         {
+            WatchForeground();
             if (PortFileReady()) return true;
             if (_edge != null && _edge.HasExited) return false;
-            Thread.Sleep(200);
+            Thread.Sleep(_foreground != null ? Foreground.PollMs : 200);
         }
+        WatchForeground();
         return PortFileReady();
     }
 
@@ -394,6 +488,7 @@ internal sealed class CdpSession
         string content = "";
         while (DateTime.UtcNow < deadline)
         {
+            WatchForeground();
             try
             {
                 if (File.Exists(path)) content = File.ReadAllText(path);
@@ -403,9 +498,22 @@ internal sealed class CdpSession
                 // 端口文件可能正被 Edge 写一半，下一轮再读
             }
             if (content.Trim().Length > 0) return content;
-            Thread.Sleep(200);
+            Thread.Sleep(_foreground != null ? Foreground.PollMs : 200);
         }
         return content;
+    }
+
+    /**
+     * 启动等待期间的顺手采样：被抢就立刻抢回来。
+     * 把它塞进等端口文件的循环里（而不是起一条后台线程）是因为那两段循环本来就占了启动的
+     * 绝大部分时间（真机 ~2.5s），而多一条线程只为了每 15ms 看一眼不值得：线程的可见性、
+     * 退出时机与异常都得管，收益只是覆盖 ConnectAndAttach 那一小段（那段由回执前的
+     * FinishForeground 兜住）。
+     */
+    private void WatchForeground()
+    {
+        if (_foreground == null) return;
+        Foreground.PollInGuest(_foregroundPrev, _foreground);
     }
 
     // ── 停一个会话（worker 收到 worker-stop / 被主桥杀掉之前调它）─────────────────
@@ -539,7 +647,48 @@ internal sealed class CdpSession
         {
             // pid 只是给现场排查看的，取不到不影响命令结果
         }
+        AppendForeground(o, alreadyRunning);
         return o.ToString();
+    }
+
+    /**
+     * 回执里的前台字段。宿主不翻译它们（resp 原样透传），它们存在的意义是：
+     * 这次 cdp-start 到底有没有把前台还回去、中间有没有一个被抢的窗口期。
+     *
+     *   prevForeground     起 Edge 之前的那个窗口（hwnd；0 = 当时没有前台窗口）
+     *   foregroundRestored 回执前 GetForegroundWindow() == prevForeground
+     *   foregroundStolen   期间被抢过（就算还原了也记 true：那一段是「已派发未验证」的窗口期）
+     *   foregroundSamples  采样次数（排查用：0 说明根本没盯）
+     *   foregroundError    只在没还回去时出现
+     */
+    private void AppendForeground(JObj o, bool alreadyRunning)
+    {
+        if (alreadyRunning)
+        {
+            // 幂等路径：没有新窗口，也就不可能抢前台
+            o.Num("prevForeground", Foreground.Current()).Bool("foregroundRestored", true)
+                .Bool("foregroundStolen", false);
+            return;
+        }
+        if (_foreground == null)
+        {
+            o.Num("prevForeground", 0).Bool("foregroundRestored", true).Bool("foregroundStolen", false)
+                .Str("foregroundNote", "headless 启动：不建窗口，不会抢前台");
+            return;
+        }
+        o.Num("prevForeground", _foregroundPrev)
+            .Bool("foregroundRestored", _foreground.Restored)
+            .Bool("foregroundStolen", _foreground.Steals > 0)
+            .Num("foregroundSamples", _foreground.Samples);
+        if (_foregroundPrev == 0)
+        {
+            o.Str("foregroundNote", "起 Edge 之前沙箱里没有前台窗口（0）：没有可还原的对象，按不涉及处理");
+            return;
+        }
+        if (_foreground.Restored) return;
+        o.Str("foregroundError", "Edge 已经起来，但前台没有还回去（起之前 hwnd " + _foregroundPrev
+            + "，现在 hwnd " + _foreground.Final + "）：这一刻的像素输入（computer_type / computer_click）"
+            + "可能落在 Edge 上。可以再发一次 sandbox_navigate 让它重试；持续这样就用 sandbox_* 车道操作网页");
     }
 
     // ── WebSocket 连接与 target 附着 ─────────────────────────────────────────────
@@ -1050,6 +1199,11 @@ internal sealed class CdpSession
             Program.Log("CDP 重启 Edge 失败（会话 " + Key + "）：" + ex.Message);
             return false;
         }
+        // 重启也是「起一只新的 Edge」：前台一样会被抢走（Launch 里已经边等边抢回），
+        // 返回前再验一次并落日志。这条路上没有 cdp-start 的回执可以挂字段，所以只靠日志。
+        // 重启发生在一条命令的中段（nav / observe 的自愈路），预算按 600ms 压：
+        // 再长就有撞上 worker 40s 杀线的风险，换来的只是「再等半秒看第二波」。
+        FinishForeground("重启 Edge", Foreground.RestartSettleBudgetMs);
         Program.Log("CDP 已重启 Edge（会话 " + Key + "，端口 " + _port + "），profile 留在 " + _profileDir);
         return true;
     }
@@ -2733,5 +2887,190 @@ internal static class CdpSessions
             sb.Append(ok ? c : '_');
         }
         return sb.Length == 0 ? DefaultKey : sb.ToString();
+    }
+}
+
+/**
+ * 前台窗口守卫（0.11.0）：把「起 Edge 时被抢走的前台」还回去。
+ *
+ * 要解决的问题（真机，不是理论）：浏览车道（sandbox_*）与像素车道（computer_*）用不同的
+ * 租约键，可以并行。会话 A 正抓着 desktop:exclusive 用 SendInput 打字，会话 B 的 cdp-start
+ * 弹出自己的 Edge 窗口——Edge 把前台抢走，于是 A 后面那些字符落进了 B 的网页（脏输入，
+ * 而 A 以为自己还在往原来的窗口里写）。
+ *
+ * 真机实测（2026-10-27，Windows Sandbox / Edge 154，脚本见会话工作台）：
+ *   · 起第二个 Edge：+326ms 与 +740ms **各抢一次**前台（第二次是首帧/导航之后）；
+ *   · `SetForegroundWindow(prev)` 两次都立刻成功（返回 TRUE，下一次 GetForegroundWindow 就是 prev）；
+ *   · STARTUPINFO.wShowWindow = SW_SHOWNOACTIVATE 起 Edge：**仍然抢**（+236ms）——所以不走
+ *     CreateProcess 那条重路；
+ *   · 起完后只对 Edge 窗口 ShowWindow(SW_SHOWNOACTIVATE)：不改变前台，窗口照样是前台。
+ * 因此唯一有效且便宜的做法是「抢回来」，而且要盯住第二波——所以判定循环要求连续几轮
+ * 都读到 prev 才算稳定，不是「调过一次 SetForegroundWindow」就算完。
+ *
+ * 三条硬约束（来自像素车道，不能推翻）：窗口必须可见、不最小化、在屏幕内——
+ * 所以「最小化 / 挪到屏幕外」都不是答案；允许窗口出现，只有键盘焦点 / 前台必须还回去。
+ *
+ * 判定是**纯函数**（Poll / Settle 收 read 与 raise 两个委托），宿主上用 --selftest-foreground
+ * 注入假 GetForegroundWindow 就能测；真机只验「它真的把前台还回去了」。
+ */
+internal sealed class ForegroundStats
+{
+    /** 起 Edge 之前的前台窗口（0 = 当时没有前台窗口） */
+    internal long Prev;
+    /** 最近一次读到的前台窗口 */
+    internal long Final;
+    /** 采样次数（含抢回来之后的复读） */
+    internal int Samples;
+    /** 被抢的次数（每次采样发现 ≠ prev 记一次） */
+    internal int Steals;
+    /** 尝试置前的次数 */
+    internal int Raises;
+    /** 置前 API 都失败过的次数（最终判据仍看 GetForegroundWindow） */
+    internal int RaiseFailures;
+    /** 第一次被抢的时刻（DateTime.UtcNow.Ticks：Environment.TickCount 只有 15.6ms 粒度，窗口期实测十几毫秒，会全被读成 0） */
+    internal long FirstStealTick;
+    /** 判定通过的时刻（同上） */
+    internal long RestoredTick;
+    /** 回执前的判定结果：true = 返回时前台就是 prev */
+    internal bool Restored;
+
+    /** 窗口期时长（毫秒）：从第一次被抢到重新回到 prev。日志用它说清「已派发未验证」有多长 */
+    internal long WindowMs()
+    {
+        if (FirstStealTick == 0 || RestoredTick == 0) return 0;
+        long diff = (RestoredTick - FirstStealTick) / TimeSpan.TicksPerMillisecond;
+        return diff < 0 ? 0 : diff;
+    }
+}
+
+internal static class Foreground
+{
+    /** 采样间隔：真机上抢前台是窗口创建那一拍的事，10–20ms 是「压得住」与「不烧 CPU」的折中 */
+    internal const int PollMs = 15;
+
+    /** 判定稳定所需的连续轮数（4 × 15ms ≈ 60ms：第二波抢前台在第一波之后 ~400ms，由预算兜住） */
+    internal const int StableRounds = 4;
+
+    /** 回执前收尾的预算：Edge 起完到真正落定约 700ms（真机），给到 1.2s 仍远小于主桥 40s 命令线 */
+    internal const int SettleBudgetMs = 1200;
+
+    /** 重启那条路的收尾预算（它夹在一条命令中段，压到 600ms） */
+    internal const int RestartSettleBudgetMs = 600;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    /** 当前前台窗口的 hwnd（0 = 没有前台窗口：沙箱刚登录时就是这样） */
+    internal static long Current()
+    {
+        return GetForegroundWindow().ToInt64();
+    }
+
+    /**
+     * 把 hwnd 置为前台。第一次失败时**attach 到当前前台线程**再试一次：
+     * Windows 的前台锁会拒绝「不在前台的进程」调用 SetForegroundWindow，
+     * 而 attach 之后调用线程被视为前台线程的一部分（这是这个限制的常规绕法）。
+     * 返回值只是 API 的结果，**判据永远是 GetForegroundWindow() == hwnd**。
+     */
+    internal static bool Raise(long hwnd)
+    {
+        IntPtr target = new IntPtr(hwnd);
+        if (SetForegroundWindow(target)) return true;
+        long fg = Current();
+        if (fg == 0) return false;
+        uint fgThread = GetWindowThreadProcessId(new IntPtr(fg), IntPtr.Zero);
+        if (fgThread == 0) return false;
+        uint self = GetCurrentThreadId();
+        bool attached = AttachThreadInput(fgThread, self, true);
+        bool ok = SetForegroundWindow(target);
+        if (attached) AttachThreadInput(fgThread, self, false);
+        return ok;
+    }
+
+    /**
+     * 一次采样（纯逻辑）：读到 prev 就什么都不做；读到别的就抢回来并复读一次。
+     * 返回采样后的前台窗口。
+     */
+    internal static long Poll(long prev, Func<long> read, Func<long, bool> raise, ForegroundStats stats)
+    {
+        long fg = read();
+        stats.Samples++;
+        stats.Final = fg;
+        // prev == 0：起 Edge 之前就没有前台窗口，没有可还原的对象（不把「有新窗口」记成被抢）
+        if (prev == 0 || fg == prev) return fg;
+        stats.Steals++;
+        if (stats.FirstStealTick == 0) stats.FirstStealTick = DateTime.UtcNow.Ticks;
+        stats.Raises++;
+        if (!raise(prev)) stats.RaiseFailures++;
+        else stats.RestoredTick = DateTime.UtcNow.Ticks;
+        fg = read();
+        stats.Samples++;
+        stats.Final = fg;
+        if (fg == prev) stats.RestoredTick = DateTime.UtcNow.Ticks;
+        return fg;
+    }
+
+    /** 生产用：拿真窗口 + 真置前 + 真睡眠 */
+    internal static long PollInGuest(long prev, ForegroundStats stats)
+    {
+        return Poll(prev, Current, Raise, stats);
+    }
+
+    /**
+     * 等「前台稳定在 prev」的判定循环（纯逻辑，注入 read / raise / sleep 可在宿主上测）。
+     *
+     * 为什么要求**连续 stableRounds 轮**：真机实测第二波抢前台在第一波之后约 400ms 才到，
+     * 只验一次会当场判「已还原」，然后前台又被抢走——回执就变成假成功。
+     *
+     * 返回 true = 返回时前台就是 prev（判据是 GetForegroundWindow，不是 API 返回值）。
+     */
+    internal static bool Settle(long prev, Func<long> read, Func<long, bool> raise, int stableRounds,
+        int maxRounds, Action<int> sleep, ForegroundStats stats)
+    {
+        if (prev == 0) return true; // 没有可还原的对象
+        if (stableRounds < 1) stableRounds = 1;
+        if (maxRounds < stableRounds) maxRounds = stableRounds;
+        int stable = 0;
+        for (int i = 0; i < maxRounds; i++)
+        {
+            long fg = Poll(prev, read, raise, stats);
+            if (fg == prev)
+            {
+                stable++;
+                if (stable >= stableRounds) return true;
+            }
+            else
+            {
+                stable = 0;
+            }
+            if (sleep != null) sleep(PollMs);
+        }
+        return stats.Final == prev;
+    }
+
+    /** 生产用：在 guest 里把前台还回去并验过（预算 budgetMs） */
+    internal static bool SettleInGuest(ForegroundStats stats, int budgetMs)
+    {
+        if (stats == null) return true;
+        if (budgetMs < PollMs * StableRounds) budgetMs = PollMs * StableRounds;
+        int maxRounds = budgetMs / PollMs;
+        return Settle(stats.Prev, Current, Raise, StableRounds, maxRounds, Sleep, stats);
+    }
+
+    private static void Sleep(int ms)
+    {
+        Thread.Sleep(ms);
     }
 }
