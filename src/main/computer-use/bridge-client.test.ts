@@ -130,10 +130,21 @@ describe("bridge-client（文件协议）", () => {
   test("半截 resp（同步抖动）不当成功也不当失败——等到完整文件", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
     try {
-      const promise = fetchGuestScreenshot(dir, 1280, 3_000);
-      await sleep(150); // 等 req 落盘
+      // 10s 而不是 3s：这条验的是「半截 resp 不算数」，不是超时预算；满载时 3s 会把真成功判红
+      const promise = fetchGuestScreenshot(dir, 1280, 10_000);
+      // 等 req 落盘：不靠固定 sleep（150ms 在满载时会不够，全量跑里就是一条偶发红）
       const cmdDir = join(dir, COMPUTER_USE_CMD_DIR);
-      const reqFile = (await readdir(cmdDir)).find((f) => f.endsWith(".req.json"));
+      const reqDeadline = Date.now() + 5_000;
+      let reqFile: string | undefined;
+      for (;;) {
+        try {
+          reqFile = (await readdir(cmdDir)).find((f) => f.endsWith(".req.json"));
+        } catch {
+          // cmd 目录还没建出来：下一轮再看
+        }
+        if (reqFile !== undefined || Date.now() > reqDeadline) break;
+        await sleep(20);
+      }
       assert.ok(reqFile, "req 应已落盘");
       const baseName = reqFile.slice(0, -".req.json".length);
       // 先写半截，再写全——模拟撞上半截文件的那一轮
