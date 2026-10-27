@@ -18,7 +18,7 @@ import type {
   ComputerUseWindowListResult,
   ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
-import type { GuestCommandResult } from "./sandbox.ts";
+import type { GuestCommandReply } from "./sandbox.ts";
 
 interface WindowShotFields {
   hwnd?: number;
@@ -58,7 +58,7 @@ function fakeGuest(options: {
   windowList?: ComputerUseWindowListResult;
   uiaList?: ComputerUseUiaListResult;
   uiaAct?: ComputerUseUiaActResult;
-  commandResult?: GuestCommandResult;
+  commandResult?: GuestCommandReply;
   throwOn?: "screenshot" | "command";
 }): { guest: ComputerUseGuest; calls: Calls } {
   const calls: Calls = { screenshot: [], commands: [], windowShots: [], listWindows: [], uiaLists: [], uiaActs: [] };
@@ -78,10 +78,10 @@ function fakeGuest(options: {
         }
       );
     },
-    async guestCommand(command, fields): Promise<GuestCommandResult> {
+    async guestCommand(command, fields): Promise<GuestCommandReply> {
       if (options.throwOn === "command") throw new Error("文件协议炸了");
       calls.commands.push({ command, fields });
-      return options.commandResult ?? { ok: true };
+      return options.commandResult ?? { ok: true, resp: { ok: true, delivery: "dispatched" } };
     },
     async windowShot(fields): Promise<ComputerUseWindowShotResult> {
       calls.windowShots.push(fields);
@@ -241,6 +241,51 @@ describe("applyComputerUseRequest", () => {
     const { guest } = fakeGuest({ commandResult: { ok: false, error: "不认识的按键名：hyper" } });
     const outcome = await run(guest, { action: "key", key: "hyper+x" });
     assert.deepEqual(outcome, { ok: false, error: "不认识的按键名：hyper" });
+  });
+
+  test("交付三档：dispatched 带「不要重放」，applied 带生效证据，failed 原样带出", async () => {
+    // dispatched：SendInput 成功入队但无法确认生效——**模型不许重放**
+    const dispatched = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "dispatched" } } });
+    const dispatchedOutcome = await run(dispatched.guest, { action: "click", x: 10, y: 20 });
+    assert.equal(dispatchedOutcome.ok && dispatchedOutcome.delivery, "dispatched");
+    if (dispatchedOutcome.ok) {
+      assert.match(dispatchedOutcome.text, /do not replay the same action/);
+      assert.match(dispatchedOutcome.text, /computer_screenshot/);
+    }
+
+    // applied：有生效证据，就不该再说「无法确认」
+    const applied = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "applied" } } });
+    const appliedOutcome = await run(applied.guest, { action: "type", text: "x" });
+    assert.equal(appliedOutcome.ok && appliedOutcome.delivery, "applied");
+    if (appliedOutcome.ok) {
+      assert.match(appliedOutcome.text, /confirmed to have taken effect/);
+      assert.doesNotMatch(appliedOutcome.text, /do not replay/);
+    }
+
+    // 老桥 / 桥没说 / 不认识的档位：一律按「已派发、未验证」——像素命令拿到 ok 回执
+    // 本来就只能说明事件入了队（不能凭缺失就把「未验证」升级成「已生效」）
+    for (const resp of [{ ok: true }, { ok: true, delivery: "possibly" }]) {
+      const silent = fakeGuest({ commandResult: { ok: true, resp } });
+      const outcome = await run(silent.guest, { action: "key", key: "enter" });
+      assert.equal(outcome.ok && outcome.delivery, "dispatched");
+    }
+
+    // failed：桥明确拒绝（「确定没做成」，可以放心重试）
+    const failed = fakeGuest({
+      commandResult: { ok: false, error: "button 只能是 left / right / middle，收到：wheel", delivery: "failed" },
+    });
+    const failedOutcome = await run(failed.guest, { action: "click", x: 1, y: 2 });
+    assert.deepEqual(failedOutcome, {
+      ok: false,
+      error: "button 只能是 left / right / middle，收到：wheel",
+      delivery: "failed",
+    });
+
+    // 超时 / 沙箱没在跑：没有那一档——「不知道成没成」不能写成 failed（会鼓励重放）
+    const unknown = fakeGuest({ commandResult: { ok: false, error: "沙箱里的桌面没有响应（click 超时 45s）" } });
+    const unknownOutcome = await run(unknown.guest, { action: "click", x: 3, y: 4 });
+    assert.equal(unknownOutcome.ok, false);
+    assert.equal("delivery" in unknownOutcome, false);
   });
 
   test("控制器抛异常：收成 ok:false（挂着不回会让那次工具调用永远等下去）", async () => {

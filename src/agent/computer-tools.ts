@@ -19,6 +19,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import {
+  COMPUTER_USE_DISPATCHED_HINT,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   GUEST_COMMAND_TIMEOUT_MS,
   screenshotPointToNative,
@@ -227,8 +228,9 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       BUSY +
       "Click a point on the sandbox desktop, by x, y pixels of your latest computer_screenshot. It moves the " +
       "pointer there and presses — whatever is under that point receives it, so take a screenshot first and " +
-      "click on what you actually see. Nothing but the fact that it was sent comes back: take another " +
-      "screenshot to see what happened. " +
+      "click on what you actually see. " +
+      COMPUTER_USE_DISPATCHED_HINT +
+      " " +
       CONSEQUENCES +
       " " +
       HANDOFF_HINT,
@@ -285,7 +287,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "retrying the same box: the win+r Run box in this sandbox swallows them (its Cancel button does not " +
       "respond either) — press escape and use the taskbar search box instead (click it, type the name, enter). " +
       "Keys that are not text (Enter, Tab, arrows, shortcuts) go through computer_key instead. " +
-      "Take a screenshot afterwards to confirm it landed where you meant. Never type passwords, one-time " +
+      COMPUTER_USE_DISPATCHED_HINT +
+      " Never type passwords, one-time " +
       "codes or other credentials — ask the user instead. " +
       CONSEQUENCES,
     parameters: {
@@ -313,8 +316,9 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       BUSY +
       "Press a key or a key combination on the sandbox desktop: enter, tab, escape, backspace, delete, home, " +
       "end, pageup, pagedown, up / down / left / right, f1–f12, ctrl+a, alt+f4, ctrl+shift+s… " +
-      "It goes to the focused window — click the window first. Take a screenshot afterwards to confirm. " +
-      "This is how you open things from the desktop itself. **Prefer the taskbar search box**: click it, type " +
+      "It goes to the focused window — click the window first. " +
+      COMPUTER_USE_DISPATCHED_HINT +
+      " This is how you open things from the desktop itself. **Prefer the taskbar search box**: click it, type " +
       "the program name (cmd, msedge — the image is a bare Windows and notepad is not installed), press " +
       "enter. **Do not use the win+r Run box**: in this sandbox click reaches it but typed characters do not " +
       "land in it (and its Cancel button does not respond). If you already opened it and typing did nothing, " +
@@ -347,7 +351,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "Scroll at a point on the sandbox desktop, by x, y pixels of your latest computer_screenshot. The point " +
       "decides which pane scrolls — pass the x, y of the list or page you mean (omitted = the middle of the " +
       "screen). deltaY is a number of wheel notches: positive scrolls down, negative up (3 is about nine " +
-      "lines). Take a screenshot afterwards to see the new position.",
+      "lines). " +
+      COMPUTER_USE_DISPATCHED_HINT,
     parameters: {
       type: "object",
       properties: {

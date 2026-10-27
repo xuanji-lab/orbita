@@ -958,6 +958,42 @@ export interface ComputerUseShot {
   data: string;
 }
 
+// ── 像素输入的交付语义（三档）─────────────────────────────────────────
+//
+// 为什么要有这一层：`SendInput` 的返回值只说明**事件进了窗口队列**，不说明动作生效
+// （窗口可能卡住、焦点可能被别人抢走、目标控件可能压根不接受输入）。以前回执只有
+// `ok:true`，模型读成「我点到了 / 打进去了」就接着往下走，出了错也发现不了，甚至会
+// 重放同一个动作。三档把「已送出」与「已生效」分开：
+//   applied     有生效证据（本刀不产出，位置先留出来：以后可以读控件文本 / 比对截图）
+//   dispatched  已派发、未验证（SendInput 成功入队，但没有生效证据）——**不要再重放**
+//   failed      明确失败（SendInput 返回值不对 / 参数非法 / 窗口不存在）
+//
+// 同类系统（ZCode 的 CUA 车道）也是这套：`actionSent` / `possibly_sent ⇒ 绝不重放`。
+
+/** 一条像素输入命令的交付档位（guest 桥写在回执的 `delivery` 上） */
+export type ComputerUseDelivery = "applied" | "dispatched" | "failed";
+
+/**
+ * 回执里的 `delivery` → 契约值。不认识 / 缺失一律 `undefined`（老桥不说话，按「没说」处理，
+ * 由调用方决定兜底档位），而不是猜一个——把失败记成成功比少一条信息坏得多。
+ */
+export function parseComputerUseDelivery(raw: unknown): ComputerUseDelivery | undefined {
+  return raw === "applied" || raw === "dispatched" || raw === "failed" ? raw : undefined;
+}
+
+/**
+ * 给模型的口径：`dispatched` 之后该做什么。**一处文案、两个消费者**（工具描述与调用回执），
+ * 免得模型从两处读到两种说法。
+ *
+ * 为什么必须写「不要立刻重放」：模型看到「已送出」的自然反应就是接着下一步；而如果那一下
+ * 其实已经生效（只是我们没证据），重放就是双击 / 双份文字。先看一眼屏幕再决定，代价是一张图，
+ * 收益是不会有「同一动作做两遍」。
+ */
+export const COMPUTER_USE_DISPATCHED_HINT =
+  "dispatched = the input was sent but there is no evidence it took effect: do not replay the same " +
+  "action right away — take a computer_screenshot (or win-shot of that window) first and look at what " +
+  "actually happened.";
+
 /** computerUseRequest 的回执载荷：主进程组装，agent 进程翻成 pi 工具结果（browserResult 同款） */
 export type ComputerUseToolOutcome =
   | {
@@ -966,8 +1002,18 @@ export type ComputerUseToolOutcome =
       text: string;
       /** 只有 screenshot 带：回图字节与两套尺寸（工具层换算坐标要靠它） */
       shot?: ComputerUseShot;
+      /**
+       * 像素输入的交付档位（可选：截图 / UIA / sandbox_* 这些通道不说这一档，缺省即可）。
+       * 主进程从桥的回执里取；桥没说时按「已派发未验证」兜底（SendInput 成功入队就是这个含义）。
+       */
+      delivery?: ComputerUseDelivery;
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** 桥**明确拒绝**了这条命令时是 `failed`；超时 / 沙箱没在跑这类「不知道」的失败不带这一档 */
+      delivery?: ComputerUseDelivery;
+    };
 
 /**
  * 一次 computer_* 调用的审计载荷（pi 工具结果的 `details.computerUse`）。

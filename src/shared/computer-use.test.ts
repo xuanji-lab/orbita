@@ -9,11 +9,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  COMPUTER_USE_DISPATCHED_HINT,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_UIA_TIMEOUT_MS,
   computerUseChannels,
   isUiaRequest,
   isWindowScreenshotRequest,
+  parseComputerUseDelivery,
   screenshotPointToNative,
 } from "./computer-use.ts";
 
@@ -103,8 +105,7 @@ describe("isUiaRequest（UIA 车道不占桌面租约的判据）", () => {
   });
 });
 
-describe("computerUseChannels（IPC 契约真源）", () => {
-  test("每个通道值唯一、都带 computer-use: 前缀（复制粘贴改错会在这里红）", () => {
+describe("computerUseChannels（IPC 契约真源）", () => {  test("每个通道值唯一、都带 computer-use: 前缀（复制粘贴改错会在这里红）", () => {
     const values = Object.values(computerUseChannels);
     assert.equal(new Set(values).size, values.length);
     for (const value of values) assert.match(value, /^computer-use:/);
@@ -114,5 +115,28 @@ describe("computerUseChannels（IPC 契约真源）", () => {
     // 2026-10-27 真机 P1：沙盒在跑时离开设置页再回来，徽标显示未启动、
     // 停止按钮灰、点启动报「沙箱已经在运行」，用户从 UI 停不掉。
     assert.equal(computerUseChannels.computerUseStatusGet, "computer-use:status-get");
+  });
+});
+
+// ── 像素输入的交付语义（三档）─────────────────────────────────────────
+
+describe("parseComputerUseDelivery", () => {
+  test("三档各自认对：applied / dispatched / failed 原样返回", () => {
+    assert.equal(parseComputerUseDelivery("applied"), "applied");
+    assert.equal(parseComputerUseDelivery("dispatched"), "dispatched");
+    assert.equal(parseComputerUseDelivery("failed"), "failed");
+  });
+
+  test("缺字段 / 不认识的档位 / 非字符串一律 undefined（不猜，不当成成功）", () => {
+    for (const raw of [undefined, null, "", "Applied", "ok", 1, true, {}, []]) {
+      assert.equal(parseComputerUseDelivery(raw), undefined, String(raw));
+    }
+  });
+
+  test("dispatched 的口径说清楚了两件事：无法确认生效 + 不要立刻重放（先截图）", () => {
+    assert.match(COMPUTER_USE_DISPATCHED_HINT, /dispatched/);
+    assert.match(COMPUTER_USE_DISPATCHED_HINT, /no evidence it took effect/);
+    assert.match(COMPUTER_USE_DISPATCHED_HINT, /do not replay/);
+    assert.match(COMPUTER_USE_DISPATCHED_HINT, /computer_screenshot/);
   });
 });

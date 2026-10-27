@@ -393,6 +393,7 @@ test(
       const probe = await ask({ command: "type", text: "", dryRun: true });
       assert.equal(probe.ok, true);
       assert.equal(probe.dryRun, true, "dryRun 没被桥认——后面的注入类请求一律不发（宿主上注入是红线）");
+      assert.equal(probe.delivery, undefined, "dryRun 什么都没派发，不能声称 dispatched 或 failed");
 
       // ---- click ----
       assert.deepEqual(await ask({ command: "click", x: 120, y: 340, dryRun: true }), {
@@ -407,9 +408,11 @@ test(
       assert.deepEqual(right, { ok: true, dryRun: true, x: 5, y: 6, button: "right", double: true });
       const noX = await ask({ command: "click", y: 6, dryRun: true });
       assert.equal(noX.ok, false);
+      assert.equal(noX.delivery, "failed", "参数非法是「明确失败」：什么都没注入");
       assert.match(noX.error, /整数 x 与 y/);
       const badButton = await ask({ command: "click", x: 1, y: 2, button: "wheel", dryRun: true });
       assert.equal(badButton.ok, false);
+      assert.equal(badButton.delivery, "failed");
       assert.match(badButton.error, /button 只能是/);
 
       // ---- key：键名 → VK（宿主侧只看解析结果，不关心 VK 具体值是否“对”到某个物理键）----
@@ -424,9 +427,11 @@ test(
       assert.deepEqual(await vks("numpad7"), [0x67]);
       const unknown = await ask({ command: "key", key: "hyper+x", dryRun: true });
       assert.equal(unknown.ok, false);
+      assert.equal(unknown.delivery, "failed");
       assert.match(unknown.error, /不认识的按键名：hyper/);
       const emptyKey = await ask({ command: "key", dryRun: true });
       assert.equal(emptyKey.ok, false);
+      assert.equal(emptyKey.delivery, "failed");
 
       // ---- type：转义与中文原样回显（引号/反斜杠/换行/中文都不能被切坏）----
       const text = '他说"你好" \\ 换行\n制表\t结束';
@@ -436,6 +441,7 @@ test(
       assert.equal(typed.length, text.length);
       const noText = await ask({ command: "type", dryRun: true });
       assert.equal(noText.ok, false);
+      assert.equal(noText.delivery, "failed");
       assert.match(noText.error, /text 字段/);
 
       // ---- scroll ----
@@ -448,9 +454,11 @@ test(
       });
       const zeroDelta = await ask({ command: "scroll", x: 1, y: 2, deltaY: 0, dryRun: true });
       assert.equal(zeroDelta.ok, false);
+      assert.equal(zeroDelta.delivery, "failed");
       assert.match(zeroDelta.error, /deltaY 不能是 0/);
       const noDelta = await ask({ command: "scroll", x: 1, y: 2, dryRun: true });
       assert.equal(noDelta.ok, false);
+      assert.equal(noDelta.delivery, "failed");
       assert.match(noDelta.error, /整数 deltaY/);
 
       // 校验类请求也不许留下 req 文件（桥执行完就删）
@@ -764,6 +772,38 @@ test("注入失败文案：错误码 5 带人话解释（模型看得到的就�
   assert.match(src, /先截图确认沙箱状态/);
   // 文案要接进异常消息里，不能只定义不用
   assert.match(src, /个事件（" \+ DescribeSendInputError/);
+});
+
+// ── 像素输入的回执：交付语义（三档）─────────────────────────────────────
+//
+// 成功路径（SendInput 返回全部送达）**测不了**：它必须真的注入，而宿主上注入是红线。
+// 所以照约定断言源码：四条命令的成功回执都走 DispatchedReceipt()，且它只声明
+// 「已派发、未验证」；明确的失败一律带 delivery:failed（参数校验那部分在
+// 上面的 dryRun 测试里已经真跑过）。
+
+test("像素输入回执：成功=dispatched、失败=failed，且 ok 保留（向后兼容）", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+
+  // 成功回执只有一处构造：改这一处就同时改了四条命令
+  assert.match(src, /private static string DispatchedReceipt\(\)/);
+  assert.match(src, /return "\{\\"ok\\":true,\\"delivery\\":\\"dispatched\\"\}";/);
+  // 四条命令的成功路径都接上它（而不是各写各的 ok:true）
+  const dispatchedCalls = src.match(/return DispatchedReceipt\(\);/g) ?? [];
+  assert.equal(dispatchedCalls.length, 4, "click / type / key / scroll 各一处");
+  // 本刀不产出 applied：留了位置但不能凭空声称生效（注释里提到不算，回执字面量才算）
+  assert.equal(src.includes('\\"delivery\\":\\"applied\\"'), false, "applied 这一档留空位，不在桥里凭空写出来");
+
+  // 四条命令里的明确失败都带 failed（参数非法 / SendInput 返回值不对 / 找不到目标）
+  for (const [name, pattern] of [
+    ["click", /点击失败：" \+ JsonEscape\(ex\.Message\)/],
+    ["type", /输入失败：" \+ JsonEscape\(ex\.Message\)/],
+    ["key", /按键失败：" \+ JsonEscape\(ex\.Message\)/],
+    ["scroll", /滚动失败：" \+ JsonEscape\(ex\.Message\)/],
+  ]) {
+    assert.match(src, pattern, `${name} 的注入异常应翻译成人话`);
+  }
+  const failedReceipts = src.match(/\\"delivery\\":\\"failed\\"/g) ?? [];
+  assert.ok(failedReceipts.length >= 8, `明确失败都要报 failed，实际只有 ${failedReceipts.length} 处`);
 });
 
 // ── launch 路径闸门的纯函数自测（--selftest-launch）────────────────────────────
