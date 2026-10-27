@@ -8,8 +8,10 @@
  *   computer_*  → desktop:exclusive  像素工具共用唯一一块屏幕与前台焦点，必须排队
  *   screenshot + window → **不要租约**  按窗口截图（PrintWindow）读窗口自己的 surface，
  *                          被遮挡也拍得到、不抢焦点，所以多个会话可以各拍各的窗口
- *   uia-*       → **不要租约**        UIA 模式调用直接进控件（AutoSetFocus 已关），
+ *   uia-list / uia-act → **不要租约**   UIA 模式调用直接进控件（AutoSetFocus 已关），
  *                          不移动前台焦点、不依赖桌面现状——写操作也不占桌面
+ *                          动作集里没有 focus（桥 0.11.0 删）：Element.SetFocus 动的是
+ *                          桌面级焦点，车道不提供它，求到就当场拒并给替代方案
  *   sandbox_*   → browser:<session>  每会话自己的 Edge，永远立刻可用，不占桌面
  *
  * **硬上限的收尾也在这里**：桌面键被 15 分钟强制收回之后，那个会话的下一条命令不该因为
@@ -20,16 +22,24 @@
  * 下一条真正的像素命令再消费——「你的桌面操作权被收回了」这句话不能因为中间插了一张
  * 窗口图就消失。
  *
- * UIA 车道（uia-list / uia-act，桥 0.10.0）**同样不取桌面键**，虽然它是写操作：AutoSetFocus
- * 关掉之后，模式调用直接进目标控件，不移动前台焦点、也不依赖「屏幕上现在是什么」。它能
- * 与持着桌面的像素会话共存——这正是拆多个会话并行的意义。与窗口截图同一条边线：
- * 不进过期标记的拦截（它们不碰那把锁）。
+ * UIA 车道（uia-list / uia-act，桥 0.10.0）**不取任何键**，虽然它是写操作：AutoSetFocus
+ * 关掉之后，调模式直接进目标控件，不移动前台焦点、也不依赖「屏幕上现在是什么」。它能与
+ * 持着桌面的像素会话共存——这正是拆多个会话并行的意义。与窗口截图同一条边线：不进过期
+ * 标记的拦截（它们不碰那把锁）。
+ *
+ * 这条豁免成立的前提是**动作集里没有 focus**：Element.SetFocus 动的是桌面级键盘焦点，
+ * 不取锁就会把并发会话的 SendInput 吸进被聚焦的控件。桥 0.11.0 把那条动作删了，而不是
+ * 给它取锁——取锁也行，但租约要到 idle 超时（60s）才放手，一次 focus 就把别人堵一分钟，
+ * 车道剩下的意义没了。所以这里还有一道兜底拦截：旧 agent / 旧会话记录里来的 focus 请求
+ * 直接拒，回一句带替代路径的话（同句文案也在桥与工具参数校验里）。
  */
 import {
   COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_LEASE,
   browserKey,
   computerUseLeaseErrors,
+  computerUseUiaErrors,
+  isUiaFocusRequest,
   isUiaRequest,
   isSandboxBrowserAction,
   isWindowScreenshotRequest,
@@ -75,7 +85,13 @@ export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): Co
     if (isWindowScreenshotRequest(request)) {
       return await deps.runPixels(sessionId, request);
     }
-    // UIA 车道不占桌面租约：模式调用不移动前台焦点（AutoSetFocus 已关），不依赖桌面现状，
+    // 已删除的 focus 动作（桥 0.11.0）：旧 agent / 旧会话记录里还可能出现。
+    // 它不碰桌面，所以不取锁、也不消费过期标记，直接回一句带替代路径的话——模型看不见 UI，
+    // 不告诉它换什么，它只会重试同一个动作。
+    if (isUiaFocusRequest(request)) {
+      return { ok: false, error: computerUseUiaErrors.focusRemoved };
+    }
+    // UIA 车道不占桌面租约：调模式不移动前台焦点（AutoSetFocus 已关），不依赖桌面现状，
     // 所以它可以与别人持着的 desktop:exclusive 共存。放在过期标记之前：它也不该被
     // 「上一轮占得太久」拦掉一把它没用过的锁（理由同按窗口截图）。
     if (isUiaRequest(request)) {

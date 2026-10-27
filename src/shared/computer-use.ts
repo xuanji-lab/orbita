@@ -172,8 +172,10 @@ export const computerUseGuestCommands = {
   uiaList: "uia-list",
   /**
    * 对一个控件执行 UIA 模式（桥 0.10.0）：`{hwnd?, title?, ref?, name?, action, value?, timeoutMs?}`。
-   * action = invoke / setValue / selection / focus。**不抢前台**（桥把 IUIAutomation2 的
-   * AutoSetFocus 置 false），所以这条路径不占桌面租约（见 isUiaRequest）。
+   * action = invoke / setValue / selection。三条都**不抢前台**（桥把 IUIAutomation2 的
+   * AutoSetFocus 置 false），所以不占桌面租约（见 isUiaRequest）。
+   * **没有 focus**：Element.SetFocus 会移动桌面级键盘焦点，与车道前提冲突，桥 0.11.0 已删
+   * （拒绝文案见 computerUseUiaErrors.focusRemoved）。
    */
   uiaAct: "uia-act",
   /** 移动指针并按键（SendInput 绝对坐标，沙箱原生物理像素） */
@@ -731,16 +733,22 @@ export type ComputerUseWindowListResult =
 //      就放弃那条线程（后台线程，不拖住桥也不拖住命令循环），下一次命令起一条新的。
 //   ③ 不支持模式的控件只能退回像素输入。失败文案必须点名它支持哪些模式，并告诉模型
 //      「改用 computer_click / computer_type 的像素路径」——它看不见 UI，不会自己想到。
+//   ④ **focus 不是本车道的动作**（桥 0.11.0 删除）：Element.SetFocus 移动的是整块桌面
+//      共享的键盘焦点，是这条车道唯一的桌面级副作用——一旦允许，车道「不占桌面」的前提
+//      就不成立了（并发会话的 SendInput 会打进来）。要移动焦点用 computer_click 点到目标，
+//      或直接用 invoke（通常同时给焦点）/ setValue（不需要焦点）。别把它加回来。
 
 /**
  * UIA 动作。**这是动作而不是像素坐标**：invoke = InvokePattern（按钮/链接/菜单项），
- * setValue = ValuePattern（输入框/文档），selection = SelectionItemPattern（列表/标签项），
- * focus = Element.SetFocus（唯一一个**有意**移动键盘焦点的动作，模型点了它才做）。
+ * setValue = ValuePattern（输入框/文档），selection = SelectionItemPattern（列表/标签项）。
+ *
+ * **没有 focus**：Element.SetFocus 动的是桌面级全局资源，与车道「不碰桌面」的不变量冲突
+ * （替代路径见上面 ④，拒绝文案见 computerUseUiaErrors）。
  *
  * 「点击」不在这里：UIA 的 InvokePattern 是「执行这个控件的默认动作」，比在坐标上按下
  * 更稳（不依赖控件位置、不被遮挡影响）。需要真的按坐标就仍用 computer_click。
  */
-export type ComputerUseUiaAction = "invoke" | "setValue" | "selection" | "focus";
+export type ComputerUseUiaAction = "invoke" | "setValue" | "selection";
 
 /**
  * uia-list 的一项：一个**可动作**的控件。字段名与 guest 的 UiaItemInfo 序列化结果一一对应。
@@ -761,7 +769,10 @@ export interface ComputerUseUiaItem {
   y: number;
   w: number;
   h: number;
-  /** 这个控件实际支持的动作（只列本车道能执行的三条：invoke / value / selectionItem）。focus 恒可用，不列 */
+  /**
+   * 这个控件实际支持的动作（只列本车道能执行的三条：invoke / value / selectionItem）。
+   * 空数组 = 这条车道没有能动它的模式（也不代表能 focus——focus 已不是动作）。
+   */
   patterns: string[];
   enabled: boolean;
   /** 控件不在可见区域（滚动到它 / 切到那个标签页之后才可动作） */
@@ -791,13 +802,11 @@ export interface ComputerUseUiaActReply {
   hwnd: number;
   /** 执行的动作（与请求里的 perform 一致；桥回显便于日志对号） */
   action: ComputerUseUiaAction;
-  /** 真正用到的模式：invoke / value / selectionItem / focus（focus 动作没有模式，回 focus） */
+  /** 真正用到的模式：invoke / value / selectionItem */
   usedPattern: string;
   /** 目标控件的可读名字 */
   name: string;
   controlType: string;
-  /** 这次动作**是否**请求了键盘焦点。只有 action=focus 才是 true */
-  focused: boolean;
   /**
    * AutoSetFocus 是否已成功关掉。true = 已关（不会因为这次调用把窗口带到前台）；
    * false = 关不掉（降级），这一次可能抢了焦点。模型需要知道这件事。
@@ -838,9 +847,38 @@ export const COMPUTER_USE_UIA_TIMEOUT_MS = 5_000;
  * 「只读也不占」，UIA 是「**写也不占**」。UIA 的模式调用直接进目标控件，不需要那个窗口在前台、
  * 不移动前台焦点（AutoSetFocus 被关掉），所以两个会话可以各自驱动各自的窗口。
  * 像素输入（click / type / key / scroll）仍然必须持 desktop:exclusive：它们共用唯一一个前台焦点。
+ *
+ * 这条判据成立的前提是**动作集里没有 focus**（桥 0.11.0 删除）：Element.SetFocus 动的是
+ * 桌面级键盘焦点。谁要把它加回来，必须同时给那条取 desktop:exclusive——否则这里的「不占桌面」
+ * 会变成一个假的陈述。
  */
 export function isUiaRequest(request: ComputerUseToolRequest): boolean {
   return request.action === "uia-list" || request.action === "uia-act";
+}
+
+/**
+ * 给模型的「focus 已删除」文案。宿主（dispatch 的兜底拦截、agent 工具的参数校验）与桥
+ * guest-bridge/Uia.cs 的 FocusRemovedMessage 是同一句话的副本：两层各有一道闸，改时两处一起改。
+ */
+export const computerUseUiaErrors = {
+  focusRemoved:
+    "focus 动作已删除：Element.SetFocus 会移动整块桌面的键盘焦点，与 UIA 车道「不碰桌面」的前提冲突。" +
+    "要移动焦点，用 computer_click 点到目标控件；或者直接用 invoke（通常同时给焦点）/ setValue（不需要焦点）。",
+} as const;
+
+/**
+ * 这条请求是不是那个**已删除**的 focus 动作（uia-act + perform=focus）。
+ *
+ * 类型与工具 schema 都不再产出它；这条判据只为两层兜底存在：接线层（dispatch.ts）拒掉旧
+ * agent / 旧会话记录里的迟到请求并给出换路文案，以及测试把「删了」这件事钉住。
+ *
+ * 为什么删而不是给它取桌面租约：Element.SetFocus 移动的是桌面级焦点。取租约也能保证正确性，
+ * 但租约要持有到 idle 超时（60s），一次 focus 就会把别的会话的像素动作堵在这把锁上一分钟——
+ * 那恰好废掉这条车道「不占桌面」的全部意义。而 focus 本身可替代（invoke 通常同时给焦点，
+ * setValue 不需要焦点，要移动焦点用 computer_click 点过去），所以直接删。
+ */
+export function isUiaFocusRequest(request: ComputerUseToolRequest): boolean {
+  return request.action === "uia-act" && String(request.perform) === "focus";
 }
 
 // ── agent 的像素工具组（PR2）───────────────────────────────────────────
@@ -874,11 +912,13 @@ export type ComputerUseToolRequest =
   //
   // 字段名与 guest 命令一致（window = hwnd 数字或标题片段，ref 来自上一次 uia-list）。
   // **不占桌面租约**（isUiaRequest）：这是整个车道的意义，别在接线层又把它塞进队列。
+  // 动作集里没有 focus（桥 0.11.0 删掉）：它动的是桌面级焦点，见 computerUseUiaErrors。
   /** 列出窗口里的可动作控件。只读、不抢焦点 */
   | { action: "uia-list"; window?: string | number; maxItems?: number }
   /**
    * 对一个控件执行 UIA 模式。ref 与 name 至少给一个（ref 优先，且必须是同一窗口里
    * uia-list 回执的那个序号）；perform 是动作，不是像素坐标。
+   * focus 不在动作集里：发了它会被接线路拒，并回一句带替代路径的话。
    */
   | {
       action: "uia-act";

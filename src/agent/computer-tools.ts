@@ -22,6 +22,7 @@ import {
   COMPUTER_USE_DISPATCHED_HINT,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   GUEST_COMMAND_TIMEOUT_MS,
+  computerUseUiaErrors,
   screenshotPointToNative,
   type ComputerUseAudit,
   type ComputerUseButton,
@@ -388,13 +389,17 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     description:
       SCOPE +
       "Drive a window's controls through UI Automation instead of pixels: list them, then invoke a button, set an " +
-      "input's text, select a list/tab item, or move focus. **This does not need the window in the foreground and " +
-      "does not take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
+      "input's text, or select a list/tab item. **This does not need the window in the foreground and does not " +
+      "take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
       "the right way to drive a background window. Start with action \"list\" (read-only) to get refs and names, then " +
       "act on one by ref (or name). A ref belongs to the latest list of that window; re-list after the window changes " +
       "(page navigation, a new dialog). Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
-      "documents — sets the value directly, no IME needed), selection (list items, tab items), focus (only this one " +
-      "moves the keyboard focus). If a control does not support the action you asked for, the result says which ones " +
+      "documents — sets the value directly, no IME needed), selection (list items, tab items). " +
+      "There is no \"focus\" action — it used to exist and was removed, because moving the keyboard focus takes " +
+      "the desktop away from other sessions: to move focus, click the target with computer_click, or just use " +
+      "invoke (it usually focuses too) / setValue (it needs no focus). " +
+      "If a control does not support " +
+      "the action you asked for, the result says which ones " +
       "it supports: fall back to computer_click / computer_type on pixels for those. Window and hwnd come from " +
       "computer_screenshot or a previous result. " +
       CONSEQUENCES +
@@ -405,9 +410,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       properties: {
         action: {
           type: "string",
-          enum: ["list", "invoke", "setValue", "selection", "focus"],
+          enum: ["list", "invoke", "setValue", "selection"],
           description:
-            "list = read the window's controls (read-only); the rest act on the control given by ref or name.",
+            "list = read the window's controls (read-only); invoke / setValue / selection act on the control given " +
+            "by ref or name. There is no focus action: use computer_click on the target for that.",
         },
         window: {
           type: "string",
@@ -459,8 +465,15 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         );
         return { content: [{ type: "text" as const, text: result.text }], details: undefined };
       }
-      if (rawAction !== "invoke" && rawAction !== "setValue" && rawAction !== "selection" && rawAction !== "focus") {
-        throw new Error('action must be one of: list, invoke, setValue, selection, focus.');
+      // focus 已从动作集里删掉（桥 0.11.0，见 shared/computer-use.ts 里 UIA 动作的说明）：
+      // 它动的是桌面级键盘焦点。模型偶尔会凭旧记忆发它，所以这里单独给一句换路提示，
+      // 不把它当成「打错字」跟其他未知动作混在一起。
+      if (rawAction === "focus") throw new Error(computerUseUiaErrors.focusRemoved);
+      if (rawAction !== "invoke" && rawAction !== "setValue" && rawAction !== "selection") {
+        throw new Error(
+          "action must be one of: list, invoke, setValue, selection. To move the keyboard focus, click the " +
+            "target with computer_click.",
+        );
       }
       const ref = numberOf(args["ref"]);
       const name = typeof args["name"] === "string" ? args["name"].trim() : "";

@@ -27,11 +27,16 @@
 //      跨线程 Release 可能卡在代理的单元锁上——放弃线程时我们**不 Release**（沙箱一次性，
 //      留给进程退出），正常替换列表时才逐个 Release。
 //
-// 支持的动作只有四条，与宿主契约 ComputerUseUiaAction 一一对应：
+// 支持的动作只有三条，与宿主契约 ComputerUseUiaAction 一一对应：
 //   invoke    → InvokePattern.Invoke()           按钮 / 链接 / 菜单项 / 标签页
 //   setValue  → ValuePattern.SetValue(BSTR)      输入框 / 文档（直接设值，不经 IME）
 //   selection → SelectionItemPattern.Select()    列表项 / 标签项 / 菜单项的单选
-//   focus     → Element.SetFocus()               唯一一个**有意**移动键盘焦点的动作
+//
+// **focus（Element.SetFocus）被删掉了**（2026-10-27）：它是这条车道唯一的桌面级副作用——
+// 键盘焦点是整块桌面共享的单一资源，A 一次 focus 就会把并发会话的 SendInput 吸进被聚焦的
+// 控件。而车道的前提就是「不碰桌面」，所以宁可少一个动作，也不留一条能打破前提的边。
+// 要移动焦点用 computer_click 点到目标，或者直接 invoke（通常同时给焦点）/ setValue
+// （不需要焦点）；被拒时 ValidateAct 回的话里带着这句替代建议。
 //
 // 不支持的控件（模式取不到）一律回人话，并点名它支持哪些模式、改用 computer_click /
 // computer_type 的像素路径——模型看不见 UI，不会自己想到这一点。
@@ -206,17 +211,16 @@ internal static class Uia
         return true;
     }
 
-    /** 动作 → 真正要调的 UIA 模式名；focus 没有模式（回 "focus"），未知动作回 null */
+    /** 动作 → 真正要调的 UIA 模式名；未知动作（含已删除的 focus）回 null */
     internal static string PatternNameForAction(string action)
     {
         if (action == "invoke") return "invoke";
         if (action == "setValue") return "value";
         if (action == "selection") return "selectionItem";
-        if (action == "focus") return "focus";
         return null;
     }
 
-    /** 动作 → 模式 id；-1 = 这个动作不需要模式（focus）或动作不认识 */
+    /** 动作 → 模式 id；-1 = 动作不认识（含已删除的 focus） */
     internal static int PatternIdForAction(string action)
     {
         if (action == "invoke") return InvokePatternId;
@@ -236,8 +240,20 @@ internal static class Uia
         if (value == "setvalue") return "setValue";
         if (value == "invoke") return "invoke";
         if (value == "selection") return "selection";
-        if (value == "focus") return "focus";
         return value;
+    }
+
+    /**
+     * focus 被删掉之后给模型的话。三件事必须同时在：
+     *   ① 这个动作不再存在；② 它为什么不行（动的是整块桌面的键盘焦点）；
+     *   ③ 换成什么（computer_click 点过去，或 invoke / setValue——它们不需要焦点）。
+     * 宿主侧 shared/computer-use.ts 的 computerUseUiaErrors.focusRemoved 是同一句话的副本
+     * （两层各有一道闸），改文案时两处一起改。
+     */
+    internal static string FocusRemovedMessage()
+    {
+        return "focus 动作已删除：Element.SetFocus 会移动整块桌面的键盘焦点，与这条车道「不碰桌面」的前提冲突。"
+            + "要移动焦点，用 computer_click 点到目标控件；或者直接用 invoke（通常同时给焦点）/ setValue（不需要焦点）。";
     }
 
     /**
@@ -246,8 +262,10 @@ internal static class Uia
      */
     internal static string ValidateAct(string action, bool hasRef, bool hasName, bool hasValue)
     {
+        // focus 单独一句：不是「打错字」，而是一个被删掉的动作，模型需要知道换成什么
+        if (action == "focus") return FocusRemovedMessage();
         if (action == null || PatternNameForAction(action) == null)
-            return "action 必须是 invoke / setValue / selection / focus 之一（大小写不敏感）";
+            return "action 必须是 invoke / setValue / selection 之一（大小写不敏感）";
         if (action == "setValue")
         {
             if (!hasRef && !hasName) return "setValue 需要 ref 或 name 指定目标控件（先 uia-list 看有哪些）";
@@ -399,8 +417,6 @@ internal static class Uia
     private const int SlotPutAutoSetFocus = 3 + 55 + 2 - 1;
     /** IUIAutomation2 第 1 个方法 get_AutoSetFocus（同上，用来读回确认） */
     private const int SlotGetAutoSetFocus = 3 + 55 + 1 - 1;
-    /** IUIAutomationElement 第 1 个方法 SetFocus() */
-    private const int SlotSetFocus = 3 + 1 - 1;
     /** IUIAutomationElement 第 4 个方法 FindAll(scope, condition, IUIAutomationElementArray**) */
     private const int SlotFindAll = 3 + 4 - 1;
     /** IUIAutomationElement 第 14 个方法 GetCurrentPattern(patternId, IUnknown**) */
@@ -485,8 +501,6 @@ internal static class Uia
     private delegate int GetStringFn(IntPtr self, out IntPtr value);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int GetRectFn(IntPtr self, out RECT rect);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate int SetFocusFn(IntPtr self);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int FindAllFn(IntPtr self, int scope, IntPtr condition, out IntPtr array);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -1023,10 +1037,11 @@ internal static class Uia
 
     /**
      * uia-act {hwnd?, title?, ref?, name?, action, value?, timeoutMs?}
-     *   → `{ok:true,hwnd,action,usedPattern,name,controlType,focused,autoSetFocus,elapsedMs}`
+     *   → `{ok:true,hwnd,action,usedPattern,name,controlType,autoSetFocus,elapsedMs}`
      *
      * 目标：ref（同一次 uia-list 的元素指针）优先，否则按 name 现枚举一遍（精确匹配优先，
-     * 其次包含匹配）。动作按契约的四条走；模式取不到就回人话，不静默失败。
+     * 其次包含匹配）。动作按契约的三条走；模式取不到就回人话，不静默失败。
+     * focus 不在这三条里：ValidateAct 会回一句点名替代路径的话（见 FocusRemovedMessage）。
      */
     internal static string ExecuteAct(string raw)
     {
@@ -1111,45 +1126,35 @@ internal static class Uia
 
             int hr;
             string usedPattern;
-            bool focused = false;
-            if (action == "focus")
+            int patternId = PatternIdForAction(action);
+            IntPtr pattern = GetPattern(target, patternId, action, controlType, patterns);
+            try
             {
-                hr = Slot<SetFocusFn>(target, SlotSetFocus)(target);
-                usedPattern = "focus";
-                focused = true;
+                if (action == "invoke")
+                {
+                    hr = Slot<InvokeFn>(pattern, SlotInvoke)(pattern);
+                    usedPattern = "invoke";
+                }
+                else if (action == "setValue")
+                {
+                    bool readOnly = ReadBool(pattern, SlotValueIsReadOnly);
+                    if (readOnly)
+                        throw new InvalidOperationException("这个控件是只读的（ValuePattern 报告 CurrentIsReadOnly）——"
+                            + "它不接受设值；改用 computer_click / computer_type 的像素路径，或者换一个输入框。");
+                    IntPtr bstr = Marshal.StringToBSTR(value);
+                    try { hr = Slot<SetValueFn>(pattern, SlotSetValue)(pattern, bstr); }
+                    finally { Marshal.FreeBSTR(bstr); }
+                    usedPattern = "value";
+                }
+                else
+                {
+                    hr = Slot<InvokeFn>(pattern, SlotSelect)(pattern);
+                    usedPattern = "selectionItem";
+                }
             }
-            else
+            finally
             {
-                int patternId = PatternIdForAction(action);
-                IntPtr pattern = GetPattern(target, patternId, action, controlType, patterns);
-                try
-                {
-                    if (action == "invoke")
-                    {
-                        hr = Slot<InvokeFn>(pattern, SlotInvoke)(pattern);
-                        usedPattern = "invoke";
-                    }
-                    else if (action == "setValue")
-                    {
-                        bool readOnly = ReadBool(pattern, SlotValueIsReadOnly);
-                        if (readOnly)
-                            throw new InvalidOperationException("这个控件是只读的（ValuePattern 报告 CurrentIsReadOnly）——"
-                                + "它不接受设值；改用 computer_click / computer_type 的像素路径，或者换一个输入框。");
-                        IntPtr bstr = Marshal.StringToBSTR(value);
-                        try { hr = Slot<SetValueFn>(pattern, SlotSetValue)(pattern, bstr); }
-                        finally { Marshal.FreeBSTR(bstr); }
-                        usedPattern = "value";
-                    }
-                    else
-                    {
-                        hr = Slot<InvokeFn>(pattern, SlotSelect)(pattern);
-                        usedPattern = "selectionItem";
-                    }
-                }
-                finally
-                {
-                    Release(pattern);
-                }
+                Release(pattern);
             }
             if (hr < 0) throw new InvalidOperationException(DescribeHresult(hr, "UIA 动作 " + action + " "));
 
@@ -1160,7 +1165,6 @@ internal static class Uia
                 .Append(",\"usedPattern\":").Append(Program.JsonQuote(usedPattern))
                 .Append(",\"name\":").Append(Program.JsonQuote(targetName))
                 .Append(",\"controlType\":").Append(Program.JsonQuote(controlType))
-                .Append(",\"focused\":").Append(focused ? "true" : "false")
                 .Append(",\"autoSetFocus\":").Append(warning == null ? "true" : "false")
                 .Append(",\"elapsedMs\":").Append(clock.ElapsedMilliseconds);
             if (warning != null) json.Append(",\"autoSetFocusWarning\":").Append(Program.JsonQuote(warning));
@@ -1283,7 +1287,7 @@ internal static class Uia
         CheckString(failures, ref cases, "invoke → invoke 模式", "invoke", PatternNameForAction("invoke"));
         CheckString(failures, ref cases, "setValue → value 模式", "value", PatternNameForAction("setValue"));
         CheckString(failures, ref cases, "selection → selectionItem 模式", "selectionItem", PatternNameForAction("selection"));
-        CheckString(failures, ref cases, "focus 不需要模式", "focus", PatternNameForAction("focus"));
+        CheckTrue(failures, ref cases, "focus 已删除，没有模式", PatternNameForAction("focus") == null);
         CheckTrue(failures, ref cases, "未知动作没有模式", PatternNameForAction("click") == null);
         CheckNumber(failures, ref cases, "invoke 用 UIA_InvokePatternId", "10000",
             PatternIdForAction("invoke").ToString(CultureInfo.InvariantCulture));
@@ -1291,19 +1295,19 @@ internal static class Uia
             PatternIdForAction("setValue").ToString(CultureInfo.InvariantCulture));
         CheckNumber(failures, ref cases, "selection 用 UIA_SelectionItemPatternId", "10010",
             PatternIdForAction("selection").ToString(CultureInfo.InvariantCulture));
-        CheckNumber(failures, ref cases, "focus 没有模式 id", "-1",
-            PatternIdForAction("focus").ToString(CultureInfo.InvariantCulture));
+        CheckTrue(failures, ref cases, "规范化之后 setValue 校验仍认 value", ValidateAct("setValue", true, false, true) == null);
         CheckString(failures, ref cases, "动作名规范化（大小写 / 空白）", "invoke", NormalizeAction("  Invoke "));
         CheckString(failures, ref cases, "动作名规范化：setValue 回规范写法（不是全小写）", "setValue",
             NormalizeAction(" SetValue "));
         CheckString(failures, ref cases, "规范化之后能选中 value 模式", "value",
             PatternNameForAction(NormalizeAction("SETVALUE")));
-        CheckTrue(failures, ref cases, "规范化之后 setValue 校验仍认 value", ValidateAct("setValue", true, false, true) == null);
+        CheckString(failures, ref cases, "规范化之后 focus 仍是 focus（好让校验认出并给替代方案）",
+            "focus", NormalizeAction(" FOCUS "));
 
         // ③ 参数校验：错在哪儿就说哪儿
-        CheckTrue(failures, ref cases, "缺 action → 报四个动作",
+        CheckTrue(failures, ref cases, "缺 action → 报三个动作",
             ValidateAct(null, false, true, true) != null
-            && ValidateAct(null, false, true, true).IndexOf("invoke / setValue / selection / focus", StringComparison.Ordinal) >= 0);
+            && ValidateAct(null, false, true, true).IndexOf("invoke / setValue / selection", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "未知 action → 拒绝", ValidateAct("click", false, true, true) != null);
         CheckTrue(failures, ref cases, "invoke 缺 ref 与 name → 拒绝",
             ValidateAct("invoke", false, false, false) != null);
@@ -1313,7 +1317,14 @@ internal static class Uia
             ValidateAct("setValue", true, false, false) != null
             && ValidateAct("setValue", true, false, false).IndexOf("value", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "setValue 空串也算给了 value", ValidateAct("setValue", true, false, true) == null);
-        CheckTrue(failures, ref cases, "focus 也要 ref 或 name", ValidateAct("focus", false, false, false) != null);
+        // focus 是一个被删掉的动作：拒绝的同时必须给两条替代路径（模型看不见 UI，不会自己想到）
+        string focusRemoved = ValidateAct("focus", true, false, false);
+        CheckTrue(failures, ref cases, "focus → 拒绝（即使 ref 齐全）", focusRemoved != null);
+        CheckTrue(failures, ref cases, "focus 的拒绝文案给 pixel 退路（computer_click）",
+            focusRemoved != null && focusRemoved.IndexOf("computer_click", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "focus 的拒绝文案给 UIA 退路（invoke / setValue）",
+            focusRemoved != null && focusRemoved.IndexOf("invoke", StringComparison.Ordinal) >= 0
+            && focusRemoved.IndexOf("setValue", StringComparison.Ordinal) >= 0);
 
         // ④ 不支持模式的文案：动作、它支持什么、像素退路，三件都在
         List<string> valueOnly = new List<string>();

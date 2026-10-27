@@ -247,6 +247,14 @@ describe("computer_* 工具", () => {
 });
 
 describe("computer_uia 工具（UIA 车道）", () => {
+  test("工具 schema 的动作集里没有 focus（模型看到的就是这份，不能比实现松）", () => {
+    const { tools } = setup();
+    const parameters = tools.get("computer_uia")!.parameters as {
+      properties: { action: { enum: string[] } };
+    };
+    assert.deepEqual(parameters.properties.action.enum, ["list", "invoke", "setValue", "selection"]);
+  });
+
   test("list：window 原样下发；没给 maxItems 就按描述里的默认 60 显式下发", async () => {
     const { sent, run, answer } = setup();
     const pending = run("computer_uia", { action: "list", window: " 记事本 " });
@@ -296,6 +304,14 @@ describe("computer_uia 工具（UIA 车道）", () => {
     await assert.rejects(run("computer_uia", { action: "setValue", hwnd: 1, ref: 1 }), /setValue needs value/);
     await assert.rejects(run("computer_uia", { action: "click", hwnd: 1, ref: 1 }), /action must be one of/);
     await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: 0 }), /ref must be a positive integer/);
+  });
+
+  test("已删除的 focus：schema 里没有它，发了就回一句带替代路径的人话", async () => {
+    const { run, sent } = setup();
+    // 模型可能凭旧记忆发 focus：拒得比普通未知动作更具体（它是「删了」而不是「拼错了」）
+    await assert.rejects(run("computer_uia", { action: "focus", hwnd: 1, ref: 1 }), /computer_click/);
+    await assert.rejects(run("computer_uia", { action: "focus", hwnd: 1, ref: 1 }), /已删除/);
+    assert.deepEqual(sent, [], "被拒的 focus 一个字节都不该往下发");
   });
 
   test("主进程的错误原话带出（含「改用 computer_click / computer_type 的像素路径」）", async () => {

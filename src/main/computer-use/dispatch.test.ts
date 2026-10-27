@@ -54,6 +54,8 @@ const WINDOW_SHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 12
 const NAVIGATE: ComputerUseToolRequest = { action: "sandbox-navigate", url: "https://example.com" };
 const UIA_LIST: ComputerUseToolRequest = { action: "uia-list", window: 4321 };
 const UIA_ACT: ComputerUseToolRequest = { action: "uia-act", window: 4321, ref: 2, perform: "invoke" };
+/** 已删除的 focus 动作：旧 agent / 旧会话记录里还可能夹着它（宽化对象模拟，不走正常类型） */
+const LEGACY_UIA_FOCUS = { action: "uia-act", window: 4321, ref: 2, perform: "focus" } as unknown as ComputerUseToolRequest;
 
 const titled = (titles: Record<string, string>) => async (sessionId: string) => titles[sessionId] ?? "";
 
@@ -244,5 +246,56 @@ describe("接线：UIA 车道不占桌面租约（写操作也不抢前台）", 
     const outcome = await click;
     assert.equal(outcome.ok, false);
     assert.deepEqual(calls, [], "拿不到桌面键，像素命令一次都不许下发");
+  });
+});
+
+describe("接线：已删除的 focus 请求被当场拒，并给出替代路径", () => {
+  test("A 持桌面时 B 发 focus：不排队也不下发，直接回一句换路建议", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲", B: "任务乙" });
+    await lease.acquire("desktop:exclusive", "A", "任务甲");
+    const outcome = await dispatcher.dispatch("B", LEGACY_UIA_FOCUS);
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) {
+      // 文案里必须有像素退路与 UIA 退路：模型看不见 UI，不说清它只会重试同一个动作
+      assert.match(outcome.error, /computer_click/);
+      assert.match(outcome.error, /invoke/);
+      assert.match(outcome.error, /setValue/);
+      assert.doesNotMatch(outcome.error, /整理发票/, "它不进桌面队列，不该回「被别人占着」");
+    }
+    assert.deepEqual(calls, []);
+    assert.equal(lease.queueDepth("desktop:exclusive"), 0, "focus 已经没有资格进桌面队列");
+    assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A");
+  });
+
+  test("桌面空着时也不下发、不拿锁（删掉的动作不能因为锁闲着就放过去）", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲" });
+    const outcome = await dispatcher.dispatch("A", LEGACY_UIA_FOCUS);
+    assert.equal(outcome.ok, false);
+    assert.deepEqual(calls, []);
+    assert.equal(lease.owner("desktop:exclusive"), null);
+  });
+
+  test("它不消费硬上限收回的标记（不碰桌面，标记留给下一条像素命令）", async () => {
+    const { dispatcher, calls } = setup({ A: "任务甲" });
+    dispatcher.noteHoldExpired("A");
+    const focus = await dispatcher.dispatch("A", LEGACY_UIA_FOCUS);
+    assert.equal(focus.ok, false);
+    if (!focus.ok) assert.match(focus.error, /computer_click/, "回的是「动作已删除」，不是 15 分钟终态");
+
+    const blocked = await dispatcher.dispatch("A", SCREENSHOT);
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.match(blocked.error, /15 分钟/);
+    assert.deepEqual(calls, []);
+  });
+
+  test("回归：合法的三条 UIA 动作仍然不拿桌面键（没把整条车道一起塞进队列）", async () => {
+    const { lease, dispatcher, calls } = setup({ A: "任务甲", B: "任务乙" });
+    await lease.acquire("desktop:exclusive", "A", "任务甲");
+    const act = await dispatcher.dispatch("B", UIA_ACT);
+    const list = await dispatcher.dispatch("B", UIA_LIST);
+    assert.deepEqual([act.ok, list.ok], [true, true]);
+    assert.deepEqual(calls, ["pixels:B", "pixels:B"]);
+    assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A");
+    assert.equal(lease.queueDepth("desktop:exclusive"), 0);
   });
 });

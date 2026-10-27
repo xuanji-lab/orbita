@@ -201,7 +201,7 @@ describe("computer-guard —— 语义分档（不是工具名硬凑）", () => 
     assert.equal(describeComputerUseRisk({ tool: "sandbox_type", args: { selector: "#q" } }), null);
   });
 
-  test("computer_uia：setValue 送文本走 D2，list / invoke / selection / focus 不套输入类", () => {
+  test("computer_uia：setValue 送文本走 D2，list / invoke / selection 不套输入类", () => {
     const risky = describeComputerUseRisk({
       tool: "computer_uia",
       args: { action: "setValue", hwnd: 7, ref: 1, value: "format c:" },
@@ -215,7 +215,7 @@ describe("computer-guard —— 语义分档（不是工具名硬凑）", () => 
       null,
     );
     // 非输入动作：没有「送进去的字」，不套 D2
-    for (const action of ["list", "invoke", "selection", "focus"]) {
+    for (const action of ["list", "invoke", "selection"]) {
       assert.equal(
         describeComputerUseRisk({ tool: "computer_uia", args: { action, hwnd: 7, ref: 1 } }),
         null,

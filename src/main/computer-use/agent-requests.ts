@@ -67,7 +67,10 @@ export interface ComputerUseGuest {
     title?: string;
     maxItems?: number;
   }): Promise<ComputerUseUiaListResult>;
-  /** 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。不抢前台，所以不占桌面租约 */
+  /**
+   * 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。不抢前台，所以不占桌面租约。
+   * 动作集里没有 focus（桥 0.11.0 删）：它动的是桌面级焦点，接线层会直接拒并回替代路径。
+   */
   uiaAct(options: {
     hwnd?: number;
     title?: string;
@@ -335,7 +338,7 @@ function uiaListText(reply: {
   const title = reply.window.title === "" ? "(no title)" : reply.window.title;
   const lines = reply.items.map((item) => {
     const name = item.name === "" ? `(automationId ${item.automationId})` : `"${item.name}"`;
-    const patterns = item.patterns.length === 0 ? "focus only" : item.patterns.join("/");
+    const patterns = item.patterns.length === 0 ? "no pattern (pixels only)" : item.patterns.join("/");
     const flags: string[] = [];
     if (!item.enabled) flags.push("disabled");
     if (item.offscreen) flags.push("offscreen");
@@ -352,9 +355,11 @@ function uiaListText(reply: {
     ". Lines are: ref · control type \"name\" · supported patterns · position/size · automationId.";
   const body = lines.length === 0 ? "No actionable controls were found in this window." : lines.join("\n");
   const tail =
-    "Act on one with computer_uia (action invoke / setValue / selection / focus, and ref or name). " +
+    "Act on one with computer_uia (action invoke / setValue / selection, and ref or name). " +
     "These actions go straight into the control: the window does not need the foreground, so the sandbox " +
-    "desktop is not taken over and another session can keep using it. Re-list after the window changes — " +
+    "desktop is not taken over and another session can keep using it. There is no \"focus\" action: to move " +
+    "the keyboard focus, click the target with computer_click (pixels), or just use invoke (it usually " +
+    "focuses too) / setValue (it does not need focus). Re-list after the window changes — " +
     "refs belong to the latest list. Controls that support no pattern above can only be driven through " +
     "computer_click / computer_type (pixels).";
   return `${header}\n${body}\n\n${tail}`;
@@ -367,27 +372,19 @@ function uiaActText(reply: {
   usedPattern: string;
   name: string;
   controlType: string;
-  focused: boolean;
   autoSetFocus: boolean;
   autoSetFocusWarning?: string;
   elapsedMs: number;
 }): string {
   const name = reply.name === "" ? "(unnamed control)" : `"${reply.name}"`;
   const verb =
-    reply.action === "focus"
-      ? "Moved keyboard focus to"
-      : reply.action === "setValue"
-        ? "Set the text of"
-        : reply.action === "selection"
-          ? "Selected"
-          : "Invoked";
+    reply.action === "setValue" ? "Set the text of" : reply.action === "selection" ? "Selected" : "Invoked";
   const head =
-    `${verb} ${name} (${reply.controlType}${reply.focused ? ", now focused" : ""}) in window hwnd ${reply.hwnd} ` +
+    `${verb} ${name} (${reply.controlType}) in window hwnd ${reply.hwnd} ` +
     `through UI Automation (pattern ${reply.usedPattern}, ${reply.elapsedMs}ms). ` +
-    (reply.action === "focus"
-      ? "You asked for focus, so the keyboard focus moved."
-      : "The window did not need the foreground, so the sandbox desktop was not taken over.") +
-    " Take a computer_screenshot (window " +
+    "The window did not need the foreground, so the sandbox desktop was not taken over. " +
+    "To move the keyboard focus, click the target with computer_click. " +
+    "Take a computer_screenshot (window " +
     reply.hwnd +
     ") to see what changed.";
   if (reply.autoSetFocus) return head;

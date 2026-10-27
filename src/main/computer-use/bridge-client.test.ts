@@ -1200,7 +1200,6 @@ describe("UIA 车道（uia-list / uia-act）", () => {
         usedPattern: "invoke",
         name: "关闭",
         controlType: "button",
-        focused: false,
         autoSetFocus: true,
         elapsedMs: 12,
       },
@@ -1218,7 +1217,6 @@ describe("UIA 车道（uia-list / uia-act）", () => {
         usedPattern: "invoke",
         name: "关闭",
         controlType: "button",
-        focused: false,
         autoSetFocus: true,
         elapsedMs: 12,
       });
@@ -1242,7 +1240,6 @@ describe("UIA 车道（uia-list / uia-act）", () => {
         usedPattern: "value",
         name: "搜索",
         controlType: "edit",
-        focused: false,
         autoSetFocus: false,
         autoSetFocusWarning: "AutoSetFocus 关不掉（这个系统的 UIA 客户端没有 IUIAutomation2）——可能抢焦点",
         elapsedMs: 30,
