@@ -16,7 +16,7 @@ import type {
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
-import type { ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus } from "@shared/computer-use";
+import type { ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
@@ -1847,6 +1847,16 @@ function GuardGroup() {
 }
 
 /**
+ * WSL2 三种状态 → 图标。它只是旁证不是结论，所以只选图标、不额外上色——
+ * 颜色留给就绪态与危险态（设计系统：图标 + 文字说话，颜色是第二信号）。
+ */
+const WSL_VISUALS: Record<WslState, { icon: IconName }> = {
+  available: { icon: "check" },
+  unavailable: { icon: "circle-off" },
+  unknown: { icon: "circle-help" },
+};
+
+/**
  * 能力检测：点按钮才查（全部只读，绝不代跑提权命令）；结果保留到下次检测。
  * 未就绪时逐条铺开主进程的 guidance（那边已组织成人话，这里只拆行）。
  */
@@ -1898,12 +1908,39 @@ function ProbeGroup(props: { result: ComputerUseProbeResult | null; onResult: (r
           <Icon name="shield-check" size={13} /> {t.computerUse.probe}
         </PanelButton>
       </SettingRow>
+      {/* 指引紧跟在探针那一行下面：它是那一行的结果，也是下面「隔离档位」为什么到不了更高档的原因 */}
       {visual?.kind === "not-ready" && visual.guidance.length > 0 && (
         <ul className="cu-guidance">
           {visual.guidance.map((line) => (
             <li key={line}>{line}</li>
           ))}
         </ul>
+      )}
+      {props.result !== null && (
+        <SettingRow
+          name={t.computerUse.isolationTier}
+          info={t.computerUse.isolationTierInfo}
+          note={
+            props.result.isolationTier === "l2" ? undefined : (
+              <span className="set-row-hint">{t.computerUse.tierFallback}</span>
+            )
+          }
+        >
+          {/* 档位是机器事实，不是可操作项：图标 + 文字，颜色只是第二信号（不借成功绿，那是就绪的专用色） */}
+          <span className="cu-state">
+            <Icon name={props.result.isolationTier === "l2" ? "shield-check" : "globe"} size={14} />
+            {t.computerUse.tiers[props.result.isolationTier]}
+          </span>
+        </SettingRow>
+      )}
+      {/* WSL2 只在 Windows 上有意义；它不是隔离档，所以单独一行、措辞里明说这一点 */}
+      {props.result !== null && props.result.platformOk && (
+        <SettingRow name={t.computerUse.wsl2} info={t.computerUse.wsl2Info}>
+          <span className="cu-state">
+            <Icon name={WSL_VISUALS[props.result.wsl2].icon} size={14} />
+            {t.computerUse.wsl2States[props.result.wsl2]}
+          </span>
+        </SettingRow>
       )}
     </SettingGroup>
   );

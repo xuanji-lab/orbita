@@ -89,6 +89,13 @@ const ALLOWED_LATIN = new Set([
   "cookie",
   // 系统名（macOS 钥匙串授权的提示）
   "macOS",
+  // 隔离档位的平台与编号（电脑使用的能力检测：档位是产品术语，L1/L2/L3 不译）
+  "Windows",
+  "Linux",
+  "WSL2",
+  "L1",
+  "L2",
+  "L3",
   // 文件名
   "mcp.json",
   "SKILL.md",

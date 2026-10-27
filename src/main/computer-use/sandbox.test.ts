@@ -1296,7 +1296,10 @@ describe("平台闸门", () => {
     try {
       const result = await harness.controller.start();
       assert.equal(result.ok, false);
-      assert.ok(result.ok === false && result.error.includes("只在 Windows"), result.ok ? "" : result.error);
+      // 文案与 probe 的 platformGuidance 同源：macOS 上要给出路（浏览器档照常能用），
+      // 不是一句「只在 Windows 上可用」把人堵回去
+      assert.ok(result.ok === false && result.error.includes("macOS"), result.ok ? "" : result.error);
+      assert.ok(result.ok === false && result.error.includes("browser_navigate"), result.ok ? "" : result.error);
       // 不能报「先运行 bun run build:bridge」那类误导文案
       assert.ok(result.ok === false && !result.error.includes("build:bridge"), result.ok ? "" : result.error);
       assert.deepEqual(harness.spawned, [], "平台不对，不该起沙箱进程");

@@ -625,6 +625,32 @@ export type SandboxFeatureState = "enabled" | "disabled" | "unknown";
  */
 export type HypervisorState = "present" | "absent" | "unknown";
 
+/**
+ * 隔离档位。产品路线三级，今天只有前两级能到（L3 未实现，所以类型里没有 l3——
+ * 加一档时先有能跑的代码，再加这个成员）。
+ *
+ *   l1  浏览器档：内置浏览器里的网页自动化（browser_* 工具）。**所有平台都有**——它就是
+ *       Electron 自己的 WebContentsView，跑在宿主上，不依赖任何虚拟化。
+ *   l2  Windows 沙箱档：沙箱里的像素操作（computer_*）与沙箱内 Edge（sandbox_*）。
+ *       需要 Windows 专业版 / 企业版 / 教育版 + 已启用 Windows 沙箱 + 虚拟化开着。
+ *
+ * 注意 l1 的实现是 browser_*，不是 sandbox_*：sandbox_* 的每条命令都走 guest 桥，而 guest
+ * 桥只住在 Windows 沙箱里（main/computer-use/cdp.ts、guest-bridge/）。macOS 上没有「宿主
+ * 浏览器版的 sandbox_*」——所以非 Windows 的文案只能承诺内置浏览器那条车道。
+ */
+export type IsolationTier = "l1" | "l2";
+
+/**
+ * WSL2 能不能用。**它不是隔离档**：WSL2 的所有发行版共享同一个 utility VM，里面的进程
+ * 与 Windows 之间只是轻量边界，不是「一次性整机」那种隔离。它在这里只作能力信号
+ * （虚拟化能不能用、为什么 L2 起不来），不参与档位判定。
+ *   available   = System32 里有 wsl.exe，且 `wsl -l -v` 正常退出
+ *   unavailable = System32 里没有 wsl.exe
+ *   unknown     = wsl.exe 在但 `wsl -l -v` 没跑成（功能没启用 / 超时）——**不判死**，
+ *                 与 hypervisorState 的 unknown 同一种态度
+ */
+export type WslState = "available" | "unavailable" | "unknown";
+
 /** computerUseProbe 的结果。guidance 是给用户看的手动操作指引（弹窗文案），ready 时为 null */
 export interface ComputerUseProbeResult {
   /** 是不是 Windows（非 Windows 平台一切免谈） */
@@ -637,6 +663,10 @@ export interface ComputerUseProbeResult {
   sandboxExeFound: boolean;
   /** 虚拟化在不在（BIOS 关 VT-x 的机器会栽在这里）。unknown = 查不成，不阻塞 */
   hypervisorState: HypervisorState;
+  /** 这台机器实际能到的最高隔离档位：ready → l2，否则 l1（浏览器档在任何平台都可用） */
+  isolationTier: IsolationTier;
+  /** WSL2 的状态。**只是能力信号，不是隔离边界**，不参与档位判定 */
+  wsl2: WslState;
   /** 四项全过（hypervisorState 为 unknown 也算过）。false 时看 guidance */
   ready: boolean;
   /** 不能就绪时的手动操作指引（含「启用或关闭 Windows 功能」路径与提权命令文本——只给文案，绝不代跑） */
