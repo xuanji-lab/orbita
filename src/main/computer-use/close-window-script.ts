@@ -107,8 +107,12 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "$invoked = $false",
     "if ($orbitaUiaReady) {",
     "  $closeCandidate = $null",
-    "  for ($round = 1; $round -le 15; $round++) {",
-    "    Start-Sleep -Milliseconds 400",
+    // 轮询节奏（2026-10-27 真机）：原来是「先睡 400ms 再查」，框出现后最快也要等 400ms
+    // 才会被看第一眼，用户能看到确认框停留约 0.5–1 秒。改成**第一轮立即查**，
+    // 之后每轮 200ms：总预算 30 轮 ≈ 6 秒（与原来的 15×400ms 相当），
+    // 但框的可见时间降到约 100–200ms。
+    "  for ($round = 1; $round -le 30; $round++) {",
+    "    if ($round -gt 1) { Start-Sleep -Milliseconds 200 }",
     "    if ($round -gt 1) {",
     // 窗口在我们轮询期间自己关掉了（用户手按 / 系统收尾）：没有要按的框，直接成功
     "      $alive = Get-Process -Id $target -ErrorAction SilentlyContinue",

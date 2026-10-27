@@ -32,16 +32,19 @@ describe("buildCloseSandboxWindowScript", () => {
     assert.ok(close < uia && uia < invoke && invoke < fallback, "四步顺序：关窗 → UIA → Invoke → 兜底");
   });
 
-  test("关窗后要轮询等确认框：每轮 400ms、最多 15 轮，每轮重新枚举按钮", () => {
+  test("关窗后轮询等确认框：第一轮立即查，之后每轮 200ms，最多 30 轮（≈6 秒）", () => {
     const script = buildCloseSandboxWindowScript(4300);
-    assert.ok(script.includes("Start-Sleep -Milliseconds 400"), "轮询节奏 400ms（真机确认框画得比 1.2s 慢）");
-    assert.match(script, /for \(\$round = 1; \$round -le 15; \$round\+\+\)/, "最多 15 轮（≈6 秒），不能一次定生死");
-    // 每轮都要真的重新找一次，而不是循环空转
+    assert.match(script, /for \(\$round = 1; \$round -le 30; \$round\+\+\)/, "最多 30 轮（≈6 秒），不能一次定生死");
+    assert.ok(
+      script.includes("if ($round -gt 1) { Start-Sleep -Milliseconds 200 }"),
+      "第一轮不等，之后 200ms（框可见时间从 ~0.5–1s 压到 ~0.1–0.2s）",
+    );
+    // 循环体内：条件睡 → 找按钮 → Invoke
     const loop = script.indexOf("for ($round = 1;");
-    const sleep = script.indexOf("Start-Sleep -Milliseconds 400");
+    const sleep = script.indexOf("Start-Sleep -Milliseconds 200");
     const find = script.indexOf("Find-OrbitaButton -Names $orbitaOkNames");
     const invoke = script.indexOf("$okPattern.Invoke()");
-    assert.ok(loop < sleep && sleep < find && find < invoke, "循环体内：睡觉 → 找按钮 → Invoke");
+    assert.ok(loop < sleep && sleep < find && find < invoke, "循环体内：条件睡 → 找按钮 → Invoke");
     assert.ok(script.includes("$invoked = $true"), "找到并 Invoke 成功要标记");
     assert.ok(script.includes("if ($invoked) { exit 0 }"), "按下确认就算成功退出");
   });
