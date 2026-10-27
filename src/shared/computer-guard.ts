@@ -167,7 +167,7 @@ export interface ComputerUseRisk {
  *
  * 语义分档而不是工具名硬凑：
  *   - computer_type / sandbox_type 都是「往焦点 / 选择器指向的输入框里送文本」，同一个风险；
- *   - computer_uia 只有 setValue 在送文本（invoke / selection / focus 是点控件、改选中 / 焦点，
+ *   - computer_uia 只有 setValue 在送文本（invoke / selection 是点控件、改选中，
  *     list 只读控件树）；value 允许空串（清空输入框）——空串不命中任何破坏词，照常返回。
  */
 function typedText(input: ComputerUseRiskInput): string | null {

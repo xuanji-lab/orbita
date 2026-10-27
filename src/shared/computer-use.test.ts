@@ -12,9 +12,12 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_UIA_TIMEOUT_MS,
   computerUseChannels,
+  computerUseUiaErrors,
+  isUiaFocusRequest,
   isUiaRequest,
   isWindowScreenshotRequest,
   screenshotPointToNative,
+  type ComputerUseToolRequest,
 } from "./computer-use.ts";
 
 /** 回图 1280×720，物理屏 2560×1440（长边缩一半的常见情形） */
@@ -89,6 +92,7 @@ describe("isUiaRequest（UIA 车道不占桌面租约的判据）", () => {
     assert.equal(isUiaRequest({ action: "uia-list", window: "Edge" }), true);
     assert.equal(isUiaRequest({ action: "uia-act", perform: "invoke", ref: 3 }), true);
     assert.equal(isUiaRequest({ action: "uia-act", perform: "setValue", name: "Search", value: "orbita" }), true);
+    assert.equal(isUiaRequest({ action: "uia-act", perform: "selection", ref: 3 }), true);
   });
 
   test("像素输入 / 整桌面截图 / 窗口截图 / 浏览器：都不是 UIA 车道", () => {
@@ -100,6 +104,35 @@ describe("isUiaRequest（UIA 车道不占桌面租约的判据）", () => {
 
   test("看门狗 5 秒：比 guest 命令的 45 秒短一个量级，它管的是跨进程调用而不是整条通道", () => {
     assert.equal(COMPUTER_USE_UIA_TIMEOUT_MS, 5_000);
+  });
+});
+
+describe("已删除的 focus 动作（桥 0.11.0）", () => {
+  /** 旧 agent / 旧会话记录里还可能夹着这个动作：用宽化对象模拟，不走正常类型 */
+  const legacyFocus = { action: "uia-act", perform: "focus", ref: 1 } as unknown as ComputerUseToolRequest;
+
+  test("isUiaFocusRequest 认得它（接线层的兜底拦截靠这条判据）", () => {
+    assert.equal(isUiaFocusRequest(legacyFocus), true);
+    assert.equal(
+      isUiaFocusRequest({ action: "uia-act", perform: "focus", name: "Search", window: "Edge" } as unknown as ComputerUseToolRequest),
+      true,
+    );
+  });
+
+  test("其余动作都不是它（包括仍然合法的三条 UIA 动作）", () => {
+    assert.equal(isUiaFocusRequest({ action: "uia-list", window: 4321 }), false);
+    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "invoke", ref: 2 }), false);
+    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "setValue", name: "Search", value: "x" }), false);
+    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "selection", ref: 2 }), false);
+    assert.equal(isUiaFocusRequest({ action: "click", x: 1, y: 2 }), false);
+    assert.equal(isUiaFocusRequest({ action: "type", text: "x" }), false);
+  });
+
+  test("拒绝文案给出两条替代路径（模型看不见 UI，不告诉它换什么它只会重试）", () => {
+    assert.match(computerUseUiaErrors.focusRemoved, /computer_click/);
+    assert.match(computerUseUiaErrors.focusRemoved, /invoke/);
+    assert.match(computerUseUiaErrors.focusRemoved, /setValue/);
+    assert.match(computerUseUiaErrors.focusRemoved, /接.*删除|已删除/);
   });
 });
 

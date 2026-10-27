@@ -220,8 +220,9 @@ export async function fetchGuestUiaList(
   return { hwnd, window, items, truncated: resp.truncated === true };
 }
 
-/** uia-act 的四个动作（与契约 ComputerUseUiaAction 同一份；桥里有一份必须逐字一致的名字） */
-const UIA_ACTIONS: readonly string[] = ["invoke", "setValue", "selection", "focus"];
+/** uia-act 的三个动作（与契约 ComputerUseUiaAction 同一份；桥里有一份必须逐字一致的名字）。
+ *  focus 已删除（桥 0.11.0）：它动的是桌面级键盘焦点，不再是一个合法动作。 */
+const UIA_ACTIONS: readonly string[] = ["invoke", "setValue", "selection"];
 
 /**
  * uia-act：对一个控件执行 UIA 模式（桥 0.10.0）。
@@ -251,7 +252,6 @@ export async function fetchGuestUiaAct(
     usedPattern,
     name: stringOr(resp.name, ""),
     controlType: stringOr(resp.controlType, ""),
-    focused: resp.focused === true,
     autoSetFocus: resp.autoSetFocus !== false,
     elapsedMs: numberOr(resp.elapsedMs, 0),
   };

@@ -1222,7 +1222,6 @@ describe("UIA 车道", () => {
                   usedPattern: "value",
                   name: "搜索",
                   controlType: "edit",
-                  focused: false,
                   autoSetFocus: false,
                   autoSetFocusWarning: "AutoSetFocus 关不掉——可能抢焦点",
                   elapsedMs: 17,

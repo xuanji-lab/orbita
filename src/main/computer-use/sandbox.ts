@@ -711,8 +711,8 @@ export class SandboxController {
   }
 
   /**
-   * 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。**不占桌面租约**，理由见 uiaList 与
-   * dispatch.ts：AutoSetFocus 关掉之后它不移动前台焦点，也就不和别的会话抢那块屏幕。
+   * 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。不占桌面租约：调模式不移动前台焦点。
+   * 动作集里没有 focus（桥 0.11.0 删）：Element.SetFocus 动的是桌面级焦点，与车道前提冲突。
    *
    * 回执里的 autoSetFocus 是桥读回来的真值；false 时调用方要把「可能抢了焦点」告诉模型。
    */

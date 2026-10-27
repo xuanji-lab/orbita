@@ -181,8 +181,8 @@ export function isComputerUseReadTool(toolName: string): boolean {
  *   - 网页五件 sandbox_navigate / click / type / upload / download：换页面、点元素、往输入框
  *     打字、把宿主机文件送进页面、把页面下载物落到宿主机。沙箱隔离不改变「它做了用户没
  *     点头的事」这一点；
- *   - computer_uia：按控件动作（invoke / setValue / selection / focus），直接改窗口里的控件
- *     状态。它的 `list` 只读控件树，**名单是工具级的、不含参数**，所以 list 也跟着走写闸门。
+ *   - computer_uia：按控件动作（invoke / setValue / selection），直接改窗口里的控件状态。
+ *     它的 `list` 只读控件树，**名单是工具级的、不含参数**，所以 list 也跟着走写闸门。
  *     **这是刻意选保守的一侧**：按参数分档要把 args 穿进 `decidePermission`（三档语义的
  *     唯一出处）、写闸门的三处判定与预算口径，并重新裁决「plan 档下 list 算不算只读」——
  *     那是另一件事。多问一次（skip 档下仅会话第一张卡，授权后不再问）比把 invoke 漏成

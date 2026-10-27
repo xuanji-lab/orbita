@@ -91,8 +91,12 @@ internal static class Program
     //   抢焦点——桥在 COM 层把 IUIAutomation2 的 AutoSetFocus 置 false 并读回确认；UIA 调用放在
     //   专用 STA 线程上，5 秒看门狗超时就放弃那条线程（不拖死桥）。于是宿主的 UIA 路径
     //   **也不占桌面租约**。像素输入（SendInput）一条行为都没变，仍然必须独占桌面。
+    // 0.11.0 删掉 uia-act 的 **focus** 动作：Element.SetFocus 移动的是整块桌面的键盘焦点，
+    //   是这条车道唯一的桌面级副作用（并发会话的 SendInput 会打进被聚焦的控件）。现在 uia-act
+    //   只接受 invoke / setValue / selection；focus 回一句带替代路径的拒绝（computer_click 点
+    //   过去，或直接 invoke / setValue）。这是**收缩**，其他命令与回执字段不变。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.10.0";
+    private const string Version = "0.11.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -882,6 +886,7 @@ internal static class Program
         if (command == "win-shot") return WinShot.ExecuteShot(raw, baseName);
         // UI Automation 车道（0.10.0）：按控件列举 / 动作，不抢焦点（实现在 Uia.cs）。
         // 与像素命令分开分派：这两条不改任何全局输入状态，所以宿主侧也不给它们排桌面队。
+        // 0.11.0 起 uia-act 只接受 invoke / setValue / selection（focus 已删，它动桌面级焦点）。
         if (command == "uia-list") return Uia.ExecuteList(raw);
         if (command == "uia-act") return Uia.ExecuteAct(raw);
         if (command == "click") return ExecuteClick(raw);

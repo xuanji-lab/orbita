@@ -173,7 +173,6 @@ function fakeGuest(options: {
           usedPattern: fields.perform === "setValue" ? "value" : "invoke",
           name: "Close",
           controlType: "button",
-          focused: fields.perform === "focus",
           autoSetFocus: true,
           elapsedMs: 7,
         }
@@ -352,6 +351,8 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
     assert.match(outcome.text, /2 · button "Close" · supports invoke/);
     assert.match(outcome.text, /at 730,0 45×30 id=Close/);
     assert.match(outcome.text, /does not need the foreground/);
+    assert.match(outcome.text, /There is no "focus" action/, "动作集变了，回执就得跟着说清");
+    assert.match(outcome.text, /click the target with computer_click/, "不提供 focus 就要给替代路径");
     assert.match(outcome.text, /refs belong to the latest list/);
   });
 
@@ -395,6 +396,7 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
       assert.match(outcome.text, /Invoked "Close" \(button\) in window hwnd 4321/);
       assert.match(outcome.text, /pattern invoke, 7ms/);
       assert.match(outcome.text, /did not need the foreground/);
+      assert.match(outcome.text, /To move the keyboard focus, click the target with computer_click/);
       assert.match(outcome.text, /computer_screenshot \(window 4321\)/);
     }
 
@@ -405,11 +407,20 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
     ]);
   });
 
-  test("uia-act focus：明说键盘焦点被移动了（这是唯一一次有意抢焦点）", async () => {
-    const { guest } = fakeGuest({});
-    const outcome = await run(guest, { action: "uia-act", window: 1, ref: 1, perform: "focus" });
-    assert.equal(outcome.ok, true);
-    if (outcome.ok) assert.match(outcome.text, /You asked for focus, so the keyboard focus moved/);
+  test("uia-act 的三种回执动词各就各位（focus 已不是动作，没有它的分支）", async () => {
+    const set = await run(fakeGuest({}).guest, {
+      action: "uia-act",
+      window: 1,
+      ref: 1,
+      perform: "setValue",
+      value: "hello",
+    });
+    assert.equal(set.ok, true);
+    if (set.ok) assert.match(set.text, /^Set the text of "Close"/);
+
+    const selected = await run(fakeGuest({}).guest, { action: "uia-act", window: 1, ref: 1, perform: "selection" });
+    assert.equal(selected.ok, true);
+    if (selected.ok) assert.match(selected.text, /^Selected "Close"/);
   });
 
   test("uia-act 关不掉 AutoSetFocus：正文追加「可能抢焦点」的警告，不把成功说成失败", async () => {
@@ -421,7 +432,6 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
         usedPattern: "invoke",
         name: "OK",
         controlType: "button",
-        focused: false,
         autoSetFocus: false,
         autoSetFocusWarning: "AutoSetFocus 关不掉（这个系统的 UIA 客户端没有 IUIAutomation2）——可能抢焦点",
         elapsedMs: 12,
