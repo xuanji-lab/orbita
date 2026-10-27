@@ -925,8 +925,19 @@ export class SandboxController {
   private closeSandboxWindowGracefully(): boolean {
     const close = this.deps.closeSandboxWindow;
     if (close === undefined) return false;
-    const window = this.newSandboxProcesses().find((process) => isRemoteSessionImage(process.image));
-    if (window === undefined) return false;
+    // 先按「本局新增」找；找不到再用**全量**兜底（2026-10-27 真机，root cause）：
+    // 基线是在 spawn **之前**记的，上一次强杀留下的 RemoteSession 会进入下一次基线 →
+    // 差集永远漏掉它 → 每次都跳过优雅关窗 → 落到 taskkill → 又可能留残留（恶性循环）。
+    // Windows Sandbox 是单实例，全量里那只 RemoteSession 就是我们的。
+    const remote = (processes: readonly SandboxProcessInfo[]): SandboxProcessInfo | undefined =>
+      processes.find((process) => isRemoteSessionImage(process.image));
+    const window =
+      remote(this.newSandboxProcesses()) ??
+      remote(this.deps.listSandboxProcesses?.() ?? []);
+    if (window === undefined) {
+      this.log("没有 RemoteSession 进程（连全量也没有），退回强杀");
+      return false;
+    }
     this.log(`关闭沙箱窗口（pid ${window.pid}，UIA 按下确认框的 Ok）：等它自己收 VM（强杀会把 VM 留给宿主）`);
     try {
       close(window.pid);
