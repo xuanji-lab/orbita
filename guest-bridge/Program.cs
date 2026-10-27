@@ -95,6 +95,10 @@ internal static class Program
     //   是这条车道唯一的桌面级副作用（并发会话的 SendInput 会打进被聚焦的控件）。现在 uia-act
     //   只接受 invoke / setValue / selection；focus 回一句带替代路径的拒绝（computer_click 点
     //   过去，或直接 invoke / setValue）。这是**收缩**，其他命令与回执字段不变。
+    // 0.11.0 多了**应用级准入**（Admission.cs）：click / scroll / uia-act 先把目标窗口解析成
+    //   guest 内 pid，判它是不是我们自己起的进程（或 exe 在白名单里），结果写进回执与
+    //   bridge.log（`admission` / `targetExe`）。**观察模式：bypassed 不拒**——先把模型实际会点
+    //   哪些 exe 量清楚。纯判定有 --selftest-admission，不需要沙箱。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
     private const string Version = "0.11.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
@@ -224,10 +228,15 @@ internal static class Program
             // UIA 客户端自检：只建 in-proc 客户端、关 AutoSetFocus 并读回（不取窗口、不调模式）。
             // 验的是 CLSID / IID / vtable 槽这三件纯函数测不到的东西；不碰用户桌面。
             if (args[i] == "--selftest-uia-client") return Uia.RunClientSelfTest();
+            // 应用级准入的纯函数自测（假 pid 树 + 假白名单；不碰真实窗口、不起进程）
+            if (args[i] == "--selftest-admission") return Admission.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
         try { SetProcessDPIAware(); } catch { } // 拿物理像素而不是 DPI 缩放后的逻辑像素
+
+        // 应用级准入的树根之一：桥自己。worker / Edge 在下面各自登记（WorkerHost.cs）
+        Admission.RegisterRoot(Process.GetCurrentProcess().Id);
 
         _cmdDir = Path.Combine(_outDir, CmdDirName);
         try
@@ -987,6 +996,8 @@ internal static class Program
             info.WorkingDirectory = Path.GetDirectoryName(path);
             Process started = Process.Start(info);
             if (started == null) throw new InvalidOperationException("进程没有起来（Process.Start 返回 null）");
+            // 我们自己拉的进程也算准入树根（沙箱里的打包产物冒烟会用它）
+            Admission.RegisterRoot(started.Id);
             int pid = started.Id;
             // 句柄我们不需要：调完就放，进程本身继续跑（kill 按 pid 找它）
             started.Dispose();
@@ -1281,9 +1292,17 @@ internal static class Program
             return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"button 只能是 left / right / middle，收到：" + JsonEscape(button) + "\"}";
         bool dbl = ExtractBool(raw, "double");
 
+        // 应用级准入（0.11.0）：这一点下面是哪个进程？观察模式，不拒，只标注。
+        // dryRun 也判——它是只读的（WindowFromPoint + 进程表快照），而宿主上的测试正是靠
+        // dryRun 看到这条回执的（绝不为了看准入信息而真注入一次点击）。
+        Admission.Decision admit = Admission.JudgePoint(x, y, Admission.Snapshot(), Admission.Roots(),
+            Admission.MergeAllowExe(ExtractString(raw, "allowExe")));
+        Admission.Log("click", admit);
+
         if (ExtractBool(raw, "dryRun"))
             return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y
-                + ",\"button\":\"" + JsonEscape(button) + "\",\"double\":" + (dbl ? "true" : "false") + "}";
+                + ",\"button\":\"" + JsonEscape(button) + "\",\"double\":" + (dbl ? "true" : "false")
+                + Admission.JsonFields(admit) + "}";
 
         try
         {
@@ -1297,7 +1316,7 @@ internal static class Program
             }
             SendInputs(inputs.ToArray());
             Log("点击 (" + x + ", " + y + ") " + button + (dbl ? " ×2" : ""));
-            return DispatchedReceipt();
+            return DispatchedReceipt(admit);
         }
         catch (Exception ex)
         {
@@ -1419,8 +1438,14 @@ internal static class Program
         if (deltaY == 0)
             return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"deltaY 不能是 0\"}";
 
+        // 滚动作用于**指针下面的窗口**（见下面的注释），所以它的目标判定与点击同一条路
+        Admission.Decision admit = Admission.JudgePoint(x, y, Admission.Snapshot(), Admission.Roots(),
+            Admission.MergeAllowExe(ExtractString(raw, "allowExe")));
+        Admission.Log("scroll", admit);
+
         if (ExtractBool(raw, "dryRun"))
-            return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y + ",\"deltaY\":" + deltaY + "}";
+            return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y + ",\"deltaY\":" + deltaY
+                + Admission.JsonFields(admit) + "}";
 
         try
         {
@@ -1430,7 +1455,7 @@ internal static class Program
             inputs[1] = MouseInput(0, 0, MOUSEEVENTF_WHEEL, wheelData);
             SendInputs(inputs);
             Log("滚动 (" + x + ", " + y + ") deltaY=" + deltaY);
-            return DispatchedReceipt();
+            return DispatchedReceipt(admit);
         }
         catch (Exception ex)
         {
@@ -1448,6 +1473,15 @@ internal static class Program
     private static string DispatchedReceipt()
     {
         return "{\"ok\":true,\"delivery\":\"dispatched\"}";
+    }
+
+    /**
+     * 同上，但带上应用级准入字段（click / scroll 才有目标坐标，type / key 打的是当前焦点）。
+     * 两者是两件独立的事：delivery 说「这一下出去没有」，admission 说「落在谁身上」。
+     */
+    private static string DispatchedReceipt(Admission.Decision admit)
+    {
+        return "{\"ok\":true,\"delivery\":\"dispatched\"" + Admission.JsonFields(admit) + "}";
     }
 
     /** 读整数 x / y（click 与 scroll 共用）；缺字段或不是整数回人话错误，否则 null */

@@ -144,4 +144,29 @@ describe("SettingsStore", () => {
     const rawAfter = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
     assert.deepEqual(rawAfter["computerUse"], { allowNetwork: true });
   });
+
+  /**
+   * 第二项（准入白名单）落地后的按键合并：设置页的开关只发 {allowNetwork}，
+   * 手改 / 将来别的入口写的 allowedApps 不能被它抹掉——这与 drawer / lastUsed 的竞态同一个错。
+   */
+  test("computerUse 按键合并：写白名单不冲掉出网开关，改开关也不冲掉白名单", async () => {
+    await store.write({ computerUse: { allowedApps: ["notepad.exe"] } });
+    assert.deepEqual((await store.read()).computerUse, { allowedApps: ["notepad.exe"] });
+
+    // 设置页的开关补丁（只有 allowNetwork）→ 白名单还在
+    await store.write({ computerUse: { allowNetwork: false } });
+    assert.deepEqual((await store.read()).computerUse, {
+      allowedApps: ["notepad.exe"],
+      allowNetwork: false,
+    });
+
+    // 反过来：只写白名单不会把 allowNetwork 抹回缺席
+    await store.write({ computerUse: { allowedApps: ["calc.exe"] } });
+    assert.deepEqual((await store.read()).computerUse, {
+      allowedApps: ["calc.exe"],
+      allowNetwork: false,
+    });
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.deepEqual(raw["computerUse"], { allowedApps: ["calc.exe"], allowNetwork: false });
+  });
 });

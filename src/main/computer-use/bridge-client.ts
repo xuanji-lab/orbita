@@ -30,6 +30,7 @@ import {
   computerUseGuestCommands,
   computerUseGuestTimeoutMs,
   GUEST_COMMAND_TIMEOUT_MS,
+  parseComputerUseAdmission,
   parseComputerUseDelivery,
   type ComputerUseDelivery,
   type ComputerUseUiaActReply,
@@ -260,6 +261,9 @@ export async function fetchGuestUiaAct(
   if (typeof resp.autoSetFocusWarning === "string" && resp.autoSetFocusWarning !== "") {
     reply.autoSetFocusWarning = resp.autoSetFocusWarning;
   }
+  // 应用级准入（桥 0.11.0 的观察模式）：老桥没这几个字段，parse 回 null，回执照常
+  const admission = parseComputerUseAdmission(resp);
+  if (admission !== null) reply.admission = admission;
   return reply;
 }
 

@@ -1752,6 +1752,7 @@ describe("guest 命令下发", () => {
       assert.deepEqual(commands, ["click", "type", "key", "scroll"]);
       // 序号从 1 起：start() 把上一局的序号归零，桥的快路径（直探 cmd-000001）第一条即命中
       assert.deepEqual(harness.requests.map((req) => req.seq), [1, 2, 3, 4, 5]);
+      // 点击 / 滚动多一个准入白名单字段（应用级准入，0.11.0）；没注入 getter 时是内置默认
       assert.deepEqual(fieldsOf(harness, 1), {
         seq: 2,
         command: "click",
@@ -1759,10 +1760,12 @@ describe("guest 命令下发", () => {
         y: 200,
         button: "right",
         double: true,
+        allowExe: "msedge.exe",
       });
+      // type / key 没有目标坐标（打到前台焦点），不带准入字段
       assert.deepEqual(fieldsOf(harness, 2), { seq: 3, command: "type", text: "你好" });
       assert.deepEqual(fieldsOf(harness, 3), { seq: 4, command: "key", key: "alt+f4" });
-      assert.deepEqual(fieldsOf(harness, 4), { seq: 5, command: "scroll", x: 5, y: 6, deltaY: -120 });
+      assert.deepEqual(fieldsOf(harness, 4), { seq: 5, command: "scroll", x: 5, y: 6, deltaY: -120, allowExe: "msedge.exe" });
 
       const left = await readdir(join(harness.dir, "out", COMPUTER_USE_CMD_DIR));
       assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
@@ -1805,6 +1808,63 @@ describe("guest 命令下发", () => {
         error: "click 需要整数 x 与 y（沙箱物理像素）",
         delivery: "failed",
       });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("准入白名单：设置里的 allowedApps 追加在内置默认之后下发；读失败退回默认", async () => {
+    const harness = await makeHarness({ allowedApps: () => ["notepad.exe", "C:\\Tools\\calc.exe"] });
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({ respond: () => ({ resp: { ok: true } }) });
+      await startPromise;
+      await harness.controller.guestCommand("click", { x: 1, y: 2 });
+      assert.deepEqual(
+        (fieldsOf(harness, 1) as Record<string, unknown>)["allowExe"],
+        "msedge.exe,notepad.exe,calc.exe",
+        "内置默认在前、用户项规范化后追加",
+      );
+    } finally {
+      await harness.close();
+    }
+
+    const broken = await makeHarness({
+      allowedApps: () => {
+        throw new Error("settings 读不动");
+      },
+    });
+    try {
+      const startPromise = broken.controller.start();
+      broken.announceBridge({ respond: () => ({ resp: { ok: true } }) });
+      await startPromise;
+      await broken.controller.guestCommand("click", { x: 1, y: 2 });
+      assert.equal((fieldsOf(broken, 1) as Record<string, unknown>)["allowExe"], "msedge.exe");
+      assert.ok(broken.logs.some((line) => /准入白名单/.test(line)), "读失败要留一行痕，不静默");
+    } finally {
+      await broken.close();
+    }
+  });
+
+  test("回执里的准入信息抬上来：bypassed + targetExe 原样进工具回执；老桥没有字段就照旧", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) =>
+          req.command === "ping"
+            ? { resp: { ok: true } }
+            : { resp: { ok: true, admission: "bypassed", targetExe: "notepad.exe", targetPid: 400 } },
+      });
+      await startPromise;
+      assert.deepEqual(await harness.controller.guestCommand("click", { x: 1, y: 2 }), {
+        ok: true,
+        resp: { ok: true, admission: "bypassed", targetExe: "notepad.exe", targetPid: 400 },
+        admission: { admission: "bypassed", targetExe: "notepad.exe", targetPid: 400 },
+      });
+      // 不认识的 verdict（以后桥加了新值）：当作没有，不让它流进 UI
+      const weird = await harness.controller.guestCommand("click", { x: 3, y: 4 });
+      assert.equal(weird.ok, true);
     } finally {
       await harness.close();
     }

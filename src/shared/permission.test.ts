@@ -4,12 +4,17 @@ import {
   atMostManual,
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
+  COMPUTER_USE_CONFINED_WRITE_TOOLS,
+  COMPUTER_USE_ESCAPING_WRITE_TOOLS,
   COMPUTER_USE_READ_TOOLS,
+  COMPUTER_USE_WRITE_TIERS,
   COMPUTER_USE_WRITE_TOOLS,
+  computerUseWriteTier,
   decidePermission,
   DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
   isChannelTool,
+  isComputerUseEscapingTool,
   isComputerUseReadTool,
   isComputerUseTool,
   isComputerUseWriteTool,
@@ -179,10 +184,10 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
     assert.equal(isComputerUseTool("bash"), false);
   });
 
-  test("写桶覆盖三条车道的写动作：像素四件 + 网页五件 + UIA，一个都不漏", () => {
+  test("写桶覆盖三条车道的写动作：像素四件 + 网页六件 + UIA，一个都不漏", () => {
     // 名字是真源：各自在 computer-tools.ts / sandbox-tools.ts 的工具定义里。漏一个的后果
     // 不是「少问一次」——它同时绕过会话授权、两级预算与急停撤销，三道闸一起失效
-    // （2026-10 修：链上新增的 6 件曾全在名单外）。
+    // （2026-10 修：链上新增的 6 件曾全在名单外；同月又发现 sandbox_tabs 在名单外）。
     const all = [
       "computer_click",
       "computer_type",
@@ -193,6 +198,7 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
       "sandbox_type",
       "sandbox_upload",
       "sandbox_download",
+      "sandbox_tabs",
       "computer_uia",
     ];
     for (const tool of all) {
@@ -200,8 +206,53 @@ describe("沙箱截图与网页读取（COMPUTER_USE_READ_TOOLS）", () => {
       assert.equal(isComputerUseTool(tool), true, `${tool} 应计入预算`);
       assert.equal(isComputerUseReadTool(tool), false, `${tool} 不应同时是只读`);
     }
-    // 名单恰好是这十件：多一个少一个都要在这里显式改（防静默漂移）
+    // 名单恰好是这十一件：多一个少一个都要在这里显式改（防静默漂移）
     assert.deepEqual([...COMPUTER_USE_WRITE_TOOLS].sort(), [...all].sort());
+  });
+});
+
+describe("写件分档（沙箱内 / 能逸出）", () => {
+  test("判据落表：沙箱内 9 件、能逸出 2 件，合起来恰好是写桶、互不重叠", () => {
+    assert.deepEqual(
+      [...COMPUTER_USE_CONFINED_WRITE_TOOLS].sort(),
+      [
+        "computer_click",
+        "computer_key",
+        "computer_scroll",
+        "computer_type",
+        "computer_uia",
+        "sandbox_click",
+        "sandbox_navigate",
+        "sandbox_tabs",
+        "sandbox_type",
+      ],
+    );
+    // 只能逸出的就这两件：host→guest 的文件内容（upload）与 guest→host 的落盘（download）。
+    // 别的写工具有一天被塞进来，这条测试会先红——那时要先想清楚它是不是真的跨了边界。
+    assert.deepEqual([...COMPUTER_USE_ESCAPING_WRITE_TOOLS].sort(), ["sandbox_download", "sandbox_upload"]);
+    for (const tool of COMPUTER_USE_CONFINED_WRITE_TOOLS) {
+      assert.equal(isComputerUseEscapingTool(tool), false, tool);
+      assert.equal(computerUseWriteTier(tool), "confined", tool);
+    }
+    for (const tool of COMPUTER_USE_ESCAPING_WRITE_TOOLS) {
+      assert.equal(isComputerUseEscapingTool(tool), true, tool);
+      assert.equal(computerUseWriteTier(tool), "escaping", tool);
+      assert.equal((COMPUTER_USE_CONFINED_WRITE_TOOLS as readonly string[]).includes(tool), false, tool);
+    }
+    assert.deepEqual(COMPUTER_USE_WRITE_TIERS.confined, COMPUTER_USE_CONFINED_WRITE_TOOLS);
+    assert.deepEqual(COMPUTER_USE_WRITE_TIERS.escaping, COMPUTER_USE_ESCAPING_WRITE_TOOLS);
+    // 读件与无关工具都不是任何一档
+    for (const tool of COMPUTER_USE_READ_TOOLS) assert.equal(computerUseWriteTier(tool), null, tool);
+    assert.equal(computerUseWriteTier("bash"), null);
+    assert.equal(computerUseWriteTier("browser_click"), null);
+  });
+
+  test("分档只改确认频率，不改三档判定：两档都还是 plan 拒 / manual 问 / skip 放", () => {
+    for (const tool of COMPUTER_USE_WRITE_TOOLS) {
+      assert.equal(decidePermission("plan", tool).behavior, "deny", tool);
+      assert.equal(decidePermission("manual", tool).behavior, "ask", tool);
+      assert.equal(decidePermission("skip", tool).behavior, "allow", tool);
+    }
   });
 });
 

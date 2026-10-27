@@ -444,6 +444,8 @@ private const int ShotCopyWaitMs = 2000;
         Program.Log("启动 worker：会话 " + key + "，日志 " + Path.Combine(dir, "worker.log"));
         Process process = Process.Start(info);
         if (process == null) throw new Exception("进程没有起来（Process.Start 返回 null）");
+        // 应用级准入的树根之一：这个 worker 起的 Edge（及其子进程）都算「我们自己的」
+        Admission.RegisterRoot(process.Id);
 
         string infoPath = Path.Combine(dir, "worker.json");
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(WorkerStartTimeoutMs);
