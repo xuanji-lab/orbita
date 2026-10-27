@@ -17,7 +17,10 @@
  * （terminalRequest / readTaskRequest 同一条纪律）。
  */
 import {
+  COMPUTER_USE_DISPATCHED_HINT,
   computerUseGuestCommands,
+  parseComputerUseDelivery,
+  type ComputerUseDelivery,
   type ComputerUseGuestCommand,
   type ComputerUseScreenshotResult,
   type ComputerUseToolOutcome,
@@ -28,7 +31,7 @@ import {
   type ComputerUseWindowListResult,
   type ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
-import type { GuestCommandResult } from "./sandbox.ts";
+import type { GuestCommandReply } from "./sandbox.ts";
 
 /**
  * 这一层真正要的那几个能力。**收窄成接口而不是直接吃 SandboxController**：
@@ -37,7 +40,11 @@ import type { GuestCommandResult } from "./sandbox.ts";
  */
 export interface ComputerUseGuest {
   screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult>;
-  guestCommand(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestCommandResult>;
+  /**
+   * 像素命令的下发（click / type / key / scroll）。成功时**带 resp**：交付档位（applied /
+   * dispatched / failed）就在里面，这一层不替桥猜。
+   */
+  guestCommand(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestCommandReply>;
   /**
    * 按**窗口**截图（桥 0.9.0 的 win-shot）。hwnd 优先，否则 title 不区分大小写包含匹配。
    * 失败时 error 是桥给出的人话（「这个窗口拍不到…——改用整桌面截图或 computer_screenshot」），
@@ -116,51 +123,59 @@ export async function applyComputerUseRequest(
       }
       case "click": {
         const button = request.button ?? "left";
-        const outcome = await controller.guestCommand(computerUseGuestCommands.click, {
+        const reply = await controller.guestCommand(computerUseGuestCommands.click, {
           x: request.x,
           y: request.y,
           button,
           double: request.double === true,
         });
-        if (!outcome.ok) return { ok: false, error: outcome.error };
+        if (!reply.ok) return failedReply(reply);
+        const delivery = deliveryOf(reply.resp);
         const kind = `${request.double === true ? "double " : ""}${button} click`;
         return {
           ok: true,
+          delivery,
           text:
-            `Sent a ${kind} at (${request.x}, ${request.y}) on the sandbox desktop. It has been delivered — ` +
-            "take a screenshot to see what it did.",
+            `Sent a ${kind} at (${request.x}, ${request.y}) on the sandbox desktop. ` +
+            deliveryNote(delivery),
         };
       }
       case "type": {
-        const outcome = await controller.guestCommand(computerUseGuestCommands.type, { text: request.text });
-        if (!outcome.ok) return { ok: false, error: outcome.error };
+        const reply = await controller.guestCommand(computerUseGuestCommands.type, { text: request.text });
+        if (!reply.ok) return failedReply(reply);
+        const delivery = deliveryOf(reply.resp);
         return {
           ok: true,
+          delivery,
           text:
             `Typed ${request.text.length} characters into the focused window on the sandbox desktop. ` +
-            "Take a screenshot to confirm they landed where you meant.",
+            deliveryNote(delivery),
         };
       }
       case "key": {
-        const outcome = await controller.guestCommand(computerUseGuestCommands.key, { key: request.key });
-        if (!outcome.ok) return { ok: false, error: outcome.error };
+        const reply = await controller.guestCommand(computerUseGuestCommands.key, { key: request.key });
+        if (!reply.ok) return failedReply(reply);
+        const delivery = deliveryOf(reply.resp);
         return {
           ok: true,
-          text: `Pressed ${request.key} on the sandbox desktop. Take a screenshot to confirm.`,
+          delivery,
+          text: `Pressed ${request.key} on the sandbox desktop. ` + deliveryNote(delivery),
         };
       }
       case "scroll": {
-        const outcome = await controller.guestCommand(computerUseGuestCommands.scroll, {
+        const reply = await controller.guestCommand(computerUseGuestCommands.scroll, {
           x: request.x,
           y: request.y,
           deltaY: request.deltaY,
         });
-        if (!outcome.ok) return { ok: false, error: outcome.error };
+        if (!reply.ok) return failedReply(reply);
+        const delivery = deliveryOf(reply.resp);
         return {
           ok: true,
+          delivery,
           text:
             `Scrolled by ${request.deltaY} wheel notch(es) at (${request.x}, ${request.y}) on the sandbox desktop ` +
-            "(positive = down). Take a screenshot to see the new position.",
+            `(positive = down). ${deliveryNote(delivery)}`,
         };
       }
       // ── UIA 车道（桥 0.10.0）：按控件动作，不按坐标、不抢前台 ─────────────
@@ -194,6 +209,31 @@ export async function applyComputerUseRequest(
   } catch (cause: unknown) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
   }
+}
+
+/**
+ * 回执里的 delivery → 契约档位。桥没说（老桥 / 非像素命令）时兜底 `dispatched`：
+ * 像素命令能走到「有回执且 ok」这一步，本来就只能是「已派发、未验证」——这正是 SendInput
+ * 返回值的真实含义。以前它只写在实现里、模型读不到，现在显式进回执与正文。
+ */
+function deliveryOf(resp: Record<string, unknown>): ComputerUseDelivery {
+  return parseComputerUseDelivery(resp["delivery"]) ?? "dispatched";
+}
+
+/**
+ * 成功回执后面跟的那句交付说明。`applied` 本刀不产出（还不知道怎么证明生效），
+ * 位置先留着；`dispatched` 是默认档，口径见 shared 的 COMPUTER_USE_DISPATCHED_HINT。
+ */
+function deliveryNote(delivery: ComputerUseDelivery): string {
+  return delivery === "applied" ? "It has been confirmed to have taken effect." : COMPUTER_USE_DISPATCHED_HINT;
+}
+
+/**
+ * 下发失败 → 回执。桥明确说的 `delivery:"failed"` 原样带出（「确定没做成」）；
+ * 超时 / 沙箱没在跑这类没有那一档——那时我们不知道那一下有没有生效，不能替它断言。
+ */
+function failedReply(reply: { ok: false; error: string; delivery?: ComputerUseDelivery }): ComputerUseToolOutcome {
+  return { ok: false, error: reply.error, ...(reply.delivery === undefined ? {} : { delivery: reply.delivery }) };
 }
 
 /**

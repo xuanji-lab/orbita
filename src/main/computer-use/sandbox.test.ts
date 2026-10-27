@@ -1737,14 +1737,17 @@ describe("guest 命令下发", () => {
 
       assert.deepEqual(
         await harness.controller.guestCommand("click", { x: 100, y: 200, button: "right", double: true }),
-        { ok: true },
+        { ok: true, resp: { ok: true } },
       );
       assert.deepEqual(
         await harness.controller.guestCommand("type", { text: "你好" }),
-        { ok: true },
+        { ok: true, resp: { ok: true } },
       );
-      assert.deepEqual(await harness.controller.guestCommand("key", { key: "alt+f4" }), { ok: true });
-      assert.deepEqual(await harness.controller.guestCommand("scroll", { x: 5, y: 6, deltaY: -120 }), { ok: true });
+      assert.deepEqual(await harness.controller.guestCommand("key", { key: "alt+f4" }), { ok: true, resp: { ok: true } });
+      assert.deepEqual(await harness.controller.guestCommand("scroll", { x: 5, y: 6, deltaY: -120 }), {
+        ok: true,
+        resp: { ok: true },
+      });
 
       const commands = harness.requests.slice(1).map((req) => req.command);
       assert.deepEqual(commands, ["click", "type", "key", "scroll"]);
@@ -1782,6 +1785,27 @@ describe("guest 命令下发", () => {
       await startPromise;
       const result = await harness.controller.guestCommand("key", { key: "hyper+x" });
       assert.deepEqual(result, { ok: false, error: "不认识的按键名：hyper" });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("桥明确拒绝时把回执的 delivery 带出去（failed = 确定没做成）", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) =>
+          req.command === "ping"
+            ? { resp: { ok: true } }
+            : { resp: { ok: false, error: "click 需要整数 x 与 y（沙箱物理像素）", delivery: "failed" } },
+      });
+      await startPromise;
+      assert.deepEqual(await harness.controller.guestCommand("click", { x: 1, y: 2 }), {
+        ok: false,
+        error: "click 需要整数 x 与 y（沙箱物理像素）",
+        delivery: "failed",
+      });
     } finally {
       await harness.close();
     }

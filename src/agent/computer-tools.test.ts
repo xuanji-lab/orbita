@@ -355,3 +355,23 @@ describe("computer_* 的审计载荷（details.computerUse）", () => {
     assert.equal(result.content.some((block) => block.type === "image"), true);
   });
 });
+
+describe("computer_* 的工具描述：交付口径写进模型读得到的地方", () => {
+  // 模型只读工具描述，不读源码、也不看 UI。`dispatched` 若不在描述里说清，它读到
+  // ok:true 就会当成「我点到了」接着往下走，或者在出错后重放同一个动作（双击 / 双份文字）。
+  test("四个像素工具都写了「已派发、无法确认生效、不要立刻重放、先截图看」", () => {
+    const { tools } = setup();
+    for (const name of ["computer_click", "computer_type", "computer_key", "computer_scroll"]) {
+      const description = tools.get(name)?.description ?? "";
+      assert.match(description, /dispatched/, `${name} 应说明 dispatched 这一档`);
+      assert.match(description, /no evidence it took effect/, `${name} 应说明无法确认生效`);
+      assert.match(description, /do not replay the same action/, `${name} 应明确不要重放`);
+      assert.match(description, /computer_screenshot/, `${name} 应给出下一步：先截图`);
+    }
+  });
+
+  test("UIA 通道（不走 SendInput）不背这句：它的失败文案自己点名路", () => {
+    const { tools } = setup();
+    assert.doesNotMatch(tools.get("computer_uia")?.description ?? "", /do not replay the same action/);
+  });
+});

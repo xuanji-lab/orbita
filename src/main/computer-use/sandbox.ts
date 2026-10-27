@@ -26,6 +26,7 @@ import {
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
   computerUseGuestCommands,
+  type ComputerUseDelivery,
   type ComputerUseGuestCommand,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -48,6 +49,7 @@ import {
   fetchGuestUiaList,
   fetchGuestWindowList,
   fetchGuestWindowShot,
+  GuestCommandRejected,
   pingGuest,
   resetGuestCommandSeq,
   sendGuestCommand,
@@ -238,19 +240,14 @@ export interface SandboxProcess {
 }
 
 /**
- * guest 命令下发的回执（controller 内部形状）。只有成/败：输入类命令的语义就是
- * 「事件已送出」，屏幕变成什么样要看下一张截图。**不进 shared/**：它不过进程边界，
- * 跨边界的那份是 shared/computer-use.ts 的 ComputerUseToolOutcome。
- */
-export type GuestCommandResult = { ok: true } | { ok: false; error: string };
-
-/**
- * 带**回执载荷**的 guest 命令结果（CDP 通道要读 resp 里的 port / running / text / elements）。
- * 与 GuestCommandResult 的区别只是多了 resp：像素命令的语义是「事件已送出」，没什么可读的。
+ * guest 命令下发的回执（controller 内部形状）。成功时带回 resp，失败时是一句人话——
+ * 桥明确拒绝的话，再加一档 delivery（failed = 确定没做成；超时不带，因为那时不知道
+ * 那一下有没有生效）。**不进 shared/**：它不过进程边界，跨边界的那份是
+ * shared/computer-use.ts 的 ComputerUseToolOutcome。
  */
 export type GuestCommandReply =
   | { ok: true; resp: Record<string, unknown> }
-  | { ok: false; error: string };
+  | { ok: false; error: string; delivery?: ComputerUseDelivery };
 
 /** 带 JPEG 兄弟文件的 guest 命令结果（cdp-shot 与像素截图共用） */
 export type GuestShotReply =
@@ -746,29 +743,33 @@ export class SandboxController {
    * agent 工具的通用命令下发（PR2 的 click / type / key / scroll 走它）。
    * 闸门与 screenshot 同一处：只有 running 才发得出去——没在跑时命令会石沉大海（上一局的
    * out/cmd 已被清空），等 45 秒超时再报错对模型毫无信息量。
-   * 回执只有成/败：这些命令的语义就是「事件已送出」，屏幕变成什么样要看下一张截图。
+   *
+   * **回执载荷要带上**：像素输入的成功只意味着「事件已入队」（delivery=dispatched），
+   * 不是「已生效」——那一档由桥写在 resp.delivery 里，这一层不能替它猜（见
+   * shared/computer-use.ts 的 ComputerUseDelivery）。
    */
   async guestCommand(
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
-  ): Promise<GuestCommandResult> {
+  ): Promise<GuestCommandReply> {
     const gate = this.notRunning("沙箱操作");
     if (gate !== null) return gate;
     try {
-      await sendGuestCommand(
+      const resp = await sendGuestCommand(
         this.outDir(),
         command,
         fields,
         this.deps.guestTimeoutMs,
       );
-      return { ok: true };
+      return { ok: true, resp };
     } catch (cause: unknown) {
-      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+      // 桥明确拒绝时把它说的那一档带出去（failed = 确定没做成，可以放心重试）；
+      // 超时 / 桥没响应则不带：那时我们真的不知道那一下有没有生效。
+      return this.rejected(cause);
     }
   }
 
-  /**
-   * CDP 命令的通用下发（PR3 的 sandbox_* 工具组走它）。与 guestCommand 同一道闸门：
+  /** CDP 命令的通用下发（PR3 的 sandbox_* 工具组走它）。与 guestCommand 同一道闸门：
    * 只有 running 才发得出去。**回执载荷原样带回**（cdp 层自己读 port / running / text 等字段）。
    */
   async guestCommandReply(
@@ -786,8 +787,22 @@ export class SandboxController {
       );
       return { ok: true, resp };
     } catch (cause: unknown) {
-      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+      return this.rejected(cause);
     }
+  }
+
+  /**
+   * 下发失败 → 回执。桥说了 `delivery` 就原样带出（`failed` = 确定没做成）：
+   * 超时 / 桥没响应时不带那一档——那时我们真的不知道那一下有没有生效，
+   * 说成 `failed` 会让模型放心重试，而它可能已经点下去了。
+   */
+  private rejected(cause: unknown): { ok: false; error: string; delivery?: ComputerUseDelivery } {
+    const delivery = cause instanceof GuestCommandRejected ? cause.delivery : undefined;
+    return {
+      ok: false,
+      error: cause instanceof Error ? cause.message : String(cause),
+      ...(delivery === undefined ? {} : { delivery }),
+    };
   }
 
   /**

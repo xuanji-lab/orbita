@@ -30,6 +30,8 @@ import {
   computerUseGuestCommands,
   computerUseGuestTimeoutMs,
   GUEST_COMMAND_TIMEOUT_MS,
+  parseComputerUseDelivery,
+  type ComputerUseDelivery,
   type ComputerUseUiaActReply,
   type ComputerUseUiaAction,
   type ComputerUseUiaItem,
@@ -310,6 +312,24 @@ export function resetGuestCommandSeq(): void {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Resp = Record<string, unknown>;
+
+/**
+ * 桥**明确拒绝**了一条命令（回执 `ok:false`）。除了那句人话，把回执里的 `delivery` 带出来：
+ * 「确定没做成」（参数非法 / SendInput 返回值不对）与「不知道成没成」（超时 / 桥没响应）对模型
+ * 是两件事——前者可以放心重试，后者必须先看一眼屏幕（见 shared/computer-use.ts 的三档语义）。
+ *
+ * 为什么用错误子类而不是把回执挂在 Error 上：调用方已经按「失败 = 一句人话」处理，
+ * 多出来的这一档必须是**有类型**的，不能靠改对象形状。
+ */
+export class GuestCommandRejected extends Error {
+  readonly delivery: ComputerUseDelivery | undefined;
+
+  constructor(message: string, delivery: ComputerUseDelivery | undefined) {
+    super(message);
+    this.name = "GuestCommandRejected";
+    this.delivery = delivery;
+  }
+}
 
 function parseResp(raw: string): Resp | null {
   let parsed: unknown;
@@ -974,7 +994,7 @@ async function sendGuestCommandRaw(
   if (attempt.kind === "reply") {
     if (attempt.resp.ok === false) {
       const message = typeof attempt.resp.error === "string" ? attempt.resp.error : "guest 桥执行失败（没给原因）";
-      throw new Error(message);
+      throw new GuestCommandRejected(message, parseComputerUseDelivery(attempt.resp["delivery"]));
     }
     return {
       resp: attempt.resp,
@@ -1018,7 +1038,7 @@ async function sendGuestCommandRaw(
         if (resp.ok === false) {
           const message = typeof resp.error === "string" ? resp.error : "guest 桥执行失败（没给原因）";
           await cleanup();
-          throw new Error(message);
+          throw new GuestCommandRejected(message, parseComputerUseDelivery(resp["delivery"]));
         }
         return { resp, file: { cmdDir, baseName } };
       }

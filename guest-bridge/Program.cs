@@ -1247,6 +1247,16 @@ internal static class Program
     }
 
     // ---- 输入注入：click / type / key / scroll（SendInput）----
+    //
+    // **交付语义（三档）**：SendInput 的返回值只说明事件**进了窗口队列**，不说明动作生效
+    // （窗口可能卡住、焦点可能被别人抢走、目标控件可能压根不接受输入）。所以回执这么写：
+    //   ok:true  + delivery:"dispatched"  已派发、未验证（本刀所有成功的像素输入都在这一档）
+    //   ok:false + delivery:"failed"      明确失败（参数非法 / SendInput 返回值不对）
+    //   delivery:"applied"                 有生效证据——本刀不产出，位置先留着
+    // 宿主与模型的口径见 src/shared/computer-use.ts 的 ComputerUseDelivery；模型看到
+    // dispatched 时**不许重放同一个动作**，先截一张图看结果。
+    //
+    // dryRun（测试缝）不带 delivery：它什么都没派发，说成 dispatched 就是假话。
 
     /**
      * click {x, y, button, double}：把指针移到 (x, y) 并按一下（或双击）。
@@ -1263,7 +1273,7 @@ internal static class Program
         if (button == null || button.Length == 0) button = "left";
         uint down, up;
         if (!TryButtonFlags(button, out down, out up))
-            return "{\"ok\":false,\"error\":\"button 只能是 left / right / middle，收到：" + JsonEscape(button) + "\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"button 只能是 left / right / middle，收到：" + JsonEscape(button) + "\"}";
         bool dbl = ExtractBool(raw, "double");
 
         if (ExtractBool(raw, "dryRun"))
@@ -1282,12 +1292,12 @@ internal static class Program
             }
             SendInputs(inputs.ToArray());
             Log("点击 (" + x + ", " + y + ") " + button + (dbl ? " ×2" : ""));
-            return "{\"ok\":true}";
+            return DispatchedReceipt();
         }
         catch (Exception ex)
         {
             Log("点击失败：" + ex.Message);
-            return "{\"ok\":false,\"error\":\"点击失败：" + JsonEscape(ex.Message) + "\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"点击失败：" + JsonEscape(ex.Message) + "\"}";
         }
     }
 
@@ -1300,7 +1310,7 @@ internal static class Program
     {
         string text = ExtractJsonString(raw, "text");
         if (text == null)
-            return "{\"ok\":false,\"error\":\"type 需要 text 字段（字符串）\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"type 需要 text 字段（字符串）\"}";
 
         if (ExtractBool(raw, "dryRun"))
             return "{\"ok\":true,\"dryRun\":true,\"text\":" + JsonQuote(text) + ",\"length\":" + text.Length + "}";
@@ -1322,12 +1332,12 @@ internal static class Program
                 at += chunk;
             }
             Log("已输入 " + text.Length + " 个字符");
-            return "{\"ok\":true}";
+            return DispatchedReceipt();
         }
         catch (Exception ex)
         {
             Log("输入失败：" + ex.Message);
-            return "{\"ok\":false,\"error\":\"输入失败：" + JsonEscape(ex.Message) + "\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"输入失败：" + JsonEscape(ex.Message) + "\"}";
         }
     }
 
@@ -1342,7 +1352,7 @@ internal static class Program
     {
         string spec = ExtractString(raw, "key");
         if (spec == null || spec.Trim().Length == 0)
-            return "{\"ok\":false,\"error\":\"key 需要 key 字段（如 enter / ctrl+a / alt+f4）\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"key 需要 key 字段（如 enter / ctrl+a / alt+f4）\"}";
 
         List<ushort> vks = new List<ushort>();
         string[] parts = spec.Split('+');
@@ -1352,11 +1362,11 @@ internal static class Program
             if (name.Length == 0) continue;
             ushort vk;
             if (!TryKeyVk(name, out vk))
-                return "{\"ok\":false,\"error\":\"不认识的按键名：" + JsonEscape(name) + "\"}";
+                return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"不认识的按键名：" + JsonEscape(name) + "\"}";
             vks.Add(vk);
         }
         if (vks.Count == 0)
-            return "{\"ok\":false,\"error\":\"key 里没有可用的按键名\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"key 里没有可用的按键名\"}";
 
         if (ExtractBool(raw, "dryRun"))
         {
@@ -1379,12 +1389,12 @@ internal static class Program
             for (int i = vks.Count - 2; i >= 0; i--) inputs.Add(KeyInput(vks[i], 0, KEYEVENTF_KEYUP));
             SendInputs(inputs.ToArray());
             Log("按键 " + spec);
-            return "{\"ok\":true}";
+            return DispatchedReceipt();
         }
         catch (Exception ex)
         {
             Log("按键失败：" + ex.Message);
-            return "{\"ok\":false,\"error\":\"按键失败：" + JsonEscape(ex.Message) + "\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"按键失败：" + JsonEscape(ex.Message) + "\"}";
         }
     }
 
@@ -1400,9 +1410,9 @@ internal static class Program
         string deltaRaw = ExtractNumber(raw, "deltaY");
         int deltaY;
         if (deltaRaw == null || !int.TryParse(deltaRaw, out deltaY))
-            return "{\"ok\":false,\"error\":\"scroll 需要整数 deltaY（正数向下）\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"scroll 需要整数 deltaY（正数向下）\"}";
         if (deltaY == 0)
-            return "{\"ok\":false,\"error\":\"deltaY 不能是 0\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"deltaY 不能是 0\"}";
 
         if (ExtractBool(raw, "dryRun"))
             return "{\"ok\":true,\"dryRun\":true,\"x\":" + x + ",\"y\":" + y + ",\"deltaY\":" + deltaY + "}";
@@ -1415,16 +1425,25 @@ internal static class Program
             inputs[1] = MouseInput(0, 0, MOUSEEVENTF_WHEEL, wheelData);
             SendInputs(inputs);
             Log("滚动 (" + x + ", " + y + ") deltaY=" + deltaY);
-            return "{\"ok\":true}";
+            return DispatchedReceipt();
         }
         catch (Exception ex)
         {
             Log("滚动失败：" + ex.Message);
-            return "{\"ok\":false,\"error\":\"滚动失败：" + JsonEscape(ex.Message) + "\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"滚动失败：" + JsonEscape(ex.Message) + "\"}";
         }
     }
 
     // ---- 输入注入的小工具 ----
+
+    /**
+     * 像素输入命令的成功回执：`ok` 保留（老宿主读它，向后兼容），`delivery` 说明
+     * 「已派发、未验证」——SendInput 返回成功只代表事件入了窗口队列。
+     */
+    private static string DispatchedReceipt()
+    {
+        return "{\"ok\":true,\"delivery\":\"dispatched\"}";
+    }
 
     /** 读整数 x / y（click 与 scroll 共用）；缺字段或不是整数回人话错误，否则 null */
     private static string ReadPoint(string raw, string command, out int x, out int y)
@@ -1434,7 +1453,7 @@ internal static class Program
         x = 0;
         y = 0;
         if (xRaw == null || yRaw == null || !int.TryParse(xRaw, out x) || !int.TryParse(yRaw, out y))
-            return "{\"ok\":false,\"error\":\"" + command + " 需要整数 x 与 y（沙箱物理像素）\"}";
+            return "{\"ok\":false,\"delivery\":\"failed\",\"error\":\"" + command + " 需要整数 x 与 y（沙箱物理像素）\"}";
         return null;
     }
 
