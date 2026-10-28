@@ -21,7 +21,7 @@
  *
  * 编辑器容器与标签沿用 Files 面板现有语言；文字与颜色走设计 token，深浅主题同一套。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { api } from "../../api.ts";
@@ -45,6 +45,9 @@ import {
 import { formatSize } from "./tree-view.ts";
 import { latexCompletion } from "./latex-completion.ts";
 import { inlineDiagnostics } from "./latex-diagnostics.ts";
+import { parseOutline, outlineIndexAt, type OutlineEntry } from "./latex-outline.ts";
+import { TexOutline } from "./TexOutline.tsx";
+import { isTexFile } from "./editor-state.ts";
 import {
   clampCursorLine,
   locateBlock,
@@ -207,6 +210,15 @@ export function TexEditorPane(props: {
   const [staleIds, setStaleIds] = useState<ReadonlySet<string>>(new Set());
   /** 文档被外部整体换过几次：改动块的高亮要在这个新文档上重算 */
   const [docEpoch, setDocEpoch] = useState(0);
+  /** 大纲抽屉：只对 .tex 开（.bib / .sty 没有章节） */
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  /**
+   * 大纲的输入文本：**只在抽屉打开时跟着文档更新**（每秒几十次的 setState 不该在
+   * 关着的时候发生）。打开时先取一次当前文档，之后在 updateListener 里同步。
+   */
+  const [outlineText, setOutlineText] = useState(props.initialText);
+  const outlineOpenRef = useRef(false);
+  outlineOpenRef.current = outlineOpen;
   /** 外部文本替换文档时不当作「用户编辑」（否则一挂载就排一次自动保存） */
   const replacingRef = useRef(false);
   const dirtyRef = useRef(false);
@@ -379,6 +391,9 @@ export function TexEditorPane(props: {
                 setPhaseBoth("saved");
               }
             }
+            if (update.docChanged && outlineOpenRef.current) {
+              setOutlineText(update.text());
+            }
             if (update.selectionSet || update.docChanged) {
               const state = viewRef.current?.state;
               if (state !== null && state !== undefined) {
@@ -386,7 +401,7 @@ export function TexEditorPane(props: {
                 setCursor(pos);
               }
             }
-          }),
+          }, { folding: isTexFile(path) }),
           latexCompletion({ cite: () => citeRef.current, index: () => indexRef.current }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
@@ -442,8 +457,7 @@ export function TexEditorPane(props: {
   // PDF → 源码的落点：选中这一行、滚到视口中间、铺一条短暂的底色。
   // 依赖只有 token：同一次定位在重渲染时不该再抢一次滚动条。
   const reveal = props.reveal ?? null;
-  useEffect(() => {
-    if (reveal === null) return;
+  useEffect(() => {    if (reveal === null) return;
     const view = viewRef.current;
     if (view === null) return;
     const line = view.state.doc.line(clampCursorLine(reveal.line, view.state.doc.lines));
@@ -461,6 +475,36 @@ export function TexEditorPane(props: {
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.token]);
+
+  // 大纲抽屉：文本变化才重算（几十条章节，开抽屉的时候重算很便宜）
+  const showOutline = isTexFile(path);
+  const outlineEntries = useMemo<readonly OutlineEntry[]>(
+    () => (outlineOpen ? parseOutline(outlineText) : []),
+    [outlineOpen, outlineText],
+  );
+  const outlineActive = outlineIndexAt(outlineEntries, cursor.line);
+
+  /** 跳到某一行（大纲点击 / PDF 反查共用）：整行选中、滚到中间、拿到焦点 */
+  const jumpToLine = (line: number): void => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const target = view.state.doc.line(clampCursorLine(line, view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: target.from, head: target.to },
+      effects: EditorView.scrollIntoView(target.from, { y: "center" }),
+    });
+    view.focus();
+  };
+
+  const toggleOutline = (): void => {
+    if (outlineOpen) {
+      setOutlineOpen(false);
+      return;
+    }
+    const view = viewRef.current;
+    setOutlineText(view?.state.doc.toString() ?? props.initialText);
+    setOutlineOpen(true);
+  };
 
   // 脏状态下盯一眼盘上内容：用户停手不打字时，外部改动也要能看见
   useEffect(() => {
@@ -791,6 +835,13 @@ export function TexEditorPane(props: {
     if (root === null) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
+      // 大纲抽屉开着：Esc 先收抽屉（用户自己打开的东西，不该一下子连标签也关掉）
+      if (outlineOpenRef.current) {
+        setOutlineOpen(false);
+        event.stopPropagation();
+        event.preventDefault();
+        return;
+      }
       const target = event.target instanceof Element ? event.target : null;
       if (event.defaultPrevented || target?.closest(".cm-panels") != null) event.stopPropagation();
     };
@@ -927,7 +978,17 @@ export function TexEditorPane(props: {
           </span>
         </div>
       )}
-      <div className="tex-editor-host" ref={hostRef} />
+      <div className="tex-editor-body">
+        <div className="tex-editor-host" ref={hostRef} />
+        {outlineOpen && showOutline && (
+          <TexOutline
+            entries={outlineEntries}
+            active={outlineActive}
+            onJump={(line) => jumpToLine(line)}
+            onClose={() => setOutlineOpen(false)}
+          />
+        )}
+      </div>
       {hunks.length > 0 && !readOnly && (
         <div className="tex-editor-hunks" role="status">
           <div className="tex-editor-hunks-head">
@@ -996,6 +1057,18 @@ export function TexEditorPane(props: {
         </div>
       )}
       <div className="tex-editor-status" data-phase={phase}>
+        {showOutline && (
+          <button
+            type="button"
+            className="quiet-control tex-editor-outline-toggle"
+            aria-expanded={outlineOpen}
+            title={t.editor.outlineTip}
+            onClick={toggleOutline}
+          >
+            <Icon name="list-tree" size={12} />
+            {t.editor.outline}
+          </button>
+        )}
         <span className="tex-editor-cursor">
           {t.editor.cursor(cursor.line, cursor.column)}
         </span>

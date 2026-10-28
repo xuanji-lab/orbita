@@ -1838,6 +1838,12 @@ export const zh: Messages = {
     hunkEdited: "已被改动，不可撤销",
     hunksShow: "展开改动块",
     hunksHide: "收起改动块",
+    /* 大纲抽屉（章节树） */
+    outline: "大纲",
+    outlineTip: "这份文件的章节——点击跳转",
+    outlineClose: "收起大纲",
+    outlineEmpty: "这份文件还没有章节",
+    outlineLine: (line) => `第 ${line} 行`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

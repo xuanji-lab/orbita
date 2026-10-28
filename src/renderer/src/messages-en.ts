@@ -1988,6 +1988,12 @@ export const en = {
     hunkEdited: "Edited since — cannot undo",
     hunksShow: "Show blocks",
     hunksHide: "Hide blocks",
+    /* 大纲抽屉（章节树） */
+    outline: "Outline",
+    outlineTip: "Sections in this file — click to jump",
+    outlineClose: "Close outline",
+    outlineEmpty: "No sections in this file yet",
+    outlineLine: (line: number) => `Line ${line}`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

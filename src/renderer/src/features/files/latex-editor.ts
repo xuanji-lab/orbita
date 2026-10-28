@@ -38,6 +38,8 @@ import {
 import { search, searchKeymap } from "@codemirror/search";
 import { completionKeymap } from "@codemirror/autocomplete";
 import { lintGutter } from "@codemirror/lint";
+import { foldGutter } from "@codemirror/language";
+import { latexFolding } from "./latex-fold.ts";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { tags } from "@lezer/highlight";
 
@@ -141,7 +143,18 @@ const latexHighlight = HighlightStyle.define([
   { tag: tags.invalid, color: "var(--color-danger)" },
 ]);
 
-export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; selectionSet: boolean }) => void): Extension[] {
+export interface LatexEditorOptions {
+  /**
+   * 折叠（章节块 / 环境块）。只对 .tex 开：.bib / .sty 没有章节与环境树，
+   * 给它们挂一个永远算不出折点的 foldService 只是白跑一遍扫描。
+   */
+  folding?: boolean;
+}
+
+export function latexEditorExtensions(
+  onUpdate: (update: { docChanged: boolean; selectionSet: boolean; text: () => string }) => void,
+  options: LatexEditorOptions = {},
+): Extension[] {
   return [
     lineNumbers(),
     highlightActiveLineGutter(),
@@ -165,10 +178,16 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
     // 编译问题的行内标记：波浪线由 setDiagnostics 推进来（TexEditorPane 接线），
     // 这里的 lintGutter 给行号旁一个可悬停的记号——长行折行后波浪线可能在视口外
     lintGutter(),
+    ...(options.folding === true ? [foldGutter(), ...latexFolding] : []),
     keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return;
-      onUpdate({ docChanged: update.docChanged, selectionSet: update.selectionSet });
+      onUpdate({
+        docChanged: update.docChanged,
+        selectionSet: update.selectionSet,
+        // 全文只在调用方真要的时候才拷（大纲抽屉开着时才需要）
+        text: () => update.state.doc.toString(),
+      });
     }),
     EditorView.theme({
       "&": {

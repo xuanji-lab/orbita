@@ -3421,8 +3421,15 @@ body {
   min-height: 0;
   background: var(--color-bg-panel);
 }
+/* 正文区 = 编辑器 + 可选的大纲抽屉（并排，不浮层：右栏本来就窄，浮层会盖住源码） */
+.tex-editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .tex-editor-host {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -3619,6 +3626,102 @@ body {
   padding: 0 6px;
   border-radius: var(--radius-md);
   font-size: var(--font-size-xs);
+}
+
+/* 大纲抽屉：与正文并排（不浮层）。层级靠缩进，不靠字号——一张卡至多三档 */
+.tex-editor-outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-outline-toggle[aria-expanded="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-bg-active);
+}
+.tex-outline {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: min(240px, 55%);
+  min-height: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.tex-outline-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.tex-outline-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.tex-outline-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.tex-outline-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+.tex-outline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.tex-outline-row:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.tex-outline-row[data-active="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.tex-outline-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tex-outline-line {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /*
