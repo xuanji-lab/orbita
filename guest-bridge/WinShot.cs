@@ -20,6 +20,10 @@
 // 与 Cdp.cs 同一纪律：只碰 guest 自己的桌面与窗口，命令语义由 Program.Execute 分派；
 // 纯函数（过滤 / 标题匹配 / 黑帧判定 / 缩放）可以在宿主上跑 --selftest-shot，不碰桌面。
 //
+// 0.12.0 起出图之前多一步**密码框遮罩**（Mask.cs）：用这个窗口最近一次 uia-list 记下的
+// 密码框矩形把它们涂黑。图像原点是窗口（PW_CLIENTONLY 回退路径下是客户区）左上角，
+// 而 UIA 给的是屏幕物理像素——只做整数减法（平移），不做 DPI 换算。
+//
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 
 using System;
@@ -135,6 +139,17 @@ internal static class WinShot
 
     [DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+
+    /** PW_CLIENTONLY 回退路径上算图像原点的：客户区 (0,0) 在屏幕上的位置 */
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
@@ -399,6 +414,10 @@ internal static class WinShot
                     MeasureBitmap(captured, out mean, out blackRatio);
                     if (!LooksBlack(mean, blackRatio))
                     {
+                        // 密码框遮罩（0.12.0）：**出图之前、缩放之前**涂黑。矩形来自这个窗口最近一次
+                        // uia-list（不重新遍历控件树）；坐标系与 DPI 的关系见 Mask.cs 文件头。
+                        MaskPlan mask = WindowMask(hwnd, captured.Width, captured.Height, flags);
+                        Mask.Paint(captured, mask.Rects);
                         int outW;
                         int outH;
                         FitLongEdge(nativeW, nativeH, maxWidth, out outW, out outH);
@@ -408,14 +427,16 @@ internal static class WinShot
                         Program.Log("窗口截图完成 hwnd " + hwnd.ToInt64() + "（" + (restored ? "从最小化恢复" : "原状")
                             + "，第 " + (attempt + 1) + " 次，mean " + mean.ToString("F1")
                             + " black " + blackRatio.ToString("F3") + "）：窗口 " + nativeW + "x" + nativeH
-                            + "，输出 " + outW + "x" + outH + "，" + jpeg.Length + " 字节");
+                            + "，输出 " + outW + "x" + outH + "，" + jpeg.Length + " 字节"
+                            + "；" + Mask.LogLine("win-shot", mask));
                         return "{\"ok\":true,\"hwnd\":" + hwnd.ToInt64()
                             + ",\"title\":" + Program.JsonQuote(title)
                             + ",\"restoredFromMinimized\":" + (restored ? "true" : "false")
                             + ",\"matched\":" + matched
                             + ",\"nativeWidth\":" + nativeW + ",\"nativeHeight\":" + nativeH
                             + ",\"width\":" + outW + ",\"height\":" + outH
-                            + ",\"jpeg\":\"" + jpgName + "\"}";
+                            + ",\"jpeg\":\"" + jpgName + "\""
+                            + "," + Mask.CaptureFields(mask) + "}";
                     }
                     Program.Log("win-shot：疑似全黑 hwnd " + hwnd.ToInt64() + "（第 " + (attempt + 1)
                         + " 次，mean " + mean.ToString("F1") + " black " + blackRatio.ToString("F3")
@@ -447,6 +468,47 @@ internal static class WinShot
     }
 
     // ---- 内部实现 ------------------------------------------------------------
+
+    /**
+     * 这个窗口的遮罩计划（**只取这个 hwnd 的** uia-list 缓存：窗口图里不会有别的窗口的内容）。
+     *
+     * 坐标系：UIA 的 BoundingRectangle 是**屏幕物理像素**，而这张位图的 (0,0) 是本次 PrintWindow
+     * 的起点——默认组合下是窗口矩形左上角，带 PW_CLIENTONLY 的回退组合下是**客户区**左上角。
+     * 所以原点按 flags 选，然后**只做整数减法（平移），不缩放、不做 DPI 换算**（理由见 Mask.cs）。
+     * 取不到原点时回空计划（Listed=false，宿主会告诉模型这张图没遮）——不拿猜的原点去遮。
+     */
+    private static MaskPlan WindowMask(IntPtr hwnd, int width, int height, uint flags)
+    {
+        int originX;
+        int originY;
+        try
+        {
+            if ((flags & PW_CLIENTONLY) != 0)
+            {
+                POINT client;
+                client.X = 0;
+                client.Y = 0;
+                if (!ClientToScreen(hwnd, ref client)) return new MaskPlan();
+                originX = client.X;
+                originY = client.Y;
+            }
+            else
+            {
+                RECT rect;
+                if (!GetWindowRect(hwnd, out rect)) return new MaskPlan();
+                originX = rect.Left;
+                originY = rect.Top;
+            }
+        }
+        catch
+        {
+            return new MaskPlan();
+        }
+        List<MaskCacheEntry> entries = new List<MaskCacheEntry>();
+        MaskCacheEntry entry;
+        if (PasswordRects.TryGet(hwnd.ToInt64(), InputHook.NowTick(), out entry)) entries.Add(entry);
+        return Mask.Plan(width, height, originX, originY, entries, Mask.CacheMaxAgeMs);
+    }
 
     /** 枚举 + 过滤（上限 MaxWindows，保持 z 序）。任何单个窗口的异常都不该让整条命令失败 */
     private static List<WindowInfo> EnumerateShootable()

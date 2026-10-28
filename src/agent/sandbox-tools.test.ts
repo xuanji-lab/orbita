@@ -334,3 +334,48 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
     assert.equal(await rejection(runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: NET_ERROR })), NET_ERROR);
   });
 });
+
+// ── 审计归属（details.computerUse 的 inputOrigin）───────────────────────────
+//
+// 沙箱浏览器里哪些算「写件」：真的改了页面或替人提交了东西的那几个——click / type /
+// upload。只读件（observe / extract / screenshot / wait / tabs list）与导航不记：
+// 每一条都记一遍只会把真动作淡出日志。
+describe("sandbox_* 写件的审计归属（inputOrigin）", () => {
+  test("click / type / upload：details.computerUse 带 action / args / inputOrigin", async () => {
+    const { runWith } = setup();
+    const click = await runWith("sandbox_click", { selector: "#submit" });
+    const clickAudit = (click.details as { computerUse: { action: string; inputOrigin: string; args: Record<string, unknown> } })
+      .computerUse;
+    assert.equal(clickAudit.action, "sandbox-click");
+    assert.equal(clickAudit.inputOrigin, "agent");
+    assert.equal(clickAudit.args["selector"], "#submit");
+
+    const typed = await runWith("sandbox_type", { selector: "#q", text: "orbita" });
+    const typeAudit = (typed.details as { computerUse: { action: string; inputOrigin: string; args: Record<string, unknown> } })
+      .computerUse;
+    assert.equal(typeAudit.action, "sandbox-type");
+    assert.equal(typeAudit.inputOrigin, "agent");
+    // 明文留在 details（JSONL 保留明文，与 computer_type 同一条纪律）
+    assert.equal(typeAudit.args["text"], "orbita");
+
+    const uploaded = await runWith("sandbox_upload", { selector: "input[file]", path: "C:\tmp\a.pdf" });
+    const uploadAudit = (
+      uploaded.details as { computerUse: { action: string; inputOrigin: string; args: Record<string, unknown> } }
+    ).computerUse;
+    assert.equal(uploadAudit.action, "sandbox-upload");
+    assert.equal(uploadAudit.inputOrigin, "agent");
+    assert.equal(uploadAudit.args["path"], "C:\tmp\a.pdf");
+  });
+
+  test("只读件与导航不加审计（details 仍是 undefined）", async () => {
+    const { runWith } = setup();
+    for (const [name, params] of [
+      ["sandbox_observe", {}],
+      ["sandbox_extract", {}],
+      ["sandbox_navigate", { url: "https://example.com" }],
+    ] as const) {
+      const result = await runWith(name, params);
+      assert.equal(result.details, undefined, name);
+    }
+  });
+});

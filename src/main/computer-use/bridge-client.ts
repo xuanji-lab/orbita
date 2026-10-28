@@ -32,6 +32,7 @@ import {
   GUEST_COMMAND_TIMEOUT_MS,
   parseComputerUseAdmission,
   parseComputerUseDelivery,
+  type ComputerUseCaptureInfo,
   type ComputerUseDelivery,
   type ComputerUseUiaActReply,
   type ComputerUseUiaAction,
@@ -50,6 +51,8 @@ export interface GuestScreenshot {
   /** 沙箱物理屏尺寸 */
   nativeWidth: number;
   nativeHeight: number;
+  /** 密码框遮罩与用户在场（桥 0.12.0；缺省 = 老桥不报） */
+  capture?: ComputerUseCaptureInfo;
 }
 
 /**
@@ -72,6 +75,25 @@ export interface GuestWindowShot {
   hwnd: number;
   title: string;
   restoredFromMinimized: boolean;
+  /** 同 GuestScreenshot.capture */
+  capture?: ComputerUseCaptureInfo;
+}
+
+/**
+ * 回执里的「遮罩 + 谁在场」（桥 0.12.0）。**老桥（< 0.12.0）没有这几个字段，回 undefined**：
+ * 那时我们不能断言「遮了」也不能断言「没遮」，两条都是谎话；审计里就不写这两个键。
+ * maskedRegions 是唯一的门槛字段：它在，其余四个才可信（它们是同一次回执同一条拼法拼出来的）。
+ */
+function captureFrom(resp: Record<string, unknown>): ComputerUseCaptureInfo | undefined {
+  const maskedRegions = resp.maskedRegions;
+  if (typeof maskedRegions !== "number" || !Number.isFinite(maskedRegions) || maskedRegions < 0) return undefined;
+  return {
+    maskedRegions: Math.round(maskedRegions),
+    maskListed: resp.maskListed === true,
+    maskStale: resp.maskStale === true,
+    maskCacheAgeMs: numberOr(resp.maskCacheAgeMs, -1),
+    userTyping: resp.userTyping === true,
+  };
 }
 
 /**
@@ -111,6 +133,7 @@ export async function fetchGuestWindowShot(
       "guest 桥的窗口截图响应缺字段（width / height / nativeWidth / nativeHeight / hwnd / title / jpeg）",
     );
   }
+  const capture = captureFrom(resp);
   return {
     jpeg: shot.jpeg,
     width,
@@ -120,6 +143,7 @@ export async function fetchGuestWindowShot(
     hwnd,
     title,
     restoredFromMinimized: resp.restoredFromMinimized === true,
+    ...(capture === undefined ? {} : { capture }),
   };
 }
 
@@ -218,9 +242,18 @@ export async function fetchGuestUiaList(
       patterns,
       enabled: row.enabled !== false,
       offscreen: row.offscreen === true,
+      // 老桥（< 0.12.0）不报这个字段：当 false——遮罩在那种桥上根本不会发生，
+      // 把它当 true 只会让模型对一个其实没遮的窗口说「密码框已遮」。
+      isPassword: row.isPassword === true,
     });
   }
-  return { hwnd, window, items, truncated: resp.truncated === true };
+  return {
+    hwnd,
+    window,
+    items,
+    truncated: resp.truncated === true,
+    passwordFields: Math.max(0, Math.round(numberOr(resp.passwordFields, 0))),
+  };
 }
 
 /** uia-act 的三个动作（与契约 ComputerUseUiaAction 同一份；桥里有一份必须逐字一致的名字）。
@@ -1144,7 +1177,15 @@ export async function fetchGuestScreenshot(
     throw new Error("guest 桥的截图响应缺字段（width / height / nativeWidth / nativeHeight / jpeg）");
   }
 
-  return { jpeg: shot.jpeg, width, height, nativeWidth, nativeHeight };
+  const capture = captureFrom(shot.resp);
+  return {
+    jpeg: shot.jpeg,
+    width,
+    height,
+    nativeWidth,
+    nativeHeight,
+    ...(capture === undefined ? {} : { capture }),
+  };
 }
 
 /**

@@ -651,6 +651,8 @@ export class SandboxController {
         nativeWidth: shot.nativeWidth,
         nativeHeight: shot.nativeHeight,
         takenAt: Date.now(),
+        // 密码框遮罩与用户在场（桥 0.12.0）：原样透传，老桥没有就不写
+        ...(shot.capture === undefined ? {} : { capture: shot.capture }),
       };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
@@ -689,6 +691,7 @@ export class SandboxController {
         title: shot.title,
         restoredFromMinimized: shot.restoredFromMinimized,
         takenAt: Date.now(),
+        ...(shot.capture === undefined ? {} : { capture: shot.capture }),
       };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };

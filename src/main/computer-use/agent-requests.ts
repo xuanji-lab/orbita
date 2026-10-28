@@ -19,9 +19,14 @@
  * 用户优先（桥 0.11.0）：像素动作在沙箱里被推迟过时，桥回 yielded / waitedMs，
  * 这一层把它变成正文里的一句「刚才那一下为什么晚了」——模型看不见沙箱窗口，
  * 只靠回执才知道“人在用它”（deferredNote）。不动任何命令的字段与租约。
+ *
+ * 密码框遮罩（桥 0.12.0）：截图回执带 capture（遮了几个密码框、清单过没过期、用户是不是
+ * 正在打字），captureNote 把它翻成一句人话追在正文后面——**没遮必须明说**：让模型以为
+ * 遮了比不遮更坏（它会放心地读图）。
  */
 import {
   COMPUTER_USE_DISPATCHED_HINT,
+  captureNote,
   computerUseGuestCommands,
   parseComputerUseDelivery,
   type ComputerUseAdmission,
@@ -119,7 +124,8 @@ export async function applyComputerUseRequest(
           text:
             `Screenshot of the sandbox desktop: the image is ${shot.width}×${shot.height}, the physical screen is ` +
             `${shot.nativeWidth}×${shot.nativeHeight}. Coordinates you pass to computer_click / computer_scroll are ` +
-            "pixels of this image. Take a fresh screenshot after every action to see what changed.",
+            "pixels of this image. Take a fresh screenshot after every action to see what changed." +
+            captureNote(shot.capture),
           shot: {
             width: shot.width,
             height: shot.height,
@@ -127,6 +133,7 @@ export async function applyComputerUseRequest(
             nativeHeight: shot.nativeHeight,
             data: shot.jpegBase64,
           },
+          ...(shot.capture === undefined ? {} : { capture: shot.capture }),
         };
       }
       case "click": {
@@ -298,7 +305,8 @@ async function windowShot(
       "It is captured from the window's own surface, so other windows covering it do not matter." +
       restored +
       " Coordinates from THIS image are window pixels, not desktop pixels: do not pass them to " +
-      "computer_click — take a normal computer_screenshot (without a window) before clicking.",
+      "computer_click — take a normal computer_screenshot (without a window) before clicking." +
+      captureNote(shot.capture),
     shot: {
       width: shot.width,
       height: shot.height,
@@ -306,6 +314,7 @@ async function windowShot(
       nativeHeight: shot.nativeHeight,
       data: shot.jpegBase64,
     },
+    ...(shot.capture === undefined ? {} : { capture: shot.capture }),
   };
 }
 
@@ -358,14 +367,17 @@ function uiaListText(reply: {
     patterns: readonly string[];
     enabled: boolean;
     offscreen: boolean;
+    isPassword: boolean;
   }[];
   truncated: boolean;
+  passwordFields: number;
 }): string {
   const title = reply.window.title === "" ? "(no title)" : reply.window.title;
   const lines = reply.items.map((item) => {
     const name = item.name === "" ? `(automationId ${item.automationId})` : `"${item.name}"`;
     const patterns = item.patterns.length === 0 ? "no pattern (pixels only)" : item.patterns.join("/");
     const flags: string[] = [];
+    if (item.isPassword) flags.push("password");
     if (!item.enabled) flags.push("disabled");
     if (item.offscreen) flags.push("offscreen");
     const id = item.automationId === "" ? "" : ` id=${item.automationId}`;
@@ -378,6 +390,12 @@ function uiaListText(reply: {
   const header =
     `UI Automation controls in window "${title}" (hwnd ${reply.hwnd}): ${reply.items.length} listed` +
     (reply.truncated ? " (there are more — raise maxItems to see them)" : "") +
+    (
+      reply.passwordFields > 0
+        ? `. ${reply.passwordFields} password field(s) are in this window: never put a secret in them and do not ` +
+          "try to read them. Their positions are remembered, so screenshots of this window will black them out"
+        : ""
+    ) +
     ". Lines are: ref · control type \"name\" · supported patterns · position/size · automationId.";
   const body = lines.length === 0 ? "No actionable controls were found in this window." : lines.join("\n");
   const tail =

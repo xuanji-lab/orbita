@@ -1146,8 +1146,10 @@ describe("UIA 车道（uia-list / uia-act）", () => {
         patterns: ["value"],
         enabled: true,
         offscreen: false,
+        isPassword: false,
       });
       assert.equal(reply.truncated, true);
+      assert.equal(reply.passwordFields, 0, "老桥（< 0.12.0）不报 passwordFields → 0");
       assert.equal(bridge.requests[0]?.command, "uia-list");
       assert.equal(bridge.requests[0]?.hwnd, 4321);
       assert.equal(bridge.requests[0]?.maxItems, 60);
@@ -1274,6 +1276,153 @@ describe("UIA 车道（uia-list / uia-act）", () => {
     try {
       await assert.rejects(fetchGuestUiaAct(dir, { hwnd: 1, action: "invoke", ref: 1 }), /不支持 invoke/);
       await assert.rejects(fetchGuestUiaAct(dir, { hwnd: 1, action: "invoke", ref: 1 }), /computer_click/);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── 密码框遮罩与 isPassword（桥 0.12.0）─────────────────────────────────────
+//
+// 解析要守住一条线：**老桥不报这几个字段时不许编**。编 true 会让审计记「当时用户在打字」，
+// 编 false 会让它记「没遮」——两种都是假证词。所以 capture 整体缺省，掩码字段缺失时
+// capture 为 undefined；只有 maskedRegions 在（同一次回执同一条拼法出来的）才认其余四个。
+describe("bridge-client：遮罩字段的解析（桥 0.12.0）", () => {
+  test("screenshot：五个字段都解析出来", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, (req) => ({
+      resp: {
+        ok: true,
+        nativeWidth: 2560,
+        nativeHeight: 1440,
+        width: 1280,
+        height: 720,
+        jpeg: `cmd-${String(req.seq).padStart(6, "0")}.jpg`,
+        maskedRegions: 2,
+        maskListed: true,
+        maskStale: false,
+        maskCacheAgeMs: 1200,
+        userTyping: true,
+      },
+      jpg: FAKE_JPEG,
+    }));
+    try {
+      const shot = await fetchGuestScreenshot(dir, 1280);
+      assert.deepEqual(shot.capture, {
+        maskedRegions: 2,
+        maskListed: true,
+        maskStale: false,
+        maskCacheAgeMs: 1200,
+        userTyping: true,
+      });
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("screenshot：老桥没有这几个字段 → capture 缺失（不编 false）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, (req) => ({
+      resp: {
+        ok: true,
+        nativeWidth: 2560,
+        nativeHeight: 1440,
+        width: 1280,
+        height: 720,
+        jpeg: `cmd-${String(req.seq).padStart(6, "0")}.jpg`,
+      },
+      jpg: FAKE_JPEG,
+    }));
+    try {
+      const shot = await fetchGuestScreenshot(dir, 1280);
+      assert.equal(shot.capture, undefined);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("win-shot：同样解析（两条截图车道共用一份门槛）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, (req) => ({
+      resp: {
+        ok: true,
+        hwnd: 77,
+        title: "登录 - Edge",
+        restoredFromMinimized: false,
+        nativeWidth: 800,
+        nativeHeight: 600,
+        width: 800,
+        height: 600,
+        jpeg: `cmd-${String(req.seq).padStart(6, "0")}.jpg`,
+        maskedRegions: 1,
+        maskListed: true,
+        maskStale: false,
+        maskCacheAgeMs: 300,
+        userTyping: false,
+      },
+      jpg: FAKE_JPEG,
+    }));
+    try {
+      const shot = await fetchGuestWindowShot(dir, { hwnd: 77 });
+      assert.equal(shot.capture?.maskedRegions, 1);
+      assert.equal(shot.capture?.userTyping, false);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-list：每一项的 isPassword 与回执的 passwordFields 都解析（老桥缺省当 false / 0）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({
+      resp: {
+        ok: true,
+        hwnd: 5,
+        window: { title: "登录", className: "Chrome_WidgetWin_1" },
+        items: [
+          {
+            ref: 1,
+            name: "",
+            controlType: "edit",
+            automationId: "password",
+            className: "Edit",
+            x: 10,
+            y: 20,
+            w: 300,
+            h: 30,
+            patterns: ["value"],
+            enabled: true,
+            offscreen: false,
+            isPassword: true,
+          },
+          {
+            ref: 2,
+            name: "登录",
+            controlType: "button",
+            automationId: "",
+            className: "Button",
+            x: 10,
+            y: 60,
+            w: 80,
+            h: 30,
+            patterns: ["invoke"],
+            enabled: true,
+            offscreen: false,
+          },
+        ],
+        truncated: false,
+        passwordFields: 1,
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaList(dir, { hwnd: 5 });
+      assert.equal(reply.items[0]?.isPassword, true);
+      // 老桥条目没有这个键 → false（遮罩在那种桥上根本不会发生，不能对模型说「已遮」）
+      assert.equal(reply.items[1]?.isPassword, false);
+      assert.equal(reply.passwordFields, 1);
     } finally {
       bridge.stop();
       await rm(dir, { recursive: true, force: true });

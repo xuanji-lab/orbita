@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.11.0");
+      assert.equal(info.version, "0.12.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -924,6 +924,62 @@ stderr: ${r.stderr}`);
     assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
   },
 );
+
+// ── 密码框遮罩（0.12.0）────────────────────────────────────────────────────────
+//
+// 这张图会进模型上下文，密码不该在里面。遮罩算法的每一步都是纯整数运算（平移 / 裁剪 /
+// 过期判定），所以在宿主上就能验完；真机上要验的是另外两件：uia-list 真的读到了密码框
+// （vtable 槽 35 是对的）、截图里那块真的是黑的——交给沙箱验收（p1-mask-probe.mjs）。
+
+test(
+  "密码框遮罩 selftest：平移 / 裁剪 / DPI 不换算 / 过期策略 / 缓存 / 回执字段",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-mask"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    // 用例数钉在 50 以上：这一组里包含「坐标不换算」「过期边界」「缓存不被外部改到」
+    // 这些删掉就再也发现不了的断言，别越改越少
+    assert.ok(parsed.cases >= 50, `用例数应 >= 50，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test("遮罩接在两条截图路径上，且出图/缩放之前（源码级，不真截图）", () => {
+  const program = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+  assert.match(program, /--selftest-mask/, "纯函数自测要能从命令行跑到");
+  // 整桌面截图：先涂黑、再缩放。顺序反了就会把黑块放大成错的尺寸（位置也会偏）
+  assert.ok(program.indexOf("Mask.Paint(full, mask.Rects)") >= 0, "screenshot 必须涂黑");
+  assert.ok(
+    program.indexOf("Mask.Paint(full, mask.Rects)") < program.indexOf("WinShot.FitLongEdge(nativeW, nativeH, maxWidth, out outW, out outH)"),
+    "涂黑必须在缩放之前",
+  );
+
+  const winShot = fs.readFileSync(path.join(scriptDir, "WinShot.cs"), "utf8");
+  assert.ok(winShot.indexOf("Mask.Paint(captured, mask.Rects)") >= 0, "win-shot 必须涂黑");
+  assert.ok(
+    winShot.indexOf("Mask.Paint(captured, mask.Rects)") < winShot.indexOf("EncodeScaled(captured, nativeW, nativeH, outW, outH)"),
+    "涂黑必须在编码/缩放之前",
+  );
+  // 窗口截图的图像原点是窗口（PW_CLIENTONLY 回退路径下是客户区）左上角：取错原点就遮偏
+  assert.match(winShot, /ClientToScreen/);
+
+  // 两条车道共用一份回执拼法（两处各拼一遍迟早拼出两种形状）
+  assert.ok(program.indexOf("Mask.CaptureFields(mask)") >= 0 && winShot.indexOf("Mask.CaptureFields(mask)") >= 0);
+
+  const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
+  assert.match(uia, /SlotCurrentIsPassword/, "isPassword 走 vtable 槽（与 ReadBool 同一套）");
+  assert.match(uia, /PasswordRects\.Record\(hwnd\.ToInt64\(\)/, "uia-list 结束时要记账给截图用");
+  // 密码框必须在 IsListable **之前**判：Chromium 的密码框常常没有 name/automationId
+  assert.ok(
+    uia.indexOf("bool isPassword = ReadIsPassword(element)") < uia.indexOf("if (!IsListable(isControl"),
+    "密码框要在过滤之前收集（否则会被过滤掉，遮罩就漏了）",
+  );
+});
 
 test(
   "UIA 客户端自检：COM 客户端拿得到、AutoSetFocus 关掉并读回（只建 in-proc 对象，不取任何窗口）",

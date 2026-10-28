@@ -143,6 +143,7 @@ function fakeGuest(options: {
               patterns: ["value"],
               enabled: true,
               offscreen: false,
+              isPassword: false,
             },
             {
               ref: 2,
@@ -157,9 +158,11 @@ function fakeGuest(options: {
               patterns: ["invoke"],
               enabled: true,
               offscreen: false,
+              isPassword: false,
             },
           ],
           truncated: false,
+          passwordFields: 0,
         }
       );
     },
@@ -500,6 +503,7 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
         window: { title: "记事本", className: "Notepad" },
         items: [],
         truncated: true,
+        passwordFields: 0,
       },
     });
     const outcome = await run(truncated.guest, { action: "uia-list", window: "记事", maxItems: 1 });
@@ -588,5 +592,149 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
       ok: false,
       error: human,
     });
+  });
+});
+
+// ── 密码框遮罩与归属（桥 0.12.0）────────────────────────────────────────────
+//
+// 两条纪律：
+//   ① 遮了就说「这块黑是有意的」，并且模型要能学到「密码不该进你的上下文」；
+//   ② **没遮必须明说**——让模型以为遮了比不遮更坏（它会放心地读图）。
+// 这两句之外，回执正文一个字都不该变（那些文案在真实会话里已经被稳住了）。
+describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
+  test("整桌面截图：遮了 N 块 → 正文说明 + outcome.capture 原样透传（审计要用）", async () => {
+    const capture = {
+      maskedRegions: 2,
+      maskListed: true,
+      maskStale: false,
+      maskCacheAgeMs: 1500,
+      userTyping: false,
+    };
+    const { guest } = fakeGuest({
+      shot: {
+        ok: true,
+        jpegBase64: "anBlZw==",
+        width: 1280,
+        height: 720,
+        nativeWidth: 2560,
+        nativeHeight: 1440,
+        takenAt: 1,
+        capture,
+      },
+    });
+    const outcome = await run(guest, { action: "screenshot", maxWidth: 1280 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /2 password fields in this image were blacked out/);
+    assert.doesNotMatch(outcome.text, /NOT masked/);
+    // 审计读的就是这一份（工具层把它翻成 maskedRegions / userTypingAtCapture）
+    assert.deepEqual(outcome.capture, capture);
+  });
+
+  test("整桌面截图：清单过期 → 正文必须写明「这张图没遮」", async () => {
+    const { guest } = fakeGuest({
+      shot: {
+        ok: true,
+        jpegBase64: "anBlZw==",
+        width: 1280,
+        height: 720,
+        nativeWidth: 2560,
+        nativeHeight: 1440,
+        takenAt: 1,
+        capture: { maskedRegions: 0, maskListed: false, maskStale: true, maskCacheAgeMs: 61_000, userTyping: false },
+      },
+    });
+    const outcome = await run(guest, { action: "screenshot" });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /WARNING: this image is NOT masked/);
+    assert.match(outcome.text, /61s old/);
+    assert.match(outcome.text, /computer_uia list on that window again/);
+  });
+
+  test("整桌面截图：用户在打字 → 正文添一句「图可能已经过时」", async () => {
+    const { guest } = fakeGuest({
+      shot: {
+        ok: true,
+        jpegBase64: "anBlZw==",
+        width: 1280,
+        height: 720,
+        nativeWidth: 2560,
+        nativeHeight: 1440,
+        takenAt: 1,
+        capture: { maskedRegions: 0, maskListed: true, maskStale: false, maskCacheAgeMs: 100, userTyping: true },
+      },
+    });
+    const outcome = await run(guest, { action: "screenshot" });
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /A person was typing in the sandbox/);
+  });
+
+  test("老桥回执没有 capture：正文一个字不加、outcome 也不编一个 capture 出来", async () => {
+    const { guest } = fakeGuest({});
+    const outcome = await run(guest, { action: "screenshot" });
+    if (!outcome.ok) return;
+    assert.doesNotMatch(outcome.text, /NOT masked/);
+    assert.doesNotMatch(outcome.text, /blacked out/);
+    assert.equal(outcome.capture, undefined);
+  });
+
+  test("窗口截图同样带遮罩说明（两条截图车道共用一份拼法）", async () => {
+    const { guest } = fakeGuest({
+      windowShot: {
+        ok: true,
+        jpegBase64: "d2luZG93",
+        width: 800,
+        height: 600,
+        nativeWidth: 800,
+        nativeHeight: 600,
+        hwnd: 4321,
+        title: "登录 - Edge",
+        restoredFromMinimized: false,
+        takenAt: 2,
+        capture: { maskedRegions: 1, maskListed: true, maskStale: false, maskCacheAgeMs: 800, userTyping: true },
+      },
+    });
+    const outcome = await run(guest, { action: "screenshot", window: 4321 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /1 password field in this image was blacked out/);
+    assert.match(outcome.text, /A person was typing in the sandbox/);
+    assert.match(outcome.text, /do not pass them to computer_click/, "窗口图的坐标纪律不能被遮罩说明顶掉");
+  });
+
+  test("uia-list：密码框那一行标 password，标题行点名「这是密码框、别往里写秘密」", async () => {
+    const { guest } = fakeGuest({
+      uiaList: {
+        ok: true,
+        hwnd: 4321,
+        window: { title: "登录 - Edge", className: "Chrome_WidgetWin_1" },
+        items: [
+          {
+            ref: 1,
+            name: "",
+            controlType: "edit",
+            automationId: "password",
+            className: "Edit",
+            x: 100,
+            y: 200,
+            w: 300,
+            h: 30,
+            patterns: ["value"],
+            enabled: true,
+            offscreen: false,
+            isPassword: true,
+          },
+        ],
+        truncated: false,
+        passwordFields: 1,
+      },
+    });
+    const outcome = await run(guest, { action: "uia-list", window: 4321 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /1 · edit \(automationId password\) · supports value, password/);
+    assert.match(outcome.text, /1 password field\(s\) are in this window/);
+    assert.match(outcome.text, /screenshots of this window will black them out/);
   });
 });

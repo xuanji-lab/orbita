@@ -12,8 +12,11 @@ import {
   COMPUTER_USE_ADMISSION_VERDICTS,
   COMPUTER_USE_DEFAULT_ALLOWED_APPS,
   COMPUTER_USE_DISPATCHED_HINT,
+  COMPUTER_USE_MASK_CACHE_MAX_AGE_MS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_UIA_TIMEOUT_MS,
+  captureNote,
+  computerUseAudit,
   computerUseChannels,
   computerUseUiaErrors,
   isUiaFocusRequest,
@@ -25,6 +28,7 @@ import {
   parseComputerUseDelivery,
   screenshotPointToNative,
   type ComputerUseToolRequest,
+  type ComputerUseCaptureInfo,
 } from "./computer-use.ts";
 
 /** 回图 1280×720，物理屏 2560×1440（长边缩一半的常见情形） */
@@ -222,5 +226,82 @@ describe("应用级准入契约（桥 0.11.0 的观察模式）", () => {
       "notepad.exe",
       "calc.exe",
     ]);
+  });
+});
+
+/** 一张「遮了、清单新鲜、刚拍时没人打字」的基准 capture，各用例只改关心的那个字段 */
+const masked: ComputerUseCaptureInfo = {
+  maskedRegions: 1,
+  maskListed: true,
+  maskStale: false,
+  maskCacheAgeMs: 900,
+  userTyping: false,
+};
+
+describe("captureNote（截图回执里那句「遮了 / 没遮」）", () => {
+  test("遮了：告诉模型那块黑是有意的、密码不该进上下文", () => {
+    const note = captureNote(masked);
+    assert.match(note, /1 password field in this image was blacked out/);
+    assert.match(note, /black block is deliberate/);
+    // 模型要知道下一步：要密码就问用户，而不是去读黑块
+    assert.match(note, /ask the user/);
+    assert.doesNotMatch(note, /NOT masked/);
+  });
+
+  test("遮了多块：复数写法（回执语法错了模型会读歪）", () => {
+    const note = captureNote({ ...masked, maskedRegions: 3 });
+    assert.match(note, /3 password fields in this image were blacked out/);
+  });
+
+  test("清单过期：**必须明说没遮**，并给出「重新 list 再截图」的下一步", () => {
+    const note = captureNote({ ...masked, maskedRegions: 0, maskListed: false, maskStale: true, maskCacheAgeMs: 42_000 });
+    assert.match(note, /WARNING: this image is NOT masked/);
+    // 年龄要说清（模型据此判断「多久之前的事」），并且点名过期线
+    assert.match(note, /42s old/);
+    assert.match(note, /30s/);
+    assert.match(note, /computer_uia list on that window again/);
+  });
+
+  test("从没 list 过：也明说没遮，并说清它现在能做什么", () => {
+    const old = captureNote({ ...masked, maskedRegions: 0, maskListed: false, maskStale: false, maskCacheAgeMs: -1 });
+    assert.match(old, /WARNING: this image is NOT masked/);
+    assert.match(old, /nothing has been listed with computer_uia yet/);
+    assert.match(old, /Run computer_uia list on that window first/);
+  });
+
+  test("看过而且没有密码框：一个字都不添（正常截图的文案不能被这一刀改掉）", () => {
+    assert.equal(captureNote({ ...masked, maskedRegions: 0 }), "");
+  });
+
+  test("老桥不报 capture：不添话、也不编造「已遮」", () => {
+    assert.equal(captureNote(undefined), "");
+  });
+
+  test("用户在打字：添一句「你看到的可能已经过时」（用户优先的既有语义）", () => {
+    const note = captureNote({ ...masked, maskedRegions: 0, userTyping: true });
+    assert.match(note, /A person was typing in the sandbox/);
+    assert.match(note, /out of date/);
+  });
+
+  test("过期线与桥的 CacheMaxAgeMs 同一个数（C# 与 TS 各一份，改了这里会红）", () => {
+    assert.equal(COMPUTER_USE_MASK_CACHE_MAX_AGE_MS, 30_000);
+  });
+});
+
+describe("computerUseAudit（审计载荷的唯一工厂）", () => {
+  test("四个基础字段：action / args / at / inputOrigin", () => {
+    const audit = computerUseAudit("click", { x: 1, y: 2 }, 1234);
+    assert.deepEqual(audit, { action: "click", args: { x: 1, y: 2 }, at: 1234, inputOrigin: "agent" });
+  });
+
+  test("不传时刻就用当下（调用点不必各写一遍 Date.now）", () => {
+    const before = Date.now();
+    const audit = computerUseAudit("type", { text: "hi" });
+    assert.ok(audit.at >= before && audit.at <= Date.now());
+  });
+
+  test("sandbox 写件与 UIA 用同一份形状（三段代码拼三份字段就会漂）", () => {
+    assert.equal(computerUseAudit("sandbox-click", { selector: "#a" }).inputOrigin, "agent");
+    assert.equal(computerUseAudit("uia-act", { action: "invoke", ref: 1 }).inputOrigin, "agent");
   });
 });

@@ -391,3 +391,94 @@ describe("computer_* 的工具描述：交付口径写进模型读得到的地�
     assert.doesNotMatch(tools.get("computer_uia")?.description ?? "", /do not replay the same action/);
   });
 });
+
+// ── 审计归属：这一下是谁干的、截图时人在不在输入（桥 0.12.0）──────────────────
+//
+// 会话 JSONL 里的 details.computerUse 要能回答两个事后问题：
+//   ① 这一下是谁做的 → 每条写动作都有 inputOrigin（现在只有 agent）；
+//   ② 那张进了模型上下文的图，当时用户在不在里面打字 / 有没有遮密码框。
+describe("computer_* 的审计归属（inputOrigin / maskedRegions / userTypingAtCapture）", () => {
+  test("五个写动作都带 inputOrigin：agent（截图也算 agent 发起的观察）", async () => {
+    const { run, answer, sent, takeScreenshot } = setup();
+    await takeScreenshot();
+    const cases: Array<[string, unknown]> = [
+      ["computer_click", { x: 1, y: 2 }],
+      ["computer_type", { text: "hi" }],
+      ["computer_key", { key: "enter" }],
+      ["computer_scroll", { deltaY: 1 }],
+    ];
+    for (const [name, params] of cases) {
+      const pending = run(name, params);
+      answer(sent.length - 1, { ok: true, text: "ok" });
+      const audit = ((await pending).details as { computerUse: { inputOrigin?: string } }).computerUse;
+      assert.equal(audit.inputOrigin, "agent", name);
+    }
+  });
+
+  test("截图：inputOrigin + 遮罩块数 + 当时用户在不在输入", async () => {
+    const { run, answer, sent } = setup();
+    const pending = run("computer_screenshot", {});
+    answer(sent.length - 1, {
+      ok: true,
+      text: "shot",
+      shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "anBlZw==" },
+      capture: { maskedRegions: 2, maskListed: true, maskStale: false, maskCacheAgeMs: 500, userTyping: true },
+    });
+    const audit = (
+      (await pending).details as {
+        computerUse: { inputOrigin?: string; maskedRegions?: number; userTypingAtCapture?: boolean; args: Record<string, unknown> };
+      }
+    ).computerUse;
+    assert.equal(audit.inputOrigin, "agent");
+    assert.equal(audit.maskedRegions, 2);
+    assert.equal(audit.userTypingAtCapture, true);
+    // 整桌面截图不该记 window（那会让事后回看误以为是某个窗口的图）
+    assert.equal("window" in audit.args, false);
+  });
+
+  test("窗口截图：审计记下拍的是哪个窗口", async () => {
+    const { run, answer, sent } = setup();
+    const pending = run("computer_screenshot", { hwnd: 4321 });
+    answer(sent.length - 1, {
+      ok: true,
+      text: "shot",
+      shot: { width: 800, height: 600, nativeWidth: 800, nativeHeight: 600, data: "d2luZG93" },
+      capture: { maskedRegions: 0, maskListed: true, maskStale: false, maskCacheAgeMs: 10, userTyping: false },
+    });
+    const audit = (
+      (await pending).details as { computerUse: { args: Record<string, unknown>; maskedRegions?: number; userTypingAtCapture?: boolean } }
+    ).computerUse;
+    assert.equal(audit.args["window"], 4321);
+    // «遮了 0 块» 与 «当时没人打字» 也要落下来：0/false 是有信息量的
+    assert.equal(audit.maskedRegions, 0);
+    assert.equal(audit.userTypingAtCapture, false);
+  });
+
+  test("老桥不带 capture：两个键都不写（不知道就不编 false）", async () => {
+    const { run, answer, sent, takeScreenshot } = setup();
+    const pending = run("computer_screenshot", {});
+    answer(sent.length - 1, {
+      ok: true,
+      text: "shot",
+      shot: { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440, data: "anBlZw==" },
+    });
+    const audit = (
+      (await pending).details as { computerUse: Record<string, unknown> }
+    ).computerUse;
+    assert.equal("maskedRegions" in audit, false);
+    assert.equal("userTypingAtCapture" in audit, false);
+    await takeScreenshot();
+  });
+
+  test("uia-act：写动作也有归属，入参里带 perform / ref / window", async () => {
+    const { run, answer, sent } = setup();
+    const pending = run("computer_uia", { action: "invoke", ref: 3, hwnd: 4321 });
+    answer(sent.length - 1, { ok: true, text: "Invoked" });
+    const audit = (
+      (await pending).details as { computerUse: { action: string; inputOrigin?: string; args: Record<string, unknown> } }
+    ).computerUse;
+    assert.equal(audit.action, "uia-act");
+    assert.equal(audit.inputOrigin, "agent");
+    assert.deepEqual(audit.args, { action: "invoke", ref: 3, window: 4321 });
+  });
+});

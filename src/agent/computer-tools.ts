@@ -21,11 +21,13 @@ import { RequestBroker } from "./request-broker.ts";
 import {
   COMPUTER_USE_DISPATCHED_HINT,
   COMPUTER_USE_SHOT_MAX_WIDTH,
+  computerUseAudit,
   GUEST_COMMAND_TIMEOUT_MS,
   computerUseUiaErrors,
   screenshotPointToNative,
   type ComputerUseAudit,
   type ComputerUseButton,
+  type ComputerUseCaptureInfo,
   type ComputerUseShotGeometry,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
@@ -97,15 +99,28 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
    * 一轮，不放手的话「停止」按钮会失灵（browser-tools.ts 同款）。
    */
   /**
-   * 审计载荷（details.computerUse）：动作 + 模型给的原始入参 + 时刻。**只给 UI 与
-   * 日志**，不入模型上下文。入参记的是模型给的那份（图像坐标 / 原文本），不是换算后
-   * 下发到 guest 的那份——回看的人要的是「它以为自己点了哪里、打了什么」。
+   * 审计载荷（details.computerUse）：动作 + 模型给的原始入参 + 时刻 + **谁干的**（inputOrigin）。
+   * **只给 UI 与日志**，不入模型上下文。入参记的是模型给的那份（图像坐标 / 原文本），
+   * 不是换算后下发到 guest 的那份——回看的人要的是「它以为自己点了哪里、打了什么」。
+   * 字段与顺序由 shared 的 computerUseAudit 一处定（sandbox_* 写件用的也是它）。
    */
-  const audit = (args: Record<string, unknown>, action: ComputerUseAudit["action"]): ComputerUseAudit => ({
-    action,
-    args,
-    at: Date.now(),
-  });
+  const audit = (args: Record<string, unknown>, action: ComputerUseAudit["action"]): ComputerUseAudit =>
+    computerUseAudit(action, args);
+
+  /**
+   * 截图的审计：在 audit 之上多两档归属信号（桥 0.12.0）——
+   *   · `maskedRegions`：这张图里被涂黑了几个密码框；
+   *   · `userTypingAtCapture`：拍的那一刻用户是不是正在沙箱里输入。
+   * 老桥不带 capture：两个键都不写（不知道就是不知道，不编 false）。
+   */
+  const shotAudit = (
+    args: Record<string, unknown>,
+    capture: ComputerUseCaptureInfo | undefined,
+  ): ComputerUseAudit => {
+    const base = audit(args, "screenshot");
+    if (capture === undefined) return base;
+    return { ...base, maskedRegions: capture.maskedRegions, userTypingAtCapture: capture.userTyping };
+  };
 
   const call = async (
     request: ComputerUseToolRequest,
@@ -177,7 +192,9 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "**Pass window (part of a window title) or hwnd to capture only that window**: that works even when other " +
       "windows cover it and it does not take focus, so it is the cheap way to check on a window you are not " +
       "driving. A window image's pixels are window pixels, not desktop pixels: take a normal screenshot (no " +
-      "window) before clicking. " +
+      "window) before clicking. Password fields are blacked out in the image, but only after you have listed " +
+      "that window once with computer_uia (list records where the password fields are): if the result warns " +
+      "that the image is NOT masked and you need to see that window, list it first and screenshot again. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
       "start it in Settings › Experimental features › Computer use; do not retry.",
@@ -216,7 +233,13 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
           { type: "text" as const, text: result.text },
           { type: "image" as const, data: shot.data, mimeType: "image/jpeg" as const },
         ],
-        details: { computerUse: audit({ maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH }, "screenshot") },
+        // 拍的哪个窗口也记下来（只记 maxWidth 的话，事后回看分不清是全屏还是某个窗口）
+        details: {
+          computerUse: shotAudit(
+            target === undefined ? { maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH } : { maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH, window: target },
+            result.capture,
+          ),
+        },
       };
     },
   };
@@ -393,7 +416,9 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
       "the right way to drive a background window. Start with action \"list\" (read-only) to get refs and names, then " +
       "act on one by ref (or name). A ref belongs to the latest list of that window; re-list after the window changes " +
-      "(page navigation, a new dialog). Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
+      "(page navigation, a new dialog). Listing also records where that window's password fields are, which is what " +
+      "lets later screenshots of it black them out — so list before you screenshot a window that may show a password. " +
+      "Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
       "documents — sets the value directly, no IME needed), selection (list items, tab items). " +
       "There is no \"focus\" action — it used to exist and was removed, because moving the keyboard focus takes " +
       "the desktop away from other sessions: to move focus, click the target with computer_click, or just use " +
@@ -500,7 +525,22 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         },
         signal,
       );
-      return { content: [{ type: "text" as const, text: result.text }], details: undefined };
+      // UIA 写动作也要留归属（inputOrigin）：它不经过 SendInput，但同样是「agent 对这个窗口做了什么」
+      return {
+        content: [{ type: "text" as const, text: result.text }],
+        details: {
+          computerUse: audit(
+            {
+              action: rawAction,
+              ...(ref === undefined ? {} : { ref: Math.round(ref) }),
+              ...(name === "" ? {} : { name }),
+              ...(typeof value === "string" ? { value } : {}),
+              window: target,
+            },
+            "uia-act",
+          ),
+        },
+      };
     },
   };
 
