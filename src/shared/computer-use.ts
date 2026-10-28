@@ -328,6 +328,13 @@ export const COMPUTER_USE_GUEST_DOWNLOAD_DIR = "C:\\orbita-out\\downloads";
 export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
 
 /**
+ * 密码框矩形缓存的过期线（毫秒）。**与 guest 桥的 `Mask.CacheMaxAgeMs` 同一个数字**：
+ * 桥按它决定遮不遮，宿主按它写「这张图没遮」那句人话（两侧各有一份常量，C# 与 TS 不能共享
+ * 一个定义，改一处必须改另一处）。取 30s 的理由写在 guest-bridge/Mask.cs。
+ */
+export const COMPUTER_USE_MASK_CACHE_MAX_AGE_MS = 30_000;
+
+/**
  * 沙箱是否允许出网的**缺省值**（= 允许）。**全栈唯一来源**：
  * `shared/settings.ts` 的 `effectiveAllowNetwork`（读设置时的兜底）、主进程控制器
  * （没注入 getter / 读失败 / 读超时）、`renderWsbXml`（不传 allowNetwork）与渲染层
@@ -650,6 +657,26 @@ export type ComputerUseStartResult = { ok: true } | { ok: false; error: string }
 export type ComputerUseStopResult = { ok: true } | { ok: false; error: string };
 
 /**
+ * 一张截图的「遮罩 + 谁在场」信息（桥 0.12.0）。两类截图共用一份：整桌面与按窗口。
+ *
+ * 为什么要把它单独成一档（而不只写进正文）：审计（`details.computerUse`）要能事后回答
+ * 「这张进过模型上下文的图，当时遮没遮密码框、人是不是正在里面打字」。存成结构化的几个数/布尔
+ * 比从正文里正则抽可靠。
+ */
+export interface ComputerUseCaptureInfo {
+  /** 这张图里被涂黑的密码框数（0 = 没有密码框需要遮，或没遮） */
+  maskedRegions: number;
+  /** 有没有「可用的」控件清单：false = 从没 uia-list 过（不知道密码框在哪），这张图没遮 */
+  maskListed: boolean;
+  /** 有清单但全部过期（> COMPUTER_USE_MASK_CACHE_MAX_AGE_MS）：这张图**没遮** */
+  maskStale: boolean;
+  /** 最近一份控件清单的年龄（毫秒；-1 = 没有任何清单） */
+  maskCacheAgeMs: number;
+  /** 拍这张图的那一刻用户是不是正在输入（桥的 input-status：lastRealAgeMs < 400ms） */
+  userTyping: boolean;
+}
+
+/**
  * computerUseScreenshot 的回执：guest 桥按 maxWidth 缩放后的 JPEG + 两套尺寸。
  * width/Height 是**回图**的像素（模型看到的那张图），nativeWidth/Height 是**沙箱物理屏**
  * 的像素——模型给的坐标是前者，注入 SendInput 要的是后者，两者靠这一对尺寸换算
@@ -666,6 +693,11 @@ export type ComputerUseScreenshotResult =
       nativeWidth: number;
       nativeHeight: number;
       takenAt: number;
+      /**
+       * 密码框遮罩与用户在场（桥 0.12.0）。缺省 = 老桥（< 0.12.0）没这条信息：
+       * 那时宿主不能断言「遮了」也不能断言「没遮」，所以不写进审计也不往正文添话。
+       */
+      capture?: ComputerUseCaptureInfo;
     }
   | { ok: false; error: string };
 
@@ -706,6 +738,8 @@ export type ComputerUseWindowShotResult =
       /** 目标最小化过、已被 ShowWindow(SW_SHOWNOACTIVATE) 恢复（不抢焦点） */
       restoredFromMinimized: boolean;
       takenAt: number;
+      /** 同 ComputerUseScreenshotResult.capture（桥 0.12.0；缺省 = 老桥） */
+      capture?: ComputerUseCaptureInfo;
     }
   | { ok: false; error: string };
 
@@ -766,6 +800,12 @@ export interface ComputerUseUiaItem {
   enabled: boolean;
   /** 控件不在可见区域（滚动到它 / 切到那个标签页之后才可动作） */
   offscreen: boolean;
+  /**
+   * 密码框（UIA_IsPasswordPropertyId）。**两项用途**：
+   *   ① 告诉模型「这一条是密码框」——别把秘密 setValue 进去，也别去读它；
+   *   ② 截图遮罩的数据源就是这个字段的矩形（guest 桥 Mask.cs）。
+   */
+  isPassword: boolean;
 }
 
 /** uia-list 回执里的窗口信息（从 UIA 根元素读，读不到时用 Win32 标题兜底） */
@@ -784,6 +824,11 @@ export interface ComputerUseUiaListReply {
   items: ComputerUseUiaItem[];
   /** 命中的控件超过 maxItems，后面的没回（模型可以调大 maxItems，或者按 name 直接动作） */
   truncated: boolean;
+  /**
+   * 本窗口里看到几个密码框（桥 0.12.0）。位置已被记进桥的遮罩缓存：接下来的截图会遮住它们。
+   * 0 也可能是「这个窗口没有密码框」或「老桥不报这个字段」——两者对模型都没有区别。
+   */
+  passwordFields: number;
 }
 
 /** uia-act 的回执载荷（成功那一支） */
@@ -966,6 +1011,12 @@ export type ComputerUseToolOutcome =
       text: string;
       /** 只有 screenshot 带：回图字节与两套尺寸（工具层换算坐标要靠它） */
       shot?: ComputerUseShot;
+      /**
+       * 只有截图带：遮罩结果与用户是否正在输入（桥 0.12.0）。
+       * 工具层拿它写审计（`details.computerUse` 的 maskedRegions / userTypingAtCapture）；
+       * **模型看不到这些字段**——它看到的是 text 里那句人话。
+       */
+      capture?: ComputerUseCaptureInfo;
     }
   | { ok: false; error: string };
 
@@ -986,6 +1037,68 @@ export interface ComputerUseAudit {
   args: Record<string, unknown>;
   /** 调用发起的时刻（毫秒） */
   at: number;
+  /**
+   * 这一下是**谁**干的。现在只有 agent 自己能用这些工具，所以永远是 "agent"；
+   * 留成字段是为了让会话记录能回答「这一下是不是人亲自做的」（以后接用户优先的车道时
+   * 才有第二个值）。像素四件、UIA、sandbox_* 写件、截图都记它。
+   */
+  inputOrigin: "agent";
+  /** 截图专用：拍的那一刻用户是不是正在沙箱里输入（桥的 input-status，< 400ms 算在打） */
+  userTypingAtCapture?: boolean;
+  /** 截图专用：图里被涂黑的密码框数（0 = 没有密码框 / 清单过期没遮） */
+  maskedRegions?: number;
+}
+
+/**
+ * 审计载荷的唯一工厂（`details.computerUse` 的真源）。像素 / UIA / 沙盒浏览器三条车道
+ * 共用一份：字段名与顺序在一处定，免得三处各拼一遍、拼出三种形状。
+ */
+export function computerUseAudit(
+  action: ComputerUseAudit["action"],
+  args: Record<string, unknown>,
+  at: number = Date.now(),
+): ComputerUseAudit {
+  return { action, args, at, inputOrigin: "agent" };
+}
+
+/**
+ * 截图回执正文后面要追的那句「遮了 / 没遮」人话（**纯函数**，两条截图路径共用，单测直接验）。
+ *
+ * 三条规则，对应三种真实处境：
+ *   · 遮了 → 告诉模型「这几块是故意的黑块，密码不该进你的上下文，也别去读」；
+ *   · 有清单但过期 → **必须明说没遮**：让模型以为遮了的代价比不遮更大（它会放心读图）；
+ *   · 从没 list 过 → 同上，并给出它当下能做的事（先 list 再截图）。
+ * 没有密码框且清单是新的（`maskListed && !maskStale && maskedRegions === 0`）什么都不说：
+ * 正常截图一个字都不该变——那些文案已经在真实会话里被稳住了。
+ */
+export function captureNote(capture: ComputerUseCaptureInfo | undefined): string {
+  if (capture === undefined) return "";
+  let note = "";
+  if (capture.maskedRegions > 0) {
+    const fields = capture.maskedRegions === 1 ? "field" : "fields";
+    note +=
+      ` ${capture.maskedRegions} password ${fields} in this image ${capture.maskedRegions === 1 ? "was" : "were"} ` +
+      "blacked out — a password must never reach you, and the black block is deliberate. Do not try to read it; " +
+      "if you need a password, ask the user.";
+  } else if (capture.maskStale) {
+    const ageSeconds = Math.max(0, Math.round(capture.maskCacheAgeMs / 1000));
+    note +=
+      " WARNING: this image is NOT masked. The last computer_uia list of what you captured is " +
+      `${ageSeconds}s old, and password field positions are only remembered for ` +
+      `${COMPUTER_USE_MASK_CACHE_MAX_AGE_MS / 1000}s — so if a password field is visible in this image, ` +
+      "do not read it. Run computer_uia list on that window again, then take the screenshot again.";
+  } else if (!capture.maskListed) {
+    note +=
+      " WARNING: this image is NOT masked — nothing has been listed with computer_uia yet, so password fields " +
+      "could not be found and covered. If a password field is visible in this image, do not read it. " +
+      "Run computer_uia list on that window first, then take the screenshot again.";
+  }
+  if (capture.userTyping) {
+    note +=
+      " A person was typing in the sandbox while this was captured (their input takes priority over yours), " +
+      "so parts of the image may already be out of date.";
+  }
+  return note;
 }
 
 /** 只用到尺寸的那部分几何（换算函数的最小输入，测试与工具层都不必凑齐字节） */

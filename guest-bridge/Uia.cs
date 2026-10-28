@@ -36,6 +36,12 @@
 // 不支持的控件（模式取不到）一律回人话，并点名它支持哪些模式、改用 computer_click /
 // computer_type 的像素路径——模型看不见 UI，不会自己想到这一点。
 //
+// 0.12.0 起 uia-list 多干一件事：读 UIA_IsPasswordPropertyId（30019）并在**过滤之前**把
+// 每个密码框的 BoundingRectangle 记进进程内缓存（Mask.PasswordRects，按 hwnd 索引、30s 过期）。
+// 为什么要在过滤之前：Chromium 的 <input type=password> 常常既没 name 也没 automationId，
+// 它会被 IsListable 滤掉——而它正是截图遮罩唯一必须命中的东西。每一项的 isPassword 字段也
+// 因此有了：模型要知道「这条是密码框，别往里写秘密」。
+//
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 // COM 的 vtable 槽位号全部来自 Windows SDK 的 UIAutomationClient.h（槽 0 基，IUnknown 占 0..2），
 // 每个常量旁边都写了它对应第几个方法，改的时候对着头文件数一遍。
@@ -63,6 +69,8 @@ internal sealed class UiaItemInfo
     public List<string> Patterns = new List<string>();
     public bool Enabled;
     public bool Offscreen;
+    /** 密码框（UIA_IsPasswordPropertyId = 30019）。宿主据此把这一行标成 password，截图遮罩也靠它 */
+    public bool IsPassword;
 }
 
 internal static class Uia
@@ -188,6 +196,28 @@ internal static class Uia
         bool hasName = name != null && name.Trim().Length > 0;
         bool hasId = automationId != null && automationId.Trim().Length > 0;
         return hasName || hasId;
+    }
+
+    /**
+     * 读 UIA_IsPassword 的结果怎么解释（**纯函数**，selftest 直接验）。三件事：
+     *   ① 读不到（HRESULT 失败 / 老控件不支持这条属性）→ false：宁可不遮也不能拿脏值去遮；
+     *   ② 0 / -1 / 1 是 BOOL 的两种合法写法（VARIANT_FALSE/FALSE、VARIANT_TRUE/TRUE）→ 照实；
+     *   ③ 其余的怪值 → false（不是布尔值就当 false，不猜）。
+     */
+    internal static bool InterpretPassword(bool readOk, int raw)
+    {
+        if (!readOk) return false;
+        if (raw == 0) return false;
+        if (raw == 1 || raw == -1) return true;
+        return false;
+    }
+
+    /** 读一个元素的 IsPassword：HRESULT 与 BOOL 一起交给 InterpretPassword（读不到不抛，当 false） */
+    private static bool ReadIsPassword(IntPtr element)
+    {
+        int value;
+        int hr = Slot<GetIntFn>(element, SlotCurrentIsPassword)(element, out value);
+        return InterpretPassword(hr >= 0, hr < 0 ? 0 : value);
     }
 
     /** ref 是 1 基的（0 留给「没给」/ 解析失败），与模型的直觉一致 */
@@ -368,6 +398,7 @@ internal static class Uia
         }
         json.Append("],\"enabled\":").Append(item.Enabled ? "true" : "false")
             .Append(",\"offscreen\":").Append(item.Offscreen ? "true" : "false")
+            .Append(",\"isPassword\":").Append(item.IsPassword ? "true" : "false")
             .Append("}");
         return json.ToString();
     }
@@ -419,6 +450,14 @@ internal static class Uia
     private const int SlotCurrentIsControlElement = 3 + 31 - 1;
     /** IUIAutomationElement 第 36 个方法 get_CurrentIsOffscreen */
     private const int SlotCurrentIsOffscreen = 3 + 36 - 1;
+    /**
+     * IUIAutomationElement 第 33 个方法 get_CurrentIsPassword（UIAutomationClient.h 的
+     * UIA_IsPasswordPropertyId = 30019，类型 BOOL）。槽号是**内插**出来的：已验证的邻居是
+     * 第 31 IsControlElement 与第 36 IsOffscreen，头文件里这两条之间正是
+     * IsContentElement / **IsPassword** / NativeWindowHandle / ItemType——
+     * 数错一个槽就会读到 HWND（非 0）而把每个元素都当成密码框，所以这里把依据写下来。
+     */
+    private const int SlotCurrentIsPassword = 3 + 33 - 1;
     /** IUIAutomationElement 第 41 个方法 get_CurrentBoundingRectangle */
     private const int SlotCurrentBoundingRectangle = 3 + 41 - 1;
     /** IUIAutomationElementArray 第 1 个方法 get_Length */
@@ -919,6 +958,9 @@ internal static class Uia
                     + "）——它可能不是标准窗口，改用 computer_screenshot 看一眼");
 
             List<IntPtr> retained = new List<IntPtr>();
+            // 密码框矩形单独收：**不管它列不列得进清单**（理由见 CollectItem 里的注释）。
+            // 它们就是截图遮罩的数据源（Mask.cs 的 PasswordRects）。
+            List<MaskRect> passwordRects = new List<MaskRect>();
             StringBuilder items = new StringBuilder();
             bool truncated = false;
             try
@@ -934,7 +976,7 @@ internal static class Uia
                     bool keep = false;
                     try
                     {
-                        keep = CollectItem(element, retained.Count, ref items);
+                        keep = CollectItem(element, retained.Count, ref items, passwordRects);
                         if (keep)
                         {
                             retained.Add(element);
@@ -960,14 +1002,22 @@ internal static class Uia
 
             ReplaceRefs(hwnd, retained);
 
+            // 清单跑完了：把这次看到的密码框位置记下（截图命令靠它遮罩）。
+            // 空列表也记 —— 「看过，这个窗口没有密码框」与「从没看过」是两件事：
+            // 前者截图不用吓唬模型，后者必须告诉它「这张图没遮，因为你还没 list 过」。
+            int passwordFields = passwordRects.Count;
+            PasswordRects.Record(hwnd.ToInt64(), passwordRects, InputHook.NowTick());
+
             StringBuilder json = new StringBuilder();
             json.Append("{\"ok\":true,\"hwnd\":").Append(hwnd.ToInt64())
                 .Append(",\"window\":{\"title\":").Append(Program.JsonQuote(windowTitle))
                 .Append(",\"className\":").Append(Program.JsonQuote(windowClass))
                 .Append("},\"items\":[").Append(items.ToString())
-                .Append("],\"truncated\":").Append(truncated ? "true" : "false").Append("}");
+                .Append("],\"truncated\":").Append(truncated ? "true" : "false")
+                .Append(",\"passwordFields\":").Append(passwordFields).Append("}");
             Program.Log("uia-list hwnd " + hwnd.ToInt64() + "「" + windowTitle + "」：" + retained.Count
-                + " 个可动作控件" + (truncated ? "（还有更多，已截断）" : ""));
+                + " 个可动作控件" + (truncated ? "（还有更多，已截断）" : "")
+                + "，密码框 " + passwordFields + " 个（已记下位置，截图会遮）");
             return json.ToString();
         }
         finally
@@ -979,13 +1029,27 @@ internal static class Uia
     /**
      * 一个候选元素要不要留下；留下就把它拼进 items（ref = retainedCount + 1）。
      * 返回 false 时调用方负责 Release（不能在这里放：`keep` 为 true 的指针要留给 ref 映射）。
+     *
+     * **密码框在读过滤之前判**：Chromium 里的 <input type=password> 常常既没有 name 也没有
+     * automationId，它会被 IsListable 过滤掉——按「列进清单的控件」收集就会漏掉真正的密码框，
+     * 而这正是遮罩唯一必须命中的东西。所以 IsPassword 与它的矩形在过滤之前就取，
+     * 与「这一条要不要列给模型」完全解耦。
      */
-    private static bool CollectItem(IntPtr element, int retainedCount, ref StringBuilder items)
+    private static bool CollectItem(IntPtr element, int retainedCount, ref StringBuilder items,
+        List<MaskRect> passwordRects)
     {
         bool isControl = ReadBool(element, SlotCurrentIsControlElement);
         int controlTypeId = ReadInt(element, SlotCurrentControlType);
         string name = ReadString(element, SlotCurrentName);
         string automationId = ReadString(element, SlotCurrentAutomationId);
+        bool isPassword = ReadIsPassword(element);
+        if (isPassword)
+        {
+            RECT secret = ReadRect(element);
+            if (secret.Right > secret.Left && secret.Bottom > secret.Top)
+                passwordRects.Add(new MaskRect(secret.Left, secret.Top,
+                    secret.Right - secret.Left, secret.Bottom - secret.Top));
+        }
         if (!IsListable(isControl, controlTypeId, name, automationId)) return false;
 
         UiaItemInfo info = new UiaItemInfo();
@@ -1001,6 +1065,7 @@ internal static class Uia
         info.H = rect.Bottom > rect.Top ? rect.Bottom - rect.Top : 0;
         info.Enabled = ReadBool(element, SlotCurrentIsEnabled);
         info.Offscreen = ReadBool(element, SlotCurrentIsOffscreen);
+        info.IsPassword = isPassword;
         info.Patterns = ProbePatterns(element);
 
         if (retainedCount > 0) items.Append(",");
@@ -1430,6 +1495,36 @@ internal static class Uia
         CheckTrue(failures, ref cases, "项 JSON 的布尔与中文都原样",
             itemJson.IndexOf("\"enabled\":true", StringComparison.Ordinal) >= 0
             && itemJson.IndexOf("\"offscreen\":false", StringComparison.Ordinal) >= 0);
+
+        // ⑪ 密码框：isPassword 的读取判定（**遮罩的唯一数据源**，读错就是漏密码）
+        CheckTrue(failures, ref cases, "IsPassword 读得到：BOOL TRUE(1) → true", InterpretPassword(true, 1));
+        CheckTrue(failures, ref cases, "IsPassword 读得到：VARIANT_TRUE(-1) → true", InterpretPassword(true, -1));
+        CheckTrue(failures, ref cases, "IsPassword 读得到：FALSE(0) → false", !InterpretPassword(true, 0));
+        CheckTrue(failures, ref cases, "IsPassword 读不到（老控件不支持）→ false",
+            !InterpretPassword(false, 1));
+        CheckTrue(failures, ref cases, "IsPassword 读不到且脏值 → false", !InterpretPassword(false, -1));
+        CheckTrue(failures, ref cases, "IsPassword 非布尔值(7) → 当 false，不拿它去遮",
+            !InterpretPassword(true, 7));
+        CheckTrue(failures, ref cases, "IsPassword 非布尔值(2) → 当 false", !InterpretPassword(true, 2));
+        // 槽号是内插出来的：它必须**夹在两条已验证的邻居之间**（IsControlElement 31 < IsPassword 35 < IsOffscreen 36）
+        CheckTrue(failures, ref cases, "IsPassword 槽号夹在 IsControlElement 与 IsOffscreen 之间",
+            SlotCurrentIsControlElement < SlotCurrentIsPassword
+            && SlotCurrentIsPassword < SlotCurrentIsOffscreen);
+        CheckNumber(failures, ref cases, "IsPassword 槽号 = 3 + 33 - 1",
+            "35", SlotCurrentIsPassword.ToString(CultureInfo.InvariantCulture));
+
+        UiaItemInfo plain = new UiaItemInfo();
+        plain.Ref = 1;
+        plain.Name = "用户名";
+        plain.ControlType = "edit";
+        CheckTrue(failures, ref cases, "普通控件默认不是密码框", !plain.IsPassword);
+        plain.IsPassword = true;
+        plain.Name = "";
+        plain.AutomationId = "";
+        CheckTrue(failures, ref cases, "项 JSON 带 isPassword",
+            ItemJson(plain).IndexOf("\"isPassword\":true", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "非密码框写 false（不是省略）",
+            ItemJson(new UiaItemInfo()).IndexOf("\"isPassword\":false", StringComparison.Ordinal) >= 0);
 
         Console.WriteLine(Program.BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;

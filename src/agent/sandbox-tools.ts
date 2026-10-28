@@ -27,6 +27,7 @@ import {
   COMPUTER_USE_BROWSER_IDLE_MS,
   COMPUTER_USE_BROWSER_MAX,
   COMPUTER_USE_CDP_TIMEOUT_MS,
+  computerUseAudit,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
 } from "../shared/computer-use.ts";
@@ -151,6 +152,16 @@ export function createSandboxBrowserTools(
     details: undefined,
   });
 
+  /**
+   * **写件**（真的改变了页面/文件的那几个）的审计：动作 + 模型给的原始入参 + 时刻 + 归属。
+   * 只读工具（observe / extract / screenshot / wait / tabs list）与导航不记——它们不替任何人
+   * 做事，多记一行只会把真动作淡出日志。字段与像素车道共用 shared 的 computerUseAudit。
+   */
+  const writeOnly = (result: SandboxSuccess, action: ComputerUseToolRequest["action"], args: Record<string, unknown>) => ({
+    content: [{ type: "text" as const, text: result.text }],
+    details: { computerUse: computerUseAudit(action, args) },
+  });
+
   const navigate: ToolDefinition = {
     name: "sandbox_navigate",
     label: "sandbox_navigate",
@@ -256,7 +267,10 @@ export function createSandboxBrowserTools(
         { action: "sandbox-click", selector, ...(element === undefined ? {} : { element }) },
         signal,
       );
-      return textOnly(result);
+      return writeOnly(result, "sandbox-click", {
+        selector,
+        ...(element === undefined ? {} : { element }),
+      });
     },
   };
 
@@ -308,7 +322,15 @@ export function createSandboxBrowserTools(
         },
         signal,
       );
-      return textOnly(result);
+      // 明文留在 details / 转录（JSONL 保留明文，computer_type 同一条纪律）；
+      // details 不进模型上下文。
+      return writeOnly(result, "sandbox-type", {
+        selector,
+        text: value,
+        ...(args["submit"] === true ? { submit: true } : {}),
+        ...(args["clear"] === false ? { clear: false } : {}),
+        ...(element === undefined ? {} : { element }),
+      });
     },
   };
 
@@ -450,7 +472,11 @@ export function createSandboxBrowserTools(
         },
         signal,
       );
-      return textOnly(result);
+      return writeOnly(result, "sandbox-upload", {
+        selector,
+        path: filePath.trim(),
+        ...(element === undefined ? {} : { element }),
+      });
     },
   };
 

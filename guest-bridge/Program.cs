@@ -95,8 +95,13 @@ internal static class Program
     //   「这一下是人在动还是我们注入」，用户在沙箱里真打字/点鼠标时，像素动作在**动作边界**上
     //   推迟（等静默，最多 4s），超时就让出并回一句人话。回执多 yielded / waitedMs 两个字段
     //   （只有真推迟过才有）。注入事件带 dwExtraInfo 魔数，供钩子与后续的审计归属识别。
+    // 0.12.0 多了**密码框遮罩**（Mask.cs）与**审计归属的两档信号**：uia-list 顺手记下密码框矩形
+    //   （Mask.PasswordRects，按 hwnd 索引、30s 过期），screenshot / win-shot 在出图之前把它们
+    //   涂黑；回执多 maskedRegions / maskListed / maskStale / maskCacheAgeMs / userTyping
+    //   五个字段（老宿主不读也不会坏，只多几个键）。uia-list 的每一项多 isPassword、回执多
+    //   passwordFields。命令语义与坐标没有任何变化。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.11.0";
+    private const string Version = "0.12.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -224,6 +229,9 @@ internal static class Program
             // 输入让路的纯函数自测（判定表 / tick 回绕 / 归属判定 / 放弃文案）。
             // **不装钩子、不碰桌面、不启进程**：装全局钩子会碰用户的真实键盘，宿主上不许。
             if (args[i] == "--selftest-yield") return InputHook.RunSelfTest();
+            // 密码框遮罩的纯函数自测（平移 / 裁剪 / DPI 不换算 / 过期策略 / 缓存）。
+            // **不碰桌面、不碰 Bitmap**：遮罩算法是纯整数运算，在宿主上就能验完。
+            if (args[i] == "--selftest-mask") return Mask.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -982,12 +990,16 @@ internal static class Program
         {
             byte[] jpeg;
             int nativeW, nativeH, outW, outH;
-            CaptureJpeg(maxWidth, out jpeg, out nativeW, out nativeH, out outW, out outH);
+            MaskPlan mask;
+            CaptureJpeg(maxWidth, out jpeg, out nativeW, out nativeH, out outW, out outH, out mask);
             string jpgName = baseName + ".jpg";
             AtomicWrite(Path.Combine(_cmdDir, jpgName), jpeg);
-            Log("截图完成：原始 " + nativeW + "x" + nativeH + "，输出 " + outW + "x" + outH + "，" + jpeg.Length + " 字节");
+            Log("截图完成：原始 " + nativeW + "x" + nativeH + "，输出 " + outW + "x" + outH + "，" + jpeg.Length + " 字节"
+                + "；" + Mask.LogLine("screenshot", mask));
+            // 遮罩/归属的五个字段（Mask.CaptureFields 一份拼法，与 win-shot 共用）
             return "{\"ok\":true,\"nativeWidth\":" + nativeW + ",\"nativeHeight\":" + nativeH
-                + ",\"width\":" + outW + ",\"height\":" + outH + ",\"jpeg\":\"" + jpgName + "\"}";
+                + ",\"width\":" + outW + ",\"height\":" + outH + ",\"jpeg\":\"" + jpgName + "\""
+                + "," + Mask.CaptureFields(mask) + "}";
         }
         catch (Exception ex)
         {
@@ -2549,10 +2561,12 @@ internal static class Program
 
     // ---- 截图（BitBlt 主屏 → 等比缩放 → JPEG q80） ----
 
-    private static void CaptureJpeg(int maxWidth, out byte[] jpeg, out int nativeW, out int nativeH, out int outW, out int outH)
+    private static void CaptureJpeg(int maxWidth, out byte[] jpeg, out int nativeW, out int nativeH, out int outW, out int outH,
+        out MaskPlan mask)
     {
         nativeW = GetSystemMetrics(SM_CXSCREEN);
         nativeH = GetSystemMetrics(SM_CYSCREEN);
+        mask = new MaskPlan();
         if (nativeW <= 0 || nativeH <= 0)
             throw new InvalidOperationException("无法获取主屏尺寸（可能不在交互式桌面会话中）");
 
@@ -2565,6 +2579,14 @@ internal static class Program
                 g.CopyFromScreen(0, 0, 0, 0, new Size(nativeW, nativeH));
             }
             finally { g.Dispose(); }
+
+            // 密码框遮罩（0.12.0）：**在出图之前、在缩放之前**涂黑。
+            // 矩形来自最近一次 uia-list（Mask.PasswordRects），这里是纯查表 + 裁剪，不遍历控件树。
+            // 整桌面截图的图像原点 = 屏幕原点 (0,0)，所以只做平移（0,0）；坐标系与 DPI 关系见 Mask.cs 文件头。
+            // 任何窗口的清单都能遮：屏幕是同一块，谁的密码框落在图里都得遮（宁可多遮，不可漏遮）。
+            mask = Mask.Plan(nativeW, nativeH, 0, 0, PasswordRects.Snapshot(InputHook.NowTick()),
+                Mask.CacheMaxAgeMs);
+            Mask.Paint(full, mask.Rects);
 
             // 缩放规则与窗口截图（win-shot）共用一份纯函数：两处算出不同的图宽，
             // 模型给的坐标就会莫名其妙地偏

@@ -70,6 +70,8 @@ const args = [
   path.join(scriptDir, "Uia.cs"),
   // 输入让路（0.11.0）：低级钩子线程 + 「人在动还是我们注入」的判定 + 让路闸门的纯函数
   path.join(scriptDir, "InputHook.cs"),
+  // 密码框遮罩（0.12.0）：uia-list 记下的密码框矩形 + 截图出图前涂黑的纯函数与缓存
+  path.join(scriptDir, "Mask.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);
