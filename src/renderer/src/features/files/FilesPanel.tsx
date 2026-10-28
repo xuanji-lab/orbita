@@ -402,6 +402,18 @@ export function FilesPanel(props: {
     }
     return issues;
   }, [citeLibrary, t]);
+  /**
+   * 行内标记的问题集合（与问题抽屉同一份来源）。**身份要稳**：每次渲染新建一个数组会
+   * 让编辑器的 setDiagnostics 效果每帧重跑；这里只在这一次编译的结局变了才换新。
+   */
+  const diagnosticIssues = useMemo(
+    () => [...(latex.last?.errors ?? []), ...(latex.last?.warnings ?? [])],
+    [latex.last],
+  );
+  const editorDiagnostics = useMemo(
+    () => (latex.project === null ? null : { issues: diagnosticIssues, projectDir: latex.project.dir }),
+    [latex.project?.dir, diagnosticIssues],
+  );
   const latexGroups = useMemo(
     () => groupLatexIssues(latex.last?.errors ?? [], [...(latex.last?.warnings ?? []), ...bibIssues]),
     [latex.last, bibIssues],
@@ -1501,6 +1513,7 @@ export function FilesPanel(props: {
                     // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
                     ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
                     latexIndex,
+                    diagnostics: editorDiagnostics,
                     reveal:
                       reveal !== null && samePath(reveal.path, leftPath ?? shownTab.path)
                         ? { line: reveal.line, token: reveal.token }

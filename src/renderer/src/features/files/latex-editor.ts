@@ -37,6 +37,7 @@ import {
 } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { completionKeymap } from "@codemirror/autocomplete";
+import { lintGutter } from "@codemirror/lint";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { tags } from "@lezer/highlight";
 
@@ -161,6 +162,9 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
     search({ top: true }),
     // completionKeymap：Ctrl/Cmd+Space 手动弹补全。LaTeX 的现场不总是「正在打字」——
     // `\ref{` 之后想看看有哪些 label、`\begin{` 之后想挑环境，手动触发比再敲一个字自然
+    // 编译问题的行内标记：波浪线由 setDiagnostics 推进来（TexEditorPane 接线），
+    // 这里的 lintGutter 给行号旁一个可悬停的记号——长行折行后波浪线可能在视口外
+    lintGutter(),
     keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return;
@@ -218,6 +222,24 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
       // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的落点框同色系）
       ".cm-sync-line": {
         backgroundColor: "var(--color-accent-soft)",
+      },
+      // 编译问题的波浪线：默认的红 / 琥珀直接用 token（深浅主题同一套语义）
+      ".cm-lintRange-error": {
+        backgroundImage: "none",
+        textDecoration: "underline wavy var(--color-danger)",
+        textUnderlineOffset: "3px",
+      },
+      ".cm-lintRange-warning": {
+        backgroundImage: "none",
+        textDecoration: "underline wavy var(--color-warning)",
+        textUnderlineOffset: "3px",
+      },
+      ".cm-tooltip-lint": {
+        backgroundColor: "var(--color-bg-panel)",
+        color: "var(--color-text-primary)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
       },
       // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
       // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来

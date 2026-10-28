@@ -31,7 +31,8 @@ import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
 import type { CiteEntry } from "@shared/cite";
-import type { LatexFileContext, LatexProjectIndex } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexProjectIndex } from "@shared/latex";
+import { setDiagnostics } from "@codemirror/lint";
 import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
 import {
   latexEditorExtensions,
@@ -43,6 +44,7 @@ import {
 } from "./latex-editor.ts";
 import { formatSize } from "./tree-view.ts";
 import { latexCompletion } from "./latex-completion.ts";
+import { inlineDiagnostics } from "./latex-diagnostics.ts";
 import {
   clampCursorLine,
   locateBlock,
@@ -152,6 +154,14 @@ export function TexEditorPane(props: {
    * null / 缺席 = 不在 LaTeX 项目里，补全只剩静态表那一层。
    */
   latexIndex?: LatexProjectIndex | null;
+  /**
+   * 这次编译的问题（行内波浪线）。映射规则在 latex-diagnostics.ts（有测试）：
+   * 只画本文件、只画 error / warning、一行一条。
+   *
+   * **位置只在本字段变化时重算**：用户继续编辑时 CodeMirror 自己会把区间随文字映射
+   * （行内小改不会错到下一行）；重新编译拿到新问题后才整批替换。
+   */
+  diagnostics?: { issues: readonly LatexIssue[]; projectDir: string } | null;
 }) {
   const t = useT();
   const path = props.request.dir;
@@ -408,6 +418,26 @@ export function TexEditorPane(props: {
     // 只在挂载 / 卸载时跑：initialText 是「打开这一刻的盘上内容」，换文件会换 key 重挂
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
+
+  // 编译问题 → 行内标记。只在这个字段变化时重算：用户继续编辑时由 CodeMirror 自己
+  // 映射区间；重编一次才整批换新（同一次编译的旧 underscoring 不该在新文本上漂着）。
+  const diagnostics = props.diagnostics ?? null;
+  const diagnosticIssues = diagnostics?.issues ?? null;
+  const diagnosticDir = diagnostics?.projectDir ?? null;
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null || diagnosticDir === null) return;
+    const list = inlineDiagnostics(diagnosticIssues ?? [], view.state.doc.toString(), path, diagnosticDir).map(
+      (item) => ({
+        from: item.from,
+        to: item.to,
+        severity: item.severity,
+        message: item.message,
+        source: "latexmk",
+      }),
+    );
+    view.dispatch(setDiagnostics(view.state, list));
+  }, [diagnosticIssues, diagnosticDir, path]);
 
   // PDF → 源码的落点：选中这一行、滚到视口中间、铺一条短暂的底色。
   // 依赖只有 token：同一次定位在重渲染时不该再抢一次滚动条。
