@@ -1743,6 +1743,21 @@ export const zh: Messages = {
     actionsTip: "项目动作",
     compileOnSave: "保存即编译",
     compileOnSaveHint: "编辑器自动保存落定后自动编译；开关写进这个项目的 .orbita/latex.json",
+    /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */
+    setup: {
+      title: "这台电脑上没有 LaTeX 编译器",
+      body:
+        "编 PDF 需要 latexmk，它随 TeX Live / MiKTeX / MacTeX 一起安装。Orbita 不会替你下载安装包——装好之后再回来。",
+      lookedIn: (n) => `找过的 ${n} 个位置`,
+      noPaths: "这台机器上没有可以查看的安装位置。",
+      whereNote:
+        "PATH 的每一段、各盘 texlive\\<年>\\bin\\windows、%LOCALAPPDATA% 与 Program Files 下的 MiKTeX；macOS 还有 /Library/TeX/texbin。",
+      openDownload: "打开下载页",
+      redetect: "已装好，重新检测",
+      checking: "检测中…",
+      locate: "指定位置…",
+      invalidFile: (path) => `这个文件跑不通 latexmk 的版本自检，没有保存：${path}`,
+    },
     clean: "清理辅助文件",
     cleanHint: "latexmk 的清理动作：删掉 .aux / .log 等中间文件，PDF 保留",
     cleaning: "清理中…",

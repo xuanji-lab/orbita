@@ -184,3 +184,52 @@ describe("createLatexProbe —— 缓存", () => {
     assert.equal(versionCalls.length, 2);
   });
 });
+
+describe("createLatexProbe —— 找过的位置（引导卡要回答「找过哪里」）", () => {
+  test("没装时列出 PATH 各段与常见根，不只是「没找到」", async () => {
+    const { deps } = fakeDeps({
+      platform: "linux",
+      env: { PATH: "/usr/bin:/opt/bin" },
+      dirs: [
+        "/usr/local/texlive",
+        "/usr/local/texlive/2024",
+        "/usr/local/texlive/2024/bin/x86_64-linux",
+      ],
+    });
+    const result = await createLatexProbe(deps).probe();
+    assert.equal(result.ok, false);
+    assert.ok(result.searched.includes("/usr/bin"));
+    assert.ok(result.searched.includes("/opt/bin"));
+    assert.ok(result.searched.includes("/usr/local/texlive/2024/bin/x86_64-linux"));
+    assert.ok(result.searched.length >= 3);
+  });
+
+  test("显式路径命中时它也记进找过的位置（排最前）", async () => {
+    const custom = "/opt/custom/latexmk";
+    const { deps } = fakeDeps({
+      platform: "linux",
+      env: { PATH: "/usr/bin" },
+      files: [custom],
+      versions: { [custom]: "Latexmk ... Version 9.99" },
+    });
+    const result = await createLatexProbe(deps).probe(custom);
+    assert.equal(result.searched[0], "/opt/custom");
+  });
+
+  test("缓存按显式路径分键：换一个路径会现验一次，切回来不再验", async () => {
+    const a = "/opt/a/latexmk";
+    const b = "/opt/b/latexmk";
+    const { deps, versionCalls } = fakeDeps({
+      platform: "linux",
+      env: { PATH: "/usr/bin" },
+      files: [a, b],
+      versions: { [a]: "Latexmk ... Version 1", [b]: "Latexmk ... Version 2" },
+    });
+    const probe = createLatexProbe(deps);
+    await probe.probe(a);
+    await probe.probe(b);
+    assert.deepEqual(versionCalls, [a, b]);
+    await probe.probe(a);
+    assert.deepEqual(versionCalls, [a, b], "同一路径的结论复用，不再起一次 Perl");
+  });
+});

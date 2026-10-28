@@ -3400,6 +3400,85 @@ body {
   color: var(--color-text-secondary);
 }
 
+/* 「没有 latexmk」引导卡：标题 + 说明 + 找过的位置（可展开）+ 三个动作。
+   它是说明不是报错——panel 底 + 细边框，红色只给标题那颗图标 */
+.latex-setup {
+  flex: 0 0 auto;
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-setup-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.latex-setup-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.latex-setup-body {
+  margin: var(--space-1) 0 0;
+  line-height: var(--line-height-ui);
+}
+.latex-setup-paths-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-setup-paths {
+  max-height: 132px;
+  overflow: auto;
+  margin: var(--space-1) 0 0;
+  padding: 0 var(--space-2);
+  list-style: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-setup-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.latex-setup-invalid {
+  margin: var(--space-1) 0 0;
+  color: var(--color-danger);
+  word-break: break-all;
+}
+.latex-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.latex-setup-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+a.latex-setup-action {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
 /* ---------- 源码编辑器（.tex 标签，PR4） ----------
  * 编辑器吃满预览体：body 让出内边距与滚动（滚动在 CodeMirror 的 .cm-scroller 里，
  * 行号槽跟着滚）；上下是冲突/错误条与状态行，都不随正文滚。

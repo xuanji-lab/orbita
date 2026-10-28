@@ -1887,6 +1887,21 @@ export const en = {
     actionsTip: "Project actions",
     compileOnSave: "Compile on save",
     compileOnSaveHint: "Compiles after the editor autosaves; kept in .orbita/latex.json for this project",
+    /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */
+    setup: {
+      title: "No LaTeX compiler on this machine",
+      body:
+        "Building a PDF needs latexmk, which ships with TeX Live, MiKTeX or MacTeX. Orbita doesn't download installers for you — install one, then come back.",
+      lookedIn: (n: number) => (n === 1 ? "Looked in 1 place" : `Looked in ${n} places`),
+      noPaths: "No install location could be inspected on this machine.",
+      whereNote:
+        "PATH, texlive\\<year>\\bin\\windows on every drive, MiKTeX under %LOCALAPPDATA% and Program Files; on macOS /Library/TeX/texbin and /usr/local/texlive.",
+      openDownload: "Open download page",
+      redetect: "Installed it — check again",
+      checking: "Checking…",
+      locate: "Choose location…",
+      invalidFile: (path: string) => `That file didn't answer \`latexmk --version\`, so nothing was saved: ${path}`,
+    },
     clean: "Clean auxiliary files",
     cleanHint: "latexmk -c — removes .aux / .log and other intermediates, keeps the PDF",
     cleaning: "Cleaning…",

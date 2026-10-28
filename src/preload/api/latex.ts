@@ -11,6 +11,8 @@ import {
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
   type LatexFileContext,
+  type LatexLocateOutcome,
+  type LatexProbeRequest,
   type LatexProjectOutcome,
   type LatexProbeResult,
   type LatexRunOutcome,
@@ -18,7 +20,10 @@ import {
 
 export const latexApi = {
   /** 本机 latexmk 与可用引擎（主进程缓存；找不到时 ok:false + 一句原因） */
-  probe: (): Promise<LatexProbeResult> => ipcRenderer.invoke(latexChannels.probe),
+  probe: (req?: LatexProbeRequest): Promise<LatexProbeResult> =>
+    ipcRenderer.invoke(latexChannels.probe, req ?? {}),
+  /** 「指定位置」：系统文件选择器，现验通过才写进设置 */
+  locate: (): Promise<LatexLocateOutcome> => ipcRenderer.invoke(latexChannels.locate),
   /** 当前文件所属的项目；不属于任何 LaTeX 项目时 found:false */
   project: (req: LatexFileContext): Promise<LatexProjectOutcome> =>
     ipcRenderer.invoke(latexChannels.project, req),

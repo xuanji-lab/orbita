@@ -48,6 +48,7 @@ import {
   type LatexCompileRequest,
   type LatexEngine,
   type LatexIssue,
+  type LatexProbeRequest,
   type LatexProbeResult,
   type LatexResult,
   type LatexRunOutcome,
@@ -101,6 +102,11 @@ export interface LatexRunnerOptions {
    * tick 都只能看到「刚有增长」，于是结果不再取决于宿主负载 / 子进程调度。
    */
   now?: () => number;
+  /**
+   * 设置里显式指定的 latexmk 路径（每轮现读）。缺席 = 只靠 PATH 与常见安装根。
+   * 生产传 `() => settings.read().then((s) => s.latexmkPath)`。
+   */
+  explicitPath?: () => Promise<string | undefined>;
 }
 
 export class LatexRunner {
@@ -113,6 +119,11 @@ export class LatexRunner {
   private readonly totalMemoryBytes: number;
   /** 看门狗时钟（注入点）。spawn 时刻与每次 tick 都用它算静默 / 总时长 */
   private readonly now: () => number;
+  /**
+   * 设置里显式指定的 latexmk 路径（每轮现读）。缺席 = 只靠 PATH 与常见安装根。
+   * 用函数而不是构造时的字符串：用户在引导卡里刚选完，不该等一次重启才生效。
+   */
+  private readonly explicitPath: (() => Promise<string | undefined>) | null;
   /** 正在编的项目（规范化后的目录）：同项目互斥的唯一真源 */
   private readonly active = new Set<string>();
   /** 正在跑的 latexmk 进程（key = 项目）。取消与退出清理都认它 */
@@ -129,6 +140,7 @@ export class LatexRunner {
     this.totalMemoryBytes = options.totalMemoryBytes ?? totalmem();
     this.maxConcurrent = latexMaxConcurrent(this.totalMemoryBytes);
     this.now = options.now ?? Date.now;
+    this.explicitPath = options.explicitPath ?? null;
   }
 
   /**
@@ -198,8 +210,31 @@ export class LatexRunner {
   }
 
   /** 本机 latexmk / 引擎探测（缓存由 createLatexProbe 管，界面点开 chip 时现问） */
-  probeEnvironment(): Promise<LatexProbeResult> {
-    return this.probe.probe();
+  async probeEnvironment(request: LatexProbeRequest = {}): Promise<LatexProbeResult> {
+    // refresh = 用户说「装好了，再看一眼」：不作废缓存就会拿到启动时（或上一次）的结论
+    if (request.refresh === true) this.probe.refresh();
+    return this.probe.probe(await this.explicitPathOf());
+  }
+
+  /**
+   * 现验一个候选路径是不是能跑的 latexmk（「指定位置」用）。
+   * **只认它自己**：`probe(explicit)` 在验不活时会退回 PATH，那时可能回 ok——那说明
+   * 「机器上有 latexmk」，但用户刚选的那个文件并不是，不能把它写进设置。
+   */
+  async verifyLatexmkPath(path: string): Promise<boolean> {
+    const result = await this.probe.probe(path);
+    return result.ok && result.source === "setting";
+  }
+
+  private async explicitPathOf(): Promise<string | undefined> {
+    if (this.explicitPath === null) return undefined;
+    try {
+      return await this.explicitPath();
+    } catch (cause) {
+      // 读设置失败不该让编译变成 not-installed：记一句，走 PATH 与常见根
+      console.warn("[latex] 读不到设置里的 latexmk 路径，改从 PATH 与常见安装位置找", cause);
+      return undefined;
+    }
   }
 
   /**
@@ -240,7 +275,7 @@ export class LatexRunner {
         error: "LaTeX is busy with another project on this machine. Wait for it to finish, then clean again.",
       };
     }
-    const probe = await this.probe.probe();
+    const probe = await this.probeEnvironment();
     if (!probe.ok || probe.latexmk === null) return { ok: false, error: probe.message };
     const plan = resolveLatexPlan(dir, {});
     if (plan.status !== "ok") return { ok: false, error: plan.detail };
@@ -291,7 +326,7 @@ export class LatexRunner {
   ): Promise<LatexResult> {
     const requestedEngine = request.engine;
 
-    const probe = await this.probe.probe();
+    const probe = await this.probeEnvironment();
     if (!probe.ok || probe.latexmk === null) {
       return {
         status: "not-installed",

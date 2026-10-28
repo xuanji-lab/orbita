@@ -30,6 +30,7 @@ import {
 import { FilePreviewPane } from "./FilePreviewPane";
 import { LatexBuildBar } from "./LatexBuildBar";
 import { LatexProblems, type ProblemItem } from "./LatexProblems";
+import { LatexSetupCard } from "./LatexSetupCard";
 import {
   groupLatexIssues,
   isFailedStatus,
@@ -1057,6 +1058,17 @@ export function FilesPanel(props: {
             onToggleCompileOnSave={latex.setCompileOnSave}
             onSelectEngine={latex.selectEngine}
             onSelectMain={latex.selectMain}
+          />
+        )}
+        {/* 「这台机器没有 latexmk」引导卡：项目已识别、探测失败时才出现。
+            它不遮不拦——用户仍可以看源码、问 agent，装完点「重新检测」即可 */}
+        {latex.project !== null && latex.probe !== null && !latex.probe.ok && (
+          <LatexSetupCard
+            probe={latex.probe}
+            busy={latex.probeBusy}
+            invalidPath={latex.locateInvalid}
+            onRefresh={latex.refreshProbe}
+            onLocate={latex.locateLatexmk}
           />
         )}
         {/* 动作回执（清理辅助文件）：一行、几秒后自己消失。它说的是「刚才那件事成了」，

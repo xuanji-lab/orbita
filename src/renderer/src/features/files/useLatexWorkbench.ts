@@ -58,6 +58,14 @@ export interface LatexWorkbench {
   clean: () => void;
   /** 保存即编译的总开关（项目级）；写失败落到 error 行 */
   setCompileOnSave: (on: boolean) => void;
+  /** 「重新检测」/「指定位置」在跑（引导卡的按钮置灰，避免连点两次起两个 `--version`） */
+  probeBusy: boolean;
+  /** 「指定位置」选到的文件跑不起来：路径如实回给卡片，不写设置 */
+  locateInvalid: string | null;
+  /** 重新探测本机 latexmk（作废缓存） */
+  refreshProbe: () => void;
+  /** 系统文件选择器选 latexmk：现验通过才写设置，然后重新探测 */
+  locateLatexmk: () => void;
   selectEngine: (engine: LatexEngine) => void;
   selectMain: (main: string) => void;
   refresh: () => void;
@@ -106,6 +114,8 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const [pdfReloadToken, setPdfReloadToken] = useState(0);
   const [cleaning, setCleaning] = useState(false);
   const [notice, setNotice] = useState<LatexNotice | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
+  const [locateInvalid, setLocateInvalid] = useState<string | null>(null);
 
   // 回执自己过期：它是「刚才那件事成了」的一句话，不该留到下一次操作
   useEffect(() => {
@@ -287,6 +297,45 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     [],
   );
 
+  /**
+   * 重新探测（「已装好，重新检测」）。必须走 refresh：探测结果按进程缓存，不作废
+   * 就会把启动时那句「没找到」原样还回来——用户刚装完 TeX 时会以为我们没看。
+   */
+  const refreshProbe = useCallback((): void => {
+    setProbeBusy(true);
+    setLocateInvalid(null);
+    void api.latex
+      .probe({ refresh: true })
+      .then((result) => setProbe(result))
+      .catch((cause: unknown) => setError(failMessage(cause)))
+      .finally(() => setProbeBusy(false));
+  }, []);
+
+  /**
+   * 「指定位置」：系统文件选择器选 latexmk。通过 `--version` 现验才写设置（主进程
+   * 那一侧做），随后重新探测一次让界面与磁盘一致。取消选择什么也不做。
+   */
+  const locateLatexmk = useCallback((): void => {
+    setProbeBusy(true);
+    setLocateInvalid(null);
+    void (async () => {
+      try {
+        const outcome = await api.latex.locate();
+        if (outcome.kind === "invalid") {
+          setLocateInvalid(outcome.path);
+          return;
+        }
+        if (outcome.kind === "cancelled") return;
+        const result = await api.latex.probe({ refresh: true });
+        setProbe(result);
+      } catch (cause) {
+        setError(failMessage(cause));
+      } finally {
+        setProbeBusy(false);
+      }
+    })();
+  }, []);
+
   /** 保存即编译的开关（写项目 `.orbita/latex.json`）；失败照旧落到 error 行 */
   const setCompileOnSave = useCallback(
     (on: boolean): void => {
@@ -323,6 +372,10 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     cancel,
     clean,
     setCompileOnSave,
+    probeBusy,
+    locateInvalid,
+    refreshProbe,
+    locateLatexmk,
     selectEngine: (engine) => configure({ engine }),
     selectMain: (main) => configure({ main }),
     refresh: () => void loadProject(false),

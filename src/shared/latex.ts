@@ -188,12 +188,12 @@ export interface LatexProbeRequest {
 
 /**
  * 「指定位置」的结局：系统文件选择器 → 现验 `--version` → 通过才写进设置。
- * `invalid` 带路径与原因（用户选的不是 latexmk / 没有执行权限），界面就在卡片里说。
+ * `invalid` 只说事实（这个文件不是能跑的 latexmk），文案由界面用自己的语言说。
  */
 export type LatexLocateOutcome =
   | { kind: "cancelled" }
   | { kind: "ok"; path: string }
-  | { kind: "invalid"; path: string; message: string };
+  | { kind: "invalid"; path: string };
 
 /**
  * 一次「清理辅助文件」的结果。
