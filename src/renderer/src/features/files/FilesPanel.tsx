@@ -40,6 +40,7 @@ import {
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
+import { issueAbsolutePath } from "./latex-diagnostics.ts";
 import { closeDecision } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
@@ -977,6 +978,32 @@ export function FilesPanel(props: {
     [session],
   );
 
+  /**
+   * 点问题行 → 打开那个文件并跳到那一行（与 SyncTeX 反查共用 reveal 通道：滚到中间 +
+   * 短暂高亮，用户能看见「跳到哪了」）。没有行号时只打开文件。
+   *
+   * 路径按项目目录拼（日志给的是相对项目目录的路径），再用 samePath 复用已开的标签
+   * ——Windows 上反斜杠 / 正斜杠两种写法不能开出两个标签。
+   */
+  const jumpToProblem = useCallback(
+    (item: ProblemItem): void => {
+      if (item.file === null || latex.project === null) return;
+      const root = activeTab?.root ?? null;
+      if (root === null) return;
+      setEditorNotice(null);
+      const absolute = issueAbsolutePath(latex.project.dir, item.file);
+      const tabPath = resolveTabPath(absolute);
+      if (item.line !== null) {
+        syncTokenRef.current += 1;
+        setReveal({ path: tabPath, line: item.line, token: syncTokenRef.current });
+      }
+      setTabs((prev) => openTab(prev, root, tabPath));
+      switchTo(tabPath);
+      if (narrowRef.current) setTreeOn(false);
+    },
+    [activeTab, latex.project, narrowRef, resolveTabPath, switchTo],
+  );
+
   // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
   // 裁决（含「请求属于别的会话 → 作废」——面板重挂后旧会话的请求不会拿新会话的
   // 根重判、报出无关的 citeOutside，2026-10-18 修），这里只按结论改 state；
@@ -1552,6 +1579,7 @@ export function FilesPanel(props: {
             open={problemsOpen}
             onToggle={() => setProblemsOpen((open) => !open)}
             onHandToAgent={handProblemToAgent}
+            onJump={jumpToProblem}
             resolved={resolvedPackages}
             onInstall={installPackage}
           />

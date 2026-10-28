@@ -34,6 +34,11 @@ export function LatexProblems(props: {
   onHandToAgent: (item: ProblemItem) => void;
   /** 缺文件名 → 反查结果；还在查 / 通道失败时查不到（按「正在反查」显示） */
   resolved: ReadonlyMap<string, LatexResolvedPackage>;
+  /**
+   * 点一条带文件 / 行号的问题：在编辑器里打开并跳到那一行（没有行号时只打开文件）。
+   * 没有文件名的条目（例如「N 份 .bib 没读」）不给这个动作——点了也无处可去。
+   */
+  onJump: (item: ProblemItem) => void;
   /** 把安装命令填进可见终端（不按回车） */
   onInstall: (command: string) => void;
 }) {
@@ -108,14 +113,32 @@ export function LatexProblems(props: {
                 data-level={item.level}
               >
                 <Icon name={iconOf(item.level)} size={13} style={{ color: tintOf(item.level) }} />
-                <span className="latex-problem-loc mono">{issueLocation(item)}</span>
-                <span className="latex-problem-msg" title={item.message}>
-                  <span>
-                    {item.level === "pending" ? t.latex.engineWaiting : label}
-                  </span>
-                  {item.level === "pending" && <span className="latex-problem-note">{item.message}</span>}
-                  {note !== null && <span className="latex-problem-note">{note}</span>}
-                </span>
+                {item.file === null ? (
+                  <>
+                    <span className="latex-problem-loc mono">{issueLocation(item)}</span>
+                    <span className="latex-problem-msg" title={item.message}>
+                      <span>{item.level === "pending" ? t.latex.engineWaiting : label}</span>
+                      {item.level === "pending" && <span className="latex-problem-note">{item.message}</span>}
+                      {note !== null && <span className="latex-problem-note">{note}</span>}
+                    </span>
+                  </>
+                ) : (
+                  // 有文件的方法行本身是个按钮：点一下就把编辑器切到那一行（与 PDF 双击
+                  // 反查用同一条「跳过去并闪一下」的通道）。动作键仍是兄弟节点，不嵌套按钮
+                  <button
+                    type="button"
+                    className="latex-problem-main"
+                    title={item.line === null ? item.message : `${issueLocation(item)} · ${item.message}`}
+                    onClick={() => props.onJump(item)}
+                  >
+                    <span className="latex-problem-loc mono">{issueLocation(item)}</span>
+                    <span className="latex-problem-msg">
+                      <span>{item.level === "pending" ? t.latex.engineWaiting : label}</span>
+                      {item.level === "pending" && <span className="latex-problem-note">{item.message}</span>}
+                      {note !== null && <span className="latex-problem-note">{note}</span>}
+                    </span>
+                  </button>
+                )}
                 <span className="row-trailing latex-problem-acts">
                   {command !== null && (
                     <button

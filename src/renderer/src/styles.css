@@ -3337,6 +3337,27 @@ body {
 .latex-problem:hover {
   background: var(--option-hover-bg);
 }
+/* 可点击的问题主体（文件:行 + 消息）：按钮只负责点击与布局，视觉与父行一致 */
+.latex-problem-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.latex-problem-main:hover .latex-problem-loc,
+.latex-problem-main:hover .latex-problem-msg > span:first-child {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .latex-problem[data-level="layout"] {
   color: var(--color-text-secondary);
 }
