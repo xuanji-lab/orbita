@@ -13,6 +13,8 @@ import {
   type CiteSaveRequest,
   type CiteSearchOutcome,
   type CiteSearchRequest,
+  type CiteVerifyOutcome,
+  type CiteVerifyRequest,
 } from "../../shared/cite.ts";
 
 export const citeApi = {
@@ -25,4 +27,7 @@ export const citeApi = {
   /** 把选中的结果追加进项目的 .bib，回写到哪个文件与生成的 key */
   save: (req: CiteSaveRequest): Promise<CiteSaveOutcome> =>
     ipcRenderer.invoke(citeChannels.save, req),
+  /** 核验项目里的条目（Crossref / arXiv）；条目由主进程重读 .bib，只传上下文与可选 key */
+  verify: (req: CiteVerifyRequest): Promise<CiteVerifyOutcome> =>
+    ipcRenderer.invoke(citeChannels.verify, req),
 } as const;

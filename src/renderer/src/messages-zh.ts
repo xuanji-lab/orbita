@@ -1754,6 +1754,7 @@ export const zh: Messages = {
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
     quotePending: "等待确认安装",
+    quoteVerify: "引文核验",
     /* ---------- SyncTeX 双向定位（源码 ↔ PDF） ---------- */
     syncNoPdf: "还没有 PDF——先编译一次再定位。",
     syncNoSynctex: "这份 PDF 里没有 SyncTeX 数据。重新编译一次就能跳转（编译时会自动带上 -synctex）。",
@@ -1797,6 +1798,25 @@ export const zh: Messages = {
     conflict: (path) => `没有写入：${path} 在你挑选期间被改过了。再选一次会按新内容重新分配引用键。`,
     writeFailed: (detail) => `没有写入：${detail}`,
     outside: "这个文件不在 LaTeX 项目里。",
+  },
+
+  /* ---------- 引文核验（cite:verify：DOI / arXiv 号 / 标题 → Crossref / arXiv） ---------- */
+  citeVerify: {
+    title: "引文核验",
+    run: "开始核验",
+    running: "核验中…",
+    tip: "按 DOI / arXiv 号 / 标题逐条查 Crossref 与 arXiv。只发送标识，不上传稿件内容。",
+    never: "还没有核验过",
+    checked: (checked, total) => `本次核验了 ${checked} / ${total} 条`,
+    unverifiedCount: (count) => `${count} 条待看`,
+    verified: "查到了，标题对得上",
+    skipped: "没有可查的标识",
+    notFound: (kind, value) => `Crossref 与 arXiv 都没有这条记录（${kind}：${value}）`,
+    notFoundNoIdentifier: "Crossref 与 arXiv 都没有这条记录",
+    mismatch: (found) => `这个 DOI / arXiv 号属于另一篇论文：${found}`,
+    error: (reason) => `这次没查成——${reason}`,
+    outside: "这个文件不属于 LaTeX 项目。",
+    failed: (detail) => `读不了文献库：${detail}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */

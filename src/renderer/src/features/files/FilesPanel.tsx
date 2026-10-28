@@ -41,6 +41,7 @@ import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
 import { issueAbsolutePath } from "./latex-diagnostics.ts";
+import type { CiteVerification } from "@shared/cite";
 import { closeDecision } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
@@ -415,6 +416,48 @@ export function FilesPanel(props: {
     () => (latex.project === null ? null : { issues: diagnosticIssues, projectDir: latex.project.dir }),
     [latex.project?.dir, diagnosticIssues],
   );
+  /**
+   * 引文核验（`cite:verify`）。**只在用户点「开始核验」时联网**；结果里只留需要人看的
+   * 那几类（查到另一篇 / 查不到 / 这次没查成），核验通过的不占行。
+   * 换项目（目录变了）就清空：上一个项目的核验结论不属于这一篇论文。
+   */
+  const [verifyState, setVerifyState] = useState<{
+    running: boolean;
+    rows: CiteVerification[];
+    checked: number;
+    total: number;
+    error: string | null;
+  }>({ running: false, rows: [], checked: 0, total: 0, error: null });
+
+  useEffect(() => {
+    setVerifyState({ running: false, rows: [], checked: 0, total: 0, error: null });
+  }, [latex.project?.dir]);
+
+  const runVerify = useCallback((): void => {
+    if (latexContext === null) return;
+    setVerifyState((current) => ({ ...current, running: true, error: null }));
+    void api.cite
+      .verify(latexContext)
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setVerifyState((current) => ({
+            ...current,
+            running: false,
+            error: outcome.reason === "outside-project" ? t.citeVerify.outside : t.citeVerify.failed(outcome.detail),
+          }));
+          return;
+        }
+        const rows = outcome.results.filter(
+          (row) => row.status === "mismatch" || row.status === "not-found" || row.status === "error",
+        );
+        setVerifyState({ running: false, rows, checked: outcome.results.length, total: outcome.total, error: null });
+        if (rows.length > 0) setProblemsOpen(true);
+      })
+      .catch((cause: unknown) => {
+        setVerifyState((current) => ({ ...current, running: false, error: t.citeVerify.failed(failMessage(cause)) }));
+      });
+  }, [latexContext, t]);
+
   const latexGroups = useMemo(
     () => groupLatexIssues(latex.last?.errors ?? [], [...(latex.last?.warnings ?? []), ...bibIssues]),
     [latex.last, bibIssues],
@@ -594,7 +637,9 @@ export function FilesPanel(props: {
             ? t.latex.quoteWarning
             : item.level === "layout"
               ? t.latex.quoteLayout
-              : t.latex.quoteMissingPackage;
+              : item.level === "verify"
+                ? t.latex.quoteVerify
+                : t.latex.quoteMissingPackage;
     const loc = issueLocation(item);
     session.addQuote({
       text: `${prefix} · ${loc === "" ? item.message : `${loc} · ${item.message}`}`,
@@ -1580,6 +1625,7 @@ export function FilesPanel(props: {
             onToggle={() => setProblemsOpen((open) => !open)}
             onHandToAgent={handProblemToAgent}
             onJump={jumpToProblem}
+            {...(citeLibrary === null ? {} : { verify: { ...verifyState, onRun: runVerify } })}
             resolved={resolvedPackages}
             onInstall={installPackage}
           />
