@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.10.0");
+      assert.equal(info.version, "0.11.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -850,6 +850,23 @@ stderr: ${r.stderr}`);
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
     assert.ok(parsed.cases >= 60, `用例数应 >= 60，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test(
+  "输入让路纯函数 selftest：判定表 / 等待上限 / tick 回绕 / 归属判定（不装钩子、不碰桌面）",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-yield"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    // 宿主上能验的就是「判定」这部分（钩子本身要沙箱）：用例数钉在 40 以上，别越改越少
+    assert.ok(parsed.cases >= 40, `用例数应 >= 40，实际 ${parsed.cases}`);
     assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
   },
 );

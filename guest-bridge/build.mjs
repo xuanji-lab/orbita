@@ -68,6 +68,8 @@ const args = [
   // UI Automation 车道（0.10.0）：uia-list / uia-act + 手写 COM interop、STA 看门狗
   // （不引 UIAutomationClient.dll：那是 .NET 的包装，不暴露 AutoSetFocus）
   path.join(scriptDir, "Uia.cs"),
+  // 输入让路（0.11.0）：低级钩子线程 + 「人在动还是我们注入」的判定 + 让路闸门的纯函数
+  path.join(scriptDir, "InputHook.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);

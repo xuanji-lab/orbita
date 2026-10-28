@@ -254,6 +254,66 @@ describe("applyComputerUseRequest", () => {
   });
 });
 
+describe("applyComputerUseRequest：用户优先的让路回执（桥 0.11.0）", () => {
+  /** 四条像素命令的请求（让路只对它们生效） */
+  const pixelRequests: ComputerUseToolRequest[] = [
+    { action: "click", x: 10, y: 20 },
+    { action: "type", text: "hi" },
+    { action: "key", key: "enter" },
+    { action: "scroll", x: 10, y: 20, deltaY: 1 },
+  ];
+
+  test("click / type / key / scroll 都补上「为什么慢了」的说明，带上具体毫秒数", async () => {
+    for (const request of pixelRequests) {
+      const { guest } = fakeGuest({ commandResult: { ok: true, yielded: true, waitedMs: 850 } });
+      const outcome = await run(guest, request);
+      assert.equal(outcome.ok, true, `${request.action} 应成功`);
+      if (!outcome.ok) continue;
+      assert.match(outcome.text, /held back for 850ms/, `${request.action} 应点名等了多久`);
+      // 模型必须知道「为了让路」而不是「桥卡了」：点出人、点出用户优先
+      assert.match(outcome.text, /a person was typing or clicking in the sandbox/);
+      assert.match(outcome.text, /takes priority over the agent's/);
+      // 以及接着该怎么做：换不占桌面的车道
+      assert.match(outcome.text, /sandbox_\* browser commands/);
+      assert.match(outcome.text, /computer_uia/);
+    }
+  });
+
+  test("没让路（回执里没有 yielded）→ 文案一个字都不加", async () => {
+    const { guest } = fakeGuest({});
+    const outcome = await run(guest, { action: "click", x: 1, y: 2 });
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) {
+      assert.doesNotMatch(outcome.text, /held back/);
+      assert.doesNotMatch(outcome.text, /priority/);
+    }
+  });
+
+  test("让路但桥没给 waitedMs → 按 0ms 说，不吞掉「让过路」这件事", async () => {
+    const { guest } = fakeGuest({ commandResult: { ok: true, yielded: true } });
+    const outcome = await run(guest, { action: "type", text: "x" });
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) assert.match(outcome.text, /held back for 0ms/);
+  });
+
+  test("让路等到上限（放弃）→ 桥的人话原样带出，不当成成功", async () => {
+    const giveUp = "用户正在使用沙箱桌面，click 已暂缓 4000ms 仍未等到停手，已放弃（一个输入事件都没送）。";
+    const { guest } = fakeGuest({ commandResult: { ok: false, error: giveUp } });
+    const outcome = await run(guest, { action: "click", x: 1, y: 2 });
+    assert.deepEqual(outcome, { ok: false, error: giveUp });
+  });
+
+  test("窗口截图 / UIA 不带让路说明（它们不占桌面，不会被推迟）", async () => {
+    const { guest } = fakeGuest({});
+    const shot = await run(guest, { action: "screenshot", window: 4321 });
+    assert.equal(shot.ok, true);
+    if (shot.ok) assert.doesNotMatch(shot.text, /held back/);
+    const uia = await run(guest, { action: "uia-act", window: 4321, ref: 2, perform: "invoke" });
+    assert.equal(uia.ok, true);
+    if (uia.ok) assert.doesNotMatch(uia.text, /held back/);
+  });
+});
+
 describe("applyComputerUseRequest：按窗口截图（win-shot / win-list，桥 0.9.0）", () => {
   test("window 是数字：下发 hwnd（hwnd 优先于 title），回执带窗口几何与「坐标不能用于点击」", async () => {
     const { guest, calls } = fakeGuest({});

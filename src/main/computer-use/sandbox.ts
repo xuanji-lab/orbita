@@ -241,8 +241,23 @@ export interface SandboxProcess {
  * guest 命令下发的回执（controller 内部形状）。只有成/败：输入类命令的语义就是
  * 「事件已送出」，屏幕变成什么样要看下一张截图。**不进 shared/**：它不过进程边界，
  * 跨边界的那份是 shared/computer-use.ts 的 ComputerUseToolOutcome。
+ *
+ * `yielded` / `waitedMs`（桥 0.11.0）是「这条动作被推迟过」的唯一回执信号：用户正在沙箱里
+ * 真打字/点鼠标时，像素动作会被推到用户停手之后再送（用户优先），模型看不见窗口，
+ * 只能靠这两个字段知道自己刚才那一下为什么慢。**没推迟过就一个字段都不加**。
  */
-export type GuestCommandResult = { ok: true } | { ok: false; error: string };
+export type GuestCommandResult =
+  | { ok: true; yielded?: boolean; waitedMs?: number }
+  | { ok: false; error: string };
+
+/**
+ * 桥回执里的让路字段 → 回执的可选项（形状守卫：不是字面 true / 不是数字就当没推迟）。
+ * 单抽出来是为了让「回执形状」只在一处决定：别的命令回执里没有这两个键，{ ok: true } 仍是 {}。
+ */
+function deferredOf(resp: Record<string, unknown>): { yielded?: boolean; waitedMs?: number } {
+  if (resp.yielded !== true) return {};
+  return { yielded: true, ...(typeof resp.waitedMs === "number" ? { waitedMs: resp.waitedMs } : {}) };
+}
 
 /**
  * 带**回执载荷**的 guest 命令结果（CDP 通道要读 resp 里的 port / running / text / elements）。
@@ -747,6 +762,7 @@ export class SandboxController {
    * 闸门与 screenshot 同一处：只有 running 才发得出去——没在跑时命令会石沉大海（上一局的
    * out/cmd 已被清空），等 45 秒超时再报错对模型毫无信息量。
    * 回执只有成/败：这些命令的语义就是「事件已送出」，屏幕变成什么样要看下一张截图。
+   * 例外是让路的两个字段（yielded / waitedMs）：它讲的是「这一下为什么晚了」，不是屏幕状态。
    */
   async guestCommand(
     command: ComputerUseGuestCommand,
@@ -755,13 +771,13 @@ export class SandboxController {
     const gate = this.notRunning("沙箱操作");
     if (gate !== null) return gate;
     try {
-      await sendGuestCommand(
+      const resp = await sendGuestCommand(
         this.outDir(),
         command,
         fields,
         this.deps.guestTimeoutMs,
       );
-      return { ok: true };
+      return { ok: true, ...deferredOf(resp) };
     } catch (cause: unknown) {
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
