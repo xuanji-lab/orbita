@@ -1306,6 +1306,21 @@ export const zh: Messages = {
     fileCardUndone: "已撤销",
     fileCardWebPage: "网页",
     openInOrbita: "在 orbita 打开",
+    openInOrbitaRefused: (reason) => {
+      switch (reason) {
+        case "outside":
+          return "这里打不开：文件不在本任务的目录里（工作台、工作目录、附加目录、浏览器下载目录）。「打开文件位置」照常可用。";
+        case "missing":
+          return "打不开：文件已经不在了。";
+        case "not-web-page":
+          return "这里打不开：它不是网页（可能是指向别种文件的链接）。";
+        case "not-in-record":
+          return "打不开：这个文件不在本任务的改动记录里。";
+        default:
+          return "打不开：文件路径无效。";
+      }
+    },
+    openInOrbitaFailed: "没能在 orbita 里打开。",
     revealArtifact: "打开文件位置",
     worked: "用时",
     // 消息时间悬停全称里的星期（getDay() 序，周日打头）——短标签不带星期，全称给足

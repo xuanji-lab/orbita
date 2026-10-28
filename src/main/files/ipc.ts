@@ -22,12 +22,12 @@ import { readPdfFile, readPreview } from "./read.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
- * 传函数不传沙盒：文件面板只需要这一个动作
+ * 传函数不传沙盒：文件面板只需要这一个动作。roots 是页面打开之后能读的本地范围（页面闸）
  */
 export function registerFilesIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
-  openInBrowser: (path: string) => Promise<void>,
+  openInBrowser: (path: string, roots: readonly string[]) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
@@ -94,12 +94,16 @@ export function registerFilesIpc(
    * 网页文件的默认打开方式：内置浏览器（2026-09-29 裁决「全都默认用内置」）。同一道白名单，
    * 外加只认网页文件——这条通道不能变成「让浏览器加载任意本地文件」。判定用 realpath 之后的
    * 路径：指向别的类型的 foo.html 软链接同样被拒。
+   *
+   * 入口闸只管第一个地址；页面打开之后它自己还能 fetch / iframe / 跳转到任意 file://（#365）。
+   * 所以把这条会话的白名单根一并交给浏览器：页面之后对 file:// 的请求只在这些根里放行——
+   * 与文件面板本身能读的范围一样，不多不少。
    */
   ipcMain.handle(ipcChannels.fsOpenInBrowser, async (_event, req: FileListRequest): Promise<void> => {
     const roots = await resolveFileRoots(workspaces, sessions, req);
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
-    await openInBrowser(path);
+    await openInBrowser(path, roots.filter((root) => root.exists).map((root) => root.path));
   });
 
   /**

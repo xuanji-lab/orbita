@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listDirectory } from "./list.ts";
+import { listDirectory, whitelistedPath } from "./list.ts";
 import type { FileListRequest, FileRoot } from "../../shared/files.ts";
 
 let dir = "";
@@ -116,5 +116,25 @@ describe("listDirectory", () => {
     await writeFile(join(rootDir, "..cache", "x.txt"), "x", "utf8");
     const result = await listDirectory(roots, req(rootDir, join(rootDir, "..cache")));
     assert.deepEqual(result.entries.map((entry) => entry.name), ["x.txt"]);
+  });
+});
+
+/**
+ * #365 的夹具：根内 `linkout/` 是指向根外的 junction，下面有 doc.pdf / page.html。
+ * fs:read-pdf 与 fs:open-in-browser 的入口闸都是 whitelistedPath（files/ipc.ts）——
+ * 这里把「入口闸拒绝」钉死；页面打开之后还能读到什么，归浏览器的 file:// 闸（browser/local-file.ts）。
+ */
+describe("whitelistedPath × #365 夹具（read-pdf / 在内置浏览器打开的入口闸）", () => {
+  test("穿过根内的链接目录指到根外：PDF 与网页一律拒绝；根内的照常放行", async () => {
+    const outside = join(dir, "outside");
+    await mkdir(outside);
+    await writeFile(join(outside, "doc.pdf"), "%PDF-1.4\nOUTSIDE-SECRET\n", "utf8");
+    await writeFile(join(outside, "page.html"), "<p>OUTSIDE-SECRET</p>", "utf8");
+    await symlink(outside, join(rootDir, "linkout"), "junction");
+    await writeFile(join(rootDir, "inside.pdf"), "%PDF-1.4\n", "utf8");
+    for (const name of ["doc.pdf", "page.html"]) {
+      await assert.rejects(() => whitelistedPath(roots, req(rootDir, join(rootDir, "linkout", name))), /不在允许的根之内/);
+    }
+    assert.equal(await whitelistedPath(roots, req(rootDir, join(rootDir, "inside.pdf"))), await realpath(join(rootDir, "inside.pdf")));
   });
 });
