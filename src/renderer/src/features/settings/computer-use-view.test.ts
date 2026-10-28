@@ -1,13 +1,20 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ComputerUseProbeResult, ComputerUseScreenshotResult, SandboxState } from "../../../../shared/computer-use.ts";
-import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "../../../../shared/computer-use.ts";
+import {
+  COMPUTER_USE_BROWSER_CHOICES,
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  COMPUTER_USE_DEFAULT_BROWSER,
+} from "../../../../shared/computer-use.ts";
 import type { AppSettings } from "../../../../shared/settings.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
   allowNetworkEnabled,
   allowNetworkPatch,
+  browserChoice,
+  browserLabel,
+  browserPatch,
   probeBlocksStart,
   probeVisual,
   sandboxControl,
@@ -199,5 +206,58 @@ describe("电脑使用 · 出网开关", () => {
     assert.match(zh.computerUse.allowNetworkBelow, /仍按启动时/);
     assert.match(en.computerUse.allowNetworkBelow, /next time the sandbox starts/i);
     assert.match(en.computerUse.allowNetworkBelow, /running sandbox/i);
+  });
+});
+
+describe("电脑使用 · 沙箱浏览器", () => {
+  const settings = (browser?: "edge" | "chrome" | "brave" | "chromium" | "auto"): AppSettings =>
+    browser === undefined
+      ? { theme: "system", drawer: { width: 320, docked: [] } }
+      : { theme: "system", drawer: { width: 320, docked: [] }, computerUse: { browser } };
+
+  test("缺席 = edge（UI 自己兜缺省，与 effectiveGuestBrowser 同源）", () => {
+    assert.equal(browserChoice(settings()), "edge");
+    assert.equal(browserChoice(settings()), COMPUTER_USE_DEFAULT_BROWSER);
+    assert.equal(browserChoice(settings("edge")), "edge");
+  });
+
+  test("盘上写过的值原样显示（五个选项一个不漏）", () => {
+    for (const choice of COMPUTER_USE_BROWSER_CHOICES) {
+      assert.equal(browserChoice(settings(choice)), choice);
+    }
+  });
+
+  test("点选项发的补丁只带 browser（不冲掉 allowNetwork / allowedApps）", () => {
+    assert.deepEqual(browserPatch("chrome"), { computerUse: { browser: "chrome" } });
+    assert.deepEqual(browserPatch("edge"), { computerUse: { browser: "edge" } });
+  });
+
+  test("芯片文字：专有名词不翻译，只有 auto 走 i18n", () => {
+    assert.equal(browserLabel("edge", zh.computerUse.browserAuto), "Edge");
+    assert.equal(browserLabel("chrome", zh.computerUse.browserAuto), "Chrome");
+    assert.equal(browserLabel("brave", zh.computerUse.browserAuto), "Brave");
+    assert.equal(browserLabel("chromium", zh.computerUse.browserAuto), "Chromium");
+    assert.equal(browserLabel("auto", zh.computerUse.browserAuto), zh.computerUse.browserAuto);
+    assert.equal(browserLabel("auto", en.computerUse.browserAuto), en.computerUse.browserAuto);
+    assert.equal(zh.computerUse.browserAuto, "自动");
+    assert.equal(en.computerUse.browserAuto, "Auto");
+  });
+
+  test("chips 顺序 = COMPUTER_USE_BROWSER_CHOICES（Edge 在最左 = 默认）", () => {
+    assert.deepEqual([...COMPUTER_USE_BROWSER_CHOICES], ["edge", "chrome", "brave", "chromium", "auto"]);
+  });
+
+  test("hint 说实话：Chrome / Brave 要先放进沙箱，否则回退 Edge", () => {
+    for (const table of [en, zh] as const) {
+      assert.ok(table.computerUse.browser.length > 0);
+      assert.ok(table.computerUse.browserInfo.length > 0);
+      assert.ok(table.computerUse.browserBelow.length > 0, "below 不能是空句");
+    }
+    assert.match(zh.computerUse.browserBelow, /映射或拷贝/);
+    assert.match(zh.computerUse.browserBelow, /回退 Edge/);
+    assert.match(zh.computerUse.browserInfo, /默认 Edge/);
+    assert.match(en.computerUse.browserBelow, /map or copy/i);
+    assert.match(en.computerUse.browserBelow, /falls back to Edge/i);
+    assert.match(en.computerUse.browserInfo, /Edge is the default/i);
   });
 });

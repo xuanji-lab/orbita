@@ -31,6 +31,13 @@
 //   起 Edge 之前的那个窗口，并在回执里给出 prevForeground / foregroundRestored。
 //   真机实测与三条路的选择理由写在文件末尾的 Foreground 类头部。
 //
+// 0.12.0 起**浏览器不写死**：cdp-start 认一个可选的 `browser`（edge / chrome / brave /
+// chromium / auto，或一条绝对路径），默认仍是 Edge——沙箱预装它，启动到 CDP 就绪实测
+// 2152ms；Chrome 从宿主映射直跑要 3198ms，拷进沙箱本地盘能追平但每台沙箱多 3 秒。所以
+// 「可配」是为了不把选择权焊死，不是为了换默认。找不到请求的那个就**回退 Edge 并在回执里
+// 说清**（browserFallbackFrom），绝不静默当成请求的浏览器成功。
+// 探测顺序与理由见 BrowserChoice / ResolveBrowser。
+//
 // 编译约束不变：csc v4.0.30319 = C# 5（禁字符串插值 / ?. / out var / using 声明 / 枚举）。
 // 全程同步 .Wait(ms)：桥本来就是 while(true) 轮询循环，铺 async 状态机没有收益。
 
@@ -48,11 +55,46 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+/**
+ * 一次「用哪个浏览器」的解析结果（纯数据：自测直接断言字段，不碰进程、不碰真实文件）。
+ *
+ * 为什么把「请求」与「实际」分成两个字段：宿主下发的是**用户的选择**，而沙箱里未必装着它。
+ * 只回实际用的那个，宿主就没法解释「我配了 Chrome，为什么回执里是 Edge」；只回请求值，
+ * 又会让模型以为它真的在 Chrome 里点（于是排查全跑偏）。两个都回，加上 FallbackFrom，
+ * 一句话就能说清这次到底跑的是谁。
+ */
+internal sealed class BrowserChoice
+{
+    /** 规范化后的请求值：edge / chrome / brave / chromium / auto，或一条绝对路径 */
+    internal string Requested;
+    /** 实际用的名字：edge / chrome / brave / chromium / custom；null = 一个都没找到 */
+    internal string Name;
+    /** 实际 exe 的绝对路径；null = 一个都没找到 */
+    internal string Path;
+    /** 回显给人 / 模型看的名字：Edge / Chrome / Brave / Chromium，自定义路径用它自己的文件名 */
+    internal string Label;
+    /** 请求的浏览器没找到、回退到别的时 = 请求的名字（如 "chrome"）；没回退 = null */
+    internal string FallbackFrom;
+    /** 找不到时给人看的一句话（点名找过哪些路径）；找到了 = null */
+    internal string MissingNote;
+}
+
 internal sealed class CdpSession
 {
-    // ── 沙箱内的固定路径（与 shared/computer-use.ts 的常量严格一致）────────────────
+    // ── 沙箱内的固定落点 ──────────────────────────────────────────────────────
+    // 这些路径**不是**「宿主的浏览器路径」：沙箱是独立 VM，只有装进 / 映射进 VM 的东西才可见。
+    // Edge 是镜像预装的，所以这里是它的默认位置；Chrome / Brave / Chromium 只在用户自己
+    // 映射进来之后才存在（设置 › 电脑使用 › 沙箱浏览器）。
     private const string EdgePathX86 = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
     private const string EdgePathX64 = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
+    private const string ChromePathX64 = @"C:\Program Files\Google\Chrome\Application\chrome.exe";
+    private const string ChromePathX86 = @"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe";
+    private const string BravePathX64 = @"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe";
+    private const string BravePathX86 = @"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe";
+    private const string ChromiumPathX64 = @"C:\Program Files\Chromium\Application\chrome.exe";
+    private const string ChromiumPathX86 = @"C:\Program Files (x86)\Chromium\Application\chrome.exe";
+    private const string ChromiumExePathX64 = @"C:\Program Files\Chromium\Application\chromium.exe";
+    private const string ChromiumExePathX86 = @"C:\Program Files (x86)\Chromium\Application\chromium.exe";
     private const string UploadRoot = @"C:\orbita-out\upload";
     private const string DownloadRoot = @"C:\orbita-out\downloads";
 
@@ -157,6 +199,12 @@ internal sealed class CdpSession
     /** 起 Edge 之前的前台窗口（0 = 当时沙箱里没有前台窗口） */
     private long _foregroundPrev;
 
+    // ── 浏览器选择（0.12.0：cdp-start 的 browser 字段）────────────────────────────
+    /** 宿主下发的原始请求值（重启浏览器时照原样再解析一遍）；null = 没给 */
+    private string _browserRequested;
+    /** 本次实际用哪个浏览器（Launch 里解析；还没起过 = null） */
+    private BrowserChoice _browserChoice;
+
     public CdpSession(string key)
     {
         Key = key;
@@ -224,6 +272,10 @@ internal sealed class CdpSession
         bool headless = Program.ExtractBool(raw, "headless");
         int port = ReadInt(raw, "port", 0, 0, 65535);
         string url = Program.ExtractJsonString(raw, "url");
+        // 浏览器选择：缺省 / 不认识都按 Edge（理由见 ResolveBrowser）。存原始值而不是解析结果：
+        // 重启浏览器时还要再解析一次（用户可能在这中间把 Chrome 映射进来了）
+        string browser = Program.ExtractJsonString(raw, "browser");
+        if (browser != null && browser.Trim().Length > 0) _browserRequested = browser.Trim();
 
         if (IsAlive())
         {
@@ -270,7 +322,7 @@ internal sealed class CdpSession
         if (_foregroundPrev == 0)
         {
             _foreground.Restored = true; // 没有可还原的对象（沙箱刚登录时就是 0）
-            Program.Log("CDP " + where + "：起 Edge 之前沙箱里没有前台窗口，无需还原（起之后的前台 hwnd "
+            Program.Log("CDP " + where + "：起 " + BrowserLabel() + " 之前沙箱里没有前台窗口，无需还原（起之后的前台 hwnd "
                 + _foreground.Final + "）");
             return;
         }
@@ -299,7 +351,7 @@ internal sealed class CdpSession
         }
         Program.Log("CDP " + where + " 前台**没有还回去**：起之前 hwnd " + _foregroundPrev + "，现在 hwnd "
             + _foreground.Final + "（置前尝试 " + _foreground.Raises + " 次，失败 " + _foreground.RaiseFailures
-            + " 次）——像素输入可能落在 Edge 上");
+            + " 次）——像素输入可能落在 " + BrowserLabel() + " 上");
     }
 
     /** portWaitMs 是等 DevToolsActivePort 的上限（重启 Edge 时会按剩余预算压低它） */
@@ -308,15 +360,25 @@ internal sealed class CdpSession
         // 测试缝：在宿主上跑 bridge.test.mjs 时绝不能去 Process.Start msedge.exe
         //（那是用户真实的浏览器）。生产不带 --no-browser。
         if (Program.BrowserDisabled)
-            throw new Exception("测试模式（--no-browser）：不在这个进程里启动 Edge。"
+            throw new Exception("测试模式（--no-browser）：不在这个进程里启动浏览器。"
                 + "真机请用 sandbox_navigate；如不能起 CDP，改用 computer_screenshot / computer_click 像素工具");
-        string edge = EdgePath();
-        if (edge == null)
+        // 解析「这次到底起谁」：请求的那个没装就回退 Edge，一个都没找到才报错
+        BrowserChoice choice = ResolveBrowser(_browserRequested, new Func<string, bool>(File.Exists));
+        if (choice.Path == null)
         {
-            throw new Exception(
-                "沙箱里没有找到 msedge.exe（找过 Program Files (x86) 与 Program Files 两处）。"
+            // 先写进状态：回执 / 日志里都要能看到「试过哪些」
+            _browserChoice = choice;
+            throw new Exception(choice.MissingNote
                 + "CDP 通道在这个沙箱里用不了：请改用 computer_screenshot / computer_click 像素工具操作网页");
         }
+        _browserChoice = choice;
+        if (choice.FallbackFrom != null)
+        {
+            // 绝不静默回退：用户在设置里选了 Chrome，回执与日志都得说「这次其实用的 Edge」
+            Program.Log("CDP 回退：请求的 " + DisplayName(choice.FallbackFrom) + " 在沙箱里没找到，本次用 "
+                + choice.Label + "（" + choice.Path + "）");
+        }
+        string exe = choice.Path;
         try
         {
             Directory.CreateDirectory(_profileDir);
@@ -347,9 +409,9 @@ internal sealed class CdpSession
         // WaitForPortFile 一进循环就看见「文件已存在」立刻回 true，然后把**旧端口**当成本次端口，
         // 之后去连一个死 socket——真机 2026-10-25 的「cdp-start 失败：Unable to connect to the remote server」。
         ClearStalePortFile(_profileDir);
-        Program.Log("CDP 启动 Edge：" + edge + " " + args);
-        _edge = Process.Start(new ProcessStartInfo(edge, args));
-        if (_edge == null) throw new Exception("启动 msedge.exe 失败（进程没有起来）");
+        Program.Log("CDP 启动 " + choice.Label + "：" + exe + " " + args);
+        _edge = Process.Start(new ProcessStartInfo(exe, args));
+        if (_edge == null) throw new Exception("启动 " + choice.Label + " 失败（进程没有起来）");
 
         // 首启偶尔会因为沙箱里嵌套的 Chromium sandbox 冲突秒退：给一次 --no-sandbox 重试
         //（沙箱本身已是 VM 隔离，这一层可接受）。
@@ -359,8 +421,8 @@ internal sealed class CdpSession
             {
                 Program.Log("CDP 首启未就绪，带 --no-sandbox 重试一次");
                 KillOurEdge();
-                _edge = Process.Start(new ProcessStartInfo(edge, BuildArgs(port, headless, true)));
-                if (_edge == null) throw new Exception("启动 msedge.exe 失败（重试也没有起来）");
+                _edge = Process.Start(new ProcessStartInfo(exe, BuildArgs(port, headless, true)));
+                if (_edge == null) throw new Exception("启动 " + choice.Label + " 失败（重试也没有起来）");
             }
         }
 
@@ -369,7 +431,7 @@ internal sealed class CdpSession
         if (content.Length == 0)
         {
             throw new Exception(
-                "Edge 进程起来了，但 " + portWaitMs / 1000 + " 秒内没有打开调试端口（"
+                choice.Label + " 进程起来了，但 " + portWaitMs / 1000 + " 秒内没有打开调试端口（"
                 + Path.Combine(_profileDir, "DevToolsActivePort") + " 没出现）。"
                 + "可以再试一次 sandbox_navigate；连续失败就改用 computer_screenshot / computer_click 像素工具");
         }
@@ -377,7 +439,8 @@ internal sealed class CdpSession
         string portText = lines.Length > 0 ? lines[0].Trim() : "";
         int parsed = ParsePortFileContent(content);
         if (parsed <= 0)
-            throw new Exception("DevToolsActivePort 的首行不是端口号（读到「" + portText + "」）——这个 Edge 版本的端口文件格式不同");
+            throw new Exception("DevToolsActivePort 的首行不是端口号（读到「" + portText + "」）——这个 "
+                + choice.Label + " 版本的端口文件格式不同");
         _port = parsed;
         Program.Log("CDP 端口 " + _port + "（来自 DevToolsActivePort）");
     }
@@ -431,10 +494,12 @@ internal sealed class CdpSession
         a.Append("--user-data-dir=\"").Append(_profileDir).Append("\" ");
         a.Append("--no-first-run --no-default-browser-check ");
         a.Append("--disable-sync --disable-background-networking --disable-component-update ");
+        // 这三条是 Edge 专用的首启体验开关（欢迎页 / 侧栏 / 首次运行向导）：对 Chrome / Brave /
+        // Chromium 是未知 feature，Chromium 只打一行 warning、行为不受影响，所以不按浏览器分叉。
         a.Append("--disable-features=msEdgeFirstRunExperience,msEdgeSidebarV2,msEdgeWelcomePage ");
         a.Append("--disable-gpu ");
         a.Append("--window-size=1366,900 ");
-        // 0.11.0 起这只 Edge 的窗口**故意不再占前台**（cdp-start 会把前台还给先前台窗口）。
+        // 0.11.0 起这只浏览器的窗口**故意不再占前台**（cdp-start 会把前台还给先前台窗口）。
         // Chromium 对被遮住 / 非前台的窗口会降频：定时器变 1Hz、renderer 被标记为 backgrounded。
         // 那会让 cdp-wait 的 readyState 轮询、页面动画与「加载完成」判定变慢，看起来像“卡死”。
         // 这三个开关就是自动化工具（Puppeteer / Playwright）为同一件事加的，这里跟着加。
@@ -452,11 +517,241 @@ internal sealed class CdpSession
         return BuildArgs(port, headless, noSandbox);
     }
 
-    private string EdgePath()
+    // ── 浏览器探测（0.12.0）──────────────────────────────────────────────────────────────
+
+    /**
+     * 请求值规范化。**宽进**：手改 enum 成大写的 `Chrome` / 末尾带空格都认；
+     * 不认识的字符串落回 edge——一个拼错的字符串不该把整条 CDP 通道挡死（宿主解析层
+     * 也做同样的事并留一行日志，这里是第二道）。
+     * 绝对路径原样保留（自定义路径的后门：不提供 UI，但允许手改 settings.json）。
+     */
+    internal static string NormalizeBrowserRequest(string requested)
     {
-        if (File.Exists(EdgePathX86)) return EdgePathX86;
-        if (File.Exists(EdgePathX64)) return EdgePathX64;
+        string want = requested == null ? "" : requested.Trim();
+        if (want.Length == 0) return "edge";
+        if (LooksLikePath(want)) return want;
+        string lower = want.ToLowerInvariant();
+        if (lower == "auto" || lower == "chrome" || lower == "brave" || lower == "chromium") return lower;
+        return "edge";
+    }
+
+    /** 是不是一条 Windows 绝对路径（盘符或 UNC）。不用 Path.IsPathRooted：它对坏字符会抛 */
+    internal static bool LooksLikePath(string value)
+    {
+        if (value == null) return false;
+        string v = value.Trim();
+        if (v.Length >= 3 && char.IsLetter(v[0]) && v[1] == ':' && (v[2] == '\\' || v[2] == '/')) return true;
+        return v.Length >= 2 && v[0] == '\\' && v[1] == '\\';
+    }
+
+    /** 一个浏览器名字 → 沙箱里可能的落点（顺序就是探测顺序）。不认识的按 Edge。 */
+    internal static string[] Candidates(string name)
+    {
+        if (name == "chrome")
+            return new string[] { ChromePathX64, ChromePathX86 };
+        if (name == "brave")
+            return new string[] { BravePathX64, BravePathX86 };
+        if (name == "chromium")
+            return new string[] { ChromiumPathX64, ChromiumPathX86, ChromiumExePathX64, ChromiumExePathX86 };
+        // Edge 先查 x86（真机上 Edge 就装在 Program Files (x86)），与改动前 EdgePath() 的顺序一致
+        return new string[] { EdgePathX86, EdgePathX64 };
+    }
+
+    /** 实际用了谁 → 给人 / 模型看的名字 */
+    internal static string DisplayName(string name)
+    {
+        if (name == null || name.Length == 0) return "浏览器";
+        string lower = name.ToLowerInvariant();
+        if (lower == "edge") return "Edge";
+        if (lower == "chrome") return "Chrome";
+        if (lower == "brave") return "Brave";
+        if (lower == "chromium") return "Chromium";
+        if (lower == "auto") return "自动选择的浏览器";
+        return name; // 自定义路径：原样回显那条路径
+    }
+
+    /** 从 exe 路径反推浏览器名（自定义路径的 name：能给真名的就给，给不了就算 custom） */
+    internal static string NameFromPath(string path)
+    {
+        string file = FileNameOf(path).ToLowerInvariant();
+        if (file == "msedge.exe") return "edge";
+        if (file == "chrome.exe") return "chrome";
+        if (file == "brave.exe" || file == "brave-browser.exe") return "brave";
+        if (file == "chromium.exe") return "chromium";
+        return "custom";
+    }
+
+    /** 路径末段（反斜杠、正斜杠都认） */
+    private static string FileNameOf(string path)
+    {
+        if (path == null) return "";
+        string v = path.Trim();
+        int cut = v.LastIndexOf('\\');
+        int cut2 = v.LastIndexOf('/');
+        if (cut2 > cut) cut = cut2;
+        return cut >= 0 ? v.Substring(cut + 1) : v;
+    }
+
+    /**
+     * 请求值 + 「文件存在吗」 → 这次到底起谁。**纯函数**：自测注入假的 exists，绝不碰真实文件。
+     *
+     * 规则（设置页 / 宿主文档同一份语义）：
+     *   - 绝对路径且存在 → 用它（自定义路径后门）；
+     *   - chrome / brave / chromium → 各自的常见落点，**没找到就回退 Edge**，并记下 FallbackFrom；
+     *   - edge / 缺省 / 不认识 → Edge 的两条落点；
+     *   - auto → 按 edge → chrome → brave → chromium 依次探，第一个存在的就用（不算回退：
+     *     它本来就没指定是谁）；
+     *   - 一个都没找到 → Path = null，MissingNote 点名找过哪些路径。
+     *
+     * 回退而不是报错：这类沙箱里绝大多数请求都是「想用 Chrome 但还没映射进来」，回退 Edge
+     * 能让这一轮网页任务继续跑（Edge 的 CDP 能力与 Chrome 完全一样），同时回执把真相说清楚。
+     */
+    internal static BrowserChoice ResolveBrowser(string requested, Func<string, bool> exists)
+    {
+        if (exists == null) exists = new Func<string, bool>(File.Exists);
+        string want = NormalizeBrowserRequest(requested);
+        BrowserChoice choice = new BrowserChoice();
+        choice.Requested = want;
+
+        if (LooksLikePath(want))
+        {
+            if (exists(want))
+            {
+                choice.Name = NameFromPath(want);
+                choice.Path = want;
+                choice.Label = LabelFor(want, choice.Name);
+                return choice;
+            }
+            // 自定义路径不存在：与「请求的浏览器没装」同一条处置——能回退就回退
+            BrowserChoice fallback = FindFirst(Candidates("edge"), "edge", exists);
+            if (fallback != null)
+            {
+                fallback.Requested = want;
+                fallback.FallbackFrom = want;
+                fallback.MissingNote = MissingNoteFor(want, new string[] { want }, true);
+                return fallback;
+            }
+            choice.MissingNote = MissingNoteFor(want, new string[] { want }, false);
+            return choice;
+        }
+
+        List<string> tried = new List<string>();
+        if (want == "auto")
+        {
+            string[] order = new string[] { "edge", "chrome", "brave", "chromium" };
+            for (int i = 0; i < order.Length; i++)
+            {
+                string[] candidates = Candidates(order[i]);
+                for (int c = 0; c < candidates.Length; c++) tried.Add(candidates[c]);
+                BrowserChoice hit = FindFirst(candidates, order[i], exists);
+                if (hit != null)
+                {
+                    hit.Requested = want;
+                    return hit;
+                }
+            }
+            choice.MissingNote = MissingNoteFor(want, tried.ToArray(), false);
+            return choice;
+        }
+
+        string[] primary = Candidates(want);
+        for (int c = 0; c < primary.Length; c++) tried.Add(primary[c]);
+        BrowserChoice found = FindFirst(primary, want, exists);
+        if (found != null)
+        {
+            found.Requested = want;
+            return found;
+        }
+        if (want != "edge")
+        {
+            string[] edgeCandidates = Candidates("edge");
+            for (int c = 0; c < edgeCandidates.Length; c++) tried.Add(edgeCandidates[c]);
+            BrowserChoice edge = FindFirst(edgeCandidates, "edge", exists);
+            if (edge != null)
+            {
+                edge.Requested = want;
+                edge.FallbackFrom = want;
+                edge.MissingNote = MissingNoteFor(want, tried.ToArray(), true);
+                return edge;
+            }
+        }
+        choice.MissingNote = MissingNoteFor(want, tried.ToArray(), false);
+        return choice;
+    }
+
+    /** 按顺序找第一个存在的落点；一个都没有 = null */
+    private static BrowserChoice FindFirst(string[] candidates, string name, Func<string, bool> exists)
+    {
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            if (!exists(candidates[i])) continue;
+            BrowserChoice hit = new BrowserChoice();
+            hit.Name = name;
+            hit.Path = candidates[i];
+            hit.Label = LabelFor(candidates[i], name);
+            return hit;
+        }
         return null;
+    }
+
+    /** 回显名：认识的给真名，自定义路径给文件名（"thorium.exe"） */
+    private static string LabelFor(string path, string name)
+    {
+        if (name == "custom" || name == null)
+        {
+            string file = FileNameOf(path);
+            return file.Length > 0 ? file : "自定义浏览器";
+        }
+        return DisplayName(name);
+    }
+
+    /**
+     * 「一个都没找到」时的那句话。**要点名试过哪些路径**：用户按提示把 Chrome 映射进来时，
+     * 需要知道该放到哪里；只说「没找到」会让他去猜。
+     */
+    private static string MissingNoteFor(string want, string[] tried, bool edgePresent)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.Append("沙箱里没有找到 ").Append(DisplayName(want)).Append("（找过：");
+        for (int i = 0; i < tried.Length; i++)
+        {
+            if (i > 0) sb.Append("；");
+            sb.Append(tried[i]);
+        }
+        sb.Append("）。");
+        if (want == "edge")
+        {
+            sb.Append("这个沙箱里没有可用的浏览器。");
+            return sb.ToString();
+        }
+        if (edgePresent)
+            sb.Append("沙箱默认只带 Edge，所以这次回退到 Edge：");
+        else
+            sb.Append("沙箱默认只带 Edge，而这次连 Edge 也没找到：");
+        sb.Append("要用 ").Append(DisplayName(want))
+            .Append(" 需要先把它映射（或拷贝）进沙箱，或者把「设置 › 电脑使用 › 沙箱浏览器」改回 Edge。");
+        return sb.ToString();
+    }
+
+    /** 回执 / 日志里提当前浏览器用的名字（还没起过 = 浏览器） */
+    private string BrowserLabel()
+    {
+        if (_browserChoice == null || _browserChoice.Label == null) return "浏览器";
+        return _browserChoice.Label;
+    }
+
+    /**
+     * 回执里的浏览器字段。**键名是宿主（cdp.ts）与模型侧的契约**，自测断言它们不漂：
+     *   browser            实际用的名字（edge / chrome / brave / chromium / custom）
+     *   browserPath        实际 exe 的 guest 绝对路径
+     *   browserFallbackFrom 请求的浏览器没找到时的请求名（有它 = 这次是回退的结果）
+     */
+    internal static void AppendBrowserFields(JObj o, BrowserChoice choice)
+    {
+        if (choice == null) return;
+        o.Str("browser", choice.Name == null ? "" : choice.Name);
+        o.Str("browserPath", choice.Path == null ? "" : choice.Path);
+        if (choice.FallbackFrom != null) o.Str("browserFallbackFrom", choice.FallbackFrom);
     }
 
     private bool PortFileReady()
@@ -601,6 +896,8 @@ internal sealed class CdpSession
                 JObj o = new JObj().Bool("ok", true).Str("session", Key).Bool("running", true).Num("port", _port)
                     .Str("product", _product).Str("url", href).Str("title", title)
                     .Num("active", ActiveIndex(pages)).Raw("tabs", TabsJson(pages));
+                // 回执里也带上「这次跑的是谁」：配了 Chrome 却回退 Edge 时，cdp-status 是模型自查的那一眼
+                AppendBrowserFields(o, _browserChoice);
                 return o.ToString();
             }
             catch (Exception ex)
@@ -618,11 +915,12 @@ internal sealed class CdpSession
                 InvalidateSession();
                 // 先确认真相：没等到的这段时间 Edge 也可能真的退了（那就是真的没在跑）
                 if (!IsAlive()) return NotRunningStatus();
-                return new JObj().Bool("ok", true).Str("session", Key).Bool("running", true).Num("port", _port)
+                JObj broken = new JObj().Bool("ok", true).Str("session", Key).Bool("running", true).Num("port", _port)
                     .Str("error", ex.Message)
                     .Str("hint", "浏览器进程还活着，但 CDP 通道刚断过一次（上一条命令超时 / 页面崩了）。"
-                        + "下一条 sandbox_navigate 会自动重连；连续失败就改用 computer_screenshot / computer_click 像素工具")
-                    .ToString();
+                        + "下一条 sandbox_navigate 会自动重连；连续失败就改用 computer_screenshot / computer_click 像素工具");
+                AppendBrowserFields(broken, _browserChoice);
+                return broken.ToString();
             }
         }
     }
@@ -630,7 +928,7 @@ internal sealed class CdpSession
     private string NotRunningStatus()
     {
         return new JObj().Bool("ok", true).Str("session", Key).Bool("running", false).Num("port", _port)
-            .Str("hint", "沙箱里的 Edge 没有在运行。sandbox_navigate 会自动把它拉起来；"
+            .Str("hint", "沙箱里的 " + BrowserLabel() + " 没有在运行。sandbox_navigate 会自动把它拉起来；"
                 + "如果拉不起来，改用 computer_screenshot / computer_click 像素工具").ToString();
     }
 
@@ -638,6 +936,8 @@ internal sealed class CdpSession
     {
         JObj o = new JObj().Bool("ok", true).Str("session", Key).Num("port", _port).Str("product", _product)
             .Bool("alreadyRunning", alreadyRunning);
+        // 实际用的浏览器 + 路径（+ 回退来源）：宿主与模型靠这三个字段知道「这次到底跑的谁」
+        AppendBrowserFields(o, _browserChoice);
         try
         {
             Process edge = _edge;
@@ -682,13 +982,13 @@ internal sealed class CdpSession
             .Num("foregroundSamples", _foreground.Samples);
         if (_foregroundPrev == 0)
         {
-            o.Str("foregroundNote", "起 Edge 之前沙箱里没有前台窗口（0）：没有可还原的对象，按不涉及处理");
+            o.Str("foregroundNote", "起 " + BrowserLabel() + " 之前沙箱里没有前台窗口（0）：没有可还原的对象，按不涉及处理");
             return;
         }
         if (_foreground.Restored) return;
-        o.Str("foregroundError", "Edge 已经起来，但前台没有还回去（起之前 hwnd " + _foregroundPrev
+        o.Str("foregroundError", BrowserLabel() + " 已经起来，但前台没有还回去（起之前 hwnd " + _foregroundPrev
             + "，现在 hwnd " + _foreground.Final + "）：这一刻的像素输入（computer_type / computer_click）"
-            + "可能落在 Edge 上。可以再发一次 sandbox_navigate 让它重试；持续这样就用 sandbox_* 车道操作网页");
+            + "可能落在 " + BrowserLabel() + " 上。可以再发一次 sandbox_navigate 让它重试；持续这样就用 sandbox_* 车道操作网页");
     }
 
     // ── WebSocket 连接与 target 附着 ─────────────────────────────────────────────
@@ -697,8 +997,8 @@ internal sealed class CdpSession
     {
         if (_ws != null && _ws.State == WebSocketState.Open && _sessionId.Length > 0) return;
         if (_edge == null || _edge.HasExited)
-            throw new Exception("沙箱里的 Edge 没有在运行（或已经退出）。先发 sandbox_navigate 打开网页，"
-                + "它会把 Edge 拉起来；连续失败就改用 computer_screenshot / computer_click 像素工具");
+            throw new Exception("沙箱里的 " + BrowserLabel() + " 没有在运行（或已经退出）。先发 sandbox_navigate 打开网页，"
+                + "它会把浏览器拉起来；连续失败就改用 computer_screenshot / computer_click 像素工具");
         if (_connecting) throw new Exception("CDP 连接正在建立中（上一条命令还没收尾）");
         _connecting = true;
         try
@@ -734,13 +1034,13 @@ internal sealed class CdpSession
             catch (Exception ex)
             {
                 if (RetryConnection(ex, deadline)) continue;
-                throw new Exception("沙箱里的 Edge 调试端口 " + _port + " 连不上（" + BaseMessage(ex) + "）。"
-                    + "可能是 Edge 刚重启、调试端口还没就绪：稍后重试一次 sandbox_navigate；"
+                throw new Exception("沙箱里的 " + BrowserLabel() + " 调试端口 " + _port + " 连不上（" + BaseMessage(ex) + "）。"
+                    + "可能是 " + BrowserLabel() + " 刚重启、调试端口还没就绪：稍后重试一次 sandbox_navigate；"
                     + "连续失败就改用 computer_screenshot / computer_click 像素工具");
             }
             string wsUrl = Program.ExtractString(version, "webSocketDebuggerUrl");
             if (wsUrl == null || wsUrl.Length == 0)
-                throw new Exception("Edge 的 /json/version 里没有 webSocketDebuggerUrl（端口 " + _port + " 可能被别的进程占了）");
+                throw new Exception(BrowserLabel() + " 的 /json/version 里没有 webSocketDebuggerUrl（端口 " + _port + " 可能被别的进程占了）");
             _product = Program.ExtractString(version, "Browser");
             CloseSocket();
             try
@@ -765,7 +1065,7 @@ internal sealed class CdpSession
     private bool RetryConnection(Exception cause, DateTime deadline)
     {
         if (_edge == null || _edge.HasExited)
-            throw new Exception("沙箱里的浏览器没有在运行（Edge 在等调试端口时退出了）。"
+            throw new Exception("沙箱里的浏览器没有在运行（" + BrowserLabel() + " 在等调试端口时退出了）。"
                 + "先 sandbox_navigate 把它重新拉起来；连续失败就改用 computer_screenshot / computer_click 像素工具");
         if (DateTime.UtcNow >= deadline) return false;
         RefreshPortFromFile();
@@ -916,7 +1216,7 @@ internal sealed class CdpSession
             10000);
         string sessionId = Program.ExtractString(attached, "sessionId");
         if (sessionId == null || sessionId.Length == 0)
-            throw new Exception("Target.attachToTarget 没有回 sessionId（这个 Edge 的 flatten 拓扑可能不同）");
+            throw new Exception("Target.attachToTarget 没有回 sessionId（这个 " + BrowserLabel() + " 的 flatten 拓扑可能不同）");
         _sessionId = sessionId;
         _targetId = targetId;
         // Page 域要先 enable 才有事件与 captureScreenshot 的完整能力；每个新 session 一次

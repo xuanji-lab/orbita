@@ -62,14 +62,14 @@ const HANDOFF_HINT =
  */
 const SCOPE =
   "Use this for **desktop GUI tasks** on the sandbox desktop. For web pages prefer the sandbox_* tools (DOM " +
-  "level, they drive the sandbox's Edge) or the host browser_* tools — they are faster and steadier than " +
+  "level, they drive the sandbox's browser) or the host browser_* tools — they are faster and steadier than " +
   "pixels. ";
 
 const BUSY =
   "The sandbox desktop belongs to **one session at a time** (pixel tools share the single screen and the " +
   "foreground focus): if the result says another session holds it, do not retry — wait for that session's " +
   "turn to end, or ask the user which session should drive the sandbox. **The sandbox_* web tools do not " +
-  "queue**: each session drives its own Edge instance, so for web tasks use sandbox_* instead of waiting on " +
+  "queue**: each session drives its own browser instance, so for web tasks use sandbox_* instead of waiting on " +
   "the desktop. ";
 
 /** 「先截图」的拒绝语：模型只有这一条路看见沙箱，说清楚它该先干什么 */

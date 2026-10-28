@@ -169,4 +169,38 @@ describe("SettingsStore", () => {
     const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
     assert.deepEqual(raw["computerUse"], { allowedApps: ["calc.exe"], allowNetwork: false });
   });
+
+  /**
+   * 第三项（沙箱浏览器）的按键合并：设置页的下拉只发 {browser}，手写的 allowedApps /
+   * allowNetwork 不能被它冲掉；反过来改开关也不能把用户选的 Chrome 抹回缺省。
+   */
+  test("computerUse 按键合并：选浏览器不冲掉另两个键，改开关也不冲掉浏览器", async () => {
+    await store.write({ computerUse: { browser: "chrome" } });
+    assert.deepEqual((await store.read()).computerUse, { browser: "chrome" });
+
+    await store.write({ computerUse: { allowNetwork: false } });
+    assert.deepEqual((await store.read()).computerUse, { browser: "chrome", allowNetwork: false });
+
+    await store.write({ computerUse: { allowedApps: ["notepad.exe"] } });
+    assert.deepEqual((await store.read()).computerUse, {
+      browser: "chrome",
+      allowNetwork: false,
+      allowedApps: ["notepad.exe"],
+    });
+
+    // 换个选项只改自己那个键
+    await store.write({ computerUse: { browser: "brave" } });
+    assert.deepEqual((await store.read()).computerUse, {
+      browser: "brave",
+      allowNetwork: false,
+      allowedApps: ["notepad.exe"],
+    });
+    // 落盘也是可移植 JSON（用户在设置页选一下就会写进这个键）
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.deepEqual(raw["computerUse"], {
+      browser: "brave",
+      allowNetwork: false,
+      allowedApps: ["notepad.exe"],
+    });
+  });
 });

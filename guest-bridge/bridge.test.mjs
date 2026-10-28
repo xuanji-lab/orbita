@@ -758,9 +758,9 @@ test("超时杀 worker 后的自愈：起 Edge 前清旧端口文件，连不上
   const src = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
 
   const clearAt = src.indexOf("ClearStalePortFile(_profileDir)");
-  const startAt = src.indexOf("Process.Start(new ProcessStartInfo(edge, args))");
+  const startAt = src.indexOf("Process.Start(new ProcessStartInfo(exe, args))");
   assert.ok(clearAt > 0, "Launch() 里应当清旧端口文件");
-  assert.ok(startAt > 0, "Launch() 里应当启动 Edge");
+  assert.ok(startAt > 0, "Launch() 里应当启动浏览器");
   assert.ok(clearAt < startAt, "清端口文件必须排在 Process.Start 之前——晚了就是把旧端口当新端口用");
 
   // 连接要重试（不是一次 HttpGet 失败就抛），且重试前重读端口文件
@@ -1061,6 +1061,45 @@ stderr: ${r.stderr}`);
     assert.ok(parsed.cases >= 20, `用例数应覆盖父链 / 白名单 / 回执片段，实得 ${parsed.cases}`);
   },
 );
+
+// ── 浏览器选择的自测（--selftest-browser，0.12.0）────────────────────────────────
+//
+// 「这次起哪个浏览器」= 设置 + 沙箱里有没有这个文件。两层都是纯函数：宿主上注入假的
+// 「文件存在性」就能把五种请求、绝对路径后门、回退与「一个都没找到」全部验完，
+// 不必起沙箱、更不必真起一份 Chrome（宿主上真起浏览器属于红线）。
+test(
+  "浏览器选择 selftest：五种请求 / 绝对路径后门 / 回退 Edge 并标记 / 一个都没找到",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-browser"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 30, `用例数应覆盖五种请求与回退，实得 ${parsed.cases}`);
+  },
+);
+
+// ── 准入白名单：桥与 shared 必须是同一份默认 ─────────────────────────────────
+//
+// 两处硬编码（C# 的 DefaultAllowExe / TS 的 COMPUTER_USE_DEFAULT_ALLOWED_APPS）漂了不会让
+// 任何功能报错——只会让「用 Chrome 时每次都判 bypassed」这种日志噪音慢慢变回现实，而且
+// 要等真机才看得出来。所以直接在测试里对两份源码做比较。
+test("准入内置白名单：guest-bridge/Admission.cs 与 shared/computer-use.ts 逐字一致", () => {
+  const csharp = fs.readFileSync(path.join(scriptDir, "Admission.cs"), "utf8");
+  const match = csharp.match(/DefaultAllowExe\s*=\s*new string\[\]\s*\{([\s\S]*?)\};/);
+  assert.ok(match, "没在 Admission.cs 里找到 DefaultAllowExe 的初始化");
+  const guest = [...match[1].matchAll(/"([a-z0-9._-]+\.exe)"/g)].map((m) => m[1]);
+  const shared = fs.readFileSync(
+    path.join(scriptDir, "..", "src", "shared", "computer-use.ts"),
+    "utf8",
+  );
+  const sharedMatch = shared.match(/COMPUTER_USE_DEFAULT_ALLOWED_APPS\s*=\s*\[([\s\S]*?)\]\s*as const/);
+  assert.ok(sharedMatch, "没在 computer-use.ts 里找到 COMPUTER_USE_DEFAULT_ALLOWED_APPS");
+  const host = [...sharedMatch[1].matchAll(/"([a-z0-9._-]+\.exe)"/g)].map((m) => m[1]);
+  assert.deepEqual(guest, host, "桥与宿主的准入默认必须逐字一致（含顺序）");
+  assert.deepEqual(guest, ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"]);
+});
 
 // ── 浏览器错误页判定的纯函数自测（--selftest-cdp）──────────────────────────────────
 //

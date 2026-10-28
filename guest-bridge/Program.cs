@@ -218,6 +218,8 @@ internal static class Program
             if (args[i] == "--selftest-launch") return RunLaunchSelfTest();
             // 会话 id 安全化的自测（纯函数：CDP 会话键直接拼进 profile 目录，这一关失守就是路径穿越）
             if (args[i] == "--selftest-session") return RunSessionSelfTest();
+            // 浏览器选择的自测（纯函数：注入假的「文件存在性」，不碰真实磁盘、不起任何进程）
+            if (args[i] == "--selftest-browser") return RunBrowserSelfTest();
             // 浏览器错误页判定的自测（纯函数：不启动任何进程、不碰 Edge）
             if (args[i] == "--selftest-cdp") return RunCdpSelfTest();
             // 前台还原判定 + 起 Edge 参数的自测（纯函数：注入假的 GetForegroundWindow，
@@ -2154,6 +2156,141 @@ internal static class Program
 
         Console.WriteLine(BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    // ---- 浏览器选择的自测（--selftest-browser）----------------------------------
+    //
+    // 「这次起哪个浏览器」= 配置 + 沙箱里有没有这个文件，两件都是纯函数能测的。真机那一半
+    // （Chrome 真的能起来、CDP 真的连上）只能由沙箱验收覆盖（workbench 的 p1-browser-probe.mjs）。
+    // 这里**绝不碰真实文件系统**：存在性用一个假委托注入——宿主上装着 Chrome，真查会
+    // 把「回退」分支测成「命中」。
+
+    /** 假的「文件存在」：只认点名的那几条（大小写不敏感，路径本身不分辨大小写） */
+    private static Func<string, bool> OnlyExisting(params string[] paths)
+    {
+        string[] snapshot = paths;
+        return delegate(string path)
+        {
+            for (int i = 0; i < snapshot.Length; i++)
+            {
+                if (string.Equals(snapshot[i], path, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        };
+    }
+
+    private static int RunBrowserSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        string[] edge = CdpSession.Candidates("edge");
+        string[] chrome = CdpSession.Candidates("chrome");
+        string[] brave = CdpSession.Candidates("brave");
+        string[] chromium = CdpSession.Candidates("chromium");
+
+        // ① 缺省 / 空 / 不认识 → Edge（与设置解析层的宽进严出同一条语义）
+        BrowserChoice fallbackDefault = CdpSession.ResolveBrowser(null, OnlyExisting(edge[0]));
+        CheckString(failures, ref cases, "没给 browser 字段 → Edge", "edge", fallbackDefault.Name);
+        CheckTrue(failures, ref cases, "缺省时路径就是 Edge 的落点", fallbackDefault.Path == edge[0]);
+        CheckTrue(failures, ref cases, "缺省不算回退", fallbackDefault.FallbackFrom == null);
+        CheckString(failures, ref cases, "空串 → Edge", "edge", CdpSession.ResolveBrowser("", OnlyExisting(edge[0])).Name);
+        CheckString(failures, ref cases, "不认识的名字落回 edge", "edge",
+            CdpSession.ResolveBrowser("firefox", OnlyExisting(edge[0])).Name);
+        CheckTrue(failures, ref cases, "不认识的名字不算回退（它不是「请求了却没找到」）",
+            CdpSession.ResolveBrowser("firefox", OnlyExisting(edge[0])).FallbackFrom == null);
+        CheckString(failures, ref cases, "NormalizeBrowserRequest 大小写宽容", "chrome",
+            CdpSession.NormalizeBrowserRequest(" Chrome "));
+        CheckString(failures, ref cases, "NormalizeBrowserRequest(\"AUTO\") 也认", "auto",
+            CdpSession.NormalizeBrowserRequest("AUTO"));
+
+        // ② 五种请求各自的落点（假的存在性检查）
+        BrowserChoice c = CdpSession.ResolveBrowser("chrome", OnlyExisting(chrome[1]));
+        CheckString(failures, ref cases, "chrome → Chrome", "chrome", c.Name);
+        CheckTrue(failures, ref cases, "chrome 的第二条落点（Program Files (x86)）也认", c.Path == chrome[1]);
+        CheckTrue(failures, ref cases, "chrome 命中时不算回退", c.FallbackFrom == null);
+        BrowserChoice b = CdpSession.ResolveBrowser("brave", OnlyExisting(brave[0]));
+        CheckString(failures, ref cases, "brave → Brave", "brave", b.Name);
+        CheckTrue(failures, ref cases, "brave 落在 BraveSoftware 目录下",
+            b.Path.IndexOf("BraveSoftware", StringComparison.Ordinal) >= 0);
+        CheckString(failures, ref cases, "chromium：Application\\chrome.exe 落点", "chromium",
+            CdpSession.ResolveBrowser("chromium", OnlyExisting(chromium[0])).Name);
+        CheckString(failures, ref cases, "chromium：Application\\chromium.exe 落点", "chromium",
+            CdpSession.ResolveBrowser("chromium", OnlyExisting(chromium[2])).Name);
+        CheckString(failures, ref cases, "edge → Edge", "edge", CdpSession.ResolveBrowser("edge", OnlyExisting(edge[1])).Name);
+
+        // ③ auto：预装的 Edge 优先（零准备成本），没有 Edge 才退到别的
+        CheckString(failures, ref cases, "auto：Edge 与 Chrome 都在时选 Edge", "edge",
+            CdpSession.ResolveBrowser("auto", OnlyExisting(edge[1], chrome[0])).Name);
+        CheckString(failures, ref cases, "auto：只有 Chrome 时选 Chrome", "chrome",
+            CdpSession.ResolveBrowser("auto", OnlyExisting(chrome[0])).Name);
+        CheckTrue(failures, ref cases, "auto 不算回退（它本来没指定是谁）",
+            CdpSession.ResolveBrowser("auto", OnlyExisting(chrome[0])).FallbackFrom == null);
+
+        // ④ 请求 Chrome 但沙箱只有 Edge：回退 + 标记，绝不静默当成 Chrome 成功
+        BrowserChoice fb = CdpSession.ResolveBrowser("chrome", OnlyExisting(edge[0]));
+        CheckString(failures, ref cases, "请求 Chrome、沙箱只有 Edge → 实际用 Edge", "edge", fb.Name);
+        CheckString(failures, ref cases, "…回执标记 browserFallbackFrom=chrome", "chrome", fb.FallbackFrom);
+        CheckString(failures, ref cases, "…请求值仍是 chrome（宿主 / 模型能对照）", "chrome", fb.Requested);
+        CheckTrue(failures, ref cases, "…回退也带上了 Edge 的路径", fb.Path == edge[0]);
+        CheckTrue(failures, ref cases, "…回退的文案说清「默认只带 Edge」",
+            fb.MissingNote != null && fb.MissingNote.IndexOf("沙箱默认只带 Edge", StringComparison.Ordinal) >= 0);
+
+        // ⑤ 绝对路径后门（自定义路径：不做 UI，但手改 settings.json 能用）
+        string custom = @"D:\tools\thorium\thorium.exe";
+        BrowserChoice abs = CdpSession.ResolveBrowser(custom, OnlyExisting(custom));
+        CheckTrue(failures, ref cases, "绝对路径存在 → 就用它", abs.Path == custom);
+        CheckString(failures, ref cases, "…不认识的 exe 名字算 custom", "custom", abs.Name);
+        CheckString(failures, ref cases, "…回显名用文件名", "thorium.exe", abs.Label);
+        CheckString(failures, ref cases, "…路径指向 chrome.exe 时名字仍是 chrome", "chrome",
+            CdpSession.ResolveBrowser(@"D:\browsers\chrome.exe", OnlyExisting(@"D:\browsers\chrome.exe")).Name);
+        BrowserChoice absGone = CdpSession.ResolveBrowser(@"D:\nope\chrome.exe", OnlyExisting(edge[0]));
+        CheckString(failures, ref cases, "绝对路径不存在 → 回退 Edge", "edge", absGone.Name);
+        CheckString(failures, ref cases, "…browserFallbackFrom 就是那条路径", @"D:\nope\chrome.exe",
+            absGone.FallbackFrom);
+
+        // ⑥ 一个都没有：Path 为 null（调用方报错），文案点名试过哪些路径
+        BrowserChoice gone = CdpSession.ResolveBrowser("chrome", OnlyExisting());
+        CheckTrue(failures, ref cases, "全部找不到 → Path 为 null", gone.Path == null);
+        CheckTrue(failures, ref cases, "…文案点名「沙箱默认只带 Edge」",
+            gone.MissingNote.IndexOf("沙箱默认只带 Edge", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "…文案点名要先映射进来",
+            gone.MissingNote.IndexOf("映射", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "…文案列出 Chrome 的落点",
+            gone.MissingNote.IndexOf("Google\\Chrome", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "…文案也列出回退试过的 Edge 落点",
+            gone.MissingNote.IndexOf("Microsoft\\Edge", StringComparison.Ordinal) >= 0);
+        BrowserChoice noEdge = CdpSession.ResolveBrowser("edge", OnlyExisting());
+        CheckTrue(failures, ref cases, "Edge 也没有：文案说「没有可用的浏览器」",
+            noEdge.MissingNote.IndexOf("没有可用的浏览器", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "Edge 也没有：没有可回退的对象", noEdge.FallbackFrom == null);
+
+        // ⑦ 回执字段（键名是宿主 / 模型的契约）
+        JObj plain = new JObj();
+        CdpSession.AppendBrowserFields(plain, fallbackDefault);
+        string plainJson = plain.ToString();
+        CheckTrue(failures, ref cases, "回执带 browser",
+            plainJson.IndexOf("\"browser\":\"edge\"", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "回执带 browserPath",
+            plainJson.IndexOf("\"browserPath\":", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "没有回退时不写 browserFallbackFrom",
+            plainJson.IndexOf("browserFallbackFrom", StringComparison.Ordinal) < 0);
+        JObj fell = new JObj();
+        CdpSession.AppendBrowserFields(fell, fb);
+        CheckTrue(failures, ref cases, "回退时回执带 browserFallbackFrom",
+            fell.ToString().IndexOf("\"browserFallbackFrom\":\"chrome\"", StringComparison.Ordinal) >= 0);
+        JObj never = new JObj();
+        CdpSession.AppendBrowserFields(never, null);
+        CheckTrue(failures, ref cases, "还没起过浏览器：不写这三个字段（老回执形状不变）",
+            never.ToString() == "{}");
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        if (failures.Count > 0)
+        {
+            for (int i = 0; i < failures.Count; i++) Console.Error.WriteLine("FAIL " + failures[i]);
+            return 1;
+        }
+        return 0;
     }
 
     // ---- 浏览器错误页判定的自测（--selftest-cdp）----------------------------------

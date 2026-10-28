@@ -13,6 +13,7 @@ import type { SessionPhase } from "@earendil-works/pi-protocol";
 import {
   effectiveAllowNetwork,
   effectiveGuestAllowExe,
+  effectiveGuestBrowser,
   effectiveLanguage,
   type Language,
   type ThemePreference,
@@ -593,11 +594,15 @@ void app.whenReady().then(async () => {
   /**
    * CDP 浏览器通道（PR3）：沙箱里有几个浏览器实例的会话级状态。
    *
-   * v1.5-1 起**一个 agent 会话一个 Edge**（不再是全员共用一份）：宿主这一侧按会话记「起没起」
+   * v1.5-1 起**一个 agent 会话一个浏览器**（不再是全员共用一份）：宿主这一侧按会话记「起没起」
    * 的缓存，每条 `cdp-*` 都带 session 字段；WebSocket、标签页、选择器表全在 guest 桥里。
    * outDir 与 SandboxController 的映射输出目录是同一个：`<userData>/computer-use/out` ↔
    * guest 的 `C:\orbita-out`。
    * 用闭包转一道而不是直接传 controller：CdpGuest 只需要两个方法，测试注入假桥足够。
+   *
+   * 第三个参数是沙箱浏览器的选择（设置 › 电脑使用 › 沙箱浏览器）：与 allowedApps 同一条路——
+   * 每条 cdp-start 现读一次设置（SettingsStore 有缓存），改了下一次拉起就生效。
+   * 不写 .wsb、不用重启沙箱：浏览器是在 guest 里被拉起来的，不属于 VM 的网络/配置。
    */
   const cdp = new CdpSession(
     {
@@ -605,6 +610,7 @@ void app.whenReady().then(async () => {
       guestShot: (command, fields) => computerUse.guestShot(command, fields),
     },
     join(configDir, "computer-use", "out"),
+    async () => effectiveGuestBrowser(await settings.read()),
   );
 
   /**

@@ -833,3 +833,112 @@ describe("worker 超时", () => {
     );
   });
 });
+
+// ── 沙箱浏览器的选择：设置 → cdp-start 的 fields → 桥的回执 ────────────────────────
+//
+// 这一层最容易出的错是「配了 Chrome 但实际还是 Edge」而且没人发现：`cdp-*` 在 worker
+// 子进程里执行，browser 字段不进 cdp-start 就等于没配；回执里不回 browser，就没有任何
+// 地方能看出回退了。所以三件事各钉一条：字段下发、不认识的值兜底、回退被说出来。
+
+describe("沙箱浏览器：设置 → cdp-start → 回执", () => {
+  /** 取 cdp-start 那一次的 fields（没发过 = undefined） */
+  const startFields = (calls: { command: string; fields: Record<string, unknown> }[]) =>
+    calls.find((call) => call.command === computerUseGuestCommands.cdpStart)?.fields;
+
+  test("默认（没注入读取口）：cdp-start 带 browser=edge，与桥的缺省一致", async () => {
+    const { guest, calls } = fakeGuest();
+    const cdp = new CdpSession(guest, tempOutDir());
+    await run(cdp, { action: "sandbox-navigate", url: "example.com" });
+    assert.deepEqual(startFields(calls), { session: "default", browser: "edge" });
+  });
+
+  test("注入 chrome：字段原样下发（这条命令真的到 worker，参数必须跟着走）", async () => {
+    const { guest, calls } = fakeGuest();
+    const cdp = new CdpSession(guest, tempOutDir(), async () => "chrome");
+    await run(cdp, { action: "sandbox-navigate", url: "example.com" });
+    assert.equal(startFields(calls)?.["browser"], "chrome");
+  });
+
+  test("每次 cdp-start 现读一次设置：换了浏览器，下一个会话用新值", async () => {
+    const { guest, calls } = fakeGuest();
+    let current = "edge";
+    const cdp = new CdpSession(guest, tempOutDir(), async () => current);
+    await run(cdp, { action: "sandbox-navigate", url: "a.example" }, "s1");
+    current = "brave";
+    await run(cdp, { action: "sandbox-navigate", url: "b.example" }, "s2");
+    const starts = calls.filter((call) => call.command === computerUseGuestCommands.cdpStart);
+    assert.deepEqual(
+      starts.map((call) => call.fields["browser"]),
+      ["edge", "brave"],
+    );
+  });
+
+  test("读取口给了不认识的值 / 抛错：都按 edge 兜底，导航照常成功（设置坏了不该打开不了网页）", async () => {
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      const bad = fakeGuest();
+      await run(new CdpSession(bad.guest, tempOutDir(), async () => "firefox"), {
+        action: "sandbox-navigate",
+        url: "example.com",
+      });
+      assert.equal(startFields(bad.calls)?.["browser"], "edge");
+
+      const boom = fakeGuest();
+      const outcome = await run(
+        new CdpSession(boom.guest, tempOutDir(), async () => {
+          throw new Error("settings.json 读不了");
+        }),
+        { action: "sandbox-navigate", url: "example.com" },
+      );
+      assert.equal(outcome.ok, true);
+      assert.equal(startFields(boom.calls)?.["browser"], "edge");
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  test("回执说回退了：navigate 正文里告诉模型「配的那个不在沙箱里」，并留一行日志", async () => {
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const { guest } = fakeGuest({
+        replies: {
+          [computerUseGuestCommands.cdpStart]: () => ({
+            ok: true,
+            resp: {
+              ok: true,
+              port: 12345,
+              browser: "edge",
+              browserPath: "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+              browserFallbackFrom: "chrome",
+            },
+          }),
+        },
+      });
+      const cdp = new CdpSession(guest, tempOutDir(), async () => "chrome");
+      const outcome = await run(cdp, { action: "sandbox-navigate", url: "https://example.com/" });
+      assert.equal(outcome.ok, true);
+      const text = outcome.ok ? outcome.text : "";
+      assert.match(text, /configured browser \(chrome\) is not inside this sandbox/);
+      assert.match(text, /runs edge instead/);
+      assert.match(text, /Settings › Computer use/);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0] ?? "", /请求的浏览器是 chrome/);
+      assert.match(warnings[0] ?? "", /实际用的是 edge/);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  test("回执里没有 browser（老桥 / 没回退）：不加那句提示，也不记日志", async () => {
+    const { guest } = fakeGuest();
+    const cdp = new CdpSession(guest, tempOutDir(), async () => "chrome");
+    const outcome = await run(cdp, { action: "sandbox-navigate", url: "https://example.com/" });
+    assert.equal(outcome.ok, true);
+    assert.doesNotMatch(outcome.ok ? outcome.text : "", /configured browser/);
+  });
+});

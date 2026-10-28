@@ -17,12 +17,16 @@ import type {
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
 import type { ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus } from "@shared/computer-use";
+import { COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import {
   allowNetworkEnabled,
   allowNetworkPatch,
+  browserChoice,
+  browserLabel,
+  browserPatch,
   probeBlocksStart,
   probeVisual,
   sandboxControl,
@@ -1710,6 +1714,8 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const visual = statusVisual(status.state, t);
   /** 出网开关：缺席 = 允许（UI 自己兜缺省，否则新用户看到 Off、沙箱实际在联网） */
   const allowNetwork = allowNetworkEnabled(props.settings);
+  /** 沙箱浏览器：缺席 = Edge（同上，UI 自己兜缺省） */
+  const browser = browserChoice(props.settings);
   /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
@@ -1772,6 +1778,23 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
             <Chip active={!allowNetwork} onClick={() => props.onChange(allowNetworkPatch(false))}>
               {t.common.off}
             </Chip>
+          </span>
+        </SettingRow>
+        {/* 沙箱浏览器：默认 Edge（沙箱自带、零准备成本），Chrome / Brave / Chromium 需要用户先把
+            它们映射进去；没放进去时桥会回退 Edge 并在回执里说明。用 Chip 组而不是 select：这个页里
+            每一个选项集合都是 Chip 组（语言 / 自动压缩 / 归属），没有裸 <select> 的先例，
+            设计系统也不给 select 任何样式。 */}
+        <SettingRow
+          name={t.computerUse.browser}
+          info={t.computerUse.browserInfo}
+          below={<p className="cu-hint">{t.computerUse.browserBelow}</p>}
+        >
+          <span className="set-chips" role="group" aria-label={t.computerUse.browserAria}>
+            {COMPUTER_USE_BROWSER_CHOICES.map((choice) => (
+              <Chip key={choice} active={browser === choice} onClick={() => props.onChange(browserPatch(choice))}>
+                {browserLabel(choice, t.computerUse.browserAuto)}
+              </Chip>
+            ))}
           </span>
         </SettingRow>
       </SettingGroup>

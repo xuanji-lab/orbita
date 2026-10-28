@@ -8,7 +8,7 @@
 //   目标 hwnd → GetWindowThreadProcessId → guest 内 PID
 //   → Toolhelp 快照里沿父链走到「我们注册过的根」（桥自己 + 每个 worker / launch 的 pid）
 //     → owned；
-//   → 否则看 exe 是否在白名单（内置 msedge.exe ∪ 宿主随请求下发的 allowExe）→ allowlisted；
+//   → 否则看 exe 是否在白名单（内置的四个浏览器 exe ∪ 宿主随请求下发的 allowExe）→ allowlisted；
 //   → 都不在 → bypassed。
 //
 // **bypassed 不拒绝**（本轮是观察模式，2026-10 用户裁决）：VM 是一次性的，沙箱里任意应用
@@ -35,13 +35,20 @@ internal static class Admission
     internal const string VerdictUnknown = "unknown";
 
     /**
-     * 内置白名单：只认沙箱里的 Edge。
+     * 内置白名单：沙箱里可能被我们起的四个浏览器（Edge / Chrome / Brave / Chromium）。
      *
-     * 为什么 Edge 要显式放行：树判定靠父链，而 Edge 的 launcher / 网络进程有机会被重新
+     * 为什么要显式放行：树判定靠父链，而 Chromium 系的 launcher / 网络进程有机会被重新
      * 拉起或换父，父链一断就落到 bypassed——它不是「宿主的东西逸出」，是自家浏览器。
-     * 宿主侧的同一条默认值在 shared/computer-use.ts 的 COMPUTER_USE_DEFAULT_ALLOWED_APPS。
+     * 四个都放而不是只放当前在用的那个：这份表是**内置默认**，不随设置变（设置只能往上
+     * 追加），否则换一次浏览器就要把准入逻辑也联动一遍，而漏联动的后果是日志噪音。
+     *
+     * 宿主侧的同一条默认值在 shared/computer-use.ts 的 COMPUTER_USE_DEFAULT_ALLOWED_APPS，
+     * **两处必须逐字一致**（guest-bridge/bridge.test.mjs 直接对比两边源码，漂了就红）。
      */
-    internal static readonly string[] DefaultAllowExe = new string[] { "msedge.exe" };
+    internal static readonly string[] DefaultAllowExe = new string[]
+    {
+        "msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"
+    };
 
     /** 父链最多走这么多层（防止一个坏掉的进程表把一次点击拖成死循环） */
     private const int MaxChainDepth = 64;
@@ -440,12 +447,15 @@ internal static class Admission
 
         // 白名单规范化与合并
         List<string> merged = MergeAllowExe(" notepad.exe , C:\\Windows\\System32\\calc.exe ,bad ,,MSEDGE.EXE ");
-        Program.CheckNumber(failures, ref cases, "合并后条数（默认 msedge + 两个有效项）", "3",
+        Program.CheckNumber(failures, ref cases, "合并后条数（内置 4 个 + 两个有效项）", "6",
             merged.Count.ToString());
         Program.CheckString(failures, ref cases, "内置默认总在第一位", "msedge.exe", merged[0]);
-        Program.CheckString(failures, ref cases, "路径取末段 + 小写", "calc.exe", merged[2]);
-        Program.CheckString(failures, ref cases, "null 也回内置默认", "1",
+        Program.CheckString(failures, ref cases, "路径取末段 + 小写", "calc.exe", merged[5]);
+        Program.CheckNumber(failures, ref cases, "null 也回内置默认（四个浏览器）", "4",
             MergeAllowExe(null).Count.ToString());
+        Program.CheckTrue(failures, ref cases, "Chrome / Brave / Chromium 也都在内置默认里",
+            MergeAllowExe(null).Contains("chrome.exe") && MergeAllowExe(null).Contains("brave.exe")
+            && MergeAllowExe(null).Contains("chromium.exe"));
         Program.CheckString(failures, ref cases, "坏值（不带 .exe）丢掉", "", NormalizeExe("notepad"));
         Program.CheckString(failures, ref cases, "纯空白丢掉", "", NormalizeExe("   "));
         Program.CheckTrue(failures, ref cases, "Allowlisted 也认带路径的白名单项",

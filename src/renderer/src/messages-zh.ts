@@ -355,6 +355,13 @@ export const zh: Messages = {
       "关掉后沙箱里的进程不能上网，网页打不开，所以网页自动化需要开着；只操作本地桌面 / 文件时可以关。",
     allowNetworkBelow: "改动在下次启动沙箱时生效；正在运行的沙箱仍按启动时的设置。",
     allowNetworkAria: "沙箱网络访问",
+    browser: "沙箱浏览器",
+    browserInfo:
+      "智能体在沙箱里用哪个浏览器打开网页。默认 Edge——沙箱镜像自带它，不用额外准备，启动到 CDP 就绪也比从宿主映射进来的 Chrome 快一秒左右。",
+    browserBelow:
+      "Chrome / Brave / Chromium 不在沙箱镜像里：需要先把它们映射或拷贝进沙箱，否则这次会自动回退 Edge（工具回执里会写明）。改动在下一次打开网页时生效。",
+    browserAria: "沙箱里用哪个浏览器",
+    browserAuto: "自动",
     // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；
     // 改那边就要改这里（冷启动实测可达 105s+，首次还要制备基础镜像）
     sandboxStateInfo:

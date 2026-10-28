@@ -83,9 +83,11 @@ describe("sandbox_* 工具注册", () => {
     }
   });
 
-  test("每个描述都说清「操作的是隔离沙箱里的 Edge」，navigate/observe 还写明网页优先 sandbox_*、像素工具兜底", () => {
+  test("每个描述都说清「操作的是隔离沙箱里的浏览器」，navigate/observe 还写明网页优先 sandbox_*、像素工具兜底", () => {
     const { tools } = setup();
     for (const [name, tool] of tools) {
+      assert.match(tool.description, /Operates the sandbox's browser/, name);
+      assert.match(tool.description, /Edge by default/, name);
       assert.match(tool.description, /inside the isolated Windows sandbox/, name);
       assert.match(tool.description, /DOM level/, name);
     }
@@ -286,7 +288,7 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
       assert.match(tool.description, /\"Allow network access\" is off/, name);
       assert.match(tool.description, /Do not retry the navigation/, name);
       // 描述的第一句仍是「这是哪个浏览器」：拼在末尾，不能打乱原有的开场
-      assert.match(tool.description, /^Operates the Edge browser/, name);
+      assert.match(tool.description, /^Operates the sandbox's browser/, name);
     }
   });
 

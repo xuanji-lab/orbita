@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_CMD_DIR,
+  COMPUTER_USE_DEFAULT_ALLOWED_APPS,
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
@@ -216,6 +217,12 @@ function requireProc(harness: Harness): FakeSandboxProcess {
 const states = (events: SandboxStatus[]): string[] => events.map((event) => event.state);
 
 // ── .wsb 生成 ──────────────────────────────────────────────────────────
+
+/**
+ * 准入内置默认（与 shared 同一个源）。断言里不写死 "msedge.exe"：内置默认会随「沙箱浏览器
+ * 可配」变（现在是四个浏览器的 exe），写死的话每改一次默认就要在测试里再错一遍。
+ */
+const DEFAULT_ALLOW_EXE = COMPUTER_USE_DEFAULT_ALLOWED_APPS.join(",");
 
 describe("renderWsbXml", () => {
   test("XML 转义：路径里的 & < > 引号 / 中文 / 空格都不破坏结构", () => {
@@ -1760,12 +1767,19 @@ describe("guest 命令下发", () => {
         y: 200,
         button: "right",
         double: true,
-        allowExe: "msedge.exe",
+        allowExe: DEFAULT_ALLOW_EXE,
       });
       // type / key 没有目标坐标（打到前台焦点），不带准入字段
       assert.deepEqual(fieldsOf(harness, 2), { seq: 3, command: "type", text: "你好" });
       assert.deepEqual(fieldsOf(harness, 3), { seq: 4, command: "key", key: "alt+f4" });
-      assert.deepEqual(fieldsOf(harness, 4), { seq: 5, command: "scroll", x: 5, y: 6, deltaY: -120, allowExe: "msedge.exe" });
+      assert.deepEqual(fieldsOf(harness, 4), {
+        seq: 5,
+        command: "scroll",
+        x: 5,
+        y: 6,
+        deltaY: -120,
+        allowExe: DEFAULT_ALLOW_EXE,
+      });
 
       const left = await readdir(join(harness.dir, "out", COMPUTER_USE_CMD_DIR));
       assert.deepEqual(left, [], `应清理干净，实际残留：${left.join(", ")}`);
@@ -1865,7 +1879,7 @@ describe("guest 命令下发", () => {
       await harness.controller.guestCommand("click", { x: 1, y: 2 });
       assert.deepEqual(
         (fieldsOf(harness, 1) as Record<string, unknown>)["allowExe"],
-        "msedge.exe,notepad.exe,calc.exe",
+        `${DEFAULT_ALLOW_EXE},notepad.exe,calc.exe`,
         "内置默认在前、用户项规范化后追加",
       );
     } finally {
@@ -1882,7 +1896,7 @@ describe("guest 命令下发", () => {
       broken.announceBridge({ respond: () => ({ resp: { ok: true } }) });
       await startPromise;
       await broken.controller.guestCommand("click", { x: 1, y: 2 });
-      assert.equal((fieldsOf(broken, 1) as Record<string, unknown>)["allowExe"], "msedge.exe");
+      assert.equal((fieldsOf(broken, 1) as Record<string, unknown>)["allowExe"], DEFAULT_ALLOW_EXE);
       assert.ok(broken.logs.some((line) => /准入白名单/.test(line)), "读失败要留一行痕，不静默");
     } finally {
       await broken.close();

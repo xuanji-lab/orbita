@@ -8,6 +8,8 @@ import type { IconName } from "../../shell/Icon";
 import type { Messages } from "../../messages-en.ts";
 import {
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  COMPUTER_USE_DEFAULT_BROWSER,
+  type ComputerUseBrowser,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type SandboxState,
@@ -83,11 +85,36 @@ export function allowNetworkEnabled(settings: AppSettings): boolean {
 }
 
 /**
- * 点一下开关要发的补丁。子对象整块回写（它目前只有这一项），
- * 不走 `{ allowNetwork }` 以外的推导——渲染层不替下一个人猜字段。
+ * 点一下开关要发的补丁。**只发自己改的那个键**：`SettingsStore.write` 对 computerUse 做
+ * 按键合并（同 drawer / lastUsed），整对象回写会把手写的 allowedApps / browser 冲掉。
  */
 export function allowNetworkPatch(enabled: boolean): Pick<SettingsPatch, "computerUse"> {
   return { computerUse: { allowNetwork: enabled } };
+}
+
+/**
+ * 沙箱浏览器的当前值：**缺席 = 缺省**（与主进程 `effectiveGuestBrowser`、桥的缺省读的是
+ * 同一个 `COMPUTER_USE_DEFAULT_BROWSER`）。解析层只在用户真的选过时才落这个键。
+ */
+export function browserChoice(settings: AppSettings): ComputerUseBrowser {
+  return settings.computerUse?.browser ?? COMPUTER_USE_DEFAULT_BROWSER;
+}
+
+/** 选一个浏览器：同样只发 browser 这一个键（不碰 allowNetwork / allowedApps） */
+export function browserPatch(browser: ComputerUseBrowser): Pick<SettingsPatch, "computerUse"> {
+  return { computerUse: { browser } };
+}
+
+/**
+ * 选项 → 芯片文字。浏览器名是专有名词，不翻译（翻成「边缘」只会更难认）；
+ * 只有 auto 是行为而不是名字，交回 i18n。
+ */
+export function browserLabel(choice: ComputerUseBrowser, autoLabel: string): string {
+  if (choice === "edge") return "Edge";
+  if (choice === "chrome") return "Chrome";
+  if (choice === "brave") return "Brave";
+  if (choice === "chromium") return "Chromium";
+  return autoLabel;
 }
 
 export type ProbeVisual = { kind: "ready" } | { kind: "not-ready"; guidance: string[] };

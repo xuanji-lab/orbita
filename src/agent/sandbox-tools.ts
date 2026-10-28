@@ -87,7 +87,8 @@ const ELEMENT_PARAM = {
 
 /** 每个工具描述的第一句都从这句开始：它回答「这是哪个浏览器」 */
 const SCOPE =
-  "Operates the Edge browser **inside the isolated Windows sandbox** (DOM level, via CDP) — not the user's own " +
+  "Operates the sandbox's browser (Edge by default; configurable in Settings › Computer use) **inside the isolated " +
+  "Windows sandbox** (DOM level, via CDP) — not the user's own " +
   "browser and not Orbita's built-in browser tab. ";
 
 /**
@@ -101,7 +102,7 @@ const BUSY =
 
 const PIXEL_FALLBACK =
   "If this fails with a CDP / browser error, fall back to the pixel tools (computer_screenshot, computer_click, " +
-  "computer_type) which drive the sandbox desktop without Edge's debugging port.";
+  "computer_type) which drive the sandbox desktop without the browser's debugging port.";
 
 /**
  * 一个会话一个浏览器（v1.5-1）：模型得知道「我这一轮看不见的页面还在不在」与「名额用完怎么办」。
@@ -170,7 +171,7 @@ export function createSandboxBrowserTools(
       BUSY +
       INSTANCES +
       "Open a URL in it and wait for the page to load. Use this for any web task that should happen in the " +
-      "sandbox — it starts the sandbox's Edge automatically, so it is the first call of a browser session. " +
+      "sandbox — it starts the sandbox's browser automatically, so it is the first call of a browser session. " +
       "Accepts \"back\" / \"forward\" for history, and a bare domain such as example.com (https is assumed). " +
       "Returns the final URL and title. Then call sandbox_observe for the page structure and element selectors. " +
       "Prefer these sandbox_* tools over computer_* for web pages: they act on the DOM and are far more reliable; " +

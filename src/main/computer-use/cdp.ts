@@ -21,12 +21,16 @@ import { join, win32 } from "node:path";
 import {
   COMPUTER_USE_BROWSER_MAX,
   COMPUTER_USE_BROWSER_PROFILE_ROOT,
+  COMPUTER_USE_DEFAULT_BROWSER,
   COMPUTER_USE_GUEST_DOWNLOAD_DIR,
   COMPUTER_USE_GUEST_UPLOAD_DIR,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   computerUseBrowserErrors,
   computerUseGuestCommands,
+  isComputerUseBrowser,
   safeBrowserSessionId,
+  type ComputerUseBrowser,
+  type ComputerUseCdpStartFields,
   type ComputerUseGuestCommand,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
@@ -63,17 +67,26 @@ function browserFailure(cause: unknown): string {
 }
 
 /**
- * 沙箱里每个会话各自一份浏览器（v1.5-1：一个会话一个 Edge，不再共用一个实例）。
+ * 沙箱里每个会话各自一份浏览器（v1.5-1：一个会话一个实例，不再共用一个）。
  *
  * 宿主这一层仍然是**按会话路由的那一层**：会话键由 safeBrowserSessionId 归一化（与 guest 桥
  * 逐字一致），每条 `cdp-*` 命令都带上 `session` 字段。桥不知道「宿主会话」是什么，它只认这个键。
  *
  * `outDir` 是**宿主侧**的映射输出目录（`<userData>/computer-use/out`）：上传落
  * `out/upload`、下载落 `out/downloads`，与 guest 的 `C:\orbita-out` 是同一份目录。
+ *
+ * `browser` 是「沙箱里用哪个浏览器」的读取口（设置 › 电脑使用 › 沙箱浏览器），与
+ * `SandboxController` 的 allowedApps 同一条路：**每次 cdp-start 现读一次**。它必须在
+ * cdp-start 的 fields 里下发——命令真正在 worker 子进程里执行，不进字段就等于没改。
  */
 export class CdpSession {
   private readonly guest: CdpGuest;
   private readonly outDir: string;
+  /**
+   * 浏览器选择的读取口。缺省 = edge（与 `COMPUTER_USE_DEFAULT_BROWSER` 同一个源）。
+   * 读失败 / 返回不合法值时也按 edge：设置读不动不该让“打开个网页”都打不开。
+   */
+  private readonly browser: (() => string | Promise<string>) | undefined;
   /**
    * 这一局里「哪些会话的 Edge 起过」。**只是缓存**：桥自己知道真相（cdp-status）。
    * 键是归一化之后的会话键（与桥一致），值只是存在与否。
@@ -83,9 +96,64 @@ export class CdpSession {
    */
   private readonly started = new Set<string>();
 
-  constructor(guest: CdpGuest, outDir: string) {
+  /**
+   * 桥这次实际用的浏览器（来自 cdp-start 的回执）。**只为“说清楚”用**：配了 Chrome 却回退
+   * Edge 时，回执 / 日志是唯一能看出这件事的地方（模型看不见设置页）。
+   */
+  private readonly browsers = new Map<string, { browser: string; fallbackFrom?: string }>();
+
+  constructor(guest: CdpGuest, outDir: string, browser?: () => string | Promise<string>) {
     this.guest = guest;
     this.outDir = outDir;
+    this.browser = browser;
+  }
+
+  /** 当前设置下的浏览器（不在五个选项里的一律按 edge；读失败也按 edge 并留一行日志） */
+  private async browserForGuest(): Promise<ComputerUseBrowser> {
+    if (this.browser === undefined) return COMPUTER_USE_DEFAULT_BROWSER;
+    try {
+      const raw = await this.browser();
+      return isComputerUseBrowser(raw) ? raw : COMPUTER_USE_DEFAULT_BROWSER;
+    } catch (cause: unknown) {
+      console.warn(
+        `[computer-use] 读不到沙箱浏览器设置，按 ${COMPUTER_USE_DEFAULT_BROWSER} 处理：` +
+          (cause instanceof Error ? cause.message : String(cause)),
+      );
+      return COMPUTER_USE_DEFAULT_BROWSER;
+    }
+  }
+
+  /**
+   * 记下桥回执里的实际浏览器（browser / browserFallbackFrom）。没写就不记：老桥没有这个字段，
+   * 那就不去猜。
+   */
+  private rememberBrowser(session: string, resp: Record<string, unknown>): void {
+    const actual = resp["browser"];
+    if (typeof actual !== "string" || actual === "") return;
+    const fallback = resp["browserFallbackFrom"];
+    const entry = {
+      browser: actual,
+      ...(typeof fallback === "string" && fallback !== "" ? { fallbackFrom: fallback } : {}),
+    };
+    this.browsers.set(session, entry);
+    if (entry.fallbackFrom !== undefined) {
+      // 静默回退是最坏的一种“成功”：用户以为自己在 Chrome 里复现问题，实际跑的是 Edge
+      console.warn(
+        `[computer-use] 会话 ${session} 请求的浏览器是 ${entry.fallbackFrom}，但沙箱里没有它，这次实际用的是 ${actual}`,
+      );
+    }
+  }
+
+  /** 回退时要告诉模型的那句话（没回退 = 空串）：它会转述给用户「配的 Chrome 没生效」。
+   *  公开给下面的动作翻译层（applySandboxBrowserRequest 是普通函数，没有 this）。 */
+  browserNote(session: string): string {
+    const entry = this.browsers.get(session);
+    if (entry === undefined || entry.fallbackFrom === undefined) return "";
+    return (
+      `Note: the configured browser (${entry.fallbackFrom}) is not inside this sandbox, so this session runs ` +
+      `${entry.browser} instead. To use ${entry.fallbackFrom}, map or copy it into the sandbox (Settings › ` +
+      `Computer use › Sandbox browser) — or set that setting back to Edge. `
+    );
   }
 
   /**
@@ -105,8 +173,11 @@ export class CdpSession {
       return;
     }
     console.log(`[computer-use] 会话 ${session} 拉起沙箱浏览器（profile 在 guest 的 ${COMPUTER_USE_BROWSER_PROFILE_ROOT}\\${session}）`);
-    const start = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStart, { session });
+    // browser 字段必须进 cdp-start：这条命令在 worker 子进程里执行，参数不过去就等于没改设置
+    const fields: ComputerUseCdpStartFields = { session, browser: await this.browserForGuest() };
+    const start = await this.guest.guestCommandReply(computerUseGuestCommands.cdpStart, fields);
     if (!start.ok) throw new Error(start.error);
+    this.rememberBrowser(session, start.resp);
     this.started.add(session);
   }
 
@@ -198,6 +269,7 @@ export class CdpSession {
   async stopAll(): Promise<void> {
     const sessions = [...this.started];
     this.started.clear();
+    this.browsers.clear();
     for (const session of sessions) {
       try {
         await this.guest.guestCommandReply(computerUseGuestCommands.cdpStop, { session });
@@ -337,6 +409,7 @@ export async function applySandboxBrowserRequest(
           text:
             `Opened ${url === "" ? request.url : url}${title === "" ? "" : ` ("${title}")`} in the sandbox browser` +
             `${ms === undefined ? "" : ` in ${ms} ms`}. ${warning === "" ? "" : `${warning} `}` +
+            `${cdp.browserNote(session)}` +
             "Call sandbox_observe to see what is on the page; its selectors stay valid until the page navigates. " +
             "This browser is the isolated sandbox one — it has none of the user's sign-in state and no CAPTCHA help.",
         };

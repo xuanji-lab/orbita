@@ -405,6 +405,13 @@ export const en = {
     allowNetworkBelow:
       "Takes effect the next time the sandbox starts; a running sandbox keeps the setting it started with.",
     allowNetworkAria: "Sandbox network access",
+    browser: "Sandbox browser",
+    browserInfo:
+      "Which browser the agent drives inside the sandbox. Edge is the default because the sandbox image already has it: nothing extra to prepare, and it reaches CDP about a second faster than Chrome installed from the host.",
+    browserBelow:
+      "Chrome / Brave / Chromium are not part of the sandbox image — map or copy one into the sandbox first, otherwise this session falls back to Edge and the tool reply says so. Takes effect the next time a page is opened.",
+    browserAria: "Browser used inside the sandbox",
+    browserAuto: "Auto",
     // "up to three minutes" mirrors BRIDGE_READY_TIMEOUT_MS in src/main/computer-use/sandbox.ts (180s);
     // change one and the other follows
     sandboxStateInfo:
