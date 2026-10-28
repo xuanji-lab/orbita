@@ -37,6 +37,7 @@ export function LatexBuildBar(props: {
   onCompile: () => void;
   onCancel: () => void;
   onClean: () => void;
+  onToggleCompileOnSave: (on: boolean) => void;
   onSelectEngine: (engine: LatexEngine) => void;
   onSelectMain: (main: string) => void;
 }) {
@@ -73,6 +74,16 @@ export function LatexBuildBar(props: {
    * 在编时清理置灰：那组 .aux 正被 latexmk 读写，主进程也会 same-project 拒掉。
    */
   const actionItems: MenuItem[] = [
+    {
+      id: "compile-on-save",
+      label: t.latex.compileOnSave,
+      hint: t.latex.compileOnSaveHint,
+      icon: "zap",
+      checked: project.compileOnSave,
+      // 不关菜单：开关的后果就在这一行里，关掉反而看不到「它现在到底是开还是关」
+      keepOpen: true,
+      onSelect: () => props.onToggleCompileOnSave(!project.compileOnSave),
+    },
     {
       id: "clean",
       label: t.latex.clean,

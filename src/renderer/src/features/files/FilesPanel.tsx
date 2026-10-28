@@ -287,6 +287,11 @@ export function FilesPanel(props: {
   const handleEditorSaved = useCallback((): void => {
     setEditorNotice(null);
     latex.refresh();
+    // 保存即编译（项目级开关，缺省关）：自动保存落定后触一发。
+    // 显式编译前的那次 flush 也要走到这里，由 compileWithSave 的抑制标记挡掉，
+    // 否则一次点击会变成「先编一轮、排队再编一轮」。
+    if (suppressSaveCompileRef.current) return;
+    if (latex.project?.compileOnSave === true) latex.compile();
   }, [latex]);
   /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
   const [problemsOpen, setProblemsOpen] = useState(false);
@@ -345,17 +350,24 @@ export function FilesPanel(props: {
    * 只 flush 当前挂载的编辑器（其它标签在切走时已经保存过），但保存链是串行的，不会交错。
    */
   const compile = latex.compile;
+  /** 显式编译期间的「保存不算一次新触发」标记（见 handleEditorSaved） */
+  const suppressSaveCompileRef = useRef(false);
   const compileWithSave = useCallback((): void => {
     void (async () => {
-      const outcomes: FlushOutcome[] = await Promise.all(
-        [...editorsRef.current.values()].map((handle) => handle.flush()),
-      );
-      if (outcomes.includes("conflict")) {
-        setEditorNotice(t.editor.conflictBlocksCompile);
-        return;
+      suppressSaveCompileRef.current = true;
+      try {
+        const outcomes: FlushOutcome[] = await Promise.all(
+          [...editorsRef.current.values()].map((handle) => handle.flush()),
+        );
+        if (outcomes.includes("conflict")) {
+          setEditorNotice(t.editor.conflictBlocksCompile);
+          return;
+        }
+        if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
+        compile();
+      } finally {
+        suppressSaveCompileRef.current = false;
       }
-      if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
-      compile();
     })();
   }, [compile, t]);
 
@@ -1042,6 +1054,7 @@ export function FilesPanel(props: {
             onCompile={compileWithSave}
             onCancel={latex.cancel}
             onClean={latex.clean}
+            onToggleCompileOnSave={latex.setCompileOnSave}
             onSelectEngine={latex.selectEngine}
             onSelectMain={latex.selectMain}
           />

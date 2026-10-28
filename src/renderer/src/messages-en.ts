@@ -1885,6 +1885,8 @@ export const en = {
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
     actionsTip: "Project actions",
+    compileOnSave: "Compile on save",
+    compileOnSaveHint: "Compiles after the editor autosaves; kept in .orbita/latex.json for this project",
     clean: "Clean auxiliary files",
     cleanHint: "latexmk -c — removes .aux / .log and other intermediates, keeps the PDF",
     cleaning: "Cleaning…",

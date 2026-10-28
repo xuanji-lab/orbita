@@ -1741,6 +1741,8 @@ export const zh: Messages = {
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
     actionsTip: "项目动作",
+    compileOnSave: "保存即编译",
+    compileOnSaveHint: "编辑器自动保存落定后自动编译；开关写进这个项目的 .orbita/latex.json",
     clean: "清理辅助文件",
     cleanHint: "latexmk 的清理动作：删掉 .aux / .log 等中间文件，PDF 保留",
     cleaning: "清理中…",

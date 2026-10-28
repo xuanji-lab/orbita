@@ -56,6 +56,8 @@ export interface LatexWorkbench {
   compile: () => void;
   cancel: () => void;
   clean: () => void;
+  /** 保存即编译的总开关（项目级）；写失败落到 error 行 */
+  setCompileOnSave: (on: boolean) => void;
   selectEngine: (engine: LatexEngine) => void;
   selectMain: (main: string) => void;
   refresh: () => void;
@@ -85,6 +87,11 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const contextRef = useRef(context);
   contextRef.current = context;
   const runningRef = useRef(false);
+  /**
+   * 编译中来了一次「保存即编译」的请求：只记一次。连着保存十次也只补跑一轮——
+   * 每一份中间稿都编一遍是纯浪费，而最后一次保存的内容一定会被那一轮带上。
+   */
+  const queuedRef = useRef(false);
   /** 请求代次：切文件后晚到的项目响应不许覆盖新文件的 */
   const requestRef = useRef(0);
 
@@ -136,6 +143,8 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   useEffect(() => {
     setError(null);
     runningRef.current = false;
+    // 上一份项目的排队不留到新项目：它那张 PDF 与新文件无关
+    queuedRef.current = false;
     setRunning(false);
     setStartedAt(null);
     const ctx = contextRef.current;
@@ -168,43 +177,59 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     return () => window.clearInterval(timer);
   }, [key, loadProject]);
 
-  const compile = useCallback((): void => {
+  /** 真正跑一轮。自引用（结束时补跑排队的那一轮）走 ref，不为递归加依赖 */
+  const runCompileRef = useRef<(() => Promise<void>) | null>(null);
+
+  const runCompile = useCallback(async (): Promise<void> => {
     const ctx = contextRef.current;
-    if (ctx === null || runningRef.current) return;
+    if (ctx === null) return;
     runningRef.current = true;
     setRunning(true);
     setStartedAt(Date.now());
     setError(null);
-    void (async () => {
-      try {
-        const outcome = await api.latex.compile(ctx);
-        if (!outcome.ok) {
-          setError(outcome.error);
-          return;
-        }
-        const result = outcome.result;
-        setLast({
-          status: result.status,
-          pages: result.pages,
-          durationMs: result.durationMs,
-          errors: result.errors,
-          warnings: result.warnings,
-          pdfPath: result.pdf,
-          finishedAt: Date.now(),
-        });
-        if (result.status === "ok" || result.status === "warning-only") {
-          setPdfReloadToken((token) => token + 1);
-        }
-      } catch (cause) {
-        setError(failMessage(cause));
-      } finally {
-        runningRef.current = false;
-        setRunning(false);
-        setStartedAt(null);
-        await loadProject(true);
+    try {
+      const outcome = await api.latex.compile(ctx);
+      if (!outcome.ok) {
+        setError(outcome.error);
+        return;
       }
-    })();
+      const result = outcome.result;
+      setLast({
+        status: result.status,
+        pages: result.pages,
+        durationMs: result.durationMs,
+        errors: result.errors,
+        warnings: result.warnings,
+        pdfPath: result.pdf,
+        finishedAt: Date.now(),
+      });
+      if (result.status === "ok" || result.status === "warning-only") {
+        setPdfReloadToken((token) => token + 1);
+      }
+    } catch (cause) {
+      setError(failMessage(cause));
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+      setStartedAt(null);
+      await loadProject(true);
+      // 排队的那一轮在「本轮收尾」之后才起：并发被拒（same-project）不是排队能解决的
+      if (queuedRef.current) {
+        queuedRef.current = false;
+        void runCompileRef.current?.();
+      }
+    }
   }, [loadProject]);
+  runCompileRef.current = runCompile;
+
+  const compile = useCallback((): void => {
+    if (contextRef.current === null) return;
+    if (runningRef.current) {
+      queuedRef.current = true;
+      return;
+    }
+    void runCompileRef.current?.();
+  }, []);
 
   const cancel = useCallback((): void => {
     const ctx = contextRef.current;
@@ -262,6 +287,28 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     [],
   );
 
+  /** 保存即编译的开关（写项目 `.orbita/latex.json`）；失败照旧落到 error 行 */
+  const setCompileOnSave = useCallback(
+    (on: boolean): void => {
+      const ctx = contextRef.current;
+      if (ctx === null) return;
+      void (async () => {
+        try {
+          const outcome = await api.latex.configure({ ...ctx, compileOnSave: on });
+          if (!outcome.ok) {
+            setError(outcome.error);
+            return;
+          }
+          setProject(outcome.project);
+          setError(null);
+        } catch (cause) {
+          setError(failMessage(cause));
+        }
+      })();
+    },
+    [],
+  );
+
   return {
     project,
     probe,
@@ -275,6 +322,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     compile,
     cancel,
     clean,
+    setCompileOnSave,
     selectEngine: (engine) => configure({ engine }),
     selectMain: (main) => configure({ main }),
     refresh: () => void loadProject(false),
