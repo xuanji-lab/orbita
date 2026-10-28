@@ -6,6 +6,7 @@
 import { ipcRenderer } from "electron";
 import {
   latexChannels,
+  type LatexCleanOutcome,
   type LatexCompileIpcRequest,
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
@@ -26,6 +27,8 @@ export const latexApi = {
     ipcRenderer.invoke(latexChannels.compile, req),
   /** 取消这个项目在跑的编译；false = 已经没有在跑的 */
   cancel: (req: LatexFileContext): Promise<boolean> => ipcRenderer.invoke(latexChannels.cancel, req),
+  /** 清理辅助文件（latexmk -c，保留 PDF）；removed / kept 是清理前后的差集 */
+  clean: (req: LatexFileContext): Promise<LatexCleanOutcome> => ipcRenderer.invoke(latexChannels.clean, req),
   /** 把引擎 / 主文件选择写进项目 `.orbita/latex.json` */
   configure: (req: LatexConfigureRequest): Promise<LatexConfigureOutcome> =>
     ipcRenderer.invoke(latexChannels.configure, req),

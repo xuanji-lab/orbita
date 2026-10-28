@@ -12,7 +12,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LatexProbe } from "./probe.ts";
-import { LatexRunner } from "./run.ts";
+import { cleanArgv, cleanResult, LatexRunner } from "./run.ts";
 import { latexMaxConcurrent, LATEX_IDLE_TIMEOUT_MS, LATEX_TOTAL_TIMEOUT_MS, type LatexResult, type LatexRunOutcome } from "../../shared/latex.ts";
 
 const roots: string[] = [];
@@ -669,5 +669,58 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     assert.equal(result.pdf, join(resolve(dir), "build", "main.pdf"));
     assert.equal(result.pdfFresh, false);
     assert.equal(result.logStale, false, "没有旧日志，就不该标 stale");
+  });
+});
+
+describe("LatexRunner —— 清理辅助文件", () => {
+  test("没装 latexmk：如实拒绝，不 spawn", async () => {
+    const dir = plainProject();
+    const outcome = await new LatexRunner(probe(false)).clean(dir);
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.ok ? "" : outcome.error, /not found/);
+  });
+
+  test("产物目录还不存在：空结果，不白跑一次 latexmk", async () => {
+    const dir = plainProject();
+    const outcome = await new LatexRunner(probe()).clean(dir);
+    assert.ok(outcome.ok, outcome.ok ? "" : outcome.error);
+    assert.deepEqual(outcome.ok ? outcome.result.removed : ["x"], []);
+    assert.deepEqual(outcome.ok ? outcome.result.kept : ["x"], []);
+    assert.equal(outcome.ok ? outcome.result.dir : "", join(resolve(dir), "build"));
+  });
+
+  test("正在编译时清理被拒（同一组 .aux 不能一边写一边删）", async () => {
+    const dir = plainProject();
+    fakeCompiler(dir, HANG);
+    const runner = new LatexRunner(probe(), { idleTimeoutMs: 60_000, totalTimeoutMs: 60_000 });
+    const compiling = runner.compile({ dir });
+    await sleep(200);
+    const outcome = await runner.clean(dir);
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok ? undefined : outcome.reason, "same-project");
+    runner.cancelAll();
+    await withDeadline(compiling, 20_000, "取消后编译应当收尾");
+  });
+});
+
+describe("清理的 argv 与差集（纯函数）", () => {
+  test("argv 带 -c 与和编译一致的 -outdir", () => {
+    assert.deepEqual(cleanArgv("/paper/build", "main.tex"), [
+      "-c",
+      "-interaction=nonstopmode",
+      "-outdir=/paper/build",
+      "main.tex",
+    ]);
+  });
+
+  test("removed 是前后差集，kept 是清理后的磁盘事实（PDF 留在 kept 里）", () => {
+    const result = cleanResult("/paper/build", ["main.aux", "main.log", "main.pdf"], ["main.pdf"], 42);
+    assert.deepEqual(result.removed, ["main.aux", "main.log"]);
+    assert.deepEqual(result.kept, ["main.pdf"]);
+    assert.equal(result.durationMs, 42);
+  });
+
+  test("本来就没东西可清：removed 空，不是失败", () => {
+    assert.deepEqual(cleanResult("/b", ["main.pdf"], ["main.pdf"], 1).removed, []);
   });
 });

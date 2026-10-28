@@ -15,6 +15,7 @@ import type { FileListRequest } from "../../shared/files.ts";
 import {
   isLatexEngine,
   latexChannels,
+  type LatexCleanOutcome,
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
   type LatexFileContext,
@@ -51,6 +52,12 @@ export function registerLatexIpc(
   ipcMain.handle(latexChannels.cancel, async (_event, req: LatexFileContext): Promise<boolean> => {
     const located = await locateProject(req, workspaces, sessions);
     return located === null ? false : runner.cancel(located.dir);
+  });
+
+  ipcMain.handle(latexChannels.clean, async (_event, req: LatexFileContext): Promise<LatexCleanOutcome> => {
+    const located = await locateProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
+    return runner.clean(located.dir);
   });
 
   ipcMain.handle(

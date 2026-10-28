@@ -1038,11 +1038,32 @@ export function FilesPanel(props: {
             state={latexState}
             last={latex.last}
             startedAt={latex.startedAt}
+            cleaning={latex.cleaning}
             onCompile={compileWithSave}
             onCancel={latex.cancel}
+            onClean={latex.clean}
             onSelectEngine={latex.selectEngine}
             onSelectMain={latex.selectMain}
           />
+        )}
+        {/* 动作回执（清理辅助文件）：一行、几秒后自己消失。它说的是「刚才那件事成了」，
+            不是需要处理的问题——那种走下面的 latex-error */}
+        {latex.notice !== null && (
+          <p className="latex-toast" role="status">
+            <Icon
+              name={latex.notice.kind === "cleaned" ? "circle-check" : "octagon-x"}
+              size={12}
+              style={{
+                color:
+                  latex.notice.kind === "cleaned" ? "var(--color-success)" : "var(--color-danger)",
+              }}
+            />
+            {latex.notice.kind === "cleaned"
+              ? latex.notice.result.removed.length === 0
+                ? t.latex.cleanedNothing
+                : t.latex.cleaned(latex.notice.result.removed.length)
+              : t.latex.cleanFailed(latex.notice.message)}
+          </p>
         )}
       {/* body 是 container query 的查询容器（styles.css 裁决 solo / 隐藏 / 浮层 /
           并排四种形态），layout 是它的直接内容层——@container 查不到容器自己，

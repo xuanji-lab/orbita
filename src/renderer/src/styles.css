@@ -3373,6 +3373,33 @@ body {
   color: var(--color-danger);
 }
 
+/* 编译条的项目动作菜单：行内小图标键，与编译键同高（24），不占行尾（状态行才是尾元素） */
+.latex-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+/* 动作回执（目前只有清理辅助文件）：一行、贴着编译条下方，几秒后自己消失。
+   它不是错误条——需要处理的问题走 .latex-error */
+.latex-toast {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 /* ---------- 源码编辑器（.tex 标签，PR4） ----------
  * 编辑器吃满预览体：body 让出内边距与滚动（滚动在 CodeMirror 的 .cm-scroller 里，
  * 行号槽跟着滚）；上下是冲突/错误条与状态行，都不随正文滚。

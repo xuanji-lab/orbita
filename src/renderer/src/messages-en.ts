@@ -1884,6 +1884,14 @@ export const en = {
     quoteWarning: "Compile warning",
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
+    actionsTip: "Project actions",
+    clean: "Clean auxiliary files",
+    cleanHint: "latexmk -c — removes .aux / .log and other intermediates, keeps the PDF",
+    cleaning: "Cleaning…",
+    cleaned: (n: number) =>
+      n === 1 ? "Cleaned 1 auxiliary file" : `Cleaned ${n} auxiliary files`,
+    cleanedNothing: "Nothing to clean — the output folder already holds only the PDF",
+    cleanFailed: (message: string) => `Clean failed: ${message}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */

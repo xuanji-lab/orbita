@@ -1740,6 +1740,13 @@ export const zh: Messages = {
     quoteWarning: "编译告警",
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
+    actionsTip: "项目动作",
+    clean: "清理辅助文件",
+    cleanHint: "latexmk 的清理动作：删掉 .aux / .log 等中间文件，PDF 保留",
+    cleaning: "清理中…",
+    cleaned: (n) => `已清理 ${n} 个辅助文件`,
+    cleanedNothing: "没有可清理的东西：产物目录里只剩 PDF 了",
+    cleanFailed: (message) => `清理失败：${message}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */

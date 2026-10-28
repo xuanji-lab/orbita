@@ -94,6 +94,9 @@ const ALLOWED_LATIN = new Set([
   "cookie",
   // 系统名（macOS 钥匙串授权的提示）
   "macOS",
+  // TeX 辅助文件的扩展名（清理辅助文件那条文案里要指名删的是什么）
+  "aux",
+  "log",
   // 文件名
   "mcp.json",
   "SKILL.md",

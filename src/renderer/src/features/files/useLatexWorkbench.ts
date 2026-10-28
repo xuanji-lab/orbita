@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pathWithin } from "../../../../shared/path.ts";
 import { api } from "../../api.ts";
 import type {
+  LatexCleanResult,
   LatexEngine,
   LatexFileContext,
   LatexIssue,
@@ -42,14 +43,31 @@ export interface LatexWorkbench {
   last: LatexBuildSummary | null;
   /** IPC / 授权 / 写配置失败的一句话（面板里一行红字，不弹窗） */
   error: string | null;
+  /** 清理辅助文件在跑 */
+  cleaning: boolean;
+  /**
+   * 一次动作的结果（目前只有清理）。**结构化而不是句子**：文案在 FilesPanel 那一层
+   * 拼（那里才有 t），这里只说事实。几秒后自己消失——它是一次动作的回执，
+   * 不是需要用户处理的问题（那种走 error）。
+   */
+  notice: LatexNotice | null;
   /** 编译成功后自增：PDF 标签据此重载（失败不动，保留上一版） */
   pdfReloadToken: number;
   compile: () => void;
   cancel: () => void;
+  clean: () => void;
   selectEngine: (engine: LatexEngine) => void;
   selectMain: (main: string) => void;
   refresh: () => void;
 }
+
+/** 动作回执。`cleaned` 带磁盘事实（删了几份、留下了什么），由界面决定怎么说 */
+export type LatexNotice =
+  | { kind: "cleaned"; result: LatexCleanResult }
+  | { kind: "clean-error"; message: string };
+
+/** 回执停留时长：够看清一行「删了 6 个文件」，又不至于占着面板 */
+const NOTICE_MS = 6000;
 
 /** 项目事实的轮询间隔：够快看到 agent 改完源码，又不至于让面板一直读盘 */
 const POLL_MS = 4000;
@@ -79,6 +97,15 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const [last, setLast] = useState<LatexBuildSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfReloadToken, setPdfReloadToken] = useState(0);
+  const [cleaning, setCleaning] = useState(false);
+  const [notice, setNotice] = useState<LatexNotice | null>(null);
+
+  // 回执自己过期：它是「刚才那件事成了」的一句话，不该留到下一次操作
+  useEffect(() => {
+    if (notice === null) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   /**
    * 拉一次项目事实。`soft` = 轮询：失败静默（一次 stat 撞上文件被删，不该在面板上
@@ -185,6 +212,35 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     void api.latex.cancel(ctx).catch((cause: unknown) => setError(failMessage(cause)));
   }, []);
 
+  /**
+   * 清理辅助文件（`latexmk -c`）。与编译一样按当前 context 找项目——renderer 给不出
+   * 目录，主进程用文件面板的白名单核。清理会动同一组 .aux，所以主进程侧与编译互斥：
+   * 在编时回 same-project，这里如实转成回执里的错误，不自己猜。
+   */
+  const clean = useCallback((): void => {
+    const ctx = contextRef.current;
+    if (ctx === null || cleaning) return;
+    setCleaning(true);
+    setError(null);
+    void (async () => {
+      try {
+        const outcome = await api.latex.clean(ctx);
+        if (outcome.ok) {
+          setNotice({ kind: "cleaned", result: outcome.result });
+          // 产物目录变了（aux/log 被删）：编译条的「PDF 是否过期」要按新事实算一次。
+          // PDF 本身没动，所以不碰 pdfReloadToken——重载会让阅读位置丢一次。
+          await loadProject(true);
+        } else {
+          setNotice({ kind: "clean-error", message: outcome.error });
+        }
+      } catch (cause) {
+        setNotice({ kind: "clean-error", message: failMessage(cause) });
+      } finally {
+        setCleaning(false);
+      }
+    })();
+  }, [cleaning, loadProject]);
+
   const configure = useCallback(
     (patch: { main?: string; engine?: LatexEngine }): void => {
       const ctx = contextRef.current;
@@ -213,9 +269,12 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     startedAt,
     last,
     error,
+    cleaning,
+    notice,
     pdfReloadToken,
     compile,
     cancel,
+    clean,
     selectEngine: (engine) => configure({ engine }),
     selectMain: (main) => configure({ main }),
     refresh: () => void loadProject(false),
