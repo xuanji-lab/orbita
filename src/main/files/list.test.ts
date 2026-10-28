@@ -110,4 +110,11 @@ describe("listDirectory", () => {
       /目录不存在/,
     );
   });
+
+  test("名字以 .. 开头的子目录（..cache）在根内：照列，不当成「跑出根」", async () => {
+    await mkdir(join(rootDir, "..cache"));
+    await writeFile(join(rootDir, "..cache", "x.txt"), "x", "utf8");
+    const result = await listDirectory(roots, req(rootDir, join(rootDir, "..cache")));
+    assert.deepEqual(result.entries.map((entry) => entry.name), ["x.txt"]);
+  });
 });

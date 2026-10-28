@@ -80,6 +80,22 @@ export const zh: Messages = {
     restoredEmpty: "与基线一致——没有可展示的差异。",
     noBaseline: "无基线",
     binary: "二进制",
+    symlink: "符号链接",
+    symlinkTarget: (target) => `符号链接，指向 ${target}。审查面板不跟随链接，不读目标的内容。`,
+    diffError: (reason) => {
+      switch (reason) {
+        case "outside-workspace":
+          return "这个路径在工作区之外，审查面板不读。";
+        case "not-in-record":
+          return "这个文件不在本任务的改动记录里，审查面板不读。";
+        case "task-not-found":
+          return "这个任务已经不在了。";
+        case "invalid-request":
+          return "请求无效——刷新面板后再试。";
+        default:
+          return "差异没能加载出来。";
+      }
+    },
   },
   common: {
     more: "更多",
