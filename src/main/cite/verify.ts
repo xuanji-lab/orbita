@@ -42,9 +42,12 @@ export function normalizeTitle(title: string): string {
 }
 
 /**
- * 两个标题是不是同一篇。**认不出来时不算 mismatch**：任一侧缺标题、或归一后短于
- * 16 个字符（「BERT」这种短标题包含关系太容易误判），都视为「对得上」——
- * 宁可漏报一次不一致，也不要因为标题写法的差异诬告一条正确的引用。
+ * 两个标题是不是同一篇：归一后**相等**，或一方是另一方的副标题（包含关系）。
+ *
+ * 为什么用包含关系而不是「相似度」：标题的常见差异就是副标题（`Attention Is All
+ * You Need` vs `Attention Is All You Need: A Retrospective`）与大小写 / 标点，
+ * 包含关系正好覆盖这两类，而且不会因为词序不同把两篇不相干的论文判成同一篇。
+ * 任一侧缺标题时**不诬告**（视为对得上）：没有标题可比，就没有「属于另一篇」的证据。
  */
 export function titlesAgree(left: string | null, right: string | null): boolean {
   if (left === null || right === null) return true;
@@ -54,8 +57,7 @@ export function titlesAgree(left: string | null, right: string | null): boolean 
   if (a === b) return true;
   const shorter = a.length <= b.length ? a : b;
   const longer = a.length <= b.length ? b : a;
-  // 短标题（「BERT」）的包含关系太容易误判：认不出来时算对得上，不诬告
-  return shorter.length < 16 ? true : longer.includes(shorter);
+  return longer.includes(shorter);
 }
 
 /** 用哪个标识查：DOI > arXiv 号 > 标题。都没有时 null（无从查起） */

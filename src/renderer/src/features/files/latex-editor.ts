@@ -38,7 +38,7 @@ import {
 import { search, searchKeymap } from "@codemirror/search";
 import { completionKeymap } from "@codemirror/autocomplete";
 import { lintGutter } from "@codemirror/lint";
-import { foldGutter } from "@codemirror/language";
+import { foldGutter, foldKeymap } from "@codemirror/language";
 import { latexFolding } from "./latex-fold.ts";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { bibtexLanguage } from "./bibtex-language.ts";
@@ -189,7 +189,14 @@ export function latexEditorExtensions(
     // 这里的 lintGutter 给行号旁一个可悬停的记号——长行折行后波浪线可能在视口外
     lintGutter(),
     ...(options.folding === true ? [foldGutter(), ...latexFolding] : []),
-    keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+    keymap.of([
+      ...completionKeymap,
+      ...(options.folding === true ? foldKeymap : []),
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...searchKeymap,
+      indentWithTab,
+    ]),
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return;
       onUpdate({

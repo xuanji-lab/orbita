@@ -51,8 +51,9 @@ describe("normalizeTitle / titlesAgree", () => {
     );
   });
 
-  test("完全不同的标题不算同一篇；短标题不靠包含关系猜", () => {
+  test("完全不同的标题不算同一篇（哪怕其中一个是短标题）", () => {
     assert.equal(titlesAgree("Attention Is All You Need", "Deep Residual Learning"), false);
+    assert.equal(titlesAgree("Attention Is All You Need", "Deep learning"), false);
     assert.equal(titlesAgree("BERT", "BERT for Everything"), true);
   });
 
