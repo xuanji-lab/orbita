@@ -43,9 +43,9 @@
 //
 // 编译：node build.mjs（用 Windows 自带的 .NET Framework 4.x csc.exe，零第三方依赖）。
 // 约束：单 exe、单进程、无持久化——沙箱每次重置即消失，不需要任何清理逻辑。
-//   源码六个文件：Program.cs（文件协议与像素命令）+ Cdp.cs（浏览器通道）+
+//   源码七个文件：Program.cs（文件协议与像素命令）+ Cdp.cs（浏览器通道）+
 //   WorkerHost.cs / TcpChannel.cs（worker 与 TCP 通道）+ WinShot.cs（按窗口截图）+
-//   Uia.cs（UI Automation 车道），一起用 build.mjs 编。
+//   Uia.cs（UI Automation 车道）+ InputHook.cs（输入让路与归属判定），一起用 build.mjs 编。
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 
 using System;
@@ -99,6 +99,10 @@ internal static class Program
     //   guest 内 pid，判它是不是我们自己起的进程（或 exe 在白名单里），结果写进回执与
     //   bridge.log（`admission` / `targetExe`）。**观察模式：bypassed 不拒**——先把模型实际会点
     //   哪些 exe 量清楚。纯判定有 --selftest-admission，不需要沙箱。
+    // 0.11.0 多了**输入让路**（InputHook.cs）：低级钩子（WH_MOUSE_LL / WH_KEYBOARD_LL）判定
+    //   「这一下是人在动还是我们注入」，用户在沙箱里真打字/点鼠标时，像素动作在**动作边界**上
+    //   推迟（等静默，最多 4s），超时就让出并回一句人话。回执多 yielded / waitedMs 两个字段
+    //   （只有真推迟过才有）。注入事件带 dwExtraInfo 魔数，供钩子与后续的审计归属识别。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
     private const string Version = "0.11.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
@@ -230,6 +234,9 @@ internal static class Program
             if (args[i] == "--selftest-uia-client") return Uia.RunClientSelfTest();
             // 应用级准入的纯函数自测（假 pid 树 + 假白名单；不碰真实窗口、不起进程）
             if (args[i] == "--selftest-admission") return Admission.RunSelfTest();
+            // 输入让路的纯函数自测（判定表 / tick 回绕 / 归属判定 / 放弃文案）。
+            // **不装钩子、不碰桌面、不启进程**：装全局钩子会碰用户的真实键盘，宿主上不许。
+            if (args[i] == "--selftest-yield") return InputHook.RunSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -251,6 +258,11 @@ internal static class Program
 
         Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms"
             + "，对齐枚举周期：每 " + AlignEveryPolls + " 轮，耗时日志阈值 " + HopLogThresholdMs + "ms");
+
+        // 输入让路（0.11.0）：低级钩子要一条自己的消息泵线程（理由见 InputHook.cs 文件头）。
+        // **装不上也照常跑**：让路闸门停用，像素命令退回改前的行为——不能让钩子决定桥可不可用。
+        InputHook.Start();
+        AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
 
         // TCP 命令行通道：起不来只记一行日志，文件协议照旧是主路
         // 必须在通告之前——bridge.json 里带了端口才代表 TCP 可用（宿主靠这个字段判断）
@@ -465,6 +477,15 @@ internal static class Program
             if (flag == "--no-firewall")
             {
                 TcpChannel.SkipFirewallForSelfTest();
+                // 同一个理由管输入钩子：宿主上装 WH_KEYBOARD_LL 就是钩住用户真实的键盘，
+                // 哪怕回调只读标记也是一条红线。带了 --no-firewall 就一定是宿主测试模式。
+                InputHook.Disabled = true;
+                continue;
+            }
+            // 测试缝：显式关掉输入让路（不装任何钩子）。宿主上跑桥一律带上它。
+            if (flag == "--no-input-hook")
+            {
+                InputHook.Disabled = true;
                 continue;
             }
             // 测试缝（只有 --selftest-worker 起子桥时带）：认 worker-* 命令，并把一条 worker
@@ -905,6 +926,9 @@ internal static class Program
         if (command == "type") return ExecuteType(raw);
         if (command == "key") return ExecuteKey(raw);
         if (command == "scroll") return ExecuteScroll(raw);
+        // 输入让路的只读诊断（0.11.0）：闸门现在看到了什么——不注入、不等待、不改状态。
+        // 真机验收靠它回答「我在沙箱里敲的字被归成真实输入还是注入」（InputHook.StatusJson）。
+        if (command == "input-status") return InputHook.StatusJson();
         // 打包产物冒烟（0.5.0）：起 / 停映射进来的 exe，以及只回数字的截图统计
         if (command == "launch") return ExecuteLaunch(raw);
         if (command == "kill") return ExecuteKill(raw);
@@ -917,7 +941,51 @@ internal static class Program
         // 测试缝：worker 层的命令（只有 --test-hooks 的桥认它们，生产永远到不了这一行）
         if (WorkerHost.TestHooks && WorkerHost.IsWorkerTestCommand(command))
             return WorkerHost.Execute(command, raw, baseName);
+        // 测试缝（同 --test-hooks）：伪造「人在输入」，让验收脚本能验让路闸门。
+        // 脚本无法产生不带 INJECTED 标记的输入事件，所以只能推时间戳；**这里不注入任何事件**。
+        if (WorkerHost.TestHooks && command == "yield-probe") return ExecuteYieldProbe(raw);
         return "{\"ok\":false,\"error\":\"未知命令：" + JsonEscape(command) + "\"}";
+    }
+
+    /**
+     * yield-probe {mode}：验收缝（**只有 --test-hooks 的桥认它**）。
+     *   touch {ageMs=100}：伪造「真实输入发生在 ageMs 之前」
+     *   typing {durationMs=6000, intervalMs=120}：伪造「有人在连续打字」
+     *   clear：回到「谁都没动过」
+     * 三个模式都只管两个时间戳，一个输入事件都不送。
+     */
+    private static string ExecuteYieldProbe(string raw)
+    {
+        string mode = ExtractString(raw, "mode");
+        if (mode == "clear")
+        {
+            InputHook.ProbeClear();
+            return "{\"ok\":true,\"mode\":\"clear\"," + InputHook.StatusFields() + "}";
+        }
+        if (mode == "touch")
+        {
+            int ageMs = 100;
+            string ageRaw = ExtractNumber(raw, "ageMs");
+            if (ageRaw != null && (!int.TryParse(ageRaw, out ageMs) || ageMs < 0))
+                return "{\"ok\":false,\"error\":\"ageMs 必须是 ≥ 0 的整数\"}";
+            InputHook.ProbeTouch(ageMs);
+            return "{\"ok\":true,\"mode\":\"touch\"," + InputHook.StatusFields() + "}";
+        }
+        if (mode == "typing")
+        {
+            int durationMs = 6000;
+            int intervalMs = 120;
+            string durationRaw = ExtractNumber(raw, "durationMs");
+            string intervalRaw = ExtractNumber(raw, "intervalMs");
+            if (durationRaw != null && (!int.TryParse(durationRaw, out durationMs) || durationMs < 1))
+                return "{\"ok\":false,\"error\":\"durationMs 必须是正整数\"}";
+            if (intervalRaw != null && (!int.TryParse(intervalRaw, out intervalMs) || intervalMs < 1))
+                return "{\"ok\":false,\"error\":\"intervalMs 必须是正整数\"}";
+            InputHook.ProbeTyping(durationMs, intervalMs);
+            return "{\"ok\":true,\"mode\":\"typing\",\"durationMs\":" + durationMs
+                + ",\"intervalMs\":" + intervalMs + "," + InputHook.StatusFields() + "}";
+        }
+        return "{\"ok\":false,\"error\":\"yield-probe 需要 mode = touch / typing / clear\"}";
     }
 
     private static string ExecuteScreenshot(string raw, string baseName)
@@ -1306,6 +1374,10 @@ internal static class Program
 
         try
         {
+            // 让路闸门（0.11.0）：动作**开送之前**问一次「用户是不是正在用这个桌面」。
+            // 放在 dryRun 之后：dryRun 不注入，没有任何理由让它等。
+            InputHook.GateResult gate = InputHook.GateForPixelAction("click");
+            if (!gate.Allowed) return gate.GiveUpJson;
             List<INPUT> inputs = new List<INPUT>();
             inputs.Add(MoveInput(x, y));
             int presses = dbl ? 2 : 1;
@@ -1316,7 +1388,7 @@ internal static class Program
             }
             SendInputs(inputs.ToArray());
             Log("点击 (" + x + ", " + y + ") " + button + (dbl ? " ×2" : ""));
-            return DispatchedReceipt(admit);
+            return DispatchedReceipt(gate.ReplySuffix, admit);
         }
         catch (Exception ex)
         {
@@ -1341,6 +1413,8 @@ internal static class Program
 
         try
         {
+            InputHook.GateResult gate = InputHook.GateForPixelAction("type");
+            if (!gate.Allowed) return gate.GiveUpJson;
             int at = 0;
             while (at < text.Length)
             {
@@ -1356,7 +1430,7 @@ internal static class Program
                 at += chunk;
             }
             Log("已输入 " + text.Length + " 个字符");
-            return DispatchedReceipt();
+            return DispatchedReceipt(gate.ReplySuffix);
         }
         catch (Exception ex)
         {
@@ -1405,6 +1479,8 @@ internal static class Program
 
         try
         {
+            InputHook.GateResult gate = InputHook.GateForPixelAction("key");
+            if (!gate.Allowed) return gate.GiveUpJson;
             ushort main = vks[vks.Count - 1];
             List<INPUT> inputs = new List<INPUT>();
             for (int i = 0; i < vks.Count - 1; i++) inputs.Add(KeyInput(vks[i], 0, 0));
@@ -1413,7 +1489,7 @@ internal static class Program
             for (int i = vks.Count - 2; i >= 0; i--) inputs.Add(KeyInput(vks[i], 0, KEYEVENTF_KEYUP));
             SendInputs(inputs.ToArray());
             Log("按键 " + spec);
-            return DispatchedReceipt();
+            return DispatchedReceipt(gate.ReplySuffix);
         }
         catch (Exception ex)
         {
@@ -1449,13 +1525,15 @@ internal static class Program
 
         try
         {
+            InputHook.GateResult gate = InputHook.GateForPixelAction("scroll");
+            if (!gate.Allowed) return gate.GiveUpJson;
             int wheelData = -deltaY * WHEEL_DELTA;
             INPUT[] inputs = new INPUT[2];
             inputs[0] = MoveInput(x, y);
             inputs[1] = MouseInput(0, 0, MOUSEEVENTF_WHEEL, wheelData);
             SendInputs(inputs);
             Log("滚动 (" + x + ", " + y + ") deltaY=" + deltaY);
-            return DispatchedReceipt(admit);
+            return DispatchedReceipt(gate.ReplySuffix, admit);
         }
         catch (Exception ex)
         {
@@ -1470,18 +1548,25 @@ internal static class Program
      * 像素输入命令的成功回执：`ok` 保留（老宿主读它，向后兼容），`delivery` 说明
      * 「已派发、未验证」——SendInput 返回成功只代表事件入了窗口队列。
      */
-    private static string DispatchedReceipt()
+    /**
+     * 像素输入命令的成功回执：`ok` 保留（老宿主读它，向后兼容），`delivery` 说明
+     * 「已派发、未验证」——SendInput 返回成功只代表事件入了窗口队列。
+     *
+     * `suffix` 是其它可选项的 JSON 片段（让路的 yielded / waitedMs，可能为空串）——
+     * 四个调用点各拼各的，回执形状只有这一个出口。
+     */
+    private static string DispatchedReceipt(string suffix)
     {
-        return "{\"ok\":true,\"delivery\":\"dispatched\"}";
+        return "{\"ok\":true,\"delivery\":\"dispatched\"" + suffix + "}";
     }
 
     /**
      * 同上，但带上应用级准入字段（click / scroll 才有目标坐标，type / key 打的是当前焦点）。
      * 两者是两件独立的事：delivery 说「这一下出去没有」，admission 说「落在谁身上」。
      */
-    private static string DispatchedReceipt(Admission.Decision admit)
+    private static string DispatchedReceipt(string suffix, Admission.Decision admit)
     {
-        return "{\"ok\":true,\"delivery\":\"dispatched\"" + Admission.JsonFields(admit) + "}";
+        return "{\"ok\":true,\"delivery\":\"dispatched\"" + Admission.JsonFields(admit) + suffix + "}";
     }
 
     /** 读整数 x / y（click 与 scroll 共用）；缺字段或不是整数回人话错误，否则 null */
@@ -1514,6 +1599,8 @@ internal static class Program
         input.u.mi.dy = dy;
         input.u.mi.mouseData = unchecked((uint)mouseData);
         input.u.mi.dwFlags = flags;
+        // 魔数（0.11.0）：让低级钩子认出这是我们的注入——有些注入路径不一定会被标 INJECTED
+        input.u.mi.dwExtraInfo = new IntPtr(InputHook.InjectMagic);
         return input;
     }
 
@@ -1524,6 +1611,7 @@ internal static class Program
         input.u.ki.wVk = vk;
         input.u.ki.wScan = scan;
         input.u.ki.dwFlags = flags;
+        input.u.ki.dwExtraInfo = new IntPtr(InputHook.InjectMagic);
         return input;
     }
 
@@ -1536,6 +1624,8 @@ internal static class Program
     private static void SendInputs(INPUT[] inputs)
     {
         if (inputs.Length == 0) return;
+        // 先记注入时刻再送：SendInput 在同一次调用里同步经过钩子，两条路径都落得下这一笔
+        InputHook.NoteInjected();
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
         if (sent != (uint)inputs.Length)
             throw new InvalidOperationException("SendInput 只送达 " + sent + "/" + inputs.Length
@@ -2737,5 +2827,12 @@ internal static class Program
     internal static void Log(string msg)
     {
         Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] [bridge] " + msg);
+    }
+
+    /** 进程退出时把输入钩子收干净（沙箱销毁时桥被 taskkill，这条不一定跑到——钩子随进程一起消失） */
+    private static void OnProcessExit(object sender, EventArgs e)
+    {
+        try { InputHook.Stop(); }
+        catch (Exception ex) { Log("收输入钩子失败：" + ex.Message); }
     }
 }

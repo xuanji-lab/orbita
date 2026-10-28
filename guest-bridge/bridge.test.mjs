@@ -796,11 +796,12 @@ test("注入失败文案：错误码 5 带人话解释（模型看得到的就�
 test("像素输入回执：成功=dispatched、失败=failed，且 ok 保留（向后兼容）", () => {
   const src = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
 
-  // 成功回执只有一处构造：改这一处就同时改了四条命令
-  assert.match(src, /private static string DispatchedReceipt\(\)/);
-  assert.match(src, /return "\{\\"ok\\":true,\\"delivery\\":\\"dispatched\\"\}";/);
+  // 成功回执只有两处构造（一个无准入、一个带准入）：改它们就同时改了四条命令。
+  // 两个都接 `suffix`（让路的 yielded / waitedMs，没让路时是空串）。
+  assert.match(src, /private static string DispatchedReceipt\(string suffix\)/);
+  assert.match(src, /"\{\\"ok\\":true,\\"delivery\\":\\"dispatched\\"" \+ suffix \+ "\}"/);
   // 四条命令的成功路径都接上它（而不是各写各的 ok:true）。
-  // click / scroll 带准入字段（DispatchedReceipt(admit)），type / key 没有目标坐标（DispatchedReceipt()）。
+  // click / scroll 带准入字段（DispatchedReceipt(suffix, admit)），type / key 没有目标坐标。
   const dispatchedCalls = src.match(/return DispatchedReceipt\([^)]*\);/g) ?? [];
   assert.equal(dispatchedCalls.length, 4, "click / type / key / scroll 各一处");
   // 本刀不产出 applied：留了位置但不能凭空声称生效（注释里提到不算，回执字面量才算）
@@ -903,6 +904,23 @@ stderr: ${r.stderr}`);
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
     assert.ok(parsed.cases >= 60, `用例数应 >= 60，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test(
+  "输入让路纯函数 selftest：判定表 / 等待上限 / tick 回绕 / 归属判定（不装钩子、不碰桌面）",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-yield"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    // 宿主上能验的就是「判定」这部分（钩子本身要沙箱）：用例数钉在 40 以上，别越改越少
+    assert.ok(parsed.cases >= 40, `用例数应 >= 40，实际 ${parsed.cases}`);
     assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
   },
 );

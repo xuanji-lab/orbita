@@ -243,22 +243,31 @@ export interface SandboxProcess {
 }
 
 /**
- * guest 命令下发的回执（controller 内部形状）。成功时带回 resp，失败时是一句人话——
- * 桥明确拒绝的话，再加一档 delivery（failed = 确定没做成；超时不带，因为那时不知道
- * 那一下有没有生效）。**不进 shared/**：它不过进程边界，跨边界的那份是
- * shared/computer-use.ts 的 ComputerUseToolOutcome。
- *
- * 应用级准入（桥 0.11.0）挂在成功这一支上：只有做准入判定的命令（click / scroll）带；
- * 老桥 / 没有目标窗口时不带（`unknown` 也在桥那边给了）。宿主用 `resp` 里的 delivery
- * 与这里的 admission 组装工具回执，两件事互不依赖。
+ * `yielded` / `waitedMs`（桥 0.11.0）是「这条动作被推迟过」的唯一回执信号：用户正在沙箱里
+ * 打字/点击时，像素动作会被推到用户停手之后再做。两者都在成功支的顶层（和 resp 并列）。
+ * **没让路时一个字都不多**：回执形状与改前逐字一致。
  */
 export type GuestCommandReply =
   | {
       ok: true;
       resp: Record<string, unknown>;
+      /** 应用级准入（桥 0.11.0）：只有 click / scroll 带；老桥带 targetExe 但不会是空串以外的值 */
       admission?: ComputerUseAdmission;
+      /** 让路（桥 0.11.0）：用户刚输入过，这一下等过他停手 */
+      yielded?: boolean;
+      /** 实际推迟了多少毫秒（只有 yielded 时才有意义） */
+      waitedMs?: number;
     }
   | { ok: false; error: string; delivery?: ComputerUseDelivery };
+
+/**
+ * 让路字段：桥只在自己推迟过动作时才写 `yielded:true`（连带 `waitedMs`）。
+ * 其余情况一个字都不加——上层不能因为「没这字段」就当成「没让路」以外的意思。
+ */
+function deferredOf(resp: Record<string, unknown>): { yielded?: boolean; waitedMs?: number } {
+  if (resp.yielded !== true) return {};
+  return { yielded: true, ...(typeof resp.waitedMs === "number" ? { waitedMs: resp.waitedMs } : {}) };
+}
 
 /** 带 JPEG 兄弟文件的 guest 命令结果（cdp-shot 与像素截图共用） */
 export type GuestShotReply =
@@ -770,6 +779,8 @@ export class SandboxController {
    * **回执载荷要带上**：像素输入的成功只意味着「事件已入队」（delivery=dispatched），
    * 不是「已生效」——那一档由桥写在 resp.delivery 里，这一层不能替它猜（见
    * shared/computer-use.ts 的 ComputerUseDelivery）。
+   * 回执只有成/败：这些命令的语义就是「事件已送出」，屏幕变成什么样要看下一张截图。
+   * 例外是让路的两个字段（yielded / waitedMs）：它讲的是「这一下为什么晚了」，不是屏幕状态。
    */
   async guestCommand(
     command: ComputerUseGuestCommand,
@@ -791,7 +802,12 @@ export class SandboxController {
         this.deps.guestTimeoutMs,
       );
       const admission = parseComputerUseAdmission(resp);
-      return { ok: true, resp, ...(admission === null ? {} : { admission }) };
+      return {
+        ok: true,
+        resp,
+        ...(admission === null ? {} : { admission }),
+        ...deferredOf(resp),
+      };
     } catch (cause: unknown) {
       // 桥明确拒绝时把它说的那一档带出去（failed = 确定没做成，可以放心重试）；
       // 超时 / 桥没响应则不带：那时我们真的不知道那一下有没有生效。

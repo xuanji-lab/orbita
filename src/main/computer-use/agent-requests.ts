@@ -15,6 +15,10 @@
  *
  * 任何路径都必须回执：挂着不回的话 agent 进程里那次工具调用会一直等下去
  * （terminalRequest / readTaskRequest 同一条纪律）。
+ *
+ * 用户优先（桥 0.11.0）：像素动作在沙箱里被推迟过时，桥回 yielded / waitedMs，
+ * 这一层把它变成正文里的一句「刚才那一下为什么晚了」——模型看不见沙箱窗口，
+ * 只靠回执才知道“人在用它”（deferredNote）。不动任何命令的字段与租约。
  */
 import {
   COMPUTER_USE_DISPATCHED_HINT,
@@ -142,7 +146,8 @@ export async function applyComputerUseRequest(
           text:
             `Sent a ${kind} at (${request.x}, ${request.y}) on the sandbox desktop. ` +
             deliveryNote(delivery) +
-            admissionNote(reply.admission, sessionId),
+            admissionNote(reply.admission, sessionId) +
+            deferredNote(reply),
         };
       }
       case "type": {
@@ -154,7 +159,7 @@ export async function applyComputerUseRequest(
           delivery,
           text:
             `Typed ${request.text.length} characters into the focused window on the sandbox desktop. ` +
-            deliveryNote(delivery),
+            deliveryNote(delivery) + deferredNote(reply),
         };
       }
       case "key": {
@@ -164,7 +169,7 @@ export async function applyComputerUseRequest(
         return {
           ok: true,
           delivery,
-          text: `Pressed ${request.key} on the sandbox desktop. ` + deliveryNote(delivery),
+          text: `Pressed ${request.key} on the sandbox desktop. ` + deliveryNote(delivery) + deferredNote(reply),
         };
       }
       case "scroll": {
@@ -180,7 +185,9 @@ export async function applyComputerUseRequest(
           delivery,
           text:
             `Scrolled by ${request.deltaY} wheel notch(es) at (${request.x}, ${request.y}) on the sandbox desktop ` +
-            `(positive = down). ${deliveryNote(delivery)}` + admissionNote(reply.admission, sessionId),
+            `(positive = down). ${deliveryNote(delivery)}` +
+            admissionNote(reply.admission, sessionId) +
+            deferredNote(reply),
         };
       }
       // ── UIA 车道（桥 0.10.0）：按控件动作，不按坐标、不抢前台 ─────────────
@@ -239,6 +246,23 @@ function deliveryNote(delivery: ComputerUseDelivery): string {
  */
 function failedReply(reply: { ok: false; error: string; delivery?: ComputerUseDelivery }): ComputerUseToolOutcome {
   return { ok: false, error: reply.error, ...(reply.delivery === undefined ? {} : { delivery: reply.delivery }) };
+}
+
+/**
+ * 让路回执 → 一句「刚才那一下为什么晚了」。模型看不见沙箱窗口，这一句是它唯一能学到
+ * 「用户正在用这个桌面」的地方：否则它只会看到一条成功的回执，然后接着按自己的节奏动手。
+ *
+ * 只在桥真的推迟过（yielded:true）时才追加——没让路的回执一个字都不变。
+ */
+function deferredNote(reply: GuestCommandReply): string {
+  if (reply.ok !== true || reply.yielded !== true) return "";
+  const waited = reply.waitedMs === undefined ? 0 : reply.waitedMs;
+  return (
+    ` It was held back for ${waited}ms first: a person was typing or clicking in the sandbox, and a real ` +
+    "user's input takes priority over the agent's, so the action waited until the desktop went quiet. If the " +
+    "user keeps working, expect further delays — prefer the lanes that do not take over the desktop " +
+    "(sandbox_* browser commands, computer_uia on controls, screenshots of a single window)."
+  );
 }
 
 /**

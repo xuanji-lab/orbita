@@ -1774,6 +1774,49 @@ describe("guest 命令下发", () => {
     }
   });
 
+  test("让路回执（桥 0.11.0）：yielded / waitedMs 原样带到 agent 工具层，其它命令的回执形状不变", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) => {
+          if (req.command === "ping") return { resp: { ok: true } };
+          // 只有 click 的那一次被推迟：其余命令的回执里没有这两个字段
+          if (req.command === "click") return { resp: { ok: true, yielded: true, waitedMs: 850 } };
+          if (req.command === "type") return { resp: { ok: true, yielded: true } };
+          if (req.command === "key") return { resp: { ok: true, yielded: "yes", waitedMs: "900" } };
+          return { resp: { ok: true, waitedMs: 500 } };
+        },
+      });
+      await startPromise;
+
+      assert.deepEqual(await harness.controller.guestCommand("click", { x: 1, y: 2 }), {
+        ok: true,
+        resp: { ok: true, yielded: true, waitedMs: 850 },
+        yielded: true,
+        waitedMs: 850,
+      });
+      // 桥只给 yielded、没给 waitedMs：回执也不编一个 0 出来（“没数据”和“等了 0ms”不是一件事）
+      assert.deepEqual(await harness.controller.guestCommand("type", { text: "x" }), {
+        ok: true,
+        resp: { ok: true, yielded: true },
+        yielded: true,
+      });
+      // 形状守卫：不是字面 true / 不是数字就不当让路（回执退回改前的形状）
+      assert.deepEqual(await harness.controller.guestCommand("key", { key: "enter" }), {
+        ok: true,
+        resp: { ok: true, yielded: "yes", waitedMs: "900" },
+      });
+      // waitedMs 孤零零出现（没有 yielded）也不当让路
+      assert.deepEqual(await harness.controller.guestCommand("scroll", { x: 1, y: 2, deltaY: 1 }), {
+        ok: true,
+        resp: { ok: true, waitedMs: 500 },
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
   test("桥回错误响应（不认识的键名）→ 原话带出", async () => {
     const harness = await makeHarness();
     try {

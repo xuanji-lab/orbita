@@ -71,6 +71,8 @@ const args = [
   // 应用级准入（0.11.0）：目标窗口 → guest 内 pid → 自己起的进程树 / exe 白名单。
   // 纯判定 + 自测（--selftest-admission），不碰真实窗口
   path.join(scriptDir, "Admission.cs"),
+  // 输入让路（0.11.0）：低级钩子线程 + 「人在动还是我们注入」的判定 + 让路闸门的纯函数
+  path.join(scriptDir, "InputHook.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);
