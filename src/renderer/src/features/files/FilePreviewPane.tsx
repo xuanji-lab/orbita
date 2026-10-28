@@ -14,6 +14,7 @@ import { WindowedText } from "./WindowedText";
 import { isPdfFile, isWebPageFile, PREVIEW_TEXT_LIMIT, type FileListRequest, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import type { CiteEntry } from "@shared/cite";
+import type { LatexProjectIndex } from "@shared/latex";
 import { PdfView, type PdfJump, type PdfSyncJump } from "./PdfView";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
@@ -76,6 +77,9 @@ export function FilePreviewPane(props: {
     reveal?: { line: number; token: number } | null;
     /** 项目文献库：`\cite{` 的候选（不在 LaTeX 项目里时缺席） */
     cite?: readonly CiteEntry[];
+    /** 项目符号索引：`
+ef` / 自定义命令 / 路径补全的候选（不在项目里时缺席） */
+    latexIndex?: LatexProjectIndex | null;
   };
 }) {
   const t = useT();
@@ -291,6 +295,7 @@ export function FilePreviewPane(props: {
             {...(props.editor?.onQuote === undefined ? {} : { onQuote: props.editor.onQuote })}
             reveal={props.editor?.reveal ?? null}
             {...(props.editor?.cite === undefined ? {} : { cite: props.editor.cite })}
+            latexIndex={props.editor?.latexIndex ?? null}
           />
         ) : sentImage === undefined ? (
           <PreviewBody

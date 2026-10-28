@@ -36,6 +36,7 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
+import { completionKeymap } from "@codemirror/autocomplete";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { tags } from "@lezer/highlight";
 
@@ -158,7 +159,9 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
     agentMarks,
     syncLineMarks,
     search({ top: true }),
-    keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+    // completionKeymap：Ctrl/Cmd+Space 手动弹补全。LaTeX 的现场不总是「正在打字」——
+    // `\ref{` 之后想看看有哪些 label、`\begin{` 之后想挑环境，手动触发比再敲一个字自然
+    keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return;
       onUpdate({ docChanged: update.docChanged, selectionSet: update.selectionSet });

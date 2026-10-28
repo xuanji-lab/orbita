@@ -31,7 +31,7 @@ import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
 import type { CiteEntry } from "@shared/cite";
-import type { LatexFileContext } from "@shared/latex";
+import type { LatexFileContext, LatexProjectIndex } from "@shared/latex";
 import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
 import {
   latexEditorExtensions,
@@ -42,7 +42,7 @@ import {
   syncLineEffect,
 } from "./latex-editor.ts";
 import { formatSize } from "./tree-view.ts";
-import { citeCompletion } from "./cite-completion.ts";
+import { latexCompletion } from "./latex-completion.ts";
 import {
   clampCursorLine,
   locateBlock,
@@ -147,6 +147,11 @@ export function TexEditorPane(props: {
    * 晚到（IPC 在飞），重挂编辑器会丢光标与撤销历史。
    */
   cite?: readonly CiteEntry[];
+  /**
+   * 项目符号索引（`\\ref` 的 label、项目自定义命令 / 环境、`\\input` 路径候选）。
+   * null / 缺席 = 不在 LaTeX 项目里，补全只剩静态表那一层。
+   */
+  latexIndex?: LatexProjectIndex | null;
 }) {
   const t = useT();
   const path = props.request.dir;
@@ -160,6 +165,9 @@ export function TexEditorPane(props: {
    */
   const citeRef = useRef<readonly CiteEntry[]>(props.cite ?? NO_CITE);
   citeRef.current = props.cite ?? NO_CITE;
+  /** 同一条纪律：索引比编辑器晚到（IPC 在飞），补全来源每次现读这个 ref */
+  const indexRef = useRef<LatexProjectIndex | null>(props.latexIndex ?? null);
+  indexRef.current = props.latexIndex ?? null;
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
   const savedHashRef = useRef(contentHash(props.initialText));
   const eolRef = useRef<LineEnding>(detectLineEnding(props.initialText));
@@ -369,7 +377,7 @@ export function TexEditorPane(props: {
               }
             }
           }),
-          citeCompletion(() => citeRef.current),
+          latexCompletion({ cite: () => citeRef.current, index: () => indexRef.current }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
       }),

@@ -39,6 +39,7 @@ import {
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
+import { useLatexIndex } from "./useLatexIndex.ts";
 import { closeDecision } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
@@ -281,6 +282,8 @@ export function FilesPanel(props: {
   const latex = useLatexWorkbench(latexContext);
   /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
   const citeLibrary = useCiteLibrary(latexContext, latex.project);
+  /** 项目符号索引：`\ref` / 自定义命令 / 路径补全的候选（与编译同一份项目目录） */
+  const latexIndex = useLatexIndex(latexContext, latex.project);
 
   /**
    * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
@@ -1497,6 +1500,7 @@ export function FilesPanel(props: {
                     onQuote: (text, line) => quoteEditorText(leftPath ?? shownTab.path, text, line),
                     // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
                     ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
+                    latexIndex,
                     reveal:
                       reveal !== null && samePath(reveal.path, leftPath ?? shownTab.path)
                         ? { line: reveal.line, token: reveal.token }
