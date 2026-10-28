@@ -10,6 +10,7 @@ import {
   effectiveIntentSettings,
   effectiveAllowNetwork,
   effectiveGuestAllowExe,
+  effectiveGuestBrowser,
   parseComputerUse,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
@@ -19,7 +20,7 @@ import {
   SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
-import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK } from "./computer-use.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, COMPUTER_USE_DEFAULT_BROWSER, COMPUTER_USE_BROWSER_CHOICES } from "./computer-use.ts";
 
 describe("parseSettings", () => {
   it("四档主题都认（含 black 手动档）", () => {
@@ -702,11 +703,13 @@ describe("parseSettings 的 computerUse（沙箱出网开关）", () => {
 });
 
 describe("parseSettings 的 computerUse.allowedApps（应用级准入白名单）", () => {
-  it("缺席 = 不落键；生效值只拿内置默认（msedge.exe）", () => {
+  const DEFAULTS = ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"];
+
+  it("缺席 = 不落键；生效值只拿内置默认（四个浏览器 exe）", () => {
     deepStrictEqual(parseSettings({}).computerUse, undefined);
-    deepStrictEqual(effectiveGuestAllowExe(undefined), ["msedge.exe"]);
-    deepStrictEqual(effectiveGuestAllowExe({ computerUse: {} }), ["msedge.exe"]);
-    deepStrictEqual(effectiveGuestAllowExe({ computerUse: { allowNetwork: false } }), ["msedge.exe"]);
+    deepStrictEqual(effectiveGuestAllowExe(undefined), DEFAULTS);
+    deepStrictEqual(effectiveGuestAllowExe({ computerUse: {} }), DEFAULTS);
+    deepStrictEqual(effectiveGuestAllowExe({ computerUse: { allowNetwork: false } }), DEFAULTS);
   });
 
   it("规范化：去空白、取路径末段、小写、去重；用户项追加在内置默认之后", () => {
@@ -717,7 +720,7 @@ describe("parseSettings 的 computerUse.allowedApps（应用级准入白名单�
     );
     deepStrictEqual(
       effectiveGuestAllowExe({ computerUse: { allowedApps: ["notepad.exe"] } }),
-      ["msedge.exe", "notepad.exe"],
+      [...DEFAULTS, "notepad.exe"],
     );
   });
 
@@ -733,5 +736,61 @@ describe("parseSettings 的 computerUse.allowedApps（应用级准入白名单�
     deepStrictEqual(parseComputerUse({ allowNetwork: false }), { allowNetwork: false });
     deepStrictEqual(effectiveAllowNetwork({ computerUse: { allowedApps: ["notepad.exe"] } }), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
     deepStrictEqual(parseComputerUse({ allowedApps: ["notepad.exe"], proxy: "http://x" }), { allowedApps: ["notepad.exe"] });
+  });
+});
+
+describe("parseSettings 的 computerUse.browser（沙箱里用哪个浏览器）", () => {
+  it("缺席 = 不落键；生效值按缺省 edge（沙箱预装、零准备成本）", () => {
+    deepStrictEqual(COMPUTER_USE_DEFAULT_BROWSER, "edge");
+    deepStrictEqual(parseSettings({}).computerUse, undefined);
+    deepStrictEqual(effectiveGuestBrowser(undefined), "edge");
+    deepStrictEqual(effectiveGuestBrowser({ computerUse: {} }), "edge");
+    deepStrictEqual(effectiveGuestBrowser({ computerUse: { allowNetwork: false } }), "edge");
+  });
+
+  it("五个合法值原样保留（edge / chrome / brave / chromium / auto）", () => {
+    for (const browser of COMPUTER_USE_BROWSER_CHOICES) {
+      deepStrictEqual(parseSettings({ computerUse: { browser } }).computerUse, { browser });
+      deepStrictEqual(effectiveGuestBrowser({ computerUse: { browser } }), browser);
+    }
+  });
+
+  it("大小写 / 首尾空白宽容：手改成 \"Chrome\" 不该落回 Edge", () => {
+    deepStrictEqual(parseComputerUse({ browser: " Chrome " }), { browser: "chrome" });
+    deepStrictEqual(parseComputerUse({ browser: "AUTO" }), { browser: "auto" });
+  });
+
+  it("不认识的字符串落回 edge 并留一行日志（不能让一个拼错把整个功能挡死）", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      deepStrictEqual(parseComputerUse({ browser: "firefox" }), { browser: "edge" });
+      // 绝对路径也不认：自定义路径只在桥的探测里当后门，设置页只给五个选项
+      deepStrictEqual(parseComputerUse({ browser: "C:\\Program Files\\Google\\Chrome\\chrome.exe" }), { browser: "edge" });
+    } finally {
+      console.warn = original;
+    }
+    deepStrictEqual(warnings.length, 2);
+    ok(warnings[0]?.includes("firefox"), warnings[0]);
+    ok(warnings[0]?.includes("edge"), warnings[0]);
+  });
+
+  it("非字符串当缺席（数字 / 布尔 / null 都不落键）", () => {
+    deepStrictEqual(parseComputerUse({ browser: 1 }), undefined);
+    deepStrictEqual(parseComputerUse({ browser: true }), undefined);
+    deepStrictEqual(parseComputerUse({ browser: null }), undefined);
+    deepStrictEqual(parseComputerUse({ browser: ["chrome"] }), undefined);
+  });
+
+  it("三个键可以只写一个：写浏览器不冲掉别的键的解析（落盘层的合并在 store 里）", () => {
+    deepStrictEqual(parseComputerUse({ browser: "chrome" }), { browser: "chrome" });
+    deepStrictEqual(
+      parseComputerUse({ allowNetwork: false, allowedApps: ["notepad.exe"], browser: "brave", proxy: "x" }),
+      { allowNetwork: false, allowedApps: ["notepad.exe"], browser: "brave" },
+    );
+    deepStrictEqual(effectiveGuestBrowser({ computerUse: { allowedApps: ["notepad.exe"] } }), "edge");
   });
 });

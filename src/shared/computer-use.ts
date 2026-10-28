@@ -213,7 +213,7 @@ export const computerUseGuestCommands = {
   // 自己的 Edge 实例（各自的 --user-data-dir 与调试端口）。上限 COMPUTER_USE_BROWSER_MAX，
   // 空闲 COMPUTER_USE_BROWSER_IDLE_MS 后自动回收。只有 `cdp-status` 不带 session 时是
   // 「汇总所有会话」的形态；其余命令（含 cdp-stop）都只落在一个实例上。
-  /** 起沙箱内的 Edge 并等到 CDP 可用（幂等）。端口取 0 让系统分配，桥读 DevToolsActivePort */
+  /** 起沙箱内的浏览器（默认 Edge，可配；见 COMPUTER_USE_BROWSER_CHOICES）并等到 CDP 可用（幂等）。端口取 0 让系统分配，桥读 DevToolsActivePort */
   cdpStart: "cdp-start",
   /** 只停桥自己启动的那个 Edge 进程树（按记录的 pid；绝不按镜像名杀） */
   cdpStop: "cdp-stop",
@@ -242,6 +242,47 @@ export const computerUseGuestCommands = {
 } as const;
 
 export type ComputerUseGuestCommand = (typeof computerUseGuestCommands)[keyof typeof computerUseGuestCommands];
+
+// ── 沙箱里用哪个浏览器（0.12.0：可配，默认 Edge）────────────────────────────
+
+/**
+ * 沙箱里的浏览器选项。**默认 edge**，不是「Chrome 更好」——真机实测（同一台沙箱、同一套
+ * CDP 口径）：
+ *   - Edge（沙箱预装）：启动到 CDP 就绪 2152ms，每台沙箱准备成本 0；
+ *   - Chrome（从宿主映射直跑）：3198ms；
+ *   - Chrome（拷到沙箱本地盘）：2119ms，但每台沙箱多 3074ms（robocopy 515MB）。
+ * 运行能力完全一样，Edge 因为预装所以零成本。可配是为了不把选择权写死，不是换默认。
+ *
+ * `auto` = 依次探测 edge → chrome → brave → chromium，第一个存在的就用（**不算回退**：
+ * 它本来就没指定是谁）。不认识的字符串一律落回 `edge`（设置解析层与桥各兜一层）。
+ */
+export const COMPUTER_USE_BROWSER_CHOICES = ["edge", "chrome", "brave", "chromium", "auto"] as const;
+export type ComputerUseBrowser = (typeof COMPUTER_USE_BROWSER_CHOICES)[number];
+export const COMPUTER_USE_DEFAULT_BROWSER: ComputerUseBrowser = "edge";
+
+/** 是不是一个合法的浏览器选项（设置解析与设置页共用；桥侧另有一份 C# 实现） */
+export function isComputerUseBrowser(value: unknown): value is ComputerUseBrowser {
+  return typeof value === "string" && (COMPUTER_USE_BROWSER_CHOICES as readonly string[]).includes(value);
+}
+
+/**
+ * `cdp-start` 的 guest 字段（宿主下发）。
+ *
+ * `browser`：edge / chrome / brave / chromium / auto，或一条 guest 内的绝对路径（自定义
+ * 路径的后门，不做 UI）；缺席 = edge。桥在 guest 里解析它，找不到就回退 Edge 并在回执里
+ * 标记 `browserFallbackFrom`（加上实际的 `browser` / `browserPath`）。
+ *
+ * **这个字段必须一路传到 worker**：`cdp-*` 是在该会话的 worker 子进程里执行的，只改主桥
+ * 等于没改。漏传的表现是「配了 Chrome 但实际还是 Edge」，而除了回执里的 browser 字段，
+ * 没有任何地方看得出来。
+ */
+export type ComputerUseCdpStartFields = {
+  session: string;
+  browser?: string;
+  headless?: boolean;
+  port?: number;
+  url?: string;
+};
 
 /**
  * 每会话一个 Edge 时 profile 的**根目录**（guest 绝对路径）：每个实例落在
@@ -376,14 +417,24 @@ export interface ComputerUseAdmission {
 }
 
 /**
- * 准入白名单的**内置默认**：只认沙箱里的 Edge。**全栈唯一来源**：设置解析的兜底
- * （`shared/settings.ts` 的 `effectiveGuestAllowExe`）、控制器下发给桥的字段、桥自己的
- * 兜底（guest-bridge/Admission.cs 的 DefaultAllowExe）都从这里对齐。
+ * 准入白名单的**内置默认**：沙箱里可能被我们起的四个浏览器（Edge / Chrome / Brave / Chromium）。
+ * **全栈唯一来源**：设置解析的兜底（`shared/settings.ts` 的 `effectiveGuestAllowExe`）、
+ * 控制器下发给桥的字段、桥自己的兜底（guest-bridge/Admission.cs 的 `DefaultAllowExe`）
+ * 都从这里对齐。**两处必须逐字一致**（含顺序）——桥改一处、宿主改另一处而没人发现，
+ * 后果是用 Chrome 时每条输入都判 `bypassed`：功能能用，但日志变噪音、owned 判定失效。
+ * guest-bridge/bridge.test.mjs 直接对比两份源码，漂了就红。
  *
- * 为什么 Edge 需要显式放行：树判定靠父链，而 Edge 的 launcher / 网络进程有机率被重新
+ * 为什么这四个要显式放行：树判定靠父链，而 Chromium 系的 launcher / 网络进程有机率被重新
  * 拉起或重新挂父，父链断了就落到 `bypassed`——它不是逸出风险，是自家浏览器。
+ * 四个都放而不管当前设置用的是哪个：这份表是**内置默认**、不随设置变（设置只能往上追加），
+ * 否则换一次浏览器就得把准入逻辑也联动一遍。
  */
-export const COMPUTER_USE_DEFAULT_ALLOWED_APPS = ["msedge.exe"] as const;
+export const COMPUTER_USE_DEFAULT_ALLOWED_APPS = [
+  "msedge.exe",
+  "chrome.exe",
+  "brave.exe",
+  "chromium.exe",
+] as const;
 
 /**
  * exe 名的规范化：去空白、只取路径末段、小写、只认 `*.exe`。
@@ -399,7 +450,7 @@ export function normalizeGuestAppName(value: string): string | null {
 
 /**
  * 真正下发给桥的白名单 = 内置默认 ∪ 用户设置（规范化、去重、保序）。
- * 用户加的是**追加**，不是替换：拿掉 msedge.exe 得改默认常量，不该靠手删设置做到。
+ * 用户加的是**追加**，不是替换：拿掉某个内置项得改默认常量，不该靠手删设置做到。
  */
 export function mergeGuestAllowExe(userList: readonly string[] | undefined): string[] {
   const out: string[] = [...COMPUTER_USE_DEFAULT_ALLOWED_APPS];

@@ -6,7 +6,7 @@
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
-import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, mergeGuestAllowExe, normalizeGuestAppName } from "./computer-use.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, COMPUTER_USE_DEFAULT_BROWSER, COMPUTER_USE_BROWSER_CHOICES, isComputerUseBrowser, mergeGuestAllowExe, normalizeGuestAppName, type ComputerUseBrowser } from "./computer-use.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /**
@@ -174,11 +174,10 @@ export function parseIntentSettings(raw: unknown): IntentSettings | undefined {
 
 /**
  * 电脑使用（沙箱）的设置子对象。**只在实验开关 `computer-use` 打开时有界面**；
- * 解析与缺省见 `parseComputerUse` / `effectiveAllowNetwork`。
+ * 解析与缺省见 `parseComputerUse` / `effectiveAllowNetwork` / `effectiveGuestBrowser`。
  *
- * 目前只有一项，所以设置页整块回写（`SettingsPatch.computerUse` 是整对象）。
- * 将来加第二项时要在 SettingsStore.write 里按键合并（同 drawer / lastUsed），
- * 否则一次只改一项的补丁会把另一项冲掉。
+ * 现在有三项，**每一项都可以单独写**：`SettingsStore.write` 对 computerUse 做按键合并
+ *（同 drawer / lastUsed）——设置页只发自己改的那个键，手写的其它键不会被冲掉。
  */
 export interface ComputerUseSettings {
   /**
@@ -204,6 +203,17 @@ export interface ComputerUseSettings {
    * （控制器每条做准入判定的命令现读一次设置）。
    */
   allowedApps?: string[];
+  /**
+   * 沙箱里用哪个浏览器（`edge` / `chrome` / `brave` / `chromium` / `auto`）。缺席 = `edge`
+   * （沙箱预装、零准备成本，实测数字见 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_CHOICES）。
+   *
+   * Chrome / Brave / Chromium **不在沙箱镜像里**：得用户自己映射或拷进去。没放进去时桥
+   * 回退 Edge，并在回执里标 `browserFallbackFrom`——所以选错不是静默的。
+   * 改了下一次 `cdp-start` 就生效（不写 .wsb、不用重启沙箱），但**已经在跑的浏览器**不换。
+   *
+   * 不认识的字符串落回 `edge` 并留一行日志：手改错的 json 不该把整个功能挡住。
+   */
+  browser?: ComputerUseBrowser;
 }
 
 /**
@@ -216,7 +226,7 @@ export function effectiveAllowNetwork(settings: { computerUse?: ComputerUseSetti
 }
 
 /**
- * 下发给 guest 桥的准入白名单（内置 msedge.exe ∪ 设置里的 allowedApps，已规范化去重）。
+ * 下发给 guest 桥的准入白名单（内置四个浏览器 exe ∪ 设置里的 allowedApps，已规范化去重）。
  * 与 `effectiveAllowNetwork` 同一个位置、同一条纪律：消费侧不各自拼默认值。
  */
 export function effectiveGuestAllowExe(
@@ -226,22 +236,58 @@ export function effectiveGuestAllowExe(
 }
 
 /**
- * computerUse 子对象的解析：`allowNetwork` 只认布尔，`allowedApps` 只认能规范化的 exe 名字。
+ * 沙箱浏览器的生效值：缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_BROWSER` = edge）。
+ * 与 `effectiveAllowNetwork` 同一条纪律：兜底走 shared 的常量，消费侧不写死。
+ */
+export function effectiveGuestBrowser(
+  settings: { computerUse?: ComputerUseSettings } | undefined,
+): ComputerUseBrowser {
+  return settings?.computerUse?.browser ?? COMPUTER_USE_DEFAULT_BROWSER;
+}
+
+/**
+ * computerUse 子对象的解析：`allowNetwork` 只认布尔，`allowedApps` 只认能规范化的 exe 名字，
+ * `browser` 只认五个选项（上级未知的字符串落回 edge 并留一行日志）。
  * 两样都没给出可用的值时返回 undefined（整段缺席 / 全是坏值 = 没设置）。
  *
- * `allowNetwork` 缺席是**允许**（老文件没有这个键）；`allowedApps` 缺席 = 只用内置默认。
+ * `allowNetwork` 缺席是**允许**（老文件没有这个键）；`allowedApps` 缺席 = 只用内置默认；
+ * `browser` 缺席 = edge。
  * 手改出来的 `"false"` / 数字一律当作没设置——与其它字段同一条纪律，不落假值到盘上。
  */
 export function parseComputerUse(raw: unknown): ComputerUseSettings | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as { allowNetwork?: unknown; allowedApps?: unknown };
+  const record = raw as { allowNetwork?: unknown; allowedApps?: unknown; browser?: unknown };
   const allowedApps = parseAllowedApps(record.allowedApps);
+  const browser = parseComputerUseBrowser(record.browser);
   const hasNetwork = typeof record.allowNetwork === "boolean";
-  if (!hasNetwork && allowedApps === undefined) return undefined;
+  if (!hasNetwork && allowedApps === undefined && browser === undefined) return undefined;
   return {
     ...(hasNetwork ? { allowNetwork: record.allowNetwork as boolean } : {}),
     ...(allowedApps === undefined ? {} : { allowedApps }),
+    ...(browser === undefined ? {} : { browser }),
   };
+}
+
+/**
+ * 浏览器选项的解析。**宽进严出**：
+ *   - 五个合法值 → 原样保留；
+ *   - 其它**字符串**（手改成 "Chrome" 大小写 / "firefox" / 一条路径）→ 落回 edge + 一行日志。
+ *     宁可丢掉用户的选择也不让一个拼写错把整条 CDP 通道变成“起不来”，日志里能看见；
+ *   - 非字符串 / 缺席 → undefined（没设过）。
+ */
+function parseComputerUseBrowser(raw: unknown): ComputerUseBrowser | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (isComputerUseBrowser(raw)) return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (isComputerUseBrowser(trimmed)) return trimmed;
+    console.warn(
+      `[settings] computerUse.browser 的值「${raw}」不认识，按 ${COMPUTER_USE_DEFAULT_BROWSER} 处理` +
+        `（可选：${COMPUTER_USE_BROWSER_CHOICES.join(" / ")}）`,
+    );
+    return COMPUTER_USE_DEFAULT_BROWSER;
+  }
+  return undefined;
 }
 
 /** exe 名单：逐项规范化，坏值丢掉，按规范化后的名字去重；空表返回 undefined（不落空数组） */

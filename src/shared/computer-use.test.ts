@@ -217,15 +217,20 @@ describe("应用级准入契约（桥 0.11.0 的观察模式）", () => {
     assert.equal(normalizeGuestAppName("we ird.exe"), null);
   });
 
-  test("下发白名单 = 内置 msedge.exe ∪ 用户项（规范化去重、默认在前）", () => {
-    assert.deepEqual([...COMPUTER_USE_DEFAULT_ALLOWED_APPS], ["msedge.exe"]);
-    assert.deepEqual(mergeGuestAllowExe(undefined), ["msedge.exe"]);
-    assert.deepEqual(mergeGuestAllowExe([]), ["msedge.exe"]);
+  test("下发白名单 = 内置四个浏览器 exe ∪ 用户项（规范化去重、默认在前）", () => {
+    assert.deepEqual([...COMPUTER_USE_DEFAULT_ALLOWED_APPS], ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"]);
+    assert.deepEqual(mergeGuestAllowExe(undefined), ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"]);
+    assert.deepEqual(mergeGuestAllowExe([]), ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"]);
     assert.deepEqual(mergeGuestAllowExe(["notepad.exe", "MSEDGE.EXE", "bad", "calc.exe"]), [
       "msedge.exe",
+      "chrome.exe",
+      "brave.exe",
+      "chromium.exe",
       "notepad.exe",
       "calc.exe",
     ]);
+    // 用户项是**追加**：写一个已经在默认里的名字不该重复，也不该把它提到前面
+    assert.deepEqual(mergeGuestAllowExe(["chrome.exe"]), ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"]);
   });
 });
 
