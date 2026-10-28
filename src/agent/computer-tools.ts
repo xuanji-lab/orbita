@@ -192,9 +192,11 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "**Pass window (part of a window title) or hwnd to capture only that window**: that works even when other " +
       "windows cover it and it does not take focus, so it is the cheap way to check on a window you are not " +
       "driving. A window image's pixels are window pixels, not desktop pixels: take a normal screenshot (no " +
-      "window) before clicking. Password fields are blacked out in the image, but only after you have listed " +
-      "that window once with computer_uia (list records where the password fields are): if the result warns " +
-      "that the image is NOT masked and you need to see that window, list it first and screenshot again. " +
+      "window) before clicking. Native (Win32) password fields are blacked out in the image, but only after " +
+      "listing that window once with computer_uia (list records where they are). **Browser page content is NOT " +
+      "exposed to UI Automation**, so a password typed into a web page is not blacked out this way — but the " +
+      "browser itself renders it as dots, so it does not show up in the image either. If the result warns that " +
+      "the image is NOT masked, that is normal unless you listed the window first. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
       "start it in Settings › Experimental features › Computer use; do not retry.",
@@ -416,8 +418,9 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
       "the right way to drive a background window. Start with action \"list\" (read-only) to get refs and names, then " +
       "act on one by ref (or name). A ref belongs to the latest list of that window; re-list after the window changes " +
-      "(page navigation, a new dialog). Listing also records where that window's password fields are, which is what " +
-      "lets later screenshots of it black them out — so list before you screenshot a window that may show a password. " +
+      "(page navigation, a new dialog). Listing also records where that window's **native** password fields are, " +
+      "so later screenshots can black them out. Browser page content is not exposed to UI Automation, so this covers " +
+      "Win32 controls only — web pages draw their own password dots, and those never reach the image. " +
       "Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
       "documents — sets the value directly, no IME needed), selection (list items, tab items). " +
       "There is no \"focus\" action — it used to exist and was removed, because moving the keyboard focus takes " +
