@@ -1901,6 +1901,8 @@ export const en = {
     quoteMissingPackage: "Missing package",
     quotePending: "Waiting for install confirmation",
     quoteVerify: "Citation check",
+    duplicateLabel: (name: string, file: string, line: number) =>
+      `Label ${name} is defined more than once — the first one is ${file}:${line}`,
     /* ---------- SyncTeX (source ↔ PDF) ---------- */
     syncNoPdf: "No PDF yet — compile once, then jump.",
     syncNoSynctex: "This PDF has no SyncTeX data. Compile it again to enable jumping (the build passes -synctex for you).",

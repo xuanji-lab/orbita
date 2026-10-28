@@ -256,6 +256,8 @@ export const latexChannels = {
   packages: "latex:packages",
   /** 项目符号索引：\label / 自定义命令 / 环境 / 路径候选（补全与重复 label 提示读它） */
   index: "latex:index",
+  /** chktex 行内检查（本机装了才可用；没装时 available:false） */
+  lint: "latex:lint",
 } as const;
 
 /**
@@ -425,6 +427,19 @@ export interface LatexProjectIndex {
 }
 
 export type LatexIndexOutcome = { found: false } | { found: true; index: LatexProjectIndex };
+
+/**
+ * chktex 行内检查的结局。
+ *
+ * `available: false` = **本机没有 chktex**（或这个文件不是 .tex）：界面据此完全不显示
+ * 这条通道的痕迹——它是 TeX 发行版的可选组件，没装的人不该看到任何「缺少工具」。
+ * `available: true` 且 `issues` 为空 = 检查过、没有问题。
+ */
+export interface LatexLintOutcome {
+  available: boolean;
+  /** 只含被检查的那个文件的问题（file 相对项目目录，与编译日志同一口径） */
+  issues: LatexIssue[];
+}
 
 /**
  * 缺宏包反查 —— 日志只说「`ctexart.cls' not found」，而 tlmgr / mpm 要的是**包名**，

@@ -81,6 +81,8 @@ const ALLOWED_LATIN = new Set([
   "Crossref",
   // BibTeX 的引用命令（界面上给出「已插入 \cite{…}」，用户照着核对）
   "cite",
+  // LaTeX 的 label 是源码里的字面量（`\label{…}`），中文文案里保留原名便于对照
+  "label",
   // 缺宏包安装：MiKTeX 的包管理器与提权命令（用户照抄进终端的字面量）
   "mpm",
   "MiKTeX",

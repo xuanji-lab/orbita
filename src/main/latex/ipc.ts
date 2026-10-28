@@ -21,6 +21,7 @@ import {
   type LatexForwardOutcome,
   type LatexForwardRequest,
   type LatexIndexOutcome,
+  type LatexLintOutcome,
   type LatexPackageQuery,
   type LatexProjectOutcome,
   type LatexResolvedPackage,
@@ -34,6 +35,7 @@ import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
 import { buildLatexIndex } from "./index.ts";
+import { lintWithChktex, probeChktex } from "./chktex.ts";
 import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
 import type { LatexRunner } from "./run.ts";
@@ -54,6 +56,24 @@ export function registerLatexIpc(
     return located === null
       ? { found: false }
       : { found: true, project: describeLatexProject(located.dir) };
+  });
+
+  /**
+   * chktex 行内检查。**探测到才启用**：本机没有 chktex 时回 available:false，界面
+   * 不显示这条通道的任何痕迹。只对 .tex 跑（对 .bib / .sty 跑 chktex 是把别的语法
+   * 当 TeX 解析，结果全是噪音）。
+   */
+  ipcMain.handle(latexChannels.lint, async (_event, req: LatexFileContext): Promise<LatexLintOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { available: false, issues: [] };
+    if (!/\.tex$/i.test(located.file)) return { available: false, issues: [] };
+    const source = insideProject(located.dir, located.file);
+    if (source === null) return { available: false, issues: [] };
+    const probe = await runner.probeEnvironment();
+    const binary = await probeChktex(probe.latexmk);
+    if (binary === null) return { available: false, issues: [] };
+    const result = await lintWithChktex({ binary, file: source.file, projectDir: located.dir });
+    return { available: true, issues: result.issues };
   });
 
   ipcMain.handle(latexChannels.compile, async (_event, req: LatexFileContext): Promise<LatexRunOutcome> => {

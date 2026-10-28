@@ -40,6 +40,7 @@ import {
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
+import { useLatexLint } from "./useLatexLint.ts";
 import { issueAbsolutePath } from "./latex-diagnostics.ts";
 import type { CiteVerification } from "@shared/cite";
 import { closeDecision } from "./editor-state.ts";
@@ -63,7 +64,7 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump, PdfSyncJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileListRequest, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
-import type { LatexFileContext, LatexIssue, LatexResolvedPackage, LatexSyncFailure } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexLabelRef, LatexResolvedPackage, LatexSyncFailure } from "@shared/latex";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -286,6 +287,11 @@ export function FilesPanel(props: {
   const citeLibrary = useCiteLibrary(latexContext, latex.project);
   /** 项目符号索引：`\ref` / 自定义命令 / 路径补全的候选（与编译同一份项目目录） */
   const latexIndex = useLatexIndex(latexContext, latex.project);
+  /**
+   * chktex 的行内检查（本机装了才有；没装时永远空数组）。只进行内标记、不进问题抽屉：
+   * 抽屉是「这次编译说了什么」，chktex 是「风格检查」，两件事混在一起会让错误计数失真。
+   */
+  const lintIssues = useLatexLint(latexContext, latex.project);
 
   /**
    * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
@@ -405,12 +411,36 @@ export function FilesPanel(props: {
     return issues;
   }, [citeLibrary, t]);
   /**
+   * 重复 label：索引里同名出现多次时，**从第二处起**各报一条（file + line 都带上，
+   * 点一下就能跳到那个重复定义）。`
+ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
+   */
+  const indexIssues = useMemo<LatexIssue[]>(() => {
+    if (latexIndex === null) return [];
+    const first = new Map<string, LatexLabelRef>();
+    const issues: LatexIssue[] = [];
+    for (const label of latexIndex.labels) {
+      const original = first.get(label.name);
+      if (original === undefined) {
+        first.set(label.name, label);
+        continue;
+      }
+      issues.push({
+        file: label.file,
+        line: label.line,
+        kind: "warning",
+        message: t.latex.duplicateLabel(label.name, original.file, original.line),
+      });
+    }
+    return issues;
+  }, [latexIndex, t]);
+  /**
    * 行内标记的问题集合（与问题抽屉同一份来源）。**身份要稳**：每次渲染新建一个数组会
    * 让编辑器的 setDiagnostics 效果每帧重跑；这里只在这一次编译的结局变了才换新。
    */
   const diagnosticIssues = useMemo(
-    () => [...(latex.last?.errors ?? []), ...(latex.last?.warnings ?? [])],
-    [latex.last],
+    () => [...(latex.last?.errors ?? []), ...(latex.last?.warnings ?? []), ...lintIssues],
+    [latex.last, lintIssues],
   );
   const editorDiagnostics = useMemo(
     () => (latex.project === null ? null : { issues: diagnosticIssues, projectDir: latex.project.dir }),
@@ -459,8 +489,13 @@ export function FilesPanel(props: {
   }, [latexContext, t]);
 
   const latexGroups = useMemo(
-    () => groupLatexIssues(latex.last?.errors ?? [], [...(latex.last?.warnings ?? []), ...bibIssues]),
-    [latex.last, bibIssues],
+    () =>
+      groupLatexIssues(latex.last?.errors ?? [], [
+        ...(latex.last?.warnings ?? []),
+        ...bibIssues,
+        ...indexIssues,
+      ]),
+    [latex.last, bibIssues, indexIssues],
   );
 
   /**

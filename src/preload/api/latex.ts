@@ -13,6 +13,7 @@ import {
   type LatexForwardOutcome,
   type LatexForwardRequest,
   type LatexIndexOutcome,
+  type LatexLintOutcome,
   type LatexProjectOutcome,
   type LatexProbeResult,
   type LatexPackageQuery,
@@ -48,4 +49,7 @@ export const latexApi = {
   /** 项目符号索引（`\ref` / 自定义命令 / 路径补全读它）；不属于项目时 found:false */
   index: (req: LatexFileContext): Promise<LatexIndexOutcome> =>
     ipcRenderer.invoke(latexChannels.index, req),
+  /** chktex 行内检查；本机没装时 available:false（界面据此不显示） */
+  lint: (req: LatexFileContext): Promise<LatexLintOutcome> =>
+    ipcRenderer.invoke(latexChannels.lint, req),
 } as const;

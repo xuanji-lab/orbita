@@ -1755,6 +1755,7 @@ export const zh: Messages = {
     quoteMissingPackage: "缺少宏包",
     quotePending: "等待确认安装",
     quoteVerify: "引文核验",
+    duplicateLabel: (name, file, line) => `label ${name} 定义了不止一次——第一处在 ${file}:${line}`,
     /* ---------- SyncTeX 双向定位（源码 ↔ PDF） ---------- */
     syncNoPdf: "还没有 PDF——先编译一次再定位。",
     syncNoSynctex: "这份 PDF 里没有 SyncTeX 数据。重新编译一次就能跳转（编译时会自动带上 -synctex）。",
