@@ -77,6 +77,13 @@ describe("parseProjectConfig / splitOptions", () => {
   test("引号包住的片段算一个参数", () => {
     assert.deepEqual(splitOptions("-a -b='x y' -c"), ["-a", "-b=x y", "-c"]);
   });
+
+  test("compileOnSave 只认布尔：字符串 true / 数字 1 当作没写", () => {
+    assert.equal(parseProjectConfig({ compileOnSave: true }).compileOnSave, true);
+    assert.equal(parseProjectConfig({ compileOnSave: false }).compileOnSave, false);
+    assert.equal(parseProjectConfig({ compileOnSave: "true" }).compileOnSave, undefined);
+    assert.equal(parseProjectConfig({}).compileOnSave, undefined);
+  });
 });
 
 describe("resolveLatexPlan —— 主文件", () => {

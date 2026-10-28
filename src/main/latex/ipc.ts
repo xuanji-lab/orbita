@@ -65,6 +65,7 @@ export function registerLatexIpc(
         await writeLatexProjectConfig(located.dir, {
           ...(req.main === undefined ? {} : { main: req.main }),
           ...(req.engine === undefined ? {} : { engine: req.engine }),
+          ...(req.compileOnSave === undefined ? {} : { compileOnSave: req.compileOnSave }),
         });
       } catch (cause) {
         return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };

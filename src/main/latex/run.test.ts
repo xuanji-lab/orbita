@@ -45,6 +45,7 @@ function probe(available = true): LatexProbe {
       engines: available ? ["pdf" as const] : [],
       source: available ? ("path" as const) : null,
       message: available ? "" : "latexmk was not found.",
+      searched: available ? ["/usr/bin"] : ["/usr/bin", "/opt/texlive"],
     }),
     refresh: () => undefined,
   };

@@ -169,7 +169,56 @@ export interface LatexProbeResult {
   source: "path" | "common" | "setting" | null;
   /** 失败原因（给界面与模型看的一句话） */
   message: string;
+  /**
+   * 按探测顺序找过的目录（PATH 各段 + 常见安装根）。**未装时界面要回答
+   * 「找过哪里」**——只说「没找到」会让人怀疑我们根本没去装好的地方看一眼。
+   * 命中的目录也在里面（它是最后一个、也是真正找到的那个）。
+   */
+  searched: string[];
 }
+
+/**
+ * 探测请求。两个动作都只属于「TeX 未安装引导卡」：
+ * - `refresh`：用户说「已经装好了」，作废进程缓存再找一遍（否则会拿到启动时的旧结论）
+ * - 现验一个路径不是这里的事：那是 `latex:locate`（系统文件选择器 + `--version` 现验）
+ */
+export interface LatexProbeRequest {
+  refresh?: boolean;
+}
+
+/**
+ * 「指定位置」的结局：系统文件选择器 → 现验 `--version` → 通过才写进设置。
+ * `invalid` 带路径与原因（用户选的不是 latexmk / 没有执行权限），界面就在卡片里说。
+ */
+export type LatexLocateOutcome =
+  | { kind: "cancelled" }
+  | { kind: "ok"; path: string }
+  | { kind: "invalid"; path: string; message: string };
+
+/**
+ * 一次「清理辅助文件」的结果。
+ *
+ * `removed` / `kept` 是**产物目录在清理前后的差集**，不是 latexmk 的自述：它只会说
+ * "Cleaned"，不报删了哪几份；界面要能说出「删了 6 个文件、PDF 还在」。只列文件名
+ * （相对产物目录），目录本身不算。
+ */
+export interface LatexCleanResult {
+  /** 清单来自哪个产物目录（绝对路径）——toast 里说清是哪一处 */
+  dir: string;
+  /** 被删掉的文件名（排序） */
+  removed: string[];
+  /** 清理后仍在产物目录里的文件名（通常就是 pdf 与外部生成图） */
+  kept: string[];
+  durationMs: number;
+}
+
+/**
+ * 清理的对外结局。并发被拒与编译同一套 `LatexRejectReason`（同项目互斥 / 机器已满）：
+ * 清理会动同一组 .aux，不能跟正在跑的 latexmk 撞在一起。
+ */
+export type LatexCleanOutcome =
+  | { ok: true; result: LatexCleanResult }
+  | { ok: false; error: string; reason?: LatexRejectReason };
 
 /**
  * 判「卡住」的静默上限：日志连续这么久没有新的落盘变化就终止整棵进程树。
@@ -194,6 +243,12 @@ export const LATEX_TOTAL_TIMEOUT_MS = 10 * 60_000;
 
 /** 失败时回给模型的日志尾巴长度 */
 export const LATEX_LOG_TAIL_LIMIT = 8 * 1024;
+
+/**
+ * `latexmk -c` 的时长上限。清理只是读 .fdb_latexmk 再删几份文件，正常是亚秒级；
+ * 60 秒是给「磁盘很慢 / 杀毒软件逐个扫描」留的余量，超了就是真有问题（照样杀整棵进程树）。
+ */
+export const LATEX_CLEAN_TIMEOUT_MS = 60_000;
 
 /** 日志解析的条目上限（errors / warnings 各自）。坏日志可以有上万条 Overfull */
 export const LATEX_MAX_ISSUES = 200;
@@ -248,6 +303,10 @@ export const latexChannels = {
   cancel: "latex:cancel",
   /** 把引擎 / 主文件的选择写进项目 `.orbita/latex.json`，回刷新后的项目 */
   configure: "latex:configure",
+  /** 清理辅助文件（`latexmk -c`）：删 .aux/.log 等，保留 PDF */
+  clean: "latex:clean",
+  /** 「指定位置」：系统文件选择器选 latexmk，现验通过后写进设置 */
+  locate: "latex:locate",
 } as const;
 
 /**
@@ -283,6 +342,11 @@ export interface LatexProjectInfo {
   sourceModifiedAt: number | null;
   /** 主文件解析失败的一句原因（no-main-file 的 detail）；成功时 null */
   detail: string | null;
+  /**
+   * 保存即编译（项目级开关，缺省关）。写在 `.orbita/latex.json` 的 `compileOnSave`：
+   * 它属于这个项目（有的项目编一次几十秒，不该全局默认开）。
+   */
+  compileOnSave: boolean;
 }
 
 export type LatexProjectOutcome = { found: false } | { found: true; project: LatexProjectInfo };
@@ -290,10 +354,11 @@ export type LatexProjectOutcome = { found: false } | { found: true; project: Lat
 /** 编译条发起的编译：不给 dir——项目目录由主进程从 path 找，绕不过白名单 */
 export type LatexCompileIpcRequest = LatexFileContext;
 
-/** 引擎 / 主文件选择。`main` 是相对项目目录的 .tex；两项都可单独给 */
+/** 引擎 / 主文件选择。`main` 是相对项目目录的 .tex；各项都可单独给 */
 export interface LatexConfigureRequest extends LatexFileContext {
   main?: string;
   engine?: LatexEngine;
+  compileOnSave?: boolean;
 }
 
 export type LatexConfigureOutcome =
