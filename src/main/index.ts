@@ -17,7 +17,9 @@ import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
-import { CustomRootsStore } from "./session/import-custom-roots.ts";
+import { CustomRootsStore, dirsOf, mergeCustomRoots } from "./session/import-custom-roots.ts";
+import { baseDir, DATA_ROOT_SPECS, findDataRoots, hasDirectory } from "./session/import-locate.ts";
+import { createKimiExternalSessionReader, kimiWorkDataRoot } from "./session/external-session.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
@@ -340,6 +342,26 @@ void app.whenReady().then(async () => {
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
   const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
+  const customRoots = new CustomRootsStore(configDir);
+  // read_task 的外部只读来源。每次现找目录：Migration 里添加 / 移除自定义 Kimi Code
+  // 数据根后下一次调用就生效；Kimi Work 复用同一 wire 解析器，但不共享它的数据根。
+  const externalSessions = createKimiExternalSessionReader({
+    defaultCwd: workspaces.defaultPath(),
+    sources: async () => {
+      const context = { platform: process.platform, home: homedir(), env: process.env };
+      const spec = DATA_ROOT_SPECS["kimi-code"];
+      const kimiCodeRoots = await mergeCustomRoots(
+        await findDataRoots(spec, context),
+        dirsOf(await customRoots.read(), "kimi-code"),
+        spec,
+      );
+      const workRoot = kimiWorkDataRoot(baseDir("appData", context));
+      return [
+        { source: "kimi-code" as const, roots: kimiCodeRoots },
+        { source: "kimi-work" as const, roots: (await hasDirectory(join(workRoot, "sessions"))) ? [workRoot] : [] },
+      ];
+    },
+  });
   /*
    * 受管浏览器（沙盒窗口懒创建，见 browser/sandbox.ts）。关窗 = 隐藏；应用退出前先
    * prepareQuit，退出时的关窗才不会被改写成隐藏；最后一个主窗口关闭就一并销毁——
@@ -478,7 +500,7 @@ void app.whenReady().then(async () => {
       return;
     }
     if (event.type === "readTaskRequest") {
-      void applyReadTask(sessions, event, workspaces, channels)
+      void applyReadTask(sessions, event, workspaces, channels, externalSessions)
         .then((result) => agentHost.answerReadTask(event.requestId, result))
         .catch((cause: unknown) =>
           agentHost.answerReadTask(event.requestId, {
@@ -626,7 +648,7 @@ void app.whenReady().then(async () => {
     settings,
     join(configDir, "pi-sessions"),
     join(configDir, "imports.jsonl"),
-    new CustomRootsStore(configDir),
+    customRoots,
     skills,
     mcp,
     async () => agentHost.mcpReload(),
