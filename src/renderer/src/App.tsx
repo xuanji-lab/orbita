@@ -53,13 +53,16 @@ import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
 import {
-  completionNoticeItems,
-  mergeNoticeIds,
+  completionNoticeRows,
+  dropWatchedNotices,
+  mergeNoticeEntries,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
+  snapshotSettled,
   sessionRunState,
   settledSessions,
+  type NoticeSnapshot,
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
@@ -654,11 +657,13 @@ export function App() {
    * 状态。只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
    */
   /**
-   * 完成卡此刻列的那一批会话（同拍一起落定的全部，失败在前、新的在上）。空数组 = 不弹。
+   * 完成卡此刻列的那一批会话（卡开着期间落定的全部）。空数组 = 不弹。
    * 以前只存一个 id：同拍完成几条时只提醒一条，丢信息（用户 2026-10-25 裁决：
    * 「多个任务完成，都要提醒才对」——一张卡全列出来）。
+   * 存的是**落定那一刻的快照**（失败与否、落定时刻），不是 id：卡开着时那条会话再开
+   * 一轮，槽的 turnError 会被清掉，实时读会让失败行变绿、排序跟着变。
    */
-  const [noticeIds, setNoticeIds] = useState<readonly string[]>([]);
+  const [noticeEntries, setNoticeEntries] = useState<readonly NoticeSnapshot[]>([]);
   const [drawerFocus, setDrawerFocus] = useState<{ tab: string; token: number } | null>(null);
   const drawerFocusTokenRef = useRef(0);
   /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
@@ -670,16 +675,14 @@ export function App() {
   const watchedKey = watchedIds.join("\n");
   /** 未读清单：从 meta 读（真源在盘上），不再另存一份 renderer state */
   const unreadSessions = session.sessions.filter((meta) => meta.unread != null);
-  /** 把一批会话标成未读：at 此刻铸；failed 查槽的回合失败（重试耗尽），同样是快照 */
+  /** 把一批会话标成未读：落盘的就是落定那一刻的快照（与完成卡同一份） */
   const markUnread = useCallback(
-    (ids: readonly string[]) => {
+    (snapshots: readonly NoticeSnapshot[]) => {
       void Promise.all(
-        ids.map((id) =>
-          api.session.setUnread(id, { at: Date.now(), failed: session.turnErrorOf(id) !== null }),
-        ),
+        snapshots.map(({ id, failed, settledAt }) => api.session.setUnread(id, { at: settledAt, failed })),
       ).then(() => engine.refreshSessions());
     },
-    [engine, session],
+    [engine],
   );
   /** 清未读（看过即清 / 全部标为已读）：目标 id 由调用方从真值现算，不闭包旧列表 */
   const clearUnreadOf = useCallback(
@@ -720,13 +723,15 @@ export function App() {
     // 同拍多条只响一声
     if (ring) playCompletionChime();
     if (fresh.length > 0) {
+      // 落定这一拍拍快照：失败标注此刻还在槽里，下一轮开跑就会被清
+      const snapshots = snapshotSettled(fresh, session.turnErrorOf, Date.now());
       // 未读整批标上
-      markUnread(fresh);
+      markUnread(snapshots);
       // 专注中不弹卡（未读照记，铃铛清单里看得到）；结束后新落定的照常弹。
       // 卡还开着就把新落定的并进去：phase 事件是逐条 IPC 到的，两条会话
       // 前后脚跑完不可能落在同一次渲染里，靠「同拍」聚合会几乎永远只有一条
       // （用户要求的是「多个任务完成，都要提醒」）。
-      if (!focusQuiet) setNoticeIds((current) => mergeNoticeIds(current, fresh));
+      if (!focusQuiet) setNoticeEntries((current) => mergeNoticeEntries(current, snapshots));
     }
     // 只在槽变化时判定；在看谁、开关值读本次渲染的闭包，就是这一拍的真值
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -739,7 +744,7 @@ export function App() {
     );
     if (hit.length > 0) clearUnreadOf(hit);
     // 看着的那条从卡上退下；卡上其余各条留着（她们还是未读）
-    setNoticeIds((current) => current.filter((id) => !watchedIds.includes(id)));
+    setNoticeEntries((current) => dropWatchedNotices(current, watchedIds));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedKey]);
   /** 在辅助对话里打开一条会话（当前主槽不动）：提醒卡与铃铛清单共用 */
@@ -760,19 +765,12 @@ export function App() {
   );
 
   /**
-   * 完成卡的内容：把 noticeIds 现算成行（会话可能已被删掉——不在列表里的直接跳过，
-   * 整批都消失了就不弹）。行序：失败在前、同类 updatedAt 降序。
+   * 完成卡的内容：快照配上会话名现算成行（会话可能已被删掉——不在列表里的直接跳过，
+   * 整批都消失了就不弹）。行序：失败在前、同类落定时刻降序；失败只读快照。
    */
   const noticeItems = useMemo(
-    () =>
-      completionNoticeItems(
-        noticeIds.flatMap((id) => {
-          const meta = session.sessions.find((candidate) => candidate.id === id);
-          if (meta === undefined) return [];
-          return [{ id, title: meta.title, failed: session.turnErrorOf(id) !== null, updatedAt: meta.updatedAt }];
-        }),
-      ),
-    [noticeIds, session.sessions, session.turnErrorOf],
+    () => completionNoticeRows(noticeEntries, session.sessions),
+    [noticeEntries, session.sessions],
   );
   const completionNotice =
     noticeItems.length === 0
@@ -781,15 +779,15 @@ export function App() {
           items: noticeItems.map(({ id, title, failed }) => ({ id, title, failed })),
           // 点开其中一条：主槽换成它，整张卡收起（其余各条仍是未读，铃铛里看得到）
           onOpen: (id: string) => {
-            setNoticeIds([]);
+            setNoticeEntries([]);
             setOverlay(null);
             void session.openSession(id);
           },
           onSideChat: (id: string) => {
-            setNoticeIds([]);
+            setNoticeEntries([]);
             openInSideChat(id);
           },
-          onLater: () => setNoticeIds([]),
+          onLater: () => setNoticeEntries([]),
         };
 
   /**

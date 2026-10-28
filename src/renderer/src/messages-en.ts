@@ -323,6 +323,8 @@ export const en = {
     manyFinishedWithFailure: (count: number, failed: number) => `${count} tasks finished, ${failed} failed`,
     manyFailed: (count: number) => `${count} tasks stopped with an error`,
     failedFlag: "Failed",
+    more: (count: number) => `${count} more`,
+    moreTip: "All unread tasks are in the bell at the bottom right",
     openNow: "Open",
     sideChat: "Side chat",
     later: "Later",

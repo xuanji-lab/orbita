@@ -42,47 +42,121 @@ export function settledSessions(
 }
 
 /**
- * 完成卡上的一行：这条会话的名字、是否失败、这一轮最后写入的时刻（排序用）。
+ * 一条会话**落定那一刻**的快照：卡片与 meta.unread 共用这一份。
+ *
+ * 为什么必须是快照：回合失败标注（槽的 `turnError`）只活到「新一轮开跑」——
+ * session-states 在非 idle 的 phase 事件上清它。卡还开着时那条会话又开一轮，
+ * 实时读的话失败行会变绿、排序跟着变：卡在描述「它现在怎样」，而卡要说的是
+ * 「它刚才那一轮怎样」。`meta.unread.failed` 一直就是这一刻的快照，卡片跟它取同一份。
+ * 排序用的时刻同理取 `settledAt`，不取 `meta.updatedAt`——后者在新一轮写盘时也会动。
+ */
+export interface NoticeSnapshot {
+  id: string;
+  /** 这一轮以失败收尾（重试耗尽等） */
+  failed: boolean;
+  /** 落定那一刻（Unix ms）：排序与 meta.unread.at 共用 */
+  settledAt: number;
+}
+
+/** 卡上最多画几行；其余收成一句「还有 N 条」（全部仍在铃铛清单里） */
+export const NOTICE_VISIBLE_MAX = 5;
+/**
+ * 卡片状态最多记几条：卡一直开着、后台连续跑完几百条时，状态不能跟着无界长。
+ * 超出时按卡的行序（失败在前、新的在上）留前面这些——挤掉的只是最早成功的那几条，
+ * 它们的未读照样在 meta 里，铃铛清单看得到。
+ */
+export const NOTICE_KEEP_MAX = 50;
+
+/** 给刚落定的一批会话拍快照：失败读槽的回合失败标注，此刻还没被新一轮清掉 */
+export function snapshotSettled(
+  ids: readonly string[],
+  turnErrorOf: (id: string) => string | null,
+  at: number,
+): NoticeSnapshot[] {
+  return ids.map((id) => ({ id, failed: turnErrorOf(id) !== null, settledAt: at }));
+}
+
+/**
+ * 完成卡上的一行：快照 + 会话名（名字现取——标题生成晚于落定是常事，取最新的才对）。
  *
  * 同拍多条落定时**一张卡列出全部**（用户裁决 2026-10-25：「多个任务完成，都要提醒
  * 才对」）。以前只弹一条——早期是取落定数组的最后一项（那个顺序来自 engine.states
  * 的 Map 迭代顺序，与谁真跑完无关，等于掷骰子），后来试过「失败优先取一条」，还是
  * 丢信息：同拍完成三个任务，用户只被告知一个。
  */
-export interface CompletionNoticeEntry {
-  id: string;
+export interface CompletionNoticeEntry extends NoticeSnapshot {
   /** 会话标题；空串由卡片按「新任务」占位显示 */
   title: string;
-  failed: boolean;
-  updatedAt: number;
 }
 
 /**
- * 完成卡的行序：**失败的在前**（出错的更该先看到），同类按 `updatedAt` 降序
+ * 完成卡的行序：**失败的在前**（出错的更该先看到），同类按 `settledAt` 降序
  * （刚完成的在上）。不改原数组；单条原样返回、空输入返回空数组。
  *
- * `updatedAt` 打平时保留输入顺序（Array#sort 稳定）——同一批输入永远给同一个顺序。
+ * `settledAt` 打平时保留输入顺序（Array#sort 稳定）——同一批输入永远给同一个顺序。
  */
-export function completionNoticeItems<T extends { failed: boolean; updatedAt: number }>(
+export function completionNoticeItems<T extends { failed: boolean; settledAt: number }>(
   entries: readonly T[],
 ): T[] {
   return [...entries].sort(
-    (a, b) => Number(b.failed) - Number(a.failed) || b.updatedAt - a.updatedAt,
+    (a, b) => Number(b.failed) - Number(a.failed) || b.settledAt - a.settledAt,
   );
 }
 
 /**
- * 把新落定的一批 id 并进卡上已有的那批：卡还开着时后来的会话也列上去（用户 2026-10-25：
- * 「多个任务完成，都要提醒」）。没有新增时**原封不动返回原数组**（引用不变），
- * 否则每次 phase 事件都会让卡重渲染一次。
+ * 卡片的行：快照配上会话名、按行序排好。列表里查不到的（已被删掉）直接跳过，
+ * 整批都没了就是空数组（不弹）。失败与排序只读快照，不读任何实时运行态。
+ */
+export function completionNoticeRows(
+  entries: readonly NoticeSnapshot[],
+  sessions: readonly { id: string; title: string }[],
+): CompletionNoticeEntry[] {
+  return completionNoticeItems(
+    entries.flatMap((entry) => {
+      const meta = sessions.find((candidate) => candidate.id === entry.id);
+      return meta === undefined ? [] : [{ ...entry, title: meta.title }];
+    }),
+  );
+}
+
+/** 卡上画哪几行、还剩几条收成「还有 N 条」 */
+export function visibleNoticeRows<T>(
+  rows: readonly T[],
+  max: number = NOTICE_VISIBLE_MAX,
+): { shown: readonly T[]; more: number } {
+  return rows.length <= max ? { shown: rows, more: 0 } : { shown: rows.slice(0, max), more: rows.length - max };
+}
+
+/**
+ * 把新落定的一批快照并进卡上已有的那批：卡还开着时后来的会话也列上去（用户 2026-10-25：
+ * 「多个任务完成，都要提醒」）。同一条会话再次落定（卡开着时它又跑完一轮）用新快照
+ * 换掉旧的——卡说的是它最近一轮的结果，与 meta.unread「新一轮跑完覆盖」同口径。
+ * 没有新快照时**原封不动返回原数组**（引用不变，不白重渲染）。超过 `keepMax` 按行序截断。
  *
  * 为什么要并而不是靠「同一次渲染里多条」：phase 事件是逐条 IPC 到的、又不进合帧器，
  * 两条会话前后脚跑完不会落在同一次 setState 里——按「同拍」算的话卡上几乎永远只有一条。
  */
-export function mergeNoticeIds(current: readonly string[], incoming: readonly string[]): readonly string[] {
-  const known = new Set(current);
-  const added = incoming.filter((id) => !known.has(id));
-  return added.length === 0 ? current : [...current, ...added];
+export function mergeNoticeEntries(
+  current: readonly NoticeSnapshot[],
+  incoming: readonly NoticeSnapshot[],
+  keepMax: number = NOTICE_KEEP_MAX,
+): readonly NoticeSnapshot[] {
+  if (incoming.length === 0) return current;
+  const replaced = new Map(incoming.map((entry) => [entry.id, entry]));
+  const merged = [
+    ...current.filter((entry) => !replaced.has(entry.id)),
+    ...replaced.values(),
+  ];
+  return merged.length <= keepMax ? merged : completionNoticeItems(merged).slice(0, keepMax);
+}
+
+/** 看着的会话从卡上退下；一条都没退时返回原数组（引用不变） */
+export function dropWatchedNotices(
+  current: readonly NoticeSnapshot[],
+  watchedIds: readonly string[],
+): readonly NoticeSnapshot[] {
+  const kept = current.filter((entry) => !watchedIds.includes(entry.id));
+  return kept.length === current.length ? current : kept;
 }
 
 export interface NoticePlan {

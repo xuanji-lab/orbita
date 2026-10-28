@@ -1,13 +1,22 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { AgentEvent } from "@shared/agent-ipc";
+import { applyAgentEvent, createSessionStates, type SessionStates } from "../chat/session-states.ts";
 import {
+  NOTICE_KEEP_MAX,
+  NOTICE_VISIBLE_MAX,
   completionNoticeItems,
-  mergeNoticeIds,
+  completionNoticeRows,
+  dropWatchedNotices,
+  mergeNoticeEntries,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
   sessionRunState,
   settledSessions,
+  snapshotSettled,
+  visibleNoticeRows,
+  type NoticeSnapshot,
   type PhaseSlot,
   type RunSlot,
 } from "./completion-notice.ts";
@@ -48,7 +57,7 @@ describe("settledSessions", () => {
 });
 
 describe("completionNoticeItems（聚合卡的行序）", () => {
-  const row = (id: string, failed: boolean, updatedAt: number) => ({ id, title: id, failed, updatedAt });
+  const row = (id: string, failed: boolean, settledAt: number) => ({ id, title: id, failed, settledAt });
 
   it("空输入：空数组（不弹卡）", () => {
     deepStrictEqual(completionNoticeItems([]), []);
@@ -60,12 +69,12 @@ describe("completionNoticeItems（聚合卡的行序）", () => {
     deepStrictEqual(completionNoticeItems([row("b", true, 3)]).map((item) => item.id), ["b"]);
   });
 
-  it("多条无失败：按 updatedAt 降序（刚完成的在上）", () => {
+  it("多条无失败：按 settledAt 降序（刚完成的在上）", () => {
     const items = completionNoticeItems([row("old", false, 1), row("new", false, 30), row("mid", false, 20)]);
     deepStrictEqual(items.map((item) => item.id), ["new", "mid", "old"]);
   });
 
-  it("失败优先：失败整体在前，同类里仍按 updatedAt 降序", () => {
+  it("失败优先：失败整体在前，同类里仍按 settledAt 降序", () => {
     const items = completionNoticeItems([
       row("ok-new", false, 90),
       row("f-old", true, 5),
@@ -82,19 +91,133 @@ describe("completionNoticeItems（聚合卡的行序）", () => {
   });
 });
 
-describe("mergeNoticeIds（卡开着时后来落定的会话并进来）", () => {
+describe("mergeNoticeEntries（卡开着时后来落定的会话并进来）", () => {
+  const snap = (id: string, failed: boolean, settledAt: number): NoticeSnapshot => ({ id, failed, settledAt });
+
   it("空卡：新批原样成为卡的内容", () => {
-    deepStrictEqual(mergeNoticeIds([], ["a", "b"]), ["a", "b"]);
+    const batch = [snap("a", false, 1), snap("b", true, 2)];
+    deepStrictEqual(mergeNoticeEntries([], batch), batch);
   });
 
-  it("已有再并：保留原顺序、新 id 接在后面、重复的不加", () => {
-    deepStrictEqual(mergeNoticeIds(["a"], ["b", "a", "c"]), ["a", "b", "c"]);
+  it("已有再并：保留原顺序、新的接在后面", () => {
+    const merged = mergeNoticeEntries([snap("a", false, 1)], [snap("b", false, 2), snap("c", true, 3)]);
+    deepStrictEqual(merged.map((entry) => entry.id), ["a", "b", "c"]);
   });
 
-  it("没有新增：原数组引用不变（不白重渲染）", () => {
-    const current = ["a", "b"];
-    strictEqual(mergeNoticeIds(current, ["b", "a"]), current);
-    strictEqual(mergeNoticeIds(current, []), current);
+  it("同一条会话再次落定：新快照换掉旧的，不重复列", () => {
+    const merged = mergeNoticeEntries([snap("a", true, 1), snap("b", false, 2)], [snap("a", false, 9)]);
+    deepStrictEqual(merged, [snap("b", false, 2), snap("a", false, 9)]);
+  });
+
+  it("没有新快照：原数组引用不变（不白重渲染）", () => {
+    const current = [snap("a", false, 1)];
+    strictEqual(mergeNoticeEntries(current, []), current);
+  });
+
+  it("状态有上限：卡一直开着连续落定也不超过 keepMax，挤掉的是最早成功的", () => {
+    let entries: readonly NoticeSnapshot[] = [snap("f-early", true, 0)];
+    for (let i = 1; i <= NOTICE_KEEP_MAX + 30; i += 1) entries = mergeNoticeEntries(entries, [snap(`ok-${i}`, false, i)]);
+    strictEqual(entries.length, NOTICE_KEEP_MAX);
+    const ids = new Set(entries.map((entry) => entry.id));
+    strictEqual(ids.has("f-early"), true, "失败行排在前面，最早落定也不被挤掉");
+    strictEqual(ids.has("ok-1"), false, "最早成功的先被挤掉");
+    strictEqual(ids.has(`ok-${NOTICE_KEEP_MAX + 30}`), true, "最新落定的一定在");
+  });
+
+  it("keepMax 可传：小上限下同样按行序截断", () => {
+    const merged = mergeNoticeEntries([snap("a", false, 1), snap("b", false, 2)], [snap("c", false, 3)], 2);
+    deepStrictEqual(merged.map((entry) => entry.id), ["c", "b"]);
+  });
+});
+
+describe("dropWatchedNotices（看着的那条从卡上退下）", () => {
+  const entries: readonly NoticeSnapshot[] = [
+    { id: "a", failed: false, settledAt: 1 },
+    { id: "b", failed: true, settledAt: 2 },
+  ];
+
+  it("看着其中一条：只退那一条，其余留着", () => {
+    deepStrictEqual(dropWatchedNotices(entries, ["a"]).map((entry) => entry.id), ["b"]);
+  });
+
+  it("看着的不在卡上：原数组引用不变", () => {
+    strictEqual(dropWatchedNotices(entries, ["z"]), entries);
+  });
+});
+
+describe("visibleNoticeRows（卡上可见行数上限）", () => {
+  const rows = (count: number) => Array.from({ length: count }, (_, i) => `r${i}`);
+
+  it("不超上限：全画，没有「还有 N 条」", () => {
+    deepStrictEqual(visibleNoticeRows(rows(NOTICE_VISIBLE_MAX)), { shown: rows(NOTICE_VISIBLE_MAX), more: 0 });
+    deepStrictEqual(visibleNoticeRows([]), { shown: [], more: 0 });
+  });
+
+  it("超上限：画前 max 行，其余记成 more", () => {
+    const { shown, more } = visibleNoticeRows(rows(NOTICE_VISIBLE_MAX + 7));
+    deepStrictEqual(shown, rows(NOTICE_VISIBLE_MAX));
+    strictEqual(more, 7);
+  });
+
+  it("上限可传", () => {
+    deepStrictEqual(visibleNoticeRows(rows(4), 2), { shown: ["r0", "r1"], more: 2 });
+  });
+});
+
+/**
+ * 回归：卡开着时，失败的那条会话又开了一轮——失败标记与排序都不能变。
+ * 驱动的是真的会话状态归约器（applyAgentEvent），不是手造的槽：先证明新一轮确实把
+ * 槽里的 turnError 清掉了（前提断言），再证明卡的行仍是落定那一刻的样子。
+ */
+describe("完成卡的失败标记是落定时快照", () => {
+  const phase = (sessionId: string, value: "turn" | "idle"): AgentEvent => ({ type: "phase", sessionId, phase: value });
+  const apply = (states: SessionStates, events: readonly AgentEvent[]): SessionStates =>
+    events.reduce(applyAgentEvent, states);
+  const turnErrorOf = (states: SessionStates) => (id: string) => states.get(id)?.turnError ?? null;
+  const metas = [
+    { id: "bad", title: "跑挂的那条" },
+    { id: "good", title: "跑完的那条" },
+  ];
+
+  it("同一会话再开一轮：卡上仍标失败、仍排第一", () => {
+    // 两条会话都在跑
+    let states = apply(createSessionStates(), [phase("bad", "turn"), phase("good", "turn")]);
+    // bad 先以回合失败落定
+    let prev = states;
+    states = apply(states, [{ type: "failed", sessionId: "bad", message: "重试耗尽", turn: true }, phase("bad", "idle")]);
+    let card = mergeNoticeEntries([], snapshotSettled(settledSessions(prev, states), turnErrorOf(states), 100));
+    // good 晚一点成功落定，并进同一张卡
+    prev = states;
+    states = apply(states, [phase("good", "idle")]);
+    card = mergeNoticeEntries(card, snapshotSettled(settledSessions(prev, states), turnErrorOf(states), 200));
+    const before = completionNoticeRows(card, metas);
+    deepStrictEqual(before.map((row) => [row.id, row.failed]), [["bad", true], ["good", false]]);
+
+    // 卡还开着，bad 又开了一轮：槽的失败标注被清掉（前提——不清的话这条测试测不到东西）
+    prev = states;
+    states = apply(states, [phase("bad", "turn")]);
+    strictEqual(states.get("bad")?.turnError, null, "前提：新一轮开跑清掉了槽的 turnError");
+    deepStrictEqual(settledSessions(prev, states), [], "新一轮开跑不是落定，卡片状态不动");
+
+    const after = completionNoticeRows(card, metas);
+    deepStrictEqual(after, before, "失败标记与行序都停在落定那一刻");
+  });
+
+  it("那一轮再落定（成功）：换成新快照，失败标记这才退掉", () => {
+    let states = apply(createSessionStates(), [phase("bad", "turn")]);
+    let prev = states;
+    states = apply(states, [{ type: "failed", sessionId: "bad", message: "x", turn: true }, phase("bad", "idle")]);
+    let card = mergeNoticeEntries([], snapshotSettled(settledSessions(prev, states), turnErrorOf(states), 100));
+    states = apply(states, [phase("bad", "turn")]);
+    prev = states;
+    states = apply(states, [phase("bad", "idle")]);
+    card = mergeNoticeEntries(card, snapshotSettled(settledSessions(prev, states), turnErrorOf(states), 300));
+    deepStrictEqual(completionNoticeRows(card, metas), [{ id: "bad", title: "跑挂的那条", failed: false, settledAt: 300 }]);
+  });
+
+  it("会话被删掉：那一行跳过，全删光就是空（不弹卡）", () => {
+    const card: NoticeSnapshot[] = [{ id: "gone", failed: true, settledAt: 1 }];
+    deepStrictEqual(completionNoticeRows(card, metas), []);
   });
 });
 

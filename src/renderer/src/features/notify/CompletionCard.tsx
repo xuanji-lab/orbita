@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
+import { visibleNoticeRows } from "./completion-notice.ts";
 
 /** 卡片上的一行：一条刚跑完（或跑挂）的会话 */
 export interface CompletionNoticeItem {
@@ -23,6 +24,7 @@ export interface CompletionNoticeItem {
  * 会话落定时只弹**一张**卡，把全部都列出来（失败的在前，同类刚完成的在上，行序由
  * completionNoticeItems 算好传进来），点某一行就在主槽打开它。单条时仍是原来那张紧凑
  * 两行卡（竖条 + 名字 + ×；下一行「打开 · 辅助对话」），外观与文案不变。
+ * 行数有上限（NOTICE_VISIBLE_MAX）：其余收成一句「还有 N 条」，卡头的总数仍算全部。
  *
  * **层级**（用户 2026-10-10 第三轮）：它属于内容面（`.pane`）里的一层，不是挂在窗口上、
  * 骑在右栏与内容面之间的浮层——portal 进主槽的弹出宿主（`.pane-pop-host`），守
@@ -59,6 +61,7 @@ export function CompletionCard(props: {
         ? t.notice.manyFailed(failedCount)
         : t.notice.manyFinishedWithFailure(props.items.length, failedCount);
   const titleOf = (item: CompletionNoticeItem): string => (item.title === "" ? t.common.newTask : item.title);
+  const { shown, more } = visibleNoticeRows(props.items);
   /** 单条卡沿用两行紧凑版：竖条 + 名字 + ×，下一行「打开 · 辅助对话」 */
   const singleBody = single ? (
     <>
@@ -109,7 +112,7 @@ export function CompletionCard(props: {
         <>
           <div className="completion-card-head">{summary}</div>
           <div className="completion-card-list">
-            {props.items.map((item) => (
+            {shown.map((item) => (
               // 整行就是一个「打开」：行序已排好（失败在前、新的在上），行尾出错标记
               // 是图标 + 文字（颜色只是第二信号）
               <button
@@ -134,6 +137,11 @@ export function CompletionCard(props: {
               </button>
             ))}
           </div>
+          {more > 0 && (
+            <div className="completion-card-more" title={t.notice.moreTip}>
+              {t.notice.more(more)}
+            </div>
+          )}
           <div className="completion-card-actions">
             <button type="button" className="completion-card-link" title={t.notice.laterTip} onClick={props.onLater}>
               {t.notice.later}

@@ -274,6 +274,9 @@ export const zh: Messages = {
     manyFailed: (count: number) => `${count} 个任务出错停下了`,
     /** 聚合卡里失败那一行的标记文字（配三角图标，不只靠颜色） */
     failedFlag: "出错",
+    /** 聚合卡超出可见行数时的末行；悬停说明去哪看全部 */
+    more: (count: number) => `还有 ${count} 条`,
+    moreTip: "全部未读在右下角铃铛里",
     openNow: "打开",
     sideChat: "辅助对话",
     later: "稍后",

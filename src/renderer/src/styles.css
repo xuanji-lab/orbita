@@ -2470,6 +2470,13 @@ body {
   background: var(--color-bg-hover);
 }
 
+/* 超出可见行数时的末行：与卡头同一档、更弱一级，左缘对齐名字 */
+.completion-card-more {
+  padding-left: 11px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
 .completion-card-flag {
   display: inline-flex;
   align-items: center;
