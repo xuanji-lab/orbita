@@ -35,6 +35,7 @@ import type { LatexFileContext, LatexIssue, LatexProjectIndex } from "@shared/la
 import { setDiagnostics } from "@codemirror/lint";
 import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
 import {
+  languageForFile,
   latexEditorExtensions,
   agentMarkEffect,
   clearSyncLineEffect,
@@ -401,7 +402,7 @@ export function TexEditorPane(props: {
                 setCursor(pos);
               }
             }
-          }, { folding: isTexFile(path) }),
+          }, { folding: isTexFile(path), language: languageForFile(path) }),
           latexCompletion({ cite: () => citeRef.current, index: () => indexRef.current }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
@@ -853,11 +854,15 @@ export function TexEditorPane(props: {
    * 右键：把光标位置换算成行号（不移动光标、不动选区）。菜单里的「在 PDF 中定位」
    * 用被右键的那一行；「引用到对话」优先用选区原文，没有选区就是这一行。
    * 没有可给的菜单项时完全不拦右键（不抢浏览器 / CodeMirror 自己的行为）。
+   *
+   * 两项只对 `.tex` 出现：「在 PDF 中定位」对 .bib 的一行没有意义（SyncTeX 里没有它），
+   * 「查找文献」在 .bib 里会往文献库插一行 `\cite{}`——那是给正文用的动作。
    */
+  const texFile = isTexFile(path);
   const contextMenuItems: MenuItem[] = menu === null
     ? []
     : [
-        ...(props.onForwardSync === undefined
+        ...(props.onForwardSync === undefined || !texFile
           ? []
           : [
               {
@@ -885,17 +890,21 @@ export function TexEditorPane(props: {
                 },
               },
             ]),
-        {
-          // 在线检索：面板自己联网、自己写 .bib，这里只把「开在哪里」交下去
-          id: "find-reference",
-          label: t.citeSearch.menu,
-          icon: "book-open" as const,
-          onSelect: () => {
-            const point = { x: menu.x, y: menu.y };
-            setMenu(null);
-            setCiteSearch(point);
-          },
-        },
+        ...(texFile
+          ? [
+              {
+                // 在线检索：面板自己联网、自己写 .bib，这里只把「开在哪里」交下去
+                id: "find-reference",
+                label: t.citeSearch.menu,
+                icon: "book-open" as const,
+                onSelect: () => {
+                  const point = { x: menu.x, y: menu.y };
+                  setMenu(null);
+                  setCiteSearch(point);
+                },
+              },
+            ]
+          : []),
       ];
 
   const openContextMenu = (event: React.MouseEvent<HTMLDivElement>): void => {

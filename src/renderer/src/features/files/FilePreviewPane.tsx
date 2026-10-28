@@ -7,7 +7,7 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { isEditableTexFile } from "./editor-state.ts";
+import { isEditableLatexFile } from "./editor-state.ts";
 import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./TexEditorPane.tsx";
 import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
 import { WindowedText } from "./WindowedText";
@@ -98,7 +98,7 @@ export function FilePreviewPane(props: {
    * .tex 走编辑器（PR4）：只读预览换成 CodeMirror；仍要等 fs:read 回一份完整的文本
    * （截断到 2 MB 的文件不编辑——写回会丢后半截）。二进制 / 图片不会走到这里。
    */
-  const editableTex = sentImage === undefined && isEditableTexFile(path);
+  const editableLatex = sentImage === undefined && isEditableLatexFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
@@ -121,7 +121,7 @@ export function FilePreviewPane(props: {
   // 可以进编辑器的只有「完整读回来的文本」：截断（>2 MB）说明 fs:read 只给了开头，
   // 写回去会把后半截吃掉——那种文件仍走只读预览，不给假的可编辑态
   const editorInitial =
-    editableTex &&
+    editableLatex &&
     state.status === "ready" &&
     state.data.kind === "text" &&
     !state.data.truncated

@@ -41,10 +41,16 @@ import { lintGutter } from "@codemirror/lint";
 import { foldGutter } from "@codemirror/language";
 import { latexFolding } from "./latex-fold.ts";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
+import { bibtexLanguage } from "./bibtex-language.ts";
 import { tags } from "@lezer/highlight";
 
 /** LaTeX 语言：stex 词法器（命令 / 注释 / 数学模式 / 环境名） */
 export const latexLanguage = StreamLanguage.define(stex);
+
+/** 按扩展名选语言：`.bib` 用 BibTeX 词法器，其余（.tex / .sty / .cls）都是 TeX */
+export function languageForFile(path: string): Extension {
+  return /\.bib$/i.test(path) ? bibtexLanguage : latexLanguage;
+}
 
 /**
  * 只读开关。agent 正在写这个文件时整块关掉：`readOnly` 挡的是所有会改文档的事务
@@ -132,6 +138,8 @@ const latexHighlight = HighlightStyle.define([
   { tag: tags.tagName, color: "var(--tex-cmd)", fontWeight: "600" },
   // 命令的参数：\begin{...} 的环境名、\cite 的 key
   { tag: tags.atom, color: "var(--tex-argument)" },
+  // BibTeX 的字段名（title / author / doi）：与命令参数同色，字重区分
+  { tag: tags.propertyName, color: "var(--tex-argument)", fontWeight: "600" },
   { tag: tags.string, color: "var(--tex-argument)" },
   { tag: tags.keyword, color: "var(--tex-math)" },
   // 数学模式里的字母 / 数字
@@ -149,6 +157,8 @@ export interface LatexEditorOptions {
    * 给它们挂一个永远算不出折点的 foldService 只是白跑一遍扫描。
    */
   folding?: boolean;
+  /** 词法器；缺省是 LaTeX（stex）。`.bib` 传 BibTeX 那个（bibtex-language.ts） */
+  language?: Extension;
 }
 
 export function latexEditorExtensions(
@@ -167,7 +177,7 @@ export function latexEditorExtensions(
     indentUnit.of("  "),
     EditorState.tabSize.of(2),
     EditorView.lineWrapping,
-    latexLanguage,
+    options.language ?? latexLanguage,
     syntaxHighlighting(latexHighlight),
     readOnlyCompartment.of(readOnlyExtensions(false)),
     agentMarks,
