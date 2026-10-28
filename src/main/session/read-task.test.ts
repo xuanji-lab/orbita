@@ -27,6 +27,7 @@ import type { ChannelMessage } from "../../shared/channel.ts";
 import type { ChannelMarkRecord, SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { Workspace } from "../../shared/workspace.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ExternalSessionReader, ExternalSessionSummary } from "./external-session.ts";
 
 type ReadTaskRequestEvent = Extract<AgentEvent, { type: "readTaskRequest" }>;
 
@@ -718,5 +719,111 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
       console.error = originalError;
     }
     assert.equal(logged.length, 2, "读失败要落日志，不能静默");
+  });
+});
+
+describe("applyReadTask（外部只读会话）", () => {
+  const summary: ExternalSessionSummary = {
+    ref: "ext:kimi-work:0123456789abcdef",
+    source: "kimi-work",
+    title: "External planning",
+    cwd: "/external/project",
+    createdAt: 100,
+    updatedAt: 200,
+  };
+  const localSessions = {
+    list: async (): Promise<SessionMeta[]> => [meta(S1, "Current"), meta(S2, "Local sibling")],
+    load: async (): Promise<null> => null,
+    recordPath: (id: string): string => `/tmp/${id}.jsonl`,
+  };
+  const request = (task?: string, rounds?: string): ReadTaskRequestEvent => ({
+    type: "readTaskRequest",
+    requestId: "external-request",
+    sessionId: S1,
+    ...(task === undefined ? null : { task }),
+    ...(rounds === undefined ? null : { rounds }),
+  });
+  const reader = (list: ExternalSessionSummary[] = [summary]): ExternalSessionReader => ({
+    list: async () => list,
+    load: async (ref) => ({
+      summary,
+      meta: meta(ref, summary.title, { cwd: summary.cwd, createdAt: summary.createdAt, updatedAt: summary.updatedAt }),
+      records: roundsFixture(2),
+    }),
+  });
+
+  test("目录保留本地索引并附外部最近会话；列目录不读全文", async () => {
+    let loads = 0;
+    const external = reader();
+    const load = external.load;
+    external.load = async (ref) => {
+      loads += 1;
+      return load(ref);
+    };
+    const result = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, external);
+    assert.equal(result.ok, true);
+    assert.match(result.ok ? result.text : "", /Local sibling/);
+    assert.match(result.ok ? result.text : "", /External sessions \(read-only/);
+    assert.match(result.ok ? result.text : "", /External planning \(ref: ext:kimi-work:0123456789abcdef\)/);
+    assert.equal(loads, 0);
+  });
+
+  test("精确 ref 读最新外部正文；rounds 复用轮切片；不挂本地跳转卡", async () => {
+    const result = await applyReadTask(localSessions, request(summary.ref, "2"), workspacesStub(), noChannels, reader());
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.card, null);
+    assert.match(result.text, /External Kimi Work session · read-only, not imported/);
+    assert.match(result.text, /--- Round 2 ---/);
+    assert.match(result.text, /answer 2/);
+    assert.doesNotMatch(result.text, /answer 1/);
+  });
+
+  test("外部标题唯一可命中；重名返回 ref 消歧", async () => {
+    const found = await applyReadTask(localSessions, request("external plan"), workspacesStub(), noChannels, reader());
+    assert.equal(found.ok, true);
+    assert.match(found.ok ? found.text : "", /External planning/);
+
+    const other = { ...summary, ref: "ext:kimi-code:fedcba9876543210", source: "kimi-code" as const };
+    const ambiguous = await applyReadTask(localSessions, request("External planning"), workspacesStub(), noChannels, reader([summary, other]));
+    assert.equal(ambiguous.ok, false);
+    assert.match(ambiguous.ok ? "" : ambiguous.error, /matches several external sessions/);
+    assert.match(ambiguous.ok ? "" : ambiguous.error, /ext:kimi-code:fedcba9876543210/);
+  });
+
+  test("本地标题优先；本地已命中时不访问外部 reader", async () => {
+    let externalLists = 0;
+    const local = {
+      ...localSessions,
+      load: async (id: string) =>
+        id === S2 ? { meta: meta(S2, "Local sibling"), transcript: roundsFixture(1) } : null,
+    };
+    const external: ExternalSessionReader = {
+      list: async () => {
+        externalLists += 1;
+        return [{ ...summary, title: "Local sibling" }];
+      },
+      load: async () => {
+        throw new Error("external load must not run");
+      },
+    };
+    const result = await applyReadTask(local, request("Local sibling"), workspacesStub(), noChannels, external);
+    assert.equal(result.ok, true);
+    assert.match(result.ok ? result.text : "", /answer 1/);
+    assert.doesNotMatch(result.ok ? result.text : "", /External Kimi/);
+    assert.equal(externalLists, 0);
+  });
+
+  test("外部目录失败不挡本地目录", async () => {
+    const broken: ExternalSessionReader = {
+      list: async () => {
+        throw new Error("permission denied");
+      },
+      load: async () => null,
+    };
+    const result = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, broken);
+    assert.equal(result.ok, true);
+    assert.match(result.ok ? result.text : "", /Local sibling/);
+    assert.match(result.ok ? result.text : "", /External sessions could not be listed: permission denied/);
   });
 });

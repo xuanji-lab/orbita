@@ -2090,7 +2090,7 @@ function kimiWireFile(sessionDir: string): string {
 }
 
 /** Kimi Code 的工作区表：工作区 id → root，以及在源里删掉的工作区。读不了 = 都没有。 */
-async function readKimiWorkspaces(file: string): Promise<{ roots: Map<string, string>; deleted: Set<string> }> {
+export async function readKimiWorkspaces(file: string): Promise<{ roots: Map<string, string>; deleted: Set<string> }> {
   const roots = new Map<string, string>();
   const deleted = new Set<string>();
   let parsed: unknown;
