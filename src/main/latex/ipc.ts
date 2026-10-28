@@ -20,6 +20,7 @@ import {
   type LatexFileContext,
   type LatexForwardOutcome,
   type LatexForwardRequest,
+  type LatexIndexOutcome,
   type LatexPackageQuery,
   type LatexProjectOutcome,
   type LatexResolvedPackage,
@@ -32,6 +33,7 @@ import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
+import { buildLatexIndex } from "./index.ts";
 import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
 import type { LatexRunner } from "./run.ts";
@@ -58,6 +60,15 @@ export function registerLatexIpc(
     const located = await locateLatexProject(req, workspaces, sessions);
     if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
     return runner.compile({ dir: located.dir });
+  });
+
+  /**
+   * 项目符号索引。与编译同一个项目目录（magic root 也一并生效）：补全的 `\ref`
+   * 候选与 `\input` 路径候选读的是「编译真正会读的那些文件」。
+   */
+  ipcMain.handle(latexChannels.index, async (_event, req: LatexFileContext): Promise<LatexIndexOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    return located === null ? { found: false } : { found: true, index: buildLatexIndex(located.dir) };
   });
 
   ipcMain.handle(latexChannels.cancel, async (_event, req: LatexFileContext): Promise<boolean> => {

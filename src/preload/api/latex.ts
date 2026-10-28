@@ -12,6 +12,7 @@ import {
   type LatexFileContext,
   type LatexForwardOutcome,
   type LatexForwardRequest,
+  type LatexIndexOutcome,
   type LatexProjectOutcome,
   type LatexProbeResult,
   type LatexPackageQuery,
@@ -44,4 +45,7 @@ export const latexApi = {
   /** 缺的文件名 → 发行版包名与安装命令（未知包时 packageName/command 为 null） */
   packages: (req: LatexPackageQuery): Promise<LatexResolvedPackage[]> =>
     ipcRenderer.invoke(latexChannels.packages, req),
+  /** 项目符号索引（`\ref` / 自定义命令 / 路径补全读它）；不属于项目时 found:false */
+  index: (req: LatexFileContext): Promise<LatexIndexOutcome> =>
+    ipcRenderer.invoke(latexChannels.index, req),
 } as const;
