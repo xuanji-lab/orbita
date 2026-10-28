@@ -287,6 +287,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
             setError(outcome.error);
             return;
           }
+          requestRef.current += 1;
           setProject(outcome.project);
           setError(null);
         } catch (cause) {
@@ -348,6 +349,8 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
             setError(outcome.error);
             return;
           }
+          // 作废在飞的轮询：它带回来的是改之前的事实，晚到会把刚写的开关冲回旧值
+          requestRef.current += 1;
           setProject(outcome.project);
           setError(null);
         } catch (cause) {
@@ -394,6 +397,8 @@ function sameProject(a: LatexProjectInfo | null, b: LatexProjectInfo | null): bo
     a.pdf?.modifiedAt === b.pdf?.modifiedAt &&
     a.sourceModifiedAt === b.sourceModifiedAt &&
     a.detail === b.detail &&
+    // 开关也是项目事实：不比它，轮询会把「用户刚关掉」的那个值永远留在界面上
+    a.compileOnSave === b.compileOnSave &&
     a.mains.join("\u0000") === b.mains.join("\u0000")
   );
 }
