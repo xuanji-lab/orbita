@@ -349,6 +349,12 @@ internal static class InputHook
      * realEvents 一直是 0、foreignEvents 随敲字上涨、lastForeignFlags="0x10"——
      * 那就得把判定改成「非本进程注入即人」，而不是对着一个永远不让路的闸门猜。
      * 它不注入、不等待、不改任何状态，模型侧永远不调它。
+     *
+     * **实测（2026-10-28，Windows 11 26200 / WSB，验证脚本 p1-rdp-injected-probe.mjs）**：
+     * 从宿主向沙箱窗口连发 10 个 'a'（走 RDP 转发，与真人敲键同一条链）后，
+     * `realEvents` 涨 38–61、`foreignEvents` 始终为 0，`lastRealFlags` = "0x80"（LLKHF_ALPHANUMERIC）。
+     * 即 **RDP 转发不带 INJECTED 标志**，「非注入 = 人」的判定成立，不需要翻转。
+     * 这条结论就是在本次实测里被钉住的，不是推断。
      */
     internal static string StatusJson()
     {
