@@ -14,6 +14,8 @@ import { normalize } from "./vector-store.ts";
 
 /** 对子进程的最小要求（child_process.ChildProcess 结构上满足；测试假货顶上）。 */
 export interface EmbedServerChild {
+  /** 操作系统 pid（spawn 失败时 Node 给 undefined）；报给主进程做退出补杀 */
+  pid?: number | undefined;
   on(event: "exit", listener: (code: number | null) => void): unknown;
   kill(): unknown;
 }
@@ -53,6 +55,8 @@ export interface EmbedServerOptions {
   startTimeoutMs?: number;
   log?: (message: string, ...args: unknown[]) => void;
   now?: () => number;
+  /** 当前在跑的 llama-server pid 变了（拉起 = 数字，退出且没有接班进程 = null） */
+  onPid?: (pid: number | null) => void;
 }
 
 const DEFAULT_IDLE_MS = 5 * 60_000;
@@ -68,6 +72,7 @@ export class EmbedServerCore {
   private readonly startTimeoutMs: number;
   private readonly log: (message: string, ...args: unknown[]) => void;
   private readonly now: () => number;
+  private readonly onPid: (pid: number | null) => void;
   private child: EmbedServerChild | null = null;
   private port = 0;
   private starting: Promise<boolean> | null = null;
@@ -87,6 +92,7 @@ export class EmbedServerCore {
     this.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     this.log = options.log ?? (() => undefined);
     this.now = options.now ?? (() => Date.now());
+    this.onPid = options.onPid ?? (() => undefined);
   }
 
   isRunning(): boolean {
@@ -153,11 +159,14 @@ export class EmbedServerCore {
           }
           this.child = child;
           this.port = port;
+          this.onPid(child.pid ?? null);
           child.on("exit", () => {
             if (this.child === child) {
               this.child = null;
               this.port = 0;
             }
+            // 报「现在活着的那个」：换模型时旧进程晚于新进程退出，不能把新 pid 冲成 null
+            this.onPid(this.child?.pid ?? null);
           });
           // 健康轮询：300ms 一拍，直到超时。进程死了 / 配置改了立刻失败
           const deadline = this.now() + this.startTimeoutMs;

@@ -16,9 +16,14 @@ const MODEL = {
   dims: 4,
 };
 
+let nextPid = 1000;
+
 class FakeChild implements EmbedServerChild {
   exited = false;
   killCount = 0;
+  pid = (nextPid += 1);
+  /** true = kill 只记数不立刻退出（模拟收 SIGTERM 后还要一会儿才退） */
+  lingerOnKill = false;
   private readonly listeners: ((code: number | null) => void)[] = [];
   on(event: "exit", listener: (code: number | null) => void): unknown {
     this.listeners.push(listener);
@@ -30,7 +35,7 @@ class FakeChild implements EmbedServerChild {
   }
   kill(): void {
     this.killCount += 1;
-    this.die();
+    if (!this.lingerOnKill) this.die();
   }
 }
 
@@ -40,8 +45,10 @@ function makeServer(overrides: {
   post?: (texts: readonly string[]) => number[][] | Promise<number[][]>;
   resolve?: () => { binaryPath: string; model: typeof MODEL } | null;
   idleMs?: number;
+  lingerOnKill?: boolean;
 }) {
   const children: FakeChild[] = [];
+  const pids: (number | null)[] = [];
   const spawnedArgs: string[][] = [];
   const core = new EmbedServerCore({
     resolve:
@@ -50,6 +57,7 @@ function makeServer(overrides: {
     spawn: (args) => {
       spawnedArgs.push([...args]);
       const child = new FakeChild();
+      child.lingerOnKill = overrides.lingerOnKill ?? false;
       children.push(child);
       return child;
     },
@@ -58,8 +66,9 @@ function makeServer(overrides: {
     freePort: async () => 8123,
     idleUnloadMs: overrides.idleMs ?? 60_000,
     log: () => undefined,
+    onPid: (pid) => pids.push(pid),
   });
-  return { core, children, spawnedArgs };
+  return { core, children, spawnedArgs, pids };
 }
 
 test("ready→embed：spawn 带模型参数（pooling/ctx/embedding），向量归一化", async () => {
@@ -139,6 +148,24 @@ test("空闲卸载：嵌入请求在途时停表，结束后才重新计时", as
   assert.notEqual(await pending, null);
   await new Promise((resolve) => setTimeout(resolve, 70));
   assert.equal(core.isRunning(), false);
+});
+
+test("onPid：拉起报 pid、退出报 null；换模型时旧进程晚退不把新 pid 冲掉", async () => {
+  let modelId = "m1";
+  const { core, children, pids } = makeServer({
+    lingerOnKill: true,
+    resolve: () => ({ binaryPath: "/bin/llama-server", model: { ...MODEL, id: modelId } }),
+  });
+  assert.equal(await core.ready(), true);
+  assert.deepEqual(pids, [children[0]!.pid]);
+  modelId = "m2";
+  assert.equal(await core.ready(), true); // 停旧拉新：旧的收了 kill 还没退
+  assert.deepEqual(pids, [children[0]!.pid, children[1]!.pid]);
+  children[0]!.die(); // 旧进程这时才退
+  assert.equal(pids.at(-1), children[1]!.pid);
+  core.stop();
+  children[1]!.die();
+  assert.equal(pids.at(-1), null);
 });
 
 test("健康检查中的并发 ready 共享同一 promise，不提前报就绪", async () => {

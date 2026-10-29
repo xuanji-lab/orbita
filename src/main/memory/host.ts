@@ -24,6 +24,16 @@ export class MemoryServiceHost extends MemoryServiceHostCore {
           ...(input.env !== undefined ? { env: input.env } : {}),
         }),
       dir: input.dir,
+      // llama-server 补杀：POSIX 发 SIGTERM（llama-server 会优雅退），Windows 上 Node 把它映射成
+      // TerminateProcess。已退出的 pid 抛 ESRCH，吞掉；永不杀自己
+      killPid: (pid) => {
+        if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+        try {
+          process.kill(pid);
+        } catch {
+          // 已经退了
+        }
+      },
       ...(input.onChanged !== undefined ? { onChanged: input.onChanged } : {}),
       ...(input.onDownloadProgress !== undefined ? { onDownloadProgress: input.onDownloadProgress } : {}),
       ...(input.onBackfillProgress !== undefined ? { onBackfillProgress: input.onBackfillProgress } : {}),

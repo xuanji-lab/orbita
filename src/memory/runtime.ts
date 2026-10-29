@@ -98,9 +98,14 @@ const core = new MemoryServiceCore({
   onChanged: () => post({ type: "changed" }),
   onDownloadProgress: (progress) => post({ type: "downloadProgress", progress }),
   onBackfillProgress: (progress) => post({ type: "backfillProgress", progress }),
+  // 主进程记下 pid：Windows 上 UtilityProcess.kill() 是 TerminateProcess，本进程的
+  // exit / SIGTERM 处理都不会跑，只能靠主进程按 pid 补杀
+  onEmbedServerPid: (pid) => post({ type: "embedServerPid", pid }),
   vectorDeps: {
-    // llama-server 子进程：detached 不需要（utility 进程退出时把它 kill 掉更干净，
-    // EmbedServerCore.stop 兜底）；stdio 静默（日志我们自己记关键行）
+    // llama-server 子进程：不 detached。它**不会**随本进程退出自动结束（Node 子进程
+    // 在父进程被杀后照样活着），所以退出清理是三层：shutdown 命令 / SIGTERM / exit
+    // 时 core.shutdown() 同步 kill（来得及就优雅），主进程再按 embedServerPid 补杀
+    // （Windows 与本进程崩溃时唯一可靠的一层）。stdio 静默（日志我们自己记关键行）
     spawn: (args) => {
       const child = spawnProcess(args[0]!, args.slice(1), { stdio: ["ignore", "ignore", "pipe"] });
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -158,8 +163,17 @@ parentPort.on("message", (event: { data: unknown }) => {
   const command = event.data as MemoryServiceCommand;
   if (command.type === "init") {
     chore = command.chore ?? null;
-    void core.init(command.dir, command.chore);
+    // init 抛错（数据目录读不了等）不能变成未捕获 rejection 把进程带走——那样主进程
+    // 每轮都会重拉、再死一次。接住、报 initFailed，由主进程停服务并不再重拉
+    core.init(command.dir, command.chore).catch((cause: unknown) => {
+      console.error("[memory] 记忆服务 init 失败", cause);
+      post({ type: "initFailed", error: cause instanceof Error ? cause.message : String(cause) });
+    });
     return;
+  }
+  if (command.type === "shutdown") {
+    core.shutdown();
+    process.exit(0);
   }
   if (command.type === "turnSettled") {
     if (command.chore !== undefined) chore = command.chore;
@@ -223,6 +237,15 @@ parentPort.on("message", (event: { data: unknown }) => {
     return;
   }
 });
+
+// 退出清理（见 vectorDeps.spawn 的注释）：macOS / Linux 上 UtilityProcess.kill() 发
+// SIGTERM——默认处理会直接退出、不跑 exit 回调，所以要显式接；exit 兜住
+// process.exit 等其它退出路径。shutdown 只做同步 kill，可重入
+process.on("SIGTERM", () => {
+  core.shutdown();
+  process.exit(0);
+});
+process.on("exit", () => core.shutdown());
 
 post({ type: "ready" });
 parentPort.start?.();

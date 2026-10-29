@@ -66,6 +66,8 @@ export interface MemoryServiceCoreOptions {
   onDownloadProgress?: (progress: MemoryDownloadProgress) => void;
   /** 补算进度（runtime 转发 backfillProgress） */
   onBackfillProgress?: (progress: MemoryBackfillProgress) => void;
+  /** llama-server pid 变了（runtime 转发 embedServerPid，主进程退出时补杀用） */
+  onEmbedServerPid?: (pid: number | null) => void;
   /** 向量引擎的原语（spawn / HTTP / 端口 / 下载 fetch），注入可测 */
   vectorDeps?: {
     spawn: EmbedServerOptions["spawn"];
@@ -87,6 +89,7 @@ export class MemoryServiceCore {
   private readonly onChanged: () => void;
   private readonly onDownloadProgress: (progress: MemoryDownloadProgress) => void;
   private readonly onBackfillProgress: (progress: MemoryBackfillProgress) => void;
+  private readonly onEmbedServerPid: (pid: number | null) => void;
   private readonly vectorDeps: NonNullable<MemoryServiceCoreOptions["vectorDeps"]> | null;
   private embedServer: EmbedServerCore | null = null;
   private vectors: VectorStore | null = null;
@@ -121,6 +124,7 @@ export class MemoryServiceCore {
     this.onChanged = options.onChanged ?? (() => undefined);
     this.onDownloadProgress = options.onDownloadProgress ?? (() => undefined);
     this.onBackfillProgress = options.onBackfillProgress ?? (() => undefined);
+    this.onEmbedServerPid = options.onEmbedServerPid ?? (() => undefined);
     this.vectorDeps = options.vectorDeps ?? null;
   }
 
@@ -158,6 +162,7 @@ export class MemoryServiceCore {
         freePort: this.vectorDeps.freePort,
         idleUnloadMs: this.vectorConfig?.idleUnloadMs,
         log: this.log,
+        onPid: this.onEmbedServerPid,
       });
     }
     if (chore !== undefined) this.chore = chore;
@@ -558,6 +563,15 @@ export class MemoryServiceCore {
       return;
     }
     this.scheduleVectorize("all");
+  }
+
+  /**
+   * 停机（runtime 在 shutdown 命令 / SIGTERM / 进程 exit 时调）：取消在途下载、
+   * 同步 kill llama-server。幂等；只做同步动作——exit 事件里不能再等 promise。
+   */
+  shutdown(): void {
+    this.downloadAbort?.abort();
+    this.embedServer?.stop();
   }
 
   /** 电池状态（主进程 powerMonitor 转发）：用电池时挂起批量补算，回电源续跑。 */

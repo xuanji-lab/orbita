@@ -237,3 +237,68 @@ test("mutate：回执配对；超时与服务不在回 ok:false；changed 回调
   ref.current!.exit(1);
   assert.equal((await inFlight).ok, false);
 });
+
+/** 带 pid 补杀观察与 fork 计数的 host（#2 / #8 的回归）。 */
+function hostWithKill() {
+  const ref: { current: FakeChild | null } = { current: null };
+  const killedPids: number[] = [];
+  let forks = 0;
+  const h = new MemoryServiceHostCore({
+    forkRuntime: () => {
+      forks += 1;
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    recallTimeoutMs: 30,
+    log: () => undefined,
+    killPid: (pid) => killedPids.push(pid),
+  });
+  return { h, ref, killedPids, forks: () => forks };
+}
+
+test("stop：先发 shutdown，再按服务报来的 pid 补杀 llama-server，最后 kill 服务", async () => {
+  const { h, ref, killedPids } = hostWithKill();
+  await h.ensureStarted();
+  const child = ref.current!;
+  child.emit("message", { type: "embedServerPid", pid: 4242 });
+  h.stop();
+  assert.deepEqual(child.posted.at(-1), { type: "shutdown" });
+  assert.deepEqual(killedPids, [4242]);
+  assert.equal(child.killed, true);
+  // 再停一次不重复补杀（pid 已清）
+  h.stop();
+  assert.deepEqual(killedPids, [4242]);
+});
+
+test("服务自己崩了：同样按 pid 补杀 llama-server（它不会随服务退出）；引擎已退报 null 则不杀", async () => {
+  const { h, ref, killedPids } = hostWithKill();
+  await h.ensureStarted();
+  ref.current!.emit("message", { type: "embedServerPid", pid: 7 });
+  ref.current!.exit(1);
+  assert.deepEqual(killedPids, [7]);
+  await h.ensureStarted();
+  ref.current!.emit("message", { type: "embedServerPid", pid: 8 });
+  ref.current!.emit("message", { type: "embedServerPid", pid: null });
+  ref.current!.exit(1);
+  assert.deepEqual(killedPids, [7]);
+});
+
+test("initFailed：停掉服务并记住失败，之后不再每轮重拉；stop（开关关）后才重试", async () => {
+  const { h, ref, forks } = hostWithKill();
+  assert.equal(await h.ensureStarted(), true);
+  const first = ref.current!;
+  first.emit("message", { type: "initFailed", error: "EACCES" });
+  assert.equal(first.killed, true);
+  assert.equal(h.isRunning(), false);
+  for (let turn = 0; turn < 3; turn += 1) assert.equal(await h.ensureStarted(), false);
+  assert.equal(forks(), 1);
+  const outcome = await h.mutate({ op: "remove", token: "user", entryId: "mem_1" });
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.ok ? "" : outcome.error, /初始化失败：EACCES/);
+  h.stop();
+  assert.equal(await h.ensureStarted(), true);
+  assert.equal(forks(), 2);
+});

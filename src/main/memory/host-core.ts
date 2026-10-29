@@ -7,7 +7,13 @@
  *
  * 崩溃自愈：子进程退出时清掉在途的召回请求（回空命中，不拦开轮），下次
  * ensureStarted 重拉。**不自动重启**——崩溃风暴不该让主进程永远在拉进程，
- * 下一次真正要用（下一轮）时再拉。
+ * 下一次真正要用（下一轮）时再拉。init 失败（initFailed）是例外：重拉也必然
+ * 再失败，记住失败、不再拉，直到 stop()（开关关）后重开。
+ *
+ * llama-server 补杀：服务报来的 embedServerPid 记在这里。停服务时先发 shutdown
+ * （来得及就让服务自己优雅停），再按 pid 补杀、再 kill 服务进程；服务自己崩了
+ * 也补杀——Windows 上 UtilityProcess.kill() 是 TerminateProcess，服务里的退出
+ * 处理一行都不会跑，这一层是唯一可靠的。
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -48,6 +54,8 @@ export interface MemoryServiceHostOptions {
   /** vectorState 问答的硬超时（服务不在 / 卡住回 null，状态页如实显示） */
   vectorStateTimeoutMs?: number;
   log?: (message: string, ...args: unknown[]) => void;
+  /** 按 pid 杀 llama-server（host.ts 注入 process.kill；已退出的 pid 由实现吞掉） */
+  killPid?: (pid: number) => void;
 }
 
 /** 主进程 → 服务的一次轮后事件（主进程已做完根会话 / 快照截断的判定）。 */
@@ -86,7 +94,12 @@ export class MemoryServiceHostCore {
   private readonly onBackfillProgress: (progress: MemoryBackfillProgress) => void;
   private readonly vectorStateTimeoutMs: number;
   private readonly log: (message: string, ...args: unknown[]) => void;
+  private readonly killPid: (pid: number) => void;
   private child: MemoryChild | null = null;
+  /** 当前服务报来的 llama-server pid（没在跑 = null） */
+  private embedPid: number | null = null;
+  /** init 失败的原因；非 null 时 ensureStarted 不再拉起 */
+  private initFailure: string | null = null;
   private ready: Promise<boolean> | null = null;
   private chore: MemoryChoreModel | undefined;
   private readonly pending = new Map<string, PendingRecall>();
@@ -110,10 +123,13 @@ export class MemoryServiceHostCore {
     this.onBackfillProgress = options.onBackfillProgress ?? (() => undefined);
     this.vectorStateTimeoutMs = options.vectorStateTimeoutMs ?? 2_000;
     this.log = options.log ?? ((message, ...args) => console.log(message, ...args));
+    this.killPid = options.killPid ?? (() => undefined);
   }
 
-  /** 拉起（或已在跑时直接用）。false = 这次没拉起来（fork 失败 / ready 超时）。 */
+  /** 拉起（或已在跑时直接用）。false = 这次没拉起来（fork 失败 / ready 超时 /
+   * 上次 init 失败还没被 stop 清掉）。 */
   ensureStarted(): Promise<boolean> {
+    if (this.initFailure !== null) return Promise.resolve(false);
     if (this.child !== null) return this.ready ?? Promise.resolve(true);
     this.ready = new Promise<boolean>((resolve) => {
       let child: MemoryChild;
@@ -182,6 +198,14 @@ export class MemoryServiceHostCore {
         if (message.type === "changed") {
           this.onChanged();
         }
+        // 下面两条只认当前这个子进程（被换掉的旧进程晚到的消息不能改状态）
+        if (message.type === "embedServerPid" && this.child === child) {
+          this.embedPid = message.pid;
+        }
+        if (message.type === "initFailed" && this.child === child) {
+          this.initFailure = message.error;
+          this.dropChild(`init 失败：${message.error}；关掉再打开实验开关后重试`);
+        }
       });
       child.on("exit", () => {
         if (this.child === child) this.dropChild("进程退出", false);
@@ -196,8 +220,10 @@ export class MemoryServiceHostCore {
   }
 
   /** 停进程（开关关 / 应用退出）。在途召回全部回空命中。killIt = false 用于
-   * 子进程自己退出的路径（已经死了，不补刀）。 */
+   * 子进程自己退出的路径（已经死了，不补刀）。主动停服务同时清掉 init 失败的
+   * 记忆：开关关了再开 = 用户要重试。 */
   stop(killIt = true): void {
+    if (killIt) this.initFailure = null;
     this.dropChild(killIt ? "主进程停服务" : "进程退出", killIt);
   }
 
@@ -285,7 +311,13 @@ export class MemoryServiceHostCore {
    */
   mutate(mutation: MemoryMutation): Promise<MemoryMutationOutcome> {
     if (this.child === null) {
-      return Promise.resolve({ ok: false, error: "记忆服务没在跑（先拉起或稍后再试）" });
+      return Promise.resolve({
+        ok: false,
+        error:
+          this.initFailure !== null
+            ? `记忆服务初始化失败：${this.initFailure}（关掉再打开记忆实验开关重试）`
+            : "记忆服务没在跑（先拉起或稍后再试）",
+      });
     }
     const requestId = `${this.seq += 1}:${randomUUID()}`;
     return new Promise<MemoryMutationOutcome>((resolve) => {
@@ -318,6 +350,23 @@ export class MemoryServiceHostCore {
       pending.resolve(null);
     }
     this.pendingVectorStates.clear();
+    // llama-server 补杀：不论服务是被停还是自己死的，它的子进程都不会跟着走
+    const embedPid = this.embedPid;
+    this.embedPid = null;
+    if (child !== null && killIt) {
+      try {
+        child.postMessage({ type: "shutdown" });
+      } catch {
+        // 通道已断：下面的按 pid 补杀兜住
+      }
+    }
+    if (embedPid !== null) {
+      try {
+        this.killPid(embedPid);
+      } catch (cause) {
+        this.log("[memory] 按 pid 补杀 llama-server 失败", embedPid, cause);
+      }
+    }
     if (child !== null) {
       this.log(`[memory] 记忆服务停了（${reason}）；在途召回已回空命中`);
       if (!killIt) return;

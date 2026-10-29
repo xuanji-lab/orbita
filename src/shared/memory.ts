@@ -252,7 +252,13 @@ export type MemoryServiceCommand =
       targetPath: string;
       sha256: string;
       sizeBytes: number;
-    };
+    }
+  /**
+   * 停机（开关关 / 应用退出）：服务停 llama-server、取消下载后自行退出。
+   * 主进程发完不等回执（退出路上等不起），紧接着按 embedServerPid 补杀引擎、再 kill
+   * 服务进程——这条命令是「来得及就优雅」的那一层，不是唯一一层。
+   */
+  | { type: "shutdown" };
 
 /** 记忆服务 → 主进程。 */
 export type MemoryServiceMessage =
@@ -279,6 +285,17 @@ export type MemoryServiceMessage =
   | { type: "downloadProgress"; progress: MemoryDownloadProgress }
   /** 后台补算进度（running / deferred-battery / idle 收尾） */
   | { type: "backfillProgress"; progress: MemoryBackfillProgress }
+  /**
+   * llama-server 的 pid（拉起时报数字、退出时报 null）。主进程记下来，在停服务 /
+   * 服务崩溃时按 pid 补杀：Windows 上 UtilityProcess.kill() 是 TerminateProcess，
+   * 服务来不及清理自己的子进程；macOS 上服务崩溃同样会把它留成孤儿。
+   */
+  | { type: "embedServerPid"; pid: number | null }
+  /**
+   * init 失败（数据目录读不了等）。主进程停掉这个服务并记住失败，不再每轮重拉；
+   * 实验开关关了再开（或重启应用）才重试。
+   */
+  | { type: "initFailed"; error: string }
   /**
    * 任何写盘之后发一次（提取落条目、事件段收尾 / 归档、记忆库写操作）：主进程
    * 接到后广播给窗口（agent:event 的 memoryChanged），界面重拉。无载荷——

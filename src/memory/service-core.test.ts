@@ -811,6 +811,65 @@ test("关闭向量功能：取消在途模型下载，不发 failed 事件", asy
   assert.equal(progress.some((event) => event.phase === "failed"), false);
 });
 
+test("shutdown：同步停掉 llama-server 并取消在途下载；pid 经 onEmbedServerPid 报出", async () => {
+  const dir = await tempDir();
+  const pids: (number | null)[] = [];
+  let kills = 0;
+  let downloadAborted = false;
+  const core = new MemoryServiceCore({
+    callModel: async () => "[]",
+    log: () => undefined,
+    onEmbedServerPid: (pid) => pids.push(pid),
+    vectorDeps: {
+      spawn: () => {
+        const exitListeners: ((code: number | null) => void)[] = [];
+        return {
+          pid: 4242,
+          on: (_event: "exit", listener: (code: number | null) => void) => exitListeners.push(listener),
+          kill: () => {
+            kills += 1;
+            for (const listener of exitListeners) listener(null);
+          },
+        };
+      },
+      probe: async () => true,
+      post: async (_port, texts) => texts.map(() => [1, 0, 0, 0]),
+      freePort: async () => 1,
+      fetchImpl: async (_url, signal) => {
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            downloadAborted = true;
+            reject(new Error("aborted"));
+          }, { once: true });
+        });
+        return { ok: false, status: 0, body: null };
+      },
+    },
+  });
+  await core.init(dir);
+  await core.mutate({ op: "addManual", token: "user", type: "fact", text: "要向量化的一条" });
+  core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 1_000_000, deferOnBattery: false });
+  for (let index = 0; index < 40 && !(await core.vectorState()).llamaRunning; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal((await core.vectorState()).llamaRunning, true);
+  assert.deepEqual(pids, [4242]);
+  core.startModelDownload({
+    requestId: "req-shutdown",
+    sources: ["https://down.example/m.gguf"],
+    targetPath: join(dir, "vector", "m.gguf"),
+    sha256: "0".repeat(64),
+    sizeBytes: 10,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  core.shutdown();
+  assert.equal(kills, 1);
+  assert.equal((await core.vectorState()).llamaRunning, false);
+  assert.deepEqual(pids, [4242, null]);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(downloadAborted, true);
+});
+
 test("补算抛错（向量目录被换成了文件）：接住记日志，不留未捕获 rejection，补算状态复位", async () => {
   const dir = await tempDir();
   const logs: string[] = [];
