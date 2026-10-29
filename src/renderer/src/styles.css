@@ -5569,3 +5569,24 @@ mark.intent-mark {
   /* 逐条的工具行字在内线上（RAIL_X）；挪到与章节标题同一根线（按钮左内边距 space-2） */
   margin-left: calc(var(--space-2) - var(--content-hem));
 }
+
+/* 能力面板头的 Skills / MCP 页签（shell/AbilityTabs.tsx）：绿点 Skills、蓝点 MCP，
+   与输入框里两种 token chip 同一组类别色（.composer-chip[data-kind]） */
+.ability-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--color-filetype-sheet);
+}
+.ability-tab[data-kind="mcp"] .ability-dot {
+  background: var(--color-filetype-doc);
+}
+.ability-tab[aria-selected="false"] .ability-dot {
+  opacity: 0.6;
+}
+/* 两个页签是面板的标题，不让过滤框挤：不压缩、不裁 */
+.ability-tabs {
+  flex: none;
+  overflow: visible;
+}

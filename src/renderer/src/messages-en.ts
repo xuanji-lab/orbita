@@ -480,6 +480,10 @@ export const en = {
     review: "Review changes",
     skills: "Skills",
     mcp: "MCP servers",
+    /** Skills 与 MCP 合成一个入口（2026-10-30）：面板头两个页签切 */
+    abilities: "Skills & MCP",
+    abilitiesSkills: "Skills",
+    abilitiesMcp: "MCP",
     terminal: "Terminal",
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
