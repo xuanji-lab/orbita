@@ -122,11 +122,9 @@
   color: var(--color-text-tertiary);
 }
 
-.ctx-empty {
-  padding-left: var(--space-2);
-}
-.panel-empty[data-tone="danger"] {
-  color: var(--color-danger);
+/* 用量块下面的状态行（在读 / 读到上限 / 读失败）：同一个空态件，上下收紧成一行的高度 */
+.panel-empty.ctx-status {
+  padding-block: var(--space-1-5);
 }
 
 /* 上下文页签顶部的视野切换（本轮 / 整个任务）：原来在胶囊里，胶囊让给了「进度 / 上下文」 */

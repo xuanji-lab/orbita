@@ -1,4 +1,5 @@
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { useT } from "../../locale.ts";
 import { MemoryEntryCard } from "./MemoryEntryCard";
 import { rememberedTurns } from "./memory-view.ts";
@@ -22,29 +23,24 @@ export function MemoryTab(props: { sessionId: string | null }) {
   const session = useMemorySession(props.sessionId);
   const view = session.data;
 
-  if (props.sessionId === null) return <p className="mem-empty">{t.memory.noTask}</p>;
+  if (props.sessionId === null) return <PanelEmpty icon="brain-circuit">{t.memory.noTask}</PanelEmpty>;
   if (session.error !== null && view === null) {
     return (
-      <div className="mem-empty" role="alert">
-        <span>{t.memory.loadFailed}</span>
-        <button type="button" className="mem-btn" onClick={session.reload}>
-          {t.memory.retry}
-        </button>
-      </div>
+      <PanelEmpty tone="danger" exit={{ label: t.memory.retry, onClick: session.reload }}>
+        {t.memory.loadFailed}
+      </PanelEmpty>
     );
   }
-  if (view === null) return <p className="mem-empty">{t.common.loading}</p>;
+  if (view === null) return <PanelEmpty busy>{t.common.loading}</PanelEmpty>;
 
   const turns = rememberedTurns(view);
 
   return (
     <div className="mem-tab">
       {turns.length === 0 ? (
-        <div className="mem-empty">
-          <Icon name="brain-circuit" size={16} strokeWidth={1.6} />
-          <span>{t.memory.sessionEmpty}</span>
-          <span className="hint">{t.memory.sessionEmptyHint}</span>
-        </div>
+        <PanelEmpty icon="brain-circuit" className="mem-empty" hint={t.memory.sessionEmptyHint}>
+          {t.memory.sessionEmpty}
+        </PanelEmpty>
       ) : (
         turns.map((row) => (
           <section key={row.turn} className="mem-tab-turn">

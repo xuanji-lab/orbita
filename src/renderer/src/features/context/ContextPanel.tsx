@@ -11,6 +11,7 @@ import type { Messages } from "../../messages-en.ts";
 import { useT } from "../../locale.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelHelp, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Chip } from "../../shell/Chip";
 import type { Carryover } from "@shared/session";
 import { TaskProgress } from "./TaskProgress";
@@ -84,9 +85,9 @@ export function ContextPanel(props: {
   return (
     <RightPanelFrame header={header} contentKey={`task:${props.tab}:${scope}`}>
       {props.sessionId === null ? (
-        <p className="panel-empty" style={{ paddingTop: "var(--space-3)" }}>
+        <PanelEmpty icon={props.tab === "progress" ? "list-todo" : "layers"}>
           {props.tab === "progress" ? t.taskPanel.noTask : t.contextPanel.noSession}
-        </p>
+        </PanelEmpty>
       ) : props.tab === "progress" ? (
         <TaskProgress
           // 按会话换实例：「载入更早的轮」这类页内状态不该跟着带到另一条会话
@@ -138,12 +139,20 @@ function ContextBody(props: { sessionId: string; entry: SessionEntry; cwd: strin
   return (
     <div className="ctx-body">
       {bar !== null && <UsageBlock bar={bar} scope={props.scope} lit={lit} />}
-      {view.loading && <p className="panel-empty">{t.contextPanel.loading(view.fetched)}</p>}
-      {view.capped && <p className="panel-empty">{t.contextPanel.capped}</p>}
+      {view.loading && (
+        <PanelEmpty busy className="ctx-status">
+          {t.contextPanel.loading(view.fetched)}
+        </PanelEmpty>
+      )}
+      {view.capped && (
+        <PanelEmpty icon="info" className="ctx-status">
+          {t.contextPanel.capped}
+        </PanelEmpty>
+      )}
       {view.error !== null && (
-        <p className="panel-empty" role="alert" data-tone="danger">
+        <PanelEmpty tone="danger" className="ctx-status">
           {t.contextPanel.loadError(view.error)}
-        </p>
+        </PanelEmpty>
       )}
       <div className="panel-list ctx-list" onMouseLeave={() => setLit(null)}>
         {inventory.rules === null && (
@@ -161,9 +170,9 @@ function ContextBody(props: { sessionId: string; entry: SessionEntry; cwd: strin
           </section>
         ))}
         {sourceGroups.length === 0 && !view.loading && (
-          <p className="panel-empty ctx-empty">
+          <PanelEmpty icon="layers">
             {props.scope === "turn" ? t.contextPanel.emptyTurn : t.contextPanel.emptyTask}
-          </p>
+          </PanelEmpty>
         )}
       </div>
     </div>

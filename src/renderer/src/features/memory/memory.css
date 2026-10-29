@@ -319,17 +319,9 @@
 
 /* ── 空态 / 加载 ── */
 
-.mem-empty {
-  display: grid;
-  justify-items: start;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
-.mem-empty .hint {
-  color: var(--color-text-tertiary);
+/* 空态是共享的 PanelEmpty（styles.css .panel-empty）；这里只把它对到记忆页自己的内边距上 */
+.panel-empty.mem-empty {
+  padding-inline: var(--space-2);
 }
 
 /* ── 审查 › 记忆页签 ── */

@@ -303,17 +303,8 @@
   background: var(--color-bg-panel);
 }
 
-/* 空态：块里一行图标 + 结论 */
-.mg-empty {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  font-size: var(--font-size-base);
-  color: var(--color-text-secondary);
-}
-
-.mg-empty > .orbita-icon {
+/* 空态（PanelEmpty）放在块里：块自带描边，空态照常一圈内边距；「都导入过了」是好消息，勾用成功绿 */
+.panel-empty.mg-empty.done .panel-empty-glyph {
   color: var(--color-success);
 }
 

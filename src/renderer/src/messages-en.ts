@@ -559,7 +559,8 @@ export const en = {
     addFolder: "Add a folder…",
     workspaceName: "Workspace name",
     loadingWorkspaces: "Loading workspaces…",
-    noWorkspace: "No workspace yet. Add the folder the agent may read.",
+    noWorkspace: "No workspace yet.",
+    noWorkspaceExit: "Add a folder the agent may read",
     tasks: "Tasks",
     loadingTasks: "Loading tasks…",
     noTask: "No task yet. The one you start lands here.",
@@ -1880,7 +1881,8 @@ export const en = {
   },
 
   terminal: {
-    empty: "No terminal open. Press + to start one.",
+    empty: "No terminal open.",
+    startOne: "Start one",
     title: "Terminal",
     newTerminal: "New terminal",
     closeTab: "Close terminal",

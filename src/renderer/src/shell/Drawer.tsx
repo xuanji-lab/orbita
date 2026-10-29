@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { PanelEmpty } from "./PanelEmpty";
 import { relativeTime } from "./relative-time.ts";
 import { PanelFilter, PanelHelp, PanelIconButton, PanelTitle, RightPanelFrame } from "./RightPanel";
 import { ChatView } from "../features/chat/ChatView";
@@ -245,9 +246,9 @@ function Picker(props: {
             <span className="drawer-pickrow-meta row-trailing">{relativeTime(meta.updatedAt, t)}</span>
           </button>
         ))}
-        {candidates.length === 0 && <p className="panel-empty">{t.drawer.noOther}</p>}
+        {candidates.length === 0 && <PanelEmpty icon="message-square">{t.drawer.noOther}</PanelEmpty>}
         {candidates.length > 0 && shown.length === 0 && (
-          <p className="panel-empty">{t.skills.noMatch(query.trim())}</p>
+          <PanelEmpty icon="search">{t.skills.noMatch(query.trim())}</PanelEmpty>
         )}
       </div>
     </RightPanelFrame>

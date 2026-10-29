@@ -25,6 +25,7 @@ import type { BuiltinProvider, OauthDeviceCode } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import {
   cardAddress,
@@ -1603,9 +1604,9 @@ function ProviderGrid(props: {
           </span>
         </div>
         {groups.length === 0 && (
-          <div className="pv-wall-empty">
+          <PanelEmpty icon={props.onlyAdded && props.query.trim() === "" ? "cpu" : "search"} className="pv-wall-empty">
             {props.onlyAdded && props.query.trim() === "" ? t.providers.noneAdded : t.providers.noProvidersMatch}
-          </div>
+          </PanelEmpty>
         )}
         {groups.map(({ group, cards }) => (
           <section key={group} className="pv-wall-group">

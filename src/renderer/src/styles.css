@@ -2559,10 +2559,9 @@ body {
   color: var(--color-text-tertiary);
 }
 
-.bell-card-empty {
+/* 空态（PanelEmpty）对到清单行的内边距上：图标落在行首状态饼那一列 */
+.panel-empty.bell-card-empty {
   padding: var(--space-1) var(--space-3) var(--space-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
 }
 
 .bell-card-list {
@@ -3936,12 +3935,51 @@ button.panel-group-toggle:hover {
   align-content: start;
   padding: 0 var(--space-2) var(--space-3);
 }
-/* 空态 / 说明：一行浅灰字，左缘与行内容对齐，不居中、不加粗、不画图标 */
+/* 空态（PanelEmpty.tsx）：图标 + 一句「现在是什么」+ 一个出口，与提示行同一句法。
+ * 图标落在行首槽（14px，面板行的图标同一列，字在 --space-4 那根线上），字落在行名那一列；
+ * 不居中、不放大图标、不斜体。全应用的空态都是它，宿主只用 className 调对齐 */
 .panel-empty {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: var(--space-2);
+  align-items: start;
   margin: 0;
-  padding: var(--space-1-5) var(--space-4);
+  padding: var(--space-3) var(--space-4);
   font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+/* 图标盒高一个行盒：多行时钉在首行的中线上 */
+.panel-empty-glyph {
+  display: inline-flex;
+  align-items: center;
+  height: 1lh;
   color: var(--color-text-tertiary);
+}
+.panel-empty-text {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.panel-empty-hint {
+  color: var(--color-text-tertiary);
+}
+/* 出口与句子隔一个普通空格（PanelEmpty 里写的），不用提示行那段 margin：折到第二行时 margin 会变成一截缩进 */
+.panel-empty .notice-exit {
+  margin-left: 0;
+}
+/* 侧栏：图标落在会话行的行首槽那一列（行内边距 --space-1），上下与节点头留一口气 */
+.panel-empty.sidebar-empty {
+  padding: var(--space-2) var(--space-1);
+}
+/* 列表容器（.panel-list）已内缩 --space-2：空态再进一个 --space-2，图标照样落在行首槽 */
+.panel-list > .panel-empty {
+  padding-inline: var(--space-2);
+}
+.panel-empty[data-tone="danger"],
+.panel-empty[data-tone="danger"] .panel-empty-glyph,
+.panel-empty[data-tone="danger"] .panel-empty-hint {
+  color: var(--color-danger);
 }
 
 /* 行尾悬停动作键：无底色的安静控件，悬停时只有 bg-hover。.row-hover-act 是
@@ -3960,6 +3998,14 @@ button.panel-group-toggle:hover {
 .file-row-act:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
+}
+
+/* 改动审查列表顶上的一行说明（比的是哪个上游）：不是空态，一行三级灰小字 */
+.review-note {
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
 }
 
 /* 改动审查的文件行：同一套圆角行，组间不画分隔线 */

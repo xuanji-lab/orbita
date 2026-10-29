@@ -495,7 +495,8 @@ export const zh: Messages = {
     addFolder: "添加文件夹…",
     workspaceName: "工作区名称",
     loadingWorkspaces: "正在载入工作区…",
-    noWorkspace: "还没有工作区。添加一个允许智能体读取的文件夹。",
+    noWorkspace: "还没有工作区。",
+    noWorkspaceExit: "添加一个允许智能体读取的文件夹",
     tasks: "任务",
     loadingTasks: "正在载入任务…",
     noTask: "还没有任务。新开的任务会出现在这里。",
@@ -1721,7 +1722,8 @@ export const zh: Messages = {
   },
 
   terminal: {
-    empty: "没有开着的终端，点 + 新开一个。",
+    empty: "没有开着的终端。",
+    startOne: "新开一个",
     title: "终端",
     newTerminal: "新建终端",
     closeTab: "关闭终端",

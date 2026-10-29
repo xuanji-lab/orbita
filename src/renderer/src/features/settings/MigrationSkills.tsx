@@ -2,6 +2,7 @@ import type { ImportSkillGroup, ImportSkillItem, ImportSkillMode, ImportSkillSco
 import type { Workspace } from "@shared/workspace";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import { Step } from "./MigrationStep.tsx";
@@ -87,9 +88,10 @@ export function SkillsSection(props: {
           {t.migration.skillsCaption}
         </p>
       ) : groups.length === 0 ? (
-        <div className="mg-block mg-empty">
-          <Icon name="circle-check" size={15} />
-          {t.migration.noSkillsInSources}
+        <div className="mg-block">
+          <PanelEmpty icon="circle-check" className="mg-empty done">
+            {t.migration.noSkillsInSources}
+          </PanelEmpty>
         </div>
       ) : (
         <>

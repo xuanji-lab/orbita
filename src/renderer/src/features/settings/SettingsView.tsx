@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
@@ -1451,10 +1452,10 @@ function LoginSitesPanel(props: {
           </label>
         ))}
         {shown.length === 0 && (
-          <span className="login-sites-empty">
-            {/* 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事 */}
+          // 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事
+          <PanelEmpty icon={props.sites.length === 0 ? "globe" : "search"} className="login-sites-empty">
             {props.sites.length === 0 ? t.settings.loginImportErrors.noCookies : t.settings.loginImportNoMatch}
-          </span>
+          </PanelEmpty>
         )}
       </div>
       <div className="login-sites-footer">

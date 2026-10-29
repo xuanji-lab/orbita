@@ -565,11 +565,9 @@
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
-.pv-wall-empty {
-  padding: var(--space-6) 0;
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
+/* 空态（PanelEmpty）：设置页的字从列左缘起，不再居中——与分区标题、卡片同一根线 */
+.panel-empty.pv-wall-empty {
+  padding: var(--space-2) 0;
 }
 
 .pv-cards {
