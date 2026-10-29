@@ -87,6 +87,9 @@ export function ContextPanel(props: {
         </p>
       ) : props.tab === "progress" ? (
         <TaskProgress
+          // 按会话换实例：「载入更早的轮」这类页内状态不该跟着带到另一条会话
+          key={props.sessionId}
+          sessionId={props.sessionId}
           entry={props.entry}
           runState={props.runState}
           carryovers={props.carryovers}

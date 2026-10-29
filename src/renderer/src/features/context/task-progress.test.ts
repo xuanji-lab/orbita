@@ -1,7 +1,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { latestPlan, stepClockFrom, taskHeadState, turnDigests, type PlanView } from "./task-progress.ts";
+import { latestPlan, liveTail, settledEnd, stepClockFrom, taskHeadState, turnDigests, type PlanView } from "./task-progress.ts";
+import { mergeHistory } from "../chat/task-inventory.ts";
 
 const user = (id: string, timestamp: number, text = "hi"): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text }], timestamp }) as TranscriptItem;
@@ -134,5 +135,43 @@ describe("stepClockFrom（「在做」那步从几点开始计）", () => {
   test("计划是前几轮写的、这一轮没更新（续聊）：从这一轮开始算，不把中间闲着的时间算进去", () => {
     const turns = turnDigests([user("u1", 500), plan_("p1", 1_000), user("u2", 90_000_000)], true);
     assert.equal(stepClockFrom(plan, turns), 90_000_000);
+  });
+});
+
+describe("整个任务的轮：落定段 + 每次重算的尾巴 = 全量一次算", () => {
+  // 三轮：u1（read）、u2（write，失败）、u3（还在跑）
+  const all = [
+    user("u1", 1000, "第一轮"),
+    assistant("a1", 1100, [{ type: "text", text: "先读。" }, { type: "toolCall", toolCallId: "r1", toolName: "read", input: { path: "a" } }]),
+    tool({ toolCallId: "r1", timestamp: 1200 }),
+    assistant("a1b", 1300, [{ type: "text", text: "读完了。" }]),
+    user("u2", 2000, "第二轮"),
+    assistant("a2", 2100, [{ type: "toolCall", toolCallId: "w1", toolName: "write", input: { path: "b" } }]),
+    tool({ toolCallId: "w1", toolName: "write", timestamp: 2200, status: "error" }),
+    assistant("a2b", 2300, [{ type: "text", text: "写不进去。" }]),
+    user("u3", 3000, "第三轮"),
+    assistant("a3", 3100, [{ type: "toolCall", toolCallId: "b1", toolName: "bash", input: { command: "ls" } }]),
+  ];
+  const shape = (turns: ReturnType<typeof turnDigests>) =>
+    turns.map((turn) => ({ key: turn.key, ask: turn.ask, steps: turn.steps, failed: turn.failed, live: turn.live, chapters: turn.chapters.length }));
+  for (const [name, olderEnd, windowStart] of [
+    ["更早那段切在第二轮中间、尾窗不重叠", 6, 6],
+    ["尾窗往上翻过、和更早那段重叠到落定段里", 6, 2],
+    ["更早那段只有第一轮的开头（落定段为空，全部进尾巴）", 2, 2],
+  ] as const) {
+    test(name, () => {
+      const older = all.slice(0, olderEnd);
+      const current = all.slice(windowStart);
+      const end = settledEnd(older);
+      const olderIds = new Set(older.map((record) => record.id));
+      const split = [...turnDigests(older.slice(0, end), false), ...turnDigests(liveTail(older, end, current, olderIds), true)];
+      assert.deepEqual(shape(split), shape(turnDigests(mergeHistory(older, current), true)));
+      assert.equal(split.length, 3);
+    });
+  }
+  test("落定段止于最后一条用户消息之前；没有用户消息就没有落定段", () => {
+    assert.equal(settledEnd(all.slice(0, 6)), 4);
+    assert.equal(settledEnd(all.slice(1, 4)), 0);
+    assert.equal(settledEnd([]), 0);
   });
 });

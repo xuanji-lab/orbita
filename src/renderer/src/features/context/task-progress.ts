@@ -134,9 +134,7 @@ export interface TurnDigest {
 export function turnDigests(
   records: readonly TranscriptRecord[],
   turnActive: boolean,
-  results: ToolResultIndex = indexToolResults(
-    records.filter((record) => record.role === "tool") as Parameters<typeof indexToolResults>[0],
-  ),
+  results: ToolResultIndex = toolIndexOf(records),
 ): TurnDigest[] {
   const view = groupTurnsByTurn(groupToolUnits(flattenRenderUnits(records)), turnActive, results);
   const turns: TurnDigest[] = [];
@@ -183,6 +181,40 @@ export function turnDigests(
     turn.durationMs = turn.live || spans.length === 0 ? null : spans.reduce((sum, ms) => sum + ms, 0);
   });
   return turns;
+}
+
+/**
+ * 整个任务的「做过的」要对全量记录算，而面板每条流式事件都重算（实测 turnDigests 在 4.9k 条
+ * 记录上约 2 ms、12.3k 条约 3.7 ms 一次）。拉来的更早那段是静的：切在它最后一条用户消息前——
+ * 之前的轮都已收完（落定段），只在拉到新的一页时重算；其余（更早那段的最后一轮 + 尾窗）
+ * 每条事件重算，量与对话自己算的同级。返回落定段的长度（0 = 没有落定段）。
+ */
+export function settledEnd(older: readonly TranscriptRecord[]): number {
+  for (let i = older.length - 1; i >= 0; i--) {
+    if (older[i]?.role === "user") return i;
+  }
+  return 0;
+}
+
+/**
+ * 落定段之后要每次重算的那截：更早那段里落定段之后的记录 + 尾窗里不在更早那段的记录
+ * （聊天面自己往上翻会把同一批装进尾窗，重叠可能伸进落定段，所以按整个更早那段的 id 去重）。
+ * 落定段 + 这一截 = mergeHistory(older, current)。
+ */
+export function liveTail(
+  older: readonly TranscriptRecord[],
+  end: number,
+  current: readonly TranscriptRecord[],
+  olderIds: ReadonlySet<string>,
+): TranscriptRecord[] {
+  return [...older.slice(end), ...current.filter((record) => !olderIds.has(record.id))];
+}
+
+/** 记录里的工具帧索引（记录里混着界碑 / 轮尾账等，indexToolResults 只要 tool 帧） */
+export function toolIndexOf(records: readonly TranscriptRecord[]): ToolResultIndex {
+  return indexToolResults(
+    records.filter((record) => record.role === "tool") as Parameters<typeof indexToolResults>[0],
+  );
 }
 
 /** 只有代码围栏的一行：``` / ~~~（可带语言名），含贴进来时被转义成 \`\`\` 的 */
