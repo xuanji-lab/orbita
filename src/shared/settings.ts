@@ -7,6 +7,7 @@
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -264,6 +265,12 @@ export interface AppSettings {
    */
   intent?: IntentSettings;
   /**
+   * 向量召回（实验功能 memory-system 的一部分，开关仍由实验开关总控）：
+   * 本地 llama-server + GGUF。缺席全默认（关）；只存用户动过的键，读侧并入
+   * DEFAULT_MEMORY_VECTOR_SETTINGS（同 intent 的纪律）。
+   */
+  vector?: Partial<MemoryVectorSettings>;
+  /**
    * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
    * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
    * 缺席 = 跟着今天、显示着。设置页里不出现。
@@ -483,6 +490,7 @@ export function parseSettings(raw: unknown): AppSettings {
     experimentalFeatures?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
+    vector?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
     experimental?: unknown;
   };
@@ -505,6 +513,7 @@ export function parseSettings(raw: unknown): AppSettings {
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
   const intent = parseIntentSettings(record.intent);
+  const vector = parseVectorSettings(record.vector);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
   return {
     theme,
@@ -551,6 +560,7 @@ export function parseSettings(raw: unknown): AppSettings {
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
     ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
     ...(intent === undefined ? {} : { intent }),
+    ...(vector === undefined ? {} : { vector }),
   };
 }
 
@@ -560,6 +570,23 @@ export function parseSettings(raw: unknown): AppSettings {
  * 旧键只在这一层兼容，解析产物永远是 experimentalFeatures，任何一次写入
  * （parseSettings 白名单重建整个对象）都会把旧键从盘上带走。
  */
+/** 向量召回设置：只认得上的键收（mode / model / idleUnloadMin / deferOnBattery），
+ * 不认识或类型不对当没动过（默认值兜底）。不校验模型文件在不在——那是运行态。 */
+function parseVectorSettings(raw: unknown): Partial<MemoryVectorSettings> | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const suspect = raw as Record<string, unknown>;
+  const out: Partial<MemoryVectorSettings> = {};
+  if (suspect.mode === "off" || suspect.mode === "local") out.mode = suspect.mode;
+  for (const model of MEMORY_VECTOR_MODELS) {
+    if (suspect.model === model.id) out.model = model.id;
+  }
+  if (typeof suspect.idleUnloadMin === "number" && Number.isFinite(suspect.idleUnloadMin)) {
+    out.idleUnloadMin = Math.max(1, Math.round(suspect.idleUnloadMin));
+  }
+  if (typeof suspect.deferOnBattery === "boolean") out.deferOnBattery = suspect.deferOnBattery;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function parseExperimentalFeatures(record: {
   experimentalFeatures?: unknown;
   experimental?: unknown;

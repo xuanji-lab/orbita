@@ -32,7 +32,11 @@ import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { IntentRecallRecord } from "./session.ts";
-import type { MemoryRecallOutcome } from "./memory.ts";
+import type {
+  MemoryBackfillProgress,
+  MemoryDownloadProgress,
+  MemoryRecallOutcome,
+} from "./memory.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -123,6 +127,11 @@ export const ipcChannels = {
   memorySession: "memory:session",
   memoryPending: "memory:pending",
   memoryMutate: "memory:mutate",
+  /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
+   *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
+  memoryVectorStatus: "memory:vector-status",
+  memoryVectorSet: "memory:vector-set",
+  memoryVectorDownload: "memory:vector-download",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -1224,6 +1233,16 @@ export type AgentEvent =
  * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
  */
 | { type: "memoryChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：模型下载进度（服务 → 主进程转发）。
+ * 载荷 MemoryDownloadProgress（phase: downloading/verifying/done/failed）。
+ */
+| { type: "vectorDownload"; progress: MemoryDownloadProgress }
+/**
+ * 记忆系统（实验功能 memory-system）：后台补算进度（running / deferred-battery /
+ * idle 收尾）。载荷 MemoryBackfillProgress。
+ */
+| { type: "vectorBackfill"; progress: MemoryBackfillProgress }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**

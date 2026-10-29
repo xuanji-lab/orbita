@@ -230,7 +230,29 @@ export type MemoryServiceCommand =
    * 记忆库的写操作（唯一写者在服务：与提取共用写盘代码，也避免两进程同写一个
    * 文件）。回执 mutateResult；任何写盘后另发一条 changed。
    */
-  | { type: "mutate"; requestId: string; mutation: MemoryMutation };
+  | { type: "mutate"; requestId: string; mutation: MemoryMutation }
+  /**
+   * 向量召回的运行配置：null = 关（停 llama-server、暂停补算）。设置改了
+   * 下一份立即生效（换模型 = manifest 不符 → 清库重算，服务自行触发补算）。
+   */
+  | { type: "setVectorConfig"; config: MemoryVectorServiceConfig | null }
+  /** 电池状态变化（powerMonitor 在主进程）：onBattery 时推迟批量补算 */
+  | { type: "setPower"; onBattery: boolean }
+  /** 拉服务的运行态（设置页 status 用）。回执 vectorStateResult。 */
+  | { type: "vectorState"; requestId: string }
+  /**
+   * 下载模型文件（服务 owns <userData>/vector/）：流式下载 + sha256 校验，
+   * 进度经 downloadProgress 事件推。已在下载中幂等回 ok。
+   */
+  | {
+      type: "startModelDownload";
+      requestId: string;
+      /** 依序尝试的下载源（HF 直连在前，hf-mirror 兜底） */
+      sources: readonly string[];
+      targetPath: string;
+      sha256: string;
+      sizeBytes: number;
+    };
 
 /** 记忆服务 → 主进程。 */
 export type MemoryServiceMessage =
@@ -245,6 +267,18 @@ export type MemoryServiceMessage =
    * 目标条目不在 / 入参不合法时 ok: false。
    */
   | ({ type: "mutateResult"; requestId: string } & MemoryMutationOutcome)
+  /** vectorState 的回执（设置页 status 的服务侧那部分） */
+  | {
+      type: "vectorStateResult";
+      requestId: string;
+      llamaRunning: boolean;
+      backfill: { state: "running" | "deferred-battery"; done: number; total: number } | null;
+      vectors: MemoryVectorsSummary | null;
+    }
+  /** 模型下载进度（流式；downloading/verifying/done/failed） */
+  | { type: "downloadProgress"; progress: MemoryDownloadProgress }
+  /** 后台补算进度（running / deferred-battery / idle 收尾） */
+  | { type: "backfillProgress"; progress: MemoryBackfillProgress }
   /**
    * 任何写盘之后发一次（提取落条目、事件段收尾 / 归档、记忆库写操作）：主进程
    * 接到后广播给窗口（agent:event 的 memoryChanged），界面重拉。无载荷——
@@ -421,3 +455,146 @@ export type MemoryMutation =
 export type MemoryMutationOutcome =
   | { ok: true; entry: MemoryEntry | null }
   | { ok: false; error: string };
+
+/* ---------- 向量召回（本地模型：llama-server + GGUF） ---------- */
+
+/**
+ * 本地向量模型登记表。sha256 是 HuggingFace LFS oid（就是文件内容哈希），
+ * 下载后本地校验；参数是选型报告（e19bf631 工作台，2026-10-29）§4 的实测值。
+ * 加模型 = 加一行；升级 llama.cpp / 换 GGUF 版本改表并整库重算。
+ */
+export interface MemoryVectorModel {
+  /** 设置与 manifest 里的模型标识 */
+  id: "embeddinggemma-2" | "qwen3-embedding-0.6b";
+  /** HF 仓库名（gguf 文件在 repo 下；hf-mirror 备用源同路径） */
+  repo: string;
+  /** GGUF 文件名（下载到 <userData>/vector/<文件名>） */
+  file: string;
+  sha256: string;
+  sizeBytes: number;
+  /** llama-server --pooling；null = GGUF 自带 */
+  pooling: "mean" | "last" | "cls" | null;
+  ctx: number;
+  /** 查询前缀（嵌入用户 query 时拼前面） */
+  queryPrefix: string | null;
+  /** 文档前缀（嵌入条目正文时拼前面） */
+  docPrefix: string | null;
+  dims: number;
+}
+
+export const MEMORY_VECTOR_MODELS: readonly MemoryVectorModel[] = [
+  {
+    id: "embeddinggemma-2",
+    repo: "ggml-org/embeddinggemma-2-GGUF",
+    file: "embeddinggemma-2-Q8_0.gguf",
+    sha256: "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135",
+    sizeBytes: 309_855_456,
+    pooling: "mean",
+    ctx: 8192,
+    queryPrefix: "task: search result | query: ",
+    docPrefix: "title: none | text: ",
+    dims: 768,
+  },
+  {
+    id: "qwen3-embedding-0.6b",
+    repo: "Qwen/Qwen3-Embedding-0.6B-GGUF",
+    file: "Qwen3-Embedding-0.6B-Q8_0.gguf",
+    sha256: "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+    sizeBytes: 639_150_592,
+    pooling: "last",
+    ctx: 8192,
+    queryPrefix:
+      "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+    docPrefix: null,
+    dims: 1024,
+  },
+];
+
+/** 设备状态（主进程探测：powerMonitor + os；「向量模型」设置页的分档提示用）。 */
+export interface MemoryDeviceStatus {
+  /** 芯片 / CPU 型号（os.cpus()[0].model） */
+  chip: string;
+  /** 内存（GB，取整） */
+  memoryGb: number;
+  onBattery: boolean;
+  platform: string;
+  arch: string;
+  /** 按 8GB 线分档（选型报告 §5）：cloud = 建议云端（后续版本），界面只做推荐文案 */
+  recommend: "local" | "cloud";
+}
+
+/** 模型文件的就地状态（下载进度从服务的事件来，status 拉取时合并最近值）。 */
+export type MemoryModelFileState =
+  | { state: "none" }
+  | { state: "downloading"; received: number; total: number; source: string }
+  | { state: "verifying" }
+  | { state: "ready"; sizeBytes: number }
+  | { state: "failed"; error: string };
+
+/** 向量库（manifest + 行数）的摘要；null = 还没向量化过。 */
+export interface MemoryVectorsSummary {
+  model: string;
+  dims: number;
+  /** 已有向量的条目数（各层之和） */
+  entries: number;
+}
+
+/** 「向量模型」设置页一次拉全的快照。 */
+export interface MemoryVectorStatus {
+  /** 设置生效值（默认已并入） */
+  settings: MemoryVectorSettings;
+  device: MemoryDeviceStatus;
+  /** llama-server 二进制备取结果（安装包 / 开发目录 / 环境变量） */
+  llamaServer: { found: boolean; path: string | null; source: "packaged" | "dev" | "env" | null };
+  modelFile: MemoryModelFileState;
+  /** 后台补算进度；null = 没在算也不欠账 */
+  backfill: { state: "running" | "deferred-battery"; done: number; total: number } | null;
+  vectors: MemoryVectorsSummary | null;
+}
+
+/** 向量召回的全默认值（AppSettings.vector 缺席时生效：关 + gemma-2 + 5 分钟卸载 + 电池推迟）。 */
+export const DEFAULT_MEMORY_VECTOR_SETTINGS: MemoryVectorSettings = {
+  mode: "off",
+  model: "embeddinggemma-2",
+  idleUnloadMin: 5,
+  deferOnBattery: true,
+};
+
+/** 设置里的向量召回偏好（AppSettings.vector；缺席全默认 = 关）。 */
+export interface MemoryVectorSettings {
+  /** off = 关（默认）；local = 本地向量。云端兜底是后续版本，枚举留扩展位 */
+  mode: "off" | "local";
+  model: MemoryVectorModel["id"];
+  /** llama-server 空闲多久卸载（分钟） */
+  idleUnloadMin: number;
+  /** 用电池时推迟批量补算（默认 true；交互召回不受影响——单查毫秒级） */
+  deferOnBattery: boolean;
+}
+
+/** 下载进度事件（服务 → 主进程 → agent:event 的 vectorDownload）。 */
+export interface MemoryDownloadProgress {
+  requestId: string;
+  phase: "downloading" | "verifying" | "done" | "failed";
+  source: string;
+  received: number;
+  total: number;
+  error?: string;
+}
+
+/** 补算进度事件（服务 → 主进程 → agent:event 的 vectorBackfill）。 */
+export interface MemoryBackfillProgress {
+  state: "running" | "idle" | "deferred-battery";
+  done: number;
+  total: number;
+}
+
+/** 主进程 → 服务：向量召回的运行配置（主进程解好路径与模型参数再送）。 */
+export interface MemoryVectorServiceConfig {
+  model: MemoryVectorModel;
+  /** GGUF 绝对路径（已就绪的；主进程保证文件存在才送 local 配置） */
+  ggufPath: string;
+  /** llama-server 二进制绝对路径 */
+  binaryPath: string;
+  idleUnloadMs: number;
+  deferOnBattery: boolean;
+}
