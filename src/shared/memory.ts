@@ -311,6 +311,14 @@ export type MemoryServiceCommand =
       sizeBytes: number;
     }
   /**
+   * 取消在途的模型下载（用户关掉向量、或换了模型）。**只有这条命令取消下载**：
+   * setVectorConfig(null) 不再取消——模型还没下完时主进程每轮同步的配置本来就是
+   * null（文件不在），以前把它当「向量关了」，下载中只要有一轮对话落定下载就被掐断，
+   * 界面停在当时的百分比（2026-10-30 打包版实测卡在 22%）。取消后服务发一次
+   * phase "cancelled" 的进度。
+   */
+  | { type: "cancelModelDownload" }
+  /**
    * 停机（开关关 / 应用退出）：服务停 llama-server、取消下载后自行退出。
    * 主进程发完不等回执（退出路上等不起），紧接着按 embedServerPid 补杀引擎、再 kill
    * 服务进程——这条命令是「来得及就优雅」的那一层，不是唯一一层。
@@ -631,7 +639,8 @@ export interface MemoryVectorSettings {
 /** 下载进度事件（服务 → 主进程 → agent:event 的 vectorDownload）。 */
 export interface MemoryDownloadProgress {
   requestId: string;
-  phase: "downloading" | "verifying" | "done" | "failed";
+  /** cancelled = 用户取消（关向量 / 换模型）；failed = 所有源都失败（含长时间收不到数据） */
+  phase: "downloading" | "verifying" | "done" | "failed" | "cancelled";
   source: string;
   received: number;
   total: number;
