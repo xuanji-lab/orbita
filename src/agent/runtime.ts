@@ -85,6 +85,7 @@ import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
+import { createMemoryTools, MEMORY_TOOL_NAMES, MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
@@ -937,15 +938,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   }
 
   /**
-   * 子会话身份（2026-09-23）：related 里有 `relation === "parent"` 的一项 → 本会话
-   * 是被派出的子会话。决定注册哪些通道工具（createChannelTools）、讲哪段通道
-   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜。
+   * 子会话身份（2026-09-23）：决定注册哪些通道工具（createChannelTools）、讲哪段通道
+   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜（isChildSession）。
    */
-  const role: "root" | "child" = command.directories?.related?.some(
-    (entry) => entry.relation === "parent",
-  )
-    ? "child"
-    : "root";
+  const role: "root" | "child" = isChildSession(command) ? "child" : "root";
+  /**
+   * 记忆工具（memory_search / revise / retire）只给根会话、且记忆开着时注册——子会话读不写。
+   * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
+   */
+  const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -1039,12 +1040,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                   ...TERMINAL_TOOL_NAMES,
                   // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
                   ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
+                  ...(memoryTools ? MEMORY_TOOL_NAMES : []),
                 ]),
                 // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
                 // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
                 describeDirectories(command.cwd, command.directories),
                 // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
                 describeChannelRole(role),
+                // 记忆工具的使用说明：固定一段（整个会话不变），只在注册了工具时讲
+                ...(memoryTools ? [MEMORY_TOOLS_GUIDELINE] : []),
                 // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
                 // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
                 storeToolsGuideline(
@@ -1297,6 +1301,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
     ...createChannelTools(requestBroker, command.sessionId, role),
+    ...(memoryTools
+      ? createMemoryTools(requestBroker, command.sessionId, {
+          scope: { workspaceId: command.workspaceId, cwd: command.cwd },
+          // 轮号在 echoAndPrompt 算好写进 memory.turn；没开轮（压缩）时不会调到工具
+          turn: () => memory.turn ?? 1,
+        })
+      : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -1828,6 +1839,14 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
 }
 
 /**
+ * 子会话身份：开轮目录清单的 related 里有 `relation === "parent"` 的一项 → 本会话是被
+ * 派出的子会话。通道工具、记忆工具的注册与召回块的纠错提示都认它一处。
+ */
+function isChildSession(command: { directories?: { related?: readonly { relation: string }[] } }): boolean {
+  return command.directories?.related?.some((entry) => entry.relation === "parent") === true;
+}
+
+/**
  * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
  * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
  */
@@ -1843,6 +1862,7 @@ async function recallMemories(
   query: string,
   turn: number,
   scope: { workspaceId: string | null; cwd: string },
+  canRevise: boolean,
 ): Promise<string | null> {
   try {
     const outcome = await requestBroker.request<MemoryRecallOutcome>(
@@ -1850,7 +1870,7 @@ async function recallMemories(
       MEMORY_RECALL_TIMEOUT_MS,
     );
     if (!outcome.ok || outcome.hits.length === 0) return null;
-    return buildMemoryBlock(outcome.hits);
+    return buildMemoryBlock(outcome.hits, { canRevise });
   } catch (cause) {
     console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
     return null;
@@ -1875,16 +1895,21 @@ async function echoAndPrompt(
   // 本轮轮号（按用户消息计，1 起）：注入账本与条目分组的键——prompt 之前的
   // 历史里数用户消息 +1（#228 的口径，与 renderer 划选引用一致）
   const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
+  opened.memory.turn = turn;
   // 轮前记忆召回（实验功能 memory-system）：召回块**不拼进用户原话**，放进本轮的
   // pending，首个 LLM 调用时由 orbita-memory-attach 扩展作为独立块挂到这条消息上
   // （见 memory-inject.ts）。超时 / 报错 / 空命中都不挂——记忆的失败不拦开轮。
   // 子会话也召回（读不写，写入门禁在主进程的轮后路径）
   opened.memory.pending =
     command.sessionMemory === true
-      ? await recallMemories(command.sessionId, command.text, turn, {
-          workspaceId: command.workspaceId,
-          cwd: command.cwd,
-        })
+      ? await recallMemories(
+          command.sessionId,
+          command.text,
+          turn,
+          { workspaceId: command.workspaceId, cwd: command.cwd },
+          // 块里讲「用 memory_revise 改」只对注册了工具的根会话；子会话的块不讲
+          !isChildSession(command),
+        )
       : null;
   const promptText = composePromptText(command.text, pasted, files);
   // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
@@ -2114,6 +2139,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "memoryRecallResult") {
     // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "memoryToolResult") {
+    // 记忆工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }

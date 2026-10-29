@@ -16,7 +16,7 @@
  * 召回、打分、门控都在记忆服务进程（memory/retrieve.ts）；这里只做组装、兜底预算与挂载。
  */
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { MemoryHit } from "../shared/memory.ts";
+import { memoryShortId, type MemoryHit } from "../shared/memory.ts";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
 /** pi 本子里记忆附件的 custom entry 类型名（data = { at: 用户消息时间戳, text: 块文本 }）。 */
@@ -36,27 +36,34 @@ function formatDate(now: number): string {
  */
 const BLOCK_BUDGET_CHARS = 3000;
 
+/** 块的说明句（读者是模型）。canRevise = 根会话、注册了记忆工具：讲清纠错要动手改。 */
+const BLOCK_INTRO = "以下条目来自既往会话的记忆（方括号里是条目 id 与日期），与当前输入无关时忽略";
+const BLOCK_REVISE_HINT =
+  "用户纠正其中某条时，用 memory_revise 按 id 改掉它（只说不对、没有新说法用 memory_retire），不要只在回复里口头答应";
+
 /**
  * 命中 → 注入块；空命中返回 null（调用方不注入、照常开轮）。
+ * 每行带短 id（memoryShortId）：用户说「刚才那条不对」时模型不用先查就能直接定位。
+ * 块落本即定格、逐字节重放——格式变了只影响新轮的块，旧附件不动。
  * 超预算的条目整条跳过试下一条——半句话比没有更难用；第一条永远装
  * （它是最高分，一条都不装等于召回白做）。
  */
-export function buildMemoryBlock(hits: readonly MemoryHit[]): string | null {
+export function buildMemoryBlock(
+  hits: readonly MemoryHit[],
+  options: { canRevise: boolean } = { canRevise: false },
+): string | null {
   if (hits.length === 0) return null;
   const lines: string[] = [];
   let used = 0;
   for (const hit of hits) {
-    const line = `- [${formatDate(hit.entry.at)}] ${hit.entry.text}`;
+    const line = `- [${memoryShortId(hit.entry.id)} · ${formatDate(hit.entry.at)}] ${hit.entry.text}`;
     if (lines.length > 0 && used + line.length > BLOCK_BUDGET_CHARS) continue;
     lines.push(line);
     used += line.length;
   }
   if (lines.length === 0) return null;
-  return (
-    "<orbita-memory>\n以下条目来自既往会话的记忆，与当前输入无关时忽略：\n" +
-    lines.join("\n") +
-    "\n</orbita-memory>"
-  );
+  const intro = options.canRevise ? `${BLOCK_INTRO}；${BLOCK_REVISE_HINT}：` : `${BLOCK_INTRO}：`;
+  return `<orbita-memory>\n${intro}\n${lines.join("\n")}\n</orbita-memory>`;
 }
 
 /**
@@ -83,6 +90,8 @@ export function memoryAttachments(branch: readonly SessionEntry[]): Map<number, 
 export interface TurnMemoryAttach {
   attached: Map<number, string>;
   pending: string | null;
+  /** 本轮轮号（开轮回显前算好；记忆工具记 revise 新条的出处轮用）。缺席 = 还没开轮 */
+  turn?: number;
 }
 
 /**

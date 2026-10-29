@@ -38,13 +38,25 @@ test("空命中返回 null（不注入，照常开轮）", () => {
   assert.equal(buildMemoryBlock([]), null);
 });
 
-test("命中拼进 <orbita-memory> 块：日期前缀 + 正文，常驻也一视同仁", () => {
-  const block = buildMemoryBlock([hit({ id: "m1" }), { ...hit({ id: "m2" }), score: 1, pinned: true }]);
+test("命中拼进 <orbita-memory> 块：短 id · 日期前缀 + 正文，常驻也一视同仁", () => {
+  const block = buildMemoryBlock([
+    hit({ id: "mem_1a2b3c4d-0000-4000-8000-000000000000", text: "条目 m1" }),
+    { ...hit({ id: "m2" }), score: 1, pinned: true },
+  ]);
   assert.ok(block !== null);
   assert.ok(block!.startsWith("<orbita-memory>"));
-  assert.ok(block!.includes("- [2026-10-29] 条目 m1"));
+  assert.ok(block!.includes("- [mem_1a2b3c4d · 2026-10-29] 条目 m1"));
   assert.ok(block!.includes("条目 m2"));
   assert.ok(block!.endsWith("</orbita-memory>"));
+});
+
+test("说明句：能改记忆的根会话讲「用 memory_revise 改、别只口头答应」，子会话不讲", () => {
+  const root = buildMemoryBlock([hit({ id: "m1" })], { canRevise: true })!;
+  assert.ok(root.includes("memory_revise"));
+  assert.ok(root.includes("不要只在回复里口头答应"));
+  const child = buildMemoryBlock([hit({ id: "m1" })])!;
+  assert.equal(child.includes("memory_revise"), false);
+  assert.ok(child.includes("方括号里是条目 id 与日期"));
 });
 
 test("预算兜底：超长条目跳过试下一条，第一条永远装", () => {
