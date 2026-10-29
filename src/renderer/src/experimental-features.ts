@@ -169,7 +169,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     },
     changelog: [
       {
-        pr: null,
+        pr: 374,
         date: "2026-10-29",
         note: {
           zh: "首版后端：独立记忆服务进程，对话按事件段切分、每段整理成事实 / 偏好 / 经验，每轮开始前召回注入；条目与注入记录的界面在后续版本里加。",
