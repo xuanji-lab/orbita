@@ -588,16 +588,10 @@ export interface TurnDirectories {
    */
   workbench: string;
   /**
-   * 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：父的清单列每个子会话的、
-   * 子的列父的。**只告知不硬拦**（同 attached）：label 是对方会话的标题，path 是对方
-   * 工作台的绝对路径——父子各自工作台独立，但「任务说明在那个目录里」这件事
-   * 对面的模型该知道。
-   *
-   * `sessionId` 是对方会话的 id——`reply_subsession` 要靠它定位子会话。
-   * `relation` 是**对方**相对本会话的角色（子会话清单里父那一项是 `"parent"`、
-   * 父会话清单里每个子是 `"child"`）：runtime 靠它判断本会话是不是子会话，
-   * 决定注册哪些通道工具、讲哪段提示词——仅凭 label/path 分不出「列的是父还是子」
-   * （父有子时 related 也非空）。
+   * 父子会话关系与会话内工作台事实。`relation` 是**对方**相对本会话的角色：
+   * runtime 靠父那一项判断本会话是不是子会话，决定注册哪些通道工具、讲哪段角色指引。
+   * 这些行**不直接进系统提示词**（派出 / 删除子会话会改清单、打断提示缓存）；对方工作台
+   * 改由 delegate 回执与每条通道信封告知模型。只告知不硬拦（同 attached）。
    *
    * 缺席 = 没有父子关系（绝大多数会话）。
    */
@@ -639,7 +633,14 @@ export interface IntentTurnContext {
 /** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
 renderer 不必为更新通道列的状态徽标拉一份全量账本 */
 export type ChannelEvent =
-  | { type: "message"; parentId: string; childId: string; message: ChannelMessage }
+  | {
+      type: "message";
+      parentId: string;
+      childId: string;
+      message: ChannelMessage;
+      /** 子会话工作台的绝对路径：renderer 组子→父信封时随每条回报重新告知模型 */
+      childWorkbench: string;
+    }
   | { type: "status"; parentId: string; childId: string; status: ChannelStatus };
 
 /** 主进程 → agent 进程 */

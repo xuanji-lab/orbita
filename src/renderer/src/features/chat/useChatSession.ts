@@ -868,7 +868,13 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
         // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
         const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const envelope = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
+        const envelope = composeChannelPrompt(head.message, {
+          id: head.childId,
+          title: childTitle,
+          // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate
+          // 回执被压缩掉，路径也会随这条信封回来
+          workbench: head.childWorkbench,
+        });
         const turn = buildTurn(id);
         if (turn === null) return;
         // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
@@ -998,6 +1004,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
           id: event.message.id,
           kind: "channel",
           childId: event.childId,
+          childWorkbench: event.childWorkbench,
           message: event.message,
         }),
       );
@@ -2786,6 +2793,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           ? composeChannelPrompt(item.message, {
               id: item.childId,
               title: engine.sessions.find((meta) => meta.id === item.childId)?.title ?? "",
+              workbench: item.childWorkbench,
             })
           : item.text;
       const images = imagesField(item.kind === "text" ? item.images : undefined);
