@@ -11,6 +11,8 @@
   padding: 0;
   list-style: none;
   display: grid;
+  /* 列宽可收到 0：grid 隐式列按内容最小宽撑开，窄栏里卡片会被撑出去 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
 }
 
@@ -37,6 +39,8 @@
 
 .mem-entry-body {
   display: grid;
+  /* 正文是 button：它的最小内容宽按一整行算，隐式列会被撑到整段话的长度 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   min-width: 0;
 }
@@ -401,6 +405,9 @@ button.mem-tag:hover {
   width: min(100%, 860px);
   margin: 0 auto;
   display: grid;
+  /* 显式 minmax(0,1fr)：隐式列按最宽一行（两组筛选按钮约 610px）的最小内容宽撑开，
+     右栏面板开着、窗口不到约 1500px 宽时整页横向溢出（2026-10-29 实机） */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   align-content: start;
 }
@@ -464,7 +471,10 @@ button.mem-tag:hover {
 
 .mem-seg {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  /* 窄栏里按钮组自己折行，不撑宽整页 */
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 2px;
   gap: 2px;
   border: 1px solid var(--color-border-subtle);
@@ -499,6 +509,7 @@ button.mem-tag:hover {
 
 .mem-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
 }
 
