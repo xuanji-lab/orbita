@@ -137,6 +137,15 @@ export class MemoryServiceCore {
    */
   private readonly entryWrites = new Map<string, number>();
   /**
+   * 已通知、还没在队列里截段的回退点（会话 → 回退点列表，每次 sessionReverted 推一个、
+   * 它自己的截段跑完摘掉自己那一个）。队列里正跑的提取拿的是回退前读出的段，靠它在每次
+   * 调模型前后看见回退：被撤回的轮不进提示词、调用中途到达的回退让那次输出作废重来。
+   *
+   * 存列表不存「最小值」：两次回退之间重说的轮会复用轮号，排在第一次截段之后的提取
+   * 只该受第二次回退约束——第一次的截段一跑完，它的回退点就得从这里消失，留下第二次的。
+   */
+  private readonly pendingReverts = new Map<string, number[]>();
+  /**
    * init 的闸：init 一进来（同步）就立起，数据目录挂好、启动清扫入队后打开。
    * 服务刚拉起时主进程紧跟 init 就发 turnSettled（开关中途打开 / 崩溃后重拉的
    * 第一轮），那时 init 还在读盘、episodes 还是 null——不等这道闸，那一轮就被
@@ -293,8 +302,12 @@ export class MemoryServiceCore {
    *    可能正跑着分钟级的提取，用户重说的那一轮开轮召回不该还注入被撤回的话；
    * 2. **排队**（与切段 / 提取串行，排在这之前投递的轮后面、重说的那一轮前面）截段：开段与
    *    待提取段里轮号 ≥ fromTurn 的轮截掉，截空的段丢掉。开段水位回落后 admissionOf 不再
-   *    ignore 重说的轮；已归档的段不参与 admission，不必改写。第 1 步之后若这个会话又有
-   *    提取落盘（排在前面的提取拿的是未截的段），再停用一遍；没有就不重扫。
+   *    ignore 重说的轮；已归档的段不参与 admission，不必改写。
+   *
+   * 排在截段前面、正在跑的同会话提取拿的是回退前读出的段：回退点同步登记进 pendingReverts，
+   * 提取每类调模型前按它截段（被撤回的轮不进提示词），调用中途到达的回退让那次输出作废重提。
+   * 剩下的窗口（调用回来之后、落盘之前到达）由兜底处理：第 1 步之后若这个会话又有提取落盘，
+   * 截段后再停用一遍；没有就不重扫。
    * 返回队列尾（runtime 不等，测试等）。失败只记日志——记忆的问题不倒灌回退。
    */
   sessionReverted(payload: { sessionId: string; fromTurn: number }): Promise<void> {
@@ -304,6 +317,8 @@ export class MemoryServiceCore {
       return Promise.resolve();
     }
     const writesBefore = this.entryWrites.get(sessionId) ?? 0;
+    // 同步登记：队列里正跑的提取下一次调模型前（或这次调用回来时）就能看见
+    this.pendingReverts.set(sessionId, [...(this.pendingReverts.get(sessionId) ?? []), fromTurn]);
     const immediate = this.revertEntries(sessionId, fromTurn);
     return this.enqueue(async () => {
       await immediate;
@@ -311,6 +326,8 @@ export class MemoryServiceCore {
         await this.truncateEpisodes(sessionId, fromTurn);
       } catch (cause) {
         this.log(`[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮时截段出错`, cause);
+      } finally {
+        this.settleRevert(sessionId, fromTurn);
       }
       if ((this.entryWrites.get(sessionId) ?? 0) !== writesBefore) {
         await this.revertEntries(sessionId, fromTurn);
@@ -355,6 +372,24 @@ export class MemoryServiceCore {
     } catch (cause) {
       this.log(`[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮时停用条目出错`, cause);
     }
+  }
+
+  /** 这次回退的截段跑完了：摘掉它登记的回退点（同轮号的另一次回退各摘各的）。 */
+  private settleRevert(sessionId: string, fromTurn: number): void {
+    const list = this.pendingReverts.get(sessionId);
+    if (list === undefined) return;
+    const at = list.indexOf(fromTurn);
+    if (at >= 0) list.splice(at, 1);
+    if (list.length === 0) this.pendingReverts.delete(sessionId);
+  }
+
+  /** 按还没截段的回退截一份内存里的段（truncateEpisode 的三态：原对象 / null / 截剩的新对象）。
+   * 多个回退点取最早的：列表里每次回退的截段都还排在当前任务后面，重说的轮排得更后、进不了
+   * 这份段，所以段里 ≥ 最早回退点的轮都已撤回。 */
+  private cutByPendingRevert(episode: OpenEpisode): OpenEpisode | null {
+    const list = this.pendingReverts.get(episode.sessionId);
+    if (list === undefined || list.length === 0) return episode;
+    return truncateEpisode(episode, Math.min(...list));
   }
 
   /** 回退的事件段那一半（队列里跑）：开段读一个文件，待提取段扫 pending/。 */
@@ -1104,9 +1139,11 @@ export class MemoryServiceCore {
       this.log("[memory] 有待提取的事件段，但没有家务活模型——留在盘上等模型配上");
       return;
     }
-    const episode = await store.loadPending(episodeId);
-    if (episode === null) return;
-    const pub = toMemoryEpisode(episode);
+    const loaded = await store.loadPending(episodeId);
+    if (loaded === null) return;
+    // 回退可能在提取途中把它换成截短的那份（见下面的 cutByPendingRevert）
+    let episode: OpenEpisode = loaded;
+    let pub = toMemoryEpisode(episode);
     // 全提完的段再被扫到（归档后、删文件前被杀的窗口）：补归档 + 删文件。
     // 归档可能重复一行（log 只追加）——UI 按 episodeId 读时去重，无害；
     // 危险的是重复提取落条目，那由逐类记账拦住
@@ -1116,24 +1153,44 @@ export class MemoryServiceCore {
       this.onChanged(); // 整理结束：pending 清空、段归档
       return;
     }
-    const episodeText = episode.turns
-      .map((turn) => `${turn.userText}\n${turn.assistantText}`)
-      .join("\n");
     for (const type of EXTRACT_TYPES) {
       if (episode.extracted[type]) continue;
-      const pool = [...(await entries.listScope(episode.scopeId)), ...(await entries.listUser())];
-      // agent 在这段里当场改写过的条目进提示词：同一件事别再写一遍
-      const recorded = agentRecordedIn(pool, pub);
+      // 一类一次调用；调用中途到达回退 = 这次输出作废，按截后的轮重来（每次重来段都严格变短，有界）
+      let raw: string | null = null;
       let candidates: MemoryEntry[] | undefined;
-      if (type === "preference") {
-        candidates = preferenceCandidates(pool, episodeText);
+      for (;;) {
+        // 回退在这份段读出之后到达（截段还排在队列后面）：先按回退截掉，被撤回的轮不进提示词
+        const cut = this.cutByPendingRevert(episode);
+        if (cut === null) {
+          // 整段都被撤回：不提了，丢掉（排队的截段再扫 pending/ 时它已经不在）
+          await store.removePending(episodeId);
+          this.log(`[memory] 段 ${episodeId} 的轮全部随会话回退撤回，不再提取`);
+          this.onChanged();
+          return;
+        }
+        if (cut !== episode) {
+          episode = cut;
+          pub = toMemoryEpisode(episode);
+          await store.savePending(episode);
+        }
+        const pool = [...(await entries.listScope(episode.scopeId)), ...(await entries.listUser())];
+        // agent 在这段里当场改写过的条目进提示词：同一件事别再写一遍
+        const recorded = agentRecordedIn(pool, pub);
+        candidates = undefined;
+        if (type === "preference") {
+          const episodeText = episode.turns.map((turn) => `${turn.userText}\n${turn.assistantText}`).join("\n");
+          candidates = preferenceCandidates(pool, episodeText);
+        }
+        const system =
+          type === "fact" ? FACT_SYSTEM_PROMPT : type === "preference" ? PREFERENCE_SYSTEM_PROMPT : INSIGHT_SYSTEM_PROMPT;
+        raw = await this.callModel(
+          system,
+          buildExtractPrompt({ turns: episode.turns, now: this.now(), candidates, recorded }),
+        );
+        if (raw === null || this.cutByPendingRevert(episode) === episode) break;
+        // 不按草稿的支撑轮过滤留用：模型读过被撤回的话，只引前面轮号的草稿也可能带着它的内容
+        this.log(`[memory] 段 ${episodeId} 的 ${type} 提取调用期间会话回退了，这次输出作废，按截后的轮重提`);
       }
-      const system =
-        type === "fact" ? FACT_SYSTEM_PROMPT : type === "preference" ? PREFERENCE_SYSTEM_PROMPT : INSIGHT_SYSTEM_PROMPT;
-      const raw = await this.callModel(
-        system,
-        buildExtractPrompt({ turns: episode.turns, now: this.now(), candidates, recorded }),
-      );
       if (raw === null) {
         this.log(`[memory] 段 ${episodeId} 的 ${type} 提取调用失败（该类记账不动，下次重试）`);
         continue;

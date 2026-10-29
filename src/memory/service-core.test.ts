@@ -1301,7 +1301,14 @@ test("回退：被撤回轮提取出的记忆停用（不进召回），部分�
   assert.ok(again.some((hit) => hit.entry.id === second.id));
 });
 
-test("回退时提取正在跑：提取随后落下的被撤回轮条目，在排队的第二遍里停用", async () => {
+/** 回退 × 在跑的提取的模型桩：切段按 segments 顺序回；提取调用记下提示词，blockFact 时
+ * 第一次事实调用卡在闸上（模拟分钟级的家务活模型），reply 按提示词决定回什么。 */
+function revertRaceModel(opts: {
+  segments: ("same" | "new")[];
+  blockFact?: boolean;
+  reply?: (system: string, prompt: string) => string;
+}) {
+  const extractCalls: { system: string; prompt: string }[] = [];
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -1310,14 +1317,84 @@ test("回退时提取正在跑：提取随后落下的被撤回轮条目，在�
   const factStarted = new Promise<void>((resolve) => {
     factCalled = resolve;
   });
-  let segments = 0;
+  let segmentAt = 0;
+  let blocked = false;
+  const logs: string[] = [];
   const core = new MemoryServiceCore({
-    callModel: async (system) => {
-      if (system.includes("切分器")) return (segments += 1) === 1 ? "same" : "new";
-      if (!system.includes("事实")) return "[]";
-      factCalled();
-      await gate;
-      return JSON.stringify([{ text: "被撤回的第二轮里的事实", keywords: ["x"], turns: [2] }]);
+    callModel: async (system, prompt) => {
+      if (system.includes("切分器")) return opts.segments[segmentAt++] ?? "same";
+      extractCalls.push({ system, prompt });
+      if (opts.blockFact === true && system.includes("事实") && !blocked) {
+        blocked = true;
+        factCalled();
+        await gate;
+      }
+      return opts.reply?.(system, prompt) ?? "[]";
+    },
+    idleCloseMs: 60_000,
+    log: (message) => logs.push(message),
+  });
+  return { core, extractCalls, release: () => release(), factStarted, logs };
+}
+
+test("回退在提取调用途中到达：那次输出作废、按截后的轮重提；被撤回轮不进后续提示词、不落盘、不触发第二遍停用", async () => {
+  // 模型读到第二轮就写一条「引用第 1 轮」的事实——出处轮号对得上段内，按轮号过滤拦不住它
+  const race = revertRaceModel({
+    segments: ["same", "new"],
+    blockFact: true,
+    reply: (system, prompt) =>
+      system.includes("事实") && prompt.includes("被撤回的第二轮")
+        ? JSON.stringify([{ text: "从被撤回的第二轮里学到的事实", keywords: ["x"], turns: [1] }])
+        : "[]",
+  });
+  const dir = await tempDir();
+  await race.core.init(dir, CHORE);
+  await race.core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await race.core.turnSettled(turnPayload({ turn: 2, at: 2000, userText: "被撤回的第二轮" }));
+  const settling = race.core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "换个话题" }));
+  await race.factStarted; // 提取卡在事实这一类（提示词里还有第二轮）
+  const reverting = race.core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
+  race.release();
+  await settling;
+  await reverting;
+  // 卡住的那次 + 重提的事实 + 偏好 + 经验
+  assert.equal(race.extractCalls.length, 4);
+  assert.ok(race.extractCalls[0]!.prompt.includes("被撤回的第二轮"));
+  for (const call of race.extractCalls.slice(1)) {
+    assert.ok(!call.prompt.includes("被撤回的第二轮"), `回退之后的提示词不该还有第二轮：${call.system.slice(0, 20)}`);
+    assert.ok(call.prompt.includes('<turn n="1"'));
+  }
+  assert.equal((await allEntries(dir)).size, 0, "作废的那次输出不该落盘");
+  assert.ok(!race.logs.some((line) => line.includes("停用")), `不该有停用：${race.logs.join(" | ")}`);
+  // 归档的段只剩第 1 轮
+  const log = await readFile(join(dir, "episodes", "log.jsonl"), "utf8");
+  const archived = JSON.parse(log.trim().split("\n")[0]!) as { turns: { turn: number }[]; toTurn: number };
+  assert.deepEqual(archived.turns.map((turn) => turn.turn), [1]);
+  assert.equal(archived.toTurn, 1);
+});
+
+test("回退在提取开始前到达（切段调用还在跑）：三类提示词都没有被撤回的轮，不多调模型", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let classifying: () => void = () => undefined;
+  const classifyStarted = new Promise<void>((resolve) => {
+    classifying = resolve;
+  });
+  let segments = 0;
+  const extractCalls: string[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async (system, prompt) => {
+      if (system.includes("切分器")) {
+        segments += 1;
+        if (segments === 1) return "same";
+        classifying();
+        await gate;
+        return "new";
+      }
+      extractCalls.push(prompt);
+      return "[]";
     },
     idleCloseMs: 60_000,
     log: () => undefined,
@@ -1325,12 +1402,90 @@ test("回退时提取正在跑：提取随后落下的被撤回轮条目，在�
   const dir = await tempDir();
   await core.init(dir, CHORE);
   await core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
-  await core.turnSettled(turnPayload({ turn: 2, at: 2000 }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000, userText: "被撤回的第二轮" }));
   const settling = core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "换个话题" }));
-  await factStarted; // 提取卡在事实这一类
+  await classifyStarted;
   const reverting = core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
   release();
   await settling;
+  await reverting;
+  assert.equal(extractCalls.length, 3);
+  for (const prompt of extractCalls) assert.ok(!prompt.includes("被撤回的第二轮"));
+});
+
+test("回退撤回了提取中段的全部轮：不再调模型，段丢掉不归档，不落条目", async () => {
+  const race = revertRaceModel({
+    segments: ["same", "new"],
+    blockFact: true,
+    reply: (system) =>
+      system.includes("事实") ? JSON.stringify([{ text: "整段撤回前的事实", keywords: ["x"], turns: [1] }]) : "[]",
+  });
+  const dir = await tempDir();
+  await race.core.init(dir, CHORE);
+  await race.core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await race.core.turnSettled(turnPayload({ turn: 2, at: 2000 }));
+  const settling = race.core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "换个话题" }));
+  await race.factStarted;
+  const reverting = race.core.sessionReverted({ sessionId: "s1", fromTurn: 1 });
+  race.release();
+  await settling;
+  await reverting;
+  assert.equal(race.extractCalls.length, 1); // 只有卡住的那一次
+  assert.ok(!race.logs.some((line) => line.includes("失败") || line.includes("出错")), `不该走到出错兜底：${race.logs.join(" | ")}`);
+  assert.equal((await allEntries(dir)).size, 0);
+  assert.deepEqual(await new EpisodeStore(dir).listPending(), []);
+  const archivedLog = await readFile(join(dir, "episodes", "log.jsonl"), "utf8").catch(() => "");
+  assert.equal(archivedLog.trim(), "");
+});
+
+test("两次回退之间重说的轮：第一次截段之后的提取只按第二次回退截（不被第一次的回退点误截，也不漏截）", async () => {
+  // 切段：2 并、3 切（提取 [1,2] 卡住）；回退到 2 后 2' 开新段，3' 并、4' 切（提取 [2',3']）
+  const race = revertRaceModel({ segments: ["same", "new", "same", "new"], blockFact: true });
+  const dir = await tempDir();
+  await race.core.init(dir, CHORE);
+  await race.core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await race.core.turnSettled(turnPayload({ turn: 2, at: 2000, userText: "旧的第二轮" }));
+  const pending: Promise<void>[] = [race.core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "旧的第三轮" }))];
+  await race.factStarted;
+  pending.push(race.core.sessionReverted({ sessionId: "s1", fromTurn: 2 }));
+  pending.push(race.core.turnSettled(turnPayload({ turn: 2, at: 4000, userText: "重说的第二轮" })));
+  pending.push(race.core.turnSettled(turnPayload({ turn: 3, at: 5000, userText: "重说的第三轮" })));
+  pending.push(race.core.turnSettled(turnPayload({ turn: 4, at: 6000, userText: "第四轮换话题" })));
+  pending.push(race.core.sessionReverted({ sessionId: "s1", fromTurn: 3 }));
+  race.release();
+  await Promise.all(pending);
+  const second = race.extractCalls.filter((call) => call.prompt.includes("重说的第二轮"));
+  assert.equal(second.length, 3, "重说的段照常提取三类（没被第一次回退的轮号 2 截空）");
+  for (const call of second) assert.ok(!call.prompt.includes("重说的第三轮"), "第二次回退撤回的第 3 轮不该进提示词");
+  for (const call of race.extractCalls.slice(1)) {
+    assert.ok(!call.prompt.includes("旧的第二轮") && !call.prompt.includes("旧的第三轮"));
+  }
+});
+
+test("回退在提取调用回来之后、落盘之前到达：落下的被撤回轮条目照样停用（第一遍赶上就第一遍，赶不上靠排队的第二遍兜底）", async () => {
+  let revert: () => Promise<void> = async () => undefined;
+  let reverting: Promise<void> | null = null;
+  let segments = 0;
+  const core = new MemoryServiceCore({
+    callModel: async (system) => {
+      if (system.includes("切分器")) return (segments += 1) === 1 ? "same" : "new";
+      if (!system.includes("事实")) return "[]";
+      // 调用回来后紧接着的下一拍（提取已过了调用后的检查、正在落盘）到达回退
+      setImmediate(() => {
+        reverting = revert();
+      });
+      return JSON.stringify([{ text: "被撤回的第二轮里的事实", keywords: ["x"], turns: [2] }]);
+    },
+    idleCloseMs: 60_000,
+    log: () => undefined,
+  });
+  revert = () => core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000 }));
+  await core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "换个话题" }));
+  assert.ok(reverting !== null);
   await reverting;
   const entry = (await allEntries(dir)).get("被撤回的第二轮里的事实");
   assert.equal(entry?.status, "muted");
