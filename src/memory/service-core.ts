@@ -1,6 +1,7 @@
 /**
  * 记忆服务核心 —— 命令（init / turnSettled / recall）到存储与模型调用的编排。
- * **纯模块**：不 import electron，模型调用与时间注入，可被 `node --test` 直接测
+ * **纯模块**：不
+import electron，模型调用与时间注入，可被 `node --test` 直接测
  * （host-core.ts 的先例同款；真的 fork 与 parentPort 在 runtime.ts 薄壳里）。
  *
  * 失败纪律：记忆是易耗品，任何失败静默跳过 + 日志，不冒错给主进程——turnSettled
@@ -10,7 +11,18 @@
  * 避免同会话文件竞态、也压住家务活模型的并发量。recall **不进队列**——只读文件，
  * 毫秒级，站在门外等着就行。
  */
-import type { MemoryChoreModel, MemoryEpisodeTurn, MemoryHit, MemoryMutation, MemoryMutationOutcome } from "../shared/memory.ts";
+import { join } from "node:path";
+import type {
+  MemoryBackfillProgress,
+  MemoryChoreModel,
+  MemoryDownloadProgress,
+  MemoryEntry,
+  MemoryEpisodeTurn,
+  MemoryHit,
+  MemoryMutation,
+  MemoryMutationOutcome,
+  MemoryVectorServiceConfig,
+} from "../shared/memory.ts";
 import { MEMORY_USER_TOKEN, memoryTurnSnapshot } from "../shared/memory.ts";
 import {
   admissionOf,
@@ -33,7 +45,10 @@ import {
   PREFERENCE_SYSTEM_PROMPT,
 } from "./extract.ts";
 import { recallHits } from "./retrieve.ts";
-import type { MemoryEntry } from "../shared/memory.ts";
+import { EmbedServerCore, type EmbedServerOptions } from "./embed-server.ts";
+import { VectorStore, dotProductRank } from "./vector-store.ts";
+import { downloadWithFallback, type DownloadFetch } from "./downloader.ts";
+import { fuseRanked } from "./vector-fuse.ts";
 
 /** 模型调用（runtime 薄壳注入真实现：completeSimple；测试注入桩）。null = 调用失败。 */
 export type MemoryCallModel = (system: string, prompt: string) => Promise<string | null>;
@@ -47,6 +62,18 @@ export interface MemoryServiceCoreOptions {
   log?: (message: string, ...args: unknown[]) => void;
   /** 任何写盘后回调一次（runtime 转发 changed 消息给主进程广播） */
   onChanged?: () => void;
+  /** 模型下载进度（runtime 转发 downloadProgress） */
+  onDownloadProgress?: (progress: MemoryDownloadProgress) => void;
+  /** 补算进度（runtime 转发 backfillProgress） */
+  onBackfillProgress?: (progress: MemoryBackfillProgress) => void;
+  /** 向量引擎的原语（spawn / HTTP / 端口 / 下载 fetch），注入可测 */
+  vectorDeps?: {
+    spawn: EmbedServerOptions["spawn"];
+    probe: EmbedServerOptions["probe"];
+    post: EmbedServerOptions["post"];
+    freePort: EmbedServerOptions["freePort"];
+    fetchImpl: DownloadFetch;
+  };
 }
 
 const EXTRACT_TYPES = ["fact", "preference", "insight"] as const;
@@ -57,6 +84,18 @@ export class MemoryServiceCore {
   private readonly idleCloseMs: number;
   private readonly log: (message: string, ...args: unknown[]) => void;
   private readonly onChanged: () => void;
+  private readonly onDownloadProgress: (progress: MemoryDownloadProgress) => void;
+  private readonly onBackfillProgress: (progress: MemoryBackfillProgress) => void;
+  private readonly vectorDeps: NonNullable<MemoryServiceCoreOptions["vectorDeps"]> | null;
+  private embedServer: EmbedServerCore | null = null;
+  private vectors: VectorStore | null = null;
+  private vectorConfig: MemoryVectorServiceConfig | null = null;
+  private onBattery = false;
+  /** 后台补算的状态（null = 没在算也不欠账）；inFlight 防重入 */
+  private backfill: { state: "running" | "deferred-battery"; done: number; total: number } | null = null;
+  private backfillInFlight: Promise<void> | null = null;
+  /** 模型下载（同一时刻最多一个；幂等回执由调用方处理） */
+  private downloadInFlight: Promise<void> | null = null;
   private entries: MemoryEntryStore | null = null;
   private episodes: EpisodeStore | null = null;
   private chore: MemoryChoreModel | null = null;
@@ -76,6 +115,9 @@ export class MemoryServiceCore {
     this.idleCloseMs = options.idleCloseMs ?? EPISODE_IDLE_CLOSE_MS;
     this.log = options.log ?? ((message, ...args) => console.log(message, ...args));
     this.onChanged = options.onChanged ?? (() => undefined);
+    this.onDownloadProgress = options.onDownloadProgress ?? (() => undefined);
+    this.onBackfillProgress = options.onBackfillProgress ?? (() => undefined);
+    this.vectorDeps = options.vectorDeps ?? null;
   }
 
   /**
@@ -87,6 +129,32 @@ export class MemoryServiceCore {
   async init(dir: string, chore?: MemoryChoreModel): Promise<void> {
     this.entries = new MemoryEntryStore(dir);
     this.episodes = new EpisodeStore(dir);
+    this.vectors = new VectorStore(join(dir, "vector"));
+    if (this.vectorDeps !== null) {
+      this.embedServer = new EmbedServerCore({
+        resolve: () => {
+          const config = this.vectorConfig;
+          if (config === null) return null;
+          return {
+            binaryPath: config.binaryPath,
+            model: {
+              id: config.model.id,
+              modelPath: config.ggufPath,
+              pooling: config.model.pooling,
+              ctx: config.model.ctx,
+              queryPrefix: config.model.queryPrefix,
+              docPrefix: config.model.docPrefix,
+              dims: config.model.dims,
+            },
+          };
+        },
+        spawn: this.vectorDeps.spawn,
+        probe: this.vectorDeps.probe,
+        post: this.vectorDeps.post,
+        freePort: this.vectorDeps.freePort,
+        log: this.log,
+      });
+    }
     if (chore !== undefined) this.chore = chore;
     const store = this.episodes;
     const { open, pending } = await store.listAll();
@@ -160,7 +228,9 @@ export class MemoryServiceCore {
         this.entries.listUser(),
         this.entries.listScope(input.scopeId),
       ]);
-      const hits = recallHits({ user, scope }, input.query, this.now());
+      const lexical = recallHits({ user, scope }, input.query, this.now());
+      const fused = await this.fuseWithVector(lexical, { user, scope }, input.scopeId, input.query);
+      const hits = fused;
       await this.entries.recordInjection({
         sessionId: input.sessionId,
         turn: input.turn,
@@ -191,7 +261,17 @@ export class MemoryServiceCore {
       const entries = this.entries;
       if (entries === null) return { ok: false, error: "记忆服务还没初始化" };
       const outcome = await this.applyMutation(entries, mutation);
-      if (outcome.ok) this.onChanged();
+      if (outcome.ok) {
+        this.onChanged();
+        if ((mutation.op === "edit" || mutation.op === "remove") && outcome.entry !== null) {
+          // 正文变了 / 条目删了：行删掉（edit 由补算重算，remove 就此消失）
+          await this.vectors?.remove(mutation.token, [mutation.entryId]).catch(() => undefined);
+          if (mutation.op === "edit") this.scheduleVectorize(mutation.token);
+        }
+        if (mutation.op === "addManual" && outcome.entry !== null) {
+          this.scheduleVectorize(mutation.token);
+        }
+      }
       return outcome;
     } catch (cause) {
       this.log("[memory] 记忆库写操作出错", mutation.op, cause);
@@ -377,6 +457,218 @@ export class MemoryServiceCore {
     return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
   }
 
+  /* ---------- 向量召回 ---------- */
+
+  /**
+   * 召回融合：向量可用时「加权 RRF（向量 3 : 字面 1，k=60）」——选型报告实测
+   * 等权 RRF 会把强向量模型拖下来（gemma 0.43→0.36），对强向量要按臂强弱加权；
+   * 真实记忆条目上的小评测数字见融合 commit 正文。向量冷启动（llama-server
+   * 没在跑）不等待：本轮照词法，后台拉起，下一轮生效——轮前路径的延迟预算
+   * （主进程 4 秒转发超时）不陪模型加载。
+   */
+  private async fuseWithVector(
+    lexical: MemoryHit[],
+    layers: { user: readonly MemoryEntry[]; scope: readonly MemoryEntry[] },
+    scopeId: string,
+    query: string,
+  ): Promise<MemoryHit[]> {
+    const config = this.vectorConfig;
+    const server = this.embedServer;
+    const vectors = this.vectors;
+    if (config === null || server === null || vectors === null || this.entries === null) return lexical;
+    if (!server.isRunning()) {
+      void server.ready(); // 后台热身，下一轮用得上
+      return lexical;
+    }
+    try {
+      const embedded = await server.embed([config.model.queryPrefix + query]);
+      const queryVector = embedded === null ? null : (embedded[0] ?? null);
+      if (queryVector === null || queryVector.length !== config.model.dims) return lexical;
+      const manifest = await vectors.manifest();
+      if (manifest === null || manifest.model !== config.model.id) return lexical;
+      const scopeToken = this.entries.tokenOf(scopeId);
+      const [userVectors, scopeVectors] = await Promise.all([
+        vectors.load(MEMORY_USER_TOKEN, config.model.dims).catch(() => null),
+        vectors.load(scopeToken, config.model.dims).catch(() => null),
+      ]);
+      const vectorRanked: { id: string; score: number }[] = [];
+      if (userVectors !== null) vectorRanked.push(...dotProductRank(queryVector, userVectors, 50));
+      if (scopeVectors !== null) vectorRanked.push(...dotProductRank(queryVector, scopeVectors, 50));
+      if (vectorRanked.length === 0) return lexical;
+      const byId = new Map([...layers.user, ...layers.scope].map((entry) => [entry.id, entry]));
+      return fuseRanked(vectorRanked, lexical, byId);
+    } catch (cause) {
+      this.log("[memory] 向量融合失败（本轮退词法）", cause);
+      return lexical;
+    }
+  }
+
+  /** 设置变了：null = 关（停 llama-server、挂起补算）；换模型 = 清库重算 + 补算。 */
+  setVectorConfig(config: MemoryVectorServiceConfig | null): void {
+    const previous = this.vectorConfig?.model.id ?? null;
+    this.vectorConfig = config;
+    if (config === null) {
+      this.embedServer?.stop();
+      this.backfill = null;
+      return;
+    }
+    if (previous !== config.model.id) {
+      // 换模型：旧维度对不上新模型，整库清掉重算（向量只是缓存）
+      void this.vectors
+        ?.reset(config.model.id, config.model.dims, this.now())
+        .then(() => this.scheduleVectorize("all"))
+        .catch((cause: unknown) => this.log("[memory] 向量库重置失败", cause));
+      return;
+    }
+    this.scheduleVectorize("all");
+  }
+
+  /** 电池状态（主进程 powerMonitor 转发）：用电池时挂起批量补算，回电源续跑。 */
+  setPower(onBattery: boolean): void {
+    const wasDeferred = this.backfill?.state === "deferred-battery";
+    this.onBattery = onBattery;
+    if (!onBattery && wasDeferred) this.scheduleVectorize("all");
+  }
+
+  /** 服务运行态（设置页 vectorState 用）。 */
+  async vectorState(): Promise<{
+    llamaRunning: boolean;
+    backfill: { state: "running" | "deferred-battery"; done: number; total: number } | null;
+    vectors: { model: string; dims: number; entries: number } | null;
+  }> {
+    const manifest = (await this.vectors?.manifest()) ?? null;
+    let counted = 0;
+    if (this.vectors !== null && this.entries !== null) {
+      for (const layer of await this.entries.listLayers()) {
+        counted += await this.vectors.count(layer.token).catch(() => 0);
+      }
+    }
+    return {
+      llamaRunning: this.embedServer?.isRunning() ?? false,
+      backfill: this.backfill,
+      vectors: manifest === null ? null : { model: manifest.model, dims: manifest.dims, entries: counted },
+    };
+  }
+
+  /** 下载模型文件（同一时刻一个；进度经 onDownloadProgress 推）。 */
+  startModelDownload(input: {
+    requestId: string;
+    sources: readonly string[];
+    targetPath: string;
+    sha256: string;
+    sizeBytes: number;
+  }): void {
+    if (this.downloadInFlight !== null || this.vectorDeps === null) return;
+    this.downloadInFlight = downloadWithFallback({
+      sources: input.sources,
+      targetPath: input.targetPath,
+      sha256: input.sha256,
+      sizeBytes: input.sizeBytes,
+      fetchImpl: this.vectorDeps.fetchImpl,
+      onProgress: (event) =>
+        this.onDownloadProgress({
+          requestId: input.requestId,
+          phase: event.phase,
+          source: event.source,
+          received: event.received,
+          total: event.total,
+          ...(event.error !== undefined ? { error: event.error } : null),
+        }),
+    })
+      .then(() => undefined)
+      .catch((cause: unknown) => this.log("[memory] 模型下载抛错", cause))
+      .finally(() => {
+        this.downloadInFlight = null;
+      });
+  }
+
+  /**
+   * 补算排程：token = 某层或 "all"。合并去重由 backfillInFlight 保证（跑着就
+   * 不重入；新一轮排程在当前轮结束后自然覆盖——「all」每轮全量对账缺失）。
+   * 用电池且设置了推迟 → 记 deferred-battery 挂起，setPower(false) 续跑。
+   */
+  private scheduleVectorize(token: string): void {
+    if (this.vectorConfig === null || this.vectors === null) return;
+    if (this.onBattery && this.vectorConfig.deferOnBattery) {
+      // 已在跑的让它在下一批检查点自行挂起
+      if (this.backfill === null) {
+        this.backfill = { state: "deferred-battery", done: 0, total: 0 };
+      }
+      return;
+    }
+    if (this.backfillInFlight !== null) return;
+    this.backfillInFlight = this.runBackfill(token).finally(() => {
+      this.backfillInFlight = null;
+    });
+  }
+
+  /** 批量补算主体：对账缺失 → 分批嵌入（bs=32）→ upsert，批间查电池与配置。 */
+  private async runBackfill(trigger: string): Promise<void> {
+    const config = this.vectorConfig;
+    const entries = this.entries;
+    const vectors = this.vectors;
+    const server = this.embedServer;
+    if (config === null || entries === null || vectors === null || server === null) return;
+    // manifest 对账：没算过（首次启用）先写清单
+    const manifest = await vectors.manifest();
+    if (manifest === null) {
+      await vectors.reset(config.model.id, config.model.dims, this.now());
+    } else if (manifest.model !== config.model.id) {
+      await vectors.reset(config.model.id, config.model.dims, this.now());
+    }
+    const layers = trigger === "all" ? await entries.listLayers() : [{ token: trigger, count: 0 }];
+    const todo: { token: string; missing: import("../shared/memory.ts").MemoryEntry[] }[] = [];
+    let total = 0;
+    for (const layer of layers) {
+      const list = await entries.listByToken(layer.token).catch(() => []);
+      const known = new Set((await vectors.load(layer.token, config.model.dims).catch(() => null))?.ids ?? []);
+      const missing = list.filter((entry) => !known.has(entry.id) && (entry.status ?? "active") !== "muted");
+      if (missing.length > 0) {
+        todo.push({ token: layer.token, missing });
+        total += missing.length;
+      }
+    }
+    if (total === 0) {
+      this.backfill = null;
+      this.onBackfillProgress({ state: "idle", done: 0, total: 0 });
+      return;
+    }
+    let done = 0;
+    this.backfill = { state: "running", done: 0, total };
+    this.onBackfillProgress({ state: "running", done: 0, total });
+    for (const { token, missing } of todo) {
+      for (let at = 0; at < missing.length; at += 32) {
+        // 检查点：配置被关 / 换了模型 → 本轮作废（下一轮排程重新对账）
+        if (this.vectorConfig === null || this.vectorConfig.model.id !== config.model.id) return;
+        // 检查点：电池 + 推迟 → 挂起
+        if (this.onBattery && config.deferOnBattery) {
+          this.backfill = { state: "deferred-battery", done, total };
+          this.onBackfillProgress({ state: "deferred-battery", done, total });
+          return;
+        }
+        const batch = missing.slice(at, at + 32);
+        const texts = batch.map((entry) => (config.model.docPrefix ?? "") + entry.text);
+        const embedded = await server.embed(texts);
+        if (embedded === null) {
+          this.log("[memory] 补算的嵌入调用失败（挂起，下次触发续跑）");
+          this.backfill = { state: "deferred-battery", done, total };
+          return;
+        }
+        for (let index = 0; index < batch.length; index += 1) {
+          const vector = embedded[index];
+          if (vector === undefined) continue;
+          await vectors.upsert(token, batch[index]!.id, vector, config.model.dims);
+        }
+        done += batch.length;
+        this.backfill = { state: "running", done, total };
+        this.onBackfillProgress({ state: "running", done, total });
+      }
+    }
+    this.backfill = null;
+    this.onBackfillProgress({ state: "idle", done: total, total });
+    this.onChanged();
+  }
+
   /* ---------- 锁 ---------- */
 
   /** 单 token 互斥：同层操作串行，不同层并行。 */
@@ -532,6 +824,7 @@ export class MemoryServiceCore {
       const scopeToken = entries.tokenOf(episode.scopeId);
       const written = await this.withLock(scopeToken, () => entries.appendScope(episode.scopeId, pub, drafts));
       this.onChanged();
+      this.scheduleVectorize(scopeToken);
       if (written.length > 0) {
         this.log(
           `[memory] 段 ${episodeId} 提取出 ${written.length} 条${type === "insight" ? "经验" : type === "fact" ? "事实" : "偏好"}`,

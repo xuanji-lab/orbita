@@ -408,3 +408,202 @@ test("changed：提取落条目 / 事件段收尾也通知（不只是 mutate）
   // split 收尾（1）+ 三类提取各落一次（3）+ 归档（1）
   assert.equal(changes.length - before >= 4, true);
 });
+
+/* ---------- 向量召回（setVectorConfig / 补算 / 融合 / 电池推迟 / 下载） ---------- */
+
+import type { MemoryDownloadProgress, MemoryEpisode } from "../shared/memory.ts";
+
+/** 向量测试用的段夹具（条目落盘要带出处）。 */
+function vectorEpisode(): MemoryEpisode {
+  return {
+    episodeId: "ep_vec",
+    sessionId: "s1",
+    scopeId: "ws-1",
+    fromTurn: 1,
+    toTurn: 1,
+    openedAt: 1,
+    lastAt: 1,
+    turns: [{ turn: 1, at: 1, userText: "u", assistantText: "a" }],
+  };
+}
+
+const VECTOR_MODEL = {
+  id: "embeddinggemma-2" as const,
+  repo: "ggml-org/embeddinggemma-2-GGUF",
+  file: "embeddinggemma-2-Q8_0.gguf",
+  sha256: "x",
+  sizeBytes: 1,
+  pooling: "mean" as const,
+  ctx: 8192,
+  queryPrefix: "task: search result | query: ",
+  docPrefix: "title: none | text: ",
+  dims: 4,
+};
+
+/** 向量原语桩：embed 按文本哈希出确定向量（同文本同向量），可探查调用参数。 */
+function vectorStub() {
+  const embeddedTexts: string[] = [];
+  let running = true;
+  return {
+    embeddedTexts,
+    setRunning(value: boolean) {
+      running = value;
+    },
+    deps: {
+      spawn: () => ({
+        on: () => undefined,
+        kill: () => undefined,
+      }),
+      probe: async () => true,
+      post: async (_port: number, texts: readonly string[]) =>
+        texts.map((text) => {
+          embeddedTexts.push(text);
+          const seed = Array.from(text).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+          return [seed % 7 + 1, seed % 5, seed % 3, 1];
+        }),
+      freePort: async () => 8999,
+      fetchImpl: async () => ({ ok: false, status: 0, body: null }),
+    },
+    isRunning: () => running,
+  };
+}
+
+function vectorCore(dir: string, stub: ReturnType<typeof vectorStub>, extra: { onBackfillProgress?: (p: { state: string; done: number; total: number }) => void } = {}) {
+  const progress: MemoryDownloadProgress[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => "[]",
+    idleCloseMs: 60_000,
+    log: () => undefined,
+    onChanged: () => undefined,
+    onDownloadProgress: (p) => progress.push(p),
+    onBackfillProgress: extra.onBackfillProgress ?? (() => undefined),
+    vectorDeps: stub.deps,
+  });
+  void dir;
+  return { core, progress };
+}
+
+test("setVectorConfig：补算给已有条目算向量（带文档前缀），muted 不算", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  // 先落两条条目（一条 muted）
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(), [
+    { type: "fact", text: "orbita 用 bun", keywords: [], turns: [1] },
+    { type: "fact", text: "被关掉的", keywords: [], turns: [1] },
+  ]);
+  const all = await entries.listByToken(entries.tokenOf("ws-1"));
+  await entries.updateEntry(entries.tokenOf("ws-1"), all[1]!.id, (current) => ({ ...current, status: "muted" }));
+
+  core.setVectorConfig({
+    model: VECTOR_MODEL,
+    ggufPath: "/models/m.gguf",
+    binaryPath: "/bin/llama-server",
+    idleUnloadMs: 300_000,
+    deferOnBattery: true,
+  });
+  // 补算是异步的：等它收尾（轮询 backfill 状态回 null）
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const state = await core.vectorState();
+    if (state.backfill === null && state.vectors !== null) break;
+  }
+  const state = await core.vectorState();
+  assert.equal(state.vectors?.entries, 1); // muted 的不算
+  assert.equal(state.llamaRunning, true); // probe 桩恒真
+  assert.ok(stub.embeddedTexts.some((text) => text.startsWith(VECTOR_MODEL.docPrefix)));
+});
+
+test("recall 融合：向量命中但词法没命中的条目也能进结果", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  // 两条条目：一条词法可命中（关键词），一条只有向量能对上（embed 桩按文本出向量，
+  // query 与条目同文本 → 同向量 → 点积最大）
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(), [
+    { type: "fact", text: "语义记忆条目", keywords: ["完全无关的关键词"], turns: [1] },
+  ]);
+  core.setVectorConfig({
+    model: VECTOR_MODEL,
+    ggufPath: "/models/m.gguf",
+    binaryPath: "/bin/llama-server",
+    idleUnloadMs: 300_000,
+    deferOnBattery: true,
+  });
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).backfill === null) break;
+  }
+  // query 与条目文本一致：embed 桩同文本同向量 → 向量第一名；词法零命中
+  const hits = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "语义记忆条目" });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.entry.text, "语义记忆条目");
+});
+
+test("电池推迟：onBattery 时挂起，回电源续跑", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const states: string[] = [];
+  const { core } = vectorCore(dir, stub, { onBackfillProgress: (p) => states.push(p.state) });
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(), [{ type: "fact", text: "等电池的条目", keywords: [], turns: [1] }]);
+  core.setPower(true);
+  core.setVectorConfig({
+    model: VECTOR_MODEL,
+    ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal((await core.vectorState()).backfill?.state, "deferred-battery");
+  core.setPower(false); // 回电源 → 续跑
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).backfill === null) break;
+  }
+  assert.equal((await core.vectorState()).vectors?.entries, 1);
+  assert.ok(states.includes("running"));
+});
+
+test("mutate edit：向量行删掉后由补算重算（换文本换向量）", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  const added = await core.mutate({ op: "addManual", token: "user", type: "fact", text: "改之前的文本" });
+  const id = added.ok && added.entry ? added.entry.id : "";
+  core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).backfill === null) break;
+  }
+  assert.equal((await core.vectorState()).vectors?.entries, 1);
+  await core.mutate({ op: "edit", token: "user", entryId: id, text: "改之后的文本" });
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).backfill === null) break;
+  }
+  assert.ok(stub.embeddedTexts.includes(VECTOR_MODEL.docPrefix + "改之后的文本"));
+});
+
+test("startModelDownload：进度事件流出（桩源全挂 → failed 事件）", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const { core, progress } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  core.startModelDownload({
+    requestId: "req-1",
+    sources: ["https://down.example/m.gguf"],
+    targetPath: join(dir, "vector", "m.gguf"),
+    sha256: "0".repeat(64),
+    sizeBytes: 10,
+  });
+  for (let i = 0; i < 20; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (progress.some((p) => p.phase === "failed")) break;
+  }
+  assert.ok(progress.some((p) => p.phase === "failed"));
+});

@@ -18,6 +18,8 @@ import type {
   MemoryServiceMessage,
 } from "../shared/memory.ts";
 import { MemoryServiceCore, type MemoryCallModel } from "./service-core.ts";
+import { spawn as spawnProcess, type ChildProcess } from "node:child_process";
+import { createServer } from "node:net";
 /** Electron 的 utility 进程 parentPort 的结构面（agent runtime 的 ParentPortLike 同款）。 */
 type ParentPortLike = {
   on(event: "message", listener: (event: { data: unknown }) => void): void;
@@ -94,6 +96,62 @@ const core = new MemoryServiceCore({
   log: (message, ...args) => console.log(message, ...args),
   // 任何写盘后告诉主进程（它广播 memoryChanged 让界面重拉）
   onChanged: () => post({ type: "changed" }),
+  onDownloadProgress: (progress) => post({ type: "downloadProgress", progress }),
+  onBackfillProgress: (progress) => post({ type: "backfillProgress", progress }),
+  vectorDeps: {
+    // llama-server 子进程：detached 不需要（utility 进程退出时把它 kill 掉更干净，
+    // EmbedServerCore.stop 兜底）；stdio 静默（日志我们自己记关键行）
+    spawn: (args) => {
+      const child = spawnProcess(args[0]!, args.slice(1), { stdio: ["ignore", "ignore", "pipe"] });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        const line = chunk.toString().trim();
+        if (line !== "") console.error("[llama-server]", line.slice(0, 300));
+      });
+      return child satisfies import("./embed-server.ts").EmbedServerChild as ChildProcess;
+    },
+    probe: async (port) => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
+        return response.ok;
+      } catch {
+        return false;
+      }
+    },
+    post: async (port, texts) => {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: texts }),
+        signal: AbortSignal.timeout(300_000),
+      });
+      if (!response.ok) throw new Error(`embeddings HTTP ${response.status}`);
+      const payload = (await response.json()) as { data?: { index: number; embedding: number[] }[] };
+      const rows = payload.data ?? [];
+      rows.sort((a, b) => a.index - b.index);
+      return rows.map((row) => row.embedding);
+    },
+    // 先占一个空闲端口再交给 llama-server（listen 0 → 拿到即关；窗口极小的竞态可接受）
+    freePort: () =>
+      new Promise((resolve, reject) => {
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          const port = typeof address === "object" && address !== null ? address.port : 0;
+          server.close(() => (port > 0 ? resolve(port) : reject(new Error("没拿到空闲端口"))));
+        });
+        server.on("error", reject);
+      }),
+    // undici 的 Response 与下载器的结构面之间架一层（getReader 的返回结构兼容）
+    fetchImpl: async (url, signal) => {
+      const response = await fetch(url, signal === undefined ? {} : { signal });
+      const body = response.body;
+      return {
+        ok: response.ok,
+        status: response.status,
+        body: body === null ? null : { getReader: () => body.getReader() },
+      };
+    },
+  },
 });
 
 parentPort.on("message", (event: { data: unknown }) => {
@@ -117,6 +175,35 @@ parentPort.on("message", (event: { data: unknown }) => {
         console.error("[memory] recall 路径抛错（回空命中）", cause);
         post({ type: "recallResult", requestId, hits: [] });
       });
+    return;
+  }
+  if (command.type === "setVectorConfig") {
+    core.setVectorConfig(command.config);
+    return;
+  }
+  if (command.type === "setPower") {
+    core.setPower(command.onBattery);
+    return;
+  }
+  if (command.type === "vectorState") {
+    const { requestId } = command;
+    void core
+      .vectorState()
+      .then((state) => post({ type: "vectorStateResult", requestId, ...state }))
+      .catch((cause: unknown) => {
+        console.error("[memory] vectorState 抛错", cause);
+        post({
+          type: "vectorStateResult",
+          requestId,
+          llamaRunning: false,
+          backfill: null,
+          vectors: null,
+        });
+      });
+    return;
+  }
+  if (command.type === "startModelDownload") {
+    core.startModelDownload(command);
     return;
   }
   if (command.type === "mutate") {
