@@ -3,7 +3,7 @@ import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { RowHoverAction } from "../../shell/RowHoverAction";
-import { PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelIconButton, RightPanelFrame } from "../../shell/RightPanel";
 import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
@@ -273,8 +273,9 @@ export function ReviewPanel(props: {
   return (
     <RightPanelFrame
       header={
-        <div className="cap-review-head">
-          <PanelTitle icon="file-diff" title={t.review.title} className="cap-slot-left" />
+        <div className="cap-review-head tabs-as-title">
+          {/* 页签就是标题（2026-10-30）：「改动 / 摘抄 / 记忆」三个页签加标题在 320 宽的胶囊里
+              放不下——标题叠在页签底下、或把「记忆」挤出去。页签本身已经说了这是哪个面板 */}
           {/* 「改动 / 摘抄」页签组：两个 1fr 轨道等宽 → 构造性落在胶囊中心
               （2026-10-19 两轮复测：grow 对称偏左、绝对居中压下拉，都不对）。
               放不下时轨道压缩，页签组顺排 + 横滚渐隐退化 */}
