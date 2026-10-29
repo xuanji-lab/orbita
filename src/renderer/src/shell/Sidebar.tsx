@@ -988,7 +988,8 @@ function WorkspaceGroup(props: {
       </div>
 
       {!props.folded && (
-        <>
+        // 子项缩进到父项名字下（styles.css 的 .tree-children）：侧栏是索引，层级只能靠缩进读
+        <div className="tree-children">
           {visible.map((meta) => (
             <SessionRow
               key={meta.id}
@@ -1005,7 +1006,7 @@ function WorkspaceGroup(props: {
             onMore={props.onMore}
             onLess={props.onLess}
           />
-        </>
+        </div>
       )}
     </div>
   );
