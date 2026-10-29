@@ -723,6 +723,11 @@ function ChatViewBody(props: {
    */
   onOpenMemoryReview?: () => void;
   /**
+   * 用量环菜单里的「查看上下文」：打开右栏上下文面板。只有主槽拿到它（面板开在主槽
+   * 旁边）；右栏与抽屉里的会话区不传，菜单不出这一项。
+   */
+  onOpenContextPanel?: () => void;
+  /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
    * 会话层——都有长转录、都会滚离底部。实现在本组件里三处共用。
@@ -1191,6 +1196,7 @@ function ChatViewBody(props: {
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
+          onOpenContext={props.onOpenContextPanel ?? null}
           intentToggle={
             intentToggleVisible
               ? { on: intentToggleOn, onToggle: session.setIntentEnabled }
@@ -2206,6 +2212,8 @@ function ComposerBar(props: {
   intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
   /** 用量环浮层里的「标记完成」（见 UsageRing）；null = 不给 */
   markDone: { onSelect: () => void; busy: boolean } | null;
+  /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
+  onOpenContext: (() => void) | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -2464,7 +2472,7 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
-      <UsageRing session={session} markDone={props.markDone} />
+      <UsageRing session={session} markDone={props.markDone} onOpenContext={props.onOpenContext} />
     </>
   );
 }
@@ -2488,6 +2496,8 @@ function UsageRing(props: {
    * 会话生命周期实验开关关着、会话还没落盘、或已经是完成态。
    */
   markDone: { onSelect: () => void; busy: boolean } | null;
+  /** 「查看上下文」：打开右栏上下文面板（分项之后、压缩之前）；null = 不给 */
+  onOpenContext: (() => void) | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -2542,6 +2552,17 @@ function UsageRing(props: {
           } satisfies MenuItem,
         ]
       : []),
+    // 「查看上下文」：分项只报总量，按来源看装了什么去右栏面板
+    ...(props.onOpenContext === null
+      ? []
+      : [
+          {
+            id: "open-context",
+            label: t.contextPanel.open,
+            icon: "layers" as const,
+            onSelect: props.onOpenContext,
+          } satisfies MenuItem,
+        ]),
     // 压过两次就建议收尾：第三次压缩时摘要已是摘要的摘要，不如带着遗留事项换会话
     ...(compactions >= WRAP_UP_AFTER_COMPACTIONS && !confirming
       ? [

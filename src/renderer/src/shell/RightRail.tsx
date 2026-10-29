@@ -36,7 +36,8 @@ export type RightPanelKind =
   | "terminal"
   | "drawer"
   | "subsessions"
-  | "intent";
+  | "intent"
+  | "context";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -120,6 +121,13 @@ export function RightRail(props: {
         label={t.rail.review}
         lit={props.panel === "review"}
         onClick={() => props.onPanel(props.panel === "review" ? null : "review")}
+      />
+      {/* 上下文：智能体此刻装了什么（按来源分组）。紧跟审查——两者都是「看这条会话」 */}
+      <RailEntryButton
+        icon="layers"
+        label={t.rail.context}
+        lit={props.panel === "context"}
+        onClick={() => props.onPanel(props.panel === "context" ? null : "context")}
       />
       <RailEntryButton
         icon="book-open"

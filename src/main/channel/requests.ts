@@ -239,7 +239,14 @@ export async function applyDelegate(
       modelId: resolved.modelId,
       mode: parent.mode,
       thinkingLevel,
-      text: composeChannelPrompt(taskMessage, { id: parent.id, title: parent.title }),
+      // 首条任务信封带上父会话工作台：子会话的重要产出要写到那里（角色指引说了落点
+      // 规矩，路径在这里给）。父的行已不进系统提示词，这个信封是子知道父工作台的
+      // 第一来源；后续每条 reply 信封也会重新带（压缩后仍能找回）。
+      text: composeChannelPrompt(taskMessage, {
+        id: parent.id,
+        title: parent.title,
+        workbench: deps.sessions.workbenchPath(parent.id),
+      }),
     });
   } catch (cause) {
     // 失败回滚：占位、子 meta、通道文件（remove 级联）都不该留下
@@ -250,7 +257,13 @@ export async function applyDelegate(
 
   // 不写父侧标记：父流里 delegate 工具的结果卡就是它的投影（下一刀的 renderer PR 画）。
   // 子侧的 task 标记由 recorder 在子首轮的 user item_started 出现时落（Commit C）。
-  deps.broadcast({ type: "message", parentId: parent.id, childId, message: taskMessage });
+  deps.broadcast({
+    type: "message",
+    parentId: parent.id,
+    childId,
+    message: taskMessage,
+    childWorkbench: deps.sessions.workbenchPath(childId),
+  });
   deps.broadcast({ type: "status", parentId: parent.id, childId, status: channelStatus([taskMessage]) });
 
   return {
@@ -446,7 +459,13 @@ export async function applyStop(deps: ChannelDeps, input: ChannelStopInput): Pro
 // ── 内部：投递给子 + 落账后的通用广播 ──
 
 async function broadcastAfterAppend(deps: ChannelDeps, key: ChannelKey, message: ChannelMessage): Promise<void> {
-  deps.broadcast({ type: "message", parentId: key.parentId, childId: key.childId, message });
+  deps.broadcast({
+    type: "message",
+    parentId: key.parentId,
+    childId: key.childId,
+    message,
+    childWorkbench: deps.sessions.workbenchPath(key.childId),
+  });
   deps.broadcast({
     type: "status",
     parentId: key.parentId,
@@ -468,7 +487,12 @@ async function deliverToChild(
   parent: SessionMeta,
   message: ChannelMessage,
 ): Promise<void> {
-  const text = composeChannelPrompt(message, { id: parent.id, title: parent.title });
+  // 每条父→子信封都重新带父工作台：就算首条任务被压缩掉，路径也会随 reply 回来
+  const text = composeChannelPrompt(message, {
+    id: parent.id,
+    title: parent.title,
+    workbench: deps.sessions.workbenchPath(parent.id),
+  });
   const phase = deps.phases.get(child.id);
   if (phase !== undefined && phase !== "idle") {
     deps.steer(child.id, text, message.delivery);

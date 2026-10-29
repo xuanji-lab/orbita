@@ -588,16 +588,10 @@ export interface TurnDirectories {
    */
   workbench: string;
   /**
-   * 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：父的清单列每个子会话的、
-   * 子的列父的。**只告知不硬拦**（同 attached）：label 是对方会话的标题，path 是对方
-   * 工作台的绝对路径——父子各自工作台独立，但「任务说明在那个目录里」这件事
-   * 对面的模型该知道。
-   *
-   * `sessionId` 是对方会话的 id——`reply_subsession` 要靠它定位子会话。
-   * `relation` 是**对方**相对本会话的角色（子会话清单里父那一项是 `"parent"`、
-   * 父会话清单里每个子是 `"child"`）：runtime 靠它判断本会话是不是子会话，
-   * 决定注册哪些通道工具、讲哪段提示词——仅凭 label/path 分不出「列的是父还是子」
-   * （父有子时 related 也非空）。
+   * 父子会话关系与会话内工作台事实。`relation` 是**对方**相对本会话的角色：
+   * runtime 靠父那一项判断本会话是不是子会话，决定注册哪些通道工具、讲哪段角色指引。
+   * 这些行**不直接进系统提示词**（派出 / 删除子会话会改清单、打断提示缓存）；对方工作台
+   * 改由 delegate 回执与每条通道信封告知模型。只告知不硬拦（同 attached）。
    *
    * 缺席 = 没有父子关系（绝大多数会话）。
    */
@@ -639,7 +633,14 @@ export interface IntentTurnContext {
 /** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
 renderer 不必为更新通道列的状态徽标拉一份全量账本 */
 export type ChannelEvent =
-  | { type: "message"; parentId: string; childId: string; message: ChannelMessage }
+  | {
+      type: "message";
+      parentId: string;
+      childId: string;
+      message: ChannelMessage;
+      /** 子会话工作台的绝对路径：renderer 组子→父信封时随每条回报重新告知模型 */
+      childWorkbench: string;
+    }
   | { type: "status"; parentId: string; childId: string; status: ChannelStatus };
 
 /** 主进程 → agent 进程 */
@@ -1114,6 +1115,34 @@ export type ChannelSendOutcome =
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
+/**
+ * 系统提示注入清单（右栏「上下文」面板「规则与说明」组的数据源）。
+ *
+ * agent 进程在 before_agent_start（每轮首个 LLM 调用前）现场组装、每轮推一次：
+ * 规则文件与技能索引每轮重注入、**永不被压缩**，所以面板只关心「最近一轮注入了什么」，
+ * 不落盘、不补算——未开过轮的会话（纯浏览历史）没有这份清单，面板如实显示未知。
+ *
+ * token 全部是估算（`context-inventory.ts` 的 estimateContextTokens 口径，误差约 ±30%），
+ * 只服务面板的占比展示，不用于计费或压缩判定。
+ */
+export interface ContextRulesInventory {
+  /** pi 的 project_context 规则文件（AGENTS.md / CLAUDE.md 等：全局 agentDir 一份 + cwd 祖先链各一份） */
+  files: { path: string; tokens: number; scope: "global" | "project" }[];
+  /**
+   * pi 基底估算：内置说明 + 工具清单 + 上述规则文件正文 + 技能索引 + cwd 行。
+   * **已包含 files 与 skillsIndex 的量**——组内合计 = baseTokens + segments，
+   * 各行只是它的拆解视图，加总时不要把 base 再加一遍。
+   */
+  baseTokens: number;
+  /** 系统提示里的技能索引（渐进披露：只有 name + description 进上下文，正文按需 read） */
+  skillsIndex: { names: string[]; tokens: number };
+  /**
+   * Orbita 逐轮追加的说明段（权限说明、目录清单、引用规则等）。id 稳定供 UI 配文案，
+   * 本轮为空串的段不出现。pi 基底不在里面（它有自己的 baseTokens）。
+   */
+  segments: { id: string; tokens: number }[];
+}
+
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
@@ -1415,4 +1444,10 @@ export type AgentEvent =
       runId: string;
       turnId: string;
       ask: IntentAskView[];
-    };
+    }
+  /**
+   * 系统提示注入清单（上下文面板「规则与说明」组）：before_agent_start 现场组装、
+   * 每轮推一次。纯 ephemeral，不落盘——规则每轮重注入，最新一份就是当前事实；
+   * 纯浏览的旧会话收不到，面板按「未知」显示。
+   */
+  | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory };
