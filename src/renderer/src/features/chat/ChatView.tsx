@@ -19,6 +19,7 @@ import { useChannelSummaries } from "./useChannelSummaries";
 import { HOME_CARD_CARRYOVER_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { relativeTime } from "../../shell/relative-time.ts";
+import { InlineMarks } from "../../shell/InlineMarks";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
@@ -3802,7 +3803,9 @@ function TurnProcessLine(props: {
           </span>
           {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
         </div>
-        <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>{snap.chapter?.title ?? ""}</div>
+        <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
+          {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
+        </div>
         <div className="proc-trail">
           {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
             <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
@@ -3907,7 +3910,9 @@ function ProcessChapterItem(props: {
         title={t.chat.processChapterSteps}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className={chapter.source === "say" ? "proc-ch-title" : "proc-ch-title think"}>{title}</span>
+        <span className={chapter.source === "say" ? "proc-ch-title" : "proc-ch-title think"}>
+          <InlineMarks text={title} />
+        </span>
         {chapter.calls.length > 0 && (
           <span className="proc-ch-steps">
             {shown.map((call) => (

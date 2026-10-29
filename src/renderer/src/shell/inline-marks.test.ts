@@ -28,6 +28,16 @@ describe("inlineMarks —— 章节标题里的行内 markdown", () => {
     assert.equal(inlinePlain("__注意__ 这里"), "注意 这里");
   });
 
+  it("粗体包着代码也剥得掉（真会话：「**但缺 `grilling`**——」）", () => {
+    assert.deepEqual(inlineMarks("它已有一个 `grill-me`（上次装的）**但缺 `grilling`**——也就是断链"), [
+      { kind: "text", text: "它已有一个 " },
+      { kind: "code", text: "grill-me" },
+      { kind: "text", text: "（上次装的）但缺 " },
+      { kind: "code", text: "grilling" },
+      { kind: "text", text: "——也就是断链" },
+    ]);
+  });
+
   it("不配对的反引号原样留着，不吞后文", () => {
     assert.deepEqual(inlineMarks("用 ` 分隔"), [{ kind: "text", text: "用 ` 分隔" }]);
   });

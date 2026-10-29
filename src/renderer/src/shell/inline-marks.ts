@@ -12,24 +12,23 @@ export type InlineMark = { kind: "text"; text: string } | { kind: "code"; text: 
 
 const CODE = /`([^`]+)`/g;
 const STRONG = /\*\*([^*]+)\*\*|__([^_]+)__/g;
+/** 代码段先换成占位符再剥粗体：粗体常常包着代码（「**但缺 `grilling`**」），分段之后再剥就配不上对 */
+const SLOT = /\u0000(\d+)\u0000/;
 
 export function inlineMarks(line: string): InlineMark[] {
+  const codes: string[] = [];
+  const masked = line.replace(CODE, (_, code: string) => {
+    codes.push(code);
+    return `\u0000${codes.length - 1}\u0000`;
+  });
+  const plain = masked.replace(STRONG, (_, a: string | undefined, b: string | undefined) => a ?? b ?? "");
+  // split 带捕获组：[文字, 代码序号, 文字, 代码序号, ……, 文字]
+  const parts = plain.split(SLOT);
   const marks: InlineMark[] = [];
-  const pushText = (raw: string): void => {
-    const text = raw.replace(STRONG, (_, a: string | undefined, b: string | undefined) => a ?? b ?? "");
-    if (text === "") return;
-    const last = marks.at(-1);
-    if (last?.kind === "text") last.text += text;
-    else marks.push({ kind: "text", text });
-  };
-  let from = 0;
-  for (const match of line.matchAll(CODE)) {
-    const at = match.index ?? 0;
-    pushText(line.slice(from, at));
-    marks.push({ kind: "code", text: match[1] ?? "" });
-    from = at + match[0].length;
-  }
-  pushText(line.slice(from));
+  parts.forEach((part, index) => {
+    if (index % 2 === 1) marks.push({ kind: "code", text: codes[Number(part)] ?? "" });
+    else if (part !== "") marks.push({ kind: "text", text: part });
+  });
   return marks;
 }
 

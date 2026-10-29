@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Carryover } from "@shared/session";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { InlineMarks } from "../../shell/InlineMarks";
+import { inlinePlain } from "../../shell/inline-marks.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { StatusPie } from "../../shell/StatusPie";
 import { formatTokens } from "../../utils/format-tokens.ts";
@@ -261,14 +263,16 @@ function TurnItem(props: {
                 {props.inChat ? (
                   <button type="button" title={t.taskPanel.jump} onClick={() => reveal(turn.processKeys[0])}>
                     {/* 章节名最多两行（真模型的旁白常有三四行、一段英文思考能到七行），全文在悬停里 */}
-                    <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"} title={label}>
-                      {label}
+                    <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"} title={inlinePlain(label)}>
+                      <InlineMarks text={label} />
                     </span>
                     {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
                   </button>
                 ) : (
                   <div className="tp-ch-row" title={t.taskPanel.notInChat}>
-                    <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"}>{label}</span>
+                    <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"}>
+                      <InlineMarks text={label} />
+                    </span>
                     {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
                   </div>
                 )}
