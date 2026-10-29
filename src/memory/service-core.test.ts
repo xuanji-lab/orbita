@@ -440,6 +440,8 @@ const VECTOR_MODEL = {
   queryPrefix: "task: search result | query: ",
   docPrefix: "title: none | text: ",
   dims: 4,
+  // 桩向量的余弦分布与真模型无关：既有融合测试不设下限，下限另有专门的测试
+  minCosine: 0,
 };
 
 /** 向量原语桩：embed 按文本哈希出确定向量（同文本同向量），可探查调用参数。 */
@@ -545,6 +547,37 @@ test("recall 融合：向量命中但词法没命中的条目也能进结果", a
   const hits = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "语义记忆条目" });
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.entry.text, "语义记忆条目");
+});
+
+test("recall 融合：余弦低于模型下限的不进融合——无关问句不再被注满", async () => {
+  const dir = await tempDir();
+  // 条目向量 [1,0,0,0]；相关问句余弦 0.8，无关问句 0.4（下限 0.5）
+  const stub = vectorStub((text) => {
+    if (text.includes("无关")) return [0.4, Math.sqrt(1 - 0.16), 0, 0];
+    if (text.includes("相关")) return [0.8, 0.6, 0, 0];
+    return [1, 0, 0, 0];
+  });
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(), [
+    { type: "fact", text: "一条语义记忆", keywords: ["词法对不上的关键词"], turns: [1] },
+  ]);
+  core.setVectorConfig({
+    model: { ...VECTOR_MODEL, minCosine: 0.5 },
+    ggufPath: "/models/m.gguf",
+    binaryPath: "/bin/llama-server",
+    idleUnloadMs: 300_000,
+    deferOnBattery: true,
+  });
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).backfill === null) break;
+  }
+  const unrelated = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "完全无关的问句" });
+  assert.deepEqual(unrelated, []);
+  const related = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 2, query: "相关的问句" });
+  assert.deepEqual(related.map((hit) => hit.entry.text), ["一条语义记忆"]);
 });
 
 test("recall 融合：user 与 scope 的向量按相似度全局排序，不按层拼名次", async () => {

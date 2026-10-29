@@ -480,6 +480,13 @@ export interface MemoryVectorModel {
   /** 文档前缀（嵌入条目正文时拼前面） */
   docPrefix: string | null;
   dims: number;
+  /**
+   * 向量臂的余弦下限：低于它的条目不进 RRF 融合。没有下限时余弦 top-50 全量进融合，
+   * 问什么都能召回满 5 条（与记忆库毫不相干的问句也注入 5 条）。各模型的余弦尺度
+   * 不同（无关问句 gemma 落 0.60–0.64、qwen3 落 0.2–0.4），所以按模型给值；
+   * 数值来自真实记忆的门槛评测，见引入本字段的 commit 正文。
+   */
+  minCosine: number;
 }
 
 export const MEMORY_VECTOR_MODELS: readonly MemoryVectorModel[] = [
@@ -494,6 +501,7 @@ export const MEMORY_VECTOR_MODELS: readonly MemoryVectorModel[] = [
     queryPrefix: "task: search result | query: ",
     docPrefix: "title: none | text: ",
     dims: 768,
+    minCosine: 0.655,
   },
   {
     id: "qwen3-embedding-0.6b",
@@ -507,6 +515,7 @@ export const MEMORY_VECTOR_MODELS: readonly MemoryVectorModel[] = [
       "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
     docPrefix: null,
     dims: 1024,
+    minCosine: 0.42,
   },
 ];
 

@@ -499,10 +499,13 @@ export class MemoryServiceCore {
       const vectorRanked: { id: string; score: number }[] = [];
       if (userVectors !== null) vectorRanked.push(...dotProductRank(queryVector, userVectors, 50));
       if (scopeVectors !== null) vectorRanked.push(...dotProductRank(queryVector, scopeVectors, 50));
-      if (vectorRanked.length === 0) return lexical;
+      // 余弦下限：低于它的不算「相关」，不进融合——否则 RRF 只看名次，无关问句也会
+      // 把 top-5 当命中注满（下限按模型给，见 MemoryVectorModel.minCosine）
+      const relevant = vectorRanked.filter((hit) => hit.score >= config.model.minCosine);
+      if (relevant.length === 0) return lexical;
       // 两层各自打分后必须按余弦全局重排：不能直接 user 前 50 + scope 前 50，
       // 否则 RRF 的名次与相似度无关，user 层够大时 scope 甚至整层进不了融合。
-      vectorRanked.sort((a, b) => b.score - a.score);
+      relevant.sort((a, b) => b.score - a.score);
       const pinned = lexical.filter((hit) => hit.pinned === true);
       const pinnedIds = new Set(pinned.map((hit) => hit.entry.id));
       // 与词法同一准入门：muted / stale 不能借向量复活；user 层常驻偏好只走
@@ -513,7 +516,7 @@ export class MemoryServiceCore {
           .map((entry) => [entry.id, entry]),
       );
       const fused = fuseRanked(
-        vectorRanked,
+        relevant,
         lexical.filter((hit) => hit.pinned !== true),
         byId,
       );
