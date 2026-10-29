@@ -1488,6 +1488,8 @@ export const zh: Messages = {
     retryIn: (seconds) => `${seconds} 秒后`,
     retryLine: (attempt, max, wait) => `第 ${attempt}/${max} 次重试 · ${wait}`,
     processSteps: (n) => `${n} 步`,
+    processThoughtOnly: "想了想",
+    processPlanOnly: "更新了计划",
     processStepAt: (n) => `第 ${n} 步`,
     processWrote: (n) => `写了 ${n} 个文件`,
     processFailed: (n) => `失败 ${n}`,

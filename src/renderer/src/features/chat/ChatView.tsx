@@ -31,6 +31,7 @@ import { sessionRunState, type SessionRunState } from "../notify/completion-noti
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import {
   CHAPTER_STEPS_SHOWN,
+  processOutcome,
   SLOW_GAP_MS,
   TAIL_AFTER_MS,
   processChapters,
@@ -3841,10 +3842,14 @@ function TurnProcessLine(props: {
     );
   }
 
-  const outcome = [
-    ...(counts.files.length > 0 ? [t.chat.processWrote(counts.files.length)] : []),
-    t.chat.processSteps(counts.steps),
-  ].join(" · ");
+  // 一步工具都没跑的轮说它做了什么（想了想 / 更新了计划），不写「0 步」（processOutcome）
+  const result = processOutcome(counts, unit.steps);
+  const outcome =
+    result.kind === "thought"
+      ? t.chat.processThoughtOnly
+      : result.kind === "plan"
+        ? t.chat.processPlanOnly
+        : [...(result.files > 0 ? [t.chat.processWrote(result.files)] : []), t.chat.processSteps(result.steps)].join(" · ");
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}

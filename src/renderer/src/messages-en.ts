@@ -1639,6 +1639,9 @@ export const en = {
     retryLine: (attempt: number, max: number, wait: string) => `Retry ${attempt}/${max} · ${wait}`,
     // 「一轮一行」过程显示（turn-process.ts）
     processSteps: (n: number) => plural(n, "step"),
+    /** 一轮里一步工具都没跑：只想了想就答 / 只写了计划（以前这里写「0 steps」） */
+    processThoughtOnly: "Thought it through",
+    processPlanOnly: "Updated the plan",
     processStepAt: (n: number) => `Step ${n}`,
     processWrote: (n: number) => `wrote ${plural(n, "file")}`,
     processFailed: (n: number) => `${n} failed`,
