@@ -124,6 +124,14 @@ describe("pairMemoryTurns：对话气泡挂哪一轮的记忆", () => {
     assert.equal(paired.size, 1);
   });
 
+  test("回退后：被撤回轮的账（时间在最后一条消息之后）不顶掉那条消息自己的轮", () => {
+    // 实例 memrevert 实测：回到第 2 轮后只剩 u1，第 2 轮的账（几分钟后）也落在 u1 名下，
+    // 旧规则留轮号大的，u1 下的「记住 3 条」被换成撤回轮的空行
+    const live = [{ id: "u1", timestamp: 100_000 }];
+    const paired = pairMemoryTurns(live, session([row(2, 410_000), row(1, 99_800)]));
+    assert.equal(paired.get("u1")?.turn, 1);
+  });
+
   test("没有视图或没有消息：空表", () => {
     assert.equal(pairMemoryTurns(users, null).size, 0);
     assert.equal(pairMemoryTurns([], session([row(1, 0)])).size, 0);

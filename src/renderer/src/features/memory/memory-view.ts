@@ -103,17 +103,27 @@ export function pairMemoryTurns(
   const paired = new Map<string, MemorySessionView["turns"][number]>();
   if (view === null || users.length === 0) return paired;
   const ordered = [...users].sort((a, b) => a.timestamp - b.timestamp);
+  const gapOf = new Map<string, number>();
   for (const row of view.turns) {
-    let owner: string | null = null;
+    let owner: { id: string; timestamp: number } | null = null;
     for (let index = 0; index < ordered.length; index += 1) {
       const user = ordered[index]!;
       if (user.timestamp - RECALL_LEAD_MS > row.at) break;
       const next = ordered[index + 1];
-      if (next === undefined || next.timestamp - RECALL_LEAD_MS > row.at) owner = user.id;
+      if (next === undefined || next.timestamp - RECALL_LEAD_MS > row.at) owner = user;
     }
-    // 同一条消息被两轮争（不该发生）时留轮号大的：它更可能是这条消息自己的轮
-    const existing = owner === null ? undefined : paired.get(owner);
-    if (owner !== null && (existing === undefined || existing.turn < row.turn)) paired.set(owner, row);
+    if (owner === null) continue;
+    // 同一条消息被两轮争时留时间最贴近它的：一轮的召回就在它自己那条消息前几秒。
+    // 会争的是「自己的气泡已不在」的轮——被「回到这里」撤回的轮（账本还在，时间落在
+    // 回退点前一条消息之后）、或刚开轮回显还没到的那一轮；旧规则「留轮号大的」会让它们
+    // 顶掉前一条消息自己的那一轮。等距时再按轮号大的
+    const gap = Math.abs(row.at - owner.timestamp);
+    const existing = paired.get(owner.id);
+    const existingGap = gapOf.get(owner.id) ?? Number.POSITIVE_INFINITY;
+    if (existing === undefined || gap < existingGap || (gap === existingGap && existing.turn < row.turn)) {
+      paired.set(owner.id, row);
+      gapOf.set(owner.id, gap);
+    }
   }
   return paired;
 }
