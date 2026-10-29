@@ -9,7 +9,7 @@
 /* —— 顶部用量：一行字 + 一条分段条 + 「其余」一行 —— */
 .ctx-usage {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1-5);
   padding: var(--space-1) var(--space-4) var(--space-2);
 }
 .ctx-usage-line {
@@ -32,7 +32,7 @@
 }
 .ctx-bar {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   height: 6px;
   overflow: hidden;
   border-radius: var(--radius-pill);
@@ -114,7 +114,7 @@
 
 /* 文件组里的目录小标：与条目主名左缘对齐 */
 .ctx-dir {
-  padding: 6px var(--space-2) 2px calc(var(--space-2) + 18px);
+  padding: var(--space-1-5) var(--space-2) var(--space-0-5) calc(var(--space-2) + 18px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -121,7 +121,7 @@ export function ContextMenu(props: {
         left: position?.left ?? 0,
         visibility: position === null ? "hidden" : "visible",
         maxHeight: position?.maxHeight,
-        zIndex: 40,
+        zIndex: "var(--z-popover)",
         minWidth: 140,
         maxWidth: 320,
         padding: "var(--space-1)",

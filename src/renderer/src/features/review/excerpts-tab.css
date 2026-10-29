@@ -8,7 +8,7 @@
 
 .review-tabs {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   /* 上下留白相等（2026-10-18 修：顶部 padding 为 0 时选中态底色块贴着内容区上边，
      看着「没有居中」）；只许 token，不写魔数 */
   padding: var(--space-2) var(--space-2) var(--space-2);
@@ -60,8 +60,8 @@
 .excerpts-seg {
   display: inline-flex;
   flex: 0 0 auto;
-  padding: 2px;
-  gap: 2px;
+  padding: var(--space-0-5);
+  gap: var(--space-0-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
 }
@@ -99,7 +99,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 28px;
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border-default);
@@ -143,7 +143,7 @@
 .excerpts-empty {
   display: grid;
   justify-items: start;
-  gap: 4px;
+  gap: var(--space-1);
   padding: var(--space-3) var(--space-2);
 }
 
@@ -156,12 +156,12 @@
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .excerpts-row {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   padding: var(--space-2);
   border-radius: var(--radius-md);
   transition: var(--transition-hover);
@@ -210,7 +210,7 @@
   justify-self: start;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 20px;
   padding: 0 5px;
   margin-left: -5px; /* 悬停底色块外扩 5px，文字仍与正文左缘对齐 */
@@ -240,7 +240,7 @@
 .excerpts-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-height: 22px;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -257,7 +257,7 @@
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 0 0 auto;
   opacity: 0;
   transition: opacity var(--duration-fast) var(--ease-out-quint);
@@ -290,7 +290,7 @@
 .excerpts-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 22px;
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border-default);

@@ -806,7 +806,7 @@ function AddMenu(props: { skills: SkillsState; onCreateSkill: () => void }) {
             border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-md)",
             boxShadow: "var(--shadow-popover)",
-            zIndex: 30,
+            zIndex: "var(--z-float)",
             minWidth: 200,
           }}
         >

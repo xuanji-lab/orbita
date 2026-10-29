@@ -220,7 +220,7 @@
    纸面两档要在这里画格子与横线（paper-themes.css），inline 的 background 会把它们盖掉。
    字体与字号也在这里：小学作业主题的镜像层（.composer-mirror）同用这个 class，排版才和 textarea 一致 */
 .composer-input {
-  padding: 2px 4px;
+  padding: var(--space-0-5) var(--space-1);
   background: transparent;
   line-height: var(--line-height-ui);
   font-family: var(--font-family-base);
@@ -366,7 +366,7 @@
   z-index: 1;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 18px;
   padding: 0 7px;
   border-radius: var(--radius-pill);
@@ -387,7 +387,7 @@
 .composer-bottom-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -549,9 +549,9 @@
 /* 左栏格子的悬停提示：与 IconButton 的单行 caption 同一套（z-index 同档 70，高于 Menu 的 40） */
 .model-rail-tip {
   position: fixed;
-  z-index: 70;
+  z-index: var(--z-tooltip);
   max-width: 240px;
-  padding: 2px 8px;
+  padding: var(--space-0-5) var(--space-2);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -879,7 +879,7 @@ body {
   --pane-pop-block: 10px;
   position: absolute;
   inset: 0;
-  z-index: 30;
+  z-index: var(--z-float);
   pointer-events: none;
 }
 
@@ -1061,12 +1061,12 @@ body {
 }
 .wrapup-group {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .wrapup-group-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   padding: var(--space-1) 0;
   font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
@@ -1081,7 +1081,7 @@ body {
   grid-template-columns: 20px minmax(0, 1fr) 56px;
   gap: var(--space-2);
   align-items: start;
-  padding: 6px var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
   margin: 0 calc(-1 * var(--space-2));
   border-radius: var(--radius-md);
 }
@@ -1100,7 +1100,7 @@ body {
 .wrapup-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   min-height: 22px;
 }
@@ -1127,7 +1127,7 @@ body {
 }
 .wrapup-tag {
   flex: 0 0 auto;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-pill);
   font-size: var(--font-size-xs);
@@ -1137,7 +1137,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px 10px;
+  gap: var(--space-0-5) var(--space-2-5);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
@@ -1160,7 +1160,7 @@ body {
   font-family: var(--font-family-mono);
 }
 .wrapup-detail {
-  margin: 2px 0 0;
+  margin: var(--space-0-5) 0 0;
   font-size: var(--font-size-xs);
   line-height: var(--line-height-ui);
   color: var(--color-text-tertiary);
@@ -1173,7 +1173,7 @@ body {
 .wrapup-trail {
   display: none;
   justify-content: flex-end;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .wrapup-row:hover .wrapup-trail,
 .wrapup-row:focus-within .wrapup-trail {
@@ -1182,7 +1182,7 @@ body {
 .wrapup-edit {
   width: 100%;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -1196,9 +1196,9 @@ body {
 .wrapup-add {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: fit-content;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   border: 0;
   background: transparent;
   font-family: var(--font-family-base);
@@ -1211,12 +1211,12 @@ body {
 }
 .wrapup-sep {
   height: 1px;
-  margin: 2px 0;
+  margin: var(--space-0-5) 0;
   background: var(--color-border-subtle);
 }
 .wrapup-said {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   background: var(--color-chat-muted-bg);
@@ -1225,7 +1225,7 @@ body {
 .wrapup-said-who {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
@@ -1240,7 +1240,7 @@ body {
 .wrapup-undo {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 0;
   border: 0;
   background: transparent;
@@ -1258,7 +1258,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   min-height: 40px;
-  padding: 4px 6px 4px 12px;
+  padding: var(--space-1) var(--space-1-5) var(--space-1) var(--space-3);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-lg);
   background: var(--color-bg-panel);
@@ -1306,7 +1306,7 @@ body {
 }
 .wrapup-btn {
   height: var(--control-height-md);
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   background: transparent;
@@ -1388,14 +1388,14 @@ body {
 /* 行内竖条：与标题行同高、跟在行内左侧（不用 .option-row-bar 的绝对定位——那要求父级
    relative，收件箱行是两行高，贴行首一行对齐更清楚） */
 .inbox-row-bar {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 
 .inbox-row-item {
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .inbox-row-l1 {
@@ -1475,7 +1475,7 @@ body {
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-primary);
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
 }
 
 .channel-reply-input:focus {
@@ -1532,7 +1532,7 @@ body {
 .channel-from-lead {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
@@ -1571,7 +1571,7 @@ body {
   width: fit-content;
   max-width: 100%;
   margin: var(--space-1) 0;
-  padding: 5px 10px;
+  padding: 5px var(--space-2-5);
   border: 0;
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
@@ -1625,8 +1625,8 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 6px 8px 6px 10px;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-2-5);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -1635,17 +1635,17 @@ body {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   overflow: hidden;
 }
 
 .drawer-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   max-width: 170px;
   min-width: 0;
-  padding: 5px 8px 5px 10px;
+  padding: 5px var(--space-2) 5px var(--space-2-5);
   border-radius: var(--radius-md);
   border: 0;
   cursor: pointer;
@@ -1956,7 +1956,7 @@ body {
 .chat-md ul,
 .chat-md ol {
   margin: var(--space-2) 0;
-  padding-inline-start: 24px;
+  padding-inline-start: var(--space-6);
 }
 
 .chat-md li {
@@ -1997,8 +1997,8 @@ body {
 .bubble-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 4px 1px 2px;
+  gap: var(--space-1);
+  padding: 1px var(--space-1) 1px var(--space-0-5);
   border-radius: var(--radius-xs);
   background: var(--color-bg-muted);
   font-size: var(--font-size-sm);
@@ -2072,7 +2072,7 @@ body {
 .chat-md sup.chat-cite:not(:has(a)) {
   display: inline-block;
   min-width: 1.5em;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-sm);
   line-height: var(--line-height-ui);
@@ -2104,7 +2104,7 @@ body {
   color: var(--color-text-tertiary);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   text-decoration: none;
   overflow-wrap: anywhere;
 }
@@ -2207,7 +2207,7 @@ body {
 
 .chat-md th,
 .chat-md td {
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-2-5);
   border: 1px solid var(--color-border-subtle);
   text-align: left;
 }
@@ -2473,7 +2473,7 @@ body {
   width: 220px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   padding: var(--space-1) 0;
   border-radius: var(--radius-lg);
 }
@@ -2646,7 +2646,7 @@ body {
   display: flex;
   align-items: center;
   min-height: 24px;
-  padding: 6px var(--space-4) 0;
+  padding: var(--space-1-5) var(--space-4) 0;
   line-height: var(--line-height-ui);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
@@ -2754,7 +2754,7 @@ body {
 .set-dots {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 0 0 auto;
 }
 .set-dot {
@@ -2786,7 +2786,7 @@ body {
  */
 .skill-row-tip {
   position: fixed;
-  z-index: 70;
+  z-index: var(--z-tooltip);
   max-width: 260px;
   padding: 9px 11px;
   display: grid;
@@ -2815,7 +2815,7 @@ body {
   font-family: var(--font-family-business);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 
 /*
@@ -2876,7 +2876,7 @@ body {
 .file-row-meta {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   font-weight: var(--weight-regular);
@@ -2918,7 +2918,7 @@ body {
 .attachment-row-tail {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   /* 与树行的 size 同一写法（sm / tabular / 无衬线） */
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
@@ -2953,7 +2953,7 @@ body {
 .file-detach-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 0 0 auto;
   height: 20px;
   padding: 0 7px;
@@ -3104,7 +3104,7 @@ body {
   left: 0;
   top: 0;
   bottom: 0;
-  z-index: 20;
+  z-index: var(--z-overlay);
   background: var(--color-bg-panel);
   box-shadow: var(--shadow-popover);
   animation: files-tree-in var(--duration-fast) var(--ease-out-quint);
@@ -3116,7 +3116,7 @@ body {
   right: 0;
   top: 0;
   bottom: 0;
-  z-index: 15;
+  z-index: calc(var(--z-overlay) - 1);
   background: var(--overlay-backdrop-subtle);
 }
 .files-panel-layout[data-file="open"][data-tree="on"] .files-panel-backdrop {
@@ -3169,7 +3169,7 @@ body {
 .file-preview-crumb {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -3201,7 +3201,7 @@ body {
 .file-preview-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   flex: 0 0 auto;
 }
 
@@ -3349,14 +3349,14 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding-top: 12px;
+  padding-top: var(--space-3);
   background: var(--color-bg-muted);
 }
 .pdf-view-notice {
   position: sticky;
   top: 0;
   z-index: 3;
-  margin: 0 12px 12px;
+  margin: 0 var(--space-3) var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   background: var(--color-bg-panel);
@@ -3447,8 +3447,8 @@ body {
 .mcp-card {
   position: relative;
   display: grid;
-  gap: 2px;
-  padding: 6px var(--space-2);
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-md);
   transition: var(--transition-hover);
 }
@@ -3477,7 +3477,7 @@ body {
 }
 .mcp-actions {
   display: inline-flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   flex: 0 0 auto;
 }
 /*
@@ -3508,13 +3508,13 @@ body {
 .mcp-tool-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .mcp-tool-chip {
   display: inline-flex;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
-  padding: 1.5px 6px;
+  padding: 1.5px var(--space-1-5);
   border-radius: var(--radius-xs);
   background: var(--color-bg-muted);
   border: 1px solid var(--color-border-subtle);
@@ -3544,7 +3544,7 @@ button.mcp-tool-chip {
 .mcp-error {
   display: grid;
   gap: var(--space-2);
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-2-5);
   background: var(--color-danger-soft);
   border-radius: var(--radius-md);
 }
@@ -3645,7 +3645,7 @@ button.mcp-tool-chip {
   display: grid;
   grid-template-columns: auto auto 1fr;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-size-sm);
 }
 .mcp-instance .ws {
@@ -3664,7 +3664,7 @@ button.mcp-tool-chip {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   overflow-wrap: anywhere;
-  padding-left: 20px;
+  padding-left: var(--space-5);
 }
 
 /*
@@ -3718,15 +3718,15 @@ textarea.text-field {
   align-items: flex-start;
   gap: var(--space-2);
   overflow-x: auto;
-  padding: 2px;
+  padding: var(--space-0-5);
 }
 
 /* 胶囊行：顶到就换行铺满（2026-10 用户裁决：全部看到，不要横滚与渐隐） */
 .material-chip-scroll {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 2px;
+  gap: var(--space-1-5);
+  padding: var(--space-0-5);
 }
 
 /* 浮层（粘贴全文）锚在胶囊行的上方；行会折成多行，浮层仍开在整块上方 */
@@ -3739,12 +3739,12 @@ textarea.text-field {
 .material-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 28px;
   min-width: 0;
   max-width: 260px;
   flex: 0 0 auto;
-  padding: 0 4px 0 10px;
+  padding: 0 var(--space-1) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   background: var(--glass-bg);
   box-shadow: var(--shadow-border);
@@ -3791,9 +3791,9 @@ textarea.text-field {
    长路径换行不截断——看全正是它的存在理由。z-index 与 IconButton 的 tooltip 同档（70） */
 .material-path-tip {
   position: fixed;
-  z-index: 70;
+  z-index: var(--z-tooltip);
   max-width: min(480px, calc(100vw - 16px));
-  padding: 2px 8px;
+  padding: var(--space-0-5) var(--space-2);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -3816,8 +3816,8 @@ textarea.text-field {
 .material-path-note {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 2px;
+  gap: var(--space-1);
+  margin-top: var(--space-0-5);
   font-family: var(--font-family-base);
   color: var(--color-warning);
 }
@@ -3826,7 +3826,7 @@ textarea.text-field {
 .material-chip-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   padding: 0;
   border: 0;
@@ -3911,7 +3911,7 @@ textarea.text-field {
 .material-quote-head {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 0 0 auto;
   color: var(--color-text-tertiary);
 }
@@ -3959,7 +3959,7 @@ textarea.text-field {
   right: 6px;
   top: 4px;
   display: inline-flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   opacity: 0;
   transition: var(--transition-hover);
 }
@@ -4000,7 +4000,7 @@ textarea.text-field {
   align-items: center;
   gap: var(--space-2);
   height: 30px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -4029,7 +4029,7 @@ textarea.text-field {
 .panel-group-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: 1 1 auto;
   min-width: 0;
   height: 28px;
@@ -4081,7 +4081,7 @@ button.panel-group-toggle:hover {
   top: 50%;
   transform: translateY(-50%);
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--transition-hover);
@@ -4102,7 +4102,7 @@ button.panel-group-toggle:hover {
 /* 空态 / 说明：一行浅灰字，左缘与行内容对齐，不居中、不加粗、不画图标 */
 .panel-empty {
   margin: 0;
-  padding: 6px var(--space-4);
+  padding: var(--space-1-5) var(--space-4);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
@@ -4171,7 +4171,7 @@ button.panel-group-toggle:hover {
   display: flex;
   gap: 14px;
   align-items: center;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--color-bg-panel) 40%, transparent);
@@ -4197,12 +4197,12 @@ button.panel-group-toggle:hover {
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .intent-run-top {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .intent-run-title {
@@ -4232,9 +4232,9 @@ button.panel-group-toggle:hover {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: transparent;
@@ -4249,7 +4249,7 @@ button.panel-group-toggle:hover {
 }
 .intent-pills {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex-wrap: wrap;
 }
 .intent-pill {
@@ -4257,7 +4257,7 @@ button.panel-group-toggle:hover {
   align-items: center;
   gap: 5px;
   height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
   border: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-xs);
@@ -4286,8 +4286,8 @@ button.panel-group-toggle:hover {
 .intent-final-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: var(--space-2-5);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--color-bg-panel) 40%, transparent);
@@ -4297,7 +4297,7 @@ button.panel-group-toggle:hover {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   padding: 0;
   border: 0;
   background: transparent;
@@ -4325,7 +4325,7 @@ button.panel-group-toggle:hover {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 0;
   border: 0;
   background: transparent;
@@ -4358,8 +4358,8 @@ button.panel-group-toggle:hover {
 .intent-confirm-top {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: var(--space-2-5);
+  padding: var(--space-2-5) var(--space-4);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 .intent-confirm-title {
@@ -4411,9 +4411,9 @@ button.panel-group-toggle:hover {
   white-space: nowrap;
 }
 .intent-confirm-main {
-  padding: 14px 16px 4px;
+  padding: 14px var(--space-4) var(--space-1);
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   /* 确认卡挂在会话页脚，不能高到把消息流挤没（用户 2026-10-14 23:27：确认卡压在运行卡上）。
      正文封顶 = 窗口高 − 固定开销 − 给消息流留的 120px：固定开销 ≈ 页头 48 + 输入卡 108 + 页脚留白 22
      + 卡片自身（顶行 / 表态行 / 底行 / 描边）162 ≈ 340。放不下的在正文里滚；再小的窗口至少留 160px */
@@ -4437,7 +4437,7 @@ button.panel-group-toggle:hover {
   box-sizing: border-box;
   border: 0;
   border-radius: var(--radius-sm);
-  padding: 2px 4px;
+  padding: var(--space-0-5) var(--space-1);
   background: transparent;
   resize: none;
   overflow-y: hidden;
@@ -4470,7 +4470,7 @@ button.panel-group-toggle:hover {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   line-height: var(--line-height-ui);
-  padding-left: 10px;
+  padding-left: var(--space-2-5);
   border-left: 2px solid color-mix(in srgb, var(--color-warning) 60%, transparent);
 }
 /* 「当时那段对话」面板：表头（标题 / 时间 / 来源 / 在辅助对话打开）+ 两个各自滚动的区 */
@@ -4482,7 +4482,7 @@ button.panel-group-toggle:hover {
 .intent-conv-h {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   padding: 7px 11px;
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-sm);
@@ -4507,7 +4507,7 @@ button.panel-group-toggle:hover {
 .intent-conv-open {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 0;
   border: 0;
   background: transparent;
@@ -4608,8 +4608,8 @@ mark.intent-mark {
 .intent-acts {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--color-border-subtle);
 }
 /* 卡上的 quiet-control 按钮：.quiet-control 只管底色与字色，不清浏览器默认的按钮边框与字体
@@ -4651,7 +4651,7 @@ mark.intent-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .intent-big:hover {
   background: var(--color-bg-hover);
@@ -4671,14 +4671,14 @@ mark.intent-mark {
 /* 底行：背景补充框 + 麦克风 + 两个出口 */
 .intent-foot {
   display: grid;
-  gap: 6px;
-  padding: 0 16px 12px;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-4) var(--space-3);
 }
 /* 行内垂直居中：背景框单行时 38 高（.text-field），按钮 30、麦克风 28——顶对齐会让它们比框高出 4px */
 .intent-foot-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .intent-note-wrap {
   position: relative;
@@ -4691,20 +4691,20 @@ mark.intent-mark {
   width: 100%;
   box-sizing: border-box;
   min-height: 30px;
-  padding: 5px 10px;
+  padding: 5px var(--space-2-5);
   resize: none;
   overflow-y: hidden;
 }
 .intent-foot-quiet {
   height: 30px;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border-radius: var(--radius-md);
   font-size: var(--font-size-base);
   white-space: nowrap;
 }
 .intent-foot-accent {
   height: 30px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   border-radius: var(--radius-md);
   font-size: var(--font-size-base);
   white-space: nowrap;
@@ -4747,7 +4747,7 @@ mark.intent-mark {
   top: 8px;
   right: 10px;
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   z-index: 1;
   padding: 1px;
   border-radius: var(--radius-md);
@@ -4796,12 +4796,12 @@ mark.intent-mark {
   top: 8px;
   left: 10px;
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   z-index: 1;
 }
 .intent-gtoggle {
   height: 22px;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -4820,7 +4820,7 @@ mark.intent-mark {
 }
 .intent-gtoggle.sm {
   height: 20px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--font-size-xs);
 }
 .intent-summary {
@@ -4830,7 +4830,7 @@ mark.intent-mark {
   max-width: calc(100% - 16px);
   margin: 0;
   /* 浮在图上的一行字：给一层面板底，枝和叶从它下面穿过时字仍可读（真机截图里被叶子压住） */
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-bg-panel) 82%, transparent);
   font-size: var(--font-size-sm);
@@ -4846,14 +4846,14 @@ mark.intent-mark {
   right: 10px;
   bottom: 8px;
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   z-index: 1;
 }
 /* 着色权重滑块：图例框第一行——两端写「时间 / 相关度」，右侧显示当前比例 */
 .intent-weight {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   pointer-events: auto;
   color: var(--color-text-secondary);
 }
@@ -4875,11 +4875,11 @@ mark.intent-mark {
   position: absolute;
   left: 8px;
   bottom: 8px;
-  padding: 3px 4px;
+  padding: 3px var(--space-1);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-bg-panel) 82%, transparent);
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   z-index: 1;
   pointer-events: none;
   font-size: var(--font-size-xs);
@@ -4893,7 +4893,7 @@ mark.intent-mark {
   gap: 5px;
 }
 .intent-key-items {
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .intent-key-bar {
   width: 56px;
@@ -5058,8 +5058,8 @@ mark.intent-mark {
   height: 32px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px 0 12px;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-2) 0 var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
   cursor: row-resize;
   user-select: none;
@@ -5134,7 +5134,7 @@ mark.intent-mark {
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .intent-row-l1 {
   display: flex;
@@ -5177,9 +5177,9 @@ mark.intent-mark {
   -webkit-line-clamp: unset;
 }
 .intent-row-more {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   line-height: var(--line-height-ui);
@@ -5194,12 +5194,12 @@ mark.intent-mark {
 }
 .intent-row-acts {
   display: flex;
-  gap: 2px;
-  margin-top: 6px;
+  gap: var(--space-0-5);
+  margin-top: var(--space-1-5);
 }
 .intent-mini {
   height: 24px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -5208,7 +5208,7 @@ mark.intent-mark {
   font-size: var(--font-size-sm);
   cursor: pointer;
   display: inline-flex;
-  gap: 4px;
+  gap: var(--space-1);
   align-items: center;
 }
 .intent-mini:hover:not(:disabled) {
@@ -5230,10 +5230,10 @@ mark.intent-mark {
 .intent-turn-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   /* 右栏胶囊里的轮次芯片：胶囊内嵌档（24）+ 胶囊圆角 */
   height: var(--titlebar-field);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-pill);
   color: var(--color-text-secondary);
@@ -5257,7 +5257,7 @@ mark.intent-mark {
 /* 意图条目展开后的 Q/A：复用聊天面的 markdown 渲染，收紧字号与行距 */
 .intent-row-md {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 .intent-row-md-label {
