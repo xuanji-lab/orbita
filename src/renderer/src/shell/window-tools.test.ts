@@ -241,18 +241,20 @@ test("字标与星云同一行：绝对定位在停机坪、中心对齐云心�
   assert.match(meter, /data-yield=\{active <= 1 \|\| undefined\}/, "避让判定没接 active 格序");
 });
 
-test("审查页签以胶囊中心居中：三列 grid 两个 1fr 等宽轨道（构造性 ±0），放不下自退化", () => {
-  // grid 1fr auto 1fr：两轨等宽 → 页签组构造性落在胶囊中心；放不下轨道压缩、
-  // 页签组顺排（cap-tabs 自带横滚渐隐），不与两侧重叠（绝对居中压过下拉，已弃）
+test("胶囊页签头：有标题时三列 grid 让页签居中且标题不叠到页签下；审查面板页签即标题", () => {
+  // 两侧 minmax(max-content, 1fr)：等宽轨道让页签组构造性居中；标题比 1fr 宽时轨道撑开、
+  // 页签组让位右移，不再叠在标题上（2026-10-30「Context」叠在页签底下实测）
   assert.match(
     toolbarCss,
-    /\.cap-review-head\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*1fr auto 1fr/s,
-    "缺审查头的三列 grid——页签组无法构造性居中",
+    /\.cap-review-head\s*\{\s*display:\s*grid;[\s\S]*?grid-template-columns:\s*minmax\(max-content, 1fr\) auto minmax\(max-content, 1fr\)/,
+    "缺页签头的三列 grid（两侧下限取内容宽）",
   );
+  // 审查面板三个页签（改动 / 摘抄 / 记忆）加标题放不下：不画标题，页签靠左打头
+  assert.match(toolbarCss, /\.cap-review-head\.tabs-as-title\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\) auto/);
   const review = readSource(join(RENDERER_SRC, "features/review/ReviewPanel.tsx"));
-  assert.match(review, /className="cap-review-head"/, "审查头没用三列 grid");
-  assert.match(review, /className="cap-tabs"/, "审查页签组不在 grid 中列");
-  // 来源下拉收成图标键（给居中让位；点开同一个来源菜单）
+  assert.match(review, /className="cap-review-head tabs-as-title"/, "审查头没用页签即标题的形态");
+  assert.match(review, /className="cap-tabs"/, "审查页签组不在页签头里");
+  // 来源下拉收成图标键（点开同一个来源菜单）
   assert.match(review, /git-branch" size=\{16\}/, "来源图标键没了");
   assert.match(review, /cap-review-head[\s\S]{0,2000}cap-seg solo/, "来源下拉没收成图标键");
 });
