@@ -56,8 +56,8 @@
 .cap-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 4px;
+  gap: var(--space-0-5);
+  margin-left: var(--space-1);
   overflow-x: auto;
   scrollbar-width: none;
 }

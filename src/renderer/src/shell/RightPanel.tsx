@@ -105,7 +105,7 @@ export function RightPanelSlot(props: {
                 border: "1px solid var(--glass-border)",
                 borderRadius: "var(--radius-xl)",
                 boxShadow: "var(--shadow-popover)",
-                zIndex: 20,
+                zIndex: "var(--z-overlay)",
                 animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
               }
             : {}),
@@ -129,7 +129,7 @@ export function RightPanelSlot(props: {
             cursor: "col-resize",
             // 要在面板内容的浮层之上（文件树 overlay 是 z-20）：浮层盖住热区就把
             // 拖宽没收了（2026-10-10 实机验收抓到）；全局浮层（contextmenu 70）仍更高
-            zIndex: 30,
+            zIndex: "var(--z-float)",
           }}
         />
       )}

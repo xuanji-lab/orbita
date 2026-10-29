@@ -103,8 +103,8 @@ body {
   height: 28px;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding-inline-end: 2px;
+  gap: var(--space-0-5);
+  padding-inline-end: var(--space-0-5);
   border: 1px solid transparent;
   border-bottom: 0;
   border-radius: var(--radius-md) var(--radius-md) 0 0;

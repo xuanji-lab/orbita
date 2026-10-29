@@ -433,11 +433,24 @@ accent outline on every focusable control. Components do not reset their own `ou
 draw their own focus expression (a card's own text field, say, expresses focus for the card).
 
 **Tokens are checked.** `src/renderer/src/design-tokens.test.ts` fails on any `var(--x)` that is
-never declared, and on any hex colour outside `tokens/`. A value that serves one feature only lives
+never declared, on any token in `tokens/` that nothing references, and on any hex colour outside
+`tokens/`. A value that serves one feature only lives
 next to that feature's CSS, not in `tokens/`. The hex check exempts exactly one file by path,
 `src/renderer/src/features/chat/highlight.ts`: it holds shiki's TextMate theme data, which shiki only
 accepts as literal colours and converts to inline styles itself — a CSS custom property can't reach
 it. The token check does not exempt it.
+
+**Placement is checked like type.** Values decide *what* a thing looks like; placement decides
+*where* it sits, and it is where "almost finished" lives — so it gets the same treatment as type:
+- **Spacing** (padding / margin / gap) takes `--space-*`: a 4px scale plus three half steps for
+  dense controls — `--space-0-5` 2, `--space-1-5` 6, `--space-2-5` 10. A value on the scale is never
+  written as bare px. Odd values (3 / 5 / 7 / 9px…) are off the grid; the ones that remain are
+  counted per file in `design-tokens.test.ts` and may only go down, each fixed against a screenshot.
+  `1px` is free (hairline compensation). Inline `style` spacing in `.tsx` is not checked yet.
+- **Layers**: four global z layers, `--z-overlay` 20 (in-pane overlays) · `--z-float` 30 (pane-level
+  floats above them) · `--z-popover` 40 (portalled menus, dialogs) · `--z-tooltip` 70 (tooltips,
+  the image lightbox). Stacking inside one component (1–9) stays a local integer; 10 and above
+  must name a layer.
 
 **Two consumers, one component.** The moment a style object gets copied into a second file, extract a
 component instead of duplicating it.
@@ -499,7 +512,7 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
 | `tokens/colors.css` | Surfaces, text, borders, accent, mode selection, status, chat surfaces + the dark and black themes. |
 | `tokens/typography.css` | Families, the base + five-role type scale, three leadings, weights, tracking. |
 | `tokens/fonts.css` | `@font-face` for Literata, Manrope, Source Han Serif/Sans SC. |
-| `tokens/spacing.css` | Space scale, radii, control and row heights, layout widths. |
+| `tokens/spacing.css` | Space scale (with half steps), radii, control and row heights, the four z layers, layout widths. |
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
 | `tokens/glass.css` | The single glass alpha, border, and the `.glass-card` recipe. |
 | `tokens/motion.css` | Durations, easings, the three composed transitions. |

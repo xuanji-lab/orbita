@@ -114,7 +114,7 @@ export function IconButton(props: {
               lineHeight: "var(--line-height-ui)",
               pointerEvents: "none",
               // 浮层顶格：高于 Menu 的 portal（40）与 SkillsPanel 的命令条（30）
-              zIndex: 70,
+              zIndex: "var(--z-tooltip)",
               // 未落位前不显形，落位后从透明过渡进来；出场上不拖沓
               opacity: tooltip.placement === null ? 0 : 1,
               transition: "opacity var(--duration-fast) var(--ease-standard)",
