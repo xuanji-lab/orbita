@@ -266,6 +266,22 @@ export class MemoryServiceHostCore {
   }
 
   /**
+   * 会话回退通知（第 fromTurn 轮及之后被撤回）。服务不在就丢并留痕——那时没有
+   * 轮在进事件段，盘上的开段要等服务下次拉起；代价是重说的那几轮可能被旧水位拒收，
+   * 日志里能看到（见 service-core 的 ignore 诊断）。
+   */
+  sessionReverted(sessionId: string, fromTurn: number): void {
+    if (this.child === null) {
+      this.log(
+        `[memory] 回退通知没转发：记忆服务不在${this.initFailure !== null ? `（init 失败：${this.initFailure}）` : ""}，` +
+          `会话 ${sessionId} 第 ${fromTurn} 轮起的记忆没停用、事件段没截`,
+      );
+      return;
+    }
+    this.child.postMessage({ type: "sessionReverted", sessionId, fromTurn });
+  }
+
+  /**
    * 召回转发：服务不在 / 转发超时 / 子进程退出 → 空命中。**任何情况都 resolve
    * 空数组而不是 reject**——调用方（主进程的 onEvent）在 agent 的轮回执路径上，
    * 记忆的失败不该变成对话的失败。

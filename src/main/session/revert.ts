@@ -41,6 +41,19 @@ export function fileTurnsIn(records: readonly unknown[]): FileTurnRecord[] {
   return records.filter(isFileTurnRecord);
 }
 
+/**
+ * 回退点的轮号：生效转录里第 targetIndex 条记录（回退目标那条 user 消息）是第几条用户消息
+ * （1 起）。与记忆轮后跟踪的 turnNumberOf 同口径（都数折叠后的 user 记录）：回退后生效列表
+ * 只剩它之前的 fromTurn − 1 条用户消息，下一条发出的消息轮号正好是 fromTurn。
+ */
+export function revertFromTurn(transcript: readonly { role: string }[], targetIndex: number): number {
+  let users = 0;
+  for (let index = 0; index < targetIndex; index += 1) {
+    if (transcript[index]?.role === "user") users += 1;
+  }
+  return users + 1;
+}
+
 /** 磁盘现状 → 可比较的形状：不在 = absent；读不了 / 非 utf8 / 带 NUL = null（无法比较）。 */
 async function diskText(path: string): Promise<{ kind: "absent" } | { kind: "text"; content: string } | null> {
   try {

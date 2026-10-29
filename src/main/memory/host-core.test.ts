@@ -145,6 +145,27 @@ test("turnSettled：服务不在时丢弃留痕（会话 + 轮号；init 失败�
   assert.ok(logs.some((line) => /init 失败：目录读不了.*会话 s7 第 4 轮不进事件段/.test(line)));
 });
 
+test("sessionReverted：服务在就转发会话与回退点轮号；不在就丢并留痕", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const logs: string[] = [];
+  const h = new MemoryServiceHostCore({
+    forkRuntime: () => {
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    log: (message) => logs.push(message),
+  });
+  h.sessionReverted("s7", 3);
+  assert.equal(ref.current, null);
+  assert.match(logs[0] ?? "", /回退通知没转发：记忆服务不在，会话 s7 第 3 轮起/);
+  await h.ensureStarted();
+  h.sessionReverted("s7", 3);
+  assert.deepEqual(ref.current!.posted[1], { type: "sessionReverted", sessionId: "s7", fromTurn: 3 });
+});
+
 test("向量控制与进度：配置 / 电源 / 下载转发，状态回执配对且超时回 null", async () => {
   const ref: { current: FakeChild | null } = { current: null };
   const downloads: MemoryDownloadProgress[] = [];

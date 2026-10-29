@@ -763,6 +763,22 @@ void app.whenReady().then(async () => {
       memoryHost.turnSettled(payload);
     },
   });
+  /**
+   * 会话回退后的记忆钩子：第 fromTurn 轮起被撤回 → 服务截段（重说的轮照常收）+ 停用来源轮
+   * 全被撤回的条目。只给根会话发（子会话不写记忆，发了也是一次白扫全库）；开关关着不发、
+   * 不为它拉起服务。失败只记日志，回退本身已经完成
+   */
+  const memoryOnReverted = async (sessionId: string, fromTurn: number): Promise<void> => {
+    try {
+      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) return;
+      const meta = await sessions.readMeta(sessionId);
+      if (meta === null || meta.parentId !== undefined) return;
+      await ensureMemoryService();
+      memoryHost.sessionReverted(sessionId, fromTurn);
+    } catch (cause) {
+      console.error("[memory] 回退后的记忆停用 / 截段没送成（不影响回退）", cause);
+    }
+  };
   // 启动时开关已开：先拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
   // 半路提取续跑），不等第一轮对话才动。失败只记日志（下次轮后再试拉起）
   if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
@@ -837,7 +853,12 @@ void app.whenReady().then(async () => {
     carryovers,
     providers,
     (path) => browserSandbox.openLocalFile(path),
-    intentOnReverted,
+    async (sessionId, reverted) => {
+      await Promise.all([
+        intentOnReverted(sessionId, reverted.turnIds),
+        memoryOnReverted(sessionId, reverted.fromTurn),
+      ]);
+    },
   );
   // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
   registerWrapupIpc({
