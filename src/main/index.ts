@@ -756,7 +756,9 @@ void app.whenReady().then(async () => {
       (await settings.read()).experimentalFeatures?.["memory-system"] === true,
     readChore: () => choreModelPayload(settings, providers),
     settle: async (payload) => {
-      // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）
+      // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）。
+      // 没拉起来照样交给 host：它在「服务不在」时记一行带会话 / 轮号的丢弃诊断。
+      // 抛错由跟踪器的 deliver 接住记日志（settle 的 Promise 在那里被 await）
       await ensureMemoryService();
       memoryHost.turnSettled(payload);
     },
