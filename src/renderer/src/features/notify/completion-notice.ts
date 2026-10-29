@@ -5,7 +5,7 @@
  * 界面上什么都不发生——只能隔一会儿回去看一眼。这里判定「刚跑完」与「用户此刻
  * 有没有在看它」，App 据此响提示音、把未读写进 meta、在辅助对话图标旁弹卡片。
  *
- * 2026-10-10 二轮（用户改需求）：侧栏行首的三节竖条与右下角铃铛清单都从这里的
+ * 2026-10-10 二轮（用户改需求）：侧栏行首的状态饼与右下角铃铛清单都从这里的
  * sessionRunState 读状态——**单一真源**，两个入口只是同一份状态的两个视图，
  * 不各算一份（各算一份迟早漂移成「侧栏说在跑、铃铛说没事」）。
  *
@@ -63,7 +63,7 @@ export function planNotice(input: { watched: boolean; windowActive: boolean; sou
 }
 
 /**
- * 一条会话此刻的运行态（三节竖条 + 铃铛清单共用的推导，单一真源）：
+ * 一条会话此刻的运行态（状态饼 + 铃铛清单共用的推导，单一真源）：
  *
  * - `"running"`：在跑（1/3 蓝）——自己或任一直接子会话的 phase 不是 idle。
  *   子会话在跑算母会话在跑：侧栏只列根会话，母会话的行就是那个任务的唯一入口；
@@ -103,7 +103,26 @@ export function sessionRunState(input: {
   return input.unread.failed ? "failed" : "done";
 }
 
-/** 铃铛清单的档位：竖条亮着的根会话按「等你 > 未读 > 在跑」分档 */
+/** 工作区汇总的顺序：等你 > 出错 > 在跑 > 跑完（越需要你动手越靠前） */
+const AGG_ORDER = ["waiting", "failed", "running", "done"] as const;
+
+/**
+ * 工作区折叠时组头上的汇总（2026-10-30）：组里各会话的运行态按档计数，
+ * 只列亮着的档，顺序固定为等你 > 出错 > 在跑 > 跑完。折叠后看不到行，
+ * 这一串是「里面还有东西在干活 / 在等你」的唯一信号。
+ */
+export function aggregateRunStates(
+  states: readonly SessionRunState[],
+): { state: Exclude<SessionRunState, null>; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const state of states) if (state !== null) counts.set(state, (counts.get(state) ?? 0) + 1);
+  return AGG_ORDER.filter((state) => counts.has(state)).map((state) => ({
+    state,
+    count: counts.get(state) ?? 0,
+  }));
+}
+
+/** 铃铛清单的档位：状态饼亮着的根会话按「等你 > 未读 > 在跑」分档 */
 export type NoticeTier = "waiting" | "unread" | "running";
 
 /** 运行态 → 清单档位。null（不亮）不进清单。 */
@@ -129,7 +148,7 @@ export function orderNoticeEntries<T extends { tier: NoticeTier; at: number }>(
 }
 
 /**
- * 运行态的可读名字（竖条的 tooltip，也是铃铛清单行尾的句子）：侧栏行与铃铛
+ * 运行态的可读名字（状态饼的 tooltip，也是铃铛清单行尾的句子）：侧栏行与铃铛
  * 清单同一套词——同一个状态在两个入口该叫同一个名字，否则像两个东西。
  */
 export function runStateLabel(

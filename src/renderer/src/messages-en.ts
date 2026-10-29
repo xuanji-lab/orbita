@@ -461,7 +461,7 @@ export const en = {
     laterTip: "Keep it marked unread in the sidebar",
   },
 
-  /** 右下角铃铛弹出的清单（侧栏竖条的另一个入口） */
+  /** 右下角铃铛弹出的清单（侧栏状态饼的另一个入口） */
   bell: {
     title: "Notifications",
     empty: "Nothing running, waiting, or unread",

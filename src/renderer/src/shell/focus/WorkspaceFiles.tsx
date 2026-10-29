@@ -3,6 +3,7 @@ import "./focus.css";
 import { api } from "../../api";
 import { Icon } from "../Icon";
 import { IconButton } from "../IconButton";
+import { StatusPie } from "../StatusPie";
 import { useT } from "../../locale";
 import { relativeTime } from "../relative-time";
 import { useFileTree } from "../../features/files/useFileTree";
@@ -421,7 +422,7 @@ function FileRow(props: {
   );
 }
 
-/** 会话节里的一行：三节竖条（与主列表同一份推导）+ 标题 + 相对时间 */
+/** 会话节里的一行：状态饼（与主列表同一份推导）+ 标题 + 相对时间 */
 function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: boolean }) {
   const t = useT();
   const { meta, session } = props;
@@ -442,13 +443,10 @@ function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: 
       onClick={() => session.openSession(meta.id)}
       style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", width: "100%", minHeight: "var(--control-height-md)", margin: "2px 0", padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)", textAlign: "left" }}
     >
-      {bar !== null && (
-        <span className="status-bar option-row-bar" data-fill={bar} title={runStateLabel(bar, t)}>
-          <i />
-          <i />
-          <i />
-        </span>
-      )}
+      {/* 行首 14px 状态槽（同侧栏会话行）：不亮也占位，标题才对得齐 */}
+      <span style={{ display: "grid", placeItems: "center", flex: "none", width: 14, height: 14 }}>
+        {bar !== null && <StatusPie state={bar} title={runStateLabel(bar, t)} />}
+      </span>
       <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {meta.title === "" ? t.common.newTask : meta.title}
       </span>

@@ -89,7 +89,7 @@ const CHECKS = [
   {
     name: "Sub-sessions·收件箱行：相对时间钉在右血线",
     row: ".inbox-row-main",
-    leading: ".status-bar",
+    leading: ".status-pie",
     trailing: ".inbox-row-ago",
     // .inbox-row-main 的右内边距 var(--space-3)；stopped / idle 行没有竖条，跳过
     rightPad: 12,

@@ -1,6 +1,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  aggregateRunStates,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
@@ -64,7 +65,7 @@ describe("planNotice", () => {
   });
 });
 
-describe("sessionRunState（竖条与铃铛清单的单一真源）", () => {
+describe("sessionRunState（状态饼与铃铛清单的单一真源）", () => {
   const idle: RunSlot = run("idle");
 
   it("自己或子会话在跑 → running（1/3 蓝）", () => {
@@ -121,5 +122,18 @@ describe("铃铛清单分档与排序", () => {
       ["waiting", "fresh-unread", "stale-unread", "fresh-running", "old-running"],
     );
     strictEqual(rows[0]?.id, "old-running");
+  });
+});
+describe("aggregateRunStates（工作区折叠时组头的汇总）", () => {
+  it("只列亮着的档，顺序 等你 > 出错 > 在跑 > 跑完", () => {
+    deepStrictEqual(aggregateRunStates(["done", "running", null, "waiting", "running", "failed"]), [
+      { state: "waiting", count: 1 },
+      { state: "failed", count: 1 },
+      { state: "running", count: 2 },
+      { state: "done", count: 1 },
+    ]);
+  });
+  it("全都读完 = 空串（组头什么都不画）", () => {
+    deepStrictEqual(aggregateRunStates([null, null]), []);
   });
 });

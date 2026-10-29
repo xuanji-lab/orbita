@@ -1,7 +1,7 @@
 /**
  * 右栏 Sub-sessions 面板（子会话 PR4c；2026-10-12 起列表层是**收件箱**）：主槽
  * 正看着一条有子会话的根会话时，这里是它们的唯一面板位——列表层（每个子会话
- * 一行：三节竖条 + 名字 + 最新一句 + 相对时间；「在问你」的行展开回答框）与
+ * 一行：状态饼 + 名字 + 最新一句 + 相对时间；「在问你」的行展开回答框）与
  * 会话层（挑中的那条，只读查看 + 审批，不给输入框）。两层状态机在
  * `sub-sessions-state.ts`（纯函数，App 持有，本组件受控渲染）；排序 / 状态 /
  * 最新一句的推导在 `sub-sessions-rows.ts`。
@@ -19,6 +19,7 @@ import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
+import { StatusPie } from "../../shell/StatusPie";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
@@ -222,7 +223,7 @@ export function SubSessionsPanel(props: {
 }
 
 /**
- * 收件箱的一行（2026-10-12）：行首三节竖条（与侧栏 / 铃铛清单同一根 `.status-bar`，
+ * 收件箱的一行（2026-10-12）：行首状态饼（与侧栏 / 铃铛清单同一个 `StatusPie`，
  * `subSessionBarFill` 定亮几节）+ 名字 + 最新一句 + 相对时间（行尾，钉在行的右内
  * 边距上）。**只有「在问你」的行展开回答框**（ChannelReplyBox）——其余行单行收着，
  * 点击进会话层看完整往来。行按钮与回答框是兄弟（button 不能嵌 button），整行 hover
@@ -244,11 +245,7 @@ function SubSessionRow(props: {
     <div className={`inbox-row${props.asking ? " asking" : ""}`}>
       <button type="button" className="inbox-row-main" onClick={props.onClick}>
         {bar !== undefined && (
-          <span className="status-bar inbox-row-bar" data-fill={bar} title={t.subSessions.rowStatus[status]}>
-            <i />
-            <i />
-            <i />
-          </span>
+          <StatusPie state={bar} title={t.subSessions.rowStatus[status]} className="inbox-row-pie" />
         )}
         <span className="inbox-row-item">
           <span className="inbox-row-l1">

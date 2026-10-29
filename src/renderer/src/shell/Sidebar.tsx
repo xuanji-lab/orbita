@@ -17,7 +17,8 @@ import type { MemoryNav } from "../features/memory/memory-view.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
-import { runStateLabel, sessionRunState } from "../features/notify/completion-notice.ts";
+import { aggregateRunStates, runStateLabel, sessionRunState } from "../features/notify/completion-notice.ts";
+import { StatusPie } from "./StatusPie";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import {
@@ -60,7 +61,7 @@ function openTodoCount(carryovers: readonly Carryover[], sessionId: string): num
 }
 
 /**
- * 三节竖条的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
+ * 状态饼的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
  * 同一套句子）。包一层是让调用点读起来像个本地词。
  */
 function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages): string {
@@ -850,6 +851,9 @@ function WorkspaceGroup(props: {
   const [editing, setEditing] = useState<string | null>(null);
   // 只列前 limit 条，其余收进「Show N more」；每点一次多放一页。打开着的那条恒可见
   const visible = visibleWithOpen(props.sessions, props.limit, props.openId);
+  // 折叠时组头上的运行态汇总：组收起来就看不到行，这是「里面还有东西在干活 / 在等你」
+  // 的唯一信号（2026-10-30 用户点名）。展开时行自己说，组头不重复
+  const agg = props.folded ? aggregateRunStates(props.sessions.map((meta) => runStateOf(props.session, meta))) : [];
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -946,7 +950,17 @@ function WorkspaceGroup(props: {
           />
         )}
 
-        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
+        <span style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
+          {agg.length > 0 && (
+            <span className="run-agg ws-agg" aria-label={agg.map((a) => `${runStateLabel(a.state, t)} ${a.count}`).join(" · ")}>
+              {agg.map((a) => (
+                <span key={a.state} title={runStateLabel(a.state, t)}>
+                  <StatusPie state={a.state} />
+                  {a.count}
+                </span>
+              ))}
+            </span>
+          )}
           {/**
             悬停动作簇（静止不占位）：「查看工作区文件」（list-tree，zcode 同款）
             在删除键前面——浏览是常事，删除是两段式。
@@ -1192,14 +1206,13 @@ function NavRow(props: {
   /** 整行的悬停说明（planned 的东西用它讲为什么点不动） */
   hint?: string;
   /**
-   * 行最左侧的三节竖条（2026-10-10 用户裁决）：running = 1/3 蓝，waiting = 2/3 橙，
-   * done = 3/3 绿，failed = 3/3 红；读完就不亮（undefined）。状态由
-   * sessionRunState 推导（与铃铛清单同一份真源）；选中仍是整行底色，互不干扰。
-   * 规则在 styles.css 的 `.status-bar`。**静态，无动效**（低端机 GPU 友好，
-   * 取代上一版的渐变带）。
+   * 行首的状态饼（2026-10-30，取代 10-10 的状态饼）：running = 1/3 蓝，
+   * waiting = 2/3 橙，done = 满绿，failed = 满红；读完就不亮（undefined）。状态由
+   * sessionRunState 推导（与铃铛清单同一份真源）；占行首状态槽，亮着时盖过
+   * fork / pin。规则在 styles.css 的 `.status-pie`。**静态，无动效**。
    */
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
-  /** 竖条的悬停说明（状态的可读名字） */
+  /** 状态饼的悬停说明（状态的可读名字） */
   barTitle?: string;
   /** 行尾的条数（记忆库导航）；undefined = 不画。钉在行右内边距（.row-trailing） */
   count?: number | undefined;
@@ -1237,29 +1250,23 @@ function NavRow(props: {
         ...props.style,
       }}
     >
-      {/* 三节竖条：贴行最左缘（GitHub 选中项同款位置）。不亮时不渲染——
-          「读完就不亮」是整个东西退场，不是留一根灰杠 */}
-      {props.bar !== undefined && (
-        <span className="status-bar option-row-bar" data-fill={props.bar} title={props.barTitle}>
-          <i />
-          <i />
-          <i />
-        </span>
-      )}
+      {/* 行首 14px 状态槽：亮着的状态饼优先（在跑 / 等你 / 跑完没看 / 出错没看），
+          否则画静态标记（fork / pin），都没有就留空槽占位——标题才对得齐 */}
       <span
-        title={props.iconTitle}
+        title={props.bar !== undefined ? props.barTitle : props.iconTitle}
         style={{
           display: "grid",
           placeItems: "center",
           flex: "0 0 auto",
+          width: 14,
+          height: 14,
           color: disabled ? "var(--color-text-tertiary)" : (props.tone ?? "var(--color-text-secondary)"),
         }}
       >
-        {props.icon === null ? (
-          // 空槽：不画任何东西，但占与图标等宽的位置——有标记的行和没标记的行标题对齐
-          <span style={{ width: 14, height: 14 }} />
-        ) : (
-          <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
+        {props.bar !== undefined ? (
+          <StatusPie state={props.bar} />
+        ) : props.icon === null ? null : (
+          <Icon name={props.icon} size={14} strokeWidth={1.8} spin={props.spin ?? false} />
         )}
       </span>
       <span
@@ -1285,7 +1292,7 @@ function NavRow(props: {
 }
 
 /**
- * 一条会话。状态在三处各说各的：行最左的三节竖条说运行态（在跑 / 在等你 / 跑完没看 /
+ * 一条会话。状态在三处各说各的：行最左的状态饼说运行态（在跑 / 在等你 / 跑完没看 /
  * 跑挂没看），行首图标槽只剩静态标记（子会话 git-fork / 置顶图钉），行尾是星标、
  * 完成勾与遗留角标——**状态优先用图标与文字，颜色是第二信号**（tooltip 补齐文字）。
  *
@@ -1296,6 +1303,22 @@ function NavRow(props: {
  * 转移要选目标——都靠 `keepOpen` 把菜单原地换成第二组项，
  * 「先讲后果再动作」不因为换了容器就省掉。
  */
+/**
+ * 一条根会话的运行态（状态饼与工作区汇总共用）：查它自己的槽——后台在跑的会话切走了
+ * 也照样亮，与「当前看哪条」无关。子会话只取一层（childSessions 同口径），子会话在跑 /
+ * 在等审批都记到母会话这一行上（入口在母）。未读读 meta（落盘，重启后还在）。
+ */
+function runStateOf(session: ChatSession, meta: SessionMeta) {
+  return sessionRunState({
+    slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
+    children: childSessions(session.sessions, meta.id).map((child) => ({
+      phase: session.phaseOf(child.id),
+      approvals: session.approvalsOf(child.id).length,
+    })),
+    unread: meta.unread ?? null,
+  });
+}
+
 function SessionRow(props: {
   meta: SessionMeta;
   session: ChatSession;
@@ -1314,27 +1337,15 @@ function SessionRow(props: {
    * 或里面没文件，文案退回光秃秃的 Delete permanently。
    */
   const [workbenchFiles, setWorkbenchFiles] = useState<number | null>(null);
-  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样亮竖条，与「当前看哪条」无关。
+  // 行的运行态查它自己的槽：后台在跑的会话切走了也照样亮状态饼，与「当前看哪条」无关。
   // 子会话只取一层（childSessions 同口径）——子会话在跑 / 在等审批都记到母会话
-  // 这一行的竖条上（入口在母），fork 图标再补「跑的是孩子」那一句
+  // 这一行的状态饼上（入口在母），fork 图标再补「跑的是孩子」那一句
   const children = childSessions(session.sessions, meta.id);
-  // 三节竖条（2026-10-10 用户裁决）：状态由 sessionRunState 推导——与右下角
-  // 铃铛清单同一份真源，两个入口只是同一状态的两种看法。未读读 meta（落盘，
-  // 重启后还在）；在跑 / 在等你读槽。选中仍是整行底色，互不干扰
-  const bar = sessionRunState({
-    slot: {
-      phase: session.phaseOf(meta.id),
-      approvals: session.approvalsOf(meta.id).length,
-    },
-    children: children.map((child) => ({
-      phase: session.phaseOf(child.id),
-      approvals: session.approvalsOf(child.id).length,
-    })),
-    unread: meta.unread ?? null,
-  });
+  // 状态饼（sessionRunState，与右下角铃铛清单同一份真源）
+  const bar = runStateOf(session, meta);
   const done = isSessionDone(meta);
   /**
-   * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归竖条，槽里只剩
+   * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归状态饼，槽里只剩
    * 静态标记。优先级与理由在 `row-status.ts`（纯函数 + 测试）。`null` = 这一
    * 行没什么可说，槽留空。
    */
