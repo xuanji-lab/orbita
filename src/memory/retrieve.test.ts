@@ -48,6 +48,21 @@ test("lexicalScore：关键词全中给满分；子串通道给中文问句兑�
   assert.ok(lexicalScore(chinese, cat) >= 0.3);
 });
 
+test("lexicalScore：关键词 bigram 覆盖通道——复合关键词撞上部分说法边过阈值", () => {
+  // 2026-10-29 真机冒烟的实测样本：条目关键词「依赖管理」，query 只说「装依赖」。
+  // 子串通道要求整词出现（擦肩而过），token 通道被长 query 稀释——覆盖通道兑底
+  const entryBun = entry({ id: "mem_bun", text: "用户的项目依赖统一用 bun 管理", keywords: ["bun", "依赖管理"] });
+  const query: MemoryQuery = {
+    text: "我要初始化一个新的前端项目，先帮我装依赖。",
+    tokens: new Set(tokenize("我要初始化一个新的前端项目，先帮我装依赖。")),
+  };
+  assert.ok(lexicalScore(query, entryBun) >= 0.3);
+  // 关键词的 bigram 一个都不在 query 里 → 覆盖通道不兑底（偶然单字重叠不算）
+  const miss = entry({ id: "mem_miss", text: "用户讨厌合并半成品", keywords: ["合并"] });
+  const missQuery: MemoryQuery = { text: "帮我装依赖", tokens: new Set(tokenize("帮我装依赖")) };
+  assert.ok(lexicalScore(missQuery, miss) < 0.3);
+});
+
 test("retrieveMemories：阈值门控、top 限制、字符预算", () => {
   const now = Date.now();
   const pool = [

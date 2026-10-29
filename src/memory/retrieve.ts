@@ -83,15 +83,21 @@ function decayOf(at: number, now: number): number {
 }
 
 /**
- * 词法打分 = max(token 通道, 关键词子串通道)。#228 原样移植：
+ * 词法打分 = max(token 通道, 关键词子串通道, 关键词 bigram 覆盖通道)。
  *
  * token 通道：命中的 query token 里，关键词里的算 0.7、只在正文里的算 0.3，按
  * query token 总数归一化。CJK bigram 的局限（#228 真机实测）：自然中文问句切成
  * 「我的/的猫/猫叫/…」与条目关键词「猫」零交集，再被分母稀释——日常问句几乎
  * 永远过不了阈值。
  *
- * 关键词子串通道补的就是这个：关键词在 query **原文**里原样出现是刻意命中。首个
- * 命中给到阈值线 0.3，之后每个 +0.15，封顶 0.7。
+ * 关键词子串通道补的是「关键词在 query 原文里原样出现」：首个命中给到阈值线
+ * 0.3，之后每个 +0.15，封顶 0.7。它只认整词——关键词是复合词（「依赖管理」）
+ * 而 query 只说到其中一部分（「帮我装依赖」，2026-10-29 真机冒烟实测）时擦肩
+ * 而过。
+ *
+ * 关键词 bigram 覆盖通道是子串通道的容错版：按关键词自己的 bigram 算 query 对
+ * 它的覆盖度，够 1/3（复合词里撞上一个实词 bigram）就给到阈值线——刻意相关
+ * 而不是偶然重叠，误伤由 top5 + 字符预算兑底。
  */
 export function lexicalScore(query: MemoryQuery, entry: MemoryEntry): number {
   let tokenChannel = 0;
@@ -110,8 +116,16 @@ export function lexicalScore(query: MemoryQuery, entry: MemoryEntry): number {
     const needle = k.trim().toLowerCase();
     return needle !== "" && haystack.includes(needle);
   }).length;
-  const keywordChannel =
+  let keywordChannel =
     substringHits === 0 ? 0 : Math.min(KEYWORD_WEIGHT, MIN_SCORE + 0.15 * (substringHits - 1));
+  let bigramCoverage = 0;
+  for (const keyword of entry.keywords) {
+    const parts = tokenize(keyword);
+    if (parts.length === 0) continue;
+    const hit = parts.filter((token) => query.tokens.has(token)).length / parts.length;
+    if (hit > bigramCoverage) bigramCoverage = hit;
+  }
+  if (bigramCoverage >= 1 / 3) keywordChannel = Math.max(keywordChannel, MIN_SCORE);
   return Math.max(tokenChannel, keywordChannel);
 }
 
