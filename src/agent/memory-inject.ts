@@ -1,14 +1,26 @@
 /**
- * 轮前召回的注入块组装（移植自已关闭的 PR #228 的 memory-inject.ts，条目形状
- * 换新：条目 text 自包含、常驻带 pinned 标）。**纯模块**，可被 `node --test` 直接加载。
+ * 轮前召回的注入块：组装（buildMemoryBlock）与**附件式挂载**（memoryAttachments /
+ * attachMemoryBlocks）。**纯模块**，可被 `node --test` 直接加载。
  *
- * 注入块拼在用户 prompt 文本的**尾部**（echoAndPrompt）：KV cache 只破尾段，
- * 前缀复用不受影响（ZCode 的缓存纪律）。回显账本记的是注入后的完整文本——
- * pi 回声对账认的是实际发出去的串。
+ * 为什么是附件、不是拼进用户消息（2026-10-29 用户裁决「不想强制 append 进消息里」）：
+ * 召回块不进用户原话——pi 本子与 orbita 转录里那条用户消息保持原样（QA 不被机器话
+ * 改写）。召回结果作为一条 custom entry（MEMORY_ATTACH_ENTRY）落在本子里，键是那条
+ * 用户消息的时间戳；每次发往模型前（context 事件，wire-only，同 user-context 的
+ * 时间情境）把它作为**独立的 text 块**挂回那条消息的末尾。
  *
- * 召回、打分、门控都在记忆服务进程（memory/retrieve.ts）；这里只做组装与兜底预算。
+ * 缓存纪律：块文本落本即定格，此后每轮按本子逐字节重放——历史前缀不变，只有本轮
+ * 新消息带新块。2026-10-29 实测（子会话 675dbb46 的 cache-probe-report）：智谱 /
+ * DeepSeek 网关 / Kimi / Claude 网关第 2–4 轮命中 95–99%，与不带附件的基线相当；
+ * 四家模型都读得到附件内容。**不能**下一轮重新召回再改写旧块——那就断了前缀。
+ *
+ * 召回、打分、门控都在记忆服务进程（memory/retrieve.ts）；这里只做组装、兜底预算与挂载。
  */
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { MemoryHit } from "../shared/memory.ts";
+import type { ContextMessage } from "./image-byte-budget.ts";
+
+/** pi 本子里记忆附件的 custom entry 类型名（data = { at: 用户消息时间戳, text: 块文本 }）。 */
+export const MEMORY_ATTACH_ENTRY = "orbita-memory-attach";
 
 /** 本地时区的 YYYY-MM-DD（条目时间的展示格式；#228 的 formatDate 同款）。 */
 function formatDate(now: number): string {
@@ -41,8 +53,76 @@ export function buildMemoryBlock(hits: readonly MemoryHit[]): string | null {
   }
   if (lines.length === 0) return null;
   return (
-    "\n\n<orbita-memory>\n以下条目来自既往会话的记忆，与当前输入无关时忽略：\n" +
+    "<orbita-memory>\n以下条目来自既往会话的记忆，与当前输入无关时忽略：\n" +
     lines.join("\n") +
     "\n</orbita-memory>"
   );
+}
+
+/**
+ * 从本子（当前叶子路径）读回各轮的记忆附件：用户消息时间戳 → 块文本。
+ * 坏 entry 跳过；同一时间戳出现两次以先落的为准（定格的那份才是发出去过的）。
+ */
+export function memoryAttachments(branch: readonly SessionEntry[]): Map<number, string> {
+  const attached = new Map<number, string>();
+  for (const entry of branch) {
+    if (entry.type !== "custom" || entry.customType !== MEMORY_ATTACH_ENTRY) continue;
+    const data = entry.data as { at?: unknown; text?: unknown } | undefined;
+    if (typeof data?.at !== "number" || !Number.isFinite(data.at) || typeof data.text !== "string") continue;
+    if (data.text === "" || attached.has(data.at)) continue;
+    attached.set(data.at, data.text);
+  }
+  return attached;
+}
+
+/**
+ * 本轮的记忆附件状态：本子里读回的 `attached`，加上本轮召回到、还没认领到用户消息
+ * 上的 `pending`（第一次 LLM 调用时认领给最后一条用户消息——那就是本轮的 prompt；
+ * 之后的 steer / 通道消息不带记忆）。
+ */
+export interface TurnMemoryAttach {
+  attached: Map<number, string>;
+  pending: string | null;
+}
+
+/**
+ * context 事件的纯核：认领 pending（返回要落本的 record），并把每条有附件的用户
+ * 消息挂上独立 text 块（末尾）。**不改入参**；没有任何附件时 messages 为 null
+ * （不替换，省一次数组拷贝）。
+ */
+export function attachMemoryBlocks(
+  messages: readonly ContextMessage[],
+  state: TurnMemoryAttach,
+): { messages: ContextMessage[] | null; record: { at: number; text: string } | null } {
+  let record: { at: number; text: string } | null = null;
+  if (state.pending !== null) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index] as { role?: unknown; timestamp?: unknown };
+      if (candidate.role !== "user") continue;
+      if (typeof candidate.timestamp === "number" && !state.attached.has(candidate.timestamp)) {
+        record = { at: candidate.timestamp, text: state.pending };
+        state.attached.set(candidate.timestamp, state.pending);
+      }
+      break;
+    }
+    state.pending = null;
+  }
+  if (state.attached.size === 0) return { messages: null, record };
+  let touched = false;
+  const next = messages.map((message) => {
+    const candidate = message as { role?: unknown; timestamp?: unknown; content?: unknown };
+    if (candidate.role !== "user" || typeof candidate.timestamp !== "number") return message;
+    const text = state.attached.get(candidate.timestamp);
+    if (text === undefined) return message;
+    touched = true;
+    const block = { type: "text" as const, text };
+    const content =
+      typeof candidate.content === "string"
+        ? [{ type: "text" as const, text: candidate.content }, block]
+        : Array.isArray(candidate.content)
+          ? [...candidate.content, block]
+          : [block];
+    return { ...message, content } as ContextMessage;
+  });
+  return { messages: touched ? next : null, record };
 }
