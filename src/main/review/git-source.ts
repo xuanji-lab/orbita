@@ -30,7 +30,7 @@ import {
 } from "../../shared/review.ts";
 import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
-import { diskUntrackedProbe, untrackedLineStat, type UntrackedProbe } from "./untracked-lines.ts";
+import { diskUntrackedProbe, untrackedLineStats, type UntrackedProbe } from "./untracked-lines.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -134,21 +134,26 @@ function insideWorkspace(path: string): boolean {
 
 /**
  * 未跟踪文件（porcelain v2 的 `? ` 行）：行数对着空文件算，二进制标 binary，符号链接只报指向哪。
- * 审查列表（unstaged）与专注左栏（gitWorkdirChanges）都走这里，数行数是 untrackedLineStat 一处实现——
- * 同一文件两边给同一个数，且都吃 size+mtime 缓存（以前这里整份读文件 + 造 diff 数 `+`：50 MB 要 1 秒）。
+ * 审查列表（unstaged）与专注左栏（gitWorkdirChanges）都走这里，数行数是 untrackedLineStats 一处实现——
+ * 同一文件两边给同一个数，且都吃同一份缓存（以前这里整份读文件 + 造 diff 数 `+`：50 MB 要 0.5–1 秒）。
+ * 一次把 status 列出的全部未跟踪文件交给计数器：缓存按「上一轮」记，必须是全集。
  */
 async function untrackedEntries(
   cwd: string,
   statusStdout: string,
   probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<ReviewEntry[]> {
-  const entries: ReviewEntry[] = [];
+  const paths: string[] = [];
   for (const line of statusStdout.split("\n")) {
     const path = parseUntrackedLine(line);
-    if (path === null || !insideWorkspace(path)) continue;
-    const lineStat = await untrackedLineStat(`${cwd}/${path}`, probe);
+    if (path !== null && insideWorkspace(path)) paths.push(path);
+  }
+  const lineStats = await untrackedLineStats(cwd, paths, probe);
+  const entries: ReviewEntry[] = [];
+  for (const path of paths) {
+    const lineStat = lineStats.get(path);
     // 刚被删 / 读不了：跳过——status 快照与磁盘现状之间的窗口，不值得报错
-    if (lineStat === null) continue;
+    if (lineStat === undefined) continue;
     if (lineStat.symlink !== undefined) {
       // 链接不跟：行数不算目标的，只标出它是链接、指向哪
       entries.push({ path, added: 0, removed: 0, binary: false, symlink: lineStat.symlink });

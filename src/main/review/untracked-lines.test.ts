@@ -13,7 +13,7 @@ import {
   diskUntrackedProbe,
   GIT_BINARY_SNIFF_BYTES,
   UNTRACKED_LINE_COUNT_MAX_BYTES,
-  untrackedLineStat,
+  untrackedLineStats,
   type UntrackedProbe,
 } from "./untracked-lines.ts";
 
@@ -88,20 +88,17 @@ function referenceLines(bytes: Buffer): number {
 }
 
 let seq = 0;
-/** 每个用例自己的路径（计数器缓存是模块级的，同路径同 size 会命中上一个用例的结论） */
-function uniquePath(name: string): string {
-  seq += 1;
-  return `/w-lines-${seq}/${name}`;
-}
 
+/** 一个文件单独成一轮：每次换一个工作区（计数器的缓存按工作区记上一轮，不让用例之间互相命中） */
 async function statOf(file: FakeFile) {
-  const path = uniquePath("f");
+  seq += 1;
+  const cwd = `/w-lines-${seq}`;
   const io = { opens: 0, bytes: 0, reads: 0 };
-  const stat = await untrackedLineStat(path, fakeProbe(new Map([[path, file]]), io));
-  return { stat, io };
+  const stats = await untrackedLineStats(cwd, ["f"], fakeProbe(new Map([[`${cwd}/f`, file]]), io));
+  return { stat: stats.get("f") ?? null, io };
 }
 
-describe("untrackedLineStat：数法与 git numstat 同口径", () => {
+describe("untrackedLineStats：数法与 git numstat 同口径", () => {
   const cases: Array<[string, Buffer, number]> = [
     ["空文件", Buffer.alloc(0), 0],
     ["只有一个换行", Buffer.from("\n"), 1],
@@ -159,7 +156,7 @@ describe("untrackedLineStat：数法与 git numstat 同口径", () => {
   });
 });
 
-describe("untrackedLineStat：上限、链接", () => {
+describe("untrackedLineStats：上限、链接", () => {
   test("正好等于上限照数；多 1 字节就只读开头 8000 字节、行数未知", async () => {
     const unit = "x".repeat(63) + "\n"; // 64 字节一行，上限 64 MB 正好整除
     const atLimit = await statOf({ content: { unit, size: UNTRACKED_LINE_COUNT_MAX_BYTES } });

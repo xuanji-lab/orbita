@@ -37,6 +37,19 @@ export const GIT_BINARY_SNIFF_BYTES = 8000;
 /** 每次 read 的块大小：一块逐字节数完约 0.3 ms，事件循环不会被一个大文件占住 */
 const READ_CHUNK_BYTES = 256 * 1024;
 
+/**
+ * 每一轮最多（重新）数多少个文件、读多少字节；缓存命中的不算。超出的这一轮先报「行数未知」、
+ * 不进缓存，下一轮接着数（前面数过的那时已经命中缓存，预算留给后面的）。保护的是「一轮」的时长：
+ * 第一次打开一个满是数据文件的工作区，或构建产物整片重新生成之后，左栏不必等几 GB 读完才出结果。
+ * - 5000 个文件：一般工作区的未跟踪文件一轮就数完（本机 2001 个小文件一轮约 0.2 s）；
+ * - 256 MB：本机约 0.3 s，也正好装得下 4 个计数上限大小的文件。
+ */
+const UNTRACKED_COUNT_FILES_PER_ROUND = 5000;
+const UNTRACKED_COUNT_BYTES_PER_ROUND = 256 * 1024 * 1024;
+
+/** 记住最近几个工作区的上一轮：专注左栏问一个，审查面板可能在问另一个会话的目录 */
+const ROUND_CACHE_WORKSPACES = 8;
+
 /** lstat 的结论：普通文件 / 符号链接 / 其他（目录、管道……不数） */
 export interface UntrackedFileInfo {
   kind: "file" | "symlink" | "other";
@@ -101,32 +114,32 @@ export const diskUntrackedProbe: UntrackedProbe = {
 export interface UntrackedLineStat {
   added: number;
   binary: boolean;
-  /** 没数行（超过单文件计数上限）：added 是 0 但**不是**「没改动」，UI 显示「行数未知」 */
+  /**
+   * 没数行：超过单文件计数上限，或这一轮的预算用完（下一轮接着数）。added 是 0 但**不是**
+   * 「没改动」，UI 显示「行数未知」。预算用完的可能是小文件，所以它不等于「文件太大」
+   */
   lineCountUnknown?: boolean;
   /** 符号链接：值是链接里写的目标（readlink 原文），不跟过去读，行数恒 0 */
   symlink?: string;
 }
 
-/**
- * 未跟踪文件行数的缓存：键 = 绝对路径 + size + mtimeMs。专注左栏每 30 秒问一遍
- * 全部未跟踪文件，而文件大多没变——不缓存时每轮把 29 MB 全文读一遍（实测 300 个
- * 文件约 0.3 s）。size 与 mtime 都没动就复用上次的结论，只花一次 lstat。
- * 容量上限 2000 是防无界增长的闸：超了按 LRU 淘汰最久没被问到的。
- */
-const UNTRACKED_LINE_CACHE_LIMIT = 2000;
-const untrackedLineCache = new Map<string, UntrackedLineStat>();
-
-function rememberUntrackedLine(key: string, lineStat: UntrackedLineStat): UntrackedLineStat {
-  // 命中也要先删再塞：Map 的迭代顺序 = 插入顺序，队首永远是最久没被问到的
-  untrackedLineCache.delete(key);
-  untrackedLineCache.set(key, lineStat);
-  while (untrackedLineCache.size > UNTRACKED_LINE_CACHE_LIMIT) {
-    const oldest = untrackedLineCache.keys().next().value;
-    if (oldest === undefined) break;
-    untrackedLineCache.delete(oldest);
-  }
-  return lineStat;
+/** 上一轮对一个文件的结论，连同当时的 size 与 mtimeMs（缓存键）。 */
+interface Remembered {
+  size: number;
+  mtimeMs: number;
+  stat: UntrackedLineStat;
 }
+
+/**
+ * 缓存按工作区记「上一轮」：工作区（cwd）→ 工作区相对路径 → 结论。专注左栏每 30 秒问一遍
+ * 全部未跟踪文件，而文件大多没变：这一轮问到、size 与 mtime 都没动的直接复用，只花一次 lstat。
+ * 这一轮没问到的随之丢掉，所以每个工作区缓存的条目数就是上一轮的条目数。
+ *
+ * 原来是一个全局 LRU（容量 2000）：轮询每轮按同一个顺序把全部未跟踪文件问一遍，文件一超过
+ * 2000 个，每问一个就挤掉下一轮最先要用的那个，每轮全部落空（实测 2001 个文件每轮读盘 2001 次）。
+ * 跟着上一轮走就没有这个悬崖，也不会无界增长：上限就是 status 列出来的那些。
+ */
+const lastRounds = new Map<string, Map<string, Remembered>>();
 
 /** 一块字节里有几个换行（0x0A）。逐字节比：indexOf 逐个找在短行文件上会退化到每个换行一次调用 */
 function newlinesIn(buffer: Buffer, length: number): number {
@@ -180,21 +193,61 @@ async function countFile(path: string, size: number, probe: UntrackedProbe): Pro
   }
 }
 
-/** 一个未跟踪文件的行级统计；null = 读不了（刚被删 / 不是普通文件） */
-export async function untrackedLineStat(
-  path: string,
+/**
+ * 一轮：cwd 下 status 列出的**全部**未跟踪文件（工作区相对路径）→ 各自的行级统计。
+ * 读不了的（刚被删 / 不是普通文件）不在结果里。paths 必须是这一轮的全集：只问一部分，
+ * 其余的会被当成「这一轮没出现」从缓存里丢掉。
+ */
+export async function untrackedLineStats(
+  cwd: string,
+  paths: readonly string[],
   probe: UntrackedProbe = diskUntrackedProbe,
-): Promise<UntrackedLineStat | null> {
-  const info = await probe.lstat(path);
-  if (info === null || info.kind === "other") return null;
-  if (info.kind === "symlink") {
-    // 链接不进缓存：lstat + readlink 已经是全部开销，没有可省的读盘
-    const target = await probe.readlink(path);
-    return target === null ? null : { added: 0, binary: false, symlink: target };
+): Promise<Map<string, UntrackedLineStat>> {
+  const previous = lastRounds.get(cwd);
+  const remembered = new Map<string, Remembered>();
+  const stats = new Map<string, UntrackedLineStat>();
+  let countedFiles = 0;
+  let countedBytes = 0;
+  for (const path of paths) {
+    const full = `${cwd}/${path}`;
+    const info = await probe.lstat(full);
+    if (info === null || info.kind === "other") continue;
+    if (info.kind === "symlink") {
+      // 链接不进缓存：lstat + readlink 已经是全部开销，没有可省的读盘
+      const target = await probe.readlink(full);
+      if (target !== null) stats.set(path, { added: 0, binary: false, symlink: target });
+      continue;
+    }
+    const hit = previous?.get(path);
+    if (hit !== undefined && hit.size === info.size && hit.mtimeMs === info.mtimeMs) {
+      remembered.set(path, hit);
+      stats.set(path, hit.stat);
+      continue;
+    }
+    // 这个文件要读多少：超过计数上限的只读判二进制的那一段
+    const cost = info.size > UNTRACKED_LINE_COUNT_MAX_BYTES ? GIT_BINARY_SNIFF_BYTES : info.size;
+    // countedBytes > 0：一轮里第一个要数的文件总放行（单个文件不超过计数上限，而上限 < 每轮预算）
+    if (
+      countedFiles >= UNTRACKED_COUNT_FILES_PER_ROUND ||
+      (countedBytes > 0 && countedBytes + cost > UNTRACKED_COUNT_BYTES_PER_ROUND)
+    ) {
+      stats.set(path, { added: 0, binary: false, lineCountUnknown: true });
+      continue;
+    }
+    countedFiles += 1;
+    countedBytes += cost;
+    const counted = await countFile(full, info.size, probe);
+    if (counted === null) continue;
+    remembered.set(path, { size: info.size, mtimeMs: info.mtimeMs, stat: counted });
+    stats.set(path, counted);
   }
-  const key = `${path}\u0000${info.size}\u0000${info.mtimeMs}`;
-  const hit = untrackedLineCache.get(key);
-  if (hit !== undefined) return rememberUntrackedLine(key, hit);
-  const counted = await countFile(path, info.size, probe);
-  return counted === null ? null : rememberUntrackedLine(key, counted);
+  // 工作区按最近一轮排：重新插入放到队尾，超出的从队首（最久没问的工作区）丢
+  lastRounds.delete(cwd);
+  lastRounds.set(cwd, remembered);
+  while (lastRounds.size > ROUND_CACHE_WORKSPACES) {
+    const oldest = lastRounds.keys().next().value;
+    if (oldest === undefined) break;
+    lastRounds.delete(oldest);
+  }
+  return stats;
 }

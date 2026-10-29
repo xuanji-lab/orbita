@@ -104,6 +104,37 @@ describe("未跟踪文件行数：专注与审查共用一份", () => {
     assert.equal(counter.opens, 1, "专注侧同样复用审查已经数好的结论");
   });
 
+  test("专注左栏与审查面板问的是不同目录：交替轮询，各自的上一轮互不挤掉", async () => {
+    // 专注看工作区 A（2001 个文件，超过原来 LRU 的 2000），审查面板看会话目录 B；
+    // 全局 LRU 时代 B 的一轮会把 A 的条目挤出去，A 下一轮整片重读
+    const files = new Map<string, FakeFile>();
+    const lines: string[] = [];
+    for (let i = 0; i < 2001; i++) {
+      files.set(`/w-alt-a/f-${i}.txt`, { bytes: Buffer.from("a\n", "utf8"), mtimeMs: 1000 });
+      lines.push(`? f-${i}.txt`);
+    }
+    files.set("/w-alt-b/only.txt", { bytes: Buffer.from("b\nb\n", "utf8"), mtimeMs: 1000 });
+    const counter = { opens: 0, bytes: 0 };
+    const probe = probeOf(files, counter);
+    const scripts = (statusOut: string): GitRunner => {
+      const table: Record<string, string> = {
+        "rev-parse --show-toplevel": "/w\n",
+        "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": statusOut,
+        "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": statusOut,
+        "diff --no-renames --relative --numstat": "",
+        "diff --cached --no-renames --relative --numstat": "",
+        "rev-parse --abbrev-ref HEAD": "main\n",
+      };
+      return async (args) => ({ code: 0, stdout: table[args.join(" ")] ?? "" });
+    };
+    await gitWorkdirChanges(scripts(lines.join("\n")), "/w-alt-a", probe);
+    await gitReviewList(scripts("? only.txt"), "/w-alt-b", "unstaged", probe);
+    assert.equal(counter.opens, 2002);
+    await gitWorkdirChanges(scripts(lines.join("\n")), "/w-alt-a", probe);
+    await gitReviewList(scripts("? only.txt"), "/w-alt-b", "unstaged", probe);
+    assert.equal(counter.opens, 2002, "两边第二轮都该全部命中");
+  });
+
   test("超过计数上限的文本：两边都只读开头 8000 字节、行数未知；第二次刷新零读盘", async () => {
     const files = new Map<string, FakeFile>([
       [
