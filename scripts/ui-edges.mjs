@@ -87,7 +87,10 @@ const CHECKS = [
   },
   {
     name: "MCP·卡头行：展开键钉在卡右血线",
-    row: ".mcp-card > span:first-of-type",
+    // 量卡本身：展开键与状态图标都在卡头那一行（querySelector 取到的第一颗就是它们）。
+    // 原先量的是卡头那个 span——它没有内边距，差值恒为 0，这条从来过不了（2026-10-30
+    // 能力面板把这张卡挪进详情后第一次真跑到）
+    row: ".mcp-card",
     leading: ".orbita-icon",
     trailing: ".mcp-expand",
     // .mcp-card 的横向内边距 var(--space-2)（右栏统一）；没有实例的卡不出展开键，跳过
