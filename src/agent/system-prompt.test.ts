@@ -26,6 +26,7 @@ const input = (patch: Partial<SystemPromptInput> = {}): SystemPromptInput => ({
   gitAttribution: true,
   attributionLanguage: "en",
   intentGuideline: false,
+  memoryToolsGuideline: false,
   ...patch,
 });
 
@@ -97,6 +98,13 @@ describe("orbitaSystemSegments —— 段序与空段", () => {
       "git-attribution",
       "reply-language",
     ]);
+  });
+
+  test("memoryToolsGuideline 开时 channel-role 之后多一段 memory-tools，关时没有", () => {
+    const off = orbitaSystemSegments(input()).map((segment) => segment.name);
+    const on = orbitaSystemSegments(input({ memoryToolsGuideline: true })).map((segment) => segment.name);
+    assert.ok(!off.includes("memory-tools"));
+    assert.equal(on[on.indexOf("channel-role") + 1], "memory-tools");
   });
 
   test("intentGuideline 开时多一段 intent，关时没有", () => {

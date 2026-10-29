@@ -16,6 +16,7 @@ import { describeChannelRole } from "./channel-tools.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
+import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
 
 const TOOL_GUIDELINES =
   "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
@@ -39,6 +40,8 @@ export interface SystemPromptInput {
   gitAttribution: boolean;
   attributionLanguage: Language | undefined;
   intentGuideline: boolean;
+  /** 本会话注册了记忆工具（根会话且记忆开着）：讲一段固定的使用说明 */
+  memoryToolsGuideline: boolean;
 }
 
 export interface PromptSegment {
@@ -53,6 +56,7 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     { name: "permission", text: describePermissionMode(input.mode, input.extraToolNames) },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
+    ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
     { name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) },
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
     { name: "expected-seconds", text: EXPECTED_SECONDS_GUIDELINE },

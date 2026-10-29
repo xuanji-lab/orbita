@@ -22,6 +22,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
+import type { MemoryRecallOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -39,6 +40,13 @@ import { buildRulesInventory } from "../shared/context-inventory.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
+import {
+  attachMemoryBlocks,
+  buildMemoryBlock,
+  MEMORY_ATTACH_ENTRY,
+  memoryAttachments,
+  type TurnMemoryAttach,
+} from "./memory-inject.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
@@ -71,6 +79,7 @@ import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools } from "./store-tools.ts";
+import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
@@ -721,6 +730,8 @@ interface TurnParts {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（OpenedTurn.budget 的透传） */
   budget: TurnImageBudget;
+  /** 本轮的记忆附件状态（OpenedTurn.memory 的透传） */
+  memory: TurnMemoryAttach;
   /** 意图召回的中止器（OpenedTurn.intentAbort 的透传）：停止 / 抢跑时拆 HTTP 流 */
   intentAbort: AbortController;
 }
@@ -766,7 +777,7 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  * notePromptStability 共用这一份真源）：MCP 工具 + 内置自定义工具 + 终端组 +
  * 本会话实际注册的通道工具。
  */
-function extraToolNames(role: "root" | "child", workspaceId: string | null): string[] {
+function extraToolNames(role: "root" | "child", workspaceId: string | null, memoryTools: boolean): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
     "create_skill",
@@ -774,6 +785,7 @@ function extraToolNames(role: "root" | "child", workspaceId: string | null): str
     "read_task",
     ...TERMINAL_TOOL_NAMES,
     ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
+    ...(memoryTools ? MEMORY_TOOL_NAMES : []),
   ];
 }
 
@@ -871,6 +883,8 @@ interface OpenedTurn {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
   budget: TurnImageBudget;
+  /** 本轮的记忆附件（实验功能 memory-system）：本子读回的各轮块 + 本轮待认领的块，见 memory-inject.ts */
+  memory: TurnMemoryAttach;
   /** 意图召回的中止器：停止 / 抢跑 / 删会话时拆掉 /recall 的 HTTP 流（无意图时闲置） */
   intentAbort: AbortController;
 }
@@ -932,15 +946,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   }
 
   /**
-   * 子会话身份（2026-09-23）：related 里有 `relation === "parent"` 的一项 → 本会话
-   * 是被派出的子会话。决定注册哪些通道工具（createChannelTools）、讲哪段通道
-   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜。
+   * 子会话身份（2026-09-23）：决定注册哪些通道工具（createChannelTools）、讲哪段通道
+   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜（isChildSession）。
    */
-  const role: "root" | "child" = command.directories?.related?.some(
-    (entry) => entry.relation === "parent",
-  )
-    ? "child"
-    : "root";
+  const role: "root" | "child" = isChildSession(command) ? "child" : "root";
+  /**
+   * 记忆工具（memory_search / revise / retire）只给根会话、且记忆开着时注册——子会话读不写。
+   * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
+   */
+  const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -1035,7 +1049,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId);
+              const extra = extraToolNames(role, command.workspaceId, memoryTools);
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
@@ -1049,6 +1063,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
                 intentGuideline: "intent" in command && command.intent !== undefined,
+                memoryToolsGuideline: memoryTools,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
@@ -1119,6 +1134,26 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               } catch (cause) {
                 // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
                 console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
+        {
+          // 记忆附件（memory-inject.ts）：召回块不进用户原话，作为独立 text 块在发往模型前
+          // 挂回它所属的那条用户消息（wire-only）；首次认领时落一条 custom entry 定格，
+          // 之后每轮逐字节重放——前缀缓存不断。无附件的会话这里是空操作
+          name: "orbita-memory-attach",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            pi.on("context", (event) => {
+              try {
+                const out = attachMemoryBlocks(event.messages, memory);
+                if (out.record !== null) pi.appendEntry(MEMORY_ATTACH_ENTRY, out.record);
+                return out.messages === null ? undefined : { messages: out.messages };
+              } catch (cause) {
+                // fail-open：记忆是易耗品，挂载出错本轮按原样发送
+                console.error("[memory] 记忆附件挂载失败，本轮请求按原样发送", cause);
                 return undefined;
               }
             });
@@ -1260,6 +1295,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     pendingRefs: new Map(),
     protectedFloor: Number.MAX_SAFE_INTEGER,
   };
+  // 记忆附件（实验功能 memory-system）：各轮召回块从本子（当前叶子路径）读回，
+  // 本轮的块在 echoAndPrompt 召回后放进 pending，首个 LLM 调用时认领落本。
+  // 定义在 extensionFactories 之后是安全的（同 budget 的说明）
+  const memory: TurnMemoryAttach = { attached: memoryAttachments(sessionManager.getBranch()), pending: null };
   // 意图召回的中止器：开轮即建，停止 / 抢跑时由 startTurn 的 abort 回调触发
   const intentAbort = new AbortController();
   /**
@@ -1298,6 +1337,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
     ...createChannelTools(requestBroker, command.sessionId, role),
+    ...(memoryTools
+      ? createMemoryTools(requestBroker, command.sessionId, {
+          scope: { workspaceId: command.workspaceId, cwd: command.cwd },
+          // 轮号在 echoAndPrompt 算好写进 memory.turn；没开轮（压缩）时不会调到工具
+          turn: () => memory.turn ?? 1,
+        })
+      : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -1500,7 +1546,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget, intentAbort };
+  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget, memory, intentAbort };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -1548,6 +1594,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         tracker: opened.tracker,
         webWatch: opened.webWatch,
         budget: opened.budget,
+        memory: opened.memory,
         intentAbort: opened.intentAbort,
       };
     },
@@ -1560,6 +1607,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         tracker: parts.tracker,
         webWatch: parts.webWatch,
         budget: parts.budget,
+        memory: parts.memory,
         intentAbort: parts.intentAbort,
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
@@ -1826,6 +1874,45 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
   }
 }
 
+/**
+ * 子会话身份：开轮目录清单的 related 里有 `relation === "parent"` 的一项 → 本会话是被
+ * 派出的子会话。通道工具、记忆工具的注册与召回块的纠错提示都认它一处。
+ */
+function isChildSession(command: { directories?: { related?: readonly { relation: string }[] } }): boolean {
+  return command.directories?.related?.some((entry) => entry.relation === "parent") === true;
+}
+
+/**
+ * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
+ * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
+ */
+const MEMORY_RECALL_TIMEOUT_MS = 6_000;
+
+/**
+ * 轮前召回（实验功能 memory-system）：拿用户原话问主进程要相关记忆（主进程再
+ * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
+ * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
+ */
+async function recallMemories(
+  sessionId: string,
+  query: string,
+  turn: number,
+  scope: { workspaceId: string | null; cwd: string },
+  canRevise: boolean,
+): Promise<string | null> {
+  try {
+    const outcome = await requestBroker.request<MemoryRecallOutcome>(
+      { type: "memoryRecallRequest", sessionId, query, turn, scope },
+      MEMORY_RECALL_TIMEOUT_MS,
+    );
+    if (!outcome.ok || outcome.hits.length === 0) return null;
+    return buildMemoryBlock(outcome.hits, { canRevise });
+  } catch (cause) {
+    console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
+    return null;
+  }
+}
+
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1841,6 +1928,25 @@ async function echoAndPrompt(
   }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
+  // 本轮轮号（按用户消息计，1 起）：注入账本与条目分组的键——prompt 之前的
+  // 历史里数用户消息 +1（#228 的口径，与 renderer 划选引用一致）
+  const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
+  opened.memory.turn = turn;
+  // 轮前记忆召回（实验功能 memory-system）：召回块**不拼进用户原话**，放进本轮的
+  // pending，首个 LLM 调用时由 orbita-memory-attach 扩展作为独立块挂到这条消息上
+  // （见 memory-inject.ts）。超时 / 报错 / 空命中都不挂——记忆的失败不拦开轮。
+  // 子会话也召回（读不写，写入门禁在主进程的轮后路径）
+  opened.memory.pending =
+    command.sessionMemory === true
+      ? await recallMemories(
+          command.sessionId,
+          command.text,
+          turn,
+          { workspaceId: command.workspaceId, cwd: command.cwd },
+          // 块里讲「用 memory_revise 改」只对注册了工具的根会话；子会话的块不讲
+          !isChildSession(command),
+        )
+      : null;
   const promptText = composePromptText(command.text, pasted, files);
   // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
   // 纯图片等极端情况下没有文字 item，退回临时 id（recall 卡片照常，只是与转录对不上）
@@ -2064,6 +2170,17 @@ async function handle(command: AgentCommand): Promise<void> {
         ? { ok: true, card: command.card, text: command.text }
         : { ok: false, error: command.error ?? "Read failed" },
     );
+    return;
+  }
+  if (command.type === "memoryRecallResult") {
+    // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
+    // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "memoryToolResult") {
+    // 记忆工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "browserResult") {

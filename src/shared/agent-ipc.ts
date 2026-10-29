@@ -32,6 +32,13 @@ import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { IntentRecallRecord } from "./session.ts";
+import type {
+  MemoryBackfillProgress,
+  MemoryDownloadProgress,
+  MemoryAgentCall,
+  MemoryAgentOutcome,
+  MemoryRecallOutcome,
+} from "./memory.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -115,6 +122,17 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
+  /** 记忆库（实验功能 memory-system）的四条读写通道。读在主进程（纯模块直读
+   * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
+  memoryScopes: "memory:scopes",
+  memoryEntries: "memory:entries",
+  memorySession: "memory:session",
+  memoryMutate: "memory:mutate",
+  /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
+   *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
+  memoryVectorStatus: "memory:vector-status",
+  memoryVectorSet: "memory:vector-set",
+  memoryVectorDownload: "memory:vector-download",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -742,6 +760,13 @@ export type AgentCommand =
        * 开关全关时不装配（与 main 行为一致的边界代价，见主进程装配处注释）。
        */
       backfill?: string[];
+      /**
+       * 记忆系统（实验功能 memory-system）的轮前召回开关。**主进程从设置装配**
+       * （同 pdfCitations）：实验开关开着就带 true——召回对根会话与子会话都生效
+       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = 关，runtime 不问
+       * 记忆、命令形状与 main 一字不差。
+       */
+      sessionMemory?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -815,6 +840,9 @@ export type AgentCommand =
       sessionId: string;
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
+      /** 记忆系统的轮前召回开关（submit.sessionMemory 的同款字段，interrupt
+       * 是「立即发送」分支，同一轮语义） */
+      sessionMemory?: boolean;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -952,6 +980,17 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /**
+   * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
+   * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
+   * 调用方（轮前召回）对任何失败按「不注入、照常开轮」处理，记忆的失败不拦对话。
+   */
+  | ({ type: "memoryRecallResult"; requestId: string } & MemoryRecallOutcome)
+  /**
+   * 记忆系统：主进程对 memoryToolRequest 的回执（同款 ok 双分支）。失败的 error
+   * 原样成为工具失败原因给模型看（找不到 / 歧义 / 服务不在）。
+   */
+  | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
@@ -1146,6 +1185,38 @@ export type AgentEvent =
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
   /**
+   * 记忆系统（实验功能 memory-system）：轮前召回的问答（readTaskRequest 同一条
+   * requestId 边界）。agent 进程不碰 userData——存储在记忆服务进程，主进程转发。
+   * 查询是本轮用户原话，回执 memoryRecallResult；agent 侧 5 秒硬超时，超时 /
+   * 出错 / 无命中都不注入（记忆的失败不拦开轮）。
+   */
+  | {
+      type: "memoryRecallRequest";
+      requestId: string;
+      sessionId: string;
+      /** 本轮用户原话（词法打分的 query） */
+      query: string;
+      /** 第几轮（按用户消息计，1 起）——注入账本按它记账 */
+      turn: number;
+      /** 会话归属（主进程按它解析作用域：workspaceId ?? cwd） */
+      scope: { workspaceId: string | null; cwd: string };
+    }
+  /**
+   * 记忆系统：agent 的记忆工具（memory_search / memory_revise / memory_retire）。
+   * 只有根会话注册这组工具；主进程另按会话 meta 再判一次（子会话的写一律拒——
+   * 「子会话读不写」不只靠 agent 侧不注册）。作用域同 memoryRecallRequest 在主进程解析。
+   * 回 memoryToolResult。
+   */
+  | {
+      type: "memoryToolRequest";
+      requestId: string;
+      sessionId: string;
+      /** 调用发生在第几轮（revise 新条的出处轮号） */
+      turn: number;
+      scope: { workspaceId: string | null; cwd: string };
+      call: MemoryAgentCall;
+    }
+  /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
    * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。
    * 作用于该会话自己的 agent tab（没有就建）。回 browserResult。
@@ -1206,6 +1277,22 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
+ * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
+ * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
+ */
+| { type: "memoryChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：模型下载进度（服务 → 主进程转发）。
+ * 载荷 MemoryDownloadProgress（phase: downloading/verifying/done/failed）。
+ */
+| { type: "vectorDownload"; progress: MemoryDownloadProgress }
+/**
+ * 记忆系统（实验功能 memory-system）：后台补算进度（running / deferred-battery /
+ * idle 收尾）。载荷 MemoryBackfillProgress。
+ */
+| { type: "vectorBackfill"; progress: MemoryBackfillProgress }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
