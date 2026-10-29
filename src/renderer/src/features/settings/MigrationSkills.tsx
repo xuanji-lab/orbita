@@ -63,7 +63,7 @@ export function SkillsSection(props: {
       tools={
         selectable.length > 0 && (
           <span className="mg-tools">
-            <span className="mg-seg" role="group" aria-label={t.migration.skillModeAria}>
+            <span className="seg-control" role="group" aria-label={t.migration.skillModeAria}>
               {(["copy", "link"] as const).map((mode) => (
                 <ModeButton
                   key={mode}
@@ -139,7 +139,6 @@ function ModeButton(props: { mode: ImportSkillMode; pressed: boolean; disabled: 
     <>
       <button
         type="button"
-        className="quiet-control mg-seg-btn"
         aria-pressed={props.pressed}
         disabled={props.disabled}
         onClick={props.onClick}

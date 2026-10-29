@@ -26,6 +26,7 @@ import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssign
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { Segmented } from "./SettingControls";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import {
   cardAddress,
@@ -1386,7 +1387,7 @@ function AccessPicker(props: { methods: readonly ProviderApi[]; value: ProviderA
   const tip = useSettingTip<HTMLSpanElement>(t.providers.accessTip);
   return (
     <>
-      <span className="pv-seg pv-access" role="group" aria-label={t.providers.accessLabel} {...tip.anchor}>
+      <span className="seg-control pv-access" role="group" aria-label={t.providers.accessLabel} {...tip.anchor}>
         {props.methods.map((api) => (
           <button
             key={api}
@@ -1589,7 +1590,7 @@ function ProviderGrid(props: {
             <Icon name="list-filter" size={13} /> {t.providers.onlyAdded}
             <span className="pv-row-count">{addedKinds}</span>
           </button>
-          <span className="pv-seg" role="group" aria-label={t.providers.cardSize}>
+          <span className="seg-control" role="group" aria-label={t.providers.cardSize}>
             {(["large", "small"] as const).map((size) => (
               <button
                 key={size}
@@ -1999,45 +2000,46 @@ function ModelDialog(props: {
           </div>
           <div className="pv-fld wide">
             <span className="pv-lab">{t.providers.imageInput}</span>
-            <div role="group" aria-label={t.providers.imageInput} className="pv-inline tight">
-              <Chip
-                icon={inheritImage ? "image" : undefined}
-                active={vision === "inherit"}
-                title={
-                  inheritImage
-                    ? t.providers.inheritImageTip
-                    : t.providers.inheritTextTip
-                }
-                onClick={() => setVision("inherit")}
-              >
-                {t.providers.inherit}
-              </Chip>
-              <Chip active={vision === "on"} onClick={() => setVision("on")}>
-                {t.common.on}
-              </Chip>
-              <Chip active={vision === "off"} onClick={() => setVision("off")}>
-                {t.common.off}
-              </Chip>
-            </div>
+            <Segmented
+              label={t.providers.imageInput}
+              value={vision}
+              options={[
+                {
+                  value: "inherit" as const,
+                  label: (
+                    <>
+                      {inheritImage && <Icon name="image" size={12} strokeWidth={1.8} />}
+                      {t.providers.inherit}
+                    </>
+                  ),
+                  title: inheritImage ? t.providers.inheritImageTip : t.providers.inheritTextTip,
+                },
+                { value: "on" as const, label: t.common.on },
+                { value: "off" as const, label: t.common.off },
+              ]}
+              onChange={setVision}
+            />
           </div>
           <div className="pv-fld wide pv-fld-top">
             <span className="pv-lab">{t.providers.thinkingLevels}</span>
             <div className="pv-fld-stack">
-              <div role="group" aria-label={t.providers.thinkingLevels} className="pv-inline tight">
-                <Chip
-                  active={thinking === null}
-                  title={inheritedLevels === null ? undefined : t.providers.inheritThinkingTip}
-                  onClick={() => setThinking(null)}
-                >
-                  {t.providers.inherit}
-                </Chip>
-                <Chip
-                  active={thinking !== null}
-                  onClick={() => setThinking((current) => current ?? customThinkingSeed(inheritedLevels))}
-                >
-                  {t.providers.custom}
-                </Chip>
-              </div>
+              <Segmented
+                label={t.providers.thinkingLevels}
+                value={thinking === null ? "inherit" : "custom"}
+                options={[
+                  {
+                    value: "inherit" as const,
+                    label: t.providers.inherit,
+                    title: inheritedLevels === null ? undefined : t.providers.inheritThinkingTip,
+                  },
+                  { value: "custom" as const, label: t.providers.custom },
+                ]}
+                onChange={(next) =>
+                  next === "inherit"
+                    ? setThinking(null)
+                    : setThinking((current) => current ?? customThinkingSeed(inheritedLevels))
+                }
+              />
               {thinking === null ? (
                 <div className="pv-levels-inherited">
                   {inheritedLevels === null ? (

@@ -530,35 +530,7 @@
   font-weight: var(--weight-semibold);
 }
 /* 大 / 小两档：一组分段按钮 */
-.pv-seg {
-  display: inline-flex;
-  flex: none;
-  padding: var(--space-0-5);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-}
-.pv-seg button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: calc(var(--control-height-md) - 6px);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: calc(var(--radius-md) - 2px);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.pv-seg button:hover {
-  color: var(--color-text-primary);
-}
-.pv-seg button[aria-pressed="true"] {
-  background: var(--color-bg-active);
-  color: var(--color-text-primary);
-  font-weight: var(--weight-semibold);
-}
+/* 分段（接入协议、卡片大小）用全应用同一个配方 .seg-control（styles.css）：外框 28、段 24 */
 
 .pv-wall-group {
   display: grid;
