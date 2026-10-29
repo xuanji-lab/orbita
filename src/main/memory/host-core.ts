@@ -17,6 +17,8 @@
  */
 import { randomUUID } from "node:crypto";
 import type {
+  MemoryAgentCall,
+  MemoryAgentOutcome,
   MemoryBackfillProgress,
   MemoryChoreModel,
   MemoryDownloadProgress,
@@ -107,6 +109,10 @@ export class MemoryServiceHostCore {
     string,
     { resolve: (outcome: MemoryMutationOutcome) => void; timer: NodeJS.Timeout }
   >();
+  private readonly pendingAgentTools = new Map<
+    string,
+    { resolve: (outcome: MemoryAgentOutcome) => void; timer: NodeJS.Timeout }
+  >();
   private readonly pendingVectorStates = new Map<
     string,
     { resolve: (state: VectorStateReply | null) => void; timer: NodeJS.Timeout }
@@ -177,6 +183,13 @@ export class MemoryServiceHostCore {
           } else {
             pending.resolve({ ok: false, error: message.error });
           }
+        }
+        if (message.type === "agentToolResult") {
+          const pending = this.pendingAgentTools.get(message.requestId);
+          if (pending === undefined) return; // 超时后到的回执：丢弃
+          clearTimeout(pending.timer);
+          this.pendingAgentTools.delete(message.requestId);
+          pending.resolve(message.ok ? { ok: true, entries: message.entries } : { ok: false, error: message.error });
         }
         if (message.type === "vectorStateResult") {
           const pending = this.pendingVectorStates.get(message.requestId);
@@ -331,6 +344,31 @@ export class MemoryServiceHostCore {
     });
   }
 
+  /**
+   * 转发 agent 的记忆工具调用（服务是唯一写者）。超时与 mutate 同一口径；服务不在 /
+   * 超时 / 崩溃 → ok:false，error 原样成为工具失败原因给模型看。
+   */
+  agentTool(input: {
+    sessionId: string;
+    scopeId: string;
+    turn: number;
+    call: MemoryAgentCall;
+  }): Promise<MemoryAgentOutcome> {
+    if (this.child === null) {
+      return Promise.resolve({ ok: false, error: "记忆服务没在跑（实验开关可能关着）" });
+    }
+    const requestId = `${this.seq += 1}:${randomUUID()}`;
+    return new Promise<MemoryAgentOutcome>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingAgentTools.delete(requestId);
+        resolve({ ok: false, error: "记忆服务没在限定时间内回执，稍后再试" });
+      }, this.mutateTimeoutMs);
+      timer.unref?.();
+      this.pendingAgentTools.set(requestId, { resolve, timer });
+      this.child?.postMessage({ type: "agentTool", requestId, ...input });
+    });
+  }
+
   private dropChild(reason: string, killIt = true): void {
     const child = this.child;
     this.child = null;
@@ -345,6 +383,11 @@ export class MemoryServiceHostCore {
       pending.resolve({ ok: false, error: "记忆服务停了" });
     }
     this.pendingMutates.clear();
+    for (const [, pending] of this.pendingAgentTools) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: "记忆服务停了" });
+    }
+    this.pendingAgentTools.clear();
     for (const [, pending] of this.pendingVectorStates) {
       clearTimeout(pending.timer);
       pending.resolve(null);

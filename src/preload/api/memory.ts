@@ -10,7 +10,6 @@ import type {
   MemoryEntriesResponse,
   MemoryMutation,
   MemoryMutationOutcome,
-  MemoryPendingResponse,
   MemoryScopeSummary,
   MemorySessionView,
   MemoryVectorSettings,
@@ -26,10 +25,8 @@ export const memoryApi = {
   /** 某会话按轮的记忆视图（轮尾卡与审查 › 记忆页签共用） */
   session: (sessionId: string): Promise<MemorySessionView> =>
     ipcRenderer.invoke(ipcChannels.memorySession, sessionId),
-  /** 待确认清单（pendingPromote 与未处理 conflictWith；已拍板的也返，撤销用） */
-  pending: (): Promise<MemoryPendingResponse> => ipcRenderer.invoke(ipcChannels.memoryPending),
-  /** 八种写操作（edit / remove / setStatus / addManual / decidePromote / undoPromote /
-   *  decideConflict / undoConflict）；结果以返回值为准，成功后另有 memoryChanged 推送 */
+  /** 六种写操作（edit / remove / setStatus / addManual / restorePrevious / returnToWorkspace）；
+   *  结果以返回值为准，成功后另有 memoryChanged 推送 */
   mutate: (mutation: MemoryMutation): Promise<MemoryMutationOutcome> =>
     ipcRenderer.invoke(ipcChannels.memoryMutate, mutation),
   /** 本地向量模型的设置页快照（设备 / llama-server / 模型文件 / 补算与向量库）。 */

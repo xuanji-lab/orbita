@@ -236,6 +236,22 @@ parentPort.on("message", (event: { data: unknown }) => {
       });
     return;
   }
+  if (command.type === "agentTool") {
+    const { requestId } = command;
+    void core
+      .agentTool(command)
+      .then((outcome) => post({ type: "agentToolResult", requestId, ...outcome }))
+      .catch((cause: unknown) => {
+        console.error("[memory] agentTool 路径抛错", cause);
+        post({
+          type: "agentToolResult",
+          requestId,
+          ok: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    return;
+  }
 });
 
 // 退出清理（见 vectorDeps.spawn 的注释）：macOS / Linux 上 UtilityProcess.kill() 发

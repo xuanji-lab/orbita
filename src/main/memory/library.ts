@@ -8,8 +8,7 @@
  * 读不会跟写打架：追加是单次 appendFile（半截行按坏行跳过），整层重写走临时文件
  * + rename（读者看到旧的或新的完整文件）。
  *
- * 四个读法对应四条 IPC（scopes / entries / session / pending），形状在
- * shared/memory.ts。
+ * 三个读法对应三条 IPC（scopes / entries / session），形状在 shared/memory.ts。
  */
 import { MemoryEntryStore } from "../../memory/entries.ts";
 import { EpisodeStore } from "../../memory/episodes.ts";
@@ -20,7 +19,6 @@ import {
   type MemoryEntryView,
   type MemoryEpisode,
   type MemoryEvolutionNode,
-  type MemoryPendingItem,
   type MemoryScopeSummary,
   type MemorySessionView,
   type MemorySessionTurnView,
@@ -134,16 +132,27 @@ export class MemoryLibrary {
           ? this.entries.tokenOf(meta.workspaceId)
           : this.entries.tokenOf(meta.cwd);
     const [records, layers] = await Promise.all([this.entries.listInjections(), this.readLayers()]);
-    const pool = layers.flatMap((layer) => layer.entries);
-    const mine = pool.filter((entry) => entry.sessionId === sessionId);
+    const located = layers.flatMap((layer) => layer.entries.map((entry) => ({ entry, token: layer.token })));
+    const pool = located.map((item) => item.entry);
+    const byId = new Map(pool.map((entry) => [entry.id, entry]));
+    const newerOf = buildReverseIndex(pool);
+    const mine = located.filter((item) => item.entry.sessionId === sessionId);
     const injectedOfTurn = new Map(
       records.filter((record) => record.sessionId === sessionId).map((record) => [record.turn, record]),
     );
-    const rememberedOfTurn = new Map<number, MemoryEntry[]>();
-    for (const entry of mine) {
+    const rememberedOfTurn = new Map<number, MemoryEntryView[]>();
+    for (const { entry, token: entryToken } of mine) {
+      // 条目卡要能看演变链、能撤销（agent 修订的那条尤其要），所以带 evolution 与所在层 token
+      const view: MemoryEntryView = {
+        entry,
+        token: entryToken,
+        sessionTitle: null,
+        quote: null,
+        evolution: evolutionOf(entry, byId, newerOf),
+      };
       for (const turn of entry.turns) {
         const bucket = rememberedOfTurn.get(turn) ?? [];
-        bucket.push(entry);
+        bucket.push(view);
         rememberedOfTurn.set(turn, bucket);
       }
     }
@@ -153,7 +162,7 @@ export class MemoryLibrary {
         const record = injectedOfTurn.get(turn);
         const used: MemoryUsedHit[] = (record?.hits ?? []).map((hit) => ({
           id: hit.id,
-          text: hit.text ?? pool.find((entry) => entry.id === hit.id)?.text ?? "",
+          text: hit.text ?? byId.get(hit.id)?.text ?? "",
           score: hit.score,
           ...(hit.pinned ? { pinned: true } : null),
         }));
@@ -165,44 +174,6 @@ export class MemoryLibrary {
         };
       });
     return { sessionId, token, turns };
-  }
-
-  /**
-   * 待确认清单：pendingPromote 与 conflictWith 的条目，**已拍板的也返**（done 卡与
-   * 撤销键的来处）。冲突的 ask 要求旧条目还在且是 active——旧条已删 / 已 muted 的
-   * 没什么可拍板。新在前。
-   */
-  async pending(): Promise<MemoryPendingItem[]> {
-    const layers = await this.readLayers();
-    const pool = layers.flatMap((layer) => layer.entries.map((entry) => ({ entry, token: layer.token })));
-    const byId = new Map(pool.map((item) => [item.entry.id, item.entry]));
-    const items: MemoryPendingItem[] = [];
-    for (const { entry, token } of pool) {
-      if (entry.pendingPromote === true || entry.promoteResolution !== undefined) {
-        items.push({
-          kind: "promote",
-          entry,
-          token,
-          old: null,
-          ...(entry.promoteResolution !== undefined ? { resolution: entry.promoteResolution } : null),
-        });
-      }
-      if (entry.conflictWith !== undefined) {
-        const old = byId.get(entry.conflictWith) ?? null;
-        const decided = entry.conflictResolution !== undefined;
-        const askable = !decided && old !== null && (old.status ?? "active") === "active";
-        if (decided || askable) {
-          items.push({
-            kind: "conflict",
-            entry,
-            token,
-            old,
-            ...(decided ? { resolution: entry.conflictResolution } : null),
-          });
-        }
-      }
-    }
-    return items.sort((a, b) => b.entry.at - a.entry.at);
   }
 
   /* ---------- 内部 ---------- */
@@ -259,7 +230,7 @@ function buildReverseIndex(entries: readonly MemoryEntry[]): Map<string, MemoryE
 }
 
 /**
- * 偏好演变链：沿 conflictWith 串起来的新旧条目，按时间旧 → 新，含自身。
+ * 演变链：沿 conflictWith 串起来的新旧条目（提取判出的冲突与 agent 修订都走它），按时间旧 → 新，含自身。
  * 没有冲突关联（自己不指人、也没人指自己）返回空数组。分叉（两条新记忆同时指
  * 一条旧记忆）时前向走**最旧**的新者——链在实践中是线性的，分叉取一条路。
  */
@@ -290,6 +261,7 @@ function evolutionOf(
       text: node.text,
       at: node.at,
       ...(node.status !== undefined ? { status: node.status } : null),
+      source: node.source,
     });
     const newers: MemoryEntry[] = (newerOf.get(node.id) ?? []).filter(
       (candidate) => !visited.has(candidate.id),
@@ -303,6 +275,6 @@ function evolutionOf(
 }
 
 /** 轮没有注入记录时（只记住了东西的轮），at 取该轮条目的最新时间。 */
-function fallbackAt(entries: readonly MemoryEntry[]): number {
-  return entries.reduce((latest, entry) => Math.max(latest, entry.at), 0);
+function fallbackAt(views: readonly MemoryEntryView[]): number {
+  return views.reduce((latest, view) => Math.max(latest, view.entry.at), 0);
 }

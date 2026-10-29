@@ -14,9 +14,9 @@
  * 分文件让读就是读一两个小文件。文件名 sha1 的理由也照旧：cwd 是任意绝对路径，
  * 原样当文件名在 Windows 上是一堆非法字符；user.jsonl 不是 hex，不会与哈希撞名。
  *
- * 写入口径与 SessionStore 一致：**只追加**（appendFile 一行一条，O_APPEND 保证单次
- * 追加不撕裂），读全量、坏行跳过。本 PR 没有改写条目的路径（冲突不改旧条目、
- * muted / 升层的写入口在后续界面 PR），所以这个文件里没有整份重写。
+ * 写入口径与 SessionStore 一致：新条目**只追加**（appendFile 一行一条，O_APPEND 保证
+ * 单次追加不撕裂），读全量、坏行跳过；改已有条目（状态、正文、搬层）走整层原子重写
+ * （writeLayer：临时文件 + rename）。
  *
  * 旧实验（#228 时代）留下的 `<sha1>.jsonl` 行缺 type / layer，解析按坏行跳过，
  * 不迁移——那是没合进 main 的实验数据。
@@ -49,9 +49,9 @@ export interface MemoryDraft {
   keywords: string[];
   /** 模型给的支撑轮号（appendScope 会夹回段内集合） */
   turns: number[];
-  /** 跨工作区通用的偏好 → pendingPromote（只对 preference 生效，见 appendScope 调用方） */
-  pendingPromote?: boolean;
-  /** 与旧偏好矛盾（id 已在候选表里验过）；只建议，不改旧条目 */
+  /** 跨工作区通用的偏好（只对 preference 生效）：appendScope 直接落 user 层 */
+  crossWorkspace?: boolean;
+  /** 与旧偏好矛盾（id 已在候选表里验过）：appendScope 把旧条标 stale */
   conflictWith?: string;
 }
 
@@ -59,12 +59,15 @@ export interface MemoryDraft {
 const KEYWORD_LIMIT = 8;
 
 const USER_LAYER_FILE = "user.jsonl";
+const USER_TOKEN = "user";
 const LOG_SUFFIX = ".jsonl";
+/** 旧「待你确认」数据落定过的标记文件（settleLegacyDecisions 只跑一次） */
+const LEGACY_MARKER = "legacy-decisions-settled.json";
 
 /* ---------- 行解析：字段不齐的行跳过，宽松字段缺席按默认解读 ---------- */
 
 const TYPES: readonly MemoryEntryType[] = ["fact", "preference", "insight"];
-const SOURCES: readonly MemorySource[] = ["chat", "manual"];
+const SOURCES: readonly MemorySource[] = ["chat", "manual", "agent"];
 const STATUSES: readonly MemoryStatus[] = ["active", "muted", "stale"];
 
 function enumOf<T extends string>(value: unknown, table: readonly T[]): T | undefined {
@@ -74,8 +77,9 @@ function enumOf<T extends string>(value: unknown, table: readonly T[]): T | unde
 /**
  * 逐字段校验一行 JSONL；必填字段不齐返回 null。**长着条目的脸但不齐的行跳过**——
  * 半截条目注入 prompt 比少一条更难查（session/store.ts 的同一条纪律）。
- * 可选字段（reason / status / pendingPromote / conflictWith）缺席 / 类型不对都当
- * 缺席，一条坏的可选字段不值得丢整条记忆。
+ * 可选字段（reason / status / conflictWith …）缺席 / 类型不对都当缺席，一条坏的
+ * 可选字段不值得丢整条记忆。旧数据里的拍板字段（pendingPromote / promoteResolution /
+ * conflictResolution）不再解析——启动时 settleLegacyDecisions 按新规则落定过一次。
  *
  * 放在服务侧而不是 shared/memory.ts：契约文件只放形状，解析是落盘侧的实现细节
  * （#228 的先例同款）。
@@ -96,11 +100,9 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
     episodeId?: unknown;
     source?: unknown;
     status?: unknown;
-    pendingPromote?: unknown;
-    promoteResolution?: unknown;
+    mutedReason?: unknown;
     promotedFrom?: unknown;
     conflictWith?: unknown;
-    conflictResolution?: unknown;
     editedAt?: unknown;
   };
   if (typeof suspect.id !== "string" || suspect.id === "") return null;
@@ -126,6 +128,8 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
   if (withProvenance && layer === "workspace" && (typeof suspect.scopeId !== "string" || suspect.scopeId === "")) {
     return null;
   }
+  // agent 修订的条目：出处是那条会话那一轮（没有事件段）
+  if (source === "agent" && (suspect.sessionId === "" || suspect.turns.length === 0)) return null;
   const keywords: string[] = [];
   for (const keyword of suspect.keywords) {
     if (typeof keyword !== "string") return null;
@@ -154,18 +158,14 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
     source,
     ...(typeof suspect.reason === "string" && suspect.reason.trim() !== "" ? { reason: suspect.reason } : null),
     ...(status !== undefined ? { status } : null),
-    ...(suspect.pendingPromote === true ? { pendingPromote: true } : null),
-    ...(enumOf(suspect.promoteResolution, ["user", "workspace"] as const) !== undefined
-      ? { promoteResolution: enumOf(suspect.promoteResolution, ["user", "workspace"] as const)! }
+    ...(typeof suspect.mutedReason === "string" && suspect.mutedReason.trim() !== ""
+      ? { mutedReason: suspect.mutedReason }
       : null),
     ...(typeof suspect.promotedFrom === "string" && suspect.promotedFrom !== ""
       ? { promotedFrom: suspect.promotedFrom }
       : null),
     ...(typeof suspect.conflictWith === "string" && suspect.conflictWith !== ""
       ? { conflictWith: suspect.conflictWith }
-      : null),
-    ...(enumOf(suspect.conflictResolution, ["stale-old", "keep-both"] as const) !== undefined
-      ? { conflictResolution: enumOf(suspect.conflictResolution, ["stale-old", "keep-both"] as const)! }
       : null),
     ...(typeof suspect.editedAt === "number" && Number.isFinite(suspect.editedAt)
       ? { editedAt: suspect.editedAt }
@@ -174,7 +174,7 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
 }
 
 /** 去重键：trim + 内部空白折叠。逐字重复才归并，措辞有差的就是另一条记忆。 */
-function normalizeText(text: string): string {
+export function normalizeText(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
@@ -228,13 +228,18 @@ export class MemoryEntryStore {
   }
 
   /**
-   * 提取产出 → 落进工作区层。id / at / 出处 / episodeId 由这里铸（提取侧不造 id，
-   * 也不能伪造出处），所以返回值才是真相。
+   * 提取产出 → 落盘，**并按 agent 的判断直接落定**（2026-10-29 用户裁决：不要待确认）：
+   * - 默认落进工作区层；
+   * - crossWorkspace 的偏好直接落 user 层，promotedFrom 记原作用域 token（条目卡的
+   *   「只留在原工作区」按它搬回）；
+   * - conflictWith 指的旧条（本作用域或 user 层）标 stale——新说法顶掉旧说法，
+   *   演变链沿 conflictWith 串起来，「恢复旧说法」可撤。
+   * id / at / 出处 / episodeId 由这里铸（提取侧不造 id，也不能伪造出处），所以返回值
+   * 才是真相。调用方须同时持有本作用域与 user 层两把锁（两层都可能被写）。
    *
    * **按归一化文本去重**（#228 真机验收的教训：模型复述记忆会把同一事实再蒸一条，
-   * 不去重库就单调膨胀），先对本作用域与 user 层都查一遍（user 层将来有手工升上去
-   * 的条目，不该因为升层被再写一份）。draft 的 turns 先夹回段内轮号集合（模型幻觉
-   * 的轮号不丢整条，但也不能指向段外）。空批不碰盘。
+   * 不去重库就单调膨胀），本作用域与 user 层都查一遍。draft 的 turns 先夹回段内
+   * 轮号集合（模型幻觉的轮号不丢整条，但也不能指向段外）。空批不碰盘。
    */
   async appendScope(
     scopeId: string,
@@ -242,6 +247,7 @@ export class MemoryEntryStore {
     drafts: readonly MemoryDraft[],
   ): Promise<MemoryEntry[]> {
     const atOfTurn = new Map(episode.turns.map((turn) => [turn.turn, turn.at]));
+    const token = this.tokenOf(scopeId);
     const seen = new Set(
       [...(await this.listScope(scopeId)), ...(await this.listUser())].map((entry) =>
         normalizeText(entry.text),
@@ -263,6 +269,7 @@ export class MemoryEntryStore {
       if (turns.length === 0) continue;
       // 时间位置 = 支撑轮里最新的那轮（契约；turns 已夹回段内，atOfTurn 必有）
       const at = Math.max(...turns.map((turn) => atOfTurn.get(turn)!));
+      const promote = draft.type === "preference" && draft.crossWorkspace === true;
       entries.push({
         id: `mem_${randomUUID()}`,
         type: draft.type,
@@ -271,25 +278,174 @@ export class MemoryEntryStore {
         keywords: draft.keywords
           .filter((keyword) => typeof keyword === "string" && keyword.trim() !== "")
           .slice(0, KEYWORD_LIMIT),
-        layer: "workspace",
+        layer: promote ? "user" : "workspace",
         scopeId,
         sessionId: episode.sessionId,
         turns,
         at,
         episodeId: episode.episodeId,
         source: "chat",
-        ...(draft.pendingPromote === true ? { pendingPromote: true } : null),
+        ...(promote ? { promotedFrom: token } : null),
         ...(draft.conflictWith !== undefined ? { conflictWith: draft.conflictWith } : null),
       });
     }
     if (entries.length === 0) return [];
     await mkdir(this.dir, { recursive: true });
+    const scoped = entries.filter((entry) => entry.layer === "workspace");
+    const promoted = entries.filter((entry) => entry.layer === "user");
+    if (scoped.length > 0) await this.appendLines(token, scoped);
+    if (promoted.length > 0) await this.appendLines(USER_TOKEN, promoted);
+    // 新条先落盘、再标旧条 stale：半路被杀最多新旧都 active（召回多一条），不会
+    // 出现旧条过时、新条没落的空窗
+    const conflicted = new Set(
+      entries.flatMap((entry) => (entry.conflictWith === undefined ? [] : [entry.conflictWith])),
+    );
+    if (conflicted.size > 0) await this.markStale([token, USER_TOKEN], conflicted);
+    return entries;
+  }
+
+  /**
+   * agent 按用户纠正写下新说法（memory_revise）：新条落在旧条同一层，source = agent，
+   * 出处是那条会话那一轮，conflictWith 指旧条；随后旧条标 stale。关键词沿用旧条的
+   * （同一件事，词法召回的主信号不该因为改了说法就丢）。调用方持有该层的锁。
+   * 返回 [新条, 旧条（已 stale）]；旧条不在这一层返回 null。
+   */
+  async appendRevision(
+    token: string,
+    oldId: string,
+    input: { text: string; reason: string; sessionId: string; turn: number; now: number },
+  ): Promise<[MemoryEntry, MemoryEntry] | null> {
+    const old = (await this.listByToken(token)).find((entry) => entry.id === oldId);
+    if (old === undefined) return null;
+    const reason = input.reason.trim();
+    const fresh: MemoryEntry = {
+      id: `mem_${randomUUID()}`,
+      type: old.type,
+      text: input.text.trim(),
+      ...(reason !== "" ? { reason } : null),
+      keywords: old.keywords,
+      layer: old.layer,
+      ...(old.scopeId !== undefined ? { scopeId: old.scopeId } : null),
+      sessionId: input.sessionId,
+      turns: [input.turn],
+      at: input.now,
+      episodeId: "",
+      source: "agent",
+      ...(old.promotedFrom !== undefined ? { promotedFrom: old.promotedFrom } : null),
+      conflictWith: old.id,
+    };
+    await mkdir(this.dir, { recursive: true });
+    await this.appendLines(token, [fresh]);
+    const staled = await this.updateEntry(token, old.id, (entry) => ({ ...entry, status: "stale" }));
+    return [fresh, staled ?? { ...old, status: "stale" }];
+  }
+
+  /** 几层里按 id 把条目标 stale（已不是 active 的不动——muted 的旧条不该被改判成过时）。 */
+  private async markStale(tokens: readonly string[], ids: ReadonlySet<string>): Promise<void> {
+    for (const token of tokens) {
+      const existing = await this.listByToken(token);
+      let touched = false;
+      const next = existing.map((entry) => {
+        if (!ids.has(entry.id) || (entry.status ?? "active") !== "active") return entry;
+        touched = true;
+        return { ...entry, status: "stale" as const };
+      });
+      if (touched) await this.writeLayer(token, next);
+    }
+  }
+
+  private async appendLines(token: string, entries: readonly MemoryEntry[]): Promise<void> {
     await appendFile(
-      join(this.dir, `${this.tokenOf(scopeId)}${LOG_SUFFIX}`),
+      join(this.dir, `${token}${LOG_SUFFIX}`),
       `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
       "utf8",
     );
-    return entries;
+  }
+
+  /**
+   * 旧数据里还没拍板的「待你确认」按新规则落定一次（2026-10-29 晚去掉待确认之前，
+   * 提取把跨工作区偏好标 pendingPromote、把冲突标 conflictWith 但不改旧条，等用户拍板）：
+   * - pendingPromote 且没拍板 → 搬进 user 层，promotedFrom 记原 token（同 appendScope）；
+   * - conflictWith 且没有 conflictResolution、新条还 active → 旧条标 stale。
+   * 已拍板过的照它们当时的结果留着（keep-both 的两条都 active，不重判）。
+   * **只跑一次**：做完落一个标记文件——新规则下的条目也带 conflictWith，再扫一遍会把
+   * 用户「恢复旧说法」后又恢复使用的新条重新顶回去。返回落定了几条（日志用）。
+   */
+  async settleLegacyDecisions(): Promise<{ promoted: number; staled: number }> {
+    const marker = join(this.dir, LEGACY_MARKER);
+    try {
+      await readFile(marker, "utf8");
+      return { promoted: 0, staled: 0 };
+    } catch (cause) {
+      if (!isNotFound(cause)) throw cause;
+    }
+    let promoted = 0;
+    let staled = 0;
+    const layers = await this.listLayers();
+    const staleIds = new Set<string>();
+    for (const layer of layers) {
+      const raw = await this.readRawLayer(layer.token);
+      for (const row of raw) {
+        if (row.status !== undefined && row.status !== "active") continue;
+        if (typeof row.conflictWith === "string" && row.conflictResolution === undefined) {
+          staleIds.add(row.conflictWith);
+        }
+        if (
+          layer.token !== USER_TOKEN &&
+          row.pendingPromote === true &&
+          row.promoteResolution === undefined &&
+          typeof row.id === "string"
+        ) {
+          const moved = await this.moveEntry(layer.token, USER_TOKEN, row.id, (entry) => ({
+            ...entry,
+            layer: "user",
+            promotedFrom: layer.token,
+          }));
+          if (moved !== null) promoted += 1;
+        }
+      }
+    }
+    if (staleIds.size > 0) {
+      const before = await this.countStatus(staleIds, "stale");
+      await this.markStale((await this.listLayers()).map((layer) => layer.token), staleIds);
+      staled = (await this.countStatus(staleIds, "stale")) - before;
+    }
+    // 空库也落标记：之后新规则写出的数据不该再被这一遍扫到
+    await mkdir(this.dir, { recursive: true });
+    await writeTextAtomic(marker, `${JSON.stringify({ settledAt: Date.now(), promoted, staled })}\n`);
+    return { promoted, staled };
+  }
+
+  private async countStatus(ids: ReadonlySet<string>, status: MemoryStatus): Promise<number> {
+    let count = 0;
+    for (const layer of await this.listLayers()) {
+      for (const entry of await this.listByToken(layer.token)) {
+        if (ids.has(entry.id) && entry.status === status) count += 1;
+      }
+    }
+    return count;
+  }
+
+  /** 读一层的原始 JSON 行（只给一次性的旧数据落定用：要看已不再解析的旧字段）。 */
+  private async readRawLayer(token: string): Promise<Record<string, unknown>[]> {
+    let raw: string;
+    try {
+      raw = await readFile(join(this.dir, `${token}${LOG_SUFFIX}`), "utf8");
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw cause;
+    }
+    const rows: Record<string, unknown>[] = [];
+    for (const line of raw.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (typeof parsed === "object" && parsed !== null) rows.push(parsed as Record<string, unknown>);
+      } catch {
+        // 半截行：跳过
+      }
+    }
+    return rows;
   }
 
   /** 注入账本追加一行（含零命中——「这轮没注入」也是要能查的账）。 */
@@ -423,7 +579,7 @@ export class MemoryEntryStore {
    * 手动添加（记忆库「手动添加」钮）：落在指定层，source = manual、无出处
    * （sessionId / turns / episodeId 为空）。偏好 / 经验必须带 reason（同提取
    * 侧的契约：落盘侧兑底）。scopeId 由调用方带（主进程能从工作区表解出来；
-   * Home 作用域解不出就省略——寻址靠 token，scopeId 只是展示与拍板参考）。
+   * Home 作用域解不出就省略——寻址靠 token，scopeId 只是展示参考）。
    * 返回铸好的完整条目；正文空 / 缺 reason 返回 null。
    */
   async addManual(

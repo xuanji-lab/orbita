@@ -66,10 +66,6 @@ export function registerMemoryIpc(input: {
     library.sessionView(parseSessionId(raw)),
   );
 
-  ipcMain.handle(ipcChannels.memoryPending, () =>
-    library.pending().then((items) => ({ items })),
-  );
-
   ipcMain.handle(ipcChannels.memoryVectorStatus, async (): Promise<MemoryVectorStatus> => {
     const settings = effectiveVectorSettings(await input.vector.readVectorSettings());
     const model = MEMORY_VECTOR_MODELS.find((candidate) => candidate.id === settings.model)!;
@@ -110,7 +106,7 @@ export function registerMemoryIpc(input: {
 
   ipcMain.handle(ipcChannels.memoryMutate, async (_event, raw: unknown) => {
     const mutation = parseMutation(raw);
-    // addManual 补 scopeId：token 对得上工作区表就带（manual 条目的展示与拍板参考；
+    // addManual 补 scopeId：token 对得上工作区表就带（manual 条目的展示参考；
     // Home 作用域解不出就省略——寻址靠 token，scopeId 不是必需）
     const enriched =
       mutation.op === "addManual" && mutation.scopeId === undefined

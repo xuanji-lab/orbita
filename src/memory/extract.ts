@@ -7,7 +7,9 @@
  * 全部嵌进提示词：滤寒暄、消指代、相对时间转绝对日期、第三人称、带日期说话人话题
  * 的完整句。三类各自的纪律：
  * - 事实：只录发生过的事，不推断、不总结方法论；
- * - 偏好：必须带理由（reason），不默认永远成立；与旧偏好矛盾只报 conflictsWith；
+ * - 偏好：必须带理由（reason），不默认永远成立；与旧偏好矛盾报 conflictsWith（落盘时
+ *   旧条直接标过时）、跨工作区通用报 crossWorkspace（直接记到所有工作区）——2026-10-29
+ *   用户裁决由 agent 判断、不要待确认，所以提示词把「拿不准就不加」讲在前头；
  * - 经验：必须挂具体交互证据（reason 引用段内交互），凭空泛化的道理不提。
  *
  * 三类是同一段对话的三个**抽象层次**（QUMem 原文的游泳例：加入游泳俱乐部 / 偏好氛围
@@ -45,6 +47,13 @@ const LAYER_RULES = `同一段对话会分三次各提取一类：事实、偏�
 例：「用户加入了游泳俱乐部」是事实；「用户偏好氛围友好的游泳课」是偏好；「用户倾向选择低压力的运动环境」是经验。
 这一次只写本类、本层次的内容。某个意思已经属于别的类，就不要换个说法写进本类；本类没有可写的就输出 []。`;
 
+/**
+ * agent 在这段对话里已经当场写下的条目（memory_revise 按用户纠正写的新说法）。不讲的话
+ * 段收尾提取会把同一件事再写一遍——用户刚说「不对，汇报要求是……」，agent 改了一条，
+ * 偏好提取又从同一句原话蒸出一条近义的，库里就两条。归一化文本去重拦不住换了措辞的。
+ */
+const RECORDED_RULE = `输入里可能带一节 <recorded>：agent 在这段对话里已经按用户的话当场记下的条目。它们已经在库里了——不要重复，也不要换个说法再写一条；同一件事没有别的新内容就跳过。`;
+
 const OUTPUT_RULES = `只输出 JSON 数组，除此之外不要有任何输出：
 [{"text": "……", "reason": "……", "keywords": ["……"], "turns": [2], "crossWorkspace": false}]
 没有值得记的内容时输出 []。最多 ${ENTRY_LIMIT} 条。turns 是支撑这条记忆的轮号（输入里 <turn> 的 n，可多条）。keywords ≤8 个，术语优先，中英文都可。`;
@@ -52,14 +61,17 @@ const OUTPUT_RULES = `只输出 JSON 数组，除此之外不要有任何输出�
 export const FACT_SYSTEM_PROMPT = `你是记忆提取器。从一段用户与 agent 的对话事件里提取「事实」：发生过的事、做成的决定、确立的项目与环境情况。
 只录对话里发生过 / 明确成立的，不推断、不猜动机、不总结方法论。
 用户提出的要求、喜好、约束（「以后都要……」「我不喜欢……」）属于偏好，这里不记；只记它们以外发生了什么。
+${RECORDED_RULE}
 ${LAYER_RULES}
 ${WRITING_RULES}
 ${OUTPUT_RULES}`;
 
 export const PREFERENCE_SYSTEM_PROMPT = `你是记忆提取器。从一段用户与 agent 的对话事件里提取「偏好」：用户的选择、倾向、约束——喜欢怎么做、要求什么、排斥什么。
 每条必须带 reason（为什么：用户的哪句话、什么情境表明了这一点），并把成立的场景写进 text（不默认永远成立）。
-输入里可能带一节 <preferences>：这个工作区已有的旧偏好（各带 id）。若新条目与其中某条矛盾（用户改了主意、推翻了旧约束），给新条目加 "conflictsWith": "那条的id"。只是相关、补充、重述都不算矛盾；拿不准就不加。没有 <preferences> 节时永远不加。
+输入里可能带一节 <preferences>：这个工作区已有的旧偏好（各带 id）。若新条目与其中某条矛盾（用户改了主意、推翻了旧约束），给新条目加 "conflictsWith": "那条的id"——那条旧偏好会被直接标为过时、不再召回，所以只在用户确实改了主意时才加；只是相关、补充、重述都不算矛盾，拿不准就不加。没有 <preferences> 节时永远不加。
+"crossWorkspace": true 表示这条偏好与当前项目无关、对用户所有工作区都成立（回复语言、沟通方式、汇报格式这类关于用户本人的习惯）；它会被直接记到所有工作区。和这个项目的代码、流程、工具相关的写 false；拿不准写 false。
 只写具体对象或场景上的偏好；跨场景的一般原则属于经验，这里不写。
+${RECORDED_RULE}
 ${LAYER_RULES}
 ${WRITING_RULES}
 ${OUTPUT_RULES}`;
@@ -67,6 +79,7 @@ ${OUTPUT_RULES}`;
 export const INSIGHT_SYSTEM_PROMPT = `你是记忆提取器。从一段用户与 agent 的对话事件里提取「经验」：可迁移的做事原则——下次遇到类似情况该怎么做的结论（什么做法有效、什么坑别再踩）。
 每条必须挂 reason（具体交互证据：这段对话里哪一轮的什么交互得出了它），凭空泛化的大道理不提。
 经验必须比原话高一层：把用户的具体选择、反馈和理由抽象成能用到别的对象或场景的原则。只是把用户说的要求换个说法重复一遍不算经验——那是偏好；这一段抽不出更高一层的原则，就输出 []。
+${RECORDED_RULE}
 ${LAYER_RULES}
 ${WRITING_RULES}
 ${OUTPUT_RULES}`;
@@ -91,10 +104,16 @@ export interface ExtractPromptInput {
   now: number;
   /** 偏好的冲突候选（同作用域最相近的旧偏好）；仅偏好调用带 */
   candidates?: readonly MemoryEntry[];
+  /** agent 在这段对话里已经当场写下的条目（agentRecordedIn 挑出来的）；三类都带 */
+  recorded?: readonly MemoryEntry[];
 }
 
-/** 组提取调用的用户消息：日期锚 + （偏好的）旧偏好候选 + 段内各轮快照。 */
+/** 组提取调用的用户消息：日期锚 + agent 已记下的 + （偏好的）旧偏好候选 + 段内各轮快照。 */
 export function buildExtractPrompt(input: ExtractPromptInput): string {
+  const recorded =
+    input.recorded !== undefined && input.recorded.length > 0
+      ? `<recorded>\n${input.recorded.map((entry) => `- ${entry.text}`).join("\n")}\n</recorded>\n`
+      : "";
   const preferences =
     input.candidates !== undefined && input.candidates.length > 0
       ? `<preferences>\n${input.candidates.map((entry) => `[${entry.id}] ${entry.text}`).join("\n")}\n</preferences>\n`
@@ -109,7 +128,23 @@ export function buildExtractPrompt(input: ExtractPromptInput): string {
       ].join("\n"),
     )
     .join("\n");
-  return `<date>${formatDate(input.now)}</date>\n${preferences}${turns}`;
+  return `<date>${formatDate(input.now)}</date>\n${recorded}${preferences}${turns}`;
+}
+
+/**
+ * 这段对话里 agent 当场写下的条目：source = agent、同会话、出处轮落在段内。被撤销
+ * （muted）的也算——用户撤了说明那条不对，更不该被提取再写回来。
+ */
+export function agentRecordedIn(
+  entries: readonly MemoryEntry[],
+  episode: { sessionId: string; fromTurn: number; toTurn: number },
+): MemoryEntry[] {
+  return entries.filter(
+    (entry) =>
+      entry.source === "agent" &&
+      entry.sessionId === episode.sessionId &&
+      entry.turns.some((turn) => turn >= episode.fromTurn && turn <= episode.toTurn),
+  );
 }
 
 /**
@@ -169,8 +204,8 @@ export function parseExtractReply(
       ...(reason !== "" ? { reason } : null),
       keywords,
       turns,
-      // 跨工作区通用的 scope hint 只对偏好生效（pendingPromote 的拍板留给用户）
-      ...(type === "preference" && suspect.crossWorkspace === true ? { pendingPromote: true } : null),
+      // 跨工作区通用只对偏好生效（落盘时直接进 user 层，条目卡可撤）
+      ...(type === "preference" && suspect.crossWorkspace === true ? { crossWorkspace: true } : null),
       ...(conflictWith !== undefined ? { conflictWith } : null),
     });
   }

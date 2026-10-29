@@ -13,7 +13,7 @@ import { EpisodeStore } from "./episodes.ts";
 import { MemoryEntryStore } from "./entries.ts";
 import { VectorStore } from "./vector-store.ts";
 import type { DownloadFetch } from "./downloader.ts";
-import type { MemoryChoreModel } from "../shared/memory.ts";
+import { memoryShortId, type MemoryChoreModel } from "../shared/memory.ts";
 
 const CHORE: MemoryChoreModel = {
   provider: { id: "p", api: "openai", baseUrl: "https://x", apiKey: "k", models: [] },
@@ -296,101 +296,237 @@ test("mutate：edit / remove / setStatus / addManual 的落盘与回执", async 
   assert.equal(changes.length, 4);
 });
 
-test("mutate：升层拍板 user / workspace 与撤销（撤销回到待拍板）", async () => {
-  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+const SEED_EPISODE = {
+  episodeId: "ep_seed", sessionId: "s1", scopeId: "ws-1", fromTurn: 1, toTurn: 2, openedAt: 1, lastAt: 2,
+  turns: [
+    { turn: 1, at: 1, userText: "u", assistantText: "a" },
+    { turn: 2, at: 2, userText: "u2", assistantText: "a2" },
+  ],
+};
+
+test("提取直接落定：跨工作区偏好进 user 层、冲突的旧偏好标 stale，不留任何待确认", async () => {
   const dir = await tempDir();
-  await core.init(dir, CHORE);
-  const store = new EpisodeStore(dir);
-  // 造一条带 pendingPromote 的工作区层条目
   const entries = new MemoryEntryStore(dir);
-  const wsToken = entries.tokenOf("ws-1");
-  await entries.appendScope("ws-1", {
-    episodeId: "ep_p", sessionId: "s1", scopeId: "ws-1", fromTurn: 1, toTurn: 1, openedAt: 1, lastAt: 1,
-    turns: [{ turn: 1, at: 1, userText: "u", assistantText: "a" }],
-  }, [{ type: "preference", text: "跨工作区偏好", reason: "r", keywords: [], turns: [1] }]);
-  const seeded = (await entries.listByToken(wsToken))[0]!;
-  await entries.updateEntry(wsToken, seeded.id, (current) => ({ ...current, pendingPromote: true }));
-  const entryId = seeded.id;
-
-  // 拍板「所有工作区」：搬进 user 层，promotedFrom 记原 token，scopeId 保留
-  const promoted = await core.mutate({ op: "decidePromote", token: wsToken, entryId, decision: "user" });
-  assert.equal(promoted.ok && promoted.entry?.layer, "user");
-  assert.equal(promoted.ok && promoted.entry?.promotedFrom, wsToken);
-  assert.equal(await entries.listByToken(wsToken).then((l) => l.length), 0);
-  assert.equal(await entries.listByToken("user").then((l) => l.length), 1);
-
-  // 撤销：搬回原作用域，回到待拍板
-  const undone = await core.mutate({ op: "undoPromote", token: "user", entryId });
-  assert.equal(undone.ok && undone.entry?.layer, "workspace");
-  assert.equal(undone.ok && undone.entry?.pendingPromote, true);
-  assert.equal(undone.ok && undone.entry?.promoteResolution, undefined);
-  assert.equal(await entries.listByToken(wsToken).then((l) => l.length), 1);
-
-  // 拍板「只留本工作区」再撤销：同样回到待拍板
-  await core.mutate({ op: "decidePromote", token: wsToken, entryId, decision: "workspace" });
-  const undoneWs = await core.mutate({ op: "undoPromote", token: wsToken, entryId });
-  assert.equal(undoneWs.ok && undoneWs.entry?.pendingPromote, true);
-  // 没有待确认标记的条目拒收拍板
-  const other = await core.mutate({ op: "addManual", token: "user", type: "fact", text: "无关条目" });
-  assert.equal(
-    (await core.mutate({
-      op: "decidePromote",
-      token: "user",
-      entryId: other.ok && other.entry ? other.entry.id : "",
-      decision: "user",
-    })).ok,
-    false,
-  );
-  // 附带：mutate 全程不碰事件段（代码路径无 episode 写点；等一拍让漏网异步现形）
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(await store.loadOpen("s1"), null);
+  const [old] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "用户要求汇报写成长段落", reason: "r", keywords: ["汇报"], turns: [1] },
+  ]);
+  const { core } = stubModel({
+    segment: "new",
+    replies: {
+      "提取「偏好」": JSON.stringify([
+        { text: "用户要求汇报写成三条要点", reason: "用户改了主意", keywords: ["汇报"], turns: [1], conflictsWith: old!.id },
+        { text: "用户要求回复一律用中文", reason: "用户说所有项目都这样", keywords: ["中文"], turns: [1], crossWorkspace: true },
+      ]),
+    },
+  });
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ turn: 1, at: 1000, userText: "汇报改成三条要点；回复都用中文" }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000, userText: "换个话题" }));
+  const scope = await entries.listScope("ws-1");
+  const user = await entries.listUser();
+  assert.equal(scope.find((item) => item.id === old!.id)?.status, "stale");
+  const fresh = scope.find((item) => item.text === "用户要求汇报写成三条要点");
+  assert.equal(fresh?.conflictWith, old!.id);
+  assert.equal(fresh?.status, undefined);
+  const promoted = user.find((item) => item.text === "用户要求回复一律用中文");
+  assert.equal(promoted?.layer, "user");
+  assert.equal(promoted?.promotedFrom, entries.tokenOf("ws-1"));
 });
 
-test("mutate：冲突拍板 stale-old / keep-both 与撤销（旧条状态恢复）", async () => {
+test("mutate restorePrevious：旧说法回 active、新条 muted（不删）；旧条已删拒收", async () => {
   const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
   const dir = await tempDir();
   await core.init(dir, CHORE);
   const entries = new MemoryEntryStore(dir);
   const wsToken = entries.tokenOf("ws-1");
-  await entries.appendScope("ws-1", {
-    episodeId: "ep_c", sessionId: "s1", scopeId: "ws-1", fromTurn: 1, toTurn: 1, openedAt: 1, lastAt: 1,
-    turns: [{ turn: 1, at: 1, userText: "u", assistantText: "a" }],
-  }, [
+  const [old] = await entries.appendScope("ws-1", SEED_EPISODE, [
     { type: "preference", text: "旧偏好", reason: "r", keywords: [], turns: [1] },
-    { type: "preference", text: "新偏好", reason: "r", keywords: [], turns: [1] },
   ]);
-  const [oldEntry, newEntry] = await entries.listByToken(wsToken);
-  await entries.updateEntry(wsToken, newEntry!.id, (current) => ({
-    ...current,
-    conflictWith: oldEntry!.id,
-  }));
+  const [fresh] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "新偏好", reason: "r", keywords: [], turns: [2], conflictWith: old!.id },
+  ]);
+  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === old!.id)?.status, "stale");
 
-  const decided = await core.mutate({
-    op: "decideConflict",
-    token: wsToken,
-    entryId: newEntry!.id,
-    decision: "stale-old",
-  });
-  assert.equal(decided.ok && decided.entry?.conflictResolution, "stale-old");
-  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === oldEntry!.id)?.status, "stale");
+  const restored = await core.mutate({ op: "restorePrevious", token: wsToken, entryId: fresh!.id });
+  assert.equal(restored.ok && restored.entry?.status, "muted");
+  const after = await entries.listByToken(wsToken);
+  assert.equal(after.find((e) => e.id === old!.id)?.status, "active");
+  assert.equal(after.length, 2); // 新条还在，演变链照常可见
 
-  const undone = await core.mutate({ op: "undoConflict", token: wsToken, entryId: newEntry!.id });
-  assert.equal(undone.ok && undone.entry?.conflictResolution, undefined);
-  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === oldEntry!.id)?.status, "active");
+  // 没有 conflictWith 的拒收；旧条删了拒收且不动新条
+  assert.equal((await core.mutate({ op: "restorePrevious", token: wsToken, entryId: old!.id })).ok, false);
+  await entries.removeEntry(wsToken, old!.id);
+  await entries.updateEntry(wsToken, fresh!.id, (e) => ({ ...e, status: "active" }));
+  assert.equal((await core.mutate({ op: "restorePrevious", token: wsToken, entryId: fresh!.id })).ok, false);
+  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === fresh!.id)?.status, "active");
+});
 
-  const kept = await core.mutate({
-    op: "decideConflict",
-    token: wsToken,
-    entryId: newEntry!.id,
-    decision: "keep-both",
-  });
-  assert.equal(kept.ok && kept.entry?.conflictResolution, "keep-both");
-  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === oldEntry!.id)?.status, "active");
-  // 没有冲突建议的条目拒收
+test("mutate restorePrevious：新条自动升到 user 层、旧条在原作用域——也找得到旧条", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const [old] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "旧的回复语言", reason: "r", keywords: [], turns: [1] },
+  ]);
+  const [fresh] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "回复一律中文", reason: "r", keywords: [], turns: [2], conflictWith: old!.id, crossWorkspace: true },
+  ]);
+  assert.equal(fresh?.layer, "user");
+  const restored = await core.mutate({ op: "restorePrevious", token: "user", entryId: fresh!.id });
+  assert.equal(restored.ok, true);
+  assert.equal((await entries.listScope("ws-1")).find((e) => e.id === old!.id)?.status, "active");
+});
+
+test("mutate returnToWorkspace：自动升层的条目搬回原作用域、promotedFrom 清掉；不是升上来的拒收", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const wsToken = entries.tokenOf("ws-1");
+  const [promoted] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "跨工作区偏好", reason: "r", keywords: [], turns: [1], crossWorkspace: true },
+  ]);
+  const back = await core.mutate({ op: "returnToWorkspace", token: "user", entryId: promoted!.id });
+  assert.equal(back.ok && back.entry?.layer, "workspace");
+  assert.equal(back.ok && back.entry?.promotedFrom, undefined);
+  assert.equal((await entries.listUser()).length, 0);
+  assert.equal((await entries.listByToken(wsToken)).length, 1);
+  // 已经搬回的再来一次、手动加在 user 层的：都拒收
+  assert.equal((await core.mutate({ op: "returnToWorkspace", token: wsToken, entryId: promoted!.id })).ok, false);
+  const manual = await core.mutate({ op: "addManual", token: "user", type: "fact", text: "手动的" });
   assert.equal(
-    (await core.mutate({ op: "decideConflict", token: wsToken, entryId: oldEntry!.id, decision: "keep-both" })).ok,
+    (await core.mutate({ op: "returnToWorkspace", token: "user", entryId: manual.ok && manual.entry ? manual.entry.id : "" })).ok,
     false,
   );
+});
+
+test("setStatus active：agent 停用时记的理由随之清掉", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const [seeded] = await entries.appendScope("ws-1", SEED_EPISODE, [{ type: "fact", text: "某事实", keywords: [], turns: [1] }]);
+  const retired = await core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 3, call: { op: "retire", entryId: seeded!.id, reason: "用户说不对" } });
+  assert.equal(retired.ok && retired.entries[0]?.mutedReason, "用户说不对");
+  const back = await core.mutate({ op: "setStatus", token: entries.tokenOf("ws-1"), entryId: seeded!.id, status: "active" });
+  assert.equal(back.ok && back.entry?.status, "active");
+  assert.equal(back.ok && back.entry?.mutedReason, undefined);
+});
+
+test("agentTool revise：按短 id 定位、旧条 stale、新条 agent 来源带出处轮；写盘通知一次", async () => {
+  const changes: number[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => null,
+    idleCloseMs: 60_000,
+    now: () => 9000,
+    log: () => undefined,
+    onChanged: () => changes.push(1),
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const [old] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "用户要求汇报写成长段落", reason: "r", keywords: ["汇报"], turns: [1] },
+  ]);
+  const before = changes.length;
+  const outcome = await core.agentTool({
+    sessionId: "s7",
+    scopeId: "ws-1",
+    turn: 4,
+    call: { op: "revise", entryId: memoryShortId(old!.id), text: "用户要求汇报写成三条要点", reason: "用户说不对" },
+  });
+  assert.equal(outcome.ok, true);
+  const [fresh, staled] = outcome.ok ? outcome.entries : [];
+  assert.equal(fresh?.source, "agent");
+  assert.equal(fresh?.sessionId, "s7");
+  assert.deepEqual(fresh?.turns, [4]);
+  assert.equal(fresh?.at, 9000);
+  assert.equal(fresh?.conflictWith, old!.id);
+  assert.equal(staled?.status, "stale");
+  assert.equal(changes.length - before, 1);
+  // 召回只认新说法
+  const hits = await core.recall({ sessionId: "s7", scopeId: "ws-1", turn: 5, query: "汇报怎么写" });
+  assert.deepEqual(hits.map((hit) => hit.entry.text), ["用户要求汇报写成三条要点"]);
+  // 再修订已过时的旧条：报「被谁顶掉了」，不分叉
+  const again = await core.agentTool({
+    sessionId: "s7", scopeId: "ws-1", turn: 5,
+    call: { op: "revise", entryId: old!.id, text: "别的说法", reason: "r" },
+  });
+  assert.equal(again.ok, false);
+  assert.match(again.ok ? "" : again.error, new RegExp(memoryShortId(fresh!.id)));
+});
+
+test("agentTool：可见范围只有 user 层 + 本作用域；找不到 / 太短 / 一字不差 / 空理由都拒", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const [other] = await entries.appendScope("ws-2", { ...SEED_EPISODE, scopeId: "ws-2" }, [
+    { type: "fact", text: "别的工作区的事", keywords: [], turns: [1] },
+  ]);
+  const [mine] = await entries.appendScope("ws-1", SEED_EPISODE, [{ type: "fact", text: "本工作区的事", keywords: [], turns: [1] }]);
+  const call = (entryId: string, text = "改过", reason = "r") =>
+    core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "revise", entryId, text, reason } });
+  assert.equal((await call(other!.id)).ok, false); // 别的工作区：不可改
+  assert.equal((await entries.listScope("ws-2"))[0]?.status, undefined);
+  assert.equal((await call("mem_")).ok, false); // 前缀太短，不猜
+  assert.equal((await call(mine!.id, "本工作区的事")).ok, false); // 一字不差
+  assert.equal((await call(mine!.id, "改过", " ")).ok, false); // 没理由
+  assert.equal((await call(mine!.id)).ok, true);
+});
+
+test("agentTool search：只回 active、按相关度；retire 标 muted 并记理由", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const [a, b] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "fact", text: "用户的项目用 bun 管依赖", keywords: ["bun", "依赖"], turns: [1] },
+    { type: "fact", text: "用户的周报每周五发", keywords: ["周报"], turns: [1] },
+  ]);
+  const found = await core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "search", query: "依赖用什么管" } });
+  assert.deepEqual(found.ok ? found.entries.map((item) => item.id) : null, [a!.id]);
+  const retired = await core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "retire", entryId: a!.id, reason: "用户说早换成 pnpm 了" } });
+  assert.equal(retired.ok && retired.entries[0]?.status, "muted");
+  const again = await core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "search", query: "依赖用什么管" } });
+  assert.deepEqual(again.ok ? again.entries : null, []);
+  assert.equal((await entries.listScope("ws-1")).find((item) => item.id === b!.id)?.status, undefined);
+});
+
+test("提取：本段里 agent 当场修订过的条目进三类提示词的 <recorded> 节", async () => {
+  const dir = await tempDir();
+  const { core, calls } = stubModel({ segment: "new" }, { now: () => 5000 });
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const [old] = await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "用户要求汇报写成长段落", reason: "r", keywords: ["汇报"], turns: [1] },
+  ]);
+  await core.turnSettled(turnPayload({ turn: 1, at: 1000, userText: "不对，汇报要三条要点" }));
+  await core.agentTool({
+    sessionId: "s1", scopeId: "ws-1", turn: 1,
+    call: { op: "revise", entryId: old!.id, text: "用户要求汇报写成三条要点", reason: "用户纠正" },
+  });
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000, userText: "换个话题" }));
+  const extractCalls = calls.filter((call) => call.system.includes("记忆提取器"));
+  assert.equal(extractCalls.length, 3);
+  for (const call of extractCalls) assert.ok(call.prompt.includes("<recorded>\n- 用户要求汇报写成三条要点"));
+});
+
+test("init：旧数据里没拍板的待确认按新规则落定一次", async () => {
+  const dir = await tempDir();
+  const entries = new MemoryEntryStore(dir);
+  const token = entries.tokenOf("ws-1");
+  const row = {
+    id: "mem_legacy", type: "preference", text: "回复用中文", reason: "r", keywords: [], layer: "workspace",
+    scopeId: "ws-1", sessionId: "s1", turns: [1], at: 1, episodeId: "ep", source: "chat", pendingPromote: true,
+  };
+  await writeFile(join(dir, `${token}.jsonl`), `${JSON.stringify(row)}\n`, "utf8");
+  const logs: string[] = [];
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: (message) => logs.push(message) });
+  await core.init(dir, CHORE);
+  assert.equal((await entries.listUser())[0]?.id, "mem_legacy");
+  assert.ok(logs.some((line) => line.includes("升到所有工作区 1 条")));
 });
 
 test("changed：提取落条目 / 事件段收尾也通知（不只是 mutate）", async () => {

@@ -18,7 +18,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
-import type { MemoryRecallOutcome } from "../../shared/memory.ts";
+import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -574,6 +574,15 @@ export class AgentHostCore {
       type: "memoryRecallResult",
       requestId,
       ...(outcome.ok ? { ok: true as const, hits: outcome.hits } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 记忆工具：memoryToolRequest 的回执。同 answerMemoryRecall：不 ensure、发完即回。 */
+  answerMemoryTool(requestId: string, outcome: MemoryAgentOutcome): void {
+    this.child?.postMessage({
+      type: "memoryToolResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, entries: outcome.entries } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
 

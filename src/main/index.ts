@@ -23,6 +23,7 @@ import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
 import { MemoryServiceHostCore } from "./memory/host-core.ts";
 import { registerMemoryIpc } from "./memory/ipc.ts";
+import { forwardMemoryTool } from "./memory/tool-forward.ts";
 import {
   MEMORY_VECTOR_MODELS,
   memoryScopeOf,
@@ -554,6 +555,20 @@ void app.whenReady().then(async () => {
             error: cause instanceof Error ? cause.message : String(cause),
           }),
         );
+      return;
+    }
+    // 记忆工具（memory_search / memory_revise / memory_retire）：同样任何路径都回执；
+    // 子会话的写在 forwardMemoryTool 里按 meta 拒（「子会话读不写」不只靠不注册）
+    if (event.type === "memoryToolRequest") {
+      void forwardMemoryTool(
+        {
+          readMeta: (id) => sessions.readMeta(id),
+          ensureStarted: ensureMemoryService,
+          isRunning: () => memoryHost.isRunning(),
+          agentTool: (input) => memoryHost.agentTool(input),
+        },
+        event,
+      ).then((outcome) => agentHost.answerMemoryTool(event.requestId, outcome));
       return;
     }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子

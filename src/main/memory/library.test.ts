@@ -1,6 +1,6 @@
 /**
  * 记忆库读面装配（library.ts）——作用域命名、条目装配（标题 / 原话片段 /
- * 演变链）、按轮视图、待确认清单。纯模块直测（node --test）：临时目录放
+ * 演变链）、按轮视图。纯模块直测（node --test）：临时目录放
  * 条目 / 事件段 / 注入账本，会话与工作区注入桩。
  */
 import test from "node:test";
@@ -57,17 +57,11 @@ async function seed(dir: string): Promise<void> {
   await entries.appendScope("ws-1", EPISODE, [
     { type: "preference", text: "记忆库放在设置里", reason: "r", keywords: [], turns: [1] },
   ]);
-  // 新偏好 + 指向旧的冲突建议（未拍板）+ 待升层
+  // 新偏好顶掉旧的（落盘时旧条直接 stale）
+  const oldId = (await entries.listByToken(WS_TOKEN))[0]!.id;
   await entries.appendScope("ws-1", EPISODE, [
-    { type: "preference", text: "在 Orbita 内做记忆库页", reason: "r", keywords: [], turns: [2], pendingPromote: true },
+    { type: "preference", text: "在 Orbita 内做记忆库页", reason: "r", keywords: [], turns: [2], conflictWith: oldId },
   ]);
-  const wsEntries = await entries.listByToken(WS_TOKEN);
-  const oldId = wsEntries[0]!.id;
-  await entries.updateEntry(WS_TOKEN, wsEntries[1]!.id, (current) => ({
-    ...current,
-    conflictWith: oldId,
-    pendingPromote: true,
-  }));
   // user 层一条常驻偏好
   await entries.addManual("user", { type: "preference", text: "本地优先", reason: "r", now: 3000 });
   // 注入账本：第 1 轮零命中，第 2 轮命中 user 层那条
@@ -168,35 +162,42 @@ test("sessionView：轮集合 = 账本 ∪ 新增；用到带快照", async () =
   assert.equal(view.turns[0]?.remembered.length, 1); // 第 2 轮支撑的新条目
 });
 
-test("pending：升层与冲突的 ask 都在；旧条已删的冲突不再 ask；拍板过的带 resolution", async () => {
+test("演变链节点带 source；agent 修订的新条接在链尾，状态如实", async () => {
   const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
   await seed(dir);
   const entries = new MemoryEntryStore(dir);
   const library = makeLibrary(dir);
-  let items = await library.pending();
-  assert.equal(items.length, 2); // 一条 promote ask + 一条 conflict ask
-  const conflict = items.find((item) => item.kind === "conflict")!;
-  assert.notEqual(conflict.old, null);
-  assert.equal(conflict.resolution, undefined);
-  const promote = items.find((item) => item.kind === "promote")!;
-  assert.equal(promote.entry.pendingPromote, true);
+  const current = (await library.listEntries({ token: WS_TOKEN })).find(
+    (item) => item.entry.text === "在 Orbita 内做记忆库页",
+  )!;
+  await entries.appendRevision(WS_TOKEN, current.entry.id, {
+    text: "记忆库是一个独立整页",
+    reason: "用户纠正",
+    sessionId: "s1",
+    turn: 3,
+    now: 4000,
+  });
+  const revised = (await library.listEntries({ token: WS_TOKEN })).find((item) => item.entry.source === "agent")!;
+  assert.deepEqual(
+    revised.evolution.map((node) => [node.text, node.status ?? "active", node.source]),
+    [
+      ["记忆库放在设置里", "stale", "chat"],
+      ["在 Orbita 内做记忆库页", "stale", "chat"],
+      ["记忆库是一个独立整页", "active", "agent"],
+    ],
+  );
+});
 
-  // 拍板后：带 resolution（撤销键的来处）
-  await entries.updateEntry(WS_TOKEN, conflict.entry.id, (current) => ({
-    ...current,
-    conflictResolution: "stale-old",
-  }));
-  items = await library.pending();
-  assert.equal(items.find((item) => item.kind === "conflict")?.resolution, "stale-old");
-
-  // 旧条删掉 + 未拍板的新条：不再 ask（没什么可拍）
-  await entries.updateEntry(WS_TOKEN, conflict.entry.id, (current) => ({
-    ...current,
-    conflictResolution: undefined,
-  }));
-  await entries.removeEntry(WS_TOKEN, conflict.old!.id);
-  items = await library.pending();
-  assert.equal(items.filter((item) => item.kind === "conflict").length, 0);
+test("sessionView：记住的条目带所在层 token 与演变链（审查页签的条目卡要能撤销）", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  await seed(dir);
+  const library = makeLibrary(dir, { metas: { s1: { workspaceId: "ws-1", cwd: "/x" } } });
+  const view = await library.sessionView("s1");
+  const second = view.turns.find((row) => row.turn === 2)!;
+  const fresh = second.remembered.find((item) => item.entry.text === "在 Orbita 内做记忆库页")!;
+  assert.equal(fresh.token, WS_TOKEN);
+  assert.equal(fresh.evolution.length, 2);
+  assert.equal(fresh.evolution[0]?.status, "stale");
 });
 
 test("sessionView：meta 读不到 → token null 但视图照常（零轮）", async () => {

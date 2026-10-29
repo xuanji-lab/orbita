@@ -238,6 +238,35 @@ test("mutate：回执配对；超时与服务不在回 ok:false；changed 回调
   assert.equal((await inFlight).ok, false);
 });
 
+test("agentTool：回执配对透传；服务不在 / 超时 / 崩溃回 ok:false", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const h = new MemoryServiceHostCore({
+    forkRuntime: () => {
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    mutateTimeoutMs: 30,
+    log: () => undefined,
+  });
+  const input = { sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "search" as const, query: "汇报" } };
+  assert.equal((await h.agentTool(input)).ok, false); // 服务不在
+  await h.ensureStarted();
+  const pending = h.agentTool(input);
+  const sent = ref.current!.posted[1] as { type: string; requestId: string; scopeId: string; call: { op: string } };
+  assert.equal(sent.type, "agentTool");
+  assert.equal(sent.scopeId, "ws-1");
+  assert.equal(sent.call.op, "search");
+  ref.current!.emit("message", { type: "agentToolResult", requestId: sent.requestId, ok: true, entries: [] });
+  assert.deepEqual(await pending, { ok: true, entries: [] });
+  assert.equal((await h.agentTool(input)).ok, false); // 超时
+  const inFlight = h.agentTool(input);
+  ref.current!.exit(1);
+  assert.equal((await inFlight).ok, false); // 崩溃
+});
+
 /** 带 pid 补杀观察与 fork 计数的 host（#2 / #8 的回归）。 */
 function hostWithKill() {
   const ref: { current: FakeChild | null } = { current: null };

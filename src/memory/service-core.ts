@@ -13,6 +13,8 @@ import electron，模型调用与时间注入，可被 `node --test` 直接测
  */
 import { join } from "node:path";
 import type {
+  MemoryAgentCall,
+  MemoryAgentOutcome,
   MemoryBackfillProgress,
   MemoryChoreModel,
   MemoryDownloadProgress,
@@ -23,7 +25,7 @@ import type {
   MemoryMutationOutcome,
   MemoryVectorServiceConfig,
 } from "../shared/memory.ts";
-import { MEMORY_USER_TOKEN, memoryTurnSnapshot } from "../shared/memory.ts";
+import { MEMORY_USER_TOKEN, memoryShortId, memoryTurnSnapshot } from "../shared/memory.ts";
 import {
   admissionOf,
   buildSegmentPrompt,
@@ -35,8 +37,9 @@ import {
   EPISODE_IDLE_CLOSE_MS,
   type OpenEpisode,
 } from "./episodes.ts";
-import { MemoryEntryStore, type MemoryDraft } from "./entries.ts";
+import { MemoryEntryStore, normalizeText, type MemoryDraft } from "./entries.ts";
 import {
+  agentRecordedIn,
   buildExtractPrompt,
   FACT_SYSTEM_PROMPT,
   INSIGHT_SYSTEM_PROMPT,
@@ -44,7 +47,15 @@ import {
   preferenceCandidates,
   PREFERENCE_SYSTEM_PROMPT,
 } from "./extract.ts";
-import { dedupeById, isRecallable, RECALL_LIMIT, RECALL_MAX_CHARS, recallHits, selectHits } from "./retrieve.ts";
+import {
+  dedupeById,
+  isRecallable,
+  RECALL_LIMIT,
+  RECALL_MAX_CHARS,
+  recallHits,
+  retrieveMemories,
+  selectHits,
+} from "./retrieve.ts";
 import { EmbedServerCore, type EmbedServerOptions } from "./embed-server.ts";
 import { VectorStore, dotProductRank } from "./vector-store.ts";
 import { downloadWithFallback, type DownloadFetch } from "./downloader.ts";
@@ -79,6 +90,12 @@ export interface MemoryServiceCoreOptions {
 }
 
 const EXTRACT_TYPES = ["fact", "preference", "insight"] as const;
+
+/** memory_search 一次最多回几条、正文总预算多少（给 agent 定位用，比轮前注入宽） */
+const AGENT_SEARCH_LIMIT = 8;
+const AGENT_SEARCH_MAX_CHARS = 4000;
+/** memory_search 的门槛比轮前注入低一档：用户在纠错时说的话常常只沾到条目一两个词 */
+const AGENT_SEARCH_THRESHOLD = 0.2;
 
 
 export class MemoryServiceCore {
@@ -135,7 +152,18 @@ export class MemoryServiceCore {
    * - 开段与待提取段同 episodeId（搬移半路被杀）：pending 赢，开段文件删掉。
    */
   async init(dir: string, chore?: MemoryChoreModel): Promise<void> {
-    this.entries = new MemoryEntryStore(dir);
+    const entries = new MemoryEntryStore(dir);
+    // 旧「待你确认」数据按新规则落定一次（只跑一次，见 settleLegacyDecisions）。
+    // 在 entries 挂上之前做：记忆库写操作此时回「还没初始化」，不与这次整层改写交错
+    try {
+      const settled = await entries.settleLegacyDecisions();
+      if (settled.promoted + settled.staled > 0) {
+        this.log(`[memory] 旧的待确认已按新规则落定：升到所有工作区 ${settled.promoted} 条，旧说法标过时 ${settled.staled} 条`);
+      }
+    } catch (cause) {
+      this.log("[memory] 旧待确认数据落定失败（不拦启动，下次启动再试）", cause);
+    }
+    this.entries = entries;
     this.episodes = new EpisodeStore(dir);
     this.vectors = new VectorStore(join(dir, "vector"));
     if (this.vectorDeps !== null) {
@@ -262,7 +290,7 @@ export class MemoryServiceCore {
   }
 
   /**
-   * 记忆库的写操作（八种，见 MemoryMutation）。**不走提取队列**：按 token 粒度
+   * 记忆库的写操作（六种，见 MemoryMutation）。**不走提取队列**：按 token 粒度
    * 互斥（withLock）——提取在跑时不该让用户点个删除等一分钟；同 token 的追加 /
    * 改写仍串行。目标不在 / 入参不合法回 ok:false；任何落盘后 onChanged 一次。
    */
@@ -280,6 +308,10 @@ export class MemoryServiceCore {
         }
         if (mutation.op === "addManual" && outcome.entry !== null) {
           this.scheduleVectorize(mutation.token);
+        }
+        // 撤销类会让条目回到 active / 换了层：补算按对账补上缺的向量
+        if (mutation.op === "restorePrevious" || mutation.op === "returnToWorkspace") {
+          this.scheduleVectorize("all");
         }
       }
       return outcome;
@@ -315,10 +347,11 @@ export class MemoryServiceCore {
       }
       case "setStatus": {
         const entry = await this.withLock(mutation.token, () =>
-          entries.updateEntry(mutation.token, mutation.entryId, (current) => ({
-            ...current,
-            status: mutation.status,
-          })),
+          entries.updateEntry(mutation.token, mutation.entryId, (current) => {
+            // 恢复使用：agent 停用时记的理由随之失效
+            const { mutedReason: _dropped, ...rest } = current;
+            return mutation.status === "active" ? { ...rest, status: "active" } : { ...current, status: "muted" };
+          }),
         );
         return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
       }
@@ -336,135 +369,187 @@ export class MemoryServiceCore {
           ? { ok: false, error: "正文为空，或偏好 / 经验没带理由" }
           : { ok: true, entry };
       }
-      case "decidePromote": {
+      case "restorePrevious":
+        return this.restorePrevious(entries, mutation.token, mutation.entryId);
+      case "returnToWorkspace": {
         const current = await entries.listByToken(mutation.token).then((list) =>
           list.find((entry) => entry.id === mutation.entryId),
         );
         if (current === undefined) return { ok: false, error: "条目不在这一层" };
-        if (current.pendingPromote !== true) {
-          return { ok: false, error: "这条没有待确认的升层建议" };
-        }
-        if (mutation.decision === "workspace") {
-          const entry = await this.withLock(mutation.token, () =>
-            entries.updateEntry(mutation.token, mutation.entryId, (target) => ({
-              ...target,
-              pendingPromote: undefined,
-              promoteResolution: "workspace",
-            })),
-          );
-          return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
-        }
-        // 升到 user 层：搬文件（双 token 按字典序上锁，避免与反向搬移死锁），
-        // 原作用域记 promotedFrom（token，寻址即它）；scopeId 保留——条目搬回时
-        // （undoPromote）它还在，不用反解哈希
-        const entry = await this.withLockPair(mutation.token, MEMORY_USER_TOKEN, () =>
-          entries.moveEntry(mutation.token, MEMORY_USER_TOKEN, mutation.entryId, (target) => ({
-            ...target,
-            layer: "user",
-            pendingPromote: undefined,
-            promoteResolution: "user",
-            promotedFrom: mutation.token,
-          })),
-        );
-        return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
-      }
-      case "undoPromote": {
-        const current = await entries.listByToken(mutation.token).then((list) =>
-          list.find((entry) => entry.id === mutation.entryId),
-        );
-        if (current === undefined) return { ok: false, error: "条目不在这一层" };
-        if (current.promoteResolution === undefined) {
-          return { ok: false, error: "这条没有可撤销的升层拍板" };
-        }
-        if (current.promoteResolution === "workspace") {
-          // 回待拍板：恢复 pendingPromote，清结果
-          const entry = await this.withLock(mutation.token, () =>
-            entries.updateEntry(mutation.token, mutation.entryId, (target) => ({
-              ...target,
-              pendingPromote: true,
-              promoteResolution: undefined,
-            })),
-          );
-          return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
-        }
-        // user 层的搬回原作用域（promotedFrom 是 token）；scopeId 一直在，直接回 workspace 层
         const origin = current.promotedFrom;
-        if (origin === undefined) return { ok: false, error: "这条没记原作用域，搬不回去" };
+        if (current.layer !== "user" || origin === undefined) {
+          return { ok: false, error: "这条不是自动升到所有工作区的，没有原工作区可回" };
+        }
+        // 双 token 按字典序上锁，避免与提取的「本作用域 + user」两把锁死锁
         const entry = await this.withLockPair(mutation.token, origin, () =>
-          entries.moveEntry(mutation.token, origin, mutation.entryId, (target) => ({
-            ...target,
-            layer: "workspace",
-            pendingPromote: true,
-            promoteResolution: undefined,
-            promotedFrom: undefined,
-          })),
+          entries.moveEntry(mutation.token, origin, mutation.entryId, (target) => {
+            const { promotedFrom: _dropped, ...rest } = target;
+            return { ...rest, layer: "workspace" };
+          }),
         );
         return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
-      }
-      case "decideConflict":
-      case "undoConflict": {
-        return this.applyConflictDecision(entries, mutation, now);
       }
     }
   }
 
-  /** 冲突拍板与撤销：新条目按 token 寻址；旧条目可能在同层或 user 层（提取时候选
-   * 来自这两处），找不到按已删处理（拍板照记，撤销时静默跳过恢复）。 */
-  private async applyConflictDecision(
+  /**
+   * 恢复旧说法（restorePrevious）：entryId 是顶掉旧条的新条（提取判冲突或 agent 修订），
+   * 它 conflictWith 指的旧条回 active，新条标 muted——不删，演变链照常可见。旧条已删的
+   * 回 ok:false，不动新条。
+   */
+  private async restorePrevious(
     entries: MemoryEntryStore,
-    mutation: Extract<MemoryMutation, { op: "decideConflict" | "undoConflict" }>,
-    _now: number,
+    token: string,
+    entryId: string,
   ): Promise<MemoryMutationOutcome> {
-    const fresh = await entries.listByToken(mutation.token).then((list) =>
-      list.find((entry) => entry.id === mutation.entryId),
-    );
+    const fresh = await entries.listByToken(token).then((list) => list.find((entry) => entry.id === entryId));
     if (fresh === undefined) return { ok: false, error: "条目不在这一层" };
-    if (fresh.conflictWith === undefined) {
-      return { ok: false, error: "这条没有冲突建议" };
-    }
-    // 旧条目所在层：先本层，再 user 层
-    const layers = [mutation.token, MEMORY_USER_TOKEN];
+    const oldId = fresh.conflictWith;
+    if (oldId === undefined) return { ok: false, error: "这条没有顶掉别的条目" };
+    // 旧条可能在：同层、user 层，或（新条自动升层了）新条原来的作用域层
+    const candidates = new Set([token, MEMORY_USER_TOKEN]);
+    if (fresh.promotedFrom !== undefined) candidates.add(fresh.promotedFrom);
+    if (fresh.scopeId !== undefined) candidates.add(entries.tokenOf(fresh.scopeId));
     let oldToken: string | null = null;
-    let old: MemoryEntry | undefined;
-    for (const token of layers) {
-      const found = await entries.listByToken(token).then((list) =>
-        list.find((entry) => entry.id === fresh.conflictWith),
-      );
-      if (found !== undefined) {
-        oldToken = token;
-        old = found;
+    for (const candidate of candidates) {
+      const list = await entries.listByToken(candidate);
+      if (list.some((entry) => entry.id === oldId)) {
+        oldToken = candidate;
         break;
       }
     }
-    if (mutation.op === "decideConflict") {
-      if (mutation.decision === "stale-old" && old !== undefined && oldToken !== null) {
-        const token = oldToken;
-        await this.withLock(token, () =>
-          entries.updateEntry(token, old!.id, (target) => ({ ...target, status: "stale" })),
-        );
-      }
-      const entry = await this.withLock(mutation.token, () =>
-        entries.updateEntry(mutation.token, mutation.entryId, (target) => ({
-          ...target,
-          conflictResolution: mutation.decision,
-        })),
-      );
+    if (oldToken === null) return { ok: false, error: "旧说法已经删了，没有可恢复的" };
+    const restoreToken = oldToken;
+    return this.withLockPair(token, restoreToken, async () => {
+      await entries.updateEntry(restoreToken, oldId, (target) => ({ ...target, status: "active" }));
+      const entry = await entries.updateEntry(token, entryId, (target) => ({ ...target, status: "muted" }));
       return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
-    }
-    // 撤销：新条回待拍板；旧条按 active 恢复（被拍板前若是 muted 会被覆盖——契约注释）
-    if (fresh.conflictResolution === "stale-old" && old !== undefined && oldToken !== null) {
-      const token = oldToken;
-      await this.withLock(token, () =>
-        entries.updateEntry(token, old!.id, (target) => ({ ...target, status: "active" })),
+    });
+  }
+
+  /* ---------- agent 的记忆工具 ---------- */
+
+  /**
+   * memory_search / memory_revise / memory_retire（主进程已判根会话、已解好 scopeId）。
+   * 可见范围恒为「user 层 + 本作用域层」——别的工作区的记忆不可查也不可改。写走与
+   * 记忆库同一套按 token 互斥；写盘后 onChanged 一次。任何内部错误回 ok:false + 人话。
+   */
+  async agentTool(input: {
+    sessionId: string;
+    scopeId: string;
+    turn: number;
+    call: MemoryAgentCall;
+  }): Promise<MemoryAgentOutcome> {
+    try {
+      const entries = this.entries;
+      if (entries === null) return { ok: false, error: "记忆服务还没初始化" };
+      const { call } = input;
+      if (call.op === "search") return { ok: true, entries: await this.agentSearch(entries, input.scopeId, call.query) };
+      const located = await this.locate(entries, input.scopeId, call.entryId);
+      if ("error" in located) return { ok: false, error: located.error };
+      const { token, entry: target } = located;
+      if (call.op === "retire") {
+        const reason = call.reason.trim();
+        const entry = await this.withLock(token, () =>
+          entries.updateEntry(token, target.id, (current) => ({
+            ...current,
+            status: "muted",
+            ...(reason !== "" ? { mutedReason: reason } : null),
+          })),
+        );
+        if (entry === null) return { ok: false, error: "条目不在了" };
+        this.onChanged();
+        return { ok: true, entries: [entry] };
+      }
+      // revise
+      const text = call.text.trim();
+      if (text === "") return { ok: false, error: "新说法不能为空" };
+      if (call.reason.trim() === "") return { ok: false, error: "要写理由：用户哪句话纠正了它" };
+      if (target.status === "stale") {
+        const newer = await this.newerOf(entries, input.scopeId, target.id);
+        return {
+          ok: false,
+          error:
+            newer === null
+              ? `${memoryShortId(target.id)} 已经过时了；要改请先 memory_search 找到现行的那条`
+              : `${memoryShortId(target.id)} 已经被 ${memoryShortId(newer.id)} 顶掉了；要改请修订 ${memoryShortId(newer.id)}`,
+        };
+      }
+      if (normalizeText(text) === normalizeText(target.text)) {
+        return { ok: false, error: "新说法和旧条一字不差，不用修订" };
+      }
+      const pair = await this.withLock(token, () =>
+        entries.appendRevision(token, target.id, {
+          text,
+          reason: call.reason,
+          sessionId: input.sessionId,
+          turn: input.turn,
+          now: this.now(),
+        }),
       );
+      if (pair === null) return { ok: false, error: "条目不在了" };
+      this.onChanged();
+      this.scheduleVectorize(token);
+      return { ok: true, entries: pair };
+    } catch (cause) {
+      this.log("[memory] 记忆工具出错", input.call.op, cause);
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
-    const entry = await this.withLock(mutation.token, () =>
-      entries.updateEntry(mutation.token, mutation.entryId, (target) => ({
-        ...target,
-        conflictResolution: undefined,
-      })),
+  }
+
+  /** memory_search：可见范围里的 active 条目，词法（+ 向量可用时融合）按相关度排。 */
+  private async agentSearch(entries: MemoryEntryStore, scopeId: string, query: string): Promise<MemoryEntry[]> {
+    const [user, scope] = await Promise.all([entries.listUser(), entries.listScope(scopeId)]);
+    const active = dedupeById([...user, ...scope]).filter(isRecallable);
+    const lexical = retrieveMemories(active, query, {
+      now: this.now(),
+      limit: AGENT_SEARCH_LIMIT,
+      maxChars: AGENT_SEARCH_MAX_CHARS,
+      threshold: AGENT_SEARCH_THRESHOLD,
+    });
+    const fused = await this.fuseWithVector(lexical, { user, scope }, scopeId, query, {
+      limit: AGENT_SEARCH_LIMIT,
+      maxChars: AGENT_SEARCH_MAX_CHARS,
+    });
+    return fused.map((hit) => hit.entry);
+  }
+
+  /**
+   * 按全 id 或短 id（前缀，至少 memoryShortId 那么长）在可见范围里定位一条。全 id 先认；
+   * 前缀撞了两条以上报歧义、列出候选——不猜。
+   */
+  private async locate(
+    entries: MemoryEntryStore,
+    scopeId: string,
+    entryId: string,
+  ): Promise<{ token: string; entry: MemoryEntry } | { error: string }> {
+    const wanted = entryId.trim();
+    const minPrefix = memoryShortId("mem_00000000-").length;
+    const pools: { token: string; list: MemoryEntry[] }[] = [
+      { token: MEMORY_USER_TOKEN, list: await entries.listUser() },
+      { token: entries.tokenOf(scopeId), list: await entries.listScope(scopeId) },
+    ];
+    for (const pool of pools) {
+      const exact = pool.list.find((entry) => entry.id === wanted);
+      if (exact !== undefined) return { token: pool.token, entry: exact };
+    }
+    if (wanted.length < minPrefix) {
+      return { error: `找不到 ${wanted}：id 至少要给到 ${minPrefix} 位（召回块里方括号中的那一段）` };
+    }
+    const matches = pools.flatMap((pool) =>
+      pool.list.filter((entry) => entry.id.startsWith(wanted)).map((entry) => ({ token: pool.token, entry })),
     );
-    return entry === null ? { ok: false, error: "条目不在这一层" } : { ok: true, entry };
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length === 0) {
+      return { error: `找不到 ${wanted}（只能改本工作区与所有工作区层的记忆）；先用 memory_search 查` };
+    }
+    return { error: `${wanted} 对上了多条：${matches.map((match) => match.entry.id).join("、")}；请给全 id` };
+  }
+
+  /** 顶掉某条的新条（沿 conflictWith 反查，可见范围内；没有回 null）。 */
+  private async newerOf(entries: MemoryEntryStore, scopeId: string, oldId: string): Promise<MemoryEntry | null> {
+    const pool = [...(await entries.listUser()), ...(await entries.listScope(scopeId))];
+    return pool.find((entry) => entry.conflictWith === oldId && isRecallable(entry)) ?? pool.find((entry) => entry.conflictWith === oldId) ?? null;
   }
 
   /* ---------- 向量召回 ---------- */
@@ -481,6 +566,7 @@ export class MemoryServiceCore {
     layers: { user: readonly MemoryEntry[]; scope: readonly MemoryEntry[] },
     scopeId: string,
     query: string,
+    budget: { limit: number; maxChars: number } = { limit: RECALL_LIMIT, maxChars: RECALL_MAX_CHARS },
   ): Promise<MemoryHit[]> {
     const config = this.vectorConfig;
     const server = this.embedServer;
@@ -529,7 +615,7 @@ export class MemoryServiceCore {
       // 不能把候选量放大成几十条跨 IPC 与注入账
       return [
         ...pinned,
-        ...selectHits(fused, { limit: RECALL_LIMIT, maxChars: RECALL_MAX_CHARS, taken: pinned.map((hit) => hit.entry) }),
+        ...selectHits(fused, { limit: budget.limit, maxChars: budget.maxChars, taken: pinned.map((hit) => hit.entry) }),
       ];
     } catch (cause) {
       this.log("[memory] 向量融合失败（本轮退词法）", cause);
@@ -753,8 +839,10 @@ export class MemoryServiceCore {
     return run;
   }
 
-  /** 双 token 互斥（升层 / 撤销升层的搬移）：按字典序上锁，避免反向搬移死锁。 */
+  /** 双 token 互斥（提取落定、恢复旧说法、搬回原工作区）：按字典序上锁，避免死锁。
+   * 两个 token 相同时只上一把（同一把锁重入会自己等自己）。 */
   private async withLockPair<T>(a: string, b: string, job: () => Promise<T>): Promise<T> {
+    if (a === b) return this.withLock(a, job);
     const ordered = [a, b].sort();
     return this.withLock(ordered[0]!, () => this.withLock(ordered[1]!, job));
   }
@@ -877,16 +965,18 @@ export class MemoryServiceCore {
       .join("\n");
     for (const type of EXTRACT_TYPES) {
       if (episode.extracted[type]) continue;
+      const pool = [...(await entries.listScope(episode.scopeId)), ...(await entries.listUser())];
+      // agent 在这段里当场改写过的条目进提示词：同一件事别再写一遍
+      const recorded = agentRecordedIn(pool, pub);
       let candidates: MemoryEntry[] | undefined;
       if (type === "preference") {
-        const pool = [...(await entries.listScope(episode.scopeId)), ...(await entries.listUser())];
         candidates = preferenceCandidates(pool, episodeText);
       }
       const system =
         type === "fact" ? FACT_SYSTEM_PROMPT : type === "preference" ? PREFERENCE_SYSTEM_PROMPT : INSIGHT_SYSTEM_PROMPT;
       const raw = await this.callModel(
         system,
-        buildExtractPrompt({ turns: episode.turns, now: this.now(), candidates }),
+        buildExtractPrompt({ turns: episode.turns, now: this.now(), candidates, recorded }),
       );
       if (raw === null) {
         this.log(`[memory] 段 ${episodeId} 的 ${type} 提取调用失败（该类记账不动，下次重试）`);
@@ -895,9 +985,12 @@ export class MemoryServiceCore {
       const candidateIds = new Set((candidates ?? []).map((entry) => entry.id));
       const drafts: MemoryDraft[] = parseExtractReply(raw, type, candidateIds);
       const scopeToken = entries.tokenOf(episode.scopeId);
-      const written = await this.withLock(scopeToken, () => entries.appendScope(episode.scopeId, pub, drafts));
+      // 两把锁：跨工作区偏好直接落 user 层、冲突的旧条可能在 user 层被标 stale
+      const written = await this.withLockPair(scopeToken, MEMORY_USER_TOKEN, () =>
+        entries.appendScope(episode.scopeId, pub, drafts),
+      );
       this.onChanged();
-      this.scheduleVectorize(scopeToken);
+      this.scheduleVectorize(written.some((entry) => entry.layer === "user") ? "all" : scopeToken);
       if (written.length > 0) {
         this.log(
           `[memory] 段 ${episodeId} 提取出 ${written.length} 条${type === "insight" ? "经验" : type === "fact" ? "事实" : "偏好"}`,

@@ -47,7 +47,7 @@ export function parseSessionId(raw: unknown): string {
 }
 
 /**
- * 八种写操作的逐 op 校验（形状层；业务不变量——偏好 / 经验必须带 reason、正文
+ * 六种写操作的逐 op 校验（形状层；业务不变量——偏好 / 经验必须带 reason、正文
  * 非空——在记忆服务侧兑底，主进程只拦明显坏形状）。addManual 的 scopeId 可选：
  * 主进程能从工作区表解出来就带（handler 那层填），解不出省略。
  */
@@ -71,7 +71,7 @@ export function parseMutation(raw: unknown): MemoryMutation {
       };
     case "setStatus": {
       if (suspect.status !== "active" && suspect.status !== "muted") {
-        throw new Error("memory status must be active | muted（stale 只能由冲突拍板产生）");
+        throw new Error("memory status must be active | muted（stale 只由新说法顶掉旧说法产生）");
       }
       return {
         op,
@@ -93,35 +93,8 @@ export function parseMutation(raw: unknown): MemoryMutation {
           : {}),
       };
     }
-    case "decidePromote": {
-      if (suspect.decision !== "user" && suspect.decision !== "workspace") {
-        throw new Error("memory promote decision must be user | workspace");
-      }
-      return {
-        op,
-        token: parseScopeToken(suspect.token),
-        entryId: parseEntryId(suspect.entryId),
-        decision: suspect.decision,
-      };
-    }
-    case "undoPromote":
-      return {
-        op,
-        token: parseScopeToken(suspect.token),
-        entryId: parseEntryId(suspect.entryId),
-      };
-    case "decideConflict": {
-      if (suspect.decision !== "stale-old" && suspect.decision !== "keep-both") {
-        throw new Error("memory conflict decision must be stale-old | keep-both");
-      }
-      return {
-        op,
-        token: parseScopeToken(suspect.token),
-        entryId: parseEntryId(suspect.entryId),
-        decision: suspect.decision,
-      };
-    }
-    case "undoConflict":
+    case "restorePrevious":
+    case "returnToWorkspace":
       return {
         op,
         token: parseScopeToken(suspect.token),

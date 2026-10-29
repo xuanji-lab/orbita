@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  agentRecordedIn,
   buildExtractPrompt,
   FACT_SYSTEM_PROMPT,
   INSIGHT_SYSTEM_PROMPT,
@@ -73,12 +74,12 @@ test("parseExtractReply：经验没依据丢弃；crossWorkspace 只对偏好生
   ]);
   const drafts = parseExtractReply(raw, "insight");
   assert.equal(drafts.length, 2);
-  assert.equal(drafts.every((draft) => draft.pendingPromote === undefined), true);
+  assert.equal(drafts.every((draft) => draft.crossWorkspace === undefined), true);
 
   const prefRaw = JSON.stringify([
     { text: "跨工作区偏好", reason: "r", keywords: [], turns: [1], crossWorkspace: true },
   ]);
-  assert.equal(parseExtractReply(prefRaw, "preference")[0]?.pendingPromote, true);
+  assert.equal(parseExtractReply(prefRaw, "preference")[0]?.crossWorkspace, true);
 });
 
 test("parseExtractReply：没有支撑轮号的条不落；超过 5 条截断；坏输出空数组", () => {
@@ -111,4 +112,39 @@ test("三类提示词都讲清抽象层次：同一意思不换说法写进别�
   assert.ok(FACT_SYSTEM_PROMPT.includes("属于偏好，这里不记"));
   assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("跨场景的一般原则属于经验"));
   assert.ok(INSIGHT_SYSTEM_PROMPT.includes("经验必须比原话高一层"));
+});
+
+test("buildExtractPrompt：agent 当场写下的条目进 <recorded> 节；三类提示词都讲「不要再写一遍」", () => {
+  const prompt = buildExtractPrompt({
+    turns: [{ turn: 3, at: 1, userText: "不对，汇报要三条要点", assistantText: "已改" }],
+    now: 1,
+    recorded: [entry({ id: "mem_a", source: "agent", text: "用户要求汇报写成三条要点" })],
+  });
+  assert.ok(prompt.includes("<recorded>\n- 用户要求汇报写成三条要点\n</recorded>"));
+  // 没有就不出节
+  assert.equal(buildExtractPrompt({ turns: [], now: 1, recorded: [] }).includes("<recorded>"), false);
+  for (const system of [FACT_SYSTEM_PROMPT, PREFERENCE_SYSTEM_PROMPT, INSIGHT_SYSTEM_PROMPT]) {
+    assert.ok(system.includes("<recorded>"));
+    assert.ok(system.includes("不要重复，也不要换个说法再写一条"));
+  }
+});
+
+test("agentRecordedIn：只挑同会话、出处轮落在段内的 agent 条目（被撤销的也算）", () => {
+  const pool = [
+    entry({ id: "in", source: "agent", sessionId: "s1", turns: [3], episodeId: "" }),
+    entry({ id: "muted", source: "agent", sessionId: "s1", turns: [2], episodeId: "", status: "muted" }),
+    entry({ id: "out-of-range", source: "agent", sessionId: "s1", turns: [9], episodeId: "" }),
+    entry({ id: "other-session", source: "agent", sessionId: "s2", turns: [3], episodeId: "" }),
+    entry({ id: "chat", source: "chat", sessionId: "s1", turns: [3] }),
+  ];
+  assert.deepEqual(
+    agentRecordedIn(pool, { sessionId: "s1", fromTurn: 2, toTurn: 4 }).map((item) => item.id),
+    ["in", "muted"],
+  );
+});
+
+test("偏好提示词讲清 conflictsWith / crossWorkspace 会直接生效、拿不准就不加", () => {
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("会被直接标为过时"));
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("会被直接记到所有工作区"));
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("拿不准写 false"));
 });
