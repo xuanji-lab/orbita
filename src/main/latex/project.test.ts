@@ -160,6 +160,26 @@ describe("writeLatexProjectConfig", () => {
     }
   });
 
+  test("保存即编译：写进 compileOnSave，项目描述读回同一个值，别的键不动", async () => {
+    const root = withProject((dir) => {
+      mkdirSync(join(dir, ".orbita"));
+      writeFileSync(join(dir, ".orbita", "latex.json"), JSON.stringify({ engine: "xelatex" }));
+      writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n");
+    });
+    try {
+      assert.equal(describeLatexProject(root).compileOnSave, false, "缺省关");
+      await writeLatexProjectConfig(root, { compileOnSave: true });
+      const saved = JSON.parse(readFileSync(join(root, ".orbita", "latex.json"), "utf8")) as Record<string, unknown>;
+      assert.equal(saved["compileOnSave"], true);
+      assert.equal(saved["engine"], "xelatex", "合并写，不抹掉引擎选择");
+      assert.equal(describeLatexProject(root).compileOnSave, true);
+      await writeLatexProjectConfig(root, { compileOnSave: false });
+      assert.equal(describeLatexProject(root).compileOnSave, false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("多个 .tex 时选根：写入后项目描述就用它", async () => {
     const root = withProject((dir) => {
       writeFileSync(join(dir, "intro.tex"), "\\documentclass{article}\n");

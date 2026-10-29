@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pathWithin } from "../../../../shared/path.ts";
 import { api } from "../../api.ts";
 import type {
+  LatexCleanResult,
   LatexEngine,
   LatexFileContext,
   LatexIssue,
@@ -42,14 +43,41 @@ export interface LatexWorkbench {
   last: LatexBuildSummary | null;
   /** IPC / 授权 / 写配置失败的一句话（面板里一行红字，不弹窗） */
   error: string | null;
+  /** 清理辅助文件在跑 */
+  cleaning: boolean;
+  /**
+   * 一次动作的结果（目前只有清理）。**结构化而不是句子**：文案在 FilesPanel 那一层
+   * 拼（那里才有 t），这里只说事实。几秒后自己消失——它是一次动作的回执，
+   * 不是需要用户处理的问题（那种走 error）。
+   */
+  notice: LatexNotice | null;
   /** 编译成功后自增：PDF 标签据此重载（失败不动，保留上一版） */
   pdfReloadToken: number;
   compile: () => void;
   cancel: () => void;
+  clean: () => void;
+  /** 保存即编译的总开关（项目级）；写失败落到 error 行 */
+  setCompileOnSave: (on: boolean) => void;
+  /** 「重新检测」/「指定位置」在跑（引导卡的按钮置灰，避免连点两次起两个 `--version`） */
+  probeBusy: boolean;
+  /** 「指定位置」选到的文件跑不起来：路径如实回给卡片，不写设置 */
+  locateInvalid: string | null;
+  /** 重新探测本机 latexmk（作废缓存） */
+  refreshProbe: () => void;
+  /** 系统文件选择器选 latexmk：现验通过才写设置，然后重新探测 */
+  locateLatexmk: () => void;
   selectEngine: (engine: LatexEngine) => void;
   selectMain: (main: string) => void;
   refresh: () => void;
 }
+
+/** 动作回执。`cleaned` 带磁盘事实（删了几份、留下了什么），由界面决定怎么说 */
+export type LatexNotice =
+  | { kind: "cleaned"; result: LatexCleanResult }
+  | { kind: "clean-error"; message: string };
+
+/** 回执停留时长：够看清一行「删了 6 个文件」，又不至于占着面板 */
+const NOTICE_MS = 6000;
 
 /** 项目事实的轮询间隔：够快看到 agent 改完源码，又不至于让面板一直读盘 */
 const POLL_MS = 4000;
@@ -67,6 +95,11 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const contextRef = useRef(context);
   contextRef.current = context;
   const runningRef = useRef(false);
+  /**
+   * 编译中来了一次「保存即编译」的请求：只记一次。连着保存十次也只补跑一轮——
+   * 每一份中间稿都编一遍是纯浪费，而最后一次保存的内容一定会被那一轮带上。
+   */
+  const queuedRef = useRef(false);
   /** 请求代次：切文件后晚到的项目响应不许覆盖新文件的 */
   const requestRef = useRef(0);
 
@@ -79,6 +112,17 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const [last, setLast] = useState<LatexBuildSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfReloadToken, setPdfReloadToken] = useState(0);
+  const [cleaning, setCleaning] = useState(false);
+  const [notice, setNotice] = useState<LatexNotice | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
+  const [locateInvalid, setLocateInvalid] = useState<string | null>(null);
+
+  // 回执自己过期：它是「刚才那件事成了」的一句话，不该留到下一次操作
+  useEffect(() => {
+    if (notice === null) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   /**
    * 拉一次项目事实。`soft` = 轮询：失败静默（一次 stat 撞上文件被删，不该在面板上
@@ -109,6 +153,8 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   useEffect(() => {
     setError(null);
     runningRef.current = false;
+    // 上一份项目的排队不留到新项目：它那张 PDF 与新文件无关
+    queuedRef.current = false;
     setRunning(false);
     setStartedAt(null);
     const ctx = contextRef.current;
@@ -141,49 +187,94 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     return () => window.clearInterval(timer);
   }, [key, loadProject]);
 
-  const compile = useCallback((): void => {
+  /** 真正跑一轮。自引用（结束时补跑排队的那一轮）走 ref，不为递归加依赖 */
+  const runCompileRef = useRef<(() => Promise<void>) | null>(null);
+
+  const runCompile = useCallback(async (): Promise<void> => {
     const ctx = contextRef.current;
-    if (ctx === null || runningRef.current) return;
+    if (ctx === null) return;
     runningRef.current = true;
     setRunning(true);
     setStartedAt(Date.now());
     setError(null);
-    void (async () => {
-      try {
-        const outcome = await api.latex.compile(ctx);
-        if (!outcome.ok) {
-          setError(outcome.error);
-          return;
-        }
-        const result = outcome.result;
-        setLast({
-          status: result.status,
-          pages: result.pages,
-          durationMs: result.durationMs,
-          errors: result.errors,
-          warnings: result.warnings,
-          pdfPath: result.pdf,
-          finishedAt: Date.now(),
-        });
-        if (result.status === "ok" || result.status === "warning-only") {
-          setPdfReloadToken((token) => token + 1);
-        }
-      } catch (cause) {
-        setError(failMessage(cause));
-      } finally {
-        runningRef.current = false;
-        setRunning(false);
-        setStartedAt(null);
-        await loadProject(true);
+    try {
+      const outcome = await api.latex.compile(ctx);
+      if (!outcome.ok) {
+        setError(outcome.error);
+        return;
       }
-    })();
+      const result = outcome.result;
+      setLast({
+        status: result.status,
+        pages: result.pages,
+        durationMs: result.durationMs,
+        errors: result.errors,
+        warnings: result.warnings,
+        pdfPath: result.pdf,
+        finishedAt: Date.now(),
+      });
+      if (result.status === "ok" || result.status === "warning-only") {
+        setPdfReloadToken((token) => token + 1);
+      }
+    } catch (cause) {
+      setError(failMessage(cause));
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+      setStartedAt(null);
+      await loadProject(true);
+      // 排队的那一轮在「本轮收尾」之后才起：并发被拒（same-project）不是排队能解决的
+      if (queuedRef.current) {
+        queuedRef.current = false;
+        void runCompileRef.current?.();
+      }
+    }
   }, [loadProject]);
+  runCompileRef.current = runCompile;
+
+  const compile = useCallback((): void => {
+    if (contextRef.current === null) return;
+    if (runningRef.current) {
+      queuedRef.current = true;
+      return;
+    }
+    void runCompileRef.current?.();
+  }, []);
 
   const cancel = useCallback((): void => {
     const ctx = contextRef.current;
     if (ctx === null) return;
     void api.latex.cancel(ctx).catch((cause: unknown) => setError(failMessage(cause)));
   }, []);
+
+  /**
+   * 清理辅助文件（`latexmk -c`）。与编译一样按当前 context 找项目——renderer 给不出
+   * 目录，主进程用文件面板的白名单核。清理会动同一组 .aux，所以主进程侧与编译互斥：
+   * 在编时回 same-project，这里如实转成回执里的错误，不自己猜。
+   */
+  const clean = useCallback((): void => {
+    const ctx = contextRef.current;
+    if (ctx === null || cleaning) return;
+    setCleaning(true);
+    setError(null);
+    void (async () => {
+      try {
+        const outcome = await api.latex.clean(ctx);
+        if (outcome.ok) {
+          setNotice({ kind: "cleaned", result: outcome.result });
+          // 产物目录变了（aux/log 被删）：编译条的「PDF 是否过期」要按新事实算一次。
+          // PDF 本身没动，所以不碰 pdfReloadToken——重载会让阅读位置丢一次。
+          await loadProject(true);
+        } else {
+          setNotice({ kind: "clean-error", message: outcome.error });
+        }
+      } catch (cause) {
+        setNotice({ kind: "clean-error", message: failMessage(cause) });
+      } finally {
+        setCleaning(false);
+      }
+    })();
+  }, [cleaning, loadProject]);
 
   const configure = useCallback(
     (patch: { main?: string; engine?: LatexEngine }): void => {
@@ -196,6 +287,70 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
             setError(outcome.error);
             return;
           }
+          requestRef.current += 1;
+          setProject(outcome.project);
+          setError(null);
+        } catch (cause) {
+          setError(failMessage(cause));
+        }
+      })();
+    },
+    [],
+  );
+
+  /**
+   * 重新探测（「已装好，重新检测」）。必须走 refresh：探测结果按进程缓存，不作废
+   * 就会把启动时那句「没找到」原样还回来——用户刚装完 TeX 时会以为我们没看。
+   */
+  const refreshProbe = useCallback((): void => {
+    setProbeBusy(true);
+    setLocateInvalid(null);
+    void api.latex
+      .probe({ refresh: true })
+      .then((result) => setProbe(result))
+      .catch((cause: unknown) => setError(failMessage(cause)))
+      .finally(() => setProbeBusy(false));
+  }, []);
+
+  /**
+   * 「指定位置」：系统文件选择器选 latexmk。通过 `--version` 现验才写设置（主进程
+   * 那一侧做），随后重新探测一次让界面与磁盘一致。取消选择什么也不做。
+   */
+  const locateLatexmk = useCallback((): void => {
+    setProbeBusy(true);
+    setLocateInvalid(null);
+    void (async () => {
+      try {
+        const outcome = await api.latex.locate();
+        if (outcome.kind === "invalid") {
+          setLocateInvalid(outcome.path);
+          return;
+        }
+        if (outcome.kind === "cancelled") return;
+        const result = await api.latex.probe({ refresh: true });
+        setProbe(result);
+      } catch (cause) {
+        setError(failMessage(cause));
+      } finally {
+        setProbeBusy(false);
+      }
+    })();
+  }, []);
+
+  /** 保存即编译的开关（写项目 `.orbita/latex.json`）；失败照旧落到 error 行 */
+  const setCompileOnSave = useCallback(
+    (on: boolean): void => {
+      const ctx = contextRef.current;
+      if (ctx === null) return;
+      void (async () => {
+        try {
+          const outcome = await api.latex.configure({ ...ctx, compileOnSave: on });
+          if (!outcome.ok) {
+            setError(outcome.error);
+            return;
+          }
+          // 作废在飞的轮询：它带回来的是改之前的事实，晚到会把刚写的开关冲回旧值
+          requestRef.current += 1;
           setProject(outcome.project);
           setError(null);
         } catch (cause) {
@@ -213,9 +368,17 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     startedAt,
     last,
     error,
+    cleaning,
+    notice,
     pdfReloadToken,
     compile,
     cancel,
+    clean,
+    setCompileOnSave,
+    probeBusy,
+    locateInvalid,
+    refreshProbe,
+    locateLatexmk,
     selectEngine: (engine) => configure({ engine }),
     selectMain: (main) => configure({ main }),
     refresh: () => void loadProject(false),
@@ -234,6 +397,8 @@ function sameProject(a: LatexProjectInfo | null, b: LatexProjectInfo | null): bo
     a.pdf?.modifiedAt === b.pdf?.modifiedAt &&
     a.sourceModifiedAt === b.sourceModifiedAt &&
     a.detail === b.detail &&
+    // 开关也是项目事实：不比它，轮询会把「用户刚关掉」的那个值永远留在界面上
+    a.compileOnSave === b.compileOnSave &&
     a.mains.join("\u0000") === b.mains.join("\u0000")
   );
 }

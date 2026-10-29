@@ -32,8 +32,12 @@ export function LatexBuildBar(props: {
   last: LatexBuildSummary | null;
   /** 这一轮开始的时刻（编译中计时） */
   startedAt: number | null;
+  /** 清理辅助文件在跑（菜单项置灰，不让连点两次） */
+  cleaning: boolean;
   onCompile: () => void;
   onCancel: () => void;
+  onClean: () => void;
+  onToggleCompileOnSave: (on: boolean) => void;
   onSelectEngine: (engine: LatexEngine) => void;
   onSelectMain: (main: string) => void;
 }) {
@@ -64,6 +68,31 @@ export function LatexBuildBar(props: {
     checked: main === project.main,
     onSelect: () => props.onSelectMain(main),
   }));
+  /**
+   * 项目动作菜单。只放「不属于每一次编译、但属于这个项目」的动作：清理辅助文件
+   * （想马上一次干净重编）与保存即编译（一个长期开关）。
+   * 在编时清理置灰：那组 .aux 正被 latexmk 读写，主进程也会 same-project 拒掉。
+   */
+  const actionItems: MenuItem[] = [
+    {
+      id: "compile-on-save",
+      label: t.latex.compileOnSave,
+      hint: t.latex.compileOnSaveHint,
+      icon: "zap",
+      checked: project.compileOnSave,
+      // 不关菜单：开关的后果就在这一行里，关掉反而看不到「它现在到底是开还是关」
+      keepOpen: true,
+      onSelect: () => props.onToggleCompileOnSave(!project.compileOnSave),
+    },
+    {
+      id: "clean",
+      label: t.latex.clean,
+      hint: props.cleaning ? t.latex.cleaning : t.latex.cleanHint,
+      icon: "trash-2",
+      disabled: running || props.cleaning,
+      onSelect: props.onClean,
+    },
+  ];
 
   return (
     <div className="latex-bar" role="toolbar" aria-label={t.latex.aria}>
@@ -121,6 +150,23 @@ export function LatexBuildBar(props: {
         </button>
       )}
 
+      <Menu
+        items={actionItems}
+        panelMinWidth={210}
+        trigger={({ toggle }) => (
+          <button
+            type="button"
+            className="quiet-control latex-actions"
+            onClick={toggle}
+            title={t.latex.actionsTip}
+            aria-label={t.latex.actionsTip}
+          >
+            <Icon name="ellipsis-vertical" size={14} />
+          </button>
+        )}
+      />
+
+      {/* 行尾血线：状态行才是尾元素；动作菜单在它左边，不抢右缘 */}
       <span className="latex-status row-trailing">
         {statusOf({ state, last, project, startedAt: props.startedAt, now, t })}
       </span>

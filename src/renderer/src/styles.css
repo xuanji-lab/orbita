@@ -3373,6 +3373,112 @@ body {
   color: var(--color-danger);
 }
 
+/* 编译条的项目动作菜单：行内小图标键，与编译键同高（24），不占行尾（状态行才是尾元素） */
+.latex-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+/* 动作回执（目前只有清理辅助文件）：一行、贴着编译条下方，几秒后自己消失。
+   它不是错误条——需要处理的问题走 .latex-error */
+.latex-toast {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 「没有 latexmk」引导卡：标题 + 说明 + 找过的位置（可展开）+ 三个动作。
+   它是说明不是报错——panel 底 + 细边框，红色只给标题那颗图标 */
+.latex-setup {
+  flex: 0 0 auto;
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-setup-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.latex-setup-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.latex-setup-body {
+  margin: var(--space-1) 0 0;
+  line-height: var(--line-height-ui);
+}
+.latex-setup-paths-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-setup-paths {
+  max-height: 132px;
+  overflow: auto;
+  margin: var(--space-1) 0 0;
+  padding: 0 var(--space-2);
+  list-style: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-setup-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.latex-setup-invalid {
+  margin: var(--space-1) 0 0;
+  color: var(--color-danger);
+  word-break: break-all;
+}
+.latex-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.latex-setup-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+a.latex-setup-action {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
 /* ---------- 源码编辑器（.tex 标签，PR4） ----------
  * 编辑器吃满预览体：body 让出内边距与滚动（滚动在 CodeMirror 的 .cm-scroller 里，
  * 行号槽跟着滚）；上下是冲突/错误条与状态行，都不随正文滚。
@@ -3711,12 +3817,152 @@ body {
   padding: 0;
   overflow: hidden;
 }
+
+/* 预览的壳：工具栏钉在上方，缩略图侧栏与滚动区并排。滚动只发生在 .pdf-view */
+.pdf-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pdf-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pdf-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* 工具栏里的一枚键：安静控件配方（.quiet-control）给颜色与按下态，这里只管几何 */
+.pdf-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+.pdf-tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.pdf-zoom {
+  margin-left: auto;
+}
+.pdf-page-input {
+  width: 40px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  text-align: center;
+}
+.pdf-page-total,
+.pdf-zoom-percent,
+.pdf-find-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.pdf-zoom-percent {
+  /* 百分比按三档宽度变化（50%–400%），固定宽度免得 ± 键跟着跳 */
+  width: 42px;
+  text-align: center;
+}
+.pdf-find {
+  gap: 4px;
+}
+.pdf-find-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.pdf-find-input {
+  width: 150px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+}
+.pdf-find-count.danger {
+  color: var(--color-danger);
+}
 .pdf-view {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding-top: 12px;
   background: var(--color-bg-muted);
+}
+
+/* 缩略图侧栏：宽 136，每页一张小 canvas。它是阅读的辅助，不抢正文宽度 */
+.pdf-thumbs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  width: 136px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+  border-right: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+}
+.pdf-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+.pdf-thumb-frame {
+  display: block;
+  width: 104px;
+  overflow: hidden;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  border-radius: 2px;
+}
+.pdf-thumb.active .pdf-thumb-frame {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.pdf-thumb-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pdf-thumb-number {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pdf-thumb.active .pdf-thumb-number {
+  color: var(--color-text-primary);
 }
 .pdf-view-notice {
   position: sticky;
@@ -3797,6 +4043,19 @@ body {
   border-radius: 2px;
   background: var(--color-citation-mark);
   mix-blend-mode: multiply;
+}
+
+/* 搜索命中：同一条路（叠层、不吃指针）。当前那一处更重，其余是淡黄提示 */
+.pdf-find-mark {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+  mix-blend-mode: multiply;
+}
+.pdf-find-mark.active {
+  background: color-mix(in srgb, var(--color-accent) 58%, transparent);
 }
 
 /*

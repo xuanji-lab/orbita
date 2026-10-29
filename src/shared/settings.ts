@@ -274,6 +274,15 @@ export interface AppSettings {
    */
   browserDownloadDir?: string;
   /**
+   * 显式指定的 latexmk 可执行文件（绝对路径）。**缺席 = 只靠 PATH 与常见安装根探测**。
+   *
+   * 为什么需要它：TeX 装在非常规位置（自定目录 / 内网分发 / 多个发行版共存）时，
+   * PATH 与常见根都会落空，而「指定位置」是未安装引导卡上的第三个动作。机器级
+   * 而不是项目级：换项目不该重选一次编译器。只接受**绝对路径**（相对路径会随 cwd 漂）；
+   * 坏的路径不会把编译变成死路，probe 验不活会回退到 PATH（见 probe.ts）。
+   */
+  latexmkPath?: string;
+  /**
    * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
    * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
    * 页面上每个开关只发自己那个键。
@@ -474,6 +483,7 @@ export function parseSettings(raw: unknown): AppSettings {
     subSessionThinking?: unknown;
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
+    latexmkPath?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
     providersPage?: unknown;
@@ -545,6 +555,12 @@ export function parseSettings(raw: unknown): AppSettings {
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
+      : {}),
+    // 同一条纪律：latexmk 的显式路径必须是绝对路径，且不是空串
+    ...(typeof record.latexmkPath === "string" &&
+    record.latexmkPath.trim() !== "" &&
+    isAbsolutePath(record.latexmkPath.trim())
+      ? { latexmkPath: record.latexmkPath.trim() }
       : {}),
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）

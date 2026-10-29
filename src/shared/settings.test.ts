@@ -469,6 +469,19 @@ describe("parseSettings 的 browserDownloadDir（受管浏览器下载目录）"
   });
 });
 
+describe("parseSettings 的 latexmkPath（显式指定的 latexmk）", () => {
+  it("绝对路径留下（两侧空白去掉）：POSIX、Windows 盘符、UNC", () => {
+    deepStrictEqual(parseSettings({ latexmkPath: "/Library/TeX/texbin/latexmk" }).latexmkPath, "/Library/TeX/texbin/latexmk");
+    deepStrictEqual(parseSettings({ latexmkPath: " D:\\texlive\\2024\\bin\\windows\\latexmk.exe " }).latexmkPath, "D:\\texlive\\2024\\bin\\windows\\latexmk.exe");
+  });
+  it("缺席、相对路径、空串、非字符串都当没设（只靠 PATH 与常见根探测）", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).latexmkPath, undefined);
+    deepStrictEqual(parseSettings({ latexmkPath: "latexmk" }).latexmkPath, undefined);
+    deepStrictEqual(parseSettings({ latexmkPath: "  " }).latexmkPath, undefined);
+    deepStrictEqual(parseSettings({ latexmkPath: 42 }).latexmkPath, undefined);
+  });
+});
+
 describe("parseSettings 的 starredModels（模型星标）", () => {
   it("成对的留下，顺序照旧", () => {
     deepStrictEqual(

@@ -30,6 +30,7 @@ import {
 import { FilePreviewPane } from "./FilePreviewPane";
 import { LatexBuildBar } from "./LatexBuildBar";
 import { LatexProblems, type ProblemItem } from "./LatexProblems";
+import { LatexSetupCard } from "./LatexSetupCard";
 import {
   groupLatexIssues,
   isFailedStatus,
@@ -287,6 +288,11 @@ export function FilesPanel(props: {
   const handleEditorSaved = useCallback((): void => {
     setEditorNotice(null);
     latex.refresh();
+    // 保存即编译（项目级开关，缺省关）：自动保存落定后触一发。
+    // 显式编译前的那次 flush 也要走到这里，由 compileWithSave 的抑制标记挡掉，
+    // 否则一次点击会变成「先编一轮、排队再编一轮」。
+    if (suppressSaveCompileRef.current) return;
+    if (latex.project?.compileOnSave === true) latex.compile();
   }, [latex]);
   /** 问题抽屉的展开态：默认收起（安静）；用户自己点的编译失败时自动展开一次 */
   const [problemsOpen, setProblemsOpen] = useState(false);
@@ -345,17 +351,24 @@ export function FilesPanel(props: {
    * 只 flush 当前挂载的编辑器（其它标签在切走时已经保存过），但保存链是串行的，不会交错。
    */
   const compile = latex.compile;
+  /** 显式编译期间的「保存不算一次新触发」标记（见 handleEditorSaved） */
+  const suppressSaveCompileRef = useRef(false);
   const compileWithSave = useCallback((): void => {
     void (async () => {
-      const outcomes: FlushOutcome[] = await Promise.all(
-        [...editorsRef.current.values()].map((handle) => handle.flush()),
-      );
-      if (outcomes.includes("conflict")) {
-        setEditorNotice(t.editor.conflictBlocksCompile);
-        return;
+      suppressSaveCompileRef.current = true;
+      try {
+        const outcomes: FlushOutcome[] = await Promise.all(
+          [...editorsRef.current.values()].map((handle) => handle.flush()),
+        );
+        if (outcomes.includes("conflict")) {
+          setEditorNotice(t.editor.conflictBlocksCompile);
+          return;
+        }
+        if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
+        compile();
+      } finally {
+        suppressSaveCompileRef.current = false;
       }
-      if (outcomes.includes("error")) return; // 编辑器自己的错误条已经在说了
-      compile();
     })();
   }, [compile, t]);
 
@@ -1038,11 +1051,44 @@ export function FilesPanel(props: {
             state={latexState}
             last={latex.last}
             startedAt={latex.startedAt}
+            cleaning={latex.cleaning}
             onCompile={compileWithSave}
             onCancel={latex.cancel}
+            onClean={latex.clean}
+            onToggleCompileOnSave={latex.setCompileOnSave}
             onSelectEngine={latex.selectEngine}
             onSelectMain={latex.selectMain}
           />
+        )}
+        {/* 「这台机器没有 latexmk」引导卡：项目已识别、探测失败时才出现。
+            它不遮不拦——用户仍可以看源码、问 agent，装完点「重新检测」即可 */}
+        {latex.project !== null && latex.probe !== null && !latex.probe.ok && (
+          <LatexSetupCard
+            probe={latex.probe}
+            busy={latex.probeBusy}
+            invalidPath={latex.locateInvalid}
+            onRefresh={latex.refreshProbe}
+            onLocate={latex.locateLatexmk}
+          />
+        )}
+        {/* 动作回执（清理辅助文件）：一行、几秒后自己消失。它说的是「刚才那件事成了」，
+            不是需要处理的问题——那种走下面的 latex-error */}
+        {latex.notice !== null && (
+          <p className="latex-toast" role="status">
+            <Icon
+              name={latex.notice.kind === "cleaned" ? "circle-check" : "octagon-x"}
+              size={12}
+              style={{
+                color:
+                  latex.notice.kind === "cleaned" ? "var(--color-success)" : "var(--color-danger)",
+              }}
+            />
+            {latex.notice.kind === "cleaned"
+              ? latex.notice.result.removed.length === 0
+                ? t.latex.cleanedNothing
+                : t.latex.cleaned(latex.notice.result.removed.length)
+              : t.latex.cleanFailed(latex.notice.message)}
+          </p>
         )}
       {/* body 是 container query 的查询容器（styles.css 裁决 solo / 隐藏 / 浮层 /
           并排四种形态），layout 是它的直接内容层——@container 查不到容器自己，

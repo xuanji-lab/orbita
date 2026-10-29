@@ -10,18 +10,22 @@
  * `compile_latex` 与这里的按钮编的是同一个东西——「两边看到的是同一次编译」。
  */
 import { realpath } from "node:fs/promises";
-import { ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { FileListRequest } from "../../shared/files.ts";
 import {
   isLatexEngine,
   latexChannels,
+  type LatexCleanOutcome,
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
   type LatexFileContext,
+  type LatexLocateOutcome,
+  type LatexProbeRequest,
   type LatexProjectOutcome,
   type LatexRunOutcome,
 } from "../../shared/latex.ts";
 import type { SessionStore } from "../session/store.ts";
+import type { SettingsStore } from "../settings/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
@@ -32,8 +36,31 @@ export function registerLatexIpc(
   runner: LatexRunner,
   workspaces: WorkspaceStore,
   sessions: SessionStore,
+  settings: SettingsStore,
 ): void {
-  ipcMain.handle(latexChannels.probe, () => runner.probeEnvironment());
+  ipcMain.handle(latexChannels.probe, (_event, req?: LatexProbeRequest) =>
+    runner.probeEnvironment(req ?? {}),
+  );
+
+  /**
+   * 「指定位置」：系统文件选择器 → 现验 `--version` → 通过才写进设置。
+   * **不自动下载**，也不猜路径：用户选什么就只验什么。选到的文件跑不起来时返回
+   * `invalid`（不写设置）——否则下次编译会在一个假路径上失败，比没选更难受。
+   */
+  ipcMain.handle(latexChannels.locate, async (): Promise<LatexLocateOutcome> => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+    // 不限扩展名：Windows 上的 latexmk 可能叫 latexmk.exe / .bat / .cmd，mac / Linux 上没有后缀
+    const options: Electron.OpenDialogOptions = {
+      title: "Select the latexmk executable",
+      properties: ["openFile"],
+    };
+    const picked = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options);
+    const path = picked.filePaths[0];
+    if (picked.canceled || path === undefined) return { kind: "cancelled" };
+    if (!(await runner.verifyLatexmkPath(path))) return { kind: "invalid", path };
+    await settings.write({ latexmkPath: path });
+    return { kind: "ok", path };
+  });
 
   ipcMain.handle(latexChannels.project, async (_event, req: LatexFileContext): Promise<LatexProjectOutcome> => {
     const located = await locateProject(req, workspaces, sessions);
@@ -53,6 +80,12 @@ export function registerLatexIpc(
     return located === null ? false : runner.cancel(located.dir);
   });
 
+  ipcMain.handle(latexChannels.clean, async (_event, req: LatexFileContext): Promise<LatexCleanOutcome> => {
+    const located = await locateProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
+    return runner.clean(located.dir);
+  });
+
   ipcMain.handle(
     latexChannels.configure,
     async (_event, req: LatexConfigureRequest): Promise<LatexConfigureOutcome> => {
@@ -65,6 +98,7 @@ export function registerLatexIpc(
         await writeLatexProjectConfig(located.dir, {
           ...(req.main === undefined ? {} : { main: req.main }),
           ...(req.engine === undefined ? {} : { engine: req.engine }),
+          ...(req.compileOnSave === undefined ? {} : { compileOnSave: req.compileOnSave }),
         });
       } catch (cause) {
         return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };

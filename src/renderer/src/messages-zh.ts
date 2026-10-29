@@ -1698,6 +1698,22 @@ export const zh: Messages = {
     largeTextWindowed: (size) => `文件较大（${size}），只渲染可见区域`,
     pdfFailed: "这个 PDF 打不开：",
     pdfPassword: "这个 PDF 有密码保护，没法预览。",
+    /* PDF 预览的工具栏（缩放 / 翻页 / 查找 / 缩略图） */
+    pdfAria: "PDF 预览",
+    pdfThumbnails: "页面缩略图",
+    pdfPrevPage: "上一页",
+    pdfNextPage: "下一页",
+    pdfPage: (page, total) => `第 ${page} 页，共 ${total} 页`,
+    pdfFindPlaceholder: "在文档里查找",
+    pdfFindNone: "没有命中",
+    pdfFindCount: (current, total) => `${current} / ${total}`,
+    pdfFindPrev: "上一处",
+    pdfFindNext: "下一处",
+    pdfFindFailed: "搜索失败",
+    pdfZoomIn: "放大",
+    pdfZoomOut: "缩小",
+    pdfFitWidth: "适宽",
+    pdfFitPage: "适页",
     citeNotFound: (page) => `第 ${page} 页上已经找不到被引的那段了。文件可能在引用之后改过。`,
     citeOutside: (name) => `${name} 不在这条任务能看到的文件夹里，这里打不开。`,
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
@@ -1740,6 +1756,30 @@ export const zh: Messages = {
     quoteWarning: "编译告警",
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
+    actionsTip: "项目动作",
+    compileOnSave: "保存即编译",
+    compileOnSaveHint: "编辑器自动保存落定后自动编译；开关写进这个项目的 .orbita/latex.json",
+    /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */
+    setup: {
+      title: "这台电脑上没有 LaTeX 编译器",
+      body:
+        "编 PDF 需要 latexmk，它随 TeX Live / MiKTeX / MacTeX 一起安装。Orbita 不会替你下载安装包——装好之后再回来。",
+      lookedIn: (n) => `找过的 ${n} 个位置`,
+      noPaths: "这台机器上没有可以查看的安装位置。",
+      whereNote:
+        "PATH 的每一段、各盘 texlive\\<年>\\bin\\windows、%LOCALAPPDATA% 与 Program Files 下的 MiKTeX；macOS 还有 /Library/TeX/texbin。",
+      openDownload: "打开下载页",
+      redetect: "已装好，重新检测",
+      checking: "检测中…",
+      locate: "指定位置…",
+      invalidFile: (path) => `这个文件跑不通 latexmk 的版本自检，没有保存：${path}`,
+    },
+    clean: "清理辅助文件",
+    cleanHint: "latexmk 的清理动作：删掉 .aux / .log 等中间文件，PDF 保留",
+    cleaning: "清理中…",
+    cleaned: (n) => `已清理 ${n} 个辅助文件`,
+    cleanedNothing: "没有可清理的东西：产物目录里只剩 PDF 了",
+    cleanFailed: (message) => `清理失败：${message}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */

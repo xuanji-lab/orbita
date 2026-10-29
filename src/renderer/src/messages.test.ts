@@ -72,6 +72,20 @@ const ALLOWED_LATIN = new Set([
   "LaTeX",
   "latexmk",
   "tlmgr",
+  // TeX 发行版与它们的安装位置（引导卡要指名的路径片段与环境变量）
+  "TeX",
+  "Live",
+  "MiKTeX",
+  "MacTeX",
+  "texlive",
+  "texbin",
+  "bin",
+  "windows",
+  "Library",
+  "Program",
+  "Files",
+  "PATH",
+  "LOCALAPPDATA",
   "tex",
   "Claude",
   "Code",
@@ -94,6 +108,9 @@ const ALLOWED_LATIN = new Set([
   "cookie",
   // 系统名（macOS 钥匙串授权的提示）
   "macOS",
+  // TeX 辅助文件的扩展名（清理辅助文件那条文案里要指名删的是什么）
+  "aux",
+  "log",
   // 文件名
   "mcp.json",
   "SKILL.md",

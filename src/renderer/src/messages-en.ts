@@ -1841,6 +1841,22 @@ export const en = {
     largeTextWindowed: (size: string) => `Large file (${size}) — rendering the visible lines only`,
     pdfFailed: "Couldn't open this PDF:",
     pdfPassword: "This PDF is password-protected and can't be previewed.",
+    /* PDF 预览的工具栏（缩放 / 翻页 / 查找 / 缩略图） */
+    pdfAria: "PDF preview",
+    pdfThumbnails: "Page thumbnails",
+    pdfPrevPage: "Previous page",
+    pdfNextPage: "Next page",
+    pdfPage: (page: number, total: number) => `Page ${page} of ${total}`,
+    pdfFindPlaceholder: "Find in document",
+    pdfFindNone: "No matches",
+    pdfFindCount: (current: number, total: number) => `${current} / ${total}`,
+    pdfFindPrev: "Previous match",
+    pdfFindNext: "Next match",
+    pdfFindFailed: "Search failed",
+    pdfZoomIn: "Zoom in",
+    pdfZoomOut: "Zoom out",
+    pdfFitWidth: "Fit width",
+    pdfFitPage: "Fit page",
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
@@ -1884,6 +1900,31 @@ export const en = {
     quoteWarning: "Compile warning",
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
+    actionsTip: "Project actions",
+    compileOnSave: "Compile on save",
+    compileOnSaveHint: "Compiles after the editor autosaves; kept in .orbita/latex.json for this project",
+    /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */
+    setup: {
+      title: "No LaTeX compiler on this machine",
+      body:
+        "Building a PDF needs latexmk, which ships with TeX Live, MiKTeX or MacTeX. Orbita doesn't download installers for you — install one, then come back.",
+      lookedIn: (n: number) => (n === 1 ? "Looked in 1 place" : `Looked in ${n} places`),
+      noPaths: "No install location could be inspected on this machine.",
+      whereNote:
+        "PATH, texlive\\<year>\\bin\\windows on every drive, MiKTeX under %LOCALAPPDATA% and Program Files; on macOS /Library/TeX/texbin and /usr/local/texlive.",
+      openDownload: "Open download page",
+      redetect: "Installed it — check again",
+      checking: "Checking…",
+      locate: "Choose location…",
+      invalidFile: (path: string) => `That file didn't answer \`latexmk --version\`, so nothing was saved: ${path}`,
+    },
+    clean: "Clean auxiliary files",
+    cleanHint: "latexmk -c — removes .aux / .log and other intermediates, keeps the PDF",
+    cleaning: "Cleaning…",
+    cleaned: (n: number) =>
+      n === 1 ? "Cleaned 1 auxiliary file" : `Cleaned ${n} auxiliary files`,
+    cleanedNothing: "Nothing to clean — the output folder already holds only the PDF",
+    cleanFailed: (message: string) => `Clean failed: ${message}`,
   },
 
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
