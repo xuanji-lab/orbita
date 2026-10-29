@@ -448,7 +448,7 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/shell/focus/focus.css", 8],
   ["src/renderer/src/shell/toolbar.css", 2],
   ["src/renderer/src/shell/usage.css", 7],
-  ["src/renderer/src/styles.css", 42],
+  ["src/renderer/src/styles.css", 41],
 ]);
 
 describe("design-tokens —— 间距走刻度", () => {

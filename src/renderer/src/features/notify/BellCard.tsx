@@ -2,24 +2,25 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../locale.ts";
 import { runStateLabel } from "./completion-notice.ts";
+import { StatusPie } from "../../shell/StatusPie";
 
-/** 清单里的一行：竖条状态 + 会话名 + 工作区名（数据由 App 按 sessionRunState 算好） */
+/** 清单里的一行：状态饼状态 + 会话名 + 工作区名（数据由 App 按 sessionRunState 算好） */
 export interface NoticeRow {
   id: string;
   /** 会话标题；空串按「新任务」占位显示 */
   title: string;
   /** 所属工作区名；null = 不属于任何工作区（不显示副行） */
   workspace: string | null;
-  /** 竖条状态（与侧栏行同一份推导） */
+  /** 状态饼状态（与侧栏行同一份推导） */
   state: "running" | "waiting" | "done" | "failed";
 }
 
 /**
- * 右下角铃铛弹出的清单（用户 2026-10-10）：所有竖条亮着的根会话——在等你、
- * 未读（跑完 / 跑挂没看）、在跑——每行最左边是同款三节竖条，点行在主槽打开
+ * 右下角铃铛弹出的清单（用户 2026-10-10）：所有状态饼亮着的根会话——在等你、
+ * 未读（跑完 / 跑挂没看）、在跑——每行最左边是同款状态饼，点行在主槽打开
  * 那条会话（打开即已读）。
  *
- * **与侧栏竖条同一份状态**（sessionRunState 推导，App 组装好传进来），这里只是
+ * **与侧栏状态饼同一份状态**（sessionRunState 推导，App 组装好传进来），这里只是
  * 另一个入口：人在看别的会话时不用去左栏翻——整个 landscape 一眼扫完。这份
  * 清单以后也是家务活模型扫描「哪些会话有结果没看」的入口，所以未读落盘、
  * 重启后还在。
@@ -65,12 +66,7 @@ export function BellCard(props: {
             // 当前对话不动。动作悬停 / 聚焦时浮出、盖住工作区名，不占位（行尾血线规矩）。
             // 再点一次铃铛关清单，所以没有 ×
             <div key={row.id} className="bell-card-row" title={runStateLabel(row.state, t)}>
-              {/* 同款三节竖条（styles.css 的 .status-bar，清单里是行内档不贴左缘） */}
-              <span className="status-bar" data-fill={row.state} aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
+              <StatusPie state={row.state} />
               <span className="bell-card-name">{row.title === "" ? t.common.newTask : row.title}</span>
               {row.workspace !== null && <span className="bell-card-ws row-trailing">{row.workspace}</span>}
               <span className="bell-card-actions">
