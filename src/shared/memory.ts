@@ -8,8 +8,11 @@
  *   做事原则，必须挂具体交互证据）。
  * - **每条自包含**：第三人称、消指代、相对时间换算成绝对日期（AtomMem 的原子化
  *   ≡ Mandol 的自包含改写），召回是词法的，条目质量就是召回质量的全部来源。
- * - **冲突只给建议**：新偏好可能与旧偏好矛盾时打 conflictWith，**写入时不改旧条目**，
- *   拍板权在用户（后续界面 PR 的写入口）。
+ * - **agent 自己判断、结果直接生效**（2026-10-29 晚用户裁决，推翻上午的「冲突只给建议、
+ *   升层与冲突要用户确认」）：提取判出新偏好与旧偏好矛盾 → 旧条直接标 stale、新条带
+ *   conflictWith 指过去；判出跨工作区通用 → 直接落 user 层、promotedFrom 记原作用域。
+ *   对话里用户一句话纠错 → agent 用记忆工具（memory_revise / memory_retire）当场改。
+ *   没有「待你确认」队列；每一步都能在条目卡上撤销，演变链里看得到。
  * - **记忆核心在独立进程**（Electron utilityProcess，与 agent 进程同级）：存储、
  *   打分、事件段状态机都在那边；以后经 MCP 开放给别的 agent、向量模型也由它统一管。
  *
@@ -25,15 +28,16 @@ import type { ProviderSecrets } from "./agent-ipc.ts";
 export type MemoryEntryType = "fact" | "preference" | "insight";
 
 /**
- * 条目来源。联合类型是给以后的摘抄（excerpt）/ 外部 agent 并入留的扩展位——
- * **只放已有消费者的成员**：chat（对话整理）与 manual（记忆库手动添加，
- * 记忆库 IPC 这组加入）。
+ * 条目来源。**只放已有消费者的成员**：chat（对话整理）、manual（记忆库手动添加）、
+ * agent（对话里 agent 用 memory_revise 按用户纠正写下的新说法——出处是那条会话
+ * 那一轮，没有事件段）。
  */
-export type MemorySource = "chat" | "manual";
+export type MemorySource = "chat" | "manual" | "agent";
 
 /**
- * 条目状态。召回只认 active：muted = 用户关掉的（不再注入）；stale = 冲突拍板
- * 「旧的标为过时」留下的——不进召回，但在偏好演变链里仍可见。
+ * 条目状态。召回只认 active：muted = 不再使用（用户关掉的，或 agent 用 memory_retire
+ * 停用的）；stale = 被新说法顶掉的旧条（提取判出冲突、或 agent 修订）——不进召回，
+ * 但在演变链里仍可见。
  */
 export type MemoryStatus = "active" | "muted" | "stale";
 
@@ -65,20 +69,24 @@ export interface MemoryEntry {
   source: MemorySource;
   /** 缺席 = active */
   status?: MemoryStatus;
-  /** 建议升到所有工作区：跨工作区通用的偏好，写在工作区层等用户拍板 */
-  pendingPromote?: true;
-  /** 升层拍板的结果（撤销键要用）：user = 已升到所有工作区（届时条目搬进 user 层，
-   * 原作用域记在 promotedFrom）；workspace = 只留本工作区（pendingPromote 随之清掉） */
-  promoteResolution?: "user" | "workspace";
-  /** 升到 user 层前的原作用域 token（撤销升层直接按它搬回；sha1 单向回不出
-   * scopeId，寻址本来就是 token） */
+  /** agent 用 memory_retire 停用时给的理由（条目卡上显示）；恢复使用时清掉 */
+  mutedReason?: string;
+  /** 提取判出跨工作区通用、自动升到 user 层前的原作用域 token。存在 = 条目卡给
+   * 「只留在原工作区」（returnToWorkspace 按它搬回；sha1 单向回不出 scopeId，寻址本来就是 token） */
   promotedFrom?: string;
-  /** 可能与哪条旧偏好矛盾（那条的 id）。只给建议，不改旧条目 */
+  /** 顶掉了哪条旧条目（那条的 id；旧条此时是 stale）。沿它串出演变链；条目卡给
+   * 「恢复旧说法」（restorePrevious） */
   conflictWith?: string;
-  /** 冲突拍板的结果（撤销键要用）：stale-old = 旧条已标过时；keep-both = 两条都留 */
-  conflictResolution?: "stale-old" | "keep-both";
   /** 上次编辑时间（epoch ms）。缺席 = 没编辑过 */
   editedAt?: number;
+}
+
+/**
+ * 条目 id 的短形（召回块与记忆工具的输出里用它）：`mem_` + uuid 头 8 位。记忆服务
+ * 按前缀反查，同一可见范围（user 层 + 当前工作区层）里撞了前缀就报歧义，不猜。
+ */
+export function memoryShortId(id: string): string {
+  return id.slice(0, 12);
 }
 
 /** 召回命中：条目 + 归一化分（0..1，含时间衰减）；pinned = 常驻直通（不打分）。 */
@@ -95,6 +103,27 @@ export interface MemoryHit {
  */
 export type MemoryRecallOutcome =
   | { ok: true; hits: MemoryHit[] }
+  | { ok: false; error: string };
+
+/**
+ * agent 的记忆工具（memory_search / memory_revise / memory_retire）的一次调用。
+ * 只在根会话注册（子会话读不写）；可见范围恒为「user 层 + 本会话作用域层」，
+ * 别的工作区的记忆不可查也不可改。entryId 可以是全 id 或 memoryShortId 的短形。
+ */
+export type MemoryAgentCall =
+  /** 按问题检索（只看 active 条目） */
+  | { op: "search"; query: string }
+  /** 用户纠正了某条：旧条标 stale，写一条 source = agent 的新条，conflictWith 指旧条 */
+  | { op: "revise"; entryId: string; text: string; reason: string }
+  /** 这条根本不对、也没有新说法：标 muted，记下理由 */
+  | { op: "retire"; entryId: string; reason: string };
+
+/**
+ * 记忆工具的回执。entries 的含义按 op：search = 命中（相关度序）；revise = [新条, 旧条]；
+ * retire = [被停用的那条]。失败带一句给模型看的人话（找不到 / 歧义 / 子会话不能写）。
+ */
+export type MemoryAgentOutcome =
+  | { ok: true; entries: MemoryEntry[] }
   | { ok: false; error: string };
 
 /* ---------- 事件段（episode） ---------- */
@@ -232,6 +261,18 @@ export type MemoryServiceCommand =
    */
   | { type: "mutate"; requestId: string; mutation: MemoryMutation }
   /**
+   * agent 记忆工具的一次调用（主进程已判根会话、已按会话解好 scopeId）。回执
+   * agentToolResult；写了盘另发 changed。sessionId / turn 是 revise 新条的出处。
+   */
+  | {
+      type: "agentTool";
+      requestId: string;
+      sessionId: string;
+      scopeId: string;
+      turn: number;
+      call: MemoryAgentCall;
+    }
+  /**
    * 向量召回的运行配置：null = 关（停 llama-server、暂停补算）。设置改了
    * 下一份立即生效（换模型 = manifest 不符 → 清库重算，服务自行触发补算）。
    */
@@ -273,6 +314,8 @@ export type MemoryServiceMessage =
    * 目标条目不在 / 入参不合法时 ok: false。
    */
   | ({ type: "mutateResult"; requestId: string } & MemoryMutationOutcome)
+  /** agentTool 的回执（服务不在 / 超时由主进程兜成 ok:false） */
+  | ({ type: "agentToolResult"; requestId: string } & MemoryAgentOutcome)
   /** vectorState 的回执（设置页 status 的服务侧那部分） */
   | {
       type: "vectorStateResult";
@@ -331,6 +374,8 @@ export interface MemoryEvolutionNode {
   at: number;
   /** 缺席 = active；stale 的节点界面要标注「已过时」 */
   status?: MemoryStatus;
+  /** agent 修订的节点界面要标注出来（用户要能看出「这是 agent 按我的话改的」） */
+  source: MemorySource;
 }
 
 /** 记忆库 / 审查页签里的一条条目（装配后的视图行）。 */
@@ -370,8 +415,9 @@ export interface MemorySessionTurnView {
   at: number;
   /** 用到：本轮注入的条目快照（含零命中轮的空数组） */
   used: readonly MemoryUsedHit[];
-  /** 记住：这一轮支撑落下的新条目（该会话条目里 turns 含此轮的） */
-  remembered: readonly MemoryEntry[];
+  /** 记住：这一轮支撑落下的新条目（该会话条目里 turns 含此轮的，含 agent 当场修订的），
+   * 带所在层 token 与演变链——条目卡要能撤销 */
+  remembered: readonly MemoryEntryView[];
 }
 
 /** 某会话的按轮记忆视图（对话里的「记忆 · 记住 M 条」行与审查 › 记忆页签共用）。 */
@@ -383,27 +429,12 @@ export interface MemorySessionView {
   turns: readonly MemorySessionTurnView[];
 }
 
-/** 待确认清单的一行（并拍板过的也返——撤销键的来处）。 */
-export interface MemoryPendingItem {
-  kind: "promote" | "conflict";
-  /** 打标记的那条（新条目） */
-  entry: MemoryEntry;
-  /** 它所在的文件（寻址） */
-  token: MemoryScopeToken;
-  /** conflict：被指矛盾的那条；找不到 / 已删为 null */
-  old: MemoryEntry | null;
-  /** 已拍板的结果（done 卡与撤销键）；缺席 = 待拍板 */
-  resolution?: "user" | "workspace" | "stale-old" | "keep-both";
-}
-
-export type MemoryPendingResponse = { items: MemoryPendingItem[] };
-
 /* ---------- 记忆库的写操作（renderer → 主进程 → 记忆服务，唯一写者） ---------- */
 
 /**
  * 记忆库的写操作。**执行在记忆服务进程**（它与提取共用一套写盘代码，也避免
- * 两进程同写一个文件）；主进程只做入参校验与转发。撤销语义：一律回到**待拍板**
- * 状态（ask 卡），拍板结果清掉。
+ * 两进程同写一个文件）；主进程只做入参校验与转发。没有拍板类操作——冲突与升层
+ * 由 agent 判断后直接生效，这里只有撤销（restorePrevious / returnToWorkspace）。
  */
 export type MemoryMutation =
   | {
@@ -420,7 +451,7 @@ export type MemoryMutation =
       entryId: string;
     }
   | {
-      /** 状态开关：muted = 这条别再用；active = 解除。stale 只能由冲突拍板产生（及撤销） */
+      /** 状态开关：muted = 这条别再用；active = 解除。stale 只由新说法顶掉旧说法产生 */
       op: "setStatus";
       token: MemoryScopeToken;
       entryId: string;
@@ -429,7 +460,7 @@ export type MemoryMutation =
   | {
       /** 手动添加（落在指定作用域）：type + 正文；偏好 / 经验必须带 reason。
        * scopeId 由主进程能解到就填（工作区表反查 token），解不出省略——
-       * 寻址靠 token，scopeId 只是展示与拍板参考 */
+       * 寻址靠 token，scopeId 只是展示参考 */
       op: "addManual";
       token: MemoryScopeToken;
       type: MemoryEntryType;
@@ -438,28 +469,16 @@ export type MemoryMutation =
       scopeId?: string;
     }
   | {
-      /** 升层拍板：user = 搬进 user 层（原作用域记 promotedFrom）；workspace = 只留本工作区 */
-      op: "decidePromote";
-      token: MemoryScopeToken;
-      entryId: string;
-      decision: "user" | "workspace";
-    }
-  | {
-      /** 撤销升层拍板：回到待拍板（user 层的搬回原作用域，要 promotedFrom） */
-      op: "undoPromote";
+      /** 撤销一次「新说法顶掉旧说法」（提取判出的冲突或 agent 修订）：entryId 是新条，
+       * 它 conflictWith 指的旧条恢复 active，新条标 muted（不删——演变链照常可见；
+       * 用户再「恢复使用」新条就是两条都留） */
+      op: "restorePrevious";
       token: MemoryScopeToken;
       entryId: string;
     }
   | {
-      /** 冲突拍板：stale-old = 旧条标 stale；keep-both = 两条都留 */
-      op: "decideConflict";
-      token: MemoryScopeToken;
-      entryId: string;
-      decision: "stale-old" | "keep-both";
-    }
-  | {
-      /** 撤销冲突拍板：回到待拍板；旧条状态按 active 恢复（此前若是 muted 会被覆盖，可接受） */
-      op: "undoConflict";
+      /** 撤销自动升层：user 层里带 promotedFrom 的条目搬回原作用域，promotedFrom 清掉 */
+      op: "returnToWorkspace";
       token: MemoryScopeToken;
       entryId: string;
     };

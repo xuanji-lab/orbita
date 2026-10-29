@@ -35,6 +35,8 @@ import type { IntentRecallRecord } from "./session.ts";
 import type {
   MemoryBackfillProgress,
   MemoryDownloadProgress,
+  MemoryAgentCall,
+  MemoryAgentOutcome,
   MemoryRecallOutcome,
 } from "./memory.ts";
 
@@ -120,12 +122,11 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
-  /** 记忆库（实验功能 memory-system）的五条读写通道。读在主进程（纯模块直读
+  /** 记忆库（实验功能 memory-system）的四条读写通道。读在主进程（纯模块直读
    * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
   memoryScopes: "memory:scopes",
   memoryEntries: "memory:entries",
   memorySession: "memory:session",
-  memoryPending: "memory:pending",
   memoryMutate: "memory:mutate",
   /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
    *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
@@ -984,6 +985,11 @@ export type AgentCommand =
    * 调用方（轮前召回）对任何失败按「不注入、照常开轮」处理，记忆的失败不拦对话。
    */
   | ({ type: "memoryRecallResult"; requestId: string } & MemoryRecallOutcome)
+  /**
+   * 记忆系统：主进程对 memoryToolRequest 的回执（同款 ok 双分支）。失败的 error
+   * 原样成为工具失败原因给模型看（找不到 / 歧义 / 服务不在）。
+   */
+  | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
@@ -1165,6 +1171,21 @@ export type AgentEvent =
       turn: number;
       /** 会话归属（主进程按它解析作用域：workspaceId ?? cwd） */
       scope: { workspaceId: string | null; cwd: string };
+    }
+  /**
+   * 记忆系统：agent 的记忆工具（memory_search / memory_revise / memory_retire）。
+   * 只有根会话注册这组工具；主进程另按会话 meta 再判一次（子会话的写一律拒——
+   * 「子会话读不写」不只靠 agent 侧不注册）。作用域同 memoryRecallRequest 在主进程解析。
+   * 回 memoryToolResult。
+   */
+  | {
+      type: "memoryToolRequest";
+      requestId: string;
+      sessionId: string;
+      /** 调用发生在第几轮（revise 新条的出处轮号） */
+      turn: number;
+      scope: { workspaceId: string | null; cwd: string };
+      call: MemoryAgentCall;
     }
   /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
