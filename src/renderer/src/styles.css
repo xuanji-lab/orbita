@@ -5590,3 +5590,13 @@ mark.intent-mark {
   flex: none;
   overflow: visible;
 }
+
+/* 「这条任务 › 进度」点一章跳过来：被跳到的那块闪一下底色（一次，不循环） */
+@keyframes entry-revealed {
+  from { background: var(--color-bg-active); }
+  to { background: transparent; }
+}
+.entry-revealed {
+  border-radius: var(--radius-md);
+  animation: entry-revealed 1.2s var(--ease-standard);
+}

@@ -99,6 +99,14 @@ describe("章节与计数", () => {
     assert.deepEqual(counts.byTool.map((b) => b.key).sort(), ["bash", "read", "write"]);
   });
 
+  test("写计划不算一步", () => {
+    const records = [user("u", 1), assistant("a", 2, [call("p", "update_plan", { items: [] }), call("r")]), tool({ toolCallId: "p", toolName: "update_plan", timestamp: 3 }), tool({ toolCallId: "r", timestamp: 3 }), assistant("z", 4, [{ type: "text", text: "好" }])];
+    const steps = procOf(view(records, false))[0]?.steps ?? [];
+    const counts = processCounts(steps, indexToolResults(records));
+    assert.equal(counts.steps, 1);
+    assert.deepEqual(counts.byTool.map((b) => b.key), ["read"]);
+  });
+
   test("firstLine 剥 markdown 前缀", () => {
     assert.equal(firstLine("\n- 一条"), "一条");
     assert.equal(firstLine("   "), null);

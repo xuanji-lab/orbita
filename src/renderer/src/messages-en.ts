@@ -492,7 +492,8 @@ export const en = {
     browser: "Built-in browser",
     bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
     intent: "Intent graph",
-    context: "Context",
+    /** 「这条任务」面板（进度 + 上下文，2026-10-30） */
+    context: "This task",
   },
 
   browser: {
@@ -1591,7 +1592,7 @@ export const en = {
     toolEdit: "Edit",
     toolList: "List",
     /** 本轮统计行里的工具名：英文就写真实工具名（bash 3 · read 5） */
-    rollupTool: (toolName: string) => toolName,
+    rollupTool: (toolName: string) => (toolName === "update_plan" ? "plan" : toolName),
     openTaskCard: (title: string) => `Open "${title}"`,
     open: "Open",
     repliedSteer: (child: string) => `replied to ${child} · steer`,
@@ -2066,6 +2067,34 @@ export const en = {
     cardVerdictSkipped: "Left blank · used as-is",
     cardVerdictPending: "Waiting for your confirmation",
     cardVerdictUnasked: "Not asked",
+  },
+
+  /** 右栏「这条任务」：进度页签（计划 / 做过的 / 留到以后）+ 上下文页签 */
+  taskPanel: {
+    tabProgress: "Progress",
+    tabContext: "Context",
+    state: (state: string): string =>
+      state === "running"
+        ? "Working"
+        : state === "waiting"
+          ? "Waiting for you"
+          : state === "failed"
+            ? "Stopped with an error"
+            : state === "done"
+              ? "Done"
+              : "Idle",
+    turns: (count: number) => plural(count, "turn"),
+    plan: "Plan",
+    planCount: (done: number, total: number) => `${done} / ${total}`,
+    noPlan: "No plan yet — for work with three or more steps the agent writes one first.",
+    history: "Done so far",
+    nothingYet: "Nothing done yet.",
+    later: "For later",
+    markDone: "Mark done",
+    reopen: "Reopen",
+    jump: "Show this in the conversation",
+    noTask: "Open a task to see its progress.",
+    contextLine: "Context",
   },
 
   contextPanel: {

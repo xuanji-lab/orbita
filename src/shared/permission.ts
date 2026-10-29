@@ -157,6 +157,13 @@ export function isBrowserReadTool(toolName: string): boolean {
 }
 
 /**
+ * 写计划（update_plan，2026-10-30）：三档一律放行。它只是把打算说出来，清单落在转录里，
+ * 不碰用户的文件与 shell；plan 档尤其要用得上（规划本来就是 plan 档的事），manual 档问了
+ * 也没意义——用户要看的是计划本身，不是「要不要允许它写计划」。
+ */
+export const PLAN_TOOL = "update_plan";
+
+/**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
  * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
  * 将来复用这个名字。
@@ -181,6 +188,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isMemoryTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
+  // 写计划：三档一律放行，理由见 PLAN_TOOL 的注释
+  if (toolName === PLAN_TOOL) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };

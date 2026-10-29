@@ -1447,6 +1447,14 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     return typeof value === "string" && value !== "" ? value : null;
   };
   switch (toolName) {
+    // 写计划：「2/5 · 当前那步」——整张清单在右栏「这条任务 › 进度」里
+    case "update_plan": {
+      const items = Array.isArray(record["items"]) ? (record["items"] as Record<string, unknown>[]) : [];
+      if (items.length === 0) return null;
+      const done = items.filter((item) => item?.["status"] === "done").length;
+      const now = items.find((item) => item?.["status"] === "in_progress")?.["text"];
+      return typeof now === "string" ? `${done}/${items.length} · ${now}` : `${done}/${items.length}`;
+    }
     case "bash":
     case "powershell": // pi 0.84.3 的独立工具（bash 的 PowerShell 壳，schema 同构）
       return str("command");
