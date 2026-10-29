@@ -13,7 +13,6 @@ import {
   PanelHelp,
   PanelIconButton,
   PanelLine,
-  PanelTitle,
   RightPanelFrame,
 } from "../../shell/RightPanel";
 import { api } from "../../api";
@@ -26,6 +25,7 @@ import {
   type TokenPickerControl,
 } from "../../shell/panel-token.ts";
 import { useT } from "../../locale.ts";
+import { AbilityTabs, type AbilityKind } from "../../shell/AbilityTabs";
 
 /** 行 hover tooltip 出现的延迟——比 IconButton 的 200ms 更慢，快速划过列表不惊扰 */
 const ROW_TOOLTIP_DELAY_MS = 350;
@@ -49,6 +49,8 @@ export function SkillsPanel(props: {
   picker?: TokenPickerControl;
   /** 行尾「选用」键：把 token 插到主槽输入框当前光标处（PanelInsertRequest） */
   onInsert: (token: string) => void;
+  /** 面板头的 Skills / MCP 页签：切到另一页（App 换 rightPanel，选取态不退） */
+  onKind?: (kind: AbilityKind) => void;
 }) {
   const { skills } = props;
   /** 当前面板视图：列表 / 详情 / 新建表单（4-1） */
@@ -94,6 +96,7 @@ export function SkillsPanel(props: {
       onCreateSkill={props.onCreateSkill}
       picker={props.picker}
       onInsert={props.onInsert}
+      onKind={props.onKind}
     />
   );
 }
@@ -105,6 +108,7 @@ function SkillList(props: {
   onCreateSkill: () => void;
   picker?: TokenPickerControl;
   onInsert: (token: string) => void;
+  onKind?: ((kind: AbilityKind) => void) | undefined;
 }) {
   const t = useT();
   const { skills } = props;
@@ -177,7 +181,7 @@ function SkillList(props: {
   const shownCount = picker !== undefined ? pickRows.length : filtered.length;
   const header = (
     <>
-      <PanelTitle icon="book-open" title={t.skills.title} />
+      <AbilityTabs kind="skills" onKind={props.onKind} />
       <PanelFilter
         inputRef={filterRef}
         value={query}

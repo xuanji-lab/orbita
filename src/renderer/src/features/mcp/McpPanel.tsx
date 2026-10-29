@@ -10,7 +10,6 @@ import {
   PanelHelp,
   PanelIconButton,
   PanelLine,
-  PanelTitle,
   RightPanelFrame,
 } from "../../shell/RightPanel";
 import { visibleTools, TOOL_CHIP_LIMIT } from "./tool-chips.ts";
@@ -20,6 +19,7 @@ import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
 import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
 import { mcpToken, type TokenPickerControl } from "../../shell/panel-token.ts";
 import { useT } from "../../locale.ts";
+import { AbilityTabs, type AbilityKind } from "../../shell/AbilityTabs";
 
 /**
  * MCP 面板（1-1 renderer / §7 + 4-2）：套共享模板，页头无 view toggle——MCP 不分
@@ -36,6 +36,8 @@ export function McpPanel(props: {
   picker?: TokenPickerControl;
   /** 卡上「选用」键：把 /mcp:<server> 插到主槽输入框当前光标处（PanelInsertRequest） */
   onInsert: (token: string) => void;
+  /** 面板头的 Skills / MCP 页签：切到另一页（App 换 rightPanel，选取态不退） */
+  onKind?: (kind: AbilityKind) => void;
 }) {
   const t = useT();
   const { servers, serversLoad, serverWarnings, openMcpConfig, reloadMcp } = props.skills;
@@ -126,7 +128,7 @@ export function McpPanel(props: {
   );
   const header = (
     <>
-      <PanelTitle icon="plug" title={t.mcp.title} />
+      <AbilityTabs kind="mcp" onKind={props.onKind} />
       <PanelFilter
         inputRef={filterRef}
         value={query}
