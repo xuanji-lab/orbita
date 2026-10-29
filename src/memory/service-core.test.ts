@@ -899,3 +899,50 @@ test("补算抛错（向量目录被换成了文件）：接住记日志，不�
     process.off("unhandledRejection", onUnhandled);
   }
 });
+
+test("服务重启（previous 为空）且盘上向量就是这个模型算的：不清库、不重算", async () => {
+  const dir = await tempDir();
+  const config = { model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true };
+  const first = vectorStub();
+  const { core } = vectorCore(dir, first);
+  await core.init(dir, CHORE);
+  await core.mutate({ op: "addManual", token: "user", type: "fact", text: "重启前就算好的条目" });
+  core.setVectorConfig(config);
+  for (let index = 0; index < 40; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).vectors?.entries === 1) break;
+  }
+  assert.equal((await core.vectorState()).vectors?.entries, 1);
+  // 新的服务进程：同一个数据目录、同一份配置
+  const second = vectorStub();
+  const { core: restarted } = vectorCore(dir, second);
+  await restarted.init(dir, CHORE);
+  restarted.setVectorConfig(config);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(second.embeddedTexts.length, 0);
+  assert.equal((await restarted.vectorState()).vectors?.entries, 1);
+});
+
+test("服务重启但盘上向量是别的模型算的：manifest 对账照样整库重算", async () => {
+  const dir = await tempDir();
+  const first = vectorStub();
+  const { core } = vectorCore(dir, first);
+  await core.init(dir, CHORE);
+  await core.mutate({ op: "addManual", token: "user", type: "fact", text: "旧模型算的条目" });
+  core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
+  for (let index = 0; index < 40; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).vectors?.entries === 1) break;
+  }
+  const second = vectorStub();
+  const { core: restarted } = vectorCore(dir, second);
+  await restarted.init(dir, CHORE);
+  const other = { ...VECTOR_MODEL, id: "qwen3-embedding-0.6b" as const, docPrefix: null };
+  restarted.setVectorConfig({ model: other, ggufPath: "/q", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
+  for (let index = 0; index < 40; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (second.embeddedTexts.length > 0 && (await restarted.vectorState()).backfill === null) break;
+  }
+  assert.ok(second.embeddedTexts.includes("旧模型算的条目"));
+  assert.equal((await restarted.vectorState()).vectors?.model, "qwen3-embedding-0.6b");
+});

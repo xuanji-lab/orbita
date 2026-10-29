@@ -554,7 +554,11 @@ export class MemoryServiceCore {
       return;
     }
     this.embedServer?.setIdleUnloadMs(config.idleUnloadMs);
-    if (previous !== config.model.id) {
+    // 只有「运行中真的换了模型」才在这里清库。previous === null 是服务刚拉起（应用
+    // 启动 / 服务重启 / 开关刚打开）——那时盘上的向量库可能就是这个模型算的，清掉
+    // 等于每次开应用都整库重算一遍（审查 2026-10-29 发现）。盘上 manifest 与配置的
+    // 模型对不对得上，交给 runBackfill 的 manifest 对账判：对不上它照样整库重置
+    if (previous !== null && previous !== config.model.id) {
       // 换模型：旧维度对不上新模型，整库清掉重算（向量只是缓存）
       void this.vectors
         ?.reset(config.model.id, config.model.dims, this.now())
