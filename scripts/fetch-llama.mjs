@@ -55,6 +55,7 @@ const LLAMA = {
     "win32-x64": [
       "llama-server.exe",
       "llama-server-impl.dll",
+      "mtmd.dll",
       "llama-common.dll",
       "llama.dll",
       "ggml.dll",
@@ -81,7 +82,11 @@ if (pinned === undefined) {
 const server = join(outDir, platform === "win32" ? "llama-server.exe" : "llama-server");
 const marker = join(outDir, ".version");
 const stamp = `${LLAMA.version} ${pinned}`;
-if (existsSync(server) && existsSync(marker) && readFileSync(marker, "utf8") === stamp) {
+// 除了版本戳还要核对每个点名文件：后续版本往白名单补文件时，旧缓存不能继续出缺文件的包。
+const requiredFilesPresent = LLAMA.keep[target].every(
+  (pattern) => pattern instanceof RegExp || existsSync(join(outDir, pattern)),
+);
+if (existsSync(server) && existsSync(marker) && readFileSync(marker, "utf8") === stamp && requiredFilesPresent) {
   console.log(`✓ llama-server ${LLAMA.version}（${target}）已就绪，跳过`);
   process.exit(0);
 }
