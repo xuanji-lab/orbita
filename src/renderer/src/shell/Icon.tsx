@@ -39,6 +39,7 @@ import eye from "../../../../design-system/assets/icons/lucide/eye.svg?raw";
 import eyeOff from "../../../../design-system/assets/icons/lucide/eye-off.svg?raw";
 import externalLink from "../../../../design-system/assets/icons/lucide/external-link.svg?raw";
 import file from "../../../../design-system/assets/icons/lucide/file.svg?raw";
+import { iconSize } from "./control-scale.ts";
 import fileArchive from "../../../../design-system/assets/icons/lucide/file-archive.svg?raw";
 import fileAudio2 from "../../../../design-system/assets/icons/lucide/file-audio-2.svg?raw";
 import fileCode2 from "../../../../design-system/assets/icons/lucide/file-code-2.svg?raw";
@@ -308,7 +309,8 @@ export function Icon(props: {
    */
   className?: string;
 }) {
-  const size = props.size ?? 16;
+  // 字形落在 12 / 14 / 16 的台阶上（control-scale.ts）：调用方写 13 也画 14
+  const size = iconSize(props.size ?? 16);
   const style = {
     width: size,
     height: size,

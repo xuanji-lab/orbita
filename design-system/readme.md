@@ -422,6 +422,22 @@ session capsule centring and clamping) and `window-tools.test.ts` guards the cha
 lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
 and the toolbar's direct children are capsules.
 
+**Two lines, one column.** The content column has an outer line and an inner line. Surfaces —
+the user bubble, the composer, cards, code blocks, a row's hover fill — sit on the outer line;
+glyphs sit on the inner line (below). The transcript and the composer share the outer line at every
+width: the transcript keeps a stable scrollbar gutter and the footer pads its right edge by the
+measured scrollbar width (`--transcript-scrollbar`, 0 with overlay scrollbars). Before 2026-10-30 the
+transcript centred inside "pane minus scrollbar" and sat half a scrollbar left of the composer.
+`scripts/ui-edges.mjs` checks both edges and the inner line.
+
+**Controls stand on steps.** Icon buttons are 24 (inline, in rows) · 28 (capsules, panel heads,
+rails) · 32; icon glyphs are 12 (inline, chips) · 14 (rows) · 16 (toolbar, panel heads). The steps
+live in the components — `IconButton` and `Icon` snap whatever they are given to the next step up
+(`shell/control-scale.ts`), so a caller writing 13 gets 14. Dots under 10px and illustrations over
+16 pass through. Text controls take their height from a token, never from text plus padding
+(collapse rows were 6 + 21 + 6 = 33). Form controls inherit the page font globally; the browser
+default (13.33px / 400) never shows.
+
 **Leading glyphs sit on one hem.** In the content column, every glyph starts at the same vertical
 line: column edge + `--content-hem` (13px = a glass card's 12px padding inside its 1px hairline).
 Card text already sat there; agent prose (`.assistant-prose`), process rows (CollapseRow's padding
@@ -498,8 +514,8 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
   one from upstream Lucide (`lucide-static@1.33.0`, ISC licence) into `assets/icons/lucide/`, and only the glyphs registered in `Icon.tsx`'s `ICONS`
   table ship — no CDN, no substitution, no hand-drawn SVG. (No count is kept here: it changes with
   almost every feature and went stale twice; `ls` and the `ICONS` table are the answer.)
-- **Sizes**: 16px in the rail, headers and dialogs; 13–14px in chips, list rows and card headers;
-  11–12px for inline affordances (locks, filters, counts). **Stroke weight** 1.8 in lists and trees,
+- **Sizes**: three steps, enforced by `Icon` — 16 in the rail, headers and dialogs; 14 in list rows
+  and card headers; 12 in chips and inline affordances (locks, filters, counts). **Stroke weight** 1.8 in lists and trees,
   2 for controls, 2.2 for the modal close.
 - Icons inherit `currentColor` — tertiary grey at rest, primary on hover, `--color-info` for the
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.

@@ -1928,8 +1928,31 @@ function Pane(props: {
 }) {
   const t = useT();
   const [editing, setEditing] = useState(false);
+  // 消息列与输入卡同一根外线：滚动段占着滚动条宽、页脚没有，宽窗口里消息列在
+  // 「面板宽 − 滚动条」里居中，比输入卡整体偏 半个滚动条（2026-10-30 实测 1800 宽：
+  // 正文 523–1523、输入卡 528–1528）。量出滚动条的实际宽度（macOS 浮层滚动条是 0，
+  // 常驻滚动条随系统设置变），页脚右内边距补同样多——两段的内容盒逐像素一致。
+  // 滚动段同时 scrollbar-gutter: stable（styles.css 的 .chat-transcript），宽度
+  // 不随「内容够不够滚」跳动
+  const paneRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const pane = paneRef.current;
+    const scroller = pane?.querySelector<HTMLElement>(".chat-transcript");
+    if (pane === null || pane === undefined || scroller === null || scroller === undefined) return;
+    const sync = (): void => {
+      const style = getComputedStyle(scroller);
+      const borders = Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
+      const bar = Math.max(0, scroller.offsetWidth - scroller.clientWidth - borders);
+      pane.style.setProperty("--transcript-scrollbar", `${bar}px`);
+    };
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, []);
   return (
     <div
+      ref={paneRef}
       style={{
         height: "100%",
         minHeight: 0,
@@ -2065,7 +2088,7 @@ function Pane(props: {
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
-          className="scroll"
+          className="scroll chat-transcript"
           style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}
         >
           <div
@@ -2122,7 +2145,7 @@ function Pane(props: {
         )}
       </div>
 
-      <div style={{ padding: "var(--space-1) var(--space-5) 10px" }}>
+      <div className="chat-footer">
         <div
           style={{
             width: "min(100%, var(--content-max-width))",
@@ -3243,7 +3266,7 @@ function UserBubble(props: {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              padding: 3,
+              padding: "var(--space-1-5)",
               border: "none",
               background: "none",
               color: "var(--color-text-tertiary)",
@@ -3263,7 +3286,7 @@ function UserBubble(props: {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              padding: 3,
+              padding: "var(--space-1-5)",
               border: "none",
               background: "none",
               color: "var(--color-text-tertiary)",
@@ -3287,7 +3310,7 @@ function UserBubble(props: {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            padding: 3,
+            padding: "var(--space-1-5)",
             border: "none",
             background: "none",
             color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
@@ -3307,7 +3330,7 @@ function UserBubble(props: {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              padding: 3,
+              padding: "var(--space-1-5)",
               border: "none",
               background: "none",
               color: "var(--color-text-tertiary)",
@@ -3506,14 +3529,14 @@ function BranchRow(props: {
     return () => window.clearTimeout(timer);
   }, [copied]);
   return (
-    // 图标按钮自带 4px 内边距：行左缩「血线 − 4」，字形落在正文同一根线上
+    // 图标按钮自带 6px 内边距（24 的台阶）：行左缩「血线 − 6」，字形落在正文同一根线上
     <div
       style={{
         display: "flex",
         width: "100%",
         alignItems: "center",
         gap: "calc(var(--space-3) / 2)",
-        paddingLeft: "calc(var(--content-hem) - var(--space-1))",
+        paddingLeft: "calc(var(--content-hem) - var(--space-1-5))",
       }}
     >
       <button
@@ -3527,7 +3550,8 @@ function BranchRow(props: {
         style={{
           display: "inline-flex",
           alignItems: "center",
-          padding: 4,
+          // 12 的字形 + 两边 6 = 24：落在图标按钮的最小台阶上
+          padding: "var(--space-1-5)",
           border: "none",
           background: "none",
           color: copied ? "var(--color-success)" : "var(--color-text-tertiary)",
@@ -3545,7 +3569,8 @@ function BranchRow(props: {
         style={{
           display: "inline-flex",
           alignItems: "center",
-          padding: 4,
+          // 12 的字形 + 两边 6 = 24：落在图标按钮的最小台阶上
+          padding: "var(--space-1-5)",
           border: "none",
           background: "none",
           color: "var(--color-text-tertiary)",
@@ -3598,7 +3623,8 @@ function CollapseRow(props: {
           gap: "var(--space-2)",
           width: "100%",
           minHeight: props.dense === true ? "var(--control-height-sm)" : "var(--control-height-md)",
-          padding: `${props.dense === true ? "var(--space-1)" : "var(--space-1-5)"} ${RAIL_X}`,
+          // 高度就是台阶本身（28 / 32），不由「字 + 上下内边距」撑：原来 6 + 21 + 6 = 33
+          padding: `0 ${RAIL_X}`,
           border: "none",
           color: "var(--color-text-secondary)",
           fontFamily: "var(--font-family-base)",
