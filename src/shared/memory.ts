@@ -69,7 +69,8 @@ export interface MemoryEntry {
   source: MemorySource;
   /** 缺席 = active */
   status?: MemoryStatus;
-  /** agent 用 memory_retire 停用时给的理由（条目卡上显示）；恢复使用时清掉 */
+  /** 停用理由：agent 用 memory_retire 停用时给的话（条目卡上原样显示），或保留值
+   * MEMORY_MUTED_REVERTED（随对话回退自动停用，条目卡显示为标签）。恢复使用时清掉 */
   mutedReason?: string;
   /** 提取判出跨工作区通用、自动升到 user 层前的原作用域 token。存在 = 条目卡给
    * 「只留在原工作区」（returnToWorkspace 按它搬回；sha1 单向回不出 scopeId，寻址本来就是 token） */
@@ -80,6 +81,13 @@ export interface MemoryEntry {
   /** 上次编辑时间（epoch ms）。缺席 = 没编辑过 */
   editedAt?: number;
 }
+
+/**
+ * mutedReason 的保留值：用户在对话里「回到这里」撤回了这条的全部来源轮，记忆服务随之
+ * 停用它（sessionReverted）。条目卡认出它就显示「随对话回退停用」标签、不当原因原文；
+ * 「恢复使用」照常清掉。agent 的 memory_retire 理由是给人看的句子，撞不上这个词。
+ */
+export const MEMORY_MUTED_REVERTED = "reverted";
 
 /**
  * 条目 id 的短形（召回块与记忆工具的输出里用它）：`mem_` + uuid 头 8 位。记忆服务
@@ -243,6 +251,14 @@ export type MemoryServiceCommand =
       /** 当前装配好的家务活模型；每次随轮现送（设置改了下一轮就生效） */
       chore?: MemoryChoreModel;
     }
+  /**
+   * 用户在对话里「回到这里」：第 fromTurn 轮（按用户消息计，1 起）及之后的轮被撤回，
+   * 下一条用户消息的轮号就是 fromTurn。服务侧：该会话开段 / 待提取段里轮号 ≥ fromTurn
+   * 的轮截掉（截空的段丢弃），开段水位回到 fromTurn − 1，之后的新轮照常并入；本会话
+   * 「来源轮全部 ≥ fromTurn」的条目停用（mutedReason = MEMORY_MUTED_REVERTED），它们
+   * 当初顶掉的旧条恢复 active。只限根会话（子会话不写记忆，主进程不发）。无回执。
+   */
+  | { type: "sessionReverted"; sessionId: string; fromTurn: number }
   /**
    * 每轮开始前的召回（所有会话都问，含子会话——子会话读不写）。合并「user 层 +
    * 当前工作区层」，常驻直通 + 词法打分；服务侧落一条注入记录（含零命中）。
