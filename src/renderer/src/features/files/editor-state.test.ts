@@ -13,7 +13,8 @@ import {
   cursorPosition,
   detectLineEnding,
   isDirty,
-  isEditableTexFile,
+  isEditableLatexFile,
+  isTexFile,
   isExternalChange,
   toDiskText,
   type TimerSource,
@@ -150,11 +151,16 @@ describe("关标签 / 切标签时的未保存处理", () => {
 });
 
 describe("编辑器覆盖的文件类型与光标", () => {
-  test("只有 .tex 走编辑器，大小写不敏感", () => {
-    assert.equal(isEditableTexFile("papers/main.tex"), true);
-    assert.equal(isEditableTexFile("C:\\p\\MAIN.TEX"), true);
-    assert.equal(isEditableTexFile("refs.bib"), false);
-    assert.equal(isEditableTexFile("main.tex.bak"), false);
+  test(".tex / .bib / .sty / .cls 都进编辑器，大小写不敏感", () => {
+    assert.equal(isEditableLatexFile("papers/main.tex"), true);
+    assert.equal(isEditableLatexFile("C:\\p\\MAIN.TEX"), true);
+    assert.equal(isEditableLatexFile("refs.bib"), true);
+    assert.equal(isEditableLatexFile("papers/mystyle.sty"), true);
+    assert.equal(isEditableLatexFile("papers/journal.cls"), true);
+    assert.equal(isEditableLatexFile("main.tex.bak"), false);
+    // 折叠 / 大纲只跟 .tex 有关：.bib 与 .sty 没有章节
+    assert.equal(isTexFile("papers/main.tex"), true);
+    assert.equal(isTexFile("refs.bib"), false);
   });
 
   test("cursorPosition：1 起算的行列", () => {

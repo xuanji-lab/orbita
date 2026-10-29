@@ -1900,6 +1900,9 @@ export const en = {
     quoteLayout: "Layout warning",
     quoteMissingPackage: "Missing package",
     quotePending: "Waiting for install confirmation",
+    quoteVerify: "Citation check",
+    duplicateLabel: (name: string, file: string, line: number) =>
+      `Label ${name} is defined more than once — the first one is ${file}:${line}`,
     /* ---------- SyncTeX (source ↔ PDF) ---------- */
     syncNoPdf: "No PDF yet — compile once, then jump.",
     syncNoSynctex: "This PDF has no SyncTeX data. Compile it again to enable jumping (the build passes -synctex for you).",
@@ -1945,6 +1948,26 @@ export const en = {
     outside: "This file is not inside a LaTeX project.",
   },
 
+  /* ---------- 引文核验（cite:verify：DOI / arXiv 号 / 标题 → Crossref / arXiv） ---------- */
+  citeVerify: {
+    title: "Citations",
+    run: "Verify",
+    running: "Verifying…",
+    tip: "Look each entry up by DOI / arXiv ID / title. Only the identifier is sent; nothing is uploaded.",
+    never: "Not verified yet",
+    checked: (checked: number, total: number) => `${checked} of ${total} verified this time`,
+    unverifiedCount: (count: number) => `${count} need a look`,
+    verified: "Found and the title matches",
+    skipped: "Nothing to look up",
+    notFound: (kind: string, value: string) => `Not found at Crossref or arXiv (${kind}: ${value})`,
+    notFoundNoIdentifier: "Not found at Crossref or arXiv",
+    mismatch: (found: string) => `That DOI / arXiv ID belongs to a different paper: ${found}`,
+    error: (reason: string) => `Lookup did not finish — ${reason}`,
+    /* 整条通道不可用时的两句（项目不在白名单 / 读库失败） */
+    outside: "This file is not inside a LaTeX project.",
+    failed: (detail: string) => `Could not read the bibliography: ${detail}`,
+  },
+
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
   paper: {
     chatTitle: "Chat",
@@ -1988,6 +2011,12 @@ export const en = {
     hunkEdited: "Edited since — cannot undo",
     hunksShow: "Show blocks",
     hunksHide: "Hide blocks",
+    /* 大纲抽屉（章节树） */
+    outline: "Outline",
+    outlineTip: "Sections in this file — click to jump",
+    outlineClose: "Close outline",
+    outlineEmpty: "No sections in this file yet",
+    outlineLine: (line: number) => `Line ${line}`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

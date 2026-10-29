@@ -16,6 +16,8 @@ import {
   type CiteSaveRequest,
   type CiteSearchOutcome,
   type CiteSearchRequest,
+  type CiteVerifyOutcome,
+  type CiteVerifyRequest,
 } from "../../shared/cite.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
@@ -24,6 +26,7 @@ import { locateLatexProject } from "../latex/ipc.ts";
 import { collectCiteLibrary } from "./library.ts";
 import { searchCite } from "./search.ts";
 import { writeCiteEntry } from "./save.ts";
+import { verifyCiteEntries } from "./verify.ts";
 
 export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionStore): void {
   ipcMain.handle(
@@ -52,6 +55,25 @@ export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionSto
    * 写 .bib。授权与 library 同一道：项目目录从「根 + 当前文件」现算，renderer 给不出
    * 目录，也就不可能让主进程往一个白名单外的 .bib 里追加条目。
    */
+  /**
+   * 核验项目里的条目（DOI / arXiv 号 / 标题 → Crossref / arXiv）。与 library 同一道
+   * 授权：条目由主进程自己从项目 .bib 重读，renderer 只给「根 + 当前文件」（与可选的
+   * 一批 key）。只在用户点「核验」时被调用。
+   */
+  ipcMain.handle(citeChannels.verify, async (_event, req: CiteVerifyRequest): Promise<CiteVerifyOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
+    const project = describeLatexProject(located.dir);
+    try {
+      const library = collectCiteLibrary(project.dir);
+      const keys = Array.isArray(req.keys) ? req.keys.filter((key) => typeof key === "string") : null;
+      const batch = await verifyCiteEntries(library, keys);
+      return { ok: true, results: batch.results, total: batch.total };
+    } catch (cause) {
+      return { ok: false, reason: "failed", detail: cause instanceof Error ? cause.message : String(cause) };
+    }
+  });
+
   ipcMain.handle(citeChannels.save, async (_event, req: CiteSaveRequest): Promise<CiteSaveOutcome> => {
     const located = await locateLatexProject(req.context, workspaces, sessions);
     if (located === null) return { ok: false, reason: "outside-project", detail: req.context.path };

@@ -36,11 +36,21 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
+import { completionKeymap } from "@codemirror/autocomplete";
+import { lintGutter } from "@codemirror/lint";
+import { foldGutter, foldKeymap } from "@codemirror/language";
+import { latexFolding } from "./latex-fold.ts";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
+import { bibtexLanguage } from "./bibtex-language.ts";
 import { tags } from "@lezer/highlight";
 
 /** LaTeX 语言：stex 词法器（命令 / 注释 / 数学模式 / 环境名） */
 export const latexLanguage = StreamLanguage.define(stex);
+
+/** 按扩展名选语言：`.bib` 用 BibTeX 词法器，其余（.tex / .sty / .cls）都是 TeX */
+export function languageForFile(path: string): Extension {
+  return /\.bib$/i.test(path) ? bibtexLanguage : latexLanguage;
+}
 
 /**
  * 只读开关。agent 正在写这个文件时整块关掉：`readOnly` 挡的是所有会改文档的事务
@@ -128,6 +138,8 @@ const latexHighlight = HighlightStyle.define([
   { tag: tags.tagName, color: "var(--tex-cmd)", fontWeight: "600" },
   // 命令的参数：\begin{...} 的环境名、\cite 的 key
   { tag: tags.atom, color: "var(--tex-argument)" },
+  // BibTeX 的字段名（title / author / doi）：与命令参数同色，字重区分
+  { tag: tags.propertyName, color: "var(--tex-argument)", fontWeight: "600" },
   { tag: tags.string, color: "var(--tex-argument)" },
   { tag: tags.keyword, color: "var(--tex-math)" },
   // 数学模式里的字母 / 数字
@@ -139,7 +151,20 @@ const latexHighlight = HighlightStyle.define([
   { tag: tags.invalid, color: "var(--color-danger)" },
 ]);
 
-export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; selectionSet: boolean }) => void): Extension[] {
+export interface LatexEditorOptions {
+  /**
+   * 折叠（章节块 / 环境块）。只对 .tex 开：.bib / .sty 没有章节与环境树，
+   * 给它们挂一个永远算不出折点的 foldService 只是白跑一遍扫描。
+   */
+  folding?: boolean;
+  /** 词法器；缺省是 LaTeX（stex）。`.bib` 传 BibTeX 那个（bibtex-language.ts） */
+  language?: Extension;
+}
+
+export function latexEditorExtensions(
+  onUpdate: (update: { docChanged: boolean; selectionSet: boolean; text: () => string }) => void,
+  options: LatexEditorOptions = {},
+): Extension[] {
   return [
     lineNumbers(),
     highlightActiveLineGutter(),
@@ -152,16 +177,34 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
     indentUnit.of("  "),
     EditorState.tabSize.of(2),
     EditorView.lineWrapping,
-    latexLanguage,
+    options.language ?? latexLanguage,
     syntaxHighlighting(latexHighlight),
     readOnlyCompartment.of(readOnlyExtensions(false)),
     agentMarks,
     syncLineMarks,
     search({ top: true }),
-    keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+    // completionKeymap：Ctrl/Cmd+Space 手动弹补全。LaTeX 的现场不总是「正在打字」——
+    // `\ref{` 之后想看看有哪些 label、`\begin{` 之后想挑环境，手动触发比再敲一个字自然
+    // 编译问题的行内标记：波浪线由 setDiagnostics 推进来（TexEditorPane 接线），
+    // 这里的 lintGutter 给行号旁一个可悬停的记号——长行折行后波浪线可能在视口外
+    lintGutter(),
+    ...(options.folding === true ? [foldGutter(), ...latexFolding] : []),
+    keymap.of([
+      ...completionKeymap,
+      ...(options.folding === true ? foldKeymap : []),
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...searchKeymap,
+      indentWithTab,
+    ]),
     EditorView.updateListener.of((update) => {
       if (!update.docChanged && !update.selectionSet) return;
-      onUpdate({ docChanged: update.docChanged, selectionSet: update.selectionSet });
+      onUpdate({
+        docChanged: update.docChanged,
+        selectionSet: update.selectionSet,
+        // 全文只在调用方真要的时候才拷（大纲抽屉开着时才需要）
+        text: () => update.state.doc.toString(),
+      });
     }),
     EditorView.theme({
       "&": {
@@ -215,6 +258,24 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
       // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的落点框同色系）
       ".cm-sync-line": {
         backgroundColor: "var(--color-accent-soft)",
+      },
+      // 编译问题的波浪线：默认的红 / 琥珀直接用 token（深浅主题同一套语义）
+      ".cm-lintRange-error": {
+        backgroundImage: "none",
+        textDecoration: "underline wavy var(--color-danger)",
+        textUnderlineOffset: "3px",
+      },
+      ".cm-lintRange-warning": {
+        backgroundImage: "none",
+        textDecoration: "underline wavy var(--color-warning)",
+        textUnderlineOffset: "3px",
+      },
+      ".cm-tooltip-lint": {
+        backgroundColor: "var(--color-bg-panel)",
+        color: "var(--color-text-primary)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
       },
       // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
       // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来

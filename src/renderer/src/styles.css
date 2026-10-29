@@ -3322,6 +3322,31 @@ body {
   overflow-y: auto;
   padding: 0 var(--space-2) var(--space-2);
 }
+/* 引文核验一块：头部是一行「查了几条 / 一共几条 + 核验」，下面只列需要人看的结果。
+   与编译问题的分组靠一道发丝线分开——它不是编译失败，不该混进错误里 */
+.latex-verify {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) 0;
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.latex-verify-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+}
+.latex-verify-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.latex-verify-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
 .latex-problem {
   display: flex;
   /* 窄面板（右栏 340）里动作组挤不下就换到下一行、靠右钉住（.row-trailing 的 margin-left
@@ -3336,6 +3361,27 @@ body {
 }
 .latex-problem:hover {
   background: var(--option-hover-bg);
+}
+/* 可点击的问题主体（文件:行 + 消息）：按钮只负责点击与布局，视觉与父行一致 */
+.latex-problem-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.latex-problem-main:hover .latex-problem-loc,
+.latex-problem-main:hover .latex-problem-msg > span:first-child {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .latex-problem[data-level="layout"] {
   color: var(--color-text-secondary);
@@ -3421,8 +3467,15 @@ body {
   min-height: 0;
   background: var(--color-bg-panel);
 }
+/* 正文区 = 编辑器 + 可选的大纲抽屉（并排，不浮层：右栏本来就窄，浮层会盖住源码） */
+.tex-editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .tex-editor-host {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -3619,6 +3672,102 @@ body {
   padding: 0 6px;
   border-radius: var(--radius-md);
   font-size: var(--font-size-xs);
+}
+
+/* 大纲抽屉：与正文并排（不浮层）。层级靠缩进，不靠字号——一张卡至多三档 */
+.tex-editor-outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-outline-toggle[aria-expanded="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-bg-active);
+}
+.tex-outline {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: min(240px, 55%);
+  min-height: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.tex-outline-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.tex-outline-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.tex-outline-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.tex-outline-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+.tex-outline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.tex-outline-row:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.tex-outline-row[data-active="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.tex-outline-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tex-outline-line {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /*

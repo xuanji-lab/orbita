@@ -20,6 +20,8 @@ import {
   type LatexFileContext,
   type LatexForwardOutcome,
   type LatexForwardRequest,
+  type LatexIndexOutcome,
+  type LatexLintOutcome,
   type LatexPackageQuery,
   type LatexProjectOutcome,
   type LatexResolvedPackage,
@@ -32,6 +34,8 @@ import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
+import { buildLatexIndex } from "./index.ts";
+import { lintWithChktex, probeChktex } from "./chktex.ts";
 import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
 import type { LatexRunner } from "./run.ts";
@@ -54,10 +58,37 @@ export function registerLatexIpc(
       : { found: true, project: describeLatexProject(located.dir) };
   });
 
+  /**
+   * chktex 行内检查。**探测到才启用**：本机没有 chktex 时回 available:false，界面
+   * 不显示这条通道的任何痕迹。只对 .tex 跑（对 .bib / .sty 跑 chktex 是把别的语法
+   * 当 TeX 解析，结果全是噪音）。
+   */
+  ipcMain.handle(latexChannels.lint, async (_event, req: LatexFileContext): Promise<LatexLintOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { available: false, issues: [] };
+    if (!/\.tex$/i.test(located.file)) return { available: false, issues: [] };
+    const source = insideProject(located.dir, located.file);
+    if (source === null) return { available: false, issues: [] };
+    const probe = await runner.probeEnvironment();
+    const binary = await probeChktex(probe.latexmk);
+    if (binary === null) return { available: false, issues: [] };
+    const result = await lintWithChktex({ binary, file: source.file, projectDir: located.dir });
+    return { available: true, issues: result.issues };
+  });
+
   ipcMain.handle(latexChannels.compile, async (_event, req: LatexFileContext): Promise<LatexRunOutcome> => {
     const located = await locateLatexProject(req, workspaces, sessions);
     if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
     return runner.compile({ dir: located.dir });
+  });
+
+  /**
+   * 项目符号索引。与编译同一个项目目录（magic root 也一并生效）：补全的 `\ref`
+   * 候选与 `\input` 路径候选读的是「编译真正会读的那些文件」。
+   */
+  ipcMain.handle(latexChannels.index, async (_event, req: LatexFileContext): Promise<LatexIndexOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    return located === null ? { found: false } : { found: true, index: buildLatexIndex(located.dir) };
   });
 
   ipcMain.handle(latexChannels.cancel, async (_event, req: LatexFileContext): Promise<boolean> => {

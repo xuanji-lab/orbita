@@ -102,6 +102,7 @@ import square from "../../../../design-system/assets/icons/lucide/square.svg?raw
 import squareTerminal from "../../../../design-system/assets/icons/lucide/square-terminal.svg?raw";
 import circleHelp from "../../../../design-system/assets/icons/lucide/circle-help.svg?raw";
 import search from "../../../../design-system/assets/icons/lucide/search.svg?raw";
+import searchCheck from "../../../../design-system/assets/icons/lucide/search-check.svg?raw";
 import terminal from "../../../../design-system/assets/icons/lucide/terminal.svg?raw";
 import fileText from "../../../../design-system/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../design-system/assets/icons/lucide/trash-2.svg?raw";
@@ -232,6 +233,7 @@ const ICONS = {
   "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,
+  "search-check": searchCheck,
   waypoints,
   sliders,
   star,

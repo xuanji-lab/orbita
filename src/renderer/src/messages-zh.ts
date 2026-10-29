@@ -1754,6 +1754,8 @@ export const zh: Messages = {
     quoteLayout: "版式提示",
     quoteMissingPackage: "缺少宏包",
     quotePending: "等待确认安装",
+    quoteVerify: "引文核验",
+    duplicateLabel: (name, file, line) => `label ${name} 定义了不止一次——第一处在 ${file}:${line}`,
     /* ---------- SyncTeX 双向定位（源码 ↔ PDF） ---------- */
     syncNoPdf: "还没有 PDF——先编译一次再定位。",
     syncNoSynctex: "这份 PDF 里没有 SyncTeX 数据。重新编译一次就能跳转（编译时会自动带上 -synctex）。",
@@ -1799,6 +1801,25 @@ export const zh: Messages = {
     outside: "这个文件不在 LaTeX 项目里。",
   },
 
+  /* ---------- 引文核验（cite:verify：DOI / arXiv 号 / 标题 → Crossref / arXiv） ---------- */
+  citeVerify: {
+    title: "引文核验",
+    run: "开始核验",
+    running: "核验中…",
+    tip: "按 DOI / arXiv 号 / 标题逐条查 Crossref 与 arXiv。只发送标识，不上传稿件内容。",
+    never: "还没有核验过",
+    checked: (checked, total) => `本次核验了 ${checked} / ${total} 条`,
+    unverifiedCount: (count) => `${count} 条待看`,
+    verified: "查到了，标题对得上",
+    skipped: "没有可查的标识",
+    notFound: (kind, value) => `Crossref 与 arXiv 都没有这条记录（${kind}：${value}）`,
+    notFoundNoIdentifier: "Crossref 与 arXiv 都没有这条记录",
+    mismatch: (found) => `这个 DOI / arXiv 号属于另一篇论文：${found}`,
+    error: (reason) => `这次没查成——${reason}`,
+    outside: "这个文件不属于 LaTeX 项目。",
+    failed: (detail) => `读不了文献库：${detail}`,
+  },
+
   /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
   paper: {
     chatTitle: "对话",
@@ -1838,6 +1859,12 @@ export const zh: Messages = {
     hunkEdited: "已被改动，不可撤销",
     hunksShow: "展开改动块",
     hunksHide: "收起改动块",
+    /* 大纲抽屉（章节树） */
+    outline: "大纲",
+    outlineTip: "这份文件的章节——点击跳转",
+    outlineClose: "收起大纲",
+    outlineEmpty: "这份文件还没有章节",
+    outlineLine: (line) => `第 ${line} 行`,
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
