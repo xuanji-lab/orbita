@@ -1,0 +1,130 @@
+/* 右栏「上下文」面板（ContextPanel.tsx）。
+ * 列表沿用右栏通用配方（.panel-list / .panel-group-head / .row-trailing），这里只补
+ * 顶部用量块与条目行。来源条是中性墨色分段：颜色是第二信号，七类来源不另立七色。 */
+
+.ctx-body {
+  padding-top: var(--space-2);
+}
+
+/* —— 顶部用量：一行字 + 一条分段条 + 「其余」一行 —— */
+.ctx-usage {
+  display: grid;
+  gap: 6px;
+  padding: var(--space-1) var(--space-4) var(--space-2);
+}
+.ctx-usage-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ctx-usage-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.ctx-usage-value {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.ctx-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+}
+.ctx-seg {
+  flex: 0 0 auto;
+  height: 100%;
+  background: var(--color-text-tertiary);
+  transition: opacity var(--duration-hover) var(--ease-standard),
+    background-color var(--duration-hover) var(--ease-standard);
+}
+/* 「其余」（对话正文等）比各来源再浅一档：它不是某一类来源 */
+.ctx-seg[data-rest="true"] {
+  background: var(--color-border-strong);
+}
+/* 悬停某组：那一段提到正文墨色，其余段退后 */
+.ctx-seg[data-lit="true"] {
+  background: var(--color-text-primary);
+}
+.ctx-seg[data-lit="false"] {
+  opacity: 0.45;
+}
+.ctx-rest {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 组头行尾的量：钉在行右血线（.row-trailing），与条目行的量同一列 —— */
+.ctx-tokens {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.panel-group-toggle[data-gone="true"] {
+  opacity: 0.55;
+}
+
+/* —— 条目行：图标 + 主名 + 浅灰副标 + 行尾量，单行省略 —— */
+.ctx-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--list-item-compact);
+  padding: 0 var(--space-2) 0 calc(var(--space-2) + 18px);
+  border-radius: var(--radius-md);
+}
+.ctx-row:hover {
+  background: var(--color-bg-hover);
+}
+.ctx-row[data-gone="true"] {
+  opacity: 0.5;
+}
+.ctx-row-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.ctx-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+.ctx-row-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 文件组里的目录小标：与条目主名左缘对齐 */
+.ctx-dir {
+  padding: 6px var(--space-2) 2px calc(var(--space-2) + 18px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.ctx-empty {
+  padding-left: var(--space-2);
+}
+.panel-empty[data-tone="danger"] {
+  color: var(--color-danger);
+}

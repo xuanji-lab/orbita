@@ -1114,6 +1114,34 @@ export type ChannelSendOutcome =
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
+/**
+ * 系统提示注入清单（右栏「上下文」面板「规则与说明」组的数据源）。
+ *
+ * agent 进程在 before_agent_start（每轮首个 LLM 调用前）现场组装、每轮推一次：
+ * 规则文件与技能索引每轮重注入、**永不被压缩**，所以面板只关心「最近一轮注入了什么」，
+ * 不落盘、不补算——未开过轮的会话（纯浏览历史）没有这份清单，面板如实显示未知。
+ *
+ * token 全部是估算（`context-inventory.ts` 的 estimateContextTokens 口径，误差约 ±30%），
+ * 只服务面板的占比展示，不用于计费或压缩判定。
+ */
+export interface ContextRulesInventory {
+  /** pi 的 project_context 规则文件（AGENTS.md / CLAUDE.md 等：全局 agentDir 一份 + cwd 祖先链各一份） */
+  files: { path: string; tokens: number; scope: "global" | "project" }[];
+  /**
+   * pi 基底估算：内置说明 + 工具清单 + 上述规则文件正文 + 技能索引 + cwd 行。
+   * **已包含 files 与 skillsIndex 的量**——组内合计 = baseTokens + segments，
+   * 各行只是它的拆解视图，加总时不要把 base 再加一遍。
+   */
+  baseTokens: number;
+  /** 系统提示里的技能索引（渐进披露：只有 name + description 进上下文，正文按需 read） */
+  skillsIndex: { names: string[]; tokens: number };
+  /**
+   * Orbita 逐轮追加的说明段（权限说明、目录清单、引用规则等）。id 稳定供 UI 配文案，
+   * 本轮为空串的段不出现。pi 基底不在里面（它有自己的 baseTokens）。
+   */
+  segments: { id: string; tokens: number }[];
+}
+
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
@@ -1415,4 +1443,10 @@ export type AgentEvent =
       runId: string;
       turnId: string;
       ask: IntentAskView[];
-    };
+    }
+  /**
+   * 系统提示注入清单（上下文面板「规则与说明」组）：before_agent_start 现场组装、
+   * 每轮推一次。纯 ephemeral，不落盘——规则每轮重注入，最新一份就是当前事实；
+   * 纯浏览的旧会话收不到，面板按「未知」显示。
+   */
+  | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory };

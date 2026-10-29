@@ -486,6 +486,7 @@ export const en = {
     browser: "Built-in browser",
     bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
     intent: "Intent graph",
+    context: "Context",
   },
 
   browser: {
@@ -2040,6 +2041,68 @@ export const en = {
     cardVerdictSkipped: "Left blank · used as-is",
     cardVerdictPending: "Waiting for your confirmation",
     cardVerdictUnasked: "Not asked",
+  },
+
+  contextPanel: {
+    title: "Context",
+    /** 胶囊「?」：口径说明（估算、灰显） */
+    help:
+      "What the agent is holding in its context right now, grouped by where it came from. Token counts are estimates (about ±30%). Dimmed rows were folded into a compaction summary and are no longer there word for word.",
+    used: "In use",
+    helpLabel: "How this panel counts",
+    scopeTurn: "This turn",
+    scopeTask: "Whole task",
+    noSession: "Open a task to see what the agent is holding in its context.",
+    usage: (used: string, window: string, percent: number) => `${used} / ${window} · ${percent}%`,
+    usageUnknown: (window: string) => `Unknown / ${window}`,
+    /**
+     * 用量条下「其余」那一行 = 真实总量 − 各来源估算：对话正文、工具的 JSON 定义（不在系统
+     * 提示里，哪组都不算它，空会话也有好几 k）；本轮视野还含此前各轮带进来的东西
+     */
+    restTurn: "Earlier turns, conversation and tool definitions",
+    restTask: "Conversation and tool definitions",
+    approx: (tokens: string) => `~${tokens}`,
+    groups: {
+      rules: "Rules and instructions",
+      attach: "You attached",
+      files: "Files",
+      web: "Web pages",
+      tasks: "Other sessions",
+      mcp: "MCP servers",
+      skills: "Skills",
+    },
+    rulesUnknown: "Shown once the next turn starts",
+    ruleGlobal: "Global",
+    ruleProject: "Project",
+    skillsIndex: (count: number) => `Skill index · ${count}`,
+    builtin: "Orbita and core instructions",
+    quote: (turn: number | null, fromUser: boolean) =>
+      `Quoted from ${fromUser ? "you" : "the agent"}${turn === null ? "" : `, turn ${turn}`}`,
+    pasted: "Pasted text",
+    pastedChars: (count: number) => `${count} chars`,
+    images: (count: number) => (count === 1 ? "1 image" : `${count} images`),
+    folderRef: "Folder",
+    times: (count: number) => `× ${count}`,
+    rangeAll: "Whole file",
+    rangeLines: (from: number, to: number | null) => (to === null ? `From line ${from}` : `Lines ${from}–${to}`),
+    rangePages: (from: number, to: number | null) => (to === null ? `From page ${from}` : `Pages ${from}–${to}`),
+    rangePagesDefault: "First 20 pages",
+    outside: "Outside the working folder",
+    root: "Working folder",
+    catalog: "Session list",
+    external: "External",
+    rounds: (rounds: string) => `Rounds ${rounds}`,
+    named: "Named in your message",
+    readOnDemand: "Read on demand",
+    turnOf: (turn: number) => `Turn ${turn}`,
+    gone: "Compacted",
+    loading: (count: number) => (count > 0 ? `Loading earlier records… ${count} so far` : "Loading earlier records…"),
+    capped: "This task is too long to load in full; the earliest turns are left out.",
+    loadError: (message: string) => `Couldn't load earlier records: ${message}`,
+    emptyTurn: "Nothing new came into the context this turn.",
+    emptyTask: "Nothing has come into the context yet.",
+    /** 输入框旁上下文环菜单里的入口 */
+    open: "View context",
   },
 };
 
