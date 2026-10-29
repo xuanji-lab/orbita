@@ -37,7 +37,7 @@ class FakeChild implements EmbedServerChild {
 function makeServer(overrides: {
   probeOk?: boolean;
   probe?: (port: number) => Promise<boolean>;
-  post?: (texts: readonly string[]) => number[][];
+  post?: (texts: readonly string[]) => number[][] | Promise<number[][]>;
   resolve?: () => { binaryPath: string; model: typeof MODEL } | null;
   idleMs?: number;
 }) {
@@ -117,6 +117,28 @@ test("空闲卸载：运行中改 idleMs 也生效；再有 embed 重新拉起",
   // 重拉
   assert.equal((await core.embed(["a"])) !== null, true);
   assert.equal(children.length, 2);
+});
+
+test("空闲卸载：嵌入请求在途时停表，结束后才重新计时", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { core, children } = makeServer({
+    idleMs: 30,
+    post: async (texts) => {
+      await gate;
+      return texts.map(() => [1, 0, 0, 0]);
+    },
+  });
+  const pending = core.embed(["慢请求"]);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(core.isRunning(), true);
+  assert.equal(children[0]!.killCount, 0);
+  release();
+  assert.notEqual(await pending, null);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(core.isRunning(), false);
 });
 
 test("健康检查中的并发 ready 共享同一 promise，不提前报就绪", async () => {

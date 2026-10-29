@@ -72,6 +72,8 @@ export class EmbedServerCore {
   private port = 0;
   private starting: Promise<boolean> | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
+  /** 在途嵌入请求数：大于零时禁用空闲卸载，最后一条结束后才重新计时 */
+  private activeEmbeds = 0;
   /** 上次请求的模型 id：换模型（设置改了）要重启 llama-server */
   private startedFor: string | null = null;
 
@@ -195,17 +197,20 @@ export class EmbedServerCore {
   async embed(texts: readonly string[]): Promise<Float32Array[] | null> {
     if (texts.length === 0) return [];
     if (!(await this.ready())) return null;
+    this.activeEmbeds += 1;
+    this.disarmIdle();
     try {
       const raw = await this.post(this.port, texts);
       if (raw.length !== texts.length) return null;
-      const vectors = raw.map((values) => normalize(Float32Array.from(values)));
-      this.armIdle();
-      return vectors;
+      return raw.map((values) => normalize(Float32Array.from(values)));
     } catch (cause) {
       // 状态未知（进程可能死了）：停掉，下次用时重拉。本轮退字面
       this.log("[memory] llama-server 嵌入请求失败（本轮退字面召回）", cause);
       this.stop();
       return null;
+    } finally {
+      this.activeEmbeds -= 1;
+      if (this.activeEmbeds === 0 && this.child !== null) this.armIdle();
     }
   }
 
@@ -229,6 +234,7 @@ export class EmbedServerCore {
   /** 重置闲置计时（有请求时调；embed 内部已调）。 */
   private armIdle(): void {
     this.disarmIdle();
+    if (this.child === null || this.activeEmbeds > 0) return;
     const timer = setTimeout(() => {
       this.idleTimer = null;
       if (this.child !== null) {
