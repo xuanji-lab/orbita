@@ -4968,6 +4968,8 @@ function MemoryLine(props: {
               </span>
             ))
           )}
+          {/* 「记住」是这个任务的产出，链去审查面板的记忆页签（改 / 删 / 拍板在那里）；
+              「用到」是输入，归上下文面板——那块在上下文面板的 PR 里接，这里只就地列出 */}
           {row.remembered.length > 0 && (
             <>
               <span style={{ marginTop: "var(--space-1)", color: "var(--color-text-tertiary)", fontSize: "var(--font-size-xs)" }}>
@@ -4978,13 +4980,13 @@ function MemoryLine(props: {
                   {entry.text}
                 </span>
               ))}
+              {props.onOpenReview !== undefined && (
+                <button type="button" className="mem-link" onClick={props.onOpenReview}>
+                  {t.memory.openReview}
+                  <Icon name="arrow-right" size={12} strokeWidth={1.8} />
+                </button>
+              )}
             </>
-          )}
-          {props.onOpenReview !== undefined && (
-            <button type="button" className="mem-link" onClick={props.onOpenReview}>
-              {t.memory.openReview}
-              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
-            </button>
           )}
         </div>
       )}
