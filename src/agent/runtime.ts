@@ -30,20 +30,13 @@ import {
 } from "./model-registration.ts";
 import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
 import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
-import {
-  createToolCallGate,
-  describePermissionMode,
-  ENABLED_BUILTIN_TOOLS,
-  type PiExtensionApi,
-} from "./permission.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
+import { createToolCallGate, ENABLED_BUILTIN_TOOLS, type PiExtensionApi } from "./permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
-import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
-import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
+import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
@@ -63,20 +56,20 @@ import {
   type WebScanResult,
 } from "./web-artifacts.ts";
 import { injectUserContext } from "./user-context.ts";
-import { gitAttributionGuideline } from "./git-attribution.ts";
+import { joinSystemPrompt, orbitaSystemSegments, type PromptSegment } from "./system-prompt.ts";
+import { diffFingerprints, promptFingerprints, stabilityLogLine } from "./prompt-stability.ts";
 import {
   RETRY_BASE_DELAY_MS,
   RETRY_MAX_ATTEMPTS,
   retryVisibleToUi,
 } from "./retry-policy.ts";
-import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
-import { describeDirectories } from "./directories-prompt.ts";
+import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
+import { createStoreTools } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
@@ -86,7 +79,6 @@ import {
   composeIntentPrompt,
   initialRecallCard,
   INTENT_GATE_OFF,
-  INTENT_CONTEXT_GUIDELINE,
   stagesOfCard,
   type IntentContextFile,
   type IntentRecallTiming,
@@ -677,6 +669,11 @@ interface LedgerNote {
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
+  /**
+   * 提示词稳定性指纹的上一轮基线（prompt-stability.ts）。null = 还没立过基线
+   * （首轮 / 进程重启后只立基线不报变化）。
+   */
+  promptPrints: Record<string, string> | null;
 }
 
 /**
@@ -689,7 +686,7 @@ const ledger = new Map<string, LedgerNote>();
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "" };
+    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "", promptPrints: null };
     ledger.set(sessionId, note);
   }
   return note;
@@ -764,30 +761,39 @@ const intentConfirmWaiter = new IntentConfirmWaiter(send);
 const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle(sessionId);
 
 /**
- * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
- * 给慢命令带上 60 秒这种小值（2026-10-01 统计：60s ×128、30s ×27、10s ×12），
- * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉——短命令不受影响，只要求慢命令
- * 别自己设短超时。
- *
- * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
- * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
+ * 本轮计入权限说明与稳定性指纹的非内建工具名单（before_agent_start 的装配与
+ * notePromptStability 共用这一份真源）：MCP 工具 + 内置自定义工具 + 终端组 +
+ * 本会话实际注册的通道工具。
  */
-const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
+function extraToolNames(role: "root" | "child", workspaceId: string | null): string[] {
+  return [
+    ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
+    "create_skill",
+    "add_mcp_server",
+    "read_task",
+    ...TERMINAL_TOOL_NAMES,
+    ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
+  ];
+}
 
 /**
- * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
- * 模型可以用 `expected_seconds` 告诉 UI「这条预计要跑多久」——**只影响界面**
- * （运行行显示「预计约 X」，预计超 10 秒的调用开始就展开看实时输出），不影响
- * 执行、不做硬性结束、也不进 shell。机制：pi 的 TypeBox 校验对未知字段放行
- * （0.84.3 实测），字段随入参原样流到渲染层，bash 的 execute 只解构
- * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
+ * 提示词稳定性记账（prompt-stability.ts）：同一会话里指纹变了就往 stderr 打一行
+ * 归因日志（哪一段 / 工具名单变了）。前缀缓存对系统提示词逐字节敏感，真实数据里
+ * 又有大量无法归因的断点——这行日志就是查“谁动了提示词”的入口。
  */
-const EXPECTED_SECONDS_GUIDELINE =
-  "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
-  "scanning large directories), you may add expected_seconds (a number of seconds, your estimate) to the arguments. " +
-  "It only drives the UI (progress hint and auto-expand) and does not affect execution or timeouts.";
+function notePromptStability(
+  sessionId: string,
+  segments: readonly PromptSegment[],
+  toolNames: readonly string[],
+): void {
+  const note = ledgerNote(sessionId);
+  const prints = promptFingerprints(segments, toolNames);
+  if (note.promptPrints !== null) {
+    const changed = diffFingerprints(note.promptPrints, prints);
+    if (changed.length > 0) console.error(`[prompt-stability] ${stabilityLogLine(sessionId, changed)}`);
+  }
+  note.promptPrints = prints;
+}
 
 /**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
@@ -1013,48 +1019,30 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
-            pi.on("before_agent_start", (event) => ({
-              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
-              systemPrompt: [
-                adaptSystemPrompt(event.systemPrompt),
-                describePermissionMode(currentMode(), [
-                  ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
-                  "create_skill",
-                  "add_mcp_server",
-                  "read_task",
-                  // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
-                  // 都会停下来等它批准，plan 档下更是直接被拒
-                  ...TERMINAL_TOOL_NAMES,
-                  // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
-                  ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
-                ]),
-                // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
-                // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
-                describeDirectories(command.cwd, command.directories),
-                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
-                describeChannelRole(role),
-                // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
-                // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
-                storeToolsGuideline(
-                  command.workspaceId === null ? null : { name: command.workspaceName },
-                  command.cwd,
-                ),
-                TOOL_GUIDELINES,
-                EXPECTED_SECONDS_GUIDELINE,
+            pi.on("before_agent_start", (event) => {
+              // 段装配抽成了纯函数（./system-prompt.ts）：「派出 / 删除子会话前后整份
+              // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
+              // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
+              // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
+              const extra = extraToolNames(role, command.workspaceId);
+              const segments = orbitaSystemSegments({
+                piBase: adaptSystemPrompt(event.systemPrompt),
+                mode: currentMode(),
+                extraToolNames: extra,
+                role,
+                workspace: command.workspaceId === null ? null : { name: command.workspaceName },
+                cwd: command.cwd,
+                directories: command.directories,
+                gitAttribution: command.gitAttribution ?? true,
+                attributionLanguage: command.attributionLanguage,
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
-                ...("intent" in command && command.intent !== undefined ? [INTENT_CONTEXT_GUIDELINE] : []),
-                // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
-                // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
-                QUOTE_GUIDELINE,
-                // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
-                gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
-                // 回复语言放最末一段（离对话最近、权重最高），见 prompt-narration.ts
-                REPLY_LANGUAGE_GUIDELINE,
-              ]
-                .filter((part) => part !== "")
-                .join("\n\n"),
-            }));
+                intentGuideline: "intent" in command && command.intent !== undefined,
+              });
+              notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
+              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
+              return { systemPrompt: joinSystemPrompt(segments) };
+            });
           },
         },
         {

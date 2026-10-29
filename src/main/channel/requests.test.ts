@@ -235,6 +235,8 @@ describe("applyDelegate", () => {
       kind: "task",
       peerId: PARENT,
     });
+    // 首条任务信封带父工作台：子会话要往那几写重要产出，父的行已不进系统提示词
+    assert.ok((submitCalls[0]?.text ?? "").includes(`Parent session workbench: ${sessions.workbenchPath(PARENT)}`));
 
     assert.equal(outcome.card.workbench, sessions.workbenchPath(outcome.childId));
   });
@@ -396,7 +398,7 @@ describe("applyChannelSend", () => {
     assert.equal(outcome.ok, false);
   });
 
-  test("子空闲（phase 不在 map 里）→ submitTurn，resume 用子的 piSessionFile", async () => {
+  test("子空闲（phase 不在 map 里）→ submitTurn，resume 用子的 piSessionFile；reply 信封也带父工作台", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT, piSessionFile: "pi/child.jsonl" }));
     const { deps, submitCalls, steerCalls } = fakeDeps();
@@ -408,6 +410,7 @@ describe("applyChannelSend", () => {
     assert.equal(steerCalls.length, 0);
     assert.equal(submitCalls.length, 1);
     assert.deepEqual(submitCalls[0]?.resume, { piSessionFile: "pi/child.jsonl" });
+    assert.ok((submitCalls[0]?.text ?? "").includes(`Parent session workbench: ${sessions.workbenchPath(PARENT)}`));
   });
 
   test("子 phase 为 turn → steer 带 delivery，不开轮", async () => {
@@ -424,15 +427,23 @@ describe("applyChannelSend", () => {
     assert.equal(steerCalls.length, 1);
     assert.equal(steerCalls[0]?.sessionId, CHILD);
     assert.equal(steerCalls[0]?.delivery, "followUp");
+    // steer 注入的信封同样带父工作台：就算首条任务被压缩掉，路径也会随 reply 回来
+    assert.ok((steerCalls[0]?.text ?? "").includes(`Parent session workbench: ${sessions.workbenchPath(PARENT)}`));
   });
 
-  test("broadcast 收到 message 与 status", async () => {
+  test("broadcast 收到 message 与 status；message 事件携带子工作台路径", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
     const { deps, broadcastCalls } = fakeDeps();
     await applyChannelSend(deps, channelSendEvent());
     assert.equal(broadcastCalls.some((e) => e.type === "message"), true);
     assert.equal(broadcastCalls.some((e) => e.type === "status"), true);
+    const messageEvents = broadcastCalls.filter((e): e is Extract<ChannelEvent, { type: "message" }> => e.type === "message");
+    assert.ok(messageEvents.length > 0);
+    for (const event of messageEvents) {
+      assert.equal(event.childWorkbench, sessions.workbenchPath(CHILD));
+      assert.equal(event.childId, CHILD);
+    }
   });
 });
 
