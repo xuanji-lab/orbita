@@ -193,6 +193,8 @@ describe("messages —— 中英两张表", () => {
     // 专注左栏（悬停）与审查面板各一条；英文表里不能出现汉字
     deepStrictEqual([cjk.test(en.focus.linesUnknown), cjk.test(en.review.linesUnknown)], [false, false]);
     deepStrictEqual([zh.focus.linesUnknown, zh.review.linesUnknown], ["行数未知", "行数未知"]);
+    // 两处是同一个计数器的同一个结论，英文也是同一句（左栏悬停时它与文件名挤一行，长句会把文件名挤没）
+    deepStrictEqual(en.focus.linesUnknown, en.review.linesUnknown);
   });
 
   test("首页批语落当天日期：中文「阅 月.日」，英文照美式缩写（Sept，不写 Sep）", () => {

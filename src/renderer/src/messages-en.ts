@@ -664,8 +664,11 @@ export const en = {
     legendM: "modified",
     badgeU: "Untracked new file",
     badgeM: "Modified",
-    /** 未跟踪文件超过行数上限：悬停只写这一句，不显示 +0 */
-    linesUnknown: "line count unavailable",
+    /**
+     * 未跟踪文件没数行：悬停只写这一句，不显示 +0。与审查面板同一句——同一个事实同一个说法；
+     * 也要短：悬停时它和文件名挤一行，原来的 "line count unavailable" 把文件名挤得只剩一个字母
+     */
+    linesUnknown: "Count unknown",
     changeSummary: (changed: number, untracked: number) =>
       `${changed} file${changed === 1 ? "" : "s"} changed, ${untracked} new`,
     notRepo: "Not a git repository — no U / M to show",
