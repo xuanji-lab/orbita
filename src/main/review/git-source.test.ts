@@ -5,6 +5,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseNumstatLine, parseUntrackedLine } from "../../shared/review.ts";
 import { gitReviewDiff, gitReviewList, gitWorkdirChanges, realGitRunner, type GitRunner } from "./git-source.ts";
+import type { UntrackedProbe } from "./untracked-lines.ts";
+
+/** 假读盘面：stat 报「读得到的大小」，read 按需返回全文或开头；counter 断言读盘次数。 */
+function fakeProbe(
+  read: (path: string) => Buffer | null,
+  counter?: { reads: number; headBytes: number[] },
+): UntrackedProbe {
+  return {
+    async stat(path) {
+      const bytes = read(path);
+      return bytes === null ? null : { size: bytes.length, mtimeMs: 1 };
+    },
+    async read(path, maxBytes) {
+      const bytes = read(path);
+      if (bytes === null) return null;
+      if (counter !== undefined) {
+        counter.reads += 1;
+        if (maxBytes !== null) counter.headBytes.push(maxBytes);
+      }
+      return maxBytes === null ? bytes : bytes.subarray(0, maxBytes);
+    },
+  };
+}
 
 /** 假 git：args → 预设输出。没预设到的 args 抛（测试写错立刻暴露）。 */
 function fakeGit(scripts: Record<string, { code?: number; stdout: string }>): GitRunner {
@@ -63,12 +86,12 @@ describe("gitReviewList", () => {
       "diff --no-renames --relative --numstat": { stdout: "2\t1\tsrc/a.ts\n0\t5\tgone.md\n" },
     });
     // 假读盘：new.txt 两行文本；bin.dat 带 NUL → binary；读不到的路径跳过
-    const readUntracked = async (path: string): Promise<Buffer | null> => {
+    const probe = fakeProbe((path) => {
       if (path.endsWith("new.txt")) return Buffer.from("one\ntwo\n", "utf8");
       if (path.endsWith("bin.dat")) return Buffer.from([0, 1, 2]);
       return null;
-    };
-    const list = await gitReviewList(runner, "/w", "unstaged", readUntracked);
+    });
+    const list = await gitReviewList(runner, "/w", "unstaged", probe);
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
     assert.deepEqual(
@@ -129,8 +152,8 @@ describe("gitReviewList", () => {
       },
       "diff --no-renames --relative --numstat": { stdout: "1\t0\tinside.ts\n" },
     });
-    const readUntracked = async (path: string): Promise<Buffer | null> => Buffer.from(`disk:${path}`, "utf8");
-    const list = await gitReviewList(runner, "/repo/sub", "unstaged", readUntracked);
+    const probe = fakeProbe((path) => Buffer.from(`disk:${path}`, "utf8"));
+    const list = await gitReviewList(runner, "/repo/sub", "unstaged", probe);
     assert.equal(list.kind, "ok");
     if (list.kind !== "ok") return;
     assert.deepEqual(list.entries.map((entry) => entry.path), ["inside.ts", "inside.txt"]);
