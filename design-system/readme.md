@@ -104,6 +104,11 @@ the English copy; the Chinese copy follows the same voice.
   order, in three short sentences.
 - **Refusals explain the blocker, not the rule.** "There are running agents in this workspace. Close
   them before removing." "This project is not a Git repository, cannot enable workspaces."
+- **A blocking notice ends with an exit.** The line under the transcript that says why you can't
+  go on also says where to go: one sentence naming the blocker, then a text button at its end
+  ("No model to send with yet. Your draft stays here. **Add a provider**"). Notices are quiet
+  lines — `--font-size-sm`, text on the glyph hem, a 12px icon hanging just left of it, the exit in
+  primary ink, semibold, hairline underline (`.notice-exit`). No card, no new colour.
 - **Placeholders invite, they don't instruct.** The composer reads "Ask anything, or start a task";
   a name field reads "Enter branch or workspace name".
 - **Interpolation is plain and terse**: "Switched to {name}", "{count} more sessions…", "{days}d ago",
