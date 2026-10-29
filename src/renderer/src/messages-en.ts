@@ -201,6 +201,8 @@ export const en = {
     returnToWorkspaceHint: "Move it back to the workspace it came from",
     statusMuted: "Not used",
     statusStale: "Outdated",
+    /** 记忆库底部的折叠：过时 / 停用的条目收在这里，不和在用的混排 */
+    inactiveFold: (count: number) => `Outdated or not used · ${count}`,
     edit: "Edit",
     save: "Save",
     cancel: "Cancel",
