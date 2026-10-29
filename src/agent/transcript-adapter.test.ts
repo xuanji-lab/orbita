@@ -293,6 +293,28 @@ describe("TranscriptAdapter", () => {
     assert.ok(!frames.some((f) => f.type === "assistant_delta"), "不该造出假的增量帧");
   });
 
+  test("start 帧的 partial 已带着后面的增量：整条重发不抄那截，块开头不重复", () => {
+    // pi 的 openai-completions：push(thinking_start) 时 partial 是同一个可变对象，
+    // 处理到它时第一段（甚至几段）增量已经拼进去了
+    const ahead = assistant([{ type: "thinking", thinking: "用户要我" }]);
+    const both = assistant([{ type: "thinking", thinking: "用户要我看" }, { type: "text", text: "好的" }]);
+    const { transcript } = replay([
+      { type: "message_start", message: assistant([]) },
+      { type: "message_update", message: ahead, assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } },
+      { type: "message_update", message: ahead, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "用户" } },
+      { type: "message_update", message: ahead, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "要我" } },
+      { type: "message_update", message: both, assistantMessageEvent: { type: "text_start", contentIndex: 1 } },
+      { type: "message_update", message: both, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "看" } },
+      { type: "message_update", message: both, assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "好的" } },
+    ]);
+    const item = transcript.at(-1);
+    assert.ok(item !== undefined && item.role === "assistant");
+    assert.deepEqual(item.content, [
+      { type: "thinking", thinking: "用户要我看" },
+      { type: "text", text: "好的" },
+    ]);
+  });
+
   test("没有 message_start 就来的 update / end 被丢弃，不产生孤儿帧", () => {
     const adapter = new TranscriptAdapter(deps);
     assert.deepEqual(
