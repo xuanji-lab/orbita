@@ -38,7 +38,6 @@
      Light theme is white + blue; the dark theme is black + yellow. */
   --color-accent: #1d4ed8;
   --color-accent-strong: #16379c;
-  --color-accent-soft: #e7eefd;
   /* text/glyph colour on a filled accent surface */
   --color-accent-fg: #ffffff;
 
@@ -61,28 +60,14 @@
      and editor badges with it. Kept as quiet as the rest of the status set. */
   --color-success: #1a7f37;
   --color-success-soft: color-mix(in srgb, var(--color-success) 16%, transparent);
-  --color-success-bg: #f0fdf4;
-  --color-success-border: #bbf7d0;
 
   /* chat surfaces */
   --color-chat-card-bg: #fafafa;
   --color-chat-muted-bg: #f4f4f5;
-  --color-chat-control-bg: #ffffff;
   --color-chat-table-bg: #ffffff;
   --color-chat-link: #2762ea;
-  --color-code-bg: #111418;
-  --color-code-text: #d1d5db;
 
-  /* semantic aliases */
-  --surface-app: var(--color-bg-app);
-  --surface-card: var(--color-bg-panel);
-  --surface-muted: var(--color-bg-muted);
-  --text-body: var(--color-text-primary);
-  --text-quiet: var(--color-text-secondary);
-  --text-faint: var(--color-text-tertiary);
-  --border-hairline: var(--color-border-subtle);
-  --action-primary: var(--color-accent);
-  --action-primary-hover: var(--color-accent-strong);  /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
+  /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
      共享类别色——文件类型图标（fileIconTone）与工具胶囊（skill 绿、MCP 蓝；橙留给
      以后的命令）同用一组，之后材料方块（Excel / Doc / PPT）也接进来。文件名文字仍
      是正墨；胶囊用法是淡底 + 同色描边（color-mix 派生，不另立值）。不借 accent /
@@ -143,7 +128,6 @@
   --color-border-strong: rgba(255, 255, 255, 0.16);
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
-  --color-accent-soft: rgba(214, 194, 69, 0.08);
   --color-accent-fg: #1b1a15;
   --color-mode-active-bg: rgba(214, 194, 69, 0.08);
   --color-mode-active-fg: #d6c245;
@@ -155,11 +139,8 @@
   --color-info: #52a8ff;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
-  --color-success-bg: #12251a;
-  --color-success-border: #1d4429;
   --color-chat-card-bg: #2c2c2e;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
-  --color-chat-control-bg: #2c2c2e;
   --color-chat-table-bg: #151517;
   --color-chat-link: #52a8ff;  /* 类别色（同明档，换亮值；读法见 readme *Category colours* 与亮档注释）：三色在黛 /
      玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
@@ -198,7 +179,6 @@
   --color-border-strong: rgba(255, 255, 255, 0.16);
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
-  --color-accent-soft: rgba(214, 194, 69, 0.08);
   --color-accent-fg: #1b1a15;
   --color-mode-active-bg: rgba(214, 194, 69, 0.08);
   --color-mode-active-fg: #d6c245;
@@ -210,11 +190,8 @@
   --color-info: #52a8ff;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
-  --color-success-bg: #12251a;
-  --color-success-border: #1d4429;
   --color-chat-card-bg: #262626;
   --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
-  --color-chat-control-bg: #262626;
   --color-chat-table-bg: #161616;
   --color-chat-link: #52a8ff;  /* 类别色（同明档，换亮值；读法见 readme *Category colours* 与亮档注释）：三色在黛 /
      玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
@@ -251,7 +228,6 @@
   --color-border-strong: #c9c8bf;
   --color-accent: #3b7a55;
   --color-accent-strong: #2f6444;
-  --color-accent-soft: rgba(59, 122, 85, 0.1);
   --color-accent-fg: #ffffff;
   --color-mode-active-bg: rgba(59, 122, 85, 0.1);
   --color-mode-active-fg: #2a6041;
@@ -263,11 +239,8 @@
   --color-info: #22345a;
   --color-info-fg: #ffffff;
   --color-success: #2e7d4f;
-  --color-success-bg: #eef7f0;
-  --color-success-border: #bfe0c9;
   --color-chat-card-bg: #ffffff;
   --color-chat-muted-bg: #f4f4ef;
-  --color-chat-control-bg: #ffffff;
   --color-chat-table-bg: #ffffff;
   --color-chat-link: #22345a;
   /* 纸面：绿格线、红笔、首页 slogan 的红田字格、输入框里垫在英文下的修正液
@@ -311,7 +284,6 @@
   --color-border-strong: #c9c8bf;
   --color-accent: #2f4f7f;
   --color-accent-strong: #243d63;
-  --color-accent-soft: rgba(47, 79, 127, 0.1);
   --color-accent-fg: #ffffff;
   --color-mode-active-bg: rgba(47, 79, 127, 0.1);
   --color-mode-active-fg: #2f4f7f;
@@ -323,11 +295,8 @@
   --color-info: #2f4f7f;
   --color-info-fg: #ffffff;
   --color-success: #2e7d4f;
-  --color-success-bg: #eef7f0;
-  --color-success-border: #bfe0c9;
   --color-chat-card-bg: #ffffff;
   --color-chat-muted-bg: #f4f4ef;
-  --color-chat-control-bg: #ffffff;
   --color-chat-table-bg: #ffffff;
   --color-chat-link: #2f4f7f;
   /* 纸面：输入框的蓝横线与红页边线；首页批语的红笔 */

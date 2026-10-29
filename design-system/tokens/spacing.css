@@ -16,9 +16,8 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 2px); /* every glass surface, all three layers */
   --radius-pill: 999px;
-  /* solid composer + user bubble use a literal 14px, not a scale step.
-     the glass composer is a glass card first, so it takes --radius-xl. */
-  --radius-composer: 14px;
+  /* the user bubble is the one literal off the scale. the composer is a glass
+     card first, so it takes --radius-xl like every other glass card (2026-08-25). */
   --radius-bubble: 14px;
 
   --control-height-xs: 24px;
@@ -40,13 +39,9 @@
   --titlebar-capsule-top: 9px; /* 胶囊上沿 = 25 − 32/2 */
   --titlebar-control: 28px;  /* 胶囊内的圆格（quiet-control） */
   --titlebar-field: 24px;    /* 胶囊内嵌的筛选框 / 选择 / 页签 */
-  --titlebar-icon: 16px;     /* 胶囊内的 lucide 图标 */
-  --toolbar-inset: 12px;     /* 左胶囊左缘（darwin 在渲染层覆写为红绿灯右侧 80px） */
 
   /* layout */
-  --sidebar-rail-width: 48px;
   --content-max-width: 1000px;
-  --app-card-max-width: 1080px;
   /* 用户气泡左侧留白：气泡从右往左伸，最宽到「内容列 - 这么宽」。按列宽比例走，
      窄窗口不至于只剩一条缝、宽窗口不至于空一大片。agent 回复不留右白，始终贴满整列
      （侧栏挤窄时它本来就贴边，一直贴边才统一——2026-10-10 用户裁决） */

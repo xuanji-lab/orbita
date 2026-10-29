@@ -234,6 +234,51 @@ describe("design-tokens —— var(--x) 引用都要有声明", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 反向检查：设计系统声明的 token 都得有人用
+// ---------------------------------------------------------------------------
+
+/**
+ * `design-system/tokens/*.css` 里声明了、却没有任何地方引用的 token 是**假陈述**：
+ * 它告诉读的人「这里有这么一个语义」，而渲染层从没按它画过（2026-10-29 清出 26 个——
+ * `--surface-*` / `--text-*` / `--action-*` 一整组别名、只剩名字的 `--toolbar-inset`、
+ * 没人用的 `--shadow-drawer` 等）。消费者纪律（AGENTS.md）落到 token 上就是这一条。
+ *
+ * 引用算：任何 `var(--x)`（tokens 自己、渲染层 css、ts/tsx），以及 ts/tsx 里以字符串出现的
+ * `"--x"`（`getPropertyValue` / `setProperty` / style 对象键）。
+ *
+ * 豁免（加条目必须写清理由）：
+ */
+const UNUSED_TOKEN_EXEMPTIONS = new Map<string, string>([
+  ["list-item-default", "行高刻度 32 / 36 / 48 的中间一档，刻度完整比按现用量裁剪更好读"],
+  ["glass-alpha", "玻璃阶梯的那个 alpha 数本身；--glass-bg 用字面量写出同一个值，readme *Transparency* 引它"],
+  ["color-text-on-dark", "readme *Caveats* 指定的契约：永远压在深色地上的字（遮罩 / toast）用它"],
+  ["color-info-fg", "实底状态面自带前景色的契约（与 danger-fg / accent-fg 成组），readme *Colour* 引它"],
+]);
+
+const TS_STRING_TOKEN_RE = /["'`]--([a-zA-Z0-9-]+)["'`]/g;
+
+describe("design-tokens —— 设计系统声明的 token 都有引用", () => {
+  test("tokens/*.css 里没有声明了却没人用的 token", () => {
+    const referenced = new Set<string>(allRefs.map((u) => u.name));
+    for (const file of rendererTsFiles) {
+      for (const m of readClean(file, true).matchAll(TS_STRING_TOKEN_RE)) referenced.add(group1(m));
+    }
+    const unused: string[] = [];
+    for (const file of tokenCssFiles) {
+      const lines = readClean(file, false).split("\n");
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(DECL_CSS_RE)) {
+          const name = group1(m);
+          if (referenced.has(name) || UNUSED_TOKEN_EXEMPTIONS.has(name)) continue;
+          unused.push(`  --${name}  ${relPath(file)}:${i + 1}`);
+        }
+      });
+    }
+    assert.deepEqual(unused, [], `以下 token 声明了但没有任何引用（删掉，或在豁免表写清理由）：\n${unused.join("\n")}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 字号检查：渲染层只按角色取档，不写像素
 // ---------------------------------------------------------------------------
 

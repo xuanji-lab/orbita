@@ -7,7 +7,7 @@
  * （左胶囊 · 会话胶囊 · 右栏胶囊 · 右栏开关）。所有胶囊同高（--titlebar-capsule），
  * 上沿 --titlebar-capsule-top——中心钉在红绿灯中心线 y=25（推导见 window-tools.ts）。
  * 胶囊里的格全部走顶部栏 token：圆格 --titlebar-control、内嵌框 --titlebar-field、
- * 图标 --titlebar-icon、标题字 --font-size-titlebar；例外（更小的箭头 / ✕ / 状态点）
+ * 图标 16（Icon 的 size）、标题字 --font-size-titlebar；例外（更小的箭头 / ✕ / 状态点）
  * 由调用处显式给小号，不用作用域兜底——结构守卫（只有胶囊）+ 共享配方已把漏网拦死。
  */
 
