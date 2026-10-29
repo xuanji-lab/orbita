@@ -36,7 +36,10 @@ export async function downloadWithFallback(input: {
   signal?: AbortSignal;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const errors: string[] = [];
+  // 函数而非局部常量：取消随时可能发生，每次都要现读（也避开 TS 跨 await 的窄化误判）
+  const cancelled = (): boolean => input.signal?.aborted === true;
   for (const source of input.sources) {
+    if (cancelled()) break;
     const outcome = await downloadFromSource({
       source,
       targetPath: input.targetPath,
@@ -48,9 +51,20 @@ export async function downloadWithFallback(input: {
     });
     if (outcome.ok) return outcome;
     errors.push(`${source}: ${outcome.error}`);
-    input.onProgress({ phase: "failed", source, received: 0, total: input.sizeBytes, error: outcome.error });
+    if (cancelled()) break;
   }
-  return { ok: false, error: errors.join("；") };
+  const error = errors.join("；") || "下载已取消";
+  // 只在所有源都试过且失败时广播一次 failed（切镜像途中不闪「失败」）；用户取消不算失败
+  if (!cancelled()) {
+    input.onProgress({
+      phase: "failed",
+      source: input.sources[input.sources.length - 1] ?? "",
+      received: 0,
+      total: input.sizeBytes,
+      error,
+    });
+  }
+  return { ok: false, error };
 }
 
 async function downloadFromSource(input: {
@@ -80,9 +94,12 @@ async function downloadFromSource(input: {
         const { done, value } = await reader.read();
         if (done) break;
         if (value === undefined) continue;
+        received += value.byteLength;
+        if (received > input.sizeBytes) {
+          throw new Error(`超过声明大小：期望 ${input.sizeBytes} 字节，已收到 ${received}`);
+        }
         hash.update(value);
         await handle.write(value);
-        received += value.byteLength;
         // 进度按 1MB 一报：310MB 逐块报会刷爆 IPC
         if (received - lastReport >= 1_000_000 || received === input.sizeBytes) {
           lastReport = received;

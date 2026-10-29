@@ -97,6 +97,7 @@ export class MemoryServiceCore {
   private backfillInFlight: Promise<void> | null = null;
   /** 模型下载（同一时刻最多一个；幂等回执由调用方处理） */
   private downloadInFlight: Promise<void> | null = null;
+  private downloadAbort: AbortController | null = null;
   private entries: MemoryEntryStore | null = null;
   private episodes: EpisodeStore | null = null;
   private chore: MemoryChoreModel | null = null;
@@ -528,7 +529,12 @@ export class MemoryServiceCore {
 
   /** 设置变了：null = 关（停 llama-server、挂起补算）；换模型 = 清库重算 + 补算。 */
   setVectorConfig(config: MemoryVectorServiceConfig | null): void {
+    // 关闭向量始终要取消下载（即便配置本来已是 null）；换模型也取消（下的是旧模型）
+    if (config === null) this.downloadAbort?.abort();
     const previous = this.vectorConfig?.model.id ?? null;
+    if (previous !== null && config !== null && previous !== config.model.id) {
+      this.downloadAbort?.abort();
+    }
     this.vectorConfig = config;
     if (config === null) {
       this.embedServer?.stop();
@@ -583,13 +589,17 @@ export class MemoryServiceCore {
     sizeBytes: number;
   }): void {
     if (this.downloadInFlight !== null || this.vectorDeps === null) return;
+    const controller = new AbortController();
+    this.downloadAbort = controller;
     this.downloadInFlight = downloadWithFallback({
       sources: input.sources,
       targetPath: input.targetPath,
       sha256: input.sha256,
       sizeBytes: input.sizeBytes,
       fetchImpl: this.vectorDeps.fetchImpl,
-      onProgress: (event) =>
+      signal: controller.signal,
+      onProgress: (event) => {
+        if (controller.signal.aborted) return;
         this.onDownloadProgress({
           requestId: input.requestId,
           phase: event.phase,
@@ -597,12 +607,14 @@ export class MemoryServiceCore {
           received: event.received,
           total: event.total,
           ...(event.error !== undefined ? { error: event.error } : null),
-        }),
+        });
+      },
     })
       .then(() => undefined)
       .catch((cause: unknown) => this.log("[memory] 模型下载抛错", cause))
       .finally(() => {
         this.downloadInFlight = null;
+        if (this.downloadAbort === controller) this.downloadAbort = null;
       });
   }
 

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { MemoryServiceCore, type MemoryCallModel } from "./service-core.ts";
 import { EpisodeStore } from "./episodes.ts";
 import { MemoryEntryStore } from "./entries.ts";
+import type { DownloadFetch } from "./downloader.ts";
 import type { MemoryChoreModel } from "../shared/memory.ts";
 
 const CHORE: MemoryChoreModel = {
@@ -463,7 +464,7 @@ function vectorStub(embed?: (text: string) => number[]) {
           return [seed % 7 + 1, seed % 5, seed % 3, 1];
         }),
       freePort: async () => 8999,
-      fetchImpl: async () => ({ ok: false, status: 0, body: null }),
+      fetchImpl: (async () => ({ ok: false, status: 0, body: null })) as DownloadFetch,
     },
     isRunning: () => running,
   };
@@ -688,4 +689,37 @@ test("startModelDownload：进度事件流出（桩源全挂 → failed 事件�
     if (progress.some((p) => p.phase === "failed")) break;
   }
   assert.ok(progress.some((p) => p.phase === "failed"));
+});
+
+test("关闭向量功能：取消在途模型下载，不发 failed 事件", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  let aborted = false;
+  let started = false;
+  stub.deps.fetchImpl = async (_url, signal) => {
+    started = true;
+    await new Promise<void>((resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new Error("aborted"));
+      }, { once: true });
+    });
+    return { ok: false, status: 0, body: null };
+  };
+  const { core, progress } = vectorCore(dir, stub);
+  await core.init(dir);
+  core.startModelDownload({
+    requestId: "req-cancel",
+    sources: ["https://down.example/m.gguf"],
+    targetPath: join(dir, "vector", "m.gguf"),
+    sha256: "0".repeat(64),
+    sizeBytes: 10,
+  });
+  for (let index = 0; index < 20 && !started; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  core.setVectorConfig(null);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(aborted, true);
+  assert.equal(progress.some((event) => event.phase === "failed"), false);
 });
