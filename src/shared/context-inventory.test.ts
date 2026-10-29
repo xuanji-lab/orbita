@@ -157,17 +157,19 @@ describe("附件组（你附带的）", () => {
     deepStrictEqual(kinds, ["file-ref", "file-ref", "image", "pasted", "quote"]);
 
     const quote = inventory.attach.rows.find((row) => row.kind === "quote");
-    ok(quote !== undefined);
-    ok(quote.label.includes("引用的原文"));
-    strictEqual(quote.detail, "第 2 轮 · agent");
+    ok(quote !== undefined && quote.kind === "quote");
+    strictEqual(quote.text, "引用的原文");
+    strictEqual(quote.quoteTurn, 2);
+    strictEqual(quote.quoteRole, "assistant");
 
     const pastedRow = inventory.attach.rows.find((row) => row.kind === "pasted");
-    strictEqual(pastedRow?.label, "粘贴块");
+    ok(pastedRow !== undefined && pastedRow.kind === "pasted");
+    strictEqual(pastedRow.chars, Array.from("粘贴的一大段").length);
 
     const refs = inventory.attach.rows.filter((row) => row.kind === "file-ref");
     strictEqual(refs.length, 2);
-    ok(refs.some((row) => row.label === "/ws/proj/design-system/readme.md" && row.detail === null));
-    ok(refs.some((row) => row.label === "/ws/proj/docs" && row.detail === "目录"));
+    ok(refs.some((row) => row.kind === "file-ref" && row.path === "/ws/proj/design-system/readme.md" && !row.dir));
+    ok(refs.some((row) => row.kind === "file-ref" && row.path === "/ws/proj/docs" && row.dir));
 
     const image = inventory.attach.rows.find((row) => row.kind === "image");
     strictEqual(image?.count, 2);
@@ -189,10 +191,10 @@ describe("文件组", () => {
     ok(inside1 !== undefined && !inside1.outside);
     strictEqual(inside1.rows[0]?.name, "readme.md");
     strictEqual(inside1.rows[0]?.path, "design-system/readme.md");
-    deepStrictEqual(inside1.rows[0]?.ranges, ["全文"]);
+    deepStrictEqual(inside1.rows[0]?.ranges, [{ kind: "all" }]);
 
     const inside2 = inventory.files.dirs.find((dir) => dir.dir === "src/shared");
-    deepStrictEqual(inside2?.rows[0]?.ranges, ["L1–100"]);
+    deepStrictEqual(inside2?.rows[0]?.ranges, [{ kind: "lines", from: 1, to: 100 }]);
 
     const outside = inventory.files.dirs.find((dir) => dir.outside);
     ok(outside !== undefined);
@@ -209,7 +211,7 @@ describe("文件组", () => {
     const inventory = buildContextInventory({ records, cwd: CWD, scope: "task" });
     const rows = inventory.files.dirs.find((dir) => dir.dir === ".")?.rows ?? [];
     strictEqual(rows.length, 1);
-    deepStrictEqual(rows[0]?.ranges, ["全文", "L200–249"]);
+    deepStrictEqual(rows[0]?.ranges, [{ kind: "all" }, { kind: "lines", from: 200, to: 249 }]);
     strictEqual(rows[0]?.turn, 1);
   });
 
@@ -221,12 +223,23 @@ describe("文件组", () => {
     const inventory = buildContextInventory({ records, cwd: CWD, scope: "task" });
     const pdf = inventory.files.dirs.find((dir) => dir.dir === ".")?.rows[0];
     strictEqual(pdf?.name, "paper.pdf");
-    deepStrictEqual(pdf?.ranges, ["第 3–7 页"]);
+    deepStrictEqual(pdf?.ranges, [{ kind: "pages", from: 3, to: 7 }]);
     strictEqual(inventory.files.dirs.reduce((n, dir) => n + dir.rows.length, 0), 1);
 
     const skill = inventory.skills.rows[0];
     strictEqual(skill?.name, "jarvis-roadmap");
     strictEqual(skill?.how, "read");
+  });
+
+  it("读取范围：pdf 不给范围 = 默认窗口；只给起点 = 开区间", () => {
+    const records = [
+      ...turnWithTool("read_pdf", { path: "/ws/proj/b.pdf" }, "默认窗口"),
+      ...turnWithTool("read", { path: "/ws/proj/c.ts", offset: 40 }, "从 40 行起"),
+    ];
+    const inventory = buildContextInventory({ records, cwd: CWD, scope: "task" });
+    const rows = inventory.files.dirs.flatMap((dir) => dir.rows);
+    deepStrictEqual(rows.find((row) => row.name === "b.pdf")?.ranges, [{ kind: "pages-default" }]);
+    deepStrictEqual(rows.find((row) => row.name === "c.ts")?.ranges, [{ kind: "lines", from: 40, to: null }]);
   });
 
   it("grep / find / ls 不进文件行，按工具小计", () => {
@@ -384,6 +397,21 @@ describe("压缩灰显与视野", () => {
     const row = inventory.files.dirs.flatMap((dir) => dir.rows).find((r) => r.name === "a.ts");
     strictEqual(row?.gone, false);
     strictEqual(row?.turn, 1);
+    // 量只算还在上下文里的那次：压缩前那次已折进摘要，算进来会虚高
+    strictEqual(row?.tokens, estimateContextTokens("压缩后读的"));
+  });
+
+  it("全部出现都已压缩：报当时的总量（灰显时告诉用户曾经装过多少）", () => {
+    const records = [
+      ...turnWithTool("read", { path: "/ws/proj/a.ts" }, "第一次读的内容"),
+      ...turnWithTool("read", { path: "/ws/proj/a.ts", offset: 5 }, "第二次"),
+      compacted(),
+      userItem("继续"),
+    ];
+    const inventory = buildContextInventory({ records, cwd: CWD, scope: "task" });
+    const row = inventory.files.dirs.flatMap((dir) => dir.rows).find((r) => r.name === "a.ts");
+    strictEqual(row?.gone, true);
+    strictEqual(row?.tokens, estimateContextTokens("第一次读的内容") + estimateContextTokens("第二次"));
   });
 
   it("turn 视野只留当前轮的出现，token 按出现重算", () => {
@@ -400,7 +428,7 @@ describe("压缩灰显与视野", () => {
     strictEqual(taskRow?.tokens, estimateContextTokens(long) + estimateContextTokens("短内容"));
     strictEqual(turnRow?.tokens, estimateContextTokens("短内容"));
     strictEqual(turnRow?.turn, 2);
-    deepStrictEqual(turnRow?.ranges, ["全文"]);
+    deepStrictEqual(turnRow?.ranges, [{ kind: "all" }]);
     // 第一轮独占的条目在 turn 视野里不出现
     strictEqual(turn.attach.rows.length, 0);
     strictEqual(turn.currentTurn, 2);

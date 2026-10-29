@@ -75,15 +75,6 @@ export function countCharKinds(text: string): { chars: number; cjk: number } {
  */
 export const IMAGE_TOKEN_ESTIMATE = 1200;
 
-/** 附件引用行等给 UI 的截断长度（码点）。 */
-const LABEL_MAX_CHARS = 40;
-
-function clampLabel(text: string): string {
-  const chars = Array.from(text);
-  if (chars.length <= LABEL_MAX_CHARS) return text;
-  return `${chars.slice(0, LABEL_MAX_CHARS).join("")}…`;
-}
-
 /** 工具入参里取一个字符串字段（入参是模型的 JSON，逐字段验形状，不猜）。 */
 function stringField(input: unknown, key: string): string | undefined {
   if (typeof input !== "object" || input === null) return undefined;
@@ -127,7 +118,8 @@ function cardField(details: Record<string, unknown> | null, card: string, key: s
  * 行类型：每组一行一个条目，跨轮合并（同一文件读两次 = 一行、两段范围）。
  * turn = 首次出现的轮号（按用户消息计，1 起；通道投递同 user 计）。
  * gone = 该条目全部出现都在最后一条压缩界碑之前（已折叠进摘要的近似）。
- * tokens = 估算，口径见 estimateContextTokens。
+ * tokens = 估算，口径见 estimateContextTokens；部分出现已被压缩的行只算仍在上下文里的那几次，
+ * 全部压出的行（gone）报当时的总量。
  * ------------------------------------------------------------------------- */
 
 export interface ContextRowBase {
@@ -136,16 +128,35 @@ export interface ContextRowBase {
   tokens: number;
 }
 
+/**
+ * 「你附带的」一项的内容（语言无关：文案由界面按语言拼，这里只给事实）。
+ * - quote：引用的原文、出自第几轮、谁说的（turn 缺席 = 旧格式没记轮号）；
+ * - pasted：粘贴块的字数（码点）；
+ * - file-ref：清单里点名的路径，dir = 点名的是目录；
+ * - image：图片（张数在 count）。
+ */
+export type ContextAttachItem =
+  | { kind: "quote"; text: string; quoteTurn: number | null; quoteRole: "user" | "assistant" }
+  | { kind: "pasted"; chars: number }
+  | { kind: "file-ref"; path: string; dir: boolean }
+  | { kind: "image" };
+
 /** 「你附带的」：用户消息里随正文进入上下文的东西。 */
-export interface ContextAttachRow extends ContextRowBase {
-  kind: "quote" | "pasted" | "file-ref" | "image";
-  /** 显示主标：引用摘句 / 路径 / 「粘贴块」/「图片」 */
-  label: string;
-  /** 副标（来源轮、字数、张数等；没有就是 null） */
-  detail: string | null;
-  /** 同条目合并的个数：图片 = 一轮几张，文件引用 = 引用几次，引用/粘贴恒 1 */
-  count: number;
-}
+export type ContextAttachRow = ContextRowBase &
+  ContextAttachItem & {
+    /** 同条目合并的个数：图片 = 一轮几张，文件引用 = 引用几次，引用/粘贴恒 1 */
+    count: number;
+  };
+
+/**
+ * 一次读取的范围（语言无关）：all = read 没给 offset/limit 读全文；lines / pages 是
+ * 1 起的闭区间，to 为 null = 只给了起点；pages-default = read_pdf 没给范围（默认 20 页窗口）。
+ */
+export type ContextReadRange =
+  | { kind: "all" }
+  | { kind: "lines"; from: number; to: number | null }
+  | { kind: "pages"; from: number; to: number | null }
+  | { kind: "pages-default" };
 
 /** 「文件」组的一行：一个被读取工具碰过的文件。 */
 export interface ContextFileRow extends ContextRowBase {
@@ -153,8 +164,8 @@ export interface ContextFileRow extends ContextRowBase {
   path: string;
   name: string;
   outside: boolean;
-  /** 读取范围标签（"全文" / "L1–100" / "第 3–7 页"），多次读取去重后按首次顺序 */
-  ranges: string[];
+  /** 读取范围，多次读取去重后按首次顺序 */
+  ranges: ContextReadRange[];
 }
 
 export interface ContextFileDir {
@@ -294,24 +305,21 @@ interface Accum<T> {
   display: T;
 }
 
-/** read 工具的行范围标签（pi 的 read：offset 1 起行号，limit 行数）。 */
-function readRangeLabel(input: unknown): string {
+/**
+ * 读取范围：read 与 read_docx 的 offset/limit 是行（docx 是块，口径同样是「1 起第几段」，
+ * 界面一律按行号显示——用户要的是「读了哪一截」，不是单位）；read_pdf 的是页。
+ */
+function readRange(input: unknown, unit: "lines" | "pages"): ContextReadRange {
   const offset = numberField(input, "offset");
   const limit = numberField(input, "limit");
-  if (offset === undefined && limit === undefined) return "全文";
-  if (offset !== undefined && limit !== undefined) return `L${Math.floor(offset)}–${Math.floor(offset + limit - 1)}`;
-  if (offset !== undefined) return `L${Math.floor(offset)}–…`;
-  return `L1–${Math.floor(limit ?? 0)}`;
+  if (offset === undefined && limit === undefined) return unit === "pages" ? { kind: "pages-default" } : { kind: "all" };
+  const from = Math.floor(offset ?? 1);
+  const to = limit === undefined ? null : Math.floor((offset ?? 1) + limit - 1);
+  return { kind: unit, from, to };
 }
 
-/** read_pdf 的页范围标签（offset 1 起页码，limit 页数；不给 = 默认 20 页窗口）。 */
-function pdfRangeLabel(input: unknown): string {
-  const offset = numberField(input, "offset");
-  const limit = numberField(input, "limit");
-  if (offset === undefined && limit === undefined) return "默认 20 页";
-  if (offset !== undefined && limit !== undefined) return `第 ${Math.floor(offset)}–${Math.floor(offset + limit - 1)} 页`;
-  if (offset !== undefined) return `第 ${Math.floor(offset)} 页起`;
-  return `第 1–${Math.floor(limit ?? 0)} 页`;
+function rangeKey(range: ContextReadRange): string {
+  return range.kind === "lines" || range.kind === "pages" ? `${range.kind}:${range.from}:${range.to ?? ""}` : range.kind;
 }
 
 /** 路径以 `<slug>/SKILL.md` 结尾 = 在读某个技能的正文（渐进披露的按需加载）。 */
@@ -374,8 +382,8 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
   const currentTurn = turn;
 
   // —— 各组累积器 ——
-  const attachRows = new Map<string, Accum<{ kind: ContextAttachRow["kind"]; label: string; detail: string | null; count: number }>>();
-  const fileRows = new Map<string, Accum<{ path: string; name: string; outside: boolean; ranges: string[] }>>();
+  const attachRows = new Map<string, Accum<ContextAttachItem & { count: number }>>();
+  const fileRows = new Map<string, Accum<{ path: string; name: string; outside: boolean; ranges: ContextReadRange[] }>>();
   const searchNotes = new Map<string, { occurrences: Occurrence[]; tool: string }>();
   const webRows = new Map<string, Accum<{ url: string; title: string | null; domain: string | null }>>();
   const taskRows = new Map<string, Accum<{ ref: string; title: string | null; external: boolean; catalog: boolean; rounds: string[] | null }>>();
@@ -405,14 +413,14 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
 
       for (const text of pasted) {
         const { chars } = countCharKinds(text);
-        pushOccurrence(attachRows, `pasted:${itemTurn}:${chars}`, { kind: "pasted", label: "粘贴块", detail: `${chars} 字`, count: 1 }, { turn: itemTurn, gone, tokens: estimateContextTokens(text) });
+        pushOccurrence(attachRows, `pasted:${itemTurn}:${chars}`, { kind: "pasted", chars, count: 1 }, { turn: itemTurn, gone, tokens: estimateContextTokens(text) });
       }
       for (const ref of files) {
         const key = `file-ref:${normalizeSeparators(ref.path)}`;
         const existing = attachRows.get(key);
         const occurrence: Occurrence = { turn: itemTurn, gone, tokens: estimateContextTokens(`- ${ref.path}`) };
         if (existing === undefined) {
-          pushOccurrence(attachRows, key, { kind: "file-ref", label: ref.path, detail: ref.kind === "dir" ? "目录" : null, count: 1 }, occurrence);
+          pushOccurrence(attachRows, key, { kind: "file-ref", path: ref.path, dir: ref.kind === "dir", count: 1 }, occurrence);
         } else {
           existing.occurrences.push(occurrence);
         }
@@ -421,14 +429,13 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
       // 图片块：一轮多张合并一行
       const images = record.content.filter((block) => block.type === "image").length;
       if (images > 0) {
-        pushOccurrence(attachRows, `image:${itemTurn}`, { kind: "image", label: "图片", detail: `${images} 张`, count: images }, { turn: itemTurn, gone, tokens: images * IMAGE_TOKEN_ESTIMATE });
+        pushOccurrence(attachRows, `image:${itemTurn}`, { kind: "image", count: images }, { turn: itemTurn, gone, tokens: images * IMAGE_TOKEN_ESTIMATE });
       }
 
       // 引用块与点名指令都长在正文里
       const { quotes, text } = parseQuotedMessage(body);
       for (const quote of quotes) {
-        const detail = `第 ${quote.turn ?? "?"} 轮 · ${quote.role === "user" ? "用户" : "agent"}`;
-        pushOccurrence(attachRows, `quote:${itemTurn}:${quote.text}`, { kind: "quote", label: `「${clampLabel(quote.text)}」`, detail, count: 1 }, { turn: itemTurn, gone, tokens: estimateContextTokens(quote.text) });
+        pushOccurrence(attachRows, `quote:${itemTurn}:${quote.text}`, { kind: "quote", text: quote.text, quoteTurn: quote.turn ?? null, quoteRole: quote.role, count: 1 }, { turn: itemTurn, gone, tokens: estimateContextTokens(quote.text) });
       }
       for (const token of findInvocationTokens(text)) {
         // 指令块（<mentioned_tools>）随消息进上下文，量级是一行点名指令
@@ -465,7 +472,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
         pushOccurrence(skillRows, `read:${slug.toLowerCase()}`, { name: slug, how: "read" }, occurrence);
         continue;
       }
-      const range = name === "read_pdf" ? pdfRangeLabel(params) : readRangeLabel(params);
+      const range = readRange(params, name === "read_pdf" ? "pages" : "lines");
       const key = `file:${normalized}`;
       const existing = fileRows.get(key);
       if (existing === undefined) {
@@ -473,7 +480,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
         pushOccurrence(fileRows, key, { path: shown.display, name: pathTail(normalized), outside: shown.outside, ranges: [range] }, occurrence);
       } else {
         existing.occurrences.push(occurrence);
-        if (!existing.display.ranges.includes(range)) existing.display.ranges.push(range);
+        if (!existing.display.ranges.some((seen) => rangeKey(seen) === rangeKey(range))) existing.display.ranges.push(range);
       }
       continue;
     }
@@ -571,6 +578,15 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     scope === "task" ? accum.occurrences : accum.occurrences.filter((occ) => occ.turn === currentTurn);
 
   const sum = (values: readonly number[]): number => values.reduce((total, value) => total + value, 0);
+  /**
+   * 一行的量：还有出现留在上下文里 = 只算这些（被压缩掉的那几次已不在上下文，算进来
+   * 会虚高——2026-10-29 实机：一个 MCP 检索调了多次、跨过压缩界碑，整行报 40k）；
+   * 全部压出去了 = 报当时的总量（灰显，告诉用户「这里曾经装过多少」）。
+   */
+  const rowTokens = (occs: readonly Occurrence[]): number => {
+    const live = occs.filter((occ) => !occ.gone);
+    return sum((live.length > 0 ? live : occs).map((occ) => occ.tokens));
+  };
 
   const attach: ContextAttachRow[] = [];
   for (const accum of attachRows.values()) {
@@ -580,7 +596,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (first === undefined) continue;
     // 文件引用的 count = 视野内出现次数；其余（图片张数 / 单条引用）用显示值
     const count = accum.display.kind === "file-ref" ? occs.length : accum.display.count;
-    attach.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)), ...accum.display, count });
+    attach.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs), ...accum.display, count });
   }
 
   const fileRowList: ContextFileRow[] = [];
@@ -589,7 +605,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (occs.length === 0) continue;
     const first = occs[0];
     if (first === undefined) continue;
-    fileRowList.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)), ...accum.display });
+    fileRowList.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs), ...accum.display });
   }
 
   const searches: ContextSearchNote[] = [];
@@ -598,7 +614,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (occs.length === 0) continue;
     const first = occs[0];
     if (first === undefined) continue;
-    searches.push({ tool: note.tool, count: occs.length, turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)) });
+    searches.push({ tool: note.tool, count: occs.length, turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs) });
   }
 
   const webRowsFinal: ContextWebRow[] = [];
@@ -607,7 +623,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (occs.length === 0) continue;
     const first = occs[0];
     if (first === undefined) continue;
-    webRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)), ...accum.display });
+    webRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs), ...accum.display });
   }
 
   const taskRowsFinal: ContextTaskRow[] = [];
@@ -616,7 +632,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (occs.length === 0) continue;
     const first = occs[0];
     if (first === undefined) continue;
-    taskRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)), ...accum.display });
+    taskRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs), ...accum.display });
   }
 
   const mcpRowsFinal: ContextMcpRow[] = [];
@@ -625,7 +641,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (occs.length === 0) continue;
     const first = occs[0];
     if (first === undefined) continue;
-    mcpRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)), calls: occs.length, ...accum.display });
+    mcpRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs), calls: occs.length, ...accum.display });
   }
 
   const skillRowsFinal: ContextSkillRow[] = [];
@@ -634,7 +650,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     if (occs.length === 0) continue;
     const first = occs[0];
     if (first === undefined) continue;
-    skillRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: sum(occs.map((occ) => occ.tokens)), ...accum.display });
+    skillRowsFinal.push({ turn: first.turn, gone: occs.every((occ) => occ.gone), tokens: rowTokens(occs), ...accum.display });
   }
 
   // 文件组按目录归组（目录保首次出现顺序；cwd 根的 "." 排最前）
