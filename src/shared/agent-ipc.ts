@@ -116,6 +116,13 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
+  /** 记忆库（实验功能 memory-system）的五条读写通道。读在主进程（纯模块直读
+   * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
+  memoryScopes: "memory:scopes",
+  memoryEntries: "memory:entries",
+  memorySession: "memory:session",
+  memoryPending: "memory:pending",
+  memoryMutate: "memory:mutate",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -1211,6 +1218,12 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
+ * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
+ * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
+ */
+| { type: "memoryChanged" }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
