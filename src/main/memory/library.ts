@@ -185,9 +185,9 @@ export class MemoryLibrary {
 
   /** 事件段快照索引（归档 + 待提取——开段还没有条目引用它，读了也无用）。 */
   private async readEpisodes(): Promise<Map<string, MemoryEpisode>> {
-    const [archived, all] = await Promise.all([this.episodes.listArchived(), this.episodes.listAll()]);
+    const [archived, pending] = await Promise.all([this.episodes.listArchived(), this.episodes.listPending()]);
     const index = new Map<string, MemoryEpisode>();
-    for (const episode of [...archived, ...all.pending]) index.set(episode.episodeId, episode);
+    for (const episode of [...archived, ...pending]) index.set(episode.episodeId, episode);
     return index;
   }
 

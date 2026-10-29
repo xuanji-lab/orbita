@@ -235,6 +235,23 @@ test("listEntries / sessionView：每个条目层文件只读一遍，结果照�
   for (const [path, count] of counts) assert.equal(count, 1, `sessionView 把 ${path} 读了 ${count} 遍`);
 });
 
+test("listEntries：原话片段只读归档与待提取段，不读各会话的开段文件", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  await seed(dir);
+  // 待提取段里的条目：原话片段从 pending/ 取
+  const pendingEpisode = { ...EPISODE, episodeId: "ep_pending", turns: [{ turn: 1, at: 1000, userText: "待提取段里的原话", assistantText: "嗯" }] };
+  await new EpisodeStore(dir).savePending({ ...pendingEpisode, extracted: { fact: true, preference: false, insight: false } });
+  await new MemoryEntryStore(dir).appendScope("ws-1", pendingEpisode, [
+    { type: "fact", text: "待提取段里提出的事实", keywords: [], turns: [1] },
+  ]);
+  // 一个读不了的「开段文件」（这里是个目录）：读它就会 EISDIR——记忆库列表不该碰开段
+  await mkdir(join(dir, "episodes", "unreadable-open.json"), { recursive: true });
+  const items = await makeLibrary(dir).listEntries({ token: "all" });
+  assert.equal(items.length, 5);
+  assert.equal(items.find((item) => item.entry.text === "待提取段里提出的事实")?.quote, "待提取段里的原话");
+  assert.equal(items.find((item) => item.entry.turns.includes(2))?.quote, "还是一次合一个吧"); // 归档段照旧
+});
+
 test("sessionView：meta 读不到 → token null 但视图照常（零轮）", async () => {
   const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
   const library = makeLibrary(dir, { metas: {} });
