@@ -9,7 +9,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * layer 1 上。wafo 2026-09-12 裁定保持 32px 不加宽到 48——「左右对称」不取字面
  * 同宽，只保留「都是无面的窄条」。
  *
- * 顶部：四个入口（Files / Skills / MCP / 辅助对话），**共用一个面板位**（2026-09-12 裁决）：
+ * 顶部：几个入口（文件 / 审查 / 这条任务 / 能力 / 终端…），**共用一个面板位**（2026-09-12 裁决）：
  * 同一时刻至多点亮一个，再点已点亮的 = 收起。点亮 = 单层
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
@@ -31,8 +31,8 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
 export type RightPanelKind =
   | "files"
   | "review"
-  | "skills"
-  | "mcp"
+  /** 能力：Skills 与 MCP 服务一张列表（2026-10-30 合并，原先是 "skills" | "mcp" 两个面板） */
+  | "abilities"
   | "terminal"
   | "drawer"
   | "subsessions"
@@ -88,8 +88,6 @@ export function RightRail(props: {
   };
 }) {
   const t = useT();
-  /** 能力入口上次开的那页（Skills / MCP），收起再开时回到它 */
-  const lastAbility = useRef<"skills" | "mcp">("skills");
   // 铃铛锚点（外部关闭判定要排除它）+ 弹层开关；开关在本体（右栏不重建），不随内容变
   const [bellOpen, setBellOpen] = useState(false);
   const [bellAnchor, setBellAnchor] = useState<HTMLSpanElement | null>(null);
@@ -131,17 +129,12 @@ export function RightRail(props: {
         lit={props.panel === "context"}
         onClick={() => props.onPanel(props.panel === "context" ? null : "context")}
       />
-      {/* Skills 与 MCP 一个入口（2026-10-30）：面板头两个页签切；再点收起，下次开回上次那页 */}
+      {/* 能力（2026-10-30）：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记） */}
       <RailEntryButton
         icon="book-open"
         label={t.rail.abilities}
-        lit={props.panel === "skills" || props.panel === "mcp"}
-        onClick={() => {
-          if (props.panel === "skills" || props.panel === "mcp") {
-            lastAbility.current = props.panel;
-            props.onPanel(null);
-          } else props.onPanel(lastAbility.current);
-        }}
+        lit={props.panel === "abilities"}
+        onClick={() => props.onPanel(props.panel === "abilities" ? null : "abilities")}
       />
       {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
       <RailEntryButton

@@ -41,8 +41,7 @@ import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult 
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
-import { SkillsPanel } from "./features/skills/SkillsPanel";
-import { McpPanel } from "./features/mcp/McpPanel";
+import { AbilitiesPanel } from "./features/abilities/AbilitiesPanel";
 import type { CiteFocusRequest } from "./features/files/cite-focus.ts";
 import { CitationOpenContext } from "./features/chat/citation-context.ts";
 import type { PdfCitation } from "@shared/pdf-quote";
@@ -892,7 +891,7 @@ export function App() {
     tokenPickAnchorRef.current = position;
     setTokenPickerOn(true);
     setTokenPickRequest((n) => n + 1);
-    setRightPanel("skills");
+    setRightPanel("abilities");
     return true;
   }, []);
   const finishTokenPick = useCallback(
@@ -909,28 +908,25 @@ export function App() {
   );
   // 面板被切走 / 关掉（rail 点了别的、× 、全局 Esc）：选取态跟着退，锚点一并丢
   useEffect(() => {
-    if (tokenPickerOn && rightPanel !== "skills" && rightPanel !== "mcp") {
+    if (tokenPickerOn && rightPanel !== "abilities") {
       setTokenPickerOn(false);
       tokenPickAnchorRef.current = null;
     }
   }, [rightPanel, tokenPickerOn]);
-  const skillsPicker: TokenPickerControl = {
+  // Tab 在能力面板里轮换「全部 / 技能 / MCP」页签，不再经这里换面板
+  const abilityPicker: TokenPickerControl = {
     onSelect: finishTokenPick,
     onCancel: () => finishTokenPick(null),
-    onSwitch: () => setRightPanel("mcp"),
     request: tokenPickRequest,
-    workspaceId: session.workspaceId,
   };
-  const mcpPicker: TokenPickerControl = {
-    onSelect: finishTokenPick,
-    onCancel: () => finishTokenPick(null),
-    onSwitch: () => setRightPanel("skills"),
-    request: tokenPickRequest,
-    workspaceId: session.workspaceId,
-  };
+  /** 能力面板的「这个工作区」：主槽会话所在的（首页 = 输入框选着的）；可用性与 Skill 开关都按它 */
+  const abilityWorkspace = useMemo(() => {
+    const found = session.workspaces.find((w) => w.id === session.workspaceId);
+    return found === undefined ? null : { id: found.id, name: found.name };
+  }, [session.workspaces, session.workspaceId]);
 
-  // ── 面板行内「选用」按钮的插入（panel-token.ts）─────────────────
-  // Skills 行 / MCP 卡尾的选用键（RowHoverAction）：token 落到主槽输入框当前
+  // ── 面板行内「插入」按钮的插入（panel-token.ts）─────────────────
+  // 能力面板行上（与 MCP 服务详情里）的插入键：token 落到主槽输入框当前
   // 光标处（从未聚焦过则草稿末尾）、焦点回输入框。与选取的锚点回执分开走：
   // 按钮是浏览态入口，面板不关，可以连插几条
   const [panelInsert, setPanelInsert] = useState<PanelInsertRequest | null>(null);
@@ -992,11 +988,10 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
-  // MCP 面板与 Skills 面板共用这个 hook（servers 也在里面）：只认 skills 的话，
-  // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
+  // 能力面板（Skills + MCP 一张列表）用这个 hook：skills 与 servers 都在里面，面板开着才读盘。
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
   // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
-  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp", session.workspaces);
+  const skills = useSkills(shownPanel === "abilities", session.workspaces);
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
@@ -1283,21 +1278,13 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   memoryFocus={memoryFocus}
                 />
-              ) : shownPanel === "skills" ? (
-                <SkillsPanel
+              ) : shownPanel === "abilities" ? (
+                <AbilitiesPanel
                   skills={skills}
-                  defaultWorkspaceId={session.workspaceId}
+                  workspace={abilityWorkspace}
                   onCreateSkill={createSkillDraft}
-                  picker={tokenPickerOn ? skillsPicker : undefined}
+                  picker={tokenPickerOn ? abilityPicker : undefined}
                   onInsert={insertPanelToken}
-                  onKind={setRightPanel}
-                />
-              ) : shownPanel === "mcp" ? (
-                <McpPanel
-                  skills={skills}
-                  picker={tokenPickerOn ? mcpPicker : undefined}
-                  onInsert={insertPanelToken}
-                  onKind={setRightPanel}
                 />
               ) : shownPanel === "terminal" ? (
                 <TerminalPanel
