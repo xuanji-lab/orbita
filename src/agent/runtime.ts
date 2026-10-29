@@ -36,7 +36,7 @@ import {
   ENABLED_BUILTIN_TOOLS,
   type PiExtensionApi,
 } from "./permission.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
@@ -769,12 +769,14 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉——短命令不受影响，只要求慢命令
  * 别自己设短超时。
  *
- * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
- * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
+ * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS` / `COMMAND_TIMEOUT_DEFAULT_SECONDS`）：
+ * 低于下限的会被抬上来，不填的补默认上限。后半句要讲：模型不知道有这条上限，就会把
+ * 真的要跑一小时以上的命令（长训练、大构建）也不带 timeout 发出去，到点被杀。
  */
 const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
+  "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
+  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
+  `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that.`;
 
 /**
  * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。

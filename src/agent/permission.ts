@@ -12,7 +12,7 @@
  */
 import {
   decidePermission,
-  COMMAND_TIMEOUT_FLOOR_SECONDS,
+  gatedCommandTimeout,
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
@@ -129,9 +129,12 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
  * 本来就慢。**代价不是「命令失败」，是白等一分钟再重试**——进程重开、环境重热、从头再跑。
  * 系统提示词里那句「不要传 timeout」拦不住，所以这里兜底。
  *
- * **只升不降**：不填 = 不设超时，那是**最宽**的选择，抬它反而变窄；填得比下限大
- * （900s）是模型自己的判断，尊重它。非法值（≤ 0 / 非有限数）不在这里修——
- * pi 自己会报「Invalid timeout」，我们不替它做第二套校验。
+ * **填了只升不降**：填得比下限大（900s）是模型自己的判断，尊重它。非法值
+ * （≤ 0 / 非有限数）不在这里修——pi 自己会报「Invalid timeout」，我们不替它做第二套校验。
+ *
+ * **不填补默认上限**（2026-10-30 起，`COMMAND_TIMEOUT_DEFAULT_SECONDS` = 1 小时）：以前
+ * 不填就不设超时，命令自己卡死时整轮永远挂着；到点 pi 杀整棵进程树、把输出交回模型。
+ * 整条规则在 shared 的 `gatedCommandTimeout`，这里只管「哪些工具」与「原地改」。
  *
  * 常量本体在 shared/permission.ts（闸门与 renderer 的「上限」显示同源：闸门改的是
  * clone、不回写入参，显示若不套同一条规则，模型填 60 时界面说「上限 1:00」、
@@ -141,11 +144,10 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 /** 原地抬 `event.input.timeout`（pi 的约定，与下面的改写入参同一套）。闸门内部用，行为经 `createToolCallGate` 测。 */
 function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): void {
   if (!COMMAND_TOOLS.has(toolName)) return;
-  const timeout = input["timeout"];
-  if (typeof timeout !== "number" || !Number.isFinite(timeout)) return;
-  if (timeout > 0 && timeout < COMMAND_TIMEOUT_FLOOR_SECONDS) {
-    input["timeout"] = COMMAND_TIMEOUT_FLOOR_SECONDS;
-  }
+  const raw = input["timeout"];
+  const gated = gatedCommandTimeout(raw);
+  // 值没变不写：非法值原样留给 pi 报错，NaN 也不被「重写成自己」
+  if (!Object.is(gated, raw)) input["timeout"] = gated;
 }
 
 /**

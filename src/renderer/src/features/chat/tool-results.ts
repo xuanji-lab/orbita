@@ -22,7 +22,7 @@ import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptReco
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
+import { gatedCommandTimeout } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -879,21 +879,22 @@ export function expectedSecondsOf(input: unknown): number | null {
 }
 
 /**
- * 本次调用的 timeout 上限（秒），运行行显示「/ 上限 10:00」。**套闸门同一条下限规则**
- * （COMMAND_TIMEOUT_FLOOR_SECONDS）：闸门抬超时改的是入参对象、不回写会话记录，
- * 这里读到的是模型原始值——模型填 60 实际跑在 600 上，显示也得说 600，否则界面撒谎。
- * 规则一字不差：不填 = null（不设上限，不显示）、比下限小 → 抬到下限、比下限大 → 尊重、
- * 非法 → null（不替 pi 做第二套校验）。
+ * 本次调用的 timeout 上限（秒），运行行显示「/ 上限 10:00」。**套闸门同一条规则**
+ * （shared 的 `gatedCommandTimeout`）：闸门改的是入参对象、不回写会话记录，这里读到的是
+ * 模型原始值——模型填 60 实际跑在 600 上、不填实际跑在 3600 上，显示也得这么说，否则界面撒谎。
+ * 闸门结果不是合法秒数（非法值原样留给 pi 报错）→ null，不显示上限。
  */
 export function timeoutSecondsOf(input: unknown): number | null {
-  const raw = secondsFieldOf(input, "timeout");
-  if (raw === null) return null;
-  return Math.max(raw, COMMAND_TIMEOUT_FLOOR_SECONDS);
+  if (typeof input !== "object" || input === null) return null;
+  return secondsValueOf(gatedCommandTimeout((input as Record<string, unknown>)["timeout"]));
 }
 
 function secondsFieldOf(input: unknown, key: string): number | null {
   if (typeof input !== "object" || input === null) return null;
-  const value = (input as Record<string, unknown>)[key];
+  return secondsValueOf((input as Record<string, unknown>)[key]);
+}
+
+function secondsValueOf(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
   if (value > EXPECTED_SECONDS_MAX) return null;
   return value;
