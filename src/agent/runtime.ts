@@ -22,6 +22,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
+import type { MemoryRecallOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -45,6 +46,7 @@ import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
+import { buildMemoryBlock } from "./memory-inject.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
@@ -1789,6 +1791,36 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
   }
 }
 
+/**
+ * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
+ * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
+ */
+const MEMORY_RECALL_TIMEOUT_MS = 6_000;
+
+/**
+ * 轮前召回（实验功能 memory-system）：拿用户原话问主进程要相关记忆（主进程再
+ * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
+ * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
+ */
+async function recallMemories(
+  sessionId: string,
+  query: string,
+  turn: number,
+  scope: { workspaceId: string | null; cwd: string },
+): Promise<string | null> {
+  try {
+    const outcome = await requestBroker.request<MemoryRecallOutcome>(
+      { type: "memoryRecallRequest", sessionId, query, turn, scope },
+      MEMORY_RECALL_TIMEOUT_MS,
+    );
+    if (!outcome.ok || outcome.hits.length === 0) return null;
+    return buildMemoryBlock(outcome.hits);
+  } catch (cause) {
+    console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
+    return null;
+  }
+}
+
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1804,7 +1836,20 @@ async function echoAndPrompt(
   }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
-  const promptText = composePromptText(command.text, pasted, files);
+  // 本轮轮号（按用户消息计，1 起）：注入账本与条目分组的键——prompt 之前的
+  // 历史里数用户消息 +1（#228 的口径，与 renderer 划选引用一致）
+  const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
+  // 轮前记忆召回（实验功能 memory-system）：块拼在 prompt 尾部（KV cache 只破尾段，
+  // 不碰前缀）；超时 / 报错 / 空命中都不注入——记忆的失败不拦开轮。子会话也召回
+  // （读不写，写入门禁在主进程的轮后路径）
+  const memoryBlock =
+    command.sessionMemory === true
+      ? await recallMemories(command.sessionId, command.text, turn, {
+          workspaceId: command.workspaceId,
+          cwd: command.cwd,
+        })
+      : null;
+  const promptText = composePromptText(command.text, pasted, files) + (memoryBlock ?? "");
   // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
   // 纯图片等极端情况下没有文字 item，退回临时 id（recall 卡片照常，只是与转录对不上）
   let turnId = "";
@@ -2027,6 +2072,12 @@ async function handle(command: AgentCommand): Promise<void> {
         ? { ok: true, card: command.card, text: command.text }
         : { ok: false, error: command.error ?? "Read failed" },
     );
+    return;
+  }
+  if (command.type === "memoryRecallResult") {
+    // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
+    // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "browserResult") {

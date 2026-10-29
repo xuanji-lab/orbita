@@ -18,6 +18,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
+import type { MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -560,6 +561,19 @@ export class AgentHostCore {
       ...(result.ok
         ? { ok: true as const, card: result.card, text: result.text }
         : { ok: false as const, error: result.error }),
+    } satisfies AgentCommand);
+  }
+
+  /**
+   * 记忆召回（实验功能 memory-system）：memoryRecallRequest 的回执。同
+   * answerReadTask 的理由：不 ensure、发完即回——调用方（主进程的转发层）自己
+   * 兑超时，agent 侧另有一层硬超时兑底。
+   */
+  answerMemoryRecall(requestId: string, outcome: MemoryRecallOutcome): void {
+    this.child?.postMessage({
+      type: "memoryRecallResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, hits: outcome.hits } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
 

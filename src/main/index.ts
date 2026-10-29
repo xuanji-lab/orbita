@@ -19,7 +19,10 @@ import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
+import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
+import { MemoryServiceHostCore } from "./memory/host-core.ts";
+import { memoryScopeOf, type MemoryRecallOutcome } from "../shared/memory.ts";
 import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
 import { choreModelPayload } from "./memory/chore.ts";
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
@@ -292,6 +295,30 @@ function ownRendererOrigin(): RendererOriginDeps {
   };
 }
 
+/**
+ * 记忆召回的转发（index.ts 的 onEvent 用）：agent → 主进程 → 记忆服务进程。
+ * 作用域在主进程解析（memoryScopeOf：workspaceId ?? cwd，agent 不做路径策略）；
+ * 服务不在 / 转发超时 / 服务内部出错都回空命中——召回在轮前的同步路径上，
+ * 记忆的任何问题都不该拦住开轮（agent 侧另有 6 秒硬超时兑主进程失联）。
+ */
+async function forwardMemoryRecall(
+  host: MemoryServiceHostCore,
+  event: Extract<AgentEvent, { type: "memoryRecallRequest" }>,
+): Promise<MemoryRecallOutcome> {
+  try {
+    if (!host.isRunning()) await host.ensureStarted();
+    const hits = await host.recall({
+      sessionId: event.sessionId,
+      scopeId: memoryScopeOf(event.scope),
+      turn: event.turn,
+      query: event.query,
+    });
+    return { ok: true, hits };
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
 void app.whenReady().then(async () => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
   // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
@@ -494,6 +521,21 @@ void app.whenReady().then(async () => {
         .then((result) => agentHost.answerReadTask(event.requestId, result))
         .catch((cause: unknown) =>
           agentHost.answerReadTask(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 记忆系统（实验功能 memory-system）：agent 的轮前召回问答——转发给记忆服务
+    // 进程（主进程按 scope 解析作用域），任何路径都回执（readTaskRequest 同款
+    // 纪律：不回的话 agent 进程里那次调用挂到超时）。服务不在先试拉一把（开关
+    // 刚开的第一轮 / 崩溃后的一次自愈）；拉不起 / 超时都回空命中，不拦开轮
+    if (event.type === "memoryRecallRequest") {
+      void forwardMemoryRecall(memoryHost, event)
+        .then((outcome) => agentHost.answerMemoryRecall(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerMemoryRecall(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),

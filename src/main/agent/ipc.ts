@@ -259,17 +259,21 @@ export function registerAgentIpc(
   });
 
   /**
-   * 记忆系统（实验功能 memory-system）的构建门禁：开关开着且这是根会话的用户
-   * 原话时让跟踪器记下这一轮（intent-env 的同一条口径：子会话 / 通道信封 /
-   * 收尾扫描不写记忆）。settle 在轮落定时现读开关与家务活模型，中途关掉
-   * 开关也不会把已并队的轮交出去。
+   * 记忆系统（实验功能 memory-system）的构建门禁：这是根会话的用户原话时让
+   * 跟踪器记下这一轮（intent-env 的同一条口径：子会话 / 通道信封 / 收尾扫描不写
+   * 记忆）。开关的读取在调用方（submit / interrupt 要用同一个值装配 sessionMemory）；
+   * settle 在轮落定时还会现读一次——中途关掉开关，已并队的轮也交不出去。
    */
   const beginMemoryTurn = async (sessionId: string, text: string): Promise<void> => {
     if (memoryTurns === undefined) return;
-    if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) return;
     const meta = await sessions.readMeta(sessionId).catch(() => null);
     if (memoryBuildEligible(meta, text)) memoryTurns.begin(sessionId, text);
   };
+
+  /** 记忆系统的实验开关：开着时轮前召回（sessionMemory，根会话与子会话都召回）
+   * 与轮后构建（beginMemoryTurn，只认根会话）两条链路才接上。 */
+  const readMemoryOn = async (): Promise<boolean> =>
+    (await settings.read()).experimentalFeatures?.["memory-system"] === true;
 
   /**
    * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
@@ -419,10 +423,12 @@ export function registerAgentIpc(
     // 返回空对象时命令与 main 一字不差
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    await beginMemoryTurn(input.sessionId, text);
+    const memoryOn = await readMemoryOn();
+    if (memoryOn) await beginMemoryTurn(input.sessionId, text);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
+      ...(memoryOn ? { sessionMemory: true } : {}),
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
@@ -473,8 +479,9 @@ export function registerAgentIpc(
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    await beginMemoryTurn(input.sessionId, text);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const memoryOn = await readMemoryOn();
+    if (memoryOn) await beginMemoryTurn(input.sessionId, text);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

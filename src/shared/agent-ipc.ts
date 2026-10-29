@@ -822,6 +822,9 @@ export type AgentCommand =
       sessionId: string;
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
+      /** 记忆系统的轮前召回开关（submit.sessionMemory 的同款字段，interrupt
+       * 是「立即发送」分支，同一轮语义） */
+      sessionMemory?: boolean;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
