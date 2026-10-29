@@ -23,7 +23,7 @@ import {
 } from "../../shared/model-assign.ts";
 import type { AgentHost } from "../agent/host.ts";
 import type { CarryoverStore } from "./carryover-store.ts";
-import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo } from "./revert.ts";
+import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
@@ -42,8 +42,13 @@ export function registerSessionIpc(
    * realpath 后判）。不放行时回原因码，不抛错
    */
   openArtifactInBrowser: (sessionId: string, path: string) => Promise<ArtifactOpenResult>,
-  /** 会话回退成功后的意图系统作度钩子（实验功能 intent-system；undefined = 不启用） */
-  onReverted?: (sessionId: string, turnIds: readonly string[]) => Promise<void>,
+  /**
+   * 会话回退成功后的钩子（index.ts 注入：意图系统作废 + 记忆系统停用 / 截段；undefined = 不启用）。
+   * turnIds = 被撤回轮次的 user 记录 id；fromTurn = 回退点那条用户消息的轮号（按用户消息计、
+   * 1 起，与记忆 turn-tracker 的 turnNumberOf 同口径）——它及之后的轮被撤回，下一条消息
+   * 的轮号就是它
+   */
+  onReverted?: (sessionId: string, reverted: { turnIds: readonly string[]; fromTurn: number }) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   // 打开会话：**只回尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
@@ -172,7 +177,9 @@ export function registerSessionIpc(
     async (_event, id: string, targetMessageId: string): Promise<RevertFileOutcome[]> => {
       // 被回退轮次的 user 记录 id（intent-lab /invalidate 要作度的 turnId 就是它们）。
       // 回退前先取——executeRevert 落 RevertRecord 后 readLog 就是折叠后的新世界
+      // 同一次读顺带取回退点的轮号（记忆系统截段 / 停用按轮号对账）
       let invalidatedTurnIds: string[] = [];
+      let fromTurn = 0;
       try {
         const detail = await store.load(id);
         if (detail !== null) {
@@ -184,16 +191,17 @@ export function registerSessionIpc(
               .slice(index)
               .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
               .map((record) => record.id);
+            fromTurn = revertFromTurn(detail.transcript, index);
           }
         }
       } catch {
         invalidatedTurnIds = [];
       }
       const outcomes = await executeRevert({ store, host: agentHost }, id, targetMessageId);
-      // 意图系统（实验）：被回退轮次的 QA 送 intent-lab 作度（fire-and-forget，
-      // 绝不动回退本身；开关关 / 连不上都只记日志）。回调由 index.ts 注入
+      // 意图系统 / 记忆系统（实验）：fire-and-forget，绝不动回退本身；开关关 / 连不上
+      // 都只记日志。回调由 index.ts 注入
       if (onReverted !== undefined && invalidatedTurnIds.length > 0) {
-        void onReverted(id, invalidatedTurnIds);
+        void onReverted(id, { turnIds: invalidatedTurnIds, fromTurn });
       }
       return outcomes;
     },

@@ -20,6 +20,7 @@ import { usageApi } from "./api/usage.ts";
 import { updaterApi } from "./api/updater.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
+import { memoryApi } from "./api/memory.ts";
 import { windowApi } from "./api/window.ts";
 import { workspaceApi } from "./api/workspace.ts";
 import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
@@ -33,6 +34,7 @@ const api = {
   review: reviewApi,
   settings: settingsApi,
   skill: skillApi,
+  memory: memoryApi,
   mcp: mcpApi,
   window: windowApi,
   workspace: workspaceApi,
