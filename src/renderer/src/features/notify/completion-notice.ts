@@ -41,6 +41,86 @@ export function settledSessions(
   return settled;
 }
 
+/** 子树判定只需要会话的这两个字段——不依赖整个 SessionMeta */
+export interface TreeNode {
+  id: string;
+  parentId?: string;
+}
+
+/**
+ * 某条会话的**后代**（不含自己，按 parentId 递归、防环）里有没有还没停下的：
+ * phase 不是 idle（在跑 / 压缩 / 等审批 / 重试退避中），或队里还有待投递的——后者
+ * 马上又要开一轮。没建过槽的后代当停着（本窗口没见过它跑，没有「在跑」的证据）。
+ *
+ * 取全部后代而不是只取一层（sessionRunState 只取一层，那是侧栏竖条的口径）：
+ * 子会话自己闲着等孙会话交付时，这棵树同样没跑完。
+ */
+export function subtreeBusy(
+  id: string,
+  sessions: readonly TreeNode[],
+  states: ReadonlyMap<string, PhaseSlot>,
+): boolean {
+  const children = new Map<string, string[]>();
+  for (const meta of sessions) {
+    if (meta.parentId === undefined) continue;
+    const list = children.get(meta.parentId);
+    if (list === undefined) children.set(meta.parentId, [meta.id]);
+    else list.push(meta.id);
+  }
+  const seen = new Set<string>([id]);
+  const stack = [...(children.get(id) ?? [])];
+  while (stack.length > 0) {
+    const next = stack.pop() as string;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    const slot = states.get(next);
+    if (slot !== undefined && (slot.phase !== "idle" || slot.queued.length > 0)) return true;
+    stack.push(...(children.get(next) ?? []));
+  }
+  return false;
+}
+
+/**
+ * 这一拍该提醒的根会话，与接着压着的那些。
+ *
+ * 场景（2026-10-29 用户实测）：母会话派了 5 个子会话，每个子会话交付都把母会话
+ * 叫醒跑一轮，每轮收尾都算「跑完」响一声——16:00–16:15 里响个不停，而任务其实
+ * 还没完。「子会话跑完不单独打扰人」的本意在这里漏了：子会话不响，但它叫醒的母会话响。
+ *
+ * 规则：根会话落定时子树还没停（subtreeBusy）就**压着**——不响、不标未读、不弹卡；
+ * 之后每一拍复查，自己与整棵子树都停下的那一拍提醒一次。典型结局：最后一个子会话
+ * 交付、母会话处理完那一轮（它会再落定一次）；子会话被停掉、没有交付叫醒母会话时，
+ * 压着的那条在子树停下那拍兑现。
+ *
+ * - **回合失败不压**（`failed`）：母会话挂了就接不住子会话的交付，等子树跑完再说就晚了。
+ * - 压着的又开跑了（不再 idle 或队不空）：从压着里去掉——它下次落定会重新判。
+ * - 槽没了（会话删了）：去掉。
+ * - 代价：子会话卡住不结束，这一声就一直等不来——侧栏蓝竖条照亮「在跑」，不至于不知道。
+ *
+ * 不改入参；返回新的压着集。notify 先列本拍刚落定的，再列兑现的。
+ */
+export function treeNotices(input: {
+  /** 本拍刚落定的根会话（settledSessions 过滤过根） */
+  settled: readonly string[];
+  /** 上一拍压着的根会话 */
+  held: ReadonlySet<string>;
+  states: ReadonlyMap<string, PhaseSlot>;
+  sessions: readonly TreeNode[];
+  /** 这条会话此刻挂着回合级失败 */
+  failed: (id: string) => boolean;
+}): { notify: string[]; held: Set<string> } {
+  const notify: string[] = [];
+  const held = new Set<string>();
+  const candidates = [...new Set([...input.settled, ...input.held])];
+  for (const id of candidates) {
+    const slot = input.states.get(id);
+    if (slot === undefined || slot.phase !== "idle" || slot.queued.length > 0) continue;
+    if (!input.failed(id) && subtreeBusy(id, input.sessions, input.states)) held.add(id);
+    else notify.push(id);
+  }
+  return { notify, held };
+}
+
 export interface NoticePlan {
   /** 响提示音 */
   sound: boolean;

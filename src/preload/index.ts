@@ -11,6 +11,7 @@ import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
+import { notifyApi } from "./api/notify.ts";
 import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
@@ -38,6 +39,7 @@ const api = {
   workspace: workspaceApi,
   files: filesApi,
   focus: focusApi,
+  notify: notifyApi,
   terminal: terminalApi,
   usage: usageApi,
   updater: updaterApi,
