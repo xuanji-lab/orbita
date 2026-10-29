@@ -2,14 +2,19 @@
  * 未跟踪文件的行级统计 —— 专注左栏（`gitWorkdirChanges`）与审查面板
  * （`gitReviewList` 的 unstaged 一档）共用的**唯一**一份数行数逻辑。
  *
- * 之前两边各数各的：专注按 size+mtime 缓存、超 1 MB 只嗅二进制；审查面板把
- * 整个文件读进来、对着空文件造一份 diff 再数 `+`——同一个 50 MB 未跟踪文件
- * 在审查面板要 1 秒，600 MB 直接不可用；而两套口径又各自演化，行数可能对不上。
- * 现在只有一个计数器：同一个缓存键（绝对路径 + size + mtimeMs）、同一个 1 MB
- * 上限、同一次 8 KB 二进制嗅探、同一套计行口径，两边拿到的一定是同一个数。
+ * 为什么只能有一份：两处问的是同一个事实（同一个文件有几行）。各写一套就会各自演化——
+ * #315 之前专注有缓存、审查面板没有，同一个 50 MB 未跟踪文件在审查面板慢一个数量级；
+ * #355 撤回后两边又一起退回「整份读进来 + 造 diff 数 `+`」。现在只有一个计数器：同一个
+ * 缓存、同一个上限、同一套口径，两边拿到的一定是同一个数；专注左栏 30 秒一轮把缓存热好，
+ * 打开审查面板就只花 lstat。
  *
- * 行数口径：有结尾换行时与 `wc -l` 相同；没有结尾换行时把最后一行也算上
- * （与 git numstat 的 `+N` 一致——所以审查面板的 added 与专注左栏逐个相等）。
+ * 为什么要自己读盘：git 的 `diff --numstat` 不管未跟踪文件（要它管得先 `git add -N`
+ * 写 index，而这里只读）。数法照 git 对新文件的口径，但不生成 diff：
+ * - 二进制 = 开头 8000 字节里有 NUL（git 的 buffer_is_binary 看的就是这个窗口）；
+ * - 行数 = 换行字节（0x0A）的个数，最后一行没有换行再 +1。CRLF 算一行，单独的 CR 不算换行，
+ *   同 git。以前造 diff 再数 `+` 的写法会把以 `++` 开头的行当成 `+++` 文件头漏掉，
+ *   8000 字节之后才出现 NUL 的文本会被整份当成二进制——两处都和 git numstat 对不上。
+ * 按块流式读、逐字节数，不转字符串：耗时只跟字节数有关，与行长短无关。
  *
  * 读盘边界（#372）：lstat 不跟符号链接，链接只报它指向哪（readlink 原文）、行数记 0；
  * 打开文件带 O_NOFOLLOW（POSIX；Windows 没有这个标志，靠前面的 lstat 判定）。
@@ -18,55 +23,74 @@ import { constants } from "node:fs";
 import { lstat, open, readlink } from "node:fs/promises";
 
 /**
- * 单文件行数统计的上限：1 MB。超过就只读开头判二进制、不数行（两边 UI 都显示
- * 「行数未知」）。理由：数行要把全文读进内存再 split，而专注左栏 30 秒问一遍
- * 全部未跟踪文件——生成物 / 日志 / 数据动辄几十 MB，为悬停才看的一个数字读它们
- * 是这条路径最贵的一步；1 MB 覆盖源码文本的绝大多数，越线的文件多半本来也不是
- * 「数行数」的对象。
+ * 单文件计数上限：64 MB。超过只读开头判二进制，行数记「未知」。
+ * 数一遍的代价只跟字节数有关：本机（Apple M 系列，页缓存热）实测约 1 ms/MB，64 MB 约 65 ms；
+ * 按 256 KB 一块读，每块的同步计数 < 0.5 ms，不长时间占住主进程。文件没变时不读（缓存），
+ * 只有变了（例如正在写的日志）才重数。再大的文件（几百 MB 的数据、转储）数出来也只是悬停里的
+ * 一个数字，不值得每次变动都读一遍；git 自己也把超过 core.bigFileThreshold（512 MB）的文件当二进制。
  */
-export const UNTRACKED_LINE_COUNT_MAX_BYTES = 1024 * 1024;
+export const UNTRACKED_LINE_COUNT_MAX_BYTES = 64 * 1024 * 1024;
 
-/** 判二进制只需开头这么多字节（git 的二进制嗅探同样只看前 8000 字节） */
-export const UNTRACKED_BINARY_SNIFF_BYTES = 8 * 1024;
+/** 判二进制看开头这么多字节：git 的 FIRST_FEW_BYTES（xdiff-interface.c）就是 8000 */
+export const GIT_BINARY_SNIFF_BYTES = 8000;
 
-/** 未跟踪文件的面（注入点）：stat 定缓存键，read 按大小决定读全文还是读头 */
-export interface UntrackedFileStat {
+/** 每次 read 的块大小：一块逐字节数完约 0.3 ms，事件循环不会被一个大文件占住 */
+const READ_CHUNK_BYTES = 256 * 1024;
+
+/** lstat 的结论：普通文件 / 符号链接 / 其他（目录、管道……不数） */
+export interface UntrackedFileInfo {
+  kind: "file" | "symlink" | "other";
   size: number;
   mtimeMs: number;
 }
 
+/** 打开的文件：从 position 起读至多 length 字节到 buffer 开头，返回读到的字节数（0 = 到头） */
+export interface UntrackedHandle {
+  read(buffer: Buffer, length: number, position: number): Promise<number>;
+  close(): Promise<void>;
+}
+
+/** 未跟踪文件的读盘面（注入点，测试喂假货）：读不了一律 null，不抛 */
 export interface UntrackedProbe {
-  /** lstat 语义：符号链接给 `{ symlink: 链接里写的目标 }`，不跟过去；不是普通文件 / 读不了 → null */
-  stat(path: string): Promise<UntrackedFileStat | { symlink: string } | null>;
-  /** maxBytes = null → 读全文；否则只读开头这么多字节。打开时不跟链接 */
-  read(path: string, maxBytes: number | null): Promise<Buffer | null>;
+  /** lstat 语义：链接本身是什么就报什么，不跟过去 */
+  lstat(path: string): Promise<UntrackedFileInfo | null>;
+  /** 链接里写的目标（readlink 原文） */
+  readlink(path: string): Promise<string | null>;
+  /** 只读打开，路径此刻是链接就打不开 */
+  open(path: string): Promise<UntrackedHandle | null>;
 }
 
 /** 只读、且路径此刻是链接就打不开（ELOOP）：lstat 之后被换成链接也不会跟过去 */
 const OPEN_NO_FOLLOW = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
 
 export const diskUntrackedProbe: UntrackedProbe = {
-  async stat(path) {
+  async lstat(path) {
     try {
       // lstat 不跟链接：stat 会把指向工作区外的未跟踪链接当成目标文件去数（#372 探针二）
       const info = await lstat(path);
-      if (info.isSymbolicLink()) return { symlink: await readlink(path) };
-      return info.isFile() ? { size: info.size, mtimeMs: info.mtimeMs } : null;
+      const kind = info.isSymbolicLink() ? "symlink" : info.isFile() ? "file" : "other";
+      return { kind, size: info.size, mtimeMs: info.mtimeMs };
     } catch {
       return null;
     }
   },
-  async read(path, maxBytes) {
+  async readlink(path) {
+    try {
+      return await readlink(path);
+    } catch {
+      return null;
+    }
+  },
+  async open(path) {
     try {
       const handle = await open(path, OPEN_NO_FOLLOW);
-      try {
-        if (maxBytes === null) return await handle.readFile();
-        const buffer = Buffer.alloc(maxBytes);
-        const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-        return buffer.subarray(0, bytesRead);
-      } finally {
-        await handle.close();
-      }
+      return {
+        async read(buffer, length, position) {
+          const { bytesRead } = await handle.read(buffer, 0, length, position);
+          return bytesRead;
+        },
+        close: () => handle.close(),
+      };
     } catch {
       return null;
     }
@@ -77,7 +101,7 @@ export const diskUntrackedProbe: UntrackedProbe = {
 export interface UntrackedLineStat {
   added: number;
   binary: boolean;
-  /** 超过 1 MB 没数行：added 是 0 但**不是**「没改动」，UI 显示「行数未知」 */
+  /** 没数行（超过单文件计数上限）：added 是 0 但**不是**「没改动」，UI 显示「行数未知」 */
   lineCountUnknown?: boolean;
   /** 符号链接：值是链接里写的目标（readlink 原文），不跟过去读，行数恒 0 */
   symlink?: string;
@@ -86,7 +110,7 @@ export interface UntrackedLineStat {
 /**
  * 未跟踪文件行数的缓存：键 = 绝对路径 + size + mtimeMs。专注左栏每 30 秒问一遍
  * 全部未跟踪文件，而文件大多没变——不缓存时每轮把 29 MB 全文读一遍（实测 300 个
- * 文件约 0.3 s）。size 与 mtime 都没动就复用上次的结论，只花一次 stat。
+ * 文件约 0.3 s）。size 与 mtime 都没动就复用上次的结论，只花一次 lstat。
  * 容量上限 2000 是防无界增长的闸：超了按 LRU 淘汰最久没被问到的。
  */
 const UNTRACKED_LINE_CACHE_LIMIT = 2000;
@@ -104,37 +128,73 @@ function rememberUntrackedLine(key: string, lineStat: UntrackedLineStat): Untrac
   return lineStat;
 }
 
-/**
- * 「对着空文件算」的行数：与 `createTwoFilesPatch("", content)` 的 `+` 行数同口径
- * （末尾换行不额外算一行），但不跑 diff 算法——这条路径上每轮几百个文件，纯计数只扫一遍。
- */
-export function countUntrackedLines(content: string): number {
-  if (content === "") return 0;
-  const lines = content.split("\n");
-  return content.endsWith("\n") ? lines.length - 1 : lines.length;
+/** 一块字节里有几个换行（0x0A）。逐字节比：indexOf 逐个找在短行文件上会退化到每个换行一次调用 */
+function newlinesIn(buffer: Buffer, length: number): number {
+  let count = 0;
+  for (let i = 0; i < length; i++) {
+    if (buffer[i] === 0x0a) count += 1;
+  }
+  return count;
 }
 
-/** 一个未跟踪文件的行级统计；null = 读不了（刚被删 / 不是文件） */
+/**
+ * 数一个普通文件：先读开头 8000 字节判二进制（二进制与超限文件读到这里就停），文本再按块数完。
+ * 只读到 lstat 时的 size 为止：正在被追加的日志，数的是 lstat 那一刻的样子，与缓存键一致；
+ * 下一轮 mtime 变了自然重数。读到一半出错（被删、权限变了）→ null，这一轮跳过。
+ */
+async function countFile(path: string, size: number, probe: UntrackedProbe): Promise<UntrackedLineStat | null> {
+  if (size === 0) return { added: 0, binary: false };
+  const handle = await probe.open(path);
+  if (handle === null) return null;
+  // 缓冲按文件大小分：小文件走 Buffer 池，不为几十字节的文件分 256 KB。不跨调用共用一块——
+  // 专注轮询与审查列表可能同时在数，共用的缓冲会在 await 之间被对方写掉
+  const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, size));
+  try {
+    // 判二进制的窗口要读满（read 可能读得比要的少，网络盘上常见）
+    const sniffWant = Math.min(size, GIT_BINARY_SNIFF_BYTES);
+    let sniffed = 0;
+    while (sniffed < sniffWant) {
+      const got = await handle.read(buffer.subarray(sniffed), sniffWant - sniffed, sniffed);
+      if (got === 0) break;
+      sniffed += got;
+    }
+    if (buffer.subarray(0, sniffed).includes(0)) return { added: 0, binary: true };
+    if (size > UNTRACKED_LINE_COUNT_MAX_BYTES) return { added: 0, binary: false, lineCountUnknown: true };
+
+    let lines = newlinesIn(buffer, sniffed);
+    let position = sniffed;
+    let last = sniffed > 0 ? buffer[sniffed - 1] : 0x0a;
+    while (position < size) {
+      const got = await handle.read(buffer, Math.min(buffer.length, size - position), position);
+      if (got === 0) break; // 读的过程中文件变短了：数到哪算哪
+      lines += newlinesIn(buffer, got);
+      last = buffer[got - 1];
+      position += got;
+    }
+    // 最后一行没有换行也是一行（git numstat 同口径；wc -l 不算它）
+    return { added: position > 0 && last !== 0x0a ? lines + 1 : lines, binary: false };
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/** 一个未跟踪文件的行级统计；null = 读不了（刚被删 / 不是普通文件） */
 export async function untrackedLineStat(
   path: string,
   probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<UntrackedLineStat | null> {
-  const info = await probe.stat(path);
-  if (info === null) return null;
-  // 链接不进缓存：lstat + readlink 已经是全部开销，没有可省的读盘
-  if ("symlink" in info) return { added: 0, binary: false, symlink: info.symlink };
+  const info = await probe.lstat(path);
+  if (info === null || info.kind === "other") return null;
+  if (info.kind === "symlink") {
+    // 链接不进缓存：lstat + readlink 已经是全部开销，没有可省的读盘
+    const target = await probe.readlink(path);
+    return target === null ? null : { added: 0, binary: false, symlink: target };
+  }
   const key = `${path}\u0000${info.size}\u0000${info.mtimeMs}`;
   const hit = untrackedLineCache.get(key);
   if (hit !== undefined) return rememberUntrackedLine(key, hit);
-
-  const oversized = info.size > UNTRACKED_LINE_COUNT_MAX_BYTES;
-  // 二进制判定与行数统计共用这一次读盘：小文件读一次全文（既判 NUL 又数行）；
-  // 大文件只读头 8 KB，NUL 在开头都没有就按文本处理、行数记「未知」
-  const bytes = await probe.read(path, oversized ? UNTRACKED_BINARY_SNIFF_BYTES : null);
-  if (bytes === null) return null;
-  if (bytes.includes(0)) return rememberUntrackedLine(key, { added: 0, binary: true });
-  if (oversized) {
-    return rememberUntrackedLine(key, { added: 0, binary: false, lineCountUnknown: true });
-  }
-  return rememberUntrackedLine(key, { added: countUntrackedLines(bytes.toString("utf8")), binary: false });
+  const counted = await countFile(path, info.size, probe);
+  return counted === null ? null : rememberUntrackedLine(key, counted);
 }

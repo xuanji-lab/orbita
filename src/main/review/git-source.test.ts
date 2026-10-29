@@ -7,24 +7,25 @@ import { parseNumstatLine, parseUntrackedLine } from "../../shared/review.ts";
 import { gitReviewDiff, gitReviewList, gitWorkdirChanges, realGitRunner, type GitRunner } from "./git-source.ts";
 import type { UntrackedProbe } from "./untracked-lines.ts";
 
-/** 假读盘面：stat 报「读得到的大小」，read 按需返回全文或开头；counter 断言读盘次数。 */
-function fakeProbe(
-  read: (path: string) => Buffer | null,
-  counter?: { reads: number; headBytes: number[] },
-): UntrackedProbe {
+/** 假读盘面：read 给出每个路径的内容（null = 不存在），mtime 恒定；按块读就是从内容里拷一段 */
+function fakeProbe(read: (path: string) => Buffer | null): UntrackedProbe {
   return {
-    async stat(path) {
+    async lstat(path) {
       const bytes = read(path);
-      return bytes === null ? null : { size: bytes.length, mtimeMs: 1 };
+      return bytes === null ? null : { kind: "file", size: bytes.length, mtimeMs: 1 };
     },
-    async read(path, maxBytes) {
+    async readlink() {
+      return null;
+    },
+    async open(path) {
       const bytes = read(path);
       if (bytes === null) return null;
-      if (counter !== undefined) {
-        counter.reads += 1;
-        if (maxBytes !== null) counter.headBytes.push(maxBytes);
-      }
-      return maxBytes === null ? bytes : bytes.subarray(0, maxBytes);
+      return {
+        async read(buffer, length, position) {
+          return bytes.copy(buffer, 0, position, Math.min(position + length, bytes.length));
+        },
+        async close() {},
+      };
     },
   };
 }
