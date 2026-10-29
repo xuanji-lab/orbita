@@ -195,11 +195,15 @@ test("启动清扫：闲置开段追认收尾（应用退出的兜底）", async
   await first.core.turnSettled(turnPayload());
   const store = new EpisodeStore(dir);
   // idleCloseMs = 25：轮询等收尾（固定睡 60ms 在全量测试的负载下会偶发不够——
-  // 启动时多了一次旧数据落定、提取落盘多一把锁，异步步数变多）
-  for (let waited = 0; waited < 2000 && (await store.loadOpen("s1")) !== null; waited += 20) {
+  // 启动时多了一次旧数据落定、提取落盘多一把锁，异步步数变多）。要等到 pending/ 也清空：
+  // 闲置收尾是「存 pending → 删开段 → 提取」，只等开段消失会在提取还没跑完时就重启，
+  // 下面第二个服务的启动清扫会把这第一段剩下的类也提一遍（全量负载下偶发 3 !== 2）
+  const settled = async (): Promise<boolean> =>
+    (await store.loadOpen("s1")) === null && (await store.listPending()).length === 0;
+  for (let waited = 0; waited < 2000 && !(await settled()); waited += 20) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.equal(await store.loadOpen("s1"), null); // 收尾提完了
+  assert.ok(await settled()); // 收尾提完了
   // 第二段：重启清扫把还没提的类补完（fact 提成、preference/insight 还欠着）
   await store.savePending({
     episodeId: "ep_half",
