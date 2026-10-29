@@ -95,6 +95,8 @@ export class MemoryServiceCore {
   /** 后台补算的状态（null = 没在算也不欠账）；inFlight 防重入 */
   private backfill: { state: "running" | "deferred-battery"; done: number; total: number } | null = null;
   private backfillInFlight: Promise<void> | null = null;
+  /** 当前轮跑着时又收到排程：结束后必须再全量对账一轮 */
+  private backfillRerunRequested = false;
   /** 模型下载（同一时刻最多一个；幂等回执由调用方处理） */
   private downloadInFlight: Promise<void> | null = null;
   private downloadAbort: AbortController | null = null;
@@ -529,8 +531,10 @@ export class MemoryServiceCore {
 
   /** 设置变了：null = 关（停 llama-server、挂起补算）；换模型 = 清库重算 + 补算。 */
   setVectorConfig(config: MemoryVectorServiceConfig | null): void {
-    // 关闭向量始终要取消下载（即便配置本来已是 null）；换模型也取消（下的是旧模型）
+    // 关闭向量始终要取消下载（即便配置本来已是 null）；其余同配置消息是每轮
+    // 落定都会重复收到的同步，不应再触发全量对账与 idle 广播。
     if (config === null) this.downloadAbort?.abort();
+    if (config !== null && JSON.stringify(this.vectorConfig) === JSON.stringify(config)) return;
     const previous = this.vectorConfig?.model.id ?? null;
     if (previous !== null && config !== null && previous !== config.model.id) {
       this.downloadAbort?.abort();
@@ -619,8 +623,8 @@ export class MemoryServiceCore {
   }
 
   /**
-   * 补算排程：token = 某层或 "all"。合并去重由 backfillInFlight 保证（跑着就
-   * 不重入；新一轮排程在当前轮结束后自然覆盖——「all」每轮全量对账缺失）。
+   * 补算排程：token = 某层或 "all"。当前轮在跑时只记补跑标记，结束后
+   * 再全量对账一轮，迟到的新条目不会等下一次任意触发。
    * 用电池且设置了推迟 → 记 deferred-battery 挂起，setPower(false) 续跑。
    */
   private scheduleVectorize(token: string): void {
@@ -632,10 +636,22 @@ export class MemoryServiceCore {
       }
       return;
     }
-    if (this.backfillInFlight !== null) return;
-    this.backfillInFlight = this.runBackfill(token).finally(() => {
-      this.backfillInFlight = null;
-    });
+    if (this.backfillInFlight !== null) {
+      this.backfillRerunRequested = true;
+      return;
+    }
+    this.backfillInFlight = this.runBackfill(token)
+      .catch((cause: unknown) => {
+        this.backfill = null;
+        this.log("[memory] 向量补算失败（已接住，下次排程重试）", cause);
+      })
+      .finally(() => {
+        this.backfillInFlight = null;
+        if (this.backfillRerunRequested) {
+          this.backfillRerunRequested = false;
+          this.scheduleVectorize("all");
+        }
+      });
   }
 
   /** 批量补算主体：对账缺失 → 分批嵌入（bs=32）→ upsert，批间查电池与配置。 */

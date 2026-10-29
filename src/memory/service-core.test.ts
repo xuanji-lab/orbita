@@ -5,12 +5,13 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryServiceCore, type MemoryCallModel } from "./service-core.ts";
 import { EpisodeStore } from "./episodes.ts";
 import { MemoryEntryStore } from "./entries.ts";
+import { VectorStore } from "./vector-store.ts";
 import type { DownloadFetch } from "./downloader.ts";
 import type { MemoryChoreModel } from "../shared/memory.ts";
 
@@ -672,6 +673,59 @@ test("mutate edit：向量行删掉后由补算重算（换文本换向量）", 
   assert.ok(stub.embeddedTexts.includes(VECTOR_MODEL.docPrefix + "改之后的文本"));
 });
 
+test("补算在跑时新增条目：记录补跑，当前轮结束后新条目也有向量", async () => {
+  const dir = await tempDir();
+  const core = new MemoryServiceCore({
+    callModel: async () => "[]",
+    log: () => undefined,
+    vectorDeps: {
+      spawn: () => ({ on: () => undefined, kill: () => undefined }),
+      probe: async () => true,
+      post: async (_port, texts) => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return texts.map(() => [1, 0, 0, 0]);
+      },
+      freePort: async () => 1,
+      fetchImpl: async () => ({ ok: false, status: 0, body: null }),
+    },
+  });
+  await core.init(dir);
+  for (let index = 0; index < 33; index += 1) {
+    await core.mutate({ op: "addManual", token: "user", type: "fact", text: `old-${index}` });
+  }
+  const config = { model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 1_000_000, deferOnBattery: false };
+  core.setVectorConfig(config);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const late = await core.mutate({ op: "addManual", token: "user", type: "fact", text: "late" });
+  const lateId = late.ok && late.entry ? late.entry.id : "";
+  for (let index = 0; index < 80; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const layer = await new VectorStore(join(dir, "vector")).load("user", VECTOR_MODEL.dims);
+    if (layer?.ids.includes(lateId)) return;
+  }
+  assert.fail("补算结束后，迟到条目仍没有向量");
+});
+
+test("setVectorConfig：配置没变不做全量对账，也不广播 idle", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const states: string[] = [];
+  const { core } = vectorCore(dir, stub, { onBackfillProgress: (progress) => states.push(progress.state) });
+  await core.init(dir);
+  const config = { model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true };
+  core.setVectorConfig(config);
+  for (let index = 0; index < 40; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if ((await core.vectorState()).backfill === null) break;
+  }
+  const posts = stub.embeddedTexts.length;
+  states.length = 0;
+  core.setVectorConfig({ ...config, model: { ...VECTOR_MODEL } });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(stub.embeddedTexts.length, posts);
+  assert.deepEqual(states, []);
+});
+
 test("startModelDownload：进度事件流出（桩源全挂 → failed 事件）", async () => {
   const dir = await tempDir();
   const stub = vectorStub();
@@ -722,4 +776,34 @@ test("关闭向量功能：取消在途模型下载，不发 failed 事件", asy
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(aborted, true);
   assert.equal(progress.some((event) => event.phase === "failed"), false);
+});
+
+test("补算抛错（向量目录被换成了文件）：接住记日志，不留未捕获 rejection，补算状态复位", async () => {
+  const dir = await tempDir();
+  const logs: string[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const stub = vectorStub();
+    const core = new MemoryServiceCore({
+      callModel: async () => "[]",
+      log: (message) => logs.push(message),
+      vectorDeps: stub.deps,
+    });
+    await core.init(dir);
+    core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 1_000_000, deferOnBattery: false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await rm(join(dir, "vector"), { recursive: true, force: true });
+    await writeFile(join(dir, "vector"), "不是目录");
+    await core.mutate({ op: "addManual", token: "user", type: "fact", text: "触发补算" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(logs.some((line) => line.includes("向量补算失败")), logs.join("\n"));
+    assert.deepEqual(unhandled, []);
+    assert.equal((await core.vectorState().catch(() => null))?.backfill ?? null, null);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
 });
