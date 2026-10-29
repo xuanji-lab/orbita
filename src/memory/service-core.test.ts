@@ -441,7 +441,7 @@ const VECTOR_MODEL = {
 };
 
 /** 向量原语桩：embed 按文本哈希出确定向量（同文本同向量），可探查调用参数。 */
-function vectorStub() {
+function vectorStub(embed?: (text: string) => number[]) {
   const embeddedTexts: string[] = [];
   let running = true;
   return {
@@ -458,6 +458,7 @@ function vectorStub() {
       post: async (_port: number, texts: readonly string[]) =>
         texts.map((text) => {
           embeddedTexts.push(text);
+          if (embed !== undefined) return embed(text);
           const seed = Array.from(text).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
           return [seed % 7 + 1, seed % 5, seed % 3, 1];
         }),
@@ -542,6 +543,84 @@ test("recall 融合：向量命中但词法没命中的条目也能进结果", a
   const hits = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "语义记忆条目" });
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.entry.text, "语义记忆条目");
+});
+
+test("recall 融合：user 与 scope 的向量按相似度全局排序，不按层拼名次", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub((text) =>
+    text.includes("工作区目标") || text.includes("完全无关的问句") ? [1, 0, 0, 0] : [0, 1, 0, 0],
+  );
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  await core.mutate({ op: "addManual", token: "user", type: "fact", text: "user-a" });
+  await core.mutate({ op: "addManual", token: "user", type: "fact", text: "user-b" });
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(), [
+    { type: "fact", text: "工作区目标", keywords: [], turns: [1] },
+  ]);
+  core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
+  for (let i = 0; i < 60; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const state = await core.vectorState();
+    if (state.backfill === null && state.vectors?.entries === 3) break;
+  }
+  const hits = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "完全无关的问句" });
+  assert.equal(hits[0]?.entry.text, "工作区目标");
+});
+
+test("recall 融合：muted / stale 不借向量复活，user 偏好仍常驻且只出现一次", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub(() => [1, 0, 0, 0]);
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  const pinned = await core.mutate({
+    op: "addManual",
+    token: "user",
+    type: "preference",
+    text: "跨工作区常驻偏好",
+    reason: "用户明确要求",
+  });
+  const pinnedId = pinned.ok && pinned.entry ? pinned.entry.id : "";
+  const entries = new MemoryEntryStore(dir);
+  const wsToken = entries.tokenOf("ws-1");
+  const seeded = await entries.appendScope("ws-1", vectorEpisode(), [
+    { type: "fact", text: "将被关闭", keywords: [], turns: [1] },
+    { type: "fact", text: "将标过时", keywords: [], turns: [1] },
+    { type: "fact", text: "正常条目", keywords: [], turns: [1] },
+  ]);
+  core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
+  for (let i = 0; i < 60; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const state = await core.vectorState();
+    if (state.backfill === null && state.vectors?.entries === 4) break;
+  }
+  await core.mutate({ op: "setStatus", token: wsToken, entryId: seeded[0]!.id, status: "muted" });
+  await entries.updateEntry(wsToken, seeded[1]!.id, (current) => ({ ...current, status: "stale" }));
+  const hits = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "没有词法重合" });
+  assert.equal(hits[0]?.entry.id, pinnedId);
+  assert.equal(hits[0]?.pinned, true);
+  assert.equal(hits.filter((hit) => hit.entry.id === pinnedId).length, 1);
+  assert.equal(hits.some((hit) => hit.entry.id === seeded[0]!.id), false);
+  assert.equal(hits.some((hit) => hit.entry.id === seeded[1]!.id), false);
+});
+
+test("recall 融合：候选再多也只回 5 条，沿用词法注入上限", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub(() => [1, 0, 0, 0]);
+  const { core } = vectorCore(dir, stub);
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(),
+    Array.from({ length: 6 }, (_, index) => ({ type: "fact" as const, text: `语义候选 ${index}`, keywords: [], turns: [1] })),
+  );
+  core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
+  for (let i = 0; i < 60; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const state = await core.vectorState();
+    if (state.backfill === null && state.vectors?.entries === 6) break;
+  }
+  const hits = await core.recall({ sessionId: "s", scopeId: "ws-1", turn: 1, query: "词法零命中" });
+  assert.equal(hits.length, 5);
 });
 
 test("电池推迟：onBattery 时挂起，回电源续跑", async () => {

@@ -13,7 +13,8 @@ import type { MemoryEntry, MemoryHit } from "../shared/memory.ts";
 
 /** RRF 的 k（名次平滑；评测脚本同款）。 */
 export const RRF_K = 60;
-/** 向量臂权重（评测钉死的默认：向量 3 : 字面 1）。 */
+/** 向量臂权重（真实记忆条目小评测钉死：26 条 / 18 个原话查询，3:1 与
+ * 2:1、等权 R@5 都是 0.9444；3:1 最贴近强向量臂，词法只作兜底）。 */
 export const VECTOR_WEIGHT = 3;
 /** 字面臂权重。 */
 export const LEXICAL_WEIGHT = 1;

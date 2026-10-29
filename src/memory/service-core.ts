@@ -44,7 +44,7 @@ import {
   preferenceCandidates,
   PREFERENCE_SYSTEM_PROMPT,
 } from "./extract.ts";
-import { recallHits } from "./retrieve.ts";
+import { dedupeById, isRecallable, recallHits } from "./retrieve.ts";
 import { EmbedServerCore, type EmbedServerOptions } from "./embed-server.ts";
 import { VectorStore, dotProductRank } from "./vector-store.ts";
 import { downloadWithFallback, type DownloadFetch } from "./downloader.ts";
@@ -77,6 +77,20 @@ export interface MemoryServiceCoreOptions {
 }
 
 const EXTRACT_TYPES = ["fact", "preference", "insight"] as const;
+
+/** 与词法召回同预算：融合只是重排，不能把候选量放大成几十条跨 IPC 与注入账。 */
+function capFusedHits(ranked: readonly MemoryHit[]): MemoryHit[] {
+  const hits: MemoryHit[] = [];
+  let used = 0;
+  for (const candidate of ranked) {
+    if (hits.length >= 5) break;
+    const size = candidate.entry.text.length;
+    if (hits.length > 0 && used + size > 1500) continue;
+    used += size;
+    hits.push(candidate);
+  }
+  return hits;
+}
 
 export class MemoryServiceCore {
   private readonly callModel: MemoryCallModel;
@@ -496,8 +510,24 @@ export class MemoryServiceCore {
       if (userVectors !== null) vectorRanked.push(...dotProductRank(queryVector, userVectors, 50));
       if (scopeVectors !== null) vectorRanked.push(...dotProductRank(queryVector, scopeVectors, 50));
       if (vectorRanked.length === 0) return lexical;
-      const byId = new Map([...layers.user, ...layers.scope].map((entry) => [entry.id, entry]));
-      return fuseRanked(vectorRanked, lexical, byId);
+      // 两层各自打分后必须按余弦全局重排：不能直接 user 前 50 + scope 前 50，
+      // 否则 RRF 的名次与相似度无关，user 层够大时 scope 甚至整层进不了融合。
+      vectorRanked.sort((a, b) => b.score - a.score);
+      const pinned = lexical.filter((hit) => hit.pinned === true);
+      const pinnedIds = new Set(pinned.map((hit) => hit.entry.id));
+      // 与词法同一准入门：muted / stale 不能借向量复活；user 层常驻偏好只走
+      // pinned 通道，既保留标志也避免向量 / 词法两份分把它算成普通命中。
+      const byId = new Map(
+        dedupeById([...layers.user, ...layers.scope])
+          .filter((entry) => isRecallable(entry) && !pinnedIds.has(entry.id))
+          .map((entry) => [entry.id, entry]),
+      );
+      const fused = fuseRanked(
+        vectorRanked,
+        lexical.filter((hit) => hit.pinned !== true),
+        byId,
+      );
+      return [...pinned, ...capFusedHits(fused)];
     } catch (cause) {
       this.log("[memory] 向量融合失败（本轮退词法）", cause);
       return lexical;
@@ -624,7 +654,7 @@ export class MemoryServiceCore {
     for (const layer of layers) {
       const list = await entries.listByToken(layer.token).catch(() => []);
       const known = new Set((await vectors.load(layer.token, config.model.dims).catch(() => null))?.ids ?? []);
-      const missing = list.filter((entry) => !known.has(entry.id) && (entry.status ?? "active") !== "muted");
+      const missing = list.filter((entry) => !known.has(entry.id) && isRecallable(entry));
       if (missing.length > 0) {
         todo.push({ token: layer.token, missing });
         total += missing.length;
