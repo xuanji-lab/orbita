@@ -18,12 +18,14 @@
  * 召回打分是暴力点积（矩阵全量载入，一万条 × 768 维 ≈ 毫秒级）：语料是单
  * 作用域几百到几千条，不值得上 ANN 索引；语料长大到十万条再立项。
  */
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { writeJsonAtomic, writeTextAtomic } from "../main/atomic-write.ts";
+import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../main/atomic-write.ts";
 import { isNotFound } from "../main/fs-errors.ts";
 
 export interface VectorManifest {
+  /** 行号分配规则版本；旧版 rows.size 会撞删除留下的洞，必须整库重算 */
+  version: 2;
   /** 模型标识（如 "embeddinggemma-2"）；换模型必须整库重算 */
   model: string;
   /** 维度（MRL 截断后的实际维度） */
@@ -39,6 +41,16 @@ export interface LayerVectors {
 
 function binFile(dir: string, token: string): string {
   return join(dir, `${token}.bin`);
+}
+
+/** 按偏移写的句柄：已有文件 r+（不截断），没有就新建。append 模式会忽略写入位置，不能用。 */
+async function openForWrite(file: string): Promise<FileHandle> {
+  try {
+    return await open(file, "r+");
+  } catch (cause) {
+    if (!isNotFound(cause)) throw cause;
+    return open(file, "w");
+  }
 }
 
 function indexFile(dir: string, token: string): string {
@@ -64,8 +76,8 @@ export class VectorStore {
   /** 全库清单；null = 还没向量化过。字段不齐当 null（坏文件当没算过，重算即可）。 */
   async manifest(): Promise<VectorManifest | null> {
     const raw = (await readJson(join(this.dir, "manifest.json"))) as Record<string, unknown> | null;
-    if (raw === null || typeof raw.model !== "string" || typeof raw.dims !== "number") return null;
-    return { model: raw.model, dims: raw.dims, updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0 };
+    if (raw === null || raw.version !== 2 || typeof raw.model !== "string" || typeof raw.dims !== "number") return null;
+    return { version: 2, model: raw.model, dims: raw.dims, updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0 };
   }
 
   /**
@@ -83,7 +95,7 @@ export class VectorStore {
       if (name === "manifest.json") continue;
       await rm(join(this.dir, name), { force: true });
     }
-    await writeJsonAtomic(join(this.dir, "manifest.json"), { model, dims, updatedAt: now });
+    await writeJsonAtomic(join(this.dir, "manifest.json"), { version: 2, model, dims, updatedAt: now });
   }
 
   /** 某层的向量条数（只读索引文件，不碰矩阵——状态页统计用）。 */
@@ -135,8 +147,8 @@ export class VectorStore {
 
   /**
    * 写入 / 更新一条的向量：已有行号则原位重写（编辑条目后重算），否则追加一行。
-   * bin 的追加用一次 append；原位重写走整文件临时副本 + rename（行定长，重写
-   * 不动其它行，但要防「写到一半」读到半行——rename 兜住）。
+   * 新行按偏移写在所有已用行之后（见分支内注释）；原位重写走整文件临时副本 + rename
+   * （writeBytesAtomic：行定长，重写不动其它行，但要防「写到一半」读到半行）。
    */
   async upsert(token: string, id: string, vector: Float32Array, dims: number): Promise<void> {
     const raw = (await readJson(indexFile(this.dir, token))) as Record<string, number> | null;
@@ -147,9 +159,21 @@ export class VectorStore {
     const existing = rows.get(id);
     const buffer = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     if (existing === undefined || !Number.isInteger(existing)) {
-      const row = rows.size;
-      await appendFile(binFile(this.dir, token), buffer);
-      rows.set(id, row);
+      // 新行号 = max(索引最大行号 + 1, bin 现有整行数)，并**按偏移写**到该行：
+      // - 删除留洞后活条数 ≠ 下一行（旧版 rows.size 撞号的根因）；
+      // - 删掉的恰是最后一行时，最大行号 + 1 < bin 行数，追加会落到别处；
+      // - 追加写到一半被杀留下的残行（不足一行）由这次写覆盖，后面不再错位。
+      const rowBytes = dims * 4;
+      const handle = await openForWrite(binFile(this.dir, token));
+      try {
+        const wholeRows = Math.floor((await handle.stat()).size / rowBytes);
+        let row = wholeRows;
+        for (const used of rows.values()) row = Math.max(row, used + 1);
+        await handle.write(buffer, 0, buffer.byteLength, row * rowBytes);
+        rows.set(id, row);
+      } finally {
+        await handle.close();
+      }
     } else {
       // 原位重写：读全量 → 换行 → 原子写回（行定长，越界行补齐）
       let current = Buffer.alloc(Math.max((existing + 1) * dims * 4, 0));
@@ -164,7 +188,7 @@ export class VectorStore {
         if (!isNotFound(cause)) throw cause;
       }
       buffer.copy(current, existing * dims * 4);
-      await writeFile(binFile(this.dir, token), current);
+      await writeBytesAtomic(binFile(this.dir, token), current);
     }
     const index: Record<string, number> = {};
     for (const [entryId, row] of rows) index[entryId] = row;
