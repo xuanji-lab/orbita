@@ -26,13 +26,21 @@ export function createPlanTools(): ToolDefinition[] {
   const updatePlan: ToolDefinition = {
     name: PLAN_TOOL_NAME,
     label: PLAN_TOOL_NAME,
+    // 「做一步勾一步」要说到调用时机（2026-10-30 实测）：只说「做完就勾」时，GLM-5.3 做完第 1 步没勾
+    // 就做第 2 步、之后一次勾两步，DeepSeek V4.1 Flash 只在开头和结尾各调一次，右栏的计划一直停在
+    // 第 2 步；Kimi K3.1 Pro 把勾和下一步的第一个动作放在同一批里，计划始终跟得上对话，也不多花一个来回——
+    // 说明里直接要求这个写法。
     description:
-      "Write down your plan for this task and keep it current; the user sees it as a checklist beside " +
-      "the conversation. Use it when the work takes three or more distinct steps; skip it for quick " +
-      "questions and one-step changes. Send the whole list every time (it replaces the previous one). " +
-      "Keep exactly one step in_progress while you work, mark a step done as soon as it is finished, " +
-      "and add or reword steps when the plan changes. Steps are short, outcome-focused phrases in the " +
-      "user's language.",
+      "Write down your plan for this task and keep it current; the user watches it as a checklist " +
+      "beside the conversation. Use it when the work takes three or more distinct steps (changing code, " +
+      "adding tests, running them and updating docs are separate steps); skip it for quick questions " +
+      "and one-step changes. Write it as soon as you know the steps: right away, or after a first look " +
+      "around. Send the whole list every time (it replaces the previous one). Exactly one step is " +
+      "in_progress while you work. Each time you move on, call update_plan again in the same batch as " +
+      "the next step's first tool call, marking the finished step done and the next one in_progress. " +
+      "Do not start a later step while an earlier one still shows in_progress, and do not save the " +
+      "ticks for the end. Add or reword steps when the plan changes. Steps are short, outcome-focused " +
+      "phrases in the user's language.",
     parameters: {
       type: "object",
       properties: {
