@@ -18,7 +18,7 @@ const VENDOR_NAMES_ZH: Record<DictationProvider, string> = {
   stepfun: "阶跃星辰",
 };
 
-const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录" };
+const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划" };
 
 /**
  * 界面文案表——中文，Copybook（小学作业）主题下使用。类型由英文真源推出。
@@ -432,7 +432,7 @@ export const zh: Messages = {
     browser: "内置浏览器",
     bell: (count) => (count > 0 ? `通知 · ${count} 条未读` : "通知"),
     intent: "意图图谱",
-    context: "上下文",
+    context: "这条任务",
   },
 
   browser: {
@@ -1898,6 +1898,25 @@ export const zh: Messages = {
     cardVerdictSkipped: "不表态 · 按原样交给模型",
     cardVerdictPending: "等你确认",
     cardVerdictUnasked: "没问你",
+  },
+
+  taskPanel: {
+    tabProgress: "进度",
+    tabContext: "上下文",
+    state: (state) =>
+      state === "running" ? "在跑" : state === "waiting" ? "等你" : state === "failed" ? "出错了" : state === "done" ? "做完了" : "空闲",
+    turns: (count) => `${count} 轮`,
+    plan: "计划",
+    planCount: (done, total) => `${done} / ${total}`,
+    noPlan: "还没有计划——三步以上的活，智能体会先列一张。",
+    history: "做过的",
+    nothingYet: "还没开始。",
+    later: "留到以后",
+    markDone: "标为完成",
+    reopen: "重新打开",
+    jump: "在对话里看这一段",
+    noTask: "打开一个任务就能看到进度。",
+    contextLine: "上下文",
   },
 
   contextPanel: {

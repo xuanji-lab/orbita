@@ -338,6 +338,12 @@ it has run 5s, and says "taking longer than usual" after a 28s gap. The threshol
 chains (gap median 1.6s, P90 9.5s, P97 28s). Too quiet reads as stuck; too busy reads as motion
 with no result. Settled, it is one line (files written · steps · counts · time) that opens into a
 chapter timeline; a chapter opens into its own tool rows.
+The same chapters appear in the right panel's **This task** (2026-10-30). Its Progress tab lists
+the agent's plan (from `update_plan`: an empty ring for pending, a blue pie for the step in progress,
+a check for done), what was done (one row per turn, with the latest turn opened into its chapters;
+clicking a chapter scrolls the conversation to it), and the leftovers saved for later. Its Context tab
+is what the agent is holding. `update_plan` is bookkeeping, not a step: it never counts toward step
+totals.
 Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
