@@ -3,7 +3,7 @@ import type { MemoryEntryType, MemoryEntryView } from "@shared/memory";
 import { Icon, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { formatDay } from "../settings/migration-groups.ts";
-import { memoryUndoActions } from "./memory-view.ts";
+import { isRevertMuted, memoryUndoActions } from "./memory-view.ts";
 import { mutateMemory } from "./useMemory.ts";
 import "./memory.css";
 
@@ -45,6 +45,8 @@ export function MemoryEntryCard(props: {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const state = entry.status ?? "active";
+  // 随对话回退停用：标签说清楚为什么，不把保留值当「停用原因」原文印出来
+  const revertMuted = isRevertMuted(entry);
   const evolution = props.view.evolution;
   const now = Date.now();
 
@@ -136,18 +138,25 @@ export function MemoryEntryCard(props: {
             {entry.reason}
           </p>
         )}
-        {state === "muted" && entry.mutedReason !== undefined && (
+        {state === "muted" && entry.mutedReason !== undefined && !revertMuted && (
           <p className="mem-entry-reason">
             {t.memory.retireReasonLabel}
             {entry.mutedReason}
           </p>
         )}
         <span className="mem-entry-meta">
-          {state !== "active" && (
-            <span className="mem-tag" data-tone={state === "stale" ? "warn" : undefined}>
-              <Icon name={state === "muted" ? "eye-off" : "history"} size={11} strokeWidth={1.8} />
-              {state === "muted" ? t.memory.statusMuted : t.memory.statusStale}
+          {revertMuted ? (
+            <span className="mem-tag" title={t.memory.revertMutedHint}>
+              <Icon name="undo-2" size={11} strokeWidth={1.8} />
+              {t.memory.revertMuted}
             </span>
+          ) : (
+            state !== "active" && (
+              <span className="mem-tag" data-tone={state === "stale" ? "warn" : undefined}>
+                <Icon name={state === "muted" ? "eye-off" : "history"} size={11} strokeWidth={1.8} />
+                {state === "muted" ? t.memory.statusMuted : t.memory.statusStale}
+              </span>
+            )
           )}
           {entry.source === "agent" && (
             <button type="button" className="mem-tag" title={t.memory.agentRevisedHint} onClick={() => setOpen(true)}>

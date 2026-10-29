@@ -192,6 +192,9 @@ export const en = {
     autoPromotedHint: "Judged to be about you rather than this project, so it applies in every workspace",
     reviseReasonLabel: "Why it changed: ",
     retireReasonLabel: "Why it was dropped: ",
+    revertMuted: "Dropped with a rewind",
+    revertMutedHint:
+      "You went back to an earlier turn in the conversation, which took back the turns this came from, so it's no longer used. Choose \"Use again\" to keep it",
     restorePrevious: "Restore the old statement",
     restorePreviousHint: "Bring the older statement back and stop using this one",
     returnToWorkspace: "Keep it in its workspace only",

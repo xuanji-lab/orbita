@@ -2,8 +2,9 @@
  * 记忆界面（审查面板 › 记忆页签、记忆库页）的数据整形——纯函数，node:test 直接测。
  * 分组顺序、筛选与搜索的口径都在这里定，组件只管画。
  */
-import { MEMORY_USER_TOKEN } from "../../../../shared/memory.ts";
+import { MEMORY_MUTED_REVERTED, MEMORY_USER_TOKEN } from "../../../../shared/memory.ts";
 import type {
+  MemoryEntry,
   MemoryScopeSummary,
   MemoryEntryType,
   MemoryEntryView,
@@ -63,6 +64,21 @@ export function groupMemoryEntries(
 export function rememberedTurns(view: MemorySessionView | null): MemorySessionView["turns"] {
   if (view === null) return [];
   return [...view.turns].filter((row) => row.remembered.length > 0).sort((a, b) => b.turn - a.turn);
+}
+
+/** 随对话回退停用的条目（「回到这里」撤回了它的全部来源轮；恢复使用后不再算）。 */
+export function isRevertMuted(entry: MemoryEntry): boolean {
+  return entry.status === "muted" && entry.mutedReason === MEMORY_MUTED_REVERTED;
+}
+
+/**
+ * 对话里「记忆 · 记住 M 条」行的条目：去掉随回退停用的。回退后重说的那一轮与被撤回的
+ * 那一轮同一个轮号，不去掉的话新气泡下会挂着已撤回那几轮记下的东西；它们在审查 › 记忆
+ * 页签与记忆库里照常可见（带标签、可恢复）。
+ */
+export function liveRemembered(row: MemorySessionView["turns"][number]): MemorySessionView["turns"][number] {
+  const kept = row.remembered.filter((view) => !isRevertMuted(view.entry));
+  return kept.length === row.remembered.length ? row : { ...row, remembered: kept };
 }
 
 /**

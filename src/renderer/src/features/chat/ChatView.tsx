@@ -107,7 +107,7 @@ import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import type { MemorySessionTurnView } from "@shared/memory";
 import { useMemorySession } from "../memory/useMemory.ts";
-import { pairMemoryTurns } from "../memory/memory-view.ts";
+import { liveRemembered, pairMemoryTurns } from "../memory/memory-view.ts";
 import "../memory/memory.css";
 import { DiffBody } from "../../shell/DiffView";
 import { RevertPreviewBar } from "./RevertPreviewBar";
@@ -956,7 +956,8 @@ function ChatViewBody(props: {
     const view = memorySession.data;
     if (view === null) return null;
     const users = session.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : []));
-    const rows = pairMemoryTurns(users, view);
+    // 随回退停用的条目不挂在对话里（重说的那一轮与被撤回的同轮号，见 liveRemembered）
+    const rows = new Map([...pairMemoryTurns(users, view)].map(([id, row]) => [id, liveRemembered(row)]));
     return { rows };
   }, [memorySession.data, session.transcript]);
   // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象

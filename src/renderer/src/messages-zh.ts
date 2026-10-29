@@ -145,6 +145,8 @@ export const zh: Messages = {
     autoPromotedHint: "判断这条说的是你本人、不只是这个项目，所以记到了所有工作区",
     reviseReasonLabel: "改的原因：",
     retireReasonLabel: "停用原因：",
+    revertMuted: "随对话回退停用",
+    revertMutedHint: "你在对话里回到了更早的一轮，记下这条的那几轮被撤回了，所以不再使用；点「恢复使用」可以接着用",
     restorePrevious: "恢复旧说法",
     restorePreviousHint: "把旧的那条恢复使用，这条不再用",
     returnToWorkspace: "只留在原工作区",

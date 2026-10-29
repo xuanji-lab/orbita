@@ -1,7 +1,10 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { MemoryEntry, MemoryEntryView, MemorySessionView } from "../../../../shared/memory.ts";
+import { MEMORY_MUTED_REVERTED } from "../../../../shared/memory.ts";
 import {
+  isRevertMuted,
+  liveRemembered,
   manualDraftProblem,
   memoryUndoActions,
   pairMemoryTurns,
@@ -178,5 +181,29 @@ describe("手动添加校验", () => {
     assert.equal(manualDraftProblem({ type: "fact", text: "x", reason: "" }), null);
     assert.equal(manualDraftProblem({ type: "preference", text: "x", reason: " " }), "reason");
     assert.equal(manualDraftProblem({ type: "insight", text: "  ", reason: "y" }), "text");
+  });
+});
+
+describe("随对话回退停用", () => {
+  test("isRevertMuted：只认 muted + 回退保留值；agent 停用 / 恢复使用后不算", () => {
+    assert.equal(isRevertMuted(entry("a", { status: "muted", mutedReason: MEMORY_MUTED_REVERTED })), true);
+    assert.equal(isRevertMuted(entry("b", { status: "muted", mutedReason: "agent 说不对" })), false);
+    assert.equal(isRevertMuted(entry("c", { status: "active" })), false);
+  });
+
+  test("liveRemembered：对话行里去掉随回退停用的条目（重说的那一轮与被撤回的同轮号）；别的停用照常留着", () => {
+    const row = {
+      turn: 2,
+      at: 1000,
+      used: [],
+      remembered: [
+        view(entry("old", { status: "muted", mutedReason: MEMORY_MUTED_REVERTED })),
+        view(entry("new")),
+        view(entry("retired", { status: "muted", mutedReason: "agent 说不对" })),
+      ],
+    };
+    assert.deepEqual(liveRemembered(row).remembered.map((item) => item.entry.id), ["new", "retired"]);
+    const clean = { ...row, remembered: [view(entry("new"))] };
+    assert.equal(liveRemembered(clean), clean);
   });
 });
