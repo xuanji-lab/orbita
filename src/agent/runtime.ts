@@ -35,6 +35,7 @@ import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
+import { buildRulesInventory } from "../shared/context-inventory.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
@@ -971,6 +972,16 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * （用户旅行）下一轮自然换标，代价是那一轮历史前缀重算一次、缓存失效一回。
    */
   const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  /**
+   * 规则注入清单的原料（上下文面板「规则与说明」组）：services 建好后读一次，
+   * before_agent_start（首个 LLM 调用前）组装成 contextInventory 事件。空串段
+   * （如关掉的 Git 标识）不透传，segments 只报实际注入的。
+   */
+  let rulesSources: {
+    agentsFiles: { path: string; content: string }[];
+    skills: { name: string; description: string }[];
+    agentDir: string;
+  } | null = null;
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -1040,6 +1051,27 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 intentGuideline: "intent" in command && command.intent !== undefined,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
+              // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
+              // 含规则文件与技能索引），不进 segments，免得加重。推送失败不影响对话
+              if (rulesSources !== null) {
+                try {
+                  send({
+                    type: "contextInventory",
+                    sessionId: command.sessionId,
+                    inventory: buildRulesInventory({
+                      agentsFiles: rulesSources.agentsFiles,
+                      skills: rulesSources.skills,
+                      basePrompt: event.systemPrompt,
+                      segments: segments
+                        .filter((segment) => segment.name !== "pi-base")
+                        .map((segment) => ({ id: segment.name, text: segment.text })),
+                      agentDir: rulesSources.agentDir,
+                    }),
+                  });
+                } catch (cause) {
+                  console.error("[context-inventory] 注入清单推送失败", cause);
+                }
+              }
               // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
               return { systemPrompt: joinSystemPrompt(segments) };
             });
@@ -1122,6 +1154,23 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   services.settingsManager.applyOverrides({
     retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
   });
+  // 规则清单原料：resourceLoader 在 services 创建时已 reload，这里读一次快照。
+  // 读失败只记日志——清单推不出去面板退「未知」，不该拦对话
+  try {
+    rulesSources = {
+      agentsFiles: services.resourceLoader.getAgentsFiles().agentsFiles.map((file) => ({
+        path: file.path,
+        content: file.content,
+      })),
+      skills: services.resourceLoader.getSkills().skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+      })),
+      agentDir: services.agentDir,
+    };
+  } catch (cause) {
+    console.error("[context-inventory] 规则清单原料读取失败", cause);
+  }
   /**
    * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
    * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。

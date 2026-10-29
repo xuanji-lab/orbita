@@ -9,6 +9,8 @@ import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
+import { ContextPanel } from "./features/context/ContextPanel.tsx";
+import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -827,6 +829,8 @@ export function App() {
   }, []);
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
+  /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
+  const openContextPanel = useCallback(() => handlePanel("context"), [handlePanel]);
 
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
   // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
@@ -1160,6 +1164,7 @@ export function App() {
                 panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
+                onOpenContextPanel={openContextPanel}
                 onOpenSideChat={openInSideChat}
                 intentOpenableIds={intentOpenableIds}
               />
@@ -1239,6 +1244,12 @@ export function App() {
                       list.filter((tab) => tab !== NEW_TASK_TAB),
                     )
                   }
+                />
+              ) : shownPanel === "context" ? (
+                <ContextPanel
+                  sessionId={mainSessionId}
+                  entry={(mainSessionId === null ? undefined : engine.states.get(mainSessionId)) ?? EMPTY_ENTRY}
+                  cwd={session.cwd ?? ""}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
