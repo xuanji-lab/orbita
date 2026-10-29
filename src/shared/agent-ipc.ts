@@ -289,6 +289,11 @@ export const ipcChannels = {
    * 进程里独立调用（不开会话、不落盘，同 classifyGreetings 的通道）。
    */
   focusSummarize: "focus:summarize",
+  /**
+   * 提示音记账：renderer 每真响一声就报一次（载荷 ChimeLogRequest，见 shared/notify.ts），
+   * 主进程追加一行到 `<userData>/chime-log.jsonl`——事后对证「那一声是谁」。
+   */
+  notifyChimeLog: "notify:chime-log",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
