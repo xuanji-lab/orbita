@@ -2133,6 +2133,7 @@ export const en = {
     later: "For later",
     markDone: "Mark done",
     reopen: "Reopen",
+    toTask: "Start as a task, with this item's context",
     jump: "Show this in the conversation",
     notInChat: "This turn isn't loaded in the conversation yet. Scroll up there to reach it.",
     olderNotLoaded: "Earlier turns aren't loaded.",

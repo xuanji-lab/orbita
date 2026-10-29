@@ -58,6 +58,8 @@ export function ContextPanel(props: {
   /** 这条会话收割的遗留（进度页签的「留到以后」） */
   carryovers: readonly Carryover[];
   onSetCarryoverStatus: (id: string, status: Carryover["status"]) => void;
+  /** 「转成任务」：与侧栏遗留面板「带上下文继续」同一条路（App 的 startCarryoverTask） */
+  onStartCarryoverTask: (item: Carryover) => void;
 }) {
   const t = useT();
   const [scope, setScope] = useState<ContextScope>("turn");
@@ -94,6 +96,7 @@ export function ContextPanel(props: {
           runState={props.runState}
           carryovers={props.carryovers}
           onSetCarryoverStatus={props.onSetCarryoverStatus}
+          onStartCarryoverTask={props.onStartCarryoverTask}
           onOpenContext={() => props.onTab("context")}
         />
       ) : (

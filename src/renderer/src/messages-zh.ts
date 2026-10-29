@@ -1962,6 +1962,7 @@ export const zh: Messages = {
     later: "留到以后",
     markDone: "标为完成",
     reopen: "重新打开",
+    toTask: "转成任务：带着这一项的上下文开新任务",
     jump: "在对话里看这一段",
     notInChat: "对话里还没加载到这一轮，往上翻到它就能跳过去。",
     olderNotLoaded: "更早的轮还没载入。",

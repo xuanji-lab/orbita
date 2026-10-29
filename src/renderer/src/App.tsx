@@ -5,7 +5,7 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
-import { childSessions, rootSessions } from "@shared/session";
+import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
@@ -404,6 +404,24 @@ export function App() {
     newTaskNonceRef.current += 1;
     setNewTaskSignal(newTaskNonceRef.current);
     session.newTask();
+  };
+  /**
+   * 遗留事项带上下文开工（转成任务）：侧栏遗留面板的「带上下文继续」与右栏「这条任务 ›
+   * 留到以后」的「转成任务」共用这一条路（2026-10-30 之前它是侧栏里的一段内联回调）。
+   * 开工即回对话：退出遗留面板与整页盖层、展开侧栏；新会话落在来源会话的组里（cwd / 归属
+   * 跟随它，见 useChatSession.startCarryoverTask），那一组得展开——工作区组在新会话打开时由
+   * Sidebar 自己展开（「打开的会话落在收着的组里就展开」那条 effect），TASKS 组靠新任务信号。
+   */
+  const startCarryoverTask = (item: Carryover): void => {
+    setShowCarryovers(false);
+    setOverlay(null);
+    setSidebarCollapsed(false);
+    const source = session.sessions.find((meta) => meta.id === item.sourceSessionId);
+    if (source?.workspaceId == null) {
+      newTaskNonceRef.current += 1;
+      setNewTaskSignal(newTaskNonceRef.current);
+    }
+    session.startCarryoverTask(item);
   };
   /** 窗口宽（胶囊几何要用：会话胶囊居中于对话列、右栏胶囊钉分隔线） */
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
@@ -1171,6 +1189,7 @@ export function App() {
           collapsed={sidebarCollapsed}
           onCollapsedChange={setSidebarCollapsed}
           newTaskSignal={newTaskSignal}
+          onStartCarryoverTask={startCarryoverTask}
           filesView={focusFilesView}
           onBrowseWorkspace={(id) => {
             setOverlay(null);
@@ -1324,6 +1343,7 @@ export function App() {
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
                   carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status === "open")}
                   onSetCarryoverStatus={session.setCarryoverStatus}
+                  onStartCarryoverTask={startCarryoverTask}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel

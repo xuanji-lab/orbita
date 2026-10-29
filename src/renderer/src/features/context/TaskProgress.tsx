@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Carryover } from "@shared/session";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import { StatusPie } from "../../shell/StatusPie";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
@@ -32,7 +33,8 @@ import {
  *   与对话里过程块展开后的章节同一份推导；点一章，对话滚到那一块（对话里还没加载到的轮不可点）。
  *   会话槽只装尾窗，更早的轮按需载入：上下文页签「整个任务」已经拉过就直接用，没拉过在列表顶上
  *   给一行「载入」——长会话的全量能有上百 MB，进度是这个面板的默认页签，不该一打开就全搬进来；
- * - 留到以后：这条会话收割的遗留（open），勾掉即完成；
+ * - 留到以后：这条会话收割的遗留（open），勾掉即完成；悬停出「转成任务」——与侧栏遗留面板的
+ *   「带上下文继续」同一个动作、同一个图标（App 的 startCarryoverTask）；
  * - 页底一行上下文用量，点进「上下文」页签。
  */
 export function TaskProgress(props: {
@@ -42,6 +44,7 @@ export function TaskProgress(props: {
   runState: SessionRunState;
   carryovers: readonly Carryover[];
   onSetCarryoverStatus: (id: string, status: Carryover["status"]) => void;
+  onStartCarryoverTask: (item: Carryover) => void;
   onOpenContext: () => void;
 }) {
   const t = useT();
@@ -149,15 +152,26 @@ export function TaskProgress(props: {
             <span className="tp-n">{props.carryovers.length}</span>
           </div>
           {props.carryovers.map((item) => (
-            <label key={item.id} className="tp-later" title={item.detail}>
-              <input
-                type="checkbox"
-                checked={item.status === "done"}
-                aria-label={item.status === "done" ? t.taskPanel.reopen : t.taskPanel.markDone}
-                onChange={(event) => props.onSetCarryoverStatus(item.id, event.target.checked ? "done" : "open")}
+            <div key={item.id} className="tp-later">
+              <label className="tp-later-check" title={item.detail}>
+                <input
+                  type="checkbox"
+                  checked={item.status === "done"}
+                  aria-label={item.status === "done" ? t.taskPanel.reopen : t.taskPanel.markDone}
+                  onChange={(event) => props.onSetCarryoverStatus(item.id, event.target.checked ? "done" : "open")}
+                />
+                <span className="tp-text">{item.title}</span>
+              </label>
+              {/* 行尾悬停动作（RowHoverAction 配方）：平时不占位，悬停 / 键盘聚焦到这一行才浮出 */}
+              <RowHoverAction
+                icon="corner-up-right"
+                title={t.taskPanel.toTask}
+                onClick={() => props.onStartCarryoverTask(item)}
+                right={0}
+                top={4}
+                className="reveal row-hover-act"
               />
-              <span className="tp-text">{item.title}</span>
-            </label>
+            </div>
           ))}
         </section>
       )}

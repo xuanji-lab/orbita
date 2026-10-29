@@ -356,8 +356,15 @@
   color: var(--color-text-secondary);
 }
 
-/* 留到以后：勾掉即完成 */
+/* 留到以后：勾掉即完成；悬停 / 键盘聚焦到这一行浮出「转成任务」（.reveal，同 .skill-row） */
 .tp-later {
+  position: relative;
+}
+.tp-later:hover .reveal,
+.tp-later:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+.tp-later-check {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
@@ -365,7 +372,7 @@
   line-height: var(--line-height-ui);
   cursor: pointer;
 }
-.tp-later input {
+.tp-later-check input {
   margin: var(--space-1) 0 0;
   accent-color: var(--color-accent);
 }
