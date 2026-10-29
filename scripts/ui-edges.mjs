@@ -161,6 +161,32 @@ for (const r of results ?? []) {
     }
   }
 }
+// 列对齐（2026-10-30）：消息列与输入卡同一根外线，正文的字在外线往里一个血线
+const column = await evaluate(`(() => {
+  const transcript = document.querySelector(".chat-transcript > div");
+  const composer = document.querySelector(".composer-card");
+  if (transcript === null || composer === null) return null;
+  const t = transcript.getBoundingClientRect();
+  const c = composer.getBoundingClientRect();
+  const para = document.querySelector(".assistant-prose .chat-md > *");
+  const hem = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-3")) + 1;
+  return {
+    left: Math.round(c.left - t.left),
+    right: Math.round(c.right - t.right),
+    prose: para === null ? null : Math.round(para.getBoundingClientRect().left - t.left - hem),
+  };
+})()`);
+if (column === null) {
+  console.log("- 列对齐：跳过（页面上没有打开的对话）");
+} else {
+  for (const [name, gap] of [["输入卡左缘 − 消息列左缘", column.left], ["输入卡右缘 − 消息列右缘", column.right], ["正文首字 − 内线", column.prose]]) {
+    if (gap === null) continue;
+    const ok = Math.abs(gap) <= 1;
+    if (!ok) failed++;
+    console.log(`${ok ? "✓" : "✖"} 列对齐：${name} = ${gap}px（期望 0±1）`);
+  }
+}
+
 close();
 console.log(failed === 0 ? "血线守卫：全部通过" : `血线守卫：${failed} 处违规`);
 process.exit(failed === 0 ? 0 : 1);
