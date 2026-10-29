@@ -153,6 +153,7 @@ export const zh: Messages = {
     returnToWorkspaceHint: "搬回它原来所在的工作区",
     statusMuted: "不再使用",
     statusStale: "已过时",
+    inactiveFold: (count) => `过时或停用 · ${count}`,
     edit: "编辑",
     save: "保存",
     cancel: "取消",
