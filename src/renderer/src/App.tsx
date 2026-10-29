@@ -39,6 +39,7 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -647,17 +648,17 @@ export function App() {
     rightPanel === "subsessions" && subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
 
   /**
-   * agent 开了可见终端（terminal:agent-open）→ **自动点亮终端面板位并激活那个 tab**。
-   * agent 的活要让人看见（Proma 的 terminal:agent-open 同款裁决）：否则它在你背后的
-   * 面板里跑 dev server，你想接手都不知道去哪接。信号是一次性的，TerminalPanel
-   * 消费完就清。
+   * agent 开了可见终端（terminal:agent-open）→ **不再自动弹出终端面板**（2026-10-30
+   * 用户裁决，推翻 Proma 同款的自动点亮）：「我只需要知道它在 run，没必要跳出来」——
+   * 在跑与输出尾巴由对话里的工具行说（过程显示的当前步 + 输出尾巴）。终端照常建在
+   * 面板里，记下 id：用户自己打开终端面板时直接落在 agent 开的那个 tab 上。
+   * 信号是一次性的，TerminalPanel 消费完就清。
    */
   const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
   useEffect(
     () =>
       api.terminal.onEvent((event) => {
         if (event.type !== "agent-open") return;
-        setRightPanel("terminal");
         setPendingTerminal(event.terminalId);
       }),
     [],
@@ -1119,6 +1120,7 @@ export function App() {
   return (
     <LocaleContext.Provider value={locale}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
+    <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     <CitationOpenContext.Provider value={openCitation}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
@@ -1380,6 +1382,7 @@ export function App() {
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
     </PastedTextCollapseContext.Provider>
+    </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>
   );

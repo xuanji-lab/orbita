@@ -323,7 +323,32 @@ export interface TurnGroupUnit {
   startedAt: number | null;
 }
 
-export type TurnViewEntry = RenderEntry | TurnGroupUnit;
+/**
+ * 「一轮一行」过程显示（2026-10-30，设置 › 过程显示 = turn）的折叠单元。与 TurnGroupUnit
+ * 的区别：**说明性正文也收进来**——一轮里夹在工具之间的「我先读一下…」是章节标题，
+ * 不是回答；只有最后一个过程成员之后的正文（结尾回答）留在折叠外。于是一轮一个块，
+ * 不再被每句旁白切成几条 Worked。
+ *
+ * `live` = 活跃轮的那一块：渲染成定高的现场块（头行计数 + 当前章节 + 最近几步 +
+ * 当前这一步）；落定后同一个 key 翻成一行结论，可展开成章节时间线。
+ * `answering` = 活跃块之后已经有正文在流（可能是结尾回答，也可能是下一段旁白——
+ * 下一个工具一来它就收进块里当章节）。
+ */
+export interface TurnProcessUnit {
+  kind: "turnProcess";
+  /** `proc:${首成员 key}`：块从活跃翻成落定时 key 不变，展开状态保住 */
+  key: string;
+  steps: readonly ProcessStep[];
+  durationMs: number | null;
+  startedAt: number | null;
+  live: boolean;
+  answering: boolean;
+}
+
+/** 过程块的一步：思考 / 工具 / 工具组，或夹在中间的说明性正文（章节标题） */
+export type ProcessStep = TurnMemberEntry | Extract<RenderUnit, { kind: "text" }>;
+
+export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit;
 
 /** 折叠成员：思考、单行工具调用、工具组。正文永不进折叠（2026-10-18 裁决），不在联合里。 */
 export type TurnMemberEntry = Extract<
@@ -441,6 +466,39 @@ export function groupTurns(
 }
 
 /**
+ * 「一轮一行」的分组（groupTurns 的另一种显示，设置 › 过程显示 = turn）。切段规则与
+ * groupTurns 相同；区别在块内：说明性正文收进过程块当章节，活跃轮也收（成 live 块），
+ * 只有最后一个过程成员之后的正文留在外面。通道工具、钉住工具、轮尾文件卡的位置规矩
+ * 与 foldSegment 一致（同一段代码，只换块内折法）。
+ */
+export function groupTurnsByTurn(
+  entries: readonly RenderEntry[],
+  turnActive: boolean,
+  results?: ToolResultIndex,
+): TurnViewEntry[] {
+  const segments: RenderEntry[][] = [];
+  for (const entry of entries) {
+    if (
+      entry.kind === "user" ||
+      entry.kind === "compacted" ||
+      entry.kind === "channelMark" ||
+      entry.kind === "revertMark" ||
+      segments.length === 0
+    ) {
+      segments.push([entry]);
+    } else {
+      segments[segments.length - 1]?.push(entry);
+    }
+  }
+  const activeIndex = turnActive ? segments.length - 1 : -1;
+  const view: TurnViewEntry[] = [];
+  segments.forEach((segment, index) => {
+    view.push(...foldSegment(segment, results, index === activeIndex ? "live" : "turn"));
+  });
+  return view;
+}
+
+/**
  * 折叠一个已落定的段。通道工具调用（delegate / reply_subsession / report_to_parent）
  * 不算轮成员且必须原样留在流里、位置不变（子会话 PR4b）——按它们把段切成若干块，
  * 每块各自套用「找首尾轮成员、中间收进折叠」的规则，通道工具本身穿插在块之间，
@@ -453,13 +511,21 @@ export function groupTurns(
  * 标识，可追溯。若按原位切开，show 夹在轮中间会产生「两个折叠块夹一张画廊」
  * 的割裂形态（正是本裁决要消灭的）。
  */
-function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
+function foldSegment(
+  segment: readonly RenderEntry[],
+  results?: ToolResultIndex,
+  mode: "steps" | "turn" | "live" = "steps",
+): TurnViewEntry[] {
   const view: TurnViewEntry[] = [];
   let chunk: RenderEntry[] = [];
   const pinned: RenderEntry[] = [];
   const tailCards: RenderEntry[] = [];
-  const flushChunk = () => {
-    view.push(...foldChunk(chunk, results));
+  // 一段里的第几块：只有第一块带轮头时间（foldChunk 的同一条规矩，跨块也成立）
+  let chunkIndex = 0;
+  const flushChunk = (last: boolean) => {
+    if (mode === "steps") view.push(...foldChunk(chunk, results));
+    else view.push(...foldChunkByTurn(chunk, results, mode === "live" && last, chunkIndex === 0));
+    if (chunk.length > 0) chunkIndex += 1;
     chunk = [];
   };
   for (const entry of segment) {
@@ -475,13 +541,13 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
       continue;
     }
     if (isChannelToolCall(entry)) {
-      flushChunk();
+      flushChunk(false);
       view.push(entry);
       continue;
     }
     chunk.push(entry);
   }
-  flushChunk();
+  flushChunk(true);
   if (tailCards.length > 0) view.push(...tailCards);
   if (pinned.length === 0) return view;
   // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
@@ -529,6 +595,50 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
 }
 
 /**
+ * 「一轮一行」的块内折法：从第一个过程成员到最后一个过程成员之间的一切（含说明性
+ * 正文）收进一个 TurnProcessUnit；第一个成员之前的正文与最后一个成员之后的正文留在
+ * 外面。块里夹着的其他单元（意图召回卡之类，不是过程也不是正文）挪到块后，不吞。
+ * 空白正文同 foldChunk：不当边界也不落视图。
+ */
+function foldChunkByTurn(
+  chunk: readonly RenderEntry[],
+  results: ToolResultIndex | undefined,
+  live: boolean,
+  firstChunk: boolean,
+): TurnViewEntry[] {
+  const kept = chunk.filter((entry) => !(entry.kind === "text" && entry.text.trim() === ""));
+  let first = -1;
+  let last = -1;
+  kept.forEach((entry, index) => {
+    if (!isTurnMember(entry)) return;
+    if (first === -1) first = index;
+    last = index;
+  });
+  if (first === -1) return [...kept];
+  const steps: ProcessStep[] = [];
+  const aside: RenderEntry[] = [];
+  for (const entry of kept.slice(first, last + 1)) {
+    if (isTurnMember(entry) || entry.kind === "text") steps.push(entry);
+    else aside.push(entry);
+  }
+  const after = kept.slice(last + 1);
+  return [
+    ...kept.slice(0, first),
+    {
+      kind: "turnProcess",
+      key: `proc:${steps[0]?.key ?? ""}`,
+      steps,
+      durationMs: segmentSpan(steps, results),
+      startedAt: firstChunk ? chunkStartAt(chunk) : null,
+      live,
+      answering: live && after.some((entry) => entry.kind === "text"),
+    },
+    ...aside,
+    ...after,
+  ];
+}
+
+/**
  * 段内最早的 **assistant 侧**渲染单元 timestamp = 这轮开始流式回复的时刻。
  * 段里还带着开轮的 user 单元（它不是 assistant 的输出，且它早于任何回答），
  * 用 isTurnContent 排掉；缺时间戳的单元在场时 null（同 segmentSpan 的口径：
@@ -568,7 +678,7 @@ export function failedFoldKey(view: readonly TurnViewEntry[]): string | null {
   }
   for (let i = start; i < view.length; i += 1) {
     const entry = view[i];
-    if (entry !== undefined && entry.kind === "turnGroup") return entry.key;
+    if (entry !== undefined && (entry.kind === "turnGroup" || entry.kind === "turnProcess")) return entry.key;
   }
   return null;
 }
@@ -1300,13 +1410,13 @@ export function branchAnchorIds(
  */
 export function branchAnchorEntries(
   anchorIds: ReadonlySet<string>,
-  entries: readonly (RenderEntry | TurnGroupUnit)[],
+  entries: readonly TurnViewEntry[],
 ): Map<number, string> {
   // 倒序扫：每个锚点消息**首次**命中就是它的最后一个 entry，后面不再覆盖
   const lastOf = new Map<string, number>();
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry === undefined || entry.kind === "turnGroup") continue;
+    if (entry === undefined || entry.kind === "turnGroup" || entry.kind === "turnProcess") continue;
     let messageId: string | null = null;
     if (entry.kind === "text" || entry.kind === "thinking" || entry.kind === "toolCall") {
       messageId = entry.messageId;

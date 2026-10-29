@@ -324,6 +324,16 @@ the turn settles; a failed run keeps a red glyph on the header so failure never 
 The turn's own rollup line (`Worked 2.8s · thought 1 · tools 4`) is a footnote, not a heading: one
 size and weight for the whole line — `--font-size-sm`, 500, tertiary — on a 28px row
 (`--control-height-sm`). It used to open at 14px / 650 and so outweighed the answer below it.
+That describes **Every step**, one of two process displays (Settings › Agent's work). The default,
+**One line per turn** (2026-10-30), folds the narration between tool calls into the turn as chapter
+titles, so a turn is one block, not one rollup per sentence. While it runs, the block has a fixed
+height and only its text changes: a head (step N · counts per tool · failures · a clock that ticks
+every second), the current chapter, the last three steps fading out, and the current step with its
+own clock — `Thinking · 12s` when no tool runs. The block shows the end of a command's output once
+it has run 5s, and says "taking longer than usual" after a 28s gap. The thresholds come from real
+chains (gap median 1.6s, P90 9.5s, P97 28s). Too quiet reads as stuck; too busy reads as motion
+with no result. Settled, it is one line (files written · steps · counts · time) that opens into a
+chapter timeline; a chapter opens into its own tool rows.
 Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
