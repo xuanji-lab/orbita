@@ -159,4 +159,23 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "memory-system",
+    icon: "brain",
+    name: { zh: "记忆系统", en: "Memory system" },
+    summary: {
+      zh: "对话按事件整理成事实 / 偏好 / 经验三类原子记忆，每轮开始前召回相关的注入上下文（需要先在设置里配好家务活模型）。",
+      en: "Conversations are distilled into atomic memories of fact / preference / insight by event, and relevant ones are recalled into context before each turn (needs a chore model configured first).",
+    },
+    changelog: [
+      {
+        pr: null,
+        date: "2026-10-29",
+        note: {
+          zh: "首版后端：独立记忆服务进程，对话按事件段切分、每段整理成事实 / 偏好 / 经验，每轮开始前召回注入；条目与注入记录的界面在后续版本里加。",
+          en: "First backend version: a separate memory service process, conversations segmented by event and distilled into facts / preferences / insights, with per-turn recall injection; the UI for entries and injections comes later.",
+        },
+      },
+    ],
+  },
 ];

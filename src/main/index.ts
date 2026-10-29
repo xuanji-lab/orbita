@@ -19,6 +19,9 @@ import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
+import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
+import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
+import { choreModelPayload } from "./memory/chore.ts";
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
@@ -311,7 +314,16 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
-  registerSettingsIpc(settings);
+  // 记忆服务（实验功能 memory-system）的开关观察：开了就拉起、关了就停
+  // （memoryHost 在后面定义；设置写入只发生在窗口起来之后，那时已就绪）。
+  // 其余设置的写入也会过这道：开关没变时拉起 / 停都是空操作，无副作用
+  registerSettingsIpc(settings, (next) => {
+    if (next.experimentalFeatures?.["memory-system"] === true) {
+      void memoryHost?.ensureStarted();
+    } else {
+      memoryHost?.stop();
+    }
+  });
   registerWindowIpc();
   const initialSettings = await settings.read();
   applyNativeTheme(initialSettings);
@@ -533,6 +545,9 @@ void app.whenReady().then(async () => {
     // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
     // 在 record 之前喂：与 recorder 各自独立，互不阻塞
     intentIngest.onEvent(event);
+    // 记忆构建（实验功能 memory-system）同一处喂：盯轮落定，正常结束的一轮
+    // 交给记忆服务（跟踪器在下面定义，TDZ 说明同 intentIngest）
+    memoryTurns.onEvent(event);
     record(event);
     broadcastAgentEvent(event);
     // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
@@ -577,13 +592,47 @@ void app.whenReady().then(async () => {
       console.error("[intent] 回退后的作废抛错（不影响回退）", cause);
     }
   };
+  /*
+   * 记忆系统（实验功能 memory-system）的主进程两件套：
+   * 1. 记忆服务进程的管家（开关开着时拉起，与 agent 进程同级的 utility 进程，
+   *    env 沿 agent 那份——模型目录缓存的 env 变量在里面）；
+   * 2. 轮次跟踪器：submit 时 begin（ipc.ts 已判根会话 + 用户原话），事件泵喂
+   *    onEvent，轮落定时把这一轮交给服务。子会话不 begin（读记忆但不写）。
+   * 实验开关关着时：submit 不 begin、服务不拉起，整条链路不碰。
+   */
+  const memoryHost = new MemoryServiceHost({
+    runtimePath: resolveMemoryRuntimePath(__dirname),
+    dir: join(configDir, "memory"),
+    env: agentProcessEnv,
+  });
+  const memoryTurns = new MemoryTurnTracker({
+    load: async (id) => {
+      const detail = await sessions.load(id);
+      return detail === null ? null : { transcript: detail.transcript };
+    },
+    readMeta: (id) => sessions.readMeta(id),
+    isMemoryOn: async () =>
+      (await settings.read()).experimentalFeatures?.["memory-system"] === true,
+    readChore: () => choreModelPayload(settings, providers),
+    settle: async (payload) => {
+      // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）
+      await memoryHost.ensureStarted();
+      memoryHost.turnSettled(payload);
+    },
+  });
+  // 启动时开关已开：先拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
+  // 半路提取续跑），不等第一轮对话才动。失败只记日志（下次轮后再试拉起）
+  if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
+    void memoryHost.ensureStarted();
+  }
   registerSessionIpc(
     sessions,
     (id) => {
       agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档的尾账也丢
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
       browserSandbox.closeSessionTab(id);
       intentIngest.forget(id);
+      memoryTurns.forget(id);
     },
     agentHost,
     carryovers,
@@ -679,6 +728,7 @@ void app.whenReady().then(async () => {
     mcp,
     settings,
     intentIngest,
+    memoryTurns,
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
@@ -723,6 +773,8 @@ void app.whenReady().then(async () => {
     appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
+    // 记忆服务直接停（退出路上不跑提取模型）：开段已落盘，下次启动的清扫追认
+    memoryHost.stop();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
   });
