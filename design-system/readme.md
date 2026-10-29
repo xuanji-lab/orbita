@@ -239,11 +239,13 @@ a 32px action rail for session actions, right drawer (320px, **closed by default
 top is one 52px toolbar of capsules centred on the traffic-light line; cards carry no header rows of
 their own (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
-sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
+sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control — a workspace's tasks indent so
+their titles start on the workspace name's line, their marker slot under its folder icon, `.tree-children`) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
 transcript, the composer and the home card, which is why the input box keeps the same width from the
-home screen to the chat page. Density is balanced: 32/36/48px row heights, 24–36px controls, never
-IDE-crowded.
+home screen to the chat page. Density is balanced: 32/36/48px row heights, 24–36px controls — **a control's height is a step, never
+what its content happens to add up to**: chips are `--control-height-xs` (24), not 12px text plus
+padding (that came to 22.5–23px). Never IDE-crowded.
 
 **Backgrounds.** No imagery, no illustration, no pattern, no texture, no photography — the product
 ships none and this system adds none. The app paints no background of its own: on macOS the window
@@ -477,7 +479,7 @@ control starts from one of them, and a deviation is a local override written rig
 | `.glass-card` | `tokens/glass.css` | The one card: `--glass-bg`, hairline `--glass-border`, `--radius-xl`, `--shadow-composer`. |
 | `.glass-float` | `src/renderer/src/styles.css` | Modifier for floating glass (queue strip, approval bar, closing card, menu): lifts the shadow to `--shadow-popover`. The menu also takes `.menu-panel`, a solid `--color-bg-panel`. |
 | `.quiet-control` | `styles.css` | Transparent, secondary ink; hover lays `--option-hover-bg` and lifts ink to primary; `aria-pressed` / `aria-selected` take the mode wash (`--color-mode-active-bg` / `-fg`); disabled is solid tertiary. Chip, IconButton, RailButton, ModeChip. |
-| `.btn-accent` | `styles.css` | The primary action: accent fill, `--color-accent-fg`, hover `--color-accent-strong`; disabled drops to `--color-bg-hover` + tertiary (the glass rule, no opacity). |
+| `.btn-accent` | `styles.css` | The primary action: accent fill, `--color-accent-fg`, hover `--color-accent-strong`; disabled drops to solid `--color-bg-muted` + tertiary (the glass rule, no opacity) and keeps its glyph — the composer's send key shows the stop square only while a turn can actually be stopped. |
 | `.option-row` | `styles.css` | Selection rows (sidebar sessions, settings tabs, menu items): hover `--option-hover-bg`; selected `--option-active-bg` + semibold and wins over hover; disabled solid tertiary. |
 | `.text-field` | `styles.css` | Inputs and textareas: panel fill, hairline border, `--radius-md`; focus is an accent border + `--focus-ring`. |
 
