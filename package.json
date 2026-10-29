@@ -119,6 +119,10 @@
             "rg",
             "fd"
           ]
+        },
+        {
+          "from": "build/bin/darwin-arm64/llama",
+          "to": "bin/llama"
         }
       ],
       "extendInfo": {
@@ -136,6 +140,10 @@
             "rg.exe",
             "fd.exe"
           ]
+        },
+        {
+          "from": "build/bin/win32-x64/llama",
+          "to": "bin/llama"
         }
       ],
       "target": [
