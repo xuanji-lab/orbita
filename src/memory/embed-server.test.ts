@@ -36,6 +36,7 @@ class FakeChild implements EmbedServerChild {
 
 function makeServer(overrides: {
   probeOk?: boolean;
+  probe?: (port: number) => Promise<boolean>;
   post?: (texts: readonly string[]) => number[][];
   resolve?: () => { binaryPath: string; model: typeof MODEL } | null;
   idleMs?: number;
@@ -52,7 +53,7 @@ function makeServer(overrides: {
       children.push(child);
       return child;
     },
-    probe: async () => overrides.probeOk ?? true,
+    probe: overrides.probe ?? (async () => overrides.probeOk ?? true),
     post: async (_port, texts) => (overrides.post ?? ((input) => input.map(() => [1, 0, 0, 0])))(texts),
     freePort: async () => 8123,
     idleUnloadMs: overrides.idleMs ?? 60_000,
@@ -68,6 +69,7 @@ test("ready→embed：spawn 带模型参数（pooling/ctx/embedding），向量�
   const args = spawnedArgs[0]!;
   assert.equal(args[0], "/bin/llama-server");
   assert.ok(args.includes("--embedding"));
+  assert.deepEqual(args.slice(args.indexOf("--port"), args.indexOf("--port") + 2), ["--port", "8123"]);
   assert.deepEqual(args.slice(args.indexOf("--pooling"), args.indexOf("--pooling") + 2), ["--pooling", "mean"]);
   const vectors = await core.embed(["a", "b"]);
   assert.equal(vectors?.length, 2);
@@ -105,15 +107,45 @@ test("post 抛错：停进程回 null（下一轮 ready 重拉）", async () => 
   assert.ok(children[0]!.killCount >= 1);
 });
 
-test("空闲卸载：idleMs 后 kill；再有 embed 重新拉起", async () => {
-  const { core, children } = makeServer({ idleMs: 30 });
+test("空闲卸载：运行中改 idleMs 也生效；再有 embed 重新拉起", async () => {
+  const { core, children } = makeServer({ idleMs: 60_000 });
   assert.equal((await core.embed(["a"])) !== null, true);
+  core.setIdleUnloadMs(30);
   await new Promise((resolve) => setTimeout(resolve, 80));
   assert.equal(core.isRunning(), false);
   assert.ok(children[0]!.killCount >= 1);
   // 重拉
   assert.equal((await core.embed(["a"])) !== null, true);
   assert.equal(children.length, 2);
+});
+
+test("健康检查中的并发 ready 共享同一 promise，不提前报就绪", async () => {
+  const health: { release: () => void } = { release: () => undefined };
+  const healthGate = new Promise<void>((resolve) => {
+    health.release = resolve;
+  });
+  const { core, children } = makeServer({
+    probe: async () => {
+      await healthGate;
+      return true;
+    },
+  });
+  const first = core.ready();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const second = core.ready();
+  let secondSettled = false;
+  void second.then(() => {
+    secondSettled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(secondSettled, false);
+  assert.equal(core.isRunning(), false);
+  assert.equal(children.length, 1);
+  health.release();
+  assert.equal(await first, true);
+  assert.equal(await second, true);
+  assert.equal(core.isRunning(), true);
+  assert.equal(children.length, 1);
 });
 
 test("换模型：resolve 返回不同 id 时先停旧进程再拉新的", async () => {

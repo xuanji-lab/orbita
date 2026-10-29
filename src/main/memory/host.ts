@@ -5,6 +5,7 @@
 import { join } from "node:path";
 import { utilityProcess } from "electron";
 import { MemoryServiceHostCore } from "./host-core.ts";
+import type { MemoryBackfillProgress, MemoryDownloadProgress } from "../../shared/memory.ts";
 
 export class MemoryServiceHost extends MemoryServiceHostCore {
   /** env 沿主进程的（agent 进程同款：模型目录缓存的 env 变量在主进程挂上）。 */
@@ -13,6 +14,8 @@ export class MemoryServiceHost extends MemoryServiceHostCore {
     dir: string;
     env?: Record<string, string | undefined>;
     onChanged?: () => void;
+    onDownloadProgress?: (progress: MemoryDownloadProgress) => void;
+    onBackfillProgress?: (progress: MemoryBackfillProgress) => void;
   }) {
     super({
       forkRuntime: () =>
@@ -22,6 +25,8 @@ export class MemoryServiceHost extends MemoryServiceHostCore {
         }),
       dir: input.dir,
       ...(input.onChanged !== undefined ? { onChanged: input.onChanged } : {}),
+      ...(input.onDownloadProgress !== undefined ? { onDownloadProgress: input.onDownloadProgress } : {}),
+      ...(input.onBackfillProgress !== undefined ? { onBackfillProgress: input.onBackfillProgress } : {}),
     });
   }
 }

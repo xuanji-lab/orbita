@@ -18,7 +18,7 @@ import type {
   MemoryServiceMessage,
 } from "../shared/memory.ts";
 import { MemoryServiceCore, type MemoryCallModel } from "./service-core.ts";
-import { spawn as spawnProcess, type ChildProcess } from "node:child_process";
+import { spawn as spawnProcess } from "node:child_process";
 import { createServer } from "node:net";
 /** Electron 的 utility 进程 parentPort 的结构面（agent runtime 的 ParentPortLike 同款）。 */
 type ParentPortLike = {
@@ -107,7 +107,7 @@ const core = new MemoryServiceCore({
         const line = chunk.toString().trim();
         if (line !== "") console.error("[llama-server]", line.slice(0, 300));
       });
-      return child satisfies import("./embed-server.ts").EmbedServerChild as ChildProcess;
+      return child;
     },
     probe: async (port) => {
       try {

@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MemoryServiceHostCore, type MemoryChild } from "./host-core.ts";
-import type { MemoryServiceMessage } from "../../shared/memory.ts";
+import type { MemoryBackfillProgress, MemoryDownloadProgress, MemoryServiceMessage } from "../../shared/memory.ts";
 
 /** 脚本假子进程：ready 要主进程等、消息可注入、kill 可观察。 */
 class FakeChild implements MemoryChild {
@@ -122,6 +122,75 @@ test("turnSettled：服务不在就丢（构建是易耗品）；在就转发", 
   const sent = ref.current!.posted[1] as { type: string; turn: number };
   assert.equal(sent.type, "turnSettled");
   assert.equal(sent.turn, 1);
+});
+
+test("向量控制与进度：配置 / 电源 / 下载转发，状态回执配对且超时回 null", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const downloads: MemoryDownloadProgress[] = [];
+  const backfills: MemoryBackfillProgress[] = [];
+  const h = new MemoryServiceHostCore({
+    forkRuntime: () => {
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    vectorStateTimeoutMs: 20,
+    onDownloadProgress: (progress) => downloads.push(progress),
+    onBackfillProgress: (progress) => backfills.push(progress),
+    log: () => undefined,
+  });
+  await h.ensureStarted();
+  h.setVectorConfig(null);
+  h.setPower(true);
+  h.startModelDownload({
+    sources: ["https://example.test/model.gguf"],
+    targetPath: "/tmp/model.gguf",
+    sha256: "0".repeat(64),
+    sizeBytes: 10,
+  });
+  assert.deepEqual(
+    ref.current!.posted.slice(1).map((message) => (message as { type: string }).type),
+    ["setVectorConfig", "setPower", "startModelDownload"],
+  );
+
+  ref.current!.emit("message", {
+    type: "downloadProgress",
+    progress: {
+      requestId: "d1",
+      phase: "downloading",
+      source: "https://example.test/model.gguf",
+      received: 5,
+      total: 10,
+    },
+  });
+  ref.current!.emit("message", {
+    type: "backfillProgress",
+    progress: { state: "running", done: 2, total: 5 },
+  });
+  assert.equal(downloads.length, 1);
+  assert.equal(backfills[0]?.done, 2);
+
+  const pending = h.vectorState();
+  const request = ref.current!.posted.find(
+    (message): message is { type: "vectorState"; requestId: string } =>
+      (message as { type: string }).type === "vectorState",
+  );
+  assert.ok(request !== undefined);
+  ref.current!.emit("message", {
+    type: "vectorStateResult",
+    requestId: request.requestId,
+    llamaRunning: true,
+    backfill: { state: "running", done: 2, total: 5 },
+    vectors: { model: "m1", dims: 768, entries: 2 },
+  });
+  assert.deepEqual(await pending, {
+    llamaRunning: true,
+    backfill: { state: "running", done: 2, total: 5 },
+    vectors: { model: "m1", dims: 768, entries: 2 },
+  });
+  assert.equal(await h.vectorState(), null);
 });
 
 test("mutate：回执配对；超时与服务不在回 ok:false；changed 回调被触发", async () => {

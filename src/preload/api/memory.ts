@@ -13,6 +13,8 @@ import type {
   MemoryPendingResponse,
   MemoryScopeSummary,
   MemorySessionView,
+  MemoryVectorSettings,
+  MemoryVectorStatus,
 } from "../../shared/memory.ts";
 
 export const memoryApi = {
@@ -30,4 +32,12 @@ export const memoryApi = {
    *  decideConflict / undoConflict）；结果以返回值为准，成功后另有 memoryChanged 推送 */
   mutate: (mutation: MemoryMutation): Promise<MemoryMutationOutcome> =>
     ipcRenderer.invoke(ipcChannels.memoryMutate, mutation),
+  /** 本地向量模型的设置页快照（设备 / llama-server / 模型文件 / 补算与向量库）。 */
+  vectorStatus: (): Promise<MemoryVectorStatus> => ipcRenderer.invoke(ipcChannels.memoryVectorStatus),
+  /** 向量设置的部分更新；换模型会让服务清掉旧向量并重算。 */
+  vectorSet: (patch: Partial<MemoryVectorSettings>): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(ipcChannels.memoryVectorSet, patch),
+  /** 下载当前选中的 GGUF；进度走 agent.onEvent 的 vectorDownload。 */
+  vectorDownload: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(ipcChannels.memoryVectorDownload),
 } as const;

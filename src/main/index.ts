@@ -5,8 +5,8 @@
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
-import { homedir } from "node:os";
+import { app, BrowserWindow, nativeTheme, powerMonitor, shell, type WebPreferences } from "electron";
+import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
@@ -23,9 +23,21 @@ import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
 import { MemoryServiceHostCore } from "./memory/host-core.ts";
 import { registerMemoryIpc } from "./memory/ipc.ts";
-import { memoryScopeOf, type MemoryRecallOutcome } from "../shared/memory.ts";
+import {
+  MEMORY_VECTOR_MODELS,
+  memoryScopeOf,
+  type MemoryModelFileState,
+  type MemoryRecallOutcome,
+} from "../shared/memory.ts";
 import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
 import { choreModelPayload } from "./memory/chore.ts";
+import { llamaServerCandidates } from "./memory/llama-bin.ts";
+import {
+  effectiveVectorSettings,
+  modelDownloadSources,
+  modelFilePath,
+  vectorServiceConfig,
+} from "./memory/vector-setup.ts";
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
@@ -305,9 +317,10 @@ function ownRendererOrigin(): RendererOriginDeps {
 async function forwardMemoryRecall(
   host: MemoryServiceHostCore,
   event: Extract<AgentEvent, { type: "memoryRecallRequest" }>,
+  ensureStarted: () => Promise<boolean>,
 ): Promise<MemoryRecallOutcome> {
   try {
-    if (!host.isRunning()) await host.ensureStarted();
+    if (!host.isRunning()) await ensureStarted();
     const hits = await host.recall({
       sessionId: event.sessionId,
       scopeId: memoryScopeOf(event.scope),
@@ -347,7 +360,7 @@ void app.whenReady().then(async () => {
   // 其余设置的写入也会过这道：开关没变时拉起 / 停都是空操作，无副作用
   registerSettingsIpc(settings, (next) => {
     if (next.experimentalFeatures?.["memory-system"] === true) {
-      void memoryHost?.ensureStarted();
+      void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
     } else {
       memoryHost?.stop();
     }
@@ -533,7 +546,7 @@ void app.whenReady().then(async () => {
     // 纪律：不回的话 agent 进程里那次调用挂到超时）。服务不在先试拉一把（开关
     // 刚开的第一轮 / 崩溃后的一次自愈）；拉不起 / 超时都回空命中，不拦开轮
     if (event.type === "memoryRecallRequest") {
-      void forwardMemoryRecall(memoryHost, event)
+      void forwardMemoryRecall(memoryHost, event, ensureMemoryService)
         .then((outcome) => agentHost.answerMemoryRecall(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerMemoryRecall(event.requestId, {
@@ -643,13 +656,76 @@ void app.whenReady().then(async () => {
    *    onEvent，轮落定时把这一轮交给服务。子会话不 begin（读记忆但不写）。
    * 实验开关关着时：submit 不 begin、服务不拉起，整条链路不碰。
    */
+  const llamaCandidates = () =>
+    llamaServerCandidates({
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      platform: process.platform,
+      arch: process.arch,
+      env: process.env.ORBITA_LLAMA_SERVER,
+    });
+  const availableLlama = () => llamaCandidates().find((candidate) => existsSync(candidate.path)) ?? null;
+  // 最近一次模型下载进度：status 拉取时与文件存在性合并；done 后清掉，让 ready 以文件为准
+  let memoryDownloadState: MemoryModelFileState | null = null;
   const memoryHost = new MemoryServiceHost({
     runtimePath: resolveMemoryRuntimePath(__dirname),
     dir: join(configDir, "memory"),
     env: agentProcessEnv,
     // 服务侧任何写盘（提取落条目 / 事件段收尾 / 记忆库写操作）→ 广播给窗口刷新
     onChanged: () => broadcastAgentEvent({ type: "memoryChanged" }),
+    onDownloadProgress: (progress) => {
+      if (progress.phase === "downloading") {
+        memoryDownloadState = {
+          state: "downloading",
+          received: progress.received,
+          total: progress.total,
+          source: progress.source,
+        };
+      } else if (progress.phase === "verifying") {
+        memoryDownloadState = { state: "verifying" };
+      } else if (progress.phase === "failed") {
+        memoryDownloadState = { state: "failed", error: progress.error ?? "模型下载失败" };
+      } else {
+        memoryDownloadState = null;
+        // rename 已完成：立即把 local 配置送进服务，触发补算，无需等下一次设置改动
+        void syncVectorConfig().catch((cause: unknown) => console.error("[memory] 下载完成后的向量配置同步失败", cause));
+      }
+      broadcastAgentEvent({ type: "vectorDownload", progress });
+    },
+    onBackfillProgress: (progress) => broadcastAgentEvent({ type: "vectorBackfill", progress }),
   });
+
+  /** 把主进程才知道的文件 / 二进制 / 设置事实发给服务；服务不在时消息丢弃，下次拉起会重发。 */
+  async function syncVectorConfig(): Promise<void> {
+    const current = await settings.read();
+    const vectorSettings = effectiveVectorSettings(current.vector);
+    const model = MEMORY_VECTOR_MODELS.find((candidate) => candidate.id === vectorSettings.model);
+    if (model === undefined) {
+      memoryHost.setVectorConfig(null);
+      return;
+    }
+    const ggufPath = modelFilePath(model, configDir);
+    memoryHost.setVectorConfig(
+      vectorServiceConfig({
+        settings: vectorSettings,
+        ggufPath: existsSync(ggufPath) ? ggufPath : null,
+        binaryPath: availableLlama()?.path ?? null,
+      }),
+    );
+  }
+
+  /** 所有拉起路径共用：ready/init 之后立即同步向量与电源，崩溃自愈也不会丢配置。 */
+  const ensureMemoryService = async (): Promise<boolean> => {
+    const started = await memoryHost.ensureStarted();
+    if (!started) return false;
+    await syncVectorConfig();
+    memoryHost.setPower(powerMonitor.isOnBatteryPower());
+    return true;
+  };
+  powerMonitor.on("on-battery", () => memoryHost.setPower(true));
+  powerMonitor.on("on-ac", () => memoryHost.setPower(false));
+
   const memoryTurns = new MemoryTurnTracker({
     load: async (id) => {
       const detail = await sessions.load(id);
@@ -661,14 +737,14 @@ void app.whenReady().then(async () => {
     readChore: () => choreModelPayload(settings, providers),
     settle: async (payload) => {
       // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）
-      await memoryHost.ensureStarted();
+      await ensureMemoryService();
       memoryHost.turnSettled(payload);
     },
   });
   // 启动时开关已开：先拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
   // 半路提取续跑），不等第一轮对话才动。失败只记日志（下次轮后再试拉起）
   if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
-    void memoryHost.ensureStarted();
+    void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
   }
   // 记忆库的读写面（实验功能 memory-system）：读在主进程直读 JSONL，写转发给
   // 记忆服务（唯一写者）；会话标题 / 工作区名这些连接属性在这里注入
@@ -681,8 +757,49 @@ void app.whenReady().then(async () => {
     },
     mutate: async (mutation) => {
       // 服务不在先拉（开关刚开的第一轮 / 崩溃后自愈）；拉不起 mutate 会回 ok:false
-      if (!memoryHost.isRunning()) await memoryHost.ensureStarted();
+      if (!memoryHost.isRunning()) await ensureMemoryService();
       return memoryHost.mutate(mutation);
+    },
+    vector: {
+      readVectorSettings: async () => (await settings.read()).vector,
+      writeVectorSettings: async (patch) => {
+        const next = await settings.write({ vector: patch });
+        if (next.experimentalFeatures?.["memory-system"] === true) {
+          await ensureMemoryService();
+        } else {
+          await syncVectorConfig();
+        }
+      },
+      userDataDir: configDir,
+      device: () => ({
+        chip: cpus()[0]?.model ?? process.arch,
+        memoryGb: Math.round(totalmem() / 1024 ** 3),
+        onBattery: powerMonitor.isOnBatteryPower(),
+        platform: process.platform,
+        arch: process.arch,
+      }),
+      llamaCandidates,
+      vectorState: () => memoryHost.vectorState(),
+      downloadState: () => memoryDownloadState,
+      startDownload: async (model) => {
+        if (!(await ensureMemoryService())) {
+          return { ok: false, error: "记忆服务没能拉起，模型下载未开始" };
+        }
+        const sources = modelDownloadSources(model);
+        memoryDownloadState = {
+          state: "downloading",
+          received: 0,
+          total: model.sizeBytes,
+          source: sources[0]!,
+        };
+        memoryHost.startModelDownload({
+          sources,
+          targetPath: modelFilePath(model, configDir),
+          sha256: model.sha256,
+          sizeBytes: model.sizeBytes,
+        });
+        return { ok: true };
+      },
     },
   });
   registerSessionIpc(

@@ -64,7 +64,7 @@ export class EmbedServerCore {
   private readonly probe: EmbedServerOptions["probe"];
   private readonly post: EmbedServerOptions["post"];
   private readonly freePort: EmbedServerOptions["freePort"];
-  private readonly idleUnloadMs: number;
+  private idleUnloadMs: number;
   private readonly startTimeoutMs: number;
   private readonly log: (message: string, ...args: unknown[]) => void;
   private readonly now: () => number;
@@ -88,7 +88,14 @@ export class EmbedServerCore {
   }
 
   isRunning(): boolean {
-    return this.child !== null;
+    // 已 spawn 但还在健康检查的不算就绪：召回的冷启动路径不该因此等加载
+    return this.child !== null && this.starting === null;
+  }
+
+  /** 设置页改空闲卸载分钟后立即生效；运行中的进程重排计时。 */
+  setIdleUnloadMs(ms: number): void {
+    this.idleUnloadMs = ms;
+    if (this.isRunning()) this.armIdle();
   }
 
   /**
@@ -98,67 +105,87 @@ export class EmbedServerCore {
   ready(): Promise<boolean> {
     const resolved = this.resolve();
     if (resolved === null) return Promise.resolve(false);
-    if (this.child !== null && this.startedFor === resolved.model.id) return Promise.resolve(true);
+    // 先看 starting：spawn 已发生但健康检查没完时，不能把 child 非空当成就绪
     if (this.starting !== null && this.startedFor === resolved.model.id) return this.starting;
+    if (this.child !== null && this.startedFor === resolved.model.id) return Promise.resolve(true);
     this.stop();
     const { binaryPath, model } = resolved;
     this.startedFor = model.id;
-    this.starting = new Promise<boolean>((resolve) => {
-      const args = [
-        "-m",
-        model.modelPath,
-        "--host",
-        "127.0.0.1",
-        "-c",
-        `${model.ctx}`,
-        "-ub",
-        "4096",
-        "--embedding",
-        ...(model.pooling !== null ? ["--pooling", model.pooling] : []),
-      ];
-      let child: EmbedServerChild;
-      try {
-        child = this.spawn([binaryPath, ...args]);
-      } catch (cause) {
-        this.log("[memory] llama-server spawn 失败", cause);
-        this.starting = null;
-        this.startedFor = null;
-        resolve(false);
-        return;
-      }
-      this.child = child;
-      child.on("exit", () => {
-        if (this.child === child) {
-          this.child = null;
-          this.port = 0;
-        }
-      });
+    const starting = new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        if (this.starting === starting) this.starting = null;
+        resolve(ok);
+      };
       void this.freePort()
         .then(async (port: number) => {
+          // 等端口时配置被关 / 换模型：这次启动已经作废
+          if (this.starting !== starting) {
+            finish(false);
+            return;
+          }
+          const args = [
+            "-m",
+            model.modelPath,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            `${port}`,
+            "-c",
+            `${model.ctx}`,
+            "-ub",
+            "4096",
+            "--embedding",
+            ...(model.pooling !== null ? ["--pooling", model.pooling] : []),
+          ];
+          let child: EmbedServerChild;
+          try {
+            child = this.spawn([binaryPath, ...args]);
+          } catch (cause) {
+            this.log("[memory] llama-server spawn 失败", cause);
+            this.startedFor = null;
+            finish(false);
+            return;
+          }
+          this.child = child;
           this.port = port;
-          // 健康轮询：300ms 一拍，直到超时。进程死了立刻失败
+          child.on("exit", () => {
+            if (this.child === child) {
+              this.child = null;
+              this.port = 0;
+            }
+          });
+          // 健康轮询：300ms 一拍，直到超时。进程死了 / 配置改了立刻失败
           const deadline = this.now() + this.startTimeoutMs;
           while (this.now() < deadline) {
-            if (this.child !== child) break; // 中途被 stop（换模型 / 卸载）
+            if (this.child !== child || this.starting !== starting) {
+              finish(false);
+              return;
+            }
             if (await this.probe(port)) {
-              this.starting = null;
+              if (this.child !== child || this.starting !== starting) {
+                finish(false);
+                return;
+              }
               this.armIdle();
-              resolve(true);
+              finish(true);
               return;
             }
             await new Promise((sleep) => setTimeout(sleep, 300));
           }
           if (this.child === child) this.stop();
-          this.starting = null;
-          resolve(false);
+          finish(false);
         })
-        .catch(() => {
-          if (this.child === child) this.stop();
-          this.starting = null;
-          resolve(false);
+        .catch((cause: unknown) => {
+          this.log("[memory] llama-server 启动失败", cause);
+          if (this.starting === starting) this.stop();
+          finish(false);
         });
     });
-    return this.starting;
+    this.starting = starting;
+    return starting;
   }
 
   /**

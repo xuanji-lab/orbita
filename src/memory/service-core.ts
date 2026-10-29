@@ -152,6 +152,7 @@ export class MemoryServiceCore {
         probe: this.vectorDeps.probe,
         post: this.vectorDeps.post,
         freePort: this.vectorDeps.freePort,
+        idleUnloadMs: this.vectorConfig?.idleUnloadMs,
         log: this.log,
       });
     }
@@ -512,6 +513,7 @@ export class MemoryServiceCore {
       this.backfill = null;
       return;
     }
+    this.embedServer?.setIdleUnloadMs(config.idleUnloadMs);
     if (previous !== config.model.id) {
       // 换模型：旧维度对不上新模型，整库清掉重算（向量只是缓存）
       void this.vectors
@@ -617,7 +619,7 @@ export class MemoryServiceCore {
       await vectors.reset(config.model.id, config.model.dims, this.now());
     }
     const layers = trigger === "all" ? await entries.listLayers() : [{ token: trigger, count: 0 }];
-    const todo: { token: string; missing: import("../shared/memory.ts").MemoryEntry[] }[] = [];
+    const todo: { token: string; missing: MemoryEntry[] }[] = [];
     let total = 0;
     for (const layer of layers) {
       const list = await entries.listByToken(layer.token).catch(() => []);

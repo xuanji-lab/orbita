@@ -11,13 +11,17 @@
  */
 import { randomUUID } from "node:crypto";
 import type {
+  MemoryBackfillProgress,
   MemoryChoreModel,
+  MemoryDownloadProgress,
   MemoryHit,
   MemoryMutation,
   MemoryMutationOutcome,
+  MemoryVectorServiceConfig,
   MemoryServiceCommand,
   MemoryServiceMessage,
 } from "../../shared/memory.ts";
+import type { MemoryVectorsSummary } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface MemoryChild {
@@ -37,6 +41,12 @@ export interface MemoryServiceHostOptions {
   mutateTimeoutMs?: number;
   /** 服务侧任何写盘后回调一次（index.ts 里接 broadcastAgentEvent） */
   onChanged?: () => void;
+  /** 模型下载进度（index.ts 里接 agent:event 的 vectorDownload） */
+  onDownloadProgress?: (progress: MemoryDownloadProgress) => void;
+  /** 后台补算进度（index.ts 里接 agent:event 的 vectorBackfill） */
+  onBackfillProgress?: (progress: MemoryBackfillProgress) => void;
+  /** vectorState 问答的硬超时（服务不在 / 卡住回 null，状态页如实显示） */
+  vectorStateTimeoutMs?: number;
   log?: (message: string, ...args: unknown[]) => void;
 }
 
@@ -54,6 +64,13 @@ export interface MemoryTurnPayload {
 const DEFAULT_RECALL_TIMEOUT_MS = 4_000;
 const DEFAULT_MUTATE_TIMEOUT_MS = 15_000;
 
+/** vectorState 的回执形状（服务消息的载荷部分）。 */
+export interface VectorStateReply {
+  llamaRunning: boolean;
+  backfill: { state: "running" | "deferred-battery"; done: number; total: number } | null;
+  vectors: MemoryVectorsSummary | null;
+}
+
 interface PendingRecall {
   resolve: (hits: MemoryHit[]) => void;
   timer: NodeJS.Timeout;
@@ -65,6 +82,9 @@ export class MemoryServiceHostCore {
   private readonly recallTimeoutMs: number;
   private readonly mutateTimeoutMs: number;
   private readonly onChanged: () => void;
+  private readonly onDownloadProgress: (progress: MemoryDownloadProgress) => void;
+  private readonly onBackfillProgress: (progress: MemoryBackfillProgress) => void;
+  private readonly vectorStateTimeoutMs: number;
   private readonly log: (message: string, ...args: unknown[]) => void;
   private child: MemoryChild | null = null;
   private ready: Promise<boolean> | null = null;
@@ -74,6 +94,10 @@ export class MemoryServiceHostCore {
     string,
     { resolve: (outcome: MemoryMutationOutcome) => void; timer: NodeJS.Timeout }
   >();
+  private readonly pendingVectorStates = new Map<
+    string,
+    { resolve: (state: VectorStateReply | null) => void; timer: NodeJS.Timeout }
+  >();
   private seq = 0;
 
   constructor(options: MemoryServiceHostOptions) {
@@ -82,6 +106,9 @@ export class MemoryServiceHostCore {
     this.recallTimeoutMs = options.recallTimeoutMs ?? DEFAULT_RECALL_TIMEOUT_MS;
     this.mutateTimeoutMs = options.mutateTimeoutMs ?? DEFAULT_MUTATE_TIMEOUT_MS;
     this.onChanged = options.onChanged ?? (() => undefined);
+    this.onDownloadProgress = options.onDownloadProgress ?? (() => undefined);
+    this.onBackfillProgress = options.onBackfillProgress ?? (() => undefined);
+    this.vectorStateTimeoutMs = options.vectorStateTimeoutMs ?? 2_000;
     this.log = options.log ?? ((message, ...args) => console.log(message, ...args));
   }
 
@@ -134,6 +161,23 @@ export class MemoryServiceHostCore {
           } else {
             pending.resolve({ ok: false, error: message.error });
           }
+        }
+        if (message.type === "vectorStateResult") {
+          const pending = this.pendingVectorStates.get(message.requestId);
+          if (pending === undefined) return;
+          clearTimeout(pending.timer);
+          this.pendingVectorStates.delete(message.requestId);
+          pending.resolve({
+            llamaRunning: message.llamaRunning,
+            backfill: message.backfill,
+            vectors: message.vectors,
+          });
+        }
+        if (message.type === "downloadProgress") {
+          this.onDownloadProgress(message.progress);
+        }
+        if (message.type === "backfillProgress") {
+          this.onBackfillProgress(message.progress);
         }
         if (message.type === "changed") {
           this.onChanged();
@@ -199,6 +243,42 @@ export class MemoryServiceHostCore {
     });
   }
 
+  /** 向量配置下发（设置变了 / 下载完成 / 服务拉起后同步）。服务不在就丢——
+   * 服务下一次拉起时 init 后主进程会再同步一次（见 index.ts 的 syncVectorConfig）。 */
+  setVectorConfig(config: MemoryVectorServiceConfig | null): void {
+    this.child?.postMessage({ type: "setVectorConfig", config });
+  }
+
+  /** 电池状态转发（powerMonitor 在主进程）。 */
+  setPower(onBattery: boolean): void {
+    this.child?.postMessage({ type: "setPower", onBattery });
+  }
+
+  /** 服务运行态问答；不在 / 超时回 null（状态页如实显示）。 */
+  vectorState(): Promise<VectorStateReply | null> {
+    if (this.child === null) return Promise.resolve(null);
+    const requestId = `${this.seq += 1}:${randomUUID()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingVectorStates.delete(requestId);
+        resolve(null);
+      }, this.vectorStateTimeoutMs);
+      timer.unref?.();
+      this.pendingVectorStates.set(requestId, { resolve, timer });
+      this.child?.postMessage({ type: "vectorState", requestId });
+    });
+  }
+
+  /** 模型下载触发（进度走 onDownloadProgress）。 */
+  startModelDownload(input: {
+    sources: readonly string[];
+    targetPath: string;
+    sha256: string;
+    sizeBytes: number;
+  }): void {
+    this.child?.postMessage({ type: "startModelDownload", requestId: randomUUID(), ...input });
+  }
+
   /**
    * 转发记忆库写操作（服务是唯一写者）。服务不在 / 超时 / 崩溃 → ok:false；
    * 调用方（IPC handler）把 error 原样给 renderer。
@@ -233,6 +313,11 @@ export class MemoryServiceHostCore {
       pending.resolve({ ok: false, error: "记忆服务停了" });
     }
     this.pendingMutates.clear();
+    for (const [, pending] of this.pendingVectorStates) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
+    this.pendingVectorStates.clear();
     if (child !== null) {
       this.log(`[memory] 记忆服务停了（${reason}）；在途召回已回空命中`);
       if (!killIt) return;
