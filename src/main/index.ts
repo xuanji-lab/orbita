@@ -52,6 +52,8 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
+import { ChimeLog } from "./notify/chime-log.ts";
+import { registerNotifyIpc } from "./notify/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
@@ -648,6 +650,8 @@ void app.whenReady().then(async () => {
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
   // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型（摘抄也是素材）
   registerFocusIpc(workspaces, sessions, providers, settings, agentHost, excerpts);
+  // 提示音记账（notify:chime-log）：每真响一声记一行，事后对证「那一声是谁」
+  registerNotifyIpc(new ChimeLog(join(configDir, "chime-log.jsonl")));
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
