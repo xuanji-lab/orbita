@@ -18,6 +18,7 @@ import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg
 import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
+import brainCircuit from "../../../../design-system/assets/icons/lucide/brain-circuit.svg?raw";
 import check from "../../../../design-system/assets/icons/lucide/check.svg?raw";
 import circleCheck from "../../../../design-system/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../design-system/assets/icons/lucide/chevron-down.svg?raw";
@@ -148,6 +149,7 @@ const ICONS = {
   "arrow-up-right": arrowUpRight,
   bot,
   brain,
+  "brain-circuit": brainCircuit,
   check,
   "circle-check": circleCheck,
   "chevron-down": chevronDown,

@@ -104,6 +104,23 @@ export function isChannelTool(toolName: string): boolean {
 }
 
 /**
+ * 记忆三件套（2026-10-29 用户裁决「我不想去确认记忆，agent 应该自己有判断力吧」）：
+ * memory_search / memory_revise / memory_retire，三档模式一律放行。
+ *
+ * 它们只读写我们自己的记忆库（记忆服务进程是唯一写者），不碰用户的文件与 shell；
+ * 每一次改动都能在条目卡上撤销（恢复旧说法 / 恢复使用），演变链里看得到。问了也没意义——
+ * 用户要的是「一句话纠错就改对」，弹审批正是他明确不要的「需要他去确认」。plan 档同样
+ * 放行：plan 拦的是对用户工作成果的改动，记忆对齐不是。
+ *
+ * 只在根会话注册（子会话读不写），主进程另有一道会话身份校验。
+ */
+export const MEMORY_TOOLS = ["memory_search", "memory_revise", "memory_retire"] as const;
+
+export function isMemoryTool(toolName: string): boolean {
+  return (MEMORY_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
  * 受管浏览器的只读四件（2026-09-27 wafo 裁决）：三档模式一律放行。
  *
  * 它们只在隔离的沙盒浏览器里读页面（导航、结构、正文、截图），不碰用户的文件与 shell；
@@ -160,6 +177,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (mode === "skip") return { behavior: "allow" };
   // 通道三件套：三档一律放行，理由见 CHANNEL_TOOLS 的注释
   if (isChannelTool(toolName)) return { behavior: "allow" };
+  // 记忆三件套：三档一律放行，理由见 MEMORY_TOOLS 的注释
+  if (isMemoryTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {

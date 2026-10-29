@@ -82,6 +82,24 @@ describe("createToolCallGate", () => {
     mode = "plan";
     assert.equal((await gate(event("bash"))).block, true);
   });
+
+  test("子会话写父会话的工作台不被路径保护拦（protectedPaths 只锁 sessions/ 与 pi-sessions/）", async () => {
+    // 子会话的重要产出要写到父工作台的 subsessions/ 下（本 PR 的产出位置规矩），
+    // 这条钉住它不会被会话文件只读锁误拦——不需要任何放行例外
+    const gate = createToolCallGate(
+      () => "skip",
+      async () => ({ behavior: "allow" }),
+      ["/userData/sessions", "/userData/pi-sessions"],
+      "/repo",
+    );
+    const write = await gate(
+      event("write", { path: "/userData/workbenches/parent-1/subsessions/abcd1234-report/report.md", content: "x" }),
+    );
+    assert.deepEqual(write, {}, "父工作台可写，不该被拦");
+    // 对照：sessions/ 里的文件仍全档只读
+    const blocked = await gate(event("write", { path: "/userData/sessions/parent-1.jsonl", content: "x" }));
+    assert.equal(blocked.block, true);
+  });
 });
 
 /**

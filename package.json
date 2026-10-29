@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
-    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
-    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
+    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && node scripts/fetch-llama.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
+    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && node scripts/fetch-llama.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
     "icon": "bash scripts/make-icon.sh",
     "icon:win": "node scripts/make-icon-win.mjs"
   },
@@ -119,6 +119,10 @@
             "rg",
             "fd"
           ]
+        },
+        {
+          "from": "build/bin/darwin-arm64/llama",
+          "to": "bin/llama"
         }
       ],
       "extendInfo": {
@@ -136,6 +140,10 @@
             "rg.exe",
             "fd.exe"
           ]
+        },
+        {
+          "from": "build/bin/win32-x64/llama",
+          "to": "bin/llama"
         }
       ],
       "target": [
