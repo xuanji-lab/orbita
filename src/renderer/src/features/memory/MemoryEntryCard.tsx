@@ -161,7 +161,8 @@ export function MemoryEntryCard(props: {
               {t.memory.autoPromoted}
             </button>
           )}
-          {props.scopeName !== null && (
+          {/* 自动升层的条目已有「已记到所有工作区」，不再重复一个「所有工作区」范围标签 */}
+          {props.scopeName !== null && !returnable && (
             <span className="mem-tag">
               <Icon name={entry.layer === "user" ? "user" : "folder"} size={11} strokeWidth={1.8} />
               {props.scopeName}

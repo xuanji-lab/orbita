@@ -71,11 +71,13 @@
 }
 
 /* 不换行：出处（会话标题常很长）收省略号，日期钉在同一行的右缘 */
+/* 标签多了（智能体改正 / 已记到所有工作区 / 状态 / 演变）会超过审查面板的窄栏：折行，
+ * 不撑宽卡片——nowrap 时整张卡被撑出右栏、正文被裁（2026-10-29 实例 memalign 实测） */
 .mem-entry-meta {
   display: flex;
   align-items: center;
-  flex-wrap: nowrap;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   min-height: 20px;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
