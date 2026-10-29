@@ -2,8 +2,9 @@
  * 记忆界面（审查面板 › 记忆页签、记忆库页）的数据整形——纯函数，node:test 直接测。
  * 分组顺序、筛选与搜索的口径都在这里定，组件只管画。
  */
+import { MEMORY_USER_TOKEN } from "../../../../shared/memory.ts";
 import type {
-  MemoryEntry,
+  MemoryScopeSummary,
   MemoryEntryType,
   MemoryEntryView,
   MemorySessionView,
@@ -53,21 +54,6 @@ export function groupMemoryEntries(
   return MEMORY_TYPE_ORDER.map((type) => ({ type, items: items.filter((view) => view.entry.type === type) })).filter(
     (group) => group.items.length > 0,
   );
-}
-
-/** 一条记忆现在还会不会被召回：缺席 = active；muted（用户说别再用）与 stale（被新说法取代）都不召回。 */
-export function memoryIsActive(entry: MemoryEntry): boolean {
-  return entry.status === undefined || entry.status === "active";
-}
-
-/** 某一轮的「用到 / 记住」条数（轮尾卡记忆行用）；没有这一轮的账 = null（不出记忆行）。 */
-export function memoryTurnCounts(
-  view: MemorySessionView | null,
-  turn: number,
-): { used: number; remembered: number } | null {
-  const row = view?.turns.find((item) => item.turn === turn);
-  if (row === undefined) return null;
-  return { used: row.used.length, remembered: row.remembered.length };
 }
 
 /** 审查页签按轮倒序（最新的轮在上）；只列「记住了东西」的轮——页签只管产出，用到的去上下文面板。 */
@@ -134,3 +120,13 @@ export function manualDraftProblem(draft: {
  * 某个范围的条目（"all" = 全部）、待你确认、向量模型。
  */
 export type MemoryNav = { kind: "scope"; token: string } | { kind: "pending" } | { kind: "vector" };
+
+/**
+ * 作用域 token → 显示名。user 层（所有工作区）的名字用界面语言的文案——服务给的
+ * name 是写死的中文；工作区 / Home 是专名，照服务给的显示。拿不到就用 userName。
+ */
+export function scopeNameOf(scopes: readonly MemoryScopeSummary[] | null, token: string, userName: string): string {
+  if (token === MEMORY_USER_TOKEN) return userName;
+  const scope = scopes?.find((item) => item.token === token);
+  return scope === undefined || scope.kind === "user" ? userName : scope.name;
+}

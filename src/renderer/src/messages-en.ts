@@ -241,15 +241,9 @@ export const en = {
     sessionEmpty: "Nothing remembered from this task yet.",
     sessionEmptyHint:
       "After a stretch of conversation goes quiet it's distilled; what gets remembered shows up here.",
-    organizing: "Organizing…",
     noTask: "Open a task to see what it remembered.",
     rowLabel: "Memory",
-    rowUsed: (count: number) => `used ${count}`,
     rowRemembered: (count: number) => `remembered ${count}`,
-    rowPending: (count: number) => `${count} waiting for your call`,
-    rowPinned: "Always on",
-    rowRelevant: "By relevance",
-    rowNoneUsed: "No memory was used this turn.",
     openReview: "Open in the review panel",
     vectorIntro:
       "Also finds memories phrased differently from your question. Off by default; when on, a small model runs on this computer and nothing leaves it.",

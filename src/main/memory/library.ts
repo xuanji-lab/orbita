@@ -121,8 +121,9 @@ export class MemoryLibrary {
 
   /**
    * 某会话的按轮视图：轮集合 = 注入账本 ∪ 本会话新增条目的轮，新在前。
-   * 「用到」带注入时刻的正文快照（旧行没有快照时回当前正文，再没有给空串）；
-   * organizing = 有未收尾 / 提取中的事件段。
+   * 「用到」带注入时刻的正文快照（旧行没有快照时回当前正文，再没有给空串）。
+   * 不再报「整理中」与待确认数（用户 2026-10-29：「其他的我不需要感知到」——对话
+   * 里只说记住了什么，用到了什么去上下文面板看，待确认只在记忆库里）。
    */
   async sessionView(sessionId: string): Promise<MemorySessionView> {
     const meta = await this.deps.readMeta(sessionId).catch(() => null);
@@ -132,12 +133,7 @@ export class MemoryLibrary {
         : meta.workspaceId !== null
           ? this.entries.tokenOf(meta.workspaceId)
           : this.entries.tokenOf(meta.cwd);
-    const [records, layers, pending, open] = await Promise.all([
-      this.entries.listInjections(),
-      this.readLayers(),
-      this.pending(),
-      this.episodes.listAll(),
-    ]);
+    const [records, layers] = await Promise.all([this.entries.listInjections(), this.readLayers()]);
     const pool = layers.flatMap((layer) => layer.entries);
     const mine = pool.filter((entry) => entry.sessionId === sessionId);
     const injectedOfTurn = new Map(
@@ -168,15 +164,7 @@ export class MemoryLibrary {
           remembered: rememberedOfTurn.get(turn) ?? [],
         };
       });
-    const organizing =
-      open.open.some((episode) => episode.sessionId === sessionId) ||
-      open.pending.some((episode) => episode.sessionId === sessionId);
-    const pendingCount = pending.filter(
-      (item) =>
-        item.resolution === undefined &&
-        (token === null || item.token === token || item.token === MEMORY_USER_TOKEN),
-    ).length;
-    return { sessionId, token, turns, organizing, pendingCount };
+    return { sessionId, token, turns };
   }
 
   /**

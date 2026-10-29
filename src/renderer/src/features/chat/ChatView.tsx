@@ -948,7 +948,7 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
-  // 记忆（实验功能 memory-system）：每条用户消息下挂「记忆 · 用到 N 条」行。
+  // 记忆（实验功能 memory-system）：记住了东西的那条用户消息下挂「记忆 · 记住 M 条」行。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memoryOn = useExperimentalFeature("memory-system");
   const memorySession = useMemorySession(memoryOn && openId !== "" ? openId : null);
@@ -957,8 +957,7 @@ function ChatViewBody(props: {
     if (view === null) return null;
     const users = session.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : []));
     const rows = pairMemoryTurns(users, view);
-    const latestTurn = view.turns.reduce((latest, row) => Math.max(latest, row.turn), 0);
-    return { rows, pendingCount: view.pendingCount, organizing: view.organizing, latestTurn };
+    return { rows };
   }, [memorySession.data, session.transcript]);
   // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象
   const previewMessageId = session.revertDialog?.targetMessageId ?? null;
@@ -2771,13 +2770,8 @@ function EntryView(props: {
           revertDisabled={props.actionsBusy || props.readOnly === true}
           revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
         />
-        {memoryRow !== undefined && props.memory != null && (
-          <MemoryLine
-            row={memoryRow}
-            pendingCount={memoryRow.turn === props.memory.latestTurn ? props.memory.pendingCount : 0}
-            organizing={memoryRow.turn === props.memory.latestTurn && props.memory.organizing}
-            onOpenReview={props.onOpenMemoryReview}
-          />
+        {memoryRow !== undefined && memoryRow.remembered.length > 0 && (
+          <MemoryLine row={memoryRow} onOpenReview={props.onOpenMemoryReview} />
         )}
       </>
     );
@@ -4904,35 +4898,22 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
   );
 }
 
-/** 记忆行的数据：气泡 id → 那一轮的账，外加会话级的待确认数与「整理中」。 */
+/** 记忆行的数据：气泡 id → 那一轮的账。 */
 interface MemoryLines {
   rows: ReadonlyMap<string, MemorySessionTurnView>;
-  pendingCount: number;
-  organizing: boolean;
-  /** 账本里最新的轮：待确认数与「整理中」只挂在这一轮的行上（会话级的状态挂一处就够） */
-  latestTurn: number;
 }
 
 /**
- * 记忆行（实验功能 memory-system）：挂在用户气泡下，说这一轮带进去了哪些记忆、
- * 从这一轮记住了什么。与思考 / 工具行同一份 CollapseRow 契约；没用到也没记住的轮不画。
- * 展开看用到的条目（注入时刻的快照，带「常驻 / 按相关度」）与记住的条目；
- * 改 / 删 / 拍板去审查面板的记忆页签——对话流里不放写操作。
+ * 记忆行（实验功能 memory-system）：挂在「从这一轮记住了东西」的用户气泡下，只说
+ * 记住了什么——确认系统在记、记得对不对（用户 2026-10-29：「我只需要知道，有在
+ * 记录记忆，记得对……其他的我不需要感知到」）。这一轮用到了哪些记忆是输入，去
+ * 上下文面板看；「整理中」「待确认」不在对话里出现（待确认只在记忆库）。
+ * 与思考 / 工具行同一份 CollapseRow 契约；改 / 删 / 别再用去审查面板的记忆页签。
  */
-function MemoryLine(props: {
-  row: MemorySessionTurnView;
-  pendingCount: number;
-  organizing: boolean;
-  onOpenReview?: () => void;
-}) {
+function MemoryLine(props: { row: MemorySessionTurnView; onOpenReview?: () => void }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const { row } = props;
-  if (row.used.length === 0 && row.remembered.length === 0 && !props.organizing && props.pendingCount === 0) return null;
-  const parts = [
-    row.used.length > 0 ? t.memory.rowUsed(row.used.length) : null,
-    row.remembered.length > 0 ? t.memory.rowRemembered(row.remembered.length) : null,
-  ].filter((part): part is string => part !== null);
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-4)" }}>
       <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
@@ -4942,51 +4923,22 @@ function MemoryLine(props: {
           </span>
           <span style={headLabel(false)}>{t.memory.rowLabel}</span>
         </span>
-        {parts.length > 0 && <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-base)" }}>{parts.join(" · ")}</span>}
-        {/* 状态是一句话不是数字：用正文字体（SLOT.status 的等宽字体是给计时 / 计数的） */}
-        {props.organizing && (
-          <span style={{ ...SLOT.status, fontFamily: "var(--font-family-base)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <Icon name="loader-circle" size={11} spin />
-            {t.memory.organizing}
-          </span>
-        )}
-        {props.pendingCount > 0 && (
-          <span style={{ ...SLOT.status, fontFamily: "var(--font-family-base)", color: "var(--color-warning)" }}>
-            {t.memory.rowPending(props.pendingCount)}
-          </span>
-        )}
+        <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-base)" }}>
+          {t.memory.rowRemembered(row.remembered.length)}
+        </span>
       </CollapseRow>
       {open && (
         <div style={{ ...EXPANDED_BODY, fontFamily: "var(--font-family-base)", whiteSpace: "normal", display: "grid", gap: "var(--space-1)" }}>
-          {row.used.length === 0 ? (
-            <span style={{ color: "var(--color-text-tertiary)" }}>{t.memory.rowNoneUsed}</span>
-          ) : (
-            row.used.map((hit) => (
-              <span key={hit.id} style={{ display: "flex", gap: "var(--space-2)", alignItems: "baseline" }}>
-                <span style={{ flex: "1 1 auto", minWidth: 0, color: "var(--color-text-primary)" }}>{hit.text}</span>
-                <span style={{ ...SLOT.status, marginLeft: "auto" }}>{hit.pinned === true ? t.memory.rowPinned : t.memory.rowRelevant}</span>
-              </span>
-            ))
-          )}
-          {/* 「记住」是这个任务的产出，链去审查面板的记忆页签（改 / 删 / 拍板在那里）；
-              「用到」是输入，归上下文面板——那块在上下文面板的 PR 里接，这里只就地列出 */}
-          {row.remembered.length > 0 && (
-            <>
-              <span style={{ marginTop: "var(--space-1)", color: "var(--color-text-tertiary)", fontSize: "var(--font-size-xs)" }}>
-                {t.memory.rowRemembered(row.remembered.length)}
-              </span>
-              {row.remembered.map((entry) => (
-                <span key={entry.id} style={{ color: "var(--color-text-primary)" }}>
-                  {entry.text}
-                </span>
-              ))}
-              {props.onOpenReview !== undefined && (
-                <button type="button" className="mem-link" onClick={props.onOpenReview}>
-                  {t.memory.openReview}
-                  <Icon name="arrow-right" size={12} strokeWidth={1.8} />
-                </button>
-              )}
-            </>
+          {row.remembered.map((entry) => (
+            <span key={entry.id} style={{ color: "var(--color-text-primary)" }}>
+              {entry.text}
+            </span>
+          ))}
+          {props.onOpenReview !== undefined && (
+            <button type="button" className="mem-link" onClick={props.onOpenReview}>
+              {t.memory.openReview}
+              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
+            </button>
           )}
         </div>
       )}

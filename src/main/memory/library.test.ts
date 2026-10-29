@@ -156,7 +156,7 @@ test("listEntries：演变链沿 conflictWith 串新旧（含自身，旧→新�
   assert.deepEqual(lone.evolution, []);
 });
 
-test("sessionView：轮集合 = 账本 ∪ 新增；用到带快照；organizing；pendingCount", async () => {
+test("sessionView：轮集合 = 账本 ∪ 新增；用到带快照", async () => {
   const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
   await seed(dir);
   const library = makeLibrary(dir, { metas: { s1: { workspaceId: "ws-1", cwd: "/x" } } });
@@ -166,25 +166,6 @@ test("sessionView：轮集合 = 账本 ∪ 新增；用到带快照；organizing
   assert.deepEqual(view.turns[0]?.used.map((hit) => [hit.text, hit.pinned]), [["本地优先", true]]);
   assert.deepEqual(view.turns[1]?.used, []);
   assert.equal(view.turns[0]?.remembered.length, 1); // 第 2 轮支撑的新条目
-  assert.equal(view.organizing, false);
-  // 待确认：本作用域一条升层 ask + 一条冲突 ask（user 层没有）
-  assert.equal(view.pendingCount, 2);
-
-  // 开段在盘上 → organizing
-  const episodes = new EpisodeStore(dir);
-  await episodes.saveOpen({
-    episodeId: "ep_open",
-    sessionId: "s1",
-    scopeId: "ws-1",
-    fromTurn: 3,
-    toTurn: 3,
-    openedAt: 1,
-    lastAt: 1,
-    turns: [{ turn: 3, at: 1, userText: "u", assistantText: "a" }],
-    extracted: { fact: false, preference: false, insight: false },
-  });
-  const view2 = await library.sessionView("s1");
-  assert.equal(view2.organizing, true);
 });
 
 test("pending：升层与冲突的 ask 都在；旧条已删的冲突不再 ask；拍板过的带 resolution", async () => {

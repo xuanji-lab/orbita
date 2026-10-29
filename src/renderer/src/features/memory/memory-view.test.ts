@@ -7,8 +7,6 @@ import {
   pairMemoryTurns,
   filterMemoryEntries,
   groupMemoryEntries,
-  memoryIsActive,
-  memoryTurnCounts,
   rememberedTurns,
 } from "./memory-view.ts";
 
@@ -83,40 +81,6 @@ describe("groupMemoryEntries", () => {
   });
 });
 
-describe("memoryIsActive", () => {
-  test("缺席与 active 会被召回，muted 与 stale 不会", () => {
-    assert.equal(memoryIsActive(entry("a")), true);
-    assert.equal(memoryIsActive(entry("a", { status: "active" })), true);
-    assert.equal(memoryIsActive(entry("a", { status: "muted" })), false);
-    assert.equal(memoryIsActive(entry("a", { status: "stale" })), false);
-  });
-});
-
-describe("按轮", () => {
-  const session: MemorySessionView = {
-    sessionId: "s1",
-    token: "tok",
-    organizing: false,
-    pendingCount: 0,
-    turns: [
-      { turn: 1, at: 1, used: [{ id: "x", text: "x", score: 0.5 }], remembered: [] },
-      { turn: 2, at: 2, used: [], remembered: [entry("f1")] },
-      { turn: 3, at: 3, used: [{ id: "y", text: "y", score: 1, pinned: true }], remembered: [entry("p1"), entry("p2")] },
-    ],
-  };
-
-  test("某轮的用到 / 记住条数；没有这轮的账返回 null", () => {
-    assert.deepEqual(memoryTurnCounts(session, 3), { used: 1, remembered: 2 });
-    assert.deepEqual(memoryTurnCounts(session, 1), { used: 1, remembered: 0 });
-    assert.equal(memoryTurnCounts(session, 9), null);
-    assert.equal(memoryTurnCounts(null, 1), null);
-  });
-
-  test("审查页签只列记住了东西的轮，新轮在上", () => {
-    assert.deepEqual(rememberedTurns(session).map((row) => row.turn), [3, 2]);
-    assert.deepEqual(rememberedTurns(null), []);
-  });
-});
 
 describe("pairMemoryTurns：对话气泡挂哪一轮的记忆", () => {
   const row = (turn: number, at: number) => ({ turn, at, used: [], remembered: [] });
@@ -124,8 +88,6 @@ describe("pairMemoryTurns：对话气泡挂哪一轮的记忆", () => {
     sessionId: "s",
     token: null,
     turns,
-    organizing: false,
-    pendingCount: 0,
   });
   const users = [
     { id: "u1", timestamp: 100_000 },

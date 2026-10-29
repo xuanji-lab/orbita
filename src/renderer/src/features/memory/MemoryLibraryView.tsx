@@ -10,7 +10,6 @@ import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { MEMORY_TYPE_ICON, MemoryEntryCard } from "./MemoryEntryCard";
 import { PendingCard } from "./PendingCard";
-import { scopeNameOf } from "./MemoryTab";
 import { VectorModelView } from "./VectorModelView";
 import {
   filterMemoryEntries,
@@ -18,6 +17,7 @@ import {
   manualDraftProblem,
   MEMORY_TYPE_ORDER,
   openPendingCount,
+  scopeNameOf,
   type MemoryNav,
   type MemorySourceFilter,
   type MemoryTypeFilter,

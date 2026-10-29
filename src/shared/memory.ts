@@ -374,17 +374,13 @@ export interface MemorySessionTurnView {
   remembered: readonly MemoryEntry[];
 }
 
-/** 某会话的按轮记忆视图（对话轮尾卡「记忆 · 用到 N · 记住 M」与审查 › 记忆页签共用）。 */
+/** 某会话的按轮记忆视图（对话里的「记忆 · 记住 M 条」行与审查 › 记忆页签共用）。 */
 export interface MemorySessionView {
   sessionId: string;
   /** 会话作用域的 token（改动寻址用）；meta 读不到为 null（新会话首轮等） */
   token: MemoryScopeToken | null;
   /** 轮集合 = 注入账本 ∪ 本会话新增条目的轮；轮间新在前 */
   turns: readonly MemorySessionTurnView[];
-  /** 有未收尾 / 提取中的事件段（「整理中…」徽标） */
-  organizing: boolean;
-  /** 待确认数（本作用域 + user 层的 pendingPromote 与未处理 conflictWith） */
-  pendingCount: number;
 }
 
 /** 待确认清单的一行（并拍板过的也返——撤销键的来处）。 */
