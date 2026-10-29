@@ -67,7 +67,7 @@ export type QueuedMessage =
       files?: readonly ComposerFileRef[];
     }
   | { id: string; kind: "compact"; instructions?: string }
-  | { id: string; kind: "channel"; childId: string; message: ChannelMessage };
+  | { id: string; kind: "channel"; childId: string; childWorkbench: string; message: ChannelMessage };
 
 /**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
