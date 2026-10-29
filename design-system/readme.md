@@ -50,10 +50,10 @@ message — see *附：中文规范 › 硬规则* below.
 
 **Orbita has no finalised logo.** Wherever a mark would go, the
 product renders the name as plain type: lowercase `orbita` set in the brand serif
-(`var(--font-family-brand)`), written directly where it's used — the sidebar titlebar
-(`src/renderer/src/shell/Sidebar.tsx`) and the home slogan
-(`src/renderer/src/features/chat/ChatView.tsx`). There is no `BrandLockup` component and no leftover
-mark glyph anywhere in the renderer. When a logo is finalised, drop `SVG + PNG + usage rules` into
+(`var(--font-family-brand)`), written directly where it's used — the foot of the sidebar's usage
+column (`.usage-brand`, `src/renderer/src/shell/UsageMeter.tsx`). The home slogan sits in the same
+face (`src/renderer/src/features/chat/HomeHero.tsx`). There is no `BrandLockup` component and no
+leftover mark glyph anywhere in the renderer. When a logo is finalised, drop `SVG + PNG + usage rules` into
 `assets/` and wire it in where the plain wordmark sits today.
 
 The **app icon** is a separate thing and does exist: `assets/app-icon.svg` — 稿纸, a green manuscript
@@ -92,8 +92,7 @@ the English copy; the Chinese copy follows the same voice.
 - **Group labels are quiet sentence case.** Sidebar node titles, menu group headers, panel group
   headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey (tertiary for card
   kickers), no uppercase, no tracking. They name a group; they never stand in for a heading or a
-  button. (Until 2026-10-14 they were uppercase mono — inherited from the pre-system renderer, never
-  chosen; the mono face is for machine facts, not for titles.)
+  button. Mono is for machine facts, not for titles (uppercase mono labels retired 2026-10-14).
 - **Settings section titles are the exception: `--font-size-lg`, semibold, primary text.** A settings
   page is a document of groups whose rows and cards are `base`; a `sm` grey label there was smaller
   than what it heads and read as noise (2026-10-24: "the title text is too small to read"). The
@@ -150,7 +149,7 @@ panel — expandable detail cards (release notes, migration lists), chips and ba
 resting fill, image placeholders. On light it is a **cool grey `#eef0f2`, not a warm off-white**
 (settled 2026-10-18): the old `#f8f8f5` was 1.06:1 against white and vanished on the warm glass, so
 cards and chips read as bare text; the cool grey matches the text greys and the blue accent. It is
-never the accent wash — `--color-accent-soft` means *selected*, and a release-notes card or a badge
+never the selection wash — `--color-bg-active` means *selected*, and a release-notes card or a badge
 in that colour reads as chosen. The paper faces keep their own warm `#f4f4ef` (paper is warm on
 purpose); the dark tiers are unaffected.
 
@@ -173,33 +172,28 @@ real nebulae each have a colour**: light reflection blue `#2f6bf0`, 黛 oxygen-e
 `#3ec1c9`, 玄 hydrogen-emission magenta `#e0588f`, Copybook ink green `#3b7a55`, Typescript
 red-pen vermilion `#c0442e`.
 
-**Two dark tiers** (re-cut 2026-09-30, values lifted from the packaged colour systems of the
-user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed): the layering grammar is
-unchanged — **the shell (the ground the left rail and right icon strip sit on) is the lighter
-step, the chat panel is the well, cards and the composer float back up; hairlines are white at
-low translucency; grounds paint solid** (`.layer` / `.pane` overrides in
-`src/renderer/src/styles.css`; glass is reserved for floating layers, whose `--glass-bg` is the
-tier's card colour). What moved is where each tier's contrast lives: the two wells now sit at the
-same depth (`#151517` / `#161616`), and the split is in the shell — **but both shells must clear the
-well by a step the eye can see.** **黛 Slate** (id `graphite`, the DeepSeek Harness palette) draws
-in: blue-gray shell `#202021`, well `#151517`, cards `#2c2c2e`, and the brightest grey ink of the
-set `#f9fafb / #cfd3d6 / #adb2b8` — timestamps and tool captions read clearly. The well, cards and
-ink are DeepSeek's own values; **the shell is not**: DeepSeek's own shell sits only ΔL\* 3.0 above
-its well — the same murk this re-cut exists to remove, and worse than the retired 石墨's ΔL\* 5.0 —
-so it was lifted to `#202021` (ΔL\* 5.5). **玄 Onyx** (id `black`, ZCode zai-dark's real structure)
-opens up: the shell floats at `#2b2b2b` — a full step above the well `#161616` (ΔL\* 10.3) — cards
-`#262626`, ink `#e5e5e5 / #b8b8b8 / #808080`. ZCode derives its greys by alpha (0.90 / 0.72 / 0.50
-white); this tier pins them solid, because the 30%-white tertiary fails the 4.5 floor on the well,
-and the second step has to clear 7 on the **lighter shell**, where the rail's section labels and
-empty-state hints sit (there it read 5.82:1 until it was lifted from `#a6a6a6`) — `dark-contrast.test.ts`
-guards both grounds.
-The retired 石墨/Ink pairing had its shell only a hair above the well — shell and well read as one
-murk, which is why it was replaced. **玄 stays the dark landing of `system`**; both are manual
-choices too, and both keep the yellow accent (`#d6c245`) on `--color-accent-fg`; selection washes
-at `.08` — carried by weight and ink, not fill. Tier ids remain `graphite`/`black` (they are the
-settings/IPC contract); the display names 黛/Slate and 玄/Onyx live in the message catalogues.
-(The 2026-09-27 ZCode-transcribed 石墨/墨 pairing and its own history — Warm's one-day life, the
-2026-09-03 true-black/GitHub/neutral bounces — live in those days' commits.)
+**Two dark tiers** (re-cut 2026-09-30; values lifted from the packaged colour systems of the
+user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed). The layering grammar: **the
+shell (the ground the left rail and right icon strip sit on) is the lighter step, the chat panel is
+the well, cards and the composer float back up; hairlines are white at low translucency; grounds
+paint solid** (`.layer` / `.pane` overrides in `src/renderer/src/styles.css`; glass is reserved for
+floating layers, whose `--glass-bg` is the tier's card colour). Both wells sit at the same depth;
+the tiers differ in the shell, and **each shell must clear its well by a step the eye can see**
+(黛 ΔL\* 5.5, 玄 10.3) — a shell a hair above the well reads as one murk, which is what retired the
+earlier 石墨 / Ink pairing (ΔL\* 5.0).
+
+| Tier | id | Shell | Well | Card | Ink (primary / secondary / tertiary) |
+| --- | --- | --- | --- | --- | --- |
+| **黛 Slate** (DeepSeek Harness) | `graphite` | `#202021` (lifted from DeepSeek's own ΔL\* 3.0 to 5.5) | `#151517` | `#2c2c2e` | `#f9fafb / #cfd3d6 / #adb2b8` |
+| **玄 Onyx** (ZCode zai-dark) | `black` | `#2b2b2b` (ΔL\* 10.3) | `#161616` | `#262626` | `#e5e5e5 / #b8b8b8 / #808080` |
+
+Inks are pinned solid, never derived by alpha (ZCode's 30%-white tertiary fails the 4.5 floor on the
+well), and the secondary step must clear 7:1 on the **lighter shell**, where the rail's section
+labels and empty-state hints sit — `dark-contrast.test.ts` guards both grounds. **玄 is the dark
+landing of `system`**; both are manual choices too, both keep the yellow accent (`#d6c245`) on
+`--color-accent-fg`, and selection washes at `.08` — carried by weight and ink, not fill. Tier ids
+stay `graphite` / `black` (the settings / IPC contract); the display names live in the message
+catalogues. Earlier dark pairings and their bounces live in those days' commits.
 
 **Paper themes** (added 2026-09-25): **Copybook** (小学作业) and **Typescript** (打字稿) are the two
 faces of the 稿纸 era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
@@ -223,13 +217,12 @@ either line means re-subsetting (command in `tokens/fonts.css`).
 Tokens live in `tokens/colors.css` (the `--color-paper-*` group), `glass.css` and
 `typography.css`; the decoration layer is `src/renderer/src/paper-themes.css`. They are the only
 themes that change type, and the only place the accent is not blue or yellow.
-Copybook was named Manuscript / 稿纸 on the day it landed and renamed the same day: the green grid
-with the teacher's red pen is a primary-school exercise book (作业本) of that era, not manuscript
-paper. Its theme id is `copybook`; a stored `"manuscript"` still parses to it (`parseTheme` in
-`src/shared/settings.ts`).
+Theme id `copybook`; a stored `"manuscript"` (its name for one day) still parses to it
+(`parseTheme` in `src/shared/settings.ts`).
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
-for CJK) appears exactly twice: the home slogan and the sidebar wordmark. UI sans **Manrope**
+for CJK) appears in three places only: the home slogan, the sidebar wordmark, and the letter a
+provider card shows when that provider has no logo (`.pv-logo-text`). UI sans **Manrope**
 (variable, with Source Han Sans SC) runs the whole interface on **one base size and five roles**
 (18 / 16 / **14** / 12 / 11px, see *Type roles* below) — transcript prose sits on the same 14px base
 with a reading leading (1.75) and a hair of tracking — and a mono/tabular face for machine facts.
@@ -242,11 +235,9 @@ the UI.
 **Layout.** A fixed shell: a full-width top toolbar (52px, capsules only — see Implementation
 rules), below it left sidebar (288px; collapsing it removes it entirely — no icon rail, the toggle lives
 in the toolbar's left capsule, 2026-10-19), conversation pane,
-a 32px action rail for session actions, right drawer (320px, **closed by default**). Every top row
-(sidebar wordmark, conversation / settings / panel headers, the right rail's first slot) shares one
-height — `--titlebar-row`, 26px — centred on the traffic-light line (macOS lights at y 19–31;
-the row centre and the lights' centre are the same horizontal line, Windows included for cross-platform
-consistency). The window's top chrome is the one regulated toolbar (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
+a 32px action rail for session actions, right drawer (320px, **closed by default**). The window's
+top is one 52px toolbar of capsules centred on the traffic-light line; cards carry no header rows of
+their own (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
@@ -255,10 +246,12 @@ home screen to the chat page. Density is balanced: 32/36/48px row heights, 24–
 IDE-crowded.
 
 **Backgrounds.** No imagery, no illustration, no pattern, no texture, no photography — the product
-ships none and this system adds none. The only gradient is the desk behind the glass (a soft warm
-off-white wash) plus two functional gradients in the app (a radial accent glow on the boot screen
-and the mark gradient on the legacy logo block). Depth comes from translucency and hairlines, not
-from colour.
+ships none and this system adds none. The app paints no background of its own: on macOS the window
+is transparent and the user's desktop shows through the glass; elsewhere `body` falls back to
+`--color-bg-app`. Gradients appear only where they do a job — the nebula creature's radial glow and
+its legend bar (`--color-nebula` tiers), a mask that fades overflowing toolbar text, and a
+`linear-gradient` used as a flat overlay to stack hover over a card fill. Depth comes from
+translucency and hairlines, not from colour.
 
 **Transparency.** No blur (2026-09-23): translucency comes from a single `--glass-bg` alpha, stacked
 by nesting rather than blurred behind — a moving pixel anywhere on screen used to force the GPU to
@@ -276,14 +269,10 @@ exception: they skip the glass ladder for a solid `--color-bg-panel` fill, a hai
 and `--shadow-popover` — without blur behind them, a translucent float would let whatever text sits
 under it bleed straight through and become unreadable.
 
-**Corners and borders.** 8px base radius: 4/6/8/10px steps, a literal 14px for the user bubble, and
-`999px` only for true circles (dots, spinners, the round send button). **Radius follows the surface**:
-every glass card takes `--radius-xl` (10px) whatever its layer. **The composer is the one exception**
-— it takes `--radius-composer` (14px), matching the user bubble's `--radius-bubble`. It is the surface
-the user types into and the only card that travels between screens, and the softer corner is what
-distinguishes it from the session cards stacked above it. (Resolved 2026-08-23: this paragraph
-previously said the composer was 10px "because radius follows the surface", contradicting
-`spacing.css`, which has always specified 14px. The token wins; the rule now names the exception.)
+**Corners and borders.** 8px base radius: 4/6/8/10px steps, a literal 14px for the user bubble
+(`--radius-bubble`), and `999px` only for true circles (dots, spinners, the round send button).
+**Radius follows the surface**: every glass card takes `--radius-xl` (10px) whatever its layer —
+the composer included (2026-08-25: a glass card is a glass card; one exception buys nothing).
 Borders are always 1px hairlines; glass cards border with
 `rgba(255,255,255,.55)`, though the app shell and content pane run borderless and rely on the
 translucency step alone. No thick rules, no coloured left-border accents.
@@ -407,7 +396,7 @@ own min / max / close group (`.win-ctl`) is the one declared exception. Every ca
 `--titlebar-capsule` (32 = `--control-height-md`) and sits at `--titlebar-capsule-top` (9) so the capsule
 **centre is the traffic-light centre line, y = 25** (`trafficLightPosition` stays at `{x:18, y:19}`, user
 ruling: move our chrome to the lights, never the lights). Inside capsules everything comes from tokens:
-cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons `--titlebar-icon` (16),
+cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons 16 (the `Icon` size),
 titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
 Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
 the session capsule (address-bar layout, fixed 480 shrinking to fit, centred on the conversation column,
@@ -514,36 +503,14 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
 | `tokens/glass.css` | The single glass alpha, border, and the `.glass-card` recipe. |
 | `tokens/motion.css` | Durations, easings, the three composed transitions. |
-| `guidelines/*.card.html` | 18 foundation specimen cards (Colors, Type, Spacing, Brand). |
-| `components/core/` | `Button`, `IconButton`, `Badge`, `TextField`, `SelectField`, `Modal`, `Icon`. |
-| `components/surfaces/` | `GlassCard`, `SessionCard`, `Chip`. |
-| `components/chat/` | `UserBubble`, `AssistantText`, `ToolCard`, `ThinkingCard`, `RespondingIndicator`. |
-| `components/navigation/` | `BrandLockup`, `ModeChip`, `RailButton`, `SessionRow`. |
-| `components/composer/` | `Composer` — one glass box, identical on both pages. |
-| `ui_kits/orbita-desktop/` | Click-through recreation of the desktop app. See its `README.md`. |
-| `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular (+ OFL). |
+| `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular, the paper faces' Courier Prime / Special Elite and the two subset hand faces (+ licences). |
 | `assets/icons/lucide/` | The Lucide glyphs copied in from upstream Lucide; only those registered in `Icon.tsx` ship. The ISC licence sits beside it, `assets/icons/LICENSE-lucide.txt`. |
-| `SKILL.md` | Agent Skills front matter, for use outside this project. |
+| `assets/vendor-logos/`, `assets/model-avatars/` | Provider marks (SVG) and per-model avatars (the one raster exception, see *Iconography*), each with its own licence / `NOTICE`. |
+| `assets/app-icon.svg` | The Dock / Finder icon (see *No logo*). |
 
-`components/**/*.jsx` — together with each one's `.d.ts`, `.prompt.md` and `@dsCard` html — are
-**frozen specimens produced by the design tool**: reference pictures, not code. The real components
-are the renderer's `.tsx` files under `src/renderer/src/shell/` and `src/renderer/src/features/`.
-Where the two disagree, the renderer is right and the specimen is simply stale — **do not port a
-specimen's writing style (inline `style`, JS-simulated hover) into the app.**
-
-Each component directory has one `@dsCard`-tagged HTML showing its states, and every component ships
-`<Name>.d.ts` (props) and `<Name>.prompt.md` (what & when, with a usage example).
-
-### Intentional additions
-
-- **`Icon`** — a thin wrapper that inlines the copied Lucide SVGs so they inherit `currentColor`.
-  The app does the same thing with its own `src/renderer/src/shell/Icon.tsx` (no `lucide-react`
-  dependency there either); this specimen mirrors that, not a new design decision.
-- **`AssistantText`** and **`Chip`** are extracted from CSS classes in the source
-  (`.assistant-text`, `.home-chip` / `.composer .input-chip`) that had no standalone component.
-
-Nothing else was invented: there is no Toast, Tabs, Avatar, Tooltip or Switch here because the
-source does not define them.
+There are no specimen components here: the real components are the renderer's `.tsx` files under
+`src/renderer/src/shell/` and `src/renderer/src/features/`, and the shared control recipes are the CSS
+classes listed under *Implementation rules*.
 
 ## 附：中文规范
 
