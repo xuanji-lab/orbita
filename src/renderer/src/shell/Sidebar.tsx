@@ -12,6 +12,8 @@ import { childSessions, isSessionDone, rootSessions, type Carryover, type Sessio
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
+import type { MemoryScopeSummary } from "@shared/memory";
+import type { MemoryNav } from "../features/memory/memory-view.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
@@ -38,7 +40,7 @@ import { useT } from "../locale.ts";
 import type { Messages } from "../messages-en.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
-export type Overlay = "settings" | null;
+export type Overlay = "settings" | "memory" | null;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -129,6 +131,14 @@ export function Sidebar(props: {
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
   /**
+   * 记忆库盖层（实验功能 memory-system）下侧栏换成它的导航：范围（全部 / 所有工作区 /
+   * 各工作区）+ 管理（待你确认 / 向量模型）。数据由 App 拉（页面本体也要用）。
+   */
+  memoryNav: MemoryNav;
+  onMemoryNav: (next: MemoryNav) => void;
+  memoryScopes: readonly MemoryScopeSummary[] | null;
+  memoryPendingCount: number;
+  /**
    * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
    * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
    * 主列表区，不弹窗。
@@ -183,6 +193,9 @@ export function Sidebar(props: {
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
+  const memoryOpen = props.overlay === "memory";
+  /** 任一整页盖层（设置 / 记忆库）开着：主列表、筛选行、子视图都让位 */
+  const overlayOpen = props.overlay !== null;
   /**
    * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
    * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
@@ -210,7 +223,7 @@ export function Sidebar(props: {
     // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
     // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCompact, session.sessions.length, settingsOpen, props.showArchived, props.showCarryovers]);
+  }, [filterCompact, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -326,7 +339,7 @@ export function Sidebar(props: {
    * 优先让位给它们（那些入口在右栏，不受专注影响）；工作区被移除则回会话列表。
    */
   const filesViewWs =
-    props.filesView !== null && !settingsOpen && !props.showArchived && !props.showCarryovers
+    props.filesView !== null && !overlayOpen && !props.showArchived && !props.showCarryovers
       ? (session.workspaces.find((item) => item.id === props.filesView?.workspaceId) ?? null)
       : null;
   const filesBody =
@@ -432,7 +445,7 @@ export function Sidebar(props: {
         「已完成且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
         筛选无从谈起，不摆。「进行中」2026-10-24 去掉（用户：「似乎完全没用」）。
       */}
-      {live.length > 0 && !settingsOpen && !props.showArchived && !props.showCarryovers && (
+      {live.length > 0 && !overlayOpen && !props.showArchived && !props.showCarryovers && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -486,7 +499,7 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {props.showArchived && !settingsOpen ? (
+        {props.showArchived && !overlayOpen ? (
           <>
             {/*
               标题行左端的返回键是 Archived 视图的**显式出口**。以前出去只能再点一次
@@ -521,7 +534,7 @@ export function Sidebar(props: {
               />
             ))}
           </>
-        ) : props.showCarryovers && !settingsOpen ? (
+        ) : props.showCarryovers && !overlayOpen ? (
           <CarryoverPanel
             carryovers={session.carryovers}
             sessions={session.sessions}
@@ -553,6 +566,43 @@ export function Sidebar(props: {
               open(id);
             }}
           />
+        ) : memoryOpen ? (
+          <>
+            <NodeLabel>{t.memory.navScopes}</NodeLabel>
+            <NavRow
+              icon="layers"
+              label={t.memory.navAll}
+              active={props.memoryNav.kind === "scope" && props.memoryNav.token === "all"}
+              count={props.memoryScopes?.reduce((sum, scope) => sum + scope.count, 0)}
+              onClick={() => props.onMemoryNav({ kind: "scope", token: "all" })}
+            />
+            {(props.memoryScopes ?? []).map((scope) => (
+              <NavRow
+                key={scope.token}
+                icon={scope.kind === "user" ? "user" : "folder"}
+                label={scope.kind === "user" ? t.memory.scopeUser : scope.name}
+                active={props.memoryNav.kind === "scope" && props.memoryNav.token === scope.token}
+                count={scope.count}
+                onClick={() => props.onMemoryNav({ kind: "scope", token: scope.token })}
+              />
+            ))}
+            <span style={{ display: "block", height: "var(--space-3)" }} />
+            <NodeLabel>{t.memory.navManage}</NodeLabel>
+            <NavRow
+              icon="circle-dot"
+              label={t.memory.pending}
+              active={props.memoryNav.kind === "pending"}
+              count={props.memoryPendingCount > 0 ? props.memoryPendingCount : undefined}
+              countTone="var(--color-warning)"
+              onClick={() => props.onMemoryNav({ kind: "pending" })}
+            />
+            <NavRow
+              icon="cpu"
+              label={t.memory.vector}
+              active={props.memoryNav.kind === "vector"}
+              onClick={() => props.onMemoryNav({ kind: "vector" })}
+            />
+          </>
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
@@ -1159,6 +1209,10 @@ function NavRow(props: {
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
   /** 竖条的悬停说明（状态的可读名字） */
   barTitle?: string;
+  /** 行尾的条数（记忆库导航）；undefined = 不画。钉在行右内边距（.row-trailing） */
+  count?: number | undefined;
+  /** 条数的颜色（待你确认用警示色——颜色是第二信号，名字已经说了是什么） */
+  countTone?: string;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1221,6 +1275,19 @@ function NavRow(props: {
       >
         {props.label}
       </span>
+      {props.count !== undefined && (
+        <span
+          className="row-trailing"
+          style={{
+            fontFamily: "var(--font-family-business)",
+            fontSize: "var(--font-size-xs)",
+            fontVariantNumeric: "tabular-nums",
+            color: props.countTone ?? "var(--color-text-tertiary)",
+          }}
+        >
+          {props.count}
+        </span>
+      )}
     </button>
   );
 }

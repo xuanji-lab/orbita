@@ -105,6 +105,10 @@ import { HomeHero } from "./HomeHero";
 import { WrapupCard } from "./WrapupCard";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
+import type { MemorySessionTurnView } from "@shared/memory";
+import { useMemorySession } from "../memory/useMemory.ts";
+import { pairMemoryTurns } from "../memory/memory-view.ts";
+import "../memory/memory.css";
 import { DiffBody } from "../../shell/DiffView";
 import { RevertPreviewBar } from "./RevertPreviewBar";
 import { collectCitations } from "./citation-markers.ts";
@@ -714,6 +718,11 @@ function ChatViewBody(props: {
    */
   onOpenIntentPanel?: () => void;
   /**
+   * 对话里记忆行的「在审查面板里看」：打开右栏审查面板的记忆页签。只有主槽拿到它；
+   * 右栏与抽屉里不传，记忆行照常显示、只是没有这个链接。
+   */
+  onOpenMemoryReview?: () => void;
+  /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
    * 会话层——都有长转录、都会滚离底部。实现在本组件里三处共用。
@@ -939,6 +948,18 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+  // 记忆（实验功能 memory-system）：每条用户消息下挂「记忆 · 用到 N 条」行。
+  // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
+  const memoryOn = useExperimentalFeature("memory-system");
+  const memorySession = useMemorySession(memoryOn && openId !== "" ? openId : null);
+  const memoryLines = useMemo((): MemoryLines | null => {
+    const view = memorySession.data;
+    if (view === null) return null;
+    const users = session.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : []));
+    const rows = pairMemoryTurns(users, view);
+    const latestTurn = view.turns.reduce((latest, row) => Math.max(latest, row.turn), 0);
+    return { rows, pendingCount: view.pendingCount, organizing: view.organizing, latestTurn };
+  }, [memorySession.data, session.transcript]);
   // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象
   const previewMessageId = session.revertDialog?.targetMessageId ?? null;
   const previewTurnId = session.undoDialog?.turnId ?? null;
@@ -1509,6 +1530,8 @@ function ChatViewBody(props: {
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
           onOpenIntentPanel={props.onOpenIntentPanel}
+          memory={memoryLines}
+          onOpenMemoryReview={props.onOpenMemoryReview}
           sessionId={openId}
         />
         </RevertPreviewContext.Provider>
@@ -1569,6 +1592,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有；引用稳定，不破 memo） */
   onOpenIntentPanel?: () => void;
+  /** 记忆行（实验功能 memory-system）：用户气泡 id → 那一轮的账；null = 关着 / 没数据 */
+  memory: MemoryLines | null;
+  /** 记忆行的「在审查面板里看」（主槽才有） */
+  onOpenMemoryReview?: () => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
   /** 意图召回（实验功能 intent-system）：终态卡（按时间插回流）与运行中卡（转录末尾） */
@@ -1809,6 +1836,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 sessionId={props.sessionId}
                 onRevertTo={props.onRevertTo}
                 streamingIds={streamingIds}
+                memory={props.memory}
+                onOpenMemoryReview={props.onOpenMemoryReview}
               />
             )}
             {branchAfter !== undefined && (
@@ -2723,6 +2752,9 @@ function EntryView(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有） */
   onOpenIntentPanel?: () => void;
+  /** 记忆行（实验功能 memory-system）：挂在用户气泡下；undefined = 不画 */
+  memory?: MemoryLines | null;
+  onOpenMemoryReview?: () => void;
   /** 产物打开按钮的会话对账（主进程白名单按它查） */
   sessionId: string;
 }) {
@@ -2730,13 +2762,24 @@ function EntryView(props: {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") {
+    const memoryRow = props.memory?.rows.get(entry.item.id);
     return (
-      <UserBubble
-        item={entry.item}
-        onRevertTo={props.onRevertTo}
-        revertDisabled={props.actionsBusy || props.readOnly === true}
-        revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
-      />
+      <>
+        <UserBubble
+          item={entry.item}
+          onRevertTo={props.onRevertTo}
+          revertDisabled={props.actionsBusy || props.readOnly === true}
+          revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
+        />
+        {memoryRow !== undefined && props.memory != null && (
+          <MemoryLine
+            row={memoryRow}
+            pendingCount={memoryRow.turn === props.memory.latestTurn ? props.memory.pendingCount : 0}
+            organizing={memoryRow.turn === props.memory.latestTurn && props.memory.organizing}
+            onOpenReview={props.onOpenMemoryReview}
+          />
+        )}
+      </>
     );
   }
   if (entry.kind === "fileTurn") {
@@ -4857,6 +4900,94 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
   return (
     <div key={key} style={{ ...BODY_LINE, color: "var(--color-text-secondary)" }}>
       {line === "" ? " " : line}
+    </div>
+  );
+}
+
+/** 记忆行的数据：气泡 id → 那一轮的账，外加会话级的待确认数与「整理中」。 */
+interface MemoryLines {
+  rows: ReadonlyMap<string, MemorySessionTurnView>;
+  pendingCount: number;
+  organizing: boolean;
+  /** 账本里最新的轮：待确认数与「整理中」只挂在这一轮的行上（会话级的状态挂一处就够） */
+  latestTurn: number;
+}
+
+/**
+ * 记忆行（实验功能 memory-system）：挂在用户气泡下，说这一轮带进去了哪些记忆、
+ * 从这一轮记住了什么。与思考 / 工具行同一份 CollapseRow 契约；没用到也没记住的轮不画。
+ * 展开看用到的条目（注入时刻的快照，带「常驻 / 按相关度」）与记住的条目；
+ * 改 / 删 / 拍板去审查面板的记忆页签——对话流里不放写操作。
+ */
+function MemoryLine(props: {
+  row: MemorySessionTurnView;
+  pendingCount: number;
+  organizing: boolean;
+  onOpenReview?: () => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const { row } = props;
+  if (row.used.length === 0 && row.remembered.length === 0 && !props.organizing && props.pendingCount === 0) return null;
+  const parts = [
+    row.used.length > 0 ? t.memory.rowUsed(row.used.length) : null,
+    row.remembered.length > 0 ? t.memory.rowRemembered(row.remembered.length) : null,
+  ].filter((part): part is string => part !== null);
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-4)" }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        <span style={HEAD_WRAP}>
+          <span style={{ color: headIconColor(false) }}>
+            <Icon name="brain-circuit" size={14} strokeWidth={1.8} />
+          </span>
+          <span style={headLabel(false)}>{t.memory.rowLabel}</span>
+        </span>
+        {parts.length > 0 && <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-base)" }}>{parts.join(" · ")}</span>}
+        {/* 状态是一句话不是数字：用正文字体（SLOT.status 的等宽字体是给计时 / 计数的） */}
+        {props.organizing && (
+          <span style={{ ...SLOT.status, fontFamily: "var(--font-family-base)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <Icon name="loader-circle" size={11} spin />
+            {t.memory.organizing}
+          </span>
+        )}
+        {props.pendingCount > 0 && (
+          <span style={{ ...SLOT.status, fontFamily: "var(--font-family-base)", color: "var(--color-warning)" }}>
+            {t.memory.rowPending(props.pendingCount)}
+          </span>
+        )}
+      </CollapseRow>
+      {open && (
+        <div style={{ ...EXPANDED_BODY, fontFamily: "var(--font-family-base)", whiteSpace: "normal", display: "grid", gap: "var(--space-1)" }}>
+          {row.used.length === 0 ? (
+            <span style={{ color: "var(--color-text-tertiary)" }}>{t.memory.rowNoneUsed}</span>
+          ) : (
+            row.used.map((hit) => (
+              <span key={hit.id} style={{ display: "flex", gap: "var(--space-2)", alignItems: "baseline" }}>
+                <span style={{ flex: "1 1 auto", minWidth: 0, color: "var(--color-text-primary)" }}>{hit.text}</span>
+                <span style={{ ...SLOT.status, marginLeft: "auto" }}>{hit.pinned === true ? t.memory.rowPinned : t.memory.rowRelevant}</span>
+              </span>
+            ))
+          )}
+          {row.remembered.length > 0 && (
+            <>
+              <span style={{ marginTop: "var(--space-1)", color: "var(--color-text-tertiary)", fontSize: "var(--font-size-xs)" }}>
+                {t.memory.rowRemembered(row.remembered.length)}
+              </span>
+              {row.remembered.map((entry) => (
+                <span key={entry.id} style={{ color: "var(--color-text-primary)" }}>
+                  {entry.text}
+                </span>
+              ))}
+            </>
+          )}
+          {props.onOpenReview !== undefined && (
+            <button type="button" className="mem-link" onClick={props.onOpenReview}>
+              {t.memory.openReview}
+              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

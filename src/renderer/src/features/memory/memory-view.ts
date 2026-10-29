@@ -75,3 +75,62 @@ export function rememberedTurns(view: MemorySessionView | null): MemorySessionVi
   if (view === null) return [];
   return [...view.turns].filter((row) => row.remembered.length > 0).sort((a, b) => b.turn - a.turn);
 }
+
+/**
+ * 召回发生在用户消息落进 pi 本子之前（轮前同步等记忆，最多 4–6 秒），所以账本里
+ * 一轮的 `at` 会略早于那条用户消息的时间戳。按时间配对时给这么多余量。
+ */
+const RECALL_LEAD_MS = 10_000;
+
+/**
+ * 对话里每条用户消息对应记忆账本的哪一轮（「记忆 · 用到 N 条」行要挂在哪条气泡下）。
+ *
+ * **按时间配，不按计数**：一轮归给「时间不晚于它 + 余量」的最后一条用户消息，且不能
+ * 越过下一条消息。计数（第 k 条用户消息 = 第 k 轮）只在 renderer 手上是完整历史时才对，
+ * 而它常常不是：只加载了最近一页，或会话在后台跑（没打开时收到的实时事件只建出
+ * 那几轮）——2026-10-29 实例 memui 实测，后台跑的第 7、8 轮被计数配成第 1、2 轮，
+ * 气泡下挂了别的轮的账。账本的 `at` 与消息时间戳相差在一秒内，时间配两种情况都对。
+ */
+export function pairMemoryTurns(
+  users: readonly { id: string; timestamp: number }[],
+  view: MemorySessionView | null,
+): Map<string, MemorySessionView["turns"][number]> {
+  const paired = new Map<string, MemorySessionView["turns"][number]>();
+  if (view === null || users.length === 0) return paired;
+  const ordered = [...users].sort((a, b) => a.timestamp - b.timestamp);
+  for (const row of view.turns) {
+    let owner: string | null = null;
+    for (let index = 0; index < ordered.length; index += 1) {
+      const user = ordered[index]!;
+      if (user.timestamp - RECALL_LEAD_MS > row.at) break;
+      const next = ordered[index + 1];
+      if (next === undefined || next.timestamp - RECALL_LEAD_MS > row.at) owner = user.id;
+    }
+    // 同一条消息被两轮争（不该发生）时留轮号大的：它更可能是这条消息自己的轮
+    const existing = owner === null ? undefined : paired.get(owner);
+    if (owner !== null && (existing === undefined || existing.turn < row.turn)) paired.set(owner, row);
+  }
+  return paired;
+}
+
+/** 待确认清单里还没拍板的条数（侧栏「待你确认」角标、记忆库顶部提示条）。 */
+export function openPendingCount(items: readonly { resolution?: string }[] | null): number {
+  return items === null ? 0 : items.filter((item) => item.resolution === undefined).length;
+}
+
+/** 手动添加的校验：正文必填；偏好 / 经验必须写理由（服务侧同样会拒，这里先挡住给出原因）。 */
+export function manualDraftProblem(draft: {
+  type: MemoryEntryType;
+  text: string;
+  reason: string;
+}): "text" | "reason" | null {
+  if (draft.text.trim() === "") return "text";
+  if (draft.type !== "fact" && draft.reason.trim() === "") return "reason";
+  return null;
+}
+
+/**
+ * 记忆库页的导航位置（侧栏在记忆库盖层下换成这份导航，与设置页同一种整页形态）：
+ * 某个范围的条目（"all" = 全部）、待你确认、向量模型。
+ */
+export type MemoryNav = { kind: "scope"; token: string } | { kind: "pending" } | { kind: "vector" };

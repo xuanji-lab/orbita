@@ -61,6 +61,10 @@ import {
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
+import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
+import { openPendingCount, type MemoryNav } from "./features/memory/memory-view.ts";
+import { useMemoryPending, useMemoryScopes } from "./features/memory/useMemory.ts";
+import type { MemoryEntryView } from "@shared/memory";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -104,6 +108,8 @@ export function App() {
     return () => query.removeEventListener("change", sync);
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  /** 记忆库盖层（实验功能 memory-system）里看的是哪一页：某个范围 / 待你确认 / 向量模型 */
+  const [memoryNav, setMemoryNav] = useState<MemoryNav>({ kind: "scope", token: "all" });
   // 初始 state 的主题跟 main.tsx 首帧写的 data-theme 对齐（api.initialTheme），
   // 否则这里先落 DEFAULT_SETTINGS 的 "system"，useTheme 首次 apply 会把主题切到
   // 系统色，api.settings.get() 读回真设置后再切回来——当着用户的面闪两次。
@@ -417,7 +423,7 @@ export function App() {
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
   const channelParentId =
-    overlay === "settings" || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
+    overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
 
   // 通道清单：右栏入口的「在等你」角标（waiting + approval）从这里算。父子会话面板
@@ -494,6 +500,38 @@ export function App() {
   /** 摘抄列表的版本：主槽每摘一条 +1，审查面板的摘抄页签据此重拉 */
   const [excerptRevision, setExcerptRevision] = useState(0);
   const bumpExcerpts = useCallback(() => setExcerptRevision((value) => value + 1), []);
+  /**
+   * 记忆条目的「回到原文」：退出记忆库，打开出处会话并滚到支撑它的最新一轮——
+   * 走摘抄跳转同一条路（原话片段找得到就闪那段，找不到退回那一轮的用户消息）。
+   */
+  const jumpToMemorySource = useCallback(
+    (view: MemoryEntryView) => {
+      setOverlay(null);
+      const turn = view.entry.turns[view.entry.turns.length - 1];
+      openExcerpt({
+        sessionId: view.entry.sessionId,
+        role: "user",
+        text: view.quote ?? "",
+        ...(turn !== undefined ? { turn } : {}),
+      });
+    },
+    [openExcerpt],
+  );
+  /**
+   * 对话里记忆行的「在审查面板里看」：打开审查面板并切到记忆页签（token 递增的
+   * 一次性请求，同 reviewFocus）。面板换走就清掉——否则下次手动打开审查面板时
+   * 挂载又会被它拽到记忆页签。
+   */
+  const [memoryFocus, setMemoryFocus] = useState<number | null>(null);
+  const memoryFocusTokenRef = useRef(0);
+  const openMemoryReview = useCallback(() => {
+    memoryFocusTokenRef.current += 1;
+    setMemoryFocus(memoryFocusTokenRef.current);
+    setRightPanel("review");
+  }, []);
+  useEffect(() => {
+    if (rightPanel !== "review") setMemoryFocus(null);
+  }, [rightPanel]);
   /**
    * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
@@ -657,7 +695,7 @@ export function App() {
   /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
   const drawerOpenId = drawerView.sessionId ?? drawerView.opened?.id ?? null;
   const watchedIds = [
-    ...(overlay === "settings" || mainOpenId === "" ? [] : [mainOpenId]),
+    ...(overlay !== null || mainOpenId === "" ? [] : [mainOpenId]),
     ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
   ];
   const watchedKey = watchedIds.join("\n");
@@ -980,6 +1018,11 @@ export function App() {
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
+  // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
+  const memoryOn = experimentalFeatures["memory-system"] === true;
+  if (overlay === "memory" && !memoryOn) setOverlay(null);
+  const memoryScopes = useMemoryScopes(overlay === "memory");
+  const memoryPending = useMemoryPending(overlay === "memory");
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -991,10 +1034,10 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" ? (
+    overlay === "settings" || overlay === "memory" ? (
       <div className="cap-sess">
         <div className="cap-sc">
-          <strong className="cap-title">{t.settings.tabs[settingsTab]}</strong>
+          <strong className="cap-title">{overlay === "memory" ? t.memory.title : t.settings.tabs[settingsTab]}</strong>
         </div>
       </div>
     ) : mainOpenId === "" && session.opened === null ? null : (
@@ -1051,6 +1094,17 @@ export function App() {
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
+    ...(memoryOn
+      ? [
+          {
+            // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
+            icon: "brain-circuit" as const,
+            label: t.memory.rail,
+            lit: overlay === "memory",
+            onClick: () => setOverlay(overlay === "memory" ? null : "memory"),
+          },
+        ]
+      : []),
     {
       icon: "settings" as const,
       label: t.common.settings,
@@ -1088,6 +1142,10 @@ export function App() {
           settingsTab={settingsTab}
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
+          memoryNav={memoryNav}
+          onMemoryNav={setMemoryNav}
+          memoryScopes={memoryScopes.data}
+          memoryPendingCount={openPendingCount(memoryPending.data?.items ?? null)}
           showArchived={showArchived}
           showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
@@ -1123,7 +1181,20 @@ export function App() {
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
-            {overlay === "settings" ? (
+            {overlay === "memory" ? (
+              <MemoryLibraryView
+                nav={memoryNav}
+                onNav={setMemoryNav}
+                scopes={memoryScopes.data}
+                pending={memoryPending.data?.items ?? null}
+                onJump={jumpToMemorySource}
+                choreLabel={settings.choreModel?.modelId ?? null}
+                onOpenGeneral={() => {
+                  setSettingsTab("general");
+                  setOverlay("settings");
+                }}
+              />
+            ) : overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
                 settings={settings}
@@ -1160,6 +1231,7 @@ export function App() {
                 panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
+                onOpenMemoryReview={openMemoryReview}
                 onOpenSideChat={openInSideChat}
                 intentOpenableIds={intentOpenableIds}
               />
@@ -1200,6 +1272,7 @@ export function App() {
                   cwd={session.cwd}
                   excerptRevision={excerptRevision}
                   onJumpExcerpt={openExcerpt}
+                  memoryFocus={memoryFocus}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel

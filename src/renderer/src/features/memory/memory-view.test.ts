@@ -2,6 +2,9 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { MemoryEntry, MemoryEntryView, MemorySessionView } from "../../../../shared/memory.ts";
 import {
+  manualDraftProblem,
+  openPendingCount,
+  pairMemoryTurns,
   filterMemoryEntries,
   groupMemoryEntries,
   memoryIsActive,
@@ -112,5 +115,65 @@ describe("按轮", () => {
   test("审查页签只列记住了东西的轮，新轮在上", () => {
     assert.deepEqual(rememberedTurns(session).map((row) => row.turn), [3, 2]);
     assert.deepEqual(rememberedTurns(null), []);
+  });
+});
+
+describe("pairMemoryTurns：对话气泡挂哪一轮的记忆", () => {
+  const row = (turn: number, at: number) => ({ turn, at, used: [], remembered: [] });
+  const session = (turns: ReturnType<typeof row>[]): MemorySessionView => ({
+    sessionId: "s",
+    token: null,
+    turns,
+    organizing: false,
+    pendingCount: 0,
+  });
+  const users = [
+    { id: "u1", timestamp: 100_000 },
+    { id: "u2", timestamp: 200_000 },
+    { id: "u3", timestamp: 300_000 },
+  ];
+
+  test("按时间配：召回略早于消息也认", () => {
+    const paired = pairMemoryTurns(users, session([row(1, 99_500), row(2, 199_800), row(3, 299_900)]));
+    assert.equal(paired.get("u1")?.turn, 1);
+    assert.equal(paired.get("u2")?.turn, 2);
+    assert.equal(paired.get("u3")?.turn, 3);
+  });
+
+  test("renderer 只有最近几条消息（后台跑的轮 / 只加载了一页）：轮号大也配得上，不按计数错配", () => {
+    // 实测回归：转录里只有第 7、8 轮两条消息，计数会把它们配成第 1、2 轮
+    const live = [
+      { id: "u7", timestamp: 1_000_000 },
+      { id: "u8", timestamp: 1_010_000 },
+    ];
+    const view = session([row(1, 10_000), row(2, 20_000), row(7, 999_700), row(8, 1_009_900)]);
+    const paired = pairMemoryTurns(live, view);
+    assert.equal(paired.get("u7")?.turn, 7);
+    assert.equal(paired.get("u8")?.turn, 8);
+    assert.equal(paired.size, 2);
+  });
+
+  test("窗口之前的轮不挂到第一条气泡上", () => {
+    const paired = pairMemoryTurns(users, session([row(5, 10_000), row(41, 98_000)]));
+    assert.equal(paired.get("u1")?.turn, 41);
+    assert.equal(paired.size, 1);
+  });
+
+  test("没有视图或没有消息：空表", () => {
+    assert.equal(pairMemoryTurns(users, null).size, 0);
+    assert.equal(pairMemoryTurns([], session([row(1, 0)])).size, 0);
+  });
+});
+
+describe("待确认计数与手动添加校验", () => {
+  test("已拍板的不算待确认", () => {
+    assert.equal(openPendingCount([{}, { resolution: "user" }, {}]), 2);
+    assert.equal(openPendingCount(null), 0);
+  });
+
+  test("事实可不写理由，偏好 / 经验必须写", () => {
+    assert.equal(manualDraftProblem({ type: "fact", text: "x", reason: "" }), null);
+    assert.equal(manualDraftProblem({ type: "preference", text: "x", reason: " " }), "reason");
+    assert.equal(manualDraftProblem({ type: "insight", text: "  ", reason: "y" }), "text");
   });
 });
