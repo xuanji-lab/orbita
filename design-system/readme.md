@@ -277,8 +277,8 @@ Borders are always 1px hairlines; glass cards border with
 `rgba(255,255,255,.55)`, though the app shell and content pane run borderless and rely on the
 translucency step alone. No thick rules, no coloured left-border accents.
 
-**Cards.** One recipe: the single `--glass-bg`, 1px light border, `--shadow-composer`
-(`0 8px 28px rgba(20,24,31,.08)`), 10px radius. Chat-internal process cards (tool, thinking) have **no**
+**Cards.** One recipe: the single `--glass-bg`, 1px light border, `--shadow-card`, 10px radius.
+The composer is the one card that floats and lifts to `--shadow-composer` (`.composer-card`). Chat-internal process cards (tool, thinking) have **no**
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
 External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
 kind word + name) sits in one pill chip — 1px hairline, fully rounded, no fill — the same language
@@ -314,11 +314,16 @@ one flat grey, with failure red as the only exception. Body text never competes 
 A run of same-type tool calls gathers under a plain verb header (`读取 · × 4`): it lives expanded
 while the turn runs, and folds itself away — every group, every time, without memory — the moment
 the turn settles; a failed run keeps a red glyph on the header so failure never folds away silently.
+The turn's own rollup line (`Worked 2.8s · thought 1 · tools 4`) is a footnote, not a heading: one
+size and weight for the whole line — `--font-size-sm`, 500, tertiary — on a 28px row
+(`--control-height-sm`). It used to open at 14px / 650 and so outweighed the answer below it.
 Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
-**Shadows.** Four steps, all cool-grey and soft: `--shadow-border` (a 1px inner hairline),
-`--shadow-composer` (cards and the input box), `--shadow-popover` (menus, card hover),
-`--shadow-modal` (dialogs). Focus is a 2px accent ring at 16% opacity, plus a solid accent outline
+**Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
+size**: `--shadow-border` (a 1px inner hairline), `--shadow-card` (resting cards — a 1px contact
+shadow plus a short 12px spread), `--shadow-composer` (the input box and the content pane),
+`--shadow-popover` (menus, card hover), `--shadow-modal` (dialogs). One 28px blur on a 225px session
+card read as a small thing carrying a big shadow (2026-10-29). Focus is a 2px accent ring at 16% opacity, plus a solid accent outline
 on `:focus-visible`.
 
 **Hover, press, disabled.** Hover lays a translucent grey over whatever is underneath
@@ -326,7 +331,7 @@ on `:focus-visible`.
 and 8% on dark) and lifts text from secondary to primary — never a colour change, never a transform.
 It is translucent on purpose: a solid "next grey up" was visible on white panels but vanished on the
 off-white shell behind the sidebar, so the same hover now reads equally on every ground. Cards lift their shadow from
-composer to popover, and nothing moves. Press deepens the fill (`--color-bg-active`); accent buttons
+card to popover, and nothing moves. Press deepens the fill (`--color-bg-active`); accent buttons
 go to `--color-accent-strong` (`#16379c`). Disabled is `opacity: .45–.55` with `cursor: not-allowed`
 — and for planned features, a `title` explaining why. **On glass, disable with a solid theme colour
 rather than opacity**: a dimmed glyph over translucency reads as neither ink nor wallpaper.
@@ -409,6 +414,14 @@ column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 80
 session capsule centring and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
 lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
 and the toolbar's direct children are capsules.
+
+**Leading glyphs sit on one hem.** In the content column, every glyph starts at the same vertical
+line: column edge + `--content-hem` (13px = a glass card's 12px padding inside its 1px hairline).
+Card text already sat there; agent prose (`.assistant-prose`), process rows (CollapseRow's padding
+and `RAIL_X` for what hangs under them), the answer's action icons and the composer's typed text
+(`.composer-input` has no inline padding) are pulled onto it, so reading and writing share one line.
+A surface that holds text (a card, a row's hover fill) starts at the column edge; only its glyphs
+step in. Before 2026-10-29 prose, process rows and input sat on three lines 13 and 4px apart.
 
 **Trailing edges sit on the row's right hem.** A row / card / list item's trailing
 element — a status mark, footnote, count or timestamp — pins its right edge to the row's right

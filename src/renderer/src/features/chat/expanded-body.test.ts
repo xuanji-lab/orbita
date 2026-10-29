@@ -28,7 +28,7 @@ test("圆角只走 --radius-md token，无像素字面量", () => {
 
 test("缩进：左缘 = RAIL_X（与行首 icon 左缘相切），右缘无 margin", () => {
   assert.equal(EXPANDED_FRAME.marginLeft, RAIL_X);
-  assert.equal(RAIL_X, 10, "RAIL_X 是折叠行按钮内边距（icon 左缘），漂了就是对不齐");
+  assert.equal(RAIL_X, "var(--content-hem)", "RAIL_X 是折叠行按钮内边距（icon 左缘）= 血线，漂了就是对不齐");
   assert.equal("marginRight" in EXPANDED_FRAME, false, "右 margin 会破坏行尾血线");
 });
 

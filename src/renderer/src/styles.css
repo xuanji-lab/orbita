@@ -39,11 +39,15 @@
  */
 
 /*
- * 玻璃卡的浮层修饰：`.glass-card`（Orbita Design System `tokens/glass.css`）默认阴影是
- * --shadow-composer；菜单 / 排队条 / 收尾确认卡 / 审批条这四处浮层要的是再抬一级的
- * --shadow-popover，加这个修饰类而不是覆盖 `.glass-card` 本身——composer 与 session
- * 卡仍然要用默认的 --shadow-composer。
+ * 玻璃卡的阴影按「浮多高」分三档（2026-10-29 精装第二笔）：`.glass-card`
+ * （`tokens/glass.css`）静止是 --shadow-card；输入卡是唯一真正浮起的卡，`.composer-card`
+ * 抬到 --shadow-composer；菜单 / 排队条 / 收尾确认卡 / 审批条这四处浮层再抬一级到
+ * --shadow-popover（`.glass-float`）。都是修饰类，不覆盖 `.glass-card` 本身。
  */
+.composer-card {
+  box-shadow: var(--shadow-composer);
+}
+
 .glass-float {
   box-shadow: var(--shadow-popover);
 }
@@ -63,7 +67,7 @@
 }
 
 /*
- * SessionCard 不属于「浮层」——静止态就是 --shadow-composer，hover 才抬一级到
+ * SessionCard 不属于「浮层」——静止态就是 --shadow-card，hover 才抬到
  * --shadow-popover（设计系统 *Hover, press, disabled*：卡片 hover 只抬阴影，不挪位置、
  * 不变色），所以不用 `.glass-float`，单独一条 hover 规则。
  */
@@ -216,11 +220,13 @@
  * 取 410px 做断点——比展开态最小需求（~420px）略窄一点，容器一旦装不下当前展开
  * 内容就立刻收，不留一段「即将重叠」的中间态。
  */
-/* 输入框本体。底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
+/* 输入框本体。左右不留内边距：卡的 12px + 发丝已经把字送到血线（--content-hem）上，
+   与正文、过程行同一根竖线（2026-10-29，原 4px 让输入的字比正文多缩 4px）。
+   底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
    纸面两档要在这里画格子与横线（paper-themes.css），inline 的 background 会把它们盖掉。
    字体与字号也在这里：小学作业主题的镜像层（.composer-mirror）同用这个 class，排版才和 textarea 一致 */
 .composer-input {
-  padding: var(--space-0-5) var(--space-1);
+  padding: var(--space-0-5) 0;
   background: transparent;
   line-height: var(--line-height-ui);
   font-family: var(--font-family-base);
@@ -1895,6 +1901,12 @@ body {
  * 6 个颜色桶撑不起 TextMate 的 scope 层次。明暗切换靠 shiki 双主题 CSS 变量
  * （--shiki-dark），见下方 pre.shiki 规则。
  */
+
+/* 正文落在血线上：agent 回复的段落与卡内文字、输入框里的字同一个左起点（--content-hem）。
+   只缩左边——右缘照旧贴满整列（agent 回复不留右白，2026-10-10 裁决） */
+.assistant-prose {
+  padding-left: var(--content-hem);
+}
 
 .chat-md {
   min-width: 0;
