@@ -717,6 +717,11 @@ void app.whenReady().then(async () => {
 
   /** 所有拉起路径共用：ready/init 之后立即同步向量与电源，崩溃自愈也不会丢配置。 */
   const ensureMemoryService = async (): Promise<boolean> => {
+    // init 要带上家务活模型：启动清扫会续提上次没提完的段（退出前没收尾的、
+    // 提取调用失败留账的），init 里没有模型就只能干等用户下一句话。setChore
+    // 以前没有任何调用点，init 永远不带模型（2026-10-29 实例 memui 实测：重启后
+    // 「有待提取的事件段，但没有家务活模型」，三个段挂着不提）
+    if (!memoryHost.isRunning()) memoryHost.setChore(await choreModelPayload(settings, providers));
     const started = await memoryHost.ensureStarted();
     if (!started) return false;
     await syncVectorConfig();
