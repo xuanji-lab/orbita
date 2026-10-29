@@ -97,6 +97,10 @@ the English copy; the Chinese copy follows the same voice.
   page is a document of groups whose rows and cards are `base`; a `sm` grey label there was smaller
   than what it heads and read as noise (2026-10-24: "the title text is too small to read"). The
   `.section-label` class carries this; other group labels keep the quiet treatment above.
+- **A setting explains itself in place.** Name `base`/500, then its description below in `sm`
+  tertiary, wrapping instead of truncating (`.set-row-desc`). Before 2026-10-30, General hid
+  descriptions behind an ⓘ next to the name while Voice wrote them out — two ways of explaining on
+  one surface, and the ⓘ made people guess there was something to hover.
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.

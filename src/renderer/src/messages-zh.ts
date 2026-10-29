@@ -738,7 +738,6 @@ export const zh: Messages = {
     unavailable: "不可用",
     openDataDirectory: "打开数据目录",
     reveal: "打开",
-    aboutSetting: (name) => `关于「${name}」`,
     browserData: "浏览器数据",
     clearBrowserData: "清除全部浏览器数据",
     clearBrowserDataInfo: "内置浏览器退出所有网站，删除它保存的登录信息、站点数据与缓存 · 不影响你自己的浏览器",

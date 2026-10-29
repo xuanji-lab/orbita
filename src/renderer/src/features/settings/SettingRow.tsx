@@ -5,8 +5,6 @@
  * 抽到这里——设计系统的规矩是「同一份样式对象被复制进第二个文件，就该抽出组件，
  * 而不是复制一份」。
  */
-import { InfoTip } from "./InfoTip";
-import { useT } from "../../locale.ts";
 
 /**
  * 分组：标题与侧栏的节点标题同一个处理（`.section-label`，UI 字、sm、semibold，
@@ -22,7 +20,11 @@ export function SettingGroup(props: { label: string; children: React.ReactNode }
 }
 
 /**
- * 一条设置：左边只有名字（说明收进旁边的 info 悬停），右边是控件与它的效果预览。
+ * 一条设置：左边是名字与它下面一行说明，右边是控件与它的效果预览。
+ *
+ * **说明常驻、不进悬停**（2026-10-30）：原来通用页把说明收进名字旁的 ⓘ，语音页把说明
+ * 写在名字下面——同一个设置面两种讲法；ⓘ 还要用户先猜「这里有话」再去悬停。统一成
+ * 名字 base/500 + 下面一行说明 sm/tertiary，长了就折行，不截断。
  * **直接坐在内容面上，靠发丝线分隔，不套第二张卡**——玻璃已经分了三层，再加一层只会把层级讲糊。
  *
  * `note` 是名字下方可选的一行状态（Data directory 的 Reveal 失败原因）——它不是说明，
@@ -40,14 +42,11 @@ export function SettingRow(props: {
   rowRef?: React.Ref<HTMLDivElement>;
   children: React.ReactNode;
 }) {
-  const t = useT();
   return (
     <div className="set-row" ref={props.rowRef}>
       <span className="set-row-head">
-        <span className="set-row-name">
-          {props.name}
-          {props.info !== undefined && <InfoTip label={t.settings.aboutSetting(props.name)}>{props.info}</InfoTip>}
-        </span>
+        <span className="set-row-name">{props.name}</span>
+        {props.info !== undefined && <span className="set-row-desc">{props.info}</span>}
         {props.note}
       </span>
       <div className="set-row-ctl">{props.children}</div>
