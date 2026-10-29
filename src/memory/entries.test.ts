@@ -220,6 +220,24 @@ test("moveEntry：搬家不做去重（搬家不是新建，重复文本不该�
   assert.equal(userEntries.length, 2); // 原有 + 搬来的，没被去重掉
 });
 
+test("moveEntry：先追加目标层再删源层，源层删除发生时目标已可读", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const from = store.tokenOf("ws-1");
+  const seeded = await store.appendScope("ws-1", episode(), [
+    { type: "fact", text: "不能因搬家中断而丢失", keywords: [], turns: [1] },
+  ]);
+  const id = seeded[0]!.id;
+  const removeEntry = store.removeEntry.bind(store);
+  let targetExistedBeforeSourceRemoval = false;
+  store.removeEntry = async (token, entryId) => {
+    targetExistedBeforeSourceRemoval = (await store.listByToken("user")).some((entry) => entry.id === id);
+    return removeEntry(token, entryId);
+  };
+  await store.moveEntry(from, "user", id, (target) => ({ ...target, layer: "user", scopeId: undefined }));
+  assert.equal(targetExistedBeforeSourceRemoval, true);
+});
+
 test("addManual：落指定层、盖 id/时间、偏好没 reason 拒收", async () => {
   const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
   const store = new MemoryEntryStore(dir);

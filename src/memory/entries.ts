@@ -394,9 +394,10 @@ export class MemoryEntryStore {
   }
 
   /**
-   * 搬一条到另一层（升层 / 撤销升层）：从源层移除、变换（改 layer / scopeId /
-   * 拍板字段）、追加进目标层。**不做去重**——条目是搬家不是新建，文本重复
-   * 不该让搬家静默丢条。返回搬后的条目；源层里没有返回 null。
+   * 搬一条到另一层（升层 / 撤销升层）：先读源层、变换并追加目标层，再删源层。
+   * 半路被杀最多短暂同存两份（召回按 id 去重），不会出现两边都没有的丢条窗口。
+   * **不做去重**——条目是搬家不是新建，文本重复不该让搬家静默丢条。
+   * 返回搬后的条目；源层里没有返回 null。
    */
   async moveEntry(
     fromToken: string,
@@ -404,7 +405,8 @@ export class MemoryEntryStore {
     entryId: string,
     apply: (entry: MemoryEntry) => MemoryEntry,
   ): Promise<MemoryEntry | null> {
-    const moved = await this.removeEntry(fromToken, entryId);
+    const source = await this.listByToken(fromToken);
+    const moved = source.find((entry) => entry.id === entryId) ?? null;
     if (moved === null) return null;
     const next = apply(moved);
     await mkdir(this.dir, { recursive: true });
@@ -413,6 +415,7 @@ export class MemoryEntryStore {
       `${JSON.stringify(next)}\n`,
       "utf8",
     );
+    await this.removeEntry(fromToken, entryId);
     return next;
   }
 
