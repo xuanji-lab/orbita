@@ -250,7 +250,14 @@ export class MemoryServiceHostCore {
    * （实验开关开着时服务应该已在跑；这里只是崩溃窗口的兜底。）
    */
   turnSettled(payload: MemoryTurnPayload): void {
-    if (this.child === null) return;
+    if (this.child === null) {
+      // 丢弃必留痕：服务没拉起来（fork 失败 / ready 超时 / 上次 init 失败后不再拉）或刚崩
+      this.log(
+        `[memory] 轮后事件没转发：记忆服务不在${this.initFailure !== null ? `（init 失败：${this.initFailure}）` : ""}，` +
+          `会话 ${payload.sessionId} 第 ${payload.turn} 轮不进事件段`,
+      );
+      return;
+    }
     this.child.postMessage({
       type: "turnSettled",
       ...payload,

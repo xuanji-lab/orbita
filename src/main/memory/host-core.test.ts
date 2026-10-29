@@ -124,6 +124,27 @@ test("turnSettled：服务不在就丢（构建是易耗品）；在就转发", 
   assert.equal(sent.turn, 1);
 });
 
+test("turnSettled：服务不在时丢弃留痕（会话 + 轮号；init 失败过则带上原因）", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const logs: string[] = [];
+  const h = new MemoryServiceHostCore({
+    forkRuntime: () => {
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    log: (message) => logs.push(message),
+  });
+  h.turnSettled({ sessionId: "s7", scopeId: "w", turn: 3, at: 1, userText: "u", assistantText: "a" });
+  assert.match(logs[0] ?? "", /记忆服务不在，会话 s7 第 3 轮不进事件段/);
+  await h.ensureStarted();
+  ref.current!.emit("message", { type: "initFailed", error: "目录读不了" });
+  h.turnSettled({ sessionId: "s7", scopeId: "w", turn: 4, at: 2, userText: "u", assistantText: "a" });
+  assert.ok(logs.some((line) => /init 失败：目录读不了.*会话 s7 第 4 轮不进事件段/.test(line)));
+});
+
 test("向量控制与进度：配置 / 电源 / 下载转发，状态回执配对且超时回 null", async () => {
   const ref: { current: FakeChild | null } = { current: null };
   const downloads: MemoryDownloadProgress[] = [];

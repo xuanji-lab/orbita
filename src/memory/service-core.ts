@@ -130,6 +130,13 @@ export class MemoryServiceCore {
    * 队列后面——按 token 粒度互斥，不同作用域互不等待 */
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * init 的闸：init 一进来（同步）就立起，数据目录挂好、启动清扫入队后打开。
+   * 服务刚拉起时主进程紧跟 init 就发 turnSettled（开关中途打开 / 崩溃后重拉的
+   * 第一轮），那时 init 还在读盘、episodes 还是 null——不等这道闸，那一轮就被
+   * integrateTurn 的空 store 分支静默丢掉。null = 还没收到过 init。
+   */
+  private initGate: Promise<void> | null = null;
 
   constructor(options: MemoryServiceCoreOptions) {
     this.callModel = options.callModel;
@@ -150,6 +157,24 @@ export class MemoryServiceCore {
    * - 开段与待提取段同 episodeId（搬移半路被杀）：pending 赢，开段文件删掉。
    */
   async init(dir: string, chore?: MemoryChoreModel): Promise<void> {
+    let openGate: () => void = () => undefined;
+    this.initGate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    try {
+      await this.initStores(dir, chore);
+    } finally {
+      // 失败也开闸：等着的轮看到 store 仍是 null，记一行丢弃日志后走掉，不把队列卡死
+      openGate();
+    }
+    // 清扫的收尾 / 提取全部入队后，init 等 queue 尾——后续 turnSettled 的活
+    // 排在清扫后面，顺序确定（启动提取可能分钟级，主进程不等 init 回执）。
+    // 开闸之前就到了的轮排在清扫前面：它自己处理开段（admissionOf 判间隔），
+    // 清扫的 closeEpisode 按 episodeId 核对、提取按类记账，先后都不出错
+    await this.queue;
+  }
+
+  private async initStores(dir: string, chore?: MemoryChoreModel): Promise<void> {
     const entries = new MemoryEntryStore(dir);
     // 旧「待你确认」数据按新规则落定一次（只跑一次，见 settleLegacyDecisions）。
     // 在 entries 挂上之前做：记忆库写操作此时回「还没初始化」，不与这次整层改写交错
@@ -210,9 +235,6 @@ export class MemoryServiceCore {
     for (const episode of pending) {
       this.enqueue(() => this.extractEpisode(episode.episodeId));
     }
-    // 清扫的收尾 / 提取全部入队后，init 等 queue 尾——后续 turnSettled 的活
-    // 排在清扫后面，顺序确定（启动提取可能分钟级，主进程不等 init 回执）
-    await this.queue;
   }
 
   /**
@@ -230,9 +252,12 @@ export class MemoryServiceCore {
   }): Promise<void> {
     if (payload.chore !== undefined) this.chore = payload.chore;
     if (this.chore === null) {
+      // 只提醒一次（每轮都刷就成了噪音）；配上模型后再缺会重新提醒
       if (!this.choreMissingLogged) {
         this.choreMissingLogged = true;
-        this.log("[memory] 没配家务活模型，记忆不构建（设置 › 模型服务 › 家务活模型）");
+        this.log(
+          `[memory] 没配家务活模型，记忆不构建（设置 › 模型服务 › 家务活模型）；会话 ${payload.sessionId} 第 ${payload.turn} 轮起的轮都不进事件段，直到配上`,
+        );
       }
       return Promise.resolve();
     }
@@ -244,7 +269,14 @@ export class MemoryServiceCore {
       assistantText: payload.assistantText,
     });
     const { sessionId, scopeId } = payload;
-    return this.enqueue(() => this.integrateTurn(snapshot, sessionId, scopeId));
+    return this.enqueue(async () => {
+      try {
+        await this.integrateTurn(snapshot, sessionId, scopeId);
+      } catch (cause) {
+        // 队列兜底的那行日志不带是哪一轮；这里补上会话与轮号再记
+        this.log(`[memory] 会话 ${sessionId} 第 ${snapshot.turn} 轮并入事件段时出错（这一轮可能没进事件段）`, cause);
+      }
+    });
   }
 
   /**
@@ -857,8 +889,14 @@ export class MemoryServiceCore {
     sessionId: string,
     scopeId: string,
   ): Promise<void> {
+    if (this.initGate !== null) await this.initGate;
     const store = this.episodes;
-    if (store === null) return;
+    if (store === null) {
+      this.log(
+        `[memory] 会话 ${sessionId} 第 ${turn.turn} 轮不进事件段——记忆服务还没初始化（${this.initGate === null ? "没收到 init" : "init 失败"}）`,
+      );
+      return;
+    }
     // 该会话若有提完没收尾干净 / 提取失败的待提取段，趁这轮补一把
     // （启动清扫之外的唯一重试触发点；扫两个小目录，代价可忽略）
     const { pending } = await store.listAll();
@@ -869,7 +907,13 @@ export class MemoryServiceCore {
     }
     const episode = await store.loadOpen(sessionId);
     const admission = admissionOf(episode, turn);
-    if (admission.kind === "ignore") return;
+    if (admission.kind === "ignore") {
+      this.log(
+        `[memory] 会话 ${sessionId} 第 ${turn.turn} 轮不进事件段——轮号不大于开段已收到的第 ${episode?.toTurn ?? "?"} 轮` +
+          "（重复投递，或会话回退后轮号回落）",
+      );
+      return;
+    }
     if (admission.kind === "classify" && episode !== null) {
       const verdict = await this.classify(episode, turn);
       if (verdict === "new") {

@@ -1108,3 +1108,42 @@ test("服务重启但盘上向量是别的模型算的：manifest 对账照样�
   assert.ok(second.embeddedTexts.includes("旧模型算的条目"));
   assert.equal((await restarted.vectorState()).vectors?.model, "qwen3-embedding-0.6b");
 });
+
+test("服务刚拉起：init 还在读盘时就到的 turnSettled 等 init 完再并入，不被空 store 静默丢掉", async () => {
+  const logs: string[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => "same",
+    idleCloseMs: 60_000,
+    log: (message) => logs.push(message),
+  });
+  const dir = await tempDir();
+  // runtime 的顺序：收到 init 就同步调 core.init（不 await），紧跟着的 turnSettled 立即进来
+  const initDone = core.init(dir, CHORE);
+  await core.turnSettled(turnPayload());
+  await initDone;
+  const open = await new EpisodeStore(dir).loadOpen("s1");
+  assert.equal(open?.turns.length, 1, `开机第一轮必须进事件段；日志：${logs.join(" | ")}`);
+});
+
+test("丢弃留痕：轮号不大于开段 toTurn 的轮被忽略时记一行带会话与轮号的诊断；没收到 init 时同样留痕", async () => {
+  const logs: string[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => "same",
+    idleCloseMs: 60_000,
+    log: (message) => logs.push(message),
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ turn: 2 }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 1001 })); // 重复投递 / 回退后轮号回落
+  const open = await new EpisodeStore(dir).loadOpen("s1");
+  assert.equal(open?.turns.length, 1);
+  assert.ok(
+    logs.some((line) => line.includes("会话 s1 第 2 轮不进事件段") && line.includes("第 2 轮")),
+    `应有 ignore 诊断；实际：${logs.join(" | ")}`,
+  );
+
+  const noInit = new MemoryServiceCore({ callModel: async () => "same", log: (message) => logs.push(message) });
+  await noInit.turnSettled(turnPayload({ sessionId: "s9", turn: 4 }));
+  assert.ok(logs.some((line) => line.includes("会话 s9 第 4 轮不进事件段") && line.includes("没收到 init")));
+});
