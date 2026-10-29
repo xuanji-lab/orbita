@@ -58,6 +58,7 @@ import {
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
+  runStateOf,
   sessionRunState,
   settledSessions,
   type NoticeTier,
@@ -1006,6 +1007,8 @@ export function App() {
   }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
+  /** 「这条任务」头一行的在跑 / 等你：与侧栏状态饼同一个推导（runStateOf，含子会话），所以要 meta */
+  const mainMeta = mainSessionId === null ? undefined : session.sessions.find((meta) => meta.id === mainSessionId);
 
   /**
    * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
@@ -1318,6 +1321,7 @@ export function App() {
                   cwd={session.cwd ?? ""}
                   tab={taskTab}
                   onTab={setTaskTab}
+                  runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
                   carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status === "open")}
                   onSetCarryoverStatus={session.setCarryoverStatus}
                 />

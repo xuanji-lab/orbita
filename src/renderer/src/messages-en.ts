@@ -2119,9 +2119,11 @@ export const en = {
           ? "Waiting for you"
           : state === "failed"
             ? "Stopped with an error"
-            : state === "done"
-              ? "Done"
-              : "Idle",
+            : state === "stopped"
+              ? "Stopped"
+              : state === "done"
+                ? "Done"
+                : "Idle",
     turns: (count: number) => plural(count, "turn"),
     plan: "Plan",
     planCount: (done: number, total: number) => `${done} / ${total}`,

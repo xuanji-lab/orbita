@@ -7,15 +7,17 @@ import { StatusPie } from "../../shell/StatusPie";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
 import { formatRunClock, formatToolDuration, indexToolResults, type ToolResultIndex } from "../chat/tool-results.ts";
-import { sessionRunState } from "../notify/completion-notice.ts";
-import { latestPlan, REVEAL_ENTRY_EVENT, turnDigests, type TurnDigest } from "./task-progress.ts";
+import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { latestPlan, REVEAL_ENTRY_EVENT, stepClockFrom, taskHeadState, turnDigests, type TurnDigest } from "./task-progress.ts";
 
 
 /**
  * 「这条任务 › 进度」（2026-10-30）：它在做什么、做过什么、还剩什么。
  *
- * - 头一行：状态饼 + 状态（在跑 / 等你 / 做完了 / 出错了）+ 轮数 + 这一轮的用时（在跑时每秒走）；
- * - 计划：update_plan 的最后一张清单（空圈 / 在做 / 勾）；「在做」那步带计时（从这张计划写下起）；
+ * - 头一行：状态饼 + 状态（在跑 / 等你 / 做完了 / 出错了；计划没做完就停了是「停下了」，只说字不画饼）
+ *   + 轮数 + 这一轮的用时（在跑时每秒走）；推导在 task-progress.ts 的 taskHeadState；
+ * - 计划：update_plan 的最后一张清单（空圈 / 在做 / 勾）；「在做」那步只在会话在跑 / 等你时画在跑饼、
+ *   带计时（从这张计划写下起；计划是前几轮写的就从这一轮起），停下之后画空圈、字仍加粗标出停在哪一步；
  * - 做过的：按轮列，旧轮收成一行（用户那句话 + 步数 · 文件 · 用时），最近一轮展开成章节——
  *   与对话里过程块展开后的章节同一份推导；点一章，对话滚到那一块；
  * - 留到以后：这条会话收割的遗留（open），勾掉即完成；
@@ -23,6 +25,8 @@ import { latestPlan, REVEAL_ENTRY_EVENT, turnDigests, type TurnDigest } from "./
  */
 export function TaskProgress(props: {
   entry: SessionEntry;
+  /** 会话运行态（App 的 runStateOf，与侧栏状态饼同一个推导，含子会话）；null = 列表里还没有这条会话的 meta */
+  runState: SessionRunState;
   carryovers: readonly Carryover[];
   onSetCarryoverStatus: (id: string, status: Carryover["status"]) => void;
   onOpenContext: () => void;
@@ -34,7 +38,9 @@ export function TaskProgress(props: {
   const turnActive = entry.phase === "turn";
   const turns = useMemo(() => turnDigests(records, turnActive, results), [records, turnActive, results]);
   const plan = useMemo(() => latestPlan(records), [records]);
-  const state = sessionRunState({ slot: { phase: entry.phase, approvals: entry.approvals.length }, children: [], unread: null });
+  // App 给的是侧栏同一个推导；meta 还没进列表（刚建的会话）时退回只看自己的槽
+  const run =
+    props.runState ?? sessionRunState({ slot: { phase: entry.phase, approvals: entry.approvals.length }, children: [], unread: null });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!turnActive) return;
@@ -42,15 +48,16 @@ export function TaskProgress(props: {
     return () => window.clearInterval(timer);
   }, [turnActive]);
   const last = turns.at(-1);
-  // 头一行的状态：在跑 / 等你取槽；落定后按最后一轮有没有失败说「做完了 / 出错了」
-  const headState = state ?? (last === undefined ? null : last.failed > 0 && last.steps === last.failed ? "failed" : "done");
+  const headState = taskHeadState({ run, turnError: entry.turnError !== null, turns: turns.length, plan });
+  // 「在做」那步画在跑饼的前提：会话真的在跑 / 等你。停下之后还画蓝饼，说的是一件没在发生的事
+  const working = headState === "running" || headState === "waiting";
   const clock = turnActive && last !== undefined ? formatRunClock(now - last.at) : last?.durationMs != null ? formatToolDuration(last.durationMs, t) : null;
   const usage = entry.stats?.contextUsage ?? null;
 
   return (
     <div className="tp-body">
       <div className="tp-now">
-        <span className="tp-slot">{headState !== null && <StatusPie state={headState} />}</span>
+        <span className="tp-slot">{headState !== null && headState !== "stopped" && <StatusPie state={headState} />}</span>
         <b>{t.taskPanel.state(headState ?? "idle")}</b>
         {turns.length > 0 && <span className="tp-sub">· {t.taskPanel.turns(turns.length)}</span>}
         {clock !== null && <span className="tp-clock">{clock}</span>}
@@ -68,14 +75,16 @@ export function TaskProgress(props: {
                 <span className="tp-slot">
                   {item.status === "done" ? (
                     <Icon name="check" size={12} strokeWidth={2} />
-                  ) : item.status === "in_progress" ? (
+                  ) : item.status === "in_progress" && working ? (
                     <StatusPie state="running" />
                   ) : (
                     <span className="tp-ring" />
                   )}
                 </span>
                 <span className="tp-text">{item.text}</span>
-                {item.status === "in_progress" && turnActive && <span className="tp-clock">{formatRunClock(now - plan.at)}</span>}
+                {item.status === "in_progress" && working && turnActive && (
+                  <span className="tp-clock">{formatRunClock(now - stepClockFrom(plan, turns))}</span>
+                )}
               </li>
             ))}
           </ol>

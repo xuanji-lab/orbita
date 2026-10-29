@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { latestPlan, turnDigests } from "./task-progress.ts";
+import { latestPlan, stepClockFrom, taskHeadState, turnDigests, type PlanView } from "./task-progress.ts";
 
 const user = (id: string, timestamp: number, text = "hi"): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text }], timestamp }) as TranscriptItem;
@@ -11,6 +11,7 @@ const tool = (o: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCal
   ({ id: `item-${o.toolCallId}`, role: "tool", toolName: "read", input: {}, content: [], timestamp: 0, status: "complete", isError: false, ...o }) as TranscriptItem;
 const plan = (id: string, at: number, items: unknown, status: ToolTranscriptItem["status"] = "complete") =>
   tool({ toolCallId: id, toolName: "update_plan", input: { items } as never, timestamp: at, status });
+const plan_ = (id: string, at: number) => plan(id, at, [{ text: "改", status: "in_progress" }]);
 
 describe("latestPlan", () => {
   test("取最后一张：被拒的（error）不算", () => {
@@ -75,5 +76,43 @@ describe("turnDigests", () => {
     assert.equal(one?.live, false);
     assert.equal(two?.failed, 1);
     assert.equal(two?.live, true);
+  });
+});
+
+describe("taskHeadState（头一行：在跑 / 等你 / 做完了 / 出错了 / 停下了）", () => {
+  const unfinished: PlanView = { items: [{ text: "读", status: "done" }, { text: "改", status: "in_progress" }], at: 10, done: 1 };
+  const finished: PlanView = { items: [{ text: "读", status: "done" }], at: 10, done: 1 };
+  test("在跑 / 等你取会话运行态（侧栏同一个推导），不看计划", () => {
+    assert.equal(taskHeadState({ run: "running", turnError: false, turns: 1, plan: unfinished }), "running");
+    assert.equal(taskHeadState({ run: "waiting", turnError: false, turns: 1, plan: finished }), "waiting");
+  });
+  test("一轮都没有：不说状态", () => {
+    assert.equal(taskHeadState({ run: null, turnError: false, turns: 0, plan: null }), null);
+  });
+  test("这一轮以错误收场 = 出错了（与侧栏红饼同一个来源 turnError），压过计划", () => {
+    assert.equal(taskHeadState({ run: null, turnError: true, turns: 2, plan: unfinished }), "failed");
+  });
+  test("计划还有没做完的步 = 停下了：用户点了停止、模型停下来问你，都不是「做完了」", () => {
+    assert.equal(taskHeadState({ run: null, turnError: false, turns: 2, plan: unfinished }), "stopped");
+  });
+  test("计划全勾或没写计划 = 做完了；工具失败不等于这一轮出错（模型照样收尾了）", () => {
+    assert.equal(taskHeadState({ run: null, turnError: false, turns: 1, plan: finished }), "done");
+    assert.equal(taskHeadState({ run: null, turnError: false, turns: 1, plan: null }), "done");
+  });
+  test("未读标记（侧栏的跑完 / 出错）不当在跑：落定后的状态由这里自己判", () => {
+    assert.equal(taskHeadState({ run: "done", turnError: false, turns: 1, plan: unfinished }), "stopped");
+    assert.equal(taskHeadState({ run: "failed", turnError: false, turns: 1, plan: null }), "done");
+  });
+});
+
+describe("stepClockFrom（「在做」那步从几点开始计）", () => {
+  const plan: PlanView = { items: [{ text: "改", status: "in_progress" }], at: 1_000, done: 0 };
+  test("计划是这一轮写的：从写下的时刻起", () => {
+    const turns = turnDigests([user("u1", 500), plan_("p1", 1_000)], true);
+    assert.equal(stepClockFrom(plan, turns), 1_000);
+  });
+  test("计划是前几轮写的、这一轮没更新（续聊）：从这一轮开始算，不把中间闲着的时间算进去", () => {
+    const turns = turnDigests([user("u1", 500), plan_("p1", 1_000), user("u2", 90_000_000)], true);
+    assert.equal(stepClockFrom(plan, turns), 90_000_000);
   });
 });

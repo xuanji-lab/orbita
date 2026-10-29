@@ -1942,7 +1942,17 @@ export const zh: Messages = {
     tabProgress: "进度",
     tabContext: "上下文",
     state: (state) =>
-      state === "running" ? "在跑" : state === "waiting" ? "等你" : state === "failed" ? "出错了" : state === "done" ? "做完了" : "空闲",
+      state === "running"
+        ? "在跑"
+        : state === "waiting"
+          ? "等你"
+          : state === "failed"
+            ? "出错了"
+            : state === "stopped"
+              ? "停下了"
+              : state === "done"
+                ? "做完了"
+                : "空闲",
     turns: (count) => `${count} 轮`,
     plan: "计划",
     planCount: (done, total) => `${done} / ${total}`,
