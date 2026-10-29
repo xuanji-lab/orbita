@@ -13,6 +13,7 @@ import {
   IMAGE_TOKEN_ESTIMATE,
 } from "./context-inventory.ts";
 import type { CompactedRecord, ChannelMarkRecord, TranscriptRecord } from "./session.ts";
+import { buildRulesInventory } from "./context-inventory.ts";
 
 const CWD = "/ws/proj";
 
@@ -426,5 +427,37 @@ describe("规则组", () => {
   it("不给清单 = null（未开过轮的旧会话）", () => {
     const inventory = buildContextInventory({ records: [userItem("hi")], cwd: CWD, scope: "turn" });
     equal(inventory.rules, null);
+  });
+});
+
+describe("规则清单组装（buildRulesInventory，runtime 的产出方）", () => {
+  it("基底整段估算、文件按内容估算、空串段不进清单、scope 按 agentDir 判", () => {
+    const basePrompt = `pi base with <project_instructions path="/ws/proj/AGENTS.md">项目规则</project_instructions>`;
+    const inventory = buildRulesInventory({
+      agentsFiles: [
+        { path: "/Users/me/.pi/agent/AGENTS.md", content: "全局规则" },
+        { path: "/ws/proj/AGENTS.md", content: "项目规则" },
+      ],
+      skills: [{ name: "贾维斯路线图", description: "在 orbita 开发路线图上的任何一项时使用" }],
+      basePrompt,
+      segments: [
+        { id: "permission", text: "权限说明" },
+        { id: "git-attribution", text: "" },
+      ],
+      agentDir: "/Users/me/.pi/agent",
+    });
+    deepStrictEqual(
+      inventory.files.map((file) => file.scope),
+      ["global", "project"],
+    );
+    strictEqual(inventory.files[0]?.tokens, estimateContextTokens("全局规则"));
+    strictEqual(inventory.baseTokens, estimateContextTokens(basePrompt));
+    deepStrictEqual(inventory.segments.map((segment) => segment.id), ["permission"]);
+    strictEqual(inventory.segments[0]?.tokens, estimateContextTokens("权限说明"));
+    deepStrictEqual(inventory.skillsIndex.names, ["贾维斯路线图"]);
+    strictEqual(
+      inventory.skillsIndex.tokens,
+      estimateContextTokens("贾维斯路线图: 在 orbita 开发路线图上的任何一项时使用"),
+    );
   });
 });

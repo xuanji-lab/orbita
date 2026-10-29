@@ -253,6 +253,41 @@ interface Occurrence {
   tokens: number;
 }
 
+/**
+ * 规则注入清单的组装（产出方是 runtime 的 before_agent_start，这里保持纯函数可测）：
+ * pi 基底原文 + 规则文件 + 技能索引 + Orbita 追加段 → ContextRulesInventory。
+ *
+ * files 的 scope 判定：pi 的 loadProjectContextFiles 把全局（agentDir）那份排在最前，
+ * 但判定不依赖顺序——落在 agentDir 里的就是 global，其余（cwd 祖先链）是 project。
+ * baseTokens 对基底整段估算，**已包含规则文件与技能索引的量**（契约里写明，防加重）。
+ */
+export function buildRulesInventory(input: {
+  agentsFiles: readonly { path: string; content: string }[];
+  skills: readonly { name: string; description: string }[];
+  /** pi 组装完的基底系统提示（含 project_context / 技能索引 / 工具清单） */
+  basePrompt: string;
+  segments: readonly { id: string; text: string }[];
+  agentDir: string;
+}): ContextRulesInventory {
+  const base = normalizeSeparators(input.agentDir);
+  return {
+    files: input.agentsFiles.map((file) => ({
+      path: file.path,
+      tokens: estimateContextTokens(file.content),
+      scope: base !== "" && pathWithin(base, normalizeSeparators(file.path)) ? "global" : "project",
+    })),
+    baseTokens: estimateContextTokens(input.basePrompt),
+    // 技能索引的近似：索引行的主体就是 name + description（formatSkillsForPrompt 的包裹行很小）
+    skillsIndex: {
+      names: input.skills.map((skill) => skill.name),
+      tokens: estimateContextTokens(input.skills.map((skill) => `${skill.name}: ${skill.description}`).join("\n")),
+    },
+    segments: input.segments
+      .filter((segment) => segment.text !== "")
+      .map((segment) => ({ id: segment.id, tokens: estimateContextTokens(segment.text) })),
+  };
+}
+
 /** 累积器：一行 = 出现列表 + 显示字段（显示字段按规则随出现更新）。 */
 interface Accum<T> {
   occurrences: Occurrence[];

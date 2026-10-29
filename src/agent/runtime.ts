@@ -41,6 +41,7 @@ import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
+import { buildRulesInventory } from "../shared/context-inventory.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
 import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
@@ -965,6 +966,16 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * （用户旅行）下一轮自然换标，代价是那一轮历史前缀重算一次、缓存失效一回。
    */
   const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  /**
+   * 规则注入清单的原料（上下文面板「规则与说明」组）：services 建好后读一次，
+   * before_agent_start（首个 LLM 调用前）组装成 contextInventory 事件。空串段
+   * （如关掉的 Git 标识）不透传，segments 只报实际注入的。
+   */
+  let rulesSources: {
+    agentsFiles: { path: string; content: string }[];
+    skills: { name: string; description: string }[];
+    agentDir: string;
+  } | null = null;
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -1013,48 +1024,80 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
-            pi.on("before_agent_start", (event) => ({
-              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
-              systemPrompt: [
-                adaptSystemPrompt(event.systemPrompt),
-                describePermissionMode(currentMode(), [
-                  ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
-                  "create_skill",
-                  "add_mcp_server",
-                  "read_task",
-                  // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
-                  // 都会停下来等它批准，plan 档下更是直接被拒
-                  ...TERMINAL_TOOL_NAMES,
-                  // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
-                  ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
-                ]),
+            pi.on("before_agent_start", (event) => {
+              // 基底单独一份：它计入清单的 baseTokens（估算基底 ≈ 改写后基底），
+              // 不进 segments——两处都算会加重一遍
+              const base = adaptSystemPrompt(event.systemPrompt);
+              // 段带稳定 id：systemPrompt 拼接用 text，contextInventory 事件按段报量；
+              // 空串的段滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
+              const segments = [
+                {
+                  id: "permission",
+                  text: describePermissionMode(currentMode(), [
+                    ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
+                    "create_skill",
+                    "add_mcp_server",
+                    "read_task",
+                    // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
+                    // 都会停下来等它批准，plan 档下更是直接被拒
+                    ...TERMINAL_TOOL_NAMES,
+                    // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
+                    ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
+                  ]),
+                },
                 // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
-                // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
-                describeDirectories(command.cwd, command.directories),
+                // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被滤掉
+                { id: "directories-listing", text: describeDirectories(command.cwd, command.directories) },
                 // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
-                describeChannelRole(role),
+                { id: "channel-role", text: describeChannelRole(role) },
                 // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
                 // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
-                storeToolsGuideline(
-                  command.workspaceId === null ? null : { name: command.workspaceName },
-                  command.cwd,
-                ),
-                TOOL_GUIDELINES,
-                EXPECTED_SECONDS_GUIDELINE,
+                {
+                  id: "store-tools",
+                  text: storeToolsGuideline(
+                    command.workspaceId === null ? null : { name: command.workspaceName },
+                    command.cwd,
+                  ),
+                },
+                { id: "tool-guidelines", text: TOOL_GUIDELINES },
+                { id: "expected-seconds", text: EXPECTED_SECONDS_GUIDELINE },
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
-                ...("intent" in command && command.intent !== undefined ? [INTENT_CONTEXT_GUIDELINE] : []),
+                ...("intent" in command && command.intent !== undefined
+                  ? [{ id: "intent-context", text: INTENT_CONTEXT_GUIDELINE }]
+                  : []),
                 // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
                 // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
-                QUOTE_GUIDELINE,
+                { id: "quote", text: QUOTE_GUIDELINE },
                 // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
-                gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
+                {
+                  id: "git-attribution",
+                  text: gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
+                },
                 // 回复语言放最末一段（离对话最近、权重最高），见 prompt-narration.ts
-                REPLY_LANGUAGE_GUIDELINE,
-              ]
-                .filter((part) => part !== "")
-                .join("\n\n"),
-            }));
+                { id: "reply-language", text: REPLY_LANGUAGE_GUIDELINE },
+              ].filter((segment) => segment.text !== "");
+              // 上下文面板的「规则与说明」组：每轮推一次最新清单。推送失败不影响对话——
+              // 面板比对话次要（stats 同一条纪律）
+              if (rulesSources !== null) {
+                try {
+                  send({
+                    type: "contextInventory",
+                    sessionId: command.sessionId,
+                    inventory: buildRulesInventory({
+                      agentsFiles: rulesSources.agentsFiles,
+                      skills: rulesSources.skills,
+                      basePrompt: event.systemPrompt,
+                      segments,
+                      agentDir: rulesSources.agentDir,
+                    }),
+                  });
+                } catch (cause) {
+                  console.error("[context-inventory] 注入清单推送失败", cause);
+                }
+              }
+              return { systemPrompt: [base, ...segments.map((segment) => segment.text)].join("\n\n") };
+            });
           },
         },
         {
@@ -1134,6 +1177,23 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   services.settingsManager.applyOverrides({
     retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
   });
+  // 规则清单原料：resourceLoader 在 services 创建时已 reload，这里读一次快照。
+  // 读失败只记日志——清单推不出去面板退「未知」，不该拦对话
+  try {
+    rulesSources = {
+      agentsFiles: services.resourceLoader.getAgentsFiles().agentsFiles.map((file) => ({
+        path: file.path,
+        content: file.content,
+      })),
+      skills: services.resourceLoader.getSkills().skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+      })),
+      agentDir: services.agentDir,
+    };
+  } catch (cause) {
+    console.error("[context-inventory] 规则清单原料读取失败", cause);
+  }
   /**
    * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
    * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。
