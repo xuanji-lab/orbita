@@ -450,6 +450,22 @@ export const en = {
     unreadFailed: "Stopped with an error · not viewed yet",
   },
 
+  /** 首页会话卡：一句「此刻在干什么」+ 一行「在哪 · 状态 · 多久前」（home-cards.ts 的 homeCardLine） */
+  homeCard: {
+    state: {
+      running: "Running",
+      waiting: "Waiting for you",
+      done: "Finished",
+      failed: "Error",
+    },
+    thinking: "Thinking",
+    doing: (step: string, now: string) => `${step}: ${now}`,
+    approve: (what: string) => `Waiting for your approval: ${what}`,
+    childWaiting: "A sub-session is waiting for your approval",
+    failed: "Stopped with an error",
+    done: "Finished — open it to see the result",
+  },
+
   /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
   notice: {
     finished: "Task finished",

@@ -190,6 +190,11 @@ export interface ChatSession {
   turnErrorOf: (id: string) => string | null;
   /** 按 id 查挂着的工具审批（槽里有真相）——状态饼「在等你」要读到后台会话的审批 */
   approvalsOf: (id: string) => readonly PendingApproval[];
+  /**
+   * 按 id 取整个槽（没载过 = undefined）。首页会话卡要说「此刻在干什么」：后台在跑的会话
+   * 槽里有它这一轮的过程，不另存——与 phaseOf 同一套 ref 读法，引用稳定
+   */
+  entryOf: (id: string) => SessionEntry | undefined;
   error: string | null;
   /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
@@ -524,6 +529,7 @@ export interface SessionEngine {
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
+  readonly entryOf: (id: string) => SessionEntry | undefined;
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
@@ -1188,6 +1194,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
     [],
   );
+  const entryOf = useCallback((id: string): SessionEntry | undefined => statesRef.current.get(id), []);
 
   return {
     catalog,
@@ -1224,6 +1231,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     phaseOf,
     turnErrorOf,
     approvalsOf,
+    entryOf,
     answerApproval,
     renameSession,
     pinSession,
@@ -3170,6 +3178,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
     approvalsOf: engine.approvalsOf,
+    entryOf: engine.entryOf,
     error: engine.error,
     draft,
     setDraft,

@@ -16,11 +16,9 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
-import {
-  HOME_CARD_CARRYOVER_ROWS,
-  HOME_CARD_QUERY_ROWS,
-  selectHomeCards,
-} from "./home-cards";
+import { HOME_CARD_CARRYOVER_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
+import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import { relativeTime } from "../../shell/relative-time.ts";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from "./scroll.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
@@ -29,7 +27,7 @@ import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./not
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
-import { runStateOf } from "../notify/completion-notice.ts";
+import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import {
   CHAPTER_STEPS_SHOWN,
@@ -178,6 +176,7 @@ import {
   type ChannelMarkRecord,
   type CompactedRecord,
   type SessionCompletion,
+  type SessionMeta,
 } from "@shared/session";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
@@ -1080,14 +1079,6 @@ function ChatViewBody(props: {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [props.scrollToEndHotkey, scrollToEnd]);
 
-  // 首页会话卡：有 open 遗留事项的会话优先占卡，剩余槽位按「最近活跃」补齐；
-  // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
-  // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
-  // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
-  const homeCards = useMemo(
-    () => selectHomeCards(session.sessions, session.carryovers),
-    [session.sessions, session.carryovers],
-  );
 
   // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
   // 列表优先——活会话首条消息刚落盘时它先到
@@ -1306,8 +1297,38 @@ function ChatViewBody(props: {
         </div>
       );
     }
-    // 行位换成遗留标题（最多 4 行）；遗留事项直接吃引擎缓存（PR-4 的 carryoverList
-    // 通道，写操作自动刷新），卡不另建缓存、meta 不冗余计数。
+    // 首页会话卡（选卡与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：
+    // 要你注意的（等你 > 出错 > 在跑）先占卡，再是有 open 遗留的、最近活跃的。卡上说「此刻在干
+    // 什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——运行态每个事件都可能
+    // 变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
+    // 没在跑的待办卡行位仍是遗留标题（最多 4 行）；遗留事项直接吃引擎缓存（PR-4 的
+    // carryoverList 通道，写操作自动刷新），卡不另建缓存、meta 不冗余计数。
+    const childrenOf = new Map<string, SessionMeta[]>();
+    for (const meta of session.sessions) {
+      if (meta.parentId === undefined) continue;
+      const list = childrenOf.get(meta.parentId);
+      if (list === undefined) childrenOf.set(meta.parentId, [meta]);
+      else list.push(meta);
+    }
+    const stateOf = (meta: SessionMeta): SessionRunState =>
+      sessionRunState({
+        slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
+        children: (childrenOf.get(meta.id) ?? []).map((child) => ({
+          phase: session.phaseOf(child.id),
+          approvals: session.approvalsOf(child.id).length,
+        })),
+        unread: meta.unread ?? null,
+      });
+    const homeCards = selectHomeCards(session.sessions, session.carryovers, stateOf);
+    const lineText: HomeCardLineText = {
+      thinking: t.homeCard.thinking,
+      doing: t.homeCard.doing,
+      approve: t.homeCard.approve,
+      childWaiting: t.homeCard.childWaiting,
+      failed: t.homeCard.failed,
+      done: t.homeCard.done,
+      verb: (toolName, input) => t.chat.rollupTool(rollupToolKey(toolName, input, skills)),
+    };
     // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
     // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
     return (
@@ -1364,27 +1385,60 @@ function ChatViewBody(props: {
             ) : (
               homeCards.length > 0 && (
                 <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                  {homeCards.map((card) => (
-                    <SessionCard
-                      key={card.sessionId}
-                      name={card.title}
-                      items={card.rows.map((row) => ({
-                        // 图标与遗留事项面板的跳转按钮同款（corner-down-left）：
-                        // 这行的动作就是「跳到那条会话」，视觉语言一致
-                        icon: row.kind === "carryover" ? ("corner-down-left" as const) : undefined,
-                        text: row.text,
-                      }))}
-                      slots={card.todo ? HOME_CARD_CARRYOVER_ROWS : HOME_CARD_QUERY_ROWS}
-                      state={(() => {
-                        const meta = session.sessions.find((m) => m.id === card.sessionId);
-                        return meta === undefined ? null : runStateOf(session, meta);
-                      })()}
-                      onClick={() => {
-                        startLeave();
-                        session.openSession(card.sessionId);
-                      }}
-                    />
-                  ))}
+                  {homeCards.map((card) => {
+                    const meta = session.sessions.find((m) => m.id === card.sessionId);
+                    const state = meta === undefined ? null : stateOf(meta);
+                    // 槽只在说「此刻」时才读：没在跑的卡说最近一次提问，不碰转录
+                    const entry = state === null ? undefined : session.entryOf(card.sessionId);
+                    const approval = session.approvalsOf(card.sessionId)[0];
+                    const where =
+                      meta?.workspaceId === null || meta === undefined
+                        ? t.sidebar.tasks
+                        : (session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? t.sidebar.tasks);
+                    const metaLine = [
+                      where,
+                      ...(state === null ? [] : [t.homeCard.state[state]]),
+                      // 在跑 / 等你不写时间：不走表的「刚刚」比不写更误导
+                      ...(state === "running" || state === "waiting" || meta === undefined
+                        ? []
+                        : [relativeTime(meta.updatedAt, t)]),
+                    ].join(" · ");
+                    return (
+                      <SessionCard
+                        key={card.sessionId}
+                        name={card.title}
+                        // 没在跑的待办卡：行位是遗留标题（图标与遗留事项面板的跳转按钮同款）
+                        items={card.rows.map((row) => ({
+                          icon: row.kind === "carryover" ? ("corner-down-left" as const) : undefined,
+                          text: row.text,
+                        }))}
+                        slots={HOME_CARD_CARRYOVER_ROWS}
+                        line={
+                          card.todo && state === null
+                            ? undefined
+                            : homeCardLine(
+                                {
+                                  state,
+                                  records: entry === undefined ? null : selectTranscript(entry.transcript),
+                                  approval:
+                                    approval === undefined
+                                      ? null
+                                      : { toolName: approval.toolName, input: approval.input },
+                                  turnError: session.turnErrorOf(card.sessionId),
+                                  lastAsk: meta?.recentQueries[0] ?? null,
+                                },
+                                lineText,
+                              )
+                        }
+                        meta={metaLine}
+                        state={state}
+                        onClick={() => {
+                          startLeave();
+                          session.openSession(card.sessionId);
+                        }}
+                      />
+                    );
+                  })}
                 </div>
               )
             )}

@@ -75,6 +75,34 @@
   box-shadow: var(--shadow-popover);
 }
 
+/* 卡上那一句「此刻在干什么」：sm 次级灰，恒占两行（一排卡才齐得平），多了截断。
+   行内的 `代码` 等宽画（InlineMarks） */
+.session-card-line {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-height: 2lh;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+/* 一行元信息：在哪 · 状态 · 多久前——纯文字、三级灰，不用等宽 */
+.session-card-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+/* 行内代码（章节标题、首页卡那一句里的 `代码`）：等宽，跟着所在那一行的字号走 */
+.inline-mark-code {
+  font-family: var(--font-family-business);
+  font-size: 0.9em;
+}
+
 /*
  * 安静控件：透明底、secondary 字；hover 填 --option-hover-bg、字升 primary；
  * pressed / selected（aria-pressed 或 aria-selected）用 --color-mode-active-bg/fg；

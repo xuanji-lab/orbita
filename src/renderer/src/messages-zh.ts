@@ -388,6 +388,21 @@ export const zh: Messages = {
     unreadFailed: "出错停下了，还没看",
   },
 
+  homeCard: {
+    state: {
+      running: "在跑",
+      waiting: "等你",
+      done: "跑完了",
+      failed: "出错",
+    },
+    thinking: "在想",
+    doing: (step, now) => `${step}：${now}`,
+    approve: (what) => `等你批准：${what}`,
+    childWaiting: "子会话在等你批准",
+    failed: "出错停下了",
+    done: "跑完了，打开看结果",
+  },
+
   notice: {
     finished: "任务完成",
     failed: "任务出错停下了",
