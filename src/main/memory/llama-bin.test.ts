@@ -3,6 +3,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { llamaServerCandidates } from "./llama-bin.ts";
 
 test("打包版：env 优先，其次 resources，dev 兜底（macOS 无后缀）", () => {
@@ -14,9 +15,11 @@ test("打包版：env 优先，其次 resources，dev 兜底（macOS 无后缀�
     arch: "arm64",
     env: undefined,
   });
+  // 期望值也用 node:path 拼：分隔符跟着跑测试的平台走（Windows 上 join 出反斜杠，
+  // 写死 "/" 的断言在 Windows 必挂——2026-10-30 肖志锋 Windows 全量测试报出）
   assert.deepEqual(candidates, [
-    { path: "/Applications/orbita.app/Contents/Resources/bin/llama/llama-server", source: "packaged" },
-    { path: "/repo/build/bin/darwin-arm64/llama/llama-server", source: "dev" },
+    { path: join("/Applications/orbita.app/Contents/Resources", "bin", "llama", "llama-server"), source: "packaged" },
+    { path: join("/repo", "build", "bin", "darwin-arm64", "llama", "llama-server"), source: "dev" },
   ]);
 });
 
