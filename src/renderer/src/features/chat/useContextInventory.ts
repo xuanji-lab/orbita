@@ -85,6 +85,9 @@ export function useContextInventory(
       let before = state.anchor.firstId;
       try {
         while (state.status === "loading") {
+          // 被顶替即作废：回退后重拉会 drop + 重启，这趟循环晚到的写不能
+          // 把新循环的结果覆盖回旧数据（按「链上最新是不是自己」判）
+          if (store.snapshot(sessionId) !== state) return;
           if (before === null) {
             // 尾窗有更早却拿不到锚（理论不可达）：如实报错，不空转
             state = failHistory(state, "尾窗锚点缺失，无法继续取更早的记录");
@@ -92,14 +95,17 @@ export function useContextInventory(
             return;
           }
           const page = await api.session.loadOlder(sessionId, before, SESSION_PAGE_RECORDS);
+          if (store.snapshot(sessionId) !== state) return;
           state = advanceHistory(state, page);
           store.set(sessionId, state);
           // 下一页的锚：已取到的最早一条（空页异常已由 advanceHistory 判错停下）
           before = state.records[0]?.id ?? before;
         }
       } catch (cause: unknown) {
-        state = failHistory(state, ipcErrorText(cause));
-        store.set(sessionId, state);
+        if (store.snapshot(sessionId) === state) {
+          state = failHistory(state, ipcErrorText(cause));
+          store.set(sessionId, state);
+        }
       }
     })();
     // entry 每条事件都换引用，全量进依赖会让 error 态每条事件都重启拉取——只进指纹
