@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { MemoryLibrary } from "./library.ts";
 import { MemoryEntryStore, tokenOfScope } from "../../memory/entries.ts";
 import { EpisodeStore } from "../../memory/episodes.ts";
+import type { MemoryEntry } from "../../shared/memory.ts";
 
 const WS_TOKEN = tokenOfScope("ws-1");
 const WS2_TOKEN = tokenOfScope("ws-2");
@@ -198,6 +199,40 @@ test("sessionView：记住的条目带所在层 token 与演变链（审查页�
   assert.equal(fresh.token, WS_TOKEN);
   assert.equal(fresh.evolution.length, 2);
   assert.equal(fresh.evolution[0]?.status, "stale");
+});
+
+test("listEntries / sessionView：每个条目层文件只读一遍，结果照旧", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  await seed(dir);
+  const store = new MemoryEntryStore(dir);
+  const expectedIds = new Set((await store.readAllLayers()).flatMap((layer) => layer.entries.map((entry) => entry.id)));
+  // 计数桩：数每个层文件被读了几遍（readLayer 是条目层唯一的读盘口）
+  const spy = t.mock.method(
+    MemoryEntryStore.prototype as unknown as { readLayer: (path: string) => Promise<MemoryEntry[]> },
+    "readLayer",
+  );
+  const readsByFile = (): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const call of spy.mock.calls) {
+      const path = String(call.arguments[0]);
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const library = makeLibrary(dir);
+  const items = await library.listEntries({ token: "all" });
+  assert.deepEqual(new Set(items.map((item) => item.entry.id)), expectedIds);
+  let counts = readsByFile();
+  assert.equal(counts.size, 3); // ws-1 / ws-2 / user
+  for (const [path, count] of counts) assert.equal(count, 1, `listEntries 把 ${path} 读了 ${count} 遍`);
+  spy.mock.resetCalls();
+  const view = await library.sessionView("s1");
+  assert.equal(view.turns.length, 2);
+  assert.deepEqual(view.turns[0]?.used.map((hit) => hit.text), ["本地优先"]);
+  assert.equal(view.turns[0]?.remembered.length, 1);
+  counts = readsByFile();
+  assert.equal(counts.size, 3);
+  for (const [path, count] of counts) assert.equal(count, 1, `sessionView 把 ${path} 读了 ${count} 遍`);
 });
 
 test("sessionView：meta 读不到 → token null 但视图照常（零轮）", async () => {

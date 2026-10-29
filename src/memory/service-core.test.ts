@@ -683,6 +683,50 @@ test("setVectorConfig：补算给已有条目算向量（带文档前缀），mu
   assert.ok(stub.embeddedTexts.some((text) => text.startsWith(VECTOR_MODEL.docPrefix)));
 });
 
+test("补算全量对账：每个条目层文件只读一遍，缺的向量照样补齐", async (t) => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  // 对账读盘在第一条 running 进度之前做完：那一刻拍下读盘计数（之后的 vectorState 轮询也读层，不算补算的）
+  let readsAtRunning: string[] | null = null;
+  let finished: () => void = () => undefined;
+  const idle = new Promise<void>((resolve) => {
+    finished = resolve;
+  });
+  let spy: { mock: { calls: { arguments: unknown[] }[] } } | null = null;
+  const { core } = vectorCore(dir, stub, {
+    onBackfillProgress: (progress) => {
+      if (progress.state === "running" && readsAtRunning === null && spy !== null) {
+        readsAtRunning = spy.mock.calls.map((call) => String(call.arguments[0]));
+      }
+      if (progress.state === "idle") finished();
+    },
+  });
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  await entries.appendScope("ws-1", vectorEpisode(), [{ type: "fact", text: "orbita 用 bun", keywords: [], turns: [1] }]);
+  await entries.appendScope("ws-2", vectorEpisode(), [{ type: "fact", text: "另一个工作区的事实", keywords: [], turns: [1] }]);
+  await entries.addManual("user", { type: "preference", text: "本地优先", reason: "r", now: 1 });
+  // 计数桩：readLayer 是条目层唯一的读盘口
+  spy = t.mock.method(
+    MemoryEntryStore.prototype as unknown as { readLayer: (path: string) => Promise<MemoryEntry[]> },
+    "readLayer",
+  );
+  core.setVectorConfig({
+    model: VECTOR_MODEL,
+    ggufPath: "/models/m.gguf",
+    binaryPath: "/bin/llama-server",
+    idleUnloadMs: 300_000,
+    deferOnBattery: true,
+  });
+  await idle;
+  assert.equal((await core.vectorState()).vectors?.entries, 3);
+  assert.ok(readsAtRunning !== null);
+  const counts = new Map<string, number>();
+  for (const path of readsAtRunning as string[]) counts.set(path, (counts.get(path) ?? 0) + 1);
+  assert.equal(counts.size, 3);
+  for (const [path, count] of counts) assert.equal(count, 1, `补算把 ${path} 读了 ${count} 遍`);
+});
+
 test("recall 融合：向量命中但词法没命中的条目也能进结果", async () => {
   const dir = await tempDir();
   const stub = vectorStub();

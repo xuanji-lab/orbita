@@ -916,11 +916,15 @@ export class MemoryServiceCore {
     } else if (manifest.model !== config.model.id) {
       await vectors.reset(config.model.id, config.model.dims, this.now());
     }
-    const layers = trigger === "all" ? await entries.listLayers() : [{ token: trigger, count: 0 }];
+    // "all" 一次读全部层连同条目（每个层文件读一遍）；单层只读那一层
+    const layers =
+      trigger === "all"
+        ? await entries.readAllLayers()
+        : [{ token: trigger, entries: await entries.listByToken(trigger).catch((): MemoryEntry[] => []) }];
     const todo: { token: string; missing: MemoryEntry[] }[] = [];
     let total = 0;
     for (const layer of layers) {
-      const list = await entries.listByToken(layer.token).catch(() => []);
+      const list = layer.entries;
       const known = new Set((await vectors.load(layer.token, config.model.dims).catch(() => null))?.ids ?? []);
       const missing = list.filter((entry) => !known.has(entry.id) && isRecallable(entry));
       if (missing.length > 0) {

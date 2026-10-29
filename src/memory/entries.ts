@@ -533,8 +533,10 @@ export class MemoryEntryStore {
     return (await this.readAllLayers()).map((layer) => ({ token: layer.token, count: layer.entries.length }));
   }
 
-  /** 全部条目层连同条目（每个文件读一遍）。空层不列；单层读不了当空层（不挡别的层）。 */
-  private async readAllLayers(): Promise<{ token: string; entries: MemoryEntry[] }[]> {
+  /** 全部条目层连同条目（每个文件读一遍）。空层不列；单层读不了当空层（不挡别的层）。
+   * 要条目的调用方（记忆库读面、向量对账）直接用它——别再 listLayers 之后逐层
+   * listByToken，那是把每个层文件读两遍。 */
+  async readAllLayers(): Promise<{ token: string; entries: MemoryEntry[] }[]> {
     let names: string[];
     try {
       names = await readdir(this.dir);

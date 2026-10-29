@@ -178,11 +178,9 @@ export class MemoryLibrary {
 
   /* ---------- 内部 ---------- */
 
-  private async readLayers(): Promise<Layer[]> {
-    const layers = await this.entries.listLayers();
-    return Promise.all(
-      layers.map(async (layer) => ({ token: layer.token, entries: await this.entries.listByToken(layer.token) })),
-    );
+  /** 全部层连同条目，每个层文件读一遍（listLayers 已经读过全量，再逐层 listByToken 就是读两遍）。 */
+  private readLayers(): Promise<Layer[]> {
+    return this.entries.readAllLayers();
   }
 
   /** 事件段快照索引（归档 + 待提取——开段还没有条目引用它，读了也无用）。 */
