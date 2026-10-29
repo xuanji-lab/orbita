@@ -77,6 +77,26 @@ describe("turnDigests", () => {
     assert.equal(two?.failed, 1);
     assert.equal(two?.live, true);
   });
+  test("在跑的那一轮不给用时：已落定各步的跨度在两步之间是冻住的，头一行的钟已经在走", () => {
+    const records = [
+      user("u1", 1000),
+      assistant("a1", 2000, [{ type: "toolCall", toolCallId: "r1", toolName: "read", input: { path: "a.ts" } }]),
+      tool({ toolCallId: "r1", timestamp: 9000 }),
+      assistant("a2", 9500, [{ type: "toolCall", toolCallId: "r2", toolName: "read", input: { path: "b.ts" } }]),
+    ];
+    assert.equal(turnDigests(records, true)[0]?.durationMs, null);
+    assert.notEqual(turnDigests(records, false)[0]?.durationMs, null);
+  });
+  test("用户那句话以代码块开头：跳过只有围栏的行（含转义的 \\`\\`\\`），取第一行正文", () => {
+    const fenced = "```\n\"两个旧文件怎么处理？\"=\"删除\"\n```\n继续";
+    const escaped = "\\`\\`\\`\n\n\"dynamic 评论减少\"=\"先查\"\n\\`\\`\\`\n继续";
+    const tagged = "```ts\nconst a = 1;\n```";
+    const turns = turnDigests([user("u1", 1, fenced), user("u2", 2, escaped), user("u3", 3, tagged)], false);
+    assert.deepEqual(
+      turns.map((turn) => turn.ask),
+      ['"两个旧文件怎么处理？"="删除"', '"dynamic 评论减少"="先查"', "const a = 1;"],
+    );
+  });
 });
 
 describe("taskHeadState（头一行：在跑 / 等你 / 做完了 / 出错了 / 停下了）", () => {

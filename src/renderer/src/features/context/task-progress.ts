@@ -150,7 +150,7 @@ export function turnDigests(
         .join("\n");
       current = {
         key: entry.key,
-        ask: text.split("\n").find((line) => line.trim() !== "")?.trim() ?? "",
+        ask: askLine(text),
         at: entry.item.timestamp,
         processKeys: [],
         chapters: [],
@@ -177,8 +177,25 @@ export function turnDigests(
     turn.steps = counts.steps;
     turn.files = counts.files.length;
     turn.failed = counts.failed;
+    // 在跑的那一轮不给用时：已落定各步的跨度在两步之间是冻住的（面板上「14.7 秒」不动，
+    // 头一行的钟已经走到 0:18），头一行那个每秒走的钟就是它的用时
     const spans = own.map((unit) => unit.durationMs).filter((ms): ms is number => ms !== null);
-    turn.durationMs = spans.length === 0 ? null : spans.reduce((sum, ms) => sum + ms, 0);
+    turn.durationMs = turn.live || spans.length === 0 ? null : spans.reduce((sum, ms) => sum + ms, 0);
   });
   return turns;
+}
+
+/** 只有代码围栏的一行：``` / ~~~（可带语言名），含贴进来时被转义成 \`\`\` 的 */
+const FENCE_LINE = /^(?:(?:\\?`){3,}|~{3,})[\w+-]*$/;
+
+/**
+ * 用户那句话在面板上的一行：第一行有字的内容，只有围栏的行跳过——以代码块开头的提问
+ * （贴一段日志 / 选项再说「继续」）原来在「做过的」里只剩一行 ```。
+ */
+function askLine(text: string): string {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line !== "" && !FENCE_LINE.test(line)) return line;
+  }
+  return "";
 }

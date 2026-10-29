@@ -335,7 +335,12 @@
 .tp-chapters button:hover {
   background: var(--color-bg-hover);
 }
+/* 章节名最多两行：真模型的旁白常有三四行、一段英文思考能到七行，「做过的」要能一眼扫完；全文在悬停里 */
 .tp-ch {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   line-height: var(--line-height-ui);
   color: var(--color-text-primary);
 }

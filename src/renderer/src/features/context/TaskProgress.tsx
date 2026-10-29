@@ -173,11 +173,14 @@ function TurnItem(props: { turn: TurnDigest; results: ToolResultIndex; openByDef
             const failed = chapter.calls.some((call) => props.results.get(call.toolCallId)?.status === "error");
             const isLive = turn.live && index === turn.chapters.length - 1;
             const work = chapter.calls.filter((call) => call.toolName !== "update_plan").length;
+            const label =
+              chapter.title ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
             return (
               <li key={chapter.key} data-live={isLive || undefined} data-failed={failed || undefined}>
                 <button type="button" title={t.taskPanel.jump} onClick={() => reveal(turn.processKeys[0])}>
-                  <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"}>
-                    {chapter.title ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ")}
+                  {/* 章节名最多两行（真模型的旁白常有三四行、一段英文思考能到七行），全文在悬停里 */}
+                  <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"} title={label}>
+                    {label}
                   </span>
                   {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
                 </button>
