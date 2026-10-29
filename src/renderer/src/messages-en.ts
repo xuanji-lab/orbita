@@ -765,6 +765,12 @@ export const en = {
     pastedCollapseAria: "Collapse pasted text",
     pastedCollapseInfo:
       "Large pastes fold into an inline chip at the cursor; click to expand and edit in place · off pastes large text straight into the box as plain text",
+    processView: "Agent's work",
+    processViewAria: "How the agent's thinking and tool calls show",
+    processViewInfo:
+      "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
+    processViewTurn: "One line per turn",
+    processViewSteps: "Every step",
     completionSound: "Completion sound",
     completionSoundAria: "Completion sound",
     completionSoundInfo:
@@ -1613,6 +1619,18 @@ export const en = {
     retrying: "Retrying…",
     retryIn: (seconds: number) => `in ${seconds}s`,
     retryLine: (attempt: number, max: number, wait: string) => `Retry ${attempt}/${max} · ${wait}`,
+    // 「一轮一行」过程显示（turn-process.ts）
+    processSteps: (n: number) => plural(n, "step"),
+    processStepAt: (n: number) => `Step ${n}`,
+    processWrote: (n: number) => `wrote ${plural(n, "file")}`,
+    processFailed: (n: number) => `${n} failed`,
+    processThinking: "Thinking",
+    processSlow: "Taking longer than usual — 9 in 10 gaps are under 10s",
+    processMore: (n: number) => `${n} more`,
+    processToolsTitle: (parts: string) => parts,
+    processToolPart: (tool: string, n: number) => `${tool} ×${n}`,
+    processEveryStep: "Every step",
+    processChapterSteps: "Show the steps in this part",
   },
 
   stats: {
