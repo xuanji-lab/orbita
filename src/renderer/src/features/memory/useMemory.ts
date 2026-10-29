@@ -112,8 +112,9 @@ export function useVectorStatus(enabled: boolean): {
     if (!enabled) return;
     return api.agent.onEvent((event) => {
       if (event.type === "vectorDownload") {
-        setDownload(event.progress);
-        if (event.progress.phase === "done" || event.progress.phase === "failed") reload();
+        // 取消：清掉本地进度（不清的话界面停在取消那一刻的百分比），以快照为准
+        setDownload(event.progress.phase === "cancelled" ? null : event.progress);
+        if (event.progress.phase !== "downloading" && event.progress.phase !== "verifying") reload();
       }
       if (event.type === "vectorBackfill") {
         setBackfill(event.progress);

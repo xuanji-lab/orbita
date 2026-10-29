@@ -220,6 +220,10 @@ parentPort.on("message", (event: { data: unknown }) => {
       });
     return;
   }
+  if (command.type === "cancelModelDownload") {
+    core.cancelModelDownload();
+    return;
+  }
   if (command.type === "startModelDownload") {
     core.startModelDownload(command);
     return;

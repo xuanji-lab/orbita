@@ -988,21 +988,55 @@ test("startModelDownload：进度事件流出（桩源全挂 → failed 事件�
   assert.ok(progress.some((p) => p.phase === "failed"));
 });
 
-test("关闭向量功能：取消在途模型下载，不发 failed 事件", async () => {
-  const dir = await tempDir();
-  const stub = vectorStub();
+/** 下载桩：fetch 挂住直到被 abort；返回观察句柄 */
+function hangingDownload(stub: ReturnType<typeof vectorStub>): { started: () => boolean; aborted: () => boolean } {
   let aborted = false;
   let started = false;
   stub.deps.fetchImpl = async (_url, signal) => {
     started = true;
-    await new Promise<void>((resolve, reject) => {
-      signal?.addEventListener("abort", () => {
-        aborted = true;
-        reject(new Error("aborted"));
-      }, { once: true });
+    await new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
     });
     return { ok: false, status: 0, body: null };
   };
+  return { started: () => started, aborted: () => aborted };
+}
+
+test("下载途中收到 setVectorConfig(null)（模型没下完时每轮同步的就是 null）：不取消下载", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const probe = hangingDownload(stub);
+  const { core, progress } = vectorCore(dir, stub);
+  await core.init(dir);
+  core.startModelDownload({
+    requestId: "req-keep",
+    sources: ["https://down.example/m.gguf"],
+    targetPath: join(dir, "vector", "m.gguf"),
+    sha256: "0".repeat(64),
+    sizeBytes: 10,
+  });
+  for (let index = 0; index < 20 && !probe.started(); index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  core.setVectorConfig(null);
+  core.setVectorConfig(null);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(probe.aborted(), false);
+  assert.equal(progress.some((event) => event.phase === "cancelled" || event.phase === "failed"), false);
+  core.shutdown();
+});
+
+test("cancelModelDownload：取消在途下载，报 cancelled、不报 failed", async () => {
+  const dir = await tempDir();
+  const stub = vectorStub();
+  const probe = hangingDownload(stub);
   const { core, progress } = vectorCore(dir, stub);
   await core.init(dir);
   core.startModelDownload({
@@ -1012,12 +1046,13 @@ test("关闭向量功能：取消在途模型下载，不发 failed 事件", asy
     sha256: "0".repeat(64),
     sizeBytes: 10,
   });
-  for (let index = 0; index < 20 && !started; index += 1) {
+  for (let index = 0; index < 20 && !probe.started(); index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  core.setVectorConfig(null);
+  core.cancelModelDownload();
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(aborted, true);
+  assert.equal(probe.aborted(), true);
+  assert.equal(progress.at(-1)?.phase, "cancelled");
   assert.equal(progress.some((event) => event.phase === "failed"), false);
 });
 

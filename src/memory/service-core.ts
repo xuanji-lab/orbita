@@ -801,14 +801,12 @@ export class MemoryServiceCore {
 
   /** 设置变了：null = 关（停 llama-server、挂起补算）；换模型 = 清库重算 + 补算。 */
   setVectorConfig(config: MemoryVectorServiceConfig | null): void {
-    // 关闭向量始终要取消下载（即便配置本来已是 null）；其余同配置消息是每轮
-    // 落定都会重复收到的同步，不应再触发全量对账与 idle 广播。
-    if (config === null) this.downloadAbort?.abort();
+    // **这里不取消下载**：模型还没下完时主进程每轮同步的配置就是 null（文件不在），
+    // 以前把 null 当「向量关了」取消下载，下载中只要一轮对话落定就被掐断（2026-10-30
+    // 打包版卡在 22%）。取消只走 cancelModelDownload（主进程在用户关向量 / 换模型时发）。
+    // 同配置消息是每轮落定都会重复收到的同步，不应再触发全量对账与 idle 广播。
     if (config !== null && JSON.stringify(this.vectorConfig) === JSON.stringify(config)) return;
     const previous = this.vectorConfig?.model.id ?? null;
-    if (previous !== null && config !== null && previous !== config.model.id) {
-      this.downloadAbort?.abort();
-    }
     this.vectorConfig = config;
     if (config === null) {
       this.embedServer?.stop();
@@ -829,6 +827,11 @@ export class MemoryServiceCore {
       return;
     }
     this.scheduleVectorize("all");
+  }
+
+  /** 取消在途的模型下载（用户关向量 / 换模型；契约见 cancelModelDownload）。没在下载 = 空操作。 */
+  cancelModelDownload(): void {
+    this.downloadAbort?.abort();
   }
 
   /**
@@ -886,7 +889,8 @@ export class MemoryServiceCore {
       fetchImpl: this.vectorDeps.fetchImpl,
       signal: controller.signal,
       onProgress: (event) => {
-        if (controller.signal.aborted) return;
+        // 取消之后的残余进度不报；取消本身的终态要报（界面据此收起进度条）
+        if (controller.signal.aborted && event.phase !== "cancelled") return;
         this.onDownloadProgress({
           requestId: input.requestId,
           phase: event.phase,

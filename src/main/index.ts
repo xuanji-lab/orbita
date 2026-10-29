@@ -36,6 +36,7 @@ import { llamaServerCandidates } from "./memory/llama-bin.ts";
 import {
   effectiveVectorSettings,
   modelDownloadSources,
+  vectorChangeCancelsDownload,
   modelFilePath,
   vectorServiceConfig,
 } from "./memory/vector-setup.ts";
@@ -701,6 +702,9 @@ void app.whenReady().then(async () => {
         memoryDownloadState = { state: "verifying" };
       } else if (progress.phase === "failed") {
         memoryDownloadState = { state: "failed", error: progress.error ?? "模型下载失败" };
+      } else if (progress.phase === "cancelled") {
+        // 用户取消：回到「没下载」，界面收起进度（不当失败报）
+        memoryDownloadState = null;
       } else {
         memoryDownloadState = null;
         // rename 已完成：立即把 local 配置送进服务，触发补算，无需等下一次设置改动
@@ -801,7 +805,12 @@ void app.whenReady().then(async () => {
     vector: {
       readVectorSettings: async () => (await settings.read()).vector,
       writeVectorSettings: async (patch) => {
+        const before = effectiveVectorSettings((await settings.read()).vector);
         const next = await settings.write({ vector: patch });
+        // 关了向量 / 换了模型：在途下载不要了（只有这里取消下载，配置同步不取消）
+        if (vectorChangeCancelsDownload(before, effectiveVectorSettings(next.vector))) {
+          memoryHost.cancelModelDownload();
+        }
         if (next.experimentalFeatures?.["memory-system"] === true) {
           await ensureMemoryService();
         } else {

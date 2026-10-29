@@ -158,5 +158,67 @@ test("取消：不再尝试后续源，也不把用户取消广播成下载失�
   });
   assert.equal(outcome.ok, false);
   assert.equal(fetches, 0);
-  assert.deepEqual(events, []);
+  // 取消报一次 cancelled（界面据此收起进度），不报 failed
+  assert.deepEqual(events, ["cancelled"]);
+});
+
+test("源卡住（不再来数据）：超过卡住时限判这个源失败、换下一个源下完", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-dl-"));
+  const target = join(dir, "m.gguf");
+  const good = fakeFetch({});
+  const events: string[] = [];
+  let hungAborted = false;
+  const outcome = await downloadWithFallback({
+    sources: ["https://hang.example/m.gguf", "https://ok.example/m.gguf"],
+    targetPath: target,
+    sha256: createHash("sha256").update(PAYLOAD).digest("hex"),
+    sizeBytes: PAYLOAD.byteLength,
+    stallMs: 40,
+    fetchImpl: async (url, signal) => {
+      if (url !== "https://hang.example/m.gguf") return good(url, signal);
+      signal?.addEventListener("abort", () => (hungAborted = true), { once: true });
+      // 先来一块数据，然后连接挂住（读永远不回）
+      let first = true;
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: () =>
+              first
+                ? ((first = false), Promise.resolve({ done: false, value: Uint8Array.from([1]) }))
+                : new Promise<{ done: boolean; value?: Uint8Array }>(() => undefined),
+          }),
+        },
+      };
+    },
+    onProgress: (event) => events.push(event.phase),
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal(hungAborted, true);
+  assert.deepEqual(await readFile(target), PAYLOAD);
+  assert.equal(events.includes("failed"), false);
+  assert.equal(events.at(-1), "done");
+});
+
+test("所有源都卡住：报一次 failed，错误里写明多久没收到数据，不留临时文件", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-dl-"));
+  const events: { phase: string; error?: string }[] = [];
+  const outcome = await downloadWithFallback({
+    sources: ["https://hang.example/m.gguf"],
+    targetPath: join(dir, "m.gguf"),
+    sha256: "0".repeat(64),
+    sizeBytes: 10,
+    stallMs: 30,
+    // 连响应头都不回
+    fetchImpl: () => new Promise(() => undefined),
+    onProgress: (event) => events.push({ phase: event.phase, error: event.error }),
+  });
+  assert.equal(outcome.ok, false);
+  assert.deepEqual(
+    events.map((event) => event.phase),
+    ["failed"],
+  );
+  assert.match(events[0]?.error ?? "", /秒没有收到数据/);
+  assert.deepEqual(await readdir(dir), []);
 });
