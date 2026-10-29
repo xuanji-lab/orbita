@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
-import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
 
 function gateFor(mode: PermissionMode, answer?: PermissionAnswer) {
   const asked: ToolCallLike[] = [];
@@ -131,8 +131,18 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
     assert.equal(await clampedTimeout("powershell", 10), 600);
   });
 
-  test("不填不动——不设超时是最宽的选择，抬它反而变窄", async () => {
-    assert.equal(await clampedTimeout("bash", undefined), undefined);
+  test("不填 → 补默认上限 1 小时：以前不填就永远不停，命令自己卡死时整轮挂住（461c6fce）", async () => {
+    assert.equal(await clampedTimeout("bash", undefined), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+    assert.equal(COMMAND_TIMEOUT_DEFAULT_SECONDS, 3600);
+    assert.equal(await clampedTimeout("powershell", undefined), COMMAND_TIMEOUT_DEFAULT_SECONDS);
+  });
+
+  test("显式 null 不当「不填」：那是非法值，留给 pi 报错，不偷偷补成 1 小时", async () => {
+    assert.equal(await clampedTimeout("bash", null), null);
+  });
+
+  test("非命令工具不填 timeout 也不补", async () => {
+    assert.equal(await clampedTimeout("read", undefined), undefined);
   });
 
   test("填得比下限大就尊重模型自己的判断", async () => {
