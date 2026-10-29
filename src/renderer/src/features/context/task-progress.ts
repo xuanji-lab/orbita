@@ -6,6 +6,7 @@
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
 import type { TranscriptRecord } from "@shared/session";
+import { parsePlan, PLAN_STATUSES, PLAN_TOOL_NAME, type PlanItem } from "../../../../shared/plan.ts";
 import {
   flattenRenderUnits,
   groupToolUnits,
@@ -19,40 +20,57 @@ import { processChapters, processCounts, type ProcessChapter } from "../chat/tur
 /** 让对话滚到某个过程块（ChatView 的 TranscriptColumn 监听）：面板与对话不共享状态，走一次性事件 */
 export const REVEAL_ENTRY_EVENT = "orbita:reveal-entry";
 
-export type PlanItemStatus = "pending" | "in_progress" | "done";
-
 export interface PlanView {
-  items: { text: string; status: PlanItemStatus }[];
-  /** 这张计划写下的时刻（update_plan 结果帧的时间戳）：「在做」那步的计时从这里起 */
+  items: PlanItem[];
+  /** 这张计划写下的时刻（update_plan 开跑帧的时间戳）：「在做」那步的计时从这里起 */
   at: number;
   done: number;
 }
 
-const STATUSES: readonly string[] = ["pending", "in_progress", "done"];
-
 /**
- * 最后一次成功的 update_plan。失败的调用（入参坏了被拒）不算——模型会改了重调；
- * 还在跑的（结果帧没到）也不算，等它落定。入参宽松解析：坏条目跳过，不让一条坏数据
- * 把整张计划弄没（工具端已经校验过一遍，这里只防旧数据 / 手改）。
+ * 最后一张计划 = 最后一次没被拒的 update_plan 的入参。
+ *
+ * - 被拒的（error：入参坏了）不算——模型会改了重调；
+ * - **还在跑的算**：它的入参在开跑帧（tool_execution_start）里就是定稿，执行只是校验 + 回执。
+ *   pi 的并行批次先让同批每个调用依次过审批闸门、全部过完才统一执行（agent-loop 的
+ *   executeToolCallsParallel），手动档下 update_plan 会和同批等你批准的 read / bash 一起挂着——
+ *   只认执行完的，面板在你批准之前一直是上一张计划，而对话里那一行已经是新计划（2026-10-30 实测）。
+ *   还没执行就没经过工具的校验，所以用工具同一个 parsePlan 判，过不了的跳过（工具会拒）；
+ * - 执行完的入参宽松解析：坏条目跳过，不让一条坏数据把整张计划弄没（工具端已经校验过，
+ *   这里只防旧数据 / 手改）。
  */
 export function latestPlan(records: readonly TranscriptRecord[]): PlanView | null {
   for (let i = records.length - 1; i >= 0; i--) {
     const record = records[i];
-    if (record === undefined || record.role !== "tool" || record.toolName !== "update_plan") continue;
-    if (record.status !== "complete") continue;
-    const raw = (record.input as { items?: unknown } | null)?.items;
-    if (!Array.isArray(raw)) continue;
-    const items = raw.flatMap((item) => {
-      const value = (item ?? {}) as Record<string, unknown>;
-      const text = typeof value["text"] === "string" ? value["text"].trim() : "";
-      const status = value["status"];
-      if (text === "" || typeof status !== "string" || !STATUSES.includes(status)) return [];
-      return [{ text, status: status as PlanItemStatus }];
-    });
+    if (record === undefined || record.role !== "tool" || record.toolName !== PLAN_TOOL_NAME) continue;
+    if (record.status === "error") continue;
+    const items = record.status === "complete" ? looseItems(record.input) : strictItems(record.input);
     if (items.length === 0) continue;
     return { items, at: record.timestamp, done: items.filter((item) => item.status === "done").length };
   }
   return null;
+}
+
+/** 还没执行的入参：过工具同一套校验，过不了 = 空（这张不算） */
+function strictItems(input: unknown): PlanItem[] {
+  try {
+    return parsePlan(input);
+  } catch {
+    return [];
+  }
+}
+
+/** 执行完的入参：坏条目跳过 */
+function looseItems(input: unknown): PlanItem[] {
+  const raw = (input as { items?: unknown } | null)?.items;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const value = (item ?? {}) as Record<string, unknown>;
+    const text = typeof value["text"] === "string" ? value["text"].trim() : "";
+    const status = value["status"];
+    if (text === "" || typeof status !== "string" || !(PLAN_STATUSES as readonly string[]).includes(status)) return [];
+    return [{ text, status: status as PlanItem["status"] }];
+  });
 }
 
 /** 一轮的摘要：用户那句话 + 这轮的过程块（章节、步数、写过的文件、失败、用时） */
