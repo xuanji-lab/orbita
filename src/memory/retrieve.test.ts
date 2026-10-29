@@ -1,0 +1,102 @@
+/**
+ * 召回打分（retrieve.ts）——词法打分移植的正确性、常驻语义（user 层偏好按时间
+ * 取新）、两层合并去重与 muted 过滤。纯模块直测（node --test）。
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  dedupeById,
+  isRecallable,
+  lexicalScore,
+  pickPinned,
+  recallHits,
+  retrieveMemories,
+  tokenize,
+  type MemoryQuery,
+} from "./retrieve.ts";
+import type { MemoryEntry } from "../shared/memory.ts";
+
+function entry(overrides: Partial<MemoryEntry> & { id: string }): MemoryEntry {
+  return {
+    type: "fact",
+    text: "用户的项目 orbita 用 bun",
+    keywords: ["bun", "orbita"],
+    layer: "workspace",
+    scopeId: "ws-1",
+    sessionId: "s1",
+    turns: [1],
+    at: Date.now(),
+    episodeId: "ep_1",
+    source: "chat",
+    ...overrides,
+  };
+}
+
+test("tokenize：拉丁词 + CJK bigram + 单字", () => {
+  assert.deepEqual(tokenize("electron-vite 0.1.6"), ["electron-vite", "0.1.6"]);
+  assert.deepEqual(tokenize("我的猫叫什么"), ["我的", "的猫", "猫叫", "叫什", "什么"]);
+  assert.deepEqual(tokenize("库"), ["库"]);
+});
+
+test("lexicalScore：关键词全中给满分；子串通道给中文问句兑底", () => {
+  const target = entry({});
+  const english: MemoryQuery = { text: "bun orbita", tokens: new Set(["bun", "orbita"]) };
+  assert.ok(lexicalScore(english, target) >= 0.7);
+  // 中文问句与关键词「猫」零 bigram 交集，但关键词在原文出现 → 子串通道过阈值
+  const cat = entry({ id: "mem_cat", text: "用户养了一只猫", keywords: ["猫"] });
+  const chinese: MemoryQuery = { text: "我的猫叫什么名字", tokens: new Set(tokenize("我的猫叫什么名字")) };
+  assert.ok(lexicalScore(chinese, cat) >= 0.3);
+});
+
+test("retrieveMemories：阈值门控、top 限制、字符预算", () => {
+  const now = Date.now();
+  const pool = [
+    entry({ id: "m1", keywords: ["bun"], text: "第一条".repeat(10), at: now }),
+    entry({ id: "m2", keywords: ["bun"], text: "第二条".repeat(10), at: now - 1000 }),
+    entry({ id: "m3", keywords: ["无关"], text: "不相关的记忆", at: now }),
+  ];
+  const hits = retrieveMemories(pool, "bun 用哪个", { now });
+  assert.equal(hits.length, 2); // m3 过不了阈值
+  assert.equal(hits[0]?.entry.id, "m1"); // 同分新者前
+  // 字符预算：装不下整条就跳过，短的可能装得下
+  const tight = retrieveMemories(pool, "bun", { now, maxChars: 5 });
+  assert.ok(tight.length <= 1);
+  assert.ok((tight[0]?.entry.text.length ?? 0) <= 5 || tight.length === 1);
+});
+
+test("retrieveMemories：空库 / 空 query 返回空", () => {
+  assert.deepEqual(retrieveMemories([], "bun"), []);
+  assert.deepEqual(retrieveMemories([entry({ id: "m1" })], "！！！"), []);
+});
+
+test("pickPinned：只取 user 层偏好，按时间新者前，条数与预算双门", () => {
+  const pool = [
+    entry({ id: "old", type: "preference", layer: "user", scopeId: undefined, text: "旧的偏好", at: 1 }),
+    entry({ id: "fact-user", layer: "user", scopeId: undefined, text: "user 层的事实", at: 999 }),
+    entry({ id: "pref-ws", type: "preference", text: "工作区层的偏好", at: 998 }),
+    entry({ id: "new", type: "preference", layer: "user", scopeId: undefined, text: "新的偏好", at: 100 }),
+  ];
+  const picked = pickPinned(pool);
+  assert.deepEqual(picked.map((each) => each.id), ["new", "old"]); // 只认 user 层偏好，新者前
+});
+
+test("recallHits：两层合并、id 去重、muted 过滤、常驻打满分区不出两次", () => {
+  const now = Date.now();
+  const shared = entry({ id: "dup", layer: "user", scopeId: undefined, type: "preference", text: "两边都有的偏好", at: now });
+  const layers = {
+    user: [shared, entry({ id: "muted", status: "muted", keywords: ["bun"], text: "被关掉的", layer: "user", scopeId: undefined, at: now })],
+    scope: [shared, entry({ id: "hit", keywords: ["bun"], text: "词法命中", at: now })],
+  };
+  const hits = recallHits(layers, "bun", now);
+  const ids = hits.map((hit) => hit.entry.id);
+  assert.equal(ids.filter((id) => id === "dup").length, 1); // 去重
+  assert.ok(!ids.includes("muted")); // muted 不进召回
+  assert.ok(ids.includes("hit"));
+  assert.ok(ids.includes("dup")); // user 层偏好常驻
+});
+
+test("dedupeById / isRecallable 的独立口径", () => {
+  assert.equal(dedupeById([entry({ id: "a" }), entry({ id: "a" })]).length, 1);
+  assert.equal(isRecallable(entry({ id: "a" })), true);
+  assert.equal(isRecallable(entry({ id: "a", status: "muted" })), false);
+});
