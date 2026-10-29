@@ -373,3 +373,71 @@ test("initFailed：停掉服务并记住失败，之后不再每轮重拉；stop
   assert.equal(await h.ensureStarted(), true);
   assert.equal(forks(), 2);
 });
+
+function downloadHost(ref: { current: FakeChild | null }, downloads: MemoryDownloadProgress[]): MemoryServiceHostCore {
+  return new MemoryServiceHostCore({
+    forkRuntime: () => {
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    onDownloadProgress: (progress) => downloads.push(progress),
+    log: () => undefined,
+  });
+}
+
+const DOWNLOAD_INPUT = {
+  sources: ["https://example.test/model.gguf"],
+  targetPath: "/tmp/model.gguf",
+  sha256: "0".repeat(64),
+  sizeBytes: 10,
+};
+
+test("cancelModelDownload：转发成独立命令（取消不再靠 setVectorConfig(null)）", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const h = downloadHost(ref, []);
+  await h.ensureStarted();
+  h.cancelModelDownload();
+  assert.equal((ref.current!.posted.at(-1) as { type: string }).type, "cancelModelDownload");
+});
+
+test("下载途中服务自己退出：替它报 failed，界面不停在最后的百分比；主动停服务报 cancelled", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const downloads: MemoryDownloadProgress[] = [];
+  const h = downloadHost(ref, downloads);
+  await h.ensureStarted();
+  h.startModelDownload(DOWNLOAD_INPUT);
+  const { requestId } = ref.current!.posted.at(-1) as { requestId: string };
+  ref.current!.emit("message", {
+    type: "downloadProgress",
+    progress: { requestId, phase: "downloading", source: "s", received: 2, total: 10 },
+  });
+  ref.current!.exit(1);
+  assert.equal(downloads.at(-1)?.phase, "failed");
+  assert.equal(downloads.at(-1)?.requestId, requestId);
+
+  await h.ensureStarted();
+  h.startModelDownload(DOWNLOAD_INPUT);
+  h.stop();
+  assert.equal(downloads.at(-1)?.phase, "cancelled");
+});
+
+test("下载已到终态再退出服务：不重复报", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const downloads: MemoryDownloadProgress[] = [];
+  const h = downloadHost(ref, downloads);
+  await h.ensureStarted();
+  h.startModelDownload(DOWNLOAD_INPUT);
+  const { requestId } = ref.current!.posted.at(-1) as { requestId: string };
+  ref.current!.emit("message", {
+    type: "downloadProgress",
+    progress: { requestId, phase: "done", source: "s", received: 10, total: 10 },
+  });
+  ref.current!.exit(0);
+  assert.deepEqual(
+    downloads.map((progress) => progress.phase),
+    ["done"],
+  );
+});

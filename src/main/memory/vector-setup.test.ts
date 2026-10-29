@@ -9,6 +9,7 @@ import {
   modelFilePath,
   modelFileStateOf,
   parseVectorPatch,
+  vectorChangeCancelsDownload,
   vectorServiceConfig,
 } from "./vector-setup.ts";
 
@@ -90,4 +91,13 @@ test("modelFileStateOf：文件已就绪优先于旧失败；不在时如实回�
   });
   assert.deepEqual(modelFileStateOf({ model: MODEL, fileExists: false, download: failed }), failed);
   assert.deepEqual(modelFileStateOf({ model: MODEL, fileExists: false, download: null }), { state: "none" });
+});
+
+test("vectorChangeCancelsDownload：关向量 / 换模型才取消；改卸载时长、电池推迟不取消", () => {
+  const before = effectiveVectorSettings({ mode: "local" });
+  const other = MEMORY_VECTOR_MODELS.find((model) => model.id !== before.model)!;
+  assert.equal(vectorChangeCancelsDownload(before, { ...before, mode: "off" }), true);
+  assert.equal(vectorChangeCancelsDownload(before, { ...before, model: other.id }), true);
+  assert.equal(vectorChangeCancelsDownload(before, { ...before, idleUnloadMin: before.idleUnloadMin + 5 }), false);
+  assert.equal(vectorChangeCancelsDownload(before, { ...before, deferOnBattery: !before.deferOnBattery }), false);
 });

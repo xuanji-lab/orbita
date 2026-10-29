@@ -100,6 +100,8 @@ export class MemoryServiceHostCore {
   private child: MemoryChild | null = null;
   /** 当前服务报来的 llama-server pid（没在跑 = null） */
   private embedPid: number | null = null;
+  /** 在途模型下载的 requestId（终态进度到达后清掉）：服务中途死掉时要替它报一个终态 */
+  private downloadRequestId: string | null = null;
   /** init 失败的原因；非 null 时 ensureStarted 不再拉起 */
   private initFailure: string | null = null;
   private ready: Promise<boolean> | null = null;
@@ -203,6 +205,13 @@ export class MemoryServiceHostCore {
           });
         }
         if (message.type === "downloadProgress") {
+          const phase = message.progress.phase;
+          if (
+            message.progress.requestId === this.downloadRequestId &&
+            (phase === "done" || phase === "failed" || phase === "cancelled")
+          ) {
+            this.downloadRequestId = null;
+          }
           this.onDownloadProgress(message.progress);
         }
         if (message.type === "backfillProgress") {
@@ -338,7 +347,15 @@ export class MemoryServiceHostCore {
     sha256: string;
     sizeBytes: number;
   }): void {
-    this.child?.postMessage({ type: "startModelDownload", requestId: randomUUID(), ...input });
+    if (this.child === null) return;
+    const requestId = randomUUID();
+    this.downloadRequestId = requestId;
+    this.child.postMessage({ type: "startModelDownload", requestId, ...input });
+  }
+
+  /** 取消在途的模型下载（用户关向量 / 换模型）。服务会回一次 cancelled 进度。 */
+  cancelModelDownload(): void {
+    this.child?.postMessage({ type: "cancelModelDownload" });
   }
 
   /**
@@ -416,6 +433,20 @@ export class MemoryServiceHostCore {
       pending.resolve(null);
     }
     this.pendingVectorStates.clear();
+    // 下载随服务一起没了：替它报终态，否则界面停在最后一次进度的百分比。主动停服务
+    // （开关关 / 退出）算取消，自己死掉算失败（用户点「重新下载」即可）
+    const downloadRequestId = this.downloadRequestId;
+    this.downloadRequestId = null;
+    if (downloadRequestId !== null) {
+      this.onDownloadProgress({
+        requestId: downloadRequestId,
+        phase: killIt ? "cancelled" : "failed",
+        source: "",
+        received: 0,
+        total: 0,
+        ...(killIt ? null : { error: "记忆服务中途退出，下载已中断" }),
+      });
+    }
     // llama-server 补杀：不论服务是被停还是自己死的，它的子进程都不会跟着走
     const embedPid = this.embedPid;
     this.embedPid = null;

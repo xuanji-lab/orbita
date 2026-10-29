@@ -63,6 +63,15 @@ export function vectorServiceConfig(input: {
   };
 }
 
+/**
+ * 改向量设置后，在途的模型下载还要不要：关了向量、或换了模型 = 不要了（主进程发
+ * cancelModelDownload）。其余改动（空闲卸载、电池推迟）不碰下载。下载**不**因为
+ * 「配置同步成 null」取消——模型没下完时配置本来就是 null（2026-10-30 卡在 22%）。
+ */
+export function vectorChangeCancelsDownload(before: MemoryVectorSettings, after: MemoryVectorSettings): boolean {
+  return after.mode !== "local" || after.model !== before.model;
+}
+
 /** 模型 GGUF 落盘路径：<userData>/vector/<file>（dir = userData）。 */
 export function modelFilePath(model: MemoryVectorModel, userDataDir: string): string {
   return joinPath(userDataDir, "vector", model.file);
