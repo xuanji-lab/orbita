@@ -4907,7 +4907,7 @@ interface MemoryLines {
  * 记忆行（实验功能 memory-system）：挂在「从这一轮记住了东西」的用户气泡下，只说
  * 记住了什么——确认系统在记、记得对不对（用户 2026-10-29：「我只需要知道，有在
  * 记录记忆，记得对……其他的我不需要感知到」）。这一轮用到了哪些记忆是输入，去
- * 上下文面板看；「整理中」「待确认」不在对话里出现（待确认只在记忆库）。
+ * 上下文面板看；「整理中」不在对话里出现，也没有待确认（agent 判断直接生效）。
  * 与思考 / 工具行同一份 CollapseRow 契约；改 / 删 / 别再用去审查面板的记忆页签。
  */
 function MemoryLine(props: { row: MemorySessionTurnView; onOpenReview?: () => void }) {
@@ -4929,9 +4929,9 @@ function MemoryLine(props: { row: MemorySessionTurnView; onOpenReview?: () => vo
       </CollapseRow>
       {open && (
         <div style={{ ...EXPANDED_BODY, fontFamily: "var(--font-family-base)", whiteSpace: "normal", display: "grid", gap: "var(--space-1)" }}>
-          {row.remembered.map((entry) => (
-            <span key={entry.id} style={{ color: "var(--color-text-primary)" }}>
-              {entry.text}
+          {row.remembered.map((item) => (
+            <span key={item.entry.id} style={{ color: "var(--color-text-primary)" }}>
+              {item.entry.text}
             </span>
           ))}
           {props.onOpenReview !== undefined && (

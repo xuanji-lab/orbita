@@ -3,6 +3,7 @@ import type { MemoryEntryType, MemoryEntryView } from "@shared/memory";
 import { Icon, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { formatDay } from "../settings/migration-groups.ts";
+import { memoryUndoActions } from "./memory-view.ts";
 import { mutateMemory } from "./useMemory.ts";
 import "./memory.css";
 
@@ -15,9 +16,15 @@ export const MEMORY_TYPE_ICON: Record<MemoryEntryType, IconName> = {
 
 /**
  * 一条记忆。记忆库页与审查 › 记忆页签共用：
- * - 点正文展开：原话（出处那一轮的用户话）、「回到原文」、偏好的演变链；
+ * - 点正文展开：原话（出处那一轮的用户话）、「回到原文」、演变链，以及撤销入口；
  * - 悬停右上角出编辑 / 别再用 / 删除（删除要再点一次确认）；
  * - 不再使用 / 已过时的条目正文退成次要色，元信息里写明状态——颜色只是第二信号。
+ *
+ * 没有「待你确认」（2026-10-29 用户：「我不想去确认记忆，agent 应该自己有判断力吧」）：
+ * agent 判断的结果直接生效，这里只负责让人看得出发生了什么、错了能一键撤——
+ * - agent 在对话里按用户的话改写的条目，元信息带「agent 修订」；
+ * - 顶掉了旧说法的条目（演变链里前一条已过时）给「恢复旧说法」；
+ * - 自动记到所有工作区的条目给「只留在原工作区」。
  *
  * 写操作结果以服务回执为准：失败就地一句话；成功不用管，memoryChanged 会让列表重拉。
  */
@@ -60,7 +67,7 @@ export function MemoryEntryCard(props: {
     if (await run({ op: "edit", token, entryId: entry.id, text })) setEditing(null);
   };
 
-  const jumpable = props.onJump !== undefined && entry.source === "chat" && props.view.sessionTitle !== null;
+  const jumpable = props.onJump !== undefined && entry.source !== "manual" && props.view.sessionTitle !== null;
   const latestTurn = entry.turns[entry.turns.length - 1];
   const origin =
     entry.source === "manual"
@@ -70,6 +77,11 @@ export function MemoryEntryCard(props: {
         : latestTurn === undefined
           ? props.view.sessionTitle
           : t.memory.origin(props.view.sessionTitle, latestTurn);
+  // 撤销入口：只在当前确实可撤时给（口径见 memoryUndoActions）
+  const undo = memoryUndoActions(props.view);
+  const restorable = undo.restorePrevious;
+  const returnable = undo.returnToWorkspace;
+  const undoable = restorable || returnable;
 
   return (
     <li
@@ -120,8 +132,14 @@ export function MemoryEntryCard(props: {
         )}
         {entry.reason !== undefined && entry.reason !== "" && (
           <p className="mem-entry-reason">
-            {t.memory.reasonLabel(entry.type)}
+            {entry.source === "agent" ? t.memory.reviseReasonLabel : t.memory.reasonLabel(entry.type)}
             {entry.reason}
+          </p>
+        )}
+        {state === "muted" && entry.mutedReason !== undefined && (
+          <p className="mem-entry-reason">
+            {t.memory.retireReasonLabel}
+            {entry.mutedReason}
           </p>
         )}
         <span className="mem-entry-meta">
@@ -130,6 +148,18 @@ export function MemoryEntryCard(props: {
               <Icon name={state === "muted" ? "eye-off" : "history"} size={11} strokeWidth={1.8} />
               {state === "muted" ? t.memory.statusMuted : t.memory.statusStale}
             </span>
+          )}
+          {entry.source === "agent" && (
+            <button type="button" className="mem-tag" title={t.memory.agentRevisedHint} onClick={() => setOpen(true)}>
+              <Icon name="bot" size={11} strokeWidth={1.8} />
+              {t.memory.agentRevised}
+            </button>
+          )}
+          {returnable && (
+            <button type="button" className="mem-tag" title={t.memory.autoPromotedHint} onClick={() => setOpen(true)}>
+              <Icon name="user" size={11} strokeWidth={1.8} />
+              {t.memory.autoPromoted}
+            </button>
           )}
           {props.scopeName !== null && (
             <span className="mem-tag">
@@ -151,7 +181,7 @@ export function MemoryEntryCard(props: {
           <span className="mem-entry-date">{formatDay(entry.at, now)}</span>
         </span>
         {problem !== null && <p className="mem-error">{problem}</p>}
-        {open && (props.view.quote !== null || evolution.length > 1 || jumpable) && (
+        {open && (props.view.quote !== null || evolution.length > 1 || jumpable || undoable) && (
           <div className="mem-detail">
             {props.view.quote !== null && (
               <>
@@ -180,16 +210,51 @@ export function MemoryEntryCard(props: {
                       <span className="mono">{formatDay(node.at, now)}</span>
                       <span>
                         <span className="mem-chain-text">{node.text}</span>
+                        {node.source === "agent" && (
+                          <span className="mem-tag">
+                            <Icon name="bot" size={11} strokeWidth={1.8} />
+                            {t.memory.agentRevised}
+                          </span>
+                        )}
                         {node.status === "stale" && (
                           <span className="mem-tag" data-tone="warn">
                             {t.memory.statusStale}
                           </span>
                         )}
+                        {node.status === "muted" && <span className="mem-tag">{t.memory.statusMuted}</span>}
                       </span>
                     </li>
                   ))}
                 </ol>
               </>
+            )}
+            {undoable && (
+              <span className="mem-edit-row">
+                {restorable && (
+                  <button
+                    type="button"
+                    className="mem-btn"
+                    disabled={busy}
+                    title={t.memory.restorePreviousHint}
+                    onClick={() => void run({ op: "restorePrevious", token, entryId: entry.id })}
+                  >
+                    <Icon name="undo-2" size={12} strokeWidth={1.8} />
+                    {t.memory.restorePrevious}
+                  </button>
+                )}
+                {returnable && (
+                  <button
+                    type="button"
+                    className="mem-btn"
+                    disabled={busy}
+                    title={t.memory.returnToWorkspaceHint}
+                    onClick={() => void run({ op: "returnToWorkspace", token, entryId: entry.id })}
+                  >
+                    <Icon name="folder" size={12} strokeWidth={1.8} />
+                    {t.memory.returnToWorkspace}
+                  </button>
+                )}
+              </span>
             )}
           </div>
         )}

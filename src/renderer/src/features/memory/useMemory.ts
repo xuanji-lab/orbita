@@ -6,15 +6,14 @@ import type {
   MemoryEntriesResponse,
   MemoryMutation,
   MemoryMutationOutcome,
-  MemoryPendingResponse,
   MemoryScopeSummary,
   MemorySessionView,
   MemoryVectorStatus,
 } from "../../../../shared/memory.ts";
 
 /**
- * 记忆界面的数据钩子。四个读接口共用一套「拉一次 + 听到 memoryChanged 就重拉」：
- * 服务侧任何写盘（提取落条目、拍板、编辑）都会广播一次，界面不自己猜哪里变了。
+ * 记忆界面的数据钩子。三个读接口共用一套「拉一次 + 听到 memoryChanged 就重拉」：
+ * 服务侧任何写盘（提取落条目、agent 修订、编辑、撤销）都会广播一次，界面不自己猜哪里变了。
  * key 为 null = 不拉（实验开关关着 / 还没开任务）；切 key 时先清空旧数据，
  * 免得上一个作用域的条目在新作用域下闪一帧。
  */
@@ -76,10 +75,6 @@ export function useMemoryScopes(enabled: boolean): MemoryResource<MemoryScopeSum
 
 export function useMemoryEntries(token: string | null): MemoryResource<MemoryEntriesResponse> {
   return useMemoryResource(token, () => api.memory.entries({ token: token ?? "all" }));
-}
-
-export function useMemoryPending(enabled: boolean): MemoryResource<MemoryPendingResponse> {
-  return useMemoryResource(enabled ? "pending" : null, () => api.memory.pending());
 }
 
 export function useMemorySession(sessionId: string | null): MemoryResource<MemorySessionView> {

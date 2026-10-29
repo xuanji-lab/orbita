@@ -345,67 +345,6 @@ button.mem-tag:hover {
   flex-wrap: wrap;
 }
 
-/* ── 待确认卡 ── */
-
-.mem-ask {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-muted);
-}
-
-.mem-ask-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
-.mem-ask-text {
-  margin: 0;
-  font-size: var(--font-size-base);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-  word-break: break-word;
-}
-
-.mem-ask-pair {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.mem-ask-side {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-panel);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-}
-
-.mem-ask-side .mono {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.mem-ask-acts {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.mem-ask[data-done="true"] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
-}
-
 /* ── 空态 / 加载 ── */
 
 .mem-empty {
@@ -556,41 +495,6 @@ button.mem-tag:hover {
   font-weight: var(--weight-semibold);
 }
 
-/* 待确认提示条：整条是按钮，点了去「待你确认」 */
-.mem-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  text-align: left;
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-
-.mem-banner:hover {
-  background: var(--color-bg-hover);
-}
-
-.mem-banner > .orbita-icon:first-child {
-  color: var(--color-warning);
-}
-
-.mem-banner strong {
-  color: var(--color-text-primary);
-  font-weight: var(--weight-semibold);
-}
-
-.mem-banner > .orbita-icon:last-child {
-  margin-left: auto;
-}
-
 .mem-group {
   display: grid;
   gap: var(--space-1);
@@ -659,11 +563,6 @@ button.mem-tag:hover {
 .mem-input:focus {
   outline: 0;
   border-color: var(--color-accent);
-}
-
-.mem-asks {
-  display: grid;
-  gap: var(--space-2);
 }
 
 /* ── 向量模型页 ── */

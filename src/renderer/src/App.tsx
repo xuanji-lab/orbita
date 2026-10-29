@@ -62,8 +62,8 @@ import {
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
 import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
-import { openPendingCount, type MemoryNav } from "./features/memory/memory-view.ts";
-import { useMemoryPending, useMemoryScopes } from "./features/memory/useMemory.ts";
+import type { MemoryNav } from "./features/memory/memory-view.ts";
+import { useMemoryScopes } from "./features/memory/useMemory.ts";
 import type { MemoryEntryView } from "@shared/memory";
 
 /**
@@ -1022,7 +1022,6 @@ export function App() {
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);
   const memoryScopes = useMemoryScopes(overlay === "memory");
-  const memoryPending = useMemoryPending(overlay === "memory");
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -1145,7 +1144,6 @@ export function App() {
           memoryNav={memoryNav}
           onMemoryNav={setMemoryNav}
           memoryScopes={memoryScopes.data}
-          memoryPendingCount={openPendingCount(memoryPending.data?.items ?? null)}
           showArchived={showArchived}
           showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
@@ -1186,7 +1184,6 @@ export function App() {
                 nav={memoryNav}
                 onNav={setMemoryNav}
                 scopes={memoryScopes.data}
-                pending={memoryPending.data?.items ?? null}
                 onJump={jumpToMemorySource}
                 choreLabel={settings.choreModel?.modelId ?? null}
                 onOpenGeneral={() => {

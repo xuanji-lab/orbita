@@ -132,12 +132,11 @@ export function Sidebar(props: {
   onOverlay: (next: Overlay) => void;
   /**
    * 记忆库盖层（实验功能 memory-system）下侧栏换成它的导航：范围（全部 / 所有工作区 /
-   * 各工作区）+ 管理（待你确认 / 向量模型）。数据由 App 拉（页面本体也要用）。
+   * 各工作区）+ 管理（向量模型）。数据由 App 拉（页面本体也要用）。
    */
   memoryNav: MemoryNav;
   onMemoryNav: (next: MemoryNav) => void;
   memoryScopes: readonly MemoryScopeSummary[] | null;
-  memoryPendingCount: number;
   /**
    * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
    * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
@@ -588,14 +587,6 @@ export function Sidebar(props: {
             ))}
             <span style={{ display: "block", height: "var(--space-3)" }} />
             <NodeLabel>{t.memory.navManage}</NodeLabel>
-            <NavRow
-              icon="circle-dot"
-              label={t.memory.pending}
-              active={props.memoryNav.kind === "pending"}
-              count={props.memoryPendingCount > 0 ? props.memoryPendingCount : undefined}
-              countTone="var(--color-warning)"
-              onClick={() => props.onMemoryNav({ kind: "pending" })}
-            />
             <NavRow
               icon="cpu"
               label={t.memory.vector}

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { MemoryEntry, MemoryEntryView, MemorySessionView } from "../../../../shared/memory.ts";
 import {
   manualDraftProblem,
-  openPendingCount,
+  memoryUndoActions,
   pairMemoryTurns,
   filterMemoryEntries,
   groupMemoryEntries,
@@ -127,12 +127,53 @@ describe("pairMemoryTurns：对话气泡挂哪一轮的记忆", () => {
   });
 });
 
-describe("待确认计数与手动添加校验", () => {
-  test("已拍板的不算待确认", () => {
-    assert.equal(openPendingCount([{}, { resolution: "user" }, {}]), 2);
-    assert.equal(openPendingCount(null), 0);
+describe("条目卡的撤销入口", () => {
+  const base = {
+    id: "mem_new",
+    type: "preference" as const,
+    text: "新说法",
+    keywords: [],
+    layer: "workspace" as const,
+    scopeId: "ws",
+    sessionId: "s",
+    turns: [3],
+    at: 3,
+    episodeId: "",
+    source: "agent" as const,
+  };
+  const chain = (oldStatus: "stale" | "active") => [
+    { id: "mem_old", text: "旧说法", at: 1, status: oldStatus, source: "chat" as const },
+    { id: "mem_new", text: "新说法", at: 3, source: "agent" as const },
+  ];
+  const view = (entry: Record<string, unknown>, evolution: ReturnType<typeof chain> | []) => ({
+    entry: { ...base, ...entry },
+    token: "t",
+    sessionTitle: null,
+    quote: null,
+    evolution,
   });
 
+  test("顶掉了旧说法、旧条已过时、这条还在用：给「恢复旧说法」", () => {
+    assert.deepEqual(memoryUndoActions(view({ conflictWith: "mem_old" }, chain("stale"))), {
+      restorePrevious: true,
+      returnToWorkspace: false,
+    });
+  });
+
+  test("已经恢复过（旧条 active、这条 muted）或没有 conflictWith：不给", () => {
+    assert.equal(memoryUndoActions(view({ conflictWith: "mem_old", status: "muted" }, chain("active"))).restorePrevious, false);
+    assert.equal(memoryUndoActions(view({ conflictWith: "mem_old" }, chain("active"))).restorePrevious, false);
+    assert.equal(memoryUndoActions(view({}, [])).restorePrevious, false);
+  });
+
+  test("自动记到所有工作区且还在 user 层：给「只留在原工作区」；搬回去后不给", () => {
+    assert.equal(memoryUndoActions(view({ layer: "user", promotedFrom: "abc" }, [])).returnToWorkspace, true);
+    assert.equal(memoryUndoActions(view({ layer: "workspace" }, [])).returnToWorkspace, false);
+    assert.equal(memoryUndoActions(view({ layer: "user" }, [])).returnToWorkspace, false);
+  });
+});
+
+describe("手动添加校验", () => {
   test("事实可不写理由，偏好 / 经验必须写", () => {
     assert.equal(manualDraftProblem({ type: "fact", text: "x", reason: "" }), null);
     assert.equal(manualDraftProblem({ type: "preference", text: "x", reason: " " }), "reason");

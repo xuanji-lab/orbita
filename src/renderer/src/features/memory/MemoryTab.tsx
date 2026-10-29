@@ -1,4 +1,3 @@
-import { MEMORY_USER_TOKEN, type MemoryEntry } from "@shared/memory";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { MemoryEntryCard } from "./MemoryEntryCard";
@@ -13,9 +12,10 @@ function clock(at: number): string {
 }
 
 /**
- * 审查面板 ›「记忆」页签：这个任务**记住了什么**——按轮倒序，悬停可改 / 别再用 / 删。
- * 用到的记忆是输入，去上下文面板；待确认与「整理中」不在这里出现（用户 2026-10-29：
- * 「我只需要知道，有在记录记忆，记得对……其他的我不需要感知到」），待确认只在记忆库。
+ * 审查面板 ›「记忆」页签：这个任务**记住了什么**——按轮倒序，含 agent 在对话里当场修订
+ * 的条目；悬停可改 / 别再用 / 删，展开看演变链、恢复旧说法。用到的记忆是输入，去上下文
+ * 面板；「整理中」不在这里出现（用户 2026-10-29：「我只需要知道，有在记录记忆，记得对……
+ * 其他的我不需要感知到」）。
  */
 export function MemoryTab(props: { sessionId: string | null }) {
   const t = useT();
@@ -36,7 +36,6 @@ export function MemoryTab(props: { sessionId: string | null }) {
   if (view === null) return <p className="mem-empty">{t.common.loading}</p>;
 
   const turns = rememberedTurns(view);
-  const tokenOf = (entry: MemoryEntry): string => (entry.layer === "user" ? MEMORY_USER_TOKEN : (view.token ?? ""));
 
   return (
     <div className="mem-tab">
@@ -54,11 +53,11 @@ export function MemoryTab(props: { sessionId: string | null }) {
               <span className="mem-tab-turn-count">{t.memory.remembered(row.remembered.length)}</span>
             </header>
             <ul className="mem-list">
-              {row.remembered.map((entry) => (
+              {row.remembered.map((item) => (
                 <MemoryEntryCard
-                  key={entry.id}
-                  view={{ entry, token: tokenOf(entry), sessionTitle: null, quote: null, evolution: [] }}
-                  scopeName={entry.layer === "user" ? t.memory.scopeUser : null}
+                  key={item.entry.id}
+                  view={item}
+                  scopeName={item.entry.layer === "user" ? t.memory.scopeUser : null}
                   showOrigin={false}
                 />
               ))}

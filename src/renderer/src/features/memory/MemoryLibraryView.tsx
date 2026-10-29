@@ -3,20 +3,18 @@ import {
   MEMORY_USER_TOKEN,
   type MemoryEntryType,
   type MemoryEntryView,
-  type MemoryPendingItem,
   type MemoryScopeSummary,
 } from "@shared/memory";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { MEMORY_TYPE_ICON, MemoryEntryCard } from "./MemoryEntryCard";
-import { PendingCard } from "./PendingCard";
 import { VectorModelView } from "./VectorModelView";
 import {
   filterMemoryEntries,
   groupMemoryEntries,
   manualDraftProblem,
+  MEMORY_SOURCE_FILTERS,
   MEMORY_TYPE_ORDER,
-  openPendingCount,
   scopeNameOf,
   type MemoryNav,
   type MemorySourceFilter,
@@ -27,14 +25,14 @@ import "./memory.css";
 
 /**
  * 记忆库（实验功能 memory-system）：和设置同一种整页形态——侧栏换成范围 / 管理导航，
- * 内容面按导航位置画三种页：某个范围的条目、待你确认、向量模型。
+ * 内容面按导航位置画两种页：某个范围的条目、向量模型。没有「待你确认」页（2026-10-29
+ * 用户：「我不想去确认记忆」）——agent 判断的结果直接生效，撤销在各条目卡上。
  * 不是 Markdown 文件视图（2026-10-29 用户裁决：不要 Proma 那种）。
  */
 export function MemoryLibraryView(props: {
   nav: MemoryNav;
   onNav: (next: MemoryNav) => void;
   scopes: readonly MemoryScopeSummary[] | null;
-  pending: readonly MemoryPendingItem[] | null;
   /** 「回到原文」：退出记忆库、打开出处会话并滚到那一轮 */
   onJump: (view: MemoryEntryView) => void;
   /** 家务活模型的显示名；null = 没设置（向量模型页底部那一行） */
@@ -44,18 +42,10 @@ export function MemoryLibraryView(props: {
   return (
     <div className="scroll" style={{ height: "100%", minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
       <div className="mem-page">
-        {props.nav.kind === "pending" ? (
-          <PendingPage items={props.pending} scopes={props.scopes} />
-        ) : props.nav.kind === "vector" ? (
+        {props.nav.kind === "vector" ? (
           <VectorModelView choreLabel={props.choreLabel} onOpenGeneral={props.onOpenGeneral} />
         ) : (
-          <ScopePage
-            token={props.nav.token}
-            scopes={props.scopes}
-            pendingCount={openPendingCount(props.pending)}
-            onOpenPending={() => props.onNav({ kind: "pending" })}
-            onJump={props.onJump}
-          />
+          <ScopePage token={props.nav.token} scopes={props.scopes} onJump={props.onJump} />
         )}
       </div>
     </div>
@@ -65,8 +55,6 @@ export function MemoryLibraryView(props: {
 function ScopePage(props: {
   token: string;
   scopes: readonly MemoryScopeSummary[] | null;
-  pendingCount: number;
-  onOpenPending: () => void;
   onJump: (view: MemoryEntryView) => void;
 }) {
   const t = useT();
@@ -139,22 +127,13 @@ function ScopePage(props: {
           ))}
         </div>
         <div className="mem-seg" role="group" aria-label={t.memory.sourceAll}>
-          {(["all", "chat", "manual"] as const).map((each) => (
+          {MEMORY_SOURCE_FILTERS.map((each) => (
             <button key={each} type="button" aria-pressed={source === each} onClick={() => setSource(each)}>
-              {each === "all" ? t.memory.sourceAll : each === "chat" ? t.memory.sourceChat : t.memory.sourceManual}
+              {each === "all" ? t.memory.sourceAll : t.memory.sourceName(each)}
             </button>
           ))}
         </div>
       </div>
-
-      {props.pendingCount > 0 && (
-        <button type="button" className="mem-banner" onClick={props.onOpenPending}>
-          <Icon name="circle-dot" size={13} strokeWidth={1.8} />
-          <strong>{t.memory.pendingBanner(props.pendingCount)}</strong>
-          <span>{t.memory.pendingBannerHint}</span>
-          <Icon name="chevron-right" size={13} strokeWidth={1.8} />
-        </button>
-      )}
 
       {entries.error !== null && items === null ? (
         <div className="mem-empty" role="alert">
@@ -272,38 +251,5 @@ function ManualForm(props: { token: string; scopeName: string; onDone: () => voi
       </span>
       {problem !== null && <p className="mem-error">{problem}</p>}
     </div>
-  );
-}
-
-function PendingPage(props: { items: readonly MemoryPendingItem[] | null; scopes: readonly MemoryScopeSummary[] | null }) {
-  const t = useT();
-  const open = (props.items ?? []).filter((item) => item.resolution === undefined);
-  const done = (props.items ?? []).filter((item) => item.resolution !== undefined);
-  return (
-    <>
-      <header className="mem-page-head">
-        <h2 className="mem-page-title">{t.memory.pending}</h2>
-      </header>
-      <p className="mem-page-hint">{t.memory.pendingIntro}</p>
-      {props.items === null ? (
-        <p className="mem-empty">{t.common.loading}</p>
-      ) : open.length === 0 && done.length === 0 ? (
-        <div className="mem-empty">
-          <Icon name="circle-check" size={16} strokeWidth={1.6} />
-          <span>{t.memory.pendingEmpty}</span>
-        </div>
-      ) : (
-        <div className="mem-asks">
-          {open.length === 0 && <p className="mem-empty">{t.memory.pendingEmpty}</p>}
-          {[...open, ...done].map((item) => (
-            <PendingCard
-              key={`${item.kind}:${item.entry.id}`}
-              item={item}
-              scopeName={scopeNameOf(props.scopes, item.token, t.memory.scopeUser)}
-            />
-          ))}
-        </div>
-      )}
-    </>
   );
 }

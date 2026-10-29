@@ -157,7 +157,6 @@ export const en = {
     navScopes: "Scope",
     navManage: "Manage",
     navAll: "All",
-    pending: "Needs your call",
     vector: "Embedding model",
     typeName: (type: string): string =>
       type === "preference" ? "Preferences" : type === "insight" ? "Lessons" : "Facts",
@@ -175,8 +174,8 @@ export const en = {
     clearSearch: "Clear search",
     filterAll: "All",
     sourceAll: "All sources",
-    sourceChat: "From chats",
-    sourceManual: "Added by hand",
+    sourceName: (source: string): string =>
+      source === "chat" ? "From chats" : source === "agent" ? "Corrected in chat" : "Added by hand",
     add: "Add",
     reasonLabel: (type: string): string => (type === "insight" ? "Evidence: " : "Reason: "),
     origin: (title: string, turn: number) => `${title} · turn ${turn}`,
@@ -186,7 +185,17 @@ export const en = {
     evolution: (count: number) => `Evolved ×${count}`,
     quoteLabel: "Original words",
     jumpSource: "Back to the conversation",
-    evolutionTitle: "How this preference evolved",
+    evolutionTitle: "How this evolved",
+    agentRevised: "Corrected by agent",
+    agentRevisedHint: "The agent rewrote this in the conversation after you corrected it",
+    autoPromoted: "Applied to all workspaces",
+    autoPromotedHint: "Judged to be about you rather than this project, so it applies in every workspace",
+    reviseReasonLabel: "Why it changed: ",
+    retireReasonLabel: "Why it was dropped: ",
+    restorePrevious: "Restore the old statement",
+    restorePreviousHint: "Bring the older statement back and stop using this one",
+    returnToWorkspace: "Keep it in its workspace only",
+    returnToWorkspaceHint: "Move it back to the workspace it came from",
     statusMuted: "Not used",
     statusStale: "Outdated",
     edit: "Edit",
@@ -203,30 +212,6 @@ export const en = {
     emptyHint:
       "With memory on, chat for a few turns; once things go quiet the conversation is distilled into memories. You can also add one by hand.",
     noMatch: "No memories match.",
-    pendingBanner: (count: number) => `${count} waiting for your call`,
-    pendingBannerHint: "Whether to apply to all workspaces, or an old and a new statement disagree.",
-    pendingIntro:
-      "Only two things stop here: whether something should apply to all workspaces, and when an old and a new statement disagree. Everything else is recorded directly and can be reviewed or undone later.",
-    pendingEmpty: "Nothing needs your call.",
-    promoteTitle: "Remember for all workspaces?",
-    promoteAsk: (scope: string) => `Looks like this applies beyond ${scope}.`,
-    promoteAll: "All workspaces",
-    promoteKeep: (scope: string) => `Only in ${scope}`,
-    conflictTitle: "Old and new disagree",
-    conflictOldGone: "The older one has been deleted.",
-    conflictOld: (date: string) => `Old · ${date}`,
-    conflictNew: (date: string) => `New · ${date}`,
-    conflictStale: "Mark the old one outdated",
-    conflictBoth: "Keep both",
-    decided: (resolution: string): string =>
-      resolution === "user"
-        ? "Now applies to all workspaces"
-        : resolution === "workspace"
-          ? "Kept in this workspace only"
-          : resolution === "stale-old"
-            ? "Old one marked outdated"
-            : "Kept both",
-    undo: "Undo",
     manualTitle: "Add a memory",
     manualText: "Write it as one complete sentence",
     manualReason: (type: string): string =>

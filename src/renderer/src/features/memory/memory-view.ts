@@ -20,6 +20,9 @@ export const MEMORY_TYPE_ORDER: readonly MemoryEntryType[] = ["preference", "ins
 export type MemoryTypeFilter = "all" | MemoryEntryType;
 export type MemorySourceFilter = "all" | MemorySource;
 
+/** 记忆库「来源」分段的顺序：对话整理、agent 修订（对话里按用户纠正改的）、手动添加。 */
+export const MEMORY_SOURCE_FILTERS: readonly MemorySourceFilter[] = ["all", "chat", "agent", "manual"];
+
 export interface MemoryFilter {
   type: MemoryTypeFilter;
   source: MemorySourceFilter;
@@ -99,9 +102,21 @@ export function pairMemoryTurns(
   return paired;
 }
 
-/** 待确认清单里还没拍板的条数（侧栏「待你确认」角标、记忆库顶部提示条）。 */
-export function openPendingCount(items: readonly { resolution?: string }[] | null): number {
-  return items === null ? 0 : items.filter((item) => item.resolution === undefined).length;
+/**
+ * 条目卡上的撤销入口（没有「待你确认」之后，agent 判断错了就靠它们撤）。只在当前
+ * 确实可撤时给，免得按了回一句「没有可撤的」：
+ * - restorePrevious：这条顶掉了旧说法（conflictWith），旧条在演变链里还是「已过时」，
+ *   且这条还在用——撤一次后旧条回 active、这条 muted，入口自然消失；
+ * - returnToWorkspace：自动记到所有工作区（promotedFrom）且还在 user 层。
+ */
+export function memoryUndoActions(view: MemoryEntryView): { restorePrevious: boolean; returnToWorkspace: boolean } {
+  const { entry } = view;
+  const previous =
+    entry.conflictWith === undefined ? undefined : view.evolution.find((node) => node.id === entry.conflictWith);
+  return {
+    restorePrevious: (entry.status ?? "active") === "active" && previous?.status === "stale",
+    returnToWorkspace: entry.layer === "user" && entry.promotedFrom !== undefined,
+  };
 }
 
 /** 手动添加的校验：正文必填；偏好 / 经验必须写理由（服务侧同样会拒，这里先挡住给出原因）。 */
@@ -117,9 +132,9 @@ export function manualDraftProblem(draft: {
 
 /**
  * 记忆库页的导航位置（侧栏在记忆库盖层下换成这份导航，与设置页同一种整页形态）：
- * 某个范围的条目（"all" = 全部）、待你确认、向量模型。
+ * 某个范围的条目（"all" = 全部）、向量模型。
  */
-export type MemoryNav = { kind: "scope"; token: string } | { kind: "pending" } | { kind: "vector" };
+export type MemoryNav = { kind: "scope"; token: string } | { kind: "vector" };
 
 /**
  * 作用域 token → 显示名。user 层（所有工作区）的名字用界面语言的文案——服务给的
