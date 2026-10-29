@@ -15,7 +15,7 @@ import {
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
@@ -67,7 +67,7 @@ export type QueuedMessage =
       files?: readonly ComposerFileRef[];
     }
   | { id: string; kind: "compact"; instructions?: string }
-  | { id: string; kind: "channel"; childId: string; message: ChannelMessage };
+  | { id: string; kind: "channel"; childId: string; childWorkbench: string; message: ChannelMessage };
 
 /**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
@@ -177,6 +177,13 @@ export interface SessionEntry {
   /** 挂起的回答前确认（intentAsk 事件；应答 / 取消后清空）。ephemeral */
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
   /**
+   * 最近一次系统提示注入清单（contextInventory 事件，上下文面板「规则与说明」
+   * 组的数据源）。**纯 ephemeral，不落盘**：规则每轮重注入、永不被压缩，最新一份
+   * 就是当前事实；未开过轮的会话（纯浏览）为 null，面板按「未知」显示。种盘即清
+   * （盘上没有它，种盘前的旧值是上一段生命的残影）。
+   */
+  rules: ContextRulesInventory | null;
+  /**
    * 乐观回显（发出即画的用户气泡）：agent 进程冷启 / 开轮装配要几秒，真回显
    * （runtime 的 progress item_started）之前聊天面会有一段只有「回应中」的空窗。
    * 这里存**与 runtime 同款切法**的正文块（splitEchoBlocks），真回显一到即清。
@@ -242,6 +249,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentRun: null,
   intentRecalls: [],
   intentAsk: null,
+  rules: null,
   pendingEcho: null,
 };
 
@@ -314,6 +322,10 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   }
   if (event.type === "stats") {
     return update(states, event.sessionId, (entry) => ({ ...entry, stats: event.stats }));
+  }
+  // 系统提示注入清单（上下文面板）：每轮推一次，新值直接覆盖（规则是当前态，不累积）
+  if (event.type === "contextInventory") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, rules: event.inventory }));
   }
   if (event.type === "thinking") {
     return update(states, event.sessionId, (entry) => ({
@@ -532,6 +544,8 @@ export function seedFromDisk(
     intentRecalls: dedupeRecalls(intentRecalls),
     intentRun: null,
     intentAsk: null,
+    // 注入清单不落盘：种盘即清（见字段注释），下一次开轮的推送会再填上
+    rules: null,
     pendingEcho: null,
   });
   return next;

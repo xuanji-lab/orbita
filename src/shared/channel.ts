@@ -221,18 +221,24 @@ function cleanEnvelopeTitle(title: string): string {
 /**
  * 把一条通道消息包成投给模型看的信封。`peer` 是**接收方眼里的「对面」**：
  * 投给子时 peer 是父，投给父时 peer 是子——不是消息的 `from`（消息发送方）。
+ * workbench 有值时放在正文前：首条任务即使之后被压缩，后续 reply / 回报也会重新带路径。
  */
 export function composeChannelPrompt(
   message: ChannelMessage,
-  peer: { id: string; title: string },
+  peer: { id: string; title: string; workbench?: string },
 ): string {
   const title = cleanEnvelopeTitle(peer.title);
+  const workbench =
+    peer.workbench === undefined
+      ? []
+      : [`${message.from === "parent" ? "Parent session" : "Sub-session"} workbench: ${peer.workbench}`];
   const notice =
     message.from === "parent"
       ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
       : `This message came from your sub-session "${title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
   return [
     `<channel from="${message.from}" kind="${message.kind}" peer="${peer.id}" message="${message.id}" title="${title}">`,
+    ...workbench,
     message.text,
     "</channel>",
     notice,
