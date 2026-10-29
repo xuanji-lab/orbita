@@ -10,6 +10,7 @@ import {
   isChannelTool,
   USER_ACTION_TOOL,
   isReadOnlyTool,
+  MEMORY_TOOLS,
   PERMISSION_MODES,
   READ_ONLY_TOOLS,
 } from "./permission.ts";
@@ -81,6 +82,16 @@ describe("decidePermission", () => {
         assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);
       }
     }
+  });
+
+  test("记忆三件套（2026-10-29 用户：不想去确认记忆）：memory_search / revise / retire 三档全放行", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of MEMORY_TOOLS) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);
+      }
+    }
+    // 名字相似的不沾光
+    assert.equal(decidePermission("plan", "memory_delete").behavior, "deny");
   });
 
   test("通道工具放行不影响其它工具的既有行为", () => {
