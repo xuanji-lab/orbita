@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryEntryStore, parseMemoryEntry } from "./entries.ts";
@@ -143,4 +143,129 @@ test("recordInjection：每轮一行（含零命中），只追加", async () =>
   const lines = raw.trim().split("\n");
   assert.equal(lines.length, 2);
   assert.deepEqual(JSON.parse(lines[0]!).hits, []);
+});
+
+test("parseMemoryEntry：manual 条目没有出处三件套也合法；旧数据缺 source 严校", () => {
+  const manual = parseMemoryEntry(
+    entry({ id: "mem_m", source: "manual", sessionId: "", turns: [], episodeId: "", scopeId: undefined }),
+  );
+  assert.notEqual(manual, null);
+  assert.equal(manual?.source, "manual");
+  // 缺 source 的旧行按 chat 解读：出处三件套必须齐
+  assert.equal(
+    parseMemoryEntry(entry({ id: "mem_old", source: undefined, sessionId: "", turns: [] })),
+    null,
+  );
+  // status 的 stale 与拍板字段都能读回
+  const decided = parseMemoryEntry(
+    entry({
+      id: "mem_d",
+      status: "stale",
+      conflictResolution: "stale-old",
+      promoteResolution: "user",
+      promotedFrom: "abc",
+      editedAt: 123,
+    }),
+  );
+  assert.equal(decided?.status, "stale");
+  assert.equal(decided?.conflictResolution, "stale-old");
+  assert.equal(decided?.promoteResolution, "user");
+  assert.equal(decided?.promotedFrom, "abc");
+  assert.equal(decided?.editedAt, 123);
+});
+
+test("updateEntry / removeEntry：改一条与删一条（整层原子重写），不在幂等回 null", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const token = store.tokenOf("ws-1");
+  await store.appendScope("ws-1", episode(), [
+    { type: "fact", text: "条目一", keywords: [], turns: [1] },
+    { type: "fact", text: "条目二", keywords: [], turns: [1] },
+  ]);
+  const first = (await store.listByToken(token))[0]!;
+  const updated = await store.updateEntry(token, first.id, (current) => ({
+    ...current,
+    text: "改过的正文",
+    editedAt: 42,
+  }));
+  assert.equal(updated?.text, "改过的正文");
+  assert.equal(updated?.editedAt, 42);
+  assert.equal((await store.listByToken(token)).length, 2); // 另一条还在
+  const removed = await store.removeEntry(token, first.id);
+  assert.equal(removed?.id, first.id);
+  assert.equal((await store.listByToken(token)).length, 1);
+  assert.equal(await store.removeEntry(token, "mem_不存在"), null);
+  assert.equal(await store.updateEntry(token, "mem_不存在", (current) => current), null);
+});
+
+test("moveEntry：搬家不做去重（搬家不是新建，重复文本不该静默丢条）", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const from = store.tokenOf("ws-1");
+  await store.appendScope("ws-1", episode(), [
+    { type: "preference", text: "要搬的偏好", reason: "r", keywords: [], turns: [1] },
+  ]);
+  // user 层先放一条同文本（若走去重搬家会丢）
+  await store.addManual("user", { type: "fact", text: "要搬的偏好", now: 1 });
+  const moved = await store.moveEntry(from, "user", (await store.listByToken(from))[0]!.id, (target) => ({
+    ...target,
+    layer: "user",
+    scopeId: undefined,
+    promoteResolution: "user",
+    promotedFrom: from,
+  }));
+  assert.notEqual(moved, null);
+  assert.equal(await store.listByToken(from).then((list) => list.length), 0);
+  const userEntries = await store.listByToken("user");
+  assert.equal(userEntries.length, 2); // 原有 + 搬来的，没被去重掉
+});
+
+test("addManual：落指定层、盖 id/时间、偏好没 reason 拒收", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const token = store.tokenOf("ws-1");
+  const added = await store.addManual(token, {
+    type: "preference",
+    text: " 手动加的偏好 ",
+    reason: " 用户亲口说的 ",
+    scopeId: "ws-1",
+    now: 100,
+  });
+  assert.notEqual(added, null);
+  assert.equal(added?.text, "手动加的偏好");
+  assert.equal(added?.reason, "用户亲口说的");
+  assert.equal(added?.source, "manual");
+  assert.equal(added?.sessionId, "");
+  assert.deepEqual(added?.turns, []);
+  const rejected = await store.addManual(token, { type: "preference", text: "没理由", now: 101 });
+  assert.equal(rejected, null);
+  const userFact = await store.addManual("user", { type: "fact", text: "user 层的事实", now: 102 });
+  assert.equal(userFact?.layer, "user");
+});
+
+test("listLayers：只列装着条目的层，injections 不算层", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  assert.deepEqual(await store.listLayers(), []);
+  await store.appendScope("ws-1", episode(), [{ type: "fact", text: "一", keywords: [], turns: [1] }]);
+  await store.addManual("user", { type: "fact", text: "二", now: 1 });
+  await store.recordInjection({ sessionId: "s", turn: 1, at: 1, hits: [] });
+  const layers = await store.listLayers();
+  assert.equal(layers.length, 2);
+  assert.ok(layers.some((layer) => layer.token === "user" && layer.count === 1));
+});
+
+test("listInjections：读回含正文快照；坏行跳过", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  await store.recordInjection({
+    sessionId: "s1",
+    turn: 1,
+    at: 1,
+    hits: [{ id: "mem_1", text: "注入时的正文", score: 1, pinned: true }],
+  });
+  await appendFile(join(dir, "injections.jsonl"), "坏行\n", "utf8");
+  const records = await store.listInjections();
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.hits[0]?.text, "注入时的正文");
 });

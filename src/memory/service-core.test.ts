@@ -248,3 +248,163 @@ test("某类提取失败：记账不动，该会话下一轮落定时重试且�
   const log = await readFile(join(dir, "episodes", "log.jsonl"), "utf8");
   assert.equal(log.trim().split("\n").length, 1);
 });
+
+/* ---------- 记忆库写操作（mutate）与 changed 通知 ---------- */
+
+test("mutate：edit / remove / setStatus / addManual 的落盘与回执", async () => {
+  const changes: number[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => null,
+    idleCloseMs: 60_000,
+    log: () => undefined,
+    onChanged: () => changes.push(1),
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+
+  const added = await core.mutate({
+    op: "addManual",
+    token: "user",
+    type: "preference",
+    text: "回复一律用中文",
+    reason: "用户手动记的",
+    scopeId: undefined,
+  });
+  assert.equal(added.ok, true);
+  const entryId = added.ok && added.entry ? added.entry.id : "";
+  assert.notEqual(entryId, "");
+
+  const edited = await core.mutate({ op: "edit", token: "user", entryId, text: "回复优先用中文" });
+  assert.equal(edited.ok && edited.entry?.text, "回复优先用中文");
+  assert.notEqual(edited.ok && edited.entry?.editedAt, undefined);
+
+  const muted = await core.mutate({ op: "setStatus", token: "user", entryId, status: "muted" });
+  assert.equal(muted.ok && muted.entry?.status, "muted");
+
+  // 偏好没 reason 的 manual 拒收；目标不在的 edit 拒收
+  assert.equal((await core.mutate({ op: "addManual", token: "user", type: "preference", text: "没理由" })).ok, false);
+  assert.equal(
+    (await core.mutate({ op: "edit", token: "user", entryId: "mem_不存在", text: "x" })).ok,
+    false,
+  );
+
+  const removed = await core.mutate({ op: "remove", token: "user", entryId });
+  assert.equal(removed.ok, true);
+  // addManual + edit + setStatus + remove 四次成功落盘各通知一次；两次拒收不通知
+  assert.equal(changes.length, 4);
+});
+
+test("mutate：升层拍板 user / workspace 与撤销（撤销回到待拍板）", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const store = new EpisodeStore(dir);
+  // 造一条带 pendingPromote 的工作区层条目
+  const entries = new MemoryEntryStore(dir);
+  const wsToken = entries.tokenOf("ws-1");
+  await entries.appendScope("ws-1", {
+    episodeId: "ep_p", sessionId: "s1", scopeId: "ws-1", fromTurn: 1, toTurn: 1, openedAt: 1, lastAt: 1,
+    turns: [{ turn: 1, at: 1, userText: "u", assistantText: "a" }],
+  }, [{ type: "preference", text: "跨工作区偏好", reason: "r", keywords: [], turns: [1] }]);
+  const seeded = (await entries.listByToken(wsToken))[0]!;
+  await entries.updateEntry(wsToken, seeded.id, (current) => ({ ...current, pendingPromote: true }));
+  const entryId = seeded.id;
+
+  // 拍板「所有工作区」：搬进 user 层，promotedFrom 记原 token，scopeId 保留
+  const promoted = await core.mutate({ op: "decidePromote", token: wsToken, entryId, decision: "user" });
+  assert.equal(promoted.ok && promoted.entry?.layer, "user");
+  assert.equal(promoted.ok && promoted.entry?.promotedFrom, wsToken);
+  assert.equal(await entries.listByToken(wsToken).then((l) => l.length), 0);
+  assert.equal(await entries.listByToken("user").then((l) => l.length), 1);
+
+  // 撤销：搬回原作用域，回到待拍板
+  const undone = await core.mutate({ op: "undoPromote", token: "user", entryId });
+  assert.equal(undone.ok && undone.entry?.layer, "workspace");
+  assert.equal(undone.ok && undone.entry?.pendingPromote, true);
+  assert.equal(undone.ok && undone.entry?.promoteResolution, undefined);
+  assert.equal(await entries.listByToken(wsToken).then((l) => l.length), 1);
+
+  // 拍板「只留本工作区」再撤销：同样回到待拍板
+  await core.mutate({ op: "decidePromote", token: wsToken, entryId, decision: "workspace" });
+  const undoneWs = await core.mutate({ op: "undoPromote", token: wsToken, entryId });
+  assert.equal(undoneWs.ok && undoneWs.entry?.pendingPromote, true);
+  // 没有待确认标记的条目拒收拍板
+  const other = await core.mutate({ op: "addManual", token: "user", type: "fact", text: "无关条目" });
+  assert.equal(
+    (await core.mutate({
+      op: "decidePromote",
+      token: "user",
+      entryId: other.ok && other.entry ? other.entry.id : "",
+      decision: "user",
+    })).ok,
+    false,
+  );
+  // 附带：mutate 全程不碰事件段（代码路径无 episode 写点；等一拍让漏网异步现形）
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await store.loadOpen("s1"), null);
+});
+
+test("mutate：冲突拍板 stale-old / keep-both 与撤销（旧条状态恢复）", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const wsToken = entries.tokenOf("ws-1");
+  await entries.appendScope("ws-1", {
+    episodeId: "ep_c", sessionId: "s1", scopeId: "ws-1", fromTurn: 1, toTurn: 1, openedAt: 1, lastAt: 1,
+    turns: [{ turn: 1, at: 1, userText: "u", assistantText: "a" }],
+  }, [
+    { type: "preference", text: "旧偏好", reason: "r", keywords: [], turns: [1] },
+    { type: "preference", text: "新偏好", reason: "r", keywords: [], turns: [1] },
+  ]);
+  const [oldEntry, newEntry] = await entries.listByToken(wsToken);
+  await entries.updateEntry(wsToken, newEntry!.id, (current) => ({
+    ...current,
+    conflictWith: oldEntry!.id,
+  }));
+
+  const decided = await core.mutate({
+    op: "decideConflict",
+    token: wsToken,
+    entryId: newEntry!.id,
+    decision: "stale-old",
+  });
+  assert.equal(decided.ok && decided.entry?.conflictResolution, "stale-old");
+  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === oldEntry!.id)?.status, "stale");
+
+  const undone = await core.mutate({ op: "undoConflict", token: wsToken, entryId: newEntry!.id });
+  assert.equal(undone.ok && undone.entry?.conflictResolution, undefined);
+  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === oldEntry!.id)?.status, "active");
+
+  const kept = await core.mutate({
+    op: "decideConflict",
+    token: wsToken,
+    entryId: newEntry!.id,
+    decision: "keep-both",
+  });
+  assert.equal(kept.ok && kept.entry?.conflictResolution, "keep-both");
+  assert.equal((await entries.listByToken(wsToken)).find((e) => e.id === oldEntry!.id)?.status, "active");
+  // 没有冲突建议的条目拒收
+  assert.equal(
+    (await core.mutate({ op: "decideConflict", token: wsToken, entryId: oldEntry!.id, decision: "keep-both" })).ok,
+    false,
+  );
+});
+
+test("changed：提取落条目 / 事件段收尾也通知（不只是 mutate）", async () => {
+  const changes: number[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => "[]",
+    idleCloseMs: 60_000,
+    log: () => undefined,
+    onChanged: () => changes.push(1),
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ userText: "第一件事" }));
+  assert.equal(changes.length, 1); // 开段落盘
+  const before = changes.length;
+  await core.turnSettled(turnPayload({ turn: 2, at: 1000 + 31 * 60_000, userText: "隔天新话题" }));
+  // split 收尾（1）+ 三类提取各落一次（3）+ 归档（1）
+  assert.equal(changes.length - before >= 4, true);
+});

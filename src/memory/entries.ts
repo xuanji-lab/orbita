@@ -22,7 +22,7 @@
  * 不迁移——那是没合进 main 的实验数据。
  */
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   MemoryEntry,
@@ -33,6 +33,8 @@ import type {
   MemoryStatus,
 } from "../shared/memory.ts";
 import { isNotFound } from "../main/fs-errors.ts";
+import { writeTextAtomic } from "../main/atomic-write.ts";
+import type { MemoryInjectionRecord } from "../shared/memory.ts";
 
 /**
  * 提取产出、待落盘的条目（extract.ts 解析模型回复铸成这个）。与 MemoryEntry 分开：
@@ -62,8 +64,8 @@ const LOG_SUFFIX = ".jsonl";
 /* ---------- 行解析：字段不齐的行跳过，宽松字段缺席按默认解读 ---------- */
 
 const TYPES: readonly MemoryEntryType[] = ["fact", "preference", "insight"];
-const SOURCES: readonly MemorySource[] = ["chat"];
-const STATUSES: readonly MemoryStatus[] = ["active", "muted"];
+const SOURCES: readonly MemorySource[] = ["chat", "manual"];
+const STATUSES: readonly MemoryStatus[] = ["active", "muted", "stale"];
 
 function enumOf<T extends string>(value: unknown, table: readonly T[]): T | undefined {
   return typeof value === "string" && (table as readonly string[]).includes(value) ? (value as T) : undefined;
@@ -95,23 +97,35 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
     source?: unknown;
     status?: unknown;
     pendingPromote?: unknown;
+    promoteResolution?: unknown;
+    promotedFrom?: unknown;
     conflictWith?: unknown;
+    conflictResolution?: unknown;
+    editedAt?: unknown;
   };
   if (typeof suspect.id !== "string" || suspect.id === "") return null;
   if (typeof suspect.text !== "string" || suspect.text === "") return null;
-  if (typeof suspect.sessionId !== "string" || suspect.sessionId === "") return null;
+  if (typeof suspect.sessionId !== "string") return null;
   if (typeof suspect.at !== "number" || !Number.isFinite(suspect.at)) return null;
-  if (typeof suspect.episodeId !== "string" || suspect.episodeId === "") return null;
+  if (typeof suspect.episodeId !== "string") return null;
   if (!Array.isArray(suspect.keywords)) return null;
-  if (!Array.isArray(suspect.turns) || suspect.turns.length === 0) return null;
+  if (!Array.isArray(suspect.turns)) return null;
   const type = enumOf(suspect.type, TYPES);
   if (type === undefined) return null;
   const layer = enumOf(suspect.layer, ["user", "workspace"] as const satisfies readonly MemoryLayer[]);
   if (layer === undefined) return null;
-  if (layer === "workspace" && (typeof suspect.scopeId !== "string" || suspect.scopeId === "")) return null;
-  const source = enumOf(suspect.source, SOURCES);
-  if (source === undefined) return null;
+  const source = enumOf(suspect.source, SOURCES) ?? "chat";
   const status = enumOf(suspect.status, STATUSES);
+  // 出处三件套（sessionId / turns / episodeId）与 workspace 层的 scopeId是对话
+  // 整理条目的承诺；manual 手动添加没有事件段，全空合法。旧实验数据缺 source
+  // 按 chat 解读（严校），新写的 manual 行 source 显式在。
+  const withProvenance = source === "chat";
+  if (withProvenance && suspect.sessionId === "") return null;
+  if (withProvenance && suspect.turns.length === 0) return null;
+  if (withProvenance && suspect.episodeId === "") return null;
+  if (withProvenance && layer === "workspace" && (typeof suspect.scopeId !== "string" || suspect.scopeId === "")) {
+    return null;
+  }
   const keywords: string[] = [];
   for (const keyword of suspect.keywords) {
     if (typeof keyword !== "string") return null;
@@ -128,7 +142,11 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
     text: suspect.text,
     keywords,
     layer,
-    ...(layer === "workspace" ? { scopeId: suspect.scopeId as string } : null),
+    // scopeId 任何层都保留：升到 user 层的条目带着它（撤销升层搬回时它还得在，
+    // sha1 单向反解不回来）；只做非空字符串校验，语义校验在 withProvenance 分支
+    ...(typeof suspect.scopeId === "string" && suspect.scopeId !== ""
+      ? { scopeId: suspect.scopeId }
+      : null),
     sessionId: suspect.sessionId,
     turns: [...new Set(turns)].sort((a, b) => a - b),
     at: suspect.at,
@@ -137,8 +155,20 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
     ...(typeof suspect.reason === "string" && suspect.reason.trim() !== "" ? { reason: suspect.reason } : null),
     ...(status !== undefined ? { status } : null),
     ...(suspect.pendingPromote === true ? { pendingPromote: true } : null),
+    ...(enumOf(suspect.promoteResolution, ["user", "workspace"] as const) !== undefined
+      ? { promoteResolution: enumOf(suspect.promoteResolution, ["user", "workspace"] as const)! }
+      : null),
+    ...(typeof suspect.promotedFrom === "string" && suspect.promotedFrom !== ""
+      ? { promotedFrom: suspect.promotedFrom }
+      : null),
     ...(typeof suspect.conflictWith === "string" && suspect.conflictWith !== ""
       ? { conflictWith: suspect.conflictWith }
+      : null),
+    ...(enumOf(suspect.conflictResolution, ["stale-old", "keep-both"] as const) !== undefined
+      ? { conflictResolution: enumOf(suspect.conflictResolution, ["stale-old", "keep-both"] as const)! }
+      : null),
+    ...(typeof suspect.editedAt === "number" && Number.isFinite(suspect.editedAt)
+      ? { editedAt: suspect.editedAt }
       : null),
   };
 }
@@ -146,6 +176,12 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
 /** 去重键：trim + 内部空白折叠。逐字重复才归并，措辞有差的就是另一条记忆。 */
 function normalizeText(text: string): string {
   return text.trim().replace(/\s+/g, " ");
+}
+
+/** scopeId → 盘上 token（sha1 hex，定长且恒合法）。模块级函数：主进程的读面 /
+ * 写转发也要算它（addManual 补 scopeId 时反向匹配工作区表），不该为此建 store。 */
+export function tokenOfScope(scopeId: string): string {
+  return createHash("sha1").update(scopeId).digest("hex");
 }
 
 export class MemoryEntryStore {
@@ -157,7 +193,7 @@ export class MemoryEntryStore {
 
   /** scopeId → 盘上文件名（sha1 hex，定长且恒合法）。 */
   tokenOf(scopeId: string): string {
-    return createHash("sha1").update(scopeId).digest("hex");
+    return tokenOfScope(scopeId);
   }
 
   private async readLayer(path: string): Promise<MemoryEntry[]> {
@@ -261,9 +297,157 @@ export class MemoryEntryStore {
     sessionId: string;
     turn: number;
     at: number;
-    hits: readonly { id: string; score: number; pinned?: boolean }[];
+    hits: readonly { id: string; score: number; pinned?: boolean; text?: string }[];
   }): Promise<void> {
     await mkdir(this.dir, { recursive: true });
     await appendFile(join(this.dir, "injections.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+  }
+
+  /**
+   * 注入账本全量（按落账顺序；主进程的记忆库读面用，服务自己不读）。坏行跳过、
+   * 文件不存在 = 空。
+   */
+  async listInjections(): Promise<MemoryInjectionRecord[]> {
+    let raw: string;
+    try {
+      raw = await readFile(join(this.dir, "injections.jsonl"), "utf8");
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw cause;
+    }
+    const records: MemoryInjectionRecord[] = [];
+    for (const line of raw.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const parsed = JSON.parse(line) as MemoryInjectionRecord;
+        if (typeof parsed?.sessionId !== "string") continue;
+        if (typeof parsed?.turn !== "number" || !Array.isArray(parsed?.hits)) continue;
+        records.push(parsed);
+      } catch {
+        // 半截行：跳过
+      }
+    }
+    return records;
+  }
+
+  /** 盘上有哪些条目层（token + 条数；injections 不是层，不列）。只有装着条目的
+   * 文件算一层——删空的文件还躺在盘上，列出来是一个点不进去的空页。 */
+  async listLayers(): Promise<{ token: string; count: number }[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.dir);
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw cause;
+    }
+    const found: { token: string; count: number }[] = [];
+    for (const name of names) {
+      if (!name.endsWith(LOG_SUFFIX) || name === "injections.jsonl") continue;
+      const token = name.slice(0, -LOG_SUFFIX.length);
+      const entries = await this.readLayer(join(this.dir, name)).catch(() => []);
+      if (entries.length > 0) found.push({ token, count: entries.length });
+    }
+    return found;
+  }
+
+  /* ---------- 记忆库写操作的改写路径（整份换掉，临时文件 + rename） ---------- */
+
+  /** 按层文件路径读（listLayers 的内部用，token 已是文件名）。 */
+  listByToken(token: string): Promise<MemoryEntry[]> {
+    return this.readLayer(join(this.dir, `${token}${LOG_SUFFIX}`));
+  }
+
+  /** 整层原子重写（改写路径的唯一落盘点；调用方保证条目已变换好）。 */
+  async writeLayer(token: string, entries: readonly MemoryEntry[]): Promise<void> {
+    await writeTextAtomic(
+      join(this.dir, `${token}${LOG_SUFFIX}`),
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+  }
+
+  /** 原地改一条（读全量 → 变换 → 整层重写）。apply 只改数据不改条数；返回改后
+   * 的条目；null = 这个 id 不在这一层（幂等，remove 同一口径）。 */
+  async updateEntry(
+    token: string,
+    entryId: string,
+    apply: (entry: MemoryEntry) => MemoryEntry,
+  ): Promise<MemoryEntry | null> {
+    const existing = await this.listByToken(token);
+    const at = existing.findIndex((entry) => entry.id === entryId);
+    if (at < 0) return null;
+    const next = apply(existing[at]!);
+    existing.splice(at, 1, next);
+    await this.writeLayer(token, existing);
+    return next;
+  }
+
+  /** 删一条（读全量 → 滤掉 → 重写）。返回被删的条目；不在返回 null（幂等）。 */
+  async removeEntry(token: string, entryId: string): Promise<MemoryEntry | null> {
+    const existing = await this.listByToken(token);
+    const removed = existing.find((entry) => entry.id === entryId) ?? null;
+    if (removed === null) return null;
+    await this.writeLayer(
+      token,
+      existing.filter((entry) => entry.id !== entryId),
+    );
+    return removed;
+  }
+
+  /**
+   * 搬一条到另一层（升层 / 撤销升层）：从源层移除、变换（改 layer / scopeId /
+   * 拍板字段）、追加进目标层。**不做去重**——条目是搬家不是新建，文本重复
+   * 不该让搬家静默丢条。返回搬后的条目；源层里没有返回 null。
+   */
+  async moveEntry(
+    fromToken: string,
+    toToken: string,
+    entryId: string,
+    apply: (entry: MemoryEntry) => MemoryEntry,
+  ): Promise<MemoryEntry | null> {
+    const moved = await this.removeEntry(fromToken, entryId);
+    if (moved === null) return null;
+    const next = apply(moved);
+    await mkdir(this.dir, { recursive: true });
+    await appendFile(
+      join(this.dir, `${toToken}${LOG_SUFFIX}`),
+      `${JSON.stringify(next)}\n`,
+      "utf8",
+    );
+    return next;
+  }
+
+  /**
+   * 手动添加（记忆库「手动添加」钮）：落在指定层，source = manual、无出处
+   * （sessionId / turns / episodeId 为空）。偏好 / 经验必须带 reason（同提取
+   * 侧的契约：落盘侧兑底）。scopeId 由调用方带（主进程能从工作区表解出来；
+   * Home 作用域解不出就省略——寻址靠 token，scopeId 只是展示与拍板参考）。
+   * 返回铸好的完整条目；正文空 / 缺 reason 返回 null。
+   */
+  async addManual(
+    token: string,
+    input: { type: MemoryEntryType; text: string; reason?: string; scopeId?: string; now: number },
+  ): Promise<MemoryEntry | null> {
+    const text = input.text.trim();
+    if (text === "") return null;
+    const reason = input.reason?.trim() ?? "";
+    if (input.type !== "fact" && reason === "") return null;
+    const layer: MemoryLayer = token === "user" ? "user" : "workspace";
+    const entry: MemoryEntry = {
+      id: `mem_${randomUUID()}`,
+      type: input.type,
+      text,
+      ...(reason !== "" ? { reason } : null),
+      keywords: [],
+      layer,
+      ...(layer === "workspace" && input.scopeId !== undefined ? { scopeId: input.scopeId } : null),
+      sessionId: "",
+      turns: [],
+      at: input.now,
+      episodeId: "",
+      source: "manual",
+    };
+    await mkdir(this.dir, { recursive: true });
+    await appendFile(join(this.dir, `${token}${LOG_SUFFIX}`), `${JSON.stringify(entry)}\n`, "utf8");
+    return entry;
   }
 }

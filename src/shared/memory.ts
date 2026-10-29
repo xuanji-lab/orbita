@@ -70,7 +70,8 @@ export interface MemoryEntry {
   /** 升层拍板的结果（撤销键要用）：user = 已升到所有工作区（届时条目搬进 user 层，
    * 原作用域记在 promotedFrom）；workspace = 只留本工作区（pendingPromote 随之清掉） */
   promoteResolution?: "user" | "workspace";
-  /** 升到 user 层前的原作用域 scopeId（撤销升层要搬回去） */
+  /** 升到 user 层前的原作用域 token（撤销升层直接按它搬回；sha1 单向回不出
+   * scopeId，寻址本来就是 token） */
   promotedFrom?: string;
   /** 可能与哪条旧偏好矛盾（那条的 id）。只给建议，不改旧条目 */
   conflictWith?: string;
@@ -115,6 +116,8 @@ export interface MemoryEpisode {
   /** `ep_` 前缀的 uuid */
   episodeId: string;
   sessionId: string;
+  /** 段发生时的作用域（提取落在这一层） */
+  scopeId: string;
   /** 段内轮号区间（含两端；单轮段两端相等） */
   fromTurn: number;
   toTurn: number;
@@ -377,12 +380,15 @@ export type MemoryMutation =
       status: "active" | "muted";
     }
   | {
-      /** 手动添加（落在指定作用域）：type + 正文；偏好 / 经验必须带 reason */
+      /** 手动添加（落在指定作用域）：type + 正文；偏好 / 经验必须带 reason。
+       * scopeId 由主进程能解到就填（工作区表反查 token），解不出省略——
+       * 寻址靠 token，scopeId 只是展示与拍板参考 */
       op: "addManual";
       token: MemoryScopeToken;
       type: MemoryEntryType;
       text: string;
       reason?: string;
+      scopeId?: string;
     }
   | {
       /** 升层拍板：user = 搬进 user 层（原作用域记 promotedFrom）；workspace = 只留本工作区 */

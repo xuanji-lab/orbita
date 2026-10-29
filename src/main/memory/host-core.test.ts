@@ -123,3 +123,48 @@ test("turnSettled：服务不在就丢（构建是易耗品）；在就转发", 
   assert.equal(sent.type, "turnSettled");
   assert.equal(sent.turn, 1);
 });
+
+test("mutate：回执配对；超时与服务不在回 ok:false；changed 回调被触发", async () => {
+  const ref: { current: FakeChild | null } = { current: null };
+  const changes: number[] = [];
+  const h = new MemoryServiceHostCore({
+    forkRuntime: () => {
+      const child = new FakeChild({});
+      ref.current = child;
+      void child.waitReady();
+      return child;
+    },
+    dir: "/tmp/memory-dir",
+    recallTimeoutMs: 30,
+    mutateTimeoutMs: 30,
+    onChanged: () => changes.push(1),
+    log: () => undefined,
+  });
+  // 服务不在：直接 ok:false，不 fork
+  const offline = await h.mutate({ op: "remove", token: "user", entryId: "mem_x" });
+  assert.equal(offline.ok, false);
+  await h.ensureStarted();
+  // 正常回执：ok 双分支原样透传
+  const pending = h.mutate({ op: "edit", token: "user", entryId: "mem_1", text: "新正文" });
+  const sent = ref.current!.posted[1] as { type: string; requestId: string; mutation: { op: string } };
+  assert.equal(sent.type, "mutate");
+  assert.equal(sent.mutation.op, "edit");
+  ref.current!.emit("message", {
+    type: "mutateResult",
+    requestId: sent.requestId,
+    ok: true,
+    entry: { id: "mem_1", text: "新正文" } as never,
+  });
+  const outcome = await pending;
+  assert.equal(outcome.ok, true);
+  // 服务侧写盘通知：changed → onChanged
+  ref.current!.emit("message", { type: "changed" });
+  assert.equal(changes.length, 1);
+  // 超时：ok:false 带一句人话
+  const slow = h.mutate({ op: "remove", token: "user", entryId: "mem_2" });
+  assert.equal((await slow).ok, false);
+  // 崩溃：在途 mutate 回 ok:false
+  const inFlight = h.mutate({ op: "remove", token: "user", entryId: "mem_3" });
+  ref.current!.exit(1);
+  assert.equal((await inFlight).ok, false);
+});

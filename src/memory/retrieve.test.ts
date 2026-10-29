@@ -16,8 +16,9 @@ import {
 } from "./retrieve.ts";
 import type { MemoryEntry } from "../shared/memory.ts";
 
-function entry(overrides: Partial<MemoryEntry> & { id: string }): MemoryEntry {
+function entry(overrides: Partial<MemoryEntry> & { id?: string }): MemoryEntry {
   return {
+    id: "mem_default",
     type: "fact",
     text: "用户的项目 orbita 用 bun",
     keywords: ["bun", "orbita"],

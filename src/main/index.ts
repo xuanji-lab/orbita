@@ -22,6 +22,7 @@ import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from ".
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
 import { MemoryServiceHostCore } from "./memory/host-core.ts";
+import { registerMemoryIpc } from "./memory/ipc.ts";
 import { memoryScopeOf, type MemoryRecallOutcome } from "../shared/memory.ts";
 import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
 import { choreModelPayload } from "./memory/chore.ts";
@@ -646,6 +647,8 @@ void app.whenReady().then(async () => {
     runtimePath: resolveMemoryRuntimePath(__dirname),
     dir: join(configDir, "memory"),
     env: agentProcessEnv,
+    // 服务侧任何写盘（提取落条目 / 事件段收尾 / 记忆库写操作）→ 广播给窗口刷新
+    onChanged: () => broadcastAgentEvent({ type: "memoryChanged" }),
   });
   const memoryTurns = new MemoryTurnTracker({
     load: async (id) => {
@@ -667,6 +670,21 @@ void app.whenReady().then(async () => {
   if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
     void memoryHost.ensureStarted();
   }
+  // 记忆库的读写面（实验功能 memory-system）：读在主进程直读 JSONL，写转发给
+  // 记忆服务（唯一写者）；会话标题 / 工作区名这些连接属性在这里注入
+  registerMemoryIpc({
+    dir: join(configDir, "memory"),
+    deps: {
+      sessionTitleOf: async (id) => (await sessions.readMeta(id).catch(() => null))?.title ?? null,
+      workspaces: async () => workspaces.list(),
+      readMeta: (id) => sessions.readMeta(id),
+    },
+    mutate: async (mutation) => {
+      // 服务不在先拉（开关刚开的第一轮 / 崩溃后自愈）；拉不起 mutate 会回 ok:false
+      if (!memoryHost.isRunning()) await memoryHost.ensureStarted();
+      return memoryHost.mutate(mutation);
+    },
+  });
   registerSessionIpc(
     sessions,
     (id) => {

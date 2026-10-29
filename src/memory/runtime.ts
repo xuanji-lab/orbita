@@ -18,7 +18,6 @@ import type {
   MemoryServiceMessage,
 } from "../shared/memory.ts";
 import { MemoryServiceCore, type MemoryCallModel } from "./service-core.ts";
-
 /** Electron 的 utility 进程 parentPort 的结构面（agent runtime 的 ParentPortLike 同款）。 */
 type ParentPortLike = {
   on(event: "message", listener: (event: { data: unknown }) => void): void;
@@ -93,6 +92,8 @@ const callModel: MemoryCallModel = async (system, prompt) => {
 const core = new MemoryServiceCore({
   callModel,
   log: (message, ...args) => console.log(message, ...args),
+  // 任何写盘后告诉主进程（它广播 memoryChanged 让界面重拉）
+  onChanged: () => post({ type: "changed" }),
 });
 
 parentPort.on("message", (event: { data: unknown }) => {
@@ -115,6 +116,22 @@ parentPort.on("message", (event: { data: unknown }) => {
       .catch((cause: unknown) => {
         console.error("[memory] recall 路径抛错（回空命中）", cause);
         post({ type: "recallResult", requestId, hits: [] });
+      });
+    return;
+  }
+  if (command.type === "mutate") {
+    const { requestId } = command;
+    void core
+      .mutate(command.mutation)
+      .then((outcome) => post({ type: "mutateResult", requestId, ...outcome }))
+      .catch((cause: unknown) => {
+        console.error("[memory] mutate 路径抛错", cause);
+        post({
+          type: "mutateResult",
+          requestId,
+          ok: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
       });
     return;
   }

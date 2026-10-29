@@ -8,7 +8,12 @@ import { MemoryServiceHostCore } from "./host-core.ts";
 
 export class MemoryServiceHost extends MemoryServiceHostCore {
   /** env 沿主进程的（agent 进程同款：模型目录缓存的 env 变量在主进程挂上）。 */
-  constructor(input: { runtimePath: string; dir: string; env?: Record<string, string | undefined> }) {
+  constructor(input: {
+    runtimePath: string;
+    dir: string;
+    env?: Record<string, string | undefined>;
+    onChanged?: () => void;
+  }) {
     super({
       forkRuntime: () =>
         utilityProcess.fork(input.runtimePath, [], {
@@ -16,6 +21,7 @@ export class MemoryServiceHost extends MemoryServiceHostCore {
           ...(input.env !== undefined ? { env: input.env } : {}),
         }),
       dir: input.dir,
+      ...(input.onChanged !== undefined ? { onChanged: input.onChanged } : {}),
     });
   }
 }

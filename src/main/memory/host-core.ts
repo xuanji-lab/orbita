@@ -13,6 +13,8 @@ import { randomUUID } from "node:crypto";
 import type {
   MemoryChoreModel,
   MemoryHit,
+  MemoryMutation,
+  MemoryMutationOutcome,
   MemoryServiceCommand,
   MemoryServiceMessage,
 } from "../../shared/memory.ts";
@@ -31,6 +33,10 @@ export interface MemoryServiceHostOptions {
   dir: string;
   /** 召回转发的硬超时；超时回空命中。agent 侧还有一层自己的超时 */
   recallTimeoutMs?: number;
+  /** 记忆库写操作的硬超时（按 token 互斥下通常毫秒级；宽跟 15 秒兑极端） */
+  mutateTimeoutMs?: number;
+  /** 服务侧任何写盘后回调一次（index.ts 里接 broadcastAgentEvent） */
+  onChanged?: () => void;
   log?: (message: string, ...args: unknown[]) => void;
 }
 
@@ -46,6 +52,7 @@ export interface MemoryTurnPayload {
 }
 
 const DEFAULT_RECALL_TIMEOUT_MS = 4_000;
+const DEFAULT_MUTATE_TIMEOUT_MS = 15_000;
 
 interface PendingRecall {
   resolve: (hits: MemoryHit[]) => void;
@@ -56,17 +63,25 @@ export class MemoryServiceHostCore {
   private readonly forkRuntime: () => MemoryChild;
   private readonly dir: string;
   private readonly recallTimeoutMs: number;
+  private readonly mutateTimeoutMs: number;
+  private readonly onChanged: () => void;
   private readonly log: (message: string, ...args: unknown[]) => void;
   private child: MemoryChild | null = null;
   private ready: Promise<boolean> | null = null;
   private chore: MemoryChoreModel | undefined;
   private readonly pending = new Map<string, PendingRecall>();
+  private readonly pendingMutates = new Map<
+    string,
+    { resolve: (outcome: MemoryMutationOutcome) => void; timer: NodeJS.Timeout }
+  >();
   private seq = 0;
 
   constructor(options: MemoryServiceHostOptions) {
     this.forkRuntime = options.forkRuntime;
     this.dir = options.dir;
     this.recallTimeoutMs = options.recallTimeoutMs ?? DEFAULT_RECALL_TIMEOUT_MS;
+    this.mutateTimeoutMs = options.mutateTimeoutMs ?? DEFAULT_MUTATE_TIMEOUT_MS;
+    this.onChanged = options.onChanged ?? (() => undefined);
     this.log = options.log ?? ((message, ...args) => console.log(message, ...args));
   }
 
@@ -108,6 +123,20 @@ export class MemoryServiceHostCore {
           clearTimeout(pending.timer);
           this.pending.delete(message.requestId);
           pending.resolve(message.hits);
+        }
+        if (message.type === "mutateResult") {
+          const pending = this.pendingMutates.get(message.requestId);
+          if (pending === undefined) return; // 超时后到的回执：丢弃
+          clearTimeout(pending.timer);
+          this.pendingMutates.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve({ ok: true, entry: message.entry });
+          } else {
+            pending.resolve({ ok: false, error: message.error });
+          }
+        }
+        if (message.type === "changed") {
+          this.onChanged();
         }
       });
       child.on("exit", () => {
@@ -170,6 +199,26 @@ export class MemoryServiceHostCore {
     });
   }
 
+  /**
+   * 转发记忆库写操作（服务是唯一写者）。服务不在 / 超时 / 崩溃 → ok:false；
+   * 调用方（IPC handler）把 error 原样给 renderer。
+   */
+  mutate(mutation: MemoryMutation): Promise<MemoryMutationOutcome> {
+    if (this.child === null) {
+      return Promise.resolve({ ok: false, error: "记忆服务没在跑（先拉起或稍后再试）" });
+    }
+    const requestId = `${this.seq += 1}:${randomUUID()}`;
+    return new Promise<MemoryMutationOutcome>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingMutates.delete(requestId);
+        resolve({ ok: false, error: "记忆服务没在限定时间内回执（可能正在整理，稍后再试）" });
+      }, this.mutateTimeoutMs);
+      timer.unref?.();
+      this.pendingMutates.set(requestId, { resolve, timer });
+      this.child?.postMessage({ type: "mutate", requestId, mutation });
+    });
+  }
+
   private dropChild(reason: string, killIt = true): void {
     const child = this.child;
     this.child = null;
@@ -179,6 +228,11 @@ export class MemoryServiceHostCore {
       pending.resolve([]);
     }
     this.pending.clear();
+    for (const [, pending] of this.pendingMutates) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: "记忆服务停了" });
+    }
+    this.pendingMutates.clear();
     if (child !== null) {
       this.log(`[memory] 记忆服务停了（${reason}）；在途召回已回空命中`);
       if (!killIt) return;

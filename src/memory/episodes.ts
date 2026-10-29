@@ -273,6 +273,29 @@ export class EpisodeStore {
     );
   }
 
+  /** 归档的全部事件段（主进程记忆库读面用：条目的原话片段从段快照取）。坏行跳过。 */
+  async listArchived(): Promise<MemoryEpisode[]> {
+    let raw: string;
+    try {
+      raw = await readFile(join(this.dir, "episodes", "log.jsonl"), "utf8");
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw cause;
+    }
+    const episodes: MemoryEpisode[] = [];
+    for (const line of raw.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const parsed = JSON.parse(line) as MemoryEpisode;
+        if (typeof parsed?.episodeId !== "string" || !Array.isArray(parsed?.turns)) continue;
+        episodes.push(parsed);
+      } catch {
+        // 半截行：跳过
+      }
+    }
+    return episodes;
+  }
+
   /**
    * 盘上全部开段与待提取段（启动清扫用）。文件名是 sha1 / uuid 单向，回不出
    * sessionId，所以返回段本身——sessionId 在段里。单个文件坏了跳过它，不挡别的段。
