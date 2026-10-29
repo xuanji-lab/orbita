@@ -833,6 +833,8 @@
 }
 
 .menu-row-tail {
+  /* 不许被压扁，理由见 Menu.tsx 的 MenuRow（flexShrink: 0） */
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
