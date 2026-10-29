@@ -21,11 +21,11 @@ const BODY_WEIGHT = 0.3;
 /** 阈值门控：低于这个归一化分就不注入。「勉强沾边」的条目只会稀释 prompt。 */
 const MIN_SCORE = 0.3;
 
-/** 一次最多注入几条（不含常驻）。 */
-const LIMIT = 5;
+/** 一次最多注入几条（不含常驻）。向量融合路径同一个数。 */
+export const RECALL_LIMIT = 5;
 
-/** 词法命中注入的总字符预算（条目正文累加）。超了就不装——半句话比没有更难用。 */
-const MAX_CHARS = 1500;
+/** 命中注入的总字符预算（条目正文累加）。超了就不装——半句话比没有更难用。 */
+export const RECALL_MAX_CHARS = 1500;
 
 /** 时间衰减半衰期（天）。180 天：记忆是长期事实，「三个月前那条」只比今天的低一档。 */
 const HALF_LIFE_DAYS = 180;
@@ -51,6 +51,8 @@ export type EntryScorer = (query: MemoryQuery, entry: MemoryEntry) => number;
 
 export interface RetrieveOptions {
   scorer?: EntryScorer;
+  /** 已经装车的条目（常驻）：与它们同源复述的命中不再占名额 */
+  taken?: readonly MemoryEntry[];
   /** 「现在」（epoch ms）。测试固定它，别让衰减把用例变成漂移的。 */
   now?: number;
   limit?: number;
@@ -142,8 +144,8 @@ export function retrieveMemories(
   if (entries.length === 0 || tokens.length === 0) return [];
   const now = options.now ?? Date.now();
   const threshold = options.threshold ?? MIN_SCORE;
-  const limit = options.limit ?? LIMIT;
-  const maxChars = options.maxChars ?? MAX_CHARS;
+  const limit = options.limit ?? RECALL_LIMIT;
+  const maxChars = options.maxChars ?? RECALL_MAX_CHARS;
   const scorer = options.scorer ?? lexicalScore;
   const parsed: MemoryQuery = { text: query, tokens: new Set(tokens) };
 
@@ -156,15 +158,66 @@ export function retrieveMemories(
     .filter((hit) => hit.relevance >= threshold)
     .sort((a, b) => b.score - a.score || b.entry.at - a.entry.at);
 
+  return selectHits(
+    ranked.map((candidate): MemoryHit => ({ entry: candidate.entry, score: candidate.score })),
+    { limit, maxChars, taken: options.taken ?? [] },
+  );
+}
+
+/**
+ * 同源复述判定的文字重叠门槛（Jaccard = 交集 / 并集）。2026-10-29 隔离实例 memui 的
+ * 8 段真实对话，用改写后的提取提示词跑出的条目逐对人工标注：同一个意思换个说法
+ * （事实 / 偏好 / 经验三次提取各写一遍）Jaccard 落在 0.27–0.57；层次真不同的同源对
+ * （「写作前喝不加糖的手冲咖啡」对「安排习惯时排除用户说有负面影响的东西」）都 ≤ 0.17。
+ * 不用重叠系数（交集 / 较小集合）：抽象后的经验句更长、又把具体例子包在里面，
+ * 重叠系数会把它和出处事实判成复述（实测 0.38–0.54，与真复述的 0.5–0.9 搅在一起）。
+ */
+const RESTATEMENT_JACCARD = 0.25;
+
+function tokenBag(entry: MemoryEntry): Set<string> {
+  return new Set([...tokenize(entry.text), ...entry.keywords.flatMap((keyword) => tokenize(keyword))]);
+}
+
+/**
+ * 两条记忆是不是同一来源的复述：**同一事件段、支撑轮号有交集，且文字大量重叠**。
+ *
+ * 为什么按来源而不是只按文字相似：QUMem 每段对话按三类各提取一次，同一句话常被
+ * 写成事实 + 偏好 + 经验三条（实测召回的 5 个名额里 3 个是同一件事）。原文的兜底
+ * 在检索端——合并去重，且同一段原文只放一次；Mandol 的 MMR 也按「来源重叠」算冗余。
+ * 只看来源会误伤（一句话里讲了两件事；或经验把事实抽象了一层——QUMem 明说同一段
+ * 交互可以支撑不同抽象层次的记忆），所以再加文字门槛。
+ * 手动添加的条目没有事件段（episodeId 为空），永远不算同源。
+ */
+export function isRestatement(a: MemoryEntry, b: MemoryEntry): boolean {
+  if (a.episodeId === "" || a.episodeId !== b.episodeId) return false;
+  if (!a.turns.some((turn) => b.turns.includes(turn))) return false;
+  const left = tokenBag(a);
+  const right = tokenBag(b);
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  const union = left.size + right.size - shared;
+  return union > 0 && shared / union >= RESTATEMENT_JACCARD;
+}
+
+/**
+ * 按名次装车：top N + 字符预算 + 同源复述只留名次最高的一条（不占名额，后面的补上）。
+ * 词法召回与向量融合两条路共用——名额怎么分只在这里定一次。
+ */
+export function selectHits(
+  ranked: readonly MemoryHit[],
+  options: { limit: number; maxChars: number; taken: readonly MemoryEntry[] },
+): MemoryHit[] {
   const hits: MemoryHit[] = [];
   let used = 0;
   for (const candidate of ranked) {
-    if (hits.length >= limit) break;
+    if (hits.length >= options.limit) break;
+    if (options.taken.some((entry) => isRestatement(entry, candidate.entry))) continue;
+    if (hits.some((hit) => isRestatement(hit.entry, candidate.entry))) continue;
     const size = candidate.entry.text.length;
     // 装不下就跳过这条试下一条（短的也许还装得下）；一条都还没装时无条件收
-    if (hits.length > 0 && used + size > maxChars) continue;
+    if (hits.length > 0 && used + size > options.maxChars) continue;
     used += size;
-    hits.push({ entry: candidate.entry, score: candidate.score });
+    hits.push(candidate);
   }
   return hits;
 }
@@ -207,6 +260,8 @@ export function pickPinned(entries: readonly MemoryEntry[]): MemoryEntry[] {
   let used = 0;
   for (const entry of pinned) {
     if (picked.length >= PINNED_LIMIT) break;
+    // 常驻也会有同源复述（同一段对话提取的偏好一起升到所有工作区）：只留最新那条
+    if (picked.some((kept) => isRestatement(kept, entry))) continue;
     if (picked.length > 0 && used + entry.text.length > PINNED_MAX_CHARS) continue;
     used += entry.text.length;
     picked.push(entry);
@@ -246,7 +301,7 @@ export function recallHits(
   const lexical = retrieveMemories(
     active.filter((entry) => !pinnedIds.has(entry.id)),
     query,
-    { now },
+    { now, taken: pinned },
   );
   return [
     ...pinned.map((entry): MemoryHit => ({ entry, score: 1, pinned: true })),

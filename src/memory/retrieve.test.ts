@@ -7,10 +7,12 @@ import assert from "node:assert/strict";
 import {
   dedupeById,
   isRecallable,
+  isRestatement,
   lexicalScore,
   pickPinned,
   recallHits,
   retrieveMemories,
+  selectHits,
   tokenize,
   type MemoryQuery,
 } from "./retrieve.ts";
@@ -67,9 +69,10 @@ test("lexicalScore：关键词 bigram 覆盖通道——复合关键词撞上部
 test("retrieveMemories：阈值门控、top 限制、字符预算", () => {
   const now = Date.now();
   const pool = [
-    entry({ id: "m1", keywords: ["bun"], text: "第一条".repeat(10), at: now }),
-    entry({ id: "m2", keywords: ["bun"], text: "第二条".repeat(10), at: now - 1000 }),
-    entry({ id: "m3", keywords: ["无关"], text: "不相关的记忆", at: now }),
+    // 各自不同的轮：这里测阈值与预算，不测同源复述（见文末那组）
+    entry({ id: "m1", keywords: ["bun"], text: "第一条".repeat(10), at: now, turns: [1] }),
+    entry({ id: "m2", keywords: ["bun"], text: "第二条".repeat(10), at: now - 1000, turns: [2] }),
+    entry({ id: "m3", keywords: ["无关"], text: "不相关的记忆", at: now, turns: [3] }),
   ];
   const hits = retrieveMemories(pool, "bun 用哪个", { now });
   assert.equal(hits.length, 2); // m3 过不了阈值
@@ -87,7 +90,7 @@ test("retrieveMemories：空库 / 空 query 返回空", () => {
 
 test("pickPinned：只取 user 层偏好，按时间新者前，条数与预算双门", () => {
   const pool = [
-    entry({ id: "old", type: "preference", layer: "user", scopeId: undefined, text: "旧的偏好", at: 1 }),
+    entry({ id: "old", type: "preference", layer: "user", scopeId: undefined, text: "旧的偏好", at: 1, turns: [2] }),
     entry({ id: "fact-user", layer: "user", scopeId: undefined, text: "user 层的事实", at: 999 }),
     entry({ id: "pref-ws", type: "preference", text: "工作区层的偏好", at: 998 }),
     entry({ id: "new", type: "preference", layer: "user", scopeId: undefined, text: "新的偏好", at: 100 }),
@@ -115,4 +118,63 @@ test("dedupeById / isRecallable 的独立口径", () => {
   assert.equal(dedupeById([entry({ id: "a" }), entry({ id: "a" })]).length, 1);
   assert.equal(isRecallable(entry({ id: "a" })), true);
   assert.equal(isRecallable(entry({ id: "a", status: "muted" })), false);
+});
+
+/* ---------- 同源复述（三类提取各写一遍的同一件事）只占一个名额 ---------- */
+
+// 2026-10-29 隔离实例 memui 的真实提取条目（同一事件段、同一轮）
+const coffeeFact = entry({
+  id: "f",
+  type: "fact",
+  text: "用户写作前习惯喝不加糖的手冲咖啡，并称甜饮会让自己犯困（2026-10-29 陈述）。",
+  keywords: ["手冲咖啡", "不加糖", "甜饮", "犯困", "写作"],
+  turns: [3],
+});
+const coffeePreference = entry({
+  id: "p",
+  type: "preference",
+  text: "2026-10-29，用户表示写作前习惯喝不加糖的手冲咖啡，并且不喝甜饮，因为甜饮会让用户犯困。",
+  keywords: ["手冲咖啡", "不加糖", "甜饮", "写作习惯"],
+  turns: [3],
+});
+const coffeeInsight = entry({
+  id: "i",
+  type: "insight",
+  text: "在为用户安排写作等日常习惯时，应排除用户明确说会带来负面影响的东西（如甜饮让人犯困），只保留其已验证有效的做法（如写作前喝不加糖的手冲咖啡），不要按通用建议额外添加。",
+  keywords: ["日常习惯", "负面影响", "排除", "已验证做法"],
+  turns: [3],
+});
+
+test("isRestatement：同段同轮的换说法复述算；抽象了一层的经验不算", () => {
+  assert.equal(isRestatement(coffeeFact, coffeePreference), true);
+  // QUMem：同一段交互可以支撑不同抽象层次的记忆——这对要两条都留
+  assert.equal(isRestatement(coffeeFact, coffeeInsight), false);
+  assert.equal(isRestatement(coffeePreference, coffeeInsight), false);
+});
+
+test("isRestatement：不同事件段 / 轮号不相交 / 手动添加都不算同源", () => {
+  assert.equal(isRestatement(coffeeFact, { ...coffeePreference, episodeId: "ep_2" }), false);
+  assert.equal(isRestatement(coffeeFact, { ...coffeePreference, turns: [4] }), false);
+  assert.equal(isRestatement({ ...coffeeFact, episodeId: "" }, { ...coffeePreference, episodeId: "" }), false);
+});
+
+test("selectHits：复述只留名次最高的一条，名额让给后面的不同内容", () => {
+  const other = (id: string) => entry({ id, text: `另一件事 ${id}`, keywords: [id], episodeId: `ep_${id}` });
+  const ranked = [coffeePreference, coffeeFact, coffeeInsight, other("a"), other("b"), other("c"), other("d")].map(
+    (item, index) => ({ entry: item, score: 1 - index * 0.1 }),
+  );
+  const hits = selectHits(ranked, { limit: 5, maxChars: 10_000, taken: [] });
+  assert.deepEqual(
+    hits.map((hit) => hit.entry.id),
+    ["p", "i", "a", "b", "c"],
+  );
+});
+
+test("recallHits：常驻已装车的偏好，它的同源复述不再占词法名额", () => {
+  const pinned = { ...coffeePreference, layer: "user" as const, scopeId: undefined };
+  const hits = recallHits({ user: [pinned], scope: [coffeeFact] }, "写作前喝手冲咖啡", Date.now());
+  assert.deepEqual(
+    hits.map((hit) => [hit.entry.id, hit.pinned === true]),
+    [["p", true]],
+  );
 });

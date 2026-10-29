@@ -167,7 +167,7 @@ export const en = {
       type === "preference"
         ? "Your choices, requirements and constraints, with the reason; not assumed to hold forever"
         : type === "insight"
-          ? "Working rules distilled from several exchanges, always with evidence"
+          ? "Working rules abstracted from concrete choices, reusable elsewhere, always with evidence"
           : "Things that happened and settled decisions",
     allTitle: "All memories",
     pageHint: "Grouped by type. Click one to see the original words, where it came from and how it evolved.",

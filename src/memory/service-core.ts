@@ -44,7 +44,7 @@ import {
   preferenceCandidates,
   PREFERENCE_SYSTEM_PROMPT,
 } from "./extract.ts";
-import { dedupeById, isRecallable, recallHits } from "./retrieve.ts";
+import { dedupeById, isRecallable, RECALL_LIMIT, RECALL_MAX_CHARS, recallHits, selectHits } from "./retrieve.ts";
 import { EmbedServerCore, type EmbedServerOptions } from "./embed-server.ts";
 import { VectorStore, dotProductRank } from "./vector-store.ts";
 import { downloadWithFallback, type DownloadFetch } from "./downloader.ts";
@@ -78,19 +78,6 @@ export interface MemoryServiceCoreOptions {
 
 const EXTRACT_TYPES = ["fact", "preference", "insight"] as const;
 
-/** 与词法召回同预算：融合只是重排，不能把候选量放大成几十条跨 IPC 与注入账。 */
-function capFusedHits(ranked: readonly MemoryHit[]): MemoryHit[] {
-  const hits: MemoryHit[] = [];
-  let used = 0;
-  for (const candidate of ranked) {
-    if (hits.length >= 5) break;
-    const size = candidate.entry.text.length;
-    if (hits.length > 0 && used + size > 1500) continue;
-    used += size;
-    hits.push(candidate);
-  }
-  return hits;
-}
 
 export class MemoryServiceCore {
   private readonly callModel: MemoryCallModel;
@@ -527,7 +514,12 @@ export class MemoryServiceCore {
         lexical.filter((hit) => hit.pinned !== true),
         byId,
       );
-      return [...pinned, ...capFusedHits(fused)];
+      // 与词法召回同预算与同一套装车规则（含同源复述只留一条）：融合只是重排，
+      // 不能把候选量放大成几十条跨 IPC 与注入账
+      return [
+        ...pinned,
+        ...selectHits(fused, { limit: RECALL_LIMIT, maxChars: RECALL_MAX_CHARS, taken: pinned.map((hit) => hit.entry) }),
+      ];
     } catch (cause) {
       this.log("[memory] 向量融合失败（本轮退词法）", cause);
       return lexical;

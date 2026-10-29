@@ -610,9 +610,12 @@ test("recall 融合：候选再多也只回 5 条，沿用词法注入上限", a
   const { core } = vectorCore(dir, stub);
   await core.init(dir, CHORE);
   const entries = new MemoryEntryStore(dir);
-  await entries.appendScope("ws-1", vectorEpisode(),
-    Array.from({ length: 6 }, (_, index) => ({ type: "fact" as const, text: `语义候选 ${index}`, keywords: [], turns: [1] })),
-  );
+  // 各来自不同事件段：同一段同一轮里六条几乎同文的会被当成同源复述只留一条（另有专门的测试）
+  for (let index = 0; index < 6; index += 1) {
+    await entries.appendScope("ws-1", { ...vectorEpisode(), episodeId: `ep_vec_${index}` }, [
+      { type: "fact", text: `语义候选 ${index}`, keywords: [], turns: [1] },
+    ]);
+  }
   core.setVectorConfig({ model: VECTOR_MODEL, ggufPath: "/m", binaryPath: "/b", idleUnloadMs: 300_000, deferOnBattery: true });
   for (let i = 0; i < 60; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25));

@@ -6,6 +6,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildExtractPrompt,
+  FACT_SYSTEM_PROMPT,
+  INSIGHT_SYSTEM_PROMPT,
+  PREFERENCE_SYSTEM_PROMPT,
   formatDate,
   parseExtractReply,
   preferenceCandidates,
@@ -98,4 +101,14 @@ test("preferenceCandidates：覆盖度打分取最像的几条偏好，非偏好
   const candidates = preferenceCandidates(pool, "这一轮里用户又一次强调偏好用中文回复，还说以后都这样");
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0]?.id, "p-hit");
+});
+
+test("三类提示词都讲清抽象层次：同一意思不换说法写进别类，经验要比原话高一层", () => {
+  for (const prompt of [FACT_SYSTEM_PROMPT, PREFERENCE_SYSTEM_PROMPT, INSIGHT_SYSTEM_PROMPT]) {
+    assert.ok(prompt.includes("三个抽象层次"));
+    assert.ok(prompt.includes("不要换个说法写进本类"));
+  }
+  assert.ok(FACT_SYSTEM_PROMPT.includes("属于偏好，这里不记"));
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("跨场景的一般原则属于经验"));
+  assert.ok(INSIGHT_SYSTEM_PROMPT.includes("经验必须比原话高一层"));
 });
