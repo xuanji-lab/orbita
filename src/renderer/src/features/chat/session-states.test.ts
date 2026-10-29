@@ -823,6 +823,7 @@ describe("子会话 PR4a：channel 队列条目", () => {
     id,
     kind: "channel",
     childId,
+    childWorkbench: `/wb/${childId}`,
     message: channelMsg(id),
   });
 

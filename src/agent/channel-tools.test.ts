@@ -92,6 +92,9 @@ describe("delegate", () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /child-1/);
     assert.match(text, /glm-5\.3/);
+    // 子工作台绝对路径进正文：父会话的提示词里已没有子会话行，这是它知道子
+    // 工作台的第一来源（重要产出也落父工作台的 subsessions/，但草稿仍在子那里）
+    assert.match(text, /\/workbenches\/child-1/);
     assert.match(text, /end this turn/);
     assert.match(text, /do not poll or wait/i);
     assert.deepEqual(result.details, {
@@ -327,5 +330,21 @@ describe("describeChannelRole", () => {
     const text = describeChannelRole("child");
     assert.match(text, /report_to_parent/);
     assert.doesNotMatch(text, /\bdelegate\b/);
+  });
+
+  test("root：讲清子会话重要产出的落点——自己工作台的 subsessions/，done 后先去核对", () => {
+    const text = describeChannelRole("root");
+    assert.match(text, /subsessions\//);
+    assert.match(text, /Session workbench/);
+    assert.match(text, /When you see done, check that directory/);
+  });
+
+  test("child：草稿留自己工作台；重要产出写父工作台的 subsessions/<短 id>-<英文名>/；done 报绝对路径；代码交付照旧进 cwd", () => {
+    const text = describeChannelRole("child");
+    assert.match(text, /your own Session workbench/);
+    assert.match(text, /parent session workbench in subsessions\//);
+    assert.match(text, /first\s+8 characters of your own session id/);
+    assert.match(text, /absolute paths/);
+    assert.match(text, /still belong in cwd/);
   });
 });
