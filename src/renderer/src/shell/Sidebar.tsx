@@ -17,7 +17,7 @@ import type { MemoryNav } from "../features/memory/memory-view.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
-import { aggregateRunStates, runStateLabel, sessionRunState } from "../features/notify/completion-notice.ts";
+import { aggregateRunStates, runStateLabel, runStateOf } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
@@ -1303,22 +1303,6 @@ function NavRow(props: {
  * 转移要选目标——都靠 `keepOpen` 把菜单原地换成第二组项，
  * 「先讲后果再动作」不因为换了容器就省掉。
  */
-/**
- * 一条根会话的运行态（状态饼与工作区汇总共用）：查它自己的槽——后台在跑的会话切走了
- * 也照样亮，与「当前看哪条」无关。子会话只取一层（childSessions 同口径），子会话在跑 /
- * 在等审批都记到母会话这一行上（入口在母）。未读读 meta（落盘，重启后还在）。
- */
-function runStateOf(session: ChatSession, meta: SessionMeta) {
-  return sessionRunState({
-    slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
-    children: childSessions(session.sessions, meta.id).map((child) => ({
-      phase: session.phaseOf(child.id),
-      approvals: session.approvalsOf(child.id).length,
-    })),
-    unread: meta.unread ?? null,
-  });
-}
-
 function SessionRow(props: {
   meta: SessionMeta;
   session: ChatSession;

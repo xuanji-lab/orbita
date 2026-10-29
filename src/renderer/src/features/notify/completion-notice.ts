@@ -12,6 +12,9 @@
  * 不碰 React、不碰 Audio，node --test 直接测。
  */
 import type { Messages } from "../../messages-en.ts";
+import type { SessionMeta } from "@shared/session";
+// 值导入走相对路径带 .ts：本文件被 node --test 直接加载
+import { childSessions } from "../../../../shared/session.ts";
 
 /** 判定只需要槽的这两个字段——不依赖整个 SessionEntry，测试不用造全量槽 */
 export interface PhaseSlot {
@@ -159,4 +162,28 @@ export function runStateLabel(
   if (state === "waiting") return t.rowStatus.waiting;
   if (state === "failed") return t.rowStatus.unreadFailed;
   return t.rowStatus.unread;
+}
+
+/** 推一条根会话运行态所需的最少接口（ChatSession 满足它；测试可以手搓） */
+export interface RunStateSource {
+  readonly sessions: readonly SessionMeta[];
+  phaseOf(id: string): RunSlot["phase"];
+  approvalsOf(id: string): readonly unknown[];
+}
+
+/**
+ * 一条根会话的运行态（侧栏状态饼、工作区汇总、首页会话卡、工作区文件共用）：查它
+ * 自己的槽——后台在跑的会话切走了也照样亮，与「当前看哪条」无关。子会话只取一层
+ * （childSessions 同口径），子会话在跑 / 在等审批都记到母会话上（入口在母）。
+ * 未读读 meta（落盘，重启后还在）。
+ */
+export function runStateOf(source: RunStateSource, meta: SessionMeta): SessionRunState {
+  return sessionRunState({
+    slot: { phase: source.phaseOf(meta.id), approvals: source.approvalsOf(meta.id).length },
+    children: childSessions(source.sessions, meta.id).map((child) => ({
+      phase: source.phaseOf(child.id),
+      approvals: source.approvalsOf(child.id).length,
+    })),
+    unread: meta.unread ?? null,
+  });
 }

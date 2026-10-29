@@ -2,6 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   aggregateRunStates,
+  runStateOf,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
@@ -135,5 +136,17 @@ describe("aggregateRunStates（工作区折叠时组头的汇总）", () => {
   });
   it("全都读完 = 空串（组头什么都不画）", () => {
     deepStrictEqual(aggregateRunStates([null, null]), []);
+  });
+});
+
+describe("runStateOf（侧栏 / 首页卡 / 工作区文件共用）", () => {
+  const meta = (id: string, parentId?: string) => ({ id, parentId, title: id }) as unknown as import("@shared/session").SessionMeta;
+  it("子会话在等审批 = 母会话在等你", () => {
+    const source = {
+      sessions: [meta("p"), meta("c", "p")],
+      phaseOf: (id: string) => (id === "c" ? ("turn" as const) : ("idle" as const)),
+      approvalsOf: (id: string) => (id === "c" ? [{}] : []),
+    };
+    strictEqual(runStateOf(source, meta("p")), "waiting");
   });
 });

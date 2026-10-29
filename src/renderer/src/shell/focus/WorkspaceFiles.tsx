@@ -8,12 +8,12 @@ import { useT } from "../../locale";
 import { relativeTime } from "../relative-time";
 import { useFileTree } from "../../features/files/useFileTree";
 import { fileIcon, fileIconTone } from "../../features/files/tree-view";
-import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
+import { rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import type { FileEntry } from "@shared/files";
 import type { FocusChangeEntry, FocusChangeKind, FocusChanges } from "@shared/focus";
 import type { ChatSession } from "../../features/chat/useChatSession";
-import { runStateLabel, sessionRunState } from "../../features/notify/completion-notice";
+import { runStateLabel, runStateOf } from "../../features/notify/completion-notice";
 import {
   ancestorsOf,
   changeIndexOf,
@@ -426,15 +426,7 @@ function FileRow(props: {
 function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: boolean }) {
   const t = useT();
   const { meta, session } = props;
-  const children = childSessions(session.sessions, meta.id);
-  const bar = sessionRunState({
-    slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
-    children: children.map((child) => ({
-      phase: session.phaseOf(child.id),
-      approvals: session.approvalsOf(child.id).length,
-    })),
-    unread: meta.unread ?? null,
-  });
+  const bar = runStateOf(session, meta);
   return (
     <button
       type="button"
