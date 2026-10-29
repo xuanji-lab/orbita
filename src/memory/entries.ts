@@ -35,6 +35,7 @@ import type {
 import { isNotFound } from "../main/fs-errors.ts";
 import { writeTextAtomic } from "../main/atomic-write.ts";
 import type { MemoryInjectionRecord } from "../shared/memory.ts";
+import { MEMORY_MUTED_REVERTED } from "../shared/memory.ts";
 
 /**
  * 提取产出、待落盘的条目（extract.ts 解析模型回复铸成这个）。与 MemoryEntry 分开：
@@ -171,6 +172,46 @@ export function parseMemoryEntry(value: unknown): MemoryEntry | null {
       ? { editedAt: suspect.editedAt }
       : null),
   };
+}
+
+/**
+ * 会话回退到第 fromTurn 轮时，这条是不是「全部来源轮都被撤回」：同一会话、有来源轮、
+ * 每一个来源轮都 ≥ fromTurn。**有一轮 < fromTurn 就不算**——这条还有没被撤回的证据撑着，
+ * 停用它就是误停用（2026-10-29 用户裁决 B 的风险点，取保守侧）。不看来源 / 状态 / 编辑，
+ * 只答「出处是不是被撤回了」；停不停另有门（revertMutable）。
+ */
+export function fromRevertedTurns(entry: MemoryEntry, sessionId: string, fromTurn: number): boolean {
+  return (
+    entry.sessionId === sessionId && entry.turns.length > 0 && entry.turns.every((turn) => turn >= fromTurn)
+  );
+}
+
+/**
+ * 回退要不要停用这条：出处全部被撤回 + 还在用（active）+ 对话产出（chat / agent）+ 用户
+ * 没手改过。手动添加 / 手动编辑过的是用户自己的话，不随对话回退走；已 muted 的不动
+ * （不覆盖用户 / agent 停用时的理由）；stale 的本来就不进召回，留在演变链里不动。
+ */
+function revertMutable(entry: MemoryEntry, sessionId: string, fromTurn: number): boolean {
+  return (
+    (entry.status ?? "active") === "active" &&
+    entry.source !== "manual" &&
+    entry.editedAt === undefined &&
+    fromRevertedTurns(entry, sessionId, fromTurn)
+  );
+}
+
+/** 回退的改动计划：按层（token）归好的「要停用」与「要恢复 active 的旧条」。 */
+export interface MemoryRevertPlan {
+  mute: Map<string, Set<string>>;
+  restore: Map<string, Set<string>>;
+  /** 扫了多少条（代价日志用） */
+  scanned: number;
+}
+
+function addTo(map: Map<string, Set<string>>, token: string, id: string): void {
+  const bucket = map.get(token) ?? new Set<string>();
+  bucket.add(id);
+  map.set(token, bucket);
 }
 
 /** 去重键：trim + 内部空白折叠。逐字重复才归并，措辞有差的就是另一条记忆。 */
@@ -489,6 +530,11 @@ export class MemoryEntryStore {
   /** 盘上有哪些条目层（token + 条数；injections 不是层，不列）。只有装着条目的
    * 文件算一层——删空的文件还躺在盘上，列出来是一个点不进去的空页。 */
   async listLayers(): Promise<{ token: string; count: number }[]> {
+    return (await this.readAllLayers()).map((layer) => ({ token: layer.token, count: layer.entries.length }));
+  }
+
+  /** 全部条目层连同条目（每个文件读一遍）。空层不列；单层读不了当空层（不挡别的层）。 */
+  private async readAllLayers(): Promise<{ token: string; entries: MemoryEntry[] }[]> {
     let names: string[];
     try {
       names = await readdir(this.dir);
@@ -496,14 +542,92 @@ export class MemoryEntryStore {
       if (isNotFound(cause)) return [];
       throw cause;
     }
-    const found: { token: string; count: number }[] = [];
+    const found: { token: string; entries: MemoryEntry[] }[] = [];
     for (const name of names) {
       if (!name.endsWith(LOG_SUFFIX) || name === "injections.jsonl") continue;
       const token = name.slice(0, -LOG_SUFFIX.length);
       const entries = await this.readLayer(join(this.dir, name)).catch(() => []);
-      if (entries.length > 0) found.push({ token, count: entries.length });
+      if (entries.length > 0) found.push({ token, entries });
     }
     return found;
+  }
+
+  /**
+   * 会话回退到第 fromTurn 轮的条目改动计划（只读不写；写在 applyRevert，由调用方按层上锁）。
+   *
+   * **扫全部层**：这个会话的条目不只在它当前作用域那一层——自动升层的在 user 层，
+   * agent 修订的落在旧条所在层，会话中途换过工作区的还留在旧作用域层。回退是低频操作，
+   * 一次全库读（每个层文件读一遍 + 逐行 JSON.parse）换正确；热路径（每轮落定 / 召回）不走这里。
+   *
+   * 规则：
+   * - 停用：revertMutable（本会话、来源轮全部 ≥ fromTurn、active、对话产出、没手改过）；
+   * - 恢复旧条：被停用的条目 conflictWith 指的旧条，**同时**满足——还是 stale；自己不是来自
+   *   被撤回轮；除了这次被停用的条目之外没有别的条目 conflictWith 指向它（旧条后来又被
+   *   别的说法顶过 = 拿不准谁该生效，保守不动）。旧条已删 = 没东西可恢复。
+   */
+  async planRevert(sessionId: string, fromTurn: number): Promise<MemoryRevertPlan> {
+    const layers = await this.readAllLayers();
+    const plan: MemoryRevertPlan = { mute: new Map(), restore: new Map(), scanned: 0 };
+    const tokenOfId = new Map<string, string>();
+    const byId = new Map<string, MemoryEntry>();
+    const muted = new Set<string>();
+    for (const layer of layers) {
+      plan.scanned += layer.entries.length;
+      for (const entry of layer.entries) {
+        tokenOfId.set(entry.id, layer.token);
+        byId.set(entry.id, entry);
+        if (revertMutable(entry, sessionId, fromTurn)) {
+          muted.add(entry.id);
+          addTo(plan.mute, layer.token, entry.id);
+        }
+      }
+    }
+    if (muted.size === 0) return plan;
+    // 旧条 id → 顶过它的、这次不停用的条目数（有就不恢复）
+    const otherOverriders = new Map<string, number>();
+    for (const entry of byId.values()) {
+      if (entry.conflictWith === undefined || muted.has(entry.id)) continue;
+      otherOverriders.set(entry.conflictWith, (otherOverriders.get(entry.conflictWith) ?? 0) + 1);
+    }
+    for (const id of muted) {
+      const oldId = byId.get(id)?.conflictWith;
+      if (oldId === undefined) continue;
+      const old = byId.get(oldId);
+      const token = tokenOfId.get(oldId);
+      if (old === undefined || token === undefined) continue;
+      if (old.status !== "stale") continue;
+      if (fromRevertedTurns(old, sessionId, fromTurn)) continue;
+      if ((otherOverriders.get(oldId) ?? 0) > 0) continue;
+      addTo(plan.restore, token, oldId);
+    }
+    return plan;
+  }
+
+  /**
+   * 按计划改一层（调用方持有这一层的锁）。锁里**重读重判**：计划是不带锁读的，中间可能
+   * 有记忆库写操作（用户刚编辑 / 停用了哪条）——停用仍要 revertMutable、恢复仍要还是 stale，
+   * 不成立就跳过。没有一条变就不碰盘；变了整层原子重写一次。
+   */
+  async applyRevert(
+    token: string,
+    input: { sessionId: string; fromTurn: number; mute: ReadonlySet<string>; restore: ReadonlySet<string> },
+  ): Promise<{ muted: number; restored: number }> {
+    const existing = await this.listByToken(token);
+    let muted = 0;
+    let restored = 0;
+    const next = existing.map((entry) => {
+      if (input.mute.has(entry.id) && revertMutable(entry, input.sessionId, input.fromTurn)) {
+        muted += 1;
+        return { ...entry, status: "muted" as const, mutedReason: MEMORY_MUTED_REVERTED };
+      }
+      if (input.restore.has(entry.id) && entry.status === "stale") {
+        restored += 1;
+        return { ...entry, status: "active" as const };
+      }
+      return entry;
+    });
+    if (muted + restored > 0) await this.writeLayer(token, next);
+    return { muted, restored };
   }
 
   /* ---------- 记忆库写操作的改写路径（整份换掉，临时文件 + rename） ---------- */

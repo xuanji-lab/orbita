@@ -34,6 +34,7 @@ import {
   parseSegmentReply,
   SEGMENT_SYSTEM_PROMPT,
   toMemoryEpisode,
+  truncateEpisode,
   EPISODE_IDLE_CLOSE_MS,
   type OpenEpisode,
 } from "./episodes.ts";
@@ -130,6 +131,11 @@ export class MemoryServiceCore {
    * 队列后面——按 token 粒度互斥，不同作用域互不等待 */
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * 每个会话「提取落过几批条目」的计数（只增不减，进程内）。回退的第二遍停用靠它判
+   * 「第一遍之后这个会话有没有新条目落盘」——没有就不再扫一遍全库。
+   */
+  private readonly entryWrites = new Map<string, number>();
   /**
    * init 的闸：init 一进来（同步）就立起，数据目录挂好、启动清扫入队后打开。
    * 服务刚拉起时主进程紧跟 init 就发 turnSettled（开关中途打开 / 崩溃后重拉的
@@ -277,6 +283,113 @@ export class MemoryServiceCore {
         this.log(`[memory] 会话 ${sessionId} 第 ${snapshot.turn} 轮并入事件段时出错（这一轮可能没进事件段）`, cause);
       }
     });
+  }
+
+  /**
+   * 会话「回到这里」：第 fromTurn 轮及之后被撤回（契约见 MemoryServiceCommand 的 sessionReverted）。
+   *
+   * 两步，分在队列内外：
+   * 1. **立即**（不排队，按层上锁）停用来源轮全被撤回的条目、恢复它们顶掉的旧条——队列里
+   *    可能正跑着分钟级的提取，用户重说的那一轮开轮召回不该还注入被撤回的话；
+   * 2. **排队**（与切段 / 提取串行，排在这之前投递的轮后面、重说的那一轮前面）截段：开段与
+   *    待提取段里轮号 ≥ fromTurn 的轮截掉，截空的段丢掉。开段水位回落后 admissionOf 不再
+   *    ignore 重说的轮；已归档的段不参与 admission，不必改写。第 1 步之后若这个会话又有
+   *    提取落盘（排在前面的提取拿的是未截的段），再停用一遍；没有就不重扫。
+   * 返回队列尾（runtime 不等，测试等）。失败只记日志——记忆的问题不倒灌回退。
+   */
+  sessionReverted(payload: { sessionId: string; fromTurn: number }): Promise<void> {
+    const { sessionId, fromTurn } = payload;
+    if (!Number.isInteger(fromTurn) || fromTurn < 1) {
+      this.log(`[memory] 会话 ${sessionId} 的回退通知轮号不合法（${fromTurn}），忽略`);
+      return Promise.resolve();
+    }
+    const writesBefore = this.entryWrites.get(sessionId) ?? 0;
+    const immediate = this.revertEntries(sessionId, fromTurn);
+    return this.enqueue(async () => {
+      await immediate;
+      try {
+        await this.truncateEpisodes(sessionId, fromTurn);
+      } catch (cause) {
+        this.log(`[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮时截段出错`, cause);
+      }
+      if ((this.entryWrites.get(sessionId) ?? 0) !== writesBefore) {
+        await this.revertEntries(sessionId, fromTurn);
+      }
+    });
+  }
+
+  /** 回退的条目那一半：全库读一遍出计划，只改动到的层各自上锁重读、重写一次。不抛。 */
+  private async revertEntries(sessionId: string, fromTurn: number): Promise<void> {
+    try {
+      if (this.initGate !== null) await this.initGate;
+      const entries = this.entries;
+      if (entries === null) {
+        this.log(`[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮：记忆服务还没初始化，条目没停用`);
+        return;
+      }
+      const started = this.now();
+      const plan = await entries.planRevert(sessionId, fromTurn);
+      let muted = 0;
+      let restored = 0;
+      for (const token of new Set([...plan.mute.keys(), ...plan.restore.keys()])) {
+        const outcome = await this.withLock(token, () =>
+          entries.applyRevert(token, {
+            sessionId,
+            fromTurn,
+            mute: plan.mute.get(token) ?? new Set(),
+            restore: plan.restore.get(token) ?? new Set(),
+          }),
+        );
+        muted += outcome.muted;
+        restored += outcome.restored;
+      }
+      if (muted + restored > 0) {
+        this.log(
+          `[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮：停用 ${muted} 条、恢复旧说法 ${restored} 条` +
+            `（扫 ${plan.scanned} 条，${this.now() - started} ms）`,
+        );
+        this.onChanged();
+        // 恢复的旧条回到 active：补算按对账补上缺的向量（停用的不必删行——融合只认 active）
+        if (restored > 0) this.scheduleVectorize("all");
+      }
+    } catch (cause) {
+      this.log(`[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮时停用条目出错`, cause);
+    }
+  }
+
+  /** 回退的事件段那一半（队列里跑）：开段读一个文件，待提取段扫 pending/。 */
+  private async truncateEpisodes(sessionId: string, fromTurn: number): Promise<void> {
+    const store = this.episodes;
+    if (store === null) return;
+    let cut = 0;
+    let dropped = 0;
+    const open = await store.loadOpen(sessionId);
+    if (open !== null) {
+      const next = truncateEpisode(open, fromTurn);
+      if (next === null) {
+        await store.removeOpen(sessionId);
+        this.disarmIdle(sessionId);
+        dropped += 1;
+      } else if (next !== open) {
+        await store.saveOpen(next);
+        cut += 1;
+      }
+    }
+    for (const episode of await store.listPending()) {
+      if (episode.sessionId !== sessionId) continue;
+      const next = truncateEpisode(episode, fromTurn);
+      if (next === null) {
+        await store.removePending(episode.episodeId);
+        dropped += 1;
+      } else if (next !== episode) {
+        await store.savePending(next);
+        cut += 1;
+      }
+    }
+    if (cut + dropped > 0) {
+      this.log(`[memory] 会话 ${sessionId} 回退到第 ${fromTurn} 轮：事件段截短 ${cut} 段、整段丢弃 ${dropped} 段`);
+      this.onChanged();
+    }
   }
 
   /**
@@ -898,9 +1011,8 @@ export class MemoryServiceCore {
       return;
     }
     // 该会话若有提完没收尾干净 / 提取失败的待提取段，趁这轮补一把
-    // （启动清扫之外的唯一重试触发点；扫两个小目录，代价可忽略）
-    const { pending } = await store.listAll();
-    for (const leftover of pending) {
+    // （启动清扫之外的唯一重试触发点；只扫 pending/——各会话的开段文件不必每轮都读）
+    for (const leftover of await store.listPending()) {
       if (leftover.sessionId === sessionId) {
         await this.extractEpisode(leftover.episodeId);
       }
@@ -1032,6 +1144,7 @@ export class MemoryServiceCore {
       this.onChanged();
       this.scheduleVectorize(written.some((entry) => entry.layer === "user") ? "all" : scopeToken);
       if (written.length > 0) {
+        this.entryWrites.set(episode.sessionId, (this.entryWrites.get(episode.sessionId) ?? 0) + 1);
         this.log(
           `[memory] 段 ${episodeId} 提取出 ${written.length} 条${type === "insight" ? "经验" : type === "fact" ? "事实" : "偏好"}`,
         );

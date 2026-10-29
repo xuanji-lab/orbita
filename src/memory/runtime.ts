@@ -180,6 +180,10 @@ parentPort.on("message", (event: { data: unknown }) => {
     core.turnSettled(command);
     return;
   }
+  if (command.type === "sessionReverted") {
+    void core.sessionReverted(command);
+    return;
+  }
   if (command.type === "recall") {
     const { requestId } = command;
     void core

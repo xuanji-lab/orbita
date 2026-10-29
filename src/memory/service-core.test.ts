@@ -13,7 +13,7 @@ import { EpisodeStore } from "./episodes.ts";
 import { MemoryEntryStore } from "./entries.ts";
 import { VectorStore } from "./vector-store.ts";
 import type { DownloadFetch } from "./downloader.ts";
-import { memoryShortId, type MemoryChoreModel } from "../shared/memory.ts";
+import { MEMORY_MUTED_REVERTED, memoryShortId, type MemoryChoreModel, type MemoryEntry } from "../shared/memory.ts";
 
 const CHORE: MemoryChoreModel = {
   provider: { id: "p", api: "openai", baseUrl: "https://x", apiKey: "k", models: [] },
@@ -1146,4 +1146,149 @@ test("丢弃留痕：轮号不大于开段 toTurn 的轮被忽略时记一行带
   const noInit = new MemoryServiceCore({ callModel: async () => "same", log: (message) => logs.push(message) });
   await noInit.turnSettled(turnPayload({ sessionId: "s9", turn: 4 }));
   assert.ok(logs.some((line) => line.includes("会话 s9 第 4 轮不进事件段") && line.includes("没收到 init")));
+});
+
+/* ---------- 会话回退（sessionReverted） ---------- */
+
+/** 全部层的条目（按 id 索引）：回退测试只关心状态，不关心在哪一层。 */
+async function allEntries(dir: string): Promise<Map<string, MemoryEntry>> {
+  const store = new MemoryEntryStore(dir);
+  const out = new Map<string, MemoryEntry>();
+  for (const layer of await store.listLayers()) {
+    for (const item of await store.listByToken(layer.token)) out.set(item.text, item);
+  }
+  return out;
+}
+
+test("回退：开段截到回退点、水位回落，重说的那一轮照常并入（不再 ignore）", async () => {
+  const logs: string[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async () => "same",
+    idleCloseMs: 60_000,
+    log: (message) => logs.push(message),
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000, userText: "被撤回的第二轮" }));
+  await core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "被撤回的第三轮" }));
+  await core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
+  const store = new EpisodeStore(dir);
+  const cut = await store.loadOpen("s1");
+  assert.deepEqual(cut?.turns.map((turn) => turn.turn), [1]);
+  assert.equal(cut?.toTurn, 1);
+  await core.turnSettled(turnPayload({ turn: 2, at: 4000, userText: "重说的第二轮" }));
+  const open = await store.loadOpen("s1");
+  assert.deepEqual(open?.turns.map((turn) => turn.userText), ["我们决定用 QUMem 的分类法", "重说的第二轮"]);
+  assert.ok(!logs.some((line) => line.includes("不进事件段")), `不该有 ignore 诊断：${logs.join(" | ")}`);
+});
+
+test("回退：待提取段截掉被撤回的轮、截空的整段丢掉；回到第 1 轮后重说的话开新段", async () => {
+  const dir = await tempDir();
+  // 提取全失败：段一直留在 pending
+  const seed = new EpisodeStore(dir);
+  await seed.savePending({
+    episodeId: "ep_p",
+    sessionId: "s1",
+    scopeId: "ws-1",
+    fromTurn: 1,
+    toTurn: 2,
+    openedAt: 900,
+    lastAt: 2000,
+    turns: [
+      { turn: 1, at: 1000, userText: "一", assistantText: "答一" },
+      { turn: 2, at: 2000, userText: "二", assistantText: "答二" },
+    ],
+    extracted: { fact: true, preference: false, insight: false },
+  });
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  await core.init(dir, CHORE);
+  await core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
+  const cut = await seed.loadPending("ep_p");
+  assert.deepEqual(cut?.turns.map((turn) => turn.turn), [1]);
+  assert.equal(cut?.extracted.fact, true); // 已提成的类不重提
+  await core.sessionReverted({ sessionId: "s1", fromTurn: 1 });
+  assert.equal(await seed.loadPending("ep_p"), null);
+  await core.turnSettled(turnPayload({ turn: 1, at: 5000, userText: "从头再来" }));
+  const open = await seed.loadOpen("s1");
+  assert.equal(open?.fromTurn, 1);
+  assert.equal(open?.turns[0]?.userText, "从头再来");
+});
+
+test("回退：被撤回轮提取出的记忆停用（不进召回），部分来源轮的不停用；恢复使用清掉回退标记", async () => {
+  const reply = JSON.stringify([
+    { text: "第一轮定下的事实：部署用 Docker", keywords: ["Docker"], turns: [1] },
+    { text: "第二轮定下的事实：数据库用 Postgres", keywords: ["Postgres"], turns: [2] },
+    { text: "两轮合起来的事实：服务跑在 Fly", keywords: ["Fly"], turns: [1, 2] },
+  ]);
+  let segments = 0;
+  const core = new MemoryServiceCore({
+    callModel: async (system) => {
+      if (system.includes("切分器")) return (segments += 1) === 1 ? "same" : "new";
+      return system.includes("事实") ? reply : "[]";
+    },
+    idleCloseMs: 60_000,
+    log: () => undefined,
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000 }));
+  await core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "换个话题" })); // 判新事件：提取 [1, 2]
+  assert.equal((await allEntries(dir)).size, 3);
+  await core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
+  const after = await allEntries(dir);
+  const second = after.get("第二轮定下的事实：数据库用 Postgres")!;
+  assert.equal(second.status, "muted");
+  assert.equal(second.mutedReason, MEMORY_MUTED_REVERTED);
+  assert.equal(after.get("第一轮定下的事实：部署用 Docker")?.status, undefined);
+  assert.equal(after.get("两轮合起来的事实：服务跑在 Fly")?.status, undefined); // 还有第 1 轮撑着
+  assert.equal(await new EpisodeStore(dir).loadOpen("s1"), null); // 第 3 轮的开段整段撤回
+  const hits = await core.recall({ sessionId: "s1", scopeId: "ws-1", turn: 2, query: "数据库用什么 Postgres" });
+  assert.ok(!hits.some((hit) => hit.entry.id === second.id));
+  const token = new MemoryEntryStore(dir).tokenOf("ws-1");
+  const outcome = await core.mutate({ op: "setStatus", token, entryId: second.id, status: "active" });
+  assert.equal(outcome.ok, true);
+  const restored = (await allEntries(dir)).get("第二轮定下的事实：数据库用 Postgres")!;
+  assert.equal(restored.status, "active");
+  assert.equal(restored.mutedReason, undefined);
+  // 对照：恢复后同一个问题召回得到它（上面的「召回不到」不是因为问题本来就不命中）
+  const again = await core.recall({ sessionId: "s1", scopeId: "ws-1", turn: 2, query: "数据库用什么 Postgres" });
+  assert.ok(again.some((hit) => hit.entry.id === second.id));
+});
+
+test("回退时提取正在跑：提取随后落下的被撤回轮条目，在排队的第二遍里停用", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let factCalled: () => void = () => undefined;
+  const factStarted = new Promise<void>((resolve) => {
+    factCalled = resolve;
+  });
+  let segments = 0;
+  const core = new MemoryServiceCore({
+    callModel: async (system) => {
+      if (system.includes("切分器")) return (segments += 1) === 1 ? "same" : "new";
+      if (!system.includes("事实")) return "[]";
+      factCalled();
+      await gate;
+      return JSON.stringify([{ text: "被撤回的第二轮里的事实", keywords: ["x"], turns: [2] }]);
+    },
+    idleCloseMs: 60_000,
+    log: () => undefined,
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ turn: 1, at: 1000 }));
+  await core.turnSettled(turnPayload({ turn: 2, at: 2000 }));
+  const settling = core.turnSettled(turnPayload({ turn: 3, at: 3000, userText: "换个话题" }));
+  await factStarted; // 提取卡在事实这一类
+  const reverting = core.sessionReverted({ sessionId: "s1", fromTurn: 2 });
+  release();
+  await settling;
+  await reverting;
+  const entry = (await allEntries(dir)).get("被撤回的第二轮里的事实");
+  assert.equal(entry?.status, "muted");
+  assert.equal(entry?.mutedReason, MEMORY_MUTED_REVERTED);
 });

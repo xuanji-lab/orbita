@@ -113,6 +113,22 @@ export function admissionOf(
   return { kind: "classify" };
 }
 
+/**
+ * 会话回退到第 fromTurn 轮：段里轮号 ≥ fromTurn 的轮截掉。返回值三态：
+ * - 原样那个对象 = 段里没有被撤回的轮（调用方不必写盘）；
+ * - null = 整段都在被撤回的轮里（调用方丢掉这段）；
+ * - 新对象 = 截剩的前半段：toTurn / lastAt 回到留下的最后一轮——admissionOf 的水位就此回落，
+ *   重说的第 fromTurn 轮按新轮并入。提取记账（extracted）原样保留：已提成的类不重提，
+ *   那些类里来自被撤回轮的条目由条目侧的停用处理（entries.ts planRevert）。
+ */
+export function truncateEpisode(episode: OpenEpisode, fromTurn: number): OpenEpisode | null {
+  if (episode.toTurn < fromTurn) return episode;
+  const kept = episode.turns.filter((turn) => turn.turn < fromTurn);
+  const last = kept[kept.length - 1];
+  if (last === undefined) return null;
+  return { ...episode, fromTurn: kept[0]!.turn, toTurn: last.turn, lastAt: last.at, turns: kept };
+}
+
 /* ---------- 切段二分类（家务活模型的最短调用） ---------- */
 
 export const SEGMENT_SYSTEM_PROMPT = `你是对话事件切分器。判断「下一句用户的话」与「上一句用户的话」是不是同一件事——
@@ -294,6 +310,26 @@ export class EpisodeStore {
       }
     }
     return episodes;
+  }
+
+  /** 盘上全部待提取段（只扫 pending/，不碰各会话的开段文件）。每轮落定与回退都要问「这个会话
+   * 有没有待提取段」，pending/ 只放收了尾还没提完的段（通常 0–2 个），开段文件却是每个活跃会话一份。 */
+  async listPending(): Promise<OpenEpisode[]> {
+    const dir = join(this.dir, "episodes", "pending");
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw cause;
+    }
+    const pending: OpenEpisode[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const episode = await readEpisodeFile(join(dir, name), `待提取段文件 ${name}`);
+      if (episode !== null) pending.push(episode);
+    }
+    return pending;
   }
 
   /**

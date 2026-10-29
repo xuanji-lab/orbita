@@ -17,6 +17,7 @@ import {
   parseOpenEpisode,
   parseSegmentReply,
   toMemoryEpisode,
+  truncateEpisode,
 } from "./episodes.ts";
 
 const TURN = { turn: 3, at: 5000, userText: "继续刚才的", assistantText: "好的" };
@@ -103,4 +104,41 @@ test("toMemoryEpisode：公开形状不带运行态（extracted）", () => {
   const pub = toMemoryEpisode(episode);
   assert.equal(pub.episodeId, episode.episodeId);
   assert.equal("extracted" in pub, false);
+});
+
+test("truncateEpisode：回退点之后的轮截掉，水位（toTurn / lastAt）回落；截空回 null；没碰到的原样返回", () => {
+  const episode = {
+    ...baseEpisode(),
+    toTurn: 3,
+    lastAt: 3000,
+    turns: [
+      { turn: 1, at: 1000, userText: "一", assistantText: "答一" },
+      { turn: 2, at: 2000, userText: "二", assistantText: "答二" },
+      { turn: 3, at: 3000, userText: "三", assistantText: "答三" },
+    ],
+    extracted: { fact: true, preference: false, insight: false },
+  };
+  const cut = truncateEpisode(episode, 2);
+  assert.notEqual(cut, null);
+  assert.deepEqual(cut?.turns.map((turn) => turn.turn), [1]);
+  assert.equal(cut?.toTurn, 1);
+  assert.equal(cut?.lastAt, 1000);
+  assert.equal(cut?.fromTurn, 1);
+  assert.deepEqual(cut?.extracted, { fact: true, preference: false, insight: false }); // 记账不动
+  assert.equal(cut?.episodeId, episode.episodeId);
+  // 截完水位回落：重说的第 2 轮不再被 ignore
+  assert.equal(admissionOf(cut, { turn: 2, at: 4000 }).kind, "classify");
+  assert.equal(truncateEpisode(episode, 1), null);
+  assert.equal(truncateEpisode(episode, 4), episode);
+});
+
+test("listPending：只读 pending/，不读各会话的开段文件", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-episodes-"));
+  const store = new EpisodeStore(dir);
+  const open = baseEpisode();
+  await store.saveOpen(open);
+  const pending = { ...baseEpisode(), sessionId: "s2" };
+  await store.savePending(pending);
+  const listed = await store.listPending();
+  assert.deepEqual(listed.map((episode) => episode.episodeId), [pending.episodeId]);
 });

@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 import { appendFile, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemoryEntryStore, parseMemoryEntry } from "./entries.ts";
-import type { MemoryEpisode } from "../shared/memory.ts";
+import { fromRevertedTurns, MemoryEntryStore, parseMemoryEntry, tokenOfScope } from "./entries.ts";
+import { MEMORY_MUTED_REVERTED, type MemoryEntry, type MemoryEpisode } from "../shared/memory.ts";
 
 function entry(overrides: Record<string, unknown> = {}): unknown {
   return {
@@ -403,4 +403,126 @@ test("listInjections：读回含正文快照；坏行跳过", async () => {
   const records = await store.listInjections();
   assert.equal(records.length, 1);
   assert.equal(records[0]?.hits[0]?.text, "注入时的正文");
+});
+
+/* ---------- 会话回退：停用来源轮全被撤回的条目、恢复它们顶掉的旧条 ---------- */
+
+async function seedLayers(dir: string, layers: Record<string, unknown[]>): Promise<void> {
+  for (const [token, rows] of Object.entries(layers)) {
+    await writeFile(join(dir, `${token}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`, "utf8");
+  }
+}
+
+async function applyPlan(store: MemoryEntryStore, sessionId: string, fromTurn: number) {
+  const plan = await store.planRevert(sessionId, fromTurn);
+  let muted = 0;
+  let restored = 0;
+  for (const token of new Set([...plan.mute.keys(), ...plan.restore.keys()])) {
+    const outcome = await store.applyRevert(token, {
+      sessionId,
+      fromTurn,
+      mute: plan.mute.get(token) ?? new Set(),
+      restore: plan.restore.get(token) ?? new Set(),
+    });
+    muted += outcome.muted;
+    restored += outcome.restored;
+  }
+  return { plan, muted, restored };
+}
+
+function byIdOf(list: readonly MemoryEntry[]): Map<string, MemoryEntry> {
+  return new Map(list.map((item) => [item.id, item]));
+}
+
+test("fromRevertedTurns：来源轮全部 ≥ 回退点才算；有一轮在前面就不算；别的会话不算", () => {
+  const base = parseMemoryEntry(entry({ turns: [3, 4] }))!;
+  assert.equal(fromRevertedTurns(base, "s1", 3), true);
+  assert.equal(fromRevertedTurns({ ...base, turns: [2, 3] }, "s1", 3), false);
+  assert.equal(fromRevertedTurns(base, "s2", 3), false);
+  assert.equal(fromRevertedTurns({ ...base, turns: [] }, "s1", 1), false);
+});
+
+test("回退停用：全部来源轮被撤回的停用（含自动升层、agent 修订）；部分来源轮 / 手动 / 手改 / 别的会话 / 已停用的不动", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-entries-"));
+  const ws = tokenOfScope("ws-1");
+  await seedLayers(dir, {
+    [ws]: [
+      entry({ id: "mem_full", turns: [3, 4], text: "全部来源轮都被撤回" }),
+      entry({ id: "mem_partial", turns: [2, 3], text: "有一轮没被撤回" }),
+      entry({ id: "mem_before", turns: [1], text: "回退点之前" }),
+      entry({ id: "mem_manual", source: "manual", sessionId: "", turns: [], episodeId: "", text: "手动添加的" }),
+      entry({ id: "mem_edited", turns: [4], editedAt: 9000, text: "用户手改过的" }),
+      entry({ id: "mem_other", sessionId: "s2", turns: [5], text: "别的会话" }),
+      entry({ id: "mem_retired", turns: [4], status: "muted", mutedReason: "agent 说不对", text: "已经停用的" }),
+    ],
+    user: [
+      entry({ id: "mem_promoted", layer: "user", type: "preference", reason: "理由", promotedFrom: ws, turns: [5], text: "自动升层的" }),
+      entry({ id: "mem_agent", layer: "user", source: "agent", episodeId: "", turns: [4], text: "agent 修订的" }),
+    ],
+  });
+  const store = new MemoryEntryStore(dir);
+  const { muted, restored } = await applyPlan(store, "s1", 3);
+  assert.equal(muted, 3);
+  assert.equal(restored, 0);
+  const scope = byIdOf(await store.listByToken(ws));
+  const user = byIdOf(await store.listUser());
+  assert.equal(scope.get("mem_full")?.status, "muted");
+  assert.equal(scope.get("mem_full")?.mutedReason, MEMORY_MUTED_REVERTED);
+  assert.equal(user.get("mem_promoted")?.status, "muted");
+  assert.equal(user.get("mem_promoted")?.promotedFrom, ws); // 停用即可，不搬回
+  assert.equal(user.get("mem_agent")?.status, "muted");
+  for (const id of ["mem_partial", "mem_before", "mem_manual", "mem_edited", "mem_other"]) {
+    assert.equal(scope.get(id)?.status, undefined, id);
+  }
+  assert.equal(scope.get("mem_retired")?.mutedReason, "agent 说不对"); // 不覆盖原理由
+});
+
+test("回退停用的连带：被停用条目顶掉的旧条恢复 active（跨层也找得到）；旧条也来自被撤回轮 / 后来又被别的说法顶过的，保守不动", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-entries-"));
+  const ws = tokenOfScope("ws-1");
+  await seedLayers(dir, {
+    [ws]: [
+      entry({ id: "mem_old", turns: [1], status: "stale", text: "旧说法" }),
+      entry({ id: "mem_new", turns: [3], conflictWith: "mem_old", text: "被撤回轮里的新说法" }),
+      entry({ id: "mem_oldR", turns: [3], status: "stale", text: "旧条也在被撤回轮里" }),
+      entry({ id: "mem_newR", turns: [4], conflictWith: "mem_oldR", text: "更新的说法也被撤回" }),
+      entry({ id: "mem_oldD", turns: [1], status: "stale", text: "被两条说法顶过的旧条" }),
+      entry({ id: "mem_newD1", turns: [3], conflictWith: "mem_oldD", text: "撤回轮里顶它的" }),
+      entry({ id: "mem_newD2", turns: [2], conflictWith: "mem_oldD", status: "stale", text: "没撤回的轮里也顶过它" }),
+    ],
+    user: [
+      entry({ id: "mem_oldU", layer: "user", type: "preference", reason: "r", turns: [1], status: "stale", text: "user 层的旧偏好" }),
+    ],
+  });
+  await appendFile(
+    join(dir, `${ws}.jsonl`),
+    `${JSON.stringify(entry({ id: "mem_rev", source: "agent", episodeId: "", turns: [5], conflictWith: "mem_oldU", text: "agent 按纠正改的" }))}\n`,
+    "utf8",
+  );
+  const store = new MemoryEntryStore(dir);
+  const { restored } = await applyPlan(store, "s1", 3);
+  const scope = byIdOf(await store.listByToken(ws));
+  const user = byIdOf(await store.listUser());
+  assert.equal(scope.get("mem_new")?.status, "muted");
+  assert.equal(scope.get("mem_old")?.status, "active");
+  assert.equal(scope.get("mem_rev")?.status, "muted");
+  assert.equal(user.get("mem_oldU")?.status, "active"); // agent 修订标的 stale 跨层恢复
+  assert.equal(scope.get("mem_newR")?.status, "muted");
+  assert.equal(scope.get("mem_oldR")?.status, "stale"); // 旧条也来自被撤回轮：不恢复
+  assert.equal(scope.get("mem_newD1")?.status, "muted");
+  assert.equal(scope.get("mem_oldD")?.status, "stale"); // 后来又被没撤回的说法顶过：不恢复
+  assert.equal(restored, 2);
+});
+
+test("applyRevert 锁里重判：计划之后用户手改了的条目不再停用；没有变化不碰盘", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-entries-"));
+  const ws = tokenOfScope("ws-1");
+  await seedLayers(dir, { [ws]: [entry({ id: "mem_a", turns: [3] })] });
+  const store = new MemoryEntryStore(dir);
+  const plan = await store.planRevert("s1", 3);
+  await store.updateEntry(ws, "mem_a", (current) => ({ ...current, text: "用户改了", editedAt: 5 }));
+  const before = await readFile(join(dir, `${ws}.jsonl`), "utf8");
+  const outcome = await store.applyRevert(ws, { sessionId: "s1", fromTurn: 3, mute: plan.mute.get(ws)!, restore: new Set() });
+  assert.deepEqual(outcome, { muted: 0, restored: 0 });
+  assert.equal(await readFile(join(dir, `${ws}.jsonl`), "utf8"), before);
 });
