@@ -43,12 +43,11 @@ function probeOf(files: Map<string, FakeFile>, io?: { opens: number; bytes: numb
   };
 }
 
-/** 未跟踪文件清单：同一个仓库同时认专注与审查两条 status 命令形态 */
+/** 未跟踪文件清单。只认一种 status 形态：专注与审查发的必须是同一组参数，发错了这里直接抛 */
 function untrackedGit(path: string): GitRunner {
   const scripts: Record<string, string> = {
     "rev-parse --show-toplevel": "/w\n",
     "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": `? ${path}`,
-    "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": `? ${path}`,
     "diff --no-renames --relative --numstat": "",
     "diff --cached --no-renames --relative --numstat": "",
     "rev-parse --abbrev-ref HEAD": "main\n",
@@ -120,12 +119,15 @@ describe("未跟踪文件行数：专注与审查共用一份", () => {
       const table: Record<string, string> = {
         "rev-parse --show-toplevel": "/w\n",
         "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": statusOut,
-        "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": statusOut,
         "diff --no-renames --relative --numstat": "",
         "diff --cached --no-renames --relative --numstat": "",
         "rev-parse --abbrev-ref HEAD": "main\n",
       };
-      return async (args) => ({ code: 0, stdout: table[args.join(" ")] ?? "" });
+      return async (args) => {
+        const hit = table[args.join(" ")];
+        if (hit === undefined) throw new Error(`fake git: unexpected args "${args.join(" ")}"`);
+        return { code: 0, stdout: hit };
+      };
     };
     await gitWorkdirChanges(scripts(lines.join("\n")), "/w-alt-a", probe);
     await gitReviewList(scripts("? only.txt"), "/w-alt-b", "unstaged", probe);

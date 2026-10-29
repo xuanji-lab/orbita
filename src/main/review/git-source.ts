@@ -39,28 +39,86 @@ export interface GitRunOutcome {
   stdout: string;
 }
 
-/** 退出码非 0 不是异常（not-repo / no-upstream 都用它表达）；ENOENT 单独抛给上层。 */
+/**
+ * 退出码非 0 不是异常（not-repo / no-upstream 都用它表达）；两种情况抛给上层：
+ * ENOENT（没有 git，上层翻成 no-git 空态）与超时（GitTimeoutError，上层如实报错）。
+ */
 export type GitRunner = (args: string[], cwd: string) => Promise<GitRunOutcome>;
 
-export const realGitRunner: GitRunner = async (args, cwd) => {
-  try {
-    // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
-    // `"\344\270\255.txt"`——未跟踪文件读盘 ENOENT 被静默跳过、已跟踪文件拉空 diff
-    // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
-    const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
-      cwd,
-      maxBuffer: 32 * 1024 * 1024,
-      encoding: "utf8",
-    });
-    return { code: 0, stdout };
-  } catch (cause) {
-    // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
-    // ENOENT（没有 git）重新抛，上层翻成 no-git 空态
-    const failure = cause as { code?: number | string; stdout?: string; errno?: string };
-    if (failure.code === "ENOENT" || failure.errno === "ENOENT") throw cause;
-    return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "" };
+/**
+ * 单条 git 命令的时限：60 秒。git 会卡住（网络盘挂了、fsmonitor 钩子不返回、杀毒软件锁着文件），
+ * 卡住的那一轮不该永远等下去——专注左栏的轮询一旦做了「上一轮没回来不发下一轮」，一次卡死就是
+ * 永远不再刷新。60 秒远长于正常的 status / diff（大仓库也是秒级），只拦真的卡死。
+ */
+const GIT_TIMEOUT_MS = 60_000;
+
+/**
+ * git 跑超时被杀。不折成退出码：那样会被读成「不是仓库」「没有改动」，界面说错话；
+ * 抛到 IPC 层变成 error 回执，界面显示原因。
+ */
+export class GitTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitTimeoutError";
   }
-};
+}
+
+/** 报错里的子命令名：跳过开头的 `-c 键=值`（status 前面带着它们） */
+function subcommandOf(args: readonly string[]): string {
+  let i = 0;
+  while (args[i] === "-c") i += 2;
+  return args[i] ?? "";
+}
+
+/** 带时限的真 git runner（execFile，不带 shell）。测试用短时限造卡死；应用里只用 realGitRunner */
+export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
+  return async (args, cwd) => {
+    try {
+      // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
+      // `"\344\270\255.txt"`——未跟踪文件读盘 ENOENT 被静默跳过、已跟踪文件拉空 diff
+      // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
+      const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        encoding: "utf8",
+        // 到点 execFile 发 SIGTERM（Windows 上直接结束进程），error.killed = true
+        timeout: timeoutMs,
+      });
+      return { code: 0, stdout };
+    } catch (cause) {
+      // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
+      // ENOENT（没有 git）重新抛，上层翻成 no-git 空态
+      const failure = cause as { code?: number | string | null; stdout?: string; errno?: string; killed?: boolean };
+      if (failure.code === "ENOENT" || failure.errno === "ENOENT") throw cause;
+      // killed 只在我们自己发信号时为 true（这里只有超时会发；maxBuffer 溢出不带这个标记）
+      if (failure.killed === true) {
+        throw new GitTimeoutError(`git ${subcommandOf(args)} timed out after ${Math.round(timeoutMs / 1000)} s`);
+      }
+      return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "" };
+    }
+  };
+}
+
+export const realGitRunner: GitRunner = gitRunnerWithTimeout(GIT_TIMEOUT_MS);
+
+/**
+ * 专注左栏与审查面板（unstaged）的 status 是同一组参数，两处共用这一份（以前各写一遍，审查那边
+ * 少了 --no-renames；目前只读 `?` 行所以没出事，但参数漂移迟早咬人）：
+ * - `-c status.relativePaths=true`：路径口径钉成「工作区相对」。`git diff` 用 --relative 强制，
+ *   status 没有这个参数，由配置决定（默认 true，用户可设 false）。不钉死，子目录工作区会遇到
+ *   「diff 是 a.txt、status 是 sub/a.txt / ../x」两套路径（2026-10-25 合作者实测）。
+ * - `--untracked-files=all`：未跟踪目录展开成文件，逐个数行。
+ * - `--no-renames`：不产 `2 <XY> … old\tnew` 改名行（parseStatusChangedLine 只认 `1` 行），
+ *   也省掉改名检测。
+ */
+const STATUS_ARGS = [
+  "-c",
+  "status.relativePaths=true",
+  "status",
+  "--porcelain=v2",
+  "--untracked-files=all",
+  "--no-renames",
+];
 
 /** 仓库根：跑得动且返回路径 = 是仓库；code 128 = 不是；ENOENT = 没有 git。 */
 async function repoRoot(runner: GitRunner, cwd: string): Promise<string | null> {
@@ -215,7 +273,9 @@ export async function gitReviewList(
   let root: string | null;
   try {
     root = await repoRoot(runner, cwd);
-  } catch {
+  } catch (cause) {
+    // 超时不是「没有 git」：抛给 IPC 层如实报错
+    if (cause instanceof GitTimeoutError) throw cause;
     return { kind: "empty", reason: "no-git", cwd };
   }
   if (root === null) return { kind: "empty", reason: "not-repo", cwd };
@@ -232,11 +292,8 @@ export async function gitReviewList(
   }
 
   if (source === "unstaged") {
-    // 路径口径必须是「工作区相对」：`git diff` 用 --relative 强制，`status` 没有这个参数，
-    // 它由 `status.relativePaths` 配置决定（默认 true，但用户可设 false）。不显式钉死，
-    // 子目录工作区会遇到「diff 是 a.txt、status 是 sub/a.txt / ../x」的两套路径，
-    // 行数全 0、工作区外的改动也会混进来（2026-10-25 合作者实测）。
-    const status = await runner(["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all"], cwd);
+    // 路径口径与专注左栏同一组 status 参数（STATUS_ARGS 的注释写了为什么要钉死工作区相对）
+    const status = await runner(STATUS_ARGS, cwd);
     const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
     const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, probe))];
     if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd };
@@ -309,17 +366,13 @@ export async function gitWorkdirChanges(
   let root: string | null;
   try {
     root = await repoRoot(runner, cwd);
-  } catch {
+  } catch (cause) {
+    if (cause instanceof GitTimeoutError) throw cause;
     return { kind: "empty", reason: "no-git" };
   }
   if (root === null) return { kind: "empty", reason: "not-repo" };
 
-  // --no-renames：status 不产 `2 <XY> … old\tnew` 改名行，parseStatusChangedLine 只认 `1` 行
-  // -c status.relativePaths=true：与上面审查面板同一条路径口径（用户配置可能是 false）。
-  const status = await runner(
-    ["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all", "--no-renames"],
-    cwd,
-  );
+  const status = await runner(STATUS_ARGS, cwd);
   const stats = new Map<string, LineStat>();
   mergeLineStat(stats, numstatEntries((await runner(diffArgs("unstaged", null, { numstat: true }) ?? [], cwd)).stdout));
   mergeLineStat(

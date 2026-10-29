@@ -4,7 +4,15 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseNumstatLine, parseUntrackedLine } from "../../shared/review.ts";
-import { gitReviewDiff, gitReviewList, gitWorkdirChanges, realGitRunner, type GitRunner } from "./git-source.ts";
+import {
+  gitReviewDiff,
+  gitReviewList,
+  gitRunnerWithTimeout,
+  GitTimeoutError,
+  gitWorkdirChanges,
+  realGitRunner,
+  type GitRunner,
+} from "./git-source.ts";
 import type { UntrackedProbe } from "./untracked-lines.ts";
 
 /** 假读盘面：read 给出每个路径的内容（null = 不存在），mtime 恒定；按块读就是从内容里拷一段 */
@@ -83,7 +91,7 @@ describe("gitReviewList", () => {
   test("unstaged：numstat + 未跟踪合并、去重", async () => {
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/w\n" },
-      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": { stdout: "? new.txt\n? bin.dat\n# branch.oid abc\n" },
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": { stdout: "? new.txt\n? bin.dat\n# branch.oid abc\n" },
       "diff --no-renames --relative --numstat": { stdout: "2\t1\tsrc/a.ts\n0\t5\tgone.md\n" },
     });
     // 假读盘：new.txt 两行文本；bin.dat 带 NUL → binary；读不到的路径跳过
@@ -148,7 +156,7 @@ describe("gitReviewList", () => {
   test("unstaged：工作区之外的路径（../ 前缀）不进列表——与 diff --relative 的排除口径一致", async () => {
     const runner = fakeGit({
       "rev-parse --show-toplevel": { stdout: "/repo\n" },
-      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": {
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": {
         stdout: "? ../outside-new.txt\n? inside.txt\n",
       },
       "diff --no-renames --relative --numstat": { stdout: "1\t0\tinside.ts\n" },
@@ -164,7 +172,7 @@ describe("gitReviewList", () => {
     const calls: string[] = [];
     const outputs: Record<string, string> = {
       "rev-parse --show-toplevel": "/w\n",
-      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all": "",
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": "",
       "rev-parse --abbrev-ref @{upstream}": "origin/main\n",
     };
     const runner: GitRunner = async (args) => {
@@ -530,5 +538,58 @@ describe("gitReviewDiff × 读盘边界（假 git）", () => {
     }
     assert.deepEqual(calls, []);
     assert.deepEqual(reads, []);
+  });
+});
+
+// ————————————————————————————————————————————————
+// 两处 status 同一组参数；git 卡死有时限，超时如实报错、不冒充「没有改动」
+// ————————————————————————————————————————————————
+describe("status 参数与 git 超时", () => {
+  test("审查面板（unstaged）与专注左栏发的 status 是同一组参数（以前审查那边少 --no-renames）", async () => {
+    const statusCalls: string[] = [];
+    const runner: GitRunner = async (args, cwd) => {
+      if (args.includes("status")) statusCalls.push(`${cwd}: ${args.join(" ")}`);
+      return { code: 0, stdout: args[0] === "rev-parse" && args[1] === "--show-toplevel" ? "/w\n" : "" };
+    };
+    await gitReviewList(runner, "/w", "unstaged", fakeProbe(() => null));
+    await gitWorkdirChanges(runner, "/w", fakeProbe(() => null));
+    assert.equal(statusCalls.length, 2);
+    assert.equal(statusCalls[0], statusCalls[1]);
+    assert.ok(statusCalls[0]?.includes("--no-renames"));
+  });
+
+  test("真 git 卡住：到点被杀，抛 GitTimeoutError，不挂死", { timeout: 20_000 }, async (t) => {
+    // 「卡住」的样本是 git 别名跑 `sleep 3`：卡得有上限。曾用等 stdin 的 hash-object，时限一被删掉
+    // （回归），git 永远不退、整个测试进程跟着挂住；换成这个，回归时 3 秒后 git 自己退出，这条测试报红
+    const nap = await realGitRunner(["-c", "alias.orbita-nap=!sleep 0", "orbita-nap"], tmpdir()).catch(() => null);
+    if (nap === null || nap.code !== 0) return t.skip("环境没有 git，或 git 别名跑不了 sleep");
+    const started = Date.now();
+    await assert.rejects(
+      gitRunnerWithTimeout(300)(["-c", "alias.orbita-slow=!sleep 3", "orbita-slow"], tmpdir()),
+      (cause: unknown) => {
+        assert.ok(cause instanceof GitTimeoutError, String(cause));
+        assert.match(cause.message, /git orbita-slow timed out/);
+        return true;
+      },
+    );
+    assert.ok(Date.now() - started < 2_500, "应在时限附近返回，而不是等 sleep 跑完");
+  });
+
+  test("应用里的 runner 有时限：一个正常命令照常返回（时限没把正常调用拦掉）", async (t) => {
+    const version = await realGitRunner(["--version"], tmpdir()).catch(() => null);
+    if (version === null) return t.skip("环境没有 git");
+    assert.equal(version.code, 0);
+    assert.match(version.stdout, /git version/);
+  });
+
+  test("status / rev-parse 超时：列表与专注左栏都抛出去（IPC 层报错），不当成「没有 git」「没有改动」", async () => {
+    const timingOut = (which: string): GitRunner => async (args) => {
+      if (args.includes(which)) throw new GitTimeoutError(`git ${which} timed out after 60 s`);
+      return { code: 0, stdout: args[1] === "--show-toplevel" ? "/w\n" : "" };
+    };
+    for (const which of ["status", "rev-parse"]) {
+      await assert.rejects(gitWorkdirChanges(timingOut(which), "/w", fakeProbe(() => null)), GitTimeoutError);
+      await assert.rejects(gitReviewList(timingOut(which), "/w", "unstaged", fakeProbe(() => null)), GitTimeoutError);
+    }
   });
 });
