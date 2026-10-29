@@ -59,6 +59,7 @@ import {
   planNotice,
   sessionRunState,
   settledSessions,
+  treeNotices,
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
@@ -701,6 +702,8 @@ export function App() {
     [engine, session],
   );
   const prevStatesRef = useRef(engine.states);
+  /** 落定时子树还在跑、提醒先压着的根会话（treeNotices）：纯判定状态，不驱动渲染 */
+  const heldNoticesRef = useRef<ReadonlySet<string>>(new Set());
   /** 专注中（计时里）：完成提醒静音——记未读、不响铃、不弹卡（用户裁决：专注期间
    * 其它会话跑完只记帐，专注结束后铃铛照常可见）。done 之后恢复常觃。 */
   const focusQuiet = focus.status.kind === "run";
@@ -711,14 +714,25 @@ export function App() {
     const settled = settledSessions(prev, engine.states).filter(
       (id) => session.sessions.find((meta) => meta.id === id)?.parentId === undefined,
     );
-    if (settled.length === 0) return;
+    if (settled.length === 0 && heldNoticesRef.current.size === 0) return;
+    // 子树还在跑的先压着，整棵停下那拍再提醒（母会话每被子会话叫醒一次就响一声的根因，
+    // 见 completion-notice.ts 的 treeNotices）
+    const { notify, held } = treeNotices({
+      settled,
+      held: heldNoticesRef.current,
+      states: engine.states,
+      sessions: session.sessions,
+      failed: (id) => session.turnErrorOf(id) !== null,
+    });
+    heldNoticesRef.current = held;
+    if (notify.length === 0) return;
     const windowActive = !isWindowInactive({
       hasFocus: document.hasFocus(),
       visibilityState: document.visibilityState,
     });
     const ringFor: string[] = [];
     const fresh: string[] = [];
-    for (const id of settled) {
+    for (const id of notify) {
       const plan = planNotice({
         watched: watchedIds.includes(id),
         windowActive,
