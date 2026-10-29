@@ -193,9 +193,12 @@ test("启动清扫：闲置开段追认收尾（应用退出的兜底）", async
   const dir = await tempDir();
   await first.core.init(dir, CHORE);
   await first.core.turnSettled(turnPayload());
-  await new Promise((resolve) => setTimeout(resolve, 60)); // idleCloseMs = 25
-  await new Promise((resolve) => setTimeout(resolve, 10));
   const store = new EpisodeStore(dir);
+  // idleCloseMs = 25：轮询等收尾（固定睡 60ms 在全量测试的负载下会偶发不够——
+  // 启动时多了一次旧数据落定、提取落盘多一把锁，异步步数变多）
+  for (let waited = 0; waited < 2000 && (await store.loadOpen("s1")) !== null; waited += 20) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   assert.equal(await store.loadOpen("s1"), null); // 收尾提完了
   // 第二段：重启清扫把还没提的类补完（fact 提成、preference/insight 还欠着）
   await store.savePending({
@@ -492,6 +495,29 @@ test("agentTool search：只回 active、按相关度；retire 标 muted 并记�
   const again = await core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "search", query: "依赖用什么管" } });
   assert.deepEqual(again.ok ? again.entries : null, []);
   assert.equal((await entries.listScope("ws-1")).find((item) => item.id === b!.id)?.status, undefined);
+});
+
+test("agentTool search：没有关键词的手动条目也搜得到——检索句覆盖了条目就算命中（实例实测的回归）", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const wsToken = entries.tokenOf("ws-1");
+  const manual = await entries.addManual(wsToken, { type: "preference", text: "用户喝咖啡只喝美式", reason: "r", now: 1 });
+  await entries.appendScope("ws-1", SEED_EPISODE, [
+    { type: "preference", text: "用户写汇报的格式要求", reason: "r", keywords: ["写作习惯"], turns: [1] },
+  ]);
+  const found = await core.agentTool({
+    sessionId: "s1", scopeId: "ws-1", turn: 2,
+    call: { op: "search", query: "用户喝咖啡的习惯 美式" },
+  });
+  assert.equal(found.ok && found.entries[0]?.id, manual!.id);
+  // 实例实测第二例：短检索句只有一个字对得上（「猫」对「橘猫」）
+  const cat = await entries.addManual(wsToken, { type: "fact", text: "用户养了一只叫团子的橘猫", now: 1 });
+  for (const query of ["猫的名字 团子", "猫 宠物 名字"]) {
+    const hit = await core.agentTool({ sessionId: "s1", scopeId: "ws-1", turn: 2, call: { op: "search", query } });
+    assert.equal(hit.ok && hit.entries[0]?.id, cat!.id, query);
+  }
 });
 
 test("提取：本段里 agent 当场修订过的条目进三类提示词的 <recorded> 节", async () => {

@@ -308,3 +308,66 @@ export function recallHits(
     ...lexical,
   ];
 }
+
+/* ---------- agent 的 memory_search：排序，不门控 ---------- */
+
+/**
+ * 条目一侧的检索单位：tokenize 的结果（拉丁词 + CJK bigram）再加上每个 CJK 单字——查询里
+ * 单独成段的字（「猫 宠物」里的「猫」）要能对上条目里词中的字（「橘猫」）。查询一侧只用
+ * tokenize：连续的中文按 bigram 切，「量子计算」不会拆出一个「子」去撞「团子」。
+ */
+function entrySearchUnits(entry: MemoryEntry): Set<string> {
+  const text = `${entry.text} ${entry.keywords.join(" ")}`;
+  return new Set([...tokenize(text), ...(text.match(/[\u4e00-\u9fff]/g) ?? [])]);
+}
+
+/** memory_search 的最低分：低于它的条目一个有区分度的字都没对上，或只沾了边。 */
+const SEARCH_MIN_SCORE = 0.3;
+
+/**
+ * agent 主动检索（memory_search）的排序。与轮前召回的分工不同：召回是**每轮自动**注入，
+ * 宁缺毋滥，要门控；检索是 agent **有意**去找某一条（用户在纠正它），漏了就改不成，
+ * 多回几条由模型自己挑。
+ *
+ * 为什么不直接用 lexicalScore：它以查询的全部 token 为分母，agent 的检索句里总有库里根本
+ * 没有的词——「猫的名字 团子」切成「猫的 / 的名 / 名字 / 团子」，与「用户养了一只叫团子的
+ * 橘猫」只对上「团子」，0.3÷4 过不了门槛（2026-10-29 实例 memalign 实测两次检索都空手）。
+ * 这里改成**按区分度加权、只数库里出现过的单位**：
+ * - 单位见 entrySearchUnits（查询侧是 tokenize）；
+ * - 每个单位按 IDF 加权：「用户」这类每条都有的单位权重低，对上了也不算数；
+ * - 一个条目的得分 = 它对上的单位的 IDF 之和 ÷ 查询里所有「库里出现过的」单位的 IDF 之和
+ *   （库里根本没有的词不进分母：「宠物」没人提过，不该稀释「猫」）；
+ * - 与 coverageScore（条目有多少落在检索句里）取最大，过 SEARCH_MIN_SCORE，按分排、取前 limit。
+ *   **不掺 lexicalScore**：它的关键词 bigram 通道一个字沾边就给到 0.3（实例里「习惯」二字
+ *   把汇报偏好捞进了咖啡的检索结果），召回门控可以靠它兜底，检索排序不行。
+ */
+export function searchMemories(
+  entries: readonly MemoryEntry[],
+  query: string,
+  options: { limit: number; now: number },
+): MemoryHit[] {
+  const queryUnits = new Set(tokenize(query));
+  if (entries.length === 0 || queryUnits.size === 0) return [];
+  const parsed: MemoryQuery = { text: query, tokens: queryUnits };
+  const entryUnits = entries.map(entrySearchUnits);
+  const total = entries.length;
+  const idf = new Map<string, number>();
+  for (const unit of queryUnits) {
+    const df = entryUnits.filter((units) => units.has(unit)).length;
+    if (df === 0) continue; // 库里没有的字不进分母
+    idf.set(unit, Math.log(1 + total / df));
+  }
+  const denominator = [...idf.values()].reduce((sum, value) => sum + value, 0);
+  return entries
+    .map((entry, index) => {
+      let matched = 0;
+      for (const [unit, weight] of idf) if (entryUnits[index]!.has(unit)) matched += weight;
+      const charScore = denominator === 0 ? 0 : matched / denominator;
+      const relevance = Math.max(charScore, coverageScore(parsed, entry));
+      return { entry, relevance, score: relevance * decayOf(entry.at, options.now) };
+    })
+    .filter((hit) => hit.relevance >= SEARCH_MIN_SCORE)
+    .sort((a, b) => b.score - a.score || b.entry.at - a.entry.at)
+    .slice(0, options.limit)
+    .map((hit): MemoryHit => ({ entry: hit.entry, score: hit.score }));
+}

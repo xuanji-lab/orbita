@@ -15,6 +15,7 @@ import {
   selectHits,
   tokenize,
   type MemoryQuery,
+  searchMemories,
 } from "./retrieve.ts";
 import type { MemoryEntry } from "../shared/memory.ts";
 
@@ -177,4 +178,35 @@ test("recallHits：常驻已装车的偏好，它的同源复述不再占词法�
     hits.map((hit) => [hit.entry.id, hit.pinned === true]),
     [["p", true]],
   );
+});
+
+/* ---------- memory_search 的排序（searchMemories） ---------- */
+
+function plain(id: string, text: string, keywords: string[] = []): MemoryEntry {
+  return {
+    id, type: "fact", text, keywords, layer: "workspace", scopeId: "ws", sessionId: "s", turns: [1],
+    at: 1, episodeId: "ep", source: "chat",
+  };
+}
+
+const SEARCH_POOL = [
+  plain("cat", "用户养了一只叫团子的橘猫"),
+  plain("coffee", "用户喝咖啡只喝美式"),
+  plain("report", "用户写工作汇报要分三条要点", ["写作习惯"]),
+  plain("standup", "用户每天下午 2 点开站会", ["站会"]),
+  plain("bun", "用户的项目用 bun 管依赖", ["bun"]),
+];
+
+test("searchMemories：agent 的短检索句也能找到条目（实例实测两次空手的回归）", () => {
+  for (const query of ["猫的名字 团子", "猫 宠物 名字"]) {
+    const hits = searchMemories(SEARCH_POOL, query, { limit: 8, now: 1 });
+    assert.equal(hits[0]?.entry.id, "cat", query);
+  }
+});
+
+test("searchMemories：每条都有的词（用户）按区分度降权——不会把沾边的都回出来", () => {
+  // 「用户」每条都有、「习惯」只沾到汇报那条的关键词：按区分度加权后只回咖啡那条
+  const hits = searchMemories(SEARCH_POOL, "用户喝咖啡的习惯 美式", { limit: 8, now: 1 });
+  assert.deepEqual(hits.map((hit) => hit.entry.id), ["coffee"]);
+  assert.deepEqual(searchMemories(SEARCH_POOL, "量子计算", { limit: 8, now: 1 }), []);
 });

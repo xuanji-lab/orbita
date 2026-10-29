@@ -53,7 +53,7 @@ import {
   RECALL_LIMIT,
   RECALL_MAX_CHARS,
   recallHits,
-  retrieveMemories,
+  searchMemories,
   selectHits,
 } from "./retrieve.ts";
 import { EmbedServerCore, type EmbedServerOptions } from "./embed-server.ts";
@@ -94,8 +94,6 @@ const EXTRACT_TYPES = ["fact", "preference", "insight"] as const;
 /** memory_search 一次最多回几条、正文总预算多少（给 agent 定位用，比轮前注入宽） */
 const AGENT_SEARCH_LIMIT = 8;
 const AGENT_SEARCH_MAX_CHARS = 4000;
-/** memory_search 的门槛比轮前注入低一档：用户在纠错时说的话常常只沾到条目一两个词 */
-const AGENT_SEARCH_THRESHOLD = 0.2;
 
 
 export class MemoryServiceCore {
@@ -497,17 +495,15 @@ export class MemoryServiceCore {
     }
   }
 
-  /** memory_search：可见范围里的 active 条目，词法（+ 向量可用时融合）按相关度排。 */
+  /**
+   * memory_search：可见范围里的 active 条目，按 searchMemories 排序（逐字 + IDF，与轮前
+   * 召回的门控词法分开——理由见 retrieve.ts），向量可用时再融合。
+   */
   private async agentSearch(entries: MemoryEntryStore, scopeId: string, query: string): Promise<MemoryEntry[]> {
     const [user, scope] = await Promise.all([entries.listUser(), entries.listScope(scopeId)]);
     const active = dedupeById([...user, ...scope]).filter(isRecallable);
-    const lexical = retrieveMemories(active, query, {
-      now: this.now(),
-      limit: AGENT_SEARCH_LIMIT,
-      maxChars: AGENT_SEARCH_MAX_CHARS,
-      threshold: AGENT_SEARCH_THRESHOLD,
-    });
-    const fused = await this.fuseWithVector(lexical, { user, scope }, scopeId, query, {
+    const ranked = searchMemories(active, query, { limit: AGENT_SEARCH_LIMIT, now: this.now() });
+    const fused = await this.fuseWithVector(ranked, { user, scope }, scopeId, query, {
       limit: AGENT_SEARCH_LIMIT,
       maxChars: AGENT_SEARCH_MAX_CHARS,
     });

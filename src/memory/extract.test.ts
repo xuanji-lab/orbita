@@ -147,4 +147,7 @@ test("偏好提示词讲清 conflictsWith / crossWorkspace 会直接生效、拿
   assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("会被直接标为过时"));
   assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("会被直接记到所有工作区"));
   assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("拿不准写 false"));
+  // 2026-10-29 实例实测：「一句话说理由」这类一次性的回答要求被记成偏好、又被升到所有工作区
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("只管这一轮，不是偏好"));
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("只在用户明说这是长期的个人习惯"));
 });
