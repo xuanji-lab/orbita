@@ -15,12 +15,19 @@ import type { CSSProperties } from "react";
  * `anywhere` 让最长无空格片段在 min-content 计算里也允许断开，宽度才收得下去。
  */
 
-/** 图标盒高度：一行行盒。文字继承 body 的 `--line-height-ui`（22px），图标盒取同高、内部居中——多行时三角钉在首行，单行时与旧 `align-items: center` 的位置一致。 */
+/**
+ * 图标挂在血线外侧（2026-10-29 精装第六笔）：提示行的字落在血线（--content-hem）上，
+ * 与正文、输入同一根线；图标绝对定位在字的左边，右缘离血线一个 --space-1，不占字的位置
+ * （13px 的沟装 12px 图标只剩 1px 缝，挤；所以按右缘定位，图标可以略探出列左缘）。
+ * 高度 = 一个行盒（`1lh`），内部居中——多行时图标钉在首行。
+ */
 export const noticeIconBoxStyle: CSSProperties = {
+  position: "absolute",
+  right: "calc(100% - var(--content-hem) + var(--space-1))",
+  top: 0,
   display: "inline-flex",
-  flex: "0 0 auto",
   alignItems: "center",
-  height: "var(--line-height-ui)",
+  height: "1lh",
 };
 
 /** 文字 wrapper：允许收缩 + 片段内断行（`anywhere`，见上）。 */
@@ -32,14 +39,15 @@ export const noticeTextStyle: CSSProperties = {
 /** 提示行本体：flex 子项默认 `min-width: auto` 是溢出的另一半根因，显式放开。 */
 export function noticeParagraphStyle(bad: boolean): CSSProperties {
   return {
+    position: "relative",
     display: "flex",
     alignItems: "flex-start",
-    gap: "var(--space-2)",
     margin: 0,
-    padding: "0 var(--space-2)",
+    // 字从血线起，图标挂在左边的沟里（见上）；提示是注脚，取 sm 字级
+    padding: "0 0 0 var(--content-hem)",
     minWidth: 0,
     maxWidth: "100%",
     color: bad ? "var(--color-danger)" : "var(--color-text-secondary)",
-    fontSize: "var(--font-size-base)",
+    fontSize: "var(--font-size-sm)",
   };
 }

@@ -1230,7 +1230,12 @@ function ChatViewBody(props: {
         <Notice tone="bad">{t.chat.providersFailed(providersError)}</Notice>
       ) : (
         session.usable.length === 0 && (
-          <Notice>{t.chat.noProvider}</Notice>
+          <Notice
+            icon="info"
+            exit={props.onOpenProviders === undefined ? undefined : { label: t.chat.noProviderExit, onClick: props.onOpenProviders }}
+          >
+            {t.chat.noProvider}
+          </Notice>
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
@@ -1240,29 +1245,8 @@ function ChatViewBody(props: {
         「已标完成」就无路可走。
       */}
       {session.scanNotice !== null && (
-        <Notice>
+        <Notice exit={session.retryClosingScan === null ? undefined : { label: t.common.retry, onClick: session.retryClosingScan }}>
           {session.scanNotice}
-          {session.retryClosingScan !== null && (
-            <button
-              type="button"
-              onClick={session.retryClosingScan}
-              style={{
-                border: 0,
-                background: "transparent",
-                padding: 0,
-                // 文字与按钮如今同在 Notice 的文字 wrapper 里（原来靠 flex gap 隔开），
-                // 这里自己补上同一间距，保持与旧版一致的视觉分隔
-                marginLeft: "var(--space-2)",
-                fontFamily: "var(--font-family-base)",
-                fontSize: "var(--font-size-base)",
-                color: "var(--color-text-primary)",
-                textDecoration: "underline",
-                cursor: "pointer",
-              }}
-            >
-              {t.common.retry}
-            </button>
-          )}
         </Notice>
       )}
       {/*
@@ -1270,7 +1254,7 @@ function ChatViewBody(props: {
         （guideline §四把这条代价写明了）。
       */}
       {session.readOnly && (
-        <Notice>{t.chat.readOnlyTask}</Notice>
+        <Notice icon="lock">{t.chat.readOnlyTask}</Notice>
       )}
     </>
   );
@@ -5217,19 +5201,37 @@ function Retrying(props: { status: RetryStatus }) {
   );
 }
 
-/** 提示行：文字是主信号，颜色是第二信号。样式口径见 notice.ts（文字断行 / 图标对首行）。 */
-function Notice(props: { tone?: "bad"; children: React.ReactNode }) {
+/**
+ * 提示行：文字是主信号，颜色是第二信号。样式口径见 notice.ts（文字断行 / 图标挂在血线外）。
+ * 阻塞类提示带一个**出口**（exit）：句尾一个文字按钮，说下一步去哪——只说「不行」
+ * 不说往哪走，读的人只能自己找（2026-10-29 精装第六笔）。
+ */
+function Notice(props: {
+  tone?: "bad";
+  /** 挂在血线外的图标；bad 档缺省 triangle-alert */
+  icon?: IconName;
+  exit?: { label: string; onClick: () => void } | undefined;
+  children: React.ReactNode;
+}) {
+  const icon = props.icon ?? (props.tone === "bad" ? "triangle-alert" : undefined);
   return (
     <p
       role={props.tone === "bad" ? "alert" : undefined}
       style={noticeParagraphStyle(props.tone === "bad")}
     >
-      {props.tone === "bad" && (
+      {icon !== undefined && (
         <span style={noticeIconBoxStyle}>
-          <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
+          <Icon name={icon} size={12} strokeWidth={1.8} />
         </span>
       )}
-      <span style={noticeTextStyle}>{props.children}</span>
+      <span style={noticeTextStyle}>
+        {props.children}
+        {props.exit !== undefined && (
+          <button type="button" className="notice-exit" onClick={props.exit.onClick}>
+            {props.exit.label}
+          </button>
+        )}
+      </span>
     </p>
   );
 }

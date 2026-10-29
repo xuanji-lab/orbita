@@ -31,9 +31,14 @@ test("提示行本体：minWidth 0 + maxWidth 100%，flex 子项能被压到可�
   }
 });
 
-test("图标盒：高度只由行高 token 构成，无像素常量", () => {
+test("图标盒：高度 = 一个行盒（1lh），挂在血线外侧的沟里，无像素常量", () => {
   const style = noticeIconBoxStyle;
-  assert.equal(style.height, "var(--line-height-ui)");
+  assert.equal(style.height, "1lh");
+  assert.equal(style.position, "absolute");
+  assert.equal(style.right, "calc(100% - var(--content-hem) + var(--space-1))", "右缘离血线一个 --space-1");
+  for (const bad of [true, false]) {
+    assert.equal(noticeParagraphStyle(bad).padding, "0 0 0 var(--content-hem)", "字落在血线上");
+  }
   for (const value of Object.values(style)) {
     assert.equal(/\d+px/.test(String(value)), false, `不许像素常量：${String(value)}`);
   }

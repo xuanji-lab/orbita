@@ -1371,7 +1371,9 @@ export const en = {
     // 收尾扫描是会话里的一轮、不设超时（审核 S-4）：出口是输入卡的停止键，这里说出来
     placeholderScanning: "Wrapping up this task — press Stop anytime to end the scan",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
-    noProvider: "Add a provider with at least one model in Settings, then send a message.",
+    // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
+    noProvider: "No model to send with yet. Your draft stays here.",
+    noProviderExit: "Add a provider",
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
     noMessages: "No messages yet. Send the first one to start.",
