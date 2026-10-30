@@ -1,11 +1,11 @@
-/** readPreview 的账：文本 / 截断 / 图片 / 超限图片 / 二进制 / 无扩展名文本 / 目录被拒。 */
+/** readPreview 的账：文本 / 大文本不读正文 / 图片 / 超限图片 / 二进制 / 无扩展名文本 / 目录被拒；readTextHead 的 UTF-8 边界。 */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PREVIEW_TEXT_LIMIT } from "../../shared/files.ts";
-import { readPdfFile, readPreview } from "./read.ts";
+import { readPdfFile, readPreview, readTextHead } from "./read.ts";
 
 let dir = "";
 
@@ -24,52 +24,71 @@ describe("readPreview", () => {
     assert.equal(result.kind, "text");
     assert.ok(result.kind === "text");
     assert.equal(result.text, "# hello\n\nworld");
-    assert.equal(result.truncated, false);
     assert.equal(result.size, Buffer.byteLength("# hello\n\nworld"));
     assert.equal(typeof result.modifiedAt, "number");
   });
 
-  test("超过 limits.text 时截断，truncated=true 且 size 是完整大小", async () => {
+  test("超过 limits.text：不读正文，回 large-text（size 是完整大小）", async () => {
     const path = join(dir, "big.txt");
     await writeFile(path, "0123456789", "utf8");
     const result = await readPreview(path, { text: 5, image: 1024 });
-    assert.equal(result.kind, "text");
+    assert.equal(result.kind, "large-text");
+    assert.ok(result.kind === "large-text");
+    assert.equal(result.size, 10);
+    // 契约上就没有正文字段：大文件的 16 MB 不再白白过一遍 IPC
+    assert.equal("text" in result, false);
+  });
+
+  test("超过 limits.text 的二进制：开头嗅到 NUL 照样判 binary", async () => {
+    const path = join(dir, "big.bin");
+    await writeFile(path, Buffer.concat([Buffer.from("ab"), Buffer.from([0]), Buffer.alloc(20, 0x61)]));
+    const result = await readPreview(path, { text: 5, image: 1024 });
+    assert.equal(result.kind, "binary");
+  });
+
+  test("恰好等于 limits.text：仍是整份 text", async () => {
+    const path = join(dir, "exact.txt");
+    await writeFile(path, "01234", "utf8");
+    const result = await readPreview(path, { text: 5, image: 1024 });
     assert.ok(result.kind === "text");
     assert.equal(result.text, "01234");
-    assert.equal(result.truncated, true);
-    assert.equal(result.size, 10);
+  });
+});
+
+describe("readTextHead —— 超长单行退路才用的开头文本", () => {
+  test("读开头 limit 字节", async () => {
+    const path = join(dir, "big.txt");
+    await writeFile(path, "0123456789", "utf8");
+    assert.equal(await readTextHead(path, 5), "01234");
+  });
+
+  test("文件比 limit 小：整份", async () => {
+    const path = join(dir, "small.txt");
+    await writeFile(path, "abc", "utf8");
+    assert.equal(await readTextHead(path, 100), "abc");
   });
 
   test("截断边界落在 3 字节汉字中间：退掉半个字符，末尾不留 U+FFFD", async () => {
     // 「汉」= E6 B1 89。限 5 字节："abc" + 汉的前 2 字节 → 只能退到 "abc"
     const path = join(dir, "cjk-cut.txt");
     await writeFile(path, "abc汉字", "utf8");
-    const result = await readPreview(path, { text: 5, image: 1024 });
-    assert.ok(result.kind === "text");
-    assert.equal(result.text, "abc");
-    assert.equal(result.text.includes("\uFFFD"), false);
-    assert.equal(result.truncated, true);
-    assert.equal(result.size, 9);
+    const text = await readTextHead(path, 5);
+    assert.equal(text, "abc");
+    assert.equal(text.includes("\uFFFD"), false);
   });
 
   test("截断边界落在 2 字节字符中间：同样退掉，不产出替换字符", async () => {
     // "é" = C3 A9。限 3 字节："ab" + C3 → 退到 "ab"
     const path = join(dir, "latin2-cut.txt");
     await writeFile(path, "abéx", "utf8");
-    const result = await readPreview(path, { text: 3, image: 1024 });
-    assert.ok(result.kind === "text");
-    assert.equal(result.text, "ab");
-    assert.equal(result.truncated, true);
+    assert.equal(await readTextHead(path, 3), "ab");
   });
 
   test("截断边界正好落在字符边界上：不多退、不缺字", async () => {
     // 「汉」占 3 字节，限 6 字节恰好是 "abc" + 汉 的完整边界
     const path = join(dir, "cjk-exact.txt");
     await writeFile(path, "abc汉字", "utf8");
-    const result = await readPreview(path, { text: 6, image: 1024 });
-    assert.ok(result.kind === "text");
-    assert.equal(result.text, "abc汉");
-    assert.equal(result.truncated, true);
+    assert.equal(await readTextHead(path, 6), "abc汉");
   });
 
   test("默认上限（16 MB）边界落在汉字中间：真尺寸下也不出 U+FFFD", async () => {
@@ -78,15 +97,14 @@ describe("readPreview", () => {
     const path = join(dir, "cjk-16mb.txt");
     const prefix = Buffer.alloc(PREVIEW_TEXT_LIMIT - 2, 0x61);
     await writeFile(path, Buffer.concat([prefix, Buffer.from("汉字", "utf8")]));
-    const result = await readPreview(path);
-    assert.ok(result.kind === "text");
-    assert.equal(result.truncated, true);
-    assert.equal(result.text.length, PREVIEW_TEXT_LIMIT - 2);
-    assert.equal(result.text, "a".repeat(PREVIEW_TEXT_LIMIT - 2));
-    assert.equal(result.text.includes("\uFFFD"), false);
-    assert.equal(result.size, PREVIEW_TEXT_LIMIT + 4);
+    const text = await readTextHead(path);
+    assert.equal(text.length, PREVIEW_TEXT_LIMIT - 2);
+    assert.equal(text, "a".repeat(PREVIEW_TEXT_LIMIT - 2));
+    assert.equal(text.includes("\uFFFD"), false);
   });
+});
 
+describe("readPreview —— 图片与其它", () => {
   test("图片：按扩展名读成 base64，mime 对应扩展名", async () => {
     const path = join(dir, "pixel.png");
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
