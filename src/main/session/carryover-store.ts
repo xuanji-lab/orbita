@@ -70,6 +70,8 @@ export class CarryoverStore {
       detail: draft.detail,
       sourceSessionId: sessionId,
       sourceMessageRange: draft.sourceMessageRange,
+      origin: draft.origin ?? "wrapup",
+      anchor: draft.anchor ?? null,
       status: "open",
       createdAt: now,
       doneAt: null,

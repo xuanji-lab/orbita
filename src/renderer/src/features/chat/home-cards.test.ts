@@ -42,6 +42,8 @@ const todo = (
   detail: "",
   sourceSessionId,
   sourceMessageRange: null,
+  origin: "wrapup",
+  anchor: null,
   status,
   createdAt: 0,
   doneAt: null,

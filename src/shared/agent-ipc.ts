@@ -747,6 +747,8 @@ export type AgentCommand =
        * 并讲它的用法；缺席 = 关
        */
       pdfCitations?: boolean;
+      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
+      planFirst?: boolean;
       /**
        * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
        * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
@@ -877,6 +879,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
+      planFirst?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
@@ -942,6 +946,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
+      planFirst?: boolean;
     }
   | { type: "listBuiltins" }
   /**

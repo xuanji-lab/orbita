@@ -17,6 +17,8 @@ const item = (patch: Partial<Carryover> = {}): Carryover => ({
   detail: "retry 耗尽后 session-guard 那一条没跑过",
   sourceSessionId: "s1",
   sourceMessageRange: null,
+  origin: "wrapup",
+  anchor: null,
   status: "open",
   createdAt: 0,
   doneAt: null,
