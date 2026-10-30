@@ -171,3 +171,26 @@ export function scopeNameOf(scopes: readonly MemoryScopeSummary[] | null, token:
   const scope = scopes?.find((item) => item.token === token);
   return scope === undefined || scope.kind === "user" ? userName : scope.name;
 }
+
+/** formatMemoryDate 要的两种月日写法（文案表给：中文「10月27日」、英文「Oct 27」） */
+export interface MemoryDateText {
+  monthDay: (month: number, day: number) => string;
+  yearMonthDay: (year: number, month: number, day: number) => string;
+}
+
+/**
+ * 记忆界面里日期只有一种写法（原型 2026-10-30：原来同屏有「10-28」「Turn 4 · 17:02」「turn 2」
+ * 三种）：今天写时间（16:29），今年写月日（10月27日），更早带年份（2025年10月27日）。
+ * 按本机时区算「今天」「今年」。条目的时间、演变链、行尾的「最近一次」都用它。
+ */
+export function formatMemoryDate(at: number, now: number, text: MemoryDateText): string {
+  const date = new Date(at);
+  const today = new Date(now);
+  const sameYear = date.getFullYear() === today.getFullYear();
+  if (sameYear && date.getMonth() === today.getMonth() && date.getDate() === today.getDate()) {
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  }
+  return sameYear
+    ? text.monthDay(date.getMonth() + 1, date.getDate())
+    : text.yearMonthDay(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}

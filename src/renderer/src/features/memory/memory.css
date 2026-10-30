@@ -32,10 +32,15 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.mem-entry:hover,
-.mem-entry[data-open="true"],
-.mem-entry[data-busy="true"] {
+.mem-entry:not([data-open]):hover {
   background: var(--color-bg-hover);
+}
+
+/* 点开 = 就地变成一张编辑卡（原型 .mrow.open）：实底 + 发丝 + 卡片阴影，悬停不再铺底 */
+.mem-entry[data-open="true"] {
+  padding: var(--space-3);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--color-border-subtle);
 }
 
 .mem-entry-icon {
@@ -51,19 +56,43 @@
   min-width: 0;
 }
 
-/* 正文本身是展开 / 收起键：整段可点，悬停只换光标 */
-.mem-entry-text {
+/* 收起的一行整行是键：正文 + 行尾「用过几次 · 最近一次」（基线对齐，正文可折行、行尾不折） */
+.mem-entry-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
   font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mem-entry-text {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: var(--font-size-base);
   line-height: var(--line-height-ui);
   color: var(--color-text-primary);
-  text-align: left;
   white-space: pre-wrap;
   word-break: break-word;
-  cursor: pointer;
+}
+
+.mem-entry-tail {
+  flex: none;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 从没被用过：橙色是第二信号，字面已经说了「还没用过」 */
+.mem-entry-tail[data-tone="warn"] {
+  color: var(--color-warning);
 }
 
 /* 不再使用 / 已过时：正文退到次要色，召回已经不认它了 */
@@ -106,29 +135,6 @@
 }
 .mem-entry-meta > .warn {
   color: var(--color-warning);
-}
-
-.mem-acts {
-  position: absolute;
-  top: var(--space-1);
-  right: var(--space-1);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-0-5);
-  padding: var(--space-0-5);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-panel);
-  box-shadow: 0 0 0 1px var(--color-border-subtle);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--duration-fast) var(--ease-out-quint);
-}
-
-.mem-entry:hover .mem-acts,
-.mem-acts:focus-within,
-.mem-acts[data-confirming="true"] {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .mem-icon-btn {
@@ -201,20 +207,22 @@
   border-color: transparent;
 }
 
+/* 编辑卡里的「删除」：红字描边（第一下）；确认那一下才是实底红（.mem-btn.danger） */
+.mem-btn[data-tone="danger"] {
+  color: var(--color-danger);
+}
+
 .mem-error {
   margin: 0;
   font-size: var(--font-size-sm);
   color: var(--color-danger);
 }
 
-/* 展开：原话 + 回到原文 + 演变链 */
+/* 编辑卡下半：出处一行、为什么、原话、演变链与撤销（卡本身已是实底，这里不再铺一层） */
 .mem-detail {
   display: grid;
   gap: var(--space-2);
   margin-top: var(--space-0-5);
-  padding: var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-panel);
 }
 
 .mem-detail-label {
