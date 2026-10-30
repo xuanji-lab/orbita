@@ -6,8 +6,9 @@
  * 主进程归拢的素材交给 agent 进程里的家务活模型（独立小调用，同
  * classifyGreetings 的通道）。路径策略在主进程：renderer 只传 workspaceId，
  * 路径由 WorkspaceStore 解——不信 renderer 传来的任何路径。
+ * 另有一条单向广播：powerMonitor 的 suspend → focus:suspend（睡眠即结束专注）。
  */
-import { BrowserWindow, Notification, ipcMain } from "electron";
+import { Notification, ipcMain, powerMonitor } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   FocusChangeEntry,
@@ -25,6 +26,7 @@ import { gitWorkdirChanges, realGitRunner } from "../review/git-source.ts";
 import { ExcerptStore } from "../excerpt/store.ts";
 import { buildSummaryMaterial, buildSummaryPrompt, pickActiveSessions } from "./summary-source.ts";
 import { normalizeFocusNotify } from "./notify.ts";
+import { mainWindows } from "../window/main-windows.ts";
 
 export function registerFocusIpc(
   workspaces: WorkspaceStore,
@@ -51,14 +53,27 @@ export function registerFocusIpc(
     // renderer 传什么都不可信：非对象 / 空标题 / 空正文直接不发（超长截断）
     const req = normalizeFocusNotify(raw);
     if (req === null) return;
+    // Windows 上打包版的系统通知要 AUMID（index.ts 启动时已 setAppUserModelId）；
+    // isSupported 为假（个别 Linux / 无通知环境）就静默跳过，不把到点埋进异常里
+    if (!Notification.isSupported()) return;
     // 时间到的提醒是「把人叫回来」：点通知聚焦主窗口（多窗口时聚焦最近使用的那张——
-    // 专注是单窗口里的事，第一张就是我们自己的）
+    // 专注是单窗口里的事，第一张就是我们自己的）。持有引用问 mainWindows，
+    // 不间 getAllWindows（沙盒浏览器窗口会插队）
     const notice = new Notification({ title: req.title, body: req.body });
     notice.on("click", () => {
-      const [first] = BrowserWindow.getAllWindows();
+      const [first] = mainWindows.list();
       first?.focus();
     });
     notice.show();
+  });
+
+  // 睡眠即结束专注（用户 2026-10-28 裁决）：系统 suspend（锁屏不算）时广播给主窗口，
+  // renderer 那一侧把在跑的一轮按提前结束收掉（不发到点通知、不跑小结、醒来不弹浮层）。
+  // 只管 suspend 不管 resume：醒来后的界面状态就是结束时留下的那一份。
+  powerMonitor.on("suspend", () => {
+    for (const window of mainWindows.list()) {
+      if (!window.webContents.isDestroyed()) window.webContents.send(ipcChannels.focusSuspend);
+    }
   });
 
   ipcMain.handle(ipcChannels.focusSummarize, async (_event, raw: unknown): Promise<FocusSummaryResult> => {

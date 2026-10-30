@@ -96,6 +96,10 @@ import { VoiceStore } from "./voice/store.ts";
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
 
+// Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
+// 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
+app.setAppUserModelId("com.orbita.desktop");
+
 // 开发版与正式版各用各的数据（理由见 data-dirs.ts）。**必须在任何人读 userData 之前**：
 // 放在模块顶层、whenReady 之前——Chromium 的 Local Storage / 缓存也在 ready 时按它定位
 const devDirs = devDataDirs({

@@ -5,7 +5,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { focusBubbleOf, focusCardMinutesOf, focusCardVisibleOf, focusFilesViewOf, settledSayTextOf } from "./focus-shell.ts";
+import { focusBubbleOf, focusCardMinutesOf, focusCardVisibleOf, focusFilesViewOf, focusSuspendActionOf, settledSayTextOf } from "./focus-shell.ts";
 import type { FocusStatus, FocusSummary } from "../../shell/focus/use-focus.ts";
 import type { FocusRun } from "../../shell/focus/focus-timer.ts";
 import { zh } from "../../messages-zh.ts";
@@ -112,5 +112,19 @@ describe("settledSayTextOf", () => {
     assert.equal(settledSayTextOf("failed", zh.focus), zh.focus.summaryFailed);
     assert.equal(settledSayTextOf("no-model", zh.focus), zh.focus.summaryNoModel);
     assert.equal(settledSayTextOf("no-activity", zh.focus), zh.focus.summaryNoActivity);
+  });
+});
+
+describe("focusSuspendActionOf（睡眠即结束专注）", () => {
+  test("run 相位：直接收掉，落到同一工作区的浏览态", () => {
+    assert.deepEqual(focusSuspendActionOf(status("run")), {
+      kind: "end-to-browse",
+      workspaceId: run.workspaceId,
+    });
+  });
+  test("不在跑就什么都不做：ending 的问句、done 的卡是醒着时留下的界面，睡眠不清理", () => {
+    assert.equal(focusSuspendActionOf(status("off")), null);
+    assert.equal(focusSuspendActionOf(status("ending")), null);
+    assert.equal(focusSuspendActionOf(status("done")), null);
   });
 });

@@ -88,3 +88,15 @@ export function settledSayTextOf(line: "ready" | "failed" | "no-activity" | "no-
   if (line === "no-model") return focus.summaryNoModel;
   return focus.summaryNoActivity;
 }
+
+/**
+ * 睡眠即结束专注（用户 2026-10-28 裁决）：suspend 信号到的那一刻，在跑的那一轮
+ * 该怎么收。按「提前结束」处理但不走 ending 的问询：人已经睡着了，问句没人答，
+ * 醒来也不该弹浮层——直接回 off，左栏落到同一工作区的**浏览态**（醒来看到的是
+ * 刚才在专心的那个工作区，只是不再计时）。不在跑（off / ending / done）就不用动：
+ * ending 的问句与 done 的卡是醒着时留下的界面，睡眠不清理它们。
+ */
+export function focusSuspendActionOf(status: FocusStatus): { kind: "end-to-browse"; workspaceId: string } | null {
+  if (status.kind !== "run") return null;
+  return { kind: "end-to-browse", workspaceId: status.run.workspaceId };
+}

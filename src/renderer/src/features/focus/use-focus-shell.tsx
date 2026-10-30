@@ -24,7 +24,7 @@ import { useFocus } from "../../shell/focus/use-focus.ts";
 import type { FocusStatus } from "../../shell/focus/use-focus.ts";
 import { isWindowInactive } from "../../shell/window-activity.ts";
 import { FocusCardLayer, FocusSay } from "./FocusLayer.tsx";
-import { focusBubbleOf, focusFilesViewOf, type FocusFilesView } from "./focus-shell.ts";
+import { focusBubbleOf, focusFilesViewOf, focusSuspendActionOf, type FocusFilesView } from "./focus-shell.ts";
 
 interface FocusShellOptions {
   /** 文案表（到点通知的正文按它写；星云气泡与卡在组件里自己取） */
@@ -166,6 +166,23 @@ export function useFocusShell(options: FocusShellOptions): FocusShell {
   }, [filesWorkspaceId]);
 
   const focusRun = focus.status.kind === "off" ? null : focus.status.run;
+
+  /**
+   * 睡眠即结束专注（用户 2026-10-28 裁决，判定在 focus-shell.ts）：系统 suspend 时
+   * 把在跑的一轮直接收掉，左栏落到同一工作区的浏览态。不走 ending 的问询——人
+   * 已睡着，问句没人答，醒来也不该弹浮层；不发到点通知（没到 done）；睡眠期间
+   * 不调模型，所以也不跑小结。end() 同时作废在途的小结结果（use-focus 的代次）。
+   */
+  useEffect(
+    () =>
+      api.focus.onSuspend(() => {
+        const action = focusSuspendActionOf(focus.status);
+        if (action === null) return;
+        setWsBrowse(action.workspaceId);
+        focus.end();
+      }),
+    [focus],
+  );
 
   /**
    * 到点那一拍要响的事：提示音（设置可关）、窗口不在前台时发系统通知、收起的
