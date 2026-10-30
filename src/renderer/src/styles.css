@@ -2313,6 +2313,56 @@ body {
   flex: 0 0 auto;
 }
 
+/*
+ * 用户消息动作行里的「用到 N · 记住 M」（原型 .memrow，2026-10-30）：与复制 / 回到这里 / 时间同一排，
+ * 一种字号（sm）、三级灰，像动作行的注脚；悬停铺中性底、字回正墨；点开时取选中行的底色。
+ * 下面的清单右对齐在气泡宽度里，一条记忆一行，次要色——它是证据，不和正文抢。
+ */
+.memrow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.memrow-btn:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+.memrow-btn[aria-pressed="true"] {
+  background: var(--option-active-bg);
+  color: var(--color-text-primary);
+}
+
+.memrow-list {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: end;
+  max-width: var(--bubble-max-width);
+  padding: 0 0 var(--space-1);
+}
+.memrow-list ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.memrow-list .mem-link {
+  justify-self: end;
+}
+
 .chat-md li::marker {
   color: var(--color-text-tertiary);
 }

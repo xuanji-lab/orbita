@@ -233,8 +233,10 @@ export const en = {
     sessionEmptyHint:
       "After a stretch of conversation goes quiet it's distilled; what gets remembered shows up here.",
     noTask: "Open a task to see what it remembered.",
-    rowLabel: "Memory",
-    rowRemembered: (count: number) => `remembered ${count}`,
+    /** 用户消息动作行里的「用到 N」：这一轮开始前召回进上下文的记忆 */
+    used: (count: number) => `Used ${count}`,
+    usedHint: "Memories recalled into this turn",
+    rememberedHint: "What this turn was distilled into",
     openReview: "Open in the review panel",
     vectorIntro:
       "Also finds memories phrased differently from your question. Off by default; when on, a small model runs on this computer and nothing leaves it.",
