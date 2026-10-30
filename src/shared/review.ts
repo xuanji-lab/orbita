@@ -33,6 +33,12 @@ export interface ReviewEntry {
   removed: number;
   /** 二进制（git numstat 的 `-`）：没有行级统计，也不出 diff 正文 */
   binary: boolean;
+  /**
+   * 未跟踪文件没有数行（与专注左栏 FocusChangeEntry.lineCountUnknown 同一个计数器）：超过单文件计数上限，
+   * 或这一轮的读盘预算用完、留到下一轮。added 是 0 但**不是**「没改动」，UI 显示「行数未知」。
+   * 它不等于「文件太大」：要判大小看字节数，预算用完的也可能是个小文件。
+   */
+  lineCountUnknown?: boolean;
   /** task 来源专用：基线与磁盘现状已一致（回退 / 撤销之后），列表标「已还原」 */
   restored?: boolean;
   /** task 来源专用：快照不可用（超限 / 非 utf8 / blob 丢失），出不了基线 diff */

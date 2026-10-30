@@ -164,6 +164,8 @@ export const en = {
           return "Couldn't load the diff.";
       }
     },
+    /** 未跟踪文件超过行数上限（与专注左栏同口径）：不拿 +0 冒充没改动 */
+    linesUnknown: "Count unknown",
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
@@ -662,6 +664,11 @@ export const en = {
     legendM: "modified",
     badgeU: "Untracked new file",
     badgeM: "Modified",
+    /**
+     * 未跟踪文件没数行：悬停只写这一句，不显示 +0。与审查面板同一句——同一个事实同一个说法；
+     * 也要短：悬停时它和文件名挤一行，原来的 "line count unavailable" 把文件名挤得只剩一个字母
+     */
+    linesUnknown: "Count unknown",
     changeSummary: (changed: number, untracked: number) =>
       `${changed} file${changed === 1 ? "" : "s"} changed, ${untracked} new`,
     notRepo: "Not a git repository — no U / M to show",

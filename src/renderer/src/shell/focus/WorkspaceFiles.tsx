@@ -381,7 +381,7 @@ function FileRow(props: {
 }) {
   const t = useT();
   const change = props.change;
-  const lines = change !== null ? formatChangeLines(change) : "";
+  const lines = change !== null ? formatChangeLines(change, t.focus.linesUnknown) : "";
   return (
     <div className="file-hover-host">
     <button
