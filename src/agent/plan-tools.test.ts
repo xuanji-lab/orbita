@@ -68,6 +68,14 @@ describe("update_plan", () => {
     }
   });
 
+  test("计划外的活要先加步骤、顺手看到的写 later：规则在 promptGuidelines（随工具启用、整会话不变），不只在说明里", () => {
+    const { tool } = setup();
+    const guidelines = (tool.promptGuidelines ?? []).join("\n");
+    assert.match(guidelines, /BEFORE you do it/);
+    assert.match(guidelines, /`later`/);
+    assert.ok(tool.promptSnippet !== undefined && tool.promptSnippet !== "");
+  });
+
   test("结构改了没写 why：回执里提醒，不拒；写了就不提醒；第一张不提醒；later 回执记一笔", async () => {
     const before = [planEntry("p1", items(["看代码", "in_progress"], ["补测试", "pending"])), planEntry("p2", items(["看代码", "in_progress"], ["补测试", "pending"]))];
     const added = { items: [{ text: "看代码", status: "done" }, { text: "修时区", status: "in_progress" }, { text: "补测试", status: "pending" }] };

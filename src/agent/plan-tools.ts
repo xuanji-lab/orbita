@@ -188,14 +188,25 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       "previous one). Exactly one step is in_progress while you work. Tick as you go: each time you move on, " +
       "call update_plan again in the same batch as the next step's first tool call, marking the finished step " +
       "done and the next one in_progress. Do not start a later step while an earlier one still shows " +
-      "in_progress, and do not save the ticks for the end. When you add, drop, split, merge, reword or reorder " +
-      "steps, pass `why`: one short clause the user will read (for example \"tests showed dueBefore compares " +
-      "UTC midnight\"); leave it out when you only tick. Things you notice but will not do in this task go in " +
-      "`later` (only the new ones; they are saved for the user). If you cannot go on without the user's " +
+      "in_progress, and do not save the ticks for the end. If you find work the plan does not cover (a bug in " +
+      "code you depend on, a missing prerequisite, a failing check), send the list again with that work as its " +
+      "own step before you do it; never fold it silently into another step. Whenever you add, drop, split, " +
+      "merge, reword or reorder steps, pass `why`: one short clause the user will read (for example \"tests " +
+      "showed dueBefore compares UTC midnight\"); leave it out when you only tick. Things you notice but will " +
+      "not do in this task (a nearby bug, a cleanup, a follow-up) go in `later` the moment you notice them, " +
+      "one short phrase each (only the new ones; they are saved for the user). If you cannot go on without the user's " +
       "answer, because the request is ambiguous or the next step is irreversible, costly or wide-reaching, put " +
       `1-${PLAN_MAX_CONFIRM} concrete questions in \`confirm\`: the plan is shown with them and your turn ends ` +
       "until they reply; call update_plan alone then, not together with other tools. Steps are short, " +
       "outcome-focused phrases in the user's language.",
+    // 规则放进系统提示的 Guidelines（promptGuidelines，随工具启用、整会话不变）：只写在工具说明里时，
+    // Kimi K3.1 Pro 实测两次发现计划没覆盖的问题（顺带修了 completeTask、兼容了旧日期），嘴上说了
+    // 「我会先修正」却照旧只打勾、没加步骤、没写 why / later（2026-10-30）
+    promptSnippet: "Write and update the task's plan; the user follows it as a checklist",
+    promptGuidelines: [
+      "Keep the plan honest. When you find work it does not cover (a bug you have to fix first, a missing prerequisite, a failing check), call update_plan with that work as its own step and a `why` BEFORE you do it. Saying it in prose, or folding it into another step, leaves the user's checklist wrong.",
+      "When you notice something worth doing but decide not to do it in this task, put it in update_plan's `later` right then, not at the end.",
+    ],
     parameters: {
       type: "object",
       properties: {
