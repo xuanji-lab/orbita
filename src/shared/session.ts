@@ -398,6 +398,16 @@ export function parseCarryover(raw: unknown): Carryover | null {
   };
 }
 
+/**
+ * 批量迁移（`session:move`）的回执。moved 含连带迁过去的子会话；
+ * skipped 是没动的根会话及原因——running = 它或它的子会话正在跑（这一轮已拿到旧 cwd），
+ * missing = meta 已不在（列表是旧快照），failed = 写 pi 本子的通知失败（这一条整家没动）。
+ */
+export interface SessionMoveResult {
+  moved: string[];
+  skipped: { id: string; reason: "running" | "missing" | "failed" }[];
+}
+
 export interface SessionMeta {
   id: string;
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
@@ -410,8 +420,10 @@ export interface SessionMeta {
    */
   intentEnabled?: boolean;
   /**
-   * 这一单跑在哪儿。**创建时固定、不可改**——pi 的 session 在 `createAgentSession`
-   * 时锁定 cwd，所以换目录只能换会话。
+   * 这一单跑在哪儿。**与 workspaceId 同进同出**：迁移到别的工作区时连同 cwd 一起换成
+   * 目标工作区的目录（session/move.ts）。换得动的理由：每轮都重开 pi 本子并显式传 cwd
+   * （`SessionManager.open(file, dir, cwd)` 覆盖本子头里记的旧 cwd），pi 不在本子上锁目录。
+   * 在跑的会话不换——这一轮开机时已经拿到了旧 cwd。
    */
   cwd: string;
   /**
