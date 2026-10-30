@@ -15,8 +15,8 @@
 import type { TranscriptRecord } from "@shared/session";
 import {
   parsePlanCall,
+  parsePlanItemsLoose,
   parsePlanNotes,
-  PLAN_STATUSES,
   PLAN_TOOL_NAME,
   type PlanItem,
   type PlanLater,
@@ -81,7 +81,7 @@ interface RawVersion {
 function rawVersion(record: TranscriptRecord): RawVersion | null {
   if (record.role !== "tool" || record.toolName !== PLAN_TOOL_NAME || record.status === "error") return null;
   if (record.status === "complete") {
-    const items = looseItems(record.input);
+    const items = parsePlanItemsLoose(record.input);
     if (items.length === 0) return null;
     const { why, later } = parsePlanNotes(record.input);
     return { record, items, why, later };
@@ -92,18 +92,6 @@ function rawVersion(record: TranscriptRecord): RawVersion | null {
   } catch {
     return null;
   }
-}
-
-function looseItems(input: unknown): PlanItem[] {
-  const raw = (input as { items?: unknown } | null)?.items;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item) => {
-    const value = (item ?? {}) as Record<string, unknown>;
-    const text = typeof value["text"] === "string" ? value["text"].trim() : "";
-    const status = value["status"];
-    if (text === "" || typeof status !== "string" || !(PLAN_STATUSES as readonly string[]).includes(status)) return [];
-    return [{ text, status: status as PlanItem["status"] }];
-  });
 }
 
 function awaitingOf(record: Extract<TranscriptRecord, { role: "tool" }>): boolean {

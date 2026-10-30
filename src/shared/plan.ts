@@ -54,6 +54,22 @@ export interface PlanToolDetails {
   awaiting?: boolean;
 }
 
+/**
+ * 已落盘入参里的清单，宽松读：坏条目跳过（不抛错）。面板、版本线、改动账都要读「已经发生过」的调用，
+ * 旧转录里可能有不合今天校验的条目，整条丢掉比抛错更对。
+ */
+export function parsePlanItemsLoose(input: unknown): PlanItem[] {
+  const raw = (input as { items?: unknown } | null)?.items;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const value = (item ?? {}) as Record<string, unknown>;
+    const text = typeof value["text"] === "string" ? value["text"].trim() : "";
+    const status = value["status"];
+    if (text === "" || typeof status !== "string" || !(PLAN_STATUSES as readonly string[]).includes(status)) return [];
+    return [{ text, status: status as PlanItemStatus }];
+  });
+}
+
 /** 一张计划的上限：再多就不是计划，是流水账 */
 export const PLAN_MAX_ITEMS = 12;
 
