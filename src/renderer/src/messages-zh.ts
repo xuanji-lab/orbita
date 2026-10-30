@@ -2058,6 +2058,7 @@ export const zh: Messages = {
     sourceUser: (time, head) => `你 ${time} 说：「${head}」`,
     sourceSelf: "智能体自己发现的",
     editsTitle: "目标和计划改了什么、为什么、是谁提的",
+    logOnly: "记录",
     notice: (from, to, why) => `目标改了：「${from}」改成「${to}」${why === "" ? "" : `——${why}`}`,
     carry: "带着目标开新会话",
     carryTitle: "新开一个会话，带上这个目标、做完的和没做完的事、目标是怎么改过来的",

@@ -2251,10 +2251,11 @@ export const en = {
     sourceUser: (time: string, head: string) => `You, ${time}: "${head}"`,
     sourceSelf: "Found by the agent itself",
     editsTitle: "What changed in the goal and the plan, why, and who asked",
+    logOnly: "Log",
     /** 对话里的一行：目标从什么改成什么；why 空串 = 没写理由 */
     notice: (from: string, to: string, why: string) => `Goal changed: "${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
     /** 目标行上的动作：带着目标开新会话（不是确认，是一个去处） */
-    carry: "Continue in a new task",
+    carry: "Continue the goal in a new task",
     carryTitle: "Start a new task with this goal, what is done, what is left and how the goal changed",
   },
 

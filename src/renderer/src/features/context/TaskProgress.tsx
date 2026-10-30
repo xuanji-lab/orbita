@@ -496,7 +496,7 @@ function PlanSection(props: {
         {t.taskPanel.plan}
         <span className="tp-n">{t.taskPanel.planCount(done, current.items.length)}</span>
         {props.ledger.goal === null && props.ledger.entries.length > 0 && (
-          <EditsButton count={props.ledger.entries.length} open={props.logOpen} onClick={props.onToggleLog} />
+          <EditsButton entries={props.ledger.entries} open={props.logOpen} onClick={props.onToggleLog} />
         )}
       </div>
       {props.ledger.goal === null && props.logOpen && (
@@ -518,12 +518,16 @@ function PlanSection(props: {
 /** 改动记录里一条目标文字最长多少字符（再长只留不同处附近的一小段，全文在悬停里） */
 const EDIT_TEXT_MAX = 80;
 
-/** 「改过 N 次」：点开是改动记录（目标和计划同一本账） */
-function EditsButton(props: { count: number; open: boolean; onClick: () => void }) {
+/**
+ * 「改过 N 次」：点开是改动记录（目标和计划同一本账）。N 只数真的改过的：第一次定下目标不是「改过」，
+ * 只有这一条时按钮写「记录」（点开仍能看到目标是从你哪句话来的）。
+ */
+function EditsButton(props: { entries: readonly LedgerEntry[]; open: boolean; onClick: () => void }) {
   const t = useT();
+  const changes = props.entries.filter((entry) => !(entry.kind === "goal" && entry.from === null)).length;
   return (
     <button type="button" className="tp-edits" aria-expanded={props.open} title={t.goalText.editsTitle} onClick={props.onClick}>
-      {t.planText.editsCount(props.count)}
+      {changes > 0 ? t.planText.editsCount(changes) : t.goalText.logOnly}
     </button>
   );
 }
@@ -550,7 +554,7 @@ function GoalSection(props: {
       <div className="tp-gh">
         {t.goalText.title}
         {props.ledger.entries.length > 0 && (
-          <EditsButton count={props.ledger.entries.length} open={props.logOpen} onClick={props.onToggleLog} />
+          <EditsButton entries={props.ledger.entries} open={props.logOpen} onClick={props.onToggleLog} />
         )}
       </div>
       <p className="tp-goal-text">{goal.text}</p>
