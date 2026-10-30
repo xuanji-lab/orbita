@@ -1284,6 +1284,11 @@ export type AgentEvent =
  */
 | { type: "skillsChanged" }
 /**
+ * 「以后再做」（carryovers.jsonl）有新增：agent 写 update_plan 时当场记下的事，由主进程在落盘那条
+ * 记录时写进清单后广播。无载荷、无 sessionId——界面听到就重拉 carryoverList（skillsChanged 同款）。
+ */
+| { type: "carryoversChanged" }
+/**
  * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
  * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
