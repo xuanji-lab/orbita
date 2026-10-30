@@ -20,6 +20,7 @@ import type {
   MemoryDownloadProgress,
   MemoryEntry,
   MemoryEpisodeTurn,
+  MemoryHistoryStepOutcome,
   MemoryHit,
   MemoryMutation,
   MemoryMutationOutcome,
@@ -80,6 +81,12 @@ export interface MemoryServiceCoreOptions {
   onBackfillProgress?: (progress: MemoryBackfillProgress) => void;
   /** llama-server pid 变了（runtime 转发 embedServerPid，主进程退出时补杀用） */
   onEmbedServerPid?: (pid: number | null) => void;
+  /** 从历史生成：相邻两轮（按历史时间）间隔多久收尾事件段（默认 = 实时的闲置收尾时长） */
+  historyGapMs?: number;
+  /** 从历史生成：家务活调用失败后的退避重试间隔（毫秒；默认 5s / 20s / 60s，共重试 3 次） */
+  historyRetryDelaysMs?: readonly number[];
+  /** 退避的等待（测试注入立即返回） */
+  sleep?: (ms: number) => Promise<void>;
   /** 向量引擎的原语（spawn / HTTP / 端口 / 下载 fetch），注入可测 */
   vectorDeps?: {
     spawn: EmbedServerOptions["spawn"];
@@ -92,6 +99,19 @@ export interface MemoryServiceCoreOptions {
 
 const EXTRACT_TYPES = ["fact", "preference", "insight"] as const;
 
+/** 从历史生成失败退避：智谱等家务活模型有并发 / 限额，429 后立刻重试只会再撞 */
+const HISTORY_RETRY_DELAYS_MS = [5_000, 20_000, 60_000] as const;
+
+/** 一次提取的上下文：用哪个调用（实时直调；从历史生成带计数与退避重试）、往哪记账。 */
+interface ExtractContext {
+  call: MemoryCallModel;
+  stats: MemoryHistoryStepOutcome | null;
+}
+
+function emptyStepOutcome(): MemoryHistoryStepOutcome {
+  return { closed: 0, written: { fact: 0, preference: 0, insight: 0 }, calls: 0, failed: 0 };
+}
+
 /** memory_search 一次最多回几条、正文总预算多少（给 agent 定位用，比轮前注入宽） */
 const AGENT_SEARCH_LIMIT = 8;
 const AGENT_SEARCH_MAX_CHARS = 4000;
@@ -101,6 +121,9 @@ export class MemoryServiceCore {
   private readonly callModel: MemoryCallModel;
   private readonly now: () => number;
   private readonly idleCloseMs: number;
+  private readonly historyGapMs: number;
+  private readonly historyRetryDelaysMs: readonly number[];
+  private readonly sleep: (ms: number) => Promise<void>;
   private readonly log: (message: string, ...args: unknown[]) => void;
   private readonly onChanged: () => void;
   private readonly onDownloadProgress: (progress: MemoryDownloadProgress) => void;
@@ -124,6 +147,11 @@ export class MemoryServiceCore {
   private chore: MemoryChoreModel | null = null;
   /** 「没配家务活模型」只提醒一次——每轮都刷一条就成了噪音 */
   private choreMissingLogged = false;
+  /** 从历史生成的按会话串行链（不进实时队列；见 historyTurn） */
+  private readonly historyChains = new Map<string, Promise<MemoryHistoryStepOutcome>>();
+  /** 正在提取的段：实时队列（启动清扫 / 同会话补提）与历史步可能同时摸到同一个待提取段，
+   * 后到的直接让开——两边各提一遍就是重复条目 */
+  private readonly extracting = new Set<string>();
   /** 串行队列（切段 / 提取都走它） */
   private queue: Promise<void> = Promise.resolve();
   /** 条目层文件级的互斥：提取的追加（appendScope）与记忆库的改写（整层重写）
@@ -157,6 +185,9 @@ export class MemoryServiceCore {
     this.callModel = options.callModel;
     this.now = options.now ?? (() => Date.now());
     this.idleCloseMs = options.idleCloseMs ?? EPISODE_IDLE_CLOSE_MS;
+    this.historyGapMs = options.historyGapMs ?? EPISODE_IDLE_CLOSE_MS;
+    this.historyRetryDelaysMs = options.historyRetryDelaysMs ?? HISTORY_RETRY_DELAYS_MS;
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.log = options.log ?? ((message, ...args) => console.log(message, ...args));
     this.onChanged = options.onChanged ?? (() => undefined);
     this.onDownloadProgress = options.onDownloadProgress ?? (() => undefined);
@@ -335,6 +366,149 @@ export class MemoryServiceCore {
     });
   }
 
+  /* ---------- 从历史生成 ---------- */
+
+  /**
+   * 一条历史轮（主进程按会话内的历史时间正序逐条喂，等回执再喂这条会话的下一条）。走与实时
+   * 同一套切段二分类与三类提取，只是：
+   * - 段放在**历史开段**（episodes/history/），不碰该会话的实时开段；
+   * - 收尾按历史时间判：本会话上一轮与这一轮间隔 ≥ historyGapMs 直接收尾（不问模型），
+   *   closeAfter（该会话在计划里的最后一轮）并入后立即收尾——实时路径的闲置计时器换成历史时钟；
+   * - 调用带计数与失败退避重试。
+   * **不进实时队列**：按会话串行（historyChains），不同会话可以并行（并发数由主进程控制）。
+   * 实时轮因此一步都不用等；跨会话的先后不影响正确性——冲突新旧按条目的 at 定向
+   * （appendScope），晚提取的旧说法照样落成过时。
+   * 返回这一步的账（收尾几段 / 写了几条 / 调了几次 / 失败几类），不抛。
+   */
+  historyTurn(payload: {
+    sessionId: string;
+    scopeId: string;
+    turn: MemoryEpisodeTurn;
+    closeAfter: boolean;
+    chore?: MemoryChoreModel;
+  }): Promise<MemoryHistoryStepOutcome> {
+    if (payload.chore !== undefined) this.chore = payload.chore;
+    return this.historyStep(payload.sessionId, "历史轮", (stats) => this.ingestHistoryTurn(payload, stats));
+  }
+
+  /** 从历史生成停止 / 跑完：全部历史开段按段尾时间先后收尾提取。 */
+  historyFlush(payload: { chore?: MemoryChoreModel } = {}): Promise<MemoryHistoryStepOutcome> {
+    if (payload.chore !== undefined) this.chore = payload.chore;
+    return this.historyStep("\u0000flush", "历史收尾", async (stats) => {
+      if (this.initGate !== null) await this.initGate;
+      const store = this.episodes;
+      if (store === null) {
+        stats.error = "记忆服务还没初始化";
+        return;
+      }
+      const context: ExtractContext = { call: this.historyCall(stats), stats };
+      const open = (await store.listHistoryOpen()).sort((a, b) => a.lastAt - b.lastAt);
+      for (const episode of open) await this.closeHistoryEpisode(episode, context);
+      if (open.length > 0) this.onChanged();
+    });
+  }
+
+  /** 历史步按 key（会话）串行，跑完把这一步的账交回去（抛错记进 error，不外抛）。 */
+  private historyStep(
+    key: string,
+    label: string,
+    job: (stats: MemoryHistoryStepOutcome) => Promise<void>,
+  ): Promise<MemoryHistoryStepOutcome> {
+    const stats = emptyStepOutcome();
+    const previous = this.historyChains.get(key) ?? Promise.resolve();
+    const run = previous.then(async () => {
+      try {
+        await job(stats);
+      } catch (cause) {
+        this.log(`[memory] 从历史生成：${label}处理出错`, cause);
+        stats.error = cause instanceof Error ? cause.message : String(cause);
+      }
+      return stats;
+    });
+    this.historyChains.set(key, run);
+    void run.finally(() => {
+      if (this.historyChains.get(key) === run) this.historyChains.delete(key);
+    });
+    return run;
+  }
+
+  /** 从历史生成的模型调用：每次（含重试）计数，失败按 historyRetryDelaysMs 退避重试。 */
+  private historyCall(stats: MemoryHistoryStepOutcome): MemoryCallModel {
+    return async (system, prompt) => {
+      for (let attempt = 0; ; attempt += 1) {
+        stats.calls += 1;
+        const raw = await this.callModel(system, prompt);
+        if (raw !== null) return raw;
+        const delay = this.historyRetryDelaysMs[attempt];
+        if (delay === undefined) return null;
+        this.log(`[memory] 从历史生成：家务活模型调用失败，${Math.round(delay / 1000)} 秒后重试（第 ${attempt + 1} 次）`);
+        await this.sleep(delay);
+      }
+    };
+  }
+
+  private async ingestHistoryTurn(
+    payload: { sessionId: string; scopeId: string; turn: MemoryEpisodeTurn; closeAfter: boolean },
+    stats: MemoryHistoryStepOutcome,
+  ): Promise<void> {
+    if (this.initGate !== null) await this.initGate;
+    const store = this.episodes;
+    if (store === null || this.entries === null) {
+      stats.error = "记忆服务还没初始化";
+      return;
+    }
+    if (this.chore === null) {
+      stats.error = "没配家务活模型（设置 › 模型服务 › 家务活模型）";
+      return;
+    }
+    const { sessionId, scopeId } = payload;
+    // 发送侧已截过；这里再过一遍同一个口径，不信任跨进程的载荷长度
+    const turn = memoryTurnSnapshot(payload.turn);
+    const context: ExtractContext = { call: this.historyCall(stats), stats };
+    let episode = await store.loadHistoryOpen(sessionId);
+    if (episode !== null && (await store.loadPending(episode.episodeId)) !== null) {
+      // 搬进待提取后、删历史开段前被杀：pending 那份是正主（实时启动清扫同款）
+      await store.removeHistoryOpen(sessionId);
+      episode = null;
+    }
+    if (episode !== null && turn.turn <= episode.toTurn) {
+      this.log(`[memory] 从历史生成：会话 ${sessionId} 第 ${turn.turn} 轮不大于历史开段已收的第 ${episode.toTurn} 轮，跳过`);
+      return;
+    }
+    let closing: OpenEpisode | null = null;
+    let next: OpenEpisode;
+    if (episode === null) {
+      next = openEpisode({ sessionId, scopeId, turn, now: turn.at });
+    } else if (
+      turn.at - episode.lastAt >= this.historyGapMs ||
+      (await this.classify(episode, turn, context.call)) === "new"
+    ) {
+      closing = episode;
+      next = openEpisode({ sessionId, scopeId, turn, now: turn.at });
+    } else {
+      next = { ...episode, toTurn: turn.turn, lastAt: turn.at, turns: [...episode.turns, turn] };
+    }
+    // 旧段先进待提取、新段再落盘（同一个历史开段文件，覆盖即搬移），最后才提取——死在提取里两段都不丢
+    if (closing !== null) await store.savePending(closing);
+    await store.saveHistoryOpen(next);
+    if (closing !== null) {
+      stats.closed += 1;
+      await this.extractEpisode(closing.episodeId, context);
+    }
+    if (payload.closeAfter) await this.closeHistoryEpisode(next, context);
+    this.onChanged();
+  }
+
+  /** 历史开段收尾：搬进待提取（已在就不覆盖——那份有提取记账），删历史开段，提取。 */
+  private async closeHistoryEpisode(episode: OpenEpisode, context: ExtractContext): Promise<void> {
+    const store = this.episodes;
+    if (store === null) return;
+    if ((await store.loadPending(episode.episodeId)) === null) await store.savePending(episode);
+    await store.removeHistoryOpen(episode.sessionId);
+    if (context.stats !== null) context.stats.closed += 1;
+    await this.extractEpisode(episode.episodeId, context);
+  }
+
   /** 回退的条目那一半：全库读一遍出计划，只改动到的层各自上锁重读、重写一次。不抛。 */
   private async revertEntries(sessionId: string, fromTurn: number): Promise<void> {
     try {
@@ -407,6 +581,18 @@ export class MemoryServiceCore {
         dropped += 1;
       } else if (next !== open) {
         await store.saveOpen(next);
+        cut += 1;
+      }
+    }
+    // 从历史生成的开段同样截（生成中途用户回退了这条会话）
+    const history = await store.loadHistoryOpen(sessionId);
+    if (history !== null) {
+      const next = truncateEpisode(history, fromTurn);
+      if (next === null) {
+        await store.removeHistoryOpen(sessionId);
+        dropped += 1;
+      } else if (next !== history) {
+        await store.saveHistoryOpen(next);
         cut += 1;
       }
     }
@@ -1104,10 +1290,14 @@ export class MemoryServiceCore {
   }
 
   /** 切段二分类：读不懂 / 调用失败按 same（并段比切段保守，判错代价更小）。 */
-  private async classify(episode: OpenEpisode, turn: MemoryEpisodeTurn): Promise<"same" | "new"> {
+  private async classify(
+    episode: OpenEpisode,
+    turn: MemoryEpisodeTurn,
+    call: MemoryCallModel = this.callModel,
+  ): Promise<"same" | "new"> {
     const last = episode.turns[episode.turns.length - 1];
     if (last === undefined) return "new"; // 空段不该来问；按新事件开段最保守
-    const raw = await this.callModel(
+    const raw = await call(
       SEGMENT_SYSTEM_PROMPT,
       buildSegmentPrompt({ prevUser: last.userText, nextUser: turn.userText }),
     );
@@ -1135,7 +1325,20 @@ export class MemoryServiceCore {
    * 某类失败（模型 / 落盘）：该类记账不动，段留在 pending——启动清扫或该会话下一轮
    * 落定时重试，已提成的类不会重提（不重复落条目）。
    */
-  private async extractEpisode(episodeId: string): Promise<void> {
+  private async extractEpisode(
+    episodeId: string,
+    context: ExtractContext = { call: this.callModel, stats: null },
+  ): Promise<void> {
+    if (this.extracting.has(episodeId)) return;
+    this.extracting.add(episodeId);
+    try {
+      await this.extractEpisodeOnce(episodeId, context);
+    } finally {
+      this.extracting.delete(episodeId);
+    }
+  }
+
+  private async extractEpisodeOnce(episodeId: string, context: ExtractContext): Promise<void> {
     const store = this.episodes;
     const entries = this.entries;
     if (store === null || entries === null) return;
@@ -1177,6 +1380,8 @@ export class MemoryServiceCore {
           pub = toMemoryEpisode(episode);
           await store.savePending(episode);
         }
+        // 冲突候选不按段的时间筛：比这段晚的新说法也要给模型看（带日期），判出矛盾时
+        // 由落盘侧按 at 定向——这段里的旧说法落成过时，不会顶掉后来的新说法（appendScope）
         const pool = [...(await entries.listScope(episode.scopeId)), ...(await entries.listUser())];
         // agent 在这段里当场改写过的条目进提示词：同一件事别再写一遍
         const recorded = agentRecordedIn(pool, pub);
@@ -1187,9 +1392,11 @@ export class MemoryServiceCore {
         }
         const system =
           type === "fact" ? FACT_SYSTEM_PROMPT : type === "preference" ? PREFERENCE_SYSTEM_PROMPT : INSIGHT_SYSTEM_PROMPT;
-        raw = await this.callModel(
+        // 「当前日期」取段尾那一轮的时间：相对时间（明天 / 上周）要按对话发生那天换算——
+        // 从历史生成的段是几周前的；实时段在启动清扫里补提时也可能隔了几天
+        raw = await context.call(
           system,
-          buildExtractPrompt({ turns: episode.turns, now: this.now(), candidates, recorded }),
+          buildExtractPrompt({ turns: episode.turns, now: episode.lastAt, candidates, recorded }),
         );
         if (raw === null || this.cutByPendingRevert(episode) === episode) break;
         // 不按草稿的支撑轮过滤留用：模型读过被撤回的话，只引前面轮号的草稿也可能带着它的内容
@@ -1197,6 +1404,7 @@ export class MemoryServiceCore {
       }
       if (raw === null) {
         this.log(`[memory] 段 ${episodeId} 的 ${type} 提取调用失败（该类记账不动，下次重试）`);
+        if (context.stats !== null) context.stats.failed += 1;
         continue;
       }
       const candidateIds = new Set((candidates ?? []).map((entry) => entry.id));
@@ -1208,6 +1416,9 @@ export class MemoryServiceCore {
       );
       this.onChanged();
       this.scheduleVectorize(written.some((entry) => entry.layer === "user") ? "all" : scopeToken);
+      if (context.stats !== null) {
+        for (const entry of written) context.stats.written[entry.type] += 1;
+      }
       if (written.length > 0) {
         this.entryWrites.set(episode.sessionId, (this.entryWrites.get(episode.sessionId) ?? 0) + 1);
         this.log(
