@@ -221,6 +221,9 @@ export const en = {
       "Memories are only built from chats after the memory system was turned on. This backfills earlier chats in their original order: a later statement marks an earlier conflicting one as outdated, and turns already processed are skipped, never repeated.",
     historyWorkspaces: "Workspaces",
     historyNoWorkspace: "Tasks without a workspace (by folder)",
+    historyMissingGroup: "Deleted workspaces",
+    scopeMissing: "workspace gone",
+    scopeMissingHint: (path: string) => `The workspace these tasks belonged to no longer exists (imported tasks or a deleted workspace); named after their folder ${path}`,
     historySessions: (count: number) => `${count} ${count === 1 ? "task" : "tasks"}`,
     historyStats: (pending: number, done: number, calls: number) =>
       `${pending} turns to process · ${done} already processed · ~${calls} model calls`,

@@ -578,8 +578,9 @@ export function Sidebar(props: {
             {(props.memoryScopes ?? []).map((scope) => (
               <NavRow
                 key={scope.token}
-                icon={scope.kind === "user" ? "user" : "folder"}
+                icon={scope.kind === "user" ? "user" : scope.kind === "missing" ? "archive" : "folder"}
                 label={scope.kind === "user" ? t.memory.scopeUser : scope.name}
+                {...(scope.kind === "missing" ? { hint: t.memory.scopeMissingHint(scope.path ?? scope.name) } : {})}
                 active={props.memoryNav.kind === "scope" && props.memoryNav.token === scope.token}
                 count={scope.count}
                 onClick={() => props.onMemoryNav({ kind: "scope", token: scope.token })}

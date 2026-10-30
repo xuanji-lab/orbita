@@ -725,3 +725,9 @@ details.mem-hist-group[open] > summary > .orbita-icon {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-secondary);
 }
+
+.mem-hist-gone {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

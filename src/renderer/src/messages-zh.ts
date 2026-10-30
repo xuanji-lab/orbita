@@ -172,6 +172,9 @@ export const zh: Messages = {
       "记忆只从打开记忆系统之后的新对话里整理。这里把之前的聊天也补进来：按对话原本的时间整理，日期更晚的说法会把更早的标为过时；已经整理过的轮自动跳过，不会重复。",
     historyWorkspaces: "工作区",
     historyNoWorkspace: "没有工作区的任务（按目录）",
+    historyMissingGroup: "已删除的工作区",
+    scopeMissing: "工作区已不在",
+    scopeMissingHint: (path: string) => `这些任务原来所在的工作区已不在（导入的旧任务或工作区已删）；名字取自它们的目录 ${path}`,
     historySessions: (count: number) => `${count} 个任务`,
     historyStats: (pending: number, done: number, calls: number) =>
       `待处理 ${pending} 轮 · 已处理 ${done} 轮 · 约 ${calls} 次模型调用`,

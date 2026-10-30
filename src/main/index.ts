@@ -839,6 +839,7 @@ void app.whenReady().then(async () => {
       sessionTitleOf: async (id) => (await sessions.readMeta(id).catch(() => null))?.title ?? null,
       workspaces: async () => workspaces.list(),
       readMeta: (id) => sessions.readMeta(id),
+      sessions: () => sessions.list(),
     },
     mutate: async (mutation) => {
       // 服务不在先拉（开关刚开的第一轮 / 崩溃后自愈）；拉不起 mutate 会回 ok:false

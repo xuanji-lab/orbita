@@ -31,6 +31,7 @@ import { memoryScopeOf } from "../../shared/memory.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import { estimateCalls, historyTurnsOf } from "./history-turns.ts";
 import { tokenOfScope } from "../../memory/entries.ts";
+import { scopeLabels } from "./scope-names.ts";
 
 /** 连续多少步都有提取失败（重试用尽）就暂停任务。 */
 const FAILURE_STREAK_LIMIT = 3;
@@ -197,16 +198,18 @@ export class MemoryHistoryJob {
       this.deps.workspaces(),
       this.deps.chore(),
     ]);
-    const names = new Map(workspaces.map((workspace) => [workspace.id, workspace.name]));
+    const roots = sessions.filter((meta) => meta.parentId === undefined);
+    const labels = scopeLabels(roots, workspaces);
     const rows = new Map<string, MemoryHistoryScope>();
-    for (const meta of sessions) {
-      if (meta.parentId !== undefined) continue;
+    for (const meta of roots) {
       const scopeId = memoryScopeOf(meta);
+      const label = labels.get(scopeId) ?? { kind: "cwd" as const, name: meta.cwd, path: meta.cwd };
       const row = rows.get(scopeId) ?? {
         scopeId,
         token: tokenOfScope(scopeId),
-        kind: meta.workspaceId !== null ? "workspace" : "cwd",
-        name: meta.workspaceId !== null ? (names.get(meta.workspaceId) ?? meta.workspaceId) : meta.cwd,
+        kind: label.kind,
+        name: label.name,
+        ...(label.path !== undefined ? { path: label.path } : null),
         sessions: 0,
         stats: null,
       };
@@ -223,7 +226,8 @@ export class MemoryHistoryJob {
     const list = [...rows.values()];
     const workspaceRows = list.filter((row) => row.kind === "workspace").sort((a, b) => a.name.localeCompare(b.name));
     const cwdRows = list.filter((row) => row.kind === "cwd").sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name));
-    return { scopes: [...workspaceRows, ...cwdRows], chore, status: this.snapshot() };
+    const missingRows = list.filter((row) => row.kind === "missing").sort((a, b) => a.name.localeCompare(b.name));
+    return { scopes: [...workspaceRows, ...cwdRows, ...missingRows], chore, status: this.snapshot() };
   }
 
   /** 开始一个新任务（已有任务在跑 / 暂停中时不另起，回当前快照）。 */
