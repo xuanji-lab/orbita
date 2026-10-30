@@ -57,6 +57,12 @@ export interface MenuItem {
   fact?: boolean;
   /** 分组头：菜单里一节的小标题（如模型菜单的厂商名）。不可选、不抢焦点，样式同设置面的节标题 */
   header?: boolean;
+  /**
+   * 分隔线：两组之间的一条 1px 细线（右栏「更多」菜单按入口的类分组，组与组之间用它）。
+   * 不是一行——没有文字、不可选、不抢键盘焦点，只占一条线加上下留白；除 `id` 外的字段都被忽略。
+   * 搜索过滤时被丢掉（分隔只在完整清单里有意义）。
+   */
+  rule?: boolean;
   /** 破坏性动作：danger 色。**只给真的会丢东西的那一项** */
   danger?: boolean;
   /**
@@ -90,6 +96,7 @@ function filterMenuItems(items: MenuItem[], q: string): MenuItem[] {
     matched = [];
   };
   for (const item of items) {
+    if (item.rule === true) continue;
     if (item.header === true) {
       flush();
       header = item;
@@ -383,7 +390,7 @@ export function Menu(props: {
 
   // 键盘导航与渲染都走**过滤后**的清单——搜索时 cursor 与 Enter 只在可见项里打转
   const enabled = visible.filter(
-    (item) => item.disabled !== true && item.fact !== true && item.header !== true,
+    (item) => item.disabled !== true && item.fact !== true && item.header !== true && item.rule !== true,
   );
   /** 打开时光标落在**当前项**上。落在第一项会让人以为选中的是第一项。 */
   const cursorAtChecked = () => Math.max(0, enabled.findIndex((item) => item.checked === true));
@@ -665,18 +672,22 @@ export function Menu(props: {
                   {(props.emptyText ?? (() => t.menu.noModels))(query)}
                 </div>
               )}
-              {visible.map((item) => (
-                <MenuRow
-                  key={item.id}
-                  item={item}
-                  cursor={enabled[active]?.id === item.id}
-                  onHover={() => {
-                    const index = enabled.findIndex((candidate) => candidate.id === item.id);
-                    if (index >= 0) setActive(index);
-                  }}
-                  onSelect={() => choose(item)}
-                />
-              ))}
+              {visible.map((item) =>
+                item.rule === true ? (
+                  <div key={item.id} role="separator" className="menu-rule" />
+                ) : (
+                  <MenuRow
+                    key={item.id}
+                    item={item}
+                    cursor={enabled[active]?.id === item.id}
+                    onHover={() => {
+                      const index = enabled.findIndex((candidate) => candidate.id === item.id);
+                      if (index >= 0) setActive(index);
+                    }}
+                    onSelect={() => choose(item)}
+                  />
+                ),
+              )}
               </div>
             </div>
             {props.footer !== undefined && (

@@ -198,6 +198,51 @@ if (column === null) {
   }
 }
 
+// 右栏入口（2026-10-31，设计系统 readme「Rail entries are grouped」）：
+// 按钮在 32px 条里居中；角标右缘不越过条（越过会被条的 overflow 切平）；
+// 组间的线比按钮窄、居中，且离上一组末按钮与下一组首按钮一样远。
+const railGeometry = await evaluate(`(() => {
+  const aside = document.querySelector(".right-rail");
+  if (aside === null) return null;
+  const a = aside.getBoundingClientRect();
+  const mid = (a.left + a.right) / 2;
+  const buttons = [...aside.querySelectorAll("button")];
+  const widest = Math.max(...buttons.map((b) => b.getBoundingClientRect().width));
+  return {
+    buttons: buttons.length,
+    offCenter: Math.max(...buttons.map((b) => { const r = b.getBoundingClientRect(); return Math.abs((r.left + r.right) / 2 - mid); })),
+    badgeOver: [...aside.querySelectorAll(".rail-badge")].map((e) => Math.round(e.getBoundingClientRect().right - a.right)),
+    seps: [...aside.querySelectorAll(".rail-sep")].map((sep) => {
+      const r = sep.getBoundingClientRect();
+      const above = sep.previousElementSibling?.lastElementChild?.getBoundingClientRect();
+      const below = sep.nextElementSibling?.firstElementChild?.getBoundingClientRect();
+      return {
+        offCenter: Math.abs((r.left + r.right) / 2 - mid),
+        narrower: widest - r.width,
+        up: above === undefined ? null : r.top - above.bottom,
+        down: below === undefined ? null : below.top - r.bottom,
+      };
+    }),
+  };
+})()`);
+if (railGeometry === null) {
+  console.log("- 右栏入口：跳过（页面上没有右栏）");
+} else {
+  const checks = [
+    ["按钮居中在条里", railGeometry.offCenter <= 0.5, `最大偏差 ${railGeometry.offCenter}px`],
+    ["角标右缘不越过条", railGeometry.badgeOver.every((over) => over <= 0), railGeometry.badgeOver.length === 0 ? "页面上没有角标" : `越过 ${railGeometry.badgeOver.join(",")}px`],
+    ...railGeometry.seps.map((sep, index) => [
+      `第 ${index + 1} 条组间线：居中、比按钮窄、上下留白对称`,
+      sep.offCenter <= 0.5 && sep.narrower > 0 && sep.up !== null && sep.down !== null && Math.abs(sep.up - sep.down) <= 1,
+      `偏心 ${sep.offCenter}px，窄 ${sep.narrower}px，上 ${sep.up}px / 下 ${sep.down}px`,
+    ]),
+  ];
+  for (const [name, ok, detail] of checks) {
+    if (!ok) failed++;
+    console.log(`${ok ? "✓" : "✖"} 右栏入口：${name}（${detail}）`);
+  }
+}
+
 close();
 console.log(failed === 0 ? "血线守卫：全部通过" : `血线守卫：${failed} 处违规`);
 process.exit(failed === 0 ? 0 : 1);

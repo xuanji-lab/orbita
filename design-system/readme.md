@@ -526,6 +526,26 @@ The anti-pattern this rule kills: `padding-right: 44px` reserving room for hidde
 resting status mark floats mid-row while the left side hugs its hem. Geometry is guarded by
 `scripts/ui-edges.mjs`.
 
+**Rail entries are grouped by the question they answer.** The right icon strip (32px wide, 28px
+entries) is not one list: its entries sit in groups, **no divider inside a group, one short hairline
+between groups**. Top to bottom: *this session* (This task, Review, Sub-sessions — what the session is
+doing and did), *work surfaces* (Files, Terminal, Built-in browser — where things are and where you
+act), *agent* (Abilities, Memory, Intent — what it can do and remembers), *put away* (For later,
+Archived), and then, alone at the bottom, *app* (Settings, Notifications — not about any one session).
+Everything except the app group stacks at the top, so the bottom stays small; before 2026-10-31 the
+strip was "a pile at the top, a pile at the bottom" and an entry's side followed history, not meaning.
+The hairline is 1px `--color-border-default`, `--space-4` (16) wide — narrower than the 28px entries,
+centred in the strip — with `--space-2` above and below (`--space-1` when the window is under 560px
+high); entries inside a group sit `--space-1` apart. It is decoration (`aria-hidden`); each group is a
+`role="group"` with a name for screen readers. A group with no visible entries draws nothing, not even
+its line. A new entry goes into the group of the question it answers (`items` in `RightRail.tsx`) — a
+fifth group is only for a fifth question. The lean rail (experimental `lean-rail`) keeps the *pinned*
+entries on the strip (Files is pinned: it is never folded away) and moves the rest into the More menu in
+the same group order, with the menu's own 1px rule between groups (`Menu` item `rule`), so an entry
+keeps its neighbours in both modes. Badges stay inside the strip (`.rail-badge` right edge −2px: the
+strip clips at its 32px). Geometry — centring, badge overhang, the line's centring and equal space above
+and below — is guarded by `scripts/ui-edges.mjs`.
+
 **Stateful styling lives in CSS classes.** Hover, `:focus-visible`, `:active`, `:disabled`,
 `[aria-selected]` / `[aria-expanded]`, `:focus-within`, container queries, `prefers-reduced-motion`,
 and per-theme differences all belong in CSS (`src/renderer/src/styles.css` or a feature's own
