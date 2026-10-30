@@ -334,3 +334,70 @@ describe("task 来源 × 数行与上限", () => {
     assert.equal(diff.tooLarge?.exceeded, "lines", JSON.stringify(diff).slice(0, 160));
   });
 });
+
+// ————————————————————————————————————————————————
+// diff 计算本身要有上限：整份重写的 Myers 在主进程同步算，58 KB 就要 ~1 s、
+// 200 KB 要 ~10 s（结构审查实测 307 KB 69 s）——1 MB 的字节门槛拦不住它
+// ————————————————————————————————————————————————
+describe("task 来源 × diff 计算上限", () => {
+  const lines = (n: number, tag: string): string =>
+    Array.from({ length: n }, (_, i) => `${tag} ${String(i).padStart(6, "0")} l`).join("\n") + "\n";
+
+  test("整份重写、行数相同、字节在限内：列表标行数未知，正文回 tooLarge(lines)——不进无界的 Myers", async () => {
+    const n = REVIEW_DIFF_MAX_LINES + 200; // ~80 KB，字节远在 1 MB 内；编辑距离 2n > 上限
+    await writeFile(join(lab, "rewrite.txt"), lines(n, "EDIT"), "utf8");
+    await turn("t1", [{ path: join(lab, "rewrite.txt"), before: lines(n, "base"), after: "x\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("rewrite.txt"));
+    assert.deepEqual(
+      { added: entry?.added, lineCountUnknown: entry?.lineCountUnknown },
+      { added: 0, lineCountUnknown: true },
+      "超编辑上限的计数应标「行数未知」，而不是把 Myers 跑完给精确数",
+    );
+    const diff = await taskReviewDiff(store, ID, join(lab, "rewrite.txt"));
+    assert.equal(diff.tooLarge?.exceeded, "lines", JSON.stringify(diff).slice(0, 160));
+    assert.equal(diff.diff, null);
+  });
+
+  test("两边行数差就超过上限：前置判定直接太大，不进 Myers", async () => {
+    await writeFile(join(lab, "grow.txt"), lines(REVIEW_DIFF_MAX_LINES + 100, "EDIT"), "utf8");
+    await turn("t1", [{ path: join(lab, "grow.txt"), before: lines(100, "base"), after: "x\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("grow.txt"));
+    assert.deepEqual({ added: entry?.added, lineCountUnknown: entry?.lineCountUnknown }, { added: 0, lineCountUnknown: true });
+    const diff = await taskReviewDiff(store, ID, join(lab, "grow.txt"));
+    assert.equal(diff.tooLarge?.exceeded, "lines");
+  });
+
+  test("新建 / 清空不进 Myers：直接数行（几百 K 行的新文件也不该 O(n²)", async () => {
+    // 以前 countLineChanges("", 大文本) 也要跑一遍 diffLines；空边的增删就是行数
+    const many = lines(REVIEW_DIFF_MAX_LINES * 4, "fresh"); // ~320 KB、两万行
+    await writeFile(join(lab, "brand-new.txt"), many, "utf8");
+    await turn("t1", [{ path: join(lab, "brand-new.txt"), before: null, after: "x\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("brand-new.txt"));
+    assert.equal(entry?.added, REVIEW_DIFF_MAX_LINES * 4, "新建文件的行数直接数，不设编辑距离上限");
+  });
+
+  test("上限内的常规改动照常计数、照常出正文（回归保护）", async () => {
+    const base = lines(200, "base");
+    const disk = lines(200, "base").split("\n");
+    for (let i = 0; i < 200; i += 2) disk[i] = `EDIT ${String(i).padStart(6, "0")} l`;
+    await writeFile(join(lab, "normal.txt"), disk.join("\n"), "utf8");
+    await turn("t1", [{ path: join(lab, "normal.txt"), before: base, after: "x\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("normal.txt"));
+    assert.deepEqual({ added: entry?.added, removed: entry?.removed }, { added: 100, removed: 100 });
+    const diff = await taskReviewDiff(store, ID, join(lab, "normal.txt"));
+    assert.equal(diff.tooLarge, undefined);
+    assert.ok(diff.diff !== null && diff.diff.includes("+EDIT"));
+  });
+});

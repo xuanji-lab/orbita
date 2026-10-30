@@ -10,7 +10,7 @@
  * 「行数未知」（lineCountUnknown），展开回「改动太大」。判的是改动的增删行数与字节，
  * 不是文件大小；文件超限但基线是文本且与现状一致，仍能判「已还原」。
  */
-import { lstat, readFile, readlink, open } from "node:fs/promises";
+import { lstat, readFile, readlink } from "node:fs/promises";
 import { createTwoFilesPatch, diffLines } from "diff";
 import type { SessionRecord } from "../../shared/session.ts";
 import { isFileTurnRecord, type SnapshotRef } from "../../shared/revert.ts";
@@ -19,14 +19,29 @@ import {
   reviewDiffOverflow,
   reviewDiffTooLarge,
   REVIEW_DIFF_MAX_BYTES,
+  REVIEW_DIFF_MAX_LINES,
   type ReviewDiff,
   type ReviewEntry,
   type ReviewList,
 } from "../../shared/review.ts";
 import type { SessionStore } from "../session/store.ts";
+import { sniffBinary } from "./untracked-lines.ts";
 
 /** 判二进制看开头这么多字节：git 的 FIRST_FEW_BYTES 口径（同 untracked-lines） */
 const BINARY_SNIFF_BYTES = 8000;
+
+/**
+ * 列表数行的时限（diff 包的 timeout 选项）：数不出来就标「行数未知」，别让一次刷新等它。
+ * 实测（Apple M 系列）：20000 行 / 273 KB 改 10% 的合法计数要 ~0.9 s——超过 300 ms 的
+ * 会如实标未知，下次刷新还有机会；整份重写的无界计算则被拦在这里（见 PATCH_DIFF_TIMEOUT_MS）。
+ */
+const LIST_COUNT_TIMEOUT_MS = 300;
+
+/**
+ * 正文路径的时限：用户点开才跑、一次性，给足空间（实测同上 ~1.8 s）；真正超 5000 行
+ * 编辑距离的会在 ~1 秒内先被 maxEditLength 拦下，这里只兜「慢但合法」之外的异常情况。
+ */
+const PATCH_DIFF_TIMEOUT_MS = 10_000;
 
 /** 账上的路径现在是个符号链接：只带链接里写的目标（readlink 原文），不读目标 */
 interface DiskLink {
@@ -72,27 +87,6 @@ async function diskFileSize(path: string): Promise<number | null> {
   }
 }
 
-/** 只读开头至多 BINARY_SNIFF_BYTES 字节判二进制（超限文件用，不整读）：true = 二进制；null = 读不了 */
-async function diskLooksBinary(path: string): Promise<boolean | null> {
-  try {
-    const handle = await open(path, "r");
-    try {
-      const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
-      let read = 0;
-      while (read < BINARY_SNIFF_BYTES) {
-        const { bytesRead } = await handle.read(buffer, read, BINARY_SNIFF_BYTES - read, read);
-        if (bytesRead === 0) break;
-        read += bytesRead;
-      }
-      return buffer.subarray(0, read).includes(0);
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  } catch {
-    return null;
-  }
-}
-
 /** 全部轮尾账里每个路径最早的 before（含被回退折掉的轮次——那也是「动过」）。 */
 function baselines(records: readonly SessionRecord[]): Map<string, SnapshotRef> {
   const byPath = new Map<string, SnapshotRef>();
@@ -116,10 +110,17 @@ async function baselineText(
   return (await store.snapshots.read(sessionId, ref.blob)) ?? undefined;
 }
 
-function patchOf(path: string, oldText: string, newText: string): { diff: string; added: number; removed: number } {
-  const diff = createTwoFilesPatch(`a/${path}`, `b/${path}`, oldText, newText, "", "", { context: 3 });
-  const { added, removed } = countLineChanges(oldText, newText);
-  return { diff, added, removed };
+function patchOf(path: string, oldText: string, newText: string): string | null {
+  // maxEditLength：编辑距离超上限时 diff 包返回 undefined——不把 Myers 跑完再造一份必超限
+  // 的 patch（实测 20000 行整份重写：无界 69 s，加上限 ~1 s 就 bail）。timeout 兜「慢但合法」
+  // 之外的异常（上限内的合法 diff 实测 ~1.8 s，给到 10 s）。只造 patch：增删计数归
+  // countLineChanges，这边不再顺带算一遍（以前算了没人用）。
+  const diff = createTwoFilesPatch(`a/${path}`, `b/${path}`, oldText, newText, "", "", {
+    context: 3,
+    maxEditLength: REVIEW_DIFF_MAX_LINES,
+    timeout: PATCH_DIFF_TIMEOUT_MS,
+  });
+  return typeof diff === "string" ? diff : null;
 }
 
 /** 一段文本有几行（最后一行没有换行也是一行；与 git numstat / untracked-lines 同口径） */
@@ -136,15 +137,38 @@ function lineCount(text: string): number {
  * 直接数两个文本的增删行数（diff 包的 diffLines，行级分块）——**不生成 patch 字符串**。
  * 以前列表为了两个数字给每个文件造一份完整 diff 再数 +/- 行：大文件多攒一整份 patch，
  * 还会把 `++` 开头的内容行误当 patch 文件头少数（与 B1 修过的计数问题是同一类）。
+ *
+ * Myers 在主进程同步算，代价 O((N+M)×编辑距离)：实测 3000 行整份重写 ~1 s、10000 行 ~11 s
+ * （结构审查 307 KB 实测 69 s），1 MB 的字节门槛拦不住。三道闸（便宜在前）：空边直接数、
+ * 行数差超上限直接放弃、maxEditLength + timeout 让 diff 包 bail 返回 undefined → null。
  */
-function countLineChanges(oldText: string, newText: string): { added: number; removed: number } {
+function countLineChanges(oldText: string, newText: string): { added: number; removed: number } | null {
+  // 新建 / 清空的两边不必比：全部行就是增/删，行数直接数（几十万行的新文件也 O(n)）
+  if (oldText === "") return { added: lineCount(newText), removed: 0 };
+  if (newText === "") return { added: 0, removed: lineCount(oldText) };
+  // 行数差是编辑距离的下界：差超上限必超，不进 Myers
+  if (Math.abs(lineCount(oldText) - lineCount(newText)) > REVIEW_DIFF_MAX_LINES) return null;
+  const parts = diffLines(oldText, newText, {
+    maxEditLength: REVIEW_DIFF_MAX_LINES,
+    timeout: LIST_COUNT_TIMEOUT_MS,
+  });
+  if (parts === undefined) return null;
   let added = 0;
   let removed = 0;
-  for (const part of diffLines(oldText, newText)) {
+  for (const part of parts) {
     if (part.added === true) added += lineCount(part.value);
     else if (part.removed === true) removed += lineCount(part.value);
   }
   return { added, removed };
+}
+
+/**
+ * 正文路径的前置判定：两边行数差必超编辑上限，patchOf 不必进 Myers。
+ * 空↔非空不算——那边增删就是行数，上限由生成后的 reviewDiffOverflow 把住。
+ */
+function editDistanceCertainlyOver(oldText: string, newText: string): boolean {
+  if (oldText === "" || newText === "") return false;
+  return Math.abs(lineCount(oldText) - lineCount(newText)) > REVIEW_DIFF_MAX_LINES;
 }
 
 /** `review:list` 的 task 侧实现。cwd 从 meta 读（路径策略在主进程，不信 renderer）。 */
@@ -158,7 +182,7 @@ export async function taskReviewList(store: SessionStore, sessionId: string): Pr
     // （不是「没改动」，也不是「太大」：展开时正文侧会再说一次）。二进制照旧如实标出。
     const size = await diskFileSize(path);
     if (size !== null && size > REVIEW_DIFF_MAX_BYTES) {
-      const binary = await diskLooksBinary(path);
+      const binary = await sniffBinary(path);
       entries.push(
         binary === null
           ? { path, added: 0, removed: 0, binary: false, lineCountUnknown: true }
@@ -201,8 +225,13 @@ export async function taskReviewList(store: SessionStore, sessionId: string): Pr
       entries.push({ path, added: 0, removed: 0, binary: false, restored: true });
       continue;
     }
-    const { added, removed } = countLineChanges(base, disk);
-    entries.push({ path, added, removed, binary: false });
+    const changes = countLineChanges(base, disk);
+    if (changes === null) {
+      // 编辑距离超上限 / 超时：数不出来就标「行数未知」，不把 Myers 跑完
+      entries.push({ path, added: 0, removed: 0, binary: false, lineCountUnknown: true });
+      continue;
+    }
+    entries.push({ path, added: changes.added, removed: changes.removed, binary: false });
   }
   if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd: meta.cwd };
   return { kind: "ok", cwd: meta.cwd, entries };
@@ -224,7 +253,7 @@ export async function taskReviewDiff(
   // 先判大小再读：超限文件不整读，开头 8000 字节是二进制就如实报 binary，否则「改动太大」
   const size = await diskFileSize(path);
   if (size !== null && size > REVIEW_DIFF_MAX_BYTES) {
-    const binary = await diskLooksBinary(path);
+    const binary = await sniffBinary(path);
     if (binary === true) return { diff: null, binary: true, restored: false };
     return reviewDiffTooLarge("bytes", `${path} is larger than the inline diff limit`);
   }
@@ -240,17 +269,29 @@ export async function taskReviewDiff(
     return reviewDiffTooLarge("bytes", `the baseline of ${path} exceeds the inline diff limit`);
   }
   if (disk === null) {
+    if (editDistanceCertainlyOver(base, "")) {
+      return reviewDiffTooLarge("lines", `the diff for ${path} exceeds the inline limits`);
+    }
     const patch = patchOf(path, base, "");
-    const overflow = reviewDiffOverflow(patch.diff);
+    if (patch === null) {
+      return reviewDiffTooLarge("lines", `the diff for ${path} exceeds the inline limits`);
+    }
+    const overflow = reviewDiffOverflow(patch);
     if (overflow !== null) {
       return reviewDiffTooLarge(overflow, `the diff for ${path} exceeds the inline limits`);
     }
-    return { diff: patch.diff, binary: false, restored: false };
+    return { diff: patch, binary: false, restored: false };
+  }
+  if (editDistanceCertainlyOver(base, disk)) {
+    return reviewDiffTooLarge("lines", `the diff for ${path} exceeds the inline limits`);
   }
   const patch = patchOf(path, base, disk);
-  const overflow = reviewDiffOverflow(patch.diff);
+  if (patch === null) {
+    return reviewDiffTooLarge("lines", `the diff for ${path} exceeds the inline limits`);
+  }
+  const overflow = reviewDiffOverflow(patch);
   if (overflow !== null) {
     return reviewDiffTooLarge(overflow, `the diff for ${path} exceeds the inline limits`);
   }
-  return { diff: patch.diff, binary: false, restored: false };
+  return { diff: patch, binary: false, restored: false };
 }
