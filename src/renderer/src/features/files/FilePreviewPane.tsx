@@ -412,14 +412,10 @@ function PreviewBody(props: {
     );
   }
 
-  // kind === "text"。空文件（`__init__.py` 这类）不进正文：高亮会画出一张空代码卡，
-  // 像是没加载出来——给一句明确的空态
-  if (data.text === "") {
-    return <EmptyPreview message={t.files.emptyFile} onOpenDefault={props.onOpenDefault} />;
-  }
-  // > PREVIEW_TEXT_LIMIT：不再只给前 16 MB，改成按行向主进程要窗口（主进程按文件大小
-  // 与行数自己决定能不能分段；分段不了它会回长行 / 行数过多的明确结果，由它退回去）
-  if (data.truncated) {
+  // > PREVIEW_TEXT_LIMIT：正文一个字节都没过 IPC（fs:read 只回 large-text），改成按行向主进程
+  // 要窗口；主进程按文件大小与内容自己决定能不能分段，分段不了会回超长行 / 过大的明确结果，
+  // 由 RangeTextPreview 退回去
+  if (data.kind === "large-text") {
     return (
       <RangeTextPreview
         sessionId={props.sessionId}
@@ -430,13 +426,17 @@ function PreviewBody(props: {
         name={props.name}
         size={data.size}
         modifiedAt={data.modifiedAt}
-        headText={data.text}
         scroller={props.scroller}
         resetKey={props.resetKey}
         reloadKey={props.reloadKey}
         onOpenDefault={props.onOpenDefault}
       />
     );
+  }
+  // kind === "text"。空文件（`__init__.py` 这类）不进正文：高亮会画出一张空代码卡，
+  // 像是没加载出来——给一句明确的空态
+  if (data.text === "") {
+    return <EmptyPreview message={t.files.emptyFile} onOpenDefault={props.onOpenDefault} />;
   }
   return (
     <>

@@ -6,11 +6,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { highlighterReady } from "../chat/highlight.ts";
+import { PREVIEW_HIGHLIGHT_LIMIT, PREVIEW_MARKDOWN_LIMIT, PREVIEW_ROW_CHARS, PREVIEW_WINDOW_LIMIT } from "../../../../shared/files.ts";
 import {
-  HIGHLIGHT_LIMIT,
   largeTextNotice,
-  MARKDOWN_LIMIT,
-  MAX_ROW_CHARS,
   textLines,
   textPreviewMode,
   textRenderKind,
@@ -18,7 +16,6 @@ import {
   textWindow,
   truncatedNotice,
   WINDOW_OVERSCAN,
-  WINDOW_TEXT_LIMIT,
 } from "./preview-view.ts";
 import { en } from "../../messages-en.ts";
 
@@ -53,35 +50,35 @@ describe("truncatedNotice", () => {
   });
 });
 
-describe("HIGHLIGHT_LIMIT", () => {
+describe("PREVIEW_HIGHLIGHT_LIMIT", () => {
   test("200 KB", () => {
-    assert.equal(HIGHLIGHT_LIMIT, 200 * 1024);
+    assert.equal(PREVIEW_HIGHLIGHT_LIMIT, 200 * 1024);
   });
 });
 
 describe("textRenderKind", () => {
   test("小 md 走 MarkdownBlock，超大 md 退化成窗口化纯文本", () => {
     assert.equal(textRenderKind("markdown", "rendered", 10 * 1024), "markdown");
-    assert.equal(textRenderKind("markdown", "rendered", MARKDOWN_LIMIT), "markdown");
-    assert.equal(textRenderKind("markdown", "rendered", MARKDOWN_LIMIT + 1), "plain");
-    assert.equal(textRenderKind("markdown", "rendered", WINDOW_TEXT_LIMIT + 1), "windowed");
+    assert.equal(textRenderKind("markdown", "rendered", PREVIEW_MARKDOWN_LIMIT), "markdown");
+    assert.equal(textRenderKind("markdown", "rendered", PREVIEW_MARKDOWN_LIMIT + 1), "plain");
+    assert.equal(textRenderKind("markdown", "rendered", PREVIEW_WINDOW_LIMIT + 1), "windowed");
   });
 
   test("md 的 Source 段不跑 markdown 渲染", () => {
     assert.equal(textRenderKind("markdown", "source", 1024), "plain");
-    assert.equal(textRenderKind("markdown", "source", WINDOW_TEXT_LIMIT + 1), "windowed");
+    assert.equal(textRenderKind("markdown", "source", PREVIEW_WINDOW_LIMIT + 1), "windowed");
   });
 
   test("代码：高亮上限内走 shiki，超过上限的走窗口化原文", () => {
     assert.equal(textRenderKind("code", "rendered", 1), "highlight");
-    assert.equal(textRenderKind("code", "rendered", HIGHLIGHT_LIMIT), "highlight");
-    assert.equal(textRenderKind("code", "rendered", HIGHLIGHT_LIMIT + 1), "plain");
-    assert.equal(textRenderKind("code", "rendered", WINDOW_TEXT_LIMIT + 1), "windowed");
+    assert.equal(textRenderKind("code", "rendered", PREVIEW_HIGHLIGHT_LIMIT), "highlight");
+    assert.equal(textRenderKind("code", "rendered", PREVIEW_HIGHLIGHT_LIMIT + 1), "plain");
+    assert.equal(textRenderKind("code", "rendered", PREVIEW_WINDOW_LIMIT + 1), "windowed");
   });
 
   test("阈值恰好卡在边界上：等于上限走完整渲染，多一个字才换路径", () => {
-    assert.equal(textRenderKind("plain", "rendered", WINDOW_TEXT_LIMIT), "plain");
-    assert.equal(textRenderKind("plain", "rendered", WINDOW_TEXT_LIMIT + 1), "windowed");
+    assert.equal(textRenderKind("plain", "rendered", PREVIEW_WINDOW_LIMIT), "plain");
+    assert.equal(textRenderKind("plain", "rendered", PREVIEW_WINDOW_LIMIT + 1), "windowed");
   });
 });
 
@@ -101,21 +98,21 @@ describe("textRows（窗口化的显示行：超长单行硬切）", () => {
   });
 
   test("恰好 4096 字符仍是一行，多一个字才切", () => {
-    assert.equal(MAX_ROW_CHARS, 4096);
-    assert.deepEqual(textRows("x".repeat(MAX_ROW_CHARS)), ["x".repeat(MAX_ROW_CHARS)]);
-    const over = textRows("x".repeat(MAX_ROW_CHARS + 1));
+    assert.equal(PREVIEW_ROW_CHARS, 4096);
+    assert.deepEqual(textRows("x".repeat(PREVIEW_ROW_CHARS)), ["x".repeat(PREVIEW_ROW_CHARS)]);
+    const over = textRows("x".repeat(PREVIEW_ROW_CHARS + 1));
     assert.equal(over.length, 2);
-    assert.deepEqual(over.map((row) => row.length), [MAX_ROW_CHARS, 1]);
+    assert.deepEqual(over.map((row) => row.length), [PREVIEW_ROW_CHARS, 1]);
   });
 
   test("10,000 字符的单行切成 3 条，最后一段长度正确，拼回去是原文", () => {
     const line = "ab".repeat(5_000);
     const rows = textRows(line);
-    assert.equal(rows.length, Math.ceil(line.length / MAX_ROW_CHARS));
+    assert.equal(rows.length, Math.ceil(line.length / PREVIEW_ROW_CHARS));
     assert.equal(rows.length, 3);
     assert.deepEqual(
       rows.map((row) => row.length),
-      [MAX_ROW_CHARS, MAX_ROW_CHARS, line.length - 2 * MAX_ROW_CHARS],
+      [PREVIEW_ROW_CHARS, PREVIEW_ROW_CHARS, line.length - 2 * PREVIEW_ROW_CHARS],
     );
     assert.equal(rows.join(""), line);
   });
@@ -130,10 +127,10 @@ describe("textRows（窗口化的显示行：超长单行硬切）", () => {
   });
 
   test("切分点落在代理对中间时不会劈开 emoji", () => {
-    const line = "a".repeat(MAX_ROW_CHARS - 1) + "😀" + "b";
+    const line = "a".repeat(PREVIEW_ROW_CHARS - 1) + "😀" + "b";
     const rows = textRows(line);
     assert.equal(rows.length, 2);
-    assert.equal(rows[0], "a".repeat(MAX_ROW_CHARS - 1) + "😀");
+    assert.equal(rows[0], "a".repeat(PREVIEW_ROW_CHARS - 1) + "😀");
     assert.equal(rows[1], "b");
     // 没有孤立代理码元
     for (const row of rows) {
@@ -244,7 +241,7 @@ describe("largeTextNotice", () => {
     assert.equal(largeTextNotice("code", "rendered", 10 * KB, 10 * KB, en), null);
     assert.equal(largeTextNotice("plain", "rendered", 10 * KB, 10 * KB, en), null);
     // md 恰好在上限上：仍走 MarkdownBlock，不提示
-    assert.equal(largeTextNotice("markdown", "rendered", MARKDOWN_LIMIT, MARKDOWN_LIMIT, en), null);
+    assert.equal(largeTextNotice("markdown", "rendered", PREVIEW_MARKDOWN_LIMIT, PREVIEW_MARKDOWN_LIMIT, en), null);
   });
 
   test("md 退化两条路径都说「按纯文本显示」，体积用真实字节数", () => {
@@ -270,6 +267,6 @@ describe("largeTextNotice", () => {
   });
 
   test("超过高亮上限但未到窗口化阈值的代码：只降级不提示（排版没变，仍是一整块）", () => {
-    assert.equal(largeTextNotice("code", "rendered", HIGHLIGHT_LIMIT + 1, HIGHLIGHT_LIMIT + 1, en), null);
+    assert.equal(largeTextNotice("code", "rendered", PREVIEW_HIGHLIGHT_LIMIT + 1, PREVIEW_HIGHLIGHT_LIMIT + 1, en), null);
   });
 });

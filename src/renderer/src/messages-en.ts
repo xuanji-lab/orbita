@@ -1977,10 +1977,12 @@ export const en = {
     rangeJumpHead: "Start",
     rangeJumpTail: "End",
     rangeJumpMiddle: "50%",
-    rangeLongLine: (limit: string) =>
-      `This file has a line longer than ${limit}, so it can't be split by lines — showing the first 16 MB`,
-    rangeTooManyLines: (lines: number) => `Too many lines (over ${lines.toLocaleString()}) to browse inside the app`,
-    rangeStale: "The file changed while it was open — reload to see its current contents",
+    rangeLongLine: (limit: string, head: string) =>
+      `This file has a line longer than ${limit}, so it can't be split by lines — showing the first ${head}`,
+    /** Over the scroll-height limit measured at runtime (it shrinks with display scaling and page zoom) */
+    rangeTooTall: (lines: number, max: number) =>
+      `Too many lines to scroll here (${lines.toLocaleString()}; at the current zoom the viewer can reach about ${max.toLocaleString()}). Zoom out or open it in the default app`,
+    rangeStale: "The file keeps changing while it is open — reload to see its current contents",
     /** 大 md 退化：不再跑 MarkdownBlock，按等宽原文看 */
     largeTextPlain: (size: string) => `Large file (${size}) — showing plain text`,
     /** 大文本窗口化：排版没变，只是只渲染可见区（提示条上带「用默认应用打开」） */

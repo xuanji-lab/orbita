@@ -1823,12 +1823,13 @@ export const zh: Messages = {
     rangeJumpHead: "开头",
     rangeJumpTail: "结尾",
     rangeJumpMiddle: "50%",
-    /** 长行退出：单行超过上限（PREVIEW_MAX_LINE_BYTES）没法按行分段，退回前 16 MB + 长行硬切 */
-    rangeLongLine: (limit) => `有超长单行（超过 ${limit}），没法按行分段；下面是前 16 MB`,
-    /** 行数超过 1.8 M（约 200 MB 日志）：原生滚动条映射不了，如实给用默认应用打开 */
-    rangeTooManyLines: (lines) => `行数太多（超过 ${lines.toLocaleString()} 行），应用内不浏览全文`,
-    /** 打开期间文件被替换 / 追写过：索引里的位置不再可信，重新索引 */
-    rangeStale: "文件在打开期间被改过，重新加载一下",
+    /** 长行退出：单行超过上限（PREVIEW_MAX_LINE_BYTES）没法按行分段，退回开头一段 + 长行硬切 */
+    rangeLongLine: (limit, head) => `有超长单行（超过 ${limit}），没法按行分段；下面是前 ${head}`,
+    /** 行数超过运行时量出的滚动高度上限（随显示器缩放与页面缩放变）：滚不到底，如实给出口 */
+    rangeTooTall: (lines, max) =>
+      `行数太多，这里滚不到底（共 ${lines.toLocaleString()} 行，当前缩放下最多能浏览约 ${max.toLocaleString()} 行）。缩小页面，或用默认应用打开`,
+    /** 打开期间文件被反复改写、自动重建索引也追不上（只变长的日志不会走到这里） */
+    rangeStale: "文件在打开期间一直在被改写，重新加载一下",
     /** 大 md 退化：不再跑 MarkdownBlock，按等宽原文看 */
     largeTextPlain: (size) => `文件较大（${size}），按纯文本显示`,
     /** 大文本窗口化：排版没变，只是只渲染可见区（提示条上带「用默认应用打开」） */

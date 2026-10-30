@@ -1,76 +1,87 @@
 /**
- * 分段预览的纯视图函数（`range-view.ts`）：日志判定、首屏落点、滚动位置 ↔ 行号、
- * 取窗起点、缓存进出。这些算式错了不会崩，只会「滚到中间是别处的行」或「露白」——
- * 肉眼很难发现，所以逐条钉住。
+ * 分段预览的纯视图函数（`range-view.ts`）：日志判定、滚动位置 ↔ 行号（含行块上方的
+ * 提示带 + 内边距）、能浏览多少行、取窗起点、缓存进出。这些算式错了不会崩，只会
+ * 「滚到中间是别处的行」「结尾差几行」或「露白」——肉眼很难发现，所以逐条钉住。
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_VIRTUAL_HEIGHT,
   RANGE_WINDOW_CACHE,
   RANGE_WINDOW_STEP,
   findCachedWindow,
-  initialScrollLine,
   isLogLikeName,
   lineAtScroll,
+  maxBrowsableLines,
   rememberWindow,
-  scrollLineForJump,
+  middleLine,
+  scrollTopForLine,
   visibleLineCount,
   windowCovers,
   windowStartFor,
   type CachedWindow,
 } from "./range-view.ts";
 
-describe("isLogLikeName", () => {
-  test(".log 与名字里带 log 的都算（大小写不敏感）", () => {
-    for (const name of ["main.log", "build.LOG", "npm-debug.log", "server-log.txt", "Logfile"]) {
+describe("isLogLikeName —— 按 .log 扩展名，不按名字里有没有 log 四个字母", () => {
+  test(".log（大小写不敏感）与轮转出来的 .log.1 / .log.日期 算日志", () => {
+    for (const name of [
+      "main.log",
+      "build.LOG",
+      "npm-debug.log",
+      ".log",
+      "app.log.1",
+      "app.log.12",
+      "server.log.2026-10-30",
+      "/Users/me/Library/Logs/orbita/main.log",
+    ]) {
       assert.equal(isLogLikeName(name), true, name);
     }
   });
 
-  test("普通文本 / 代码 / 数据文件不算", () => {
-    for (const name of ["notes.md", "data.csv", "app.ts", "README", "image.png"]) {
+  test("名字里碰巧带 log 的不算：changelog / dialog / catalog / login / blog", () => {
+    // 原来是 /log/i：这些全中，默认被扔到文件末尾，用户以为文件被截了
+    for (const name of [
+      "CHANGELOG.md",
+      "changelog.txt",
+      "dialog.txt",
+      "catalog.csv",
+      "login.py",
+      "blog-export.json",
+      "server-log.txt",
+      "Logfile",
+      "log",
+      "logs",
+    ]) {
+      assert.equal(isLogLikeName(name), false, name);
+    }
+  });
+
+  test("普通文本 / 代码 / 数据文件不算；.log 之后跟压缩后缀的也不算（那是二进制）", () => {
+    for (const name of ["notes.md", "data.csv", "app.ts", "README", "image.png", "app.log.gz", "app.logx", "app.log.bak.zip"]) {
       assert.equal(isLogLikeName(name), false, name);
     }
   });
 });
 
-describe("initialScrollLine —— 首屏落点", () => {
-  test("日志落在末尾（总行数 - 可见行数）", () => {
-    assert.equal(initialScrollLine(1000, 20, true), 980);
+describe("middleLine —— 50%", () => {
+  test("中间一屏居中：全文中点落在视口正中", () => {
+    assert.equal(middleLine(1000, 20), 490);
+    assert.equal(middleLine(1_200_001, 31), 600_000 - 15);
   });
 
-  test("非日志落在开头", () => {
-    assert.equal(initialScrollLine(1000, 20, false), 0);
+  test("短文件：夹到 0，不出现负行号", () => {
+    assert.equal(middleLine(5, 20), 0);
+    assert.equal(middleLine(0, 20), 0);
   });
 
-  test("文件比一屏短：夹到 0", () => {
-    assert.equal(initialScrollLine(10, 20, true), 0);
-    assert.equal(initialScrollLine(0, 20, true), 0);
-  });
-});
-
-describe("scrollLineForJump —— 开头 / 50% / 结尾", () => {
-  test("三个出口各落在该在的位置", () => {
-    assert.equal(scrollLineForJump(1000, 20, "head"), 0);
-    assert.equal(scrollLineForJump(1000, 20, "middle"), 490);
-    assert.equal(scrollLineForJump(1000, 20, "tail"), 980);
-  });
-
-  test("短文件：50% 与结尾都夹到 0，不出现负行号", () => {
-    assert.equal(scrollLineForJump(5, 20, "middle"), 0);
-    assert.equal(scrollLineForJump(5, 20, "tail"), 0);
-    assert.equal(scrollLineForJump(0, 20, "tail"), 0);
-  });
-
-  test("跳转后的首行与跳转目标一致（显式取窗的参数由这两个纯函数算出）", () => {
+  test("跳转后的首行与跳转目标一致（显式取窗的参数由这几个纯函数算出）", () => {
     // 真机量到的行高 18.59375 px；跳转设完 scrollTop 后还要自己算一次首行，
-    // 不能只等 scroll 事件（真机上程序化滚动不一定派发它）
+    // 不能只等 scroll 事件（真机上程序化滚动不一定派发它）。行块上方有提示带 + 内边距（contentTop）
     const rowHeight = 18.59375;
-    for (const total of [300, 1_120_000, 1_800_000]) {
-      for (const jump of ["head", "middle", "tail"] as const) {
-        const line = scrollLineForJump(total, 34, jump);
-        assert.equal(lineAtScroll(line * rowHeight, rowHeight), line, `${jump} / ${total}`);
+    for (const contentTop of [0, 114, 126.5]) {
+      for (const total of [300, 1_120_000, 1_800_000]) {
+        const line = middleLine(total, 34);
+        const scrollTop = scrollTopForLine(line, rowHeight, contentTop);
+        assert.equal(lineAtScroll(scrollTop, rowHeight, contentTop), line, `${total} / ${contentTop}`);
       }
     }
   });
@@ -81,6 +92,22 @@ describe("lineAtScroll / visibleLineCount —— 滚动映射", () => {
     assert.equal(lineAtScroll(0, 18.6), 0);
     assert.equal(lineAtScroll(18.6 * 100, 18.6), 100);
     assert.equal(lineAtScroll(18.6 * 100 + 18.5, 18.6), 100);
+  });
+
+  test("行块上方有提示带 + 内边距：扣掉 contentTop 再算（原来没扣，「结尾」差 5 行才到底）", () => {
+    // 114 px / 18.59 ≈ 6.1 行：不扣的话滚到第 N 行会被认成第 N + 6 行
+    assert.equal(lineAtScroll(114 + 18.6 * 100, 18.6, 114), 100);
+    assert.equal(lineAtScroll(114 + 18.6 * 100 + 18.5, 18.6, 114), 100);
+    // 还在提示带里（还没滚到行块）：第 0 行
+    assert.equal(lineAtScroll(60, 18.6, 114), 0);
+  });
+
+  test("scrollTopForLine 与 lineAtScroll 互逆", () => {
+    assert.equal(scrollTopForLine(0, 18.6, 114), 114);
+    assert.ok(Math.abs(scrollTopForLine(100, 18.6, 114) - (114 + 1860)) < 1e-9);
+    for (const line of [0, 1, 999, 1_000_000]) {
+      assert.equal(lineAtScroll(scrollTopForLine(line, 18.59375, 126), 18.59375, 126), line);
+    }
   });
 
   test("负的 scrollTop（macOS 回弹）与没量出行高时都给 0", () => {
@@ -183,12 +210,35 @@ describe("windowCovers / 缓存", () => {
   });
 });
 
-describe("MAX_VIRTUAL_HEIGHT", () => {
-  test("1.8 M 行 × 默认行高在 Chromium 的滚动高度之内", () => {
-    assert.ok(1_800_000 * 18.59375 < MAX_VIRTUAL_HEIGHT);
+describe("maxBrowsableLines —— 运行时量出的滚动高度上限 ÷ 行高", () => {
+  const rowHeight = 18.59375;
+
+  test("Mac 实测 16,777,216 px：约 90 万行（原来写死 33.5M，放行到 180 万行，后一半滚不到）", () => {
+    const max = maxBrowsableLines(16_777_216, rowHeight);
+    assert.ok(max > 900_000 && max < 903_000, `max=${max}`);
+    // 上限以内：总高度 + 边距不超过实测上限
+    assert.ok(max * rowHeight <= 16_777_216 - 1024); // 至少留 1 KB 给行块上下的内边距与提示带
+    // 120 万行超限，80 万行不超
+    assert.ok(1_200_000 > max);
+    assert.ok(800_000 < max);
   });
 
-  test("界面字号撑大行高后可能超限，组件据此给出口", () => {
-    assert.ok(1_800_000 * 24 > MAX_VIRTUAL_HEIGHT);
+  test("页面放大两档（DPR × 1.2²）上限变小，缩小则变大：同一份行数可能从能看变成看不了", () => {
+    const base = maxBrowsableLines(16_777_216, rowHeight);
+    const zoomedIn = maxBrowsableLines(Math.floor(16_777_216 / 1.44), rowHeight);
+    const zoomedOut = maxBrowsableLines(Math.floor(16_777_216 * 2), rowHeight);
+    assert.ok(zoomedIn < base && base < zoomedOut);
+    assert.ok(Math.abs(zoomedIn / base - 1 / 1.44) < 0.01);
+  });
+
+  test("行高被界面字号撑大：同样的上限能看的行数相应变少", () => {
+    assert.ok(maxBrowsableLines(16_777_216, 24) < maxBrowsableLines(16_777_216, 18));
+  });
+
+  test("没量出行高 / 上限异常：给 0（组件据此不渲染行块），不给 Infinity / 负数", () => {
+    assert.equal(maxBrowsableLines(16_777_216, 0), 0);
+    assert.equal(maxBrowsableLines(0, 18.6), 0);
+    assert.equal(maxBrowsableLines(500, 18.6), 0); // 比边距还小
+    assert.equal(maxBrowsableLines(Number.NaN, 18.6), 0);
   });
 });

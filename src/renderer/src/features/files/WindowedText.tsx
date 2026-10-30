@@ -3,17 +3,17 @@ import { textRows, textWindow, type TextWindow } from "./preview-view.ts";
 import { useRowHeight } from "./useRowHeight.ts";
 
 /**
- * 大文本的窗口化渲染（大文件预览，见 preview-view.ts 的 WINDOW_TEXT_LIMIT）：只把
+ * 大文本的窗口化渲染（大文件预览，见 shared/files.ts 的 PREVIEW_WINDOW_LIMIT）：只把
  * 可视区上下各 WINDOW_OVERSCAN 行放进 DOM，滚动时滑动这个窗口——`main.log`、
  * `.bib`、长 `.tex` 这类 600 KB+ 的文件才不至于整篇建 DOM / 整篇重排。
  *
- * 窗口是**按显示行**算的：超过 MAX_ROW_CHARS 的单行先被硬切成多条显示行（`textRows`），
+ * 窗口是**按显示行**算的：超过 PREVIEW_ROW_CHARS 的单行先被硬切成多条显示行（`textRows`），
  * 否则一条 minified JSON 那样几十 MB 的行会把整条行盒一次性建出来——32 MB 单行实测
  * 到屏 1.9 s，硬切后 24 ms。当前面板没有行号 gutter，所以「显示行」与「原始行」的差别
  * 只在滚动的总高度上，不影响任何行号语义。
  *
  * **行高必须固定**，所以窗口化一律不折行（`white-space: pre` + 横向滚动，与超过
- * HIGHLIGHT_LIMIT 的代码同一条规矩）：`pre-wrap` 会让一行占多行高，窗口算出来的
+ * PREVIEW_HIGHLIGHT_LIMIT 的代码同一条规矩）：`pre-wrap` 会让一行占多行高，窗口算出来的
  * 位置与实际排版对不上，滚动就会漂。行高由 CSS 决定（`--font-size-sm` ×
  * `--line-height-code-block`，随界面字号缩放），所以首帧先量一次探针，量到之前
  * 只渲染首屏 + overscan，绝不先全渲染再收。
