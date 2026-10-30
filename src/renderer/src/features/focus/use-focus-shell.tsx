@@ -172,16 +172,22 @@ export function useFocusShell(options: FocusShellOptions): FocusShell {
    * 把在跑的一轮直接收掉，左栏落到同一工作区的浏览态。不走 ending 的问询——人
    * 已睡着，问句没人答，醒来也不该弹浮层；不发到点通知（没到 done）；睡眠期间
    * 不调模型，所以也不跑小结。end() 同时作废在途的小结结果（use-focus 的代次）。
+   *
+   * 依赖只盯真正用到的两样：相位（判定读它）与 end（稳定引用，useCallback([])）。
+   * 不能写 [focus]——useFocus 每次渲染都返回新对象，App 每渲染一次就会退订重订
+   * 一次 IPC（审查指出）；写 [focus.status, focus.end] 只在相位变化时重订。
    */
+  const focusStatus = focus.status;
+  const focusEnd = focus.end;
   useEffect(
     () =>
       api.focus.onSuspend(() => {
-        const action = focusSuspendActionOf(focus.status);
+        const action = focusSuspendActionOf(focusStatus);
         if (action === null) return;
         setWsBrowse(action.workspaceId);
-        focus.end();
+        focusEnd();
       }),
-    [focus],
+    [focusStatus, focusEnd],
   );
 
   /**
