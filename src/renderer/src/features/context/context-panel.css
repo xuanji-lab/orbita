@@ -245,6 +245,137 @@
   word-break: break-word;
 }
 
+/* 计划是主干：步 = 状态槽 + 一列（文字行 / 出处 / 章节）。文字行尾巴：在做的写计时，其余写「用了几步」 */
+.tp-step {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+button.tp-step-head {
+  cursor: pointer;
+}
+button.tp-step-head:hover .tp-text {
+  color: var(--color-text-primary);
+}
+.tp-tail {
+  flex: none;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-tail[data-failed] {
+  color: var(--color-danger);
+}
+.tp-step-head .tp-clock {
+  margin-left: 0;
+}
+/* 改过的步下面一行出处：「新加 / 改过 / 拆出」半粗 + 理由 */
+.tp-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-0-5) var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.tp-note b {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+/* 去掉的步：划线灰行，只在被去掉的那一轮里露面 */
+.tp-plan li[data-status="removed"] {
+  color: var(--color-text-tertiary);
+}
+.tp-plan li[data-status="removed"] .tp-text {
+  text-decoration: line-through;
+}
+.tp-plan li[data-status="pseudo"] {
+  color: var(--color-text-tertiary);
+}
+/* 头上的「改过 N 次」：点开是改动记录 */
+.tp-edits {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.tp-edits:hover,
+.tp-edits[aria-expanded="true"] {
+  color: var(--color-text-secondary);
+}
+.tp-editlog {
+  list-style: none;
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-editlog button {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.tp-editlog button:hover {
+  background: var(--color-bg-hover);
+}
+.tp-editlog-what {
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+/* 「做过的」收成页底一行：点开才是按轮列表 */
+.tp-histline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-4) 0;
+  padding: var(--space-2) 0 0;
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.tp-histline-label {
+  font-weight: var(--weight-semibold);
+}
+.tp-histline .tp-n {
+  flex: 1;
+  min-width: 0;
+}
+.tp-histline svg {
+  flex: none;
+  align-self: center;
+}
+
 /* 做过的：一轮一块；头是时刻 + 用户那句话，下一行计数；展开是章节时间线 */
 .tp-turn {
   display: grid;

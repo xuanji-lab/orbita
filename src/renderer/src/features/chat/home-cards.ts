@@ -3,7 +3,8 @@ import type { Carryover, SessionMeta, TranscriptRecord } from "@shared/session";
 // 只在构建期由 electron-vite 解析（同 stats-format.ts:13 的先例）
 import { rootSessions } from "../../../../shared/session.ts";
 import type { SessionRunState } from "../notify/completion-notice.ts";
-import { latestPlan, toolIndexOf } from "../context/task-progress.ts";
+import { planTimeline } from "../context/plan-timeline.ts";
+import { toolIndexOf } from "../context/task-progress.ts";
 import { flattenRenderUnits, groupToolUnits, groupTurnsByTurn, toolCallSummary, type TurnProcessUnit } from "./tool-results.ts";
 import { firstLine, processLive } from "./turn-process.ts";
 
@@ -190,8 +191,7 @@ export function homeCardLine(input: HomeCardLineInput, text: HomeCardLineText): 
   if (input.state === "running") {
     if (records === null) return text.thinking;
     const now = runningLine(lastTurn(records), text);
-    const plan = latestPlan(records);
-    const step = plan?.items.find((item) => item.status === "in_progress")?.text ?? null;
+    const step = planTimeline(records)?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
     return step === null || step === now ? now : text.doing(step, now);
   }
   if (input.state === "done") {

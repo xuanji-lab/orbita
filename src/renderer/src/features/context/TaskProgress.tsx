@@ -11,8 +11,10 @@ import type { SessionEntry } from "../chat/session-states.ts";
 import { formatRunClock, formatToolDuration } from "../chat/tool-results.ts";
 import { useTaskHistory, useTaskRecords, type TaskRecordsView } from "../chat/useTaskRecords.ts";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import type { TranscriptRecord } from "@shared/session";
+import type { ProcessChapter } from "../chat/turn-process.ts";
 import {
-  latestPlan,
   liveTail,
   REVEAL_ENTRY_EVENT,
   settledEnd,
@@ -22,6 +24,19 @@ import {
   turnDigests,
   type TurnDigest,
 } from "./task-progress.ts";
+import {
+  BEFORE_PLAN,
+  groupBySteps,
+  OUTSIDE_PLAN,
+  planTimeline,
+  planView,
+  stepActiveSince,
+  type PlanStep,
+  type PlanTimeline,
+  type StepActivity,
+  type StepChapter,
+} from "./plan-timeline.ts";
+import { planChangeText } from "./plan-text.ts";
 
 
 /**
@@ -29,9 +44,11 @@ import {
  *
  * - 头一行：状态饼 + 状态（在跑 / 等你 / 做完了 / 出错了；计划没做完就停了是「停下了」，只说字不画饼）
  *   + 轮数 + 这一轮的用时（在跑时每秒走）；推导在 task-progress.ts 的 taskHeadState；
- * - 计划：update_plan 的最后一张清单（空圈 / 在做 / 勾）；「在做」那步只在会话在跑 / 等你时画在跑饼、
- *   带计时（从这张计划写下起；计划是前几轮写的就从这一轮起），停下之后画空圈、字仍加粗标出停在哪一步；
- * - 做过的：按轮列，旧轮收成一行（用户那句话 + 步数 · 文件 · 用时），最近一轮展开成章节——
+ * - 计划是主干（2026-10-30）：每一步（空圈 / 在做 / 勾）尾部写它「用了几步」，在做的那步带计时（从它这一次
+ *   变成在做起）；每一步下面挂它那几章（按时间归属，plan-timeline.ts），在做那步默认展开；改过的计划在步下写
+ *   「新加 / 改过 / 拆出」与理由，头上「改过 N 次」点开是改动记录；「在做」只在会话在跑 / 等你时画在跑饼，
+ *   停下之后画空圈、字仍加粗标出停在哪一步；
+ * - 做过的：有计划时收成页底一行（点开才是按轮列表）；没有计划时按轮列，旧轮收成一行（用户那句话 + 步数 · 文件 · 用时），最近一轮展开成章节——
  *   与对话里过程块展开后的章节同一份推导；点一章，对话滚到那一块（对话里还没加载到的轮不可点）。
  *   会话槽只装尾窗，更早的轮按需载入：上下文页签「整个任务」已经拉过就直接用，没拉过在列表顶上
  *   给一行「载入」——长会话的全量能有上百 MB，进度是这个面板的默认页签，不该一打开就全搬进来；
@@ -56,7 +73,9 @@ export function TaskProgress(props: {
   const history = useTaskHistory(props.sessionId);
   const [wantOlder, setWantOlder] = useState(false);
   const view = useTaskRecords(props.sessionId, entry, wantOlder || history.status !== "idle");
-  const { turns, plan, statusOf, inChat } = useProgressDigest(view, turnActive);
+  const { turns, plan, timeline, statusOf, inChat } = useProgressDigest(view, turnActive);
+  const activity = useMemo(() => groupBySteps(timeline, turns, statusOf), [timeline, turns, statusOf]);
+  const [historyOpen, setHistoryOpen] = useState(false);
   // App 给的是侧栏同一个推导；meta 还没进列表（刚建的会话）时退回只看自己的槽
   const run =
     props.runState ?? sessionRunState({ slot: { phase: entry.phase, approvals: entry.approvals.length }, children: [], unread: null });
@@ -82,70 +101,72 @@ export function TaskProgress(props: {
         {clock !== null && <span className="tp-clock">{clock}</span>}
       </div>
 
-      {plan !== null ? (
-        <section className="tp-sec">
-          <div className="tp-gh">
-            {t.taskPanel.plan}
-            <span className="tp-n">{t.taskPanel.planCount(plan.done, plan.items.length)}</span>
-          </div>
-          <ol className="tp-plan">
-            {plan.items.map((item, index) => (
-              <li key={index} data-status={item.status}>
-                <span className="tp-slot">
-                  {item.status === "done" ? (
-                    <Icon name="check" size={12} strokeWidth={2} />
-                  ) : item.status === "in_progress" && working ? (
-                    <StatusPie state="running" />
-                  ) : (
-                    <span className="tp-ring" />
-                  )}
-                </span>
-                <span className="tp-text">{item.text}</span>
-                {item.status === "in_progress" && working && turnActive && (
-                  <span className="tp-clock">{formatRunClock(now - stepClockFrom(plan, turns))}</span>
-                )}
-              </li>
-            ))}
-          </ol>
-        </section>
+      {timeline !== null && plan !== null ? (
+        <PlanSection
+          timeline={timeline}
+          turns={turns}
+          activity={activity}
+          working={working}
+          turnActive={turnActive}
+          now={now}
+          inChat={inChat}
+          statusOf={statusOf}
+        />
       ) : (
         turnActive && <p className="tp-hint">{t.taskPanel.noPlan}</p>
       )}
 
-      <section className="tp-sec">
-        <div className="tp-gh">
-          {t.taskPanel.history}
-          {turns.length > 0 && <span className="tp-n">{t.taskPanel.turns(turns.length)}</span>}
-        </div>
-        {view.hasOlder && view.older.length === 0 && !view.loading && view.error === null && (
-          <p className="tp-hint">
-            {t.taskPanel.olderNotLoaded}
-            <button type="button" className="notice-exit" onClick={() => setWantOlder(true)}>
-              {t.taskPanel.loadOlder}
-            </button>
-          </p>
-        )}
-        {view.loading && <p className="tp-hint">{t.contextPanel.loading(view.fetched)}</p>}
-        {view.capped && <p className="tp-hint">{t.contextPanel.capped}</p>}
-        {view.error !== null && (
-          <p className="tp-hint" role="alert" data-tone="danger">
-            {t.contextPanel.loadError(view.error)}
-          </p>
-        )}
-        {turns.length === 0 ? (
-          <p className="tp-hint">{t.taskPanel.nothingYet}</p>
-        ) : (
-          turns.map((turn, index) => (
-            <TurnItem
-              key={turn.key}
-              turn={turn}
-              statusOf={statusOf}
-              inChat={inChat.has(turn.key)}
-              openByDefault={index === turns.length - 1}
-            />
-          ))
-        )}
-      </section>
+      {plan !== null && turns.length > 0 && (
+        <button
+          type="button"
+          className="tp-histline"
+          aria-expanded={historyOpen}
+          onClick={() => setHistoryOpen((value) => !value)}
+        >
+          <span className="tp-histline-label">{t.taskPanel.history}</span>
+          <span className="tp-n">
+            {t.planText.history(turns.length, turns.reduce((sum, turn) => sum + turn.steps, 0), turns.reduce((sum, turn) => sum + turn.files, 0))}
+          </span>
+          <Icon name={historyOpen ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+        </button>
+      )}
+
+      {(plan === null || historyOpen) && (
+        <section className="tp-sec">
+          <div className="tp-gh">
+            {t.taskPanel.history}
+            {turns.length > 0 && <span className="tp-n">{t.taskPanel.turns(turns.length)}</span>}
+          </div>
+          {view.hasOlder && view.older.length === 0 && !view.loading && view.error === null && (
+            <p className="tp-hint">
+              {t.taskPanel.olderNotLoaded}
+              <button type="button" className="notice-exit" onClick={() => setWantOlder(true)}>
+                {t.taskPanel.loadOlder}
+              </button>
+            </p>
+          )}
+          {view.loading && <p className="tp-hint">{t.contextPanel.loading(view.fetched)}</p>}
+          {view.capped && <p className="tp-hint">{t.contextPanel.capped}</p>}
+          {view.error !== null && (
+            <p className="tp-hint" role="alert" data-tone="danger">
+              {t.contextPanel.loadError(view.error)}
+            </p>
+          )}
+          {turns.length === 0 ? (
+            <p className="tp-hint">{t.taskPanel.nothingYet}</p>
+          ) : (
+            turns.map((turn, index) => (
+              <TurnItem
+                key={turn.key}
+                turn={turn}
+                statusOf={statusOf}
+                inChat={inChat.has(turn.key)}
+                openByDefault={index === turns.length - 1}
+              />
+            ))
+          )}
+        </section>
+      )}
 
       {props.carryovers.length > 0 && (
         <section className="tp-sec">
@@ -207,19 +228,28 @@ function useProgressDigest(view: TaskRecordsView, turnActive: boolean) {
   const olderIds = useMemo(() => new Set(view.older.map((record) => record.id)), [view.older]);
   const settledResults = useMemo(() => toolIndexOf(settled), [settled]);
   const settledTurns = useMemo(() => turnDigests(settled, false, settledResults), [settled, settledResults]);
-  const settledPlan = useMemo(() => latestPlan(settled), [settled]);
+  const settledPlanRecords = useMemo(() => settled.filter(isPlanRecord), [settled]);
   const tail = useMemo(() => liveTail(view.older, end, view.current, olderIds), [view.older, end, view.current, olderIds]);
   const tailResults = useMemo(() => toolIndexOf(tail), [tail]);
   const tailTurns = useMemo(() => turnDigests(tail, turnActive, tailResults), [tail, turnActive, tailResults]);
   const turns = useMemo(() => [...settledTurns, ...tailTurns], [settledTurns, tailTurns]);
-  const plan = useMemo(() => latestPlan(tail) ?? settledPlan, [tail, settledPlan]);
+  // 计划的版本线要对整段转录算（步骤 id 沿版本传下去），但只看 update_plan 那几条：落定段的挑一次，尾巴每条事件挑
+  const timeline = useMemo(
+    () => planTimeline([...settledPlanRecords, ...tail.filter(isPlanRecord)]),
+    [settledPlanRecords, tail],
+  );
+  const plan = useMemo(() => planView(timeline), [timeline]);
   const statusOf = useCallback(
     (toolCallId: string) => (tailResults.get(toolCallId) ?? settledResults.get(toolCallId))?.status,
     [tailResults, settledResults],
   );
   // 对话里加载着的轮（用户那句话在尾窗里）：只有它们的章节点了能滚过去
   const inChat = useMemo(() => new Set(view.current.map((record) => record.id)), [view.current]);
-  return { turns, plan, statusOf, inChat };
+  return { turns, plan, timeline, statusOf, inChat };
+}
+
+function isPlanRecord(record: TranscriptRecord): boolean {
+  return record.role === "tool" && record.toolName === PLAN_TOOL_NAME;
 }
 
 /** 一轮：用户那句话 + 一行计数；展开是章节，点一章让对话滚到那一块 */
@@ -240,9 +270,6 @@ function TurnItem(props: {
     ...(turn.failed > 0 ? [t.chat.processFailed(turn.failed)] : []),
     ...(turn.durationMs !== null ? [formatToolDuration(turn.durationMs, t)] : []),
   ];
-  const reveal = (key: string | undefined) => {
-    if (key !== undefined) window.dispatchEvent(new CustomEvent(REVEAL_ENTRY_EVENT, { detail: key }));
-  };
   return (
     <div className="tp-turn" data-open={shown || undefined}>
       <button type="button" className="tp-turn-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>
@@ -251,35 +278,15 @@ function TurnItem(props: {
       </button>
       {turn.steps > 0 && <div className="tp-meta">{meta.join(" · ")}</div>}
       {shown && turn.chapters.length > 0 && (
-        <ol className="tp-chapters">
-          {turn.chapters.map((chapter, index) => {
-            const failed = chapter.calls.some((call) => props.statusOf(call.toolCallId) === "error");
-            const isLive = turn.live && index === turn.chapters.length - 1;
-            const work = chapter.calls.filter((call) => call.toolName !== "update_plan").length;
-            const label =
-              chapter.title ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
-            return (
-              <li key={chapter.key} data-live={isLive || undefined} data-failed={failed || undefined}>
-                {props.inChat ? (
-                  <button type="button" title={t.taskPanel.jump} onClick={() => reveal(turn.processKeys[0])}>
-                    {/* 章节名最多两行（真模型的旁白常有三四行、一段英文思考能到七行），全文在悬停里 */}
-                    <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"} title={inlinePlain(label)}>
-                      <InlineMarks text={label} />
-                    </span>
-                    {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
-                  </button>
-                ) : (
-                  <div className="tp-ch-row" title={t.taskPanel.notInChat}>
-                    <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"}>
-                      <InlineMarks text={label} />
-                    </span>
-                    {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ol>
+        <ChapterList
+          rows={turn.chapters.map((chapter, index) => ({
+            chapter,
+            processKey: turn.processKeys[0],
+            inChat: props.inChat,
+            live: turn.live && index === turn.chapters.length - 1,
+          }))}
+          statusOf={props.statusOf}
+        />
       )}
     </div>
   );
@@ -288,4 +295,224 @@ function TurnItem(props: {
 function clockOf(at: number): string {
   const date = new Date(at);
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function reveal(key: string | undefined): void {
+  if (key !== undefined) window.dispatchEvent(new CustomEvent(REVEAL_ENTRY_EVENT, { detail: key }));
+}
+
+interface ChapterRow {
+  chapter: ProcessChapter;
+  /** 点一章让对话滚到哪一块 */
+  processKey: string | undefined;
+  /** 这一章所在的轮在对话里加载着：能点过去；没加载的只列不点 */
+  inChat: boolean;
+  live: boolean;
+}
+
+/** 章节时间线（「做过的」里一轮的章节与计划里一步的章节共用） */
+function ChapterList(props: { rows: readonly ChapterRow[]; statusOf: (toolCallId: string) => string | undefined }) {
+  const t = useT();
+  return (
+    <ol className="tp-chapters">
+      {props.rows.map(({ chapter, processKey, inChat, live }) => {
+        const failed = chapter.calls.some((call) => props.statusOf(call.toolCallId) === "error");
+        const work = chapter.calls.filter((call) => call.toolName !== PLAN_TOOL_NAME).length;
+        const label =
+          chapter.title ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
+        const text = (
+          <>
+            {/* 章节名最多两行（真模型的旁白常有三四行、一段英文思考能到七行），全文在悬停里 */}
+            <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"} title={inlinePlain(label)}>
+              <InlineMarks text={label} />
+            </span>
+            {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
+          </>
+        );
+        return (
+          <li key={chapter.key} data-live={live || undefined} data-failed={failed || undefined}>
+            {inChat ? (
+              <button type="button" title={t.taskPanel.jump} onClick={() => reveal(processKey)}>
+                {text}
+              </button>
+            ) : (
+              <div className="tp-ch-row" title={t.taskPanel.notInChat}>
+                {text}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * 计划（面板的主干）：每一步一行——状态槽、文字、尾部（在做的写计时，其余写用了几步）；
+ * 改过的步下面写出处与理由；在做的那步默认展开它的章节，点任何一步展开 / 收起；
+ * 本轮去掉的步在原位置画划线灰行；写计划之前的探索与计划外的活各收成一个灰行。
+ */
+function PlanSection(props: {
+  timeline: PlanTimeline;
+  turns: readonly TurnDigest[];
+  activity: ReadonlyMap<string, StepActivity>;
+  working: boolean;
+  turnActive: boolean;
+  now: number;
+  inChat: ReadonlySet<string>;
+  statusOf: (toolCallId: string) => string | undefined;
+}) {
+  const t = useT();
+  const { timeline, activity } = props;
+  const { current } = timeline;
+  const done = current.items.filter((item) => item.status === "done").length;
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [editsOpen, setEditsOpen] = useState(false);
+  const turnStart = props.turns.at(-1)?.at ?? 0;
+  // 去掉的步只在它被去掉的那一轮里露面，之后只留在改动记录里
+  const recentRemoved = current.at >= turnStart ? current.removed : [];
+  const rowsFor = (act: StepActivity | undefined): ChapterRow[] =>
+    (act?.chapters ?? []).map((entry: StepChapter) => ({
+      chapter: entry.chapter,
+      processKey: entry.processKey,
+      inChat: props.inChat.has(entry.turnKey),
+      live: entry.live,
+    }));
+  const callOf = new Map<string, string | undefined>();
+  for (const turn of props.turns) {
+    for (const chapter of turn.chapters) {
+      for (const call of chapter.calls) if (call.toolName === PLAN_TOOL_NAME) callOf.set(call.toolCallId, turn.processKeys[0]);
+    }
+  }
+  const stepRow = (item: PlanStep) => {
+    const act = activity.get(item.id);
+    const active = item.status === "in_progress" && props.working;
+    const rows = rowsFor(act);
+    const shown = open[item.id] ?? active;
+    const since = item.status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
+    const note = item.note;
+    return (
+      <li key={item.id} data-status={item.status}>
+        <span className="tp-slot">
+          {item.status === "done" ? (
+            <Icon name="check" size={12} strokeWidth={2} />
+          ) : active ? (
+            <StatusPie state="running" />
+          ) : (
+            <span className="tp-ring" />
+          )}
+        </span>
+        <div className="tp-step">
+          {rows.length > 0 ? (
+            <button
+              type="button"
+              className="tp-step-head"
+              aria-expanded={shown}
+              title={t.planText.stepTitle(rows.length, act?.files.length ?? 0)}
+              onClick={() => setOpen((prev) => ({ ...prev, [item.id]: !shown }))}
+            >
+              <span className="tp-text">{item.text}</span>
+              <StepTail act={act} clock={active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null} />
+            </button>
+          ) : (
+            <div className="tp-step-head">
+              <span className="tp-text">{item.text}</span>
+              <StepTail act={act} clock={active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null} />
+            </div>
+          )}
+          {note !== null && (
+            <div className="tp-note">
+              <b>{note.kind === "added" ? t.planText.noteAdded : note.kind === "reworded" ? t.planText.noteReworded : t.planText.noteSplit}</b>
+              {note.kind === "reworded" && note.from !== null && <span>{t.planText.was(note.from)}</span>}
+              {note.kind === "split" && note.from !== null && <span>{t.planText.splitFrom(note.from)}</span>}
+              {note.why !== null && <span>{note.why}</span>}
+            </div>
+          )}
+          {shown && rows.length > 0 && <ChapterList rows={rows} statusOf={props.statusOf} />}
+        </div>
+      </li>
+    );
+  };
+  const removedRow = (entry: { id: string; text: string }, key: string) => (
+    <li key={key} data-status="removed">
+      <span className="tp-slot">
+        <Icon name="x" size={12} strokeWidth={2} />
+      </span>
+      <div className="tp-step">
+        <div className="tp-step-head">
+          <span className="tp-text">{entry.text}</span>
+          <span className="tp-tail">{t.planText.dropped}</span>
+        </div>
+        {current.why !== null && <div className="tp-note"><span>{current.why}</span></div>}
+      </div>
+    </li>
+  );
+  const pseudo = (bucket: string, label: string) => {
+    const act = activity.get(bucket);
+    const rows = rowsFor(act);
+    if (act === undefined || (act.calls === 0 && rows.length === 0)) return null;
+    const shown = open[bucket] ?? false;
+    return (
+      <li key={bucket} data-status="pseudo">
+        <span className="tp-slot" />
+        <div className="tp-step">
+          <button type="button" className="tp-step-head" aria-expanded={shown} onClick={() => setOpen((prev) => ({ ...prev, [bucket]: !shown }))}>
+            <span className="tp-text">{label}</span>
+            <StepTail act={act} clock={null} />
+          </button>
+          {shown && rows.length > 0 && <ChapterList rows={rows} statusOf={props.statusOf} />}
+        </div>
+      </li>
+    );
+  };
+  return (
+    <section className="tp-sec">
+      <div className="tp-gh">
+        {t.taskPanel.plan}
+        <span className="tp-n">{t.taskPanel.planCount(done, current.items.length)}</span>
+        {timeline.edits > 0 && (
+          <button type="button" className="tp-edits" aria-expanded={editsOpen} title={t.planText.editsTitle} onClick={() => setEditsOpen((value) => !value)}>
+            {t.planText.editsCount(timeline.edits)}
+          </button>
+        )}
+      </div>
+      {editsOpen && (
+        <ol className="tp-editlog">
+          {[...timeline.versions]
+            .reverse()
+            .filter((version) => version.changes.length > 0)
+            .map((version) => (
+              <li key={version.toolCallId}>
+                <button type="button" title={t.taskPanel.jump} onClick={() => reveal(callOf.get(version.toolCallId))}>
+                  <span className="tp-time">{t.planText.versionAt(version.n)} · {clockOf(version.at)}</span>
+                  <span className="tp-editlog-what">{version.changes.map((change) => planChangeText(t, change)).join("；")}</span>
+                  {version.why !== null && <span className="tp-meta">{version.why}</span>}
+                </button>
+              </li>
+            ))}
+        </ol>
+      )}
+      <ol className="tp-plan">
+        {pseudo(BEFORE_PLAN, t.planText.beforePlan)}
+        {recentRemoved.filter((entry) => entry.afterNext === -1).map((entry, i) => removedRow(entry, `rm-first-${i}`))}
+        {current.items.flatMap((item, index) => [
+          stepRow(item),
+          ...recentRemoved.filter((entry) => entry.afterNext === index).map((entry, i) => removedRow(entry, `rm-${index}-${i}`)),
+        ])}
+        {pseudo(OUTSIDE_PLAN, t.planText.outsidePlan)}
+      </ol>
+    </section>
+  );
+}
+
+/** 一步尾部：在做的写计时，其余写「用了几步」（0 步不写） */
+function StepTail(props: { act: StepActivity | undefined; clock: string | null }) {
+  const t = useT();
+  if (props.clock !== null) return <span className="tp-clock">{props.clock}</span>;
+  if (props.act === undefined || props.act.calls === 0) return null;
+  return (
+    <span className="tp-tail" data-failed={props.act.failed > 0 || undefined}>
+      {t.planText.stepCalls(props.act.calls)}
+    </span>
+  );
 }

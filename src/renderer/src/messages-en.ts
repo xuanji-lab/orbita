@@ -2198,6 +2198,38 @@ export const en = {
     contextLine: "Context",
   },
 
+  /** 计划的改动文案（对话里的提示行与进度面板共用；参数只用原始类型，messages.test.ts 要能逐条调用） */
+  planText: {
+    added: (text: string) => `added "${text}"`,
+    removed: (text: string) => `dropped "${text}"`,
+    reworded: (from: string, to: string) => `"${from}" is now "${to}"`,
+    /** before = 挪到哪一步前面；空串 = 挪到了最后 */
+    moved: (text: string, before: string) => (before === "" ? `moved "${text}" to the end` : `moved "${text}" before "${before}"`),
+    split: (from: string, into: string) => `"${from}" split into ${into}`,
+    merged: (from: string, into: string) => `${from} merged into "${into}"`,
+    /** 对话里的一行：count = 这一轮改了几处，summary = 第一处的说法，why 空串 = 没写理由 */
+    notice: (count: number, summary: string, why: string) =>
+      `${count === 1 ? "Plan changed" : `Plan changed in ${count} places`}: ${summary}${count > 1 ? " and more" : ""}${why === "" ? "" : ` — ${why}`}`,
+    /** 把一段文字加上引号（拆成 / 合成里并排列出几步用） */
+    quoted: (text: string) => `"${text}" `,
+    noteAdded: "New",
+    noteReworded: "Reworded",
+    noteSplit: "Split out",
+    /** 改过的步下面写原文字 */
+    was: (from: string) => `was: ${from}`,
+    splitFrom: (from: string) => `from "${from}"`,
+    editsCount: (n: number) => (n === 1 ? "changed once" : `changed ${n} times`),
+    editsTitle: "What changed in the plan, and why",
+    dropped: "dropped",
+    stepCalls: (n: number) => (n === 1 ? "1 step" : `${n} steps`),
+    stepTitle: (chapters: number, files: number) => `${chapters === 1 ? "1 chapter" : `${chapters} chapters`}${files > 0 ? `, ${files === 1 ? "1 file" : `${files} files`} changed` : ""}`,
+    beforePlan: "Looked around first",
+    outsidePlan: "Outside the plan",
+    history: (turns: number, steps: number, files: number) =>
+      `${turns === 1 ? "1 turn" : `${turns} turns`} · ${steps === 1 ? "1 step" : `${steps} steps`}${files > 0 ? ` · ${files === 1 ? "1 file" : `${files} files`} changed` : ""}`,
+    versionAt: (n: number) => `v${n}`,
+  },
+
   contextPanel: {
     title: "Context",
     /** 胶囊「?」：口径说明（估算、灰显） */

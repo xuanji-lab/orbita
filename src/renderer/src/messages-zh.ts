@@ -2014,6 +2014,32 @@ export const zh: Messages = {
     contextLine: "上下文",
   },
 
+  planText: {
+    added: (text) => `加了「${text}」`,
+    removed: (text) => `去掉了「${text}」`,
+    reworded: (from, to) => `「${from}」改成「${to}」`,
+    moved: (text, before) => (before === "" ? `「${text}」挪到了最后` : `「${text}」挪到「${before}」前面`),
+    split: (from, into) => `「${from}」拆成${into}`,
+    merged: (from, into) => `${from}合成「${into}」`,
+    notice: (count, summary, why) =>
+      `${count === 1 ? "计划改了" : `计划改了 ${count} 处`}：${summary}${count > 1 ? "等" : ""}${why === "" ? "" : `——${why}`}`,
+    quoted: (text) => `「${text}」`,
+    noteAdded: "新加",
+    noteReworded: "改过",
+    noteSplit: "拆出",
+    was: (from) => `原：${from}`,
+    splitFrom: (from) => `从「${from}」拆出`,
+    editsCount: (n) => `改过 ${n} 次`,
+    editsTitle: "计划改了什么、为什么",
+    dropped: "去掉了",
+    stepCalls: (n) => `${n} 步`,
+    stepTitle: (chapters, files) => `${chapters} 章${files > 0 ? `，改了 ${files} 个文件` : ""}`,
+    beforePlan: "开工前看了看",
+    outsidePlan: "计划外",
+    history: (turns, steps, files) => `${turns} 轮 · ${steps} 步${files > 0 ? ` · 改了 ${files} 个文件` : ""}`,
+    versionAt: (n) => `第 ${n} 版`,
+  },
+
   contextPanel: {
     title: "上下文",
     help: "智能体此刻的上下文里装了什么，按来源分组。token 都是估算（误差约三成）；灰掉的条目已被压缩进摘要，原文不在上下文里了。",
