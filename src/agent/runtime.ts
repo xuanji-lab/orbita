@@ -72,6 +72,7 @@ import {
   RETRY_MAX_ATTEMPTS,
   retryVisibleToUi,
 } from "./retry-policy.ts";
+import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "./automation-tools.ts";
 import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
@@ -782,7 +783,12 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  * notePromptStability 共用这一份真源）：MCP 工具 + 内置自定义工具 + 终端组 +
  * 本会话实际注册的通道工具。
  */
-function extraToolNames(role: "root" | "child", workspaceId: string | null, memoryTools: boolean): string[] {
+function extraToolNames(
+  role: "root" | "child",
+  workspaceId: string | null,
+  memoryTools: boolean,
+  automationTools: boolean,
+): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
     "create_skill",
@@ -791,6 +797,7 @@ function extraToolNames(role: "root" | "child", workspaceId: string | null, memo
     ...TERMINAL_TOOL_NAMES,
     ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
+    ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
   ];
 }
 
@@ -960,6 +967,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
    */
   const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
+  /**
+   * 自动化工具（实验功能 automation）：主进程只在开关开、且这条会话不是自动化跑出来的时候带
+   * automationTools；这里再叠一道「只给根会话」。与记忆工具同一个装配方式，提示词名单里也同步。
+   */
+  const automationTools = "automationTools" in command && command.automationTools === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -1054,7 +1066,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools);
+              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools);
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
@@ -1349,6 +1361,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           turn: () => memory.turn ?? 1,
         })
       : []),
+    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId) : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
