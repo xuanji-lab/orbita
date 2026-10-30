@@ -289,11 +289,13 @@ export class MemoryEntryStore {
   ): Promise<MemoryEntry[]> {
     const atOfTurn = new Map(episode.turns.map((turn) => [turn.turn, turn.at]));
     const token = this.tokenOf(scopeId);
-    const seen = new Set(
-      [...(await this.listScope(scopeId)), ...(await this.listUser())].map((entry) =>
-        normalizeText(entry.text),
-      ),
-    );
+    const scopeList = await this.listScope(scopeId);
+    const userList = await this.listUser();
+    const seen = new Set([...scopeList, ...userList].map((entry) => normalizeText(entry.text)));
+    // 冲突定向要查旧条的时间与链：两层按 id 建表（记住各在哪一层，回头改写要寻址）
+    const known = new Map<string, { entry: MemoryEntry; token: string }>();
+    for (const entry of scopeList) known.set(entry.id, { entry, token });
+    for (const entry of userList) known.set(entry.id, { entry, token: USER_TOKEN });
     const entries: MemoryEntry[] = [];
     for (const draft of drafts) {
       const text = draft.text.trim();
@@ -331,18 +333,85 @@ export class MemoryEntryStore {
       });
     }
     if (entries.length === 0) return [];
+    // 冲突定向：新旧按原始问答时间（条目的 at），不按写入先后。从历史生成会在库里已有
+    // 新说法之后才写进更早的旧说法——这时过时的是新写的这条，它插回演变链里早于旧条的
+    // 位置（见 orientConflicts）；实时轮天然最新，走的仍是「新条顶掉旧条」那一支
+    const relinks = this.orientConflicts(entries, known);
     await mkdir(this.dir, { recursive: true });
     const scoped = entries.filter((entry) => entry.layer === "workspace");
     const promoted = entries.filter((entry) => entry.layer === "user");
     if (scoped.length > 0) await this.appendLines(token, scoped);
     if (promoted.length > 0) await this.appendLines(USER_TOKEN, promoted);
-    // 新条先落盘、再标旧条 stale：半路被杀最多新旧都 active（召回多一条），不会
-    // 出现旧条过时、新条没落的空窗
+    // 新条先落盘、再改旧条（标 stale / 改链指针）：半路被杀最多新旧都 active（召回多一条）
+    // 或旧说法悬在链外，不会出现旧条过时、新条没落的空窗
+    for (const relink of relinks) {
+      await this.updateEntry(relink.token, relink.id, (current) => {
+        const { conflictWith: _dropped, ...rest } = current;
+        return relink.conflictWith === undefined ? rest : { ...rest, conflictWith: relink.conflictWith };
+      });
+    }
     const conflicted = new Set(
-      entries.flatMap((entry) => (entry.conflictWith === undefined ? [] : [entry.conflictWith])),
+      entries.flatMap((entry) =>
+        entry.conflictWith === undefined || entry.status === "stale" ? [] : [entry.conflictWith],
+      ),
     );
     if (conflicted.size > 0) await this.markStale([token, USER_TOKEN], conflicted);
     return entries;
+  }
+
+  /**
+   * 给带 conflictWith 的新条定向（就地改 entries；返回要改链指针的旧条）。规则只有一条：
+   * **at 早的那条过时**。
+   * - 新条不早于它冲突的旧条（实时轮总是这样）：新条顶掉旧条——调用方把旧条标 stale；
+   * - 新条更早（从历史生成补进来的旧说法）：新条自己落成 stale，旧条保持 active。新条
+   *   沿旧条的链往回找到时间上的位置插进去：链上第一个不晚于它的节点之后——那个节点的
+   *   后继改指向新条、新条指向原来的前驱。这样演变链按时间先后，「恢复旧说法」恢复的
+   *   永远是时间上紧挨着的上一个说法，方向反过来也同一语义。
+   */
+  private orientConflicts(
+    entries: MemoryEntry[],
+    known: ReadonlyMap<string, { entry: MemoryEntry; token: string }>,
+  ): { token: string; id: string; conflictWith: string | undefined }[] {
+    const relinks: { token: string; id: string; conflictWith: string | undefined }[] = [];
+    // 同一批里改过的指针要被后面的新条看见（两条旧说法冲突同一条新说法）
+    const pointer = new Map<string, string | undefined>();
+    const pointerOf = (id: string): string | undefined =>
+      pointer.has(id) ? pointer.get(id) : known.get(id)?.entry.conflictWith;
+    const atOf = (id: string): number | undefined =>
+      known.get(id)?.entry.at ?? entries.find((entry) => entry.id === id)?.at;
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
+      const target = entry.conflictWith === undefined ? undefined : known.get(entry.conflictWith);
+      if (target === undefined || entry.at >= target.entry.at) continue;
+      // 往回走：后继 successor 的前驱比新条还晚，就继续往前
+      let successor = target.entry.id;
+      const visited = new Set<string>([successor]);
+      for (;;) {
+        const previous = pointerOf(successor);
+        const previousAt = previous === undefined ? undefined : atOf(previous);
+        if (previous === undefined || previousAt === undefined || previousAt <= entry.at || visited.has(previous)) break;
+        visited.add(previous);
+        successor = previous;
+      }
+      const predecessor = pointerOf(successor);
+      const { conflictWith: _dropped, ...rest } = entry;
+      entries[index] = {
+        ...rest,
+        status: "stale",
+        ...(predecessor !== undefined ? { conflictWith: predecessor } : null),
+      };
+      pointer.set(entry.id, predecessor);
+      pointer.set(successor, entry.id);
+      const home = known.get(successor);
+      if (home !== undefined) {
+        relinks.push({ token: home.token, id: successor, conflictWith: entry.id });
+      } else {
+        // 后继是同一批里刚定向过的新条：还没落盘，就地改
+        const sibling = entries.findIndex((candidate) => candidate.id === successor);
+        if (sibling >= 0) entries[sibling] = { ...entries[sibling]!, conflictWith: entry.id };
+      }
+    }
+    return relinks;
   }
 
   /**

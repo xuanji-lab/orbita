@@ -649,3 +649,85 @@ button.mem-tag:hover {
   background: var(--color-accent);
   transition: width var(--duration-fast) var(--ease-standard);
 }
+
+/* ── 从历史生成 ── */
+
+.mem-hist {
+  gap: var(--space-2);
+}
+
+.mem-hist-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mem-hist-group {
+  display: grid;
+  gap: 2px;
+}
+
+.mem-hist-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+details.mem-hist-group > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+details.mem-hist-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.mem-hist-group[open] > summary > .orbita-icon {
+  transform: rotate(90deg);
+}
+
+.mem-hist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.mem-hist-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.mem-hist-row input {
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.mem-hist-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mem-hist-meta {
+  flex: none;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.mem-hist-gone {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

@@ -35,6 +35,7 @@ import type { IntentRecallRecord } from "./session.ts";
 import type {
   MemoryBackfillProgress,
   MemoryDownloadProgress,
+  MemoryHistoryStatus,
   MemoryAgentCall,
   MemoryAgentOutcome,
   MemoryRecallOutcome,
@@ -133,6 +134,12 @@ export const ipcChannels = {
   memoryVectorStatus: "memory:vector-status",
   memoryVectorSet: "memory:vector-set",
   memoryVectorDownload: "memory:vector-download",
+  /** 从历史生成（实验功能 memory-system）：预估（选中的作用域才读转录）/ 开始 /
+   *  暂停·继续·停止 / 状态快照；进度走 agent:event 的 memoryHistory */
+  memoryHistoryEstimate: "memory:history-estimate",
+  memoryHistoryStart: "memory:history-start",
+  memoryHistoryControl: "memory:history-control",
+  memoryHistoryStatus: "memory:history-status",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -1293,6 +1300,10 @@ export type AgentEvent =
  * idle 收尾）。载荷 MemoryBackfillProgress。
  */
 | { type: "vectorBackfill"; progress: MemoryBackfillProgress }
+/**
+ * 记忆系统（实验功能 memory-system）：「从历史生成」的进度快照（每喂完一轮、状态变化时推）。
+ */
+| { type: "memoryHistory"; status: MemoryHistoryStatus }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**

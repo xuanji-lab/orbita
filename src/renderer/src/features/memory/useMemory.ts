@@ -4,6 +4,7 @@ import type {
   MemoryBackfillProgress,
   MemoryDownloadProgress,
   MemoryEntriesResponse,
+  MemoryHistoryStatus,
   MemoryMutation,
   MemoryMutationOutcome,
   MemoryScopeSummary,
@@ -123,4 +124,30 @@ export function useVectorStatus(enabled: boolean): {
     });
   }, [enabled, reload]);
   return { status: resource.data, error: resource.error, download, backfill, reload };
+}
+
+/**
+ * 从历史生成的任务快照：拉一次 + 听 memoryHistory 事件（每喂完一轮、状态变化时主进程推）。
+ * enabled = false 不拉不听。
+ */
+export function useMemoryHistory(enabled: boolean): MemoryHistoryStatus | null {
+  const [status, setStatus] = useState<MemoryHistoryStatus | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    void api.memory
+      .historyStatus()
+      .then((next) => {
+        if (live) setStatus(next);
+      })
+      .catch(() => undefined);
+    const off = api.agent.onEvent((event) => {
+      if (event.type === "memoryHistory") setStatus(event.status);
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [enabled]);
+  return status;
 }

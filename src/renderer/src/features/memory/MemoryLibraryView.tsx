@@ -20,7 +20,9 @@ import {
   type MemorySourceFilter,
   type MemoryTypeFilter,
 } from "./memory-view.ts";
-import { mutateMemory, useMemoryEntries } from "./useMemory.ts";
+import { mutateMemory, useMemoryEntries, useMemoryHistory } from "./useMemory.ts";
+import { HistoryImport } from "./HistoryImport";
+import { historyActive } from "./history-view.ts";
 import "./memory.css";
 
 /**
@@ -63,6 +65,8 @@ function ScopePage(props: {
   const [source, setSource] = useState<MemorySourceFilter>("all");
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const history = useMemoryHistory(true);
   const all = props.token === "all";
   const scope = all ? null : (props.scopes?.find((item) => item.token === props.token) ?? null);
   const items = entries.data?.items ?? null;
@@ -79,11 +83,26 @@ function ScopePage(props: {
           {scope === null ? t.memory.allTitle : scopeNameOf(props.scopes, scope.token, t.memory.scopeUser)}
         </h2>
         <span className="mem-page-hint">{t.memory.pageHint}</span>
-        <button type="button" className="mem-btn row-trailing" onClick={() => setAdding((value) => !value)}>
-          <Icon name="plus" size={12} strokeWidth={1.8} />
-          {t.memory.add}
-        </button>
+        <span className="row-trailing mem-edit-row">
+          <button
+            type="button"
+            className="mem-btn"
+            aria-pressed={historyOpen}
+            onClick={() => setHistoryOpen((value) => !value)}
+          >
+            <Icon name="history" size={12} strokeWidth={1.8} />
+            {t.memory.historyOpen}
+          </button>
+          <button type="button" className="mem-btn" onClick={() => setAdding((value) => !value)}>
+            <Icon name="plus" size={12} strokeWidth={1.8} />
+            {t.memory.add}
+          </button>
+        </span>
       </header>
+
+      {(historyOpen || historyActive(history)) && (
+        <HistoryImport token={props.token} status={history} onClose={() => setHistoryOpen(false)} />
+      )}
 
       {adding && (
         <ManualForm

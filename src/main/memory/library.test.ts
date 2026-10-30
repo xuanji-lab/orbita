@@ -24,6 +24,7 @@ function makeLibrary(
     titles?: Record<string, string | null>;
     workspaces?: { id: string; name: string }[];
     metas?: Record<string, { workspaceId: string | null; cwd: string }>;
+    sessions?: { workspaceId: string | null; cwd: string }[];
   } = {},
 ): MemoryLibrary {
   return new MemoryLibrary(dir, {
@@ -31,6 +32,7 @@ function makeLibrary(
     workspaces: async () => overrides.workspaces ?? [{ id: "ws-1", name: "orbita" }],
     readMeta: async (id) =>
       overrides.metas?.[id] ?? { workspaceId: "ws-1", cwd: "/Users/某家/Orbita/orbita" },
+    sessions: async () => overrides.sessions ?? [],
   });
 }
 
@@ -260,8 +262,62 @@ test("sessionView：meta 读不到 → token null 但视图照常（零轮）", 
     sessionTitleOf: async () => null,
     workspaces: async () => [],
     readMeta,
+    sessions: async () => [],
   });
   const view = await lib.sessionView("s-unknown");
   assert.equal(view.token, null);
   assert.deepEqual(view.turns, []);
+});
+
+test("演变链按原始问答时间（at）排：指针方向与时间相反的旧数据也是旧 → 新", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  const entries = new MemoryEntryStore(dir);
+  const base = {
+    type: "preference" as const,
+    reason: "r",
+    keywords: [] as string[],
+    layer: "workspace" as const,
+    scopeId: "ws-1",
+    sessionId: "s1",
+    turns: [1],
+    episodeId: "ep_1",
+    source: "chat" as const,
+  };
+  // 插链之前的旧行为：后写进来的旧说法（at 更早）指向了已有的新说法
+  const rows: MemoryEntry[] = [
+    { ...base, id: "mem_new", text: "汇报分三点", at: 29_000, status: "stale" },
+    { ...base, id: "mem_old", text: "汇报写整段", at: 20_000, conflictWith: "mem_new" },
+  ];
+  await entries.writeLayer(WS_TOKEN, rows);
+  const items = await makeLibrary(dir).listEntries({ token: WS_TOKEN });
+  for (const item of items) {
+    assert.deepEqual(item.evolution.map((node) => node.text), ["汇报写整段", "汇报分三点"]);
+  }
+});
+
+test("scopes：会话指向已不在的工作区——起名用多数 cwd 的末段目录名、标 missing、排在最后，不露 token / id", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  const entries = new MemoryEntryStore(dir);
+  const gone = "0161d576-0000-4000-8000-000000000000";
+  await entries.appendScope(gone, { ...EPISODE, scopeId: gone }, [{ type: "fact", text: "导入会话的事实", keywords: [], turns: [1] }]);
+  await entries.appendScope("/Users/某家/Home", { ...EPISODE, scopeId: "/Users/某家/Home" }, [{ type: "fact", text: "Home 的事实", keywords: [], turns: [1] }]);
+  await entries.appendScope("ws-1", EPISODE, [{ type: "fact", text: "工作区的事实", keywords: [], turns: [1] }]);
+  const library = makeLibrary(dir, {
+    sessions: [
+      { workspaceId: gone, cwd: "/Users/某家/code/NUS-AR5302-3" },
+      { workspaceId: gone, cwd: "/Users/某家/code/NUS-AR5302-3" },
+      { workspaceId: gone, cwd: "/tmp/x" },
+    ],
+  });
+  const scopes = await library.scopes();
+  assert.deepEqual(
+    scopes.map((scope) => [scope.kind, scope.name, scope.path ?? null]),
+    [
+      ["user", "所有工作区", null],
+      ["workspace", "orbita", null],
+      ["home", "Home", null],
+      ["missing", "NUS-AR5302-3", "/Users/某家/code/NUS-AR5302-3"],
+    ],
+  );
+  assert.equal(scopes[3]!.token, tokenOfScope(gone));
 });

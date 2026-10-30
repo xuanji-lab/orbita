@@ -24,6 +24,7 @@ import {
   type MemorySessionTurnView,
   type MemoryUsedHit,
 } from "../../shared/memory.ts";
+import { scopeLabels } from "./scope-names.ts";
 
 /** 原话片段的截断上限（几百字即可，见契约注释）。 */
 const QUOTE_CHARS = 300;
@@ -35,6 +36,8 @@ export interface MemoryLibraryDeps {
   workspaces: () => Promise<{ id: string; name: string }[]>;
   /** 会话 meta（解析作用域 token 用） */
   readMeta: (sessionId: string) => Promise<{ workspaceId: string | null; cwd: string } | null>;
+  /** 全部会话的归属（只在有层对不上工作区表时才读：认出「工作区已不在」的层，给它起名） */
+  sessions: () => Promise<readonly { workspaceId: string | null; cwd: string }[]>;
 }
 
 /** 一个条目层（token + 条目）。 */
@@ -67,17 +70,37 @@ export class MemoryLibrary {
     const byToken = new Map(
       workspaces.map((workspace) => [this.entries.tokenOf(workspace.id), workspace.name]),
     );
+    // 对不上工作区表的层：可能是 cwd 作用域（Home），也可能是会话指向的工作区已不在。
+    // 只有这时才读一遍会话列表认它们（读全部 meta 不便宜，记忆库每次变更都会重拉 scopes）
+    const unmatched = layers.some((layer) => layer.token !== MEMORY_USER_TOKEN && !byToken.has(layer.token));
+    const missing = new Map<string, { name: string; path?: string }>();
+    if (unmatched) {
+      const labels = scopeLabels(await this.deps.sessions().catch(() => []), workspaces);
+      for (const [scopeId, label] of labels) {
+        if (label.kind === "missing") missing.set(this.entries.tokenOf(scopeId), label);
+      }
+    }
     const userCount = layers.find((layer) => layer.token === MEMORY_USER_TOKEN)?.count ?? 0;
     const rows: MemoryScopeSummary[] = [
       { token: MEMORY_USER_TOKEN, kind: "user", name: "所有工作区", count: userCount },
     ];
     const workspaceRows: MemoryScopeSummary[] = [];
     const homeRows: MemoryScopeSummary[] = [];
+    const missingRows: MemoryScopeSummary[] = [];
     for (const layer of layers) {
       if (layer.token === MEMORY_USER_TOKEN) continue;
       const name = byToken.get(layer.token);
+      const gone = missing.get(layer.token);
       if (name !== undefined) {
         workspaceRows.push({ token: layer.token, kind: "workspace", name, count: layer.count });
+      } else if (gone !== undefined) {
+        missingRows.push({
+          token: layer.token,
+          kind: "missing",
+          name: gone.name,
+          ...(gone.path !== undefined ? { path: gone.path } : null),
+          count: layer.count,
+        });
       } else {
         homeRows.push({ token: layer.token, kind: "home", name: "Home", count: layer.count });
       }
@@ -86,7 +109,8 @@ export class MemoryLibrary {
     if (homeRows.length > 1) {
       for (const row of homeRows) row.name = `Home ${row.token.slice(0, 6)}`;
     }
-    return [...rows, ...workspaceRows, ...homeRows];
+    missingRows.sort((a, b) => a.name.localeCompare(b.name));
+    return [...rows, ...workspaceRows, ...homeRows, ...missingRows];
   }
 
   /**
@@ -269,7 +293,9 @@ function evolutionOf(
       candidate.at < acc.at ? candidate : acc,
     );
   }
-  return chain;
+  // 链上先后按原始问答时间（at）：从历史生成补进来的旧说法已按时间插进链，这里再按 at
+  // 稳定排一遍，兜住插链之前留下的旧数据——界面上「谁先谁后」只认对话发生的时间
+  return chain.sort((a, b) => a.at - b.at);
 }
 
 /** 轮没有注入记录时（只记住了东西的轮），at 取该轮条目的最新时间。 */

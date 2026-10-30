@@ -215,6 +215,51 @@ export const en = {
     emptyHint:
       "With memory on, chat for a few turns; once things go quiet the conversation is distilled into memories. You can also add one by hand.",
     noMatch: "No memories match.",
+    historyOpen: "Generate from history",
+    historyTitle: "Generate memories from past chats",
+    historyIntro:
+      "Memories are only built from chats after the memory system was turned on. This backfills earlier chats in their original order: a later statement marks an earlier conflicting one as outdated, and turns already processed are skipped, never repeated.",
+    historyWorkspaces: "Workspaces",
+    historyNoWorkspace: "Tasks without a workspace (by folder)",
+    historyMissingGroup: "Deleted workspaces",
+    scopeMissing: "workspace gone",
+    scopeMissingHint: (path: string) => `The workspace these tasks belonged to no longer exists (imported tasks or a deleted workspace); named after their folder ${path}`,
+    historySessions: (count: number) => `${count} ${count === 1 ? "task" : "tasks"}`,
+    historyStats: (pending: number, done: number, calls: number) =>
+      `${pending} turns to process · ${done} already processed · ~${calls} model calls`,
+    historyCounting: "Counting…",
+    historyTotal: (pending: number, done: number, calls: number) =>
+      `In total: ${pending} turns to process; ${done} already processed will be skipped; ~${calls} model calls`,
+    historyChore: "Using the chore model",
+    historyNoChore: "No chore model set yet. Pick one in Settings first.",
+    historyNothing: "Nothing left to process in the selected scopes.",
+    historyStart: "Start",
+    historyPause: "Pause",
+    historyResume: "Resume",
+    historyStop: "Stop",
+    historyClose: "Hide",
+    historyAgain: "Choose scopes again",
+    historyState: (state: string): string =>
+      state === "running"
+        ? "Generating"
+        : state === "paused"
+          ? "Paused"
+          : state === "stopping"
+            ? "Wrapping up"
+            : state === "stopped"
+              ? "Stopped"
+              : state === "done"
+                ? "Done"
+                : state === "failed"
+                  ? "Paused on error"
+                  : "No job",
+    historyProgress: (done: number, total: number) => `Turn ${done} / ${total}`,
+    historyEpisodes: (count: number) => `${count} segments processed`,
+    historyWritten: (fact: number, preference: number, insight: number) =>
+      `${fact + preference + insight} memories: ${fact} facts · ${preference} preferences · ${insight} insights`,
+    historyCalls: (count: number) => `${count} model calls`,
+    historyFailedNote: (count: number) => `${count} extractions failed; those segments stay queued and retry on next launch`,
+    historyResumeHint: "Stopping or quitting is safe: starting again picks up where it left off.",
     manualTitle: "Add a memory",
     manualText: "Write it as one complete sentence",
     manualReason: (type: string): string =>

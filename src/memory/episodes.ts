@@ -160,6 +160,11 @@ function openFile(dir: string, sessionId: string): string {
   return join(dir, "episodes", `${createHash("sha1").update(sessionId).digest("hex")}.json`);
 }
 
+/** 历史开段（从历史生成）：与实时开段分目录存——同一会话正在实时聊时，两段各开各的。 */
+function historyFile(dir: string, sessionId: string): string {
+  return join(dir, "episodes", "history", `${createHash("sha1").update(sessionId).digest("hex")}.json`);
+}
+
 function pendingFile(dir: string, episodeId: string): string {
   return join(dir, "episodes", "pending", `${episodeId}.json`);
 }
@@ -330,6 +335,63 @@ export class EpisodeStore {
       if (episode !== null) pending.push(episode);
     }
     return pending;
+  }
+
+  /* ---------- 历史开段（从历史生成用；启动清扫不碰它们——它们按历史时间收尾，不按墙钟） ---------- */
+
+  loadHistoryOpen(sessionId: string): Promise<OpenEpisode | null> {
+    return readEpisodeFile(historyFile(this.dir, sessionId), `会话 ${sessionId} 的历史开段文件`);
+  }
+
+  async saveHistoryOpen(episode: OpenEpisode): Promise<void> {
+    await writeTextAtomic(historyFile(this.dir, episode.sessionId), `${JSON.stringify(episode)}\n`);
+  }
+
+  async removeHistoryOpen(sessionId: string): Promise<void> {
+    await unlink(historyFile(this.dir, sessionId)).catch((cause: unknown) => {
+      if (!isNotFound(cause)) throw cause;
+    });
+  }
+
+  async listHistoryOpen(): Promise<OpenEpisode[]> {
+    const dir = join(this.dir, "episodes", "history");
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw cause;
+    }
+    const open: OpenEpisode[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const episode = await readEpisodeFile(join(dir, name), `历史开段文件 ${name}`);
+      if (episode !== null) open.push(episode);
+    }
+    return open;
+  }
+
+  /**
+   * 已经进过事件段的轮（会话 → 轮号集合）：归档、待提取、实时开段、历史开段四处的并集。
+   * 从历史生成的去重账本就是它——段文件本身就是单一真相，不另记一份会和它对不上的账：
+   * 实时整理过的、上次生成到一半的、停止时收尾的，都在这里。
+   */
+  async processedTurns(): Promise<Map<string, Set<number>>> {
+    const out = new Map<string, Set<number>>();
+    const add = (episode: { sessionId: string; turns: readonly MemoryEpisodeTurn[] }): void => {
+      let set = out.get(episode.sessionId);
+      if (set === undefined) {
+        set = new Set();
+        out.set(episode.sessionId, set);
+      }
+      for (const turn of episode.turns) set.add(turn.turn);
+    };
+    const [archived, all, history] = await Promise.all([this.listArchived(), this.listAll(), this.listHistoryOpen()]);
+    for (const episode of archived) add(episode);
+    for (const episode of all.open) add(episode);
+    for (const episode of all.pending) add(episode);
+    for (const episode of history) add(episode);
+    return out;
   }
 
   /**
