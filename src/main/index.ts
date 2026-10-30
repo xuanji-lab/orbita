@@ -14,6 +14,7 @@ import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
@@ -31,6 +32,10 @@ import {
   type MemoryRecallOutcome,
 } from "../shared/memory.ts";
 import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
+import { MemoryHistoryJob, parseHistoryStatus } from "./memory/history-job.ts";
+import { EpisodeStore, EPISODE_IDLE_CLOSE_MS } from "../memory/episodes.ts";
+import { writeJsonAtomic } from "./atomic-write.ts";
+import { isNotFound } from "./fs-errors.ts";
 import { choreModelPayload } from "./memory/chore.ts";
 import { llamaServerCandidates } from "./memory/llama-bin.ts";
 import {
@@ -788,9 +793,47 @@ void app.whenReady().then(async () => {
   if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
     void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
   }
+  /*
+   * 从历史生成（实验功能 memory-system）：开关打开前的聊天记录按历史时间正序逐轮喂给
+   * 记忆服务。「处理过没有」只问段文件（主进程只读），任务快照落在 memory/ 外面——
+   * memory/ 只有服务一个写者
+   */
+  const memoryHistoryFile = join(configDir, "memory-history.json");
+  const memoryHistory = new MemoryHistoryJob({
+    listSessions: () => sessions.list(),
+    workspaces: () => workspaces.list(),
+    load: (id) => sessions.load(id),
+    processedTurns: () => new EpisodeStore(join(configDir, "memory")).processedTurns(),
+    chore: async () => {
+      const choice = (await settings.read()).choreModel;
+      return choice === undefined ? null : { providerId: choice.providerId, modelId: choice.modelId };
+    },
+    prepare: async () => {
+      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) {
+        return "记忆实验开关没开";
+      }
+      const chore = await choreModelPayload(settings, providers);
+      if (chore === undefined) return "没配家务活模型（设置 › 模型服务 › 家务活模型）";
+      memoryHost.setChore(chore);
+      return (await ensureMemoryService()) ? null : "记忆服务没能拉起";
+    },
+    step: (input) => memoryHost.historyStep(input),
+    readState: async () => {
+      try {
+        return parseHistoryStatus(JSON.parse(await readFile(memoryHistoryFile, "utf8")));
+      } catch (cause) {
+        if (isNotFound(cause)) return null;
+        throw cause;
+      }
+    },
+    writeState: (status) => writeJsonAtomic(memoryHistoryFile, status),
+    emit: (status) => broadcastAgentEvent({ type: "memoryHistory", status }),
+    gapMs: EPISODE_IDLE_CLOSE_MS,
+  });
   // 记忆库的读写面（实验功能 memory-system）：读在主进程直读 JSONL，写转发给
   // 记忆服务（唯一写者）；会话标题 / 工作区名这些连接属性在这里注入
   registerMemoryIpc({
+    history: memoryHistory,
     dir: join(configDir, "memory"),
     deps: {
       sessionTitleOf: async (id) => (await sessions.readMeta(id).catch(() => null))?.title ?? null,
