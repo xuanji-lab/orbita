@@ -5,7 +5,8 @@
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, powerMonitor, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
+import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
@@ -44,6 +45,12 @@ import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
+import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
+import { KeepAwake } from "./automation/keep-awake.ts";
+import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
+import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
+import { AutomationScheduler } from "./automation/scheduler.ts";
+import { AutomationStore } from "./automation/store.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
@@ -365,6 +372,10 @@ void app.whenReady().then(async () => {
   // （memoryHost 在后面定义；设置写入只发生在窗口起来之后，那时已就绪）。
   // 其余设置的写入也会过这道：开关没变时拉起 / 停都是空操作，无副作用
   registerSettingsIpc(settings, (next) => {
+    // 自动化：开关刚打开立刻 tick 一次（不等 30 秒）；「阻止睡眠」设置变了按当前在跑数重对一次。
+    // 两者都在窗口起来之后才可能被触发，此时 automationScheduler / keepAwake 已就绪
+    if (next.experimentalFeatures?.["automation"] === true) void automationScheduler.tick().catch(() => undefined);
+    void keepAwake.sync().catch(() => undefined);
     if (next.experimentalFeatures?.["memory-system"] === true) {
       void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
     } else {
@@ -489,6 +500,18 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 自动化：agent 的 automation_create / list / cancel——存盘在主进程，任何路径都回执
+    if (event.type === "automationRequest") {
+      void applyAutomationRequest(automationDeps, event)
+        .then((outcome) => agentHost.answerAutomation(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerAutomation(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "channelSendRequest") {
       void applyChannelSend(deps, event)
         .then((outcome) => agentHost.answerChannelSend(event.requestId, outcome))
@@ -504,6 +527,9 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
+    // 只旁听，不 return：事件照常往下 record + broadcast
+    automationScheduler.onAgentEvent(event);
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
     if (event.type === "failed" && event.sessionId === null) phases.clear();
@@ -982,6 +1008,54 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps);
 
   /*
+   * 自动化（实验功能 automation）：定时任务的存盘、调度与「阻止睡眠」。开关关着时调度器每次 tick 直接
+   * 返回、工具不注册、list 回空。两种去处都走 agentIpc.submitTurn——与用户发消息、delegate 同一套开轮装配。
+   * 睡眠唤醒（powerMonitor resume）立刻 tick 一次：Mac 睡眠时定时器不走。
+   */
+  const automationStore = new AutomationStore(configDir);
+  const automationEnabled = async (): Promise<boolean> =>
+    (await settings.read()).experimentalFeatures?.["automation"] === true;
+  const keepAwake = new KeepAwake(
+    powerSaveBlocker,
+    async () => (await settings.read()).automationKeepAwake === true,
+    (holding) => console.info(`[automation] 阻止系统睡眠：${holding ? "已拦住（有运行在执行）" : "已放开"}`),
+  );
+  const launchDeps: LaunchDeps = {
+    sessions,
+    providers,
+    settings,
+    workspaces,
+    submitTurn: (input) => agentIpc.submitTurn(input),
+  };
+  const automationScheduler = new AutomationScheduler({
+    store: automationStore,
+    now: Date.now,
+    enabled: automationEnabled,
+    launch: (input) => launchAutomationRun(launchDeps, input),
+    deliver: (input) => deliverAutomationRun(launchDeps, input),
+    sessionExists: async (sessionId) => (await sessions.readMeta(sessionId)) !== null,
+    isSessionBusy: (sessionId) => (phases.get(sessionId) ?? "idle") !== "idle",
+    abort: (sessionId) => agentHost.abort(sessionId),
+    notify: broadcastAutomationEvent,
+    onActiveChange: (count) => void keepAwake.sync(count).catch((cause: unknown) => console.error("[automation] 阻止睡眠同步失败", cause)),
+  });
+  const automationDeps: AutomationRequestDeps = {
+    store: automationStore,
+    scheduler: automationScheduler,
+    sessions,
+    providers,
+    workspaces,
+    enabled: automationEnabled,
+    now: Date.now,
+    newId: randomUUID,
+    notify: broadcastAutomationEvent,
+  };
+  registerAutomationIpc(automationDeps);
+  automationScheduler.start();
+  setTimeout(() => void automationScheduler.tick().catch(() => undefined), 5_000);
+  powerMonitor.on("resume", () => void automationScheduler.tick().catch(() => undefined));
+
+  /*
    * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包好的 Windows 应用才接线
    * （macOS 包未签名公证、装不上，界面说「暂不支持」），
    * 启动 10s 后首查 + 每 4h 一次 + 设置页的手动检查；autoDownload=false，下载与安装都由
@@ -1001,6 +1075,8 @@ void app.whenReady().then(async () => {
   updater.start();
 
   app.on("before-quit", () => {
+    automationScheduler.stop();
+    keepAwake.release();
     appTray?.beginQuit();
     appTray?.destroy();
     appTray = null;
