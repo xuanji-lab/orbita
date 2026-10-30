@@ -75,6 +75,7 @@ import {
 import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
+import { createGoalTools } from "./goal-tools.ts";
 import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
@@ -1339,6 +1340,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createImageTools(command.cwd),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
     ...createPlanTools(planOptions),
+    // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
+    ...createGoalTools({ branch: () => sessionManager.getBranch() }),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
