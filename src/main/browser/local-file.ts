@@ -52,6 +52,32 @@ export async function resolveLocalPage(
   realpath: (path: string) => Promise<string> = fsRealpath,
 ): Promise<LocalFileResult> {
   const text = input.trim();
+  const outside = (display: string): LocalFileResult => ({
+    ok: false,
+    reason: "outside",
+    error:
+      `${display} is outside the directories this session can use ` +
+      "(session workbench, working directory, attached directories, browser downloads).",
+  });
+  // UNC 预判，必须在任何 fs 调用之前（与页面闸 localRequestAllowed 同一口径）：带主机名的
+  // file:// 就是 UNC——Windows 的 fileURLToPath 会把它转成 \\\\host\\share\\…；裸输入的
+  // \\\\host\\share\\…、//host/share/…（Windows 里两种分隔符等价）与 \\\\?\\UNC\\host\\share\\…
+  // （设备命名空间的同一网络路径）同理。realpath 这种路径会让 Windows 先对那台主机发起 SMB
+  // 连接（可能顺手把 NTLM 凭据送出去）再被根判定拒绝——连接不该发生。只有放行根本身就在
+  // 那台主机的共享上（工作区在 NAS）才继续往下判。file:// 的主机名用 new URL 取：
+  // fileURLToPath 自己也是这么解析的，两处判定不会分叉。
+  let fileUrl: URL | null = null;
+  if (/^file:\/\//i.test(text)) {
+    try {
+      fileUrl = new URL(text);
+    } catch {
+      fileUrl = null;
+    }
+  }
+  const host = fileUrl?.hostname.toLowerCase() ?? uncHostOf(text);
+  if (host !== null && host !== "" && host !== "localhost" && !roots.some((root) => uncHostOf(root) === host)) {
+    return outside(text);
+  }
   let path: string;
   try {
     path = /^file:\/\//i.test(text) ? fileURLToPath(text) : text;
@@ -73,24 +99,23 @@ export async function resolveLocalPage(
   }
   if (!exists) return { ok: false, reason: "missing", error: `The file ${path} does not exist.` };
   const real = await realpathInside(path, roots, realpath);
-  if (real === null) {
-    return {
-      ok: false,
-      reason: "outside",
-      error:
-        `${path} is outside the directories this session can use ` +
-        "(session workbench, working directory, attached directories, browser downloads).",
-    };
-  }
+  if (real === null) return outside(path);
   // 类型也按真身判：改名成 foo.html 的链接指向 .txt / .pdf，浏览器会按真身渲染（与 fs:open-in-browser 同口径）
   if (!isWebPageFile(real)) return notWebPage();
   return { ok: true, path: real };
 }
 
-/** UNC 根（`\\host\share\…`）的主机名，小写；不是 UNC（含 `\\?\` / `\\.\` 设备路径）回 null */
+/**
+ * UNC 根的主机名，小写；不是 UNC 回 null。认四种写法：`\\host\share`、`//host/share`
+ * （Windows 里两种分隔符等价）、`\\?\\UNC\\host\\share` 与 `\\.\\UNC\\host\\share`（设备
+ * 命名空间里同一网络路径的转写——不认它就绕得过 UNC 预判）；`\\?\\C:\…` 这类本地盘
+ * 设备路径仍回 null。
+ */
 function uncHostOf(root: string): string | null {
-  const match = /^\\\\([^\\?.][^\\]*)\\/.exec(root);
-  return match?.[1]?.toLowerCase() ?? null;
+  const device = /^\\\\[?.]\\unc\\([^\\/?.][^\\/]*)[\\/]/i.exec(root);
+  if (device?.[1] !== undefined) return device[1].toLowerCase();
+  const plain = /^[/\\]{2}([^\\/?.][^\\/]*)[\\/]/.exec(root);
+  return plain?.[1]?.toLowerCase() ?? null;
 }
 
 /**

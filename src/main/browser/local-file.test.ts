@@ -79,6 +79,62 @@ test("类型判定用 realpath 之后的路径：改名成 .html 的软链接指
   if (!disguised.ok) assert.match(disguised.error, /Only web pages/);
 });
 
+test("UNC 输入在碰盘之前就拒（原因码 outside）：realpath 它会让 Windows 先对那台主机发起 SMB 连接", async () => {
+  const touched: string[] = [];
+  const spy = async (path: string): Promise<string> => {
+    touched.push(path);
+    return path;
+  };
+  const cases = [
+    "\\\\attacker.example\\share\\x.html", // 裸 UNC（Windows 绝对路径）
+    "file://attacker.example/share/x.html", // 带主机名的 file://（Windows 上 fileURLToPath 转成上一行）
+    "//attacker.example/share/x.html", // 正斜杠写法（Windows 与上一行等价）
+    "\\\\?\\UNC\\attacker.example\\share\\x.html", // 设备命名空间的同一网络路径
+  ];
+  for (const input of cases) {
+    touched.length = 0;
+    const result = await resolveLocalPage(input, roots, spy);
+    assert.equal(result.ok, false, input);
+    if (!result.ok) {
+      assert.equal(result.reason, "outside", input);
+      assert.match(result.error, /outside the directories/, input);
+    }
+    assert.deepEqual(touched, [], `${input}：拒绝必须发生在任何 fs 调用之前`);
+  }
+});
+
+test("放行根本身在那台主机的共享上（工作区在 NAS）：照常往下判，而不是一刀切", async () => {
+  const uncRoot = "\\\\nas\\proj";
+  const nasFs = new Map(fs);
+  nasFs.set(uncRoot, uncRoot);
+  nasFs.set(`${uncRoot}\\page.html`, `${uncRoot}\\page.html`);
+  const nasRealpath = async (path: string): Promise<string> => {
+    const hit = nasFs.get(path);
+    if (hit === undefined) throw new Error("ENOENT");
+    return hit;
+  };
+  // 裸 UNC 与 file://host 两种写法都指向同一台主机的放行根
+  const bare = await resolveLocalPage(`${uncRoot}\\page.html`, [uncRoot], nasRealpath);
+  const viaUrl = await resolveLocalPage("file://NAS/proj/page.html", [uncRoot], nasRealpath);
+  if (process.platform === "win32") {
+    assert.deepEqual(bare, { ok: true, path: `${uncRoot}\\page.html` });
+    assert.deepEqual(viaUrl, { ok: true, path: `${uncRoot}\\page.html` });
+  } else {
+    // POSIX：裸 UNC 非绝对路径、file://host 被 fileURLToPath 拒——都回 invalid，与页面闸同口径
+    assert.equal(bare.ok, false);
+    assert.equal(viaUrl.ok, false);
+  }
+});
+
+test("file://localhost 不算 UNC 主机：照常按本地路径判", async () => {
+  // pathToFileURL 不产主机名，这里手工拼一个 localhost 主机（POSIX 与 Windows 的 fileURLToPath 都认）
+  const local = pathToFileURL(join(wb, "page.html")).href.replace(/^file:\/\//, "");
+  assert.deepEqual(await resolveLocalPage(`file://localhost${local}`, roots, realpath), {
+    ok: true,
+    path: join(wb, "page.html"),
+  });
+});
+
 /**
  * 页面打开之后的 file:// 闸（#365）：入口闸只管第一个地址，页面自己还能 fetch / iframe /
  * 跳转到任意 file://。真文件系统 + #365 的夹具：根内 linkout/ 是指向根外的 junction。
