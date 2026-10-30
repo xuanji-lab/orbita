@@ -382,7 +382,15 @@ void app.whenReady().then(async () => {
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
   const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
-  const record = createSessionRecorder(sessions, taskLedger);
+  const record = createSessionRecorder(sessions, taskLedger, (sessionId, drafts) => {
+    // 「以后再做」：agent 写 update_plan 时当场记下的事。有新增才广播，界面听到就重拉清单
+    void carryovers
+      .appendNoticed(sessionId, drafts)
+      .then((created) => {
+        if (created.length > 0) broadcastAgentEvent({ type: "carryoversChanged" });
+      })
+      .catch((error: unknown) => console.error("[carryover] 以后再做没记上（不影响对话）", sessionId, error));
+  });
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
     readUsageLog: (id) => sessions.readUsageLog(id),

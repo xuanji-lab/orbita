@@ -920,6 +920,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       applyStates((prev) => batch.reduce((acc, event) => applyAgentEvent(acc, event), prev));
     }, 50);
     const off = api.agent.onEvent((event) => {
+        // 「以后再做」有新增（agent 写 update_plan 时当场记下的，主进程落盘后广播）：重拉清单
+        if (event.type === "carryoversChanged") refreshCarryovers();
         if (event.type === "failed") {
           // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
           // 操作级失败仍走全局红字（输入框上方）
@@ -991,7 +993,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       off();
       coalescer.dispose();
     };
-  }, [applyStates, deliverNext, refreshSessions]);
+  }, [applyStates, deliverNext, refreshSessions, refreshCarryovers]);
 
   /**
    * 子会话 PR4a：子→父投递。通道消息落账 + 广播是主进程的事（`applyChannelSend` /

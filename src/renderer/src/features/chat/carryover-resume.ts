@@ -45,6 +45,11 @@ export function buildCarryoverSeed(item: Carryover, sourceTitle: string | null):
  * 标题——只点名这件事并要求接着做完。
  */
 export function buildCarryoverFollowUp(item: Carryover): string {
+  if (item.origin === "noticed") {
+    // 「以后再做」里当场记下的：它的 detail 是当时写的一句「为什么这次不做」，不是上下文摘录
+    const why = item.detail === "" ? "" : `\n\n当时记下它时说：${item.detail}`;
+    return `现在把之前记下「以后再做」的这件事也做了：\n\n${item.title}${why}\n\n请把它加进计划里，说明加这一步的原因，然后接着做完。`;
+  }
   const detail = item.detail === "" ? "" : `\n\n当时的上下文摘录：${item.detail}`;
   return `继续处理这件收尾时留下的遗留事项：\n\n${item.title}${detail}\n\n请接着把它做完。`;
 }

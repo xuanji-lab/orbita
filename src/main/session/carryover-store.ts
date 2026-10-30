@@ -27,6 +27,11 @@ import {
   type CarryoverStatus,
 } from "../../shared/session.ts";
 
+/** 去重键：去掉全部空白（中文里空格有无不影响是不是同一句）、不分大小写 */
+function noticedKey(title: string): string {
+  return title.replace(/\s+/g, "").toLowerCase();
+}
+
 export class CarryoverStore {
   private readonly file: string;
   /** 写入链（见文件头）：append / setStatus 串行化，防读-改-写互相覆盖。 */
@@ -85,9 +90,48 @@ export class CarryoverStore {
   }
 
   /**
-   * 翻转一条的状态：done 记 doneAt（翻的那一刻），回 open 清掉——doneAt 与
-   * status 同进退，不留「open 却带着完成时刻」的半态。id 不存在返回 null（会话
-   * 被删时它的 carryover 还在盘上，翻一条已不存在的记录不值得报错）。
+   * agent 当场记下的「以后再做」（update_plan 的 later）：按「来源会话 + 文字」去重——
+   * 同一件事不论是 open / done / dismissed 都不再记第二次（丢掉过的事不该因为模型下次又提起而回来）；
+   * 同一批里的重复也只收一条。没有新的就不写盘。返回新铸的记录。
+   * 文字比较去空白、不分大小写：模型两次写同一句常有空格 / 大小写出入。
+   */
+  async appendNoticed(
+    sessionId: string,
+    drafts: readonly { title: string; detail: string; anchor: string }[],
+  ): Promise<Carryover[]> {
+    if (drafts.length === 0) return [];
+    return this.runSerialized(async () => {
+      const existing = await this.list();
+      const seen = new Set(existing.filter((item) => item.sourceSessionId === sessionId).map((item) => noticedKey(item.title)));
+      const now = Date.now();
+      const created: Carryover[] = [];
+      for (const draft of drafts) {
+        const key = noticedKey(draft.title);
+        if (key === "" || seen.has(key)) continue;
+        seen.add(key);
+        created.push({
+          id: randomUUID(),
+          title: draft.title.trim(),
+          detail: draft.detail,
+          sourceSessionId: sessionId,
+          sourceMessageRange: null,
+          origin: "noticed",
+          anchor: draft.anchor,
+          status: "open",
+          createdAt: now,
+          doneAt: null,
+        });
+      }
+      if (created.length === 0) return created;
+      await writeTextAtomic(this.file, `${[...existing, ...created].map((item) => JSON.stringify(item)).join("\n")}\n`);
+      return created;
+    });
+  }
+
+  /**
+   * 翻转一条的状态：done 记 doneAt（翻的那一刻），回 open / 丢掉（dismissed）清掉——doneAt 与
+   * status 同进退，不留「open 却带着完成时刻」的半态；丢掉的可以找回（回 open）。id 不存在返回 null
+   * （会话被删时它的 carryover 还在盘上，翻一条已不存在的记录不值得报错）。
    */
   async setStatus(id: string, status: CarryoverStatus): Promise<Carryover | null> {
     return this.runSerialized(async () => {

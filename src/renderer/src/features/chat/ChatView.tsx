@@ -16,7 +16,7 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
-import { HOME_CARD_CARRYOVER_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
+import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { InlineMarks } from "../../shell/InlineMarks";
@@ -1325,7 +1325,7 @@ function ChatViewBody(props: {
         })),
         unread: meta.unread ?? null,
       });
-    const homeCards = selectHomeCards(session.sessions, session.carryovers, stateOf);
+    const homeCards = selectHomeCards(session.sessions, stateOf);
     const lineText: HomeCardLineText = {
       thinking: t.homeCard.thinking,
       doing: t.homeCard.doing,
@@ -1413,16 +1413,10 @@ function ChatViewBody(props: {
                       <SessionCard
                         key={card.sessionId}
                         name={card.title}
-                        // 没在跑的待办卡：行位是遗留标题（图标与遗留事项面板的跳转按钮同款）
-                        items={card.rows.map((row) => ({
-                          icon: row.kind === "carryover" ? ("corner-down-left" as const) : undefined,
-                          text: row.text,
-                        }))}
-                        slots={HOME_CARD_CARRYOVER_ROWS}
+                        items={card.rows.map((row) => ({ text: row.text }))}
+                        slots={HOME_CARD_QUERY_ROWS}
                         line={
-                          card.todo && state === null
-                            ? undefined
-                            : homeCardLine(
+                          homeCardLine(
                                 {
                                   state,
                                   records: entry === undefined ? null : selectTranscript(entry.transcript),

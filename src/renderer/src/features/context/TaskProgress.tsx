@@ -52,8 +52,9 @@ import { planChangeText } from "./plan-text.ts";
  *   与对话里过程块展开后的章节同一份推导；点一章，对话滚到那一块（对话里还没加载到的轮不可点）。
  *   会话槽只装尾窗，更早的轮按需载入：上下文页签「整个任务」已经拉过就直接用，没拉过在列表顶上
  *   给一行「载入」——长会话的全量能有上百 MB，进度是这个面板的默认页签，不该一打开就全搬进来；
- * - 留到以后：这条会话收割的遗留（open），勾掉即完成；悬停出「转成任务」——与侧栏遗留面板的
- *   「带上下文继续」同一个动作、同一个图标（App 的 startCarryoverTask）；
+ * - 以后再做（2026-10-30：future work 与遗留事项合并）：这条任务里当场记下的（agent 在 update_plan 的
+ *   later 里写的）与收尾时确认的；悬停出三个动作——转成任务（App 的 startCarryoverTask）、现在就做
+ *   （发进本会话）、丢掉（收进「丢掉的」，可找回）；点一项，对话滚到记下它的那一章；
  * - 页底一行上下文用量，点进「上下文」页签。
  */
 export function TaskProgress(props: {
@@ -61,9 +62,12 @@ export function TaskProgress(props: {
   entry: SessionEntry;
   /** 会话运行态（App 的 runStateOf，与侧栏状态饼同一个推导，含子会话）；null = 列表里还没有这条会话的 meta */
   runState: SessionRunState;
+  /** 这条任务的「以后再做」（全部状态：open 列出，dismissed 收在「丢掉的」里） */
   carryovers: readonly Carryover[];
   onSetCarryoverStatus: (id: string, status: Carryover["status"]) => void;
   onStartCarryoverTask: (item: Carryover) => void;
+  /** 现在就做：把这一项作为下一条消息发进本会话（在跑就排队，同 continueCarryoverInSource） */
+  onDoCarryoverNow: (item: Carryover) => void;
   onOpenContext: () => void;
 }) {
   const t = useT();
@@ -75,6 +79,16 @@ export function TaskProgress(props: {
   const view = useTaskRecords(props.sessionId, entry, wantOlder || history.status !== "idle");
   const { turns, plan, timeline, statusOf, inChat } = useProgressDigest(view, turnActive);
   const activity = useMemo(() => groupBySteps(timeline, turns, statusOf), [timeline, turns, statusOf]);
+  // update_plan 调用 → 它所在的过程块（改动记录与以后再做点一下让对话滚过去）
+  const callOf = useMemo(() => {
+    const map = new Map<string, string | undefined>();
+    for (const turn of turns) {
+      for (const chapter of turn.chapters) {
+        for (const call of chapter.calls) if (call.toolName === PLAN_TOOL_NAME) map.set(call.toolCallId, turn.processKeys[0]);
+      }
+    }
+    return map;
+  }, [turns]);
   const [historyOpen, setHistoryOpen] = useState(false);
   // App 给的是侧栏同一个推导；meta 还没进列表（刚建的会话）时退回只看自己的槽
   const run =
@@ -111,6 +125,7 @@ export function TaskProgress(props: {
           now={now}
           inChat={inChat}
           statusOf={statusOf}
+          callOf={callOf}
         />
       ) : (
         turnActive && <p className="tp-hint">{t.taskPanel.noPlan}</p>
@@ -168,36 +183,13 @@ export function TaskProgress(props: {
         </section>
       )}
 
-      {props.carryovers.length > 0 && (
-        <section className="tp-sec">
-          <div className="tp-gh">
-            {t.taskPanel.later}
-            <span className="tp-n">{props.carryovers.length}</span>
-          </div>
-          {props.carryovers.map((item) => (
-            <div key={item.id} className="tp-later">
-              <label className="tp-later-check" title={item.detail}>
-                <input
-                  type="checkbox"
-                  checked={item.status === "done"}
-                  aria-label={item.status === "done" ? t.taskPanel.reopen : t.taskPanel.markDone}
-                  onChange={(event) => props.onSetCarryoverStatus(item.id, event.target.checked ? "done" : "open")}
-                />
-                <span className="tp-text">{item.title}</span>
-              </label>
-              {/* 行尾悬停动作（RowHoverAction 配方）：平时不占位，悬停 / 键盘聚焦到这一行才浮出 */}
-              <RowHoverAction
-                icon="corner-up-right"
-                title={t.taskPanel.toTask}
-                onClick={() => props.onStartCarryoverTask(item)}
-                right={0}
-                top={4}
-                className="reveal row-hover-act"
-              />
-            </div>
-          ))}
-        </section>
-      )}
+      <LaterSection
+        items={props.carryovers}
+        revealOf={(toolCallId) => callOf.get(toolCallId)}
+        onSetStatus={props.onSetCarryoverStatus}
+        onToTask={props.onStartCarryoverTask}
+        onDoNow={props.onDoCarryoverNow}
+      />
 
       {usage !== null && usage.contextWindow > 0 && (
         <button type="button" className="tp-ctx" onClick={props.onOpenContext}>
@@ -361,9 +353,10 @@ function PlanSection(props: {
   now: number;
   inChat: ReadonlySet<string>;
   statusOf: (toolCallId: string) => string | undefined;
+  callOf: ReadonlyMap<string, string | undefined>;
 }) {
   const t = useT();
-  const { timeline, activity } = props;
+  const { timeline, activity, callOf } = props;
   const { current } = timeline;
   const done = current.items.filter((item) => item.status === "done").length;
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -378,12 +371,6 @@ function PlanSection(props: {
       inChat: props.inChat.has(entry.turnKey),
       live: entry.live,
     }));
-  const callOf = new Map<string, string | undefined>();
-  for (const turn of props.turns) {
-    for (const chapter of turn.chapters) {
-      for (const call of chapter.calls) if (call.toolName === PLAN_TOOL_NAME) callOf.set(call.toolCallId, turn.processKeys[0]);
-    }
-  }
   const stepRow = (item: PlanStep) => {
     const act = activity.get(item.id);
     const active = item.status === "in_progress" && props.working;
@@ -514,5 +501,87 @@ function StepTail(props: { act: StepActivity | undefined; clock: string | null }
     <span className="tp-tail" data-failed={props.act.failed > 0 || undefined}>
       {t.planText.stepCalls(props.act.calls)}
     </span>
+  );
+}
+
+/**
+ * 以后再做：这条任务里记下的、这次不做的事。open 的列在上面，悬停出三个动作；丢掉的收成一行
+ * 「丢掉的 N」，点开能找回。没有任何一项时整段不出现（不占版面）。
+ */
+function LaterSection(props: {
+  items: readonly Carryover[];
+  /** 记下它的那次 update_plan（anchor）所在的过程块；找不到 = 不可点 */
+  revealOf: (toolCallId: string) => string | undefined;
+  onSetStatus: (id: string, status: Carryover["status"]) => void;
+  onToTask: (item: Carryover) => void;
+  onDoNow: (item: Carryover) => void;
+}) {
+  const t = useT();
+  const [dismissedOpen, setDismissedOpen] = useState(false);
+  const open = props.items.filter((item) => item.status === "open");
+  const dismissed = props.items.filter((item) => item.status === "dismissed");
+  if (open.length === 0 && dismissed.length === 0) return null;
+  const origin = (item: Carryover): string =>
+    item.origin === "noticed" ? t.taskPanel.laterNoticed(clockOf(item.createdAt)) : t.taskPanel.laterWrapup(clockOf(item.createdAt));
+  return (
+    <section className="tp-sec">
+      <div className="tp-gh">
+        {t.taskPanel.later}
+        <span className="tp-n">{open.length}</span>
+      </div>
+      {open.map((item) => {
+        const processKey = item.anchor === null ? undefined : props.revealOf(item.anchor);
+        const title = (
+          <>
+            <span className="tp-text" title={item.detail === "" ? undefined : item.detail}>
+              {item.title}
+            </span>
+            <span className="tp-meta">{origin(item)}</span>
+          </>
+        );
+        return (
+          <div key={item.id} className="tp-later">
+            <span className="tp-slot">
+              <Icon name="bookmark" size={12} strokeWidth={1.8} />
+            </span>
+            {processKey === undefined ? (
+              <div className="tp-later-body">{title}</div>
+            ) : (
+              <button type="button" className="tp-later-body" title={t.taskPanel.jump} onClick={() => reveal(processKey)}>
+                {title}
+              </button>
+            )}
+            {/* 行尾悬停动作（RowHoverAction 配方）：平时不占位，悬停 / 键盘聚焦到这一行才浮出 */}
+            <span className="tp-later-acts reveal">
+              <RowHoverAction icon="corner-up-right" title={t.taskPanel.toTask} onClick={() => props.onToTask(item)} className="row-hover-act" />
+              <RowHoverAction icon="play" title={t.taskPanel.doNow} onClick={() => props.onDoNow(item)} className="row-hover-act" />
+              <RowHoverAction icon="x" title={t.taskPanel.dismiss} onClick={() => props.onSetStatus(item.id, "dismissed")} className="row-hover-act" />
+            </span>
+          </div>
+        );
+      })}
+      {dismissed.length > 0 && (
+        <>
+          <button type="button" className="tp-dismissed" aria-expanded={dismissedOpen} onClick={() => setDismissedOpen((value) => !value)}>
+            {t.taskPanel.dismissedCount(dismissed.length)}
+            <Icon name={dismissedOpen ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+          </button>
+          {dismissedOpen &&
+            dismissed.map((item) => (
+              <div key={item.id} className="tp-later" data-dismissed>
+                <span className="tp-slot">
+                  <Icon name="bookmark" size={12} strokeWidth={1.8} />
+                </span>
+                <div className="tp-later-body">
+                  <span className="tp-text">{item.title}</span>
+                </div>
+                <span className="tp-later-acts reveal">
+                  <RowHoverAction icon="undo-2" title={t.taskPanel.restore} onClick={() => props.onSetStatus(item.id, "open")} className="row-hover-act" />
+                </span>
+              </div>
+            ))}
+        </>
+      )}
+    </section>
   );
 }

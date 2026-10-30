@@ -1386,9 +1386,10 @@ export function App() {
                   tab={taskTab}
                   onTab={setTaskTab}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
-                  carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status === "open")}
+                  carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status !== "done")}
                   onSetCarryoverStatus={session.setCarryoverStatus}
                   onStartCarryoverTask={startCarryoverTask}
+                  onDoCarryoverNow={session.continueCarryoverInSource}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel

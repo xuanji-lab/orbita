@@ -485,25 +485,68 @@ button.tp-step-head:hover .tp-text {
   color: var(--color-text-secondary);
 }
 
-/* 留到以后：勾掉即完成；悬停 / 键盘聚焦到这一行浮出「转成任务」（.reveal，同 .skill-row） */
+/* 以后再做：书签 + 标题（一行出处）；悬停 / 键盘聚焦到这一行浮出三个动作（.reveal，同 .skill-row） */
 .tp-later {
   position: relative;
-}
-.tp-later:hover .reveal,
-.tp-later:has(:focus-visible) .reveal {
-  opacity: 1;
-}
-.tp-later-check {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-1) 0;
   line-height: var(--line-height-ui);
+}
+.tp-later .tp-slot {
+  height: calc(var(--font-size-base) * 1.5);
+  color: var(--color-text-tertiary);
+}
+.tp-later-body {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+}
+button.tp-later-body {
   cursor: pointer;
 }
-.tp-later-check input {
-  margin: var(--space-1) 0 0;
-  accent-color: var(--color-accent);
+button.tp-later-body:hover .tp-text {
+  color: var(--color-text-primary);
+}
+.tp-later[data-dismissed] .tp-text {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
+.tp-later-acts {
+  position: absolute;
+  top: var(--space-0-5);
+  right: 0;
+  display: inline-flex;
+  gap: var(--space-0-5);
+  padding-left: var(--space-2);
+  background: var(--color-bg-panel);
+}
+.tp-later:hover .reveal,
+.tp-later:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+.tp-dismissed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.tp-dismissed:hover {
+  color: var(--color-text-secondary);
 }
 
 /* 页底一行上下文用量：点进「上下文」页签 */
