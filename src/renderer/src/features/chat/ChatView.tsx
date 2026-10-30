@@ -30,6 +30,9 @@ import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
+import { planNoticeOf, planTimeline, type PlanTimeline } from "../context/plan-timeline.ts";
+import { planNoticeText } from "../context/plan-text.ts";
+import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   processOutcome,
@@ -37,6 +40,7 @@ import {
   TAIL_AFTER_MS,
   processChapters,
   processCounts,
+  processCalls,
   processLive,
   type ProcessChapter,
 } from "./turn-process.ts";
@@ -1677,6 +1681,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
+  // 计划的版本线（对话里每个过程块的「计划改了：…」一行、现场块里「在做哪一步」都吃它）：只挑 update_plan 那几条算
+  const plan = useMemo(
+    () => planTimeline(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
+    [transcript],
+  );
   // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
   // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
   const records = useMemo(
@@ -1891,6 +1900,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             {entry.kind === "turnProcess" ? (
               <TurnProcessLine
                 unit={entry}
+                plan={plan}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
                 skills={props.skills}
@@ -3793,6 +3803,8 @@ function BranchRow(props: {
  */
 function TurnProcessLine(props: {
   unit: TurnProcessUnit;
+  /** 计划的版本线（没写过计划 = null） */
+  plan: PlanTimeline | null;
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   skills: SkillMeta[];
@@ -3811,6 +3823,13 @@ function TurnProcessLine(props: {
     return () => window.clearInterval(timer);
   }, [unit.live]);
   const counts = processCounts(unit.steps, props.toolResults, props.skills);
+  // 这个块里计划改了什么（每块最多一行；只打勾不提示），与现在在做的是计划里哪一步
+  const planCallIds = processCalls(unit.steps)
+    .filter((call) => call.toolName === PLAN_TOOL_NAME)
+    .map((call) => call.toolCallId);
+  const planNotice = planNoticeOf(props.plan, planCallIds);
+  const planNoticeLine = planNotice === null ? null : planNoticeText(t, planNotice);
+  const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
   const toolChips = counts.byTool.slice(0, 4).map(({ key, count }) => (
     <span key={key}>
       {t.chat.rollupTool(key)} {count}
@@ -3851,6 +3870,7 @@ function TurnProcessLine(props: {
           {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
         </div>
         <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
+          {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
           {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
         </div>
         <div className="proc-trail">
@@ -3887,7 +3907,7 @@ function TurnProcessLine(props: {
             {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
           </div>
         </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? "")}</div>
+        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? planNoticeLine ?? "")}</div>
       </div>
     );
   }
@@ -3925,6 +3945,7 @@ function TurnProcessLine(props: {
           ))}
         </ol>
       )}
+      {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
     </div>
   );
 }

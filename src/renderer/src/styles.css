@@ -5511,6 +5511,15 @@ mark.intent-mark {
 .proc-chapter.think {
   color: var(--color-text-secondary);
 }
+/* 计划里在做的那一步：半粗放在章节名前，「· 」隔开（计划就是这一轮的主线，章节是它下面的细节） */
+.proc-plan-step {
+  font-weight: var(--weight-semibold);
+}
+.proc-plan-step::after {
+  content: " · ";
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
 .proc-trail {
   display: grid;
   grid-auto-rows: 20px;
