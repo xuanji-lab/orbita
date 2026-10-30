@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGoalLedger, headLine, renderLedgerForModel, type LedgerEvent } from "./goal-ledger.ts";
+import { buildGoalLedger, headLine, headSnippet, renderLedgerForModel, snippetPair, type LedgerEvent } from "./goal-ledger.ts";
 
 let seq = 0;
 const user = (text: string, at: number): LedgerEvent => ({ kind: "user", id: `u${++seq}`, at, text });
@@ -185,6 +185,15 @@ describe("renderLedgerForModel：压缩后附在摘要后面的固定段", () =>
     assert.equal(renderLedgerForModel(buildGoalLedger(events)), renderLedgerForModel(buildGoalLedger(events)));
   });
 
+  test("改动要点里的目标文字过长只留开头（当前目标另行全文）", () => {
+    const long = "很长的目标".repeat(60);
+    const text = renderLedgerForModel(buildGoalLedger([user("a", 1), goal(long, 2), goal(`${long}再加一句`, 3)])) ?? "";
+    assert.ok(text.includes(`Current goal: "${long}再加一句"`), "当前目标全文");
+    const changes = text.split("\n").filter((line) => line.startsWith("- "));
+    assert.ok(changes.every((line) => line.length < 400), "历史行不随目标长度膨胀");
+    assert.ok(changes.some((line) => line.includes("…")));
+  });
+
   test("改动很多时只留最近若干条", () => {
     const events: LedgerEvent[] = [user("a", 1)];
     for (let i = 0; i < 20; i++) events.push(goal(`目标版本${i}`, 10 + i));
@@ -192,5 +201,42 @@ describe("renderLedgerForModel：压缩后附在摘要后面的固定段", () =>
     assert.ok(!text.includes("目标版本1\""), "较早的改动被截掉");
     assert.ok(text.includes("目标版本19"));
     assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, 8);
+  });
+});
+
+describe("snippetPair（长目标「从 A 改成 B」只留不同处）", () => {
+  test("两段都不长：原样", () => {
+    assert.deepEqual(snippetPair("做排序", "做排序和筛选"), ["做排序", "做排序和筛选"]);
+  });
+
+  test("末尾追加一句（公共开头很长）：两边都从不同处附近开始，改动看得见", () => {
+    const base = "把待办模块做成能用的小工具：".repeat(10);
+    const [from, to] = snippetPair(base, `${base}最后还要有命令行入口 cli.js。`);
+    assert.notEqual(from, to);
+    assert.ok(from.startsWith("…") && to.startsWith("…"));
+    assert.ok(to.endsWith("最后还要有命令行入口 cli.js。"), "新增的那句在里面");
+    assert.ok([...to].length <= 120 && [...from].length <= 120);
+  });
+
+  test("中间改了一处：保留不同处前后的上下文，两头用省略号", () => {
+    const head = "前文".repeat(60);
+    const tail = "后文".repeat(60);
+    const [from, to] = snippetPair(`${head}README 要写${tail}`, `${head}改成 exportCsv${tail}`);
+    assert.ok(from.includes("README 要写") && to.includes("改成 exportCsv"));
+    assert.ok(from.startsWith("…") && from.endsWith("…"));
+    assert.ok(to.startsWith("…") && to.endsWith("…"));
+  });
+
+  test("第一次定目标只留开头（不是不同处——没有可比的上一版）", () => {
+    assert.equal(headSnippet("短目标"), "短目标");
+    const out = headSnippet("开头".repeat(100));
+    assert.equal([...out].length, 120);
+    assert.ok(out.startsWith("开头开头") && out.endsWith("…"));
+  });
+
+  test("完全不同的两段长文字：各自截到上限，不炸", () => {
+    const [from, to] = snippetPair("甲".repeat(300), "乙".repeat(300));
+    assert.equal([...from].length, 120);
+    assert.equal([...to].length, 120);
   });
 });

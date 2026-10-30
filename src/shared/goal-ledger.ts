@@ -157,6 +157,43 @@ export function ledgerTime(at: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** 改动要点里一段文字最长多少字符（目标自己写得长时只留开头；当前目标另行全文给出） */
+export const LEDGER_TEXT_MAX = 120;
+/** 摘取两段文字不同处时，不同处前后各留多少字符的上下文 */
+const SNIPPET_CONTEXT = 24;
+
+/**
+ * 「从 A 改成 B」里把两段长文字各自缩成一小段：只留**不同的地方**和它前后的上下文，公共的开头 / 结尾用省略号。
+ * 只截开头会出事——实测里目标是在末尾追加了一句「最后还要有命令行入口 cli.js…」，前 120 字完全相同，
+ * 截出来「从什么变成什么」两边一模一样（2026-10-30 Kimi 实跑）。
+ * 短到不用缩（两段都不超过 max）原样返回；缩完仍超过 max 的再从尾部截断。
+ */
+/** 一段文字只留开头 max 个字符（第一次定目标那条用：要看的是它怎么开头的） */
+export function headSnippet(text: string, max = LEDGER_TEXT_MAX): string {
+  const chars = [...text];
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
+}
+
+export function snippetPair(from: string, to: string, max = LEDGER_TEXT_MAX): [string, string] {
+  const a = [...from];
+  const b = [...to];
+  if (a.length <= max && b.length <= max) return [from, to];
+  let prefix = 0;
+  while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < a.length - prefix && suffix < b.length - prefix && a.at(-1 - suffix) === b.at(-1 - suffix)) suffix++;
+  const start = Math.max(0, prefix - SNIPPET_CONTEXT);
+  const keepTail = Math.min(suffix, SNIPPET_CONTEXT);
+  const cut = (chars: string[]): string => {
+    const end = chars.length - suffix + keepTail;
+    let out = chars.slice(start, end).join("");
+    if (start > 0) out = `…${out}`;
+    if (end < chars.length) out = `${out}…`;
+    const o = [...out];
+    return o.length > max ? `${o.slice(0, max - 1).join("")}…` : out;
+  };
+  return [cut(a), cut(b)];
+}
 const q = (text: string, max = 160): string => `"${text.length > max ? `${text.slice(0, max - 1)}…` : text}"`;
 
 function changeEn(change: PlanChange): string {
@@ -204,8 +241,9 @@ export function renderLedgerForModel(ledger: GoalLedger): string | null {
     lines.push("Goal changes (oldest first):");
     for (const entry of goalEntries.slice(-LEDGER_MODEL_MAX_GOAL_ENTRIES)) {
       const why = entry.why === null ? "" : ` because ${entry.why}`;
-      const from = entry.from === null ? "set" : `${q(entry.from, 200)} → `;
-      lines.push(`- ${ledgerTime(entry.at)} ${from}${entry.from === null ? " " : ""}${q(entry.to, 200)}${why} (${sourceEn(entry.source)})`);
+      const [from, to] = entry.from === null ? [null, headSnippet(entry.to)] : snippetPair(entry.from, entry.to);
+      const change = from === null ? `set ${q(to, 400)}` : `${q(from, 400)} → ${q(to, 400)}`;
+      lines.push(`- ${ledgerTime(entry.at)} ${change}${why} (${sourceEn(entry.source)})`);
     }
   }
   if (planEntries.length > 0) {

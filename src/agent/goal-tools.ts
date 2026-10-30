@@ -42,7 +42,8 @@ export function goalReceipt(previous: string | null, next: string): string {
   if (previous === next) return "Goal unchanged.";
   return (
     "Goal changed. Now tell the user in one plain sentence in your reply, in their language " +
-    '(for example "目标我改成了 …" or "I changed the goal to …"); do not ask them to confirm.'
+    '(for example "目标我改成了 …" or "I changed the goal to …"); do not ask them to confirm. ' +
+    "(The goal states what they want, not what is done or deferred.)"
   );
 }
 
@@ -53,7 +54,9 @@ export function createGoalTools(options: { branch: () => readonly unknown[] }): 
     description:
       "The long-lived goal of this conversation: what the user wants out of the whole thing, which may take " +
       "several turns or more than one session. Write it mostly in the user's own words; do not turn it into " +
-      "your plan (steps belong in update_plan, which sits under the goal). Set it once the user's objective " +
+      "your plan (steps belong in update_plan, which sits under the goal) and keep progress and scheduling out of " +
+      "it: no \"already done\", \"next\", \"not this time\" (those go in the plan or `later`; the goal only " +
+      "changes when what the user wants changes). Set it once the user's objective " +
       "is clear and will take more than a single reply; skip it for quick questions and one-off tasks. " +
       "When the user restates, narrows, widens or drops part of what they want, call update_goal again with " +
       "the new wording and `why` (one short clause: what changed); this is how their change is recorded, so " +

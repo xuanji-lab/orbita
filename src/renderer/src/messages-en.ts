@@ -2267,7 +2267,7 @@ export const en = {
     open: "Not done yet",
     later: "Noted for later (not handled yet)",
     changes: "How the goal and plan changed",
-    ask: "Please record the goal above as this task's goal (update_goal, keep my wording), then continue from what is not done yet.",
+    ask: "Please record the goal above as this task's goal (update_goal, keep my wording; leave progress words like \"already done\" or \"not this time\" out of it), then continue from what is not done yet.",
     /** 改动要点的一行：time 本地时间；what 改了什么；why 空串 = 没写；source 谁提的 */
     change: (time: string, what: string, why: string, source: string) => `${time} ${what}${why === "" ? "" : ` — ${why}`} (${source})`,
     goalSet: (to: string) => `goal set: "${to}"`,

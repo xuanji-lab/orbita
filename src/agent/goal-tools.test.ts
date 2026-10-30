@@ -62,6 +62,8 @@ describe("update_goal 工具", () => {
     assert.match(tool.description, /user's own words/);
     assert.match(tool.description, /never ask them to confirm/);
     assert.match(tool.description, /by="self"/);
+    // 2026-10-30 实测：Kimi 第二次改目标时把「已完成排序」这类进度写进了目标——说明里要明讲目标不装进度
+    assert.match(tool.description, /keep progress and scheduling out of it/);
     assert.ok((tool.promptGuidelines ?? []).some((line) => /tell them in one sentence/.test(line)));
     const props = (tool.parameters as { properties: Record<string, unknown>; required: string[] }).properties;
     assert.deepEqual(Object.keys(props), ["goal", "why", "by"]);

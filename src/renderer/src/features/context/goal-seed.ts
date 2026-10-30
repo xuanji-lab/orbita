@@ -13,7 +13,7 @@
  *
  * 纯模块：可被 node --test 直接加载。
  */
-import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
+import { headSnippet, snippetPair, type GoalLedger } from "../../../../shared/goal-ledger.ts";
 import type { Messages } from "../../messages-en.ts";
 import { planChangeText } from "./plan-text.ts";
 
@@ -51,12 +51,13 @@ export function buildGoalSeed(t: Messages, input: GoalSeedInput): string | null 
     t.goalSeed.later,
     input.later.map((item) => (item.detail === "" ? item.title : `${item.title}（${item.detail}）`)),
   );
+  // 改动要点里的目标文字只留不同处与上下文：当前目标上面已经全文给了，历史是为了看「怎么变的」
   const changes = input.ledger.entries.slice(-SEED_MAX_CHANGES).map((entry) => {
     const what =
       entry.kind === "goal"
         ? entry.from === null
-          ? t.goalSeed.goalSet(entry.to)
-          : t.goalSeed.goalChanged(entry.from, entry.to)
+          ? t.goalSeed.goalSet(headSnippet(entry.to))
+          : t.goalSeed.goalChanged(...snippetPair(entry.from, entry.to))
         : entry.replaced !== null
           ? t.goalText.planReplaced(entry.replaced.length)
           : entry.changes.map((change) => planChangeText(t, change)).join("；");

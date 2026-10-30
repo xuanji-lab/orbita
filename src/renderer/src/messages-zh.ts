@@ -2070,7 +2070,7 @@ export const zh: Messages = {
     open: "还没做完的",
     later: "记下了、还没处理的以后再做",
     changes: "目标和计划是怎么改过来的",
-    ask: "请把上面的目标记成这个会话的目标（update_goal，保留我的原话），然后从没做完的接着做。",
+    ask: "请把上面的目标记成这个会话的目标（update_goal，保留我的原话；「已完成」「本次不做」这类进度说法不要写进目标），然后从没做完的接着做。",
     change: (time, what, why, source) => `${time} ${what}${why === "" ? "" : `——${why}`}（${source}）`,
     goalSet: (to) => `定下目标：「${to}」`,
     goalChanged: (from, to) => `目标「${from}」改成「${to}」`,

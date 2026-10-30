@@ -37,7 +37,7 @@ describe("buildGoalSeed（带着目标开新会话的种子）", () => {
     assert.match(seed, /- nextId 是模块级可变量（不影响本次）\n- addTask 不校验 priority/);
     // 改动账要点：从什么变成什么、why、来源（用户哪句话）
     assert.match(seed, /目标「把待办模块做完」改成「把待办模块做完，含按到期日筛选」——用户补充了筛选（你 10-30 14:31 说：「还要按到期日筛选」）/);
-    assert.match(seed, /请把上面的目标记成这个会话的目标（update_goal，保留我的原话）/);
+    assert.match(seed, /请把上面的目标记成这个会话的目标（update_goal，保留我的原话；「已完成」「本次不做」这类进度说法不要写进目标）/);
   });
 
   test("英文：用英文文案，同样的结构", () => {
@@ -57,6 +57,18 @@ describe("buildGoalSeed（带着目标开新会话的种子）", () => {
     assert.match(seed, /目标：只有目标/);
     // 第一次定目标也是一条改动要点
     assert.match(seed, /定下目标：「只有目标」/);
+  });
+
+  test("改动要点里目标过长只留开头，当前目标那一行仍是全文", () => {
+    const long = "目标很长很长".repeat(40);
+    const ledger = buildGoalLedger([user("u", 0, "a"), goal("g1", 1, long), goal("g2", 2, `${long}再加`)]);
+    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger, later: [] }) ?? "";
+    assert.ok(seed.includes(`目标：${long}再加`));
+    const changeLines = seed.split("\n").filter((line) => /^- \d\d-\d\d /.test(line));
+    assert.equal(changeLines.length, 2);
+    assert.ok(changeLines.every((line) => line.length < 300));
+    // 末尾追加的那一句必须在「改成」两边看得见（只截开头会让两边一模一样）
+    assert.match(changeLines[1] ?? "", /改成「…[^」]*再加」/);
   });
 
   test("条数上限：每段最多 12 条、改动要点最近 6 条", () => {
