@@ -233,9 +233,23 @@ export interface ChatSession {
   approvals: PendingApproval[];
   /** 侧栏列的工作区（落盘、跨会话）。 */
   workspaces: Workspace[];
-  addWorkspace: () => void;
-  /** 命名新建：在 ~/Orbita/<name>/ 建文件夹并加进来。名字不合法由主进程拒（错误走列表那行） */
-  createWorkspace: (name: string) => void;
+  /**
+   * 加 / 命名新建一个工作区。默认把本槽的下一条新任务落进去；moveCurrent = 把**正看着的
+   * 这条会话**迁进去（对话里的工作区芯片用：聊着发现该去一个还没加进来的文件夹）。
+   * 名字不合法由主进程拒（错误走列表那行）
+   */
+  addWorkspace: (options?: { moveCurrent?: boolean }) => void;
+  createWorkspace: (name: string, options?: { moveCurrent?: boolean }) => void;
+  /**
+   * 正看着一条已有会话（活会话或盘上打开的）——对话里的工作区芯片据此切换语义：
+   * 首页是「新任务放在哪」，对话里是「把这条移到哪」。
+   */
+  inConversation: boolean;
+  /**
+   * 把正看着的这条会话迁到另一个工作区（null = 无工作区 / Home）：工作目录一起换，
+   * 子会话随行；在跑的被主进程跳过，原因写进错误条（不弹窗）。
+   */
+  moveCurrentTo: (workspaceId: string | null) => void;
   renameWorkspace: (id: string, name: string) => void;
   removeWorkspace: (id: string) => void;
   /**
@@ -1552,6 +1566,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 兜底键带槽名：主槽与抽屉槽的「首页」是两份草稿
   const draftKey = sessionId ?? opened?.id ?? `home:${key}`;
   const draft = drafts.get(draftKey)?.text ?? "";
+  /**
+   * 预填着的遗留事项（startCarryoverTask 只预填、不发）：首页发出第一句时带上它的 id，
+   * 主进程记进新会话的 meta.resumedCarryovers（收尾确认时那条自动标为做完）。
+   * 用户清空了输入框、打开了别的会话，链接就作废——发出去的已经不是那条遗留事项了。
+   */
+  const pendingCarryoverRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (draft.trim() === "" && sessionId === null && opened === null) pendingCarryoverRef.current = null;
+  }, [draft, sessionId, opened]);
   const setDraft = (value: string) => writeDraft(draftKey, value);
   const attachments = attachmentMap.get(draftKey) ?? NO_ATTACHMENTS;
   const files = fileMap.get(draftKey) ?? NO_FILES;
@@ -2082,7 +2105,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
-      await submitTurn(id, text, target, workspace, resume, images, { files });
+      // 首页发出的第一句、且预填着遗留事项：带上它的 id（只用一次）
+      const carryoverId = resume === null && meta === null ? pendingCarryoverRef.current : null;
+      pendingCarryoverRef.current = null;
+      await submitTurn(id, text, target, workspace, resume, images, {
+        files,
+        ...(carryoverId !== null ? { carryoverId } : {}),
+      });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -2213,8 +2242,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         engine.setError(engine.messagesRef.current.session.noWorkspaceFolder);
         return;
       }
-      const workspace = source?.workspaceId ?? workspaceId ?? null;
-      // 回首页清槽，并把本槽落点切到来源目录：开工后的下一条新任务默认同目录
+      // 回首页清槽，并把本槽落点**默认**切到来源目录——只是默认：种子预填进输入框，
+      // 用户可以先在底栏芯片换工作区再回车（2026-10-31 用户：聊出来的待办常常该去别的
+      // 工作区，「一点就发」没给选的机会）
       reset();
       setCwd(source?.cwd ?? null);
       setWorkspaceId(source?.workspaceId ?? null);
@@ -2223,12 +2253,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 路径，「放行」档下智能体会照着往用户真实目录写。输入卡同步显示这一档（新会话 meta 也按它建），
       // 用户可以自己再切；不写 settings.lastUsed——那是用户给新任务选的起始档，不归这次开工改。
       // 在原会话里续跑（continueCarryoverInSource）不降档：那是用户自己的会话、自己的档。
-      const startMode = atMostManual(mode);
-      setMode(startMode);
-      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
-      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { carryoverId: item.id, mode: startMode });
+      setMode(atMostManual(mode));
+      // 预填不发：种子进首页草稿，遗留事项 id 挂在 pendingCarryoverRef 上，回车发出时带上
+      // （主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完）
+      writeDraft(`home:${key}`, seed);
+      pendingCarryoverRef.current = item.id;
     },
-    [engine, model, mode, cwd, workspaceId, reset, submitTurn],
+    [engine, model, mode, cwd, reset, writeDraft, key],
   );
 
   /**
@@ -2306,34 +2337,63 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [reset],
   );
 
-  /** 加一个工作区，并把本槽的下一条任务直接落在它里面——加完就想用，别让人再点一次 */
-  const addWorkspace = useCallback(() => {
-    void api.workspace
-      .add()
-      .then((added) => {
-        if (added === null) return;
-        engine.refreshWorkspaces();
-        reset();
-        setCwd(added.path);
-        setWorkspaceId(added.id);
-      })
-      .catch(engine.workspaceFailed);
-  }, [engine, reset]);
+  /**
+   * 把正看着的这条会话迁走（对话里的工作区芯片）。会话 id 读 viewedIdRef（活会话优先，
+   * 否则盘上打开的那条）；首页没有「这条」，什么都不做。没迁动（在跑）就把原因放进错误条。
+   */
+  const moveCurrentTo = useCallback(
+    (target: string | null) => {
+      const id = viewedIdRef.current;
+      if (id === null) return;
+      void engine
+        .moveSessions([id], target)
+        .then((result) => {
+          if (result.skipped.length === 0) return;
+          const running = result.skipped.filter((item) => item.reason === "running").length;
+          engine.setError(engine.messagesRef.current.sidebar.moveSkipped(running, result.skipped.length - running));
+        })
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+    },
+    [engine],
+  );
 
-  /** 命名新建工作区：落点与 addWorkspace 同一套（加完就切过去），名字由主进程校验 */
-  const createWorkspace = useCallback(
-    (name: string) => {
+  /** 加好一个工作区之后：默认把本槽的下一条新任务落进去；moveCurrent 时把正看着的这条迁进去 */
+  const landIn = useCallback(
+    (workspace: Workspace, moveCurrent: boolean) => {
+      engine.refreshWorkspaces();
+      if (moveCurrent && viewedIdRef.current !== null) {
+        moveCurrentTo(workspace.id);
+        return;
+      }
+      reset();
+      setCwd(workspace.path);
+      setWorkspaceId(workspace.id);
+    },
+    [engine, reset, moveCurrentTo],
+  );
+
+  /** 加一个工作区，并把本槽的下一条任务直接落在它里面——加完就想用，别让人再点一次 */
+  const addWorkspace = useCallback(
+    (options?: { moveCurrent?: boolean }) => {
       void api.workspace
-        .create(name)
-        .then((created) => {
-          engine.refreshWorkspaces();
-          reset();
-          setCwd(created.path);
-          setWorkspaceId(created.id);
+        .add()
+        .then((added) => {
+          if (added !== null) landIn(added, options?.moveCurrent === true);
         })
         .catch(engine.workspaceFailed);
     },
-    [engine, reset],
+    [engine, landIn],
+  );
+
+  /** 命名新建工作区：落点与 addWorkspace 同一套（加完就切过去），名字由主进程校验 */
+  const createWorkspace = useCallback(
+    (name: string, options?: { moveCurrent?: boolean }) => {
+      void api.workspace
+        .create(name)
+        .then((created) => landIn(created, options?.moveCurrent === true))
+        .catch(engine.workspaceFailed);
+    },
+    [engine, landIn],
   );
 
   /**
@@ -3222,6 +3282,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setIntentEnabled,
     workspaces: engine.workspaces,
     addWorkspace,
+    inConversation: sessionId !== null || opened !== null,
+    moveCurrentTo,
     createWorkspace,
     renameWorkspace: engine.renameWorkspace,
     removeWorkspace: engine.removeWorkspace,

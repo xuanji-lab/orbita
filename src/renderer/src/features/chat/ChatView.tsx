@@ -169,6 +169,7 @@ import type { ChatSession } from "./useChatSession";
 import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
+import { scopeChipAction } from "./scope-chip.ts";
 
 /**
  * 展开体的贴底跟随：chat 级滚动（上方 ChatView）同款语义的缩小版——内容增长
@@ -2235,7 +2236,27 @@ function ComposerBar(props: {
   // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
   const catalog = session.catalog;
 
+  /**
+   * 芯片的两种语义（2026-10-31 用户认可）：首页 = 「新任务放在哪」；对话里 = 「把这条移到哪」
+   * ——以前对话里选别的工作区会清掉对话、去那边开空白新任务，这条会话本身不动，
+   * 聊着发现该换地方时毫无办法。移动连工作目录一起换（session:move），在跑的不能移：
+   * 项灰掉并说明原因，不弹窗。
+   */
+  const moving = session.inConversation;
+  /** 一项菜单的行为：按 scopeChipAction 接到 onSelect / disabled 上 */
+  const scopeEntry = (target: string | null, newTask: () => void): Partial<MenuItem> => {
+    const action = scopeChipAction({
+      inConversation: moving,
+      running: session.phase !== "idle",
+      isCurrent: session.workspaceId === target,
+    });
+    if (action === "new-task") return { onSelect: newTask };
+    if (action === "move") return { onSelect: () => session.moveCurrentTo(target) };
+    if (action === "blocked") return { disabled: true, hint: t.chat.moveBlocked };
+    return { onSelect: () => undefined };
+  };
   const scopeItems: MenuItem[] = [
+    ...(moving ? [{ id: "move-header", label: t.chat.moveHeader, header: true } satisfies MenuItem] : []),
     {
       id: "home",
       label: t.chat.home,
@@ -2245,8 +2266,8 @@ function ComposerBar(props: {
       subLabel: session.defaultCwd,
       subLabelMono: true,
       subLabelEllipsis: "head",
-      checked: session.workspaceId === null && session.cwd === null,
-      onSelect: session.newTask,
+      checked: session.workspaceId === null && (moving || session.cwd === null),
+      ...scopeEntry(null, session.newTask),
     },
     ...session.workspaces.map((item): MenuItem => ({
       id: item.id,
@@ -2257,7 +2278,7 @@ function ComposerBar(props: {
       subLabelEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
-      onSelect: () => session.newTaskIn(item),
+      ...scopeEntry(item.id, () => session.newTaskIn(item)),
     })),
   ];
 
@@ -2344,7 +2365,8 @@ function ComposerBar(props: {
               style={menuFooterRowStyle}
               onClick={() => {
                 close();
-                session.addWorkspace();
+                // 对话里：加进来的文件夹直接成为这条会话的新家（在跑时只加不移，主进程会跳过）
+                session.addWorkspace({ moveCurrent: moving });
               }}
             >
               <Icon name="folder-plus" size={13} strokeWidth={1.8} />
@@ -2363,7 +2385,7 @@ function ComposerBar(props: {
               onCommit={(name) => {
                 setNamingWorkspace(false);
                 const trimmed = name.trim();
-                if (trimmed !== "") session.createWorkspace(trimmed);
+                if (trimmed !== "") session.createWorkspace(trimmed, { moveCurrent: moving });
               }}
               onCancel={() => setNamingWorkspace(false)}
               style={{ width: 140 }}
