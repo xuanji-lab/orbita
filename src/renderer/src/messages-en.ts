@@ -1643,7 +1643,7 @@ export const en = {
     toolEdit: "Edit",
     toolList: "List",
     /** 本轮统计行里的工具名：英文就写真实工具名（bash 3 · read 5） */
-    rollupTool: (toolName: string) => (toolName === "update_plan" ? "plan" : toolName),
+    rollupTool: (toolName: string) => (toolName === "update_plan" ? "plan" : toolName === "update_goal" ? "goal" : toolName),
     openTaskCard: (title: string) => `Open "${title}"`,
     open: "Open",
     repliedSteer: (child: string) => `replied to ${child} · steer`,
@@ -2238,6 +2238,21 @@ export const en = {
     history: (turns: number, steps: number, files: number) =>
       `${turns === 1 ? "1 turn" : `${turns} turns`} · ${steps === 1 ? "1 step" : `${steps} steps`}${files > 0 ? ` · ${files === 1 ? "1 file" : `${files} files`} changed` : ""}`,
     versionAt: (n: number) => `v${n}`,
+  },
+
+  /** 会话级目标与改动账（右栏进度最上面一块、对话里目标改了的那一行） */
+  goalText: {
+    title: "Goal",
+    kindGoalSet: "Goal · set",
+    kindGoalChanged: "Goal · changed",
+    kindPlan: "Plan · changed",
+    planReplaced: (steps: number) => `Replaced the plan with a new one (${steps === 1 ? "1 step" : `${steps} steps`})`,
+    /** 改动的来源：触发它的那条用户消息（时间 + 头一行） */
+    sourceUser: (time: string, head: string) => `You, ${time}: "${head}"`,
+    sourceSelf: "Found by the agent itself",
+    editsTitle: "What changed in the goal and the plan, why, and who asked",
+    /** 对话里的一行：目标从什么改成什么；why 空串 = 没写理由 */
+    notice: (from: string, to: string, why: string) => `Goal changed: "${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
   },
 
   contextPanel: {

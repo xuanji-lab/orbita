@@ -328,7 +328,11 @@ button.tp-step-head:hover .tp-text {
   display: grid;
   gap: var(--space-0-5);
 }
-.tp-editlog button {
+.tp-editlog li {
+  display: grid;
+  gap: 0;
+}
+.tp-editlog-main {
   display: grid;
   gap: 0;
   width: 100%;
@@ -341,12 +345,47 @@ button.tp-step-head:hover .tp-text {
   cursor: pointer;
   transition: var(--transition-hover);
 }
-.tp-editlog button:hover {
+.tp-editlog-main:hover {
   background: var(--color-bg-hover);
 }
 .tp-editlog-what {
   line-height: var(--line-height-ui);
   color: var(--color-text-primary);
+  word-break: break-word;
+}
+/* 来源（谁提的）：和「为什么」同一档小字，可点的那条悬停变深 */
+.tp-editlog-src {
+  display: block;
+  width: 100%;
+  padding: 0 var(--space-1-5) var(--space-1);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  text-align: left;
+  color: var(--color-text-tertiary);
+  word-break: break-word;
+}
+button.tp-editlog-src {
+  cursor: pointer;
+}
+button.tp-editlog-src:hover {
+  color: var(--color-text-secondary);
+}
+/* 目标：进度面板最上面一块；计划（todo）挂在它下面 */
+.tp-goal {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: 0 var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.tp-goal-text {
+  margin: 0;
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  word-break: break-word;
 }
 /* 「做过的」收成页底一行：点开才是按轮列表 */
 .tp-histline {

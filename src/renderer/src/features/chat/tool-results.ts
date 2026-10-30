@@ -1455,6 +1455,9 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
       const now = items.find((item) => item?.["status"] === "in_progress")?.["text"];
       return typeof now === "string" ? `${done}/${items.length} · ${now}` : `${done}/${items.length}`;
     }
+    // 定目标：就是目标那句话
+    case "update_goal":
+      return str("goal");
     case "bash":
     case "powershell": // pi 0.84.3 的独立工具（bash 的 PowerShell 壳，schema 同构）
       return str("command");

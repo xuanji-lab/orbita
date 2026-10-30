@@ -10,6 +10,7 @@
  *
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
+import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex, TurnProcessUnit } from "./tool-results.ts";
 import { rollupToolKey, thinkingPreview } from "./tool-results.ts";
 
@@ -62,7 +63,7 @@ export function processCounts(
   skills: ReadonlyArray<{ slug: string; name: string }> = [],
 ): ProcessCounts {
   // 写计划不是干活的一步：它是记账（计划本身在右栏「这条任务 › 进度」），不进步数与次数
-  const calls = processCalls(steps).filter((call) => call.toolName !== "update_plan");
+  const calls = processCalls(steps).filter((call) => !isBookkeepingTool(call.toolName));
   const by = new Map<string, number>();
   const files = new Set<string>();
   let failed = 0;
@@ -84,7 +85,7 @@ export function processCounts(
 }
 
 /**
- * 落定那一行开头说什么。步数只数工具调用（update_plan 是记账不算）——一步工具都没跑的轮
+ * 落定那一行开头说什么。步数只数工具调用（update_plan / update_goal 是记账不算）——一步工具都没跑的轮
  * （只想了想就答、或只写了计划）以前原样写成「0 步」。2026-10-30：没跑工具时说它做了什么。
  */
 export type ProcessOutcome =

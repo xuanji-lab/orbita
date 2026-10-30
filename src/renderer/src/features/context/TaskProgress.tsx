@@ -11,6 +11,8 @@ import type { SessionEntry } from "../chat/session-states.ts";
 import { formatRunClock, formatToolDuration } from "../chat/tool-results.ts";
 import { useTaskHistory, useTaskRecords, type TaskRecordsView } from "../chat/useTaskRecords.ts";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { isBookkeepingTool } from "../../../../shared/goal.ts";
+import type { GoalLedger, LedgerEntry } from "../../../../shared/goal-ledger.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import type { TranscriptRecord } from "@shared/session";
 import type { ProcessChapter } from "../chat/turn-process.ts";
@@ -37,6 +39,7 @@ import {
   type StepChapter,
 } from "./plan-timeline.ts";
 import { planChangeText } from "./plan-text.ts";
+import { useGoalLedger } from "./useGoalLedger.ts";
 
 
 /**
@@ -78,13 +81,16 @@ export function TaskProgress(props: {
   const [wantOlder, setWantOlder] = useState(false);
   const view = useTaskRecords(props.sessionId, entry, wantOlder || history.status !== "idle");
   const { turns, plan, timeline, statusOf, inChat } = useProgressDigest(view, turnActive);
+  // 目标与计划的改动账（shared/goal-ledger.ts）：从转录推，目标行与「改过 N 次」的记录都读它
+  const ledger = useGoalLedger(view.records);
+  const [logOpen, setLogOpen] = useState(false);
   const activity = useMemo(() => groupBySteps(timeline, turns, statusOf), [timeline, turns, statusOf]);
-  // update_plan 调用 → 它所在的过程块（改动记录与以后再做点一下让对话滚过去）
+  // update_plan / update_goal 调用 → 它所在的过程块（改动记录与以后再做点一下让对话滚过去）
   const callOf = useMemo(() => {
     const map = new Map<string, string | undefined>();
     for (const turn of turns) {
       for (const chapter of turn.chapters) {
-        for (const call of chapter.calls) if (call.toolName === PLAN_TOOL_NAME) map.set(call.toolCallId, turn.processKeys[0]);
+        for (const call of chapter.calls) if (isBookkeepingTool(call.toolName)) map.set(call.toolCallId, turn.processKeys[0]);
       }
     }
     return map;
@@ -108,6 +114,15 @@ export function TaskProgress(props: {
 
   return (
     <div className="tp-body">
+      {ledger.goal !== null && (
+        <GoalSection
+          ledger={ledger}
+          logOpen={logOpen}
+          onToggleLog={() => setLogOpen((value) => !value)}
+          callOf={callOf}
+          inChat={inChat}
+        />
+      )}
       <div className="tp-now">
         <span className="tp-slot">{headState !== null && headState !== "stopped" && <StatusPie state={headState} />}</span>
         <b>{t.taskPanel.state(headState ?? "idle")}</b>
@@ -126,6 +141,9 @@ export function TaskProgress(props: {
           inChat={inChat}
           statusOf={statusOf}
           callOf={callOf}
+          ledger={ledger}
+          logOpen={logOpen}
+          onToggleLog={() => setLogOpen((value) => !value)}
         />
       ) : (
         turnActive && <p className="tp-hint">{t.taskPanel.noPlan}</p>
@@ -309,7 +327,7 @@ function ChapterList(props: { rows: readonly ChapterRow[]; statusOf: (toolCallId
     <ol className="tp-chapters">
       {props.rows.map(({ chapter, processKey, inChat, live }) => {
         const failed = chapter.calls.some((call) => props.statusOf(call.toolCallId) === "error");
-        const work = chapter.calls.filter((call) => call.toolName !== PLAN_TOOL_NAME).length;
+        const work = chapter.calls.filter((call) => !isBookkeepingTool(call.toolName)).length;
         const label =
           chapter.title ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
         const text = (
@@ -354,13 +372,16 @@ function PlanSection(props: {
   inChat: ReadonlySet<string>;
   statusOf: (toolCallId: string) => string | undefined;
   callOf: ReadonlyMap<string, string | undefined>;
+  /** 目标与计划的改动账；有目标时「改过 N 次」挂在目标行（同一本账），没有目标才挂在计划头上 */
+  ledger: GoalLedger;
+  logOpen: boolean;
+  onToggleLog: () => void;
 }) {
   const t = useT();
-  const { timeline, activity, callOf } = props;
+  const { timeline, activity } = props;
   const { current } = timeline;
   const done = current.items.filter((item) => item.status === "done").length;
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [editsOpen, setEditsOpen] = useState(false);
   const turnStart = props.turns.at(-1)?.at ?? 0;
   // 去掉的步只在它被去掉的那一轮里露面，之后只留在改动记录里
   const recentRemoved = current.at >= turnStart ? current.removed : [];
@@ -457,27 +478,12 @@ function PlanSection(props: {
       <div className="tp-gh">
         {t.taskPanel.plan}
         <span className="tp-n">{t.taskPanel.planCount(done, current.items.length)}</span>
-        {timeline.edits > 0 && (
-          <button type="button" className="tp-edits" aria-expanded={editsOpen} title={t.planText.editsTitle} onClick={() => setEditsOpen((value) => !value)}>
-            {t.planText.editsCount(timeline.edits)}
-          </button>
+        {props.ledger.goal === null && props.ledger.entries.length > 0 && (
+          <EditsButton count={props.ledger.entries.length} open={props.logOpen} onClick={props.onToggleLog} />
         )}
       </div>
-      {editsOpen && (
-        <ol className="tp-editlog">
-          {[...timeline.versions]
-            .reverse()
-            .filter((version) => version.changes.length > 0)
-            .map((version) => (
-              <li key={version.toolCallId}>
-                <button type="button" title={t.taskPanel.jump} onClick={() => reveal(callOf.get(version.toolCallId))}>
-                  <span className="tp-time">{t.planText.versionAt(version.n)} · {clockOf(version.at)}</span>
-                  <span className="tp-editlog-what">{version.changes.map((change) => planChangeText(t, change)).join("；")}</span>
-                  {version.why !== null && <span className="tp-meta">{version.why}</span>}
-                </button>
-              </li>
-            ))}
-        </ol>
+      {props.ledger.goal === null && props.logOpen && (
+        <EditLog entries={props.ledger.entries} callOf={props.callOf} inChat={props.inChat} />
       )}
       <ol className="tp-plan">
         {pseudo(BEFORE_PLAN, t.planText.beforePlan)}
@@ -489,6 +495,95 @@ function PlanSection(props: {
         {pseudo(OUTSIDE_PLAN, t.planText.outsidePlan)}
       </ol>
     </section>
+  );
+}
+
+/** 「改过 N 次」：点开是改动记录（目标和计划同一本账） */
+function EditsButton(props: { count: number; open: boolean; onClick: () => void }) {
+  const t = useT();
+  return (
+    <button type="button" className="tp-edits" aria-expanded={props.open} title={t.goalText.editsTitle} onClick={props.onClick}>
+      {t.planText.editsCount(props.count)}
+    </button>
+  );
+}
+
+/**
+ * 进度面板最上面一块：会话级目标（2026-10-30）。目标由智能体从你的话里提炼、替你写（update_goal），
+ * 面板上只读——要改直接在聊天里说，智能体改完会在回复里告诉你；没有输入框、没有确认按钮。
+ * 计划（todo）挂在目标下面。「改过 N 次」点开是目标与计划共用的改动记录。
+ */
+function GoalSection(props: {
+  ledger: GoalLedger;
+  logOpen: boolean;
+  onToggleLog: () => void;
+  callOf: ReadonlyMap<string, string | undefined>;
+  inChat: ReadonlySet<string>;
+}) {
+  const t = useT();
+  const goal = props.ledger.goal;
+  if (goal === null) return null;
+  return (
+    <section className="tp-goal" aria-label={t.goalText.title}>
+      <div className="tp-gh">
+        {t.goalText.title}
+        {props.ledger.entries.length > 0 && (
+          <EditsButton count={props.ledger.entries.length} open={props.logOpen} onClick={props.onToggleLog} />
+        )}
+      </div>
+      <p className="tp-goal-text">{goal.text}</p>
+      {props.logOpen && <EditLog entries={props.ledger.entries} callOf={props.callOf} inChat={props.inChat} />}
+    </section>
+  );
+}
+
+/**
+ * 改动记录：目标和计划的每一次改动，新 → 旧。每条写「从什么变成什么、为什么、是谁提的」——
+ * 来源是触发改动的那条用户消息（时间 + 头一行，点一下对话滚到那句话），或者智能体自己发现的。
+ * 点改动本身，对话滚到记下它的那一块。
+ */
+function EditLog(props: {
+  entries: readonly LedgerEntry[];
+  callOf: ReadonlyMap<string, string | undefined>;
+  inChat: ReadonlySet<string>;
+}) {
+  const t = useT();
+  return (
+    <ol className="tp-editlog">
+      {[...props.entries].reverse().map((entry) => {
+        const kind =
+          entry.kind === "plan" ? t.goalText.kindPlan : entry.from === null ? t.goalText.kindGoalSet : t.goalText.kindGoalChanged;
+        const what =
+          entry.kind === "goal"
+            ? entry.to
+            : entry.replaced !== null
+              ? t.goalText.planReplaced(entry.replaced.length)
+              : entry.changes.map((change) => planChangeText(t, change)).join("；");
+        const source = entry.source;
+        const sourceText = source.kind === "user" ? t.goalText.sourceUser(clockOf(source.at), source.head) : t.goalText.sourceSelf;
+        return (
+          <li key={entry.id}>
+            <button type="button" className="tp-editlog-main" title={t.taskPanel.jump} onClick={() => reveal(props.callOf.get(entry.id))}>
+              <span className="tp-time">
+                {clockOf(entry.at)} · {kind}
+              </span>
+              <span className="tp-editlog-what">{what}</span>
+              {entry.kind === "goal" && entry.from !== null && <span className="tp-meta">{t.planText.was(entry.from)}</span>}
+              {entry.why !== null && <span className="tp-meta">{entry.why}</span>}
+            </button>
+            {source.kind === "user" && props.inChat.has(source.id) ? (
+              <button type="button" className="tp-editlog-src" title={t.taskPanel.jump} onClick={() => reveal(source.id)}>
+                {sourceText}
+              </button>
+            ) : (
+              <div className="tp-editlog-src" title={source.kind === "user" ? t.taskPanel.notInChat : undefined}>
+                {sourceText}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 

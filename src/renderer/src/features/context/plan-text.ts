@@ -2,6 +2,7 @@
  * 计划改动的文案（对话里的「计划改了：…」一行与进度面板共用）：把 PlanChange 按当前语言说成一句话。
  * 纯函数，可被 node --test 直接加载。
  */
+import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import type { PlanChange } from "../../../../shared/plan-diff.ts";
 import type { Messages } from "../../messages-en.ts";
 import type { PlanNotice } from "./plan-timeline.ts";
@@ -31,4 +32,20 @@ export function planNoticeText(t: Messages, notice: PlanNotice): string {
   const first = notice.changes[0];
   if (first === undefined) return "";
   return t.planText.notice(notice.changes.length, planChangeText(t, first), notice.why ?? "");
+}
+
+/**
+ * 对话里「目标改了」那一行：这个过程块里的 update_goal 调用（toolCallId）改掉了一个已有的目标才出；
+ * 第一次定目标不出（那是开场，不是改动）。一块里改了几次，取最后一次。没有 = null。
+ */
+export function goalNoticeText(t: Messages, ledger: GoalLedger, toolCallIds: readonly string[]): string | null {
+  if (toolCallIds.length === 0) return null;
+  const wanted = new Set(toolCallIds);
+  for (let i = ledger.entries.length - 1; i >= 0; i--) {
+    const entry = ledger.entries[i];
+    if (entry?.kind === "goal" && entry.from !== null && wanted.has(entry.id)) {
+      return t.goalText.notice(entry.from, entry.to, entry.why ?? "");
+    }
+  }
+  return null;
 }

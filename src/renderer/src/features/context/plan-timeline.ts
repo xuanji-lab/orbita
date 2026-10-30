@@ -13,6 +13,7 @@
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
 import type { TranscriptRecord } from "@shared/session";
+import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import {
   parsePlanCall,
   parsePlanItemsLoose,
@@ -253,7 +254,7 @@ export function groupBySteps(
   };
   for (const turn of turns) {
     turn.chapters.forEach((chapter, index) => {
-      const work = chapter.calls.filter((call) => call.toolName !== PLAN_TOOL_NAME);
+      const work = chapter.calls.filter((call) => !isBookkeepingTool(call.toolName));
       let chapterBucket: string | null = null;
       for (const call of work) {
         const bucket = bucketAt(timeline, call.timestamp);

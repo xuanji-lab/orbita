@@ -18,7 +18,7 @@ const VENDOR_NAMES_ZH: Record<DictationProvider, string> = {
   stepfun: "阶跃星辰",
 };
 
-const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划" };
+const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划", update_goal: "目标" };
 
 /**
  * 界面文案表——中文，Copybook（小学作业）主题下使用。类型由英文真源推出。
@@ -2047,6 +2047,18 @@ export const zh: Messages = {
     outsidePlan: "计划外",
     history: (turns, steps, files) => `${turns} 轮 · ${steps} 步${files > 0 ? ` · 改了 ${files} 个文件` : ""}`,
     versionAt: (n) => `第 ${n} 版`,
+  },
+
+  goalText: {
+    title: "目标",
+    kindGoalSet: "目标 · 定下",
+    kindGoalChanged: "目标 · 改了",
+    kindPlan: "计划 · 改了",
+    planReplaced: (steps) => `换了一张新计划（${steps} 步）`,
+    sourceUser: (time, head) => `你 ${time} 说：「${head}」`,
+    sourceSelf: "智能体自己发现的",
+    editsTitle: "目标和计划改了什么、为什么、是谁提的",
+    notice: (from, to, why) => `目标改了：「${from}」改成「${to}」${why === "" ? "" : `——${why}`}`,
   },
 
   contextPanel: {
