@@ -10,11 +10,15 @@
  * 权限：三档一律放行（shared/permission.ts 的 PLAN_TOOL）——它只是把打算说出来，
  * 不碰用户的文件与 shell；plan 档尤其要用得上。
  *
- * **停下来等确认**：下面三种情况写完计划这一轮就停（decidePlanStop），靠 pi 的 `terminate`
- * 提示——但**同一批每个工具结果都带它，这一轮才会结束**（pi agent-loop 的 shouldTerminateToolBatch），
- * 所以排在 update_plan 之后的同批调用由 createPlanGate 在 tool_call 闸门里拦下并带上 terminate
- * （不能抛错：抛错拿到的是不带 terminate 的错误结果）。排在它**之前**的同批调用闸门已经过了，拦不住——
- * 只读调用照常跑完，结果里的回执仍要求模型停下，实测里模型都照做。
+ * **停下来对齐，在聊天里对齐**（2026-10-30 用户：「我不希望这方面老是找用户确认，打扰用户……要确认可以在聊天框里面
+ * 确认，不要在交互页面上让用户点什么确认或者修改……还是以 agent 和用户对齐后，agent 为用户代写为主」）：
+ * 下面三种情况写完计划这一轮先停（decidePlanStop）——plan 档、带了 confirm 问题、「先给我看计划」——
+ * 但停下的方式是**让 agent 用正文说话**：回执要求它在回复里用自然语言把问题问出来（或说一句要开工请切出 plan 档），
+ * 然后这一轮不再调工具；用户在输入框里回答，下一轮 agent 按回答改计划。界面上没有任何确认 / 修改按钮。
+ * 不用 pi 的 terminate：它会让这一轮在工具之后直接结束、没有最后一句话，agent 就没机会开口。
+ * 「不再调工具」由 createPlanGate 兜底：已决定停之后，本轮其余工具调用在 tool_call 闸门里被拦（返回 block，不抛错），
+ * 回执与拦截理由都让它回头用正文说话；下一轮开轮时复位。排在 update_plan **之前**的同批调用闸门已经过了，拦不住——
+ * 只读调用照常跑完。
  *
  * 纯模块：回执文案与停下的判定可被 node --test 直接测；计划的形状与校验在 shared/plan.ts。
  */
@@ -101,28 +105,29 @@ export function planReceipt(items: readonly PlanItem[]): string {
   return `Plan updated: ${done}/${items.length} done.${tail}`;
 }
 
-/** 停下时回给模型的话：讲清为什么停、该做什么（结束这一轮，别再调工具） */
+/** 停下时回给模型的话：讲清为什么停、该用正文说什么、别再调工具 */
 export function stopReceipt(reason: PlanStopReason): string {
   switch (reason) {
     case "confirm":
       return (
-        "Plan shown to the user together with your question(s). Stop here: end your turn now with no further " +
-        "tool calls, and wait for their answer."
+        "Plan shown to the user. Your turn pauses here: write your reply now and ask the question(s) from `confirm` " +
+        "in plain prose (the user answers in the chat box; there are no buttons), then call no more tools this turn."
       );
     case "plan-mode":
       return (
-        "Plan shown to the user. You are in plan mode, so this is the deliverable: end your turn now with no " +
-        "further tool calls and wait for them to approve it or ask for changes."
+        "Plan shown to the user. You are in plan mode, so the plan is the deliverable: reply now with a short summary " +
+        "and say that to have you start, they need to switch the permission out of plan mode and tell you to go. " +
+        "Call no more tools this turn."
       );
     case "plan-first":
       return (
-        "Plan shown to the user, who asked to see the plan before any work starts. Stop here: end your turn now " +
-        "with no further tool calls, and wait for their go-ahead or changes."
+        "Plan shown to the user, who asked to see the plan before any work starts. Reply now in one or two sentences " +
+        "(put anything you are unsure about as a question) and call no more tools until they answer in the chat box."
       );
   }
 }
 
-/** 一轮之内「已决定停」的标记：update_plan 的闸门置位，同批排在它后面的调用据此被拦；execute 时复位 */
+/** 一轮之内「已决定停」的标记：update_plan 的闸门置位，本轮其余工具调用据此被拦；下一轮开轮时复位（runtime 的 before_agent_start） */
 export interface PlanStopState {
   stopping: boolean;
 }
@@ -137,9 +142,9 @@ export interface PlanToolOptions {
   state: PlanStopState;
 }
 
-/** tool_call 闸门里与计划有关的那一段：只在已决定停之后拦同批后面的调用。返回 null = 不管 */
+/** tool_call 闸门里与计划有关的那一段：已决定停之后拦本轮其余工具调用。返回 null = 不管 */
 export function createPlanGate(options: PlanToolOptions) {
-  return (event: { toolCallId: string; toolName: string; input: Record<string, unknown> }): { block: true; reason: string; terminate: true } | null => {
+  return (event: { toolCallId: string; toolName: string; input: Record<string, unknown> }): { block: true; reason: string } | null => {
     if (event.toolName === PLAN_TOOL_NAME) {
       let call: PlanCall;
       try {
@@ -161,10 +166,9 @@ export function createPlanGate(options: PlanToolOptions) {
     if (!options.state.stopping) return null;
     return {
       block: true,
-      terminate: true,
       reason:
-        "Not run: you asked the user to confirm your plan, so this turn ends here. " +
-        "Wait for their answer, then call this again if it is still needed.",
+        "Not run: the plan is shown to the user and this turn is paused for their reply. " +
+        "Answer in plain prose now; call this again next turn if it is still needed.",
     };
   };
 }
@@ -196,8 +200,9 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       "not do in this task (a nearby bug, a cleanup, a follow-up) go in `later` the moment you notice them, " +
       "one short phrase each (only the new ones; they are saved for the user). If you cannot go on without the user's " +
       "answer, because the request is ambiguous or the next step is irreversible, costly or wide-reaching, put " +
-      `1-${PLAN_MAX_CONFIRM} concrete questions in \`confirm\`: the plan is shown with them and your turn ends ` +
-      "until they reply; call update_plan alone then, not together with other tools. Steps are short, " +
+      `1-${PLAN_MAX_CONFIRM} concrete questions in \`confirm\`, and then ask them in plain prose in your reply: ` +
+      "the user answers in the chat box, there are no buttons, and you make no more tool calls until they do. " +
+      "Otherwise do not stop to ask; write the plan and get on with it. Steps are short, " +
       "outcome-focused phrases in the user's language.",
     // 规则放进系统提示的 Guidelines（promptGuidelines，随工具启用、整会话不变）：只写在工具说明里时，
     // Kimi K3.1 Pro 实测两次发现计划没覆盖的问题（顺带修了 completeTask、兼容了旧日期），嘴上说了
@@ -240,7 +245,7 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
         },
         confirm: {
           type: "array",
-          description: `1-${PLAN_MAX_CONFIRM} concrete questions the user must answer before you go on. Ends your turn.`,
+          description: `1-${PLAN_MAX_CONFIRM} concrete questions the user must answer before you go on; also ask them in your reply text.`,
           items: { type: "string" },
         },
       },
@@ -257,12 +262,9 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
         diff,
         hadPlan: previous !== null,
       });
-      // 这一批所有调用的闸门都已过完（pi 先逐个过闸门、再统一执行），标记到此复位
-      options.state.stopping = false;
       const details: PlanToolDetails = {
         plan: call.items,
         ...(reason === null ? {} : { awaiting: true }),
-        ...(call.confirm.length > 0 ? { confirm: call.confirm } : {}),
       };
       const lines = [planReceipt(call.items)];
       // 改了结构却没写理由：提醒一句，不拒——拒一次就多一个来回
@@ -274,7 +276,6 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       return {
         content: [{ type: "text", text: lines.join(" ") }],
         details,
-        ...(reason === null ? {} : { terminate: true }),
       };
     },
   };

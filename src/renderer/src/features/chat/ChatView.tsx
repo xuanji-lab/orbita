@@ -31,10 +31,9 @@ import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planNoticeOf, planTimeline, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
-import { PlanConfirmCard } from "./PlanConfirmCard";
+import { PlanCard } from "./PlanCard";
 import { planNoticeText } from "../context/plan-text.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
-import type { PermissionMode } from "../../../../shared/permission.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   processOutcome,
@@ -1577,8 +1576,6 @@ function ChatViewBody(props: {
           transcript={session.transcript}
           compactions={session.compactions}
           marks={session.marks}
-          onApprovePlan={session.approvePlan}
-          approveMode={session.planApproveMode}
           phase={session.phase}
           retry={session.retry}
           turnError={session.turnError}
@@ -1627,10 +1624,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   compactions: readonly CompactedRecord[];
   /** 子会话 PR4a：盘上读回的通道标记，与 compactions 同一条纪律（见 mergeSideRecords） */
   marks: readonly ChannelMarkRecord[];
-  /** 计划卡「按这个做」：发出确认语（必要时先切档，useChatSession 的 approvePlan） */
-  onApprovePlan: (text: string) => void;
-  /** 点「按这个做」会切到哪一档；null = 不换档 */
-  approveMode: PermissionMode | null;
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
   turnError: string | null;
@@ -1914,8 +1907,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 unit={entry}
                 plan={plan}
                 awaitingPlan={awaitingPlan}
-                onApprovePlan={() => props.onApprovePlan(t.chat.planApproveText)}
-                approveMode={props.approveMode}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
                 skills={props.skills}
@@ -3820,10 +3811,8 @@ function TurnProcessLine(props: {
   unit: TurnProcessUnit;
   /** 计划的版本线（没写过计划 = null） */
   plan: PlanTimeline | null;
-  /** 停在「等你确认」上的那一版；这个块里的计划调用正是它时画计划卡 */
+  /** 停下来等你回答的那一版；这个块里的计划调用正是它时画（只读的）计划卡 */
   awaitingPlan: PlanVersion | null;
-  approveMode: PermissionMode | null;
-  onApprovePlan: () => void;
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   skills: SkillMeta[];
@@ -3966,7 +3955,7 @@ function TurnProcessLine(props: {
       )}
       {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
       {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
-        <PlanConfirmCard version={props.awaitingPlan} approveMode={props.approveMode} onApprove={props.onApprovePlan} />
+        <PlanCard version={props.awaitingPlan} />
       )}
     </div>
   );

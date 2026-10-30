@@ -232,10 +232,6 @@ export interface ChatSession {
   removeQuote: (index: number) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
-  /** 计划卡「按这个做」会切到哪一档（plan 档里：进 plan 之前那档，没记录 = 手动；不在 plan 档 = null 不换档） */
-  planApproveMode: PermissionMode | null;
-  /** 计划卡「按这个做」：必要时先切档，再把确认语发进本会话 */
-  approvePlan: (text: string) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
   thinkingLevel: ThinkingLevel;
   changeThinkingLevel: (next: ThinkingLevel) => void;
@@ -2439,12 +2435,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
 
-  /** 每条会话进 plan 档之前的那一档：计划卡「按这个做」要切回它（没有记录 = 手动） */
-  const modeBeforePlanRef = useRef(new Map<string, PermissionMode>());
-
   const changeMode = useCallback(
     (next: PermissionMode) => {
-      if (next === "plan" && mode !== "plan") modeBeforePlanRef.current.set(sessionRef.current ?? opened?.id ?? "", mode);
       // 理由同 chooseModel 的记账链：UI 即时、意图记在会话名下（跑着时改不进
       // meta，排队卡投递时要拿这一档）。
       // **总是发 IPC（不再只在 idle 时发）**：档位联动子会话（父带子）不能等父
@@ -2467,25 +2459,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .setMode(id, next)
         .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [engine, opened, mode],
-  );
-
-  /**
-   * 计划卡「按这个做」会切到哪一档：plan 档只读，只确认不换档 agent 什么也做不了——所以在 plan 档里点
-   * 它要顺带离开：切回进 plan 档之前的那一档，没有记录（开局就是 plan）就切到手动。不在 plan 档 = null（不换档）。
-   */
-  const planApproveMode: PermissionMode | null =
-    mode === "plan" ? (modeBeforePlanRef.current.get(sessionId ?? opened?.id ?? "") ?? "manual") : null;
-
-  /** 计划卡「按这个做」：必要时先切档，再把确认语作为一条用户消息发进本会话（在跑就排队，同 send） */
-  const approvePlan = useCallback(
-    (text: string): void => {
-      const id = sessionRef.current ?? opened?.id ?? null;
-      if (id === null) return;
-      if (planApproveMode !== null) changeMode(planApproveMode);
-      deliverText(id, text);
-    },
-    [opened, planApproveMode, changeMode, deliverText],
+    [engine, opened],
   );
 
   const changeThinkingLevel = useCallback(
@@ -3263,8 +3237,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     removeQuote,
     mode,
     changeMode,
-    planApproveMode,
-    approvePlan,
     thinkingLevel,
     changeThinkingLevel,
     // 只给当前型号报回的支持集；别的型号报的（切过型号还没开轮）当没有，菜单回落目录

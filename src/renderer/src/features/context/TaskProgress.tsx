@@ -498,8 +498,10 @@ function StepTail(props: { act: StepActivity | undefined; clock: string | null }
   if (props.clock !== null) return <span className="tp-clock">{props.clock}</span>;
   if (props.act === undefined || props.act.calls === 0) return null;
   return (
-    <span className="tp-tail" data-failed={props.act.failed > 0 || undefined}>
+    <span className="tp-tail">
       {t.planText.stepCalls(props.act.calls)}
+      {/* 失败的写成字（颜色只是第二信号） */}
+      {props.act.failed > 0 && <span className="tp-tail-bad"> · {t.chat.processFailed(props.act.failed)}</span>}
     </span>
   );
 }

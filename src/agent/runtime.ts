@@ -968,8 +968,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     command.protectedPaths,
     command.cwd,
   );
-  // 计划（update_plan）的「停下来等确认」：闸门里先看有没有已决定停的标记（同批排在 update_plan 之后的
-  // 调用拦下并带 terminate），工具 execute 里再按同一判定带 terminate（plan-tools.ts 头注释）
+  // 计划（update_plan）的「停下来对齐」：闸门里 update_plan 判定要停，本轮其余工具调用就被拦下，
+  // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
   const planOptions: PlanToolOptions = {
     getMode: currentMode,
     planFirst: command.planFirst === true,
@@ -1057,6 +1057,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
             pi.on("before_agent_start", (event) => {
+              planOptions.state.stopping = false;
               // 段装配抽成了纯函数（./system-prompt.ts）：「派出 / 删除子会话前后整份
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。

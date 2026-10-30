@@ -54,9 +54,7 @@ export interface PlanVersion {
   changes: PlanChange[];
   /** 这一版去掉的步（含 id）与原位置（排在新清单第几步之后，-1 = 最前） */
   removed: { id: string; text: string; afterNext: number }[];
-  /** 模型带的问题（confirm）；空 = 没有 */
-  confirm: string[];
-  /** 这一次调用让这一轮停下来等确认（工具结果 details.awaiting；还在跑的版本没有） */
+  /** 这一次调用让这一轮先停下、等你在聊天框里回答（工具结果 details.awaiting；还在跑的版本没有） */
   awaiting: boolean;
 }
 
@@ -77,7 +75,6 @@ interface RawVersion {
   items: PlanItem[];
   why: string | null;
   later: PlanLater[];
-  confirm: string[];
 }
 
 /** 一条 update_plan 记录里的计划：被拒的不算；还在跑的过工具同一套校验；执行完的宽松读 */
@@ -86,11 +83,12 @@ function rawVersion(record: TranscriptRecord): RawVersion | null {
   if (record.status === "complete") {
     const items = looseItems(record.input);
     if (items.length === 0) return null;
-    return { record, items, ...parsePlanNotes(record.input) };
+    const { why, later } = parsePlanNotes(record.input);
+    return { record, items, why, later };
   }
   try {
     const call = parsePlanCall(record.input);
-    return { record, items: call.items, why: call.why, later: call.later, confirm: call.confirm };
+    return { record, items: call.items, why: call.why, later: call.later };
   } catch {
     return null;
   }
@@ -165,7 +163,6 @@ export function planTimeline(records: readonly TranscriptRecord[]): PlanTimeline
       later: raw.later,
       changes: diff.fresh ? [] : diff.changes,
       removed,
-      confirm: raw.confirm,
       awaiting: awaitingOf(raw.record),
     });
     prevItems = raw.items;

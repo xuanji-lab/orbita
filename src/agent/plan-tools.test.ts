@@ -134,31 +134,34 @@ describe("decidePlanStop：什么时候停下来等用户", () => {
   });
 });
 
-describe("停下来：terminate 与同批拦截", () => {
-  test("plan 档写新计划：execute 带 terminate、details.awaiting；回执要求停下", async () => {
-    const { run, state } = setup({ getMode: () => "plan" });
-    const out = (await run("c1", { items: [{ text: "a", status: "in_progress" }, { text: "b", status: "pending" }] })) as {
-      terminate?: boolean;
-      details: { awaiting?: boolean };
-      content: { text: string }[];
-    };
-    assert.equal(out.terminate, true);
-    assert.equal(out.details.awaiting, true);
-    assert.match(out.content[0]?.text ?? "", /plan mode/);
-    assert.equal(state.stopping, false);
+describe("停下来：先停、让 agent 用正文说话（没有 terminate、没有按钮）", () => {
+  const textOf = (out: unknown): string => (out as { content: { text: string }[] }).content[0]?.text ?? "";
+
+  test("plan 档写新计划：details.awaiting；回执要求在正文里说要开工请切出 plan 档，且不 terminate", async () => {
+    const { run } = setup({ getMode: () => "plan" });
+    const out = await run("c1", { items: [{ text: "a", status: "in_progress" }, { text: "b", status: "pending" }] });
+    assert.equal((out as { terminate?: boolean }).terminate, undefined);
+    assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, true);
+    assert.match(textOf(out), /plan mode/);
+    assert.match(textOf(out), /switch the permission out of plan mode/);
+    assert.match(textOf(out), /no more tools/);
   });
 
-  test("confirm：问题进 details，回执要求停下", async () => {
+  test("confirm：回执要求把问题在正文里问出来（用户在聊天框答，没有按钮）；问题不进 details", async () => {
     const { run } = setup();
-    const out = (await run("c1", { items: [{ text: "a", status: "in_progress" }], confirm: ["删不删？", "  "] })) as {
-      terminate?: boolean;
-      details: { confirm?: string[] };
-    };
-    assert.equal(out.terminate, true);
-    assert.deepEqual(out.details.confirm, ["删不删？"]);
+    const out = await run("c1", { items: [{ text: "a", status: "in_progress" }], confirm: ["删不删？", "  "] });
+    assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, true);
+    assert.equal("confirm" in (out as { details: object }).details, false);
+    assert.match(textOf(out), /ask the question\(s\) from `confirm` in plain prose/);
+    assert.match(textOf(out), /no buttons/);
   });
 
-  test("闸门：update_plan 决定停之后，同批后面的调用被拦且带 terminate（不抛错）；之前的拦不住", () => {
+  test("先给我看计划：回执要求一两句话 + 问题放正文", async () => {
+    const { run } = setup({ planFirst: true });
+    assert.match(textOf(await run("c1", { items: [{ text: "a", status: "in_progress" }] })), /before any work starts/);
+  });
+
+  test("闸门：update_plan 决定停之后，本轮其余工具调用被拦（block，不抛错、不带 terminate），让它回头用正文说话；之前的拦不住", () => {
     const { gate, state } = setup({ getMode: () => "plan" });
     const event = (id: string, toolName: string, input: Record<string, unknown>) => ({ toolCallId: id, toolName, input });
     assert.equal(gate(event("r0", "read", { path: "a" })), null);
@@ -166,8 +169,9 @@ describe("停下来：terminate 与同批拦截", () => {
     assert.equal(state.stopping, true);
     const held = gate(event("r1", "read", { path: "b" }));
     assert.equal(held?.block, true);
-    assert.equal(held?.terminate, true);
-    assert.match(held?.reason ?? "", /confirm your plan/);
+    assert.equal("terminate" in (held ?? {}), false);
+    assert.match(held?.reason ?? "", /paused for their reply/);
+    assert.match(held?.reason ?? "", /plain prose/);
     // 同批第二个 update_plan 也按自己的判定走，不被当成「后面的调用」拦
     assert.equal(gate(event("p2", "update_plan", { items: [{ text: "a", status: "in_progress" }] })), null);
   });

@@ -72,17 +72,16 @@ describe("planTimeline", () => {
     assert.deepEqual(t.current.changes, []);
   });
 
-  test("被拒的不算；还在跑的过严格校验；later / confirm / awaiting 带出来", () => {
+  test("被拒的不算；还在跑的过严格校验；later / awaiting 带出来", () => {
     const t = planTimeline([
       plan("p1", 10, steps(["读", "in_progress"])),
       plan("bad", 15, steps(["x", "in_progress"], ["y", "in_progress"]), { status: "running" }),
       plan("err", 16, steps(["z", "pending"]), { status: "error" }),
-      plan("p2", 20, { ...steps(["读", "in_progress"]), later: ["日期解析不一致"], confirm: ["要兼容旧格式吗？"] }, { details: { plan: [], awaiting: true } as never }),
+      plan("p2", 20, { ...steps(["读", "in_progress"]), later: ["日期解析不一致"] }, { details: { plan: [], awaiting: true } as never }),
     ]);
     assert.ok(t !== null);
     assert.equal(t.versions.length, 2);
     assert.deepEqual(t.current.later, [{ text: "日期解析不一致" }]);
-    assert.deepEqual(t.current.confirm, ["要兼容旧格式吗？"]);
     assert.equal(t.current.awaiting, true);
   });
 });

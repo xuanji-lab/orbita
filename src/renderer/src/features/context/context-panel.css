@@ -277,7 +277,7 @@ button.tp-step-head:hover .tp-text {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
-.tp-tail[data-failed] {
+.tp-tail-bad {
   color: var(--color-danger);
 }
 .tp-step-head .tp-clock {

@@ -46,13 +46,12 @@ export const PLAN_NOTE_MAX_CHARS = 200;
 
 /**
  * update_plan 的结果 details（随转录落盘，只给界面、不进模型上下文）。
- * awaiting = 这一次调用让这一轮停下来等用户确认（plan 档写完计划 / 带了 confirm 问题 / 「先给我看计划」）；
- * confirm 同入参，界面据此在对话里画计划卡。
+ * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（plan 档写完计划 / 带了 confirm 问题 /
+ * 「先给我看计划」）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
  */
 export interface PlanToolDetails {
   plan: PlanItem[];
   awaiting?: boolean;
-  confirm?: string[];
 }
 
 /** 一张计划的上限：再多就不是计划，是流水账 */
