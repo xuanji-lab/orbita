@@ -100,6 +100,16 @@ export function useFocus(): FocusApi {
   }, [send, summary.state]);
 
   /**
+   * 自动起跑已发过的那一轮（按 run 对象身份记）。合盖唤醒 / Alt-Tab 回窗口时
+   * `visibilitychange` 与 `focus` 在同一个任务里背靠背触发，两次 check() 的闭包里
+   * `summary.state` 都还是旧值 idle（React 没来得及重渲染）——没有这个标记，小结
+   * 会被自动发两次（隔离实例实测复现：两事件同任务派发 → focus:summarize 两遭，
+   * 等于两次模型调用）。用户入口不经过 check()（ending 的「要」、failed 的「重试」
+   * 都不走时钟），不受这个标记限制。
+   */
+  const autoFiredRunRef = useRef<FocusRun | null>(null);
+
+  /**
    * 专注时钟：run 相位每秒对一次**墙上时间**（`Date.now()`），只在跨过 T-5 / 到点
    * 时才 setState（`focusClockAction`，纯函数带测试）——剩下的拍子连一次渲染都不花，
    * `perf(focus)` 的省电结论不变。
@@ -119,7 +129,10 @@ export function useFocus(): FocusApi {
     const run = status.run;
     const check = (): void => {
       const action = focusClockAction(run, Date.now(), summary.state === "idle");
-      if (action.startSummary) fire(run);
+      if (action.startSummary && autoFiredRunRef.current !== run) {
+        autoFiredRunRef.current = run;
+        fire(run);
+      }
       if (action.finish) setStatus({ kind: "done", run });
     };
     check();
