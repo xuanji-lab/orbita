@@ -59,6 +59,16 @@ describe("goalNoticeText（对话里『目标改了』那一行）", () => {
     assert.equal(goalNoticeText(en, ledger, ["g2"]), 'Goal changed: "做排序" → "做排序和筛选" — 用户补充');
   });
 
+  test("目标很长时对话里那一行只留不同处附近的一小段，改动看得见", () => {
+    const base = "把待办模块做成能用的小工具：".repeat(12);
+    const long = buildGoalLedger(
+      ledgerEventsOf([userMsg("u1", 1, "a"), tool("g1", "update_goal", 2, { goal: base }), tool("g2", "update_goal", 3, { goal: `${base}最后还要有 cli.js` })]),
+    );
+    const line = goalNoticeText(zh, long, ["g2"]) ?? "";
+    assert.ok(line.includes("最后还要有 cli.js"));
+    assert.ok(line.length < 200, `一行放得下：${line.length}`);
+  });
+
   test("第一次定目标不出；不在这个块里的调用不出；没理由不带破折号", () => {
     assert.equal(goalNoticeText(zh, ledger, ["g1"]), null);
     assert.equal(goalNoticeText(zh, ledger, ["gX"]), null);

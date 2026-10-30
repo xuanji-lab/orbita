@@ -352,6 +352,11 @@ button.tp-step-head:hover .tp-text {
   line-height: var(--line-height-ui);
   color: var(--color-text-primary);
   word-break: break-word;
+  /* 兜底：已按不同处缩过，仍超长（极端长的单个词）时最多四行 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
 }
 /* 来源（谁提的）：和「为什么」同一档小字，可点的那条悬停变深 */
 .tp-editlog-src {

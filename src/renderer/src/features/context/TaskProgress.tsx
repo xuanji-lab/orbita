@@ -12,7 +12,7 @@ import { formatRunClock, formatToolDuration } from "../chat/tool-results.ts";
 import { useTaskHistory, useTaskRecords, type TaskRecordsView } from "../chat/useTaskRecords.ts";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { isBookkeepingTool } from "../../../../shared/goal.ts";
-import type { GoalLedger, LedgerEntry } from "../../../../shared/goal-ledger.ts";
+import { headSnippet, snippetPair, type GoalLedger, type LedgerEntry } from "../../../../shared/goal-ledger.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import type { TranscriptRecord } from "@shared/session";
 import type { ProcessChapter } from "../chat/turn-process.ts";
@@ -515,6 +515,9 @@ function PlanSection(props: {
   );
 }
 
+/** 改动记录里一条目标文字最长多少字符（再长只留不同处附近的一小段，全文在悬停里） */
+const EDIT_TEXT_MAX = 80;
+
 /** 「改过 N 次」：点开是改动记录（目标和计划同一本账） */
 function EditsButton(props: { count: number; open: boolean; onClick: () => void }) {
   const t = useT();
@@ -577,9 +580,16 @@ function EditLog(props: {
       {[...props.entries].reverse().map((entry) => {
         const kind =
           entry.kind === "plan" ? t.goalText.kindPlan : entry.from === null ? t.goalText.kindGoalSet : t.goalText.kindGoalChanged;
+        // 目标很长时，「从什么变成什么」两边各缩成不同处附近的一小段（全文在悬停里；当前目标在最上面全文给出）
+        const [goalFrom, goalTo] =
+          entry.kind === "goal"
+            ? entry.from === null
+              ? [null, headSnippet(entry.to, EDIT_TEXT_MAX)]
+              : snippetPair(entry.from, entry.to, EDIT_TEXT_MAX)
+            : [null, null];
         const what =
           entry.kind === "goal"
-            ? entry.to
+            ? (goalTo ?? entry.to)
             : entry.replaced !== null
               ? t.goalText.planReplaced(entry.replaced.length)
               : entry.changes.map((change) => planChangeText(t, change)).join("；");
@@ -591,8 +601,14 @@ function EditLog(props: {
               <span className="tp-time">
                 {clockOf(entry.at)} · {kind}
               </span>
-              <span className="tp-editlog-what">{what}</span>
-              {entry.kind === "goal" && entry.from !== null && <span className="tp-meta">{t.planText.was(entry.from)}</span>}
+              <span className="tp-editlog-what" title={entry.kind === "goal" ? entry.to : undefined}>
+                {what}
+              </span>
+              {entry.kind === "goal" && goalFrom !== null && entry.from !== null && (
+                <span className="tp-meta" title={entry.from}>
+                  {t.planText.was(goalFrom)}
+                </span>
+              )}
               {entry.why !== null && <span className="tp-meta">{entry.why}</span>}
             </button>
             {source.kind === "user" && props.inChat.has(source.id) ? (
