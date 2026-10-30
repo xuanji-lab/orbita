@@ -21,6 +21,7 @@ import {
   REVEAL_ENTRY_EVENT,
   settledEnd,
   stepClockFrom,
+  stepDisplay,
   taskHeadState,
   toolIndexOf,
   turnDigests,
@@ -30,6 +31,7 @@ import {
   BEFORE_PLAN,
   groupBySteps,
   OUTSIDE_PLAN,
+  planAwaitingIn,
   planTimeline,
   planView,
   stepActiveSince,
@@ -148,6 +150,7 @@ export function TaskProgress(props: {
           turns={turns}
           activity={activity}
           working={working}
+          awaiting={timeline.current.awaiting && planAwaitingIn(view.current)}
           turnActive={turnActive}
           now={now}
           inChat={inChat}
@@ -379,6 +382,8 @@ function PlanSection(props: {
   turns: readonly TurnDigest[];
   activity: ReadonlyMap<string, StepActivity>;
   working: boolean;
+  /** 计划停下等你确认（最后一次 update_plan 要求确认、之后还没有用户消息）：计划里不出现在做的步 */
+  awaiting: boolean;
   turnActive: boolean;
   now: number;
   inChat: ReadonlySet<string>;
@@ -406,15 +411,15 @@ function PlanSection(props: {
     }));
   const stepRow = (item: PlanStep) => {
     const act = activity.get(item.id);
-    const active = item.status === "in_progress" && props.working;
+    const { status, active } = stepDisplay(item.status, { working: props.working, awaiting: props.awaiting });
     const rows = rowsFor(act);
     const shown = open[item.id] ?? active;
-    const since = item.status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
+    const since = status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
     const note = item.note;
     return (
-      <li key={item.id} data-status={item.status}>
+      <li key={item.id} data-status={status}>
         <span className="tp-slot">
-          {item.status === "done" ? (
+          {status === "done" ? (
             <Icon name="check" size={12} strokeWidth={2} />
           ) : active ? (
             <StatusPie state="running" />

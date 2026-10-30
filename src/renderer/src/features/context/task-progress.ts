@@ -7,6 +7,7 @@
  */
 import type { TranscriptRecord } from "@shared/session";
 import type { SessionRunState } from "../notify/completion-notice.ts";
+import type { PlanItemStatus } from "../../../../shared/plan.ts";
 import type { PlanView } from "./plan-timeline.ts";
 import {
   flattenRenderUnits,
@@ -23,6 +24,19 @@ export const REVEAL_ENTRY_EVENT = "orbita:reveal-entry";
 
 /** 头一行的状态：侧栏状态饼的四档，再加一个只说字、不画饼的「停下了」 */
 export type TaskHeadState = "running" | "waiting" | "done" | "failed" | "stopped";
+
+/**
+ * 计划里一步在面板上怎么画：画成什么状态、要不要画「在做」的蓝饼。
+ * - 蓝饼的前提是会话真的在跑 / 等你（working）；停下之后画空圈；
+ * - **计划停下等你确认时（awaiting），计划里不出现在做的步**：agent 写计划时习惯把第一步标成 in_progress，
+ *   可这一轮写完计划就停了、什么都还没开始做；头一行此时恰好是「等你」（working 为真），第 0 期因此把第一步
+ *   画成了在做的蓝饼（2026-10-30 实测，plan 档停下的截图）。等确认时 in_progress 一律按待做画——
+ *   不画饼、不加粗（加粗也是「在做」的信号）、不走计时；等你回答后它改计划 / 开工，那一步才变成在做。
+ */
+export function stepDisplay(status: PlanItemStatus, ctx: { working: boolean; awaiting: boolean }): { status: PlanItemStatus; active: boolean } {
+  if (ctx.awaiting && status === "in_progress") return { status: "pending", active: false };
+  return { status, active: status === "in_progress" && ctx.working };
+}
 
 /**
  * 头一行说什么。
