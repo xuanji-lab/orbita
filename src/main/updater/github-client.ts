@@ -131,6 +131,37 @@ export function withAssetAccept(options: RequestOptions): RequestOptions {
   return { ...options, headers: { ...options.headers, accept: ASSET_ACCEPT } };
 }
 
+/**
+ * 资产重定向的目标域白名单（安全纵深：302 不许把下载带去陌生域）。
+ *
+ * 实测（2026-10-31）：`api.github.com/repos/<o>/<r>/releases/assets/<id>` 带
+ * `Accept: application/octet-stream` 时 302 到 `release-assets.githubusercontent.com`
+ * 的签名地址；历史上还有 `objects.githubusercontent.com` 一族。白名单 = https 的
+ * `github.com`、`api.github.com` 与 `*.githubusercontent.com` 子域（裸 apex 不放）。
+ * 更新器（resilient-executor.ts 的 resolveRedirect）与「历史版本」说明的退路 URL
+ * （recent-releases.ts 的 browser_download_url）共用这一张表。
+ */
+export function githubRedirectAllowed(url: URL): boolean {
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  if (host === "github.com" || host === "api.github.com") return true;
+  return host.endsWith(".githubusercontent.com");
+}
+
+/**
+ * 这条通道（electronGitHubTransport）只服务 JSON 元数据与 latest.yml 一类小文件；
+ * 超过它说明端点被换 / 出错，别把内存吃进去。blockmap / 安装包不走这条通道。
+ */
+export const GITHUB_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+
+/** 攒响应体时判一笔：未超限 null；超限给出错误（调用方中止请求并丢弃已收字节） */
+export function githubBodyLimitError(received: number): Error | null {
+  if (received <= GITHUB_BODY_LIMIT_BYTES) return null;
+  return new Error(
+    `GitHub 响应超过 ${GITHUB_BODY_LIMIT_BYTES} 字节上限（这条通道只读 JSON / latest.yml，不该出现大响应）`,
+  );
+}
+
 export class GitHubClient implements GitHubReader {
   private readonly transport: GitHubTransport;
   private readonly now: () => number;

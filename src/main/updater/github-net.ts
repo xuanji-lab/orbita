@@ -15,6 +15,7 @@
  */
 import { net, session, type Session } from "electron";
 import { NET_SESSION_NAME } from "electron-updater/out/electronHttpExecutor.js";
+import { githubBodyLimitError } from "./github-client.ts";
 import type { GitHubRequest, GitHubResponse, GitHubTransport } from "./github-client.ts";
 import { hasProxySetting, proxyRulesOf, type ProxyEnv } from "./proxy.ts";
 
@@ -55,8 +56,18 @@ export function electronGitHubTransport(): GitHubTransport {
 
       client.on("response", (response) => {
         const chunks: Buffer[] = [];
+        let received = 0;
         response.on("data", (chunk: Buffer) => {
-          chunks.push(Buffer.from(chunk));
+          const piece = Buffer.from(chunk);
+          received += piece.length;
+          // 超过元数据响应的字节上限：端点被换 / 出错，中止并报错，不把内存吃进去
+          const over = githubBodyLimitError(received);
+          if (over !== null) {
+            settle(over);
+            client.abort();
+            return;
+          }
+          chunks.push(piece);
         });
         response.on("end", () => {
           settle(null, {

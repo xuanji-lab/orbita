@@ -27,7 +27,7 @@
 // 也不为读一个字段再引一份 YAML 依赖。包没有 exports 字段，深路径可用；版本精确锁在 6.8.9
 import { parseUpdateInfo } from "electron-updater/out/providers/Provider.js";
 import type { RecentRelease, RecentReleasesResult, UpdateNote } from "../../shared/updater.ts";
-import { GitHubHttpError, type GitHubReader } from "./github-client.ts";
+import { GitHubHttpError, githubRedirectAllowed, type GitHubReader } from "./github-client.ts";
 import { appNotesOf } from "./notes.ts";
 import { releasesApiUrl } from "./releases-url.ts";
 
@@ -146,6 +146,16 @@ export function createRecentReleases(options: RecentReleasesOptions): RecentRele
     notesUrl: string | null,
   ): Promise<{ release: RecentRelease; transient: boolean }> {
     if (notesUrl === null) return { release: { ...release, notes: null }, transient: false };
+    // 退路 URL（browser_download_url）来自 API 响应，不一定是 GitHub 的域：先过重定向
+    // 白名单（与更新器同一张表，githubRedirectAllowed），白名单外 / 解析不了的地址不发
+    // 请求，那一行当「没有说明」处理（列表照常）。资产端点地址天然在白名单内。
+    try {
+      if (!githubRedirectAllowed(new URL(notesUrl))) {
+        return { release: { ...release, notes: null }, transient: false };
+      }
+    } catch {
+      return { release: { ...release, notes: null }, transient: false };
+    }
     try {
       // 资产端点要资产头才回文件（客户端按 Accept 决定）；网页下载地址收到它也无害
       const raw = await client.getText(notesUrl, "application/octet-stream");

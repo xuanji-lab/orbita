@@ -245,6 +245,24 @@ describe("createRecentReleases —— 共享客户端、缓存与失败", () => 
     assert.equal(calls.filter((href) => href.endsWith("/assets/43")).length, 2, "403 不算「没有说明」，第二次重新拉");
   });
 
+  test("退路 URL（browser_download_url）在白名单外的域：不向它发请求，那一行当没有说明", async () => {
+    const calls: string[] = [];
+    const entry = {
+      ...ENTRY,
+      assets: [{ name: "latest.yml", browser_download_url: "https://evil.example/latest.yml" }],
+    };
+    const transport: GitHubTransport = async ({ url }) => {
+      calls.push(url.href);
+      return { status: 200, headers: {}, body: JSON.stringify([entry]) };
+    };
+    const recent = createRecentReleases({ endpoint: () => API, client: new GitHubClient({ transport }) });
+    const result = await recent.recent();
+    assert.equal(result.ok, true);
+    assert.equal(result.ok ? result.releases[0]?.notes : "x", null);
+    // 只打了列表端点：白名单外的域一个请求都不发
+    assert.deepEqual(calls, [`${API}?per_page=5`]);
+  });
+
   test("成功结果缓存 10 分钟：窗口内再点不打 API，过期后再打", async () => {
     const calls: string[] = [];
     let clock = 0;

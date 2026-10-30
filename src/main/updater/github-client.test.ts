@@ -14,8 +14,11 @@ import assert from "node:assert/strict";
 import type { RequestOptions } from "node:http";
 import {
   ASSET_ACCEPT,
+  GITHUB_BODY_LIMIT_BYTES,
   GitHubClient,
   GitHubHttpError,
+  githubBodyLimitError,
+  githubRedirectAllowed,
   isGitHubAssetRequest,
   isGitHubAssetUrl,
   withAssetAccept,
@@ -190,5 +193,42 @@ describe("资产请求头规则 —— 库的差分下载写死 */* 后靠它改
       headers: { accept: "*/*" },
     };
     assert.equal(withAssetAccept(options), options);
+  });
+});
+
+describe("githubRedirectAllowed —— 资产 302 目标域白名单（重定向不许把下载带去陌生域）", () => {
+  test("放行 GitHub 自己的域（实测 2026-10-31：资产端点 302 到 release-assets.githubusercontent.com）", () => {
+    assert.equal(githubRedirectAllowed(new URL("https://github.com/xuanji-lab/orbita/releases/download/v0.1.16/latest.yml")), true);
+    assert.equal(githubRedirectAllowed(new URL("https://api.github.com/repos/a/b/releases/assets/12")), true);
+    // 资产端点 302 的真实目标（Azure 签名地址，带查询串）
+    assert.equal(
+      githubRedirectAllowed(new URL("https://release-assets.githubusercontent.com/github-production-release-asset/xyz?sig=abc")),
+      true,
+    );
+    assert.equal(githubRedirectAllowed(new URL("https://objects.githubusercontent.com/x/y")), true);
+  });
+
+  test("主机名大小写不敏感（规范成小写再比）", () => {
+    assert.equal(githubRedirectAllowed(new URL("https://API.GitHub.com/repos/a/b")), true);
+    assert.equal(githubRedirectAllowed(new URL("https://Objects.GitHubUserContent.com/x")), true);
+  });
+
+  test("拒绝：非 https、陌生域、前缀仿冒、裸 apex", () => {
+    assert.equal(githubRedirectAllowed(new URL("http://objects.githubusercontent.com/x")), false, "只认 https");
+    assert.equal(githubRedirectAllowed(new URL("https://evil.example.com/file")), false);
+    assert.equal(githubRedirectAllowed(new URL("https://github.com.evil.example.com/file")), false, "前缀仿冒不算子域");
+    assert.equal(githubRedirectAllowed(new URL("https://objects.githubusercontent.com.evil.example.com/x")), false);
+    assert.equal(githubRedirectAllowed(new URL("https://githubusercontent.com/x")), false, "裸 apex 不放行");
+    assert.equal(githubRedirectAllowed(new URL("file://github.com/etc/passwd")), false);
+  });
+});
+
+describe("githubBodyLimitError —— 元数据响应的字节上限", () => {
+  test("未超限是 null；恰好超限给出错误（这条通道只读 JSON / latest.yml 一类小文件）", () => {
+    assert.equal(githubBodyLimitError(1024), null);
+    assert.equal(githubBodyLimitError(GITHUB_BODY_LIMIT_BYTES), null);
+    const error = githubBodyLimitError(GITHUB_BODY_LIMIT_BYTES + 1);
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /超过/);
   });
 });

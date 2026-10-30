@@ -204,7 +204,7 @@ describe("downloadFile", () => {
       },
     };
     await withTempFile(async (path) => {
-      await assert.rejects(downloadFile(transport, { url: URL_OK, destination: path, headers: {}, cancellation }), (error: unknown) =>
+      await assert.rejects(downloadFile(transport, { url: URL_OK, destination: path, headers: {}, cancellation, sha512: sha512(data) }), (error: unknown) =>
         error instanceof DownloadCancelledError,
       );
     });
@@ -239,6 +239,7 @@ describe("downloadFile", () => {
           url: URL_OK,
           destination: path,
           headers: {},
+          sha512: sha512(data),
           partSize: 40_000,
           concurrency: 3,
           maxStalledAttempts: 2,
@@ -280,7 +281,7 @@ describe("downloadFile", () => {
     };
     await withTempFile(async (path) => {
       await assert.rejects(
-        downloadFile(transport, { url: URL_OK, destination: path, headers: {} }),
+        downloadFile(transport, { url: URL_OK, destination: path, headers: {}, sha512: sha512(data) }),
         (error: unknown) => {
           assert.ok(error instanceof DownloadUnsupportedError);
           assert.match(error.message, /无法确定更新包大小/);
@@ -288,6 +289,24 @@ describe("downloadFile", () => {
           return true;
         },
       );
+    });
+  });
+
+  test("sha512 缺失 / 空串 → 拒绝下载（不再跳过校验）", async () => {
+    const data = Buffer.alloc(1000, 9);
+    const transport = new FakeTransport(data);
+    await withTempFile(async (path) => {
+      await assert.rejects(
+        downloadFile(transport, { url: URL_OK, destination: path, headers: {} }),
+        /缺少 sha512/,
+      );
+      await assert.rejects(
+        downloadFile(transport, { url: URL_OK, destination: path, headers: {}, sha512: "" }),
+        /缺少 sha512/,
+      );
+      // 拒绝发生在下载开始之前：一次网络请求都不发、文件不落盘
+      assert.equal(transport.calls.length, 0);
+      await assert.rejects(readFile(path), /ENOENT/);
     });
   });
 });

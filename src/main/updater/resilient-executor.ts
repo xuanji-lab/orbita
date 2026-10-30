@@ -23,7 +23,7 @@ import type { AppUpdater } from "electron-updater";
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor.js";
 import { NET_SESSION_NAME } from "electron-updater/out/electronHttpExecutor.js";
 import type { RequestOptions } from "node:http";
-import { isGitHubAssetUrl, withAssetAccept } from "./github-client.ts";
+import { isGitHubAssetUrl, githubRedirectAllowed, withAssetAccept } from "./github-client.ts";
 import {
   downloadFile,
   DownloadChecksumError,
@@ -176,6 +176,12 @@ class ElectronRangeTransport implements RangeTransport {
   /**
    * 只取 302 的 Location，不读 body；没有重定向就返回原地址。
    *
+   * **目标域白名单**（安全审查 M1 的纵深）：Location 只认 https 的 github.com /
+   * api.github.com / *.githubusercontent.com（githubRedirectAllowed，实测资产端点 302
+   * 到 release-assets.githubusercontent.com）。白名单外直接报错中止——重定向不许把
+   * 下载带去陌生域。分段请求（request）只发给这里放行的目标或原资产端点，自身
+   * redirect: "follow" 只在目标再跳时生效，那些目标已在白名单内。
+   *
    * 限流账的已知缺口：这次 GET 打在 api.github.com 的资产端点上，占用未认证配额
    * （60 次/小时），但它的 x-ratelimit-* 响应头不回写共享客户端那本账
    * （github-client.ts）——下载器这条路径不过客户端，检查 / 历史版本的限流判定
@@ -193,6 +199,14 @@ class ElectronRangeTransport implements RangeTransport {
         redirect: "manual",
         headers: { ...headers, range: "bytes=0-0" },
       });
+      /** Location → 目标地址；白名单外 / 解析不了都当失败，不带下载去陌生域 */
+      const targetOf = (raw: string): string => {
+        const target = new URL(raw, url);
+        if (!githubRedirectAllowed(target)) {
+          throw new Error(`更新资产重定向到了白名单外的域：${target.hostname}（只允许 github.com / api.github.com / *.githubusercontent.com）`);
+        }
+        return target.href;
+      };
       const finish = (error: Error | null, target?: string): void => {
         if (settled) return;
         settled = true;
@@ -201,11 +215,11 @@ class ElectronRangeTransport implements RangeTransport {
         else resolve(target ?? url.href);
       };
       request.on("response", (response) => {
-        // 有些地址不会重定向（镜像 / 直链）：直接用原地址
+        // 有些地址不会重定向（镜像 / 直链）：直接用原地址（原地址是 api.github.com，在白名单内）
         const location = headerValue(response.headers, "location");
         if (isRedirect(response.statusCode) && location !== null) {
           try {
-            finish(null, new URL(location, url).href);
+            finish(null, targetOf(location));
           } catch (error) {
             finish(error instanceof Error ? error : new Error(String(error)));
           }
@@ -217,7 +231,7 @@ class ElectronRangeTransport implements RangeTransport {
       // 不 follow 的话之后会补一个 "Redirect was cancelled"，由 settled 守卫吃掉。
       request.on("redirect", (_status: number, _method: string, redirectUrl: string) => {
         try {
-          finish(null, new URL(redirectUrl, url).href);
+          finish(null, targetOf(redirectUrl));
         } catch (error) {
           finish(error instanceof Error ? error : new Error(String(error)));
         }

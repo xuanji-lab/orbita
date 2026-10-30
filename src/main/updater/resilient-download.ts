@@ -9,8 +9,9 @@
  *    8 连接 ~213KB/s，单连接 30–70KB/s）；
  * 2. **每段自己从已写字节续传**：断了只重发这一段剩下的部分，不清空整个文件。
  *
- * 安全边界：下载完成后**必须**核对 sha512（由 GitHub 的 latest.yml 提供）。校验不过就
- * 抛错，electron-updater 会删掉临时文件，绝不会把残缺/被替换的安装包交给 NSIS。
+ * 安全边界：下载完成后**必须**核对 sha512（由 GitHub 的 latest.yml 提供）——latest.yml
+ * 没给 sha512 时拒绝下载、校验不过就抛错，electron-updater 会删掉临时文件，绝不会把
+ * 残缺/被替换的安装包交给 NSIS。
  *
  * Range 语义按 HTTP 习惯：`end` 是**闭区间**（bytes=start-end）。内部切段时用半开区间
  * 计算长度，避免差一。
@@ -53,7 +54,7 @@ export interface DownloadFileOptions {
   url: URL;
   destination: string;
   headers: Readonly<Record<string, string>>;
-  /** GitHub latest.yml 给的 sha512（base64）；没给就跳过校验（不该发生） */
+  /** GitHub latest.yml 给的 sha512（base64）；必填——缺失或空串直接拒绝下载（安全默认） */
   sha512?: string | null;
   /** 只是结构，不引 builder-util-runtime 的类；可变，取消状态由外部随时翻 */
   cancellation?: { cancelled: boolean };
@@ -81,7 +82,10 @@ export class DownloadCancelledError extends Error {
   readonly code = "ERR_UPDATER_CANCELLED";
 }
 
-/** 哈希不符：更新源（或中间链路）给的字节不是 GitHub 记录的那一份 */
+/**
+ * 哈希不符，或 latest.yml 根本没给 sha512（缺失同样拒绝）：字节没有 GitHub 记录的那
+ * 一份的凭据，不能交给 NSIS。
+ */
 export class DownloadChecksumError extends Error {
   readonly code = "ERR_UPDATER_INVALID_CHECKSUM";
 }
@@ -188,6 +192,12 @@ async function probe(transport: RangeTransport, url: URL, headers: Record<string
 export async function downloadFile(transport: RangeTransport, options: DownloadFileOptions): Promise<void> {
   const { url, destination, headers, cancellation, onProgress } = options;
   const isCancelled = (): boolean => cancellation !== undefined && cancellation.cancelled;
+  // sha512 缺失 / 空串 = 没有完整性凭据：拒绝整个下载（以前是跳过校验照常交付，那样完整
+  // 性就只剩 TLS 一道防线）。拒绝发生在探针之前：一次请求都不发、临时文件不建。
+  // electron-builder 的正常发布一定带 files[].sha512，拒绝是安全默认。
+  if (options.sha512 == null || options.sha512 === "") {
+    throw new DownloadChecksumError("更新包缺少 sha512 校验值（latest.yml 没给 files[].sha512），拒绝下载。");
+  }
   const probeResult = await probe(transport, url, headers);
   const { total, supportsRanges } = probeResult;
   if (total === 0) throw new DownloadUnsupportedError("更新包是 0 字节。");
@@ -332,10 +342,9 @@ export async function downloadFile(transport: RangeTransport, options: DownloadF
     await file.close();
   }
 
-  if (options.sha512 != null && options.sha512 !== "") {
-    const actual = await sha512Of(destination);
-    if (actual !== options.sha512) {
-      throw new DownloadChecksumError("更新包 sha512 校验失败，已丢弃这次下载。");
-    }
+  // 入口已拒绝缺失 / 空串（见上面的入口检查），这里无条件核对
+  const actual = await sha512Of(destination);
+  if (actual !== options.sha512) {
+    throw new DownloadChecksumError("更新包 sha512 校验失败，已丢弃这次下载。");
   }
 }
