@@ -15,7 +15,7 @@ import {
   type ReviewSource,
 } from "../../shared/review.ts";
 import type { SessionStore } from "../session/store.ts";
-import { gitReviewDiff, gitReviewList, realGitRunner } from "./git-source.ts";
+import { gitReviewDiff, gitReviewList, realDiffRunner, realGitRunner } from "./git-source.ts";
 import { taskReviewDiff, taskReviewList } from "./task-source.ts";
 
 export function registerReviewIpc(sessions: SessionStore): void {
@@ -53,7 +53,7 @@ export function registerReviewIpc(sessions: SessionStore): void {
         if (source === "task") return await taskReviewDiff(sessions, sessionId, path);
         const meta = await sessions.readMeta(sessionId);
         if (meta === null) return reviewDiffError("task-not-found", `task ${sessionId} not found`);
-        return await gitReviewDiff(realGitRunner, meta.cwd, source, path);
+        return await gitReviewDiff(realDiffRunner, meta.cwd, source, path);
       } catch (cause) {
         return reviewDiffError("failed", cause instanceof Error ? cause.message : String(cause));
       }

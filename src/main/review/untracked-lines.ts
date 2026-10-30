@@ -141,13 +141,54 @@ interface Remembered {
  */
 const lastRounds = new Map<string, Map<string, Remembered>>();
 
-/** 一块字节里有几个换行（0x0A）。逐字节比：indexOf 逐个找在短行文件上会退化到每个换行一次调用 */
-function newlinesIn(buffer: Buffer, length: number): number {
+/**
+ * 一块字节里有几个换行（0x0A）。逐字节比：indexOf 逐个找在短行文件上会退化到每个换行一次调用。
+ * B2 起 git 来源 / task 来源也用它数行（以前各自又写了一份）
+ */
+export function countNewlines(buffer: Buffer, length: number): number {
   let count = 0;
   for (let i = 0; i < length; i++) {
     if (buffer[i] === 0x0a) count += 1;
   }
   return count;
+}
+
+/**
+ * 一块完整的字节里有几行（git numstat 口径：最后一个字节不是换行也第一行）。
+ * 流式分块版的末尾判定在 countFile 里——那边末行可能落在上一块之外，不能直接用这个。
+ */
+export function bufferLineCount(bytes: Buffer): number {
+  const lines = countNewlines(bytes, bytes.length);
+  return bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a ? lines + 1 : lines;
+}
+
+/** 从 position 0 起把 buffer 读满（或到 EOF）：判二进制 / 首块计数共用的读法 */
+async function readFromStart(handle: UntrackedHandle, buffer: Buffer): Promise<number> {
+  let read = 0;
+  while (read < buffer.length) {
+    // 偏移用视图表达（与 countFile 主循环同一协议）：读盘面把内容写进 buffer 的开头
+    const got = await handle.read(buffer.subarray(read), buffer.length - read, read);
+    if (got === 0) break;
+    read += got;
+  }
+  return read;
+}
+
+/**
+ * 只读开头 GIT_BINARY_SNIFF_BYTES 字节判是不是二进制（git 的 buffer_is_binary 窗口）：
+ * 有 NUL → true；没有 → false；打不开 / 读不了 → null。git 来源（超限未跟踪文件）与
+ * task 来源（超限账面文件）其用，不再各自写一份读头部的循环。O_NOFOLLOW 由读盘面自带。
+ */
+export async function sniffBinary(path: string): Promise<boolean | null> {
+  const handle = await diskUntrackedProbe.open(path);
+  if (handle === null) return null;
+  try {
+    const buffer = Buffer.alloc(GIT_BINARY_SNIFF_BYTES);
+    const read = await readFromStart(handle, buffer);
+    return buffer.subarray(0, read).includes(0);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 /**
@@ -165,22 +206,17 @@ async function countFile(path: string, size: number, probe: UntrackedProbe): Pro
   try {
     // 判二进制的窗口要读满（read 可能读得比要的少，网络盘上常见）
     const sniffWant = Math.min(size, GIT_BINARY_SNIFF_BYTES);
-    let sniffed = 0;
-    while (sniffed < sniffWant) {
-      const got = await handle.read(buffer.subarray(sniffed), sniffWant - sniffed, sniffed);
-      if (got === 0) break;
-      sniffed += got;
-    }
+    const sniffed = await readFromStart(handle, buffer.subarray(0, sniffWant));
     if (buffer.subarray(0, sniffed).includes(0)) return { added: 0, binary: true };
     if (size > UNTRACKED_LINE_COUNT_MAX_BYTES) return { added: 0, binary: false, lineCountUnknown: true };
 
-    let lines = newlinesIn(buffer, sniffed);
+    let lines = countNewlines(buffer, sniffed);
     let position = sniffed;
     let last = sniffed > 0 ? buffer[sniffed - 1] : 0x0a;
     while (position < size) {
       const got = await handle.read(buffer, Math.min(buffer.length, size - position), position);
       if (got === 0) break; // 读的过程中文件变短了：数到哪算哪
-      lines += newlinesIn(buffer, got);
+      lines += countNewlines(buffer, got);
       last = buffer[got - 1];
       position += got;
     }

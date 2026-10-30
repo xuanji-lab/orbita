@@ -1,6 +1,7 @@
 import type { Messages } from "./messages-en.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
+import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 
 const THINKING_ZH: Record<ThinkingLevel, string> = {
   off: "关",
@@ -99,6 +100,13 @@ export const zh: Messages = {
     },
     /** 未跟踪文件超过行数上限（与专注左栏同口径）：不拿 +0 冒充没改动 */
     linesUnknown: "行数未知",
+    /** 改动超过正文上限（REVIEW_DIFF_MAX_*）：不生成 diff 正文，给外部打开的出口 */
+    tooLarge: (exceeded) =>
+      exceeded === "lines"
+        ? `改动超过 ${REVIEW_DIFF_MAX_LINES} 行，不在面板里生成对比正文。`
+        : `改动超过 ${REVIEW_DIFF_MAX_BYTES / (1024 * 1024)} MB，不在面板里生成对比正文。`,
+    /** 「改动太大」的出口之一：在文件面板里打开这个文件 */
+    openInFilesPanel: "在文件面板看",
   },
   common: {
     more: "更多",

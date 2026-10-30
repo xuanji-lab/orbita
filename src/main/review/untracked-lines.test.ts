@@ -10,8 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitReviewList, gitWorkdirChanges, realGitRunner } from "./git-source.ts";
 import {
+  bufferLineCount,
+  countNewlines,
   diskUntrackedProbe,
   GIT_BINARY_SNIFF_BYTES,
+  sniffBinary,
   UNTRACKED_LINE_COUNT_MAX_BYTES,
   untrackedLineStats,
   type UntrackedProbe,
@@ -325,6 +328,46 @@ describe("行数与 git diff --numstat 一致（真 git + 真磁盘）", () => {
       }
     } finally {
       await rm(join(repo, "..", `orbita-empty-${process.pid}`), { force: true });
+    }
+  });
+});
+
+// ————————————————————————————————————————————————
+// B2 起导出的共用件：字节行数计数 + 只读开头判二进制（git-source / task-source 复用）
+// ————————————————————————————————————————————————
+describe("countNewlines / bufferLineCount", () => {
+  test("换行计数与 git 口径的行数（末行无换行也算一行）", () => {
+    assert.equal(bufferLineCount(Buffer.from("", "utf8")), 0);
+    assert.equal(bufferLineCount(Buffer.from("a\nb\n", "utf8")), 2);
+    assert.equal(bufferLineCount(Buffer.from("a\nb", "utf8")), 2);
+    assert.equal(bufferLineCount(Buffer.from("\n\n\n", "utf8")), 3);
+    assert.equal(countNewlines(Buffer.from("a\nb\n", "utf8"), 4), 2);
+  });
+});
+
+describe("sniffBinary", () => {
+  test("开头有 NUL → true；纯文本 → false；不在盘上 → null", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-sniff-"));
+    try {
+      const bin = join(dir, "bin.dat");
+      const txt = join(dir, "txt.txt");
+      await writeFile(bin, Buffer.concat([Buffer.from("hi"), Buffer.from([0]), Buffer.alloc(64, 7)]));
+      await writeFile(txt, "just text\n".repeat(100));
+      assert.equal(await sniffBinary(bin), true);
+      assert.equal(await sniffBinary(txt), false);
+      assert.equal(await sniffBinary(join(dir, "gone.txt")), null);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  test("NUL 在 8000 字节窗口之外不判二进制（git 的 FIRST_FEW_BYTES 口径）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-sniff-"));
+    try {
+      const late = join(dir, "late.txt");
+      await writeFile(late, Buffer.concat([Buffer.alloc(9000, 0x61), Buffer.from([0])]));
+      assert.equal(await sniffBinary(late), false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
