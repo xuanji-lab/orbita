@@ -159,7 +159,11 @@ export const ipcChannels = {
    */
   sessionUnread: "session:unread",
   sessionArchive: "session:archive",
-  /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
+  /**
+   * 迁移会话到另一个工作区（可批量）：归属与 cwd 一起换成目标工作区的（null = 回到 TASKS，
+   * cwd 换成 Home）。子会话随母会话一起走；在跑的跳过。请求 (ids: string[], workspaceId)，
+   * 回执 SessionMoveResult。cwd 由主进程按工作区 id 查，renderer 不传路径。
+   */
   sessionMove: "session:move",
   /**
    * 从某条 agent 回答另起一支（C-2）：保留该回答及之前的全部，开出一条新会话。
@@ -1029,6 +1033,18 @@ export type AgentCommand =
       /** 告知模型的那句通知（含文件清单） */
       notice: string;
     }
+  | {
+      /**
+       * 会话迁移的 pi 侧一刀（undoPiBook 同构）：在当前叶子追加一条 custom_message，
+       * 告诉模型工作目录换了、历史里的相对路径指的是旧目录。会话必须不在跑。
+       * cwd 是**新**目录。完成经 `piBookEdited` / `failed` 回传。
+       */
+      type: "movePiBook";
+      sessionId: string;
+      sourcePiSessionFile: string;
+      cwd: string;
+      notice: string;
+    }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
@@ -1328,7 +1344,7 @@ export type AgentEvent =
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
    * pending 等待者吃掉它——renderer 不消费，不广播。
    */
-  | { type: "piBookEdited"; sessionId: string; edit: "revert" | "undo" }
+  | { type: "piBookEdited"; sessionId: string; edit: "revert" | "undo" | "move" }
   | { type: "progress"; sessionId: string; progress: TranscriptProgress }
   /**
    * 模型生成的会话标题（C-3 的 `generateTitle` 命令翻译而来）。**只在成功时发**：

@@ -580,6 +580,21 @@ export const en = {
     unpin: "Unpin",
     pin: "Pin to top",
     moveTo: "Move to…",
+    moveCount: (count: number) => `Move ${plural(count, "task")} to…`,
+    selectedCount: (count: number) => `${plural(count, "task")} selected`,
+    clearSelection: "Clear selection (Esc)",
+    selectHint: "Shift-click to select a range, ⌘/Ctrl-click to add one",
+    moveSkipped: (running: number, other: number) =>
+      [
+        running > 0 ? `${plural(running, "task")} still running, not moved — stop it and try again` : null,
+        other > 0 ? `${plural(other, "task")} could not be moved` : null,
+      ]
+        .filter((part) => part !== null)
+        .join(" · "),
+    moveTasks: "Move tasks…",
+    moveHeader: "Move to… (the working folder moves too)",
+    checkHint: "Tick the tasks to move",
+    checkDone: "Done",
     exportMarkdown: "Export as Markdown…",
     unarchive: "Unarchive",
     archive: "Archive…",

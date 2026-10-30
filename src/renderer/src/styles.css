@@ -5280,3 +5280,80 @@ mark.intent-mark {
 .intent-conv-md .chat-md pre code {
   font-size: inherit;
 }
+
+/*
+ * 侧栏多选条（Shift / ⌘ 点任务行之后出现在列表上方）：已选几条 + 移到… + 取消。
+ * 安静控件，不用 accent——真正的动作在「移到…」菜单里选完目标才发生。
+ */
+.sidebar-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--option-active-bg);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.sidebar-selection-bar > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-selection-move:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+  background: transparent;
+}
+/* 勾选态的勾选框：画在任务行的图标槽里（行本身是 button，不能再套一个 input）。
+   语义由行的 aria-pressed 承担；勾上 = accent 底 + accent-fg 勾（设计系统：勾选是 accent 的合法用途） */
+.row-check {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--color-text-tertiary);
+  border-radius: 3px;
+  color: var(--color-accent-fg);
+}
+.row-check[data-checked="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.sidebar-selection-move {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.sidebar-selection-move:hover,
+.sidebar-selection-move[aria-expanded="true"] {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.sidebar-move-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+.sidebar-move-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}

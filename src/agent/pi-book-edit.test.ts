@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
-import { piBookContextRoles, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
+import { movePiBook, piBookContextRoles, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 
 /**
  * 用**真的 SessionManager** 测（不 mock）：这一刀的险处全在 pi 的落盘语义里——
@@ -174,6 +174,27 @@ describe("undoPiBook", () => {
       assert.ok(!text.includes("second"));
       assert.ok(text.includes("b.md"));
       // SessionManager 无 dispose（那是 AgentSession 的方法）；文件句柄按需打开即关
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("movePiBook", () => {
+  test("换目录后用新 cwd 重开：通知进上下文，pi 报告的 cwd 是新目录（本子头里的旧值被覆盖）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-book-"));
+    try {
+      const { file } = await bookWithTwoRounds(dir);
+      // 本子是在 /tmp/work 建的；迁移时 runtime 用新目录开它
+      const opened = SessionManager.open(file, undefined, "/tmp/elsewhere");
+      movePiBook(opened, "The working directory moved from /tmp/work to /tmp/elsewhere.");
+      const reopened = SessionManager.open(file, undefined, "/tmp/elsewhere");
+      assert.equal(reopened.getCwd(), "/tmp/elsewhere");
+      const text = JSON.stringify(reopened.buildSessionContext().messages);
+      assert.ok(text.includes("moved from /tmp/work to /tmp/elsewhere"));
+      // 旧对话原样保留，通知排在末尾（作为 user 侧消息）
+      assert.ok(text.includes("first answer") && text.includes("second answer"));
+      assert.deepEqual(piBookContextRoles(reopened), ["user", "assistant", "user", "assistant", "user"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

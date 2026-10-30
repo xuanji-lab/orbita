@@ -85,6 +85,7 @@ import {
   type CompactedRecord,
   type SessionCompletion,
   type SessionMeta,
+  type SessionMoveResult,
 } from "@shared/session";
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
@@ -315,7 +316,11 @@ export interface ChatSession {
   continueCarryoverInSource: (item: Carryover) => void;
   /** 归档：从主列表移走，**不是删除** */
   archiveSession: (id: string, archived: boolean) => void;
-  moveSession: (id: string, workspaceId: string | null) => void;
+  /**
+   * 迁移到另一个工作区（可批量）：归属与工作目录一起换，子会话跟着走，在跑的跳过。
+   * 回执里 skipped 是没搬动的——调用方要把它告诉用户，不能悄悄吞掉。
+   */
+  moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>;
   /**
    * 从某条 agent 回答另起一支（C-2）：新会话 = 该回答及之前的全部，原会话不动
    * （在跑的话照跑，槽里继续涨）。成功后切过去；两本账对不上时主进程以错误拒绝，
@@ -420,8 +425,8 @@ interface ViewHandle {
   alignMode(mode: PermissionMode): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
-  /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
-  handleMoved(id: string, targetWorkspaceId: string | null): void;
+  /** 正开着的那条迁到了别的工作区：meta、作用域芯片与 cwd 跟着变 */
+  handleMoved(id: string, targetWorkspaceId: string | null, cwd: string): void;
   /** 工作区被移出：本槽的新任务不再落在这个工作区 */
   handleWorkspaceRemoved(id: string): void;
   /** 会话列表刷新后同步「正开着的那条」的 meta（改名 / 模型标题要能换掉顶栏） */
@@ -538,7 +543,7 @@ export interface SessionEngine {
   readonly refreshCarryovers: () => void;
   readonly setCarryoverStatus: (id: string, status: Carryover["status"]) => void;
   readonly archiveSession: (id: string, archived: boolean) => void;
-  readonly moveSession: (id: string, workspaceId: string | null) => void;
+  readonly moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>;
   readonly exportSession: (id: string) => void;
   readonly removeSession: (id: string) => void;
 }
@@ -1134,15 +1139,23 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [refreshSessions],
   );
 
-  const moveSession = useCallback(
-    (id: string, targetWorkspaceId: string | null) => {
-      void api.session.move(id, targetWorkspaceId).then(() => {
-        refreshSessions();
-        // 正开着的就是这条：底栏那个作用域芯片也要跟着变（各查看槽自己认领）
-        for (const view of views.current) view.handleMoved(id, targetWorkspaceId);
-      });
+  const moveSessions = useCallback(
+    async (ids: readonly string[], targetWorkspaceId: string | null): Promise<SessionMoveResult> => {
+      const result = await api.session.move(ids, targetWorkspaceId);
+      // 新 cwd 以主进程落盘的 meta 为准（目标目录由主进程按工作区 id 查，这里不再算一遍）
+      const list = await api.session.list();
+      setSessions(list);
+      sessionsRef.current = list;
+      for (const view of views.current) view.syncOpened(list);
+      // 正开着的就是其中一条：底栏作用域芯片与 cwd 也要跟着变（各查看槽自己认领）
+      for (const id of result.moved) {
+        const meta = list.find((item) => item.id === id);
+        if (meta === undefined) continue;
+        for (const view of views.current) view.handleMoved(id, meta.workspaceId, meta.cwd);
+      }
+      return result;
     },
-    [refreshSessions],
+    [],
   );
 
   const exportSession = useCallback((id: string) => {
@@ -1234,7 +1247,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     refreshCarryovers,
     setCarryoverStatus,
     archiveSession,
-    moveSession,
+    moveSessions,
     exportSession,
     removeSession,
   };
@@ -1500,11 +1513,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           setOpened(null);
         }
       },
-      handleMoved: (id, target) => {
+      handleMoved: (id, target, nextCwd) => {
         setOpened((current) =>
-          current?.id === id ? { ...current, workspaceId: target } : current,
+          current?.id === id ? { ...current, workspaceId: target, cwd: nextCwd } : current,
         );
-        if (id === sessionRef.current) setWorkspaceId(target);
+        // 正看着的那条（活会话或盘上打开的）：芯片与 cwd 槽跟上——打开会话时这两个槽
+        // 就是从它的 meta 恢复的，迁移后不跟上会显示旧目录
+        if (id === viewedIdRef.current) {
+          setWorkspaceId(target);
+          setCwd(nextCwd);
+        }
       },
       handleWorkspaceRemoved: (id) => {
         setWorkspaceId((current) => (current === id ? null : current));
@@ -3230,7 +3248,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setCompletionSession: engine.setCompletionSession,
     archiveDoneSessions: engine.archiveDoneSessions,
     archiveSession: engine.archiveSession,
-    moveSession: engine.moveSession,
+    moveSessions: engine.moveSessions,
     branchFrom,
     exportSession: engine.exportSession,
     removeSession: engine.removeSession,

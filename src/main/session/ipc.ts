@@ -10,6 +10,7 @@ import {
   transcriptToMarkdown,
   type CarryoverStatus,
   type SessionCompletion,
+  type SessionMoveResult,
   type SessionOlderPage,
 } from "../../shared/session.ts";
 import {
@@ -39,6 +40,8 @@ export function registerSessionIpc(
   providers: ProviderStore,
   /** 轮尾产物在内置浏览器「你的」tab 打开（BrowserSandbox.openLocalFile） */
   openArtifactInBrowser: (path: string) => Promise<void>,
+  /** 迁移会话（session/move.ts 的 moveSessions，index.ts 绑好工作区表与 phase 表） */
+  moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>,
   /**
    * 会话回退成功后的钩子（index.ts 注入：意图系统作废 + 记忆系统停用 / 截段；undefined = 不启用）。
    * turnIds = 被撤回轮次的 user 记录 id；fromTurn = 回退点那条用户消息的轮号（按用户消息计、
@@ -139,7 +142,13 @@ export function registerSessionIpc(
   );
   ipcMain.handle(
     ipcChannels.sessionMove,
-    (_event, id: string, workspaceId: string | null) => store.move(id, workspaceId),
+    (_event, ids: unknown, workspaceId: unknown): Promise<SessionMoveResult> => {
+      // 入口就洗：ids 只收字符串，workspaceId 只收字符串或 null
+      if (!Array.isArray(ids)) throw new Error("session:move 需要 ids 数组");
+      const clean = ids.filter((id): id is string => typeof id === "string" && id !== "");
+      const target = typeof workspaceId === "string" && workspaceId !== "" ? workspaceId : null;
+      return moveSessions(clean, target);
+    },
   );
 
   /**

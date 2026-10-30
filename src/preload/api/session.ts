@@ -17,6 +17,7 @@ import type {
   CarryoverStatus,
   SessionCompletion,
   SessionMeta,
+  SessionMoveResult,
   SessionOlderPage,
   SessionWindowDetail,
 } from "../../shared/session.ts";
@@ -69,9 +70,9 @@ export const sessionApi = {
   /** 归档：从主列表移走，**不是删除** */
   archive: (id: string, archived: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionArchive, id, archived),
-  /** 换归属工作区；null = 回到 TASKS */
-  move: (id: string, workspaceId: string | null): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionMove, id, workspaceId),
+  /** 迁移到另一个工作区（可批量；归属与 cwd 一起换，子会话跟着走，在跑的跳过）；null = 回到 TASKS */
+  move: (ids: readonly string[], workspaceId: string | null): Promise<SessionMoveResult> =>
+    ipcRenderer.invoke(ipcChannels.sessionMove, ids, workspaceId),
   /**
    * 从某条 agent 回答另起一支（C-2）：新会话 = 该回答及之前的全部，原会话不动。
    * 返回新会话 id；两本账对不上时以错误拒绝（宁可不分支，不切错位置）。

@@ -724,9 +724,12 @@ export class SessionStore {
     return this.update(id, { archived });
   }
 
-  /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
-  move(id: string, workspaceId: string | null): Promise<void> {
-    return this.update(id, { workspaceId });
+  /**
+   * 换归属工作区与 cwd（两者同进同出；null = 回到 TASKS）。只写 meta——
+   * 在跑判断、pi 本子通知、子会话连带都在 session/move.ts 编排。
+   */
+  relocate(id: string, workspaceId: string | null, cwd: string): Promise<void> {
+    return this.update(id, { workspaceId, cwd });
   }
 
   /**
