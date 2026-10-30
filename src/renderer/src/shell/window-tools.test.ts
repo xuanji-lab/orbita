@@ -231,10 +231,12 @@ test("选中蓝底在：rail 入口走 quiet-control 配方，右栏开关跟任
 
 test("对话卡的高度链：删页头后 grid 行数跟着切换（composer 曾卡半空）", () => {
   const chat = readSource(join(RENDERER_SRC, "features/chat/ChatView.tsx"));
+  // 行数 = 页头（有才占一行 auto）+ 通栏 banner（有才占一行 auto）+ 滚动区 1fr + 输入卡 auto：
+  // 缺一行滚动区就会掉进 auto 行、输入卡掉进 1fr 行
   assert.match(
     chat,
-    /props\.hideHeader === true \? "minmax\(0,1fr\) auto" : "auto minmax\(0,1fr\) auto"/,
-    "Pane 的 grid 行没随页头有无切换——滚动区会掉进 auto 行、输入卡掉进 1fr 行",
+    /props\.hideHeader === true \? "" : "auto "\}\$\{props\.banner === undefined \? "" : "auto "\}minmax\(0,1fr\) auto/,
+    "Pane 的 grid 行没随页头 / 通栏有无切换——滚动区会掉进 auto 行、输入卡掉进 1fr 行",
   );
 });
 

@@ -115,6 +115,11 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
+import { AutomationRunBar } from "../automation/AutomationRunBar";
+import { AutomationToolLine } from "../automation/AutomationToolLine";
+import { AutomationWakeLine } from "../automation/AutomationWakeLine";
+import { useAutomationRunSessions } from "../automation/automation-context.ts";
+import { parseAutomationHeader } from "../../../../shared/automation.ts";
 import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 import {
   contextRing,
@@ -1425,6 +1430,11 @@ function ChatViewBody(props: {
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
         hideHeader={props.bareHeader === true}
+        banner={
+          openMeta != null && openMeta.automationId !== undefined && openMeta.promoted !== true ? (
+            <AutomationRunBar meta={openMeta} onPromoted={session.reloadSessions} />
+          ) : undefined
+        }
         footer={
           <>
             {notices}
@@ -1939,6 +1949,8 @@ function Pane(props: {
    * 胶囊，对话卡从工具栏下直接开始）；抽屉里的 ChatView 保留页头。
    */
   hideHeader?: boolean;
+  /** 页头与消息列之间的一条通栏（自动化新开的会话：「任务名 · 第 n 次」+ 转成普通会话）；缺席不渲染 */
+  banner?: React.ReactNode;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -1952,8 +1964,8 @@ function Pane(props: {
         display: "grid",
         // 行数随页头有无切换（2026-10-19 修复：主槽删页头后若仍是三行，滚动区会
         // 掉进第一行 auto、输入卡掉进第二行 1fr——composer 卡在半空、下方一片空白）
-        gridTemplateRows:
-          props.hideHeader === true ? "minmax(0,1fr) auto" : "auto minmax(0,1fr) auto",
+        // 通栏（banner，自动化运行会话的顶部条）自己占一行 auto，不抢滚动区那一行 1fr
+        gridTemplateRows: `${props.hideHeader === true ? "" : "auto "}${props.banner === undefined ? "" : "auto "}minmax(0,1fr) auto`,
       }}
     >
       {/* 抽屉里保留的卡内页头（主槽 hideHeader，2026-10-19 方案 B v2：会话信息住
@@ -2074,6 +2086,8 @@ function Pane(props: {
         </span>
       </header>
       )}
+
+      {props.banner}
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走。
           样式在 styles.css 的 .chat-scroll-seg（含 overflow: hidden——页脚很高时滚动段不越界盖到页脚下） */}
@@ -2780,9 +2794,22 @@ function EntryView(props: {
   sessionId: string;
 }) {
   const t = useT();
+  const runSessionIds = useAutomationRunSessions();
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") {
+    // this_session 的自动化叫醒这条会话的那一轮：细分隔线（指令正文点开看）。
+    // 自动化新开的运行会话里第一条消息照常画气泡——那里顶部有「任务名 · 第 n 次」的条
+    const firstText = entry.item.content.find((block) => block.type === "text");
+    const wake =
+      firstText !== undefined && firstText.type === "text" && !runSessionIds.has(props.sessionId)
+        ? parseAutomationHeader(firstText.text)
+        : null;
+    if (wake !== null) {
+      return (
+        <AutomationWakeLine title={wake.title} number={wake.number} max={wake.max} stamp={wake.stamp} body={wake.body} />
+      );
+    }
     const memoryRow = props.memory?.rows.get(entry.item.id);
     return (
       <>
@@ -3870,6 +3897,10 @@ function ToolLine(props: {
   // 语气」盖过去。delegate 若在此早退，一次真实失败会被 DelegateCardView 的
   // running 帧（`card === null` 时的「delegating…」呼吸）悄悄吞掉，永远显示
   // 「派出中」而不是「失败了」。
+  // 自动化：automation_create 的结果是一张卡（在右栏查看 / 暂停）；失败照通用骨架走
+  if (props.toolName === "automation_create" && !failed) {
+    return <AutomationToolLine result={result} interrupted={interrupted} />;
+  }
   if (props.toolName === "delegate" && !failed) {
     return (
       <DelegateToolLine

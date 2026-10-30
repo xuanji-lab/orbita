@@ -128,6 +128,10 @@ type Entry = { path: string; text: string };
  */
 const SAMPLE_ARGS: Record<string, unknown[][]> = {
   thinkingLevel: [["xhigh", "claude-opus-4-6"], ["medium", null]],
+  // 自动化：间隔的单位、触发方式是枚举；wake 的上限可以为 null（没有上限）
+  "automation.sched.interval": [[1, "hour"], [15, "minute"], [2, "day"]],
+  "automation.wake": [["日报", 3, 12, "10-31 01:45"], ["日报", 3, null, "10-31 01:45"]],
+  "automation.runBar.label": [["日报", 3, "10-31 01:45", "schedule"], ["日报", 3, "10-31 01:45", "manual"], ["日报", 3, "10-31 01:45", "caughtUp"]],
   // 语音文案的参数是厂商 id：两家各调一遍，插值出来的名字才被守卫看到
   "voice.failures.not-configured": [["doubao"], ["stepfun"]],
   "voice.failures.unauthorized": [["doubao"], ["stepfun"]],

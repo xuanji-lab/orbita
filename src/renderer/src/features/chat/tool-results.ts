@@ -186,6 +186,8 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "delegate",
   "reply_subsession",
   "report_to_parent",
+  // 自动化：建出来的那张卡是给用户看的结果（在右栏查看 / 暂停），不是「工作过程」，不该被折叠吞掉
+  "automation_create",
 ]);
 
 /**

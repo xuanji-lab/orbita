@@ -95,6 +95,15 @@ const CHECKS = [
     rightPad: 12,
     skipNoTrailing: true,
   },
+  {
+    name: "自动化·行：次数钉在右血线（悬停动作簇绝对定位盖在上面，静止不占位）",
+    row: ".auto-row",
+    leading: ".auto-ico",
+    trailing: ".auto-count",
+    // .auto-row 的横向内边距 var(--space-3)；没有运行记录的行次数为空串，元素仍在 DOM
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });

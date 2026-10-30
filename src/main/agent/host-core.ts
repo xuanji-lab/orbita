@@ -14,6 +14,7 @@ import type {
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
+import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
@@ -618,6 +619,22 @@ export class AgentHostCore {
       requestId,
       ...(outcome.ok
         ? { ok: true as const, text: outcome.text, ...(outcome.terminal === undefined ? {} : { terminal: outcome.terminal }) }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 自动化：automationRequest 的回执（delegate 同款）：不 ensure、发完即回。 */
+  answerAutomation(requestId: string, outcome: AutomationToolOutcome): void {
+    this.child?.postMessage({
+      type: "automationResult",
+      requestId,
+      ...(outcome.ok
+        ? {
+            ok: true as const,
+            text: outcome.text,
+            ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
+            ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
+          }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }

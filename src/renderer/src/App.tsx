@@ -39,6 +39,14 @@ import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
+import { AutomationPanel } from "./features/automation/AutomationPanel";
+import {
+  AutomationContext,
+  AutomationRunSessionsContext,
+  type AutomationUi,
+} from "./features/automation/automation-context.ts";
+import { runningCount } from "./features/automation/automation-view.ts";
+import { useAutomations } from "./features/automation/useAutomations.ts";
 import type { CiteFocusRequest } from "./features/files/cite-focus.ts";
 import { CitationOpenContext } from "./features/chat/citation-context.ts";
 import type { PdfCitation } from "@shared/pdf-quote";
@@ -569,10 +577,12 @@ export function App() {
   useEffect(() => {
     const prev = prevStatesRef.current;
     prevStatesRef.current = engine.states;
-    // 只认根会话；列表里还查不到的（刚建）当根会话
-    const settled = settledSessions(prev, engine.states).filter(
-      (id) => session.sessions.find((meta) => meta.id === id)?.parentId === undefined,
-    );
+    // 只认根会话；列表里还查不到的（刚建）当根会话。自动化新开的运行会话（没转成普通会话的）也不单独
+    // 打扰人——它们收在右栏自动化面板里，跑完的结果看那一条自动化的运行记录
+    const settled = settledSessions(prev, engine.states).filter((id) => {
+      const meta = session.sessions.find((candidate) => candidate.id === id);
+      return meta === undefined || (meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true));
+    });
     if (settled.length === 0) return;
     const windowActive = !isWindowInactive({
       hasFocus: document.hasFocus(),
@@ -865,6 +875,30 @@ export function App() {
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);
   const memoryScopes = useMemoryScopes(overlay === "memory");
+  // 自动化（实验功能 automation）：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
+  const automationOn = experimentalFeatures["automation"] === true;
+  const automations = useAutomations(automationOn);
+  const [automationFocus, setAutomationFocus] = useState<{ id: string; nonce: number } | null>(null);
+  const openAutomationPanel = useCallback((automationId?: string): void => {
+    setRightPanel("automation");
+    if (automationId !== undefined) setAutomationFocus((current) => ({ id: automationId, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
+  // 开关关掉：面板位上若正开着自动化面板就收起（入口一并从右栏消失）
+  if (!automationOn && rightPanel === "automation") setRightPanel(null);
+  const automationUi = useMemo<AutomationUi>(
+    () => ({ automations: automations.automations, openPanel: openAutomationPanel, act: automations.act }),
+    [automations.automations, automations.act, openAutomationPanel],
+  );
+  // 运行会话 id 集：按**内容**稳定——会话列表每跑完一轮都会换新数组，集合没变就别让订阅它的每条用户消息重渲染
+  const runSessionKey = session.sessions
+    .filter((meta) => meta.automationId !== undefined && meta.promoted !== true)
+    .map((meta) => meta.id)
+    .sort()
+    .join("\n");
+  const runSessionIds = useMemo<ReadonlySet<string>>(
+    () => new Set(runSessionKey === "" ? [] : runSessionKey.split("\n")),
+    [runSessionKey],
+  );
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -958,6 +992,8 @@ export function App() {
   return (
     <LocaleContext.Provider value={locale}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
+    <AutomationContext.Provider value={automationUi}>
+    <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     <CitationOpenContext.Provider value={openCitation}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
@@ -1124,6 +1160,23 @@ export function App() {
                   picker={tokenPickerOn ? mcpPicker : undefined}
                   onInsert={insertPanelToken}
                 />
+              ) : shownPanel === "automation" ? (
+                <AutomationPanel
+                  state={automations}
+                  workspaceId={session.workspaceId}
+                  workspaces={session.workspaces}
+                  sessionId={mainSessionId}
+                  sessions={session.sessions}
+                  providers={providers}
+                  keepAwake={settings.automationKeepAwake === true}
+                  onKeepAwakeChange={(next) => changeSettings({ automationKeepAwake: next })}
+                  focus={automationFocus}
+                  onOpenSession={(id) => {
+                    setOverlay(null);
+                    void session.openSession(id);
+                  }}
+                  onAskInChat={() => session.setDraft(t.automation.addByChatDraft)}
+                />
               ) : shownPanel === "terminal" ? (
                 <TerminalPanel
                   cwd={session.cwd}
@@ -1194,6 +1247,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
+          automation={automationOn ? { running: runningCount(automations.automations) } : null}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }
@@ -1214,6 +1268,8 @@ export function App() {
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
     </PastedTextCollapseContext.Provider>
+    </AutomationRunSessionsContext.Provider>
+    </AutomationContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>
   );

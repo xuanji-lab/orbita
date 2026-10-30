@@ -220,6 +220,8 @@ export function registerAgentIpc(
     if (current.experimentalFeatures?.["intent-system"] !== true) return { ingest: false };
     const effective = effectiveIntentSettings(current.intent);
     const meta = await sessions.readMeta(sessionId);
+    // 自动化跑出的会话：无人值守，召回的确认卡会永远等一个不在场的人；提示词也不是用户亲口说的话
+    if (meta?.automationId !== undefined) return { ingest: false };
     const detail = meta === null ? null : await sessions.load(sessionId);
     return intentTurnEnv({
       experimentOn: true,
@@ -268,6 +270,17 @@ export function registerAgentIpc(
     if (memoryTurns === undefined) return;
     const meta = await sessions.readMeta(sessionId).catch(() => null);
     if (memoryBuildEligible(meta, text)) memoryTurns.begin(sessionId, text);
+  };
+
+  /**
+   * 自动化工具（实验功能 automation）的注册开关：实验开关开着，且这条会话既不是子会话、
+   * 也不是自动化自己跑出来的（防递归：自动化不能再建自动化）。新会话首轮 meta 还没建，视为根会话。
+   * 注册只是第一道，automationRequest 进主进程时 applyAutomationRequest 还会按会话身份再拒一次。
+   */
+  const readAutomationTools = async (sessionId: string): Promise<boolean> => {
+    if ((await settings.read()).experimentalFeatures?.["automation"] !== true) return false;
+    const meta = await sessions.readMeta(sessionId).catch(() => null);
+    return meta?.automationId === undefined && meta?.parentId === undefined;
   };
 
   /** 记忆系统的实验开关：开着时轮前召回（sessionMemory，根会话与子会话都召回）
@@ -425,10 +438,12 @@ export function registerAgentIpc(
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     const memoryOn = await readMemoryOn();
     if (memoryOn) await beginMemoryTurn(input.sessionId, text);
+    const automationTools = await readAutomationTools(input.sessionId);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
       ...(memoryOn ? { sessionMemory: true } : {}),
+      ...(automationTools ? { automationTools: true } : {}),
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
@@ -481,7 +496,8 @@ export function registerAgentIpc(
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     const memoryOn = await readMemoryOn();
     if (memoryOn) await beginMemoryTurn(input.sessionId, text);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const automationTools = await readAutomationTools(input.sessionId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
