@@ -224,6 +224,75 @@ test("appendScope：conflictWith 指的旧条（本层或 user 层）直接标 s
   assert.equal(fresh?.status, undefined);
 });
 
+/** 另一条会话的单轮段，时间可指定（冲突定向按条目的 at，即支撑轮的时间） */
+function episodeAt(at: number, episodeId = `ep_${at}`): MemoryEpisode {
+  return {
+    episodeId,
+    sessionId: `s_${at}`,
+    scopeId: "ws-1",
+    fromTurn: 1,
+    toTurn: 1,
+    openedAt: at,
+    lastAt: at,
+    turns: [{ turn: 1, at, userText: "u", assistantText: "a" }],
+  };
+}
+
+test("appendScope：更早的说法后写进来（从历史生成）——它自己落成 stale，已有的新说法保持 active", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const [newer] = await store.appendScope("ws-1", episodeAt(29_000), [
+    { type: "preference", text: "用户要求汇报分三点", reason: "r", keywords: [], turns: [1] },
+  ]);
+  const [older] = await store.appendScope("ws-1", episodeAt(20_000), [
+    { type: "preference", text: "用户要求汇报写整段", reason: "r", keywords: [], turns: [1], conflictWith: newer!.id },
+  ]);
+  const scope = await store.listScope("ws-1");
+  const newerNow = scope.find((item) => item.id === newer!.id)!;
+  const olderNow = scope.find((item) => item.id === older!.id)!;
+  assert.equal(newerNow.status, undefined, "后来的说法不能被更早的旧话顶掉");
+  assert.equal(olderNow.status, "stale");
+  // 链按时间：新说法指向旧说法（「恢复旧说法」恢复的就是它），旧说法不再指新说法
+  assert.equal(newerNow.conflictWith, older!.id);
+  assert.equal(olderNow.conflictWith, undefined);
+});
+
+test("appendScope：旧说法插进已有链的时间位置（链按 at 先后）", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const [first] = await store.appendScope("ws-1", episodeAt(10_000), [
+    { type: "preference", text: "v10", reason: "r", keywords: [], turns: [1] },
+  ]);
+  const [third] = await store.appendScope("ws-1", episodeAt(30_000), [
+    { type: "preference", text: "v30", reason: "r", keywords: [], turns: [1], conflictWith: first!.id },
+  ]);
+  // v20 后写进来，模型判它与现行的 v30 矛盾
+  const [second] = await store.appendScope("ws-1", episodeAt(20_000), [
+    { type: "preference", text: "v20", reason: "r", keywords: [], turns: [1], conflictWith: third!.id },
+  ]);
+  const byId = new Map((await store.listScope("ws-1")).map((item) => [item.id, item]));
+  assert.equal(byId.get(third!.id)?.conflictWith, second!.id);
+  assert.equal(byId.get(second!.id)?.conflictWith, first!.id);
+  assert.equal(byId.get(third!.id)?.status, undefined);
+  assert.equal(byId.get(second!.id)?.status, "stale");
+  assert.equal(byId.get(first!.id)?.status, "stale");
+});
+
+test("appendScope：实时的新说法（更晚）照旧顶掉旧条", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
+  const store = new MemoryEntryStore(dir);
+  const [old] = await store.appendScope("ws-1", episodeAt(20_000), [
+    { type: "preference", text: "汇报写整段", reason: "r", keywords: [], turns: [1] },
+  ]);
+  const [fresh] = await store.appendScope("ws-1", episodeAt(29_000), [
+    { type: "preference", text: "汇报分三点", reason: "r", keywords: [], turns: [1], conflictWith: old!.id },
+  ]);
+  const byId = new Map((await store.listScope("ws-1")).map((item) => [item.id, item]));
+  assert.equal(byId.get(old!.id)?.status, "stale");
+  assert.equal(byId.get(fresh!.id)?.status, undefined);
+  assert.equal(byId.get(fresh!.id)?.conflictWith, old!.id);
+});
+
 test("appendRevision：新条同层、source agent、出处是会话那一轮、关键词沿用；旧条 stale", async () => {
   const dir = await mkdtemp(join(tmpdir(), "orbita-memory-"));
   const store = new MemoryEntryStore(dir);

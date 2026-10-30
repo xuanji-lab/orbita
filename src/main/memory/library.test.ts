@@ -265,3 +265,29 @@ test("sessionView：meta 读不到 → token null 但视图照常（零轮）", 
   assert.equal(view.token, null);
   assert.deepEqual(view.turns, []);
 });
+
+test("演变链按原始问答时间（at）排：指针方向与时间相反的旧数据也是旧 → 新", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  const entries = new MemoryEntryStore(dir);
+  const base = {
+    type: "preference" as const,
+    reason: "r",
+    keywords: [] as string[],
+    layer: "workspace" as const,
+    scopeId: "ws-1",
+    sessionId: "s1",
+    turns: [1],
+    episodeId: "ep_1",
+    source: "chat" as const,
+  };
+  // 插链之前的旧行为：后写进来的旧说法（at 更早）指向了已有的新说法
+  const rows: MemoryEntry[] = [
+    { ...base, id: "mem_new", text: "汇报分三点", at: 29_000, status: "stale" },
+    { ...base, id: "mem_old", text: "汇报写整段", at: 20_000, conflictWith: "mem_new" },
+  ];
+  await entries.writeLayer(WS_TOKEN, rows);
+  const items = await makeLibrary(dir).listEntries({ token: WS_TOKEN });
+  for (const item of items) {
+    assert.deepEqual(item.evolution.map((node) => node.text), ["汇报写整段", "汇报分三点"]);
+  }
+});

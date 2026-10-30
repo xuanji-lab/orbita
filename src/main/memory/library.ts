@@ -269,7 +269,9 @@ function evolutionOf(
       candidate.at < acc.at ? candidate : acc,
     );
   }
-  return chain;
+  // 链上先后按原始问答时间（at）：从历史生成补进来的旧说法已按时间插进链，这里再按 at
+  // 稳定排一遍，兜住插链之前留下的旧数据——界面上「谁先谁后」只认对话发生的时间
+  return chain.sort((a, b) => a.at - b.at);
 }
 
 /** 轮没有注入记录时（只记住了东西的轮），at 取该轮条目的最新时间。 */
