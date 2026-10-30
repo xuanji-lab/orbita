@@ -15,7 +15,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat, open, readFile, readlink } from "node:fs/promises";
+import { lstat, readFile, readlink } from "node:fs/promises";
 import { dirname, posix, resolve, win32 } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import {
@@ -34,7 +34,13 @@ import {
 } from "../../shared/review.ts";
 import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
-import { diskUntrackedProbe, GIT_BINARY_SNIFF_BYTES, untrackedLineStats, type UntrackedProbe } from "./untracked-lines.ts";
+import {
+  bufferLineCount,
+  diskUntrackedProbe,
+  sniffBinary,
+  untrackedLineStats,
+  type UntrackedProbe,
+} from "./untracked-lines.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -197,33 +203,13 @@ const diskUntrackedReader: UntrackedReader = async (path, workspace) => {
     if (info.isSymbolicLink()) return { symlink: await readlink(path) };
     if (!info.isFile()) return null;
     if (info.size <= REVIEW_DIFF_MAX_BYTES) return await readFile(path);
-    const sniffed = await readHead(path, GIT_BINARY_SNIFF_BYTES);
-    return sniffed === null ? null : sniffed.includes(0) ? { binary: true } : { tooLarge: true };
+    // 超限文件只喳开头判二进制（同 untracked-lines 的 git 口径）：是二进制如实报，是文本才报 tooLarge
+    const binary = await sniffBinary(path);
+    return binary === null ? null : binary ? { binary: true } : { tooLarge: true };
   } catch {
     return null;
   }
 };
-
-/** 只读开头至多 length 字节（判二进制用）：打不开 / 读不了返回 null */
-async function readHead(path: string, length: number): Promise<Buffer | null> {
-  try {
-    const handle = await open(path, "r");
-    try {
-      const buffer = Buffer.alloc(length);
-      let read = 0;
-      while (read < length) {
-        const { bytesRead } = await handle.read(buffer, read, length - read, read);
-        if (bytesRead === 0) break;
-        read += bytesRead;
-      }
-      return read === length ? buffer : buffer.subarray(0, read);
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  } catch {
-    return null;
-  }
-}
 
 /**
  * renderer 传来的路径能不能当这个工作区里的文件：只认相对路径（列表给的就是工作区相对），
@@ -556,7 +542,7 @@ export async function gitReviewDiff(
       }
       if (found.includes(0)) return { diff: null, binary: true, restored: false };
       // 字节没超限但行数超限（极短行）：不用造 patch 就能判——patch 的 + 行数就是文件行数
-      if (countLines(found) > REVIEW_DIFF_MAX_LINES) {
+      if (bufferLineCount(found) > REVIEW_DIFF_MAX_LINES) {
         return reviewDiffTooLarge("lines", `${path} has more lines than the inline diff limit`);
       }
       diff = createTwoFilesPatch("/dev/null", path, "", found.toString("utf8"));
@@ -567,13 +553,4 @@ export async function gitReviewDiff(
     }
   }
   return { diff: diff === "" ? null : diff, binary: false, restored: diff === "" };
-}
-
-/** 字节里有多少行（git 口径：最后一个字节不是换行也第一行，同 untracked-lines 的数法） */
-function countLines(bytes: Buffer): number {
-  let lines = 0;
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] === 0x0a) lines += 1;
-  }
-  return bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a ? lines + 1 : lines;
 }
