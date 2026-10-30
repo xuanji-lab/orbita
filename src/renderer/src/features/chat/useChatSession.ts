@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
-import { planAwaitingIn } from "../context/plan-timeline.ts";
+import { planAwaitingIn, planTimeline } from "../context/plan-timeline.ts";
+import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
@@ -3010,11 +3012,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setScanFailed({ sessionId: closingScan.sessionId, messageId: scanMessageIdIn(items) });
       return;
     }
+    // 留下的事预填（carryover-prefill.ts）：这条任务里已经当场记下了以后再做、计划里写明了哪几步没做完——
+    // 收尾只确认，不再采信模型回看整段对话收割出来的那一组；没有计划也没有以后再做的老会话才沿用它
+    const planNow = planTimeline(items.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME));
+    const prefilled = prefillLeft({
+      modelLeft: draft.left,
+      unfinishedSteps:
+        planNow === null ? null : planNow.current.items.filter((step) => step.status !== "done").map((step) => step.text),
+      noticed: engine.carryovers.filter((item) => item.sourceSessionId === closingScan.sessionId && item.status === "open"),
+    });
     // 两组都空也弹卡：用户可能还想自己加一件（v1 时代这里直接标完成——那时卡上只有留下的事）
-    setScanResult({ sessionId: closingScan.sessionId, plan: closingScan.plan, draft });
+    setScanResult({ sessionId: closingScan.sessionId, plan: closingScan.plan, draft: { ...draft, left: prefilled } });
     // entry.phase 是渲染值，它的变化就是本 effect 的触发源——必须进依赖；
     // engine 整体每次渲染都是新引用，取稳定的 statesRef / setCompletionSession
-  }, [closingScan, viewedId, entry.phase, engine.statesRef, engine.setCompletionSession]);
+  }, [closingScan, viewedId, entry.phase, engine.statesRef, engine.setCompletionSession, engine.carryovers]);
 
   /**
    * 发出扫描消息（首次与重试共用）。**它是一条普通的用户消息**：走与
@@ -3157,16 +3168,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       );
       const left = draft.left.filter((entry) => entry.title.trim() !== "");
       const done = draft.done.filter((entry) => entry.title.trim() !== "");
-      void api.session
-        .wrapupConfirm(id, {
-          throughTurn: plan.lastTurn,
-          done: done.map((entry) => ({ title: entry.title, turns: entry.turns })),
-          carryovers: left.map((entry) => ({
-            title: entry.title,
-            detail: entry.detail,
-            sourceMessageRange: locateMessageRange(items, entry.detail),
-          })),
-        })
+      // 卡上留着的、本来就开着的以后再做不再新记；在卡上删掉的标丢掉（carryover-prefill.ts）
+      const { drafts, dismissIds } = reconcileLeft({
+        left,
+        noticed: engine.carryovers.filter((item) => item.sourceSessionId === id && item.status === "open"),
+        locate: (detail) => locateMessageRange(items, detail),
+      });
+      // 先丢掉卡上删了的，再确认：主进程据此数「还开着的」决定标 done 还是 done_with_todos
+      void Promise.all(dismissIds.map((carryoverId) => api.session.carryoverSetStatus(carryoverId, "dismissed")))
+        .then(() =>
+          api.session.wrapupConfirm(id, {
+            throughTurn: plan.lastTurn,
+            done: done.map((entry) => ({ title: entry.title, turns: entry.turns })),
+            carryovers: drafts,
+          }),
+        )
         .then(() => {
           engine.refreshSessions();
           engine.refreshCarryovers();
