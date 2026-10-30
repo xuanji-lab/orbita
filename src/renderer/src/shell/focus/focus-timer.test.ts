@@ -13,6 +13,7 @@ import {
   focusProgress,
   formatFocusClock,
   formatStartClock,
+  pickerRequestFresh,
   remainMs,
   resolvePickerWorkspace,
   shouldStartSummary,
@@ -206,4 +207,13 @@ describe("summaryWindowOf：素材窗口在起跑时冻结", () => {
     // 错误做法：拿之后某一刻重算，until 跟着变——重试读的就是另一段素材了
     assert.equal(summaryWindowOf(run, 40 * 60_000).until, 40 * 60_000);
   });
+});
+
+test("pickerRequestFresh：同一遭浮层请求只开一次（消费高水位）", () => {
+  // 新请求（token 更高）→ 开
+  assert.equal(pickerRequestFresh(3, 2), true);
+  // 同一遭（已消费过）→ 不再开：之后每次回到 off 都不重弹
+  assert.equal(pickerRequestFresh(3, 3), false);
+  // 旧请求回放（token 更低）→ 不开
+  assert.equal(pickerRequestFresh(2, 3), false);
 });

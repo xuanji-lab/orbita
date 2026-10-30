@@ -12,6 +12,7 @@ import {
   focusProgress,
   formatFocusClock,
   formatStartClock,
+  pickerRequestFresh,
   remainMs,
   resolvePickerWorkspace,
   wheelIndex,
@@ -96,10 +97,15 @@ export function FocusControl(props: {
   const wsName = (id: string | null): string =>
     (id !== null ? props.workspaces.find((w) => w.id === id)?.name : undefined) ?? t.focus.deletedWorkspace;
 
-  // 外部请求开浮层（token 变了才动，避免渲染期 setState 环）
+  // 外部请求开浮层（token 变了才动，避免渲染期 setState 环）；**消费高水位**：
+  // 同一遭请求只开一次——之后每一次回到 off（结束一轮、Esc 关掉再开一轮）
+  // 都不重弹（pickerRequestFresh，纯函数带测试）
+  const pickerConsumedRef = useRef(0);
   useEffect(() => {
     if (props.pickerRequest === null) return;
     if (props.status.kind !== "off") return;
+    if (!pickerRequestFresh(props.pickerRequest.token, pickerConsumedRef.current)) return;
+    pickerConsumedRef.current = props.pickerRequest.token;
     setWorkspaceId(props.pickerRequest.workspaceId);
     if (props.pickerRequest.minutes !== undefined) setMinutes(props.pickerRequest.minutes);
     setPop("picker");

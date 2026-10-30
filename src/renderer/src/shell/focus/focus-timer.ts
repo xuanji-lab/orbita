@@ -55,6 +55,18 @@ export function shouldStartSummary(run: FocusRun, now: number): boolean {
 }
 
 /**
+ * 浮层请求的已消费判定：token 只递增，同一遭请求只开一次浮层。
+ *
+ * 原来的 effect 只看「请求非空 + 相位是 off」：请求消费过一次后，之后每一次
+ * 回到 off（手动开完一轮文专注、结束一轮、Esc 关掉浮层再开一轮）effect 重跑
+ * 都会把浮层再弹一次——同一遭请求被消费多次。消费标记就是 token 的高水位：
+ * 只有权号比已消费的高（新请求）才再开。
+ */
+export function pickerRequestFresh(token: number, consumed: number): boolean {
+  return token > consumed;
+}
+
+/**
  * 一次「对表」该做的事。两个标志都是**跨过关键时刻**才算，平常的日子两个都 false
  * ——调用方据此完全不 setState（`perf(focus)`：App 不每秒重渲染）。
  */
