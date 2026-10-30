@@ -13,7 +13,7 @@
 /** 侧栏视图态：设置盖层开没开 + 两个子视图开没开（App 持有，本模块只做纯计算） */
 export interface RailSubviewState {
   /** 与 Sidebar 的 `Overlay` 同构；不是 import 是为了让本模块零依赖、可直接加载 */
-  overlay: "settings" | null;
+  overlay: "settings" | "memory" | null;
   showArchived: boolean;
   showCarryovers: boolean;
 }

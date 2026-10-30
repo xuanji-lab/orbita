@@ -3,7 +3,8 @@
  *
  *   usage:price-chart（agent-ipc.ts 的 ipcChannels.usagePriceChart）  renderer 拉一份现算的图数据
  *
- * 设置 › 模型服务的卡片墙下面那张散点图：**一个点 = 型号 × 思考档**，也就是一条榜单条目
+ * 设置 › 模型服务的卡片墙下面那张散点图：**一个点 = 型号 × 思考档**，也就是一条榜单条目，或用户
+ * 实测过、榜单没评的一档（借最高档的分，见 `PriceChartPoint.scoreFrom`）
  * （用户 2026-10-24：「其实只要看得出模型的数据就好了，不关心它有多少个服务商」）。同一个型号
  * 挂在几家服务商下、或用别名（k3 / kimi-k3）添加，都合成一个点，契约里因此没有服务商字段。
  *
@@ -72,26 +73,35 @@ export interface PriceChartPoint {
    * MIN_MEASURED_TASKS），点按估算画，悬停时另写一行「实测 n 个任务 $x」。实测点上缺席。
    */
   measured?: { cost: number; samples: number };
+  /**
+   * **借来的分**（用户 2026-10-25：「有些榜单，没有测，我们就用 max 顶替吧」，推翻 2026-10-24 的「不借分、
+   * 单列一组」）：榜单在当前分类没评这一档，纵轴借同型号榜单评过的最高档。字段值就是那一档
+   * （多半是 max），boardName / score / harness 都是那一档的。只给用户实测过的档画——没用过的档
+   * 估算花费与档无关，画出来只是源档那个点的复制。
+   *
+   * 借分点**不进帕累托前沿**：分不是这一档自己的，最高档的分配上低档的花费会把前沿往左上拉。
+   */
+  scoreFrom?: ThinkingLevel;
+  /**
+   * 并进这个点的、榜单没评的档：它们借的就是这一点的分，任务又不够门槛、横轴按估算——而估算
+   * 与档无关。这一点自己也是估算时，单独画就与它叠在同一个位置（点不开下面那个），所以并进来，
+   * 点开时逐档写「也代表中：实测 1 个任务 $x」。
+   */
+  folded?: PriceChartFoldedLevel[];
+}
+
+/** 并进某个点的榜单没评的档（见 `PriceChartPoint.folded`） */
+export interface PriceChartFoldedLevel {
+  thinkingLevel: ThinkingLevel;
+  /** 这一档的实测任务数（各服务商合计），不到门槛 */
+  samples: number;
+  /** 这一档各任务花费的中位数，美元 */
+  cost: number;
 }
 
 /** 已添加但不能画进图的型号（列在图下，按型号去重：别名合成一条，不缀服务商） */
 export interface PriceChartModelRef {
   modelId: string;
-}
-
-/**
- * 用过、但当前分类的榜单没评这一档：这个型号在榜上有条目，只是没有这一档（用户用 Fable 5.1 的
- * 高档发过消息，榜单只评了最高档）。有花费、没有分数——**不借别的档的分、不画点**，单列一组。
- */
-export interface PriceChartUnratedLevel {
-  modelId: string;
-  thinkingLevel: ThinkingLevel;
-  /** 这一档的实测任务数（各服务商合计，不受实测门槛限制） */
-  samples: number;
-  /** 这一档各任务花费的中位数，美元 */
-  cost: number;
-  /** 榜单在当前分类评过的档（悬停 / 点开时写「榜单只评了：最高」） */
-  ratedLevels: ThinkingLevel[];
 }
 
 export interface PriceChartCategoryData {
@@ -104,8 +114,6 @@ export interface PriceChartCategoryData {
   unranked: PriceChartModelRef[];
   /** 上了榜、但既没有实测花费也找不到官方单价，横轴没法定：列出来提示去填费率 */
   unpriced: PriceChartModelRef[];
-  /** 用过、但榜单没评的档（按型号 × 档去重；整个型号不在榜上的进 unranked，两组不重复） */
-  unratedLevels: PriceChartUnratedLevel[];
 }
 
 /** 估算用的 token 画像：构成是占比（四项和为 1），medianTaskTokens 是全部任务 token 量的中位数 */

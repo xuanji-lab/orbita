@@ -37,6 +37,7 @@
  */
 import type { ModelCostDecl } from "../../shared/provider.ts";
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
+import { knownModelParams } from "../../shared/known-models.ts";
 import { lookupCatalogModel, type CatalogPreference } from "../../shared/model-defaults.ts";
 import { stampedThinkingLevel, type SessionRecord } from "../../shared/session.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
@@ -442,7 +443,8 @@ function isPriced(cost: ModelCostDecl | undefined): cost is ModelCostDecl {
 
 /**
  * 这个（服务商，型号）的**官方单价**：用户自填的（非全零）> 本家目录（与会话注册同一条查找，
- * 本家 > 同协议 > 其余 > Claude 家族）> 全目录里同 id 的非零单价（同协议先）。都没有 → null。
+ * 本家 > 同协议 > 其余 > Claude 家族）> 全目录里同 id 的非零单价（同协议先）> 型号白名单的
+ * officialCost（只补目录全都缺价的 id，理由见 known-models 的字段注释）。都没有 → null。
  *
  * 全零不算数：套餐目录（zai-coding-cn、qwen-token-plan）的同一型号单价是 0，那是「包月不按量」，
  * 不是「这个型号不要钱」——图要的是官方按量价，往下找。
@@ -464,5 +466,6 @@ export function officialRates(
     const cost = provider.models.find((model) => model.id === modelId)?.cost;
     if (isPriced(cost)) return { ...cost };
   }
-  return null;
+  const listed = knownModelParams(modelId).officialCost;
+  return isPriced(listed) ? { ...listed } : null;
 }

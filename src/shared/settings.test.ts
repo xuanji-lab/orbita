@@ -520,12 +520,27 @@ describe("parseSettings 的 starredModels（模型星标）", () => {
   });
 });
 
-describe("parseSettings 的 providerCardSize（模型服务的卡片尺寸）", () => {
-  it("large / small 留下，其余当没选过（缺席 = large）", () => {
-    deepStrictEqual(parseSettings({ providerCardSize: "small" }).providerCardSize, "small");
-    deepStrictEqual(parseSettings({ providerCardSize: "large" }).providerCardSize, "large");
-    deepStrictEqual("providerCardSize" in parseSettings({ providerCardSize: "huge" }), false);
-    deepStrictEqual("providerCardSize" in parseSettings({}), false);
+describe("parseSettings 的 providersPage（模型服务页的界面记忆）", () => {
+  it("卡片尺寸、仅显示已添加、价格图分类：认得的留下，不认识的当没选过", () => {
+    deepStrictEqual(
+      parseSettings({ providersPage: { cardSize: "small", onlyAdded: true, chartCategory: "coding" } }).providersPage,
+      { cardSize: "small", onlyAdded: true, chartCategory: "coding" },
+    );
+    deepStrictEqual(
+      parseSettings({ providersPage: { cardSize: "huge", onlyAdded: "yes", chartCategory: "vision" } }).providersPage,
+      undefined,
+    );
+    deepStrictEqual("providersPage" in parseSettings({}), false);
+    deepStrictEqual("providersPage" in parseSettings({ providersPage: {} }), false);
+  });
+
+  it("旧的顶层 providerCardSize 迁进来（新位置优先），解析产物不再带旧键", () => {
+    const migrated = parseSettings({ providerCardSize: "small" });
+    deepStrictEqual(migrated.providersPage, { cardSize: "small" });
+    deepStrictEqual("providerCardSize" in migrated, false);
+    deepStrictEqual(parseSettings({ providerCardSize: "small", providersPage: { cardSize: "large" } }).providersPage, {
+      cardSize: "large",
+    });
   });
 });
 

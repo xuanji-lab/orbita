@@ -15,7 +15,11 @@ export function applyNativeTheme(settings: AppSettings): void {
   nativeTheme.themeSource = resolveNativeThemeSource(settings.theme);
 }
 
-export function registerSettingsIpc(store: SettingsStore): void {
+export function registerSettingsIpc(
+  store: SettingsStore,
+  /** 写入成功后的观察者（如实验开关切换要拉起 / 停后台进程） */
+  onChange?: (next: AppSettings) => void,
+): void {
   ipcMain.handle(ipcChannels.settingsGet, () => store.read());
 
   ipcMain.handle(
@@ -23,6 +27,7 @@ export function registerSettingsIpc(store: SettingsStore): void {
     async (_event, patch: SettingsPatch): Promise<AppSettings> => {
       const next = await store.write(patch);
       applyNativeTheme(next);
+      onChange?.(next);
       return next;
     },
   );

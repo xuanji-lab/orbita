@@ -16,11 +16,10 @@ import {
   type PriceChartModelRef,
   type PriceChartPoint,
   type PriceChartScoreUnit,
-  type PriceChartUnratedLevel,
 } from "../../shared/price-chart.ts";
 import type { Provider } from "../../shared/provider.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/thinking.ts";
-import { boardBaseOf, boardEntriesFor, boardIndexOf, type BoardRow } from "./arena-board.ts";
+import { boardBaseOf, boardEntriesFor, boardIndexOf, type BoardEntry, type BoardRow } from "./arena-board.ts";
 import { modelGroups } from "./model-groups.ts";
 import {
   estimateTaskCost,
@@ -70,26 +69,66 @@ const MIN_MEASURED_TASKS = 3;
 const costKey = (base: string, level: ThinkingLevel | "any") => `${base}\u0000${level}`;
 
 /**
- * 用过、但当前分类的榜单没评的档（用户 2026-10-24 拍板，方案 b）：这个型号在榜上有条目，只是没有
- * 这一档——有花费、没有分数。只要这一档有实测任务（任意数量，不受实测门槛限制）就列出来。
+ * 用过、但当前分类的榜单没评的档：**借同型号榜单评过的最高档的分**（用户 2026-10-25：「有些榜单，
+ * 没有测，我们就用 max 顶替吧」——推翻 2026-10-24 的方案 b「不借分、单列一组」）。榜单只挑值得测的档
+ * 来评，没评的档按最高档的分画，点上标「借分」、图下写明（renderer），不进帕累托前沿（见契约
+ * `PriceChartPoint.scoreFrom`）。
  *
- * **不借分数、不画点**：拿最高档的分给高档用，等于替 Arena 编一个它没测过的数；图上的每个点都必须
- * 是榜单真评过的「型号 × 档」。榜单条目是没标档的那种（GLM-5.3-Flash）时不列：那个点的横轴本来就
- * 取这个型号全部档位的任务，没有被漏掉的档。
+ * 只借给用户实测过的档（任意任务数）：没用过的档估算花费与档无关，借了也只是源档那一点的复制。
+ * 榜单条目没标档的（GLM-5.3-Flash）不借：那个点的横轴本来就取这个型号全部档位的任务。
+ *
+ * 横轴的规矩与评过的档一样：够门槛用实测中位数；不够门槛按估算——估算与档无关，源档那一点也是
+ * 估算时两点会叠在同一个位置，所以并进源档那一点（`folded`），不另画。
  */
-function unratedOf(
+function borrowScores(
+  points: PriceChartPoint[],
   modelId: string,
-  entries: readonly { thinking: ThinkingLevel | null }[],
+  entries: readonly BoardEntry[],
   used: ReadonlySet<ThinkingLevel> | undefined,
   costsOf: (level: ThinkingLevel) => readonly number[],
-): PriceChartUnratedLevel[] {
-  if (used === undefined || entries.some((entry) => entry.thinking === null)) return [];
-  const rated = THINKING_LEVELS.filter((level) => entries.some((entry) => entry.thinking === level));
-  return THINKING_LEVELS.filter((level) => used.has(level) && !rated.includes(level)).flatMap((level) => {
+  estimate: { cost: number; basis: "estimated" | "reference" } | null,
+): void {
+  if (used === undefined || entries.some((entry) => entry.thinking === null)) return;
+  const source = [...entries].sort(
+    (a, b) => THINKING_LEVELS.indexOf(b.thinking ?? "off") - THINKING_LEVELS.indexOf(a.thinking ?? "off"),
+  )[0];
+  if (source === undefined || source.thinking === null) return;
+  const sourcePoint = points.find((point) => point.modelId === modelId && point.thinkingLevel === source.thinking);
+  for (const level of THINKING_LEVELS) {
+    if (!used.has(level) || entries.some((entry) => entry.thinking === level)) continue;
     const costs = costsOf(level);
     const mid = median(costs);
-    return mid === null ? [] : [{ modelId, thinkingLevel: level, samples: costs.length, cost: mid, ratedLevels: rated }];
-  });
+    if (mid === null) continue;
+    const measured = costs.length >= MIN_MEASURED_TASKS;
+    let cost: number;
+    let costBasis: PriceChartPoint["costBasis"];
+    if (measured) {
+      cost = mid;
+      costBasis = "measured";
+    } else if (estimate === null) {
+      continue; // 没官方单价定不了估算：与评过的档同一条规矩
+    } else if (sourcePoint !== undefined && sourcePoint.costBasis !== "measured") {
+      sourcePoint.folded = [...(sourcePoint.folded ?? []), { thinkingLevel: level, samples: costs.length, cost: mid }];
+      continue;
+    } else {
+      cost = estimate.cost;
+      costBasis = estimate.basis;
+    }
+    points.push({
+      modelId,
+      thinkingLevel: level,
+      scoreFrom: source.thinking,
+      boardName: source.name,
+      ...(source.harness === undefined ? {} : { harness: source.harness }),
+      score: source.score,
+      scoreLower: source.lower,
+      scoreUpper: source.upper,
+      cost,
+      costBasis,
+      samples: measured ? costs.length : 0,
+      ...(measured ? {} : { measured: { cost: mid, samples: costs.length } }),
+    });
+  }
 }
 
 export async function buildPriceChart(sources: PriceChartSources, snapshot: ArenaSnapshot): Promise<PriceChartData> {
@@ -113,7 +152,7 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     list.push(value);
     costs.set(k, list);
   };
-  /** 每个型号实测过哪些档（「用过、但榜单没评的档」要它） */
+  /** 每个型号实测过哪些档（榜单没评的档借分要它，见 borrowScores） */
   const usedLevels = new Map<string, Set<ThinkingLevel>>();
   for (const { task, totals } of tasks) {
     const base = boardBaseOf(task.modelId, index);
@@ -134,7 +173,6 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
     const points: PriceChartPoint[] = [];
     const unranked: PriceChartModelRef[] = [];
     const unpriced: PriceChartModelRef[] = [];
-    const unratedLevels: PriceChartUnratedLevel[] = [];
     for (const group of models.added) {
       const ref = { modelId: group.modelId };
       const entries = group.base === undefined ? [] : boardEntriesFor(rows, group.modelId, board.publishDate, index);
@@ -175,10 +213,22 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
           ...(costBasis !== "measured" && mid !== null ? { measured: { cost: mid, samples: measured.length } } : {}),
         });
       }
-      if (!anyPriced) unpriced.push(ref);
+      if (!anyPriced) {
+        unpriced.push(ref);
+        continue;
+      }
       const base = group.base;
-      unratedLevels.push(
-        ...unratedOf(group.modelId, entries, usedLevels.get(base), (level) => costs.get(costKey(base, level)) ?? []),
+      const estimate =
+        group.rates === null
+          ? null
+          : { cost: estimateTaskCost(group.rates, profile), basis: profile.reference ? ("reference" as const) : ("estimated" as const) };
+      borrowScores(
+        points,
+        group.modelId,
+        entries,
+        usedLevels.get(base),
+        (level) => costs.get(costKey(base, level)) ?? [],
+        estimate,
       );
     }
     categories.push({
@@ -188,7 +238,6 @@ export async function buildPriceChart(sources: PriceChartSources, snapshot: Aren
       points,
       unranked,
       unpriced,
-      unratedLevels,
     });
   }
 

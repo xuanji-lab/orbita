@@ -10,7 +10,8 @@ import {
   knownProviderGroup,
   type KnownProvider,
 } from "@shared/known-providers";
-import type { ProviderCardSize } from "@shared/settings";
+import type { PriceChartCategory } from "@shared/price-chart";
+import type { ProviderCardSize, ProvidersPageSettings } from "@shared/settings";
 import {
   knownParamsFor,
   modelDisplayName,
@@ -51,6 +52,7 @@ import { useT } from "../../locale.ts";
 import { ModelAvatar } from "./ModelAvatar";
 import { PriceCapabilityChart } from "./PriceCapabilityChart";
 import { shouldShowPriceChart } from "./price-chart-model.ts";
+import { rateInputText, usdOf } from "../../utils/money.ts";
 import { useBuiltinCatalog } from "./model-menu";
 import { VendorLogo } from "./VendorLogo";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
@@ -74,9 +76,12 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
 export function ProvidersView(props: {
   onChange?: () => void;
   onSessionsChanged?: () => void;
-  /** 卡片墙的尺寸档（AppSettings.providerCardSize，缺席 = large）；切换即落设置 */
-  cardSize: ProviderCardSize;
-  onCardSize: (size: ProviderCardSize) => void;
+  /**
+   * 这一页的界面记忆（AppSettings.providersPage）：卡片尺寸、「仅显示已添加」、价格图的分类。
+   * 改哪个只发哪个键，主进程按键合并（settings/store.ts）。
+   */
+  page: ProvidersPageSettings;
+  onPage: (patch: ProvidersPageSettings) => void;
 }) {
   const t = useT();
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
@@ -87,7 +92,13 @@ export function ProvidersView(props: {
   >({ kind: "grid" });
   /** 卡片墙的搜索词与「仅显示已添加」：只活在这一页，离开设置就清 */
   const [query, setQuery] = useState("");
-  const [onlyAdded, setOnlyAdded] = useState(false);
+  // 「仅显示已添加」记在设置里（用户 2026-10-25）：本地先切，不等写盘回来
+  const [onlyAdded, setOnlyAddedState] = useState(props.page.onlyAdded ?? false);
+  useEffect(() => setOnlyAddedState(props.page.onlyAdded ?? false), [props.page.onlyAdded]);
+  const setOnlyAdded = (next: boolean) => {
+    setOnlyAddedState(next);
+    props.onPage({ onlyAdded: next });
+  };
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyDraft());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
@@ -789,8 +800,10 @@ export function ProvidersView(props: {
             onQuery={setQuery}
             onlyAdded={onlyAdded}
             onOnlyAdded={setOnlyAdded}
-            size={props.cardSize}
-            onSize={props.onCardSize}
+            size={props.page.cardSize ?? "large"}
+            onSize={(cardSize) => props.onPage({ cardSize })}
+            chartCategory={props.page.chartCategory ?? "agent"}
+            onChartCategory={(chartCategory) => props.onPage({ chartCategory })}
             onOpen={openKind}
             onAddAnother={pickKnown}
           />
@@ -1540,6 +1553,8 @@ function ProviderGrid(props: {
   onOnlyAdded: (only: boolean) => void;
   size: ProviderCardSize;
   onSize: (size: ProviderCardSize) => void;
+  chartCategory: PriceChartCategory;
+  onChartCategory: (category: PriceChartCategory) => void;
   onOpen: (kindId: string) => void;
   onAddAnother: (kindId: string) => void;
 }) {
@@ -1613,7 +1628,12 @@ function ProviderGrid(props: {
           ≥ 2 个型号才出现。吃的是全部服务商，不是筛过的卡片——「仅显示已添加」与搜索都不影响它。
         */}
         {shouldShowPriceChart(props.providers) && (
-          <PriceCapabilityChart providers={props.providers} catalog={props.catalog} />
+          <PriceCapabilityChart
+            providers={props.providers}
+            catalog={props.catalog}
+            category={props.chartCategory}
+            onCategory={props.onChartCategory}
+          />
         )}
       </div>
     </div>
@@ -1829,8 +1849,11 @@ function ModelDialog(props: {
   const [name, setName] = useState(props.decl?.name ?? "");
   const [ctxText, setCtxText] = useState(props.decl?.contextWindow?.toString() ?? "");
   const [outText, setOutText] = useState(props.decl?.maxTokens?.toString() ?? "");
-  const [cinText, setCinText] = useState(props.decl?.cost?.input?.toString() ?? "");
-  const [coutText, setCoutText] = useState(props.decl?.cost?.output?.toString() ?? "");
+  // 单价按显示币种填（中文界面人民币，utils/money.ts）；落盘仍是美元。初值记下来：用户没改的那一格按原值存回
+  const initialCin = props.decl?.cost?.input === undefined ? "" : rateInputText(props.decl.cost.input, t.currency);
+  const initialCout = props.decl?.cost?.output === undefined ? "" : rateInputText(props.decl.cost.output, t.currency);
+  const [cinText, setCinText] = useState(initialCin);
+  const [coutText, setCoutText] = useState(initialCout);
   const [vision, setVision] = useState<"inherit" | "on" | "off">(
     props.decl?.vision === true ? "on" : props.decl?.vision === false ? "off" : "inherit",
   );
@@ -1877,8 +1900,14 @@ function ModelDialog(props: {
     }
     const ctx = parseTokenInput(ctxText);
     const out = parseTokenInput(outText);
-    const cin = parseRateInput(cinText);
-    const cout = parseRateInput(coutText);
+    // 显示币种 → 美元；没改的那一格用原值，不让换算的舍入改掉用户的数
+    const toUsd = (text: string, initial: string, original: number | undefined) => {
+      const parsed = parseRateInput(text);
+      if (typeof parsed !== "number") return parsed;
+      return text === initial && original !== undefined ? original : usdOf(parsed, t.currency);
+    };
+    const cin = toUsd(cinText, initialCin, props.decl?.cost?.input);
+    const cout = toUsd(coutText, initialCout, props.decl?.cost?.output);
     if (ctx === "invalid" || out === "invalid" || cin === "invalid" || cout === "invalid") {
       setFieldIssue(t.providers.fieldsMustBeNumbers);
       return;
@@ -2076,8 +2105,8 @@ function ModelDialog(props: {
               id="pv-model-cin"
               label={t.providers.inputCost}
               value={cinText}
-              placeholder={inheritedCost ? String(activeDefaults.cost.input) : "—"}
-              pre="$"
+              placeholder={inheritedCost ? rateInputText(activeDefaults.cost.input, t.currency) : "—"}
+              pre={t.currency.symbol}
               post="/ 1M"
               onChange={setCinText}
             />
@@ -2085,8 +2114,8 @@ function ModelDialog(props: {
               id="pv-model-cout"
               label={t.providers.outputCost}
               value={coutText}
-              placeholder={inheritedCost ? String(activeDefaults.cost.output) : "—"}
-              pre="$"
+              placeholder={inheritedCost ? rateInputText(activeDefaults.cost.output, t.currency) : "—"}
+              pre={t.currency.symbol}
               post="/ 1M"
               onChange={setCoutText}
             />
