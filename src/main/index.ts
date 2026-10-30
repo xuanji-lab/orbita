@@ -61,6 +61,8 @@ import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usag
 import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
+import { GitHubClient } from "./updater/github-client.ts";
+import { applyEnvProxy, electronGitHubTransport } from "./updater/github-net.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
@@ -978,6 +980,16 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps);
 
   /*
+   * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
+   * 同一套网络 / 代理（electron-updater 的 session，下载器也在上面）、同一份缓存、
+   * 同一本限流账（见 main/updater/github-client.ts）。
+   * 代理在启动时就按 HTTPS_PROXY / HTTP_PROXY 设上，不等更新器接线：dev（未打包）里
+   * 历史版本列表同样要能用（以前只有打包后的 Windows 实例才会设）。失败只警告，不拖启动。
+   */
+  const github = new GitHubClient({ transport: electronGitHubTransport() });
+  await applyEnvProxy();
+
+  /*
    * 自动更新（Windows NSIS + GitHub Releases，见 main/updater/）：只有打包好的 Windows 应用才接线
    * （macOS 包未签名公证、装不上，界面说「暂不支持」），
    * 启动 10s 后首查 + 每 4h 一次 + 设置页的手动检查；autoDownload=false，下载与安装都由
@@ -990,11 +1002,15 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     version: app.getVersion(),
     beforeInstall: () => agentHost.dispose(),
+    github,
   });
-  // 「所有版本」展开体的最近版本列表：纯网络请求 + 内存缓存（10 分钟），
+  // 「所有版本」展开体的最近版本列表：走同一个客户端（原文缓存由它管）+ 本层组装缓存，
   // 与更新器接不接线无关——dev 下也照常能用（见 main/updater/recent-releases.ts）
-  registerUpdaterIpc(updater, createRecentReleases());
-  updater.start();
+  registerUpdaterIpc(updater, createRecentReleases({ client: github }));
+  updater.start().catch((error: unknown) => {
+    // start 只会在 Electron session 初始化时失败；更新是可选功能，不能拖住主窗口启动
+    console.warn("[更新] 初始化失败：", error instanceof Error ? error.message : String(error));
+  });
 
   app.on("before-quit", () => {
     appTray?.beginQuit();

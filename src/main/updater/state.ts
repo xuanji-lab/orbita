@@ -14,6 +14,7 @@
  */
 import type {
   UpdateDownloadProgress,
+  UpdateFailureKind,
   UpdateNote,
   UpdateRelease,
   UpdateStage,
@@ -44,7 +45,7 @@ export type UpdaterAction =
   | { type: "progress"; progress: UpdateDownloadProgress }
   | { type: "download-cancelled" }
   | { type: "downloaded"; version: string }
-  | { type: "failed"; stage: UpdateStage; message: string };
+  | { type: "failed"; stage: UpdateStage; failure: UpdateFailureKind; message: string };
 
 /** 更新说明逐条相比：解析一次就得到一份新数组，不比内容的话「同一次检查的同一个答案」会被当成两份 */
 function sameNotes(a: readonly UpdateNote[] | null, b: readonly UpdateNote[] | null): boolean {
@@ -126,8 +127,24 @@ export function reduceUpdater(state: UpdateState, action: UpdaterAction): Update
       // （第二次时「正在下载」的标记已经清掉，会算成 check）：**先到的那条更准**，
       // 同一条消息不许把已有的 error 换个阶段显示
       if (state.kind === "error" && state.message === action.message) return state;
-      return { kind: "error", stage: action.stage, message: action.message };
+      return { kind: "error", stage: action.stage, failure: action.failure, message: action.message };
   }
+}
+
+/**
+ * 这次检查要不要给下载让路。
+ *
+ * 定时检查（4h 一次）与下载并发时，provider 会清空重写自己的资产表
+ * （github-api-provider.ts 的 getLatestVersion），而差分下载正读着那张表解析
+ * blockmap / 安装包地址——并发检查会把下载脚下的资产映射换掉（sha512 兜底归兜底，
+ * 不该靠它收这种竞态）。所以下载进行中（用户已按下下载、尚未落成 downloaded / 取消）
+ * 时跳过检查，下一个 4h 再说；手动检查同一条路（下载中界面本来就没有检查按钮）。
+ *
+ * `activeDownload` 与状态机判两遍：download() 先置 activeDownload 再切状态、事件到达
+ * 顺序也不定，两边任一在「下载中」都让路，不留窗口。
+ */
+export function checkYieldsToDownload(state: UpdateState, activeDownload: string | null): boolean {
+  return activeDownload !== null || state.kind === "downloading";
 }
 
 interface ParsedVersion {
