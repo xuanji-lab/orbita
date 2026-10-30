@@ -2,6 +2,7 @@ import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts
 import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 import type { ReviewSource } from "../../shared/review.ts";
+import type { PanelUsageKey } from "../../shared/panel-usage.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -737,6 +738,27 @@ export const en = {
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
     experimentalCollapse: "Collapse",
+    /* ---------- 面板打开次数（实验功能「精简右栏」的数据，只在本机） ---------- */
+    panelUsageTitle: "How often each panel is opened",
+    panelUsageSince: (month: number, day: number) =>
+      `Counted on this computer since ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] ?? month} ${day}; nothing is uploaded. Switching tasks does not count.`,
+    panelUsageName: (key: PanelUsageKey) =>
+      ({
+        task: "This task",
+        context: "Context",
+        terminal: "Terminal",
+        browser: "Browser",
+        files: "Files",
+        review: "Review",
+        abilities: "Skills & MCP",
+        memory: "Memory",
+        intent: "Intent",
+        carryovers: "Carryovers",
+        archived: "Archive",
+        bell: "Notifications",
+        subsessions: "Sub-sessions",
+        sidechat: "Side chat",
+      })[key] ?? String(key),
     /* ---------- 意图系统（实验）：实验开关打开才出现的设置区 ---------- */
     intentTitle: "Intent system",
     intentBaseUrl: "intent-lab address",

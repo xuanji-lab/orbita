@@ -2853,6 +2853,22 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 右图标条（shell/RightRail.tsx）：32px、无自己的面，直接坐在边界卡上。2026-10-19 方案 B v2：
+   顶部没有行级对齐了（右栏开关住工具栏胶囊），rail 从工具栏下开始，首格离卡顶一个 space-1。
+   常规与精简（实验功能 lean-rail）两种排法共用这一条 */
+.right-rail {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-2);
+  background: transparent;
+  overflow: hidden;
+}
+
 /* 铃铛入口的未读角标：常驻在方块右上角，0 时不渲染（RightRail） */
 .rail-badge {
   position: absolute;
