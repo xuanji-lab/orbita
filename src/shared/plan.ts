@@ -95,8 +95,16 @@ export function parsePlanCall(params: unknown): PlanCall {
   if (items.filter((item) => item.status === "in_progress").length > 1) {
     throw new Error("Only one step can be in_progress at a time.");
   }
+  return { items, ...parsePlanNotes(params) };
+}
+
+/**
+ * 三个可选字段单独解析：面板对「已落盘的旧入参」宽松读 items 时，why / later / confirm 也要读——
+ * 它们从不抛错，所以不论 items 是否过得了严格校验都能取。
+ */
+export function parsePlanNotes(params: unknown): Pick<PlanCall, "why" | "later" | "confirm"> {
   const record = (params ?? {}) as Record<string, unknown>;
-  return { items, why: cleanNote(record["why"]), later: parseLater(record["later"]), confirm: parseConfirm(record["confirm"]) };
+  return { why: cleanNote(record["why"]), later: parseLater(record["later"]), confirm: parseConfirm(record["confirm"]) };
 }
 
 /** 一句说明：只认非空字符串，去空白、折叠换行、超长截断 */

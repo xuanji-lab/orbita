@@ -75,7 +75,7 @@ import {
 import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
-import { createPlanTools } from "./plan-tools.ts";
+import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -968,6 +968,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     command.protectedPaths,
     command.cwd,
   );
+  // 计划（update_plan）的「停下来等确认」：闸门里先看有没有已决定停的标记（同批排在 update_plan 之后的
+  // 调用拦下并带 terminate），工具 execute 里再按同一判定带 terminate（plan-tools.ts 头注释）
+  const planOptions: PlanToolOptions = {
+    getMode: currentMode,
+    planFirst: command.planFirst === true,
+    branch: () => sessionManager.getBranch(),
+    state: { stopping: false },
+  };
+  const planGate = createPlanGate(planOptions);
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
@@ -1035,6 +1044,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           hidden: true,
           factory: (pi: PiExtensionApi) => {
             pi.on("tool_call", async (event) => {
+              const held = planGate(event);
+              if (held !== null) return held;
               const result = await gate(event);
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
@@ -1326,7 +1337,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
-    ...createPlanTools(),
+    ...createPlanTools(planOptions),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),

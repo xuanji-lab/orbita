@@ -111,6 +111,8 @@ export interface ToolCallLike {
 export interface ToolCallGateResult {
   block?: boolean;
   reason?: string;
+  /** 被拦的同时提示 pi：这一批若每个结果都带它，这一轮就结束（计划等确认用，见 plan-tools.ts） */
+  terminate?: boolean;
 }
 
 export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
