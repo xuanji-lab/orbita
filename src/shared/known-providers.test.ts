@@ -82,7 +82,6 @@ describe("命名 —— label 是厂商名，计费方式交给分区", () => {
     assert.equal(knownProviderDefaultName(byId("kimi-coding")), "Kimi（套餐）");
     assert.equal(knownProviderDefaultName(byId("kimi-api")), "Kimi（按量）");
     assert.equal(knownProviderDefaultName(byId("deepseek")), "DeepSeek");
-    assert.equal(knownProviderDefaultName(byId("ark-coding-plan")), "火山方舟 Agent");
     const names = KNOWN_PROVIDERS.map(knownProviderDefaultName);
     assert.equal(new Set(names).size, names.length, "默认名撞了，服务商列表里分不出来");
   });
@@ -130,6 +129,15 @@ describe("knownProviderOf —— 同一家的第二个实例也认得出", () =>
     assert.equal(knownProviderOf(p("gw", { api: "anthropic-messages" })).id, "anthropic-compatible");
     assert.equal(knownProviderOf(p("gw", { api: "openai-responses" })).id, "openai-responses-compatible");
     assert.equal(knownProviderOf(p("gw", { kind: "nope" })).id, "openai-compatible");
+  });
+  it("下架的火山方舟三条（2026-10-25）：已添加过的实例按协议落兼容入口，按量计费，不丢", () => {
+    for (const id of ["doubao-api", "doubao", "ark-coding-plan"]) {
+      assert.equal(KNOWN_PROVIDERS.some((provider) => provider.id === id), false, id);
+    }
+    assert.equal(knownProviderOf(p("doubao")).id, "openai-compatible");
+    assert.equal(knownProviderOf(p("my-ark", { kind: "doubao-api" })).id, "openai-compatible");
+    assert.equal(knownProviderOf(p("ark-coding-plan", { api: "anthropic-messages" })).id, "anthropic-compatible");
+    assert.equal(isPlanBilling(p("doubao")), false);
   });
   it("第二个套餐实例同样按套餐计费", () => {
     assert.equal(isPlanBilling(p("kimi-coding-2", { api: "anthropic-messages" })), true);
@@ -195,7 +203,8 @@ describe("catalogPreferenceOf —— 设置页、菜单与会话装配共用的�
 });
 
 describe("未实测 —— 还没用真实账号验证过的条目如实标出", () => {
-  // 用户用真实账号跑通过的条目（2026-10-24 用户裁决的名单）：不带标记
+  // 用户用真实账号跑通过的条目（2026-10-24 用户裁决的名单；2026-10-25 补 Kimi 按量 API、xAI 登录、
+  // 基元律动——三家都用真实账号 / key 发通过）：不带标记
   const VERIFIED = [
     "deepseek",
     "zhipu",
@@ -204,7 +213,10 @@ describe("未实测 —— 还没用真实账号验证过的条目如实标出",
     "zai",
     "stepfun",
     "kimi-coding",
+    "kimi-api",
     "opencode-go",
+    "xai",
+    "tokenrhythm",
     "anthropic-compatible",
     "openai-compatible",
   ];
@@ -225,13 +237,10 @@ describe("未实测 —— 还没用真实账号验证过的条目如实标出",
       "minimax",
       "xiaomi",
       "qwen",
-      "doubao-api",
       "openrouter",
       "zhipu-coding-team",
       "qwen-token-plan",
       "xiaomi-token-plan",
-      "doubao",
-      "ark-coding-plan",
       "openai-responses-compatible",
       "openai-codex",
       "github-copilot",

@@ -58,6 +58,27 @@ describe("SettingsStore", () => {
     assert.deepEqual(read.drawer, { width: 380, docked: ["a", "b"] });
   });
 
+  test("模型服务页的界面记忆按键合并：切卡片尺寸不抹掉「仅显示已添加」与图的分类", async () => {
+    await store.write({ providersPage: { onlyAdded: true } });
+    await store.write({ providersPage: { chartCategory: "webdev" } });
+    await store.write({ providersPage: { cardSize: "small" } });
+    assert.deepEqual((await store.read()).providersPage, { onlyAdded: true, chartCategory: "webdev", cardSize: "small" });
+  });
+
+  test("向量设置按键合并：只切模式不抹掉模型、卸载时间与电池偏好", async () => {
+    await store.write({
+      vector: { model: "qwen3-embedding-0.6b", idleUnloadMin: 9, deferOnBattery: false },
+    });
+    await store.write({ vector: { mode: "local" } });
+    assert.deepEqual((await store.read()).vector, {
+      mode: "local",
+      model: "qwen3-embedding-0.6b",
+      idleUnloadMin: 9,
+      deferOnBattery: false,
+    });
+    assert.deepEqual((await new SettingsStore(dir).read()).vector, (await store.read()).vector);
+  });
+
   test("落盘的是格式化 JSON，用户手改得动", async () => {
     await store.write({ theme: "light" });
     const raw = await readFile(join(dir, "settings.json"), "utf8");

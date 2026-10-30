@@ -115,7 +115,7 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       const card = result.card;
       const text =
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
-        `(thinking: ${card.thinkingLevel}). It is now working; its messages will arrive as <channel> ` +
+        `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
         "not poll or wait for it.";
       return {
@@ -194,7 +194,8 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
       "from you — a normal reply is never delivered to it. kind \"question\": you are blocked and need a " +
       "decision; proceed on your best guess while you wait, or end this turn if you truly cannot " +
       'continue. "progress": occasional update, use sparingly. "done": you finished — say what you ' +
-      'concluded, what you changed, and where the output is, then end this turn. "failed": you cannot ' +
+      'concluded, what you changed, and where the output is, then end this turn. Include absolute paths ' +
+      'to important output (especially for done). "failed": you cannot ' +
       "complete the task — say why, then end this turn.",
     parameters: {
       type: "object",
@@ -240,8 +241,9 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
  * 工具参数 schema 已经讲了字段；这里讲角色语境——root 是能派出子会话的普通会话，
  * child 是被派出的那一个，两者看到的通道是不对称的（root 用 delegate /
  * reply_subsession，child 只有 report_to_parent），所以说明也分两段。
- * 与 related（describeDirectories）的关系：related 只列出「对面工作台在哪」，
- * 这里讲「怎么用工具跟对面说话」——不重复，各管各的。
+ * 与 related（describeDirectories）的关系：related 只用于 runtime 判断角色；对方工作台由
+ * delegate 回执与通道信封携带。这里讲「怎么用工具跟对面说话、重要产出放哪」，两段都不随
+ * 会话中的父子清单变化，因此可以安全留在系统提示词里。
  */
 const ROOT_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
 You can hand off self-contained, parallelizable, well-bounded work to a sub-session with delegate. It
@@ -252,9 +254,10 @@ the goal, constraints, done criteria, and where the output should go. After dele
 unless you have unrelated work to do — do not poll or wait for it. Its messages (question / progress /
 done / failed) arrive as <channel from="child" …> blocks in a later turn. If it asks something the
 user's own words do not answer, do not decide on the user's behalf — end this turn and ask the user
-first; only once you have their answer, reply with reply_subsession. Progress needs no reply. When you
-see done, check its workbench / cwd for the actual output before reporting to the user. Do not delegate
-for small things.
+first; only once you have their answer, reply with reply_subsession. Progress needs no reply. Important
+sub-session output belongs in subsessions/ under your own Session workbench, in the sub-session's own
+subdirectory. When you see done, check that directory for the actual output (and cwd for requested code
+or repository changes) before reporting to the user. Do not delegate for small things.
 </orbita-sub-sessions>`;
 
 const CHILD_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
@@ -268,6 +271,12 @@ truly cannot continue without one). You may send occasional progress updates —
 useful. When you finish, you MUST send one done report with your conclusion, what you changed, and where
 the output is. If you cannot complete the task, send failed with the reason. The parent's replies arrive
 as <channel from="parent" kind="reply"> blocks, possibly mid-task — adjust accordingly.
+Keep plans, drafts, intermediate results and reproduction scripts in your own Session workbench. Write
+important output for the parent (reports, handoffs, evaluation results, screenshot evidence and similar)
+under the parent session workbench in subsessions/<your-short-id>-<short-english-name>/; use the first
+8 characters of your own session id (the last component of your Session workbench path) so concurrent
+sub-sessions do not collide. In report_to_parent, especially done, give the absolute paths of those
+files. Requested code and repository deliverables still belong in cwd and are unaffected by this rule.
 </orbita-sub-sessions>`;
 
 /** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */

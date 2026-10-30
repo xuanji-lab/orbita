@@ -37,6 +37,7 @@ import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
 import { intentTurnEnv } from "./intent-env.ts";
+import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
 import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
@@ -135,6 +136,9 @@ export function registerAgentIpc(
   /** 意图存档跟踪器（实验功能 intent-system；undefined = 旧测试夹具不传）。submit /
    *  interrupt 判定要存档时 begin，事件泵在 index.ts 里喂 onEvent */
   intentIngest?: { begin(sessionId: string, text: string, pasted: readonly string[]): void },
+  /** 记忆构建的轮次跟踪器（实验功能 memory-system；undefined = 测试夹具不传）。
+   * submit / interrupt 判过根会话 + 用户原话后 begin，轮落定时由它交给记忆服务 */
+  memoryTurns?: { begin(sessionId: string, text: string): void },
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -255,10 +259,29 @@ export function registerAgentIpc(
   });
 
   /**
+   * 记忆系统（实验功能 memory-system）的构建门禁：这是根会话的用户原话时让
+   * 跟踪器记下这一轮（intent-env 的同一条口径：子会话 / 通道信封 / 收尾扫描不写
+   * 记忆）。开关的读取在调用方（submit / interrupt 要用同一个值装配 sessionMemory）；
+   * settle 在轮落定时还会现读一次——中途关掉开关，已并队的轮也交不出去。
+   */
+  const beginMemoryTurn = async (sessionId: string, text: string): Promise<void> => {
+    if (memoryTurns === undefined) return;
+    const meta = await sessions.readMeta(sessionId).catch(() => null);
+    if (memoryBuildEligible(meta, text)) memoryTurns.begin(sessionId, text);
+  };
+
+  /** 记忆系统的实验开关：开着时轮前召回（sessionMemory，根会话与子会话都召回）
+   * 与轮后构建（beginMemoryTurn，只认根会话）两条链路才接上。 */
+  const readMemoryOn = async (): Promise<boolean> =>
+    (await settings.read()).experimentalFeatures?.["memory-system"] === true;
+
+  /**
    * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
    * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
    * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
    * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。
+   * 记忆线（服务进程）的装配在 memory/chore.ts（同样的口径，避免与这里的闭包
+   * 成 import 环）。
    */
   const readChoreModel = async (): Promise<
     { provider: ProviderSecrets; modelId: string } | undefined
@@ -400,9 +423,12 @@ export function registerAgentIpc(
     // 返回空对象时命令与 main 一字不差
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
+    const memoryOn = await readMemoryOn();
+    if (memoryOn) await beginMemoryTurn(input.sessionId, text);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
+      ...(memoryOn ? { sessionMemory: true } : {}),
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
@@ -453,7 +479,9 @@ export function registerAgentIpc(
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const memoryOn = await readMemoryOn();
+    if (memoryOn) await beginMemoryTurn(input.sessionId, text);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

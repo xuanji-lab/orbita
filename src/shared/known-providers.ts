@@ -152,7 +152,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "智谱开放平台标准 API（按 token 计费）",
   },
   /*
-   * ── 以下 API 条目对齐 Proma 开源版的厂商清单（只取事实：厂商与端点），全部 `untested`。
+   * ── 以下 API 条目对齐 Proma 开源版的厂商清单（只取事实：厂商与端点），都是 `untested` 起步；
+   * Kimi 按量 API 2026-10-25 用真实 key 扫过一遍型号后摘掉了。
    *
    * **协议跟 pi 的目录走，不跟 Proma 走。** Proma 的 Agent 内核是 Claude Agent SDK，只会说
    * Anthropic 协议，所以它把能接的厂商都接在 `/anthropic` 端点上；我们跑的是 pi，pi 的目录
@@ -162,8 +163,12 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
    * 协议不同的 catalogId，请求就被悄悄改道到目录的协议上。一致性测试
    * （agent/whitelist-consistency.test.ts）对每条都核对「会话里的协议与地址就是条目自己的」。
    *
-   * pi 目录里没有的厂商（通义千问 DashScope、火山方舟）照 Proma 的默认端点与协议填，不挂
+   * pi 目录里没有的厂商（通义千问 DashScope）照 Proma 的默认端点与协议填，不挂
    * catalogId，型号参数照样能按型号 id 跨目录借。
+   *
+   * 火山方舟（按量 API、Coding Plan、Agent Plan 三条）2026-10-25 起不再适配（用户裁决「取消适配」）：
+   * 三条都没用真实账号跑通过。已添加过的实例不会丢——认不出条目时按协议落到「OpenAI 兼容」/
+   * 「Anthropic 兼容」（knownProviderOf 第 3 档），地址与型号照旧，只是不再按套餐计费。
    */
   {
     id: "anthropic",
@@ -206,7 +211,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
       { api: "anthropic-messages", baseUrl: "https://api.moonshot.cn/anthropic" },
     ],
     catalogId: "moonshotai-cn",
-    untested: true,
     note: "Kimi 开放平台按量 API",
   },
   {
@@ -247,14 +251,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     untested: true,
     note: "阿里云百炼 DashScope，OpenAI 兼容模式",
-  },
-  {
-    id: "doubao-api",
-    label: "火山方舟",
-    api: "openai-completions",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-    untested: true,
-    note: "火山引擎方舟模型 API（按 token 计费）",
   },
   {
     id: "openrouter",
@@ -411,24 +407,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     note: "小米 MiMo Token Plan 订阅",
   },
   {
-    id: "doubao",
-    label: "火山方舟",
-    api: "openai-completions",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-    billing: "plan",
-    untested: true,
-    note: "火山方舟 Coding Plan 订阅；只能用套餐授权的型号",
-  },
-  {
-    id: "ark-coding-plan",
-    label: "火山方舟 Agent",
-    api: "anthropic-messages",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/plan",
-    billing: "plan",
-    untested: true,
-    note: "火山方舟 Agent Plan 订阅",
-  },
-  {
     id: "claude",
     label: "Claude",
     api: "anthropic-messages",
@@ -441,7 +419,8 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
   },
   /*
    * 以下三家的登录流程、续期与请求鉴权都复用 pi 自带的实现（pi-ai 的 OAuth 流程），凭据落
-   * 我们自己的密钥库。我们没有这三家的账号，全部 `untested`。
+   * 我们自己的密钥库。xAI 用户用 SuperGrok 账号真登过、发通了 Grok 4.7（2026-10-24，PR 298 验收）；
+   * ChatGPT 与 Copilot 还没有账号跑通，仍是 `untested`。
    *
    * id 与 pi 内建 id 一致**不是巧合，是必须**：pi 的客户端按 `model.provider` 认 Copilot
    * （动态请求头、Claude 型号走 Bearer），会话又用我们的 id 注册——第一个实例的 id 就是条目 id。
@@ -480,7 +459,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogId: "xai",
     billing: "plan",
     auth: "oauth",
-    untested: true,
     note: "SuperGrok / X Premium 订阅",
   },
   {
@@ -508,7 +486,6 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogId: "tokenrhythm",
     // 聚合网关：它自家目录收窄了型号能力（哪个型号开哪种协议、思考恒开与否），型号口径以它为准
     catalogAuthoritative: true,
-    untested: true,
     note: "聚合网关，一个 key 调用多家模型；型号清单与参数跟着它自己的目录走，计费按各厂官方美元单价",
   },
   {

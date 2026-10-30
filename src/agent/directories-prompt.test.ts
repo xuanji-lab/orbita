@@ -1,4 +1,8 @@
-/** describeDirectories 的账：缺席→空串；attached 空省略该段不留占位；workbench 恒出现。 */
+/**
+ * describeDirectories 的账：缺席→空串；attached 空省略该段不留占位；workbench 恒出现；
+ * related 的父子会话行不进这里（本 PR：它们会随派 / 删子会话变化，留在系统提示词里
+ * 就打断前缀缓存——对方工作台改由 delegate 回执与通道信封携带）。
+ */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { describeDirectories } from "./directories-prompt.ts";
@@ -42,31 +46,25 @@ describe("describeDirectories", () => {
     assert.ok(!text.includes("Sub-session"));
   });
 
-  test("related 有父：一行 Parent session，带 id 与工作台路径", () => {
-    const text = describeDirectories(
-      "/repo/orbita",
-      dirs({
-        related: [{ sessionId: "parent-1", relation: "parent", label: "母任务", path: "/workbenches/parent-1" }],
-      }),
-    );
-    assert.ok(text.includes('Parent session "母任务" (id parent-1) workbench: /workbenches/parent-1'));
-    assert.ok(text.includes("private workbenches"));
-    assert.ok(text.startsWith("<directories>"));
-    assert.ok(text.endsWith("</directories>"));
-  });
-
-  test("related 有子：每个子会话各一行 Sub-session", () => {
+  test("related 有父 / 有子：Parent / Sub-session 行与对方工作台路径都不再出现", () => {
     const text = describeDirectories(
       "/repo/orbita",
       dirs({
         related: [
+          { sessionId: "parent-1", relation: "parent", label: "母任务", path: "/workbenches/parent-1" },
           { sessionId: "child-1", relation: "child", label: "先派出的", path: "/workbenches/child-1" },
           { sessionId: "child-2", relation: "child", label: "Sub-session", path: "/workbenches/child-2" },
         ],
       }),
     );
-    assert.ok(text.includes('Sub-session "先派出的" (id child-1) workbench: /workbenches/child-1'));
-    assert.ok(text.includes('Sub-session "Sub-session" (id child-2) workbench: /workbenches/child-2'));
+    assert.ok(!text.includes("Parent session"));
+    assert.ok(!text.includes("Sub-session"));
+    assert.ok(!text.includes("private workbenches"));
+    assert.ok(!text.includes("/workbenches/parent-1"));
+    assert.ok(!text.includes("/workbenches/child-1"));
+    assert.ok(!text.includes("/workbenches/child-2"));
+    // 本会话自己的 workbench 照旧在（会话内稳定，不断缓存）
+    assert.ok(text.includes("Session workbench: /Users/u/Library/Application Support/orbita/workbenches/s1"));
   });
   test("browserDownloads：有就说在哪、可以整理；缺席不出现", () => {
     const withDownloads = describeDirectories("/cwd", { attached: [], workbench: "/wb", browserDownloads: "/Users/me/Downloads" });

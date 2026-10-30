@@ -5,7 +5,9 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -121,6 +123,7 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
   "pdf-citations",
   "intent-system",
+  "memory-system",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
@@ -262,6 +265,12 @@ export interface AppSettings {
    */
   intent?: IntentSettings;
   /**
+   * 向量召回（实验功能 memory-system 的一部分，开关仍由实验开关总控）：
+   * 本地 llama-server + GGUF。缺席全默认（关）；只存用户动过的键，读侧并入
+   * DEFAULT_MEMORY_VECTOR_SETTINGS（同 intent 的纪律）。
+   */
+  vector?: Partial<MemoryVectorSettings>;
+  /**
    * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
    * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
    * 缺席 = 跟着今天、显示着。设置页里不出现。
@@ -273,10 +282,11 @@ export interface AppSettings {
    */
   browserDownloadDir?: string;
   /**
-   * 设置 › 模型服务的厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，
-   * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
+   * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
+   * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
+   * 页面上每个开关只发自己那个键。
    */
-  providerCardSize?: ProviderCardSize;
+  providersPage?: ProvidersPageSettings;
   /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
@@ -305,6 +315,22 @@ export interface AppSettings {
 }
 
 export type ProviderCardSize = "large" | "small";
+
+/** 设置 › 模型服务这一页的界面记忆（AppSettings.providersPage）；每个键缺席都是默认值 */
+export interface ProvidersPageSettings {
+  /**
+   * 厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，small 只留 logo、名字与角标。
+   * 2026-10-25 之前存在顶层 `providerCardSize`，读的时候迁过来（parseSettings）。
+   */
+  cardSize?: ProviderCardSize;
+  /** 卡片墙只显示已添加的服务商。缺席 = 全部显示 */
+  onlyAdded?: boolean;
+  /**
+   * 价格 · 能力图停在哪个分类。缺席 = Agent 综合。用户 2026-10-25：离开再回来又回到「Agent 综合」，
+   * 偏偏这一类很多型号没分数——切到哪类就记住哪类。
+   */
+  chartCategory?: PriceChartCategory;
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
@@ -413,6 +439,24 @@ function parseWidth(value: unknown): number {
 }
 
 /**
+ * 模型服务页的界面记忆：认得的值留下，不认识的当没选过（缺席 = 默认）。卡片尺寸先看新位置，
+ * 没有再读旧的顶层 providerCardSize——选过「小」的用户升级后不用重选。全空返回 undefined，不落空对象。
+ */
+function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPageSettings | undefined {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const size = record.cardSize ?? legacyCardSize;
+  const page: ProvidersPageSettings = {
+    ...(size === "large" || size === "small" ? { cardSize: size } : {}),
+    ...(typeof record.onlyAdded === "boolean" ? { onlyAdded: record.onlyAdded } : {}),
+    // 不认识的分类（以后删了某个榜单）当没选过，回到默认
+    ...((PRICE_CHART_CATEGORIES as readonly unknown[]).includes(record.chartCategory)
+      ? { chartCategory: record.chartCategory as PriceChartCategory }
+      : {}),
+  };
+  return Object.keys(page).length === 0 ? undefined : page;
+}
+
+/**
  * 从磁盘上的任意 JSON 解出设置。
  *
  * **只认识的字段留下，别的一律丢掉**，坏值退回默认。理由是这个文件在用户目录里、
@@ -440,10 +484,13 @@ export function parseSettings(raw: unknown): AppSettings {
     browserDownloadDir?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
+    providersPage?: unknown;
+    /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
+    vector?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
     experimental?: unknown;
   };
@@ -466,6 +513,8 @@ export function parseSettings(raw: unknown): AppSettings {
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
   const intent = parseIntentSettings(record.intent);
+  const vector = parseVectorSettings(record.vector);
+  const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -502,10 +551,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
-    // 不认识的尺寸当没选过（缺席 = large）
-    ...(record.providerCardSize === "large" || record.providerCardSize === "small"
-      ? { providerCardSize: record.providerCardSize }
-      : {}),
+    ...(providersPage === undefined ? {} : { providersPage }),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
@@ -514,6 +560,7 @@ export function parseSettings(raw: unknown): AppSettings {
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
     ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
     ...(intent === undefined ? {} : { intent }),
+    ...(vector === undefined ? {} : { vector }),
   };
 }
 
@@ -523,6 +570,23 @@ export function parseSettings(raw: unknown): AppSettings {
  * 旧键只在这一层兼容，解析产物永远是 experimentalFeatures，任何一次写入
  * （parseSettings 白名单重建整个对象）都会把旧键从盘上带走。
  */
+/** 向量召回设置：只认得上的键收（mode / model / idleUnloadMin / deferOnBattery），
+ * 不认识或类型不对当没动过（默认值兜底）。不校验模型文件在不在——那是运行态。 */
+function parseVectorSettings(raw: unknown): Partial<MemoryVectorSettings> | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const suspect = raw as Record<string, unknown>;
+  const out: Partial<MemoryVectorSettings> = {};
+  if (suspect.mode === "off" || suspect.mode === "local") out.mode = suspect.mode;
+  for (const model of MEMORY_VECTOR_MODELS) {
+    if (suspect.model === model.id) out.model = model.id;
+  }
+  if (typeof suspect.idleUnloadMin === "number" && Number.isFinite(suspect.idleUnloadMin)) {
+    out.idleUnloadMin = Math.max(1, Math.round(suspect.idleUnloadMin));
+  }
+  if (typeof suspect.deferOnBattery === "boolean") out.deferOnBattery = suspect.deferOnBattery;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function parseExperimentalFeatures(record: {
   experimentalFeatures?: unknown;
   experimental?: unknown;

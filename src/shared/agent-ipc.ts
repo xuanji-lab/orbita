@@ -32,6 +32,13 @@ import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { IntentRecallRecord } from "./session.ts";
+import type {
+  MemoryBackfillProgress,
+  MemoryDownloadProgress,
+  MemoryAgentCall,
+  MemoryAgentOutcome,
+  MemoryRecallOutcome,
+} from "./memory.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -115,6 +122,17 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
+  /** 记忆库（实验功能 memory-system）的四条读写通道。读在主进程（纯模块直读
+   * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
+  memoryScopes: "memory:scopes",
+  memoryEntries: "memory:entries",
+  memorySession: "memory:session",
+  memoryMutate: "memory:mutate",
+  /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
+   *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
+  memoryVectorStatus: "memory:vector-status",
+  memoryVectorSet: "memory:vector-set",
+  memoryVectorDownload: "memory:vector-download",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -570,16 +588,10 @@ export interface TurnDirectories {
    */
   workbench: string;
   /**
-   * 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：父的清单列每个子会话的、
-   * 子的列父的。**只告知不硬拦**（同 attached）：label 是对方会话的标题，path 是对方
-   * 工作台的绝对路径——父子各自工作台独立，但「任务说明在那个目录里」这件事
-   * 对面的模型该知道。
-   *
-   * `sessionId` 是对方会话的 id——`reply_subsession` 要靠它定位子会话。
-   * `relation` 是**对方**相对本会话的角色（子会话清单里父那一项是 `"parent"`、
-   * 父会话清单里每个子是 `"child"`）：runtime 靠它判断本会话是不是子会话，
-   * 决定注册哪些通道工具、讲哪段提示词——仅凭 label/path 分不出「列的是父还是子」
-   * （父有子时 related 也非空）。
+   * 父子会话关系与会话内工作台事实。`relation` 是**对方**相对本会话的角色：
+   * runtime 靠父那一项判断本会话是不是子会话，决定注册哪些通道工具、讲哪段角色指引。
+   * 这些行**不直接进系统提示词**（派出 / 删除子会话会改清单、打断提示缓存）；对方工作台
+   * 改由 delegate 回执与每条通道信封告知模型。只告知不硬拦（同 attached）。
    *
    * 缺席 = 没有父子关系（绝大多数会话）。
    */
@@ -621,7 +633,14 @@ export interface IntentTurnContext {
 /** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
 renderer 不必为更新通道列的状态徽标拉一份全量账本 */
 export type ChannelEvent =
-  | { type: "message"; parentId: string; childId: string; message: ChannelMessage }
+  | {
+      type: "message";
+      parentId: string;
+      childId: string;
+      message: ChannelMessage;
+      /** 子会话工作台的绝对路径：renderer 组子→父信封时随每条回报重新告知模型 */
+      childWorkbench: string;
+    }
   | { type: "status"; parentId: string; childId: string; status: ChannelStatus };
 
 /** 主进程 → agent 进程 */
@@ -741,6 +760,13 @@ export type AgentCommand =
        * 开关全关时不装配（与 main 行为一致的边界代价，见主进程装配处注释）。
        */
       backfill?: string[];
+      /**
+       * 记忆系统（实验功能 memory-system）的轮前召回开关。**主进程从设置装配**
+       * （同 pdfCitations）：实验开关开着就带 true——召回对根会话与子会话都生效
+       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = 关，runtime 不问
+       * 记忆、命令形状与 main 一字不差。
+       */
+      sessionMemory?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -814,6 +840,9 @@ export type AgentCommand =
       sessionId: string;
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
+      /** 记忆系统的轮前召回开关（submit.sessionMemory 的同款字段，interrupt
+       * 是「立即发送」分支，同一轮语义） */
+      sessionMemory?: boolean;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -951,6 +980,17 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /**
+   * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
+   * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
+   * 调用方（轮前召回）对任何失败按「不注入、照常开轮」处理，记忆的失败不拦对话。
+   */
+  | ({ type: "memoryRecallResult"; requestId: string } & MemoryRecallOutcome)
+  /**
+   * 记忆系统：主进程对 memoryToolRequest 的回执（同款 ok 双分支）。失败的 error
+   * 原样成为工具失败原因给模型看（找不到 / 歧义 / 服务不在）。
+   */
+  | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
@@ -1075,6 +1115,34 @@ export type ChannelSendOutcome =
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
+/**
+ * 系统提示注入清单（右栏「上下文」面板「规则与说明」组的数据源）。
+ *
+ * agent 进程在 before_agent_start（每轮首个 LLM 调用前）现场组装、每轮推一次：
+ * 规则文件与技能索引每轮重注入、**永不被压缩**，所以面板只关心「最近一轮注入了什么」，
+ * 不落盘、不补算——未开过轮的会话（纯浏览历史）没有这份清单，面板如实显示未知。
+ *
+ * token 全部是估算（`context-inventory.ts` 的 estimateContextTokens 口径，误差约 ±30%），
+ * 只服务面板的占比展示，不用于计费或压缩判定。
+ */
+export interface ContextRulesInventory {
+  /** pi 的 project_context 规则文件（AGENTS.md / CLAUDE.md 等：全局 agentDir 一份 + cwd 祖先链各一份） */
+  files: { path: string; tokens: number; scope: "global" | "project" }[];
+  /**
+   * pi 基底估算：内置说明 + 工具清单 + 上述规则文件正文 + 技能索引 + cwd 行。
+   * **已包含 files 与 skillsIndex 的量**——组内合计 = baseTokens + segments，
+   * 各行只是它的拆解视图，加总时不要把 base 再加一遍。
+   */
+  baseTokens: number;
+  /** 系统提示里的技能索引（渐进披露：只有 name + description 进上下文，正文按需 read） */
+  skillsIndex: { names: string[]; tokens: number };
+  /**
+   * Orbita 逐轮追加的说明段（权限说明、目录清单、引用规则等）。id 稳定供 UI 配文案，
+   * 本轮为空串的段不出现。pi 基底不在里面（它有自己的 baseTokens）。
+   */
+  segments: { id: string; tokens: number }[];
+}
+
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
@@ -1116,6 +1184,38 @@ export type AgentEvent =
    * 读错了组）。
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
+  /**
+   * 记忆系统（实验功能 memory-system）：轮前召回的问答（readTaskRequest 同一条
+   * requestId 边界）。agent 进程不碰 userData——存储在记忆服务进程，主进程转发。
+   * 查询是本轮用户原话，回执 memoryRecallResult；agent 侧 5 秒硬超时，超时 /
+   * 出错 / 无命中都不注入（记忆的失败不拦开轮）。
+   */
+  | {
+      type: "memoryRecallRequest";
+      requestId: string;
+      sessionId: string;
+      /** 本轮用户原话（词法打分的 query） */
+      query: string;
+      /** 第几轮（按用户消息计，1 起）——注入账本按它记账 */
+      turn: number;
+      /** 会话归属（主进程按它解析作用域：workspaceId ?? cwd） */
+      scope: { workspaceId: string | null; cwd: string };
+    }
+  /**
+   * 记忆系统：agent 的记忆工具（memory_search / memory_revise / memory_retire）。
+   * 只有根会话注册这组工具；主进程另按会话 meta 再判一次（子会话的写一律拒——
+   * 「子会话读不写」不只靠 agent 侧不注册）。作用域同 memoryRecallRequest 在主进程解析。
+   * 回 memoryToolResult。
+   */
+  | {
+      type: "memoryToolRequest";
+      requestId: string;
+      sessionId: string;
+      /** 调用发生在第几轮（revise 新条的出处轮号） */
+      turn: number;
+      scope: { workspaceId: string | null; cwd: string };
+      call: MemoryAgentCall;
+    }
   /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
    * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。
@@ -1177,6 +1277,22 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
+ * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
+ * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
+ */
+| { type: "memoryChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：模型下载进度（服务 → 主进程转发）。
+ * 载荷 MemoryDownloadProgress（phase: downloading/verifying/done/failed）。
+ */
+| { type: "vectorDownload"; progress: MemoryDownloadProgress }
+/**
+ * 记忆系统（实验功能 memory-system）：后台补算进度（running / deferred-battery /
+ * idle 收尾）。载荷 MemoryBackfillProgress。
+ */
+| { type: "vectorBackfill"; progress: MemoryBackfillProgress }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
@@ -1328,4 +1444,10 @@ export type AgentEvent =
       runId: string;
       turnId: string;
       ask: IntentAskView[];
-    };
+    }
+  /**
+   * 系统提示注入清单（上下文面板「规则与说明」组）：before_agent_start 现场组装、
+   * 每轮推一次。纯 ephemeral，不落盘——规则每轮重注入，最新一份就是当前事实；
+   * 纯浏览的旧会话收不到，面板按「未知」显示。
+   */
+  | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory };

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { FileTurnRecord, RevertRecord } from "@shared/revert";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent, AgentStats, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { ChannelMarkRecord, CompactedRecord, IntentRecallRecord, SessionRecord } from "@shared/session";
 import {
@@ -637,6 +637,34 @@ describe("stats 快照的进出槽", () => {
   });
 });
 
+describe("注入清单的进出槽（上下文面板）", () => {
+  const inventory: ContextRulesInventory = {
+    files: [{ path: "/ws/proj/AGENTS.md", tokens: 6100, scope: "project" }],
+    baseTokens: 8200,
+    skillsIndex: { names: ["贾维斯路线图"], tokens: 260 },
+    segments: [{ id: "permission", tokens: 180 }],
+  };
+
+  test("contextInventory 事件进槽，后到覆盖先到（每轮推一次）", () => {
+    let states = applyAgentEvent(new Map(), { type: "contextInventory", sessionId: "A", inventory });
+    assert.equal(states.get("A")?.rules?.baseTokens, 8200);
+
+    states = applyAgentEvent(states, {
+      type: "contextInventory",
+      sessionId: "A",
+      inventory: { ...inventory, baseTokens: 9100 },
+    });
+    assert.equal(states.get("A")?.rules?.baseTokens, 9100);
+  });
+
+  test("seedFromDisk 清掉清单：盘上没有它，种盘前的旧值是残影", () => {
+    let states = applyAgentEvent(new Map(), { type: "contextInventory", sessionId: "A", inventory });
+    assert.notEqual(states.get("A")?.rules, null);
+    states = seedFromDisk(states, "A", [userItem("u1", 1000)]);
+    assert.equal(states.get("A")?.rules, null);
+  });
+});
+
 describe("phase 三态 —— 压缩有自己的进行态", () => {
   test("compaction 透传，不再压扁成 turn", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "compaction" });
@@ -823,6 +851,7 @@ describe("子会话 PR4a：channel 队列条目", () => {
     id,
     kind: "channel",
     childId,
+    childWorkbench: `/wb/${childId}`,
     message: channelMsg(id),
   });
 

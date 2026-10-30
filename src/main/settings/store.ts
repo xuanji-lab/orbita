@@ -51,7 +51,22 @@ export class SettingsStore {
       patch.experimentalFeatures === undefined
         ? current.experimentalFeatures
         : { ...current.experimentalFeatures, ...patch.experimentalFeatures };
-    const next = parseSettings({ ...current, ...patch, drawer, lastUsed, experimentalFeatures });
+    // 模型服务页的界面记忆同款按键合并：切卡片尺寸只发 cardSize，不该把「仅显示已添加」抹掉
+    const providersPage =
+      patch.providersPage === undefined
+        ? current.providersPage
+        : { ...current.providersPage, ...patch.providersPage };
+    // 向量设置也是 patch：只改 mode 不该把模型 / 卸载分钟 / 电池偏好冲回默认
+    const vector = patch.vector === undefined ? current.vector : { ...current.vector, ...patch.vector };
+    const next = parseSettings({
+      ...current,
+      ...patch,
+      drawer,
+      lastUsed,
+      experimentalFeatures,
+      providersPage,
+      vector,
+    });
     await writeJsonAtomic(this.filePath, next);
     this.cache = next;
     return next;
