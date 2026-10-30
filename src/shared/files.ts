@@ -113,8 +113,14 @@ export function fileRootLabel(kind: FileRootKind, path: string, title: string, f
  * 指向根外的 symlink 同样被拒，预览通道不能变成读任意文件的后门。
  */
 export type FilePreview =
-  /** `truncated`：文件比 PREVIEW_TEXT_LIMIT 大，只读了开头那一段（面板要如实标出） */
-  | { kind: "text"; text: string; truncated: boolean; size: number; modifiedAt: number }
+  | { kind: "text"; text: string; size: number; modifiedAt: number }
+  /**
+   * 文本比 PREVIEW_TEXT_LIMIT 大：**一个字节的正文都不过 IPC**（只嗅了开头 8 KB 确认不是二进制），
+   * 面板改走 `fs:line-index` + `fs:read-lines` 按行取窗。原先是先读 16 MB 的开头再让
+   * renderer 丢掉——100 MB 日志白白搬一遍 16 MB，而分段预览只有「超长单行」那条退路才用得上它
+   * （那条路现在由 `FileLineIndex` 的 long-line 回执自带开头）。
+   */
+  | { kind: "large-text"; size: number; modifiedAt: number }
   /** 图片：`mime` 由扩展名定（Chromium 的 <img> 画得了的那几种），`base64` 不带 data: 前缀 */
   | { kind: "image"; mime: string; base64: string; size: number; modifiedAt: number }
   /** 二进制（开头有 NUL 字节，或是 Chromium 画不了的图片格式）：不读内容，面板给「用默认应用打开」 */
@@ -125,23 +131,32 @@ export type FilePreview =
 /**
  * `fs:line-index` 的请求：与 `fs:list` / `fs:read` 同一道白名单（`root` 必须是
  * `fs:roots` 回过的，`dir` 就是文件路径、realpath 后必须在 root 之内）。
+ *
+ * `requestId` 是 renderer 自己起的一次性号码，只为 `fs:line-index-cancel`：换标签 / 关面板时
+ * 通知主进程停掉还在扫的那一遍。它只在发起请求的那个窗口之内有效，不是权限凭证。
  */
-export type FileLineIndexRequest = FileListRequest;
+export interface FileLineIndexRequest extends FileListRequest {
+  requestId: string;
+}
 
 /**
  * 行索引的回执（`fs:line-index`）：大于 PREVIEW_TEXT_LIMIT 的文本可能比一次 IPC 装得下的
  * 大得多，renderer 于是只问「这个文件有多少行」、随后按行窗口向主进程要内容。
  *
  * `indexId` 是主进程铸的**不透明令牌**，`fs:read-lines` 只认它、不接受路径：令牌只发给
- * 刚过完白名单的文件，renderer 没有任何办法拿它去读别的东西。缓存键是
- * `realpath + size + mtimeMs`（LRU 3）——文件一改，旧令牌自然失效。
+ * 刚过完白名单的文件，renderer 没有任何办法拿它去读别的东西。同一个文件只留一条索引
+ * （LRU，条数见主进程），**文件只是变长且前面没改时在原索引上接着扫、令牌不变**；
+ * 被改写 / 截断才换新令牌。
  *
- * 两种「不做分段」的结果不是错误，而是明确的能力边界，renderer 各有退路：
+ * 几种「不做分段」的结果不是错误，而是明确的能力边界，renderer 各有退路：
  * - `long-line`：单行超过 PREVIEW_MAX_LINE_BYTES。分段是按行窗口化的，而**一条行本身
- *   无法再窗口化**——退回「前 PREVIEW_TEXT_LIMIT + 长行硬切」那条路；
- * - `too-many-lines`：行数超过 PREVIEW_MAX_INDEXED_LINES。Chromium 的原生滚动高度上限
- *   是 33,554,430 px，1.8 M 行 × 18.6 px 正好贴边，再往上滚动条就没法映射了——
- *   如实给「用默认应用打开」，不假装能浏览。
+ *   无法再窗口化**——退回「前 PREVIEW_TEXT_LIMIT + 长行硬切」那条路，开头文本由这条回执
+ *   带上（只有这一种情形才让 16 MB 过 IPC）；
+ * - `too-large`：文件超过 PREVIEW_MAX_INDEX_BYTES，扫一遍的代价不值得，如实给「用默认应用打开」；
+ * - `cancelled`：renderer 自己取消了这次请求（换标签 / 卸载），不需要处理。
+ *
+ * 注意**没有「行数太多」**：能不能滚到底取决于 renderer 运行时量出来的滚动高度上限
+ * （随显示器缩放与页面缩放变），主进程不知道也不该猜；它只如实回 `totalLines`。
  */
 export type FileLineIndex =
   | {
@@ -155,9 +170,10 @@ export type FileLineIndex =
   | { kind: "empty"; size: number; modifiedAt: number }
   /** 开头 8 KB 有 NUL 字节：文件在 fs:read 之后变成了二进制（改名 / 被重写），不读内容 */
   | { kind: "binary"; size: number; modifiedAt: number }
-  /** 单行超过 PREVIEW_MAX_LINE_BYTES：一条行没法再窗口化，退回去看前 PREVIEW_TEXT_LIMIT */
-  | { kind: "long-line"; size: number; modifiedAt: number }
-  | { kind: "too-many-lines"; limit: number; size: number; modifiedAt: number };
+  /** 单行超过 PREVIEW_MAX_LINE_BYTES：一条行没法再窗口化，`headText` 是前 PREVIEW_TEXT_LIMIT 的文本 */
+  | { kind: "long-line"; headText: string; size: number; modifiedAt: number }
+  | { kind: "too-large"; limit: number; size: number; modifiedAt: number }
+  | { kind: "cancelled" };
 
 /**
  * `fs:read-lines` 的请求：一个索引令牌 + 要第几行起的几行。**没有路径**——令牌已经
@@ -174,8 +190,13 @@ export interface FileLinesRequest {
  * `fs:read-lines` 的回执。行按 `\n` 切（`\r\n` 的 `\r` 已去掉），末尾换行**不**多出
  * 一个空行（`"a\nb\n"` 是 2 行，与 `wc -l` 的口径一致，日志末尾不会挂一条空白行）。
  *
- * `stale` = 索引建好之后文件的大小或 mtime 变了（被替换 / 追加）：不猜内容，让 renderer
- * 重新索引。二进制与太小 / 太多行都在 `fs:line-index` 那一步就挡掉了，走不到这条通道。
+ * - `text.totalLines` 可能比建索引时大：文件只是变长（正在写的日志）时，主进程先把索引
+ *   接着扫到新末尾再取窗，renderer 据此撑高滚动容器；
+ * - `stale`：文件被改写 / 截断 / 替换，旧检查点不再可信，不猜内容，让 renderer 重新索引
+ *   （renderer 自动重建，有次数上限）；
+ * - `expired`：令牌不认识（缓存把它挤掉了 / 应用重启过）。同样让 renderer 重新索引——
+ *   以前这条是 reject，用户只能看到一行红字再手点重试。
+ * 二进制与过大都在 `fs:line-index` 那一步就挡掉了，走不到这条通道。
  */
 export type FileLines =
   | {
@@ -187,28 +208,8 @@ export type FileLines =
       size: number;
       modifiedAt: number;
     }
-  | { kind: "stale"; size: number; modifiedAt: number };
-
-/**
- * 每次 `fs:read-lines` 最多给多少行（主进程夹取的上限）：一份 600 行的窗口在
- * 18.6 px 行高下是 11,000 px，比最长的桌面还高，滚一次窗口不会露出空白；
- * 同时它把一次 IPC 的载荷压在几十 KB（一条 200 字符的行约 200 B）。
- */
-export const PREVIEW_LINES_PER_READ = 600;
-
-/**
- * 行索引最多记多少行（1.8 M）：Chromium 的原生滚动高度是 33,554,430 px，按
- * 18.59 px 一行算出 1,804,650 行——超过这个数滚动条就无法映射到全文位置了。
- * 取 1.8 M 留一点余量（约 200 MB 的常规日志），再大的文件给「用默认应用打开」。
- */
-export const PREVIEW_MAX_INDEXED_LINES = 1_800_000;
-
-/**
- * 分段预览能容忍的单行字节上限（64 KB）：分段是按行窗口化的，一行再长也只能整条渲染，
- * 而一条 8 MB 的行建 DOM 就要 460 ms（PR #279 实测）。超过它的文件退回
- * 「前 PREVIEW_TEXT_LIMIT + 长行硬切」，那是长行唯一可行的渲染方式。
- */
-export const PREVIEW_MAX_LINE_BYTES = 64 * 1024;
+  | { kind: "stale"; size: number; modifiedAt: number }
+  | { kind: "expired" };
 
 /**
  * 网页类文件：浏览器能直接渲染、在内置浏览器里打开有意义的那几种。文件面板据此给「在内置
@@ -250,24 +251,6 @@ export interface FsEntryFact {
 }
 
 /**
- * 文本预览最多读的字节数（16 MB）：再大的日志 / 数据文件只读开头，截断如实标出。
- *
- * 这个上限现在的含义已经变了：窗口化（`WINDOW_TEXT_LIMIT`）之后它**不再是渲染上限**
- * （DOM 里最多只有可视区附近那几百行），它只保护两件事——整份文本进 renderer 的 JS
- * 堆（保留内存约 1.2× 文件体积），以及一次 IPC 结构化克隆的耗时。
- *
- * 依据（2026-10-25 实测，Electron 43 + 同一套窗口化 DOM，page cache 热读、窗口可见）：
- * 16 MB 在 harness 里首帧 21–26 ms，真应用里点击→首帧 64 ms（外壳那一段是不随体积
- * 增长的常数），renderer 堆 +20 MB，无长任务；32 MB 也稳（harness 39–48 ms / +40 MB），
- * 但慢机按 2–3× 折价后 32 MB 就要 100+ ms，所以默认取 16 MB 给慢机留余量。
- * 超过它的文件面板给「用默认应用打开」。
- */
-export const PREVIEW_TEXT_LIMIT = 16 * 1024 * 1024;
-
-/** 图片预览上限（20 MB）：base64 过 IPC 再进 <img>，再大就不读 */
-export const PREVIEW_IMAGE_LIMIT = 20 * 1024 * 1024;
-
-/**
  * PDF 预览（`fs:read-pdf` 的回执，实验功能「PDF 引用」）。字节原样过 IPC
  * （Uint8Array 走结构化克隆，不转 base64），renderer 交给 pdf.js 渲染。白名单与
  * fs:read 同一道。上限与外部附件的复制上限同值：再大的 PDF 本来也不会被复制进会话。
@@ -276,9 +259,140 @@ export type PdfFile =
   | { kind: "pdf"; data: Uint8Array; size: number; modifiedAt: number }
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
 
-/** PDF 预览上限（100 MB） */
-export const PREVIEW_PDF_LIMIT = 100 * 1024 * 1024;
-
 export function isPdfFile(path: string): boolean {
   return /\.pdf$/i.test(path);
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+// 文件预览的尺寸门槛——**只有这一处**
+//
+// 预览管线上每一道「超过多大就换一条路」都在下面。renderer 的 preview-view / range-view /
+// RangeTextPreview、主进程的 read / lines 都从这里取，别的地方不再写死数字
+// （之前散在 preview-view.ts、range-view.ts、lines.ts、read.ts 四个文件里，read.ts 与
+// lines.ts 各抄了一份「嗅二进制看多少字节」）。边界只收**文件预览**：终端缓冲、图片
+// 预算、git maxBuffer、会话尾窗保护的是别的东西，不进这张表。
+//
+// | 门槛                          | 值        | 保护什么                         | 超过之后                         |
+// | ----------------------------- | --------- | -------------------------------- | -------------------------------- |
+// | PREVIEW_BINARY_SNIFF_BYTES    | 8 KB      | 判二进制只看开头                 | —                                |
+// | PREVIEW_MARKDOWN_LIMIT        | 64 KB     | MarkdownBlock 的 DOM 代价        | 退到等宽原文                     |
+// | PREVIEW_MAX_LINE_BYTES        | 64 KB     | 分段预览里一条行的渲染代价       | long-line，退回前 16 MB 硬切     |
+// | PREVIEW_HIGHLIGHT_LIMIT       | 200 KB    | shiki 高亮的耗时与缓存           | 退到等宽原文                     |
+// | PREVIEW_WINDOW_LIMIT          | 256 KB    | 单个文本节点的整篇重排           | 窗口化，只渲染可视区附近的行     |
+// | PREVIEW_ROW_CHARS             | 4096 字符 | 一条显示行的长度                 | 硬切成多条显示行                 |
+// | PREVIEW_LINES_PER_READ        | 600 行    | 一次 `fs:read-lines` 的载荷      | 主进程夹取                       |
+// | PREVIEW_TEXT_LIMIT            | 16 MB     | 整份文本进 renderer 堆 / 一次 IPC | 分段预览（按行取窗）             |
+// | PREVIEW_IMAGE_LIMIT           | 20 MB     | base64 过 IPC 再进 <img>         | 空态 + 默认应用打开              |
+// | PREVIEW_MAX_INDEX_BYTES       | 1 GiB     | 主进程扫一遍换行的耗时           | 空态 + 默认应用打开              |
+// | PREVIEW_PDF_LIMIT             | 100 MB    | PDF 字节过 IPC                   | 空态 + 默认应用打开              |
+//
+// **不在表里的两个数是运行时才知道的**：滚动容器能撑多高（Chromium 的上限按物理像素算，
+// 随显示器缩放与页面缩放变——同一台 Mac 上页面缩放 0.5 / 1 / 2 实测 33.5M / 16.7M / 8.4M px）
+// 由 renderer 的探针现量（`useScrollHeightLimit.ts`）；由它除以行高得到的「最多能浏览多少行」
+// 因此也不是常量。
+// ───────────────────────────────────────────────────────────────────────────────
+
+/** 「有没有 NUL 字节」判定只看开头这一段（`fs:read` 与 `fs:line-index` 共用，与文本截断上限是两个独立的尺度） */
+export const PREVIEW_BINARY_SNIFF_BYTES = 8 * 1024;
+
+/**
+ * Markdown 渲染上限（64 KB）：**超过就走等宽原文 + 顶部提示**，不进 MarkdownBlock。
+ *
+ * 依据（2026-10-23 实测，隔离实例 paper0 + CDP，面板宽 ~540px，正文节点数 / 最长一次
+ * 主线程 longtask / 点击到首帧）：
+ *
+ * | md 体积 | 正文 DOM 节点 | 最长 longtask | 点击→首帧 |
+ * | --- | ---: | ---: | ---: |
+ * | 32 KB | 4,713 | 488 ms | 669 ms |
+ * | 64 KB | 9,330 | 755 ms | 1,081 ms |
+ * | 128 KB | 18,545 | 1,311 ms | 1,944 ms |
+ * | 256 KB | 36,234 | 2,296 ms | 3,473 ms |
+ * | 1 MB | 97,921 | 5,636 ms | 7,714 ms（JS 堆 +73 MB） |
+ *
+ * MarkdownBlock 为整篇建 DOM（每个段落 / 列表项 / 表格单元 / 代码块都是节点），
+ * 代价与体积近似线性但常数极大：1 MB 那一次窗口冻结了近 6 秒。64 KB 落在「小于
+ * 50 KB 的现有渲染行为不变」这条底线之上、单次打开已经要 0.8 秒的位置。
+ */
+export const PREVIEW_MARKDOWN_LIMIT = 64 * 1024;
+
+/**
+ * 代码高亮的体积上限（200 KB）：shiki 在几 MB 的文件上会明显卡顿，且
+ * `highlight.ts` 的 HTML 缓存没有上限——超过这个数退回等宽原文，不进高亮管线。
+ */
+export const PREVIEW_HIGHLIGHT_LIMIT = 200 * 1024;
+
+/**
+ * 大文本窗口化阈值（256 KB）：超过它只在 DOM 里放可视区附近的行（±WINDOW_OVERSCAN，在 preview-view.ts）。
+ *
+ * 依据（同一轮实测，等宽原文 `<pre>` 全文渲染）：
+ *
+ * | 文本 | 正文节点 | 最长 longtask | 点击→首帧 |
+ * | --- | ---: | ---: | ---: |
+ * | 300 KB / 3,151 行 | 1 个文本节点 | 0 | 224 ms（= 50 KB 的基线） |
+ * | 600 KB / 3,654 行 | 1 | 117 ms（.bib） | 242 ms |
+ * | 2 MB / 21,083 行 | 1 | 142 ms | 203 ms |
+ *
+ * 单个文本节点本身很便宜，贵的是它在**每次布局**（打开、面板拖宽、滚到没缓存过的
+ * 段）上都要重排整篇：2 MB 时一次 142 ms 的阻塞、600 KB × 每行 100–200 字符时 117 ms。
+ * 256 KB 是「全文 `<pre>` 仍然只有一次廉价布局」的上界（300 KB 已与 50 KB 基线同价），
+ * 再往上行数与字符数都开始把布局推过 100 ms。窗口化之后任何体积的代价都是常数：
+ * 最多 2 × 200 + 一屏的行进 DOM。
+ */
+export const PREVIEW_WINDOW_LIMIT = 256 * 1024;
+
+/**
+ * 窗口化时一条显示行最多放多少字符（超出就硬切成多条显示行）。
+ *
+ * 窗口化是**按行**切窗口的，而一行本身无法再窗口化：一行有多长，它的行盒就有多长。
+ * 依据（2026-10-25 实测，面板 540 × 700）：8 MB 一行 → 建 DOM 460 ms + 465 ms 长任务；
+ * 32 MB 一行 → 到屏 1.9 s；按 4,096 字符硬切后同样的 32 MB 一行只要 24 ms、无长任务。
+ * 4,096 远宽于面板（12 px 等宽字在 540 px 里约 45 字符），用户照样要横向滚动——
+ * 它只是把「一条显示行的长度」从无界变成有界，不改文本内容、不插换行符。
+ */
+export const PREVIEW_ROW_CHARS = 4096;
+
+/**
+ * 一整份文本最多读进 renderer 的字节数（16 MB）：再大的文本不再整份过 IPC，改走分段预览。
+ *
+ * 这个上限现在的含义已经变了：窗口化（`PREVIEW_WINDOW_LIMIT`）之后它**不再是渲染上限**
+ * （DOM 里最多只有可视区附近那几百行），它只保护两件事——整份文本进 renderer 的 JS
+ * 堆（保留内存约 1.2× 文件体积），以及一次 IPC 结构化克隆的耗时。
+ *
+ * 依据（2026-10-25 实测，Electron 43 + 同一套窗口化 DOM，page cache 热读、窗口可见）：
+ * 16 MB 在 harness 里首帧 21–26 ms，真应用里点击→首帧 64 ms（外壳那一段是不随体积
+ * 增长的常数），renderer 堆 +20 MB，无长任务；32 MB 也稳（harness 39–48 ms / +40 MB），
+ * 但慢机按 2–3× 折价后 32 MB 就要 100+ ms，所以默认取 16 MB 给慢机留余量。
+ */
+export const PREVIEW_TEXT_LIMIT = 16 * 1024 * 1024;
+
+/** 图片预览上限（20 MB）：base64 过 IPC 再进 <img>，再大就不读 */
+export const PREVIEW_IMAGE_LIMIT = 20 * 1024 * 1024;
+
+/** PDF 预览上限（100 MB）：与外部附件的复制上限同值，见 `PdfFile` */
+export const PREVIEW_PDF_LIMIT = 100 * 1024 * 1024;
+
+/**
+ * 每次 `fs:read-lines` 最多给多少行（主进程夹取的上限）：一份 600 行的窗口在
+ * 18.6 px 行高下是 11,000 px，比最长的桌面还高，滚一次窗口不会露出空白；
+ * 同时它把一次 IPC 的载荷压在几十 KB（一条 200 字符的行约 200 B）。
+ */
+export const PREVIEW_LINES_PER_READ = 600;
+
+/**
+ * 分段预览能容忍的单行字节上限（64 KB）：分段是按行窗口化的，一行再长也只能整条渲染，
+ * 而一条 8 MB 的行建 DOM 就要 460 ms（PR #279 实测）。超过它的文件退回
+ * 「前 PREVIEW_TEXT_LIMIT + 长行硬切」，那是长行唯一可行的渲染方式。
+ */
+export const PREVIEW_MAX_LINE_BYTES = 64 * 1024;
+
+/**
+ * 主进程愿意为一个文件扫一遍换行的最大字节数（1 GiB）。超过的不扫，回 `too-large`，
+ * 面板给「用默认应用打开」。
+ *
+ * 扫描是 8 MB 一块、块间让出事件循环的，不会卡住主进程，所以它保护的是**等待时间**与
+ * 磁盘：page cache 热时约 1.4 GB/s（100 MB 用时 67–79 ms），冷盘 / 网络盘可低至百 MB/s，
+ * 1 GiB 在最慢的盘上也只是十几秒，且用户换标签就取消。再往上（几 GB 的转储 / 导出）本来
+ * 也不是一个「预览」该做的事。它同时是「几 MB 一行的少行巨文件」的闸：那种文件不会撞
+ * 单行上限之外的任何早退，只能靠字节数挡。
+ */
+export const PREVIEW_MAX_INDEX_BYTES = 1024 * 1024 * 1024;

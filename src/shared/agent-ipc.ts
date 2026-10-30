@@ -226,13 +226,17 @@ export const ipcChannels = {
   /**
    * 建一个文件的行索引（同 root/dir 白名单，回 `FileLineIndex`，files.ts）：大于
    * PREVIEW_TEXT_LIMIT 的文本走「按行分段预览」时，renderer 先问这份文件有多少行。
-   * 主进程按 8 MB 分块扫换行、逐块让出事件循环，索引按 path+size+mtime 缓存（LRU 3），
-   * 回一个只能读这个文件的 `indexId` 令牌。文件太大 / 单行太长 / 二进制各有明确结果。
+   * 主进程按 8 MB 分块扫换行、逐块让出事件循环；同一个文件同时只扫一遍（在途的请求合并），
+   * 文件只是变长时在原索引上接着扫；请求带 `requestId`，换标签时可用 `fs:line-index-cancel` 停掉。
+   * 回一个只能读这个文件的 `indexId` 令牌。
    */
   fsLineIndex: "fs:line-index",
+  /** 取消一次还在扫的 `fs:line-index`（单向，载荷就是请求里的 `requestId`；没有对应请求就什么都不做） */
+  fsLineIndexCancel: "fs:line-index-cancel",
   /**
    * 按行读一段（回 `FileLines`）：载荷只有 `indexId` + `startLine` + `count`，**不接受
-   * 路径**——令牌已绑定白名单校验过的文件。文件在索引之后变过就回 `stale`，不猜内容。
+   * 路径**——令牌已绑定白名单校验过的文件。文件被改写回 `stale`、令牌过期回 `expired`，
+   * 都不猜内容；只是变长则接着扫索引再读。
    */
   fsReadLines: "fs:read-lines",
   /** 用系统默认应用打开一个文件（同 root/dir 白名单）；预览不了或想编辑时的出口 */
