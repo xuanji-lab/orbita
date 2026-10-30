@@ -57,7 +57,8 @@ import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
-import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
+import { priceChartSourceOf, registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
+import { applyModelCosts } from "./usage/model-costs.ts";
 import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
@@ -479,6 +480,18 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerDelegate(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerDelegate(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 派发参考：agent 的 model_costs——数据（任务账本、服务商声明）在主进程。同样任何路径都回执
+    if (event.type === "modelCostsRequest") {
+      void applyModelCosts(() => priceChart())
+        .then((outcome) => agentHost.answerModelCosts(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerModelCosts(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
@@ -931,12 +944,15 @@ void app.whenReady().then(async () => {
   registerProviderIpc(providers, agentHost);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
-  registerPriceChartIpc({
+  // 设置页的图与 agent 的 model_costs 工具读同一份（同一个 memo）：priceChart 在上面
+  // agentHost 的 onEvent 里被引用，那里只在事件到达时执行，此时已定义
+  const priceChart = priceChartSourceOf({
     ledger: taskLedger,
     providers: () => providers.load(),
     catalog: () => agentHost.listBuiltins(),
     sessions: () => sessions.list(),
   });
+  registerPriceChartIpc(priceChart);
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();

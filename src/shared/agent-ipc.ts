@@ -997,6 +997,8 @@ export type AgentCommand =
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
+  /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
+  | ({ type: "modelCostsResult"; requestId: string } & ModelCostsOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   | {
@@ -1108,6 +1110,12 @@ export interface DelegateCard {
 export type DelegateOutcome =
   | { ok: true; childId: string; title: string; card: DelegateCard }
   | { ok: false; error: string };
+
+/**
+ * modelCostsRequest 的回执载荷：主进程把「价格 · 能力图」的数据压成一张给模型读的紧凑表
+ * （main/usage/model-costs.ts），agent 进程原样当工具结果。没有卡：这张表只给模型，UI 走通用工具卡。
+ */
+export type ModelCostsOutcome = { ok: true; text: string } | { ok: false; error: string };
 
 /** channelSendRequest 的回执载荷：成功回落进通道的那条消息 id（供对账与测试断言） */
 export type ChannelSendOutcome =
@@ -1255,6 +1263,12 @@ export type AgentEvent =
       /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
     }
+  /**
+   * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、
+   * 服务商声明与 pi 目录都不在 agent 进程），复用设置页「价格 · 能力图」同一份算好的结果
+   * （同一个 memo），压成一张表回 modelCostsResult。只根会话注册（子会话不能再派）。
+   */
+  | { type: "modelCostsRequest"; requestId: string; sessionId: string }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，

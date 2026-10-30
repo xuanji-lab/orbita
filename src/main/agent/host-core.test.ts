@@ -445,6 +445,26 @@ describe("steer —— 父→子注入的发送侧（子会话）", () => {
   });
 });
 
+describe("answerModelCosts —— 派发参考的回执", () => {
+  test("成功带 text，失败只带 error；进程没了就静默", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    ctx.host.answerModelCosts("r0", { ok: false, error: "gone" });
+    assert.equal(ctx.forks(), 0);
+
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.answerModelCosts("r1", { ok: true, text: "model | thinking" });
+    ctx.host.answerModelCosts("r2", { ok: false, error: "boom" });
+    assert.deepEqual(ctx.child().posted.at(-2), { type: "modelCostsResult", requestId: "r1", ok: true, text: "model | thinking" });
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "modelCostsResult", requestId: "r2", ok: false, error: "boom" });
+  });
+});
+
 describe("answerDelegate / answerChannelSend —— 子会话请求的回执", () => {
   test("answerDelegate：成功带 childId/title/card，失败只带 error；进程没了就静默", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });

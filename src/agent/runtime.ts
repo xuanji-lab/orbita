@@ -784,7 +784,7 @@ function extraToolNames(role: "root" | "child", workspaceId: string | null, memo
     "add_mcp_server",
     "read_task",
     ...TERMINAL_TOOL_NAMES,
-    ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
+    ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
   ];
 }
@@ -2170,6 +2170,11 @@ async function handle(command: AgentCommand): Promise<void> {
         ? { ok: true, card: command.card, text: command.text }
         : { ok: false, error: command.error ?? "Read failed" },
     );
+    return;
+  }
+  if (command.type === "modelCostsResult") {
+    // 派发参考的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "memoryRecallResult") {

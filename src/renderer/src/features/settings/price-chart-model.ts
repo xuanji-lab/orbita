@@ -24,22 +24,8 @@ export function cycleCategory(current: PriceChartCategory, step: 1 | -1): PriceC
   return PRICE_CHART_CATEGORIES[next] ?? current;
 }
 
-/**
- * 帕累托前沿：按花费从低到高扫，只留「比所有更便宜的点分数都高」的点——同等花费分数最高、
- * 再往上找更高分就要花更多钱。花费相同的按分数从高到低先扫，只有最高的那个能进前沿。
- */
-export function paretoFrontier<T extends Pick<PriceChartPoint, "cost" | "score">>(points: readonly T[]): T[] {
-  const sorted = [...points].sort((a, b) => a.cost - b.cost || b.score - a.score);
-  const out: T[] = [];
-  let best = Number.NEGATIVE_INFINITY;
-  for (const point of sorted) {
-    if (point.score > best) {
-      out.push(point);
-      best = point.score;
-    }
-  }
-  return out;
-}
+// 帕累托前沿与点的身份挪到 shared（主进程的 model_costs 工具也要用），这里转出，调用方不动
+export { paretoFrontier, pointKey } from "../../../../shared/price-chart.ts";
 
 export interface AxisRange {
   min: number;
@@ -122,11 +108,6 @@ export function formatScore(score: number, unit: PriceChartScoreUnit): string {
   const pct = score * 100;
   const sign = pct > 0 ? "+" : pct < 0 ? "−" : "";
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
-}
-
-/** 点的身份（型号 × 档：同一型号挂几家服务商都是一个点） */
-export function pointKey(point: Pick<PriceChartPoint, "modelId" | "thinkingLevel">): string {
-  return `${point.modelId}\u0000${point.thinkingLevel ?? "none"}`;
 }
 
 /**

@@ -139,3 +139,28 @@ export interface PriceChartData {
     attribution: string;
   };
 }
+
+/** 点的身份（型号 × 档：同一型号挂几家服务商都是一个点） */
+export function pointKey(point: Pick<PriceChartPoint, "modelId" | "thinkingLevel">): string {
+  return `${point.modelId}\u0000${point.thinkingLevel ?? "none"}`;
+}
+
+/**
+ * 帕累托前沿：按花费从低到高扫，只留「比所有更便宜的点分数都高」的点——同等花费分数最高、
+ * 再往上找更高分就要花更多钱。花费相同的按分数从高到低先扫，只有最高的那个能进前沿。
+ *
+ * 设置页画前沿线与 agent 的 model_costs 工具标「在前沿上」共用这一份（原先在 renderer，
+ * 主进程要用就挪到这里）。调用方负责先把借分点（`scoreFrom`）筛掉。
+ */
+export function paretoFrontier<T extends Pick<PriceChartPoint, "cost" | "score">>(points: readonly T[]): T[] {
+  const sorted = [...points].sort((a, b) => a.cost - b.cost || b.score - a.score);
+  const out: T[] = [];
+  let best = Number.NEGATIVE_INFINITY;
+  for (const point of sorted) {
+    if (point.score > best) {
+      out.push(point);
+      best = point.score;
+    }
+  }
+  return out;
+}
