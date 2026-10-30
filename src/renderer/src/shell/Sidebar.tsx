@@ -6,6 +6,14 @@ import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
+import { MoveSessionsDialog } from "./MoveSessionsDialog.tsx";
+import {
+  EMPTY_SELECTION,
+  nextSelection,
+  rowClickKind,
+  selectedInOrder,
+  type SidebarSelection,
+} from "./sidebar-selection.ts";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
@@ -248,6 +256,15 @@ export function Sidebar(props: {
    */
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   /**
+   * 任务行多选（Shift 选一段 / ⌘·Ctrl 逐个加）：只为批量迁移服务，不持久化。
+   * 规则在 sidebar-selection.ts；多选非空时列表上方出现多选条。
+   */
+  const [selection, setSelection] = useState<SidebarSelection>(EMPTY_SELECTION);
+  /** 迁移没全成功时的说明（在跑的跳过等）：贴在多选条下面，下一次点击任务行时清掉 */
+  const [moveNote, setMoveNote] = useState<string | null>(null);
+  /** 「迁移任务…」弹窗开在哪个工作区上；null = 没开 */
+  const [moveDialogFor, setMoveDialogFor] = useState<string | null>(null);
+  /**
    * 分组状态：哪些组折叠着、哪些组点了 Show more 全量铺开。状态本体在
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
    */
@@ -332,6 +349,72 @@ export function Sidebar(props: {
     props.onOverlay(null);
     session.openSession(id);
   };
+
+  /**
+   * 主列表从上到下**可见**的任务行（Shift 区间按它算）：展开着的工作区组各自的可见行，
+   * 再接 TASKS 的可见行——与下面的渲染顺序一致，折起的组、Show more 后藏着的不算。
+   */
+  const visibleOrder = [
+    ...(workspaceList.body === "list" ? workspaceMatches : []).flatMap((workspace) => {
+      const key = foldKeyForWorkspace(workspace.id);
+      if (isGroupFolded(groups, key)) return [];
+      const members = scoped.filter((m) => m.workspaceId === workspace.id);
+      return visibleWithOpen(members, groupVisibleLimit(groups, key), openId).map((m) => m.id);
+    }),
+    ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
+  ];
+  const batch = selectedInOrder(selection, visibleOrder);
+  const listView = !overlayOpen && !props.showArchived && !props.showCarryovers;
+  /** 行的高亮：多选进行中只亮选中的那几行（Finder 同款），否则亮正打开的那条 */
+  const rowActive = (id: string): boolean => (batch.length > 0 ? selection.ids.has(id) : id === openId);
+  /** 某一行菜单里「移到…」要搬哪些：它在多选里就搬整批，否则只搬它自己 */
+  const moveIdsFor = (id: string): readonly string[] =>
+    batch.length > 1 && selection.ids.has(id) ? batch : [id];
+  const clickRow = (id: string, event: React.MouseEvent): void => {
+    const kind = rowClickKind(event);
+    // Shift 点按钮会顺手扩一段页面文字选区，清掉——这里的 Shift 是选任务不是选字
+    if (kind === "range") window.getSelection()?.removeAllRanges();
+    const next = nextSelection(selection, kind, id, visibleOrder, openId);
+    setSelection(next.selection);
+    setMoveNote(null);
+    if (next.open) open(id);
+  };
+  const clearSelection = (): void => {
+    setSelection(EMPTY_SELECTION);
+    setMoveNote(null);
+  };
+  /**
+   * 迁移（行菜单 / 多选条共用）：没迁动的留在多选里并把原因写在多选条下——
+   * 在跑的会话被跳过不能是悄悄的。迁过去的那一组展开，让用户看到它们落在哪。
+   */
+  const moveBatch = (ids: readonly string[], target: string | null): void => {
+    void session
+      .moveSessions(ids, target)
+      .then((result) => {
+        const running = result.skipped.filter((item) => item.reason === "running").length;
+        setSelection({ ids: new Set(result.skipped.map((item) => item.id)), anchor: null });
+        setMoveNote(result.skipped.length === 0 ? null : t.sidebar.moveSkipped(running, result.skipped.length - running));
+        if (result.moved.length > 0) {
+          setGroups((current) =>
+            unfoldGroup(current, target === null ? TASKS_FOLD_KEY : foldKeyForWorkspace(target)),
+          );
+        }
+      })
+      .catch((cause: unknown) => setMoveNote(cause instanceof Error ? cause.message : String(cause)));
+  };
+  /** 一条任务（或其子会话）在跑：迁移会跳过它，弹窗里先灰掉 */
+  const familyRunning = (id: string): boolean =>
+    session.phaseOf(id) !== "idle" ||
+    childSessions(session.sessions, id).some((child) => session.phaseOf(child.id) !== "idle");
+  // Esc 清多选（弹窗开着时 Esc 归弹窗）
+  useEffect(() => {
+    if (batch.length === 0 || moveDialogFor !== null) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") clearSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [batch.length, moveDialogFor]);
 
   /**
    * 左栏的文件视图（浏览 / 专注）：设置页与 Archived / Carryovers 子视图盖着时
@@ -489,6 +572,50 @@ export function Sidebar(props: {
         </div>
       )}
 
+      {listView && (batch.length > 0 || moveNote !== null) && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          {batch.length > 0 && (
+            <div className="sidebar-selection-bar" title={t.sidebar.selectHint}>
+              <span>{t.sidebar.selectedCount(batch.length)}</span>
+              <Menu
+                items={moveTargetItems(t, session.workspaces, batch, null, moveBatch)}
+                align="end"
+                panelMinWidth={160}
+                panelMaxWidth={240}
+                trigger={({ open: menuOpen, toggle }) => (
+                  // 带字的按钮：多选条上唯一的动作，光一个图标读不出「这是迁移」
+                  <button
+                    type="button"
+                    className="sidebar-selection-move"
+                    aria-expanded={menuOpen}
+                    title={t.sidebar.moveCount(batch.length)}
+                    onClick={toggle}
+                  >
+                    <Icon name="folder-sync" size={13} strokeWidth={1.8} />
+                    {t.sidebar.moveTo}
+                  </button>
+                )}
+              />
+              <IconButton
+                label={t.sidebar.clearSelection}
+                title={t.sidebar.clearSelection}
+                size={24}
+                onClick={clearSelection}
+                style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
+              >
+                <Icon name="x" size={14} strokeWidth={1.8} />
+              </IconButton>
+            </div>
+          )}
+          {moveNote !== null && (
+            <p className="sidebar-move-note" role="status">
+              <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
+              {moveNote}
+            </p>
+          )}
+        </div>
+      )}
+
       <div
         className="scroll"
         style={{
@@ -530,6 +657,8 @@ export function Sidebar(props: {
                 session={session}
                 active={meta.id === openId}
                 onClick={() => open(meta.id)}
+                moveIds={[meta.id]}
+                onMove={moveBatch}
               />
             ))}
           </>
@@ -716,7 +845,11 @@ export function Sidebar(props: {
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
                       onBrowse={() => props.onBrowseWorkspace(workspace.id)}
-                      onOpen={open}
+                      onMoveTasks={() => setMoveDialogFor(workspace.id)}
+                      rowActive={rowActive}
+                      onRowClick={clickRow}
+                      moveIdsFor={moveIdsFor}
+                      onMove={moveBatch}
                     />
                   ))
                 ) : null}
@@ -760,8 +893,10 @@ export function Sidebar(props: {
                         key={meta.id}
                         meta={meta}
                         session={session}
-                        active={meta.id === openId}
-                        onClick={() => open(meta.id)}
+                        active={rowActive(meta.id)}
+                        onClick={(event) => clickRow(meta.id, event)}
+                        moveIds={moveIdsFor(meta.id)}
+                        onMove={moveBatch}
                       />
                     ))}
                     <ShowMoreRow
@@ -786,6 +921,29 @@ export function Sidebar(props: {
        * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
        * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
        */}
+      {moveDialogFor !== null &&
+        (() => {
+          const source = session.workspaces.find((w) => w.id === moveDialogFor);
+          if (source === undefined) return null;
+          return (
+            <MoveSessionsDialog
+              source={source}
+              sessions={live.filter((m) => m.workspaceId === source.id)}
+              workspaces={session.workspaces}
+              isRunning={familyRunning}
+              onMove={async (ids, target) => {
+                const result = await session.moveSessions(ids, target);
+                if (result.moved.length > 0) {
+                  setGroups((current) =>
+                    unfoldGroup(current, target === null ? TASKS_FOLD_KEY : foldKeyForWorkspace(target)),
+                  );
+                }
+                return result;
+              }}
+              onClose={() => setMoveDialogFor(null)}
+            />
+          );
+        })()}
       <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} petSay={props.usageSay} petCard={props.usageCard} />
     </aside>
     {/*
@@ -843,7 +1001,13 @@ function WorkspaceGroup(props: {
   onRemove: () => void;
   /** 悬停的「查看工作区文件」 */
   onBrowse: () => void;
-  onOpen: (id: string) => void;
+  /** 悬停的「迁移任务…」：开可勾选的批量迁移弹窗 */
+  onMoveTasks: () => void;
+  /** 多选：行高亮、点击、行菜单「移到…」的目标与执行（Sidebar 持有状态） */
+  rowActive: (id: string) => boolean;
+  onRowClick: (id: string, event: React.MouseEvent) => void;
+  moveIdsFor: (id: string) => readonly string[];
+  onMove: (ids: readonly string[], target: string | null) => void;
 }) {
   const t = useT();
   const [armed, setArmed] = useState(false);
@@ -951,6 +1115,18 @@ function WorkspaceGroup(props: {
             悬停动作簇（静止不占位）：「查看工作区文件」（list-tree，zcode 同款）
             在删除键前面——浏览是常事，删除是两段式。
           */}
+          {props.sessions.length > 0 && (
+            <IconButton
+              label={t.sidebar.moveTasks}
+              title={t.sidebar.moveTasks}
+              size={20}
+              onClick={props.onMoveTasks}
+              className="reveal workspace-group-act"
+              style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
+            >
+              <Icon name="folder-sync" size={14} strokeWidth={1.8} />
+            </IconButton>
+          )}
           <IconButton
             label={t.focus.browseFiles}
             title={t.focus.browseFiles}
@@ -994,8 +1170,10 @@ function WorkspaceGroup(props: {
               key={meta.id}
               meta={meta}
               session={props.session}
-              active={meta.id === props.openId}
-              onClick={() => props.onOpen(meta.id)}
+              active={props.rowActive(meta.id)}
+              onClick={(event) => props.onRowClick(meta.id, event)}
+              moveIds={props.moveIdsFor(meta.id)}
+              onMove={props.onMove}
             />
           ))}
           <ShowMoreRow
@@ -1143,6 +1321,36 @@ function visibleWithOpen<T extends { id: string }>(sessions: readonly T[], limit
 }
 
 /**
+ * 「移到…」的目标清单（行菜单与多选条共用）：无工作区（回到 TASKS）+ 全部工作区。
+ * current = 打勾的那一项；undefined = 不打勾（批量时一批可能来自不同工作区）。
+ * 迁移会连工作目录一起换（session:move），在跑的跳过——由调用方的 onMove 报告。
+ */
+function moveTargetItems(
+  t: Messages,
+  workspaces: readonly Workspace[],
+  ids: readonly string[],
+  current: string | null | undefined,
+  onMove: (ids: readonly string[], target: string | null) => void,
+): MenuItem[] {
+  return [
+    {
+      id: "none",
+      label: t.sidebar.noWorkspaceTarget,
+      icon: "folder",
+      checked: current === null,
+      onSelect: () => onMove(ids, null),
+    },
+    ...workspaces.map((workspace): MenuItem => ({
+      id: workspace.id,
+      label: workspace.name,
+      icon: "folder" as const,
+      checked: current === workspace.id,
+      onSelect: () => onMove(ids, workspace.id),
+    })),
+  ];
+}
+
+/**
  * 「Show N more / Show less」行：垫在列表尾。**条数写进文案**——被藏起来多少
  * 这件事不能是悄悄的（下一次放几条、一共还藏几条）。还有藏着的就是 Show more；
  * 全放完了且点过 Show more，原地变成 Show less，收回默认预览（排序保证前 N 条
@@ -1182,7 +1390,7 @@ function NavRow(props: {
   icon: IconName | null;
   label: string;
   active: boolean;
-  onClick?: (() => void) | undefined;
+  onClick?: ((event: React.MouseEvent<HTMLButtonElement>) => void) | undefined;
   disabled?: boolean;
   tone?: string;
   spin?: boolean;
@@ -1299,7 +1507,10 @@ function SessionRow(props: {
   meta: SessionMeta;
   session: ChatSession;
   active: boolean;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent) => void;
+  /** 菜单「移到…」搬哪些：这一行在多选里就是整批，否则只有它自己 */
+  moveIds: readonly string[];
+  onMove: (ids: readonly string[], target: string | null) => void;
 }) {
   const t = useT();
   const { meta, session } = props;
@@ -1438,22 +1649,14 @@ function SessionRow(props: {
             },
           ]
         : step === "move"
-        ? [
-            {
-              id: "none",
-              label: t.sidebar.noWorkspaceTarget,
-              icon: "folder",
-              checked: meta.workspaceId === null,
-              onSelect: () => session.moveSession(meta.id, null),
-            },
-            ...session.workspaces.map((workspace): MenuItem => ({
-              id: workspace.id,
-              label: workspace.name,
-              icon: "folder" as const,
-              checked: meta.workspaceId === workspace.id,
-              onSelect: () => session.moveSession(meta.id, workspace.id),
-            })),
-          ]
+        ? moveTargetItems(
+            t,
+            session.workspaces,
+            props.moveIds,
+            // 批量时不打勾：一批里可能来自不同工作区
+            props.moveIds.length > 1 ? undefined : meta.workspaceId,
+            props.onMove,
+          )
         : [
             { id: "rename", label: t.common.rename, icon: "pencil-line", onSelect: () => setEditing(true) },
             {
@@ -1466,7 +1669,7 @@ function SessionRow(props: {
             // （一次点击，不必开菜单）。同一个动作留两个入口只会让菜单更长、更难扫
             {
               id: "move",
-              label: t.sidebar.moveTo,
+              label: props.moveIds.length > 1 ? t.sidebar.moveCount(props.moveIds.length) : t.sidebar.moveTo,
               icon: "folder",
               keepOpen: true,
               onSelect: () => setStep("move"),

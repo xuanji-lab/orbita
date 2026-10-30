@@ -519,6 +519,24 @@ export const zh: Messages = {
     unpin: "取消置顶",
     pin: "置顶",
     moveTo: "移到…",
+    moveCount: (count) => `把 ${count} 个任务移到…`,
+    selectedCount: (count) => `已选 ${count} 个任务`,
+    clearSelection: "取消选择（Esc）",
+    selectHint: "Shift 点击选一段，⌘ / Ctrl 点击逐个加选",
+    moveSkipped: (running, other) =>
+      [
+        running > 0 ? `${running} 个任务正在运行，没有迁移，停下后再试` : null,
+        other > 0 ? `${other} 个任务迁移失败` : null,
+      ]
+        .filter((part) => part !== null)
+        .join(" · "),
+    moveTasks: "迁移任务…",
+    moveDialogTitle: (name) => `从「${name}」迁移任务`,
+    moveSelectAll: "全选",
+    moveTarget: "迁到",
+    moveNote: "工作目录会一起换：这些任务之后在目标工作区的文件夹里继续，已经写过的文件留在原处。正在运行的任务会跳过。",
+    moveConfirm: (count) => `迁移 ${count} 个任务`,
+    moveNoTasks: "这个工作区里还没有任务。",
     exportMarkdown: "导出为 Markdown…",
     unarchive: "取消归档",
     archive: "归档…",

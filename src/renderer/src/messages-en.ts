@@ -580,6 +580,25 @@ export const en = {
     unpin: "Unpin",
     pin: "Pin to top",
     moveTo: "Move to…",
+    moveCount: (count: number) => `Move ${plural(count, "task")} to…`,
+    selectedCount: (count: number) => `${plural(count, "task")} selected`,
+    clearSelection: "Clear selection (Esc)",
+    selectHint: "Shift-click to select a range, ⌘/Ctrl-click to add one",
+    moveSkipped: (running: number, other: number) =>
+      [
+        running > 0 ? `${plural(running, "task")} still running, not moved — stop it and try again` : null,
+        other > 0 ? `${plural(other, "task")} could not be moved` : null,
+      ]
+        .filter((part) => part !== null)
+        .join(" · "),
+    moveTasks: "Move tasks…",
+    moveDialogTitle: (name: string) => `Move tasks from ${name}`,
+    moveSelectAll: "Select all",
+    moveTarget: "Move to",
+    moveNote:
+      "The working folder moves too: these tasks continue in the target workspace's folder. Files they already wrote stay where they are. Running tasks are skipped.",
+    moveConfirm: (count: number) => `Move ${plural(count, "task")}`,
+    moveNoTasks: "No tasks in this workspace.",
     exportMarkdown: "Export as Markdown…",
     unarchive: "Unarchive",
     archive: "Archive…",

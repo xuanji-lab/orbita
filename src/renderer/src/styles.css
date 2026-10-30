@@ -5280,3 +5280,241 @@ mark.intent-mark {
 .intent-conv-md .chat-md pre code {
   font-size: inherit;
 }
+
+/*
+ * ---------- 批量迁移任务弹窗（MoveSessionsDialog）：dialogs 配方 ----------
+ * 实心面板 + 发丝线 + --shadow-modal；遮罩只用纯色 alpha 不加 blur（readme *Transparency and blur*）。
+ * z-index 与 Menu 的 portal 同档（40）：弹窗里的目标菜单是后挂的 portal，自然压在上面。
+ */
+.move-dialog-root {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+.move-dialog-backdrop {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--overlay-backdrop);
+  pointer-events: auto;
+}
+.move-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(440px, calc(100% - 48px));
+  max-height: min(560px, calc(100% - 48px));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-modal);
+  font-family: var(--font-family-base);
+}
+.move-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.move-dialog-head strong {
+  min-width: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.move-dialog-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+}
+.move-dialog-list {
+  min-height: 0;
+  overflow: auto;
+}
+.move-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.move-dialog-row:hover {
+  background: var(--option-hover-bg);
+}
+.move-dialog-row[data-disabled="true"] {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.move-dialog-row input {
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+.move-dialog-all {
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+  margin-bottom: var(--space-1);
+}
+.move-dialog-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.move-dialog-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.move-dialog-empty {
+  padding: var(--space-3) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.move-dialog-foot {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.move-dialog-target {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.move-dialog-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 280px;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.move-dialog-picker:hover,
+.move-dialog-picker[aria-expanded="true"] {
+  background: var(--color-bg-hover);
+}
+.move-dialog-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.move-dialog-message {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+.move-dialog-message svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.move-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.move-dialog-cancel,
+.move-dialog-confirm {
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+}
+.move-dialog-cancel {
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.move-dialog-cancel:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/*
+ * 侧栏多选条（Shift / ⌘ 点任务行之后出现在列表上方）：已选几条 + 移到… + 取消。
+ * 安静控件，不用 accent——真正的动作在「移到…」菜单里选完目标才发生。
+ */
+.sidebar-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--option-active-bg);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.sidebar-selection-bar > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-selection-move {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.sidebar-selection-move:hover,
+.sidebar-selection-move[aria-expanded="true"] {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.sidebar-move-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+}
+.sidebar-move-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
