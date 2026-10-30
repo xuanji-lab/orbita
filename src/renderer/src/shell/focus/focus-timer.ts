@@ -53,6 +53,35 @@ export function shouldStartSummary(run: FocusRun, now: number): boolean {
   return remainMs(run, now) <= SUMMARY_LEAD_MS;
 }
 
+/**
+ * 一次「对表」该做的事。两个标志都是**跨过关键时刻**才算，平常的日子两个都 false
+ * ——调用方据此完全不 setState（`perf(focus)`：App 不每秒重渲染）。
+ */
+export interface FocusClockAction {
+  /** 进了 T-5 窗口、小结还没起跑 → 起跑（只一次；睡眠越过整段窗口时在醒来那一拍补跑） */
+  startSummary: boolean;
+  /** 越过 endsAt → 转 done（只一次；状态机换了相位就没有下一拍了） */
+  finish: boolean;
+}
+
+/**
+ * 专注时钟：给定这一刻的墙上时间，判断该不该起跑小结 / 该不该收工。
+ *
+ * 原来这两件事靠开始时排的一次性 `setTimeout`——定时器算的是「还要过多久」的
+ * 单调时间，电脑合盖睡眠多久，到点就晚多久（合盖一夜，回来才响）。改成每秒对
+ * 墙上时间以后，定时器只负责把人叫醒，判断一律看 `now`：睡眠期间没拍的，醒来
+ * 第一拍就补上。
+ *
+ * 到点时两个标志可同时为真（睡眠跨过了 T-5 与 endsAt）：与改成定时器之前的语义
+ * 一致——小结先起跑、卡片显示「正在整理」，同时转 done。
+ */
+export function focusClockAction(run: FocusRun, now: number, summaryIdle: boolean): FocusClockAction {
+  return {
+    startSummary: summaryIdle && shouldStartSummary(run, now),
+    finish: now >= run.endsAt,
+  };
+}
+
 /** 已过进度（0..1）：胶囊浮层那条细进度线的宽度 */
 export function focusProgress(run: FocusRun, now: number): number {
   const total = Math.max(1, run.totalMs);

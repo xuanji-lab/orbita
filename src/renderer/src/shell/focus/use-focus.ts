@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { FocusSummaryResult } from "@shared/focus";
-import { startFocusRun, extendFocusRun, shouldStartSummary, type FocusRun } from "./focus-timer.ts";
+import { focusClockAction, startFocusRun, extendFocusRun, type FocusRun } from "./focus-timer.ts";
 
 /**
  * 专注计时的 hook（App 持有，工具栏左胶囊的 FocusControl 与左栏的文件视图共用）。
  *
  * - **状态不落盘**（用户裁决：关掉应用重开 = 已结束）——它只活在这里的 useState。
- * - run 期间每秒跳一拍 `now`；到点转 done，计时停。四个相位：
+ * - **不向外暴露每秒跳动的 `now`**：App 只在相位变化时重渲染；秒针住在
+ *   FocusControl 本地（`perf(focus)`：原来每秒 setNow 把整棵 App 提起来重画）。
+ *   到点转 done / T-5 起跑小结由下面那个每秒对墙上时间的 effect 决定。四个相位：
  *   `run`（在跑）/ `ending`（提前结束、等用户决定要不要总结，计时停）/
  *   `done`（时间到）/ `off`。
  * - **收工小结**（PR B）：run 相位剩 5 分钟自动起跑（原型状态 8）；ending 相位
@@ -31,8 +33,6 @@ export type FocusSummary =
 
 export interface FocusApi {
   status: FocusStatus;
-  /** 每秒跳动的当前时刻（只在 run 期间跳动）；ending/done 停在停表那一拍 */
-  now: number;
   summary: FocusSummary;
   start: (workspaceId: string, minutes: number) => void;
   extend: (minutes: number) => void;
@@ -56,25 +56,12 @@ function summaryOf(result: FocusSummaryResult): FocusSummary {
 
 export function useFocus(): FocusApi {
   const [status, setStatus] = useState<FocusStatus>({ kind: "off" });
-  const [now, setNow] = useState(() => Date.now());
   const [summary, setSummary] = useState<FocusSummary>({ state: "idle" });
   const [lastPreset, setLastPreset] = useState<{ workspaceId: string; minutes: number } | null>(null);
 
-  // 计时：run 期间每秒一拍。status 对象换了（开始 / 延长 / 到点 / 提前结束）重排一拍
-  useEffect(() => {
-    if (status.kind !== "run") return;
-    const run = status.run;
-    const tick = (): void => {
-      const current = Date.now();
-      setNow(current);
-      if (current >= run.endsAt) setStatus({ kind: "done", run });
-    };
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
-  }, [status]);
-
-  /** 起跑小结（唯一入口：run 相位自动 / ending 相位用户点「要」） */
+  /**
+   * 起跑小结（唯一入口：run 相位自动 / ending 相位用户点「要」）
+   */
   const fire = useCallback((run: FocusRun): void => {
     setSummary({ state: "running" });
     void api.focus
@@ -85,11 +72,56 @@ export function useFocus(): FocusApi {
       });
   }, []);
 
-  // 自动起跑：剩 5 分钟（shouldStartSummary 也含到点之后——补跑，卡片不再等下一拍）
+  /**
+   * 自动起跑已发过的那一轮（按 run 对象身份记）。合盖唤醒 / Alt-Tab 回窗口时
+   * `visibilitychange` 与 `focus` 在同一个任务里背靠背触发，两次 check() 的闭包里
+   * `summary.state` 都还是旧值 idle（React 没来得及重渲染）——没有这个标记，小结
+   * 会被自动发两次（隔离实例实测复现：两事件同任务派发 → focus:summarize 两遭，
+   * 等于两次模型调用）。用户点「要」不走这里：那是 fire 的另一条入口，不受限。
+   */
+  const autoFiredRunRef = useRef<FocusRun | null>(null);
+
+  /**
+   * 专注时钟：run 相位每秒对一次**墙上时间**（`Date.now()`），只在跨过 T-5 / 到点
+   * 时才 setState（`focusClockAction`，纯函数带测试）——剩下的拍子连一次渲染都不花，
+   * `perf(focus)` 的省电结论不变。
+   *
+   * 为什么不再按截止时刻排一次性 `setTimeout`：定时器算的是「还要过多久」，电脑
+   * 合盖睡眠期间它不走，睡多久到点就晚多久（合盖一夜，回来才响）。现在定时器只是
+   * 叫醒：合盖期间 interval 也不跑，但醒来后第一拍（或 `visibilitychange` /
+   * window `focus`）立刻对表，越过 T-5 就补跑小结、越过 endsAt 就转 done。
+   *
+   * endsAt 上那个一次性 timeout 是**后台兜底**，不是判断依据：窗口藏起来时 Chromium
+   * 会把 1 秒 interval 降到约一分钟一拍，到点通知会晚最多一分钟；这个定时器到点只
+   * 调一次 check（判断仍看墙上时间），所以睡眠越过它也不会错。窗口在后台到点照样转
+   * done 并发系统通知（App 那一侧看 `isWindowInactive`）。
+   */
   useEffect(() => {
-    if (status.kind !== "run" || summary.state !== "idle") return;
-    if (shouldStartSummary(status.run, now)) fire(status.run);
-  }, [status, now, summary.state, fire]);
+    if (status.kind !== "run") return;
+    const run = status.run;
+    const check = (): void => {
+      const action = focusClockAction(run, Date.now(), summary.state === "idle");
+      if (action.startSummary && autoFiredRunRef.current !== run) {
+        autoFiredRunRef.current = run;
+        fire(run);
+      }
+      if (action.finish) setStatus({ kind: "done", run });
+    };
+    check();
+    const ticker = window.setInterval(check, 1000);
+    const backstop = window.setTimeout(check, Math.max(0, run.endsAt - Date.now()));
+    const onWake = (): void => {
+      if (document.visibilityState !== "hidden") check();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      window.clearInterval(ticker);
+      window.clearTimeout(backstop);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, [status, summary.state, fire]);
 
   const start = useCallback((workspaceId: string, minutes: number): void => {
     const next = startFocusRun(Date.now(), workspaceId, minutes);
@@ -119,5 +151,5 @@ export function useFocus(): FocusApi {
     // 没人消费——下一次 start 会重置，这里不清也无人再读
   }, []);
 
-  return { status, now, summary, start, extend, earlyEnd, requestSummary, end, lastPreset };
+  return { status, summary, start, extend, earlyEnd, requestSummary, end, lastPreset };
 }

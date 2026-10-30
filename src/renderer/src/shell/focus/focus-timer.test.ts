@@ -9,6 +9,7 @@ import {
   FOCUS_WHEEL_ROW,
   SUMMARY_LEAD_MS,
   extendFocusRun,
+  focusClockAction,
   focusProgress,
   formatFocusClock,
   formatStartClock,
@@ -99,6 +100,69 @@ test("shouldStartSummary：剩 5 分钟线（到点后仍真；延长把线推�
   assert.equal(shouldStartSummary(extended, 20 * 60_000), false);
   assert.equal(shouldStartSummary(extended, 35 * 60_000), true);
   assert.equal(SUMMARY_LEAD_MS, 5 * 60_000);
+});
+
+describe("focusClockAction：对墙上时间 → 这一刻该不该起跑 / 该不该收工", () => {
+  // 25 分钟：T-5 在 startedAt + 20 分钟，到点在 + 25 分钟
+  const run = startFocusRun(0, "ws-1", 25);
+  const lead = run.endsAt - SUMMARY_LEAD_MS;
+
+  test("未进 T-5：两个都不该做（这一拍不 setState）", () => {
+    assert.deepEqual(focusClockAction(run, 0, true), { startSummary: false, finish: false });
+    assert.deepEqual(focusClockAction(run, lead - 1, true), { startSummary: false, finish: false });
+  });
+
+  test("刚好 T-5：起跑（含边界那一毫秒）", () => {
+    assert.deepEqual(focusClockAction(run, lead, true), { startSummary: true, finish: false });
+  });
+
+  test("T-5 与到点之间：已经起跑过就不重复起跑；到点前不 done", () => {
+    assert.deepEqual(focusClockAction(run, lead + 1, false), { startSummary: false, finish: false });
+    assert.deepEqual(focusClockAction(run, run.endsAt - 1, false), { startSummary: false, finish: false });
+  });
+
+  test("刚好 endsAt：转 done", () => {
+    assert.deepEqual(focusClockAction(run, run.endsAt, false), { startSummary: false, finish: true });
+    // 小结还没起跑时同一拍一起补跑（卡片先出「正在整理」）
+    assert.deepEqual(focusClockAction(run, run.endsAt, true), { startSummary: true, finish: true });
+  });
+
+  test("睡眠越过整段：醒来那一拍立刻 done，并补跑小结", () => {
+    // 合盖三小时，醒来时早已越过 T-5 与 endsAt
+    assert.deepEqual(focusClockAction(run, run.endsAt + 3 * 60 * 60_000, true), { startSummary: true, finish: true });
+    // 小结已经跑过（ready / failed / none）就只收工
+    assert.deepEqual(focusClockAction(run, run.endsAt + 3 * 60 * 60_000, false), {
+      startSummary: false,
+      finish: true,
+    });
+  });
+
+  test("延长把两条线都推后：旧到点时刻不再是到点", () => {
+    const extended = extendFocusRun(run, 5);
+    assert.deepEqual(focusClockAction(extended, run.endsAt, false), { startSummary: false, finish: false });
+    assert.deepEqual(focusClockAction(extended, extended.endsAt, false), { startSummary: false, finish: true });
+  });
+
+  test("逐秒对表全流程：小结与到点各只发生一次（到点后相位换掉，没有下一拍）", () => {
+    const short = startFocusRun(0, "ws-1", 10); // T-5 = 第 5 分钟
+    let phase: "run" | "done" = "run";
+    let summaryIdle = true;
+    let summaryFires = 0;
+    let doneAt: number | null = null;
+    for (let now = 0; phase === "run"; now += 1000) {
+      const action = focusClockAction(short, now, summaryIdle);
+      if (action.startSummary) {
+        summaryFires += 1;
+        summaryIdle = false;
+      }
+      if (action.finish) {
+        doneAt = now;
+        phase = "done";
+      }
+    }
+    assert.equal(summaryFires, 1, "小结只起跑一次");
+    assert.equal(doneAt, short.endsAt, "到点那一拍就 done，不等下一拍");
+  });
 });
 
 describe("resolvePickerWorkspace：工作区晚到也要有有效选择", () => {
