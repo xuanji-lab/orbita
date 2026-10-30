@@ -188,7 +188,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     },
     changelog: [
       {
-        pr: null,
+        pr: 407,
         date: "2026-10-31",
         note: {
           zh: "首版：右栏自动化面板；调度（一次 / 每小时 / 每天 / 每工作日 / 每周 / 每月 / 自定义间隔）；每次新开会话或投回原会话；agent 的 automation_create / list / cancel 工具，对话里出一张卡；有任务在跑时阻止系统睡眠的开关；护栏：间隔 ≥ 5 分钟、24 小时最多 24 次、连续失败 3 次进入失败态、agent 建的必有终点。",
