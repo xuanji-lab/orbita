@@ -3,16 +3,17 @@
  *
  * 全部跑真实临时文件：索引的整个价值就是「换行在第几个字节」，mock 掉文件就读不出
  * 这件事。覆盖：普通日志、跨检查点、末尾窗口、无结尾换行、CRLF、空行、CJK、
- * UTF-8 跨块边界、起始行 / count 夹取、文件被换掉、超长单行、行数过多、缓存命中。
+ * UTF-8 跨块边界、起始行 / count 夹取、文件被换掉、超长单行、超过字节上限、缓存命中；
+ * 增量索引（正在写的日志）、在途去重与取消、LRU 与令牌过期。
  */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, open as openForWrite, rename, rm, truncate, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   PREVIEW_LINES_PER_READ,
-  PREVIEW_MAX_INDEXED_LINES,
+  PREVIEW_MAX_INDEX_BYTES,
   PREVIEW_MAX_LINE_BYTES,
 } from "../../shared/files.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
@@ -232,19 +233,9 @@ describe("readLines —— 夹取与失效", () => {
     assert.ok(nonNumber.lines.length >= 1);
   });
 
-  test("文件在索引之后被追加：回 stale，不按旧检查点猜内容", async () => {
-    const path = join(dir, "growing.log");
-    await writeFile(path, "a\nb\nc\n", "utf8");
-    const { indexId } = await indexOk(path);
-    await appendFile(path, "d\n", "utf8");
-
-    const got = await readLines({ indexId, startLine: 0, count: 2 });
-    assert.ok(got.kind === "stale");
-    assert.equal(got.size, 8);
-  });
-
-  test("令牌不认识（缓存被换出 / 应用重启）：reject，不猜一个文件去读", async () => {
-    await assert.rejects(() => readLines({ indexId: "lines-does-not-exist", startLine: 0, count: 1 }));
+  test("令牌不认识（缓存被换出 / 应用重启）：回 expired，不猜一个文件去读", async () => {
+    const got = await readLines({ indexId: "lines-does-not-exist", startLine: 0, count: 1 });
+    assert.equal(got.kind, "expired");
   });
 });
 
@@ -269,14 +260,31 @@ describe("buildLineIndex —— 能力边界", () => {
     const index = await buildLineIndex(path);
     assert.ok(index.kind === "long-line");
     assert.equal(index.size, PREVIEW_MAX_LINE_BYTES + 1024);
+    // 退路要看的开头文本随回执带上（fs:read 不再先读 16 MB 了）
+    assert.equal(index.headText, "x".repeat(PREVIEW_MAX_LINE_BYTES + 1024));
   });
 
-  test("行数超过 1.8 M：too-many-lines（滚动条映射不了全文）", async () => {
+  test("超过字节上限：不读一个字节就回 too-large（稀疏文件造 1 GiB，不占盘）", async () => {
     const path = join(dir, "huge.log");
-    await writeFile(path, "a\n".repeat(PREVIEW_MAX_INDEXED_LINES + 1), "utf8");
+    await writeFile(path, "a\n", "utf8");
+    await truncate(path, PREVIEW_MAX_INDEX_BYTES + 1);
+    const started = performance.now();
     const index = await buildLineIndex(path);
-    assert.ok(index.kind === "too-many-lines");
-    assert.equal(index.limit, PREVIEW_MAX_INDEXED_LINES);
+    const took = performance.now() - started;
+    assert.ok(index.kind === "too-large");
+    assert.equal(index.limit, PREVIEW_MAX_INDEX_BYTES);
+    assert.equal(index.size, PREVIEW_MAX_INDEX_BYTES + 1);
+    // 扫 1 GiB 要几百毫秒到几秒；只 stat 是个位数毫秒
+    assert.ok(took < 100, `不该开始扫：${took.toFixed(1)} ms`);
+  });
+
+  test("恰好等于字节上限：不被挡（上限是「超过」才拒）", async () => {
+    // 同样用稀疏文件，但开头 8 KB 是 NUL → 走到二进制嗅探而不是 too-large，证明过了字节闸
+    const path = join(dir, "at-limit.bin");
+    await writeFile(path, Buffer.from([0]));
+    await truncate(path, PREVIEW_MAX_INDEX_BYTES);
+    const index = await buildLineIndex(path);
+    assert.equal(index.kind, "binary");
   });
 });
 
@@ -289,21 +297,306 @@ describe("buildLineIndex —— 索引缓存", () => {
     assert.equal(second.indexId, first.indexId);
   });
 
-  test("文件被替换（大小 / mtime 变）：新索引、新令牌", async () => {
+  test("文件被替换（rename 换了 inode）：新索引、新令牌，旧令牌作废", async () => {
     const path = join(dir, "replaced.log");
     await writeFile(path, "a\nb\n", "utf8");
     const first = await indexOk(path);
-    await writeFile(path, "a\nb\nc\nd\n", "utf8");
+    // logrotate 的写法：新文件写好再 rename 盖上去（inode 变了）
+    await writeFile(`${path}.new`, "x\ny\nz\nw\n", "utf8");
+    await rename(`${path}.new`, path);
     const second = await indexOk(path);
     assert.notEqual(second.indexId, first.indexId);
     assert.equal(second.totalLines, 4);
+    const old = await readLines({ indexId: first.indexId, startLine: 0, count: 1 });
+    assert.equal(old.kind, "expired");
   });
 
-  test("LRU 3：第 4 份文件建索引后，第 1 份的令牌不再被接受", async () => {
-    const files = [1, 2, 3, 4].map((n) => join(dir, `lru-${n}.log`));
-    for (const [at, path] of files.entries()) await writeFile(path, `a\nb\nc ${at}\n`, "utf8");
-    const first = await indexOk(files[0] as string);
-    for (const path of files.slice(1)) await indexOk(path);
-    await assert.rejects(() => readLines({ indexId: first.indexId, startLine: 0, count: 1 }));
+  test("LRU：缓存只留最近用到的几份，最久没用的令牌过期", async () => {
+    const first = join(dir, "lru-first.log");
+    await writeFile(first, "a\nb\n", "utf8");
+    const { indexId } = await indexOk(first);
+    for (let n = 0; n < 20; n += 1) {
+      const path = join(dir, `lru-${n}.log`);
+      await writeFile(path, `a\nb\nc ${n}\n`, "utf8");
+      await indexOk(path);
+    }
+    const got = await readLines({ indexId, startLine: 0, count: 1 });
+    assert.equal(got.kind, "expired");
+  });
+
+  test("取窗也算用到：一直在读的那份不会被别的标签建索引挤掉", async () => {
+    const first = join(dir, "busy.log");
+    await writeFile(first, "a\nb\n", "utf8");
+    const { indexId } = await indexOk(first);
+    for (let n = 0; n < 20; n += 1) {
+      const path = join(dir, `other-${n}.log`);
+      await writeFile(path, `a\nb\nc ${n}\n`, "utf8");
+      await indexOk(path);
+      // 用户在这份上滚动：每次取窗都刷新它的新旧顺序
+      const got = await readLines({ indexId, startLine: 0, count: 1 });
+      assert.ok(got.kind === "text", `第 ${n} 轮就过期了：${got.kind}`);
+    }
+  });
+
+  test("同时开着 4 份大文件来回切：每份的令牌都还在", async () => {
+    const paths = [1, 2, 3, 4].map((n) => join(dir, `tab-${n}.log`));
+    const ids: string[] = [];
+    for (const [at, path] of paths.entries()) {
+      await writeFile(path, `a\nb\nc ${at}\n`, "utf8");
+      ids.push((await indexOk(path)).indexId);
+    }
+    for (let round = 0; round < 3; round += 1) {
+      for (const [at, indexId] of ids.entries()) {
+        const got = await readLines({ indexId, startLine: 2, count: 1 });
+        assert.ok(got.kind === "text", `第 ${round} 轮第 ${at} 份：${got.kind}`);
+        assert.deepEqual(got.lines, [`c ${at}`]);
+      }
+    }
   });
 });
+
+/** 造一份大到够 4 KB 样本不覆盖整份的日志：每行 `row-<n>` 补到 32 字节 */
+function bigLog(rows: number, from = 0): string {
+  return Array.from({ length: rows }, (_, i) => `row-${from + i}`.padEnd(31, ".")).join("\n") + "\n";
+}
+
+describe("增量索引 —— 正在写入的日志只是变长", () => {
+  test("追加若干行：令牌不变，totalLines 变大，新行读得到", async () => {
+    const path = join(dir, "grow.log");
+    await writeFile(path, "a\nb\nc\n", "utf8");
+    const first = await indexOk(path);
+    await appendFile(path, "d\ne\n", "utf8");
+
+    const again = await indexOk(path);
+    assert.equal(again.indexId, first.indexId);
+    assert.equal(again.totalLines, 5);
+    const got = await readLines({ indexId: first.indexId, startLine: 3, count: 5 });
+    assert.ok(got.kind === "text");
+    assert.deepEqual(got.lines, ["d", "e"]);
+    assert.equal(got.totalLines, 5);
+  });
+
+  test("只调 readLines 也能发现变长（renderer 手里的 totalLines 过时）：接着扫再读，回执带新总数", async () => {
+    const path = join(dir, "grow-read.log");
+    await writeFile(path, bigLog(3000), "utf8");
+    const first = await indexOk(path);
+    assert.equal(first.totalLines, 3000);
+    await appendFile(path, bigLog(10, 3000), "utf8");
+
+    const got = await readLines({ indexId: first.indexId, startLine: 2995, count: 100 });
+    assert.ok(got.kind === "text");
+    assert.equal(got.totalLines, 3010);
+    assert.equal(got.lines.length, 15);
+    assert.equal(got.lines[0], "row-2995".padEnd(31, "."));
+    assert.equal(got.lines[14], "row-3009".padEnd(31, "."));
+  });
+
+  test("旧末尾是一条没收尾的残行：续扫从它的行首开始，拼成完整的一行", async () => {
+    const path = join(dir, "partial.log");
+    await writeFile(path, "a\nb", "utf8");
+    const first = await indexOk(path);
+    assert.equal(first.totalLines, 2);
+    await appendFile(path, "c\nd\n", "utf8");
+
+    const again = await indexOk(path);
+    assert.equal(again.indexId, first.indexId);
+    assert.equal(again.totalLines, 3);
+    const got = await readLines({ indexId: first.indexId, startLine: 0, count: 5 });
+    assert.ok(got.kind === "text");
+    assert.deepEqual(got.lines, ["a", "bc", "d"]);
+  });
+
+  test("残行 + 追加合起来才超过 64 KB：按整行算，回 long-line", async () => {
+    const path = join(dir, "partial-long.log");
+    await writeFile(path, `a\n${"x".repeat(40_000)}`, "utf8"); // 末尾残行 40 KB，还没超
+    const first = await indexOk(path);
+    assert.equal(first.totalLines, 2);
+    await appendFile(path, `${"y".repeat(40_000)}\n`, "utf8"); // 续上之后这一行 80 KB
+    const again = await buildLineIndex(path);
+    assert.equal(again.kind, "long-line");
+  });
+
+  test("追加跨过 1024 行的检查点边界：旧检查点保留，新检查点接上", async () => {
+    const path = join(dir, "cross.log");
+    await writeFile(path, bigLog(1000), "utf8");
+    const first = await indexOk(path);
+    await appendFile(path, bigLog(3000, 1000), "utf8");
+    const again = await indexOk(path);
+    assert.equal(again.indexId, first.indexId);
+    assert.equal(again.totalLines, 4000);
+    for (const at of [0, 1023, 1024, 2047, 2048, 3071, 3999]) {
+      const got = await readLines({ indexId: first.indexId, startLine: at, count: 1 });
+      assert.ok(got.kind === "text");
+      assert.deepEqual(got.lines, [`row-${at}`.padEnd(31, ".")], `第 ${at} 行`);
+    }
+  });
+
+  test("旧末尾刚好是第 1024 行的行首：续扫后第 1024 行读得准", async () => {
+    const path = join(dir, "exact-stride.log");
+    await writeFile(path, bigLog(1024), "utf8");
+    const first = await indexOk(path);
+    assert.equal(first.totalLines, 1024);
+    await appendFile(path, bigLog(5, 1024), "utf8");
+    await indexOk(path);
+    const got = await readLines({ indexId: first.indexId, startLine: 1024, count: 5 });
+    assert.ok(got.kind === "text");
+    assert.deepEqual(got.lines, Array.from({ length: 5 }, (_, i) => `row-${1024 + i}`.padEnd(31, ".")));
+  });
+
+  test("续扫只扫新增的部分：前面被原地改过、但旧末尾样本没变——认不出来（已知的启发式边界）", async () => {
+    // 这条同时是「确实没有整份重扫」的证据：若整份重扫，被改成 x 的换行会让总行数少 1
+    const path = join(dir, "heuristic.log");
+    await writeFile(path, bigLog(2000), "utf8");
+    const first = await indexOk(path);
+    const handle = await openForWrite(path, "r+");
+    try {
+      await handle.write("x", 31); // 把第 0 行末尾的 \n 改成 x，文件大小不变、末尾 4 KB 不变
+    } finally {
+      await handle.close();
+    }
+    await appendFile(path, bigLog(10, 2000), "utf8");
+    const again = await indexOk(path);
+    assert.equal(again.indexId, first.indexId);
+    assert.equal(again.totalLines, 2010);
+  });
+
+  test("旧末尾那段被改写了：不当成追加，回新索引与新令牌", async () => {
+    const path = join(dir, "rewritten.log");
+    await writeFile(path, bigLog(2000), "utf8");
+    const first = await indexOk(path);
+    // 末尾的内容改了，再追加：样本对不上 → 整份重建
+    const handle = await openForWrite(path, "r+");
+    try {
+      await handle.write("ZZZZ", 2000 * 32 - 10);
+    } finally {
+      await handle.close();
+    }
+    await appendFile(path, bigLog(10, 2000), "utf8");
+    const again = await indexOk(path);
+    assert.notEqual(again.indexId, first.indexId);
+    assert.equal(again.totalLines, 2010);
+    const old = await readLines({ indexId: first.indexId, startLine: 0, count: 1 });
+    assert.equal(old.kind, "expired");
+  });
+
+  test("变小（被截断）：旧令牌回 stale，不按旧检查点读", async () => {
+    const path = join(dir, "shrink.log");
+    await writeFile(path, bigLog(100), "utf8");
+    const { indexId } = await indexOk(path);
+    await truncate(path, 320);
+    const got = await readLines({ indexId, startLine: 0, count: 5 });
+    assert.equal(got.kind, "stale");
+  });
+
+  test("大小没变但 mtime 变了（被重写 / touch）：保守回 stale", async () => {
+    const path = join(dir, "touched.log");
+    await writeFile(path, "a\nb\nc\n", "utf8");
+    const { indexId } = await indexOk(path);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(path, later, later);
+    const got = await readLines({ indexId, startLine: 0, count: 1 });
+    assert.equal(got.kind, "stale");
+  });
+
+  test("追加进来一条超长行：建索引回 long-line，旧令牌作废", async () => {
+    const path = join(dir, "grow-long.log");
+    await writeFile(path, "a\nb\n", "utf8");
+    const first = await indexOk(path);
+    await appendFile(path, "x".repeat(PREVIEW_MAX_LINE_BYTES + 100), "utf8");
+    const again = await buildLineIndex(path);
+    assert.equal(again.kind, "long-line");
+    const old = await readLines({ indexId: first.indexId, startLine: 0, count: 1 });
+    assert.equal(old.kind, "expired");
+  });
+
+  test("跨 8 MB 块的续扫：新增 9 MB 也一样准", async () => {
+    const path = join(dir, "grow-big.log");
+    await writeFile(path, bigLog(1500), "utf8");
+    const first = await indexOk(path);
+    const more = bigLog(300_000, 1500); // 约 9.6 MB
+    await appendFile(path, more, "utf8");
+    const again = await indexOk(path);
+    assert.equal(again.indexId, first.indexId);
+    assert.equal(again.totalLines, 301_500);
+    const got = await readLines({ indexId: first.indexId, startLine: 301_499, count: 5 });
+    assert.ok(got.kind === "text");
+    assert.deepEqual(got.lines, [`row-301499`.padEnd(31, ".")]);
+  });
+});
+
+describe("在途去重与取消", () => {
+  /** 一份够大、扫一遍要让出几次事件循环的文件（~17 MB，三块） */
+  async function bigFile(name: string): Promise<string> {
+    const path = join(dir, name);
+    await writeFile(path, bigLog(540_000), "utf8");
+    return path;
+  }
+
+  test("同一个文件同时建两次：并成一次扫描，令牌相同", async () => {
+    const path = await bigFile("dedupe.log");
+    const [a, b, c] = await Promise.all([buildLineIndex(path), buildLineIndex(path), buildLineIndex(path)]);
+    assert.ok(a.kind === "ok" && b.kind === "ok" && c.kind === "ok");
+    // 没有去重时，后完成的那次会换掉先完成的（新令牌）
+    assert.equal(a.indexId, b.indexId);
+    assert.equal(b.indexId, c.indexId);
+    assert.equal(a.totalLines, 540_000);
+  });
+
+  test("取消：信号触发后立刻回 cancelled，不留索引", async () => {
+    const path = await bigFile("cancel.log");
+    const controller = new AbortController();
+    const pending = buildLineIndex(path, controller.signal);
+    controller.abort();
+    const got = await pending;
+    assert.equal(got.kind, "cancelled");
+    // 没缓存下来：下一次从头扫，拿到的是一个新的有效索引
+    const next = await indexOk(path);
+    assert.equal(next.totalLines, 540_000);
+  });
+
+  test("取消之后扫描真的停下：没有索引被装进缓存", async () => {
+    const probe = join(dir, "probe.log");
+    await writeFile(probe, "a\n", "utf8");
+    const seq = Number((await indexOk(probe)).indexId.replace("lines-", ""));
+    const path = await bigFile("stops.log");
+    const controller = new AbortController();
+    const pending = buildLineIndex(path, controller.signal);
+    controller.abort();
+    assert.equal((await pending).kind, "cancelled");
+    // 令牌按序号发：若被取消的那次照样扫完并装进缓存，它拿到的就是下一个号
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const leaked = await readLines({ indexId: `lines-${seq + 1}`, startLine: 0, count: 1 });
+    assert.equal(leaked.kind, "expired");
+  });
+
+  test("已经取消的信号：直接回 cancelled", async () => {
+    const path = await bigFile("pre-cancel.log");
+    const controller = new AbortController();
+    controller.abort();
+    assert.equal((await buildLineIndex(path, controller.signal)).kind, "cancelled");
+  });
+
+  test("两个请求并在一次扫描上，一个取消：另一个照常拿到结果", async () => {
+    const path = await bigFile("share.log");
+    const quitter = new AbortController();
+    const stayer = buildLineIndex(path);
+    const left = buildLineIndex(path, quitter.signal);
+    quitter.abort();
+    assert.equal((await left).kind, "cancelled");
+    const got = await stayer;
+    assert.ok(got.kind === "ok");
+    assert.equal(got.totalLines, 540_000);
+  });
+
+  test("等的人都走了、扫描还没停下时来了新请求：新请求不会拿到别人的 cancelled", async () => {
+    const path = await bigFile("revive.log");
+    const first = new AbortController();
+    const gone = buildLineIndex(path, first.signal);
+    first.abort(); // 唯一的等待者走了 → 任务被取消，但它还没来得及停
+    const fresh = await buildLineIndex(path);
+    assert.ok(fresh.kind === "ok", `新请求拿到了 ${fresh.kind}`);
+    assert.equal((await gone).kind, "cancelled");
+    assert.equal(fresh.totalLines, 540_000);
+  });
+});
+

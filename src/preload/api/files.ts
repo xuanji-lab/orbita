@@ -7,6 +7,7 @@ import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   FileLineIndex,
+  FileLineIndexRequest,
   FileLines,
   FileLinesRequest,
   FileListRequest,
@@ -30,8 +31,10 @@ export const filesApi = {
   /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf；实验功能「PDF 引用」） */
   readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
   /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
-  lineIndex: (req: FileListRequest): Promise<FileLineIndex> =>
+  lineIndex: (req: FileLineIndexRequest): Promise<FileLineIndex> =>
     ipcRenderer.invoke(ipcChannels.fsLineIndex, req),
+  /** 取消一次还在扫的 lineIndex（换标签 / 卸载时调；已完成的请求什么都不会发生） */
+  cancelLineIndex: (requestId: string): void => ipcRenderer.send(ipcChannels.fsLineIndexCancel, requestId),
   /** 按行读一段：只认 lineIndex 回的令牌，不传路径（白名单已在建索引时过完） */
   readLines: (req: FileLinesRequest): Promise<FileLines> =>
     ipcRenderer.invoke(ipcChannels.fsReadLines, req),
