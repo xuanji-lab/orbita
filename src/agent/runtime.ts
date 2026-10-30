@@ -2172,6 +2172,11 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
+  if (command.type === "modelCostsResult") {
+    // 派发参考的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
   if (command.type === "memoryRecallResult") {
     // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
