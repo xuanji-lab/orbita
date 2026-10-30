@@ -184,7 +184,10 @@ yet). The material blocks (Excel / Doc / PPT — the blue / green / orange of th
 view) join the same set when they land. Not the accent or any status colour; ≥ 3:1 on every
 theme's panel / muted / app grounds (icon use), hues ≥ 40° apart, guarded by
 `filetype-colors.test.ts`. Chip usage is tint-and-stroke: a light `color-mix` tint of the same
-variable as the fill, the full colour as the stroke, text in ink; icons may use the full colour.
+variable as the fill, the full colour as the stroke. Attachment pills keep their text in ink;
+skill / MCP chips set their name and glyphs in the category colour mixed 70 / 30 with primary
+ink (`--chip-ink`; the pure colour on its own tint is 3.9–4.4:1, the mix clears 4.5 on every
+theme), as the 2026-10-30 prototype draws them.
 
 **Nebula colour** (`--color-nebula`, added 2026-10): the colour of the sidebar's daily
 token-usage squares and the nebula energy creature sitting on them (bottom-left) — usage is
@@ -327,11 +330,20 @@ longer carries it. Skill / MCP tokens enter the text the same way: typing a lone
 start of the draft and pressing **space** opens the right-rail Skills picker (Tab switches to MCP,
 Enter inserts the token back at the caret) — there is no in-composer slash panel anymore
 (2026-10-10 ruling; drag a Skills/MCP card into the box as the other path).
-The same language extends **inline**: a `/skill:` or `/mcp:` token typed mid-sentence renders as a chip in the
-composer (a mirror layer beneath the textarea paints the pill exactly under the token's glyphs —
-no horizontal padding or icon, or the text would shift out of alignment) and in the sent user
-bubble (icon + name, the pill recipe above); the composer variant can therefore only ever show
-the token's literal text (2026-10-06, chip-overlay option D). A large paste joins the same
+The same language extends **inline**: a `/skill:` or `/mcp:` token renders as a **pill** — category
+glyph (`book-open` / `plug`) + the name only + `×`, a 1px category stroke, a 10% tint, fully
+rounded, one line-height minus 2px tall — in the composer and, without the `×`, in the sent user
+bubble (2026-10-30; before, the composer could only tint the token's literal text and the user read
+it as highlighted text, not an object). The sent text keeps the prefix; only the display drops it.
+The composer stays a `<textarea>`: its glyphs are transparent and the mirror layer beneath paints
+all text, the token's literal text included but invisible, so both layers lay out identically and
+the caret and selection stay true. The pill covers the literal token's own box; the hidden
+`/skill:` (34px) / `/mcp:` (37.5px) pays for the glyph, the `×` and the padding, so the pill
+follows the name's width. The caret never rests inside a pill (arrows hop it, a click lands on
+the nearest edge, a selection grows to the whole pill), the `×` is hit-tested by coordinates
+(the textarea is on top), Backspace at its tail deletes it whole, and spell-check is off while
+the draft holds a pill (its squiggle lands on the pill's edge). A token longer than a line falls
+back to the tinted literal text. A large paste joins the same
 family (2026-10-09, plan C): it lands **at the caret** as a chip whose token is its literal label
 (`[粘贴 1 · 42 行]`), deletable as one block by a backspace at its tail, restored whole by one
 undo step, and assembled into a `<pasted-text>` block in place when sent. Clicking the chip

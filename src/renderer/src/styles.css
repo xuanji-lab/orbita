@@ -292,10 +292,16 @@
 }
 
 /* textarea 必须也是定位元素：镜像层改成 absolute 之后，未定位的 textarea 会被画在
-   它下面——chip 与展开段的底色盖住 textarea 的字（胶囊成了空白药丸、展开段只剩色条）。
-   两个都定位、textarea 在 DOM 里靠后，它就叠在镜像之上；收起标签 z-index: 1 仍在最上 */
+   它下面，接不到指针。两个都定位、textarea 在 DOM 里靠后，它就叠在镜像之上；
+   收起标签 z-index: 1 仍在最上。
+   **textarea 的字透明，字由镜像层画**（2026-10-30）：句中 chip 要画成「图标 + 名字 + ×」的
+   胶囊、不显示 `/skill:` 前缀，而 textarea 不能按区间改字的样子——只能整片透明、镜像代画。
+   光标、选区、输入法、拼写检查仍是 textarea 的：两层排版逐像素一致（同一个 .composer-input），
+   光标画在 textarea 的字位上，正好就是镜像的字位。光标颜色单独给（caret 默认跟字色，会跟着透明） */
 .composer-field > textarea {
   position: relative;
+  color: transparent;
+  caret-color: var(--color-text-primary);
 }
 
 /* 收起标签不进格子：`.composer-field > *` 给了所有子项 grid-area 1/1，绝对定位的
@@ -306,14 +312,15 @@
   grid-area: auto;
 }
 
-/* 镜像层（全主题常驻，垫在 textarea 下）：字透明，只画句中 chip 与（copybook 的）修正液；
+/* 镜像层（全主题常驻，垫在 textarea 下）：**画全部的字**（textarea 的字透明，见上），外加句中 chip、
+   （copybook 的）修正液与粘贴展开段的底色；
    换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
    曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06）。
    absolute + inset:0：脱开 grid 的行高贡献——textarea 12 行封顶后，镜像若仍在流内，
    几十行的草稿会把格子撑到 textarea 之外（方案 C 粘贴展开实测：field 长到 928px），
    脱流后格子高度只由 textarea 决定，镜像随格子裁剪（overflow hidden + 滚动同步） */
 .composer-mirror {
-  color: transparent;
+  color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: break-word;
   overflow: hidden;
@@ -326,31 +333,13 @@
 }
 
 /*
- * 句中 chip：镜像层里 token（/skill:…）的视觉包装。两条硬约束（选型报告 §3-D，
- * 原型实测）：
+ * 句中 chip：镜像层里 token 的视觉包装。
  *
- * 1. **不能有横向 padding**——会把 chip 自己的字推右、与 textarea 的字错位
- *    （原型实测 native=18/mirror=23，差值正好是 padding）；
- * 2. **字体继承输入框**（.composer-input 同时挂在镜像上），换字体就错位。
- *
- * 配方照 Proma 的 mention chip（2026-10-11 用户裁决：不要描边胶囊，只换底色）：
- * **无描边、不透明淡色底、4px 圆角**（--radius-xs）。pill 的横向留白用
- * **带水平偏移的 box-shadow** 铺出来：三份同色阴影（0 / -2px / +2px，各
- * 扩散 1px）的并集 = 横向每侧多 3px、纵向仅 1px 的加宽 pill——横向 padding
- * 禁令不破，纵向多铺会压到 22px 行高的相邻行。token 前后各有一个空格
- * （14px Manrope 约 3.9px），3px 留白吃掉空格的大半但碰不到相邻字的字形。
- *
- * 底色必须**不透明**（2026-10-11 像素实测教训）：半透明 tint 会被三份阴影
- * 叠画发深，重叠处颜色不均。所以统一走 --chip-fill（不透明预混色，
- * --chip-ground 的取法见 .composer-field），底色与阴影同一变量。
- *
- * 跨行换行时 clone：断开的每一截各自是一个完整的 pill，与底下文字同步换行。
- * copybook 主题的变体（中性淡墨、skill / MCP 同色系淡底混白）在 paper-themes.css。
- *
- * 中性胶囊（粘贴 token）是正墨 10% 混卡底，不是 bg-muted：去描边后 muted 与
- * 卡面几乎同色（明档 / 稿纸实测看不见），淡墨底的可见度才与 skill / MCP 的
- * 15% 类别色淡底相当（ΔL* 对齐：明 7.7 vs 8.0、暗 8.8–9.4 vs 8.9–9.6、
- * 稿纸 7.7 vs 7.8，全部差在 ±0.8 内）。
+ * **中性胶囊**（收起的粘贴 token「[粘贴 1 · 42 行]」，不带 data-kind）：原文就是给人看的标签，
+ * 照旧显示原文、铺一层淡墨底。底色**不透明**（--chip-fill 预混 --chip-ground，2026-10-11 像素
+ * 实测：半透明 tint 叠画发深）；不加横向 padding——它的字就是原文，padding 会把字推离 textarea
+ * 的字位。淡墨是正墨 10% 混卡底，不是 bg-muted：muted 与卡面几乎同色（明档 / 稿纸看不见）。
+ * 跨行换行时 clone：断开的每一截各自是一段底色。
  */
 .composer-chip {
   --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--chip-ground));
@@ -364,17 +353,100 @@
 }
 
 /*
- * chip 按类别上色（2026-10 用户裁决：「直接用颜色给我区分吧，skills 一个颜色，
- * mcp 一个颜色」）：skill = 表格绿（--color-filetype-sheet）、MCP = 文档蓝
- * （--color-filetype-doc）——与文件类型图标同一组类别色。只换底不描边，
- * 字保持正墨（textarea 无法按区间染色，彩色字要做只能全部文字透明 +
- * 镜像层代画，本 PR 不做）；粘贴 token 的 chip 不带 data-kind，落回中性配方。
+ * skill / MCP chip 画成胶囊（2026-10-30 用户验收：原来「像一段被高亮的字，不像一个块」）：
+ * 类别图标（book-open / plug）+ 名字 + ×，1px 类别色描边、淡底、类别色的字，全圆角，
+ * `/skill:` `/mcp:` 前缀不显示（发出去的文本照旧带前缀）。原型：orbita-proto.html 的 .tok。
+ *
+ * 怎么做到不错位：原文在镜像里照样排版、只是透明（与 textarea 同字同宽，光标与选区都对得上），
+ * 胶囊（.composer-chip-face）绝对定位盖在原文自己的格子上。名字继承输入框的字，宽度就是原文里
+ * 名字那一截；藏掉的前缀（14px Manrope：`/skill:` 34px、`/mcp:` 37.5px）正好让给左 4 + 图标 12
+ * + 2 …… 2 + × 12 + 右 2 = 34px，所以胶囊的宽度跟着名字走、两头不挤也不空（/mcp: 多的 3.5px
+ * 落在名字与 × 之间）。高度是行高减 2px（21px 行里 19px）：再高，上下两行的胶囊会贴在一起。
+ * 光标不停在胶囊中间、× 的点击与悬停在 Composer.tsx（textarea 盖在上面，胶囊收不到指针）。
+ *
+ * 颜色：skill = 表格绿（--color-filetype-sheet）、MCP = 文档蓝（--color-filetype-doc），与文件
+ * 类型图标同一组类别色。描边用整色；字与图标用「类别色 70% 混正墨」——纯类别色压在淡底上
+ * 只有 3.9–4.4:1，混墨后五档主题都过 4.5（气泡 chip 2026-10-11 的实测口径）；淡底 10%。
+ * 气泡里的 chip（.bubble-chip）同一套变量、同一个长相，只是没有 ×。
  */
-.composer-chip[data-kind="skill"] {
-  --chip-fill: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--chip-ground));
+.composer-chip[data-kind],
+.bubble-chip {
+  --chip-fill: color-mix(in srgb, var(--chip-hue) 10%, var(--chip-ground));
+  --chip-stroke: var(--chip-hue);
+  --chip-ink: color-mix(in srgb, var(--chip-hue) 70%, var(--color-text-primary));
 }
-.composer-chip[data-kind="mcp"] {
-  --chip-fill: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--chip-ground));
+.composer-chip[data-kind="skill"],
+.bubble-chip-skill {
+  --chip-hue: var(--color-filetype-sheet);
+}
+.composer-chip[data-kind="mcp"],
+.bubble-chip-mcp {
+  --chip-hue: var(--color-filetype-doc);
+}
+
+.composer-chip[data-kind] {
+  position: relative;
+  /* 原文只占位：字透明、不铺底（胶囊在 face 上画） */
+  color: transparent;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.composer-chip-face {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: calc(1lh - 2px);
+  translate: 0 -50%;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-0-5) 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--chip-fill);
+  box-shadow: inset 0 0 0 1px var(--chip-stroke);
+  color: var(--chip-ink);
+  white-space: pre;
+  overflow: hidden;
+}
+
+.composer-chip-face > .orbita-icon {
+  flex: 0 0 auto;
+  margin-right: var(--space-0-5);
+}
+
+.composer-chip-name {
+  flex: 0 0 auto;
+}
+
+/* 名字走伪元素：face 不许往镜像里加文字（caret-point 按 textContent 定位） */
+.composer-chip-name::before {
+  content: attr(data-name);
+}
+
+/* × 收在右端；静止时比字浅一档（实色混淡底，不用 opacity——玻璃上的半透明字形两头不靠），
+   指针停上去回到字色（悬停判定在 Composer.tsx，挂 data-close-hover） */
+.composer-chip-x {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: var(--space-0-5);
+  color: color-mix(in srgb, var(--chip-ink) 60%, var(--chip-fill));
+}
+.composer-chip[data-close-hover] .composer-chip-x {
+  color: var(--chip-ink);
+}
+
+/* 比一行还长的 token 会被折成两行，胶囊盖不住两截：退回「原文 + 淡底」（Composer 量出来挂
+   data-wrapped）。极少见——skill / MCP 的名字很少长过一行 */
+.composer-chip[data-kind][data-wrapped] {
+  color: inherit;
+  border-radius: var(--radius-xs);
+  background: var(--chip-fill);
+}
+.composer-chip[data-wrapped] > .composer-chip-face {
+  display: none;
 }
 
 /*
@@ -2216,57 +2288,29 @@ body {
 
 /*
  * 气泡里的句中 chip：用户原文里的 /skill: / /mcp: token（chip-runs.ts 的 rehype 变换塞进
- * span.bubble-chip，MarkdownBlock 的 ChipSpan 换成图标 + 名字）。与输入框镜像层的
- * .composer-chip 是同一语言的另一形态：气泡没有对齐约束，可以有横向 padding 与
- * 图标；配方照 Proma 的 mention chip（2026-10-11 用户裁决）：**无描边、4px 圆角、
- * 不透明淡色底**，padding 1px 4px 1px 2px。图标与文字缩到 sm 号——chip 是
- * 句子里的一个对象，不与正文争字号。
- * 纵向不採行高：气泡行高 1.75（约 24.5px），chip 装得下 22px。
+ * span.bubble-chip，MarkdownBlock 的 ChipSpan 换成图标 + 名字）。与输入框里的胶囊同一个
+ * 长相（2026-10-30 用户：「对话气泡里的 chip 也统一成这个样子」）：类别色描边 + 淡底 +
+ * 类别色的字，全圆角，名字与正文同字号，高度同输入框的胶囊（ui 行高减 2px）——只是没有 ×，
+ * 发出去的话不能再改。颜色变量与 .composer-chip[data-kind] 共用（见上），底色混气泡自己的实底。
+ * 气泡行高 1.75（约 24.5px），装得下 19px 的胶囊；inline-flex 的基线是名字的基线，与句子对齐。
  */
 .bubble-chip {
+  --chip-ground: var(--color-chat-card-bg);
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 1px var(--space-1) 1px var(--space-0-5);
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-muted);
-  font-size: var(--font-size-sm);
-  box-decoration-break: clone;
+  gap: var(--space-0-5);
+  height: calc(var(--font-size-base) * var(--line-height-ui) - 2px);
+  padding: 0 var(--space-1-5) 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--chip-fill);
+  box-shadow: inset 0 0 0 1px var(--chip-stroke);
+  color: var(--chip-ink);
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .bubble-chip-icon {
-  color: var(--color-text-tertiary);
   flex: 0 0 auto;
-}
-
-.bubble-chip-target {
-  color: var(--color-text-primary);
-  font-weight: 500;
-}
-
-/*
- * 气泡 chip 同一套类别色（与镜像层的 .composer-chip[data-kind] 同源）：
- * 15% 类别色混入气泡实底（--color-chat-card-bg，不透明预混），无描边。
- * 文字与图标同用「类别色 70% 混正墨」：纯类别色在明档绿 / 暗档蓝上
- * 对 15% 淡底的对比度只有 3.9–4.4:1（wcag 4.5 不达标），混入 30% 正墨后
- * 五档主题两类色全部 ≥ 5.7:1（比例见 commit），色相仍读得出类别。
- * 中性 chip 保持 muted。
- */
-.bubble-chip-skill {
-  --chip-ink: color-mix(in srgb, var(--color-filetype-sheet) 70%, var(--color-text-primary));
-  background: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--color-chat-card-bg));
-}
-.bubble-chip-skill .bubble-chip-icon,
-.bubble-chip-skill .bubble-chip-target {
-  color: var(--chip-ink);
-}
-.bubble-chip-mcp {
-  --chip-ink: color-mix(in srgb, var(--color-filetype-doc) 70%, var(--color-text-primary));
-  background: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--color-chat-card-bg));
-}
-.bubble-chip-mcp .bubble-chip-icon,
-.bubble-chip-mcp .bubble-chip-target {
-  color: var(--chip-ink);
 }
 
 .chat-md li::marker {
