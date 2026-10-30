@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
+import { REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 import { SessionStore } from "../session/store.ts";
 import { taskReviewDiff, taskReviewList } from "./task-source.ts";
 
@@ -216,5 +217,120 @@ describe("task 来源 × 符号链接", () => {
     const diff = await taskReviewDiff(store, ID, join(lab, "notes.txt"));
     assert.equal(diff.symlink, undefined);
     assert.ok(diff.diff?.includes("+more"), `普通文件被一起拦掉了：${JSON.stringify(diff)}`);
+  });
+});
+
+// ————————————————————————————————————————————————
+// 数增删行不再生成 patch；超限文件不读、不比、不出正文
+// ————————————————————————————————————————————————
+describe("task 来源 × 数行与上限", () => {
+  test("增删行数与 git numstat 口径一致：++ 开头的内容行不再被少数（以前靠数 patch 的 + 行）", async () => {
+    await writeFile(join(lab, "plus.txt"), "++lead\nplain\n", "utf8");
+    await turn("t1", [{ path: join(lab, "plus.txt"), before: "++old\n", after: "++lead\nplain\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("plus.txt"));
+    // 旧行「++old」删一行、新「++lead」「plain」增两行
+    assert.deepEqual({ added: entry?.added, removed: entry?.removed }, { added: 2, removed: 1 });
+  });
+
+  test("末行无换行、空文件、整文件重写：计数照常", async () => {
+    await writeFile(join(lab, "noeol.txt"), "a\nb", "utf8");
+    await turn("t1", [{ path: join(lab, "noeol.txt"), before: "", after: "a\nb" }]);
+    await writeFile(join(lab, "empty.txt"), "", "utf8");
+    await turn("t1", [{ path: join(lab, "empty.txt"), before: "x\ny\n", after: "" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const byName = new Map(list.entries.map((entry) => [basename(entry.path), entry]));
+    assert.deepEqual(
+      { added: byName.get("noeol.txt")?.added, removed: byName.get("noeol.txt")?.removed },
+      { added: 2, removed: 0 },
+    );
+    assert.deepEqual(
+      { added: byName.get("empty.txt")?.added, removed: byName.get("empty.txt")?.removed },
+      { added: 0, removed: 2 },
+    );
+  });
+
+  test("磁盘文件超过 1 MB：列表标行数未知（不当没改动），正文回「改动太大」、不整读", async () => {
+    await writeFile(join(lab, "huge.txt"), `${"h".repeat(120)}\n`.repeat(10_000), "utf8"); // ~1.2 MB
+    await turn("t1", [{ path: join(lab, "huge.txt"), before: null, after: "small\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind === "ok") {
+      const entry = list.entries.find((item) => item.path.endsWith("huge.txt"));
+      assert.deepEqual(
+        { added: entry?.added, lineCountUnknown: entry?.lineCountUnknown, noBaseline: entry?.noBaseline },
+        { added: 0, lineCountUnknown: true, noBaseline: undefined },
+      );
+    }
+    const diff = await taskReviewDiff(store, ID, join(lab, "huge.txt"));
+    assert.equal(diff.tooLarge?.exceeded, "bytes", JSON.stringify(diff).slice(0, 160));
+    assert.equal(diff.diff, null);
+  });
+
+  test("超过 1 MB 的二进制：列表照旧标无基线，正文如实报二进制（不报「太大」）", async () => {
+    await writeFile(join(lab, "huge.bin"), Buffer.concat([Buffer.from([0, 1, 0]), Buffer.alloc(2 * 1024 * 1024, 9)]));
+    await turn("t1", [{ path: join(lab, "huge.bin"), before: null, after: "small\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind === "ok") {
+      const entry = list.entries.find((item) => item.path.endsWith("huge.bin"));
+      assert.deepEqual(
+        { noBaseline: entry?.noBaseline, lineCountUnknown: entry?.lineCountUnknown },
+        { noBaseline: true, lineCountUnknown: undefined },
+      );
+    }
+    const diff = await taskReviewDiff(store, ID, join(lab, "huge.bin"));
+    assert.deepEqual([diff.binary, diff.tooLarge], [true, undefined]);
+  });
+
+  test("字节在限内但增删行超 5000：列表照常给计数，正文回 tooLarge(lines)", async () => {
+    const many = Array.from({ length: REVIEW_DIFF_MAX_LINES + 1 }, (_, i) => `line ${i}`).join("\n");
+    await writeFile(join(lab, "many.txt"), many, "utf8"); // ~40 KB
+    await turn("t1", [{ path: join(lab, "many.txt"), before: null, after: "x\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind === "ok") {
+      const entry = list.entries.find((item) => item.path.endsWith("many.txt"));
+      assert.equal(entry?.added, REVIEW_DIFF_MAX_LINES + 1);
+    }
+    const diff = await taskReviewDiff(store, ID, join(lab, "many.txt"));
+    assert.equal(diff.tooLarge?.exceeded, "lines");
+    assert.equal(diff.diff, null);
+  });
+
+  test("基线超过 1 MB 且与现状不一致：列表标行数未知，正文回「改动太大」", async () => {
+    const huge = `${"B".repeat(120)}\n`.repeat(10_000); // ~1.2 MB
+    await writeFile(join(lab, "big-base.txt"), "changed\n", "utf8");
+    await turn("t1", [{ path: join(lab, "big-base.txt"), before: huge, after: "changed\n" }]);
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind === "ok") {
+      const entry = list.entries.find((item) => item.path.endsWith("big-base.txt"));
+      assert.equal(entry?.lineCountUnknown, true);
+    }
+    const diff = await taskReviewDiff(store, ID, join(lab, "big-base.txt"));
+    assert.equal(diff.tooLarge?.exceeded, "bytes");
+  });
+
+  test("单条近 1 MB 的长行（行数 1、字节在限内）：正文照常出", async () => {
+    const longLine = "z".repeat(900 * 1024);
+    await writeFile(join(lab, "one-line.txt"), longLine, "utf8");
+    await turn("t1", [{ path: join(lab, "one-line.txt"), before: null, after: "x\n" }]);
+    const diff = await taskReviewDiff(store, ID, join(lab, "one-line.txt"));
+    assert.equal(diff.tooLarge, undefined);
+    assert.equal(diff.error, undefined);
+    assert.ok((diff.diff?.length ?? 0) > 900 * 1024, "应保留完整正文");
+  });
+
+  test("被删文件的删除正文也要过上限：全删超限回「改动太大」", async () => {
+    const many = Array.from({ length: REVIEW_DIFF_MAX_LINES + 1 }, (_, i) => `d${i}`).join("\n");
+    await turn("t1", [{ path: join(lab, "gone-big.txt"), before: many, after: "x\n" }]);
+    // 磁盘上没有 gone-big.txt → 全量删除
+    const diff = await taskReviewDiff(store, ID, join(lab, "gone-big.txt"));
+    assert.equal(diff.tooLarge?.exceeded, "lines", JSON.stringify(diff).slice(0, 160));
   });
 });
