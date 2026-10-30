@@ -10,6 +10,7 @@ import type {
   BuiltinProvider,
   ChannelSendOutcome,
   DelegateOutcome,
+  ModelCostsOutcome,
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
@@ -630,6 +631,15 @@ export class AgentHostCore {
       ...(outcome.ok
         ? { ok: true as const, childId: outcome.childId, title: outcome.title, card: outcome.card }
         : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 派发参考：modelCostsRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerModelCosts(requestId: string, outcome: ModelCostsOutcome): void {
+    this.child?.postMessage({
+      type: "modelCostsResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, text: outcome.text } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
 
