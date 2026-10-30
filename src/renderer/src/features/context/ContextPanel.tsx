@@ -62,6 +62,8 @@ export function ContextPanel(props: {
   /** 「转成任务」：与侧栏遗留面板「带上下文继续」同一条路（App 的 startCarryoverTask） */
   onStartCarryoverTask: (item: Carryover) => void;
   onDoCarryoverNow: (item: Carryover) => void;
+  /** 「带着目标开新会话」（App 的 startGoalTask） */
+  onStartGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
 }) {
   const t = useT();
   const [scope, setScope] = useState<ContextScope>("turn");
@@ -100,6 +102,7 @@ export function ContextPanel(props: {
           onSetCarryoverStatus={props.onSetCarryoverStatus}
           onStartCarryoverTask={props.onStartCarryoverTask}
           onDoCarryoverNow={props.onDoCarryoverNow}
+          onStartGoalTask={props.onStartGoalTask}
           onOpenContext={() => props.onTab("context")}
         />
       ) : (

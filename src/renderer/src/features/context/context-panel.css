@@ -373,6 +373,23 @@ button.tp-editlog-src {
 button.tp-editlog-src:hover {
   color: var(--color-text-secondary);
 }
+/* 目标行上的去处：不是确认按钮，是安静的文字动作；悬停才变深 */
+.tp-goal-carry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-self: start;
+  padding: var(--space-0-5) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.tp-goal-carry:hover {
+  color: var(--color-text-secondary);
+}
 /* 目标：进度面板最上面一块；计划（todo）挂在它下面 */
 .tp-goal {
   display: grid;

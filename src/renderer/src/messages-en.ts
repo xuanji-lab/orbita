@@ -2253,6 +2253,25 @@ export const en = {
     editsTitle: "What changed in the goal and the plan, why, and who asked",
     /** 对话里的一行：目标从什么改成什么；why 空串 = 没写理由 */
     notice: (from: string, to: string, why: string) => `Goal changed: "${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
+    /** 目标行上的动作：带着目标开新会话（不是确认，是一个去处） */
+    carry: "Continue in a new task",
+    carryTitle: "Start a new task with this goal, what is done, what is left and how the goal changed",
+  },
+
+  /** 「带着目标开新会话」的种子消息（新会话的第一条用户消息，可见）；各段空了就不写 */
+  goalSeed: {
+    lead: (title: string | null) =>
+      title === null ? "Pick up the goal of an earlier task (the task has been deleted)." : `Pick up the goal of the task "${title}".`,
+    goal: "Goal",
+    done: "Done so far",
+    open: "Not done yet",
+    later: "Noted for later (not handled yet)",
+    changes: "How the goal and plan changed",
+    ask: "Please record the goal above as this task's goal (update_goal, keep my wording), then continue from what is not done yet.",
+    /** 改动要点的一行：time 本地时间；what 改了什么；why 空串 = 没写；source 谁提的 */
+    change: (time: string, what: string, why: string, source: string) => `${time} ${what}${why === "" ? "" : ` — ${why}`} (${source})`,
+    goalSet: (to: string) => `goal set: "${to}"`,
+    goalChanged: (from: string, to: string) => `goal "${from}" → "${to}"`,
   },
 
   contextPanel: {

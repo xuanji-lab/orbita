@@ -39,6 +39,7 @@ import {
   type StepChapter,
 } from "./plan-timeline.ts";
 import { planChangeText } from "./plan-text.ts";
+import { buildGoalSeed } from "./goal-seed.ts";
 import { useGoalLedger } from "./useGoalLedger.ts";
 
 
@@ -71,6 +72,8 @@ export function TaskProgress(props: {
   onStartCarryoverTask: (item: Carryover) => void;
   /** 现在就做：把这一项作为下一条消息发进本会话（在跑就排队，同 continueCarryoverInSource） */
   onDoCarryoverNow: (item: Carryover) => void;
+  /** 带着目标开新会话：种子由这里按来源标题现拼（goal-seed.ts），App 负责开会话 */
+  onStartGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
   onOpenContext: () => void;
 }) {
   const t = useT();
@@ -121,6 +124,15 @@ export function TaskProgress(props: {
           onToggleLog={() => setLogOpen((value) => !value)}
           callOf={callOf}
           inChat={inChat}
+          onCarry={() =>
+            props.onStartGoalTask(props.sessionId, (sourceTitle) =>
+              buildGoalSeed(t, {
+                sourceTitle,
+                ledger,
+                later: props.carryovers.filter((item) => item.status === "open").map((item) => ({ title: item.title, detail: item.detail })),
+              }),
+            )
+          }
         />
       )}
       <div className="tp-now">
@@ -519,6 +531,8 @@ function GoalSection(props: {
   onToggleLog: () => void;
   callOf: ReadonlyMap<string, string | undefined>;
   inChat: ReadonlySet<string>;
+  /** 带着目标开新会话 */
+  onCarry: () => void;
 }) {
   const t = useT();
   const goal = props.ledger.goal;
@@ -532,6 +546,11 @@ function GoalSection(props: {
         )}
       </div>
       <p className="tp-goal-text">{goal.text}</p>
+      {/* 这是一个去处，不是确认：目标没做完、一个会话装不下时，带着它换个会话接着做 */}
+      <button type="button" className="tp-goal-carry" title={t.goalText.carryTitle} onClick={props.onCarry}>
+        <Icon name="corner-up-right" size={12} strokeWidth={1.8} />
+        {t.goalText.carry}
+      </button>
       {props.logOpen && <EditLog entries={props.ledger.entries} callOf={props.callOf} inChat={props.inChat} />}
     </section>
   );
