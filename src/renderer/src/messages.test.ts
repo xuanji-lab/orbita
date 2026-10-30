@@ -43,6 +43,9 @@ const ALLOWED_LATIN = new Set([
   // 工具名（带着目标开新会话的种子消息里，请 agent 调 update_goal——工具名是字面量，翻了它就不认）
   "update",
   "goal",
+  // 更新出口的环境变量名（HTTPS_PROXY / HTTP_PROXY，用户照抄进终端或启动脚本）
+  "HTTPS",
+  "PROXY",
   // 命令名与工具名前缀（用户照抄的字面量）
   "node",
   "npx",

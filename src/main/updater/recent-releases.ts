@@ -13,26 +13,28 @@
  * - **说明读每一版附带的 latest.yml，不读 Release 正文**（`body` 是给专业用户的完整文档，
  *   见 notes.ts 文件头）：列表里每一行自己是一条 disclosure，展开就地看那一版带来了什么；
  *   没传 latest.yml / 里面没写 / 拉不到就是 `notes: null`，界面据此不画三角（不是丢掉这一行
- *   ——版本号与日期还是要列出来）。每版多一次请求（最多 5 次，并行），走 GitHub 的下载地址，
- *   不占 API 的未认证配额。
+ *   ——版本号与日期还是要列出来）。每版多一次请求（最多 5 次，并行），走发布资产端点
+ *   （`releases/assets/<id>`）而不是 `browser_download_url`：后者在 github.com 网页域名上，
+ *   部分网络被拦（与更新器同一个理由，见 github-api-provider.ts）。
  * - **只缓存成功**，10 分钟。失败不缓存，用户点「重试」是真的再打一次；成功则点开 /
  *   收起来回点不打 API。内测期发布节奏远慢于 10 分钟，够用。
  * - **失败是数据**（RecentReleasesResult）：离线 / 限流 / 非 200 都由界面在展开体里
  *   说一句人话并给重试，不让 invoke reject（见 shared/updater.ts 的取舍说明）。
+ * - **网络全走共享客户端**（github-client.ts，与更新器同一个实例）：同一套代理 / 缓存 /
+ *   限流记录。这里只保留「列表 + 每版说明」的组装缓存：那是解析结果，客户端缓存的是原文。
  */
 // electron-updater 自己读 latest.yml 的那一个解析函数（js-yaml load）：说明与更新器同口径，
 // 也不为读一个字段再引一份 YAML 依赖。包没有 exports 字段，深路径可用；版本精确锁在 6.8.9
 import { parseUpdateInfo } from "electron-updater/out/providers/Provider.js";
 import type { RecentRelease, RecentReleasesResult, UpdateNote } from "../../shared/updater.ts";
+import { GitHubHttpError, githubRedirectAllowed, type GitHubReader } from "./github-client.ts";
 import { appNotesOf } from "./notes.ts";
 import { releasesApiUrl } from "./releases-url.ts";
 
 /** 展开体一屏够看，别把发布史整本拉下来 */
 const PER_PAGE = 5;
-/** 成功结果的内存缓存时长 */
+/** 组装结果的内存缓存时长（与客户端原文缓存同一个窗口） */
 const CACHE_MS = 10 * 60 * 1000;
-/** 单次请求的上限：断网 / 挂着不走时不能把设置页的展开体永远转下去 */
-const FETCH_TIMEOUT_MS = 10_000;
 
 /** 非空字符串才算数（GitHub 对没有标题的 Release 给 `name: ""`） */
 function text(value: unknown): string | null {
@@ -62,14 +64,17 @@ export interface ListedRelease extends Omit<RecentRelease, "notes"> {
 /** 带说明的更新元数据文件：Windows 的 latest.yml 优先，没有再看 mac 的（两份说明同源） */
 const CHANNEL_FILES = ["latest.yml", "latest-mac.yml"] as const;
 
-function channelFileUrl(assets: unknown): string | null {
+function channelFileUrl(assets: unknown, assetBaseUrl: string | null): string | null {
   if (!Array.isArray(assets)) return null;
   for (const name of CHANNEL_FILES) {
     for (const asset of assets) {
       if (typeof asset !== "object" || asset === null) continue;
       const record = asset as Record<string, unknown>;
+      if (record.name !== name) continue;
+      // 优先用资产 id 拼 API 地址；老响应没有 id 才退回网页下载地址（那条可能被拦）
+      if (typeof record.id === "number" && assetBaseUrl !== null) return `${assetBaseUrl}/${record.id}`;
       const url = text(record.browser_download_url);
-      if (record.name === name && url !== null) return url;
+      if (url !== null) return url;
     }
   }
   return null;
@@ -84,7 +89,7 @@ export function notesFromChannelFile(raw: string): readonly UpdateNote[] | null 
   }
 }
 
-export function parseRecentReleases(payload: unknown): readonly ListedRelease[] | null {
+export function parseRecentReleases(payload: unknown, assetBaseUrl: string | null = null): readonly ListedRelease[] | null {
   if (!Array.isArray(payload)) return null;
   const releases: ListedRelease[] = [];
   for (const entry of payload) {
@@ -100,7 +105,7 @@ export function parseRecentReleases(payload: unknown): readonly ListedRelease[] 
       title: text(record.name) ?? tag,
       publishedAt,
       htmlUrl,
-      notesUrl: channelFileUrl(record.assets),
+      notesUrl: channelFileUrl(record.assets, assetBaseUrl),
     });
   }
   return releases;
@@ -112,35 +117,55 @@ export interface RecentReleases {
 }
 
 export interface RecentReleasesOptions {
+  /** 共享 GitHub 客户端（index.ts 注入；与更新器同一个实例） */
+  client: GitHubReader;
   /** 列表端点（默认 releasesApiUrl；测试注入用） */
   endpoint?: () => string | null;
-  /** fetch（默认全局；测试注入用） */
-  call?: typeof fetch;
   /** 时钟（默认 Date.now；测试注入用） */
   now?: () => number;
 }
 
-export function createRecentReleases(options: RecentReleasesOptions = {}): RecentReleases {
+/** 限流 / 非 200 的原文只进 title，展开体里一句人话就够——界面只需要知道「重试有没有意义」 */
+function messageOf(error: unknown): string {
+  if (error instanceof GitHubHttpError) return `HTTP ${error.statusCode}`;
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function createRecentReleases(options: RecentReleasesOptions): RecentReleases {
   const endpoint = options.endpoint ?? releasesApiUrl;
-  const call = options.call ?? fetch;
+  const client = options.client;
   const now = options.now ?? Date.now;
   let cached: { at: number; releases: readonly RecentRelease[] } | null = null;
 
-  /** 拉一版的 latest.yml 读说明。transient = 网络层失败（超时 / 断网 / 5xx），不是「没有这份文件」 */
+  /**
+   * 拉一版的 latest.yml 读说明。transient = 这次没拿到（限流 403/429、其它 4xx、5xx、
+   * 网络错误），不是「没有这份文件」——只有 404 是确定的没有。
+   */
   async function withNotes(
     release: Omit<RecentRelease, "notes">,
     notesUrl: string | null,
   ): Promise<{ release: RecentRelease; transient: boolean }> {
     if (notesUrl === null) return { release: { ...release, notes: null }, transient: false };
+    // 退路 URL（browser_download_url）来自 API 响应，不一定是 GitHub 的域：先过重定向
+    // 白名单（与更新器同一张表，githubRedirectAllowed），白名单外 / 解析不了的地址不发
+    // 请求，那一行当「没有说明」处理（列表照常）。资产端点地址天然在白名单内。
     try {
-      const response = await call(notesUrl, {
-        headers: { "user-agent": "orbita" },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!response.ok) return { release: { ...release, notes: null }, transient: response.status >= 500 };
-      return { release: { ...release, notes: notesFromChannelFile(await response.text()) }, transient: false };
+      if (!githubRedirectAllowed(new URL(notesUrl))) {
+        return { release: { ...release, notes: null }, transient: false };
+      }
     } catch {
-      return { release: { ...release, notes: null }, transient: true };
+      return { release: { ...release, notes: null }, transient: false };
+    }
+    try {
+      // 资产端点要资产头才回文件（客户端按 Accept 决定）；网页下载地址收到它也无害
+      const raw = await client.getText(notesUrl, "application/octet-stream");
+      return { release: { ...release, notes: notesFromChannelFile(raw) }, transient: false };
+    } catch (error) {
+      // 只有 404 = 这一版真的没传 latest.yml（确定的「没有」，可以连同列表一起缓存）；
+      // 403 / 429（限流）、其它 4xx、5xx、断网都只是「这次没拿到」：不写缓存，下次展开再试
+      // （修之前 403/429 也被当成「没有说明」缓存 10 分钟，限流一次说明就丢十分钟）
+      const transient = !(error instanceof GitHubHttpError) || error.statusCode !== 404;
+      return { release: { ...release, notes: null }, transient };
     }
   }
 
@@ -150,22 +175,19 @@ export function createRecentReleases(options: RecentReleasesOptions = {}): Recen
       if (url === null) return { ok: false, message: "没有配置发布源" };
       if (cached !== null && now() - cached.at < CACHE_MS) return { ok: true, releases: cached.releases };
       try {
-        const response = await call(`${url}?per_page=${PER_PAGE}`, {
-          headers: { accept: "application/vnd.github+json", "user-agent": "orbita" },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        });
-        if (!response.ok) return { ok: false, message: `HTTP ${response.status}` };
-        const listed = parseRecentReleases(await response.json());
+        // 结果级缓存之外，整页列表与每版 latest.yml 的原文由共享客户端缓存（同 10 分钟窗口）
+        const payload = await client.getJson(`${url}?per_page=${PER_PAGE}`);
+        const listed = parseRecentReleases(payload, url.endsWith("/releases") ? `${url}/assets` : null);
         if (listed === null) return { ok: false, message: "返回的不是版本列表" };
         // 每一版各拉一份 latest.yml（并行，最多 PER_PAGE 份）；单份失败只让那一行没有说明
         const fetched = await Promise.all(listed.map(({ notesUrl, ...release }) => withNotes(release, notesUrl)));
         const releases = fetched.map((entry) => entry.release);
-        // 有一份是网络层失败（不是「这一版没传 latest.yml」）就不缓存：下次展开再试，别把
-        // 一次抖动记成十分钟的「没有说明」
+        // 有一份是「这次没拿到」（限流 / 断网 / 5xx，不是「这一版没传 latest.yml」）就不缓存：
+        // 下次展开再试，别把一次抖动记成十分钟的「没有说明」
         if (fetched.every((entry) => !entry.transient)) cached = { at: now(), releases };
         return { ok: true, releases };
       } catch (error) {
-        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+        return { ok: false, message: messageOf(error) };
       }
     },
   };
