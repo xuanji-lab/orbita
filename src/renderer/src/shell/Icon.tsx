@@ -18,6 +18,7 @@ import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg
 import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
+import brainCircuit from "../../../../design-system/assets/icons/lucide/brain-circuit.svg?raw";
 import check from "../../../../design-system/assets/icons/lucide/check.svg?raw";
 import circleCheck from "../../../../design-system/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../design-system/assets/icons/lucide/chevron-down.svg?raw";
@@ -105,6 +106,7 @@ import search from "../../../../design-system/assets/icons/lucide/search.svg?raw
 import terminal from "../../../../design-system/assets/icons/lucide/terminal.svg?raw";
 import fileText from "../../../../design-system/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../design-system/assets/icons/lucide/trash-2.svg?raw";
+import trendingUp from "../../../../design-system/assets/icons/lucide/trending-up.svg?raw";
 import shieldCheck from "../../../../design-system/assets/icons/lucide/shield-check.svg?raw";
 import waypoints from "../../../../design-system/assets/icons/lucide/waypoints.svg?raw";
 import sliders from "../../../../design-system/assets/icons/lucide/sliders.svg?raw";
@@ -147,6 +149,7 @@ const ICONS = {
   "arrow-up-right": arrowUpRight,
   bot,
   brain,
+  "brain-circuit": brainCircuit,
   check,
   "circle-check": circleCheck,
   "chevron-down": chevronDown,
@@ -241,6 +244,7 @@ const ICONS = {
   terminal,
   "file-text": fileText,
   "trash-2": trash2,
+  "trending-up": trendingUp,
   "triangle-alert": triangleAlert,
   "undo-2": undo2,
   user,

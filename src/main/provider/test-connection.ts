@@ -6,7 +6,8 @@
  * 但「怎么发一个请求」只取决于**协议**：OpenAI 兼容的都发 /chat/completions，
  * Anthropic 兼容的都发 /v1/messages。厂商差异属于 baseUrl 与鉴权头，那是数据不是代码。
  *
- * 所以这里只有两个分支，而且它不会随支持的厂商变多而增长。
+ * 所以这里按协议分支（Anthropic Messages / OpenAI Chat / OpenAI Responses / Gemini 原生），
+ * 它只随**协议**变多，不随支持的厂商变多而增长。
  */
 import { anthropicOauthHeaders, isClaudeOauthToken } from "./oauth.ts";
 import { discoverModels } from "./discover.ts";
@@ -23,6 +24,58 @@ interface TestInput {
   modelId: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
+}
+
+/**
+ * 探测请求：发一条最短的「hi」、只要 1 个 token（Responses 协议下限是 16）。
+ * 纯函数，按协议给出地址、鉴权头与请求体——测试直接断言它。
+ */
+export function buildTestRequest(input: {
+  api: string;
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+  headers?: Record<string, string>;
+}): { url: string; headers: Record<string, string>; body: unknown } {
+  const base = input.baseUrl.replace(/\/+$/, "");
+  const model = input.modelId.trim();
+  const json = { "Content-Type": "application/json" };
+  const extra = input.headers ?? {};
+  if (input.api === "anthropic-messages") {
+    return {
+      url: `${base}/v1/messages`,
+      headers: {
+        ...json,
+        // OAuth 访问令牌只认 Bearer + oauth beta 头（同 discover 的处理）
+        ...(isClaudeOauthToken(input.apiKey)
+          ? anthropicOauthHeaders(input.apiKey)
+          : { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" }),
+        ...extra,
+      },
+      body: { model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] },
+    };
+  }
+  if (input.api === "google-generative-ai") {
+    // Gemini 原生：型号在路径里，鉴权只认 x-goog-api-key（同 discover）
+    return {
+      url: `${base}/models/${encodeURIComponent(model)}:generateContent`,
+      headers: { ...json, "x-goog-api-key": input.apiKey, ...extra },
+      body: { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: 1 } },
+    };
+  }
+  if (input.api === "openai-responses") {
+    return {
+      url: `${base}/responses`,
+      headers: { ...json, Authorization: `Bearer ${input.apiKey}`, ...extra },
+      // Responses 的 max_output_tokens 下限是 16，填 1 会被 400
+      body: { model, input: "hi", max_output_tokens: 16 },
+    };
+  }
+  return {
+    url: `${base}/chat/completions`,
+    headers: { ...json, Authorization: `Bearer ${input.apiKey}`, ...extra },
+    body: { model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] },
+  };
 }
 
 export async function testConnection(input: TestInput): Promise<ConnectionTestResult> {
@@ -50,23 +103,7 @@ export async function testConnection(input: TestInput): Promise<ConnectionTestRe
       ? { ok: true, message: "Key accepted, but the provider listed no models. Add one by hand." }
       : { ok: true, message: `Key accepted — ${found.models.length} model(s) available.` };
   }
-  const base = input.baseUrl.replace(/\/+$/, "");
-  const anthropic = input.api === "anthropic-messages";
-  const url = anthropic ? `${base}/v1/messages` : `${base}/chat/completions`;
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(anthropic
-      ? // OAuth 访问令牌只认 Bearer + oauth beta 头（同 discover 的处理）
-        isClaudeOauthToken(input.apiKey)
-        ? anthropicOauthHeaders(input.apiKey)
-        : { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" }
-      : { Authorization: `Bearer ${input.apiKey}` }),
-    ...(input.headers ?? {}),
-  };
-  const body = anthropic
-    ? { model: input.modelId, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }
-    : { model: input.modelId, max_tokens: 1, messages: [{ role: "user", content: "hi" }] };
+  const { url, headers, body } = buildTestRequest(input);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 20_000);

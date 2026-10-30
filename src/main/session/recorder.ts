@@ -21,47 +21,63 @@
  * 不由「存不存」承载。
  *
  * **不做归约。** 归约是渲染层的事（用 pi 自带的归约器），这里只挑终态帧。
+ *
+ * **assistant 记录盖上本轮生效的思考档**（`StampedAssistantRecord.thinkingLevel`）：取开轮时
+ * runtime 推的 `thinking` 事件——clamp 之后的真值，不是用户点的意图档。pi 的本子在会话中途
+ * 改档时不记（理由见 shared/session.ts），价格 · 能力图按「型号 × 档」算每任务成本要靠这一章。
+ * 手动压缩时 runtime 会先推 off、压完再推回原档；压缩不产生 assistant 记录，盖到的总是回来那一档。
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
-import type { ChannelMarkRecord, SessionRecord } from "../../shared/session.ts";
+import { stampedThinkingLevel, type ChannelMarkRecord, type SessionRecord } from "../../shared/session.ts";
+import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import { isEmptyErrorAssistant, type SessionStore } from "./store.ts";
-import type { UsageLedger } from "../usage/ledger.ts";
+import type { TaskLedger } from "../usage/task-ledger.ts";
+import { taskRecordOf } from "../usage/task-cost.ts";
 
 export function createSessionRecorder(
   store: SessionStore,
-  /** 日用量账本（可选——旧测试夹具不传则不计账）。assistant 记录落盘的同一条路径上落账 */
-  usage?: UsageLedger,
+  /**
+   * 任务账本（侧栏用量格与价格 · 能力图共用，可选——旧夹具不传则不记）。assistant 记录落盘的
+   * 同一条路径上按「会话 × 型号 × 档的连续一段」增量记账，档取记录上刚盖的章；意图召回的 token
+   * 另记一份按天的账。失败不拦对话——账本是可以从会话 JSONL 重建的派生数据。
+   */
+  tasks?: TaskLedger,
 ): (event: AgentEvent) => void {
   // 写失败不该让对话中断——记一条到 stderr，界面照常
   const persist = (sessionId: string, item: SessionRecord): void => {
     void store.record(sessionId, item).catch((error: unknown) => {
       console.error("[session] 落盘失败", sessionId, error);
     });
-    // 用量落账：只认带 usage 的 assistant 记录（去重在账本里按 message id 做）。
-    // 失败同样不拦对话——账本是可以重建的派生数据，下一条消息还有机会补上今天的账
-    if (usage !== undefined && item.role === "assistant" && item.usage !== undefined) {
-      void usage.recordUsage({ id: item.id, timestamp: item.timestamp, usage: item.usage }).catch(
-        (error: unknown) => {
-          console.error("[usage] 日账本落账失败", sessionId, error);
-        },
-      );
+    if (tasks !== undefined && item.role === "assistant") {
+      const task = taskRecordOf(item, stampedThinkingLevel(item));
+      if (task !== null) {
+        void tasks.record(sessionId, task).catch((error: unknown) => {
+          console.error("[task-ledger] 任务账记账失败", sessionId, error);
+        });
+      }
     }
   };
+  /** 每条会话最近一次 thinking 事件的档（进程重启后为空：下一轮开轮必推一次，先于任何 assistant 记录） */
+  const turnLevels = new Map<string, ThinkingLevel>();
   return (event) => {
+    if (event.type === "thinking") {
+      turnLevels.set(event.sessionId, event.level);
+      return;
+    }
     if (event.type === "compaction") return persist(event.sessionId, event.record);
-    // 意图召回的终态记录（实验功能）：落盘进会话 JSONL；带 usage 时同步进日账本
+    // 意图召回的终态记录（实验功能）：落盘进会话 JSONL；带 usage 时同步进任务账本的意图召回那一份
     // （DeepSeek / Proma 管线花的是用户自己的 token，账本可从记录回填重建）
     if (event.type === "intentRecallRecord") {
       persist(event.sessionId, event.record);
-      if (usage !== undefined && event.record.usage !== undefined) {
-        void usage
-          .recordUsage({
+      if (tasks !== undefined && event.record.usage !== undefined) {
+        void tasks
+          .recordIntent({
             id: event.record.id,
             timestamp: event.record.timestamp,
-            usage: usageCountsOfIntent(event.record.usage),
+            tokens: usageCountsOfIntent(event.record.usage),
           })
           .catch((error: unknown) => {
             console.error("[usage] 意图召回的 token 账没记上", event.sessionId, error);
@@ -115,7 +131,8 @@ export function createSessionRecorder(
         return;
       }
     }
-    persist(event.sessionId, item);
+    const level = item.role === "assistant" ? turnLevels.get(event.sessionId) : undefined;
+    persist(event.sessionId, item.role === "assistant" && level !== undefined ? { ...item, thinkingLevel: level } : item);
   };
 }
 

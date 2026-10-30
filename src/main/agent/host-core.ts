@@ -18,6 +18,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
+import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -27,9 +28,13 @@ export interface AgentChild {
   kill(): unknown;
 }
 
+/** 已添加的服务商用到哪几份目录（主进程从 providers.json 算，catalogIdsOfProviders） */
+export type CatalogScope = () => Promise<readonly string[]>;
+
 export class AgentHostCore {
   private readonly forkRuntime: () => AgentChild;
   private readonly onEvent: (event: AgentEvent) => void;
+  private readonly catalogScope: CatalogScope | undefined;
   private child: AgentChild | null = null;
   private ready: Promise<void> | null = null;
   /** pi 报上来的内建目录。runtime 是**先发 ready 再异步建目录**，所以不能只等 ready
@@ -82,10 +87,17 @@ export class AgentHostCore {
     { resolve: (bullets: string[]) => void; reject: (error: Error) => void }
   >();
   private focusSummarySeq = 0;
+  /** 在等的 choreComplete 回执（收尾清单按反馈改写），按 requestId；进程退出全部 reject */
+  private readonly pendingChores = new Map<string, { resolve: (text: string) => void; reject: (error: Error) => void }>();
+  private choreSeq = 0;
 
-  constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void) {
+  /**
+   * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
+   */
+  constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void, catalogScope?: CatalogScope) {
     this.forkRuntime = forkRuntime;
     this.onEvent = onEvent;
+    this.catalogScope = catalogScope;
   }
 
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
@@ -98,12 +110,17 @@ export class AgentHostCore {
       child.on("message", (message: AgentEvent) => {
         if (message.type === "ready") {
           resolve();
+          // 每次拉起（含崩溃后重拉）都送一份全量：agent 进程不记得上一个自己听过什么
+          this.syncCatalogScope();
           return;
         }
         if (message.type === "builtins") {
           this.builtins = message.providers;
           this.resolveBuiltins?.(message.providers);
           this.resolveBuiltins = null;
+          // 也交 onEvent 广播：目录在后台联网刷新完会再报一次（model-catalog.ts），窗口里开着的
+          // 菜单 / 设置页要跟着换，不然新型号的名字要用户刷新窗口才出来（2026-10-24 验收发现）
+          this.onEvent(message);
           return;
         }
         if (message.type === "mcp") {
@@ -132,6 +149,14 @@ export class AgentHostCore {
           this.pendingFocusSummaries.delete(message.requestId);
           if (message.bullets === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
           else pending?.resolve(message.bullets);
+          return;
+        }
+        if (message.type === "choreCompleted") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingChores.get(message.requestId);
+          this.pendingChores.delete(message.requestId);
+          if (message.text === null) pending?.reject(new Error(message.error ?? "the model didn't answer"));
+          else pending?.resolve(message.text);
           return;
         }
         if (message.type === "providerProbed") {
@@ -191,6 +216,8 @@ export class AgentHostCore {
         this.pendingProbes.clear();
         for (const pending of this.pendingFocusSummaries.values()) pending.reject(new Error(message));
         this.pendingFocusSummaries.clear();
+        for (const pending of this.pendingChores.values()) pending.reject(new Error(message));
+        this.pendingChores.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -273,6 +300,33 @@ export class AgentHostCore {
       setTimeout(() => resolve(this.builtins), 15_000);
     });
     return this.builtinsArrived;
+  }
+
+  /**
+   * 把「已添加服务商的目录全量」送给 agent 进程：它只联网刷新这些（审核 F-1），并当场按节流补刷。
+   * 服务商列表变了（添加 / 改 / 删 / 登录）由 provider IPC 调。**不 ensure**：进程没起就不为它
+   * 拉起——下次拉起时 ready 那里会送。发完即回，结果走 builtins 广播。
+   */
+  syncCatalogScope(): void {
+    const scope = this.catalogScope;
+    const ready = this.ready;
+    if (scope === undefined || ready === null) return;
+    void Promise.all([ready, scope()])
+      .then(([, catalogIds]) => {
+        // 等的这一会儿进程可能退了又起：那个新进程会在自己的 ready 里送，这里不重复
+        if (this.ready !== ready || this.child === null) return;
+        this.post({ type: "refreshCatalogs", scope: "added", catalogIds: [...catalogIds] });
+      })
+      .catch((error: unknown) => console.warn("[catalog] 目录刷新范围没送出去：", error));
+  }
+
+  /**
+   * 设置页点开一张还没保存的服务商卡片：现拉一次这份目录（agent 侧节流内不拉）。
+   * 要拉起进程：用户正看着这张卡，目录是给他看的。发完即回，新目录走 builtins 广播。
+   */
+  async peekCatalog(catalogId: string): Promise<void> {
+    await this.ensure();
+    this.post({ type: "refreshCatalogs", scope: "peek", catalogIds: [catalogId] });
   }
 
   /**
@@ -384,6 +438,39 @@ export class AgentHostCore {
   }
 
   /**
+   * 家务活模型的一次独立小调用（收尾清单按反馈改写）：交回回复原文，解析在调用方。
+   * 150 秒兜底（agent 侧 120 秒先断）。
+   */
+  async choreComplete(
+    provider: Extract<AgentCommand, { type: "choreComplete" }>["provider"],
+    modelId: string,
+    system: string,
+    prompt: string,
+  ): Promise<string> {
+    await this.ensure();
+    this.choreSeq += 1;
+    const requestId = `chore-${this.choreSeq}`;
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingChores.has(requestId)) return;
+        this.pendingChores.delete(requestId);
+        reject(new Error("the model didn't answer in time"));
+      }, 150_000);
+      this.pendingChores.set(requestId, {
+        resolve: (text) => {
+          clearTimeout(timer);
+          resolve(text);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.post({ type: "choreComplete", requestId, provider, modelId, system, prompt });
+    });
+  }
+
+  /**
    * 连接探测（Test 的 OAuth 路由）：让 agent 进程用 pi 的客户端（与真会话同源）
    * 发一条小消息。1 分钟没回当失败——网关挂住时不让 Test 按钮一直转。
    */
@@ -474,6 +561,28 @@ export class AgentHostCore {
       ...(result.ok
         ? { ok: true as const, card: result.card, text: result.text }
         : { ok: false as const, error: result.error }),
+    } satisfies AgentCommand);
+  }
+
+  /**
+   * 记忆召回（实验功能 memory-system）：memoryRecallRequest 的回执。同
+   * answerReadTask 的理由：不 ensure、发完即回——调用方（主进程的转发层）自己
+   * 兑超时，agent 侧另有一层硬超时兑底。
+   */
+  answerMemoryRecall(requestId: string, outcome: MemoryRecallOutcome): void {
+    this.child?.postMessage({
+      type: "memoryRecallResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, hits: outcome.hits } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 记忆工具：memoryToolRequest 的回执。同 answerMemoryRecall：不 ensure、发完即回。 */
+  answerMemoryTool(requestId: string, outcome: MemoryAgentOutcome): void {
+    this.child?.postMessage({
+      type: "memoryToolResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, entries: outcome.entries } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
 

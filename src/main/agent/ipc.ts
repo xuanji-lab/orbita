@@ -23,11 +23,12 @@ import { withoutQuotes } from "../../shared/quote.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import { knownModelParams, knownProviderOf } from "../../shared/known-providers.ts";
+import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
 import type { ProviderStore } from "../provider/store.ts";
+import { oauthRequestAuth } from "../provider/oauth-flows.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
@@ -36,6 +37,7 @@ import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
 import { intentTurnEnv } from "./intent-env.ts";
+import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
 import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
@@ -65,49 +67,46 @@ export async function resolveProviderSecrets(
 ): Promise<ProviderSecrets> {
   const dto = (await providers.list()).find((p) => p.id === providerId);
   if (!dto) throw new Error(`unknown provider "${providerId}"`);
-  // OAuth 访问令牌优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
+  const known = knownProviderOf(dto);
+  // OAuth 凭据优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
   // 续期失败不能静默拿旧 token 硬发一轮——换成一句用户能行动的话
-  let apiKey = await providers.resolveOauthApiKey(providerId).catch((cause: unknown) => {
+  const credential = await providers.resolveOauthCredential(providerId).catch((cause: unknown) => {
     throw new Error(
-      `Claude 登录已失效，请到设置 › 模型服务里重新登录（${
+      `${known.label} 登录已失效，请到设置 › 模型服务里重新登录（${
         cause instanceof Error ? cause.message : String(cause)
       }）`,
     );
   });
-  if (apiKey === null) {
-    apiKey = await providers.resolveApiKey(providerId);
-  }
+  // 凭据 → 请求鉴权：多数就是令牌本身；Copilot 的令牌里还写着这个账号该打的地址（proxy-ep）
+  const oauth = credential === null ? null : await oauthRequestAuth(known.id, credential);
+  const apiKey = oauth?.apiKey ?? (await providers.resolveApiKey(providerId));
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
+  const headers =
+    dto.endpoint.headers === undefined && oauth?.headers === undefined
+      ? undefined
+      : { ...dto.endpoint.headers, ...oauth?.headers };
+  const baseUrl = oauth?.baseUrl ?? dto.endpoint.baseUrl;
   // 明文密钥只在主进程 → agent 进程这一跳出现，永不进 renderer
   return {
     id: dto.id,
     api: dto.endpoint.api,
-    baseUrl: dto.endpoint.baseUrl,
+    baseUrl,
     apiKey,
-    ...(dto.endpoint.headers ? { headers: dto.endpoint.headers } : {}),
+    ...(headers === undefined ? {} : { headers }),
     /**
-     * 声明的模型 + **我们自己补的参数**（快速适配通道）。用户显式填过的优先，
-     * 其次是白名单，再其次由 runtime 走「pi 目录 → 兜底」。
-     * 白名单存在的理由：pi 目录只收录它已知的模型，厂商新上线的型号要等 1–2 周。
+     * 声明的模型原样过线。型号白名单（known-models.ts）不在这里叠：它要和 pi 目录比
+     * （「目录说了算」的服务商在本家目录命中时不吃白名单），而目录只在 agent 进程里有——
+     * 以前在这里把白名单窗口 / 输出当用户覆盖塞进声明，思考档却塞不进去，菜单与会话
+     * 对同一个型号说两套话。叠加统一在 agent 侧 model-registration 做。
      */
-    models: dto.models.declared.map((decl) => {
-      const patch = knownModelParams(decl.id);
-      return {
-        ...decl,
-        ...(decl.contextWindow === undefined && patch.contextWindow !== undefined
-          ? { contextWindow: patch.contextWindow }
-          : {}),
-        ...(decl.maxTokens === undefined && patch.maxTokens !== undefined
-          ? { maxTokens: patch.maxTokens }
-          : {}),
-      };
-    }),
+    models: dto.models.declared,
     // pi 目录里这家叫什么。**模型官方参数按它查**——我们的 id 与目录 id 不是一回事
     // （zhipu-coding ↔ zai-coding-cn），拿自己的 id 查一无所获，1M 会被拍成 128k。
     // 按条目认（knownProviderOf）而不是按 id：第二个 DeepSeek 实例（deepseek-2）同样吃目录参数
-    ...(knownProviderOf(dto).catalogId === undefined ? {} : { catalogId: knownProviderOf(dto).catalogId }),
+    // 多协议网关（OpenCode Go）还带上实例地址所在那一组官方端点：型号各走各的协议时地址从那里取
+    ...endpointHintsOf(known, { api: dto.endpoint.api, baseUrl }),
   };
 }
 
@@ -137,6 +136,9 @@ export function registerAgentIpc(
   /** 意图存档跟踪器（实验功能 intent-system；undefined = 旧测试夹具不传）。submit /
    *  interrupt 判定要存档时 begin，事件泵在 index.ts 里喂 onEvent */
   intentIngest?: { begin(sessionId: string, text: string, pasted: readonly string[]): void },
+  /** 记忆构建的轮次跟踪器（实验功能 memory-system；undefined = 测试夹具不传）。
+   * submit / interrupt 判过根会话 + 用户原话后 begin，轮落定时由它交给记忆服务 */
+  memoryTurns?: { begin(sessionId: string, text: string): void },
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -257,10 +259,29 @@ export function registerAgentIpc(
   });
 
   /**
+   * 记忆系统（实验功能 memory-system）的构建门禁：这是根会话的用户原话时让
+   * 跟踪器记下这一轮（intent-env 的同一条口径：子会话 / 通道信封 / 收尾扫描不写
+   * 记忆）。开关的读取在调用方（submit / interrupt 要用同一个值装配 sessionMemory）；
+   * settle 在轮落定时还会现读一次——中途关掉开关，已并队的轮也交不出去。
+   */
+  const beginMemoryTurn = async (sessionId: string, text: string): Promise<void> => {
+    if (memoryTurns === undefined) return;
+    const meta = await sessions.readMeta(sessionId).catch(() => null);
+    if (memoryBuildEligible(meta, text)) memoryTurns.begin(sessionId, text);
+  };
+
+  /** 记忆系统的实验开关：开着时轮前召回（sessionMemory，根会话与子会话都召回）
+   * 与轮后构建（beginMemoryTurn，只认根会话）两条链路才接上。 */
+  const readMemoryOn = async (): Promise<boolean> =>
+    (await settings.read()).experimentalFeatures?.["memory-system"] === true;
+
+  /**
    * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
    * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
    * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
    * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。
+   * 记忆线（服务进程）的装配在 memory/chore.ts（同样的口径，避免与这里的闭包
+   * 成 import 环）。
    */
   const readChoreModel = async (): Promise<
     { provider: ProviderSecrets; modelId: string } | undefined
@@ -402,9 +423,12 @@ export function registerAgentIpc(
     // 返回空对象时命令与 main 一字不差
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
+    const memoryOn = await readMemoryOn();
+    if (memoryOn) await beginMemoryTurn(input.sessionId, text);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
+      ...(memoryOn ? { sessionMemory: true } : {}),
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
@@ -422,6 +446,13 @@ export function registerAgentIpc(
       }),
     });
     await settleFirstTurn(input, piSessionFile);
+    // 遗留清单「继续」开的轮：记下这条会话在接着做哪条遗留事项（收尾确认时自动标做完）。
+    // 必须在 settleFirstTurn 之后：新会话的 meta 在那里才建出来
+    if (input.carryoverId !== undefined) {
+      await sessions.addResumedCarryover(input.sessionId, input.carryoverId).catch((error: unknown) => {
+        console.error("[carryover] 记不下接着做的遗留事项（不影响发送）", error);
+      });
+    }
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。
@@ -448,7 +479,9 @@ export function registerAgentIpc(
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const memoryOn = await readMemoryOn();
+    if (memoryOn) await beginMemoryTurn(input.sessionId, text);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

@@ -3,19 +3,43 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
-import { app, BrowserWindow, nativeTheme, shell, type WebPreferences } from "electron";
-import { homedir } from "node:os";
+import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
+import { catalogIdsOfProviders } from "../shared/known-providers.ts";
+import { app, BrowserWindow, nativeTheme, powerMonitor, shell, type WebPreferences } from "electron";
+import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
+import type { AgentEvent } from "../shared/agent-ipc.ts";
+import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
+import { MemoryServiceHostCore } from "./memory/host-core.ts";
+import { registerMemoryIpc } from "./memory/ipc.ts";
+import { forwardMemoryTool } from "./memory/tool-forward.ts";
+import {
+  MEMORY_VECTOR_MODELS,
+  memoryScopeOf,
+  type MemoryModelFileState,
+  type MemoryRecallOutcome,
+} from "../shared/memory.ts";
+import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
+import { choreModelPayload } from "./memory/chore.ts";
+import { llamaServerCandidates } from "./memory/llama-bin.ts";
+import {
+  effectiveVectorSettings,
+  modelDownloadSources,
+  vectorChangeCancelsDownload,
+  modelFilePath,
+  vectorServiceConfig,
+} from "./memory/vector-setup.ts";
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
@@ -24,6 +48,7 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
@@ -32,8 +57,8 @@ import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { CarryoverStore } from "./session/carryover-store.ts";
-import { UsageLedger } from "./usage/ledger.ts";
-import { registerUsageIpc } from "./usage/ipc.ts";
+import { registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
+import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
@@ -285,6 +310,31 @@ function ownRendererOrigin(): RendererOriginDeps {
   };
 }
 
+/**
+ * 记忆召回的转发（index.ts 的 onEvent 用）：agent → 主进程 → 记忆服务进程。
+ * 作用域在主进程解析（memoryScopeOf：workspaceId ?? cwd，agent 不做路径策略）；
+ * 服务不在 / 转发超时 / 服务内部出错都回空命中——召回在轮前的同步路径上，
+ * 记忆的任何问题都不该拦住开轮（agent 侧另有 6 秒硬超时兑主进程失联）。
+ */
+async function forwardMemoryRecall(
+  host: MemoryServiceHostCore,
+  event: Extract<AgentEvent, { type: "memoryRecallRequest" }>,
+  ensureStarted: () => Promise<boolean>,
+): Promise<MemoryRecallOutcome> {
+  try {
+    if (!host.isRunning()) await ensureStarted();
+    const hits = await host.recall({
+      sessionId: event.sessionId,
+      scopeId: memoryScopeOf(event.scope),
+      turn: event.turn,
+      query: event.query,
+    });
+    return { ok: true, hits };
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
 void app.whenReady().then(async () => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。
   // 从旧 models.json / auth.json 的迁移等到真有旧数据的用户时再单独立项（落库纪律：没有消费者不写）。
@@ -307,7 +357,16 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
-  registerSettingsIpc(settings);
+  // 记忆服务（实验功能 memory-system）的开关观察：开了就拉起、关了就停
+  // （memoryHost 在后面定义；设置写入只发生在窗口起来之后，那时已就绪）。
+  // 其余设置的写入也会过这道：开关没变时拉起 / 停都是空操作，无副作用
+  registerSettingsIpc(settings, (next) => {
+    if (next.experimentalFeatures?.["memory-system"] === true) {
+      void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
+    } else {
+      memoryHost?.stop();
+    }
+  });
   registerWindowIpc();
   const initialSettings = await settings.read();
   applyNativeTheme(initialSettings);
@@ -317,11 +376,16 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
-  // 日用量账本（usage:week / usage:event）：与 sessions 同目录的派生数据，
-  // assistant 记录落盘的同一条路径上累计。注册即异步装载 + 回填，不阻塞启动
-  const usageLedger = new UsageLedger(join(configDir, "usage-daily.json"));
-  const record = createSessionRecorder(sessions, usageLedger);
-  registerUsageIpc(usageLedger, sessions);
+  // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
+  // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
+  // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
+  const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
+  const record = createSessionRecorder(sessions, taskLedger);
+  startTaskLedger(taskLedger, {
+    list: () => sessions.list(),
+    readUsageLog: (id) => sessions.readUsageLog(id),
+    readPiTimeline: (path) => readPiThinkingTimeline(path),
+  });
   // 摘抄（excerpt:*）：聊天里划选存下的收藏清单，与 agent 循环无关、不进模型；
   // 存 userData 根下的一份 JSONL，list 时按 sessionId 回读会话标题补出处。
   // 同一个实例也喂给专注小结（摘抄是素材之一）
@@ -378,7 +442,14 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     arch: process.arch,
   });
-  const agentProcessEnv = existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : { ...process.env };
+  // pi 打进 bundle 后会把 Orbita 的 package.json 当成自己的，版本号错了 pi.dev 的目录就是 404（pi-package.ts）
+  const piPackage = piPackageDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+  const agentProcessEnv = {
+    ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
+    // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
+    [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
+    ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
+  };
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -472,6 +543,35 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 记忆系统（实验功能 memory-system）：agent 的轮前召回问答——转发给记忆服务
+    // 进程（主进程按 scope 解析作用域），任何路径都回执（readTaskRequest 同款
+    // 纪律：不回的话 agent 进程里那次调用挂到超时）。服务不在先试拉一把（开关
+    // 刚开的第一轮 / 崩溃后的一次自愈）；拉不起 / 超时都回空命中，不拦开轮
+    if (event.type === "memoryRecallRequest") {
+      void forwardMemoryRecall(memoryHost, event, ensureMemoryService)
+        .then((outcome) => agentHost.answerMemoryRecall(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerMemoryRecall(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 记忆工具（memory_search / memory_revise / memory_retire）：同样任何路径都回执；
+    // 子会话的写在 forwardMemoryTool 里按 meta 拒（「子会话读不写」不只靠不注册）
+    if (event.type === "memoryToolRequest") {
+      void forwardMemoryTool(
+        {
+          readMeta: (id) => sessions.readMeta(id),
+          ensureStarted: ensureMemoryService,
+          isRunning: () => memoryHost.isRunning(),
+          agentTool: (input) => memoryHost.agentTool(input),
+        },
+        event,
+      ).then((outcome) => agentHost.answerMemoryTool(event.requestId, outcome));
+      return;
+    }
     // 续轮开机的 created 没有等待者（submit 带 resume 时不等）：在这里把 pi 本子
     // 真值校准回 meta——open 失败退回新建时 pi 会换文件，按轮自愈。
     // 首轮的 created 由 submit handler 等待并建 meta，不经过这里。
@@ -509,12 +609,21 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 内建目录（启动时一次，pi.dev 刷新后再一次）：不属于任何会话，不落账、不进意图存档，只转给窗口
+    if (event.type === "builtins") {
+      broadcastAgentEvent(event);
+      return;
+    }
     // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
     // 在 record 之前喂：与 recorder 各自独立，互不阻塞
     intentIngest.onEvent(event);
+    // 记忆构建（实验功能 memory-system）同一处喂：盯轮落定，正常结束的一轮
+    // 交给记忆服务（跟踪器在下面定义，TDZ 说明同 intentIngest）
+    memoryTurns.onEvent(event);
     record(event);
     broadcastAgentEvent(event);
-  });
+    // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
+  }, async () => catalogIdsOfProviders(await providers.load()));
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -555,20 +664,226 @@ void app.whenReady().then(async () => {
       console.error("[intent] 回退后的作废抛错（不影响回退）", cause);
     }
   };
+  /*
+   * 记忆系统（实验功能 memory-system）的主进程两件套：
+   * 1. 记忆服务进程的管家（开关开着时拉起，与 agent 进程同级的 utility 进程，
+   *    env 沿 agent 那份——模型目录缓存的 env 变量在里面）；
+   * 2. 轮次跟踪器：submit 时 begin（ipc.ts 已判根会话 + 用户原话），事件泵喂
+   *    onEvent，轮落定时把这一轮交给服务。子会话不 begin（读记忆但不写）。
+   * 实验开关关着时：submit 不 begin、服务不拉起，整条链路不碰。
+   */
+  const llamaCandidates = () =>
+    llamaServerCandidates({
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      platform: process.platform,
+      arch: process.arch,
+      env: process.env.ORBITA_LLAMA_SERVER,
+    });
+  const availableLlama = () => llamaCandidates().find((candidate) => existsSync(candidate.path)) ?? null;
+  // 最近一次模型下载进度：status 拉取时与文件存在性合并；done 后清掉，让 ready 以文件为准
+  let memoryDownloadState: MemoryModelFileState | null = null;
+  const memoryHost = new MemoryServiceHost({
+    runtimePath: resolveMemoryRuntimePath(__dirname),
+    dir: join(configDir, "memory"),
+    env: agentProcessEnv,
+    // 服务侧任何写盘（提取落条目 / 事件段收尾 / 记忆库写操作）→ 广播给窗口刷新
+    onChanged: () => broadcastAgentEvent({ type: "memoryChanged" }),
+    onDownloadProgress: (progress) => {
+      if (progress.phase === "downloading") {
+        memoryDownloadState = {
+          state: "downloading",
+          received: progress.received,
+          total: progress.total,
+          source: progress.source,
+        };
+      } else if (progress.phase === "verifying") {
+        memoryDownloadState = { state: "verifying" };
+      } else if (progress.phase === "failed") {
+        memoryDownloadState = { state: "failed", error: progress.error ?? "模型下载失败" };
+      } else if (progress.phase === "cancelled") {
+        // 用户取消：回到「没下载」，界面收起进度（不当失败报）
+        memoryDownloadState = null;
+      } else {
+        memoryDownloadState = null;
+        // rename 已完成：立即把 local 配置送进服务，触发补算，无需等下一次设置改动
+        void syncVectorConfig().catch((cause: unknown) => console.error("[memory] 下载完成后的向量配置同步失败", cause));
+      }
+      broadcastAgentEvent({ type: "vectorDownload", progress });
+    },
+    onBackfillProgress: (progress) => broadcastAgentEvent({ type: "vectorBackfill", progress }),
+  });
+
+  /** 把主进程才知道的文件 / 二进制 / 设置事实发给服务；服务不在时消息丢弃，下次拉起会重发。 */
+  async function syncVectorConfig(): Promise<void> {
+    const current = await settings.read();
+    const vectorSettings = effectiveVectorSettings(current.vector);
+    const model = MEMORY_VECTOR_MODELS.find((candidate) => candidate.id === vectorSettings.model);
+    if (model === undefined) {
+      memoryHost.setVectorConfig(null);
+      return;
+    }
+    const ggufPath = modelFilePath(model, configDir);
+    memoryHost.setVectorConfig(
+      vectorServiceConfig({
+        settings: vectorSettings,
+        ggufPath: existsSync(ggufPath) ? ggufPath : null,
+        binaryPath: availableLlama()?.path ?? null,
+      }),
+    );
+  }
+
+  /** 所有拉起路径共用：ready/init 之后立即同步向量与电源，崩溃自愈也不会丢配置。 */
+  const ensureMemoryService = async (): Promise<boolean> => {
+    // init 要带上家务活模型：启动清扫会续提上次没提完的段（退出前没收尾的、
+    // 提取调用失败留账的），init 里没有模型就只能干等用户下一句话。setChore
+    // 以前没有任何调用点，init 永远不带模型（2026-10-29 实例 memui 实测：重启后
+    // 「有待提取的事件段，但没有家务活模型」，三个段挂着不提）
+    if (!memoryHost.isRunning()) memoryHost.setChore(await choreModelPayload(settings, providers));
+    const started = await memoryHost.ensureStarted();
+    if (!started) return false;
+    await syncVectorConfig();
+    memoryHost.setPower(powerMonitor.isOnBatteryPower());
+    return true;
+  };
+  powerMonitor.on("on-battery", () => memoryHost.setPower(true));
+  powerMonitor.on("on-ac", () => memoryHost.setPower(false));
+
+  const memoryTurns = new MemoryTurnTracker({
+    load: async (id) => {
+      const detail = await sessions.load(id);
+      return detail === null ? null : { transcript: detail.transcript };
+    },
+    readMeta: (id) => sessions.readMeta(id),
+    isMemoryOn: async () =>
+      (await settings.read()).experimentalFeatures?.["memory-system"] === true,
+    readChore: () => choreModelPayload(settings, providers),
+    settle: async (payload) => {
+      // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）。
+      // 没拉起来照样交给 host：它在「服务不在」时记一行带会话 / 轮号的丢弃诊断。
+      // 抛错由跟踪器的 deliver 接住记日志（settle 的 Promise 在那里被 await）
+      await ensureMemoryService();
+      memoryHost.turnSettled(payload);
+    },
+  });
+  /**
+   * 会话回退后的记忆钩子：第 fromTurn 轮起被撤回 → 服务截段（重说的轮照常收）+ 停用来源轮
+   * 全被撤回的条目。只给根会话发（子会话不写记忆，发了也是一次白扫全库）；开关关着不发、
+   * 不为它拉起服务。失败只记日志，回退本身已经完成
+   */
+  const memoryOnReverted = async (sessionId: string, fromTurn: number): Promise<void> => {
+    try {
+      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) return;
+      const meta = await sessions.readMeta(sessionId);
+      if (meta === null || meta.parentId !== undefined) return;
+      await ensureMemoryService();
+      memoryHost.sessionReverted(sessionId, fromTurn);
+    } catch (cause) {
+      console.error("[memory] 回退后的记忆停用 / 截段没送成（不影响回退）", cause);
+    }
+  };
+  // 启动时开关已开：先拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
+  // 半路提取续跑），不等第一轮对话才动。失败只记日志（下次轮后再试拉起）
+  if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
+    void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
+  }
+  // 记忆库的读写面（实验功能 memory-system）：读在主进程直读 JSONL，写转发给
+  // 记忆服务（唯一写者）；会话标题 / 工作区名这些连接属性在这里注入
+  registerMemoryIpc({
+    dir: join(configDir, "memory"),
+    deps: {
+      sessionTitleOf: async (id) => (await sessions.readMeta(id).catch(() => null))?.title ?? null,
+      workspaces: async () => workspaces.list(),
+      readMeta: (id) => sessions.readMeta(id),
+    },
+    mutate: async (mutation) => {
+      // 服务不在先拉（开关刚开的第一轮 / 崩溃后自愈）；拉不起 mutate 会回 ok:false
+      if (!memoryHost.isRunning()) await ensureMemoryService();
+      return memoryHost.mutate(mutation);
+    },
+    vector: {
+      readVectorSettings: async () => (await settings.read()).vector,
+      writeVectorSettings: async (patch) => {
+        const before = effectiveVectorSettings((await settings.read()).vector);
+        const next = await settings.write({ vector: patch });
+        // 关了向量 / 换了模型：在途下载不要了（只有这里取消下载，配置同步不取消）
+        if (vectorChangeCancelsDownload(before, effectiveVectorSettings(next.vector))) {
+          memoryHost.cancelModelDownload();
+        }
+        if (next.experimentalFeatures?.["memory-system"] === true) {
+          await ensureMemoryService();
+        } else {
+          await syncVectorConfig();
+        }
+      },
+      userDataDir: configDir,
+      device: () => ({
+        chip: cpus()[0]?.model ?? process.arch,
+        memoryGb: Math.round(totalmem() / 1024 ** 3),
+        onBattery: powerMonitor.isOnBatteryPower(),
+        platform: process.platform,
+        arch: process.arch,
+      }),
+      llamaCandidates,
+      vectorState: () => memoryHost.vectorState(),
+      downloadState: () => memoryDownloadState,
+      startDownload: async (model) => {
+        if (!(await ensureMemoryService())) {
+          return { ok: false, error: "记忆服务没能拉起，模型下载未开始" };
+        }
+        const sources = modelDownloadSources(model);
+        memoryDownloadState = {
+          state: "downloading",
+          received: 0,
+          total: model.sizeBytes,
+          source: sources[0]!,
+        };
+        memoryHost.startModelDownload({
+          sources,
+          targetPath: modelFilePath(model, configDir),
+          sha256: model.sha256,
+          sizeBytes: model.sizeBytes,
+        });
+        return { ok: true };
+      },
+    },
+  });
   registerSessionIpc(
     sessions,
     (id) => {
       agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档的尾账也丢
+      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
       browserSandbox.closeSessionTab(id);
       intentIngest.forget(id);
+      memoryTurns.forget(id);
     },
     agentHost,
     carryovers,
     providers,
     (path) => browserSandbox.openLocalFile(path),
-    intentOnReverted,
+    async (sessionId, reverted) => {
+      await Promise.all([
+        intentOnReverted(sessionId, reverted.turnIds),
+        memoryOnReverted(sessionId, reverted.fromTurn),
+      ]);
+    },
   );
+  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
+  registerWrapupIpc({
+    sessions,
+    carryovers,
+    providers,
+    settings,
+    host: agentHost,
+    catalog: () => agentHost.listBuiltins(),
+    // 确认的做完的事记进任务账本（价格图的主会话任务）
+    onConfirmed: (sessionId, wrapup) => {
+      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
+        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
+      });
+    },
+  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -614,6 +929,14 @@ void app.whenReady().then(async () => {
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
   registerProviderIpc(providers, agentHost);
+  // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
+  registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
+  registerPriceChartIpc({
+    ledger: taskLedger,
+    providers: () => providers.load(),
+    catalog: () => agentHost.listBuiltins(),
+    sessions: () => sessions.list(),
+  });
 
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();
@@ -634,6 +957,7 @@ void app.whenReady().then(async () => {
     mcp,
     settings,
     intentIngest,
+    memoryTurns,
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
@@ -678,6 +1002,8 @@ void app.whenReady().then(async () => {
     appTray = null;
     browserSandbox.prepareQuit();
     agentHost.dispose();
+    // 记忆服务直接停（退出路上不跑提取模型）：开段已落盘，下次启动的清扫追认
+    memoryHost.stop();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
   });

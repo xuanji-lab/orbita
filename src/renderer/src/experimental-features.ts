@@ -11,7 +11,8 @@
  *   （PR 号、日期、一句用户看得懂的话，中英各一）。PR 号开 PR 后回填；
  * - **转正**（用户说「把 X 移出实验功能」）：
  *   1. 去掉该功能所有 `useExperimentalFeature("…")` 门，入口常驻；
- *   2. 把这一项的 changelog 整理成正式版本的更新说明（`UPDATE_NOTES.md` 一节）；
+ *   2. 把这一项的 changelog 整理成正式版本的更新说明——UPDATE_NOTES.md 已移出仓库，
+ *      写进转正那个 commit 的正文（会话生命周期 2026-10-24 即如此）；
  *   3. 从这张表里删掉这一项，并把它在 EXPERIMENTAL_FEATURE_IDS 里的 id 一并删掉。
  *   表空了不删设置键：下一个实验功能还要用它。
  *
@@ -43,12 +44,6 @@ export interface ExperimentalFeature {
   name: LocalizedText;
   /** 一句话：这个功能是什么、在哪里看得到 */
   summary: LocalizedText;
-  /**
-   * 与另一项互斥（今天只有黑洞 ↔ 俄罗斯方块这一对）：设置页打开这一项时连带
-   * 把它关掉（SettingsView 的开关逻辑）。盘上手改出两个都开时 parseSettings
-   * 以黑洞为准。双方都要声明（对称），文案里也要说清互斥。
-   */
-  exclusiveWith?: ExperimentalFeatureId;
   /** 按时间顺序（旧 → 新） */
   changelog: readonly ExperimentalChange[];
 }
@@ -119,129 +114,6 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     ],
   },
   {
-    id: "session-lifecycle",
-    icon: "circle-check",
-    name: { zh: "会话生命周期", en: "Session lifecycle" },
-    summary: {
-      zh: "给会话加星标、标记完成；完成时扫描遗留事项，挂在右栏「遗留事项」里。",
-      en: "Star sessions and mark them done; marking done scans for carryovers, listed under Carryovers in the right rail.",
-    },
-    changelog: [
-      {
-        pr: null,
-        date: "2026-09-22",
-        note: {
-          zh: "首版：星标、完成状态与闲置收尾建议；完成时扫描遗留事项，扫描结果渲染成卡片。",
-          en: "First version: stars, done state and idle nudges; marking done scans for carryovers, shown as a card.",
-        },
-      },
-      {
-        pr: 76,
-        date: "2026-09-25",
-        note: {
-          zh: "遗留事项入口常驻，0 条时点进去看空态。",
-          en: "The Carryovers entry is always there; with none, it opens to an empty state.",
-        },
-      },
-      {
-        pr: 94,
-        date: "2026-09-27",
-        note: {
-          zh: "修复：设置页里点右栏的已归档 / 遗留事项入口没反应。",
-          en: "Fix: the Archived and Carryovers entries in the right rail did nothing while Settings was open.",
-        },
-      },
-      {
-        pr: 130,
-        date: "2026-10-02",
-        note: {
-          zh: "收尾扫描要求模型交卷前自检格式，扫描结果不再偶发解析失败。",
-          en: "The carryover scan asks the model to check its own output, so scans stop failing to parse now and then.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-10",
-        note: {
-          zh: "挂到实验开关后面：关着时星标、完成、遗留事项的入口全部隐藏，数据原样保留。",
-          en: "Moved behind the experimental switch: stars, done and carryover entries hide when off; the data stays.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-12",
-        note: {
-          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
-          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
-        },
-      },
-    ],
-  },
-  {
-    id: "composer-blackhole",
-    icon: "orbit",
-    exclusiveWith: "composer-tetris",
-    name: { zh: "输入框黑洞", en: "Input box black hole" },
-    summary: {
-      zh: "拖进来的文件被吸进输入框中心，再从聊天区顶上的舷窗掉进输入框上方的隐形盒子，堆起来；发送后消息顶上留一份缩小的快照。只在浅色、黛、玄三套主题生效。与『俄罗斯方块』互斥：打开这个会关掉俄罗斯方块。",
-      en: "Dropped files are pulled into the centre of the composer, then fall from a porthole at the top of the chat into an invisible box above it and pile up; sent messages keep a shrunken snapshot. Light, Slate and Onyx themes only. Mutually exclusive with Tetris: turning this on turns Tetris off.",
-    },
-    changelog: [
-      {
-        pr: 188,
-        date: "2026-10-11",
-        note: {
-          zh: "首版：中心变黑、吸入、舷窗掉落、重力堆叠与删除补位，发送后消息里留缩小快照。",
-          en: "First version: the centre darkens, files are pulled in, fall from the porthole, stack under gravity and settle when one is removed; sent messages keep a shrunken snapshot.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-11",
-        note: {
-          zh: "挂到实验开关后面：关着时设置里不出这个开关，存过的选择也不生效。",
-          en: "Moved behind the experimental switch: the toggle is hidden when off, and a saved choice has no effect.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-12",
-        note: {
-          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
-          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
-        },
-      },
-      {
-        pr: 212,
-        date: "2026-10-12",
-        note: {
-          zh: "与『俄罗斯方块』互斥：打开这个会连带关掉俄罗斯方块（同一个材料盒的两种形态）。",
-          en: "Mutually exclusive with Tetris: turning this on now turns Tetris off (two styles of the same material box).",
-        },
-      },
-    ],
-  },
-  {
-    id: "composer-tetris",
-    icon: "blocks",
-    exclusiveWith: "composer-blackhole",
-    name: { zh: "俄罗斯方块", en: "Tetris" },
-    summary: {
-      zh: "拖进来的文件不演黑洞特效，从输入框上方的隐形盒子口随机落下、堆起来，删除后重力补位，发送后消息顶上留一份缩小快照。只在浅色、黛、玄三套主题生效。与『输入框黑洞』互斥：打开这个会关掉黑洞。",
-      en: "Dragged files skip the black-hole theatrics: they drop at random from the mouth of the invisible box above the input and stack up, settle under gravity when removed, and sent messages keep a shrunken snapshot. Light, Slate and Onyx themes only. Mutually exclusive with the input box black hole: turning this on turns the black hole off.",
-    },
-    changelog: [
-      {
-        pr: 212,
-        date: "2026-10-12",
-        note: {
-          zh: "首版：材料从盒口纯随机落点落下（确定性种子，同一份清单永远同一个布局）。",
-          en: "First version: materials drop from the mouth of the box to purely random spots (deterministic seeds; the same list always yields the same layout).",
-        },
-      },
-    ],
-  },
-  {
     id: "pdf-citations",
     icon: "quote",
     name: { zh: "PDF 引用", en: "PDF citations" },
@@ -283,6 +155,25 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         note: {
           zh: "首版：意图闸门（门卫 → 理解 → 打分 → 理由 → 摘句 → 确认 → 上下文）插在回显与回答之间；回答前确认卡（对 / 不对 / 不表态 / 改字）；右栏意图图谱（六岗泳道 + 本问 + 历史联系）；会话级开关与渠道（Proma / DeepSeek）；token 记进 7 天用量；回退作废、每轮存档。",
           en: "First version: the intent gate (gate → understand → score → reasons → excerpt → confirm → context) sits between your message and the answer; a confirm-before-answering card (right / wrong / skip / reword); the Intent graph in the right rail (six slot lanes + this question + past links); per-task switch and pipeline (Proma / DeepSeek); recall tokens counted into the 7-day usage; revert invalidates, every turn archived.",
+        },
+      },
+    ],
+  },
+  {
+    id: "memory-system",
+    icon: "brain",
+    name: { zh: "记忆系统", en: "Memory system" },
+    summary: {
+      zh: "对话按事件整理成事实 / 偏好 / 经验三类原子记忆，每轮开始前召回相关的注入上下文（需要先在设置里配好家务活模型）。",
+      en: "Conversations are distilled into atomic memories of fact / preference / insight by event, and relevant ones are recalled into context before each turn (needs a chore model configured first).",
+    },
+    changelog: [
+      {
+        pr: 374,
+        date: "2026-10-29",
+        note: {
+          zh: "首版后端：独立记忆服务进程，对话按事件段切分、每段整理成事实 / 偏好 / 经验，每轮开始前召回注入；条目与注入记录的界面在后续版本里加。",
+          en: "First backend version: a separate memory service process, conversations segmented by event and distilled into facts / preferences / insights, with per-turn recall injection; the UI for entries and injections comes later.",
         },
       },
     ],

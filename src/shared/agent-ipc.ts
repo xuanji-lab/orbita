@@ -32,6 +32,13 @@ import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { IntentRecallRecord } from "./session.ts";
+import type {
+  MemoryBackfillProgress,
+  MemoryDownloadProgress,
+  MemoryAgentCall,
+  MemoryAgentOutcome,
+  MemoryRecallOutcome,
+} from "./memory.ts";
 
 export const ipcChannels = {
   providerList: "provider:list",
@@ -80,6 +87,11 @@ export const ipcChannels = {
   /** 从 attachedDirs 移除一条；不在列表里不报错 */
   workspaceDetachDir: "workspace:detach-dir",
   providerBuiltins: "provider:builtins",
+  /**
+   * 「添加」页点开一张还没保存的服务商卡片：现拉一次这家的目录（节流内不拉），
+   * 拉完的新目录经 `builtins` 事件广播回来。发完即回，不等网络。
+   */
+  providerRefreshCatalog: "provider:refresh-catalog",
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
@@ -89,6 +101,14 @@ export const ipcChannels = {
    * 不进 renderer——登录本身就是保存。
    */
   providerOauthLogin: "provider:oauth-login",
+  /** 取消进行中的浏览器登录（参数：provider id）。设备码流程要等十几分钟，得能叫停 */
+  providerOauthCancel: "provider:oauth-cancel",
+  /**
+   * 主进程 → renderer 推送：设备码登录（GitHub Copilot / xAI）要用户在浏览器里输入的
+   * 验证码。载荷 OauthDeviceCode；登录结束（成功 / 失败 / 取消）不另推，以 oauthLogin 的
+   * 返回为准。
+   */
+  providerOauthDeviceCode: "provider:oauth-device-code",
   settingsGet: "settings:get",
   settingsSet: "settings:set",
   /**
@@ -102,6 +122,17 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
+  /** 记忆库（实验功能 memory-system）的四条读写通道。读在主进程（纯模块直读
+   * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
+  memoryScopes: "memory:scopes",
+  memoryEntries: "memory:entries",
+  memorySession: "memory:session",
+  memoryMutate: "memory:mutate",
+  /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
+   *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
+  memoryVectorStatus: "memory:vector-status",
+  memoryVectorSet: "memory:vector-set",
+  memoryVectorDownload: "memory:vector-download",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -232,6 +263,8 @@ export const ipcChannels = {
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
   usageEvent: "usage:event",
+  /** 「价格 · 能力图」的数据（载荷形状在 shared/price-chart.ts）：分数快照 × 已添加型号 × 本地每任务成本，主进程现算。回 `PriceChartData` */
+  usagePriceChart: "usage:price-chart",
   /** 自动更新：拉当前快照（`UpdaterSnapshot`，载荷形状在 shared/updater.ts）。之后的状态变化走 updaterState 推送 */
   updaterGet: "updater:get",
   /** 自动更新：手动检查（启动首查与 4h 定时在 main/updater/service.ts） */
@@ -246,8 +279,18 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /** 批量落盘（收尾仪式确认的那一拨）；id/status/时间戳由主进程铸，返回完整记录 */
-  carryoverCreate: "carryover:create",
+  /**
+   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
+   * （会话不存在 / 没有新轮次时 null）。
+   */
+  sessionWrapupPlan: "session:wrapup-plan",
+  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
+  sessionWrapupRevise: "session:wrapup-revise",
+  /**
+   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
+   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
+   */
+  sessionWrapupConfirm: "session:wrapup-confirm",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
@@ -329,8 +372,16 @@ export const ipcChannels = {
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
 
 /**
- * pi 内建 provider 目录里的一条。目录由 pi 维护、每 4 小时从 pi.dev 刷新覆盖层，
- * 我们零维护——用户选中名字就拿到官方 baseUrl / 协议 / 模型清单。
+ * 主进程交给 agent 进程的环境变量：pi.dev 目录覆盖层的缓存文件（Orbita 自己的数据目录里）。
+ * 缺席（单测、裸跑 runtime）时目录缓存只留在内存，不落盘——绝不退回 pi CLI 的 ~/.pi/agent。
+ */
+export const CATALOG_CACHE_ENV = "ORBITA_MODEL_CATALOG_CACHE";
+
+/**
+ * pi 内建 provider 目录里的一条。目录由 pi 维护，我们零维护——用户选中名字就拿到官方
+ * baseUrl / 协议 / 模型清单。内建快照随 pi 版本发布；agent 进程启动时与之后每 4 小时，
+ * 再为预置服务商用到的那几份目录向 pi.dev 拉一次覆盖层（src/agent/model-catalog.ts），
+ * 所以新型号不必等 pi 发版。
  */
 export interface BuiltinProvider {
   id: string;
@@ -346,6 +397,12 @@ export interface BuiltinProvider {
  */
 export interface BuiltinModel {
   id: string;
+  /**
+   * 目录里的显示名（「Kimi K3」「Claude Opus 4.6」）。菜单与设置页的主文字按「声明里的名字 >
+   * 白名单 > 这里 > id」取（model-defaults 的 modelDisplayName）。目录名就是 id 本身时不带
+   * （pi.dev 的 kimi-for-coding 就是这样）——那不是名字。
+   */
+  name?: string;
   contextWindow: number;
   maxTokens: number;
   /**
@@ -416,6 +473,27 @@ export interface ProviderSecrets {
   apiKey: string;
   headers?: Record<string, string>;
   models: ModelDecl[];
+  /**
+   * pi 目录里这家叫什么（`KnownProvider.catalogId`，如 zhipu-coding ↔ zai-coding-cn）。
+   * 官方参数按它去查；缺席 = 目录里没这家（自建网关）。以前靠展开运算符夹带过线，没进契约。
+   */
+  catalogId?: string;
+  /**
+   * 这家的目录说了算（`KnownProvider.catalogAuthoritative`）：本家目录收录了的型号，
+   * 白名单不覆盖——聚合网关会收窄型号能力（OpenCode Go 的 kimi-k3 只开 max 一档），
+   * 型号的通用口径在它那里不成立。目录没收录的型号仍由白名单补。
+   */
+  catalogAuthoritative?: boolean;
+  /**
+   * 多协议网关（`KnownProvider.protocolPerModel`）：本家目录收录的型号各走目录给它的协议。
+   * 只在实例地址属于这家某组官方端点时为 true（known-providers 的 endpointHintsOf）。
+   */
+  protocolPerModel?: boolean;
+  /**
+   * 实例地址所在那一组官方端点，按协议各一个地址（存的是旧写法 zen/go，这里就是 zen/go 那组）。
+   * 与 protocolPerModel 同进同出：型号的协议与条目不同时，地址从这里取。
+   */
+  access?: { api: string; baseUrl: string }[];
 }
 
 /**
@@ -425,11 +503,25 @@ export interface ProviderSecrets {
  */
 export interface OauthLoginInput {
   id: string;
+  /**
+   * 走哪家的登录流程 = 目录条目 id（`claude` / `openai-codex` / `github-copilot` / `xai`）。
+   * 也决定新建时落盘的 kind 与默认 endpoint。
+   */
+  kind: string;
   displayName: string;
   /** 新建时 true（id 撞名拒绝）；已有 provider 重登录时缺省 */
   create?: boolean;
   /** 仅 create 时生效：登录后启用的模型清单（一般空，登录后用 Fetch 拉取） */
   models?: ModelDecl[];
+}
+
+/** 设备码登录要用户在浏览器里输入的码（providerOauthDeviceCode 的载荷） */
+export interface OauthDeviceCode {
+  /** 哪个 provider 的登录（OauthLoginInput.id） */
+  id: string;
+  userCode: string;
+  /** 输入验证码的页面（主进程已经替用户打开过一次） */
+  verificationUri: string;
 }
 
 /**
@@ -475,6 +567,11 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
+  /**
+   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
+   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
+   */
+  carryoverId?: string;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -503,16 +600,10 @@ export interface TurnDirectories {
    */
   workbench: string;
   /**
-   * 父子会话互见对方的工作台（子会话 2026-09-23 裁决）：父的清单列每个子会话的、
-   * 子的列父的。**只告知不硬拦**（同 attached）：label 是对方会话的标题，path 是对方
-   * 工作台的绝对路径——父子各自工作台独立，但「任务说明在那个目录里」这件事
-   * 对面的模型该知道。
-   *
-   * `sessionId` 是对方会话的 id——`reply_subsession` 要靠它定位子会话。
-   * `relation` 是**对方**相对本会话的角色（子会话清单里父那一项是 `"parent"`、
-   * 父会话清单里每个子是 `"child"`）：runtime 靠它判断本会话是不是子会话，
-   * 决定注册哪些通道工具、讲哪段提示词——仅凭 label/path 分不出「列的是父还是子」
-   * （父有子时 related 也非空）。
+   * 父子会话关系与会话内工作台事实。`relation` 是**对方**相对本会话的角色：
+   * runtime 靠父那一项判断本会话是不是子会话，决定注册哪些通道工具、讲哪段角色指引。
+   * 这些行**不直接进系统提示词**（派出 / 删除子会话会改清单、打断提示缓存）；对方工作台
+   * 改由 delegate 回执与每条通道信封告知模型。只告知不硬拦（同 attached）。
    *
    * 缺席 = 没有父子关系（绝大多数会话）。
    */
@@ -554,7 +645,14 @@ export interface IntentTurnContext {
 /** `channel:event` 的推送载荷。status 是派生值（channelStatus），主进程算好推——
 renderer 不必为更新通道列的状态徽标拉一份全量账本 */
 export type ChannelEvent =
-  | { type: "message"; parentId: string; childId: string; message: ChannelMessage }
+  | {
+      type: "message";
+      parentId: string;
+      childId: string;
+      message: ChannelMessage;
+      /** 子会话工作台的绝对路径：renderer 组子→父信封时随每条回报重新告知模型 */
+      childWorkbench: string;
+    }
   | { type: "status"; parentId: string; childId: string; status: ChannelStatus };
 
 /** 主进程 → agent 进程 */
@@ -674,6 +772,13 @@ export type AgentCommand =
        * 开关全关时不装配（与 main 行为一致的边界代价，见主进程装配处注释）。
        */
       backfill?: string[];
+      /**
+       * 记忆系统（实验功能 memory-system）的轮前召回开关。**主进程从设置装配**
+       * （同 pdfCitations）：实验开关开着就带 true——召回对根会话与子会话都生效
+       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = 关，runtime 不问
+       * 记忆、命令形状与 main 一字不差。
+       */
+      sessionMemory?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -718,6 +823,18 @@ export type AgentCommand =
     }
   | {
       /**
+       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
+       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
+       */
+      type: "choreComplete";
+      requestId: string;
+      provider: ProviderSecrets;
+      modelId: string;
+      system: string;
+      prompt: string;
+    }
+  | {
+      /**
        * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
        * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
        * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
@@ -735,6 +852,9 @@ export type AgentCommand =
       sessionId: string;
       /** 要发的文本。**队列在 renderer 一侧**，这里只负责「停下当前这一轮、发这句话」 */
       text: string;
+      /** 记忆系统的轮前召回开关（submit.sessionMemory 的同款字段，interrupt
+       * 是「立即发送」分支，同一轮语义） */
+      sessionMemory?: boolean;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -837,6 +957,15 @@ export type AgentCommand =
     }
   | { type: "listBuiltins" }
   /**
+   * 目录联网刷新（pi.dev 覆盖层 + 基元律动自家目录）**只针对给出的目录 id**——
+   * agent 进程自己不知道用户添加了哪些服务商，没收到 `added` 之前一份也不拉。
+   * - `added`：已添加服务商用到的全部目录（主进程每次拉起 agent 进程、服务商列表变了都送一份全量）；
+   *   替换后台 4 小时循环的刷新范围，并当场按节流补刷一次；
+   * - `peek`：设置页点开一张还没保存的卡片，只刷这几份、不进 4 小时循环。
+   * 每份目录各自节流（4 小时内拉过就不拉）；有刷新动作就重报一次 `builtins`。
+   */
+  | { type: "refreshCatalogs"; scope: "added" | "peek"; catalogIds: string[] }
+  /**
    * 热重载（1-1）：把现有 MCP 连接全拆，下一轮开机按新配置重建。**不送 servers**——
    * 配置本来就每轮由主进程现读现解析（开轮命令里的 `mcpServers`），这里再送一份
    * 等于把同一份真相说两遍，而且说不了「哪个工作区看哪一份」。
@@ -863,6 +992,17 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /**
+   * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
+   * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
+   * 调用方（轮前召回）对任何失败按「不注入、照常开轮」处理，记忆的失败不拦对话。
+   */
+  | ({ type: "memoryRecallResult"; requestId: string } & MemoryRecallOutcome)
+  /**
+   * 记忆系统：主进程对 memoryToolRequest 的回执（同款 ok 双分支）。失败的 error
+   * 原样成为工具失败原因给模型看（找不到 / 歧义 / 服务不在）。
+   */
+  | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
@@ -987,6 +1127,34 @@ export type ChannelSendOutcome =
   | { ok: false; error: string };
 
 /** agent 进程 → 主进程 → renderer（同一份形状，主进程只做转发） */
+/**
+ * 系统提示注入清单（右栏「上下文」面板「规则与说明」组的数据源）。
+ *
+ * agent 进程在 before_agent_start（每轮首个 LLM 调用前）现场组装、每轮推一次：
+ * 规则文件与技能索引每轮重注入、**永不被压缩**，所以面板只关心「最近一轮注入了什么」，
+ * 不落盘、不补算——未开过轮的会话（纯浏览历史）没有这份清单，面板如实显示未知。
+ *
+ * token 全部是估算（`context-inventory.ts` 的 estimateContextTokens 口径，误差约 ±30%），
+ * 只服务面板的占比展示，不用于计费或压缩判定。
+ */
+export interface ContextRulesInventory {
+  /** pi 的 project_context 规则文件（AGENTS.md / CLAUDE.md 等：全局 agentDir 一份 + cwd 祖先链各一份） */
+  files: { path: string; tokens: number; scope: "global" | "project" }[];
+  /**
+   * pi 基底估算：内置说明 + 工具清单 + 上述规则文件正文 + 技能索引 + cwd 行。
+   * **已包含 files 与 skillsIndex 的量**——组内合计 = baseTokens + segments，
+   * 各行只是它的拆解视图，加总时不要把 base 再加一遍。
+   */
+  baseTokens: number;
+  /** 系统提示里的技能索引（渐进披露：只有 name + description 进上下文，正文按需 read） */
+  skillsIndex: { names: string[]; tokens: number };
+  /**
+   * Orbita 逐轮追加的说明段（权限说明、目录清单、引用规则等）。id 稳定供 UI 配文案，
+   * 本轮为空串的段不出现。pi 基底不在里面（它有自己的 baseTokens）。
+   */
+  segments: { id: string; tokens: number }[];
+}
+
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
@@ -1028,6 +1196,38 @@ export type AgentEvent =
    * 读错了组）。
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
+  /**
+   * 记忆系统（实验功能 memory-system）：轮前召回的问答（readTaskRequest 同一条
+   * requestId 边界）。agent 进程不碰 userData——存储在记忆服务进程，主进程转发。
+   * 查询是本轮用户原话，回执 memoryRecallResult；agent 侧 5 秒硬超时，超时 /
+   * 出错 / 无命中都不注入（记忆的失败不拦开轮）。
+   */
+  | {
+      type: "memoryRecallRequest";
+      requestId: string;
+      sessionId: string;
+      /** 本轮用户原话（词法打分的 query） */
+      query: string;
+      /** 第几轮（按用户消息计，1 起）——注入账本按它记账 */
+      turn: number;
+      /** 会话归属（主进程按它解析作用域：workspaceId ?? cwd） */
+      scope: { workspaceId: string | null; cwd: string };
+    }
+  /**
+   * 记忆系统：agent 的记忆工具（memory_search / memory_revise / memory_retire）。
+   * 只有根会话注册这组工具；主进程另按会话 meta 再判一次（子会话的写一律拒——
+   * 「子会话读不写」不只靠 agent 侧不注册）。作用域同 memoryRecallRequest 在主进程解析。
+   * 回 memoryToolResult。
+   */
+  | {
+      type: "memoryToolRequest";
+      requestId: string;
+      sessionId: string;
+      /** 调用发生在第几轮（revise 新条的出处轮号） */
+      turn: number;
+      scope: { workspaceId: string | null; cwd: string };
+      call: MemoryAgentCall;
+    }
   /**
    * 受管浏览器：agent 的浏览器工具请求。**浏览器实例在主进程**（WebContentsView 只能在
    * 主进程建），agent 进程只剩「工具定义 → requestId 问答」一层薄包装——换内核只重写那层。
@@ -1089,6 +1289,22 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
+ * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
+ * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
+ */
+| { type: "memoryChanged" }
+/**
+ * 记忆系统（实验功能 memory-system）：模型下载进度（服务 → 主进程转发）。
+ * 载荷 MemoryDownloadProgress（phase: downloading/verifying/done/failed）。
+ */
+| { type: "vectorDownload"; progress: MemoryDownloadProgress }
+/**
+ * 记忆系统（实验功能 memory-system）：后台补算进度（running / deferred-battery /
+ * idle 收尾）。载荷 MemoryBackfillProgress。
+ */
+| { type: "vectorBackfill"; progress: MemoryBackfillProgress }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
   | { type: "created"; sessionId: string; piSessionFile: string | null }
   /**
@@ -1138,6 +1354,8 @@ export type AgentEvent =
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
+  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
+  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
@@ -1151,10 +1369,17 @@ export type AgentEvent =
    * 我们传的意图档可能被模型能力裁剪（不支持的就近落档），芯片必须显示这个值
    * 而不是用户点的那一档。supported 是 pi 算的支持集（可能含我们菜单外的 xhigh /
    * max——菜单只放 5 档，这不矛盾：菜单管「能选什么」，supported 管「它支持什么」）。
+   *
+   * providerId / modelId 是**报这组真值的型号**（与 `model` 事件同口径：pi 的
+   * model.provider / model.id）。supported 只对这个型号成立——会话切到别的型号
+   * （含同名型号换服务商：kimi-coding/k3 → opencode-go/kimi-k3）后，renderer 必须
+   * 按它判出这份真值已过期、回落目录，而不是拿上一个型号的集合画菜单。
    */
   | {
       type: "thinking";
       sessionId: string;
+      providerId: string;
+      modelId: string;
       level: PiThinkingLevel;
       supported: readonly PiThinkingLevel[];
     }
@@ -1231,4 +1456,10 @@ export type AgentEvent =
       runId: string;
       turnId: string;
       ask: IntentAskView[];
-    };
+    }
+  /**
+   * 系统提示注入清单（上下文面板「规则与说明」组）：before_agent_start 现场组装、
+   * 每轮推一次。纯 ephemeral，不落盘——规则每轮重注入，最新一份就是当前事实；
+   * 纯浏览的旧会话收不到，面板按「未知」显示。
+   */
+  | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory };

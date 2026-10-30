@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  atMostManual,
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   decidePermission,
@@ -9,6 +10,7 @@ import {
   isChannelTool,
   USER_ACTION_TOOL,
   isReadOnlyTool,
+  MEMORY_TOOLS,
   PERMISSION_MODES,
   READ_ONLY_TOOLS,
 } from "./permission.ts";
@@ -82,6 +84,16 @@ describe("decidePermission", () => {
     }
   });
 
+  test("记忆三件套（2026-10-29 用户：不想去确认记忆）：memory_search / revise / retire 三档全放行", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of MEMORY_TOOLS) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);
+      }
+    }
+    // 名字相似的不沾光
+    assert.equal(decidePermission("plan", "memory_delete").behavior, "deny");
+  });
+
   test("通道工具放行不影响其它工具的既有行为", () => {
     assert.deepEqual(decidePermission("plan", "read"), { behavior: "allow" });
     assert.equal(decidePermission("plan", "bash").behavior, "deny");
@@ -137,6 +149,22 @@ describe("交接（USER_ACTION_TOOL）", () => {
   test("三档一律放行：它本身就是在问用户", () => {
     for (const mode of PERMISSION_MODES) {
       assert.deepEqual(decidePermission(mode, USER_ACTION_TOOL), { behavior: "allow" }, mode);
+    }
+  });
+});
+
+describe("atMostManual（收尾扫描轮与遗留事项开出的新会话首轮，审核 F-4）", () => {
+  test("放行压成询问；询问、计划原样（计划更严，不放宽）", () => {
+    assert.equal(atMostManual("skip"), "manual");
+    assert.equal(atMostManual("manual"), "manual");
+    assert.equal(atMostManual("plan"), "plan");
+  });
+
+  test("压过之后写类工具一律不再直接放行：要么问、要么拒", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of MUTATING) {
+        assert.notDeepEqual(decidePermission(atMostManual(mode), tool), { behavior: "allow" }, `${mode} / ${tool}`);
+      }
     }
   });
 });

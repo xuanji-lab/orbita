@@ -33,6 +33,8 @@ const ALLOWED_LATIN = new Set([
   "GIF",
   "WebP",
   "MB",
+  // 内存与模型文件的计量单位（向量模型页的设备一行）
+  "GB",
   // 文档格式名（PDF 预览与引用）
   "PDF",
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
@@ -53,6 +55,16 @@ const ALLOWED_LATIN = new Set([
   "Co-Authored-By",
   // 迁移来源（其他应用的名字）
   "Proma",
+  // 价格 · 能力图的分数出处（榜单名、数据集名、授权名、数据集版本号——署名义务，原样照写）
+  "Arena",
+  "arena.ai",
+  "lmarena-ai",
+  "CC",
+  "BY",
+  "revision",
+  "Agent",
+  "WebDev",
+  "Orbita",
   // 意图系统的本机服务与管线（召回走它；界面里只有名字没有第二写法）
   "intent-lab",
   "DeepSeek",

@@ -102,20 +102,34 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
-import { CarryoverChecklist } from "./CarryoverChecklist";
+import { WrapupCard } from "./WrapupCard";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
+import type { MemorySessionTurnView } from "@shared/memory";
+import { useMemorySession } from "../memory/useMemory.ts";
+import { liveRemembered, pairMemoryTurns } from "../memory/memory-view.ts";
+import "../memory/memory.css";
 import { DiffBody } from "../../shell/DiffView";
 import { RevertPreviewBar } from "./RevertPreviewBar";
 import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
-import { matchCarryoverMessage, type CarryoverDraft } from "./carryover-parse.ts";
-import { contextRing, formatSpeed, replySpeed, streamingStart, usageBreakdown, type ContextRing } from "./stats-format";
+import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
+import {
+  contextRing,
+  formatSpeed,
+  replySpeed,
+  ringLayers,
+  streamingStart,
+  usageBreakdown,
+  WRAP_UP_AFTER_COMPACTIONS,
+  type ContextRing,
+  type RingLayers,
+} from "./stats-format";
 import { isPlanBilling } from "@shared/known-providers";
 import { deriveWorkspaceName } from "@shared/workspace";
-import { modelCardFooter, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
+import { modelCardFooter, modelChipParts, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
@@ -124,12 +138,11 @@ import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
-import { MaterialBoxContext } from "../../shell/BlackholeBox.tsx";
-import { SentBlackholeBox } from "../../shell/SentBlackholeBox.tsx";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
-import { modelThinkingLevels } from "./thinking-choice.ts";
+import { modelDisplayName, modelThinkingLevels } from "@shared/model-defaults";
+import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
 import { parseQualifiedToolName, type McpServerInfo } from "@shared/mcp";
 import { parseSkillSegments, skillForReadPath } from "@shared/skill";
@@ -705,6 +718,16 @@ function ChatViewBody(props: {
    */
   onOpenIntentPanel?: () => void;
   /**
+   * 对话里记忆行的「在审查面板里看」：打开右栏审查面板的记忆页签。只有主槽拿到它；
+   * 右栏与抽屉里不传，记忆行照常显示、只是没有这个链接。
+   */
+  onOpenMemoryReview?: () => void;
+  /**
+   * 用量环菜单里的「查看上下文」：打开右栏上下文面板。只有主槽拿到它（面板开在主槽
+   * 旁边）；右栏与抽屉里的会话区不传，菜单不出这一项。
+   */
+  onOpenContextPanel?: () => void;
+  /**
    * 一键回底浮钮（feat/scroll-to-bottom-X）：距底超过 300px 时在消息列底端浮现「回底」
    * 浮钮，点击 smooth 滚到底。三个会话区都开：主槽、辅助对话抽屉、Sub-sessions 面板的
    * 会话层——都有长转录、都会滚离底部。实现在本组件里三处共用。
@@ -745,9 +768,6 @@ function ChatViewBody(props: {
   bareHeader?: boolean;
 }) {
   const t = useT();
-  // 会话生命周期开关：头部完成标记、收尾扫描的全部面挂它后面；
-  // 关闭时收尾相关数据源一并在渲染前置空（首页卡退回提问行位、消息流不出扫描卡）
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { session, providersError, homeBare, hideComposer } = props;
   // 意图系统（实验功能）：确认卡、输入框开关挂它后面；转录里的终态卡另在
   // TranscriptColumn 里判（历史记录照渲染，入口才藏）
@@ -829,6 +849,36 @@ function ChatViewBody(props: {
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 收尾卡上的型号名：与模型菜单同一套显示名（声明名 > 白名单 > 目录名 > id）
+  const wrapupModelName = useCallback(
+    (modelId: string): string => {
+      const declared = session.usable.flatMap((p) => p.models.declared).find((m) => m.id === modelId);
+      return modelDisplayName(session.catalog, modelId, {}, declared?.name);
+    },
+    [session.usable, session.catalog],
+  );
+  // 收尾卡「第 x–y 轮」：跳回那一轮的用户消息并闪一下。不在已加载的窗口里就往前翻页再找
+  // （每页 SESSION_PAGE_RECORDS 条，最多翻 20 页——再远的历史不值得一直等）
+  const hasMoreRef = useRef(session.hasMoreHistory);
+  hasMoreRef.current = session.hasMoreHistory;
+  const loadOlderRef = useRef(session.loadOlder);
+  loadOlderRef.current = session.loadOlder;
+  const jumpToMessage = useCallback((messageId: string) => {
+    let tries = 0;
+    const attempt = () => {
+      const pane = scrollRef.current;
+      if (pane === null) return;
+      if (pane.querySelector(`[data-quote-id="${CSS.escape(messageId)}"]`) !== null) {
+        highlightQuote(pane, messageId, "");
+        return;
+      }
+      if (!hasMoreRef.current || tries >= 20) return;
+      tries += 1;
+      loadOlderRef.current();
+      window.setTimeout(attempt, 400);
+    };
+    attempt();
+  }, []);
   const followRef = useRef(true);
   /**
    * 触顶拉更早一页那一刻的滚动几何（源侧分页的滚动锚定）：
@@ -903,6 +953,18 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+  // 记忆（实验功能 memory-system）：记住了东西的那条用户消息下挂「记忆 · 记住 M 条」行。
+  // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
+  const memoryOn = useExperimentalFeature("memory-system");
+  const memorySession = useMemorySession(memoryOn && openId !== "" ? openId : null);
+  const memoryLines = useMemo((): MemoryLines | null => {
+    const view = memorySession.data;
+    if (view === null) return null;
+    const users = session.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : []));
+    // 随回退停用的条目不挂在对话里（重说的那一轮与被撤回的同轮号，见 liveRemembered）
+    const rows = new Map([...pairMemoryTurns(users, view)].map(([id, row]) => [id, liveRemembered(row)]));
+    return { rows };
+  }, [memorySession.data, session.transcript]);
   // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象
   const previewMessageId = session.revertDialog?.targetMessageId ?? null;
   const previewTurnId = session.undoDialog?.turnId ?? null;
@@ -1006,10 +1068,9 @@ function ChatViewBody(props: {
   // 选卡与截断规则在 home-cards.ts 纯函数（测试覆盖），这里只接线。
   // **必须在首页分支之外无条件调用**——hook 不能长在条件分支里，首页让位给聊天页时
   // hooks 数量一变 React 直接卸载整棵树（灰屏）。纯函数毫秒级，恒算不亏。
-  // 会话生命周期开关关闭时遗留清单传空——首页卡全部退回「最近提问」行位，不出待办卡。
   const homeCards = useMemo(
-    () => selectHomeCards(session.sessions, lifecycle ? session.carryovers : []),
-    [session.sessions, session.carryovers, lifecycle],
+    () => selectHomeCards(session.sessions, session.carryovers),
+    [session.sessions, session.carryovers],
   );
 
   // 头部完成入口读当前状态：列表里的 meta 与 opened 都是真的（refreshSessions 双向同步），
@@ -1108,9 +1169,13 @@ function ChatViewBody(props: {
       onStop={session.stop}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
-      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index
+      // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index。
+      // 收尾扫描中：扫描轮不设超时，唯一出口是这张卡上的停止键（空草稿 + 在跑 = 发送键变停止），
+      // 占位里直接说出来（审核 S-4）
       placeholder={
-        session.quotes.length > 0
+        session.closingScan
+          ? t.chat.placeholderScanning
+          : session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
             ? t.chat.placeholderNew
@@ -1121,9 +1186,17 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
+          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（已落盘 + 未完成；会话生命周期已转正，
+          // 不再看实验开关），同一条收尾仪式
+          markDone={
+            openId !== "" && (openMeta?.completion ?? "open") === "open"
+              ? { onSelect: session.startClosingRitual, busy: session.phase !== "idle" || session.closingScan }
+              : null
+          }
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
+          onOpenContext={props.onOpenContextPanel ?? null}
           intentToggle={
             intentToggleVisible
               ? { on: intentToggleOn, onToggle: session.setIntentEnabled }
@@ -1336,17 +1409,16 @@ function ChatViewBody(props: {
         onScroll={handleScroll}
         scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
         // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用。
-        // 会话生命周期开关关闭时整组不传（Pane 头部的完成入口随之不渲染）
         completion={
-          lifecycle && openId !== "" ? (openMeta?.completion ?? "open") : null
+          openId !== "" ? (openMeta?.completion ?? "open") : null
         }
         onSetCompletion={
-          lifecycle && openId !== ""
+          openId !== ""
             ? (next) => session.setCompletionSession(openId, next)
             : undefined
         }
         // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
-        onMarkDone={lifecycle && openId !== "" ? session.startClosingRitual : undefined}
+        onMarkDone={openId !== "" ? session.startClosingRitual : undefined}
         closing={session.closingScan}
         busy={session.phase !== "idle"}
         scanless={openMeta?.piSessionFile == null}
@@ -1399,13 +1471,18 @@ function ChatViewBody(props: {
               />
             )}
             {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
-                （scanResult 由 hook 查看槽持有，切走再切回还在）。挂会话生命周期开关：
-                开关在确认卡开着时被关掉（去设置里关）的话，回来不再渲染 */}
-            {lifecycle && session.scanResult !== null && session.scanResult.sessionId === openId && (
-              <CarryoverChecklist
-                drafts={session.scanResult.drafts}
+                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
+            {session.scanResult !== null && session.scanResult.sessionId === openId && (
+              <WrapupCard
+                // 每次扫描是一张新卡：换一份清单就重挂，卡内的编辑状态不串到下一次
+                key={`${session.scanResult.sessionId}:${session.scanResult.plan.lastTurn}:${session.scanResult.plan.sinceTurn}`}
+                plan={session.scanResult.plan}
+                draft={session.scanResult.draft}
+                nameOf={wrapupModelName}
                 onConfirm={session.confirmCarryovers}
                 onCancel={session.cancelCarryovers}
+                onRevise={session.reviseWrapup}
+                onJumpTurn={jumpToMessage}
               />
             )}
             {/*
@@ -1459,6 +1536,8 @@ function ChatViewBody(props: {
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
           onOpenIntentPanel={props.onOpenIntentPanel}
+          memory={memoryLines}
+          onOpenMemoryReview={props.onOpenMemoryReview}
           sessionId={openId}
         />
         </RevertPreviewContext.Provider>
@@ -1519,6 +1598,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有；引用稳定，不破 memo） */
   onOpenIntentPanel?: () => void;
+  /** 记忆行（实验功能 memory-system）：用户气泡 id → 那一轮的账；null = 关着 / 没数据 */
+  memory: MemoryLines | null;
+  /** 记忆行的「在审查面板里看」（主槽才有） */
+  onOpenMemoryReview?: () => void;
   /** 产物打开按钮的会话对账 */
   sessionId: string;
   /** 意图召回（实验功能 intent-system）：终态卡（按时间插回流）与运行中卡（转录末尾） */
@@ -1530,9 +1613,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   pendingEcho: { blocks: readonly string[] } | null;
 }) {
   const t = useT();
-  // 会话生命周期开关：关闭时消息流不出收尾扫描卡（同 useT 读 Context 的先例——开关
-  // 几乎不变，偶尔破一次 memo 无妨）
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   // 意图系统开关：关着时终态记录照渲染（历史还在），运行卡与入口全藏
   const intentOn = useExperimentalFeature("intent-system");
   const { transcript } = props;
@@ -1612,9 +1692,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
   // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
   const carryoverCards = useMemo(() => {
-    // 会话生命周期开关关闭：消息流不出收尾扫描卡（历史会话里的旧扫描回答同样不卡片化）
-    if (!lifecycle) return new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
-    const cards = new Map<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>();
+    const cards = new Map<string, { scan: ScanMessage; firstKey: string }>();
     for (const record of records) {
       if (record.role !== "assistant" || record.status === "streaming") continue;
       let firstKey: string | null = null;
@@ -1625,11 +1703,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         parts.push(block.text);
       });
       if (firstKey === null) continue;
-      const drafts = matchCarryoverMessage(parts.join(""));
-      if (drafts !== null) cards.set(record.id, { drafts, firstKey });
+      const scan = matchScanMessage(parts.join(""));
+      if (scan !== null) cards.set(record.id, { scan, firstKey });
     }
     return cards;
-  }, [records, lifecycle]);
+  }, [records]);
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
@@ -1764,6 +1842,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 sessionId={props.sessionId}
                 onRevertTo={props.onRevertTo}
                 streamingIds={streamingIds}
+                memory={props.memory}
+                onOpenMemoryReview={props.onOpenMemoryReview}
               />
             )}
             {branchAfter !== undefined && (
@@ -1866,8 +1946,6 @@ function Pane(props: {
   const [editing, setEditing] = useState(false);
   return (
     <div
-      // 输入框黑洞的舷窗挂在滚动段顶边（data-porthole-anchor）：BlackholeBox 从输入框往上找这一对
-      data-chat-pane=""
       style={{
         height: "100%",
         minHeight: 0,
@@ -1999,7 +2077,7 @@ function Pane(props: {
 
       {/* 滚动段套一层定位容器：回底浮钮要浮在这段的底缘上，而不是随内容滚走。
           样式在 styles.css 的 .chat-scroll-seg（含 overflow: hidden——页脚很高时滚动段不越界盖到页脚下） */}
-      <div data-porthole-anchor="" className="chat-scroll-seg">
+      <div className="chat-scroll-seg">
         <div
           ref={props.scrollRef}
           onScroll={props.onScroll}
@@ -2132,6 +2210,10 @@ function ComposerBar(props: {
   onOpenProviders: () => void;
   /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
   intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
+  /** 用量环浮层里的「标记完成」（见 UsageRing）；null = 不给 */
+  markDone: { onSelect: () => void; busy: boolean } | null;
+  /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
+  onOpenContext: (() => void) | null;
 }) {
   const t = useT();
   const { session } = props;
@@ -2203,7 +2285,15 @@ function ComposerBar(props: {
   // pi 旁算好过线）。都没有 = 未知：按全量显示、不禁用，开轮后由 thinking 事件
   // 纠真——宁可待验证，不先撒谎
   const thinkingSupported =
-    session.model === null ? null : modelThinkingLevels(session.model.modelId, catalog, session.thinkingSupported);
+    session.model === null
+      ? null
+      : modelThinkingLevels(
+          session.model.modelId,
+          catalog,
+          session.thinkingSupported,
+          modelPreferenceById(session.usable, session.model.providerId),
+          declaredThinkingLevels(session.usable, session.model.providerId, session.model.modelId),
+        );
   const thinkingMenuLevels = thinkingSupported ?? THINKING_LEVELS;
   // 逐档判断，不是全局锁：glm-5.3 支持 low/high/max（不含 minimal），全局判
   // 「不含 minimal」会把整个菜单错锁成全灰——那是 reasoning:false 模型（支持集
@@ -2343,18 +2433,23 @@ function ComposerBar(props: {
               },
             })
           }
-          trigger={({ open, toggle }) => (
-            <Chip
-              active={open}
-              title={t.chat.modelTip}
-              onClick={toggle}
-              chevron
-              // 名字随时可省略号截断（styles.css），不等断点
-              className="chip-model"
-            >
-              {session.model?.modelId ?? t.chat.noModel}
-            </Chip>
-          )}
+          trigger={({ open, toggle }) => {
+            // 头像 + 显示名（不带服务商名）；服务商与 id 进悬停提示
+            const parts = session.model === null ? null : modelChipParts(session.usable, catalog, session.model);
+            return (
+              <Chip
+                active={open}
+                title={parts === null ? t.chat.modelTip : `${parts.name} · ${parts.detail}\n${t.chat.modelTip}`}
+                onClick={toggle}
+                chevron
+                leading={parts?.avatar}
+                // 名字随时可省略号截断（styles.css），不等断点
+                className="chip-model"
+              >
+                {parts?.name ?? t.chat.noModel}
+              </Chip>
+            );
+          }}
         />
       )}
       <Menu
@@ -2377,7 +2472,7 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
-      <UsageRing session={session} />
+      <UsageRing session={session} markDone={props.markDone} onOpenContext={props.onOpenContext} />
     </>
   );
 }
@@ -2394,11 +2489,21 @@ function ComposerBar(props: {
  * 压缩只在闲着时给：pi 的 `compact()` 会先打断当前这一轮——跑着时让人点得动，
  * 他以为只是整理一下，实际把回答砍了。**禁用的理由写在 hint 里**，不让它只是变灰。
  */
-function UsageRing(props: { session: ChatSession }) {
+function UsageRing(props: {
+  session: ChatSession;
+  /**
+   * 「标记完成」入口（压缩 ≥ 2 次时浮层里给）。null = 不给这一项、只留提示文字：
+   * 会话生命周期实验开关关着、会话还没落盘、或已经是完成态。
+   */
+  markDone: { onSelect: () => void; busy: boolean } | null;
+  /** 「查看上下文」：打开右栏上下文面板（分项之后、压缩之前）；null = 不给 */
+  onOpenContext: (() => void) | null;
+}) {
   const t = useT();
   const { session } = props;
   const stats = session.stats;
   const ring = contextRing(stats, t);
+  const compactions = session.compactionCount;
   const busy = session.phase !== "idle";
   // 包月制的 provider 不显示花费——那个数字是拿 API 价目表算的估价，不是他的账单。
   // 认不得的 id（自建网关）一律当按量算：藏起真实花费比多一行估价更坏。
@@ -2436,6 +2541,51 @@ function UsageRing(props: { session: ChatSession }) {
       hint: row.value,
       fact: true,
     })),
+    // 压缩次数：0 次不出这一行（没压过就没什么可报的）
+    ...(compactions > 0
+      ? [
+          {
+            id: "compacted-count",
+            label: t.stats.compacted,
+            hint: t.stats.compactedTimes(compactions),
+            fact: true,
+          } satisfies MenuItem,
+        ]
+      : []),
+    // 「查看上下文」：分项只报总量，按来源看装了什么去右栏面板
+    ...(props.onOpenContext === null
+      ? []
+      : [
+          {
+            id: "open-context",
+            label: t.contextPanel.open,
+            icon: "layers" as const,
+            onSelect: props.onOpenContext,
+          } satisfies MenuItem,
+        ]),
+    // 压过两次就建议收尾：第三次压缩时摘要已是摘要的摘要，不如带着遗留事项换会话
+    ...(compactions >= WRAP_UP_AFTER_COMPACTIONS && !confirming
+      ? [
+          {
+            id: "wrap-up-hint",
+            label: props.markDone === null ? t.chat.compactSuggestNew : t.chat.compactSuggestDone,
+            icon: "lightbulb" as const,
+            fact: true,
+          } satisfies MenuItem,
+          ...(props.markDone === null
+            ? []
+            : [
+                {
+                  id: "wrap-up-done",
+                  label: t.chat.markTaskDone,
+                  icon: "check" as const,
+                  hint: props.markDone.busy ? t.chat.compactWait : undefined,
+                  disabled: props.markDone.busy,
+                  onSelect: props.markDone.onSelect,
+                } satisfies MenuItem,
+              ]),
+        ]
+      : []),
     ...(confirming
       ? [
           {
@@ -2489,8 +2639,13 @@ function UsageRing(props: { session: ChatSession }) {
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (
-          <Chip active={open} onClick={toggle} ariaLabel={ring.label}>
-            <Ring ring={ring} />
+          <Chip
+            active={open}
+            onClick={toggle}
+            ariaLabel={compactions > 0 ? `${ring.label} · ${t.stats.compacted} ${t.stats.compactedTimes(compactions)}` : ring.label}
+            leading={<Ring ring={ring} layers={ringLayers(compactions)} />}
+          >
+            {null}
           </Chip>
         )}
       />
@@ -2498,25 +2653,37 @@ function UsageRing(props: { session: ChatSession }) {
   );
 }
 
-/** 环的几何：直径、线宽——底栏芯片里 12px 的图标位 */
-const RING_SIZE = 14;
+/**
+ * 环的几何：外径 20 = 模型芯片里的型号头像（两者在底栏同高对齐），线宽 2、圈隙 1，
+ * 两圈半径依次 9 / 6。数字档只有外圈，里面留 16px 给数字。
+ */
+const RING_SIZE = 20;
 const RING_STROKE = 2;
+const RING_GAP = 1;
 
 /**
- * 上下文占用环。底环一圈中性边框色，弧从 12 点方向顺时针长——和钟一样，不用学。
- * 颜色是第二信号（设计系统）：过七成前继承文字色，之后才用 warning / danger。
- * `fill` 为 null 时只有底环：没数字就不画数字。
+ * 上下文占用环（Apple 健身圆环式，档位见 stats-format 的 `ringLayers`）。
+ * 底轨一圈中性边框色，弧从 12 点方向顺时针长——和钟一样，不用学。
+ * 画满的圈（用完的窗口）用 tertiary 墨，当前圈继承文字色：前者是历史，后者才是要看的那一圈。
+ * 颜色是第二信号（设计系统）：过七成 warning、过九成 danger，**只给当前圈**。
+ * `fill` 为 null 时当前圈只有底轨：没数字就不画数字。
  */
-function Ring(props: { ring: ContextRing }) {
-  const radius = (RING_SIZE - RING_STROKE) / 2;
-  const circumference = 2 * Math.PI * radius;
+function Ring(props: { ring: ContextRing; layers: RingLayers }) {
   const { fill, tone } = props.ring;
+  const { full, label } = props.layers;
   const color =
     tone === "danger"
       ? "var(--color-danger)"
       : tone === "warning"
         ? "var(--color-warning)"
         : "currentColor";
+  const center = RING_SIZE / 2;
+  const radii = Array.from(
+    { length: full + 1 },
+    (_, index) => (RING_SIZE - RING_STROKE) / 2 - index * (RING_STROKE + RING_GAP),
+  );
+  const current = radii[full] ?? (RING_SIZE - RING_STROKE) / 2;
+  const circumference = 2 * Math.PI * current;
   return (
     <svg
       width={RING_SIZE}
@@ -2525,27 +2692,47 @@ function Ring(props: { ring: ContextRing }) {
       aria-hidden
       style={{ display: "block" }}
     >
-      <circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={radius}
-        fill="none"
-        stroke="var(--color-border-strong)"
-        strokeWidth={RING_STROKE}
-      />
+      {radii.map((radius, index) => (
+        <circle
+          key={radius}
+          cx={center}
+          cy={center}
+          r={radius}
+          fill="none"
+          stroke={index < full ? "var(--color-text-tertiary)" : "var(--color-border-strong)"}
+          strokeWidth={RING_STROKE}
+        />
+      ))}
       {fill !== null && fill > 0 && (
         <circle
-          cx={RING_SIZE / 2}
-          cy={RING_SIZE / 2}
-          r={radius}
+          cx={center}
+          cy={center}
+          r={current}
           fill="none"
           stroke={color}
           strokeWidth={RING_STROKE}
           strokeLinecap="round"
           strokeDasharray={`${circumference * fill} ${circumference}`}
-          transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+          transform={`rotate(-90 ${center} ${center})`}
           style={{ transition: "stroke-dasharray var(--duration-hover) var(--ease-standard)" }}
         />
+      )}
+      {label !== null && (
+        <text
+          x={center}
+          y={center}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="currentColor"
+          style={{
+            fontFamily: "var(--font-family-base)",
+            fontSize: "var(--font-size-xs)",
+            fontWeight: "var(--weight-semibold)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {label}
+        </text>
       )}
     </svg>
   );
@@ -2566,7 +2753,7 @@ function EntryView(props: {
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
@@ -2586,6 +2773,9 @@ function EntryView(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有） */
   onOpenIntentPanel?: () => void;
+  /** 记忆行（实验功能 memory-system）：挂在用户气泡下；undefined = 不画 */
+  memory?: MemoryLines | null;
+  onOpenMemoryReview?: () => void;
   /** 产物打开按钮的会话对账（主进程白名单按它查） */
   sessionId: string;
 }) {
@@ -2593,13 +2783,19 @@ function EntryView(props: {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") {
+    const memoryRow = props.memory?.rows.get(entry.item.id);
     return (
-      <UserBubble
-        item={entry.item}
-        onRevertTo={props.onRevertTo}
-        revertDisabled={props.actionsBusy || props.readOnly === true}
-        revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
-      />
+      <>
+        <UserBubble
+          item={entry.item}
+          onRevertTo={props.onRevertTo}
+          revertDisabled={props.actionsBusy || props.readOnly === true}
+          revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
+        />
+        {memoryRow !== undefined && memoryRow.remembered.length > 0 && (
+          <MemoryLine row={memoryRow} onOpenReview={props.onOpenMemoryReview} />
+        )}
+      </>
     );
   }
   if (entry.kind === "fileTurn") {
@@ -2648,7 +2844,7 @@ function EntryView(props: {
     if (card !== undefined) {
       // 同一条消息的多个 text 块只渲染一张卡（第一个块的位置），其余已并进卡里
       if (entry.key !== card.firstKey) return null;
-      return <CarryoverScanCard drafts={card.drafts} />;
+      return <CarryoverScanCard scan={card.scan} />;
     }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
     // streaming：正在流式的那条渲染成便宜的帧（不排公式、不高亮代码，见 stream-render.ts），
@@ -2712,7 +2908,7 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { drafts: readonly CarryoverDraft[]; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */
@@ -2912,7 +3108,6 @@ function UserBubble(props: {
   );
   // 只发图的消息没有文字气泡——一个空气泡比没有更像出了错
   const hasText = text.trim() !== "";
-  const boxStyle = useContext(MaterialBoxContext);
   useLayoutEffect(() => {
     if (expanded) return;
     const el = clampRef.current;
@@ -2937,16 +3132,7 @@ function UserBubble(props: {
         gap: 2,
       }}
     >
-      {/* 材料盒启用（黑洞 / 俄罗斯方块）：截图与文件 / 目录收进一个缩小的同款盒子（快照），引用排在它下面 */}
-      {boxStyle !== null && images.length + fileRefs.length > 0 ? (
-        <SentBlackholeBox
-          style={boxStyle}
-          images={images}
-          files={fileRefs.map((ref) => ({ name: fileRefName(ref.path), path: ref.path, kind: ref.kind }))}
-        />
-      ) : (
-        images.length > 0 && <UserImages images={images} />
-      )}
+      {images.length > 0 && <UserImages images={images} />}
       {quotes.length > 0 && (
         <div
           style={{
@@ -2968,7 +3154,7 @@ function UserBubble(props: {
           ))}
         </div>
       )}
-      {boxStyle === null && fileRefs.length > 0 && (
+      {fileRefs.length > 0 && (
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
@@ -4730,6 +4916,54 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
   return (
     <div key={key} style={{ ...BODY_LINE, color: "var(--color-text-secondary)" }}>
       {line === "" ? " " : line}
+    </div>
+  );
+}
+
+/** 记忆行的数据：气泡 id → 那一轮的账。 */
+interface MemoryLines {
+  rows: ReadonlyMap<string, MemorySessionTurnView>;
+}
+
+/**
+ * 记忆行（实验功能 memory-system）：挂在「从这一轮记住了东西」的用户气泡下，只说
+ * 记住了什么——确认系统在记、记得对不对（用户 2026-10-29：「我只需要知道，有在
+ * 记录记忆，记得对……其他的我不需要感知到」）。这一轮用到了哪些记忆是输入，去
+ * 上下文面板看；「整理中」不在对话里出现，也没有待确认（agent 判断直接生效）。
+ * 与思考 / 工具行同一份 CollapseRow 契约；改 / 删 / 别再用去审查面板的记忆页签。
+ */
+function MemoryLine(props: { row: MemorySessionTurnView; onOpenReview?: () => void }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const { row } = props;
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-4)" }}>
+      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+        <span style={HEAD_WRAP}>
+          <span style={{ color: headIconColor(false) }}>
+            <Icon name="brain-circuit" size={14} strokeWidth={1.8} />
+          </span>
+          <span style={headLabel(false)}>{t.memory.rowLabel}</span>
+        </span>
+        <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-base)" }}>
+          {t.memory.rowRemembered(row.remembered.length)}
+        </span>
+      </CollapseRow>
+      {open && (
+        <div style={{ ...EXPANDED_BODY, fontFamily: "var(--font-family-base)", whiteSpace: "normal", display: "grid", gap: "var(--space-1)" }}>
+          {row.remembered.map((item) => (
+            <span key={item.entry.id} style={{ color: "var(--color-text-primary)" }}>
+              {item.entry.text}
+            </span>
+          ))}
+          {props.onOpenReview !== undefined && (
+            <button type="button" className="mem-link" onClick={props.onOpenReview}>
+              {t.memory.openReview}
+              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

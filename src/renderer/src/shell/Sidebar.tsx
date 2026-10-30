@@ -12,13 +12,14 @@ import { childSessions, isSessionDone, rootSessions, type Carryover, type Sessio
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
+import type { MemoryScopeSummary } from "@shared/memory";
+import type { MemoryNav } from "../features/memory/memory-view.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { runStateLabel, sessionRunState } from "../features/notify/completion-notice.ts";
 import { nextFilterRowMode } from "./filter-row-compact.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
-import { useExperimentalFeature } from "../experimental.ts";
 import {
   effectiveSidebarFilters,
   type StatusFilter,
@@ -39,7 +40,7 @@ import { useT } from "../locale.ts";
 import type { Messages } from "../messages-en.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
-export type Overlay = "settings" | null;
+export type Overlay = "settings" | "memory" | null;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -103,7 +104,6 @@ function filterEmptyText(
   t: Messages,
 ): string {
   if (hasTodosOnly) return t.sidebar.emptyHasTodos;
-  if (status === "active") return starredOnly ? t.sidebar.emptyActiveStarred : t.sidebar.emptyActive;
   if (status === "done") return starredOnly ? t.sidebar.emptyDoneStarred : t.sidebar.emptyDone;
   return t.sidebar.emptyStarred;
 }
@@ -130,6 +130,13 @@ export function Sidebar(props: {
   settingsTab: SettingsTab;
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
+  /**
+   * 记忆库盖层（实验功能 memory-system）下侧栏换成它的导航：范围（全部 / 所有工作区 /
+   * 各工作区）+ 管理（向量模型）。数据由 App 拉（页面本体也要用）。
+   */
+  memoryNav: MemoryNav;
+  onMemoryNav: (next: MemoryNav) => void;
+  memoryScopes: readonly MemoryScopeSummary[] | null;
   /**
    * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
    * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
@@ -181,13 +188,13 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
-  // 会话生命周期开关：关着时三件套（完成 / 收尾扫描 / 星标）的入口不渲染——
-  // 筛选行五个 chip 全是它们的入口或依赖 done 概念，整行不渲染
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
+  const memoryOpen = props.overlay === "memory";
+  /** 任一整页盖层（设置 / 记忆库）开着：主列表、筛选行、子视图都让位 */
+  const overlayOpen = props.overlay !== null;
   /**
    * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
    * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
@@ -215,7 +222,7 @@ export function Sidebar(props: {
     // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
     // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCompact, session.sessions.length, settingsOpen, props.showArchived, props.showCarryovers]);
+  }, [filterCompact, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -224,7 +231,7 @@ export function Sidebar(props: {
    */
   const [starredOnly, setStarredOnly] = useState(false);
   /**
-   * 完成状态筛选：单选组（All / Active / Done 互斥，点一个顶掉另一个）。
+   * 完成状态筛选：单选组（All / Done 互斥，点一个顶掉另一个）。
    * 默认 All = 无过滤；与 Starred 是两条独立的开关，叠加生效。
    */
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -295,13 +302,12 @@ export function Sidebar(props: {
   // （只列根会话，子会话 PR4c 2.3），两个数字不一致会出现「读到 0 条」误报或反之
   const sessionList = describeList(session.loads.sessions, roots.length);
   /**
-   * 主列表的筛选管线（筛选区 chips）。状态（All/Active/Done，单选组）、星标与
+   * 主列表的筛选管线（筛选区 chips）。状态（All/Done，单选组）、星标与
    * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
    * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
-   * 有效值过 effectiveSidebarFilters：会话生命周期开关关闭时恒为 null（筛选行不渲染、
-   * 残留的本地状态不再过滤），见 sidebar-filters.ts。
+   * 有效值过 effectiveSidebarFilters（全是默认值时 null = 不过滤），见 sidebar-filters.ts。
    */
-  const filters = effectiveSidebarFilters(lifecycle, {
+  const filters = effectiveSidebarFilters({
     status: statusFilter,
     starredOnly,
     hasTodosOnly,
@@ -309,7 +315,6 @@ export function Sidebar(props: {
   const filtered = filters !== null;
   const scoped = live.filter((m) => {
     if (filters === null) return true;
-    if (filters.status === "active" && isSessionDone(m)) return false;
     if (filters.status === "done" && !isSessionDone(m)) return false;
     if (filters.starredOnly && m.starred !== true) return false;
     if (filters.hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
@@ -333,7 +338,7 @@ export function Sidebar(props: {
    * 优先让位给它们（那些入口在右栏，不受专注影响）；工作区被移除则回会话列表。
    */
   const filesViewWs =
-    props.filesView !== null && !settingsOpen && !props.showArchived && !props.showCarryovers
+    props.filesView !== null && !overlayOpen && !props.showArchived && !props.showCarryovers
       ? (session.workspaces.find((item) => item.id === props.filesView?.workspaceId) ?? null)
       : null;
   const filesBody =
@@ -434,14 +439,12 @@ export function Sidebar(props: {
       </div>
 
       {/**
-        筛选区：会话浏览的过滤 chips。状态是单选组（All / Active / Done 互斥，
+        筛选区：会话浏览的过滤 chips。状态是单选组（All / Done 互斥，
         点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
-        「进行中且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
-        筛选无从谈起，不摆。会话生命周期开关关闭时整行不渲染：五个 chip 全部属于
-        会话生命周期那批功能（Done / Starred / Has todos 是直接入口，Active
-        依赖 done 概念，All 单独存在没有意义），见 sidebar-filters.ts。
+        「已完成且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
+        筛选无从谈起，不摆。「进行中」2026-10-24 去掉（用户：「似乎完全没用」）。
       */}
-      {live.length > 0 && lifecycle && !settingsOpen && !props.showArchived && !props.showCarryovers && (
+      {live.length > 0 && !overlayOpen && !props.showArchived && !props.showCarryovers && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -454,15 +457,6 @@ export function Sidebar(props: {
             onClick={() => setStatusFilter("all")}
           >
             {t.sidebar.filterAll}
-          </Chip>
-          <Chip
-            icon="play"
-            compact={filterCompact}
-            active={statusFilter === "active"}
-            title={t.sidebar.filterActiveTip}
-            onClick={() => setStatusFilter("active")}
-          >
-            {t.sidebar.filterActive}
           </Chip>
           <Chip
             icon="check"
@@ -504,7 +498,7 @@ export function Sidebar(props: {
           paddingRight: "var(--space-3)",
         }}
       >
-        {props.showArchived && !settingsOpen ? (
+        {props.showArchived && !overlayOpen ? (
           <>
             {/*
               标题行左端的返回键是 Archived 视图的**显式出口**。以前出去只能再点一次
@@ -539,7 +533,7 @@ export function Sidebar(props: {
               />
             ))}
           </>
-        ) : props.showCarryovers && !settingsOpen ? (
+        ) : props.showCarryovers && !overlayOpen ? (
           <CarryoverPanel
             carryovers={session.carryovers}
             sessions={session.sessions}
@@ -571,6 +565,35 @@ export function Sidebar(props: {
               open(id);
             }}
           />
+        ) : memoryOpen ? (
+          <>
+            <NodeLabel>{t.memory.navScopes}</NodeLabel>
+            <NavRow
+              icon="layers"
+              label={t.memory.navAll}
+              active={props.memoryNav.kind === "scope" && props.memoryNav.token === "all"}
+              count={props.memoryScopes?.reduce((sum, scope) => sum + scope.count, 0)}
+              onClick={() => props.onMemoryNav({ kind: "scope", token: "all" })}
+            />
+            {(props.memoryScopes ?? []).map((scope) => (
+              <NavRow
+                key={scope.token}
+                icon={scope.kind === "user" ? "user" : "folder"}
+                label={scope.kind === "user" ? t.memory.scopeUser : scope.name}
+                active={props.memoryNav.kind === "scope" && props.memoryNav.token === scope.token}
+                count={scope.count}
+                onClick={() => props.onMemoryNav({ kind: "scope", token: scope.token })}
+              />
+            ))}
+            <span style={{ display: "block", height: "var(--space-3)" }} />
+            <NodeLabel>{t.memory.navManage}</NodeLabel>
+            <NavRow
+              icon="cpu"
+              label={t.memory.vector}
+              active={props.memoryNav.kind === "vector"}
+              onClick={() => props.onMemoryNav({ kind: "vector" })}
+            />
+          </>
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
@@ -1177,6 +1200,10 @@ function NavRow(props: {
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
   /** 竖条的悬停说明（状态的可读名字） */
   barTitle?: string;
+  /** 行尾的条数（记忆库导航）；undefined = 不画。钉在行右内边距（.row-trailing） */
+  count?: number | undefined;
+  /** 条数的颜色（待你确认用警示色——颜色是第二信号，名字已经说了是什么） */
+  countTone?: string;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1239,6 +1266,19 @@ function NavRow(props: {
       >
         {props.label}
       </span>
+      {props.count !== undefined && (
+        <span
+          className="row-trailing"
+          style={{
+            fontFamily: "var(--font-family-business)",
+            fontSize: "var(--font-size-xs)",
+            fontVariantNumeric: "tabular-nums",
+            color: props.countTone ?? "var(--color-text-tertiary)",
+          }}
+        >
+          {props.count}
+        </span>
+      )}
     </button>
   );
 }
@@ -1262,8 +1302,6 @@ function SessionRow(props: {
   onClick: () => void;
 }) {
   const t = useT();
-  // 会话生命周期开关：行内入口（星标 / 完成标记 / 遗留角标）挂它后面
-  const lifecycle = useExperimentalFeature("session-lifecycle");
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
   const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
@@ -1457,8 +1495,7 @@ function SessionRow(props: {
                 },
             // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
             // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动。
-            // 挂会话生命周期开关：它按 done 状态选目标，done 不在时这个入口也没有意义
-            ...(lifecycle && doneCount > 0
+            ...(doneCount > 0
               ? [
                   {
                     id: "archive-done",
@@ -1516,25 +1553,22 @@ function SessionRow(props: {
         列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
         是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
         与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
-        会话生命周期开关关闭时不渲染：已星的会话不显示星（数据在盘上，开关打开回来）。
       */}
-      {lifecycle && (
-        <IconButton
-          label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
-          title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
-          size={20}
-          onClick={() => session.starSession(meta.id, meta.starred !== true)}
-          className="reveal"
-          style={{
-            borderRadius: "var(--radius-xs)",
-            color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
-            // 已星标常显，不等 hover / 键盘聚焦
-            opacity: meta.starred === true ? 1 : undefined,
-          }}
-        >
-          <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
-        </IconButton>
-      )}
+      <IconButton
+        label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
+        title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
+        size={20}
+        onClick={() => session.starSession(meta.id, meta.starred !== true)}
+        className="reveal"
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
+          // 已星标常显，不等 hover / 键盘聚焦
+          opacity: meta.starred === true ? 1 : undefined,
+        }}
+      >
+        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
+      </IconButton>
       {/**
         完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
         hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
@@ -1542,44 +1576,39 @@ function SessionRow(props: {
         tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
         不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
         「还差几件」由右边那个灯泡角标单独说。
-        会话生命周期开关关闭时不渲染（闲置建议随它一起消失）：已完成的会话照常列出，
-        只是不再有可点的标记。
       */}
-      {lifecycle && (
-        <IconButton
-          label={done ? t.sidebar.reopen : t.sidebar.markDone}
-          title={
-            done
-              ? openTodos > 0
-                ? t.sidebar.doneWithTodos(openTodos)
-                : t.sidebar.doneTip
-              : idleSuggested
-                ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-                : t.sidebar.markDone
-          }
-          size={20}
-          onClick={() =>
-            session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-          }
-          className="reveal"
-          style={{
-            borderRadius: "var(--radius-xs)",
-            color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-            // 已完成常显，不等 hover / 键盘聚焦
-            opacity: done ? 1 : undefined,
-          }}
-        >
-          <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
-        </IconButton>
-      )}
+      <IconButton
+        label={done ? t.sidebar.reopen : t.sidebar.markDone}
+        title={
+          done
+            ? openTodos > 0
+              ? t.sidebar.doneWithTodos(openTodos)
+              : t.sidebar.doneTip
+            : idleSuggested
+              ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
+              : t.sidebar.markDone
+        }
+        size={20}
+        onClick={() =>
+          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+        }
+        className="reveal"
+        style={{
+          borderRadius: "var(--radius-xs)",
+          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+          // 已完成常显，不等 hover / 键盘聚焦
+          opacity: done ? 1 : undefined,
+        }}
+      >
+        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
+      </IconButton>
       {/**
         遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
         （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
         **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
         角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
-        挂会话生命周期开关：它说的是 done + 遗留，两个概念都不在时角标无处挂靠。
       */}
-      {lifecycle && done && openTodos > 0 && (
+      {done && openTodos > 0 && (
         <span
           title={t.sidebar.openTodosLeft(openTodos)}
           style={{

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { intentTurnEnv } from "./intent-env.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
-import { CLOSING_SCAN_PROMPT } from "../../shared/closing-scan.ts";
+import { LEGACY_CLOSING_SCAN_PROMPT as CLOSING_SCAN_PROMPT } from "../../shared/wrapup-scan.ts";
 
 const ENVELOPE = `<channel from="parent" kind="task" peer="p1" message="m1">父会话投来的任务</channel>`;
 assert.notEqual(parseChannelPrompt(ENVELOPE), null); // 夹具自证：信封能被解出

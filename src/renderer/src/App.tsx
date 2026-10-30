@@ -9,6 +9,8 @@ import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
+import { ContextPanel } from "./features/context/ContextPanel.tsx";
+import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
@@ -37,8 +39,6 @@ import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
-import { MaterialBoxContext } from "./shell/BlackholeBox.tsx";
-import { materialBoxStyle } from "./shell/blackhole-layout.ts";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { SkillsPanel } from "./features/skills/SkillsPanel";
 import { McpPanel } from "./features/mcp/McpPanel";
@@ -63,6 +63,10 @@ import {
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
+import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
+import type { MemoryNav } from "./features/memory/memory-view.ts";
+import { useMemoryScopes } from "./features/memory/useMemory.ts";
+import type { MemoryEntryView } from "@shared/memory";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -106,6 +110,8 @@ export function App() {
     return () => query.removeEventListener("change", sync);
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  /** 记忆库盖层（实验功能 memory-system）里看的是哪一页：某个范围 / 待你确认 / 向量模型 */
+  const [memoryNav, setMemoryNav] = useState<MemoryNav>({ kind: "scope", token: "all" });
   // 初始 state 的主题跟 main.tsx 首帧写的 data-theme 对齐（api.initialTheme），
   // 否则这里先落 DEFAULT_SETTINGS 的 "system"，useTheme 首次 apply 会把主题切到
   // 系统色，api.settings.get() 读回真设置后再切回来——当着用户的面闪两次。
@@ -419,7 +425,7 @@ export function App() {
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
   const channelParentId =
-    overlay === "settings" || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
+    overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
 
   // 通道清单：右栏入口的「在等你」角标（waiting + approval）从这里算。父子会话面板
@@ -496,6 +502,38 @@ export function App() {
   /** 摘抄列表的版本：主槽每摘一条 +1，审查面板的摘抄页签据此重拉 */
   const [excerptRevision, setExcerptRevision] = useState(0);
   const bumpExcerpts = useCallback(() => setExcerptRevision((value) => value + 1), []);
+  /**
+   * 记忆条目的「回到原文」：退出记忆库，打开出处会话并滚到支撑它的最新一轮——
+   * 走摘抄跳转同一条路（原话片段找得到就闪那段，找不到退回那一轮的用户消息）。
+   */
+  const jumpToMemorySource = useCallback(
+    (view: MemoryEntryView) => {
+      setOverlay(null);
+      const turn = view.entry.turns[view.entry.turns.length - 1];
+      openExcerpt({
+        sessionId: view.entry.sessionId,
+        role: "user",
+        text: view.quote ?? "",
+        ...(turn !== undefined ? { turn } : {}),
+      });
+    },
+    [openExcerpt],
+  );
+  /**
+   * 对话里记忆行的「在审查面板里看」：打开审查面板并切到记忆页签（token 递增的
+   * 一次性请求，同 reviewFocus）。面板换走就清掉——否则下次手动打开审查面板时
+   * 挂载又会被它拽到记忆页签。
+   */
+  const [memoryFocus, setMemoryFocus] = useState<number | null>(null);
+  const memoryFocusTokenRef = useRef(0);
+  const openMemoryReview = useCallback(() => {
+    memoryFocusTokenRef.current += 1;
+    setMemoryFocus(memoryFocusTokenRef.current);
+    setRightPanel("review");
+  }, []);
+  useEffect(() => {
+    if (rightPanel !== "review") setMemoryFocus(null);
+  }, [rightPanel]);
   /**
    * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
@@ -659,7 +697,7 @@ export function App() {
   /** 此刻「在看」的会话：主槽（没被设置页盖住时）与开着的辅助对话 */
   const drawerOpenId = drawerView.sessionId ?? drawerView.opened?.id ?? null;
   const watchedIds = [
-    ...(overlay === "settings" || mainOpenId === "" ? [] : [mainOpenId]),
+    ...(overlay !== null || mainOpenId === "" ? [] : [mainOpenId]),
     ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
   ];
   const watchedKey = watchedIds.join("\n");
@@ -829,6 +867,8 @@ export function App() {
   }, []);
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
+  /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
+  const openContextPanel = useCallback(() => handlePanel("context"), [handlePanel]);
 
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
   // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
@@ -981,11 +1021,11 @@ export function App() {
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
-  // 实验功能逐项开关（会话生命周期挂在其中）：关着时右栏底部的遗留事项
-  // 入口不渲染；showCarryovers 的本地状态可能残留（开着面板去设置里关了开关），
-  // 在传给 Sidebar 的路上一并压掉——开关关了，这个子视图就不该再出得来
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  const sessionLifecycle = experimentalFeatures["session-lifecycle"] === true;
+  // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
+  const memoryOn = experimentalFeatures["memory-system"] === true;
+  if (overlay === "memory" && !memoryOn) setOverlay(null);
+  const memoryScopes = useMemoryScopes(overlay === "memory");
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -997,10 +1037,10 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" ? (
+    overlay === "settings" || overlay === "memory" ? (
       <div className="cap-sess">
         <div className="cap-sc">
-          <strong className="cap-title">{t.settings.tabs[settingsTab]}</strong>
+          <strong className="cap-title">{overlay === "memory" ? t.memory.title : t.settings.tabs[settingsTab]}</strong>
         </div>
       </div>
     ) : mainOpenId === "" && session.opened === null ? null : (
@@ -1009,7 +1049,7 @@ export function App() {
         shortId={capsuleShortId}
         onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
         completion={
-          sessionLifecycle && mainOpenId !== ""
+          mainOpenId !== ""
             ? {
                 state: mainOpenMeta?.completion ?? "open",
                 closing: session.closingScan,
@@ -1034,17 +1074,13 @@ export function App() {
     );
 
   const railEntries: RailEntry[] = [
-    // 遗留事项入口（收尾扫描的下游）挂会话生命周期开关；Archived / Browser / Settings 不挂
-    ...(sessionLifecycle
-      ? [
-          {
-            icon: "list-todo" as const,
-            label: t.app.carryoversEntry(openCarryoverCount),
-            lit: railSubviewLit(subviewState, "carryovers"),
-            onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-          },
-        ]
-      : []),
+    // 遗留事项入口（收尾扫描的下游）
+    {
+      icon: "list-todo" as const,
+      label: t.app.carryoversEntry(openCarryoverCount),
+      lit: railSubviewLit(subviewState, "carryovers"),
+      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
+    },
     {
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
@@ -1061,6 +1097,17 @@ export function App() {
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
+    ...(memoryOn
+      ? [
+          {
+            // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
+            icon: "brain-circuit" as const,
+            label: t.memory.rail,
+            lit: overlay === "memory",
+            onClick: () => setOverlay(overlay === "memory" ? null : "memory"),
+          },
+        ]
+      : []),
     {
       icon: "settings" as const,
       label: t.common.settings,
@@ -1073,15 +1120,6 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
-    {/* 输入框材料盒：开关 × 主题（只在浅 / 黛 / 玄）× 黑洞与俄罗斯方块的互斥优先级，
-        在这里用 materialBoxStyle 算一次，输入框与转录都读它 */}
-    <MaterialBoxContext.Provider
-      value={materialBoxStyle(
-        experimentalFeatures["composer-blackhole"] === true,
-        experimentalFeatures["composer-tetris"] === true,
-        resolvedTheme,
-      )}
-    >
     <CitationOpenContext.Provider value={openCitation}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
@@ -1107,8 +1145,11 @@ export function App() {
           settingsTab={settingsTab}
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
+          memoryNav={memoryNav}
+          onMemoryNav={setMemoryNav}
+          memoryScopes={memoryScopes.data}
           showArchived={showArchived}
-          showCarryovers={showCarryovers && sessionLifecycle}
+          showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
           onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
@@ -1142,7 +1183,19 @@ export function App() {
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
-            {overlay === "settings" ? (
+            {overlay === "memory" ? (
+              <MemoryLibraryView
+                nav={memoryNav}
+                onNav={setMemoryNav}
+                scopes={memoryScopes.data}
+                onJump={jumpToMemorySource}
+                choreLabel={settings.choreModel?.modelId ?? null}
+                onOpenGeneral={() => {
+                  setSettingsTab("general");
+                  setOverlay("settings");
+                }}
+              />
+            ) : overlay === "settings" ? (
               <SettingsView
                 tab={settingsTab}
                 settings={settings}
@@ -1179,6 +1232,8 @@ export function App() {
                 panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
+                onOpenMemoryReview={openMemoryReview}
+                onOpenContextPanel={openContextPanel}
                 onOpenSideChat={openInSideChat}
                 intentOpenableIds={intentOpenableIds}
               />
@@ -1207,6 +1262,7 @@ export function App() {
                 escapeRef={filesEscapeRef}
                 citeFocus={citeFocus}
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
+                focusDone={focus.status.kind === "done"}
                 fileOpen={fileOpenRequest}
               />
               ) : shownPanel === "review" ? (
@@ -1218,6 +1274,7 @@ export function App() {
                   cwd={session.cwd}
                   excerptRevision={excerptRevision}
                   onJumpExcerpt={openExcerpt}
+                  memoryFocus={memoryFocus}
                 />
               ) : shownPanel === "skills" ? (
                 <SkillsPanel
@@ -1257,6 +1314,12 @@ export function App() {
                       list.filter((tab) => tab !== NEW_TASK_TAB),
                     )
                   }
+                />
+              ) : shownPanel === "context" ? (
+                <ContextPanel
+                  sessionId={mainSessionId}
+                  entry={(mainSessionId === null ? undefined : engine.states.get(mainSessionId)) ?? EMPTY_ENTRY}
+                  cwd={session.cwd ?? ""}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
@@ -1316,7 +1379,6 @@ export function App() {
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
-    </MaterialBoxContext.Provider>
     </PastedTextCollapseContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </LocaleContext.Provider>

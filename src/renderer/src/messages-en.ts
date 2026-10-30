@@ -20,15 +20,30 @@ import type { ReviewSource } from "../../shared/review.ts";
 const KNOWN_NOTES: Record<string, string> = {
   deepseek: "DeepSeek official API",
   zhipu: "Zhipu open platform standard API (billed per token)",
-  claude: "Claude Pro / Max subscription — log in with your browser, tokens renew automatically",
-  "zhipu-coding": "GLM Coding Plan subscription, via the Anthropic-compatible endpoint",
+  claude: "Claude Pro / Max subscription, tokens renew automatically",
+  "zhipu-coding": "GLM Coding Plan subscription",
   zai: "GLM Coding Plan on Zhipu's international site; accounts are separate from the China site",
   stepfun: "Step Plan subscription (the URL must include /v1)",
-  "kimi-coding": "Kimi Code membership, via the Anthropic-compatible endpoint",
+  "kimi-coding": "Kimi Code membership",
   "opencode-go": "OpenCode Go subscription — one key for open models from many vendors (DeepSeek / MiniMax…)",
   "anthropic-compatible": "Self-hosted gateway / private deployment; the client appends /v1/messages to your URL",
   "openai-compatible":
     "Self-hosted gateway / private deployment; include the version segment, the client appends /chat/completions",
+  anthropic: "Anthropic official API, billed per key (for subscription login see Claude below)",
+  openai: "OpenAI official API, via the Responses protocol",
+  google: "Gemini API (an AI Studio key)",
+  "kimi-api": "Kimi open platform pay-as-you-go API",
+  minimax: "API and coding plan share one endpoint; billing follows the key",
+  xiaomi: "Xiaomi MiMo open platform API, via the OpenAI-compatible endpoint",
+  qwen: "Alibaba Cloud Model Studio (DashScope), OpenAI-compatible mode",
+  openrouter: "Aggregating gateway — one key for models from many vendors",
+  "zhipu-coding-team": "GLM Coding Plan for teams, sign in with team credentials",
+  "qwen-token-plan": "Qwen Token Plan subscription, via the OpenAI-compatible endpoint",
+  "xiaomi-token-plan": "Xiaomi MiMo Token Plan subscription",
+  "openai-responses-compatible": "Self-hosted gateway on the Responses protocol; the client appends /responses",
+  "openai-codex": "ChatGPT Plus / Pro subscription, uses your Codex quota",
+  "github-copilot": "Copilot subscription — models from many vendors on your Copilot quota",
+  xai: "SuperGrok / X Premium subscription",
 };
 
 const KNOWN_LABELS: Record<string, string> = {
@@ -38,6 +53,13 @@ const KNOWN_LABELS: Record<string, string> = {
   claude: "Claude",
   "anthropic-compatible": "Anthropic-compatible",
   "openai-compatible": "OpenAI-compatible",
+  xiaomi: "Xiaomi MiMo",
+  "xiaomi-token-plan": "Xiaomi MiMo",
+  qwen: "Qwen",
+  "qwen-token-plan": "Qwen",
+  "zhipu-coding-team": "Zhipu Team",
+  tokenrhythm: "TokenRhythm",
+  "openai-responses-compatible": "OpenAI Responses-compatible",
 };
 
 /** 听写厂商的英文自称（voice 段的 failures / connecting / testOk 插值用） */
@@ -53,6 +75,8 @@ const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
 export const en = {
+  /** 花费的显示币种（utils/money.ts）：数据一律美元，英文界面原样显示 */
+  currency: { symbol: "$", perUsd: 1 },
   common: {
     more: "More",
     cancel: "Cancel",
@@ -83,6 +107,7 @@ export const en = {
     refresh: "Refresh",
     tabChanges: "Changes",
     tabExcerpts: "Excerpts",
+    tabMemory: "Memory",
     copyPath: "Copy path",
     excerptsThisTask: "This task",
     excerptsAll: "All",
@@ -125,6 +150,139 @@ export const en = {
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
   thinkingLevel: (level: ThinkingLevel, modelId: string | null | undefined): string =>
     thinkingLevelLabel(level, modelId),
+
+  memory: {
+    title: "Memory",
+    rail: "Memory",
+    navScopes: "Scope",
+    navManage: "Manage",
+    navAll: "All",
+    vector: "Embedding model",
+    typeName: (type: string): string =>
+      type === "preference" ? "Preferences" : type === "insight" ? "Lessons" : "Facts",
+    typeOne: (type: string): string =>
+      type === "preference" ? "Preference" : type === "insight" ? "Lesson" : "Fact",
+    typeHint: (type: string): string =>
+      type === "preference"
+        ? "Your choices, requirements and constraints, with the reason; not assumed to hold forever"
+        : type === "insight"
+          ? "Working rules abstracted from concrete choices, reusable elsewhere, always with evidence"
+          : "Things that happened and settled decisions",
+    allTitle: "All memories",
+    pageHint: "Grouped by type. Click one to see the original words, where it came from and how it evolved.",
+    search: "Search memories, quotes or sources",
+    clearSearch: "Clear search",
+    filterAll: "All",
+    sourceAll: "All sources",
+    sourceName: (source: string): string =>
+      source === "chat" ? "From chats" : source === "agent" ? "Corrected in chat" : "Added by hand",
+    add: "Add",
+    reasonLabel: (type: string): string => (type === "insight" ? "Evidence: " : "Reason: "),
+    origin: (title: string, turn: number) => `${title} · turn ${turn}`,
+    originManual: "Added by hand",
+    originDeleted: "Task deleted",
+    scopeUser: "All workspaces",
+    evolution: (count: number) => `Evolved ×${count}`,
+    quoteLabel: "Original words",
+    jumpSource: "Back to the conversation",
+    evolutionTitle: "How this evolved",
+    agentRevised: "Corrected by agent",
+    agentRevisedHint: "The agent rewrote this in the conversation after you corrected it",
+    autoPromoted: "Applied to all workspaces",
+    autoPromotedHint: "Judged to be about you rather than this project, so it applies in every workspace",
+    reviseReasonLabel: "Why it changed: ",
+    retireReasonLabel: "Why it was dropped: ",
+    revertMuted: "Dropped with a rewind",
+    revertMutedHint:
+      "You went back to an earlier turn in the conversation, which took back the turns this came from, so it's no longer used. Choose \"Use again\" to keep it",
+    restorePrevious: "Restore the old statement",
+    restorePreviousHint: "Bring the older statement back and stop using this one",
+    returnToWorkspace: "Keep it in its workspace only",
+    returnToWorkspaceHint: "Move it back to the workspace it came from",
+    statusMuted: "Not used",
+    statusStale: "Outdated",
+    edit: "Edit",
+    save: "Save",
+    cancel: "Cancel",
+    mute: "Stop using this",
+    unmute: "Use again",
+    remove: "Delete",
+    confirmRemove: "Confirm delete",
+    failed: (message: string) => `Didn't go through: ${message}`,
+    loadFailed: "Couldn't read memories.",
+    retry: "Retry",
+    empty: "No memories yet.",
+    emptyHint:
+      "With memory on, chat for a few turns; once things go quiet the conversation is distilled into memories. You can also add one by hand.",
+    noMatch: "No memories match.",
+    manualTitle: "Add a memory",
+    manualText: "Write it as one complete sentence",
+    manualReason: (type: string): string =>
+      type === "insight" ? "Evidence: which exchanges taught this" : "Reason: why you want it this way",
+    manualReasonOptional: "Reason (optional)",
+    manualScope: "Save to",
+    manualTextMissing: "Write the memory first.",
+    manualReasonMissing: "Preferences and lessons need a reason.",
+    tab: "Memory",
+    turnHeader: (turn: number, time: string) => `Turn ${turn} · ${time}`,
+    remembered: (count: number) => `Remembered ${count}`,
+    sessionEmpty: "Nothing remembered from this task yet.",
+    sessionEmptyHint:
+      "After a stretch of conversation goes quiet it's distilled; what gets remembered shows up here.",
+    noTask: "Open a task to see what it remembered.",
+    rowLabel: "Memory",
+    rowRemembered: (count: number) => `remembered ${count}`,
+    openReview: "Open in the review panel",
+    vectorIntro:
+      "Also finds memories phrased differently from your question. Off by default; when on, a small model runs on this computer and nothing leaves it.",
+    device: "This computer",
+    deviceLine: (chip: string, memoryGb: number) => `${chip} · ${memoryGb} GB memory`,
+    onBattery: "on battery",
+    onPower: "plugged in",
+    recommendLocal: "This computer can run the local model.",
+    recommendCloud:
+      "Under 8 GB of memory, the local model is slow and drains the battery. A cloud embedding service comes in a later version.",
+    localGroup: "Local model",
+    choreRow: "Chore model",
+    mode: "Embedding recall",
+    modeInfo: "Off: recall matches words only. Local: also matches meaning, using the model below.",
+    modeOff: "Off",
+    modeLocal: "On this computer",
+    model: "Model",
+    modelInfo: "Switching re-embeds every memory with the new model; until that finishes recall matches words only.",
+    modelDefault: "default",
+    modelAlt: "alternative",
+    switchWarn: (count: number) =>
+      `Switching re-embeds ${count} memories with the new model; recall matches words only until it finishes.`,
+    switchConfirm: "Switch",
+    modelFile: "Model file",
+    fileNone: "Not downloaded",
+    fileReady: "Ready",
+    fileDownloading: (percent: number) => `Downloading ${percent}%`,
+    fileVerifying: "Verifying…",
+    fileFailed: (message: string) => `Download failed: ${message}`,
+    fileFrom: (host: string) => `from ${host}`,
+    download: (size: string) => `Download (${size})`,
+    engine: "Runtime",
+    engineFound: (source: string): string =>
+      source === "packaged" ? "Bundled with the app" : source === "dev" ? "Development folder" : "Environment variable",
+    engineMissing: "Runtime not found. In development, run this in the repo first:",
+    vectors: "Embeddings",
+    vectorsLine: (count: number, dims: number) => `${count} embedded · ${dims} dims`,
+    vectorsNone: "None yet",
+    backfillRunning: (done: number, total: number) => `Embedding ${done}/${total}`,
+    backfillDeferred: (done: number, total: number) => `Paused on battery (${done}/${total})`,
+    idleUnload: "Unload when idle",
+    idleInfo: "The model holds memory while loaded. After this long unused it's unloaded; loading again takes about a second.",
+    minutes: (count: number) => `${count} min`,
+    deferOnBattery: "Defer bulk embedding on battery",
+    deferInfo: "Bulk embedding uses power. On battery it pauses and resumes once plugged in; per-turn recall isn't affected.",
+    chore: "Model that distills memories",
+    choreInfo: "Distilling conversations into memories uses the chore model. Change it in General settings.",
+    choreLine: (name: string) => name,
+    choreUnset: "Not set — memories won't be distilled until a chore model is chosen",
+    openGeneral: "Open General",
+  },
 
   time: {
     justNow: "just now",
@@ -328,6 +486,7 @@ export const en = {
     browser: "Built-in browser",
     bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
     intent: "Intent graph",
+    context: "Context",
   },
 
   browser: {
@@ -372,8 +531,6 @@ export const en = {
 
   sidebar: {
     emptyHasTodos: "No task has open carryover items. Wrap one up to collect them here.",
-    emptyActiveStarred: "No active starred tasks. Clear the Starred filter to see the rest.",
-    emptyActive: "No active tasks right now — everything is done.",
     emptyDoneStarred: "No starred tasks done yet.",
     emptyDone: "No done tasks yet. Mark a task done from its menu to find it here.",
     emptyStarred: "No starred tasks yet. Hover a task and click its star to find it here.",
@@ -385,8 +542,6 @@ export const en = {
     orchestratePlanned: "Orchestration mode (planned)",
     filterAll: "All",
     filterAllTip: "All tasks",
-    filterActive: "Active",
-    filterActiveTip: "Tasks still in progress",
     filterDone: "Done",
     filterDoneTip: "Completed tasks",
     filterStarred: "Starred",
@@ -529,6 +684,12 @@ export const en = {
     noUsage: "A rest day. Enjoy it~",
     /** 悬停一格：只给当天总量（日期与星期在格子下面） */
     day: (tokens: string) => `${tokens} tokens`,
+    /** 悬停一格的明细：意图召回那一行（实验功能，不是对话型号） */
+    intentRecall: "Intent recall",
+    /** 明细最后一行：当天花费按官方单价折算 */
+    cost: (usd: string) => `≈ ${usd} (at official prices)`,
+    /** 花费下面单独一行：有一部分用量找不到单价（含意图召回），没算进去 */
+    costPartial: "Some usage has no price, not counted",
     /** 点一格的效果（格子的悬停 title） */
     pinPetHere: "Click to keep the nebula on this day",
     backToToday: "Click to bring the nebula back to today",
@@ -583,7 +744,7 @@ export const en = {
     compactSummary: "folds into a summary",
     choreModel: "Chore model",
     choreModelInfo:
-      "Small housekeeping calls — naming tasks, closing scans, filtering throwaway imports · a fast model is enough · more chores will move here over time",
+      "Small housekeeping calls — naming tasks, revising the wrap-up list from what you say, filtering throwaway imports · a fast model is enough · more chores will move here over time",
     choreModelTip: "Chores use the model the task is running",
     sameAsSession: "Same as session",
     sameAsSessionHint: "Use whichever model the task is running",
@@ -780,14 +941,20 @@ export const en = {
     pasteKey: "Paste your API key",
     hideKey: "Hide key",
     showKey: "Show key",
-    // —— Claude 订阅登录（oauth 目录条目专用）——
-    oauthAccount: "Claude account",
-    oauthLoginButton: "Log in with Claude",
+    // —— 浏览器登录订阅（oauth 目录条目专用：Claude / ChatGPT / GitHub Copilot / xAI）——
+    // 厂商名已经在详情头上了；标签栏只有 76px，「GitHub Copilot account」会折成三行
+    oauthAccount: "Account",
+    oauthLoginButton: (vendor: string) => `Log in with ${vendor}`,
     oauthRelogin: "Log in again",
     oauthWaiting: "Waiting for authorization in the browser…",
     oauthLoggedIn: (account: string | null) => (account === null ? "Logged in" : `Logged in as ${account}`),
-    oauthLoggedOut: "Not logged in — log in to draw on your Claude Pro / Max subscription",
-    oauthNote: "Opens the browser to claude.ai · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins",
+    oauthLoggedOut: (vendor: string) => `Not logged in — log in to draw on your ${vendor} subscription`,
+    oauthNote: (host: string) =>
+      `Opens the browser to ${host} · tokens are stored encrypted on this machine and renewed before expiry, no repeated logins`,
+    /** 设备码登录（Copilot / xAI）：网页已经打开，用户要把码输进去 */
+    oauthDeviceCode: "Enter this code on the page that opened",
+    oauthCopyCode: "Copy code",
+    oauthCancel: "Cancel login",
     oauthRisk:
       "Subscription quota via third-party clients is currently tolerated but can be revoked at any time; use an API key instead if that concerns you",
     test: "Test",
@@ -807,8 +974,11 @@ export const en = {
     editModel: (id: string) => `Edit ${id}`,
     removeModel: (id: string) => `Remove ${id}`,
     apiFormatTip: "API format · set by the provider preset · to switch protocol, add a different entry",
+    /** 多协议条目的协议选择器（KnownProvider.access） */
+    accessLabel: "API format",
+    accessTip: "This provider officially supports several protocols · switching also switches the URL · takes effect after Save",
     urlSuffixTip: "The client appends this path",
-    /** 「添加服务商」目录的三个分区标题（knownProviderGroup） */
+    /** 「添加服务商」目录的四个分区标题（knownProviderGroup） */
     /** 模型服务卡片墙的工具条与卡片 */
     searchProviders: "Search providers, URLs or your own names",
     onlyAdded: "Added only",
@@ -819,11 +989,21 @@ export const en = {
     addAnother: "Add another",
     addAnotherTip: (name: string) => `Add another ${name} (a second account or key)`,
     customUrl: "Your own URL",
+    /** 浏览器登录订阅的卡片底行：没有要填的地址，写登录方式 */
+    browserLogin: "Browser login",
     catalogGroups: {
       api: "API providers",
       plan: "Coding plans",
+      oauth: "Browser-login subscriptions",
       custom: "Custom compatible",
     },
+    /** 还没用真实账号验证过的目录条目（KnownProvider.untested） */
+    untested: "Untested",
+    untestedTip: "We haven't verified this provider with a real account yet",
+    untestedNotice:
+      "Untested: we haven't verified this provider with a real account yet, so its URL and login flow may not match its docs. Ran into a problem? ",
+    untestedNoticeLink: "Pull requests welcome",
+    untestedNoticeEnd: ".",
     /** 目录卡的说明：shared 的 note 是中文，英文界面在这里给英文；查不到退回 shared 原文 */
     knownNote: (id: string, fallback: string) => KNOWN_NOTES[id] ?? fallback,
     /** 目录卡的名字：只有带描述性中文的几条要换（「Anthropic 兼容」），厂商名原样 */
@@ -862,12 +1042,70 @@ export const en = {
     inheritImageTip: "Follows the catalog · this model takes images",
     inheritTextTip: "Follows the catalog · this model takes text only",
     inherit: "Inherit",
+    thinkingLevels: "Thinking",
+    custom: "Custom",
+    inheritThinkingTip: "Follows the catalog · the thinking menu shows these levels",
+    thinkingUnknown: "Unknown · the menu shows every level until the first reply",
+    customThinkingHint: "The thinking menu shows only checked levels.",
+    customThinkingFrom: (source: string, levels: string) => `${source}: ${levels}`,
+    lastThinkingLevelTip: "Keep at least one level. To follow the catalog again, choose Inherit.",
     contextWindow: "Context window",
     maxOutput: "Max output",
     inputCost: "Input cost",
     outputCost: "Output cost",
     unitTokens: "tokens",
     resetTip: "Clear overrides · values fall back to the catalog / built-in defaults",
+    priceChart: {
+      title: "Price · capability",
+      categories: {
+        agent: "Agent overall",
+        overall: "Overall",
+        coding: "Coding",
+        webdev: "WebDev",
+        math: "Math",
+        instruction_following: "Instruction following",
+      },
+      prevCategory: "Previous category",
+      nextCategory: "Next category",
+      basedOnTasks: (count: number) => `From your ${count} task${count === 1 ? "" : "s"}`,
+      referenceBadge: "No local tasks yet · costs are estimates",
+      loading: "Adding up your tasks…",
+      loadFailed: "Couldn't build the chart",
+      noPoints: "Nothing in this category can be plotted yet",
+      xAxis: "Cost per task (log scale)",
+      yAxisRating: "Arena score",
+      yAxisAgent: "Agent net improvement",
+      legendMeasured: "Measured · median of your tasks",
+      legendEstimated: "Estimate · official price × your token mix",
+      legendLevels: "Dashed line = same model, other levels",
+      legendBorrowed: "Dotted = a level the board didn't rate, scored as the top rated level",
+      legendFrontier: "Solid line = Pareto frontier",
+      frontierTitle: "Pareto optimal",
+      frontierNote: "Above the frontier, a higher score costs more.",
+      tipScore: "Score",
+      tipCost: "Cost per task",
+      tipMeasured: (samples: number) => `measured · ${samples} task${samples === 1 ? "" : "s"}`,
+      tipEstimated: "estimate",
+      tipReference: "estimate · reference profile",
+      tipMeasuredFew: (samples: number, cost: string) =>
+        `Measured ${samples} task${samples === 1 ? "" : "s"} ${cost} · too few to plot, shown as an estimate`,
+      tipBoard: "Leaderboard entry",
+      borrowedTag: (level: string) => `scored as ${level}`,
+      tipBorrowed: (level: string) => `The board didn't rate this level; the score is ${level}'s. Kept off the Pareto frontier.`,
+      tipFolded: (level: string, samples: number, cost: string) =>
+        `${level} shares this point: not rated, borrows this score; measured ${samples} task${samples === 1 ? "" : "s"} ${cost}, too few, so estimated`,
+      levelUnlabeled: "level not on board",
+      unranked: "Not on this board",
+      unpriced: "No official price",
+      unpricedTip: "Fill in this model's rates in its settings to place it on the chart",
+      borrowNote:
+        "Levels the board didn't rate borrow the model's top rated level's score (dotted). The board skipping a level means it wasn't worth testing on its own — for real tasks, prefer the levels the board rated.",
+      explainer:
+        "A task is one thing you confirmed as done when wrapping up a session: its cost is those turns added up, counted toward the model and thinking level that used the most tokens in them. A sub-session that reports back counts as one task. Sessions never wrapped up are not measured.",
+      planNote: "Plans and subscriptions are converted at official prices.",
+      source: (date: string, revision: string) =>
+        `Scores: Arena (arena.ai) · lmarena-ai/leaderboard-dataset · CC BY 4.0 · board ${date} · revision ${revision} · subsets and columns selected by Orbita`,
+    },
   },
 
   migration: {
@@ -1130,6 +1368,8 @@ export const en = {
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
+    // 收尾扫描是会话里的一轮、不设超时（审核 S-4）：出口是输入卡的停止键，这里说出来
+    placeholderScanning: "Wrapping up this task — press Stop anytime to end the scan",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
     noProvider: "Add a provider with at least one model in Settings, then send a message.",
     readOnlyTask:
@@ -1163,6 +1403,8 @@ export const en = {
     compactNow: "Compact context now",
     compactReadOnly: "this task can't be continued",
     compactWait: "wait for this turn",
+    compactSuggestDone: "Consider marking this done and continuing in a new task",
+    compactSuggestNew: "Consider continuing in a new task",
     showLess: "Show less",
     showMore: "Show more",
     copied: "Copied",
@@ -1382,6 +1624,8 @@ export const en = {
     context: "Context",
     unknownUntilReply: "unknown until next reply",
     cost: "Cost",
+    compacted: "Compacted",
+    compactedTimes: (n: number) => (n === 1 ? "1 time" : `${n} times`),
     speed: (n: number) => `${n} tok/s`,
   },
 
@@ -1492,16 +1736,44 @@ export const en = {
 
   carryover: {
     wrapUp: "Wrap up this task",
-    intro:
-      "The agent scanned this task for loose ends. Uncheck what you don't want to carry over; titles can be edited in place.",
+    intro: (done: number, left: number) =>
+      `The agent looked back over this task: ${plural(done, "thing")} done, ${plural(left, "item")} left. Fix it here directly, or tell it what's wrong.`,
     clickToEdit: "Click to edit",
-    addOwnPlaceholder: "Add your own item…",
-    addOwn: "Add your own item",
-    addItem: "Add item",
+    doneGroup: "Done",
+    doneGroupNote: (count: number) => `${count} · each one is a task on the price chart`,
+    leftGroup: "Left to do",
+    leftGroupNote: (count: number) => `${count} · go to carryovers, pick up any time`,
+    turns: (from: number, to: number) => (from === to ? `Turn ${from}` : `Turns ${from}–${to}`),
+    noTurns: "No turns",
+    jumpToTurns: "Jump back to this part of the conversation",
+    addDone: "Add something done",
+    addLeft: "Add something left to do",
+    newItemPlaceholder: "One line…",
+    removeDone: "Don't count this",
+    removeLeft: "Remove",
+    moveToLeft: "Move to left to do",
+    moveToDone: "Move to done",
+    feedbackPlaceholder: "Something off? Tell the agent (e.g. \"1 and 2 are one thing\")",
+    feedbackSend: "Send to the agent",
+    youSaid: "You said",
+    revising: "The agent is revising the list as you said…",
+    reviseFailed: (error: string) => `Not revised: ${error} (the list is unchanged)`,
+    reviseUnreadable: "Couldn't read the agent's reply — the list is unchanged. Try saying it another way.",
+    revised: (summary: string) => `As you said: ${summary}`,
+    undoRevise: "Undo this revision",
+    expand: "Show the list",
+    change: {
+      merged: "Merged",
+      "moved-to-left": "Moved from done",
+      "moved-to-done": "Moved from left",
+      added: "New",
+      edited: "Edited",
+    },
+    confirm: (done: number, left: number) => `Confirm: ${done} done · ${left} left`,
     discardAndDone: "Discard & mark done",
     keepOpen: "Keep open",
-    keepAndDone: (count: number) => (count > 0 ? `Keep ${count} & mark done` : "Mark done"),
     scanResult: "Closing scan result",
+    doneCount: (count: number) => `${plural(count, "thing")} done`,
     itemsToCarry: (count: number) => `${plural(count, "item")} to carry over`,
     nothingToCarry: "Nothing to carry over",
   },
@@ -1512,15 +1784,14 @@ export const en = {
     pickModelFirst: "Pick a model first.",
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
-    scanTimeout: "The leftover scan didn't finish in time — marked done without a checklist.",
     scanUnreadable:
-      "Couldn't read the scan result — marked done without a checklist. If this keeps happening, try a different chore model in Settings.",
-    scanNothing: "The leftover scan found nothing — marked done.",
+      "Didn't get a wrap-up list it could read — marked done. Retry to scan again; if it keeps happening, try another model.",
     queuedBeforeWrapUp: "There are queued messages in this task — send or withdraw them before wrapping up.",
     noAgentSession: "This task cannot be scanned (no agent session) — marked done directly.",
     nothingSaid: "Nothing was ever said in this task — marked done directly.",
-    doneNoCarryovers: "Marked done — no carryover items were kept.",
-    doneWithCarryovers: (count: number) => `Marked done with ${plural(count, "carryover item")}.`,
+    scanNoNewTurns: "Nothing new since the last wrap-up — marked done directly.",
+    wrapupConfirmed: (done: number, left: number) =>
+      `Marked done: ${plural(done, "thing")} done, ${plural(left, "item")} left to do.`,
     checklistDiscarded: "Marked done — the checklist was discarded.",
   },
 
@@ -1781,6 +2052,68 @@ export const en = {
     cardVerdictSkipped: "Left blank · used as-is",
     cardVerdictPending: "Waiting for your confirmation",
     cardVerdictUnasked: "Not asked",
+  },
+
+  contextPanel: {
+    title: "Context",
+    /** 胶囊「?」：口径说明（估算、灰显） */
+    help:
+      "What the agent is holding in its context right now, grouped by where it came from. Token counts are estimates (about ±30%). Dimmed rows were folded into a compaction summary and are no longer there word for word.",
+    used: "In use",
+    helpLabel: "How this panel counts",
+    scopeTurn: "This turn",
+    scopeTask: "Whole task",
+    noSession: "Open a task to see what the agent is holding in its context.",
+    usage: (used: string, window: string, percent: number) => `${used} / ${window} · ${percent}%`,
+    usageUnknown: (window: string) => `Unknown / ${window}`,
+    /**
+     * 用量条下「其余」那一行 = 真实总量 − 各来源估算：对话正文、工具的 JSON 定义（不在系统
+     * 提示里，哪组都不算它，空会话也有好几 k）；本轮视野还含此前各轮带进来的东西
+     */
+    restTurn: "Earlier turns, conversation and tool definitions",
+    restTask: "Conversation and tool definitions",
+    approx: (tokens: string) => `~${tokens}`,
+    groups: {
+      rules: "Rules and instructions",
+      attach: "You attached",
+      files: "Files",
+      web: "Web pages",
+      tasks: "Other sessions",
+      mcp: "MCP servers",
+      skills: "Skills",
+    },
+    rulesUnknown: "Shown once the next turn starts",
+    ruleGlobal: "Global",
+    ruleProject: "Project",
+    skillsIndex: (count: number) => `Skill index · ${count}`,
+    builtin: "Orbita and core instructions",
+    quote: (turn: number | null, fromUser: boolean) =>
+      `Quoted from ${fromUser ? "you" : "the agent"}${turn === null ? "" : `, turn ${turn}`}`,
+    pasted: "Pasted text",
+    pastedChars: (count: number) => `${count} chars`,
+    images: (count: number) => (count === 1 ? "1 image" : `${count} images`),
+    folderRef: "Folder",
+    times: (count: number) => `× ${count}`,
+    rangeAll: "Whole file",
+    rangeLines: (from: number, to: number | null) => (to === null ? `From line ${from}` : `Lines ${from}–${to}`),
+    rangePages: (from: number, to: number | null) => (to === null ? `From page ${from}` : `Pages ${from}–${to}`),
+    rangePagesDefault: "First 20 pages",
+    outside: "Outside the working folder",
+    root: "Working folder",
+    catalog: "Session list",
+    external: "External",
+    rounds: (rounds: string) => `Rounds ${rounds}`,
+    named: "Named in your message",
+    readOnDemand: "Read on demand",
+    turnOf: (turn: number) => `Turn ${turn}`,
+    gone: "Compacted",
+    loading: (count: number) => (count > 0 ? `Loading earlier records… ${count} so far` : "Loading earlier records…"),
+    capped: "This task is too long to load in full; the earliest turns are left out.",
+    loadError: (message: string) => `Couldn't load earlier records: ${message}`,
+    emptyTurn: "Nothing new came into the context this turn.",
+    emptyTask: "Nothing has come into the context yet.",
+    /** 输入框旁上下文环菜单里的入口 */
+    open: "View context",
   },
 };
 
