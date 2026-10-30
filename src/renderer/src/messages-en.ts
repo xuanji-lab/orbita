@@ -1824,7 +1824,7 @@ export const en = {
     doneGroup: "Done",
     doneGroupNote: (count: number) => `${count} · each one is a task on the price chart`,
     leftGroup: "Left to do",
-    leftGroupNote: (count: number) => `${count} · go to carryovers, pick up any time`,
+    leftGroupNote: (count: number) => `${count} · goes to For later, pick up any time`,
     turns: (from: number, to: number) => (from === to ? `Turn ${from}` : `Turns ${from}–${to}`),
     noTurns: "No turns",
     jumpToTurns: "Jump back to this part of the conversation",

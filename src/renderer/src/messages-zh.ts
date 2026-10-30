@@ -1655,7 +1655,7 @@ export const zh: Messages = {
     doneGroup: "做完的事",
     doneGroupNote: (count) => `${count} 件 · 价格图按件算`,
     leftGroup: "留下的事",
-    leftGroupNote: (count) => `${count} 项 · 进遗留清单，可以接着做`,
+    leftGroupNote: (count) => `${count} 项 · 进「以后再做」，可以接着做`,
     turns: (from, to) => (from === to ? `第 ${from} 轮` : `第 ${from}–${to} 轮`),
     noTurns: "没指定轮次",
     jumpToTurns: "跳回对话里的这一段",
