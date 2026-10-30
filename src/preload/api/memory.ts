@@ -8,6 +8,11 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   MemoryEntriesRequest,
   MemoryEntriesResponse,
+  MemoryHistoryControl,
+  MemoryHistoryEstimate,
+  MemoryHistoryEstimateRequest,
+  MemoryHistoryStartRequest,
+  MemoryHistoryStatus,
   MemoryMutation,
   MemoryMutationOutcome,
   MemoryScopeSummary,
@@ -37,4 +42,13 @@ export const memoryApi = {
   /** 下载当前选中的 GGUF；进度走 agent.onEvent 的 vectorDownload。 */
   vectorDownload: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(ipcChannels.memoryVectorDownload),
+  /** 从历史生成：全部作用域（只数会话）+ 点名作用域的轮数 / 预计调用 + 当前任务 */
+  historyEstimate: (request: MemoryHistoryEstimateRequest): Promise<MemoryHistoryEstimate> =>
+    ipcRenderer.invoke(ipcChannels.memoryHistoryEstimate, request),
+  /** 开始（已有任务在跑 / 暂停中不另起）；进度走 agent.onEvent 的 memoryHistory */
+  historyStart: (request: MemoryHistoryStartRequest): Promise<MemoryHistoryStatus> =>
+    ipcRenderer.invoke(ipcChannels.memoryHistoryStart, request),
+  historyControl: (request: MemoryHistoryControl): Promise<MemoryHistoryStatus> =>
+    ipcRenderer.invoke(ipcChannels.memoryHistoryControl, request),
+  historyStatus: (): Promise<MemoryHistoryStatus> => ipcRenderer.invoke(ipcChannels.memoryHistoryStatus),
 } as const;

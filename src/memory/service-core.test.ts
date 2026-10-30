@@ -1530,3 +1530,205 @@ test("回退在提取调用回来之后、落盘之前到达：落下的被撤�
   assert.equal(entry?.status, "muted");
   assert.equal(entry?.mutedReason, MEMORY_MUTED_REVERTED);
 });
+
+/* ---------- 从历史生成 ---------- */
+
+/** 历史轮的载荷（会话 h1、作用域 ws-1） */
+function historyPayload(turn: number, at: number, overrides: Record<string, unknown> = {}): Parameters<MemoryServiceCore["historyTurn"]>[0] {
+  return {
+    sessionId: "h1",
+    scopeId: "ws-1",
+    turn: { turn, at, userText: `第 ${turn} 轮的话`, assistantText: `第 ${turn} 轮的回答` },
+    closeAfter: false,
+    chore: CHORE,
+    ...overrides,
+  } as Parameters<MemoryServiceCore["historyTurn"]>[0];
+}
+
+test("从历史生成：按历史间隔收尾（不看墙钟）、closeAfter 收尾；提取的「当前日期」是段的历史日期", async () => {
+  const calls: { system: string; prompt: string }[] = [];
+  const core = new MemoryServiceCore({
+    callModel: async (system, prompt) => {
+      calls.push({ system, prompt });
+      return system.includes("切分器") ? "same" : "[]";
+    },
+    // 墙钟在一个多月之后：若按墙钟判闲置，第一轮之后每一轮都会被当成闲置收尾
+    now: () => new Date(2026, 9, 30, 15, 0).getTime(),
+    idleCloseMs: 25,
+    historyGapMs: 10 * 60_000,
+    historyRetryDelaysMs: [],
+    log: () => undefined,
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const base = new Date(2026, 8, 1, 10, 0).getTime();
+  const first = await core.historyTurn(historyPayload(1, base));
+  assert.equal(first.calls, 0); // 新起一段，不问模型
+  await core.historyTurn(historyPayload(2, base + 5 * 60_000)); // 间隔 5 分钟：问一次切段，同一件事
+  const gap = await core.historyTurn(historyPayload(3, base + 25 * 60_000)); // 间隔 20 分钟：直接收尾
+  assert.equal(gap.closed, 1);
+  const last = await core.historyTurn(historyPayload(4, base + 27 * 60_000, { closeAfter: true }));
+  assert.equal(last.closed, 1);
+  const segments = calls.filter((call) => call.system.includes("切分器"));
+  assert.equal(segments.length, 2); // 第 2、4 轮各一次；第 3 轮按间隔直接切
+  const extracts = calls.filter((call) => !call.system.includes("切分器"));
+  assert.equal(extracts.length, 6);
+  assert.ok(extracts.every((call) => call.prompt.startsWith("<date>2026-09-01</date>")));
+  const store = new EpisodeStore(dir);
+  const archived = await store.listArchived();
+  assert.deepEqual(archived.map((episode) => episode.turns.map((turn) => turn.turn)), [[1, 2], [3, 4]]);
+  assert.equal(archived[0]!.openedAt, base); // 段的时间是历史时间
+  assert.deepEqual(await store.listHistoryOpen(), []);
+});
+
+test("从历史生成：历史开段与实时开段分开存，同一会话两边互不顶掉", async () => {
+  const { core } = stubModel({ segment: "same" }, { idleMs: 60_000 });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.turnSettled(turnPayload({ sessionId: "h1", turn: 50, at: 9_000_000 }));
+  await core.historyTurn(historyPayload(3, 1000));
+  const store = new EpisodeStore(dir);
+  assert.deepEqual((await store.loadOpen("h1"))?.turns.map((turn) => turn.turn), [50]);
+  assert.deepEqual((await store.loadHistoryOpen("h1"))?.turns.map((turn) => turn.turn), [3]);
+  // 段账本：两处的轮都算处理过
+  assert.deepEqual([...((await store.processedTurns()).get("h1") ?? [])].sort((a, b) => a - b), [3, 50]);
+});
+
+test("从历史生成：调用失败按退避重试，用尽记 failed、段留在待提取，不抛也不中断", async () => {
+  const waits: number[] = [];
+  let factCalls = 0;
+  const core = new MemoryServiceCore({
+    callModel: async (system) => {
+      if (system.includes("提取「事实」")) {
+        factCalls += 1;
+        return null; // 事实提取一直失败
+      }
+      if (system.includes("提取「偏好」")) return null;
+      return "[]";
+    },
+    historyRetryDelaysMs: [5, 7],
+    sleep: async (ms) => {
+      waits.push(ms);
+    },
+    log: () => undefined,
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const outcome = await core.historyTurn(historyPayload(1, 1000, { closeAfter: true }));
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.closed, 1);
+  assert.equal(outcome.failed, 2); // 事实、偏好两类重试用尽
+  assert.equal(factCalls, 3); // 1 次 + 2 次重试
+  assert.deepEqual(waits, [5, 7, 5, 7]);
+  assert.equal(outcome.calls, 3 + 3 + 1);
+  const pending = await new EpisodeStore(dir).listPending();
+  assert.equal(pending.length, 1);
+  assert.deepEqual(pending[0]!.extracted, { fact: false, preference: false, insight: true });
+});
+
+test("从历史生成：历史步不进实时队列——模型卡在历史提取上时，实时轮照常并入", async () => {
+  let release: () => void = () => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const core = new MemoryServiceCore({
+    callModel: async (system, prompt) => {
+      if (prompt.includes("历史卡住")) await hold;
+      return system.includes("切分器") ? "same" : "[]";
+    },
+    idleCloseMs: 60_000,
+    historyRetryDelaysMs: [],
+    log: () => undefined,
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const stuck = core.historyTurn(
+    historyPayload(1, 1000, {
+      closeAfter: true,
+      turn: { turn: 1, at: 1000, userText: "历史卡住", assistantText: "答" },
+    }),
+  );
+  await core.turnSettled(turnPayload({ sessionId: "live", turn: 1, at: 5000 }));
+  assert.deepEqual((await new EpisodeStore(dir).loadOpen("live"))?.turns.map((turn) => turn.turn), [1]);
+  release();
+  assert.equal((await stuck).closed, 1);
+});
+
+test("从历史生成：没配家务活模型 / 没初始化回 error，不碰盘", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => "[]", log: () => undefined });
+  const before = await core.historyTurn({ ...historyPayload(1, 1000), chore: undefined });
+  assert.match(before.error ?? "", /没初始化/);
+  const dir = await tempDir();
+  await core.init(dir);
+  const noChore = await core.historyTurn({ ...historyPayload(1, 1000), chore: undefined });
+  assert.match(noChore.error ?? "", /家务活模型/);
+  assert.deepEqual(await new EpisodeStore(dir).listHistoryOpen(), []);
+});
+
+test("从历史生成：historyFlush 把全部历史开段收尾提取", async () => {
+  const { core } = stubModel({ segment: "same" });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  await core.historyTurn(historyPayload(1, 1000));
+  await core.historyTurn(historyPayload(1, 2000, { sessionId: "h2" }));
+  const outcome = await core.historyFlush({ chore: CHORE });
+  assert.equal(outcome.closed, 2);
+  const store = new EpisodeStore(dir);
+  assert.deepEqual(await store.listHistoryOpen(), []);
+  assert.equal((await store.listArchived()).length, 2);
+});
+
+test("从历史生成：同一个待提取段不会被历史步与实时补提同时提取（重复条目）", async () => {
+  let release: () => void = () => undefined;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let factCalls = 0;
+  const core = new MemoryServiceCore({
+    callModel: async (system) => {
+      if (system.includes("切分器")) return "same";
+      if (system.includes("提取「事实」")) {
+        factCalls += 1;
+        await hold;
+        return JSON.stringify([{ text: "只该有一条的事实", keywords: [], turns: [1] }]);
+      }
+      return "[]";
+    },
+    idleCloseMs: 60_000,
+    historyRetryDelaysMs: [],
+    log: () => undefined,
+  });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const history = core.historyTurn(historyPayload(1, 1000, { closeAfter: true }));
+  // 等历史段进了待提取、卡在事实提取上
+  while (factCalls === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+  // 同一会话的实时轮：integrateTurn 会扫到这个会话的待提取段并补提
+  const live = core.turnSettled(turnPayload({ sessionId: "h1", turn: 9, at: 9000 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  release();
+  await Promise.all([history, live]);
+  assert.equal(factCalls, 1);
+  const facts = [...(await allEntries(dir)).values()].filter((item) => item.text === "只该有一条的事实");
+  assert.equal(facts.length, 1);
+});
+
+test("restorePrevious：从历史补进来的旧说法排在链里新说法之前——恢复旧说法照样是「旧回 active、新 muted」", async () => {
+  const core = new MemoryServiceCore({ callModel: async () => null, idleCloseMs: 60_000, log: () => undefined });
+  const dir = await tempDir();
+  await core.init(dir, CHORE);
+  const entries = new MemoryEntryStore(dir);
+  const wsToken = entries.tokenOf("ws-1");
+  const at = (time: number): MemoryEpisode => ({ ...SEED_EPISODE, episodeId: `ep_${time}`, lastAt: time, turns: [{ turn: 1, at: time, userText: "u", assistantText: "a" }], fromTurn: 1, toTurn: 1 });
+  const [newer] = await entries.appendScope("ws-1", at(29_000), [
+    { type: "preference", text: "汇报分三点", reason: "r", keywords: [], turns: [1] },
+  ]);
+  const [older] = await entries.appendScope("ws-1", at(20_000), [
+    { type: "preference", text: "汇报写整段", reason: "r", keywords: [], turns: [1], conflictWith: newer!.id },
+  ]);
+  const restored = await core.mutate({ op: "restorePrevious", token: wsToken, entryId: newer!.id });
+  assert.equal(restored.ok, true);
+  const after = new Map((await entries.listByToken(wsToken)).map((item) => [item.id, item]));
+  assert.equal(after.get(older!.id)?.status, "active");
+  assert.equal(after.get(newer!.id)?.status, "muted");
+});

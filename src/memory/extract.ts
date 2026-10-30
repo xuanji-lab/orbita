@@ -68,7 +68,8 @@ ${OUTPUT_RULES}`;
 
 export const PREFERENCE_SYSTEM_PROMPT = `你是记忆提取器。从一段用户与 agent 的对话事件里提取「偏好」：用户的选择、倾向、约束——喜欢怎么做、要求什么、排斥什么。
 每条必须带 reason（为什么：用户的哪句话、什么情境表明了这一点），并把成立的场景写进 text（不默认永远成立）。
-输入里可能带一节 <preferences>：这个工作区已有的旧偏好（各带 id）。若新条目与其中某条矛盾（用户改了主意、推翻了旧约束），给新条目加 "conflictsWith": "那条的id"——那条旧偏好会被直接标为过时、不再召回，所以只在用户确实改了主意时才加；只是相关、补充、重述都不算矛盾，拿不准就不加。没有 <preferences> 节时永远不加。
+输入里可能带一节 <preferences>：这个工作区已有的偏好（各带 id 与记下它的日期）。若新条目与其中某条矛盾（同一件事上说法相反、一方推翻另一方的约束），给新条目加 "conflictsWith": "那条的id"——系统会按日期把较早的那条标为过时、不再召回，所以只在确实矛盾时才加；只是相关、补充、重述都不算矛盾，拿不准就不加。没有 <preferences> 节时永远不加。
+<date> 是这段对话发生的日期。<preferences> 里日期比 <date> 晚的条目是这段对话**之后**用户的说法：这段里的话不是对它的改口，而是它之前的旧说法——矛盾照样报 conflictsWith（系统据日期把这段的旧说法记为过时），但 text 里要写清这是 <date> 那时的说法，不要写成现行规则。
 用户只对这一次回答提的格式要求（「一句话说」「三句话以内」「简单回一句」）只管这一轮，不是偏好，不要记。
 "crossWorkspace": true 表示这条偏好与当前项目无关、对用户所有工作区都成立；它会被直接记到所有工作区、每轮都带上，所以只在用户明说这是长期的个人习惯（「我一直……」「以后都……」「不管哪个项目都……」）时才写 true。和这个项目的代码、流程、工具相关的写 false；拿不准写 false。
 只写具体对象或场景上的偏好；跨场景的一般原则属于经验，这里不写。
@@ -102,6 +103,7 @@ function formatDateTime(at: number): string {
 
 export interface ExtractPromptInput {
   turns: readonly MemoryEpisodeTurn[];
+  /** 「当前日期」锚：这段对话发生的时间（段尾一轮的时间），相对时间按它换算 */
   now: number;
   /** 偏好的冲突候选（同作用域最相近的旧偏好）；仅偏好调用带 */
   candidates?: readonly MemoryEntry[];
@@ -117,7 +119,7 @@ export function buildExtractPrompt(input: ExtractPromptInput): string {
       : "";
   const preferences =
     input.candidates !== undefined && input.candidates.length > 0
-      ? `<preferences>\n${input.candidates.map((entry) => `[${entry.id}] ${entry.text}`).join("\n")}\n</preferences>\n`
+      ? `<preferences>\n${input.candidates.map((entry) => `[${entry.id}] (${formatDate(entry.at)}) ${entry.text}`).join("\n")}\n</preferences>\n`
       : "";
   const turns = input.turns
     .map((turn) =>

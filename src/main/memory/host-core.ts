@@ -22,6 +22,8 @@ import type {
   MemoryBackfillProgress,
   MemoryChoreModel,
   MemoryDownloadProgress,
+  MemoryEpisodeTurn,
+  MemoryHistoryStepOutcome,
   MemoryHit,
   MemoryMutation,
   MemoryMutationOutcome,
@@ -115,6 +117,8 @@ export class MemoryServiceHostCore {
     string,
     { resolve: (outcome: MemoryAgentOutcome) => void; timer: NodeJS.Timeout }
   >();
+  /** 从历史生成的一步（不设超时：一步可能含多段提取与分钟级退避；服务死了由 dropChild 回 null） */
+  private readonly pendingHistorySteps = new Map<string, (outcome: MemoryHistoryStepOutcome | null) => void>();
   private readonly pendingVectorStates = new Map<
     string,
     { resolve: (state: VectorStateReply | null) => void; timer: NodeJS.Timeout }
@@ -192,6 +196,12 @@ export class MemoryServiceHostCore {
           clearTimeout(pending.timer);
           this.pendingAgentTools.delete(message.requestId);
           pending.resolve(message.ok ? { ok: true, entries: message.entries } : { ok: false, error: message.error });
+        }
+        if (message.type === "historyStepResult") {
+          const resolve = this.pendingHistorySteps.get(message.requestId);
+          if (resolve === undefined) return;
+          this.pendingHistorySteps.delete(message.requestId);
+          resolve(message.outcome);
         }
         if (message.type === "vectorStateResult") {
           const pending = this.pendingVectorStates.get(message.requestId);
@@ -314,6 +324,30 @@ export class MemoryServiceHostCore {
     });
   }
 
+  /**
+   * 从历史生成的一步：一条历史轮（turn）或全部历史开段收尾（flush）。服务处理完才回执；
+   * 服务不在 / 中途退出回 null（调用方把任务停在这一步，下次继续从段文件重算进度）。
+   */
+  historyStep(
+    input:
+      | { kind: "turn"; sessionId: string; scopeId: string; turn: MemoryEpisodeTurn; closeAfter: boolean }
+      | { kind: "flush" },
+  ): Promise<MemoryHistoryStepOutcome | null> {
+    const child = this.child;
+    if (child === null) return Promise.resolve(null);
+    const requestId = `${this.seq += 1}:${randomUUID()}`;
+    const chore = this.chore !== undefined ? { chore: this.chore } : {};
+    return new Promise((resolve) => {
+      this.pendingHistorySteps.set(requestId, resolve);
+      if (input.kind === "flush") {
+        child.postMessage({ type: "historyFlush", requestId, ...chore });
+        return;
+      }
+      const { kind: _kind, ...rest } = input;
+      child.postMessage({ type: "historyTurn", requestId, ...rest, ...chore });
+    });
+  }
+
   /** 向量配置下发（设置变了 / 下载完成 / 服务拉起后同步）。服务不在就丢——
    * 服务下一次拉起时 init 后主进程会再同步一次（见 index.ts 的 syncVectorConfig）。 */
   setVectorConfig(config: MemoryVectorServiceConfig | null): void {
@@ -433,6 +467,8 @@ export class MemoryServiceHostCore {
       pending.resolve(null);
     }
     this.pendingVectorStates.clear();
+    for (const [, resolve] of this.pendingHistorySteps) resolve(null);
+    this.pendingHistorySteps.clear();
     // 下载随服务一起没了：替它报终态，否则界面停在最后一次进度的百分比。主动停服务
     // （开关关 / 退出）算取消，自己死掉算失败（用户点「重新下载」即可）
     const downloadRequestId = this.downloadRequestId;
