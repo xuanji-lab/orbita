@@ -178,4 +178,23 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "lean-rail",
+    icon: "panel-right",
+    name: { zh: "精简右栏", en: "Lean right rail" },
+    summary: {
+      zh: "右栏常驻只留「这条任务」、终端、内置浏览器，文件预览只在打开时出现；审查、上下文、文件、能力、记忆、意图、遗留、归档、通知收进「更多」，各自原来的入口照常能用。本机记下每个面板打开了几次（不上传），统计在本页底部。",
+      en: "The right rail keeps only This task, the terminal and the built-in browser; file preview appears only while it is open. Review, context, files, abilities, memory, intent, carryovers, archive and notifications move into More, and every other way in still works. This computer counts how often each panel is opened (nothing is uploaded); the counts are at the bottom of this page.",
+    },
+    changelog: [
+      {
+        pr: null,
+        date: "2026-10-30",
+        note: {
+          zh: "首版：精简右栏 + 本机的面板打开次数。",
+          en: "First version: the lean rail and local counts of how often each panel is opened.",
+        },
+      },
+    ],
+  },
 ];
