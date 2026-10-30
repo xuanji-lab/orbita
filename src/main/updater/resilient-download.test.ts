@@ -14,6 +14,7 @@ import {
   downloadFile,
   DownloadCancelledError,
   DownloadChecksumError,
+  DownloadUnsupportedError,
   headerOf,
   planParts,
   totalFromContentRange,
@@ -266,6 +267,27 @@ describe("downloadFile", () => {
       const written = await readFile(path);
       assert.equal(written.length, data.length);
       assert.equal(sha512(written), sha512(data));
+    });
+  });
+
+  test("200 但没给 Content-Length → 说「无法确定大小」，不误报「更新包是 0 字节」", async () => {
+    const data = Buffer.alloc(1000, 1);
+    // 曾经 Number(null) === 0 把「不知道大小」当成长度 0，报成了「更新包是 0 字节」
+    const transport: RangeTransport = {
+      async open(_url, _headers, range) {
+        return responseOf(data, range, { status: 200, headers: {} });
+      },
+    };
+    await withTempFile(async (path) => {
+      await assert.rejects(
+        downloadFile(transport, { url: URL_OK, destination: path, headers: {} }),
+        (error: unknown) => {
+          assert.ok(error instanceof DownloadUnsupportedError);
+          assert.match(error.message, /无法确定更新包大小/);
+          assert.doesNotMatch(error.message, /0 字节/);
+          return true;
+        },
+      );
     });
   });
 });

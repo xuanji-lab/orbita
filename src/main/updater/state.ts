@@ -131,6 +131,22 @@ export function reduceUpdater(state: UpdateState, action: UpdaterAction): Update
   }
 }
 
+/**
+ * 这次检查要不要给下载让路。
+ *
+ * 定时检查（4h 一次）与下载并发时，provider 会清空重写自己的资产表
+ * （github-api-provider.ts 的 getLatestVersion），而差分下载正读着那张表解析
+ * blockmap / 安装包地址——并发检查会把下载脚下的资产映射换掉（sha512 兜底归兜底，
+ * 不该靠它收这种竞态）。所以下载进行中（用户已按下下载、尚未落成 downloaded / 取消）
+ * 时跳过检查，下一个 4h 再说；手动检查同一条路（下载中界面本来就没有检查按钮）。
+ *
+ * `activeDownload` 与状态机判两遍：download() 先置 activeDownload 再切状态、事件到达
+ * 顺序也不定，两边任一在「下载中」都让路，不留窗口。
+ */
+export function checkYieldsToDownload(state: UpdateState, activeDownload: string | null): boolean {
+  return activeDownload !== null || state.kind === "downloading";
+}
+
 interface ParsedVersion {
   /** 数字段（`1.2.3` → [1, 2, 3]）；段数不定，比较时缺的按 0 */
   numbers: number[];

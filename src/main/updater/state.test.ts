@@ -7,7 +7,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { UpdateNote, UpdateRelease, UpdateState } from "../../shared/updater.ts";
-import { isNewerVersion, reduceUpdater, updateSupport } from "./state.ts";
+import { checkYieldsToDownload, isNewerVersion, reduceUpdater, updateSupport } from "./state.ts";
 
 const release = (
   version: string,
@@ -208,6 +208,27 @@ describe("isNewerVersion —— 版本比较", () => {
     assert.equal(isNewerVersion("0.1.16", "nightly"), false);
     assert.equal(isNewerVersion("0.1.16 发布", "0.1.15"), false);
     assert.equal(isNewerVersion("0.1.16.1.2", "0.1.15"), true);
+  });
+});
+
+describe("checkYieldsToDownload —— 下载中检查让路（provider 资产表的竞态）", () => {
+  test("下载进行中都让路：按钮已按下（activeDownload 在手）或已进 downloading 态", () => {
+    const available = reduceUpdater({ kind: "checking" }, { type: "available", release: release("0.2.0") });
+    const downloading = reduceUpdater(available, { type: "download-started" });
+    assert.equal(checkYieldsToDownload(downloading, null), true, "downloading 态让路");
+    assert.equal(checkYieldsToDownload(available, "0.2.0"), true, "按钮已按下但状态还没切过去时也她不掉");
+  });
+
+  test("其余状态照常检查（含已下载完：安装包在盘上，检查不动它）", () => {
+    assert.equal(checkYieldsToDownload({ kind: "idle" }, null), false);
+    assert.equal(checkYieldsToDownload({ kind: "checking" }, null), false);
+    assert.equal(checkYieldsToDownload({ kind: "available", release: release("0.2.0") }, null), false);
+    assert.equal(checkYieldsToDownload({ kind: "up-to-date", version: "0.1.15" }, null), false);
+    assert.equal(checkYieldsToDownload({ kind: "downloaded", version: "0.2.0" }, null), false);
+    assert.equal(
+      checkYieldsToDownload({ kind: "error", stage: "check", failure: "network", message: "x" }, null),
+      false,
+    );
   });
 });
 

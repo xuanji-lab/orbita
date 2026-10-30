@@ -137,7 +137,10 @@ export function createRecentReleases(options: RecentReleasesOptions): RecentRele
   const now = options.now ?? Date.now;
   let cached: { at: number; releases: readonly RecentRelease[] } | null = null;
 
-  /** 拉一版的 latest.yml 读说明。transient = 网络层失败（超时 / 断网 / 5xx），不是「没有这份文件」 */
+  /**
+   * 拉一版的 latest.yml 读说明。transient = 这次没拿到（限流 403/429、其它 4xx、5xx、
+   * 网络错误），不是「没有这份文件」——只有 404 是确定的没有。
+   */
   async function withNotes(
     release: Omit<RecentRelease, "notes">,
     notesUrl: string | null,
@@ -148,8 +151,10 @@ export function createRecentReleases(options: RecentReleasesOptions): RecentRele
       const raw = await client.getText(notesUrl, "application/octet-stream");
       return { release: { ...release, notes: notesFromChannelFile(raw) }, transient: false };
     } catch (error) {
-      // 404 = 这一版真的没传 latest.yml（确定的「没有」，可以缓存）；5xx / 断网算暂时的
-      const transient = !(error instanceof GitHubHttpError) || error.statusCode >= 500;
+      // 只有 404 = 这一版真的没传 latest.yml（确定的「没有」，可以连同列表一起缓存）；
+      // 403 / 429（限流）、其它 4xx、5xx、断网都只是「这次没拿到」：不写缓存，下次展开再试
+      // （修之前 403/429 也被当成「没有说明」缓存 10 分钟，限流一次说明就丢十分钟）
+      const transient = !(error instanceof GitHubHttpError) || error.statusCode !== 404;
       return { release: { ...release, notes: null }, transient };
     }
   }
@@ -167,8 +172,8 @@ export function createRecentReleases(options: RecentReleasesOptions): RecentRele
         // 每一版各拉一份 latest.yml（并行，最多 PER_PAGE 份）；单份失败只让那一行没有说明
         const fetched = await Promise.all(listed.map(({ notesUrl, ...release }) => withNotes(release, notesUrl)));
         const releases = fetched.map((entry) => entry.release);
-        // 有一份是网络层失败（不是「这一版没传 latest.yml」）就不缓存：下次展开再试，别把
-        // 一次抖动记成十分钟的「没有说明」
+        // 有一份是「这次没拿到」（限流 / 断网 / 5xx，不是「这一版没传 latest.yml」）就不缓存：
+        // 下次展开再试，别把一次抖动记成十分钟的「没有说明」
         if (fetched.every((entry) => !entry.transient)) cached = { at: now(), releases };
         return { ok: true, releases };
       } catch (error) {

@@ -47,7 +47,7 @@ import type { GitHubClient } from "./github-client.ts";
 import { appNotesOf } from "./notes.ts";
 import { publishTarget, releasesUrl } from "./releases-url.ts";
 import { installResilientDownload } from "./resilient-executor.ts";
-import { reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
+import { checkYieldsToDownload, reduceUpdater, updateSupport, type UpdaterAction } from "./state.ts";
 
 /** 启动后延迟首查：错开启动时那一串磁盘 / 网络活动，别和界面首帧抢 */
 const FIRST_CHECK_DELAY_MS = 10_000;
@@ -211,9 +211,16 @@ export class Updater {
   /**
    * 检查更新（自动与手动同一条）。**库在失败时既发 `error` 事件又 reject 这个 promise**，
    * 两条都翻译成同一个 action，状态机自己去重（同一条错误不换对象、不重复广播）。
+   *
+   * 下载进行中直接让路（checkYieldsToDownload）：并发检查会重写 provider 的资产表，
+   * 而下载正读着它（竞态见 state.ts 里 checkYieldsToDownload 的说明）。
    */
   async check(): Promise<void> {
     if (this.support !== "supported") return;
+    if (checkYieldsToDownload(this.state, this.activeDownload)) {
+      console.info("[更新] 下载进行中，跳过这次检查（避免与下载竞态重写 provider 的资产表）");
+      return;
+    }
     try {
       await autoUpdater.checkForUpdates();
     } catch (error) {
@@ -228,8 +235,10 @@ export class Updater {
   async download(): Promise<void> {
     if (this.support !== "supported" || this.state.kind !== "available") return;
     const version = this.state.release.version;
-    this.apply({ type: "download-started" });
+    // 先立 activeDownload 再广播状态：check() 的让路判定看它，顺序反了会留一个
+    // 「状态已是 downloading、检查却还没让路」的窗口（见 state.ts 的 checkYieldsToDownload）
     this.activeDownload = version;
+    this.apply({ type: "download-started" });
     this.cancelRequested = false;
     this.cancelHandled = false;
     const token = new CancellationToken();

@@ -173,7 +173,16 @@ class ElectronRangeTransport implements RangeTransport {
     }
   }
 
-  /** 只取 302 的 Location，不读 body；没有重定向就返回原地址 */
+  /**
+   * 只取 302 的 Location，不读 body；没有重定向就返回原地址。
+   *
+   * 限流账的已知缺口：这次 GET 打在 api.github.com 的资产端点上，占用未认证配额
+   * （60 次/小时），但它的 x-ratelimit-* 响应头不回写共享客户端那本账
+   * （github-client.ts）——下载器这条路径不过客户端，检查 / 历史版本的限流判定
+   * 各自过账、不受影响，影响只是那本账对下载时段的消耗信计偏乐观。资产地址一次
+   * 下载只解析一次并缓存（targetOf），真被限流时 403 会走下面的重解析路径，
+   * 重试次数由下载器的停滞计数收口；要把这几笔也记账得把客户端注进来，不值。
+   */
   private async resolveRedirect(url: URL, headers: Readonly<Record<string, string>>): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
       let settled = false;

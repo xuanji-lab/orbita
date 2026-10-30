@@ -199,6 +199,52 @@ describe("createRecentReleases —— 共享客户端、缓存与失败", () => 
     assert.equal(calls.filter((url) => url === YML_URL).length, 2);
   });
 
+  test("说明请求被限流（429）：那一行没有说明，但不写缓存——限流解除后下一次展开就拿到说明", async () => {
+    const calls: string[] = [];
+    let limited = true;
+    const entry = { ...ENTRY, assets: [{ id: 42, name: "latest.yml" }] };
+    const transport: GitHubTransport = async ({ url }) => {
+      calls.push(url.href);
+      if (url.pathname.endsWith("/releases/assets/42")) {
+        // 不带 retry-after / x-ratelimit-*：这里钉的是 recent-releases 的分类，不是客户端那本账
+        return limited ? { status: 429, headers: {}, body: "rate limited" } : { status: 200, headers: {}, body: LATEST_YML };
+      }
+      return { status: 200, headers: {}, body: JSON.stringify([entry]) };
+    };
+    const recent = createRecentReleases({ endpoint: () => API, client: new GitHubClient({ transport }) });
+
+    const first = await recent.recent();
+    assert.equal(first.ok, true);
+    assert.equal(first.ok ? first.releases[0]?.notes : "x", null, "限流时那一行没有说明，但列表照常");
+
+    limited = false;
+    const second = await recent.recent();
+    // 修之前：429 被当成「这一版没有说明」缓存 10 分钟，第二次直接吃缓存，说明永远是 null
+    const notes = second.ok ? second.releases[0]?.notes : null;
+    assert.ok(notes !== null && notes !== undefined && notes.length > 0, "限流的说明不写缓存，限流解除后重新拉到了");
+    assert.equal(calls.filter((href) => href.endsWith("/assets/42")).length, 2, "说明打了两次（第一次 429、第二次成功）");
+  });
+
+  test("说明请求 403（共享出口 IP 被限流的样子）：同样不缓存，下次展开再试", async () => {
+    const calls: string[] = [];
+    const entry = { ...ENTRY, assets: [{ id: 43, name: "latest.yml" }] };
+    const transport: GitHubTransport = async ({ url }) => {
+      calls.push(url.href);
+      if (url.pathname.endsWith("/releases/assets/43")) {
+        return { status: 403, headers: {}, body: "forbidden" };
+      }
+      return { status: 200, headers: {}, body: JSON.stringify([entry]) };
+    };
+    const recent = createRecentReleases({ endpoint: () => API, client: new GitHubClient({ transport }) });
+
+    const first = await recent.recent();
+    assert.equal(first.ok, true);
+    assert.equal(first.ok ? first.releases[0]?.notes : "x", null);
+
+    await recent.recent();
+    assert.equal(calls.filter((href) => href.endsWith("/assets/43")).length, 2, "403 不算「没有说明」，第二次重新拉");
+  });
+
   test("成功结果缓存 10 分钟：窗口内再点不打 API，过期后再打", async () => {
     const calls: string[] = [];
     let clock = 0;

@@ -161,8 +161,13 @@ async function probe(transport: RangeTransport, url: URL, headers: Record<string
     const total = totalFromContentRange(headerOf(response.headers, "content-range"));
     if (response.status === 206 && total !== null) return { total, supportsRanges: true };
     if (response.status === 200) {
-      const length = Number(headerOf(response.headers, "content-length"));
-      if (Number.isSafeInteger(length) && length >= 0) return { total: length, supportsRanges: false };
+      // 头缺席时 headerOf 返回 null，而 Number(null) === 0——不能把「不知道大小」当
+      // 长度 0（曾误报「更新包是 0 字节」）：缺席就落到下面「无法确定大小」
+      const rawLength = headerOf(response.headers, "content-length");
+      if (rawLength !== null) {
+        const length = Number(rawLength);
+        if (Number.isSafeInteger(length) && length >= 0) return { total: length, supportsRanges: false };
+      }
     }
     if (response.status === 416) {
       const fromRange = totalFromContentRange(headerOf(response.headers, "content-range"));
