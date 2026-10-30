@@ -307,6 +307,12 @@ export const ipcChannels = {
    * 进程里独立调用（不开会话、不落盘，同 classifyGreetings 的通道）。
    */
   focusSummarize: "focus:summarize",
+  /**
+   * 专注模式：系统即将睡眠（powerMonitor 的 suspend，主进程 → renderer 单向广播，
+   * 无载荷）。renderer 收到后按「睡眠即结束专注」处理当前一轮（用户 2026-10-28
+   * 裁决：不考虑专注时合盖，睡就把这一轮收掉）。
+   */
+  focusSuspend: "focus:suspend",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
