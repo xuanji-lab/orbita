@@ -15,7 +15,6 @@ import {
   LAYER_PAD,
   RAIL_W,
   SESSION_GAP,
-  WIN_CTL_W,
   conversationColumn,
   leftCapsuleX,
   rightEdge,

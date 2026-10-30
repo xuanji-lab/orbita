@@ -70,6 +70,11 @@ test("对话列与右端边界（原型 v2 的 1440 窗实算：SBW 288 / RAIL 3
   // 右端边界：无右栏 = 右栏开关胶囊左缘（W−12−32=1396）
   assert.equal(rightEdge({ windowWidth: 1440, platform: "darwin", panelOpen: false, panelWidth: 0 }), 1396);
   assert.equal(rightEdge({ windowWidth: 1440, platform: "darwin", panelOpen: true, panelWidth: 360 }), 1024);
+  // Windows / Linux：三键在品牌行，胶囊行不再为它们左让（2026-10-23：旧算法减 126px，
+  // 1000 宽时把会话胶囊截到 372；正确值是 W−12−32）
+  assert.equal(rightEdge({ windowWidth: 1440, platform: "other", panelOpen: false, panelWidth: 0 }), 1396);
+  assert.equal(rightEdge({ windowWidth: 1000, platform: "other", panelOpen: false, panelWidth: 0 }), 956);
+  assert.equal(rightEdge({ windowWidth: 960, platform: "other", panelOpen: false, panelWidth: 0 }), 916);
 });
 
 test("会话胶囊：优先居中于对话列（对称收缩），低于 280 才贴左", () => {

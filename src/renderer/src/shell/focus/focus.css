@@ -770,6 +770,17 @@
   color: var(--color-text-secondary);
 }
 
+/* 失败原因行：就在卡上、不靠 hover。一行，超长截断（完整原文在 title） */
+.neb-card-reason {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 内容区自己滚：卡高被锚限制在视口内，按钮行恒可见 */
 .neb-card-scroll {
   min-height: 0;
