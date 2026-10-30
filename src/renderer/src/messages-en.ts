@@ -1,7 +1,8 @@
 import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts";
 import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
-import type { ReviewSource } from "../../shared/review.ts";
+import type { ArtifactOpenResult } from "../../shared/browser.ts";
+import type { ReviewDiffErrorReason, ReviewSource } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -145,6 +146,24 @@ export const en = {
     restoredEmpty: "Identical to the baseline — nothing to show.",
     noBaseline: "No baseline",
     binary: "Binary",
+    symlink: "Symbolic link",
+    symlinkTarget: (target: string) =>
+      `Symbolic link to ${target}. The review panel doesn't follow links, so the target isn't read.`,
+    diffError: (reason: ReviewDiffErrorReason): string => {
+      switch (reason) {
+        case "outside-workspace":
+          return "This path is outside the workspace, so the review panel won't read it.";
+        case "not-in-record":
+          return "This file isn't in this task's change record, so the review panel won't read it.";
+        case "task-not-found":
+          return "This task no longer exists.";
+        case "invalid-request":
+          return "The request wasn't valid. Refresh the panel and try again.";
+        // failed 与认不得的原因码（新版本主进程对旧 renderer）同一句
+        default:
+          return "Couldn't load the diff.";
+      }
+    },
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */
@@ -1555,6 +1574,22 @@ export const en = {
     fileCardUndone: "Undone",
     fileCardWebPage: "Web page",
     openInOrbita: "Open in orbita",
+    /** 「在 orbita 打开」不放行的原因（ArtifactOpenResult.reason）；「Show in folder」不受影响 */
+    openInOrbitaRefused: (reason: Extract<ArtifactOpenResult, { ok: false }>["reason"]): string => {
+      switch (reason) {
+        case "outside":
+          return "Can't open it here: the file is outside this task's folders (workbench, working folder, attached folders, browser downloads). Show in folder still works.";
+        case "missing":
+          return "Can't open it: the file is no longer there.";
+        case "not-web-page":
+          return "Can't open it here: it isn't a web page (it may be a link to a different kind of file).";
+        case "not-in-record":
+          return "Can't open it: the file isn't in this task's change record.";
+        default:
+          return "Can't open it: the file path isn't valid.";
+      }
+    },
+    openInOrbitaFailed: "Couldn't open it in orbita.",
     revealArtifact: "Show in folder",
     worked: "Worked",
     // Weekday names for the full timestamp on message-time hover (getDay() order, Sunday first)

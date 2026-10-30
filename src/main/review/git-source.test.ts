@@ -1,10 +1,10 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseNumstatLine, parseUntrackedLine } from "../../shared/review.ts";
-import { gitReviewDiff, gitReviewList, realGitRunner, type GitRunner } from "./git-source.ts";
+import { gitReviewDiff, gitReviewList, gitWorkdirChanges, realGitRunner, type GitRunner } from "./git-source.ts";
 
 /** 假 git：args → 预设输出。没预设到的 args 抛（测试写错立刻暴露）。 */
 function fakeGit(scripts: Record<string, { code?: number; stdout: string }>): GitRunner {
@@ -354,5 +354,157 @@ describe("git 来源 × 子目录工作区（真 git）", () => {
     const result = await gitReviewDiff(realGitRunner, repo, "unstaged", "sub/a.txt");
     assert.equal(result.restored, false);
     assert.ok(result.diff?.includes("+2"), `根工作区的 diff 应照旧有正文：${result.diff}`);
+  });
+});
+
+// ————————————————————————————————————————————————
+// 读盘边界（审查报告 R06 的两个探针）：review:diff 的 path 是 renderer 传来的。主进程只认
+// 「相对路径、resolve 后仍在工作区里」，realpath 后再判一次；未跟踪的符号链接不跟到目标
+// 读正文——列表与正文都只报「这是个链接、指向哪」。拒绝要有明确回执，不能显示成「二进制」。
+// ————————————————————————————————————————————————
+
+/** 建链接；这台机器建不了（Windows 未开开发者模式建文件 symlink 会 EPERM）返回 false，那几格跳过 */
+async function trySymlink(target: string, path: string, type: "file" | "junction"): Promise<boolean> {
+  try {
+    await symlink(target, path, type);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe("git 来源 × 读盘边界（真 git）", () => {
+  let repo: string | null = null;
+  let outside = "";
+  let sub = "";
+  let fileLink = false;
+  let dirLink = false;
+
+  before(async () => {
+    const hasGit = await realGitRunner(["--version"], tmpdir()).then(
+      () => true,
+      () => false,
+    );
+    if (!hasGit) return;
+    repo = await mkdtemp(join(tmpdir(), "orbita-review-bound-"));
+    outside = await mkdtemp(join(tmpdir(), "orbita-review-outside-"));
+    sub = join(repo, "sub");
+    await mkdir(sub);
+    await realGitRunner(["init"], repo);
+    // 仓库根（工作区之外）有一个未跟踪文件；工作区（sub）里一个普通未跟踪文件当对照
+    await writeFile(join(repo, "secret.txt"), "ROOT-SECRET\n", "utf8");
+    await writeFile(join(sub, "visible.txt"), "visible\n", "utf8");
+    await writeFile(join(outside, "outside.txt"), "OUTSIDE-SECRET\n", "utf8");
+    fileLink = await trySymlink(join(outside, "outside.txt"), join(sub, "linked.txt"), "file");
+    // 目录链接用 junction：#365 的夹具就是 junction，Windows 上也不要特权；POSIX 上 type 被忽略
+    dirLink = await trySymlink(outside, join(sub, "linkdir"), "junction");
+  });
+
+  after(async () => {
+    if (repo !== null) await rm(repo, { recursive: true, force: true });
+    if (outside !== "") await rm(outside, { recursive: true, force: true });
+  });
+
+  test("../ 跑出工作区：拒绝并说明原因，读不到仓库里工作区外的文件（R06 探针一）", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    const result = await gitReviewDiff(realGitRunner, sub, "unstaged", "../secret.txt");
+    assert.ok(!(result.diff ?? "").includes("ROOT-SECRET"), `读到了工作区外的文件：${result.diff}`);
+    assert.equal(result.diff, null);
+    assert.equal(result.error?.reason, "outside-workspace");
+    // 拒绝不能伪装成「二进制」或「已还原」
+    assert.equal(result.binary, false);
+    assert.equal(result.restored, false);
+  });
+
+  test("绝对路径、空路径、resolve 回工作区本身：三个 git 来源一律拒绝", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    for (const source of ["unstaged", "staged", "branch"] as const) {
+      for (const path of [join(repo, "secret.txt"), join(sub, "visible.txt"), "", ".", "a/../../secret.txt"]) {
+        const result = await gitReviewDiff(realGitRunner, sub, source, path);
+        assert.equal(result.error?.reason, "outside-workspace", `${source} ${JSON.stringify(path)} 没被拒：${JSON.stringify(result)}`);
+        assert.equal(result.diff, null);
+      }
+    }
+  });
+
+  test("git 的 pathspec 魔法（:(top) / :/）：读不出工作区外（git 输出被 --relative 限在 cwd，我们只读 resolve 后的字面路径）", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    for (const source of ["unstaged", "staged", "branch"] as const) {
+      for (const path of [":(top)secret.txt", ":/secret.txt", ":(top,glob)**"]) {
+        const result = await gitReviewDiff(realGitRunner, sub, source, path);
+        assert.ok(!(result.diff ?? "").includes("ROOT-SECRET"), `${source} ${path} 读到了工作区外：${result.diff}`);
+      }
+    }
+  });
+
+  test("未跟踪的符号链接：不跟到目标读正文，回执标出链接指向哪（R06 探针二）", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    if (!fileLink) return t.skip("这台机器建不了文件符号链接");
+    const result = await gitReviewDiff(realGitRunner, sub, "unstaged", "linked.txt");
+    assert.ok(!(result.diff ?? "").includes("OUTSIDE-SECRET"), `跟着链接读到了工作区外：${result.diff}`);
+    assert.equal(result.diff, null);
+    assert.equal(result.symlink, join(outside, "outside.txt"));
+    assert.equal(result.binary, false);
+    assert.equal(result.restored, false);
+  });
+
+  test("链接目录下的路径（列表不会给，renderer 直接传）：realpath 后在工作区外，拒绝", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    if (!dirLink) return t.skip("这台机器建不了目录链接");
+    const result = await gitReviewDiff(realGitRunner, sub, "unstaged", "linkdir/outside.txt");
+    assert.ok(!(result.diff ?? "").includes("OUTSIDE-SECRET"), `穿过链接目录读到了工作区外：${result.diff}`);
+    assert.equal(result.error?.reason, "outside-workspace");
+  });
+
+  test("对照：工作区内的普通未跟踪文件照常出全量新增 diff", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    const result = await gitReviewDiff(realGitRunner, sub, "unstaged", "visible.txt");
+    assert.equal(result.error, undefined);
+    assert.ok(result.diff?.includes("+visible"), `正常文件被一起拦掉了：${JSON.stringify(result)}`);
+  });
+
+  test("列表（审查 unstaged）：未跟踪的链接标 symlink，行数不算目标的；普通文件照常数行", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    if (!fileLink) return t.skip("这台机器建不了文件符号链接");
+    const list = await gitReviewList(realGitRunner, sub, "unstaged");
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const linked = list.entries.find((entry) => entry.path === "linked.txt");
+    assert.deepEqual(
+      { added: linked?.added, binary: linked?.binary, symlink: linked?.symlink },
+      { added: 0, binary: false, symlink: join(outside, "outside.txt") },
+    );
+    assert.equal(list.entries.find((entry) => entry.path === "visible.txt")?.added, 1);
+  });
+
+  test("专注左栏（gitWorkdirChanges）走同一条读盘路：链接不跟，行数不算目标的", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    if (!fileLink) return t.skip("这台机器建不了文件符号链接");
+    const changes = await gitWorkdirChanges(realGitRunner, sub);
+    assert.equal(changes.kind, "ok");
+    if (changes.kind !== "ok") return;
+    const linked = changes.entries.find((entry) => entry.path === "linked.txt");
+    assert.deepEqual({ kind: linked?.kind, added: linked?.added }, { kind: "U", added: 0 });
+  });
+});
+
+describe("gitReviewDiff × 读盘边界（假 git）", () => {
+  test("被拒的路径不跑 git、不读盘", async () => {
+    const calls: string[] = [];
+    const runner: GitRunner = async (args) => {
+      calls.push(args.join(" "));
+      return { code: 0, stdout: "" };
+    };
+    const reads: string[] = [];
+    const readUntracked = async (path: string): Promise<Buffer | null> => {
+      reads.push(path);
+      return Buffer.from("SECRET\n", "utf8");
+    };
+    for (const path of ["../x.txt", "/etc/hosts", "C:\\Windows\\win.ini", "\\\\server\\share\\x", "a\u0000b"]) {
+      const result = await gitReviewDiff(runner, "/w/sub", "unstaged", path, readUntracked);
+      assert.equal(result.error?.reason, "outside-workspace", `${JSON.stringify(path)} 没被拒`);
+    }
+    assert.deepEqual(calls, []);
+    assert.deepEqual(reads, []);
   });
 });

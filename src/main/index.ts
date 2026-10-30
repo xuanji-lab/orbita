@@ -861,7 +861,7 @@ void app.whenReady().then(async () => {
     agentHost,
     carryovers,
     providers,
-    (path) => browserSandbox.openLocalFile(path),
+    (sessionId, path) => browserSandbox.openSessionArtifact(sessionId, path),
     async (sessionId, reverted) => {
       await Promise.all([
         intentOnReverted(sessionId, reverted.turnIds),
@@ -920,7 +920,7 @@ void app.whenReady().then(async () => {
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
   registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
-  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
+  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，

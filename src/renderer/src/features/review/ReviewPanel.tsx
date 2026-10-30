@@ -13,6 +13,7 @@ import { pathWithin } from "../../../../shared/path.ts";
 import {
   absoluteReviewPath,
   disambiguatedDirs,
+  reviewDiffNotice,
   reviewEmptyText,
   reviewEmptyTitle,
   unifiedDiffEntries,
@@ -243,8 +244,14 @@ export function ReviewPanel(props: {
       .then((result) => {
         if (!cancelled) setDiffs((current) => new Map(current).set(path, result));
       })
-      .catch(() => {
-        if (!cancelled) setDiffs((current) => new Map(current).set(path, { diff: null, binary: false, restored: false }));
+      .catch((cause: unknown) => {
+        // 失败如实说：以前写成 { diff: null, binary: false }，正文区显示「二进制」
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (!cancelled) {
+          setDiffs((current) =>
+            new Map(current).set(path, { diff: null, binary: false, restored: false, error: { reason: "failed", message } }),
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setDiffLoading(null);
@@ -364,6 +371,9 @@ export function ReviewPanel(props: {
           {entries.map((entry) => {
             const open = expanded === entry.path;
             const diff = diffs.get(entry.path);
+            // 正文区不是 diff 时说什么（拒绝 / 失败 / 链接 / 已还原 / 二进制）；null = 交给 DiffBody
+            const notice = diff === undefined ? null : reviewDiffNotice(diff, t);
+            // 符号链接可以展开：正文区说它指向哪（面板不读目标）。二进制 / 已还原没什么可展开的
             const expandable = !entry.binary && entry.restored !== true && entry.noBaseline !== true;
             // 悬停键「在访达中显示」：task 来源必有（白名单 = 本任务文件账）；git 来源
             // 要落在 fs:roots 白名单的某条根内，否则不出现（同附件行「根外只展示」）
@@ -443,6 +453,21 @@ export function ReviewPanel(props: {
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.noBaseline}
                       </span>
+                    ) : entry.symlink !== undefined ? (
+                      // 链接不数行（面板不跟到目标读）：角标与文件面板的符号链接同一个箭头
+                      <span
+                        style={{
+                          flex: "0 0 auto",
+                          display: "inline-flex",
+                          gap: 4,
+                          alignItems: "center",
+                          fontSize: "var(--font-size-sm)",
+                          color: "var(--color-text-tertiary)",
+                        }}
+                      >
+                        <Icon name="arrow-up-right" size={11} strokeWidth={2} />
+                        {t.review.symlink}
+                      </span>
                     ) : entry.binary ? (
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.binary}
@@ -472,12 +497,29 @@ export function ReviewPanel(props: {
                       <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.common.loading}
                       </span>
-                    ) : diff.diff === null ? (
-                      <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
-                        {diff.restored ? t.review.restoredEmpty : t.review.binary}
+                    ) : notice !== null ? (
+                      // 拒绝 / 失败用图标 + 文字说（颜色只是第二信号）；英文原句放悬停，排查用
+                      <span
+                        title={diff.error?.message}
+                        style={{
+                          display: "flex",
+                          gap: 4,
+                          alignItems: "flex-start",
+                          fontSize: "var(--font-size-sm)",
+                          color: notice.tone === "danger" ? "var(--color-danger)" : "var(--color-text-tertiary)",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {notice.tone === "danger" && (
+                          // 图标钉在第一行的行高里居中：原因折成两行时不悬在两行中间
+                          <span style={{ display: "inline-flex", alignItems: "center", height: "1lh", flex: "0 0 auto" }}>
+                            <Icon name="triangle-alert" size={11} strokeWidth={2} />
+                          </span>
+                        )}
+                        <span>{notice.text}</span>
                       </span>
                     ) : (
-                      <DiffBody entries={unifiedDiffEntries(diff.diff)} maxHeight={420} />
+                      <DiffBody entries={unifiedDiffEntries(diff.diff ?? "")} maxHeight={420} />
                     )}
                   </div>
                 )}

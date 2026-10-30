@@ -132,6 +132,22 @@ export interface BrowserWindowState {
 export type BrowserNavigateResult = { ok: true } | { ok: false; reason: "not-an-address" };
 
 /**
+ * 本地网页打开不了的稳定原因码（renderer 用文案表翻成人话；agent 那边拿英文原句）。
+ * 判定都在 realpath 之后（main/browser/local-file.ts 的 resolveLocalPage）：
+ *   invalid       不是绝对路径 / 不是合法的 file:// 地址
+ *   not-web-page  不是 .html / .htm / .xhtml / .svg（链接指向的真身也算）
+ *   missing       文件不存在
+ *   outside       realpath 之后不在本会话的目录里（工作台、工作目录、附加目录、浏览器下载）
+ */
+export type LocalPageRefusal = "invalid" | "not-web-page" | "missing" | "outside";
+
+/**
+ * 轮尾卡「在 orbita 打开」（session:open-artifact-in-browser）的回执。拒绝带原因码，卡片照着
+ * 说清楚——以前失败是抛错，只进了 console，用户点了没反应。not-in-record = 不在本任务的文件账上。
+ */
+export type ArtifactOpenResult = { ok: true } | { ok: false; reason: LocalPageRefusal | "not-in-record" };
+
+/**
  * 读取类工具读哪个 tab：缺席 = agent 自己的 tab；否则是 browser_tabs 列出的某个**用户 tab 的 id**
  * （**只读**）。用户常常自己先打开并登录好了（例如经图书馆代理进 Scopus）——agent 读得到它，
  * 要操作就在自己的 tab 里打开同一个地址（登录态共享）。
