@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_SELECTION, nextSelection, rowClickKind, selectedInOrder } from "./sidebar-selection.ts";
+import { EMPTY_SELECTION, nextSelection, rowClickKind, selectedInOrder, toggleOne } from "./sidebar-selection.ts";
 
 const visible = ["a", "b", "c", "d", "e"];
 const ids = (set: ReadonlySet<string>): string[] => [...set].sort();
@@ -58,5 +58,14 @@ describe("nextSelection", () => {
 describe("selectedInOrder", () => {
   test("按可见顺序，丢掉已不可见的", () => {
     assert.deepEqual(selectedInOrder({ ids: new Set(["d", "gone", "a"]), anchor: null }, visible), ["a", "d"]);
+  });
+});
+
+describe("toggleOne", () => {
+  test("只切这一条，不带上别的；anchor 跟着走（之后 Shift 从这里起）", () => {
+    const first = toggleOne(EMPTY_SELECTION, "b");
+    assert.deepEqual(ids(first.ids), ["b"]);
+    assert.equal(first.anchor, "b");
+    assert.deepEqual(ids(toggleOne(first, "b").ids), []);
   });
 });

@@ -55,6 +55,17 @@ export function nextSelection(
   return { selection: { ids, anchor: id }, open: false };
 }
 
+/**
+ * 勾选态（工作区「迁移任务…」进入的）里点一行：只切这一条。不像 Cmd 那样把正打开的
+ * 那条带上——勾选态的意思是「从这一组里挑」，打开着的会话不一定在这一组。
+ */
+export function toggleOne(current: SidebarSelection, id: string): SidebarSelection {
+  const ids = new Set(current.ids);
+  if (ids.has(id)) ids.delete(id);
+  else ids.add(id);
+  return { ids, anchor: id };
+}
+
 /** 多选里还在可见列表上的那些（迁走 / 删掉 / 被筛掉的不该留在批量动作的目标里），按可见顺序。 */
 export function selectedInOrder(selection: SidebarSelection, visible: readonly string[]): string[] {
   return visible.filter((id) => selection.ids.has(id));

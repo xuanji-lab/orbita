@@ -6,12 +6,12 @@ import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
-import { MoveSessionsDialog } from "./MoveSessionsDialog.tsx";
 import {
   EMPTY_SELECTION,
   nextSelection,
   rowClickKind,
   selectedInOrder,
+  toggleOne,
   type SidebarSelection,
 } from "./sidebar-selection.ts";
 import { api } from "../api";
@@ -262,8 +262,12 @@ export function Sidebar(props: {
   const [selection, setSelection] = useState<SidebarSelection>(EMPTY_SELECTION);
   /** 迁移没全成功时的说明（在跑的跳过等）：贴在多选条下面，下一次点击任务行时清掉 */
   const [moveNote, setMoveNote] = useState<string | null>(null);
-  /** 「迁移任务…」弹窗开在哪个工作区上；null = 没开 */
-  const [moveDialogFor, setMoveDialogFor] = useState<string | null>(null);
+  /**
+   * 勾选态开在哪个工作区组上（组头悬停的「迁移任务…」进入）；null = 没开。
+   * **不弹窗**（2026-10-31 用户：「我们从来不弹卡片的……弹卡片太打断人了」）：
+   * 只有这一组的任务行前面出现勾选框，点行 = 勾 / 取消，顶部用同一个多选条迁移。
+   */
+  const [checkFor, setCheckFor] = useState<string | null>(null);
   /**
    * 分组状态：哪些组折叠着、哪些组点了 Show more 全量铺开。状态本体在
    * `sidebar-fold.ts`；同样**不持久化**，理由同上——列表每次启动从盘上重读。
@@ -374,14 +378,33 @@ export function Sidebar(props: {
     const kind = rowClickKind(event);
     // Shift 点按钮会顺手扩一段页面文字选区，清掉——这里的 Shift 是选任务不是选字
     if (kind === "range") window.getSelection()?.removeAllRanges();
+    setMoveNote(null);
+    // 勾选态里点那一组的行：普通点击 = 勾 / 取消这一条，不打开（Shift 照常选一段）
+    const inChecking =
+      checkFor !== null && session.sessions.find((m) => m.id === id)?.workspaceId === checkFor;
+    if (inChecking && kind !== "range") {
+      setSelection(toggleOne(selection, id));
+      return;
+    }
     const next = nextSelection(selection, kind, id, visibleOrder, openId);
     setSelection(next.selection);
-    setMoveNote(null);
-    if (next.open) open(id);
+    // 普通点开别的会话 = 离开勾选态（用户的注意力已经回到对话上）
+    if (next.open) {
+      setCheckFor(null);
+      open(id);
+    }
   };
   const clearSelection = (): void => {
     setSelection(EMPTY_SELECTION);
     setMoveNote(null);
+    setCheckFor(null);
+  };
+  /** 进入某一组的勾选态：组展开，之前的多选清掉（勾选只在这一组里挑） */
+  const startChecking = (workspaceId: string): void => {
+    setSelection(EMPTY_SELECTION);
+    setMoveNote(null);
+    setCheckFor(workspaceId);
+    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspaceId)));
   };
   /**
    * 迁移（行菜单 / 多选条共用）：没迁动的留在多选里并把原因写在多选条下——
@@ -406,15 +429,21 @@ export function Sidebar(props: {
   const familyRunning = (id: string): boolean =>
     session.phaseOf(id) !== "idle" ||
     childSessions(session.sessions, id).some((child) => session.phaseOf(child.id) !== "idle");
-  // Esc 清多选（弹窗开着时 Esc 归弹窗）
+  // Esc 清多选、退出勾选态
+  const selecting = batch.length > 0 || checkFor !== null;
   useEffect(() => {
-    if (batch.length === 0 || moveDialogFor !== null) return;
+    if (!selecting) return;
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") clearSelection();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [batch.length, moveDialogFor]);
+  }, [selecting]);
+  // 勾选态那一组被搬空了（或工作区被移除）：勾选态自然结束，别留一个没有行的勾选态
+  const checkGroupSize = checkFor === null ? 0 : live.filter((m) => m.workspaceId === checkFor).length;
+  useEffect(() => {
+    if (checkFor !== null && checkGroupSize === 0) setCheckFor(null);
+  }, [checkFor, checkGroupSize]);
 
   /**
    * 左栏的文件视图（浏览 / 专注）：设置页与 Archived / Carryovers 子视图盖着时
@@ -572,13 +601,13 @@ export function Sidebar(props: {
         </div>
       )}
 
-      {listView && (batch.length > 0 || moveNote !== null) && (
+      {listView && (selecting || moveNote !== null) && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
-          {batch.length > 0 && (
+          {selecting && (
             <div className="sidebar-selection-bar" title={t.sidebar.selectHint}>
-              <span>{t.sidebar.selectedCount(batch.length)}</span>
+              <span>{batch.length === 0 ? t.sidebar.checkHint : t.sidebar.selectedCount(batch.length)}</span>
               <Menu
-                items={moveTargetItems(t, session.workspaces, batch, null, moveBatch)}
+                items={moveTargetItems(t, session.workspaces, batch, undefined, moveBatch)}
                 align="end"
                 panelMinWidth={160}
                 panelMaxWidth={240}
@@ -588,7 +617,8 @@ export function Sidebar(props: {
                     type="button"
                     className="sidebar-selection-move"
                     aria-expanded={menuOpen}
-                    title={t.sidebar.moveCount(batch.length)}
+                    title={batch.length === 0 ? t.sidebar.checkHint : t.sidebar.moveCount(batch.length)}
+                    disabled={batch.length === 0}
                     onClick={toggle}
                   >
                     <Icon name="folder-sync" size={13} strokeWidth={1.8} />
@@ -845,7 +875,10 @@ export function Sidebar(props: {
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
                       onBrowse={() => props.onBrowseWorkspace(workspace.id)}
-                      onMoveTasks={() => setMoveDialogFor(workspace.id)}
+                      checking={checkFor === workspace.id}
+                      onStartChecking={() => startChecking(workspace.id)}
+                      onDoneChecking={clearSelection}
+                      isChecked={(id) => selection.ids.has(id)}
                       rowActive={rowActive}
                       onRowClick={clickRow}
                       moveIdsFor={moveIdsFor}
@@ -921,29 +954,6 @@ export function Sidebar(props: {
        * 宽度钉在 216px（SIDEBAR_WIDTH_MIN 的内容宽），侧栏拖宽时保持左对齐。
        * 折叠态（48px 图标条）不渲染——那里放不下 7 格。
        */}
-      {moveDialogFor !== null &&
-        (() => {
-          const source = session.workspaces.find((w) => w.id === moveDialogFor);
-          if (source === undefined) return null;
-          return (
-            <MoveSessionsDialog
-              source={source}
-              sessions={live.filter((m) => m.workspaceId === source.id)}
-              workspaces={session.workspaces}
-              isRunning={familyRunning}
-              onMove={async (ids, target) => {
-                const result = await session.moveSessions(ids, target);
-                if (result.moved.length > 0) {
-                  setGroups((current) =>
-                    unfoldGroup(current, target === null ? TASKS_FOLD_KEY : foldKeyForWorkspace(target)),
-                  );
-                }
-                return result;
-              }}
-              onClose={() => setMoveDialogFor(null)}
-            />
-          );
-        })()}
       <UsageMeter running={anyRunning} pet={props.usagePet} onPetChange={props.onUsagePetChange} petSay={props.usageSay} petCard={props.usageCard} />
     </aside>
     {/*
@@ -1001,8 +1011,12 @@ function WorkspaceGroup(props: {
   onRemove: () => void;
   /** 悬停的「查看工作区文件」 */
   onBrowse: () => void;
-  /** 悬停的「迁移任务…」：开可勾选的批量迁移弹窗 */
-  onMoveTasks: () => void;
+  /** 这一组正处在勾选态（悬停的「迁移任务…」进入；不弹窗，行首出勾选框） */
+  checking: boolean;
+  onStartChecking: () => void;
+  /** 组头的「完成」：退出勾选态、清掉多选 */
+  onDoneChecking: () => void;
+  isChecked: (id: string) => boolean;
   /** 多选：行高亮、点击、行菜单「移到…」的目标与执行（Sidebar 持有状态） */
   rowActive: (id: string) => boolean;
   onRowClick: (id: string, event: React.MouseEvent) => void;
@@ -1115,17 +1129,24 @@ function WorkspaceGroup(props: {
             悬停动作簇（静止不占位）：「查看工作区文件」（list-tree，zcode 同款）
             在删除键前面——浏览是常事，删除是两段式。
           */}
-          {props.sessions.length > 0 && (
-            <IconButton
-              label={t.sidebar.moveTasks}
-              title={t.sidebar.moveTasks}
-              size={20}
-              onClick={props.onMoveTasks}
-              className="reveal workspace-group-act"
-              style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
-            >
-              <Icon name="folder-sync" size={14} strokeWidth={1.8} />
-            </IconButton>
+          {props.checking ? (
+            // 勾选态里常显的出口（不等悬停）：用户得一眼看到怎么退出
+            <button type="button" className="sidebar-selection-move" onClick={props.onDoneChecking}>
+              {t.sidebar.checkDone}
+            </button>
+          ) : (
+            props.sessions.length > 0 && (
+              <IconButton
+                label={t.sidebar.moveTasks}
+                title={t.sidebar.moveTasks}
+                size={20}
+                onClick={props.onStartChecking}
+                className="reveal workspace-group-act"
+                style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
+              >
+                <Icon name="folder-sync" size={14} strokeWidth={1.8} />
+              </IconButton>
+            )
           )}
           <IconButton
             label={t.focus.browseFiles}
@@ -1172,6 +1193,7 @@ function WorkspaceGroup(props: {
               session={props.session}
               active={props.rowActive(meta.id)}
               onClick={(event) => props.onRowClick(meta.id, event)}
+              checkbox={props.checking ? props.isChecked(meta.id) : undefined}
               moveIds={props.moveIdsFor(meta.id)}
               onMove={props.onMove}
             />
@@ -1333,6 +1355,7 @@ function moveTargetItems(
   onMove: (ids: readonly string[], target: string | null) => void,
 ): MenuItem[] {
   return [
+    { id: "move-header", label: t.sidebar.moveHeader, header: true },
     {
       id: "none",
       label: t.sidebar.noWorkspaceTarget,
@@ -1388,6 +1411,8 @@ function ShowMoreRow(props: {
 function NavRow(props: {
   /** `null` = 这一行没有图标可画（会话行的空状态槽）。槽仍然占位，标题才对得齐 */
   icon: IconName | null;
+  /** 图标槽换成别的东西（勾选态的勾选框）；给了就不画 icon */
+  leading?: React.ReactNode;
   label: string;
   active: boolean;
   onClick?: ((event: React.MouseEvent<HTMLButtonElement>) => void) | undefined;
@@ -1462,7 +1487,9 @@ function NavRow(props: {
           color: disabled ? "var(--color-text-tertiary)" : (props.tone ?? "var(--color-text-secondary)"),
         }}
       >
-        {props.icon === null ? (
+        {props.leading !== undefined ? (
+          props.leading
+        ) : props.icon === null ? (
           // 空槽：不画任何东西，但占与图标等宽的位置——有标记的行和没标记的行标题对齐
           <span style={{ width: 13, height: 13 }} />
         ) : (
@@ -1508,6 +1535,8 @@ function SessionRow(props: {
   session: ChatSession;
   active: boolean;
   onClick: (event: React.MouseEvent) => void;
+  /** 勾选态：true / false = 画勾选框（是否勾上）；undefined = 不在勾选态 */
+  checkbox?: boolean | undefined;
   /** 菜单「移到…」搬哪些：这一行在多选里就是整批，否则只有它自己 */
   moveIds: readonly string[];
   onMove: (ids: readonly string[], target: string | null) => void;
@@ -1739,6 +1768,13 @@ function SessionRow(props: {
       ) : (
         <NavRow
           icon={status?.icon ?? null}
+          leading={
+            props.checkbox === undefined ? undefined : (
+              <span className="row-check" data-checked={props.checkbox || undefined}>
+                {props.checkbox && <Icon name="check" size={10} strokeWidth={3} />}
+              </span>
+            )
+          }
           label={meta.title === "" ? t.common.newTask : meta.title}
           tone={status?.tone}
           iconTitle={status?.label}

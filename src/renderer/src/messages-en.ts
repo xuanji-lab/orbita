@@ -592,13 +592,9 @@ export const en = {
         .filter((part) => part !== null)
         .join(" · "),
     moveTasks: "Move tasks…",
-    moveDialogTitle: (name: string) => `Move tasks from ${name}`,
-    moveSelectAll: "Select all",
-    moveTarget: "Move to",
-    moveNote:
-      "The working folder moves too: these tasks continue in the target workspace's folder. Files they already wrote stay where they are. Running tasks are skipped.",
-    moveConfirm: (count: number) => `Move ${plural(count, "task")}`,
-    moveNoTasks: "No tasks in this workspace.",
+    moveHeader: "Move to… (the working folder moves too)",
+    checkHint: "Tick the tasks to move",
+    checkDone: "Done",
     exportMarkdown: "Export as Markdown…",
     unarchive: "Unarchive",
     archive: "Archive…",
