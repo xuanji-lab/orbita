@@ -750,6 +750,14 @@
   position: relative;
 }
 
+/* 菜单里两组之间的分隔线（Menu 的 `rule` 项）：1px 细线 + 上下 space-1 留白，不是一行 */
+.menu-rule {
+  flex: none;
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--color-border-subtle);
+}
+
 /*
  * NavRow 用真实 :hover；Menu 用 data-cursor。两条都要排在下面的选中 / 禁用规则
  * 之前——选中盖过 hover 靠的是选中规则在源码顺序里更靠后（同等特异度下后者赢），
@@ -2952,17 +2960,75 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-2);
+  /* 间距全由下面的组承担：组内 space-1、组间一条细线（rail-sep）、上下两段之间弹性留白 */
+  gap: 0;
   padding: var(--space-1) 0 var(--space-2);
   background: transparent;
   overflow: hidden;
+}
+
+/*
+ * 入口按「这类入口回答什么问题」分组（RightRail 的 RAIL_GROUPS；规矩见设计系统 readme
+ * 「Rail entries are grouped」）：组内一列、间距 space-1、**组内没有分隔**；组与组之间一条
+ * 1px 细线（.rail-sep）。线比 28px 的按钮窄（16px）、居中，上下各留 space-2——
+ * 它只是「到这里换了一类」的换气，不是侧栏的分割线（侧栏仍无框无线无分隔）。
+ * 上段（会话 / 工作面 / 智能体 / 收纳）全在右上，右下只剩「应用」组（设置、通知）。
+ */
+.rail-stack {
+  /* 窗口矮到放不下时，上段自己滚（隐藏滚动条）：下段永远在视野里，Tab 聚焦会把入口带进视野 */
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.rail-stack::-webkit-scrollbar {
+  display: none;
+}
+
+.rail-group {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.rail-sep {
+  flex: none;
+  width: var(--space-4);
+  height: 1px;
+  margin: var(--space-2) 0;
+  background: var(--color-border-default);
+}
+
+/*
+ * 矮窗（窗口最小高 520）里，入口全开的最坏情形（子会话 + 意图 + 记忆）上段比条还高约 7px：
+ * 把组间留白收一档（space-2 → space-1，三条线共省 24px），入口一个不少、不用滚。
+ * 再矮的窗口由 .rail-stack 自己滚兜底。
+ */
+@media (max-height: 560px) {
+  .rail-sep {
+    margin: var(--space-1) 0;
+  }
+}
+
+/* 上下两段之间的弹性留白；矮窗里至少留一档，不让上段贴到「应用」组 */
+.rail-spacer {
+  flex: 1 1 0;
+  min-height: var(--space-1);
 }
 
 /* 铃铛入口的未读角标：常驻在方块右上角，0 时不渲染（RightRail） */
 .rail-badge {
   position: absolute;
   top: -4px;
-  right: -4px;
+  /* 右缘收在条宽之内：按钮居中在 32px 条里（右缘 30），-4px 会让角标右 2px 被条的 overflow 切掉 */
+  right: -2px;
   min-width: 14px;
   height: 14px;
   padding: 0 3px;

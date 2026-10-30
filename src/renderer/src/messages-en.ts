@@ -590,6 +590,14 @@ export const en = {
     intent: "Intent graph",
     /** 「这条任务」面板（进度 + 上下文，2026-10-30） */
     context: "This task",
+    /** 右栏入口的分组名（读屏的 group 标签；视觉上组与组之间只有一条细线，不写字） */
+    groups: {
+      session: "This session",
+      workbench: "Work surfaces",
+      agent: "Agent",
+      shelf: "Put away",
+      app: "App",
+    },
   },
 
   browser: {

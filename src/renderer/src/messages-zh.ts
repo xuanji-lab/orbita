@@ -516,6 +516,13 @@ export const zh: Messages = {
     bell: (count) => (count > 0 ? `通知 · ${count} 条未读` : "通知"),
     intent: "意图图谱",
     context: "这条任务",
+    groups: {
+      session: "这条会话",
+      workbench: "工作面",
+      agent: "智能体",
+      shelf: "收纳",
+      app: "应用",
+    },
   },
 
   browser: {
