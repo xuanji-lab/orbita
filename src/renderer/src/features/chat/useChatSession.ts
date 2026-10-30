@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import { planAwaitingIn } from "../context/plan-timeline.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
@@ -190,6 +191,8 @@ export interface ChatSession {
   turnErrorOf: (id: string) => string | null;
   /** 按 id 查挂着的工具审批（槽里有真相）——状态饼「在等你」要读到后台会话的审批 */
   approvalsOf: (id: string) => readonly PendingApproval[];
+  /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的第二个来源（plan-timeline 的 planAwaitingIn） */
+  planAwaitingOf: (id: string) => boolean;
   /**
    * 按 id 取整个槽（没载过 = undefined）。首页会话卡要说「此刻在干什么」：后台在跑的会话
    * 槽里有它这一轮的过程，不另存——与 phaseOf 同一套 ref 读法，引用稳定
@@ -227,6 +230,10 @@ export interface ChatSession {
   removeQuote: (index: number) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
+  /** 计划卡「按这个做」会切到哪一档（plan 档里：进 plan 之前那档，没记录 = 手动；不在 plan 档 = null 不换档） */
+  planApproveMode: PermissionMode | null;
+  /** 计划卡「按这个做」：必要时先切档，再把确认语发进本会话 */
+  approvePlan: (text: string) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
   thinkingLevel: ThinkingLevel;
   changeThinkingLevel: (next: ThinkingLevel) => void;
@@ -529,6 +536,7 @@ export interface SessionEngine {
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
+  readonly planAwaitingOf: (id: string) => boolean;
   readonly entryOf: (id: string) => SessionEntry | undefined;
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
@@ -1196,6 +1204,13 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
     [],
   );
+  // 停在「计划等你确认」上（状态饼 / 铃铛 / 首页卡「等你」的第二个来源）：只在 idle 时判——在跑的
+  // 轮不可能停在确认上，也免得每次渲染对在跑会话扫转录
+  const planAwaitingOf = useCallback((id: string): boolean => {
+    const entry = statesRef.current.get(id);
+    if (entry === undefined || entry.phase !== "idle") return false;
+    return planAwaitingIn(selectTranscript(entry.transcript));
+  }, []);
   const entryOf = useCallback((id: string): SessionEntry | undefined => statesRef.current.get(id), []);
 
   return {
@@ -1233,6 +1248,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     phaseOf,
     turnErrorOf,
     approvalsOf,
+    planAwaitingOf,
     entryOf,
     answerApproval,
     renameSession,
@@ -2224,6 +2240,36 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
+   * 把一句话作为用户消息发进这条会话：在跑就排队（不打断正在跑的轮，与 send 同一条纪律），
+   * 闲着就按会话自己的账续跑（buildTurn：cwd / 本子 / 档位都是它当时的样子）。
+   * 续跑遗留事项（continueCarryoverInSource）与计划卡的「按这个做」共用。
+   */
+  const deliverText = useCallback(
+    (id: string, text: string, extra: { carryoverId?: string } = {}): void => {
+      // 没有槽（undefined）也是没在跑：直接发，不排队——排了没人投递，成死队列
+      const entry = engine.statesRef.current.get(id);
+      if (entry !== undefined && entry.phase !== "idle") {
+        engine.applyStates((prev) => enqueue(prev, id, { id: crypto.randomUUID(), kind: "text", text }));
+        return;
+      }
+      const turn = engine.buildTurn(id);
+      if (turn === null) return;
+      // 这里不再清 error：openSession 读盘失败的红字要留着（链会继续走到这，
+      // 消息照发、历史没种上，用户得知道有错）；常规清理 openSession 开头已做
+      if (sessionRef.current !== id) {
+        setSessionId(id);
+        sessionRef.current = id;
+      }
+      const revertTurn = engine.beginOptimisticTurn(id);
+      void api.agent.submit({ sessionId: id, text, ...turn, ...extra }).catch((cause: unknown) => {
+        engine.setError(cause instanceof Error ? cause.message : String(cause));
+        revertTurn();
+      });
+    },
+    [engine],
+  );
+
+  /**
    * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
    * 只读导入会话没有 pi 本子，面板已按 canResumeInSource 禁掉入口，这里再守一道）。
    * **等 openSession 把历史种完再发**：submit 先行会把槽建出来，种子看到槽已存在
@@ -2237,31 +2283,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const meta = engine.sessions.find((entry) => entry.id === id) ?? null;
       if (meta === null || meta.piSessionFile === null) return;
       const text = buildCarryoverFollowUp(item);
-      void openSession(id).then(() => {
-        // 没有槽（undefined）也是没在跑：直接发，不排队——排了没人投递，成死队列
-        const entry = engine.statesRef.current.get(id);
-        if (entry !== undefined && entry.phase !== "idle") {
-          engine.applyStates((prev) =>
-            enqueue(prev, id, { id: crypto.randomUUID(), kind: "text", text }),
-          );
-          return;
-        }
-        const turn = engine.buildTurn(id);
-        if (turn === null) return;
-        // 这里不再清 error：openSession 读盘失败的红字要留着（链会继续走到这，
-        // 消息照发、历史没种上，用户得知道有错）；常规清理 openSession 开头已做
-        if (sessionRef.current !== id) {
-          setSessionId(id);
-          sessionRef.current = id;
-        }
-        const revertTurn = engine.beginOptimisticTurn(id);
-        void api.agent.submit({ sessionId: id, text, ...turn, carryoverId: item.id }).catch((cause: unknown) => {
-          engine.setError(cause instanceof Error ? cause.message : String(cause));
-          revertTurn();
-        });
-      });
+      void openSession(id).then(() => deliverText(id, text, { carryoverId: item.id }));
     },
-    [engine, openSession],
+    [engine, openSession, deliverText],
   );
 
   const branchFrom = useCallback(
@@ -2413,8 +2437,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
 
+  /** 每条会话进 plan 档之前的那一档：计划卡「按这个做」要切回它（没有记录 = 手动） */
+  const modeBeforePlanRef = useRef(new Map<string, PermissionMode>());
+
   const changeMode = useCallback(
     (next: PermissionMode) => {
+      if (next === "plan" && mode !== "plan") modeBeforePlanRef.current.set(sessionRef.current ?? opened?.id ?? "", mode);
       // 理由同 chooseModel 的记账链：UI 即时、意图记在会话名下（跑着时改不进
       // meta，排队卡投递时要拿这一档）。
       // **总是发 IPC（不再只在 idle 时发）**：档位联动子会话（父带子）不能等父
@@ -2437,7 +2465,25 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         .setMode(id, next)
         .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [engine, opened],
+    [engine, opened, mode],
+  );
+
+  /**
+   * 计划卡「按这个做」会切到哪一档：plan 档只读，只确认不换档 agent 什么也做不了——所以在 plan 档里点
+   * 它要顺带离开：切回进 plan 档之前的那一档，没有记录（开局就是 plan）就切到手动。不在 plan 档 = null（不换档）。
+   */
+  const planApproveMode: PermissionMode | null =
+    mode === "plan" ? (modeBeforePlanRef.current.get(sessionId ?? opened?.id ?? "") ?? "manual") : null;
+
+  /** 计划卡「按这个做」：必要时先切档，再把确认语作为一条用户消息发进本会话（在跑就排队，同 send） */
+  const approvePlan = useCallback(
+    (text: string): void => {
+      const id = sessionRef.current ?? opened?.id ?? null;
+      if (id === null) return;
+      if (planApproveMode !== null) changeMode(planApproveMode);
+      deliverText(id, text);
+    },
+    [opened, planApproveMode, changeMode, deliverText],
   );
 
   const changeThinkingLevel = useCallback(
@@ -3180,6 +3226,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
     approvalsOf: engine.approvalsOf,
+    planAwaitingOf: engine.planAwaitingOf,
     entryOf: engine.entryOf,
     error: engine.error,
     draft,
@@ -3200,6 +3247,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     removeQuote,
     mode,
     changeMode,
+    planApproveMode,
+    approvePlan,
     thinkingLevel,
     changeThinkingLevel,
     // 只给当前型号报回的支持集；别的型号报的（切过型号还没开轮）当没有，菜单回落目录

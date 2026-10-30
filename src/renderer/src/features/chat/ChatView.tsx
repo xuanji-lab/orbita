@@ -30,9 +30,11 @@ import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
-import { planNoticeOf, planTimeline, type PlanTimeline } from "../context/plan-timeline.ts";
+import { planAwaitingIn, planNoticeOf, planTimeline, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
+import { PlanConfirmCard } from "./PlanConfirmCard";
 import { planNoticeText } from "../context/plan-text.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import type { PermissionMode } from "../../../../shared/permission.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   processOutcome,
@@ -1318,10 +1320,15 @@ function ChatViewBody(props: {
     }
     const stateOf = (meta: SessionMeta): SessionRunState =>
       sessionRunState({
-        slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
+        slot: {
+          phase: session.phaseOf(meta.id),
+          approvals: session.approvalsOf(meta.id).length,
+          planAwaiting: session.planAwaitingOf(meta.id),
+        },
         children: (childrenOf.get(meta.id) ?? []).map((child) => ({
           phase: session.phaseOf(child.id),
           approvals: session.approvalsOf(child.id).length,
+          planAwaiting: session.planAwaitingOf(child.id),
         })),
         unread: meta.unread ?? null,
       });
@@ -1570,6 +1577,8 @@ function ChatViewBody(props: {
           transcript={session.transcript}
           compactions={session.compactions}
           marks={session.marks}
+          onApprovePlan={session.approvePlan}
+          approveMode={session.planApproveMode}
           phase={session.phase}
           retry={session.retry}
           turnError={session.turnError}
@@ -1618,6 +1627,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   compactions: readonly CompactedRecord[];
   /** 子会话 PR4a：盘上读回的通道标记，与 compactions 同一条纪律（见 mergeSideRecords） */
   marks: readonly ChannelMarkRecord[];
+  /** 计划卡「按这个做」：发出确认语（必要时先切档，useChatSession 的 approvePlan） */
+  onApprovePlan: (text: string) => void;
+  /** 点「按这个做」会切到哪一档；null = 不换档 */
+  approveMode: PermissionMode | null;
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
   turnError: string | null;
@@ -1679,6 +1692,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const plan = useMemo(
     () => planTimeline(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
     [transcript],
+  );
+  // 停在「计划等你确认」上的那一版（最后一次 update_plan 要求确认、之后用户还没回应）：画成计划卡
+  const awaitingPlan = useMemo(
+    () => (plan !== null && plan.current.awaiting && planAwaitingIn(transcript) ? plan.current : null),
+    [plan, transcript],
   );
   // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
   // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
@@ -1895,6 +1913,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
               <TurnProcessLine
                 unit={entry}
                 plan={plan}
+                awaitingPlan={awaitingPlan}
+                onApprovePlan={() => props.onApprovePlan(t.chat.planApproveText)}
+                approveMode={props.approveMode}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
                 skills={props.skills}
@@ -3799,6 +3820,10 @@ function TurnProcessLine(props: {
   unit: TurnProcessUnit;
   /** 计划的版本线（没写过计划 = null） */
   plan: PlanTimeline | null;
+  /** 停在「等你确认」上的那一版；这个块里的计划调用正是它时画计划卡 */
+  awaitingPlan: PlanVersion | null;
+  approveMode: PermissionMode | null;
+  onApprovePlan: () => void;
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   skills: SkillMeta[];
@@ -3940,6 +3965,9 @@ function TurnProcessLine(props: {
         </ol>
       )}
       {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
+      {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
+        <PlanConfirmCard version={props.awaitingPlan} approveMode={props.approveMode} onApprove={props.onApprovePlan} />
+      )}
     </div>
   );
 }

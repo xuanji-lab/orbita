@@ -322,3 +322,18 @@ export function planNoticeOf(timeline: PlanTimeline | null, toolCallIds: readonl
   }
   return changes.length === 0 ? null : { changes, why };
 }
+
+/**
+ * 这条会话此刻是不是停在「计划等你确认」上：从尾往前找，先碰到用户消息 = 已回应、不是；
+ * 先碰到 update_plan 的完成记录 = 看它 details.awaiting（plan 档写完计划 / 带了 confirm / 先给我看计划）。
+ * 侧栏状态饼、铃铛、首页卡的「等你」与进度面板头一行都读它（sessionRunState 的计划来源）。
+ */
+export function planAwaitingIn(records: readonly TranscriptRecord[]): boolean {
+  for (let i = records.length - 1; i >= 0; i--) {
+    const record = records[i];
+    if (record === undefined) continue;
+    if (record.role === "user") return false;
+    if (record.role === "tool" && record.toolName === PLAN_TOOL_NAME && record.status === "complete") return awaitingOf(record);
+  }
+  return false;
+}

@@ -852,10 +852,12 @@ export function App() {
         slot: {
           phase: session.phaseOf(meta.id),
           approvals: session.approvalsOf(meta.id).length,
+          planAwaiting: session.planAwaitingOf(meta.id),
         },
         children: childSessions(session.sessions, meta.id).map((child) => ({
           phase: session.phaseOf(child.id),
           approvals: session.approvalsOf(child.id).length,
+          planAwaiting: session.planAwaitingOf(child.id),
         })),
         unread: meta.unread ?? null,
       });
@@ -873,7 +875,7 @@ export function App() {
     }
     return orderNoticeEntries(rows);
     // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
-  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, engine.states]);
+  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, session.planAwaitingOf, engine.states]);
   /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
    *  但它若已在主槽就没有那一拍了，这里兑底） */
   const openFromNotice = useCallback(

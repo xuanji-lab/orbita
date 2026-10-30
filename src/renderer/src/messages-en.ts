@@ -812,6 +812,10 @@ export const en = {
     thinkingLevelFor: (modelId: string) => `Thinking level for ${modelId}`,
     defaultThinking: (label: string) => `Default · ${label}`,
     attribution: "Commit & PR attribution",
+    planFirst: "Show me the plan first",
+    planFirstAria: "Show me the plan first",
+    planFirstInfo:
+      "After the agent writes the first plan of a task, it stops and waits for your go-ahead before doing anything. Off by default · Plan mode and questions from the agent always stop",
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
@@ -1677,6 +1681,15 @@ export const en = {
     /** 一轮里一步工具都没跑：只想了想就答 / 只写了计划（以前这里写「0 steps」） */
     processThoughtOnly: "Thought it through",
     processPlanOnly: "Updated the plan",
+    planCardTitle: "Plan waiting for you",
+    planCardAsking: "A question before it starts",
+    planCardSteps: (n: number) => (n === 1 ? "1 step" : `${n} steps`),
+    planCardQuestions: "It needs your answer",
+    planCardHint: "Say what to change right in the box below, or approve it.",
+    planCardHintAsking: "Answer in the box below. The agent carries on once you reply.",
+    planCardApprove: "Go ahead with this plan",
+    planCardApproveSwitch: (mode: string) => `Go ahead · switch to ${mode}`,
+    planApproveText: "Go ahead with this plan.",
     processStepAt: (n: number) => `Step ${n}`,
     processWrote: (n: number) => `wrote ${plural(n, "file")}`,
     processFailed: (n: number) => `${n} failed`,

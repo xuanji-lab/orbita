@@ -1575,6 +1575,70 @@ body {
   color: var(--color-accent-fg);
 }
 
+/* 计划卡（PlanConfirmCard）：停在「等你确认」上时画在过程行下面，骨架同离开卡（ExitCard） */
+.plan-card {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: var(--space-1) var(--content-hem) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+.plan-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.plan-card-kicker {
+  font-weight: var(--weight-semibold);
+}
+.plan-card-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.plan-card-steps,
+.plan-card-asks ol {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-0-5);
+  line-height: var(--line-height-ui);
+}
+.plan-card-steps li {
+  color: var(--color-text-primary);
+}
+.plan-card-steps li::marker,
+.plan-card-asks li::marker {
+  color: var(--color-text-tertiary);
+}
+.plan-card-asks {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.plan-card-asks-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.plan-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.plan-card-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
 /* 折叠行共用骨架（CollapseRow：ToolCard / ThinkingCard）：hover 淡底，disabled 时
    原生 :disabled 天然不触发 :hover，不用另外判 interactive */
 .collapse-row-btn {

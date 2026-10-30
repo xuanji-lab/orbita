@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planNoticeOf, planTimeline, stepActiveSince } from "./plan-timeline.ts";
+import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planAwaitingIn, planNoticeOf, planTimeline, stepActiveSince } from "./plan-timeline.ts";
 import type { ProcessChapter } from "../chat/turn-process.ts";
 
 const tool = (o: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">): TranscriptItem =>
@@ -180,5 +180,18 @@ describe("stepActiveSince：在做那步的钟", () => {
       plan("p2", 150, steps(["甲", "in_progress"])),
     ]);
     assert.equal(stepActiveSince(first as NonNullable<typeof first>, first?.current.items[0]?.id ?? ""), 100);
+  });
+});
+
+describe("planAwaitingIn：停在计划确认上", () => {
+  const user = (id: string, at: number) => ({ id, role: "user", content: [{ type: "text", text: "x" }], timestamp: at }) as unknown as TranscriptItem;
+  const awaitingPlan = plan("p1", 10, steps(["甲", "in_progress"]), { details: { plan: [], awaiting: true } as never });
+  test("最后一次 update_plan 要求确认、之后没有用户消息 = 是", () => {
+    assert.equal(planAwaitingIn([user("u1", 1), awaitingPlan, tool({ toolCallId: "r1", timestamp: 11 })]), true);
+  });
+  test("用户已回应 / 之后有不要求确认的计划 / 没有计划 = 否", () => {
+    assert.equal(planAwaitingIn([awaitingPlan, user("u2", 20)]), false);
+    assert.equal(planAwaitingIn([awaitingPlan, plan("p2", 30, steps(["甲", "in_progress"]))]), false);
+    assert.equal(planAwaitingIn([user("u1", 1)]), false);
   });
 });
