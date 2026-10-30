@@ -21,6 +21,10 @@ import {
   formatChangeLines,
   isHiddenEntry,
   joinRel,
+  POLL_GATE_IDLE,
+  pollGateAccept,
+  pollGateBegin,
+  pollGateSettle,
   shouldPollChanges,
 } from "./focus-files.ts";
 
@@ -60,14 +64,27 @@ export function WorkspaceFiles(props: {
 
   // —─ U / M：拉取 + 30 秒一拉（快照视图：agent 写盘由 useFileTree 的自动刷新盖住，
   //    U/M 的半分钟延迟可见不是问题）。**窗口藏起来时跳过这一拍**：后台没人看，
-  //    每次 git 读 + IPC 都是纯烧电；回到前台由 visibilitychange 立刻补一拍。 ──
+  //    每次 git 读 + IPC 都是纯烧电；回到前台由 visibilitychange 立刻补一拍。
+  //    在途去重与代次：慢 git 不叠跑（同一工作区在途时新拍放弃）；万一同一实例里
+  //    换了工作区 prop，新工作区顶替旧在途，旧结果落定对不上号就作废——不串台。 ──
   const [changesGen, setChangesGen] = useState(0);
+  const pollGateRef = useRef(POLL_GATE_IDLE);
   const loadChanges = useCallback(async (): Promise<void> => {
+    const ticket = pollGateBegin(pollGateRef.current, workspace.id);
+    if (ticket === null) return;
+    pollGateRef.current = ticket.gate;
     try {
-      setChanges(await api.focus.changes(workspace.id));
-      setChangesGen((current) => current + 1);
+      const result = await api.focus.changes(workspace.id);
+      if (pollGateAccept(pollGateRef.current, ticket.mine)) {
+        setChanges(result);
+        setChangesGen((current) => current + 1);
+      }
     } catch (cause) {
-      setChanges({ kind: "error", message: cause instanceof Error ? cause.message : String(cause) });
+      if (pollGateAccept(pollGateRef.current, ticket.mine)) {
+        setChanges({ kind: "error", message: cause instanceof Error ? cause.message : String(cause) });
+      }
+    } finally {
+      pollGateRef.current = pollGateSettle(pollGateRef.current);
     }
   }, [workspace.id]);
   useEffect(() => {

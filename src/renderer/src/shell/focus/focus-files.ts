@@ -68,3 +68,46 @@ export function joinRel(dir: string, name: string): string {
 export function shouldPollChanges(visibilityState: string): boolean {
   return visibilityState !== "hidden";
 }
+
+/**
+ * 轮询守卫的小状态（在途标记 + 其代次与工作区）。代数简单，不值得一个类：
+ * 三个纯函数盖住全部转移，组件里只拿 ref 存它。`node --test` 直接可测。
+ */
+export interface PollGate {
+  /** 有没有一遭 focus:changes 在途（30 秒一拍 + 回前台补拍都可能发起） */
+  inflight: boolean;
+  /** 在途那遭的代次（每次真正发起 +1；落定时对不上号就作废） */
+  generation: number;
+  /** 在途那遭查的工作区 */
+  workspaceId: string | null;
+}
+
+export const POLL_GATE_IDLE: PollGate = { inflight: false, generation: 0, workspaceId: null };
+
+/** 发起成功的回执：新状态 + 这一遭的号（落定时拿它对号） */
+export interface PollTicket {
+  gate: PollGate;
+  mine: number;
+}
+
+/**
+ * 发起前：在途去重。**同一工作区**在途时后来的拍子直接放弃（慢 git 一次 status
+ * 数秒，30 秒一拍 + 回前台补拍会叠起来；在途那遭回来就是新鲜数据，不欠这拍）。
+ * 工作区变了就顶替：旧在途不被等，代次 +1 让它落定时作废——key 重挂已经保证
+ * 换工作区是新实例，这里是同一实例内换了 prop 时的兑底。
+ */
+export function pollGateBegin(current: PollGate, workspaceId: string): PollTicket | null {
+  if (current.inflight && current.workspaceId === workspaceId) return null;
+  const generation = current.generation + 1;
+  return { gate: { inflight: true, generation, workspaceId }, mine: generation };
+}
+
+/** 落定时：这一遭的号还是最新才收——对不上号只在被顶替时发生，宁作废不串台 */
+export function pollGateAccept(current: PollGate, mine: number): boolean {
+  return current.generation === mine;
+}
+
+/** 结束（收不收都走）：在途清零；代次与工作区留着给后到者对号 */
+export function pollGateSettle(current: PollGate): PollGate {
+  return { inflight: false, generation: current.generation, workspaceId: current.workspaceId };
+}

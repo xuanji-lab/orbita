@@ -345,6 +345,7 @@ export function Sidebar(props: {
     filesViewWs !== null && props.filesView !== null
       ? (
           <WorkspaceFiles
+            key={filesViewWs.id}
             mode={props.filesView.mode}
             workspace={filesViewWs}
             workspaces={session.workspaces}
