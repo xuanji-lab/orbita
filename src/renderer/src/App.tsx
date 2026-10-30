@@ -386,6 +386,7 @@ export function App() {
         }
         workspaceName={focusWorkspaceName}
         summary={focus.summary}
+        onRetry={focus.retrySummary}
         onEnd={focus.end}
         onAgain={() => {
           const preset = focus.lastPreset ?? { workspaceId: focusRun.workspaceId, minutes: 25 };

@@ -5,6 +5,7 @@
  * `use-focus.ts`（hook），界面在 `FocusControl.tsx`。状态不落盘：用户裁决
  * 「关掉应用重开 = 已结束」，内存里的计时器天然满足。
  */
+import type { FocusSummaryRequest } from "@shared/focus";
 
 /** 滚轮的时长档（分钟），原型的定档 */
 export const FOCUS_MINUTES: readonly number[] = [10, 15, 20, 25, 30, 45, 60, 90, 120];
@@ -80,6 +81,16 @@ export function focusClockAction(run: FocusRun, now: number, summaryIdle: boolea
     startSummary: summaryIdle && shouldStartSummary(run, now),
     finish: now >= run.endsAt,
   };
+}
+
+/**
+ * 起跑那一刻的素材窗口（[startedAt, until]，限定所选工作区）。
+ *
+ * **只在起跑时算一次**：失败后点「重试」必须沿用它，不能拿重试时刻当 until——
+ * 否则用户看完原因再点，窗口已经比这次专注长了，重试读的是另一段素材。
+ */
+export function summaryWindowOf(run: FocusRun, now: number): FocusSummaryRequest {
+  return { startedAt: run.startedAt, until: now, workspaceId: run.workspaceId };
 }
 
 /** 已过进度（0..1）：胶囊浮层那条细进度线的宽度 */
