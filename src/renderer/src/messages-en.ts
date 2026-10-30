@@ -620,8 +620,8 @@ export const en = {
     markItemDone: "Mark this item done",
     continueWithContext: "Continue with context",
     continueTipResumable:
-      "Start a new task with this item's context · right-click to continue in the original task",
-    continueTip: "Start a new task with this item's context",
+      "Put this item's context in the input box — pick a workspace, then press Enter · right-click to continue in the original task",
+    continueTip: "Put this item's context in the input box — pick a workspace, then press Enter",
     jumpToSource: "Jump to the source task",
     jumpToSourceTip: "Open the task this came from",
   },
@@ -1376,6 +1376,8 @@ export const en = {
   permissionModes: PERMISSION_MODE_LABELS,
 
   chat: {
+    moveHeader: "Move this task to… (the working folder moves too)",
+    moveBlocked: "The task is running — stop it first, then move it",
     /**
      * 纸面两档首页 slogan 下的红笔批语（老师在作业本上写的那一行），落当天日期；只在纸面
      * 两档出现。月份照美式批改的缩写（原型写「Sept 25」）：五个字母以内的月份写全

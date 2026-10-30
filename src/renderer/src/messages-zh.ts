@@ -558,8 +558,8 @@ export const zh: Messages = {
     reopenItem: "重新打开这一项",
     markItemDone: "标记这一项已完成",
     continueWithContext: "带上下文继续",
-    continueTipResumable: "带着这一项的上下文开新任务 · 右键在原任务里继续",
-    continueTip: "带着这一项的上下文开新任务",
+    continueTipResumable: "带着这一项的上下文填进输入框，选好工作区回车开工 · 右键在原任务里继续",
+    continueTip: "带着这一项的上下文填进输入框，选好工作区回车开工",
     jumpToSource: "跳到来源任务",
     jumpToSourceTip: "打开这一项所在的任务",
   },
@@ -1248,6 +1248,8 @@ export const zh: Messages = {
   },
 
   chat: {
+    moveHeader: "把这条任务移到…（工作目录一起换）",
+    moveBlocked: "任务正在运行，停下后再移",
     // 批改的落款：全角空格隔开评语与「阅 月.日」（原型「字迹工整　阅 9.25」）
     homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
     placeholderNew: "问点什么，或交办一件事",
