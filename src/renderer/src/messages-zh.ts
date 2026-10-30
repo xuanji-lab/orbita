@@ -166,6 +166,48 @@ export const zh: Messages = {
     empty: "还没有记忆。",
     emptyHint: "开着记忆系统聊几轮，闲下来后对话会自动整理成记忆；也可以手动添加。",
     noMatch: "没有符合的记忆。",
+    historyOpen: "从历史生成",
+    historyTitle: "从历史聊天生成记忆",
+    historyIntro:
+      "记忆只从打开记忆系统之后的新对话里整理。这里把之前的聊天也补进来：按对话原本的时间整理，日期更晚的说法会把更早的标为过时；已经整理过的轮自动跳过，不会重复。",
+    historyWorkspaces: "工作区",
+    historyNoWorkspace: "没有工作区的任务（按目录）",
+    historySessions: (count: number) => `${count} 个任务`,
+    historyStats: (pending: number, done: number, calls: number) =>
+      `待处理 ${pending} 轮 · 已处理 ${done} 轮 · 约 ${calls} 次模型调用`,
+    historyCounting: "正在统计……",
+    historyTotal: (pending: number, done: number, calls: number) =>
+      `合计待处理 ${pending} 轮；已处理的 ${done} 轮会跳过；约 ${calls} 次模型调用`,
+    historyChore: "用家务活模型",
+    historyNoChore: "还没设家务活模型，先去设置里选一个。",
+    historyNothing: "选中的范围里没有待处理的轮。",
+    historyStart: "开始生成",
+    historyPause: "暂停",
+    historyResume: "继续",
+    historyStop: "停止",
+    historyClose: "收起",
+    historyAgain: "再选范围",
+    historyState: (state: string): string =>
+      state === "running"
+        ? "正在生成"
+        : state === "paused"
+          ? "已暂停"
+          : state === "stopping"
+            ? "正在收尾"
+            : state === "stopped"
+              ? "已停止"
+              : state === "done"
+                ? "已完成"
+                : state === "failed"
+                  ? "出错暂停"
+                  : "没有任务",
+    historyProgress: (done: number, total: number) => `第 ${done} / ${total} 轮`,
+    historyEpisodes: (count: number) => `已整理 ${count} 段`,
+    historyWritten: (fact: number, preference: number, insight: number) =>
+      `生成 ${fact + preference + insight} 条：事实 ${fact} · 偏好 ${preference} · 经验 ${insight}`,
+    historyCalls: (count: number) => `调用模型 ${count} 次`,
+    historyFailedNote: (count: number) => `${count} 类提取失败，那几段留着，下次启动会重试`,
+    historyResumeHint: "停止或退出后再开始，会从断点接着生成。",
     manualTitle: "手动添加一条记忆",
     manualText: "写成一句完整的话",
     manualReason: (type) => (type === "insight" ? "依据：从哪几次交互看出来的" : "理由：为什么要这样"),

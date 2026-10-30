@@ -79,6 +79,7 @@ import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../design-system/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../design-system/assets/icons/lucide/pencil-line.svg?raw";
+import pause from "../../../../design-system/assets/icons/lucide/pause.svg?raw";
 import play from "../../../../design-system/assets/icons/lucide/play.svg?raw";
 import paperclip from "../../../../design-system/assets/icons/lucide/paperclip.svg?raw";
 import quote from "../../../../design-system/assets/icons/lucide/quote.svg?raw";
@@ -222,6 +223,7 @@ const ICONS = {
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  pause,
   play,
   paperclip,
   pin,
