@@ -218,6 +218,13 @@ describe("snippetPair（长目标「从 A 改成 B」只留不同处）", () => 
     assert.ok([...to].length <= 120 && [...from].length <= 120);
   });
 
+  test("前缀从最近的标点后面起，不把词切在半截", () => {
+    const base = `${"前文".repeat(80)}，只修改 sandbox-k2 目录里的文件。`;
+    const [from, to] = snippetPair(base, `${base}最后还要有 cli.js。`);
+    assert.ok(from.startsWith("…只修改 sandbox-k2"), from);
+    assert.ok(to.startsWith("…只修改 sandbox-k2"), to);
+  });
+
   test("中间改了一处：保留不同处前后的上下文，两头用省略号", () => {
     const head = "前文".repeat(60);
     const tail = "后文".repeat(60);

@@ -161,6 +161,7 @@ export function ledgerTime(at: number): string {
 export const LEDGER_TEXT_MAX = 120;
 /** 摘取两段文字不同处时，不同处前后各留多少字符的上下文 */
 const SNIPPET_CONTEXT = 24;
+const SNIPPET_MIN_CONTEXT = 8;
 
 /**
  * 「从 A 改成 B」里把两段长文字各自缩成一小段：只留**不同的地方**和它前后的上下文，公共的开头 / 结尾用省略号。
@@ -182,7 +183,15 @@ export function snippetPair(from: string, to: string, max = LEDGER_TEXT_MAX): [s
   while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++;
   let suffix = 0;
   while (suffix < a.length - prefix && suffix < b.length - prefix && a.at(-1 - suffix) === b.at(-1 - suffix)) suffix++;
-  const start = Math.max(0, prefix - SNIPPET_CONTEXT);
+  // 从不同处往前最多 SNIPPET_CONTEXT 个字符；窗口里第一个标点 / 空格之后起，别把一个词切在半截（「…E，只修改」），
+  // 但至少留 SNIPPET_MIN_CONTEXT 个字符的上下文（标点紧贴着不同处时，不能把上下文削光）
+  let start = Math.max(0, prefix - SNIPPET_CONTEXT);
+  for (let i = start; i <= prefix - SNIPPET_MIN_CONTEXT; i++) {
+    if (/[\s，。；：、！？,.;:!?]/.test(a[i] ?? "")) {
+      start = i + 1;
+      break;
+    }
+  }
   const keepTail = Math.min(suffix, SNIPPET_CONTEXT);
   const cut = (chars: string[]): string => {
     const end = chars.length - suffix + keepTail;
