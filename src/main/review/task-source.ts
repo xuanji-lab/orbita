@@ -2,18 +2,36 @@
  * 审查面板的 task 来源 —— 「本任务改动」：基线 = 本任务**首次**改该文件前的快照
  * （含已撤回轮次——回退不抹掉「动过」的事实），对比 = 磁盘现状。不依赖 git：
  * 没有仓库的目录一样能用；回退 / 撤销之后基线与现状一致，条目标「已还原」。
+ *
+ * 读盘边界：白名单是本任务的文件账（账上没有的路径不给 diff）；账上的路径事后被换成符号链接时
+ * 不跟过去读（lstat），只报它指向哪——账管「哪个路径」，管不到「这个路径现在指向谁」。
  */
-import { readFile, stat } from "node:fs/promises";
+import { lstat, readFile, readlink } from "node:fs/promises";
 import { createTwoFilesPatch } from "diff";
 import type { SessionRecord } from "../../shared/session.ts";
 import { isFileTurnRecord, type SnapshotRef } from "../../shared/revert.ts";
-import type { ReviewDiff, ReviewEntry, ReviewList } from "../../shared/review.ts";
+import { reviewDiffError, type ReviewDiff, type ReviewEntry, type ReviewList } from "../../shared/review.ts";
 import type { SessionStore } from "../session/store.ts";
 
-/** 磁盘现状：不在 = null；读不了 / 非 utf8 / 带 NUL = undefined（比不了、也出不了 diff）。 */
-async function diskContent(path: string): Promise<string | null | undefined> {
+/** 账上的路径现在是个符号链接：只带链接里写的目标（readlink 原文），不读目标 */
+interface DiskLink {
+  symlink: string;
+}
+
+function isDiskLink(value: string | null | undefined | DiskLink): value is DiskLink {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * 磁盘现状：不在 = null；读不了 / 非 utf8 / 带 NUL = undefined（比不了、也出不了 diff）；
+ * 符号链接 = DiskLink。
+ */
+async function diskContent(path: string): Promise<string | null | undefined | DiskLink> {
   try {
-    const info = await stat(path);
+    // lstat 不跟链接：跟过去的话，账上一个路径被换成指向根外的链接，「本任务改动」就成了
+    // 读任意文件的后门（Windows 的 junction 在 Node 里同样是 isSymbolicLink）
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) return { symlink: await readlink(path) };
     if (!info.isFile()) return undefined;
     const bytes = await readFile(path);
     if (bytes.includes(0)) return undefined;
@@ -69,6 +87,11 @@ export async function taskReviewList(store: SessionStore, sessionId: string): Pr
   for (const [path, before] of baselines(records)) {
     const base = await baselineText(store, sessionId, before);
     const disk = await diskContent(path);
+    if (isDiskLink(disk)) {
+      // 链接：不跟到目标读，行数不算目标的，只标出它指向哪
+      entries.push({ path, added: 0, removed: 0, binary: false, symlink: disk.symlink });
+      continue;
+    }
     if (base === undefined || disk === undefined) {
       // 基线或现状是二进制 / 读不了：列出来（路径是真的动过），标无基线
       entries.push({ path, added: 0, removed: 0, binary: base === undefined && disk === undefined, noBaseline: true });
@@ -106,11 +129,13 @@ export async function taskReviewDiff(
   const records = await store.readRawLog(sessionId);
   const before = baselines(records).get(path);
   if (before === undefined) {
-    // 不在账上的路径不给 diff——review:diff 不能变成读任意文件的后门
-    return { diff: null, binary: false, restored: false };
+    // 不在账上的路径不给 diff——review:diff 不能变成读任意文件的后门。拒绝要说清楚，
+    // 以前回 { diff: null, binary: false }，面板显示成「二进制」
+    return reviewDiffError("not-in-record", `${path} is not in this task's change record`);
   }
   const base = await baselineText(store, sessionId, before);
   const disk = await diskContent(path);
+  if (isDiskLink(disk)) return { diff: null, binary: false, restored: false, symlink: disk.symlink };
   if (base === undefined || disk === undefined) {
     return { diff: null, binary: true, restored: false };
   }

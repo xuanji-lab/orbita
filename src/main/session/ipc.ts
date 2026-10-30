@@ -25,7 +25,7 @@ import type { AgentHost } from "../agent/host.ts";
 import type { CarryoverStore } from "./carryover-store.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
-import { isWebPageFile } from "../../shared/files.ts";
+import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
@@ -37,8 +37,11 @@ export function registerSessionIpc(
   carryovers: CarryoverStore,
   /** 给导入的会话分配模型：执行前校验目标 provider / 模型仍存在（model-assign.ts） */
   providers: ProviderStore,
-  /** 轮尾产物在内置浏览器「你的」tab 打开（BrowserSandbox.openLocalFile） */
-  openArtifactInBrowser: (path: string) => Promise<void>,
+  /**
+   * 轮尾产物在内置浏览器「你的」tab 打开（BrowserSandbox.openSessionArtifact：本会话目录那道入口闸，
+   * realpath 后判）。不放行时回原因码，不抛错
+   */
+  openArtifactInBrowser: (sessionId: string, path: string) => Promise<ArtifactOpenResult>,
   /**
    * 会话回退成功后的钩子（index.ts 注入：意图系统作废 + 记忆系统停用 / 截段；undefined = 不启用）。
    * turnIds = 被撤回轮次的 user 记录 id；fromTurn = 回退点那条用户消息的轮号（按用户消息计、
@@ -217,22 +220,29 @@ export function registerSessionIpc(
    * （同 fs:open 的纪律，但根不是目录树而是会话自己的账本）。内置浏览器再叠加
    * isWebPageFile。
    */
-  const knownArtifact = async (id: string, path: string): Promise<void> => {
+  const isKnownArtifact = async (id: string, path: string): Promise<boolean> => {
     const turns = fileTurnsIn(await store.readRawLog(id));
-    const known = turns.some(
+    return turns.some(
       (turn) =>
         turn.changes.some((change) => change.path === path) ||
         (turn.webArtifacts?.includes(path) ?? false),
     );
-    if (!known) throw new Error(`That file is not in this task's change record: ${path}`);
   };
-  ipcMain.handle(ipcChannels.sessionOpenArtifactInBrowser, async (_event, id: string, path: string) => {
-    await knownArtifact(id, path);
-    if (!isWebPageFile(path)) {
-      throw new Error(`Only web pages (html/svg) open in the built-in browser: ${path}`);
-    }
-    await openArtifactInBrowser(path);
-  });
+  const knownArtifact = async (id: string, path: string): Promise<void> => {
+    if (!(await isKnownArtifact(id, path))) throw new Error(`That file is not in this task's change record: ${path}`);
+  };
+  /**
+   * 账上有这个路径只是第一道；第二道在 openArtifactInBrowser 里（realpath 后必须在本会话的目录里、
+   * 是网页文件）——以前只有第一道，账上的路径被换成指向外面的链接，打开的就是外面的文件。
+   * 两道都回原因码，卡片照着说（以前抛错只进 console）。
+   */
+  ipcMain.handle(
+    ipcChannels.sessionOpenArtifactInBrowser,
+    async (_event, id: string, path: string): Promise<ArtifactOpenResult> => {
+      if (!(await isKnownArtifact(id, path))) return { ok: false, reason: "not-in-record" };
+      return openArtifactInBrowser(id, path);
+    },
+  );
   // 第二个出口是「打开文件所在位置」而不是「默认浏览器」（用户 2026-10-01 裁决）：
   // 默认浏览器与内置浏览器是同一件事的两个版本，定位文件才是另一种需要（拷走、拖进别的应用）
   ipcMain.handle(ipcChannels.sessionRevealArtifact, async (_event, id: string, path: string) => {

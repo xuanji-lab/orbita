@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
@@ -142,6 +142,9 @@ describe("taskReviewDiff", () => {
     assert.ok(inside.diff?.includes("+two"));
     const outside = await taskReviewDiff(store, ID, join(dir, "sessions", `${ID}.meta.json`));
     assert.equal(outside.diff, null);
+    // 拒绝要说清楚：不在账上，而不是显示成「二进制」
+    assert.equal(outside.error?.reason, "not-in-record");
+    assert.equal(outside.binary, false);
   });
 
   test("基线与现状一致 → restored；二进制基线 → binary", async () => {
@@ -157,5 +160,61 @@ describe("taskReviewDiff", () => {
     ]);
     const bin = await taskReviewDiff(store, ID, join(lab, "bin.png"));
     assert.equal(bin.binary, true);
+  });
+});
+
+// ————————————————————————————————————————————————
+// 读盘边界：账上的路径事后被换成符号链接（指到账外、甚至根外），审查面板不跟过去读——
+// 否则「本任务改动」就成了读任意文件的后门（文件账白名单只管路径，不管路径现在指向谁）。
+// ————————————————————————————————————————————————
+describe("task 来源 × 符号链接", () => {
+  let outside = "";
+  /** 这台机器建不了文件符号链接（Windows 未开开发者模式）：整组跳过 */
+  let canLink = true;
+
+  beforeEach(async () => {
+    outside = await mkdtemp(join(tmpdir(), "orbita-task-outside-"));
+    await writeFile(join(outside, "secret.txt"), "OUTSIDE-SECRET\n", "utf8");
+    // 账：本任务新建了 notes.txt；事后它被换成指向根外的链接
+    await turn("t1", [{ path: join(lab, "notes.txt"), before: null, after: "mine\n" }]);
+    try {
+      await symlink(join(outside, "secret.txt"), join(lab, "notes.txt"), "file");
+    } catch {
+      canLink = false;
+    }
+  });
+
+  afterEach(async () => {
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  test("正文：不跟到目标读，回执标出链接指向哪", async (t) => {
+    if (!canLink) return t.skip("这台机器建不了文件符号链接");
+    const diff = await taskReviewDiff(store, ID, join(lab, "notes.txt"));
+    assert.ok(!(diff.diff ?? "").includes("OUTSIDE-SECRET"), `跟着链接读到了根外：${diff.diff}`);
+    assert.equal(diff.diff, null);
+    assert.equal(diff.symlink, join(outside, "secret.txt"));
+    assert.equal(diff.binary, false);
+  });
+
+  test("列表：链接标 symlink，行数不算目标的", async (t) => {
+    if (!canLink) return t.skip("这台机器建不了文件符号链接");
+    const list = await taskReviewList(store, ID);
+    assert.equal(list.kind, "ok");
+    if (list.kind !== "ok") return;
+    const entry = list.entries.find((item) => item.path.endsWith("notes.txt"));
+    assert.deepEqual(
+      { added: entry?.added, removed: entry?.removed, symlink: entry?.symlink },
+      { added: 0, removed: 0, symlink: join(outside, "secret.txt") },
+    );
+  });
+
+  test("对照：链接换回普通文件，正文照常出", async (t) => {
+    if (!canLink) return t.skip("这台机器建不了文件符号链接");
+    await unlink(join(lab, "notes.txt"));
+    await writeFile(join(lab, "notes.txt"), "mine\nmore\n", "utf8");
+    const diff = await taskReviewDiff(store, ID, join(lab, "notes.txt"));
+    assert.equal(diff.symlink, undefined);
+    assert.ok(diff.diff?.includes("+more"), `普通文件被一起拦掉了：${JSON.stringify(diff)}`);
   });
 });

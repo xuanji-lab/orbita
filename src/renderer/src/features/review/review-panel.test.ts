@@ -4,6 +4,7 @@ import { zh } from "../../messages-zh.ts";
 import {
   absoluteReviewPath,
   disambiguatedDirs,
+  reviewDiffNotice,
   reviewEmptyText,
   reviewEmptyTitle,
   unifiedDiffEntries,
@@ -149,5 +150,30 @@ describe("空态文案", () => {
     const noGit = { kind: "empty", reason: "no-git", cwd: "/w" } as const;
     assert.notEqual(reviewEmptyTitle(notRepo, zh), reviewEmptyText(notRepo, zh, "unstaged"));
     assert.notEqual(reviewEmptyTitle(noGit, zh), reviewEmptyText(noGit, zh, "unstaged"));
+  });
+});
+
+describe("reviewDiffNotice", () => {
+  test("拒绝 / 失败不再显示成「二进制」：先说原因，危险色", () => {
+    const refused = reviewDiffNotice(
+      { diff: null, binary: false, restored: false, error: { reason: "outside-workspace", message: "\"../x\" is not a path inside the workspace /w" } },
+      zh,
+    );
+    assert.deepEqual(refused, { text: zh.review.diffError("outside-workspace"), tone: "danger" });
+    assert.notEqual(refused?.text, zh.review.binary);
+    const failed = reviewDiffNotice({ diff: null, binary: false, restored: false, error: { reason: "failed", message: "boom" } }, zh);
+    assert.equal(failed?.tone, "danger");
+  });
+
+  test("符号链接：说它指向哪、不读目标", () => {
+    const notice = reviewDiffNotice({ diff: null, binary: false, restored: false, symlink: "/outside/secret.txt" }, zh);
+    assert.equal(notice?.tone, "muted");
+    assert.ok(notice?.text.includes("/outside/secret.txt"));
+  });
+
+  test("已还原 / 二进制照旧；有正文 → null（交给 DiffBody）", () => {
+    assert.equal(reviewDiffNotice({ diff: null, binary: false, restored: true }, zh)?.text, zh.review.restoredEmpty);
+    assert.equal(reviewDiffNotice({ diff: null, binary: true, restored: false }, zh)?.text, zh.review.binary);
+    assert.equal(reviewDiffNotice({ diff: "@@\n+x", binary: false, restored: false }, zh), null);
   });
 });
