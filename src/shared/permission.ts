@@ -85,7 +85,9 @@ export function isReadOnlyTool(toolName: string): boolean {
 
 /**
  * 通道三件套（子会话 2026-09-23 裁决）：delegate / reply_subsession / report_to_parent，
- * 三档模式一律放行。
+ * 三档模式一律放行。model_costs（派发前查各型号的价格 · 能力）一并放在这里：它只读我们自己的
+ * 用量账本，是 delegate 的前置一步——manual 档下每次派发前都为它弹一次审批，就把派发流程
+ * 拖成两次点击，而它什么也不改。
  *
  * 它们是**协调**而不是**动作**——只写我们自己的通道账本（`ChannelStore`），不碰用户的
  * 文件与 shell；真正有副作用的动作发生在子会话自己的工具调用上，那些照子会话的档位
@@ -97,7 +99,7 @@ export function isReadOnlyTool(toolName: string): boolean {
  * 「全都问」、只读也问——而这三个工具问了没有意义（它们不改用户能看到的任何东西）。
  * 单独立一个桶，语义与 READ_ONLY_TOOLS 不同，不能共用同一张表。
  */
-export const CHANNEL_TOOLS = ["delegate", "reply_subsession", "report_to_parent"] as const;
+export const CHANNEL_TOOLS = ["delegate", "reply_subsession", "report_to_parent", "model_costs"] as const;
 
 export function isChannelTool(toolName: string): boolean {
   return (CHANNEL_TOOLS as readonly string[]).includes(toolName);

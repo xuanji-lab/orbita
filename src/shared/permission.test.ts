@@ -106,6 +106,7 @@ describe("decidePermission", () => {
 describe("isChannelTool", () => {
   test("通道三件套精确命中，其它工具（包括名字相似的）不命中", () => {
     for (const tool of CHANNEL_TOOLS) assert.equal(isChannelTool(tool), true, tool);
+    assert.equal(isChannelTool("model_costs"), true); // 派发前查价，delegate 的前置一步
     assert.equal(isChannelTool("read_task"), false);
     assert.equal(isChannelTool("bash"), false);
     assert.equal(isChannelTool("delegate_extra"), false);

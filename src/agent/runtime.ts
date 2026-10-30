@@ -784,7 +784,7 @@ function extraToolNames(role: "root" | "child", workspaceId: string | null, memo
     "add_mcp_server",
     "read_task",
     ...TERMINAL_TOOL_NAMES,
-    ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
+    ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
   ];
 }
