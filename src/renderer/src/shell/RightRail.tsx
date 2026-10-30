@@ -37,7 +37,8 @@ export type RightPanelKind =
   | "drawer"
   | "subsessions"
   | "intent"
-  | "context";
+  | "context"
+  | "automation";
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -62,6 +63,11 @@ export function RightRail(props: {
    */
   /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
   intentAvailable: boolean;
+  /**
+   * 自动化面板入口（实验功能 automation）：null = 不出现（开关关着）；running 是正在跑的自动化数，
+   * 角标只在有运行时出现（没有「未读」这类计数——自动化的结果在面板里那条任务下面看）。
+   */
+  automation: { running: number } | null;
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -141,6 +147,15 @@ export function RightRail(props: {
         lit={props.panel === "mcp"}
         onClick={() => props.onPanel(props.panel === "mcp" ? null : "mcp")}
       />
+      {props.automation !== null && (
+        <RailEntryButton
+          icon="calendar-clock"
+          label={t.automation.railLabel(props.automation.running)}
+          lit={props.panel === "automation"}
+          onClick={() => props.onPanel(props.panel === "automation" ? null : "automation")}
+          badge={props.automation.running}
+        />
+      )}
       {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
       <RailEntryButton
         icon="square-terminal"
