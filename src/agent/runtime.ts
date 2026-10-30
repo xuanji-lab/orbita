@@ -54,7 +54,7 @@ import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./gr
 import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
-import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
+import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
   foldWebArtifacts,
@@ -1661,6 +1661,19 @@ function undoPiBookCommand(command: Extract<AgentCommand, { type: "undoPiBook" }
 }
 
 /**
+ * 会话迁移的 pi 侧一刀：追加「工作目录换了」的通知（进上下文）。同样要求会话不在跑——
+ * 主进程按 phase 先筛过一道，这里是信任边界的再校验。command.cwd 是新目录。
+ */
+function movePiBookCommand(command: Extract<AgentCommand, { type: "movePiBook" }>): void {
+  if (running.has(command.sessionId)) {
+    throw new Error("the session is still running — stop it before moving");
+  }
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  movePiBook(manager, command.notice);
+  send({ type: "piBookEdited", sessionId: command.sessionId, edit: "move" });
+}
+
+/**
  * pi 内建 provider 目录 → 我们的 BuiltinProvider。读的是内建快照 + 本地缓存的 pi.dev 覆盖层，
  * 不联网、不读用户的 ~/.pi/agent（createModelRuntime）。
  */
@@ -2013,6 +2026,10 @@ async function handle(command: AgentCommand): Promise<void> {
   }
   if (command.type === "undoPiBook") {
     undoPiBookCommand(command);
+    return;
+  }
+  if (command.type === "movePiBook") {
+    movePiBookCommand(command);
     return;
   }
 

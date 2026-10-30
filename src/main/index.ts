@@ -48,6 +48,7 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
@@ -862,6 +863,20 @@ void app.whenReady().then(async () => {
     carryovers,
     providers,
     (path) => browserSandbox.openLocalFile(path),
+    (ids, workspaceId) =>
+      moveSessions(
+        {
+          sessions,
+          workspaces,
+          host: agentHost,
+          isRunning: (id) => {
+            const phase = phases.get(id);
+            return phase !== undefined && phase !== "idle";
+          },
+        },
+        ids,
+        workspaceId,
+      ),
     async (sessionId, reverted) => {
       await Promise.all([
         intentOnReverted(sessionId, reverted.turnIds),

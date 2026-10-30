@@ -264,7 +264,7 @@ export class AgentHostCore {
    * 那时 runtime 还没起——裁本子不需要会话活着，只需要进程在。
    */
   async editPiBook(
-    command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" }>,
+    command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" | "movePiBook" }>,
   ): Promise<void> {
     await this.ensure();
     return new Promise<void>((resolve, reject) => {
