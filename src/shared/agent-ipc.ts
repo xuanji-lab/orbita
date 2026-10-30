@@ -28,6 +28,7 @@ import type {
   ChannelMessageKind,
   ChannelStatus,
 } from "./channel.ts";
+import type { AutomationToolOutcome, AutomationToolRequest } from "./automation.ts";
 import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
@@ -133,6 +134,22 @@ export const ipcChannels = {
   memoryVectorStatus: "memory:vector-status",
   memoryVectorSet: "memory:vector-set",
   memoryVectorDownload: "memory:vector-download",
+  /**
+   * 自动化（实验功能 automation）的六条通道。list 回全部工作区的 `Automation[]`（面板「全部」范围与
+   * 侧栏徽标要跨工作区，面板按 target.workspaceId 过滤）；create 载荷 `AutomationCreateInput`
+   * （用户在面板里手建，只能是新开会话，直接 active）；update 载荷 `(id, AutomationPatch)`；
+   * act 载荷 `(id, AutomationAction)`——面板上的按钮就是状态转移；promote 载荷 sessionId，
+   * 把一条自动化新开的会话「转成普通会话」（进左侧栏）。create / update / act 回 `AutomationOutcome`
+   * （失败带一句人话，不抛）。变更经 `automationEvent` 推，载荷不带数据，renderer 听到就重拉。
+   * 开关关着时 handler 照常注册但写操作拒绝、list 回空。
+   */
+  automationList: "automation:list",
+  automationCreate: "automation:create",
+  automationUpdate: "automation:update",
+  automationAct: "automation:act",
+  automationPromote: "automation:promote",
+  /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
+  automationEvent: "automation:event",
   sessionList: "session:list",
   /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
@@ -773,6 +790,12 @@ export type AgentCommand =
        * 记忆、命令形状与 main 一字不差。
        */
       sessionMemory?: boolean;
+      /**
+       * 自动化工具（实验功能 automation）的注册开关。**主进程装配**：实验开关开着、且这条会话
+       * 既不是子会话也不是自动化自己跑出来的（防递归）才带 true；runtime 据此注册
+       * automation_create / list / cancel。缺席 = 不注册，命令形状与 main 一字不差。
+       */
+      automationTools?: boolean;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -849,6 +872,8 @@ export type AgentCommand =
       /** 记忆系统的轮前召回开关（submit.sessionMemory 的同款字段，interrupt
        * 是「立即发送」分支，同一轮语义） */
       sessionMemory?: boolean;
+      /** 自动化工具的注册开关，语义同 submit.automationTools */
+      automationTools?: boolean;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -1005,6 +1030,8 @@ export type AgentCommand =
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
+  /** 自动化（实验功能 automation）：主进程对 automationRequest 的回执（delegateResult 同款） */
+  | ({ type: "automationResult"; requestId: string } & AutomationToolOutcome)
   | {
       /**
        * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
@@ -1261,6 +1288,14 @@ export type AgentEvent =
       /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
     }
+  /**
+   * 自动化（实验功能 automation）：agent 的 automation_create / list / cancel 请求。
+   * **存盘在主进程**（agent 进程不碰 userData，delegateRequest 同一条边界）：主进程校验入参、
+   * 按这条会话所在的工作区落 `automations.json`（只能管当前工作区的）、回 automationResult。
+   * 建出来**直接生效**（2026-10-31 用户裁决，不再有待启用）：默认绑定这条会话（this_session），
+   * 到点把指令送回来。自动化新开的会话与子会话的请求主进程直接拒（防递归，不只靠不注册工具）。
+   */
+  | { type: "automationRequest"; requestId: string; sessionId: string; request: AutomationToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，

@@ -276,6 +276,16 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
+describe("parseSettings 的 automationKeepAwake", () => {
+  it("只认布尔：缺席 / 非布尔都不落键", () => {
+    deepStrictEqual(parseSettings({ automationKeepAwake: true }).automationKeepAwake, true);
+    deepStrictEqual(parseSettings({ automationKeepAwake: false }).automationKeepAwake, false);
+    deepStrictEqual(parseSettings({}).automationKeepAwake, undefined);
+    deepStrictEqual(parseSettings({ automationKeepAwake: "on" }).automationKeepAwake, undefined);
+    deepStrictEqual(parseSettings({ automationKeepAwake: 1 }).automationKeepAwake, undefined);
+  });
+});
+
 describe("parseSettings 的 collapsePastedText", () => {
   it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }), {

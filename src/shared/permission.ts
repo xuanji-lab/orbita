@@ -121,6 +121,25 @@ export function isMemoryTool(toolName: string): boolean {
 }
 
 /**
+ * 自动化三件套（实验功能 automation）：automation_create / automation_list /
+ * automation_cancel，三档模式一律放行。
+ *
+ * 它们只写我们自己的 `automations.json`，不碰用户的文件与 shell；建出来的任务**直接生效**
+ * （2026-10-31 用户裁决），到点才真正动手——那时的动作照任务所绑会话 / 新会话自己的权限档过闸。
+ * 所以这里问了也没意义：建的这一下不改用户能看到的任何东西，用户在对话里能看到那张卡并随时暂停。
+ * plan 档同样放行：规划「要定期查什么」本就是 plan 的一部分。
+ * 只在根会话注册；自动化新开的会话与子会话不注册（防递归），主进程另有一道会话身份校验。
+ * 条数有护栏（每会话活跃 ≤ 5、全局 ≤ 20，间隔 ≥ 5 分钟，24 小时 ≤ 24 次，agent 建的必有终点）。
+ *
+ * **否决「并进 CHANNEL_TOOLS」**：语义不同（通道是协调、这是排期），将来收紧时不该连坐。
+ */
+export const AUTOMATION_TOOLS = ["automation_create", "automation_list", "automation_cancel"] as const;
+
+export function isAutomationTool(toolName: string): boolean {
+  return (AUTOMATION_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
  * 受管浏览器的只读四件（2026-09-27 wafo 裁决）：三档模式一律放行。
  *
  * 它们只在隔离的沙盒浏览器里读页面（导航、结构、正文、截图），不碰用户的文件与 shell；
@@ -179,6 +198,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isChannelTool(toolName)) return { behavior: "allow" };
   // 记忆三件套：三档一律放行，理由见 MEMORY_TOOLS 的注释
   if (isMemoryTool(toolName)) return { behavior: "allow" };
+  // 自动化三件套：三档一律放行（建出来是待启用，确认在启用那一下），理由见 AUTOMATION_TOOLS 的注释
+  if (isAutomationTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {

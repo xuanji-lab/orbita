@@ -10,6 +10,7 @@
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
+import { parseAutomationRunLabel, type AutomationRunLabel } from "./automation.ts";
 import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { isThinkingLevel, parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
@@ -521,6 +522,25 @@ export interface SessionMeta {
    */
   parentId?: string;
   /**
+   * 这条会话是哪条自动化**新开**出来的（实验功能 automation，target = new_session）；
+   * **缺席 = 用户自己开的会话**。this_session 的任务是叫醒一条普通会话，不在这条会话上留任何标记。
+   *
+   * 自动化每次触发开一条新会话（在该自动化所属的工作区里），meta 上记它的 id：
+   * - 左栏与所有「根会话」列表都不列它（`rootSessions` 过滤；`promoted` 之后才列），
+   *   只从右栏自动化面板里那条任务下面进；
+   * - 它自己的 agent 不注册 automation_* 工具（自动化不能再建自动化，防递归）；
+   * - 自动化被删时它跑出的会话不删——这个 id 指向不存在的自动化是正常状态，
+   *   会话顶部的标注读下面的 `automationRun`，不依赖自动化还在。
+   */
+  automationId?: string;
+  /** 会话顶部「任务名 · 第 n 次 · 时间 · 定时/手动」的素材；与 automationId 同生（缺席 = 没有标注） */
+  automationRun?: AutomationRunLabel;
+  /**
+   * 用户点了「转成普通会话」：这条自动化开出的会话从此进左侧栏（`rootSessions` 认它）。
+   * 缺席即否；只对带 automationId 的会话有意义。
+   */
+  promoted?: boolean;
+  /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
    *
@@ -726,6 +746,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const importedFrom = str(value["importedFrom"]);
   const importedModel = str(value["importedModel"]);
   const parentId = str(value["parentId"]);
+  const automationId = str(value["automationId"]);
+  const automationRun = parseAutomationRunLabel(value["automationRun"]);
 
   return {
     id,
@@ -767,6 +789,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
     // 从左栏消失又无处可达，比多列一条根会话糟得多
     ...(parentId === null ? null : { parentId }),
+    ...(automationId === null ? null : { automationId }),
+    ...(automationId === null || automationRun === null ? null : { automationRun }),
+    ...(automationId !== null && value["promoted"] === true ? { promoted: true } : null),
     // 意图召回的会话级开关（实验功能 intent-system）：缺席 = 跟随设置里的
     // 新会话默认。只认布尔，坏值丢掉
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
@@ -864,11 +889,15 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
 }
 
 /**
- * 根会话：没有母会话的那些。**左栏、首页最近、辅助对话选择器只列根会话**——
- * 三处消费者各自调用同一个函数，不各写一遍 `parentId === undefined`。
+ * 根会话：没有母会话、也不是自动化跑出来（且没被「转成普通会话」）的那些。
+ * **左栏、首页最近、辅助对话选择器只列根会话**——三处消费者各自调用同一个函数，不各写一遍
+ * `parentId === undefined`。自动化新开的会话（`automationId`）只从右栏自动化面板进，
+ * 转成普通会话（`promoted`）之后才进这些列表。
  */
 export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
-  return sessions.filter((meta) => meta.parentId === undefined);
+  return sessions.filter(
+    (meta) => meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true),
+  );
 }
 
 /**

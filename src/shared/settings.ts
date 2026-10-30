@@ -124,6 +124,7 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "pdf-citations",
   "intent-system",
   "memory-system",
+  "automation",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
@@ -219,6 +220,13 @@ export interface AppSettings {
    * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
    */
   completionSound?: boolean;
+  /**
+   * 自动化（实验功能 automation）：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
+   * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
+   * 拦住系统挂起，运行全部结束就放开；屏幕照样可以关。这是应用自己的 API，不是 caffeinate / pmset。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  automationKeepAwake?: boolean;
   /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
@@ -474,6 +482,7 @@ export function parseSettings(raw: unknown): AppSettings {
     compaction?: unknown;
     collapsePastedText?: unknown;
     completionSound?: unknown;
+    automationKeepAwake?: unknown;
     gitAttribution?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
@@ -546,6 +555,10 @@ export function parseSettings(raw: unknown): AppSettings {
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }
+      : {}),
+    // 同上：非布尔丢掉，缺席 = 关
+    ...(typeof record.automationKeepAwake === "boolean"
+      ? { automationKeepAwake: record.automationKeepAwake }
       : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),

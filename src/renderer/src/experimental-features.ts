@@ -178,4 +178,23 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "automation",
+    icon: "calendar-clock",
+    name: { zh: "自动化", en: "Automations" },
+    summary: {
+      zh: "定时任务：到点把一段指令交给 agent，可以每次新开一条会话跑（收在右栏自动化面板里，不进左侧栏），也可以投回创建它的那条会话继续做。在对话里说「每周五帮我看……」「15 分钟后回来看下日志」，agent 会直接建好。右栏「自动化」进入。",
+      en: "Scheduled tasks: at the due time a prompt goes to the agent, either in a fresh task per run (kept inside the Automations panel in the right rail, not in the left sidebar) or sent back into the task that created it. Say \"every Friday, check …\" or \"come back in 15 minutes and look at the log\" and the agent sets it up directly. Open it from Automations in the right rail.",
+    },
+    changelog: [
+      {
+        pr: null,
+        date: "2026-10-31",
+        note: {
+          zh: "首版：右栏自动化面板；调度（一次 / 每小时 / 每天 / 每工作日 / 每周 / 每月 / 自定义间隔）；每次新开会话或投回原会话；agent 的 automation_create / list / cancel 工具，对话里出一张卡；有任务在跑时阻止系统睡眠的开关；护栏：间隔 ≥ 5 分钟、24 小时最多 24 次、连续失败 3 次进入失败态、agent 建的必有终点。",
+          en: "First version: an Automations panel in the right rail; schedules (once / hourly / daily / weekdays / weekly / monthly / custom interval); a fresh task per run or back into the original task; agent tools automation_create / list / cancel with a card in the conversation; a switch to keep the system awake while a run is going; guardrails: intervals of at least 5 minutes, at most 24 runs per 24 hours, a failed state after 3 consecutive failures, agent-created ones always have an end.",
+        },
+      },
+    ],
+  },
 ];

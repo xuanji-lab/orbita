@@ -186,6 +186,27 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, parentId: "" })?.parentId, undefined);
   });
 
+  // 自动化（实验功能 automation）之前存的会话没有这些字段：缺席即用户自己开的
+  it("automationId：缺席即用户自己开的；非字符串 / 空串按缺席读，不丢会话", () => {
+    strictEqual("automationId" in (parseSessionMeta(valid) ?? {}), false);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "au1" })?.automationId, "au1");
+    strictEqual(parseSessionMeta({ ...valid, automationId: 7 })?.automationId, undefined);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "" })?.automationId, undefined);
+  });
+
+  it("automationRun / promoted 只在有 automationId 时才留；坏的标注丢掉", () => {
+    const label = { title: "日报", number: 3, at: 5, trigger: "schedule" };
+    const parsed = parseSessionMeta({ ...valid, automationId: "au1", automationRun: label, promoted: true });
+    deepStrictEqual(parsed?.automationRun, label);
+    strictEqual(parsed?.promoted, true);
+    // 没有 automationId：这两个字段不该凭空出现
+    const orphan = parseSessionMeta({ ...valid, automationRun: label, promoted: true });
+    strictEqual(orphan?.automationRun, undefined);
+    strictEqual(orphan?.promoted, undefined);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "au1", automationRun: { title: "x" } })?.automationRun, undefined);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "au1", promoted: "yes" })?.promoted, undefined);
+  });
+
   // auto-title（C-3）之前存的会话没有这个字段：它们是首句截断，允许模型再试
   it("缺 titleSource 视为 derived；坏值同样退回 derived，不丢会话", () => {
     strictEqual(parseSessionMeta({ ...valid, titleSource: undefined })?.titleSource, "derived");
@@ -351,6 +372,12 @@ describe("rootSessions / childSessions", () => {
   it("rootSessions 只留没有母会话的——左栏/首页/picker 共用这一条规则", () => {
     const list = [at("a", 1), at("b", 2, "a"), at("c", 3), at("d", 4, "c")];
     deepStrictEqual(rootSessions(list).map((s) => s.id), ["a", "c"]);
+  });
+
+  it("rootSessions 也不列自动化新开的会话——它们只从右栏自动化面板进；转成普通会话（promoted）后才列", () => {
+    const fromAutomation: SessionMeta = { ...at("auto", 5), automationId: "au1" };
+    deepStrictEqual(rootSessions([at("a", 1), fromAutomation]).map((s) => s.id), ["a"]);
+    deepStrictEqual(rootSessions([at("a", 1), { ...fromAutomation, promoted: true }]).map((s) => s.id), ["a", "auto"]);
   });
 
   it("rootSessions 不改原数组；全是子会话时给空", () => {

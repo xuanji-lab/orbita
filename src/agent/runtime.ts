@@ -2218,6 +2218,11 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
+  if (command.type === "automationResult") {
+    // 自动化工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
   if (command.type === "channelSendResult") {
     requestBroker.resolve(
       command.requestId,
