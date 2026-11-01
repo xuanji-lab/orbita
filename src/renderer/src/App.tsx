@@ -1274,6 +1274,7 @@ export function App() {
                   cwd={session.cwd}
                   excerptRevision={excerptRevision}
                   onJumpExcerpt={openExcerpt}
+                  onOpenInFiles={openFocusFile}
                   memoryFocus={memoryFocus}
                 />
               ) : shownPanel === "skills" ? (
