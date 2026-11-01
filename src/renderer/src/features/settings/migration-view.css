@@ -303,17 +303,8 @@
   background: var(--color-bg-panel);
 }
 
-/* 空态：块里一行图标 + 结论 */
-.mg-empty {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  font-size: var(--font-size-base);
-  color: var(--color-text-secondary);
-}
-
-.mg-empty > .orbita-icon {
+/* 空态（PanelEmpty）放在块里：块自带描边，空态照常一圈内边距；「都导入过了」是好消息，勾用成功绿 */
+.panel-empty.mg-empty.done .panel-empty-glyph {
   color: var(--color-success);
 }
 
@@ -943,18 +934,7 @@
 }
 
 /* Skills 段头的 Copy / Link：两个安静按钮并排，按下的那个用 mode-active 底 */
-.mg-seg {
-  display: inline-flex;
-  gap: var(--space-0-5);
-}
-
-.mg-seg-btn {
-  height: 24px;
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-}
+/* 复制 / 链接的分段用全应用同一个配方 .seg-control（styles.css） */
 
 /* ===== 5 Import（底栏） ===== */
 

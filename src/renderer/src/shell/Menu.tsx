@@ -755,6 +755,15 @@ function MenuRow(props: {
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
+        /*
+         * 行不许被压扁（2026-10-30，压缩确认那句字叠在「仍要压缩」上）：清单是限高、内部滚的
+         * flex 列，行默认 flex-shrink: 1——内容超过封顶时，行会被压到各自的 minHeight。普通行的
+         * minHeight 就是内容高，看不出来；能换行的事实行内容两行（50）、minHeight 只有 24，被压成
+         * 24，第二行字就画到下一行上。更糟的是重新定位时量的是 scrollHeight——量到的已经是压扁后
+         * 的高度，面板就按压扁的高度封顶，永远不会长高、也不会出滚动条。不收缩，清单该多高就多高，
+         * 量得准，放不下时才滚。
+         */
+        flexShrink: 0,
         // 两行的行要高出一档（32 + 16 = 48）：副行不是浮着的小字，它是行的下半截
         minHeight:
           item.subLabel === undefined

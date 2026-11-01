@@ -84,6 +84,20 @@ export function processCounts(
 }
 
 /**
+ * 落定那一行开头说什么。步数只数工具调用（update_plan 是记账不算）——一步工具都没跑的轮
+ * （只想了想就答、或只写了计划）以前原样写成「0 步」。2026-10-30：没跑工具时说它做了什么。
+ */
+export type ProcessOutcome =
+  | { kind: "thought" }
+  | { kind: "plan" }
+  | { kind: "work"; steps: number; files: number };
+
+export function processOutcome(counts: ProcessCounts, steps: readonly ProcessStep[]): ProcessOutcome {
+  if (counts.steps > 0) return { kind: "work", steps: counts.steps, files: counts.files.length };
+  return steps.some((step) => step.kind === "thinking") ? { kind: "thought" } : { kind: "plan" };
+}
+
+/**
  * 章节：一轮按「agent 说的话」切开。标题优先级：说明性正文 > 这一章第一段思考的一行 >
  * 按工具归类（由视图层用文案拼，这里给 null）。只切在正文上，不切在思考上——
  * 有的模型每步都先想一句，按思考切会切成「一章一步」。

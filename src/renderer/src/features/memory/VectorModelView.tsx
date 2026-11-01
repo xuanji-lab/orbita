@@ -3,6 +3,7 @@ import { MEMORY_VECTOR_MODELS, type MemoryVectorModel, type MemoryVectorSettings
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { useT } from "../../locale.ts";
 import { SettingGroup, SettingRow } from "../settings/SettingRow";
 import "../settings/settings-view.css";
@@ -57,14 +58,13 @@ export function VectorModelView(props: { choreLabel: string | null; onOpenGenera
 
   if (status === null) {
     return vector.error !== null ? (
-      <div className="mem-empty" role="alert">
-        <span>{t.memory.loadFailed}</span>
-        <button type="button" className="mem-btn" onClick={vector.reload}>
-          {t.memory.retry}
-        </button>
-      </div>
+      <PanelEmpty tone="danger" className="mem-empty" exit={{ label: t.memory.retry, onClick: vector.reload }}>
+        {t.memory.loadFailed}
+      </PanelEmpty>
     ) : (
-      <p className="mem-empty">{t.common.loading}</p>
+      <PanelEmpty busy className="mem-empty">
+        {t.common.loading}
+      </PanelEmpty>
     );
   }
 

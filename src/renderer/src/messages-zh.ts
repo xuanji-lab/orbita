@@ -388,6 +388,21 @@ export const zh: Messages = {
     unreadFailed: "出错停下了，还没看",
   },
 
+  homeCard: {
+    state: {
+      running: "在跑",
+      waiting: "等你",
+      done: "跑完了",
+      failed: "出错",
+    },
+    thinking: "在想",
+    doing: (step, now) => `${step}：${now}`,
+    approve: (what) => `等你批准：${what}`,
+    childWaiting: "子会话在等你批准",
+    failed: "出错停下了",
+    done: "跑完了，打开看结果",
+  },
+
   notice: {
     finished: "任务完成",
     failed: "任务出错停下了",
@@ -495,7 +510,8 @@ export const zh: Messages = {
     addFolder: "添加文件夹…",
     workspaceName: "工作区名称",
     loadingWorkspaces: "正在载入工作区…",
-    noWorkspace: "还没有工作区。添加一个允许智能体读取的文件夹。",
+    noWorkspace: "还没有工作区。",
+    noWorkspaceExit: "添加一个允许智能体读取的文件夹",
     tasks: "任务",
     loadingTasks: "正在载入任务…",
     noTask: "还没有任务。新开的任务会出现在这里。",
@@ -1472,6 +1488,8 @@ export const zh: Messages = {
     retryIn: (seconds) => `${seconds} 秒后`,
     retryLine: (attempt, max, wait) => `第 ${attempt}/${max} 次重试 · ${wait}`,
     processSteps: (n) => `${n} 步`,
+    processThoughtOnly: "想了想",
+    processPlanOnly: "更新了计划",
     processStepAt: (n) => `第 ${n} 步`,
     processWrote: (n) => `写了 ${n} 个文件`,
     processFailed: (n) => `失败 ${n}`,
@@ -1721,7 +1739,8 @@ export const zh: Messages = {
   },
 
   terminal: {
-    empty: "没有开着的终端，点 + 新开一个。",
+    empty: "没有开着的终端。",
+    startOne: "新开一个",
     title: "终端",
     newTerminal: "新建终端",
     closeTab: "关闭终端",

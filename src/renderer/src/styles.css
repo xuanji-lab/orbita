@@ -75,6 +75,34 @@
   box-shadow: var(--shadow-popover);
 }
 
+/* 卡上那一句「此刻在干什么」：sm 次级灰，恒占两行（一排卡才齐得平），多了截断。
+   行内的 `代码` 等宽画（InlineMarks） */
+.session-card-line {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-height: 2lh;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+/* 一行元信息：在哪 · 状态 · 多久前——纯文字、三级灰，不用等宽 */
+.session-card-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+/* 行内代码（章节标题、首页卡那一句里的 `代码`）：等宽，跟着所在那一行的字号走 */
+.inline-mark-code {
+  font-family: var(--font-family-business);
+  font-size: 0.9em;
+}
+
 /*
  * 安静控件：透明底、secondary 字；hover 填 --option-hover-bg、字升 primary；
  * pressed / selected（aria-pressed 或 aria-selected）用 --color-mode-active-bg/fg；
@@ -480,6 +508,150 @@
 }
 
 /*
+ * 设置页的三种控件（features/settings/SettingControls.tsx，2026-10-30）：分段、开关、下拉各一种长相。
+ * 高度只取台阶：外框 28（--control-height-sm），里面的段 24（--control-height-xs）。框用内描边的
+ * 发丝（box-shadow inset，不吃版式），所以 2 + 24 + 2 = 28 恰好是两个台阶。
+ * 选中 = 选中底 + 主墨色 + 半粗（与选中行 .option-row 同一套），不用模式色：暗色主题下满页
+ * 黄字的「开 / 20% / 中文」会把 accent 变成噪音。
+ */
+.seg-control {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-0-5);
+  height: var(--control-height-sm);
+  padding: var(--space-0-5);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+.seg-control > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.seg-control > button:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+.seg-control > button[aria-pressed="true"] {
+  background: var(--option-active-bg);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.seg-control > button:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.seg-control > button[aria-pressed="true"]:disabled {
+  background: var(--color-bg-muted);
+}
+
+/* 开关：点击区 24 高、轨道 28 × 16；关 = 发丝描边的空槽，开 = accent 底（与勾选框的 accent-color
+   同一个意思）。圆点开时取 accent 上的前景色：浅色蓝底白点、暗色黄底深点 */
+.switch-control {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.switch-control::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  transition: var(--transition-hover);
+}
+.switch-control::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+  transition:
+    left var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+.switch-control[aria-checked="true"]::before {
+  background: var(--color-accent);
+  box-shadow: none;
+}
+.switch-control[aria-checked="true"]::after {
+  left: 14px;
+  background: var(--color-accent-fg);
+}
+.switch-control:disabled {
+  cursor: not-allowed;
+}
+.switch-control:disabled::before {
+  background: var(--color-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+.switch-control:disabled::after {
+  background: var(--color-border-strong);
+}
+
+/* 下拉的触发键：与分段同一圈发丝、同高 28；字 sm 主墨色，尾巴 12 的 chevron；悬停铺 hover 底、打开铺选中底 */
+.select-control {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2) 0 var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.select-control > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.select-control-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.select-control:hover {
+  background: var(--option-hover-bg);
+}
+.select-control[aria-expanded="true"] {
+  background: var(--option-active-bg);
+}
+.select-control:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/*
  * 选择行（原 `shell/selection.ts` 的 `selectionStyle()`）：侧栏会话行、设置 tab、菜单项
  * 共用——它们是同一件事。Menu 用 `data-cursor` 表达「键盘 / 鼠标共用的光标」，不叠
  * `:hover`——否则键盘挪光标、鼠标停在别的项上时会同时亮两行；NavRow 用真实 `:hover`。
@@ -661,6 +833,8 @@
 }
 
 .menu-row-tail {
+  /* 不许被压扁，理由见 Menu.tsx 的 MenuRow（flexShrink: 0） */
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -2559,10 +2733,9 @@ body {
   color: var(--color-text-tertiary);
 }
 
-.bell-card-empty {
+/* 空态（PanelEmpty）对到清单行的内边距上：图标落在行首状态饼那一列 */
+.panel-empty.bell-card-empty {
   padding: var(--space-1) var(--space-3) var(--space-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
 }
 
 .bell-card-list {
@@ -3936,12 +4109,51 @@ button.panel-group-toggle:hover {
   align-content: start;
   padding: 0 var(--space-2) var(--space-3);
 }
-/* 空态 / 说明：一行浅灰字，左缘与行内容对齐，不居中、不加粗、不画图标 */
+/* 空态（PanelEmpty.tsx）：图标 + 一句「现在是什么」+ 一个出口，与提示行同一句法。
+ * 图标落在行首槽（14px，面板行的图标同一列，字在 --space-4 那根线上），字落在行名那一列；
+ * 不居中、不放大图标、不斜体。全应用的空态都是它，宿主只用 className 调对齐 */
 .panel-empty {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: var(--space-2);
+  align-items: start;
   margin: 0;
-  padding: var(--space-1-5) var(--space-4);
+  padding: var(--space-3) var(--space-4);
   font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+/* 图标盒高一个行盒：多行时钉在首行的中线上 */
+.panel-empty-glyph {
+  display: inline-flex;
+  align-items: center;
+  height: 1lh;
   color: var(--color-text-tertiary);
+}
+.panel-empty-text {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.panel-empty-hint {
+  color: var(--color-text-tertiary);
+}
+/* 出口与句子隔一个普通空格（PanelEmpty 里写的），不用提示行那段 margin：折到第二行时 margin 会变成一截缩进 */
+.panel-empty .notice-exit {
+  margin-left: 0;
+}
+/* 侧栏：图标落在会话行的行首槽那一列（行内边距 --space-1），上下与节点头留一口气 */
+.panel-empty.sidebar-empty {
+  padding: var(--space-2) var(--space-1);
+}
+/* 列表容器（.panel-list）已内缩 --space-2：空态再进一个 --space-2，图标照样落在行首槽 */
+.panel-list > .panel-empty {
+  padding-inline: var(--space-2);
+}
+.panel-empty[data-tone="danger"],
+.panel-empty[data-tone="danger"] .panel-empty-glyph,
+.panel-empty[data-tone="danger"] .panel-empty-hint {
+  color: var(--color-danger);
 }
 
 /* 行尾悬停动作键：无底色的安静控件，悬停时只有 bg-hover。.row-hover-act 是
@@ -3960,6 +4172,14 @@ button.panel-group-toggle:hover {
 .file-row-act:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
+}
+
+/* 改动审查列表顶上的一行说明（比的是哪个上游）：不是空态，一行三级灰小字 */
+.review-note {
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
 }
 
 /* 改动审查的文件行：同一套圆角行，组间不画分隔线 */

@@ -100,7 +100,11 @@ the English copy; the Chinese copy follows the same voice.
 - **A setting explains itself in place.** Name `base`/500, then its description below in `sm`
   tertiary, wrapping instead of truncating (`.set-row-desc`). Before 2026-10-30, General hid
   descriptions behind an ⓘ next to the name while Voice wrote them out — two ways of explaining on
-  one surface, and the ⓘ made people guess there was something to hover.
+  one surface, and the ⓘ made people guess there was something to hover. Its control is one of
+  three (2026-10-30, `features/settings/SettingControls.tsx`): **segmented** for exclusive values,
+  a **switch** for anything that is only on / off, a **select** button for a dropdown — each with
+  one look and a stepped height (see *Control recipes*). Two chips reading "On" "Off" made you read
+  two words to learn the state; a switch says it at a glance.
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
   first person, never "we". The agent does not speak about itself in the UI chrome.
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
@@ -113,6 +117,15 @@ the English copy; the Chinese copy follows the same voice.
   ("No model to send with yet. Your draft stays here. **Add a provider**"). Notices are quiet
   lines — `--font-size-sm`, text on the glyph hem, a 12px icon hanging just left of it, the exit in
   primary ink, semibold, hairline underline (`.notice-exit`). No card, no new colour.
+- **An empty state is the same sentence, standing alone** (2026-10-30, `shell/PanelEmpty.tsx`).
+  A 14px glyph in the row's leading slot, one sentence saying what is there now (`sm`, secondary),
+  an optional hint after it (tertiary), at most one exit (the `.notice-exit` recipe, set off by a
+  plain space so a wrapped exit does not indent). Left-aligned on the rows' glyph column — never
+  centred, never a big icon, never italic. Loading uses the same line with a turning
+  `loader-circle`; a failure turns the whole line red with `role="alert"`. Hosts only align it
+  (`className`), they do not restyle it: before this there were six spellings (`.panel-empty`,
+  `.mem-empty`, `.bell-card-empty`, `.pv-wall-empty`, the sidebar's inline style, the sub-session
+  and intent panels' own).
 - **Placeholders invite, they don't instruct.** The composer reads "Ask anything, or start a task";
   a name field reads "Enter branch or workspace name".
 - **Interpolation is plain and terse**: "Switched to {name}", "{count} more sessions…", "{days}d ago",
@@ -226,6 +239,12 @@ either line means re-subsetting (command in `tokens/fonts.css`).
 Tokens live in `tokens/colors.css` (the `--color-paper-*` group), `glass.css` and
 `typography.css`; the decoration layer is `src/renderer/src/paper-themes.css`. They are the only
 themes that change type, and the only place the accent is not blue or yellow.
+Source Han Serif SC ships as one weight (Medium), so Copybook's Chinese at 600 and above would only
+get the browser's faux bold (+13% ink, invisible next to Literata's real semibold). Copybook's
+stack therefore puts `"Orbita Serif CJK"` first (`tokens/fonts.css`): the same Medium below 600,
+and above it a real bold Song face found on the machine — Source Han / Noto Serif CJK Bold, else
+macOS Songti SC Black (+29% ink; Songti Bold was lighter than the faux bold). With none installed
+(Windows) the face fails to load and the stack falls through to the Medium, as before.
 Theme id `copybook`; a stored `"manuscript"` (its name for one day) still parses to it
 (`parseTheme` in `src/shared/settings.ts`).
 
@@ -397,6 +416,17 @@ working or waiting; it yields to the hover actions. The same pie (same derivatio
 heads each row of the notifications list behind the `bell`, the sub-session inbox and the
 completion card; unread marks persist in the session meta, so it survives a restart.
 
+**The home cards say what each task is doing now** (2026-10-30, `features/chat/home-cards.ts`):
+pie + title, one sentence held at two lines, then one plain line "where · state · how long ago".
+The sentence is derived, never stored — running: the current chapter, led by the plan step in
+progress ("Re-check the status: the path was wrong, trying src"), else the tool running, else
+"Thinking"; waiting: what the pending approval wants to do; failed: the error's first line;
+finished unread: the answer's first line; idle: the last thing you asked (an idle task's own last
+line would mean reading its whole transcript). Tasks that want you take the cards first —
+waiting › failed › running — then the carryover and recency rules as before. A single line of
+markdown taken as a title (chapters, this sentence) renders inline `code` in the mono face and
+drops `**` markers (`shell/inline-marks.ts`).
+
 ## Implementation rules
 
 **Type roles: one base, five sizes, pick by role.** Every size derives from `--ui-font-size`
@@ -531,6 +561,10 @@ control starts from one of them, and a deviation is a local override written rig
 | `.btn-accent` | `styles.css` | The primary action: accent fill, `--color-accent-fg`, hover `--color-accent-strong`; disabled drops to solid `--color-bg-muted` + tertiary (the glass rule, no opacity) and keeps its glyph — the composer's send key shows the stop square only while a turn can actually be stopped. |
 | `.option-row` | `styles.css` | Selection rows (sidebar sessions, settings tabs, menu items): hover `--option-hover-bg`; selected `--option-active-bg` + semibold and wins over hover; disabled solid tertiary. |
 | `.text-field` | `styles.css` | Inputs and textareas: panel fill, hairline border, `--radius-md`; focus is an accent border + `--focus-ring`. |
+| `.seg-control` | `styles.css` | Segmented control (`<Segmented>`): inset hairline frame, 2 + 24 + 2 = 28 (`--control-height-sm` around `-xs` segments); the pressed segment takes the selected-row look (`--option-active-bg`, primary ink, semibold), not the mode wash. Settings, the providers card size and access picker, migration's copy / link. |
+| `.switch-control` | `styles.css` | On / off switch (`<Switch role="switch">`): 24-high hit box, 28 × 16 track; off is a hairline slot with a tertiary knob, on is accent with an `--color-accent-fg` knob (the checkbox's accent meaning: chosen). |
+| `.select-control` | `styles.css` | A dropdown's trigger (`<SelectButton>`): the segmented frame, 28 high, `sm` primary ink, a 12px chevron; hover lays the hover wash, open lays the selected wash. |
+| `.panel-empty` | `styles.css` | The empty state (`<PanelEmpty>`): see *An empty state is the same sentence, standing alone*. |
 
 Checkboxes have no recipe: the three in use (Sidebar carryover list, CarryoverChecklist, the Providers
 model list) are native `<input type="checkbox">` tinted with `accent-color: var(--color-accent)`.

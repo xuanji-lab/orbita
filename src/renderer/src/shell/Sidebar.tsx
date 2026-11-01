@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
+import { PanelEmpty } from "./PanelEmpty";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
@@ -528,7 +529,7 @@ export function Sidebar(props: {
               以前会自动退回，是因为出口只有底部那条会在 0 条时禁用的入口——现在标题旁有返回键、
               入口常驻右栏，死胡同已不存在。与遗留事项面板（09-25 起 0 条也能进）同一口径。
             */}
-            {archived.length === 0 && <Empty>{t.sidebar.noArchived}</Empty>}
+            {archived.length === 0 && <Empty icon="archive">{t.sidebar.noArchived}</Empty>}
             {archived.map((meta) => (
               <SessionRow
                 key={meta.id}
@@ -604,7 +605,7 @@ export function Sidebar(props: {
           </>
         ) : filtered && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty>{filterEmptyText(statusFilter, starredOnly, hasTodosOnly, t)}</Empty>
+          <Empty icon="list-filter">{filterEmptyText(statusFilter, starredOnly, hasTodosOnly, t)}</Empty>
         ) : (
           <>
             {(!filtered || workspaceMatches.length > 0) && (
@@ -675,9 +676,11 @@ export function Sidebar(props: {
                   <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />
                 )}
                 {workspaceList.body === "loading" ? (
-                  <Empty>{t.sidebar.loadingWorkspaces}</Empty>
+                  <Empty busy>{t.sidebar.loadingWorkspaces}</Empty>
                 ) : workspaceList.body === "empty" ? (
-                  <Empty>{t.sidebar.noWorkspace}</Empty>
+                  <Empty icon="folder" exit={{ label: t.sidebar.noWorkspaceExit, onClick: session.addWorkspace }}>
+                    {t.sidebar.noWorkspace}
+                  </Empty>
                 ) : workspaceList.body === "list" ? (
                   workspaceMatches.map((workspace) => (
                     <WorkspaceGroup
@@ -745,9 +748,9 @@ export function Sidebar(props: {
                   <ListError message={sessionList.error} onRetry={session.reloadSessions} />
                 )}
                 {sessionList.body === "loading" ? (
-                  <Empty>{t.sidebar.loadingTasks}</Empty>
+                  <Empty busy>{t.sidebar.loadingTasks}</Empty>
                 ) : sessionList.body === "none" ? null : sessionList.body === "empty" ? (
-                  <Empty>{t.sidebar.noTask}</Empty>
+                  <Empty icon="message-square">{t.sidebar.noTask}</Empty>
                 ) : tasksFolded ? null : (
                   <>
                     {looseVisible.map((meta) => (
@@ -1697,7 +1700,7 @@ function CarryoverPanel(props: {
     return (
       <>
         {header}
-        <Empty>{t.sidebar.noCarryovers}</Empty>
+        <Empty icon="list-todo">{t.sidebar.noCarryovers}</Empty>
       </>
     );
   }
@@ -1888,19 +1891,17 @@ function CarryoverRow(props: {
   );
 }
 
-function Empty(props: { children: React.ReactNode }) {
+/** 侧栏的空态：共享的 PanelEmpty（图标 + 一句 + 出口），对到侧栏行的版式上（.sidebar-empty） */
+function Empty(props: {
+  icon?: IconName;
+  busy?: boolean;
+  exit?: { label: string; onClick: () => void };
+  children: React.ReactNode;
+}) {
   return (
-    <p
-      style={{
-        margin: "var(--space-2) 0",
-        padding: "0 var(--space-1)",
-        fontSize: "var(--font-size-sm)",
-        lineHeight: "var(--line-height-ui)",
-        color: "var(--color-text-secondary)",
-      }}
-    >
+    <PanelEmpty icon={props.icon} busy={props.busy} exit={props.exit} className="sidebar-empty">
       {props.children}
-    </p>
+    </PanelEmpty>
   );
 }
 

@@ -3,21 +3,30 @@ import { useT } from "../locale.ts";
 import { StatusPie } from "./StatusPie";
 import type { PieFill } from "./status-pie.ts";
 import { runStateLabel } from "../features/notify/completion-notice.ts";
+import { InlineMarks } from "./InlineMarks";
 
 /**
  * 首页的最近会话卡（设计系统 components/surfaces/SessionCard 的实现）：
- * layer-3 玻璃卡，名字行 + 行位槽。槽位由 `slots` 定——普通卡恒 3（提问）、
- * 待办卡恒 4（遗留事项）；槽位不足就留空、恒渲染：一排卡片才齐得平。
+ * layer-3 玻璃卡，名字行 + 一句「此刻在干什么」（line，恒占两行、多了截断）+ 一行元信息
+ * （meta：在哪 · 状态 · 多久前）。没在跑的待办卡改画行位槽（items，遗留事项，恒 4 槽）；
+ * 槽位不足就留空、恒渲染：一排卡片才齐得平。
  * hover 只从 composer 阴影抬到 popover 阴影，别的都不动
  * （设计系统 *Hover, press, disabled*）。
  */
 export function SessionCard(props: {
   /** 会话名，单行截断 */
   name: string;
-  /** 行位数据：icon 有值是遗留事项行，无值是用户提问行 */
+  /** 行位数据：icon 有值是遗留事项行，无值是普通行（给了 line 时不画） */
   items?: readonly { icon?: IconName; text: string }[];
-  /** 恒渲染槽位数；默认 3（普通卡的提问槽） */
+  /** 恒渲染槽位数；默认 3 */
   slots?: number;
+  /**
+   * 「此刻在干什么」那一句（home-cards.ts 的 homeCardLine）：恒占两行、多了截断；
+   * null = 说不出来，留两行空。给了它就不画 items 行位
+   */
+  line?: string | null;
+  /** 一行元信息：在哪 · 状态 · 多久前 */
+  meta?: string;
   /**
    * 这条会话的运行态（runStateOf，与侧栏同一份推导）：名字前的状态饼，与侧栏同一套
    * 份数与颜色（2026-10-30，取代名字行尾那枚呼吸的 accent 圆点——暗色主题的 accent
@@ -77,7 +86,10 @@ export function SessionCard(props: {
               {props.name}
             </span>
           </span>
-          {Array.from({ length: slots }, (_, slot) => {
+          {props.line !== undefined ? (
+            <span className="session-card-line">{props.line !== null && <InlineMarks text={props.line} />}</span>
+          ) : (
+            Array.from({ length: slots }, (_, slot) => {
             const item = items[slot];
             return (
               <span
@@ -117,7 +129,9 @@ export function SessionCard(props: {
                 )}
               </span>
             );
-          })}
+            })
+          )}
+          {props.meta !== undefined && <span className="session-card-meta">{props.meta}</span>}
         </>
       )}
     </button>

@@ -23,6 +23,7 @@ import type { ModelPair } from "@shared/settings";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { useSettingTip } from "./InfoTip";
 import {
@@ -503,9 +504,13 @@ export function MigrationView(props: {
             {scan.kind === "ready" && grouped !== null && (
               <>
                 {grouped.groups.length === 0 && grouped.changed.length === 0 ? (
-                  <div className="mg-block mg-empty">
-                    <Icon name={grouped.total === 0 ? "circle-check" : "eye-off"} size={15} />
-                    {grouped.total === 0 ? t.migration.nothingToImport : t.migration.noSessionsMatch}
+                  <div className="mg-block">
+                    <PanelEmpty
+                      icon={grouped.total === 0 ? "circle-check" : "eye-off"}
+                      className={grouped.total === 0 ? "mg-empty done" : "mg-empty"}
+                    >
+                      {grouped.total === 0 ? t.migration.nothingToImport : t.migration.noSessionsMatch}
+                    </PanelEmpty>
                   </div>
                 ) : (
                   <>

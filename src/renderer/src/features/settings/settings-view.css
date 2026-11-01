@@ -525,10 +525,9 @@
   vertical-align: -2px;
 }
 
-.login-sites-empty {
-  padding: var(--space-2) var(--space-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
+/* 空态（PanelEmpty）对到站点行的内边距上 */
+.panel-empty.login-sites-empty {
+  padding: var(--space-2);
 }
 
 .login-sites-footer {

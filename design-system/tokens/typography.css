@@ -59,7 +59,8 @@
    以中文为主的消息整段换 --font-family-reading-cjk（中英同源的衬线）：等宽的数字、英文夹在
    比例宽的中文里，两套字节奏打架（wafo 2026-09-25：「读起来不舒服」）。 */
 :root[data-theme="copybook"] {
-  --font-family-base: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
+  /* "Orbita Serif CJK" 在前：中文半粗走真粗宋体，找不到时落回下一族 Source Han Serif SC（fonts.css） */
+  --font-family-base: "Literata", "Orbita Serif CJK", "Source Han Serif SC", Georgia, "Songti SC", serif;
 }
 
 :root[data-theme="typescript"] {
