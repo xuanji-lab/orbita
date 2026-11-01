@@ -9,52 +9,10 @@
  * 权限：三档一律放行（shared/permission.ts 的 PLAN_TOOL）——它只是把打算说出来，
  * 不碰用户的文件与 shell；plan 档尤其要用得上。
  *
- * 纯模块：校验与回执文案可被 node --test 直接测。
+ * 纯模块：回执文案可被 node --test 直接测；计划的形状与校验在 shared/plan.ts（右栏面板也用它认计划）。
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-
-export const PLAN_TOOL_NAME = "update_plan";
-
-export type PlanItemStatus = "pending" | "in_progress" | "done";
-
-export interface PlanItem {
-  text: string;
-  status: PlanItemStatus;
-}
-
-/** 一张计划的上限：再多就不是计划，是流水账 */
-export const PLAN_MAX_ITEMS = 12;
-
-const STATUSES: readonly PlanItemStatus[] = ["pending", "in_progress", "done"];
-
-/**
- * 入参 → 计划清单。坏入参抛错（错误文案回灌给模型，让它改了重调）：
- * - items 必须是 1–12 条；text 去空白后不能为空；status 只认三个值；
- * - **最多一条 in_progress**：同时「在做」两件事，界面上的「当前一步」就说不清了。
- */
-export function parsePlan(params: unknown): PlanItem[] {
-  const raw = (params as { items?: unknown } | null)?.items;
-  if (!Array.isArray(raw) || raw.length === 0) {
-    throw new Error('update_plan requires "items": a list of 1-12 steps, each { text, status }.');
-  }
-  if (raw.length > PLAN_MAX_ITEMS) {
-    throw new Error(`A plan has at most ${PLAN_MAX_ITEMS} steps (got ${raw.length}). Merge smaller steps.`);
-  }
-  const items = raw.map((item, index): PlanItem => {
-    const record = (item ?? {}) as Record<string, unknown>;
-    const text = typeof record["text"] === "string" ? record["text"].trim() : "";
-    if (text === "") throw new Error(`Step ${index + 1} has no text.`);
-    const status = record["status"];
-    if (typeof status !== "string" || !(STATUSES as readonly string[]).includes(status)) {
-      throw new Error(`Step ${index + 1} has status "${String(status)}"; use pending, in_progress or done.`);
-    }
-    return { text, status: status as PlanItemStatus };
-  });
-  if (items.filter((item) => item.status === "in_progress").length > 1) {
-    throw new Error("Only one step can be in_progress at a time.");
-  }
-  return items;
-}
+import { parsePlan, PLAN_MAX_ITEMS, PLAN_STATUSES, PLAN_TOOL_NAME, type PlanItem } from "../shared/plan.ts";
 
 /** 回给模型的一句话：几步做完、当前在做哪步。短——模型自己刚写的清单，不用复述 */
 export function planReceipt(items: readonly PlanItem[]): string {
@@ -68,13 +26,21 @@ export function createPlanTools(): ToolDefinition[] {
   const updatePlan: ToolDefinition = {
     name: PLAN_TOOL_NAME,
     label: PLAN_TOOL_NAME,
+    // 「做一步勾一步」要说到调用时机（2026-10-30 实测）：只说「做完就勾」时，GLM-5.3 做完第 1 步没勾
+    // 就做第 2 步、之后一次勾两步，DeepSeek V4.1 Flash 只在开头和结尾各调一次，右栏的计划一直停在
+    // 第 2 步；Kimi K3.1 Pro 把勾和下一步的第一个动作放在同一批里，计划始终跟得上对话，也不多花一个来回——
+    // 说明里直接要求这个写法。
     description:
-      "Write down your plan for this task and keep it current; the user sees it as a checklist beside " +
-      "the conversation. Use it when the work takes three or more distinct steps; skip it for quick " +
-      "questions and one-step changes. Send the whole list every time (it replaces the previous one). " +
-      "Keep exactly one step in_progress while you work, mark a step done as soon as it is finished, " +
-      "and add or reword steps when the plan changes. Steps are short, outcome-focused phrases in the " +
-      "user's language.",
+      "Write down your plan for this task and keep it current; the user watches it as a checklist " +
+      "beside the conversation. Use it when the work takes three or more distinct steps (changing code, " +
+      "adding tests, running them and updating docs are separate steps); skip it for quick questions " +
+      "and one-step changes. Write it as soon as you know the steps: right away, or after a first look " +
+      "around. Send the whole list every time (it replaces the previous one). Exactly one step is " +
+      "in_progress while you work. Each time you move on, call update_plan again in the same batch as " +
+      "the next step's first tool call, marking the finished step done and the next one in_progress. " +
+      "Do not start a later step while an earlier one still shows in_progress, and do not save the " +
+      "ticks for the end. Add or reword steps when the plan changes. Steps are short, outcome-focused " +
+      "phrases in the user's language.",
     parameters: {
       type: "object",
       properties: {
@@ -85,7 +51,7 @@ export function createPlanTools(): ToolDefinition[] {
             type: "object",
             properties: {
               text: { type: "string", description: "What this step achieves, one short phrase." },
-              status: { type: "string", enum: STATUSES, description: "pending, in_progress or done." },
+              status: { type: "string", enum: PLAN_STATUSES, description: "pending, in_progress or done." },
             },
             required: ["text", "status"],
           },

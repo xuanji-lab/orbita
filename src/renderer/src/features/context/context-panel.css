@@ -204,6 +204,9 @@
 .tp-sec .tp-hint {
   padding: var(--space-1) 0;
 }
+.tp-hint[data-tone="danger"] {
+  color: var(--color-danger);
+}
 
 /* 计划：空圈 / 在做（蓝饼）/ 勾；做完的退到三级色 */
 .tp-plan {
@@ -319,7 +322,8 @@
   border-color: var(--color-info);
   background: var(--color-info);
 }
-.tp-chapters button {
+.tp-chapters button,
+.tp-chapters .tp-ch-row {
   display: grid;
   gap: 0;
   width: 100%;
@@ -335,7 +339,16 @@
 .tp-chapters button:hover {
   background: var(--color-bg-hover);
 }
+/* 对话里还没加载到的轮：章节只列不点 */
+.tp-chapters .tp-ch-row {
+  cursor: default;
+}
+/* 章节名最多两行：真模型的旁白常有三四行、一段英文思考能到七行，「做过的」要能一眼扫完；全文在悬停里 */
 .tp-ch {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   line-height: var(--line-height-ui);
   color: var(--color-text-primary);
 }
@@ -343,8 +356,15 @@
   color: var(--color-text-secondary);
 }
 
-/* 留到以后：勾掉即完成 */
+/* 留到以后：勾掉即完成；悬停 / 键盘聚焦到这一行浮出「转成任务」（.reveal，同 .skill-row） */
 .tp-later {
+  position: relative;
+}
+.tp-later:hover .reveal,
+.tp-later:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+.tp-later-check {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
@@ -352,7 +372,7 @@
   line-height: var(--line-height-ui);
   cursor: pointer;
 }
-.tp-later input {
+.tp-later-check input {
   margin: var(--space-1) 0 0;
   accent-color: var(--color-accent);
 }

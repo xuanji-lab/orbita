@@ -16,6 +16,7 @@ import type { Carryover } from "@shared/session";
 import { TaskProgress } from "./TaskProgress";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
+import type { SessionRunState } from "../notify/completion-notice.ts";
 import { useContextInventory } from "../chat/useContextInventory.ts";
 import {
   contextBar,
@@ -52,9 +53,13 @@ export function ContextPanel(props: {
   /** 「这条任务」的两个页签（2026-10-30）：进度 / 上下文。App 持有——输入框旁的用量环要直接开到「上下文」 */
   tab: TaskPanelTab;
   onTab: (tab: TaskPanelTab) => void;
+  /** 会话运行态（runStateOf，侧栏状态饼同一个推导）：进度页签头一行的在跑 / 等你 */
+  runState: SessionRunState;
   /** 这条会话收割的遗留（进度页签的「留到以后」） */
   carryovers: readonly Carryover[];
   onSetCarryoverStatus: (id: string, status: Carryover["status"]) => void;
+  /** 「转成任务」：与侧栏遗留面板「带上下文继续」同一条路（App 的 startCarryoverTask） */
+  onStartCarryoverTask: (item: Carryover) => void;
 }) {
   const t = useT();
   const [scope, setScope] = useState<ContextScope>("turn");
@@ -84,9 +89,14 @@ export function ContextPanel(props: {
         </p>
       ) : props.tab === "progress" ? (
         <TaskProgress
+          // 按会话换实例：「载入更早的轮」这类页内状态不该跟着带到另一条会话
+          key={props.sessionId}
+          sessionId={props.sessionId}
           entry={props.entry}
+          runState={props.runState}
           carryovers={props.carryovers}
           onSetCarryoverStatus={props.onSetCarryoverStatus}
+          onStartCarryoverTask={props.onStartCarryoverTask}
           onOpenContext={() => props.onTab("context")}
         />
       ) : (

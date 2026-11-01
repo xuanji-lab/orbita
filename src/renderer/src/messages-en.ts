@@ -2119,9 +2119,11 @@ export const en = {
           ? "Waiting for you"
           : state === "failed"
             ? "Stopped with an error"
-            : state === "done"
-              ? "Done"
-              : "Idle",
+            : state === "stopped"
+              ? "Stopped"
+              : state === "done"
+                ? "Done"
+                : "Idle",
     turns: (count: number) => plural(count, "turn"),
     plan: "Plan",
     planCount: (done: number, total: number) => `${done} / ${total}`,
@@ -2131,7 +2133,11 @@ export const en = {
     later: "For later",
     markDone: "Mark done",
     reopen: "Reopen",
+    toTask: "Start as a task, with this item's context",
     jump: "Show this in the conversation",
+    notInChat: "This turn isn't loaded in the conversation yet. Scroll up there to reach it.",
+    olderNotLoaded: "Earlier turns aren't loaded.",
+    loadOlder: "Load them",
     noTask: "Open a task to see its progress.",
     contextLine: "Context",
   },

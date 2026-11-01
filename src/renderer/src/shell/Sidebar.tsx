@@ -163,10 +163,15 @@ export function Sidebar(props: {
   collapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
   /**
-   * 收起态页头「新任务」的信号（nonce 递增）：Sidebar 展开列表后把 TASKS 组跟着
-   * 展开——新任务不能落进一个收着的组里无声无息。0 = 从未发过。
+   * 收起态页头「新任务」与遗留事项「转成任务」的信号（nonce 递增）：Sidebar 展开列表后把
+   * TASKS 组跟着展开——新任务不能落进一个收着的组里无声无息。0 = 从未发过。
    */
   newTaskSignal: number;
+  /**
+   * 遗留事项带上下文开工（遗留面板的「带上下文继续」）：App 持有这条路，右栏「这条任务 ›
+   * 留到以后」的「转成任务」走的是同一个函数——退出遗留面板与盖层、展开侧栏、开新会话。
+   */
+  onStartCarryoverTask: (item: Carryover) => void;
   /**
    * 左栏此刻换成哪个工作区的文件视图：browse = 不计时地看一眼（工作区行悬停的
    * 「查看工作区文件」进的），focus = 专注中。null = 正常的会话列表。
@@ -540,20 +545,9 @@ export function Sidebar(props: {
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
             onBack={() => props.onShowCarryovers(false)}
-            onResumeNew={(item) => {
-              // 开工即回对话：退出面板（下次进重新开），新会话落在来源会话的组里
-              // （cwd / 归属跟随它）——不能落进一个收着的组里无声无息
-              props.onShowCarryovers(false);
-              props.onOverlay(null);
-              props.onCollapsedChange(false);
-              const source = session.sessions.find((m) => m.id === item.sourceSessionId);
-              setGroups((current) =>
-                source?.workspaceId != null
-                  ? unfoldGroup(current, foldKeyForWorkspace(source.workspaceId))
-                  : unfoldGroup(current, TASKS_FOLD_KEY),
-              );
-              session.startCarryoverTask(item);
-            }}
+            // 开工即回对话：退出面板、新会话落在来源会话的组里并展开那一组——App 的
+            // startCarryoverTask，右栏「这条任务 › 留到以后」的「转成任务」走同一条路
+            onResumeNew={props.onStartCarryoverTask}
             onResumeInSource={(item) => {
               // 右键备选：续跑原会话——跳回去看它接着干（同 onOpenTask 的退场）
               props.onShowCarryovers(false);
