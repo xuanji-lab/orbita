@@ -735,3 +735,20 @@ a.exp-pr:hover {
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
 }
+
+/* 设置 › 实验功能底部：每个面板打开了几次（只读，一行可折行）。次数是机器事实，走等宽字；
+   0 次的那几项退到三级灰——它们正是要考虑删的 */
+.panel-usage-line {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.panel-usage-line [data-zero] {
+  color: var(--color-text-tertiary);
+}
+
+.panel-usage-count {
+  font-family: var(--font-family-mono);
+}

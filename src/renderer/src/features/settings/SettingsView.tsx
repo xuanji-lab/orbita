@@ -42,6 +42,7 @@ import {
 import type { IntentHealth } from "@shared/intent-lab";
 import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
+import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
 import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 
@@ -550,7 +551,46 @@ function ExperimentalSettings(props: {
           />
         ))}
       </div>
+      <PanelUsageSection />
     </div>
+  );
+}
+
+/**
+ * 每个面板打开了几次（实验功能「精简右栏」的数据，shared/panel-usage.ts）：一行只读统计，
+ * 全部面板都列、0 次也列，多的在前——一周后看它决定删什么。只在本机数、不上传；
+ * 拉不到（IPC 出错）就不画这一节。
+ */
+function PanelUsageSection() {
+  const t = useT();
+  const [snapshot, setSnapshot] = useState<PanelUsageSnapshot | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.panelUsage
+      .get()
+      .then((next) => {
+        if (!cancelled) setSnapshot(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (snapshot === null) return null;
+  const since = new Date(snapshot.since);
+  return (
+    <section className="set-group panel-usage">
+      <span className="section-label">{t.settings.panelUsageTitle}</span>
+      <p className="panel-usage-line">
+        {panelUsageRows(snapshot).map((row, index) => (
+          <span key={row.key} data-zero={row.count === 0 || undefined}>
+            {index > 0 && " · "}
+            {t.settings.panelUsageName(row.key)} <span className="panel-usage-count">{row.count}</span>
+          </span>
+        ))}
+      </p>
+      <p className="set-row-desc">{t.settings.panelUsageSince(since.getMonth() + 1, since.getDate())}</p>
+    </section>
   );
 }
 

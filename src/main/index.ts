@@ -75,6 +75,8 @@ import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
+import { registerPanelUsageIpc } from "./panel-usage/ipc.ts";
+import { PanelUsageStore } from "./panel-usage/store.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
@@ -391,6 +393,9 @@ void app.whenReady().then(async () => {
   // 同一个实例也喂给专注小结（摘抄是素材之一）
   const excerpts = new ExcerptStore(join(configDir, "excerpts.jsonl"));
   registerExcerptIpc(excerpts, sessions);
+  // 面板打开次数（panel-usage:*，实验功能「精简右栏」的数据）：只在本机、不上传，
+  // 设置 › 实验功能里给一行只读统计
+  registerPanelUsageIpc(new PanelUsageStore(join(configDir, "panel-usage.json")));
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）

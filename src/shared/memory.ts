@@ -402,6 +402,17 @@ export interface MemoryEvolutionNode {
   source: MemorySource;
 }
 
+/**
+ * 一条记忆被用过几次：注入账本（injections.jsonl）里它出现在几轮的命中里、最近一轮是什么时候。
+ * 读的时候现算，不另存——账本本来就是每轮一行。常驻直通的条目（pinned）每轮都算一次。
+ */
+export interface MemoryUsage {
+  /** 被召回注入的轮数；0 = 从没用过 */
+  count: number;
+  /** 最近一次注入的开轮时刻（epoch ms）；从没用过为 null */
+  lastAt: number | null;
+}
+
 /** 记忆库 / 审查页签里的一条条目（装配后的视图行）。 */
 export interface MemoryEntryView {
   entry: MemoryEntry;
@@ -413,6 +424,11 @@ export interface MemoryEntryView {
   quote: string | null;
   /** 偏好演变链（含自身，旧 → 新）；无冲突关联为空数组 */
   evolution: readonly MemoryEvolutionNode[];
+  /**
+   * 用过几次、最近一次（2026-10-30，记忆库每行尾部「用过 N 次 · 最近一次」）。记忆库与审查
+   * 页签的读面都带；缺席 = 这份视图没算（界面不显示，不当成「没用过」）
+   */
+  usage?: MemoryUsage;
 }
 
 /** 条目列表请求：token = "all" 读全部层；type 缺席 = 不过滤。 */

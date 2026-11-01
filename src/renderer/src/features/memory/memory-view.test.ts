@@ -11,6 +11,7 @@ import {
   filterMemoryEntries,
   groupMemoryEntries,
   rememberedTurns,
+  formatMemoryDate,
 } from "./memory-view.ts";
 
 const entry = (id: string, patch: Partial<MemoryEntry> = {}): MemoryEntry => ({
@@ -214,4 +215,16 @@ describe("随对话回退停用", () => {
     const clean = { ...row, remembered: [view(entry("new"))] };
     assert.equal(liveRemembered(clean), clean);
   });
+});
+
+test("formatMemoryDate：今天写时间，今年写月日，更早带年份（本机时区）", () => {
+  const text = {
+    monthDay: (month: number, day: number) => `${month}月${day}日`,
+    yearMonthDay: (year: number, month: number, day: number) => `${year}年${month}月${day}日`,
+  };
+  const now = new Date(2026, 9, 30, 13, 5).getTime();
+  assert.equal(formatMemoryDate(new Date(2026, 9, 30, 9, 7).getTime(), now, text), "09:07");
+  assert.equal(formatMemoryDate(new Date(2026, 9, 29, 23, 59).getTime(), now, text), "10月29日");
+  assert.equal(formatMemoryDate(new Date(2026, 0, 1, 0, 0).getTime(), now, text), "1月1日");
+  assert.equal(formatMemoryDate(new Date(2025, 9, 30, 13, 5).getTime(), now, text), "2025年10月30日");
 });

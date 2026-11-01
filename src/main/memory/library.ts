@@ -19,9 +19,11 @@ import {
   type MemoryEntryView,
   type MemoryEpisode,
   type MemoryEvolutionNode,
+  type MemoryInjectionRecord,
   type MemoryScopeSummary,
   type MemorySessionView,
   type MemorySessionTurnView,
+  type MemoryUsage,
   type MemoryUsedHit,
 } from "../../shared/memory.ts";
 
@@ -91,10 +93,11 @@ export class MemoryLibrary {
 
   /**
    * 条目列表：按作用域（"all" = 全部层）+ 类型筛，新在前。每条装配出处会话标题、
-   * 原话片段（段快照取最新支撑轮的用户原文头部）与偏好演变链。
+   * 原话片段（段快照取最新支撑轮的用户原文头部）、偏好演变链，与用过几次（注入账本现算）。
    */
   async listEntries(request: MemoryEntriesRequest): Promise<MemoryEntryView[]> {
-    const layers = await this.readLayers();
+    const [layers, records] = await Promise.all([this.readLayers(), this.entries.listInjections()]);
+    const usageOf = usageIndex(records);
     const pool = layers.flatMap((layer) =>
       layer.entries.map((entry) => ({ entry, token: layer.token })),
     );
@@ -114,6 +117,7 @@ export class MemoryLibrary {
         sessionTitle: entry.sessionId === "" ? null : (titles.get(entry.sessionId) ?? null),
         quote: quoteOf(entry, episodes),
         evolution: evolutionOf(entry, byId, newerOf),
+        usage: usageOf(entry.id),
       }));
   }
 
@@ -137,6 +141,7 @@ export class MemoryLibrary {
     const byId = new Map(pool.map((entry) => [entry.id, entry]));
     const newerOf = buildReverseIndex(pool);
     const mine = located.filter((item) => item.entry.sessionId === sessionId);
+    const usageOf = usageIndex(records);
     const injectedOfTurn = new Map(
       records.filter((record) => record.sessionId === sessionId).map((record) => [record.turn, record]),
     );
@@ -149,6 +154,7 @@ export class MemoryLibrary {
         sessionTitle: null,
         quote: null,
         evolution: evolutionOf(entry, byId, newerOf),
+        usage: usageOf(entry.id),
       };
       for (const turn of entry.turns) {
         const bucket = rememberedOfTurn.get(turn) ?? [];
@@ -270,6 +276,24 @@ function evolutionOf(
     );
   }
   return chain;
+}
+
+/**
+ * 每条记忆用过几次：注入账本里出现在几轮的命中里、最近一轮的开轮时刻。同一轮里重复
+ * 出现只算一次（账本按轮一行，hits 里同一 id 本不该重复，防一手）。没出现过 = 0 / null。
+ */
+function usageIndex(records: readonly MemoryInjectionRecord[]): (id: string) => MemoryUsage {
+  const index = new Map<string, MemoryUsage>();
+  for (const record of records) {
+    for (const id of new Set(record.hits.map((hit) => hit.id))) {
+      const seen = index.get(id);
+      index.set(id, {
+        count: (seen?.count ?? 0) + 1,
+        lastAt: seen?.lastAt === null || seen === undefined ? record.at : Math.max(seen.lastAt, record.at),
+      });
+    }
+  }
+  return (id) => index.get(id) ?? { count: 0, lastAt: null };
 }
 
 /** 轮没有注入记录时（只记住了东西的轮），at 取该轮条目的最新时间。 */
