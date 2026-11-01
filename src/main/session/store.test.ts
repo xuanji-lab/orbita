@@ -1053,6 +1053,36 @@ describe("SessionStore · 文件引用落盘", () => {
   });
 });
 
+describe("SessionStore.record · 最近提问不收自动化送进来的指令", () => {
+  test("抬头开头的 user 消息（自动化叫醒这条会话）不进 recentQueries；用户自己说的照常进", async () => {
+    await store.ensureSession(meta());
+    await store.record(ID, userItem("帮我看看日志", 2000));
+    await store.record(ID, { ...userItem("[定时任务「报时」第 1/2 次 · 10-31 02:17]\n\n看日志", 3000), id: "u2" });
+    await store.record(ID, { ...userItem("好，继续", 4000), id: "u3" });
+    const saved = await store.readMeta(ID);
+    assert.deepEqual(saved?.recentQueries, ["好，继续", "帮我看看日志"]);
+  });
+});
+
+describe("SessionStore.setPromoted（自动化新开的会话转成普通会话）", () => {
+  test("带 automationId 的会话标成 promoted 并落盘；重复点幂等", async () => {
+    await store.ensureSession(meta({ automationId: "au1", automationRun: { title: "日报", number: 2, at: 5, trigger: "schedule" } }));
+    assert.equal(await store.setPromoted(ID), true);
+    assert.equal(await store.setPromoted(ID), true);
+    const saved = await store.readMeta(ID);
+    assert.equal(saved?.promoted, true);
+    assert.equal(saved?.automationId, "au1", "来源标注保留，顶部那条仍认得出它是哪次运行");
+    assert.deepEqual(saved?.automationRun, { title: "日报", number: 2, at: 5, trigger: "schedule" });
+  });
+
+  test("不是自动化开的会话：不动、返回 false；不存在的会话也是 false", async () => {
+    await store.ensureSession(meta());
+    assert.equal(await store.setPromoted(ID), false);
+    assert.equal((await store.readMeta(ID))?.promoted, undefined);
+    assert.equal(await store.setPromoted(OTHER), false);
+  });
+});
+
 describe("SessionStore.assignModel（给导入的会话分配模型）", () => {
   test("占位会话写入目标，importedModel 原样保留", async () => {
     await store.ensureSession(

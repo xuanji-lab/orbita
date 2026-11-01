@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   atMostManual,
+  AUTOMATION_TOOLS,
   BROWSER_READ_TOOLS,
   CHANNEL_TOOLS,
   decidePermission,
@@ -92,6 +93,15 @@ describe("decidePermission", () => {
     }
     // 名字相似的不沾光
     assert.equal(decidePermission("plan", "memory_delete").behavior, "deny");
+  });
+
+  test("自动化三件套：建出来是待启用，确认在启用那一下——三档全放行，名字相似的不沾光", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of AUTOMATION_TOOLS) {
+        assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);
+      }
+    }
+    assert.equal(decidePermission("plan", "automation_enable").behavior, "deny");
   });
 
   test("通道工具放行不影响其它工具的既有行为", () => {

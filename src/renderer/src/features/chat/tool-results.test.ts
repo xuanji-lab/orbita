@@ -352,6 +352,34 @@ describe("rollupToolKey（折叠统计行的统计词汇）", () => {
     );
   });
 
+  test("automation_create 不成组——建出来的那张卡是给用户看的结果，不是折叠掉的工作过程", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "c1", toolName: "automation_create", input: {} }]),
+        toolItem({ toolCallId: "c1", toolName: "automation_create" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "c2", toolName: "automation_create", input: {} }]),
+        toolItem({ toolCallId: "c2", toolName: "automation_create" }),
+      ]),
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.kind),
+      ["toolCall", "toolCall"],
+    );
+    // 对照：同样连发两次的 automation_list 是普通工具，照常合并成组
+    const lists = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("b1", [{ type: "toolCall", toolCallId: "l1", toolName: "automation_list", input: {} }]),
+        toolItem({ toolCallId: "l1", toolName: "automation_list" }),
+        assistantItem("b2", [{ type: "toolCall", toolCallId: "l2", toolName: "automation_list", input: {} }]),
+        toolItem({ toolCallId: "l2", toolName: "automation_list" }),
+      ]),
+    );
+    assert.deepEqual(
+      lists.map((entry) => entry.kind),
+      ["toolGroup"],
+    );
+  });
+
   test("request_user_action 不成组——交接卡要一直露在外面，折进组里用户看不见", () => {
     const entries = groupToolUnits(
       flattenRenderUnits([

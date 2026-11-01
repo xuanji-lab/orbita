@@ -28,6 +28,7 @@ import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
+import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/wrapup-scan.ts";
 
 /** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
@@ -462,7 +463,9 @@ export class SessionStore {
       // 收尾扫描的机器提问不是用户的提问，不进最近提问（首页卡上会冒出一行「【Orbita 收尾扫描】」）
       if (item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text" && !isClosingScanText(text.text)) {
+        // 收尾扫描的机器提问、自动化到点送进来的指令（首行是 `[定时任务「…」第 n 次 · …]` 抬头）
+        // 都不是用户的提问，不进最近提问
+        if (text !== undefined && text.type === "text" && !isClosingScanText(text.text) && parseAutomationHeader(text.text) === null) {
           changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);
         }
       }
@@ -629,6 +632,20 @@ export class SessionStore {
 
   setMode(id: string, mode: PermissionMode): Promise<void> {
     return this.update(id, { mode });
+  }
+
+  /**
+   * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
+   * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
+   */
+  async setPromoted(id: string): Promise<boolean> {
+    let changed = false;
+    await this.update(id, (meta) => {
+      if (meta.automationId === undefined) return null;
+      changed = true;
+      return { promoted: true };
+    });
+    return changed;
   }
 
   /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */

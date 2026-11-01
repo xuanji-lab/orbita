@@ -44,7 +44,8 @@ export type RightPanelKind =
   | "drawer"
   | "subsessions"
   | "intent"
-  | "context";
+  | "context"
+  | "automation";
 
 /**
  * App 传给右栏的应用级入口（右栏上其余入口由面板状态推出，不走这里）。
@@ -81,6 +82,12 @@ export function RightRail(props: {
    */
   /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
   intentAvailable: boolean;
+  /**
+   * 自动化面板入口（实验功能 automation）：null = 不出现（开关关着）；running 是正在跑的自动化数，
+   * 角标只在有运行时出现（没有「未读」这类计数——自动化的结果在面板里那条任务下面看）。
+   * 归「智能体」组、精简态收进「更多」（菜单项的文案带运行数）。
+   */
+  automation: { running: number } | null;
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -187,6 +194,20 @@ export function RightRail(props: {
           },
         ]
       : []),
+    ...(props.automation === null
+      ? []
+      : [
+          {
+            id: "automation",
+            group: "agent" as const,
+            pinned: false,
+            icon: "calendar-clock" as const,
+            label: t.automation.railLabel(props.automation.running),
+            lit: props.panel === "automation",
+            onSelect: toggle("automation"),
+            badge: props.automation.running,
+          },
+        ]),
     // 收起来以后再看的
     ...fromApp("carryovers", { group: "shelf", pinned: false }),
     ...fromApp("archived", { group: "shelf", pinned: false }),
