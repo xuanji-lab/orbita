@@ -24,6 +24,7 @@ import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor.
 import { NET_SESSION_NAME } from "electron-updater/out/electronHttpExecutor.js";
 import type { RequestOptions } from "node:http";
 import { isGitHubAssetUrl, githubRedirectAllowed, withAssetAccept } from "./github-client.ts";
+import { armTimeout, type TimeoutScheduler } from "./response-timeout.ts";
 import {
   downloadFile,
   DownloadChecksumError,
@@ -33,8 +34,14 @@ import {
   type RangeTransport,
 } from "./resilient-download.ts";
 
-/** 连接建立 / 两次收到数据之间的上限；超过就中止并续传 */
+/** 连接建立 / 收到响应头 / 两次收到数据之间的上限；超过就中止并续传 */
 const IDLE_TIMEOUT_MS = 30_000;
+const RESPONSE_TIMEOUT_MS = 30_000;
+
+const nativeTimeoutScheduler: TimeoutScheduler = {
+  set: (callback, delayMs) => setTimeout(callback, delayMs),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 type DownloadOptions = Parameters<ElectronHttpExecutor["download"]>[2];
 
@@ -52,18 +59,6 @@ function normalizeHeaders(headers: DownloadOptions["headers"]): Record<string, s
   return result;
 }
 
-function headerValue(headers: IncomingMessage["headers"], name: string): string | null {
-  const value = headers[name.toLowerCase()];
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value[0] ?? null;
-  return null;
-}
-
-function isRedirect(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
-/** GitHub 的发布资产端点：只有它需要先解析 302，也只有它要强制资产头 */
 function needsRedirectResolution(url: URL): boolean {
   return isGitHubAssetUrl(url);
 }
@@ -147,13 +142,13 @@ class ElectronRangeTransport implements RangeTransport {
 
   async open(url: URL, headers: Readonly<Record<string, string>>, range: RangeRequest): Promise<RangeResponse> {
     const target = await this.targetOf(url, headers);
-    const response = await this.request(target, headers, range);
+    const response = await this.request(target, headers, range, needsRedirectResolution(url));
     if (response.status === 403 || response.status === 401) {
       // 签名地址过期：重新解析一次再试。API 请求只多一次，不会撞限流。
       response.close();
       this.resolved.delete(url.href);
       const refreshed = await this.targetOf(url, headers);
-      return await this.request(refreshed, headers, range);
+      return await this.request(refreshed, headers, range, needsRedirectResolution(url));
     }
     return response;
   }
@@ -180,7 +175,8 @@ class ElectronRangeTransport implements RangeTransport {
    * api.github.com / *.githubusercontent.com（githubRedirectAllowed，实测资产端点 302
    * 到 release-assets.githubusercontent.com）。白名单外直接报错中止——重定向不许把
    * 下载带去陌生域。分段请求（request）只发给这里放行的目标或原资产端点，自身
-   * redirect: "follow" 只在目标再跳时生效，那些目标已在白名单内。
+   * redirect: "manual" 只用于 GitHub 资产，逐跳校验后同步 followRedirect；其它地址
+   * 保留库原来的 follow 语义。
    *
    * 限流账的已知缺口：这次 GET 打在 api.github.com 的资产端点上，占用未认证配额
    * （60 次/小时），但它的 x-ratelimit-* 响应头不回写共享客户端那本账
@@ -192,6 +188,9 @@ class ElectronRangeTransport implements RangeTransport {
   private async resolveRedirect(url: URL, headers: Readonly<Record<string, string>>): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
       let settled = false;
+      let cancelResponseTimer: (() => void) | null = null;
+      let currentUrl = url;
+      let target: string | undefined;
       const request = net.request({
         url: url.href,
         method: "GET",
@@ -200,63 +199,94 @@ class ElectronRangeTransport implements RangeTransport {
         headers: { ...headers, range: "bytes=0-0" },
       });
       /** Location → 目标地址；白名单外 / 解析不了都当失败，不带下载去陌生域 */
-      const targetOf = (raw: string): string => {
-        const target = new URL(raw, url);
-        if (!githubRedirectAllowed(target)) {
-          throw new Error(`更新资产重定向到了白名单外的域：${target.hostname}（只允许 github.com / api.github.com / *.githubusercontent.com）`);
+      const targetOf = (raw: string, base: URL): URL => {
+        const next = new URL(raw, base);
+        if (!githubRedirectAllowed(next)) {
+          throw new Error(`更新资产重定向到了白名单外的域：${next.hostname}（只允许 github.com / api.github.com / *.githubusercontent.com）`);
         }
-        return target.href;
+        return next;
       };
-      const finish = (error: Error | null, target?: string): void => {
+      const finish = (error: Error | null, resolvedTarget?: string): void => {
         if (settled) return;
         settled = true;
+        cancelResponseTimer?.();
         request.abort();
         if (error !== null) reject(error);
-        else resolve(target ?? url.href);
+        else resolve(resolvedTarget ?? url.href);
       };
-      request.on("response", (response) => {
-        // 有些地址不会重定向（镜像 / 直链）：直接用原地址（原地址是 api.github.com，在白名单内）
-        const location = headerValue(response.headers, "location");
-        if (isRedirect(response.statusCode) && location !== null) {
-          try {
-            finish(null, targetOf(location));
-          } catch (error) {
-            finish(error instanceof Error ? error : new Error(String(error)));
-          }
-        } else {
-          finish(null, url.href);
-        }
-      });
-      // manual 模式下 Electron 重定向走 `redirect` 事件而不是 response；
-      // 不 follow 的话之后会补一个 "Redirect was cancelled"，由 settled 守卫吃掉。
       request.on("redirect", (_status: number, _method: string, redirectUrl: string) => {
+        // Electron 要求 manual 模式在 redirect listener 内同步 followRedirect；
+        // 先同步校验这一跳，再继续，下一跳仍会重新经过这里。
         try {
-          finish(null, targetOf(redirectUrl));
+          const next = targetOf(redirectUrl, currentUrl);
+          currentUrl = next;
+          target = next.href;
+          request.followRedirect();
         } catch (error) {
           finish(error instanceof Error ? error : new Error(String(error)));
         }
       });
+      request.on("response", (response) => {
+        // redirect listener 已保存最后一跳；直链则继续使用原地址。
+        finish(null, target ?? url.href);
+        response.on("end", () => undefined);
+      });
       request.on("error", (error: Error) => finish(error));
+      cancelResponseTimer = armTimeout(nativeTimeoutScheduler, RESPONSE_TIMEOUT_MS, () => {
+        finish(new Error("更新资产重定向响应超时（ETIMEDOUT）"));
+      });
       request.end();
     });
   }
 
+  /** 已完成的请求结果；响应头到达后交给 bodyOf */
   private async request(
     target: string,
     headers: Readonly<Record<string, string>>,
     range: RangeRequest,
+    validateRedirects: boolean,
   ): Promise<RangeResponse> {
     return await new Promise<RangeResponse>((resolve, reject) => {
       let settled = false;
+      let currentUrl = new URL(target);
       const request = net.request({
         url: target,
         method: "GET",
         session: this.httpSession,
-        redirect: "follow",
+        redirect: validateRedirects ? "manual" : "follow",
         headers: { ...headers, range: `bytes=${range.start}-${range.end}` },
       });
-      request.on("response", (response) => {
+      const cancelResponseTimer = armTimeout(nativeTimeoutScheduler, RESPONSE_TIMEOUT_MS, () => {
+        if (settled) return;
         settled = true;
+        request.abort();
+        reject(new Error("更新下载响应超时（ETIMEDOUT）"));
+      });
+      if (validateRedirects) {
+        request.on("redirect", (_status: number, _method: string, redirectUrl: string) => {
+          try {
+            const next = new URL(redirectUrl, currentUrl);
+            if (!githubRedirectAllowed(next)) {
+              settled = true;
+              cancelResponseTimer();
+              request.abort();
+              reject(new Error(`更新下载重定向到了白名单外的域：${next.hostname}`));
+              return;
+            }
+            currentUrl = next;
+            request.followRedirect();
+          } catch (error) {
+            settled = true;
+            cancelResponseTimer();
+            request.abort();
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      }
+      request.on("response", (response) => {
+        if (settled) return;
+        settled = true;
+        cancelResponseTimer();
         resolve({
           status: response.statusCode,
           headers: response.headers,
@@ -264,8 +294,19 @@ class ElectronRangeTransport implements RangeTransport {
           close: () => request.abort(),
         });
       });
+      request.on("close", () => {
+        if (!settled) {
+          settled = true;
+          cancelResponseTimer();
+          reject(new Error("更新下载连接在响应头前关闭"));
+        }
+      });
       request.on("error", (error: Error) => {
-        if (!settled) reject(error);
+        if (!settled) {
+          settled = true;
+          cancelResponseTimer();
+          reject(error);
+        }
       });
       request.end();
     });

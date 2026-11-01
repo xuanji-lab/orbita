@@ -15,7 +15,7 @@
  */
 import { net, session, type Session } from "electron";
 import { NET_SESSION_NAME } from "electron-updater/out/electronHttpExecutor.js";
-import { githubBodyLimitError } from "./github-client.ts";
+import { githubBodyLimitError, githubRedirectAllowed } from "./github-client.ts";
 import type { GitHubRequest, GitHubResponse, GitHubTransport } from "./github-client.ts";
 import { hasProxySetting, proxyRulesOf, type ProxyEnv } from "./proxy.ts";
 
@@ -41,11 +41,12 @@ export function electronGitHubTransport(): GitHubTransport {
         else if (response !== undefined) resolve(response);
       };
 
+      let currentUrl = url;
       const client = net.request({
         url: url.href,
         method: "GET",
         session: githubSession(),
-        redirect: "follow",
+        redirect: "manual",
         headers: request.headers,
       });
       timer = setTimeout(() => {
@@ -54,6 +55,22 @@ export function electronGitHubTransport(): GitHubTransport {
         client.abort();
       }, REQUEST_TIMEOUT_MS);
 
+      client.on("redirect", (_status: number, _method: string, redirectUrl: string) => {
+        try {
+          const next = new URL(redirectUrl, currentUrl);
+          if (!githubRedirectAllowed(next)) {
+            settle(new Error(`GitHub 请求重定向到了白名单外的域：${next.hostname}`));
+            client.abort();
+            return;
+          }
+          currentUrl = next;
+          // Electron 要求在 redirect 事件内同步 followRedirect；逐跳校验后立即继续。
+          client.followRedirect();
+        } catch (error) {
+          settle(error instanceof Error ? error : new Error(String(error)));
+          client.abort();
+        }
+      });
       client.on("response", (response) => {
         const chunks: Buffer[] = [];
         let received = 0;
