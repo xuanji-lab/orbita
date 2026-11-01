@@ -415,9 +415,12 @@ export interface MemoryHistoryScope {
   scopeId: string;
   /** 记忆库里这个作用域的寻址 token（界面据此默认勾上正在看的那个范围） */
   token: MemoryScopeToken;
-  kind: "workspace" | "cwd";
-  /** 工作区名；cwd 作用域是路径本身 */
+  /** missing = 会话指向的工作区已不在（同 MemoryScopeSummary 的 missing） */
+  kind: "workspace" | "cwd" | "missing";
+  /** 工作区名；cwd 作用域是路径本身；已不在的工作区是多数 cwd 的末段目录名（不露 uuid） */
   name: string;
+  /** cwd 与 missing 的完整路径（悬停用） */
+  path?: string;
   /** 根会话数（子会话不写记忆，不计） */
   sessions: number;
   /** 轮次统计（要读转录，只对请求里点名的作用域算；null = 没算） */
@@ -437,7 +440,7 @@ export interface MemoryHistoryEstimateRequest {
 }
 
 export interface MemoryHistoryEstimate {
-  /** 工作区在前（按名字），cwd 作用域在后（按会话数） */
+  /** 现存工作区在前（按名字），cwd 作用域其次（按会话数），已不在的工作区最后（按名字） */
   scopes: MemoryHistoryScope[];
   /** 当前家务活模型；null = 没配（不能开始） */
   chore: { providerId: string; modelId: string } | null;
@@ -485,9 +488,14 @@ export const MEMORY_USER_TOKEN = "user";
 /** 记忆库左栏 / 范围选择的一行。 */
 export interface MemoryScopeSummary {
   token: MemoryScopeToken;
-  kind: "user" | "workspace" | "home";
-  /** 显示名：所有工作区 / 工作区名 / Home（多个 Home 带短 token 后缀区分） */
+  /** missing = 会话指向的工作区已不在 workspaces.json（导入的旧会话 / 工作区被删）——存储照旧按
+   * 那个 workspaceId，只是显示名回落到会话 cwd 的末段目录名，界面上不露 uuid */
+  kind: "user" | "workspace" | "home" | "missing";
+  /** 显示名：所有工作区 / 工作区名 / Home（多个 Home 带短 token 后缀区分）/ 已不在的工作区取
+   * 这些会话出现最多的 cwd 的末段目录名 */
   name: string;
+  /** missing 的完整路径（悬停用） */
+  path?: string;
   /** 条数 */
   count: number;
 }

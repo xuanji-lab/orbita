@@ -221,3 +221,27 @@ test("重启：跑着 / 停到一半的任务读回来是暂停（不自己开�
   assert.equal((await h.job.current()).state, "paused");
   assert.equal((await h.job.current()).doneTurns, 7);
 });
+
+test("预估的作用域：现存工作区在前（按名字）→ 按目录 → 已不在的工作区（按名字，名字是目录末段，不露 id）", async () => {
+  const gone = "24d85ecd-0000-4000-8000-000000000000";
+  const h = harness({
+    sessions: [
+      { id: "a", workspaceId: "ws-1", cwd: "/x", times: [1] },
+      { id: "b", workspaceId: null, cwd: "/Users/u/Orbita/Home", times: [2] },
+      { id: "c", workspaceId: gone, cwd: "/Users/u/code/clementi-agents", times: [3] },
+      { id: "d", workspaceId: gone, cwd: "/Users/u/code/clementi-agents", times: [4] },
+      { id: "e", workspaceId: gone, cwd: "/tmp/other", times: [5] },
+    ],
+  });
+  const estimate = await h.job.estimate([]);
+  assert.deepEqual(
+    estimate.scopes.map((row) => [row.kind, row.name, row.sessions, row.path ?? null]),
+    [
+      ["workspace", "意图系统", 1, null],
+      ["cwd", "/Users/u/Orbita/Home", 1, "/Users/u/Orbita/Home"],
+      ["missing", "clementi-agents", 3, "/Users/u/code/clementi-agents"],
+    ],
+  );
+  // 存储作用域不变：仍按 workspaceId
+  assert.equal(estimate.scopes[2]!.scopeId, gone);
+});

@@ -107,12 +107,14 @@ function HistoryPicker(props: { token: string; onClose: () => void }) {
 
   const workspaces = (scopes ?? []).filter((scope) => scope.kind === "workspace");
   const folders = (scopes ?? []).filter((scope) => scope.kind === "cwd");
+  const gone = (scopes ?? []).filter((scope) => scope.kind === "missing");
   const row = (scope: MemoryHistoryScope) => (
     <label key={scope.scopeId} className="mem-hist-row">
       <input type="checkbox" checked={selected?.has(scope.scopeId) ?? false} onChange={() => toggle(scope.scopeId)} />
-      <span className="mem-hist-name" title={scope.name}>
+      <span className="mem-hist-name" title={scope.path ?? scope.name}>
         {scope.name}
       </span>
+      {scope.kind === "missing" && <span className="mem-hist-gone">{t.memory.scopeMissing}</span>}
       <span className="mem-hist-meta row-trailing">
         {t.memory.historySessions(scope.sessions)}
         {selected?.has(scope.scopeId) === true && (
@@ -148,6 +150,15 @@ function HistoryPicker(props: { token: string; onClose: () => void }) {
                 {t.memory.historyNoWorkspace}
               </summary>
               {folders.map(row)}
+            </details>
+          )}
+          {gone.length > 0 && (
+            <details className="mem-hist-group">
+              <summary className="mem-hist-group-title">
+                <Icon name="chevron-right" size={12} strokeWidth={1.8} />
+                {t.memory.historyMissingGroup}
+              </summary>
+              {gone.map(row)}
             </details>
           )}
         </>
