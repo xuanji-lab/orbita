@@ -1,5 +1,4 @@
 import { test, describe, before, after } from "node:test";
-import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -593,74 +592,4 @@ describe("status 参数与 git 超时", () => {
       await assert.rejects(gitReviewList(timingOut(which), "/w", "unstaged", fakeProbe(() => null)), GitTimeoutError);
     }
   });
-});
-
-describe("git 超时杀整棵进程树（Kill Job，与 bash 超时同一实现）", () => {
-  const MARKER = "orbitaGitKillProbe20261101";
-
-  function probeProcesses(): number[] {
-    // 只认后台 sleeper 自己的命令行（`Start-Sleep 600 # MARKER`）——git/bash 的
-    // 命令行里只有脚本路径与别名，不含这句；查询自己的命令行里也带 MARKER 串，
-    // 必须再排除含 Get-CimInstance 的（查自己），否则每个查询进程都会把自己算成残留
-    const out = execFileSync("powershell.exe", [
-      "-NoProfile", "-Command",
-      `(@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'powershell.exe' -and $_.CommandLine -match 'Start-Sleep 600 # ${MARKER}' -and $_.CommandLine -notmatch 'Get-CimInstance' } | Select-Object -ExpandProperty ProcessId)) -join ','`,
-    ], { encoding: "utf-8" }).trim();
-    return out === "" ? [] : out.split(",").map(Number);
-  }
-
-  test(
-    "git 卡死超时：别名 shell 与 Start-Process 独活的后台子进程都不留活口",
-    { skip: process.platform !== "win32", timeout: 30_000 },
-    async (t) => {
-      const version = await realGitRunner(["--version"], tmpdir()).catch(() => null);
-      if (version === null) return t.skip("环境没有 git");
-      const repo = await mkdtemp(join(tmpdir(), "orbita-gitkilling-"));
-      try {
-        // 探针脚本：先睡 1 秒再放大招——给 job 登记留出稳定时间（git 一启动就秒放的
-        // 竞态窗口与 bash 那道同款，见 fix/bash-default-timeout 的说明，这里测的是
-        // 「登记到位后，超时能不能杀整树」）：放一个 Start-Process 独活的后台 sleeper
-        //（Marker 在它的命令行里，脱离父子链也能独活），自己再 sleep 9999 把 git 永久卡住。
-        await writeFile(
-          join(repo, "probe.sh"),
-          `#!/bin/sh\nsleep 1\npowershell.exe -NoProfile -Command "Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep 600 # ${MARKER}'"\nsleep 9999\n`,
-          "utf8",
-        );
-        await assert.rejects(
-          gitRunnerWithTimeout(3_000)(["-c", "alias.orbita-kill=!./probe.sh", "orbita-kill"], repo),
-          (cause: unknown) => {
-            assert.ok(cause instanceof GitTimeoutError, String(cause));
-            return true;
-          },
-        );
-        // TerminateJobObject 是毫秒级；放宽到 5 秒观察期，排除调度抖动
-        const deadline = Date.now() + 5_000;
-        let alive = probeProcesses();
-        while (alive.length > 0 && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 250));
-          alive = probeProcesses();
-        }
-        if (alive.length > 0) {
-          // 临时调试： survivors 详情
-          const detail = execFileSync("powershell.exe", ["-NoProfile", "-Command",
-            `Get-CimInstance Win32_Process | Where-Object { ${alive.map((x) => "$_.ProcessId -eq " + x).join(" -or ")} } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List | Out-String`], { encoding: "utf-8" });
-          console.error("[dbg survivors]", detail);
-          const helperInfo = execFileSync("powershell.exe", ["-NoProfile", "-Command",
-            "(@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'powershell.exe' -and $_.CommandLine -match 'ORBITA-JOB-HELPER-READY' } | Select-Object -ExpandProperty ProcessId)) -join ','"], { encoding: "utf-8" }).trim();
-          console.error("[dbg helper]", JSON.stringify(helperInfo));
-        }
-        assert.deepEqual(alive, [], `超时后仍有钩子孙进程残留: ${alive.join(",")}`);
-      } finally {
-        // 断言失败也清场：只杀带本测试 Marker 的 sleeper
-        for (const pid of probeProcesses()) {
-          try {
-            execFileSync("taskkill", ["/F", "/PID", String(pid)], { stdio: "ignore" });
-          } catch {
-            // 已死或权限不足：断言会如实报出来
-          }
-        }
-        await rm(repo, { recursive: true, force: true });
-      }
-    },
-  );
 });

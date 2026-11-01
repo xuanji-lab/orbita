@@ -14,9 +14,9 @@
  * 展开一个文件时才整份读来造正文（diskUntrackedReader，只给 review:diff）。
  */
 import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { lstat, readFile, readlink } from "node:fs/promises";
 import { dirname, posix, resolve, win32 } from "node:path";
-import { assignProcessToKillJob, awaitJobHelperReady, terminateKillJob } from "@earendil-works/pi-coding-agent";
 import { createTwoFilesPatch } from "diff";
 import {
   parseNumstatLine,
@@ -32,6 +32,7 @@ import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
 import { diskUntrackedProbe, untrackedLineStats, type UntrackedProbe } from "./untracked-lines.ts";
 
+const execFileAsync = promisify(execFile);
 
 export interface GitRunOutcome {
   code: number;
@@ -48,11 +49,6 @@ export type GitRunner = (args: string[], cwd: string) => Promise<GitRunOutcome>;
  * 单条 git 命令的时限：60 秒。git 会卡住（网络盘挂了、fsmonitor 钩子不返回、杀毒软件锁着文件），
  * 卡住的那一轮不该永远等下去——专注左栏的轮询一旦做了「上一轮没回来不发下一轮」，一次卡死就是
  * 永远不再刷新。60 秒远长于正常的 status / diff（大仓库也是秒级），只拦真的卡死。
- *
- * 到点只杀 git 自己会漏：fsmonitor 钩子 / credential helper / ssh 这些子进程在 Windows 上
- * 可能脱离父子链（MSYS2 fork 同理，见 fix/bash-default-timeout 的 Kill Job 修复）。超时与
- * 正常结束都走 pi 补丁的同一套 Job Object 助手——spawn 即挂 job，到点 TerminateJobObject
- * 杀整树，正常 close 后清掉 job 句柄。与 agent 的 bash 超时是同一实现，不写第二套。
  */
 const GIT_TIMEOUT_MS = 60_000;
 
@@ -75,69 +71,30 @@ function subcommandOf(args: readonly string[]): string {
 }
 
 /** 带时限的真 git runner（execFile，不带 shell）。测试用短时限造卡死；应用里只用 realGitRunner */
-let gitJobHelperReady: Promise<void> | undefined;
-
 export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
   return async (args, cwd) => {
     try {
       // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
       // `"\344\270\255.txt"`——未跟踪文件读盘 ENOENT 被静默跳过、已跟踪文件拉空 diff
       // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
-      // 第一个 git spawn 之前等 Kill Job 助手就绪（win32；内部 once，超时也放行）：
-      // A 指令必须在 git 的子进程出现之前落进 job，迟了追不回。
-      if (process.platform === "win32") {
-        gitJobHelperReady ??= awaitJobHelperReady();
-        await gitJobHelperReady;
-      }
-      const outcome = await new Promise<{ code: number; stdout: string }>((resolvePromise, rejectPromise) => {
-        const child = execFile("git", ["-c", "core.quotepath=false", ...args], {
-          cwd,
-          maxBuffer: 32 * 1024 * 1024,
-          encoding: "utf8",
-          windowsHide: true,
-          // 到点 execFile 结束 git 本体（Windows 上直接结束进程）
-          timeout: timeoutMs,
-        });
-        // spawn 即挂进 Kill Job：超时杀 git 本体之后，钩子等孙进程由 job 一刀切。
-        // T 发两次——close 时一次，被信号结束（超时）时再补一次：close 事件与
-        // helper 串行队列之间不保证先后，双发让「job 已清空」不依赖单一路径送达。
-        if (child.pid) assignProcessToKillJob(child.pid);
-        const terminateJob = () => {
-          if (child.pid) terminateKillJob(child.pid);
-        };
-        child.on("close", terminateJob);
-        let stdout = "";
-        child.stdout?.on("data", (chunk: string) => {
-          stdout += chunk;
-        });
-        child.stderr?.resume();
-        child.on("error", (error) => {
-          // spawn 失败（没有 git：ENOENT）。外层翻成 no-git 空态
-          rejectPromise(error);
-        });
-        child.on("close", (code, signal) => {
-          if (signal !== null || code === null) {
-            // 被信号结束（这里的超时路径）：外层折成 GitTimeoutError
-            const killed = new Error("killed") as Error & { killed?: boolean };
-            killed.killed = true;
-            terminateJob();
-            rejectPromise(killed);
-            return;
-          }
-          // 非零退出码不是异常（not-repo / no-upstream 靠它表达），原样带回
-          resolvePromise({ code, stdout });
-        });
+      const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        encoding: "utf8",
+        // 到点 execFile 发 SIGTERM（Windows 上直接结束进程），error.killed = true
+        timeout: timeoutMs,
       });
-      return outcome;
+      return { code: 0, stdout };
     } catch (cause) {
+      // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
       // ENOENT（没有 git）重新抛，上层翻成 no-git 空态
-      const failure = cause as { code?: number | string | null; errno?: string; killed?: boolean };
+      const failure = cause as { code?: number | string | null; stdout?: string; errno?: string; killed?: boolean };
       if (failure.code === "ENOENT" || failure.errno === "ENOENT") throw cause;
       // killed 只在我们自己发信号时为 true（这里只有超时会发；maxBuffer 溢出不带这个标记）
       if (failure.killed === true) {
         throw new GitTimeoutError(`git ${subcommandOf(args)} timed out after ${Math.round(timeoutMs / 1000)} s`);
       }
-      throw cause;
+      return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "" };
     }
   };
 }
