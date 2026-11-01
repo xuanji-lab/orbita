@@ -576,6 +576,21 @@ describe("在途去重与取消", () => {
     assert.equal((await buildLineIndex(path, controller.signal)).kind, "cancelled");
   });
 
+  test("取消后的旧扫描晚收尾也不能覆盖新索引", async () => {
+    const path = await bigFile("stale-job.log");
+    await appendFile(path, bigLog(300_000, 540_000), "utf8");
+    const quitter = new AbortController();
+    const gone = buildLineIndex(path, quitter.signal);
+    quitter.abort();
+    assert.equal((await gone).kind, "cancelled");
+
+    const fresh = await buildLineIndex(path);
+    assert.ok(fresh.kind === "ok");
+    const nextToken = `lines-${Number(fresh.indexId.replace("lines-", "")) + 1}`;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal((await readLines({ indexId: nextToken, startLine: 0, count: 1 })).kind, "expired");
+  });
+
   test("两个请求并在一次扫描上，一个取消：另一个照常拿到结果", async () => {
     const path = await bigFile("share.log");
     const quitter = new AbortController();
@@ -587,6 +602,7 @@ describe("在途去重与取消", () => {
     assert.ok(got.kind === "ok");
     assert.equal(got.totalLines, 540_000);
   });
+
 
   test("等的人都走了、扫描还没停下时来了新请求：新请求不会拿到别人的 cancelled", async () => {
     const path = await bigFile("revive.log");
