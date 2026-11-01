@@ -18,7 +18,7 @@ const VENDOR_NAMES_ZH: Record<DictationProvider, string> = {
   stepfun: "阶跃星辰",
 };
 
-const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划" };
+const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划", update_goal: "目标" };
 
 /**
  * 界面文案表——中文，Copybook（小学作业）主题下使用。类型由英文真源推出。
@@ -2047,6 +2047,34 @@ export const zh: Messages = {
     outsidePlan: "计划外",
     history: (turns, steps, files) => `${turns} 轮 · ${steps} 步${files > 0 ? ` · 改了 ${files} 个文件` : ""}`,
     versionAt: (n) => `第 ${n} 版`,
+  },
+
+  goalText: {
+    title: "目标",
+    kindGoalSet: "目标 · 定下",
+    kindGoalChanged: "目标 · 改了",
+    kindPlan: "计划 · 改了",
+    planReplaced: (steps) => `换了一张新计划（${steps} 步）`,
+    sourceUser: (time, head) => `你 ${time} 说：「${head}」`,
+    sourceSelf: "智能体自己发现的",
+    editsTitle: "目标和计划改了什么、为什么、是谁提的",
+    logOnly: "记录",
+    notice: (from, to, why) => `目标改了：「${from}」改成「${to}」${why === "" ? "" : `——${why}`}`,
+    carry: "带着目标开新会话",
+    carryTitle: "新开一个会话，带上这个目标、做完的和没做完的事、目标是怎么改过来的",
+  },
+
+  goalSeed: {
+    lead: (title) => (title === null ? "接着做之前一个任务的目标（那个任务已删除）。" : `接着做任务「${title}」的目标。`),
+    goal: "目标",
+    done: "已经做完的",
+    open: "还没做完的",
+    later: "记下了、还没处理的以后再做",
+    changes: "目标和计划是怎么改过来的",
+    ask: "请把上面的目标记成这个会话的目标（update_goal，保留我的原话；「已完成」「本次不做」这类进度说法不要写进目标），然后从没做完的接着做。",
+    change: (time, what, why, source) => `${time} ${what}${why === "" ? "" : `——${why}`}（${source}）`,
+    goalSet: (to) => `定下目标：「${to}」`,
+    goalChanged: (from, to) => `目标「${from}」改成「${to}」`,
   },
 
   contextPanel: {

@@ -168,3 +168,11 @@ describe("atMostManual（收尾扫描轮与遗留事项开出的新会话首轮�
     }
   });
 });
+
+describe("update_goal（会话级目标）", () => {
+  test("三档一律放行：它只是把目标记在转录里，plan 档也要能定目标", () => {
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, "update_goal"), { behavior: "allow" }, mode);
+    }
+  });
+});

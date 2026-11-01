@@ -13,10 +13,11 @@
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
 import type { TranscriptRecord } from "@shared/session";
+import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import {
   parsePlanCall,
+  parsePlanItemsLoose,
   parsePlanNotes,
-  PLAN_STATUSES,
   PLAN_TOOL_NAME,
   type PlanItem,
   type PlanLater,
@@ -81,7 +82,7 @@ interface RawVersion {
 function rawVersion(record: TranscriptRecord): RawVersion | null {
   if (record.role !== "tool" || record.toolName !== PLAN_TOOL_NAME || record.status === "error") return null;
   if (record.status === "complete") {
-    const items = looseItems(record.input);
+    const items = parsePlanItemsLoose(record.input);
     if (items.length === 0) return null;
     const { why, later } = parsePlanNotes(record.input);
     return { record, items, why, later };
@@ -92,18 +93,6 @@ function rawVersion(record: TranscriptRecord): RawVersion | null {
   } catch {
     return null;
   }
-}
-
-function looseItems(input: unknown): PlanItem[] {
-  const raw = (input as { items?: unknown } | null)?.items;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item) => {
-    const value = (item ?? {}) as Record<string, unknown>;
-    const text = typeof value["text"] === "string" ? value["text"].trim() : "";
-    const status = value["status"];
-    if (text === "" || typeof status !== "string" || !(PLAN_STATUSES as readonly string[]).includes(status)) return [];
-    return [{ text, status: status as PlanItem["status"] }];
-  });
 }
 
 function awaitingOf(record: Extract<TranscriptRecord, { role: "tool" }>): boolean {
@@ -265,7 +254,7 @@ export function groupBySteps(
   };
   for (const turn of turns) {
     turn.chapters.forEach((chapter, index) => {
-      const work = chapter.calls.filter((call) => call.toolName !== PLAN_TOOL_NAME);
+      const work = chapter.calls.filter((call) => !isBookkeepingTool(call.toolName));
       let chapterBucket: string | null = null;
       for (const call of work) {
         const bucket = bucketAt(timeline, call.timestamp);

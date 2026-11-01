@@ -319,6 +319,11 @@ export interface ChatSession {
    */
   startCarryoverTask: (item: Carryover) => void;
   /**
+   * 带着会话目标新开一单（右栏进度「目标」上的动作）：与 startCarryoverTask 同一条路（cwd / 归属跟随来源会话、
+   * 权限档压到不高于「询问」），只是种子由调用方按来源标题现拼。
+   */
+  startGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
+  /**
    * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
    * 来源会话无 pi 本子时面板不提供入口）。在跑就排队，闲着就无状态续跑。
    */
@@ -2195,25 +2200,23 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
-   * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
-   * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
-   * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
-   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。新会话记下它接的是哪条
-   * 遗留事项（meta.resumedCarryovers），收尾确认时那条自动标为做完（2026-10-24 用户：
-   * 遗留事项的后续之前「没有设计」）。
+   * 从来源会话新开一单带着种子开工——遗留事项（startCarryoverTask）与会话目标（startGoalTask）共用：
+   * cwd / 归属跟随来源，来源已删时退到本槽当前选择再退兜底；权限档压到不高于「询问」。
+   * extra 带上遗留事项 id 时主进程记进新会话的 meta.resumedCarryovers。
    */
-  const startCarryoverTask = useCallback(
-    (item: Carryover): void => {
+  const startFromSource = useCallback(
+    (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null, extra: { carryoverId?: string }): void => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
         return;
       }
-      const source = engine.sessions.find((meta) => meta.id === item.sourceSessionId) ?? null;
+      const source = engine.sessions.find((meta) => meta.id === sourceSessionId) ?? null;
       // 空标题的会话不会有 carryover（收尾扫描要求 transcript 非空），防御性兑到
       // Untitled task（transcriptToMarkdown 同款措辞），不谎称「已删除」
       const sourceTitle =
         source === null ? null : source.title === "" ? "Untitled task" : source.title;
-      const seed = buildCarryoverSeed(item, sourceTitle);
+      const seed = makeSeed(sourceTitle);
+      if (seed === null) return;
       const target = source?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") {
         engine.setError(engine.messagesRef.current.session.noWorkspaceFolder);
@@ -2231,10 +2234,32 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 在原会话里续跑（continueCarryoverInSource）不降档：那是用户自己的会话、自己的档。
       const startMode = atMostManual(mode);
       setMode(startMode);
-      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
-      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { carryoverId: item.id, mode: startMode });
+      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { ...extra, mode: startMode });
     },
     [engine, model, mode, cwd, workspaceId, reset, submitTurn],
+  );
+
+  /**
+   * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
+   * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
+   * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
+   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。新会话记下它接的是哪条
+   * 遗留事项（meta.resumedCarryovers），收尾确认时那条自动标为做完（2026-10-24 用户：
+   * 遗留事项的后续之前「没有设计」）。
+   */
+  const startCarryoverTask = useCallback(
+    (item: Carryover): void => {
+      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
+      startFromSource(item.sourceSessionId, (sourceTitle) => buildCarryoverSeed(item, sourceTitle), { carryoverId: item.id });
+    },
+    [startFromSource],
+  );
+
+  const startGoalTask = useCallback(
+    (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
+      startFromSource(sourceSessionId, makeSeed, {});
+    },
+    [startFromSource],
   );
 
   /**
@@ -3286,6 +3311,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     refreshCarryovers: engine.refreshCarryovers,
     setCarryoverStatus: engine.setCarryoverStatus,
     startCarryoverTask,
+    startGoalTask,
     continueCarryoverInSource,
     closingScan: closingScan !== null && closingScan.sessionId === viewedId,
     scanResult,

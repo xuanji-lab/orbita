@@ -32,7 +32,10 @@ import { sessionRunState, type SessionRunState } from "../notify/completion-noti
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planNoticeOf, planTimeline, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
-import { planNoticeText } from "../context/plan-text.ts";
+import { goalNoticeText, planNoticeText } from "../context/plan-text.ts";
+import { useGoalLedger } from "../context/useGoalLedger.ts";
+import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
+import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import {
   CHAPTER_STEPS_SHOWN,
@@ -1686,6 +1689,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => planTimeline(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
     [transcript],
   );
+  // 目标与计划的改动账：对话里「目标改了：…」那一行读它
+  const ledger = useGoalLedger(transcript);
   // 停在「计划等你确认」上的那一版（最后一次 update_plan 要求确认、之后用户还没回应）：画成计划卡
   const awaitingPlan = useMemo(
     () => (plan !== null && plan.current.awaiting && planAwaitingIn(transcript) ? plan.current : null),
@@ -1906,6 +1911,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
               <TurnProcessLine
                 unit={entry}
                 plan={plan}
+                ledger={ledger}
                 awaitingPlan={awaitingPlan}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
@@ -3811,6 +3817,8 @@ function TurnProcessLine(props: {
   unit: TurnProcessUnit;
   /** 计划的版本线（没写过计划 = null） */
   plan: PlanTimeline | null;
+  /** 目标与计划的改动账（目标改了的那一行） */
+  ledger: GoalLedger;
   /** 停下来等你回答的那一版；这个块里的计划调用正是它时画（只读的）计划卡 */
   awaitingPlan: PlanVersion | null;
   toolResults: ToolResultIndex;
@@ -3837,6 +3845,14 @@ function TurnProcessLine(props: {
     .map((call) => call.toolCallId);
   const planNotice = planNoticeOf(props.plan, planCallIds);
   const planNoticeLine = planNotice === null ? null : planNoticeText(t, planNotice);
+  // 这个块里目标改了没有（第一次定目标不算改）
+  const goalNoticeLine = goalNoticeText(
+    t,
+    props.ledger,
+    processCalls(unit.steps)
+      .filter((call) => call.toolName === GOAL_TOOL_NAME)
+      .map((call) => call.toolCallId),
+  );
   const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
   const toolChips = counts.byTool.slice(0, 4).map(({ key, count }) => (
     <span key={key}>
@@ -3915,7 +3931,7 @@ function TurnProcessLine(props: {
             {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
           </div>
         </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? planNoticeLine ?? "")}</div>
+        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
       </div>
     );
   }
@@ -3953,6 +3969,7 @@ function TurnProcessLine(props: {
           ))}
         </ol>
       )}
+      {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
       {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
       {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
         <PlanCard version={props.awaitingPlan} />
