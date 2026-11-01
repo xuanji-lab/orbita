@@ -9,6 +9,9 @@
  * （workspaceRelativePath），不认的连 git 都不跑；未跟踪文件是我们自己读盘（git diff 覆盖不到），
  * 读之前 realpath 再判一次，且 lstat 不跟符号链接——链接只报它指向哪。已跟踪文件的正文由 git
  * 自己读：`--relative` 把输出限在 cwd 之内，已跟踪的链接 git 只比链接里写的目标串、不跟过去。
+ *
+ * 未跟踪文件的读盘有两条路：列表只要行数（专注左栏与审查列表共用 untracked-lines.ts 的计数器），
+ * 展开一个文件时才整份读来造正文（diskUntrackedReader，只给 review:diff）。
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -27,6 +30,7 @@ import {
 } from "../../shared/review.ts";
 import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
+import { diskUntrackedProbe, untrackedLineStats, type UntrackedProbe } from "./untracked-lines.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -35,28 +39,86 @@ export interface GitRunOutcome {
   stdout: string;
 }
 
-/** 退出码非 0 不是异常（not-repo / no-upstream 都用它表达）；ENOENT 单独抛给上层。 */
+/**
+ * 退出码非 0 不是异常（not-repo / no-upstream 都用它表达）；两种情况抛给上层：
+ * ENOENT（没有 git，上层翻成 no-git 空态）与超时（GitTimeoutError，上层如实报错）。
+ */
 export type GitRunner = (args: string[], cwd: string) => Promise<GitRunOutcome>;
 
-export const realGitRunner: GitRunner = async (args, cwd) => {
-  try {
-    // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
-    // `"\344\270\255.txt"`——未跟踪文件读盘 ENOENT 被静默跳过、已跟踪文件拉空 diff
-    // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
-    const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
-      cwd,
-      maxBuffer: 32 * 1024 * 1024,
-      encoding: "utf8",
-    });
-    return { code: 0, stdout };
-  } catch (cause) {
-    // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
-    // ENOENT（没有 git）重新抛，上层翻成 no-git 空态
-    const failure = cause as { code?: number | string; stdout?: string; errno?: string };
-    if (failure.code === "ENOENT" || failure.errno === "ENOENT") throw cause;
-    return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "" };
+/**
+ * 单条 git 命令的时限：60 秒。git 会卡住（网络盘挂了、fsmonitor 钩子不返回、杀毒软件锁着文件），
+ * 卡住的那一轮不该永远等下去——专注左栏的轮询一旦做了「上一轮没回来不发下一轮」，一次卡死就是
+ * 永远不再刷新。60 秒远长于正常的 status / diff（大仓库也是秒级），只拦真的卡死。
+ */
+const GIT_TIMEOUT_MS = 60_000;
+
+/**
+ * git 跑超时被杀。不折成退出码：那样会被读成「不是仓库」「没有改动」，界面说错话；
+ * 抛到 IPC 层变成 error 回执，界面显示原因。
+ */
+export class GitTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitTimeoutError";
   }
-};
+}
+
+/** 报错里的子命令名：跳过开头的 `-c 键=值`（status 前面带着它们） */
+function subcommandOf(args: readonly string[]): string {
+  let i = 0;
+  while (args[i] === "-c") i += 2;
+  return args[i] ?? "";
+}
+
+/** 带时限的真 git runner（execFile，不带 shell）。测试用短时限造卡死；应用里只用 realGitRunner */
+export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
+  return async (args, cwd) => {
+    try {
+      // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
+      // `"\344\270\255.txt"`——未跟踪文件读盘 ENOENT 被静默跳过、已跟踪文件拉空 diff
+      // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
+      const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        encoding: "utf8",
+        // 到点 execFile 发 SIGTERM（Windows 上直接结束进程），error.killed = true
+        timeout: timeoutMs,
+      });
+      return { code: 0, stdout };
+    } catch (cause) {
+      // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
+      // ENOENT（没有 git）重新抛，上层翻成 no-git 空态
+      const failure = cause as { code?: number | string | null; stdout?: string; errno?: string; killed?: boolean };
+      if (failure.code === "ENOENT" || failure.errno === "ENOENT") throw cause;
+      // killed 只在我们自己发信号时为 true（这里只有超时会发；maxBuffer 溢出不带这个标记）
+      if (failure.killed === true) {
+        throw new GitTimeoutError(`git ${subcommandOf(args)} timed out after ${Math.round(timeoutMs / 1000)} s`);
+      }
+      return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "" };
+    }
+  };
+}
+
+export const realGitRunner: GitRunner = gitRunnerWithTimeout(GIT_TIMEOUT_MS);
+
+/**
+ * 专注左栏与审查面板（unstaged）的 status 是同一组参数，两处共用这一份（以前各写一遍，审查那边
+ * 少了 --no-renames；目前只读 `?` 行所以没出事，但参数漂移迟早咬人）：
+ * - `-c status.relativePaths=true`：路径口径钉成「工作区相对」。`git diff` 用 --relative 强制，
+ *   status 没有这个参数，由配置决定（默认 true，用户可设 false）。不钉死，子目录工作区会遇到
+ *   「diff 是 a.txt、status 是 sub/a.txt / ../x」两套路径（2026-10-25 合作者实测）。
+ * - `--untracked-files=all`：未跟踪目录展开成文件，逐个数行。
+ * - `--no-renames`：不产 `2 <XY> … old\tnew` 改名行（parseStatusChangedLine 只认 `1` 行），
+ *   也省掉改名检测。
+ */
+const STATUS_ARGS = [
+  "-c",
+  "status.relativePaths=true",
+  "status",
+  "--porcelain=v2",
+  "--untracked-files=all",
+  "--no-renames",
+];
 
 /** 仓库根：跑得动且返回路径 = 是仓库；code 128 = 不是；ENOENT = 没有 git。 */
 async function repoRoot(runner: GitRunner, cwd: string): Promise<string | null> {
@@ -81,10 +143,11 @@ function numstatEntries(stdout: string): ReviewEntry[] {
 export type UntrackedRead = Buffer | { symlink: string } | { outside: true };
 
 /**
- * 未跟踪文件的读盘面（测试注入假货）：null = 读不了 / 不是文件（跳过）。
- * workspace 给了 = 路径来自 renderer（review:diff），读之前先 realpath 判所在目录仍在工作区里。
- * 列表那条路的路径是 git status 给的（git 不进链接目录，只把链接本身当一项列），省掉这两次
- * realpath——2000 个未跟踪文件实测要多 84 ms，而专注左栏 30 秒就整轮问一遍。
+ * 未跟踪文件正文的读盘面（review:diff 展开一个文件时整份读；测试注入假货）：null = 读不了 / 不是文件。
+ * workspace 给了 = 路径来自 renderer，读之前先 realpath 判所在目录仍在工作区里。
+ * 列表只数行、不走这里（untracked-lines.ts）：列表的路径是 git status 给的（git 不进链接目录，
+ * 只把链接本身当一项列），省掉这两次 realpath——2000 个未跟踪文件实测要多 84 ms，而专注左栏
+ * 30 秒就整轮问一遍。
  */
 export type UntrackedReader = (path: string, workspace?: string) => Promise<UntrackedRead | null>;
 
@@ -127,36 +190,41 @@ function insideWorkspace(path: string): boolean {
   return path !== ".." && !path.startsWith("../");
 }
 
-/** 未跟踪文件（porcelain v2 的 `? ` 行）：行数对着空文件算，二进制标 binary。 */
+/**
+ * 未跟踪文件（porcelain v2 的 `? ` 行）：行数对着空文件算，二进制标 binary，符号链接只报指向哪。
+ * 审查列表（unstaged）与专注左栏（gitWorkdirChanges）都走这里，数行数是 untrackedLineStats 一处实现——
+ * 同一文件两边给同一个数，且都吃同一份缓存（以前这里整份读文件 + 造 diff 数 `+`：50 MB 要 0.5–1 秒）。
+ * 一次把 status 列出的全部未跟踪文件交给计数器：缓存按「上一轮」记，必须是全集。
+ */
 async function untrackedEntries(
   cwd: string,
   statusStdout: string,
-  read: UntrackedReader = diskUntrackedReader,
+  probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<ReviewEntry[]> {
-  const entries: ReviewEntry[] = [];
+  const paths: string[] = [];
   for (const line of statusStdout.split("\n")) {
     const path = parseUntrackedLine(line);
-    if (path === null || !insideWorkspace(path)) continue;
-    const found = await read(`${cwd}/${path}`);
+    if (path !== null && insideWorkspace(path)) paths.push(path);
+  }
+  const lineStats = await untrackedLineStats(cwd, paths, probe);
+  const entries: ReviewEntry[] = [];
+  for (const path of paths) {
+    const lineStat = lineStats.get(path);
     // 刚被删 / 读不了：跳过——status 快照与磁盘现状之间的窗口，不值得报错
-    if (found === null || "outside" in found) continue;
-    if ("symlink" in found) {
+    if (lineStat === undefined) continue;
+    if (lineStat.symlink !== undefined) {
       // 链接不跟：行数不算目标的，只标出它是链接、指向哪
-      entries.push({ path, added: 0, removed: 0, binary: false, symlink: found.symlink });
+      entries.push({ path, added: 0, removed: 0, binary: false, symlink: lineStat.symlink });
       continue;
     }
-    const bytes = found;
-    if (bytes.includes(0)) {
-      entries.push({ path, added: 0, removed: 0, binary: true });
-      continue;
-    }
-    const content = bytes.toString("utf8");
-    const patch = createTwoFilesPatch("/dev/null", path, "", content);
-    let added = 0;
-    for (const line2 of patch.split("\n")) {
-      if (line2.startsWith("+") && !line2.startsWith("+++")) added += 1;
-    }
-    entries.push({ path, added, removed: 0, binary: false });
+    entries.push({
+      path,
+      added: lineStat.added,
+      removed: 0,
+      binary: lineStat.binary,
+      // 只在真未知时带上字段：超限文件 added 是 0，但 UI 不能拿 +0 冒充没改动
+      ...(lineStat.lineCountUnknown === true ? { lineCountUnknown: true } : {}),
+    });
   }
   return entries;
 }
@@ -195,17 +263,19 @@ function diffArgs(
   return null;
 }
 
-/** `review:list` 的 git 侧实现。readUntracked 只为测试注入（未跟踪文件的读盘面）。 */
+/** `review:list` 的 git 侧实现。probe 只为测试注入（未跟踪文件的读盘面）。 */
 export async function gitReviewList(
   runner: GitRunner,
   cwd: string,
   source: ReviewSource,
-  readUntracked: UntrackedReader = diskUntrackedReader,
+  probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<ReviewList> {
   let root: string | null;
   try {
     root = await repoRoot(runner, cwd);
-  } catch {
+  } catch (cause) {
+    // 超时不是「没有 git」：抛给 IPC 层如实报错
+    if (cause instanceof GitTimeoutError) throw cause;
     return { kind: "empty", reason: "no-git", cwd };
   }
   if (root === null) return { kind: "empty", reason: "not-repo", cwd };
@@ -222,13 +292,10 @@ export async function gitReviewList(
   }
 
   if (source === "unstaged") {
-    // 路径口径必须是「工作区相对」：`git diff` 用 --relative 强制，`status` 没有这个参数，
-    // 它由 `status.relativePaths` 配置决定（默认 true，但用户可设 false）。不显式钉死，
-    // 子目录工作区会遇到「diff 是 a.txt、status 是 sub/a.txt / ../x」的两套路径，
-    // 行数全 0、工作区外的改动也会混进来（2026-10-25 合作者实测）。
-    const status = await runner(["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all"], cwd);
+    // 路径口径与专注左栏同一组 status 参数（STATUS_ARGS 的注释写了为什么要钉死工作区相对）
+    const status = await runner(STATUS_ARGS, cwd);
     const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
-    const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, readUntracked))];
+    const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, probe))];
     if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd };
     // 同一路径可能两处出现（已改 + 未跟踪不会同路径；稳妥起见去重保序）
     const seen = new Set<string>();
@@ -289,39 +356,32 @@ function changeKindOf(xy: string): FocusChangeEntry["kind"] {
  * `focus:changes` 的 git 侧实现：工作区**尚未提交**的全部改动（VS Code 源代码管理的口径，
  * 不是审查面板 unstaged 那一档）——`status --porcelain=v2` 一遍拿全量清单，
  * 行级统计用未暂存 + 已暂存两条 `diff --numstat` 合并，未跟踪文件对着空文件算
- * （同 `gitReviewList` 的 unstaged 支路，同一条 disk 读盘路）。全部只读。
+ * （与审查面板共用 untrackedLines：size+mtime 缓存，超大文件只读头不数行）。全部只读。
  */
 export async function gitWorkdirChanges(
   runner: GitRunner,
   cwd: string,
-  readUntracked: UntrackedReader = diskUntrackedReader,
+  probe: UntrackedProbe = diskUntrackedProbe,
 ): Promise<FocusChanges> {
   let root: string | null;
   try {
     root = await repoRoot(runner, cwd);
-  } catch {
+  } catch (cause) {
+    if (cause instanceof GitTimeoutError) throw cause;
     return { kind: "empty", reason: "no-git" };
   }
   if (root === null) return { kind: "empty", reason: "not-repo" };
 
-  // --no-renames：status 不产 `2 <XY> … old\tnew` 改名行，parseStatusChangedLine 只认 `1` 行
-  // -c status.relativePaths=true：与上面审查面板同一条路径口径（用户配置可能是 false）。
-  const status = await runner(
-    ["-c", "status.relativePaths=true", "status", "--porcelain=v2", "--untracked-files=all", "--no-renames"],
-    cwd,
-  );
+  const status = await runner(STATUS_ARGS, cwd);
   const stats = new Map<string, LineStat>();
   mergeLineStat(stats, numstatEntries((await runner(diffArgs("unstaged", null, { numstat: true }) ?? [], cwd)).stdout));
   mergeLineStat(
     stats,
     numstatEntries((await runner(diffArgs("staged", null, { numstat: true }) ?? [], cwd)).stdout),
   );
-  // 未跟踪文件不在 git diff 的覆盖面里，行数对着空文件算（读盘，与审查面板同一条路）
+  // 未跟踪文件不在 git diff 的覆盖面里，行数对着空文件算（与审查面板同一条路：同一个计数器、同一份缓存）
   const untrackedStats = new Map(
-    (await untrackedEntries(cwd, status.stdout, readUntracked)).map((entry) => [
-      entry.path,
-      entry,
-    ]),
+    (await untrackedEntries(cwd, status.stdout, probe)).map((entry) => [entry.path, entry]),
   );
 
   const entries: FocusChangeEntry[] = [];
@@ -330,14 +390,16 @@ export async function gitWorkdirChanges(
     if (untrackedPath !== null) {
       if (!insideWorkspace(untrackedPath)) continue;
       const fromDisk = untrackedStats.get(untrackedPath);
-      // 读盘失败（刚被删 / 二进制读不了）的未跟踪文件不在 untrackedEntries 里——
+      // 读盘失败（刚被删 / 读不了）的未跟踪文件不在 untrackedStats 里——
       // status 快照与磁盘现状之间的窗口，不值得报错；行数落 0 但 U 标记保留
       entries.push({
         path: untrackedPath,
         kind: "U",
         added: fromDisk?.added ?? 0,
-        removed: fromDisk?.removed ?? 0,
+        removed: 0,
         binary: fromDisk?.binary ?? false,
+        // 只在真未知时带上字段：IPC 上少一个键，老 renderer 走原路
+        ...(fromDisk?.lineCountUnknown === true ? { lineCountUnknown: true } : {}),
       });
       continue;
     }

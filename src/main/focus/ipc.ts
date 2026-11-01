@@ -87,8 +87,9 @@ export function registerFocusIpc(
       let changeEntries: FocusChangeEntry[] = [];
       let branch: string | null = null;
       if (workspace !== null) {
-        const changes = await gitWorkdirChanges(realGitRunner, workspace.path);
-        if (changes.kind === "ok") {
+        // git 超时会抛（GitTimeoutError）：按上面说的「拿不到就当没有」，不让它拦下整份小结
+        const changes = await gitWorkdirChanges(realGitRunner, workspace.path).catch(() => null);
+        if (changes?.kind === "ok") {
           changeEntries = changes.entries;
           branch = changes.branch;
         }
