@@ -187,7 +187,7 @@ export async function taskReviewList(store: SessionStore, sessionId: string): Pr
         binary === null
           ? { path, added: 0, removed: 0, binary: false, lineCountUnknown: true }
           : binary
-            ? { path, added: 0, removed: 0, binary: false, noBaseline: true }
+            ? { path, added: 0, removed: 0, binary: true }
             : { path, added: 0, removed: 0, binary: false, lineCountUnknown: true },
       );
       continue;

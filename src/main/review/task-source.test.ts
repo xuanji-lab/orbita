@@ -271,7 +271,7 @@ describe("task 来源 × 数行与上限", () => {
     assert.equal(diff.diff, null);
   });
 
-  test("超过 1 MB 的二进制：列表照旧标无基线，正文如实报二进制（不报「太大」）", async () => {
+  test("超过 1 MB 的二进制：列表标二进制，正文如实报二进制（不报「太大」）", async () => {
     await writeFile(join(lab, "huge.bin"), Buffer.concat([Buffer.from([0, 1, 0]), Buffer.alloc(2 * 1024 * 1024, 9)]));
     await turn("t1", [{ path: join(lab, "huge.bin"), before: null, after: "small\n" }]);
     const list = await taskReviewList(store, ID);
@@ -279,8 +279,8 @@ describe("task 来源 × 数行与上限", () => {
     if (list.kind === "ok") {
       const entry = list.entries.find((item) => item.path.endsWith("huge.bin"));
       assert.deepEqual(
-        { noBaseline: entry?.noBaseline, lineCountUnknown: entry?.lineCountUnknown },
-        { noBaseline: true, lineCountUnknown: undefined },
+        { binary: entry?.binary, noBaseline: entry?.noBaseline, lineCountUnknown: entry?.lineCountUnknown },
+        { binary: true, noBaseline: undefined, lineCountUnknown: undefined },
       );
     }
     const diff = await taskReviewDiff(store, ID, join(lab, "huge.bin"));
