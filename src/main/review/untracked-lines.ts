@@ -17,10 +17,21 @@
  * 按块流式读、逐字节数，不转字符串：耗时只跟字节数有关，与行长短无关。
  *
  * 读盘边界（#372）：lstat 不跟符号链接，链接只报它指向哪（readlink 原文）、行数记 0；
- * 打开文件带 O_NOFOLLOW（POSIX；Windows 没有这个标志，靠前面的 lstat 判定）。
+ * 打开文件带 O_NOFOLLOW（POSIX；Windows 没有这个标志，靠下面的多重判定）。
+ *
+ * Windows 的两道补充（2026-11-01 验收实测免特权复现）：
+ * - **中间组件穿透**：目录级 junction（免特权可建，git status 会跟着列出里面的文件）
+ *   让「工作区内的相对路径」实际读到根外文件，lstat/open 对最终组件都不报链接。
+ *   每轮对每个**父目录**做一次 realpath 验身（按目录去重，一轮只查一次），真身不在
+ *   cwd 里的整支跳过、不数。
+ * - **lstat→open 竞态**：路径在两者之间被换成根外链接时，Windows 的 open 会跟过去。
+ *   open 之后用句柄 fstat 对照路径此刻的 lstat，不是同一个非链接文件就当读不了处理。
+ *   残余窗口（验身之后被换走、读到的是已打开句柄指向的文件）只有 POSIX 的 O_NOFOLLOW
+ *   能根除，Windows 上这是尽其所能。
  */
 import { constants } from "node:fs";
-import { lstat, open, readlink } from "node:fs/promises";
+import { lstat, open, readlink, realpath as fsRealpath } from "node:fs/promises";
+import { isInside } from "../path-boundary.ts";
 
 /**
  * 单文件计数上限：64 MB。超过只读开头判二进制，行数记「未知」。
@@ -71,6 +82,12 @@ export interface UntrackedProbe {
   readlink(path: string): Promise<string | null>;
   /** 只读打开，路径此刻是链接就打不开 */
   open(path: string): Promise<UntrackedHandle | null>;
+  /**
+   * 解析路径真身（中间组件的链接/junction 一并展开）；解析不了返回 null。
+   * 未注入（旧测试假货）时，untrackedLineStats 跳过中间组件验身——磁盘真身
+   * diskUntrackedProbe 一定带，应用里不缺这道。
+   */
+  realpath?(path: string): Promise<string | null>;
 }
 
 /** 只读、且路径此刻是链接就打不开（ELOOP）：lstat 之后被换成链接也不会跟过去 */
@@ -97,6 +114,27 @@ export const diskUntrackedProbe: UntrackedProbe = {
   async open(path) {
     try {
       const handle = await open(path, OPEN_NO_FOLLOW);
+      if (process.platform !== "win32") {
+        return {
+          async read(buffer, length, position) {
+            const { bytesRead } = await handle.read(buffer, 0, length, position);
+            return bytesRead;
+          },
+          close: () => handle.close(),
+        };
+      }
+      // Windows 没有 O_NOFOLLOW：open 可能跟了 lstat 之后换上的链接。验身——句柄的
+      // fstat 与路径此刻的 lstat 必须是同一个非链接文件，对不上就当读不了（跳过一轮）。
+      try {
+        const [fstat, latest] = await Promise.all([handle.stat(), lstat(path)]);
+        if (latest.isSymbolicLink() || latest.dev !== fstat.dev || latest.ino !== fstat.ino) {
+          await handle.close().catch(() => undefined);
+          return null;
+        }
+      } catch {
+        await handle.close().catch(() => undefined);
+        return null;
+      }
       return {
         async read(buffer, length, position) {
           const { bytesRead } = await handle.read(buffer, 0, length, position);
@@ -104,6 +142,13 @@ export const diskUntrackedProbe: UntrackedProbe = {
         },
         close: () => handle.close(),
       };
+    } catch {
+      return null;
+    }
+  },
+  async realpath(path) {
+    try {
+      return await fsRealpath(path);
     } catch {
       return null;
     }
@@ -140,6 +185,11 @@ interface Remembered {
  * 跟着上一轮走就没有这个悬崖，也不会无界增长：上限就是 status 列出来的那些。
  */
 const lastRounds = new Map<string, Map<string, Remembered>>();
+
+/** 去掉 Windows 扩展路径前缀（\\?\C:\… / \\?\UNC\…），供词法 isInside 判位 */
+function stripExtendedPrefix(p: string): string {
+  return p.startsWith("\\\\?\\") ? p.slice(4) : p;
+}
 
 /**
  * 一块字节里有几个换行（0x0A）。逐字节比：indexOf 逐个找在短行文件上会退化到每个换行一次调用。
@@ -242,10 +292,28 @@ export async function untrackedLineStats(
   const previous = lastRounds.get(cwd);
   const remembered = new Map<string, Remembered>();
   const stats = new Map<string, UntrackedLineStat>();
+  // 中间组件验身（Windows junction / 目录链接穿透）：父目录真身必须仍在 cwd 里。
+  // 按目录去重——一轮里同目录的成百上千个文件只查一次，不碰缓存命中数的盘。
+  // probe 没注入 realpath（旧测试假货）时保持原行为，不验。
+  const probeRealpath = probe.realpath?.bind(probe);
+  const realCwd = probeRealpath === undefined ? null : await probeRealpath(cwd);
+  const dirChecked = new Map<string, boolean>();
   let countedFiles = 0;
   let countedBytes = 0;
   for (const path of paths) {
+    // 去掉 \\?\ 扩展前缀再判——realpath 长路径会带它，词法判据不认
     const full = `${cwd}/${path}`;
+    const dirEnd = path.lastIndexOf("/");
+    if (dirEnd > 0 && probeRealpath !== undefined && realCwd !== null) {
+      const dirKey = path.slice(0, dirEnd);
+      let dirOk = dirChecked.get(dirKey);
+      if (dirOk === undefined) {
+        const realDir = await probeRealpath(full.slice(0, cwd.length + 1 + dirKey.length));
+        dirOk = realDir !== null && isInside(stripExtendedPrefix(realCwd), stripExtendedPrefix(realDir));
+        dirChecked.set(dirKey, dirOk);
+      }
+      if (!dirOk) continue; // 父目录把路径带出工作区：整支不数
+    }
     const info = await probe.lstat(full);
     if (info === null || info.kind === "other") continue;
     if (info.kind === "symlink") {
