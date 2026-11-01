@@ -2,8 +2,16 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createKimiExternalSessionReader, kimiWorkDataRoot, type ExternalSourceRoots } from "./external-session.ts";
+import { dirname, join } from "node:path";
+import {
+  createKimiExternalSessionReader,
+  EXTERNAL_BLOB_MAX_BYTES,
+  EXTERNAL_BLOBS_MAX_BYTES,
+  EXTERNAL_TOTAL_MAX_BYTES,
+  EXTERNAL_WIRE_MAX_BYTES,
+  kimiWorkDataRoot,
+  type ExternalSourceRoots,
+} from "./external-session.ts";
 
 let dir = "";
 let clock = 1000;
@@ -30,6 +38,18 @@ function answer(text: string, step = "s1"): string[] {
   ];
 }
 
+function imageRecord(shas: readonly string[]): string {
+  return rec({
+    type: "context.append_message",
+    agentId: "main",
+    message: {
+      role: "user",
+      content: shas.map((sha) => ({ type: "image_url", imageUrl: { url: `blobref:image/png;${sha}` } })),
+      origin: { kind: "user" },
+    },
+  });
+}
+
 async function addSession(input: {
   root: string;
   workspace?: string;
@@ -38,6 +58,7 @@ async function addSession(input: {
   cwd?: string;
   prompt: string;
   answer: string;
+  wireOverride?: string;
 }): Promise<string> {
   const sessionDir = join(input.root, "sessions", input.workspace ?? "ws-1", input.id);
   await mkdir(join(sessionDir, "agents", "main"), { recursive: true });
@@ -52,7 +73,7 @@ async function addSession(input: {
       updatedAt: 200,
     }),
   );
-  const wire = [user(input.prompt), ...answer(input.answer)].join("\n");
+  const wire = input.wireOverride ?? [user(input.prompt), ...answer(input.answer)].join("\n");
   await writeFile(join(sessionDir, "agents", "main", "wire.jsonl"), wire);
   return join(sessionDir, "agents", "main", "wire.jsonl");
 }
@@ -197,6 +218,112 @@ describe("Kimi 外部会话只读", () => {
     assert.equal(await reader.load("not-an-external-ref"), null);
   });
 
+  test("wire 超过字节预算时拒绝，不返回部分 transcript，也不改源文件", async () => {
+    const root = join(dir, "kimi-work");
+    const sourceFile = await addSession({
+      root,
+      id: "wire-too-large",
+      prompt: "prompt",
+      answer: "answer",
+      wireOverride: "x".repeat(EXTERNAL_WIRE_MAX_BYTES + 1),
+    });
+    const before = await readFile(sourceFile);
+    const reader = createKimiExternalSessionReader({
+      sources: async () => [{ source: "kimi-work", roots: [root] }],
+      defaultCwd: dir,
+    });
+    const [summary] = await reader.list();
+    assert.ok(summary !== undefined);
+    await assert.rejects(reader.load(summary.ref), /External session wire\.jsonl exceeds/);
+    assert.deepEqual(await readFile(sourceFile), before);
+  });
+
+  test("单个 blob 超过预算时拒绝，且不把 blob 转成 base64", async () => {
+    const root = join(dir, "kimi-work");
+    const sha = "a".repeat(64);
+    const sourceFile = await addSession({
+      root,
+      id: "blob-too-large",
+      prompt: "prompt",
+      answer: "answer",
+      wireOverride: [imageRecord([sha]), ...answer("answer")].join("\n"),
+    });
+    const blobsDir = join(dirname(sourceFile), "blobs");
+    await mkdir(blobsDir, { recursive: true });
+    await writeFile(join(blobsDir, sha), Buffer.alloc(EXTERNAL_BLOB_MAX_BYTES + 1, 7));
+    const reader = createKimiExternalSessionReader({
+      sources: async () => [{ source: "kimi-work", roots: [root] }],
+      defaultCwd: dir,
+    });
+    const [summary] = await reader.list();
+    assert.ok(summary !== undefined);
+    await assert.rejects(reader.load(summary.ref), /an image blob exceeds/);
+  });
+
+  test("多个 blob 的合计预算生效；预算内会话仍能载入", async () => {
+    const root = join(dir, "kimi-work");
+    const shas = ["b", "c", "d", "e"].map((prefix) => prefix.repeat(64));
+    const sourceFile = await addSession({
+      root,
+      id: "blobs-total",
+      prompt: "prompt",
+      answer: "answer",
+      wireOverride: [imageRecord(shas), ...answer("answer")].join("\n"),
+    });
+    const blobsDir = join(dirname(sourceFile), "blobs");
+    await mkdir(blobsDir, { recursive: true });
+    for (const sha of shas) await writeFile(join(blobsDir, sha), Buffer.alloc(Math.floor(EXTERNAL_BLOBS_MAX_BYTES / shas.length) + 1, 9));
+    const reader = createKimiExternalSessionReader({
+      sources: async () => [{ source: "kimi-work", roots: [root] }],
+      defaultCwd: dir,
+    });
+    const [summary] = await reader.list();
+    assert.ok(summary !== undefined);
+    await assert.rejects(reader.load(summary.ref), /the referenced image blobs exceeds/);
+
+    const wirePrefix = [imageRecord(shas), ...answer("answer")].join("\n");
+    const wire = `${wirePrefix}${"x".repeat(EXTERNAL_WIRE_MAX_BYTES - Buffer.byteLength(wirePrefix) - 1)}`;
+    const totalRoot = join(dir, "kimi-work-total");
+    const totalSourceFile = await addSession({
+      root: totalRoot,
+      id: "total-too-large",
+      prompt: "prompt",
+      answer: "answer",
+      wireOverride: wire,
+    });
+    const totalBlobsDir = join(dirname(totalSourceFile), "blobs");
+    await mkdir(totalBlobsDir, { recursive: true });
+    const totalBlobSize = Math.ceil((EXTERNAL_TOTAL_MAX_BYTES - EXTERNAL_WIRE_MAX_BYTES + 1) / 3);
+    for (const sha of shas.slice(0, 3)) await writeFile(join(totalBlobsDir, sha), Buffer.alloc(totalBlobSize, 8));
+    const totalReader = createKimiExternalSessionReader({
+      sources: async () => [{ source: "kimi-work", roots: [totalRoot] }],
+      defaultCwd: dir,
+    });
+    const [totalSummary] = await totalReader.list();
+    assert.ok(totalSummary !== undefined);
+    await assert.rejects(totalReader.load(totalSummary.ref), /the external session payload exceeds/);
+
+    const smallRoot = join(dir, "small-kimi-work");
+    const smallSha = "f".repeat(64);
+    const smallFile = await addSession({
+      root: smallRoot,
+      id: "blob-ok",
+      prompt: "prompt",
+      answer: "answer",
+      wireOverride: [imageRecord([smallSha]), ...answer("answer")].join("\n"),
+    });
+    await mkdir(join(dirname(smallFile), "blobs"), { recursive: true });
+    await writeFile(join(dirname(smallFile), "blobs", smallSha), Buffer.from("small-image"));
+    const smallReader = createKimiExternalSessionReader({
+      sources: async () => [{ source: "kimi-work", roots: [smallRoot] }],
+      defaultCwd: dir,
+    });
+    const [smallSummary] = await smallReader.list();
+    assert.ok(smallSummary !== undefined);
+    const detail = await smallReader.load(smallSummary.ref);
+    assert.ok(detail !== null);
+    assert.ok(detail.records.length > 0);
+  });
   test("Kimi Work 数据根从 appData 推导", () => {
     assert.equal(
       kimiWorkDataRoot("/app-data"),

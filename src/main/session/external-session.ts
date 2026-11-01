@@ -76,6 +76,46 @@ interface SessionCandidate {
 const INDEX_LIMIT = 10;
 const TITLE_HEAD_BYTES = 256 * 1024;
 
+export const EXTERNAL_WIRE_MAX_BYTES = 32 * 1024 * 1024;
+export const EXTERNAL_BLOB_MAX_BYTES = 8 * 1024 * 1024;
+export const EXTERNAL_BLOBS_MAX_BYTES = 24 * 1024 * 1024;
+export const EXTERNAL_TOTAL_MAX_BYTES = 48 * 1024 * 1024;
+const BOUNDED_READ_CHUNK_BYTES = 64 * 1024;
+
+class ExternalSessionSizeError extends Error {
+  readonly code = "ERR_EXTERNAL_SESSION_SIZE";
+
+  constructor(resource: string, size: number, limit: number) {
+    super(`External session ${resource} exceeds its ${limit} byte limit (file is ${size} bytes).`);
+    this.name = "ExternalSessionSizeError";
+  }
+}
+
+async function readBoundedFile(path: string, limit: number, resource: string): Promise<Buffer> {
+  const handle = await open(path, "r");
+  try {
+    const initial = await handle.stat();
+    if (initial.size > limit) throw new ExternalSessionSizeError(resource, initial.size, limit);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let position = 0;
+    for (;;) {
+      const remaining = limit + 1 - total;
+      if (remaining <= 0) throw new ExternalSessionSizeError(resource, total + 1, limit);
+      const buffer = Buffer.alloc(Math.min(BOUNDED_READ_CHUNK_BYTES, remaining));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      position += bytesRead;
+      if (total > limit) throw new ExternalSessionSizeError(resource, total, limit);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 export function externalSessionSourceLabel(source: ExternalSessionSource): string {
   return source === "kimi-code" ? "Kimi Code" : "Kimi Work";
 }
@@ -238,13 +278,55 @@ export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderD
       const candidates = await candidatesFor(parsedRef.source);
       const candidate = candidates.find((item) => refOf(item.source, item.sourceFile).endsWith(parsedRef.hash));
       if (candidate === undefined) return null;
-      const [raw, state] = await Promise.all([readFile(candidate.sourceFile, "utf8"), readState(candidate.stateFile)]);
+      const [wireBuffer, state] = await Promise.all([
+        readBoundedFile(candidate.sourceFile, EXTERNAL_WIRE_MAX_BYTES, "wire.jsonl"),
+        readState(candidate.stateFile),
+      ]);
+      const raw = wireBuffer.toString("utf8");
       const blobs = new Map<string, string>();
+      const blobFiles: Array<{ sha: string; path: string }> = [];
+      let plannedBlobBytes = 0;
       for (const sha of kimiBlobRefs(raw)) {
+        const blobPath = join(candidate.dir, "agents", "main", "blobs", sha);
+        let info;
         try {
-          blobs.set(sha, (await readFile(join(candidate.dir, "agents", "main", "blobs", sha))).toString("base64"));
+          info = await stat(blobPath);
         } catch {
           // 与导入器一致：图片缺席时由解析器换成文字说明。
+          continue;
+        }
+        if (!info.isFile()) continue;
+        if (info.size > EXTERNAL_BLOB_MAX_BYTES) {
+          throw new ExternalSessionSizeError("an image blob", info.size, EXTERNAL_BLOB_MAX_BYTES);
+        }
+        plannedBlobBytes += info.size;
+        if (plannedBlobBytes > EXTERNAL_BLOBS_MAX_BYTES) {
+          throw new ExternalSessionSizeError("the referenced image blobs", plannedBlobBytes, EXTERNAL_BLOBS_MAX_BYTES);
+        }
+        if (wireBuffer.byteLength + plannedBlobBytes > EXTERNAL_TOTAL_MAX_BYTES) {
+          throw new ExternalSessionSizeError("the external session payload", wireBuffer.byteLength + plannedBlobBytes, EXTERNAL_TOTAL_MAX_BYTES);
+        }
+        blobFiles.push({ sha, path: blobPath });
+      }
+      let actualBlobBytes = 0;
+      for (const blob of blobFiles) {
+        try {
+          const data = await readBoundedFile(blob.path, EXTERNAL_BLOB_MAX_BYTES, "an image blob");
+          actualBlobBytes += data.byteLength;
+          if (actualBlobBytes > EXTERNAL_BLOBS_MAX_BYTES) {
+            throw new ExternalSessionSizeError("the referenced image blobs", actualBlobBytes, EXTERNAL_BLOBS_MAX_BYTES);
+          }
+          if (wireBuffer.byteLength + actualBlobBytes > EXTERNAL_TOTAL_MAX_BYTES) {
+            throw new ExternalSessionSizeError(
+              "the external session payload",
+              wireBuffer.byteLength + actualBlobBytes,
+              EXTERNAL_TOTAL_MAX_BYTES,
+            );
+          }
+          blobs.set(blob.sha, data.toString("base64"));
+        } catch (error) {
+          if (error instanceof ExternalSessionSizeError) throw error;
+          // 与导入器一致：图片在检查后消失或不可读时由解析器换成文字说明。
         }
       }
       const wire = parseKimiWire(raw, UNASSIGNED_PROVIDER_ID, blobs);
