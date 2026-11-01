@@ -22,8 +22,8 @@ describe("rememberPanel / recallPanel：切走记、切回恢复", () => {
 
   it("同一条会话再次离开时覆盖：最后一次的面板才算数", () => {
     let memory: PanelMemory = rememberPanel(new Map(), "a", "files");
-    memory = rememberPanel(memory, "a", "skills");
-    strictEqual(recallPanel(memory, "a"), "skills");
+    memory = rememberPanel(memory, "a", "abilities");
+    strictEqual(recallPanel(memory, "a"), "abilities");
   });
 
   it("离开时面板是关着的：也记（恢复成关着，而不是漏记后回退到更早的记忆）", () => {
