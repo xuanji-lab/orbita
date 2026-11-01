@@ -1,7 +1,22 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-29f99279613d8a1 b/.bun-tag-29f99279613d8a1
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-32e420f6b2bb27a1 b/.bun-tag-32e420f6b2bb27a1
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-576a6acaf8adc832 b/.bun-tag-576a6acaf8adc832
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-6ddf3428bf981223 b/.bun-tag-6ddf3428bf981223
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-da69889e28559183 b/.bun-tag-da69889e28559183
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-e253dc2b34768df6 b/.bun-tag-e253dc2b34768df6
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-e53030ab016a8383 b/.bun-tag-e53030ab016a8383
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-ec94782b6fff3ae b/.bun-tag-ec94782b6fff3ae
@@ -103,25 +118,26 @@ index 3e145b0e23bc3f25640907aeb9ff25f71eb328aa..83b05a1b75448e92c8b38c407735744b
                          if (aborted)
                              return;
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index cd12d9e885c21ea14c3a1e681e9ca1544087600a..12828245e707a3ddd571542ba819f4e8f195aa77 100644
+index cd12d9e885c21ea14c3a1e681e9ca1544087600a..6347e130767ac4017d027a94fad33152cabb16d4 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -22,7 +22,10 @@ export { formatSkillsForPrompt, type LoadSkillsFromDirOptions, type LoadSkillsRe
+@@ -22,7 +22,11 @@ export { formatSkillsForPrompt, type LoadSkillsFromDirOptions, type LoadSkillsRe
  export { createSyntheticSourceInfo } from "./core/source-info.ts";
  export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
  export { type BashOperations, type BashSpawnContext, type BashSpawnHook, type BashToolDetails, type BashToolInput, type BashToolOptions, createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type EditOperations, type EditToolDetails, type EditToolInput, type EditToolOptions, type FindOperations, type FindToolDetails, type FindToolInput, type FindToolOptions, formatSize, type GrepOperations, type GrepToolDetails, type GrepToolInput, type GrepToolOptions, type LsOperations, type LsToolDetails, type LsToolInput, type LsToolOptions, type PowerShellOperations, type PowerShellSpawnContext, type PowerShellSpawnHook, type PowerShellToolDetails, type PowerShellToolInput, type PowerShellToolOptions, type ReadOperations, type ReadToolDetails, type ReadToolInput, type ReadToolOptions, type ToolsOptions, type TruncationOptions, type TruncationResult, truncateHead, truncateLine, truncateTail, type WriteOperations, type WriteToolInput, type WriteToolOptions, withFileMutationQueue, } from "./core/tools/index.ts";
 +export { resolveToCwd } from "./core/tools/path-utils.ts";
  export { hasTrustRequiringProjectResources, type ProjectTrustDecision, ProjectTrustStore, type ProjectTrustStoreEntry, type ProjectTrustUpdate, } from "./core/trust-manager.ts";
 +export { assignProcessToKillJob, terminateKillJob } from "./utils/shell.js";
++export { awaitJobHelperReady } from "./utils/shell.js";
 +
  export { type MainOptions, main } from "./main.ts";
  export { InteractiveMode, type InteractiveModeOptions, type JsonAgentSessionEvent, type ModelInfo, type PrintModeOptions, RpcClient, type RpcClientOptions, type RpcCommand, type RpcEventListener, type RpcExtensionUIRequest, type RpcExtensionUIResponse, type RpcResponse, type RpcSessionState, runPrintMode, runRpcMode, } from "./modes/index.ts";
  export { ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader, BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor, CustomMessageComponent, DynamicBorder, ExtensionEditorComponent, ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, keyHint, keyText, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, type RenderDiffOptions, rawKeyHint, renderDiff, SessionSelectorComponent, type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent, ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent, type ToolExecutionOptions, TreeSelectorComponent, truncateToVisualLines, UserMessageComponent, UserMessageSelectorComponent, type VisualTruncateResult, } from "./modes/interactive/components/index.ts";
 diff --git a/dist/index.js b/dist/index.js
-index 7bc4467f5af64aba74ab6cafd136e468b6aab803..012d922a115bdcc8082acaaa86106d9bf79ce2df 100644
+index 7bc4467f5af64aba74ab6cafd136e468b6aab803..6beeecc147f832c1973d99d0f6827385e46e6578 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -28,7 +28,12 @@ export { createSyntheticSourceInfo } from "./core/source-info.js";
+@@ -28,7 +28,13 @@ export { createSyntheticSourceInfo } from "./core/source-info.js";
  export { generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.js";
  // Tools
  export { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateLine, truncateTail, withFileMutationQueue, } from "./core/tools/index.js";
@@ -130,15 +146,16 @@ index 7bc4467f5af64aba74ab6cafd136e468b6aab803..012d922a115bdcc8082acaaa86106d9b
  export { hasTrustRequiringProjectResources, ProjectTrustStore, } from "./core/trust-manager.js";
 +// orbita：Windows Job Object 杀整树（超时/退出清扫 MSYS2 孙进程）
 +export { assignProcessToKillJob, terminateKillJob } from "./utils/shell.js";
++export { awaitJobHelperReady } from "./utils/shell.js";
 +
  // Main entry point
  export { main } from "./main.js";
  // Run modes for programmatic SDK usage
 diff --git a/dist/utils/shell.js b/dist/utils/shell.js
-index a0a592281ae0db8b5b262ce22b2f11871db37a77..7cce03e7b2988c8767f06088f16a06ee62b9d8d5 100644
+index a0a592281ae0db8b5b262ce22b2f11871db37a77..991907bdd860d5991f4c44f7f50d015c15cfb00e 100644
 --- a/dist/utils/shell.js
 +++ b/dist/utils/shell.js
-@@ -174,10 +174,270 @@ export function untrackDetachedChildPid(pid) {
+@@ -174,10 +174,266 @@ export function untrackDetachedChildPid(pid) {
  }
  export function killTrackedDetachedChildren() {
      for (const pid of trackedDetachedChildPids) {
@@ -262,15 +279,11 @@ index a0a592281ae0db8b5b262ce22b2f11871db37a77..7cce03e7b2988c8767f06088f16a06ee
 +      }
 +      $jobs[$pidArg] = $job
 +      Assign-One $job $pidArg
-+      # 竞态兜底：300ms 内每 ~2ms 把新出现的后代补挂进 job——覆盖「子 shell 先于
-+      # A 落锤就 fork」的毫秒级窗口；窗口之后创建的进程由 job 继承规则自动入伙。
-+      # 内联循环会暂短卡住后续指令（最多 300ms），T 的最坏延迟同量级，可接受。
-+      $end = (Get-Date).AddMilliseconds(300)
-+      while ((Get-Date) -lt $end) {
-+        [System.Threading.Thread]::Sleep(1)
-+        if (-not $jobs.ContainsKey($pidArg)) { break }
-+        try { [OrbitaJob.Native]::AssignTree($job, $pidArg) } catch { }
-+      }
++      # 竞态兜底：立即补挂当前已出现的后代一轮。轮询 sweep 曾放在这里，但它会
++      # 阻塞读行队列——高频 spawn 下 T 排不进队，job 永远等不到终止（2026-11-01
++      # 实测）。readiness 门（首个 spawn 前 await 助手就绪）已把 A 的处理压到毫秒级，
++      # 窗口之后创建的进程由 job 继承规则自动入伙，不再需要轮询。
++      try { [OrbitaJob.Native]::AssignTree($job, $pidArg) } catch { }
 +    } elseif ($op -eq 'T') {
 +      if ($jobs.ContainsKey($pidArg)) {
 +        [OrbitaJob.Native]::TerminateJobObject($jobs[$pidArg], 0) | Out-Null

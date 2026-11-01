@@ -53,7 +53,12 @@ function copyOut(file: FakeFile, buffer: Buffer, length: number, position: numbe
   return total;
 }
 
-function fakeProbe(files: Map<string, FakeFile>, io: { opens: number; bytes: number; reads: number }): UntrackedProbe {
+function fakeProbe(
+  files: Map<string, FakeFile>,
+  io: { opens: number; bytes: number; reads: number },
+  /** 注入的 realpath 应答：路径 → 真身；没列的路径返回 null（解析不了） */
+  realpaths?: Map<string, string>,
+): UntrackedProbe {
   return {
     async lstat(path) {
       const file = files.get(path);
@@ -77,6 +82,14 @@ function fakeProbe(files: Map<string, FakeFile>, io: { opens: number; bytes: num
         async close() {},
       };
     },
+    // 只有调用方注入应答表才带 realpath：没注入的用例保持旧行为（不验中间组件）
+    ...(realpaths === undefined
+      ? {}
+      : {
+          async realpath(path: string) {
+            return realpaths.get(path) ?? null;
+          },
+        }),
   };
 }
 
@@ -326,5 +339,68 @@ describe("行数与 git diff --numstat 一致（真 git + 真磁盘）", () => {
     } finally {
       await rm(join(repo, "..", `orbita-empty-${process.pid}`), { force: true });
     }
+  });
+});
+
+describe("untrackedLineStats：中间组件验身（Windows junction / 目录链接穿透）", () => {
+  const cwd = "/w-lines-boundary";
+  const io = { opens: 0, bytes: 0, reads: 0 };
+
+  test("父目录真身飞出工作区：整支不数（免特权 junction 场景的等价注入）", async () => {
+    const files = new Map([
+      [`${cwd}/link/secret.log`, { content: Buffer.from("a\nb\nc\n") }],
+      [`${cwd}/plain/ok.txt`, { content: Buffer.from("fine\n") }],
+    ]);
+    const realpaths = new Map([
+      [cwd, cwd],
+      [`${cwd}/link`, "/outside-root/link"], // junction 指向根外：真身不在 cwd 里
+      [`${cwd}/plain`, `${cwd}/plain`],
+    ]);
+    const stats = await untrackedLineStats(cwd, ["link/secret.log", "plain/ok.txt"], fakeProbe(files, io, realpaths));
+    assert.equal(stats.get("link/secret.log"), undefined, "穿透的文件不许进结果");
+    assert.equal(stats.get("plain/ok.txt")?.added, 1, "正常目录照常数");
+  });
+
+  test("父目录解析不了：同样不数（不把 null 当「在里面」）", async () => {
+    const files = new Map([[`${cwd}/gone/x.txt`, { content: Buffer.from("x\n") }]]);
+    const realpaths = new Map([[cwd, cwd]]); // gone 不在表里 → null
+    const stats = await untrackedLineStats(cwd, ["gone/x.txt"], fakeProbe(files, io, realpaths));
+    assert.equal(stats.get("gone/x.txt"), undefined);
+  });
+
+  test("根目录直下文件：不查 realpath，照常数", async () => {
+    const files = new Map([[`${cwd}/root.txt`, { content: Buffer.from("r\n") }]]);
+    let realpathCalls = 0;
+    const probe = fakeProbe(files, io, new Map([[cwd, cwd]]));
+    const counting = { ...probe, realpath: async (p: string) => { realpathCalls += 1; return probe.realpath?.(p) ?? null; } };
+    const stats = await untrackedLineStats(cwd, ["root.txt"], counting);
+    assert.equal(stats.get("root.txt")?.added, 1);
+    assert.equal(realpathCalls, 1, "只查 cwd 自身这一次，文件不查");
+  });
+
+  test("同目录多个文件：realpath 按目录去重，一轮只查一次", async () => {
+    const files = new Map([
+      [`${cwd}/d/a.txt`, { content: Buffer.from("1\n") }],
+      [`${cwd}/d/b.txt`, { content: Buffer.from("2\n") }],
+      [`${cwd}/d/c.txt`, { content: Buffer.from("3\n") }],
+    ]);
+    const realpaths = new Map([[cwd, cwd], [`${cwd}/d`, `${cwd}/d`]]);
+    let dirCalls = 0;
+    const probe = fakeProbe(files, io, realpaths);
+    const counting = {
+      ...probe,
+      realpath: async (p: string) => {
+        if (p !== cwd) dirCalls += 1;
+        return probe.realpath?.(p) ?? null;
+      },
+    };
+    await untrackedLineStats(cwd, ["d/a.txt", "d/b.txt", "d/c.txt"], counting);
+    assert.equal(dirCalls, 1, "三个文件共享一个目录查一次");
+  });
+
+  test("probe 没注入 realpath（旧假货）：保持原行为，不验", async () => {
+    const files = new Map([[`${cwd}/legacy/x.txt`, { content: Buffer.from("L\n") }]]);
+    const stats = await untrackedLineStats(cwd, ["legacy/x.txt"], fakeProbe(files, io));
+    assert.equal(stats.get("legacy/x.txt")?.added, 1);
   });
 });
