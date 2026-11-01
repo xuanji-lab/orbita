@@ -40,6 +40,9 @@ const ALLOWED_LATIN = new Set([
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",
+  // 更新出口的环境变量名（HTTPS_PROXY / HTTP_PROXY，用户照抄进终端或启动脚本）
+  "HTTPS",
+  "PROXY",
   // 命令名与工具名前缀（用户照抄的字面量）
   "node",
   "npx",
