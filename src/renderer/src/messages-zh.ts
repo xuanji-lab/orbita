@@ -816,6 +816,21 @@ export const zh: Messages = {
     unpin: "取消置顶",
     pin: "置顶",
     moveTo: "移到…",
+    moveCount: (count) => `把 ${count} 个任务移到…`,
+    selectedCount: (count) => `已选 ${count} 个任务`,
+    clearSelection: "取消选择（Esc）",
+    selectHint: "Shift 点击选一段，⌘ / Ctrl 点击逐个加选",
+    moveSkipped: (running, other) =>
+      [
+        running > 0 ? `${running} 个任务正在运行，没有迁移，停下后再试` : null,
+        other > 0 ? `${other} 个任务迁移失败` : null,
+      ]
+        .filter((part) => part !== null)
+        .join(" · "),
+    moveTasks: "迁移任务…",
+    moveHeader: "移到…（工作目录一起换）",
+    checkHint: "勾选要迁移的任务",
+    checkDone: "完成",
     exportMarkdown: "导出为 Markdown…",
     unarchive: "取消归档",
     archive: "归档…",
@@ -840,8 +855,8 @@ export const zh: Messages = {
     reopenItem: "重新打开这一项",
     markItemDone: "标记这一项已完成",
     continueWithContext: "带上下文继续",
-    continueTipResumable: "带着这一项的上下文开新任务 · 右键在原任务里继续",
-    continueTip: "带着这一项的上下文开新任务",
+    continueTipResumable: "带着这一项的上下文填进输入框，选好工作区回车开工 · 右键在原任务里继续",
+    continueTip: "带着这一项的上下文填进输入框，选好工作区回车开工",
     jumpToSource: "跳到来源任务",
     jumpToSourceTip: "打开这一项所在的任务",
   },
@@ -1567,6 +1582,8 @@ export const zh: Messages = {
   },
 
   chat: {
+    moveHeader: "把这条任务移到…（工作目录一起换）",
+    moveBlocked: "任务正在运行，停下后再移",
     // 批改的落款：全角空格隔开评语与「阅 月.日」（原型「字迹工整　阅 9.25」）
     homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
     placeholderNew: "问点什么，或交办一件事",
