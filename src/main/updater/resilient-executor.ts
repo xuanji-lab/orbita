@@ -294,13 +294,9 @@ class ElectronRangeTransport implements RangeTransport {
           close: () => request.abort(),
         });
       });
-      request.on("close", () => {
-        if (!settled) {
-          settled = true;
-          cancelResponseTimer();
-          reject(new Error("更新下载连接在响应头前关闭"));
-        }
-      });
+      // 不要用 close 判「响应头前连接关闭」：Electron 43 实测 close 先于 response 到达
+      // （含直连 206，见 net-probe 复现），把它当早关会误杀每一个分段请求。
+      // 「连接建立后不回响应头」由上面的一次性首响应计时器兜底。
       request.on("error", (error: Error) => {
         if (!settled) {
           settled = true;
