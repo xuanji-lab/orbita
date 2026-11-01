@@ -410,3 +410,45 @@ describe("recorder 给 assistant 记录盖本轮生效的思考档（价格 · �
     assert.deepEqual(await rawLevels(), ["absent"]);
   });
 });
+
+describe("createSessionRecorder 的「以后再做」", () => {
+  const planTool = (status: "complete" | "running" | "error", input: unknown, toolName = "update_plan") => ({
+    id: "t-plan",
+    role: "tool" as const,
+    toolCallId: "call-7",
+    toolName,
+    input: input as never,
+    content: [],
+    timestamp: 3000,
+    status,
+    isError: status === "error",
+  });
+  const withLater = { items: [{ text: "a", status: "in_progress" }], later: [{ text: "日期解析不一致", why: "这次不动" }, "加 CI"] };
+
+  test("update_plan 跑完（complete）：later 逐条交给回调，带上调用 id 当锚点", () => {
+    const got: unknown[] = [];
+    const rec = createSessionRecorder(store, undefined, (sessionId, drafts) => got.push({ sessionId, drafts }));
+    rec(progress({ type: "item_finished", item: planTool("complete", withLater) as never }));
+    assert.deepEqual(got, [
+      {
+        sessionId: ID,
+        drafts: [
+          { title: "日期解析不一致", detail: "这次不动", anchor: "call-7" },
+          { title: "加 CI", detail: "", anchor: "call-7" },
+        ],
+      },
+    ]);
+  });
+
+  test("还在跑 / 被拒 / 别的工具 / 没有 later：不交；记录本身照落盘", async () => {
+    const got: unknown[] = [];
+    const rec = createSessionRecorder(store, undefined, (_id, drafts) => got.push(drafts));
+    rec(progress({ type: "item_finished", item: planTool("running", withLater) as never }));
+    rec(progress({ type: "item_finished", item: planTool("error", withLater) as never }));
+    rec(progress({ type: "item_finished", item: planTool("complete", withLater, "read") as never }));
+    rec(progress({ type: "item_finished", item: planTool("complete", { items: [{ text: "a", status: "done" }] }) as never }));
+    await settleUntil(transcriptLanded(4));
+    assert.deepEqual(got, []);
+    assert.equal((await store.load(ID))?.transcript.length, 4);
+  });
+});

@@ -310,7 +310,7 @@ export const en = {
   },
 
   app: {
-    carryoversEntry: (open: number) => `Carryovers (${open} open)`,
+    carryoversEntry: (open: number) => `For later (${open})`,
     archivedEntry: (count: number) => `Archived (${count})`,
     skillDraft: "Describe the workflow you want to turn into a skill.",
   },
@@ -628,8 +628,8 @@ export const en = {
     idleSuggest: (days: number) => `Idle for ${days}+ days · mark done?`,
     openTodosLeft: (open: number) => `${plural(open, "open carryover item")} left`,
     taskActions: "Task actions",
-    carryovers: "Carryovers",
-    noCarryovers: "No carryover items yet. Wrap up a task to collect its loose ends.",
+    carryovers: "For later",
+    noCarryovers: "Nothing noted for later yet. Things the agent notices but won't do in a task are kept here.",
     noArchived: "Nothing archived. Archive a task from its menu to move it here without deleting it.",
     sourceDeleted: "The source task was deleted",
     openSource: "Open the source task",
@@ -812,6 +812,10 @@ export const en = {
     thinkingLevelFor: (modelId: string) => `Thinking level for ${modelId}`,
     defaultThinking: (label: string) => `Default · ${label}`,
     attribution: "Commit & PR attribution",
+    planFirst: "Show me the plan first",
+    planFirstAria: "Show me the plan first",
+    planFirstInfo:
+      "After the agent writes the first plan of a task, it stops and waits for your reply in the chat box before doing anything (no buttons). Off by default · Plan mode and questions from the agent always pause first",
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
@@ -1677,6 +1681,8 @@ export const en = {
     /** 一轮里一步工具都没跑：只想了想就答 / 只写了计划（以前这里写「0 steps」） */
     processThoughtOnly: "Thought it through",
     processPlanOnly: "Updated the plan",
+    planCardTitle: "Plan waiting for you",
+    planCardSteps: (n: number) => (n === 1 ? "1 step" : `${n} steps`),
     processStepAt: (n: number) => `Step ${n}`,
     processWrote: (n: number) => `wrote ${plural(n, "file")}`,
     processFailed: (n: number) => `${n} failed`,
@@ -1818,7 +1824,7 @@ export const en = {
     doneGroup: "Done",
     doneGroupNote: (count: number) => `${count} · each one is a task on the price chart`,
     leftGroup: "Left to do",
-    leftGroupNote: (count: number) => `${count} · go to carryovers, pick up any time`,
+    leftGroupNote: (count: number) => `${count} · goes to For later, pick up any time`,
     turns: (from: number, to: number) => (from === to ? `Turn ${from}` : `Turns ${from}–${to}`),
     noTurns: "No turns",
     jumpToTurns: "Jump back to this part of the conversation",
@@ -2187,15 +2193,51 @@ export const en = {
     history: "Done so far",
     nothingYet: "Nothing done yet.",
     later: "For later",
-    markDone: "Mark done",
-    reopen: "Reopen",
     toTask: "Start as a task, with this item's context",
+    doNow: "Do it now: send it to the agent in this task",
+    dismiss: "Drop it",
+    restore: "Bring it back",
+    dismissedCount: (n: number) => `${n} dropped`,
+    laterNoticed: (time: string) => `Noted by the agent while working · ${time}`,
+    laterWrapup: (time: string) => `Confirmed at wrap-up · ${time}`,
     jump: "Show this in the conversation",
     notInChat: "This turn isn't loaded in the conversation yet. Scroll up there to reach it.",
     olderNotLoaded: "Earlier turns aren't loaded.",
     loadOlder: "Load them",
     noTask: "Open a task to see its progress.",
     contextLine: "Context",
+  },
+
+  /** 计划的改动文案（对话里的提示行与进度面板共用；参数只用原始类型，messages.test.ts 要能逐条调用） */
+  planText: {
+    added: (text: string) => `added "${text}"`,
+    removed: (text: string) => `dropped "${text}"`,
+    reworded: (from: string, to: string) => `"${from}" is now "${to}"`,
+    /** before = 挪到哪一步前面；空串 = 挪到了最后 */
+    moved: (text: string, before: string) => (before === "" ? `moved "${text}" to the end` : `moved "${text}" before "${before}"`),
+    split: (from: string, into: string) => `"${from}" split into ${into}`,
+    merged: (from: string, into: string) => `${from} merged into "${into}"`,
+    /** 对话里的一行：count = 这一轮改了几处，summary = 第一处的说法，why 空串 = 没写理由 */
+    notice: (count: number, summary: string, why: string) =>
+      `${count === 1 ? "Plan changed" : `Plan changed in ${count} places`}: ${summary}${count > 1 ? " and more" : ""}${why === "" ? "" : ` — ${why}`}`,
+    /** 把一段文字加上引号（拆成 / 合成里并排列出几步用） */
+    quoted: (text: string) => `"${text}" `,
+    noteAdded: "New",
+    noteReworded: "Reworded",
+    noteSplit: "Split out",
+    /** 改过的步下面写原文字 */
+    was: (from: string) => `was: ${from}`,
+    splitFrom: (from: string) => `from "${from}"`,
+    editsCount: (n: number) => (n === 1 ? "changed once" : `changed ${n} times`),
+    editsTitle: "What changed in the plan, and why",
+    dropped: "dropped",
+    stepCalls: (n: number) => (n === 1 ? "1 step" : `${n} steps`),
+    stepTitle: (chapters: number, files: number) => `${chapters === 1 ? "1 chapter" : `${chapters} chapters`}${files > 0 ? `, ${files === 1 ? "1 file" : `${files} files`} changed` : ""}`,
+    beforePlan: "Looked around first",
+    outsidePlan: "Outside the plan",
+    history: (turns: number, steps: number, files: number) =>
+      `${turns === 1 ? "1 turn" : `${turns} turns`} · ${steps === 1 ? "1 step" : `${steps} steps`}${files > 0 ? ` · ${files === 1 ? "1 file" : `${files} files`} changed` : ""}`,
+    versionAt: (n: number) => `v${n}`,
   },
 
   contextPanel: {

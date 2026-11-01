@@ -238,6 +238,7 @@ function General(props: {
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
   // 同理：缺席 = 开启，UI 要把这一层兜回来，否则新用户看到的是 Off、实际在签名
   const gitAttribution = props.settings.gitAttribution ?? true;
+  const planFirst = props.settings.planFirst ?? false;
   // 同理：缺席 = 折叠（粘贴文本 chip 的出厂形态）
   const pastedCollapse = props.settings.collapsePastedText ?? true;
   // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
@@ -468,6 +469,13 @@ function General(props: {
             onChange={(next) => props.onChange({ gitAttribution: next })}
           />
           <AttributionPreview enabled={gitAttribution} language={shownLanguage} />
+        </SettingRow>
+        <SettingRow name={t.settings.planFirst} info={t.settings.planFirstInfo}>
+          <Switch
+            label={t.settings.planFirstAria}
+            checked={planFirst}
+            onChange={(next) => props.onChange({ planFirst: next })}
+          />
         </SettingRow>
         <SettingRow name={t.settings.processView} info={t.settings.processViewInfo}>
           <Segmented

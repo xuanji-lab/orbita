@@ -70,8 +70,8 @@ function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages)
 }
 
 /**
- * 遗留事项面板的分组：按来源会话归堆，组序跟会话列表（最近的在前）；
- * 来源会话已删的堆到最后（标题换占位，跳转不可用）。
+ * 以后再做面板的分组：按来源会话归堆，组序跟会话列表（最近的在前）；
+ * 来源会话已删的堆到最后（标题换占位，跳转不可用）。丢掉的（dismissed）不列——它们只在那条任务的进度面板里能找回。
  */
 function groupCarryovers(
   carryovers: readonly Carryover[],
@@ -79,6 +79,7 @@ function groupCarryovers(
 ): { session: SessionMeta | null; items: Carryover[] }[] {
   const bySource = new Map<string, Carryover[]>();
   for (const item of carryovers) {
+    if (item.status === "dismissed") continue;
     const list = bySource.get(item.sourceSessionId) ?? [];
     list.push(item);
     bySource.set(item.sourceSessionId, list);
@@ -1657,7 +1658,9 @@ function SessionRow(props: {
 }
 
 /**
- * 遗留事项面板（侧栏的 Carryovers 视图）：按来源会话分组，每条可勾办结、
+ * 以后再做面板（侧栏的 Carryovers 视图，2026-10-30 起是跨任务的**折叠索引**：每个来源任务一行、
+ * 只写还有几项没做，点开才列各项）——当场记下的与收尾确认的是同一种东西，主战场在那条任务的进度面板。
+ * 按来源会话分组，每条可勾办结、
  * 可跳回来源会话、可带上下文开工（左键新开一单 / 右键续跑原会话）。
  * **勾选即写盘**（carryoverSetStatus），角标与筛选跟着引擎缓存自动刷新；
  * 跳回原文今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
@@ -1678,6 +1681,15 @@ function CarryoverPanel(props: {
 }) {
   const t = useT();
   const groups = groupCarryovers(props.carryovers, props.sessions);
+  // 默认全折叠：一眼只看到「哪几个任务还有几项」，不是一整面待办墙
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string): void =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   /**
    * 标题行左端的返回键是本面板的**显式出口**（与 Archived 同款）：出去不该只能
    * 再点一次底部那条 toggle——它既不像一个「返回」，又会在清单空了时禁用。
@@ -1707,15 +1719,28 @@ function CarryoverPanel(props: {
   return (
     <>
       {header}
-      {groups.map((group) => (
+      {groups.map((group) => {
+        const groupKey = group.session?.id ?? group.items[0]?.sourceSessionId ?? "";
+        const isOpen = expanded.has(groupKey);
+        const openCount = group.items.filter((item) => item.status === "open").length;
+        return (
         <div
-          key={group.session?.id ?? group.items[0]?.sourceSessionId}
+          key={groupKey}
           style={{ marginBottom: "var(--space-3)" }}
         >
           {/**
             组头就是来源会话：标题可点（跳回原文），来源已删的组换占位标题、
             不可点。全组办结的组仍列出（办结的是历史，不是消失）。
           */}
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+          <IconButton
+            label={isOpen ? t.sidebar.collapseGroup : t.sidebar.expandGroup}
+            size={20}
+            onClick={() => toggle(groupKey)}
+            style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)", flex: "none" }}
+          >
+            <Icon name={isOpen ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
+          </IconButton>
           <button
             type="button"
             disabled={group.session === null}
@@ -1727,7 +1752,8 @@ function CarryoverPanel(props: {
               display: "flex",
               alignItems: "center",
               gap: "var(--space-1)",
-              width: "100%",
+              flex: "1 1 auto",
+              minWidth: 0,
               minHeight: 28,
               padding: 0,
               border: 0,
@@ -1759,7 +1785,18 @@ function CarryoverPanel(props: {
                   : group.session.title}
             </span>
           </button>
-          {group.items.map((item) => (
+          <span
+            style={{
+              flex: "none",
+              fontSize: "var(--font-size-sm)",
+              fontVariantNumeric: "tabular-nums",
+              color: "var(--color-text-tertiary)",
+            }}
+          >
+            {openCount}
+          </span>
+          </div>
+          {isOpen && group.items.map((item) => (
             <CarryoverRow
               key={item.id}
               item={item}
@@ -1774,7 +1811,8 @@ function CarryoverPanel(props: {
             />
           ))}
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }

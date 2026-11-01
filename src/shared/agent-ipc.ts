@@ -747,6 +747,8 @@ export type AgentCommand =
        * 并讲它的用法；缺席 = 关
        */
       pdfCitations?: boolean;
+      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
+      planFirst?: boolean;
       /**
        * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
        * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
@@ -877,6 +879,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
+      planFirst?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
@@ -942,6 +946,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
+      planFirst?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -1277,6 +1283,11 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 「以后再做」（carryovers.jsonl）有新增：agent 写 update_plan 时当场记下的事，由主进程在落盘那条
+ * 记录时写进清单后广播。无载荷、无 sessionId——界面听到就重拉 carryoverList（skillsChanged 同款）。
+ */
+| { type: "carryoversChanged" }
 /**
  * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就

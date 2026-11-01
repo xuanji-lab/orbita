@@ -150,3 +150,21 @@ describe("runStateOf（侧栏 / 首页卡 / 工作区文件共用）", () => {
     strictEqual(runStateOf(source, meta("p")), "waiting");
   });
 });
+
+describe("sessionRunState 的「计划等确认」来源", () => {
+  it("停在计划确认上（没有审批、不在跑）= 等你，不是跑完的绿饼", () => {
+    strictEqual(
+      sessionRunState({ slot: { phase: "idle", approvals: 0, planAwaiting: true }, children: [], unread: { at: 1, failed: false } }),
+      "waiting",
+    );
+  });
+  it("子会话停在计划确认上，算母会话等你（入口在母）", () => {
+    strictEqual(
+      sessionRunState({ slot: { phase: "idle", approvals: 0 }, children: [{ phase: "idle", approvals: 0, planAwaiting: true }], unread: null }),
+      "waiting",
+    );
+  });
+  it("不带这个来源 = 旧行为", () => {
+    strictEqual(sessionRunState({ slot: { phase: "idle", approvals: 0 }, children: [], unread: { at: 1, failed: false } }), "done");
+  });
+});

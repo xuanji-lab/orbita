@@ -75,7 +75,7 @@ import {
 import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
-import { createPlanTools } from "./plan-tools.ts";
+import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -968,6 +968,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     command.protectedPaths,
     command.cwd,
   );
+  // 计划（update_plan）的「停下来对齐」：闸门里 update_plan 判定要停，本轮其余工具调用就被拦下，
+  // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
+  const planOptions: PlanToolOptions = {
+    getMode: currentMode,
+    planFirst: command.planFirst === true,
+    branch: () => sessionManager.getBranch(),
+    state: { stopping: false },
+  };
+  const planGate = createPlanGate(planOptions);
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
@@ -1035,6 +1044,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           hidden: true,
           factory: (pi: PiExtensionApi) => {
             pi.on("tool_call", async (event) => {
+              const held = planGate(event);
+              if (held !== null) return held;
               const result = await gate(event);
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
@@ -1046,6 +1057,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
             pi.on("before_agent_start", (event) => {
+              planOptions.state.stopping = false;
               // 段装配抽成了纯函数（./system-prompt.ts）：「派出 / 删除子会话前后整份
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
@@ -1326,7 +1338,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
-    ...createPlanTools(),
+    ...createPlanTools(planOptions),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),

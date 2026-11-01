@@ -276,6 +276,19 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
+describe("parseSettings 的 planFirst（先给我看计划）", () => {
+  it("缺席 = 关，不落键", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }).planFirst, undefined);
+  });
+
+  it("布尔原样保留，非布尔丢掉", () => {
+    deepStrictEqual(parseSettings({ planFirst: true }).planFirst, true);
+    deepStrictEqual(parseSettings({ planFirst: false }).planFirst, false);
+    deepStrictEqual(parseSettings({ planFirst: "yes" }).planFirst, undefined);
+    deepStrictEqual(parseSettings({ planFirst: 1 }).planFirst, undefined);
+  });
+});
+
 describe("parseSettings 的 collapsePastedText", () => {
   it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }), {
