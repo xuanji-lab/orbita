@@ -15,8 +15,8 @@
 
 .auto-seg {
   display: inline-flex;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-border);
   background: var(--color-bg-panel);
@@ -74,7 +74,7 @@
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   column-gap: var(--space-2);
-  row-gap: 2px;
+  row-gap: var(--space-0-5);
   align-items: start;
   width: 100%;
   padding: var(--space-3) var(--space-3);
@@ -121,7 +121,7 @@
 
 /* 行尾次数：钉在行右内边距（.row-trailing）；悬停动作簇浮出时让位 */
 .auto-count {
-  padding-top: 2px;
+  padding-top: var(--space-0-5);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
@@ -146,7 +146,7 @@
   right: var(--space-2);
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   opacity: 0;
   pointer-events: none;
   transition: var(--transition-hover);
@@ -168,7 +168,7 @@
 /* 一句话提醒（失败原因 / 会卡在审批）：行内左缘与标题对齐 */
 .auto-note {
   margin: 0;
-  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 16px + var(--space-2));
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--space-4) + var(--space-2));
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
@@ -327,7 +327,7 @@
   background: var(--color-bg-hover);
 }
 .auto-tpl svg {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   color: var(--color-text-secondary);
 }
 .auto-tpl b {
@@ -346,7 +346,7 @@
 
 .auto-add-menu {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: var(--space-2) var(--space-2) 0;
   padding: var(--space-1);
   background: var(--color-bg-panel);
