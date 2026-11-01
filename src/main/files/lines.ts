@@ -102,6 +102,10 @@ const byToken = new Map<string, IndexEntry>();
 /** 在途的扫描，按路径合并 */
 const jobs = new Map<string, Job>();
 
+function isCurrentEntry(entry: IndexEntry): boolean {
+  return entriesByPath.get(entry.path) === entry;
+}
+
 let tokenSeq = 0;
 
 /** 一次在途的扫描（新建 / 续扫）。`waiters` = 还在等结果的请求数，归零才真停 */
@@ -116,6 +120,8 @@ type JobResult =
   | { kind: "binary"; size: number; modifiedAt: number }
   | { kind: "long-line"; size: number; modifiedAt: number }
   | { kind: "cancelled" };
+
+type JobIsCurrent = () => boolean;
 
 /** 让出一次事件循环（8 MB 一块的扫描之间） */
 function yieldToLoop(): Promise<void> {
@@ -267,18 +273,27 @@ interface FileStats {
 }
 
 /** 从头建一条索引（含二进制嗅探），成功就装进缓存 */
-async function buildFresh(path: string, stats: FileStats, signal: AbortSignal): Promise<JobResult> {
+async function buildFresh(
+  path: string,
+  stats: FileStats,
+  signal: AbortSignal,
+  isJobCurrent: JobIsCurrent,
+): Promise<JobResult> {
+  if (!isJobCurrent()) return { kind: "cancelled" };
   if (await looksBinary(path, stats.size)) {
+    if (!isJobCurrent()) return { kind: "cancelled" };
     drop(path);
     return { kind: "binary", size: stats.size, modifiedAt: stats.mtimeMs };
   }
   const state: ScanState = { doneLines: 0, tailStart: 0, maxLineBytes: 0, checkpoints: [0] };
   const outcome = await scanFrom(path, state, stats.size, signal);
-  if (outcome === "cancelled") return { kind: "cancelled" };
+  if (outcome === "cancelled" || !isJobCurrent()) return { kind: "cancelled" };
   if (outcome === "long-line") {
     drop(path);
     return { kind: "long-line", size: stats.size, modifiedAt: stats.mtimeMs };
   }
+  const sample = await readSample(path, stats.size);
+  if (!isJobCurrent()) return { kind: "cancelled" };
   const entry: IndexEntry = {
     indexId: `lines-${(tokenSeq += 1)}`,
     path,
@@ -287,14 +302,20 @@ async function buildFresh(path: string, stats: FileStats, signal: AbortSignal): 
     dev: stats.dev,
     ino: stats.ino,
     ...state,
-    sample: await readSample(path, stats.size),
+    sample,
   };
   install(entry);
   return { kind: "ok", entry };
 }
 
 /** 在原索引上接着扫到新的末尾；令牌不变 */
-async function extend(entry: IndexEntry, stats: FileStats, signal: AbortSignal): Promise<JobResult> {
+async function extend(
+  entry: IndexEntry,
+  stats: FileStats,
+  signal: AbortSignal,
+  isJobCurrent: JobIsCurrent,
+): Promise<JobResult> {
+  if (!isJobCurrent() || !isCurrentEntry(entry)) return { kind: "cancelled" };
   const state: ScanState = {
     doneLines: entry.doneLines,
     tailStart: entry.tailStart,
@@ -302,13 +323,14 @@ async function extend(entry: IndexEntry, stats: FileStats, signal: AbortSignal):
     checkpoints: entry.checkpoints.slice(),
   };
   const outcome = await scanFrom(entry.path, state, stats.size, signal);
-  if (outcome === "cancelled") return { kind: "cancelled" };
+  if (outcome === "cancelled" || !isJobCurrent() || !isCurrentEntry(entry)) return { kind: "cancelled" };
   if (outcome === "long-line") {
     // 追加进来一条超长行：这份文件不再适合分段预览，旧令牌作废
     drop(entry.path);
     return { kind: "long-line", size: stats.size, modifiedAt: stats.mtimeMs };
   }
   const sample = await readSample(entry.path, stats.size);
+  if (!isJobCurrent() || !isCurrentEntry(entry)) return { kind: "cancelled" };
   // 以下全是同步赋值：并发的取窗在它的第一个 await 之前就把所需的快照拿走了，不会读到半新半旧
   entry.size = stats.size;
   entry.modifiedAt = stats.mtimeMs;
@@ -321,24 +343,31 @@ async function extend(entry: IndexEntry, stats: FileStats, signal: AbortSignal):
 }
 
 /** 一次扫描任务：能续扫就续（先验样本），否则从头建 */
-async function runJob(path: string, stats: FileStats, entry: IndexEntry | undefined, signal: AbortSignal): Promise<JobResult> {
-  if (entry !== undefined && relationOf(entry, stats) === "grown" && (await sampleStillMatches(entry))) {
-    return extend(entry, stats, signal);
+async function runJob(
+  path: string,
+  stats: FileStats,
+  entry: IndexEntry | undefined,
+  signal: AbortSignal,
+  isJobCurrent: JobIsCurrent,
+): Promise<JobResult> {
+  if (entry !== undefined && isCurrentEntry(entry) && relationOf(entry, stats) === "grown" && (await sampleStillMatches(entry))) {
+    if (!isJobCurrent() || !isCurrentEntry(entry)) return { kind: "cancelled" };
+    return extend(entry, stats, signal, isJobCurrent);
   }
-  return buildFresh(path, stats, signal);
+  return buildFresh(path, stats, signal, isJobCurrent);
 }
 
 /** 起一个任务并登记（同步完成——登记与调用方「看一眼 jobs 里有没有」之间不能有 await） */
 function startJob(path: string, stats: FileStats, entry: IndexEntry | undefined): Job {
   const controller = new AbortController();
   const job: Job = { controller, waiters: 0, promise: Promise.resolve({ kind: "cancelled" }) };
-  job.promise = runJob(path, stats, entry, controller.signal).finally(() => {
+  jobs.set(path, job);
+  job.promise = runJob(path, stats, entry, controller.signal, () => jobs.get(path) === job).finally(() => {
     // 被取消的旧任务收尾时，同路径可能已经有新任务顶上了，不能把新的登记删掉
     if (jobs.get(path) === job) jobs.delete(path);
   });
   // 等结果的请求都自带 then / finally；这一句只是防「请求在任务失败前就已取消」时留下一个没人接的 rejection
   job.promise.catch(() => undefined);
-  jobs.set(path, job);
   return job;
 }
 
@@ -435,6 +464,7 @@ export async function buildLineIndex(path: string, signal?: AbortSignal): Promis
   const result = await joinJob(job, signal);
   switch (result.kind) {
     case "ok":
+      if (!isCurrentEntry(result.entry)) return { kind: "cancelled" };
       touch(result.entry);
       return okResult(result.entry);
     case "cancelled":
@@ -538,10 +568,12 @@ export async function readLines(req: FileLinesRequest): Promise<FileLines> {
     const job = activeJob(entry.path) ?? startJob(entry.path, stats, entry);
     const result = await joinJob(job, undefined);
     // 续扫成功时 entry 原地更新；样本对不上 / 追加了超长行 / 被别的请求从头重建，都是「这个令牌不能用了」
-    if (result.kind !== "ok" || result.entry !== entry) {
+    if (result.kind !== "ok" || result.entry !== entry || !isCurrentEntry(entry)) {
       return { kind: "stale", size: stats.size, modifiedAt: stats.mtimeMs };
     }
   }
+
+  if (!isCurrentEntry(entry)) return { kind: "expired" };
 
   // 同步拿走快照：从这里到读完，续扫再改 entry 也不影响这一次
   const snap: Snapshot = {
@@ -558,5 +590,6 @@ export async function readLines(req: FileLinesRequest): Promise<FileLines> {
   const total = snap.totalLines;
   const startLine = Math.min(Math.max(0, Math.floor(Number.isFinite(req.startLine) ? req.startLine : 0)), Math.max(0, total - 1));
   const lines = total === 0 ? [] : await readWindow(snap, startLine, count);
+  if (!isCurrentEntry(entry)) return { kind: "expired" };
   return { kind: "text", lines, startLine, totalLines: total, size: snap.size, modifiedAt };
 }
