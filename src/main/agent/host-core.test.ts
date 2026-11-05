@@ -214,6 +214,39 @@ describe("pendingCreates —— 首轮开机与 created 事件的竞态（债务
   });
 });
 
+describe("ensure —— fork 同步抛错不缓存在 ready 里（Windows ENOTCONN）", () => {
+  test("第一次同步抛错交给调用方，第二次请求重新拉起并成功", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let fail = true;
+    let forks = 0;
+    let child!: FakeChild;
+    const host = new AgentHostCore(
+      () => {
+        forks += 1;
+        if (fail) {
+          fail = false;
+          throw new Error("spawn ENOTCONN");
+        }
+        child = new FakeChild();
+        return child;
+      },
+      () => undefined,
+    );
+
+    // 第一次：forkRuntime 同步抛错 → 这次调用方拿到错误，而不是被挂起
+    await assert.rejects(firstSubmit(host, "s1"), /ENOTCONN/);
+    assert.equal(forks, 1);
+
+    // 第二次：同一个 host 还能拉起（ready 没被缓存的 rejected promise 占住），请求成功
+    const pending = firstSubmit(host, "s1");
+    child.emit({ type: "ready" });
+    await flush();
+    child.emit({ type: "created", sessionId: "s1", piSessionFile: "pi/abc.jsonl" });
+    assert.equal(await pending, "pi/abc.jsonl");
+    assert.equal(forks, 2);
+  });
+});
+
 describe("内建 provider 目录的到达时机（债务 B #2）", () => {
   test("目录未到就等，builtins 事件一到立刻返回；之后走缓存", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
