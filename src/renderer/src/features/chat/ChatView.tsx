@@ -378,12 +378,13 @@ export function ChatView(props: ChatViewProps) {
 }
 
 /**
- * transcript 的「已落定视图」：只有末条换了引用（流式逐字增长）时交回上一帧的数组，
- * 别的变化（新条目、前面的条目换了）才换新（keepUnlessSettledChanged）。
+ * transcript 的「已落定视图」：只有末条换了引用且仍是同一条目（流式逐字增长，
+ * id 不变）时交回上一帧的数组，别的变化（新条目、前面的条目换了、末条换成了
+ * 另一条——含切到另一条只有一条记录的会话）才换新（keepUnlessSettledChanged）。
  */
 function useSettledTranscript(transcript: readonly TranscriptItem[]): readonly TranscriptItem[] {
   const ref = useRef(transcript);
-  ref.current = keepUnlessSettledChanged(ref.current, transcript);
+  ref.current = keepUnlessSettledChanged(ref.current, transcript, (a, b) => a.id === b.id);
   return ref.current;
 }
 
