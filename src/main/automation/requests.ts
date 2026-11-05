@@ -58,7 +58,7 @@ export interface AutomationRequestDeps {
   providers: { list(): Promise<ProviderDto[]> };
   workspaces: { list(): Promise<Workspace[]> };
   /**
-   * 选插件的校验：这个工作区（null = Home）此刻能用的插件名（已装且范围覆盖它）。缺席 = 只校验名字形状
+   * 选插件的校验：这个工作区（null = Home）此刻能用、且带看板的插件名（已装、范围覆盖它、清单有 orbita.board）。缺席 = 只校验名字形状
    * （测试与没接插件的场景）。
    */
   plugins?: { enabledIn(workspaceId: string | null): Promise<string[]> };
@@ -137,7 +137,7 @@ async function checkPlugin(deps: AutomationRequestDeps, raw: unknown, workspaceI
   const plugin = parseAutomationPlugin(raw);
   if (plugin === null) return fail("plugin must be { name } with a valid plugin name.");
   if (deps.plugins !== undefined && !(await deps.plugins.enabledIn(workspaceId)).includes(plugin.name)) {
-    return fail(`The plugin "${plugin.name}" is not installed or not enabled in this workspace.`);
+    return fail(`The plugin "${plugin.name}" is not installed, not enabled in this workspace, or has no board (orbita.board in its manifest) for the automation to show.`);
   }
   return { ok: true, value: plugin };
 }

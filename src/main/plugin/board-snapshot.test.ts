@@ -14,7 +14,7 @@ import {
   type PluginBoardOutcome,
   type PluginBoardResult,
 } from "../../shared/plugin-board.ts";
-import { BoardTemplateStore, PluginBoards, boardFrameOf, templateHash } from "./board-snapshot.ts";
+import { BoardTemplateStore, PluginBoards, boardFrameOf, boardPluginsIn, templateHash } from "./board-snapshot.ts";
 import { PanelFrames } from "./panel-frame.ts";
 import type { PluginRecord } from "./records.ts";
 
@@ -328,5 +328,28 @@ describe("board:frame", () => {
     for (const raw of [null, "x", { hash: 1 }, { hash: "../x" }, { hash: "f".repeat(64) }]) {
       assert.equal(await boardFrameOf({ templates: store, frames }, raw), null, JSON.stringify(raw));
     }
+  });
+});
+
+describe("boardPluginsIn（自动化选插件只列带看板的）", () => {
+  test("已装 + 范围覆盖这个工作区 + 清单有 orbita.board；没有看板的、范围不覆盖的、清单坏掉的都不列", async () => {
+    const plain = join(dir, "installed", "plain");
+    await writeJson(join(plain, ".claude-plugin", "plugin.json"), { name: "plain", description: "只有技能" });
+    const broken = join(dir, "installed", "broken");
+    await mkdir(join(broken, ".claude-plugin"), { recursive: true });
+    await writeFile(join(broken, ".claude-plugin", "plugin.json"), "{ not json");
+    const roots: Record<string, string> = { lit: installedRoot, plain, broken, other: installedRoot };
+    const source = {
+      records: async (): Promise<PluginRecord[]> => [
+        record("lit"),
+        record("plain"),
+        record("broken"),
+        record("other", { kind: "workspaces", ids: ["ws-2"] }),
+      ],
+      rootOf: (each: PluginRecord): string => roots[each.name] ?? installedRoot,
+      dataDirOf: (name: string): string => join(dataRoot, name),
+    };
+    assert.deepEqual(await boardPluginsIn(source, "ws-1"), ["lit"]);
+    assert.deepEqual(await boardPluginsIn(source, "ws-2"), ["lit", "other"], "范围覆盖 ws-2 的 other 也带看板");
   });
 });

@@ -503,7 +503,7 @@ describe("选插件", () => {
     assert.equal(ok.ok, true);
     assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
     const missing = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "other" } });
-    assert.match(missing.ok ? "" : missing.error, /not installed or not enabled/);
+    assert.match(missing.ok ? "" : missing.error, /not installed, not enabled in this workspace, or has no board/);
     const bad = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "../x" } });
     assert.match(bad.ok ? "" : bad.error, /valid plugin name/);
     const elsewhere = await applyAutomationCreate(deps, { ...validCreate, workspaceId: "ws2", plugin: { name: "lit" } });

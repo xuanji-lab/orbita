@@ -122,6 +122,20 @@ export interface BoardPluginSource {
   dataDirOf(name: string): string;
 }
 
+/**
+ * 这个工作区（null = Home）此刻能用、且**带看板**的插件名：已装、范围覆盖它、清单里有 `orbita.board`。
+ * 自动化的「选插件」下拉与校验用——自动化到点要调 show_plugin_board，没有看板的插件选了也没有东西可显示。
+ */
+export async function boardPluginsIn(plugins: BoardPluginSource, workspaceId: string | null): Promise<string[]> {
+  const names: string[] = [];
+  for (const record of await plugins.records()) {
+    if (!scopeApplies(record.scope, workspaceId)) continue;
+    const { manifest } = await readManifest(plugins.rootOf(record), []).catch(() => ({ manifest: {} as Record<string, unknown> }));
+    if (parseBoard(manifest, record.name, []) !== null) names.push(record.name);
+  }
+  return names;
+}
+
 export interface PluginBoardsDeps {
   plugins: BoardPluginSource;
   templates: Pick<BoardTemplateStore, "put">;
