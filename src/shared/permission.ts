@@ -241,6 +241,17 @@ export function isSelfConfirmingTool(toolName: string): boolean {
 export const PLUGIN_DRAFT_TOOL = "preview_plugin";
 
 /**
+ * 看板结果：show_plugin_board 把插件**已经写好的**卡（模板 + 此刻的数据）快照进工具结果、显示在对话里。
+ * 它不碰用户的文件与 shell，唯一的写是 userData 里我们自己的模板缓存（board-templates/，按哈希去重）。
+ * 三档一律放行（同 preview_plugin）：
+ * - plan：只是把结果给用户看，不改用户的工作成果；
+ * - manual：每跑一次插件弹一次审批会把「看结果」打断成一问一答；this_session 自动化跟随会话的档，
+ *   manual 会话里无人值守的那一轮会卡在这张审批上。
+ * **否决「并进 READ_ONLY_TOOLS」**：那张表在 manual 档仍要问（2026-11-05 主会话裁决）。
+ */
+export const PLUGIN_BOARD_TOOL = "show_plugin_board";
+
+/**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
  * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
  * 将来复用这个名字。
@@ -271,6 +282,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (toolName === PLAN_TOOL || toolName === GOAL_TOOL) return { behavior: "allow" };
   // 草稿预览：三档一律放行（理由见 PLUGIN_DRAFT_TOOL）
   if (toolName === PLUGIN_DRAFT_TOOL) return { behavior: "allow" };
+  // 看板结果：三档一律放行（理由见 PLUGIN_BOARD_TOOL）
+  if (toolName === PLUGIN_BOARD_TOOL) return { behavior: "allow" };
   // 自带确认的工具：manual 不再问一次（对话里那一行就是询问），plan 照拒（理由见 SELF_CONFIRMING_TOOLS）
   if (isSelfConfirmingTool(toolName) && mode === "manual") return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {

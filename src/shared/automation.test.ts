@@ -11,6 +11,7 @@ import {
   parseAutomation,
   parseAutomationCard,
   parseAutomationHeader,
+  parseAutomationPlugin,
   parseAutomationRunLabel,
   parseClockTime,
   parseSchedule,
@@ -372,5 +373,41 @@ describe("会话上的运行标注", () => {
     assert.equal(parseAutomationRunLabel({ title: "t", number: 3, trigger: "manual" }), null);
     assert.equal(parseAutomationRunLabel({ title: "t", number: 3, at: 5, trigger: "cron" }), null);
     assert.equal(parseAutomationRunLabel(undefined), null);
+  });
+});
+
+describe("插件与看板快照 id", () => {
+  const raw = {
+    id: "a",
+    title: "t",
+    prompt: "p",
+    schedule: { kind: "daily", time: "09:00" },
+    target: { kind: "new_session", workspaceId: null },
+    status: "active",
+    mode: "plan",
+    plugin: { name: "lit" },
+    runs: [
+      { id: "r1", runAt: 1, trigger: "schedule", status: "success", sessionId: "s", boardSnapshotIds: ["c1", "c1", "", 3, "c2"] },
+      { id: "r2", runAt: 2, trigger: "schedule", status: "success", sessionId: "s", boardSnapshotIds: "x" },
+    ],
+  };
+
+  test("parseAutomation 读回插件与快照 id（去重、丢坏值）；坏插件名当没有", () => {
+    const parsed = parseAutomation(raw);
+    assert.deepEqual(parsed?.plugin, { name: "lit" });
+    assert.deepEqual(parsed?.runs[0]?.boardSnapshotIds, ["c1", "c2"]);
+    assert.equal(parsed?.runs[1]?.boardSnapshotIds, undefined);
+    assert.equal(parseAutomation({ ...raw, plugin: { name: "Bad Name" } })?.plugin, undefined);
+  });
+
+  test("parseAutomationPlugin 与对话卡", () => {
+    assert.deepEqual(parseAutomationPlugin({ name: "lit" }), { name: "lit" });
+    assert.equal(parseAutomationPlugin({ name: "" }), null);
+    assert.equal(parseAutomationPlugin("lit"), null);
+    const parsed = parseAutomation(raw);
+    assert.ok(parsed !== null);
+    const card = automationCardOf(parsed);
+    assert.equal(card.plugin, "lit");
+    assert.equal(parseAutomationCard(card)?.plugin, "lit");
   });
 });
