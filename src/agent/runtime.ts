@@ -2265,7 +2265,7 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(command.requestId, command);
     return;
   }
-  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult") {
+  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult" || command.type === "pluginBoardResult") {
     // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
     requestBroker.resolve(command.requestId, command);
     return;

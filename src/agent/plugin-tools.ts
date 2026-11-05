@@ -2,9 +2,10 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import type { PermissionMode } from "../shared/permission.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginInstallRow } from "../shared/plugin.ts";
+import type { PluginBoardOutcome, PluginBoardResult } from "../shared/plugin-board.ts";
 
 /**
- * agent 的插件工具（实验功能 plugins）：install_plugin / preview_plugin / list_plugins。
+ * agent 的插件工具（实验功能 plugins）：install_plugin / preview_plugin / list_plugins / show_plugin_board。
  *
  * 与 create_skill / add_mcp_server 同一条路（broker，见 request-broker.ts）：这一层**只是翻译**——
  * 参数 → pluginInstallRequest / pluginPreviewRequest / pluginListRequest → 等回执 → 工具结果。预览、路径校验、
@@ -16,7 +17,7 @@ import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPrev
  * （随会话落盘，渲染层据此画出那一行）。权限档语义见 shared/permission.ts 的 SELF_CONFIRMING_TOOLS。
  */
 
-export const PLUGIN_TOOL_NAMES = ["install_plugin", "preview_plugin", "list_plugins"] as const;
+export const PLUGIN_TOOL_NAMES = ["install_plugin", "preview_plugin", "list_plugins", "show_plugin_board"] as const;
 
 /** 讲给模型听的工具说明（字段说明在参数 schema 里，这里讲语义与会发生什么）。 */
 const INSTALL_DESCRIPTION =
@@ -44,7 +45,16 @@ const PREVIEW_DESCRIPTION =
   "Returns immediately with what Orbita found (skills, workflow steps, panel files, problems to fix before install_plugin). " +
   "Problems are normal while the draft is unfinished; they do not stop the pane from showing.";
 
-type Outcome = PluginAgentInstallOutcome | PluginAgentListOutcome | PluginAgentPreviewOutcome;
+const BOARD_DESCRIPTION =
+  "Show a plugin's board cards to the user, as the result in this conversation. Call it at the END of running a plugin " +
+  "(after its scripts have written the data the cards read), and when the user asks to see the board. " +
+  "Orbita reads each card's template and its current data (or the sample data when the data file is still empty) and freezes them " +
+  "into this conversation, so the cards keep looking like this even if the plugin changes later. " +
+  "`plugin` is an installed plugin's name (enabled in this workspace), or the path of a plugin folder you are drafting inside the workspace " +
+  "(a bare name also finds the draft at <workspace>/plugins/<name>/). `cards` optionally limits it to some card ids; default all cards. " +
+  "Returns immediately. The reply tells you how much to say afterwards (the plugin's `tuned` flag): follow it.";
+
+type Outcome = PluginAgentInstallOutcome | PluginAgentListOutcome | PluginAgentPreviewOutcome | PluginBoardOutcome;
 
 /** 铸工具对。broker 由 runtime 持有并接回执；getMode 读此刻的权限档（manual 档主进程不直接装）。 */
 export function createPluginTools(broker: RequestBroker, sessionId: string, getMode: () => PermissionMode): ToolDefinition[] {
@@ -130,7 +140,58 @@ export function createPluginTools(broker: RequestBroker, sessionId: string, getM
     },
   };
 
-  return [installPlugin, previewPlugin, listPlugins];
+  const showBoard: ToolDefinition = {
+    name: "show_plugin_board",
+    label: "show_plugin_board",
+    description: BOARD_DESCRIPTION,
+    parameters: {
+      type: "object",
+      properties: {
+        plugin: { type: "string", description: "Installed plugin name, or the path of the draft plugin folder inside the workspace." },
+        cards: { type: "array", items: { type: "string" }, description: "Optional card ids to show (from orbita.board.cards[].id). Default: all cards." },
+      },
+      required: ["plugin"],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const plugin = typeof args["plugin"] === "string" ? args["plugin"].trim() : "";
+      if (plugin === "") throw new Error("show_plugin_board needs a non-empty plugin name or folder path");
+      const rawCards = args["cards"];
+      if (rawCards !== undefined && (!Array.isArray(rawCards) || rawCards.some((id) => typeof id !== "string"))) {
+        throw new Error("cards must be an array of card ids (strings)");
+      }
+      const cards = rawCards === undefined || rawCards.length === 0 ? null : (rawCards as string[]);
+      const result = await call<PluginBoardOutcome>({ type: "pluginBoardRequest", sessionId, plugin, cards }, signal);
+      if (!result.ok) throw new Error(result.error);
+      // 卡快照随工具结果落盘（details.pluginBoard），会话结果行与全局周看板都按它画
+      return { content: [{ type: "text", text: describeBoard(result.board) }], details: { pluginBoard: result.board } };
+    },
+  };
+
+  return [installPlugin, previewPlugin, listPlugins, showBoard];
+}
+
+/**
+ * show_plugin_board 回给模型的话（纯函数，带测试）。话术按清单 tuned 分两种：
+ * 没磨合好 → 一两句说做了什么、请用户挑错；磨合好了 → 不再解释，除非用户问。
+ */
+export function describeBoard(board: PluginBoardResult): string {
+  const lines: string[] = [];
+  const n = board.cards.length;
+  lines.push(
+    `Shown ${n} card${n === 1 ? "" : "s"} of "${board.displayName}" (${board.plugin}${board.source === "draft" ? ", draft" : ""}) in the conversation; tuned=${board.tuned}.`,
+  );
+  const samples = [...new Set(board.cards.filter((card) => card.usingSample).map((card) => card.id))];
+  if (samples.length > 0) lines.push(`Showing SAMPLE data (the data file is missing or empty): ${samples.join(", ")}.`);
+  if (board.skipped.length > 0) {
+    lines.push(`Not shown:\n- ${board.skipped.map((skip) => `${skip.id}: ${skip.reason}${skip.detail === "" ? "" : ` (${skip.detail})`}`).join("\n- ")}`);
+  }
+  lines.push(
+    board.tuned
+      ? "The cards are shown. Do not explain them again unless the user asks."
+      : "The cards are shown. In one or two sentences say what you did, and ask the user to point out anything wrong.",
+  );
+  return lines.join("\n");
 }
 
 /** 为什么没直接装（给模型的话）。 */

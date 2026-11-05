@@ -123,6 +123,8 @@ export function composeAutomationPrompt(input: {
   at: number;
   prompt: string;
   lastResult?: string;
+  /** 自动化选的插件名：提示词里让 agent 用它，最后调 show_plugin_board 出看板 */
+  plugin?: string;
 }): string {
   const head = composeAutomationHeader({
     title: input.title,
@@ -134,7 +136,16 @@ export function composeAutomationPrompt(input: {
     input.lastResult !== undefined && input.lastResult.trim() !== ""
       ? `\n\n上次结果（供对照，说出这次有什么新的）：\n${clipText(input.lastResult.trim(), AUTOMATION_LAST_RESULT_MAX)}`
       : "";
-  return `${head}\n\n${input.prompt.trim()}${last}`;
+  const plugin = input.plugin === undefined ? "" : `\n\n${pluginInstruction(input.plugin)}`;
+  return `${head}\n\n${input.prompt.trim()}${plugin}${last}`;
+}
+
+/**
+ * 选了插件的自动化在提示词里加的一段：用这个插件做，最后调 show_plugin_board 把看板结果显示出来——
+ * 全局周看板只认这次运行里 show_plugin_board 的结果（运行记录的 boardSnapshotIds）。
+ */
+export function pluginInstruction(name: string): string {
+  return `用插件「${name}」完成这次任务（按它的技能与工作流做）。做完最后调用 show_plugin_board（plugin: "${name}"），把它的看板卡片作为这次的结果显示出来。`;
 }
 
 /** 目标会话已经不在了（被删）：调度器据此把 this_session 任务翻成 completed(sessionDeleted) */
@@ -211,6 +222,7 @@ export async function launchAutomationRun(
         at: input.at,
         prompt: automation.prompt,
         ...(automation.lastResult === undefined ? {} : { lastResult: automation.lastResult }),
+        ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
       }),
     });
   } catch (cause) {
@@ -252,6 +264,7 @@ export async function deliverAutomationRun(
       ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
       at: input.at,
       prompt: automation.prompt,
+      ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
     }),
   });
 }

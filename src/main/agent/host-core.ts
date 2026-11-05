@@ -21,6 +21,7 @@ import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
+import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
 import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -580,6 +581,11 @@ export class AgentHostCore {
   /** 插件：list_plugins 的回执。同上。 */
   answerPluginList(requestId: string, outcome: PluginAgentListOutcome): void {
     this.child?.postMessage({ type: "pluginListResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：show_plugin_board 的回执（卡快照）。同上。 */
+  answerPluginBoard(requestId: string, outcome: PluginBoardOutcome): void {
+    this.child?.postMessage({ type: "pluginBoardResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /**

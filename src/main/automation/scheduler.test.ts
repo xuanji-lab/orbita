@@ -799,3 +799,65 @@ describe("AutomationScheduler：this_session", () => {
     assert.equal(automation?.endReason, "finished");
   });
 });
+
+describe("AutomationScheduler：看板快照 id", () => {
+  const toolEvent = (sessionId: string, toolCallId: string, toolName: string, status: "complete" | "error"): AgentEvent =>
+    ({
+      type: "progress",
+      sessionId,
+      progress: {
+        type: "item_finished",
+        item: {
+          id: `t-${toolCallId}`,
+          role: "tool",
+          toolCallId,
+          toolName,
+          input: {},
+          content: [],
+          timestamp: T0,
+          status,
+          isError: status === "error",
+        },
+      },
+    }) as AgentEvent;
+
+  test("这次运行里成功的 show_plugin_board 调用记进 boardSnapshotIds（按顺序、去重）；失败的、别的工具不记", async () => {
+    const h = harness();
+    await h.store.insert(makeAutomation({ id: "a", nextRunAt: T0, plugin: { name: "lit" } }));
+    await h.scheduler.tick();
+    const sessionId = h.launches[0]?.sessionId ?? "";
+    h.scheduler.onAgentEvent(toolEvent(sessionId, "c1", "show_plugin_board", "complete"));
+    h.scheduler.onAgentEvent(toolEvent(sessionId, "c2", "show_plugin_board", "error"));
+    h.scheduler.onAgentEvent(toolEvent(sessionId, "c3", "read", "complete"));
+    h.scheduler.onAgentEvent(toolEvent(sessionId, "c4", "show_plugin_board", "complete"));
+    h.scheduler.onAgentEvent(toolEvent(sessionId, "c1", "show_plugin_board", "complete"));
+    h.scheduler.onAgentEvent(toolEvent("别人的会话", "c9", "show_plugin_board", "complete"));
+    h.scheduler.onAgentEvent(answerEvent(sessionId, "好了"));
+    h.scheduler.onAgentEvent(idleEvent(sessionId));
+    await h.settled();
+    const done = await h.store.get("a");
+    assert.equal(done?.runs[0]?.status, "success");
+    assert.deepEqual(done?.runs[0]?.boardSnapshotIds, ["c1", "c4"]);
+    // 落盘再读回仍在（parseRun 不丢字段）
+    assert.equal(done?.plugin?.name, "lit");
+  });
+
+  test("没调 show_plugin_board 的运行不带这个字段；失败的运行也保留已显示过的卡", async () => {
+    const h = harness();
+    await h.store.insert(makeAutomation({ id: "a", nextRunAt: T0 }));
+    await h.scheduler.tick();
+    const sessionId = h.launches[0]?.sessionId ?? "";
+    h.scheduler.onAgentEvent(answerEvent(sessionId, "好了"));
+    h.scheduler.onAgentEvent(idleEvent(sessionId));
+    await h.settled();
+    assert.equal((await h.store.get("a"))?.runs[0]?.boardSnapshotIds, undefined);
+
+    const failed = applyRunResult(
+      makeAutomation({ id: "b", runs: [run({ id: "r1", status: "running" })] }),
+      "r1",
+      { status: "error", durationMs: 1, tokens: null, error: "x", boardSnapshotIds: ["c7"] },
+      T0,
+    );
+    assert.deepEqual(failed.runs[0]?.boardSnapshotIds, ["c7"]);
+  });
+});

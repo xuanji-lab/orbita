@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import type { PermissionMode } from "../shared/permission.ts";
 import type { PluginInstallRow } from "../shared/plugin.ts";
-import { createPluginTools, describeInstalled, describePlugins, describePreview, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
+import type { PluginBoardResult } from "../shared/plugin-board.ts";
+import { createPluginTools, describeBoard, describeInstalled, describePlugins, describePreview, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 
 const setup = (mode: PermissionMode = "skip"): { tools: ReturnType<typeof createPluginTools>; sent: Record<string, unknown>[]; broker: RequestBroker } => {
   const sent: Record<string, unknown>[] = [];
@@ -230,6 +231,58 @@ describe("list_plugins", () => {
     const pending = tool.execute("c1", {}, undefined, undefined, undefined as never);
     broker.resolve(String(sent[0]?.["requestId"]), { ok: false, error: "turned off" });
     await assert.rejects(pending, /turned off/);
+  });
+});
+
+const BOARD: PluginBoardResult = {
+  plugin: "lit",
+  displayName: "文献追踪",
+  title: "今日文献",
+  source: "installed",
+  draftPath: null,
+  at: 1,
+  tuned: false,
+  cards: [{ id: "today", title: "今日一篇", size: "1x1", index: 0, template: "a".repeat(64), data: { t: 1 }, state: "ready", usingSample: true, updatedAt: null }],
+  skipped: [{ id: "big", reason: "too-large", detail: "0: 300000 bytes" }],
+};
+
+describe("show_plugin_board", () => {
+  test("发 pluginBoardRequest（cards 缺席 = null），回执的看板原样放进 details.pluginBoard", async () => {
+    const { tools, sent, broker } = setup();
+    const tool = tools.find((each) => each.name === "show_plugin_board");
+    assert.ok(tool !== undefined);
+    const pending = tool.execute("c1", { plugin: " lit " }, undefined, undefined, undefined as never);
+    assert.deepEqual({ ...sent[0], requestId: "" }, { type: "pluginBoardRequest", sessionId: "session-1", plugin: "lit", cards: null, requestId: "" });
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: true, board: BOARD });
+    const result = await pending;
+    assert.deepEqual(result.details, { pluginBoard: BOARD });
+    assert.match((result.content[0] as { text: string }).text, /Shown 1 card of "文献追踪"/);
+  });
+
+  test("cards 透传；参数不对 / 失败回执抛错", async () => {
+    const { tools, sent, broker } = setup();
+    const tool = tools.find((each) => each.name === "show_plugin_board");
+    assert.ok(tool !== undefined);
+    await assert.rejects(tool.execute("c0", { plugin: "" }, undefined, undefined, undefined as never), /non-empty/);
+    await assert.rejects(tool.execute("c0", { plugin: "lit", cards: "today" }, undefined, undefined, undefined as never), /array/);
+    const pending = tool.execute("c1", { plugin: "lit", cards: ["today"] }, undefined, undefined, undefined as never);
+    assert.deepEqual(sent[0]?.["cards"], ["today"]);
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: false, error: "not installed" });
+    await assert.rejects(pending, /not installed/);
+  });
+
+  test("describeBoard：tuned 两种话术；样例与没放进来的卡都告诉模型", () => {
+    const loose = describeBoard(BOARD);
+    assert.match(loose, /tuned=false/);
+    assert.match(loose, /say what you did, and ask the user to point out anything wrong/);
+    assert.doesNotMatch(loose, /Do not explain/);
+    assert.match(loose, /SAMPLE data.*today/);
+    assert.match(loose, /big: too-large \(0: 300000 bytes\)/);
+    const tuned = describeBoard({ ...BOARD, tuned: true, skipped: [], cards: [] });
+    assert.match(tuned, /Shown 0 cards/);
+    assert.match(tuned, /Do not explain them again unless the user asks/);
+    assert.doesNotMatch(tuned, /point out anything wrong/);
+    assert.doesNotMatch(tuned, /Not shown/);
   });
 });
 
