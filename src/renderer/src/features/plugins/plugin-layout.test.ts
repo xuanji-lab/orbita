@@ -58,4 +58,20 @@ describe("plugins.css：容器查询", () => {
     ok(wide !== null);
     match(wide[1] ?? "", /repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   });
+
+  it("全屏版两棵树的显隐：宽档卡片墙显示、列表藏；窄档反过来，大小切换跟着收起", () => {
+    const [narrow] = containerBlocks(css).map((block) => block.body);
+    // 宽档（基础规则）：页签版里列表藏起来，卡片墙是 grid
+    match(css, /\.pl-page\[data-chrome="page"\]\s+\.pl-grp\s*\{[^}]*display:\s*none/);
+    match(css, /\.pl-wall\s*\{[^}]*display:\s*grid/);
+    // 窄档：卡片墙与大小切换收起，列表回来
+    match(narrow ?? "", /\.pl-wall,\s*\.pl-bar\s+\.pl-size-seg\s*\{[^}]*display:\s*none/);
+    match(narrow ?? "", /\.pl-page\[data-chrome="page"\]\s+\.pl-grp\s*\{[^}]*display:\s*block/);
+  });
+
+  it("启用开关默认透明、悬停 / 聚焦才现；小卡悬停时勾让位", () => {
+    match(css, /\.pl-card-switch\s*\{[^}]*opacity:\s*0/);
+    match(css, /\.pl-vcard:hover\s+\.pl-card-switch,\s*\.pl-vcard:focus-within\s+\.pl-card-switch\s*\{[^}]*opacity:\s*1/);
+    match(css, /\.pv-cards\.small\s+\.pl-vcard:hover\s+\.pv-added-badge/);
+  });
 });

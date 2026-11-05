@@ -147,6 +147,14 @@
   color: var(--color-text-primary);
 }
 
+/* 开关态的按钮（仅显示已启用）：按下 = 选中行的那层洗色，与模型服务页「仅显示已添加」同源 */
+.pl-btn[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: none;
+}
+
 .pl-btn.btn-accent {
   background: var(--color-accent);
   color: var(--color-accent-fg);
@@ -258,6 +266,83 @@
 .pl-chips > button:disabled {
   color: var(--color-text-tertiary);
   cursor: not-allowed;
+}
+
+/* 筛选条右端：仅显示已启用 + 大 / 小（大小那组是 card-wall.css 的 .pv-seg） */
+.pl-bar-end {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---------- 卡片墙（全屏版）：外壳是模型服务页那套 .pv-cards / .pv-vcard（card-wall.css），这里只补插件卡自己的 ---------- */
+
+.pl-wall {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 全屏版同时渲染卡片墙与安静列表：宽档显示卡片墙、藏列表（窄档在文件末尾的容器查询里反过来） */
+.pl-page[data-chrome="page"] .pl-grp {
+  display: none;
+}
+
+/* 组头在卡片外，不吃卡片底里的左右内边距 */
+.pl-wall .pl-gh {
+  padding: 0 var(--space-1);
+}
+
+.pl-vcard[data-active="false"] .pv-vcard-name {
+  color: var(--color-text-secondary);
+}
+
+/* 一句话最多两行，全文在详情里（技能描述原文常常很长） */
+.pl-vcard-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.pl-vcard-note.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* 底行让出右下角的开关 */
+.pl-vcard .pv-vcard-foot {
+  padding-right: calc(30px + var(--space-2));
+}
+
+/* 启用开关：悬停或键盘聚焦才浮出（模型服务卡的「+」同款），不占卡面；点它不进详情（组件里拦了冒泡） */
+.pl-card-switch {
+  position: absolute;
+  display: flex;
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+.pv-cards.large .pl-card-switch {
+  right: var(--space-3);
+  bottom: var(--space-3);
+}
+
+/* 小卡一行放不下第四样东西：开关悬停时浮在勾上，勾让位 */
+.pv-cards.small .pl-card-switch {
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.pl-vcard:hover .pl-card-switch,
+.pl-vcard:focus-within .pl-card-switch {
+  opacity: 1;
+}
+
+.pv-cards.small .pl-vcard:hover .pv-added-badge,
+.pv-cards.small .pl-vcard:focus-within .pv-added-badge {
+  opacity: 0;
 }
 
 .pl-note {
@@ -1028,6 +1113,21 @@
 
   .pl-bar {
     flex-wrap: wrap;
+  }
+
+  /* 退回列表：卡片墙收起、列表显示；列表没有大小之分，那一组也收起（仅显示已启用仍有效） */
+  /* .pl-size-seg 带上 .pl-bar 提高特异性：它的 display 来自 card-wall.css 的 .pv-seg，两份文件的进包顺序不定 */
+  .pl-wall,
+  .pl-bar .pl-size-seg {
+    display: none;
+  }
+
+  .pl-page[data-chrome="page"] .pl-grp {
+    display: block;
+  }
+
+  .pl-bar-end {
+    margin-left: 0;
   }
 
   .pl-search {
