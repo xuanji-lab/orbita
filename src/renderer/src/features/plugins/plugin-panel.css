@@ -141,15 +141,167 @@
   color: var(--color-warning);
 }
 
-/* ---------- 详情页里的「面板」与「最近产出」 ---------- */
+/* ---------- 插件页里的面板（详情「面板」页签 / 右栏「正在做」）：工具条、样例标记、模板说明 ---------- */
+
+/* 工具条：左边样例标记 + 一句话，右边原始数据与额外动作；一行放不下就让那句话省略，不换行 */
+.pp-strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding-bottom: var(--space-2);
+}
+
+.pp-strip-grow {
+  flex: 1;
+}
+
+.pp-strip-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pp-sample {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-info) 12%, var(--color-bg-panel));
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+}
+
+.pp-sample .orbita-icon {
+  color: var(--color-info);
+}
+
+/* 工具条里的小按钮：比 .pl-btn 低一档 */
+.pl-btn.pp-mini {
+  flex: none;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+.pl-btn.pp-mini.icon {
+  width: var(--control-height-xs);
+  padding: 0;
+}
+
+.pl-btn.pp-mini[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+
+/* 模板拿满剩下的高度；说明展开时它也不会被挤没 */
+.pp-tab .pp-frame-wrap {
+  min-height: 160px;
+}
+
+.pp-tab .pp-bar {
+  margin: 0 0 var(--space-2);
+}
+
+/* 草稿还没有面板：不是错误，是「还在做」 */
+.pp-wait {
+  flex: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.pp-wait b {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+/* 模板说明：宿主渲染的 markdown，卡片样式同详情页的卡；最多占四成高度，自己滚 */
+.pp-spec {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-border);
+  overflow: hidden;
+}
+
+.pp-spec-h {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pp-spec-h:hover {
+  color: var(--color-text-secondary);
+}
+
+.pp-spec-h b {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pp-spec-badge {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pp-spec-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: var(--font-size-sm);
+}
+
+/* 聊天 markdown 的字号是正文档；放进窄面板降到 sm，标题不再分三档（说明是几行字段表，不是文章） */
+.pp-spec-body .chat-md {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+
+.pp-spec-body .chat-md h1,
+.pp-spec-body .chat-md h2,
+.pp-spec-body .chat-md h3,
+.pp-spec-body .chat-md h4,
+.pp-spec-body .chat-md h5,
+.pp-spec-body .chat-md h6 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* ---------- 详情「设置与来源」里的「面板」与「最近产出」 ---------- */
 
 .pl-kv.wide {
   grid-template-columns: 96px minmax(0, 1fr);
-}
-
-.pl-panel-open {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }

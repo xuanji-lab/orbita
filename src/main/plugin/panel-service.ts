@@ -301,7 +301,7 @@ export class PluginPanels {
     const actions = { path: actionsFile, updatedAt: actionsInfo.updatedAt, count: actionsInfo.count };
     const spec = inspected.parse.spec;
     if (spec === null) {
-      return { title: "", template: "", spec: "", sample: "", dataRaw: "", dataPath: null, data: null, actions, problems: inspected.parse.problems, openable: false };
+      return { title: "", template: "", spec: "", sample: "", dataRaw: "", dataPath: null, data: null, actions, problems: inspected.parse.problems };
     }
     const problems: PluginPanelProblem[] = [...inspected.parse.notices];
     const located = await locatePanelTemplate(inspected.root, spec.template);
@@ -338,7 +338,6 @@ export class PluginPanels {
       data,
       actions,
       problems,
-      openable: located.ok && scopeApplies(record.scope, workspaceId),
     };
   }
 

@@ -1,16 +1,16 @@
 /**
- * 插件详情页里的两块：「面板」（标题、模板路径、替换后的数据路径、在右栏打开）与「最近产出」
- * （数据文件与面板动作记录的最后修改时间、条数）。插件没声明面板时两块都不出现。
+ * 插件详情「设置与来源」页签里的两块：「面板」（标题、模板路径、模板说明与样例数据的路径、替换后的
+ * 数据路径）与「最近产出」（数据文件与面板动作记录的最后修改时间、条数）。插件没声明面板时两块都不出现。
+ * 面板本身在「面板」页签里；这里只列它从哪来。
  * 解析问题不在这里列——并进详情页原有的「问题」卡（PluginDetail），一处看全。
  */
 import { useMemo } from "react";
 import type { PluginPanelInfo } from "@shared/plugin-panel";
 import { PANEL_DATA_MAX_BYTES } from "@shared/plugin-panel";
 import { useT } from "../../locale.ts";
-import { Icon } from "../../shell/Icon";
 import { dataProblemText, formatBytes } from "./panel-view.ts";
 
-export function PluginPanelCards(props: { info: PluginPanelInfo; onOpen: () => void }) {
+export function PluginPanelCards(props: { info: PluginPanelInfo }) {
   const messages = useT();
   const t = messages.pluginPanel;
   // 按界面语言（<html lang>）格式化，不按系统区域：中文界面不该冒出「03:41 PM」
@@ -40,6 +40,18 @@ export function PluginPanelCards(props: { info: PluginPanelInfo; onOpen: () => v
               <dd className="mono">{info.template}</dd>
             </>
           )}
+          {info.spec !== "" && (
+            <>
+              <dt>{t.kvSpec}</dt>
+              <dd className="mono">{info.spec}</dd>
+            </>
+          )}
+          {info.sample !== "" && (
+            <>
+              <dt>{t.kvSample}</dt>
+              <dd className="mono">{info.sample}</dd>
+            </>
+          )}
           {info.dataRaw !== "" && (
             <>
               <dt>{t.kvData}</dt>
@@ -49,13 +61,6 @@ export function PluginPanelCards(props: { info: PluginPanelInfo; onOpen: () => v
             </>
           )}
         </dl>
-        <div className="pl-panel-open">
-          <button type="button" className="pl-btn" disabled={!info.openable} onClick={props.onOpen}>
-            <Icon name="panel-right" size={13} strokeWidth={1.8} />
-            {t.openInRail}
-          </button>
-          {!info.openable && info.problems.length === 0 && <span className="pl-muted">{t.notEnabledHere}</span>}
-        </div>
       </section>
 
       <section className="pl-card">

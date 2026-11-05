@@ -312,7 +312,7 @@ describe("spec 与 sample：模板说明、样例数据、usingSample", () => {
     await writePanelManifest(root, { spec: "/etc/hosts", sample: "./nope.json" });
     const bad = await panels.info("lit-tracker", "ws-1");
     assert.deepEqual(bad?.problems.map((problem) => problem.kind), ["spec-escape", "sample-missing"]);
-    assert.equal(bad?.openable, true, "说明 / 样例的问题不影响面板能不能看");
+    assert.equal(bad?.title, "文献追踪", "说明 / 样例的问题不影响面板信息本身");
   });
 });
 
@@ -525,7 +525,6 @@ describe("info 详情页的面板与最近产出", () => {
     assert.equal(info?.template, "./panel/index.html");
     assert.equal(info?.dataRaw, "${CLAUDE_PLUGIN_DATA}/panel.json");
     assert.equal(info?.dataPath, dataFile());
-    assert.equal(info?.openable, true);
     assert.deepEqual(info?.problems, []);
   });
 
@@ -545,17 +544,12 @@ describe("info 详情页的面板与最近产出", () => {
     assert.ok((filled?.actions.updatedAt ?? 0) > 0);
   });
 
-  test("openable：只有插件在当前工作区启用才可点；解析问题列在 problems（模板逃逸 / data 变量不认得）", async () => {
-    record = makeRecord({ kind: "workspaces", ids: ["ws-2"] });
-    assert.equal((await panels.info("lit-tracker", "ws-1"))?.openable, false);
-    assert.equal((await panels.info("lit-tracker", "ws-2"))?.openable, true);
-    record = makeRecord({ kind: "global" });
+  test("解析问题列在 problems（模板逃逸 / data 变量不认得）", async () => {
     await writeFile(
       join(root, ".claude-plugin", "plugin.json"),
       JSON.stringify({ name: "lit-tracker", orbita: { panel: { title: "x", template: "../out.html", data: "${NOPE}/p.json" } } }),
     );
     const info = await panels.info("lit-tracker", "ws-1");
-    assert.equal(info?.openable, false);
     assert.deepEqual(info?.problems.map((problem) => problem.kind), ["template-escape", "data-variable"]);
     assert.equal(info?.dataPath, null);
     assert.equal(info?.data, null);

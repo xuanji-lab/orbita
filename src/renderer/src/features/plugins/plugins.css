@@ -584,13 +584,109 @@
   color: var(--color-text-primary);
 }
 
-.pl-acts {
-  margin-left: auto;
-  flex: none;
-  display: inline-flex;
+/* 「设置与来源」里的操作卡：按钮多了就换行 */
+.pl-actions {
+  display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* ---------- 详情页签（设计稿 v4 第 3 屏）：下划线式，选中是主文字色 + 2px 底线 ---------- */
+
+.pl-tabs {
+  display: flex;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.pl-tabs > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-tabs > button:hover {
+  color: var(--color-text-secondary);
+}
+
+.pl-tabs > button[aria-selected="true"] {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.pl-tabs > button[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-text-primary);
+}
+
+.pl-tabs > button:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+  outline: 0;
+}
+
+.pl-tab-warn {
+  display: inline-flex;
+  color: var(--color-warning);
+}
+
+.pl-tabpanel {
+  min-width: 0;
+}
+
+/*
+ * 面板页签与草稿预览要一个定高的位置（模板自己在 iframe 里滚），所以这两种情形整页撑满、不随内容长高：
+ * 右栏版靠右栏壳给的定高，全屏版靠 .pl-page 的 100%。别的页签仍是随内容长高、body 滚动。
+ */
+.pl-page:has(.pl-detail[data-fill="true"]),
+.pl-page[data-chrome="rail"].pl-draft {
+  height: 100%;
+}
+
+.pl-page:has(.pl-detail[data-fill="true"]) .pl-body,
+.pl-page[data-chrome="rail"].pl-draft .pl-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.pl-detail[data-fill="true"] {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.pl-detail[data-fill="true"] .pl-tabpanel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pl-tabpanel > .pp,
+.pl-page.pl-draft .pl-body > .pp {
+  flex: 1;
+  height: auto;
+  min-height: 0;
 }
 
 .pl-cols {
@@ -1094,16 +1190,5 @@
   /* 详情：两列叠成一列，顺序就是 DOM 顺序（它能做什么 → 装在哪 → 要你填的 → 来源与版本） */
   .pl-cols {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* 头部：头像 + 名字一排，按钮另起一行并可换行 */
-  .pl-hero {
-    flex-wrap: wrap;
-  }
-
-  .pl-acts {
-    flex: 1 1 100%;
-    margin-left: 0;
-    justify-content: flex-start;
   }
 }

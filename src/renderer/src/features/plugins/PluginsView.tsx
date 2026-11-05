@@ -13,7 +13,7 @@
  * 选中某个插件时同一槽里换成详情；旧技能 / MCP 面板本期保留不动。
  */
 import { useEffect, useMemo, useState } from "react";
-import type { PluginView } from "@shared/plugin";
+import { parsePluginViewId, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
@@ -21,6 +21,8 @@ import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../..
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
+import { PluginDraftView } from "./PluginDraftView.tsx";
+import type { DetailTab } from "./detail-tabs.ts";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
 import { contentsParts, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
@@ -29,18 +31,37 @@ import "./plugins.css";
 /** 外壳：右栏单列版 / 设置页全屏版。排法不看它，看容器宽度（plugins.css 的 @container pl） */
 export type PluginsChrome = "rail" | "page";
 
+/** 「在右栏打开这个插件的面板」的请求：nonce 每次递增，同一个插件连点两次也会再选一次 */
+export interface PluginOpenRequest {
+  name: string;
+  nonce: number;
+}
+
 export function PluginsView(props: {
   workspaces: readonly Workspace[];
   chrome: PluginsChrome;
-  /** 当前会话所在的工作区：详情页里面板的数据路径与「在右栏打开」按它判断 */
+  /** 当前会话所在的工作区：面板的数据路径与启没启用按它判断 */
   currentWorkspaceId: string | null;
+  /** 全屏版详情页的「在右栏打开」：App 负责打开右栏插件页并回一个 openRequest 过来 */
   onOpenPanel: (pluginName: string) => void;
+  /** 右栏版收到的请求：选中该插件的面板页签；处理完调 onOpenRequestHandled（全屏版不传） */
+  openRequest?: PluginOpenRequest | null;
+  onOpenRequestHandled?: () => void;
+  /** 正在做的草稿（工作区内插件文件夹的路径）；非 null 时右栏版显示「正在做」视图（全屏版不传） */
+  draft?: string | null;
+  onLeaveDraft?: () => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
+  // 想看的详情页签：换了插件就清（按默认规则：有面板看面板）。「在右栏打开面板」会指定它
+  const [wantedTab, setWantedTab] = useState<DetailTab | null>(null);
+  const setSelectedId = (id: string | null): void => {
+    setSelectedIdRaw(id);
+    setWantedTab(null);
+  };
   const [installing, setInstalling] = useState(false);
   const [query, setQuery] = useState("");
   const [toggleError, setToggleError] = useState<string | null>(null);
@@ -50,6 +71,19 @@ export function PluginsView(props: {
   useEffect(() => {
     if (selectedId !== null && state.load.kind === "ready" && selected === null) setSelectedId(null);
   }, [selectedId, selected, state.load.kind]);
+
+  // 「在右栏打开面板」：等列表读到、找到那个插件，就选中它并停在面板页签
+  const { openRequest = null, onOpenRequestHandled } = props;
+  useEffect(() => {
+    if (openRequest === null || state.load.kind !== "ready") return;
+    const target = state.plugins.find((view) => view.origin === "plugin" && parsePluginViewId(view.id)?.key === openRequest.name);
+    if (target !== undefined) {
+      setSelectedIdRaw(target.id);
+      setWantedTab("panel");
+    }
+    // 找不到（刚卸载 / 列表还没带上它）也算处理过，别让请求一直挂着
+    onOpenRequestHandled?.();
+  }, [openRequest, state.load.kind, state.plugins, onOpenRequestHandled]);
 
   const workspaces = props.workspaces;
   const filtered = useMemo(() => filterPlugins(state.plugins, query), [state.plugins, query]);
@@ -156,7 +190,10 @@ export function PluginsView(props: {
         view={selected}
         workspaces={workspaces}
         currentWorkspaceId={props.currentWorkspaceId}
-        onOpenPanel={props.onOpenPanel}
+        // 右栏版本来就在右栏里，只有全屏版需要「在右栏打开」
+        onOpenInRail={rail ? undefined : () => props.onOpenPanel(parsePluginViewId(selected.id)?.key ?? "")}
+        tab={wantedTab}
+        onTab={setWantedTab}
         // 右栏版的返回键在胶囊里；全屏版在页内
         showBack={!rail}
         onBack={() => setSelectedId(null)}
@@ -178,6 +215,11 @@ export function PluginsView(props: {
       }}
     />
   ) : null;
+
+  // 正在做的草稿优先于列表与详情（智能体刚预览了它，用户要看的就是它）；点返回回到列表
+  if (rail && props.draft !== undefined && props.draft !== null) {
+    return <PluginDraftView path={props.draft} workspaceId={props.currentWorkspaceId} onBack={() => props.onLeaveDraft?.()} />;
+  }
 
   if (rail) {
     // 页头住工具栏的右栏胶囊（RightPanelFrame 把它 portal 过去）：列表 = 标题 + 筛选；详情 = 返回 + 标题

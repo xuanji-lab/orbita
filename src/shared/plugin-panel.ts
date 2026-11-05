@@ -226,8 +226,6 @@ export interface PluginPanelInfo {
   /** 动作日志：最后修改时间；条数（非空行，文件超 8 MB 不数为 null） */
   actions: { path: string; updatedAt: number | null; count: number | null };
   problems: PluginPanelProblem[];
-  /** 插件在当前工作区启用、面板可解析：详情页的「面板」页签才有东西可看 */
-  openable: boolean;
 }
 
 // ---------- 宿主 ↔ 模板的消息 ----------
