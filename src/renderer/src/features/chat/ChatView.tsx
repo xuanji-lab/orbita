@@ -163,6 +163,7 @@ import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
+import { keepUnlessSettledChanged } from "./render-stability.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
 import { modelDisplayName, modelThinkingLevels } from "@shared/model-defaults";
@@ -254,16 +255,20 @@ export function ChatView(props: ChatViewProps) {
   const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
   // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
   // 迁移来的引用、被压缩掉的历史找不到就不可点）
+  // 它经 QuoteJumpContext 交给每个用户气泡，**身份必须跨流式帧稳定**：Context 一变，
+  // 所有气泡穿透 memo 重渲染、各自再扫一遍整条转录（findQuoteSource）。引用不可能指向
+  // 流式中的那条（quoteFromSelection 拒绝），所以只在已落定条目变化时换身份
+  const quoteTranscript = useSettledTranscript(session.transcript);
   const jumpToQuote = useCallback(
     (quote: TextQuote): (() => void) | undefined => {
-      const sourceId = findQuoteSource(session.transcript, quote);
+      const sourceId = findQuoteSource(quoteTranscript, quote);
       if (sourceId === null) return undefined;
       return () => {
         const pane = paneRef.current;
         if (pane !== null) highlightQuote(pane, sourceId, quote.text);
       };
     },
-    [session.transcript],
+    [quoteTranscript],
   );
   // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
   const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
@@ -370,6 +375,16 @@ export function ChatView(props: ChatViewProps) {
       />
     </div>
   );
+}
+
+/**
+ * transcript 的「已落定视图」：只有末条换了引用（流式逐字增长）时交回上一帧的数组，
+ * 别的变化（新条目、前面的条目换了）才换新（keepUnlessSettledChanged）。
+ */
+function useSettledTranscript(transcript: readonly TranscriptItem[]): readonly TranscriptItem[] {
+  const ref = useRef(transcript);
+  ref.current = keepUnlessSettledChanged(ref.current, transcript);
+  return ref.current;
 }
 
 /** 引用 → 跳回原文的处理器（undefined = 原文不在本转录里）。ChatView 外层提供，chip 们各自取 */
