@@ -96,7 +96,9 @@ export type PluginUnsupportedKind =
   | "themes"
   | "settings"
   | "mcp-bundle"
-  | "dependencies";
+  | "dependencies"
+  /** 清单 `orbita` 对象里除 workflow / panel 之外的子键（Orbita 还不认识的扩展）：items 是键名 */
+  | "orbita";
 
 export interface PluginUnsupported {
   kind: PluginUnsupportedKind;
@@ -111,6 +113,29 @@ export interface PluginSkillInfo {
   /** SKILL.md 头里的 name（pi 拿它当 prompt 标识）；没写就是 slug */
   name: string;
   description: string;
+}
+
+/**
+ * 清单 `orbita.workflow` 的一步（Orbita 的清单扩展：给人看的「这个插件怎么做事」，不执行）。
+ * 数组顺序即步骤顺序。`skill` 写技能的 name 或 slug，解析时对上本插件的某条技能。
+ */
+export interface PluginWorkflowStep {
+  title: string;
+  /** 清单里写的技能（name 或 slug）；没写为 null */
+  skill: string | null;
+  /** 对上了本插件哪条技能（它的 slug：`/skill:` 点名与只读查看用）；没写 skill 或对不上为 null——写了却为 null 就是「找不到这个技能」 */
+  skillSlug: string | null;
+  detail: string | null;
+  /** 这一步产出的文件（相对路径，只展示不读取） */
+  output: string | null;
+}
+
+/** 插件里一条技能的 SKILL.md 原文（只读查看用）。 */
+export interface PluginSkillFile {
+  slug: string;
+  /** 绝对路径 */
+  path: string;
+  content: string;
 }
 
 /**
@@ -156,7 +181,9 @@ export interface PluginProblem {
     | "config-key-invalid"
     | "mcp-unreadable"
     /** 链接安装的源目录没了（用户挪走 / 删了）：记录还在，内容读不到 */
-    | "root-missing";
+    | "root-missing"
+    /** `orbita.workflow` 写得不对（不是数组、某一步没有 title）：detail 是哪一步 / 哪个字段，那一步被跳过 */
+    | "workflow-invalid";
   detail: string;
 }
 
@@ -175,13 +202,15 @@ export type PluginSource = { kind: "folder"; path: string } | { kind: "git"; url
 export type PluginInstallMode = "copy" | "link";
 
 export type PluginSourceRecord =
+  /** Orbita 随应用带的插件：内容在安装包的资源目录里，随版本更新；可停用，不可卸载 */
+  | { kind: "builtin" }
   | { kind: "copy"; from: string }
   | { kind: "link"; path: string }
   | { kind: "git"; url: string; commit: string };
 
 export interface PluginInstallInfo {
   source: PluginSourceRecord;
-  /** `${CLAUDE_PLUGIN_ROOT}`：复制 / git 是 userData 里的副本，链接是用户的源目录 */
+  /** `${CLAUDE_PLUGIN_ROOT}`：复制 / git 是 userData 里的副本，链接是用户的源目录，内置是安装包资源目录里的那份 */
   root: string;
   /** `${CLAUDE_PLUGIN_DATA}` */
   dataDir: string;
@@ -207,6 +236,8 @@ export interface PluginPreview {
   root: string;
   hasScripts: boolean;
   skills: PluginSkillInfo[];
+  /** 清单 `orbita.workflow` 解析后的步骤；没写为空数组 */
+  workflow: PluginWorkflowStep[];
   mcp: PluginMcpInfo[];
   unsupported: PluginUnsupported[];
   config: PluginConfigField[];
@@ -268,6 +299,8 @@ export interface PluginView {
   /** 一行小字用：技能 N · MCP · 脚本 */
   contents: { skills: number; mcp: number; scripts: boolean };
   skills: PluginSkillInfo[];
+  /** 清单 `orbita.workflow` 解析后的步骤；没写（或旧技能 / 旧 MCP）为空数组，详情页不显示这一块 */
+  workflow: PluginWorkflowStep[];
   mcp: PluginMcpInfo[];
   unsupported: PluginUnsupported[];
   config: PluginConfigState[];
@@ -306,4 +339,53 @@ export function parsePluginViewId(id: string): { origin: PluginOrigin; key: stri
     if (id.startsWith(prefix) && id.length > prefix.length) return { origin, key: id.slice(prefix.length) };
   }
   return null;
+}
+
+// ---------- agent 的 install_plugin / list_plugins ----------
+
+/** agent 工具里的范围：只有两个字，「workspace」= 这条会话所在的工作区（主进程按会话归属解析）。 */
+export type PluginAgentScope = "workspace" | "global";
+
+/**
+ * install_plugin 的结果（主进程 → agent 进程，形状即契约）。成功分两种：
+ * 用户点了「安装」；或这个文件夹早已链接安装（`already`：没弹卡，改动下一轮自动生效，因为链接安装只记路径）。
+ * 失败的 `error` 原样成为工具失败原因给模型看，要写成它照着能改的话。
+ */
+export type PluginAgentInstallOutcome =
+  | {
+      ok: true;
+      name: string;
+      scope: PluginAgentScope;
+      already: boolean;
+      skills: string[];
+      mcp: string[];
+      /** `${CLAUDE_PLUGIN_DATA}`：插件的数据目录。面板上的动作（orbita:action）追加在这里的 actions.jsonl，插件自己的脚本下一轮去读它 */
+      dataDir: string;
+    }
+  | { ok: false; error: string };
+
+/** list_plugins 的一行：这条会话能用的真插件（含内置）；旧技能 / 旧 MCP 不列（技能索引里本来就有）。 */
+export interface PluginAgentListItem {
+  name: string;
+  description: string;
+  origin: "builtin" | "plugin";
+  /** 技能 slug */
+  skills: string[];
+  /** 清单里的 MCP 服务名 */
+  mcp: string[];
+  /** workflow 每一步的标题（没写为空） */
+  workflow: string[];
+  /** 插件根目录（绝对路径）：agent 要改它时去这里 */
+  root: string;
+  /** 插件数据目录（绝对路径）：面板动作的 actions.jsonl 在这里 */
+  dataDir: string;
+}
+
+export type PluginAgentListOutcome = { ok: true; plugins: PluginAgentListItem[] } | { ok: false; error: string };
+
+/** 内置插件的名字表：随应用带的、默认对所有工作区启用、不可卸载。内容目录与它同名。 */
+export const BUILTIN_PLUGIN_NAMES = ["plugin-creator"] as const;
+
+export function isBuiltinPluginName(name: string): boolean {
+  return (BUILTIN_PLUGIN_NAMES as readonly string[]).includes(name);
 }
