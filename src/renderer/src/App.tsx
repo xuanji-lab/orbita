@@ -1291,6 +1291,7 @@ export function App() {
                   },
                 }}
                 onTab={setSettingsTab}
+                onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
             ) : (
               <ChatView

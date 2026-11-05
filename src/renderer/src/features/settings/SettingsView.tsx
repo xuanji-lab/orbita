@@ -80,6 +80,8 @@ export function SettingsView(props: {
   onTab: (tab: SettingsTab) => void;
   /** 插件页签（全屏版）要接到会话引擎与右栏上的三样（实验功能 plugins） */
   plugins: { currentWorkspaceId: string | null; onMakeWithAgent: () => void; onOpenPanel: (pluginName: string) => void };
+  /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
+  onCollapseRail: (() => void) | null;
 }) {
   const t = useT();
   /**
@@ -154,6 +156,7 @@ export function SettingsView(props: {
           onSessionsChanged={props.onImported}
           page={props.settings.providersPage ?? {}}
           onPage={(providersPage) => props.onSettingsChange({ providersPage })}
+          onCollapseRail={props.onCollapseRail}
         />
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
