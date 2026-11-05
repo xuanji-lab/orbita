@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
+import "./card-wall.css";
 import "./providers-view.css";
 import {
   KNOWN_PROVIDERS,
@@ -11,7 +12,7 @@ import {
   type KnownProvider,
 } from "@shared/known-providers";
 import type { PriceChartCategory } from "@shared/price-chart";
-import type { ProviderCardSize, ProvidersPageSettings } from "@shared/settings";
+import type { CardSize, ProvidersPageSettings } from "@shared/settings";
 import {
   knownParamsFor,
   modelDisplayName,
@@ -1553,8 +1554,8 @@ function ProviderGrid(props: {
   onQuery: (query: string) => void;
   onlyAdded: boolean;
   onOnlyAdded: (only: boolean) => void;
-  size: ProviderCardSize;
-  onSize: (size: ProviderCardSize) => void;
+  size: CardSize;
+  onSize: (size: CardSize) => void;
   chartCategory: PriceChartCategory;
   onChartCategory: (category: PriceChartCategory) => void;
   onOpen: (kindId: string) => void;
@@ -1650,7 +1651,7 @@ function ProviderGrid(props: {
  */
 function ProviderGridCard(props: {
   card: ProviderCard;
-  size: ProviderCardSize;
+  size: CardSize;
   onOpen: () => void;
   onAddAnother: () => void;
 }) {

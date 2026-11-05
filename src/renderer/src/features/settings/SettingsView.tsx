@@ -134,7 +134,13 @@ export function SettingsView(props: {
         </div>
       ) : props.tab === "plugins" ? (
         // 插件页的全屏版：自己带滚动区；窄了（右栏同时开着）由它自己的容器查询收成单列
-        <PluginsView workspaces={props.workspaces} chrome="page" {...props.plugins} />
+        <PluginsView
+          workspaces={props.workspaces}
+          chrome="page"
+          page={props.settings.pluginsPage}
+          onPage={(pluginsPage) => props.onSettingsChange({ pluginsPage })}
+          {...props.plugins}
+        />
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>

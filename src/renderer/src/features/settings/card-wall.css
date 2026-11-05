@@ -1,0 +1,143 @@
+/*
+ * 卡片墙的公共件：大 / 小两档的分段切换、分组、卡片外壳、卡片内的名字 / 说明 / 底行、右上角的状态角标。
+ * 有两个消费者：设置 › 模型服务（ProvidersView，logo 磁贴）与设置 › 插件（PluginsView，头像）。
+ * 类名保持 pv- 前缀不动（模型服务页的 DOM 与测试都认它）；各自特有的部分（logo 磁贴、「再加一个」按钮、
+ * 未实测角标、插件的启用开关）留在各自的样式文件里。
+ */
+
+/* 大 / 小两档：一组分段按钮 */
+.pv-seg {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.pv-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: calc(var(--control-height-md) - 6px);
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.pv-seg button:hover {
+  color: var(--color-text-primary);
+}
+.pv-seg button[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.pv-wall-group {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.pv-cards {
+  display: grid;
+  gap: var(--space-2);
+}
+.pv-cards.large {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.pv-cards.small {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px;
+}
+
+/* 厂商卡：hover 抬阴影、描边加深，不换色不位移（设计系统 *Hover*） */
+.pv-vcard {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition:
+    var(--transition-hover),
+    box-shadow var(--duration-instant) var(--ease-standard);
+}
+.pv-vcard:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-composer);
+}
+.pv-vcard:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.pv-cards.large .pv-vcard {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-2);
+  min-height: 140px;
+  padding: var(--space-3);
+}
+.pv-cards.small .pv-vcard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 42px;
+  padding: 6px 8px;
+}
+.pv-vcard-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.pv-vcard-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.pv-vcard-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+.pv-cards.small .pv-vcard-name {
+  flex: 1;
+}
+.pv-vcard-note {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.pv-vcard-foot {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 30px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 已添加：图标是状态，颜色只是第二信号 */
+.pv-added-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.pv-added-badge .orbita-icon {
+  color: var(--color-success);
+}

@@ -567,6 +567,20 @@ describe("parseSettings 的 providersPage（模型服务页的界面记忆）", 
   });
 });
 
+describe("parseSettings 的 pluginsPage（插件页的界面记忆）", () => {
+  it("卡片尺寸与仅显示已启用：认得的留下，不认识的当没选过，全空不落键", () => {
+    deepStrictEqual(parseSettings({ pluginsPage: { cardSize: "small", onlyEnabled: true } }).pluginsPage, {
+      cardSize: "small",
+      onlyEnabled: true,
+    });
+    deepStrictEqual(parseSettings({ pluginsPage: { cardSize: "huge", onlyEnabled: "yes" } }).pluginsPage, undefined);
+    // 只有一个键也留着：另一个键缺席 = 默认
+    deepStrictEqual(parseSettings({ pluginsPage: { onlyEnabled: false } }).pluginsPage, { onlyEnabled: false });
+    deepStrictEqual("pluginsPage" in parseSettings({}), false);
+    deepStrictEqual("pluginsPage" in parseSettings({ pluginsPage: {} }), false);
+  });
+});
+
 describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
   it("缺席 = 键不在：全部默认关，不为此落一个空对象", () => {
     deepStrictEqual("experimentalFeatures" in parseSettings({}), false);

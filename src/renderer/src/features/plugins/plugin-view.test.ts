@@ -4,6 +4,7 @@ import type { PluginPlacement, PluginScope, PluginView } from "../../../../share
 import type { Workspace } from "../../../../shared/workspace.ts";
 import {
   contentsParts,
+  filterEnabled,
   filterPlugins,
   groupPlugins,
   initialOf,
@@ -41,6 +42,38 @@ function view(over: Partial<PluginView> & { id: string; name: string }): PluginV
     ...over,
   };
 }
+
+describe("filterEnabled（仅显示已启用）", () => {
+  const on = view({ id: "plugin:on", name: "On" });
+  const scoped = view({ id: "plugin:ws", name: "Ws", scope: { kind: "workspaces", ids: ["a"] }, placement: { kind: "workspaces", ids: ["a"] } });
+  // 停用的仍记着位置，分组里照常在它的工作区（开关一拨就回原位）；过滤只看此刻生效不生效
+  const off = view({ id: "plugin:off", name: "Off", scope: { kind: "off" } });
+  const emptyList = view({ id: "plugin:empty", name: "Empty", scope: { kind: "workspaces", ids: [] } });
+
+  test("开着只留此刻生效的：全局、有名单的工作区范围都算，停用与空名单不算", () => {
+    assert.deepEqual(filterEnabled([on, scoped, off, emptyList], true).map((v) => v.id), ["plugin:on", "plugin:ws"]);
+  });
+
+  test("关着原样全留，并且是新数组（调用方排序不会动入参）", () => {
+    const all = [on, off];
+    const result = filterEnabled(all, false);
+    assert.deepEqual(result.map((v) => v.id), ["plugin:on", "plugin:off"]);
+    assert.notEqual(result, all);
+  });
+
+  test("先搜再过滤：两个条件叠加，过滤后一个不剩时分组为空（页面据此显示「还没有启用的插件」）", () => {
+    const only = filterEnabled(filterPlugins([on, off], "off"), true);
+    assert.deepEqual(only, []);
+    assert.deepEqual(groupPlugins(only, WORKSPACES), []);
+    assert.deepEqual(groupPlugins(filterEnabled([off], true), WORKSPACES), []);
+  });
+
+  test("停用的卡仍在自己的工作区组里（关着过滤时），开了过滤整组消失", () => {
+    const placed = view({ id: "plugin:p", name: "P", scope: { kind: "off" }, placement: { kind: "workspaces", ids: ["b"] } });
+    assert.deepEqual(groupPlugins(filterEnabled([placed], false), WORKSPACES).map((g) => g.kind), ["workspace"]);
+    assert.deepEqual(groupPlugins(filterEnabled([placed], true), WORKSPACES), []);
+  });
+});
 
 describe("groupPlugins", () => {
   test("所有工作区 → 各工作区（侧栏顺序）→ 未启用；空组不出现", () => {

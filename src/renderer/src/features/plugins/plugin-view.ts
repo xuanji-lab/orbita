@@ -51,6 +51,11 @@ export function filterPlugins(views: readonly PluginView[], query: string): Plug
   );
 }
 
+/** 「仅显示已启用」：开着只留此刻生效的；关着原样（拷一份，调用方可以放心排序）。 */
+export function filterEnabled(views: readonly PluginView[], onlyEnabled: boolean): PluginView[] {
+  return onlyEnabled ? views.filter(isActive) : [...views];
+}
+
 /** 此刻对哪些会话生效：不是停用，且「只在这些」的名单非空。 */
 export function isActive(view: PluginView): boolean {
   return view.scope.kind === "global" || (view.scope.kind === "workspaces" && view.scope.ids.length > 0);

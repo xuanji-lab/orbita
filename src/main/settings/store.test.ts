@@ -65,6 +65,15 @@ describe("SettingsStore", () => {
     assert.deepEqual((await store.read()).providersPage, { onlyAdded: true, chartCategory: "webdev", cardSize: "small" });
   });
 
+  test("插件页的界面记忆按键合并：切卡片尺寸不抹掉「仅显示已启用」，重开 store 还在", async () => {
+    await store.write({ pluginsPage: { onlyEnabled: true } });
+    await store.write({ pluginsPage: { cardSize: "small" } });
+    assert.deepEqual((await store.read()).pluginsPage, { onlyEnabled: true, cardSize: "small" });
+    assert.deepEqual((await new SettingsStore(dir).read()).pluginsPage, { onlyEnabled: true, cardSize: "small" });
+    // 模型服务页的记忆互不相干
+    assert.equal((await store.read()).providersPage, undefined);
+  });
+
   test("向量设置按键合并：只切模式不抹掉模型、卸载时间与电池偏好", async () => {
     await store.write({
       vector: { model: "qwen3-embedding-0.6b", idleUnloadMin: 9, deferOnBattery: false },

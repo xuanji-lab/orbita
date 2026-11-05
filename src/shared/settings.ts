@@ -317,6 +317,11 @@ export interface AppSettings {
    */
   providersPage?: ProvidersPageSettings;
   /**
+   * 设置 › 插件这一页的界面记忆：卡片尺寸、「仅显示已启用」（用户 2026-11-05：学模型服务页的大 / 小卡，
+   * 状态切页 / 重载后保持）。缺席 = 全部默认。store 写入时按键合并一层，同 providersPage。
+   */
+  pluginsPage?: PluginsPageSettings;
+  /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
@@ -343,7 +348,8 @@ export interface AppSettings {
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
 
-export type ProviderCardSize = "large" | "small";
+/** 卡片墙的尺寸：模型服务页与插件页共用（同一套大 / 小卡） */
+export type CardSize = "large" | "small";
 
 /** 设置 › 模型服务这一页的界面记忆（AppSettings.providersPage）；每个键缺席都是默认值 */
 export interface ProvidersPageSettings {
@@ -351,7 +357,7 @@ export interface ProvidersPageSettings {
    * 厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，small 只留 logo、名字与角标。
    * 2026-10-25 之前存在顶层 `providerCardSize`，读的时候迁过来（parseSettings）。
    */
-  cardSize?: ProviderCardSize;
+  cardSize?: CardSize;
   /** 卡片墙只显示已添加的服务商。缺席 = 全部显示 */
   onlyAdded?: boolean;
   /**
@@ -460,11 +466,29 @@ export function selectableThemes(paperThemes: boolean): readonly ThemePreference
   return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
 }
 
+/** 设置 › 插件这一页的界面记忆（AppSettings.pluginsPage）；每个键缺席都是默认值 */
+export interface PluginsPageSettings {
+  /** 卡片尺寸。缺席 = large；只管设置页的全屏卡片墙，右栏单列版没有尺寸 */
+  cardSize?: CardSize;
+  /** 只显示已启用的插件。缺席 = 全部显示 */
+  onlyEnabled?: boolean;
+}
+
 /** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
 function parseWidth(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DRAWER_WIDTH.default;
   if (value < DRAWER_WIDTH.min || value > DRAWER_WIDTH.max) return DRAWER_WIDTH.default;
   return Math.round(value);
+}
+
+/** 插件页的界面记忆：认得的值留下，不认识的当没选过；全空返回 undefined，不落空对象 */
+function parsePluginsPage(raw: unknown): PluginsPageSettings | undefined {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const page: PluginsPageSettings = {
+    ...(record.cardSize === "large" || record.cardSize === "small" ? { cardSize: record.cardSize } : {}),
+    ...(typeof record.onlyEnabled === "boolean" ? { onlyEnabled: record.onlyEnabled } : {}),
+  };
+  return Object.keys(page).length === 0 ? undefined : page;
 }
 
 /**
@@ -517,6 +541,7 @@ export function parseSettings(raw: unknown): AppSettings {
     starredModels?: unknown;
     usagePet?: unknown;
     providersPage?: unknown;
+    pluginsPage?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
@@ -547,6 +572,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const intent = parseIntentSettings(record.intent);
   const vector = parseVectorSettings(record.vector);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
+  const pluginsPage = parsePluginsPage(record.pluginsPage);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -593,6 +619,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
     ...(providersPage === undefined ? {} : { providersPage }),
+    ...(pluginsPage === undefined ? {} : { pluginsPage }),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
