@@ -121,12 +121,6 @@ import {
   type ImageBudgetMark,
 } from "./image-byte-budget.ts";
 
-console.error(`[agent-runtime] boot, INSPECT=${JSON.stringify(process.env.ORBITA_AGENT_INSPECT)}`);
-try {
-  writeFileSync("C:\orbita-bench\agent-boot-debug.log", `boot INSPECT=${JSON.stringify(process.env.ORBITA_AGENT_INSPECT)} FILE=${JSON.stringify(process.env.ORBITA_INSPECT_FILE)}
-`, { flag: "a" });
-} catch {}
-
 // Windows 上的 utilityProcess 不消费继承来的 NODE_OPTIONS，也不把 fork 的 execArgv 当 Node
 // 运行时参数（2026-11-05 G14 bench 实测：主进程的 Debugger listening 正常，agent 进程没有
 // 任何监听行，Mac 同机制可跑通）。测量驱动（scripts/bench/bench.mjs）设 ORBITA_AGENT_INSPECT=1
