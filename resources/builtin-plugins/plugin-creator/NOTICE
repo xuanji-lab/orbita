@@ -1,0 +1,25 @@
+plugin-creator — Orbita 内置插件
+
+本插件里的技能文字是 Orbita 团队写的，其中下列部分改编自开源项目。改编处已按各自许可证的要求保留署名；
+改编时做了删减、翻译与针对 Orbita 的改写，不代表原作者背书。
+
+1. skills/panel-style（风格激发）
+   - impeccable — https://github.com/pbakaus/impeccable — Apache License 2.0
+     借用的机制：把自己的默认审美点名并“花掉”、从内容世界里列七个候选、用骰子而非自己的排序挑方向、
+     常设一张“设计系统原生”的出口卡、方向契约（“去掉内容还认得出”）、挑选后独立复核。
+   - huashu-design（花叔 Design）— https://github.com/alchaincyf/huashu-design — MIT License
+     借用的机制：三个方向先出真实小样再让用户选、“加选项不加禁令”、外观账本、品味档案逐字记用户原话并写明适用范围、
+     “去掉这个手法，信息是更清楚还是更糊”的判据、颜色按内容推导而不是抄条目里的 hex。
+   - frontend-design（Anthropic）— https://github.com/anthropics/skills — Apache License 2.0
+     借用的机制：点名 AI 的默认审美簇、写一份紧凑计划再自审“换一个类似的需求会不会得到一样的东西”、一处大胆的签名元素。
+
+2. skills/find-existing（主动找现成的）
+   - find-skills — https://github.com/vercel-labs/skills — MIT License
+     借用的做法：用 skills.sh 与 `npx skills find` 检索、向用户呈现候选而不是直接装。
+
+3. skills/plugin-creator/references/skill-writing.md（怎么写技能）
+   - skill-creator（Anthropic）— https://github.com/anthropics/skills — Apache License 2.0
+     借用的写法原则：渐进披露、description 要“推”一点、解释为什么而不是堆 MUST、测试用例用真实说法。
+
+Apache License 2.0 全文：https://www.apache.org/licenses/LICENSE-2.0
+MIT License 全文见各原项目仓库。

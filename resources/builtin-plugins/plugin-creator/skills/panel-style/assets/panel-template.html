@@ -1,0 +1,154 @@
+<!doctype html>
+<!--
+  Orbita 插件面板模板骨架（自包含：内联 style / script，没有任何外部引用）。
+
+  宿主 ⇄ 模板的约定（改渲染部分，别改下面这套收发）：
+    宿主 → 模板  window.postMessage({ type: "orbita:data", data, state: "ready" | "empty", updatedAt, theme: { name, scheme, vars } })
+                 · 数据文件不存在 / 空 → data = null, state = "empty"
+                 · theme.vars 是 Orbita 当前主题的变量表，要设到 :root 上才跟主题走
+    模板 → 宿主  parent.postMessage({ type: "orbita:ready", emptyState: true }, "*")   加载完告诉宿主；emptyState:true = 空态我自己画
+                 parent.postMessage({ type: "orbita:action", action: "mark-useful", payload: { id } }, "*")
+                 · action ≤ 64 字符，payload 序列化后 ≤ 16 KB，每个插件 10 秒内最多 20 条
+                 · 宿主只把它追加到插件数据目录的 actions.jsonl，不做别的；插件自己的脚本下一轮去读
+  沙盒限制：不能联网、不能跳转链接、不能读文件、图片字体只能 data:。显示链接请当文字，或发一个 action。
+  没有宿主（直接用浏览器打开这个文件，或在 preview.html 里）时，用 window.__SAMPLE__ 渲染，方便预览。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>面板</title>
+<style>
+  /* 主题变量的兜底值（浅色）；宿主会用 theme.vars 覆盖。变量名单见约定，别发明新名字。 */
+  :root {
+    --color-text-primary: #202124; --color-text-secondary: #5f6368; --color-text-tertiary: #8b8f94;
+    --color-bg-panel: #ffffff; --color-bg-muted: #eef0f2; --color-chat-card-bg: #fafafa;
+    --color-border-subtle: #e5e5df; --color-border-default: #dfdfd7; --color-border-strong: #d7d7cf;
+    --color-accent: #1d4ed8; --color-accent-soft: #e7eefd; --color-accent-fg: #ffffff;
+    --color-success: #1a7f37; --color-warning: #b7791f; --color-danger: #b42318; --color-info: #2563eb;
+    --font-family-base: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-family-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --font-size-xl: 20px; --font-size-lg: 16px; --font-size-base: 14px; --font-size-sm: 13px; --font-size-xs: 12px;
+    --radius-sm: 6px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 10px;
+    --line-height-ui: 1.5; --line-height-tight: 1.25;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--color-bg-panel); color: var(--color-text-primary);
+    font: var(--font-size-base)/var(--line-height-ui) var(--font-family-base);
+    overflow-y: auto; /* 高度由宿主给满，模板自己滚动 */
+  }
+  main { padding: 14px 16px 24px; display: grid; gap: 10px; align-content: start; }
+  header.top { display: flex; align-items: baseline; gap: 8px; color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+  header.top strong { color: var(--color-text-secondary); font-weight: 600; font-size: var(--font-size-sm); }
+  .sample { padding: 6px 10px; border-radius: var(--radius-md); background: var(--color-bg-muted); color: var(--color-warning); font-size: var(--font-size-xs); }
+
+  /* ↓↓ 示例渲染：一条一张卡。换风格就重写这一段（骨架要变，不是只换色）。 */
+  .card { padding: 12px; border-radius: var(--radius-lg); background: var(--color-chat-card-bg); border: 1px solid var(--color-border-subtle); display: grid; gap: 6px; }
+  .card h3 { margin: 0; font-size: var(--font-size-base); line-height: var(--line-height-tight); font-weight: 600; }
+  .card .meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+  .card p { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag { padding: 0 6px; border-radius: var(--radius-sm); background: var(--color-bg-muted); color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+  .acts { display: flex; gap: 6px; margin-top: 2px; }
+  button.act { font: inherit; font-size: var(--font-size-xs); padding: 3px 9px; border: 0; border-radius: var(--radius-md); background: var(--color-bg-muted); color: var(--color-text-secondary); cursor: pointer; }
+  button.act:hover { color: var(--color-text-primary); }
+  button.act[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
+  /* ↑↑ */
+
+  .empty { display: grid; gap: 6px; padding: 28px 8px; text-align: center; color: var(--color-text-tertiary); }
+  .empty b { color: var(--color-text-secondary); font-weight: 600; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+(function () {
+  "use strict";
+  var app = document.getElementById("app");
+  var hosted = window.parent !== window;
+  var pressed = {}; // 本次页面里按过的反馈（只是界面状态；真正的记录在宿主的 actions.jsonl）
+
+  /* 小工具：只用 textContent，数据里有什么都不会被当成 HTML 执行。 */
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (key === "class") node.className = attrs[key];
+      else if (key === "text") node.textContent = attrs[key];
+      else node.setAttribute(key, attrs[key]);
+    });
+    (children || []).forEach(function (child) { if (child) node.appendChild(child); });
+    return node;
+  }
+
+  function applyTheme(theme) {
+    if (!theme) return;
+    var vars = theme.vars || {};
+    Object.keys(vars).forEach(function (name) { document.documentElement.style.setProperty(name, vars[name]); });
+    if (theme.scheme) document.documentElement.setAttribute("data-scheme", theme.scheme);
+  }
+
+  function act(action, payload) {
+    if (hosted) parent.postMessage({ type: "orbita:action", action: action, payload: payload }, "*");
+  }
+
+  function renderEmpty() {
+    app.replaceChildren(el("div", { class: "empty" }, [
+      el("b", { text: "还没有产出" }),
+      el("span", { text: "让智能体跑一次这个插件，结果会出现在这里。" })
+    ]));
+  }
+
+  function updatedText(updatedAt, data) {
+    var t = updatedAt || (data && data.generatedAt ? Date.parse(data.generatedAt) : null);
+    return t ? "更新于 " + new Date(t).toLocaleString() : "";
+  }
+
+  function renderCard(item) {
+    var id = String(item.id == null ? item.title : item.id);
+    var tags = (item.tags || []).map(function (tag) { return el("span", { class: "tag", text: String(tag) }); });
+    function feedback(label, action) {
+      var button = el("button", { class: "act", type: "button", "aria-pressed": pressed[id] === action ? "true" : "false", text: label });
+      button.addEventListener("click", function () {
+        pressed[id] = action;
+        act(action, { id: id });
+        render(current.data, current.state, current.updatedAt);
+      });
+      return button;
+    }
+    return el("article", { class: "card" }, [
+      el("h3", { text: String(item.title || "（无标题）") }),
+      item.venue ? el("div", { class: "meta", text: String(item.venue) }) : null,
+      item.summary ? el("p", { text: String(item.summary) }) : null,
+      tags.length ? el("div", { class: "tags" }, tags) : null,
+      el("div", { class: "acts" }, [feedback("有用", "mark-useful"), feedback("不相关", "mark-irrelevant")])
+    ]);
+  }
+
+  var current = { data: null, state: "empty", updatedAt: null };
+  function render(data, state, updatedAt) {
+    current = { data: data, state: state, updatedAt: updatedAt };
+    var items = data && Array.isArray(data.items) ? data.items : [];
+    if (state === "empty" || items.length === 0) return renderEmpty();
+    var children = [el("header", { class: "top" }, [el("strong", { text: String(data.source || "最新") }), el("span", { text: updatedText(updatedAt, data) })])];
+    if (data.sample === true) children.push(el("div", { class: "sample", text: "这是样例数据，不是真实产出。" }));
+    items.forEach(function (item) { children.push(renderCard(item)); });
+    app.replaceChildren.apply(app, children);
+  }
+
+  window.addEventListener("message", function (event) {
+    var message = event.data;
+    if (!message || message.type !== "orbita:data") return;
+    applyTheme(message.theme);
+    render(message.data, message.state, message.updatedAt);
+  });
+
+  /* 告诉宿主：加载好了，空态我自己画（emptyState:true），宿主就不再盖一行“还没有产出”。 */
+  if (hosted) parent.postMessage({ type: "orbita:ready", emptyState: true }, "*");
+  else if (window.__SAMPLE__) render(window.__SAMPLE__, "ready", Date.now()); // 直接打开文件预览
+  else renderEmpty();
+})();
+</script>
+</body>
+</html>

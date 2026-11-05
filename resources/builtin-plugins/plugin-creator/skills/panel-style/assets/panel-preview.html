@@ -1,0 +1,75 @@
+<!doctype html>
+<!--
+  面板方向对比页（只在做面板的过程中用，挑完就删）。把它拷成 panel/preview.html，旁边放：
+    sample-data.js   window.__SAMPLE__ = { …data/panel.json 的内容… };
+    drafts.js        window.__DRAFTS__ = [{ "name": "审读单", "file": "drafts/a-referee.html" }, …];
+  打开 preview.html?scheme=light 或 ?scheme=dark：每份草稿一列，400px 宽，像宿主一样放进沙盒 iframe 并下发主题变量。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>面板方向对比</title>
+<style>
+  body { margin: 0; padding: 16px 20px; font: 13px/1.4 system-ui, -apple-system, "PingFang SC", sans-serif; background: #d9dadc; color: #202124; }
+  body[data-scheme="dark"] { background: #0b0b0b; color: #e5e5e5; }
+  .row { display: flex; gap: 20px; align-items: flex-start; }
+  .col { display: grid; gap: 6px; flex: none; }
+  .col b { font-size: 14px; }
+  .col small { opacity: .6; }
+  iframe { width: 400px; height: 640px; border: 1px solid rgba(128,128,128,.35); border-radius: 8px; background: transparent; }
+</style>
+<script src="sample-data.js"></script>
+<script src="drafts.js"></script>
+</head>
+<body>
+<div class="row" id="row"></div>
+<script>
+(function () {
+  var scheme = new URLSearchParams(location.search).get("scheme") === "dark" ? "dark" : "light";
+  document.body.setAttribute("data-scheme", scheme);
+  /* 取自 Orbita 设计系统的浅色（light）与玄（black）主题 */
+  var THEMES = {
+    light: { name: "light", scheme: "light", vars: {
+      "--color-text-primary": "#202124", "--color-text-secondary": "#5f6368", "--color-text-tertiary": "#8b8f94",
+      "--color-bg-panel": "#ffffff", "--color-bg-muted": "#eef0f2", "--color-chat-card-bg": "#fafafa",
+      "--color-border-subtle": "#e5e5df", "--color-border-default": "#dfdfd7", "--color-border-strong": "#d7d7cf",
+      "--color-accent": "#1d4ed8", "--color-accent-soft": "#e7eefd", "--color-accent-fg": "#ffffff",
+      "--color-success": "#1a7f37", "--color-warning": "#b7791f", "--color-danger": "#b42318", "--color-info": "#2563eb" } },
+    dark: { name: "black", scheme: "dark", vars: {
+      "--color-text-primary": "#e5e5e5", "--color-text-secondary": "#b8b8b8", "--color-text-tertiary": "#808080",
+      "--color-bg-panel": "#161616", "--color-bg-muted": "#202020", "--color-chat-card-bg": "#2c2c2e",
+      "--color-border-subtle": "rgba(255,255,255,0.08)", "--color-border-default": "rgba(255,255,255,0.1)", "--color-border-strong": "rgba(255,255,255,0.16)",
+      "--color-accent": "#d6c245", "--color-accent-soft": "rgba(214,194,69,0.08)", "--color-accent-fg": "#1b1a15",
+      "--color-success": "#56d364", "--color-warning": "#d4a72c", "--color-danger": "#ff7b72", "--color-info": "#52a8ff" } }
+  };
+  var COMMON = {
+    "--font-family-base": 'system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    "--font-family-mono": 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    "--font-size-xl": "20px", "--font-size-lg": "16px", "--font-size-base": "14px", "--font-size-sm": "13px", "--font-size-xs": "12px",
+    "--radius-sm": "6px", "--radius-md": "6px", "--radius-lg": "8px", "--radius-xl": "10px",
+    "--line-height-ui": "1.5", "--line-height-tight": "1.25"
+  };
+  var theme = JSON.parse(JSON.stringify(THEMES[scheme]));
+  Object.keys(COMMON).forEach(function (key) { theme.vars[key] = COMMON[key]; });
+
+  var row = document.getElementById("row");
+  (window.__DRAFTS__ || []).forEach(function (draft) {
+    var frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-scripts"); /* 与宿主一致：没有 allow-same-origin */
+    frame.src = draft.file;
+    frame.addEventListener("load", function () {
+      frame.contentWindow.postMessage({ type: "orbita:data", data: window.__SAMPLE__ || null, state: window.__SAMPLE__ ? "ready" : "empty", updatedAt: Date.now(), theme: theme }, "*");
+    });
+    var col = document.createElement("div");
+    col.className = "col";
+    var title = document.createElement("b");
+    title.textContent = draft.name;
+    var note = document.createElement("small");
+    note.textContent = draft.file + " · " + scheme;
+    col.appendChild(title); col.appendChild(frame); col.appendChild(note);
+    row.appendChild(col);
+  });
+})();
+</script>
+</body>
+</html>

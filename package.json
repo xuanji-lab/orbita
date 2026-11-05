@@ -80,6 +80,10 @@
         "to": "tray.png"
       },
       {
+        "from": "resources/builtin-plugins",
+        "to": "builtin-plugins"
+      },
+      {
         "from": "node_modules/@earendil-works/pi-coding-agent/package.json",
         "to": "pi-coding-agent/package.json"
       }
