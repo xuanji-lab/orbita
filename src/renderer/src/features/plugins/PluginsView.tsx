@@ -24,6 +24,9 @@ export function PluginsView(props: {
   workspaces: readonly Workspace[];
   /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；页面随之退场） */
   onMakeWithAgent: () => void;
+  /** 当前会话所在的工作区：详情页里面板的数据路径与「在右栏打开」按它判断 */
+  currentWorkspaceId: string | null;
+  onOpenPanel: (pluginName: string) => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
@@ -93,6 +96,8 @@ export function PluginsView(props: {
             key={selected.id}
             view={selected}
             workspaces={workspaces}
+            currentWorkspaceId={props.currentWorkspaceId}
+            onOpenPanel={props.onOpenPanel}
             onBack={() => setSelectedId(null)}
             onScope={(scope) => state.setScope(selected.id, scope)}
             onChanged={state.refresh}

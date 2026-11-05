@@ -31,6 +31,10 @@ import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { Icon } from "./shell/Icon";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
+import { pluginPanelKind, pluginPanelNameOf } from "./shell/plugin-panel-kind.ts";
+import { PluginPanel } from "./features/plugins/PluginPanel.tsx";
+import { usePluginPanelTabs } from "./features/plugins/usePluginPanel.ts";
+import { initialOf } from "./features/plugins/plugin-view.ts";
 import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
@@ -889,6 +893,17 @@ export function App() {
   // 插件页（实验功能 plugins）：开关关掉时盖层退回聊天，入口不出现
   const pluginsOn = experimentalFeatures["plugins"] === true;
   if (overlay === "plugins" && !pluginsOn) setOverlay(null);
+  // 插件面板页签：当前工作区里已启用且声明了面板的插件各一个（开关关着一个都没有）。
+  // overlay 进 revision：在插件页里改了范围，关掉页面回来要重读
+  const pluginPanelTabs = usePluginPanelTabs(pluginsOn, session.workspaceId, overlay);
+  const openPluginPanelName = pluginPanelNameOf(rightPanel);
+  // 开着的插件面板对应的页签没了（插件被停用 / 卸载 / 换到没启用它的工作区的会话）→ 收起。
+  // 等这份页签结果确是当前工作区的再判，别把「还没读完」当成「没有」
+  useEffect(() => {
+    if (openPluginPanelName === null) return;
+    const settled = !pluginsOn || pluginPanelTabs.loadedFor === session.workspaceId;
+    if (settled && !pluginPanelTabs.tabs.some((tab) => tab.name === openPluginPanelName)) setRightPanel(null);
+  }, [openPluginPanelName, pluginsOn, pluginPanelTabs, session.workspaceId]);
   const memoryScopes = useMemoryScopes(overlay === "memory");
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
@@ -1046,7 +1061,12 @@ export function App() {
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
             {overlay === "plugins" ? (
-              <PluginsView workspaces={session.workspaces} onMakeWithAgent={makePluginWithAgent} />
+              <PluginsView
+                workspaces={session.workspaces}
+                currentWorkspaceId={session.workspaceId}
+                onMakeWithAgent={makePluginWithAgent}
+                onOpenPanel={(name) => handlePanel(pluginPanelKind(name))}
+              />
             ) : overlay === "memory" ? (
               <MemoryLibraryView
                 nav={memoryNav}
@@ -1185,6 +1205,12 @@ export function App() {
                   entry={(mainSessionId === null ? undefined : engine.states.get(mainSessionId)) ?? EMPTY_ENTRY}
                   cwd={session.cwd ?? ""}
                 />
+              ) : pluginPanelNameOf(shownPanel) !== null ? (
+                // 插件面板：模板在沙箱 iframe 里，宿主只收发数据与动作（features/plugins/PluginPanel.tsx）
+                (() => {
+                  const tab = pluginPanelTabs.tabs.find((each) => each.name === pluginPanelNameOf(shownPanel));
+                  return tab === undefined ? null : <PluginPanel tab={tab} workspaceId={session.workspaceId} />;
+                })()
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1239,6 +1265,11 @@ export function App() {
                 }
               : null
           }
+          pluginPanels={pluginPanelTabs.tabs.map((tab) => ({
+            id: pluginPanelKind(tab.name),
+            title: tab.title,
+            initial: initialOf(tab.displayName),
+          }))}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }

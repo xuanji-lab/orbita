@@ -394,6 +394,14 @@ export const ipcChannels = {
   pluginReload: "plugin:reload",
   /** 读一条插件技能的 SKILL.md 原文（详情页「工作流」里点技能只读查看；入参插件名 + 技能 slug） */
   pluginSkillFile: "plugin:skill-file",
+  /** 插件面板（契约在 plugin-panel.ts）：这个工作区里已启用且带面板的插件，各一个右栏页签（入参工作区 id 或 null） */
+  pluginPanelTabs: "plugin:panel-tabs",
+  /** 载入 / 轮询一个面板：模板的 iframe 地址 + 数据文件内容；stamp 没变回 unchanged（只是 stat） */
+  pluginPanelLoad: "plugin:panel-load",
+  /** 模板里点按钮的回传：校验后原子追加到插件数据目录的 actions.jsonl，不做别的 */
+  pluginPanelAction: "plugin:panel-action",
+  /** 详情页「面板」「最近产出」：模板与数据路径（替换后）、数据与动作日志的更新时间和条数、解析问题 */
+  pluginPanelInfo: "plugin:panel-info",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];

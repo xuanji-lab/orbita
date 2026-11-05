@@ -123,7 +123,7 @@ export async function scanPlugin(root: string, fallbackName: string): Promise<Sc
 
 // ---------- 清单 ----------
 
-async function readManifest(
+export async function readManifest(
   root: string,
   problems: PluginProblem[],
 ): Promise<{ manifest: Record<string, unknown>; manifestFile: string | null }> {

@@ -13,6 +13,14 @@ import type {
   PluginScope,
   PluginSkillFile,
 } from "../../shared/plugin.ts";
+import type {
+  PluginPanelActionRequest,
+  PluginPanelActionResult,
+  PluginPanelInfo,
+  PluginPanelLoadRequest,
+  PluginPanelSnapshot,
+  PluginPanelTab,
+} from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 
 export const pluginApi = {
@@ -44,4 +52,16 @@ export const pluginApi = {
   reload: (): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReload),
   /** 一条插件技能的 SKILL.md 原文（只读查看） */
   skillFile: (name: string, slug: string): Promise<PluginSkillFile> => ipcRenderer.invoke(ipcChannels.pluginSkillFile, name, slug),
+  /** 右栏页签：这个工作区（null = Home）里已启用、带面板的插件 */
+  panelTabs: (workspaceId: string | null): Promise<PluginPanelTab[]> =>
+    ipcRenderer.invoke(ipcChannels.pluginPanelTabs, workspaceId),
+  /** 载入 / 轮询一个面板；stamp 没变回 unchanged */
+  panelLoad: (request: PluginPanelLoadRequest): Promise<PluginPanelSnapshot> =>
+    ipcRenderer.invoke(ipcChannels.pluginPanelLoad, request),
+  /** 模板里点按钮的回传：追加到插件数据目录的 actions.jsonl，不做别的；失败以数据返回 */
+  panelAction: (request: PluginPanelActionRequest): Promise<PluginPanelActionResult> =>
+    ipcRenderer.invoke(ipcChannels.pluginPanelAction, request),
+  /** 详情页「面板」「最近产出」；插件没声明面板为 null */
+  panelInfo: (name: string, workspaceId: string | null): Promise<PluginPanelInfo | null> =>
+    ipcRenderer.invoke(ipcChannels.pluginPanelInfo, name, workspaceId),
 } as const;

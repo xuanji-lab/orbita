@@ -20,18 +20,27 @@ import {
   type PluginSkillFile,
   type PluginSource,
 } from "../../shared/plugin.ts";
+import type {
+  PluginPanelActionResult,
+  PluginPanelInfo,
+  PluginPanelSnapshot,
+  PluginPanelTab,
+} from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import type { McpStore } from "../mcp/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { applyMcpScope, applySkillScope, mcpViews, skillViews } from "./legacy.ts";
+import type { PluginPanels } from "./panel-service.ts";
 import { parseScope } from "./records.ts";
 import type { PluginAgentRequests } from "./agent-requests.ts";
 import type { PluginStore } from "./store.ts";
 
 export function registerPluginIpc(deps: {
   plugins: PluginStore;
+  /** 插件面板（右栏页签 / 载入 / 动作 / 详情）；契约在 shared/plugin-panel.ts */
+  panels: PluginPanels;
   skills: SkillStore;
   mcp: McpStore;
   workspaces: WorkspaceStore;
@@ -40,7 +49,7 @@ export function registerPluginIpc(deps: {
   /** agent 的 install_plugin 确认卡的应答落在它身上 */
   agentRequests: PluginAgentRequests;
 }): void {
-  const { plugins, skills, mcp, workspaces } = deps;
+  const { plugins, panels, skills, mcp, workspaces } = deps;
 
   ipcMain.handle(ipcChannels.pluginList, async (): Promise<PluginListResult> => {
     let servers: Record<string, McpServer> = {};
@@ -127,6 +136,38 @@ export function registerPluginIpc(deps: {
     ipcChannels.agentAnswerPluginInstall,
     (_event, requestId: unknown, approve: unknown): Promise<void> => deps.agentRequests.answer(requireString(requestId, "requestId"), approve === true),
   );
+  // 面板：入参一律当不可信（renderer 被攻破时也不该能凭空读写别的插件 / 路径——这里只认插件名与工作区 id，
+  // 路径从不由 renderer 给）
+  ipcMain.handle(
+    ipcChannels.pluginPanelTabs,
+    (_event, workspaceId: unknown): Promise<PluginPanelTab[]> => panels.tabs(optionalId(workspaceId, "workspaceId")),
+  );
+
+  ipcMain.handle(ipcChannels.pluginPanelLoad, (_event, raw: unknown): Promise<PluginPanelSnapshot> => {
+    const request = requireRecord(raw, "panel load request");
+    return panels.load({
+      name: requireString(request["name"], "name"),
+      workspaceId: optionalId(request["workspaceId"], "workspaceId"),
+      stamp: request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp"),
+    });
+  });
+
+  ipcMain.handle(ipcChannels.pluginPanelAction, (_event, raw: unknown): Promise<PluginPanelActionResult> => {
+    const request = requireRecord(raw, "panel action request");
+    // action 不是字符串也不抛：交给 checkPanelAction 回 invalid，调用方一律拿到数据而不是异常
+    return panels.action({ name: requireString(request["name"], "name"), action: request["action"] as string, payload: request["payload"] });
+  });
+
+  ipcMain.handle(
+    ipcChannels.pluginPanelInfo,
+    (_event, name: unknown, workspaceId: unknown): Promise<PluginPanelInfo | null> =>
+      panels.info(requireString(name, "name"), optionalId(workspaceId, "workspaceId")),
+  );
+}
+
+function optionalId(value: unknown, what: string): string | null {
+  if (value === null || value === undefined) return null;
+  return requireString(value, what);
 }
 
 function requireRecord(value: unknown, what: string): Record<string, unknown> {
