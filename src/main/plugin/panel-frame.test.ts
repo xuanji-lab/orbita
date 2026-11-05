@@ -74,12 +74,12 @@ describe("PanelFrames", () => {
     assert.equal(frames.respond(url).status, 404);
   });
 
-  test("没取走的最多放 32 份，满了丢最旧的（renderer 反复开关面板不能无限涨内存）", () => {
+  test("没取走的最多放 96 份（够 24 张卡的看板同时开几处），满了丢最旧的（renderer 反复开关面板不能无限涨内存）", () => {
     const frames = new PanelFrames();
-    const urls = Array.from({ length: 40 }, (_, index) => frames.register(`<p>${index}</p>`));
-    assert.equal(frames.size(), 32);
+    const urls = Array.from({ length: 110 }, (_, index) => frames.register(`<p>${index}</p>`));
+    assert.equal(frames.size(), 96);
     assert.equal(frames.respond(urls[0] ?? "").status, 404);
-    assert.equal(frames.respond(urls[39] ?? "").status, 200);
+    assert.equal(frames.respond(urls[109] ?? "").status, 200);
   });
 });
 

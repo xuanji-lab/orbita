@@ -12,7 +12,7 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import { parsePluginInstallRow, type PluginAgentInstallOutcome, type PluginInstallRow } from "../../shared/plugin.ts";
 import type { SecretsPort } from "../provider/store.ts";
-import { PluginAgentRequests, draftPanelFiles, fingerprintOf, locateInside, needsLook, type PluginDraftEvent } from "./agent-requests.ts";
+import { PluginAgentRequests, draftBoardFiles, fingerprintOf, locateInside, needsLook, type PluginDraftEvent } from "./agent-requests.ts";
 import { PluginStore } from "./store.ts";
 
 class FakeSecrets implements SecretsPort {
@@ -432,7 +432,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
 describe("previewDraft：只扫描、不装；成功后让右栏打开「正在做」视图", () => {
   const preview = (path: string, sessionId = S) => requests.previewDraft({ type: "pluginPreviewRequest", requestId: "p1", sessionId, path });
 
-  /** UI 先行的草稿：只有清单 + 面板三件套，还没有技能 */
+  /** UI 先行的草稿：只有清单 + 一张卡的三件套，还没有技能 */
   async function makeDraft(over: { spec?: boolean; template?: boolean } = {}): Promise<string> {
     const root = join(workspaceRoot, "plugins", "draft");
     await put(
@@ -443,24 +443,28 @@ describe("previewDraft：只扫描、不装；成功后让右栏打开「正在�
         description: "文献追踪",
         orbita: {
           workflow: [{ title: "每日扫", skill: "draft-scan" }],
-          panel: { title: "文献追踪", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_ROOT}/data/panel.json", spec: "./panel/spec.md", sample: "./panel/sample.json" },
+          board: {
+            title: "文献追踪",
+            spec: "./board/spec.md",
+            cards: [{ id: "today", size: "2x1", template: "./board/today.html", data: "${CLAUDE_PLUGIN_ROOT}/data/today.json", sample: "./board/today.sample.json" }],
+          },
         },
       }),
     );
-    if (over.template !== false) await put(root, "panel/index.html", "<!doctype html><p>x</p>");
-    if (over.spec !== false) await put(root, "panel/spec.md", "# 卡片\n字段：问题句");
-    await put(root, "panel/sample.json", JSON.stringify({ items: [{ title: "x" }] }));
+    if (over.template !== false) await put(root, "board/today.html", "<!doctype html><p>x</p>");
+    if (over.spec !== false) await put(root, "board/spec.md", "# 卡片\n字段：问题句");
+    await put(root, "board/today.sample.json", JSON.stringify({ title: "x" }));
     return root;
   }
 
-  test("正常：回名字 / 面板文件都在，发 pluginDraft（带真实路径），什么都没装；技能还没写只算提醒", async () => {
+  test("正常：回名字 / 看板文件都在，发 pluginDraft（带真实路径），什么都没装；技能还没写只算提醒", async () => {
     const root = await makeDraft();
     const outcome = await preview(root);
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.name, "draft");
     assert.equal(outcome.path, await realpath(root));
-    assert.deepEqual(outcome.panelFiles.map((file) => [file.key, file.exists]), [["template", true], ["spec", true], ["sample", true], ["data", false]]);
+    assert.deepEqual(outcome.boardFiles.map((file) => [file.card, file.key, file.exists]), [[null, "spec", true], ["today", "template", true], ["today", "sample", true], ["today", "data", false]]);
     assert.equal(outcome.installed, false);
     assert.equal(outcome.issues.some((line) => /names the skill "draft-scan"/.test(line) && /must exist before install_plugin/.test(line)), true);
     assert.deepEqual(drafts, [{ type: "pluginDraft", sessionId: S, path: await realpath(root) }]);
@@ -468,28 +472,30 @@ describe("previewDraft：只扫描、不装；成功后让右栏打开「正在�
     assert.equal(installedCalls, 0);
   });
 
-  test("面板文件缺了：issues 里点名缺的是哪个键，pluginDraft 照发（草稿没做完很正常）", async () => {
+  test("看板文件缺了：issues 里点名缺的是哪个键，pluginDraft 照发（草稿没做完很正常）", async () => {
     const root = await makeDraft({ spec: false });
     const outcome = await preview(root);
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
-    assert.equal(outcome.issues.some((line) => /orbita\.panel\.spec points at \.\/panel\/spec\.md, which does not exist/.test(line)), true);
+    assert.equal(outcome.issues.some((line) => /orbita\.board\.spec points at \.\/board\/spec\.md, which does not exist/.test(line)), true);
     assert.equal(drafts.length, 1);
   });
 
-  test("清单里没有 panel 块：提醒右栏没有东西可显示", async () => {
+  test("清单里没有 board 块：提醒看板没有东西可显示", async () => {
     const root = await makePlugin("nopanel");
     const outcome = await preview(root);
-    assert.equal(outcome.ok && outcome.panelFiles.length, 0);
-    assert.equal(outcome.ok && outcome.issues.some((line) => /no "orbita\.panel" block/.test(line)), true);
+    assert.equal(outcome.ok && outcome.boardFiles.length, 0);
+    assert.equal(outcome.ok && outcome.issues.some((line) => /no "orbita\.board" block/.test(line)), true);
   });
 
-  test("面板路径用 .. 逃出插件根：算不存在", async () => {
+  test("看板卡的模板路径用 .. 逃出插件根：算不存在", async () => {
     const root = join(workspaceRoot, "plugins", "esc");
-    await put(root, ".claude-plugin/plugin.json", JSON.stringify({ name: "esc", orbita: { panel: { template: "../../secret.html" } } }));
+    await put(root, ".claude-plugin/plugin.json", JSON.stringify({ name: "esc", orbita: { board: { cards: [{ id: "a", size: "1x1", template: "../../secret.html" }] } } }));
     await put(workspaceRoot, "secret.html", "x");
-    const files = await draftPanelFiles(root, { manifestFile: ".claude-plugin/plugin.json" }, join(base, "d"));
-    assert.deepEqual(files, [{ key: "template", path: "../../secret.html", exists: false }]);
+    const previewed = await store.preview({ source: { kind: "folder", path: root }, mode: "link" });
+    assert.ok(previewed.ok);
+    const files = await draftBoardFiles(root, previewed.ok ? previewed.preview : { board: null }, join(base, "d"));
+    assert.deepEqual(files, [{ card: "a", key: "template", path: "../../secret.html", exists: false }]);
   });
 
   test("路径在工作区之外 / 不是插件 / 开关关着 / 会话不在：报错，且不发 pluginDraft", async () => {

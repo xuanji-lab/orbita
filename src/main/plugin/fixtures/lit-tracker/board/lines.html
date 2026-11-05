@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%}
+body{font:13px/1.4 var(--font-family-base,system-ui);background:#ece8f6;color:#2f2750;padding:14px;box-sizing:border-box}
+h2{margin:0 0 10px;font-size:12px;letter-spacing:.06em;color:#6a5fa0;font-weight:600}
+.row{display:grid;grid-template-columns:1fr auto;gap:4px 8px;margin-bottom:10px}
+.bar{grid-column:1/-1;height:4px;border-radius:2px;background:#d6cfec}
+.bar i{display:block;height:100%;border-radius:2px;background:#6a5fa0}
+</style></head><body><h2>在追的主线</h2><div id="l"></div>
+<script>
+addEventListener("message",function(e){var m=e.data;if(!m||m.type!=="orbita:data"||!m.data)return;var l=document.getElementById("l");l.innerHTML="";
+var max=Math.max.apply(null,m.data.lines.map(function(x){return x.added}))||1;
+m.data.lines.forEach(function(x){var r=document.createElement("div");r.className="row";var a=document.createElement("span");a.textContent=x.name;var b=document.createElement("b");b.textContent="+"+x.added;
+var bar=document.createElement("div");bar.className="bar";var i=document.createElement("i");i.style.width=(x.added/max*100)+"%";bar.appendChild(i);r.append(a,b,bar);l.appendChild(r)})});
+parent.postMessage({type:"orbita:ready"},"*");
+</script></body></html>

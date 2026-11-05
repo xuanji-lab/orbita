@@ -2,12 +2,27 @@
   "name": "lit-tracker",
   "displayName": "文献追踪",
   "version": "0.1.0",
-  "description": "按理念在 Semantic Scholar、OpenAlex 上找论文，每天轻扫、每周汇总，结果显示在右栏面板里。（测试夹具：只含面板，没有技能。）",
+  "description": "按理念在 Semantic Scholar、OpenAlex 上找论文，每天轻扫、每周汇总，结果显示在看板里。（测试夹具：只含看板，没有技能。）",
   "orbita": {
-    "panel": {
+    "workflow": [
+      { "title": "确认研究 idea", "detail": "把需求抽象成方法 / 问题 / 结论，你点「确认」才往下", "wait": "board" },
+      { "title": "每日轻扫", "detail": "每天 08:30 查新论文", "output": "data/today.json" },
+      { "title": "你读周报，标想深读的", "wait": "chat" }
+    ],
+    "io": {
+      "reads": [{ "path": "intent.md", "note": "10 条理念" }],
+      "writes": [{ "path": "data/today.json", "note": "看板读它", "when": "每天" }]
+    },
+    "external": [{ "name": "Semantic Scholar API", "kind": "api", "account": false, "resident": false, "note": "只在跑的时候联网" }],
+    "board": {
       "title": "文献追踪",
-      "template": "./panel/index.html",
-      "data": "${CLAUDE_PLUGIN_DATA}/panel.json"
-    }
+      "spec": "./board/spec.txt",
+      "cards": [
+        { "id": "today", "title": "今日一篇", "size": "2x1", "note": "标题 · 为什么挑它", "template": "./board/today.html", "data": "${CLAUDE_PLUGIN_DATA}/today.json", "sample": "./board/today.sample.json" },
+        { "id": "week", "title": "本周新进", "size": "1x1", "note": "数量 · 必读", "template": "./board/week.html", "sample": "./board/week.sample.json" },
+        { "id": "lines", "title": "在追的主线", "size": "1x2", "note": "主线与新增篇数", "template": "./board/lines.html", "sample": "./board/lines.sample.json" }
+      ]
+    },
+    "tuned": false
   }
 }

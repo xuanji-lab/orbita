@@ -11,6 +11,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parsePluginViewId,
   type PluginConfigValue,
+  type PluginDraftSnapshot,
   type PluginInstallRequest,
   type PluginInstallResult,
   type PluginListResult,
@@ -23,9 +24,10 @@ import {
   type PluginSource,
 } from "../../shared/plugin.ts";
 import type {
+  PluginBoardCardRef,
+  PluginBoardSnapshot,
+  PluginDraftLoadRequest,
   PluginPanelActionResult,
-  PluginPanelInfo,
-  PluginPanelSnapshot,
 } from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 import type { McpServer } from "../../shared/mcp.ts";
@@ -40,7 +42,7 @@ import type { PluginStore } from "./store.ts";
 
 export function registerPluginIpc(deps: {
   plugins: PluginStore;
-  /** 插件面板（右栏页签 / 载入 / 动作 / 详情）；契约在 shared/plugin-panel.ts */
+  /** 插件看板（载入 / 草稿 / 动作）；契约在 shared/plugin-panel.ts */
   panels: PluginPanels;
   skills: SkillStore;
   mcp: McpStore;
@@ -147,41 +149,43 @@ export function registerPluginIpc(deps: {
     return deps.agentRequests.installFromRow(checked);
   });
 
-  // 面板：入参一律当不可信（renderer 被攻破时也不该能凭空读写别的插件 / 路径——这里只认插件名与工作区 id，
+  // 看板：入参一律当不可信（renderer 被攻破时也不该能凭空读写别的插件 / 路径——这里只认插件名与工作区 id，
   // 路径从不由 renderer 给）
-  ipcMain.handle(ipcChannels.pluginPanelLoad, (_event, raw: unknown): Promise<PluginPanelSnapshot> => {
-    const request = requireRecord(raw, "panel load request");
+  const stampOf = (request: Record<string, unknown>): string | null =>
+    request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp");
+
+  ipcMain.handle(ipcChannels.pluginBoardLoad, (_event, raw: unknown): Promise<PluginBoardSnapshot> => {
+    const request = requireRecord(raw, "board load request");
     return panels.load({
       name: requireString(request["name"], "name"),
       workspaceId: optionalId(request["workspaceId"], "workspaceId"),
-      stamp: request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp"),
+      stamp: stampOf(request),
     });
   });
 
   // 草稿预览：path 来自 renderer（它收到 agent 的 pluginDraft 事件后原样带来），当不可信——
-  // 这里只做形状校验，路径在不在该工作区根之内由 PluginPanels.loadDraft 判（词法 + realpath）
-  ipcMain.handle(ipcChannels.pluginDraftLoad, (_event, raw: unknown): Promise<PluginPanelSnapshot> => {
+  // 这里只做形状校验，路径在不在该工作区根之内由 PluginPanels 判（词法 + realpath）
+  const draftRequest = (raw: unknown): PluginDraftLoadRequest => {
     const request = requireRecord(raw, "draft load request");
     const path = requireString(request["path"], "path");
     if (path.length > 4096) throw new Error("Invalid path");
-    return panels.loadDraft({
-      path,
-      workspaceId: optionalId(request["workspaceId"], "workspaceId"),
-      stamp: request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp"),
-    });
-  });
+    return { path, workspaceId: optionalId(request["workspaceId"], "workspaceId"), stamp: stampOf(request) };
+  };
+  ipcMain.handle(ipcChannels.pluginDraftLoad, (_event, raw: unknown): Promise<PluginDraftSnapshot> => panels.loadDraftView(draftRequest(raw)));
+  ipcMain.handle(ipcChannels.pluginDraftBoardLoad, (_event, raw: unknown): Promise<PluginBoardSnapshot> => panels.loadDraftBoard(draftRequest(raw)));
 
   ipcMain.handle(ipcChannels.pluginPanelAction, (_event, raw: unknown): Promise<PluginPanelActionResult> => {
     const request = requireRecord(raw, "panel action request");
     // action 不是字符串也不抛：交给 checkPanelAction 回 invalid，调用方一律拿到数据而不是异常
-    return panels.action({ name: requireString(request["name"], "name"), action: request["action"] as string, payload: request["payload"] });
+    const rawCard = request["card"];
+    let card: PluginBoardCardRef | undefined;
+    if (rawCard !== undefined && rawCard !== null) {
+      const ref = requireRecord(rawCard, "card");
+      if (typeof ref["index"] !== "number") throw new Error("Invalid card");
+      card = { id: requireString(ref["id"], "card.id"), index: ref["index"] };
+    }
+    return panels.action({ name: requireString(request["name"], "name"), action: request["action"] as string, payload: request["payload"], ...(card === undefined ? {} : { card }) });
   });
-
-  ipcMain.handle(
-    ipcChannels.pluginPanelInfo,
-    (_event, name: unknown, workspaceId: unknown): Promise<PluginPanelInfo | null> =>
-      panels.info(requireString(name, "name"), optionalId(workspaceId, "workspaceId")),
-  );
 }
 
 function optionalId(value: unknown, what: string): string | null {

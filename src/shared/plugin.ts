@@ -251,6 +251,10 @@ export interface PluginPreview {
   skills: PluginSkillInfo[];
   /** 清单 `orbita.workflow` 解析后的步骤；没写为空数组 */
   workflow: PluginWorkflowStep[];
+  io: PluginIo;
+  external: PluginExternal[];
+  board: PluginBoardInfo | null;
+  tuned: boolean;
   mcp: PluginMcpInfo[];
   unsupported: PluginUnsupported[];
   config: PluginConfigField[];

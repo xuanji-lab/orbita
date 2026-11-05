@@ -15,9 +15,9 @@
  *   **宽容一处**：规格要求以 `./` 开头，但 ZCode 官方清单写的是 `"skills": "skills"`，
  *   第二期市场要装它们，所以不带 `./` 的相对路径照认（含 `..` 与逃逸的仍拒绝）。
  *
- * 清单里 Orbita 自己的扩展 `orbita.workflow`（给人看的步骤列表）见 workflow.ts。
+ * 清单里 Orbita 自己的扩展：`orbita.workflow` 见 workflow.ts，`io` / `external` / `tuned` 见 extras.ts，`board` 见 board.ts。
  *
- * 其余组件（commands / agents / hooks / lsp / 输出风格 / monitors / bin / 面板 / channels …）
+ * 其余组件（commands / agents / hooks / lsp / 输出风格 / monitors / bin / channels …）
  * 解析出名字列进 `unsupported`，不加载、但不静默丢。
  */
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
@@ -25,6 +25,8 @@ import { basename, isAbsolute, join, sep } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
 import { parseSkillMd } from "../skill/store.ts";
 import { parseServer, type McpServer } from "../../shared/mcp.ts";
+import { parseBoard } from "./board.ts";
+import { parseExternal, parseIo, parseTuned } from "./extras.ts";
 import { parseWorkflow } from "./workflow.ts";
 import {
   isPluginName,
@@ -37,9 +39,10 @@ import {
   type PluginUnsupportedKind,
   type PluginWorkflowStep,
 } from "../../shared/plugin.ts";
+import type { PluginBoardInfo, PluginExternal, PluginIo } from "../../shared/plugin-board.ts";
 
 /** 清单 `orbita` 对象里认识的子键（约定见 shared/plugin.ts）；别的列进「暂不支持」。 */
-const ORBITA_KNOWN_KEYS = ["workflow", "panel"];
+const ORBITA_KNOWN_KEYS = ["workflow", "io", "external", "board", "tuned", "panel"];
 
 /** 「暂不支持」里每类最多列几个名字（数量以 count 为准）。 */
 const UNSUPPORTED_ITEMS_MAX = 6;
@@ -78,6 +81,11 @@ export interface ScannedPlugin {
   skills: DiscoveredSkill[];
   /** 清单 `orbita.workflow`：给人看的步骤（没写为空数组） */
   workflow: PluginWorkflowStep[];
+  /** 清单 `orbita.io` / `external` / `board` / `tuned`（都是给人看或给宿主画的，不执行） */
+  io: PluginIo;
+  external: PluginExternal[];
+  board: PluginBoardInfo | null;
+  tuned: boolean;
   mcpServers: ScannedMcpServer[];
   unsupported: PluginUnsupported[];
   hasScripts: boolean;
@@ -98,12 +106,13 @@ export async function scanPlugin(root: string, fallbackName: string): Promise<Sc
   const skills = await discoverSkills(root, realRoot, rawName, manifest, problems);
   const mcpServers = await discoverMcp(root, realRoot, manifest, problems);
   const unsupported = await detectUnsupported(root, manifest, mcpServers.bundles);
+  const displayName = typeof manifest["displayName"] === "string" && manifest["displayName"] !== "" ? manifest["displayName"] : rawName;
   const hasScripts = await isDirectory(join(root, "scripts"));
 
   return {
     name: rawName,
     nameValid: isPluginName(rawName),
-    displayName: typeof manifest["displayName"] === "string" && manifest["displayName"] !== "" ? manifest["displayName"] : rawName,
+    displayName,
     version: typeof manifest["version"] === "string" && manifest["version"] !== "" ? manifest["version"] : null,
     description: typeof manifest["description"] === "string" ? manifest["description"] : "",
     author,
@@ -112,6 +121,10 @@ export async function scanPlugin(root: string, fallbackName: string): Promise<Sc
     config: parseUserConfig(manifest["userConfig"], problems),
     skills,
     workflow: parseWorkflow(manifest, skills, problems),
+    io: parseIo(manifest, problems),
+    external: parseExternal(manifest, problems),
+    board: parseBoard(manifest, displayName, problems),
+    tuned: parseTuned(manifest, problems),
     mcpServers: mcpServers.servers,
     unsupported,
     hasScripts,

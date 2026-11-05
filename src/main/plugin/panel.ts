@@ -1,5 +1,5 @@
 /**
- * 插件面板的解析与读写（纯函数 + 文件读写，不碰 Electron）：清单 `orbita.panel` 的字段、
+ * 看板卡的路径与读写（纯函数 + 文件读写，不碰 Electron；清单 `orbita.board` 的解析在 board.ts）：
  * 模板与数据路径的校验与变量替换、数据文件读取、动作日志的追加与限速。
  *
  * **模板是不可信输入**（agent 生成或第三方插件带来），所以：
@@ -11,7 +11,7 @@
  * - 动作日志有整份上限与限速，模板失控也写不满磁盘。
  *
  * 清单里还有两个可选的辅助文件：`spec`（模板说明，markdown，宿主渲染）与 `sample`（样例数据，
- * 数据文件不存在 / 为空时用它渲染）。路径规则同模板，读不出来只是少一块、不拦面板。
+ * 数据文件不存在 / 为空时用它渲染）。路径规则同模板，读不出来只是少一块、不拦卡。
  */
 import { mkdir, open, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -29,67 +29,8 @@ import {
 import { resolveComponentPath } from "./manifest.ts";
 import { DATA_NAMES, PROJECT_NAMES, ROOT_NAMES } from "./vars.ts";
 
-// ---------- 清单 ----------
-
-export interface PanelSpec {
-  title: string;
-  /** 清单原文（相对插件根） */
-  template: string;
-  /** 清单原文（含变量） */
-  data: string;
-  /** 模板说明 / 样例数据的清单原文（相对插件根）；没写为 null */
-  spec: string | null;
-  sample: string | null;
-}
-
-export interface PanelParse {
-  /** 清单里有没有 `orbita.panel`（没有 = 插件不带面板，不报问题） */
-  declared: boolean;
-  spec: PanelSpec | null;
-  /** 让面板整个出不来的问题（spec 为 null 时才有） */
-  problems: PluginPanelProblem[];
-  /** 不拦面板的问题：spec / sample 写成了不认识的形状 */
-  notices: PluginPanelProblem[];
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * 读清单里的 `orbita.panel`。title 缺省退回插件显示名（宽容：标题不是安全相关字段）；
- * template 与 data 必填，缺了 / 类型不对报 `shape` 并不给 spec。
- */
-export function parsePanelSpec(manifest: Record<string, unknown>, fallbackTitle: string): PanelParse {
-  const orbita = manifest["orbita"];
-  if (!isRecord(orbita) || orbita["panel"] === undefined) return { declared: false, spec: null, problems: [], notices: [] };
-  const panel = orbita["panel"];
-  if (!isRecord(panel)) return { declared: true, spec: null, problems: [{ kind: "shape", detail: "panel" }], notices: [] };
-  const problems: PluginPanelProblem[] = [];
-  const template = panel["template"];
-  const data = panel["data"];
-  if (typeof template !== "string" || template.trim() === "") problems.push({ kind: "shape", detail: "template" });
-  if (typeof data !== "string" || data.trim() === "") problems.push({ kind: "shape", detail: "data" });
-  if (problems.length > 0) return { declared: true, spec: null, problems, notices: [] };
-  const title = typeof panel["title"] === "string" && panel["title"].trim() !== "" ? panel["title"].trim() : fallbackTitle;
-  const notices: PluginPanelProblem[] = [];
-  const optionalPath = (field: "spec" | "sample"): string | null => {
-    const value = panel[field];
-    if (value === undefined || value === null) return null;
-    if (typeof value !== "string" || value.trim() === "") {
-      notices.push({ kind: "shape", detail: field });
-      return null;
-    }
-    return value.trim();
-  };
-  const specPath = optionalPath("spec");
-  const samplePath = optionalPath("sample");
-  return {
-    declared: true,
-    spec: { title, template: (template as string).trim(), data: (data as string).trim(), spec: specPath, sample: samplePath },
-    problems: [],
-    notices,
-  };
 }
 
 // ---------- 路径 ----------
@@ -196,14 +137,14 @@ export type PanelFileResult =
 /** 保留旧名：模板与另外两个辅助文件走同一条定位规则，返回形状一样 */
 export type PanelTemplateResult = PanelFileResult;
 
-/** 三种面板文件各自的问题分类与大小上限。 */
+/** 三种看板文件各自的问题分类与大小上限。 */
 const FILE_KINDS = {
   template: {
     escape: "template-escape",
     missing: "template-missing",
     unreadable: "template-unreadable",
     tooLarge: "template-too-large",
-    label: "panel.template",
+    label: "board.template",
     maxBytes: PANEL_TEMPLATE_MAX_BYTES,
   },
   spec: {
@@ -211,7 +152,7 @@ const FILE_KINDS = {
     missing: "spec-missing",
     unreadable: "spec-unreadable",
     tooLarge: "spec-too-large",
-    label: "panel.spec",
+    label: "board.spec",
     maxBytes: PANEL_SPEC_MAX_BYTES,
   },
   sample: {
@@ -219,7 +160,7 @@ const FILE_KINDS = {
     missing: "sample-missing",
     unreadable: "sample-unreadable",
     tooLarge: "sample-too-large",
-    label: "panel.sample",
+    label: "board.sample",
     maxBytes: PANEL_DATA_MAX_BYTES,
   },
 } as const;
@@ -231,7 +172,7 @@ function fileProblem(kind: PluginPanelProblem["kind"], detail: string): PluginPa
 }
 
 /**
- * 面板文件（模板 / 说明 / 样例）的路径解析 + 是文件 + 没超限，返回一个轻量的 stamp（不读内容）。
+ * 看板文件（模板 / 说明 / 样例）的路径解析 + 是文件 + 没超限，返回一个轻量的 stamp（不读内容）。
  * 路径规则同其它组件路径（`resolveComponentPath`）：含 `..`、绝对路径、符号链接逃逸一律拒。
  * 读不了的情况（权限、不是目录……）也以问题返回，不抛——这三个文件里任何一个坏了都不该让轮询报错。
  */
@@ -265,14 +206,17 @@ export async function readPanelSpec(abs: string): Promise<{ ok: true; text: stri
   }
 }
 
+/** 数据文件读不出来的原因换成样例的问题分类（sample-*）。 */
+export function sampleProblemOf(problem: PluginPanelDataProblem): PluginPanelProblem {
+  if (problem.kind === "too-large") return fileProblem("sample-too-large", String(problem.bytes));
+  if (problem.kind === "invalid-json") return fileProblem("sample-invalid", problem.message);
+  return fileProblem("sample-unreadable", problem.message);
+}
+
 /** 样例数据：读法与数据文件一样（≤ 2 MB、合法 JSON、空算没有）；读不出来的原因换成 sample-* 分类。 */
 export async function readPanelSample(abs: string): Promise<{ ok: true; data: PluginPanelData } | { ok: false; problem: PluginPanelProblem }> {
   const data = await readPanelData(abs);
-  if (data.kind !== "problem") return { ok: true, data };
-  const problem = data.problem;
-  if (problem.kind === "too-large") return { ok: false, problem: fileProblem("sample-too-large", String(problem.bytes)) };
-  if (problem.kind === "invalid-json") return { ok: false, problem: fileProblem("sample-invalid", problem.message) };
-  return { ok: false, problem: fileProblem("sample-unreadable", problem.message) };
+  return data.kind === "problem" ? { ok: false, problem: sampleProblemOf(data.problem) } : { ok: true, data };
 }
 
 export async function readPanelTemplate(abs: string): Promise<{ ok: true; html: string } | { ok: false; problem: PluginPanelProblem }> {
@@ -307,7 +251,7 @@ export async function statDataFile(path: string): Promise<DataStat> {
 }
 
 /**
- * 读数据文件。不存在 / 空白 / 顶层是 null、`{}`、`[]` 都算「空」（面板显示空态）；超过 2 MB 不读直接报
+ * 读数据文件。不存在 / 空白 / 顶层是 null、`{}`、`[]` 都算「空」（卡显示空态）；超过 2 MB 不读直接报
  * too-large；JSON 写坏报 invalid-json（agent 非原子地写到一半时会碰到，调用方留着上一份好数据）。
  */
 export async function readPanelData(path: string): Promise<PluginPanelData> {
@@ -345,15 +289,22 @@ function isEmptyJson(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length === 0;
 }
 
-/** 详情页「最近产出」的条数：顶层数组的长度，或顶层对象里最长的数组属性的长度；别的形状为 null。 */
-export function itemCountOf(value: unknown): number | null {
-  if (Array.isArray(value)) return value.length;
-  if (!isRecord(value)) return null;
-  let best: number | null = null;
-  for (const entry of Object.values(value)) {
-    if (Array.isArray(entry) && (best === null || entry.length > best)) best = entry.length;
-  }
-  return best;
+// ---------- repeat ----------
+
+/**
+ * `repeat` 展开：数据（或样例）里顶层数组属性的每一项各一张卡。
+ * - `items`：有项，一项一张；
+ * - `none`：没有数据 / 数据有问题 / 数组是空的——调用方画一张占位卡（数据原样传，模板自己画空态）；
+ * - `not-array`：数据有值但这个属性不是数组（清单与数据对不上），这块声明不出卡并报问题。
+ */
+export type RepeatExpansion = { kind: "items"; items: unknown[] } | { kind: "none" } | { kind: "not-array" };
+
+export function expandRepeat(data: PluginPanelData, key: string): RepeatExpansion {
+  if (data.kind !== "ready") return { kind: "none" };
+  if (!isRecord(data.value) || !Object.hasOwn(data.value, key)) return { kind: "not-array" };
+  const list = data.value[key];
+  if (!Array.isArray(list)) return { kind: "not-array" };
+  return list.length === 0 ? { kind: "none" } : { kind: "items", items: list };
 }
 
 // ---------- 动作日志 ----------
@@ -408,22 +359,6 @@ export async function appendActionLine(file: string, line: string, maxBytes: num
   } finally {
     await handle.close();
   }
-}
-
-/** 动作日志此刻的状态：最后修改时间与条数（非空行）。文件不存在 = 没有；超过 8 MB 不数（条数 null）。 */
-export async function readActionsInfo(file: string): Promise<{ updatedAt: number | null; count: number | null }> {
-  let info;
-  try {
-    info = await stat(file);
-  } catch (error) {
-    if (isNotFound(error) || errorCode(error) === "ENOTDIR") return { updatedAt: null, count: 0 };
-    throw error;
-  }
-  if (!info.isFile()) return { updatedAt: null, count: 0 };
-  const updatedAt = Math.floor(info.mtimeMs);
-  if (info.size > 8 * 1024 * 1024) return { updatedAt, count: null };
-  const text = await readFile(file, "utf8");
-  return { updatedAt, count: text.split("\n").filter((line) => line.trim() !== "").length };
 }
 
 function errorText(error: unknown): string {
