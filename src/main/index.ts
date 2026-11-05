@@ -477,13 +477,20 @@ void app.whenReady().then(async () => {
       );
       return;
     }
-    // 插件（实验功能 plugins）：agent 的 install_plugin（等用户在对话里点确认卡才回执）/ list_plugins。
+    // 插件（实验功能 plugins）：agent 的 install_plugin / preview_plugin / list_plugins，都立即回执（不等用户）。
     // 任何路径都回执，否则 agent 进程里那次工具调用挂到超时
     if (event.type === "pluginInstallRequest") {
       void pluginAgent
         .install(event)
         .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
         .then((outcome) => agentHost.answerPluginInstall(event.requestId, outcome));
+      return;
+    }
+    if (event.type === "pluginPreviewRequest") {
+      void pluginAgent
+        .previewDraft(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginPreview(event.requestId, outcome));
       return;
     }
     if (event.type === "pluginListRequest") {
@@ -493,8 +500,6 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerPluginList(event.requestId, outcome));
       return;
     }
-    // 这一轮停了：还没应答的安装确认卡按取消结掉（renderer 那头随 idle 收卡；**不 return**，事件照常往下走）
-    if (event.type === "phase" && event.phase === "idle") pluginAgent.cancelSession(event.sessionId);
     // 子会话：delegate 工具 / 通道发信请求——照 readTaskRequest 的形态，任何路径
     // 都必须回执，否则 agent 进程里的工具调用永远挂着。deps 声明在本文件靠后的
     // 位置（拿 registerAgentIpc 返回的 submitTurn），这里引用它安全：onEvent 只在
@@ -936,7 +941,8 @@ void app.whenReady().then(async () => {
   void plugins.init().catch((error: unknown) => {
     console.error("[main] 清不了插件暂存目录（不影响使用，下次启动再试）", error);
   });
-  // agent 的 install_plugin / list_plugins 在主进程的落地（确认卡经 broadcastAgentEvent 到 renderer，应答走 plugin ipc）
+  // agent 的 install_plugin / preview_plugin / list_plugins 在主进程的落地（草稿与刷新事件经 broadcastAgentEvent 到 renderer；
+  // 对话里那一行的「安装」走 plugin ipc 的 pluginInstallFromRow）
   const pluginAgent = new PluginAgentRequests({
     plugins,
     enabled: async () => (await settings.read()).experimentalFeatures?.["plugins"] === true,
@@ -948,7 +954,7 @@ void app.whenReady().then(async () => {
       const found = (await workspaces.list()).find((workspace) => workspace.id === id);
       return found === undefined ? null : { name: found.name, path: found.path };
     },
-    ask: (event) => broadcastAgentEvent(event),
+    draft: (event) => broadcastAgentEvent(event),
     installed: () => {
       broadcastAgentEvent({ type: "pluginsChanged" });
       broadcastAgentEvent({ type: "skillsChanged" });

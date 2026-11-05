@@ -1,18 +1,39 @@
 /**
- * 插件工具（实验功能 plugins）的账：参数校验、参数翻成 pluginInstallRequest / pluginListRequest、
- * 回执翻成工具结果、这一轮被停掉就放手。落地在主进程（main/plugin/agent-requests.ts）。
+ * 插件工具（实验功能 plugins）的账：参数校验、参数翻成 pluginInstallRequest / pluginPreviewRequest / pluginListRequest、
+ * 回执翻成工具结果（含那一行的 details）、这一轮被停掉就放手。落地在主进程（main/plugin/agent-requests.ts）。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
-import { createPluginTools, describeInstalled, describePlugins, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
+import type { PermissionMode } from "../shared/permission.ts";
+import type { PluginInstallRow } from "../shared/plugin.ts";
+import { createPluginTools, describeInstalled, describePlugins, describePreview, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 
-const setup = (): { tools: ReturnType<typeof createPluginTools>; sent: Record<string, unknown>[]; broker: RequestBroker } => {
+const setup = (mode: PermissionMode = "skip"): { tools: ReturnType<typeof createPluginTools>; sent: Record<string, unknown>[]; broker: RequestBroker } => {
   const sent: Record<string, unknown>[] = [];
   const broker = new RequestBroker((event) => {
     sent.push(event as Record<string, unknown>);
   });
-  return { tools: createPluginTools(broker, "session-1"), sent, broker };
+  return { tools: createPluginTools(broker, "session-1", () => mode), sent, broker };
+};
+
+const ROW: PluginInstallRow = {
+  state: "installed",
+  reason: null,
+  name: "lit",
+  displayName: "文献追踪",
+  path: "/ws/plugins/lit",
+  scope: "workspace",
+  workspaceName: "文献组",
+  skills: ["lit-scan"],
+  commands: [],
+  fingerprint: "abc",
+};
+
+const preview = (tools: ReturnType<typeof createPluginTools>) => {
+  const tool = tools.find((each) => each.name === "preview_plugin");
+  assert.ok(tool !== undefined);
+  return tool;
 };
 
 const install = (tools: ReturnType<typeof createPluginTools>) => {
@@ -27,21 +48,62 @@ describe("install_plugin", () => {
     assert.deepEqual(tools.map((tool) => tool.name), [...PLUGIN_TOOL_NAMES]);
   });
 
-  test("参数翻成 pluginInstallRequest（带 sessionId）；回执 ok → 告诉模型已装、范围、技能；链接所以改动下一轮生效", async () => {
-    const { tools, sent, broker } = setup();
+  test("参数翻成 pluginInstallRequest（带 sessionId 与此刻的权限档）；回执 installed → 告诉模型已装、范围、技能，那一行进 details", async () => {
+    const { tools, sent, broker } = setup("skip");
     const pending = install(tools).execute("c1", { path: "  /ws/plugins/lit  ", scope: "workspace" }, undefined, undefined, undefined as never);
     const request = sent[0];
     assert.equal(request?.["type"], "pluginInstallRequest");
     assert.equal(request?.["sessionId"], "session-1");
     assert.equal(request?.["path"], "/ws/plugins/lit");
     assert.equal(request?.["scope"], "workspace");
-    broker.resolve(String(request?.["requestId"]), { ok: true, name: "lit", scope: "workspace", already: false, skills: ["lit-scan"], mcp: [], dataDir: "/u/plugin-data/lit" });
+    assert.equal(request?.["mode"], "skip");
+    broker.resolve(String(request?.["requestId"]), { ok: true, kind: "installed", name: "lit", scope: "workspace", skills: ["lit-scan"], mcp: [], dataDir: "/u/plugin-data/lit", row: ROW });
     const result = await pending;
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Installed plugin "lit" for this workspace/);
     assert.match(text, /skills: lit-scan/);
     assert.match(text, /next turn/);
     assert.match(text, /Plugin data folder: \/u\/plugin-data\/lit .*actions\.jsonl/);
+    assert.deepEqual(result.details, { pluginInstall: ROW });
+  });
+
+  test("权限档每次现读：会话中途切到 manual，下一次请求带的就是 manual", () => {
+    let mode: PermissionMode = "skip";
+    const sent: Record<string, unknown>[] = [];
+    const broker = new RequestBroker((event) => {
+      sent.push(event as Record<string, unknown>);
+    });
+    const tools = createPluginTools(broker, "s", () => mode);
+    void install(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
+    mode = "manual";
+    void install(tools).execute("c2", { path: "/p" }, undefined, undefined, undefined as never);
+    assert.deepEqual(sent.map((event) => event["mode"]), ["skip", "manual"]);
+  });
+
+  test("回执 pending：不说「装好了」，告诉模型没装、为什么、结束这一轮、别再调；那一行进 details", async () => {
+    const { tools, sent, broker } = setup("skip");
+    const pending = install(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
+    const row: PluginInstallRow = { ...ROW, state: "pending", reason: "mcp", commands: ["node server.js"] };
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: true, kind: "pending", name: "lit", scope: "workspace", skills: ["lit-scan"], mcp: ["srv"], row });
+    const result = await pending;
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Not installed yet/);
+    assert.match(text, /was NOT installed because it starts an MCP server/);
+    assert.match(text, /\[Install\] and \[Details\]/);
+    assert.match(text, /End your turn now/);
+    assert.match(text, /Do not repeat the command or the reason/);
+    assert.match(text, /do not call install_plugin again/);
+    assert.doesNotMatch(text, /^Installed plugin/);
+    assert.deepEqual(result.details, { pluginInstall: row });
+  });
+
+  test("回执 already：没有那一行（details 为空），话里说明没有新东西", async () => {
+    const { tools, sent, broker } = setup();
+    const pending = install(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: true, kind: "already", name: "lit", scope: "workspace", skills: ["lit-scan"], mcp: [], dataDir: "/d", row: null });
+    const result = await pending;
+    assert.equal(result.details, undefined);
+    assert.match((result.content[0] as { text: string }).text, /already installed/);
   });
 
   test("scope 省略 → 请求里为 null（由主进程按会话归属定默认）", () => {
@@ -50,11 +112,11 @@ describe("install_plugin", () => {
     assert.equal(sent[0]?.["scope"], null);
   });
 
-  test("回执失败（拒绝 / 越界 / 清单有问题）→ 抛错，原因原样给模型", async () => {
+  test("回执失败（越界 / 清单有问题）→ 抛错，原因原样给模型", async () => {
     const { tools, sent, broker } = setup();
     const pending = install(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
-    broker.resolve(String(sent[0]?.["requestId"]), { ok: false, error: "The user declined to install the plugin." });
-    await assert.rejects(pending, /The user declined/);
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: false, error: "The plugin folder has problems" });
+    await assert.rejects(pending, /has problems/);
   });
 
   test("参数校验：缺 path / 空 path / 非法 scope 直接报，不发请求", async () => {
@@ -66,7 +128,7 @@ describe("install_plugin", () => {
     assert.equal(sent.length, 0);
   });
 
-  test("等用户点卡的时候这一轮被停掉：立刻放手（Stopped），不挂着", async () => {
+  test("这一轮被停掉：立刻放手（Stopped），不挂着", async () => {
     const { tools } = setup();
     const controller = new AbortController();
     const pending = install(tools).execute("c1", { path: "/p" }, controller.signal, undefined, undefined as never);
@@ -78,13 +140,68 @@ describe("install_plugin", () => {
     assert.equal(sent.length, 0);
   });
 
-  test("说明里讲了会弹确认卡、链接安装、先在弹卡前报错", () => {
+  test("不再挂起等用户：请求不带 15 分钟超时（走 broker 的默认兜底），说明里没有「等用户点」", () => {
     const { tools } = setup();
     const description = install(tools).description;
-    assert.match(description, /confirmation card/);
+    assert.doesNotMatch(description, /waits until they press/);
+    assert.doesNotMatch(description, /confirmation card/);
+    assert.match(description, /returns immediately; it never waits for the user/);
+  });
+
+  test("说明里讲了先在对话里问一句、两种结局、链接安装、范围、路径", () => {
+    const { tools } = setup();
+    const description = install(tools).description;
+    assert.match(description, /FIRST ask the user, in one plain sentence/);
+    assert.match(description, /"Installed"/);
+    assert.match(description, /"Not installed yet"/);
+    assert.match(description, /Manual permission mode/);
     assert.match(description, /LINK/);
-    assert.match(description, /BEFORE the card/);
     assert.match(description, /<workspace>\/plugins\/<name>\//);
+  });
+});
+
+describe("preview_plugin", () => {
+  test("参数翻成 pluginPreviewRequest；回执 → 告诉模型右栏现在显示草稿、之后自己刷新别再调、要修的东西", async () => {
+    const { tools, sent, broker } = setup();
+    const pending = preview(tools).execute("c1", { path: " /ws/plugins/lit " }, undefined, undefined, undefined as never);
+    assert.equal(sent[0]?.["type"], "pluginPreviewRequest");
+    assert.equal(sent[0]?.["sessionId"], "session-1");
+    assert.equal(sent[0]?.["path"], "/ws/plugins/lit");
+    broker.resolve(String(sent[0]?.["requestId"]), {
+      ok: true,
+      name: "lit",
+      path: "/ws/plugins/lit",
+      skills: [],
+      workflow: ["扫"],
+      panelFiles: [{ key: "template", path: "./panel/index.html", exists: true }, { key: "spec", path: "./panel/spec.md", exists: false }],
+      issues: ["orbita.panel.spec points at ./panel/spec.md, which does not exist"],
+      installed: false,
+    });
+    const result = await pending;
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /right pane now shows the draft "lit"/);
+    assert.match(text, /do not need to call preview_plugin again/);
+    assert.match(text, /skills: none yet/);
+    assert.match(text, /template \.\/panel\/index\.html; spec \.\/panel\/spec\.md \(MISSING\)/);
+    assert.match(text, /Things to fix/);
+    assert.equal(result.details, undefined);
+  });
+
+  test("失败回执（越界 / 不是插件）→ 抛错；缺 path 不发请求", async () => {
+    const { tools, sent, broker } = setup();
+    const pending = preview(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: false, error: "outside this session's workspace" });
+    await assert.rejects(pending, /outside this session's workspace/);
+    await assert.rejects(preview(tools).execute("c2", {}, undefined, undefined, undefined as never), /non-empty path/);
+    assert.equal(sent.length, 1);
+  });
+
+  test("说明里讲了「只显示不安装」「调一次、之后自己刷新」", () => {
+    const { tools } = setup();
+    const description = preview(tools).description;
+    assert.match(description, /WITHOUT installing it/);
+    assert.match(description, /do NOT call it again after every edit/);
+    assert.match(description, /panel\/sample\.json/);
   });
 });
 
@@ -117,11 +234,24 @@ describe("list_plugins", () => {
 });
 
 describe("回给模型的话", () => {
-  test("describeInstalled：already 不说「装好了」而说没弹卡；global 说所有工作区；带 MCP", () => {
-    assert.match(describeInstalled({ ok: true, name: "x", scope: "global", already: false, skills: [], mcp: ["srv"], dataDir: "" }), /for all workspaces \(MCP servers: srv\)/);
-    const already = describeInstalled({ ok: true, name: "x", scope: "workspace", already: true, skills: ["a", "b"], mcp: [], dataDir: "/d" });
+  test("describeInstalled：global 说所有工作区；带 MCP；already 说没有新东西；pending 说没装", () => {
+    const global = describeInstalled({ ok: true, kind: "installed", name: "x", scope: "global", skills: [], mcp: ["srv"], dataDir: "", row: { ...ROW, scope: "global" } });
+    assert.match(global, /for all workspaces \(MCP servers: srv\)/);
+    const already = describeInstalled({ ok: true, kind: "already", name: "x", scope: "workspace", skills: ["a", "b"], mcp: [], dataDir: "/d", row: null });
     assert.match(already, /already installed/);
-    assert.match(already, /no card was shown/);
+    assert.match(already, /nothing new was shown/);
+    const manual = describeInstalled({ ok: true, kind: "pending", name: "x", scope: "workspace", skills: [], mcp: [], row: { ...ROW, state: "pending", reason: "manual" } });
+    assert.match(manual, /Manual permission mode/);
+    const everywhere = describeInstalled({ ok: true, kind: "pending", name: "x", scope: "global", skills: [], mcp: [], row: { ...ROW, state: "pending", reason: "global", scope: "global" } });
+    assert.match(everywhere, /enabled for all workspaces/);
+  });
+
+  test("describePreview：已装同名时提醒；没有 issues 就没有「Things to fix」", () => {
+    const text = describePreview({ ok: true, name: "lit", path: "/p", skills: ["a"], workflow: [], panelFiles: [], issues: [], installed: true });
+    assert.match(text, /already installed/);
+    assert.match(text, /workflow: not written yet/);
+    assert.match(text, /panel files: none declared/);
+    assert.doesNotMatch(text, /Things to fix/);
   });
 
   test("describePlugins：空清单有话说；没描述写占位", () => {

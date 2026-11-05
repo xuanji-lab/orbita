@@ -16,6 +16,8 @@ import {
   type PluginListResult,
   type PluginPreviewRequest,
   type PluginPreviewResult,
+  type PluginRowInstallRequest,
+  type PluginRowInstallResult,
   type PluginScope,
   type PluginSkillFile,
   type PluginSource,
@@ -37,7 +39,7 @@ export function registerPluginIpc(deps: {
   workspaces: WorkspaceStore;
   /** 让 agent 进程把现有 MCP 连接拆掉重来（host 注入；「重新载入」与改旧 MCP 用） */
   reloadMcp: () => Promise<void>;
-  /** agent 的 install_plugin 确认卡的应答落在它身上 */
+  /** 对话里「装上插件」那一行的「安装」落在它身上 */
   agentRequests: PluginAgentRequests;
 }): void {
   const { plugins, skills, mcp, workspaces } = deps;
@@ -122,11 +124,20 @@ export function registerPluginIpc(deps: {
     (_event, name: unknown, slug: unknown): Promise<PluginSkillFile> => plugins.skillFile(requireString(name, "name"), requireString(slug, "slug")),
   );
 
-  // 对话里 install_plugin 确认卡的应答：true = 装、false = 不装；不认识的 requestId 静默（这一轮已停、卡已取消）
-  ipcMain.handle(
-    ipcChannels.agentAnswerPluginInstall,
-    (_event, requestId: unknown, approve: unknown): Promise<void> => deps.agentRequests.answer(requireString(requestId, "requestId"), approve === true),
-  );
+  // 对话里 install_plugin 留下的那一行的「安装」：入参全当不可信，主进程重验会话、路径与指纹后才装；
+  // 结局以数据返回（reason 是稳定代码，句子由界面出），不抛
+  ipcMain.handle(ipcChannels.pluginInstallFromRow, (_event, raw: unknown): Promise<PluginRowInstallResult> => {
+    const request = requireRecord(raw, "install-from-row request");
+    const scope = request["scope"];
+    if (scope !== "workspace" && scope !== "global") throw new Error("Invalid scope");
+    const checked: PluginRowInstallRequest = {
+      sessionId: requireString(request["sessionId"], "sessionId"),
+      path: requireString(request["path"], "path"),
+      scope,
+      fingerprint: requireString(request["fingerprint"], "fingerprint"),
+    };
+    return deps.agentRequests.installFromRow(checked);
+  });
 }
 
 function requireRecord(value: unknown, what: string): Record<string, unknown> {

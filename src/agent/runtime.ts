@@ -967,7 +967,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
    */
   const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
-  // 实验功能「插件」：开着才注册 install_plugin / list_plugins（缺席 = 关；子会话不装插件，只有根会话注册）
+  // 实验功能「插件」：开着才注册 install_plugin / preview_plugin / list_plugins（缺席 = 关；子会话不装插件，只有根会话注册）
   const pluginTools = command.pluginTools === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
@@ -1339,7 +1339,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
     ...createStoreTools(requestBroker, command.sessionId),
-    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId) : []),
+    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
@@ -2187,7 +2187,7 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
-  if (command.type === "pluginInstallResult" || command.type === "pluginListResult") {
+  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult") {
     // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
     requestBroker.resolve(command.requestId, command);
     return;

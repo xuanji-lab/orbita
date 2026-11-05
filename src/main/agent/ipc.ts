@@ -233,7 +233,7 @@ export function registerAgentIpc(
   const readPdfCitations = async (): Promise<boolean> =>
     (await settings.read()).experimentalFeatures?.["pdf-citations"] === true;
 
-  /** 实验功能「插件」的开关同款每轮现读：开着才注册 install_plugin / list_plugins（关了就一个也不给模型） */
+  /** 实验功能「插件」的开关同款每轮现读：开着才注册 install_plugin / preview_plugin / list_plugins（关了就一个也不给模型） */
   const readPluginTools = async (): Promise<boolean> =>
     (await settings.read()).experimentalFeatures?.["plugins"] === true;
 

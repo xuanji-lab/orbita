@@ -18,7 +18,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
-import type { PluginAgentInstallOutcome, PluginAgentListOutcome } from "../../shared/plugin.ts";
+import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -565,9 +565,14 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
-  /** 插件（实验功能 plugins）：install_plugin 的回执（用户应答 / 拒绝 / 出错后才回）。同上：不 ensure、发完即回。 */
+  /** 插件（实验功能 plugins）：install_plugin 的回执（立即回，不等用户）。同上：不 ensure、发完即回。 */
   answerPluginInstall(requestId: string, outcome: PluginAgentInstallOutcome): void {
     this.child?.postMessage({ type: "pluginInstallResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：preview_plugin 的回执。同上。 */
+  answerPluginPreview(requestId: string, outcome: PluginAgentPreviewOutcome): void {
+    this.child?.postMessage({ type: "pluginPreviewResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 插件：list_plugins 的回执。同上。 */

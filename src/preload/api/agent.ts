@@ -44,9 +44,6 @@ export const agentApi = {
   /** 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台 */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerIntentConfirm, requestId, decision),
-  /** 插件安装确认卡的应答（agent 的 install_plugin）：true = 安装，false = 不装 */
-  answerPluginInstall: (requestId: string, approve: boolean): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentAnswerPluginInstall, requestId, approve),
   onEvent: (listener: (event: AgentEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: AgentEvent) => listener(event);
     ipcRenderer.on(ipcChannels.agentEvent, handler);
