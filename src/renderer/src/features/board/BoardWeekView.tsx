@@ -39,7 +39,8 @@ import {
   maxScrollLeft,
   mountedDays,
   plannedLabel,
-  scrollToTodayLeft,
+  todayScrollTarget,
+  trailingSlack,
   shiftWeek,
   todayColumnIndex,
   weekCellWidth,
@@ -89,6 +90,10 @@ export function BoardWeekView(props: {
   const contents = useMemo(() => (week === null ? [] : week.days.map((day) => dayContent(day, dayPhase(day, week.now)))), [week]);
   const layout = useMemo(() => layoutWeekColumns(contents.map((content) => content.cells), cellWidth), [contents, cellWidth]);
   const todayIndex = week === null ? null : todayColumnIndex(week.days, week.now);
+  // 打开时要滚到的位置；内容只比可视窗多一点点时在尾部多留一点空白，让它够得着（见 trailingSlack）
+  const target = todayScrollTarget(layout, viewport, todayIndex, WEEK_PAD_X - WEEK_DAY_GAP);
+  const slack = trailingSlack(layout, viewport, target);
+  const contentWidth = layout.totalWidth + slack;
   const mounted = useMemo(() => mountedDays(layout, scrollLeft, viewport, 1), [layout, scrollLeft, viewport]);
 
   // 打开 / 翻周 / 换天数后把今天滚进视野（每个「周 + 天数」只滚一次：数据每分钟刷新，不能把用户拖走的位置拽回来）
@@ -100,18 +105,18 @@ export function BoardWeekView(props: {
     const key = `${week.weekStart}|${props.days}`;
     if (scrolledFor.current === key) return;
     scrolledFor.current = key;
-    const left = scrollToTodayLeft(layout, viewport, todayIndex, WEEK_PAD_X - WEEK_DAY_GAP);
+    const left = clampScroll(target, contentWidth, viewport);
     node.scrollLeft = left;
     setScrollLeft(left);
-  }, [scroller, week, viewport, props.days, layout, todayIndex]);
+  }, [scroller, week, viewport, props.days, target, contentWidth]);
 
   // 窗口缩放 / 天数变了，内容宽变，位置可能越界：夹回去
   useEffect(() => {
     const node = scroller;
     if (node === null || week === null) return;
-    const clamped = clampScroll(node.scrollLeft, layout.totalWidth + 2 * WEEK_PAD_X, node.clientWidth);
+    const clamped = clampScroll(node.scrollLeft, contentWidth + 2 * WEEK_PAD_X, node.clientWidth);
     if (Math.abs(clamped - node.scrollLeft) > 0.5) node.scrollLeft = clamped;
-  }, [scroller, layout.totalWidth, week]);
+  }, [scroller, contentWidth, week]);
 
   // Shift + 滚轮 → 横向滑。要用原生监听（React 的 onWheel 是 passive，拦不住默认的竖向滚动）
   const [shift, setShift] = useState(false);
@@ -143,7 +148,7 @@ export function BoardWeekView(props: {
     };
   }, []);
 
-  const overflow = layout.totalWidth > viewport && viewport > 0;
+  const overflow = contentWidth > viewport && viewport > 0;
   const noAutomations = automations.length === 0;
   const automationOn = useExperimentalFeature("automation");
 
@@ -201,7 +206,7 @@ export function BoardWeekView(props: {
           ref={setScroller}
           // 两侧还有内容时边缘淡出：滚到某一天贴左缘后，前一天只会在内边距里露一条细边，淡出比硬切好看
           data-more-left={scrollLeft > 1 ? "true" : undefined}
-          data-more-right={scrollLeft < maxScrollLeft(layout.totalWidth, viewport) - 1 ? "true" : undefined}
+          data-more-right={scrollLeft < maxScrollLeft(contentWidth, viewport) - 1 ? "true" : undefined}
           onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}>
           <div
             className="wk-days"
@@ -210,7 +215,7 @@ export function BoardWeekView(props: {
               columnGap: WEEK_DAY_GAP,
               paddingInline: WEEK_PAD_X,
               paddingBlock: "var(--space-3)",
-              width: layout.totalWidth + 2 * WEEK_PAD_X,
+              width: contentWidth + 2 * WEEK_PAD_X,
             }}
           >
             {week !== null &&

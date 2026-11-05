@@ -82,15 +82,33 @@ export function clampScroll(value: number, totalWidth: number, viewportWidth: nu
  * 今天不在这一周（翻到别的周）→ 0。
  */
 export function scrollToTodayLeft(layout: WeekColumns, viewportWidth: number, todayIndex: number | null, edgeInset = 0): number {
+  return clampScroll(todayScrollTarget(layout, viewportWidth, todayIndex, edgeInset), layout.totalWidth, viewportWidth);
+}
+
+/** `scrollToTodayLeft` 夹之前的目标位置（今天本来就看得见时为 0）。 */
+export function todayScrollTarget(layout: WeekColumns, viewportWidth: number, todayIndex: number | null, edgeInset = 0): number {
   if (todayIndex === null) return 0;
   const today = layout.columns[todayIndex];
   if (today === undefined) return 0;
   if (today.left + today.width <= viewportWidth) return 0;
   const before = layout.columns[todayIndex - 1];
-  // edgeInset：滚动区两侧有内边距（> 天间距），贴左缘时前一天会在内边距里露出一条边；多滚这么多把它挤出视口
+  // edgeInset：滚动区两侧有内边距（> 天间距），贴左缘时前一天会在内边距里露一条边；多滚这么多把它挤出视口
   const aligned = (before === undefined ? today.left : before.left) + edgeInset;
   const fits = today.left + today.width <= aligned + viewportWidth;
-  return clampScroll(fits ? aligned : today.left + edgeInset, layout.totalWidth, viewportWidth);
+  return fits ? aligned : today.left + edgeInset;
+}
+
+/** 内容尾部多留的宽度的上限：再多就是一大片空白，不如让前一天老老实实露出来。 */
+export const TRAILING_SLACK_MAX = 48;
+
+/**
+ * 内容只比可视窗多一点点时（今天在周中、右边的天都不宽），夹到最大滚动会让前一天的前一天露出一条窄边。
+ * 在尾部多留一点空白（不超过 TRAILING_SLACK_MAX），让「前一天贴左缘」够得着；缺口大于上限就不留，
+ * 那时露出来的是真正的前几天，不是一条边。
+ */
+export function trailingSlack(layout: WeekColumns, viewportWidth: number, target: number): number {
+  const shortage = target - maxScrollLeft(layout.totalWidth, viewportWidth);
+  return shortage > 0 && shortage <= TRAILING_SLACK_MAX ? shortage : 0;
 }
 
 /** 此刻在可视窗里（哪怕只露一部分）的列区间 [first, last]；没有列回 null。 */

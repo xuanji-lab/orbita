@@ -125,16 +125,20 @@
 }
 
 /* 边缘淡出（mask 只看 alpha，颜色无所谓）：内边距那一圈渐变到不透明 */
+.wk-scroll {
+  --wk-fade: var(--space-5);
+}
+
 .wk-scroll[data-more-left="true"] {
-  mask-image: linear-gradient(to right, transparent 0, black var(--space-5));
+  mask-image: linear-gradient(to right, transparent 0, black var(--wk-fade));
 }
 
 .wk-scroll[data-more-right="true"] {
-  mask-image: linear-gradient(to left, transparent 0, black var(--space-5));
+  mask-image: linear-gradient(to left, transparent 0, black var(--wk-fade));
 }
 
 .wk-scroll[data-more-left="true"][data-more-right="true"] {
-  mask-image: linear-gradient(to right, transparent 0, black var(--space-5), black calc(100% - var(--space-5)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, black var(--wk-fade), black calc(100% - var(--wk-fade)), transparent 100%);
 }
 
 .wk-days {

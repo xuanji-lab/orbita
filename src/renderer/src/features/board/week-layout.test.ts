@@ -14,7 +14,10 @@ import {
   fullyVisibleDays,
   layoutWeekColumns,
   mountedDays,
+  TRAILING_SLACK_MAX,
   scrollToTodayLeft,
+  todayScrollTarget,
+  trailingSlack,
   shiftWeek,
   todayColumnIndex,
   visibleColumnRange,
@@ -163,6 +166,33 @@ describe("scrollToTodayLeft：打开时把今天滚进视野", () => {
   it("内容比可视窗窄：永远 0", () => {
     const narrow = layoutWeekColumns(cellsOf(1, 1, 1), 100);
     strictEqual(scrollToTodayLeft(narrow, VIEWPORT, 2), 0);
+  });
+});
+
+describe("trailingSlack：内容只比可视窗多一点点时，尾部多留空白让「前一天贴左」够得着", () => {
+  // 真机的数字：5 天档、可视宽 ≈ 799，周一周三是 2 格列，今天周五（2 格）——夹到底时周三会露出约 33px
+  const cell = 150;
+  const layout = layoutWeekColumns(cellsOf(2, 1, 2, 1, 2, 1, 1), cell);
+  const viewport = 799;
+  it("缺口很小（≤ 上限）：恰好补上缺口，目标位置够得着、前一天正好滚出视口", () => {
+    const target = todayScrollTarget(layout, viewport, 4, 8);
+    const slack = trailingSlack(layout, viewport, target);
+    ok(slack > 0 && slack <= TRAILING_SLACK_MAX, `slack=${slack}`);
+    const widened = { ...layout, totalWidth: layout.totalWidth + slack };
+    strictEqual(clampScroll(target, widened.totalWidth, viewport), target);
+    // 没补的话被夹回去，前一天会露出一条边
+    ok(scrollToTodayLeft(layout, viewport, 4, 8) < target);
+  });
+  it("缺口大（今天在周尾）：不留，那时露出来的是真正的前几天", () => {
+    const flat = layoutWeekColumns(cellsOf(1, 1, 1, 1, 1, 1, 1), 210);
+    const target = todayScrollTarget(flat, 1100, 6, 8);
+    strictEqual(trailingSlack(flat, 1100, target), 0);
+  });
+  it("不需要滚（今天看得见）/ 够得着：0", () => {
+    const flat = layoutWeekColumns(cellsOf(1, 1, 1, 1, 1, 1, 1), 210);
+    strictEqual(trailingSlack(flat, 1100, todayScrollTarget(flat, 1100, 2, 8)), 0);
+    const wide = layoutWeekColumns(cellsOf(1, 1, 1, 1, 1, 1, 1), 300);
+    strictEqual(trailingSlack(wide, 1100, todayScrollTarget(wide, 1100, 3, 8)), 0);
   });
 });
 
