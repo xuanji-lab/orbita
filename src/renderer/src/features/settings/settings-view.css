@@ -563,7 +563,7 @@
 }
 
 /* ===== 设置 › 实验功能（卡片墙，原型 exp-B；同「服务商」页的配方） =====
- * 卡片本体复用 providers-view.css 的 .pv-vcard / .pv-cards.large（设置页顶部
+ * 卡片本体复用 card-wall.css 的 .pv-vcard / .pv-cards.large（设置页顶部
  * import ProvidersView，样式已在产物里）；这里只补实验卡自己的部分：
  * 卡不是按钮（去 cursor / hover 抬升）、展开横跨两列、头部图标砖、
  * 底部发丝线 + 最近一次更新、展开的日志与安静文字钮。 */
@@ -580,7 +580,7 @@
 }
 
 /* 卡不是可点的（开关 / 链接 / 展开钮各自可点）：去掉厂商卡的指针与 hover 抬升。
- * 选择器带上 .pv-vcard 提高特异性：providers-view.css 在本文件之后进包，
+ * 选择器带上 .pv-vcard 提高特异性：card-wall.css 在本文件之后进包，
  * 同特异的规则会被它压回去 */
 .pv-vcard.exp-card {
   cursor: default;

@@ -120,13 +120,19 @@ function SkillList(props: {
   /** 选取模式的高亮行（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
   const [pickIndex, setPickIndex] = useState(-1);
   // 过滤与计数：列表 / 空态 / 加载三态共用（标题行过滤框的计数也在场）
-  const total = skills.skills.length;
+  // 选取模式多带插件里的技能（实验功能 plugins）：点名规则与用户技能一致，选取面要选得到；
+  // 浏览视图仍只列你自己的技能（插件的技能在插件页管）
+  const pickPlugin = picker !== undefined ? skills.pluginSkills : [];
+  const total = skills.skills.length + pickPlugin.length;
   const filtered = filterSkills(skills.skills, query);
   const filtering = query.trim() !== "";
   // 选取模式的可行行：扁平、按发起输入框的工作区可用（isSkillAvailable，与
   // 主进程发送端同一谓词——这里选得到的，发出去必然认）。拖拽源不在选取
   // 态也用同一份，与浏览视图的分组展示互不影响
-  const pickRows = picker !== undefined ? filtered.filter((s) => isSkillAvailable(s, picker.workspaceId)) : [];
+  const pickRows =
+    picker !== undefined
+      ? [...filtered, ...filterSkills(pickPlugin, query)].filter((s) => isSkillAvailable(s, picker.workspaceId))
+      : [];
   // 进入选取模式：清词、聚焦过滤行、高亮首行。
   // 靠 request 重触发：第二次「/ + 空格」时面板可能已开、选取态可能已在
   useEffect(() => {
@@ -207,7 +213,7 @@ function SkillList(props: {
     ) : null;
 
   // 空态与加载：标题行照常（过滤、打开目录、新建的路一直在）
-  if (load.kind === "loading" && skills.skills.length === 0) {
+  if (load.kind === "loading" && total === 0) {
     return (
       <RightPanelFrame
         header={header}
@@ -219,7 +225,7 @@ function SkillList(props: {
       </RightPanelFrame>
     );
   }
-  if (skills.skills.length === 0) {
+  if (total === 0) {
     return (
       <RightPanelFrame
         header={header}

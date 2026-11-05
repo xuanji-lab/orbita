@@ -129,3 +129,25 @@ describe("readMcpConfigFile", () => {
     await assert.rejects(readMcpConfigFile(join(dir, ".mcp.json")), /SyntaxError|JSON/);
   });
 });
+
+describe("McpStore.setScope（插件页改旧 MCP 的启用范围）", () => {
+  test("一次写完停用与白名单；空数组删掉白名单字段（所有工作区）", async () => {
+    await writeFile(file(), JSON.stringify({ mcpServers: { s: { transport: "stdio", command: "x", workspaces: ["old"], extra: 1 } } }), "utf8");
+    await store.setScope("s", { disabled: false, workspaces: ["w1", "w2"] });
+    let server = JSON.parse(await readFile(file(), "utf8")).mcpServers.s;
+    assert.deepEqual(server, { transport: "stdio", command: "x", workspaces: ["w1", "w2"], extra: 1 });
+    await store.setScope("s", { disabled: true });
+    server = JSON.parse(await readFile(file(), "utf8")).mcpServers.s;
+    assert.equal(server.disabled, true);
+    assert.deepEqual(server.workspaces, ["w1", "w2"]);
+    await store.setScope("s", { disabled: false, workspaces: [] });
+    server = JSON.parse(await readFile(file(), "utf8")).mcpServers.s;
+    assert.equal("disabled" in server, false);
+    assert.equal("workspaces" in server, false);
+    assert.equal(server.extra, 1);
+  });
+
+  test("不存在的 server 抛，不写文件", async () => {
+    await assert.rejects(() => store.setScope("nope", { disabled: true }), /No such server/);
+  });
+});

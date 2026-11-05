@@ -27,6 +27,13 @@ const ALLOWED_LATIN = new Set([
   "stdio",
   "http",
   "https",
+  // 插件页：git 仓库地址、ssh 地址、WebSocket（协议名，原样照写）
+  "git",
+  "ssh",
+  "WebSocket",
+  // SKILL.md 头里的字段名（冲突提示让用户改的就是它们，要照写的字面量）
+  "name",
+  "description",
   // 图片格式名（附图的准入提示）
   "PNG",
   "JPEG",

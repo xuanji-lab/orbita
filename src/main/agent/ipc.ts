@@ -33,6 +33,7 @@ import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import { readMcpConfigFile } from "../mcp/store.ts";
+import type { PluginAssembly, PluginStore } from "../plugin/store.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
@@ -129,6 +130,8 @@ export function registerAgentIpc(
   skillDirs: (workspaceId: string | null) => string[],
   /** skill 中心存储：`/skill:` 展开在这里查名与读正文（真源在 store，别人不再认一遍） */
   skills: SkillStore,
+  /** 插件（实验功能 plugins）：开轮时把对该工作区启用的插件的技能目录与 MCP 叠进去；开关关着时一字不叠 */
+  plugins: PluginStore,
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillDirs 的纪律） */
   mcp: McpStore,
   /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
@@ -161,7 +164,22 @@ export function registerAgentIpc(
    * 连对话都开不了（与 D-3 不矛盾：那条纪律是「不把失败伪装成空」且不披露，
    * 这里两者都做到）。
    */
-  const readMcpServers = async (workspaceId: string | null): Promise<Record<string, McpServer>> => {
+  /**
+   * 对这条会话生效的插件内容。**实验开关关着直接给空**（入口不出现、开轮不叠插件）；
+   * 装配本身读不动不拦开轮：记日志、这一轮没有插件（同「一台坏的 MCP 不该把会话堵死」）。
+   */
+  const readPluginAssembly = async (workspaceId: string | null): Promise<PluginAssembly> => {
+    const empty: PluginAssembly = { skillDirs: [], skills: [], mcpServers: {} };
+    if ((await settings.read()).experimentalFeatures?.plugins !== true) return empty;
+    try {
+      return await plugins.assemble(await scopeOf(workspaceId));
+    } catch (error: unknown) {
+      console.error("[main] 插件装配失败，这一轮不叠插件", error);
+      return empty;
+    }
+  };
+
+  const readMcpServers = async (workspaceId: string | null, pluginServers: Record<string, McpServer> = {}): Promise<Record<string, McpServer>> => {
     const configured = await mcp.read().catch((error: unknown) => {
       console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
       return {};
@@ -177,7 +195,20 @@ export function registerAgentIpc(
             );
             return {};
           });
-    return resolveServersForWorkspace(mergeMcpConfigs(configured, local), scope);
+    // 插件的 MCP 垫在底下（变量已在装配时替换）：服务名带 plugin_ 前缀，万一用户自己起了同名的，用户的赢。
+    // 之后走同一道白名单与 ${workspaceFolder} 解析——插件里引用项目根的 server 在 Home 会话里同样被跳过
+    return resolveServersForWorkspace(mergeMcpConfigs(pluginServers, mergeMcpConfigs(configured, local)), scope);
+  };
+
+  /** 开轮要带的两样「能力」：skill 目录（用户的在前、插件的在后）与 MCP 配置。三条开轮路径共用。 */
+  const readCapabilities = async (
+    workspaceId: string | null,
+  ): Promise<{ skillsDirs: string[]; mcpServers: Record<string, McpServer> }> => {
+    const assembly = await readPluginAssembly(workspaceId);
+    return {
+      skillsDirs: [...skillDirs(workspaceId), ...assembly.skillDirs],
+      mcpServers: await readMcpServers(workspaceId, assembly.mcpServers),
+    };
   };
 
   /**
@@ -384,11 +415,14 @@ export function registerAgentIpc(
       skillTargets.length > 0
         ? (await skills.list()).filter((meta) => isSkillAvailable(meta, workspaceId))
         : [];
+    // 插件技能规则与用户技能一致（按 slug、再按 name），排在用户技能之后：与开轮装配里「用户的赢」同序
+    const pluginAvailable = skillTargets.length > 0 ? (await readPluginAssembly(workspaceId)).skills : [];
     const invokedSkills: InvokedSkill[] = [];
     for (const target of skillTargets) {
       const meta = matchSkillTarget(available, target);
       if (meta === null) {
-        invokedSkills.push({ target, problem: "not-found" });
+        const fromPlugin = matchSkillTarget(pluginAvailable, target);
+        invokedSkills.push(fromPlugin === null ? { target, problem: "not-found" } : { target, location: fromPlugin.file });
         continue;
       }
       // 正文不进消息，read 只为探知可读（存储损坏的 skill 与查不到同样如实写明）
@@ -402,7 +436,7 @@ export function registerAgentIpc(
     const invokedMcps: InvokedMcp[] = [];
     if (mcpTargets.length > 0) {
       // 与这一轮实际装配的 MCP 同一份：全局 ∪ 工作区 .mcp.json——工作区里配的 server 也要认得出
-      const servers = await readMcpServers(workspaceId);
+      const servers = await readMcpServers(workspaceId, (await readPluginAssembly(workspaceId)).mcpServers);
       for (const target of mcpTargets) {
         const server = servers[target];
         invokedMcps.push({ target, available: server !== undefined && server.disabled !== true });
@@ -425,6 +459,7 @@ export function registerAgentIpc(
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     const memoryOn = await readMemoryOn();
     if (memoryOn) await beginMemoryTurn(input.sessionId, text);
+    const capabilities = await readCapabilities(input.workspaceId);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
@@ -435,9 +470,9 @@ export function registerAgentIpc(
       ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}),
       ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}),
       ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, {
-        skillsDirs: skillDirs(input.workspaceId),
+        skillsDirs: capabilities.skillsDirs,
         directories: await readDirectories(input),
-        mcpServers: await readMcpServers(input.workspaceId),
+        mcpServers: capabilities.mcpServers,
         compaction: await readCompaction(),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
@@ -481,12 +516,14 @@ export function registerAgentIpc(
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     const memoryOn = await readMemoryOn();
     if (memoryOn) await beginMemoryTurn(input.sessionId, text);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const capabilities = await readCapabilities(input.workspaceId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(memoryOn ? { sessionMemory: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const capabilities = await readCapabilities(input.workspaceId);
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 

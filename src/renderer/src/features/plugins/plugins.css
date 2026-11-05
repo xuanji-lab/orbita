@@ -1,0 +1,1209 @@
+/*
+ * 插件页（实验功能 plugins）：已装页按工作区分组、详情页、安装确认对话框。
+ * 结构与信息照设计稿 v2 第 2 / 6 屏；值只用 token，状态（hover / 禁用 / 选中）全在类与 aria 属性上。
+ * 一张卡至多三档字号：标题 base 半粗、正文 base 或 sm、元信息 xs（设计系统 Type roles）。
+ * 层级先靠字重与颜色。
+ *
+ * 一个组件两种外壳（右栏单列版 data-chrome="rail" / 设置页全屏版 "page"），排法只看**容器宽度**：
+ * .pl-page 是容器（container-type: inline-size），窄于 640px 的全部规矩收在文件末尾那一个
+ * `@container pl` 里——别处不许再写宽度断点，别的 PR 往详情加的卡片放进 .pl-col 就自动单列。
+ * 容器与内容必须是两个元素（@container 查不到容器自己）：根 .pl-page 只当容器，样式落在它的后代上。
+ */
+
+.pl-page {
+  container: pl / inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 右栏版：滚动由右栏面板壳（RightPanelFrame 的内容区）负责，页自己随内容长高 */
+.pl-page[data-chrome="rail"] {
+  height: auto;
+}
+
+.pl-page[data-chrome="rail"] .pl-body {
+  flex: none;
+  overflow: visible;
+}
+
+/* 头部与正文共用一条版心：与会话页同一个测量（--content-max-width） */
+.pl-head,
+.pl-body > * {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  box-sizing: border-box;
+}
+
+.pl-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6) var(--space-2);
+}
+
+.pl-head-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 右栏版：两个入口按钮放在列表顶上（全屏版在页头右侧）；多了就换行，不挤成一行 */
+.pl-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.pl-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-6) var(--space-5);
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+/* ---------- 分段（发现 / 已装） ---------- */
+
+.pl-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+}
+
+.pl-seg > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-weight: var(--weight-regular);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-seg > button:hover {
+  color: var(--color-text-primary);
+}
+
+.pl-seg > button[aria-pressed="true"] {
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: var(--shadow-border);
+}
+
+/* 计划中：显示、禁用、写明（设计系统 Content fundamentals）；玻璃上禁用用实色，不用 opacity */
+.pl-seg > button:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.pl-seg-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* ---------- 按钮（安静控件 + 发丝框；主操作叠 .btn-accent） ---------- */
+
+.pl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  flex: none;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: var(--transition-hover);
+  white-space: nowrap;
+}
+
+.pl-btn:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+/* 开关态的按钮（仅显示已启用）：按下 = 选中行的那层洗色，与模型服务页「仅显示已添加」同源 */
+.pl-btn[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: none;
+}
+
+.pl-btn.btn-accent {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  box-shadow: none;
+}
+
+.pl-btn.btn-accent:hover {
+  background: var(--color-accent-strong);
+}
+
+.pl-btn.danger {
+  color: var(--color-danger);
+}
+
+.pl-btn.danger:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.pl-btn:disabled,
+.pl-btn.btn-accent:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+.pl-btn.btn-accent:disabled {
+  background: var(--color-bg-hover);
+  box-shadow: none;
+}
+
+.pl-link-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pl-link-btn:hover {
+  color: var(--color-text-primary);
+}
+
+/* ---------- 已装页：筛选条、提示、分组卡、行 ---------- */
+
+.pl-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pl-search {
+  flex: 1;
+  max-width: 520px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.pl-search:focus-within {
+  box-shadow: var(--shadow-border), var(--focus-ring);
+}
+
+.pl-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.pl-chips {
+  display: inline-flex;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.pl-chips > button {
+  padding: 3px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pl-chips > button[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: none;
+}
+
+.pl-chips > button:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* 筛选条右端：仅显示已启用 + 大 / 小（大小那组是 card-wall.css 的 .pv-seg） */
+.pl-bar-end {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---------- 卡片墙（全屏版）：外壳是模型服务页那套 .pv-cards / .pv-vcard（card-wall.css），这里只补插件卡自己的 ---------- */
+
+.pl-wall {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 全屏版同时渲染卡片墙与安静列表：宽档显示卡片墙、藏列表（窄档在文件末尾的容器查询里反过来） */
+.pl-page[data-chrome="page"] .pl-grp {
+  display: none;
+}
+
+/* 组头在卡片外，不吃卡片底里的左右内边距 */
+.pl-wall .pl-gh {
+  padding: 0 var(--space-1);
+}
+
+.pl-vcard[data-active="false"] .pv-vcard-name {
+  color: var(--color-text-secondary);
+}
+
+/* 一句话最多两行，全文在详情里（技能描述原文常常很长） */
+.pl-vcard-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.pl-vcard-note.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* 底行让出右下角的开关 */
+.pl-vcard .pv-vcard-foot {
+  padding-right: calc(30px + var(--space-2));
+}
+
+/* 启用开关：悬停或键盘聚焦才浮出（模型服务卡的「+」同款），不占卡面；点它不进详情（组件里拦了冒泡） */
+.pl-card-switch {
+  position: absolute;
+  display: flex;
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+.pv-cards.large .pl-card-switch {
+  right: var(--space-3);
+  bottom: var(--space-3);
+}
+
+/* 小卡一行放不下第四样东西：开关悬停时浮在勾上，勾让位 */
+.pv-cards.small .pl-card-switch {
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.pl-vcard:hover .pl-card-switch,
+.pl-vcard:focus-within .pl-card-switch {
+  opacity: 1;
+}
+
+.pv-cards.small .pl-vcard:hover .pv-added-badge,
+.pv-cards.small .pl-vcard:focus-within .pv-added-badge {
+  opacity: 0;
+}
+
+.pl-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-info) 9%, var(--color-bg-panel));
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.pl-note .orbita-icon {
+  margin-top: 2px;
+  flex: none;
+  color: var(--color-info);
+}
+
+.pl-note.warn {
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--color-bg-panel));
+}
+
+.pl-note.warn .orbita-icon {
+  color: var(--color-warning);
+}
+
+.pl-note.danger {
+  background: var(--color-danger-soft);
+}
+
+.pl-note.danger .orbita-icon {
+  color: var(--color-danger);
+}
+
+/* 卡片底：玻璃卡的那一个 --glass-bg（暗档是比井更浅的卡色，浅档与面板白几乎同色），边是设计稿的 --shadow-border */
+.pl-grp {
+  background: var(--glass-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
+  padding: var(--space-1) 0;
+}
+
+.pl-gh {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-sm);
+}
+
+.pl-gh .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.pl-gh b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.pl-gh-count {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) 0 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* 点这一块进详情；开关在它外面（<button> 不能嵌 <button>） */
+.pl-row-main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto minmax(0, 84px);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  transition: var(--transition-hover);
+}
+
+.pl-row-main:hover {
+  background: var(--option-hover-bg);
+}
+
+.pl-row[data-active="false"] .pl-name b {
+  color: var(--color-text-secondary);
+}
+
+.pl-name {
+  display: grid;
+  min-width: 0;
+}
+
+.pl-name b {
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-name small {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-name small.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-kinds {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 行尾血线：来源右缘钉在行右内边距（设计系统 Implementation rules） */
+.pl-from {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 头像：有图标用图标，没有就用名字首字（设计稿同款降级） ---------- */
+
+.pl-av {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+}
+
+.pl-av b {
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+}
+
+/* 类别色只给技能（绿）与 MCP（蓝）：设计系统 Category colours 的既有分工 */
+.pl-av[data-kind="skill"] {
+  color: var(--color-filetype-sheet);
+  background: color-mix(in srgb, var(--color-filetype-sheet) 14%, transparent);
+}
+
+.pl-av[data-kind="mcp"] {
+  color: var(--color-filetype-doc);
+  background: color-mix(in srgb, var(--color-filetype-doc) 14%, transparent);
+}
+
+.pl-av.big {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-xl);
+}
+
+.pl-av.big b {
+  font-size: var(--font-size-lg);
+}
+
+/* ---------- 开关（设计稿 v2 的 switch；设计系统没有 Switch 配方，本地定义，状态走 aria） ---------- */
+
+.pl-switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  transition: transform 120ms var(--ease-out-quint);
+}
+
+.pl-switch[aria-checked="true"] {
+  background: var(--color-accent);
+  box-shadow: none;
+}
+
+.pl-switch[aria-checked="true"]::after {
+  transform: translateX(12px);
+}
+
+.pl-switch:disabled {
+  cursor: not-allowed;
+  background: var(--color-bg-hover);
+}
+
+/* ---------- 空态与加载 ---------- */
+
+.pl-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.pl-empty b {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 详情 ---------- */
+
+.pl-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.pl-back:hover {
+  color: var(--color-text-primary);
+}
+
+.pl-detail {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pl-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.pl-hero-main {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.pl-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+.pl-by {
+  margin-top: 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.pl-lead {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  max-width: 560px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  line-height: var(--line-height-ui);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.pl-lead[data-open="true"] {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.pl-lead:hover {
+  color: var(--color-text-primary);
+}
+
+.pl-acts {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.pl-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.pl-col {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.pl-card {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--glass-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
+  min-width: 0;
+}
+
+.pl-card-h {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pl-card-h .hint {
+  margin-left: auto;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+.pl-ab {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 2px var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+}
+
+.pl-ab:first-of-type {
+  border-top: 0;
+}
+
+.pl-ab-kind {
+  padding-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-ab-body {
+  min-width: 0;
+}
+
+.pl-ab-body b {
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.pl-ab-body small {
+  display: block;
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.pl-ab-body small.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.pl-ab-body small.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-ab-body code,
+.pl-code {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pl-warn {
+  grid-column: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+
+.pl-warn .orbita-icon {
+  margin-top: 1px;
+  flex: none;
+}
+
+.pl-muted {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 装在哪：三选一，选中是模式选中色（accent 仅给选中与主操作） */
+.pl-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.pl-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-opt:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.pl-opt[aria-checked="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+  box-shadow: inset 0 0 0 1px var(--color-mode-active-fg);
+  font-weight: var(--weight-semibold);
+}
+
+.pl-ws-list {
+  display: grid;
+  gap: 2px;
+}
+
+.pl-ws-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.pl-ws-item:hover {
+  background: var(--option-hover-bg);
+}
+
+.pl-ws-item input {
+  accent-color: var(--color-accent);
+}
+
+.pl-ws-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 配置表单 */
+.pl-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.pl-field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-field-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.pl-field-label .req {
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+.pl-field-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-ui);
+}
+
+.pl-field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pl-field-row .text-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.pl-field-error {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.pl-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.pl-secret .mask {
+  font-family: var(--font-family-mono);
+  letter-spacing: 1px;
+}
+
+.pl-checks {
+  display: grid;
+  gap: 2px;
+}
+
+.pl-checks label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.pl-checks input {
+  accent-color: var(--color-accent);
+}
+
+/* 来源与版本 */
+.pl-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  font-size: var(--font-size-sm);
+}
+
+.pl-kv dt {
+  color: var(--color-text-tertiary);
+}
+
+.pl-kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-kv dd.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+
+.pl-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 安装对话框（复用 .pv-modal 的外壳：实心面板 + 发丝线 + 重投影） ---------- */
+
+/*
+ * 高度要钉在视口上：.pv-modal 的 max-height 用百分比，而它的父级是 place-items:center 的 grid、
+ * 行高随内容走——百分比成了循环依赖，被当成没写。型号弹窗内容短碰不上，确认单一长，页脚就被挤出窗口外。
+ */
+.pv-modal.pl-modal {
+  width: min(640px, calc(100% - 48px));
+  max-height: calc(100vh - var(--space-6) * 2);
+}
+
+.pl-modal-sub {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.pl-pick {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.pl-git {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.pl-section-h {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pl-box {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+
+.pl-box .pl-ab {
+  border-top-color: var(--color-border-default);
+}
+
+.pl-cmd {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.pl-cmd:first-child {
+  border-top: 0;
+}
+
+.pl-cmd b {
+  font-weight: var(--weight-semibold);
+}
+
+.pl-radio {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-radio button {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.pl-radio button:hover {
+  background: var(--option-hover-bg);
+}
+
+.pl-radio button[aria-checked="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--color-mode-active-fg);
+}
+
+.pl-radio button b {
+  font-weight: var(--weight-semibold);
+}
+
+.pl-radio button small {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-modal-foot-note {
+  margin-right: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+/*
+ * ---------- 窄容器（< 640px）：右栏版恒在此档，设置页被右栏挤窄时也在 ----------
+ * 整页只有这一个宽度断点。窄档的原则：详情单列，列表退成右栏面板同款的安静列表
+ * （分组头 + 圆角行，无卡片底），行里的「里面有什么 / 来源」收起（悬停仍可读）。
+ * 内容左右血线对齐右栏其它面板：文字距面板边 16px，行的 hover 底铺到 8px。
+ */
+@container pl (max-width: 639px) {
+  .pl-head {
+    flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4) var(--space-2);
+  }
+
+  .pl-head-actions {
+    flex-wrap: wrap;
+  }
+
+  .pl-body {
+    padding: var(--space-2) var(--space-4) var(--space-4);
+  }
+
+  .pl-bar {
+    flex-wrap: wrap;
+  }
+
+  /* 退回列表：卡片墙收起、列表显示；列表没有大小之分，那一组也收起（仅显示已启用仍有效） */
+  /* .pl-size-seg 带上 .pl-bar 提高特异性：它的 display 来自 card-wall.css 的 .pv-seg，两份文件的进包顺序不定 */
+  .pl-wall,
+  .pl-bar .pl-size-seg {
+    display: none;
+  }
+
+  .pl-page[data-chrome="page"] .pl-grp {
+    display: block;
+  }
+
+  .pl-bar-end {
+    margin-left: 0;
+  }
+
+  .pl-search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  /* 列表：卡片底退掉，组头与行回到右栏面板的写法 */
+  .pl-grp {
+    width: auto;
+    margin-inline: calc(-1 * var(--space-2));
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .pl-gh {
+    height: 28px;
+    padding: 0 var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .pl-gh .orbita-icon {
+    display: none;
+  }
+
+  /* 数量紧跟组名（同 PanelGroupHead 的 detail），不推到行尾 */
+  .pl-gh-count {
+    margin-left: 0;
+    font-size: var(--font-size-sm);
+  }
+
+  .pl-row {
+    padding: 0 var(--space-2) 0 0;
+    border-top: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .pl-row:hover,
+  .pl-row:has(:focus-visible) {
+    background: var(--option-hover-bg);
+  }
+
+  .pl-row-main {
+    grid-template-columns: 22px minmax(0, 1fr);
+    padding-left: var(--space-2);
+  }
+
+  .pl-row-main:hover {
+    background: transparent;
+  }
+
+  .pl-kinds,
+  .pl-from {
+    display: none;
+  }
+
+  /* 空态 / 无匹配：左缘对齐内容血线（body 的 16px 已经是版心，不再叠一层） */
+  .pl-empty {
+    padding: var(--space-4) 0;
+  }
+
+  /* 详情：两列叠成一列，顺序就是 DOM 顺序（它能做什么 → 装在哪 → 要你填的 → 来源与版本） */
+  .pl-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 头部：头像 + 名字一排，按钮另起一行并可换行 */
+  .pl-hero {
+    flex-wrap: wrap;
+  }
+
+  .pl-acts {
+    flex: 1 1 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}

@@ -22,16 +22,16 @@ import {
   syncToMainSession,
   type SubSessionsView,
 } from "./features/chat/sub-sessions-state";
-import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
+import { SettingsView } from "./features/settings/SettingsView";
+import { resolveSettingsTab, type SettingsTab } from "./features/settings/settings-tabs.ts";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
-import { Icon } from "./shell/Icon";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
-import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
@@ -61,6 +61,7 @@ import {
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
 import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
+import { PluginsView } from "./features/plugins/PluginsView.tsx";
 import type { MemoryNav } from "./features/memory/memory-view.ts";
 import { useMemoryScopes } from "./features/memory/useMemory.ts";
 import type { MemoryEntryView } from "@shared/memory";
@@ -829,7 +830,11 @@ export function App() {
   // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
   // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
-  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp", session.workspaces);
+  const skills = useSkills(
+    shownPanel === "skills" || shownPanel === "mcp",
+    session.workspaces,
+    settings.experimentalFeatures?.["plugins"] === true,
+  );
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
@@ -864,6 +869,12 @@ export function App() {
   // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);
+  // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
+  const pluginsOn = experimentalFeatures["plugins"] === true;
+  const resolvedPanel = resolvePanel(rightPanel, experimentalFeatures);
+  if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
+  const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
+  if (shownSettingsTab !== settingsTab) setSettingsTab(shownSettingsTab);
   const memoryScopes = useMemoryScopes(overlay === "memory");
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
@@ -1155,6 +1166,8 @@ export function App() {
                   entry={(mainSessionId === null ? undefined : engine.states.get(mainSessionId)) ?? EMPTY_ENTRY}
                   cwd={session.cwd ?? ""}
                 />
+              ) : shownPanel === "plugins" ? (
+                <PluginsView workspaces={session.workspaces} chrome="rail" />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1194,6 +1207,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
+          pluginsAvailable={pluginsOn}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }
