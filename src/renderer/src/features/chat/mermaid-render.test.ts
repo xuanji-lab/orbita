@@ -72,6 +72,13 @@ test("svgViolation：干净的 pele 输出放行，注入一律拦下", () => {
   assert.notEqual(svgViolation('<svg><a xlink:href="https://evil.example"><text>x</text></a></svg>'), null);
   assert.notEqual(svgViolation('<svg><image href="https://evil.example/x.png"/></svg>'), null);
   assert.notEqual(svgViolation('<svg><foreignObject><div/></foreignObject></svg>'), null);
+  // 动画元素按前缀拦：animate / animateTransform / animateMotion / animateColor（含大小写、标签名前的空白）
+  for (const tag of ["animate", "animateTransform", "animateMotion", "animateColor", "ANIMATETRANSFORM", "set"]) {
+    assert.notEqual(svgViolation(`<svg><rect><${tag} attributeName="x" to="1"/></rect></svg>`), null, tag);
+  }
+  assert.notEqual(svgViolation('<svg><rect>< animateMotion path="M0,0"/></rect></svg>'), null);
+  // 只查标签：文字里写着 animate 不算违规
+  assert.equal(svgViolation('<svg><text>animate me</text></svg>'), null);
   assert.notEqual(svgViolation('<svg><rect style="fill:url(https://evil.example/a)"/></svg>'), null);
   assert.equal(svgViolation('<svg><rect fill="url(#g1)"/></svg>'), null);
   // 属性值里的 > 不能让标签提前结束而漏检

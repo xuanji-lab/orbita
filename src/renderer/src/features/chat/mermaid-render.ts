@@ -98,7 +98,8 @@ export function svgViolation(svg: string): string | null {
   // 否则 `<rect title=">" onload=x()>` 的后半截会被当成文字漏检。
   const tags = svg.match(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g) ?? [];
   const markup = tags.join("\n");
-  if (/<\s*(script|foreignObject|iframe|object|embed|style|image|use|animate|set)\b/i.test(markup)) {
+  // animate 按前缀匹配：animateTransform / animateMotion / animateColor 也是动画元素，白名单外一律拦
+  if (/<\s*(?:(?:script|foreignObject|iframe|object|embed|style|image|use|set)\b|animate)/i.test(markup)) {
     return "含有不允许的元素";
   }
   if (/\son[a-z]+\s*=/i.test(markup)) return "含有事件属性";
