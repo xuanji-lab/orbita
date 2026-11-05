@@ -1144,7 +1144,7 @@ export function App() {
     // 遗留事项入口（收尾扫描的下游）
     {
       id: "carryovers",
-      icon: "list-todo" as const,
+      icon: "hourglass" as const,
       label: t.app.carryoversEntry(openCarryoverCount),
       lit: railSubviewLit(subviewState, "carryovers"),
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
@@ -1173,7 +1173,7 @@ export function App() {
           {
             // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
             id: "memory" as const,
-            icon: "brain-circuit" as const,
+            icon: "notebook-text" as const,
             label: t.memory.rail,
             lit: overlay === "memory",
             onClick: () => setOverlay(overlay === "memory" ? null : "memory"),

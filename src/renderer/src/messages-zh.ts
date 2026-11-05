@@ -722,9 +722,8 @@ export const zh: Messages = {
     context: "这条任务",
     groups: {
       session: "这条会话",
-      workbench: "工作面",
-      agent: "智能体",
-      shelf: "收纳",
+      agent: "智能体的能力",
+      shelf: "搁着的",
       app: "应用",
     },
     automation: "自动化",

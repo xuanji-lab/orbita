@@ -25,9 +25,9 @@ const FULL: Item[] = [
   item("review", "session", false),
   item("context-tab", "session", false, true),
   item("subsessions", "session", true),
-  item("files", "workbench", true),
-  item("terminal", "workbench", true),
-  item("browser", "workbench", true),
+  item("files", "session", true),
+  item("terminal", "agent", true),
+  item("browser", "agent", true),
   item("abilities", "agent", false),
   item("memory", "agent", false),
   item("intent", "agent", false),
@@ -45,9 +45,8 @@ describe("layoutRail", () => {
     assert.deepEqual(
       layout.stack.map((part) => [part.group, ids(part.items)]),
       [
-        ["session", ["context", "review", "subsessions"]],
-        ["workbench", ["files", "terminal", "browser"]],
-        ["agent", ["abilities", "memory", "intent"]],
+        ["session", ["context", "review", "subsessions", "files"]],
+        ["agent", ["terminal", "browser", "abilities", "memory", "intent"]],
         ["shelf", ["carryovers", "archived"]],
       ],
     );
@@ -60,8 +59,8 @@ describe("layoutRail", () => {
     assert.deepEqual(
       layout.stack.map((part) => [part.group, ids(part.items)]),
       [
-        ["session", ["context", "subsessions"]],
-        ["workbench", ["files", "terminal", "browser"]],
+        ["session", ["context", "subsessions", "files"]],
+        ["agent", ["terminal", "browser"]],
       ],
     );
     assert.deepEqual(ids(layout.dock), ["settings"]);
@@ -79,8 +78,8 @@ describe("layoutRail", () => {
   it("空组不出现：没有子会话 / 记忆 / 意图时，对应的入口与线都不画", () => {
     const sparse = FULL.filter((each) => !["subsessions", "memory", "intent", "carryovers", "archived"].includes(each.id));
     const regular = layoutRail(sparse, false);
-    assert.deepEqual(regular.stack.map((part) => part.group), ["session", "workbench", "agent"]);
-    assert.deepEqual(ids(regular.stack[2]?.items ?? []), ["abilities"]);
+    assert.deepEqual(regular.stack.map((part) => part.group), ["session", "agent"]);
+    assert.deepEqual(ids(regular.stack[1]?.items ?? []), ["terminal", "browser", "abilities"]);
     const lean = layoutRail(sparse, true);
     assert.deepEqual(lean.more.map((part) => part.group), ["session", "agent", "app"]);
   });
@@ -125,7 +124,11 @@ describe("结构守卫", () => {
   const menu = read("Menu.tsx");
 
   it("文件入口在精简态常驻（用户：文件面板不应该被收纳）", () => {
-    assert.match(rail, /id: "files", group: "workbench", pinned: true/);
+    assert.match(rail, /id: "files", group: "session", pinned: true/);
+  });
+
+  it("plugins 开着时没有「技能与 MCP」入口，关着时保留", () => {
+    assert.match(rail, /props\.pluginsAvailable\s*\?\s*\[\]\s*:\s*\[\{ id: "abilities"/);
   });
 
   it("组名登记齐：RAIL_GROUP_IDS 每一组在中英文案里都有名字（读屏的 group 标签）", () => {
