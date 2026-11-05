@@ -1,11 +1,19 @@
 ---
 name: panel-style
-description: 为一个插件的右栏面板（或任何要给用户看的卡片、看板、产出页）定样子时使用：出 2–3 个骨架不同的真实小样让用户挑，挑中的写下来，并避免落回千篇一律或“像某一家”。做插件的流程（plugin-creator）第 5 步用它；用户说“做几个风格方向”“这个面板太普通”“换个风格”时也用。不用于改 Orbita 自己的界面（侧栏、输入框、设置页）——那些只守 design-system。
+description: 做插件右栏面板的卡片时使用——它有两个角色：（1）写面板模板的约束与骨架（plugin-creator 第 3 步的第一版卡片靠它：模板底稿和“八条写模板规则”）；（2）用户**对整体风格不满意、要换风格**时的子流程：出 2–3 个骨架不同的真实小样让他挑，挑中的写下来，避免落回千篇一律或“像某一家”。用户说“换个风格”“这个面板太普通”“不是这种感觉”时也用。局部意见（字大一点、去掉这一栏）不用它，直接改。不用于改 Orbita 自己的界面（侧栏、输入框、设置页）——那些只守 design-system。
 ---
 
 # 面板风格：造一个，不是选一个
 
 > 改编自 impeccable（Apache-2.0）、花叔 Design（MIT）、Anthropic frontend-design（Apache-2.0），署名见插件根目录 NOTICE。
+
+**语言**：用用户自己写的文字的语言回复（他中文写就中文回），别被消息里英文的系统包装带成英文。
+
+## 什么时候用这个技能
+
+- **做第一版卡片（plugin-creator 第 3 步）**：只用到下面“面板是什么样的约束”和 `assets/panel-template.html`。**第一版从用户已有的品味出发**（他选过的风格、`taste.md`、风格账本），不要一上来就出方向。只有一条品味记录都找不到时，才走下面的“步骤”挑**一个**起点（只出一个方向，不出三个）。
+- **用户对整体风格不满意（plugin-creator 第 4 步里）**：走下面的“步骤”，出 2–3 个骨架不同的方向，用**同一篇样例**（`panel/sample.json`）渲染，让他挑。**这是子流程，不是开场**：他还没看过任何一张卡之前，不要摆方向。
+- 局部意见（“字大一点”“把作者去掉”“这一栏挪上去”）：**不要用它**，直接在 `panel/index.html` 里改那一处，改完告诉他改了哪。
 
 ## 为什么要费这个事
 
@@ -25,7 +33,7 @@ description: 为一个插件的右栏面板（或任何要给用户看的卡片�
 
 - 一份**自包含的 HTML**：内联 `<style>` / `<script>`，图片字体只能 `data:`，**不能联网、不能引外部文件、不能用 `eval` / `new Function`**。在沙盒 iframe 里，不能跳转链接。
 - 宿主给的宽度大约 **360–440px**（右栏），高度给满，模板自己滚动。浅色 / 暗色主题都要成立（宿主下发主题变量，见 `assets/panel-template.html`）。
-- 数据来自 `orbita.panel.data` 指向的 JSON（第 4 步已经跑出真数据）；动作按钮发 `orbita:action`。
+- 数据来自 `orbita.panel.data` 指向的 JSON；**还没有这个文件时右栏用 `orbita.panel.sample`（`panel/sample.json`）渲染**——所以做卡片时拿样例当数据就行，模板里别区分“样例”和“真数据”。动作按钮发 `orbita:action`。
 
 ### 写模板的八条规则（面板那头实测出来的）
 
@@ -41,13 +49,13 @@ description: 为一个插件的右栏面板（或任何要给用户看的卡片�
 8. **数据 ≤ 2 MB**：超了面板拒读。别把全量历史塞进去，面板只放当前要看的。
 - 这是 Read / Operate 界面，不是海报：表现力的雄心体现在**精确与克制**。每张卡至多三档字号，展示字体只给签名元素；正文对比度 ≥ 4.5:1；正文不小于 `--font-size-sm`。
 
-## 步骤
+## 步骤（换风格 / 没有任何品味记录时才走）
 
 ### 1. 读三样东西
 
 - 工作区的 `plugins/.style-ledger.json`（账本，没有就当空）：最近 5 次交付的风格名、骨架、主色色相、签名元素。
 - 这个插件的 `intent.md`（意图、验收清单、品味参照）和已有的 `taste.md`（用户原话）。
-- **真数据**：`data/panel.json` 里至少 3 条。没有真数据不开工——回第 4 步。
+- **样例**：`panel/sample.json`（就是这次要排的内容；没有样例不开工——回 plugin-creator 第 3 步先写样例）。
 
 ### 2. 把用户的话翻成风格简报（不写长什么样）
 
@@ -71,6 +79,8 @@ brief:
 两条约束：七个里超过三个属于同一种材料（全是纸、全是屏幕）= 你停在了最显眼的物件上，继续挖；Operate / Read 界面**不许扮成工具本身**（终端、仪表盘、控制台）。
 
 ### 4. 选方向：骰子，不按你的排序
+
+**只要一个起点（没有任何品味记录的第一版）：只取方向 1，不出方向 2、3 和出口。**换风格才出全套。
 
 先跑 `date +%S` 取当前秒数 S（Windows 用 `powershell -c "(Get-Date).Second"`）。
 
@@ -104,17 +114,18 @@ brief:
 4. **默认测试**：它落在“已花掉”清单里了吗？
 5. **三张互比**：是不是挤在同一个温度、同一种材料里？
 
-### 7. 做真小样，截图给用户
+### 7. 做小样，截图给用户
 
-每个方向一份 HTML，放 `panel/drafts/`（`a-<名>.html`、`b-<名>.html`、`c-<名>.html`、`exit.html`）。**以 `assets/panel-template.html` 为底**（它已经处理好了：接收 `orbita:data`、设主题变量、空态、动作回传、没有宿主时的预览兜底），只改渲染部分和样式。
+每个方向一份 HTML，放 `panel/drafts/`（`a-<名>.html`、`b-<名>.html`、`c-<名>.html`、`exit.html`）。**以 `assets/panel-template.html` 为底**（它已经处理好了：接收 `orbita:data`、设主题变量、空态、动作回传、没有宿主时的预览兜底），只改渲染部分和样式。**用同一篇样例渲染**——方向之间比的是骨架，不是数据。
 
 然后做对比页：
 
 1. 把 `assets/panel-preview.html` 拷成 `panel/preview.html`；
-2. 写 `panel/sample-data.js`：`window.__SAMPLE__ = <data/panel.json 的内容>;`
+2. 写 `panel/sample-data.js`：`window.__SAMPLE__ = <panel/sample.json 的内容>;`
 3. 写 `panel/drafts.js`：`window.__DRAFTS__ = [{ "name": "审读单", "file": "drafts/a-referee.html" }, …];`
 4. 用浏览器工具打开 `file://<工作区>/plugins/<名字>/panel/preview.html?scheme=light`，`browser_screenshot`（要保存就带 `save`）后给用户看；再开 `?scheme=dark` 再截一张。**自己先看一遍**，有明显问题（溢出、对比度、空白）就改，最多改两轮。
 5. 浏览器工具用不了：把四份草稿的路径和方向卡发给用户，让他用系统浏览器打开 `preview.html`。
+6. 他想在右栏里看某一个：把那份拷成 `panel/index.html`，右栏几秒内就变（`preview_plugin` 已经调过就不用再调）。
 
 **摆出来就停**，等他挑。不替他选，不在没看到小样前问“你想要哪个方向”。
 
@@ -122,7 +133,7 @@ brief:
 
 ### 8. 他挑中之后
 
-- 把挑中的复制成 `panel/index.html`；删掉 `panel/drafts/`、`preview.html`、`sample-data.js`、`drafts.js`（留着会被当成插件内容）。
+- 把挑中的复制成 `panel/index.html`；删掉 `panel/drafts/`、`preview.html`、`sample-data.js`、`drafts.js`（留着会被当成插件内容）；`panel/spec.md` 按新卡片改一遍（显示哪些字段、怎么排）。
 - 写 `plugins/<名字>/taste.md`：
 
   ```markdown
@@ -139,7 +150,7 @@ brief:
 
 ### 9. 以后再改这个面板
 
-先读 `taste.md` 和 `panel/index.html`，照它的方向改，不重新激发。用户说“换一个”才回第 3 步（账本会让你避开刚用过的）。用户只想微调（密度、圆角、字重反差）：旋 3–5 个旋钮，把非默认值写回 `taste.md`。
+先读 `taste.md`、`panel/spec.md` 和 `panel/index.html`，照它的方向改，不重新激发。用户说“换一个”才回第 3 步（账本会让你避开刚用过的）。用户只想微调（密度、圆角、字重反差）：旋 3–5 个旋钮，把非默认值写回 `taste.md`。
 
 ## 防止落回千篇一律
 
