@@ -21,6 +21,11 @@ export function keepUnlessSettledChanged<T>(prev: readonly T[], next: readonly T
   return prev;
 }
 
+/** 两个数组逐项同一引用 */
+export function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a === b || (a.length === b.length && a.every((value, index) => value === b[index]));
+}
+
 /** 两个 Map 的键与值（按引用）完全相同 */
 export function sameMap<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
   if (a === b) return true;
