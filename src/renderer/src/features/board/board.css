@@ -13,6 +13,11 @@
   margin: var(--space-2) 0;
 }
 
+/* 离开视口时的占位：只占高度（iframe 已卸），不画任何东西 */
+.board-placeholder {
+  min-width: 0;
+}
+
 .board-result-note {
   margin: 0;
   font-size: var(--font-size-sm);

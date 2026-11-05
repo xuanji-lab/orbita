@@ -16,7 +16,8 @@
 import { mkdir, open, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isNotFound, errorCode } from "../fs-errors.ts";
-import type { PluginConfigField, PluginConfigValue } from "../../shared/plugin.ts";
+import { isPluginName, type PluginConfigField, type PluginConfigValue } from "../../shared/plugin.ts";
+import type { PluginBoardInfo } from "../../shared/plugin-board.ts";
 import {
   PANEL_ACTIONS_FILE_MAX_BYTES,
   PANEL_DATA_MAX_BYTES,
@@ -26,11 +27,47 @@ import {
   type PluginPanelDataProblem,
   type PluginPanelProblem,
 } from "../../shared/plugin-panel.ts";
-import { resolveComponentPath } from "./manifest.ts";
+import { manifestDisplayName, resolveComponentPath } from "./manifest.ts";
 import { DATA_NAMES, PROJECT_NAMES, ROOT_NAMES } from "./vars.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// ---------- 看板的来源（已装插件与草稿共用） ----------
+
+/**
+ * 渲染一块看板要的一切输入：已装插件与草稿预览都归到这一个形状（右栏看板与会话里的快照各用一份载入逻辑，
+ * 输入的形状只在这里写一次）。草稿没有配置值（`values` 为空）、没有启用范围。
+ */
+export interface BoardSource {
+  root: string;
+  dataDir: string;
+  fields: readonly PluginConfigField[];
+  values: Readonly<Record<string, PluginConfigValue>>;
+  /** 会话所在工作区根；Home 会话为 null */
+  workspaceRoot: string | null;
+  board: PluginBoardInfo | null;
+}
+
+/**
+ * 草稿文件夹的身份：名字取清单里的、不合规退回文件夹名、再不行就用文件夹名原样（只用来显示）；
+ * 数据目录按这个合规的名字算（装上之后它就是那个目录），两个都不合规退回草稿自己的 `data/`。
+ * 右栏草稿预览与 show_plugin_board 的草稿都用它，两处的数据目录因此永远是同一个。
+ */
+export function draftIdentity(
+  manifest: Record<string, unknown>,
+  draftRoot: string,
+  dataDirOf: (name: string) => string,
+): { name: string; displayName: string; dataDir: string } {
+  const folder = basename(draftRoot);
+  const valid = [manifest["name"], folder].find((candidate): candidate is string => typeof candidate === "string" && isPluginName(candidate));
+  const name = valid ?? folder;
+  return {
+    name,
+    displayName: manifestDisplayName(manifest, name),
+    dataDir: valid === undefined ? join(draftRoot, "data") : dataDirOf(valid),
+  };
 }
 
 // ---------- 路径 ----------
@@ -134,8 +171,6 @@ export async function resolveDataPath(raw: string, context: PanelPathContext): P
 export type PanelFileResult =
   | { ok: true; abs: string; /** mtime:size */ stamp: string }
   | { ok: false; problem: PluginPanelProblem };
-/** 保留旧名：模板与另外两个辅助文件走同一条定位规则，返回形状一样 */
-export type PanelTemplateResult = PanelFileResult;
 
 /** 三种看板文件各自的问题分类与大小上限。 */
 const FILE_KINDS = {
@@ -189,11 +224,6 @@ export async function locatePanelFile(root: string, raw: string, field: PanelFil
   } catch (error) {
     return { ok: false, problem: fileProblem(kinds.unreadable, `${raw}: ${errorText(error)}`) };
   }
-}
-
-/** 模板路径解析（同 locatePanelFile 的 template 档）。 */
-export function locatePanelTemplate(root: string, raw: string): Promise<PanelTemplateResult> {
-  return locatePanelFile(root, raw, "template");
 }
 
 /** 模板说明：读成文本（去 BOM）。定位已经判过大小，这里只读。 */

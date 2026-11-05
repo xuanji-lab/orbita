@@ -74,12 +74,18 @@ describe("PanelFrames", () => {
     assert.equal(frames.respond(url).status, 404);
   });
 
-  test("没取走的最多放 96 份（够 24 张卡的看板同时开几处），满了丢最旧的（renderer 反复开关面板不能无限涨内存）", () => {
-    const frames = new PanelFrames();
-    const urls = Array.from({ length: 110 }, (_, index) => frames.register(`<p>${index}</p>`));
-    assert.equal(frames.size(), 96);
-    assert.equal(frames.respond(urls[0] ?? "").status, 404);
-    assert.equal(frames.respond(urls[109] ?? "").status, 200);
+  test("没有数量上限：一次挂几百张卡（周看板）每一份都取得到；兜内存的只有 TTL", () => {
+    let now = 0;
+    const frames = new PanelFrames(() => now);
+    const urls = Array.from({ length: 500 }, (_, index) => frames.register(`<p>${index}</p>`));
+    assert.equal(frames.size(), 500);
+    // 最早注册的一份没被挤掉
+    assert.equal(frames.respond(urls[0] ?? "").status, 200);
+    assert.equal(frames.respond(urls[499] ?? "").status, 200);
+    // 没取走的过了 TTL 照样作废
+    now = PANEL_FRAME_TTL_MS;
+    assert.equal(frames.size(), 0);
+    assert.equal(frames.respond(urls[1] ?? "").status, 404);
   });
 });
 

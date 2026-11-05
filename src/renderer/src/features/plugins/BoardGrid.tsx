@@ -69,8 +69,6 @@ export interface BoardGridProps {
   actionName: string | null;
   /** 卡上方宿主画的标题行（周看板的「时间 · 插件名」）；不给就没有这一行 */
   caption?: (card: BoardCardView) => ReactNode;
-  /** 点卡外框（没点到卡里的按钮时）；周看板用它「打开那次运行的会话」。给了才有手型与键盘焦点 */
-  onCardOpen?: (card: BoardCardView) => void;
 }
 
 interface Toast {
@@ -142,7 +140,7 @@ export function BoardGrid(props: BoardGridProps) {
                     {card.usingSample && <SampleBadge />}
                   </div>
                 )}
-                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} onOpen={props.onCardOpen} />
+                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} />
               </div>
             );
           })}
@@ -173,7 +171,6 @@ function BoardCardFrame(props: {
   theme: PanelTheme;
   actionName: string | null;
   onNotify: (text: string, tone: Toast["tone"]) => void;
-  onOpen?: ((card: BoardCardView) => void) | undefined;
 }) {
   const t = useT().pluginPanel;
   const { card, onNotify, actionName } = props;
@@ -253,28 +250,8 @@ function BoardCardFrame(props: {
 
   const broken = card.brokenProblems !== null;
   const hostEmpty = !broken && card.frameUrl !== null && showHostEmpty({ shown, problem: card.problem, templateHandlesEmpty, graceOver });
-  const open = props.onOpen;
   return (
-    <div
-      className="bd-frame"
-      style={{ height: props.height }}
-      data-open={open !== undefined}
-      title={card.title}
-      {...(open === undefined
-        ? {}
-        : {
-            role: "button" as const,
-            tabIndex: 0,
-            onClick: () => open(card),
-            onKeyDown: (event: React.KeyboardEvent) => {
-              if (event.target !== event.currentTarget) return;
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                open(card);
-              }
-            },
-          })}
-    >
+    <div className="bd-frame" style={{ height: props.height }} title={card.title}>
       {broken ? (
         <div className="bd-broken" role="alert">
           <Icon name="triangle-alert" size={14} strokeWidth={1.8} />

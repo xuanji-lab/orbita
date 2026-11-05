@@ -9,6 +9,7 @@
  * 快照**不复制**进 automations.json：运行记录只记 toolCallId（`boardSnapshotIds`），这里按 id 回会话记录里找
  * 工具结果的 details。读会话用按行粗筛（jsonl-scan）：只有 show_plugin_board 的工具行才整行解码。
  */
+import { stat } from "node:fs/promises";
 import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { isNotFound } from "../fs-errors.ts";
 import {
@@ -76,10 +77,45 @@ function startOfLocalDay(t: number): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
-/** 读一条会话里指定 toolCallId 的 show_plugin_board 结果。读不了的会话回空表（会话被删了很正常）。 */
+/** 读快照结果的缓存最多放几份：一份是一条会话里点名那几次 show_plugin_board 的快照（每次 ≤ 1 MB），不能无限长 */
+const SNAPSHOT_CACHE_MAX = 16;
+const snapshotCache = new Map<string, Map<string, PluginBoardResult>>();
+
+/**
+ * 读一条会话里指定 toolCallId 的 show_plugin_board 结果。读不了的会话回空表（会话被删了很正常）。
+ *
+ * `board:week` 每分钟 + 每次自动化事件各调一遍，而收了尾的会话文件不再变，所以按 (路径, mtime, 大小, 点名的 id)
+ * 缓存扫描结果：文件没变就不再整文件流式扫。mtime / 大小在**扫描之前**取——扫描途中文件又被追加，缓存里记的是
+ * 旧签名，下一次一定重扫，不会把没扫全的结果当成新的。没读到的（文件不在）不缓存。
+ */
 export async function readBoardSnapshots(recordPath: string, toolCallIds: ReadonlySet<string>): Promise<Map<string, PluginBoardResult>> {
+  if (toolCallIds.size === 0) return new Map();
+  let key: string;
+  try {
+    const info = await stat(recordPath);
+    key = JSON.stringify([recordPath, info.mtimeMs, info.size, [...toolCallIds].sort()]);
+  } catch {
+    return scanBoardSnapshots(recordPath, toolCallIds);
+  }
+  const cached = snapshotCache.get(key);
+  if (cached !== undefined) {
+    // 最近用过的挪到队尾
+    snapshotCache.delete(key);
+    snapshotCache.set(key, cached);
+    return new Map(cached);
+  }
+  const found = await scanBoardSnapshots(recordPath, toolCallIds);
+  snapshotCache.set(key, found);
+  while (snapshotCache.size > SNAPSHOT_CACHE_MAX) {
+    const oldest = snapshotCache.keys().next();
+    if (oldest.done === true) break;
+    snapshotCache.delete(oldest.value);
+  }
+  return new Map(found);
+}
+
+async function scanBoardSnapshots(recordPath: string, toolCallIds: ReadonlySet<string>): Promise<Map<string, PluginBoardResult>> {
   const found = new Map<string, PluginBoardResult>();
-  if (toolCallIds.size === 0) return found;
   try {
     await scanJsonlLines(
       recordPath,

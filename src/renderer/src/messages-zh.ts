@@ -745,7 +745,7 @@ export const zh: Messages = {
       template: "模板读不出来",
       data: "数据读不出来",
       "too-large": "数据太大",
-      budget: "超过了整份快照的大小上限",
+      budget: "超过了整份快照的大小或张数上限",
       repeat: "展开的项太多或不是数组",
     },
     draftResult: "这是草稿里的看板，按钮不会记录，装上之后才有用。",

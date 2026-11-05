@@ -95,6 +95,12 @@ export interface ScannedPlugin {
 }
 
 /** 扫描一个插件根。`fallbackName`：没有清单（或清单没写 name）时用的名字，通常是目录名。 */
+/** 清单的 displayName（非空白字符串）优先，否则退回给定的名字。扫描、看板面板、会话快照共用这一份。 */
+export function manifestDisplayName(manifest: Record<string, unknown>, fallback: string): string {
+  const value = manifest["displayName"];
+  return typeof value === "string" && value.trim() !== "" ? value : fallback;
+}
+
 export async function scanPlugin(root: string, fallbackName: string): Promise<ScannedPlugin> {
   const realRoot = await realpath(root);
   const problems: PluginProblem[] = [];
@@ -106,7 +112,7 @@ export async function scanPlugin(root: string, fallbackName: string): Promise<Sc
   const skills = await discoverSkills(root, realRoot, rawName, manifest, problems);
   const mcpServers = await discoverMcp(root, realRoot, manifest, problems);
   const unsupported = await detectUnsupported(root, manifest, mcpServers.bundles);
-  const displayName = typeof manifest["displayName"] === "string" && manifest["displayName"] !== "" ? manifest["displayName"] : rawName;
+  const displayName = manifestDisplayName(manifest, rawName);
   const hasScripts = await isDirectory(join(root, "scripts"));
 
   return {

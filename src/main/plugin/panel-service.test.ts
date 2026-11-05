@@ -8,7 +8,7 @@ import type { PluginPreviewResult } from "../../shared/plugin.ts";
 import { PANEL_ACTIONS_FILE_MAX_BYTES, PANEL_ACTIONS_MAX_PER_WINDOW, PANEL_DATA_MAX_BYTES, type PluginBoardSnapshot } from "../../shared/plugin-panel.ts";
 import { BOARD_MAX_EXPANDED_CARDS } from "../../shared/plugin-board.ts";
 import { PanelFrames } from "./panel-frame.ts";
-import { PluginPanels, expandDecl, type PanelPluginSource } from "./panel-service.ts";
+import { DRAFT_FULL_SCAN_MS, PluginPanels, expandDecl, type PanelPluginSource } from "./panel-service.ts";
 import type { PluginRecord } from "./records.ts";
 
 /** 示例夹具：文献追踪的三张卡（今日一篇 2x1、本周新进 1x1、在追的主线 1x2），只在测试与自检里用，不进产品。 */
@@ -23,6 +23,7 @@ let record: PluginRecord;
 let panels: PluginPanels;
 let now = Date.UTC(2026, 10, 5, 7, 30, 0);
 let previewResult: PluginPreviewResult = { ok: false, error: { kind: "not-a-plugin" } };
+let previewCalls = 0;
 
 function makeRecord(scope: PluginRecord["scope"]): PluginRecord {
   return {
@@ -43,7 +44,10 @@ function build(records: () => PluginRecord[]): PluginPanels {
     records: async () => records(),
     rootOf: () => root,
     dataDirOf: (name) => join(dataRoot, name),
-    preview: async () => previewResult,
+    preview: async () => {
+      previewCalls += 1;
+      return previewResult;
+    },
   };
   return new PluginPanels({
     plugins: source,
@@ -54,6 +58,8 @@ function build(records: () => PluginRecord[]): PluginPanels {
 }
 
 beforeEach(async () => {
+  previewCalls = 0;
+  now = Date.UTC(2026, 10, 5, 7, 30, 0);
   dir = await mkdtemp(join(tmpdir(), "orbita-panel-service-"));
   root = join(dir, "plugin");
   dataRoot = join(dir, "plugin-data");
@@ -306,7 +312,16 @@ describe("repeat 展开", () => {
     const placeholder = await loadReady();
     assert.deepEqual(placeholder.cards.map((each) => [each.key, each.data.kind]), [["paper#0", "empty"]]);
     await writeFile(join(dataRoot, "lit-tracker", "none.json"), '{"items":[]}');
-    assert.equal((await loadReady()).cards.length, 1);
+    const emptyList = await loadReady();
+    assert.deepEqual(emptyList.cards.map((each) => [each.key, each.data.kind]), [["paper#0", "empty"]], "空数组：给模板的是 empty（与会话快照卡一致），不是整份 {items: []}");
+  });
+
+  test("expandDecl 纯函数：repeat 的数组是空的 → 一张占位卡，data 为 empty（与 board-snapshot 的 data null / state empty 同义）；数据有问题时原样传", () => {
+    const decl = { id: "a", title: "a", size: "1x1", note: null, template: "t", data: null, sample: null, repeat: "items" } as const;
+    const emptyList = expandDecl({ decl }, { data: { kind: "ready", value: { items: [] }, updatedAt: 1 }, usingSample: false, problems: [] });
+    assert.deepEqual(emptyList.cards, [{ index: 0, data: { kind: "empty" }, usingSample: false }]);
+    const problem = expandDecl({ decl }, { data: { kind: "problem", problem: { kind: "invalid-json", message: "x" } }, usingSample: false, problems: [] });
+    assert.equal(problem.cards[0]?.data.kind, "problem");
   });
 
   test("repeat 的属性不是数组：这块声明不出卡，原因进看板级 problems", async () => {
@@ -452,6 +467,67 @@ describe("loadDraftBoard 草稿预览（看板）", () => {
     assert.equal(empty.view.install, null);
     assert.equal(empty.view.board, null);
     assert.deepEqual(await panels.loadDraftView({ path: "plugins/lit-draft", workspaceId: "ws-1", stamp: empty.stamp }), { kind: "unchanged" });
+  });
+});
+
+describe("loadDraftView 的轻 stamp：文件夹没变不重扫", () => {
+  const request = (stamp: string | null) => ({ path: "plugins/lit-draft", workspaceId: "ws-1", stamp });
+  const draft = (): string => join(workspaceRoot, "plugins", "lit-draft");
+
+  beforeEach(async () => {
+    await mkdir(join(draft(), ".claude-plugin"), { recursive: true });
+    await writeFile(manifestFile(draft()), JSON.stringify({ name: "lit-draft" }));
+  });
+
+  test("没变：第二次起不再扫描（preview 只调一次）；手里没有 stamp 的新窗口直接拿到缓存的视图", async () => {
+    const first = await panels.loadDraftView(request(null));
+    assert.equal(first.kind, "ready");
+    if (first.kind !== "ready") return;
+    assert.equal(previewCalls, 1);
+    for (let poll = 0; poll < 5; poll += 1) assert.deepEqual(await panels.loadDraftView(request(first.stamp)), { kind: "unchanged" });
+    const fresh = await panels.loadDraftView(request(null));
+    assert.deepEqual(fresh, { kind: "ready", stamp: first.stamp, view: first.view });
+    assert.equal(previewCalls, 1, "六次轮询只扫了一次");
+  });
+
+  test("清单改了 / 新加了技能 / 加了 .mcp.json 或 scripts/：重扫", async () => {
+    const first = await panels.loadDraftView(request(null));
+    assert.equal(first.kind, "ready");
+    if (first.kind !== "ready") return;
+    await writeFile(manifestFile(draft()), JSON.stringify({ name: "lit-draft", description: "改了" }));
+    await bump(manifestFile(draft()));
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 2, "清单 mtime 变了");
+
+    await mkdir(join(draft(), "skills", "pick"), { recursive: true });
+    await writeFile(join(draft(), "skills", "pick", "SKILL.md"), "---\nname: pick\ndescription: d\n---\n");
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 3, "新技能");
+
+    await writeFile(join(draft(), "skills", "pick", "SKILL.md"), "---\nname: pick\ndescription: dd\n---\n");
+    await bump(join(draft(), "skills", "pick", "SKILL.md"));
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 4, "技能文件改了");
+
+    await writeFile(join(draft(), ".mcp.json"), "{}");
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 5, ".mcp.json 新出现");
+    await mkdir(join(draft(), "scripts"), { recursive: true });
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 6, "scripts/ 新出现");
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 6, "之后没动就不再扫");
+  });
+
+  test("轻 stamp 管不到的地方靠定期全扫兜底：过了 DRAFT_FULL_SCAN_MS 照样扫一次", async () => {
+    const first = await panels.loadDraftView(request(null));
+    if (first.kind !== "ready") throw new Error("unreachable");
+    now += DRAFT_FULL_SCAN_MS - 1;
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 1);
+    now += 1;
+    await panels.loadDraftView(request(first.stamp));
+    assert.equal(previewCalls, 2);
   });
 });
 

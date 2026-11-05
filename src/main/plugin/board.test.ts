@@ -73,6 +73,15 @@ describe("parseBoard", () => {
     assert.ok(problems.every((problem) => problem.kind === "board-invalid"));
   });
 
+  test("模板路径超过 400 字符：这张卡直接记 board-invalid「太长」，不截成假路径；400 字符整的照常", () => {
+    const problems: PluginProblem[] = [];
+    const exact = `./${"a".repeat(398)}`;
+    const board = parseBoard(manifest({ board: { cards: [card({ id: "ok", template: exact }), card({ id: "long", template: `./${"a".repeat(399)}` })] } }), "X", problems);
+    assert.deepEqual(board?.cards.map((each) => [each.id, each.template.length]), [["ok", 400]]);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0]?.detail ?? "", /template: longer than 400 characters \(card "long"\)/);
+  });
+
   test("一张能用的都没有：整块 null；board 不是对象 / cards 不是数组都报问题", () => {
     for (const board of [5, { cards: "x" }, { title: "t" }, { cards: [] }, { cards: [{}] }]) {
       const problems: PluginProblem[] = [];

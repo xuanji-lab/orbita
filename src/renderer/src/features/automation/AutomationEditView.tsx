@@ -404,7 +404,7 @@ export function AutomationEditView(props: {
   );
 }
 
-/** 这个工作区此刻装着、启用着的插件（选插件下拉的选项）。读失败当没有：下拉就不出现 */
+/** 这个工作区此刻装着、启用着、带看板的插件（选插件下拉的选项）。读失败当没有：下拉就不出现 */
 function useEnabledPlugins(workspaceId: string | null): { name: string; label: string }[] {
   const [options, setOptions] = useState<{ name: string; label: string }[]>([]);
   useEffect(() => {
@@ -415,7 +415,7 @@ function useEnabledPlugins(workspaceId: string | null): { name: string; label: s
         if (!live) return;
         setOptions(
           result.plugins
-            .filter((view) => view.origin === "plugin" && view.install !== null && scopeApplies(view.scope, workspaceId))
+            .filter((view) => view.origin === "plugin" && view.install !== null && view.board !== null && scopeApplies(view.scope, workspaceId))
             .map((view) => ({ name: view.id.slice("plugin:".length), label: view.name })),
         );
       })

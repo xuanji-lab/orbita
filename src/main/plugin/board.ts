@@ -80,6 +80,8 @@ function parseCard(entry: unknown, where: string, seen: ReadonlySet<string>, pro
   if (!isBoardCardSize(size)) return bad(`.size: must be one of 1x1, 2x1, 1x2, 2x2 (card "${id}")`);
   const template = entry["template"];
   if (typeof template !== "string" || template.trim() === "") return bad(`.template: required (card "${id}")`);
+  // 超长的模板路径不截断（截成 `…` 结尾的假路径，后面报「找不到文件」会误导）：直接说太长，这张卡跳过
+  if (template.trim().length > PATH_MAX) return bad(`.template: longer than ${PATH_MAX} characters (card "${id}")`);
 
   const optional = (key: "data" | "sample" | "note" | "title", max: number): string | null => {
     const value = entry[key];
@@ -109,7 +111,7 @@ function parseCard(entry: unknown, where: string, seen: ReadonlySet<string>, pro
     title: optional("title", TITLE_MAX) ?? id,
     size,
     note: optional("note", NOTE_MAX),
-    template: clip(template.trim(), PATH_MAX),
+    template: template.trim(),
     data,
     sample,
     repeat,
