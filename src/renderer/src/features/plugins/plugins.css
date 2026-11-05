@@ -3,13 +3,29 @@
  * 结构与信息照设计稿 v2 第 2 / 6 屏；值只用 token，状态（hover / 禁用 / 选中）全在类与 aria 属性上。
  * 一张卡至多三档字号：标题 base 半粗、正文 base 或 sm、元信息 xs（设计系统 Type roles）。
  * 层级先靠字重与颜色。
+ *
+ * 一个组件两种外壳（右栏单列版 data-chrome="rail" / 设置页全屏版 "page"），排法只看**容器宽度**：
+ * .pl-page 是容器（container-type: inline-size），窄于 640px 的全部规矩收在文件末尾那一个
+ * `@container pl` 里——别处不许再写宽度断点，别的 PR 往详情加的卡片放进 .pl-col 就自动单列。
+ * 容器与内容必须是两个元素（@container 查不到容器自己）：根 .pl-page 只当容器，样式落在它的后代上。
  */
 
 .pl-page {
+  container: pl / inline-size;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+/* 右栏版：滚动由右栏面板壳（RightPanelFrame 的内容区）负责，页自己随内容长高 */
+.pl-page[data-chrome="rail"] {
+  height: auto;
+}
+
+.pl-page[data-chrome="rail"] .pl-body {
+  flex: none;
+  overflow: visible;
 }
 
 /* 头部与正文共用一条版心：与会话页同一个测量（--content-max-width） */
@@ -28,17 +44,17 @@
   padding: var(--space-4) var(--space-6) var(--space-2);
 }
 
-.pl-head-title {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-}
-
 .pl-head-actions {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
+}
+
+/* 右栏版：两个入口按钮放在列表顶上（全屏版在页头右侧）；多了就换行，不挤成一行 */
+.pl-top {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -524,6 +540,7 @@
 }
 
 .pl-hero-main {
+  flex: 1 1 0;
   min-width: 0;
 }
 
@@ -578,7 +595,7 @@
 
 .pl-cols {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   align-items: start;
 }
@@ -1176,4 +1193,106 @@ button.pl-wf-chip:hover {
 .pl-ask-foot {
   display: flex;
   gap: var(--space-2);
+}
+
+/*
+ * ---------- 窄容器（< 640px）：右栏版恒在此档，设置页被右栏挤窄时也在 ----------
+ * 整页只有这一个宽度断点。窄档的原则：详情单列，列表退成右栏面板同款的安静列表
+ * （分组头 + 圆角行，无卡片底），行里的「里面有什么 / 来源」收起（悬停仍可读）。
+ * 内容左右血线对齐右栏其它面板：文字距面板边 16px，行的 hover 底铺到 8px。
+ */
+@container pl (max-width: 639px) {
+  .pl-head {
+    flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4) var(--space-2);
+  }
+
+  .pl-head-actions {
+    flex-wrap: wrap;
+  }
+
+  .pl-body {
+    padding: var(--space-2) var(--space-4) var(--space-4);
+  }
+
+  .pl-bar {
+    flex-wrap: wrap;
+  }
+
+  .pl-search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  /* 列表：卡片底退掉，组头与行回到右栏面板的写法 */
+  .pl-grp {
+    width: auto;
+    margin-inline: calc(-1 * var(--space-2));
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .pl-gh {
+    height: 28px;
+    padding: 0 var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .pl-gh .orbita-icon {
+    display: none;
+  }
+
+  /* 数量紧跟组名（同 PanelGroupHead 的 detail），不推到行尾 */
+  .pl-gh-count {
+    margin-left: 0;
+    font-size: var(--font-size-sm);
+  }
+
+  .pl-row {
+    padding: 0 var(--space-2) 0 0;
+    border-top: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .pl-row:hover,
+  .pl-row:has(:focus-visible) {
+    background: var(--option-hover-bg);
+  }
+
+  .pl-row-main {
+    grid-template-columns: 22px minmax(0, 1fr);
+    padding-left: var(--space-2);
+  }
+
+  .pl-row-main:hover {
+    background: transparent;
+  }
+
+  .pl-kinds,
+  .pl-from {
+    display: none;
+  }
+
+  /* 空态 / 无匹配：左缘对齐内容血线（body 的 16px 已经是版心，不再叠一层） */
+  .pl-empty {
+    padding: var(--space-4) 0;
+  }
+
+  /* 详情：两列叠成一列，顺序就是 DOM 顺序（它能做什么 → 装在哪 → 要你填的 → 来源与版本） */
+  .pl-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 头部：头像 + 名字一排，按钮另起一行并可换行 */
+  .pl-hero {
+    flex-wrap: wrap;
+  }
+
+  .pl-acts {
+    flex: 1 1 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
 }

@@ -2,10 +2,12 @@ import "./settings-view.css";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
-import { Icon, type IconName } from "../../shell/Icon";
+import { Icon } from "../../shell/Icon";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
+import { PluginsView } from "../plugins/PluginsView.tsx";
+import type { SettingsTab } from "./settings-tabs.ts";
 import type { ProviderDto } from "@shared/provider";
 import type {
   BrowserImportedSite,
@@ -56,17 +58,6 @@ import { playCompletionChime } from "../notify/chime.ts";
  * 右边还是同一张 `.pane`，同一个宽度、同一套宽度变化。这样设置与聊天是同一个壳，
  * 不是叠在壳上的另一层。
  */
-export const SETTINGS_TABS = [
-  { id: "general", icon: "sliders" },
-  { id: "providers", icon: "cpu" },
-  { id: "migration", icon: "download" },
-  { id: "browser", icon: "globe" },
-  { id: "voice", icon: "mic" },
-  { id: "experimental", icon: "flask-conical" },
-] as const satisfies readonly { id: string; icon: IconName }[];
-
-export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
-
 export function SettingsView(props: {
   tab: SettingsTab;
   settings: AppSettings;
@@ -83,9 +74,10 @@ export function SettingsView(props: {
   workspaces: readonly Workspace[];
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
+  /** 插件页「和智能体一起做一个」：新开会话并预填引导（App 接，设置页随之退场） */
+  onMakeWithAgent: () => void;
 }) {
   const t = useT();
-  const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
   /**
    * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
    * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
@@ -137,6 +129,9 @@ export function SettingsView(props: {
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
         </div>
+      ) : props.tab === "plugins" ? (
+        // 插件页的全屏版：自己带滚动区；窄了（右栏同时开着）由它自己的容器查询收成单列
+        <PluginsView workspaces={props.workspaces} chrome="page" onMakeWithAgent={props.onMakeWithAgent} />
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
