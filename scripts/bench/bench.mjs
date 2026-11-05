@@ -212,7 +212,21 @@ async function attach(app, cdpPort) {
     if (!(main && agent)) await sleep(500);
   }
   if (!main) throw new Error("没接上主进程 inspector（NODE_OPTIONS=--inspect=0 没生效？看实例日志）");
-  if (!agent) throw new Error("没接上 agent 进程 inspector");
+  if (!main) throw new Error("没接上主进程 inspector（NODE_OPTIONS=--inspect=0 没生效？看实例日志）");
+  if (!agent) {
+    // Windows 上 agent 的 utilityProcess fork 成功但入口不执行（G14 实测：极简 CJS 也复现，
+    // serviceName / 显式 env / 去 NODE_OPTIONS / no-sandbox 全部排除，Electron 43.2.0 平台问题
+    // 另行跟进）。agent 侧指标本轮降级缺测：假连接让下游自然拿到 null，renderer / 主进程 /
+    // 端到端测量照常。
+    console.error("没接上 agent 进程 inspector：agent 侧指标本轮缺测（utilityProcess 待修）");
+    agent = {
+      evaluate: async (expr) =>
+        expr.includes("readMs") ? { readMs: null, parseMs: null, lines: 0 }
+          : expr.includes("__bench.end()") ? { eldP99: null, eldMax: null, heapPeak: 0 }
+          : null,
+      close: () => {},
+    };
+  }
   // 密钥用本机 safeStorage 现加密（Mac 钥匙串 / Windows DPAPI），不借别的实例的密文。
   // renderer 启动时已按「没有密钥」缓存了 provider 列表（发不出消息），写完刷新一次页面
   await main.evaluate(`(() => { const { safeStorage, app } = require('electron'); const fs = require('node:fs');
