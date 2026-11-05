@@ -555,8 +555,12 @@ const fixtures = FIXTURES.map((f) => {
 const toolFile = join(WORK, "ws", "bench-tool-8kb.txt");
 mkdirSync(dirname(toolFile), { recursive: true });
 writeFileSync(toolFile, `${"x".repeat(63)}\n`.repeat(128));
-const mockPort = await pickPort(5381, 5399);
-const cdpPort = await pickPort(39381, 39399);
+// Windows 上 winnat（Hyper-V/WSL）每次开机在低位段随机保留整段端口，2026-11-05 一台 G14 实测
+// 5305-5404 全保留，把 19 口的 5381-5399 整段吞掉，跳完保留段后无端口可用。动态段每次开机重摇，
+// 固定换新段只是挪概率；pickPort 本就先跳保留段再逐口试绑，加宽扫描让它自愈。端口号不在测量
+// 路径上，与 Mac 基线（旧段）的数据可直接并排比较。
+const mockPort = await pickPort(5300, 5799);
+const cdpPort = await pickPort(39300, 39999);
 const mock = await startMock({ port: mockPort, toolFile });
 step(`假模型 127.0.0.1:${mockPort}，CDP ${cdpPort}，结果 → ${outDir}`);
 const ctx = { mock, mockPort, cdpPort, outDir, machine: machineInfo() };

@@ -49,7 +49,7 @@ node scripts\bench\bench.mjs --fixture C:\orbita-bench\fixture-6df79261.zip --fi
 
 **插电，并记下电源模式。** Windows 笔记本拔电会降频。脚本只读地记录三件事，写进结果头部：是否插电、`powercfg /getactivescheme` 的当前方案、Defender 实时防护是否开着。它不关 Defender，也不加排除项。
 
-**端口。** 假模型在 5381–5399 里挑第一个可用的端口，renderer 调试口在 39381–39399 里挑。Windows 上先查 `netsh int ipv4 show excludedportrange`，跳过系统保留段（同 `scripts/try-pr.ps1`）。主进程与 agent 进程的 inspector 用 `--inspect=0`，由系统分配临时端口。不会碰 5273。
+**端口。** 假模型在 5300–5799 里挑第一个可用的端口，renderer 调试口在 39300–39999 里挑。范围给得宽，是因为 Windows 的 winnat（Hyper-V/WSL）每次开机在低位段随机保留整段端口（实测 5305-5404 整段保留过，窄段会被整段吞掉）；脚本先查 `netsh int ipv4 show excludedportrange`，跳过系统保留段（同 `scripts/try-pr.ps1`），再逐口试绑。主进程与 agent 进程的 inspector 用 `--inspect=0`，由系统分配临时端口。不会碰 5273。
 
 **它会在家目录下建一个空的 `Orbita-bench` 文件夹**（应用按 `--user-data-dir` 的目录名派生工作区根）。跑完可以删。
 
