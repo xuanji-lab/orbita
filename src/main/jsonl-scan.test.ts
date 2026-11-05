@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HEAD_BYTES, headStringField, scanJsonlLines } from "./jsonl-scan.ts";
@@ -23,7 +23,6 @@ async function scan(text: string, keep: (head: string) => boolean): Promise<stri
   await scanJsonlLines(file, keep, (line) => out.push(line));
   return out;
 }
-
 describe("scanJsonlLines", () => {
   test("全留时与 split('\\n') 去空行逐行一致：跨块的长行、无尾换行、多字节字符", async () => {
     // 600KB 的行跨过 256KB 的读块边界；中文让多字节字符落在块边界上的概率不为零
@@ -50,8 +49,49 @@ describe("scanJsonlLines", () => {
     assert.deepEqual(heads.map((h) => h.length), [HEAD_BYTES, 5]);
   });
 
+  test("onLine 附带行的字节区间 [start, end)：多字节字符、跨块长行、无尾换行都字节精确", async () => {
+    // 中文每字 3 字节，让字节偏移与字符下标明显错开；长行跨过 256KB 读块边界
+    const long = JSON.stringify({ id: "1", role: "tool", text: "工具输出".repeat(150_000) });
+    const first = '{"id":"a","role":"user","text":"中文"}';
+    const text = `${first}\n${long}\n{"id":"b"}`; // 最后一行无尾换行
+    const file = join(dir, "x.jsonl");
+    await writeFile(file, text, "utf8");
+    const bytes = Buffer.from(text, "utf8");
+    const spans: [string, number, number][] = [];
+    await scanJsonlLines(file, () => true, (line, start, end) => spans.push([line, start, end]));
+    assert.equal(spans.length, 3);
+    for (const [line, start, end] of spans) {
+      assert.equal(bytes.toString("utf8", start, end), line); // 区间读回即整行
+    }
+    assert.equal(bytes[spans[0]?.[2] ?? -1], 0x0a); // 前两行的 end 钉在换行符上
+    assert.equal(bytes[spans[1]?.[2] ?? -1], 0x0a);
+    assert.equal(spans[0]?.[1], 0);
+    assert.equal(spans[2]?.[2], bytes.length); // 无尾换行的最后一行：end 钉在文件尾
+  });
+
   test("文件不存在照抛，由调用方兜底", async () => {
     await assert.rejects(scanJsonlLines(join(dir, "nope.jsonl"), () => true, () => undefined));
+  });
+
+  test("传 fd 时从共享句柄读、流不替调用方关：内容与按路径读一致，扫完句柄仍可用", async () => {
+    const long = JSON.stringify({ id: "1", role: "tool", text: "长行".repeat(100_000) }); // 跨多个 256KB 读块
+    const text = `${long}\n{"id":"2"}\n{"id":"3"}`; // 末行无尾换行
+    const file = join(dir, "x.jsonl");
+    await writeFile(file, text, "utf8");
+    const byPath: string[] = [];
+    await scanJsonlLines(file, () => true, (line) => byPath.push(line));
+    const handle = await open(file, "r");
+    try {
+      const byFd: string[] = [];
+      await scanJsonlLines(file, () => true, (line) => byFd.push(line), { fd: handle.fd });
+      assert.deepEqual(byFd, byPath);
+      // autoClose:false：扫完句柄还开着、能继续用（loadWindow 的第二遍靠它接着按区间读）
+      const probe = Buffer.alloc(1);
+      const { bytesRead } = await handle.read(probe, 0, 1, 0);
+      assert.equal(bytesRead, 1);
+    } finally {
+      await handle.close();
+    }
   });
 });
 
