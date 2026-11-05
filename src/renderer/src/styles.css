@@ -2145,6 +2145,42 @@ body {
 }
 
 /*
+ * mermaid 图（MermaidBlock，pele 渲染）：颜色变量由组件内联映射到设计系统 token，
+ * 这里只管容器。失败退回时上方一行灰字 + 原来的代码块（pre 沿用 .chat-md pre）。
+ */
+.chat-md .mermaid-block {
+  margin: var(--space-2) 0;
+}
+
+.chat-md .mermaid-diagram {
+  /* pele 的缩放按钮 absolute 定位，不设定位祖先就会飘到整个面板的右上角（多张图叠在一起） */
+  position: relative;
+  padding: var(--space-3);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.chat-md .mermaid-diagram[hidden] {
+  display: none;
+}
+
+.chat-md .mermaid-block[data-phase="loading"] .mermaid-diagram {
+  visibility: hidden;
+}
+
+.chat-md .mermaid-fail {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.chat-md .mermaid-block pre {
+  margin: 0;
+}
+
+/*
  * 数学公式（KaTeX，math 渲染管线见 MarkdownBlock）：颜色继承正文墨色、字号微升；
  * 块级公式居中（LaTeX 惯例）；解析失败的源码降级为斜体次级灰——这不是报警
  * （流式期间根本不挂 katex，公式先以源码文本显示，见 stream-render.ts）。

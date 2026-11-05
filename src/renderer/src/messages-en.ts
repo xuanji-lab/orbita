@@ -1413,6 +1413,7 @@ export const en = {
     copyMessage: "Copy message",
     copyAnswer: "Copy answer",
     messageRenderFailed: "This message failed to render:",
+    mermaidFailed: "This mermaid block could not be drawn: ",
     responding: "Responding",
     // 转写里的折叠行
     thinking: "Thinking",
