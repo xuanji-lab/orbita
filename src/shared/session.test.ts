@@ -16,6 +16,7 @@ import {
   sortSessions,
   transcriptToMarkdown,
   type SessionMeta,
+  userTextForTitle,
 } from "./session.ts";
 
 const valid = {
@@ -40,6 +41,40 @@ const valid = {
   createdAt: 1000,
   updatedAt: 2000,
 };
+
+describe("userTextForTitle", () => {
+  it("没有指令块：取首块（附件块、普通多段消息照旧）", () => {
+    strictEqual(userTextForTitle(["第一段", "第二段"]), "第一段");
+    strictEqual(userTextForTitle(["<pasted-text>x</pasted-text>", "真话"]), "<pasted-text>x</pasted-text>");
+  });
+
+  it("没有文本块：null", () => {
+    strictEqual(userTextForTitle([]), null);
+  });
+
+  it("开头是 /skill: 指令块：把被空行拆开的几块接回去，整体剥掉，剩下用户自己的话", () => {
+    const composed = composeInvocationPrompt("/skill:a 做事\n\n第二段", [{ target: "a", location: "/x/SKILL.md" }], []);
+    const blocks = composed.split("\n\n").filter((part) => part !== "");
+    // 指令块自己就拆成了多块——这正是只看首块出错的原因
+    strictEqual(blocks.length > 3, true);
+    strictEqual(blocks[0]?.startsWith("<mentioned_tools>"), true);
+    strictEqual(userTextForTitle(blocks)?.split("\n\n")[0], "/skill:a 做事");
+    strictEqual(deriveSessionTitle(userTextForTitle(blocks) ?? ""), "/skill:a 做事");
+  });
+
+  it("指令块缺闭标签：原样（宁可不剥也不吞内容）", () => {
+    strictEqual(userTextForTitle(["<mentioned_tools>", "后面"]), "<mentioned_tools>\n\n后面");
+  });
+});
+
+describe("recentQueriesFromRecords（分支继承）", () => {
+  it("首条消息带 /skill: 指令块时同样取用户自己的话", () => {
+    const composed = composeInvocationPrompt("/skill:a 做事", [{ target: "a", location: "/x/SKILL.md" }], []);
+    const content = composed.split("\n\n").map((text) => ({ type: "text" as const, text }));
+    const queries = recentQueriesFromRecords([{ id: "u", role: "user", content, timestamp: 1 }]);
+    deepStrictEqual(queries, ["/skill:a 做事"]);
+  });
+});
 
 describe("deriveSessionTitle", () => {
   it("取第一行", () => {

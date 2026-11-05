@@ -15,7 +15,7 @@ import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { isThinkingLevel, parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillSegments } from "./skill.ts";
-import { stripInvocationBlock } from "./invocation.ts";
+import { INVOCATION_OPEN, stripInvocationBlock } from "./invocation.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
@@ -300,8 +300,8 @@ export function recentQueriesFromRecords(records: readonly SessionRecord[]): str
   let queries: string[] = [];
   for (const record of records) {
     if (record.role !== "user") continue;
-    const text = record.content.find((block) => block.type === "text");
-    if (text !== undefined && text.type === "text") queries = pushRecentQuery(queries, text.text);
+    const text = userTextForTitle(record.content.flatMap((block) => (block.type === "text" ? [block.text] : [])));
+    if (text !== null) queries = pushRecentQuery(queries, text);
   }
   return queries;
 }
@@ -585,6 +585,23 @@ export interface SessionOlderPage {
   records: SessionRecord[];
   /** 这一段之前还有记录 */
   hasMore: boolean;
+}
+
+/**
+ * 一条用户消息里该拿去算标题与「最近提问」的文本（入参是它的文本块，按顺序）。
+ *
+ * 回显按空行把消息拆成多块（splitEchoBlocks），首块通常就够——除了开头的 `/skill:` / `/mcp:`
+ * 指令块：它自己含空行，被拆成「开标签 + 说明」「清单 + 闭标签」几块，只看首块得到的是一行
+ * 裸的 `<mentioned_tools>`（2026-11-05 插件页「和智能体一起做一个」的首条消息必带 /skill:，
+ * 侧栏标题与首页卡的「最近提问」都写成了它，最近提问还一直留着）。这种情况把块接回去、
+ * 整体剥掉指令块，剩下的才是用户自己的话。没有指令块时仍取首块（附件块等照旧）。
+ * 没有文本块返回 null。
+ */
+export function userTextForTitle(textBlocks: readonly string[]): string | null {
+  const first = textBlocks[0];
+  if (first === undefined) return null;
+  if (!first.startsWith(INVOCATION_OPEN)) return first;
+  return stripInvocationBlock(textBlocks.join("\n\n"));
 }
 
 /**

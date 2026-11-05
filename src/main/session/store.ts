@@ -39,6 +39,7 @@ function isMachinePrompt(record: SessionRecord): boolean {
 import {
   childSessions,
   deriveSessionTitle,
+  userTextForTitle,
   isChannelMarkRecord,
   isCompactedRecord,
   parseSessionMeta,
@@ -452,18 +453,17 @@ export class SessionStore {
       const changes: Partial<SessionMeta> = { updatedAt: item.timestamp };
       // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名。
       // 手动改过名的会话 title 不为空，因此这条守卫自动让位给它。
-      if (current.title === "" && item.role === "user") {
-        const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text") {
-          changes.title = deriveSessionTitle(text.text);
-        }
-      }
+      const userText =
+        item.role === "user"
+          ? userTextForTitle(item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])))
+          : null;
+      if (current.title === "" && userText !== null) changes.title = deriveSessionTitle(userText);
       // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致。
       // 收尾扫描的机器提问不是用户的提问，不进最近提问（首页卡上会冒出一行「【Orbita 收尾扫描】」）
       if (item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text" && !isClosingScanText(text.text)) {
-          changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);
+        if (userText !== null && text !== undefined && text.type === "text" && !isClosingScanText(text.text)) {
+          changes.recentQueries = pushRecentQuery(current.recentQueries, userText);
         }
       }
       return changes;
