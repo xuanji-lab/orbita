@@ -75,11 +75,11 @@ export function SettingsView(props: {
   onImported: () => void;
   /** 既有工作区（Migration 的去向菜单列它们） */
   workspaces: readonly Workspace[];
-  /** 当前会话所在的工作区与「在右栏打开面板」：插件页（全屏版）的详情页用 */
+  /** 当前会话所在的工作区与「打开看板」：插件页（全屏版）的详情页用 */
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
   /** 插件页签（全屏版）要接到会话引擎与右栏上的三样（实验功能 plugins） */
-  plugins: { currentWorkspaceId: string | null; onMakeWithAgent: () => void; onOpenPanel: (pluginName: string) => void };
+  plugins: { currentWorkspaceId: string | null; onMakeWithAgent: () => void; onOpenBoard: (pluginName: string) => void };
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
   onCollapseRail: (() => void) | null;
 }) {
