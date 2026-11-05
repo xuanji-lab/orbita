@@ -62,6 +62,11 @@ export function RightRail(props: {
    */
   /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
   intentAvailable: boolean;
+  /**
+   * 插件入口（实验功能 plugins）：null = 不出现（开关关着）。不占右栏面板位——它在**中间主槽**
+   * 显示插件页（与记忆库同类的盖层），所以点亮与点击都由 App 给，不走 `onPanel`。
+   */
+  pluginsEntry: RailEntry | null;
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -141,6 +146,14 @@ export function RightRail(props: {
         lit={props.panel === "mcp"}
         onClick={() => props.onPanel(props.panel === "mcp" ? null : "mcp")}
       />
+      {props.pluginsEntry !== null && (
+        <RailEntryButton
+          icon={props.pluginsEntry.icon}
+          label={props.pluginsEntry.label}
+          lit={props.pluginsEntry.lit}
+          onClick={props.pluginsEntry.onClick}
+        />
+      )}
       {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
       <RailEntryButton
         icon="square-terminal"

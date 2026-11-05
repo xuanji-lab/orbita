@@ -61,6 +61,7 @@ import {
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
 import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
+import { PluginsView } from "./features/plugins/PluginsView.tsx";
 import type { MemoryNav } from "./features/memory/memory-view.ts";
 import { useMemoryScopes } from "./features/memory/useMemory.ts";
 import type { MemoryEntryView } from "@shared/memory";
@@ -829,7 +830,11 @@ export function App() {
   // 单独打开 MCP 面板 active 恒为 false，列表永远停在「Loading servers…」（2026-09-21 实测）
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
   // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
-  const skills = useSkills(shownPanel === "skills" || shownPanel === "mcp", session.workspaces);
+  const skills = useSkills(
+    shownPanel === "skills" || shownPanel === "mcp",
+    session.workspaces,
+    settings.experimentalFeatures?.["plugins"] === true,
+  );
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
@@ -864,6 +869,9 @@ export function App() {
   // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);
+  // 插件页（实验功能 plugins）：开关关掉时盖层退回聊天，入口不出现
+  const pluginsOn = experimentalFeatures["plugins"] === true;
+  if (overlay === "plugins" && !pluginsOn) setOverlay(null);
   const memoryScopes = useMemoryScopes(overlay === "memory");
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
@@ -876,10 +884,13 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" || overlay === "memory" ? (
+    overlay === "settings" || overlay === "memory" || overlay === "plugins" ? (
       <div className="cap-sess">
         <div className="cap-sc">
-          <strong className="cap-title">{overlay === "memory" ? t.memory.title : t.settings.tabs[settingsTab]}</strong>
+          {overlay === "plugins" && <Icon name="blocks" size={14} strokeWidth={1.8} />}
+          <strong className="cap-title">
+            {overlay === "memory" ? t.memory.title : overlay === "plugins" ? t.plugins.title : t.settings.tabs[settingsTab]}
+          </strong>
         </div>
       </div>
     ) : mainOpenId === "" && session.opened === null ? null : (
@@ -1017,7 +1028,9 @@ export function App() {
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
-            {overlay === "memory" ? (
+            {overlay === "plugins" ? (
+              <PluginsView workspaces={session.workspaces} />
+            ) : overlay === "memory" ? (
               <MemoryLibraryView
                 nav={memoryNav}
                 onNav={setMemoryNav}
@@ -1194,6 +1207,21 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
+          pluginsEntry={
+            pluginsOn
+              ? {
+                  icon: "blocks",
+                  label: t.rail.plugins,
+                  lit: overlay === "plugins",
+                  onClick: () => {
+                    // 插件页占主槽、侧栏照旧：先把归档 / 遗留子视图收掉（它们会盖住侧栏列表）
+                    setShowArchived(false);
+                    setShowCarryovers(false);
+                    setOverlay(overlay === "plugins" ? null : "plugins");
+                  },
+                }
+              : null
+          }
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }

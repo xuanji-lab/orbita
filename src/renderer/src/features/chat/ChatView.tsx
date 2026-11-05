@@ -630,9 +630,16 @@ function useSkillIndex(): {
   skills: SkillMeta[];
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  // 插件里的技能（实验功能 plugins）也要认：read 它的 SKILL.md 同样标成「在用 skill」
+  const pluginsOn = useExperimentalFeature("plugins");
   const reload = useCallback(() => {
-    void api.skill.list().then(setSkills).catch(() => undefined);
-  }, []);
+    void Promise.all([
+      api.skill.list(),
+      pluginsOn ? api.plugin.skills().catch((): SkillMeta[] => []) : Promise.resolve<SkillMeta[]>([]),
+    ])
+      .then(([own, fromPlugins]) => setSkills([...own, ...fromPlugins]))
+      .catch(() => undefined);
+  }, [pluginsOn]);
   useEffect(() => {
     reload();
   }, [reload]);
