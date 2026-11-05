@@ -126,19 +126,34 @@ import {
 // 任何监听行，Mac 同机制可跑通）。测量驱动（scripts/bench/bench.mjs）设 ORBITA_AGENT_INSPECT=1
 // 时，进程内自己激活 inspector，并按 Node CLI 的输出格式打印，bench 靠这行认出 agent 进程。
 if (process.env.ORBITA_AGENT_INSPECT === "1") {
+  let gate = "gate-enter";
   try {
     inspector.open(0);
     const url = inspector.url();
+    gate += " url=" + (url ?? "null");
     if (url) {
       console.error(`Debugger listening on ${url}`);
       // utilityProcess 的 stderr 不保证进父进程管道（Windows 实测过不进），bench 同时轮询
-      // 这个文件兖底；路径由测量驱动经 env 传入，正常运行没有它，不写。
+      // 这个文件兜底；路径由测量驱动经 env 传入，正常运行没有它，不写。
       const file = process.env.ORBITA_INSPECT_FILE;
       if (file) writeFileSync(file, url);
     }
   } catch (e) {
+    // NODE_OPTIONS=--inspect=0 已在 utilityProcess 生效时 open 会抛 ALREADY_ACTIVATED：
+    // 此时 url() 仍能拿到现成的 ws 地址，同样写文件给 bench 轮询。
+    gate += " open-throw: " + String(e);
+    try {
+      const u2 = inspector.url();
+      gate += " url2=" + (u2 ?? "null");
+      if (u2) {
+        console.error(`Debugger listening on ${u2} (already activated)`);
+        const file2 = process.env.ORBITA_INSPECT_FILE;
+        if (file2) writeFileSync(file2, u2);
+      }
+    } catch {}
     console.error(`[agent-runtime] inspector.open 失败：${String(e)}`);
   }
+  try { writeFileSync("C:/orbita-bench/agent-boot2.log", gate + "\n", { flag: "a" }); } catch {}
 }
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
