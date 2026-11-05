@@ -51,6 +51,8 @@ import { registerSessionIpc } from "./session/ipc.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
+import { registerPluginIpc } from "./plugin/ipc.ts";
+import { PluginStore } from "./plugin/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
@@ -900,6 +902,20 @@ void app.whenReady().then(async () => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
   registerSkillIpc(skills);
+  /*
+   * 插件（实验功能 plugins）：记录 / 副本 / 数据 / 归档都在 userData 下，不写进上面这个 skills
+   * 目录也不写 mcp.json。冲突检测与开轮装配要避开用户自己的技能，所以把它们的身份读法注入进去
+   * （missing 的断链不算：它没有真实文件）。敏感配置值共用 provider 那把密钥存储。
+   */
+  const plugins = new PluginStore({
+    configDir,
+    secrets,
+    userSkills: async () => (await skills.list()).filter((meta) => !meta.missing).map(({ slug, name }) => ({ slug, name })),
+  });
+  void plugins.init().catch((error: unknown) => {
+    console.error("[main] 清不了插件暂存目录（不影响使用，下次启动再试）", error);
+  });
+  registerPluginIpc({ plugins, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload() });
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
   registerImportIpc(
     sessions,
@@ -922,7 +938,11 @@ void app.whenReady().then(async () => {
     console.error("[main] 建不了 Home 目录，Home 任务的文件可能落不了盘", error);
   });
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
-  registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
+  registerWorkspaceIpc(workspaces, async (id) => {
+    await skills.removeWorkspace(id);
+    // 插件的「只在这些工作区」名单里摘掉它（摘空转停用）
+    await plugins.removeWorkspace(id);
+  });
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
@@ -958,6 +978,7 @@ void app.whenReady().then(async () => {
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
+    plugins,
     mcp,
     settings,
     intentIngest,

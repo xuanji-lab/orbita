@@ -36,6 +36,7 @@ import {
   type PluginPreviewRequest,
   type PluginPreviewResult,
   type PluginProblem,
+  type PluginPlacement,
   type PluginScope,
   type PluginSource,
   type PluginSourceRecord,
@@ -373,6 +374,42 @@ export class PluginStore {
         placement: next.kind === "off" ? record.placement : next,
         updatedAt: this.now(),
       }));
+    });
+  }
+
+  /**
+   * 工作区被移除：从所有插件的范围与位置里摘掉它（同 SkillStore.removeWorkspace 的连带清理）。
+   * 「只在这些工作区」摘空了就转成停用——不能留一个名单为空却显示「启用」的插件；
+   * 位置名单摘空回到「所有工作区」（停用的行总要有个落脚的组）。
+   */
+  removeWorkspace(id: string): Promise<void> {
+    return this.serial(async () => {
+      const records = await this.records();
+      const touched = records.filter(
+        (record) =>
+          (record.scope.kind === "workspaces" && record.scope.ids.includes(id)) ||
+          (record.placement.kind === "workspaces" && record.placement.ids.includes(id)),
+      );
+      if (touched.length === 0) return;
+      const without = (ids: readonly string[]): string[] => ids.filter((each) => each !== id);
+      await this.writeRecords(
+        records.map((record) => {
+          if (!touched.includes(record)) return record;
+          const placement: PluginPlacement =
+            record.placement.kind === "workspaces"
+              ? without(record.placement.ids).length > 0
+                ? { kind: "workspaces", ids: without(record.placement.ids) }
+                : { kind: "global" }
+              : record.placement;
+          const scope: PluginScope =
+            record.scope.kind === "workspaces"
+              ? without(record.scope.ids).length > 0
+                ? { kind: "workspaces", ids: without(record.scope.ids) }
+                : { kind: "off" }
+              : record.scope;
+          return { ...record, scope, placement, updatedAt: this.now() };
+        }),
+      );
     });
   }
 

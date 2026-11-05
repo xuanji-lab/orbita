@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { SecretsPort } from "../provider/store.ts";
+import { mergeMcpConfigs, resolveServersForWorkspace } from "../../shared/mcp.ts";
 import type { PluginInstallResult, PluginPreview, PluginScope } from "../../shared/plugin.ts";
 import { runGit, type GitRunner } from "./install.ts";
 import { PluginStore } from "./store.ts";
@@ -378,6 +379,30 @@ describe("开轮装配", () => {
     assert.equal((await stat(join(configDir, "plugin-data", "demo"))).isDirectory(), true);
   });
 
+  test("引用项目根（CLAUDE_PROJECT_DIR）：装配给 ${workspaceFolder} 占位，再走现有解析——工作区里换成根，Home 会话里跳过；用户同名 server 赢", async () => {
+    const root = join(base, "sources", "proj");
+    await put(root, ".mcp.json", JSON.stringify({ mcpServers: { s: { command: "run", cwd: "${CLAUDE_PROJECT_DIR}", args: ["--root", "${CLAUDE_PROJECT_DIR}/x"] } } }));
+    await installFolder(root, "link");
+    const { mcpServers } = await store.assemble({ id: "w", name: "论文", path: "/papers" });
+    assert.equal(mcpServers["plugin_proj_s"]?.transport, "stdio");
+    const merged = (workspace: { id: string; name: string; path: string } | null, user: Record<string, never> = {}) =>
+      resolveServersForWorkspace(mergeMcpConfigs(mcpServers, mergeMcpConfigs(user, {})), workspace);
+    assert.deepEqual(merged({ id: "w", name: "论文", path: "/papers" })["plugin_proj_s"], {
+      transport: "stdio",
+      command: "run",
+      cwd: "/papers",
+      args: ["--root", "/papers/x"],
+      env: { CLAUDE_PLUGIN_ROOT: root, CLAUDE_PLUGIN_DATA: join(configDir, "plugin-data", "proj") },
+    });
+    assert.equal("plugin_proj_s" in merged(null), false);
+    // 用户自己起了同名 server：垫在底下的插件版被它盖掉
+    const overridden = resolveServersForWorkspace(
+      mergeMcpConfigs(mcpServers, { plugin_proj_s: { transport: "stdio", command: "mine" } }),
+      { id: "w", name: "论文", path: "/papers" },
+    );
+    assert.equal(overridden["plugin_proj_s"]?.transport === "stdio" && overridden["plugin_proj_s"].command, "mine");
+  });
+
   test("必填配置没填：这台 MCP 不叠（不用空值硬起），技能照常", async () => {
     await installDemo();
     const assembled = await store.assemble(null);
@@ -513,6 +538,27 @@ describe("启用范围", () => {
     // @ts-expect-error 故意传坏形状
     await store.setScope("demo", { kind: "everything" });
     assert.deepEqual((await store.records())[0]?.scope, { kind: "off" });
+  });
+});
+
+describe("工作区被移除", () => {
+  test("从范围与位置里摘掉它；摘空的「只在这些」转停用，位置回到所有工作区", async () => {
+    await installFolder(await makeSource("one"), "link", { kind: "workspaces", ids: ["w1", "w2"] });
+    await installFolder(await makeSource("two"), "link", { kind: "workspaces", ids: ["w1"] });
+    await installFolder(await makeSource("three"), "link", GLOBAL);
+    await store.removeWorkspace("w1");
+    const by = async (name: string) => (await store.records()).find((r) => r.name === name);
+    assert.deepEqual((await by("one"))?.scope, { kind: "workspaces", ids: ["w2"] });
+    assert.deepEqual([(await by("two"))?.scope, (await by("two"))?.placement], [{ kind: "off" }, { kind: "global" }]);
+    assert.deepEqual((await by("three"))?.scope, GLOBAL);
+  });
+
+  test("停用的插件位置记忆里的工作区被移除：位置同样摘掉", async () => {
+    await installFolder(await makeSource("one"), "link", { kind: "workspaces", ids: ["w1", "w2"] });
+    await store.setScope("one", { kind: "off" });
+    await store.removeWorkspace("w2");
+    const record = (await store.records())[0];
+    assert.deepEqual([record?.scope, record?.placement], [{ kind: "off" }, { kind: "workspaces", ids: ["w1"] }]);
   });
 });
 
