@@ -8,6 +8,7 @@ import { PANEL_DATA_MAX_BYTES, PANEL_SPEC_MAX_BYTES, PANEL_TEMPLATE_MAX_BYTES, t
 import {
   ActionLimiter,
   appendActionLine,
+  draftIdentity,
   expandRepeat,
   locatePanelFile,
   locatePanelTemplate,
@@ -358,5 +359,31 @@ describe("appendActionLine", () => {
     const read = (await readFile(file, "utf8")).split("\n").filter((line) => line !== "");
     assert.equal(read.length, 100);
     assert.deepEqual(read.map((line) => (JSON.parse(line) as { n: number }).n).sort((a, b) => a - b), lines.map((_, index) => index));
+  });
+});
+
+describe("draftIdentity（右栏草稿预览与 show_plugin_board 共用的草稿身份）", () => {
+  const dataDirOf = (name: string): string => join("/data", name);
+
+  test("清单名合规：用清单名；显示名取清单 displayName，没有就是名字；数据目录按清单名", () => {
+    assert.deepEqual(draftIdentity({ name: "lit-draft", displayName: "文献草稿" }, "/ws/plugins/folder", dataDirOf), {
+      name: "lit-draft",
+      displayName: "文献草稿",
+      dataDir: join("/data", "lit-draft"),
+    });
+    assert.equal(draftIdentity({ name: "lit-draft" }, "/ws/plugins/folder", dataDirOf).displayName, "lit-draft");
+  });
+
+  test("清单名不合规 / 没写：退回文件夹名；两个都不合规：数据目录退回草稿自己的 data/（路径穿越进不来）", () => {
+    assert.deepEqual(draftIdentity({ name: "../../x" }, "/ws/plugins/lit-draft", dataDirOf), {
+      name: "lit-draft",
+      displayName: "lit-draft",
+      dataDir: join("/data", "lit-draft"),
+    });
+    assert.deepEqual(draftIdentity({ name: "../../x" }, "/ws/plugins/Odd Name", dataDirOf), {
+      name: "Odd Name",
+      displayName: "Odd Name",
+      dataDir: join("/ws/plugins/Odd Name", "data"),
+    });
   });
 });

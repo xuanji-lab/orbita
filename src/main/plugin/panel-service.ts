@@ -11,10 +11,7 @@ import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   PLUGIN_MANIFEST_PATHS,
-  isPluginName,
   scopeApplies,
-  type PluginConfigField,
-  type PluginConfigValue,
   type PluginDraftSnapshot,
   type PluginPreviewRequest,
   type PluginPreviewResult,
@@ -24,7 +21,6 @@ import {
   BOARD_CARD_ID_PATTERN,
   BOARD_MAX_EXPANDED_CARDS,
   type PluginBoardCardDecl,
-  type PluginBoardInfo,
 } from "../../shared/plugin-board.ts";
 import {
   PANEL_ACTIONS_FILE,
@@ -44,10 +40,11 @@ import {
 import { draftViewOf, emptyDraftView } from "./draft-view.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { parseBoard } from "./board.ts";
-import { parseUserConfig, readManifest } from "./manifest.ts";
+import { manifestDisplayName, parseUserConfig, readManifest } from "./manifest.ts";
 import {
   ActionLimiter,
   appendActionLine,
+  draftIdentity,
   expandRepeat,
   locatePanelFile,
   readPanelData,
@@ -56,6 +53,7 @@ import {
   resolveDataPath,
   sampleProblemOf,
   statDataFile,
+  type BoardSource,
   type DataStat,
   type PanelFileResult,
   type ResolvedDataPath,
@@ -78,19 +76,6 @@ export interface PluginPanelsDeps {
   workspaceRoot: (workspaceId: string | null) => Promise<string | null>;
   frames: PanelFrames;
   now?: () => number;
-}
-
-/**
- * 渲染一块看板要的一切输入：已装插件与草稿预览都归到这一个形状，载入逻辑只写一份。
- * 草稿没有配置值（`values` 为空）、没有启用范围；它的数据目录按清单里的名字算（装上之后就是那个目录）。
- */
-interface BoardSource {
-  root: string;
-  dataDir: string;
-  fields: readonly PluginConfigField[];
-  values: Readonly<Record<string, PluginConfigValue>>;
-  workspaceRoot: string | null;
-  board: PluginBoardInfo | null;
 }
 
 /**
@@ -259,14 +244,11 @@ export class PluginPanels {
     if (!located.ok) return this.unavailable(request.stamp, located.reason, []);
     // 清单本身的问题这里不报：草稿还在写，写到一半的清单就是「还没有看板」
     const { manifest } = await readManifest(located.draftRoot, []).catch(() => ({ manifest: {} as Record<string, unknown> }));
-    const displayName = manifestDisplayName(manifest, basename(located.draftRoot));
-    // 数据目录按清单里的名字（没写 / 不合规就按文件夹名）：装上之后它就是那个目录。两个都不合规就退回草稿自己的 data/
-    const manifestName = manifest["name"];
-    const name = [manifestName, basename(located.draftRoot)].find((candidate): candidate is string => typeof candidate === "string" && isPluginName(candidate));
+    const { displayName, dataDir } = draftIdentity(manifest, located.draftRoot, (name) => this.plugins.dataDirOf(name));
     return this.render(
       {
         root: located.draftRoot,
-        dataDir: name === undefined ? join(located.draftRoot, "data") : this.plugins.dataDirOf(name),
+        dataDir,
         fields: parseUserConfig(manifest["userConfig"]),
         values: {},
         workspaceRoot: located.wsRoot,
@@ -543,12 +525,6 @@ export function expandDecl(
     cardProblems: source.problems,
     boardProblems: [],
   };
-}
-
-/** 清单的 displayName（非空字符串）优先，否则退回给定的名字。 */
-function manifestDisplayName(manifest: Record<string, unknown>, fallback: string): string {
-  const value = manifest["displayName"];
-  return typeof value === "string" && value !== "" ? value : fallback;
 }
 
 /** 文件进 stamp 的签名：没写 `none`；读得到用 mtime:size；有问题带上问题分类（问题变了也要刷新）。 */

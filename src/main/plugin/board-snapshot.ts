@@ -16,10 +16,10 @@
  */
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { errorCode, isNotFound } from "../fs-errors.ts";
-import { isPluginName, scopeApplies, type PluginConfigField, type PluginConfigValue } from "../../shared/plugin.ts";
+import { isPluginName, scopeApplies } from "../../shared/plugin.ts";
 import type { PluginPanelData } from "../../shared/plugin-panel.ts";
 import {
   BOARD_MAX_EXPANDED_CARDS,
@@ -36,19 +36,19 @@ import {
 } from "../../shared/plugin-board.ts";
 import { locateInside } from "./agent-requests.ts";
 import { parseBoard } from "./board.ts";
-import { parseUserConfig, readManifest } from "./manifest.ts";
-import { locatePanelFile, readPanelData, readPanelSample, readPanelTemplate, resolveDataPath } from "./panel.ts";
+import { parseTuned } from "./extras.ts";
+import { manifestDisplayName, parseUserConfig, readManifest } from "./manifest.ts";
+import {
+  draftIdentity,
+  expandRepeat,
+  locatePanelFile,
+  readPanelData,
+  readPanelSample,
+  readPanelTemplate,
+  resolveDataPath,
+  type BoardSource,
+} from "./panel.ts";
 import type { PluginRecord } from "./records.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** 清单 `orbita.tuned`：只认 true */
-export function isTuned(manifest: Record<string, unknown>): boolean {
-  const orbita = manifest["orbita"];
-  return isRecord(orbita) && orbita["tuned"] === true;
-}
 
 // ---------- 模板仓库 ----------
 
@@ -133,23 +133,13 @@ export interface PluginBoardsDeps {
   now?: () => number;
 }
 
-/** 渲染卡片要的一切输入：已装与草稿归到同一个形状 */
-interface BoardSource {
+/** 快照的来源：面板共用的 BoardSource（`board` 已解析）再加上结果里要写的名字、来源与草稿路径 */
+interface SnapshotSource extends BoardSource {
   name: string;
   displayName: string;
-  root: string;
-  dataDir: string;
-  fields: readonly PluginConfigField[];
-  values: Readonly<Record<string, PluginConfigValue>>;
-  workspaceRoot: string | null;
   manifest: Record<string, unknown>;
   source: "installed" | "draft";
   draftPath: string | null;
-}
-
-function displayNameOf(manifest: Record<string, unknown>, fallback: string): string {
-  const value = manifest["displayName"];
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
 }
 
 function looksLikePath(raw: string): boolean {
@@ -179,7 +169,7 @@ export class PluginBoards {
     const found = await this.findSource(wanted, session, workspaceRoot);
     if (!found.ok) return found;
     const source = found.source;
-    const board = parseBoard(source.manifest, source.displayName, []);
+    const board = source.board;
     if (board === null) {
       return {
         ok: false,
@@ -194,18 +184,20 @@ export class PluginBoards {
     wanted: string,
     session: { cwd: string; workspaceId: string | null },
     workspaceRoot: string | null,
-  ): Promise<{ ok: true; source: BoardSource } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; source: SnapshotSource } | { ok: false; error: string }> {
     const roots = [...new Set([workspaceRoot, session.cwd].filter((root): root is string => root !== null && root !== ""))];
     if (!looksLikePath(wanted)) {
       const record = (await this.deps.plugins.records()).find((each) => each.name === wanted);
       if (record !== undefined && scopeApplies(record.scope, session.workspaceId)) {
         const root = this.deps.plugins.rootOf(record);
         const { manifest } = await readManifest(root, []).catch(() => ({ manifest: {} as Record<string, unknown> }));
+        const displayName = manifestDisplayName(manifest, record.name);
         return {
           ok: true,
           source: {
             name: record.name,
-            displayName: displayNameOf(manifest, record.name),
+            displayName,
+            board: parseBoard(manifest, displayName, []),
             root,
             dataDir: this.deps.plugins.dataDirOf(record.name),
             fields: parseUserConfig(manifest["userConfig"]),
@@ -242,22 +234,22 @@ export class PluginBoards {
     cwd: string,
     roots: readonly string[],
     workspaceRoot: string | null,
-  ): Promise<{ ok: true; source: BoardSource } | { ok: false; error: string } | null> {
+  ): Promise<{ ok: true; source: SnapshotSource } | { ok: false; error: string } | null> {
     const located = await locateInside(raw, cwd, roots);
     if (!located.ok) return { ok: false, error: located.error };
     const root = located.path;
     const { manifest, manifestFile } = await readManifest(root, []).catch(() => ({ manifest: {} as Record<string, unknown>, manifestFile: null }));
     if (manifestFile === null) return { ok: false, error: `${root} has no .claude-plugin/plugin.json.` };
-    const manifestName = manifest["name"];
-    const name = [manifestName, basename(root)].find((candidate): candidate is string => typeof candidate === "string" && isPluginName(candidate));
+    // 名字、显示名、数据目录与右栏草稿预览同一份公式（panel.ts 的 draftIdentity）
+    const identity = draftIdentity(manifest, root, (name) => this.deps.plugins.dataDirOf(name));
     return {
       ok: true,
       source: {
-        name: name ?? basename(root),
-        displayName: displayNameOf(manifest, name ?? basename(root)),
+        name: identity.name,
+        displayName: identity.displayName,
+        board: parseBoard(manifest, identity.displayName, []),
         root,
-        // 同面板草稿预览：数据目录按清单里的名字（装上之后就是那个目录）；名字不合规退回草稿自己的 data/
-        dataDir: name === undefined ? join(root, "data") : this.deps.plugins.dataDirOf(name),
+        dataDir: identity.dataDir,
         fields: parseUserConfig(manifest["userConfig"]),
         values: {},
         workspaceRoot,
@@ -268,7 +260,7 @@ export class PluginBoards {
     };
   }
 
-  private async render(source: BoardSource, board: PluginBoardInfo, requested: readonly string[] | null): Promise<PluginBoardResult> {
+  private async render(source: SnapshotSource, board: PluginBoardInfo, requested: readonly string[] | null): Promise<PluginBoardResult> {
     const skipped: BoardSkippedCard[] = [];
     const wantedIds = requested === null || requested.length === 0 ? null : new Set(requested);
     if (wantedIds !== null) {
@@ -293,18 +285,18 @@ export class PluginBoards {
         skipped.push({ id: card.id, reason: "data", detail: loaded.detail });
         continue;
       }
-      // 展开：repeat 卡每项一张；其余一张
+      // 展开（与右栏看板同一份 expandRepeat）：repeat 卡每项一张；数组是空的 / 没有数据画一张空态占位；其余一张
       const pieces: { data: unknown; state: "ready" | "empty" }[] = [];
-      const value = loaded.data.kind === "ready" ? loaded.data.value : null;
-      if (card.repeat !== null && value !== null) {
-        const list = isRecord(value) ? value[card.repeat] : undefined;
-        if (!Array.isArray(list)) {
+      if (card.repeat !== null) {
+        const expansion = expandRepeat(loaded.data, card.repeat);
+        if (expansion.kind === "not-array") {
           skipped.push({ id: card.id, reason: "repeat", detail: `${card.repeat} is not an array` });
           continue;
         }
-        if (list.length === 0) pieces.push({ data: null, state: "empty" });
-        for (const item of list) pieces.push({ data: item, state: "ready" });
+        if (expansion.kind === "none") pieces.push({ data: null, state: "empty" });
+        else for (const item of expansion.items) pieces.push({ data: item, state: "ready" });
       } else {
+        const value = loaded.data.kind === "ready" ? loaded.data.value : null;
         pieces.push(value === null ? { data: null, state: "empty" } : { data: value, state: "ready" });
       }
       let hash: string | null = null;
@@ -345,7 +337,7 @@ export class PluginBoards {
       source: source.source,
       draftPath: source.draftPath,
       at: this.now(),
-      tuned: isTuned(source.manifest),
+      tuned: parseTuned(source.manifest, []),
       cards,
       skipped,
     };
@@ -353,7 +345,7 @@ export class PluginBoards {
 
   /** 一张卡此刻的数据：数据文件 → 空就退回样例；数据文件坏了是错误，不拿样例盖过去（同面板） */
   private async cardData(
-    source: BoardSource,
+    source: SnapshotSource,
     card: PluginBoardCardDecl,
   ): Promise<{ ok: true; data: PluginPanelData; usingSample: boolean } | { ok: false; detail: string }> {
     let data: PluginPanelData = { kind: "empty" };
