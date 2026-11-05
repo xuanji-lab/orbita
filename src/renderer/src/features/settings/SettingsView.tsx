@@ -83,6 +83,8 @@ export function SettingsView(props: {
   workspaces: readonly Workspace[];
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
+  /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
+  onCollapseRail: (() => void) | null;
 }) {
   const t = useT();
   const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
@@ -149,6 +151,7 @@ export function SettingsView(props: {
           onSessionsChanged={props.onImported}
           page={props.settings.providersPage ?? {}}
           onPage={(providersPage) => props.onSettingsChange({ providersPage })}
+          onCollapseRail={props.onCollapseRail}
         />
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
