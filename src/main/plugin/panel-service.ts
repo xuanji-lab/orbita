@@ -7,9 +7,10 @@
  * 下一次轮询就生效。轮询只做几次 stat：数据 / 样例的内容按「路径 + 签名」缓存，签名没变不重读
  * （repeat 的卡要知道有几项，才读得到内容）。
  */
-import { realpath, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  PLUGIN_MANIFEST_PATHS,
   isPluginName,
   scopeApplies,
   type PluginConfigField,
@@ -17,6 +18,7 @@ import {
   type PluginDraftSnapshot,
   type PluginPreviewRequest,
   type PluginPreviewResult,
+  type PluginView,
 } from "../../shared/plugin.ts";
 import {
   BOARD_CARD_ID_PATTERN,
@@ -91,6 +93,49 @@ interface BoardSource {
   board: PluginBoardInfo | null;
 }
 
+/**
+ * 草稿文件夹的「轻 stamp」：草稿视图每 2 秒轮询一次，每次完整扫描（读清单 + 扫技能 + 解析）太费；
+ * 先对扫描会读到的那几处做 stat（根目录、清单、`.mcp.json`、`skills/` 与每个技能的目录和 SKILL.md、
+ * `scripts/`），mtime + 大小都没变就沿用上次的扫描结果。
+ * 往根目录加 / 删文件夹（commands、hooks……）会改根目录的 mtime，所以「新出现的组件」也在里面。
+ * 管不到的（清单里声明的别处的技能目录）靠 `DRAFT_FULL_SCAN_MS` 的定期全扫兜底。
+ */
+export async function draftFolderStamp(root: string): Promise<string> {
+  const entries: Array<[string, number, number] | [string, null]> = [];
+  const touch = async (relativePath: string): Promise<void> => {
+    try {
+      const info = await stat(relativePath === "" ? root : join(root, relativePath));
+      entries.push([relativePath, info.mtimeMs, info.size]);
+    } catch {
+      entries.push([relativePath, null]);
+    }
+  };
+  for (const path of ["", ".claude-plugin", ".zcode-plugin", ...PLUGIN_MANIFEST_PATHS, ".mcp.json", "SKILL.md", "scripts", "skills"]) await touch(path);
+  let skills: string[] = [];
+  try {
+    skills = (await readdir(join(root, "skills"))).filter((name) => !name.startsWith(".") && name !== "node_modules").sort();
+  } catch {
+    // 没有 skills/ 目录：上面那条 stat 已经记了 null
+  }
+  for (const name of skills) {
+    await touch(`skills/${name}`);
+    await touch(`skills/${name}/SKILL.md`);
+  }
+  return JSON.stringify(entries);
+}
+
+/** 轻 stamp 没变时，最久多久也要完整扫一次（兜住轻 stamp 管不到的地方） */
+export const DRAFT_FULL_SCAN_MS = 10_000;
+/** 草稿扫描结果最多缓存几份（按文件夹） */
+const DRAFT_SCAN_CACHE_MAX = 8;
+
+interface DraftScan {
+  light: string;
+  at: number;
+  stamp: string;
+  view: PluginView;
+}
+
 /** 一张声明在这一轮里的文件状态。 */
 interface DeclState {
   decl: PluginBoardCardDecl;
@@ -147,6 +192,8 @@ export class PluginPanels {
   private readonly appendQueue = new Map<string, Promise<unknown>>();
   /** 数据 / 样例文件的内容缓存：键 = 绝对路径 + 签名，签名变了就是另一份 */
   private readonly contents = new Map<string, PluginPanelData>();
+  /** 草稿视图的上一次扫描：文件夹没变就不重扫（见 draftFolderStamp） */
+  private readonly draftScans = new Map<string, DraftScan>();
 
   constructor(deps: PluginPanelsDeps) {
     this.plugins = deps.plugins;
@@ -236,12 +283,24 @@ export class PluginPanels {
       const stamp = JSON.stringify(["unavailable", located.reason]);
       return stamp === request.stamp ? { kind: "unchanged" } : { kind: "unavailable", stamp, reason: located.reason };
     }
+    const light = await draftFolderStamp(located.real);
+    const cached = this.draftScans.get(located.real);
+    if (cached !== undefined && cached.light === light && this.now() - cached.at < DRAFT_FULL_SCAN_MS) {
+      return cached.stamp === request.stamp ? { kind: "unchanged" } : { kind: "ready", stamp: cached.stamp, view: cached.view };
+    }
     const previewed = await this.plugins.preview({ source: { kind: "folder", path: located.real }, mode: "link" });
     // 刚建的空文件夹（还没有清单也没有技能）不是错误：显示一张什么都没聊到的页
     const view = previewed.ok
       ? draftViewOf(previewed.preview)
       : emptyDraftView(previewed.error.kind === "invalid-name" ? previewed.error.name : basename(located.draftRoot), located.real);
     const stamp = JSON.stringify(view);
+    this.draftScans.delete(located.real);
+    this.draftScans.set(located.real, { light, at: this.now(), stamp, view });
+    while (this.draftScans.size > DRAFT_SCAN_CACHE_MAX) {
+      const oldest = this.draftScans.keys().next();
+      if (oldest.done === true) break;
+      this.draftScans.delete(oldest.value);
+    }
     return stamp === request.stamp ? { kind: "unchanged" } : { kind: "ready", stamp, view };
   }
 
