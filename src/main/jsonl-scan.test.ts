@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HEAD_BYTES, headStringField, scanJsonlLines } from "./jsonl-scan.ts";
@@ -71,6 +71,27 @@ describe("scanJsonlLines", () => {
 
   test("文件不存在照抛，由调用方兜底", async () => {
     await assert.rejects(scanJsonlLines(join(dir, "nope.jsonl"), () => true, () => undefined));
+  });
+
+  test("传 fd 时从共享句柄读、流不替调用方关：内容与按路径读一致，扫完句柄仍可用", async () => {
+    const long = JSON.stringify({ id: "1", role: "tool", text: "长行".repeat(100_000) }); // 跨多个 256KB 读块
+    const text = `${long}\n{"id":"2"}\n{"id":"3"}`; // 末行无尾换行
+    const file = join(dir, "x.jsonl");
+    await writeFile(file, text, "utf8");
+    const byPath: string[] = [];
+    await scanJsonlLines(file, () => true, (line) => byPath.push(line));
+    const handle = await open(file, "r");
+    try {
+      const byFd: string[] = [];
+      await scanJsonlLines(file, () => true, (line) => byFd.push(line), { fd: handle.fd });
+      assert.deepEqual(byFd, byPath);
+      // autoClose:false：扫完句柄还开着、能继续用（loadWindow 的第二遍靠它接着按区间读）
+      const probe = Buffer.alloc(1);
+      const { bytesRead } = await handle.read(probe, 0, 1, 0);
+      assert.equal(bytesRead, 1);
+    } finally {
+      await handle.close();
+    }
   });
 });
 
