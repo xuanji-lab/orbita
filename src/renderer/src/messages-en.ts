@@ -1938,7 +1938,7 @@ export const en = {
       sampleInvalid: (message: string) => `The sample data isn't valid JSON, so it isn't used: ${message}`,
     },
     detailTitle: "Panel",
-    detailHint: "Shown on the Panel tab of the details",
+    detailHint: "Shown on the Panel tab",
     kvTitle: "Title",
     kvTemplate: "Template",
     kvSpec: "Template notes",
