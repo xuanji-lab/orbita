@@ -1903,6 +1903,11 @@ export function turnAssistantRecords<T extends TurnRecordLike>(
 ): T[] {
   const end = records.findIndex((record) => record.id === anchorId);
   if (end === -1) return [];
+  return turnAssistantRecordsAt(records, end);
+}
+
+/** 同 turnAssistantRecords，锚点按位置给（调用方已知下标时免一次 findIndex） */
+export function turnAssistantRecordsAt<T extends TurnRecordLike>(records: readonly T[], end: number): T[] {
   let start = 0;
   for (let i = end; i >= 0; i -= 1) {
     const role = records[i]?.role;

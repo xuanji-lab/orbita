@@ -54,6 +54,7 @@ import {
   toolGroupStatus,
   toolResultText,
   turnAssistantRecords,
+  turnAssistantRecordsAt,
   writeContent,
   writeLineCount,
   type RenderUnit,
@@ -664,6 +665,9 @@ describe("toolResultText", () => {
     );
     // 锚点不存在：空
     assert.deepEqual(turnAssistantRecords(records, "nope"), []);
+    // 按位置给锚点：与按 id 同一口径
+    assert.deepEqual(turnAssistantRecordsAt(records, 5).map((r) => r.id), ["a1", "a2"]);
+    assert.deepEqual(turnAssistantRecordsAt(records, 1).map((r) => r.id), ["a0"]);
   });
 
   test("图片标记它存在，不丢掉也不假装能渲染", () => {
