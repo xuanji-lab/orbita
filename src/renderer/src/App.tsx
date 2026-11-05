@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
-import { ExperimentalFeaturesContext } from "./experimental.ts";
+import { ExperimentalFeaturesContext, NO_EXPERIMENTAL_FEATURES } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
@@ -1088,7 +1088,7 @@ export function App() {
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
-  const experimentalFeatures = settings.experimentalFeatures ?? {};
+  const experimentalFeatures = settings.experimentalFeatures ?? NO_EXPERIMENTAL_FEATURES;
   // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);

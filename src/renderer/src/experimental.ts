@@ -15,6 +15,13 @@ export const ExperimentalFeaturesContext = createContext<
   Readonly<Partial<Record<ExperimentalFeatureId, boolean>>>
 >({});
 
+/**
+ * 设置里还没有 experimentalFeatures 字段时的 Provider 值：**必须是同一个对象**。
+ * 写成 `?? {}` 时每次 App 渲染都新建空对象，Context 跟着变，所有消费者（每条消息的
+ * MarkdownBlock 都是）穿透 memo 逐帧重渲染——流式输出期间就是整条对话逐帧重算。
+ */
+export const NO_EXPERIMENTAL_FEATURES: Readonly<Partial<Record<ExperimentalFeatureId, boolean>>> = Object.freeze({});
+
 /** 某一项实验功能开着吗。缺省（测试 / 树外渲染 / 键不在）= false */
 export function useExperimentalFeature(id: ExperimentalFeatureId): boolean {
   return useContext(ExperimentalFeaturesContext)[id] === true;
