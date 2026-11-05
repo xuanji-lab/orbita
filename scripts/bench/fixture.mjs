@@ -241,6 +241,43 @@ export function seedInstance({ fx, userData, ws, mockPort, spec }) {
   return { sessionId: id, title: `bench-${fx.manifest.fixture}-${spec}`, label: tick.label, turns: tick.turns, compactions: tick.compactions };
 }
 
+/**
+ * 并发场景：在母会话下挂 count 条子会话（meta.parentId = 母会话 id，侧栏不显示、母会话右栏的
+ * Sub-sessions 面板里列出），每条都是同一快照（例如 6df79261·10 / ·60）的副本，id 按条加盐换新
+ * ——同一份历史复制 5 份，记录 id、pi 会话本 id 都不重复。返回每条的 id 与开轮要带的字段。
+ */
+export function seedChildren({ fx, userData, ws, parentId, spec, count }) {
+  const sessions = join(userData, "sessions");
+  const piDir = join(userData, "pi-sessions");
+  const tick = buildTick(fx, spec);
+  const srcAttach = fx.manifest.sourceAttachmentsDir;
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    const salt = `#child${k}`;
+    const idMap = (v) =>
+      /^[0-9a-f-]{36}$/.test(v) ? v.slice(0, 28) + hash8(v + salt) : /^[0-9a-f]{8}$/.test(v) ? hash8(v + salt) : `${v}k${k}`;
+    const id = `c0c0c0c0-0000-4000-8000-${String(k + 1).padStart(12, "0")}`;
+    const attach = join(sessions, `${id}.attachments`);
+    const fix = (l) => (srcAttach && l.includes(srcAttach) ? l.split(srcAttach).join(JSON.stringify(attach).slice(1, -1)) : l);
+    const orb = tick.orb.map((l) => JSON.stringify(remap(JSON.parse(fix(l)), 0, idMap)));
+    const pi = tick.pi.map((l) => remap(JSON.parse(fix(l)), 0, idMap));
+    pi[0] = { ...pi[0], cwd: ws };
+    const piFile = join(piDir, `bench-${id}.jsonl`);
+    writeFileSync(join(sessions, `${id}.jsonl`), orb.join("\n") + "\n");
+    writeFileSync(piFile, pi.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    if (existsSync(join(fx.dir, "attachments"))) cpSync(join(fx.dir, "attachments"), attach, { recursive: true });
+    const meta = {
+      ...fx.meta, id, parentId, title: `bench-child-${k + 1}`, titleSource: "user", cwd: ws, workspaceId: null, piSessionFile: piFile,
+      providerId: "bench", modelId: "bench-model", mode: "skip", completion: "open", unread: null, closedAt: null,
+      pinned: false, archived: false, starred: false, updatedAt: Date.now() - 120_000 - k, thinkingLevel: "high", intentEnabled: false,
+    };
+    delete meta.importedFrom;
+    writeFileSync(join(sessions, `${id}.meta.json`), JSON.stringify(meta, null, 2));
+    out.push({ id, piFile, bytes: Buffer.byteLength(orb.join("\n")) });
+  }
+  return { label: tick.label, turns: tick.turns, children: out };
+}
+
 /** 素材体量（每个刻度开跑前记一笔：所有数都对齐到这条横轴） */
 export function tickSizes(userData, sessionId) {
   const meta = JSON.parse(readFileSync(join(userData, "sessions", `${sessionId}.meta.json`), "utf8"));

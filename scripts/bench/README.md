@@ -37,6 +37,14 @@ node scripts\bench\bench.mjs --fixture C:\orbita-bench\fixture-6df79261.zip --fi
 
 脚本第一次运行时会把每个 zip 解到 `%TEMP%\orbita-bench\` 下，之后复用；解开后约 500 MB，每个刻度铺实例时还会临时再占 150–300 MB。
 
+### 子会话并发（单独一节）
+
+```bash
+node scripts/bench/bench.mjs --fixture <fb46e6be.zip> --fixture <6df79261.zip> --scenario concurrency --label <机器名>-conc
+```
+
+母会话是 fb46e6be·end（93 MB），下面挂 5 条子会话，分两档体量各起一个实例：小的每条是 6df79261·10（1 MB），大的每条是 6df79261·60（16 MB）。K = 0 / 1 / 3 / 5 条子会话同时开轮，各档轮流跑 3 遍。每档有两种变体：一种是母会话空着、在它的输入框里打字；另一种是母会话自己也跑一轮。子会话由驱动直接调 `window.orbita.agent.submit` 开轮，不经母会话的 delegate，理由见 `bench.mjs` 里这一节的注释。结果在 `concurrency.md` 与 `result.json` 的 `concurrency` 字段。M3 Max 上实测约 8 分钟。可调的参数有：`--conc-mother fb46e6be:end`、`--conc-child 6df79261`、`--conc-sizes 10,60`、`--conc-counts 0,1,3,5`、`--conc-reps 3`、`--conc-no-mother-turn`。`--scenario all` 先跑刻度再跑并发。agent 调试口接不上时，agent 列缺测，其余照量。
+
 ### 其它参数
 
 `--ticks "fb46e6be=pre4,end;6df79261=60"` 只跑部分刻度。刻度的写法有三种：数字 N 是前 N 轮；`pre<k>` 是第 k 次压缩那一轮之前（盘上只有 k−1 次压缩）；`end` 是整条会话。不写就用素材 manifest 里的默认值：6df79261 是 10/30/60/100，fb46e6be 是 pre2/pre4/end，8ee32d1b 是 pre2/pre3/end。

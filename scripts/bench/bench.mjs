@@ -17,9 +17,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { step, watchdog } from "../cdp.mjs";
-import { extractFixture, loadFixture, seedInstance, tickSizes } from "./fixture.mjs";
+import { extractFixture, loadFixture, seedChildren, seedInstance, tickSizes } from "./fixture.mjs";
 import { startMock } from "./mock-llm.mjs";
-import { renderMarkdown, summarize } from "./report.mjs";
+import { renderConcurrency, renderMarkdown, summarize } from "./report.mjs";
 
 const IS_WIN = process.platform === "win32";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -462,7 +462,7 @@ async function loadProbe(c, sessionId, sessionFile, piFile) {
 const runs = async (n, fn) => { const out = []; for (let i = 0; i < n; i++) out.push(await fn()); return out; };
 
 /** 铺 + 起一个实例，接上三个进程、装好探针，并冷打开一次目标会话 */
-async function startInstance(fixtureDir, spec, ctx, logName) {
+async function startInstance(fixtureDir, spec, ctx, logName, extraSeed = null) {
   const userData = join(WORK, "orbita-bench"); // 目录名决定工作区根：~/Orbita-bench（data-dirs.ts）
   if (existsSync(userData) && !existsSync(join(userData, ".orbita-bench"))) throw new Error(`${userData} 不是测量脚本建的，不删`);
   rmSync(userData, { recursive: true, force: true });
@@ -470,6 +470,8 @@ async function startInstance(fixtureDir, spec, ctx, logName) {
   writeFileSync(join(userData, ".orbita-bench"), "");
   // 素材每格现读：大素材不常驻驱动的内存
   const seeded = seedInstance({ fx: loadFixture(fixtureDir), userData, ws: join(WORK, "ws"), mockPort: ctx.mockPort, spec });
+  // 并发场景在母会话下再挂子会话（铺在起实例之前：侧栏与子会话面板从盘上读到它们）
+  const extra = extraSeed ? extraSeed({ userData, ws: join(WORK, "ws"), seeded }) : null;
   const sizes = tickSizes(userData, seeded.sessionId);
   const sessionFile = join(userData, "sessions", `${seeded.sessionId}.jsonl`);
   const piFile = JSON.parse(readFileSync(join(userData, "sessions", `${seeded.sessionId}.meta.json`), "utf8")).piSessionFile;
@@ -484,7 +486,7 @@ async function startInstance(fixtureDir, spec, ctx, logName) {
     await sleep(1000);
     const coldOpen = await actionSwitch(c, pids, seeded.title);
     delete coldOpen._events;
-    return { app, c, pids, seeded, sizes, sessionFile, piFile, coldOpen };
+    return { app, c, pids, seeded, sizes, sessionFile, piFile, coldOpen, extra };
   } catch (error) {
     error.app = app;
     throw error;
@@ -569,6 +571,167 @@ async function runTick(fixtureDir, fixtureName, spec, ctx) {
   return tick;
 }
 
+// —— 并发场景：一条大母会话下挂 K 条子会话，子会话同时跑轮 ——
+// 为什么直接对子会话提交、不让母会话经 delegate 派：delegate 每次都新建空的子会话（体量只能是「小」，
+// 也做不出「大子会话」这一档），重复 5 次就多出 25 条会话；而子会话派出后的每一轮，真实路径也是
+// 主进程替它开轮、事件经同一条 agent:event 广播给窗口。这里在 renderer 里调 window.orbita.agent.submit
+// （同一个 IPC、同一个 runtime、同一条广播），起点比 delegate 少一跳「母会话的模型发出 delegate 调用」，
+// 可重复，且能预先铺好任意体量的子会话。
+const CONC_MOTHER = opt("conc-mother", "fb46e6be:end"); // 母会话：素材:刻度
+const CONC_CHILD = opt("conc-child", "6df79261"); // 子会话用哪个素材
+const CONC_SIZES = opt("conc-sizes", "10,60").split(","); // 子会话体量（该素材的刻度）
+const CONC_COUNTS = opt("conc-counts", "0,1,3,5").split(",").map(Number);
+const CONC_REPS = Number(opt("conc-reps", 3));
+const CONC_MOTHER_TURN = !argv.includes("--conc-no-mother-turn");
+const CHILD_PROMPT = "bench child tokens=300 rate=50 ttft=300 tool=2";
+
+/** renderer 里再挂一个只读监听：数收到的 agent 事件，记每条会话第一次带「qzv」的事件到达时刻（= 首字到达界面进程） */
+const CONC_PROBE = `(() => {
+  const b = window.__conc = { on: false, n: 0, first: {}, err: null };
+  window.orbita.agent.onEvent((e) => {
+    if (!b.on) return; b.n++;
+    const id = e && e.sessionId; if (!id || b.first[id] !== undefined) return;
+    if (JSON.stringify(e).includes('qzv')) b.first[id] = Date.now();
+  });
+  return 1;
+})()`;
+
+async function waitTags(mock, t0, tags) {
+  for (let i = 0; i < 1800; i++) {
+    if (tags.every((t) => mock.log.some((q) => q.arrivedAt >= t0 && q.tag === t && q.kind === "text" && q.doneAt))) return;
+    await sleep(100);
+  }
+  throw new Error(`3 分钟内 ${tags.join(",")} 没全部跑完`);
+}
+
+const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[s.length >> 1] : null; };
+
+/** 子会话每条的三段时间：回车→请求到达、回车→首字到达 renderer、回车→这一轮正文流完 */
+function childStats(mock, t0, children, first) {
+  const per = children.map((ch) => {
+    const reqs = mock.log.filter((q) => q.arrivedAt >= t0 && q.tag === ch.tag && q.hasTools);
+    const text = reqs.find((q) => q.kind === "text");
+    const gaps = reqs.slice(1).map((q, i) => q.arrivedAt - reqs[i].doneAt);
+    return { req: reqs[0].arrivedAt - t0, first: first[ch.id] ? first[ch.id] - t0 : null, turn: text.doneAt - t0, gap: gaps.length ? gaps.reduce((s, x) => s + x, 0) / gaps.length : null };
+  });
+  const pick = (k) => per.map((p) => p[k]).filter((v) => v !== null);
+  return {
+    childReqMed: med(pick("req")), childReqMax: Math.max(...pick("req")),
+    childFirstMed: med(pick("first")), childFirstMax: pick("first").length ? Math.max(...pick("first")) : null,
+    childTurnMed: med(pick("turn")), childTurnMax: Math.max(...pick("turn")),
+    childGapMed: med(pick("gap")),
+  };
+}
+
+/**
+ * 一次并发：K 条子会话同时开轮；母会话同时要么空着、用户在它的输入框里打字（typing），
+ * 要么自己也跑一轮（mother）。量到所有会话都跑完 + 1.5 s。
+ */
+async function actionConcurrent(inst, children, K, variant, mock) {
+  const { c, pids } = inst;
+  const kids = children.slice(0, K).map((ch, k) => ({ ...ch, tag: `c${k}` }));
+  const inputs = kids.map((ch) => {
+    const meta = JSON.parse(readFileSync(join(WORK, "orbita-bench", "sessions", `${ch.id}.meta.json`), "utf8"));
+    return { sessionId: ch.id, cwd: meta.cwd, workspaceId: null, resume: { piSessionFile: meta.piSessionFile }, providerId: "bench", modelId: "bench-model", mode: "skip", thinkingLevel: meta.thinkingLevel ?? "high", text: `${CHILD_PROMPT} bench-session=${ch.tag}` };
+  });
+  await begin(c);
+  await c.r.evaluate(`(() => { const b = window.__conc; b.on = true; b.n = 0; b.first = {}; b.err = null; return 1; })()`);
+  const t0 = Date.now();
+  await c.r.evaluate(`(() => { for (const x of ${JSON.stringify(inputs)}) window.orbita.agent.submit(x).catch((e) => { window.__conc.err = String(e && e.message || e); }); return 1; })()`);
+  const out = {};
+  const tags = kids.map((k) => k.tag);
+  if (variant === "mother") {
+    const { t0: tm, first } = await submit(c.r, `${TURN_PROMPT} bench-session=m`);
+    const tFirst = await first();
+    await waitTags(mock, Math.min(t0, tm), [...tags, "m"]);
+    const reqs = mock.log.filter((q) => q.arrivedAt >= tm && q.tag === "m" && q.hasTools);
+    const gaps = reqs.slice(1).map((q, i) => q.arrivedAt - reqs[i].doneAt);
+    Object.assign(out, { enterToReqMs: reqs[0].arrivedAt - tm, firstTokenMs: tFirst - tm, toolGapMs: gaps.length ? gaps.reduce((s, x) => s + x, 0) / gaps.length : null, motherTurnMs: reqs.find((q) => q.kind === "text").doneAt - tm });
+  } else {
+    await c.r.evaluate(`(() => { window.__bench.ev = []; document.querySelector('textarea.composer-input').focus(); return 1; })()`);
+    for (const ch of KEYS) {
+      const code = ch === " " ? "Space" : `Key${ch.toUpperCase()}`;
+      await c.r.send("Input.dispatchKeyEvent", { type: "keyDown", key: ch, code, text: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+      await c.r.send("Input.dispatchKeyEvent", { type: "keyUp", key: ch, code, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+      await sleep(100);
+    }
+    if (tags.length > 0) await waitTags(mock, t0, tags);
+  }
+  await sleep(1500);
+  const m = await end(c, pids);
+  const conc = await c.r.evaluate(`(() => { const b = window.__conc; b.on = false; return { n: b.n, first: b.first, err: b.err }; })()`);
+  if (conc.err) throw new Error(`子会话提交失败：${conc.err}`);
+  if (variant !== "mother") {
+    const typed = await c.r.evaluate(`document.querySelector('textarea.composer-input').value.length`);
+    await c.r.evaluate(`(() => { const el = document.querySelector('textarea.composer-input'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, ''); el.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+    if (typed < KEYS.length) throw new Error(`只有 ${typed}/${KEYS.length} 个字符落进母会话输入框`);
+    const per = new Map();
+    for (const [id, d] of m._events) per.set(id, Math.max(per.get(id) ?? 0, d));
+    const lat = [...per.values()];
+    while (lat.length < KEYS.length) lat.push(16);
+    lat.sort((a, b) => a - b);
+    Object.assign(out, { keyP95: lat[Math.floor(lat.length * 0.95)], keyMax: lat.at(-1), keyOver50: lat.filter((x) => x > 50).length });
+  }
+  return { ...out, ...(K > 0 ? childStats(mock, t0, kids, conc.first) : {}), eventsN: conc.n, eventsPerS: conc.n / ((Date.now() - t0) / 1000), ...m };
+}
+
+async function runConcurrency(fixtures, ctx) {
+  const byName = new Map(fixtures.map((f) => [f.name, f]));
+  const [motherName, motherSpec] = CONC_MOTHER.split(":");
+  const mother = byName.get(motherName);
+  const child = byName.get(CONC_CHILD);
+  if (!mother || !child) throw new Error(`并发场景要同时给母会话素材 ${motherName} 与子会话素材 ${CONC_CHILD}（--fixture）`);
+  const maxK = Math.max(...CONC_COUNTS);
+  const conc = { mother: `${motherName}·${motherSpec}`, child: CONC_CHILD, counts: CONC_COUNTS, reps: CONC_REPS, motherTurn: CONC_MOTHER_TURN, childPrompt: CHILD_PROMPT, sizes: [] };
+  for (const size of CONC_SIZES) {
+    const entry = { size, label: `${CONC_CHILD}·${size}`, rows: {}, warnings: [] };
+    let inst = null;
+    try {
+      step(`并发 · 子会话 ${CONC_CHILD}·${size} ×${maxK}：铺母会话 ${motherName}·${motherSpec} + 子会话、起实例`);
+      inst = await startInstance(mother.dir, motherSpec, ctx, `conc-${size}`, ({ userData, ws, seeded }) =>
+        seedChildren({ fx: loadFixture(child.dir), userData, ws, parentId: seeded.sessionId, spec: size, count: maxK }));
+      const { c } = inst;
+      entry.childTurns = inst.extra.turns;
+      entry.childMB = inst.extra.children[0]?.bytes / 1e6;
+      entry.motherSizes = inst.sizes;
+      // 打开母会话右栏的子会话面板（列表态），子会话的运行状态在那里真实渲染
+      const opened = await c.r.evaluate(`(() => { const b = document.querySelector('[aria-label^="Sub-sessions ("], [aria-label^="子会话"]'); if (!b) return null; b.click(); return b.getAttribute('aria-label'); })()`);
+      await sleep(1500);
+      entry.panel = { button: opened, listed: await c.r.evaluate(`[...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && /^bench-child-\\d+$/.test(e.textContent.trim())).length`) };
+      if (!opened || entry.panel.listed < maxK) entry.warnings.push(`子会话面板没按预期打开：按钮 ${opened}，列出 ${entry.panel.listed}/${maxK} 条`);
+      await c.r.evaluate(CONC_PROBE);
+      step(`并发 · ${size}：预热（${maxK} 条子会话各跑一轮，不计）`);
+      await actionConcurrent(inst, inst.extra.children, maxK, "typing", ctx.mock);
+      for (let rep = 1; rep <= CONC_REPS; rep++) {
+        for (const K of CONC_COUNTS) {
+          step(`并发 · ${size} · 第 ${rep}/${CONC_REPS} 遍 · K=${K}`);
+          const row = (entry.rows[K] ??= { typing: { runs: [] }, mother: { runs: [] } });
+          row.typing.runs.push(await actionConcurrent(inst, inst.extra.children, K, "typing", ctx.mock));
+          if (CONC_MOTHER_TURN) row.mother.runs.push(await actionConcurrent(inst, inst.extra.children, K, "mother", ctx.mock));
+        }
+      }
+    } catch (error) {
+      console.error(`✖ 并发 · ${size} 失败：${error.stack ?? error}`);
+      entry.warnings.push(`失败：${error.message}`);
+      const shot = await inst?.c?.r.send("Page.captureScreenshot", { format: "png" }, 10_000).catch(() => null);
+      if (shot) writeFileSync(join(ctx.outDir, `fail-conc-${size}.png`), Buffer.from(shot.data, "base64"));
+      inst ??= { app: error.app };
+    } finally {
+      for (const x of [inst?.c?.r, inst?.c?.main, inst?.c?.agent]) x?.close();
+      if (inst?.app) { await stop(inst.app.child); inst.app.flushLog(); }
+    }
+    for (const row of Object.values(entry.rows)) for (const v of Object.values(row)) {
+      for (const run of v.runs) {
+        if (run._visible !== "visible" || run["r.frames"] === 0) entry.warnings.push("有一次窗口不可见或 0 帧，帧相关的数不可信");
+        delete run._events;
+      }
+      v.summary = summarize(v.runs);
+    }
+    conc.sizes.push(entry);
+  }
+  return conc;
+}
+
 // —— 主流程 ——
 const outDir = join(OUT, `${LABEL}-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`);
 mkdirSync(outDir, { recursive: true });
@@ -603,7 +766,9 @@ const result = {
   config: { runs: RUNS, runsBig: RUNS_BIG, compactReps: COMPACT_REPS, actions: ACTION_SPEC, turnPrompt: TURN_PROMPT, typePrompt: TYPE_PROMPT, compactPrompt: COMPACT_PROMPT, keys: KEYS.length, platform: process.platform },
   ticks: [],
 };
-for (const f of fixtures) {
+// --scenario：ticks（默认，刻度 × 动作）/ concurrency（只跑子会话并发）/ all（两者都跑）
+const SCENARIO = opt("scenario", "ticks");
+if (SCENARIO !== "concurrency") for (const f of fixtures) {
   for (const spec of f.ticks) {
     result.ticks.push(await runTick(f.dir, f.name, spec, ctx));
     result.build.electron = ctx.electron ?? null;
@@ -611,6 +776,13 @@ for (const f of fixtures) {
     writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
     writeFileSync(join(outDir, "result.md"), renderMarkdown(result));
   }
+}
+if (SCENARIO !== "ticks") {
+  result.concurrency = await runConcurrency(fixtures, ctx);
+  result.build.electron = ctx.electron ?? null;
+  result.finishedAt = new Date().toISOString();
+  writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(outDir, "concurrency.md"), renderConcurrency(result));
 }
 mock.close();
 step(`完成 → ${join(outDir, "result.md")}`);

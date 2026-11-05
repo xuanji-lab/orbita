@@ -46,7 +46,9 @@ export function startMock({ port, toolFile, summaryMs = 2000 }) {
       const kind = system.startsWith("You are a context summarization assistant")
         ? "summary"
         : !hasTools ? "aux" : toolsSinceUser < plan.tool ? "tool" : "text";
-      const entry = { arrivedAt, bodyBytes: body.length, messages: msgs.length, hasTools, kind };
+      // tag：并发场景里每条会话的提示词带 bench-session=<名>，按它把请求归到会话（没有就是 null）
+      const tag = /\bbench-session=(\w+)/.exec(text)?.[1] ?? null;
+      const entry = { arrivedAt, bodyBytes: body.length, messages: msgs.length, hasTools, kind, tag };
       log.push(entry);
 
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });

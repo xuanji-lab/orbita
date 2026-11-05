@@ -3,7 +3,7 @@
 // 每格「A 中位数 → B 中位数（变化%）」；变化以 A 为基准。刻度按「素材·刻度」配对（v1 结果按轮数），对不上的跳过。
 // 只比中位数：最差值在各自的 result.md 里看；某一边那格标了「抖」，这里也标出来。
 import { readFileSync, writeFileSync } from "node:fs";
-import { LOAD_COLS, PRE_POST, TABLES, fmt, machineLines, rowName, tickKey } from "./report.mjs";
+import { CONC_TABLES, LOAD_COLS, PRE_POST, TABLES, fmt, machineLines, rowName, tickKey } from "./report.mjs";
 
 const [pathA, pathB] = process.argv.slice(2).filter((a) => !a.startsWith("--") && !a.endsWith(".md"));
 if (!pathA || !pathB) {
@@ -44,6 +44,19 @@ table("冷打开", [["settleMs", "点击→静止 ms", 0], ["r.longMax", "最长
 table("打开时传多少、读一遍多久", LOAD_COLS, (t, k) => one(t.load?.[k]));
 for (const [action, spec] of Object.entries(TABLES)) table(spec.title, spec.cols, (t, k) => t.actions[action]?.summary?.[k]);
 for (const [phase, name] of PRE_POST.phases) table(`${PRE_POST.title}：${name}`, PRE_POST.cols, (t, k) => t.actions[phase]?.summary?.[k]);
+
+// 并发场景：按「子会话体量 · K」配对
+if (A.concurrency && B.concurrency) {
+  const rowsOf = (r) => new Map(r.concurrency.sizes.flatMap((s) => Object.entries(s.rows).map(([K, row]) => [`${s.label} · K=${K}`, row])));
+  const ra = rowsOf(A), rb = rowsOf(B);
+  const kidCols = CONC_TABLES.children.pairs.flatMap(([m, x, name]) => [[m, `子会话${name}（中位）`, 0], [x, `子会话${name}（最差）`, 0]]);
+  for (const [key, title, cols] of [["typing", CONC_TABLES.typing.title, CONC_TABLES.typing.cols], ["typing", CONC_TABLES.children.title, kidCols], ["mother", CONC_TABLES.mother.title, CONC_TABLES.mother.cols]]) {
+    const names = [...rb.keys()].filter((n) => ra.has(n) && rb.get(n)[key]?.summary);
+    if (!names.length) continue;
+    lines.push("", `## 并发：${title}`, "", `| 子会话 · 条数 | ${cols.map((c) => c[1]).join(" | ")} |`, `|---|${cols.map(() => "---").join("|")}|`);
+    for (const n of names) lines.push(`| ${n} | ${cols.map(([k, , d]) => cell(ra.get(n)[key]?.summary?.[k], rb.get(n)[key]?.summary?.[k], d)).join(" | ")} |`);
+  }
+}
 
 const md = lines.join("\n") + "\n";
 if (outIdx > 0) writeFileSync(process.argv[outIdx + 1], md);

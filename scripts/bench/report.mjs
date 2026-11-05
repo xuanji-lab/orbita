@@ -178,3 +178,74 @@ export function renderMarkdown(r) {
   if (warn.length > 0) lines.push("", "## 警告", "", ...warn);
   return lines.join("\n") + "\n";
 }
+
+/** 并发场景三张表的列：母会话里打字时（typing）、母会话自己跑一轮时（mother）、子会话自己的时间 */
+export const CONC_TABLES = {
+  typing: {
+    title: "母会话空着、在它的输入框里打字，同时 K 条子会话各跑一轮（每条 300 token、2 次 read 工具）",
+    cols: [
+      ["keyP95", "按键→下一帧 p95 ms", 0],
+      ["keyMax", "按键→下一帧 最大 ms", 0],
+      ["keyOver50", "按键 >50ms 个数", 0],
+      ["r.longMax", "renderer 最长任务 ms", 0],
+      ["r.longSum", "renderer 长任务合计 ms", 0],
+      ["r.cpuS", "renderer CPU 秒", 2],
+      ["eventsPerS", "renderer 收到事件 /s", 0],
+      ["main.cpuS", "主进程 CPU 秒", 2],
+      ["main.eldMax", "主进程 ELD 最大 ms", 0],
+      ["agent.cpuS", "agent CPU 秒", 2],
+      ["agent.wsPeakMB", "agent 工作集峰值 MB", 0],
+      ["agent.eldMax", "agent ELD 最大 ms", 0],
+      ["gpu.cpuS", "GPU CPU 秒", 2],
+    ],
+  },
+  children: {
+    title: "子会话自己（同上那几遍；每格「中位 / 最差」，中位取各遍中位数的中位，最差取各遍最差的最大）",
+    pairs: [
+      ["childReqMed", "childReqMax", "回车→请求 ms"],
+      ["childFirstMed", "childFirstMax", "回车→首字到达界面 ms"],
+      ["childTurnMed", "childTurnMax", "回车→一轮跑完 ms（理想约 7.0 s）"],
+    ],
+    cols: [["childGapMed", "工具往返额外 ms", 0]],
+  },
+  mother: {
+    title: "母会话自己跑一轮（同「跑一轮」的工作量），同时 K 条子会话各跑一轮",
+    cols: [
+      ["enterToReqMs", "回车→请求 ms", 0],
+      ["firstTokenMs", "回车→首字上屏 ms", 0],
+      ["toolGapMs", "工具往返额外 ms", 0],
+      ["motherTurnMs", "回车→一轮跑完 ms", 0],
+      ["r.longMax", "renderer 最长任务 ms", 0],
+      ["r.cpuS", "renderer CPU 秒", 2],
+      ["agent.eldMax", "agent ELD 最大 ms", 0],
+      ["agent.wsPeakMB", "agent 工作集峰值 MB", 0],
+    ],
+  },
+};
+
+export function renderConcurrency(r) {
+  const conc = r.concurrency;
+  const lines = [`# Orbita 性能基线（子会话并发）：${r.label}`, "", `${r.startedAt}${r.finishedAt ? ` → ${r.finishedAt}` : ""}`, "", ...machineLines(r).slice(0, 4)];
+  lines.push(`- 母会话：${conc.mother}；子会话素材：${conc.child}，K = ${conc.counts.join(" / ")}；每档 ${conc.reps} 遍（各档轮流跑，不是一档连跑完），另有 1 遍 K=${Math.max(...conc.counts)} 预热不计`);
+  lines.push("- 子会话由驱动在 renderer 里调 window.orbita.agent.submit 同时开轮（同一个 IPC 与广播路径），不经母会话的 delegate；母会话右栏的子会话面板打开在列表态", "");
+  lines.push("| 子会话体量 | 每条子会话 | 母会话体量 | 子会话面板 |", "|---|---|---|---|");
+  for (const s of conc.sizes) lines.push(`| ${s.label} | ${s.childTurns ?? "?"} 轮、${fmt(s.childMB, 1)} MB | ${fmt(s.motherSizes?.sessionBytes / 1e6, 1)} MB | ${s.panel ? `${s.panel.listed} 条已列出` : "—"} |`);
+  const rowsOf = (key) => conc.sizes.flatMap((s) => Object.entries(s.rows).map(([K, row]) => [`${s.label} · K=${K}`, row[key]?.summary]));
+  for (const key of ["typing", "mother"]) {
+    const spec = CONC_TABLES[key];
+    const rows = rowsOf(key).filter(([, sm]) => sm && Object.keys(sm).length);
+    if (!rows.length) continue;
+    lines.push("", `## ${spec.title}`, "", `| 子会话 · 条数 | ${spec.cols.map((c) => c[1]).join(" | ")} |`, `|---|${spec.cols.map(() => "---").join("|")}|`);
+    for (const [name, sm] of rows) lines.push(`| ${name} | ${spec.cols.map(([k, , d]) => cell(sm[k], d)).join(" | ")} |`);
+    if (key === "typing") {
+      const ch = CONC_TABLES.children;
+      const kids = rows.filter(([, sm]) => sm.childReqMed);
+      if (!kids.length) continue;
+      lines.push("", `## ${ch.title}`, "", `| 子会话 · 条数 | ${ch.pairs.map((p) => p[2]).join(" | ")} | ${ch.cols.map((c) => c[1]).join(" | ")} |`, `|---|${[...ch.pairs, ...ch.cols].map(() => "---").join("|")}|`);
+      for (const [name, sm] of kids) lines.push(`| ${name} | ${ch.pairs.map(([a, b]) => `${fmt(sm[a]?.median, 0)} / ${fmt(sm[b]?.max, 0)}`).join(" | ")} | ${ch.cols.map(([k, , d]) => fmt(sm[k]?.median, d)).join(" | ")} |`);
+    }
+  }
+  const warn = conc.sizes.flatMap((s) => [...new Set(s.warnings)].map((w) => `- ${s.label}：${w}`));
+  if (warn.length) lines.push("", "## 警告", "", ...warn);
+  return lines.join("\n") + "\n";
+}
