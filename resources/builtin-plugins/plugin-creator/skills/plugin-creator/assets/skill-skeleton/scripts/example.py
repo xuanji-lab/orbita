@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """示例脚本骨架：只用标准库；输出路径相对脚本位置；先写临时文件再改名；失败大声报错。
 
-用法：python3 scripts/example.py [--out data/panel.json]
-把 __ 开头的占位和 TODO 换成真实逻辑。别留着这个文件当“示例技能”——不用的脚本删掉。
+用法：python3 scripts/example.py [--out data/<卡id>.json]
+把 __ 开头的占位和 TODO 换成真实逻辑（一张卡一个输出文件，形状与 board/<卡id>.sample.json 一致）。
+别留着这个文件当“示例技能”——不用的脚本删掉。
 """
 import argparse
 import json
@@ -35,7 +36,7 @@ def write_atomic(path: Path, payload: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default=str(ROOT / "data" / "panel.json"))
+    parser.add_argument("--out", default=str(ROOT / "data" / "out.json"))
     args = parser.parse_args()
     try:
         items = fetch_items()

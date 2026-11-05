@@ -37,11 +37,11 @@ const INSTALL_DESCRIPTION =
 
 const PREVIEW_DESCRIPTION =
   "Show the user the plugin folder you are drafting in the right pane of the app, WITHOUT installing it. " +
-  "Call it once, right after you have written the panel files (panel/sample.json, panel/index.html, panel/spec.md and the orbita.panel block " +
-  "in .claude-plugin/plugin.json): the pane then shows the plugin being made — the card rendered from your sample data, plus the spec. " +
-  "After that the pane refreshes by itself within a few seconds whenever you change those files, so do NOT call it again after every edit; " +
+  "Call it once, right after you have written the manifest skeleton (.claude-plugin/plugin.json with at least the name and the description): the pane then shows the plugin being made — " +
+  "its detail page, with a dashed 'not discussed yet' placeholder for each manifest section you have not filled in. " +
+  "As you fill in sections (description, workflow, io, external, board), the pane grows them by itself within a few seconds, so do NOT call it again after each edit; " +
   "call it again only if the user says they cannot see it. The folder must be inside this session's workspace. " +
-  "Returns immediately with what Orbita found (skills, workflow steps, panel files, problems to fix before install_plugin). " +
+  "Returns immediately with what Orbita found (skills, workflow steps, board files, problems to fix before install_plugin). " +
   "Problems are normal while the draft is unfinished; they do not stop the pane from showing.";
 
 type Outcome = PluginAgentInstallOutcome | PluginAgentListOutcome | PluginAgentPreviewOutcome;
@@ -157,7 +157,7 @@ export function describeInstalled(outcome: Extract<PluginAgentInstallOutcome, { 
       "and do not ask the same question in prose."
     );
   }
-  const data = outcome.dataDir === "" ? "" : ` Plugin data folder: ${outcome.dataDir} (actions the user triggers in the plugin's panel are appended to actions.jsonl there).`;
+  const data = outcome.dataDir === "" ? "" : ` Plugin data folder: ${outcome.dataDir} (actions the user triggers in the plugin's board are appended to actions.jsonl there).`;
   if (outcome.kind === "already") {
     return (
       `Plugin "${outcome.name}" is already installed from this folder${brings}; nothing new was shown. ` +
@@ -177,8 +177,8 @@ export function describePreview(outcome: Extract<PluginAgentPreviewOutcome, { ok
     outcome.skills.length > 0 ? `skills: ${outcome.skills.join(", ")}` : "skills: none yet",
     outcome.workflow.length > 0 ? `workflow: ${outcome.workflow.map((title, index) => `${index + 1}. ${title}`).join(" → ")}` : "workflow: not written yet",
     outcome.panelFiles.length > 0
-      ? `panel files: ${outcome.panelFiles.map((file) => `${file.key} ${file.path}${file.exists ? "" : " (MISSING)"}`).join("; ")}`
-      : "panel files: none declared",
+      ? `board files: ${outcome.panelFiles.map((file) => `${file.key} ${file.path}${file.exists ? "" : " (MISSING)"}`).join("; ")}`
+      : "board files: none declared",
   ];
   if (outcome.installed) lines.push("A plugin with this name is already installed (you are editing it; the pane shows the draft folder).");
   if (outcome.issues.length > 0) lines.push(`Things to fix (before install_plugin; none of them stops the pane from showing):\n- ${outcome.issues.join("\n- ")}`);

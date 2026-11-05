@@ -1104,6 +1104,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
                 intentGuideline: "intent" in command && command.intent !== undefined,
                 memoryToolsGuideline: memoryTools,
+                longTaskAutomationGuideline: automationTools,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
