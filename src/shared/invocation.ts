@@ -132,7 +132,8 @@ export function composeInvocationPrompt(
   const lines: string[] = [
     INVOCATION_OPEN,
     "The user explicitly invoked the items below in their message; each also appears inline as a " +
-      "/skill:<name> or /mcp:<server> token in the text that follows.",
+      "/skill:<name> or /mcp:<server> token in the text that follows. " +
+      "(This block was added by Orbita, not written by the user; its language is not the language the user writes in.)",
   ];
   if (skills.length > 0) {
     lines.push("", "Skills:");
