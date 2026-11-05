@@ -361,6 +361,31 @@ export const ipcChannels = {
   mcpRemove: "mcp:remove",
   /** 启停一台 server（4-2）：改 disabled 字段后自动重连 */
   mcpSetDisabled: "mcp:set-disabled",
+  /**
+   * 插件（实验功能 plugins）。已装页的一切读写：列表 = 真插件 + 原来的技能 / MCP 显示成的
+   * 「一样东西的插件」（PluginView），范围与配置的写入按视图 id 的前缀分派到各自的真源。
+   */
+  pluginList: "plugin:list",
+  /** 开轮之外的技能选取面（右栏 `/` 选取、聊天里的 read SKILL.md 徽标）要认的插件技能，SkillMeta 形状 */
+  pluginSkills: "plugin:skills",
+  /** 目录选择框（renderer 无文件系统权，主进程开）：选中返回绝对路径，取消返回 null */
+  pluginPickFolder: "plugin:pick-folder",
+  /** 安装前预览：读出它带了什么、MCP 命令行、冲突；复制 / git 先暂存，确认的就是装上的 */
+  pluginPreview: "plugin:preview",
+  /** 放弃一次预览：清掉暂存目录 */
+  pluginDiscard: "plugin:discard",
+  /** 确认安装（入参 PluginInstallRequest）；冲突 / 暂存失效以数据返回，不抛 */
+  pluginInstall: "plugin:install",
+  /** 改启用范围（入参视图 id + PluginScope）；旧技能 / MCP 映射到 skill link 与 mcp.json */
+  pluginSetScope: "plugin:set-scope",
+  /** 改一个配置项（入参插件名、键、值或 null=清除）；敏感值进系统密钥库 */
+  pluginSetConfig: "plugin:set-config",
+  /** 卸载 = 归档不是删除（链接安装只归档记录，绝不碰源文件夹） */
+  pluginUninstall: "plugin:uninstall",
+  /** 在系统文件管理器里打开插件目录 */
+  pluginReveal: "plugin:reveal",
+  /** 重新读目录（改了源文件夹、清单后）并让 MCP 连接按新配置重建 */
+  pluginReload: "plugin:reload",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];

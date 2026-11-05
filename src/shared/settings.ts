@@ -124,6 +124,7 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "pdf-citations",
   "intent-system",
   "memory-system",
+  "plugins",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
