@@ -216,14 +216,16 @@ export class PluginAgentRequests {
     const relinked = await this.isRelinked(preview.name, path);
     const installed = (await ports.plugins.records()).some((record) => record.name === preview.name);
 
-    const panelFiles = await draftPanelFiles(path, preview, ports.plugins.dataDirOf(preview.name));
+    const boardFiles = await draftBoardFiles(path, preview, ports.plugins.dataDirOf(preview.name));
     const conflicts = relinked ? preview.conflicts.filter((conflict) => !(conflict.kind === "plugin-exists" && conflict.name === preview.name)) : preview.conflicts;
     const issues = [
       ...preview.problems.map((problem) => `${problem.kind}: ${problem.detail}`),
       ...conflicts.map(conflictMessage),
       ...unresolvedWorkflow(preview).map((line) => `${line} (fine for now if you have not written that skill yet; it must exist before install_plugin)`),
-      ...panelFiles.filter((file) => !file.exists && file.key !== "data").map((file) => `orbita.panel.${file.key} points at ${file.path}, which does not exist`),
-      ...(panelFiles.length === 0 ? ['plugin.json has no "orbita.panel" block, so the right pane has no panel to show yet'] : []),
+      ...boardFiles
+        .filter((file) => !file.exists && file.key !== "data")
+        .map((file) => `orbita.board${file.card === null ? "" : `.cards[${file.card}]`}.${file.key} points at ${file.path}, which does not exist`),
+      ...(boardFiles.length === 0 ? ['plugin.json has no "orbita.board" block with cards, so the board has nothing to show yet'] : []),
     ];
     ports.draft({ type: "pluginDraft", sessionId: event.sessionId, path });
     return {
@@ -232,7 +234,7 @@ export class PluginAgentRequests {
       path,
       skills: preview.skills.map((skill) => skill.slug),
       workflow: preview.workflow.map((step) => step.title),
-      panelFiles,
+      boardFiles,
       issues,
       installed,
     };
@@ -326,31 +328,26 @@ function rowOf(prepared: Prepared, state: PluginInstallRow["state"], reason: Plu
 }
 
 /**
- * 清单 `orbita.panel` 里写的几个文件，各自在不在。没写 panel 块返回空数组。
- * 只读原始清单里的这几个键（面板的完整解析在面板那条线上）；template / spec / sample 必须在插件根内才算在，
+ * 清单 `orbita.board` 里写的文件（每张卡的 template / sample / data，加看板级的 spec），各自在不在。
+ * 没写 board 返回空数组。template / spec / sample 必须在插件根内才算在，
  * data 允许落在插件数据目录（`${CLAUDE_PLUGIN_DATA}`），不在也正常（脚本还没跑）。
  */
-export async function draftPanelFiles(root: string, preview: Pick<PluginPreview, "manifestFile">, dataDir: string): Promise<PluginDraftFile[]> {
-  if (preview.manifestFile === null) return [];
-  let panel: unknown;
-  try {
-    const manifest: unknown = JSON.parse(await readFile(join(root, ...preview.manifestFile.split("/")), "utf8"));
-    const orbita = typeof manifest === "object" && manifest !== null ? (manifest as Record<string, unknown>)["orbita"] : undefined;
-    panel = typeof orbita === "object" && orbita !== null ? (orbita as Record<string, unknown>)["panel"] : undefined;
-  } catch {
-    return [];
-  }
-  if (typeof panel !== "object" || panel === null) return [];
-  const entries = panel as Record<string, unknown>;
-  const files: PluginDraftFile[] = [];
-  for (const key of ["template", "spec", "sample", "data"] as const) {
-    const written = entries[key];
-    if (typeof written !== "string" || written === "") continue;
+export async function draftBoardFiles(root: string, preview: Pick<PluginPreview, "board">, dataDir: string): Promise<PluginDraftFile[]> {
+  const { board } = preview;
+  if (board === null) return [];
+  const check = async (card: string | null, key: PluginDraftFile["key"], written: string): Promise<PluginDraftFile> => {
     const absolute = resolve(root, written.replaceAll("${CLAUDE_PLUGIN_ROOT}", root).replaceAll("${CLAUDE_PLUGIN_DATA}", dataDir));
     const inside = relative(root, absolute);
     const allowed = key === "data" || (!inside.startsWith("..") && !isAbsolute(inside));
     const exists = allowed && (await stat(absolute).then((info) => info.isFile(), () => false));
-    files.push({ key, path: written, exists });
+    return { card, key, path: written, exists };
+  };
+  const files: PluginDraftFile[] = [];
+  if (board.spec !== null) files.push(await check(null, "spec", board.spec));
+  for (const card of board.cards) {
+    files.push(await check(card.id, "template", card.template));
+    if (card.sample !== null) files.push(await check(card.id, "sample", card.sample));
+    if (card.data !== null) files.push(await check(card.id, "data", card.data));
   }
   return files;
 }

@@ -1021,11 +1021,12 @@ export function App() {
       }),
     [],
   );
-  // 「在右栏打开这个插件的面板」（设置页的全屏版详情里点）：右栏打开插件页，选中那个插件的面板页签
+  // 「在右栏打开这个插件」：右栏打开插件页，选中那个插件；`board` 为真直接进它的看板视图
+  // （设置页全屏版详情里点「打开看板」），否则停在详情（装好之后）
   const [pluginOpenRequest, setPluginOpenRequest] = useState<PluginOpenRequest | null>(null);
-  const openPluginPanel = useCallback(
-    (name: string) => {
-      setPluginOpenRequest((previous) => ({ name, nonce: (previous?.nonce ?? 0) + 1 }));
+  const openPlugin = useCallback(
+    (name: string, board: boolean) => {
+      setPluginOpenRequest((previous) => ({ name, nonce: (previous?.nonce ?? 0) + 1, board }));
       // 要看的是已装的这个插件：这条会话若正挂着草稿视图，先让位给它
       if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
       setRightPanel("plugins");
@@ -1035,10 +1036,10 @@ export function App() {
   const handlePluginOpenHandled = useCallback(() => setPluginOpenRequest(null), []);
   /**
    * agent 的 install_plugin 装上了插件、或用户点了对话里那一行的「安装」，而且是**正看着的这条会话**里装的：
-   * 右栏打开插件页、选中它的面板页签（没有面板时按详情默认页签）。别的会话里装的不抢右栏。
+   * 右栏打开插件页、选中它停在详情（要看看板再点「打开看板」）。别的会话里装的不抢右栏。
    */
-  const openPluginPanelRef = useRef(openPluginPanel);
-  openPluginPanelRef.current = openPluginPanel;
+  const openPluginRef = useRef(openPlugin);
+  openPluginRef.current = openPlugin;
   const viewedForInstallRef = useRef(mainSessionId);
   viewedForInstallRef.current = mainSessionId;
   useEffect(
@@ -1046,7 +1047,7 @@ export function App() {
       api.agent.onEvent((event) => {
         if (event.type !== "pluginsChanged" || event.installed === undefined) return;
         if (event.installed.sessionId !== viewedForInstallRef.current) return;
-        openPluginPanelRef.current(event.installed.name);
+        openPluginRef.current(event.installed.name, false);
       }),
     [],
   );
@@ -1284,10 +1285,10 @@ export function App() {
                 plugins={{
                   currentWorkspaceId: session.workspaceId,
                   onMakeWithAgent: makePluginWithAgent,
-                  // 从设置页签点「在右栏打开」：退出设置，回到对话，右栏开这个插件的面板
-                  onOpenPanel: (name) => {
+                  // 从设置页签点「打开看板」：退出设置，回到对话，右栏开这个插件的看板视图
+                  onOpenBoard: (name) => {
                     setOverlay(null);
-                    openPluginPanel(name);
+                    openPlugin(name, true);
                   },
                 }}
                 onTab={setSettingsTab}
@@ -1429,7 +1430,7 @@ export function App() {
                   chrome="rail"
                   currentWorkspaceId={session.workspaceId}
                   onMakeWithAgent={makePluginWithAgent}
-                  onOpenPanel={openPluginPanel}
+                  onOpenBoard={(name) => openPlugin(name, true)}
                   openRequest={pluginOpenRequest}
                   onOpenRequestHandled={handlePluginOpenHandled}
                   draft={draftOf(pluginDrafts, mainSessionId)}

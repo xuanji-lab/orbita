@@ -39,7 +39,7 @@ export const PANEL_FRAME_CSP = [
 /** 一份文档没被取走多久就作废。 */
 export const PANEL_FRAME_TTL_MS = 60_000;
 /** 同时放着多少份没取走的文档（renderer 反复开关面板时的上限，满了丢最旧的）。 */
-const MAX_PENDING = 32;
+const MAX_PENDING = 96;
 
 export interface PanelFrameResponse {
   status: number;

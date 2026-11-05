@@ -438,14 +438,14 @@ export const ipcChannels = {
   pluginReload: "plugin:reload",
   /** 读一条插件技能的 SKILL.md 原文（详情页「工作流」里点技能只读查看；入参插件名 + 技能 slug） */
   pluginSkillFile: "plugin:skill-file",
-  /** 载入 / 轮询一个面板（契约在 plugin-panel.ts）：模板的 iframe 地址 + 数据文件内容 + spec；stamp 没变回 unchanged（只是 stat） */
-  pluginPanelLoad: "plugin:panel-load",
-  /** 草稿预览：同上，但对象是工作区里**还没安装**的插件文件夹（入参 PluginDraftLoadRequest；路径必须在该工作区根内） */
+  /** 载入 / 轮询一个插件的看板（契约在 plugin-panel.ts）：每张卡的 iframe 地址 + 数据；stamp 没变回 unchanged（只是几次 stat） */
+  pluginBoardLoad: "plugin:board-load",
+  /** 草稿预览（一）：工作区里**还没安装**的插件文件夹的扫描结果，与已装页同一形状的 PluginView（入参 PluginDraftLoadRequest；路径必须在该工作区根内） */
   pluginDraftLoad: "plugin:draft-load",
-  /** 模板里点按钮的回传：校验后原子追加到插件数据目录的 actions.jsonl，不做别的 */
+  /** 草稿预览（二）：同一个草稿文件夹的看板，给出与 `plugin:board-load` 同形的快照 */
+  pluginDraftBoardLoad: "plugin:draft-board-load",
+  /** 卡里点按钮的回传：校验后原子追加到插件数据目录的 actions.jsonl（带 card 字段），不做别的 */
   pluginPanelAction: "plugin:panel-action",
-  /** 详情页「面板」「最近产出」：模板与数据路径（替换后）、数据与动作日志的更新时间和条数、解析问题 */
-  pluginPanelInfo: "plugin:panel-info",
   /**
    * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
    * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区 / manual 档）：主进程重新校验会话、
@@ -1659,7 +1659,7 @@ export type AgentEvent =
   | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory }
   /**
    * agent 工具 `preview_plugin` 扫过了一个还没安装的插件文件夹：renderer 正看着该会话时，
-   * 右栏打开插件页的「正在做」视图（面板 + 模板说明，经 `plugin:draft-load` 轮询）。
+   * 右栏打开插件页的「正在做」视图（详情长页，经 `plugin:draft-load` / `plugin:draft-board-load` 轮询）。
    * `path` 是工作区内的插件文件夹（绝对路径或相对工作区根）；纯 ephemeral，不落盘。
    */
   | { type: "pluginDraft"; sessionId: string; path: string };

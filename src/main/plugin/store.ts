@@ -48,6 +48,7 @@ import {
   type PluginSourceRecord,
   type PluginView,
 } from "../../shared/plugin.ts";
+import { EMPTY_PLUGIN_IO } from "../../shared/plugin-board.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 import { findConflicts, skillsCollide, type OtherPlugin, type SkillIdentity } from "./conflicts.ts";
 import { checkGitUrl, repoNameOf, runGit, stageCopy, stageGit, type GitRunner } from "./install.ts";
@@ -270,6 +271,10 @@ export class PluginStore {
       hasScripts: scanned.hasScripts,
       skills: scanned.skills.map(({ slug, name, description }) => ({ slug, name, description })),
       workflow: scanned.workflow,
+      io: scanned.io,
+      external: scanned.external,
+      board: scanned.board,
+      tuned: scanned.tuned,
       mcp,
       unsupported: scanned.unsupported,
       config: scanned.config,
@@ -542,6 +547,10 @@ export class PluginStore {
       contents: { skills: skills.length, mcp: mcp.length, scripts: scanned?.hasScripts ?? false },
       skills,
       workflow: scanned?.workflow ?? [],
+      io: scanned?.io ?? EMPTY_PLUGIN_IO,
+      external: scanned?.external ?? [],
+      board: scanned?.board ?? null,
+      tuned: scanned?.tuned ?? false,
       mcp,
       unsupported: scanned?.unsupported ?? [],
       config,

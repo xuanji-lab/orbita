@@ -176,9 +176,9 @@ export function describePreview(outcome: Extract<PluginAgentPreviewOutcome, { ok
     `The right pane now shows the draft "${outcome.name}" (${outcome.path}). It re-reads the files by itself every few seconds; you do not need to call preview_plugin again after each edit.`,
     outcome.skills.length > 0 ? `skills: ${outcome.skills.join(", ")}` : "skills: none yet",
     outcome.workflow.length > 0 ? `workflow: ${outcome.workflow.map((title, index) => `${index + 1}. ${title}`).join(" → ")}` : "workflow: not written yet",
-    outcome.panelFiles.length > 0
-      ? `panel files: ${outcome.panelFiles.map((file) => `${file.key} ${file.path}${file.exists ? "" : " (MISSING)"}`).join("; ")}`
-      : "panel files: none declared",
+    outcome.boardFiles.length > 0
+      ? `board files: ${outcome.boardFiles.map((file) => `${file.card === null ? "" : `${file.card}.`}${file.key} ${file.path}${file.exists ? "" : " (MISSING)"}`).join("; ")}`
+      : "board files: none declared",
   ];
   if (outcome.installed) lines.push("A plugin with this name is already installed (you are editing it; the pane shows the draft folder).");
   if (outcome.issues.length > 0) lines.push(`Things to fix (before install_plugin; none of them stops the pane from showing):\n- ${outcome.issues.join("\n- ")}`);

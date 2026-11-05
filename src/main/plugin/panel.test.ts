@@ -4,15 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { PluginConfigField } from "../../shared/plugin.ts";
-import { PANEL_DATA_MAX_BYTES, PANEL_SPEC_MAX_BYTES, PANEL_TEMPLATE_MAX_BYTES } from "../../shared/plugin-panel.ts";
+import { PANEL_DATA_MAX_BYTES, PANEL_SPEC_MAX_BYTES, PANEL_TEMPLATE_MAX_BYTES, type PluginPanelData } from "../../shared/plugin-panel.ts";
 import {
   ActionLimiter,
   appendActionLine,
-  itemCountOf,
+  expandRepeat,
   locatePanelFile,
   locatePanelTemplate,
-  parsePanelSpec,
-  readActionsInfo,
   readPanelData,
   readPanelSample,
   readPanelSpec,
@@ -57,46 +55,6 @@ function field(partial: Partial<PluginConfigField> & { key: string }): PluginCon
 function context(partial: Partial<PanelPathContext> = {}): PanelPathContext {
   return { root, dataDir, fields: [], values: {}, workspaceRoot: workspace, ...partial };
 }
-
-describe("parsePanelSpec", () => {
-  test("没有 orbita.panel：不算声明，不报问题", () => {
-    assert.deepEqual(parsePanelSpec({}, "T"), { declared: false, spec: null, problems: [], notices: [] });
-    assert.deepEqual(parsePanelSpec({ orbita: { workflow: [] } }, "T"), { declared: false, spec: null, problems: [], notices: [] });
-    assert.equal(parsePanelSpec({ orbita: "x" }, "T").declared, false);
-  });
-
-  test("正常：标题、模板、数据原样（去首尾空白）", () => {
-    const parsed = parsePanelSpec({ orbita: { panel: { title: " 文献追踪 ", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_DATA}/panel.json" } } }, "fallback");
-    assert.deepEqual(parsed.spec, { title: "文献追踪", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_DATA}/panel.json", spec: null, sample: null });
-    assert.deepEqual(parsed.problems, []);
-  });
-
-  test("spec / sample 是可选的清单原文（去首尾空白）；写成别的形状不拦面板，只记一条 shape 提示", () => {
-    const base = { title: "x", template: "t.html", data: "d.json" };
-    const both = parsePanelSpec({ orbita: { panel: { ...base, spec: " ./panel/spec.md ", sample: "./panel/sample.json" } } }, "T");
-    assert.equal(both.spec?.spec, "./panel/spec.md");
-    assert.equal(both.spec?.sample, "./panel/sample.json");
-    assert.deepEqual(both.notices, []);
-    const bad = parsePanelSpec({ orbita: { panel: { ...base, spec: 3, sample: " " } } }, "T");
-    assert.equal(bad.declared, true);
-    assert.equal(bad.spec?.spec, null, "面板照常出");
-    assert.equal(bad.spec?.sample, null);
-    assert.deepEqual(bad.notices, [{ kind: "shape", detail: "spec" }, { kind: "shape", detail: "sample" }]);
-    assert.deepEqual(parsePanelSpec({ orbita: { panel: { ...base, spec: null } } }, "T").notices, [], "显式写 null = 没写");
-  });
-
-  test("标题缺省退回显示名；template / data 缺了或类型不对报 shape 并不给 spec", () => {
-    assert.equal(parsePanelSpec({ orbita: { panel: { template: "a.html", data: "d.json" } } }, "显示名").spec?.title, "显示名");
-    const missing = parsePanelSpec({ orbita: { panel: { title: "x", template: 3 } } }, "T");
-    assert.equal(missing.declared, true);
-    assert.equal(missing.spec, null);
-    assert.deepEqual(missing.problems, [
-      { kind: "shape", detail: "template" },
-      { kind: "shape", detail: "data" },
-    ]);
-    assert.deepEqual(parsePanelSpec({ orbita: { panel: "oops" } }, "T").problems, [{ kind: "shape", detail: "panel" }]);
-  });
-});
 
 describe("resolveDataPath 变量替换", () => {
   test("CLAUDE_PLUGIN_DATA / CLAUDE_PLUGIN_ROOT / ZCODE 前缀同义", async () => {
@@ -345,12 +303,17 @@ describe("readPanelData", () => {
   });
 });
 
-describe("itemCountOf", () => {
-  test("顶层数组取长度；顶层对象取最长的数组属性；别的为 null", () => {
-    assert.equal(itemCountOf([1, 2, 3]), 3);
-    assert.equal(itemCountOf({ round: { no: 1 }, papers: [1, 2], notes: [1] }), 2);
-    assert.equal(itemCountOf({ a: 1 }), null);
-    assert.equal(itemCountOf("x"), null);
+describe("expandRepeat", () => {
+  test("有项：一项一张；空数组 / 没数据 / 数据有问题：none（画一张占位卡）；属性缺失或不是数组：not-array", () => {
+    const ready = (value: unknown): PluginPanelData => ({ kind: "ready", value, updatedAt: 1 });
+    assert.deepEqual(expandRepeat(ready({ items: [1, 2] }), "items"), { kind: "items", items: [1, 2] });
+    assert.deepEqual(expandRepeat(ready({ items: [] }), "items"), { kind: "none" });
+    assert.deepEqual(expandRepeat({ kind: "empty" }, "items"), { kind: "none" });
+    assert.deepEqual(expandRepeat({ kind: "problem", problem: { kind: "invalid-json", message: "x" } }, "items"), { kind: "none" });
+    assert.deepEqual(expandRepeat(ready({ items: "x" }), "items"), { kind: "not-array" });
+    assert.deepEqual(expandRepeat(ready({ other: [1] }), "items"), { kind: "not-array" });
+    assert.deepEqual(expandRepeat(ready([1, 2]), "items"), { kind: "not-array" }, "顶层是数组也不认：repeat 只认顶层属性");
+    assert.deepEqual(expandRepeat(ready({ constructor: [1] }), "toString"), { kind: "not-array" }, "原型上的键不算");
   });
 });
 
@@ -395,14 +358,5 @@ describe("appendActionLine", () => {
     const read = (await readFile(file, "utf8")).split("\n").filter((line) => line !== "");
     assert.equal(read.length, 100);
     assert.deepEqual(read.map((line) => (JSON.parse(line) as { n: number }).n).sort((a, b) => a - b), lines.map((_, index) => index));
-  });
-
-  test("readActionsInfo：不存在 = 0 条；有内容数非空行并给 mtime", async () => {
-    const file = join(dataDir, "actions.jsonl");
-    assert.deepEqual(await readActionsInfo(file), { updatedAt: null, count: 0 });
-    await writeFile(file, '{"a":1}\n\n{"a":2}\n');
-    const info = await readActionsInfo(file);
-    assert.equal(info.count, 2);
-    assert.ok((info.updatedAt ?? 0) > 0);
   });
 });
