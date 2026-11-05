@@ -71,7 +71,7 @@ export function PluginPanelCards(props: { info: PluginPanelInfo; onOpen: () => v
               <span>
                 {t.recentWhen(WHEN.format(data.updatedAt))}
                 {data.items !== null && ` · ${t.recentCount(data.items)}`}
-                {data.bytes !== null && <span className="pl-muted"> · {formatBytes(data.bytes)}</span>}
+                {data.bytes !== null && ` · ${formatBytes(data.bytes)}`}
               </span>
             ) : (
               <span className="pl-muted">{t.recentNone}</span>
