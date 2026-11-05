@@ -52,6 +52,9 @@ import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
+import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
+import { installPanelProtocol, registerPanelScheme } from "./plugin/panel-protocol.ts";
+import { PluginPanels } from "./plugin/panel-service.ts";
 import { PluginStore } from "./plugin/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
@@ -97,6 +100,9 @@ import { VoiceStore } from "./voice/store.ts";
 
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
+
+// 插件面板的 iframe 协议（orbita-panel://）：Electron 要求自定义协议在 app ready 之前登记
+registerPanelScheme();
 
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
@@ -228,6 +234,16 @@ function createMainWindow(
     if (isOwnRendererPage(url, ownRendererOrigin())) return;
     event.preventDefault();
     openLink(url);
+  });
+
+  /*
+   * 子框架的导航：renderer 里唯一的子框架是插件面板的 iframe（orbita-panel://），它是不可信模板的家——
+   * 模板里 location.href / <a> / <meta refresh> 想把自己（或拿着 preload 的主框架）带去别处，一律拦。
+   * 主框架由上面的 will-navigate 管；这里只管 isMainFrame 为 false 的。
+   */
+  window.webContents.on("will-frame-navigate", (event) => {
+    if (event.isMainFrame) return;
+    if (!isPanelFrameUrl(event.url)) event.preventDefault();
   });
 
   /*
@@ -915,7 +931,15 @@ void app.whenReady().then(async () => {
   void plugins.init().catch((error: unknown) => {
     console.error("[main] 清不了插件暂存目录（不影响使用，下次启动再试）", error);
   });
-  registerPluginIpc({ plugins, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload() });
+  // 面板文档仓库：模板由主进程按一次性 token 从内存给 iframe，CSP 走响应头（plugin/panel-frame.ts）
+  const panelFrames = new PanelFrames();
+  installPanelProtocol(panelFrames, (url) => isOwnRendererPage(url, ownRendererOrigin()));
+  const panels = new PluginPanels({
+    plugins,
+    frames: panelFrames,
+    workspaceRoot: async (id) => (id === null ? null : ((await workspaces.list()).find((each) => each.id === id)?.path ?? null)),
+  });
+  registerPluginIpc({ plugins, panels, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload() });
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
   registerImportIpc(
     sessions,

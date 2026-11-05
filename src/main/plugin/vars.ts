@@ -32,9 +32,9 @@ export const MASKED_VALUE = "••••••";
 
 const PATTERN = /\$\{([^}]*)\}/g;
 
-const ROOT_NAMES = new Set(["CLAUDE_PLUGIN_ROOT", "ZCODE_PLUGIN_ROOT"]);
-const DATA_NAMES = new Set(["CLAUDE_PLUGIN_DATA", "ZCODE_PLUGIN_DATA"]);
-const PROJECT_NAMES = new Set(["CLAUDE_PROJECT_DIR", "ZCODE_PROJECT_DIR"]);
+export const ROOT_NAMES = new Set(["CLAUDE_PLUGIN_ROOT", "ZCODE_PLUGIN_ROOT"]);
+export const DATA_NAMES = new Set(["CLAUDE_PLUGIN_DATA", "ZCODE_PLUGIN_DATA"]);
+export const PROJECT_NAMES = new Set(["CLAUDE_PROJECT_DIR", "ZCODE_PROJECT_DIR"]);
 
 /** 值怎么变成命令行里的一段文字：数组用逗号连，布尔 / 数字照字面。 */
 function renderValue(value: PluginConfigValue): string {

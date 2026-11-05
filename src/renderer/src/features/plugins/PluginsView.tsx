@@ -20,7 +20,12 @@ import { contentsParts, filterPlugins, groupPlugins, legacyCounts, sourceKey, to
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
 
-export function PluginsView(props: { workspaces: readonly Workspace[] }) {
+export function PluginsView(props: {
+  workspaces: readonly Workspace[];
+  /** 当前会话所在的工作区：详情页里面板的数据路径与「在右栏打开」按它判断 */
+  currentWorkspaceId: string | null;
+  onOpenPanel: (pluginName: string) => void;
+}) {
   const messages = useT();
   const t = messages.plugins;
   const state = usePlugins(true);
@@ -82,6 +87,8 @@ export function PluginsView(props: { workspaces: readonly Workspace[] }) {
             key={selected.id}
             view={selected}
             workspaces={workspaces}
+            currentWorkspaceId={props.currentWorkspaceId}
+            onOpenPanel={props.onOpenPanel}
             onBack={() => setSelectedId(null)}
             onScope={(scope) => state.setScope(selected.id, scope)}
             onChanged={state.refresh}

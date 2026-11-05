@@ -1,5 +1,6 @@
 import { useRef, useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
+import type { PluginPanelKind } from "./plugin-panel-kind.ts";
 import { useT } from "../locale.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
 import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/BellCard";
@@ -37,7 +38,9 @@ export type RightPanelKind =
   | "drawer"
   | "subsessions"
   | "intent"
-  | "context";
+  | "context"
+  /** 某个插件的面板（实验功能 plugins）：`plugin-panel:<插件名>`，每个带面板的插件一个页签 */
+  | PluginPanelKind;
 
 /** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
 export interface RailEntry {
@@ -67,6 +70,11 @@ export function RightRail(props: {
    * 显示插件页（与记忆库同类的盖层），所以点亮与点击都由 App 给，不走 `onPanel`。
    */
   pluginsEntry: RailEntry | null;
+  /**
+   * 插件面板页签（实验功能 plugins）：当前工作区里已启用、声明了面板的插件各一个，没有就是空数组。
+   * 与 Files 等共用右栏面板位（走 `onPanel`，互斥）；图标用插件头像的同一条规则——名字首字。
+   */
+  pluginPanels: readonly { id: PluginPanelKind; title: string; initial: string }[];
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -154,6 +162,15 @@ export function RightRail(props: {
           onClick={props.pluginsEntry.onClick}
         />
       )}
+      {props.pluginPanels.map((entry) => (
+        <RailEntryButton
+          key={entry.id}
+          glyph={entry.initial}
+          label={entry.title}
+          lit={props.panel === entry.id}
+          onClick={() => props.onPanel(props.panel === entry.id ? null : entry.id)}
+        />
+      ))}
       {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
       <RailEntryButton
         icon="square-terminal"
@@ -226,7 +243,9 @@ export function RightRail(props: {
  * 调用方表达成收起。badge（铃铛的未读角标）常驻在右上角，0 / 缺席不渲染。
  */
 function RailEntryButton(props: {
-  icon: IconName;
+  /** 有图标用图标；插件面板页签没有，传 glyph（名字首字） */
+  icon?: IconName;
+  glyph?: string;
   label: string;
   lit: boolean;
   onClick: () => void;
@@ -254,7 +273,7 @@ function RailEntryButton(props: {
         position: "relative",
       }}
     >
-      <Icon name={props.icon} size={16} />
+      {props.icon !== undefined ? <Icon name={props.icon} size={16} /> : <span className="rail-glyph" aria-hidden="true">{props.glyph}</span>}
       {props.badge !== undefined && props.badge > 0 && (
         <span className="rail-badge" aria-hidden="true">
           {props.badge > 99 ? "99+" : props.badge}
