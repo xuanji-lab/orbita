@@ -312,7 +312,16 @@ describe("repeat 展开", () => {
     const placeholder = await loadReady();
     assert.deepEqual(placeholder.cards.map((each) => [each.key, each.data.kind]), [["paper#0", "empty"]]);
     await writeFile(join(dataRoot, "lit-tracker", "none.json"), '{"items":[]}');
-    assert.equal((await loadReady()).cards.length, 1);
+    const emptyList = await loadReady();
+    assert.deepEqual(emptyList.cards.map((each) => [each.key, each.data.kind]), [["paper#0", "empty"]], "空数组：给模板的是 empty（与会话快照卡一致），不是整份 {items: []}");
+  });
+
+  test("expandDecl 纯函数：repeat 的数组是空的 → 一张占位卡，data 为 empty（与 board-snapshot 的 data null / state empty 同义）；数据有问题时原样传", () => {
+    const decl = { id: "a", title: "a", size: "1x1", note: null, template: "t", data: null, sample: null, repeat: "items" } as const;
+    const emptyList = expandDecl({ decl }, { data: { kind: "ready", value: { items: [] }, updatedAt: 1 }, usingSample: false, problems: [] });
+    assert.deepEqual(emptyList.cards, [{ index: 0, data: { kind: "empty" }, usingSample: false }]);
+    const problem = expandDecl({ decl }, { data: { kind: "problem", problem: { kind: "invalid-json", message: "x" } }, usingSample: false, problems: [] });
+    assert.equal(problem.cards[0]?.data.kind, "problem");
   });
 
   test("repeat 的属性不是数组：这块声明不出卡，原因进看板级 problems", async () => {

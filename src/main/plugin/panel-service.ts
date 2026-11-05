@@ -517,7 +517,10 @@ export function expandDecl(
     return { cards: [], cardProblems: [], boardProblems: [{ kind: "repeat-not-array", detail: decl.repeat }, ...source.problems] };
   }
   if (expansion.kind === "none") {
-    return { cards: [{ index: 0, data: source.data, usingSample: source.usingSample }], cardProblems: source.problems, boardProblems: [] };
+    // 数组是空的（数据是 ready 才会走到这）：和会话里的快照卡一致，给模板 data null / state empty，而不是整份 {items: []}
+    // ——同一张卡在右栏与会话里的空态才画得一样（见 board-snapshot 的展开）
+    const data: PluginPanelData = source.data.kind === "ready" ? { kind: "empty" } : source.data;
+    return { cards: [{ index: 0, data, usingSample: source.usingSample }], cardProblems: source.problems, boardProblems: [] };
   }
   const updatedAt = source.data.kind === "ready" ? source.data.updatedAt : 0;
   return {
