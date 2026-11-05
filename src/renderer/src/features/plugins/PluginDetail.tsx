@@ -19,6 +19,8 @@ const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-dig
 export function PluginDetail(props: {
   view: PluginView;
   workspaces: readonly Workspace[];
+  /** 页内是否画返回键：右栏版的返回键在工具栏胶囊里，不重复 */
+  showBack: boolean;
   onBack: () => void;
   onScope: (scope: PluginScope) => Promise<void>;
   /** 配置 / 重载 / 卸载之后让列表回读 */
@@ -60,10 +62,12 @@ export function PluginDetail(props: {
 
   return (
     <div className="pl-detail">
-      <button type="button" className="pl-back" onClick={props.onBack}>
-        <Icon name="chevron-left" size={14} strokeWidth={1.8} />
-        {t.backToInstalled}
-      </button>
+      {props.showBack && (
+        <button type="button" className="pl-back" onClick={props.onBack}>
+          <Icon name="chevron-left" size={14} strokeWidth={1.8} />
+          {t.backToInstalled}
+        </button>
+      )}
 
       <div className="pl-hero">
         <PluginAvatar view={view} big />

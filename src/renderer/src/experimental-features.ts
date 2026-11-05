@@ -183,16 +183,16 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     icon: "blocks",
     name: { zh: "插件", en: "Plugins" },
     summary: {
-      zh: "把技能、MCP 和脚本打包成插件：右侧图标条的积木图标打开插件页，已装的按工作区分组，你原来的技能和 MCP 也显示在里面（文件不动）。可接入本地文件夹或 git 地址，装之前会列出它会在本机启动的命令。",
-      en: "Skills, MCP servers and scripts bundled as plugins: the blocks icon in the right rail opens the Plugins page, installed ones grouped by workspace, with your existing skills and MCP servers shown there too (files untouched). Connect a local folder or a git URL; before installing you see the commands it will start on this machine.",
+      zh: "把技能、MCP 和脚本打包成插件：右侧图标条的积木图标在右栏打开插件页（对话照常能看，列表与详情都是单列），设置里的「插件」页签是全屏版；已装的按工作区分组，你原来的技能和 MCP 也显示在里面（文件不动）。可接入本地文件夹或 git 地址，装之前会列出它会在本机启动的命令。",
+      en: "Skills, MCP servers and scripts bundled as plugins: the blocks icon in the right rail opens the Plugins page in the right panel (the conversation stays visible; list and detail are single-column), and the Plugins tab in Settings is the full-screen version; installed ones grouped by workspace, with your existing skills and MCP servers shown there too (files untouched). Connect a local folder or a git URL; before installing you see the commands it will start on this machine.",
     },
     changelog: [
       {
         pr: null,
         date: "2026-11-05",
         note: {
-          zh: "首版：Claude Code 兼容的插件格式（技能与 MCP 可用，其余组件列为暂不支持）；复制 / 链接 / git 三种安装；重名技能拒装；卸载归档不删除；已装页与详情页。",
-          en: "First version: Claude Code compatible plugin format (skills and MCP load, other components are listed as unsupported); copy / link / git installs; duplicate skill names are refused; uninstall archives instead of deleting; installed list and detail pages.",
+          zh: "首版：Claude Code 兼容的插件格式（技能与 MCP 可用，其余组件列为暂不支持）；复制 / 链接 / git 三种安装；重名技能拒装；卸载归档不删除；已装页与详情页；右栏单列版与设置里的全屏版。",
+          en: "First version: Claude Code compatible plugin format (skills and MCP load, other components are listed as unsupported); copy / link / git installs; duplicate skill names are refused; uninstall archives instead of deleting; installed list and detail pages; a single-column right-panel version and a full-screen one in Settings.",
         },
       },
     ],
