@@ -854,6 +854,16 @@ export function App() {
     else session.newTask();
     session.setDraft(t.app.skillDraft);
   }, [session, t]);
+  /**
+   * 「和智能体一起做一个」（插件页）：在当前工作区（没有则 Home）新开一条任务，输入框预填一句引导，
+   * 开头的 `/skill:plugin-creator` 点名内置的做插件技能（发送时由主进程展开成指令块）。
+   * 草稿写进新任务槽自己的键（startTaskWithDraft）；插件页盖在主槽上，先退场才看得到新任务。
+   */
+  const makePluginWithAgent = useCallback(() => {
+    const workspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+    setOverlay(null);
+    session.startTaskWithDraft(workspace, t.plugins.makeWithAgentDraft);
+  }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
 
@@ -1036,7 +1046,7 @@ export function App() {
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
             {overlay === "plugins" ? (
-              <PluginsView workspaces={session.workspaces} />
+              <PluginsView workspaces={session.workspaces} onMakeWithAgent={makePluginWithAgent} />
             ) : overlay === "memory" ? (
               <MemoryLibraryView
                 nav={memoryNav}

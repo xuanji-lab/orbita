@@ -12,7 +12,8 @@ import { Icon } from "../../shell/Icon";
 import { ConfigField, ScopeEditor } from "./PluginConfig.tsx";
 import { McpAbility, PluginAvatar, ScriptsAbility, SkillAbility, UnsupportedAbility } from "./PluginParts.tsx";
 import { conflictText, problemText } from "./plugin-text.ts";
-import { sourceKey } from "./plugin-view.ts";
+import { isBuiltinView, sourceKey } from "./plugin-view.ts";
+import { WorkflowCard } from "./PluginWorkflow.tsx";
 
 const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
 
@@ -49,6 +50,7 @@ export function PluginDetail(props: {
   const sourceLabel = {
     userSkill: t.sourceUserSkill,
     userMcp: t.sourceUserMcp,
+    builtin: t.sourceBuiltin,
     copy: t.sourceCopy,
     link: t.sourceLink,
     git: t.sourceGit,
@@ -57,6 +59,7 @@ export function PluginDetail(props: {
   const isPlugin = view.origin === "plugin";
   const hasAbilities = view.skills.length + view.mcp.length + view.unsupported.length > 0 || view.contents.scripts;
   const linked = view.install?.source.kind === "link";
+  const builtin = isBuiltinView(view);
 
   return (
     <div className="pl-detail">
@@ -116,10 +119,12 @@ export function PluginDetail(props: {
                 <Icon name="refresh-cw" size={13} strokeWidth={1.8} />
                 {busy === "reload" ? t.reloading : reloaded ? t.reloaded : t.reload}
               </button>
-              <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming(true)}>
-                <Icon name="trash-2" size={13} strokeWidth={1.8} />
-                {t.uninstall}
-              </button>
+              {!builtin && (
+                <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming(true)}>
+                  <Icon name="trash-2" size={13} strokeWidth={1.8} />
+                  {t.uninstall}
+                </button>
+              )}
             </>
           )}
           {view.origin === "user-skill" && (
@@ -188,6 +193,12 @@ export function PluginDetail(props: {
           <span>{view.origin === "user-skill" ? t.legacySkillNote : t.legacyMcpNote}</span>
         </div>
       )}
+      {builtin && (
+        <div className="pl-note">
+          <Icon name="info" size={14} strokeWidth={1.8} />
+          <span>{t.builtinNote}</span>
+        </div>
+      )}
 
       {view.conflicts.length > 0 && (
         <div className="pl-note warn" role="alert">
@@ -225,6 +236,7 @@ export function PluginDetail(props: {
               <span className="pl-muted">{t.abilitiesEmpty}</span>
             )}
           </section>
+          {isPlugin && view.workflow.length > 0 && <WorkflowCard pluginName={parsed?.key ?? ""} steps={view.workflow} />}
           {view.problems.length > 0 && (
             <section className="pl-card">
               <div className="pl-card-h">{t.problemsTitle}</div>
@@ -287,10 +299,15 @@ export function PluginDetail(props: {
               )}
               {view.install !== null && (
                 <>
-                  <dt>{t.kvInstalled}</dt>
-                  <dd>{DATE.format(view.install.installedAt)}</dd>
+                  {/* 内置插件没有安装日期（它随应用来，不是被装进来的）：只说它怎么更新 */}
+                  {!builtin && (
+                    <>
+                      <dt>{t.kvInstalled}</dt>
+                      <dd>{DATE.format(view.install.installedAt)}</dd>
+                    </>
+                  )}
                   <dt>{t.kvUpdates}</dt>
-                  <dd>{t.kvUpdatesValue}</dd>
+                  <dd>{builtin ? t.kvUpdatesBuiltin : t.kvUpdatesValue}</dd>
                 </>
               )}
             </dl>
@@ -306,7 +323,7 @@ export function PluginDetail(props: {
 
 function sourceLine(view: PluginView, t: ReturnType<typeof useT>["plugins"], fallback: string): string {
   const source = view.install?.source;
-  if (source === undefined) return fallback;
+  if (source === undefined || source.kind === "builtin") return fallback;
   if (source.kind === "copy") return t.sourceCopyLine(source.from);
   if (source.kind === "link") return t.sourceLinkLine(source.path);
   return t.sourceGitLine(source.url);

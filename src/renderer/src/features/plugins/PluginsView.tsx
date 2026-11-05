@@ -16,11 +16,15 @@ import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
-import { contentsParts, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
+import { contentsParts, creatorAvailable, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
 
-export function PluginsView(props: { workspaces: readonly Workspace[] }) {
+export function PluginsView(props: {
+  workspaces: readonly Workspace[];
+  /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；页面随之退场） */
+  onMakeWithAgent: () => void;
+}) {
   const messages = useT();
   const t = messages.plugins;
   const state = usePlugins(true);
@@ -40,6 +44,7 @@ export function PluginsView(props: { workspaces: readonly Workspace[] }) {
   const groups = useMemo(() => groupPlugins(filtered, workspaces), [filtered, workspaces]);
   const legacy = legacyCounts(state.plugins);
   const list = describeList(state.load, state.plugins.length);
+  const makeAvailable = creatorAvailable(state.plugins);
 
   const toggle = async (view: PluginView): Promise<void> => {
     setToggleError(null);
@@ -68,7 +73,13 @@ export function PluginsView(props: { workspaces: readonly Workspace[] }) {
               <Icon name="folder-open" size={13} strokeWidth={1.8} />
               {t.connectLocal}
             </button>
-            <button type="button" className="pl-btn" disabled title={t.planned}>
+            <button
+              type="button"
+              className="pl-btn"
+              disabled={!makeAvailable}
+              title={makeAvailable ? t.makeWithAgentTip : t.makeWithAgentOffTip}
+              onClick={props.onMakeWithAgent}
+            >
               <Icon name="bot" size={13} strokeWidth={1.8} />
               {t.makeWithAgent}
             </button>
@@ -200,6 +211,7 @@ function PluginRow(props: { view: PluginView; onOpen: () => void; onToggle: () =
   const sourceLabel = {
     userSkill: t.sourceUserSkill,
     userMcp: t.sourceUserMcp,
+    builtin: t.sourceBuiltin,
     copy: t.sourceCopy,
     link: t.sourceLink,
     git: t.sourceGit,
