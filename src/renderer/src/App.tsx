@@ -264,6 +264,13 @@ export function App() {
    */
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
+  // 插件页只占主槽、侧栏的会话列表仍可点：主槽换了会话（任何途径：点行、搜索、通知、遗留续跑…）
+  // 就把它退掉，不逐个入口去补——漏一个就是「点了没反应」
+  const lastOpenIdRef = useRef(mainOpenId);
+  useEffect(() => {
+    if (lastOpenIdRef.current !== mainOpenId && overlay === "plugins") setOverlay(null);
+    lastOpenIdRef.current = mainOpenId;
+  }, [mainOpenId, overlay]);
   const channelParentId =
     overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";

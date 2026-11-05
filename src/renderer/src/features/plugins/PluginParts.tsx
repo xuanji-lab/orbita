@@ -65,7 +65,10 @@ export function SkillAbility(props: { skill: PluginSkillInfo }) {
   return (
     <AbilityRow kind={t.kindSkill}>
       <b>{props.skill.name}</b>
-      <small>{props.skill.description}</small>
+      {/* 描述原文常常很长（pdf 技能有十行）：卡里只留三行，全文在 title 里 */}
+      <small className="clamp" title={props.skill.description}>
+        {props.skill.description}
+      </small>
     </AbilityRow>
   );
 }

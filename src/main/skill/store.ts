@@ -443,12 +443,34 @@ export function rebuildSkillMd(raw: string, patch: SkillPatch): string {
   return `---\n${block}\n---\n${body}`;
 }
 
+/**
+ * 读一个顶格的键。除了单行标量，也认 YAML 的块标量（`description: >` / `|`，可带 `-` `+`）：
+ * 官方插件与用户自己的技能里这种写法很常见，pi 用真 YAML 解析所以模型看得到全文，
+ * 我们若只读第一行，界面上的描述就成了一个孤零零的 `>`（插件页第一次把它们摆出来才暴露）。
+ * 缩进的行不是顶格键：它们是上一个块标量的续行，或嵌套结构里的字段，不能当 `description:` 读。
+ */
 function readKey(block: string, key: string): string | null {
-  for (const line of block.split(/\r?\n/)) {
+  const lines = block.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    if (/^\s/.test(line)) continue;
     const at = line.indexOf(":");
     if (at === -1) continue;
     if (line.slice(0, at).trim() !== key) continue;
-    return unquote(line.slice(at + 1).trim());
+    const value = line.slice(at + 1).trim();
+    const style = /^([>|])[+-]?$/.exec(value);
+    if (style === null) return unquote(value);
+    const content: string[] = [];
+    for (const next of lines.slice(index + 1)) {
+      if (next.trim() !== "") {
+        if (!/^\s/.test(next)) break;
+        content.push(next.trim());
+      } else {
+        content.push("");
+      }
+    }
+    while (content.at(-1) === "") content.pop();
+    // 折叠（>）：相邻行连成一行；字面（|）：保留换行。界面只当一段文字显示
+    return style[1] === ">" ? content.join(" ").replace(/\s+/g, " ").trim() : content.join("\n");
   }
   return null;
 }
@@ -459,11 +481,15 @@ function upsertKey(block: string, key: string, value: string): string {
   const lines = block === "" ? [] : block.split(/\r?\n/);
   const at = lines.findIndex((line) => {
     const colon = line.indexOf(":");
-    return colon !== -1 && line.slice(0, colon).trim() === key;
+    return colon !== -1 && !/^\s/.test(line) && line.slice(0, colon).trim() === key;
   });
   const rendered = `${key}: ${needsQuote(inline) ? JSON.stringify(inline) : inline}`;
   if (at === -1) return [...lines, rendered].join("\n");
-  lines[at] = rendered;
+  // 被替换的键如果是块标量（description: > 加缩进续行），续行要一并去掉——
+  // 只换第一行会留下一串没有主人的缩进行，把整份 frontmatter 写坏
+  let end = at + 1;
+  while (end < lines.length && (lines[end] === "" || /^\s/.test(lines[end] ?? ""))) end += 1;
+  lines.splice(at, end - at, rendered);
   return lines.join("\n");
 }
 

@@ -108,6 +108,12 @@ describe("scanPlugin 技能", () => {
     assert.deepEqual(scanned.skills.map((s) => [s.slug, s.name]), [["whole", "whole-skill"]]);
   });
 
+  test("官方插件常见的块标量 description（> 折叠）读到全文，不是孤零零的 >", async () => {
+    await put("skills/doc/SKILL.md", "---\nname: doc\ndescription: >\n  第一句。\n  第二句。\n---\n正文\n");
+    const skills = (await scanPlugin(dir, "p")).skills;
+    assert.equal(skills[0]?.description, "第一句。 第二句。");
+  });
+
   test("没有 description 的 SKILL.md pi 不会加载：不当技能数，报出来", async () => {
     await put("skills/dead/SKILL.md", "---\nname: dead\n---\n正文\n");
     const scanned = await scanPlugin(dir, "p");

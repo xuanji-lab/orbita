@@ -716,6 +716,8 @@ export function Sidebar(props: {
                         setGroups((current) =>
                           unfoldGroup(current, foldKeyForWorkspace(workspace.id)),
                         );
+                        // 插件页只占主槽、侧栏列表还在：新任务要把它退掉，不然点了没反应
+                        props.onOverlay(null);
                         session.newTaskIn(workspace);
                       }}
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
@@ -742,6 +744,7 @@ export function Sidebar(props: {
                   onAdd={() => {
                     // 同上：新任务落 TASKS，先展开再建
                     setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+                    props.onOverlay(null);
                     session.newTask();
                   }}
                   folded={tasksFolded}

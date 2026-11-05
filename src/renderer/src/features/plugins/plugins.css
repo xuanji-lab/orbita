@@ -278,8 +278,9 @@
   color: var(--color-danger);
 }
 
+/* 卡片底：玻璃卡的那一个 --glass-bg（暗档是比井更浅的卡色，浅档与面板白几乎同色），边是设计稿的 --shadow-border */
 .pl-grp {
-  background: var(--color-bg-panel);
+  background: var(--glass-bg);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-border);
   padding: var(--space-1) 0;
@@ -573,7 +574,7 @@
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  background: var(--color-bg-panel);
+  background: var(--glass-bg);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-border);
   min-width: 0;
@@ -626,6 +627,13 @@
   display: block;
   color: var(--color-text-tertiary);
   overflow-wrap: anywhere;
+}
+
+.pl-ab-body small.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 .pl-ab-body small.mono {
@@ -810,6 +818,7 @@
 
 /* 来源与版本 */
 .pl-kv {
+  margin: 0;
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: var(--space-1) var(--space-3);
@@ -853,8 +862,13 @@
 
 /* ---------- 安装对话框（复用 .pv-modal 的外壳：实心面板 + 发丝线 + 重投影） ---------- */
 
+/*
+ * 高度要钉在视口上：.pv-modal 的 max-height 用百分比，而它的父级是 place-items:center 的 grid、
+ * 行高随内容走——百分比成了循环依赖，被当成没写。型号弹窗内容短碰不上，确认单一长，页脚就被挤出窗口外。
+ */
 .pv-modal.pl-modal {
   width: min(640px, calc(100% - 48px));
+  max-height: calc(100vh - var(--space-6) * 2);
 }
 
 .pl-modal-sub {

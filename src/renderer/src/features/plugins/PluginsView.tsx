@@ -158,8 +158,8 @@ export function PluginsView(props: { workspaces: readonly Workspace[] }) {
           onClose={() => setInstalling(false)}
           onInstalled={(id) => {
             setInstalling(false);
-            setSelectedId(id);
-            void state.refresh();
+            // 先回读再选中：选中的 id 在刷新回来之前找不到，「选中的那条没了就回列表」会把它当场清掉
+            void state.refresh().then(() => setSelectedId(id));
           }}
         />
       )}
