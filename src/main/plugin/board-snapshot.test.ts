@@ -295,6 +295,18 @@ describe("快照上限", () => {
     assert.match(board.skipped[0]?.detail ?? "", /^7 more/);
   });
 
+  test("前面的 repeat 卡占满 24 张后，后面的非 repeat 卡记 budget（不是 repeat：它不是「项太多」）", async () => {
+    await writeJson(join(dataRoot, "lit", "papers.json"), { items: Array.from({ length: 24 }, (_, i) => ({ i })) });
+    const manifestPath = join(installedRoot, ".claude-plugin", "plugin.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { orbita: { board: { cards: unknown[] } } };
+    manifest.orbita.board.cards.reverse();
+    await writeJson(manifestPath, manifest);
+    const board = ready(await boards().snapshot({ sessionId: "s1", plugin: "lit", cards: null }));
+    assert.equal(board.cards.length, 24);
+    assert.deepEqual(board.skipped.map((skip) => [skip.id, skip.reason]), [["today", "budget"]]);
+    assert.match(board.skipped[0]?.detail ?? "", /24-card limit/);
+  });
+
   test("结果能被 parsePluginBoardDetails 原样读回（会话落盘后重开）", async () => {
     await writeJson(join(dataRoot, "lit", "papers.json"), { items: [{ t: "a" }] });
     const board = ready(await boards().snapshot({ sessionId: "s1", plugin: "lit", cards: null }));

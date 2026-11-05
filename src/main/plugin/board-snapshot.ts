@@ -316,7 +316,9 @@ export class PluginBoards {
       let hash: string | null = null;
       for (const [index, piece] of pieces.entries()) {
         if (cards.length >= BOARD_MAX_EXPANDED_CARDS) {
-          skipped.push({ id: card.id, reason: "repeat", detail: `${pieces.length - index} more item(s) after the ${BOARD_MAX_EXPANDED_CARDS}-card limit` });
+          // repeat 卡说「还有几项」；前面的卡已经占满 24 张时，后面的非 repeat 卡不是「项太多」，算「超了整份的上限」
+          if (card.repeat !== null) skipped.push({ id: card.id, reason: "repeat", detail: `${pieces.length - index} more item(s) after the ${BOARD_MAX_EXPANDED_CARDS}-card limit` });
+          else skipped.push({ id: card.id, reason: "budget", detail: `over the ${BOARD_MAX_EXPANDED_CARDS}-card limit` });
           break;
         }
         const bytes = jsonBytes(piece.data);
