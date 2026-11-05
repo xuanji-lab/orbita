@@ -59,3 +59,6 @@ docs/plans/
 docs/
 UPDATE_NOTES.md
 CLAUDE.md
+
+# 性能测量结果（scripts/bench），只在本地
+bench-results/
