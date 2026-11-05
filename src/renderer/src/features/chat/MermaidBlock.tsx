@@ -10,8 +10,8 @@
  * - 没有「复制源码」键：现有代码块（CodeBlock.tsx）本来就没有这个键，保持一致；
  *   源码可直接划选复制（失败退回的代码块也是）。
  */
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, RefObject } from "react";
 import { mountAsync } from "pele/lazy";
 import { useT } from "../../locale.ts";
 import { MERMAID_OPTIONS, PELE_THEME_VARS, failureReason, svgViolation } from "./mermaid-render.ts";
@@ -29,6 +29,28 @@ function sanitizeSvg(svg: string): Node {
   return document.importNode(doc.documentElement, true);
 }
 
+/**
+ * 图容器此刻的字号（继承正文字号）。界面字号（`--ui-font-size`）在根元素的 style 上改，字号变了要重画——
+ * pele 把字号烘进 SVG，不重画图就停在旧字号。没读到（0）= 还没量过，调用方先别画。
+ */
+function useHostFontSize(host: RefObject<HTMLElement | null>): number {
+  const [size, setSize] = useState(0);
+  useLayoutEffect(() => {
+    const el = host.current;
+    if (el === null) return;
+    const read = (): void => {
+      const value = Number.parseFloat(getComputedStyle(el).fontSize);
+      if (Number.isFinite(value) && value > 0) setSize((previous) => (previous === value ? previous : value));
+    };
+    read();
+    const observer = new MutationObserver(read);
+    // style 是 --ui-font-size 等运行时覆盖；class / data-theme 的切换（纸面主题换字体档）也可能改字号
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme", "lang"] });
+    return () => observer.disconnect();
+  }, [host]);
+  return size;
+}
+
 type Phase = { kind: "loading" } | { kind: "ready" } | { kind: "failed"; reason: string };
 
 export function MermaidBlock(props: { source: string }) {
@@ -36,10 +58,11 @@ export function MermaidBlock(props: { source: string }) {
   const pending = useContext(MermaidPendingContext);
   const host = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  const fontSize = useHostFontSize(host);
 
   useEffect(() => {
     const el = host.current;
-    if (pending || el === null) return;
+    if (pending || el === null || fontSize === 0) return;
     let cancelled = false;
     setPhase({ kind: "loading" });
     const fail = (error: unknown): void => {
@@ -48,11 +71,10 @@ export function MermaidBlock(props: { source: string }) {
       setPhase({ kind: "failed", reason: failureReason(error) });
     };
     let destroy: (() => void) | undefined;
-    // 字号跟随容器（继承正文字号，用户调 --ui-font-size 时图跟着缩放），不在这里写死像素
-    const fontSize = Number.parseFloat(getComputedStyle(el).fontSize);
+    // 字号跟随容器（继承正文字号）；用户调 --ui-font-size 时 fontSize 变，这个 effect 重跑、图重画
     mountAsync(el, props.source, {
       ...MERMAID_OPTIONS,
-      ...(Number.isFinite(fontSize) && fontSize > 0 ? { fontSize } : {}),
+      fontSize,
       sanitize: sanitizeSvg,
       onRender: () => {
         if (!cancelled) setPhase({ kind: "ready" });
@@ -70,7 +92,7 @@ export function MermaidBlock(props: { source: string }) {
       destroy?.();
       el.replaceChildren();
     };
-  }, [props.source, pending]);
+  }, [props.source, pending, fontSize]);
 
   const showCode = pending || phase.kind === "failed";
   return (
