@@ -2344,7 +2344,7 @@ export const en = {
     },
     sample: "Sample",
     sampleTip: "The plugin hasn't written any data yet, so this is its built-in sample data.",
-    specTitle: "Template notes",
+    specTitle: "Board notes",
     draftTitle: (name: string) => `Making · ${name}`,
     draftTitleFallback: "Making a plugin",
     draftBack: "Back to the plugin list",

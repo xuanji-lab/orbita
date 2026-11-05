@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="zh"><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%}
-body{font:13px/1.4 var(--font-family-base,system-ui);background:#e3efe1;color:#24402b;display:grid;place-items:center;text-align:center}
-.ring{width:64%;aspect-ratio:1;border-radius:50%;border:5px solid #4f8a5b;display:grid;place-items:center;align-content:center}
-.n{font:700 34px/1 Georgia,serif}
-.s{font-size:11px;margin-top:2px;color:#3d6a47}
+body{font:1rem/1.4 var(--font-family-base,system-ui);background:#e3efe1;color:#24402b;display:grid;place-items:center;text-align:center;overflow:hidden}
+.ring{width:72%;aspect-ratio:1;border-radius:50%;border:.35rem solid #4f8a5b;display:grid;place-items:center;align-content:center}
+.n{font:700 2.6rem/1 Georgia,serif}
+.s{font-size:.72rem;margin-top:.2rem;color:#3d6a47}
 </style></head><body><div class="ring"><div><div class="n" id="n">–</div><div class="s" id="s">本周新进</div></div></div>
 <script>
-addEventListener("message",function(e){var m=e.data;if(!m||m.type!=="orbita:data")return;var d=m.data;if(!d)return;
-document.getElementById("n").textContent=d.added;document.getElementById("s").textContent="必读 "+d.must+" · 已标 "+d.marked;
-document.getElementById("n").style.fontSize=Math.max(24,m.unit.width/5)+"px"});
+addEventListener("message",function(e){var m=e.data;if(!m||m.type!=="orbita:data")return;
+document.documentElement.style.fontSize=Math.max(9,m.unit.width/13)+"px";var d=m.data;if(!d)return;
+document.getElementById("n").textContent=d.added;document.getElementById("s").textContent="必读 "+d.must+" · 已标 "+d.marked});
 parent.postMessage({type:"orbita:ready"},"*");
 </script></body></html>

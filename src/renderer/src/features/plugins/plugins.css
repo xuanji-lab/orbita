@@ -681,7 +681,8 @@
   justify-content: flex-end;
 }
 
-.pl-acts-card {
+/* 宽时操作在头部右侧，这张卡藏起来；窄档才显示（.pl-card 的 display: grid 在后面，要加一级选择器压过它） */
+.pl-card.pl-acts-card {
   display: none;
 }
 
@@ -1627,7 +1628,7 @@ button.pl-wf-chip:hover {
     order: 8;
   }
 
-  .pl-detail > .pl-acts-card {
+  .pl-detail > .pl-card.pl-acts-card {
     display: grid;
     order: 9;
   }

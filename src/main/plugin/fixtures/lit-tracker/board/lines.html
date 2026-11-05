@@ -1,14 +1,15 @@
 <!doctype html>
 <html lang="zh"><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%}
-body{font:13px/1.4 var(--font-family-base,system-ui);background:#ece8f6;color:#2f2750;padding:14px;box-sizing:border-box}
-h2{margin:0 0 10px;font-size:12px;letter-spacing:.06em;color:#6a5fa0;font-weight:600}
-.row{display:grid;grid-template-columns:1fr auto;gap:4px 8px;margin-bottom:10px}
-.bar{grid-column:1/-1;height:4px;border-radius:2px;background:#d6cfec}
-.bar i{display:block;height:100%;border-radius:2px;background:#6a5fa0}
+body{font:1rem/1.4 var(--font-family-base,system-ui);background:#ece8f6;color:#2f2750;padding:.9rem 1rem;box-sizing:border-box;overflow:hidden}
+h2{margin:0 0 .7rem;font-size:.75rem;letter-spacing:.06em;color:#6a5fa0;font-weight:600;padding-right:3.4rem}
+.row{display:grid;grid-template-columns:1fr auto;gap:.2rem .5rem;margin-bottom:.7rem;font-size:.85rem}
+.bar{grid-column:1/-1;height:.25rem;border-radius:.15rem;background:#d6cfec}
+.bar i{display:block;height:100%;border-radius:.15rem;background:#6a5fa0}
 </style></head><body><h2>在追的主线</h2><div id="l"></div>
 <script>
-addEventListener("message",function(e){var m=e.data;if(!m||m.type!=="orbita:data"||!m.data)return;var l=document.getElementById("l");l.innerHTML="";
+addEventListener("message",function(e){var m=e.data;if(!m||m.type!=="orbita:data")return;
+document.documentElement.style.fontSize=Math.max(9,m.unit.width/13)+"px";if(!m.data)return;var l=document.getElementById("l");l.innerHTML="";
 var max=Math.max.apply(null,m.data.lines.map(function(x){return x.added}))||1;
 m.data.lines.forEach(function(x){var r=document.createElement("div");r.className="row";var a=document.createElement("span");a.textContent=x.name;var b=document.createElement("b");b.textContent="+"+x.added;
 var bar=document.createElement("div");bar.className="bar";var i=document.createElement("i");i.style.width=(x.added/max*100)+"%";bar.appendChild(i);r.append(a,b,bar);l.appendChild(r)})});

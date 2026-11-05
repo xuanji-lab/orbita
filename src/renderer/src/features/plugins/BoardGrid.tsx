@@ -135,8 +135,14 @@ export function BoardGrid(props: BoardGridProps) {
             const box = cardBox(layout, card.size);
             return (
               <div key={card.key} className="bd-cell" style={{ gridColumn: `span ${span.cols}`, gridRow: `span ${span.rows}` }} data-size={card.size}>
-                {caption !== undefined && <div className="bd-caption">{caption(card)}</div>}
-                <BoardCardFrame card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} onOpen={props.onCardOpen} />
+                {caption !== undefined && (
+                  <div className="bd-caption">
+                    <span className="bd-caption-main">{caption(card)}</span>
+                    {/* 有标题行时「样例」标画在框外的标题行里，不盖在卡上 */}
+                    {card.usingSample && <SampleBadge />}
+                  </div>
+                )}
+                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} onOpen={props.onCardOpen} />
               </div>
             );
           })}
@@ -154,8 +160,13 @@ export function BoardGrid(props: BoardGridProps) {
   );
 }
 
-/** 一张卡：宿主画的外框（圆角、overflow hidden、「样例」标、问题条）+ 里面的沙箱 iframe。 */
+/**
+ * 一张卡：宿主画的外框（圆角、overflow hidden、「样例」标、问题条）+ 里面的沙箱 iframe。
+ * 调用方用 `key={frameKey}` 挂它：模板换了（新 iframe）整张重建，loaded / ready 之类的状态跟着清零，数据会重新发进新 iframe。
+ */
 function BoardCardFrame(props: {
+  /** 「样例」标已经画在框外的标题行里（BoardGrid 给了 caption）：框上不再盖一枚 */
+  sampleOutside: boolean;
   card: BoardCardView;
   unit: { width: number; height: number };
   height: number;
@@ -300,12 +311,7 @@ function BoardCardFrame(props: {
         </div>
       )}
       <div className="bd-badges">
-        {card.usingSample && (
-          <span className="bd-badge" title={t.sampleTip}>
-            <Icon name="flask-conical" size={11} strokeWidth={1.8} />
-            {t.sample}
-          </span>
-        )}
+        {card.usingSample && !props.sampleOutside && <SampleBadge />}
         {card.problem !== null && (
           <span className="bd-badge warn" title={`${dataProblemText(t, card.problem, PANEL_DATA_MAX_BYTES)}${card.shown.kind === "ready" ? ` ${t.showingLast}` : ""}`}>
             <Icon name="triangle-alert" size={11} strokeWidth={1.8} />
@@ -314,6 +320,17 @@ function BoardCardFrame(props: {
         )}
       </div>
     </div>
+  );
+}
+
+/** 「样例」标：这张卡显示的是插件自带的样例数据，不是真数据。 */
+function SampleBadge() {
+  const t = useT().pluginPanel;
+  return (
+    <span className="bd-badge" title={t.sampleTip}>
+      <Icon name="flask-conical" size={11} strokeWidth={1.8} />
+      {t.sample}
+    </span>
   );
 }
 

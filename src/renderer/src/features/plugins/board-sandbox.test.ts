@@ -27,6 +27,10 @@ describe("卡片 iframe 的沙箱", () => {
     assert.equal(/allow-[a-z-]+/.test(code), false, "代码里不应出现 allow-* 字面量（注释除外）");
   });
 
+  test("模板换了（frameKey 变）整张卡重建：loaded / ready 的状态清零，数据重新发进新 iframe（改模板后右栏不会停在空白）", () => {
+    assert.match(source, /<BoardCardFrame key=\{card\.frameKey\}/);
+  });
+
   test("收消息只认这只 iframe 的 contentWindow 且来源是 \"null\"；往里发只用 targetOrigin \"*\"", () => {
     assert.match(source, /event\.source !== target \|\| event\.origin !== "null"/);
     assert.match(source, /target\.postMessage\(message, "\*"\)/);

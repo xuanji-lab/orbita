@@ -2159,7 +2159,7 @@ export const zh: Messages = {
     },
     sample: "样例",
     sampleTip: "插件还没有写出数据，这里显示的是它自带的样例数据。",
-    specTitle: "模板说明",
+    specTitle: "看板说明",
     draftTitle: (name: string) => `正在做 · ${name}`,
     draftTitleFallback: "正在做",
     draftBack: "回到插件列表",
