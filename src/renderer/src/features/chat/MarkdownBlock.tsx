@@ -159,9 +159,12 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     return splitMarkdownBlocks(normalized);
   }, [normalized, bubble, citations]);
 
+  // 全文正则扫一遍：按 text 记忆，组件因别的原因重渲染（Context、父级）时不重扫
+  const script = useMemo(() => dominantScript(text), [text]);
+
   return (
     // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
-    <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
+    <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={script}>
       <MarkdownErrorBoundary>
         {blocks.map((block, index) => {
           // 只有仍在增长的尾块走流式取舍：已完成段的字符串不变、memo 命中，
