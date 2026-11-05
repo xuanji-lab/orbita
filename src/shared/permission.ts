@@ -159,16 +159,29 @@ export function isBrowserReadTool(toolName: string): boolean {
 }
 
 /**
- * 自己带确认卡的工具：install_plugin 在对话里弹一张确认卡（带了什么、MCP 完整命令行、范围），
- * 用户点「安装」才装。**卡片就是那次询问**，所以 manual 档不再弹一次审批（套娃，同
- * USER_ACTION_TOOL 的理由）；plan 档照拒——装插件改的是用户已装的东西，plan 的语义是「描述而不动手」。
- * skip 档本来就全放行，但卡片仍会弹：放行档放的是审批，不是确认卡（确认卡不靠权限档）。
+ * 自己带确认的工具：install_plugin 不靠审批条，它**自己**在对话里留一行（「装上 X　[安装] [看详情]」，
+ * 或低风险时直接装上后的「已装上 X · [卸载]」）。权限档的语义：
+ *
+ * - **plan**：拒（装插件改的是用户已装的东西，plan 的语义是「描述而不动手」）。
+ * - **manual**（Ask before every tool call）：不再另弹审批条（那一行就是那次询问，再弹是套娃），
+ *   但**永不直接装**——主进程见 manual 档一律只留带「安装」的那一行，用户点了才装。
+ * - **skip**：低风险（会话工作区内、链接安装、不带 MCP、范围是工作区、无冲突）直接装；
+ *   带 MCP / 范围是所有工作区 / 有冲突仍留那一行——放行档放的是审批，不是「看一眼」。
+ *
+ * 以前的做法（挂起等用户点的确认卡 + 15 分钟超时）已删：agent 一直等着，用户吃饭回来它还挂着。
  */
 export const SELF_CONFIRMING_TOOLS = ["install_plugin"] as const;
 
 export function isSelfConfirmingTool(toolName: string): boolean {
   return (SELF_CONFIRMING_TOOLS as readonly string[]).includes(toolName);
 }
+
+/**
+ * 草稿预览：preview_plugin 只扫描会话工作区里的插件文件夹、让右栏显示「正在做」视图，不装也不写任何东西。
+ * 三档一律放行（含 plan：它只是把已经写好的文件给用户看；manual 下为一次预览弹审批，会把「边聊边改卡片」
+ * 的节奏打断成一问一答）。
+ */
+export const PLUGIN_DRAFT_TOOL = "preview_plugin";
 
 /**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
@@ -195,7 +208,9 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isMemoryTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
-  // 自带确认卡的工具：manual 不再问一次（卡片就是询问），plan 照拒（理由见 SELF_CONFIRMING_TOOLS）
+  // 草稿预览：三档一律放行（理由见 PLUGIN_DRAFT_TOOL）
+  if (toolName === PLUGIN_DRAFT_TOOL) return { behavior: "allow" };
+  // 自带确认的工具：manual 不再问一次（对话里那一行就是询问），plan 照拒（理由见 SELF_CONFIRMING_TOOLS）
   if (isSelfConfirmingTool(toolName) && mode === "manual") return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
