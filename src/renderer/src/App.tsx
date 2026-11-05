@@ -1012,6 +1012,24 @@ export function App() {
     const settled = !pluginsOn || pluginPanelTabs.loadedFor === session.workspaceId;
     if (settled && !pluginPanelTabs.tabs.some((tab) => tab.name === openPluginPanelName)) setRightPanel(null);
   }, [openPluginPanelName, pluginsOn, pluginPanelTabs, session.workspaceId]);
+  // agent 用 install_plugin 装好一个带面板的插件：正看着装它的那条会话时，右栏直接切到它的面板，
+  // 一边聊一边看面板随文件改动刷新（链接安装，改了就生效）。页签要等重读回来才有，所以先记下名字
+  const [panelToOpen, setPanelToOpen] = useState<string | null>(null);
+  const viewedSessionId = session.sessionId ?? session.opened?.id ?? null;
+  useEffect(() => {
+    if (!pluginsOn) return;
+    return api.agent.onEvent((event) => {
+      if (event.type === "pluginsChanged" && event.installed !== undefined && event.installed.sessionId === viewedSessionId) {
+        setPanelToOpen(event.installed.name);
+      }
+    });
+  }, [pluginsOn, viewedSessionId]);
+  useEffect(() => {
+    if (panelToOpen === null) return;
+    if (!pluginPanelTabs.tabs.some((tab) => tab.name === panelToOpen)) return;
+    setPanelToOpen(null);
+    handlePanel(pluginPanelKind(panelToOpen));
+  }, [panelToOpen, pluginPanelTabs, handlePanel]);
   const memoryScopes = useMemoryScopes(overlay === "memory");
   useEffect(() => {
     if (overlay === "memory") countPanel("memory");

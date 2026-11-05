@@ -43,6 +43,7 @@ let enabled = true;
 let sessions: Map<string, { cwd: string; workspaceId: string | null }>;
 let asks: PluginInstallAsk[];
 let installedCalls = 0;
+let installedInfo: { name: string; sessionId: string } | null = null;
 let requests: PluginAgentRequests;
 
 const S = "session-1";
@@ -94,6 +95,7 @@ beforeEach(async () => {
   enabled = true;
   asks = [];
   installedCalls = 0;
+  installedInfo = null;
   sessions = new Map([
     [S, { cwd: workspaceRoot, workspaceId: "ws-1" }],
     [HOME_SESSION, { cwd: join(base, "home"), workspaceId: null }],
@@ -106,8 +108,9 @@ beforeEach(async () => {
     session: async (id) => sessions.get(id) ?? null,
     workspace: async (id) => (id === "ws-1" ? { name: "文献组", path: workspaceRoot } : null),
     ask: (event) => asks.push(event),
-    installed: () => {
+    installed: (info) => {
       installedCalls += 1;
+      installedInfo = info;
     },
   });
 });
@@ -237,6 +240,9 @@ describe("install：用户点了才装", () => {
     assert.deepEqual(record?.source, { kind: "link", path: await realpath(root) });
     assert.deepEqual(record?.scope, { kind: "workspaces", ids: ["ws-1"] });
     assert.equal(installedCalls, 1);
+    // renderer 靠它把装插件的那条会话的右栏切到这个插件的面板
+    assert.equal(installedInfo?.name, "lit");
+    assert.equal(installedInfo?.sessionId, S);
   });
 
   test("scope global：对所有工作区", async () => {

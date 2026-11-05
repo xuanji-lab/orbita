@@ -1329,7 +1329,14 @@ export type AgentEvent =
    * 已装的插件变了（agent 的 install_plugin 装好了一个；主进程 → renderer，不进 agent 进程、不落盘）。
    * 插件页与右栏面板页签听它重读插件列表——不然得等窗口重新获得焦点或开关一次插件页才看得到新插件。
    */
-  | { type: "pluginsChanged" }
+  | {
+      type: "pluginsChanged";
+      /**
+       * agent 的 install_plugin 刚装好的那一个：哪条会话装的、插件名。renderer 据此把**那条会话**的右栏
+       * 切到这个插件的面板（插件声明了面板时），一边聊一边看它的变化。缺席 = 别的原因变的，只重读。
+       */
+      installed?: { name: string; sessionId: string };
+    }
   /** 插件：agent 工具 list_plugins 的读请求（回 pluginListResult） */
   | { type: "pluginListRequest"; requestId: string; sessionId: string }
   /**

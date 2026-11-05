@@ -56,8 +56,8 @@ export interface PluginAgentPorts {
   workspace: (id: string) => Promise<{ name: string; path: string } | null>;
   /** 把确认卡送到 renderer */
   ask: (event: PluginInstallAsk) => void;
-  /** 装好了（让技能选取面等刷新） */
-  installed: () => void;
+  /** 装好了（让技能选取面等刷新；renderer 还会把装它的那条会话的右栏切到它的面板） */
+  installed: (info: { name: string; sessionId: string }) => void;
 }
 
 interface Pending {
@@ -157,8 +157,8 @@ export class PluginAgentRequests {
         pending.settle(fail(installErrorMessage(result.error)));
         return;
       }
-      this.ports.installed();
       const { preview_: preview, agentScope } = pending.request;
+      this.ports.installed({ name: preview.name, sessionId: pending.sessionId });
       pending.settle({
         ok: true,
         name: preview.name,
