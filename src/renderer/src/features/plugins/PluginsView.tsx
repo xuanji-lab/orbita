@@ -17,7 +17,7 @@
  * 本期：页签「发现」是计划中（显示、禁用、写明）；「已装」按工作区分组——
  * 真插件、你原来的技能、你原来的 MCP 都是这张表里的一行（旧的不搬文件，只是投影），
  * 行尾开关、点行进详情。「接入本地插件」打开安装确认（模态框，两种外壳都一样）。
- * 选中某个插件时同一槽里换成详情；旧技能 / MCP 面板本期保留不动。
+ * 选中某个插件时同一槽里换成详情（一张长页）；详情里点「打开看板」右栏换成看板视图；旧技能 / MCP 面板本期保留不动。
  */
 import { useEffect, useMemo, useState } from "react";
 import { parsePluginViewId, type PluginView } from "@shared/plugin";
@@ -31,7 +31,7 @@ import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
-import type { DetailTab } from "./detail-tabs.ts";
+import { PluginBoardView } from "./PluginBoardView.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
 import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
@@ -40,25 +40,29 @@ import "./plugins.css";
 /** 外壳：右栏单列版 / 设置页全屏版。排法不看它，看容器宽度（plugins.css 的 @container pl） */
 export type PluginsChrome = "rail" | "page";
 
-/** 「在右栏打开这个插件的面板」的请求：nonce 每次递增，同一个插件连点两次也会再选一次 */
+/**
+ * 「在右栏打开这个插件」的请求：nonce 每次递增，同一个插件连点两次也会再选一次。
+ * `board` = 打开它的看板视图（设置里的全屏版点「打开看板」）；否则打开详情（装好之后）。
+ */
 export interface PluginOpenRequest {
   name: string;
   nonce: number;
+  board: boolean;
 }
 
 export function PluginsView(props: {
   workspaces: readonly Workspace[];
   chrome: PluginsChrome;
-  /** 当前会话所在的工作区：面板的数据路径与启没启用按它判断 */
+  /** 当前会话所在的工作区：看板的数据路径与启没启用按它判断 */
   currentWorkspaceId: string | null;
-  /** 全屏版详情页的「在右栏打开」：App 负责打开右栏插件页并回一个 openRequest 过来 */
-  onOpenPanel: (pluginName: string) => void;
+  /** 全屏版详情页的「打开看板」：App 关掉设置、打开右栏插件页并回一个 openRequest 过来（右栏版自己进看板视图，不用它） */
+  onOpenBoard: (pluginName: string) => void;
   /** 全屏版的界面记忆（AppSettings.pluginsPage）；右栏版不传，也没有这两个状态 */
   page?: PluginsPageSettings;
   onPage?: (patch: PluginsPageSettings) => void;
   /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；设置里的全屏版随之退场） */
   onMakeWithAgent: () => void;
-  /** 右栏版收到的请求：选中该插件的面板页签；处理完调 onOpenRequestHandled（全屏版不传） */
+  /** 右栏版收到的请求：选中该插件（并按请求进它的看板视图）；处理完调 onOpenRequestHandled（全屏版不传） */
   openRequest?: PluginOpenRequest | null;
   onOpenRequestHandled?: () => void;
   /** 正在做的草稿（工作区内插件文件夹的路径）；非 null 时右栏版显示「正在做」视图（全屏版不传） */
@@ -70,11 +74,11 @@ export function PluginsView(props: {
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
-  // 想看的详情页签：换了插件就清（按默认规则：有面板看面板）。「在右栏打开面板」会指定它
-  const [wantedTab, setWantedTab] = useState<DetailTab | null>(null);
+  // 右栏里看的是详情还是看板视图：换了插件就回详情
+  const [boardOpen, setBoardOpen] = useState(false);
   const setSelectedId = (id: string | null): void => {
     setSelectedIdRaw(id);
-    setWantedTab(null);
+    setBoardOpen(false);
   };
   const [installing, setInstalling] = useState(false);
   const [query, setQuery] = useState("");
@@ -100,14 +104,14 @@ export function PluginsView(props: {
     if (selectedId !== null && state.load.kind === "ready" && selected === null) setSelectedId(null);
   }, [selectedId, selected, state.load.kind]);
 
-  // 「在右栏打开面板」：等列表读到、找到那个插件，就选中它并停在面板页签
+  // 「在右栏打开」：等列表读到、找到那个插件，就选中它（看板请求直接进看板视图）
   const { openRequest = null, onOpenRequestHandled } = props;
   useEffect(() => {
     if (openRequest === null || state.load.kind !== "ready") return;
     const target = state.plugins.find((view) => view.origin === "plugin" && parsePluginViewId(view.id)?.key === openRequest.name);
     if (target !== undefined) {
       setSelectedIdRaw(target.id);
-      setWantedTab("panel");
+      setBoardOpen(openRequest.board);
     }
     // 找不到（刚卸载 / 列表还没带上它）也算处理过，别让请求一直挂着
     onOpenRequestHandled?.();
@@ -260,10 +264,8 @@ export function PluginsView(props: {
         view={selected}
         workspaces={workspaces}
         currentWorkspaceId={props.currentWorkspaceId}
-        // 右栏版本来就在右栏里，只有全屏版需要「在右栏打开」
-        onOpenInRail={rail ? undefined : () => props.onOpenPanel(parsePluginViewId(selected.id)?.key ?? "")}
-        tab={wantedTab}
-        onTab={setWantedTab}
+        // 右栏版直接进看板视图；全屏版（设置里）要退出设置、到右栏去看
+        onOpenBoard={rail ? () => setBoardOpen(true) : () => props.onOpenBoard(parsePluginViewId(selected.id)?.key ?? "")}
         // 右栏版的返回键在胶囊里；全屏版在页内
         showBack={!rail}
         onBack={() => setSelectedId(null)}
@@ -293,8 +295,16 @@ export function PluginsView(props: {
 
   if (rail) {
     // 页头住工具栏的右栏胶囊（RightPanelFrame 把它 portal 过去）：列表 = 标题 + 筛选；详情 = 返回 + 标题
+    const boardOf = selected !== null && boardOpen && parsePluginViewId(selected.id) !== null ? selected : null;
     const header =
-      selected === null ? (
+      boardOf !== null ? (
+        <>
+          <PanelIconButton title={t.boardBackToDetail} onClick={() => setBoardOpen(false)}>
+            <Icon name="chevron-left" size={16} strokeWidth={2} />
+          </PanelIconButton>
+          <strong className="cap-title">{t.boardViewTitle(boardOf.name)}</strong>
+        </>
+      ) : selected === null ? (
         <>
           <PanelTitle icon="blocks" title={t.title} />
           <PanelFilter
@@ -315,9 +325,17 @@ export function PluginsView(props: {
       );
     return (
       <>
-        <RightPanelFrame header={header} contentKey={selected === null ? "list" : `detail:${selected.id}`}>
+        <RightPanelFrame header={header} contentKey={selected === null ? "list" : `${boardOf === null ? "detail" : "board"}:${selected.id}`}>
           <div className="pl-page" data-chrome="rail">
-            <div className="pl-body">{selected === null ? listBody : detailBody}</div>
+            <div className="pl-body">
+              {boardOf !== null ? (
+                <PluginBoardView target={{ kind: "installed", name: parsePluginViewId(boardOf.id)?.key ?? "", workspaceId: props.currentWorkspaceId }} />
+              ) : selected === null ? (
+                listBody
+              ) : (
+                detailBody
+              )}
+            </div>
           </div>
         </RightPanelFrame>
         {dialog}

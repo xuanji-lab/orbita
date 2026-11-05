@@ -1,5 +1,5 @@
 /**
- * 详情页的「工作流」：清单 `orbita.workflow` 画成竖向步骤列表（给人看，不执行）。
+ * 详情页的「工作流」：清单 `orbita.workflow` 画成竖向步骤列表（给人看，不执行）；等用户的步骤（`wait`）序号换成手形图标并带「等你」小签。
  * 步骤上的技能可点开只读查看 SKILL.md；写了技能名却对不上本插件任何一条的，原样显示并标出来。
  * 没写 workflow 的插件整块不出现（调用方判）。
  */
@@ -10,28 +10,33 @@ import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 
-export function WorkflowCard(props: { pluginName: string; steps: readonly PluginWorkflowStep[] }) {
+/** `canView` 为 false（草稿：插件还没装，读不到它的技能文件）时技能只是标签，不能点开。 */
+export function WorkflowList(props: { pluginName: string; steps: readonly PluginWorkflowStep[]; canView?: boolean }) {
   const t = useT().plugins;
   const [viewing, setViewing] = useState<string | null>(null);
   return (
-    <section className="pl-card">
-      <div className="pl-card-h">
-        {t.workflowTitle}
-        <span className="hint">{t.workflowHint}</span>
-      </div>
+    <>
       <ol className="pl-wf">
         {props.steps.map((step, index) => (
-          <li key={index} className="pl-wf-step">
+          <li key={index} className="pl-wf-step" data-wait={step.wait ?? undefined}>
             <span className="pl-wf-n" aria-hidden="true">
-              {index + 1}
+              {step.wait === null ? index + 1 : <Icon name="hand" size={12} strokeWidth={2} />}
             </span>
             <div className="pl-wf-body">
-              <b>{step.title}</b>
+              <b>
+                {step.title}
+                {step.wait !== null && <span className="pl-wf-wait">{step.wait === "board" ? t.waitBoard : t.waitChat}</span>}
+              </b>
               {step.detail !== null && <small>{step.detail}</small>}
               {(step.skill !== null || step.output !== null) && (
                 <span className="pl-wf-chips">
                   {step.skill !== null &&
-                    (step.skillSlug !== null ? (
+                    (step.skillSlug !== null && props.canView === false ? (
+                      <span className="pl-wf-chip">
+                        <Icon name="book-open" size={12} strokeWidth={1.8} />
+                        {step.skill}
+                      </span>
+                    ) : step.skillSlug !== null ? (
                       <button
                         type="button"
                         className="pl-wf-chip"
@@ -61,7 +66,7 @@ export function WorkflowCard(props: { pluginName: string; steps: readonly Plugin
         ))}
       </ol>
       {viewing !== null && <SkillViewer pluginName={props.pluginName} slug={viewing} onClose={() => setViewing(null)} />}
-    </section>
+    </>
   );
 }
 

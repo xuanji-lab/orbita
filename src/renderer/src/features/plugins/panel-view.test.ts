@@ -2,21 +2,21 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   PANEL_THEME_VARS,
+  type PluginBoardCardLive,
   type PluginPanelActionFailure,
   type PluginPanelDataProblem,
   type PluginPanelProblem,
 } from "../../../../shared/plugin-panel.ts";
+import { mergeBoardCards } from "./board-card.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
-  RAW_VIEW_MAX_CHARS,
   actionFailureText,
   buildPanelTheme,
   dataProblemText,
   formatBytes,
   formatSizeVsLimit,
   panelProblemText,
-  rawDataText,
   reduceShownData,
   sameTheme,
   showHostEmpty,
@@ -110,18 +110,6 @@ describe("showHostEmpty 宿主何时盖「还没有产出」", () => {
   });
 });
 
-describe("rawDataText 原始数据视图", () => {
-  test("缩进的 JSON；空 / 有问题给空串", () => {
-    assert.deepEqual(rawDataText(ready({ a: [1] })), { text: '{\n  "a": [\n    1\n  ]\n}', truncated: false });
-    assert.deepEqual(rawDataText({ kind: "empty" }), { text: "", truncated: false });
-  });
-  test("太长截断并标出", () => {
-    const result = rawDataText(ready("x".repeat(RAW_VIEW_MAX_CHARS + 10)));
-    assert.equal(result.truncated, true);
-    assert.equal(result.text.length, RAW_VIEW_MAX_CHARS);
-  });
-});
-
 describe("formatSizeVsLimit 超限那句话里的两个数不能自相矛盾", () => {
   test("刚超一点点（2 MB 多几百字节）：写成 2049 KB 对 2048 KB，不是「2.0 MB 超过 2.0 MB」", () => {
     assert.deepEqual(formatSizeVsLimit(2 * 1024 * 1024 + 130, 2 * 1024 * 1024), { size: "2049 KB", limit: "2048 KB" });
@@ -141,9 +129,6 @@ describe("formatBytes", () => {
 
 describe("文案：每一种问题、每一种失败原因、两种语言都有一句话", () => {
   const problems: PluginPanelProblem[] = [
-    { kind: "shape", detail: "template" },
-    { kind: "shape", detail: "data" },
-    { kind: "shape", detail: "panel" },
     { kind: "template-escape", detail: "../x.html" },
     { kind: "template-missing", detail: "./nope.html" },
     { kind: "template-unreadable", detail: "EACCES" },
@@ -162,6 +147,8 @@ describe("文案：每一种问题、每一种失败原因、两种语言都有�
     { kind: "sample-unreadable", detail: "EACCES" },
     { kind: "sample-too-large", detail: "3000000" },
     { kind: "sample-invalid", detail: "Unexpected token" },
+    { kind: "repeat-not-array", detail: "items" },
+    { kind: "repeat-limit", detail: "24" },
   ];
   for (const [name, messages] of [["en", en], ["zh", zh]] as const) {
     test(`${name}：解析问题带上路径 / 变量名 / 键名`, () => {
@@ -169,7 +156,7 @@ describe("文案：每一种问题、每一种失败原因、两种语言都有�
         const text = panelProblemText(messages.pluginPanel, problem);
         assert.ok(text.length > 8, `${problem.kind}: ${text}`);
         const sizeOnly = ["template-too-large", "spec-too-large", "sample-too-large"];
-        if (problem.kind !== "shape" && problem.kind !== "data-needs-workspace" && !sizeOnly.includes(problem.kind)) {
+        if (problem.kind !== "data-needs-workspace" && !sizeOnly.includes(problem.kind)) {
           assert.ok(text.includes(problem.detail), `${problem.kind} 应带上 ${problem.detail}：${text}`);
         }
       }
@@ -186,4 +173,63 @@ describe("文案：每一种问题、每一种失败原因、两种语言都有�
       for (const reason of reasons) assert.ok(actionFailureText(messages.pluginPanel, reason).length > 3, reason);
     });
   }
+});
+
+describe("mergeBoardCards 一份快照并进手里的记忆", () => {
+  const live = (key: string, extra: Partial<PluginBoardCardLive> = {}): PluginBoardCardLive => ({
+    key,
+    id: key.split("#")[0] ?? key,
+    title: key,
+    size: "1x1",
+    index: 0,
+    problems: [],
+    frameUrl: `orbita-panel://doc/${key}`,
+    broken: false,
+    data: ready({ n: 1 }),
+    usingSample: false,
+    ...extra,
+  });
+  const counter = (): (() => number) => {
+    let n = 0;
+    return () => (n += 1);
+  };
+
+  test("第一次来：每张卡拿到自己的 iframe 地址与递增的 frameKey", () => {
+    const merged = mergeBoardCards(new Map(), [live("a"), live("b")], counter());
+    assert.deepEqual(merged.views.map((view) => [view.key, view.frameUrl, view.frameKey]), [["a", "orbita-panel://doc/a", 1], ["b", "orbita-panel://doc/b", 2]]);
+  });
+
+  test("frameUrl 为 null（模板没变）：沿用手里的地址与 frameKey，只换数据——iframe 不重建", () => {
+    const next = counter();
+    const first = mergeBoardCards(new Map(), [live("a")], next);
+    const second = mergeBoardCards(first.memory, [live("a", { frameUrl: null, data: ready({ n: 2 }) })], next);
+    assert.equal(second.views[0]?.frameUrl, "orbita-panel://doc/a");
+    assert.equal(second.views[0]?.frameKey, first.views[0]?.frameKey);
+    assert.deepEqual(second.views[0]?.shown, ready({ n: 2 }));
+  });
+
+  test("模板换了（新地址）：frameKey 递增，iframe 重建", () => {
+    const next = counter();
+    const first = mergeBoardCards(new Map(), [live("a")], next);
+    const second = mergeBoardCards(first.memory, [live("a", { frameUrl: "orbita-panel://doc/a2" })], next);
+    assert.equal(second.views[0]?.frameUrl, "orbita-panel://doc/a2");
+    assert.notEqual(second.views[0]?.frameKey, first.views[0]?.frameKey);
+  });
+
+  test("数据读不出来：留着上一份好的并带问题；快照里没有的卡的记忆丢掉（再来就是新的）", () => {
+    const next = counter();
+    const first = mergeBoardCards(new Map(), [live("a"), live("b")], next);
+    const bad = mergeBoardCards(first.memory, [live("a", { frameUrl: null, data: { kind: "problem", problem: { kind: "invalid-json", message: "x" } } })], next);
+    assert.deepEqual(bad.views[0]?.shown, ready({ n: 1 }));
+    assert.equal(bad.views[0]?.problem?.kind, "invalid-json");
+    assert.equal(bad.memory.has("b"), false);
+    const again = mergeBoardCards(bad.memory, [live("a", { frameUrl: null }), live("b", { frameUrl: null })], next);
+    assert.equal(again.views[1]?.frameUrl, null, "b 的记忆已丢，又没给新地址：画不出（显示载入中），不会拿旧地址冒充");
+  });
+
+  test("broken 的卡：不给 iframe，带原因", () => {
+    const merged = mergeBoardCards(new Map(), [live("a", { broken: true, frameUrl: null, problems: [{ kind: "template-missing", detail: "./x.html" }] })], counter());
+    assert.equal(merged.views[0]?.frameUrl, null);
+    assert.equal(merged.views[0]?.brokenProblems?.[0]?.kind, "template-missing");
+  });
 });

@@ -1,5 +1,5 @@
 /**
- * 插件面板的纯逻辑：主题变量怎么读、数据怎么在「新读到的」与「上一份好的」之间取舍、
+ * 看板卡宿主的纯逻辑：主题变量怎么读、数据怎么在「新读到的」与「上一份好的」之间取舍、
  * 宿主何时盖「还没有产出」、动作回传的反馈文案、原始数据怎么截。
  * 单独成文件只为可测——`node --test` 只加载 .ts，这些判定写在 .tsx 里就没法直接跑。
  */
@@ -76,14 +76,6 @@ export function showHostEmpty(args: { shown: PluginPanelData; problem: PluginPan
   return args.shown.kind === "empty" && args.problem === null && !args.templateHandlesEmpty && args.graceOver;
 }
 
-/** 「原始数据」视图的文本：缩进的 JSON，太长截断（只是给人看一眼，不是导出）。 */
-export const RAW_VIEW_MAX_CHARS = 200_000;
-export function rawDataText(data: PluginPanelData): { text: string; truncated: boolean } {
-  if (data.kind !== "ready") return { text: "", truncated: false };
-  const text = JSON.stringify(data.value, null, 2) ?? "";
-  return text.length > RAW_VIEW_MAX_CHARS ? { text: text.slice(0, RAW_VIEW_MAX_CHARS), truncated: true } : { text, truncated: false };
-}
-
 // ---------- 文案 ----------
 
 /** 字节数说成人话（1.5 KB / 3.2 MB）。 */
@@ -118,8 +110,6 @@ export function dataProblemText(t: T, problem: PluginPanelDataProblem, limit: nu
 export function panelProblemText(t: T, problem: PluginPanelProblem): string {
   const detail = problem.detail;
   switch (problem.kind) {
-    case "shape":
-      return t.problem.shape(detail === "template" ? t.fieldTemplate : detail === "data" ? t.fieldData : t.fieldPanel);
     case "template-escape":
       return t.problem.templateEscape(detail);
     case "template-missing":
@@ -156,6 +146,10 @@ export function panelProblemText(t: T, problem: PluginPanelProblem): string {
       return t.problem.sampleTooLarge(formatBytes(Number(detail) || 0), formatBytes(PANEL_DATA_MAX_BYTES));
     case "sample-invalid":
       return t.problem.sampleInvalid(detail);
+    case "repeat-not-array":
+      return t.problem.repeatNotArray(detail);
+    case "repeat-limit":
+      return t.problem.repeatLimit(detail);
   }
 }
 

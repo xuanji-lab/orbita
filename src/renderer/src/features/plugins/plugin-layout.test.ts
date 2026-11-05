@@ -49,8 +49,20 @@ describe("plugins.css：容器查询", () => {
 
   it("窄档里：详情叠成单列、列表行的次要列收起", () => {
     const narrow = containerBlocks(css)[0]?.body ?? "";
-    match(narrow, /\.pl-cols\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/);
+    // 两列容器与列退成 display: contents，各节成为 .pl-detail 的直接子项、按 order 重排
+    match(narrow, /\.pl-cols,\s*\.pl-col\s*\{[^}]*display:\s*contents/);
     match(narrow, /\.pl-kinds,\s*\.pl-from\s*\{[^}]*display:\s*none/);
+  });
+
+  it("窄档的节序：能做什么 → 输入与输出 → 工作流 → 看板样式 → 要你填的 → 装在哪 → 来源与版本", () => {
+    const narrow = containerBlocks(css)[0]?.body ?? "";
+    const order = ["abilities", "io", "workflow", "board", "config", "scope", "source"].map((section) => {
+      const rule = new RegExp(`\\[data-sec="${section}"\\]\\s*\\{[^}]*order:\\s*(\\d+)`).exec(narrow);
+      ok(rule !== null, `${section} 缺 order`);
+      return Number(rule[1]);
+    });
+    deepStrictEqual(order, [...order].sort((a, b) => a - b));
+    deepStrictEqual(new Set(order).size, 7);
   });
 
   it("宽档的详情是显式两列（不是 auto-fit minmax(320px)）", () => {

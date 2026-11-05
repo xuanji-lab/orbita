@@ -5,6 +5,7 @@ import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   PluginConfigValue,
+  PluginDraftSnapshot,
   PluginInstallRequest,
   PluginInstallResult,
   PluginListResult,
@@ -16,12 +17,11 @@ import type {
   PluginSkillFile,
 } from "../../shared/plugin.ts";
 import type {
+  PluginBoardLoadRequest,
+  PluginBoardSnapshot,
   PluginDraftLoadRequest,
   PluginPanelActionRequest,
   PluginPanelActionResult,
-  PluginPanelInfo,
-  PluginPanelLoadRequest,
-  PluginPanelSnapshot,
 } from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 
@@ -57,16 +57,16 @@ export const pluginApi = {
     ipcRenderer.invoke(ipcChannels.pluginInstallFromRow, request),
   /** 一条插件技能的 SKILL.md 原文（只读查看） */
   skillFile: (name: string, slug: string): Promise<PluginSkillFile> => ipcRenderer.invoke(ipcChannels.pluginSkillFile, name, slug),
-  /** 载入 / 轮询一个面板；stamp 没变回 unchanged */
-  panelLoad: (request: PluginPanelLoadRequest): Promise<PluginPanelSnapshot> =>
-    ipcRenderer.invoke(ipcChannels.pluginPanelLoad, request),
-  /** 草稿预览：工作区里还没安装的插件文件夹，给出同形的面板快照（路径必须在该工作区根内，主进程校验） */
-  draftLoad: (request: PluginDraftLoadRequest): Promise<PluginPanelSnapshot> =>
+  /** 载入 / 轮询一个插件的看板（每张卡的 iframe 地址 + 数据）；stamp 没变回 unchanged */
+  boardLoad: (request: PluginBoardLoadRequest): Promise<PluginBoardSnapshot> =>
+    ipcRenderer.invoke(ipcChannels.pluginBoardLoad, request),
+  /** 草稿预览（一）：工作区里还没安装的插件文件夹的扫描（路径必须在该工作区根内，主进程校验）；没变回 unchanged */
+  draftLoad: (request: PluginDraftLoadRequest): Promise<PluginDraftSnapshot> =>
     ipcRenderer.invoke(ipcChannels.pluginDraftLoad, request),
-  /** 模板里点按钮的回传：追加到插件数据目录的 actions.jsonl，不做别的；失败以数据返回 */
+  /** 草稿预览（二）：同一个草稿文件夹的看板 */
+  draftBoardLoad: (request: PluginDraftLoadRequest): Promise<PluginBoardSnapshot> =>
+    ipcRenderer.invoke(ipcChannels.pluginDraftBoardLoad, request),
+  /** 卡里点按钮的回传：追加到插件数据目录的 actions.jsonl，不做别的；失败以数据返回 */
   panelAction: (request: PluginPanelActionRequest): Promise<PluginPanelActionResult> =>
     ipcRenderer.invoke(ipcChannels.pluginPanelAction, request),
-  /** 详情页「面板」「最近产出」；插件没声明面板为 null */
-  panelInfo: (name: string, workspaceId: string | null): Promise<PluginPanelInfo | null> =>
-    ipcRenderer.invoke(ipcChannels.pluginPanelInfo, name, workspaceId),
 } as const;

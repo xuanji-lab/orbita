@@ -2,6 +2,7 @@
  * 插件页里列表与详情共用的小件：头像、开关、能力行。
  */
 import type { PluginMcpInfo, PluginSkillInfo, PluginUnsupported, PluginView } from "@shared/plugin";
+import type { PluginExternal } from "@shared/plugin-board";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { mcpProblemText } from "./plugin-text.ts";
@@ -113,6 +114,36 @@ export function UnsupportedAbility(props: { entry: PluginUnsupported }) {
           {more > 0 ? ` ${t.moreItems(more)}` : ""}
         </small>
       )}
+    </AbilityRow>
+  );
+}
+
+/** 「外接」一行：外部服务 / 命令行的名字 + 种类，下面一句要不要账号、会不会常驻、插件自己的备注。 */
+export function ExternalAbility(props: { items: readonly PluginExternal[] }) {
+  const t = useT().plugins;
+  return (
+    <AbilityRow kind={t.kindExternal}>
+      <span className="pl-ext">
+        {props.items.map((item, index) => (
+          <span key={index} className="pl-tag" title={t.externalKinds[item.kind]}>
+            <Icon name={item.kind === "cli" ? "terminal" : item.kind === "mcp" ? "plug" : "globe"} size={11} strokeWidth={1.8} />
+            {item.name}
+          </span>
+        ))}
+      </span>
+      {props.items.map((item, index) => {
+        const facts = [
+          item.account === null ? null : item.account ? t.externalAccountYes : t.externalAccountNo,
+          item.resident === null ? null : item.resident ? t.externalResidentYes : t.externalResidentNo,
+          item.note,
+        ].filter((part): part is string => part !== null);
+        return facts.length === 0 ? null : (
+          <small key={index}>
+            {props.items.length > 1 ? `${item.name}：` : ""}
+            {facts.join(" · ")}
+          </small>
+        );
+      })}
     </AbilityRow>
   );
 }

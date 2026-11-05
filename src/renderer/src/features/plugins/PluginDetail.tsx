@@ -1,24 +1,33 @@
 /**
- * 插件详情（设计稿 v4 第 3 屏）：头部（头像、名字、来源、描述）+ 三个页签——
- * 面板（有面板时默认；底部可折叠看模板说明）/ 工作流 / 设置与来源（装在哪、要你填的、面板与最近产出、
- * 来源与版本、读取问题、打开文件夹 / 重新载入 / 卸载）。页签规则在 detail-tabs.ts。
- * 旧技能与旧 MCP 同样走这一页，只是不分页签（没有工作流也没有面板）、能做的动作少几样。
+ * 插件详情（设计稿 v5 屏 1）：**一张长页**——头部（头像、名字、来源、描述）+ 各节：
+ * 它能做什么（技能、脚本、外接）/ 输入与输出 / 工作流（标出等你的步骤）/ 看板样式（缩小的看板 + 每卡一行 +「打开看板」）/
+ * 要你填的 / 装在哪 / 来源与版本。宽的时候左右两列（左：能做什么、输入输出、工作流；右：装在哪、要你填的、来源与版本，
+ * 看板样式跨两列放最下），窄的时候（右栏）单列，顺序见 plugins.css 的 `order`。
+ *
+ * 「正在做」（草稿，`draftPath` 非空）就是这张页：清单里还没写的节画虚线框「还没聊到」，刚变化的节外圈高亮 2 秒，
+ * 文件改动几秒内刷新；没有安装记录，所以没有开关、没有卸载。
+ * 旧技能与旧 MCP 同样走这一页，只是没有输入输出 / 工作流 / 看板，能做的动作少几样。
  */
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parsePluginViewId, type PluginScope, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { ConfigField, ScopeEditor } from "./PluginConfig.tsx";
-import { McpAbility, PluginAvatar, ScriptsAbility, SkillAbility, UnsupportedAbility } from "./PluginParts.tsx";
-import { InstalledPanel } from "./PluginPanel.tsx";
-import { PluginPanelCards } from "./PluginPanelCard.tsx";
-import { WorkflowCard } from "./PluginWorkflow.tsx";
-import { detailTabs, resolveDetailTab, stepDetailTab, type DetailTab } from "./detail-tabs.ts";
-import { panelProblemText } from "./panel-view.ts";
+import { BoardStyleBody } from "./PluginBoardSection.tsx";
+import { ExternalAbility, McpAbility, PluginAvatar, ScriptsAbility, SkillAbility, UnsupportedAbility } from "./PluginParts.tsx";
+import { WorkflowList } from "./PluginWorkflow.tsx";
+import {
+  FRESH_HIGHLIGHT_MS,
+  changedSections,
+  sectionFilled,
+  sectionSignatures,
+  waitCount,
+  type DetailSection,
+  type SectionSignatures,
+} from "./detail-sections.ts";
 import { conflictText, problemText } from "./plugin-text.ts";
-import { usePanelInfo } from "./usePluginPanel.ts";
 import { isBuiltinView, sourceKey } from "./plugin-view.ts";
 
 const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
@@ -26,13 +35,12 @@ const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-dig
 export function PluginDetail(props: {
   view: PluginView;
   workspaces: readonly Workspace[];
-  /** 当前会话所在的工作区（面板的数据路径里 `${workspaceFolder}` 按它解析，也决定面板在这里启没启用） */
+  /** 当前会话所在的工作区（看板的数据路径里 `${workspaceFolder}` 按它解析，也决定看板在这里启没启用） */
   currentWorkspaceId: string | null;
-  /** 在右栏打开这个插件的面板（只有全屏版给——右栏版本来就在右栏里） */
-  onOpenInRail?: () => void;
-  /** 想看的页签（用户点的 / 「在右栏打开面板」指定的）；null = 按默认 */
-  tab: DetailTab | null;
-  onTab: (tab: DetailTab) => void;
+  /** 「正在做」：这份视图是还没安装的草稿（工作区内插件文件夹的路径）；null / 不给 = 已装的 */
+  draftPath?: string | null;
+  /** 点「打开看板」：右栏版进入看板视图；设置里的全屏版 = 关设置并在右栏打开 */
+  onOpenBoard: () => void;
   /** 页内是否画返回键：右栏版的返回键在工具栏胶囊里，不重复 */
   showBack: boolean;
   onBack: () => void;
@@ -45,14 +53,29 @@ export function PluginDetail(props: {
   const messages = useT();
   const t = messages.plugins;
   const { view } = props;
+  const draft = props.draftPath !== undefined && props.draftPath !== null;
   const parsed = parsePluginViewId(view.id);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<null | "reload" | "uninstall">(null);
   const [reloaded, setReloaded] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
-  // 面板与最近产出（只有真插件、且声明了 orbita.panel 才有；其余为 null）
-  const panelInfo = usePanelInfo(view.origin === "plugin" ? (parsed?.key ?? null) : null, props.currentWorkspaceId);
+
+  // 草稿里刚变化的节高亮 2 秒：只比较各节自己的内容签名（标题 / 描述变了不亮）
+  const signatures = useMemo(() => sectionSignatures(view), [view]);
+  const previousSignatures = useRef<SectionSignatures | null>(null);
+  const [fresh, setFresh] = useState<readonly DetailSection[]>([]);
+  useEffect(() => {
+    if (!draft) return;
+    const changed = changedSections(previousSignatures.current, signatures);
+    previousSignatures.current = signatures;
+    if (changed.length > 0) setFresh(changed);
+  }, [signatures, draft]);
+  useEffect(() => {
+    if (fresh.length === 0) return;
+    const timer = window.setTimeout(() => setFresh([]), FRESH_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [fresh]);
 
   const run = async (task: () => Promise<void>): Promise<void> => {
     setError(null);
@@ -72,93 +95,171 @@ export function PluginDetail(props: {
     link: t.sourceLink,
     git: t.sourceGit,
   }[source];
-  const by = [view.author, view.version, view.license, sourceLabel].filter((part): part is string => part !== null && part !== "");
+  const by = draft ? [t.draftBy] : [view.author, view.version, view.license, sourceLabel].filter((part): part is string => part !== null && part !== "");
   const isPlugin = view.origin === "plugin";
-  const hasAbilities = view.skills.length + view.mcp.length + view.unsupported.length > 0 || view.contents.scripts;
+  const hasAbilities = sectionFilled(view, "abilities");
   const linked = view.install?.source.kind === "link";
   /** Orbita 内置（做插件）：可以停用，不能卸载 */
   const builtin = isBuiltinView(view);
-  const problemCount = view.problems.length + (panelInfo?.problems.length ?? 0);
+  const pluginName = parsed?.key ?? "";
 
-  // 页签：有没有面板要等主进程回话才知道（旧技能 / MCP 同步就是「没有」）；没读到之前不画页签，免得默认页闪一下
-  const panelKnown = panelInfo !== undefined;
-  const tabs = detailTabs({ isPlugin, hasPanel: panelInfo !== null && panelInfo !== undefined });
-  const tab = resolveDetailTab(tabs, props.tab);
-  const tabLabel: Record<DetailTab, string> = { panel: t.tabPanel, workflow: t.tabWorkflow, settings: t.tabSettings };
-  const onTabKey = (event: KeyboardEvent<HTMLElement>): void => {
-    const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (delta === 0) return;
-    event.preventDefault();
-    const next = stepDetailTab(tabs, tab, delta);
-    if (next !== null) props.onTab(next);
-    // 焦点跟着选中的页签走（roving tabindex）
-    requestAnimationFrame(() => document.getElementById(`pl-tab-${next ?? ""}`)?.focus());
+  /** 一节：草稿里没写的画虚线框「还没聊到」+ 一句提示，写了的正常画；刚变化的外圈亮一下 */
+  const section = (key: DetailSection, title: string, body: ReactNode, opts: { hint?: string; trailing?: ReactNode; placeholder: string }): ReactNode => {
+    if (draft && !sectionFilled(view, key)) {
+      return (
+        <section className="pl-card pl-ph" data-sec={key}>
+          <div className="pl-card-h">
+            {title}
+            <span className="hint">{t.notChatted}</span>
+          </div>
+          <p className="pl-ph-text">{opts.placeholder}</p>
+        </section>
+      );
+    }
+    return (
+      <section className="pl-card" data-sec={key} data-fresh={fresh.includes(key) ? "true" : undefined}>
+        <div className="pl-card-h">
+          {title}
+          {opts.hint !== undefined && <span className="hint">{opts.hint}</span>}
+          {opts.trailing !== undefined && <span className="pl-card-trail">{opts.trailing}</span>}
+        </div>
+        {body}
+      </section>
+    );
   };
 
-  // ---- 各页签里的卡片 ----
-  const abilitiesCard = (
-    <section className="pl-card">
-      <div className="pl-card-h">
-        {t.abilitiesTitle}
-        <span className="hint">{t.abilitiesHint}</span>
+  const abilities = section(
+    "abilities",
+    t.abilitiesTitle,
+    hasAbilities ? (
+      <div>
+        {view.skills.map((skill) => (
+          <SkillAbility key={`s:${skill.slug}`} skill={skill} />
+        ))}
+        {view.mcp.map((server) => (
+          <McpAbility key={`m:${server.name}`} server={server} />
+        ))}
+        {view.contents.scripts && <ScriptsAbility />}
+        {view.external.length > 0 && <ExternalAbility items={view.external} />}
+        {view.unsupported.map((entry) => (
+          <UnsupportedAbility key={`u:${entry.kind}`} entry={entry} />
+        ))}
       </div>
-      {hasAbilities ? (
-        <div>
-          {view.skills.map((skill) => (
-            <SkillAbility key={`s:${skill.slug}`} skill={skill} />
-          ))}
-          {view.mcp.map((server) => (
-            <McpAbility key={`m:${server.name}`} server={server} />
-          ))}
-          {view.contents.scripts && <ScriptsAbility />}
-          {view.unsupported.map((entry) => (
-            <UnsupportedAbility key={`u:${entry.kind}`} entry={entry} />
-          ))}
-        </div>
-      ) : (
-        // 只带面板的插件（技能 / MCP 都没有）不是「加载不了」，是本来就没有
-        <span className="pl-muted">{tabs.includes("panel") ? t.abilitiesNone : t.abilitiesEmpty}</span>
-      )}
-    </section>
+    ) : (
+      // 只带看板的插件（技能 / MCP 都没有）不是「加载不了」，是本来就没有
+      <span className="pl-muted">{view.board !== null ? t.abilitiesNone : t.abilitiesEmpty}</span>
+    ),
+    { hint: t.abilitiesHint, placeholder: t.phAbilities },
   );
 
-  const scopeCard = (
-    <section className="pl-card">
-      <div className="pl-card-h">{t.scopeTitle}</div>
-      <ScopeEditor
-        scope={view.scope}
-        workspaces={props.workspaces}
-        offLabel={t.scopeOff}
-        onChange={(scope) => void run(() => props.onScope(scope))}
-      />
-    </section>
-  );
+  const hasIo = sectionFilled(view, "io");
+  const io =
+    draft || hasIo
+      ? section(
+          "io",
+          t.ioTitle,
+          <div>
+            {(["reads", "writes"] as const).map((side) =>
+              view.io[side].length === 0 ? null : (
+                <div className="pl-ab" key={side}>
+                  <span className="pl-ab-kind pl-io-kind">
+                    <Icon name={side === "reads" ? "log-in" : "log-out"} size={12} strokeWidth={1.8} />
+                    {side === "reads" ? t.ioRead : t.ioWrite}
+                  </span>
+                  <div className="pl-ab-body">
+                    {view.io[side].map((item, index) => (
+                      <span className="pl-io" key={index}>
+                        <code>{item.path}</code>
+                        {(item.note !== null || item.when !== null) && <small>{[item.note, item.when].filter((part) => part !== null).join(" · ")}</small>}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>,
+          { hint: t.ioHint, placeholder: t.phIo },
+        )
+      : null;
 
-  const configCard = (
-    <section className="pl-card">
-      <div className="pl-card-h">{t.configTitle}</div>
-      {view.config.length === 0 ? (
-        <span className="pl-muted">{t.configNone}</span>
-      ) : (
-        <div className="pl-form">
-          {view.config.map((state) => (
-            <ConfigField
-              key={state.field.key}
-              state={state}
-              onSave={async (value) => {
-                await api.plugin.setConfig(parsed?.key ?? "", state.field.key, value);
-                await props.onChanged();
-              }}
+  const hasWorkflow = view.workflow.length > 0;
+  const waits = waitCount(view.workflow);
+  const workflow =
+    draft || hasWorkflow
+      ? section("workflow", t.workflowTitle, <WorkflowList pluginName={pluginName} steps={view.workflow} canView={!draft} />, {
+          hint: waits === 0 ? t.workflowHint : undefined,
+          trailing: waits > 0 ? t.workflowWaits(waits) : undefined,
+          placeholder: t.phWorkflow,
+        })
+      : null;
+
+  const board =
+    view.board !== null || draft
+      ? section(
+          "board",
+          t.boardTitle,
+          view.board === null ? null : (
+            <BoardStyleBody
+              board={view.board}
+              target={draft ? { kind: "draft", path: props.draftPath ?? "", workspaceId: props.currentWorkspaceId } : { kind: "installed", name: pluginName, workspaceId: props.currentWorkspaceId }}
             />
-          ))}
-        </div>
-      )}
-    </section>
+          ),
+          {
+            trailing:
+              view.board === null ? undefined : (
+                <button type="button" className="pl-btn pl-open-board" onClick={props.onOpenBoard}>
+                  <Icon name="layout-grid" size={12} strokeWidth={1.8} />
+                  {t.boardOpen}
+                </button>
+              ),
+            placeholder: t.phBoard,
+          },
+        )
+      : null;
+
+  const scope = section(
+    "scope",
+    t.scopeTitle,
+    <ScopeEditor scope={view.scope} workspaces={props.workspaces} offLabel={t.scopeOff} onChange={(next) => void run(() => props.onScope(next))} />,
+    { placeholder: t.phScope },
   );
 
-  const sourceCard = (
-    <section className="pl-card">
-      <div className="pl-card-h">{t.sourceTitle}</div>
+  const config = section(
+    "config",
+    t.configTitle,
+    view.config.length === 0 ? (
+      <span className="pl-muted">{t.configNone}</span>
+    ) : draft ? (
+      // 草稿还没装，没有地方存值：只列出它会问你什么，装上之后再填
+      <ul className="pl-list">
+        {view.config.map((state) => (
+          <li key={state.field.key}>
+            <b>{state.field.title}</b>
+            {state.field.description !== "" && <small> {state.field.description}</small>}
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <div className="pl-form">
+        {view.config.map((state) => (
+          <ConfigField
+            key={state.field.key}
+            state={state}
+            onSave={async (value) => {
+              await api.plugin.setConfig(pluginName, state.field.key, value);
+              await props.onChanged();
+            }}
+          />
+        ))}
+      </div>
+    ),
+    { placeholder: t.phConfig },
+  );
+
+  const sourceCard = section(
+    "source",
+    t.sourceTitle,
+    <>
       <dl className="pl-kv">
         {view.version !== null && (
           <>
@@ -186,79 +287,103 @@ export function PluginDetail(props: {
       {view.location !== null && view.install === null && <span className="pl-code">{view.location}</span>}
       {/* 链接安装的根就是来源那一行的路径，不再重复一遍 */}
       {view.install !== null && view.install.source.kind !== "link" && <span className="pl-code">{view.install.root}</span>}
-    </section>
+    </>,
+    { placeholder: t.phSource },
   );
 
   const problemsCard =
-    problemCount > 0 ? (
-      <section className="pl-card">
+    view.problems.length > 0 ? (
+      <section className="pl-card" data-sec="problems">
         <div className="pl-card-h">{t.problemsTitle}</div>
         <ul className="pl-list">
           {view.problems.map((problem, index) => (
             <li key={index}>{problemText(t, problem)}</li>
           ))}
-          {(panelInfo?.problems ?? []).map((problem, index) => (
-            <li key={`panel-${index}`}>{panelProblemText(messages.pluginPanel, problem)}</li>
-          ))}
         </ul>
       </section>
     ) : null;
 
-  // 打开文件夹 / 重新载入 / 卸载：原先挤在头部右侧，窄栏里占两行；设计稿 v4 头部只留名字与来源，动作收进「设置与来源」
-  const actionsCard = (
-    <section className="pl-card">
-      <div className="pl-card-h">{t.actionsTitle}</div>
-      <div className="pl-acts">
-        {isPlugin && (
-          <>
-            <button type="button" className="pl-btn" onClick={() => void run(() => api.plugin.reveal(parsed?.key ?? ""))}>
-              <Icon name="folder-open" size={13} strokeWidth={1.8} />
-              {t.openFolder}
-            </button>
-            <button
-              type="button"
-              className="pl-btn"
-              title={t.reloadTip}
-              disabled={busy !== null}
-              onClick={() =>
-                void run(async () => {
-                  setBusy("reload");
-                  setReloaded(false);
-                  try {
-                    await api.plugin.reload();
-                    await props.onChanged();
-                    setReloaded(true);
-                  } finally {
-                    setBusy(null);
-                  }
-                })
-              }
-            >
-              <Icon name="refresh-cw" size={13} strokeWidth={1.8} />
-              {busy === "reload" ? t.reloading : reloaded ? t.reloaded : t.reload}
-            </button>
-            {!builtin && (
-              <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming(true)}>
-                <Icon name="trash-2" size={13} strokeWidth={1.8} />
-                {t.uninstall}
-              </button>
-            )}
-          </>
-        )}
-        {view.origin === "user-skill" && (
-          <button type="button" className="pl-btn" onClick={() => void run(() => api.skill.reveal(parsed?.key ?? null))}>
+  // 打开文件夹 / 重新载入 / 卸载：宽的时候在头部右侧，窄的时候收成末尾一张卡（CSS 二选一）
+  const actionButtons = (
+    <>
+      {isPlugin && !draft && (
+        <>
+          <button type="button" className="pl-btn" onClick={() => void run(() => api.plugin.reveal(pluginName))}>
             <Icon name="folder-open" size={13} strokeWidth={1.8} />
             {t.openFolder}
           </button>
-        )}
-        {view.origin === "user-mcp" && (
-          <button type="button" className="pl-btn" onClick={() => void run(() => api.mcp.openConfig())}>
-            <Icon name="file-text" size={13} strokeWidth={1.8} />
-            {t.openMcpConfig}
+          <button
+            type="button"
+            className="pl-btn"
+            title={t.reloadTip}
+            disabled={busy !== null}
+            onClick={() =>
+              void run(async () => {
+                setBusy("reload");
+                setReloaded(false);
+                try {
+                  await api.plugin.reload();
+                  await props.onChanged();
+                  setReloaded(true);
+                } finally {
+                  setBusy(null);
+                }
+              })
+            }
+          >
+            <Icon name="refresh-cw" size={13} strokeWidth={1.8} />
+            {busy === "reload" ? t.reloading : reloaded ? t.reloaded : t.reload}
           </button>
-        )}
+          {!builtin && (
+            <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming(true)}>
+              <Icon name="trash-2" size={13} strokeWidth={1.8} />
+              {t.uninstall}
+            </button>
+          )}
+        </>
+      )}
+      {view.origin === "user-skill" && (
+        <button type="button" className="pl-btn" onClick={() => void run(() => api.skill.reveal(parsed?.key ?? null))}>
+          <Icon name="folder-open" size={13} strokeWidth={1.8} />
+          {t.openFolder}
+        </button>
+      )}
+      {view.origin === "user-mcp" && (
+        <button type="button" className="pl-btn" onClick={() => void run(() => api.mcp.openConfig())}>
+          <Icon name="file-text" size={13} strokeWidth={1.8} />
+          {t.openMcpConfig}
+        </button>
+      )}
+    </>
+  );
+  const hasActions = !draft;
+
+  return (
+    <div className="pl-detail" data-draft={draft ? "true" : undefined}>
+      {props.showBack && (
+        <button type="button" className="pl-back" onClick={props.onBack}>
+          <Icon name="chevron-left" size={14} strokeWidth={1.8} />
+          {t.backToInstalled}
+        </button>
+      )}
+
+      <div className="pl-hero">
+        <PluginAvatar view={view} big />
+        <div className="pl-hero-main">
+          <div className="pl-title">{view.name}</div>
+          <div className="pl-by">{by.join(" · ")}</div>
+          {view.description !== "" ? (
+            // 描述原文常常几百字（技能的触发词清单）：默认三行，点一下展开——简洁为默认、细节可展开
+            <button type="button" className="pl-lead" aria-expanded={leadOpen} data-open={leadOpen} onClick={() => setLeadOpen((open) => !open)}>
+              {view.description}
+            </button>
+          ) : (
+            draft && <p className="pl-lead pl-ph-text">{t.phLead}</p>
+          )}
+        </div>
+        {hasActions && <span className="pl-acts pl-acts-hero">{actionButtons}</span>}
       </div>
-      {/* 卸载确认就在按钮下面：窄栏里按钮在页签底部，确认放到头部会离开视线 */}
+
       {confirming && (
         <div className="pl-note danger" role="alertdialog" aria-label={t.uninstall}>
           <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
@@ -273,7 +398,7 @@ export function PluginDetail(props: {
                   void run(async () => {
                     setBusy("uninstall");
                     try {
-                      await api.plugin.uninstall(parsed?.key ?? "");
+                      await api.plugin.uninstall(pluginName);
                       await props.onChanged();
                       props.onUninstalled();
                     } finally {
@@ -292,66 +417,6 @@ export function PluginDetail(props: {
           </div>
         </div>
       )}
-    </section>
-  );
-
-  /** 工作流页签：插件清单里 orbita.workflow 画成的步骤（点技能可只读看 SKILL.md），再往下是「它能做什么」 */
-  const workflowBody = (
-    <div className="pl-col">
-      {isPlugin && view.workflow.length > 0 && <WorkflowCard pluginName={parsed?.key ?? ""} steps={view.workflow} />}
-      {builtin && (
-        <div className="pl-note">
-          <Icon name="info" size={14} strokeWidth={1.8} />
-          <span>{t.builtinNote}</span>
-        </div>
-      )}
-      {abilitiesCard}
-    </div>
-  );
-
-  const settingsBody = (
-    <div className="pl-cols">
-      <div className="pl-col">
-        {scopeCard}
-        {configCard}
-        {panelInfo !== null && panelInfo !== undefined && <PluginPanelCards info={panelInfo} />}
-      </div>
-      <div className="pl-col">
-        {sourceCard}
-        {problemsCard}
-        {actionsCard}
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="pl-detail" data-fill={tab === "panel"}>
-      {props.showBack && (
-        <button type="button" className="pl-back" onClick={props.onBack}>
-          <Icon name="chevron-left" size={14} strokeWidth={1.8} />
-          {t.backToInstalled}
-        </button>
-      )}
-
-      <div className="pl-hero">
-        <PluginAvatar view={view} big />
-        <div className="pl-hero-main">
-          <div className="pl-title">{view.name}</div>
-          <div className="pl-by">{by.join(" · ")}</div>
-          {view.description !== "" && (
-            // 描述原文常常几百字（技能的触发词清单）：默认三行，点一下展开——简洁为默认、细节可展开
-            <button
-              type="button"
-              className="pl-lead"
-              aria-expanded={leadOpen}
-              data-open={leadOpen}
-              onClick={() => setLeadOpen((open) => !open)}
-            >
-              {view.description}
-            </button>
-          )}
-        </div>
-      </div>
 
       {error !== null && (
         <div className="pl-note danger" role="alert">
@@ -379,60 +444,35 @@ export function PluginDetail(props: {
         </div>
       )}
 
-      {!panelKnown ? (
-        <p className="pl-empty">{messages.common.loading}</p>
-      ) : tab === null ? (
-        // 旧技能 / 旧 MCP：没有工作流也没有面板，不分页签，能展示的平铺
-        <div className="pl-cols">
-          <div className="pl-col">{abilitiesCard}</div>
-          <div className="pl-col">
-            {sourceCard}
-            {problemsCard}
-            {actionsCard}
-          </div>
+      {builtin && (
+        <div className="pl-note">
+          <Icon name="info" size={14} strokeWidth={1.8} />
+          <span>{t.builtinNote}</span>
         </div>
-      ) : (
-        <>
-          <div className="pl-tabs" role="tablist" aria-label={t.tabsAria} onKeyDown={onTabKey}>
-            {tabs.map((each) => (
-              <button
-                key={each}
-                type="button"
-                role="tab"
-                id={`pl-tab-${each}`}
-                aria-selected={each === tab}
-                aria-controls="pl-tabpanel"
-                tabIndex={each === tab ? 0 : -1}
-                onClick={() => props.onTab(each)}
-              >
-                {tabLabel[each]}
-                {each === "settings" && problemCount > 0 && (
-                  <span title={t.tabHasProblems} className="pl-tab-warn">
-                    <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          <div className="pl-tabpanel" id="pl-tabpanel" role="tabpanel" aria-labelledby={`pl-tab-${tab}`}>
-            {tab === "panel" && (
-              <InstalledPanel
-                name={parsed?.key ?? ""}
-                workspaceId={props.currentWorkspaceId}
-                extra={
-                  props.onOpenInRail === undefined ? undefined : (
-                    <button type="button" className="pl-btn pp-mini" title={messages.pluginPanel.openInRailTip} onClick={props.onOpenInRail}>
-                      <Icon name="panel-right" size={12} strokeWidth={1.8} />
-                      {messages.pluginPanel.openInRail}
-                    </button>
-                  )
-                }
-              />
-            )}
-            {tab === "workflow" && workflowBody}
-            {tab === "settings" && settingsBody}
-          </div>
-        </>
+      )}
+
+      {/* 两列（宽）：左 能做什么 / 输入与输出 / 工作流，右 装在哪 / 要你填的 / 来源与版本，看板样式跨两列放最下；
+          单列（窄）：.pl-cols / .pl-col 退成 display: contents，各节按 order 重排（plugins.css） */}
+      <div className="pl-cols">
+        <div className="pl-col">
+          {abilities}
+          {io}
+          {workflow}
+        </div>
+        <div className="pl-col">
+          {scope}
+          {config}
+          {sourceCard}
+          {problemsCard}
+        </div>
+      </div>
+      {board}
+
+      {hasActions && (
+        <section className="pl-card pl-acts-card" data-sec="actions">
+          <div className="pl-card-h">{t.actionsTitle}</div>
+          <div className="pl-acts">{actionButtons}</div>
+        </section>
       )}
     </div>
   );

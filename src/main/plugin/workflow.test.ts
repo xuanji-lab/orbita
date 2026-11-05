@@ -25,16 +25,16 @@ describe("parseWorkflow", () => {
     });
     assert.deepEqual(problems, []);
     assert.deepEqual(steps, [
-      { title: "按理念检索", skill: "lit-scan", skillSlug: "lit-scan", detail: "Semantic Scholar 搜 8 条理念", output: null },
-      { title: "滚一轮引用", skill: "文献扫描", skillSlug: "lit-scan", detail: null, output: null },
-      { title: "写进当日记录", skill: null, skillSlug: null, detail: null, output: "data/2026-11-05.jsonl" },
-      { title: "每周汇总", skill: "lit-weekly", skillSlug: "lit-weekly", detail: null, output: null },
+      { title: "按理念检索", skill: "lit-scan", skillSlug: "lit-scan", detail: "Semantic Scholar 搜 8 条理念", output: null, wait: null },
+      { title: "滚一轮引用", skill: "文献扫描", skillSlug: "lit-scan", detail: null, output: null, wait: null },
+      { title: "写进当日记录", skill: null, skillSlug: null, detail: null, output: "data/2026-11-05.jsonl", wait: null },
+      { title: "每周汇总", skill: "lit-weekly", skillSlug: "lit-weekly", detail: null, output: null, wait: null },
     ]);
   });
 
   test("技能对不上：照常显示，skill 留着、skillSlug 为 null（界面据此标「找不到这个技能」）；不记成问题", () => {
     const { steps, problems } = parse({ workflow: [{ title: "x", skill: "不存在" }] });
-    assert.deepEqual(steps, [{ title: "x", skill: "不存在", skillSlug: null, detail: null, output: null }]);
+    assert.deepEqual(steps, [{ title: "x", skill: "不存在", skillSlug: null, detail: null, output: null, wait: null }]);
     assert.deepEqual(problems, []);
   });
 
@@ -66,7 +66,7 @@ describe("parseWorkflow", () => {
 
   test("可选字段类型不对：当没写并记问题；空串当没写、不记", () => {
     const { steps, problems } = parse({ workflow: [{ title: "a", skill: 3, detail: {}, output: "" }] });
-    assert.deepEqual(steps, [{ title: "a", skill: null, skillSlug: null, detail: null, output: null }]);
+    assert.deepEqual(steps, [{ title: "a", skill: null, skillSlug: null, detail: null, output: null, wait: null }]);
     assert.deepEqual(problems.map((problem) => problem.detail), ["orbita.workflow[0].skill: not a string", "orbita.workflow[0].detail: not a string"]);
   });
 

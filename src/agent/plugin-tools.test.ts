@@ -173,8 +173,8 @@ describe("preview_plugin", () => {
       path: "/ws/plugins/lit",
       skills: [],
       workflow: ["扫"],
-      panelFiles: [{ key: "template", path: "./panel/index.html", exists: true }, { key: "spec", path: "./panel/spec.md", exists: false }],
-      issues: ["orbita.panel.spec points at ./panel/spec.md, which does not exist"],
+      boardFiles: [{ card: "today", key: "template", path: "./board/today.html", exists: true }, { card: null, key: "spec", path: "./board/spec.md", exists: false }],
+      issues: ["orbita.board.spec points at ./board/spec.md, which does not exist"],
       installed: false,
     });
     const result = await pending;
@@ -182,7 +182,7 @@ describe("preview_plugin", () => {
     assert.match(text, /right pane now shows the draft "lit"/);
     assert.match(text, /do not need to call preview_plugin again/);
     assert.match(text, /skills: none yet/);
-    assert.match(text, /template \.\/panel\/index\.html; spec \.\/panel\/spec\.md \(MISSING\)/);
+    assert.match(text, /today\.template \.\/board\/today\.html; spec \.\/board\/spec\.md \(MISSING\)/);
     assert.match(text, /Things to fix/);
     assert.equal(result.details, undefined);
   });
@@ -247,10 +247,10 @@ describe("回给模型的话", () => {
   });
 
   test("describePreview：已装同名时提醒；没有 issues 就没有「Things to fix」", () => {
-    const text = describePreview({ ok: true, name: "lit", path: "/p", skills: ["a"], workflow: [], panelFiles: [], issues: [], installed: true });
+    const text = describePreview({ ok: true, name: "lit", path: "/p", skills: ["a"], workflow: [], boardFiles: [], issues: [], installed: true });
     assert.match(text, /already installed/);
     assert.match(text, /workflow: not written yet/);
-    assert.match(text, /panel files: none declared/);
+    assert.match(text, /board files: none declared/);
     assert.doesNotMatch(text, /Things to fix/);
   });
 

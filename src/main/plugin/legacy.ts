@@ -18,6 +18,7 @@ import {
   type PluginView,
 } from "../../shared/plugin.ts";
 import { describeServer, isHttpServer, type McpServer } from "../../shared/mcp.ts";
+import { EMPTY_PLUGIN_IO } from "../../shared/plugin-board.ts";
 import type { SkillMeta, SkillScope } from "../../shared/skill.ts";
 import type { Workspace } from "../../shared/workspace.ts";
 
@@ -46,6 +47,10 @@ export function skillViews(metas: readonly SkillMeta[], storeRoot: string): Plug
         contents: { skills: 1, mcp: 0, scripts: false },
         skills: [{ slug: meta.slug, name: meta.name, description: meta.description }],
         workflow: [],
+        io: EMPTY_PLUGIN_IO,
+        external: [],
+        board: null,
+        tuned: false,
         mcp: [],
         location: meta.linkedPath ?? join(storeRoot, meta.slug),
       };
@@ -79,6 +84,10 @@ export function mcpViews(servers: Readonly<Record<string, McpServer>>, workspace
         contents: { skills: 0, mcp: 1, scripts: false },
         skills: [],
         workflow: [],
+        io: EMPTY_PLUGIN_IO,
+        external: [],
+        board: null,
+        tuned: false,
         mcp: [
           {
             name,
