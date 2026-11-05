@@ -18,6 +18,10 @@ import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg
 import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
+import alarmClock from "../../../../design-system/assets/icons/lucide/alarm-clock.svg?raw";
+import clipboardList from "../../../../design-system/assets/icons/lucide/clipboard-list.svg?raw";
+import hourglass from "../../../../design-system/assets/icons/lucide/hourglass.svg?raw";
+import notebookText from "../../../../design-system/assets/icons/lucide/notebook-text.svg?raw";
 import brainCircuit from "../../../../design-system/assets/icons/lucide/brain-circuit.svg?raw";
 import calendarClock from "../../../../design-system/assets/icons/lucide/calendar-clock.svg?raw";
 import check from "../../../../design-system/assets/icons/lucide/check.svg?raw";
@@ -155,6 +159,10 @@ const ICONS = {
   "arrow-up-right": arrowUpRight,
   bot,
   brain,
+  "alarm-clock": alarmClock,
+  "clipboard-list": clipboardList,
+  hourglass,
+  "notebook-text": notebookText,
   "brain-circuit": brainCircuit,
   "calendar-clock": calendarClock,
   check,

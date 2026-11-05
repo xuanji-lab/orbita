@@ -162,8 +162,10 @@ export function RightRail(props: {
   // 分组的理由见 rail-groups.ts；pinned = 精简态常驻在条上
   const items: RailItem[] = [
     // 这条会话在做什么、做过什么、脑子里装了什么
-    { id: "context", group: "session", pinned: true, icon: "list-todo", label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
+    { id: "context", group: "session", pinned: true, icon: "clipboard-list", label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
     { id: "review", group: "session", pinned: false, icon: "file-diff", label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
+    // 文件跟审查、会话放一组（用户 2026-11-05）；精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
+    { id: "files", group: "session", pinned: true, icon: "folder", label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
     // 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路）；常规态条上没有它
     { id: "context-tab", group: "session", pinned: false, moreOnly: true, icon: "layers", label: t.taskPanel.tabContext, lit: false, onSelect: props.onOpenContext },
     ...(props.subSessions === null
@@ -180,13 +182,14 @@ export function RightRail(props: {
             badge: props.subSessions.waiting,
           },
         ]),
-    // 东西在哪、在哪动手。文件在精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
-    { id: "files", group: "workbench", pinned: true, icon: "folder", label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
-    { id: "terminal", group: "workbench", pinned: true, icon: "square-terminal", label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
-    ...fromApp("browser", { group: "workbench", pinned: true }),
+    { id: "terminal", group: "agent", pinned: true, icon: "square-terminal", label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
+    ...fromApp("browser", { group: "agent", pinned: true }),
     // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
-    { id: "abilities", group: "agent", pinned: false, icon: "book-open", label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") },
+    // 插件页已把技能与 MCP 当插件显示：plugins 开着时不再单列这个入口
+    ...(props.pluginsAvailable
+      ? []
+      : [{ id: "abilities", group: "agent" as const, pinned: false, icon: "book-open" as const, label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") }]),
     ...(props.pluginsAvailable
       ? [{ id: "plugins", group: "agent" as const, pinned: true, icon: "blocks" as const, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
       : []),
@@ -211,7 +214,7 @@ export function RightRail(props: {
             id: "automation",
             group: "agent" as const,
             pinned: false,
-            icon: "calendar-clock" as const,
+            icon: "alarm-clock" as const,
             label: t.automation.railLabel(props.automation.running),
             lit: props.panel === "automation",
             onSelect: toggle("automation"),
