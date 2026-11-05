@@ -33,6 +33,7 @@ import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginAgentScope } from "./plugin.ts";
+import type { PluginBoardOutcome } from "./plugin-board.ts";
 import type { IntentRecallRecord } from "./session.ts";
 import type {
   MemoryBackfillProgress,
@@ -446,6 +447,13 @@ export const ipcChannels = {
   pluginPanelAction: "plugin:panel-action",
   /** 详情页「面板」「最近产出」：模板与数据路径（替换后）、数据与动作日志的更新时间和条数、解析问题 */
   pluginPanelInfo: "plugin:panel-info",
+  /**
+   * 全局周看板（契约在 plugin-board.ts）：入参 BoardWeekRequest（当地周一 00:00），回 BoardWeekResponse——
+   * 7 天各自的 items（过去的自动化运行 + 那次会话里 show_plugin_board 的卡快照）与 planned（按排期推算、还没到的）。
+   */
+  boardWeek: "board:week",
+  /** 按快照画卡：模板哈希 → 一次性 iframe 地址（入参 BoardFrameRequest，回 BoardFrameResult；哈希不合规 / 仓库里没有回 null） */
+  boardFrame: "board:frame",
   /**
    * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
    * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区 / manual 档）：主进程重新校验会话、
@@ -1106,6 +1114,8 @@ export type AgentCommand =
   | ({ type: "pluginPreviewResult"; requestId: string } & PluginAgentPreviewOutcome)
   /** 插件：主进程对 pluginListRequest 的回执 */
   | ({ type: "pluginListResult"; requestId: string } & PluginAgentListOutcome)
+  /** 插件：主进程对 pluginBoardRequest 的回执（show_plugin_board 的卡快照） */
+  | ({ type: "pluginBoardResult"; requestId: string } & PluginBoardOutcome)
   /**
    * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
    * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
@@ -1351,6 +1361,12 @@ export type AgentEvent =
    * 只扫描不安装；成功后广播 pluginDraft，然后回执。
    */
   | { type: "pluginPreviewRequest"; requestId: string; sessionId: string; path: string }
+  /**
+   * 插件：agent 工具 show_plugin_board 的请求（回 pluginBoardResult）。`plugin` 是已装插件名，或本会话工作区里
+   * 草稿文件夹的路径 / 名字（主进程解析并校验在工作区内）；`cards` 缺席 = 全部卡。主进程读模板与数据、
+   * 模板按哈希存进 board-templates/，数据快照回执——随工具结果的 details 落盘。
+   */
+  | { type: "pluginBoardRequest"; requestId: string; sessionId: string; plugin: string; cards: string[] | null }
   /**
    * 草稿插件（还没装的文件夹）做出了能看的东西：右栏打开插件页的「正在做」视图（主进程 → renderer，
    * 不进 agent 进程、不落盘）。`path` 已是主进程校验过的真实路径；renderer 只在正看着 `sessionId` 这条会话时响应。

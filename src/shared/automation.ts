@@ -16,6 +16,7 @@
  * 主进程（存盘 / 调度）与 renderer（表单校验 / 面板）共用同一份，不各写一套。
  */
 import type { PermissionMode } from "./permission.ts";
+import { isPluginName } from "./plugin.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
 /* ---------- 护栏常量 ---------- */
@@ -308,6 +309,23 @@ export interface AutomationRun {
   merged?: number;
   /** 最终回答的前 ~300 字 */
   resultExcerpt?: string;
+  /**
+   * 这次运行的会话里 show_plugin_board 成功的工具调用（toolCallId，按调用顺序）。卡快照本身在会话记录的
+   * 工具结果 details 里（不复制进 automations.json），全局周看板按这些 id 回会话里找。
+   */
+  boardSnapshotIds?: string[];
+}
+
+/** 一条自动化选的插件：每次运行让 agent 用它，最后调 show_plugin_board 出看板。 */
+export interface AutomationPlugin {
+  name: string;
+}
+
+/** 插件选择的校验（面板表单、IPC 入口、agent 工具、磁盘解析共用）：只认合规的插件名 */
+export function parseAutomationPlugin(raw: unknown): AutomationPlugin | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const name = (raw as Record<string, unknown>)["name"];
+  return typeof name === "string" && isPluginName(name) ? { name } : null;
 }
 
 export interface Automation {
@@ -323,6 +341,8 @@ export interface Automation {
   thinkingLevel?: ThinkingLevel;
   /** new_session 才用；this_session 跟会话自己的档（这里留着，改投回为新会话时用） */
   mode: AutomationMode;
+  /** 选了插件：运行时提示词让 agent 用它、最后调 show_plugin_board（全局周看板据此出卡） */
+  plugin?: AutomationPlugin;
   status: AutomationStatus;
   endReason?: AutomationEndReason;
   createdBy: AutomationCreator;
@@ -428,6 +448,7 @@ export interface AutomationCreateInput {
   thinkingLevel?: ThinkingLevel;
   maxRuns?: number;
   until?: number;
+  plugin?: AutomationPlugin;
 }
 
 /** 编辑表单：只改给了的字段；maxRuns / until / 模型给 null = 清掉 */
@@ -441,6 +462,8 @@ export interface AutomationPatch {
   thinkingLevel?: ThinkingLevel | null;
   maxRuns?: number | null;
   until?: number | null;
+  /** 选插件；null = 不再用插件 */
+  plugin?: AutomationPlugin | null;
   /** 改去处：只有 agent 在对话里建的才能在「新开会话」与「投回原会话」之间切 */
   deliver?: "new_session" | "this_session";
 }
@@ -478,6 +501,8 @@ export type AutomationToolRequest =
       until?: number;
       target?: "this_session" | "new_session";
       model?: string;
+      /** 插件名：每次运行用它并在最后调 show_plugin_board */
+      plugin?: string;
     }
   | { op: "list" }
   | { op: "cancel"; automationId: string };
@@ -493,6 +518,8 @@ export interface AutomationCardView {
   runCount: number;
   maxRuns?: number;
   until?: number;
+  /** 选的插件名 */
+  plugin?: string;
 }
 
 export function automationCardOf(automation: Automation): AutomationCardView {
@@ -506,6 +533,7 @@ export function automationCardOf(automation: Automation): AutomationCardView {
     runCount: automation.runCount,
     ...(automation.maxRuns === undefined ? {} : { maxRuns: automation.maxRuns }),
     ...(automation.until === undefined ? {} : { until: automation.until }),
+    ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
   };
 }
 
@@ -523,6 +551,7 @@ export function parseAutomationCard(raw: unknown): AutomationCardView | null {
   if (target !== "this_session" && target !== "new_session") return null;
   const maxRuns = num(value["maxRuns"]);
   const until = num(value["until"]);
+  const plugin = value["plugin"];
   return {
     id,
     title,
@@ -533,6 +562,7 @@ export function parseAutomationCard(raw: unknown): AutomationCardView | null {
     runCount: Math.max(0, Math.floor(num(value["runCount"]) ?? 0)),
     ...(maxRuns !== null ? { maxRuns } : {}),
     ...(until !== null ? { until } : {}),
+    ...(typeof plugin === "string" && isPluginName(plugin) ? { plugin } : {}),
   };
 }
 
@@ -576,7 +606,15 @@ function parseRun(raw: unknown): AutomationRun | null {
     ...(repeat !== null && repeat > 1 ? { repeat: Math.floor(repeat) } : {}),
     ...(merged !== null && merged > 0 ? { merged: Math.floor(merged) } : {}),
     ...(typeof value["resultExcerpt"] === "string" ? { resultExcerpt: value["resultExcerpt"] } : {}),
+    ...boardSnapshotIdsOf(value["boardSnapshotIds"]),
   };
+}
+
+/** 运行记录里的快照 id：非空字符串数组，去重；没有 / 坏了就不带这个字段 */
+function boardSnapshotIdsOf(raw: unknown): { boardSnapshotIds?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const ids = [...new Set(raw.filter((id): id is string => typeof id === "string" && id !== ""))];
+  return ids.length === 0 ? {} : { boardSnapshotIds: ids };
 }
 
 function parseTarget(raw: unknown): AutomationTarget | null {
@@ -624,6 +662,7 @@ export function parseAutomation(raw: unknown): Automation | null {
   const thinking = value["thinkingLevel"];
   const lastResult = typeof value["lastResult"] === "string" ? value["lastResult"] : null;
   const endReason = value["endReason"];
+  const plugin = parseAutomationPlugin(value["plugin"]);
   const pendingRaw = value["pendingDelivery"];
   let pending: NonNullable<Automation["pendingDelivery"]> | null = null;
   if (typeof pendingRaw === "object" && pendingRaw !== null) {
@@ -646,6 +685,7 @@ export function parseAutomation(raw: unknown): Automation | null {
     ...(providerId !== null && modelId !== null ? { providerId, modelId } : {}),
     ...(isThinkingLevel(thinking) ? { thinkingLevel: thinking } : {}),
     mode,
+    ...(plugin === null ? {} : { plugin }),
     status: parsedStatus,
     ...(parsedStatus === "completed" && (END_REASONS as readonly unknown[]).includes(endReason)
       ? { endReason: endReason as AutomationEndReason }
