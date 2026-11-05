@@ -136,6 +136,24 @@ export function panelProblemText(t: T, problem: PluginPanelProblem): string {
       return t.problem.dataSensitive(detail);
     case "data-needs-workspace":
       return t.problem.dataNeedsWorkspace;
+    case "spec-escape":
+      return t.problem.specEscape(detail);
+    case "spec-missing":
+      return t.problem.specMissing(detail);
+    case "spec-unreadable":
+      return t.problem.specUnreadable(detail);
+    case "spec-too-large":
+      return t.problem.specTooLarge(formatBytes(Number(detail) || 0));
+    case "sample-escape":
+      return t.problem.sampleEscape(detail);
+    case "sample-missing":
+      return t.problem.sampleMissing(detail);
+    case "sample-unreadable":
+      return t.problem.sampleUnreadable(detail);
+    case "sample-too-large":
+      return t.problem.sampleTooLarge(formatBytes(Number(detail) || 0));
+    case "sample-invalid":
+      return t.problem.sampleInvalid(detail);
   }
 }
 

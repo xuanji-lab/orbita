@@ -20,7 +20,6 @@ import {
   type PluginPanelLoadRequest,
   type PluginPanelProblem,
   type PluginPanelSnapshot,
-  type PluginPanelTab,
   type PluginPanelUnavailable,
 } from "../../shared/plugin-panel.ts";
 import { parseUserConfig, readManifest } from "./manifest.ts";
@@ -97,23 +96,6 @@ export class PluginPanels {
     this.limiter = new ActionLimiter(PANEL_ACTIONS_MAX_PER_WINDOW, PANEL_ACTIONS_WINDOW_MS, this.now);
   }
 
-  // ---------- 右栏页签 ----------
-
-  /** 这个工作区里已启用、声明了面板且模板可解析的插件，各一个页签；没有就是空数组。 */
-  async tabs(workspaceId: string | null): Promise<PluginPanelTab[]> {
-    const records = (await this.plugins.records()).filter((record) => scopeApplies(record.scope, workspaceId));
-    const tabs: PluginPanelTab[] = [];
-    for (const record of records) {
-      const inspected = await this.inspect(record);
-      const spec = inspected.parse.spec;
-      if (spec === null) continue;
-      // 模板都找不到就不加死页签：原因在详情页「问题」里
-      if (!(await locatePanelTemplate(inspected.root, spec.template)).ok) continue;
-      tabs.push({ name: record.name, title: spec.title, displayName: inspected.displayName });
-    }
-    return tabs;
-  }
-
   // ---------- 载入 / 轮询 ----------
 
   async load(request: PluginPanelLoadRequest): Promise<PluginPanelSnapshot> {
@@ -141,7 +123,8 @@ export class PluginPanels {
       frameUrl = this.frames.register(template.html);
     }
     const data: PluginPanelData = await readPanelData(path.path);
-    return { kind: "ready", stamp, title: spec.title, frameUrl, data };
+    // usingSample / spec / problems：契约先到位，解析与读取在下一个提交接上
+    return { kind: "ready", stamp, title: spec.title, frameUrl, data, usingSample: false, spec: null, problems: [] };
   }
 
   /** 不可用的 stamp 也要稳定：同一原因同一问题连着轮询回 unchanged，不让 renderer 反复重画。 */
@@ -203,7 +186,7 @@ export class PluginPanels {
     const actions = { path: actionsFile, updatedAt: actionsInfo.updatedAt, count: actionsInfo.count };
     const spec = inspected.parse.spec;
     if (spec === null) {
-      return { title: "", template: "", dataRaw: "", dataPath: null, data: null, actions, problems: inspected.parse.problems, openable: false };
+      return { title: "", template: "", spec: "", sample: "", dataRaw: "", dataPath: null, data: null, actions, problems: inspected.parse.problems, openable: false };
     }
     const problems: PluginPanelProblem[] = [];
     const located = await locatePanelTemplate(inspected.root, spec.template);
@@ -226,6 +209,8 @@ export class PluginPanels {
     return {
       title: spec.title,
       template: spec.template,
+      spec: "",
+      sample: "",
       dataRaw: spec.data,
       dataPath: path.ok ? path.path : null,
       data,

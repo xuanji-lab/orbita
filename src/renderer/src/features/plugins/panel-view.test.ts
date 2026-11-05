@@ -153,13 +153,23 @@ describe("文案：每一种问题、每一种失败原因、两种语言都有�
     { kind: "data-config-missing", detail: "OUT_DIR" },
     { kind: "data-sensitive", detail: "TOKEN" },
     { kind: "data-needs-workspace", detail: "workspaceFolder" },
+    { kind: "spec-escape", detail: "../spec.md" },
+    { kind: "spec-missing", detail: "./nope.md" },
+    { kind: "spec-unreadable", detail: "EACCES" },
+    { kind: "spec-too-large", detail: "100000" },
+    { kind: "sample-escape", detail: "../sample.json" },
+    { kind: "sample-missing", detail: "./nope.json" },
+    { kind: "sample-unreadable", detail: "EACCES" },
+    { kind: "sample-too-large", detail: "3000000" },
+    { kind: "sample-invalid", detail: "Unexpected token" },
   ];
   for (const [name, messages] of [["en", en], ["zh", zh]] as const) {
     test(`${name}：解析问题带上路径 / 变量名 / 键名`, () => {
       for (const problem of problems) {
         const text = panelProblemText(messages.pluginPanel, problem);
         assert.ok(text.length > 8, `${problem.kind}: ${text}`);
-        if (problem.kind !== "shape" && problem.kind !== "data-needs-workspace" && problem.kind !== "template-too-large") {
+        const sizeOnly = ["template-too-large", "spec-too-large", "sample-too-large"];
+        if (problem.kind !== "shape" && problem.kind !== "data-needs-workspace" && !sizeOnly.includes(problem.kind)) {
           assert.ok(text.includes(problem.detail), `${problem.kind} 应带上 ${problem.detail}：${text}`);
         }
       }

@@ -22,7 +22,6 @@ import {
   type PanelTheme,
   type PluginPanelData,
   type PluginPanelDataProblem,
-  type PluginPanelTab,
 } from "@shared/plugin-panel";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
@@ -42,7 +41,7 @@ interface Toast {
   tone: "ok" | "warn";
 }
 
-export function PluginPanel(props: { tab: PluginPanelTab; workspaceId: string | null }) {
+export function PluginPanel(props: { tab: { name: string; title: string }; workspaceId: string | null }) {
   const t = useT().pluginPanel;
   const { tab } = props;
   const feed = usePanelFeed(tab.name, props.workspaceId);

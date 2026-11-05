@@ -18,7 +18,6 @@ import type {
   PluginPanelInfo,
   PluginPanelLoadRequest,
   PluginPanelSnapshot,
-  PluginPanelTab,
 } from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 
@@ -49,9 +48,6 @@ export const pluginApi = {
   reveal: (name: string): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReveal, name),
   /** 重新读目录，并让 MCP 连接按新配置重建 */
   reload: (): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReload),
-  /** 右栏页签：这个工作区（null = Home）里已启用、带面板的插件 */
-  panelTabs: (workspaceId: string | null): Promise<PluginPanelTab[]> =>
-    ipcRenderer.invoke(ipcChannels.pluginPanelTabs, workspaceId),
   /** 载入 / 轮询一个面板；stamp 没变回 unchanged */
   panelLoad: (request: PluginPanelLoadRequest): Promise<PluginPanelSnapshot> =>
     ipcRenderer.invoke(ipcChannels.pluginPanelLoad, request),

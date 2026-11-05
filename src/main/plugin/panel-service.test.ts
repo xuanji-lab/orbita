@@ -90,34 +90,6 @@ describe("夹具本身", () => {
   });
 });
 
-describe("tabs 右栏页签", () => {
-  test("已启用且带面板的插件各一个页签，标题用 panel.title", async () => {
-    assert.deepEqual(await panels.tabs("ws-1"), [{ name: "lit-tracker", title: "文献追踪", displayName: "文献追踪" }]);
-  });
-
-  test("范围：global 在 Home（null）也出现；workspaces 范围只在名单里的工作区出现；off 不出现", async () => {
-    assert.equal((await panels.tabs(null)).length, 1);
-    record = makeRecord({ kind: "workspaces", ids: ["ws-1"] });
-    assert.equal((await panels.tabs("ws-1")).length, 1);
-    assert.equal((await panels.tabs("ws-2")).length, 0);
-    assert.equal((await panels.tabs(null)).length, 0, "Home 会话没有 id，只有 global 覆盖它");
-    record = makeRecord({ kind: "off" });
-    assert.equal((await panels.tabs("ws-1")).length, 0);
-  });
-
-  test("没声明面板的插件不加页签；模板逃逸 / 不存在的也不加死页签", async () => {
-    await writeFile(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "lit-tracker", orbita: { workflow: [] } }));
-    assert.equal((await panels.tabs("ws-1")).length, 0);
-    for (const template of ["../escape.html", "/etc/hosts", "./missing.html"]) {
-      await writeFile(
-        join(root, ".claude-plugin", "plugin.json"),
-        JSON.stringify({ name: "lit-tracker", orbita: { panel: { title: "x", template, data: "${CLAUDE_PLUGIN_DATA}/p.json" } } }),
-      );
-      assert.equal((await panels.tabs("ws-1")).length, 0, template);
-    }
-  });
-});
-
 describe("load 载入与轮询", () => {
   test("数据文件不存在 = 空态；首次来（stamp null）给一个新 iframe 地址，模板就是夹具里的 HTML", async () => {
     const first = await loadReady();

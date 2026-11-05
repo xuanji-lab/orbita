@@ -23,7 +23,6 @@ import type {
   PluginPanelActionResult,
   PluginPanelInfo,
   PluginPanelSnapshot,
-  PluginPanelTab,
 } from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 import type { McpServer } from "../../shared/mcp.ts";
@@ -124,11 +123,6 @@ export function registerPluginIpc(deps: {
 
   // 面板：入参一律当不可信（renderer 被攻破时也不该能凭空读写别的插件 / 路径——这里只认插件名与工作区 id，
   // 路径从不由 renderer 给）
-  ipcMain.handle(
-    ipcChannels.pluginPanelTabs,
-    (_event, workspaceId: unknown): Promise<PluginPanelTab[]> => panels.tabs(optionalId(workspaceId, "workspaceId")),
-  );
-
   ipcMain.handle(ipcChannels.pluginPanelLoad, (_event, raw: unknown): Promise<PluginPanelSnapshot> => {
     const request = requireRecord(raw, "panel load request");
     return panels.load({

@@ -1,5 +1,5 @@
 /**
- * 插件面板的两个数据钩子：右栏页签（哪些插件在当前工作区带面板）与单个面板的轮询。
+ * 插件面板的两个数据钩子：单个面板的轮询与详情页「面板」「最近产出」的信息。
  *
  * 轮询而不是主进程推送：agent 写数据通常是临时文件加 rename，单文件的 fs.watch 在 rename 后会丢句柄；
  * 数据目录可能还不存在；Windows / 网络盘上 watch 的行为也不一。面板**可见**时每 1.5 秒问主进程一次，
@@ -12,7 +12,6 @@ import type {
   PluginPanelDataProblem,
   PluginPanelInfo,
   PluginPanelProblem,
-  PluginPanelTab,
   PluginPanelUnavailable,
 } from "@shared/plugin-panel";
 import { api } from "../../api";
@@ -99,43 +98,6 @@ export function usePanelFeed(name: string, workspaceId: string | null): PanelFee
     };
   }, [name, workspaceId]);
   return feed;
-}
-
-/**
- * 右栏页签：当前工作区里已启用、带面板的插件。`revision` 变了就重读（插件页关掉后范围可能改过）；
- * 窗口回到前台也读一次（agent 可能刚在对话里建好了插件）。`loadedFor` 是这份结果对应的工作区——
- * 切会话那一拍它与当前不等，调用方据此不把「还没读完」当成「没有这个面板」。
- */
-const NO_TABS: { tabs: PluginPanelTab[]; loadedFor: string | null | undefined } = { tabs: [], loadedFor: undefined };
-
-export function usePluginPanelTabs(
-  enabled: boolean,
-  workspaceId: string | null,
-  revision: unknown,
-): { tabs: PluginPanelTab[]; loadedFor: string | null | undefined } {
-  const [state, setState] = useState(NO_TABS);
-  useEffect(() => {
-    let cancelled = false;
-    if (!enabled) {
-      setState(NO_TABS);
-      return;
-    }
-    const load = (): void => {
-      api.plugin
-        .panelTabs(workspaceId)
-        .then((tabs) => {
-          if (!cancelled) setState({ tabs, loadedFor: workspaceId });
-        })
-        .catch((cause: unknown) => console.error("[plugin] 读面板页签失败", cause));
-    };
-    load();
-    window.addEventListener("focus", load);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", load);
-    };
-  }, [enabled, workspaceId, revision]);
-  return state;
 }
 
 /** 详情页「面板」「最近产出」的数据：打开时读一次，之后窗口可见时每 4 秒读一次（看得到刚点的反馈、刚写的数据）。 */

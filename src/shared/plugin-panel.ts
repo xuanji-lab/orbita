@@ -1,11 +1,17 @@
 /**
  * 插件面板契约 —— IPC 四层的第 1 层（面板这一半；插件本体的契约在 plugin.ts）。
  *
- * **面板 = 插件自带的一份 HTML 模板 + 一个 JSON 数据文件**，和用户商量好样子后显示在右栏、
- * 与对话并排。清单写法（`.claude-plugin/plugin.json` 顶层的 `orbita.panel`）：
+ * **面板 = 插件自带的一份 HTML 模板 + 一个 JSON 数据文件**，和用户商量好样子后显示在插件页里
+ * （插件详情的「面板」页签；做插件的过程中是「正在做」的草稿预览），与对话并排。
+ * 清单写法（`.claude-plugin/plugin.json` 顶层的 `orbita.panel`）：
  *
  *   "orbita": { "panel": { "title": "文献追踪", "template": "./panel/index.html",
- *                          "data": "${CLAUDE_PLUGIN_DATA}/panel.json" } }
+ *                          "data": "${CLAUDE_PLUGIN_DATA}/panel.json",
+ *                          "spec": "./panel/spec.md", "sample": "./panel/sample.json" } }
+ *
+ * `spec`（可选）：模板说明——显示哪些字段、怎么排、数据从哪来，给人看的短 markdown，由宿主渲染（不进 iframe）。
+ * `sample`（可选）：样例数据；`data` 文件不存在 / 为空时用它渲染，界面标「样例」。
+ * 两者的路径规则同 `template`（插件根内、拒逃逸）。
  *
  * **模板当不可信代码**（agent 生成，或第三方插件带来）：它在 `sandbox="allow-scripts"`（不给
  * allow-same-origin）的 iframe 里跑，页面由主进程经自定义协议 `orbita-panel://` 给出，CSP 走响应头
@@ -31,6 +37,8 @@ export const PANEL_PAYLOAD_MAX_BYTES = 16 * 1024;
 export const PANEL_DATA_MAX_BYTES = 2 * 1024 * 1024;
 /** 模板文件上限（里面可以内联字体 / 图片的 data URI，所以比数据宽松不了太多）。 */
 export const PANEL_TEMPLATE_MAX_BYTES = 1024 * 1024;
+/** 模板说明（spec）上限：它是给人看的短文，超了就是写错了地方。样例数据的上限同 PANEL_DATA_MAX_BYTES。 */
+export const PANEL_SPEC_MAX_BYTES = 64 * 1024;
 
 /** 动作日志：文件名、整份上限、限速（窗口内最多几条）。模板失控地狂发动作时挡住磁盘被写满。 */
 export const PANEL_ACTIONS_FILE = "actions.jsonl";
@@ -99,7 +107,15 @@ export type PluginPanelProblem =
   /** data 引用了敏感配置项：拒绝（路径会出现在界面与日志里） */
   | { kind: "data-sensitive"; detail: string }
   /** data 用了 `${workspaceFolder}`，而当前会话不在任何工作区里 */
-  | { kind: "data-needs-workspace"; detail: string };
+  | { kind: "data-needs-workspace"; detail: string }
+  /**
+   * `spec` / `sample` 的问题（不拦面板：面板照常出，缺的那块不出）。detail = 清单里写的原文路径，
+   * too-large 为字节数。escape = 路径逃出插件根；missing = 文件不存在；unreadable = 不是文件 / 读不出来。
+   */
+  | { kind: "spec-escape" | "spec-missing" | "spec-unreadable" | "spec-too-large"; detail: string }
+  | { kind: "sample-escape" | "sample-missing" | "sample-unreadable" | "sample-too-large"; detail: string }
+  /** 样例文件不是合法 JSON（detail = 解析器的话） */
+  | { kind: "sample-invalid"; detail: string };
 
 /** 数据文件读出来之后的问题（运行时，随文件变）。 */
 export type PluginPanelDataProblem =
@@ -107,14 +123,7 @@ export type PluginPanelDataProblem =
   | { kind: "invalid-json"; message: string }
   | { kind: "unreadable"; message: string };
 
-// ---------- IPC：右栏页签 / 载入 / 动作 / 详情 ----------
-
-/** 右栏要加的一个页签：插件名（后续请求的键）、面板标题、插件显示名（头像首字用）。 */
-export interface PluginPanelTab {
-  name: string;
-  title: string;
-  displayName: string;
-}
+// ---------- IPC：载入 / 草稿预览 / 动作 / 详情 ----------
 
 /** 数据文件的此刻内容：有值（附文件 mtime）、空（不存在 / 空文件）、或读不出来。 */
 export type PluginPanelData =
@@ -130,7 +139,28 @@ export interface PluginPanelLoadRequest {
   stamp: string | null;
 }
 
-export type PluginPanelUnavailable = "not-installed" | "not-enabled" | "no-panel" | "invalid";
+export type PluginPanelUnavailable =
+  | "not-installed"
+  | "not-enabled"
+  | "no-panel"
+  | "invalid"
+  /** 草稿预览专用：路径不存在 / 不是插件文件夹 */
+  | "not-found"
+  /** 草稿预览专用：路径不在该工作区根之内（或会话不在任何工作区里） */
+  | "outside-workspace";
+
+/**
+ * 草稿预览（还没安装的插件文件夹，`plugin:draft-load`）。入参一律当不可信：`path` 绝对或相对工作区根，
+ * 主进程校验它落在 `workspaceId` 对应的工作区根之内（词法 + realpath 两关），工作区外一律拒。
+ * 返回与 `plugin:panel-load` 同形的快照（含 `spec` / `usingSample`）；草稿没有「启用范围」，
+ * 所以不会出现 not-installed / not-enabled。
+ */
+export interface PluginDraftLoadRequest {
+  path: string;
+  /** 会话所在的工作区 id；Home 会话为 null（Home 没有工作区根，草稿一律拒） */
+  workspaceId: string | null;
+  stamp: string | null;
+}
 
 export type PluginPanelSnapshot =
   | { kind: "unchanged" }
@@ -145,6 +175,15 @@ export type PluginPanelSnapshot =
        */
       frameUrl: string | null;
       data: PluginPanelData;
+      /**
+       * `data` 是不是样例：数据文件不存在 / 为空、而清单给了 `sample` 且样例读得出来。界面据此标「样例」。
+       * 数据文件读不出来（坏 JSON / 超限）**不**退回样例——那是要让人看到的错误。
+       */
+      usingSample: boolean;
+      /** 清单里 `spec` 指的 markdown 原文；没写 / 读不出来为 null（读不出来的原因在 problems） */
+      spec: string | null;
+      /** 不拦面板的问题：spec / sample 读不出来之类 */
+      problems: PluginPanelProblem[];
     };
 
 export interface PluginPanelActionRequest {
@@ -169,6 +208,9 @@ export interface PluginPanelInfo {
   /** 清单里写的原文（解析失败时 title 为空串） */
   title: string;
   template: string;
+  /** `spec` / `sample` 在清单里写的原文；没写为空串 */
+  spec: string;
+  sample: string;
   dataRaw: string;
   /** 变量替换后的绝对路径；替换 / 校验失败为 null（原因在 problems） */
   dataPath: string | null;
@@ -184,7 +226,7 @@ export interface PluginPanelInfo {
   /** 动作日志：最后修改时间；条数（非空行，文件超 8 MB 不数为 null） */
   actions: { path: string; updatedAt: number | null; count: number | null };
   problems: PluginPanelProblem[];
-  /** 插件在当前工作区启用、面板可解析：「在右栏打开」才可点 */
+  /** 插件在当前工作区启用、面板可解析：详情页的「面板」页签才有东西可看 */
   openable: boolean;
 }
 
