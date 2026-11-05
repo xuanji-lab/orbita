@@ -1679,6 +1679,7 @@ export const zh: Messages = {
     copyMessage: "复制消息",
     copyAnswer: "复制回答",
     messageRenderFailed: "这条消息渲染失败：",
+    mermaidFailed: "这段 mermaid 没画出来：",
     responding: "回应中",
     thinking: "思考",
     compacted: "已压缩",

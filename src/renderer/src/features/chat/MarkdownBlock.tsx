@@ -15,6 +15,8 @@ import { Component, memo, useMemo, useContext } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import { MdPre } from "./CodeBlock";
+import { MermaidPendingContext } from "./MermaidBlock.tsx";
+import { endsInsideFence } from "./mermaid-render.ts";
 import { remarkDemoteBoundaryMath } from "./math-guard";
 import { rehypePluginsFor, streamRenderPolicy } from "./stream-render.ts";
 import { splitMarkdownBlocks } from "./markdown-blocks.ts";
@@ -74,17 +76,21 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
   /** bubble 变体摊平的标题元素（全量变体传 undefined） */
   disallowedElements?: string[];
   unwrapDisallowed?: boolean;
+  /** 流式尾块且围栏还没闭合：块里的 mermaid 先不画（MermaidBlock） */
+  fenceOpen: boolean;
 }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={props.remarkPlugins}
-      rehypePlugins={props.rehypePlugins}
-      components={props.components}
-      disallowedElements={props.disallowedElements}
-      unwrapDisallowed={props.unwrapDisallowed}
-    >
-      {props.text}
-    </ReactMarkdown>
+    <MermaidPendingContext.Provider value={props.fenceOpen}>
+      <ReactMarkdown
+        remarkPlugins={props.remarkPlugins}
+        rehypePlugins={props.rehypePlugins}
+        components={props.components}
+        disallowedElements={props.disallowedElements}
+        unwrapDisallowed={props.unwrapDisallowed}
+      >
+        {props.text}
+      </ReactMarkdown>
+    </MermaidPendingContext.Provider>
   );
 });
 
@@ -177,6 +183,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
               components={cheap ? plainComponents : highlightComponents}
               disallowedElements={bubble ? BUBBLE_BANNED : undefined}
               unwrapDisallowed={bubble}
+              fenceOpen={cheap && endsInsideFence(block)}
             />
           );
         })}
