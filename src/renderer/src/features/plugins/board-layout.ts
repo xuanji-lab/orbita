@@ -86,3 +86,37 @@ export function rowHeight(layout: BoardLayout): number {
 export function unitOf(layout: BoardLayout): { width: number; height: number } {
   return { width: Math.round(layout.cellWidth), height: Math.round(layout.cellHeight) };
 }
+
+/**
+ * 一组卡排好后整块网格的像素高（`grid-auto-flow: row dense` 的逐张放置：每张卡从第一行第一列起找第一个放得下的位置）。
+ * 会话里的看板离开视口后卸掉 iframe，占位用它算高度——和真实排版差不到 1px，对话滚动因此不跳。
+ */
+export function gridHeight(layout: BoardLayout, sizes: readonly BoardCardSize[]): number {
+  const occupied: boolean[][] = [];
+  let rows = 0;
+  for (const size of sizes) {
+    const span = placedSpan(layout, size);
+    let placed = false;
+    for (let row = 0; !placed; row += 1) {
+      for (let col = 0; col + span.cols <= layout.columns && !placed; col += 1) {
+        let free = true;
+        for (let r = row; r < row + span.rows && free; r += 1) {
+          for (let c = col; c < col + span.cols; c += 1) {
+            if (occupied[r]?.[c] === true) {
+              free = false;
+              break;
+            }
+          }
+        }
+        if (!free) continue;
+        for (let r = row; r < row + span.rows; r += 1) {
+          const line = (occupied[r] ??= []);
+          for (let c = col; c < col + span.cols; c += 1) line[c] = true;
+        }
+        rows = Math.max(rows, row + span.rows);
+        placed = true;
+      }
+    }
+  }
+  return rows === 0 ? 0 : rows * rowHeight(layout) + (rows - 1) * layout.gap;
+}
