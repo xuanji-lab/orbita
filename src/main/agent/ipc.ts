@@ -235,7 +235,7 @@ export function registerAgentIpc(
 
   /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
   const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;
-  /** 实验功能「插件」的开关同款每轮现读：开着才注册 install_plugin / list_plugins（关了就一个也不给模型） */
+  /** 实验功能「插件」的开关同款每轮现读：开着才注册 install_plugin / preview_plugin / list_plugins（关了就一个也不给模型） */
   const readPluginTools = async (): Promise<boolean> =>
     (await settings.read()).experimentalFeatures?.["plugins"] === true;
 

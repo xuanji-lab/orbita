@@ -20,8 +20,10 @@ import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
+import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
+import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
 import { gatedCommandTimeout } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
@@ -196,12 +198,21 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
  */
 const HANDOFF_TOOL_NAME = "request_user_action";
 
+/**
+ * install_plugin 同样独立成行、不进折叠：它留下的那一行（「已装上 X · [卸载]」或「装上 X　[安装] [看详情]」）
+ * 是要用户看见、可能要用户点的东西，折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等。
+ */
+const PLUGIN_INSTALL_TOOL_NAME = "install_plugin";
+
 // 故意不写成类型谓词（`entry is ToolCallUnit`）：只有「toolCall 且工具名在名单里」
 // 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
 // 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
 function isChannelToolCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME);
+  return (
+    entry.kind === "toolCall" &&
+    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME)
+  );
 }
 
 /**
@@ -272,6 +283,7 @@ export function groupToolUnits(
       !skillRead &&
       !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
       unit.toolName !== HANDOFF_TOOL_NAME &&
+      unit.toolName !== PLUGIN_INSTALL_TOOL_NAME &&
       !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
@@ -1172,6 +1184,14 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
   return { childId, title, modelId, workbench, thinkingLevel };
 }
 
+/**
+ * install_plugin 结果 `details.pluginInstall` 里「装上插件」那一行的数据（主进程写的，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对 / `already`（没有行）都为 null——调用方退回通用工具行。
+ */
+export function pluginInstallRowOf(result: ToolTranscriptItem | undefined): PluginInstallRow | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parsePluginInstallRow(result.details);
+}
 
 /** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
 export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "failed";

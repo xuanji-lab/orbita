@@ -8,6 +8,7 @@ import {
   filterPlugins,
   groupPlugins,
   initialOf,
+  installedNamesOf,
   creatorAvailable,
   isActive,
   isBuiltinView,
@@ -217,5 +218,19 @@ describe("toggleWorkspaceInScope", () => {
 
   test("从 global 起：勾一个就变成只在它", () => {
     assert.deepEqual(toggleWorkspaceInScope({ kind: "global" }, "a"), { kind: "workspaces", ids: ["a"] });
+  });
+});
+
+describe("installedNamesOf：对话里那一行靠它判断「已装上」", () => {
+  test("真插件（有安装记录）算；旧技能 / 旧 MCP / 没有安装记录的不算", () => {
+    const install = { source: { kind: "link" as const, path: "/p" }, root: "/p", dataDir: "/d", installedAt: 0, updatedAt: 0 };
+    const names = installedNamesOf([
+      view({ id: "plugin:lit", name: "lit", install }),
+      view({ id: "plugin:plugin-creator", name: "creator", install: { ...install, source: { kind: "builtin" } } }),
+      view({ id: "skill:pdf", name: "pdf", origin: "user-skill" }),
+      view({ id: "mcp:fs", name: "fs", origin: "user-mcp" }),
+      view({ id: "plugin:ghost", name: "ghost", install: null }),
+    ]);
+    assert.deepEqual([...names].sort(), ["lit", "plugin-creator"]);
   });
 });

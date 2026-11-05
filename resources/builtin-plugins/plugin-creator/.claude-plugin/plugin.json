@@ -1,17 +1,17 @@
 {
   "name": "plugin-creator",
   "displayName": "做插件",
-  "version": "0.1.0",
-  "description": "和智能体从头做一个 Orbita 插件：先问清要什么，主动找现成的技能和风格，搭骨架，试跑出真数据，出几个面板方向让你挑，最后装好。",
+  "version": "0.2.0",
+  "description": "和智能体一起做一个 Orbita 插件：先说需求，智能体主动找现成的，用一篇样例在右栏摆出第一版卡片，你一次改一处磨到满意，再写脚本、跑真数据；装之前只在对话里问你一句。",
   "author": { "name": "Orbita" },
   "orbita": {
     "workflow": [
-      { "title": "听你说要什么，写下意图和验收清单", "skill": "plugin-creator", "detail": "意图 / 验收清单 / 品味参照三层，写进 intent.md" },
-      { "title": "主动找现成的技能和插件", "skill": "find-existing", "detail": "你已有的、本机市场、skills.sh、GitHub，给 2–3 个候选，说明能复用什么" },
-      { "title": "在工作区搭好插件骨架", "skill": "plugin-creator", "detail": "plugin.json（含工作流）、skills/、scripts/", "output": "plugins/<名字>/" },
-      { "title": "写技能和脚本，真跑一次", "skill": "plugin-creator", "detail": "跑出的真实数据交给面板", "output": "data/panel.json" },
-      { "title": "出 2–3 个骨架不同的面板方向，你来挑", "skill": "panel-style", "detail": "挑中的留作面板，你的取舍原话记进 taste.md", "output": "panel/index.html" },
-      { "title": "弹确认卡，你点了才装", "skill": "plugin-creator", "detail": "install_plugin：链接安装，改了文件夹下一轮就生效" },
+      { "title": "听你说要什么，写下意图", "skill": "plugin-creator", "detail": "intent.md：意图、验收清单（参照）、品味参照" },
+      { "title": "主动找现成的技能和插件", "skill": "find-existing", "detail": "你已有的、本机市场、skills.sh、GitHub；只在要放弃你已有的、许可证受限、候选互斥时才停下来问你" },
+      { "title": "用一篇样例，在右栏摆出第一版卡片", "skill": "plugin-creator", "detail": "从你选过的风格出发；panel/sample.json、panel/index.html、panel/spec.md，右栏出现“正在做”", "output": "panel/" },
+      { "title": "和你磨卡片：一次改一处，定稿写进 taste.md", "skill": "panel-style", "detail": "改完告诉你改了哪、说明同步更新；你对整体风格不满意才出 2–3 个骨架不同的方向", "output": "taste.md" },
+      { "title": "卡片定稿后，才写技能和脚本，试跑，批量处理", "skill": "plugin-creator", "detail": "脚本产出的形状与样例一致，数据写进面板", "output": "data/panel.json" },
+      { "title": "装之前在对话里问你一句，同意才装", "skill": "plugin-creator", "detail": "低风险直接装并留一行“已装上”；带 MCP 的留一行“安装”等你点" },
       { "title": "问你要不要定时跑", "skill": "plugin-creator", "detail": "只是提议，不会替你建" }
     ]
   }

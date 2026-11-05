@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
-import { PluginInstallCard } from "../plugins/PluginInstallCard.tsx";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
@@ -26,6 +25,7 @@ import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
 import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
+import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
@@ -54,6 +54,7 @@ import {
   branchAnchorIds,
   answerText,
   delegateCard,
+  pluginInstallRowOf,
   handoffOutcome,
   editDiffText,
   failedFoldKey,
@@ -1538,11 +1539,6 @@ function ChatViewBody(props: {
             )}
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
-            )}
-            {/* 插件安装确认卡（实验功能 plugins，agent 的 install_plugin）：与审批条同位同配方，
-                用户点「安装」才装；这一轮停了卡随 idle 收起 */}
-            {session.pluginInstall !== null && (
-              <PluginInstallCard ask={session.pluginInstall} onAnswer={session.answerPluginInstall} />
             )}
             {/* 回答前确认（实验功能 intent-system）：与审批条同位同配方——比聊天面高
                 一层、要求一个回答才继续，但不霸屏、不抢焦点、不藏输入框。草稿不跨
@@ -3093,6 +3089,7 @@ function EntryView(props: {
         onOpenTask={props.onOpenTask}
         channel={props.channel}
         skills={props.skills}
+        sessionId={props.sessionId}
       />
     );
   }
@@ -4340,6 +4337,8 @@ function ToolLine(props: {
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 EntryView） */
   skills: SkillMeta[];
+  /** install_plugin 的那一行点「安装」要带会话（主进程按它重验工作区）；别的工具不传 */
+  sessionId?: string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -4386,6 +4385,12 @@ function ToolLine(props: {
     setOpen((value) => !value);
   };
 
+  // install_plugin：留下的是一行「已装上 X · [卸载]」或「装上 X　[安装] [看详情]」，不是「调用 + 摘要」。
+  // 失败 / 没有那一行（already）/ 还在跑照通用骨架走
+  if (props.toolName === "install_plugin") {
+    const row = pluginInstallRowOf(result);
+    if (row !== null) return <PluginInstallLine row={row} sessionId={props.sessionId ?? null} />;
+  }
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
   // 样式走（红色 triangle-alert + 可展开看错误），不能被派出卡/标记行的「成功

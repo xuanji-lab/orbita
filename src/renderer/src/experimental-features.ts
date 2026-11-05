@@ -237,16 +237,16 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         pr: null,
         date: "2026-11-05",
         note: {
-          zh: "和智能体一起做插件：内置「做插件」技能带你从说需求、主动找现成的、搭骨架、真跑一次，到挑面板方向；做好后智能体弹确认卡，你点「安装」才装。详情页新增「工作流」，点技能可只读查看。",
-          en: "Make plugins with the agent: the built-in plugin-creator takes you from describing what you want, through proactively finding existing skills, scaffolding and a real test run, to choosing a panel direction; the agent then shows a confirmation card and installs only after you press Install. The detail page gains a Workflow section; click a skill to read it (read-only).",
+          zh: "和智能体一起做插件，先定卡片再写脚本：内置「做插件」技能先听你说需求、主动找现成的（只在有真取舍时才停下问你），再用一篇样例在右栏摆出第一版卡片、和你一次改一处磨到定稿，之后才写脚本、跑真数据。装之前只在对话里问你一句：低风险的直接装并留一行「已装上」；带 MCP、范围是所有工作区或「逐个询问」档的留一行「安装」，不挂起、不拦路，什么时候点都行。详情页新增「工作流」，点技能可只读查看。",
+          en: "Make plugins with the agent — card first, scripts later: the built-in plugin-creator listens to what you want, proactively looks for existing skills (it only stops to ask when there is a real trade-off), puts a first version of the card next to the chat from one sample article, polishes it with you one change at a time, and only then writes scripts and runs real data. Before installing it asks you one sentence in the chat: low-risk plugins are installed right away with an “Installed” line; plugins with MCP, for all workspaces, or in Ask-every-time mode leave an “Install” line instead — nothing blocks, click whenever you like. The detail page gains a Workflow section; click a skill to read it (read-only).",
         },
       },
       {
         pr: null,
         date: "2026-11-05",
         note: {
-          zh: "首版：Claude Code 兼容的插件格式（技能与 MCP 可用，其余组件列为暂不支持）；复制 / 链接 / git 三种安装；重名技能拒装；卸载归档不删除；已装页与详情页。",
-          en: "First version: Claude Code compatible plugin format (skills and MCP load, other components are listed as unsupported); copy / link / git installs; duplicate skill names are refused; uninstall archives instead of deleting; installed list and detail pages.",
+          zh: "首版：Claude Code 兼容的插件格式（技能与 MCP 可用，其余组件列为暂不支持）；复制 / 链接 / git 三种安装；重名技能拒装；卸载归档不删除；已装页与详情页；右栏单列版与设置里的全屏版。",
+          en: "First version: Claude Code compatible plugin format (skills and MCP load, other components are listed as unsupported); copy / link / git installs; duplicate skill names are refused; uninstall archives instead of deleting; installed list and detail pages; a single-column right-panel version and a full-screen one in Settings.",
         },
       },
     ],

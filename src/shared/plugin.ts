@@ -341,26 +341,146 @@ export function parsePluginViewId(id: string): { origin: PluginOrigin; key: stri
   return null;
 }
 
-// ---------- agent 的 install_plugin / list_plugins ----------
+// ---------- agent 的 install_plugin / list_plugins / preview_plugin ----------
 
 /** agent 工具里的范围：只有两个字，「workspace」= 这条会话所在的工作区（主进程按会话归属解析）。 */
 export type PluginAgentScope = "workspace" | "global";
 
 /**
- * install_plugin 的结果（主进程 → agent 进程，形状即契约）。成功分两种：
- * 用户点了「安装」；或这个文件夹早已链接安装（`already`：没弹卡，改动下一轮自动生效，因为链接安装只记路径）。
+ * 对话里「装上插件」那一行的数据。**它是 install_plugin 工具结果的 `details.pluginInstall`**——
+ * 工具结果本来就随会话落盘，所以这一行重开会话、隔很久都在，不另开一种会话记录。
+ *
+ * 一行有两种来历：
+ * - `installed`：这次调用直接装上了（低风险：工作区内、链接安装、不带 MCP、范围是工作区、无冲突，
+ *   且会话不在 manual 档）；
+ * - `pending`：需要用户看一眼，工具已立即返回，装不装等用户点这一行的「安装」。`reason` 说为什么。
+ * 行上显示「已装上」还是「安装」**不看 state，看渲染时的已装列表**：用户后来卸载了、或在别处装了，
+ * 行都照实说（state 只是它被画出来时的样子）。
+ */
+export interface PluginInstallRow {
+  state: "installed" | "pending";
+  /** pending 的原因：带 MCP（会在本机启动程序）/ 范围是所有工作区 / manual 档（每个动作都要用户点头）；installed 为 null */
+  reason: "mcp" | "global" | "manual" | null;
+  /** 插件名（plugin.json 的 name；已装列表里按它找） */
+  name: string;
+  displayName: string;
+  /** 插件文件夹（已 realpath）。点「安装」时主进程会重新校验它仍在这条会话的工作区内 */
+  path: string;
+  scope: PluginAgentScope;
+  /** scope 为 workspace 时的工作区名（行上写「只在 XX」） */
+  workspaceName: string | null;
+  /** 技能 slug */
+  skills: string[];
+  /** 会在本机启动的完整命令行（每台 MCP 一条，敏感值已掩码）；空 = 不带 MCP */
+  commands: string[];
+  /**
+   * 用户看到的东西的指纹（名字 + 范围 + 技能 + MCP 命令行）。点「安装」时主进程重新读文件夹再算一遍，
+   * 对不上（用户看到这一行之后文件夹里的命令改了）就拒装，请用户让智能体重新提交。
+   */
+  fingerprint: string;
+}
+
+/** 工具结果的 details 里取出那一行；形状不对为 null（旧会话、别的工具、坏数据都当没有）。 */
+export function parsePluginInstallRow(details: unknown): PluginInstallRow | null {
+  if (typeof details !== "object" || details === null) return null;
+  const raw = (details as Record<string, unknown>)["pluginInstall"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const row = raw as Record<string, unknown>;
+  const strings = (value: unknown): string[] | null =>
+    Array.isArray(value) && value.every((item): item is string => typeof item === "string") ? value : null;
+  const state = row["state"];
+  const reason = row["reason"];
+  const scope = row["scope"];
+  const skills = strings(row["skills"]);
+  const commands = strings(row["commands"]);
+  if (state !== "installed" && state !== "pending") return null;
+  if (reason !== null && reason !== "mcp" && reason !== "global" && reason !== "manual") return null;
+  if (scope !== "workspace" && scope !== "global") return null;
+  if (skills === null || commands === null) return null;
+  const { name, displayName, path, fingerprint, workspaceName } = row;
+  if (typeof name !== "string" || name === "" || typeof displayName !== "string" || typeof path !== "string" || path === "") return null;
+  if (typeof fingerprint !== "string" || (workspaceName !== null && typeof workspaceName !== "string")) return null;
+  return { state, reason, name, displayName, path, scope, workspaceName, skills, commands, fingerprint };
+}
+
+/**
+ * install_plugin 的结果（主进程 → agent 进程，形状即契约）。**立即返回，不等用户**。成功三种：
+ * - `installed`：直接装上了（`row` 留在对话里）；
+ * - `pending`：需要用户看一眼，已在对话里留了带「安装」的一行，agent 应结束这一轮（`row` 同上）；
+ * - `already`：这个文件夹早已链接安装，没有新的一行，改动下一轮自动生效。
  * 失败的 `error` 原样成为工具失败原因给模型看，要写成它照着能改的话。
  */
 export type PluginAgentInstallOutcome =
   | {
       ok: true;
+      kind: "installed" | "already";
       name: string;
       scope: PluginAgentScope;
-      already: boolean;
       skills: string[];
       mcp: string[];
       /** `${CLAUDE_PLUGIN_DATA}`：插件的数据目录。面板上的动作（orbita:action）追加在这里的 actions.jsonl，插件自己的脚本下一轮去读它 */
       dataDir: string;
+      /** installed 时有；already 没有行 */
+      row: PluginInstallRow | null;
+    }
+  | { ok: true; kind: "pending"; name: string; scope: PluginAgentScope; skills: string[]; mcp: string[]; row: PluginInstallRow }
+  | { ok: false; error: string };
+
+/**
+ * 用户点对话里那一行的「安装」（renderer → 主进程）。主进程**不信这些字段**：会话、路径、范围逐项重验，
+ * 文件夹现读现算指纹，对得上才装。
+ */
+export interface PluginRowInstallRequest {
+  sessionId: string;
+  path: string;
+  scope: PluginAgentScope;
+  fingerprint: string;
+}
+
+/** 点「安装」的结局。`reason` 是稳定的代码，句子由界面按语言出；`detail` 是路径 / 系统错误原文这类语言中立的东西。 */
+export type PluginRowInstallResult =
+  | { ok: true; name: string }
+  | {
+      ok: false;
+      reason:
+        /** 实验功能被关了 */
+        | "disabled"
+        /** 会话不在了 */
+        | "no-session"
+        /** 文件夹不在了 / 不在这条会话的工作区内 / 不是插件 */
+        | "not-found"
+        /** 用户看到这一行之后，文件夹里会启动的命令（或技能、名字）变了 */
+        | "changed"
+        /** 清单有问题 / 重名冲突：detail 说是什么 */
+        | "invalid"
+        | "failed";
+      detail: string;
+    };
+
+/** preview_plugin 里一个面板文件的检查：清单 `orbita.panel` 写了它，文件在不在（路径在插件根内才算）。 */
+export interface PluginDraftFile {
+  key: "template" | "spec" | "sample" | "data";
+  /** 清单里写的路径（原样） */
+  path: string;
+  exists: boolean;
+}
+
+/**
+ * preview_plugin 的结果：只扫描、不安装。`issues` 是装之前要修的东西（agent 能照着改），
+ * 不是失败——草稿没做完时有 issues 很正常，右栏照样显示。
+ */
+export type PluginAgentPreviewOutcome =
+  | {
+      ok: true;
+      name: string;
+      /** 已转成真实路径的插件文件夹（右栏的「正在做」视图读它） */
+      path: string;
+      skills: string[];
+      workflow: string[];
+      panelFiles: PluginDraftFile[];
+      issues: string[];
+      /** 同名插件此刻已装上（草稿是在改一个已装的插件） */
+      installed: boolean;
     }
   | { ok: false; error: string };
 

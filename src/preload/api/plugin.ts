@@ -10,6 +10,8 @@ import type {
   PluginListResult,
   PluginPreviewRequest,
   PluginPreviewResult,
+  PluginRowInstallRequest,
+  PluginRowInstallResult,
   PluginScope,
   PluginSkillFile,
 } from "../../shared/plugin.ts";
@@ -50,6 +52,9 @@ export const pluginApi = {
   reveal: (name: string): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReveal, name),
   /** 重新读目录，并让 MCP 连接按新配置重建 */
   reload: (): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReload),
+  /** 对话里「装上插件」那一行的「安装」（agent 的 install_plugin 留的）：主进程重验会话 / 路径 / 指纹；结局以数据返回，不抛 */
+  installFromRow: (request: PluginRowInstallRequest): Promise<PluginRowInstallResult> =>
+    ipcRenderer.invoke(ipcChannels.pluginInstallFromRow, request),
   /** 一条插件技能的 SKILL.md 原文（只读查看） */
   skillFile: (name: string, slug: string): Promise<PluginSkillFile> => ipcRenderer.invoke(ipcChannels.pluginSkillFile, name, slug),
   /** 右栏页签：这个工作区（null = Home）里已启用、带面板的插件 */

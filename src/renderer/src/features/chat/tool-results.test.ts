@@ -30,6 +30,7 @@ import {
   parseDiffLines,
   parseEditDiff,
   parseGrepLine,
+  pluginInstallRowOf,
   readTaskCard,
   formatToolDuration,
   recordToolFrame,
@@ -392,6 +393,63 @@ describe("rollupToolKey（折叠统计行的统计词汇）", () => {
       entries.map((entry) => entry.kind),
       ["toolCall", "toolCall"],
     );
+  });
+});
+
+describe("install_plugin 留下的那一行", () => {
+  const ROW = {
+    state: "pending",
+    reason: "mcp",
+    name: "lit",
+    displayName: "文献追踪",
+    path: "/w/plugins/lit",
+    scope: "workspace",
+    workspaceName: "文献组",
+    skills: ["lit-scan"],
+    commands: ["node server.js"],
+    fingerprint: "f",
+  };
+  const installItem = (details: unknown, status: "complete" | "running" | "error" = "complete"): ToolTranscriptItem =>
+    ({
+      id: "item-i1",
+      role: "tool",
+      toolCallId: "i1",
+      toolName: "install_plugin",
+      input: {},
+      content: [],
+      details,
+      timestamp: 0,
+      status,
+      isError: status === "error",
+    }) as ToolTranscriptItem;
+
+  test("install_plugin 不成组——那一行要一直露在外面", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "i1", toolName: "install_plugin", input: {} }]),
+        toolItem({ toolCallId: "i1", toolName: "install_plugin" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "i2", toolName: "install_plugin", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
+  });
+
+  test("从 details.pluginInstall 取；落盘后 JSON 来回照样取得出", () => {
+    assert.deepEqual(pluginInstallRowOf(installItem({ pluginInstall: ROW })), ROW);
+    assert.deepEqual(pluginInstallRowOf(JSON.parse(JSON.stringify(installItem({ pluginInstall: ROW }))) as ToolTranscriptItem), ROW);
+  });
+
+  test("没有结果 / 还在跑 / 失败 / 没有行（already）/ 坏形状：都是 null，退回通用工具行", () => {
+    assert.equal(pluginInstallRowOf(undefined), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: ROW }, "running")), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: ROW }, "error")), null);
+    assert.equal(pluginInstallRowOf(installItem(undefined)), null);
+    assert.equal(pluginInstallRowOf(installItem({})), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, state: "maybe" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, scope: "everywhere" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, commands: "node" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, path: "" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, fingerprint: 3 } })), null);
   });
 });
 

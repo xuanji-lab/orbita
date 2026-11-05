@@ -10,6 +10,7 @@ import {
   isBrowserReadTool,
   isChannelTool,
   isSelfConfirmingTool,
+  PLUGIN_DRAFT_TOOL,
   SELF_CONFIRMING_TOOLS,
   USER_ACTION_TOOL,
   isReadOnlyTool,
@@ -198,7 +199,7 @@ describe("插件工具（实验功能 plugins）", () => {
     assert.deepEqual(decidePermission("skip", "list_plugins"), { behavior: "allow" });
   });
 
-  test("install_plugin 自带确认卡：manual 不再弹一次审批（卡片就是询问），skip 放行，plan 照拒", () => {
+  test("install_plugin 自带确认（对话里那一行）：manual 不再弹一次审批（那一行就是询问），skip 放行，plan 照拒", () => {
     assert.deepEqual(SELF_CONFIRMING_TOOLS, ["install_plugin"]);
     assert.equal(isSelfConfirmingTool("install_plugin"), true);
     assert.deepEqual(decidePermission("manual", "install_plugin"), { behavior: "allow" });
@@ -208,7 +209,14 @@ describe("插件工具（实验功能 plugins）", () => {
     if (plan.behavior === "deny") assert.match(plan.message, /install_plugin/);
   });
 
-  test("自带确认卡不是通用后门：名字相近的工具、create_skill 都照写操作过闸；不混进只读名单", () => {
+  test("preview_plugin 只扫描、让右栏显示草稿：三档一律放行（含 plan 与 manual）", () => {
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, PLUGIN_DRAFT_TOOL), { behavior: "allow" }, mode);
+    }
+    assert.equal(isReadOnlyTool(PLUGIN_DRAFT_TOOL), false);
+  });
+
+  test("自带确认不是通用后门：名字相近的工具、create_skill 都照写操作过闸；不混进只读名单", () => {
     assert.equal(isSelfConfirmingTool("install_plugins"), false);
     assert.equal(isReadOnlyTool("install_plugin"), false);
     assert.equal(decidePermission("manual", "create_skill").behavior, "ask");

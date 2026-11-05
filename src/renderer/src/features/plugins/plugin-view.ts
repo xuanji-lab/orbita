@@ -139,3 +139,12 @@ export function toggleWorkspaceInScope(scope: PluginScope, workspaceId: string):
 export function workspaceName(workspaces: readonly Workspace[], id: string): string {
   return workspaces.find((workspace) => workspace.id === id)?.name ?? id;
 }
+
+/** 已装的真插件名（plugin:<name> 的 name）。不含旧技能 / 旧 MCP——它们没有「装上」这回事。 */
+export function installedNamesOf(views: ReadonlyArray<{ id: string; origin: string; install: unknown }>): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const view of views) {
+    if (view.origin === "plugin" && view.install !== null && view.id.startsWith("plugin:")) found.add(view.id.slice("plugin:".length));
+  }
+  return found;
+}

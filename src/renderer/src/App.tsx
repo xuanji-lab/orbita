@@ -5,6 +5,7 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { pluginViewId } from "@shared/plugin";
 import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
@@ -967,7 +968,8 @@ export function App() {
   /**
    * 「和智能体一起做一个」（插件页）：在当前工作区（没有则 Home）新开一条任务，输入框预填一句引导，
    * 开头的 `/skill:plugin-creator` 点名内置的做插件技能（发送时由主进程展开成指令块）。
-   * 草稿写进新任务槽自己的键（startTaskWithDraft）；插件页盖在主槽上，先退场才看得到新任务。
+   * 草稿写进新任务槽自己的键（startTaskWithDraft）；从设置里的全屏版触发时设置页盖在主槽上，先退场才看得到新任务；
+   * 右栏版触发时右栏保持开着（按会话记忆，新任务槽自己的面板状态）。
    */
   const makePluginWithAgent = useCallback(() => {
     const workspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
@@ -982,6 +984,24 @@ export function App() {
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
   /** 「这条任务」头一行的在跑 / 等你：与侧栏状态饼同一个推导（runStateOf，含子会话），所以要 meta */
   const mainMeta = mainSessionId === null ? undefined : session.sessions.find((meta) => meta.id === mainSessionId);
+  /**
+   * agent 的 install_plugin 装上了插件、或用户点了对话里那一行的「安装」，而且是**正看着的这条会话**里装的：
+   * 右栏切到插件页并选中它。别的会话里装的不抢右栏（用户可能正在看别的）。`focus` 由 PluginsView 消费后清掉，
+   * 不然之后每次手动打开插件页都会又跳回这个插件。
+   */
+  const [pluginFocus, setPluginFocus] = useState<{ id: string; nonce: number } | null>(null);
+  const mainSessionIdRef = useRef(mainSessionId);
+  mainSessionIdRef.current = mainSessionId;
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "pluginsChanged" || event.installed === undefined) return;
+        if (event.installed.sessionId !== mainSessionIdRef.current) return;
+        setPluginFocus({ id: pluginViewId("plugin", event.installed.name), nonce: Date.now() });
+        setRightPanel("plugins");
+      }),
+    [],
+  );
 
   /**
    * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
@@ -1409,6 +1429,8 @@ export function App() {
                   currentWorkspaceId={session.workspaceId}
                   onMakeWithAgent={makePluginWithAgent}
                   onOpenPanel={(name) => handlePanel(pluginPanelKind(name))}
+                  focus={pluginFocus}
+                  onFocusConsumed={() => setPluginFocus(null)}
                 />
               ) : pluginPanelNameOf(shownPanel) !== null ? (
                 // 插件面板：模板在沙箱 iframe 里，宿主只收发数据与动作（features/plugins/PluginPanel.tsx）

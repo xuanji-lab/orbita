@@ -5,14 +5,12 @@
   "description": "__一句话：它做什么、给谁用、产出什么__",
   "author": { "name": "__作者__" },
   "orbita": {
-    "workflow": [
-      { "title": "__第一步，人话__", "skill": "__SKILL__", "detail": "__这步具体做什么，可省略__" },
-      { "title": "__产出写到哪__", "output": "data/panel.json" }
-    ],
     "panel": {
-      "title": "__面板页签标题__",
+      "title": "__面板标题__",
       "template": "./panel/index.html",
-      "data": "${CLAUDE_PLUGIN_ROOT}/data/panel.json"
+      "data": "${CLAUDE_PLUGIN_ROOT}/data/panel.json",
+      "spec": "./panel/spec.md",
+      "sample": "./panel/sample.json"
     }
   }
 }

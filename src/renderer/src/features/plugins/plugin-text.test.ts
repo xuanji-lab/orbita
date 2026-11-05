@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 import type { PluginConflict, PluginMcpProblem, PluginPreviewError, PluginProblem } from "../../../../shared/plugin.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
-import { conflictText, mcpProblemText, previewErrorText, problemText } from "./plugin-text.ts";
+import { conflictText, mcpProblemText, previewErrorText, problemText, rowFailureText, rowMode, rowReasonText, rowScopeText, rowSkillsText } from "./plugin-text.ts";
 
 const CONFLICTS: PluginConflict[] = [
   { kind: "skill-name", skill: "pdf", with: { origin: "user-skill", name: "pdf-mine" } },
@@ -54,5 +54,39 @@ describe("plugin-text", () => {
     const text = previewErrorText(en.plugins, { kind: "symlink-escape", paths: ["a", "b", "c", "d"] });
     assert.equal(text.includes("a, b, c"), true);
     assert.equal(text.includes(", d"), false);
+  });
+});
+
+describe("对话里「装上插件」那一行的文字", () => {
+  test("rowMode：此刻的已装列表说了算；没读到时按落盘时的样子；装上过又卸载了 = uninstalled", () => {
+    assert.equal(rowMode({ state: "pending" }, true), "installed");
+    assert.equal(rowMode({ state: "installed" }, true), "installed");
+    assert.equal(rowMode({ state: "pending" }, false), "pending");
+    assert.equal(rowMode({ state: "installed" }, false), "uninstalled");
+    assert.equal(rowMode({ state: "pending" }, undefined), "pending");
+    assert.equal(rowMode({ state: "installed" }, undefined), "installed");
+  });
+
+  test("技能数 / 范围 / 为什么没直接装：中英两张表都说得出，且带上名字", () => {
+    for (const table of [zh.plugins.row, en.plugins.row]) {
+      assert.notEqual(rowSkillsText(table, { skills: ["a", "b"] }), "");
+      assert.equal(rowSkillsText(table, { skills: [] }), "");
+      assert.equal(rowScopeText(table, { scope: "workspace", workspaceName: "文献组" }).includes("文献组"), true);
+      assert.equal(rowScopeText(table, { scope: "workspace", workspaceName: null }), "");
+      assert.notEqual(rowScopeText(table, { scope: "global", workspaceName: null }), "");
+      for (const reason of ["mcp", "global", "manual"] as const) assert.notEqual(rowReasonText(table, { reason }), "");
+      assert.equal(rowReasonText(table, { reason: null }), "");
+    }
+    assert.equal(rowSkillsText(zh.plugins.row, { skills: ["a", "b"] }), "2 个技能");
+    assert.equal(rowSkillsText(en.plugins.row, { skills: ["a"] }), "1 skill");
+  });
+
+  test("点「安装」没成的每个原因都有话说；invalid / failed 把细节带进去", () => {
+    const reasons = ["disabled", "no-session", "not-found", "changed", "invalid", "failed"] as const;
+    for (const table of [zh.plugins.row, en.plugins.row]) {
+      for (const reason of reasons) assert.notEqual(rowFailureText(table, reason, "DETAIL"), "");
+      assert.equal(rowFailureText(table, "invalid", "DETAIL").includes("DETAIL"), true);
+      assert.equal(rowFailureText(table, "failed", "DETAIL").includes("DETAIL"), true);
+    }
   });
 });

@@ -1,40 +1,55 @@
 /**
- * agent 的 install_plugin / list_plugins 在主进程的落地（实验功能 plugins）。
+ * agent 的 install_plugin / preview_plugin / list_plugins 在主进程的落地（实验功能 plugins）。
  *
  * **纯逻辑模块**（不 import electron；store 与会话查询都是注入的端口），可被 `node --test` 直接测——
- * main/index.ts 只做路由。流程（install）：
+ * main/index.ts 只做路由。**没有任何一个请求会等用户**（以前挂起等用户点确认卡、15 分钟超时，已删）。
  *
+ * install（立即回执）：
  *   1. 开关 / 会话归属 / 范围解析（`workspace` 落到这条会话所在工作区；没有工作区的会话只能用 global）；
  *   2. **路径只认这条会话的工作区或工作目录之内**（realpath 之后再比，符号链接指出去的不算）——
  *      agent 想把别处的文件夹装成插件，得先放进工作区；
  *   3. 预览（链接装法，**只读不写**）：读不出来 / 重名 / 清单有问题 / workflow 点名了不存在的技能，
- *      都在弹卡**之前**以清楚的错误回给模型——这些是它自己写错的东西，让它先改完再来打扰用户；
- *   4. 弹确认卡（pluginInstallAsk 事件挂到会话上），**等用户点**；点了「安装」才 `PluginStore.install`，
- *      拒绝 / 这一轮停了 / 超时都回清楚的错误。
+ *      都以清楚的错误回给模型——这些是它自己写错的东西，让它先改完再来；
+ *   4. 要不要让用户看一眼：带 MCP（会在本机启动程序）/ 范围是所有工作区 / manual 档（每个动作都要用户点头）
+ *      → **不装**，回 `pending`，对话里留一行带「安装」的行（`PluginInstallRow`，落在工具结果的 details 里
+ *      随会话落盘）；其余低风险 → 直接装，回 `installed`，留一行「已装上」。
  *
- * 已经链接安装过同一个文件夹的（agent 改完又装一次）不再弹卡：链接只记路径、开轮现读目录，改动已经生效。
+ * installFromRow：用户点那一行的「安装」。renderer 传来的会话 / 路径 / 范围一概不信，重走 1–3，
+ * 再重算指纹——用户看到那一行之后文件夹里会启动的命令变了就拒装（`changed`），不让「看到的」和「装上的」分叉。
+ *
+ * preview（立即回执）：同样的路径校验 + 只读扫描，不装；成功后送出 pluginDraft（右栏打开「正在做」视图）。
+ *
+ * 已经链接安装过同一个文件夹的（agent 改完又装一次）不新增一行：链接只记路径、开轮现读目录，改动已经生效。
  */
-import { realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import {
   scopeApplies,
   type PluginAgentInstallOutcome,
   type PluginAgentListItem,
   type PluginAgentListOutcome,
+  type PluginAgentPreviewOutcome,
   type PluginAgentScope,
   type PluginConflict,
+  type PluginDraftFile,
   type PluginInstallResult,
+  type PluginInstallRow,
   type PluginPreview,
   type PluginPreviewError,
   type PluginPreviewRequest,
   type PluginPreviewResult,
+  type PluginRowInstallRequest,
+  type PluginRowInstallResult,
   type PluginScope,
   type PluginView,
 } from "../../shared/plugin.ts";
+import type { PermissionMode } from "../../shared/permission.ts";
 import type { PluginRecord } from "./records.ts";
 
-export type PluginInstallAsk = Extract<AgentEvent, { type: "pluginInstallAsk" }>;
+/** 送到 renderer 的草稿事件（右栏的「正在做」视图靠它打开） */
+export type PluginDraftEvent = Extract<AgentEvent, { type: "pluginDraft" }>;
 
 /** PluginStore 里本模块要用的几个方法（测试注入假的）。 */
 export interface PluginStorePort {
@@ -54,38 +69,47 @@ export interface PluginAgentPorts {
   session: (sessionId: string) => Promise<{ cwd: string; workspaceId: string | null } | null>;
   /** 工作区 id → 名字与根目录；找不到（被删了）为 null */
   workspace: (id: string) => Promise<{ name: string; path: string } | null>;
-  /** 把确认卡送到 renderer */
-  ask: (event: PluginInstallAsk) => void;
-  /** 装好了（让技能选取面等刷新；renderer 还会把装它的那条会话的右栏切到它的面板） */
+  /** 草稿能看了：把 pluginDraft 送到 renderer */
+  draft: (event: PluginDraftEvent) => void;
+  /** 装好了（让技能选取面、插件页、对话里那一行刷新；正看着那条会话的窗口还会把右栏切到这个插件） */
   installed: (info: { name: string; sessionId: string }) => void;
 }
 
-interface Pending {
-  sessionId: string;
-  settle: (outcome: PluginAgentInstallOutcome) => void;
-  /** 用户点「安装」后要装的东西 */
-  request: { preview: PluginPreviewRequest; scope: PluginScope; agentScope: PluginAgentScope; preview_: PluginPreview };
+/** 通过了路径、预览、清单与冲突检查、可以装的东西（install 与 installFromRow 共用） */
+interface Prepared {
+  wanted: PluginAgentScope;
+  scope: PluginScope;
+  workspaceName: string | null;
+  path: string;
+  request: PluginPreviewRequest;
+  preview: PluginPreview;
+  /** 同一个文件夹早已链接装过 */
+  relinked: boolean;
 }
+
+/** message 是写给模型的话（照着能改）；detail 是语言中立的事实（给用户点「安装」失败时说原因，不含「再调 install_plugin」这类指令） */
+type PrepareFailure = { ok: false; kind: "disabled" | "no-session" | "not-found" | "invalid"; message: string; detail: string };
 
 export class PluginAgentRequests {
   private readonly ports: PluginAgentPorts;
-  private readonly pending = new Map<string, Pending>();
 
   constructor(ports: PluginAgentPorts) {
     this.ports = ports;
   }
 
-  async install(event: Extract<AgentEvent, { type: "pluginInstallRequest" }>): Promise<PluginAgentInstallOutcome> {
+  /** 开关 → 会话 → 范围 → 路径 → 预览 → 冲突与自己写错的东西。任何一步不过都以清楚的话回。 */
+  private async prepare(sessionId: string, rawPath: string, agentScope: PluginAgentScope | null): Promise<({ ok: true } & Prepared) | PrepareFailure> {
     const { ports } = this;
-    if (!(await ports.enabled())) return fail("The plugins feature is turned off in Orbita's experimental settings.");
-    const session = await ports.session(event.sessionId);
-    if (session === null) return fail("This session no longer exists.");
+    if (!(await ports.enabled())) return refuse("disabled", "The plugins feature is turned off in Orbita's experimental settings.");
+    const session = await ports.session(sessionId);
+    if (session === null) return refuse("no-session", "This session no longer exists.");
     const workspace = session.workspaceId === null ? null : await ports.workspace(session.workspaceId);
 
     // 范围：省略时工作区会话默认 workspace、没有工作区默认 global
-    const wanted: PluginAgentScope = event.scope ?? (workspace === null ? "global" : "workspace");
+    const wanted: PluginAgentScope = agentScope ?? (workspace === null ? "global" : "workspace");
     if (wanted === "workspace" && (session.workspaceId === null || workspace === null)) {
-      return fail(
+      return refuse(
+        "invalid",
         'This session does not belong to a workspace, so scope "workspace" has nowhere to apply. ' +
           'Use scope "global", or ask the user to move the session into a workspace first.',
       );
@@ -94,92 +118,124 @@ export class PluginAgentRequests {
       wanted === "global" || session.workspaceId === null ? { kind: "global" } : { kind: "workspaces", ids: [session.workspaceId] };
 
     // 路径：只认工作区根与会话工作目录之内
-    const roots = [...new Set([workspace?.path, session.cwd].filter((root): root is string => root !== undefined && root !== ""))];
-    const located = await locateInside(event.path, session.cwd, roots);
-    if (!located.ok) return fail(located.error);
+    const located = await locateInside(rawPath, session.cwd, rootsOf(workspace, session.cwd));
+    if (!located.ok) return refuse("not-found", located.error);
     const path = located.path;
 
     const request: PluginPreviewRequest = { source: { kind: "folder", path }, mode: "link" };
     const previewed = await ports.plugins.preview(request);
-    if (!previewed.ok) return fail(previewErrorMessage(previewed.error, path));
+    if (!previewed.ok) return refuse("not-found", previewErrorMessage(previewed.error, path));
     const preview = previewed.preview;
 
-    // 同一个文件夹已经链接装过：不重复弹卡，改动下一轮自动生效
-    const existing = (await ports.plugins.records()).find((record) => record.name === preview.name);
-    const relinked = existing !== undefined && existing.source.kind === "link" && sameFolder(existing.source.path, path);
+    // 同一个文件夹已经链接装过：不再新增一行，改动下一轮自动生效
+    const relinked = await this.isRelinked(preview.name, path);
     const conflicts = relinked ? preview.conflicts.filter((conflict) => !(conflict.kind === "plugin-exists" && conflict.name === preview.name)) : preview.conflicts;
-    if (conflicts.length > 0) return fail(`Cannot install "${preview.name}": ${conflicts.map(conflictMessage).join(" ")}`);
+    if (conflicts.length > 0) {
+      const detail = conflicts.map(conflictMessage).join(" ");
+      return refuse("invalid", `Cannot install "${preview.name}": ${detail}`, detail);
+    }
 
-    // 弹卡之前先拦下 agent 自己写错的东西
+    // 先拦下 agent 自己写错的东西
     const issues = [
       ...preview.problems.map((problem) => `${problem.kind}: ${problem.detail}`),
-      ...preview.workflow
-        .filter((step) => step.skill !== null && step.skillSlug === null)
-        .map((step) => `workflow step "${step.title}" names the skill "${step.skill}", which is not one of this plugin's skills (${preview.skills.map((skill) => skill.slug).join(", ") || "none"})`),
+      ...unresolvedWorkflow(preview),
     ];
     if (issues.length > 0) {
-      return fail(`The plugin folder has problems; fix them and call install_plugin again (the user has not been asked yet):\n- ${issues.join("\n- ")}`);
+      return refuse("invalid", `The plugin folder has problems; fix them and call install_plugin again:\n- ${issues.join("\n- ")}`, issues.join("; "));
     }
+    return { ok: true, wanted, scope, workspaceName: wanted === "workspace" ? (workspace?.name ?? null) : null, path, request, preview, relinked };
+  }
 
+  private async isRelinked(name: string, path: string): Promise<boolean> {
+    const existing = (await this.ports.plugins.records()).find((record) => record.name === name);
+    return existing !== undefined && existing.source.kind === "link" && sameFolder(existing.source.path, path);
+  }
+
+  /** 真装（链接）。成功广播刷新，失败回一句话。 */
+  private async doInstall(prepared: Prepared, sessionId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      const result = await this.ports.plugins.install({ preview: prepared.request, previewId: null, scope: prepared.scope });
+      if (!result.ok) return { ok: false, error: installErrorMessage(result.error) };
+    } catch (cause) {
+      return { ok: false, error: `Installing failed: ${cause instanceof Error ? cause.message : String(cause)}` };
+    }
+    this.ports.installed({ name: prepared.preview.name, sessionId });
+    return { ok: true };
+  }
+
+  async install(event: Extract<AgentEvent, { type: "pluginInstallRequest" }>): Promise<PluginAgentInstallOutcome> {
+    const prepared = await this.prepare(event.sessionId, event.path, event.scope);
+    if (!prepared.ok) return fail(prepared.message);
+    const { preview, wanted } = prepared;
     const skills = preview.skills.map((skill) => skill.slug);
     const mcp = preview.mcp.map((server) => server.name);
-    if (relinked) return { ok: true, name: preview.name, scope: wanted, already: true, skills, mcp, dataDir: ports.plugins.dataDirOf(preview.name) };
+    const dataDir = this.ports.plugins.dataDirOf(preview.name);
+    if (prepared.relinked) return { ok: true, kind: "already", name: preview.name, scope: wanted, skills, mcp, dataDir, row: null };
 
-    return new Promise<PluginAgentInstallOutcome>((settle) => {
-      this.pending.set(event.requestId, {
-        sessionId: event.sessionId,
-        settle,
-        request: { preview: request, scope, agentScope: wanted, preview_: preview },
-      });
-      ports.ask({
-        type: "pluginInstallAsk",
-        sessionId: event.sessionId,
-        requestId: event.requestId,
-        preview,
-        scope: wanted,
-        workspaceName: wanted === "workspace" ? (workspace?.name ?? null) : null,
-      });
-    });
+    const reason = needsLook(preview, wanted, event.mode);
+    if (reason !== null) {
+      // 不装，也不等：留一行带「安装」的行，让这一轮结束
+      return { ok: true, kind: "pending", name: preview.name, scope: wanted, skills, mcp, row: rowOf(prepared, "pending", reason) };
+    }
+    const installed = await this.doInstall(prepared, event.sessionId);
+    if (!installed.ok) return fail(installed.error);
+    return { ok: true, kind: "installed", name: preview.name, scope: wanted, skills, mcp, dataDir, row: rowOf(prepared, "installed", null) };
   }
 
-  /** 用户在确认卡上的应答。不认识的 requestId（这一轮停了、已经取消）静默。 */
-  async answer(requestId: string, approve: boolean): Promise<void> {
-    const pending = this.pending.get(requestId);
-    if (pending === undefined) return;
-    this.pending.delete(requestId);
-    if (!approve) {
-      pending.settle(fail("The user declined to install the plugin. Do not retry on your own: ask what they want changed."));
-      return;
+  /** 用户点了对话里那一行的「安装」。 */
+  async installFromRow(request: PluginRowInstallRequest): Promise<PluginRowInstallResult> {
+    const prepared = await this.prepare(request.sessionId, request.path, request.scope);
+    if (!prepared.ok) return { ok: false, reason: prepared.kind, detail: prepared.detail };
+    if (prepared.relinked) return { ok: true, name: prepared.preview.name };
+    if (fingerprintOf(prepared) !== request.fingerprint) {
+      return {
+        ok: false,
+        reason: "changed",
+        detail: "The plugin folder changed after this line was shown (its name, skills or the commands it starts are not what you were shown).",
+      };
     }
-    try {
-      const result = await this.ports.plugins.install({ preview: pending.request.preview, previewId: null, scope: pending.request.scope });
-      if (!result.ok) {
-        pending.settle(fail(installErrorMessage(result.error)));
-        return;
-      }
-      const { preview_: preview, agentScope } = pending.request;
-      this.ports.installed({ name: preview.name, sessionId: pending.sessionId });
-      pending.settle({
-        ok: true,
-        name: preview.name,
-        scope: agentScope,
-        already: false,
-        skills: preview.skills.map((skill) => skill.slug),
-        mcp: preview.mcp.map((server) => server.name),
-        dataDir: this.ports.plugins.dataDirOf(preview.name),
-      });
-    } catch (cause) {
-      pending.settle(fail(`Installing failed: ${cause instanceof Error ? cause.message : String(cause)}`));
-    }
+    const installed = await this.doInstall(prepared, request.sessionId);
+    if (!installed.ok) return { ok: false, reason: "failed", detail: installed.error };
+    return { ok: true, name: prepared.preview.name };
   }
 
-  /** 这条会话的一轮停了（完成 / 被停 / 出错）：没应答的卡按取消结掉。 */
-  cancelSession(sessionId: string): void {
-    for (const [requestId, pending] of [...this.pending]) {
-      if (pending.sessionId !== sessionId) continue;
-      this.pending.delete(requestId);
-      pending.settle(fail("The turn ended before the user answered the install card, so nothing was installed."));
-    }
+  /** preview_plugin：路径校验 + 只读扫描，不装；成功后让右栏打开「正在做」视图。 */
+  async previewDraft(event: Extract<AgentEvent, { type: "pluginPreviewRequest" }>): Promise<PluginAgentPreviewOutcome> {
+    const { ports } = this;
+    if (!(await ports.enabled())) return fail("The plugins feature is turned off in Orbita's experimental settings.");
+    const session = await ports.session(event.sessionId);
+    if (session === null) return fail("This session no longer exists.");
+    const workspace = session.workspaceId === null ? null : await ports.workspace(session.workspaceId);
+    const located = await locateInside(event.path, session.cwd, rootsOf(workspace, session.cwd));
+    if (!located.ok) return fail(located.error);
+    const path = located.path;
+
+    const previewed = await ports.plugins.preview({ source: { kind: "folder", path }, mode: "link" });
+    if (!previewed.ok) return fail(previewErrorMessage(previewed.error, path));
+    const preview = previewed.preview;
+    const relinked = await this.isRelinked(preview.name, path);
+    const installed = (await ports.plugins.records()).some((record) => record.name === preview.name);
+
+    const panelFiles = await draftPanelFiles(path, preview, ports.plugins.dataDirOf(preview.name));
+    const conflicts = relinked ? preview.conflicts.filter((conflict) => !(conflict.kind === "plugin-exists" && conflict.name === preview.name)) : preview.conflicts;
+    const issues = [
+      ...preview.problems.map((problem) => `${problem.kind}: ${problem.detail}`),
+      ...conflicts.map(conflictMessage),
+      ...unresolvedWorkflow(preview).map((line) => `${line} (fine for now if you have not written that skill yet; it must exist before install_plugin)`),
+      ...panelFiles.filter((file) => !file.exists && file.key !== "data").map((file) => `orbita.panel.${file.key} points at ${file.path}, which does not exist`),
+      ...(panelFiles.length === 0 ? ['plugin.json has no "orbita.panel" block, so the right pane has no panel to show yet'] : []),
+    ];
+    ports.draft({ type: "pluginDraft", sessionId: event.sessionId, path });
+    return {
+      ok: true,
+      name: preview.name,
+      path,
+      skills: preview.skills.map((skill) => skill.slug),
+      workflow: preview.workflow.map((step) => step.title),
+      panelFiles,
+      issues,
+      installed,
+    };
   }
 
   async list(event: Extract<AgentEvent, { type: "pluginListRequest" }>): Promise<PluginAgentListOutcome> {
@@ -206,6 +262,97 @@ export class PluginAgentRequests {
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
+}
+
+function refuse(kind: PrepareFailure["kind"], message: string, detail: string = message): PrepareFailure {
+  return { ok: false, kind, message, detail };
+}
+
+/** 路径只认这些根之内：会话所在工作区的根与会话工作目录。 */
+function rootsOf(workspace: { path: string } | null, cwd: string): string[] {
+  return [...new Set([workspace?.path, cwd].filter((root): root is string => root !== undefined && root !== ""))];
+}
+
+/** workflow 里点名了、却不是本插件技能的步骤（agent 自己写错的，装之前要改）。 */
+function unresolvedWorkflow(preview: PluginPreview): string[] {
+  return preview.workflow
+    .filter((step) => step.skill !== null && step.skillSlug === null)
+    .map(
+      (step) =>
+        `workflow step "${step.title}" names the skill "${step.skill}", which is not one of this plugin's skills (${preview.skills.map((skill) => skill.slug).join(", ") || "none"})`,
+    );
+}
+
+/**
+ * 这次安装要不要让用户先看一眼（要 = 不装，留一行带「安装」的行）。返回原因，null = 低风险可直装。
+ *
+ * 看一眼的有三种：带 MCP（会在本机启动程序，必须让用户看见完整命令）、范围是所有工作区（别的工作区也会加载这些技能）、
+ * 权限档不是 skip（manual = 每个动作都要用户点头；plan 本来就被权限层拒了，万一走到这里也按保守处理）。
+ * 多个原因同时成立时取最要紧的：mcp > global > manual。
+ */
+export function needsLook(preview: Pick<PluginPreview, "mcp">, scope: PluginAgentScope, mode: PermissionMode): PluginInstallRow["reason"] {
+  if (preview.mcp.length > 0) return "mcp";
+  if (scope === "global") return "global";
+  if (mode !== "skip") return "manual";
+  return null;
+}
+
+/** 用户看到的那一行的内容的指纹：名字 + 范围 + 技能 + MCP（名字与完整命令行）。点「安装」时对着现读的文件夹再算一遍。 */
+export function fingerprintOf(prepared: Pick<Prepared, "wanted" | "preview">): string {
+  const { preview, wanted } = prepared;
+  const payload = [
+    preview.name,
+    wanted,
+    preview.skills.map((skill) => skill.slug).sort(),
+    preview.mcp.map((server) => [server.name, server.commandLine]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  ];
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function rowOf(prepared: Prepared, state: PluginInstallRow["state"], reason: PluginInstallRow["reason"]): PluginInstallRow {
+  const { preview } = prepared;
+  return {
+    state,
+    reason,
+    name: preview.name,
+    displayName: preview.displayName,
+    path: prepared.path,
+    scope: prepared.wanted,
+    workspaceName: prepared.workspaceName,
+    skills: preview.skills.map((skill) => skill.slug),
+    commands: preview.mcp.map((server) => server.commandLine),
+    fingerprint: fingerprintOf(prepared),
+  };
+}
+
+/**
+ * 清单 `orbita.panel` 里写的几个文件，各自在不在。没写 panel 块返回空数组。
+ * 只读原始清单里的这几个键（面板的完整解析在面板那条线上）；template / spec / sample 必须在插件根内才算在，
+ * data 允许落在插件数据目录（`${CLAUDE_PLUGIN_DATA}`），不在也正常（脚本还没跑）。
+ */
+export async function draftPanelFiles(root: string, preview: Pick<PluginPreview, "manifestFile">, dataDir: string): Promise<PluginDraftFile[]> {
+  if (preview.manifestFile === null) return [];
+  let panel: unknown;
+  try {
+    const manifest: unknown = JSON.parse(await readFile(join(root, ...preview.manifestFile.split("/")), "utf8"));
+    const orbita = typeof manifest === "object" && manifest !== null ? (manifest as Record<string, unknown>)["orbita"] : undefined;
+    panel = typeof orbita === "object" && orbita !== null ? (orbita as Record<string, unknown>)["panel"] : undefined;
+  } catch {
+    return [];
+  }
+  if (typeof panel !== "object" || panel === null) return [];
+  const entries = panel as Record<string, unknown>;
+  const files: PluginDraftFile[] = [];
+  for (const key of ["template", "spec", "sample", "data"] as const) {
+    const written = entries[key];
+    if (typeof written !== "string" || written === "") continue;
+    const absolute = resolve(root, written.replaceAll("${CLAUDE_PLUGIN_ROOT}", root).replaceAll("${CLAUDE_PLUGIN_DATA}", dataDir));
+    const inside = relative(root, absolute);
+    const allowed = key === "data" || (!inside.startsWith("..") && !isAbsolute(inside));
+    const exists = allowed && (await stat(absolute).then((info) => info.isFile(), () => false));
+    files.push({ key, path: written, exists });
+  }
+  return files;
 }
 
 type Located = { ok: true; path: string } | { ok: false; error: string };
