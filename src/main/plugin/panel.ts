@@ -171,8 +171,6 @@ export async function resolveDataPath(raw: string, context: PanelPathContext): P
 export type PanelFileResult =
   | { ok: true; abs: string; /** mtime:size */ stamp: string }
   | { ok: false; problem: PluginPanelProblem };
-/** 保留旧名：模板与另外两个辅助文件走同一条定位规则，返回形状一样 */
-export type PanelTemplateResult = PanelFileResult;
 
 /** 三种看板文件各自的问题分类与大小上限。 */
 const FILE_KINDS = {
@@ -226,11 +224,6 @@ export async function locatePanelFile(root: string, raw: string, field: PanelFil
   } catch (error) {
     return { ok: false, problem: fileProblem(kinds.unreadable, `${raw}: ${errorText(error)}`) };
   }
-}
-
-/** 模板路径解析（同 locatePanelFile 的 template 档）。 */
-export function locatePanelTemplate(root: string, raw: string): Promise<PanelTemplateResult> {
-  return locatePanelFile(root, raw, "template");
 }
 
 /** 模板说明：读成文本（去 BOM）。定位已经判过大小，这里只读。 */

@@ -11,7 +11,6 @@ import {
   draftIdentity,
   expandRepeat,
   locatePanelFile,
-  locatePanelTemplate,
   readPanelData,
   readPanelSample,
   readPanelSpec,
@@ -157,11 +156,11 @@ describe("resolveDataPath 只许读允许的目录", () => {
   });
 });
 
-describe("locatePanelTemplate", () => {
+describe("locatePanelFile：template", () => {
   test("正常：给绝对路径与 stamp", async () => {
     await mkdir(join(root, "panel"));
     await writeFile(join(root, "panel", "index.html"), "<p>hi</p>");
-    const result = await locatePanelTemplate(root, "./panel/index.html");
+    const result = await locatePanelFile(root, "./panel/index.html", "template");
     assert.equal(result.ok, true);
     if (result.ok) assert.equal(result.abs, join(root, "panel", "index.html"));
   });
@@ -173,7 +172,7 @@ describe("locatePanelTemplate", () => {
     await writeFile(join(root, "big.html"), "x".repeat(PANEL_TEMPLATE_MAX_BYTES + 1));
     const kinds: Record<string, string> = {};
     for (const raw of ["../outside.html", "/etc/hosts", "link.html", "nope.html", "d", "big.html"]) {
-      const result = await locatePanelTemplate(root, raw);
+      const result = await locatePanelFile(root, raw, "template");
       kinds[raw] = result.ok ? "ok" : result.problem.kind;
     }
     assert.deepEqual(kinds, {
