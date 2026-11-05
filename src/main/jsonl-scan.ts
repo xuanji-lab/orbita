@@ -34,26 +34,30 @@ export function timeSlicer(sliceMs = 8): () => Promise<void> {
 
 /**
  * 逐行扫一个文件。`keep(head)` 拿行首（至多 HEAD_BYTES 字节解码出的文本，可能截在多字节字符中间）
- * 判断要不要；要的整行解码后交给 `onLine`。行的切法与 `text.split("\n")` 一致（含最后一行无换行）。
+ * 判断要不要；要的整行解码后交给 `onLine`，连同该行的字节区间 `[start, end)`
+ * （不含换行符）——需要按区间回读的调用方（分页的尾窗回读）用它定位，不必再扫一遍。
+ * 行的切法与 `text.split("\n")` 一致（含最后一行无换行）。
  * 读失败（不存在 / 权限 / 中途出错）原样抛出，由调用方决定怎么兜底。
  */
 export async function scanJsonlLines(
   path: string,
   keep: (head: string) => boolean,
-  onLine: (line: string) => void,
+  onLine: (line: string, start: number, end: number) => void,
   yieldSlice: () => Promise<void> = timeSlicer(),
 ): Promise<void> {
   const line = new LineState(keep, onLine);
   const stream = createReadStream(path, { highWaterMark: 256 * 1024 });
+  let consumed = 0; // 已流过的文件字节数（含正在处理的这个块之前的所有块）
   for await (const chunk of stream as AsyncIterable<Buffer>) {
     let start = 0;
     while (start < chunk.length) {
       const nl = chunk.indexOf(NEWLINE, start);
-      line.append(chunk, start, nl === -1 ? chunk.length : nl);
+      line.append(chunk, start, nl === -1 ? chunk.length : nl, consumed + start);
       if (nl === -1) break;
       line.finish();
       start = nl + 1;
     }
+    consumed += chunk.length;
     await yieldSlice();
   }
   line.finish();
@@ -62,18 +66,21 @@ export async function scanJsonlLines(
 /** 正在切的那一行：攒字节、到行首窗口就做决定、换行时交出 */
 class LineState {
   private readonly keep: (head: string) => boolean;
-  private readonly onLine: (line: string) => void;
+  private readonly onLine: (line: string, start: number, end: number) => void;
   /** 还没决定 / 要 / 不要 */
   private state: "pending" | "keep" | "skip" = "pending";
   private parts: Buffer[] = [];
   private length = 0;
+  /** 行首在文件里的字节偏移（第一个片段到达时记下） */
+  private lineStart = 0;
 
-  constructor(keep: (head: string) => boolean, onLine: (line: string) => void) {
+  constructor(keep: (head: string) => boolean, onLine: (line: string, start: number, end: number) => void) {
     this.keep = keep;
     this.onLine = onLine;
   }
 
-  append(chunk: Buffer, start: number, end: number): void {
+  append(chunk: Buffer, start: number, end: number, offset: number): void {
+    if (this.length === 0) this.lineStart = offset;
     if (this.state === "skip" || end <= start) return;
     // subarray 不拷贝；被留下的行最后 concat 一次
     this.parts.push(chunk.subarray(start, end));
@@ -84,7 +91,13 @@ class LineState {
   /** 一行结束（遇到换行或文件尾）：要的交出去，然后复位。空行不交（与 split 后跳空行一致） */
   finish(): void {
     if (this.state === "pending" && this.length > 0) this.decide();
-    if (this.state === "keep") this.onLine(Buffer.concat(this.parts, this.length).toString("utf8"));
+    if (this.state === "keep") {
+      this.onLine(
+        Buffer.concat(this.parts, this.length).toString("utf8"),
+        this.lineStart,
+        this.lineStart + this.length,
+      );
+    }
     this.parts = [];
     this.length = 0;
     this.state = "pending";
