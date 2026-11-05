@@ -103,10 +103,19 @@ export class AgentHostCore {
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
   private ensure(): Promise<void> {
     if (this.ready) return this.ready;
+    let child: AgentChild;
+    try {
+      child = this.forkRuntime();
+    } catch (error) {
+      // Windows 上 utilityProcess.fork 会同步抛 ENOTCONN（terminal/service.ts 同款老毛病）。
+      // 这里的关键是不把 rejected promise 存进 ready——存了它就永远返回同一个拒绝，
+      // agent 再也起不来，用户只能重启 Orbita。把错误交给这一次的调用方，ready 保持空，
+      // 下一次请求自然重新拉起。不做冷却重试：那要把 fork 与事件接线抽成两步改 ensure 的
+      // 结构，而「失败一次、下一次请求重试」已够用（ENOTCONN 偶发，代价只是一轮报错）。
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    this.child = child;
     this.ready = new Promise<void>((resolve, reject) => {
-      const child = this.forkRuntime();
-      this.child = child;
-
       child.on("message", (message: AgentEvent) => {
         if (message.type === "ready") {
           resolve();
