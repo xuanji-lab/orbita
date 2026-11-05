@@ -7,7 +7,9 @@ import {
   filterPlugins,
   groupPlugins,
   initialOf,
+  creatorAvailable,
   isActive,
+  isBuiltinView,
   legacyCounts,
   sourceKey,
   toggleTarget,
@@ -28,6 +30,7 @@ function view(over: Partial<PluginView> & { id: string; name: string }): PluginV
     placement: { kind: "global" },
     contents: { skills: 1, mcp: 0, scripts: false },
     skills: [],
+    workflow: [],
     mcp: [],
     unsupported: [],
     config: [],
@@ -133,6 +136,19 @@ describe("contentsParts / sourceKey / legacyCounts / initialOf", () => {
     assert.equal(sourceKey(view({ id: "a", name: "a", install: install("link") })), "link");
     assert.equal(sourceKey(view({ id: "a", name: "a", install: install("git") })), "git");
     assert.equal(sourceKey(view({ id: "a", name: "a", install: install("copy") })), "copy");
+    const builtin = view({ id: "plugin:plugin-creator", name: "p", install: { source: { kind: "builtin" }, root: "/r", dataDir: "/d", installedAt: 0, updatedAt: 0 } });
+    assert.equal(sourceKey(builtin), "builtin");
+    assert.equal(isBuiltinView(builtin), true);
+    assert.equal(isBuiltinView(view({ id: "a", name: "a", install: install("link") })), false);
+  });
+
+  test("「和智能体一起做一个」：plugin-creator 被停用才点不得；没列到（加载中 / 没带资源）不拦", () => {
+    const creator = (scope: PluginView["scope"]) => view({ id: "plugin:plugin-creator", name: "plugin-creator", scope });
+    assert.equal(creatorAvailable([creator({ kind: "global" })]), true);
+    assert.equal(creatorAvailable([creator({ kind: "workspaces", ids: ["a"] })]), true);
+    assert.equal(creatorAvailable([creator({ kind: "off" })]), false);
+    assert.equal(creatorAvailable([view({ id: "plugin:other", name: "other" })]), true);
+    assert.equal(creatorAvailable([]), true);
   });
 
   test("页首提示的数", () => {

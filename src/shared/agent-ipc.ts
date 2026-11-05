@@ -31,6 +31,7 @@ import type {
 import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
+import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentScope, PluginPreview } from "./plugin.ts";
 import type { IntentRecallRecord } from "./session.ts";
 import type {
   MemoryBackfillProgress,
@@ -60,6 +61,11 @@ export const ipcChannels = {
   agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
+  /**
+   * 插件安装确认卡的应答（实验功能 plugins）：载荷 requestId + 是否安装，回 void。
+   * 卡片是 agent 的 install_plugin 触发的（pluginInstallAsk 事件），应答后主进程才真装并给 agent 回执。
+   */
+  agentAnswerPluginInstall: "agent:answer-plugin-install",
   /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
@@ -386,6 +392,8 @@ export const ipcChannels = {
   pluginReveal: "plugin:reveal",
   /** 重新读目录（改了源文件夹、清单后）并让 MCP 连接按新配置重建 */
   pluginReload: "plugin:reload",
+  /** 读一条插件技能的 SKILL.md 原文（详情页「工作流」里点技能只读查看；入参插件名 + 技能 slug） */
+  pluginSkillFile: "plugin:skill-file",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
@@ -779,6 +787,11 @@ export type AgentCommand =
        */
       pdfCitations?: boolean;
       /**
+       * 实验功能「插件」的开关（settings.experimentalFeatures.plugins）。**主进程从设置装配**
+       * （同 pdfCitations）：开着时 runtime 才注册 install_plugin / list_plugins；缺席 = 关
+       */
+      pluginTools?: boolean;
+      /**
        * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
        * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
        * 一致的路径（不调 recall、不发卡片事件）。
@@ -908,6 +921,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 实验功能「插件」的开关，语义同 submit */
+      pluginTools?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
@@ -973,6 +988,8 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 实验功能「插件」的开关，语义同 submit */
+      pluginTools?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -1011,6 +1028,10 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /** 插件（实验功能 plugins）：主进程对 pluginInstallRequest 的回执（用户点了「安装」或拒绝 / 出错后才回；ok 双分支） */
+  | ({ type: "pluginInstallResult"; requestId: string } & PluginAgentInstallOutcome)
+  /** 插件：主进程对 pluginListRequest 的回执 */
+  | ({ type: "pluginListResult"; requestId: string } & PluginAgentListOutcome)
   /**
    * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
    * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
@@ -1203,6 +1224,34 @@ export type AgentEvent =
       requestId: string;
       name: string;
       server: McpServer;
+    }
+  /**
+   * 插件（实验功能 plugins）：agent 工具 install_plugin 的请求。**预览与安装都在主进程**
+   * （PluginStore）：主进程校验路径（必须在这条会话的工作区 / 工作目录之内）、读出它带了什么，
+   * 通过 pluginInstallAsk 在对话里弹确认卡，用户点了「安装」才装，回 pluginInstallResult。
+   * scope 的 workspace 一侧由主进程按会话归属解析（agent 不知道 workspaceId，同 skillWriteRequest）。
+   */
+  | { type: "pluginInstallRequest"; requestId: string; sessionId: string; path: string; scope: PluginAgentScope | null }
+  /**
+   * 已装的插件变了（agent 的 install_plugin 装好了一个；主进程 → renderer，不进 agent 进程、不落盘）。
+   * 插件页与右栏面板页签听它重读插件列表——不然得等窗口重新获得焦点或开关一次插件页才看得到新插件。
+   */
+  | { type: "pluginsChanged" }
+  /** 插件：agent 工具 list_plugins 的读请求（回 pluginListResult） */
+  | { type: "pluginListRequest"; requestId: string; sessionId: string }
+  /**
+   * 插件安装确认卡（主进程 → renderer，不进 agent 进程、不落盘）：挂在 `sessionId` 的会话上，
+   * 浮在输入框上方，用户应答走 agentAnswerPluginInstall。这一轮停了（idle）卡片随之收起，
+   * 主进程那头同时把没应答的按取消结掉。
+   */
+  | {
+      type: "pluginInstallAsk";
+      sessionId: string;
+      requestId: string;
+      preview: PluginPreview;
+      scope: PluginAgentScope;
+      /** scope 为 workspace 时的工作区名字（卡片上写「只在 XX 启用」） */
+      workspaceName: string | null;
     }
   /**
    * B-1：agent 工具 read_task 的读盘请求。**读在主进程**（agent 进程不碰

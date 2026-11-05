@@ -1,0 +1,18 @@
+{
+  "name": "plugin-creator",
+  "displayName": "做插件",
+  "version": "0.1.0",
+  "description": "和智能体从头做一个 Orbita 插件：先问清要什么，主动找现成的技能和风格，搭骨架，试跑出真数据，出几个面板方向让你挑，最后装好。",
+  "author": { "name": "Orbita" },
+  "orbita": {
+    "workflow": [
+      { "title": "听你说要什么，写下意图和验收清单", "skill": "plugin-creator", "detail": "意图 / 验收清单 / 品味参照三层，写进 intent.md" },
+      { "title": "主动找现成的技能和插件", "skill": "find-existing", "detail": "你已有的、本机市场、skills.sh、GitHub，给 2–3 个候选，说明能复用什么" },
+      { "title": "在工作区搭好插件骨架", "skill": "plugin-creator", "detail": "plugin.json（含工作流）、skills/、scripts/", "output": "plugins/<名字>/" },
+      { "title": "写技能和脚本，真跑一次", "skill": "plugin-creator", "detail": "跑出的真实数据交给面板", "output": "data/panel.json" },
+      { "title": "出 2–3 个骨架不同的面板方向，你来挑", "skill": "panel-style", "detail": "挑中的留作面板，你的取舍原话记进 taste.md", "output": "panel/index.html" },
+      { "title": "弹确认卡，你点了才装", "skill": "plugin-creator", "detail": "install_plugin：链接安装，改了文件夹下一轮就生效" },
+      { "title": "问你要不要定时跑", "skill": "plugin-creator", "detail": "只是提议，不会替你建" }
+    ]
+  }
+}

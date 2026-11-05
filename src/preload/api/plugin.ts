@@ -11,6 +11,7 @@ import type {
   PluginPreviewRequest,
   PluginPreviewResult,
   PluginScope,
+  PluginSkillFile,
 } from "../../shared/plugin.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 
@@ -41,4 +42,6 @@ export const pluginApi = {
   reveal: (name: string): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReveal, name),
   /** 重新读目录，并让 MCP 连接按新配置重建 */
   reload: (): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReload),
+  /** 一条插件技能的 SKILL.md 原文（只读查看） */
+  skillFile: (name: string, slug: string): Promise<PluginSkillFile> => ipcRenderer.invoke(ipcChannels.pluginSkillFile, name, slug),
 } as const;

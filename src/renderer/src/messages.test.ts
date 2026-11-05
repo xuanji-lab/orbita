@@ -31,6 +31,8 @@ const ALLOWED_LATIN = new Set([
   "git",
   "ssh",
   "WebSocket",
+  // 内置技能名（插件页「和智能体一起做一个」预填的 /skill: 点名，照写的字面量）
+  "plugin-creator",
   // SKILL.md 头里的字段名（冲突提示让用户改的就是它们，要照写的字面量）
   "name",
   "description",

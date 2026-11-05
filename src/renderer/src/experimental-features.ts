@@ -191,6 +191,14 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         pr: null,
         date: "2026-11-05",
         note: {
+          zh: "和智能体一起做插件：内置「做插件」技能带你从说需求、主动找现成的、搭骨架、真跑一次，到挑面板方向；做好后智能体弹确认卡，你点「安装」才装。详情页新增「工作流」，点技能可只读查看。",
+          en: "Make plugins with the agent: the built-in plugin-creator takes you from describing what you want, through proactively finding existing skills, scaffolding and a real test run, to choosing a panel direction; the agent then shows a confirmation card and installs only after you press Install. The detail page gains a Workflow section; click a skill to read it (read-only).",
+        },
+      },
+      {
+        pr: null,
+        date: "2026-11-05",
+        note: {
           zh: "首版：Claude Code 兼容的插件格式（技能与 MCP 可用，其余组件列为暂不支持）；复制 / 链接 / git 三种安装；重名技能拒装；卸载归档不删除；已装页与详情页。",
           en: "First version: Claude Code compatible plugin format (skills and MCP load, other components are listed as unsupported); copy / link / git installs; duplicate skill names are refused; uninstall archives instead of deleting; installed list and detail pages.",
         },

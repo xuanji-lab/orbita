@@ -91,6 +91,7 @@ function parseRecord(name: string, value: unknown): PluginRecord | null {
 function parseSource(raw: unknown): PluginSourceRecord | null {
   if (typeof raw !== "object" || raw === null) return null;
   const s = raw as Record<string, unknown>;
+  if (s["kind"] === "builtin") return { kind: "builtin" };
   if (s["kind"] === "copy" && typeof s["from"] === "string") return { kind: "copy", from: s["from"] };
   if (s["kind"] === "link" && typeof s["path"] === "string" && s["path"] !== "") return { kind: "link", path: s["path"] };
   if (s["kind"] === "git" && typeof s["url"] === "string" && typeof s["commit"] === "string") {

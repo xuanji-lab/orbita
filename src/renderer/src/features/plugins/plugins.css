@@ -988,3 +988,192 @@
   font-size: var(--font-size-sm);
   color: var(--color-danger);
 }
+
+/* ---------- 工作流（详情页）：竖向步骤列表，左侧一条贯穿的细线串起编号 ---------- */
+
+.pl-wf {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+}
+
+.pl-wf-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+
+/* 串起编号的线：最后一步不画 */
+.pl-wf-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 24px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--color-border-default);
+}
+
+.pl-wf-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pl-wf-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+
+.pl-wf-body b {
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.pl-wf-body small {
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.pl-wf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.pl-wf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+button.pl-wf-chip {
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+button.pl-wf-chip:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.pl-wf-chip code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-wf-chip.missing {
+  color: var(--color-warning);
+}
+
+.pl-wf-chip.missing em {
+  font-style: normal;
+  color: var(--color-text-tertiary);
+}
+
+.pl-wf-ro {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 只读查看的 SKILL.md：原文，等宽，自己滚 */
+.pl-skillmd {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 对话里的安装确认卡（与审批条同位同配方：浮在输入框上方的玻璃卡） ---------- */
+
+.pl-ask {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  max-height: min(60vh, 520px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.pl-ask-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.pl-ask-head strong {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.pl-ask-keys {
+  margin-inline-start: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-ask-body {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+
+.pl-ask-desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-ui);
+}
+
+.pl-ask-steps {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: 2px;
+  font-size: var(--font-size-sm);
+}
+
+.pl-ask-steps small {
+  margin-left: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.pl-ask-foot {
+  display: flex;
+  gap: var(--space-2);
+}

@@ -78,11 +78,25 @@ export function contentsParts(contents: PluginView["contents"]): { kind: "skills
 }
 
 /** 来源标签的键（文案在 messages）。真插件看装法，旧的看出身。 */
-export function sourceKey(view: PluginView): "userSkill" | "userMcp" | "copy" | "link" | "git" {
+export function sourceKey(view: PluginView): "userSkill" | "userMcp" | "builtin" | "copy" | "link" | "git" {
   if (view.origin === "user-skill") return "userSkill";
   if (view.origin === "user-mcp") return "userMcp";
   const kind = view.install?.source.kind;
-  return kind === "link" ? "link" : kind === "git" ? "git" : "copy";
+  return kind === "link" ? "link" : kind === "git" ? "git" : kind === "builtin" ? "builtin" : "copy";
+}
+
+/** 随 Orbita 带的内置插件：可停用，不可卸载。 */
+export function isBuiltinView(view: PluginView): boolean {
+  return view.install?.source.kind === "builtin";
+}
+
+/** 「和智能体一起做一个」靠内置的 plugin-creator 技能：它被停用了就点不得（点了也点名不到）。 */
+export const PLUGIN_CREATOR_ID = "plugin:plugin-creator";
+
+export function creatorAvailable(views: readonly PluginView[]): boolean {
+  const creator = views.find((view) => view.id === PLUGIN_CREATOR_ID);
+  // 没列到（还在加载 / 开发环境没带资源）不拦：按钮照开，点名不到时指令块如实写「没找到」
+  return creator === undefined || isActive(creator);
 }
 
 /** 页首提示里的数：旧技能与旧 MCP 各几个（为 0 的整条提示不出现）。 */

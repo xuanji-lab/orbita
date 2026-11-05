@@ -19,6 +19,7 @@ import {
   parseCompactCommand,
   createSessionStates,
   removeApproval,
+  removePluginInstall,
   setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
@@ -219,6 +220,61 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
     assert.deepEqual(states.get("A")?.approvals, [], "轮结束就不可能还有挂起的审批");
     assert.equal(states.get("B")?.approvals.length, 1, "别的会话的审批不受影响");
+  });
+
+  /** 插件安装确认卡（agent 的 install_plugin）：挂在会话槽上，应答摘掉，这一轮停了随 idle 收起 */
+  const pluginAsk = (sessionId: string, requestId: string): AgentEvent => ({
+    type: "pluginInstallAsk",
+    sessionId,
+    requestId,
+    scope: "workspace",
+    workspaceName: "w",
+    preview: {
+      previewId: null,
+      name: "lit",
+      displayName: "lit",
+      version: null,
+      description: "",
+      author: null,
+      license: null,
+      source: { kind: "folder", path: "/w/plugins/lit" },
+      mode: "link",
+      manifestFile: null,
+      root: "/w/plugins/lit",
+      hasScripts: false,
+      skills: [],
+      workflow: [],
+      mcp: [],
+      unsupported: [],
+      config: [],
+      conflicts: [],
+      problems: [],
+    },
+  });
+
+  test("插件安装确认卡进对应槽；按 requestId 跨槽摘除；未匹配原样返回", () => {
+    let states = applyAgentEvent(new Map(), pluginAsk("A", "r-a"));
+    states = applyAgentEvent(states, pluginAsk("B", "r-b"));
+    assert.equal(states.get("A")?.pluginInstall?.requestId, "r-a");
+    const after = removePluginInstall(states, "r-b");
+    assert.equal(after.get("B")?.pluginInstall, null);
+    assert.equal(after.get("A")?.pluginInstall?.requestId, "r-a", "别的会话的卡不动");
+    assert.equal(removePluginInstall(after, "nope"), after);
+  });
+
+  test("phase idle 清掉挂起的安装确认卡（主进程已按取消结掉），turn / compaction 不清", () => {
+    let states = applyAgentEvent(new Map(), pluginAsk("A", "r-a"));
+    states = applyAgentEvent(states, pluginAsk("B", "r-b"));
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.equal(states.get("A")?.pluginInstall?.requestId, "r-a");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(states.get("A")?.pluginInstall, null);
+    assert.equal(states.get("B")?.pluginInstall?.requestId, "r-b");
+  });
+
+  test("pluginsChanged 是全局信号，不属于任何会话槽：归约原样返回同一引用", () => {
+    const states = applyAgentEvent(new Map(), pluginAsk("A", "r-a"));
+    assert.equal(applyAgentEvent(states, { type: "pluginsChanged" }), states);
   });
 
   test("phase turn / compaction 不清审批卡——工具还在等回答", () => {

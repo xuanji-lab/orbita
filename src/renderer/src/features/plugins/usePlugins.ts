@@ -35,6 +35,14 @@ export function usePlugins(active: boolean): PluginsState {
     }
   }, []);
 
+  // agent 的 install_plugin 装好了一个：开着的页面立刻重读（不用等下次打开）
+  useEffect(() => {
+    if (!active) return;
+    return api.agent.onEvent((event) => {
+      if (event.type === "pluginsChanged") void refresh();
+    });
+  }, [active, refresh]);
+
   // 每次打开都重读：用户很可能刚在文件管理器里动过插件目录，或在旧面板里拨过技能
   useEffect(() => {
     if (active) void refresh();
