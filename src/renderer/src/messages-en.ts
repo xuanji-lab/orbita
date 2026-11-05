@@ -1046,6 +1046,7 @@ export const en = {
       migration: "Migration",
       browser: "Browser",
       voice: "Voice",
+      plugins: "Plugins",
       experimental: "Experimental",
     },
     appearance: "Appearance",

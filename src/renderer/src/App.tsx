@@ -23,20 +23,20 @@ import {
   syncToMainSession,
   type SubSessionsView,
 } from "./features/chat/sub-sessions-state";
-import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
+import { SettingsView } from "./features/settings/SettingsView";
+import { resolveSettingsTab, type SettingsTab } from "./features/settings/settings-tabs.ts";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
-import { Icon } from "./shell/Icon";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { pluginPanelKind, pluginPanelNameOf } from "./shell/plugin-panel-kind.ts";
 import { PluginPanel } from "./features/plugins/PluginPanel.tsx";
 import { usePluginPanelTabs } from "./features/plugins/usePluginPanel.ts";
 import { initialOf } from "./features/plugins/plugin-view.ts";
-import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
@@ -330,13 +330,6 @@ export function App() {
    */
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
-  // 插件页只占主槽、侧栏的会话列表仍可点：主槽换了会话（任何途径：点行、搜索、通知、遗留续跑…）
-  // 就把它退掉，不逐个入口去补——漏一个就是「点了没反应」
-  const lastOpenIdRef = useRef(mainOpenId);
-  useEffect(() => {
-    if (lastOpenIdRef.current !== mainOpenId && overlay === "plugins") setOverlay(null);
-    lastOpenIdRef.current = mainOpenId;
-  }, [mainOpenId, overlay]);
   const channelParentId =
     overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
@@ -503,13 +496,20 @@ export function App() {
   /** 下一次右栏变化是「按会话恢复」而不是用户打开的（面板打开次数要跳过它） */
   const panelRestoredRef = useRef(false);
   const panelMainIdRef = useRef(mainOpenId);
+  /** 一次性：下一条**还没记过面板的新会话**拿到 id 时，恢复成这个面板（「和智能体一起做一个」用） */
+  const carryPanelRef = useRef<RightPanelKind | null>(null);
   useEffect(() => {
     const previous = panelMainIdRef.current;
     panelMainIdRef.current = mainOpenId;
     if (previous === mainOpenId) return;
     const sessionOf = (id: string): string | null => (id === "" ? null : id);
     panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
-    const recalled = recallPanel(panelMemoryRef.current, sessionOf(mainOpenId));
+    const target = sessionOf(mainOpenId);
+    let recalled = recallPanel(panelMemoryRef.current, target);
+    if (carryPanelRef.current !== null && target !== null && !panelMemoryRef.current.has(target)) {
+      recalled = carryPanelRef.current;
+      carryPanelRef.current = null;
+    }
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
     if (recalled !== rightPanel) panelRestoredRef.current = true;
     setRightPanel(recalled);
@@ -971,7 +971,11 @@ export function App() {
    */
   const makePluginWithAgent = useCallback(() => {
     const workspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+    // 从设置页签的全屏版点：先退出设置，新任务才不会落在设置页后面
     setOverlay(null);
+    // 一边聊一边看插件页（用户 2026-11-05）：这条新会话拿到 id 时，右栏恢复成插件页而不是「没记过 = 关」。
+    // 只带这一次；之后切会话照会话记忆（用户定：插件页不做应用级例外）
+    carryPanelRef.current = "plugins";
     session.startTaskWithDraft(workspace, t.plugins.makeWithAgentDraft);
   }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
@@ -998,12 +1002,15 @@ export function App() {
   // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);
-  // 插件页（实验功能 plugins）：开关关掉时盖层退回聊天，入口不出现
+  // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
   const pluginsOn = experimentalFeatures["plugins"] === true;
-  if (overlay === "plugins" && !pluginsOn) setOverlay(null);
+  const resolvedPanel = resolvePanel(rightPanel, experimentalFeatures);
+  if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
+  const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
+  if (shownSettingsTab !== settingsTab) setSettingsTab(shownSettingsTab);
   // 插件面板页签：当前工作区里已启用且声明了面板的插件各一个（开关关着一个都没有）。
-  // overlay 进 revision：在插件页里改了范围，关掉页面回来要重读
-  const pluginPanelTabs = usePluginPanelTabs(pluginsOn, session.workspaceId, overlay);
+  // rightPanel 进 revision：在右栏插件页里改了范围，切到别的面板（含它自己的面板页签）时重读
+  const pluginPanelTabs = usePluginPanelTabs(pluginsOn, session.workspaceId, rightPanel);
   const openPluginPanelName = pluginPanelNameOf(rightPanel);
   // 开着的插件面板对应的页签没了（插件被停用 / 卸载 / 换到没启用它的工作区的会话）→ 收起。
   // 等这份页签结果确是当前工作区的再判，别把「还没读完」当成「没有」
@@ -1077,13 +1084,10 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" || overlay === "memory" || overlay === "plugins" ? (
+    overlay === "settings" || overlay === "memory" ? (
       <div className="cap-sess">
         <div className="cap-sc">
-          {overlay === "plugins" && <Icon name="blocks" size={14} strokeWidth={1.8} />}
-          <strong className="cap-title">
-            {overlay === "memory" ? t.memory.title : overlay === "plugins" ? t.plugins.title : t.settings.tabs[settingsTab]}
-          </strong>
+          <strong className="cap-title">{overlay === "memory" ? t.memory.title : t.settings.tabs[settingsTab]}</strong>
         </div>
       </div>
     ) : mainOpenId === "" && session.opened === null ? null : (
@@ -1231,14 +1235,7 @@ export function App() {
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
-            {overlay === "plugins" ? (
-              <PluginsView
-                workspaces={session.workspaces}
-                currentWorkspaceId={session.workspaceId}
-                onMakeWithAgent={makePluginWithAgent}
-                onOpenPanel={(name) => handlePanel(pluginPanelKind(name))}
-              />
-            ) : overlay === "memory" ? (
+            {overlay === "memory" ? (
               <MemoryLibraryView
                 nav={memoryNav}
                 onNav={setMemoryNav}
@@ -1264,6 +1261,15 @@ export function App() {
                   engine.refreshWorkspaces();
                 }}
                 workspaces={session.workspaces}
+                plugins={{
+                  currentWorkspaceId: session.workspaceId,
+                  onMakeWithAgent: makePluginWithAgent,
+                  // 从设置页签点「在右栏打开」：退出设置，回到对话，右栏开这个插件的面板
+                  onOpenPanel: (name) => {
+                    setOverlay(null);
+                    handlePanel(pluginPanelKind(name));
+                  },
+                }}
                 onTab={setSettingsTab}
               />
             ) : (
@@ -1396,6 +1402,14 @@ export function App() {
                   onDoCarryoverNow={session.continueCarryoverInSource}
                   onStartGoalTask={startGoalTask}
                 />
+              ) : shownPanel === "plugins" ? (
+                <PluginsView
+                  workspaces={session.workspaces}
+                  chrome="rail"
+                  currentWorkspaceId={session.workspaceId}
+                  onMakeWithAgent={makePluginWithAgent}
+                  onOpenPanel={(name) => handlePanel(pluginPanelKind(name))}
+                />
               ) : pluginPanelNameOf(shownPanel) !== null ? (
                 // 插件面板：模板在沙箱 iframe 里，宿主只收发数据与动作（features/plugins/PluginPanel.tsx）
                 (() => {
@@ -1444,21 +1458,7 @@ export function App() {
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           automation={automationOn ? { running: runningCount(automations.automations) } : null}
-          pluginsEntry={
-            pluginsOn
-              ? {
-                  icon: "blocks",
-                  label: t.rail.plugins,
-                  lit: overlay === "plugins",
-                  onClick: () => {
-                    // 插件页占主槽、侧栏照旧：先把归档 / 遗留子视图收掉（它们会盖住侧栏列表）
-                    setShowArchived(false);
-                    setShowCarryovers(false);
-                    setOverlay(overlay === "plugins" ? null : "plugins");
-                  },
-                }
-              : null
-          }
+          pluginsAvailable={pluginsOn}
           pluginPanels={pluginPanelTabs.tabs.map((tab) => ({
             id: pluginPanelKind(tab.name),
             title: tab.title,

@@ -56,10 +56,14 @@ export function InstallDialog(props: {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && busy === null) props.onClose();
+      if (event.key !== "Escape") return;
+      // 捕获阶段拦下：对话框开着时这一下 Esc 只属于它。否则右栏版里 App 的「Esc 关右栏面板」
+      // 会在同一下按键里把承载这个对话框的面板一起收掉（忙时更糟：装到一半面板没了）
+      event.stopPropagation();
+      if (busy === null) props.onClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [busy, props]);
 
   const read = async (source: PluginSource, mode: PluginInstallMode): Promise<void> => {

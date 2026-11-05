@@ -954,6 +954,7 @@ export const zh: Messages = {
       migration: "迁移",
       browser: "浏览器",
       voice: "语音",
+      plugins: "插件",
       experimental: "实验功能",
     },
     appearance: "外观",

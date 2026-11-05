@@ -47,6 +47,8 @@ export type RightPanelKind =
   | "intent"
   | "context"
   | "automation"
+  /** 插件页的右栏单列版（实验功能 plugins）；全屏版是设置页的「插件」页签 */
+  | "plugins"
   /** 某个插件的面板（实验功能 plugins）：`plugin-panel:<插件名>`，每个带面板的插件一个页签 */
   | PluginPanelKind;
 
@@ -92,10 +94,10 @@ export function RightRail(props: {
    */
   automation: { running: number } | null;
   /**
-   * 插件入口（实验功能 plugins）：null = 不出现（开关关着）。不占右栏面板位——它在**中间主槽**
-   * 显示插件页（与记忆库同类的盖层），所以点亮与点击都由 App 给，不走 `onPanel`。
+   * 插件入口（实验功能 plugins）：false = 不出现（开关关着）。与 Files 等共用右栏面板位（走 `onPanel`，
+   * 互斥、再点收起）；想要全屏版去设置里的「插件」页签。
    */
-  pluginsEntry: { icon: IconName; label: string; lit: boolean; onClick: () => void } | null;
+  pluginsAvailable: boolean;
   /**
    * 插件面板页签（实验功能 plugins）：当前工作区里已启用、声明了面板的插件各一个，没有就是空数组。
    * 与 Files 等共用右栏面板位（走 `onPanel`，互斥）；图标用插件头像的同一条规则——名字首字。
@@ -204,9 +206,9 @@ export function RightRail(props: {
     })),
     // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
     { id: "abilities", group: "agent", pinned: false, icon: "book-open", label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") },
-    ...(props.pluginsEntry === null
-      ? []
-      : [{ id: "plugins", group: "agent" as const, pinned: true, icon: props.pluginsEntry.icon, label: props.pluginsEntry.label, lit: props.pluginsEntry.lit, onSelect: props.pluginsEntry.onClick }]),
+    ...(props.pluginsAvailable
+      ? [{ id: "plugins", group: "agent" as const, pinned: true, icon: "blocks" as const, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
+      : []),
     ...fromApp("memory", { group: "agent", pinned: false }),
     ...(props.intentAvailable
       ? [
