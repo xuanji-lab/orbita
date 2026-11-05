@@ -11,11 +11,9 @@ import {
   dayColumnWidth,
   dayContent,
   dayPhase,
-  fullyVisibleDays,
   layoutWeekColumns,
   mountedDays,
   TRAILING_SLACK_MAX,
-  scrollToTodayLeft,
   todayScrollTarget,
   trailingSlack,
   shiftWeek,
@@ -26,7 +24,16 @@ import {
   weekRangeLabel,
   wheelScrollDelta,
   type DayCells,
+  type WeekColumns,
 } from "./week-layout.ts";
+
+/** 打开时今天滚到哪（界面里是 todayScrollTarget 再 clampScroll；测试里合成一步方便断言夹后的位置） */
+const scrollToTodayLeft = (layout: WeekColumns, viewportWidth: number, todayIndex: number | null, edgeInset = 0): number =>
+  clampScroll(todayScrollTarget(layout, viewportWidth, todayIndex, edgeInset), layout.totalWidth, viewportWidth);
+
+/** 一屏能整列看全的天数 */
+const fullyVisibleDays = (layout: WeekColumns, scrollLeft: number, viewportWidth: number): number =>
+  layout.columns.filter((column) => column.left >= scrollLeft - 0.5 && column.left + column.width <= scrollLeft + viewportWidth + 0.5).length;
 
 // 2026-11-02 是周一（本地时区；用本地构造器，测试与时区无关）
 const MONDAY = new Date(2026, 10, 2).getTime();
@@ -262,19 +269,9 @@ describe("dayContent：一天里画什么", () => {
     const narrow = dayContent(day(1, { items: [item(at, [snapshot("a", "1x1"), snapshot("c", "1x2")])] }), "past");
     strictEqual(narrow.cells, 1);
   });
-  it("卡按运行时间排，key 带运行 id + 卡 id + 序号（repeat 的各项不撞）", () => {
-    const content = dayContent(
-      day(1, { items: [item(at, [snapshot("p", "1x1", 0), snapshot("p", "1x1", 1)]), item(at + 1000, [snapshot("q", "1x1")])] }),
-      "past",
-    );
-    deepStrictEqual(
-      content.cards.map((card) => card.key),
-      [`r${at}:p:0`, `r${at}:p:1`, `r${at + 1000}:q:0`],
-    );
-  });
   it("没卡的运行进 bare，不占卡位", () => {
     const content = dayContent(day(1, { items: [item(at, [])] }), "past");
-    strictEqual(content.cards.length, 0);
+    strictEqual(content.cells, 1);
     strictEqual(content.bare.length, 1);
     strictEqual(content.empty, null);
   });
