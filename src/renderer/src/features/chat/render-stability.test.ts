@@ -7,25 +7,47 @@ describe("keepUnlessSettledChanged", () => {
   const b = { id: "b" };
   const c1 = { id: "c", text: "he" };
   const c2 = { id: "c", text: "hello" };
+  const sameId = (x: { id: string }, y: { id: string }): boolean => x.id === y.id;
 
   test("只有末条换了引用（流式逐字增长）：交回上一份", () => {
     const prev = [a, b, c1];
-    assert.equal(keepUnlessSettledChanged(prev, [a, b, c2]), prev);
+    assert.equal(keepUnlessSettledChanged(prev, [a, b, c2], sameId), prev);
   });
 
   test("新增条目、前面的条目换了引用、删了条目：交回新的", () => {
     const prev = [a, b, c1];
     const appended = [a, b, c1, c2];
-    assert.equal(keepUnlessSettledChanged(prev, appended), appended);
+    assert.equal(keepUnlessSettledChanged(prev, appended, sameId), appended);
     const midChanged = [a, { id: "b" }, c1];
-    assert.equal(keepUnlessSettledChanged(prev, midChanged), midChanged);
+    assert.equal(keepUnlessSettledChanged(prev, midChanged, sameId), midChanged);
     const shorter = [a, b];
-    assert.equal(keepUnlessSettledChanged(prev, shorter), shorter);
+    assert.equal(keepUnlessSettledChanged(prev, shorter, sameId), shorter);
   });
 
   test("空数组不当作「只变了末条」", () => {
     const empty: { id: string }[] = [];
-    assert.equal(keepUnlessSettledChanged([a], empty), empty);
+    assert.equal(keepUnlessSettledChanged([a], empty, sameId), empty);
+  });
+
+  test("长度 1：换成另一条不同 id 的条目（切到另一条只有一条记录的会话）交回新的", () => {
+    // 修前长度 1 的数组一轮循环都不跑，任何替换都被当成「末条在长」而停在旧会话
+    // 的那条上——B 的记忆行按 A 的用户 id 配对、引用跳转在 B 里找 A 的消息
+    const prev = [a];
+    const next = [{ id: "别家的消息" }];
+    assert.equal(keepUnlessSettledChanged(prev, next, sameId), next);
+  });
+
+  test("长度 1：末条同 id 只换了引用（同一条还在长）交回上一份", () => {
+    const prev = [c1];
+    assert.equal(keepUnlessSettledChanged(prev, [c2], sameId), prev);
+  });
+
+  test("末条整条换成不同 id 的条目：不论长短都交回新的", () => {
+    // 长度 >1 时前面每条都同引用、末条却已是另一条——不足「只有末条在长」",
+    // 交回新的；未来若出现末条被替换的形态也不误判
+    const prev = [a, b, c1];
+    const replaced = [a, b, { id: "别家", text: "…" }];
+    assert.equal(keepUnlessSettledChanged(prev, replaced, sameId), replaced);
   });
 });
 

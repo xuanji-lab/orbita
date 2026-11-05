@@ -8,17 +8,31 @@
  */
 
 /**
- * 只有末条换了引用（长度相同、前面每条都是同一对象）时交回上一份，否则交回新的。
- * 用在「只关心已落定条目」的派生上：例如引用找出处——引用不可能指向流式中的那条
- * （quoteFromSelection 拒绝流式消息），末条逐字增长不改变任何结果。
+ * 只有末条换了引用（长度相同、前面每条都是同一对象）**且末条仍是同一条目**时交回
+ * 上一份，否则交回新的。用在「只关心已落定条目」的派生上：例如引用找出处——
+ * 引用不可能指向流式中的那条（quoteFromSelection 拒绝流式消息），末条逐字增长
+ * 不改变任何结果。
+ *
+ * `sameLastEntry` 判末条是不是「同一条目还在长」（流式中 id 不变、内容在长）：
+ * 没有这条守卫，长度 1 的数组一轮循环都不跑，任何替换都被当成「末条在长」——
+ * 从只有一条记录的会话 A 切到同样只有一条的会话 B 会停在 A 的转录上（B 的记忆
+ * 行按 A 的用户 id 配对、引用跳转在 B 里找 A 的消息）；末条被整条换成不同条目
+ * 的未来情形同理。
  */
-export function keepUnlessSettledChanged<T>(prev: readonly T[], next: readonly T[]): readonly T[] {
+export function keepUnlessSettledChanged<T>(
+  prev: readonly T[],
+  next: readonly T[],
+  sameLastEntry: (prevLast: T, nextLast: T) => boolean,
+): readonly T[] {
   if (prev === next) return prev;
   if (prev.length !== next.length || next.length === 0) return next;
   for (let i = 0; i < next.length - 1; i += 1) {
     if (prev[i] !== next[i]) return next;
   }
-  return prev;
+  const prevLast = prev.at(-1);
+  const nextLast = next.at(-1);
+  if (prevLast === undefined || nextLast === undefined) return next;
+  return sameLastEntry(prevLast, nextLast) ? prev : next;
 }
 
 /** 两个数组逐项同一引用 */
