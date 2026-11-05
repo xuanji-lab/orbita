@@ -33,6 +33,17 @@ const EXPECTED_SECONDS_GUIDELINE =
   "scanning large directories), you may add expected_seconds (a number of seconds, your estimate) to the arguments. " +
   "It only drives the UI (progress hint and auto-expand) and does not affect execution or timeouts.";
 
+/**
+ * 自动化工具（automation_create）已注册时的长任务指引：用户 2026-11-05 裁决——这类建议要写进系统提示词，
+ * 不能只靠工具 description（模型想不起来就不会去读）。没注册自动化时不讲（讲了模型也做不了，只会干等）。
+ */
+const LONG_TASK_AUTOMATION_GUIDELINE =
+  "When a command you are about to run will likely take more than about 10 minutes (a long training run, a large build, a full scan), " +
+  "do not wait it out in a foreground bash call. Start it in the background with its output redirected to a log file, " +
+  "create a this_session automation (one-shot around the expected finish time, or a short interval) whose instruction tells you to read that log " +
+  "and check whether the job finished (cancel the automation once it has), then end your turn. " +
+  "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
+
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
   piBase: string;
@@ -48,6 +59,8 @@ export interface SystemPromptInput {
   intentGuideline: boolean;
   /** 本会话注册了记忆工具（根会话且记忆开着）：讲一段固定的使用说明 */
   memoryToolsGuideline: boolean;
+  /** 本会话注册了 automation_create（根会话且自动化开着）：讲长任务放后台、建自动化回来看的指引 */
+  longTaskAutomationGuideline: boolean;
 }
 
 export interface PromptSegment {
@@ -66,6 +79,7 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     { name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) },
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
     { name: "expected-seconds", text: EXPECTED_SECONDS_GUIDELINE },
+    ...(input.longTaskAutomationGuideline ? [{ name: "long-task-automation", text: LONG_TASK_AUTOMATION_GUIDELINE }] : []),
     ...(input.intentGuideline ? [{ name: "intent", text: INTENT_CONTEXT_GUIDELINE }] : []),
     { name: "quote", text: QUOTE_GUIDELINE },
     {
