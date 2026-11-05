@@ -59,6 +59,7 @@
   - 一般 4–8 步。写“人眼里的步骤”，不是函数调用栈。
 - `orbita.panel`：右栏面板。`template` 是插件里的 HTML 文件；`data` 是 JSON 文件路径，**可用变量** `${CLAUDE_PLUGIN_ROOT}`（插件根）、`${CLAUDE_PLUGIN_DATA}`（插件数据目录）、`${user_config.KEY}`、`${workspaceFolder}`（会话所在工作区根）。`data` 解析后必须落在插件根 / 插件数据目录 / 工作区根 / directory 型配置值之内。
   - **默认用 `${CLAUDE_PLUGIN_ROOT}/data/panel.json`**：你现在就能算出它的真实路径、能让脚本直接写进去、第 4 步就能试跑。`${CLAUDE_PLUGIN_DATA}` 要等装上之后才知道在哪（装完 `install_plugin` 的返回里会给出），用它做**输入**的目录（比如面板动作 `actions.jsonl`）。
+- 面板模板怎么写（接收 `orbita:data`、主题变量、空态、动作回传、八条规则）见 `../../panel-style/SKILL.md`，骨架在它的 `assets/panel-template.html`。
 - `orbita` 下除 `workflow`、`panel` 之外的键，Orbita 现在不认，会在详情页列进“暂不支持”。
 - 不支持的 Claude Code 组件（commands、agents、hooks 等）可以写，但 Orbita 现在不运行，详情页会标出来；做给 Orbita 用的插件就别写。
 

@@ -75,8 +75,14 @@ describe("内置插件 plugin-creator", () => {
     assert.doesNotMatch(html, /<script[^>]+src=/i);
     assert.doesNotMatch(html, /<link[^>]+href=/i);
     assert.doesNotMatch(html, /\bfetch\(|XMLHttpRequest|https?:\/\/(?!www\.w3\.org)/);
-    // 数据里的字符串不走 innerHTML
+    // 数据里的字符串不走 innerHTML；面板的 CSP 不放行 eval / new Function
     assert.doesNotMatch(html, /innerHTML/);
+    const code = html.replace(/<!--[\s\S]*?-->/g, ""); // 开头的说明注释里会写到这两个词
+    assert.doesNotMatch(code, /\beval\(|new Function/);
+    // 面板那头实测出来的规则：透明底 + color-scheme（否则深色主题下被刷成不透明白底）、只信宿主的消息
+    assert.match(html, /<meta name="color-scheme" content="light dark">/);
+    assert.match(html, /html, body \{[^}]*background: transparent/);
+    assert.match(html, /event\.source !== parent/);
   });
 
   test("NOTICE 保留 impeccable（Apache-2.0）与花叔 Design（MIT）的署名", async () => {

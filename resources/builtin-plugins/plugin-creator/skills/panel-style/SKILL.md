@@ -23,9 +23,22 @@ description: 为一个插件的右栏面板（或任何要给用户看的卡片�
 
 ## 面板是什么样的约束（先记住）
 
-- 一份**自包含的 HTML**：内联 `<style>` / `<script>`，图片字体只能 `data:`，**不能联网、不能引外部文件**。在沙盒 iframe 里，不能跳转链接。
+- 一份**自包含的 HTML**：内联 `<style>` / `<script>`，图片字体只能 `data:`，**不能联网、不能引外部文件、不能用 `eval` / `new Function`**。在沙盒 iframe 里，不能跳转链接。
 - 宿主给的宽度大约 **360–440px**（右栏），高度给满，模板自己滚动。浅色 / 暗色主题都要成立（宿主下发主题变量，见 `assets/panel-template.html`）。
 - 数据来自 `orbita.panel.data` 指向的 JSON（第 4 步已经跑出真数据）；动作按钮发 `orbita:action`。
+
+### 写模板的八条规则（面板那头实测出来的）
+
+`assets/panel-template.html` 已经全部做到，**以它为底改渲染部分，别动收发那套**：
+
+1. **自包含**：样式与脚本都内联；图片 / 字体只能是 `data:`；不能联网、不能引外部文件、不能 `eval` / `new Function`。
+2. **透明底 + color-scheme**：`<meta name="color-scheme" content="light dark">` 加 `html, body { background: transparent }`。宿主给满面板、露出面板自己的底色；不写的话深色主题下会被浏览器刷成不透明白底。
+3. **收数据**：`window.addEventListener("message", e => { if (e.source !== parent) return; … })`，只信宿主。`m.data` 是数据文件内容（空态时 `null`，`m.state === "empty"`），`m.theme.vars` 用 `document.documentElement.style.setProperty` 套到 `:root`，`m.theme.scheme` 是 `"light"` / `"dark"`。每次数据文件变化或主题切换都会再来一条，**渲染要能重复做**（先清空再画，不要追加）。
+4. **样式用宿主变量并带回退**：`var(--color-text-primary, #202124)`、`var(--font-size-sm, 12px)`。名单：`--color-text-primary/secondary/tertiary`、`--color-bg-panel/-muted`、`--color-chat-card-bg`、`--color-border-subtle/default/strong`、`--color-accent/-soft/-fg`、`--color-success/warning/danger/info`、`--font-family-base/mono`、`--font-size-xl/lg/base/sm/xs`、`--radius-sm/md/lg/xl`、`--line-height-ui/tight`。拿不到 Orbita 打包的字体，用系统字体栈兜底。
+5. **空态**：自己画了空态就发 `parent.postMessage({ type: "orbita:ready", emptyState: true }, "*")`；不发也行，但数据为空时宿主会盖一行「还没有产出」。
+6. **动作回传**：`parent.postMessage({ type: "orbita:action", action: "feedback", payload: {…} }, "*")`。动作名 ≤ 64 字符，载荷序列化后 ≤ 16 KB，每 10 秒 ≤ 20 条。宿主只把它追加成一行 `{"at","action","payload"}` 到 `<插件数据目录>/actions.jsonl`，**不会替你做任何别的事**；你的脚本下一轮去读它，用 `at` 判断哪些是新的。
+7. **数据文件原子写**：脚本先写临时文件再改名。写到一半被读到，面板只会多一条“读不出来”的说明、保留上一份。
+8. **数据 ≤ 2 MB**：超了面板拒读。别把全量历史塞进去，面板只放当前要看的。
 - 这是 Read / Operate 界面，不是海报：表现力的雄心体现在**精确与克制**。每张卡至多三档字号，展示字体只给签名元素；正文对比度 ≥ 4.5:1；正文不小于 `--font-size-sm`。
 
 ## 步骤
@@ -104,6 +117,8 @@ brief:
 5. 浏览器工具用不了：把四份草稿的路径和方向卡发给用户，让他用系统浏览器打开 `preview.html`。
 
 **摆出来就停**，等他挑。不替他选，不在没看到小样前问“你想要哪个方向”。
+
+**诚实汇报你验证过什么。** 如果你看不了图（当前模型不支持图片），就明说“我看不了图”；方向卡里只写你真验证过的（文字出来了没有、点击有没有反应、控制台有没有报错），**不要写“渲染正常”“版式没问题”**——版式好不好、有没有文字被挤成竖排、有没有溢出，由用户看截图判断。把截图和 `preview.html` 的路径都给他。
 
 ### 8. 他挑中之后
 

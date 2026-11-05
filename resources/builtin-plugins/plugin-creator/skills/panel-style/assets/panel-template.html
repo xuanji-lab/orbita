@@ -12,11 +12,21 @@
                  · 宿主只把它追加到插件数据目录的 actions.jsonl，不做别的；插件自己的脚本下一轮去读
   沙盒限制：不能联网、不能跳转链接、不能读文件、图片字体只能 data:。显示链接请当文字，或发一个 action。
   没有宿主（直接用浏览器打开这个文件，或在 preview.html 里）时，用 window.__SAMPLE__ 渲染，方便预览。
+
+  写模板的规则（面板那头实测出来的，别改掉）：
+    1. 一份自包含 HTML：样式脚本都内联；图片 / 字体只能 data:；不联网、不引外部文件、不用 eval / new Function。
+    2. <meta name="color-scheme" content="light dark"> + html, body { background: transparent }：宿主给满面板，露出面板底色，
+       也避免深色主题下被浏览器刷成不透明白底。
+    3. 只信来自宿主的消息：if (event.source !== parent) return;。每次数据文件变化 / 主题切换都会再收到一条，渲染要能重复做。
+    4. 样式用宿主下发的变量并带回退：var(--color-text-primary, #202124)；字体拿不到应用打包的那几个，用系统字体栈兜底。
+    5. 自己画了空态就发 orbita:ready { emptyState: true }，否则数据为空时宿主会盖一行「还没有产出」。
+    6. 动作只是“记一笔”：宿主把 {at, action, payload} 追加进 actions.jsonl，不替你做别的事。
 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>面板</title>
 <style>
   /* 主题变量的兜底值（浅色）；宿主会用 theme.vars 覆盖。变量名单见约定，别发明新名字。 */
@@ -33,9 +43,9 @@
     --line-height-ui: 1.5; --line-height-tight: 1.25;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  html, body { height: 100%; margin: 0; background: transparent; }
   body {
-    background: var(--color-bg-panel); color: var(--color-text-primary);
+    color: var(--color-text-primary);
     font: var(--font-size-base)/var(--line-height-ui) var(--font-family-base);
     overflow-y: auto; /* 高度由宿主给满，模板自己滚动 */
   }
@@ -138,6 +148,7 @@
   }
 
   window.addEventListener("message", function (event) {
+    if (event.source !== parent) return; // 只信宿主
     var message = event.data;
     if (!message || message.type !== "orbita:data") return;
     applyTheme(message.theme);

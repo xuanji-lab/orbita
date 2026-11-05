@@ -57,6 +57,7 @@
     var frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts"); /* 与宿主一致：没有 allow-same-origin */
     frame.src = draft.file;
+    frame.style.background = theme.vars["--color-bg-panel"]; /* 模板背景是透明的（露出面板底色）：对比页里补上这层底 */
     frame.addEventListener("load", function () {
       frame.contentWindow.postMessage({ type: "orbita:data", data: window.__SAMPLE__ || null, state: window.__SAMPLE__ ? "ready" : "empty", updatedAt: Date.now(), theme: theme }, "*");
     });
