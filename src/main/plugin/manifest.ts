@@ -15,6 +15,8 @@
  *   **宽容一处**：规格要求以 `./` 开头，但 ZCode 官方清单写的是 `"skills": "skills"`，
  *   第二期市场要装它们，所以不带 `./` 的相对路径照认（含 `..` 与逃逸的仍拒绝）。
  *
+ * 清单里 Orbita 自己的扩展 `orbita.workflow`（给人看的步骤列表）见 workflow.ts。
+ *
  * 其余组件（commands / agents / hooks / lsp / 输出风格 / monitors / bin / 面板 / channels …）
  * 解析出名字列进 `unsupported`，不加载、但不静默丢。
  */
@@ -23,6 +25,7 @@ import { basename, isAbsolute, join, sep } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
 import { parseSkillMd } from "../skill/store.ts";
 import { parseServer, type McpServer } from "../../shared/mcp.ts";
+import { parseWorkflow } from "./workflow.ts";
 import {
   isPluginName,
   PLUGIN_MANIFEST_PATHS,
@@ -32,7 +35,11 @@ import {
   type PluginProblem,
   type PluginUnsupported,
   type PluginUnsupportedKind,
+  type PluginWorkflowStep,
 } from "../../shared/plugin.ts";
+
+/** 清单 `orbita` 对象里认识的子键（约定见 shared/plugin.ts）；别的列进「暂不支持」。 */
+const ORBITA_KNOWN_KEYS = ["workflow", "panel"];
 
 /** 「暂不支持」里每类最多列几个名字（数量以 count 为准）。 */
 const UNSUPPORTED_ITEMS_MAX = 6;
@@ -69,6 +76,8 @@ export interface ScannedPlugin {
   manifestFile: string | null;
   config: PluginConfigField[];
   skills: DiscoveredSkill[];
+  /** 清单 `orbita.workflow`：给人看的步骤（没写为空数组） */
+  workflow: PluginWorkflowStep[];
   mcpServers: ScannedMcpServer[];
   unsupported: PluginUnsupported[];
   hasScripts: boolean;
@@ -102,6 +111,7 @@ export async function scanPlugin(root: string, fallbackName: string): Promise<Sc
     manifestFile,
     config: parseUserConfig(manifest["userConfig"], problems),
     skills,
+    workflow: parseWorkflow(manifest, skills, problems),
     mcpServers: mcpServers.servers,
     unsupported,
     hasScripts,
@@ -471,6 +481,10 @@ async function detectUnsupported(
   if (manifest["settings"] !== undefined || (await isFile(join(root, "settings.json")))) push("settings", []);
 
   if (bundles.length > 0) push("mcp-bundle", bundles.map((bundle) => basename(bundle)));
+
+  // Orbita 自己的清单扩展：只认 workflow 与 panel，其余子键列出来不静默丢
+  const unknownOrbita = isRecord(manifest["orbita"]) ? Object.keys(manifest["orbita"]).filter((key) => !ORBITA_KNOWN_KEYS.includes(key)) : [];
+  if (unknownOrbita.length > 0) push("orbita", unknownOrbita);
 
   if (Array.isArray(manifest["dependencies"]) && manifest["dependencies"].length > 0) {
     push("dependencies", manifest["dependencies"].map((entry) => (typeof entry === "string" ? entry : nameOfEntry(entry))).filter((name): name is string => name !== null));

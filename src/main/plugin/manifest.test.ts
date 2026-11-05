@@ -298,3 +298,42 @@ describe("parseUserConfig", () => {
     assert.deepEqual(fields.map((f) => [f.key, f.type]), [["a", "string"], ["b", "string"]]);
   });
 });
+
+describe("scanPlugin 的 orbita 扩展（workflow）", () => {
+  test("orbita.workflow 解析进 scanned.workflow，技能按 slug / name 对上本插件的", async () => {
+    await put("skills/lit-scan/SKILL.md", SKILL("lit-scan"));
+    await put(
+      ".claude-plugin/plugin.json",
+      JSON.stringify({
+        name: "lit",
+        orbita: { workflow: [{ title: "扫", skill: "lit-scan" }, { title: "写", output: "data/x.jsonl" }, { title: "错", skill: "nope" }] },
+      }),
+    );
+    const scanned = await scanPlugin(dir, "lit");
+    assert.deepEqual(scanned.workflow.map((step) => [step.title, step.skillSlug]), [["扫", "lit-scan"], ["写", null], ["错", null]]);
+    assert.deepEqual(scanned.problems, []);
+    assert.deepEqual(scanned.unsupported, []);
+  });
+
+  test("workflow 写坏的一步进 problems（workflow-invalid），其余步骤与技能照常", async () => {
+    await put("skills/a/SKILL.md", SKILL("a"));
+    await put(".claude-plugin/plugin.json", JSON.stringify({ name: "p", orbita: { workflow: [{ skill: "a" }, { title: "好", skill: "a" }] } }));
+    const scanned = await scanPlugin(dir, "p");
+    assert.deepEqual(scanned.workflow.map((step) => step.title), ["好"]);
+    assert.deepEqual(scanned.problems, [{ kind: "workflow-invalid", detail: "orbita.workflow[0]: title is required" }]);
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["a"]);
+  });
+
+  test("orbita 下除 workflow / panel 之外的子键列进「暂不支持」", async () => {
+    await put(".claude-plugin/plugin.json", JSON.stringify({ name: "p", orbita: { workflow: [], panel: { title: "x" }, automation: {}, agents: [] } }));
+    const scanned = await scanPlugin(dir, "p");
+    assert.deepEqual(scanned.unsupported, [{ kind: "orbita", items: ["automation", "agents"], count: 2 }]);
+  });
+
+  test("只有 workflow / panel 时不出「暂不支持」；没有 orbita 时 workflow 为空数组", async () => {
+    await put(".claude-plugin/plugin.json", JSON.stringify({ name: "p", orbita: { panel: { title: "x" } } }));
+    assert.deepEqual((await scanPlugin(dir, "p")).unsupported, []);
+    await put(".claude-plugin/plugin.json", JSON.stringify({ name: "p" }));
+    assert.deepEqual((await scanPlugin(dir, "p")).workflow, []);
+  });
+});

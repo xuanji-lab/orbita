@@ -45,6 +45,7 @@ export function skillViews(metas: readonly SkillMeta[], storeRoot: string): Plug
         placement,
         contents: { skills: 1, mcp: 0, scripts: false },
         skills: [{ slug: meta.slug, name: meta.name, description: meta.description }],
+        workflow: [],
         mcp: [],
         location: meta.linkedPath ?? join(storeRoot, meta.slug),
       };
@@ -77,6 +78,7 @@ export function mcpViews(servers: Readonly<Record<string, McpServer>>, workspace
         placement,
         contents: { skills: 0, mcp: 1, scripts: false },
         skills: [],
+        workflow: [],
         mcp: [
           {
             name,

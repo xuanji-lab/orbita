@@ -746,3 +746,122 @@ describe("git 来源", () => {
     assert.equal((await stat(join(configDir, "plugins", "real-git", ".git"))).isDirectory(), true);
   });
 });
+
+describe("内置插件（随应用带，默认对所有工作区启用，可停用不可卸载）", () => {
+  let builtinRoot = "";
+  let withBuiltin: PluginStore;
+
+  beforeEach(async () => {
+    builtinRoot = join(base, "resources", "builtin-plugins");
+    await put(
+      join(builtinRoot, "plugin-creator"),
+      ".claude-plugin/plugin.json",
+      JSON.stringify({
+        name: "plugin-creator",
+        displayName: "做插件",
+        description: "和智能体一起做插件",
+        orbita: { workflow: [{ title: "找现成的", skill: "plugin-creator" }, { title: "装上", skill: "nope" }] },
+      }),
+    );
+    await put(join(builtinRoot, "plugin-creator"), "skills/plugin-creator/SKILL.md", SKILL("plugin-creator", "做插件的流程"));
+    withBuiltin = new PluginStore({ configDir, secrets, userSkills: async () => userSkills, builtinRoot });
+  });
+
+  test("没有磁盘记录：合成默认记录（来源 builtin、范围所有工作区），列表里带 workflow", async () => {
+    const views = await withBuiltin.listViews();
+    assert.equal(views.length, 1);
+    const view = views[0];
+    assert.equal(view?.id, "plugin:plugin-creator");
+    assert.deepEqual(view?.scope, { kind: "global" });
+    assert.deepEqual(view?.install?.source, { kind: "builtin" });
+    assert.equal(view?.install?.root, join(builtinRoot, "plugin-creator"));
+    assert.deepEqual(view?.workflow.map((step) => [step.title, step.skillSlug]), [["找现成的", "plugin-creator"], ["装上", null]]);
+    // 只读列表不写盘：用户没动过它之前 plugins.json 不该出现
+    await assert.rejects(stat(join(configDir, "plugins.json")));
+  });
+
+  test("开轮装配：Home 与任一工作区都带它的技能", async () => {
+    const home = await withBuiltin.assemble(null);
+    assert.deepEqual(home.skills.map((skill) => [skill.slug, skill.plugin]), [["plugin-creator", "plugin-creator"]]);
+    const inWorkspace = await withBuiltin.assemble({ id: "ws-1", name: "w", path: "/w" });
+    assert.equal(inWorkspace.skillDirs.length, 1);
+  });
+
+  test("停用：范围写成 off 并落盘；再读仍是停用，且位置记着（开关拨回原位）", async () => {
+    await withBuiltin.setScope("plugin-creator", { kind: "off" });
+    const reread = new PluginStore({ configDir, secrets, userSkills: async () => userSkills, builtinRoot });
+    const view = (await reread.listViews())[0];
+    assert.deepEqual(view?.scope, { kind: "off" });
+    assert.deepEqual(view?.placement, { kind: "global" });
+    assert.deepEqual((await reread.assemble(null)).skills, []);
+    await reread.setScope("plugin-creator", { kind: "global" });
+    assert.equal((await withBuiltin.assemble(null)).skills.length, 1);
+  });
+
+  test("不可卸载：抛错、记录与目录原样", async () => {
+    await assert.rejects(withBuiltin.uninstall("plugin-creator"), /cannot be uninstalled/);
+    assert.equal((await withBuiltin.listViews()).length, 1);
+    await assert.rejects(stat(join(configDir, "plugins-archive")));
+  });
+
+  test("装别的插件时内置记录一起写进 plugins.json，且不影响它；再装同名的被当成已存在", async () => {
+    const source = await makeSource("other");
+    const { result } = await (async () => {
+      const previewed = await withBuiltin.preview({ source: { kind: "folder", path: source }, mode: "link" });
+      assert.equal(previewed.ok, true);
+      return { result: await withBuiltin.install({ preview: { source: { kind: "folder", path: source }, mode: "link" }, previewId: null, scope: GLOBAL }) };
+    })();
+    assert.equal(result.ok, true);
+    const raw = JSON.parse(await readFile(join(configDir, "plugins.json"), "utf8")) as { plugins: Record<string, { source: { kind: string }; scope: { kind: string } }> };
+    assert.deepEqual(Object.keys(raw.plugins).sort(), ["other", "plugin-creator"]);
+    assert.equal(raw.plugins["plugin-creator"]?.source.kind, "builtin");
+    assert.equal(raw.plugins["plugin-creator"]?.scope.kind, "global");
+    // 同名插件（用户自己做了个 plugin-creator）装不进来
+    const clash = await makeSource("plugin-creator");
+    const preview = await withBuiltin.preview({ source: { kind: "folder", path: clash }, mode: "link" });
+    assert.equal(preview.ok && preview.preview.conflicts.some((conflict) => conflict.kind === "plugin-exists"), true);
+  });
+
+  test("用户自己有同名技能：用户的赢，内置的那条不叠，详情页亮冲突", async () => {
+    userSkills = [{ slug: "plugin-creator", name: "plugin-creator" }];
+    assert.deepEqual((await withBuiltin.assemble(null)).skills, []);
+    const view = (await withBuiltin.listViews())[0];
+    assert.equal(view?.conflicts.some((conflict) => conflict.kind === "skill-name"), true);
+  });
+
+  test("这一版应用不再带它（内容目录没了）：记录和列表里都不留僵尸；没配 builtinRoot 的环境同理", async () => {
+    await withBuiltin.setScope("plugin-creator", { kind: "off" });
+    await rm(join(builtinRoot, "plugin-creator"), { recursive: true });
+    assert.deepEqual(await withBuiltin.listViews(), []);
+    assert.deepEqual(await store.listViews(), []);
+  });
+
+  test("skillFile：读本插件技能的 SKILL.md 原文；不存在的插件 / 技能报错", async () => {
+    const file = await withBuiltin.skillFile("plugin-creator", "plugin-creator");
+    assert.equal(file.slug, "plugin-creator");
+    assert.equal(file.path, join(builtinRoot, "plugin-creator", "skills", "plugin-creator", "SKILL.md"));
+    assert.equal(file.content.includes("做插件的流程"), true);
+    await assert.rejects(withBuiltin.skillFile("plugin-creator", "nope"), /No such skill/);
+    await assert.rejects(withBuiltin.skillFile("ghost", "x"), /No such plugin/);
+  });
+
+  test("skillFile：SKILL.md 本身是指到插件之外的符号链接 → 拒绝（renderer 传来的名字不可信）", async () => {
+    const secret = join(base, "secret.txt");
+    await writeFile(secret, "---\nname: evil\ndescription: d\n---\nTOP SECRET", "utf8");
+    const source = join(base, "sources", "evil");
+    await mkdir(join(source, "skills", "evil"), { recursive: true });
+    await symlink(secret, join(source, "skills", "evil", "SKILL.md"));
+    const previewed = await withBuiltin.preview({ source: { kind: "folder", path: source }, mode: "link" });
+    assert.equal(previewed.ok, true);
+    await withBuiltin.install({ preview: { source: { kind: "folder", path: source }, mode: "link" }, previewId: null, scope: GLOBAL });
+    await assert.rejects(withBuiltin.skillFile("evil", "evil"), /outside the plugin folder/);
+  });
+
+  test("skillFile：超过 256 KB 不读", async () => {
+    const source = join(base, "sources", "big");
+    await put(source, "skills/big/SKILL.md", `---\nname: big\ndescription: d\n---\n${"x".repeat(300 * 1024)}`);
+    await withBuiltin.preview({ source: { kind: "folder", path: source }, mode: "link" });
+    await withBuiltin.install({ preview: { source: { kind: "folder", path: source }, mode: "link" }, previewId: null, scope: GLOBAL });
+    await assert.rejects(withBuiltin.skillFile("big", "big"), /too large/);
+  });
+});

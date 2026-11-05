@@ -1,6 +1,10 @@
 /**
  * 插件存储：安装记录、副本目录、暂存、卸载归档、启用范围、配置值、开轮装配。
  *
+ * **内置插件**（BUILTIN_PLUGIN_NAMES，如 plugin-creator）：内容在安装包的资源目录里（`builtinRoot`），
+ * 随应用版本更新、不复制进 userData。没有记录时按默认（对所有工作区启用）合成一条，用户停用 /
+ * 改范围时才写进 plugins.json；可停用、不可卸载。
+ *
  * 目录布局（都在 userData 下，**不写进用户自己的 skills 目录和 mcp.json**）：
  *
  *   plugins.json                      安装记录（原子写）
@@ -15,13 +19,14 @@
  * 覆盖先写的（同 McpStore.mutate 吃过的亏）。
  */
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { cp, mkdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { isHttpServer, type McpServer, type McpWorkspace } from "../../shared/mcp.ts";
 import {
+  BUILTIN_PLUGIN_NAMES,
   isBlockingMcpProblem,
   pluginViewId,
   scopeApplies,
@@ -39,6 +44,7 @@ import {
   type PluginPlacement,
   type PluginScope,
   type PluginSource,
+  type PluginSkillFile,
   type PluginSourceRecord,
   type PluginView,
 } from "../../shared/plugin.ts";
@@ -50,6 +56,9 @@ import { qualifiedPluginServerName } from "./names.ts";
 import { parseScope, readPluginRecords, serializePluginRecords, type PluginRecord } from "./records.ts";
 import { formatCommandLine, substituteServer, type VarContext } from "./vars.ts";
 
+/** 详情页只读查看技能时的大小上限。 */
+const SKILL_FILE_MAX_BYTES = 256 * 1024;
+
 /** 暂存超过这么久没人确认就当放弃（对话框开着不动一小时的人很少，留着只占盘）。 */
 const STAGED_TTL_MS = 30 * 60 * 1000;
 
@@ -58,6 +67,8 @@ export interface PluginStoreDeps {
   secrets: SecretsPort;
   /** 用户自己的技能（中心存储里每一条）：冲突检测与开轮装配都要避开它们 */
   userSkills: () => Promise<SkillIdentity[]>;
+  /** 内置插件的内容目录（`<它>/<插件名>/`）；缺席 = 没有内置插件（测试夹具、没带资源的开发环境） */
+  builtinRoot?: string;
   /** git 执行器；测试注入假的 */
   git?: GitRunner;
   now?: () => number;
@@ -84,6 +95,7 @@ export class PluginStore {
   private readonly configDir: string;
   private readonly secrets: SecretsPort;
   private readonly userSkills: () => Promise<SkillIdentity[]>;
+  private readonly builtinRoot: string | null;
   private readonly git: GitRunner;
   private readonly now: () => number;
   private readonly file: string;
@@ -98,6 +110,7 @@ export class PluginStore {
     this.configDir = deps.configDir;
     this.secrets = deps.secrets;
     this.userSkills = deps.userSkills;
+    this.builtinRoot = deps.builtinRoot ?? null;
     this.git = deps.git ?? runGit;
     this.now = deps.now ?? Date.now;
     this.file = join(deps.configDir, "plugins.json");
@@ -113,7 +126,9 @@ export class PluginStore {
   }
 
   rootOf(record: PluginRecord): string {
-    return record.source.kind === "link" ? record.source.path : join(this.pluginsDir, record.name);
+    if (record.source.kind === "link") return record.source.path;
+    if (record.source.kind === "builtin") return join(this.builtinRoot ?? "", record.name);
+    return join(this.pluginsDir, record.name);
   }
 
   dataDirOf(name: string): string {
@@ -130,8 +145,28 @@ export class PluginStore {
     return run;
   }
 
-  records(): Promise<PluginRecord[]> {
-    return readPluginRecords(this.file);
+  /** 全部安装记录：磁盘上的 + 内置插件（磁盘上没有它的记录就合成默认的：对所有工作区启用）。 */
+  async records(): Promise<PluginRecord[]> {
+    return this.withBuiltins(await readPluginRecords(this.file));
+  }
+
+  /**
+   * 内置插件并进记录表。内容目录不在了（这一版应用不再带它 / 开发环境没资源）的内置记录丢掉，
+   * 不留一条读不出内容的僵尸；没有记录的补默认——所以新版本新增的内置插件，老用户升级后自动出现。
+   */
+  private async withBuiltins(stored: PluginRecord[]): Promise<PluginRecord[]> {
+    const rest = stored.filter((record) => record.source.kind !== "builtin");
+    const out: PluginRecord[] = [...rest];
+    const root = this.builtinRoot;
+    if (root === null) return out.sort(byName);
+    for (const name of BUILTIN_PLUGIN_NAMES) {
+      if (!(await isDirectory(join(root, name)))) continue;
+      const own = stored.find((record) => record.name === name && record.source.kind === "builtin");
+      // 同名的非内置记录（旧版本里用户自己装过同名插件）占着名字：不再合成，免得两条同名
+      if (own === undefined && rest.some((record) => record.name === name)) continue;
+      out.push(own ?? defaultBuiltinRecord(name));
+    }
+    return out.sort(byName);
   }
 
   private async writeRecords(records: readonly PluginRecord[]): Promise<void> {
@@ -234,6 +269,7 @@ export class PluginStore {
       root,
       hasScripts: scanned.hasScripts,
       skills: scanned.skills.map(({ slug, name, description }) => ({ slug, name, description })),
+      workflow: scanned.workflow,
       mcp,
       unsupported: scanned.unsupported,
       config: scanned.config,
@@ -335,6 +371,7 @@ export class PluginStore {
       const records = await this.records();
       const record = records.find((each) => each.name === name);
       if (record === undefined) throw new Error(`No such plugin: ${name}`);
+      if (record.source.kind === "builtin") throw new Error(`${name} is built into Orbita and cannot be uninstalled; turn it off instead`);
       // 先把记录拿掉（装配只认记录，之后即使挪目录失败也不会再叠进会话），再挪副本
       await this.writeRecords(records.filter((each) => each.name !== name));
       const stamp = timestamp(this.now());
@@ -504,6 +541,7 @@ export class PluginStore {
       placement: record.placement,
       contents: { skills: skills.length, mcp: mcp.length, scripts: scanned?.hasScripts ?? false },
       skills,
+      workflow: scanned?.workflow ?? [],
       mcp,
       unsupported: scanned?.unsupported ?? [],
       config,
@@ -557,6 +595,24 @@ export class PluginStore {
     const records = await this.records();
     const inspected = await Promise.all(records.map((record) => this.inspect(record)));
     return inspected.map((each) => otherOf(each.record, each.scanned));
+  }
+
+  /**
+   * 一条插件技能的 SKILL.md 原文（详情页「工作流」里点技能只读查看）。入参从 renderer 来，不可信：
+   * 只认已装插件扫出来的技能，并再确认文件的真实路径还在插件根之内（SKILL.md 本身是指到根外的
+   * 符号链接就拒）；超过 256 KB 不读（技能正文没有那么大，大的多半不是它）。
+   */
+  async skillFile(name: string, slug: string): Promise<PluginSkillFile> {
+    const record = (await this.records()).find((each) => each.name === name);
+    if (record === undefined) throw new Error(`No such plugin: ${name}`);
+    const root = this.rootOf(record);
+    const skill = (await scanPlugin(root, record.name)).skills.find((each) => each.slug === slug);
+    if (skill === undefined) throw new Error(`No such skill in ${name}: ${slug}`);
+    const [realRoot, realFile] = await Promise.all([realpath(root), realpath(skill.file)]);
+    const inside = relative(realRoot, realFile);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) throw new Error(`${slug}: SKILL.md is outside the plugin folder`);
+    if ((await stat(realFile)).size > SKILL_FILE_MAX_BYTES) throw new Error(`${slug}: SKILL.md is too large to show`);
+    return { slug, path: skill.file, content: await readFile(realFile, "utf8") };
   }
 
   // ---------- 开轮装配 ----------
@@ -639,6 +695,29 @@ export class PluginStore {
 }
 
 // ---------- 小工具 ----------
+
+function byName(a: PluginRecord, b: PluginRecord): number {
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+/** 内置插件没有磁盘记录时的默认：对所有工作区启用。installedAt 取 0——界面对内置插件不显示安装日期。 */
+function defaultBuiltinRecord(name: string): PluginRecord {
+  return {
+    name,
+    source: { kind: "builtin" },
+    version: null,
+    installedAt: 0,
+    updatedAt: 0,
+    scope: { kind: "global" },
+    placement: { kind: "global" },
+    config: {},
+    secretKeys: [],
+  };
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  return stat(path).then((info) => info.isDirectory(), () => false);
+}
 
 function otherOf(record: PluginRecord, scanned: ScannedPlugin | null): OtherPlugin {
   return {

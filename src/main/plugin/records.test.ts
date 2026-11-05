@@ -37,6 +37,12 @@ describe("parsePluginRecords", () => {
     assert.deepEqual(records.map((r) => r.name), ["ok"]);
   });
 
+  test("内置来源（builtin）可读可写回：不带路径，原样往返", () => {
+    const records = parsePluginRecords({ plugins: { "plugin-creator": { ...good, source: { kind: "builtin" }, scope: { kind: "off" } } } });
+    assert.deepEqual(records[0]?.source, { kind: "builtin" });
+    assert.deepEqual(parsePluginRecords(serializePluginRecords(records)), records);
+  });
+
   test("没有 placement 时：启用的以有效范围为位置；停用的回到所有工作区", () => {
     const enabled = parsePluginRecords({ plugins: { a: { ...good, placement: undefined, scope: { kind: "workspaces", ids: ["w"] } } } })[0];
     assert.deepEqual(enabled?.placement, { kind: "workspaces", ids: ["w"] });
