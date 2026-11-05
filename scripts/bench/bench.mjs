@@ -10,7 +10,7 @@
 // 窗口必须一直看得见：被盖住 / 最小化时 rAF 不跑，帧数为 0 的那次会被标出来。脚本不去动窗口层级。
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import os from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -28,10 +28,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // —— 参数 ——
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : dflt; };
-const FIXTURE = opt("fixture");
-if (!FIXTURE) { console.error("用法：node scripts/bench/bench.mjs --fixture <zip 或已解开的目录> [--turns 10,30,60,100] [--runs 5] [--label 名字] [--no-build]"); process.exit(1); }
-const TURNS = opt("turns", "10,30,60,100").split(",").map(Number);
+const FIXTURES = argv.flatMap((a, i) => (a === "--fixture" ? [argv[i + 1]] : []));
+if (FIXTURES.length === 0) {
+  console.error("用法：node scripts/bench/bench.mjs --fixture <zip 或目录> [--fixture …] [--ticks 6df79261=10,60;fb46e6be=pre4,end] [--runs 5] [--runs-big 3] [--compact-reps 3] [--actions switch,idle,turn,type,compact] [--label 名字] [--no-build]");
+  process.exit(1);
+}
+// 每个素材跑哪些刻度：--ticks 里给了就听它，否则用素材 manifest 的 defaultTicks
+const TICKS = Object.fromEntries((opt("ticks", "") || "").split(";").filter(Boolean).map((s) => { const [k, v] = s.split("="); return [k, v.split(",")]; }));
 const RUNS = Number(opt("runs", 5));
+// 大会话（会话文件 > 30 MB）每格的次数：一轮要十几秒，5 次 × 很多格在慢机器上太久
+const RUNS_BIG = Number(opt("runs-big", 3));
+// 压缩场景重复几次（每次一个新实例：压过一次的会话就不是同一个起点了）；0 = 不跑
+const COMPACT_REPS = Number(opt("compact-reps", 3));
+// 跑哪些动作：「switch,turn」对全部素材；「6df79261=switch,turn」只改这个素材，其余照默认全跑（可用 ; 写多个）
+const ALL_ACTIONS = "switch,idle,turn,type,compact";
+const ACTION_SPEC = opt("actions", ALL_ACTIONS);
+const actionsFor = (fixture) => {
+  if (!ACTION_SPEC.includes("=")) return new Set(ACTION_SPEC.split(","));
+  const hit = ACTION_SPEC.split(";").map((s) => s.split("=")).find(([k]) => k === fixture);
+  return new Set((hit?.[1] ?? ALL_ACTIONS).split(","));
+};
 const LABEL = opt("label", `${os.hostname()}`);
 const WORK = resolve(opt("work", join(os.tmpdir(), "orbita-bench")));
 const OUT = resolve(opt("out", join(REPO, "bench-results")));
@@ -262,12 +278,12 @@ async function submit(r, prompt) {
 
 /** 等假模型把这一轮的正文流完（kind = text 的请求有了 doneAt） */
 async function waitTurnDone(mock, t0) {
-  for (let i = 0; i < 600; i++) {
+  for (let i = 0; i < 1800; i++) {
     const reqs = mock.log.filter((q) => q.arrivedAt >= t0 && q.hasTools);
     if (reqs.some((q) => q.kind === "text" && q.doneAt)) return reqs;
     await sleep(100);
   }
-  throw new Error("60 秒内这一轮没跑完");
+  throw new Error("3 分钟内这一轮没跑完");
 }
 
 const TURN_PROMPT = "bench turn tokens=300 rate=50 ttft=300 tool=2";
@@ -299,7 +315,9 @@ async function actionTurn(c, pids, mock) {
   const gaps = reqs.slice(1).map((q, i) => q.arrivedAt - reqs[i].doneAt);
   return {
     enterToReqMs: reqs[0].arrivedAt - t0, reqMB: reqs[0].bodyBytes / 1e6, reqMessages: reqs[0].messages,
-    toolGapMs: gaps.length ? gaps.reduce((s, x) => s + x, 0) / gaps.length : null, firstTokenMs: tFirst - t0, ...m,
+    toolGapMs: gaps.length ? gaps.reduce((s, x) => s + x, 0) / gaps.length : null, firstTokenMs: tFirst - t0,
+    // 应当恒为 0；非 0 说明这一轮意外触发了压缩（例如压缩后的预检又压了一次）
+    summaryN: mock.log.filter((q) => q.arrivedAt >= t0 && q.kind === "summary").length, ...m,
   };
 }
 
@@ -332,62 +350,190 @@ async function actionType(c, pids, mock) {
   return { typedChars, keyP95: lat[Math.floor(lat.length * 0.95)], keyMax: lat.at(-1), keyOver50: lat.filter((x) => x > 50).length, ...m };
 }
 
-// —— 一个刻度：铺实例 → 起 → 量 → 停 ——
-async function runTick(fx, turns, ctx) {
+const COMPACT_PROMPT = "bench compact tokens=300 rate=50 ttft=300 tool=2 ctx=1700000";
+
+/** 会话文件从 offset 起新增的内容里有没有压缩界碑（只读新增部分：不为探测去整读 145 MB） */
+function newMarker(file, offset) {
+  const size = statSync(file).size;
+  if (size <= offset) return false;
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(size - offset);
+    readSync(fd, buf, 0, buf.length, offset);
+    return buf.toString("utf8").includes('"role":"compacted"');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * 触发一次自动压缩：这一轮的正文回复报 ctx=1700000，超过 200 万窗口的 80%，pi 在轮末压缩。
+ * 量这一整段（回车 → 界碑落盘 + 1.5 s）的各进程数，再拆出压缩本身的几段时间。
+ */
+async function actionCompact(c, pids, mock, sessionFile) {
+  const offset = statSync(sessionFile).size;
+  await begin(c);
+  const { t0, first } = await submit(c.r, COMPACT_PROMPT);
+  const tFirst = await first();
+  const reqs = await waitTurnDone(mock, t0);
+  const textDone = reqs.find((q) => q.kind === "text").doneAt;
+  let markerAt = null;
+  for (let i = 0; i < 1800 && markerAt === null; i++) {
+    if (newMarker(sessionFile, offset)) markerAt = Date.now();
+    else await sleep(100);
+  }
+  if (markerAt === null) throw new Error("3 分钟内没等到压缩界碑落盘（压缩没触发或失败，看实例日志）");
+  await sleep(1500);
+  const m = await end(c, pids);
+  const sums = mock.log.filter((q) => q.arrivedAt >= t0 && q.kind === "summary");
+  return {
+    enterToReqMs: reqs[0].arrivedAt - t0, firstTokenMs: tFirst - t0,
+    compactTotalMs: markerAt - textDone,
+    summaryPrepMs: sums[0] ? sums[0].arrivedAt - textDone : null,
+    summaryN: sums.length, summaryMB: sums.reduce((s, q) => s + q.bodyBytes, 0) / 1e6,
+    summaryDoneToMarkerMs: sums.at(-1)?.doneAt ? markerAt - sums.at(-1).doneAt : null,
+    ...m,
+  };
+}
+
+/**
+ * 打开会话时的量：session:load 回来的尾窗多大（条数 / 字节 / 耗时，从 renderer 调同一个 IPC），
+ * 界面渲染了多少 DOM；以及在主进程、agent 进程里各自同步读 + 逐行 JSON.parse 一遍自己那份会话文件
+ * 的耗时——这是「每轮整份重读」的下界模拟（不是 pi / store 的原函数，量的是同进程、同文件的读与解析）。
+ */
+async function loadProbe(c, sessionId, sessionFile, piFile) {
+  const win = [];
+  for (let i = 0; i < 3; i++) {
+    win.push(await c.r.evaluate(`(async () => { const t = performance.now(); const w = await window.orbita.session.load(${JSON.stringify(sessionId)}); const ms = performance.now() - t;
+      return { ms, records: w.transcript.length, total: w.window.total, hasMore: w.window.hasMore, compactionsBefore: w.window.compactionsBefore,
+        compactedInWindow: w.transcript.filter(r => r.role === 'compacted').length, bytes: JSON.stringify(w.transcript).length }; })()`, 120_000));
+    await sleep(500);
+  }
+  const dom = await c.r.evaluate(`({ nodes: document.getElementsByTagName('*').length, userBubbles: document.querySelectorAll('.user-msg-time').length })`);
+  const readParse = (file) => `(() => { const fs = process.getBuiltinModule('node:fs'); const t0 = performance.now(); const s = fs.readFileSync(${JSON.stringify(file)}, 'utf8');
+    const t1 = performance.now(); let n = 0; for (const l of s.split('\\n')) if (l) { JSON.parse(l); n++; } const t2 = performance.now(); return { readMs: t1 - t0, parseMs: t2 - t1, lines: n }; })()`;
+  const agentRP = [], mainRP = [];
+  for (let i = 0; i < 3; i++) {
+    agentRP.push(await c.agent.evaluate(readParse(piFile), 120_000));
+    mainRP.push(await c.main.evaluate(readParse(sessionFile), 120_000));
+  }
+  const med = (xs) => [...xs].sort((a, b) => a - b)[xs.length >> 1];
+  return {
+    loadIpcMs: med(win.map((w) => w.ms)), windowRecords: win[0].records, totalRecords: win[0].total, windowMB: win[0].bytes / 1e6,
+    hasMore: win[0].hasMore, compactionsBeforeWindow: win[0].compactionsBefore, compactedInWindow: win[0].compactedInWindow,
+    domNodes: dom.nodes, userBubbles: dom.userBubbles,
+    agentReadMs: med(agentRP.map((x) => x.readMs)), agentParseMs: med(agentRP.map((x) => x.parseMs)),
+    mainReadMs: med(mainRP.map((x) => x.readMs)), mainParseMs: med(mainRP.map((x) => x.parseMs)),
+  };
+}
+
+const runs = async (n, fn) => { const out = []; for (let i = 0; i < n; i++) out.push(await fn()); return out; };
+
+/** 铺 + 起一个实例，接上三个进程、装好探针，并冷打开一次目标会话 */
+async function startInstance(fixtureDir, spec, ctx, logName) {
   const userData = join(WORK, "orbita-bench"); // 目录名决定工作区根：~/Orbita-bench（data-dirs.ts）
   if (existsSync(userData) && !existsSync(join(userData, ".orbita-bench"))) throw new Error(`${userData} 不是测量脚本建的，不删`);
   rmSync(userData, { recursive: true, force: true });
   mkdirSync(userData, { recursive: true });
   writeFileSync(join(userData, ".orbita-bench"), "");
-  const ws = join(WORK, "ws");
-  const { sessionId, turns: actual } = seedInstance({ fx, userData, ws, mockPort: ctx.mockPort, turns });
-  const title = `bench-${turns}`;
-  const sizes = tickSizes(userData, sessionId);
-  step(`${turns} 轮：会话 ${(sizes.sessionBytes / 1e6).toFixed(1)} MB，pi 会话本 ${(sizes.piBytes / 1e6).toFixed(1)} MB；起实例`);
-  const app = launch({ userData, cdpPort: ctx.cdpPort, logFile: join(ctx.outDir, `instance-${turns}.log`) });
-  const tick = { turns: actual, sizes, actions: {}, warnings: [] };
-  let cdp = null;
+  // 素材每格现读：大素材不常驻驱动的内存
+  const seeded = seedInstance({ fx: loadFixture(fixtureDir), userData, ws: join(WORK, "ws"), mockPort: ctx.mockPort, spec });
+  const sizes = tickSizes(userData, seeded.sessionId);
+  const sessionFile = join(userData, "sessions", `${seeded.sessionId}.jsonl`);
+  const piFile = JSON.parse(readFileSync(join(userData, "sessions", `${seeded.sessionId}.meta.json`), "utf8")).piSessionFile;
+  const app = launch({ userData, cdpPort: ctx.cdpPort, logFile: join(ctx.outDir, `instance-${logName}.log`) });
   try {
     const c = await attach(app, ctx.cdpPort);
-    cdp = c.r;
     ctx.machine.display ??= await c.main.evaluate(`(() => { const d = require('electron').screen.getPrimaryDisplay(); return { scaleFactor: d.scaleFactor, width: d.size.width, height: d.size.height, hz: d.displayFrequency }; })()`);
     ctx.machine.onBattery ??= await c.main.evaluate(`require('electron').powerMonitor.isOnBatteryPower()`);
     ctx.electron ??= await c.main.evaluate("process.versions.electron");
     const pids = await installProbes(c);
-
-    step(`${turns} 轮：冷打开 1 次 + 切会话 ×${RUNS}`);
     await clickRow(c.r, "bench-home");
     await sleep(1000);
-    tick.coldOpen = await actionSwitch(c, pids, title);
-    const runs = (n, fn) => (async () => { const out = []; for (let i = 0; i < n; i++) out.push(await fn()); return out; })();
-    tick.actions.switch = { runs: await runs(RUNS, () => actionSwitch(c, pids, title)) };
-    step(`${turns} 轮：空闲`);
-    await sleep(2000);
-    tick.actions.idle = { runs: [await actionIdle(c, pids)] };
-    step(`${turns} 轮：跑一轮 ×${RUNS + 1}（第 1 次预热不计）`);
-    tick.actions.turn = { warmup: await actionTurn(c, pids, ctx.mock), runs: await runs(RUNS, () => actionTurn(c, pids, ctx.mock)) };
-    step(`${turns} 轮：流式时打字 ×${RUNS + 1}`);
-    tick.actions.type = { warmup: await actionType(c, pids, ctx.mock), runs: await runs(RUNS, () => actionType(c, pids, ctx.mock)) };
-    for (const [name, a] of Object.entries(tick.actions)) {
-      for (const run of a.runs) {
-        if (run._visible !== "visible" || run["r.frames"] === 0) tick.warnings.push(`${name}：有一次窗口不可见或 0 帧（visibility=${run._visible}），帧相关的数不可信`);
-        delete run._events;
-      }
-      if (a.warmup) delete a.warmup._events;
-      a.summary = summarize(a.runs);
-    }
-    delete tick.coldOpen._events;
-    for (const x of [c.r, c.main, c.agent]) x.close();
+    const coldOpen = await actionSwitch(c, pids, seeded.title);
+    delete coldOpen._events;
+    return { app, c, pids, seeded, sizes, sessionFile, piFile, coldOpen };
   } catch (error) {
-    console.error(`✖ ${turns} 轮失败：${error.stack ?? error}`);
-    tick.warnings.push(`整格失败：${error.message}`);
-    // 留一张失败时的截图，看卡在哪个界面
-    const shot = await cdp?.send("Page.captureScreenshot", { format: "png" }, 10_000).catch(() => null);
-    if (shot) writeFileSync(join(ctx.outDir, `fail-${turns}.png`), Buffer.from(shot.data, "base64"));
-  } finally {
-    await stop(app.child);
-    app.flushLog();
+    error.app = app;
+    throw error;
   }
+}
+
+function finish(actions, warnings) {
+  for (const [name, a] of Object.entries(actions)) {
+    for (const run of a.runs) {
+      if (run._visible !== "visible" || run["r.frames"] === 0) warnings.push(`${name}：有一次窗口不可见或 0 帧（visibility=${run._visible}），帧相关的数不可信`);
+      delete run._events;
+    }
+    if (a.warmup) delete a.warmup._events;
+    a.summary = summarize(a.runs);
+  }
+}
+
+// —— 一个刻度：铺实例 → 起 → 量 → 停；压缩场景每次另起新实例 ——
+async function runTick(fixtureDir, fixtureName, spec, ctx) {
+  const ACTIONS = actionsFor(fixtureName);
+  const tick = { fixture: fixtureName, spec, actions: {}, warnings: [] };
+  const name = `${fixtureName}-${spec}`;
+  const fail = async (inst, error, what) => {
+    console.error(`✖ ${name} ${what}失败：${error.stack ?? error}`);
+    tick.warnings.push(`${what}失败：${error.message}`);
+    const shot = await inst?.c?.r.send("Page.captureScreenshot", { format: "png" }, 10_000).catch(() => null);
+    if (shot) writeFileSync(join(ctx.outDir, `fail-${name}-${what}.png`), Buffer.from(shot.data, "base64"));
+  };
+  const main = ["switch", "idle", "turn", "type"].some((a) => ACTIONS.has(a));
+  let inst = null;
+  if (main) {
+    try {
+      step(`${name}：铺素材、起实例、冷打开`);
+      inst = await startInstance(fixtureDir, spec, ctx, name);
+      Object.assign(tick, { label: inst.seeded.label, turns: inst.seeded.turns, compactions: inst.seeded.compactions, sizes: inst.sizes, coldOpen: inst.coldOpen });
+      const n = inst.sizes.sessionBytes > 30e6 ? Math.min(RUNS, RUNS_BIG) : RUNS;
+      tick.runs = n;
+      step(`${name}：${inst.seeded.turns} 轮、${inst.seeded.compactions} 次压缩，会话 ${(inst.sizes.sessionBytes / 1e6).toFixed(1)} MB / pi ${(inst.sizes.piBytes / 1e6).toFixed(1)} MB；冷打开 ${inst.coldOpen.settleMs} ms；每格 ${n} 次`);
+      const { c, pids, seeded } = inst;
+      await sleep(1500);
+      tick.load = await loadProbe(c, seeded.sessionId, inst.sessionFile, inst.piFile);
+      await sleep(2000);
+      if (ACTIONS.has("switch")) tick.actions.switch = { runs: await runs(n, () => actionSwitch(c, pids, seeded.title)) };
+      if (ACTIONS.has("idle")) { await sleep(2000); tick.actions.idle = { runs: [await actionIdle(c, pids)] }; }
+      if (ACTIONS.has("turn")) { step(`${name}：跑一轮 ×${n + 1}`); tick.actions.turn = { warmup: await actionTurn(c, pids, ctx.mock), runs: await runs(n, () => actionTurn(c, pids, ctx.mock)) }; }
+      if (ACTIONS.has("type")) { step(`${name}：流式时打字 ×${n + 1}`); tick.actions.type = { warmup: await actionType(c, pids, ctx.mock), runs: await runs(n, () => actionType(c, pids, ctx.mock)) }; }
+    } catch (error) {
+      await fail(inst, error, "常规动作");
+      inst ??= { app: error.app };
+    } finally {
+      for (const x of [inst?.c?.r, inst?.c?.main, inst?.c?.agent]) x?.close();
+      if (inst?.app) { await stop(inst.app.child); inst.app.flushLog(); }
+    }
+  }
+  if (ACTIONS.has("compact") && COMPACT_REPS > 0) {
+    const reps = { compactPre: [], compact: [], compactPost1: [], compactPost2: [], compactPost3: [] };
+    for (let k = 1; k <= COMPACT_REPS; k++) {
+      let ci = null;
+      try {
+        step(`${name}：压缩场景 第 ${k}/${COMPACT_REPS} 次（新实例：预热一轮 → 压缩前一轮 → 压缩 → 压缩后三轮）`);
+        ci = await startInstance(fixtureDir, spec, ctx, `${name}-compact${k}`);
+        if (!tick.sizes) Object.assign(tick, { label: ci.seeded.label, turns: ci.seeded.turns, compactions: ci.seeded.compactions, sizes: ci.sizes, coldOpen: ci.coldOpen });
+        const { c, pids } = ci;
+        await sleep(1500);
+        await actionTurn(c, pids, ctx.mock); // 预热：这个实例第一轮带着 agent 冷启动
+        reps.compactPre.push(await actionTurn(c, pids, ctx.mock));
+        reps.compact.push(await actionCompact(c, pids, ctx.mock, ci.sessionFile));
+        reps.compactPost1.push(await actionTurn(c, pids, ctx.mock));
+        reps.compactPost2.push(await actionTurn(c, pids, ctx.mock));
+        reps.compactPost3.push(await actionTurn(c, pids, ctx.mock));
+      } catch (error) {
+        await fail(ci, error, `压缩场景第 ${k} 次`);
+        ci ??= { app: error.app };
+      } finally {
+        for (const x of [ci?.c?.r, ci?.c?.main, ci?.c?.agent]) x?.close();
+        if (ci?.app) { await stop(ci.app.child); ci.app.flushLog(); }
+      }
+    }
+    for (const [k, v] of Object.entries(reps)) if (v.length > 0) tick.actions[k] = { runs: v };
+  }
+  finish(tick.actions, tick.warnings);
   return tick;
 }
 
@@ -400,9 +546,12 @@ if (!argv.includes("--no-build")) {
   execFileSync(process.execPath, [join(REPO, "node_modules/electron-vite/bin/electron-vite.js"), "build"], { cwd: REPO, stdio: "inherit" });
 }
 if (!existsSync(join(REPO, "out/main/index.js"))) throw new Error("out/ 里没有生产构建，先去掉 --no-build 跑一次");
-const fixtureDir = statSync(FIXTURE).isDirectory() ? FIXTURE : extractFixture(FIXTURE, join(WORK, `fixture-${basename(FIXTURE, ".zip")}`));
-const fx = loadFixture(fixtureDir);
-const sha = createHash("sha256").update(readFileSync(join(fixtureDir, "manifest.json"))).digest("hex");
+const fixtures = FIXTURES.map((f) => {
+  const dir = statSync(f).isDirectory() ? f : extractFixture(f, join(WORK, `fixture-${basename(f, ".zip")}`));
+  const manifestRaw = readFileSync(join(dir, "manifest.json"));
+  const manifest = JSON.parse(manifestRaw);
+  return { dir, name: manifest.fixture, sha256: createHash("sha256").update(manifestRaw).digest("hex"), ticks: TICKS[manifest.fixture] ?? manifest.defaultTicks ?? ["10", "30", "60", "100"] };
+});
 const toolFile = join(WORK, "ws", "bench-tool-8kb.txt");
 mkdirSync(dirname(toolFile), { recursive: true });
 writeFileSync(toolFile, `${"x".repeat(63)}\n`.repeat(128));
@@ -412,17 +561,20 @@ const mock = await startMock({ port: mockPort, toolFile });
 step(`假模型 127.0.0.1:${mockPort}，CDP ${cdpPort}，结果 → ${outDir}`);
 const ctx = { mock, mockPort, cdpPort, outDir, machine: machineInfo() };
 const result = {
-  schema: 1, label: LABEL, startedAt: new Date().toISOString(), machine: ctx.machine,
+  schema: 2, label: LABEL, startedAt: new Date().toISOString(), machine: ctx.machine,
   build: { type: "生产构建（electron-vite build，electron . 加载 out/，React 生产模式）", commit: sh("git", ["-C", REPO, "rev-parse", "--short", "HEAD"]), dirty: (sh("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"]) ?? "") !== "", electron: null },
-  fixture: { name: fx.manifest.fixture, sha256: sha, totalTurns: fx.totalTurns },
-  config: { runs: RUNS, turnPrompt: TURN_PROMPT, typePrompt: TYPE_PROMPT, keys: KEYS.length, platform: process.platform },
+  fixtures: fixtures.map(({ name, sha256, ticks }) => ({ name, sha256, ticks })),
+  config: { runs: RUNS, runsBig: RUNS_BIG, compactReps: COMPACT_REPS, actions: ACTION_SPEC, turnPrompt: TURN_PROMPT, typePrompt: TYPE_PROMPT, compactPrompt: COMPACT_PROMPT, keys: KEYS.length, platform: process.platform },
   ticks: [],
 };
-for (const turns of TURNS) {
-  result.ticks.push(await runTick(fx, turns, ctx));
-  result.build.electron = ctx.electron ?? null;
-  writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(outDir, "result.md"), renderMarkdown(result));
+for (const f of fixtures) {
+  for (const spec of f.ticks) {
+    result.ticks.push(await runTick(f.dir, f.name, spec, ctx));
+    result.build.electron = ctx.electron ?? null;
+    result.finishedAt = new Date().toISOString();
+    writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
+    writeFileSync(join(outDir, "result.md"), renderMarkdown(result));
+  }
 }
 mock.close();
 step(`完成 → ${join(outDir, "result.md")}`);
