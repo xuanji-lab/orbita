@@ -19,6 +19,7 @@ import type { UsagePetPref } from "@shared/settings";
 import type { UsageDayTotal } from "@shared/usage";
 import { ModelAvatar } from "../features/settings/ModelAvatar";
 import { formatMoney } from "../utils/money.ts";
+import { nebCardSpot, sameNebCardSpot, type NebCardSpot } from "./neb-card.ts";
 
 /**
  * 侧栏左下角的 7 天 token 用量格 + 星云能量体。
@@ -88,6 +89,9 @@ export function UsageMeter(props: {
   const hovered = hover === null ? undefined : cells[hover];
   const hoveredDay = hovered === undefined ? undefined : days?.find((day) => day.date === hovered.date);
   const petRef = useRef<HTMLDivElement | null>(null);
+  // 云的 left 是渲染期唯一决定其水平位置的输入（垂直只随窗口尺寸变），
+  // NebCardPortal 靠它知道「云换了格、该重新量锚点」
+  const petLeftPx = petLeft(active);
 
   return (
     <div className="usage-meter" data-hidden={hidden || undefined} data-say={props.petSay !== null || undefined}>
@@ -101,9 +105,11 @@ export function UsageMeter(props: {
           orbita
         </div>
       {props.petCard !== null && (
-        <NebCardPortal petRef={petRef}>{props.petCard}</NebCardPortal>
+        <NebCardPortal petRef={petRef} petLeftPx={petLeftPx}>
+          {props.petCard}
+        </NebCardPortal>
       )}
-      <div ref={petRef} className="usage-pet" style={{ left: petLeft(active) }}>
+      <div ref={petRef} className="usage-pet" style={{ left: petLeftPx }}>
         {props.petSay !== null ? (
           props.petSay
         ) : (
@@ -304,12 +310,24 @@ function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
 
 /**
  * 星云卡片的浮层锚：portal 到 body + fixed（侧栏 aside 是 overflow:hidden，360px 的卡
- * 在原地渲染右缘被裁——2026-10-19 用户截图实证）。位置随星云当格（petRef 量 rect）：
- * 水平居中于云心、两端夹回视口；底边钉在云顶上方 8px，向上生长；max-height = 云顶到
- * 视口顶的余量（再减 24），内容区自己滚。窗口尺寸变化重算（侧栏拖宽 / 缩放）。
+ * 在原地渲染右缘被裁——2026-10-19 用户截图实证）。几何由 nebCardSpot 纯函数算，
+ * 只在可能改变云位置的时机量 rect，而不是每次渲染都量：
+ *   - 挂载时量一次（卡片出现）；
+ *   - petLeftPx 变（悬停 / 钉 / 说话换格——渲染期里唯一会动云水平位置的输入）；
+ *   - 云滑到新格是 160ms 的 CSS 过渡，渲染那一下量到的是起点，transitionend 后
+ *     再量一次才钉在终点（云自身的 left/transform，以及停机坪 padding-top 的过渡
+ *     都会冒泡到这里）；
+ *   - 窗口 resize / 文档根尺寸变（缩放）。
+ * 曾经依赖 props.children：它每次渲染都是新引用，等于每渲染一次就 getBoundingClientRect
+ * 强制布局一次——流式时 UsageMeter 高频重渲染，60 轮会话累计秒级；而卡片位置只由
+ * 云的 rect 与视口决定，与卡片内容无关（侧栏格子行定宽左对齐，拖宽侧栏不动云）。
  */
-function NebCardPortal(props: { petRef: React.RefObject<HTMLDivElement | null>; children: React.ReactNode }) {
-  const [spot, setSpot] = useState<{ left: number; bottom: number; maxHeight: number; tailX: number } | null>(null);
+function NebCardPortal(props: {
+  petRef: React.RefObject<HTMLDivElement | null>;
+  petLeftPx: number;
+  children: React.ReactNode;
+}) {
+  const [spot, setSpot] = useState<NebCardSpot | null>(null);
   useLayoutEffect(() => {
     const place = (): void => {
       const pet = props.petRef.current;
@@ -318,35 +336,24 @@ function NebCardPortal(props: { petRef: React.RefObject<HTMLDivElement | null>; 
         return;
       }
       const rect = pet.getBoundingClientRect();
-      const width = Math.min(360, window.innerWidth - 16);
-      const center = rect.left + rect.width / 2;
-      const left = Math.max(8, Math.min(Math.round(center - width / 2), window.innerWidth - width - 8));
-      const tailX = Math.max(14, Math.min(width - 14, Math.round(center - left)));
-      const next = {
-        left,
-        bottom: Math.max(8, window.innerHeight - rect.top + 8),
-        maxHeight: Math.max(120, rect.top - 24),
-        tailX,
-      };
-      setSpot((current) =>
-        current !== null &&
-        current.left === next.left &&
-        current.bottom === next.bottom &&
-        current.maxHeight === next.maxHeight &&
-        current.tailX === next.tailX
-          ? current
-          : next,
+      const next = nebCardSpot(
+        { left: rect.left, width: rect.width, top: rect.top },
+        { width: window.innerWidth, height: window.innerHeight },
       );
+      setSpot((current) => (current !== null && sameNebCardSpot(current, next) ? current : next));
     };
     place();
+    const pet = props.petRef.current;
+    pet?.addEventListener("transitionend", place);
     const observer = new ResizeObserver(place);
     observer.observe(document.documentElement);
     window.addEventListener("resize", place);
     return () => {
+      pet?.removeEventListener("transitionend", place);
       observer.disconnect();
       window.removeEventListener("resize", place);
     };
-  }, [props.petRef, props.children]);
+  }, [props.petRef, props.petLeftPx]);
   if (spot === null) return null;
   return createPortal(
     <div
