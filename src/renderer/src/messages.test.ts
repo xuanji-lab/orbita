@@ -24,6 +24,7 @@ const ALLOWED_LATIN = new Set([
   "SSE",
   "HTTP",
   "Markdown",
+  "mermaid",
   "stdio",
   "http",
   "https",
