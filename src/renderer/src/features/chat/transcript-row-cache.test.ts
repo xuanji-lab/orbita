@@ -42,7 +42,7 @@ describe("branchInfoOf", () => {
   const a2 = assistant("a2", ["第二句"], { usage: { output: 100 }, genMs: 1000 });
   const records: TranscriptRecord[] = [user("u1"), a1, a2, user("u2"), assistant("b1", ["下一轮"])];
 
-  test("按锚点所在整轮取复制文本与速度（同 turnAssistantRecords + answerText + replySpeed）", () => {
+  test("按锚点所在整轮取复制文本与速度（同 turnAssistantRecordsAt + answerText + replySpeed）", () => {
     const info = branchInfoOf(records, new Map([[2, "a2"]]));
     assert.equal(info.get("a2")?.copyText, "第一句\n\n第二句");
     assert.equal(typeof info.get("a2")?.speed, "number");
