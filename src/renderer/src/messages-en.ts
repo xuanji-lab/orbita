@@ -2004,9 +2004,9 @@ export const en = {
     },
     conflict: {
       skillUser: (skill: string, other: string) =>
-        `Skill “${skill}” has the same name as your skill “${other}”. Rename one of them (the Skills panel, or the name line in its SKILL.md), then connect again.`,
+        `Skill “${skill}” has the same name as your skill “${other}”, and the two can't coexist. Rename one of them (the Skills panel, or the name line in its SKILL.md).`,
       skillPlugin: (skill: string, other: string) =>
-        `Skill “${skill}” has the same name as a skill in the plugin “${other}”. Rename one of them in its SKILL.md, then connect again.`,
+        `Skill “${skill}” has the same name as a skill in the plugin “${other}”, and the two can't coexist. Rename one of them in its SKILL.md.`,
       skillDuplicate: (skill: string) => `Two skills inside this plugin are both called “${skill}”.`,
       pluginExists: (name: string) => `A plugin named “${name}” is already installed. Uninstall it first.`,
       mcpName: (server: string, qualified: string, other: string) =>

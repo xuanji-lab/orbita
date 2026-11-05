@@ -1849,9 +1849,9 @@ export const zh: Messages = {
     },
     conflict: {
       skillUser: (skill, other) =>
-        `技能「${skill}」与你的技能「${other}」重名。给其中一个改名（右栏「技能」面板，或改它 SKILL.md 里的 name），再接入。`,
+        `技能「${skill}」与你的技能「${other}」重名，两条不能并存。给其中一个改名就行（右栏「技能」面板，或改它 SKILL.md 里的 name）。`,
       skillPlugin: (skill, other) =>
-        `技能「${skill}」与插件「${other}」里的技能重名。改其中一个的 SKILL.md 里的 name，再接入。`,
+        `技能「${skill}」与插件「${other}」里的技能重名，两条不能并存。改其中一个 SKILL.md 里的 name 就行。`,
       skillDuplicate: (skill) => `这个插件里有两条技能都叫「${skill}」。`,
       pluginExists: (name) => `已经装了叫「${name}」的插件。先卸载它。`,
       mcpName: (server, qualified, other) => `服务「${server}」会叫 ${qualified}，插件「${other}」已经在用这个名字。`,

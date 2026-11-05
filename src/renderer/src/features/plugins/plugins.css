@@ -541,11 +541,30 @@
 }
 
 .pl-lead {
-  margin-top: var(--space-2);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin: var(--space-2) 0 0;
+  padding: 0;
   max-width: 560px;
+  border: 0;
+  background: transparent;
   color: var(--color-text-secondary);
+  font: inherit;
   line-height: var(--line-height-ui);
+  text-align: left;
   overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.pl-lead[data-open="true"] {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.pl-lead:hover {
+  color: var(--color-text-primary);
 }
 
 .pl-acts {

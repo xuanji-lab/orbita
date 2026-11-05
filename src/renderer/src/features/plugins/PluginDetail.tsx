@@ -34,6 +34,7 @@ export function PluginDetail(props: {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<null | "reload" | "uninstall">(null);
   const [reloaded, setReloaded] = useState(false);
+  const [leadOpen, setLeadOpen] = useState(false);
 
   const run = async (task: () => Promise<void>): Promise<void> => {
     setError(null);
@@ -69,7 +70,18 @@ export function PluginDetail(props: {
         <div className="pl-hero-main">
           <div className="pl-title">{view.name}</div>
           <div className="pl-by">{by.join(" · ")}</div>
-          {view.description !== "" && <div className="pl-lead">{view.description}</div>}
+          {view.description !== "" && (
+            // 描述原文常常几百字（技能的触发词清单）：默认三行，点一下展开——简洁为默认、细节可展开
+            <button
+              type="button"
+              className="pl-lead"
+              aria-expanded={leadOpen}
+              data-open={leadOpen}
+              onClick={() => setLeadOpen((open) => !open)}
+            >
+              {view.description}
+            </button>
+          )}
         </div>
         <span className="pl-acts">
           {isPlugin && (
@@ -283,7 +295,8 @@ export function PluginDetail(props: {
               )}
             </dl>
             {view.location !== null && view.install === null && <span className="pl-code">{view.location}</span>}
-            {view.install !== null && <span className="pl-code">{view.install.root}</span>}
+            {/* 链接安装的根就是来源那一行的路径，不再重复一遍 */}
+            {view.install !== null && view.install.source.kind !== "link" && <span className="pl-code">{view.install.root}</span>}
           </section>
         </div>
       </div>
