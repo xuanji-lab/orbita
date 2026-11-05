@@ -713,6 +713,44 @@ export const zh: Messages = {
     noMatchInProvider: (query: string) => `这家服务商里没有匹配「${query}」的模型。`,
   },
 
+  board: {
+    /** 右栏入口与整页标题 */
+    title: "看板",
+    prevWeek: "上一周",
+    nextWeek: "下一周",
+    thisWeek: "回到本周",
+    daysChoice: "一屏显示的天数",
+    days: (count: number) => `${count} 天`,
+    weekdays: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+    today: "今天",
+    loading: "载入中…",
+    loadFailed: (message: string) => `看板读不出来：${message}`,
+    retry: "重试",
+    openAutomation: "去自动化面板",
+    emptyTitle: "还没有看板",
+    emptyHint: "建一条选了插件的自动化，它每次跑完，卡片就会出现在运行的那一天。",
+    noneRan: "这天没有自动化运行",
+    nonePlanned: "这天没有排好的自动化",
+    /** 跑过但没有卡的运行：一行灰字 */
+    bareRun: (time: string, title: string) => `${time} ${title} · 没有看板`,
+    bareRunning: (time: string, title: string) => `${time} ${title} · 正在跑`,
+    bareFailed: (time: string, title: string) => `${time} ${title} · 没跑成`,
+    plannedTip: "排好的自动化，到点会跑",
+    openSession: (caption: string) => `${caption}，打开这次运行的会话`,
+    scrollHint: "按住 Shift 滚动滚轮，左右滑动看别的天",
+    /** 会话里的看板结果：被跳过的卡（每张一句原因） */
+    skipped: (items: string) => `没有显示：${items}`,
+    skipReason: {
+      "unknown-card": "清单里没有这张卡",
+      template: "模板读不出来",
+      data: "数据读不出来",
+      "too-large": "数据太大",
+      budget: "超过了整份快照的大小上限",
+      repeat: "展开的项太多或不是数组",
+    },
+    draftResult: "这是草稿里的看板，按钮不会记录，装上之后才有用。",
+  },
+
   rail: {
     files: "文件",
     review: "审查改动",
@@ -732,6 +770,7 @@ export const zh: Messages = {
     },
     automation: "自动化",
     plugins: "插件",
+    board: "看板",
   },
 
   browser: {

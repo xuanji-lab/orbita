@@ -54,7 +54,7 @@ export type RightPanelKind =
  * 它们在条上的分组与精简态去留不由调用方定，由 RightRail 按 id 登记（见本文件的 `items`）。
  */
 export interface RailEntry {
-  id: "carryovers" | "archived" | "browser" | "memory" | "settings";
+  id: "carryovers" | "archived" | "browser" | "memory" | "board" | "settings";
   icon: IconName;
   /** tooltip 与读屏共用这一句 */
   label: string;
@@ -224,7 +224,8 @@ export function RightRail(props: {
     // 收起来以后再看的
     ...fromApp("carryovers", { group: "shelf", pinned: false }),
     ...fromApp("archived", { group: "shelf", pinned: false }),
-    // 应用级：设置、通知。铃铛在右下角最底：它是常驻的状态入口，位置稳才扫得到
+    // 应用级：看板（实验功能 plugins）、设置、通知。铃铛在右下角最底：它是常驻的状态入口，位置稳才扫得到
+    ...fromApp("board", { group: "app", pinned: false }),
     ...fromApp("settings", { group: "app", pinned: true }),
     { id: "bell", group: "app", pinned: false, icon: "bell", label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
   ];

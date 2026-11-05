@@ -24,7 +24,8 @@ import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
-import { gatedCommandTimeout } from "../../../../shared/permission.ts";
+import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -217,13 +218,15 @@ function isChannelToolCall(entry: RenderEntry): boolean {
 
 /**
  * 钉住工具（2026-09-27 裁决）：show_image 是**给用户的展示**，不是「工作过程」——
+ * show_plugin_board（插件的看板结果，2026-11-05）同理：用户默认只想要这块看板，读技能、写数据那些步骤照常收进折叠，
+ * 看板卡钉在折叠之后、结尾回复之前。
  * 大折叠把轮内工具吞进统计行时会把它递出的画廊一起吞走，等于模型递完照片当场
  * 收回。与通道工具同一套豁免口径（不进工具组 / 不锚折叠边界 / 折叠区间在它处
  * 切开 / 不计统计——它根本不进 members），但语义不同：通道是父子通信，这是
  * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
  * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
  */
-const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image"]);
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL]);
 
 function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
@@ -1191,6 +1194,15 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
 export function pluginInstallRowOf(result: ToolTranscriptItem | undefined): PluginInstallRow | null {
   if (result === undefined || result.status === "running" || result.status === "error") return null;
   return parsePluginInstallRow(result.details);
+}
+
+/**
+ * show_plugin_board 结果 `details.pluginBoard` 的看板（主进程写的快照，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对都为 null——调用方退回通用工具行。
+ */
+export function pluginBoardOf(result: ToolTranscriptItem | undefined): PluginBoardResult | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parsePluginBoardDetails(result.details);
 }
 
 /** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
