@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { utilityProcess } from "electron";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { AgentHostCore, type CatalogScope } from "./host-core.ts";
+import { AgentHostCore, agentExecArgv, type CatalogScope } from "./host-core.ts";
 
 export class AgentHost extends AgentHostCore {
   /**
@@ -18,7 +18,11 @@ export class AgentHost extends AgentHostCore {
     onEvent: (event: AgentEvent) => void,
     catalogScope: CatalogScope,
   ) {
-    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, catalogScope);
+    super(
+      () => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env, execArgv: agentExecArgv(env) }),
+      onEvent,
+      catalogScope,
+    );
   }
 }
 

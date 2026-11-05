@@ -106,7 +106,7 @@ const getJson = async (url) => (await fetch(url, { signal: AbortSignal.timeout(3
 // —— 起停 ——
 function electronBinary() { return createRequire(join(REPO, "package.json"))("electron"); }
 function launch({ userData, cdpPort, logFile }) {
-  const env = { ...process.env, NODE_OPTIONS: "--inspect=0" };
+  const env = { ...process.env, NODE_OPTIONS: "--inspect=0", ORBITA_AGENT_INSPECT: "1" };
   delete env.ELECTRON_RENDERER_URL; // 从 dev 实例的终端里跑时会继承它；未打包的 electron . 会去连 dev server
   const child = spawn(electronBinary(), [REPO, `--user-data-dir=${userData}`, `--remote-debugging-port=${cdpPort}`], { env, stdio: ["ignore", "pipe", "pipe"] });
   const inspectors = [];

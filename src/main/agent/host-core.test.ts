@@ -16,7 +16,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentCommand, AgentEvent } from "../../shared/agent-ipc.ts";
-import { AgentHostCore, type AgentChild } from "./host-core.ts";
+import { AgentHostCore, agentExecArgv, type AgentChild } from "./host-core.ts";
 
 /** 脚本化的假子进程。 */
 class FakeChild implements AgentChild {
@@ -719,5 +719,16 @@ describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F
     ctx.host.syncCatalogScope();
     await flush();
     assert.deepEqual(refreshes(ctx.child()), []);
+  });
+});
+
+describe("agentExecArgv", () => {
+  test("测量驱动设 ORBITA_AGENT_INSPECT=1 时给 utility 进程显式 --inspect=0", () => {
+    assert.deepEqual(agentExecArgv({ ORBITA_AGENT_INSPECT: "1" }), ["--inspect=0"]);
+  });
+  test("没有该变量或值不为 1 时空数组（正常使用零变化）", () => {
+    assert.deepEqual(agentExecArgv({}), []);
+    assert.deepEqual(agentExecArgv({ ORBITA_AGENT_INSPECT: undefined }), []);
+    assert.deepEqual(agentExecArgv({ ORBITA_AGENT_INSPECT: "0" }), []);
   });
 });
