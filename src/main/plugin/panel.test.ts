@@ -4,15 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { PluginConfigField } from "../../shared/plugin.ts";
-import { PANEL_DATA_MAX_BYTES, PANEL_TEMPLATE_MAX_BYTES } from "../../shared/plugin-panel.ts";
+import { PANEL_DATA_MAX_BYTES, PANEL_SPEC_MAX_BYTES, PANEL_TEMPLATE_MAX_BYTES } from "../../shared/plugin-panel.ts";
 import {
   ActionLimiter,
   appendActionLine,
   itemCountOf,
+  locatePanelFile,
   locatePanelTemplate,
   parsePanelSpec,
   readActionsInfo,
   readPanelData,
+  readPanelSample,
+  readPanelSpec,
   resolveDataPath,
   statDataFile,
   type PanelPathContext,
@@ -57,15 +60,29 @@ function context(partial: Partial<PanelPathContext> = {}): PanelPathContext {
 
 describe("parsePanelSpec", () => {
   test("没有 orbita.panel：不算声明，不报问题", () => {
-    assert.deepEqual(parsePanelSpec({}, "T"), { declared: false, spec: null, problems: [] });
-    assert.deepEqual(parsePanelSpec({ orbita: { workflow: [] } }, "T"), { declared: false, spec: null, problems: [] });
+    assert.deepEqual(parsePanelSpec({}, "T"), { declared: false, spec: null, problems: [], notices: [] });
+    assert.deepEqual(parsePanelSpec({ orbita: { workflow: [] } }, "T"), { declared: false, spec: null, problems: [], notices: [] });
     assert.equal(parsePanelSpec({ orbita: "x" }, "T").declared, false);
   });
 
   test("正常：标题、模板、数据原样（去首尾空白）", () => {
     const parsed = parsePanelSpec({ orbita: { panel: { title: " 文献追踪 ", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_DATA}/panel.json" } } }, "fallback");
-    assert.deepEqual(parsed.spec, { title: "文献追踪", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_DATA}/panel.json" });
+    assert.deepEqual(parsed.spec, { title: "文献追踪", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_DATA}/panel.json", spec: null, sample: null });
     assert.deepEqual(parsed.problems, []);
+  });
+
+  test("spec / sample 是可选的清单原文（去首尾空白）；写成别的形状不拦面板，只记一条 shape 提示", () => {
+    const base = { title: "x", template: "t.html", data: "d.json" };
+    const both = parsePanelSpec({ orbita: { panel: { ...base, spec: " ./panel/spec.md ", sample: "./panel/sample.json" } } }, "T");
+    assert.equal(both.spec?.spec, "./panel/spec.md");
+    assert.equal(both.spec?.sample, "./panel/sample.json");
+    assert.deepEqual(both.notices, []);
+    const bad = parsePanelSpec({ orbita: { panel: { ...base, spec: 3, sample: " " } } }, "T");
+    assert.equal(bad.declared, true);
+    assert.equal(bad.spec?.spec, null, "面板照常出");
+    assert.equal(bad.spec?.sample, null);
+    assert.deepEqual(bad.notices, [{ kind: "shape", detail: "spec" }, { kind: "shape", detail: "sample" }]);
+    assert.deepEqual(parsePanelSpec({ orbita: { panel: { ...base, spec: null } } }, "T").notices, [], "显式写 null = 没写");
   });
 
   test("标题缺省退回显示名；template / data 缺了或类型不对报 shape 并不给 spec", () => {
@@ -208,6 +225,72 @@ describe("locatePanelTemplate", () => {
       d: "template-unreadable",
       "big.html": "template-too-large",
     });
+  });
+});
+
+describe("locatePanelFile：spec 与 sample 走和模板同一条路径规则", () => {
+  test("逃逸（`..`、绝对路径、符号链接）/ 缺失 / 目录 / 超限，各报自己那一档的分类", async () => {
+    await writeFile(join(dir, "outside.md"), "x");
+    await symlink(join(dir, "outside.md"), join(root, "link.md"));
+    await mkdir(join(root, "d"));
+    await writeFile(join(root, "big.md"), "x".repeat(PANEL_SPEC_MAX_BYTES + 1));
+    await writeFile(join(root, "ok.md"), "# hi");
+    const kinds: Record<string, string> = {};
+    for (const raw of ["../outside.md", "/etc/hosts", "link.md", "nope.md", "d", "big.md", "./ok.md"]) {
+      const result = await locatePanelFile(root, raw, "spec");
+      kinds[raw] = result.ok ? "ok" : result.problem.kind;
+    }
+    assert.deepEqual(kinds, {
+      "../outside.md": "spec-escape",
+      "/etc/hosts": "spec-escape",
+      "link.md": "spec-escape",
+      "nope.md": "spec-missing",
+      d: "spec-unreadable",
+      "big.md": "spec-too-large",
+      "./ok.md": "ok",
+    });
+    const sample = await locatePanelFile(root, "../outside.md", "sample");
+    assert.equal(sample.ok === false && sample.problem.kind, "sample-escape");
+    assert.equal((await locatePanelFile(root, "nope.md", "sample")).ok, false);
+  });
+
+  test("样例的上限是数据文件的 2 MB，说明的上限是 64 KB——各用各的", async () => {
+    await writeFile(join(root, "mid.json"), "x".repeat(PANEL_SPEC_MAX_BYTES + 1));
+    assert.equal((await locatePanelFile(root, "mid.json", "sample")).ok, true);
+    assert.equal((await locatePanelFile(root, "mid.json", "spec")).ok, false);
+    await writeFile(join(root, "huge.json"), "x".repeat(PANEL_DATA_MAX_BYTES + 1));
+    const huge = await locatePanelFile(root, "huge.json", "sample");
+    assert.equal(huge.ok === false && huge.problem.kind, "sample-too-large");
+  });
+
+  test("文件在轮询之间被删 / 换成目录：以问题返回，不抛", async () => {
+    await writeFile(join(root, "gone.md"), "x");
+    await rm(join(root, "gone.md"));
+    assert.equal((await locatePanelFile(root, "gone.md", "spec")).ok, false);
+    assert.equal((await locatePanelFile(join(root, "no-such-root"), "a.md", "spec")).ok, false);
+  });
+});
+
+describe("readPanelSpec / readPanelSample", () => {
+  test("说明去 BOM；样例按数据文件的规则读，读不出来的原因换成 sample-* 分类", async () => {
+    await writeFile(join(root, "s.md"), "\ufeff# 标题");
+    const spec = await readPanelSpec(join(root, "s.md"));
+    assert.deepEqual(spec, { ok: true, text: "# 标题" });
+
+    await writeFile(join(root, "good.json"), '{"papers":[1]}');
+    const good = await readPanelSample(join(root, "good.json"));
+    assert.equal(good.ok && good.data.kind, "ready");
+    await writeFile(join(root, "empty.json"), "[]");
+    const empty = await readPanelSample(join(root, "empty.json"));
+    assert.deepEqual(empty, { ok: true, data: { kind: "empty" } });
+    await writeFile(join(root, "bad.json"), '{"a":');
+    const bad = await readPanelSample(join(root, "bad.json"));
+    assert.equal(bad.ok === false && bad.problem.kind, "sample-invalid");
+    await writeFile(join(root, "big.json"), `"${"x".repeat(PANEL_DATA_MAX_BYTES)}"`);
+    const big = await readPanelSample(join(root, "big.json"));
+    assert.equal(big.ok === false && big.problem.kind, "sample-too-large");
+    const missing = await readPanelSample(join(root, "none.json"));
+    assert.deepEqual(missing, { ok: true, data: { kind: "empty" } }, "不存在 = 空（定位那一步才报 missing）");
   });
 });
 

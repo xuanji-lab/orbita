@@ -13,6 +13,7 @@ import type {
   PluginScope,
 } from "../../shared/plugin.ts";
 import type {
+  PluginDraftLoadRequest,
   PluginPanelActionRequest,
   PluginPanelActionResult,
   PluginPanelInfo,
@@ -51,6 +52,9 @@ export const pluginApi = {
   /** 载入 / 轮询一个面板；stamp 没变回 unchanged */
   panelLoad: (request: PluginPanelLoadRequest): Promise<PluginPanelSnapshot> =>
     ipcRenderer.invoke(ipcChannels.pluginPanelLoad, request),
+  /** 草稿预览：工作区里还没安装的插件文件夹，给出同形的面板快照（路径必须在该工作区根内，主进程校验） */
+  draftLoad: (request: PluginDraftLoadRequest): Promise<PluginPanelSnapshot> =>
+    ipcRenderer.invoke(ipcChannels.pluginDraftLoad, request),
   /** 模板里点按钮的回传：追加到插件数据目录的 actions.jsonl，不做别的；失败以数据返回 */
   panelAction: (request: PluginPanelActionRequest): Promise<PluginPanelActionResult> =>
     ipcRenderer.invoke(ipcChannels.pluginPanelAction, request),
