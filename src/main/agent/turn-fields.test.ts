@@ -30,6 +30,7 @@ const environment = {
   gitAttribution: true,
   attributionLanguage: "en" as const,
   pdfCitations: false,
+  pluginTools: false,
 };
 
 describe("turnFields", () => {
@@ -50,6 +51,11 @@ describe("turnFields", () => {
     const fields = turnFields({ ...input, workspaceId: null }, provider, "/pi", "/sessions/s1.attachments", [], environment);
     assert.equal(fields.workspaceId, null);
     assert.equal("workspaceName" in fields, false);
+  });
+
+  test("pluginTools（实验功能「插件」的开关）原样进命令：开 = true，关 = false", () => {
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], { ...environment, pluginTools: true }).pluginTools, true);
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], environment).pluginTools, false);
   });
 
   // 续会话的唯一通路：renderer 的 resume → 命令的 piSessionFile → runtime 的 SessionManager.open。

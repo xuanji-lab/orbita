@@ -77,6 +77,7 @@ import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
+import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools } from "./store-tools.ts";
 import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
@@ -782,7 +783,12 @@ const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle
  * notePromptStability 共用这一份真源）：MCP 工具 + 内置自定义工具 + 终端组 +
  * 本会话实际注册的通道工具。
  */
-function extraToolNames(role: "root" | "child", workspaceId: string | null, memoryTools: boolean): string[] {
+function extraToolNames(
+  role: "root" | "child",
+  workspaceId: string | null,
+  memoryTools: boolean,
+  pluginTools: boolean,
+): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
     "create_skill",
@@ -791,6 +797,7 @@ function extraToolNames(role: "root" | "child", workspaceId: string | null, memo
     ...TERMINAL_TOOL_NAMES,
     ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
+    ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
   ];
 }
 
@@ -960,6 +967,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
    */
   const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
+  // 实验功能「插件」：开着才注册 install_plugin / list_plugins（缺席 = 关；子会话不装插件，只有根会话注册）
+  const pluginTools = command.pluginTools === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -1054,7 +1063,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools);
+              const extra = extraToolNames(role, command.workspaceId, memoryTools, pluginTools);
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
@@ -1330,6 +1339,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
     ...createStoreTools(requestBroker, command.sessionId),
+    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
@@ -2175,6 +2185,11 @@ async function handle(command: AgentCommand): Promise<void> {
         ? { ok: true, card: command.card, text: command.text }
         : { ok: false, error: command.error ?? "Read failed" },
     );
+    return;
+  }
+  if (command.type === "pluginInstallResult" || command.type === "pluginListResult") {
+    // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "memoryRecallResult") {

@@ -17,6 +17,7 @@ import {
   type PluginPreviewRequest,
   type PluginPreviewResult,
   type PluginScope,
+  type PluginSkillFile,
   type PluginSource,
 } from "../../shared/plugin.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
@@ -26,6 +27,7 @@ import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { applyMcpScope, applySkillScope, mcpViews, skillViews } from "./legacy.ts";
 import { parseScope } from "./records.ts";
+import type { PluginAgentRequests } from "./agent-requests.ts";
 import type { PluginStore } from "./store.ts";
 
 export function registerPluginIpc(deps: {
@@ -35,6 +37,8 @@ export function registerPluginIpc(deps: {
   workspaces: WorkspaceStore;
   /** 让 agent 进程把现有 MCP 连接拆掉重来（host 注入；「重新载入」与改旧 MCP 用） */
   reloadMcp: () => Promise<void>;
+  /** agent 的 install_plugin 确认卡的应答落在它身上 */
+  agentRequests: PluginAgentRequests;
 }): void {
   const { plugins, skills, mcp, workspaces } = deps;
 
@@ -112,6 +116,17 @@ export function registerPluginIpc(deps: {
   ipcMain.handle(ipcChannels.pluginReload, async (): Promise<void> => {
     await deps.reloadMcp();
   });
+
+  ipcMain.handle(
+    ipcChannels.pluginSkillFile,
+    (_event, name: unknown, slug: unknown): Promise<PluginSkillFile> => plugins.skillFile(requireString(name, "name"), requireString(slug, "slug")),
+  );
+
+  // 对话里 install_plugin 确认卡的应答：true = 装、false = 不装；不认识的 requestId 静默（这一轮已停、卡已取消）
+  ipcMain.handle(
+    ipcChannels.agentAnswerPluginInstall,
+    (_event, requestId: unknown, approve: unknown): Promise<void> => deps.agentRequests.answer(requireString(requestId, "requestId"), approve === true),
+  );
 }
 
 function requireRecord(value: unknown, what: string): Record<string, unknown> {
