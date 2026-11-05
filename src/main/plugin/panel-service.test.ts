@@ -240,8 +240,8 @@ describe("load 载入与轮询（按卡）", () => {
 
   test("改说明 / 改样例都会让 stamp 变；spec / sample 写得不对：卡照常出，原因进 problems", async () => {
     const first = await loadReady();
-    await writeFile(join(root, "board", "spec.md"), "# 改过了");
-    await bump(join(root, "board", "spec.md"));
+    await writeFile(join(root, "board", "spec.txt"), "# 改过了");
+    await bump(join(root, "board", "spec.txt"));
     const afterSpec = await loadReady(first.stamp);
     assert.equal(afterSpec.spec, "# 改过了");
     assert.ok(afterSpec.cards.every((each) => each.frameUrl === null));
