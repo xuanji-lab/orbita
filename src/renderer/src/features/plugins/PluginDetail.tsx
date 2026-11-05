@@ -11,7 +11,10 @@ import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { ConfigField, ScopeEditor } from "./PluginConfig.tsx";
 import { McpAbility, PluginAvatar, ScriptsAbility, SkillAbility, UnsupportedAbility } from "./PluginParts.tsx";
+import { PluginPanelCards } from "./PluginPanelCard.tsx";
+import { panelProblemText } from "./panel-view.ts";
 import { conflictText, problemText } from "./plugin-text.ts";
+import { usePanelInfo } from "./usePluginPanel.ts";
 import { sourceKey } from "./plugin-view.ts";
 
 const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
@@ -19,6 +22,10 @@ const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-dig
 export function PluginDetail(props: {
   view: PluginView;
   workspaces: readonly Workspace[];
+  /** 当前会话所在的工作区（面板的数据路径里 `${workspaceFolder}` 按它解析；「在右栏打开」按它判断启没启用） */
+  currentWorkspaceId: string | null;
+  /** 在右栏打开这个插件的面板 */
+  onOpenPanel: (pluginName: string) => void;
   onBack: () => void;
   onScope: (scope: PluginScope) => Promise<void>;
   /** 配置 / 重载 / 卸载之后让列表回读 */
@@ -35,6 +42,8 @@ export function PluginDetail(props: {
   const [busy, setBusy] = useState<null | "reload" | "uninstall">(null);
   const [reloaded, setReloaded] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
+  // 面板与最近产出（只有真插件、且声明了 orbita.panel 才有；其余为 null）
+  const panelInfo = usePanelInfo(view.origin === "plugin" ? (parsed?.key ?? null) : null, props.currentWorkspaceId);
 
   const run = async (task: () => Promise<void>): Promise<void> => {
     setError(null);
@@ -225,12 +234,18 @@ export function PluginDetail(props: {
               <span className="pl-muted">{t.abilitiesEmpty}</span>
             )}
           </section>
-          {view.problems.length > 0 && (
+          {panelInfo !== null && panelInfo !== undefined && (
+            <PluginPanelCards info={panelInfo} onOpen={() => props.onOpenPanel(parsed?.key ?? "")} />
+          )}
+          {view.problems.length + (panelInfo?.problems.length ?? 0) > 0 && (
             <section className="pl-card">
               <div className="pl-card-h">{t.problemsTitle}</div>
               <ul className="pl-list">
                 {view.problems.map((problem, index) => (
                   <li key={index}>{problemText(t, problem)}</li>
+                ))}
+                {(panelInfo?.problems ?? []).map((problem, index) => (
+                  <li key={`panel-${index}`}>{panelProblemText(messages.pluginPanel, problem)}</li>
                 ))}
               </ul>
             </section>
