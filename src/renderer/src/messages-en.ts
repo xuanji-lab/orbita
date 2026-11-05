@@ -798,9 +798,8 @@ export const en = {
     /** 右栏入口的分组名（读屏的 group 标签；视觉上组与组之间只有一条细线，不写字） */
     groups: {
       session: "This session",
-      workbench: "Work surfaces",
-      agent: "Agent",
-      shelf: "Put away",
+      agent: "Agent abilities",
+      shelf: "Set aside",
       app: "App",
     },
     automation: "Automations",
