@@ -53,7 +53,7 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
-  turnAssistantRecords,
+  turnAssistantRecordsAt,
   writeContent,
   writeLineCount,
   type RenderUnit,
@@ -642,7 +642,7 @@ describe("toolResultText", () => {
     );
   });
 
-  test("turnAssistantRecords —— 锚点所在轮的全部 assistant 记录，user / 界碑是轮边界", () => {
+  test("turnAssistantRecordsAt —— 锚点所在轮的全部 assistant 记录，user / 界碑是轮边界", () => {
     const records: SessionRecord[] = [
       userItem,
       assistantItem("a0", [{ type: "text", text: "上一轮" }]),
@@ -651,19 +651,18 @@ describe("toolResultText", () => {
       { id: "r1", role: "tool", toolCallId: "t1", toolName: "read", input: {}, content: [], timestamp: 0, status: "complete", isError: false } as TranscriptItem,
       assistantItem("a2", [{ type: "text", text: "这轮第二句" }]),
     ];
+    // 锚点（下标 5，a2）在本轮：这轮的两句 assistant 都进来，user / tool 行不进
     assert.deepEqual(
-      turnAssistantRecords(records, "a2").map((r) => r.id),
+      turnAssistantRecordsAt(records, 5).map((r) => r.id),
       ["a1", "a2"],
     );
-    // 锚点在上一轮：只拿上一轮的
-    assert.deepEqual(turnAssistantRecords(records, "a0").map((r) => r.id), ["a0"]);
-    // 界碑也是边界
+    // 锚点在上一轮（下标 1，a0）：只拿上一轮的
+    assert.deepEqual(turnAssistantRecordsAt(records, 1).map((r) => r.id), ["a0"]);
+    // 界碑也是边界：u2 换成压缩界碑后，a1 所在轮从界碑之后起算
     assert.deepEqual(
-      turnAssistantRecords([...records.slice(0, 2), compacted, ...records.slice(3)], "a2").map((r) => r.id),
+      turnAssistantRecordsAt([...records.slice(0, 2), compacted, ...records.slice(3)], 5).map((r) => r.id),
       ["a1", "a2"],
     );
-    // 锚点不存在：空
-    assert.deepEqual(turnAssistantRecords(records, "nope"), []);
   });
 
   test("图片标记它存在，不丢掉也不假装能渲染", () => {

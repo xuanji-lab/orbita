@@ -51,7 +51,6 @@ import {
 import {
   branchAnchorEntries,
   branchAnchorIds,
-  answerText,
   delegateCard,
   handoffOutcome,
   editDiffText,
@@ -96,7 +95,6 @@ import {
   toolGroupStatus,
   toolResultText,
   rollupLead,
-  turnAssistantRecords,
   turnStats,
   type ProcessStep,
   type TurnProcessUnit,
@@ -107,6 +105,7 @@ import {
   type ToolGroupUnit,
   type ToolResultIndex,
   type TurnGroupUnit,
+  type TurnViewEntry,
 } from "./tool-results";
 import { useToday } from "./today.ts";
 import { formatMessageTime, fullTimestamp } from "./message-time.ts";
@@ -139,11 +138,9 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
-import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 import {
   contextRing,
   formatSpeed,
-  replySpeed,
   ringLayers,
   streamingStart,
   usageBreakdown,
@@ -163,6 +160,8 @@ import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
+import { keepUnlessSettledChanged, sameItems, sameMap, sameSet, shareStructure } from "./render-stability.ts";
+import { branchInfoOf, scanCardOf, type CarryoverCard } from "./transcript-row-cache.ts";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ChannelMessage } from "@shared/channel";
 import { modelDisplayName, modelThinkingLevels } from "@shared/model-defaults";
@@ -254,19 +253,25 @@ export function ChatView(props: ChatViewProps) {
   const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
   // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
   // 迁移来的引用、被压缩掉的历史找不到就不可点）
+  // 它经 QuoteJumpContext 交给每个用户气泡，**身份必须跨流式帧稳定**：Context 一变，
+  // 所有气泡穿透 memo 重渲染、各自再扫一遍整条转录（findQuoteSource）。引用不可能指向
+  // 流式中的那条（quoteFromSelection 拒绝），所以只在已落定条目变化时换身份
+  const quoteTranscript = useSettledTranscript(session.transcript);
   const jumpToQuote = useCallback(
     (quote: TextQuote): (() => void) | undefined => {
-      const sourceId = findQuoteSource(session.transcript, quote);
+      const sourceId = findQuoteSource(quoteTranscript, quote);
       if (sourceId === null) return undefined;
       return () => {
         const pane = paneRef.current;
         if (pane !== null) highlightQuote(pane, sourceId, quote.text);
       };
     },
-    [session.transcript],
+    [quoteTranscript],
   );
   // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
-  const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
+  // 按已落定视图算：引用表要跨流式帧保持身份（Context 一变，正文里每个引用编号都重渲染）；
+  // 引用它的正文总在 cite_pdf 结果之后追加，追加即换新视图，不会漏
+  const citations = useMemo(() => collectCitations(quoteTranscript), [quoteTranscript]);
   // 摘抄与跳回原文按「正在看的会话」算：纯浏览的旧会话不起 runtime session（sessionId 为
   // null、opened 里拿得到），但它的文字照样能摘、摘过的照样能跳回来
   const viewedId = session.sessionId ?? session.opened?.id ?? null;
@@ -370,6 +375,17 @@ export function ChatView(props: ChatViewProps) {
       />
     </div>
   );
+}
+
+/**
+ * transcript 的「已落定视图」：只有末条换了引用且仍是同一条目（流式逐字增长，
+ * id 不变）时交回上一帧的数组，别的变化（新条目、前面的条目换了、末条换成了
+ * 另一条——含切到另一条只有一条记录的会话）才换新（keepUnlessSettledChanged）。
+ */
+function useSettledTranscript(transcript: readonly TranscriptItem[]): readonly TranscriptItem[] {
+  const ref = useRef(transcript);
+  ref.current = keepUnlessSettledChanged(ref.current, transcript, (a, b) => a.id === b.id);
+  return ref.current;
 }
 
 /** 引用 → 跳回原文的处理器（undefined = 原文不在本转录里）。ChatView 外层提供，chip 们各自取 */
@@ -982,14 +998,24 @@ function ChatViewBody(props: {
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memoryOn = useExperimentalFeature("memory-system");
   const memorySession = useMemorySession(memoryOn && openId !== "" ? openId : null);
+  // 只认用户消息，用已落定视图（流式逐字增长不换身份）：它交给转录列的每一行，
+  // 每帧新建会打穿行级 memo
+  const settledTranscript = useSettledTranscript(session.transcript);
   const memoryLines = useMemo((): MemoryLines | null => {
     const view = memorySession.data;
     if (view === null) return null;
-    const users = session.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : []));
+    const users = settledTranscript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : []));
     // 随回退停用的条目不挂在对话里（重说的那一轮与被撤回的同轮号，见 liveRemembered）
     const rows = new Map([...pairMemoryTurns(users, view)].map(([id, row]) => [id, liveRemembered(row)]));
     return { rows };
-  }, [memorySession.data, session.transcript]);
+  }, [memorySession.data, settledTranscript]);
+  // 转录列的四个回调：useChatSession 的这几个依赖 engine，而 engine 每次渲染都是新对象，
+  // 它们跟着每帧换身份——打穿 TranscriptColumn 与每一行的 memo（打字时整列也跟着重渲染）。
+  // 它们只在点击时调用，包一层身份恒定、调用时取最新的壳
+  const onBranch = useLatestCallback(session.branchFrom);
+  const onOpenTask = useLatestCallback(session.openSession);
+  const onUndoTurn = useLatestCallback(session.undoTurn);
+  const onRevertTo = useLatestCallback(session.revertToMessage);
   // 回退 / 撤销的预演对象：TranscriptColumn 是 memo，按原始值记忆，不每帧新建对象
   const previewMessageId = session.revertDialog?.targetMessageId ?? null;
   const previewTurnId = session.undoDialog?.turnId ?? null;
@@ -1584,8 +1610,8 @@ function ChatViewBody(props: {
           turnError={session.turnError}
           loadingHistory={session.loadingHistory}
           loadingOlder={session.loadingOlder}
-          onBranch={session.branchFrom}
-          onOpenTask={session.openSession}
+          onBranch={onBranch}
+          onOpenTask={onOpenTask}
           channel={channel}
           skills={skills}
           intentRecalls={session.intentRecalls}
@@ -1596,8 +1622,8 @@ function ChatViewBody(props: {
           reverts={session.reverts}
           undos={session.undos}
           cwd={session.cwd}
-          onUndoTurn={session.undoTurn}
-          onRevertTo={session.revertToMessage}
+          onUndoTurn={onUndoTurn}
+          onRevertTo={onRevertTo}
           actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
@@ -1620,6 +1646,150 @@ function ChatViewBody(props: {
  * 已按 entry 稳定化——闲时（打字 / 排队操作）memo 命中，整列跳过；流式期间它
  * 逐帧变化，列照旧逐帧重渲染，活体的实时性不变。
  */
+/**
+ * 身份恒定的回调壳：调用时转给最新一次渲染拿到的 fn。只给事件处理用（渲染期间
+ * 不调用）——交给 memo 组件的回调不必随上游每次渲染换身份。
+ */
+function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  useLayoutEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
+}
+
+/**
+ * 内容相同就交回上一次的同一个对象（equal 判内容）。流式期间 transcript 每帧换新，
+ * 从它派生的 Map / Set / 数组也每帧新建；交给 memo 行组件之前过一道这个，行才不被打穿。
+ */
+function useStableBy<T>(value: T, equal: (a: T, b: T) => boolean): T {
+  const ref = useRef(value);
+  if (ref.current !== value && !equal(ref.current, value)) ref.current = value;
+  return ref.current;
+}
+
+/** 两个数组逐项同一引用 */
+/**
+ * 转录列的一行（memo）：一个渲染单元连同它的回退切点、分支行。props 全是原始值或
+ * 跨帧稳定的引用（TranscriptColumn 用 useStableBy / shareStructure 维持），流式期间
+ * 已落定的行浅比较全等、整行跳过；只有末尾在长的那几行重渲染。
+ */
+const TranscriptRow = memo(function TranscriptRow(props: {
+  entry: TurnViewEntry;
+  /** 回退预演的切点就在这一行前面 */
+  isCut: boolean;
+  cutRef: React.RefObject<HTMLDivElement | null>;
+  /** 在回退切点之后（预演里变淡加删除线） */
+  doomed: boolean;
+  /** 这一行后面挂分支行：锚点 id；undefined = 不挂 */
+  branchAnchor: string | undefined;
+  branchSpeed: number | null;
+  branchCopyText: string;
+  toolsRunning: boolean;
+  onBranch: (anchorItemId: string) => void;
+  turnFailed: boolean;
+  plan: PlanTimeline | null;
+  ledger: GoalLedger;
+  awaitingPlan: PlanVersion | null;
+  renderStep: (step: ProcessStep) => ReactNode;
+  toolResults: ToolResultIndex;
+  activeThinkingKey: string | null;
+  turnActive: boolean;
+  interruptedCalls: ReadonlySet<string>;
+  onOpenTask: (sessionId: string) => void;
+  carryoverCards: ReadonlyMap<string, CarryoverCard>;
+  channel: ChannelViewContext;
+  skills: SkillMeta[];
+  cwd: string | null;
+  undoneTurnIds: ReadonlySet<string>;
+  onUndoTurn: (turnId: string) => void;
+  actionsBusy: boolean;
+  onOpenReviewAt?: (path: string) => void;
+  onOpenIntentPanel?: () => void;
+  sessionId: string;
+  onRevertTo: (messageId: string) => void;
+  streamingIds: ReadonlySet<string>;
+  memory: MemoryLines | null;
+  onOpenMemoryReview?: () => void;
+}) {
+  const t = useT();
+  const { entry } = props;
+  return (
+    <>
+      {props.isCut && (
+        <div ref={props.cutRef} className="revert-cut">
+          <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
+          {t.chat.previewCut}
+        </div>
+      )}
+      <div className={props.doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key}>
+      {entry.kind === "turnProcess" ? (
+        <TurnProcessLine
+          unit={entry}
+          plan={props.plan}
+          ledger={props.ledger}
+          awaitingPlan={props.awaitingPlan}
+          toolResults={props.toolResults}
+          turnFailed={props.turnFailed}
+          skills={props.skills}
+          interruptedCalls={props.interruptedCalls}
+          renderStep={props.renderStep}
+        />
+      ) : entry.kind === "turnGroup" ? (
+        <TurnRollupLine
+          group={entry}
+          toolResults={props.toolResults}
+          turnFailed={props.turnFailed}
+          onOpenTask={props.onOpenTask}
+          carryoverCards={props.carryoverCards}
+          channel={props.channel}
+          skills={props.skills}
+          cwd={props.cwd}
+          undoneTurnIds={props.undoneTurnIds}
+          onUndoTurn={props.onUndoTurn}
+          actionsBusy={props.actionsBusy}
+          onOpenReviewAt={props.onOpenReviewAt}
+          sessionId={props.sessionId}
+          interruptedCalls={props.interruptedCalls}
+        />
+      ) : (
+        <EntryView
+          entry={entry}
+          toolResults={props.toolResults}
+          activeThinkingKey={props.activeThinkingKey}
+          turnActive={props.turnActive}
+          interruptedCalls={props.interruptedCalls}
+          onOpenTask={props.onOpenTask}
+          carryoverCards={props.carryoverCards}
+          channel={props.channel}
+          skills={props.skills}
+          cwd={props.cwd}
+          undoneTurnIds={props.undoneTurnIds}
+          onUndoTurn={props.onUndoTurn}
+          actionsBusy={props.actionsBusy}
+          onOpenReviewAt={props.onOpenReviewAt}
+          onOpenIntentPanel={props.onOpenIntentPanel}
+          sessionId={props.sessionId}
+          onRevertTo={props.onRevertTo}
+          streamingIds={props.streamingIds}
+          memory={props.memory}
+          onOpenMemoryReview={props.onOpenMemoryReview}
+        />
+      )}
+      {props.branchAnchor !== undefined && (
+        <BranchRow
+          anchorItemId={props.branchAnchor}
+          speed={props.branchSpeed}
+          copyText={props.branchCopyText}
+          disabled={props.toolsRunning}
+          onBranch={props.onBranch}
+        />
+      )}
+      </div>
+    </>
+  );
+});
+
 const TranscriptColumn = memo(function TranscriptColumn(props: {
   /** 回退 / 撤销预演：回退时切点之后的往来变淡加删除线；撤销时那一轮的轮尾卡描边 */
   preview: RevertPreview;
@@ -1683,12 +1853,18 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const intentOn = useExperimentalFeature("intent-system");
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
-  const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
+  // 下面凡是交给行组件的派生值都过一道 useStableBy：内容没变就交回上一帧的同一个对象，
+  // 行级 memo（TranscriptRow）才命中——流式期间只有末尾在长的那几行重渲染
+  const toolResults = useStableBy(useMemo(() => indexToolResults(transcript), [transcript]), sameMap);
   // 计划的版本线（对话里每个过程块的「计划改了：…」一行、现场块里「在做哪一步」都吃它）：只挑 update_plan 那几条算
-  const plan = useMemo(
-    () => planTimeline(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
-    [transcript],
+  const planItems = useStableBy(
+    useMemo(
+      () => transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME),
+      [transcript],
+    ),
+    sameItems,
   );
+  const plan = useMemo(() => planTimeline(planItems), [planItems]);
   // 目标与计划的改动账：对话里「目标改了：…」那一行读它
   const ledger = useGoalLedger(transcript);
   // 停在「计划等你确认」上的那一版（最后一次 update_plan 要求确认、之后用户还没回应）：画成计划卡
@@ -1712,45 +1888,56 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     [props.compactions, props.marks, props.fileTurns, props.reverts, props.undos, transcript, props.intentRecalls],
   );
   // 被撤销的轮 id 集：轮尾卡据此挂「已撤销」徽标（undo 记录不是渲染单元）
-  const undoneTurnIds = useMemo(
-    () =>
-      new Set(
-        records.filter((record) => record.role === "undo").map((record) => record.turnId),
-      ),
-    [records],
+  const undoneTurnIds = useStableBy(
+    useMemo(
+      () =>
+        new Set(
+          records.filter((record) => record.role === "undo").map((record) => record.turnId),
+        ),
+      [records],
+    ),
+    sameSet,
   );
   // 摊平 → 相邻同类合并：渲染从「按条」改成「按单元」，连续同类工具收成一行组
   const units = useMemo(() => flattenRenderUnits(records), [records]);
   const entries = useMemo(() => groupToolUnits(units, props.skills), [units, props.skills]);
   // 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming——
   // 流式帧省掉公式排版与代码高亮（stream-render.ts），落定帧再补渲
-  const streamingIds = useMemo(
-    () =>
-      new Set(
-        records
-          .filter((record) => record.role === "assistant" && record.status === "streaming")
-          .map((record) => record.id),
-      ),
-    [records],
+  const streamingIds = useStableBy(
+    useMemo(
+      () =>
+        new Set(
+          records
+            .filter((record) => record.role === "assistant" && record.status === "streaming")
+            .map((record) => record.id),
+        ),
+      [records],
+    ),
+    sameSet,
   );
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
   // 已中断的工具调用（interruptedToolCallIds）：结果永远不会来的调用按静止的
   // 「已中断」渲染，不再呼吸/转圈——委派卡「委派中…」停不下来就是这类（2026-10-09）
-  const interruptedCalls = useMemo(
-    () => interruptedToolCallIds(records, toolResults, turnActive),
-    [records, toolResults, turnActive],
+  const interruptedCalls = useStableBy(
+    useMemo(() => interruptedToolCallIds(records, toolResults, turnActive), [records, toolResults, turnActive]),
+    sameSet,
   );
   // 过程显示（设置 › 过程显示）：一轮一行 = groupTurnsByTurn（旁白收进块、活跃轮成现场块）；
   // 逐步铺开 = groupTurns（落定轮按旁白收成几条 Worked，活跃轮原样铺开）
   const processView = useContext(ProcessViewContext);
-  const turnView = useMemo(
-    () =>
+  // 结构共享：每帧新建的单元里，与上一帧结构相同的换回旧对象（shareStructure），
+  // 已落定的行拿到的 entry 跨帧是同一个引用
+  const turnViewRef = useRef<readonly TurnViewEntry[]>([]);
+  const turnView = useMemo(() => {
+    const next =
       processView === "turn"
         ? groupTurnsByTurn(entries, turnActive, toolResults)
-        : groupTurns(entries, turnActive, toolResults),
-    [entries, turnActive, toolResults, processView],
-  );
+        : groupTurns(entries, turnActive, toolResults);
+    const shared = shareStructure<readonly TurnViewEntry[]>(turnViewRef.current, next);
+    turnViewRef.current = shared;
+    return shared;
+  }, [entries, turnActive, toolResults, processView]);
   // 现场块在场且后面没有正文在流时，它自己就是「在干活」的那一行——底下的 Responding 不再重复
   const liveBlockShown = turnView.some((entry) => entry.kind === "turnProcess" && entry.live && !entry.answering);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
@@ -1772,6 +1959,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => transcript.some((item) => item.role === "tool" && item.status === "running"),
     [transcript],
   );
+  // 分支行的复制文本与速度：按锚点所在整轮的记录算，整轮记录没变就用上一帧的结果
+  // （branchInfoOf 按锚点记录对象记忆）——不再每帧对每个锚点 findIndex + 拼接整轮正文
+  const branchInfo = useMemo(() => branchInfoOf(records, branchRows), [records, branchRows]);
   // 收尾扫描回复卡片化：落定的 assistant 消息若整条恰好是一个可解析的 fenced
   // json 块（扫描回答的 prompt 契约形状），用只读展示卡替代 markdown 渲染——
   // 原始 json 占屏是噪音（2026-09-22 用户反馈）。streaming 中保持普通流式渲染，
@@ -1779,23 +1969,19 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 同口径：围栏可能被拆在多个 text 块里）；命中后多个 text 单元只在第一个的位置
   // 渲染一次卡片，其余跳过——整条消息已进卡。消息里命中与 user 关闭无关，
   // 挂在 records 上（扫描历史会话的旧回答同样卡片化）。
-  const carryoverCards = useMemo(() => {
-    const cards = new Map<string, { scan: ScanMessage; firstKey: string }>();
-    for (const record of records) {
-      if (record.role !== "assistant" || record.status === "streaming") continue;
-      let firstKey: string | null = null;
-      const parts: string[] = [];
-      record.content.forEach((block, index) => {
-        if (block.type !== "text") return;
-        if (firstKey === null) firstKey = `${record.id}:${index}`;
-        parts.push(block.text);
-      });
-      if (firstKey === null) continue;
-      const scan = matchScanMessage(parts.join(""));
-      if (scan !== null) cards.set(record.id, { scan, firstKey });
-    }
-    return cards;
-  }, [records]);
+  // 判定按记录对象记忆（scanCardOf）：落定记录跨帧是同一个对象，不每帧拼接全文再解析
+  const carryoverCards = useStableBy(
+    useMemo(() => {
+      const cards = new Map<string, CarryoverCard>();
+      for (const record of records) {
+        if (record.role !== "assistant" || record.status === "streaming") continue;
+        const card = scanCardOf(record);
+        if (card !== null) cards.set(record.id, card);
+      }
+      return cards;
+    }, [records]),
+    sameMap,
+  );
   // 回合级失败（网络中断 / 重试耗尽）的红 triangle 只挂**失败那轮**的折叠（见 failedFoldKey）；
   // 那轮没折叠就不挂，红字自带的图标是全部。
   // 工具类失败不配图标（各自的红色 failed 计数已经跟在工具后面）。
@@ -1811,6 +1997,61 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     [previewMessageId, turnView],
   );
   const cutRef = useRef<HTMLDivElement | null>(null);
+  // 过程块里每一步的渲染：身份必须稳定（TranscriptRow 是 memo，内联箭头每帧新建会打穿它）
+  const {
+    onOpenTask,
+    channel,
+    skills,
+    cwd,
+    onUndoTurn,
+    actionsBusy,
+    onOpenReviewAt,
+    onOpenIntentPanel,
+    sessionId,
+    onRevertTo,
+  } = props;
+  const renderStep = useCallback(
+    (step: ProcessStep) => (
+      <EntryView
+        key={step.key}
+        entry={step}
+        toolResults={toolResults}
+        activeThinkingKey={null}
+        turnActive={false}
+        interruptedCalls={interruptedCalls}
+        onOpenTask={onOpenTask}
+        carryoverCards={carryoverCards}
+        channel={channel}
+        skills={skills}
+        cwd={cwd}
+        undoneTurnIds={undoneTurnIds}
+        onUndoTurn={onUndoTurn}
+        actionsBusy={actionsBusy}
+        onOpenReviewAt={onOpenReviewAt}
+        onOpenIntentPanel={onOpenIntentPanel}
+        sessionId={sessionId}
+        onRevertTo={onRevertTo}
+        streamingIds={streamingIds}
+      />
+    ),
+    [
+      toolResults,
+      interruptedCalls,
+      onOpenTask,
+      carryoverCards,
+      channel,
+      skills,
+      cwd,
+      undoneTurnIds,
+      onUndoTurn,
+      actionsBusy,
+      onOpenReviewAt,
+      onOpenIntentPanel,
+      sessionId,
+      onRevertTo,
+      streamingIds,
+    ],
+  );
   // 「这条任务 › 进度」点一章：对话滚到那个过程块并闪一下（面板与对话不共享状态，走一次性事件）
   useEffect(() => {
     const onReveal = (event: Event) => {
@@ -1845,7 +2086,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       {turnView.map((entry, index) => {
         const branchAfter = branchRows.get(index);
         // 复制与速度都按锚点所在的**整轮**取：轮内可能有多条 assistant 记录（每次 toolCall 切一条）
-        const turnRecords = branchAfter !== undefined ? turnAssistantRecords(records, branchAfter) : [];
+        const branch = branchAfter !== undefined ? branchInfo.get(branchAfter) : undefined;
         // 相邻 show_image 合并成一个画廊（2026-09-27 裁决）：首张渲染合并画廊，后续
         // 兄弟渲染 null（数据数组不动，branchRows 索引不乱）；失败的 show_image 不进
         // 合并——照通用红色骨架。判「组首」：自己是 show_image 且前一个不是
@@ -1887,8 +2128,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 <BranchRow
                   /* 挂点照常渲染：被吸收的 entry 只把主行换 null，分支行各归各 */
                   anchorItemId={branchAfter}
-                  speed={replySpeed(turnRecords)}
-                  copyText={answerText(turnRecords)}
+                  speed={branch?.speed ?? null}
+                  copyText={branch?.copyText ?? ""}
                   disabled={toolsRunning}
                   onBranch={props.onBranch}
                 />
@@ -1897,102 +2138,45 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             </Fragment>
           );
         }
-        const doomed = cutIndex >= 0 && index >= cutIndex;
+        // 其余各行走 memo 的 TranscriptRow：props 全是原始值或跨帧稳定的引用，
+        // 流式期间已落定的行整行跳过
         return (
-          <Fragment key={entry.key}>
-            {index === cutIndex && (
-              <div ref={cutRef} className="revert-cut">
-                <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
-                {t.chat.previewCut}
-              </div>
-            )}
-            <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key}>
-            {entry.kind === "turnProcess" ? (
-              <TurnProcessLine
-                unit={entry}
-                plan={plan}
-                ledger={ledger}
-                awaitingPlan={awaitingPlan}
-                toolResults={toolResults}
-                turnFailed={entry.key === failedFold}
-                skills={props.skills}
-                interruptedCalls={interruptedCalls}
-                renderStep={(step) => (
-                  <EntryView
-                    key={step.key}
-                    entry={step}
-                    toolResults={toolResults}
-                    activeThinkingKey={null}
-                    turnActive={false}
-                    interruptedCalls={interruptedCalls}
-                    onOpenTask={props.onOpenTask}
-                    carryoverCards={carryoverCards}
-                    channel={props.channel}
-                    skills={props.skills}
-                    cwd={props.cwd}
-                    undoneTurnIds={undoneTurnIds}
-                    onUndoTurn={props.onUndoTurn}
-                    actionsBusy={props.actionsBusy}
-                    onOpenReviewAt={props.onOpenReviewAt}
-                    onOpenIntentPanel={props.onOpenIntentPanel}
-                    sessionId={props.sessionId}
-                    onRevertTo={props.onRevertTo}
-                    streamingIds={streamingIds}
-                  />
-                )}
-              />
-            ) : entry.kind === "turnGroup" ? (
-              <TurnRollupLine
-                group={entry}
-                toolResults={toolResults}
-                turnFailed={entry.key === failedFold}
-                onOpenTask={props.onOpenTask}
-                carryoverCards={carryoverCards}
-                channel={props.channel}
-                skills={props.skills}
-                cwd={props.cwd}
-                undoneTurnIds={undoneTurnIds}
-                onUndoTurn={props.onUndoTurn}
-                actionsBusy={props.actionsBusy}
-                onOpenReviewAt={props.onOpenReviewAt}
-                sessionId={props.sessionId}
-                interruptedCalls={interruptedCalls}
-              />
-            ) : (
-              <EntryView
-                entry={entry}
-                toolResults={toolResults}
-                activeThinkingKey={activeThinkingKey}
-                turnActive={turnActive}
-                interruptedCalls={interruptedCalls}
-                onOpenTask={props.onOpenTask}
-                carryoverCards={carryoverCards}
-                channel={props.channel}
-                skills={props.skills}
-                cwd={props.cwd}
-                undoneTurnIds={undoneTurnIds}
-                onUndoTurn={props.onUndoTurn}
-                actionsBusy={props.actionsBusy}
-                onOpenReviewAt={props.onOpenReviewAt}
-                onOpenIntentPanel={props.onOpenIntentPanel}
-                sessionId={props.sessionId}
-                onRevertTo={props.onRevertTo}
-                streamingIds={streamingIds}
-                memory={props.memory}
-                onOpenMemoryReview={props.onOpenMemoryReview}
-              />
-            )}
-            {branchAfter !== undefined && (
-              <BranchRow
-                anchorItemId={branchAfter}
-                speed={replySpeed(turnRecords)}
-                copyText={answerText(turnRecords)}
-                disabled={toolsRunning}
-                onBranch={props.onBranch}
-              />
-            )}
-            </div>
-          </Fragment>
+          <TranscriptRow
+            key={entry.key}
+            entry={entry}
+            isCut={index === cutIndex}
+            cutRef={cutRef}
+            doomed={cutIndex >= 0 && index >= cutIndex}
+            branchAnchor={branchAfter}
+            branchSpeed={branch?.speed ?? null}
+            branchCopyText={branch?.copyText ?? ""}
+            toolsRunning={toolsRunning}
+            onBranch={props.onBranch}
+            turnFailed={entry.key === failedFold}
+            plan={plan}
+            ledger={ledger}
+            awaitingPlan={awaitingPlan}
+            renderStep={renderStep}
+            toolResults={toolResults}
+            activeThinkingKey={activeThinkingKey}
+            turnActive={turnActive}
+            interruptedCalls={interruptedCalls}
+            onOpenTask={props.onOpenTask}
+            carryoverCards={carryoverCards}
+            channel={props.channel}
+            skills={props.skills}
+            cwd={props.cwd}
+            undoneTurnIds={undoneTurnIds}
+            onUndoTurn={props.onUndoTurn}
+            actionsBusy={props.actionsBusy}
+            onOpenReviewAt={props.onOpenReviewAt}
+            onOpenIntentPanel={props.onOpenIntentPanel}
+            sessionId={props.sessionId}
+            onRevertTo={props.onRevertTo}
+            streamingIds={streamingIds}
+            memory={props.memory}
+            onOpenMemoryReview={props.onOpenMemoryReview}
+          />
         );
       })}
       {props.pendingEcho !== null && <PendingEchoRow blocks={props.pendingEcho.blocks} />}
@@ -2916,7 +3100,7 @@ function EntryView(props: {
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, CarryoverCard>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
@@ -3068,7 +3252,7 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, { scan: ScanMessage; firstKey: string }>;
+  carryoverCards: ReadonlyMap<string, CarryoverCard>;
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */
