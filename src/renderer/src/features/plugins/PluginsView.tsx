@@ -19,7 +19,7 @@
  * 行尾开关、点行进详情。「接入本地插件」打开安装确认（模态框，两种外壳都一样）。
  * 选中某个插件时同一槽里换成详情（一张长页）；详情里点「打开看板」右栏换成看板视图；旧技能 / MCP 面板本期保留不动。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parsePluginViewId, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import type { CardSize, PluginsPageSettings } from "@shared/settings";
@@ -39,6 +39,9 @@ import "./plugins.css";
 
 /** 外壳：右栏单列版 / 设置页全屏版。排法不看它，看容器宽度（plugins.css 的 @container pl） */
 export type PluginsChrome = "rail" | "page";
+
+/** 「在右栏打开」的请求在列表里找不到那个插件时，最多等列表更新多久再放弃 */
+const OPEN_REQUEST_WAIT_MS = 5000;
 
 /**
  * 「在右栏打开这个插件」的请求：nonce 每次递增，同一个插件连点两次也会再选一次。
@@ -104,18 +107,29 @@ export function PluginsView(props: {
     if (selectedId !== null && state.load.kind === "ready" && selected === null) setSelectedId(null);
   }, [selectedId, selected, state.load.kind]);
 
-  // 「在右栏打开」：等列表读到、找到那个插件，就选中它（看板请求直接进看板视图）
+  // 「在右栏打开」：等列表读到、找到那个插件，就选中它（看板请求直接进看板视图）。
+  // 找不到时**留着请求等列表更新**：装好之后马上来的请求（agent 装完 / 点了对话里的「安装」）常常早于列表的重读——
+  // 页面已经开着、列表还是装之前的，此刻丢掉请求，右栏就停在列表里不进详情。所以找不到就主动重读一次，
+  // 列表一变（`state.plugins` 换了引用）这个 effect 重跑再找；等不到（刚卸载的、拼错的名字）过了 OPEN_REQUEST_WAIT_MS 才放弃。
   const { openRequest = null, onOpenRequestHandled } = props;
+  const { refresh } = state;
+  const refreshedFor = useRef<PluginOpenRequest | null>(null);
   useEffect(() => {
     if (openRequest === null || state.load.kind !== "ready") return;
     const target = state.plugins.find((view) => view.origin === "plugin" && parsePluginViewId(view.id)?.key === openRequest.name);
     if (target !== undefined) {
       setSelectedIdRaw(target.id);
       setBoardOpen(openRequest.board);
+      onOpenRequestHandled?.();
+      return;
     }
-    // 找不到（刚卸载 / 列表还没带上它）也算处理过，别让请求一直挂着
-    onOpenRequestHandled?.();
-  }, [openRequest, state.load.kind, state.plugins, onOpenRequestHandled]);
+    if (refreshedFor.current !== openRequest) {
+      refreshedFor.current = openRequest;
+      void refresh();
+    }
+    const timer = window.setTimeout(() => onOpenRequestHandled?.(), OPEN_REQUEST_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [openRequest, state.load.kind, state.plugins, onOpenRequestHandled, refresh]);
 
   const workspaces = props.workspaces;
   const filtered = useMemo(
