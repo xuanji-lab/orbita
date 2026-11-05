@@ -315,8 +315,10 @@ function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
  *   - 挂载时量一次（卡片出现）；
  *   - petLeftPx 变（悬停 / 钉 / 说话换格——渲染期里唯一会动云水平位置的输入）；
  *   - 云滑到新格是 160ms 的 CSS 过渡，渲染那一下量到的是起点，transitionend 后
- *     再量一次才钉在终点（云自身的 left/transform，以及停机坪 padding-top 的过渡
- *     都会冒泡到这里）；
+ *     再量一次才钉在终点。transitionend 只向上冒泡，接得住的是云自身的
+ *     left / opacity / transform；停机坪 padding-top 在云的父元素上，它的过渡
+ *     事件到不了这里的监听器——但卡片显形时云的 opacity / transform 与它同一
+ *     --duration-enter 同时跑，云自己的事件等价地接住了那一刻；
  *   - 窗口 resize / 文档根尺寸变（缩放）。
  * 曾经依赖 props.children：它每次渲染都是新引用，等于每渲染一次就 getBoundingClientRect
  * 强制布局一次——流式时 UsageMeter 高频重渲染，60 轮会话累计秒级；而卡片位置只由
