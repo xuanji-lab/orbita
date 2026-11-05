@@ -51,6 +51,8 @@ node scripts/bench/bench.mjs --fixture <fb46e6be.zip> --fixture <6df79261.zip> -
 
 `--actions` 选动作（`switch,idle,turn,type,compact`），写成 `素材=动作,…` 只改那个素材。`--runs 5` 是每格次数；会话文件超过 30 MB 的格按 `--runs-big`（默认 3）跑。`--compact-reps 3` 是压缩场景重复几次，0 表示不跑。另外还有：`--no-build` 跳过构建，`--out <目录>` 改结果位置，`--work <目录>` 改临时数据位置。
 
+**动作的先后就是测量的顺序**：冷打开 → switch → idle → turn → type，打开探针（含主进程 / agent 里的 readParse ×3）放在整条动作序列的**最后**——它的即弃对象（约三倍文件体积）若排在前面，会叠进后面动作的进程内存读数；idle 开始前还会经 inspector 对主进程与 agent 各做一次手动 GC，让 idle 的工作集反映真实驻留而不是「垃圾挂多久」。探针自己量的是 CPU 计时，放在最后不受先前动作影响；session:load 的尾窗量此时会含 turn / type 追加的轮次。
+
 ## 跑的时候要注意
 
 **窗口要一直看得见。** 窗口被盖住或最小化时，Chromium 会停掉 `requestAnimationFrame`，帧相关的数会变成 0。脚本会在 `result.md` 的「警告」里标出这种情况，但不会去动窗口层级。跑的这段时间里不要用这台机器，也不要让它睡眠（脚本不会替你改电源设置）。每个刻度会新起一个 Orbita 窗口，这是正常的。

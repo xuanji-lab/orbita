@@ -332,6 +332,17 @@ async function actionSwitch(c, pids, title) {
 }
 
 async function actionIdle(c, pids) {
+  // idle 之前先手动 GC（主进程 + agent）：readParse 探针与 switch 的整份读会在两个进程里
+  // 各留下几百 MB 即弃对象，V8 不一定在 idle 前跑到 major GC、Windows 更不主动还页——
+  // 不先收掉，idle 的工作集读数量的是「垃圾挂多久」而不是真实驻留。
+  // agent 接不上时是只有 evaluate 的假连接，没有 send，跳过即可（agent 列本来就缺测）。
+  for (const s of [c.main, c.agent]) {
+    if (typeof s?.send !== "function") continue;
+    await s.send("HeapProfiler.collectGarbage", {}, 60_000).catch(() => {});
+    await sleep(1500);
+    await s.send("HeapProfiler.collectGarbage", {}, 60_000).catch(() => {});
+  }
+  await sleep(1500);
   await begin(c);
   await sleep(8000);
   return end(c, pids);
@@ -527,12 +538,15 @@ async function runTick(fixtureDir, fixtureName, spec, ctx) {
       step(`${name}：${inst.seeded.turns} 轮、${inst.seeded.compactions} 次压缩，会话 ${(inst.sizes.sessionBytes / 1e6).toFixed(1)} MB / pi ${(inst.sizes.piBytes / 1e6).toFixed(1)} MB；冷打开 ${inst.coldOpen.settleMs} ms；每格 ${n} 次`);
       const { c, pids, seeded } = inst;
       await sleep(1500);
-      tick.load = await loadProbe(c, seeded.sessionId, inst.sessionFile, inst.piFile);
-      await sleep(2000);
       if (ACTIONS.has("switch")) tick.actions.switch = { runs: await runs(n, () => actionSwitch(c, pids, seeded.title)) };
       if (ACTIONS.has("idle")) { await sleep(2000); tick.actions.idle = { runs: [await actionIdle(c, pids)] }; }
       if (ACTIONS.has("turn")) { step(`${name}：跑一轮 ×${n + 1}`); tick.actions.turn = { warmup: await actionTurn(c, pids, ctx.mock), runs: await runs(n, () => actionTurn(c, pids, ctx.mock)) }; }
       if (ACTIONS.has("type")) { step(`${name}：流式时打字 ×${n + 1}`); tick.actions.type = { warmup: await actionType(c, pids, ctx.mock), runs: await runs(n, () => actionType(c, pids, ctx.mock)) }; }
+      // 打开探针放动作序列最后：它的 readParse ×3 在主进程 / agent 里整份读解析，先跑会把
+      // 约三倍文件体积的即弃对象叠进后面 switch / idle 的进程读数（perf-investigate 的排查
+      // 结论：探针自己贡献了 idle 内存的大头）。放最后只影响它自己的耗时读数——那是纯 CPU
+      // 计时，不受先前动作的内存残留影响；session:load 的尾窗量此时会含 turn / type 追加的轮次。
+      tick.load = await loadProbe(c, seeded.sessionId, inst.sessionFile, inst.piFile);
     } catch (error) {
       await fail(inst, error, "常规动作");
       inst ??= { app: error.app };
