@@ -353,6 +353,30 @@ describe("groupTurns", () => {
     assert.equal(trailing.kind === "toolCall" ? trailing.toolName : "", "delegate");
   });
 
+  test("install_plugin 不算轮成员：它留下的那一行（装上 / 安装）要一直露在外面，不被折进「N 个工具调用」", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "thinking", thinking: "先看看" },
+        { type: "toolCall", toolCallId: "r1", toolName: "read", input: { path: "a.ts" } },
+      ]),
+      toolItem({ toolCallId: "r1", timestamp: 2500 }),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "i1", toolName: "install_plugin", input: { path: "/w/plugins/lit" } }]),
+      toolItem({ toolCallId: "i1", toolName: "install_plugin", timestamp: 3500 }),
+      assistantItem("a3", 4000, [{ type: "text", text: "那一行在等你点安装。" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "toolCall", "text"],
+    );
+    const fold = foldUnits(view)[0];
+    assert.deepEqual(fold?.members.map((member) => member.kind), ["thinking", "toolCall"]);
+    const line = view[2];
+    assert.ok(line !== undefined && line.kind === "toolCall");
+    assert.equal(line.kind === "toolCall" ? line.toolName : "", "install_plugin");
+  });
+
   test("show_image 夹在轮中间（图后还有思考+工具）也挂轮尾：单一折叠 + 画廊贴正文前，不产生两折叠夹画廊（2026-09-27 裁决 Y′）", () => {
     const records = [
       userItem("u1", 1000),

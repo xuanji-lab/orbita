@@ -955,8 +955,8 @@ void app.whenReady().then(async () => {
       return found === undefined ? null : { name: found.name, path: found.path };
     },
     draft: (event) => broadcastAgentEvent(event),
-    installed: () => {
-      broadcastAgentEvent({ type: "pluginsChanged" });
+    installed: (info) => {
+      broadcastAgentEvent({ type: "pluginsChanged", installed: info });
       broadcastAgentEvent({ type: "skillsChanged" });
     },
   });

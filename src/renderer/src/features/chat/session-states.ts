@@ -176,8 +176,6 @@ export interface SessionEntry {
   intentRecalls: readonly IntentRecallRecord[];
   /** 挂起的回答前确认（intentAsk 事件；应答 / 取消后清空）。ephemeral */
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
-  /** 挂起的插件安装确认卡（agent 的 install_plugin，pluginInstallAsk 事件；应答 / 这一轮停了后清空）。ephemeral */
-  pluginInstall: Extract<AgentEvent, { type: "pluginInstallAsk" }> | null;
   /**
    * 最近一次系统提示注入清单（contextInventory 事件，上下文面板「规则与说明」
    * 组的数据源）。**纯 ephemeral，不落盘**：规则每轮重注入、永不被压缩，最新一份
@@ -251,7 +249,6 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentRun: null,
   intentRecalls: [],
   intentAsk: null,
-  pluginInstall: null,
   rules: null,
   pendingEcho: null,
 };
@@ -288,8 +285,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
       // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
-      // 插件安装确认卡同理：这一轮停了，主进程已把没应答的按取消结掉，卡片不能留着
-      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null, pluginInstall: null } : null),
+      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null } : null),
     }));
   }
   if (event.type === "retry") {
@@ -374,10 +370,6 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   }
   if (event.type === "intentAsk") {
     return update(states, event.sessionId, (entry) => ({ ...entry, intentAsk: event }));
-  }
-  // 插件（实验功能 plugins）：install_plugin 的确认卡挂到会话上，等用户点
-  if (event.type === "pluginInstallAsk") {
-    return update(states, event.sessionId, (entry) => ({ ...entry, pluginInstall: event }));
   }
   if (event.type === "failed") {
     // runtime 整个没了：所有槽归位；单条失败只归位那条（不存在的槽不凭空造）
@@ -552,7 +544,6 @@ export function seedFromDisk(
     intentRecalls: dedupeRecalls(intentRecalls),
     intentRun: null,
     intentAsk: null,
-    pluginInstall: null,
     // 注入清单不落盘：种盘即清（见字段注释），下一次开轮的推送会再填上
     rules: null,
     pendingEcho: null,
@@ -746,17 +737,6 @@ export function removeIntentAsk(states: SessionStates, requestId: string): Sessi
     if (entry.intentAsk?.requestId !== requestId) continue;
     const next = new Map(states);
     next.set(sessionId, { ...entry, intentAsk: null });
-    return next;
-  }
-  return states;
-}
-
-/** 按 requestId 跨槽摘掉挂起的插件安装确认卡。没有匹配就原样返回（同一引用）。 */
-export function removePluginInstall(states: SessionStates, requestId: string): SessionStates {
-  for (const [sessionId, entry] of states) {
-    if (entry.pluginInstall?.requestId !== requestId) continue;
-    const next = new Map(states);
-    next.set(sessionId, { ...entry, pluginInstall: null });
     return next;
   }
   return states;

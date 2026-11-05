@@ -46,6 +46,7 @@ let enabled = true;
 let sessions: Map<string, { cwd: string; workspaceId: string | null }>;
 let drafts: PluginDraftEvent[];
 let installedCalls = 0;
+let installedInfo: { name: string; sessionId: string }[];
 let requests: PluginAgentRequests;
 
 const S = "session-1";
@@ -58,8 +59,9 @@ function makeRequests(): PluginAgentRequests {
     session: async (id) => sessions.get(id) ?? null,
     workspace: async (id) => (id === "ws-1" ? { name: "文献组", path: workspaceRoot } : null),
     draft: (event) => drafts.push(event),
-    installed: () => {
+    installed: (info) => {
       installedCalls += 1;
+      installedInfo.push(info);
     },
   });
 }
@@ -109,6 +111,7 @@ beforeEach(async () => {
   enabled = true;
   drafts = [];
   installedCalls = 0;
+  installedInfo = [];
   sessions = new Map([
     [S, { cwd: workspaceRoot, workspaceId: "ws-1" }],
     [HOME_SESSION, { cwd: join(base, "home"), workspaceId: null }],
@@ -233,6 +236,7 @@ describe("install：低风险直接装，立即回执", () => {
     assert.deepEqual(record?.source, { kind: "link", path: await realpath(root) });
     assert.deepEqual(record?.scope, { kind: "workspaces", ids: ["ws-1"] });
     assert.equal(installedCalls, 1);
+    assert.deepEqual(installedInfo, [{ name: "lit", sessionId: S }]);
   });
 
   test("行经 JSON 来回（落盘）后仍能被解析", async () => {
@@ -347,6 +351,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
     const result = await fresh.installFromRow(clickOf(reopened ?? shown));
     assert.equal(result.ok, true);
     assert.equal((await store.records()).length, 1);
+    assert.deepEqual(installedInfo, [{ name: "lit", sessionId: S }]);
   });
 
   test("已经装上（在别处装的 / 点了两次）：幂等，不再装第二次", async () => {

@@ -71,8 +71,8 @@ export interface PluginAgentPorts {
   workspace: (id: string) => Promise<{ name: string; path: string } | null>;
   /** 草稿能看了：把 pluginDraft 送到 renderer */
   draft: (event: PluginDraftEvent) => void;
-  /** 装好了（让技能选取面、插件页、对话里那一行刷新） */
-  installed: () => void;
+  /** 装好了（让技能选取面、插件页、对话里那一行刷新；正看着那条会话的窗口还会把右栏切到这个插件） */
+  installed: (info: { name: string; sessionId: string }) => void;
 }
 
 /** 通过了路径、预览、清单与冲突检查、可以装的东西（install 与 installFromRow 共用） */
@@ -87,7 +87,8 @@ interface Prepared {
   relinked: boolean;
 }
 
-type PrepareFailure = { ok: false; kind: "disabled" | "no-session" | "not-found" | "invalid"; message: string };
+/** message 是写给模型的话（照着能改）；detail 是语言中立的事实（给用户点「安装」失败时说原因，不含「再调 install_plugin」这类指令） */
+type PrepareFailure = { ok: false; kind: "disabled" | "no-session" | "not-found" | "invalid"; message: string; detail: string };
 
 export class PluginAgentRequests {
   private readonly ports: PluginAgentPorts;
@@ -129,7 +130,10 @@ export class PluginAgentRequests {
     // 同一个文件夹已经链接装过：不再新增一行，改动下一轮自动生效
     const relinked = await this.isRelinked(preview.name, path);
     const conflicts = relinked ? preview.conflicts.filter((conflict) => !(conflict.kind === "plugin-exists" && conflict.name === preview.name)) : preview.conflicts;
-    if (conflicts.length > 0) return refuse("invalid", `Cannot install "${preview.name}": ${conflicts.map(conflictMessage).join(" ")}`);
+    if (conflicts.length > 0) {
+      const detail = conflicts.map(conflictMessage).join(" ");
+      return refuse("invalid", `Cannot install "${preview.name}": ${detail}`, detail);
+    }
 
     // 先拦下 agent 自己写错的东西
     const issues = [
@@ -137,7 +141,7 @@ export class PluginAgentRequests {
       ...unresolvedWorkflow(preview),
     ];
     if (issues.length > 0) {
-      return refuse("invalid", `The plugin folder has problems; fix them and call install_plugin again:\n- ${issues.join("\n- ")}`);
+      return refuse("invalid", `The plugin folder has problems; fix them and call install_plugin again:\n- ${issues.join("\n- ")}`, issues.join("; "));
     }
     return { ok: true, wanted, scope, workspaceName: wanted === "workspace" ? (workspace?.name ?? null) : null, path, request, preview, relinked };
   }
@@ -148,14 +152,14 @@ export class PluginAgentRequests {
   }
 
   /** 真装（链接）。成功广播刷新，失败回一句话。 */
-  private async doInstall(prepared: Prepared): Promise<{ ok: true } | { ok: false; error: string }> {
+  private async doInstall(prepared: Prepared, sessionId: string): Promise<{ ok: true } | { ok: false; error: string }> {
     try {
       const result = await this.ports.plugins.install({ preview: prepared.request, previewId: null, scope: prepared.scope });
       if (!result.ok) return { ok: false, error: installErrorMessage(result.error) };
     } catch (cause) {
       return { ok: false, error: `Installing failed: ${cause instanceof Error ? cause.message : String(cause)}` };
     }
-    this.ports.installed();
+    this.ports.installed({ name: prepared.preview.name, sessionId });
     return { ok: true };
   }
 
@@ -173,7 +177,7 @@ export class PluginAgentRequests {
       // 不装，也不等：留一行带「安装」的行，让这一轮结束
       return { ok: true, kind: "pending", name: preview.name, scope: wanted, skills, mcp, row: rowOf(prepared, "pending", reason) };
     }
-    const installed = await this.doInstall(prepared);
+    const installed = await this.doInstall(prepared, event.sessionId);
     if (!installed.ok) return fail(installed.error);
     return { ok: true, kind: "installed", name: preview.name, scope: wanted, skills, mcp, dataDir, row: rowOf(prepared, "installed", null) };
   }
@@ -181,7 +185,7 @@ export class PluginAgentRequests {
   /** 用户点了对话里那一行的「安装」。 */
   async installFromRow(request: PluginRowInstallRequest): Promise<PluginRowInstallResult> {
     const prepared = await this.prepare(request.sessionId, request.path, request.scope);
-    if (!prepared.ok) return { ok: false, reason: prepared.kind, detail: prepared.message };
+    if (!prepared.ok) return { ok: false, reason: prepared.kind, detail: prepared.detail };
     if (prepared.relinked) return { ok: true, name: prepared.preview.name };
     if (fingerprintOf(prepared) !== request.fingerprint) {
       return {
@@ -190,7 +194,7 @@ export class PluginAgentRequests {
         detail: "The plugin folder changed after this line was shown (its name, skills or the commands it starts are not what you were shown).",
       };
     }
-    const installed = await this.doInstall(prepared);
+    const installed = await this.doInstall(prepared, request.sessionId);
     if (!installed.ok) return { ok: false, reason: "failed", detail: installed.error };
     return { ok: true, name: prepared.preview.name };
   }
@@ -260,8 +264,8 @@ function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
 }
 
-function refuse(kind: PrepareFailure["kind"], message: string): PrepareFailure {
-  return { ok: false, kind, message };
+function refuse(kind: PrepareFailure["kind"], message: string, detail: string = message): PrepareFailure {
+  return { ok: false, kind, message, detail };
 }
 
 /** 路径只认这些根之内：会话所在工作区的根与会话工作目录。 */

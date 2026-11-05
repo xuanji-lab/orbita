@@ -12,7 +12,7 @@
  * 行尾开关、点行进详情。「接入本地插件」打开安装确认（模态框，两种外壳都一样）。
  * 选中某个插件时同一槽里换成详情；旧技能 / MCP 面板本期保留不动。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import { useT } from "../../locale.ts";
@@ -34,6 +34,9 @@ export function PluginsView(props: {
   chrome: PluginsChrome;
   /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；设置里的全屏版随之退场） */
   onMakeWithAgent: () => void;
+  /** 装上了插件（正看着的会话里）：选中它的详情。只有右栏版传；消费后调 onFocusConsumed */
+  focus?: { id: string; nonce: number } | null;
+  onFocusConsumed?: () => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
@@ -49,6 +52,18 @@ export function PluginsView(props: {
   useEffect(() => {
     if (selectedId !== null && state.load.kind === "ready" && selected === null) setSelectedId(null);
   }, [selectedId, selected, state.load.kind]);
+
+  // 刚装上的那个：先重读列表再选中（选中的 id 在刷新回来之前找不到，上面「选中的那条没了就回列表」会把它当场清掉）
+  const { focus } = props;
+  const { refresh } = state;
+  const consumedRef = useRef(props.onFocusConsumed);
+  consumedRef.current = props.onFocusConsumed;
+  useEffect(() => {
+    if (focus === undefined || focus === null) return;
+    setQuery("");
+    void refresh().then(() => setSelectedId(focus.id));
+    consumedRef.current?.();
+  }, [focus, refresh]);
 
   const workspaces = props.workspaces;
   const filtered = useMemo(() => filterPlugins(state.plugins, query), [state.plugins, query]);

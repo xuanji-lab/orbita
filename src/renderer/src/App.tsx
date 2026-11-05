@@ -5,6 +5,7 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { pluginViewId } from "@shared/plugin";
 import { childSessions, rootSessions } from "@shared/session";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
@@ -860,6 +861,24 @@ export function App() {
   }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
+  /**
+   * agent 的 install_plugin 装上了插件、或用户点了对话里那一行的「安装」，而且是**正看着的这条会话**里装的：
+   * 右栏切到插件页并选中它。别的会话里装的不抢右栏（用户可能正在看别的）。`focus` 由 PluginsView 消费后清掉，
+   * 不然之后每次手动打开插件页都会又跳回这个插件。
+   */
+  const [pluginFocus, setPluginFocus] = useState<{ id: string; nonce: number } | null>(null);
+  const mainSessionIdRef = useRef(mainSessionId);
+  mainSessionIdRef.current = mainSessionId;
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "pluginsChanged" || event.installed === undefined) return;
+        if (event.installed.sessionId !== mainSessionIdRef.current) return;
+        setPluginFocus({ id: pluginViewId("plugin", event.installed.name), nonce: Date.now() });
+        setRightPanel("plugins");
+      }),
+    [],
+  );
 
   /**
    * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
@@ -1179,7 +1198,13 @@ export function App() {
                   cwd={session.cwd ?? ""}
                 />
               ) : shownPanel === "plugins" ? (
-                <PluginsView workspaces={session.workspaces} chrome="rail" onMakeWithAgent={makePluginWithAgent} />
+                <PluginsView
+                  workspaces={session.workspaces}
+                  chrome="rail"
+                  onMakeWithAgent={makePluginWithAgent}
+                  focus={pluginFocus}
+                  onFocusConsumed={() => setPluginFocus(null)}
+                />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}

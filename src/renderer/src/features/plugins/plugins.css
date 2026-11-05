@@ -1131,68 +1131,105 @@ button.pl-wf-chip:hover {
   overflow-wrap: anywhere;
 }
 
-/* ---------- 对话里的安装确认卡（与审批条同位同配方：浮在输入框上方的玻璃卡） ---------- */
+/* ---------- 对话里「装上插件」那一行（agent 的 install_plugin 留的）：一行字 + 行尾血线上的小按钮，不是卡 ---------- */
 
-.pl-ask {
+.pl-line {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  max-height: min(60vh, 520px);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font-size: var(--font-size-sm);
 }
 
-.pl-ask-head {
+.pl-line-main {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
-  color: var(--color-text-secondary);
+  min-width: 0;
 }
 
-.pl-ask-head strong {
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.pl-ask-keys {
-  margin-inline-start: auto;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
+.pl-line-ic {
+  flex: none;
   color: var(--color-text-tertiary);
 }
 
-.pl-ask-body {
-  display: grid;
-  gap: var(--space-3);
-  align-content: start;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: var(--space-1);
+.pl-line-ic.ok {
+  color: var(--color-success);
 }
 
-.pl-ask-desc {
-  font-size: var(--font-size-sm);
+.pl-line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-line-text b {
+  font-weight: var(--weight-semibold);
+}
+
+.pl-line-meta {
   color: var(--color-text-secondary);
-  line-height: var(--line-height-ui);
 }
 
-.pl-ask-steps {
-  margin: 0;
-  padding-left: var(--space-5);
+/* 已卸载的：整行退到次级灰，按钮仍在 */
+.pl-line[data-mode="uninstalled"] .pl-line-text {
+  color: var(--color-text-tertiary);
+}
+
+/* 行尾的小按钮（右缘钉在行右内边距：.row-trailing 推右） */
+.pl-line-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 会启动的完整命令：每台 MCP 一条，等宽、可换行，缩进到图标之后 */
+.pl-line-cmds {
   display: grid;
   gap: 2px;
-  font-size: var(--font-size-sm);
+  padding-left: calc(14px + var(--space-2));
+  min-width: 0;
 }
 
-.pl-ask-steps small {
-  margin-left: var(--space-2);
+.pl-line-cmds-h {
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+}
+
+.pl-line-cmds code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pl-line-note {
+  padding-left: calc(14px + var(--space-2));
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-line-detail {
+  margin: 0;
+  padding-left: calc(14px + var(--space-2));
   font-size: var(--font-size-xs);
 }
 
-.pl-ask-foot {
+.pl-line-detail dd {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pl-line-error {
   display: flex;
-  gap: var(--space-2);
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-left: calc(14px + var(--space-2));
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
 }
 
 /*
