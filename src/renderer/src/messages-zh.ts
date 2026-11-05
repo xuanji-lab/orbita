@@ -1734,8 +1734,9 @@ export const zh: Messages = {
     makeWithAgent: "和智能体一起做一个",
     makeWithAgentTip: "在当前工作区新开一个任务，让智能体和你从头做一个插件",
     makeWithAgentOffTip: "「做插件」这个内置插件被停用了——先在列表里把它打开",
-    // 预填输入框的一句引导；开头的 /skill:plugin-creator 点名内置的做插件技能
-    makeWithAgentDraft: "/skill:plugin-creator 我想和你一起做一个插件，希望它做到：",
+    // 预填输入框的一句引导：**完整的一句话**，不以冒号结尾（以前半句「希望它做到：」会让用户以为后面必须接着写，也让智能体拿到的只有一句英文包装 + 半句话）；
+    // 开头的 /skill:plugin-creator 点名内置的做插件技能
+    makeWithAgentDraft: "/skill:plugin-creator 我想和你一起做一个插件。",
     planned: "计划中",
     filterPlaceholder: "筛选已装的插件",
     filterAria: "筛选已装的插件",

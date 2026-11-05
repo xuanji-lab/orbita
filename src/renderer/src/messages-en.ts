@@ -1888,8 +1888,8 @@ export const en = {
     makeWithAgent: "Make one with the agent",
     makeWithAgentTip: "Open a new task in this workspace where the agent builds a plugin with you from scratch",
     makeWithAgentOffTip: "The plugin-creator plugin is turned off — switch it on in the list first",
-    // 预填输入框的一句引导；开头的 /skill:plugin-creator 点名内置的做插件技能
-    makeWithAgentDraft: "/skill:plugin-creator I want to make a plugin with you. What I want it to do: ",
+    // 预填输入框的一句引导：完整的一句话，不以冒号结尾；开头的 /skill:plugin-creator 点名内置的做插件技能
+    makeWithAgentDraft: "/skill:plugin-creator I want to make a plugin with you. ",
     planned: "Planned",
     filterPlaceholder: "Filter installed plugins",
     filterAria: "Filter installed plugins",

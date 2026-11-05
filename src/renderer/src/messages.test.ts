@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, doesNotMatch, match, ok } from "node:assert/strict";
 import { describe, test } from "node:test";
 import { en } from "./messages-en.ts";
 import { zh } from "./messages-zh.ts";
@@ -214,5 +214,20 @@ describe("messages —— 中英两张表", () => {
       "1 sub-session",
       "2 sub-sessions",
     ]);
+  });
+});
+
+describe("「和智能体一起做一个」的预填首句", () => {
+  test("点名内置技能，后面是**完整的一句话**，不以冒号（半句话）收尾——用户看到的、智能体读到的都是一句完整的话", () => {
+    for (const draft of [zh.plugins.makeWithAgentDraft, en.plugins.makeWithAgentDraft]) {
+      ok(draft.startsWith("/skill:plugin-creator "), draft);
+      const sentence = draft.slice("/skill:plugin-creator ".length).trim();
+      ok(sentence.length >= 8, `句子太短：${sentence}`);
+      doesNotMatch(sentence, /[:：]$/, `不能以冒号结尾：${sentence}`);
+      match(sentence, /[.。!！?？]$/, `要以句号一类的标点收尾：${sentence}`);
+    }
+    // 中文界面预填中文、英文界面预填英文（语言信号跟着用户走，不是整条英文包装）
+    match(zh.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
+    doesNotMatch(en.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
   });
 });
