@@ -46,7 +46,7 @@ const branchInfoCache = new WeakMap<object, { turn: readonly TranscriptRecord[];
 
 /**
  * 每个分支锚点（branchRows 的值）→ 复制文本与速度。锚点按 id 一次建索引，
- * 再从锚点往回走到轮边界（turnAssistantRecords 的口径，见 tool-results.ts）。
+ * 再从锚点往回走到轮边界（turnAssistantRecordsAt 的口径，见 tool-results.ts）。
  */
 export function branchInfoOf(
   records: readonly TranscriptRecord[],

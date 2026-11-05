@@ -1888,25 +1888,14 @@ interface TurnRecordLike {
 }
 
 /**
- * 锚点消息所在那一轮的全部 assistant 记录（原序）。轮边界 = user / 界碑 / 通道标记
- * （子会话 2026-09-23 不变量：通道标记顶替的正是一条 user 消息，与 branchAnchorIds
- * 的边界口径一致——否则锚点紧跟在通道标记后面时，会把标记之前那一轮的 assistant
- * 记录也一并拷进来）。
+ * 锚点所在那一轮的全部 assistant 记录（原序），锚点按位置给（branchInfoOf 遍历
+ * 时手里已有下标）。轮边界 = user / 界碑 / 通道标记（子会话 2026-09-23 不变量：
+ * 通道标记顶替的正是一条 user 消息，与 branchAnchorIds 的边界口径一致——否则
+ * 锚点紧跟在通道标记后面时，会把标记之前那一轮的 assistant 记录也一并拷进来）。
  *
  * pi 每次 toolCall 都结束当前消息：「说一句 → 跑工具 → 再说一句」是两三条记录。
  * 只读锚点（末条）会丢前面那句——复制漏前半段、速度只算末条那几百毫秒（2026-09-11 验收复现）。
- * 找不到锚点返回空数组。
  */
-export function turnAssistantRecords<T extends TurnRecordLike>(
-  records: readonly T[],
-  anchorId: string,
-): T[] {
-  const end = records.findIndex((record) => record.id === anchorId);
-  if (end === -1) return [];
-  return turnAssistantRecordsAt(records, end);
-}
-
-/** 同 turnAssistantRecords，锚点按位置给（调用方已知下标时免一次 findIndex） */
 export function turnAssistantRecordsAt<T extends TurnRecordLike>(records: readonly T[], end: number): T[] {
   let start = 0;
   for (let i = end; i >= 0; i -= 1) {
