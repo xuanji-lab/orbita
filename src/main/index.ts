@@ -949,7 +949,10 @@ void app.whenReady().then(async () => {
       return found === undefined ? null : { name: found.name, path: found.path };
     },
     ask: (event) => broadcastAgentEvent(event),
-    installed: () => broadcastAgentEvent({ type: "skillsChanged" }),
+    installed: () => {
+      broadcastAgentEvent({ type: "pluginsChanged" });
+      broadcastAgentEvent({ type: "skillsChanged" });
+    },
   });
   registerPluginIpc({ plugins, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload(), agentRequests: pluginAgent });
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储

@@ -272,6 +272,11 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(states.get("B")?.pluginInstall?.requestId, "r-b");
   });
 
+  test("pluginsChanged 是全局信号，不属于任何会话槽：归约原样返回同一引用", () => {
+    const states = applyAgentEvent(new Map(), pluginAsk("A", "r-a"));
+    assert.equal(applyAgentEvent(states, { type: "pluginsChanged" }), states);
+  });
+
   test("phase turn / compaction 不清审批卡——工具还在等回答", () => {
     let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
