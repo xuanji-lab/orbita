@@ -605,6 +605,11 @@ export async function applyAutomationRequest(
       (targetKind === "this_session"
         ? "Each time it is due, the instruction is sent back into this conversation (if this conversation is still busy then, it waits until it is idle). "
         : "Each run opens a new session in this workspace, read-only (Plan) unless the user changes the permission in the Automations panel. ") +
+      // 插件脚本要往磁盘写数据，Plan 档的 bash / write 一律被拒，到点只能把旧数据 / 样例再快照一遍。
+      // 档位只能用户亲手放开（无人值守写盘不能由 agent 自己决定），所以要求模型把这件事转告用户
+      (plugin !== undefined && targetKind === "new_session"
+        ? 'IMPORTANT — tell the user in your reply: scheduled runs are read-only by default, so the plugin\'s scripts cannot write new data and each run will only show the data that already exists. For it to really write data, the user must change the permission of this automation to "Skip — unattended" in the Automations panel. Do not try to change it yourself. '
+        : "") +
       "Do not wait for it or poll — end your turn when you have nothing else to do now.",
     automation: automationCardOf(automation),
   };
