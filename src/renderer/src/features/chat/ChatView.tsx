@@ -26,6 +26,7 @@ import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
 import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
+import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
@@ -54,6 +55,7 @@ import {
   branchAnchorIds,
   answerText,
   delegateCard,
+  pluginBoardOf,
   pluginInstallRowOf,
   handoffOutcome,
   editDiffText,
@@ -4390,6 +4392,12 @@ function ToolLine(props: {
   if (props.toolName === "install_plugin") {
     const row = pluginInstallRowOf(result);
     if (row !== null) return <PluginInstallLine row={row} sessionId={props.sessionId ?? null} />;
+  }
+  // show_plugin_board：留下的是一块看板（BoardGrid，按快照画），不是「调用 + 摘要」。
+  // 失败 / 还在跑 / 形状不对照通用骨架走
+  if (props.toolName === "show_plugin_board") {
+    const board = pluginBoardOf(result);
+    if (board !== null) return <PluginBoardResultView toolCallId={props.toolCallId} board={board} />;
   }
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败

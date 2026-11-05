@@ -322,6 +322,11 @@ export interface AppSettings {
    */
   pluginsPage?: PluginsPageSettings;
   /**
+   * 全局周看板一屏显示几天（用户 2026-11-05：「如果是一格的话，就显示 5 天……右上角可以让他选择显示三天，
+   * 还是五天，还是七天」）。**缺席 = 5**（BOARD_DAYS_DEFAULT）；只认 3 / 5 / 7，其余丢掉。
+   */
+  boardDays?: BoardDays;
+  /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
@@ -365,6 +370,15 @@ export interface ProvidersPageSettings {
    * 偏偏这一类很多型号没分数——切到哪类就记住哪类。
    */
   chartCategory?: PriceChartCategory;
+}
+
+/** 周看板一屏显示的天数档位与默认（缺席 = 5）。 */
+export const BOARD_DAYS_CHOICES = [3, 5, 7] as const;
+export type BoardDays = (typeof BOARD_DAYS_CHOICES)[number];
+export const BOARD_DAYS_DEFAULT: BoardDays = 5;
+
+export function isBoardDays(value: unknown): value is BoardDays {
+  return (BOARD_DAYS_CHOICES as readonly unknown[]).includes(value);
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -542,6 +556,7 @@ export function parseSettings(raw: unknown): AppSettings {
     usagePet?: unknown;
     providersPage?: unknown;
     pluginsPage?: unknown;
+    boardDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
@@ -620,6 +635,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(lastUsed === undefined ? {} : { lastUsed }),
     ...(providersPage === undefined ? {} : { providersPage }),
     ...(pluginsPage === undefined ? {} : { pluginsPage }),
+    // 只认 3 / 5 / 7：别的数当作没选过（缺席 = 5）
+    ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }

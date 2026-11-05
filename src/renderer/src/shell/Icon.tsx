@@ -77,6 +77,7 @@ import gripVertical from "../../../../design-system/assets/icons/lucide/grip-ver
 import key from "../../../../design-system/assets/icons/lucide/key.svg?raw";
 import lightbulb from "../../../../design-system/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../design-system/assets/icons/lucide/loader-circle.svg?raw";
+import layoutDashboard from "../../../../design-system/assets/icons/lucide/layout-dashboard.svg?raw";
 import layoutGrid from "../../../../design-system/assets/icons/lucide/layout-grid.svg?raw";
 import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw";
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
@@ -218,6 +219,7 @@ const ICONS = {
   lightbulb,
   "loader-circle": loaderCircle,
   list,
+  "layout-dashboard": layoutDashboard,
   "layout-grid": layoutGrid,
   layers,
   "list-filter": listFilter,

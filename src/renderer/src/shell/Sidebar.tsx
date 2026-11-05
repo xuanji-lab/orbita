@@ -55,7 +55,7 @@ import type { Messages } from "../messages-en.ts";
  * 两者互斥，所以是联合类型而不是几个 boolean。插件页不在这里：右栏单列版走右栏面板位，
  * 全屏版是设置页的一个页签。
  */
-export type Overlay = "settings" | "memory" | null;
+export type Overlay = "settings" | "memory" | "board" | null;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示

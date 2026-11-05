@@ -409,6 +409,31 @@ describe("groupTurns", () => {
     assert.equal(gallery.kind === "toolCall" ? gallery.toolName : "", "show_image");
   });
 
+  test("show_plugin_board：读技能、写数据的步骤照常收进折叠，看板钉在折叠之后、结尾回复之前", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "toolCall", toolCallId: "r1", toolName: "read", input: { path: "SKILL.md" } },
+        { type: "toolCall", toolCallId: "w1", toolName: "write", input: { path: "today.json" } },
+      ]),
+      toolItem({ toolCallId: "r1", timestamp: 2200 }),
+      toolItem({ toolCallId: "w1", toolName: "write", timestamp: 2400 }),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "b1", toolName: "show_plugin_board", input: {} }]),
+      toolItem({ toolCallId: "b1", toolName: "show_plugin_board", timestamp: 3500 }),
+      assistantItem("a3", 9000, [{ type: "text", text: "卡已经放上来了" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "toolCall", "text"],
+    );
+    const fold = foldUnits(view)[0];
+    assert.ok(fold !== undefined);
+    assert.ok(fold.members.every((member) => !(member.kind === "toolCall" && member.toolName === "show_plugin_board")));
+    const board = view[2];
+    assert.equal(board?.kind === "toolCall" ? board.toolName : "", "show_plugin_board");
+  });
+
   test("通道工具夹在两次真实工具调用中间时同样被抠出来，前后各自成一个折叠，位置不变", () => {
     const records = [
       userItem("u1", 1000),

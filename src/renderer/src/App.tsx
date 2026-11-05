@@ -24,6 +24,7 @@ import {
   type SubSessionsView,
 } from "./features/chat/sub-sessions-state";
 import { SettingsView } from "./features/settings/SettingsView";
+import { BoardWeekView } from "./features/board/BoardWeekView";
 import { resolveSettingsTab, type SettingsTab } from "./features/settings/settings-tabs.ts";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
@@ -58,7 +59,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -908,11 +909,14 @@ export function App() {
         // 文件面板开着预览：这一下 Esc 只关预览（退一层），面板留着
       } else if (rightPanel !== null) {
         setRightPanel(null);
+      } else if (overlay === "board") {
+        // 全局周看板没有别的层要先退：Esc 直接回到对话
+        setOverlay(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, subSessionsNav]);
+  }, [rightPanel, subSessionsNav, overlay]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）。判定抽在 shell/drawer-shortcut.ts：
   // macOS 上 Option 会把 event.key 变成 ∂，只看 key 在 mac 上永远匹配不到
@@ -1003,6 +1007,8 @@ export function App() {
   if (overlay === "memory" && !memoryOn) setOverlay(null);
   // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
   const pluginsOn = experimentalFeatures["plugins"] === true;
+  // 全局周看板（实验功能 plugins 的一部分）：开关关掉时盖层退回聊天
+  if (overlay === "board" && !pluginsOn) setOverlay(null);
   // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
   // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。只记在 renderer 内存里，
   // 重开应用后没有草稿视图——草稿本来就是对话进行时的东西，文件还在，agent 再 preview 一次就回来
@@ -1105,10 +1111,12 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" || overlay === "memory" ? (
+    overlay === "settings" || overlay === "memory" || overlay === "board" ? (
       <div className="cap-sess">
         <div className="cap-sc">
-          <strong className="cap-title">{overlay === "memory" ? t.memory.title : t.settings.tabs[settingsTab]}</strong>
+          <strong className="cap-title">
+            {overlay === "memory" ? t.memory.title : overlay === "board" ? t.board.title : t.settings.tabs[settingsTab]}
+          </strong>
         </div>
       </div>
     ) : mainOpenId === "" && session.opened === null ? null : (
@@ -1178,6 +1186,18 @@ export function App() {
             label: t.memory.rail,
             lit: overlay === "memory",
             onClick: () => setOverlay(overlay === "memory" ? null : "memory"),
+          },
+        ]
+      : []),
+    ...(pluginsOn
+      ? [
+          {
+            // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
+            id: "board" as const,
+            icon: "layout-dashboard" as const,
+            label: t.rail.board,
+            lit: overlay === "board",
+            onClick: () => setOverlay(overlay === "board" ? null : "board"),
           },
         ]
       : []),
@@ -1266,6 +1286,15 @@ export function App() {
                 onOpenGeneral={() => {
                   setSettingsTab("general");
                   setOverlay("settings");
+                }}
+              />
+            ) : overlay === "board" ? (
+              <BoardWeekView
+                days={settings.boardDays ?? BOARD_DAYS_DEFAULT}
+                onDaysChange={(boardDays) => changeSettings({ boardDays })}
+                onOpenSession={(id) => {
+                  setOverlay(null);
+                  void session.openSession(id);
                 }}
               />
             ) : overlay === "settings" ? (

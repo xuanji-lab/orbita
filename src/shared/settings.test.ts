@@ -1,6 +1,7 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  BOARD_DAYS_DEFAULT,
   effectiveLanguage,
   selectableThemes,
   themeLanguage,
@@ -578,6 +579,15 @@ describe("parseSettings 的 pluginsPage（插件页的界面记忆）", () => {
     deepStrictEqual(parseSettings({ pluginsPage: { onlyEnabled: false } }).pluginsPage, { onlyEnabled: false });
     deepStrictEqual("pluginsPage" in parseSettings({}), false);
     deepStrictEqual("pluginsPage" in parseSettings({ pluginsPage: {} }), false);
+  });
+});
+
+describe("parseSettings 的 boardDays（周看板一屏几天）", () => {
+  it("只认 3 / 5 / 7；缺席或坏值不落键（读侧缺席 = 5）", () => {
+    for (const days of [3, 5, 7]) deepStrictEqual(parseSettings({ boardDays: days }).boardDays, days);
+    for (const bad of [4, 0, "5", null, 5.5, [5]]) deepStrictEqual("boardDays" in parseSettings({ boardDays: bad }), false);
+    deepStrictEqual("boardDays" in parseSettings({}), false);
+    deepStrictEqual(BOARD_DAYS_DEFAULT, 5);
   });
 });
 

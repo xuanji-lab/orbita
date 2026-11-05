@@ -30,6 +30,7 @@ import {
   parseDiffLines,
   parseEditDiff,
   parseGrepLine,
+  pluginBoardOf,
   pluginInstallRowOf,
   readTaskCard,
   formatToolDuration,
@@ -450,6 +451,52 @@ describe("install_plugin 留下的那一行", () => {
     assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, commands: "node" } })), null);
     assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, path: "" } })), null);
     assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, fingerprint: 3 } })), null);
+  });
+});
+
+describe("pluginBoardOf（show_plugin_board 的结果行）", () => {
+  const HASH = "a".repeat(64);
+  const BOARD = {
+    plugin: "lit-tracker",
+    displayName: "文献追踪",
+    title: "文献追踪",
+    source: "installed",
+    draftPath: null,
+    at: 1_000,
+    tuned: false,
+    cards: [{ id: "today", title: "今日一篇", size: "2x2", index: 0, template: HASH, data: { n: 1 }, state: "ready", usingSample: false, updatedAt: 900 }],
+    skipped: [{ id: "x", reason: "too-large", detail: "300000" }],
+  };
+  const boardItem = (details: unknown, status: "complete" | "running" | "error" = "complete"): ToolTranscriptItem =>
+    ({ id: "b1", role: "tool", toolCallId: "b1", toolName: "show_plugin_board", input: {}, content: [], details, timestamp: 0, status, isError: status === "error" }) as ToolTranscriptItem;
+
+  test("show_plugin_board 不成组也不进折叠——看板要一直露在外面", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "b1", toolName: "show_plugin_board", input: {} }]),
+        toolItem({ toolCallId: "b1", toolName: "show_plugin_board" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "b2", toolName: "show_plugin_board", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
+  });
+
+  test("从 details.pluginBoard 取；落盘后 JSON 来回照样取得出", () => {
+    const board = pluginBoardOf(JSON.parse(JSON.stringify(boardItem({ pluginBoard: BOARD }))) as ToolTranscriptItem);
+    assert.equal(board?.plugin, "lit-tracker");
+    assert.equal(board?.cards.length, 1);
+    assert.equal(board?.cards[0]?.size, "2x2");
+    assert.deepEqual(board?.skipped, [{ id: "x", reason: "too-large", detail: "300000" }]);
+  });
+
+  test("没有结果 / 还在跑 / 失败 / 坏形状：null，退回通用工具行；单张坏卡丢掉不毁整份", () => {
+    assert.equal(pluginBoardOf(undefined), null);
+    assert.equal(pluginBoardOf(boardItem({ pluginBoard: BOARD }, "running")), null);
+    assert.equal(pluginBoardOf(boardItem({ pluginBoard: BOARD }, "error")), null);
+    assert.equal(pluginBoardOf(boardItem(undefined)), null);
+    assert.equal(pluginBoardOf(boardItem({ pluginBoard: { ...BOARD, source: "elsewhere" } })), null);
+    const oneBad = pluginBoardOf(boardItem({ pluginBoard: { ...BOARD, cards: [...BOARD.cards, { id: "BAD ID" }] } }));
+    assert.equal(oneBad?.cards.length, 1);
   });
 });
 

@@ -786,6 +786,44 @@ export const en = {
     noMatchInProvider: (query: string) => `No model matching “${query}” in this provider.`,
   },
 
+  board: {
+    /** Right-rail entry and page title */
+    title: "Board",
+    prevWeek: "Previous week",
+    nextWeek: "Next week",
+    thisWeek: "Back to this week",
+    daysChoice: "Days per screen",
+    days: (count: number) => `${count} days`,
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    today: "Today",
+    loading: "Loading…",
+    loadFailed: (message: string) => `Couldn't load the board: ${message}`,
+    retry: "Retry",
+    openAutomation: "Open automations",
+    emptyTitle: "No board yet",
+    emptyHint: "Create an automation that uses a plugin; after each run its cards show up on the day it ran.",
+    noneRan: "No automation ran this day",
+    nonePlanned: "Nothing scheduled this day",
+    /** A run that happened but left no cards: one grey line */
+    bareRun: (time: string, title: string) => `${time} ${title} · no board`,
+    bareRunning: (time: string, title: string) => `${time} ${title} · running`,
+    bareFailed: (time: string, title: string) => `${time} ${title} · failed`,
+    plannedTip: "Scheduled; it will run at that time",
+    openSession: (caption: string) => `${caption}, open this run's session`,
+    scrollHint: "Hold Shift and scroll to slide between days",
+    /** Board result in a session: cards that were skipped */
+    skipped: (items: string) => `Not shown: ${items}`,
+    skipReason: {
+      "unknown-card": "not in the manifest",
+      template: "template unreadable",
+      data: "data unreadable",
+      "too-large": "data too large",
+      budget: "over the snapshot size limit",
+      repeat: "too many items, or not an array",
+    },
+    draftResult: "This board is from a draft; buttons aren't recorded until the plugin is installed.",
+  },
+
   rail: {
     files: "Files",
     review: "Review changes",
@@ -808,6 +846,7 @@ export const en = {
     },
     automation: "Automations",
     plugins: "Plugins",
+    board: "Board",
   },
 
   browser: {

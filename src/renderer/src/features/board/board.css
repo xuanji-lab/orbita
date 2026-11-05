@@ -1,0 +1,311 @@
+/*
+ * 看板的外壳：会话里的结果（.board-result）与全局周看板（.wk-*）。
+ * 卡本身（外框 / 圆角 / 标题行）是 BoardGrid 的 .bd-*（features/plugins/plugin-panel.css），卡里是插件自己的。
+ * 这里只放排版：全部走 token，字号按角色取档（周看板一块里：标题 base · 正文 sm · 元信息 xs）。
+ */
+
+/* ---------- 会话里的结果 ---------- */
+
+.board-result {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: var(--space-2) 0;
+}
+
+.board-result-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+/* ---------- 全局周看板 ---------- */
+
+.wk {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+/* 页头：左 翻周，右 天数；一行，窄了折行 */
+.wk-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-5) var(--space-2);
+}
+
+.wk-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.wk-range {
+  min-width: 9ch;
+  text-align: center;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wk-this {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.wk-this:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.wk-tools {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.wk-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 3 / 5 / 7 天：分段，配方同记忆库的 .mem-seg */
+.wk-seg {
+  display: inline-flex;
+  padding: var(--space-0-5);
+  gap: var(--space-0-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.wk-seg button {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.wk-seg button:hover {
+  color: var(--color-text-primary);
+}
+
+.wk-seg button[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+/* 滚动区：横竖都能滚；竖向滚动条的位置固定，免得出现 / 消失时可视宽跳变、格宽跟着抖 */
+.wk-scroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  padding-bottom: var(--space-5);
+}
+
+/* 边缘淡出（mask 只看 alpha，颜色无所谓）：内边距那一圈渐变到不透明 */
+.wk-scroll {
+  --wk-fade: var(--space-5);
+}
+
+.wk-scroll[data-more-left="true"] {
+  mask-image: linear-gradient(to right, transparent 0, black var(--wk-fade));
+}
+
+.wk-scroll[data-more-right="true"] {
+  mask-image: linear-gradient(to left, transparent 0, black var(--wk-fade));
+}
+
+.wk-scroll[data-more-left="true"][data-more-right="true"] {
+  mask-image: linear-gradient(to right, transparent 0, black var(--wk-fade), black calc(100% - var(--wk-fade)), transparent 100%);
+}
+
+.wk-days {
+  display: grid;
+  align-items: start;
+  box-sizing: border-box;
+}
+
+.wk-day {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  /* 显式 minmax(0,1fr)：隐式列按内容撑开，窄列里的虚线框会宽出列、盖到隔壁天 */
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-2);
+}
+
+/* 今天那列：底下铺一层淡底，比两边各宽出一圈，不挤占列宽 */
+.wk-day[data-today="true"]::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-muted);
+  z-index: 0;
+}
+
+.wk-day > * {
+  position: relative;
+  z-index: 1;
+}
+
+.wk-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: 24px;
+  padding: 0 var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.wk-day-head b {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.wk-day-date {
+  font-variant-numeric: tabular-nums;
+}
+
+.wk-today {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+}
+
+.wk-runs {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* 卡上方那一行是个按钮：点它打开那次运行的会话（卡本身是 iframe，点击全在卡里，不会冒到外面） */
+.wk-cap {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.wk-cap > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wk-cap:hover {
+  color: var(--color-text-primary);
+}
+
+.wk-cap:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.wk-cap .orbita-icon {
+  flex: none;
+}
+
+.wk-cap[data-failed="true"] .orbita-icon {
+  color: var(--color-warning);
+}
+
+/* 灰字：没有看板的运行、没有自动化的日子 */
+.wk-note {
+  margin: 0;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+button.wk-note {
+  all: unset;
+  display: block;
+  box-sizing: border-box;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+button.wk-note:hover {
+  color: var(--color-text-secondary);
+}
+
+/* 排好还没到的：虚线框 + 灰字 */
+.wk-planned {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+.wk-planned span {
+  min-width: 0;
+  /* 窄列（7 天档）里折行，不截成「21:00 状…」：灰字行的信息就是时间和名字 */
+  overflow-wrap: anywhere;
+}
+
+.wk-planned .orbita-icon {
+  flex: none;
+}
+
+/* 还没挂卡的天（滑出视口太远）：占位，滑近了再挂 */
+.wk-skel {
+  min-height: 96px;
+}
+
+/* 按住 Shift 时让滚轮落在宿主上：iframe 会吞掉滚轮，宿主就收不到 Shift + 滚轮了 */
+.wk[data-shift="true"] .bd-iframe {
+  pointer-events: none;
+}
+
+.wk-empty {
+  padding: var(--space-5);
+}
