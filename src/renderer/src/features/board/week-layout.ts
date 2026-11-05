@@ -77,18 +77,20 @@ export function clampScroll(value: number, totalWidth: number, viewportWidth: nu
  * - 今天本来就整列在 0 滚动位置的可视窗里 → 不滚（0）；
  * - 否则让今天**前一天**贴左缘（多看一天昨天的结果）；前一天贴左会把今天挤出右缘（2 格列连着 2 格列）
  *   或今天是周一，就让今天贴左缘；
+ * - `edgeInset`：滚动区两侧有内边距，比天间距宽的那部分会让贴左缘的前一天再前一天露出一条边，多滚这么多把它挤出视口；
  * - 夹在 [0, 最大滚动]：今天在周尾时停在最右，今天那列整列可见。
  * 今天不在这一周（翻到别的周）→ 0。
  */
-export function scrollToTodayLeft(layout: WeekColumns, viewportWidth: number, todayIndex: number | null): number {
+export function scrollToTodayLeft(layout: WeekColumns, viewportWidth: number, todayIndex: number | null, edgeInset = 0): number {
   if (todayIndex === null) return 0;
   const today = layout.columns[todayIndex];
   if (today === undefined) return 0;
   if (today.left + today.width <= viewportWidth) return 0;
   const before = layout.columns[todayIndex - 1];
-  const withYesterday = before === undefined ? today.left : before.left;
-  const fits = today.left + today.width <= withYesterday + viewportWidth;
-  return clampScroll(fits ? withYesterday : today.left, layout.totalWidth, viewportWidth);
+  // edgeInset：滚动区两侧有内边距（> 天间距），贴左缘时前一天会在内边距里露出一条边；多滚这么多把它挤出视口
+  const aligned = (before === undefined ? today.left : before.left) + edgeInset;
+  const fits = today.left + today.width <= aligned + viewportWidth;
+  return clampScroll(fits ? aligned : today.left + edgeInset, layout.totalWidth, viewportWidth);
 }
 
 /** 此刻在可视窗里（哪怕只露一部分）的列区间 [first, last]；没有列回 null。 */

@@ -126,6 +126,14 @@ describe("scrollToTodayLeft：打开时把今天滚进视野", () => {
     const range = visibleColumnRange(flat, left, VIEWPORT);
     ok(range !== null && range.first <= 5 && range.last >= 5);
   });
+  it("edgeInset：多滚这么多，前一天再前一天正好滚出视口；今天在周尾时夹在最大滚动，不受它影响", () => {
+    const wide = layoutWeekColumns(cellsOf(1, 1, 1, 1, 1, 1, 1), 300);
+    const plain = scrollToTodayLeft(wide, VIEWPORT, 3);
+    strictEqual(plain, wide.columns[2]?.left);
+    strictEqual(scrollToTodayLeft(wide, VIEWPORT, 3, 8), plain + 8);
+    strictEqual(scrollToTodayLeft(flat, VIEWPORT, 6, 8), flat.totalWidth - VIEWPORT);
+    strictEqual(scrollToTodayLeft(flat, VIEWPORT, 0, 8), 0);
+  });
   it("今天在周尾（周日下标 6）：夹在最大滚动，今天那列整列可见", () => {
     const left = scrollToTodayLeft(flat, VIEWPORT, 6);
     strictEqual(left, flat.totalWidth - VIEWPORT);

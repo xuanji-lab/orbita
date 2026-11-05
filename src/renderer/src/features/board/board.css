@@ -124,6 +124,19 @@
   padding-bottom: var(--space-5);
 }
 
+/* 边缘淡出（mask 只看 alpha，颜色无所谓）：内边距那一圈渐变到不透明 */
+.wk-scroll[data-more-left="true"] {
+  mask-image: linear-gradient(to right, transparent 0, black var(--space-5));
+}
+
+.wk-scroll[data-more-right="true"] {
+  mask-image: linear-gradient(to left, transparent 0, black var(--space-5));
+}
+
+.wk-scroll[data-more-left="true"][data-more-right="true"] {
+  mask-image: linear-gradient(to right, transparent 0, black var(--space-5), black calc(100% - var(--space-5)), transparent 100%);
+}
+
 .wk-days {
   display: grid;
   align-items: start;
@@ -134,6 +147,8 @@
   position: relative;
   min-width: 0;
   display: grid;
+  /* 显式 minmax(0,1fr)：隐式列按内容撑开，窄列里的虚线框会宽出列、盖到隔壁天 */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-2);
 }
@@ -175,13 +190,16 @@
 
 .wk-today {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
   padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
   background: var(--color-bg-active);
   color: var(--color-text-primary);
   font-size: var(--font-size-xs);
   font-weight: var(--weight-medium);
-  line-height: 18px;
+  line-height: 1;
 }
 
 .wk-runs {
@@ -266,9 +284,8 @@ button.wk-note:hover {
 
 .wk-planned span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 窄列（7 天档）里折行，不截成「21:00 状…」：灰字行的信息就是时间和名字 */
+  overflow-wrap: anywhere;
 }
 
 .wk-planned .orbita-icon {

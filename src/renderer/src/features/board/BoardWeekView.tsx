@@ -9,7 +9,7 @@
  * 布局、天数、滚动位置的算法在 week-layout.ts（纯函数，有测试）；这里只管把它们接到 DOM。
  * 每张卡一只沙箱 iframe，一周几十张全挂太重：只挂可视窗里的天及左右各一天，滑远了卸掉。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   localWeekStart,
   type BoardPlannedRun,
@@ -36,6 +36,7 @@ import {
   dayLabel,
   dayPhase,
   layoutWeekColumns,
+  maxScrollLeft,
   mountedDays,
   plannedLabel,
   scrollToTodayLeft,
@@ -67,22 +68,21 @@ export function BoardWeekView(props: {
   const currentWeek = localWeekStart(Date.now());
 
   // 滚动区的可视宽与滚动位置
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 滚动区只在有数据时才挂（载入中 / 出错 / 空态没有它），所以拿节点用 state：挂上 / 卸掉都会重跑下面几个 effect
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
-  const scrollerRef = useCallback((node: HTMLDivElement | null) => {
-    scrollRef.current = node;
-  }, []);
-  const ready = state.kind === "ready";
   useLayoutEffect(() => {
-    const node = scrollRef.current;
-    if (node === null) return;
-    const measure = (): void => setViewport(Math.max(0, node.clientWidth - 2 * WEEK_PAD_X));
+    if (scroller === null) {
+      setViewport(0);
+      return;
+    }
+    const measure = (): void => setViewport(Math.max(0, scroller.clientWidth - 2 * WEEK_PAD_X));
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(node);
+    observer.observe(scroller);
     return () => observer.disconnect();
-  }, [ready]);
+  }, [scroller]);
 
   const week = state.kind === "ready" ? state.week : null;
   const cellWidth = weekCellWidth(viewport, props.days);
@@ -94,28 +94,29 @@ export function BoardWeekView(props: {
   // 打开 / 翻周 / 换天数后把今天滚进视野（每个「周 + 天数」只滚一次：数据每分钟刷新，不能把用户拖走的位置拽回来）
   const scrolledFor = useRef<string | null>(null);
   useLayoutEffect(() => {
-    const node = scrollRef.current;
+    const node = scroller;
     if (week === null || node === null || viewport <= 0) return;
-    const key = `${weekStart}|${props.days}`;
+    // 用数据自己的周起点：翻周后新数据回来之前，手里还是上一周的数据，按上一周的「今天」滚会滚错
+    const key = `${week.weekStart}|${props.days}`;
     if (scrolledFor.current === key) return;
     scrolledFor.current = key;
-    const left = scrollToTodayLeft(layout, viewport, todayIndex);
+    const left = scrollToTodayLeft(layout, viewport, todayIndex, WEEK_PAD_X - WEEK_DAY_GAP);
     node.scrollLeft = left;
     setScrollLeft(left);
-  }, [week, viewport, weekStart, props.days, layout, todayIndex]);
+  }, [scroller, week, viewport, props.days, layout, todayIndex]);
 
   // 窗口缩放 / 天数变了，内容宽变，位置可能越界：夹回去
   useEffect(() => {
-    const node = scrollRef.current;
+    const node = scroller;
     if (node === null || week === null) return;
     const clamped = clampScroll(node.scrollLeft, layout.totalWidth + 2 * WEEK_PAD_X, node.clientWidth);
     if (Math.abs(clamped - node.scrollLeft) > 0.5) node.scrollLeft = clamped;
-  }, [layout.totalWidth, week]);
+  }, [scroller, layout.totalWidth, week]);
 
   // Shift + 滚轮 → 横向滑。要用原生监听（React 的 onWheel 是 passive，拦不住默认的竖向滚动）
   const [shift, setShift] = useState(false);
   useEffect(() => {
-    const node = scrollRef.current;
+    const node = scroller;
     if (node === null) return;
     const onWheel = (event: WheelEvent): void => {
       const delta = wheelScrollDelta(event);
@@ -125,7 +126,7 @@ export function BoardWeekView(props: {
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, [ready]);
+  }, [scroller]);
   // 按住 Shift 时让 iframe 不吃滚轮（它会把滚轮吞进自己的文档，宿主就收不到了）
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -195,7 +196,13 @@ export function BoardWeekView(props: {
           </PanelEmpty>
         </div>
       ) : (
-        <div className="wk-scroll scroll" ref={scrollerRef} onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}>
+        <div
+          className="wk-scroll scroll"
+          ref={setScroller}
+          // 两侧还有内容时边缘淡出：滚到某一天贴左缘后，前一天只会在内边距里露一条细边，淡出比硬切好看
+          data-more-left={scrollLeft > 1 ? "true" : undefined}
+          data-more-right={scrollLeft < maxScrollLeft(layout.totalWidth, viewport) - 1 ? "true" : undefined}
+          onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}>
           <div
             className="wk-days"
             style={{
