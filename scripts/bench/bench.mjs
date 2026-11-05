@@ -195,7 +195,15 @@ async function attach(app, cdpPort) {
       // agent 进程是懒启动（第一次真请求才 fork），测量里经 renderer 显式触发一次目录请求
       // （providerBuiltins → listBuiltins → ensure）；Windows 的 utilityProcess stderr 不保证
       // 进实例日志，同时轮询 runtime 自己写的 inspector URL 文件兜底。
-      await r.evaluate(`window.orbita.provider.builtins().catch(() => {})`).catch(() => {});
+      const res = await r
+        .evaluate(
+          `window.orbita && window.orbita.provider && typeof window.orbita.provider.builtins === "function"
+            ? window.orbita.provider.builtins().then(() => "ok").catch((e) => "rej:" + String((e && e.message) || e))
+            : "no-bridge"`,
+        )
+        .then((v) => String(v))
+        .catch((e) => "eval-err:" + String((e && e.message) || e));
+      if (process.env.BENCH_DEBUG || res !== "ok") console.error(`[attach] builtins 触发：${res}`);
       try {
         const u = readFileSync(app.inspectFile, "utf8").trim();
         if (u.startsWith("ws://") && !app.inspectors.includes(u)) app.inspectors.push(u);

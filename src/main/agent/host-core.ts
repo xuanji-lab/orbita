@@ -32,7 +32,7 @@ export interface AgentChild {
 export type CatalogScope = () => Promise<readonly string[]>;
 
 export class AgentHostCore {
-  private readonly forkRuntime: () => AgentChild;
+  private readonly forkRuntime: () => AgentChild | Promise<AgentChild>;
   private readonly onEvent: (event: AgentEvent) => void;
   private readonly catalogScope: CatalogScope | undefined;
   private child: AgentChild | null = null;
@@ -94,18 +94,18 @@ export class AgentHostCore {
   /**
    * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
    */
-  constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void, catalogScope?: CatalogScope) {
+  constructor(forkRuntime: () => AgentChild | Promise<AgentChild>, onEvent: (event: AgentEvent) => void, catalogScope?: CatalogScope) {
     this.forkRuntime = forkRuntime;
     this.onEvent = onEvent;
     this.catalogScope = catalogScope;
   }
 
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
-  private ensure(): Promise<void> {
+  private async ensure(): Promise<void> {
     if (this.ready) return this.ready;
     let child: AgentChild;
     try {
-      child = this.forkRuntime();
+      child = await this.forkRuntime();
     } catch (e) {
       // Windows 上 utilityProcess.fork 会同步抛 ENOTCONN（Electron 老毛病，terminal/service.ts
       // 同款、那边冷却 150ms 重试一次）；forkRuntime 是同步签名，改为清掉 ready 让下一次

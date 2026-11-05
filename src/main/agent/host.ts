@@ -3,7 +3,7 @@
  * 逻辑全在 `host-core.ts`（纯模块，可被 `node --test` 直接测）；这里只注入真的 fork。
  */
 import { join } from "node:path";
-import { utilityProcess } from "electron";
+import { utilityProcess, type UtilityProcess } from "electron";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { AgentHostCore, type CatalogScope } from "./host-core.ts";
 
@@ -18,7 +18,25 @@ export class AgentHost extends AgentHostCore {
     onEvent: (event: AgentEvent) => void,
     catalogScope: CatalogScope,
   ) {
-    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, catalogScope);
+    super(() => forkAgentRuntime(runtimePath, env), onEvent, catalogScope);
+  }
+}
+
+/**
+ * Windows 上 `utilityProcess.fork` 会同步抛 ENOTCONN（Electron 的老毛病，terminal/service.ts
+ * 同款：冷却后重试一次，两次都挂才把错误交出去）。ensure 对同步与异步失败都会清 ready、
+ * 由下一次请求重试，这里是 fork 内部的一次即时重试。
+ */
+async function forkAgentRuntime(
+  runtimePath: string,
+  env: Record<string, string | undefined>,
+): Promise<UtilityProcess> {
+  const fork = (): UtilityProcess => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env });
+  try {
+    return fork();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return fork();
   }
 }
 
