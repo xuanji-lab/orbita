@@ -1,3 +1,4 @@
+import type { ExperimentalFeatureId } from "@shared/settings";
 import type { RightPanelKind } from "./RightRail.tsx";
 // 只要类型：RightPanelKind 是纯类型别名，`node --test` 的原生剥离会把整条 import
 // 连同这一行一起删掉，不会真的去加载 RightRail.tsx（那份文件带 JSX，Node 的类型
@@ -42,4 +43,20 @@ export function rememberPanel(
 export function recallPanel(memory: PanelMemory, session: string | null): RightPanelKind | null {
   if (session === null) return null;
   return memory.get(session) ?? null;
+}
+
+/** 挂在实验功能后面的右栏面板：开关关着时它不该开着 */
+const PANEL_FLAGS: Partial<Record<RightPanelKind, ExperimentalFeatureId>> = { plugins: "plugins" };
+
+/**
+ * 开着的面板若挂的实验开关已关（设置里关掉、或记忆里恢复出来的），收起；其余原样。
+ * 与设置页「插件」页签的 resolveSettingsTab 同一条纪律：开关关掉，入口与已开着的页面一起退场。
+ */
+export function resolvePanel(
+  panel: RightPanelKind | null,
+  flags: Readonly<Partial<Record<ExperimentalFeatureId, boolean>>>,
+): RightPanelKind | null {
+  if (panel === null) return null;
+  const flag = PANEL_FLAGS[panel];
+  return flag === undefined || flags[flag] === true ? panel : null;
 }

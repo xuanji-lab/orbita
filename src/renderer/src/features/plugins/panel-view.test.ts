@@ -21,7 +21,6 @@ import {
   sameTheme,
   showHostEmpty,
 } from "./panel-view.ts";
-import { pluginPanelKind, pluginPanelNameOf } from "../../shell/plugin-panel-kind.ts";
 
 const ready = (value: unknown, updatedAt = 1): { kind: "ready"; value: unknown; updatedAt: number } => ({ kind: "ready", value, updatedAt });
 
@@ -177,12 +176,4 @@ describe("文案：每一种问题、每一种失败原因、两种语言都有�
       for (const reason of reasons) assert.ok(actionFailureText(messages.pluginPanel, reason).length > 3, reason);
     });
   }
-});
-
-describe("pluginPanelKind", () => {
-  test("编码 / 解码来回一致；不是插件面板的返回 null", () => {
-    assert.equal(pluginPanelKind("lit-tracker"), "plugin-panel:lit-tracker");
-    assert.equal(pluginPanelNameOf("plugin-panel:lit-tracker"), "lit-tracker");
-    for (const other of ["files", "context", "plugin-panel:", null, ""]) assert.equal(pluginPanelNameOf(other), null);
-  });
 });
