@@ -38,8 +38,11 @@ export const PANEL_FRAME_CSP = [
 
 /** 一份文档没被取走多久就作废。 */
 export const PANEL_FRAME_TTL_MS = 60_000;
-/** 同时放着多少份没取走的文档（renderer 反复开关面板时的上限，满了丢最旧的）。 */
-const MAX_PENDING = 96;
+/**
+ * 没有「同时放几份」的数量上限，只靠上面的 TTL 兜内存：周看板一次挂几百张卡、会话里多块看板同时挂，
+ * 数量上限一满就丢最旧的，那些卡在 iframe 来取之前就 404 了（曾经的 96 份上限）。一份模板 ≤ 1 MB，
+ * 60 秒内没被取走就作废，注册的节奏又由 renderer 挂载 iframe 的节奏决定，内存天然有界。
+ */
 
 export interface PanelFrameResponse {
   status: number;
@@ -65,11 +68,6 @@ export class PanelFrames {
     this.prune();
     const token = randomBytes(16).toString("hex");
     this.pending.set(token, { html, expiresAt: this.now() + PANEL_FRAME_TTL_MS });
-    while (this.pending.size > MAX_PENDING) {
-      const oldest = this.pending.keys().next();
-      if (oldest.done === true) break;
-      this.pending.delete(oldest.value);
-    }
     return `${PANEL_FRAME_SCHEME}://${PANEL_FRAME_HOST}/${token}`;
   }
 

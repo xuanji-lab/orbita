@@ -818,7 +818,7 @@ export const en = {
       template: "template unreadable",
       data: "data unreadable",
       "too-large": "data too large",
-      budget: "over the snapshot size limit",
+      budget: "over the snapshot size or card-count limit",
       repeat: "too many items, or not an array",
     },
     draftResult: "This board is from a draft; buttons aren't recorded until the plugin is installed.",

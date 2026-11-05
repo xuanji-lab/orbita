@@ -4,7 +4,7 @@
  * 时区靠改 process.env.TZ（Node 赋值时会重置时区缓存）；每个 describe 自己设、结束复原。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -261,6 +261,42 @@ describe("readBoardSnapshots", () => {
       assert.deepEqual([...found.keys()], ["c1"]);
       assert.deepEqual(found.get("c1"), good);
       assert.equal((await readBoardSnapshots(join(dir, "gone.jsonl"), new Set(["c1"]))).size, 0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("按 (路径, mtime, 大小, 点名的 id) 缓存：文件没变不重扫；改了 / 追加了 / 点名的 id 不同才重扫", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-board-week-cache-"));
+    try {
+      const file = join(dir, "s.jsonl");
+      const toolLine = (callId: string, name: string): string =>
+        JSON.stringify({ id: callId, role: "tool", toolCallId: callId, toolName: "show_plugin_board", input: {}, content: [], details: { pluginBoard: board([card(name, 0, { n: 1 })]) }, status: "complete", isError: false });
+      await writeFile(file, `${toolLine("c1", "aaaa")}\n`);
+      const fixed = new Date("2026-11-05T00:00:00Z");
+      await utimes(file, fixed, fixed);
+      const before = await stat(file);
+      const first = await readBoardSnapshots(file, new Set(["c1"]));
+      assert.equal(first.get("c1")?.cards[0]?.id, "aaaa");
+
+      // 同样大小、把 mtime 还原：读到的是缓存（证明没有重扫）
+      await writeFile(file, `${toolLine("c1", "bbbb")}\n`);
+      await utimes(file, fixed, fixed);
+      assert.equal((await stat(file)).size, before.size, "测试前提：大小不变");
+      assert.equal((await readBoardSnapshots(file, new Set(["c1"]))).get("c1")?.cards[0]?.id, "aaaa", "命中缓存");
+
+      // 调用方改返回的表不能污染缓存
+      first.clear();
+      assert.equal((await readBoardSnapshots(file, new Set(["c1"]))).size, 1);
+
+      // mtime 变了 → 重扫
+      const later = new Date(fixed.getTime() + 5000);
+      await utimes(file, later, later);
+      assert.equal((await readBoardSnapshots(file, new Set(["c1"]))).get("c1")?.cards[0]?.id, "bbbb", "mtime 变了重扫");
+
+      // 点名的 id 不同 → 另一份缓存
+      await writeFile(file, `${toolLine("c1", "bbbb")}\n${toolLine("c2", "cccc")}\n`);
+      assert.deepEqual([...(await readBoardSnapshots(file, new Set(["c1", "c2"]))).keys()].sort(), ["c1", "c2"], "文件长大（追加了一行）重扫");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

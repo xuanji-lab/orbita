@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { cardBox, columnCells, columnLayout, containerLayout, placedSpan, rowHeight, unitOf } from "./board-layout.ts";
+import { cardBox, columnCells, columnLayout, containerLayout, gridHeight, placedSpan, rowHeight, unitOf } from "./board-layout.ts";
 
 describe("containerLayout", () => {
   test("< 560px 一行 2 格、间距 8；≥ 560px 一行 4 格、间距 10；560 本身算宽", () => {
@@ -82,5 +82,36 @@ describe("columnCells / columnLayout", () => {
 describe("unitOf", () => {
   test("发给模板的一格像素宽高取整", () => {
     assert.deepEqual(unitOf(containerLayout(380)), { width: 186, height: 167 });
+  });
+});
+
+describe("gridHeight（离开视口的占位高度）", () => {
+  const wide = containerLayout(680); // 4 列、间距 10
+  const narrow = containerLayout(380); // 2 列、间距 8
+
+  test("没有卡 = 0；一张 1x1 = 一行；n 行 = n 行高 + (n−1) 个间距", () => {
+    assert.equal(gridHeight(wide, []), 0);
+    assert.equal(gridHeight(wide, ["1x1"]), wide.cellHeight);
+    assert.equal(gridHeight(wide, ["2x2"]), 2 * wide.cellHeight + 10);
+    assert.equal(gridHeight(wide, ["1x1", "1x1", "1x1", "1x1", "1x1"]), 2 * wide.cellHeight + 10);
+  });
+
+  test("dense：后面的小卡填进前面大卡旁边的空位，不另起一行", () => {
+    // 2x2 + 2x1 + 1x1 + 1x1 在 4 列里：2x2 占左上，2x1 放右上，两张 1x1 放右下 → 2 行
+    assert.equal(gridHeight(wide, ["2x2", "2x1", "1x1", "1x1"]), 2 * wide.cellHeight + 10);
+    // 窄屏 2 列：2x2 占满两列两行，后面的 1x1 在它下面
+    assert.equal(gridHeight(narrow, ["2x2", "1x1", "1x1"]), 3 * narrow.cellHeight + 2 * 8);
+    // 1x2 在 2 列里：1x2 + 1x1 + 1x1 → 左列两行，右列两行 = 2 行
+    assert.equal(gridHeight(narrow, ["1x2", "1x1", "1x1"]), 2 * narrow.cellHeight + 8);
+  });
+
+  test("宽卡压到列宽（列模式 1 格列里放 2x2）；带标题行时每行加标题高", () => {
+    const column = columnLayout({ cellWidth: 100, columns: 1, captionHeight: 22 });
+    assert.equal(gridHeight(column, ["2x1", "1x1"]), 2 * (column.cellHeight + 22) + column.gap);
+  });
+
+  test("没量到宽度：格高 0，只剩间距，不出 NaN", () => {
+    const layout = containerLayout(0);
+    assert.equal(gridHeight(layout, ["2x2", "1x1"]), 2 * layout.gap);
   });
 });

@@ -8,7 +8,7 @@
  * - 打开时把今天滚进视野；
  * - 过去的天给运行记录（卡），今天剩下的与未来的天给排好的自动化（灰字）。
  */
-import { localDayStart, type BoardPlannedRun, type BoardWeekDay, type BoardWeekItem } from "../../../../shared/plugin-board.ts";
+import { localDayStart, type BoardCardSize, type BoardPlannedRun, type BoardWeekDay, type BoardWeekItem } from "../../../../shared/plugin-board.ts";
 import type { BoardDays } from "../../../../shared/settings.ts";
 import { columnCells } from "../plugins/board-layout.ts";
 
@@ -73,19 +73,13 @@ export function clampScroll(value: number, totalWidth: number, viewportWidth: nu
 }
 
 /**
- * 打开时把今天滚进视野：
+ * 打开时把今天滚进视野的目标位置（界面再用 `clampScroll` 夹进 [0, 最大滚动]，今天在周尾时停在最右、整列可见）：
  * - 今天本来就整列在 0 滚动位置的可视窗里 → 不滚（0）；
  * - 否则让今天**前一天**贴左缘（多看一天昨天的结果）；前一天贴左会把今天挤出右缘（2 格列连着 2 格列）
  *   或今天是周一，就让今天贴左缘；
- * - `edgeInset`：滚动区两侧有内边距，比天间距宽的那部分会让贴左缘的前一天再前一天露出一条边，多滚这么多把它挤出视口；
- * - 夹在 [0, 最大滚动]：今天在周尾时停在最右，今天那列整列可见。
+ * - `edgeInset`：滚动区两侧有内边距，比天间距宽的那部分会让贴左缘的前一天再前一天露出一条边，多滚这么多把它挤出视口。
  * 今天不在这一周（翻到别的周）→ 0。
  */
-export function scrollToTodayLeft(layout: WeekColumns, viewportWidth: number, todayIndex: number | null, edgeInset = 0): number {
-  return clampScroll(todayScrollTarget(layout, viewportWidth, todayIndex, edgeInset), layout.totalWidth, viewportWidth);
-}
-
-/** `scrollToTodayLeft` 夹之前的目标位置（今天本来就看得见时为 0）。 */
 export function todayScrollTarget(layout: WeekColumns, viewportWidth: number, todayIndex: number | null, edgeInset = 0): number {
   if (todayIndex === null) return 0;
   const today = layout.columns[todayIndex];
@@ -137,11 +131,6 @@ export function mountedDays(layout: WeekColumns, scrollLeft: number, viewportWid
   return result;
 }
 
-/** 一屏能整列看全的天数（有 2 格列时少于所选天数；用于验证口径与调试）。 */
-export function fullyVisibleDays(layout: WeekColumns, scrollLeft: number, viewportWidth: number): number {
-  return layout.columns.filter((column) => column.left >= scrollLeft - 0.5 && column.left + column.width <= scrollLeft + viewportWidth + 0.5).length;
-}
-
 /**
  * 滚轮 → 横向滚动量。按住 Shift 时把滚轮变横滑：mac 与部分设备在系统层已把 deltaY 换成了 deltaX，
  * 所以取两者里绝对值大的一个。没按 Shift 返回 null（不拦：竖向滚轮照常上下滚，触控板的横滑本来就带 deltaX）。
@@ -169,17 +158,7 @@ export function todayColumnIndex(days: readonly Pick<BoardWeekDay, "start" | "en
   return index === -1 ? null : index;
 }
 
-/** 一张要画的卡与它所属的那次运行 */
-export interface WeekCardRef {
-  /** 整周内唯一：运行 id + 卡 id + 序号 */
-  key: string;
-  item: BoardWeekItem;
-  cardIndex: number;
-}
-
 export interface DayContent {
-  /** 当天各次运行里的卡（按运行时间、卡的原顺序） */
-  cards: WeekCardRef[];
   /** 跑过但没有卡的运行（没选插件 / 没调 show_plugin_board / 还在跑）：一行灰字 */
   bare: BoardWeekItem[];
   /** 排好还没到的运行 */
@@ -191,22 +170,17 @@ export interface DayContent {
 }
 
 export function dayContent(day: BoardWeekDay, phase: DayPhase): DayContent {
-  const cards: WeekCardRef[] = [];
+  const sizes: BoardCardSize[] = [];
   const bare: BoardWeekItem[] = [];
   for (const item of day.items) {
-    if (item.cards.length === 0) {
-      bare.push(item);
-      continue;
-    }
-    item.cards.forEach((card, cardIndex) => cards.push({ key: `${item.runId}:${card.id}:${card.index}`, item, cardIndex }));
+    if (item.cards.length === 0) bare.push(item);
+    else sizes.push(...item.cards.map((card) => card.size));
   }
-  const cells = columnCells(cards.map((ref) => ref.item.cards[ref.cardIndex]?.size ?? "1x1"));
-  const nothing = cards.length === 0 && bare.length === 0 && day.planned.length === 0;
+  const nothing = sizes.length === 0 && bare.length === 0 && day.planned.length === 0;
   return {
-    cards,
     bare,
     planned: day.planned,
-    cells,
+    cells: columnCells(sizes),
     empty: !nothing ? null : phase === "future" ? "none-planned" : "none-ran",
   };
 }

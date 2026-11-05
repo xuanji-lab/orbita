@@ -68,10 +68,9 @@ import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
 import { builtinPluginsDir } from "./plugin/builtin.ts";
-import { BoardTemplateStore, PluginBoards } from "./plugin/board-snapshot.ts";
+import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board-snapshot.ts";
 import { registerBoardIpc } from "./plugin/board-ipc.ts";
 import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
-import { scopeApplies } from "../shared/plugin.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
 import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
 import { installPanelProtocol, registerPanelScheme } from "./plugin/panel-protocol.ts";
@@ -1284,11 +1283,8 @@ void app.whenReady().then(async () => {
     sessions,
     providers,
     workspaces,
-    // 选插件：这个工作区此刻装着、启用着的插件
-    plugins: {
-      enabledIn: async (workspaceId) =>
-        (await plugins.records()).filter((record) => scopeApplies(record.scope, workspaceId)).map((record) => record.name),
-    },
+    // 选插件：这个工作区此刻装着、启用着、且带看板的插件（没有看板的插件，自动化到点没有东西可显示）
+    plugins: { enabledIn: (workspaceId) => boardPluginsIn(plugins, workspaceId) },
     enabled: automationEnabled,
     now: Date.now,
     newId: randomUUID,

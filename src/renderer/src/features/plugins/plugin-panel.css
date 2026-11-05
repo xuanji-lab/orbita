@@ -60,15 +60,6 @@
   background: var(--color-bg-muted);
 }
 
-.bd-frame[data-open="true"] {
-  cursor: pointer;
-}
-
-.bd-frame[data-open="true"]:focus-visible {
-  outline: 0;
-  box-shadow: var(--focus-ring);
-}
-
 .bd-iframe {
   display: block;
   width: 100%;

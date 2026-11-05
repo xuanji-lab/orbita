@@ -503,7 +503,7 @@ describe("选插件", () => {
     assert.equal(ok.ok, true);
     assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
     const missing = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "other" } });
-    assert.match(missing.ok ? "" : missing.error, /not installed or not enabled/);
+    assert.match(missing.ok ? "" : missing.error, /not installed, not enabled in this workspace, or has no board/);
     const bad = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "../x" } });
     assert.match(bad.ok ? "" : bad.error, /valid plugin name/);
     const elsewhere = await applyAutomationCreate(deps, { ...validCreate, workspaceId: "ws2", plugin: { name: "lit" } });
@@ -528,9 +528,21 @@ describe("选插件", () => {
     assert.equal(result.ok, true);
     if (!result.ok) return;
     assert.match(result.text, /use the plugin "lit"/);
+    // 新会话档固定 Plan：回执要求模型转告用户「定时跑默认只读、写数据要用户在面板里放开」，且不许自己改
+    assert.match(result.text, /tell the user/);
+    assert.match(result.text, /read-only by default/);
+    assert.match(result.text, /Do not try to change it yourself/);
     assert.equal(result.automation?.plugin, "lit");
     assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
     const refused = await applyAutomationRequest(deps, toolEvent("S", createRequest({ plugin: "other" })));
     assert.equal(refused.ok, false);
+  });
+
+  test("agent 建：没带插件、或回到本会话的自动化，回执里没有「转告用户改权限」那句", async () => {
+    const { deps } = withPlugins({ ws1: ["lit"] }, [meta({ id: "S", workspaceId: "ws1" })]);
+    const plain = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "new_session" })));
+    assert.equal(plain.ok && /tell the user/.test(plain.text), false);
+    const sameSession = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "this_session", plugin: "lit" })));
+    assert.equal(sameSession.ok && /tell the user/.test(sameSession.text), false);
   });
 });
