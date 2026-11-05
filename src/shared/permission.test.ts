@@ -10,6 +10,7 @@ import {
   isBrowserReadTool,
   isChannelTool,
   isSelfConfirmingTool,
+  PLUGIN_BOARD_TOOL,
   PLUGIN_DRAFT_TOOL,
   SELF_CONFIRMING_TOOLS,
   USER_ACTION_TOOL,
@@ -214,6 +215,16 @@ describe("插件工具（实验功能 plugins）", () => {
       assert.deepEqual(decidePermission(mode, PLUGIN_DRAFT_TOOL), { behavior: "allow" }, mode);
     }
     assert.equal(isReadOnlyTool(PLUGIN_DRAFT_TOOL), false);
+  });
+
+  test("show_plugin_board 只显示插件已写好的卡：三档一律放行（manual 也不问），不进只读名单", () => {
+    assert.equal(PLUGIN_BOARD_TOOL, "show_plugin_board");
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, PLUGIN_BOARD_TOOL), { behavior: "allow" }, mode);
+    }
+    assert.equal(isReadOnlyTool(PLUGIN_BOARD_TOOL), false);
+    // 名字相近的不沾光
+    assert.deepEqual(decidePermission("manual", "show_plugin_boards"), { behavior: "ask" });
   });
 
   test("自带确认不是通用后门：名字相近的工具、create_skill 都照写操作过闸；不混进只读名单", () => {

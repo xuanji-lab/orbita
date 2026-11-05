@@ -68,6 +68,10 @@ import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
 import { builtinPluginsDir } from "./plugin/builtin.ts";
+import { BoardTemplateStore, PluginBoards } from "./plugin/board.ts";
+import { registerBoardIpc } from "./plugin/board-ipc.ts";
+import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
+import { scopeApplies } from "../shared/plugin.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
 import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
 import { installPanelProtocol, registerPanelScheme } from "./plugin/panel-protocol.ts";
@@ -564,6 +568,13 @@ void app.whenReady().then(async () => {
         .previewDraft(event)
         .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
         .then((outcome) => agentHost.answerPluginPreview(event.requestId, outcome));
+      return;
+    }
+    if (event.type === "pluginBoardRequest") {
+      void pluginBoards
+        .snapshot(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginBoard(event.requestId, outcome));
       return;
     }
     if (event.type === "pluginListRequest") {
@@ -1122,6 +1133,18 @@ void app.whenReady().then(async () => {
     workspaceRoot: async (id) => (id === null ? null : ((await workspaces.list()).find((each) => each.id === id)?.path ?? null)),
   });
   registerPluginIpc({ plugins, panels, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload(), agentRequests: pluginAgent });
+  // 看板结果（agent 的 show_plugin_board）：模板按内容哈希存进 <userData>/board-templates/，数据快照进工具结果
+  const boardTemplates = new BoardTemplateStore(join(configDir, BOARD_TEMPLATES_DIR));
+  const pluginBoards = new PluginBoards({
+    plugins,
+    templates: boardTemplates,
+    enabled: async () => (await settings.read()).experimentalFeatures?.["plugins"] === true,
+    session: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      return meta === null ? null : { cwd: meta.cwd, workspaceId: meta.workspaceId };
+    },
+    workspaceRoot: async (id) => (await workspaces.list()).find((workspace) => workspace.id === id)?.path ?? null,
+  });
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
   registerImportIpc(
     sessions,
@@ -1261,12 +1284,27 @@ void app.whenReady().then(async () => {
     sessions,
     providers,
     workspaces,
+    // 选插件：这个工作区此刻装着、启用着的插件
+    plugins: {
+      enabledIn: async (workspaceId) =>
+        (await plugins.records()).filter((record) => scopeApplies(record.scope, workspaceId)).map((record) => record.name),
+    },
     enabled: automationEnabled,
     now: Date.now,
     newId: randomUUID,
     notify: broadcastAutomationEvent,
   };
   registerAutomationIpc(automationDeps);
+  // 全局周看板：自动化的运行记录 + 会话里 show_plugin_board 的快照；自动化关着就没有运行与排期
+  registerBoardIpc({
+    week: {
+      automations: async () => ((await automationEnabled()) ? automationStore.list() : []),
+      recordPath: (sessionId) => sessions.recordPath(sessionId),
+      now: Date.now,
+    },
+    templates: boardTemplates,
+    frames: panelFrames,
+  });
   automationScheduler.start();
   setTimeout(() => void automationScheduler.tick().catch(() => undefined), 5_000);
   powerMonitor.on("resume", () => void automationScheduler.tick().catch(() => undefined));

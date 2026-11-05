@@ -30,10 +30,12 @@ import {
   describeScheduleEn,
   isAutomationMode,
   nextRunAfter,
+  parseAutomationPlugin,
   parseSchedule,
   type Automation,
   type AutomationAction,
   type AutomationOutcome,
+  type AutomationPlugin,
   type AutomationSchedule,
   type AutomationTarget,
   type AutomationToolOutcome,
@@ -55,6 +57,11 @@ export interface AutomationRequestDeps {
   };
   providers: { list(): Promise<ProviderDto[]> };
   workspaces: { list(): Promise<Workspace[]> };
+  /**
+   * 选插件的校验：这个工作区（null = Home）此刻能用的插件名（已装且范围覆盖它）。缺席 = 只校验名字形状
+   * （测试与没接插件的场景）。
+   */
+  plugins?: { enabledIn(workspaceId: string | null): Promise<string[]> };
   /** 实验开关（每次现读） */
   enabled(): Promise<boolean>;
   now(): number;
@@ -125,6 +132,16 @@ function firstRunAt(schedule: AutomationSchedule, now: number, until: number | u
   return next;
 }
 
+/** 自动化选的插件：名字合规，且（接了插件端口时）在这个工作区里装着、启用着 */
+async function checkPlugin(deps: AutomationRequestDeps, raw: unknown, workspaceId: string | null): Promise<Parsed<AutomationPlugin>> {
+  const plugin = parseAutomationPlugin(raw);
+  if (plugin === null) return fail("plugin must be { name } with a valid plugin name.");
+  if (deps.plugins !== undefined && !(await deps.plugins.enabledIn(workspaceId)).includes(plugin.name)) {
+    return fail(`The plugin "${plugin.name}" is not installed or not enabled in this workspace.`);
+  }
+  return { ok: true, value: plugin };
+}
+
 async function knownWorkspace(deps: AutomationRequestDeps, workspaceId: unknown): Promise<Parsed<string | null>> {
   if (workspaceId === null) return { ok: true, value: null };
   if (typeof workspaceId !== "string" || workspaceId === "") return fail("workspaceId must be a workspace id or null (Home).");
@@ -192,6 +209,12 @@ export async function applyAutomationCreate(deps: AutomationRequestDeps, raw: un
     if (!parsed.ok) return parsed;
     until = parsed.value;
   }
+  let plugin: AutomationPlugin | undefined;
+  if (raw["plugin"] !== undefined && raw["plugin"] !== null) {
+    const parsed = await checkPlugin(deps, raw["plugin"], workspaceId.value);
+    if (!parsed.ok) return parsed;
+    plugin = parsed.value;
+  }
   const nextRunAt = firstRunAt(schedule.schedule, now, until);
   if (nextRunAt === null) return fail("The end date comes before the first run.");
   if ((await deps.store.list()).length >= AUTOMATION_MAX_TOTAL) return fail(TOTAL_LIMIT_MESSAGE);
@@ -204,6 +227,7 @@ export async function applyAutomationCreate(deps: AutomationRequestDeps, raw: un
     ...(model === undefined ? {} : model),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     mode: raw["mode"],
+    ...(plugin === undefined ? {} : { plugin }),
     status: "active",
     createdBy: { kind: "user" },
     ...(maxRuns === undefined ? {} : { maxRuns }),
@@ -290,6 +314,15 @@ export async function applyAutomationUpdate(deps: AutomationRequestDeps, rawId: 
       set.thinkingLevel = rawPatch["thinkingLevel"];
     } else {
       return fail("thinkingLevel is not valid.");
+    }
+  }
+  if (rawPatch["plugin"] !== undefined) {
+    if (rawPatch["plugin"] === null) {
+      unset.push("plugin");
+    } else {
+      const parsed = await checkPlugin(deps, rawPatch["plugin"], automationWorkspaceId(current));
+      if (!parsed.ok) return parsed;
+      set.plugin = parsed.value;
     }
   }
   if (rawPatch["deliver"] !== undefined) {
@@ -518,6 +551,12 @@ export async function applyAutomationRequest(
     if (!resolved.ok) return resolved;
     model = { providerId: resolved.providerId, modelId: resolved.modelId };
   }
+  let plugin: AutomationPlugin | undefined;
+  if (request.plugin !== undefined && request.plugin !== "") {
+    const parsed = await checkPlugin(deps, { name: request.plugin }, workspaceId);
+    if (!parsed.ok) return parsed;
+    plugin = parsed.value;
+  }
   const nextRunAt = firstRunAt(schedule.schedule, now, until);
   if (nextRunAt === null) return fail("The end time comes before the first run.");
   const all = await deps.store.list();
@@ -537,6 +576,7 @@ export async function applyAutomationRequest(
     ...(model === undefined ? {} : model),
     // 新开会话的无人值守运行落最保守的只读档；要放行写盘，用户在面板里改。this_session 不看这一档
     mode: "plan",
+    ...(plugin === undefined ? {} : { plugin }),
     status: "active",
     createdBy: { kind: "agent", sessionId: meta.id },
     ...(maxRuns === undefined ? {} : { maxRuns }),
@@ -561,6 +601,7 @@ export async function applyAutomationRequest(
     text:
       `Automation "${automation.title}" (id ${automation.id}) is active. ${describeScheduleEn(automation.schedule)}; ` +
       `first run ${new Date(nextRunAt).toISOString()}; ends after ${ends}. ` +
+      (plugin === undefined ? "" : `Each run is told to use the plugin "${plugin.name}" and to end with show_plugin_board. `) +
       (targetKind === "this_session"
         ? "Each time it is due, the instruction is sent back into this conversation (if this conversation is still busy then, it waits until it is idle). "
         : "Each run opens a new session in this workspace, read-only (Plan) unless the user changes the permission in the Automations panel. ") +

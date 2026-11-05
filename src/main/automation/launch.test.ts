@@ -173,6 +173,15 @@ describe("launchAutomationRun（new_session）", () => {
     assert.ok(input?.text.includes("上周说了 A"));
   });
 
+  test("选了插件：提示词里让它用这个插件、最后调 show_plugin_board；没选不加", async () => {
+    const { launchDeps, submitted } = deps();
+    await launchAutomationRun(launchDeps, { automation: automation({ plugin: { name: "lit" } }), sessionId: "44444444-4444-4444-4444-444444444444", number: 1, at: AT, trigger: "schedule" });
+    await launchAutomationRun(launchDeps, { automation: automation(), sessionId: "55555555-5555-5555-5555-555555555555", number: 1, at: AT, trigger: "schedule" });
+    assert.ok(submitted[0]?.text.includes("用插件「lit」"));
+    assert.ok(submitted[0]?.text.includes('show_plugin_board（plugin: "lit"）'));
+    assert.ok(!(submitted[1]?.text.includes("show_plugin_board") ?? true));
+  });
+
   test("Home 任务落在 Home 目录；工作区被删：抛错，且不留下会话", async () => {
     const home = deps();
     await launchAutomationRun(home.launchDeps, {

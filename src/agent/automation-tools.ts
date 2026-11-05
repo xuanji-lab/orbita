@@ -62,6 +62,7 @@ function describeCard(card: AutomationCardView): string {
     card.target === "this_session" ? "sent back into its session" : "new session each run",
     `${card.runCount} run(s)${card.maxRuns === undefined ? "" : ` of ${card.maxRuns}`}`,
     card.nextRunAt === null ? "no next run" : `next ${new Date(card.nextRunAt).toISOString()}`,
+    ...(card.plugin === undefined ? [] : [`plugin ${card.plugin}`]),
   ];
   return `- ${card.id} · "${card.title}" · ${bits.join(" · ")}`;
 }
@@ -138,6 +139,12 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string):
           description: 'Where each run goes. Default "this_session" (sent back into this conversation).',
         },
         model: { type: "string", description: 'Optional model id for the runs; only with target "new_session". Default: the sub-session default model setting.' },
+        plugin: {
+          type: "string",
+          description:
+            "Optional name of an installed plugin (enabled in this workspace) to run each time. Each run is then told to use it and to end with show_plugin_board, " +
+            "and its cards appear on the user's weekly board.",
+        },
       },
       required: ["title", "prompt", "schedule"],
     } as never,
@@ -152,6 +159,7 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string):
         ...(args["until"] === undefined ? {} : { until: parseIsoTime(args["until"], "until") }),
         ...(args["target"] === "this_session" || args["target"] === "new_session" ? { target: args["target"] } : {}),
         ...(typeof args["model"] === "string" && args["model"].trim() !== "" ? { model: args["model"] } : {}),
+        ...(typeof args["plugin"] === "string" && args["plugin"].trim() !== "" ? { plugin: args["plugin"].trim() } : {}),
       };
       return toToolResult(await send(request));
     },

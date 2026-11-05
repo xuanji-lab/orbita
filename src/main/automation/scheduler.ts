@@ -38,6 +38,7 @@ import {
   type AutomationRunTrigger,
   type AutomationSkipReason,
 } from "../../shared/automation.ts";
+import { PLUGIN_BOARD_TOOL } from "../../shared/permission.ts";
 import { clipText } from "./launch.ts";
 import type { AutomationStore } from "./store.ts";
 
@@ -248,6 +249,8 @@ export interface RunResult {
   noSession?: boolean;
   /** 失败不计入「连续失败」（应用退出时被打断的那类：不是自动化自己的错） */
   notCounted?: boolean;
+  /** 这次运行里 show_plugin_board 成功的工具调用 id（按调用顺序）；全局周看板据此回会话找卡快照 */
+  boardSnapshotIds?: string[];
 }
 
 /**
@@ -267,6 +270,8 @@ export function applyRunResult(automation: Automation, runId: string, result: Ru
     ...(result.noSession === true ? { sessionId: null } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
     ...(result.status === "success" && answer !== "" ? { resultExcerpt: clipText(answer, AUTOMATION_EXCERPT_MAX) } : {}),
+    // 失败的运行也留着：看板已经显示过的卡就是那次的产出
+    ...(result.boardSnapshotIds !== undefined && result.boardSnapshotIds.length > 0 ? { boardSnapshotIds: [...result.boardSnapshotIds] } : {}),
   };
   const runs = [...automation.runs];
   runs[index] = run;
@@ -342,6 +347,8 @@ interface ActiveRun {
   softFailure: string | null;
   /** 是否测 token：this_session 的会话 stats 是整条会话累计的，量不出这一次 */
   trackTokens: boolean;
+  /** 这次运行里 show_plugin_board 成功的工具调用 id */
+  boardSnapshotIds: string[];
 }
 
 export type RunNowOutcome = { ok: true } | { ok: false; error: string };
@@ -528,6 +535,7 @@ export class AutomationScheduler {
       turnFailure: null,
       softFailure: null,
       trackTokens: before.target.kind === "new_session",
+      boardSnapshotIds: [],
     };
     this.setActive(run);
     try {
@@ -578,6 +586,13 @@ export class AutomationScheduler {
       const run = this.runOfSession(event.sessionId);
       if (run === undefined || event.progress.type !== "item_finished") return;
       const item = event.progress.item;
+      if (item.role === "tool") {
+        // 看板结果：记下工具调用 id（快照本身随会话落盘，不复制进运行记录）
+        if (item.toolName === PLUGIN_BOARD_TOOL && item.status === "complete" && !run.boardSnapshotIds.includes(item.toolCallId)) {
+          run.boardSnapshotIds.push(item.toolCallId);
+        }
+        return;
+      }
       if (item.role !== "assistant") return;
       run.lastStatus = item.status === "complete" ? "complete" : item.status === "aborted" ? "aborted" : "error";
       run.lastErrorMessage = item.status === "error" ? (item.errorMessage ?? null) : null;
@@ -631,10 +646,11 @@ export class AutomationScheduler {
           : run.answer === "" && run.softFailure !== null
             ? run.softFailure
             : null);
+    const boards = run.boardSnapshotIds.length > 0 ? { boardSnapshotIds: run.boardSnapshotIds } : {};
     const result: RunResult =
       failure === null
-        ? { status: "success", durationMs: now - run.startedAt, tokens: run.tokens, answer: run.answer }
-        : { status: "error", durationMs: now - run.startedAt, tokens: run.tokens, error: failure };
+        ? { status: "success", durationMs: now - run.startedAt, tokens: run.tokens, answer: run.answer, ...boards }
+        : { status: "error", durationMs: now - run.startedAt, tokens: run.tokens, error: failure, ...boards };
     await this.deps.store.update(run.automationId, (current) => applyRunResult(current, run.runId, result, now));
     this.deps.notify();
   }

@@ -489,3 +489,48 @@ describe("applyAutomationRequest：list / cancel（只管当前工作区）", ()
     assert.equal((await applyAutomationRequest(deps, toolEvent("S", { op: "cancel", automationId: "" }))).ok, false);
   });
 });
+
+describe("选插件", () => {
+  const withPlugins = (enabledIn: Record<string, string[]>, metas: SessionMeta[] = []) => {
+    const built = setup({ metas });
+    built.deps.plugins = { enabledIn: async (workspaceId) => enabledIn[workspaceId ?? "home"] ?? [] };
+    return built;
+  };
+
+  test("面板新建：插件要在这个工作区启用着；名字不合规 / 没装都拒；不给就没有", async () => {
+    const { deps, store } = withPlugins({ ws1: ["lit"] });
+    const ok = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "lit" } });
+    assert.equal(ok.ok, true);
+    assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
+    const missing = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "other" } });
+    assert.match(missing.ok ? "" : missing.error, /not installed or not enabled/);
+    const bad = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "../x" } });
+    assert.match(bad.ok ? "" : bad.error, /valid plugin name/);
+    const elsewhere = await applyAutomationCreate(deps, { ...validCreate, workspaceId: "ws2", plugin: { name: "lit" } });
+    assert.equal(elsewhere.ok, false);
+    const none = await applyAutomationCreate(deps, validCreate);
+    assert.equal(none.ok && none.automation?.plugin, undefined);
+  });
+
+  test("编辑：换插件要校验；null 清掉", async () => {
+    const { deps, store } = withPlugins({ ws1: ["lit", "weekly"] });
+    await store.insert(makeAutomation({ id: "a", plugin: { name: "lit" }, target: { kind: "new_session", workspaceId: "ws1" } }));
+    assert.equal((await applyAutomationUpdate(deps, "a", { plugin: { name: "weekly" } })).ok, true);
+    assert.deepEqual((await store.get("a"))?.plugin, { name: "weekly" });
+    assert.equal((await applyAutomationUpdate(deps, "a", { plugin: { name: "nope" } })).ok, false);
+    assert.equal((await applyAutomationUpdate(deps, "a", { plugin: null })).ok, true);
+    assert.equal((await store.get("a"))?.plugin, undefined);
+  });
+
+  test("agent 建：plugin 参数按会话工作区校验，回执提到插件，对话卡带插件名", async () => {
+    const { deps, store } = withPlugins({ ws1: ["lit"] }, [meta({ id: "S", workspaceId: "ws1" })]);
+    const result = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "new_session", plugin: "lit" })));
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.match(result.text, /use the plugin "lit"/);
+    assert.equal(result.automation?.plugin, "lit");
+    assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
+    const refused = await applyAutomationRequest(deps, toolEvent("S", createRequest({ plugin: "other" })));
+    assert.equal(refused.ok, false);
+  });
+});
