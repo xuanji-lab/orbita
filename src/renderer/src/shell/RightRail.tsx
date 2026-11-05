@@ -164,6 +164,8 @@ export function RightRail(props: {
     // 这条会话在做什么、做过什么、脑子里装了什么
     { id: "context", group: "session", pinned: true, icon: "clipboard-list", label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
     { id: "review", group: "session", pinned: false, icon: "file-diff", label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
+    // 文件跟审查、会话放一组（用户 2026-11-05）；精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
+    { id: "files", group: "session", pinned: true, icon: "folder", label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
     // 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路）；常规态条上没有它
     { id: "context-tab", group: "session", pinned: false, moreOnly: true, icon: "layers", label: t.taskPanel.tabContext, lit: false, onSelect: props.onOpenContext },
     ...(props.subSessions === null
@@ -180,8 +182,6 @@ export function RightRail(props: {
             badge: props.subSessions.waiting,
           },
         ]),
-    // 文件跟审查、会话放一组（用户 2026-11-05）；精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
-    { id: "files", group: "session", pinned: true, icon: "folder", label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
     { id: "terminal", group: "agent", pinned: true, icon: "square-terminal", label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
     ...fromApp("browser", { group: "agent", pinned: true }),
