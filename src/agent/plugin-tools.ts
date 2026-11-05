@@ -38,11 +38,11 @@ const INSTALL_DESCRIPTION =
 
 const PREVIEW_DESCRIPTION =
   "Show the user the plugin folder you are drafting in the right pane of the app, WITHOUT installing it. " +
-  "Call it once, right after you have written the panel files (panel/sample.json, panel/index.html, panel/spec.md and the orbita.panel block " +
-  "in .claude-plugin/plugin.json): the pane then shows the plugin being made — the card rendered from your sample data, plus the spec. " +
-  "After that the pane refreshes by itself within a few seconds whenever you change those files, so do NOT call it again after every edit; " +
+  "Call it once, right after you have written the manifest skeleton (.claude-plugin/plugin.json with at least the name and the description): the pane then shows the plugin being made — " +
+  "its detail page, with a dashed 'not discussed yet' placeholder for each manifest section you have not filled in. " +
+  "As you fill in sections (description, workflow, io, external, board), the pane grows them by itself within a few seconds, so do NOT call it again after each edit; " +
   "call it again only if the user says they cannot see it. The folder must be inside this session's workspace. " +
-  "Returns immediately with what Orbita found (skills, workflow steps, panel files, problems to fix before install_plugin). " +
+  "Returns immediately with what Orbita found (skills, workflow steps, board files, problems to fix before install_plugin). " +
   "Problems are normal while the draft is unfinished; they do not stop the pane from showing.";
 
 const BOARD_DESCRIPTION =
@@ -218,7 +218,7 @@ export function describeInstalled(outcome: Extract<PluginAgentInstallOutcome, { 
       "and do not ask the same question in prose."
     );
   }
-  const data = outcome.dataDir === "" ? "" : ` Plugin data folder: ${outcome.dataDir} (actions the user triggers in the plugin's panel are appended to actions.jsonl there).`;
+  const data = outcome.dataDir === "" ? "" : ` Plugin data folder: ${outcome.dataDir} (actions the user triggers in the plugin's board are appended to actions.jsonl there).`;
   if (outcome.kind === "already") {
     return (
       `Plugin "${outcome.name}" is already installed from this folder${brings}; nothing new was shown. ` +

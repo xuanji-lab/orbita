@@ -31,7 +31,7 @@ description: 在动手写新插件、新技能之前，先主动去找有没有�
    或用浏览器工具打开 `https://skills.sh/` 搜关键词。只看，不装。
 4. **GitHub**：搜 `<关键词> claude skill` / `agent skill`，常见合集 `anthropics/skills`、各类 `awesome-claude-skills`。用 `web_search` 或浏览器工具。
 
-找界面风格 / 面板样子时，去处不同：看 `../panel-style/SKILL.md`，别在这里找。
+找看板卡片的风格时，去处不同：看 `../board-style/SKILL.md`，别在这里找。
 
 **用户的需求里点名了底子**（“在 X 的基础上做”“用我那个 Y 技能”“照这个仓库改”）：直接用它，跳过搜索，只读一遍它的内容再动手。
 
@@ -57,7 +57,7 @@ description: 在动手写新插件、新技能之前，先主动去找有没有�
 
 | 候选 | 来自哪 / 许可证 | 能复用什么 | 要改哪里才合你用 |
 |---|---|---|---|
-| 例：`arxiv-digest` 技能 | claude-plugins-official · MIT | 取 RSS + 去重的整段脚本 | 它出的是英文摘要，要改成一句中文；输出格式要换成 panel.json |
+| 例：`arxiv-digest` 技能 | claude-plugins-official · MIT | 取 RSS + 去重的整段脚本 | 它出的是英文摘要，要改成一句中文；输出格式要换成看板数据 JSON |
 
 - “能复用什么”要具体到文件或步骤，不要写“可以参考”。
 - 许可证看仓库或技能目录里的 LICENSE；**看不到就写“没找到许可证”**，不要猜。宽松许可证（MIT / Apache-2.0）复用要在插件的 `NOTICE` 里署名；没有许可证的只能参考思路、不能抄代码。

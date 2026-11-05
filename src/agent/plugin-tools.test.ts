@@ -197,12 +197,13 @@ describe("preview_plugin", () => {
     assert.equal(sent.length, 1);
   });
 
-  test("说明里讲了「只显示不安装」「调一次、之后自己刷新」", () => {
+  test("说明里讲了「只显示不安装」「调一次、之后自己刷新」，看板口径（board）不是 panel", () => {
     const { tools } = setup();
     const description = preview(tools).description;
     assert.match(description, /WITHOUT installing it/);
-    assert.match(description, /do NOT call it again after every edit/);
-    assert.match(description, /panel\/sample\.json/);
+    assert.match(description, /do NOT call it again after each edit/);
+    assert.match(description, /board files/);
+    assert.doesNotMatch(description, /panel/);
   });
 });
 
