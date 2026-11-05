@@ -10,6 +10,7 @@
  * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
  */
 import { appendFile, copyFile, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -884,7 +885,9 @@ export class SessionStore {
    * 第一遍 `scanEffectiveIndex` 流式扫全文件，每行解析后只留几十字节的轻量索引
    * （字节区间 + id / role），据此在生效视图上定位尾窗；第二遍 `readIndexedWindow`
    * 只回读窗口那一段字节、只解析那几百行。逐行落地判定与回退折叠和全量路径
-   * （readLog）是同一套函数，语义逐位不变。
+   * （readLog）是同一套函数，语义逐位不变。两遍共用同一个 fd（openLogFd）：
+   * 两遍之间日志被原子替换（commitImportUpdate）也只是拿到打开那一刻的快照，
+   * 不会新记录配旧索引。
    *
    * 窗口起点对齐到轮边界（`alignToTurnStart`）：从一轮的中间切会把半轮的工具行留在
    * 窗口开头，renderer 的分组里它们是无主的（用户气泡不在）。
@@ -895,25 +898,40 @@ export class SessionStore {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
     const path = this.logPath(id);
-    const effective = await this.scanEffectiveIndex(path);
-    const start = alignToTurnStart(
-      effective.map((entry) => entry.role),
-      Math.max(0, effective.length - pageRecords(limit)),
-    );
-    const transcript = await this.readIndexedWindow(path, effective.slice(start));
-    if (transcript !== null) {
+    // 两遍共用同一个 fd（见 openLogFd）：中途的原子替换（commitImportUpdate 的
+    // temp+rename）换的是路径指向的 inode、换不动已打开的 fd，第二遍读到的必然
+    // 还是第一遍建索引的那份文件——不会新记录配旧索引
+    const handle = await this.openLogFd(path);
+    if (handle === null) {
       return {
         meta,
-        transcript,
-        window: {
-          total: effective.length,
-          hasMore: start > 0,
-          // 窗口之前的压缩界碑：用量环的「第几个窗口」要数全量，尾窗外的不能漏
-          compactionsBefore: effective.slice(0, start).filter((entry) => entry.role === "compacted").length,
-        },
+        transcript: [],
+        window: { total: 0, hasMore: false, compactionsBefore: 0 },
       };
     }
-    // 两遍之间文件变了（被截断 / 重写）：退回全量路径，语义不变
+    try {
+      const effective = await this.scanEffectiveIndex(path, handle.fd);
+      const start = alignToTurnStart(
+        effective.map((entry) => entry.role),
+        Math.max(0, effective.length - pageRecords(limit)),
+      );
+      const transcript = await this.readIndexedWindow(handle, effective.slice(start));
+      if (transcript !== null) {
+        return {
+          meta,
+          transcript,
+          window: {
+            total: effective.length,
+            hasMore: start > 0,
+            // 窗口之前的压缩界碑：用量环的「第几个窗口」要数全量，尾窗外的不能漏
+            compactionsBefore: effective.slice(0, start).filter((entry) => entry.role === "compacted").length,
+          },
+        };
+      }
+    } finally {
+      await handle.close();
+    }
+    // 同一文件被截断 / 原地重写、第二遍读到的与索引对不上：退回全量路径，语义不变
     return this.loadWindowFromLog(meta, id, limit);
   }
 
@@ -954,19 +972,28 @@ export class SessionStore {
     limit: number = SESSION_PAGE_RECORDS,
   ): Promise<SessionOlderPage> {
     const path = this.logPath(id);
-    const effective = await this.scanEffectiveIndex(path);
-    const end = effective.findIndex((entry) => entry.id === before);
-    if (end < 0) {
+    const handle = await this.openLogFd(path);
+    if (handle === null) {
       console.error(`[session] 分页锚点在生效视图里找不到（会话可能刚被回退）：${id} / ${before}`);
       return { records: [], hasMore: false };
     }
-    const start = alignToTurnStart(
-      effective.map((entry) => entry.role),
-      Math.max(0, end - pageRecords(limit)),
-    );
-    const records = await this.readIndexedWindow(path, effective.slice(start, end));
-    if (records !== null) return { records, hasMore: start > 0 };
-    // 两遍之间文件变了：退回全量路径，语义不变
+    try {
+      const effective = await this.scanEffectiveIndex(path, handle.fd);
+      const end = effective.findIndex((entry) => entry.id === before);
+      if (end < 0) {
+        console.error(`[session] 分页锚点在生效视图里找不到（会话可能刚被回退）：${id} / ${before}`);
+        return { records: [], hasMore: false };
+      }
+      const start = alignToTurnStart(
+        effective.map((entry) => entry.role),
+        Math.max(0, end - pageRecords(limit)),
+      );
+      const records = await this.readIndexedWindow(handle, effective.slice(start, end));
+      if (records !== null) return { records, hasMore: start > 0 };
+    } finally {
+      await handle.close();
+    }
+    // 同一文件被截断 / 原地重写：退回全量路径，语义不变
     return this.loadOlderFromLog(id, before, limit);
   }
 
@@ -1166,14 +1193,27 @@ export class SessionStore {
   }
 
   /**
-   * 流式扫整份日志，产出「生效视图」的轻量索引（流式两遍的第一遍）。
+   * 打开日志的 fd，供 loadWindow / loadOlder 的两遍扫共用（rename 换不动已打开的
+   * inode，两遍必是同一份文件）。打不开返回 null——与第一遍读失败同一兑底。
+   */
+  private async openLogFd(path: string): Promise<FileHandle | null> {
+    try {
+      return await open(path, "r");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 流式扫整份日志，产出「生效视图」的轻量索引（流式两遍的第一遍）。给了 fd
+   * 就从它扫（两遍共用，见 openLogFd）。
    *
    * 逐行的落地判定与 `readLogEntries` 是同一个 `parseLogLine`，回退折叠与
    * `foldReverts` 同一套规则，只是把每条记录换成了几十字节的 IndexedLine——
    * 不再把整份记录对象攒在堆里，解析完一条即可奔一条。读失败与 readLogEntries
    * 同一兜底：空索引（连 partial 都不给， readFile 失败也是整份没有）。
    */
-  private async scanEffectiveIndex(path: string): Promise<IndexedLine[]> {
+  private async scanEffectiveIndex(path: string, fd?: number): Promise<IndexedLine[]> {
     const landed: IndexedLine[] = [];
     try {
       await scanJsonlLines(
@@ -1192,6 +1232,7 @@ export class SessionStore {
             revertTarget: isRevertRecord(record) ? record.targetMessageId : undefined,
           });
         },
+        { fd },
       );
     } catch {
       return [];
@@ -1211,11 +1252,12 @@ export class SessionStore {
   /**
    * 按索引回读窗口里的真实记录（流式两遍的第二遍）：只读窗口那一段字节，逐行过
    * 同一个 `parseLogLine`，再按第一遍记下的行首偏移挑出窗口内的行——这段字节里
-   * 还夹着被回退折掉的历史行与不落地的行，不能收。读到的与索引对不上（两遍之间
-   * 文件被截断 / 重写）返回 null，调用方退回全量路径。
+   * 还夹着被回退折掉的历史行与不落地的行，不能收。读的 fd 与第一遍是同一个
+   * （见 openLogFd）。读到的与索引对不上（同一文件被截断 / 原地重写）返回 null，
+   * 调用方退回全量路径。
    */
   private async readIndexedWindow(
-    path: string,
+    handle: FileHandle,
     window: readonly IndexedLine[],
   ): Promise<SessionRecord[] | null> {
     if (window.length === 0) return [];
@@ -1226,16 +1268,11 @@ export class SessionStore {
     const to = last.end;
     const buffer = Buffer.alloc(to - from);
     try {
-      const handle = await open(path, "r");
-      try {
-        let filled = 0;
-        while (filled < buffer.length) {
-          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, from + filled);
-          if (bytesRead === 0) return null; // 文件比第一遍看到的短了
-          filled += bytesRead;
-        }
-      } finally {
-        await handle.close();
+      let filled = 0;
+      while (filled < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, from + filled);
+        if (bytesRead === 0) return null; // 文件比第一遍看到的短了（同一 inode 被截短）
+        filled += bytesRead;
       }
     } catch {
       return null;

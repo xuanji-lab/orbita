@@ -1,7 +1,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -1570,5 +1570,88 @@ describe("SessionStore · 窗口分页的行级语义", () => {
         ? bigRecord.content.find((block) => block.type === "text")
         : undefined;
     assert.equal(text !== undefined && text.type === "text" ? text.text.length : 0, 600_000);
+  });
+});
+
+// ── 两遍之间的原子替换：两遍必须读到同一份文件 ──
+
+describe("SessionStore · 窗口分页两遍之间的原子替换", () => {
+  // commitImportUpdate（再导入落盘）用 temp+rename 原子替换整个日志。第二遍另开 fd
+  // 重 open 路径时，替换恰好插进两遍之间会读到新文件、配的却是第一遍在旧文件上建好
+  // 的索引；替换文件与原文件逐行同字节长时甚至不触发兑底，直接漏出「新记录 +
+  // 旧 total / hasMore」的混合世界。两遍共用同一个 fd 后，rename 换的是路径指向的
+  // inode、换不动已打开的 fd：两遍必是同一份文件，返回打开那一刻的完整旧快照。
+
+  /**
+   * 在第一遍（scanEffectiveIndex）返回之后、第二遍回读之前把日志原子替换掉，
+   * 复现「替换恰好插进两遍之间」。scanEffectiveIndex 是私有方法，按运行时形状包一层
+   * （两版签名都是首参 path，修后多传一个 fd）。
+   */
+  const raceStoreWithReplacement = (replacement: string): SessionStore => {
+    const racer = new SessionStore(join(dir, "sessions"));
+    const holder = racer as unknown as {
+      scanEffectiveIndex: (path: string, fd?: number) => Promise<unknown>;
+    };
+    const scan = holder.scanEffectiveIndex.bind(racer);
+    let pending: string | null = replacement;
+    holder.scanEffectiveIndex = async (path, fd) => {
+      const index = await scan(path, fd);
+      if (pending !== null) {
+        await rename(pending, path);
+        pending = null;
+      }
+      return index;
+    };
+    return racer;
+  };
+
+  test("替换成逐行同字节长、不同 id 的文件：返回打开那一刻的完整旧快照，不再新记录配旧索引", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    // 每行同字节长（行界与字节偏移与原文件全对得上）、id 换成另一套——这是修前唯一
+    // 不触发兑底、直接把错配漏出去的形状
+    const swapId = (id: string): string => (id[0] === "u" ? "p" : id[0] === "a" ? "q" : "r") + id.slice(1);
+    const replacement = join(dir, "replacement.jsonl");
+    await writeFile(
+      replacement,
+      `${records.map((record) => JSON.stringify({ ...record, id: swapId(record.id) })).join("\n")}\n`,
+      "utf8",
+    );
+    const detail = await raceStoreWithReplacement(replacement).loadWindow(ID);
+    // 窗口统计按第一遍（旧文件）算：1200 条、切点 700 对齐 u140、还有更多
+    assert.equal(detail?.window.total, 1200);
+    assert.equal(detail?.window.hasMore, true);
+    assert.equal(detail?.transcript.length, 500);
+    // 记录也必须整个来自旧文件——修前这里是 p140…（新文件的记录），total / hasMore
+    // 却按旧文件算
+    assert.equal(detail?.transcript[0]?.id, "u140");
+    assert.equal(detail?.transcript.at(-1)?.id, "t239-2");
+    const stranger = detail?.transcript.find(
+      (record) => record.id.startsWith("p") || record.id.startsWith("q") || record.id.startsWith("r"),
+    );
+    assert.equal(stranger, undefined, "窗口里混进了替换文件的记录");
+  });
+
+  test("替换成更短的不同形状文件：同样只认打开时那份（旧快照）；下一次 load 才是新世界", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    const replacement = join(dir, "replacement.jsonl");
+    await writeFile(
+      replacement,
+      `${turnBlock(0, 1).map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+    const racer = raceStoreWithReplacement(replacement);
+    const detail = await racer.loadWindow(ID);
+    assert.equal(detail?.window.total, 1200);
+    assert.equal(detail?.transcript.length, 500);
+    assert.equal(detail?.transcript[0]?.id, "u140");
+    // 不再注替换，下一次 load 打开的就是替换后的文件
+    const fresh = await racer.loadWindow(ID);
+    assert.equal(fresh?.window.total, 3);
+    assert.deepEqual(
+      fresh?.transcript.map((record) => record.id),
+      ["u0", "a0", "t0-0"],
+    );
   });
 });

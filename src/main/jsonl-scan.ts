@@ -38,15 +38,23 @@ export function timeSlicer(sliceMs = 8): () => Promise<void> {
  * （不含换行符）——需要按区间回读的调用方（分页的尾窗回读）用它定位，不必再扫一遍。
  * 行的切法与 `text.split("\n")` 一致（含最后一行无换行）。
  * 读失败（不存在 / 权限 / 中途出错）原样抛出，由调用方决定怎么兜底。
+ *
+ * `opts.fd`：已打开的 fd（从它当前的位置读到尾，`autoClose:false` 不替调用方关，
+ * path 被忽略）。分页的 loadWindow 用它在两遍扫里共用同一个 fd——rename 换不动
+ * 已打开的 inode，两遍必是同一份文件。
  */
 export async function scanJsonlLines(
   path: string,
   keep: (head: string) => boolean,
   onLine: (line: string, start: number, end: number) => void,
-  yieldSlice: () => Promise<void> = timeSlicer(),
+  opts: { yieldSlice?: () => Promise<void>; fd?: number } = {},
 ): Promise<void> {
+  const yieldSlice = opts.yieldSlice ?? timeSlicer();
   const line = new LineState(keep, onLine);
-  const stream = createReadStream(path, { highWaterMark: 256 * 1024 });
+  const stream =
+    opts.fd === undefined
+      ? createReadStream(path, { highWaterMark: 256 * 1024 })
+      : createReadStream(path, { fd: opts.fd, autoClose: false, highWaterMark: 256 * 1024 });
   let consumed = 0; // 已流过的文件字节数（含正在处理的这个块之前的所有块）
   for await (const chunk of stream as AsyncIterable<Buffer>) {
     let start = 0;
