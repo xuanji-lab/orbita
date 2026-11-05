@@ -373,6 +373,25 @@ describe("parseSkillMd / rebuildSkillMd", () => {
     assert.equal(parseSkillMd(crlf).description, "回车换行");
   });
 
+  test("块标量：description: > 折成一行，| 保留换行，- 与 + 修饰符照认", () => {
+    const folded = "---\nname: a\ndescription: >\n  第一行\n  第二行\n\n  第三段\n---\n正文\n";
+    assert.equal(parseSkillMd(folded).description, "第一行 第二行 第三段");
+    const literal = "---\nname: a\ndescription: |-\n  一\n  二\n---\n正文\n";
+    assert.equal(parseSkillMd(literal).description, "一\n二");
+  });
+
+  test("缩进的 description 不是顶格键：嵌套结构里的同名字段不会被读成它", () => {
+    const nested = "---\nname: a\nmetadata:\n  description: 嵌套的\n---\n正文\n";
+    assert.equal(parseSkillMd(nested).description, null);
+  });
+
+  test("改块标量的 description：续行一并换掉，frontmatter 不被写坏", () => {
+    const raw = "---\nname: a\ndescription: >\n  旧的第一行\n  旧的第二行\nother: keep\n---\n正文\n";
+    const rebuilt = rebuildSkillMd(raw, { description: "新的" });
+    assert.equal(rebuilt, "---\nname: a\ndescription: 新的\nother: keep\n---\n正文\n");
+    assert.equal(parseSkillMd(rebuilt).description, "新的");
+  });
+
   test("整篇没有 frontmatter 时全当正文", () => {
     assert.deepEqual(parseSkillMd("就是一段话"), { name: null, description: null, body: "就是一段话" });
   });

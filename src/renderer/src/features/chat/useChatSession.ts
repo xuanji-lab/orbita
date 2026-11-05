@@ -20,6 +20,7 @@ import {
   parseCompactCommand,
   removeApproval,
   removeIntentAsk,
+  removePluginInstall,
   setPendingEcho,
   nextDeliverable,
   prependOlder,
@@ -422,6 +423,11 @@ export interface ChatSession {
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
   newTaskIn: (workspace: Workspace) => void;
+  /**
+   * 新开一条任务（落在 workspace 里；null = 不属于任何工作区，落 Home）并把输入框预填成 text。
+   * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
+   */
+  startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
@@ -432,6 +438,10 @@ export interface ChatSession {
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
   /** 确认卡的回答（对不上号的陈旧应答由 runtime 丢弃） */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 挂起的插件安装确认卡（agent 的 install_plugin）；null = 没有 */
+  pluginInstall: Extract<AgentEvent, { type: "pluginInstallAsk" }> | null;
+  /** 确认卡的应答：true = 安装，false = 不装（陈旧的 requestId 主进程静默） */
+  answerPluginInstall: (requestId: string, approve: boolean) => void;
   /** 会话级召回开关：null = 没有会话（新任务）；undefined = 没开实验功能 */
   intentEnabled: boolean | null | undefined;
   setIntentEnabled: (next: boolean) => void;
@@ -563,6 +573,8 @@ export interface SessionEngine {
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 插件安装确认卡的应答（agent 的 install_plugin） */
+  readonly answerPluginInstall: (requestId: string, approve: boolean) => void;
   /** 乐观回显：发出即画用户气泡（真回显事件一到即清）。ephemeral */
   readonly setPendingEcho: (id: string, blocks: readonly string[]) => void;
   readonly renameSession: (id: string, title: string) => void;
@@ -1094,6 +1106,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [applyStates],
   );
 
+  // 插件安装确认卡的应答：摘掉挂起的卡再送主进程（主进程应答后才真装并给 agent 回执）
+  const answerPluginInstall = useCallback(
+    (requestId: string, approve: boolean) => {
+      applyStates((prev) => removePluginInstall(prev, requestId));
+      void api.agent.answerPluginInstall(requestId, approve);
+    },
+    [applyStates],
+  );
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -1249,6 +1270,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     pickedThinkingRef,
     states,
     answerIntentConfirm,
+    answerPluginInstall,
     setPendingEcho: setPendingEchoCb,
     statesRef,
     views: views.current,
@@ -2427,6 +2449,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine],
   );
+  const startTaskWithDraft = useCallback(
+    (workspace: Workspace | null, text: string) => {
+      reset();
+      setCwd(workspace === null ? null : workspace.path);
+      setWorkspaceId(workspace === null ? null : workspace.id);
+      writeDraft(`home:${key}`, text);
+    },
+    [reset, writeDraft, key],
+  );
+
 
   /** 加好一个工作区之后：默认把本槽的下一条新任务落进去；moveCurrent 时把正看着的这条迁进去 */
   const landIn = useCallback(
@@ -3365,6 +3397,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     pendingEcho: entry.pendingEcho,
     intentAsk: entry.intentAsk,
     answerIntentConfirm: engine.answerIntentConfirm,
+    pluginInstall: entry.pluginInstall,
+    answerPluginInstall: engine.answerPluginInstall,
     intentEnabled: opened === null ? null : opened.intentEnabled,
     setIntentEnabled,
     workspaces: engine.workspaces,
@@ -3437,6 +3471,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     moveQueuedTo,
     newTask,
     newTaskIn,
+    startTaskWithDraft,
     answerApproval: engine.answerApproval,
   };
 }

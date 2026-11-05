@@ -15,6 +15,11 @@ import type { Workspace } from "@shared/workspace";
 
 export interface SkillsState {
   skills: SkillMeta[];
+  /**
+   * 插件里的技能（实验功能 plugins，SkillMeta 形状）。**只给 `/` 选取用**：右栏技能列表本身
+   * 仍只是你自己的技能（插件的技能在插件页管），但点名规则与用户技能一致，选取面要选得到。
+   */
+  pluginSkills: SkillMeta[];
   load: LoadState;
   /** 工作区列表——link 的目标集合从这来。**透传自调用方**，不是这个 hook 自己读的 */
   workspaces: Workspace[];
@@ -48,8 +53,9 @@ export interface SkillsState {
  * 刷新会不同步：侧栏删工作区时这里的旧副本还在，Skills 列表 / 韦恩图 / 矩阵
  * 都会显示已经被删掉的工作区（2026-09-23 真机复现的 bug）。
  */
-export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState {
+export function useSkills(active: boolean, workspaces: Workspace[], pluginsOn = false): SkillsState {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [pluginSkills, setPluginSkills] = useState<SkillMeta[]>([]);
   const [load, setLoad] = useState<LoadState>(LOADING);
   const [selected, setSelected] = useState<string | null>(null);
   const [servers, setServers] = useState<McpServerInfo[]>([]);
@@ -69,6 +75,18 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
     [],
   );
 
+  /** 开关关着不读：插件功能关着时选取面一字不多。读失败静默——选取面少几条比整面报错好。 */
+  const refreshPluginSkills = useCallback(() => {
+    if (!pluginsOn) {
+      setPluginSkills([]);
+      return;
+    }
+    void api.plugin
+      .skills()
+      .then(setPluginSkills)
+      .catch(() => setPluginSkills([]));
+  }, [pluginsOn]);
+
   const refreshServers = useCallback(() => {
     void api.mcp
       .list()
@@ -85,7 +103,8 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
     if (!active) return;
     void refresh();
     refreshServers();
-  }, [active, refresh, refreshServers]);
+    refreshPluginSkills();
+  }, [active, refresh, refreshServers, refreshPluginSkills]);
 
   // MCP 的连接状态是 agent 进程的运行时事实，随开会话、重载、闲置回收持续变化——
   // #163 按工作区实例化后它从「稀有事件」变成「连续变化」，面板开着就得跟着快照走，
@@ -214,6 +233,7 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
 
   return {
     skills,
+    pluginSkills,
     load,
     workspaces,
     servers,

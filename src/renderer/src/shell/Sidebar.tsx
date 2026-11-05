@@ -50,7 +50,11 @@ import { useT } from "../locale.ts";
 import type { Messages } from "../messages-en.ts";
 
 /** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
-export type Overlay = "settings" | "memory" | null;
+/**
+ * 中卡盖着的非聊天页。settings / memory 是「整页盖层」（侧栏换成它们自己的导航）；
+ * plugins 只占主槽——侧栏仍是工作区与任务的列表（设计稿：插件页开着时左栏不变）。
+ */
+export type Overlay = "settings" | "memory" | "plugins" | null;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -209,8 +213,8 @@ export function Sidebar(props: {
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
   const memoryOpen = props.overlay === "memory";
-  /** 任一整页盖层（设置 / 记忆库）开着：主列表、筛选行、子视图都让位 */
-  const overlayOpen = props.overlay !== null;
+  /** 任一整页盖层（设置 / 记忆库）开着：主列表、筛选行、子视图都让位（插件页不算：它只占主槽，侧栏照旧） */
+  const overlayOpen = props.overlay === "settings" || props.overlay === "memory";
   /**
    * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
    * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
@@ -871,6 +875,8 @@ export function Sidebar(props: {
                         setGroups((current) =>
                           unfoldGroup(current, foldKeyForWorkspace(workspace.id)),
                         );
+                        // 插件页只占主槽、侧栏列表还在：新任务要把它退掉，不然点了没反应
+                        props.onOverlay(null);
                         session.newTaskIn(workspace);
                       }}
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
@@ -904,6 +910,7 @@ export function Sidebar(props: {
                   onAdd={() => {
                     // 同上：新任务落 TASKS，先展开再建
                     setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+                    props.onOverlay(null);
                     session.newTask();
                   }}
                   folded={tasksFolded}

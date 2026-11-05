@@ -1,6 +1,7 @@
 import { Fragment, useRef, useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
 import { Menu, type MenuItem } from "./Menu";
+import type { PluginPanelKind } from "./plugin-panel-kind.ts";
 import { useT } from "../locale.ts";
 import { layoutRail, withGroupRules, type RailPlacement } from "./rail-groups.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
@@ -45,7 +46,9 @@ export type RightPanelKind =
   | "subsessions"
   | "intent"
   | "context"
-  | "automation";
+  | "automation"
+  /** 某个插件的面板（实验功能 plugins）：`plugin-panel:<插件名>`，每个带面板的插件一个页签 */
+  | PluginPanelKind;
 
 /**
  * App 传给右栏的应用级入口（右栏上其余入口由面板状态推出，不走这里）。
@@ -88,6 +91,16 @@ export function RightRail(props: {
    * 归「智能体」组、精简态收进「更多」（菜单项的文案带运行数）。
    */
   automation: { running: number } | null;
+  /**
+   * 插件入口（实验功能 plugins）：null = 不出现（开关关着）。不占右栏面板位——它在**中间主槽**
+   * 显示插件页（与记忆库同类的盖层），所以点亮与点击都由 App 给，不走 `onPanel`。
+   */
+  pluginsEntry: { icon: IconName; label: string; lit: boolean; onClick: () => void } | null;
+  /**
+   * 插件面板页签（实验功能 plugins）：当前工作区里已启用、声明了面板的插件各一个，没有就是空数组。
+   * 与 Files 等共用右栏面板位（走 `onPanel`，互斥）；图标用插件头像的同一条规则——名字首字。
+   */
+  pluginPanels: readonly { id: PluginPanelKind; title: string; initial: string }[];
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -178,8 +191,22 @@ export function RightRail(props: {
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
     { id: "terminal", group: "workbench", pinned: true, icon: "square-terminal", label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
     ...fromApp("browser", { group: "workbench", pinned: true }),
+    // 插件面板：这个工作区里启用了、带面板的插件各一个（工作面：它和文件、终端一样是看东西的地方）
+    ...props.pluginPanels.map((panel) => ({
+      id: panel.id,
+      group: "workbench" as const,
+      pinned: true,
+      icon: "blocks" as const,
+      glyph: panel.initial,
+      label: panel.title,
+      lit: props.panel === panel.id,
+      onSelect: toggle(panel.id),
+    })),
     // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
     { id: "abilities", group: "agent", pinned: false, icon: "book-open", label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") },
+    ...(props.pluginsEntry === null
+      ? []
+      : [{ id: "plugins", group: "agent" as const, pinned: true, icon: props.pluginsEntry.icon, label: props.pluginsEntry.label, lit: props.pluginsEntry.lit, onSelect: props.pluginsEntry.onClick }]),
     ...fromApp("memory", { group: "agent", pinned: false }),
     ...(props.intentAvailable
       ? [
@@ -221,6 +248,7 @@ export function RightRail(props: {
       <RailEntryButton
         key={item.id}
         icon={item.icon}
+        {...(item.glyph === undefined ? {} : { glyph: item.glyph })}
         label={item.label}
         lit={item.lit}
         onClick={item.onSelect}
@@ -291,6 +319,8 @@ export function RightRail(props: {
 interface RailItem extends RailPlacement {
   id: string;
   icon: IconName;
+  /** 有它就画首字代替图标（插件面板页签）；「更多」菜单里仍用 icon */
+  glyph?: string;
   /** tooltip 与读屏共用这一句 */
   label: string;
   lit: boolean;
@@ -308,6 +338,8 @@ interface RailItem extends RailPlacement {
  */
 function RailEntryButton(props: {
   icon: IconName;
+  /** 插件面板页签：画名字首字代替图标 */
+  glyph?: string;
   label: string;
   lit: boolean;
   onClick: () => void;
@@ -335,7 +367,7 @@ function RailEntryButton(props: {
         position: "relative",
       }}
     >
-      <Icon name={props.icon} size={16} />
+      {props.glyph !== undefined ? <span className="rail-glyph" aria-hidden="true">{props.glyph}</span> : <Icon name={props.icon} size={16} />}
       {props.badge !== undefined && props.badge > 0 && (
         <span className="rail-badge" aria-hidden="true">
           {props.badge > 99 ? "99+" : props.badge}

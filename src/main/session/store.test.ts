@@ -119,6 +119,37 @@ describe("SessionStore", () => {
     assert.equal((await store.load(ID))?.meta.title, "第一句");
   });
 
+  // 2026-11-05 插件页「和智能体一起做一个」的首条消息必带 /skill:：回显按空行把消息拆成多块，
+  // 指令块自己含空行，被拆在前三块里——只看首块，标题与最近提问就是一行裸的 <mentioned_tools>
+  test("首条消息以 /skill: 开头（回显把指令块拆成多块）：标题与最近提问取用户自己的话，不是 <mentioned_tools>", async () => {
+    await store.ensureSession(meta());
+    const prompt = "/skill:plugin-creator 我想和你一起做一个插件：每天取 arXiv";
+    await store.record(ID, {
+      id: "u1",
+      role: "user",
+      content: [
+        { type: "text", text: "<mentioned_tools>\nThe user explicitly invoked the items below in their message." },
+        { type: "text", text: 'Skills:\n- "plugin-creator" — read "/x/SKILL.md" with the read tool BEFORE any other output.\n</mentioned_tools>' },
+        { type: "text", text: prompt },
+      ],
+      timestamp: 2000,
+    });
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, prompt);
+    assert.deepEqual(detail?.meta.recentQueries, [prompt]);
+  });
+
+  test("指令块没写完整（缺闭标签）：宁可不剥，行为与以前一致", async () => {
+    await store.ensureSession(meta());
+    await store.record(ID, {
+      id: "u1",
+      role: "user",
+      content: [{ type: "text", text: "<mentioned_tools>\n手打的残缺标签" }, { type: "text", text: "后面的话" }],
+      timestamp: 2000,
+    });
+    assert.equal((await store.load(ID))?.meta.title, "<mentioned_tools>");
+  });
+
   test("assistant 消息不当标题用", async () => {
     await store.ensureSession(meta());
     await store.record(ID, assistantItem("我先说话"));

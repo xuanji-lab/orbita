@@ -128,6 +128,28 @@ export class McpStore {
     });
   }
 
+  /**
+   * 一次写完「启停 + 工作区白名单」（插件页把旧 MCP 显示成插件、改它的启用范围时用）。
+   * `workspaces` 缺席 = 白名单不动；空数组 = 删掉白名单字段（所有工作区）。
+   * 两个字段放一次 mutate 里：分两次写，中间崩掉会留下「已启用但白名单还是旧的」。
+   */
+  async setScope(name: string, patch: { disabled: boolean; workspaces?: string[] }): Promise<void> {
+    await this.mutate((servers) => {
+      const server = servers[name];
+      if (typeof server !== "object" || server === null) {
+        throw new Error(`No such server: ${name}`);
+      }
+      const next = { ...(server as Record<string, unknown>) };
+      if (patch.disabled) next["disabled"] = true;
+      else delete next["disabled"];
+      if (patch.workspaces !== undefined) {
+        if (patch.workspaces.length === 0) delete next["workspaces"];
+        else next["workspaces"] = patch.workspaces;
+      }
+      servers[name] = next;
+    });
+  }
+
   /** 启停：改写 disabled 字段（true 落盘，false 直接删字段——保持文件干净）。 */
   async setDisabled(name: string, disabled: boolean): Promise<void> {
     await this.mutate((servers) => {

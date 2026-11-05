@@ -66,6 +66,13 @@ import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
+import { PluginAgentRequests } from "./plugin/agent-requests.ts";
+import { builtinPluginsDir } from "./plugin/builtin.ts";
+import { registerPluginIpc } from "./plugin/ipc.ts";
+import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
+import { installPanelProtocol, registerPanelScheme } from "./plugin/panel-protocol.ts";
+import { PluginPanels } from "./plugin/panel-service.ts";
+import { PluginStore } from "./plugin/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
@@ -117,6 +124,9 @@ import { VoiceStore } from "./voice/store.ts";
 
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
+
+// 插件面板的 iframe 协议（orbita-panel://）：Electron 要求自定义协议在 app ready 之前登记
+registerPanelScheme();
 
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
@@ -248,6 +258,16 @@ function createMainWindow(
     if (isOwnRendererPage(url, ownRendererOrigin())) return;
     event.preventDefault();
     openLink(url);
+  });
+
+  /*
+   * 子框架的导航：renderer 里唯一的子框架是插件面板的 iframe（orbita-panel://），它是不可信模板的家——
+   * 模板里 location.href / <a> / <meta refresh> 想把自己（或拿着 preload 的主框架）带去别处，一律拦。
+   * 主框架由上面的 will-navigate 管；这里只管 isMainFrame 为 false 的。
+   */
+  window.webContents.on("will-frame-navigate", (event) => {
+    if (event.isMainFrame) return;
+    if (!isPanelFrameUrl(event.url)) event.preventDefault();
   });
 
   /*
@@ -530,6 +550,24 @@ void app.whenReady().then(async () => {
       );
       return;
     }
+    // 插件（实验功能 plugins）：agent 的 install_plugin（等用户在对话里点确认卡才回执）/ list_plugins。
+    // 任何路径都回执，否则 agent 进程里那次工具调用挂到超时
+    if (event.type === "pluginInstallRequest") {
+      void pluginAgent
+        .install(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginInstall(event.requestId, outcome));
+      return;
+    }
+    if (event.type === "pluginListRequest") {
+      void pluginAgent
+        .list(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginList(event.requestId, outcome));
+      return;
+    }
+    // 这一轮停了：还没应答的安装确认卡按取消结掉（renderer 那头随 idle 收卡；**不 return**，事件照常往下走）
+    if (event.type === "phase" && event.phase === "idle") pluginAgent.cancelSession(event.sessionId);
     // 子会话：delegate 工具 / 通道发信请求——照 readTaskRequest 的形态，任何路径
     // 都必须回执，否则 agent 进程里的工具调用永远挂着。deps 声明在本文件靠后的
     // 位置（拿 registerAgentIpc 返回的 submitTurn），这里引用它安全：onEvent 只在
@@ -1037,6 +1075,47 @@ void app.whenReady().then(async () => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
   registerSkillIpc(skills);
+  /*
+   * 插件（实验功能 plugins）：记录 / 副本 / 数据 / 归档都在 userData 下，不写进上面这个 skills
+   * 目录也不写 mcp.json。冲突检测与开轮装配要避开用户自己的技能，所以把它们的身份读法注入进去
+   * （missing 的断链不算：它没有真实文件）。敏感配置值共用 provider 那把密钥存储。
+   */
+  const plugins = new PluginStore({
+    configDir,
+    secrets,
+    builtinRoot: builtinPluginsDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+    userSkills: async () => (await skills.list()).filter((meta) => !meta.missing).map(({ slug, name }) => ({ slug, name })),
+  });
+  void plugins.init().catch((error: unknown) => {
+    console.error("[main] 清不了插件暂存目录（不影响使用，下次启动再试）", error);
+  });
+  // agent 的 install_plugin / list_plugins 在主进程的落地（确认卡经 broadcastAgentEvent 到 renderer，应答走 plugin ipc）
+  const pluginAgent = new PluginAgentRequests({
+    plugins,
+    enabled: async () => (await settings.read()).experimentalFeatures?.["plugins"] === true,
+    session: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      return meta === null ? null : { cwd: meta.cwd, workspaceId: meta.workspaceId };
+    },
+    workspace: async (id) => {
+      const found = (await workspaces.list()).find((workspace) => workspace.id === id);
+      return found === undefined ? null : { name: found.name, path: found.path };
+    },
+    ask: (event) => broadcastAgentEvent(event),
+    installed: () => {
+      broadcastAgentEvent({ type: "pluginsChanged" });
+      broadcastAgentEvent({ type: "skillsChanged" });
+    },
+  });
+  // 面板文档仓库：模板由主进程按一次性 token 从内存给 iframe，CSP 走响应头（plugin/panel-frame.ts）
+  const panelFrames = new PanelFrames();
+  installPanelProtocol(panelFrames, (url) => isOwnRendererPage(url, ownRendererOrigin()));
+  const panels = new PluginPanels({
+    plugins,
+    frames: panelFrames,
+    workspaceRoot: async (id) => (id === null ? null : ((await workspaces.list()).find((each) => each.id === id)?.path ?? null)),
+  });
+  registerPluginIpc({ plugins, panels, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload(), agentRequests: pluginAgent });
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
   registerImportIpc(
     sessions,
@@ -1059,7 +1138,11 @@ void app.whenReady().then(async () => {
     console.error("[main] 建不了 Home 目录，Home 任务的文件可能落不了盘", error);
   });
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
-  registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
+  registerWorkspaceIpc(workspaces, async (id) => {
+    await skills.removeWorkspace(id);
+    // 插件的「只在这些工作区」名单里摘掉它（摘空转停用）
+    await plugins.removeWorkspace(id);
+  });
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
@@ -1100,6 +1183,7 @@ void app.whenReady().then(async () => {
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
+    plugins,
     mcp,
     settings,
     intentIngest,

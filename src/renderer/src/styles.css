@@ -3043,6 +3043,13 @@ body {
   pointer-events: none;
 }
 
+/* 插件面板入口：没有图标，用插件名首字（插件头像的同一条降级规则，RightRail） */
+.rail-glyph {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+}
+
 /*
  * 右侧分屏面板（S-0）：进入向右滑入 + 淡入，220ms（--duration-enter --ease-out-quint）；
  * 两个面板之间原地切内容时 120ms 淡入。动效只解释「东西去哪了」。

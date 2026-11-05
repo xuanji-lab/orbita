@@ -437,6 +437,7 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/browser-toolbar/browser-toolbar.css", 1],
   ["src/renderer/src/features/context/context-panel.css", 2], // #375 合入时带来，未收
   ["src/renderer/src/features/memory/memory.css", 1], // #374 合入时带来，未收
+  ["src/renderer/src/features/plugins/plugins.css", 1], // #416 筛选胶囊的 3px 纵向内边距（体验合并包里记账，合 main 时随 #416 一起收）
   ["src/renderer/src/features/review/excerpts-tab.css", 3],
   ["src/renderer/src/features/settings/info-tip.css", 1],
   ["src/renderer/src/features/settings/migration-view.css", 10],

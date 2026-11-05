@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
+import { PluginInstallCard } from "../plugins/PluginInstallCard.tsx";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
@@ -661,9 +662,16 @@ function useSkillIndex(): {
   skills: SkillMeta[];
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  // 插件里的技能（实验功能 plugins）也要认：read 它的 SKILL.md 同样标成「在用 skill」
+  const pluginsOn = useExperimentalFeature("plugins");
   const reload = useCallback(() => {
-    void api.skill.list().then(setSkills).catch(() => undefined);
-  }, []);
+    void Promise.all([
+      api.skill.list(),
+      pluginsOn ? api.plugin.skills().catch((): SkillMeta[] => []) : Promise.resolve<SkillMeta[]>([]),
+    ])
+      .then(([own, fromPlugins]) => setSkills([...own, ...fromPlugins]))
+      .catch(() => undefined);
+  }, [pluginsOn]);
   useEffect(() => {
     reload();
   }, [reload]);
@@ -1530,6 +1538,11 @@ function ChatViewBody(props: {
             )}
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
+            )}
+            {/* 插件安装确认卡（实验功能 plugins，agent 的 install_plugin）：与审批条同位同配方，
+                用户点「安装」才装；这一轮停了卡随 idle 收起 */}
+            {session.pluginInstall !== null && (
+              <PluginInstallCard ask={session.pluginInstall} onAnswer={session.answerPluginInstall} />
             )}
             {/* 回答前确认（实验功能 intent-system）：与审批条同位同配方——比聊天面高
                 一层、要求一个回答才继续，但不霸屏、不抢焦点、不藏输入框。草稿不跨

@@ -103,6 +103,8 @@ export const READ_ONLY_TOOLS = [
   "read_pdf",
   "read_docx",
   "show_image",
+  // 插件列表：读已装插件的名字与技能，不改任何东西（实验功能 plugins 开着才注册）
+  "list_plugins",
 ] as const;
 
 export function isReadOnlyTool(toolName: string): boolean {
@@ -214,6 +216,18 @@ export const PLAN_TOOL = "update_plan";
 export const GOAL_TOOL = "update_goal";
 
 /**
+ * 自己带确认卡的工具：install_plugin 在对话里弹一张确认卡（带了什么、MCP 完整命令行、范围），
+ * 用户点「安装」才装。**卡片就是那次询问**，所以 manual 档不再弹一次审批（套娃，同
+ * USER_ACTION_TOOL 的理由）；plan 档照拒——装插件改的是用户已装的东西，plan 的语义是「描述而不动手」。
+ * skip 档本来就全放行，但卡片仍会弹：放行档放的是审批，不是确认卡（确认卡不靠权限档）。
+ */
+export const SELF_CONFIRMING_TOOLS = ["install_plugin"] as const;
+
+export function isSelfConfirmingTool(toolName: string): boolean {
+  return (SELF_CONFIRMING_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
  * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
  * 将来复用这个名字。
@@ -242,6 +256,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   // 写计划：三档一律放行，理由见 PLAN_TOOL 的注释
   if (toolName === PLAN_TOOL || toolName === GOAL_TOOL) return { behavior: "allow" };
+  // 自带确认卡的工具：manual 不再问一次（卡片就是询问），plan 照拒（理由见 SELF_CONFIRMING_TOOLS）
+  if (isSelfConfirmingTool(toolName) && mode === "manual") return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };
