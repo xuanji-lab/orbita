@@ -1,27 +1,22 @@
 /**
- * 插件面板契约 —— IPC 四层的第 1 层（面板这一半；插件本体的契约在 plugin.ts）。
+ * 插件看板卡的宿主契约 —— IPC 四层的第 1 层（卡的沙箱、协议、消息与 IPC 这一半；
+ * 清单与视图类型在 plugin-board.ts，插件本体的契约在 plugin.ts）。
  *
- * **面板 = 插件自带的一份 HTML 模板 + 一个 JSON 数据文件**，和用户商量好样子后显示在插件页里
- * （插件详情的「面板」页签；做插件的过程中是「正在做」的草稿预览），与对话并排。
- * 清单写法（`.claude-plugin/plugin.json` 顶层的 `orbita.panel`）：
- *
- *   "orbita": { "panel": { "title": "文献追踪", "template": "./panel/index.html",
- *                          "data": "${CLAUDE_PLUGIN_DATA}/panel.json",
- *                          "spec": "./panel/spec.md", "sample": "./panel/sample.json" } }
- *
- * `spec`（可选）：模板说明——显示哪些字段、怎么排、数据从哪来，给人看的短 markdown，由宿主渲染（不进 iframe）。
- * `sample`（可选）：样例数据；`data` 文件不存在 / 为空时用它渲染，界面标「样例」。
- * 两者的路径规则同 `template`（插件根内、拒逃逸）。
+ * **一张卡 = 插件自带的一份 HTML 模板 + 一个 JSON 数据文件**，由宿主按固定尺寸画在看板里
+ * （清单写法与尺寸见 plugin-board.ts：`orbita.board.cards[]`）。每张卡**各自一个沙箱 iframe**，
+ * 外框（四档尺寸、圆角、overflow）与卡外的标题行、「样例」标由宿主画，模板只管框里。
+ * `orbita.panel`（旧的单面板）已作废，不再渲染。
  *
  * **模板当不可信代码**（agent 生成，或第三方插件带来）：它在 `sandbox="allow-scripts"`（不给
  * allow-same-origin）的 iframe 里跑，页面由主进程经自定义协议 `orbita-panel://` 给出，CSP 走响应头
  * （见 main/plugin/panel-frame.ts）；它只有两条路和外界说话——收宿主的 `postMessage`，向宿主发
- * `orbita:ready` / `orbita:action`。动作只会被追加进 `<plugin-data>/actions.jsonl`，宿主不据此做
- * 任何别的事；插件自己的脚本下一轮去读它。
+ * `orbita:ready` / `orbita:action`。动作只会被追加进 `<plugin-data>/actions.jsonl`（多记一个 `card` 字段），
+ * 宿主不据此做任何别的事；插件自己的脚本下一轮去读它。
  *
- * 这里放：清单字段规格、各种上限、IPC 的请求 / 响应形状、宿主与模板之间的消息，以及两端共用的
+ * 这里放：各种上限、IPC 的请求 / 响应形状、宿主与模板之间的消息，以及两端共用的
  * 纯校验函数（renderer 收 iframe 消息时校验，主进程落盘前再校验一遍——renderer 的入参不是信任边界）。
  */
+import type { BoardCardSize } from "./plugin-board.ts";
 
 // ---------- 常量 ----------
 
@@ -85,15 +80,13 @@ export const PANEL_THEME_VARS = [
   "--line-height-tight",
 ] as const;
 
-// ---------- 清单解析出的问题 ----------
+// ---------- 载入时的问题 ----------
 
 /**
- * 面板解析 / 路径替换的问题。`detail` 是路径、变量名、键名（语言中立）；说明它的句子由界面按语言出。
- * 在详情页「问题」里列出——解析失败不能只是「面板没出来」。
+ * 看板 / 卡的路径解析与载入问题（清单本身的写法问题在 `PluginProblem`）。`detail` 是路径、变量名、键名
+ * （语言中立）；说明它的句子由界面按语言出。出在哪张卡上就挂在那张卡的 `problems` 里，看板级的挂在快照上。
  */
 export type PluginPanelProblem =
-  /** `orbita.panel` 不是对象，或缺必填字段（detail = 字段名） */
-  | { kind: "shape"; detail: string }
   | { kind: "template-escape"; detail: string }
   | { kind: "template-missing"; detail: string }
   | { kind: "template-unreadable"; detail: string }
@@ -109,13 +102,17 @@ export type PluginPanelProblem =
   /** data 用了 `${workspaceFolder}`，而当前会话不在任何工作区里 */
   | { kind: "data-needs-workspace"; detail: string }
   /**
-   * `spec` / `sample` 的问题（不拦面板：面板照常出，缺的那块不出）。detail = 清单里写的原文路径，
+   * `spec` / `sample` 的问题（不拦卡：卡照常出，缺的那块不出）。detail = 清单里写的原文路径，
    * too-large 为字节数。escape = 路径逃出插件根；missing = 文件不存在；unreadable = 不是文件 / 读不出来。
    */
   | { kind: "spec-escape" | "spec-missing" | "spec-unreadable" | "spec-too-large"; detail: string }
   | { kind: "sample-escape" | "sample-missing" | "sample-unreadable" | "sample-too-large"; detail: string }
   /** 样例文件不是合法 JSON（detail = 解析器的话） */
-  | { kind: "sample-invalid"; detail: string };
+  | { kind: "sample-invalid"; detail: string }
+  /** `repeat` 指的属性在数据里不是数组（detail = 属性名）：这一块声明不出卡 */
+  | { kind: "repeat-not-array"; detail: string }
+  /** `repeat` 展开后超过整块看板的卡数上限，多出的丢掉（detail = 上限） */
+  | { kind: "repeat-limit"; detail: string };
 
 /** 数据文件读出来之后的问题（运行时，随文件变）。 */
 export type PluginPanelDataProblem =
@@ -123,7 +120,7 @@ export type PluginPanelDataProblem =
   | { kind: "invalid-json"; message: string }
   | { kind: "unreadable"; message: string };
 
-// ---------- IPC：载入 / 草稿预览 / 动作 / 详情 ----------
+// ---------- IPC：载入 / 草稿 / 动作 ----------
 
 /** 数据文件的此刻内容：有值（附文件 mtime）、空（不存在 / 空文件）、或读不出来。 */
 export type PluginPanelData =
@@ -131,29 +128,28 @@ export type PluginPanelData =
   | { kind: "empty" }
   | { kind: "problem"; problem: PluginPanelDataProblem };
 
-export interface PluginPanelLoadRequest {
+export interface PluginBoardLoadRequest {
   name: string;
   /** 当前会话所在的工作区 id；Home 会话为 null */
   workspaceId: string | null;
-  /** 上一次拿到的 stamp；没变就回 unchanged（面板可见时轮询，一次只是 stat） */
+  /** 上一次拿到的 stamp；没变就回 unchanged（看板可见时轮询，一次只是几次 stat） */
   stamp: string | null;
 }
 
 export type PluginPanelUnavailable =
   | "not-installed"
   | "not-enabled"
-  | "no-panel"
-  | "invalid"
+  /** 插件没有声明看板（或整块写坏了：原因在详情页的问题里） */
+  | "no-board"
   /** 草稿预览专用：路径不存在 / 不是插件文件夹 */
   | "not-found"
   /** 草稿预览专用：路径不在该工作区根之内（或会话不在任何工作区里） */
   | "outside-workspace";
 
 /**
- * 草稿预览（还没安装的插件文件夹，`plugin:draft-load`）。入参一律当不可信：`path` 绝对或相对工作区根，
- * 主进程校验它落在 `workspaceId` 对应的工作区根之内（词法 + realpath 两关），工作区外一律拒。
- * 返回与 `plugin:panel-load` 同形的快照（含 `spec` / `usingSample`）；草稿没有「启用范围」，
- * 所以不会出现 not-installed / not-enabled。
+ * 草稿预览（还没安装的插件文件夹，`plugin:draft-load` 取扫描、`plugin:draft-board-load` 取看板）。
+ * 入参一律当不可信：`path` 绝对或相对工作区根，主进程校验它落在 `workspaceId` 对应的工作区根之内
+ * （词法 + realpath 两关），工作区外一律拒。草稿没有「启用范围」，所以不会出现 not-installed / not-enabled。
  */
 export interface PluginDraftLoadRequest {
   path: string;
@@ -162,34 +158,55 @@ export interface PluginDraftLoadRequest {
   stamp: string | null;
 }
 
-export type PluginPanelSnapshot =
+/** 看板里的一张活卡（`repeat` 已展开）。 */
+export interface PluginBoardCardLive {
+  /** 展开后整块看板内唯一：普通卡 = id；repeat 的第 n 项 = `id#n` */
+  key: string;
+  id: string;
+  title: string;
+  size: BoardCardSize;
+  /** repeat 的第几项；普通卡 0 */
+  index: number;
+  /** 这张卡的问题（模板读不出来 / 数据路径越界）：有 `broken` 才拦这张卡，其余只是提醒 */
+  problems: PluginPanelProblem[];
+  /**
+   * iframe 的 src，**一次性**（主进程只给第一次取它的 iframe 文档）。非 null = 模板是新的 / 你第一次来，
+   * 换上它重载 iframe；null = 模板没变，保留手里的 iframe，只更新数据。`broken` 的卡为 null 且 `broken = true`。
+   */
+  frameUrl: string | null;
+  /** 这张卡出不来（模板路径越界 / 缺失 / 读不出来 / 数据路径越界）：宿主在框里写原因，不渲染 iframe */
+  broken: boolean;
+  data: PluginPanelData;
+  /** `data` 是不是样例：数据文件不存在 / 为空、而声明给了 `sample` 且样例读得出来。界面据此在卡外标「样例」 */
+  usingSample: boolean;
+}
+
+export type PluginBoardSnapshot =
   | { kind: "unchanged" }
   | { kind: "unavailable"; stamp: string; reason: PluginPanelUnavailable; problems: PluginPanelProblem[] }
   | {
       kind: "ready";
       stamp: string;
       title: string;
-      /**
-       * iframe 的 src，**一次性**（主进程只给第一次取它的 iframe 文档）。非 null = 模板是新的 / 你第一次来，
-       * 换上它重载 iframe；null = 模板没变，保留手里的 iframe，只更新数据。
-       */
-      frameUrl: string | null;
-      data: PluginPanelData;
-      /**
-       * `data` 是不是样例：数据文件不存在 / 为空、而清单给了 `sample` 且样例读得出来。界面据此标「样例」。
-       * 数据文件读不出来（坏 JSON / 超限）**不**退回样例——那是要让人看到的错误。
-       */
-      usingSample: boolean;
       /** 清单里 `spec` 指的 markdown 原文；没写 / 读不出来为 null（读不出来的原因在 problems） */
       spec: string | null;
-      /** 不拦面板的问题：spec / sample 读不出来之类 */
+      cards: PluginBoardCardLive[];
+      /** 看板级的问题：spec 读不出来、repeat 不是数组、超限 */
       problems: PluginPanelProblem[];
     };
+
+/** 动作所属的卡（和 `orbita:data` 里的 `card` 对应；落进 actions.jsonl 的 `card` 字段）。 */
+export interface PluginBoardCardRef {
+  id: string;
+  index: number;
+}
 
 export interface PluginPanelActionRequest {
   name: string;
   action: string;
   payload: unknown;
+  /** 哪张卡点的；不给（旧调用方）就不记 */
+  card?: PluginBoardCardRef;
 }
 
 export type PluginPanelActionFailure =
@@ -203,31 +220,6 @@ export type PluginPanelActionFailure =
 
 export type PluginPanelActionResult = { ok: true } | { ok: false; reason: PluginPanelActionFailure; message?: string };
 
-/** 详情页「面板」与「最近产出」两块要的一切；插件没声明面板为 null。 */
-export interface PluginPanelInfo {
-  /** 清单里写的原文（解析失败时 title 为空串） */
-  title: string;
-  template: string;
-  /** `spec` / `sample` 在清单里写的原文；没写为空串 */
-  spec: string;
-  sample: string;
-  dataRaw: string;
-  /** 变量替换后的绝对路径；替换 / 校验失败为 null（原因在 problems） */
-  dataPath: string | null;
-  /** 数据文件此刻的状态；dataPath 为 null 时 null */
-  data: {
-    exists: boolean;
-    updatedAt: number | null;
-    bytes: number | null;
-    /** 最长的那个数组有几项（顶层数组或顶层对象里最长的数组属性）；不是 JSON / 没有数组为 null */
-    items: number | null;
-    problem: PluginPanelDataProblem | null;
-  } | null;
-  /** 动作日志：最后修改时间；条数（非空行，文件超 8 MB 不数为 null） */
-  actions: { path: string; updatedAt: number | null; count: number | null };
-  problems: PluginPanelProblem[];
-}
-
 // ---------- 宿主 ↔ 模板的消息 ----------
 
 export interface PanelTheme {
@@ -237,7 +229,11 @@ export interface PanelTheme {
   vars: Record<string, string>;
 }
 
-/** 宿主 → 模板。数据为空（文件不存在 / 空）时 `data: null, state: "empty"`。 */
+/**
+ * 宿主 → 模板。数据为空（文件不存在 / 空）时 `data: null, state: "empty"`。
+ * repeat 的卡收到的 `data` 是那一项。`card` 说这是哪张卡、第几项；`unit` 是**一格**的像素宽高
+ * （2x2 卡的框是 2 倍多一点），模板可据此等比取字号——窗口放大缩小时宿主会重发。
+ */
 export interface PanelDataMessage {
   type: "orbita:data";
   data: unknown;
@@ -245,6 +241,8 @@ export interface PanelDataMessage {
   /** 数据文件 mtime（毫秒）；没有为 null */
   updatedAt: number | null;
   theme: PanelTheme;
+  card: { id: string; size: BoardCardSize; index: number };
+  unit: { width: number; height: number };
 }
 
 /** 模板 → 宿主，校验后的形状。 */
@@ -297,7 +295,7 @@ export function parsePanelMessage(raw: unknown): PanelInbound {
   return { kind: "ignored" };
 }
 
-/** 数据变成「宿主 → 模板」消息要的两个字段。 */
+/** 数据变成「宿主 → 模板」消息要的三个字段。 */
 export function dataMessageParts(data: PluginPanelData): { data: unknown; state: "ready" | "empty"; updatedAt: number | null } {
   if (data.kind === "ready") return { data: data.value, state: "ready", updatedAt: data.updatedAt };
   return { data: null, state: "empty", updatedAt: null };

@@ -15,6 +15,7 @@
  * 解析规格对照 https://code.claude.com/docs/en/plugins/manifest-reference ：
  * 能加载的只有 skills 与 mcpServers，其余组件解析出来列为「暂不支持」，不加载但不静默丢。
  */
+import type { PluginBoardInfo, PluginExternal, PluginIo, PluginWaitKind } from "./plugin-board.ts";
 
 /** 插件名：和 Claude Code 一样当标识用（目录名、服务名前缀、记录键），所以从严。 */
 export const PLUGIN_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -97,7 +98,7 @@ export type PluginUnsupportedKind =
   | "settings"
   | "mcp-bundle"
   | "dependencies"
-  /** 清单 `orbita` 对象里除 workflow / panel 之外的子键（Orbita 还不认识的扩展）：items 是键名 */
+  /** 清单 `orbita` 对象里除 workflow / io / external / board / tuned 之外的子键（Orbita 还不认识的扩展）：items 是键名 */
   | "orbita";
 
 export interface PluginUnsupported {
@@ -128,6 +129,8 @@ export interface PluginWorkflowStep {
   detail: string | null;
   /** 这一步产出的文件（相对路径，只展示不读取） */
   output: string | null;
+  /** 这一步等用户：「board」= 在看板上点，「chat」= 在对话里回；不写 / null = 自动往下走 */
+  wait: PluginWaitKind | null;
 }
 
 /** 插件里一条技能的 SKILL.md 原文（只读查看用）。 */
@@ -183,7 +186,17 @@ export interface PluginProblem {
     /** 链接安装的源目录没了（用户挪走 / 删了）：记录还在，内容读不到 */
     | "root-missing"
     /** `orbita.workflow` 写得不对（不是数组、某一步没有 title）：detail 是哪一步 / 哪个字段，那一步被跳过 */
-    | "workflow-invalid";
+    | "workflow-invalid"
+    /** `orbita.io` 写得不对（不是对象、某项没有 path）：detail 是哪一项，那一项被跳过 */
+    | "io-invalid"
+    /** `orbita.external` 写得不对（不是数组、某项没有 name / kind 不认识）：同上 */
+    | "external-invalid"
+    /** `orbita.board` 写得不对（卡的 id 重复 / 尺寸不认识 / 缺 template……）：detail 是哪张卡 / 哪个字段，那张卡被跳过 */
+    | "board-invalid"
+    /** 清单还在写已作废的 `orbita.panel`：它已改名为 `orbita.board`，不再渲染 */
+    | "panel-renamed"
+    /** `orbita.tuned` 不是 true / false */
+    | "tuned-invalid";
   detail: string;
 }
 
@@ -301,6 +314,14 @@ export interface PluginView {
   skills: PluginSkillInfo[];
   /** 清单 `orbita.workflow` 解析后的步骤；没写（或旧技能 / 旧 MCP）为空数组，详情页不显示这一块 */
   workflow: PluginWorkflowStep[];
+  /** 清单 `orbita.io`：读什么、写到哪（给人看）；没写为两个空数组 */
+  io: PluginIo;
+  /** 清单 `orbita.external`：外接的服务 / 命令行（给人看）；没写为空数组 */
+  external: PluginExternal[];
+  /** 清单 `orbita.board` 解析后的看板；没写（或写坏了整块）为 null */
+  board: PluginBoardInfo | null;
+  /** 清单 `orbita.tuned`：用户和插件磨合好了（会话里调用时只出一行 + 卡，不解释） */
+  tuned: boolean;
   mcp: PluginMcpInfo[];
   unsupported: PluginUnsupported[];
   config: PluginConfigState[];
@@ -418,7 +439,7 @@ export type PluginAgentInstallOutcome =
       scope: PluginAgentScope;
       skills: string[];
       mcp: string[];
-      /** `${CLAUDE_PLUGIN_DATA}`：插件的数据目录。面板上的动作（orbita:action）追加在这里的 actions.jsonl，插件自己的脚本下一轮去读它 */
+      /** `${CLAUDE_PLUGIN_DATA}`：插件的数据目录。看板卡上的动作（orbita:action）追加在这里的 actions.jsonl，插件自己的脚本下一轮去读它 */
       dataDir: string;
       /** installed 时有；already 没有行 */
       row: PluginInstallRow | null;
@@ -457,8 +478,10 @@ export type PluginRowInstallResult =
       detail: string;
     };
 
-/** preview_plugin 里一个面板文件的检查：清单 `orbita.panel` 写了它，文件在不在（路径在插件根内才算）。 */
+/** preview_plugin 里一个看板文件的检查：清单 `orbita.board` 写了它，文件在不在（路径在插件根内才算）。 */
 export interface PluginDraftFile {
+  /** `spec` 是看板级的（card 为 null），其余三种属于某张卡 */
+  card: string | null;
   key: "template" | "spec" | "sample" | "data";
   /** 清单里写的路径（原样） */
   path: string;
@@ -477,12 +500,22 @@ export type PluginAgentPreviewOutcome =
       path: string;
       skills: string[];
       workflow: string[];
-      panelFiles: PluginDraftFile[];
+      boardFiles: PluginDraftFile[];
       issues: string[];
       /** 同名插件此刻已装上（草稿是在改一个已装的插件） */
       installed: boolean;
     }
   | { ok: false; error: string };
+
+/**
+ * 草稿预览的扫描结果（`plugin:draft-load`，轮询）：还没安装的插件文件夹，用与已装页同一形状的视图给出——
+ * 「正在做」就是同一张详情长页。草稿没有启用范围与安装记录（`scope` 为 off、`install` 为 null）。
+ * `stamp` 是内容签名：没变回 unchanged。
+ */
+export type PluginDraftSnapshot =
+  | { kind: "unchanged" }
+  | { kind: "unavailable"; stamp: string; reason: "not-found" | "outside-workspace" }
+  | { kind: "ready"; stamp: string; view: PluginView };
 
 /** list_plugins 的一行：这条会话能用的真插件（含内置）；旧技能 / 旧 MCP 不列（技能索引里本来就有）。 */
 export interface PluginAgentListItem {
@@ -497,7 +530,7 @@ export interface PluginAgentListItem {
   workflow: string[];
   /** 插件根目录（绝对路径）：agent 要改它时去这里 */
   root: string;
-  /** 插件数据目录（绝对路径）：面板动作的 actions.jsonl 在这里 */
+  /** 插件数据目录（绝对路径）：看板动作的 actions.jsonl 在这里 */
   dataDir: string;
 }
 
