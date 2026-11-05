@@ -103,8 +103,18 @@ export class AgentHostCore {
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
   private ensure(): Promise<void> {
     if (this.ready) return this.ready;
+    let child: AgentChild;
+    try {
+      child = this.forkRuntime();
+    } catch (e) {
+      // Windows 上 utilityProcess.fork 会同步抛 ENOTCONN（Electron 老毛病，terminal/service.ts
+      // 同款、那边冷却 150ms 重试一次）；forkRuntime 是同步签名，改为清掉 ready 让下一次
+      // 调用重新 fork——bench 驱动 500ms 一轮、用户再点一次目录，都是天然的重试节奏。
+      // 原写法 fork 在 Promise executor 里抛，ready 永远卡在同一个 rejection 上，再也不会重试。
+      this.ready = null;
+      throw e;
+    }
     this.ready = new Promise<void>((resolve, reject) => {
-      const child = this.forkRuntime();
       this.child = child;
 
       child.on("message", (message: AgentEvent) => {

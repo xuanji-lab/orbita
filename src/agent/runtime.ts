@@ -15,6 +15,7 @@
  */
 import { randomUUID } from "node:crypto";
 import inspector from "node:inspector";
+import { writeFileSync } from "node:fs";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSessionFromServices,
@@ -120,13 +121,26 @@ import {
   type ImageBudgetMark,
 } from "./image-byte-budget.ts";
 
+console.error(`[agent-runtime] boot, INSPECT=${JSON.stringify(process.env.ORBITA_AGENT_INSPECT)}`);
+
 // Windows 上的 utilityProcess 不消费继承来的 NODE_OPTIONS，也不把 fork 的 execArgv 当 Node
 // 运行时参数（2026-11-05 G14 bench 实测：主进程的 Debugger listening 正常，agent 进程没有
 // 任何监听行，Mac 同机制可跑通）。测量驱动（scripts/bench/bench.mjs）设 ORBITA_AGENT_INSPECT=1
 // 时，进程内自己激活 inspector，并按 Node CLI 的输出格式打印，bench 靠这行认出 agent 进程。
 if (process.env.ORBITA_AGENT_INSPECT === "1") {
-  inspector.open(0);
-  console.error(`Debugger listening on ${inspector.url()}`);
+  try {
+    inspector.open(0);
+    const url = inspector.url();
+    if (url) {
+      console.error(`Debugger listening on ${url}`);
+      // utilityProcess 的 stderr 不保证进父进程管道（Windows 实测过不进），bench 同时轮询
+      // 这个文件兖底；路径由测量驱动经 env 传入，正常运行没有它，不写。
+      const file = process.env.ORBITA_INSPECT_FILE;
+      if (file) writeFileSync(file, url);
+    }
+  } catch (e) {
+    console.error(`[agent-runtime] inspector.open 失败：${String(e)}`);
+  }
 }
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）

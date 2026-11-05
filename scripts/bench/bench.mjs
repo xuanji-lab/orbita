@@ -106,7 +106,7 @@ const getJson = async (url) => (await fetch(url, { signal: AbortSignal.timeout(3
 // —— 起停 ——
 function electronBinary() { return createRequire(join(REPO, "package.json"))("electron"); }
 function launch({ userData, cdpPort, logFile }) {
-  const env = { ...process.env, NODE_OPTIONS: "--inspect=0", ORBITA_AGENT_INSPECT: "1" };
+  const env = { ...process.env, NODE_OPTIONS: "--inspect=0", ORBITA_AGENT_INSPECT: "1", ORBITA_INSPECT_FILE: join(userData, "agent-inspector.url") };
   delete env.ELECTRON_RENDERER_URL; // 从 dev 实例的终端里跑时会继承它；未打包的 electron . 会去连 dev server
   const child = spawn(electronBinary(), [REPO, `--user-data-dir=${userData}`, `--remote-debugging-port=${cdpPort}`], { env, stdio: ["ignore", "pipe", "pipe"] });
   const inspectors = [];
@@ -115,7 +115,7 @@ function launch({ userData, cdpPort, logFile }) {
   child.stdout.on("data", onData);
   child.stderr.on("data", onData);
   child.on("exit", () => writeFileSync(logFile, log));
-  return { child, inspectors, flushLog: () => writeFileSync(logFile, log) };
+  return { child, inspectors, inspectFile: join(userData, "agent-inspector.url"), flushLog: () => writeFileSync(logFile, log) };
 }
 async function stop(child) {
   if (child.exitCode !== null) return;
@@ -190,6 +190,16 @@ async function attach(app, cdpPort) {
       if (who.type === "browser") main = c;
       else if (/agent-runtime\.js/.test(who.argv)) agent = c;
       else c.close();
+    }
+    if (!agent) {
+      // agent 进程是懒启动（第一次真请求才 fork），测量里经 renderer 显式触发一次目录请求
+      // （providerBuiltins → listBuiltins → ensure）；Windows 的 utilityProcess stderr 不保证
+      // 进实例日志，同时轮询 runtime 自己写的 inspector URL 文件兜底。
+      await r.evaluate(`window.orbita.provider.builtins().catch(() => {})`).catch(() => {});
+      try {
+        const u = readFileSync(app.inspectFile, "utf8").trim();
+        if (u.startsWith("ws://") && !app.inspectors.includes(u)) app.inspectors.push(u);
+      } catch {}
     }
     if (!(main && agent)) await sleep(500);
   }
