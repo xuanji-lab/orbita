@@ -82,6 +82,8 @@ export function ProvidersView(props: {
    */
   page: ProvidersPageSettings;
   onPage: (patch: ProvidersPageSettings) => void;
+  /** 收起右栏（右栏开着才有值）：价格 · 能力图太窄不画时，说明行里的按钮用 */
+  onCollapseRail: (() => void) | null;
 }) {
   const t = useT();
   const [providers, setProviders] = useState<ProviderDto[] | null>(null);
@@ -804,6 +806,7 @@ export function ProvidersView(props: {
             onSize={(cardSize) => props.onPage({ cardSize })}
             chartCategory={props.page.chartCategory ?? "agent"}
             onChartCategory={(chartCategory) => props.onPage({ chartCategory })}
+            onCollapseRail={props.onCollapseRail}
             onOpen={openKind}
             onAddAnother={pickKnown}
           />
@@ -1555,6 +1558,7 @@ function ProviderGrid(props: {
   onSize: (size: ProviderCardSize) => void;
   chartCategory: PriceChartCategory;
   onChartCategory: (category: PriceChartCategory) => void;
+  onCollapseRail: (() => void) | null;
   onOpen: (kindId: string) => void;
   onAddAnother: (kindId: string) => void;
 }) {
@@ -1633,6 +1637,7 @@ function ProviderGrid(props: {
             catalog={props.catalog}
             category={props.chartCategory}
             onCategory={props.onChartCategory}
+            onCollapseRail={props.onCollapseRail}
           />
         )}
       </div>

@@ -1044,6 +1044,7 @@ export function App() {
                 }}
                 workspaces={session.workspaces}
                 onTab={setSettingsTab}
+                onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
             ) : (
               <ChatView

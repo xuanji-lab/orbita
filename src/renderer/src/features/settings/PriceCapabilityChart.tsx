@@ -27,6 +27,7 @@ import {
   placeLabels,
   pointKey,
   popoverPlacement,
+  priceChartLayout,
   scoreRange,
   scoreTicks,
 } from "./price-chart-model.ts";
@@ -46,6 +47,7 @@ import "./price-chart.css";
  * - 用过、但榜单没评的档借同型号最高评测档的分（用户 2026-10-25：「用 max 顶替」）：点线框标出、
  *   不进前沿，图下写一句为什么（榜单没评 = 不值得单独测，做任务推荐用评过的档）。
  *
+ * 宽度按这一块自己的宽度分三档（price-chart-model 的 priceChartLayout）：并排 / 列表在图下 / 不画图。
  * 数据由主进程现算（usage:price-chart）。服务商的型号清单一变就重拉。
  */
 export function PriceCapabilityChart(props: {
@@ -57,6 +59,11 @@ export function PriceCapabilityChart(props: {
    */
   category: PriceChartCategory;
   onCategory: (category: PriceChartCategory) => void;
+  /**
+   * 收起右栏。右栏开着时才有值（关着就没有可收的）；这一块太窄、不画图时，说明行里的按钮调它。
+   * 由 App 经设置页一路传下来，组件不自己去拿全局。
+   */
+  onCollapseRail: (() => void) | null;
 }) {
   const t = useT();
   const copy = t.providers.priceChart;
@@ -77,6 +84,24 @@ export function PriceCapabilityChart(props: {
    */
   const [selected, setSelected] = useState<string | null>(null);
   const areaRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 这一块自身的宽度（.pc-block）。右栏开合、侧栏开合、窗口缩放都会改它，所以用 ResizeObserver 量，
+   * 不看视口宽度。useLayoutEffect 在绘制前量第一次：此前 width 是 null，按「隐藏」渲染，
+   * 不会先闪一帧被挤坏的图再收起。
+   */
+  const blockRef = useRef<HTMLElement | null>(null);
+  const [blockWidth, setBlockWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const block = blockRef.current;
+    if (block === null) return;
+    const measure = () => setBlockWidth(block.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(block);
+    return () => observer.disconnect();
+  }, []);
+  const layout = priceChartLayout(blockWidth ?? 0);
+  const drawn = layout !== "hidden";
   useEffect(() => {
     if (selected === null) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -195,7 +220,7 @@ export function PriceCapabilityChart(props: {
     const observer = new ResizeObserver(() => setAreaSize(`${area.clientWidth}x${area.clientHeight}`));
     observer.observe(area);
     return () => observer.disconnect();
-  }, [view !== null]);
+  }, [view !== null, drawn]);
   useLayoutEffect(() => {
     const area = areaRef.current;
     if (area === null || view === null) return;
@@ -220,60 +245,75 @@ export function PriceCapabilityChart(props: {
   const picked = selected === null ? undefined : view?.points.find((p) => pointKey(p) === selected);
 
   return (
-    <section className="pc-block" aria-label={copy.title}>
+    <section className="pc-block" aria-label={copy.title} ref={blockRef}>
       <div className="pc-head">
         <span className="pc-title">{copy.title}</span>
-        {badge !== null && (
+        {drawn && badge !== null && (
           <span className="pc-badge">
             <Icon name={data?.profile.reference === true ? "triangle-alert" : "info"} size={12} />
             {badge}
           </span>
         )}
-        <span className="pc-switch row-trailing">
-          <button
-            type="button"
-            className="quiet-control"
-            aria-label={copy.prevCategory}
-            title={copy.prevCategory}
-            onClick={() => {
-              setSelected(null);
-              setCategory((c) => cycleCategory(c, -1));
-            }}
-          >
-            <Icon name="chevron-left" size={13} />
-          </button>
-          <span className="pc-cat" aria-live="polite">
-            {copy.categories[category]}
+        {drawn && (
+          <span className="pc-switch row-trailing">
+            <button
+              type="button"
+              className="quiet-control"
+              aria-label={copy.prevCategory}
+              title={copy.prevCategory}
+              onClick={() => {
+                setSelected(null);
+                setCategory((c) => cycleCategory(c, -1));
+              }}
+            >
+              <Icon name="chevron-left" size={13} />
+            </button>
+            <span className="pc-cat" aria-live="polite">
+              {copy.categories[category]}
+            </span>
+            <button
+              type="button"
+              className="quiet-control"
+              aria-label={copy.nextCategory}
+              title={copy.nextCategory}
+              onClick={() => {
+                setSelected(null);
+                setCategory((c) => cycleCategory(c, 1));
+              }}
+            >
+              <Icon name="chevron-right" size={13} />
+            </button>
           </span>
-          <button
-            type="button"
-            className="quiet-control"
-            aria-label={copy.nextCategory}
-            title={copy.nextCategory}
-            onClick={() => {
-              setSelected(null);
-              setCategory((c) => cycleCategory(c, 1));
-            }}
-          >
-            <Icon name="chevron-right" size={13} />
-          </button>
-        </span>
+        )}
       </div>
 
-      {error !== null && (
+      {!drawn && (
+        <div className="pc-off">
+          <Icon name="trending-up" size={14} />
+          <span>{props.onCollapseRail === null ? copy.tooNarrowNoRail : copy.tooNarrow}</span>
+          {props.onCollapseRail !== null && (
+            <button type="button" className="pv-btn sm pc-off-action row-trailing" onClick={props.onCollapseRail}>
+              <Icon name="panel-right" size={13} />
+              {copy.collapseRail}
+            </button>
+          )}
+        </div>
+      )}
+
+      {drawn && error !== null && (
         <div className="pc-status">
           <Icon name="triangle-alert" size={13} /> {copy.loadFailed} · {error}
         </div>
       )}
-      {error === null && data === null && (
+      {drawn && error === null && data === null && (
         <div className="pc-status">
           <Icon name="loader-circle" size={13} spin /> {copy.loading}
         </div>
       )}
 
-      {current !== null && view !== null && (
+      {drawn && current !== null && view !== null && (
         <>
-          <div className="pc-wrap">
+          <div className={`pc-wrap${layout === "stack" ? " stack" : ""}`}>
             <div className="pc-main">
               <div className="pc-plot">
                 <span className="pc-axis-y">{current.unit === "rating" ? copy.yAxisRating : copy.yAxisAgent}</span>
