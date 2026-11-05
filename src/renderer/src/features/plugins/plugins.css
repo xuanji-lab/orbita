@@ -1426,18 +1426,22 @@ button.pl-wf-chip:hover {
 }
 
 /* 看板样式一节：缩小的看板 + 每卡一行。宽时左右并排，窄时上下叠 */
+/* 缩小的看板（最宽 600，至少 340）与每卡一行并排；放不下就换行叠在上面（不看视口，只看这一节有多宽） */
 .pd-board {
-  display: grid;
-  grid-template-columns: minmax(0, 600px) minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-4);
-  align-items: start;
+  align-items: flex-start;
 }
 
 .pd-board-grid {
+  flex: 1 1 340px;
+  max-width: 600px;
   min-width: 0;
 }
 
 .pd-blist {
+  flex: 1 1 240px;
   display: grid;
   gap: var(--space-1);
   align-content: start;
@@ -1637,7 +1641,7 @@ button.pl-wf-chip:hover {
     display: none;
   }
 
-  .pd-board {
-    grid-template-columns: minmax(0, 1fr);
+  .pd-board-grid {
+    max-width: none;
   }
 }
