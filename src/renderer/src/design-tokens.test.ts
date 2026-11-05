@@ -437,12 +437,13 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/browser-toolbar/browser-toolbar.css", 1],
   ["src/renderer/src/features/context/context-panel.css", 2], // #375 合入时带来，未收
   ["src/renderer/src/features/memory/memory.css", 1], // #374 合入时带来，未收
-  ["src/renderer/src/features/plugins/plugins.css", 1], // #416 筛选胶囊的 3px 纵向内边距（体验合并包里记账，合 main 时随 #416 一起收）
+  ["src/renderer/src/features/plugins/plugins.css", 6], // 插件页与面板（#416–#418），体验合并包里记账，合 main 时随这几个 PR 收
+  ["src/renderer/src/features/settings/card-wall.css", 2], // 从 providers-view.css 搬出的卡片墙（#416），原值照搬
   ["src/renderer/src/features/review/excerpts-tab.css", 3],
   ["src/renderer/src/features/settings/info-tip.css", 1],
   ["src/renderer/src/features/settings/migration-view.css", 10],
   ["src/renderer/src/features/settings/price-chart.css", 7],
-  ["src/renderer/src/features/settings/providers-view.css", 8],
+  ["src/renderer/src/features/settings/providers-view.css", 6],
   ["src/renderer/src/features/settings/settings-view.css", 5],
   ["src/renderer/src/features/settings/update-view.css", 1],
   ["src/renderer/src/paper-themes.css", 2],

@@ -9,16 +9,16 @@
 .pv-seg {
   display: inline-flex;
   flex: none;
-  padding: 2px;
+  padding: var(--space-0-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
 }
 .pv-seg button {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: calc(var(--control-height-md) - 6px);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 0;
   border-radius: calc(var(--radius-md) - 2px);
   background: transparent;
@@ -50,7 +50,7 @@
 }
 .pv-cards.small {
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* 厂商卡：hover 抬阴影、描边加深，不换色不位移（设计系统 *Hover*） */
@@ -86,7 +86,7 @@
   align-items: center;
   gap: var(--space-2);
   min-height: 42px;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
 }
 .pv-vcard-top {
   display: flex;
@@ -96,7 +96,7 @@
 }
 .pv-vcard-text {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 .pv-vcard-name {
@@ -129,7 +129,7 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 20px;
   padding: 0 7px;
   border-radius: var(--radius-pill);

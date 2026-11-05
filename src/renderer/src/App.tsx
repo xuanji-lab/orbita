@@ -5,7 +5,6 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
-import { pluginViewId } from "@shared/plugin";
 import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
@@ -33,11 +32,9 @@ import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
-import { pluginPanelKind, pluginPanelNameOf } from "./shell/plugin-panel-kind.ts";
-import { PluginPanel } from "./features/plugins/PluginPanel.tsx";
-import { usePluginPanelTabs } from "./features/plugins/usePluginPanel.ts";
-import { initialOf } from "./features/plugins/plugin-view.ts";
 import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
+import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
@@ -984,24 +981,6 @@ export function App() {
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
   /** 「这条任务」头一行的在跑 / 等你：与侧栏状态饼同一个推导（runStateOf，含子会话），所以要 meta */
   const mainMeta = mainSessionId === null ? undefined : session.sessions.find((meta) => meta.id === mainSessionId);
-  /**
-   * agent 的 install_plugin 装上了插件、或用户点了对话里那一行的「安装」，而且是**正看着的这条会话**里装的：
-   * 右栏切到插件页并选中它。别的会话里装的不抢右栏（用户可能正在看别的）。`focus` 由 PluginsView 消费后清掉，
-   * 不然之后每次手动打开插件页都会又跳回这个插件。
-   */
-  const [pluginFocus, setPluginFocus] = useState<{ id: string; nonce: number } | null>(null);
-  const mainSessionIdRef = useRef(mainSessionId);
-  mainSessionIdRef.current = mainSessionId;
-  useEffect(
-    () =>
-      api.agent.onEvent((event) => {
-        if (event.type !== "pluginsChanged" || event.installed === undefined) return;
-        if (event.installed.sessionId !== mainSessionIdRef.current) return;
-        setPluginFocus({ id: pluginViewId("plugin", event.installed.name), nonce: Date.now() });
-        setRightPanel("plugins");
-      }),
-    [],
-  );
 
   /**
    * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
@@ -1024,39 +1003,60 @@ export function App() {
   if (overlay === "memory" && !memoryOn) setOverlay(null);
   // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
   const pluginsOn = experimentalFeatures["plugins"] === true;
+  // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
+  // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。只记在 renderer 内存里，
+  // 重开应用后没有草稿视图——草稿本来就是对话进行时的东西，文件还在，agent 再 preview 一次就回来
+  const [pluginDrafts, setPluginDrafts] = useState<PluginDrafts>(new Map());
+  const draftContext = useRef({ viewed: mainSessionId, enabled: pluginsOn });
+  draftContext.current = { viewed: mainSessionId, enabled: pluginsOn };
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "pluginDraft") return;
+        setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
+        const context = draftContext.current;
+        if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: context.viewed, pluginsEnabled: context.enabled })) {
+          setRightPanel("plugins");
+        }
+      }),
+    [],
+  );
+  // 「在右栏打开这个插件的面板」（设置页的全屏版详情里点）：右栏打开插件页，选中那个插件的面板页签
+  const [pluginOpenRequest, setPluginOpenRequest] = useState<PluginOpenRequest | null>(null);
+  const openPluginPanel = useCallback(
+    (name: string) => {
+      setPluginOpenRequest((previous) => ({ name, nonce: (previous?.nonce ?? 0) + 1 }));
+      // 要看的是已装的这个插件：这条会话若正挂着草稿视图，先让位给它
+      if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
+      setRightPanel("plugins");
+    },
+    [mainSessionId],
+  );
+  const handlePluginOpenHandled = useCallback(() => setPluginOpenRequest(null), []);
+  /**
+   * agent 的 install_plugin 装上了插件、或用户点了对话里那一行的「安装」，而且是**正看着的这条会话**里装的：
+   * 右栏打开插件页、选中它的面板页签（没有面板时按详情默认页签）。别的会话里装的不抢右栏。
+   */
+  const openPluginPanelRef = useRef(openPluginPanel);
+  openPluginPanelRef.current = openPluginPanel;
+  const viewedForInstallRef = useRef(mainSessionId);
+  viewedForInstallRef.current = mainSessionId;
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "pluginsChanged" || event.installed === undefined) return;
+        if (event.installed.sessionId !== viewedForInstallRef.current) return;
+        openPluginPanelRef.current(event.installed.name);
+      }),
+    [],
+  );
+  const leavePluginDraft = useCallback(() => {
+    if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
+  }, [mainSessionId]);
   const resolvedPanel = resolvePanel(rightPanel, experimentalFeatures);
   if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
   const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
   if (shownSettingsTab !== settingsTab) setSettingsTab(shownSettingsTab);
-  // 插件面板页签：当前工作区里已启用且声明了面板的插件各一个（开关关着一个都没有）。
-  // rightPanel 进 revision：在右栏插件页里改了范围，切到别的面板（含它自己的面板页签）时重读
-  const pluginPanelTabs = usePluginPanelTabs(pluginsOn, session.workspaceId, rightPanel);
-  const openPluginPanelName = pluginPanelNameOf(rightPanel);
-  // 开着的插件面板对应的页签没了（插件被停用 / 卸载 / 换到没启用它的工作区的会话）→ 收起。
-  // 等这份页签结果确是当前工作区的再判，别把「还没读完」当成「没有」
-  useEffect(() => {
-    if (openPluginPanelName === null) return;
-    const settled = !pluginsOn || pluginPanelTabs.loadedFor === session.workspaceId;
-    if (settled && !pluginPanelTabs.tabs.some((tab) => tab.name === openPluginPanelName)) setRightPanel(null);
-  }, [openPluginPanelName, pluginsOn, pluginPanelTabs, session.workspaceId]);
-  // agent 用 install_plugin 装好一个带面板的插件：正看着装它的那条会话时，右栏直接切到它的面板，
-  // 一边聊一边看面板随文件改动刷新（链接安装，改了就生效）。页签要等重读回来才有，所以先记下名字
-  const [panelToOpen, setPanelToOpen] = useState<string | null>(null);
-  const viewedSessionId = session.sessionId ?? session.opened?.id ?? null;
-  useEffect(() => {
-    if (!pluginsOn) return;
-    return api.agent.onEvent((event) => {
-      if (event.type === "pluginsChanged" && event.installed !== undefined && event.installed.sessionId === viewedSessionId) {
-        setPanelToOpen(event.installed.name);
-      }
-    });
-  }, [pluginsOn, viewedSessionId]);
-  useEffect(() => {
-    if (panelToOpen === null) return;
-    if (!pluginPanelTabs.tabs.some((tab) => tab.name === panelToOpen)) return;
-    setPanelToOpen(null);
-    handlePanel(pluginPanelKind(panelToOpen));
-  }, [panelToOpen, pluginPanelTabs, handlePanel]);
   const memoryScopes = useMemoryScopes(overlay === "memory");
   useEffect(() => {
     if (overlay === "memory") countPanel("memory");
@@ -1287,7 +1287,7 @@ export function App() {
                   // 从设置页签点「在右栏打开」：退出设置，回到对话，右栏开这个插件的面板
                   onOpenPanel: (name) => {
                     setOverlay(null);
-                    handlePanel(pluginPanelKind(name));
+                    openPluginPanel(name);
                   },
                 }}
                 onTab={setSettingsTab}
@@ -1428,16 +1428,12 @@ export function App() {
                   chrome="rail"
                   currentWorkspaceId={session.workspaceId}
                   onMakeWithAgent={makePluginWithAgent}
-                  onOpenPanel={(name) => handlePanel(pluginPanelKind(name))}
-                  focus={pluginFocus}
-                  onFocusConsumed={() => setPluginFocus(null)}
+                  onOpenPanel={openPluginPanel}
+                  openRequest={pluginOpenRequest}
+                  onOpenRequestHandled={handlePluginOpenHandled}
+                  draft={draftOf(pluginDrafts, mainSessionId)}
+                  onLeaveDraft={leavePluginDraft}
                 />
-              ) : pluginPanelNameOf(shownPanel) !== null ? (
-                // 插件面板：模板在沙箱 iframe 里，宿主只收发数据与动作（features/plugins/PluginPanel.tsx）
-                (() => {
-                  const tab = pluginPanelTabs.tabs.find((each) => each.name === pluginPanelNameOf(shownPanel));
-                  return tab === undefined ? null : <PluginPanel tab={tab} workspaceId={session.workspaceId} />;
-                })()
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1481,11 +1477,6 @@ export function App() {
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           automation={automationOn ? { running: runningCount(automations.automations) } : null}
           pluginsAvailable={pluginsOn}
-          pluginPanels={pluginPanelTabs.tabs.map((tab) => ({
-            id: pluginPanelKind(tab.name),
-            title: tab.title,
-            initial: initialOf(tab.displayName),
-          }))}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }

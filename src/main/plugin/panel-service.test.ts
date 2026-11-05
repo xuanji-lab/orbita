@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,34 +87,6 @@ describe("夹具本身", () => {
     assert.equal(data.papers.length, 8);
     assert.deepEqual([3, 2, 1].map((score) => data.papers.filter((paper) => paper.score === score).length), [3, 3, 2]);
     assert.ok(data.papers.every((paper) => !/[():,]/.test(paper.problem)), "问题句里没有半角标点");
-  });
-});
-
-describe("tabs 右栏页签", () => {
-  test("已启用且带面板的插件各一个页签，标题用 panel.title", async () => {
-    assert.deepEqual(await panels.tabs("ws-1"), [{ name: "lit-tracker", title: "文献追踪", displayName: "文献追踪" }]);
-  });
-
-  test("范围：global 在 Home（null）也出现；workspaces 范围只在名单里的工作区出现；off 不出现", async () => {
-    assert.equal((await panels.tabs(null)).length, 1);
-    record = makeRecord({ kind: "workspaces", ids: ["ws-1"] });
-    assert.equal((await panels.tabs("ws-1")).length, 1);
-    assert.equal((await panels.tabs("ws-2")).length, 0);
-    assert.equal((await panels.tabs(null)).length, 0, "Home 会话没有 id，只有 global 覆盖它");
-    record = makeRecord({ kind: "off" });
-    assert.equal((await panels.tabs("ws-1")).length, 0);
-  });
-
-  test("没声明面板的插件不加页签；模板逃逸 / 不存在的也不加死页签", async () => {
-    await writeFile(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "lit-tracker", orbita: { workflow: [] } }));
-    assert.equal((await panels.tabs("ws-1")).length, 0);
-    for (const template of ["../escape.html", "/etc/hosts", "./missing.html"]) {
-      await writeFile(
-        join(root, ".claude-plugin", "plugin.json"),
-        JSON.stringify({ name: "lit-tracker", orbita: { panel: { title: "x", template, data: "${CLAUDE_PLUGIN_DATA}/p.json" } } }),
-      );
-      assert.equal((await panels.tabs("ws-1")).length, 0, template);
-    }
   });
 });
 
@@ -235,6 +207,255 @@ describe("load 载入与轮询", () => {
   });
 });
 
+/** 把清单换成带 spec / sample 的版本（夹具里的 panel/index.html 还在 root 下）。 */
+async function writePanelManifest(folder: string, panel: Record<string, unknown>, name = "lit-tracker"): Promise<void> {
+  await mkdir(join(folder, ".claude-plugin"), { recursive: true });
+  await writeFile(
+    join(folder, ".claude-plugin", "plugin.json"),
+    JSON.stringify({ name, orbita: { panel: { title: "文献追踪", template: "./panel/index.html", data: "${CLAUDE_PLUGIN_DATA}/panel.json", ...panel } } }),
+  );
+}
+
+describe("spec 与 sample：模板说明、样例数据、usingSample", () => {
+  beforeEach(async () => {
+    await writePanelManifest(root, { spec: "./panel/spec.md", sample: "./panel.sample.json" });
+    await writeFile(join(root, "panel", "spec.md"), "# 卡片\n\n- 问题句：最大的字");
+  });
+
+  test("数据文件不存在 → 用样例渲染并标 usingSample；说明原文随快照给出", async () => {
+    const snapshot = await loadReady();
+    assert.equal(snapshot.usingSample, true);
+    assert.equal(snapshot.data.kind, "ready");
+    if (snapshot.data.kind === "ready") assert.equal((snapshot.data.value as { papers: unknown[] }).papers.length, 8);
+    assert.equal(snapshot.spec, "# 卡片\n\n- 问题句：最大的字");
+    assert.deepEqual(snapshot.problems, []);
+  });
+
+  test("数据文件有内容 → 用数据、不标样例；数据文件是 {} / [] / 空文件也算没有，退回样例", async () => {
+    await writeFile(dataFile(), '{"papers":[{"pid":"P1"}]}');
+    const real = await loadReady();
+    assert.equal(real.usingSample, false);
+    for (const empty of ["{}", "[]", "", "null"]) {
+      await writeFile(dataFile(), empty);
+      const snapshot = await loadReady(real.stamp);
+      assert.equal(snapshot.usingSample, true, JSON.stringify(empty));
+      assert.equal(snapshot.data.kind, "ready");
+    }
+  });
+
+  test("数据文件写坏 / 超限是要让人看到的错误：不拿样例盖过去", async () => {
+    await writeFile(dataFile(), '{"papers": [');
+    const bad = await loadReady();
+    assert.equal(bad.usingSample, false);
+    assert.equal(bad.data.kind === "problem" && bad.data.problem.kind, "invalid-json");
+    await writeFile(dataFile(), `"${"x".repeat(PANEL_DATA_MAX_BYTES)}"`);
+    const big = await loadReady(bad.stamp);
+    assert.equal(big.usingSample, false);
+    assert.equal(big.data.kind === "problem" && big.data.problem.kind, "too-large");
+  });
+
+  test("agent 写出真数据后：下一次轮询从样例换成真数据（stamp 变、frameUrl 保持 null）", async () => {
+    const first = await loadReady();
+    assert.equal(first.usingSample, true);
+    assert.deepEqual(await panels.load({ name: "lit-tracker", workspaceId: "ws-1", stamp: first.stamp }), { kind: "unchanged" });
+    await writeFile(dataFile(), await sample());
+    const second = await loadReady(first.stamp);
+    assert.equal(second.usingSample, false);
+    assert.equal(second.frameUrl, null);
+  });
+
+  test("改说明 / 改样例都会让 stamp 变（草稿预览靠它几秒内刷新）", async () => {
+    const first = await loadReady();
+    await writeFile(join(root, "panel", "spec.md"), "# 改过了");
+    await utimes(join(root, "panel", "spec.md"), new Date(), new Date(Date.now() + 5000));
+    const afterSpec = await loadReady(first.stamp);
+    assert.equal(afterSpec.spec, "# 改过了");
+    assert.equal(afterSpec.frameUrl, null, "模板没动就不换 iframe");
+    await writeFile(join(root, "panel.sample.json"), '{"papers":[{"pid":"only"}]}');
+    await utimes(join(root, "panel.sample.json"), new Date(), new Date(Date.now() + 9000));
+    const afterSample = await loadReady(afterSpec.stamp);
+    assert.equal(afterSample.data.kind === "ready" && (afterSample.data.value as { papers: unknown[] }).papers.length, 1);
+  });
+
+  test("spec / sample 写得不对：面板照常出，缺的那块不出，原因进 problems", async () => {
+    await writePanelManifest(root, { spec: "../out.md", sample: "./nope.json" });
+    const snapshot = await loadReady();
+    assert.equal(snapshot.spec, null);
+    assert.equal(snapshot.usingSample, false);
+    assert.deepEqual(snapshot.data, { kind: "empty" });
+    assert.deepEqual(snapshot.problems.map((problem) => problem.kind), ["sample-missing", "spec-escape"]);
+    // 样例写坏了：同样不拦面板
+    await writePanelManifest(root, { sample: "./bad.json" });
+    await writeFile(join(root, "bad.json"), '{"a":');
+    const bad = await loadReady(snapshot.stamp);
+    assert.deepEqual(bad.problems.map((problem) => problem.kind), ["sample-invalid"]);
+    assert.equal(bad.usingSample, false);
+    // 写成了不认识的形状
+    await writePanelManifest(root, { spec: 5 });
+    const shape = await loadReady(bad.stamp);
+    assert.deepEqual(shape.problems, [{ kind: "shape", detail: "spec" }]);
+  });
+
+  test("没写 spec / sample 的插件：usingSample false、spec null、没有 problems（旧插件原样）", async () => {
+    await writePanelManifest(root, {});
+    const snapshot = await loadReady();
+    assert.equal(snapshot.usingSample, false);
+    assert.equal(snapshot.spec, null);
+    assert.deepEqual(snapshot.problems, []);
+  });
+
+  test("详情页信息：给出清单原文，spec / sample 的路径问题进 problems（不读内容）", async () => {
+    const info = await panels.info("lit-tracker", "ws-1");
+    assert.equal(info?.spec, "./panel/spec.md");
+    assert.equal(info?.sample, "./panel.sample.json");
+    assert.deepEqual(info?.problems, []);
+    await writePanelManifest(root, { spec: "/etc/hosts", sample: "./nope.json" });
+    const bad = await panels.info("lit-tracker", "ws-1");
+    assert.deepEqual(bad?.problems.map((problem) => problem.kind), ["spec-escape", "sample-missing"]);
+    assert.equal(bad?.title, "文献追踪", "说明 / 样例的问题不影响面板信息本身");
+  });
+});
+
+describe("loadDraft 草稿预览", () => {
+  let draft = "";
+  beforeEach(async () => {
+    draft = join(workspaceRoot, "plugins", "lit-draft");
+    await cp(FIXTURE, draft, { recursive: true });
+    await writePanelManifest(draft, { spec: "./panel/spec.md", sample: "./panel.sample.json" }, "lit-draft");
+    await writeFile(join(draft, "panel", "spec.md"), "# 草稿说明");
+    // 草稿没装：records 里没有它
+    panels = build(() => []);
+  });
+
+  const loadDraft = (path: string, workspaceId: string | null = "ws-1", stamp: string | null = null): Promise<PluginPanelSnapshot> =>
+    panels.loadDraft({ path, workspaceId, stamp });
+
+  test("绝对路径与相对工作区根的路径都行：样例渲染 + 说明 + 同一套 iframe 协议", async () => {
+    for (const path of [draft, "plugins/lit-draft", "./plugins/lit-draft/"]) {
+      const snapshot = await loadDraft(path);
+      assert.equal(snapshot.kind, "ready", path);
+      if (snapshot.kind !== "ready") continue;
+      assert.equal(snapshot.usingSample, true);
+      assert.equal(snapshot.spec, "# 草稿说明");
+      assert.equal(snapshot.title, "文献追踪");
+      assert.equal(frames.respond(snapshot.frameUrl ?? "").status, 200);
+    }
+  });
+
+  test("轮询：stamp 没变回 unchanged；agent 往数据目录写出真数据 → 换成真数据；改说明 → 刷新", async () => {
+    const first = await loadDraft(draft);
+    assert.equal(first.kind, "ready");
+    if (first.kind !== "ready") return;
+    assert.deepEqual(await loadDraft(draft, "ws-1", first.stamp), { kind: "unchanged" });
+    // 草稿的 ${CLAUDE_PLUGIN_DATA} 就是装上之后那个插件的数据目录（按清单里的名字）
+    await mkdir(join(dataRoot, "lit-draft"), { recursive: true });
+    await writeFile(join(dataRoot, "lit-draft", "panel.json"), '{"papers":[{"pid":"P9"}]}');
+    const second = await loadDraft(draft, "ws-1", first.stamp);
+    assert.equal(second.kind, "ready");
+    if (second.kind !== "ready") return;
+    assert.equal(second.usingSample, false);
+    assert.equal(second.frameUrl, null);
+    await writeFile(join(draft, "panel", "spec.md"), "# 改了");
+    await utimes(join(draft, "panel", "spec.md"), new Date(), new Date(Date.now() + 5000));
+    const third = await loadDraft(draft, "ws-1", second.stamp);
+    assert.equal(third.kind === "ready" && third.spec, "# 改了");
+  });
+
+  test("工作区之外一律拒（不管那里有没有东西）：绝对路径、`..`、同名前缀的兄弟目录、插件根本身往上走", async () => {
+    const sibling = `${workspaceRoot}-evil`;
+    await cp(FIXTURE, join(sibling, "p"), { recursive: true });
+    await cp(FIXTURE, join(dir, "outside-plugin"), { recursive: true });
+    const outsiders = [
+      join(dir, "outside-plugin"),
+      "../outside-plugin",
+      "plugins/../../outside-plugin",
+      join(sibling, "p"),
+      "../ws-evil/p",
+      "/etc",
+      dir,
+      join(dir, "no-such-place"),
+      "../no-such-place",
+    ];
+    for (const path of outsiders) {
+      const snapshot = await loadDraft(path);
+      assert.equal(snapshot.kind === "unavailable" && snapshot.reason, "outside-workspace", path);
+    }
+  });
+
+  test("符号链接走出工作区：目录链接、指向工作区外插件的链接都拒", async () => {
+    await cp(FIXTURE, join(dir, "outside-plugin"), { recursive: true });
+    await symlink(join(dir, "outside-plugin"), join(workspaceRoot, "sneaky"));
+    await mkdir(join(workspaceRoot, "plugins", "viaDir"), { recursive: true });
+    await symlink(dir, join(workspaceRoot, "plugins", "viaDir", "up"));
+    for (const path of ["sneaky", "plugins/viaDir/up/outside-plugin"]) {
+      const snapshot = await loadDraft(path);
+      assert.equal(snapshot.kind === "unavailable" && snapshot.reason, "outside-workspace", path);
+    }
+  });
+
+  test("会话不在工作区（Home / 未知 id）、路径含 NUL：outside-workspace", async () => {
+    for (const workspaceId of [null, "ws-unknown"]) {
+      const snapshot = await loadDraft(draft, workspaceId);
+      assert.equal(snapshot.kind === "unavailable" && snapshot.reason, "outside-workspace", String(workspaceId));
+    }
+    const nul = await loadDraft(`plugins/lit-draft\u0000/../../..`);
+    assert.equal(nul.kind === "unavailable" && nul.reason, "outside-workspace");
+  });
+
+  test("工作区里的路径不存在 / 是个文件：not-found；同一原因连着轮询回 unchanged", async () => {
+    const missing = await loadDraft("plugins/not-yet");
+    assert.equal(missing.kind === "unavailable" && missing.reason, "not-found");
+    if (missing.kind === "unavailable") assert.deepEqual(await loadDraft("plugins/not-yet", "ws-1", missing.stamp), { kind: "unchanged" });
+    await writeFile(join(workspaceRoot, "plugins", "a-file"), "x");
+    const file = await loadDraft("plugins/a-file");
+    assert.equal(file.kind === "unavailable" && file.reason, "not-found");
+  });
+
+  test("还没有面板（没清单 / 清单没声明 / 声明写歪）：no-panel 或 invalid，写出来之后下一次轮询就出现", async () => {
+    await mkdir(join(workspaceRoot, "plugins", "early"), { recursive: true });
+    const bare = await loadDraft("plugins/early");
+    assert.equal(bare.kind === "unavailable" && bare.reason, "no-panel");
+    await writeFile(join(workspaceRoot, "plugins", "early", "plugin.json"), "{}");
+    await mkdir(join(workspaceRoot, "plugins", "early", ".claude-plugin"), { recursive: true });
+    await writeFile(join(workspaceRoot, "plugins", "early", ".claude-plugin", "plugin.json"), '{"name":"early"');
+    const broken = await loadDraft("plugins/early", "ws-1", bare.kind === "unavailable" ? bare.stamp : null);
+    assert.equal(broken.kind === "unavailable" || broken.kind === "unchanged", true, "写到一半的清单按「还没有面板」");
+    await writePanelManifest(join(workspaceRoot, "plugins", "early"), { template: "./t.html" }, "early");
+    await writeFile(join(workspaceRoot, "plugins", "early", "t.html"), "<p>t</p>");
+    const ready = await loadDraft("plugins/early");
+    assert.equal(ready.kind, "ready");
+  });
+
+  test("草稿里的模板 / 说明 / 样例路径逃逸照拒；data 指到允许范围之外照拒", async () => {
+    await writePanelManifest(draft, { template: "../../../outside.html" }, "lit-draft");
+    const escaped = await loadDraft(draft);
+    assert.equal(escaped.kind === "unavailable" && escaped.problems[0]?.kind, "template-escape");
+    await writePanelManifest(draft, { data: join(dir, "secret.json") }, "lit-draft");
+    const dataOut = await loadDraft(draft);
+    assert.equal(dataOut.kind === "unavailable" && dataOut.problems[0]?.kind, "data-escape");
+    await writePanelManifest(draft, { spec: "../../../x.md", sample: "/etc/hosts" }, "lit-draft");
+    const aux = await loadDraft(draft);
+    assert.equal(aux.kind, "ready");
+    assert.deepEqual(aux.kind === "ready" && aux.problems.map((problem) => problem.kind), ["sample-escape", "spec-escape"]);
+  });
+
+  test("草稿清单里的名字不合规：数据目录退回文件夹名，再不行退回草稿自己的 data/（路径穿越进不来）", async () => {
+    await writePanelManifest(draft, { data: "${CLAUDE_PLUGIN_DATA}/panel.json" }, "../../../etc");
+    await mkdir(join(draft, "data"), { recursive: true });
+    const viaFolder = await loadDraft(draft);
+    assert.equal(viaFolder.kind, "ready");
+    // 文件夹名也不合规（大写 + 空格）
+    const odd = join(workspaceRoot, "plugins", "Odd Name");
+    await cp(FIXTURE, odd, { recursive: true });
+    await writePanelManifest(odd, {}, "../../x");
+    await mkdir(join(odd, "data"), { recursive: true });
+    await writeFile(join(odd, "data", "panel.json"), '{"papers":[{"pid":"inside"}]}');
+    const snapshot = await loadDraft(odd);
+    assert.equal(snapshot.kind, "ready");
+    assert.equal(snapshot.kind === "ready" && snapshot.data.kind, "ready", "读的是草稿根下的 data/panel.json");
+  });
+});
+
 describe("action 动作回传", () => {
   test("追加一行 {at, action, payload}：at 是 ISO UTC 字符串，每次一行", async () => {
     assert.deepEqual(await panels.action({ name: "lit-tracker", action: "feedback", payload: { pid: "P0181", verdict: "useful" } }), { ok: true });
@@ -304,7 +525,6 @@ describe("info 详情页的面板与最近产出", () => {
     assert.equal(info?.template, "./panel/index.html");
     assert.equal(info?.dataRaw, "${CLAUDE_PLUGIN_DATA}/panel.json");
     assert.equal(info?.dataPath, dataFile());
-    assert.equal(info?.openable, true);
     assert.deepEqual(info?.problems, []);
   });
 
@@ -324,17 +544,12 @@ describe("info 详情页的面板与最近产出", () => {
     assert.ok((filled?.actions.updatedAt ?? 0) > 0);
   });
 
-  test("openable：只有插件在当前工作区启用才可点；解析问题列在 problems（模板逃逸 / data 变量不认得）", async () => {
-    record = makeRecord({ kind: "workspaces", ids: ["ws-2"] });
-    assert.equal((await panels.info("lit-tracker", "ws-1"))?.openable, false);
-    assert.equal((await panels.info("lit-tracker", "ws-2"))?.openable, true);
-    record = makeRecord({ kind: "global" });
+  test("解析问题列在 problems（模板逃逸 / data 变量不认得）", async () => {
     await writeFile(
       join(root, ".claude-plugin", "plugin.json"),
       JSON.stringify({ name: "lit-tracker", orbita: { panel: { title: "x", template: "../out.html", data: "${NOPE}/p.json" } } }),
     );
     const info = await panels.info("lit-tracker", "ws-1");
-    assert.equal(info?.openable, false);
     assert.deepEqual(info?.problems.map((problem) => problem.kind), ["template-escape", "data-variable"]);
     assert.equal(info?.dataPath, null);
     assert.equal(info?.data, null);

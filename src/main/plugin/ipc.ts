@@ -26,7 +26,6 @@ import type {
   PluginPanelActionResult,
   PluginPanelInfo,
   PluginPanelSnapshot,
-  PluginPanelTab,
 } from "../../shared/plugin-panel.ts";
 import type { SkillMeta } from "../../shared/skill.ts";
 import type { McpServer } from "../../shared/mcp.ts";
@@ -150,15 +149,23 @@ export function registerPluginIpc(deps: {
 
   // 面板：入参一律当不可信（renderer 被攻破时也不该能凭空读写别的插件 / 路径——这里只认插件名与工作区 id，
   // 路径从不由 renderer 给）
-  ipcMain.handle(
-    ipcChannels.pluginPanelTabs,
-    (_event, workspaceId: unknown): Promise<PluginPanelTab[]> => panels.tabs(optionalId(workspaceId, "workspaceId")),
-  );
-
   ipcMain.handle(ipcChannels.pluginPanelLoad, (_event, raw: unknown): Promise<PluginPanelSnapshot> => {
     const request = requireRecord(raw, "panel load request");
     return panels.load({
       name: requireString(request["name"], "name"),
+      workspaceId: optionalId(request["workspaceId"], "workspaceId"),
+      stamp: request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp"),
+    });
+  });
+
+  // 草稿预览：path 来自 renderer（它收到 agent 的 pluginDraft 事件后原样带来），当不可信——
+  // 这里只做形状校验，路径在不在该工作区根之内由 PluginPanels.loadDraft 判（词法 + realpath）
+  ipcMain.handle(ipcChannels.pluginDraftLoad, (_event, raw: unknown): Promise<PluginPanelSnapshot> => {
+    const request = requireRecord(raw, "draft load request");
+    const path = requireString(request["path"], "path");
+    if (path.length > 4096) throw new Error("Invalid path");
+    return panels.loadDraft({
+      path,
       workspaceId: optionalId(request["workspaceId"], "workspaceId"),
       stamp: request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp"),
     });

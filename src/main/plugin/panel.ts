@@ -9,6 +9,9 @@
  *   就能让宿主把任意 JSON 文件发进模板；
  * - 数据文件超 2 MB 不读（JSON 没法安全截断）；
  * - 动作日志有整份上限与限速，模板失控也写不满磁盘。
+ *
+ * 清单里还有两个可选的辅助文件：`spec`（模板说明，markdown，宿主渲染）与 `sample`（样例数据，
+ * 数据文件不存在 / 为空时用它渲染）。路径规则同模板，读不出来只是少一块、不拦面板。
  */
 import { mkdir, open, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -17,6 +20,7 @@ import type { PluginConfigField, PluginConfigValue } from "../../shared/plugin.t
 import {
   PANEL_ACTIONS_FILE_MAX_BYTES,
   PANEL_DATA_MAX_BYTES,
+  PANEL_SPEC_MAX_BYTES,
   PANEL_TEMPLATE_MAX_BYTES,
   type PluginPanelData,
   type PluginPanelDataProblem,
@@ -33,13 +37,19 @@ export interface PanelSpec {
   template: string;
   /** 清单原文（含变量） */
   data: string;
+  /** 模板说明 / 样例数据的清单原文（相对插件根）；没写为 null */
+  spec: string | null;
+  sample: string | null;
 }
 
 export interface PanelParse {
   /** 清单里有没有 `orbita.panel`（没有 = 插件不带面板，不报问题） */
   declared: boolean;
   spec: PanelSpec | null;
+  /** 让面板整个出不来的问题（spec 为 null 时才有） */
   problems: PluginPanelProblem[];
+  /** 不拦面板的问题：spec / sample 写成了不认识的形状 */
+  notices: PluginPanelProblem[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,17 +62,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function parsePanelSpec(manifest: Record<string, unknown>, fallbackTitle: string): PanelParse {
   const orbita = manifest["orbita"];
-  if (!isRecord(orbita) || orbita["panel"] === undefined) return { declared: false, spec: null, problems: [] };
+  if (!isRecord(orbita) || orbita["panel"] === undefined) return { declared: false, spec: null, problems: [], notices: [] };
   const panel = orbita["panel"];
-  if (!isRecord(panel)) return { declared: true, spec: null, problems: [{ kind: "shape", detail: "panel" }] };
+  if (!isRecord(panel)) return { declared: true, spec: null, problems: [{ kind: "shape", detail: "panel" }], notices: [] };
   const problems: PluginPanelProblem[] = [];
   const template = panel["template"];
   const data = panel["data"];
   if (typeof template !== "string" || template.trim() === "") problems.push({ kind: "shape", detail: "template" });
   if (typeof data !== "string" || data.trim() === "") problems.push({ kind: "shape", detail: "data" });
-  if (problems.length > 0) return { declared: true, spec: null, problems };
+  if (problems.length > 0) return { declared: true, spec: null, problems, notices: [] };
   const title = typeof panel["title"] === "string" && panel["title"].trim() !== "" ? panel["title"].trim() : fallbackTitle;
-  return { declared: true, spec: { title, template: (template as string).trim(), data: (data as string).trim() }, problems: [] };
+  const notices: PluginPanelProblem[] = [];
+  const optionalPath = (field: "spec" | "sample"): string | null => {
+    const value = panel[field];
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "string" || value.trim() === "") {
+      notices.push({ kind: "shape", detail: field });
+      return null;
+    }
+    return value.trim();
+  };
+  const specPath = optionalPath("spec");
+  const samplePath = optionalPath("sample");
+  return {
+    declared: true,
+    spec: { title, template: (template as string).trim(), data: (data as string).trim(), spec: specPath, sample: samplePath },
+    problems: [],
+    notices,
+  };
 }
 
 // ---------- 路径 ----------
@@ -163,33 +190,89 @@ export async function resolveDataPath(raw: string, context: PanelPathContext): P
 
 // ---------- 模板 ----------
 
-export type PanelTemplateResult =
+export type PanelFileResult =
   | { ok: true; abs: string; /** mtime:size */ stamp: string }
   | { ok: false; problem: PluginPanelProblem };
+/** 保留旧名：模板与另外两个辅助文件走同一条定位规则，返回形状一样 */
+export type PanelTemplateResult = PanelFileResult;
 
-/** 模板路径解析 + 是文件 + 没超限，返回一个轻量的 stamp（不读内容）。 */
-export async function locatePanelTemplate(root: string, raw: string): Promise<PanelTemplateResult> {
-  let realRoot: string;
+/** 三种面板文件各自的问题分类与大小上限。 */
+const FILE_KINDS = {
+  template: {
+    escape: "template-escape",
+    missing: "template-missing",
+    unreadable: "template-unreadable",
+    tooLarge: "template-too-large",
+    label: "panel.template",
+    maxBytes: PANEL_TEMPLATE_MAX_BYTES,
+  },
+  spec: {
+    escape: "spec-escape",
+    missing: "spec-missing",
+    unreadable: "spec-unreadable",
+    tooLarge: "spec-too-large",
+    label: "panel.spec",
+    maxBytes: PANEL_SPEC_MAX_BYTES,
+  },
+  sample: {
+    escape: "sample-escape",
+    missing: "sample-missing",
+    unreadable: "sample-unreadable",
+    tooLarge: "sample-too-large",
+    label: "panel.sample",
+    maxBytes: PANEL_DATA_MAX_BYTES,
+  },
+} as const;
+
+export type PanelFileField = keyof typeof FILE_KINDS;
+
+function fileProblem(kind: PluginPanelProblem["kind"], detail: string): PluginPanelProblem {
+  return { kind, detail } as PluginPanelProblem;
+}
+
+/**
+ * 面板文件（模板 / 说明 / 样例）的路径解析 + 是文件 + 没超限，返回一个轻量的 stamp（不读内容）。
+ * 路径规则同其它组件路径（`resolveComponentPath`）：含 `..`、绝对路径、符号链接逃逸一律拒。
+ * 读不了的情况（权限、不是目录……）也以问题返回，不抛——这三个文件里任何一个坏了都不该让轮询报错。
+ */
+export async function locatePanelFile(root: string, raw: string, field: PanelFileField): Promise<PanelFileResult> {
+  const kinds = FILE_KINDS[field];
   try {
-    realRoot = await realpath(root);
-  } catch (error) {
-    return { ok: false, problem: { kind: "template-unreadable", detail: errorText(error) } };
-  }
-  const resolved = await resolveComponentPath(root, realRoot, "panel.template", raw);
-  if (!resolved.ok) {
-    return {
-      ok: false,
-      problem: { kind: resolved.problem.kind === "path-escape" ? "template-escape" : "template-missing", detail: raw },
-    };
-  }
-  try {
+    const realRoot = await realpath(root);
+    const resolved = await resolveComponentPath(root, realRoot, kinds.label, raw);
+    if (!resolved.ok) return { ok: false, problem: fileProblem(resolved.problem.kind === "path-escape" ? kinds.escape : kinds.missing, raw) };
     const info = await stat(resolved.abs);
-    if (!info.isFile()) return { ok: false, problem: { kind: "template-unreadable", detail: `${raw}: not a file` } };
-    if (info.size > PANEL_TEMPLATE_MAX_BYTES) return { ok: false, problem: { kind: "template-too-large", detail: String(info.size) } };
+    if (!info.isFile()) return { ok: false, problem: fileProblem(kinds.unreadable, `${raw}: not a file`) };
+    if (info.size > kinds.maxBytes) return { ok: false, problem: fileProblem(kinds.tooLarge, String(info.size)) };
     return { ok: true, abs: resolved.abs, stamp: `${info.mtimeMs}:${info.size}` };
   } catch (error) {
-    return { ok: false, problem: { kind: "template-unreadable", detail: `${raw}: ${errorText(error)}` } };
+    return { ok: false, problem: fileProblem(kinds.unreadable, `${raw}: ${errorText(error)}`) };
   }
+}
+
+/** 模板路径解析（同 locatePanelFile 的 template 档）。 */
+export function locatePanelTemplate(root: string, raw: string): Promise<PanelTemplateResult> {
+  return locatePanelFile(root, raw, "template");
+}
+
+/** 模板说明：读成文本（去 BOM）。定位已经判过大小，这里只读。 */
+export async function readPanelSpec(abs: string): Promise<{ ok: true; text: string } | { ok: false; problem: PluginPanelProblem }> {
+  try {
+    const raw = await readFile(abs, "utf8");
+    return { ok: true, text: raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw };
+  } catch (error) {
+    return { ok: false, problem: fileProblem("spec-unreadable", errorText(error)) };
+  }
+}
+
+/** 样例数据：读法与数据文件一样（≤ 2 MB、合法 JSON、空算没有）；读不出来的原因换成 sample-* 分类。 */
+export async function readPanelSample(abs: string): Promise<{ ok: true; data: PluginPanelData } | { ok: false; problem: PluginPanelProblem }> {
+  const data = await readPanelData(abs);
+  if (data.kind !== "problem") return { ok: true, data };
+  const problem = data.problem;
+  if (problem.kind === "too-large") return { ok: false, problem: fileProblem("sample-too-large", String(problem.bytes)) };
+  if (problem.kind === "invalid-json") return { ok: false, problem: fileProblem("sample-invalid", problem.message) };
+  return { ok: false, problem: fileProblem("sample-unreadable", problem.message) };
 }
 
 export async function readPanelTemplate(abs: string): Promise<{ ok: true; html: string } | { ok: false; problem: PluginPanelProblem }> {

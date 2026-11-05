@@ -19,8 +19,8 @@
  * 行尾开关、点行进详情。「接入本地插件」打开安装确认（模态框，两种外壳都一样）。
  * 选中某个插件时同一槽里换成详情；旧技能 / MCP 面板本期保留不动。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { PluginView } from "@shared/plugin";
+import { useEffect, useMemo, useState } from "react";
+import { parsePluginViewId, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import type { CardSize, PluginsPageSettings } from "@shared/settings";
 import { useT } from "../../locale.ts";
@@ -30,6 +30,8 @@ import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../..
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
+import { PluginDraftView } from "./PluginDraftView.tsx";
+import type { DetailTab } from "./detail-tabs.ts";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
 import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
@@ -38,26 +40,42 @@ import "./plugins.css";
 /** 外壳：右栏单列版 / 设置页全屏版。排法不看它，看容器宽度（plugins.css 的 @container pl） */
 export type PluginsChrome = "rail" | "page";
 
+/** 「在右栏打开这个插件的面板」的请求：nonce 每次递增，同一个插件连点两次也会再选一次 */
+export interface PluginOpenRequest {
+  name: string;
+  nonce: number;
+}
+
 export function PluginsView(props: {
   workspaces: readonly Workspace[];
   chrome: PluginsChrome;
-  /** 当前会话所在的工作区：详情页里面板的数据路径与「在右栏打开」按它判断 */
+  /** 当前会话所在的工作区：面板的数据路径与启没启用按它判断 */
   currentWorkspaceId: string | null;
+  /** 全屏版详情页的「在右栏打开」：App 负责打开右栏插件页并回一个 openRequest 过来 */
   onOpenPanel: (pluginName: string) => void;
   /** 全屏版的界面记忆（AppSettings.pluginsPage）；右栏版不传，也没有这两个状态 */
   page?: PluginsPageSettings;
   onPage?: (patch: PluginsPageSettings) => void;
   /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；设置里的全屏版随之退场） */
   onMakeWithAgent: () => void;
-  /** 装上了插件（正看着的会话里）：选中它的详情。只有右栏版传；消费后调 onFocusConsumed */
-  focus?: { id: string; nonce: number } | null;
-  onFocusConsumed?: () => void;
+  /** 右栏版收到的请求：选中该插件的面板页签；处理完调 onOpenRequestHandled（全屏版不传） */
+  openRequest?: PluginOpenRequest | null;
+  onOpenRequestHandled?: () => void;
+  /** 正在做的草稿（工作区内插件文件夹的路径）；非 null 时右栏版显示「正在做」视图（全屏版不传） */
+  draft?: string | null;
+  onLeaveDraft?: () => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
+  // 想看的详情页签：换了插件就清（按默认规则：有面板看面板）。「在右栏打开面板」会指定它
+  const [wantedTab, setWantedTab] = useState<DetailTab | null>(null);
+  const setSelectedId = (id: string | null): void => {
+    setSelectedIdRaw(id);
+    setWantedTab(null);
+  };
   const [installing, setInstalling] = useState(false);
   const [query, setQuery] = useState("");
   const [toggleError, setToggleError] = useState<string | null>(null);
@@ -82,17 +100,18 @@ export function PluginsView(props: {
     if (selectedId !== null && state.load.kind === "ready" && selected === null) setSelectedId(null);
   }, [selectedId, selected, state.load.kind]);
 
-  // 刚装上的那个：先重读列表再选中（选中的 id 在刷新回来之前找不到，上面「选中的那条没了就回列表」会把它当场清掉）
-  const { focus } = props;
-  const { refresh } = state;
-  const consumedRef = useRef(props.onFocusConsumed);
-  consumedRef.current = props.onFocusConsumed;
+  // 「在右栏打开面板」：等列表读到、找到那个插件，就选中它并停在面板页签
+  const { openRequest = null, onOpenRequestHandled } = props;
   useEffect(() => {
-    if (focus === undefined || focus === null) return;
-    setQuery("");
-    void refresh().then(() => setSelectedId(focus.id));
-    consumedRef.current?.();
-  }, [focus, refresh]);
+    if (openRequest === null || state.load.kind !== "ready") return;
+    const target = state.plugins.find((view) => view.origin === "plugin" && parsePluginViewId(view.id)?.key === openRequest.name);
+    if (target !== undefined) {
+      setSelectedIdRaw(target.id);
+      setWantedTab("panel");
+    }
+    // 找不到（刚卸载 / 列表还没带上它）也算处理过，别让请求一直挂着
+    onOpenRequestHandled?.();
+  }, [openRequest, state.load.kind, state.plugins, onOpenRequestHandled]);
 
   const workspaces = props.workspaces;
   const filtered = useMemo(
@@ -240,10 +259,13 @@ export function PluginsView(props: {
         key={selected.id}
         view={selected}
         workspaces={workspaces}
+        currentWorkspaceId={props.currentWorkspaceId}
+        // 右栏版本来就在右栏里，只有全屏版需要「在右栏打开」
+        onOpenInRail={rail ? undefined : () => props.onOpenPanel(parsePluginViewId(selected.id)?.key ?? "")}
+        tab={wantedTab}
+        onTab={setWantedTab}
         // 右栏版的返回键在胶囊里；全屏版在页内
         showBack={!rail}
-        currentWorkspaceId={props.currentWorkspaceId}
-        onOpenPanel={props.onOpenPanel}
         onBack={() => setSelectedId(null)}
         onScope={(scope) => state.setScope(selected.id, scope)}
         onChanged={state.refresh}
@@ -263,6 +285,11 @@ export function PluginsView(props: {
       }}
     />
   ) : null;
+
+  // 正在做的草稿优先于列表与详情（智能体刚预览了它，用户要看的就是它）；点返回回到列表
+  if (rail && props.draft !== undefined && props.draft !== null) {
+    return <PluginDraftView path={props.draft} workspaceId={props.currentWorkspaceId} onBack={() => props.onLeaveDraft?.()} />;
+  }
 
   if (rail) {
     // 页头住工具栏的右栏胶囊（RightPanelFrame 把它 portal 过去）：列表 = 标题 + 筛选；详情 = 返回 + 标题
