@@ -679,14 +679,3 @@ export class AgentHostCore {
     this.child.postMessage(command);
   }
 }
-
-/**
- * agent 进程的 Node 执行参数：测量驱动（scripts/bench）设 ORBITA_AGENT_INSPECT=1 时，
- * 给 utilityProcess 显式挂 --inspect=0。Windows 上 utilityProcess 不消费继承来的 NODE_OPTIONS
- * ——主进程靠它起 inspector 正常，agent 进程却没有任何 Debugger listening 行（2026-11-05
- * bench 实测，Mac 同机制可跑通），改走 fork 的 execArgv 才确定生效；正常运行没有这个
- * 变量，返回空数组，行为不变。
- */
-export function agentExecArgv(env: Record<string, string | undefined>): string[] {
-  return env.ORBITA_AGENT_INSPECT === "1" ? ["--inspect=0"] : [];
-}
