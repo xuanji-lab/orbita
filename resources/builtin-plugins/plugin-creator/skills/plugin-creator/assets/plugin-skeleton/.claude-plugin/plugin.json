@@ -5,12 +5,6 @@
   "description": "__一句话：它做什么、给谁用、产出什么__",
   "author": { "name": "__作者__" },
   "orbita": {
-    "panel": {
-      "title": "__面板标题__",
-      "template": "./panel/index.html",
-      "data": "${CLAUDE_PLUGIN_ROOT}/data/panel.json",
-      "spec": "./panel/spec.md",
-      "sample": "./panel/sample.json"
-    }
+    "tuned": false
   }
 }
