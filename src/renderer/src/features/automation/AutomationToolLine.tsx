@@ -5,6 +5,8 @@ import { PanelButton } from "../../shell/RightPanel";
 import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { parseAutomationCard, type AutomationCardView } from "../../../../shared/automation.ts";
+import { automationModeRowOf } from "../chat/tool-results.ts";
+import { AutomationModeLine } from "./AutomationModeLine";
 import { useAutomationUi } from "./automation-context.ts";
 import { describeSchedule, formatWhen, rowStateOf } from "./automation-view.ts";
 import "./automation.css";
@@ -24,7 +26,7 @@ export function automationCardOf(result: ToolTranscriptItem | undefined): Automa
   return parseAutomationCard((details as Record<string, unknown>)["automation"]);
 }
 
-export function AutomationToolLine(props: { result: ToolTranscriptItem | undefined; interrupted: boolean }) {
+export function AutomationToolLine(props: { result: ToolTranscriptItem | undefined; interrupted: boolean; sessionId?: string }) {
   const t = useT();
   const a = t.automation;
   const ui = useAutomationUi();
@@ -63,7 +65,9 @@ export function AutomationToolLine(props: { result: ToolTranscriptItem | undefin
     .filter((part): part is string => part !== null)
     .join(" · ");
   const canToggle = live !== undefined && (live.status === "active" || live.status === "paused");
-  return (
+  // 建的时候就申请了放行（automation_create 带 mode）：卡下面跟一行「已改成放行 / 让它到点能写文件？」
+  const modeRow = automationModeRowOf(props.result);
+  const cardView = (
     <ExitCard
       kicker={a.title}
       icon={FEATURE_ICON.automation}
@@ -89,5 +93,12 @@ export function AutomationToolLine(props: { result: ToolTranscriptItem | undefin
         </>
       }
     />
+  );
+  if (modeRow === null) return cardView;
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)", minWidth: 0 }}>
+      {cardView}
+      <AutomationModeLine row={modeRow} sessionId={props.sessionId ?? null} />
+    </div>
   );
 }

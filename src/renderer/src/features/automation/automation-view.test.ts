@@ -15,6 +15,8 @@ import {
   formatTokens,
   formatWhen,
   groupAutomations,
+  modeRowFailureText,
+  modeRowView,
   modelOptionValue,
   noteOf,
   parseModelOption,
@@ -318,5 +320,45 @@ describe("详情页按钮 / 立即运行 / 指令折叠", () => {
     assert.equal(promptIsLong("x".repeat(141)), true);
     assert.equal(promptIsLong("1\n2\n3\n4"), false);
     assert.equal(promptIsLong("1\n2\n3\n4\n5"), true);
+  });
+});
+
+describe("modeRowView（对话里「改权限」那一行画哪一种：看此刻的自动化，不看落盘时的样子）", () => {
+  const pending = { state: "pending", requestId: "r1" } as const;
+  const applied = { state: "applied", requestId: "r2" } as const;
+
+  test("此刻是 skip → 已放行（不论这一行怎么来的）；点「允许」之后同理", () => {
+    assert.equal(modeRowView(pending, { mode: "skip" }), "allowed");
+    assert.equal(modeRowView(applied, { mode: "skip" }), "allowed");
+  });
+
+  test("此刻是 plan：没点过的待确认 → 待确认；点过「保持只读 / 改回只读」的 → 保持只读；落盘时已放行、后来被改回的 → 保持只读", () => {
+    assert.equal(modeRowView(pending, { mode: "plan" }), "pending");
+    assert.equal(modeRowView(pending, { mode: "plan", modeDeclined: ["别的请求"] }), "pending", "只让点过的那一行变灰");
+    assert.equal(modeRowView(pending, { mode: "plan", modeDeclined: ["别的请求", "r1"] }), "kept");
+    assert.equal(modeRowView(applied, { mode: "plan" }), "kept");
+  });
+
+  test("自动化已不存在 → gone；列表还没读到（null）→ 按落盘时的样子画，不闪成「已不存在」", () => {
+    assert.equal(modeRowView(pending, undefined), "gone");
+    assert.equal(modeRowView(pending, null), "pending");
+    assert.equal(modeRowView(applied, null), "allowed");
+  });
+});
+
+describe("modeRowFailureText 与文案", () => {
+  test("主进程的每个稳定代码都有一句中英文人话，不漏", () => {
+    for (const messages of [T.modeRow, Z.modeRow]) {
+      for (const reason of ["disabled", "noSession", "notFound", "notApplicable", "finished"] as const) {
+        assert.notEqual(modeRowFailureText(messages, { ok: false, reason, detail: "x" }), "", reason);
+      }
+    }
+  });
+
+  test("文案带上标题；待确认行的说明点出会话是哪一档", () => {
+    assert.match(Z.modeRow.pendingTitle("每日一篇"), /每日一篇/);
+    assert.match(Z.modeRow.allowedTitle("每日一篇"), /放行/);
+    assert.match(Z.modeRow.note("手动"), /手动/);
+    assert.match(T.modeRow.note("Manual"), /Manual/);
   });
 });

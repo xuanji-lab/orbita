@@ -32,6 +32,7 @@ import {
   parseGrepLine,
   pluginBoardOf,
   pluginInstallRowOf,
+  automationModeRowOf,
   readTaskCard,
   formatToolDuration,
   recordToolFrame,
@@ -451,6 +452,57 @@ describe("install_plugin 留下的那一行", () => {
     assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, commands: "node" } })), null);
     assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, path: "" } })), null);
     assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, fingerprint: 3 } })), null);
+  });
+});
+
+describe("automation_update 留下的「改权限」那一行", () => {
+  const ROW = { state: "pending", requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" };
+  const updateItem = (details: unknown, status: "complete" | "running" | "error" = "complete"): ToolTranscriptItem =>
+    ({
+      id: "item-u1",
+      role: "tool",
+      toolCallId: "u1",
+      toolName: "automation_update",
+      input: {},
+      content: [],
+      details,
+      timestamp: 0,
+      status,
+      isError: status === "error",
+    }) as ToolTranscriptItem;
+
+  test("automation_update 不成组——那一行要一直露在外面（agent 已结束这一轮在等用户点）", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "u1", toolName: "automation_update", input: {} }]),
+        toolItem({ toolCallId: "u1", toolName: "automation_update" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "u2", toolName: "automation_update", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
+  });
+
+  test("从 details.automationMode 取；落盘后 JSON 来回照样取得出；create 的结果（卡 + 行）同样取得出", () => {
+    assert.deepEqual(automationModeRowOf(updateItem({ automationMode: ROW })), ROW);
+    assert.deepEqual(automationModeRowOf(JSON.parse(JSON.stringify(updateItem({ automationMode: ROW }))) as ToolTranscriptItem), ROW);
+    assert.deepEqual(automationModeRowOf(updateItem({ automation: { id: "au1" }, automationMode: { ...ROW, state: "applied", sessionMode: "skip" } })), {
+      ...ROW,
+      state: "applied",
+      sessionMode: "skip",
+    });
+  });
+
+  test("没有结果 / 还在跑 / 失败 / 没留行（改成只读）/ 坏形状：都是 null，退回通用工具行", () => {
+    assert.equal(automationModeRowOf(undefined), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: ROW }, "running")), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: ROW }, "error")), null);
+    assert.equal(automationModeRowOf(updateItem(undefined)), null);
+    assert.equal(automationModeRowOf(updateItem({})), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, state: "maybe" } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, sessionMode: "root" } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, requestId: "" } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, automationId: 3 } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, title: undefined } })), null);
   });
 });
 

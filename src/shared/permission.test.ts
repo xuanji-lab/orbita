@@ -99,7 +99,7 @@ describe("decidePermission", () => {
     assert.equal(decidePermission("plan", "memory_delete").behavior, "deny");
   });
 
-  test("自动化三件套：建出来是待启用，确认在启用那一下——三档全放行，名字相似的不沾光", () => {
+  test("自动化四件套（含只改权限档的 automation_update）：三档全放行，闸在主进程；名字相似的不沾光", () => {
     for (const mode of PERMISSION_MODES) {
       for (const tool of AUTOMATION_TOOLS) {
         assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);

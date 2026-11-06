@@ -24,6 +24,7 @@ import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
+import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
@@ -191,6 +192,9 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "report_to_parent",
   // 自动化：建出来的那张卡是给用户看的结果（在右栏查看 / 暂停），不是「工作过程」，不该被折叠吞掉
   "automation_create",
+  // 自动化改权限：留下的那一行（已改成放行 [改回只读] / 让它到点能写文件？[允许] [保持只读]）要用户看见、可能要点，
+  // 折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等
+  "automation_update",
 ]);
 
 /**
@@ -1194,6 +1198,15 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
 export function pluginInstallRowOf(result: ToolTranscriptItem | undefined): PluginInstallRow | null {
   if (result === undefined || result.status === "running" || result.status === "error") return null;
   return parsePluginInstallRow(result.details);
+}
+
+/**
+ * automation_create / automation_update 结果 `details.automationMode` 里「改权限」那一行的数据（主进程写的，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对 / 这次调用没留行（改成只读、本来就是放行）都为 null。
+ */
+export function automationModeRowOf(result: ToolTranscriptItem | undefined): AutomationModeRow | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parseAutomationModeRow(result.details);
 }
 
 /**

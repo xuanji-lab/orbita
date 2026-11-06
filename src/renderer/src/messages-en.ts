@@ -607,6 +607,31 @@ export const en = {
       endsUntil: (when: string) => `until ${when}`,
       gone: "This automation no longer exists",
     },
+    /** The row in the conversation where the agent asked for write access (automation_update): done, or waiting for the user's click */
+    modeRow: {
+      aria: "Automation permission",
+      allowedTitle: (title: string) => `“${title}” set to Skip`,
+      allowedMeta: "can write files when due",
+      pendingTitle: (title: string) => `Let “${title}” write files when due (Skip)?`,
+      keptTitle: (title: string) => `“${title}” stays read-only`,
+      keptMeta: "can only read when due",
+      goneTitle: (title: string) => `“${title}” no longer exists`,
+      allow: "Allow",
+      allowing: "Allowing…",
+      revert: "Back to read-only",
+      reverting: "Reverting…",
+      keep: "Keep read-only",
+      note: (mode: string) =>
+        `This conversation is in “${mode}” mode: the agent cannot give an automation more permission than the conversation has, so it needs your click.`,
+      failed: {
+        disabled: "Automations are turned off.",
+        noSession: "This conversation no longer exists, so its workspace cannot be checked.",
+        notFound: "The automation is gone, or no longer belongs to this conversation's workspace.",
+        notApplicable: "This automation runs inside its conversation and has no permission of its own.",
+        finished: "This automation has already finished.",
+        failed: (detail: string) => `Could not change it: ${detail}`,
+      },
+    },
     wake: (title: string, number: number, max: number | null, stamp: string) =>
       `Automation “${title}” · run ${max === null ? number : `${number}/${max}`} · ${stamp}`,
     wakeExpand: "Show the instruction",

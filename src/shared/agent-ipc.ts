@@ -157,6 +157,8 @@ export const ipcChannels = {
   automationUpdate: "automation:update",
   automationAct: "automation:act",
   automationPromote: "automation:promote",
+  /** 对话里「改权限」那一行的按钮（入参 AutomationModeRowRequest，回 AutomationModeRowResult；结局以数据返回，不抛） */
+  automationModeFromRow: "automation:mode-from-row",
   /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
   automationEvent: "automation:event",
   sessionList: "session:list",
@@ -1466,13 +1468,15 @@ export type AgentEvent =
    */
   | { type: "modelCostsRequest"; requestId: string; sessionId: string }
   /**
-   * 自动化（实验功能 automation）：agent 的 automation_create / list / cancel 请求。
+   * 自动化（实验功能 automation）：agent 的 automation_create / list / cancel / update 请求。
    * **存盘在主进程**（agent 进程不碰 userData，delegateRequest 同一条边界）：主进程校验入参、
    * 按这条会话所在的工作区落 `automations.json`（只能管当前工作区的）、回 automationResult。
    * 建出来**直接生效**（2026-10-31 用户裁决，不再有待启用）：默认绑定这条会话（this_session），
    * 到点把指令送回来。自动化新开的会话与子会话的请求主进程直接拒（防递归，不只靠不注册工具）。
+   * `mode` 是这条会话此刻的权限档：agent 给自动化的权限不能高于它——请求 skip 只有会话本身是「放行」才直接改，
+   * 其余在对话里留一行让用户点「允许」（automation_update / automation_create 的 mode 参数）。
    */
-  | { type: "automationRequest"; requestId: string; sessionId: string; request: AutomationToolRequest }
+  | { type: "automationRequest"; requestId: string; sessionId: string; mode: PermissionMode; request: AutomationToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
