@@ -695,12 +695,15 @@
 
 .pl-col {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   min-width: 0;
 }
 
 .pl-card {
   display: grid;
+  /* 隐式 auto 列会按内容（看板的固定像素列）算宽，把卡撑出右栏；列宽只听外面 */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   background: var(--glass-bg);
@@ -1429,6 +1432,7 @@ button.pl-wf-chip:hover {
 /* 缩小的看板（最宽 600，至少 340）与每卡一行并排；放不下就换行叠在上面（不看视口，只看这一节有多宽） */
 .pd-board {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: var(--space-4);
   align-items: flex-start;
@@ -1488,6 +1492,7 @@ button.pl-wf-chip:hover {
 /* 右栏看板视图：BoardGrid 占满宽度 */
 .pl-boardview {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   align-content: start;
   min-width: 0;
