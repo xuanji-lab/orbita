@@ -4,16 +4,29 @@
  * 引用的参考文件不在）用户第一次点「和智能体一起做一个」就走偏。所以用真扫描器扫一遍。
  */
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { BUILTIN_PLUGIN_NAMES } from "../../shared/plugin.ts";
+import type { SecretsPort } from "../provider/store.ts";
 import { scanPlugin } from "./manifest.ts";
+import { PluginStore } from "./store.ts";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
 const BUILTIN = join(REPO, "resources", "builtin-plugins");
 const CREATOR = join(BUILTIN, "plugin-creator");
+
+const SKILL_KIT = join(BUILTIN, "skill-kit");
+
+class NoSecrets implements SecretsPort {
+  async set(): Promise<void> {}
+  async get(): Promise<string | null> {
+    return null;
+  }
+  async delete(): Promise<void> {}
+}
 
 const exists = (path: string): Promise<boolean> => stat(path).then(() => true, () => false);
 
@@ -193,5 +206,142 @@ describe("内置插件 plugin-creator", () => {
   test("打包：package.json 的 extraResources 把 resources/builtin-plugins 放进安装包", async () => {
     const pkg = JSON.parse(await readFile(join(REPO, "package.json"), "utf8")) as { build: { extraResources: { from: string; to: string }[] } };
     assert.equal(pkg.build.extraResources.some((entry) => entry.from === "resources/builtin-plugins" && entry.to === "builtin-plugins"), true);
+  });
+});
+
+describe("内置插件的名字表与资源目录", () => {
+  test("BUILTIN_PLUGIN_NAMES 与 resources/builtin-plugins 下的目录一一对应（多一个少一个都不行）", async () => {
+    const dirs = (await readdir(BUILTIN, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    assert.deepEqual([...dirs].sort(), [...BUILTIN_PLUGIN_NAMES].sort());
+  });
+
+  test("每个内置插件的每条技能：有 description（模型靠它想起技能）、目录名与 SKILL.md 的 name 一致、清单有中文名与作者", async () => {
+    for (const name of BUILTIN_PLUGIN_NAMES) {
+      const scanned = await scanPlugin(join(BUILTIN, name), name);
+      assert.equal(scanned.skills.length >= 1, true, `${name} 没有技能`);
+      assert.notEqual(scanned.displayName, name, `${name} 没写 displayName`);
+      assert.notEqual(scanned.author, null, `${name} 没写 author`);
+      for (const skill of scanned.skills) {
+        assert.equal(skill.description.length > 40, true, `${name}/${skill.slug} 的 description 太短`);
+        assert.equal(skill.name, skill.slug, `${name}/${skill.slug} 的 name 与目录名不一致`);
+      }
+    }
+  });
+});
+
+describe("内置插件 skill-kit", () => {
+  test("两条技能：find-skills 与 skill-creator；workflow 点名都对得上", async () => {
+    const scanned = await scanPlugin(SKILL_KIT, "skill-kit");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["find-skills", "skill-creator"]);
+    assert.equal(scanned.workflow.length >= 3, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能对不上`);
+  });
+
+  test("找技能只回应用户直接开口：不再写「创建插件前主动找」（那是 plugin-creator 里 find-existing 的事，两个都写会同时触发）", async () => {
+    const find = await readFile(join(SKILL_KIT, "skills", "find-skills", "SKILL.md"), "utf8");
+    const description = /^description: (.*)$/m.exec(find)?.[1] ?? "";
+    assert.doesNotMatch(description, /PROACTIVELY|主动/);
+    assert.doesNotMatch(find, /Orbita 插件功能开发中|插件功能上线后/);
+    assert.match(find, /不要在做插件的流程里用它/);
+    // 安装路径：单文件走 create_skill，多文件做成插件走 install_plugin；禁 -g；不写死 mac 路径、不让模型手工建符号链接
+    assert.match(find, /create_skill/);
+    assert.match(find, /install_plugin/);
+    assert.match(find, /不要用 `npx skills add -g`/);
+    assert.doesNotMatch(find, /npx skills add [^\n`]*-g -y/);
+    assert.doesNotMatch(find, /Library\/Application Support/);
+    // 反过来：find-existing 不再认领「用户单独问有没有技能」
+    const existing = await readFile(join(CREATOR, "skills", "find-existing", "SKILL.md"), "utf8");
+    const existingDescription = /^description: (.*)$/m.exec(existing)?.[1] ?? "";
+    assert.doesNotMatch(existingDescription, /用户问“有没有现成的 XX 技能”/);
+    assert.match(existingDescription, /find-skills/);
+  });
+
+  test("写技能：写入走 create_skill / 插件安装，不写死 mac 数据目录；版本带 -orbita 后缀", async () => {
+    const text = await readFile(join(SKILL_KIT, "skills", "skill-creator", "SKILL.md"), "utf8");
+    assert.match(text, /create_skill/);
+    assert.match(text, /install_plugin/);
+    assert.doesNotMatch(text, /Library\/Application Support|skill-links/);
+    assert.match(text, /^version: "1\.1\.\d+-orbita"$/m);
+    const find = await readFile(join(SKILL_KIT, "skills", "find-skills", "SKILL.md"), "utf8");
+    assert.match(find, /^version: "1\.0\.\d+-orbita"$/m);
+  });
+
+  test("许可署名：skill-creator 原样带 Apache-2.0 的 LICENSE.txt；NOTICE 写明两个上游、作者、许可与改动", async () => {
+    const license = await readFile(join(SKILL_KIT, "skills", "skill-creator", "LICENSE.txt"), "utf8");
+    assert.match(license, /Apache License\s+Version 2\.0/);
+    const notice = await readFile(join(SKILL_KIT, "NOTICE"), "utf8");
+    assert.match(notice, /github\.com\/vercel-labs\/skills/);
+    assert.match(notice, /Copyright \(c\) \d{4} Vercel, Inc\./);
+    assert.match(notice, /MIT License/);
+    assert.match(notice, /github\.com\/anthropics\/skills/);
+    assert.match(notice, /Apache License 2\.0/);
+    assert.match(notice, /我们改了什么/);
+    // MIT 全文跟在后面（保留版权声明与许可声明的要求）
+    assert.match(notice, /Permission is hereby granted, free of charge/);
+  });
+
+  test("skill-creator 带的脚本与参考文件都在，SKILL.md 引用的 scripts/ references/ agents/ 文件不悬空", async () => {
+    const dir = join(SKILL_KIT, "skills", "skill-creator");
+    const text = await readFile(join(dir, "SKILL.md"), "utf8");
+    const refs = [...text.matchAll(/(?<![A-Za-z0-9_.-])((?:references|agents|scripts|assets|eval-viewer)\/[A-Za-z0-9_-]+\.[a-z]+)/g)].map((match) => match[1] ?? "");
+    assert.equal(refs.length >= 5, true, `只扫到 ${refs.length} 处引用，正则可能失效`);
+    for (const ref of new Set(refs)) assert.equal(await exists(join(dir, ref)), true, `skill-creator 引用了不存在的 ${ref}`);
+  });
+});
+
+describe("内置插件与用户自己的同名技能（用真实资源跑 PluginStore）", () => {
+  /** 用真实 resources/builtin-plugins 当 builtinRoot；userSkills 由用例给。不碰任何用户目录。 */
+  async function withUserSkills(userSkills: { slug: string; name: string }[]): Promise<{ store: PluginStore; cleanup: () => Promise<void> }> {
+    const configDir = await mkdtemp(join(tmpdir(), "orbita-builtin-clash-"));
+    const store = new PluginStore({ configDir, secrets: new NoSecrets(), userSkills: async () => userSkills, builtinRoot: BUILTIN });
+    return { store, cleanup: () => rm(configDir, { recursive: true, force: true }) };
+  }
+
+  test("没有重名：两个内置插件的技能都叠进开轮装配，无冲突", async () => {
+    const { store, cleanup } = await withUserSkills([]);
+    try {
+      const assembled = await store.assemble(null);
+      assert.deepEqual(assembled.skills.map((skill) => `${skill.plugin}/${skill.slug}`).sort(), [
+        "plugin-creator/board-style",
+        "plugin-creator/find-existing",
+        "plugin-creator/plugin-creator",
+        "skill-kit/find-skills",
+        "skill-kit/skill-creator",
+      ]);
+      assert.deepEqual((await store.listViews()).flatMap((view) => view.conflicts), []);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("用户自己有同名的 find-skills 与 skill-creator：用户的赢，内置那两条不叠，插件页亮冲突；其它内置技能不受影响", async () => {
+    const { store, cleanup } = await withUserSkills([
+      { slug: "find-skills", name: "find-skills" },
+      { slug: "skill-creator", name: "skill-creator" },
+    ]);
+    try {
+      const assembled = await store.assemble(null);
+      assert.deepEqual(assembled.skills.filter((skill) => skill.plugin === "skill-kit"), []);
+      assert.equal(assembled.skills.filter((skill) => skill.plugin === "plugin-creator").length, 3);
+      assert.equal((await store.skillMetas()).some((meta) => meta.slug === "find-skills"), false);
+      const view = (await store.listViews()).find((each) => each.id === "plugin:skill-kit");
+      assert.deepEqual(view?.conflicts.map((conflict) => conflict.kind), ["skill-name", "skill-name"]);
+      // 冲突只是提示：插件仍是启用的内置插件，不被拆掉
+      assert.deepEqual(view?.scope, { kind: "global" });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("只重名一条（用户只有自己的 find-skills）：另一条 skill-creator 照常加载，冲突只报一条", async () => {
+    const { store, cleanup } = await withUserSkills([{ slug: "mine", name: "find-skills" }]);
+    try {
+      const assembled = await store.assemble(null);
+      assert.deepEqual(assembled.skills.filter((skill) => skill.plugin === "skill-kit").map((skill) => skill.slug), ["skill-creator"]);
+      const view = (await store.listViews()).find((each) => each.id === "plugin:skill-kit");
+      assert.equal(view?.conflicts.length, 1);
+    } finally {
+      await cleanup();
+    }
   });
 });
