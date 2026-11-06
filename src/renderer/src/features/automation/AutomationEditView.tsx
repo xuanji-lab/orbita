@@ -9,6 +9,7 @@ import {
 } from "../../shell/RightPanel";
 import { useT } from "../../locale.ts";
 import type { ProviderDto } from "@shared/provider";
+import { enabledProviders, isPairOnClosedProvider } from "../settings/providers-view-model.ts";
 import type {
   Automation,
   AutomationCreateInput,
@@ -106,13 +107,16 @@ export function AutomationEditView(props: {
     : [];
 
   const modelOptions = useMemo(() => {
-    const groups = props.providers.map((provider) => ({
+    // 关着的服务商不列（服务商开关）；这条自动化已选的模型若落在关着的那家，退成「缺失项」留着，不静默改选
+    const groups = enabledProviders(props.providers).map((provider) => ({
       id: provider.id,
       name: provider.displayName,
       models: provider.models.declared.map((m) => m.id),
     }));
     const known = groups.some((group) => group.id === automation?.providerId && group.models.includes(automation?.modelId ?? ""));
-    return { groups, missing: !known && model !== "" ? model : null };
+    const missing = !known && model !== "" ? model : null;
+    const closed = missing !== null && isPairOnClosedProvider(props.providers, parseModelOption(missing) ?? undefined);
+    return { groups, missing, closed };
   }, [props.providers, automation, model]);
 
   const set = (patch: Partial<ScheduleForm>): void => setForm((current) => ({ ...current, ...patch }));
@@ -359,6 +363,7 @@ export function AutomationEditView(props: {
               ))}
             </select>
           )}
+          {!followsSession && modelOptions.closed && <span className="auto-hint">{t.providers.closedAutomationModel}</span>}
         </label>
 
         {(pluginOptions.length > 0 || plugin !== "") && (

@@ -2599,6 +2599,8 @@ function ComposerBar(props: {
           onToggleStar={props.onToggleStarModel}
           onSelect={(providerId, modelId) => session.chooseModel(providerId, modelId)}
           placement="above"
+          // 关着的服务商不列，菜单底部灰字行的「去模型服务打开」走同一个去向
+          onOpenProviders={props.onOpenProviders}
           // 底部固定行：卡片会筛掉没配 key 的厂商，这行是唯一能说清「别家不是不存在」的地方
           footer={(close) =>
             modelCardFooter({

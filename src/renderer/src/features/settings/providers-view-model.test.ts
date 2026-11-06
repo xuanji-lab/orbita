@@ -7,7 +7,10 @@ import {
   cardAddress,
   compactTokens,
   connectionDirty,
+  closedProvidersSummary,
   customThinkingSeed,
+  enabledProviders,
+  isPairOnClosedProvider,
   declaredThinkingLevels,
   hasCredentials,
   mergeModelCost,
@@ -486,5 +489,34 @@ describe("型号思考档覆盖（弹窗的勾选逻辑与按服务商取声明�
     assert.deepEqual(declaredThinkingLevels([provider], "tokenrhythm", "kimi-k3"), ["high"]);
     assert.equal(declaredThinkingLevels([provider], "tokenrhythm", "glm-5.3"), undefined);
     assert.equal(declaredThinkingLevels([provider], "other", "kimi-k3"), undefined);
+  });
+});
+
+describe("服务商开关的菜单口径", () => {
+  const dto = (id: string, models: string[], extra: Partial<ProviderDto> = {}): ProviderDto => ({
+    id,
+    displayName: id,
+    endpoint: { baseUrl: "https://x", api: "openai-completions" },
+    auth: { scheme: "api_key", hasSecret: true, masked: "k" },
+    models: { declared: models.map((m) => ({ id: m })) },
+    ...extra,
+  });
+  const list = [dto("zai", ["glm-5.3", "glm-5.3-flash"]), dto("pro", ["gpt-6", "claude-opus-5-5", "glm-5.3", "x"], { disabled: true }), dto("kimi", ["k3"])];
+
+  test("enabledProviders：只留开着的，顺序不变；旧数据（无字段）算开着", () => {
+    assert.deepEqual(enabledProviders(list).map((p) => p.id), ["zai", "kimi"]);
+    assert.deepEqual(enabledProviders([dto("a", ["m"]), dto("b", ["m"], { disabled: false })]).map((p) => p.id), ["a", "b"]);
+  });
+
+  test("closedProvidersSummary：菜单底部灰字的家数与模型数；没关就是 null", () => {
+    assert.deepEqual(closedProvidersSummary(list), { providers: 1, models: 4 });
+    assert.equal(closedProvidersSummary([dto("zai", ["m"])]), null);
+  });
+
+  test("isPairOnClosedProvider：设置里的模型选择指向关着的服务商才提示；删了的 / 没选的不算", () => {
+    assert.equal(isPairOnClosedProvider(list, { providerId: "pro" }), true);
+    assert.equal(isPairOnClosedProvider(list, { providerId: "zai" }), false);
+    assert.equal(isPairOnClosedProvider(list, { providerId: "gone" }), false);
+    assert.equal(isPairOnClosedProvider(list, undefined), false);
   });
 });

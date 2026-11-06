@@ -124,9 +124,10 @@ export function PriceCapabilityChart(props: {
     };
   }, [selected]);
 
-  // 只在「哪些型号、什么费率」变了时重拉：别的字段（显示名、排序）不影响图
+  // 只在「哪些型号、什么费率、开着还是关着」变了时重拉：别的字段（显示名、排序）不影响图。
+  // 关着的服务商主进程不给图（price-chart-source），开关一翻就得重拉
   const signature = props.providers
-    .map((p) => `${p.id}:${p.models.declared.map((m) => `${m.id}=${JSON.stringify(m.cost ?? null)}`).join(",")}`)
+    .map((p) => `${p.id}${p.disabled === true ? "!" : ""}:${p.models.declared.map((m) => `${m.id}=${JSON.stringify(m.cost ?? null)}`).join(",")}`)
     .join("|");
   useEffect(() => {
     let alive = true;

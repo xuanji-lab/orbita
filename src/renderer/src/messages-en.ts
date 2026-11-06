@@ -1362,6 +1362,9 @@ export const en = {
     unstar: "Unstar this model",
     starredTip: "Starred · click to unstar",
     configure: "Configure models",
+    /** 模型菜单底部灰字：关着的服务商不列，这行说它们没消失 */
+    closedServices: (models: number) => `Turned-off services · ${models} model${models === 1 ? "" : "s"}`,
+    openClosedServices: "Turn on in Model services",
   },
 
   providers: {
@@ -1373,6 +1376,15 @@ export const en = {
     saved: "Saved",
     keyFromEnv: (name: string, keys: string) => `${name} · key from environment (${keys})`,
     noApiKey: "No API key",
+    // —— 服务商开关 ——
+    switchLabel: (name: string) => `Use ${name}`,
+    closed: "Off",
+    closedNote:
+      "Turned off: configuration and key are kept. While it is off, new sessions, sub-sessions, automations and chores never use it; a session already using it is asked to switch models on its next message.",
+    closedModelSet: "This service is turned off",
+    closedModelSub: "Sub-sessions fall back to the parent's model until you turn it on.",
+    closedModelChore: "Chores fall back to the session's model until you turn it on.",
+    closedAutomationModel: "This service is turned off. The automation will not run until you turn it on or pick another model.",
     addProvider: "Add provider",
     loadingProviders: "Loading providers…",
     // —— 给导入的会话分配模型 ——
