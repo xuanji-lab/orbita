@@ -2499,6 +2499,11 @@ export const en = {
       `Uninstall ${name}? It stops loading in every workspace and leaves this list. Your source folder is not touched, and any secrets you entered are cleared.`,
     uninstallAction: "Uninstall",
     uninstalling: "Uninstalling…",
+    mcpRemove: "Remove…",
+    mcpRemoveConfirm: (name: string) =>
+      `Remove "${name}" from mcp.json? It stops loading in every workspace; the program itself is not deleted.`,
+    mcpRemoveAction: "Remove",
+    mcpRemoving: "Removing…",
     actionFailed: (message: string) => `That didn't work: ${message}`,
     abilitiesTitle: "What it does",
     abilitiesHint: "In Orbita",
@@ -2575,8 +2580,9 @@ export const en = {
     sourceCopyLine: (path: string) => `Copied from ${path}`,
     sourceLinkLine: (path: string) => `Linked to ${path}`,
     sourceGitLine: (url: string) => url,
-    legacySkillNote: "This is one of your own skills. To delete it, use the Skills panel on the right rail.",
-    legacyMcpNote: "This is one of your MCP servers from mcp.json. To edit or remove it, use the MCP panel or edit mcp.json.",
+    legacySkillNote: (path: string) =>
+      `This is one of your own skills, stored at ${path}. To delete it, choose "Open folder" and move its folder away.`,
+    legacyMcpNote: "This is one of your MCP servers from mcp.json. To edit it, open mcp.json; to remove it, choose Remove.",
     conflictsTitle: "Conflicts — these don't load",
     problemsTitle: "Notes from reading it",
     problem: {

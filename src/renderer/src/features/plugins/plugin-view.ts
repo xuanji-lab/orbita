@@ -90,6 +90,12 @@ export function sourceKey(view: PluginView): "userSkill" | "userMcp" | "builtin"
   return kind === "link" ? "link" : kind === "git" ? "git" : kind === "builtin" ? "builtin" : "copy";
 }
 
+/** 旧 MCP 的「移除」按钮能不能出：插件页的 user-mcp 全部来自全局 mcp.json（工作区自带
+ *  的 `.mcp.json` 不进这张表），而 `mcp.remove` 恰好也只删全局文件——所以逐条都显示。 */
+export function canRemoveMcpView(view: Pick<PluginView, "origin">): boolean {
+  return view.origin === "user-mcp";
+}
+
 /** 随 Orbita 带的内置插件：可停用，不可卸载。 */
 export function isBuiltinView(view: PluginView): boolean {
   return view.install?.source.kind === "builtin";

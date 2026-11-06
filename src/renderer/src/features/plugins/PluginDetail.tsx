@@ -28,7 +28,7 @@ import {
   type SectionSignatures,
 } from "./detail-sections.ts";
 import { conflictText, problemText } from "./plugin-text.ts";
-import { isBuiltinView, sourceKey } from "./plugin-view.ts";
+import { canRemoveMcpView, isBuiltinView, sourceKey } from "./plugin-view.ts";
 
 const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
 
@@ -56,8 +56,9 @@ export function PluginDetail(props: {
   const draft = props.draftPath !== undefined && props.draftPath !== null;
   const parsed = parsePluginViewId(view.id);
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState<null | "reload" | "uninstall">(null);
+  // 行内二次确认正等着哪个动作：插件卸载或旧 MCP 移除；null = 没在确认
+  const [confirming, setConfirming] = useState<null | "plugin" | "mcp">(null);
+  const [busy, setBusy] = useState<null | "reload" | "uninstall" | "remove">(null);
   const [reloaded, setReloaded] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
 
@@ -335,7 +336,7 @@ export function PluginDetail(props: {
             {busy === "reload" ? t.reloading : reloaded ? t.reloaded : t.reload}
           </button>
           {!builtin && (
-            <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming(true)}>
+            <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming("plugin")}>
               <Icon name="trash-2" size={13} strokeWidth={1.8} />
               {t.uninstall}
             </button>
@@ -349,10 +350,19 @@ export function PluginDetail(props: {
         </button>
       )}
       {view.origin === "user-mcp" && (
-        <button type="button" className="pl-btn" onClick={() => void run(() => api.mcp.openConfig())}>
-          <Icon name="file-text" size={13} strokeWidth={1.8} />
-          {t.openMcpConfig}
-        </button>
+        <>
+          <button type="button" className="pl-btn" onClick={() => void run(() => api.mcp.openConfig())}>
+            <Icon name="file-text" size={13} strokeWidth={1.8} />
+            {t.openMcpConfig}
+          </button>
+          {/* 右栏的「MCP」面板已撤（PR #421）：删它只能落在这里或手改 mcp.json */}
+          {canRemoveMcpView(view) && (
+            <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => setConfirming("mcp")}>
+              <Icon name="trash-2" size={13} strokeWidth={1.8} />
+              {t.mcpRemove}
+            </button>
+          )}
+        </>
       )}
     </>
   );
@@ -384,33 +394,63 @@ export function PluginDetail(props: {
         {hasActions && <span className="pl-acts pl-acts-hero">{actionButtons}</span>}
       </div>
 
-      {confirming && (
-        <div className="pl-note danger" role="alertdialog" aria-label={t.uninstall}>
+      {confirming !== null && (
+        <div className="pl-note danger" role="alertdialog" aria-label={confirming === "mcp" ? t.mcpRemove : t.uninstall}>
           <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
           <div style={{ display: "grid", gap: "var(--space-2)" }}>
-            <span>{linked ? t.uninstallConfirmLink(view.name) : t.uninstallConfirm(view.name)}</span>
+            <span>
+              {confirming === "mcp"
+                ? t.mcpRemoveConfirm(view.name)
+                : linked
+                  ? t.uninstallConfirmLink(view.name)
+                  : t.uninstallConfirm(view.name)}
+            </span>
             <span style={{ display: "flex", gap: "var(--space-2)" }}>
-              <button
-                type="button"
-                className="pl-btn danger"
-                disabled={busy !== null}
-                onClick={() =>
-                  void run(async () => {
-                    setBusy("uninstall");
-                    try {
-                      await api.plugin.uninstall(pluginName);
-                      await props.onChanged();
-                      props.onUninstalled();
-                    } finally {
-                      setBusy(null);
-                      setConfirming(false);
-                    }
-                  })
-                }
-              >
-                {busy === "uninstall" ? t.uninstalling : t.uninstallAction}
-              </button>
-              <button type="button" className="pl-btn" onClick={() => setConfirming(false)}>
+              {confirming === "mcp" ? (
+                <button
+                  type="button"
+                  className="pl-btn danger"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void run(async () => {
+                      setBusy("remove");
+                      try {
+                        // 主进程写盘后自动重连；插件页里的 user-mcp 都来自全局 mcp.json，remove 够得着
+                        await api.mcp.remove(parsed?.key ?? view.name);
+                        await props.onChanged();
+                        props.onUninstalled();
+                      } finally {
+                        setBusy(null);
+                        setConfirming(null);
+                      }
+                    })
+                  }
+                >
+                  {busy === "remove" ? t.mcpRemoving : t.mcpRemoveAction}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="pl-btn danger"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void run(async () => {
+                      setBusy("uninstall");
+                      try {
+                        await api.plugin.uninstall(pluginName);
+                        await props.onChanged();
+                        props.onUninstalled();
+                      } finally {
+                        setBusy(null);
+                        setConfirming(null);
+                      }
+                    })
+                  }
+                >
+                  {busy === "uninstall" ? t.uninstalling : t.uninstallAction}
+                </button>
+              )}
+              <button type="button" className="pl-btn" onClick={() => setConfirming(null)}>
                 {messages.common.cancel}
               </button>
             </span>
@@ -428,7 +468,7 @@ export function PluginDetail(props: {
       {view.origin !== "plugin" && (
         <div className="pl-note">
           <Icon name="info" size={14} strokeWidth={1.8} />
-          <span>{view.origin === "user-skill" ? t.legacySkillNote : t.legacyMcpNote}</span>
+          <span>{view.origin === "user-skill" ? t.legacySkillNote(view.location ?? "") : t.legacyMcpNote}</span>
         </div>
       )}
 
