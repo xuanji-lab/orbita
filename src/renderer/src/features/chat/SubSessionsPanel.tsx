@@ -171,7 +171,7 @@ export function SubSessionsPanel(props: {
   }
 
   // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question / 审批）
-  // 最前，其次 failed、done、running，同组新的在前（sub-sessions-rows.ts）。
+  // 最前，其次 running、failed、done（2026-11-06 起在跑的提前），同组新的在前（sub-sessions-rows.ts）。
   // 最新一句来自通道账本（useParentChannels，上面已拉）。
   const rows = sortSubSessionRows(
     children.map((meta) => {
