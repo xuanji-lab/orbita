@@ -185,6 +185,8 @@ export interface PluginProblem {
     | "mcp-unreadable"
     /** 链接安装的源目录没了（用户挪走 / 删了）：记录还在，内容读不到 */
     | "root-missing"
+    /** 旧技能：链接还在、真身目录没了（在 Orbita 之外被挪走 / 改名）。detail 是技能目录名；详情里提示可清理断链引用 */
+    | "skill-folder-missing"
     /** `orbita.workflow` 写得不对（不是数组、某一步没有 title）：detail 是哪一步 / 哪个字段，那一步被跳过 */
     | "workflow-invalid"
     /** `orbita.io` 写得不对（不是对象、某项没有 path）：detail 是哪一项，那一项被跳过 */
