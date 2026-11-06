@@ -61,6 +61,11 @@ export function PluginDetail(props: {
   const [busy, setBusy] = useState<null | "reload" | "uninstall" | "remove">(null);
   const [reloaded, setReloaded] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
+  // 确认条一出现就把焦点给「取消」：误按回车不会删东西，Esc 也在这一层收回
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (confirming !== null) cancelRef.current?.focus();
+  }, [confirming]);
 
   // 草稿里刚变化的节高亮 2 秒：只比较各节自己的内容签名（标题 / 描述变了不亮）
   const signatures = useMemo(() => sectionSignatures(view), [view]);
@@ -96,7 +101,11 @@ export function PluginDetail(props: {
     link: t.sourceLink,
     git: t.sourceGit,
   }[source];
-  const by = draft ? [t.draftBy] : [view.author, view.version, view.license, sourceLabel].filter((part): part is string => part !== null && part !== "");
+  const by = draft
+    ? [t.draftBy]
+    : view.origin === "user-mcp"
+      ? [t.userMcpBy]
+      : [view.author, view.version, view.license, sourceLabel].filter((part): part is string => part !== null && part !== "");
   const isPlugin = view.origin === "plugin";
   const hasAbilities = sectionFilled(view, "abilities");
   const linked = view.install?.source.kind === "link";
@@ -304,7 +313,7 @@ export function PluginDetail(props: {
       </section>
     ) : null;
 
-  // 打开文件夹 / 重新载入 / 卸载：宽的时候在头部右侧，窄的时候收成末尾一张卡（CSS 二选一）
+  // 打开文件夹 / 重新载入 / 卸载：宽窄都在标题区下面这一处；点「卸载 / 移除」原地换成确认条
   const actionButtons = (
     <>
       {isPlugin && !draft && (
@@ -391,25 +400,30 @@ export function PluginDetail(props: {
             draft && <p className="pl-lead pl-ph-text">{t.phLead}</p>
           )}
         </div>
-        {hasActions && <span className="pl-acts pl-acts-hero">{actionButtons}</span>}
       </div>
 
-      {confirming !== null && (
-        <div className="pl-note danger" role="alertdialog" aria-label={confirming === "mcp" ? t.mcpRemove : t.uninstall}>
-          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
-          <div style={{ display: "grid", gap: "var(--space-2)" }}>
-            <span>
-              {confirming === "mcp"
-                ? t.mcpRemoveConfirm(view.name)
-                : linked
-                  ? t.uninstallConfirmLink(view.name)
-                  : t.uninstallConfirm(view.name)}
-            </span>
-            <span style={{ display: "flex", gap: "var(--space-2)" }}>
+      {hasActions &&
+        (confirming === null ? (
+          <div className="pl-acts">{actionButtons}</div>
+        ) : (
+          <div
+            className="pl-ic"
+            role="alertdialog"
+            aria-label={confirming === "mcp" ? t.mcpRemoveAsk : t.uninstallAsk(view.name)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                setConfirming(null);
+              }
+            }}
+          >
+            <div className="pl-ic-bar">
+              <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+              <span className="pl-ic-ask">{confirming === "mcp" ? t.mcpRemoveAsk : t.uninstallAsk(view.name)}</span>
               {confirming === "mcp" ? (
                 <button
                   type="button"
-                  className="pl-btn danger"
+                  className="pl-btn solid-danger"
                   disabled={busy !== null}
                   onClick={() =>
                     void run(async () => {
@@ -431,7 +445,7 @@ export function PluginDetail(props: {
               ) : (
                 <button
                   type="button"
-                  className="pl-btn danger"
+                  className="pl-btn solid-danger"
                   disabled={busy !== null}
                   onClick={() =>
                     void run(async () => {
@@ -450,13 +464,13 @@ export function PluginDetail(props: {
                   {busy === "uninstall" ? t.uninstalling : t.uninstallAction}
                 </button>
               )}
-              <button type="button" className="pl-btn" onClick={() => setConfirming(null)}>
+              <button type="button" className="pl-btn" ref={cancelRef} onClick={() => setConfirming(null)}>
                 {messages.common.cancel}
               </button>
-            </span>
+            </div>
+            <p className="pl-ic-hint">{confirming === "mcp" ? t.mcpRemoveHint : linked ? t.uninstallHintLink : t.uninstallHint}</p>
           </div>
-        </div>
-      )}
+        ))}
 
       {error !== null && (
         <div className="pl-note danger" role="alert">
@@ -465,10 +479,10 @@ export function PluginDetail(props: {
         </div>
       )}
 
-      {view.origin !== "plugin" && (
+      {view.origin === "user-skill" && (
         <div className="pl-note">
           <Icon name="info" size={14} strokeWidth={1.8} />
-          <span>{view.origin === "user-skill" ? t.legacySkillNote(view.location ?? "") : t.legacyMcpNote}</span>
+          <span>{t.legacySkillNote(view.location ?? "")}</span>
         </div>
       )}
 
@@ -507,13 +521,6 @@ export function PluginDetail(props: {
         </div>
       </div>
       {board}
-
-      {hasActions && (
-        <section className="pl-card pl-acts-card" data-sec="actions">
-          <div className="pl-card-h">{t.actionsTitle}</div>
-          <div className="pl-acts">{actionButtons}</div>
-        </section>
-      )}
     </div>
   );
 }
