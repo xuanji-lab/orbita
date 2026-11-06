@@ -1408,6 +1408,7 @@ export function App() {
                   keepAwake={settings.automationKeepAwake === true}
                   onKeepAwakeChange={(next) => changeSettings({ automationKeepAwake: next })}
                   focus={automationFocus}
+                  onFocusConsumed={() => setAutomationFocus(null)}
                   onOpenSession={(id) => {
                     setOverlay(null);
                     void session.openSession(id);
