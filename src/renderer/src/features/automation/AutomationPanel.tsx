@@ -64,6 +64,11 @@ export function AutomationPanel(props: {
   onKeepAwakeChange: (next: boolean) => void;
   /** 对话卡的「在右栏查看」：直接打开这一条的详情（nonce 递增，同一条重复点也生效） */
   focus: { id: string; nonce: number } | null;
+  /**
+   * 这次 focus 已经用掉：App 清回 null。不清的话面板每次重新挂载（关了右栏再点自动化）都会被
+   * 同一个 focus 再拉进那条的详情——2026-11-06 用户报「不管在哪个会话点自动化，都回到同一条」。
+   */
+  onFocusConsumed: () => void;
   onOpenSession: (sessionId: string) => void;
   /** 「在这条会话里说一句」：往输入框预填一句引导 */
   onAskInChat: () => void;
@@ -88,6 +93,8 @@ export function AutomationPanel(props: {
   useEffect(() => {
     if (props.focus === null) return;
     const target = state.automations.find((automation) => automation.id === props.focus?.id);
+    // 一次性：用完就让 App 清掉（见 onFocusConsumed）
+    props.onFocusConsumed();
     setMenuOpen(false);
     if (target === undefined) {
       setView({ kind: "list" });
