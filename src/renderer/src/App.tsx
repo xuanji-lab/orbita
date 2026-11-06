@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
 import { ExperimentalFeaturesContext } from "./experimental.ts";
@@ -34,7 +34,24 @@ import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
-import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import {
+  CLOSED_ENTRY,
+  composeEntry,
+  forgetMissing,
+  hasEntry,
+  hasSubLayer,
+  mergeLoaded,
+  parseMemoryFile,
+  parsePath,
+  recallEntry,
+  rememberEntry,
+  resolveSubSessionsSub,
+  taskTabOf,
+  toMemoryFile,
+  type PanelEntry,
+  type PanelMemory,
+  type PanelPath,
+} from "./shell/right-panel-memory.ts";
 import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
@@ -487,42 +504,32 @@ export function App() {
     subSessionsMainIdRef.current = nextMainId;
   }, [mainOpenId]);
 
-  // 每条会话记住自己离开时右栏开的是哪个面板（right-panel-memory.ts，用户
-  // 2026-10-18：「每个 session，应该记住自己离开的时候，右侧面板是啥」）。切主槽
-  // 会话的那一拍：把离开会话此刻的面板记下，再恢复目标会话记着的面板（没记过 =
-  // 关着）。只记种类、只记在 renderer 内存：文件面板里的标签不跟着恢复（切会话清
-  // 标签的既有设计不变），重启后都从「关着」起步，右栏宽度仍全局共用。首页
-  // （mainOpenId ""）不是会话：不记也不恢复，面板沿用当前值（与改前一致）。抽屉 /
-  // 辅助对话不开转例：右栏面板位属于主槽视图，一律按主槽会话记。
+  // 每条会话记住自己的右栏路径（right-panel-memory.ts，用户 2026-10-18：「每个 session，应该记住自己离开的
+  // 时候，右侧面板是啥」；2026-11-07：「这个树节点要往下探呀」）：开着哪个面板，再往下一层
+  // （进了哪个插件 / 哪条自动化 / 哪个页签……由面板经 sub + onSubChange 报上来）。
+  // 面板一变就写进记忆（见下方「写穿」），切主槽会话的那一拍只管**取**：恢复目标会话
+  // 记着的路径（没记过 = 关着），并换新右栏的 epoch——面板内容的 key 带着它，切会话必定重挂，
+  // 面板里的状态只从记忆里来、不会从上一条会话原样带过去。
+  // 文件面板的标签仍不跟着恢复（切会话清标签的既有设计），终端 / 辅助对话状态全局共用，三者不重挂、不记第二层。
+  // 记忆落盘到 <userData>/right-panel-memory.json（防抖），重启后保留；右栏宽度仍全局共用。
+  // 首页（mainOpenId ""）不是会话：不记；回到首页面板关着（与改前一致）。抽屉 / 辅助对话不开转例：
+  // 右栏面板位属于主槽视图，一律按主槽会话记。
   // rightPanel 进依赖是为了让切换那一拍读到「离开时」的面板值；面板自身变化时
   // previous === mainOpenId 早退，自然空跑
   const panelMemoryRef = useRef<PanelMemory>(new Map());
   /** 下一次右栏变化是「按会话恢复」而不是用户打开的（面板打开次数要跳过它） */
   const panelRestoredRef = useRef(false);
   const panelMainIdRef = useRef(mainOpenId);
+  /** 右栏此刻属于哪条会话（null = 首页 / 还没有会话，不写记忆）与第几次恢复；面板内容的 key 用 */
+  const [railCtx, setRailCtx] = useState<{ owner: string | null; epoch: number }>(() => ({ owner: mainOpenId === "" ? null : mainOpenId, epoch: 0 }));
+  /** 当前面板自己报上来的「停在哪一层」；panel 与 rightPanel 不一致的那份是过期的，下面的 effect 会清掉 */
+  const [railPath, setRailPath] = useState<PanelPath>(CLOSED_ENTRY);
   /**
    * 一次性：恢复成这个面板，而不是会话自己的记忆。`sessionId` 为 null = 下一条**还没记过面板的新会话**拿到 id 时
    * （「和智能体一起做一个」用）；给了 id = 只在切到**那一条**会话时（「正在做」的「回到对话」用：它早就有自己的面板记忆）。
    * 只带这一次，之后切会话照会话记忆。
    */
   const carryPanelRef = useRef<{ panel: RightPanelKind; sessionId: string | null } | null>(null);
-  useEffect(() => {
-    const previous = panelMainIdRef.current;
-    panelMainIdRef.current = mainOpenId;
-    if (previous === mainOpenId) return;
-    const sessionOf = (id: string): string | null => (id === "" ? null : id);
-    panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
-    const target = sessionOf(mainOpenId);
-    let recalled = recallPanel(panelMemoryRef.current, target);
-    const carry = carryPanelRef.current;
-    if (carry !== null && target !== null && (carry.sessionId === null ? !panelMemoryRef.current.has(target) : carry.sessionId === target)) {
-      recalled = carry.panel;
-      carryPanelRef.current = null;
-    }
-    // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
-    if (recalled !== rightPanel) panelRestoredRef.current = true;
-    setRightPanel(recalled);
-  }, [mainOpenId, rightPanel]);
 
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
   // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
@@ -1084,6 +1091,112 @@ export function App() {
     setRightPanel("automation");
     if (automationId !== undefined) setAutomationFocus((current) => ({ id: automationId, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
+
+  // ── 右栏路径：恢复 / 写穿 / 落盘（right-panel-memory.ts；说明见上方 panelMemoryRef）──────────
+  const sessionsRef = useRef(session.sessions);
+  sessionsRef.current = session.sessions;
+  /** 面板换了：上一个面板报的第二层作废（面板自己挂上后会报新的） */
+  useEffect(() => {
+    setRailPath((current) => (current.panel === rightPanel ? current : (parsePath({ panel: rightPanel }) ?? CLOSED_ENTRY)));
+  }, [rightPanel]);
+  /** 点开的草稿属于插件面板：面板换走就放下（同其余面板「换走回到根」） */
+  useEffect(() => {
+    if (rightPanel !== "plugins") setOpenedDraft(null);
+  }, [rightPanel]);
+  // 切主槽会话：恢复目标会话记着的路径（没记过 = 关着）。面板、页签、第二层、子会话面板的层、
+  // 草稿在同一批里设好；epoch +1 让面板内容重挂。一次性信号（审查定位、记忆页签、「/ + 空格」选取态）
+  // 都属于离开的那条会话，不带过去——否则重挂后会拿着旧会话的路径去定位
+  useEffect(() => {
+    const previous = panelMainIdRef.current;
+    panelMainIdRef.current = mainOpenId;
+    if (previous === mainOpenId) return;
+    const target = mainOpenId === "" ? null : mainOpenId;
+    let recalled: PanelEntry = recallEntry(panelMemoryRef.current, target);
+    const carry = carryPanelRef.current;
+    if (carry !== null && target !== null && (carry.sessionId === null ? !hasEntry(panelMemoryRef.current, target) : carry.sessionId === target)) {
+      const bare = parsePath({ panel: carry.panel }) ?? CLOSED_ENTRY;
+      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      carryPanelRef.current = null;
+    }
+    const nextTab = taskTabOf(recalled);
+    // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
+    if (recalled.panel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
+    const children = new Set(target === null ? [] : childSessions(sessionsRef.current, target).map((meta) => meta.id));
+    const nav = recalled.panel === "subsessions" ? resolveSubSessionsSub(recalled.sub, children) : undefined;
+    setRightPanel(recalled.panel);
+    setTaskTab(nextTab);
+    setRailPath(parsePath(recalled) ?? CLOSED_ENTRY);
+    setOpenedDraft(recalled.panel === "plugins" ? (recalled.sub?.draft ?? null) : null);
+    setSubSessionsNav(nav === undefined ? SUB_SESSIONS_LIST : openSubSession(nav.sessionId));
+    setReviewFocus(null);
+    setMemoryFocus(null);
+    setTokenPickerOn(false);
+    tokenPickAnchorRef.current = null;
+    setRailCtx((current) => ({ owner: target, epoch: current.epoch + 1 }));
+  }, [mainOpenId, rightPanel, taskTab]);
+
+  // 写穿：右栏路径一变就记进这条会话的记忆（不等切走那一拍——切会话时离开的会话已经是最新）
+  const memoryLoadedRef = useRef(false);
+  const [memoryLoaded, setMemoryLoaded] = useState(false);
+  const saveTimerRef = useRef<number | null>(null);
+  const flushMemory = useCallback((): void => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    if (!memoryLoadedRef.current) return; // 旧记忆还没读回来：现在写会把它覆盖掉
+    void api.rightPanelMemory.save(toMemoryFile(panelMemoryRef.current)).catch(() => undefined);
+  }, []);
+  /** 防抖 1 秒落盘：连着点几下面板只写一次；失败就算了（便利功能，不值得打扰用户） */
+  const scheduleMemorySave = useCallback((): void => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(flushMemory, 1000);
+  }, [flushMemory]);
+  const openedSubSessionId = subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
+  useEffect(() => {
+    if (railCtx.owner === null) return;
+    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab });
+    const next = rememberEntry(panelMemoryRef.current, railCtx.owner, entry);
+    if (next === panelMemoryRef.current) return;
+    panelMemoryRef.current = next;
+    scheduleMemorySave();
+  }, [railCtx.owner, rightPanel, railPath, openedDraft, openedSubSessionId, taskTab, scheduleMemorySave]);
+  // 启动读一次上次的记忆；读回来之前本次运行已记下的（极少）压在上面
+  useEffect(() => {
+    let cancelled = false;
+    void api.rightPanelMemory
+      .load()
+      .catch(() => null)
+      .then((file) => {
+        if (cancelled) return;
+        const hadCurrent = panelMemoryRef.current.size > 0;
+        panelMemoryRef.current = mergeLoaded(parseMemoryFile(file), panelMemoryRef.current);
+        memoryLoadedRef.current = true;
+        setMemoryLoaded(true);
+        if (hadCurrent) scheduleMemorySave();
+      });
+    const onUnload = (): void => flushMemory();
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [flushMemory, scheduleMemorySave]);
+  // 会话被删：顺手清掉它的条目。列表为空（还没读回 / 读失败）时不清——否则一次失败会抹掉全部记忆
+  useEffect(() => {
+    if (!memoryLoaded || !session.sessionsLoaded || session.sessions.length === 0) return;
+    const alive = new Set(session.sessions.map((meta) => meta.id));
+    if (mainOpenId !== "") alive.add(mainOpenId);
+    const next = forgetMissing(panelMemoryRef.current, alive);
+    if (next === panelMemoryRef.current) return;
+    panelMemoryRef.current = next;
+    scheduleMemorySave();
+  }, [memoryLoaded, session.sessions, session.sessionsLoaded, mainOpenId, scheduleMemorySave]);
+  /** 面板报上来的第二层：只收当前面板的（面板收起动画里的残余报告不算） */
+  const rightPanelRef = useRef(rightPanel);
+  rightPanelRef.current = rightPanel;
+  const reportRailPath = useCallback((path: PanelPath): void => {
+    if (path.panel !== rightPanelRef.current) return;
+    setRailPath((current) => (JSON.stringify(current) === JSON.stringify(path) ? current : path));
+  }, []);
   /**
    * 新手引导：全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次；
    * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 通用「再看一遍」打开（不改这个键）。
@@ -1362,6 +1475,10 @@ export function App() {
                 animation: "right-panel-fade 120ms var(--ease-out-quint)",
               }}
             >
+              {/* 带第二层的面板：key 带上「属于哪条会话 + 第几次恢复」，切会话必定重挂，状态只从记忆里来
+                  （不会把上一条会话停的那一层原样带过去）；淡入动画仍只跟面板种类走。
+                  文件 / 终端 / 辅助对话不重挂（它们的状态本就全局共用或另有清理） */}
+              <Fragment key={hasSubLayer(shownPanel) ? `${railCtx.owner ?? ""}#${railCtx.epoch}` : "-"}>
               {shownPanel === "files" ? (
                 <FilesPanel
                 session={session}
@@ -1382,6 +1499,8 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   onOpenInFiles={focus.openFile}
                   memoryFocus={memoryFocus}
+                  {...(railPath.panel === "review" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "review", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "automation" ? (
                 <AutomationPanel
@@ -1400,6 +1519,8 @@ export function App() {
                     void session.openSession(id);
                   }}
                   onAskInChat={() => session.setDraft(t.automation.addByChatDraft)}
+                  {...(railPath.panel === "automation" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "automation", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "terminal" ? (
                 <TerminalPanel
@@ -1433,6 +1554,8 @@ export function App() {
                   cwd={session.cwd ?? ""}
                   tab={taskTab}
                   onTab={setTaskTab}
+                  {...(railPath.panel === "context" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
                   carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status !== "done")}
                   onSetCarryoverStatus={session.setCarryoverStatus}
@@ -1454,6 +1577,8 @@ export function App() {
                   onOpenDraft={openPluginDraft}
                   onOpenSession={openDraftSession}
                   picker={tokenPickerOn ? tokenPicker : undefined}
+                  {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
@@ -1468,6 +1593,8 @@ export function App() {
                   liveTurnIds={intentLiveTurnIds}
                   openableSessionIds={intentOpenableIds}
                   onOpenSession={openInSideChat}
+                  {...(railPath.panel === "intent" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "intent", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
@@ -1485,6 +1612,7 @@ export function App() {
                   onToggleStarModel={toggleStarModel}
                 />
               ) : null}
+              </Fragment>
             </div>
           </RightPanelSlot>
         </main>

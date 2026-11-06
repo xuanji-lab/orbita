@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type {
   ContextAttachRow,
   ContextFileDir,
@@ -29,6 +29,8 @@ import {
   type ContextGroupKey,
   type ContextGroupSummary,
 } from "./context-panel-view.ts";
+import { contextSubOf, DEFAULT_COLLAPSED, type ContextSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 import "./context-panel.css";
 
 /**
@@ -65,9 +67,28 @@ export function ContextPanel(props: {
   onDoCarryoverNow: (item: Carryover) => void;
   /** 「带着目标开新会话」（App 的 startGoalTask） */
   onStartGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
+  /**
+   * 上下文页签的第二层（按会话记忆，right-panel-memory.ts）：「本轮 / 整个任务」视野、折叠的组。
+   * 进度 / 上下文页签本身由 App 按会话记（tab / onTab）。只在挂载时读一次当初值（App 按会话换 key 重挂）。
+   */
+  sub?: ContextSub;
+  onSubChange?: (sub: ContextSub | undefined) => void;
 }) {
   const t = useT();
-  const [scope, setScope] = useState<ContextScope>("turn");
+  const [scope, setScope] = useState<ContextScope>(() => props.sub?.scope ?? "turn");
+  /** 折叠的组：规则组默认收着（每轮都在、量大但用户最少需要看）；记在这里（而不是 ContextBody），好让它随会话被记住 */
+  const [collapsed, setCollapsed] = useState<ReadonlySet<ContextGroupKey>>(() => new Set(props.sub?.collapsed ?? DEFAULT_COLLAPSED));
+  const toggleGroup = useCallback(
+    (key: ContextGroupKey): void =>
+      setCollapsed((current) => {
+        const next = new Set(current);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      }),
+    [],
+  );
+  useReportSub(contextSubOf(scope, collapsed), props.onSubChange);
   // 页签就是标题（同审查面板）：「进度 / 上下文」；口径说明「?」只在上下文页签有意义
   const header = (
     <div className="cap-review-head tabs-as-title">
@@ -117,14 +138,22 @@ export function ContextPanel(props: {
               {t.contextPanel.scopeTask}
             </Chip>
           </div>
-          <ContextBody sessionId={props.sessionId} entry={props.entry} cwd={props.cwd} scope={scope} />
+          <ContextBody sessionId={props.sessionId} entry={props.entry} cwd={props.cwd} scope={scope} collapsed={collapsed} onToggleGroup={toggleGroup} />
         </>
       )}
     </RightPanelFrame>
   );
 }
 
-function ContextBody(props: { sessionId: string; entry: SessionEntry; cwd: string; scope: ContextScope }) {
+function ContextBody(props: {
+  sessionId: string;
+  entry: SessionEntry;
+  cwd: string;
+  scope: ContextScope;
+  /** 折叠的组（状态在 ContextPanel，随会话被记住） */
+  collapsed: ReadonlySet<ContextGroupKey>;
+  onToggleGroup: (key: ContextGroupKey) => void;
+}) {
   const t = useT();
   const view = useContextInventory(props.sessionId, props.entry, props.cwd, props.scope);
   const { inventory } = view;
@@ -132,15 +161,8 @@ function ContextBody(props: { sessionId: string; entry: SessionEntry; cwd: strin
   const bar = contextBar(groups, props.entry.stats?.contextUsage ?? null);
   /** 悬停中的组：条上对应那段点亮 */
   const [lit, setLit] = useState<ContextGroupKey | null>(null);
-  /** 折叠的组：规则组默认收着（每轮都在、量大但用户最少需要看） */
-  const [collapsed, setCollapsed] = useState<ReadonlySet<ContextGroupKey>>(() => new Set(["rules"]));
-  const toggle = (key: ContextGroupKey): void =>
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  const { collapsed } = props;
+  const toggle = props.onToggleGroup;
   const sourceGroups = groups.filter((group) => group.key !== "rules");
   return (
     <div className="ctx-body">
