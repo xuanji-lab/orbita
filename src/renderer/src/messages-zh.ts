@@ -2305,6 +2305,11 @@ export const zh: Messages = {
       `卸载 ${name}？它会在所有工作区停止加载，并从这个列表里移走。你的源文件夹不会被动；填过的密钥会清掉。`,
     uninstallAction: "卸载",
     uninstalling: "正在卸载…",
+    mcpRemove: "移除…",
+    mcpRemoveConfirm: (name) =>
+      `从 mcp.json 里删掉「${name}」这一条？它会在所有工作区停止加载；程序本身不会被删。`,
+    mcpRemoveAction: "移除",
+    mcpRemoving: "正在移除…",
     actionFailed: (message) => `没做成：${message}`,
     abilitiesTitle: "它能做什么",
     abilitiesHint: "在 orbita 里",
@@ -2380,8 +2385,9 @@ export const zh: Messages = {
     sourceCopyLine: (path) => `复制自 ${path}`,
     sourceLinkLine: (path) => `链接到 ${path}`,
     sourceGitLine: (url) => url,
-    legacySkillNote: "这是你自己的技能。要删除它，请用右栏的「技能」面板。",
-    legacyMcpNote: "这是你在 mcp.json 里配的 MCP。要改或删，请用右栏的「MCP」面板，或直接编辑 mcp.json。",
+    legacySkillNote: (path) =>
+      `这是你自己的技能，放在 ${path}。要删除，点「打开文件夹」，把它的文件夹挪走即可。`,
+    legacyMcpNote: "这是你在 mcp.json 里配的 MCP。要改，点「打开 mcp.json」直接编辑；要删，点「移除」。",
     conflictsTitle: "冲突 · 下面这些没有加载",
     problemsTitle: "读取时发现的",
     problem: {
