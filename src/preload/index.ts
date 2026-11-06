@@ -8,6 +8,7 @@ import { automationApi } from "./api/automation.ts";
 import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
@@ -48,6 +49,7 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  docs: docsApi,
   focus: focusApi,
   notify: notifyApi,
   terminal: terminalApi,
