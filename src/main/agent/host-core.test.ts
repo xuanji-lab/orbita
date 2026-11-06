@@ -465,6 +465,35 @@ describe("answerModelCosts —— 派发参考的回执", () => {
   });
 });
 
+describe("answerAutomation —— 自动化工具请求的回执", () => {
+  test("成功回执逐字段带上卡、列表与「改权限」那一行（漏了行，工具结果里就没有那一行）；失败只带 error", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    const card = {
+      id: "au1",
+      title: "每日一篇",
+      schedule: { kind: "daily" as const, time: "08:00" },
+      target: "new_session" as const,
+      status: "active" as const,
+      nextRunAt: 1,
+      runCount: 0,
+    };
+    const modeRow = { state: "pending" as const, requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" as const };
+    ctx.host.answerAutomation("q1", { ok: true, text: "NOT changed", automation: card, modeRow });
+    ctx.host.answerAutomation("q2", { ok: true, text: "list", automations: [card] });
+    ctx.host.answerAutomation("q3", { ok: false, error: "No such automation" });
+    assert.deepEqual(ctx.child().posted.at(-3), { type: "automationResult", requestId: "q1", ok: true, text: "NOT changed", automation: card, modeRow });
+    assert.deepEqual(ctx.child().posted.at(-2), { type: "automationResult", requestId: "q2", ok: true, text: "list", automations: [card] });
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "automationResult", requestId: "q3", ok: false, error: "No such automation" });
+  });
+});
+
 describe("answerDelegate / answerChannelSend —— 子会话请求的回执", () => {
   test("answerDelegate：成功带 childId/title/card，失败只带 error；进程没了就静默", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });

@@ -657,6 +657,8 @@ export class AgentHostCore {
             text: outcome.text,
             ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
+            // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
+            ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
