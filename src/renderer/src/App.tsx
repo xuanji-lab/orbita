@@ -1120,8 +1120,8 @@ export function App() {
   // 开关关掉：面板位上若正开着自动化面板就收起（入口一并从右栏消失）
   if (!automationOn && rightPanel === "automation") setRightPanel(null);
   const automationUi = useMemo<AutomationUi>(
-    () => ({ automations: automations.automations, openPanel: openAutomationPanel, act: automations.act }),
-    [automations.automations, automations.act, openAutomationPanel],
+    () => ({ automations: automations.automations, loaded: automations.load.kind === "ready", openPanel: openAutomationPanel, act: automations.act }),
+    [automations.automations, automations.load.kind, automations.act, openAutomationPanel],
   );
   // 运行会话 id 集：按**内容**稳定——会话列表每跑完一轮都会换新数组，集合没变就别让订阅它的每条用户消息重渲染
   const runSessionKey = session.sessions

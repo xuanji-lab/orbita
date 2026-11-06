@@ -8,6 +8,8 @@ import type { Automation, AutomationAction, AutomationOutcome } from "../../../.
  */
 export interface AutomationUi {
   automations: readonly Automation[];
+  /** 列表读到过了（没读到时对话里的行按落盘时的样子画，不闪成「已不存在」） */
+  loaded: boolean;
   /** 打开右栏自动化面板；给 id 就定位到那一条并展开 */
   openPanel: (automationId?: string) => void;
   act: (id: string, action: AutomationAction) => Promise<AutomationOutcome>;
@@ -15,6 +17,7 @@ export interface AutomationUi {
 
 const EMPTY: AutomationUi = {
   automations: [],
+  loaded: false,
   openPanel: () => undefined,
   act: async () => ({ ok: false, error: "Automations are unavailable here." }),
 };

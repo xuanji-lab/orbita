@@ -57,6 +57,7 @@ import {
   delegateCard,
   pluginBoardOf,
   pluginInstallRowOf,
+  automationModeRowOf,
   handoffOutcome,
   editDiffText,
   failedFoldKey,
@@ -144,6 +145,7 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
+import { AutomationModeLine } from "../automation/AutomationModeLine";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
 import { AutomationWakeLine } from "../automation/AutomationWakeLine";
@@ -4408,7 +4410,13 @@ function ToolLine(props: {
   // 「派出中」而不是「失败了」。
   // 自动化：automation_create 的结果是一张卡（在右栏查看 / 暂停）；失败照通用骨架走
   if (props.toolName === "automation_create" && !failed) {
-    return <AutomationToolLine result={result} interrupted={interrupted} />;
+    return <AutomationToolLine result={result} interrupted={interrupted} sessionId={props.sessionId} />;
+  }
+  // automation_update：留下的是一行「已改成放行 [改回只读]」或「让它到点能写文件？[允许] [保持只读]」；
+  // 失败 / 没留行（改成只读、本来就是放行）/ 还在跑照通用骨架走
+  if (props.toolName === "automation_update") {
+    const modeRow = automationModeRowOf(result);
+    if (modeRow !== null) return <AutomationModeLine row={modeRow} sessionId={props.sessionId ?? null} />;
   }
   if (props.toolName === "delegate" && !failed) {
     return (
