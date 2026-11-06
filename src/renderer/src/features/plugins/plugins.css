@@ -174,6 +174,20 @@
   color: var(--color-danger);
 }
 
+/* 确认条里真正执行删除的那一个：实心红（--color-danger-solid 是为白字调过的深红，深浅主题都够对比度） */
+.pl-btn.solid-danger {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+  box-shadow: none;
+  font-weight: var(--weight-semibold);
+}
+
+.pl-btn.solid-danger:hover {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+  filter: brightness(1.1);
+}
+
 .pl-btn:disabled,
 .pl-btn.btn-accent:disabled {
   background: transparent;
@@ -724,21 +738,48 @@
   color: var(--color-text-primary);
 }
 
-/* 头部右侧的操作（宽时）/ 末尾的操作卡（窄时）：按钮多了就换行 */
+/* 标题区下面的操作行：宽窄都在这一处；按钮多了就换行 */
 .pl-acts {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-.pl-acts-hero {
-  flex: none;
-  justify-content: flex-end;
+/* 行内二次确认：就在按钮那一行原地换成这条（红底 + 实心红主按钮 + 取消），后果小字挂在下面 */
+.pl-ic {
+  display: grid;
+  gap: var(--space-1);
 }
 
-/* 宽时操作在头部右侧，这张卡藏起来；窄档才显示（.pl-card 的 display: grid 在后面，要加一级选择器压过它） */
-.pl-card.pl-acts-card {
-  display: none;
+.pl-ic-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-danger-soft);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.pl-ic-bar .orbita-icon {
+  flex: none;
+  color: var(--color-danger);
+}
+
+.pl-ic-ask {
+  flex: 1 1 8em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-ic-hint {
+  margin: 0;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
 }
 
 .pl-cols {
@@ -1697,12 +1738,4 @@ button.pl-wf-chip:hover {
     order: 8;
   }
 
-  .pl-detail > .pl-card.pl-acts-card {
-    display: grid;
-    order: 9;
-  }
-
-  .pl-acts-hero {
-    display: none;
-  }
 }
