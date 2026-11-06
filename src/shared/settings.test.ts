@@ -733,3 +733,12 @@ describe("parseSettings 的 intent（实验功能 intent-system）", () => {
     deepStrictEqual(effectiveIntentSettings({ baseUrl: "http://localhost:9000//" }).baseUrl, "http://localhost:9000");
   });
 });
+
+describe("parseSettings 的 docPaper", () => {
+  it("只认三个纸面；乱值丢掉（缺席 = quiet）", () => {
+    for (const paper of ["quiet", "print", "focus"]) deepStrictEqual(parseSettings({ docPaper: paper }).docPaper, paper);
+    deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
+    deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
+    deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});

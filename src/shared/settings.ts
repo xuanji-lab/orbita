@@ -244,6 +244,11 @@ export interface AppSettings {
    */
   onboardingSeen?: boolean;
   /**
+   * 文档 / 演示文稿编辑面板的「纸面」：同一套结构与交互，只换样式变量（安静编辑台 / 印刷版式 /
+   * 专注写作）。缺席 = quiet（守 design-system 的默认）。只认三个已知值，手改的乱值丢掉。
+   */
+  docPaper?: DocPaper;
+  /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
    * 只认布尔——这个文件手改得到，`"yes"` 该被丢掉而不是当成真。
@@ -406,6 +411,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
+export const DOC_PAPERS = ["quiet", "print", "focus"] as const;
+export type DocPaper = (typeof DOC_PAPERS)[number];
+export const isDocPaper = (value: unknown): value is DocPaper =>
+  typeof value === "string" && (DOC_PAPERS as readonly string[]).includes(value);
+
 export type SettingsPatch = Partial<
   Omit<
     AppSettings,
@@ -565,6 +575,7 @@ export function parseSettings(raw: unknown): AppSettings {
     processView?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
+    docPaper?: unknown;
     gitAttribution?: unknown;
     planFirst?: unknown;
     choreModel?: unknown;
@@ -654,6 +665,7 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     // 同上：非布尔丢掉，缺席 = 没看过新手引导
     ...(typeof record.onboardingSeen === "boolean" ? { onboardingSeen: record.onboardingSeen } : {}),
+    ...(isDocPaper(record.docPaper) ? { docPaper: record.docPaper } : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
