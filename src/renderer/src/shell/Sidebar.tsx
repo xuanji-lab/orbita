@@ -47,6 +47,7 @@ import {
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
 import { useT } from "../locale.ts";
+import { startPointerDrag } from "./pointer-drag.ts";
 import { ExperimentalFeaturesContext } from "../experimental.ts";
 import type { Messages } from "../messages-en.ts";
 
@@ -492,32 +493,21 @@ export function Sidebar(props: {
    * 对话面（`main.pane`）是 `flex: 1`，侧栏变宽它自己就让出来——用户要的正是
    * 「靠右侧 chat view 的宽度来调节」（2026-09-22 wafo）。
    */
-  const startResize = (event: React.PointerEvent): void => {
-    if (event.button !== 0) return;
+  const startResize = (event: React.PointerEvent<HTMLElement>): void => {
     const aside = asideRef.current;
     if (aside === null) return;
-    event.preventDefault();
-    setResizing(true);
-    const startX = event.clientX;
     const startWidth = aside.getBoundingClientRect().width;
     const clamp = (value: number): number =>
       Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(value)));
-    const previousSelect = document.body.style.userSelect;
-    const previousCursor = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    const move = (ev: PointerEvent): void => {
-      props.onWidthChange(clamp(startWidth + (ev.clientX - startX)));
-    };
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener("pointermove", move);
-      document.body.style.userSelect = previousSelect;
-      document.body.style.cursor = previousCursor;
-      setResizing(false);
-      props.onWidthCommit(clamp(startWidth + (ev.clientX - startX)));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    const started = startPointerDrag(event, {
+      cursor: "col-resize",
+      onMove: (delta) => props.onWidthChange(clamp(startWidth + delta.x)),
+      onEnd: (delta) => {
+        setResizing(false);
+        props.onWidthCommit(clamp(startWidth + delta.x));
+      },
+    });
+    if (started) setResizing(true);
   };
 
   // —— 收起态：什么都不渲染，主区域向左铺满。侧栏开关与新任务住工具栏左胶囊

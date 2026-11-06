@@ -57,7 +57,7 @@ const TOAST_MS = 1800;
 export const BOARD_CAPTION_HEIGHT = 22;
 
 export type BoardGridMode =
-  /** 量自己的宽度：< 560px 一行 2 格，否则 4 格 */
+  /** 量自己的宽度：一行固定 2 格，u = (宽 − 间距) ÷ 2 */
   | { mode: "container" }
   /** 格宽（可选格高）与列宽由外面给：周看板的一天。`columns` 缺省按卡里最宽的算 */
   | { mode: "column"; cellWidth: number; cellHeight?: number; columns?: 1 | 2; gap?: number };
