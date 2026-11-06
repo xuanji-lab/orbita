@@ -521,6 +521,30 @@ export type PluginDraftSnapshot =
   | { kind: "unavailable"; stamp: string; reason: "not-found" | "outside-workspace" }
   | { kind: "ready"; stamp: string; view: PluginView };
 
+/**
+ * 「正在做」列表的一行（`plugin:drafts`）：某个工作区 `plugins/<文件夹>/` 下**有清单、但还没安装**的插件文件夹。
+ * 用户中途离开、之后回来「有空把它做完」的入口——草稿没有别的存在形式（只是磁盘上的一个文件夹）。
+ * 路径是 realpath 之后落在该工作区根内的真实路径（可以原样交给 `plugin:draft-load`）。
+ */
+export interface PluginDraftEntry {
+  workspaceId: string;
+  /** 插件文件夹的真实路径 */
+  path: string;
+  /** 清单 name；没写用文件夹名（小写） */
+  name: string;
+  /** 清单 displayName；没写同 name */
+  displayName: string;
+  description: string;
+  /** 文件夹里最近一次改动的时间（毫秒时间戳） */
+  updatedAt: number;
+  /** 最近一次对它 preview_plugin 的会话；没记过 / 会话已删为 null */
+  sessionId: string | null;
+  /** 那条会话的标题；会话没了、或还没有标题为 null */
+  sessionTitle: string | null;
+  /** 清单读不出来 / 写坏了的原文（草稿还在写时常见）；清单没问题为 null */
+  manifestProblem: string | null;
+}
+
 /** list_plugins 的一行：这条会话能用的真插件（含内置）；旧技能 / 旧 MCP 不列（技能索引里本来就有）。 */
 export interface PluginAgentListItem {
   name: string;
