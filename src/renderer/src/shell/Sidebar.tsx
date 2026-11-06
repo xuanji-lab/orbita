@@ -21,8 +21,6 @@ import { childSessions, isSessionDone, rootSessions, type Carryover, type Sessio
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
 import { visibleSettingsTabs, type SettingsTab } from "../features/settings/settings-tabs.ts";
-import type { MemoryScopeSummary } from "@shared/memory";
-import type { MemoryNav } from "../features/memory/memory-view.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
@@ -55,7 +53,7 @@ import type { Messages } from "../messages-en.ts";
  * 两者互斥，所以是联合类型而不是几个 boolean。插件页不在这里：右栏单列版走右栏面板位，
  * 全屏版是设置页的一个页签。
  */
-export type Overlay = "settings" | "memory" | "board" | null;
+export type Overlay = "settings" | "board" | null;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -147,13 +145,6 @@ export function Sidebar(props: {
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
   /**
-   * 记忆库盖层（实验功能 memory-system）下侧栏换成它的导航：范围（全部 / 所有工作区 /
-   * 各工作区）+ 管理（向量模型）。数据由 App 拉（页面本体也要用）。
-   */
-  memoryNav: MemoryNav;
-  onMemoryNav: (next: MemoryNav) => void;
-  memoryScopes: readonly MemoryScopeSummary[] | null;
-  /**
    * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
    * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
    * 主列表区，不弹窗。
@@ -214,9 +205,8 @@ export function Sidebar(props: {
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
-  const memoryOpen = props.overlay === "memory";
-  /** 任一整页盖层（设置 / 记忆库）开着：主列表、筛选行、子视图都让位 */
-  const overlayOpen = props.overlay === "settings" || props.overlay === "memory";
+  /** 任一整页盖层（设置）开着：主列表、筛选行、子视图都让位 */
+  const overlayOpen = props.overlay === "settings";
   /**
    * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
    * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
@@ -728,36 +718,6 @@ export function Sidebar(props: {
               open(id);
             }}
           />
-        ) : memoryOpen ? (
-          <>
-            <NodeLabel>{t.memory.navScopes}</NodeLabel>
-            <NavRow
-              icon="layers"
-              label={t.memory.navAll}
-              active={props.memoryNav.kind === "scope" && props.memoryNav.token === "all"}
-              count={props.memoryScopes?.reduce((sum, scope) => sum + scope.count, 0)}
-              onClick={() => props.onMemoryNav({ kind: "scope", token: "all" })}
-            />
-            {(props.memoryScopes ?? []).map((scope) => (
-              <NavRow
-                key={scope.token}
-                icon={scope.kind === "user" ? "user" : scope.kind === "missing" ? "archive" : "folder"}
-                label={scope.kind === "user" ? t.memory.scopeUser : scope.name}
-                {...(scope.kind === "missing" ? { hint: t.memory.scopeMissingHint(scope.path ?? scope.name) } : {})}
-                active={props.memoryNav.kind === "scope" && props.memoryNav.token === scope.token}
-                count={scope.count}
-                onClick={() => props.onMemoryNav({ kind: "scope", token: scope.token })}
-              />
-            ))}
-            <span style={{ display: "block", height: "var(--space-3)" }} />
-            <NodeLabel>{t.memory.navManage}</NodeLabel>
-            <NavRow
-              icon="cpu"
-              label={t.memory.vector}
-              active={props.memoryNav.kind === "vector"}
-              onClick={() => props.onMemoryNav({ kind: "vector" })}
-            />
-          </>
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
@@ -1456,10 +1416,6 @@ function NavRow(props: {
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
   /** 状态饼的悬停说明（状态的可读名字） */
   barTitle?: string;
-  /** 行尾的条数（记忆库导航）；undefined = 不画。钉在行右内边距（.row-trailing） */
-  count?: number | undefined;
-  /** 条数的颜色（待你确认用警示色——颜色是第二信号，名字已经说了是什么） */
-  countTone?: string;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1518,19 +1474,6 @@ function NavRow(props: {
       >
         {props.label}
       </span>
-      {props.count !== undefined && (
-        <span
-          className="row-trailing"
-          style={{
-            fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-xs)",
-            fontVariantNumeric: "tabular-nums",
-            color: props.countTone ?? "var(--color-text-tertiary)",
-          }}
-        >
-          {props.count}
-        </span>
-      )}
     </button>
   );
 }

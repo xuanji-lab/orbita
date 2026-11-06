@@ -54,7 +54,7 @@ export type RightPanelKind =
  * 它们在条上的分组与精简态去留不由调用方定，由 RightRail 按 id 登记（见本文件的 `items`）。
  */
 export interface RailEntry {
-  id: "carryovers" | "archived" | "browser" | "memory" | "board" | "settings";
+  id: "carryovers" | "archived" | "browser" | "board" | "settings";
   icon: IconName;
   /** tooltip 与读屏共用这一句 */
   label: string;
@@ -193,7 +193,6 @@ export function RightRail(props: {
     ...(props.pluginsAvailable
       ? [{ id: "plugins", group: "agent" as const, pinned: true, icon: "blocks" as const, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
       : []),
-    ...fromApp("memory", { group: "agent", pinned: false }),
     ...(props.intentAvailable
       ? [
           {

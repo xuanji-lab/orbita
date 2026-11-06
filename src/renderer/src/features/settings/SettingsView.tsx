@@ -7,6 +7,8 @@ import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
+import { MemoryLibraryView } from "../memory/MemoryLibraryView";
+import type { MemoryEntryView } from "@shared/memory";
 import { PluginsView } from "../plugins/PluginsView.tsx";
 import type { SettingsTab } from "./settings-tabs.ts";
 import type { ProviderDto } from "@shared/provider";
@@ -80,6 +82,8 @@ export function SettingsView(props: {
   onTab: (tab: SettingsTab) => void;
   /** 插件页签（全屏版）要接到会话引擎与右栏上的三样（实验功能 plugins） */
   plugins: { currentWorkspaceId: string | null; onMakeWithAgent: () => void; onOpenBoard: (pluginName: string) => void };
+  /** 记忆库页签里「回到原文」：退出设置、打开出处会话并滚到那一轮 */
+  onJumpToMemorySource: (view: MemoryEntryView) => void;
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
   onCollapseRail: (() => void) | null;
 }) {
@@ -143,6 +147,16 @@ export function SettingsView(props: {
           page={props.settings.pluginsPage}
           onPage={(pluginsPage) => props.onSettingsChange({ pluginsPage })}
           {...props.plugins}
+        />
+      ) : props.tab === "memory" ? (
+        // 记忆库页签：页内自带范围导航与滚动区；宽 / 窄的排法看容器宽度（memory.css 的 @container mem）
+        <MemoryLibraryView
+          onJump={props.onJumpToMemorySource}
+          choreLabel={props.settings.choreModel?.modelId ?? null}
+          onOpenGeneral={() => {
+            setHighlightChore(true);
+            props.onTab("general");
+          }}
         />
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现

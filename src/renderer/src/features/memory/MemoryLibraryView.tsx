@@ -5,7 +5,7 @@ import {
   type MemoryEntryView,
   type MemoryScopeSummary,
 } from "@shared/memory";
-import { Icon } from "../../shell/Icon";
+import { Icon, type IconName } from "../../shell/Icon";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { useT } from "../../locale.ts";
 import { MEMORY_TYPE_ICON, MemoryEntryCard } from "./MemoryEntryCard";
@@ -20,37 +20,92 @@ import {
   type MemorySourceFilter,
   type MemoryTypeFilter,
 } from "./memory-view.ts";
-import { mutateMemory, useMemoryEntries, useMemoryHistory } from "./useMemory.ts";
+import { mutateMemory, useMemoryEntries, useMemoryHistory, useMemoryScopes } from "./useMemory.ts";
 import { HistoryImport } from "./HistoryImport";
 import { historyActive } from "./history-view.ts";
 import "./memory.css";
 
 /**
- * 记忆库（实验功能 memory-system）：和设置同一种整页形态——侧栏换成范围 / 管理导航，
- * 内容面按导航位置画两种页：某个范围的条目、向量模型。没有「待你确认」页（2026-10-29
+ * 记忆库（实验功能 memory-system）：设置里的一个页签（2026-11-06 从右侧图标条挪进来）——
+ * 范围 / 管理导航收在页内，内容面按导航位置画两种页：某个范围的条目、向量模型。没有「待你确认」页（2026-10-29
  * 用户：「我不想去确认记忆」）——agent 判断的结果直接生效，撤销在各条目卡上。
  * 不是 Markdown 文件视图（2026-10-29 用户裁决：不要 Proma 那种）。
  */
 export function MemoryLibraryView(props: {
-  nav: MemoryNav;
-  onNav: (next: MemoryNav) => void;
-  scopes: readonly MemoryScopeSummary[] | null;
   /** 「回到原文」：退出记忆库、打开出处会话并滚到那一轮 */
   onJump: (view: MemoryEntryView) => void;
   /** 家务活模型的显示名；null = 没设置（向量模型页底部那一行） */
   choreLabel: string | null;
   onOpenGeneral: () => void;
 }) {
+  const t = useT();
+  // 范围导航收进页面里（设置的左栏是设置导航）：宽时页内左右两栏，窄时上下（见 memory.css 的 @container mem）
+  const [nav, setNav] = useState<MemoryNav>({ kind: "scope", token: "all" });
+  const scopes = useMemoryScopes(true);
+  const total = scopes.data?.reduce((sum, scope) => sum + scope.count, 0);
   return (
-    <div className="scroll" style={{ height: "100%", minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-      <div className="mem-page">
-        {props.nav.kind === "vector" ? (
-          <VectorModelView choreLabel={props.choreLabel} onOpenGeneral={props.onOpenGeneral} />
-        ) : (
-          <ScopePage token={props.nav.token} scopes={props.scopes} onJump={props.onJump} />
-        )}
+    <div className="scroll mem-lib" style={{ height: "100%", minHeight: 0 }}>
+      <div className="mem-lib-grid">
+        <nav className="mem-nav" aria-label={t.memory.title}>
+          <span className="mem-nav-label">{t.memory.navScopes}</span>
+          <NavItem
+            icon="layers"
+            label={t.memory.navAll}
+            count={total}
+            active={nav.kind === "scope" && nav.token === "all"}
+            onClick={() => setNav({ kind: "scope", token: "all" })}
+          />
+          {(scopes.data ?? []).map((scope) => (
+            <NavItem
+              key={scope.token}
+              icon={scope.kind === "user" ? "user" : scope.kind === "missing" ? "archive" : "folder"}
+              label={scope.kind === "user" ? t.memory.scopeUser : scope.name}
+              {...(scope.kind === "missing" ? { hint: t.memory.scopeMissingHint(scope.path ?? scope.name) } : {})}
+              count={scope.count}
+              active={nav.kind === "scope" && nav.token === scope.token}
+              onClick={() => setNav({ kind: "scope", token: scope.token })}
+            />
+          ))}
+          <span className="mem-nav-label mem-nav-manage">{t.memory.navManage}</span>
+          <NavItem
+            icon="cpu"
+            label={t.memory.vector}
+            active={nav.kind === "vector"}
+            onClick={() => setNav({ kind: "vector" })}
+          />
+        </nav>
+        <div className="mem-page">
+          {nav.kind === "vector" ? (
+            <VectorModelView choreLabel={props.choreLabel} onOpenGeneral={props.onOpenGeneral} />
+          ) : (
+            <ScopePage token={nav.token} scopes={scopes.data} onJump={props.onJump} />
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+function NavItem(props: {
+  icon: IconName;
+  label: string;
+  count?: number | undefined;
+  hint?: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="option-row mem-nav-item"
+      aria-pressed={props.active}
+      title={props.hint ?? props.label}
+      onClick={props.onClick}
+    >
+      <Icon name={props.icon} size={14} strokeWidth={1.8} />
+      <span className="mem-nav-name">{props.label}</span>
+      {props.count !== undefined && <span className="mem-nav-count">{props.count}</span>}
+    </button>
   );
 }
 
