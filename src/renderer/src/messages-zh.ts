@@ -138,7 +138,6 @@ export const zh: Messages = {
 
   memory: {
     title: "记忆库",
-    rail: "记忆库",
     navScopes: "范围",
     navManage: "管理",
     navAll: "全部",
@@ -997,6 +996,7 @@ export const zh: Messages = {
       browser: "浏览器",
       voice: "语音",
       plugins: "插件",
+      memory: "记忆库",
       experimental: "实验功能",
     },
     appearance: "外观",

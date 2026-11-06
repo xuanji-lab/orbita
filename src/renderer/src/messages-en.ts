@@ -184,7 +184,6 @@ export const en = {
 
   memory: {
     title: "Memory",
-    rail: "Memory",
     navScopes: "Scope",
     navManage: "Manage",
     navAll: "All",
@@ -1089,6 +1088,7 @@ export const en = {
       browser: "Browser",
       voice: "Voice",
       plugins: "Plugins",
+      memory: "Memory",
       experimental: "Experimental",
     },
     appearance: "Appearance",

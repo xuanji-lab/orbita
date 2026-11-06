@@ -27,7 +27,7 @@ export const PANEL_USAGE_KEYS = [
   "review",
   /** 能力：Skills 与 MCP */
   "abilities",
-  /** 记忆库（整页盖层） */
+  /** 记忆库（设置里的页签） */
   "memory",
   "intent",
   /** 遗留事项（侧栏子视图） */
