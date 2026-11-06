@@ -569,12 +569,17 @@ function foldSegment(
     chunk.push(entry);
   }
   flushChunk(true);
+  // 先钉画廊 / 看板、后追加轮尾文件卡：顺序反过来时，「尾部连续的正文」被文件卡挡住、找不到结尾回复，
+  // 钉住项就掉到文件卡之后（2026-11-06 用户：看板回复完变灰 not found）。更要紧的是位置**不随轮尾卡
+  // 出现而变**：文件卡在轮结束后才补进来，钉住项若因此换位，React 会搬动它的 DOM 节点，而 iframe 被搬动
+  // 会重新加载——看板卡的地址是一次性的，重载拿到 404。
+  if (pinned.length > 0) {
+    // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
+    let insertAt = view.length;
+    while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
+    view.splice(insertAt, 0, ...pinned);
+  }
   if (tailCards.length > 0) view.push(...tailCards);
-  if (pinned.length === 0) return view;
-  // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
-  let insertAt = view.length;
-  while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
-  view.splice(insertAt, 0, ...pinned);
   return view;
 }
 
