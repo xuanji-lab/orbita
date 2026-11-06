@@ -15,7 +15,7 @@
  * 本文件只放**不依赖 electron / node 的纯定义**：类型、护栏常量、调度的纯函数、逐字段解析。
  * 主进程（存盘 / 调度）与 renderer（表单校验 / 面板）共用同一份，不各写一套。
  */
-import type { PermissionMode } from "./permission.ts";
+import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { isPluginName } from "./plugin.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 
@@ -341,6 +341,11 @@ export interface Automation {
   thinkingLevel?: ThinkingLevel;
   /** new_session 才用；this_session 跟会话自己的档（这里留着，改投回为新会话时用） */
   mode: AutomationMode;
+  /**
+   * 对话里「让它能写文件吗？」那一行上，用户点过「保持只读」/「改回只读」的请求 id（AutomationModeRow.requestId）。
+   * 那一行重开会话后据此显示「保持只读」而不是又变回「允许」。只留最近 10 个。
+   */
+  modeDeclined?: string[];
   /** 选了插件：运行时提示词让 agent 用它、最后调 show_plugin_board（全局周看板据此出卡） */
   plugin?: AutomationPlugin;
   status: AutomationStatus;
@@ -503,9 +508,72 @@ export type AutomationToolRequest =
       model?: string;
       /** 插件名：每次运行用它并在最后调 show_plugin_board */
       plugin?: string;
+      /** 请求的权限档（只对 new_session 有意义）；skip 要主进程核对会话此刻的档，不是想给就给 */
+      mode?: AutomationMode;
     }
   | { op: "list" }
-  | { op: "cancel"; automationId: string };
+  | { op: "cancel"; automationId: string }
+  /** 只开放权限档这一项；别的字段 agent 不能改 */
+  | { op: "update"; automationId: string; mode: AutomationMode };
+
+/**
+ * 对话里「改权限」那一行的数据。**它是 automation_create / automation_update 工具结果的 `details.automationMode`**
+ * ——工具结果本来就随会话落盘，所以这一行重开会话、隔很久都在（与 PluginInstallRow 同一套路）。
+ *
+ * 一行有两种来历：
+ * - `applied`：这次调用直接改成放行了（会话此刻本来就是「放行」档）；
+ * - `pending`：会话是「手动 / 计划」档，agent 不能把自动化调得比会话还宽——**没改**，
+ *   等用户点这一行的「允许」。`sessionMode` 记下当时是哪一档，说明文字用。
+ * 行上画哪一种**看渲染时那条自动化此刻的 mode**（用户在面板里改了、点了按钮，行都照实说），state 只是落盘时的样子。
+ * `requestId` 区分同一条自动化上的多次请求：点了「保持只读」只让**那一行**变灰。
+ */
+export interface AutomationModeRow {
+  state: "applied" | "pending";
+  requestId: string;
+  automationId: string;
+  title: string;
+  /** 请求时会话的权限档 */
+  sessionMode: PermissionMode;
+}
+
+/** 工具结果的 details 里取出那一行；形状不对为 null（旧会话、别的工具、坏数据都当没有） */
+export function parseAutomationModeRow(details: unknown): AutomationModeRow | null {
+  if (typeof details !== "object" || details === null) return null;
+  const raw = (details as Record<string, unknown>)["automationMode"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const row = raw as Record<string, unknown>;
+  const state = row["state"];
+  const requestId = str(row["requestId"]);
+  const automationId = str(row["automationId"]);
+  const title = str(row["title"]);
+  const sessionMode = row["sessionMode"];
+  if (state !== "applied" && state !== "pending") return null;
+  if (requestId === null || automationId === null || title === null || !(PERMISSION_MODES as readonly unknown[]).includes(sessionMode)) return null;
+  return { state, requestId, automationId, title, sessionMode: sessionMode as PermissionMode };
+}
+
+/** 对话里那一行的按钮：允许（改成放行）/ 改回只读 / 保持只读（只记下，不改档） */
+export const AUTOMATION_MODE_ROW_ACTIONS = ["allow", "readonly", "keep"] as const;
+export type AutomationModeRowAction = (typeof AUTOMATION_MODE_ROW_ACTIONS)[number];
+
+/**
+ * 用户点那一行的按钮（renderer → 主进程）。主进程**不信这些字段**：会话在不在、自动化在不在且属于这条会话 /
+ * 这个工作区、它此刻的状态，逐项重验后才改。
+ */
+export interface AutomationModeRowRequest {
+  sessionId: string;
+  automationId: string;
+  requestId: string;
+  action: AutomationModeRowAction;
+}
+
+/** 结局以数据返回（reason 是稳定代码，句子由界面出），不抛 */
+export type AutomationModeRowResult =
+  | { ok: true }
+  | { ok: false; reason: "disabled" | "noSession" | "notFound" | "notApplicable" | "finished"; detail: string };
+
+/** modeDeclined 只留最近这么多条 */
+export const AUTOMATION_MODE_DECLINED_KEPT = 10;
 
 /** 对话里那张卡 / 工具回执用的一条自动化摘要（不带指令全文与运行历史） */
 export interface AutomationCardView {
@@ -567,7 +635,7 @@ export function parseAutomationCard(raw: unknown): AutomationCardView | null {
 }
 
 export type AutomationToolOutcome =
-  | { ok: true; text: string; automation?: AutomationCardView; automations?: AutomationCardView[] }
+  | { ok: true; text: string; automation?: AutomationCardView; automations?: AutomationCardView[]; modeRow?: AutomationModeRow }
   | { ok: false; error: string };
 
 /* ---------- 磁盘解析（逐字段校验，坏的丢掉，不给坏值过路） ---------- */
@@ -663,6 +731,9 @@ export function parseAutomation(raw: unknown): Automation | null {
   const lastResult = typeof value["lastResult"] === "string" ? value["lastResult"] : null;
   const endReason = value["endReason"];
   const plugin = parseAutomationPlugin(value["plugin"]);
+  const declined = Array.isArray(value["modeDeclined"])
+    ? value["modeDeclined"].filter((id): id is string => typeof id === "string" && id !== "").slice(-AUTOMATION_MODE_DECLINED_KEPT)
+    : [];
   const pendingRaw = value["pendingDelivery"];
   let pending: NonNullable<Automation["pendingDelivery"]> | null = null;
   if (typeof pendingRaw === "object" && pendingRaw !== null) {
@@ -685,6 +756,7 @@ export function parseAutomation(raw: unknown): Automation | null {
     ...(providerId !== null && modelId !== null ? { providerId, modelId } : {}),
     ...(isThinkingLevel(thinking) ? { thinkingLevel: thinking } : {}),
     mode,
+    ...(declined.length === 0 ? {} : { modeDeclined: declined }),
     ...(plugin === null ? {} : { plugin }),
     status: parsedStatus,
     ...(parsedStatus === "completed" && (END_REASONS as readonly unknown[]).includes(endReason)
