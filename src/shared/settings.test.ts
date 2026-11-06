@@ -290,6 +290,15 @@ describe("parseSettings 的 planFirst（先给我看计划）", () => {
   });
 });
 
+describe("parseSettings 的 onboardingSeen", () => {
+  it("只认布尔：缺席 = 没看过，非布尔当没写", () => {
+    deepStrictEqual(parseSettings({ onboardingSeen: true }).onboardingSeen, true);
+    deepStrictEqual(parseSettings({ onboardingSeen: false }).onboardingSeen, false);
+    deepStrictEqual(parseSettings({}).onboardingSeen, undefined);
+    deepStrictEqual(parseSettings({ onboardingSeen: "yes" }).onboardingSeen, undefined);
+  });
+});
+
 describe("parseSettings 的 automationKeepAwake", () => {
   it("只认布尔：缺席 / 非布尔都不落键", () => {
     deepStrictEqual(parseSettings({ automationKeepAwake: true }).automationKeepAwake, true);

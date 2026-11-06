@@ -238,6 +238,12 @@ export interface AppSettings {
    */
   automationKeepAwake?: boolean;
   /**
+   * 新手引导看过了没有（2026-11-06）：**缺席 = 没看过**，窗口起来、设置读回后自动全屏弹一次；
+   * 看完或跳过都写 true，之后不再自动弹（设置 › 通用里能再看一遍，不改这个键）。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  onboardingSeen?: boolean;
+  /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
    * 只认布尔——这个文件手改得到，`"yes"` 该被丢掉而不是当成真。
@@ -538,6 +544,7 @@ export function parseSettings(raw: unknown): AppSettings {
     completionSound?: unknown;
     processView?: unknown;
     automationKeepAwake?: unknown;
+    onboardingSeen?: unknown;
     gitAttribution?: unknown;
     planFirst?: unknown;
     choreModel?: unknown;
@@ -624,6 +631,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.automationKeepAwake === "boolean"
       ? { automationKeepAwake: record.automationKeepAwake }
       : {}),
+    // 同上：非布尔丢掉，缺席 = 没看过新手引导
+    ...(typeof record.onboardingSeen === "boolean" ? { onboardingSeen: record.onboardingSeen } : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
