@@ -65,12 +65,12 @@
   max-width: var(--content-max-width);
   margin-inline: auto;
   box-sizing: border-box;
-  padding: var(--space-1) var(--space-6) 0;
+  padding: var(--space-1) var(--space-6) var(--space-1);
 }
 
 /* 右栏版的选择条在 .pl-page 容器之外（RightPanelFrame 的 subheader），容器查询够不着它：直接按窄档写 */
 .pl-wsbar[data-chrome="rail"] {
-  padding: var(--space-1) var(--space-4) 0;
+  padding: var(--space-1) var(--space-4) var(--space-1);
 }
 
 .pl-body {
@@ -1612,7 +1612,7 @@ button.pl-wf-chip:hover {
  */
 @container pl (max-width: 639px) {
   .pl-wsbar {
-    padding: var(--space-1) var(--space-4) 0;
+    padding: var(--space-1) var(--space-4) var(--space-1);
   }
 
   .pl-head {

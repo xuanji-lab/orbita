@@ -7,6 +7,7 @@ import { startPointerDrag } from "./pointer-drag.ts";
 import { usePaneTotalWidth } from "./side-width.ts";
 import { useT } from "../locale.ts";
 import { ToolbarPanelSlotContext } from "./Toolbar";
+import { useScrolledEdge } from "./WorkspaceFilterBar.tsx";
 
 /**
  * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
@@ -151,6 +152,7 @@ export function RightPanelFrame(props: {
   children: React.ReactNode;
 }) {
   const slot = useContext(ToolbarPanelSlotContext);
+  const edge = useScrolledEdge(props.contentKey);
   return (
     <div
       style={{
@@ -161,7 +163,8 @@ export function RightPanelFrame(props: {
         ...(props.subheader === undefined ? {} : { gridTemplateColumns: "minmax(0,1fr)" }),
       }}
     >
-      {props.subheader}
+      {/* 钉在滚动区上方、占自己的一行；内容滚起来时在它下面画一根发丝线（useScrolledEdge） */}
+      {props.subheader !== undefined && <div style={edge.edgeStyle}>{props.subheader}</div>}
       {slot !== null &&
         createPortal(
           <div className="cap-panel-content" key={props.contentKey}>
@@ -176,6 +179,7 @@ export function RightPanelFrame(props: {
         key={props.contentKey}
         className="scroll"
         style={{ minHeight: 0, animation: "right-panel-fade 120ms var(--ease-out-quint)" }}
+        onScroll={props.subheader === undefined ? undefined : edge.onScroll}
       >
         {props.children}
       </div>

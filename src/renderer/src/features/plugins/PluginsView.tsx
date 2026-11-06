@@ -31,7 +31,7 @@ import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { relativeTime } from "../../shell/relative-time";
-import { WorkspaceFilterBar, useWorkspaceFilter } from "../../shell/WorkspaceFilterBar.tsx";
+import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "../../shell/WorkspaceFilterBar.tsx";
 import { buildOptions, defaultFilter, type WsAllow } from "../../shell/workspace-filter.ts";
 import type { TokenPickerControl } from "../../shell/panel-token.ts";
 import { describeList } from "../chat/load-state";
@@ -277,6 +277,8 @@ export function PluginsView(props: {
     const counts = pluginFilterCounts(state.plugins, workspaces);
     return buildOptions({ workspaces, total: counts.total, perWorkspace: counts.perWorkspace, tasks: null, global: counts.global, selected: wsFilter, hideEmpty: false });
   }, [state.plugins, workspaces, wsFilter]);
+  // 全屏版的选择条夹在页头与滚动正文之间：正文滚起来时在它下面画发丝线
+  const pageEdge = useScrolledEdge(selectedId);
   const wsBar = <WorkspaceFilterBar options={wsOptions} workspaces={workspaces} selected={wsFilter} onSelect={setWsFilter} />;
   // 「全部」= 按位置分组；选了某个工作区 / 全局 = 一组「它能用的」，每行小字写范围
   const groups = useMemo(() => groupUsable(filtered, workspaces, wsFilter), [filtered, workspaces, wsFilter]);
@@ -601,8 +603,12 @@ export function PluginsView(props: {
           <span className="pl-head-actions">{actions}</span>
         </div>
       )}
-      {selected === null && <div className="pl-wsbar">{wsBar}</div>}
-      <div className="pl-body scroll">{selected === null ? listBody : detailBody}</div>
+      {selected === null && (
+        <div style={pageEdge.edgeStyle}>
+          <div className="pl-wsbar">{wsBar}</div>
+        </div>
+      )}
+      <div className="pl-body scroll" onScroll={pageEdge.onScroll}>{selected === null ? listBody : detailBody}</div>
       {dialog}
     </div>
   );
