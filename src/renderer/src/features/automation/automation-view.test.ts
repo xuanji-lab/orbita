@@ -4,8 +4,10 @@ import { AUTOMATION_RUNS_VISIBLE, type Automation, type AutomationRun, type Auto
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
+  canRunNow,
   countLabel,
   defaultScheduleForm,
+  detailActions,
   describeSchedule,
   endFormFrom,
   endFromForm,
@@ -17,6 +19,7 @@ import {
   noteOf,
   parseModelOption,
   previewTimes,
+  promptIsLong,
   rowStateOf,
   runLine,
   runWhen,
@@ -292,4 +295,27 @@ test("模型选项值：provider 与型号往返；空串 = 默认", () => {
   assert.deepEqual(parseModelOption(modelOptionValue("zai", "glm-5.3")), { providerId: "zai", modelId: "glm-5.3" });
   assert.deepEqual(parseModelOption(modelOptionValue("p", "m/with::odd")), { providerId: "p", modelId: "m/with::odd" });
   assert.equal(parseModelOption(""), null);
+});
+
+describe("详情页按钮 / 立即运行 / 指令折叠", () => {
+  test("排期中：立即运行 + 暂停；暂停：立即运行 + 继续；失败 / 完成：只有重新启动", () => {
+    assert.deepEqual(detailActions(auto({ id: "a" })), { runNow: true, toggle: "pause" });
+    assert.deepEqual(detailActions(auto({ id: "a", status: "paused" })), { runNow: true, toggle: "resume" });
+    assert.deepEqual(detailActions(auto({ id: "a", status: "failed" })), { runNow: false, toggle: "restart" });
+    assert.deepEqual(detailActions(auto({ id: "a", status: "completed" })), { runNow: false, toggle: "restart" });
+  });
+
+  test("有一次运行正在跑时不能再立即运行（列表 ▶ 同一口径）", () => {
+    const running = auto({ id: "a", runs: [run({ id: "r", status: "running" })] });
+    assert.equal(canRunNow(running), false);
+    assert.equal(detailActions(running).toggle, "pause");
+    assert.equal(canRunNow(auto({ id: "a" })), true);
+  });
+
+  test("指令超过 140 字或多于 4 行才折起", () => {
+    assert.equal(promptIsLong("短"), false);
+    assert.equal(promptIsLong("x".repeat(141)), true);
+    assert.equal(promptIsLong("1\n2\n3\n4"), false);
+    assert.equal(promptIsLong("1\n2\n3\n4\n5"), true);
+  });
 });

@@ -16,6 +16,7 @@ import type { ProviderDto } from "@shared/provider";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { automationWorkspaceId, type Automation, type AutomationAction } from "../../../../shared/automation.ts";
+import { AutomationDetailView } from "./AutomationDetailView";
 import { AutomationEditView, type AutomationSeed } from "./AutomationEditView";
 import { AutomationRow } from "./AutomationRow";
 import {
@@ -36,7 +37,11 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
-type View = { kind: "list" } | { kind: "edit"; id: string | null; seed: AutomationSeed | null };
+type View =
+  | { kind: "list" }
+  | { kind: "detail"; id: string }
+  /** from = "detail"：从详情的「改设置」进来，保存 / 返回后回到那条的详情 */
+  | { kind: "edit"; id: string | null; seed: AutomationSeed | null; from?: "detail" };
 
 /**
  * 右栏「自动化」面板（实验功能 automation）：列表 / 运行记录 / 新建与编辑子页 / 空态模板，
@@ -56,7 +61,7 @@ export function AutomationPanel(props: {
   providers: readonly ProviderDto[];
   keepAwake: boolean;
   onKeepAwakeChange: (next: boolean) => void;
-  /** 对话卡的「在右栏查看」：定位到这一条并展开（nonce 递增，同一条重复点也生效） */
+  /** 对话卡的「在右栏查看」：直接打开这一条的详情（nonce 递增，同一条重复点也生效） */
   focus: { id: string; nonce: number } | null;
   onOpenSession: (sessionId: string) => void;
   /** 「在这条会话里说一句」：往输入框预填一句引导 */
@@ -70,8 +75,6 @@ export function AutomationPanel(props: {
   const [scope, setScope] = useState<AutomationScope>("workspace");
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const [focusedId, setFocusedId] = useState<string | null>(null);
 
   // 工作区被移除之后它名下的自动化还在（会话 id 同理）：组头如实说「已移除的工作区」，不留一个空标题
   const nameOf = (id: string | null): string =>
@@ -80,19 +83,18 @@ export function AutomationPanel(props: {
   const sessionById = useMemo(() => new Map(props.sessions.map((meta) => [meta.id, meta])), [props.sessions]);
   const knownSessionIds = useMemo(() => new Set(props.sessions.map((meta) => meta.id)), [props.sessions]);
 
-  // 从对话卡跳来：回到列表、必要时把范围切到「全部」、展开并高亮那一条
+  // 从对话卡跳来：直接打开那一条的详情（它不在当前范围里就把范围切到「全部」，返回列表时看得到它）
   useEffect(() => {
     if (props.focus === null) return;
     const target = state.automations.find((automation) => automation.id === props.focus?.id);
-    setView({ kind: "list" });
     setMenuOpen(false);
-    if (target === undefined) return;
+    if (target === undefined) {
+      setView({ kind: "list" });
+      return;
+    }
     if (automationWorkspaceId(target) !== props.workspaceId) setScope("all");
-    setOpen((current) => new Set(current).add(target.id));
-    setFocusedId(target.id);
-    const timer = window.setTimeout(() => setFocusedId(null), 2000);
-    return () => window.clearTimeout(timer);
-    // focus 的 nonce 变了才重来；列表刷新不该把高亮再点一遍
+    setView({ kind: "detail", id: target.id });
+    // focus 的 nonce 变了才重来；列表刷新不该把详情再打开一遍
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.focus?.nonce]);
 
@@ -118,12 +120,16 @@ export function AutomationPanel(props: {
         create={state.create}
         update={state.update}
         remove={(id) => state.act(id, { type: "delete" })}
-        onBack={() => setView({ kind: "list" })}
+        onBack={() => setView(view.from === "detail" && view.id !== null ? { kind: "detail", id: view.id } : { kind: "list" })}
       />
     );
   }
 
   const header = <PanelTitle icon={FEATURE_ICON.automation} title={a.title} />;
+  const detailTarget =
+    view.kind === "detail" ? (state.automations.find((automation) => automation.id === view.id) ?? null) : null;
+  // 看的那一条被删了（别处删的 / 会话级联）：回列表
+  if (view.kind === "detail" && detailTarget === null) return <BackToList onBack={() => setView({ kind: "list" })} />;
   const headerExtra = (
     <>
       <PanelHelp label={a.helpLabel} text={a.help} />
@@ -160,6 +166,30 @@ export function AutomationPanel(props: {
       },
     });
   };
+
+  if (view.kind === "detail" && detailTarget !== null) {
+    const bound = detailTarget.target.kind === "this_session" ? sessionById.get(detailTarget.target.sessionId) : undefined;
+    return (
+      <RightPanelFrame header={header} headerExtra={headerExtra} contentKey={`detail:${detailTarget.id}`} footer={footer}>
+        <div className="auto-detail-wrap">
+          <button type="button" className="auto-back" onClick={() => setView({ kind: "list" })}>
+            <Icon name="chevron-left" size={14} strokeWidth={2} /> {a.detail.back}
+          </button>
+        </div>
+        <AutomationDetailView
+          key={detailTarget.id}
+          automation={detailTarget}
+          now={now}
+          boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
+          knownSessionIds={knownSessionIds}
+          act={(action) => state.act(detailTarget.id, action)}
+          onEdit={() => setView({ kind: "edit", id: detailTarget.id, seed: null, from: "detail" })}
+          onDeleted={() => setView({ kind: "list" })}
+          onOpenSession={props.onOpenSession}
+        />
+      </RightPanelFrame>
+    );
+  }
 
   return (
     <RightPanelFrame header={header} headerExtra={headerExtra} contentKey="list" footer={footer}>
@@ -259,20 +289,8 @@ export function AutomationPanel(props: {
                   automation={automation}
                   now={now}
                   boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
-                  knownSessionIds={knownSessionIds}
-                  open={open.has(automation.id)}
-                  focused={focusedId === automation.id}
-                  onToggle={() =>
-                    setOpen((current) => {
-                      const next = new Set(current);
-                      if (next.has(automation.id)) next.delete(automation.id);
-                      else next.add(automation.id);
-                      return next;
-                    })
-                  }
+                  onOpen={() => setView({ kind: "detail", id: automation.id })}
                   onAct={(action) => void act(automation, action)}
-                  onEdit={() => setView({ kind: "edit", id: automation.id, seed: null })}
-                  onOpenSession={props.onOpenSession}
                 />
               );
             })}
