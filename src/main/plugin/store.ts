@@ -19,7 +19,7 @@
  * 覆盖先写的（同 McpStore.mutate 吃过的亏）。
  */
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
@@ -30,6 +30,7 @@ import {
   isBlockingMcpProblem,
   pluginViewId,
   scopeApplies,
+  type PluginArchiveEntry,
   type PluginConfigField,
   type PluginConfigState,
   type PluginConfigValue,
@@ -54,7 +55,7 @@ import { findConflicts, skillsCollide, type OtherPlugin, type SkillIdentity } fr
 import { checkGitUrl, repoNameOf, runGit, stageCopy, stageGit, type GitRunner } from "./install.ts";
 import { scanPlugin, type ScannedPlugin } from "./manifest.ts";
 import { qualifiedPluginServerName } from "./names.ts";
-import { parseScope, readPluginRecords, serializePluginRecords, type PluginRecord } from "./records.ts";
+import { parseArchiveEntry, parseScope, readPluginRecords, serializePluginRecords, type PluginRecord } from "./records.ts";
 import { formatCommandLine, substituteServer, type VarContext } from "./vars.ts";
 
 /** 详情页只读查看技能时的大小上限。 */
@@ -388,6 +389,33 @@ export class PluginStore {
       // 密钥不随归档带走：归档目录是明文文件，而系统密钥库里的值留着没有回头路可用
       for (const key of record.secretKeys) await this.secrets.delete(secretAccount(name, key)).catch(() => undefined);
     });
+  }
+
+  /**
+   * 卸载归档的只读清单：扫 plugins-archive 下的 `*.json`，新的在前。坏文件跳过并留日志，
+   * 目录不存在 = 没有归档。**只读**：恢复插件另有说法，不在这里。
+   */
+  async listArchived(): Promise<PluginArchiveEntry[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.archiveDir);
+    } catch (error) {
+      if (isNotFound(error)) return [];
+      throw error;
+    }
+    const entries: PluginArchiveEntry[] = [];
+    for (const fileName of names) {
+      if (!fileName.endsWith(".json")) continue;
+      const id = fileName.slice(0, -".json".length);
+      try {
+        const entry = parseArchiveEntry(id, JSON.parse(await readFile(join(this.archiveDir, fileName), "utf8")));
+        if (entry !== null) entries.push(entry);
+        else console.error(`[plugin] 归档记录「${fileName}」读不了，已跳过`);
+      } catch (error) {
+        console.error(`[plugin] 归档记录「${fileName}」读不了，已跳过`, error);
+      }
+    }
+    return entries.sort((a, b) => b.archivedAt - a.archivedAt || a.id.localeCompare(b.id));
   }
 
   private async archiveDirectory(from: string, folder: string): Promise<void> {
