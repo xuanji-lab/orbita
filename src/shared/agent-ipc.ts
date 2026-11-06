@@ -50,6 +50,8 @@ export const ipcChannels = {
   providerRemove: "provider:remove",
   /** 拖拽排序的落盘：载荷是全量 id 的新顺序 */
   providerReorder: "provider:reorder",
+  /** 开 / 关一家服务商（载荷 ProviderSetDisabledInput）：配置与密钥不动，只是哪里都不用它；返回改完的 ProviderDto，id 不存在返回 null */
+  providerSetDisabled: "provider:set-disabled",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
   /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
