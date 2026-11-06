@@ -96,11 +96,10 @@ function Spark(props: {
           <span
             key={day.dayStart}
             className="auto-bar"
-            data-empty={day.count === 0 || undefined}
+            data-kind={day.kind}
             data-today={day.today || undefined}
-            data-failed={day.failed || undefined}
-            style={{ height: sparkBarHeight(day.count, props.max) }}
-            title={props.label.dayTip(md, props.weekdays[date.getDay()] ?? "", day.count, day.failed)}
+            style={{ height: sparkBarHeight(day, props.max) }}
+            title={day.kind === "na" ? undefined : props.label.dayTip(md, props.weekdays[date.getDay()] ?? "", day.count, day.failed)}
           />
         );
       })}

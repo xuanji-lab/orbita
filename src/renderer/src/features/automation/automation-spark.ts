@@ -8,18 +8,31 @@ import type { Automation } from "../../../../shared/automation.ts";
 export const SPARK_DAYS = 7;
 /** 单日最大次数的那根柱的满高（px） */
 export const SPARK_FULL_PX = 18;
-/** 跑过的天至少这么高：1 次碰上别人 8 次也要看得见 */
-export const SPARK_MIN_PX = 3;
+/** 跑过的天（含失败、正在跑）至少这么高：用户只关心「有没有跑」，次数只让特别多的那天稍高 */
+export const SPARK_RAN_PX = 11;
 /** 没跑的天：一道细线 */
 export const SPARK_ZERO_PX = 2;
+
+/**
+ * 一天的画法：
+ * - na：自动化创建之前，什么都不画（不是「没跑」）
+ * - none：创建之后这天没跑，细线
+ * - ran：跑过，实心
+ * - failed：至少一次 error，红
+ * - running：仅今天——有一条 running 且今天没有 error，空心描边；跑完变 ran
+ */
+export type SparkKind = "na" | "none" | "ran" | "failed" | "running";
 
 export interface SparkDay {
   /** 当天 00:00（本地）的 epoch ms */
   dayStart: number;
-  /** 当天真正跑的次数（不含 skipped） */
+  /** 当天真正跑的次数（不含 skipped，含 running） */
   count: number;
   /** 当天至少有一次失败 */
   failed: boolean;
+  /** 当天有一条 running 的运行 */
+  running: boolean;
+  kind: SparkKind;
   today: boolean;
 }
 
@@ -33,13 +46,27 @@ export function sparkDayStarts(now: number): number[] {
   return starts;
 }
 
-/** 一条自动化近 7 天每天的次数（旧 → 新）。早于第 7 天起点、或晚于 now 的运行不算 */
-export function sparkDays(automation: Pick<Automation, "runs">, now: number): SparkDay[] {
+/** 本地自然日的 00:00 */
+function localDayStart(ms: number): number {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/**
+ * 一条自动化近 7 天每天的画法（旧 → 新）。早于第 7 天起点、或晚于 now 的运行不算。
+ * 正在跑：今天有 running、且今天没有 error → running（即使今天已有完成的，再加一条在跑的也是「今天正在跑」，
+ * 空心比实心多一个信息；红色优先，失败是要人看的）。非今天遗留的 running 当作跑过。
+ * 创建日之前且没有任何运行的天 → na；有运行的天不隐藏（脏数据也不能把真实运行画没）。
+ */
+export function sparkDays(automation: Pick<Automation, "runs" | "createdAt">, now: number): SparkDay[] {
   const starts = sparkDayStarts(now);
+  const createdDay = localDayStart(automation.createdAt);
   const days: SparkDay[] = starts.map((dayStart, index) => ({
     dayStart,
     count: 0,
     failed: false,
+    running: false,
+    kind: "none",
     today: index === starts.length - 1,
   }));
   const oldest = days[0]?.dayStart ?? now;
@@ -50,6 +77,13 @@ export function sparkDays(automation: Pick<Automation, "runs">, now: number): Sp
     if (day === undefined) continue;
     day.count += 1;
     if (run.status === "error") day.failed = true;
+    if (run.status === "running") day.running = true;
+  }
+  for (const day of days) {
+    if (day.failed) day.kind = "failed";
+    else if (day.running && day.today) day.kind = "running";
+    else if (day.count > 0) day.kind = "ran";
+    else day.kind = day.dayStart < createdDay ? "na" : "none";
   }
   return days;
 }
@@ -72,8 +106,13 @@ export function sparkScale(automations: readonly Automation[], now: number): num
   return max;
 }
 
-/** 柱高（px）：没跑 = 细线；跑过的按 次数 / max × 满高，至少 SPARK_MIN_PX */
-export function sparkBarHeight(count: number, max: number): number {
-  if (count <= 0 || max <= 0) return SPARK_ZERO_PX;
-  return Math.min(SPARK_FULL_PX, Math.max(SPARK_MIN_PX, Math.round((count / max) * SPARK_FULL_PX)));
+/**
+ * 柱高（px）：na 不画（0）；没跑 = 细线；正在跑 = 跑过的底高；
+ * 跑过的 = max(底高, 次数 / 尺子最大值 × 满高)——1 次碰上别人 8 次也不会被压成一道线。
+ */
+export function sparkBarHeight(day: Pick<SparkDay, "kind" | "count">, max: number): number {
+  if (day.kind === "na") return 0;
+  if (day.kind === "none") return SPARK_ZERO_PX;
+  if (day.kind === "running" || max <= 0) return SPARK_RAN_PX;
+  return Math.min(SPARK_FULL_PX, Math.max(SPARK_RAN_PX, Math.round((day.count / max) * SPARK_FULL_PX)));
 }
