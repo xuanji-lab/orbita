@@ -11,6 +11,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parsePluginViewId,
   type PluginConfigValue,
+  type PluginArchiveEntry,
   type PluginDraftEntry,
   type PluginDraftSnapshot,
   type PluginInstallRequest,
@@ -120,6 +121,8 @@ export function registerPluginIpc(deps: {
   );
 
   ipcMain.handle(ipcChannels.pluginUninstall, (_event, name: unknown): Promise<void> => plugins.uninstall(requireString(name, "name")));
+
+  ipcMain.handle(ipcChannels.pluginArchived, (): Promise<PluginArchiveEntry[]> => plugins.listArchived());
 
   ipcMain.handle(ipcChannels.pluginReveal, async (_event, name: unknown): Promise<void> => {
     const record = (await plugins.records()).find((each) => each.name === requireString(name, "name"));

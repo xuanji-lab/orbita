@@ -11,6 +11,7 @@ import { readFile } from "node:fs/promises";
 import { isNotFound } from "../fs-errors.ts";
 import {
   isPluginName,
+  type PluginArchiveEntry,
   type PluginConfigValue,
   type PluginPlacement,
   type PluginScope,
@@ -134,4 +135,29 @@ export function serializePluginRecords(records: readonly PluginRecord[]): Plugin
     plugins[record.name] = record;
   }
   return { version: 1, plugins };
+}
+
+/**
+ * 卸载归档的一个 `<folder>.json`（`{ archivedAt, record }`）读成界面用的一条。
+ * 只读投影：位置取卸载前的 placement，缺了退回 scope（停用状态下卸载的也要能说清「原来在哪」）。
+ * 读不出名字或时间的（坏 json、手改过）返回 null，由调用方跳过。
+ */
+export function parseArchiveEntry(id: string, raw: unknown): PluginArchiveEntry | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const file = raw as Record<string, unknown>;
+  const record = file["record"];
+  const archivedAt = file["archivedAt"];
+  if (typeof record !== "object" || record === null || typeof archivedAt !== "number" || !Number.isFinite(archivedAt)) return null;
+  const fields = record as Record<string, unknown>;
+  const name = fields["name"];
+  if (typeof name !== "string" || name === "") return null;
+  const place = parseScope(fields["placement"]);
+  const scope = place !== null && place.kind !== "off" ? place : parseScope(fields["scope"]);
+  return {
+    id,
+    name,
+    archivedAt,
+    global: scope?.kind === "global",
+    workspaces: scope?.kind === "workspaces" ? scope.ids : [],
+  };
 }

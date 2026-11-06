@@ -10,7 +10,12 @@ import {
   groupPlugins,
   installedNamesOf,
   creatorAvailable,
-  archivedScopeText,
+  archivedRange,
+  archivedUsableIn,
+  groupUsable,
+  mergeArchived,
+  pluginFilterCounts,
+  rangeOf,
   availabilityScopeOf,
   isActive,
   isBuiltinView,
@@ -295,12 +300,71 @@ describe("在哪儿可用：小标点击 → 新范围", () => {
   });
 });
 
-describe("archivedScopeText：已归档行上的范围", () => {
-  const nameOf = (id: string): string | null => ({ a: "paper-a", b: "paper-b" })[id] ?? null;
-  test("全局优先；工作区列名字；已不存在的工作区不列；都没有为空串", () => {
-    assert.equal(archivedScopeText({ global: true, workspaces: ["a"] }, "全局", nameOf), "全局");
-    assert.equal(archivedScopeText({ global: false, workspaces: ["a", "gone", "b"] }, "全局", nameOf), "paper-a、paper-b");
-    assert.equal(archivedScopeText({ global: false, workspaces: ["gone"] }, "全局", nameOf), "");
-    assert.equal(archivedScopeText({ global: false, workspaces: [] }, "全局", nameOf), "");
+describe("工作区选择条：能用的、范围小字、归档过滤", () => {
+  const a = ws("a", "paper-a");
+  const b = ws("b", "paper-b");
+  const spaces = [a, b];
+  const global = view({ id: "plugin:g", name: "G" });
+  const onlyA = view({ id: "plugin:oa", name: "OA", scope: { kind: "workspaces", ids: ["a"] }, placement: { kind: "workspaces", ids: ["a"] } });
+  const onlyB = view({ id: "plugin:ob", name: "OB", scope: { kind: "workspaces", ids: ["b"] }, placement: { kind: "workspaces", ids: ["b"] } });
+  const unplaced = view({ id: "plugin:n", name: "N", scope: { kind: "off" }, placement: null });
+  const all = [global, onlyA, onlyB, unplaced];
+
+  test("某工作区能用的 = 全局 + 只在它的；停用但记着位置的也算；没位置的哪档都不算", () => {
+    const off = view({ id: "plugin:off", name: "Off", scope: { kind: "off" }, placement: { kind: "workspaces", ids: ["a"] } });
+    assert.deepEqual(groupUsable([...all, off], spaces, { kind: "workspace", id: "a" })[0]?.items.map((v) => v.id), ["plugin:g", "plugin:oa", "plugin:off"]);
+    assert.deepEqual(groupUsable(all, spaces, { kind: "global" })[0]?.items.map((v) => v.id), ["plugin:g"]);
+    assert.deepEqual(groupUsable([unplaced], spaces, { kind: "workspace", id: "a" }), []);
+  });
+
+  test("「全部」仍是按位置分组（含未启用组）；usable 组的 workspace：工作区档是它、全局档是 null", () => {
+    assert.deepEqual(groupUsable(all, spaces, { kind: "all" }).map((g) => g.kind), ["global", "workspace", "workspace", "none"]);
+    const usable = groupUsable(all, spaces, { kind: "workspace", id: "b" })[0];
+    assert.equal(usable?.kind === "usable" ? usable.workspace?.id : null, "b");
+    const globalGroup = groupUsable(all, spaces, { kind: "global" })[0];
+    assert.equal(globalGroup?.kind === "usable" ? globalGroup.workspace : "x", null);
+  });
+
+  test("条数：全部 = 总行数；工作区 = 它能用的（含全局）；全局 = 只数全局", () => {
+    const counts = pluginFilterCounts(all, spaces);
+    assert.equal(counts.total, 4);
+    assert.equal(counts.perWorkspace.get("a"), 2);
+    assert.equal(counts.perWorkspace.get("b"), 2);
+    assert.equal(counts.global, 1);
+  });
+
+  test("范围小字：全局 / 只在这些（已删的不列）/ 没有", () => {
+    assert.deepEqual(rangeOf(global, spaces), { kind: "global" });
+    assert.deepEqual(rangeOf(onlyA, spaces), { kind: "only", names: ["paper-a"] });
+    assert.deepEqual(rangeOf(view({ id: "plugin:x", name: "X", placement: { kind: "workspaces", ids: ["a", "gone", "b"] } }), spaces), { kind: "only", names: ["paper-a", "paper-b"] });
+    assert.deepEqual(rangeOf(view({ id: "plugin:y", name: "Y", placement: { kind: "workspaces", ids: ["gone"] } }), spaces), { kind: "none" });
+    assert.deepEqual(rangeOf(unplaced, spaces), { kind: "none" });
+  });
+
+  test("归档合并：技能与插件卸载同一张表，新的在前", () => {
+    const rows = mergeArchived(
+      [{ id: "s1", slug: "s1", name: "old-notes", archivedAt: 10, global: false, workspaces: ["a"] }],
+      [{ id: "p1", name: "dsh-bili", archivedAt: 20, global: false, workspaces: ["a"] }],
+    );
+    assert.deepEqual(rows.map((r) => `${r.kind}:${r.name}`), ["plugin:dsh-bili", "skill:old-notes"]);
+  });
+
+  test("归档过滤：原来能在它那儿用的——全局的对每个工作区都算；全局档只留原来全局；全部不过滤", () => {
+    const g = { global: true, workspaces: [] as string[] };
+    const inA = { global: false, workspaces: ["a"] };
+    const nowhere = { global: false, workspaces: [] as string[] };
+    assert.equal(archivedUsableIn(g, { kind: "workspace", id: "b" }), true);
+    assert.equal(archivedUsableIn(inA, { kind: "workspace", id: "b" }), false);
+    assert.equal(archivedUsableIn(inA, { kind: "workspace", id: "a" }), true);
+    assert.equal(archivedUsableIn(inA, { kind: "global" }), false);
+    assert.equal(archivedUsableIn(g, { kind: "global" }), true);
+    assert.equal(archivedUsableIn(nowhere, { kind: "all" }), true);
+    assert.equal(archivedUsableIn(nowhere, { kind: "workspace", id: "a" }), false);
+  });
+
+  test("归档的「原来在哪」：全局优先；已不存在的工作区不列；都没有说不清", () => {
+    assert.deepEqual(archivedRange({ global: true, workspaces: ["a"] }, spaces), { kind: "global" });
+    assert.deepEqual(archivedRange({ global: false, workspaces: ["a", "gone", "b"] }, spaces), { kind: "only", names: ["paper-a", "paper-b"] });
+    assert.deepEqual(archivedRange({ global: false, workspaces: ["gone"] }, spaces), { kind: "none" });
   });
 });

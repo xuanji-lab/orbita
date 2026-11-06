@@ -58,6 +58,21 @@
   gap: var(--space-2);
 }
 
+/* 工作区选择条：钉在列表上方（右栏走 RightPanelFrame 的 subheader，全屏版夹在页头与正文之间），左右血线与正文一致 */
+.pl-wsbar {
+  min-width: 0;
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  box-sizing: border-box;
+  padding: var(--space-1) var(--space-6) 0;
+}
+
+/* 右栏版的选择条在 .pl-page 容器之外（RightPanelFrame 的 subheader），容器查询够不着它：直接按窄档写 */
+.pl-wsbar[data-chrome="rail"] {
+  padding: var(--space-1) var(--space-4) 0;
+}
+
 .pl-body {
   flex: 1;
   min-height: 0;
@@ -438,7 +453,8 @@
 }
 
 /* 全屏版：已装的列表树在宽档被藏起来（卡片墙顶替它），「正在做」没有墙版，宽窄都显示这一棵 */
-.pl-page[data-chrome="page"] .pl-grp.pl-dgrp {
+.pl-page[data-chrome="page"] .pl-grp.pl-dgrp,
+.pl-page[data-chrome="page"] .pl-grp.pl-archived {
   display: block;
 }
 
@@ -1595,6 +1611,10 @@ button.pl-wf-chip:hover {
  * 内容左右血线对齐右栏其它面板：文字距面板边 16px，行的 hover 底铺到 8px。
  */
 @container pl (max-width: 639px) {
+  .pl-wsbar {
+    padding: var(--space-1) var(--space-4) 0;
+  }
+
   .pl-head {
     flex-wrap: wrap;
     padding: var(--space-3) var(--space-4) var(--space-2);

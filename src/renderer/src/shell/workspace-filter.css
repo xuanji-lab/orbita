@@ -1,0 +1,66 @@
+/*
+ * 工作区选择条（WorkspaceFilterBar）：一排 Chip，放不下时横向滚动、滚动条藏起，
+ * 被裁的一侧用淡出提示（做法同工具栏溢出文字的 mask，toolbar.css）。
+ */
+.ws-filter-bar {
+  /* 自己当 offsetParent：「选中的那档滚进视野」按 offsetLeft 算，要的是相对这一条的位置 */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--space-0-5) 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.ws-filter-bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Chip 在横向滚动条里不许被 flex 压扁：宁可滚也不截成一个字 */
+.ws-filter-bar > .chip {
+  flex: none;
+}
+
+.ws-filter-bar[data-fade-end] {
+  -webkit-mask-image: linear-gradient(90deg, var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+  mask-image: linear-gradient(90deg, var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+}
+
+.ws-filter-bar[data-fade-start] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6));
+  mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6));
+}
+
+.ws-filter-bar[data-fade-start][data-fade-end] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6), var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+  mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6), var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+}
+
+.ws-chip-in {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ws-chip-name {
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 条数：xs 档、次级灰；选中的那档跟着字色走（不另起一个色） */
+.ws-chip-count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+.chip[data-active="true"] .ws-chip-count {
+  color: inherit;
+}

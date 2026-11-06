@@ -865,3 +865,34 @@ describe("内置插件（随应用带，默认对所有工作区启用，可停�
     await assert.rejects(withBuiltin.skillFile("big", "big"), /too large/);
   });
 });
+
+describe("卸载归档的只读清单", () => {
+  test("列出卸载前的位置与时间，新的在前；坏 json 与非 json 跳过", async () => {
+    const source = await makeSource();
+    await installFolder(source, "copy");
+    await store.setScope("demo", { kind: "workspaces", ids: ["w1", "w2"] });
+    await store.uninstall("demo");
+    const dir = join(configDir, "plugins-archive");
+    await put(dir, "broken-20260101-000000.json", "{不是 json");
+    await put(dir, "notes.txt", "x");
+    await put(dir, "old-20200101-000000.json", JSON.stringify({ archivedAt: 1, record: { name: "old", scope: { kind: "global" }, placement: { kind: "global" } } }));
+    const entries = await store.listArchived();
+    assert.deepEqual(entries.map((e) => e.name), ["demo", "old"]);
+    const demo = entries[0];
+    assert.equal(demo?.global, false);
+    assert.deepEqual(demo?.workspaces, ["w1", "w2"]);
+    assert.equal(entries[1]?.global, true);
+    assert.match(demo?.id ?? "", /^demo-\d{8}-\d{6}$/);
+  });
+
+  test("停用状态下卸载也记得原位置（placement 优先）；没有归档目录是空表", async () => {
+    assert.deepEqual(await store.listArchived(), []);
+    const source = await makeSource();
+    await installFolder(source, "copy");
+    await store.setScope("demo", { kind: "workspaces", ids: ["w1"] });
+    await store.setScope("demo", { kind: "off" });
+    await store.uninstall("demo");
+    const [entry] = await store.listArchived();
+    assert.deepEqual(entry?.workspaces, ["w1"]);
+  });
+});

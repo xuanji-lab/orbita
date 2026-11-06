@@ -4,6 +4,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
+  PluginArchiveEntry,
   PluginConfigValue,
   PluginDraftEntry,
   PluginDraftSnapshot,
@@ -49,6 +50,8 @@ export const pluginApi = {
     ipcRenderer.invoke(ipcChannels.pluginSetConfig, name, key, value),
   /** 卸载 = 归档不是删除 */
   uninstall: (name: string): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginUninstall, name),
+  /** 卸载归档的只读清单（新的在前）；只列不恢复 */
+  archived: (): Promise<PluginArchiveEntry[]> => ipcRenderer.invoke(ipcChannels.pluginArchived),
   /** 在文件管理器里打开插件目录 */
   reveal: (name: string): Promise<void> => ipcRenderer.invoke(ipcChannels.pluginReveal, name),
   /** 重新读目录，并让 MCP 连接按新配置重建 */

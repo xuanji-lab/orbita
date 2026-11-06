@@ -7,6 +7,9 @@ import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
+import { WorkspaceFilterBar, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
+import { carryoverCounts, groupCarryoversByWorkspace, type CarryoverWorkspaceGroup } from "./carryover-groups.ts";
+import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import {
   EMPTY_SELECTION,
@@ -81,32 +84,8 @@ function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages)
   return runStateLabel(state, t);
 }
 
-/**
- * 以后再做面板的分组：按来源会话归堆，组序跟会话列表（最近的在前）；
- * 来源会话已删的堆到最后（标题换占位，跳转不可用）。丢掉的（dismissed）不列——它们只在那条任务的进度面板里能找回。
- */
-function groupCarryovers(
-  carryovers: readonly Carryover[],
-  sessions: readonly SessionMeta[],
-): { session: SessionMeta | null; items: Carryover[] }[] {
-  const bySource = new Map<string, Carryover[]>();
-  for (const item of carryovers) {
-    if (item.status === "dismissed") continue;
-    const list = bySource.get(item.sourceSessionId) ?? [];
-    list.push(item);
-    bySource.set(item.sourceSessionId, list);
-  }
-  const groups: { session: SessionMeta | null; items: Carryover[] }[] = [];
-  for (const meta of sessions) {
-    const items = bySource.get(meta.id);
-    if (items !== undefined) groups.push({ session: meta, items });
-  }
-  for (const [source, items] of bySource) {
-    if (sessions.some((meta) => meta.id === source)) continue;
-    groups.push({ session: null, items });
-  }
-  return groups;
-}
+/** 已归档 / 以后再做的选择条：有「任务」档，没有「全局」档 */
+const SESSION_FILTER_ALLOW: WsAllow = { tasks: true, global: false };
 
 /**
  * 筛选扑空的空态文案：按激活的组合说清「为什么什么都没有、怎么才有」，
@@ -321,6 +300,44 @@ export function Sidebar(props: {
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
   const live = roots.filter((m) => !m.archived);
   const archived = roots.filter((m) => m.archived);
+  // 已归档 / 以后再做各记一份「上次选的工作区」（没选过时默认当前会话所在的工作区）
+  const subviewFallback = defaultFilter(openWorkspaceId, session.workspaces);
+  const [archivedFilter, setArchivedFilter] = useWorkspaceFilter("archived", subviewFallback, session.workspaces, SESSION_FILTER_ALLOW);
+  const [carryoverFilter, setCarryoverFilter] = useWorkspaceFilter("carryovers", subviewFallback, session.workspaces, SESSION_FILTER_ALLOW);
+  // 组内按归档时间新→旧：meta 没存归档时刻，以最后活动时间代之（归档的多是做完不再动的会话，两者基本一致）
+  const archivedGroups = groupByWorkspace(
+    [...archived].sort((a, b) => b.updatedAt - a.updatedAt),
+    (meta) => meta.workspaceId,
+    session.workspaces,
+    archivedFilter,
+  );
+  const archivedCounts = bucketCounts(archived, (meta) => meta.workspaceId, session.workspaces);
+  const archivedOptions = buildOptions({
+    workspaces: session.workspaces,
+    total: archived.length,
+    perWorkspace: archivedCounts.perWorkspace,
+    tasks: archivedCounts.tasks,
+    global: null,
+    selected: archivedFilter,
+    hideEmpty: true,
+  });
+  const carryCounts = carryoverCounts(session.carryovers, session.sessions, session.workspaces);
+  const carryoverOptions = buildOptions({
+    workspaces: session.workspaces,
+    total: carryCounts.total,
+    perWorkspace: carryCounts.perWorkspace,
+    tasks: carryCounts.tasks,
+    global: null,
+    selected: carryoverFilter,
+    hideEmpty: true,
+    present: carryCounts.listed,
+  });
+  const carryoverGroups = groupCarryoversByWorkspace(session.carryovers, session.sessions, session.workspaces, carryoverFilter);
+  /** 选了某档却没有东西时空态里写的名字 */
+  const filterName = (filter: WsFilter): string =>
+    filter.kind === "workspace"
+      ? (session.workspaces.find((w) => w.id === filter.id)?.name ?? filter.id)
+      : t.sidebar.wsFilterTasks;
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   // 用 roots.length 不用 session.sessions.length：这里描述的是左栏那份列表
@@ -640,6 +657,35 @@ export function Sidebar(props: {
         </div>
       )}
 
+      {/*
+        标题行左端的返回键是子视图的**显式出口**。以前出去只能再点一次底部那条 toggle，
+        而它既不像一个「返回」，又会在归档空了时禁用。这是一个子视图，子视图就该在它自己的
+        标题旁边带着回去的路。标题与工作区选择条**钉在列表外面**：列表滚下去了，一排工作区还在手边。
+      */}
+      {(props.showArchived || props.showCarryovers) && !overlayOpen && (
+        // minmax(0,1fr)：不加的话 grid 的 auto 列按选择条的内容宽撑开，横向滚动永远触发不了
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: "var(--space-1)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+            <IconButton
+              label={t.sidebar.backToTasks}
+              title={t.sidebar.backToTasksTip}
+              size={20}
+              onClick={() => (props.showArchived ? props.onShowArchived(false) : props.onShowCarryovers(false))}
+              style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
+            >
+              <Icon name="chevron-left" size={13} strokeWidth={1.8} />
+            </IconButton>
+            <NodeLabel>{props.showArchived ? t.sidebar.archived : t.sidebar.carryovers}</NodeLabel>
+          </div>
+          <WorkspaceFilterBar
+            options={props.showArchived ? archivedOptions : carryoverOptions}
+            workspaces={session.workspaces}
+            selected={props.showArchived ? archivedFilter : carryoverFilter}
+            onSelect={props.showArchived ? setArchivedFilter : setCarryoverFilter}
+          />
+        </div>
+      )}
+
       <div
         className="scroll"
         style={{
@@ -652,46 +698,37 @@ export function Sidebar(props: {
         {props.showArchived && !overlayOpen ? (
           <>
             {/*
-              标题行左端的返回键是 Archived 视图的**显式出口**。以前出去只能再点一次
-              底部那条 toggle，而它既不像一个「返回」，又会在归档空了时禁用。
-              这是一个子视图，子视图就该在它自己的标题旁边带着回去的路。
-            */}
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
-              <IconButton
-                label={t.sidebar.backToTasks}
-                title={t.sidebar.backToTasksTip}
-                size={20}
-                onClick={() => props.onShowArchived(false)}
-                style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
-              >
-                <Icon name="chevron-left" size={13} strokeWidth={1.8} />
-              </IconButton>
-              <NodeLabel>{t.sidebar.archived}</NodeLabel>
-            </div>
-            {/*
               空了也停在这里、显示空态（2026-09-27 wafo：空的时候自动弹回主列表，点入口像按钮坏了）。
               以前会自动退回，是因为出口只有底部那条会在 0 条时禁用的入口——现在标题旁有返回键、
               入口常驻右栏，死胡同已不存在。与遗留事项面板（09-25 起 0 条也能进）同一口径。
             */}
             {archived.length === 0 && <Empty icon={FEATURE_ICON.archived}>{t.sidebar.noArchived}</Empty>}
-            {archived.map((meta) => (
-              <SessionRow
-                key={meta.id}
-                meta={meta}
-                session={session}
-                active={meta.id === openId}
-                onClick={() => open(meta.id)}
-                moveIds={[meta.id]}
-                onMove={moveBatch}
-              />
+            {archived.length > 0 && archivedGroups.length === 0 && (
+              <Empty icon={FEATURE_ICON.archived}>{t.sidebar.wsFilterNoneIn(filterName(archivedFilter))}</Empty>
+            )}
+            {archivedGroups.map((group) => (
+              <div key={group.workspace?.id ?? "tasks"} style={{ marginBottom: "var(--space-2)" }}>
+                <WsGroupHead workspace={group.workspace} count={group.items.length} />
+                {group.items.map((meta) => (
+                  <SessionRow
+                    key={meta.id}
+                    meta={meta}
+                    session={session}
+                    active={meta.id === openId}
+                    onClick={() => open(meta.id)}
+                    moveIds={[meta.id]}
+                    onMove={moveBatch}
+                  />
+                ))}
+              </div>
             ))}
           </>
         ) : props.showCarryovers && !overlayOpen ? (
           <CarryoverPanel
-            carryovers={session.carryovers}
+            workspaceGroups={carryoverGroups}
+            emptyForFilter={carryCounts.listed.total > 0 ? filterName(carryoverFilter) : null}
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
-            onBack={() => props.onShowCarryovers(false)}
             // 开工即回对话：退出面板、新会话落在来源会话的组里并展开那一组——App 的
             // startCarryoverTask，右栏「这条任务 › 留到以后」的「转成任务」走同一条路
             onResumeNew={props.onStartCarryoverTask}
@@ -1850,7 +1887,10 @@ function SessionRow(props: {
  * 「跳回原文」的滚动定位，等定位基建立项后接 sourceMessageRange[0]）。
  */
 function CarryoverPanel(props: {
-  carryovers: readonly Carryover[];
+  /** 已按选择条分好的两层：工作区 → 来源会话 → 事项 */
+  workspaceGroups: readonly CarryoverWorkspaceGroup[];
+  /** 选了某档却没有东西时那一档的名字；null = 整个面板就是空的（还没记过任何事项） */
+  emptyForFilter: string | null;
   sessions: readonly SessionMeta[];
   onSetStatus: (id: string, status: Carryover["status"]) => void;
   /** 方案 A：新开一单带上下文开工（面板主入口） */
@@ -1858,11 +1898,8 @@ function CarryoverPanel(props: {
   /** 方案 B：以遗留事项为用户消息续跑原会话（同一按钮的右键备选） */
   onResumeInSource: (item: Carryover) => void;
   onOpenTask: (sessionId: string) => void;
-  /** 显式出口：标题行左端的返回键 */
-  onBack: () => void;
 }) {
   const t = useT();
-  const groups = groupCarryovers(props.carryovers, props.sessions);
   // 默认全折叠：一眼只看到「哪几个任务还有几项」，不是一整面待办墙
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string): void =>
@@ -1872,36 +1909,19 @@ function CarryoverPanel(props: {
       else next.add(key);
       return next;
     });
-  /**
-   * 标题行左端的返回键是本面板的**显式出口**（与 Archived 同款）：出去不该只能
-   * 再点一次底部那条 toggle——它既不像一个「返回」，又会在清单空了时禁用。
-   */
-  const header = (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
-      <IconButton
-        label={t.sidebar.backToTasks}
-        title={t.sidebar.backToTasksTip}
-        size={20}
-        onClick={props.onBack}
-        style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
-      >
-        <Icon name="chevron-left" size={13} strokeWidth={1.8} />
-      </IconButton>
-      <NodeLabel>{t.sidebar.carryovers}</NodeLabel>
-    </div>
-  );
-  if (groups.length === 0) {
+  if (props.workspaceGroups.length === 0) {
     return (
-      <>
-        {header}
-        <Empty icon={FEATURE_ICON.carryovers}>{t.sidebar.noCarryovers}</Empty>
-      </>
+      <Empty icon={FEATURE_ICON.carryovers}>
+        {props.emptyForFilter === null ? t.sidebar.noCarryovers : t.sidebar.wsFilterNoneIn(props.emptyForFilter)}
+      </Empty>
     );
   }
   return (
     <>
-      {header}
-      {groups.map((group) => {
+      {props.workspaceGroups.map((workspaceGroup) => (
+        <div key={workspaceGroup.workspace?.id ?? "tasks"} style={{ marginBottom: "var(--space-2)" }}>
+          <WsGroupHead workspace={workspaceGroup.workspace} count={workspaceGroup.count} />
+          {workspaceGroup.groups.map((group) => {
         const groupKey = group.session?.id ?? group.items[0]?.sourceSessionId ?? "";
         const isOpen = expanded.has(groupKey);
         const openCount = group.items.filter((item) => item.status === "open").length;
@@ -1994,8 +2014,52 @@ function CarryoverPanel(props: {
           ))}
         </div>
         );
-      })}
+          })}
+        </div>
+      ))}
     </>
+  );
+}
+
+/**
+ * 已归档 / 以后再做里的工作区组头：folder 图标（与侧栏工作区组头同一枚）+ 名字 + 条数，条数钉在行右。
+ * 「任务」组（没有工作区的）不画图标，与侧栏 TASKS 节点一样只有名字。
+ */
+function WsGroupHead(props: { workspace: Workspace | null; count: number }) {
+  const t = useT();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", minHeight: "var(--control-height-md)" }}>
+      {props.workspace !== null && (
+        <span style={{ display: "grid", placeItems: "center", width: 20, flex: "none", color: "var(--color-text-tertiary)" }}>
+          <Icon name="folder" size={13} strokeWidth={1.8} />
+        </span>
+      )}
+      <strong
+        title={props.workspace?.name}
+        style={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          fontSize: "var(--font-size-sm)",
+          fontWeight: "var(--weight-semibold)",
+          color: "var(--color-text-secondary)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {props.workspace?.name ?? t.sidebar.tasks}
+      </strong>
+      <span
+        style={{
+          flex: "none",
+          fontSize: "var(--font-size-sm)",
+          fontVariantNumeric: "tabular-nums",
+          color: "var(--color-text-tertiary)",
+        }}
+      >
+        {props.count}
+      </span>
+    </div>
   );
 }
 
