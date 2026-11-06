@@ -441,7 +441,8 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
         // 指令块（<mentioned_tools>）随消息进上下文，量级是一行点名指令
         if (token.kind === "skill") {
           pushOccurrence(skillRows, `invoked:${token.target}`, { name: token.target, how: "invoked" }, { turn: itemTurn, gone, tokens: estimateContextTokens(`- ${token.target} — read the skill file before anything else`) });
-        } else {
+        } else if (token.kind === "mcp") {
+          // plugin 点名没有独立的行：指令块让模型 read 入口技能，那次读取自己会记一行
           pushOccurrence(mcpRows, `invoked:${token.target}`, { server: token.target, tool: "", query: null }, { turn: itemTurn, gone, tokens: estimateContextTokens(`- use the MCP server ${token.target}`) });
         }
       }
