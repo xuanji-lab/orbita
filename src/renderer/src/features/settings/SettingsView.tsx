@@ -115,6 +115,10 @@ export function SettingsView(props: {
         minHeight: 0,
         display: "grid",
         gridTemplateRows: "minmax(0,1fr)",
+        // 列必须显式写 minmax(0,1fr)：缺省是隐式的 auto 列，它的下限是页签内容的 min-content——
+        // 右栏一开、主槽变窄时这一列不肯缩，内容溢出 .pane-main 画到右栏底下（2026-11-07 用户：
+        // 模型服务页被右栏盖住；1000 宽窗口 + 右栏实测溢出 198px，补这一行后为 0）
+        gridTemplateColumns: "minmax(0,1fr)",
       }}
     >
 
