@@ -4144,7 +4144,8 @@ textarea.text-field {
 /* 正文：最多两行省略；可跳时是按钮（title 挂全文——原文不在转录里时唯一看全文的地方） */
 .material-quote-text {
   flex: 1 1 auto;
-  min-width: 0;
+  /* 正文有底线宽：窄列里先让注脚省略，不让正文缩成 0（文档引用的注脚是「文件名 · 第几行 · 字数」，很长） */
+  min-width: 6em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4163,6 +4164,10 @@ textarea.text-field {
 /* 引用卡格子注脚：尾部元素，钉在格右血线上（动作键绝对定位，悬停时它让位——
    D 项同款）；用 .row-trailing 同一套推右 */
 .material-quote-note {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);

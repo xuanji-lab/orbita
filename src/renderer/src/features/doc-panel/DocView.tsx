@@ -36,8 +36,13 @@ export function DocView(props: {
       });
     }
     let timer: number | undefined;
-    const remember = (): void => setView(path, { scroll: Math.round(scroller.scrollTop) });
+    // 卸载时节点已脱离、scrollTop 读出来是 0：所以滚动时就把最新值记在闭包里，卸载时记它（没滚过就不写，免得盖掉旧值）
+    let latest: number | null = null;
+    const remember = (): void => {
+      if (latest !== null) setView(path, { scroll: latest });
+    };
     const onScroll = (): void => {
+      latest = Math.round(scroller.scrollTop);
       window.clearTimeout(timer);
       timer = window.setTimeout(remember, 300);
     };
@@ -46,8 +51,7 @@ export function DocView(props: {
       cancelAnimationFrame(frame);
       window.clearTimeout(timer);
       scroller.removeEventListener("scroll", onScroll);
-      // 卸载时 scrollTop 可能已被清零（节点已脱离），只在还有值时记
-      if (scroller.scrollTop > 0 || saved === 0) remember();
+      remember();
     };
   }, [path]);
 

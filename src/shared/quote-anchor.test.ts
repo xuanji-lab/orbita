@@ -38,6 +38,18 @@ describe("relocateQuote —— 以原文为锚（M3）", () => {
     assert.equal(moved.missing, undefined);
   });
 
+  it("同一段原文出现多次：带上「第几处 / 共几处」与这一处前后的字，进正文（模型数行号不可靠）", () => {
+    const edited = base.replace("# 标题\n\n", `# 标题\n\n${SENTENCE}\n\n`);
+    const moved = relocateQuote(edited, select(base, SENTENCE));
+    assert.deepEqual(moved.occurrence, { index: 2, of: 2 });
+    const message = composeQuotedMessage([moved], "改成英文");
+    assert.match(message, / occurrence="2\/2" before="[^"]*第一段。\\n\\n" after="\\n\\n结尾一段。\\n">/);
+    assert.match(QUOTE_GUIDELINE, /occurrence="k\/n"/);
+    // 只有一处：不带这些
+    const unique = composeQuotedMessage([relocateQuote(base, select(base, SENTENCE))], "x");
+    assert.doesNotMatch(unique, /occurrence|before=/);
+  });
+
   it("重复句在下方出现：同样靠上下文，不被旧行号带偏", () => {
     const text = `甲\n\n${SENTENCE}\n\n乙\n\n${SENTENCE}\n\n丙\n`;
     const second = select(text, SENTENCE, 1);

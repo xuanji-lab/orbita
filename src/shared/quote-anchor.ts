@@ -82,6 +82,13 @@ export function quoteAt(text: string, quote: TextQuote, index: number): TextQuot
   const from = lineOf(text, index);
   const to = Math.max(from, lineOf(text, lastChar));
   const next: TextQuote = { ...rest, lines: { from, to } };
+  delete next.occurrence;
+  const all = occurrences(text, quote.text);
+  if (all.length > 1) {
+    next.occurrence = { index: all.indexOf(index) + 1 || 1, of: all.length };
+    // 此刻这一处前后的字（不是划选时的）：模型拿它们拼 oldText
+    next.context = contextAround(text, index, end);
+  }
   if (quote.slide !== undefined) {
     const page = parseDeck(text).pages.find((candidate) => index >= candidate.from && index <= candidate.to);
     if (page !== undefined) next.slide = page.index + 1;

@@ -56,6 +56,11 @@ export interface TextQuote {
    * **只活在输入框里**，不进正文，不参与判重
    */
   anchor?: string;
+  /**
+   * 发送时发现这段原文在文件里出现了好几次：划选的是从上往下数第 index 处、共 of 处。进正文
+   * （连同当前位置前后的上下文），让模型能构造只命中这一处的 edit——模型数行号不可靠（实测数错过两行）
+   */
+  occurrence?: { index: number; of: number };
   /** 发送时在文件里已找不到这段原文（被用户或 agent 改掉了）：进正文，告诉模型别改 */
   missing?: true;
   /**
@@ -131,6 +136,11 @@ function sanitizeBody(text: string): string {
   return text.replace(/<\/quoted_context>/gi, "</quoted_context_>").replace(/<\/quoted_file>/gi, "</quoted_file_>");
 }
 
+/** 属性值里的换行写成字面的 `\n`（两个字符），免得一个属性跨行 */
+function escapeNewlines(value: string): string {
+  return value.replace(/\r?\n/g, "\\n");
+}
+
 function encodeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -140,7 +150,12 @@ function quoteBlock(quote: TextQuote, index: number): string {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
     const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"`;
     const missing = quote.missing === true ? ' missing="true"' : "";
-    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
+    // 同一段原文在文件里出现多次：说清是第几处，并带上这一处前后的字，模型把它们拼进 edit 的 oldText 就只会命中这一处
+    const several =
+      quote.occurrence !== undefined && quote.occurrence.of > 1 && quote.context !== undefined
+        ? ` occurrence="${quote.occurrence.index}/${quote.occurrence.of}" before="${encodeAttribute(escapeNewlines(quote.context.before))}" after="${encodeAttribute(escapeNewlines(quote.context.after))}"`
+        : "";
+    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${several}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
   }
   const turn = quote.turn !== undefined ? ` turn="${quote.turn}"` : "";
   return `<quoted_context index="${index}" role="${quote.role}"${turn}>\n${sanitizeBody(quote.text)}\n</quoted_context>\n\n`;
@@ -190,8 +205,12 @@ export const QUOTE_GUIDELINE = [
     "as the user selected it in the document panel. The quoted text is authoritative; lines (1-based, inclusive) and " +
     "slide (the 1-based page of a slide deck) are only a locator hint, already re-resolved against the file as it " +
     "is now. To change it, edit only that passage — match the quoted text exactly, and when the same text occurs " +
-    "more than once in the file, use lines to pick the quoted occurrence — and leave every other byte of the file " +
-    'as it was. missing="true" means the quoted text no longer exists in the file (it was edited since): do ' +
+    "more than once in the file, pick the quoted occurrence (see below) — and leave every other byte of the file " +
+    'as it was. occurrence="k/n" means this exact text occurs n times in the file and the quote is the k-th, ' +
+    "counting from the top; before / after (with \\n for line breaks) are the characters right around the quoted " +
+    "occurrence — include them in the edit's old text so it matches only that occurrence. Line numbers are counted " +
+    'like `cat -n`, blank lines included; do not trust your own counting when it disagrees. missing="true" means ' +
+    "the quoted text no longer exists in the file (it was edited since): do " +
     "not edit anything for that quote, tell the user the passage has changed, and ask what they want.",
   '<open_document path="…" kind="doc|slides"/> at the start of a message means the user has that file open ' +
     'in the document panel beside the chat; "the document", "the slides", "this page" mean it. kind=doc is ' +

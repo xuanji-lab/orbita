@@ -4,12 +4,15 @@
  * 写东西的面板在 320px 里太局促，所以默认占 pane（chat 主区 + 右栏）的 0.58；但聊天列有
  * 它自己的底线——再窄输入框按钮互相压住、引用芯片没有正文、「1 个文件已更改」一字一行
  * （2026-11-07 独立验收：1200 窗口聊天列 293–370px）。所以：
- *   宽 = clamp(下限 420, 想要的, min(pane × 2/3, pane − 聊天列底线 480))
- * pane 连「聊天 480 + 面板下限 420」都放不下时不再并排，转右侧覆盖层，宽 = min(640, 窗口 − 48)。
+ *   宽 = clamp(下限 420, 想要的, min(pane × 2/3, pane − 聊天列首选 480))
+ * 聊天列 480 是首选；面板已经缩到下限 420 还放不下时，聊天列可以再让到硬底线 410（1200 窗口实测：
+ * 输入框按钮不重叠、引用芯片有正文）；连「面板 420 + 聊天 410」都放不下才不再并排，转右侧覆盖层，宽 = min(640, 窗口 − 48)。
+ * 覆盖层会盖住聊天列右侧，想边看边聊要收起左侧栏。
  * 其它右栏页不走这里（它们的规则在 clampRightPanelWidth）。
  */
 export const DOC_PANEL_FRACTION = 0.58;
 export const DOC_CHAT_MIN = 480;
+export const DOC_CHAT_HARD_MIN = 410;
 export const DOC_PANEL_FLOOR = 420;
 export const DOC_OVERLAY_MAX = 640;
 export const DOC_OVERLAY_MARGIN = 48;
@@ -29,8 +32,8 @@ export function docPanelLayout(pane: number, wanted: number | null, windowWidth:
   if (!Number.isFinite(pane) || pane <= 0) {
     return { overlay: false, width: Math.round(wanted ?? DOC_PANEL_FLOOR) };
   }
-  if (pane < DOC_CHAT_MIN + DOC_PANEL_FLOOR) return { overlay: true, width: overlayWidth };
-  const ceiling = Math.min(Math.round((pane * 2) / 3), pane - DOC_CHAT_MIN);
+  if (pane < DOC_CHAT_HARD_MIN + DOC_PANEL_FLOOR) return { overlay: true, width: overlayWidth };
+  const ceiling = Math.max(DOC_PANEL_FLOOR, Math.min(Math.round((pane * 2) / 3), pane - DOC_CHAT_MIN));
   const want = wanted ?? Math.round(pane * DOC_PANEL_FRACTION);
   return { overlay: false, width: Math.max(DOC_PANEL_FLOOR, Math.min(ceiling, Math.round(want))) };
 }

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { docPanelLayout, DOC_CHAT_MIN, DOC_PANEL_FLOOR } from "./doc-panel-width.ts";
+import { docPanelLayout, DOC_CHAT_HARD_MIN, DOC_CHAT_MIN, DOC_PANEL_FLOOR } from "./doc-panel-width.ts";
 
 describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () => {
   it("宽窗口：默认 0.58 × pane，不超过 2/3", () => {
@@ -8,17 +8,19 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
     assert.equal(docPanelLayout(1200, 5000, 1500).width, 720);
   });
 
-  it("聊天列永远 ≥ 480：pane 1000 时面板最多 520", () => {
-    for (const pane of [900, 1000, 1100, 1200, 1400]) {
-      const { overlay, width } = docPanelLayout(pane, null, pane + 330);
-      if (!overlay) assert.ok(pane - width >= DOC_CHAT_MIN, `pane ${pane} 聊天列 ${pane - width}`);
-    }
+  it("聊天列首选 ≥ 480；面板到下限后聊天列可让到硬底线 410，不再低", () => {
     assert.deepEqual(docPanelLayout(1000, null, 1330), { overlay: false, width: 520 });
+    for (const pane of [830, 880, 900, 1000, 1100, 1200, 1400]) {
+      const { overlay, width } = docPanelLayout(pane, null, pane + 330);
+      assert.equal(overlay, false, `pane ${pane}`);
+      assert.ok(pane - width >= DOC_CHAT_HARD_MIN, `pane ${pane} 聊天列 ${pane - width}`);
+      if (pane >= DOC_CHAT_MIN + DOC_PANEL_FLOOR) assert.ok(pane - width >= DOC_CHAT_MIN);
+    }
   });
 
-  it("面板先缩到下限 420，再放不下才走覆盖层", () => {
-    assert.deepEqual(docPanelLayout(900, null, 1230), { overlay: false, width: DOC_PANEL_FLOOR });
-    assert.equal(docPanelLayout(899, null, 1229).overlay, true);
+  it("面板先缩到下限 420，聊天列硬底线都保不住才走覆盖层", () => {
+    assert.deepEqual(docPanelLayout(830, null, 1160), { overlay: false, width: DOC_PANEL_FLOOR });
+    assert.equal(docPanelLayout(829, null, 1159).overlay, true);
   });
 
   it("覆盖层宽 = min(640, 窗口 − 48)", () => {
