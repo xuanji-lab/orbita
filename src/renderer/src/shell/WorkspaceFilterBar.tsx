@@ -106,6 +106,24 @@ export function WorkspaceFilterBar(props: {
 }
 
 /**
+ * 钉在滚动区上方的那一条（选择条）与滚动内容之间的分界：内容没滚时不画线（顶上本来就是干净的），
+ * 滚起来、内容被滚动区的上缘裁掉时才在条下画一根发丝线——不然被裁的内容（提示条、列表行）
+ * 紧贴着选择条硬切，读起来像是选择条「盖」在了内容上。`reset` 变了（换了面板内容）就回到未滚态。
+ */
+export function useScrolledEdge(reset?: unknown): { scrolled: boolean; onScroll: (event: React.UIEvent<HTMLElement>) => void; edgeStyle: React.CSSProperties } {
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => setScrolled(false), [reset]);
+  const onScroll = useCallback((event: React.UIEvent<HTMLElement>) => {
+    const next = event.currentTarget.scrollTop > 0;
+    setScrolled((now) => (now === next ? now : next));
+  }, []);
+  const edgeStyle: React.CSSProperties = {
+    borderBottom: `1px solid ${scrolled ? "var(--color-border-subtle)" : "transparent"}`,
+  };
+  return { scrolled, onScroll, edgeStyle };
+}
+
+/**
  * 每个面板各记一份上次选的（key = 面板名），整个应用生命周期内不丢：右栏关了再开、切走又回来仍停在原来那档。
  * **不按会话记**（用户裁决）：没选过时才走默认（当前会话所在工作区），之后随用户。
  * 同一个面板可能同时挂两份（能力面板：右栏版与设置里的全屏版），所以是个可订阅的小仓库而不是各自的 state——

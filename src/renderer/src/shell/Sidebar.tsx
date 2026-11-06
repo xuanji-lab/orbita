@@ -7,7 +7,7 @@ import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
-import { WorkspaceFilterBar, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
+import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
 import { carryoverCounts, groupCarryoversByWorkspace, type CarryoverWorkspaceGroup } from "./carryover-groups.ts";
 import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
@@ -332,6 +332,8 @@ export function Sidebar(props: {
     hideEmpty: true,
     present: carryCounts.listed,
   });
+  // 子视图的标题 + 选择条钉在列表外：列表滚起来时在它们下面画发丝线（内容被滚动区上缘裁掉时不至于像被盖住）
+  const subviewEdge = useScrolledEdge(props.showArchived ? "archived" : "carryovers");
   const carryoverGroups = groupCarryoversByWorkspace(session.carryovers, session.sessions, session.workspaces, carryoverFilter);
   /** 选了某档却没有东西时空态里写的名字 */
   const filterName = (filter: WsFilter): string =>
@@ -664,7 +666,7 @@ export function Sidebar(props: {
       */}
       {(props.showArchived || props.showCarryovers) && !overlayOpen && (
         // minmax(0,1fr)：不加的话 grid 的 auto 列按选择条的内容宽撑开，横向滚动永远触发不了
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: "var(--space-1)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: "var(--space-1)", paddingBottom: "var(--space-1)", ...subviewEdge.edgeStyle }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
             <IconButton
               label={t.sidebar.backToTasks}
@@ -694,6 +696,7 @@ export function Sidebar(props: {
           marginRight: "calc(-1 * var(--space-3))",
           paddingRight: "var(--space-3)",
         }}
+        onScroll={subviewEdge.onScroll}
       >
         {props.showArchived && !overlayOpen ? (
           <>
