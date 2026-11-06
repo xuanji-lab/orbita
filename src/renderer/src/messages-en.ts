@@ -2990,6 +2990,11 @@ export const en = {
     reworded: (from: string, to: string) => `"${from}" is now "${to}"`,
     /** before = 挪到哪一步前面；空串 = 挪到了最后 */
     moved: (text: string, before: string) => (before === "" ? `moved "${text}" to the end` : `moved "${text}" before "${before}"`),
+    /** 往前提了（用户让先做这一步）：before = 提到哪一步前面 */
+    movedUp: (text: string, before: string) => `moved "${text}" up, before "${before}"`,
+    /** 一步变成 waiting（等用户 / 外部）：waitingFor 空串 = 没写等什么 */
+    waiting: (text: string, waitingFor: string) =>
+      waitingFor === "" ? `"${text}" is waiting on you` : `"${text}" is waiting: ${waitingFor}`,
     split: (from: string, into: string) => `"${from}" split into ${into}`,
     merged: (from: string, into: string) => `${from} merged into "${into}"`,
     /** 对话里的一行：count = 这一轮改了几处，summary = 第一处的说法，why 空串 = 没写理由 */
@@ -3000,6 +3005,11 @@ export const en = {
     noteAdded: "New",
     noteReworded: "Reworded",
     noteSplit: "Split out",
+    /** 被往前提的步下面写一句出处（后面跟理由） */
+    noteMoved: "Moved up",
+    /** waiting 的步，waitingFor 没写时小签上的默认字 */
+    waitingDefault: "Waiting",
+    waitingTitle: "Waiting on you or something external; not in progress",
     /** 改过的步下面写原文字 */
     was: (from: string) => `was: ${from}`,
     splitFrom: (from: string) => `from "${from}"`,

@@ -2785,6 +2785,8 @@ export const zh: Messages = {
     removed: (text) => `去掉了「${text}」`,
     reworded: (from, to) => `「${from}」改成「${to}」`,
     moved: (text, before) => (before === "" ? `「${text}」挪到了最后` : `「${text}」挪到「${before}」前面`),
+    movedUp: (text, before) => `把「${text}」提到「${before}」前面`,
+    waiting: (text, waitingFor) => (waitingFor === "" ? `「${text}」在等你` : `「${text}」：${waitingFor}`),
     split: (from, into) => `「${from}」拆成${into}`,
     merged: (from, into) => `${from}合成「${into}」`,
     notice: (count, summary, why) =>
@@ -2793,6 +2795,9 @@ export const zh: Messages = {
     noteAdded: "新加",
     noteReworded: "改过",
     noteSplit: "拆出",
+    noteMoved: "提前",
+    waitingDefault: "等你",
+    waitingTitle: "在等你或外部，不是正在做",
     was: (from) => `原：${from}`,
     splitFrom: (from) => `从「${from}」拆出`,
     editsCount: (n) => `改过 ${n} 次`,

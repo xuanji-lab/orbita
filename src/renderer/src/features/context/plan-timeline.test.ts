@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planAwaitingIn, planNoticeOf, planTimeline, stepActiveSince } from "./plan-timeline.ts";
+import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planAwaitingIn, planNoticeOf, planTimeline, planView, stepActiveSince } from "./plan-timeline.ts";
 import type { ProcessChapter } from "../chat/turn-process.ts";
 
 const tool = (o: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">): TranscriptItem =>
@@ -135,6 +135,105 @@ describe("groupBySteps", () => {
     assert.equal(g.get(b)?.failed, 1);
     assert.deepEqual(g.get(a)?.chapters.map((c) => c.chapter.key), ["c1"]);
     assert.deepEqual(g.get(b)?.chapters.map((c) => c.chapter.key), ["c2"]);
+  });
+});
+
+describe("waiting 与跳步（用户说「先做第 3 步」）", () => {
+  const item = (text: string, status: string, waitingFor?: string) => ({ text, status, ...(waitingFor === undefined ? {} : { waitingFor }) });
+  // 第 1 步卡在用户身上，用户说先做「立场表」：它提到前面、在做；「装好」回到 waiting
+  const t = planTimeline([
+    plan("p1", 100, { items: [item("装好", "in_progress"), item("立场表", "pending"), item("检验", "pending")] }),
+    plan("p2", 200, {
+      items: [item("立场表", "in_progress"), item("装好", "waiting", "等你改权限"), item("检验", "pending")],
+      why: "user asked to do this first",
+    }),
+  ]);
+  const [installId, tableId] = [t?.versions[0]?.items[0]?.id, t?.versions[0]?.items[1]?.id];
+
+  test("版本线认 waiting：步骤带 waitingFor，顺序按新清单，id 沿用旧版", () => {
+    assert.ok(t !== null);
+    assert.deepEqual(t.current.items.map((i) => [i.text, i.status, i.waitingFor]), [
+      ["立场表", "in_progress", undefined],
+      ["装好", "waiting", "等你改权限"],
+      ["检验", "pending", undefined],
+    ]);
+    assert.deepEqual(t.current.items.map((i) => i.id), [tableId, installId, t.versions[0]?.items[2]?.id]);
+  });
+
+  test("被提前的步下面有出处「moved」+ why；被让位的步不带出处（靠 waiting 的状态说话）", () => {
+    assert.deepEqual(t?.current.items[0]?.note, { kind: "moved", why: "user asked to do this first", from: null, version: 2 });
+    assert.equal(t?.current.items[1]?.note, null);
+    assert.equal(t?.edits, 1);
+    assert.deepEqual(t?.current.changes, [{ kind: "moved", text: "立场表", before: "装好", earlier: true }]);
+    assert.deepEqual(t?.current.waits, [{ text: "装好", waitingFor: "等你改权限" }]);
+  });
+
+  test("过程挂到当时在做的步：跳步之后的调用归「立场表」，不归卡着的「装好」", () => {
+    assert.equal(bucketAt(t, 150), installId);
+    assert.equal(bucketAt(t, 200), tableId);
+    assert.equal(bucketAt(t, 999), tableId);
+  });
+
+  test("没有在做的步（全在 waiting / 待做）= 计划外：waiting 的步不认领过程", () => {
+    const stuck = planTimeline([
+      plan("p1", 100, { items: [item("甲", "in_progress"), item("乙", "pending")] }),
+      plan("p2", 200, { items: [item("甲", "waiting", "等你"), item("乙", "waiting", "等外部")] }),
+    ]);
+    assert.equal(bucketAt(stuck, 250), OUTSIDE_PLAN);
+  });
+
+  test("groupBySteps：跳步之后的章节与调用挂在「立场表」下，卡着的「装好」不吃新活", () => {
+    const call = (id: string, name: string, at: number) => ({ kind: "toolCall" as const, key: id, messageId: "m", toolCallId: id, toolName: name, input: {}, timestamp: at });
+    const chapter = (key: string, calls: ReturnType<typeof call>[]): ProcessChapter => ({ key, title: key, source: "say", calls, steps: calls });
+    const turn = {
+      key: "u1",
+      processKeys: ["proc:1"],
+      live: false,
+      chapters: [
+        chapter("before", [call("r1", "read", 120)]),
+        chapter("after", [call("p2", "update_plan", 200), call("r2", "read", 210), call("w1", "write", 220)]),
+      ],
+    };
+    const g = groupBySteps(t, [turn], () => "complete");
+    assert.equal(g.get(installId ?? "")?.calls, 1);
+    assert.deepEqual(g.get(installId ?? "")?.chapters.map((c) => c.chapter.key), ["before"]);
+    assert.equal(g.get(tableId ?? "")?.calls, 2);
+    assert.deepEqual(g.get(tableId ?? "")?.chapters.map((c) => c.chapter.key), ["after"]);
+  });
+
+  test("计数口径只数 done：waiting 不算完成", () => {
+    const view = planView(
+      planTimeline([plan("p1", 1, { items: [item("a", "done"), item("b", "waiting", "等你"), item("c", "in_progress"), item("d", "pending")] })]),
+    );
+    assert.equal(view?.done, 1);
+    assert.equal(view?.items.length, 4);
+  });
+
+  test("对话提示：「把 X 提到前面」+「X 在等你」，理由取 why", () => {
+    assert.deepEqual(planNoticeOf(t, ["p2"]), {
+      changes: [
+        { kind: "moved", text: "立场表", before: "装好", earlier: true },
+        { kind: "waiting", text: "装好", waitingFor: "等你改权限" },
+      ],
+      why: "user asked to do this first",
+    });
+    assert.equal(planNoticeOf(t, ["p1"]), null);
+  });
+
+  test("只是把卡住的步标 waiting、顺序不变：不是改动（不计入「改过 N 次」），但对话里仍有一行「X 在等你」", () => {
+    const flipped = planTimeline([
+      plan("p1", 10, { items: [item("装好", "in_progress"), item("立场表", "pending")] }),
+      plan("p2", 20, { items: [item("装好", "waiting", "等你改权限"), item("立场表", "in_progress")] }),
+    ]);
+    assert.equal(flipped?.edits, 0);
+    assert.deepEqual(planNoticeOf(flipped, ["p2"]), { changes: [{ kind: "waiting", text: "装好", waitingFor: "等你改权限" }], why: null });
+  });
+
+  test("旧数据（没有 waiting / waitingFor）：步骤形状与以前相同，没有多出字段", () => {
+    const old = planTimeline([plan("p1", 1, { items: [item("a", "in_progress"), item("b", "pending")] })]);
+    assert.ok(old !== null);
+    assert.equal("waitingFor" in (old.current.items[0] ?? {}), false);
+    assert.deepEqual(old.current.waits, []);
   });
 });
 

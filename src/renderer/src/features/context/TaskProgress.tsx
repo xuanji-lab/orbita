@@ -20,6 +20,7 @@ import {
   liveTail,
   REVEAL_ENTRY_EVENT,
   settledEnd,
+  chapterTitle,
   stepClockFrom,
   stepDisplay,
   taskHeadState,
@@ -309,6 +310,7 @@ function TurnItem(props: {
             processKey: turn.processKeys[0],
             inChat: props.inChat,
             live: turn.live && index === turn.chapters.length - 1,
+            ask: turn.ask,
           }))}
           statusOf={props.statusOf}
         />
@@ -333,6 +335,8 @@ interface ChapterRow {
   /** 这一章所在的轮在对话里加载着：能点过去；没加载的只列不点 */
   inChat: boolean;
   live: boolean;
+  /** 这一轮用户那句话：判章节标题（思考来的英文标题）要不要用，见 chapterTitle */
+  ask: string;
 }
 
 /** 章节时间线（「做过的」里一轮的章节与计划里一步的章节共用） */
@@ -340,11 +344,11 @@ function ChapterList(props: { rows: readonly ChapterRow[]; statusOf: (toolCallId
   const t = useT();
   return (
     <ol className="tp-chapters">
-      {props.rows.map(({ chapter, processKey, inChat, live }) => {
+      {props.rows.map(({ chapter, processKey, inChat, live, ask }) => {
         const failed = chapter.calls.some((call) => props.statusOf(call.toolCallId) === "error");
         const work = chapter.calls.filter((call) => !isBookkeepingTool(call.toolName)).length;
         const label =
-          chapter.title ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
+          chapterTitle(chapter, ask) ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
         const text = (
           <>
             {/* 章节名最多两行（真模型的旁白常有三四行、一段英文思考能到七行），全文在悬停里 */}
@@ -408,6 +412,7 @@ function PlanSection(props: {
       processKey: entry.processKey,
       inChat: props.inChat.has(entry.turnKey),
       live: entry.live,
+      ask: props.turns.find((turn) => turn.key === entry.turnKey)?.ask ?? "",
     }));
   const stepRow = (item: PlanStep) => {
     const act = activity.get(item.id);
@@ -416,6 +421,12 @@ function PlanSection(props: {
     const shown = open[item.id] ?? active;
     const since = status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
     const note = item.note;
+    const waitTag =
+      status === "waiting" ? (
+        <span className="tp-wait" title={t.planText.waitingTitle}>
+          {item.waitingFor ?? t.planText.waitingDefault}
+        </span>
+      ) : null;
     return (
       <li key={item.id} data-status={status}>
         <span className="tp-slot">
@@ -423,6 +434,9 @@ function PlanSection(props: {
             <Icon name="check" size={12} strokeWidth={2} />
           ) : active ? (
             <StatusPie state="running" />
+          ) : status === "waiting" ? (
+            // 等你 / 等外部：沙漏 + 黄签，不占「正在做」，也不是做完
+            <Icon name="hourglass" size={12} strokeWidth={1.8} />
           ) : (
             <span className="tp-ring" />
           )}
@@ -436,18 +450,32 @@ function PlanSection(props: {
               title={t.planText.stepTitle(rows.length, act?.files.length ?? 0)}
               onClick={() => setOpen((prev) => ({ ...prev, [item.id]: !shown }))}
             >
-              <span className="tp-text">{item.text}</span>
+              <span className="tp-text">
+                {item.text}
+                {waitTag}
+              </span>
               <StepTail act={act} clock={active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null} />
             </button>
           ) : (
             <div className="tp-step-head">
-              <span className="tp-text">{item.text}</span>
+              <span className="tp-text">
+                {item.text}
+                {waitTag}
+              </span>
               <StepTail act={act} clock={active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null} />
             </div>
           )}
           {note !== null && (
             <div className="tp-note">
-              <b>{note.kind === "added" ? t.planText.noteAdded : note.kind === "reworded" ? t.planText.noteReworded : t.planText.noteSplit}</b>
+              <b>
+                {note.kind === "added"
+                  ? t.planText.noteAdded
+                  : note.kind === "reworded"
+                    ? t.planText.noteReworded
+                    : note.kind === "moved"
+                      ? t.planText.noteMoved
+                      : t.planText.noteSplit}
+              </b>
               {note.kind === "reworded" && note.from !== null && <span>{t.planText.was(note.from)}</span>}
               {note.kind === "split" && note.from !== null && <span>{t.planText.splitFrom(note.from)}</span>}
               {note.why !== null && <span>{note.why}</span>}
