@@ -2,21 +2,19 @@
  * 看板的布局计算（纯函数，BoardGrid 与全局周看板共用；单独成文件只为可测）。
  *
  * 一格的宽高比固定（10 : 9）；卡有四档（1x1 / 2x1 / 1x2 / 2x2，单位是格），占几格就是几格宽高加上中间的间距。
+ * **只有一个变量 u（一格的宽）**：每个放卡的地方只定一行几格 N，u = (可用宽 − 间距 × (N−1)) ÷ N，
+ * 卡的宽高、发给模板的 unit 都由 u 推出——所以拉宽 / 缩窄时 u 线性、平滑地变，不会有「先变小再变大」的跳变。
  * 两种模式：
- * - **容器**（详情页、右栏看板、会话结果）：容器宽 < 560px 一行 2 格，否则 4 格；格宽 = (容器宽 − 间距) / 列数，
- *   窗口放大缩小时等比缩放；
+ * - **容器**（详情页、右栏看板、会话结果）：N 固定 2；
  * - **列**（全局周看板里的一天）：格宽（可选格高）由外面给，列宽 = 当天最宽的卡（1 或 2 格）。
  * 卡上方可以带宿主画的一行标题（`captionHeight`）：它属于格的一部分，多格卡的框跨过中间各行的标题行。
  */
 import { BOARD_CELL_RATIO, boardCardSpan, type BoardCardSize } from "../../../../shared/plugin-board.ts";
 
-/** 容器宽低于它一行放 2 格，否则 4 格。 */
-export const BOARD_NARROW_BELOW = 560;
-/** 容器模式的间距：窄 8、宽 10。 */
-export const BOARD_GAP_NARROW = 8;
-export const BOARD_GAP_WIDE = 10;
-/** 列模式的默认间距。 */
-export const BOARD_GAP_COLUMN = 8;
+/** 容器模式一行几格（N）：固定 2，不随容器宽变。 */
+export const BOARD_CONTAINER_COLUMNS = 2;
+/** 格与格之间的间距：固定一个值（容器模式与列模式的默认都用它）。 */
+export const BOARD_GAP = 8;
 
 export interface BoardLayout {
   /** 一行几格 */
@@ -35,11 +33,11 @@ export interface BoardBox {
   height: number;
 }
 
-/** 容器模式：按容器宽算。容器还没量到（0 / 负 / NaN）按一格 0 处理，不抛。 */
+/** 容器模式：u = (容器宽 − 间距 × (N−1)) ÷ N。容器还没量到（0 / 负 / NaN）按一格 0 处理，不抛。 */
 export function containerLayout(width: number, captionHeight = 0): BoardLayout {
   const usable = Number.isFinite(width) && width > 0 ? width : 0;
-  const columns = usable < BOARD_NARROW_BELOW ? 2 : 4;
-  const gap = usable < BOARD_NARROW_BELOW ? BOARD_GAP_NARROW : BOARD_GAP_WIDE;
+  const columns = BOARD_CONTAINER_COLUMNS;
+  const gap = BOARD_GAP;
   const cellWidth = Math.max(0, (usable - gap * (columns - 1)) / columns);
   return { columns, gap, cellWidth, cellHeight: cellWidth * (BOARD_CELL_RATIO.height / BOARD_CELL_RATIO.width), captionHeight };
 }
@@ -49,7 +47,7 @@ export function columnLayout(args: { cellWidth: number; cellHeight?: number; col
   const cellWidth = Number.isFinite(args.cellWidth) && args.cellWidth > 0 ? args.cellWidth : 0;
   return {
     columns: args.columns,
-    gap: args.gap ?? BOARD_GAP_COLUMN,
+    gap: args.gap ?? BOARD_GAP,
     cellWidth,
     cellHeight: args.cellHeight ?? cellWidth * (BOARD_CELL_RATIO.height / BOARD_CELL_RATIO.width),
     captionHeight: args.captionHeight ?? 0,
