@@ -21,6 +21,7 @@ import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useAutomationUi } from "../automation/automation-context.ts";
 import { BoardGrid } from "../plugins/BoardGrid.tsx";
@@ -196,7 +197,7 @@ export function BoardWeekView(props: {
       ) : noAutomations && week !== null && weekIsBlank(week.days) ? (
         <div className="wk-empty">
           {/* 没有任何自动化、这一周也没有历史记录才算空态（翻到有记录的周照常画） */}
-          <PanelEmpty icon="layout-dashboard" hint={t.emptyHint} exit={automationOn ? { label: t.openAutomation, onClick: () => openPanel() } : undefined}>
+          <PanelEmpty icon={FEATURE_ICON.board} hint={t.emptyHint} exit={automationOn ? { label: t.openAutomation, onClick: () => openPanel() } : undefined}>
             {t.emptyTitle}
           </PanelEmpty>
         </div>
@@ -331,7 +332,7 @@ function PlannedRun(props: { run: BoardPlannedRun }) {
   const t = useT().board;
   return (
     <div className="wk-planned" title={t.plannedTip}>
-      <Icon name="calendar-clock" size={14} strokeWidth={1.8} />
+      <Icon name={FEATURE_ICON.automation} size={14} strokeWidth={1.8} />
       <span>{plannedLabel(props.run)}</span>
     </div>
   );

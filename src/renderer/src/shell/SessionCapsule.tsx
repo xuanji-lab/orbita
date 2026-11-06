@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
+import { FEATURE_ICON } from "./feature-icons.ts";
 import { InlineName } from "./InlineName";
 import { useT } from "../locale.ts";
 import type { Messages } from "../messages-en.ts";
@@ -78,7 +79,7 @@ export function SessionCapsule(props: {
                 : t.chat.subSessionCount(props.subChip.count)
             }
           >
-            <Icon name="git-fork" size={12} strokeWidth={1.8} />
+            <Icon name={FEATURE_ICON.subsessions} size={12} strokeWidth={1.8} />
             <b>{props.subChip.count}</b>
             {props.subChip.waiting > 0 && <span>· {t.chat.subSessionWaiting(props.subChip.waiting)}</span>}
           </button>

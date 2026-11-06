@@ -12,6 +12,7 @@ import { useT } from "../../locale.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import { PanelHelp, RightPanelFrame } from "../../shell/RightPanel";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Chip } from "../../shell/Chip";
 import type { Carryover } from "@shared/session";
 import { TaskProgress } from "./TaskProgress";
@@ -72,7 +73,7 @@ export function ContextPanel(props: {
     <div className="cap-review-head tabs-as-title">
       <div className="cap-tabs" role="tablist" aria-label={t.rail.context}>
         <button type="button" role="tab" className="cap-tab no-drag" aria-selected={props.tab === "progress"} onClick={() => props.onTab("progress")}>
-          <Icon name="list-todo" size={12} strokeWidth={1.8} />
+          <Icon name={FEATURE_ICON.task} size={12} strokeWidth={1.8} />
           {t.taskPanel.tabProgress}
         </button>
         <button type="button" role="tab" className="cap-tab no-drag" aria-selected={props.tab === "context"} onClick={() => props.onTab("context")}>
@@ -88,7 +89,7 @@ export function ContextPanel(props: {
   return (
     <RightPanelFrame header={header} contentKey={`task:${props.tab}:${scope}`}>
       {props.sessionId === null ? (
-        <PanelEmpty icon={props.tab === "progress" ? "list-todo" : "layers"}>
+        <PanelEmpty icon={props.tab === "progress" ? FEATURE_ICON.task : "layers"}>
           {props.tab === "progress" ? t.taskPanel.noTask : t.contextPanel.noSession}
         </PanelEmpty>
       ) : props.tab === "progress" ? (

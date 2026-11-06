@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import { parseAutomationHeader } from "../../../../shared/automation.ts";
 import "./automation.css";
@@ -28,7 +29,7 @@ export function AutomationWakeLine(props: { title: string; number: number; max: 
         disabled={props.body === ""}
         onClick={() => setOpen((value) => !value)}
       >
-        <Icon name="calendar-clock" size={12} strokeWidth={1.8} />
+        <Icon name={FEATURE_ICON.automation} size={12} strokeWidth={1.8} />
         <b>{label}</b>
         {props.body !== "" && <Icon name={open ? "chevron-down" : "chevron-right"} size={11} strokeWidth={2} />}
       </button>

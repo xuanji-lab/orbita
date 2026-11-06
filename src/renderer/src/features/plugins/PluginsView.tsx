@@ -26,6 +26,7 @@ import type { CardSize, PluginsPageSettings } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
@@ -306,7 +307,7 @@ export function PluginsView(props: {
         </>
       ) : selected === null ? (
         <>
-          <PanelTitle icon="blocks" title={t.title} />
+          <PanelTitle icon={FEATURE_ICON.plugins} title={t.title} />
           <PanelFilter
             value={query}
             onChange={setQuery}

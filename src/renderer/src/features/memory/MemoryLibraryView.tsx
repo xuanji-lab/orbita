@@ -7,6 +7,7 @@ import {
 } from "@shared/memory";
 import { Icon } from "../../shell/Icon";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import { MEMORY_TYPE_ICON, MemoryEntryCard } from "./MemoryEntryCard";
 import { VectorModelView } from "./VectorModelView";
@@ -158,7 +159,7 @@ function ScopePage(props: {
         </PanelEmpty>
       ) : shown.length === 0 ? (
         <PanelEmpty
-          icon={items.length === 0 ? "brain-circuit" : "search"}
+          icon={items.length === 0 ? FEATURE_ICON.memory : "search"}
           className="mem-empty"
           hint={items.length === 0 ? t.memory.emptyHint : undefined}
         >

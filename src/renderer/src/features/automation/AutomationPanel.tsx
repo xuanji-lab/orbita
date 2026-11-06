@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./automation.css";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import {
   PanelButton,
   PanelGroupHead,
@@ -122,7 +123,7 @@ export function AutomationPanel(props: {
     );
   }
 
-  const header = <PanelTitle icon="calendar-clock" title={a.title} />;
+  const header = <PanelTitle icon={FEATURE_ICON.automation} title={a.title} />;
   const headerExtra = (
     <>
       <PanelHelp label={a.helpLabel} text={a.help} />
@@ -219,7 +220,7 @@ export function AutomationPanel(props: {
         <>
           <div className="auto-empty">
             <span className="auto-empty-icon">
-              <Icon name="calendar-clock" size={18} strokeWidth={1.8} />
+              <Icon name={FEATURE_ICON.automation} size={18} strokeWidth={1.8} />
             </span>
             <strong>{scope === "all" ? a.empty.titleAll : a.empty.title}</strong>
             <p>{a.empty.body}</p>
