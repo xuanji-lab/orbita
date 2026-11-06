@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon, type IconName } from "../shell/Icon";
 import { IconButton } from "./IconButton";
 import { clampRightPanelWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import { startPointerDrag } from "./pointer-drag.ts";
 import { usePaneTotalWidth } from "./side-width.ts";
 import { useT } from "../locale.ts";
 import { ToolbarPanelSlotContext } from "./Toolbar";
@@ -55,32 +56,20 @@ export function RightPanelSlot(props: {
    * P 在拖动中恒定：pane 让出多少面板就长多少，所以不必每帧重测。
    * 拖动中不做动画；松手不 snap；双击热区回 320（同样夹一次）。
    */
-  const startResize = (event: React.PointerEvent): void => {
-    if (event.button !== 0) return;
+  const startResize = (event: React.PointerEvent<HTMLElement>): void => {
     const panel = asideRef.current;
     if (panel === null) return;
-    event.preventDefault();
-    setResizing(true);
-    const startX = event.clientX;
     const startWidth = panel.getBoundingClientRect().width;
     const clamp = (value: number): number => clampRightPanelWidth(value, paneTotal);
-    // 拖动期间全文选择与光标都固定成拖拽语义，松手还原
-    const previousSelect = document.body.style.userSelect;
-    const previousCursor = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    const move = (ev: PointerEvent): void => {
-      props.onWidthChange(clamp(startWidth - (ev.clientX - startX)));
-    };
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener("pointermove", move);
-      document.body.style.userSelect = previousSelect;
-      document.body.style.cursor = previousCursor;
-      setResizing(false);
-      props.onWidthCommit(clamp(startWidth - (ev.clientX - startX)));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    const started = startPointerDrag(event, {
+      cursor: "col-resize",
+      onMove: (delta) => props.onWidthChange(clamp(startWidth - delta.x)),
+      onEnd: (delta) => {
+        setResizing(false);
+        props.onWidthCommit(clamp(startWidth - delta.x));
+      },
+    });
+    if (started) setResizing(true);
   };
 
   return (
