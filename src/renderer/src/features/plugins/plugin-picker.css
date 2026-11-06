@@ -8,7 +8,13 @@
   /* 头像列宽（与 .pl-row-main 的第一列同 22px）：子行 / 提示行缩进到名字下面要用 */
   --pick-av-w: 22px;
   display: grid;
+  /* 单列必须是 minmax(0, 1fr)：默认的 auto 列吃子项的 min-content，一行 nowrap 的长说明就把整列撑出右栏（窄栏 320 实测出横向滚动条） */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
+}
+
+.pl-pick-list > * {
+  min-width: 0;
 }
 
 /* 一行只有「点这块」一列（插件页的行右边还有开关）：行内右缘钉在行右内边距，↵ 提示贴着它 */
