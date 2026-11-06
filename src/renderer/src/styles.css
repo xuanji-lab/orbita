@@ -1191,6 +1191,12 @@ body {
   transition: none;
 }
 
+/* 拖把手期间（pointer-drag.ts 在 <html> 上挂标记）：iframe 不收指针。
+   主防线是把手的 setPointerCapture；这条兜底——松手点落在看板卡的 iframe 上时事件进了 iframe，主窗口就收不到 */
+html[data-pointer-drag] iframe {
+  pointer-events: none;
+}
+
 /* 内容固定宽：壳的 width 动画期间它只被逐渐「拉开」，内容不 reflow */
 .right-panel-slot-inner {
   width: var(--right-panel-w, 320px);

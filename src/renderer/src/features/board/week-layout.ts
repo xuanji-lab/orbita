@@ -14,7 +14,7 @@ import { columnCells } from "../plugins/board-layout.ts";
 
 /** 天与天之间的间距（px） */
 export const WEEK_DAY_GAP = 12;
-/** 一列里格与格之间的间距（BoardGrid 列模式的默认间距，同 board-layout 的 BOARD_GAP_COLUMN） */
+/** 一列里格与格之间的间距（BoardGrid 列模式的默认间距，同 board-layout 的 BOARD_GAP） */
 export const WEEK_CELL_GAP = 8;
 /** 格宽的下限：窗口再窄也不压到这以下（再窄卡里什么也看不清，宁可横滚） */
 export const WEEK_CELL_MIN = 96;

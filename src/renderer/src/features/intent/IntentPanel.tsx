@@ -49,6 +49,7 @@ import {
 import { GraphRenderer, nebulaFill, type SceneBuilder } from "./GraphRenderer.ts";
 import { ZOOM_MAX, ZOOM_MIN } from "./graph-view.ts";
 import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
+import { startPointerDrag } from "../../shell/pointer-drag.ts";
 
 type IntentView = "slots" | "questions";
 
@@ -634,19 +635,17 @@ function IntentSplitBar(props: {
     if ((event.target as HTMLElement).closest("button") !== null) return;
     const body = hostRef.current?.parentElement;
     if (body === null || body === undefined) return;
-    const y0 = event.clientY;
     const h0 = body.querySelector<HTMLElement>(".intent-graph-area")?.clientHeight ?? 0;
     const max = body.clientHeight - 48 - 32;
-    const move = (ev: PointerEvent): void => {
-      props.onDrag(Math.max(0, Math.min(max, h0 + ev.clientY - y0)));
-    };
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener("pointermove", move);
-      const h = Math.max(0, Math.min(max, h0 + ev.clientY - y0));
-      props.onDrag(h < 60 ? 0 : h);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    const heightAt = (dy: number): number => Math.max(0, Math.min(max, h0 + dy));
+    startPointerDrag(event, {
+      cursor: "row-resize",
+      onMove: (delta) => props.onDrag(heightAt(delta.y)),
+      onEnd: (delta) => {
+        const h = heightAt(delta.y);
+        props.onDrag(h < 60 ? 0 : h);
+      },
+    });
   };
   return (
     <div
