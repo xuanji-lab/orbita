@@ -1,4 +1,4 @@
-import { match, ok } from "node:assert/strict";
+import { doesNotMatch, match, ok } from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
@@ -35,8 +35,14 @@ describe("看板宽度不被内容撑开", () => {
     }
   });
 
-  it("flex 祖先 .pd-board / .pd-board-grid 的 min-width 是 0（flex 项默认 min-width:auto 会被内容撑住）", () => {
-    match(rule("./plugins.css", ".pd-board"), /min-width:\s*0/);
-    match(rule("./plugins.css", ".pd-board-grid"), /min-width:\s*0/);
+  it("「看板样式」一节：.pd-board 是 minmax(0, 1fr) 单列上下叠，看板没有宽度上限、不再与说明列表并排", () => {
+    const board = rule("./plugins.css", ".pd-board");
+    match(board, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+    match(board, /min-width:\s*0/);
+    doesNotMatch(board, /flex/);
+    const grid = rule("./plugins.css", ".pd-board-grid");
+    match(grid, /min-width:\s*0/);
+    doesNotMatch(grid, /max-width|flex/);
+    doesNotMatch(rule("./plugins.css", ".pd-blist"), /flex/);
   });
 });

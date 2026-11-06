@@ -1428,24 +1428,23 @@ button.pl-wf-chip:hover {
   font-weight: var(--weight-semibold);
 }
 
-/* 看板样式一节：缩小的看板 + 每卡一行。宽时左右并排，窄时上下叠 */
-/* 缩小的看板（最宽 600，至少 340）与每卡一行并排；放不下就换行叠在上面（不看视口，只看这一节有多宽） */
+/*
+ * 看板样式一节：看板独占整行宽度（没有上限，随 u 等比变大——想看清就把右栏 / 窗口拉宽），每卡一行的说明列表在它下面。
+ * 以前宽时左右并排、看板封顶 600px：拉宽后只多出一列说明，看板里的信息并没有变清楚（2026-11-06 用户）。
+ * 列数由 BoardGrid 定死（一行 2 格），这里只管上下叠。
+ */
 .pd-board {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
-  align-items: flex-start;
+  min-width: 0;
 }
 
 .pd-board-grid {
-  flex: 1 1 340px;
-  max-width: 600px;
   min-width: 0;
 }
 
 .pd-blist {
-  flex: 1 1 240px;
   display: grid;
   gap: var(--space-1);
   align-content: start;
@@ -1644,9 +1643,5 @@ button.pl-wf-chip:hover {
 
   .pl-acts-hero {
     display: none;
-  }
-
-  .pd-board-grid {
-    max-width: none;
   }
 }
