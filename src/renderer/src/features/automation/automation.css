@@ -146,19 +146,26 @@
   flex: none;
   width: var(--space-1-5);
   border-radius: 1px;
-  background: var(--color-text-tertiary);
-}
-.auto-bar[data-empty] {
-  background: var(--color-border-strong);
+  background: var(--color-text-secondary);
 }
 .auto-bar[data-today] {
   background: var(--color-text-primary);
 }
-.auto-bar[data-today][data-empty] {
-  background: var(--color-text-tertiary);
+/* 创建之前：什么都不画，只占位 */
+.auto-bar[data-kind="na"] {
+  background: transparent;
 }
-.auto-bar[data-failed] {
+/* 没跑：浅线，和跑过的柱拉开 */
+.auto-bar[data-kind="none"] {
+  background: var(--color-border-strong);
+}
+.auto-bar[data-kind="failed"] {
   background: var(--color-danger);
+}
+/* 正在跑：空心描边柱，跑完变实心 */
+.auto-bar[data-kind="running"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-primary);
 }
 
 /* 暂停 / 已完成：整张图变淡（失败行保持，红柱本身是信号） */
