@@ -5,7 +5,7 @@
  */
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PriceChartData } from "../../shared/price-chart.ts";
-import type { Provider } from "../../shared/provider.ts";
+import { isProviderEnabled, type Provider } from "../../shared/provider.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import { buildPriceChart, type ArenaSnapshot } from "./price-chart.ts";
 import type { ChartTask } from "./task-cost.ts";
@@ -35,13 +35,16 @@ export function createPriceChartSource(deps: PriceChartSourceDeps): PriceChartSo
   return async () => {
     const started = Date.now();
     await deps.ledger.settled();
-    const [providers, catalog, sessions] = await Promise.all([deps.providers(), deps.catalog(), deps.sessions()]);
+    const [allProviders, catalog, sessions] = await Promise.all([deps.providers(), deps.catalog(), deps.sessions()]);
+    // 关着的服务商不进图、也不进 model_costs 的清单：它的型号派不出去（resolveSubSessionModel 同口径）。
+    // 同一型号另有开着的服务商声明时仍在——图按「型号」合并服务商。历史账不受影响（任务账本只读）
+    const providers = allProviders.filter(isProviderEnabled);
     const childIds = new Set(sessions.filter((meta) => meta.parentId !== undefined).map((meta) => meta.id));
     const key = [
       deps.ledger.version(),
       childIds.size,
       catalog.length,
-      JSON.stringify(providers.map((p) => [p.id, p.kind, p.endpoint.api, p.models.declared])),
+      JSON.stringify(providers.map((p) => [p.id, p.kind, p.endpoint.api, p.models.declared])), // 已筛掉关着的：开关一翻，key 变，memo 重算
     ].join("|");
     if (memo?.key === key) {
       console.error(`[price-chart] 账本未变，直接返回上次的结果（${Date.now() - started}ms）`);

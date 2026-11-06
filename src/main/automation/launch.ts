@@ -20,7 +20,7 @@ import {
   type AutomationRunTrigger,
 } from "../../shared/automation.ts";
 import type { SubmitAgentInput } from "../../shared/agent-ipc.ts";
-import type { ProviderDto } from "../../shared/provider.ts";
+import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { UNASSIGNED_MODEL_ID, UNASSIGNED_PROVIDER_ID } from "../../shared/session.ts";
 import type { AppSettings } from "../../shared/settings.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -61,13 +61,20 @@ export function resolveAutomationModel(input: {
   const lastUsed =
     last?.providerId !== undefined &&
     last.modelId !== undefined &&
-    providers.some((provider) => provider.id === last.providerId)
+    providers.some((provider) => provider.id === last.providerId && isProviderEnabled(provider))
       ? { providerId: last.providerId, modelId: last.modelId }
       : undefined;
 
   if (automation.providerId !== undefined && automation.modelId !== undefined) {
     const { providerId, modelId } = automation;
     const provider = providers.find((candidate) => candidate.id === providerId);
+    // 卡上指名的服务商被关了：不静默改选别家（渠道不替用户选），和服务商被删同口径报错，但把原因写明
+    if (provider !== undefined && !isProviderEnabled(provider)) {
+      return {
+        ok: false,
+        error: `The model ${providerId}/${modelId} set on this automation is on a provider that is turned off (${provider.displayName}). Turn it back on in Model services, or edit the automation to pick another model.`,
+      };
+    }
     if (provider?.models.declared.some((model) => model.id === modelId) !== true) {
       return {
         ok: false,

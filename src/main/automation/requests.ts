@@ -50,7 +50,7 @@ import {
   type AutomationToolOutcome,
 } from "../../shared/automation.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
-import type { ProviderDto } from "../../shared/provider.ts";
+import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { Workspace } from "../../shared/workspace.ts";
@@ -119,6 +119,9 @@ function parseModelPair(providerId: unknown, modelId: unknown, providers: readon
   const provider = providers.find((candidate) => candidate.id === providerId);
   if (provider === undefined || !provider.models.declared.some((model) => model.id === modelId)) {
     return fail(`Model ${providerId}/${modelId} is not configured.`);
+  }
+  if (!isProviderEnabled(provider)) {
+    return fail(`Model ${providerId}/${modelId} is on a provider that is turned off (${provider.displayName}).`);
   }
   return { ok: true, value: { providerId, modelId } };
 }

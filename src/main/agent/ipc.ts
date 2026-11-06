@@ -27,9 +27,10 @@ import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
+import { providerDisabledText } from "../../shared/provider.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
-import type { ProviderStore } from "../provider/store.ts";
+import { assertProviderEnabled, ProviderDisabledError, type ProviderStore } from "../provider/store.ts";
 import { oauthRequestAuth } from "../provider/oauth-flows.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
@@ -68,9 +69,13 @@ import { AgentHost } from "./host.ts";
 export async function resolveProviderSecrets(
   providers: ProviderStore,
   providerId: string,
+  /** 测试连接要允许关着的服务商（用户想看它恢复了没有）；其余调用方（开轮、换模型、家务活、专注小结…）一律不给 */
+  options: { allowDisabled?: boolean } = {},
 ): Promise<ProviderSecrets> {
   const dto = (await providers.list()).find((p) => p.id === providerId);
   if (!dto) throw new Error(`unknown provider "${providerId}"`);
+  // 所有「按 id 装配服务商」的入口都经过这里：关着的在此一处拦下，不必每个调用方各判一遍
+  if (options.allowDisabled !== true) assertProviderEnabled(dto);
   const known = knownProviderOf(dto);
   // OAuth 凭据优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
   // 续期失败不能静默拿旧 token 硬发一轮——换成一句用户能行动的话
@@ -317,6 +322,19 @@ export function registerAgentIpc(
 
 
   /**
+   * 开轮 / 压缩 / 换模型的装配入口：同 resolveProviderSecrets，但「这家已关闭」按界面语言写成
+   * 一句能行动的话（错误经 IPC 原样显示在输入框上方，与 provider 被删 / 无密钥的错误同一呈现）。
+   */
+  const resolveForTurn = async (providerId: string): Promise<ProviderSecrets> => {
+    try {
+      return await resolveProviderSecrets(providers, providerId);
+    } catch (error: unknown) {
+      if (!(error instanceof ProviderDisabledError)) throw error;
+      throw new Error(providerDisabledText(error.displayName, await readAttributionLanguage()));
+    }
+  };
+
+  /**
    * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
    * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
    * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
@@ -479,7 +497,7 @@ export function registerAgentIpc(
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
   async function submitTurn(input: SubmitAgentInput): Promise<void> {
-    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const provider = await resolveForTurn(input.providerId);
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     // 意图系统（实验）：开关开着才装配（intent / backfill）与存档（ingest）。
     // 返回空对象时命令与 main 一字不差
@@ -537,7 +555,7 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
-    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
@@ -550,7 +568,7 @@ export function registerAgentIpc(
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
-    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
     const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
@@ -588,7 +606,7 @@ export function registerAgentIpc(
     async (_e, sessionId: string, providerId: string, modelId: string) => {
       // provider 在这里装配（含 key）再传给 runtime——renderer 永远不碰密钥。
       // meta 不在此落：成功与否由 runtime 的 model / failed 事件定，recorder 统一落盘。
-      const provider = await resolveProviderSecrets(providers, providerId);
+      const provider = await resolveForTurn(providerId);
       await host.setModel(sessionId, provider, modelId);
     },
   );

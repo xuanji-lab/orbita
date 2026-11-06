@@ -5,6 +5,7 @@
  * 那一刻 UI 刷新，下一次扫描必须看到刚落盘的 meta（幂等判重的底），拿启动时的
  * 快照会把已导入的再导一遍。
  */
+import { isProviderEnabled } from "../../shared/provider.ts";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -81,8 +82,11 @@ export function registerImportIpc(
    */
   async function greetingModelStatus(): Promise<ImportGreetingModelStatus> {
     const [providerList, appSettings] = await Promise.all([providers.list(), settings.read()]);
+    // 关着的服务商不算：家务活解析时它会被拒，这里当它不存在，迁移页才不会显示「有模型可用」
     const registered = providerList.flatMap((provider) =>
-      provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id })),
+      isProviderEnabled(provider)
+        ? provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id }))
+        : [],
     );
     if (registered.length === 0) return { unavailable: "no-provider" };
     const chore = appSettings.choreModel;

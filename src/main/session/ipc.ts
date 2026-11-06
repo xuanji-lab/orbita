@@ -2,6 +2,7 @@
  * 会话的 IPC —— 四层契约的第 2 层。
  * 落盘那一半在 `recorder.ts`：它是纯模块，抽出去是为了能被 `node --test` 直接测。
  */
+import { isProviderEnabled } from "../../shared/provider.ts";
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
@@ -77,7 +78,9 @@ export function registerSessionIpc(
       const dead = findDeadTarget(
         entries,
         (await providers.list()).flatMap((provider) =>
-          provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id })),
+          isProviderEnabled(provider)
+            ? provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id }))
+            : [],
         ),
       );
       if (dead !== null) throw new Error(MODEL_ASSIGN_TARGET_GONE_CODE + dead.model);

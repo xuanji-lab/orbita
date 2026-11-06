@@ -4,7 +4,14 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProviderStore, ProviderValidationError, type OauthDeps, type SecretsPort } from "./store.ts";
+import {
+  assertProviderEnabled,
+  ProviderDisabledError,
+  ProviderStore,
+  ProviderValidationError,
+  type OauthDeps,
+  type SecretsPort,
+} from "./store.ts";
 import type { OauthCredential, ProviderUpsertInput } from "../../shared/provider.ts";
 
 /** 内存密钥端口——store 不依赖 Electron，这里就能跑真文件系统的用例 */
@@ -371,5 +378,72 @@ describe("ProviderStore · OAuth（Claude 订阅）", () => {
 
     await store.remove("claude");
     assert.equal(secrets.values.size, 0);
+  });
+});
+
+describe("ProviderStore · 停用开关", () => {
+  async function diskProviders(): Promise<Array<Record<string, unknown>>> {
+    return (JSON.parse(await readFile(join(dir, "providers.json"), "utf8")) as { providers: Array<Record<string, unknown>> }).providers;
+  }
+
+  test("旧数据没有 disabled 字段 = 开着（不迁移，DTO 也不凭空多字段）", async () => {
+    await store.upsert(input());
+    assert.equal((await diskProviders())[0]?.["disabled"], undefined);
+    const [dto] = await store.list();
+    assert.equal(dto?.disabled, undefined);
+    assert.doesNotThrow(() => assertProviderEnabled(dto as NonNullable<typeof dto>));
+  });
+
+  test("setDisabled 只翻开关：配置、密钥、模型列表一字不动，再打开一切照旧", async () => {
+    await store.upsert(input());
+    const before = (await diskProviders())[0] as Record<string, unknown>;
+    const closed = await store.setDisabled("openai", true);
+    assert.equal(closed?.disabled, true);
+    const after = (await diskProviders())[0] as Record<string, unknown>;
+    assert.deepEqual({ ...after, disabled: undefined }, { ...before, disabled: undefined });
+    assert.equal(after["disabled"], true);
+    assert.equal(await store.resolveApiKey("openai"), "sk-proj-abcdefgh1234", "关着不删密钥");
+    // 重新读盘（模拟重启）仍是关着的
+    const reopened = new ProviderStore(dir, secrets);
+    assert.equal((await reopened.list())[0]?.disabled, true);
+
+    const reopenedOn = await store.setDisabled("openai", false);
+    assert.equal(reopenedOn?.disabled, undefined);
+    assert.deepEqual(await diskProviders(), [before], "打开后盘上与关之前逐字段一致（不留 disabled: false）");
+  });
+
+  test("setDisabled：id 不存在返回 null；状态没变不重写盘", async () => {
+    assert.equal(await store.setDisabled("nope", true), null);
+    await store.upsert(input());
+    await store.setDisabled("openai", true);
+    const files = await readdir(dir);
+    const again = await store.setDisabled("openai", true);
+    assert.equal(again?.disabled, true);
+    assert.deepEqual(await readdir(dir), files);
+  });
+
+  test("关着时编辑别的字段（改名、加模型）不会悄悄把它打开；表单带 disabled 也不能越权改它", async () => {
+    await store.upsert(input());
+    await store.setDisabled("openai", true);
+    await store.upsert({ ...input({ displayName: "OpenAI 改名" }), apiKey: undefined as unknown as string });
+    assert.equal((await store.list())[0]?.disabled, true);
+    await store.upsert({ ...input({ displayName: "再改", disabled: false }), apiKey: undefined as unknown as string });
+    assert.equal((await store.list())[0]?.disabled, true, "只有 provider:set-disabled 能改开关");
+  });
+
+  test("原子写：开关翻转后不留 .tmp 文件", async () => {
+    await store.upsert(input());
+    await store.setDisabled("openai", true);
+    await store.setDisabled("openai", false);
+    assert.ok((await readdir(dir)).every((name) => !name.endsWith(".tmp")));
+  });
+
+  test("assertProviderEnabled：关着的抛带服务名的 ProviderDisabledError", async () => {
+    await store.upsert(input());
+    const closed = await store.setDisabled("openai", true);
+    assert.throws(
+      () => assertProviderEnabled(closed as NonNullable<typeof closed>),
+      (error: unknown) => error instanceof ProviderDisabledError && error.displayName === "OpenAI" && /已在模型服务里关闭/.test(error.message),
+    );
   });
 });
