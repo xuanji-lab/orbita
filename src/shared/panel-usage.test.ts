@@ -39,7 +39,8 @@ describe("bumpPanelUsage / panelUsageRows", () => {
 
   it("isPanelUsageKey 只认登记过的键", () => {
     strictEqual(isPanelUsageKey("task"), true);
-    strictEqual(isPanelUsageKey("settings"), false);
+    strictEqual(isPanelUsageKey("bogus"), false);
+    for (const key of ["plugins", "automation", "board", "settings", "memory"]) strictEqual(isPanelUsageKey(key), true, key);
     strictEqual(isPanelUsageKey(3), false);
   });
 });

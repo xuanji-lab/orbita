@@ -124,8 +124,6 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "pdf-citations",
   "intent-system",
   "memory-system",
-  /** 精简右栏（2026-10-30）：常驻只留「这条任务」、文件、终端、内置浏览器和设置，其余收进「更多」 */
-  "lean-rail",
   "automation",
   "plugins",
 ] as const;

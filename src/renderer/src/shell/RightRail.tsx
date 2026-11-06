@@ -15,7 +15,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * **入口按类分组**（2026-10-31 用户裁决，原话：「会对右栏进行分类……每一类之间没有分隔，
  * 但是类和类之间有一个小横线做分隔」「全部都在右上，然后右下就简单一点」）：
  * 组的划分与理由见 `rail-groups.ts`，规矩见设计系统 readme「Rail entries are grouped」。
- * 右上堆前四组（这条会话 / 工作面 / 智能体 / 收纳），右下只留「应用」组（设置、通知）。
+ * 右上堆「这条会话」「智能体」两组常驻，其后一条细线 + 「更多」⋮（以后再做 / 归档 / 通知），右下只留「应用」组（看板、设置）。只有这一种布局（2026-11-06 用户裁决，取代实验功能「精简右栏」的两态）。
  * 此前是「上面一串、下面一串」，两串之间靠弹性空隙隔开，入口归哪串凭历史而不凭类。
  *
  * 面板类入口（文件 / 审查 / 这条任务 / 能力 / 终端 / 意图 / 子会话）**共用一个面板位**
@@ -67,15 +67,7 @@ export interface RailEntry {
 export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
-  /**
-   * 精简右栏（实验功能 lean-rail，2026-10-30）：常驻只留「这条任务」、文件、终端、内置浏览器
-   * （子会话有就露）和设置，其余收进右下的「更多」。文件常驻是 2026-10-31 用户的裁决
-   * （「文件面板不应该被收纳」）；条上与「更多」里都沿用常规态的分组，组间一条线。
-   */
-  lean: boolean;
-  /** 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路） */
-  onOpenContext: () => void;
-  /** 应用级入口（遗留 / 归档 / 浏览器 / 记忆 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
+  /** 应用级入口（遗留 / 归档 / 浏览器 / 记忆 / 看板 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
   railEntries: RailEntry[];
   /**
    * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
@@ -88,7 +80,7 @@ export function RightRail(props: {
   /**
    * 自动化面板入口（实验功能 automation）：null = 不出现（开关关着）；running 是正在跑的自动化数，
    * 角标只在有运行时出现（没有「未读」这类计数——自动化的结果在面板里那条任务下面看）。
-   * 归「智能体」组、精简态收进「更多」（菜单项的文案带运行数）。
+   * 归「智能体」组、常驻条上（tooltip 带运行数）。
    */
   automation: { running: number } | null;
   /**
@@ -159,23 +151,20 @@ export function RightRail(props: {
     />
   );
 
-  // 全部入口，**组内顺序即数组顺序**（常规态的堆叠顺序，也是精简态「更多」里的行序）。
-  // 分组的理由见 rail-groups.ts；pinned = 精简态常驻在条上
+  // 全部入口，**组内顺序即数组顺序**（条上的堆叠顺序，也是「更多」里的行序）。
+  // 分组的理由见 rail-groups.ts；inMore = 收进「更多」
   const items: RailItem[] = [
     // 这条会话在做什么、做过什么、脑子里装了什么
-    { id: "context", group: "session", pinned: true, icon: FEATURE_ICON.task, label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
-    { id: "review", group: "session", pinned: false, icon: FEATURE_ICON.review, label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
+    { id: "context", group: "session", icon: FEATURE_ICON.task, label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
+    { id: "review", group: "session", icon: FEATURE_ICON.review, label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
     // 文件跟审查、会话放一组（用户 2026-11-05）；精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
-    { id: "files", group: "session", pinned: true, icon: FEATURE_ICON.files, label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
-    // 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路）；常规态条上没有它
-    { id: "context-tab", group: "session", pinned: false, moreOnly: true, icon: "layers", label: t.taskPanel.tabContext, lit: false, onSelect: props.onOpenContext },
+    { id: "files", group: "session", icon: FEATURE_ICON.files, label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
     ...(props.subSessions === null
       ? []
       : [
           {
             id: "subsessions",
             group: "session" as const,
-            pinned: true,
             icon: FEATURE_ICON.subsessions,
             label: t.rail.subSessions(props.subSessions.count),
             lit: props.panel === "subsessions",
@@ -184,22 +173,21 @@ export function RightRail(props: {
           },
         ]),
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
-    { id: "terminal", group: "agent", pinned: true, icon: FEATURE_ICON.terminal, label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
-    ...fromApp("browser", { group: "agent", pinned: true }),
+    { id: "terminal", group: "agent", icon: FEATURE_ICON.terminal, label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
+    ...fromApp("browser", { group: "agent" }),
     // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
     // 插件页已把技能与 MCP 当插件显示：plugins 开着时不再单列这个入口
     ...(props.pluginsAvailable
       ? []
-      : [{ id: "abilities", group: "agent" as const, pinned: false, icon: FEATURE_ICON.abilities, label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") }]),
+      : [{ id: "abilities", group: "agent" as const, icon: FEATURE_ICON.abilities, label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") }]),
     ...(props.pluginsAvailable
-      ? [{ id: "plugins", group: "agent" as const, pinned: true, icon: FEATURE_ICON.plugins, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
+      ? [{ id: "plugins", group: "agent" as const, icon: FEATURE_ICON.plugins, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
       : []),
     ...(props.intentAvailable
       ? [
           {
             id: "intent",
             group: "agent" as const,
-            pinned: false,
             icon: FEATURE_ICON.intent,
             label: t.rail.intent,
             lit: props.panel === "intent",
@@ -213,7 +201,6 @@ export function RightRail(props: {
           {
             id: "automation",
             group: "agent" as const,
-            pinned: false,
             icon: FEATURE_ICON.automation,
             label: t.automation.railLabel(props.automation.running),
             lit: props.panel === "automation",
@@ -221,15 +208,15 @@ export function RightRail(props: {
             badge: props.automation.running,
           },
         ]),
-    // 收起来以后再看的
-    ...fromApp("carryovers", { group: "shelf", pinned: false }),
-    ...fromApp("archived", { group: "shelf", pinned: false }),
-    // 应用级：看板（实验功能 plugins）、设置、通知。铃铛在右下角最底：它是常驻的状态入口，位置稳才扫得到
-    ...fromApp("board", { group: "app", pinned: false }),
-    ...fromApp("settings", { group: "app", pinned: true }),
-    { id: "bell", group: "app", pinned: false, icon: FEATURE_ICON.bell, label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
+    // 收起来以后再看的：全部在「更多」菜单里（记忆库在设置里，不在右栏）
+    ...fromApp("carryovers", { group: "shelf", inMore: true }),
+    ...fromApp("archived", { group: "shelf", inMore: true }),
+    // 应用级：看板（实验功能 plugins）、设置，钉右下。通知收进「更多」，未读数写在菜单项上
+    ...fromApp("board", { group: "app" }),
+    ...fromApp("settings", { group: "app" }),
+    { id: "bell", group: "shelf", inMore: true, icon: FEATURE_ICON.bell, label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
   ];
-  const layout = layoutRail(items, props.lean);
+  const layout = layoutRail(items);
   const renderItem = (item: RailItem) => {
     const button = (
       <RailEntryButton
@@ -242,17 +229,10 @@ export function RightRail(props: {
         badge={item.badge}
       />
     );
-    // 铃铛的清单从它自己（常规态）或「更多」（精简态）弹出，外部点击判定要排除这个锚点
-    return item.id === "bell" ? (
-      <span key={item.id} ref={setBellAnchor} style={{ display: "inline-flex" }}>
-        {button}
-      </span>
-    ) : (
-      button
-    );
+    return button;
   };
   const moreItems = layout.more.flatMap((part) => part.items);
-  // 「更多」菜单：与条上同一套组序，组间一条分隔线。菜单不画点亮（点亮只用来让「更多」键自己亮）
+  // 「更多」菜单：按组序，组间一条分隔线。菜单不画点亮（点亮只用来让「更多」键自己亮）
   const moreMenu = withGroupRules<MenuItem, MenuItem>(
     layout.more.map((part) => ({
       group: part.group,
@@ -262,7 +242,7 @@ export function RightRail(props: {
   );
 
   return (
-    <aside className="right-rail" data-lean={props.lean ? "" : undefined}>
+    <aside className="right-rail">
       <div className="rail-stack">
         {layout.stack.map((part, index) => (
           <Fragment key={part.group}>
@@ -273,28 +253,33 @@ export function RightRail(props: {
             </div>
           </Fragment>
         ))}
+        {moreItems.length > 0 && (
+          <>
+            <span className="rail-sep" aria-hidden="true" />
+            <div className="rail-group" role="group" aria-label={t.rail.groups.shelf}>
+              {/* 「更多」也是通知清单的锚点：清单从菜单里打开，外部点击判定排除这颗键 */}
+              <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
+                <Menu
+                  items={moreMenu}
+                  placement="below"
+                  align="end"
+                  panelMinWidth={200}
+                  trigger={({ open, toggle: toggleMenu }) => (
+                    <RailEntryButton
+                      icon="ellipsis-vertical"
+                      label={t.common.more}
+                      lit={open || moreItems.some((item) => item.lit)}
+                      onClick={toggleMenu}
+                    />
+                  )}
+                />
+              </span>
+            </div>
+          </>
+        )}
       </div>
       <span className="rail-spacer" />
       <div className="rail-group" role="group" aria-label={t.rail.groups.app}>
-        {props.lean && moreItems.length > 0 && (
-          // 「更多」也是通知清单的锚点：清单从菜单里打开，外部点击判定排除这颗键
-          <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
-            <Menu
-              items={moreMenu}
-              placement="above"
-              align="end"
-              panelMinWidth={200}
-              trigger={({ open, toggle: toggleMenu }) => (
-                <RailEntryButton
-                  icon="ellipsis-vertical"
-                  label={t.common.more}
-                  lit={open || moreItems.some((item) => item.lit)}
-                  onClick={toggleMenu}
-                />
-              )}
-            />
-          </span>
-        )}
         {layout.dock.map(renderItem)}
       </div>
       {bellCard}
