@@ -59,7 +59,7 @@ describe("工具名与权限桶同源", () => {
 
   test("create 的说明让模型先口头问再请求放行，不再说「去面板里改」", () => {
     const description = harness({ ok: true, text: "" }).byName("automation_create").description;
-    for (const needle of ["ask the user in ONE plain sentence", 'automation_update with mode "skip"', "Never request", "Allow button"]) {
+    for (const needle of ["ask the user in ONE plain sentence", 'automation_update with mode "skip"', "Never request", "allow button", "user's language"]) {
       assert.ok(description.includes(needle), needle);
     }
     assert.doesNotMatch(description, /Automations panel|yourself/);

@@ -104,7 +104,7 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
       "each run opens a fresh session in this workspace, read-only (Plan) by default, and the previous run's answer is attached so it can say what is new; the instruction must then be self-contained. " +
       "WRITE ACCESS: a read-only run cannot write files or run commands. If the routine has to write (save cards or notes, run a plugin's scripts), AFTER creating it ask the user in ONE plain sentence whether it may run with write access " +
       "(\"Skip\", unattended), and only once they agree call automation_update with mode \"skip\". Never request \"skip\" without asking first, and do not pass mode \"skip\" to automation_create on your own. " +
-      "If this conversation is not in Skip mode, the permission is NOT changed by that call: a row with an Allow button is left in the conversation for the user to click — then end your turn and do not call it again. " +
+      "If this conversation is not in Skip mode, the permission is NOT changed by that call: a row with an allow button is left in the conversation for the user to click (the button is labelled in the user's language; refer to it in that language, not by an English name) — then end your turn and do not call it again. " +
       `Limits: intervals of at least ${AUTOMATION_INTERVAL_MIN_MINUTES} minutes, at most ${AUTOMATION_MAX_RUNS_PER_DAY} runs per 24 hours; ` +
       `a task you create always has an end — if you give neither maxRuns nor until it stops after ${AUTOMATION_AGENT_DEFAULT_MAX_RUNS} runs (maxRuns at most ${AUTOMATION_AGENT_MAX_RUNS_CAP}); ` +
       "at most 5 active tasks per conversation and 20 in total. Times are local time. Three consecutive failed runs stop it. " +
@@ -219,7 +219,7 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
       "Change the permission (mode) of an automation of this workspace that opens a new session each run: \"skip\" = unattended with write access, \"plan\" = read-only. Nothing else can be changed here. " +
       "Ask the user in one plain sentence first (\"it has to write files, may I let it run with write access?\") and call this only after they agree. " +
       "An automation can never get more permission than this conversation has: if this conversation is in Skip mode the change is made and the user sees a row with an \"undo\" button; " +
-      "otherwise NOTHING is changed — a row with an Allow button is left in the conversation for the user to click. In that case end your turn and do not call it again. " +
+      "otherwise NOTHING is changed — a row with an allow button is left in the conversation for the user to click (labelled in the user's language; refer to it in that language). In that case end your turn and do not call it again. " +
       "\"plan\" is always applied at once. Use automation_list for the ids.",
     parameters: {
       type: "object",

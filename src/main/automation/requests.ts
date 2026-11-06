@@ -712,7 +712,7 @@ async function changeModeForAgent(
     automation: target,
     text:
       `The permission of "${target.title}" was NOT changed: this conversation is in "${effectiveSession}" mode, and an automation cannot be given more permission than the conversation that asks for it. ` +
-      "A row with an Allow button is now in the conversation for the user to click. End your turn and wait; do not call automation_update again.",
+      "A row with an allow button is now in the conversation for the user to click; the button is labelled in the user's language, so when you mention it use that language (for a Chinese user: 「允许」), not the English word. End your turn and wait; do not call automation_update again.",
     row: row("pending"),
   };
 }
