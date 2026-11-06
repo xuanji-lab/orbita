@@ -54,14 +54,20 @@ describe("旧技能 → 一样东西的插件", () => {
     assert.equal(by("g")?.location, join(dir, "skills", "g"));
   });
 
-  test("显示名是 SKILL.md 的 name，不是目录名；断链的不显示", async () => {
+  test("显示名是 SKILL.md 的 name，不是目录名；断链的也列出来：停用、没有位置、带断链问题（清理入口靠它）", async () => {
     await putSkill("dir-name", "显示名");
     await skills.link("dir-name", { kind: "global" });
     await mkdir(join(dir, "skill-links", "global"), { recursive: true });
     const { symlink } = await import("node:fs/promises");
     await symlink(join(dir, "skills", "ghost"), join(dir, "skill-links", "global", "ghost"));
     const views = await listSkillViews();
-    assert.deepEqual(views.map((v) => v.name), ["显示名"]);
+    assert.deepEqual(views.map((v) => v.id), ["skill:dir-name", "skill:ghost"]);
+    assert.equal(views[0]?.name, "显示名");
+    assert.deepEqual(views[0]?.problems, []);
+    const ghost = views[1];
+    // 链接还在（global），但真身没了：不能算「在全局生效」，也不能当作有位置
+    assert.deepEqual([ghost?.scope, ghost?.placement], [{ kind: "off" }, null]);
+    assert.deepEqual(ghost?.problems, [{ kind: "skill-folder-missing", detail: "ghost" }]);
   });
 
   test("写路径：off 把 global 与各工作区的链都移出；中心存储文件不动", async () => {

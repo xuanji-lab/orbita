@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { PluginView } from "../../../../shared/plugin.ts";
 import { EMPTY_PLUGIN_IO } from "../../../../shared/plugin-board.ts";
-import { changedSections, sectionFilled, sectionSignatures, waitCount } from "./detail-sections.ts";
+import { changedSections, detailParts, sectionFilled, sectionSignatures, waitCount } from "./detail-sections.ts";
 
 function view(over: Partial<PluginView> = {}): PluginView {
   return {
@@ -87,5 +87,36 @@ describe("waitCount", () => {
   test("数 board / chat 的步骤", () => {
     assert.equal(waitCount([]), 0);
     assert.equal(waitCount([step(null), step("board"), step("chat"), step(null)]), 2);
+  });
+});
+
+describe("detailParts：详情页按种类画哪几块", () => {
+  const missingProblem = { kind: "skill-folder-missing" as const, detail: "gone" };
+
+  test("你的技能：内容三格 + 在哪儿可用；没有状态 / 工具 / 命令，也没有三选一的「装在哪」与来源版本", () => {
+    const parts = detailParts(view({ origin: "user-skill" }));
+    assert.equal(parts.skillContent, true);
+    assert.equal(parts.availability, true);
+    assert.equal(parts.skillMissing, false);
+    assert.deepEqual([parts.mcpStatus, parts.mcpSwitch, parts.mcpTools, parts.mcpCommand], [false, false, false, false]);
+    assert.deepEqual([parts.pluginScope, parts.abilities, parts.source, parts.lead], [false, false, false, false]);
+  });
+
+  test("断链的技能：不给编辑也不给范围，只有清理断链的提示", () => {
+    const parts = detailParts(view({ origin: "user-skill", problems: [missingProblem] }));
+    assert.deepEqual([parts.skillContent, parts.availability, parts.skillMissing], [false, false, true]);
+  });
+
+  test("你的 MCP：状态（含启用开关）、工具、命令、在哪儿可用；没有技能内容", () => {
+    const parts = detailParts(view({ origin: "user-mcp" }));
+    assert.deepEqual([parts.mcpStatus, parts.mcpSwitch, parts.mcpTools, parts.mcpCommand, parts.availability], [true, true, true, true, true]);
+    assert.deepEqual([parts.skillContent, parts.skillMissing, parts.pluginScope, parts.abilities, parts.source], [false, false, false, false, false]);
+  });
+
+  test("真插件：技能只读（没有内容编辑）、MCP 没有单独的启用开关；走「装在哪」三选一", () => {
+    // 带着技能和 MCP 的插件：照样不出现技能编辑与 MCP 开关
+    const parts = detailParts(view({ origin: "plugin", skills: [{ slug: "s", name: "s", description: "d" }], mcp: [{ name: "m", qualified: "plugin_x_m", transport: "stdio", commandLine: "npx m", problem: null }] }));
+    assert.deepEqual([parts.skillContent, parts.skillMissing, parts.mcpSwitch, parts.availability], [false, false, false, false]);
+    assert.deepEqual([parts.pluginScope, parts.abilities, parts.source, parts.lead], [true, true, true, true]);
   });
 });

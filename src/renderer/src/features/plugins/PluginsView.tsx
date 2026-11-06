@@ -37,12 +37,13 @@ import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
+import { KindTag } from "./AbilitySections.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
 import { PluginPickerBar, PluginPickerGroup } from "./PluginPicker.tsx";
 import { activateRow, buildPicker, clampPick, collapseRow, expandRow, indexOfPlugin, movePick, type PickerOutcome } from "./plugin-picker.ts";
 import { filterDrafts, groupDrafts, type PluginDraftTarget } from "./plugin-draft.ts";
 import { useDraftList } from "./useDraftList.ts";
-import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
+import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, isMissingSkillView, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
 
@@ -733,8 +734,10 @@ function PluginRow(props: { view: PluginView; onOpen: () => void; onToggle: () =
         </span>
         <span className="pl-kinds">{kindsLine}</span>
         <span className="pl-from">{sourceLabel}</span>
+        <KindTag view={view} />
       </button>
-      <PluginSwitch checked={active} label={active ? t.toggleOff(view.name) : t.toggleOn(view.name)} onChange={props.onToggle} />
+      {/* 断链的技能没有东西可开关：开关停着，点进去清理 */}
+      <PluginSwitch checked={active} label={active ? t.toggleOff(view.name) : t.toggleOn(view.name)} disabled={isMissingSkillView(view)} onChange={props.onToggle} />
     </div>
   );
 }

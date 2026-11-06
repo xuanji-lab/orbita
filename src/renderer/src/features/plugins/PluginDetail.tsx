@@ -6,7 +6,9 @@
  *
  * 「正在做」（草稿，`draftPath` 非空）就是这张页：清单里还没写的节画虚线框「还没聊到」，刚变化的节外圈高亮 2 秒，
  * 文件改动几秒内刷新；没有安装记录，所以没有开关、没有卸载。
- * 旧技能与旧 MCP 同样走这一页，只是没有输入输出 / 工作流 / 看板，能做的动作少几样。
+ * 零散的技能与 MCP（面板叫「能力」，列表里和插件并排）同样走这一页，只是节不同（见 detail-sections.ts 的 detailParts）：
+ * 技能 = 内容三格（失焦即存）+ 在哪儿可用；MCP = 状态（启用开关、连接状态、错误全文与重试）+ 工具 + 命令 + 在哪儿可用。
+ * 插件带的技能只读，带的 MCP 显示状态与工具、不单独启停。
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parsePluginViewId, type PluginScope, type PluginView } from "@shared/plugin";
@@ -14,13 +16,15 @@ import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { AvailabilityBody, McpStatusLine, McpToolChips, PluginMcpRuntime, SkillContentBody, serverStatusOf, toolsOfStatus } from "./AbilitySections.tsx";
 import { ConfigField, ScopeEditor } from "./PluginConfig.tsx";
 import { BoardStyleBody } from "./PluginBoardSection.tsx";
-import { ExternalAbility, McpAbility, PluginAvatar, ScriptsAbility, SkillAbility, UnsupportedAbility } from "./PluginParts.tsx";
+import { ExternalAbility, McpAbility, PluginAvatar, PluginSwitch, ScriptsAbility, SkillAbility, UnsupportedAbility } from "./PluginParts.tsx";
 import { WorkflowList } from "./PluginWorkflow.tsx";
 import {
   FRESH_HIGHLIGHT_MS,
   changedSections,
+  detailParts,
   sectionFilled,
   sectionSignatures,
   waitCount,
@@ -28,7 +32,9 @@ import {
   type SectionSignatures,
 } from "./detail-sections.ts";
 import { conflictText, problemText } from "./plugin-text.ts";
-import { canRemoveMcpView, isBuiltinView, sourceKey } from "./plugin-view.ts";
+import { namedInstances } from "./mcp-row-display.ts";
+import { useMcpRows } from "./useMcpRows.ts";
+import { availabilityScopeOf, canRemoveMcpView, isBuiltinView, sourceKey, workspaceName } from "./plugin-view.ts";
 
 const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
 
@@ -61,6 +67,8 @@ export function PluginDetail(props: {
   const [busy, setBusy] = useState<null | "reload" | "uninstall" | "remove">(null);
   const [reloaded, setReloaded] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const parts = detailParts(view);
   // 确认条一出现就把焦点给「取消」：误按回车不会删东西，Esc 也在这一层收回
   const cancelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -101,17 +109,47 @@ export function PluginDetail(props: {
     link: t.sourceLink,
     git: t.sourceGit,
   }[source];
+  // 零散技能 / MCP 的副标题：「你的技能 · 全局」——种类 + 现在在哪儿可用（MCP 停用时说已停用）
+  const availability = availabilityScopeOf(view);
+  const where =
+    view.origin === "user-mcp" && view.scope.kind === "off"
+      ? t.mcpState.disabled
+      : availability.kind === "global"
+        ? t.availableGlobal
+        : availability.kind === "workspaces"
+          ? availability.ids.map((id) => workspaceName(props.workspaces, id)).join("、")
+          : t.groupNone;
   const by = draft
     ? [t.draftBy]
-    : view.origin === "user-mcp"
-      ? [t.userMcpBy]
-      : [view.author, view.version, view.license, sourceLabel].filter((part): part is string => part !== null && part !== "");
+    : view.origin === "user-mcp" || (view.origin === "user-skill" && !parts.skillMissing)
+      ? [sourceLabel, where]
+      : view.origin === "user-skill"
+        ? [sourceLabel]
+        : [view.author, view.version, view.license, sourceLabel].filter((part): part is string => part !== null && part !== "");
   const isPlugin = view.origin === "plugin";
   const hasAbilities = sectionFilled(view, "abilities");
   const linked = view.install?.source.kind === "link";
   /** Orbita 内置（做插件）：可以停用，不能卸载 */
   const builtin = isBuiltinView(view);
   const pluginName = parsed?.key ?? "";
+  // 连接状态是运行时事实：这张详情涉及 MCP（你的 MCP，或插件带了 MCP）才读，并跟着 agent 的快照走
+  const mcpRows = useMcpRows(parts.mcpStatus || (isPlugin && view.mcp.length > 0));
+  const mcpServer = parts.mcpStatus ? (mcpRows.servers.find((row) => row.name === (parsed?.key ?? view.name)) ?? null) : null;
+  const mcpStatus = serverStatusOf(mcpServer, mcpRows.loaded);
+  const mcpTools = toolsOfStatus(mcpStatus);
+  /** 启用开关的真值：文件里的 disabled 事实（mcp:list 读的），没读到就按视图的范围 */
+  const mcpEnabled = mcpServer !== null ? !mcpServer.disabled : view.scope.kind !== "off";
+  const pluginRuntimeRow = (row: (typeof mcpRows.pluginServers)[number] | undefined) =>
+    row === undefined ? null : { status: row.status, instances: namedInstances(row.instances, (id) => workspaceName(props.workspaces, id)) };
+  const reconnect = (): void =>
+    void run(async () => {
+      setReconnecting(true);
+      try {
+        await mcpRows.reconnect();
+      } finally {
+        setReconnecting(false);
+      }
+    });
 
   /** 一节：草稿里没写的画虚线框「还没聊到」+ 一句提示，写了的正常画；刚变化的外圈亮一下 */
   const section = (key: DetailSection, title: string, body: ReactNode, opts: { hint?: string; trailing?: ReactNode; placeholder: string }): ReactNode => {
@@ -147,7 +185,20 @@ export function PluginDetail(props: {
           <SkillAbility key={`s:${skill.slug}`} skill={skill} />
         ))}
         {view.mcp.map((server) => (
-          <McpAbility key={`m:${server.name}`} server={server} />
+          <McpAbility
+            key={`m:${server.name}`}
+            server={server}
+            runtime={
+              <PluginMcpRuntime
+                server={server.qualified}
+                row={pluginRuntimeRow(mcpRows.pluginServers.find((row) => row.name === server.qualified))}
+                loaded={mcpRows.loaded}
+                disabled={view.scope.kind === "off"}
+                reconnecting={reconnecting}
+                onRetry={reconnect}
+              />
+            }
+          />
         ))}
         {view.contents.scripts && <ScriptsAbility />}
         {view.external.length > 0 && <ExternalAbility items={view.external} />}
@@ -352,14 +403,37 @@ export function PluginDetail(props: {
           )}
         </>
       )}
-      {view.origin === "user-skill" && (
+      {view.origin === "user-skill" && !parts.skillMissing && (
         <button type="button" className="pl-btn" onClick={() => void run(() => api.skill.reveal(parsed?.key ?? null))}>
           <Icon name="folder-open" size={13} strokeWidth={1.8} />
-          {t.openFolder}
+          {t.revealInFinder}
+        </button>
+      )}
+      {parts.skillMissing && (
+        <button
+          type="button"
+          className="pl-btn danger"
+          title={t.skillMissingCleanTip}
+          disabled={busy !== null}
+          onClick={() =>
+            void run(async () => {
+              await api.skill.clean(parsed?.key ?? "");
+              await props.onChanged();
+              // 清完这一条就不在列表里了：回列表
+              props.onUninstalled();
+            })
+          }
+        >
+          <Icon name="trash-2" size={13} strokeWidth={1.8} />
+          {t.skillMissingClean}
         </button>
       )}
       {view.origin === "user-mcp" && (
         <>
+          <button type="button" className="pl-btn" disabled={reconnecting} onClick={reconnect}>
+            <Icon name="refresh-cw" size={13} strokeWidth={1.8} className={reconnecting ? "anim-continuous pl-mcp-spin" : undefined} />
+            {reconnecting ? t.mcpReconnecting : t.mcpReconnect}
+          </button>
           <button type="button" className="pl-btn" onClick={() => void run(() => api.mcp.openConfig())}>
             <Icon name="file-text" size={13} strokeWidth={1.8} />
             {t.openMcpConfig}
@@ -377,6 +451,19 @@ export function PluginDetail(props: {
   );
   const hasActions = !draft;
 
+  /**
+   * 「在哪儿可用」改范围。你的 MCP 停用时改位置不该顺手把它开起来：setScope 的非停用范围会写 disabled: false，
+   * 所以原本停着的再补一次停用。
+   */
+  const changeAvailability = async (next: PluginScope): Promise<void> => {
+    const wasStopped = view.origin === "user-mcp" && view.scope.kind === "off";
+    await props.onScope(next);
+    if (wasStopped && next.kind !== "off") {
+      await api.mcp.setDisabled(parsed?.key ?? view.name, true);
+      await props.onChanged();
+    }
+  };
+
   return (
     <div className="pl-detail" data-draft={draft ? "true" : undefined}>
       {props.showBack && (
@@ -391,7 +478,7 @@ export function PluginDetail(props: {
         <div className="pl-hero-main">
           <div className="pl-title">{view.name}</div>
           <div className="pl-by">{by.join(" · ")}</div>
-          {view.description !== "" ? (
+          {!parts.lead ? null : view.description !== "" ? (
             // 描述原文常常几百字（技能的触发词清单）：默认三行，点一下展开——简洁为默认、细节可展开
             <button type="button" className="pl-lead" aria-expanded={leadOpen} data-open={leadOpen} onClick={() => setLeadOpen((open) => !open)}>
               {view.description}
@@ -479,10 +566,10 @@ export function PluginDetail(props: {
         </div>
       )}
 
-      {view.origin === "user-skill" && (
-        <div className="pl-note">
-          <Icon name="info" size={14} strokeWidth={1.8} />
-          <span>{t.legacySkillNote(view.location ?? "")}</span>
+      {parts.skillMissing && (
+        <div className="pl-note danger" role="alert">
+          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          <span>{t.skillMissingNote}</span>
         </div>
       )}
 
@@ -507,20 +594,90 @@ export function PluginDetail(props: {
 
       {/* 两列（宽）：左 能做什么 / 输入与输出 / 工作流，右 装在哪 / 要你填的 / 来源与版本，看板样式跨两列放最下；
           单列（窄）：.pl-cols / .pl-col 退成 display: contents，各节按 order 重排（plugins.css） */}
-      <div className="pl-cols">
-        <div className="pl-col">
-          {abilities}
-          {io}
-          {workflow}
+      {parts.skillContent || parts.mcpStatus ? (
+        // 零散技能 / MCP：单列几节（设计稿 b / c），没有两列、没有看板
+        <div className="pl-legacy">
+          {parts.skillContent && (
+            <section className="pl-card" data-sec="content">
+              <div className="pl-card-h">
+                {t.contentTitle}
+                <span className="hint">{t.contentHint}</span>
+              </div>
+              <SkillContentBody slug={parsed?.key ?? ""} onSaved={props.onChanged} />
+            </section>
+          )}
+          {parts.mcpStatus && (
+            <>
+              <section className="pl-card" data-sec="status">
+                <div className="pl-card-h">
+                  {t.mcpStatusTitle}
+                  <span className="pl-card-trail pl-mcp-enable">
+                    {t.mcpEnabled}
+                    <PluginSwitch
+                      checked={mcpEnabled}
+                      label={mcpEnabled ? t.mcpEnabledOn(view.name) : t.mcpEnabledOff(view.name)}
+                      disabled={busy !== null || reconnecting}
+                      onChange={() =>
+                        void run(async () => {
+                          // 写盘后主进程自动重连；这里等它回来再读，状态才是新的
+                          await api.mcp.setDisabled(parsed?.key ?? view.name, mcpEnabled);
+                          await Promise.all([props.onChanged(), mcpRows.refresh()]);
+                        })
+                      }
+                    />
+                  </span>
+                </div>
+                <McpStatusLine status={mcpStatus} instances={mcpServer?.instances ?? []} reconnecting={reconnecting} onRetry={reconnect} />
+                {mcpRows.error !== null && (
+                  <span className="pl-field-error" role="alert">
+                    {mcpRows.error}
+                  </span>
+                )}
+              </section>
+              <section className="pl-card" data-sec="tools">
+                <div className="pl-card-h">
+                  <Icon name="wrench" size={13} strokeWidth={1.8} />
+                  {t.mcpToolsTitle(mcpTools.length)}
+                </div>
+                {mcpTools.length > 0 ? <McpToolChips server={parsed?.key ?? view.name} tools={mcpTools} /> : <span className="pl-muted">{t.mcpToolsNone}</span>}
+              </section>
+              <section className="pl-card" data-sec="command">
+                <div className="pl-card-h">
+                  <Icon name="terminal" size={13} strokeWidth={1.8} />
+                  {t.mcpCommandTitle}
+                </div>
+                <code className="pl-cmd">{view.mcp[0]?.commandLine ?? view.description}</code>
+              </section>
+            </>
+          )}
+          {parts.availability && (
+            <section className="pl-card" data-sec="available">
+              <div className="pl-card-h">
+                <Icon name="layers" size={13} strokeWidth={1.8} />
+                {t.availableTitle}
+              </div>
+              <AvailabilityBody view={view} workspaces={props.workspaces} onScope={(next) => void run(() => changeAvailability(next))} />
+            </section>
+          )}
         </div>
-        <div className="pl-col">
-          {scope}
-          {config}
-          {sourceCard}
-          {problemsCard}
-        </div>
-      </div>
-      {board}
+      ) : parts.skillMissing ? null : (
+        <>
+          <div className="pl-cols">
+            <div className="pl-col">
+              {abilities}
+              {io}
+              {workflow}
+            </div>
+            <div className="pl-col">
+              {scope}
+              {config}
+              {sourceCard}
+              {problemsCard}
+            </div>
+          </div>
+          {board}
+        </>
+      )}
     </div>
   );
 }

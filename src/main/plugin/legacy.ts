@@ -1,8 +1,8 @@
 /**
  * 旧技能 / 旧 MCP 显示成「只有一样东西的插件」——**视图层的投影，不搬文件**：
  * - 技能：`skill-links/` 的链接表是真源。global 链 → 所有工作区；链在某些工作区 → 那些工作区；
- *   哪里都没链 → 停用且没有位置（落「未启用」组）。断链（missing）不显示：它没有东西可开关，
- *   清理在原来的技能面板里（旧面板本期保留不动）。
+ *   哪里都没链 → 停用且没有位置（落「未启用」组）。断链（missing，真身目录没了）也列出来、停用且没有位置，
+ *   带一条 skill-folder-missing 问题——旧技能面板撤了以后，清理断链引用只能从这里进。
  * - MCP：全局 `mcp.json`。`workspaces` 白名单为空 → 所有工作区；`disabled` → 停用但位置还记着
  *   （停用的行仍落在原来的组里，与真插件一致）。白名单里写的可以是工作区名或 id，投影时翻成 id，
  *   翻不到的丢掉（那个工作区已经不在了）。工作区自带的 `.mcp.json` 不算「你的 MCP」，不在这里。
@@ -28,33 +28,35 @@ function emptyParts(): Pick<PluginView, "author" | "version" | "license" | "unsu
 }
 
 export function skillViews(metas: readonly SkillMeta[], storeRoot: string): PluginView[] {
-  return metas
-    .filter((meta) => !meta.missing)
-    .map((meta): PluginView => {
-      const placement: PluginPlacement | null = meta.global
+  return metas.map((meta): PluginView => {
+    // 断链的技能没有东西可开关：不论链接还剩几条，都按「没有位置、停用」列出，只留清理入口
+    const placement: PluginPlacement | null = meta.missing
+      ? null
+      : meta.global
         ? { kind: "global" }
         : meta.workspaces.length > 0
           ? { kind: "workspaces", ids: [...meta.workspaces] }
           : null;
-      return {
-        ...emptyParts(),
-        id: pluginViewId("user-skill", meta.slug),
-        origin: "user-skill",
-        name: meta.name,
-        description: meta.description,
-        scope: placement ?? { kind: "off" },
-        placement,
-        contents: { skills: 1, mcp: 0, scripts: false },
-        skills: [{ slug: meta.slug, name: meta.name, description: meta.description }],
-        workflow: [],
-        io: EMPTY_PLUGIN_IO,
-        external: [],
-        board: null,
-        tuned: false,
-        mcp: [],
-        location: meta.linkedPath ?? join(storeRoot, meta.slug),
-      };
-    });
+    return {
+      ...emptyParts(),
+      id: pluginViewId("user-skill", meta.slug),
+      origin: "user-skill",
+      name: meta.name,
+      description: meta.description,
+      scope: placement ?? { kind: "off" },
+      placement,
+      contents: { skills: 1, mcp: 0, scripts: false },
+      skills: [{ slug: meta.slug, name: meta.name, description: meta.description }],
+      workflow: [],
+      io: EMPTY_PLUGIN_IO,
+      external: [],
+      board: null,
+      tuned: false,
+      mcp: [],
+      problems: meta.missing ? [{ kind: "skill-folder-missing", detail: meta.slug }] : [],
+      location: meta.linkedPath ?? join(storeRoot, meta.slug),
+    };
+  });
 }
 
 export function mcpViews(servers: Readonly<Record<string, McpServer>>, workspaces: readonly Workspace[]): PluginView[] {

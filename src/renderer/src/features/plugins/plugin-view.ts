@@ -96,6 +96,49 @@ export function canRemoveMcpView(view: Pick<PluginView, "origin">): boolean {
   return view.origin === "user-mcp";
 }
 
+/** 列表行右侧小字标的种类：插件 / 内置 / 技能 / MCP（面板叫「能力」，每一项仍按它自己的种类叫）。 */
+export type RowKind = "plugin" | "builtin" | "skill" | "mcp";
+
+export function rowKind(view: Pick<PluginView, "origin" | "install">): RowKind {
+  if (view.origin === "user-skill") return "skill";
+  if (view.origin === "user-mcp") return "mcp";
+  return view.install?.source.kind === "builtin" ? "builtin" : "plugin";
+}
+
+/** 断链的旧技能：链接还在、真身目录没了。它只能被清理，不能开关、不能点名（选取态也不列）。 */
+export function isMissingSkillView(view: Pick<PluginView, "origin" | "problems">): boolean {
+  return view.origin === "user-skill" && view.problems.some((problem) => problem.kind === "skill-folder-missing");
+}
+
+/** 「在哪儿可用」里的一枚小标：全局，或某个工作区。 */
+export type AvailabilityChip = { kind: "global" } | { kind: "workspace"; id: string };
+
+/**
+ * 旧技能 / 旧 MCP 详情里「在哪儿可用」当前显示的范围。MCP 停用时 scope 是 off，
+ * 但它记着停用前的位置（placement）——小标要照位置画，不能因为停用了就全灭。
+ */
+export function availabilityScopeOf(view: Pick<PluginView, "origin" | "scope" | "placement">): PluginScope {
+  return view.origin === "user-mcp" ? (view.placement ?? { kind: "off" }) : view.scope;
+}
+
+/**
+ * 点一枚小标后的新范围（原来的 link / unlink 小标的语义）：
+ * - 点「全局」：已是全局 → 停用（全取消）；否则 → 全局（原来的工作区链接由主进程互斥移出）；
+ * - 点工作区：全局时点它 → 只在这一个；名单里时点它 = 加入 / 取消。
+ * `keepOne`：MCP 的开关是单独的「启用」，名单点空会被当成停用，所以不许点空——返回 null（不改）。
+ */
+export function nextAvailability(scope: PluginScope, chip: AvailabilityChip, keepOne: boolean): PluginScope | null {
+  const next: PluginScope =
+    chip.kind === "global"
+      ? scope.kind === "global"
+        ? { kind: "off" }
+        : { kind: "global" }
+      : scope.kind === "global"
+        ? { kind: "workspaces", ids: [chip.id] }
+        : toggleWorkspaceInScope(scope, chip.id);
+  return keepOne && next.kind === "off" ? null : next;
+}
+
 /** 随 Orbita 带的内置插件：可停用，不可卸载。 */
 export function isBuiltinView(view: PluginView): boolean {
   return view.install?.source.kind === "builtin";

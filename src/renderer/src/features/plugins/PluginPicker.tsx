@@ -5,6 +5,7 @@
  */
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
+import { KindTag } from "./AbilitySections.tsx";
 import { PluginAvatar } from "./PluginParts.tsx";
 import type { PickerGroup, PickerRow } from "./plugin-picker.ts";
 import "./plugin-picker.css";
@@ -72,7 +73,10 @@ function PluginPickRow(props: {
             <b>{view.name}</b>
             <small className={view.origin === "user-mcp" ? "mono" : undefined}>{view.description}</small>
           </span>
-          {active && <EnterHint />}
+          <span className="pl-trail">
+            <KindTag view={view} />
+            {active && <EnterHint />}
+          </span>
         </button>
       </div>
       {hint && (

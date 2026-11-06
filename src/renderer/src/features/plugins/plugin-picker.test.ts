@@ -53,6 +53,16 @@ describe("tokenOfView —— token 随来源走", () => {
   });
 });
 
+describe("buildPicker —— 断链技能", () => {
+  it("断链的旧技能（文件夹没了）不进选取态：点名也读不到，只留在列表里给清理用", () => {
+    const ghost = view("skill:ghost", "ghost", { kind: "off" }, { problems: [{ kind: "skill-folder-missing", detail: "ghost" }] });
+    const model = buildPicker([...all, ghost], "orbita", "", null);
+    const names = model.groups.flatMap((group) => group.rows.map((row) => (row.kind === "plugin" ? row.view.name : row.skill.name)));
+    assert.equal(names.includes("ghost"), false);
+    assert.equal(names.includes("miyo"), true);
+  });
+});
+
 describe("buildPicker —— 分组与排序", () => {
   it("这个工作区能用的在前（真插件、零散技能、零散 MCP），没启用的排下面", () => {
     const model = buildPicker(all, "orbita", "", null);

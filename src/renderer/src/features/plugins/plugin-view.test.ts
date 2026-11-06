@@ -10,8 +10,12 @@ import {
   groupPlugins,
   installedNamesOf,
   creatorAvailable,
+  availabilityScopeOf,
   isActive,
   isBuiltinView,
+  isMissingSkillView,
+  nextAvailability,
+  rowKind,
   legacyCounts,
   sourceKey,
   toggleTarget,
@@ -235,5 +239,57 @@ describe("installedNamesOf：对话里那一行靠它判断「已装上」", () 
       view({ id: "plugin:ghost", name: "ghost", install: null }),
     ]);
     assert.deepEqual([...names].sort(), ["lit", "plugin-creator"]);
+  });
+});
+
+describe("rowKind：列表行右侧的种类小标", () => {
+  const install = (kind: "builtin" | "copy" | "link") =>
+    ({ source: kind === "builtin" ? { kind } : kind === "copy" ? { kind, from: "/x" } : { kind, path: "/x" } }) as PluginView["install"];
+  test("插件 / 内置 / 技能 / MCP 四种", () => {
+    assert.equal(rowKind(view({ id: "plugin:a", name: "a", install: install("copy") })), "plugin");
+    assert.equal(rowKind(view({ id: "plugin:a", name: "a", install: install("link") })), "plugin");
+    assert.equal(rowKind(view({ id: "plugin:b", name: "b", install: install("builtin") })), "builtin");
+    assert.equal(rowKind(view({ id: "skill:s", name: "s", origin: "user-skill" })), "skill");
+    assert.equal(rowKind(view({ id: "mcp:m", name: "m", origin: "user-mcp" })), "mcp");
+  });
+});
+
+describe("isMissingSkillView", () => {
+  test("只认旧技能身上的断链问题；插件里的同名问题与别的问题都不算", () => {
+    const problem = { kind: "skill-folder-missing" as const, detail: "x" };
+    assert.equal(isMissingSkillView(view({ id: "skill:x", name: "x", origin: "user-skill", problems: [problem] })), true);
+    assert.equal(isMissingSkillView(view({ id: "skill:x", name: "x", origin: "user-skill", problems: [{ kind: "path-missing", detail: "x" }] })), false);
+    assert.equal(isMissingSkillView(view({ id: "plugin:x", name: "x", problems: [problem] })), false);
+  });
+});
+
+describe("在哪儿可用：小标点击 → 新范围", () => {
+  const A = { kind: "workspace" as const, id: "a" };
+  const B = { kind: "workspace" as const, id: "b" };
+  const G = { kind: "global" as const };
+
+  test("技能：全局 ↔ 停用；全局时点工作区 = 只在这一个；名单里加入 / 取消，点空 = 停用", () => {
+    assert.deepEqual(nextAvailability({ kind: "off" }, G, false), { kind: "global" });
+    assert.deepEqual(nextAvailability({ kind: "global" }, G, false), { kind: "off" });
+    assert.deepEqual(nextAvailability({ kind: "global" }, A, false), { kind: "workspaces", ids: ["a"] });
+    assert.deepEqual(nextAvailability({ kind: "workspaces", ids: ["a"] }, B, false), { kind: "workspaces", ids: ["a", "b"] });
+    assert.deepEqual(nextAvailability({ kind: "workspaces", ids: ["a", "b"] }, A, false), { kind: "workspaces", ids: ["b"] });
+    assert.deepEqual(nextAvailability({ kind: "workspaces", ids: ["a"] }, A, false), { kind: "off" });
+    assert.deepEqual(nextAvailability({ kind: "workspaces", ids: ["a"] }, G, false), { kind: "global" });
+  });
+
+  test("MCP（keepOne）：不许点空——空名单会被当成停用，那是「启用」开关的事；其余照常", () => {
+    assert.equal(nextAvailability({ kind: "global" }, G, true), null);
+    assert.equal(nextAvailability({ kind: "workspaces", ids: ["a"] }, A, true), null);
+    assert.deepEqual(nextAvailability({ kind: "workspaces", ids: ["a", "b"] }, A, true), { kind: "workspaces", ids: ["b"] });
+    assert.deepEqual(nextAvailability({ kind: "global" }, A, true), { kind: "workspaces", ids: ["a"] });
+  });
+
+  test("显示的范围：MCP 停用时照记着的位置画（小标不因停用而全灭）；技能照有效范围", () => {
+    const mcp = view({ id: "mcp:m", name: "m", origin: "user-mcp", scope: { kind: "off" }, placement: { kind: "workspaces", ids: ["a"] } });
+    assert.deepEqual(availabilityScopeOf(mcp), { kind: "workspaces", ids: ["a"] });
+    assert.deepEqual(availabilityScopeOf({ ...mcp, placement: null }), { kind: "off" });
+    const skill = view({ id: "skill:s", name: "s", origin: "user-skill", scope: { kind: "global" } });
+    assert.deepEqual(availabilityScopeOf(skill), { kind: "global" });
   });
 });
