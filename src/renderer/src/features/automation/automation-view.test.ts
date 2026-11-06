@@ -169,10 +169,11 @@ describe("时间与调度的人话", () => {
     );
   });
 
-  test("countLabel：有上限 3/12，没上限已运行 N 次，没跑过为空", () => {
-    assert.equal(countLabel(auto({ id: "a", maxRuns: 12, runCount: 3 }), T), "3/12 runs");
-    assert.equal(countLabel(auto({ id: "a", runCount: 6 }), Z), "已运行 6 次");
-    assert.equal(countLabel(auto({ id: "a" }), T), "");
+  test("countLabel：一律「累计 N 次」，有上限也不写分母，没跑过写 0", () => {
+    assert.equal(countLabel(auto({ id: "a", maxRuns: 12, runCount: 3 }), T), "3 runs total");
+    assert.equal(countLabel(auto({ id: "a", runCount: 1 }), T), "1 run total");
+    assert.equal(countLabel(auto({ id: "a", runCount: 6 }), Z), "累计 6 次");
+    assert.equal(countLabel(auto({ id: "a" }), Z), "累计 0 次");
   });
 
   test("noteOf：失败态给原因；最近一次失败给提示；绑 manual 档的会话提醒会卡在审批；正常无", () => {
