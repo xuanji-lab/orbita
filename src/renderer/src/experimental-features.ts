@@ -179,33 +179,6 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
     ],
   },
   {
-    id: "lean-rail",
-    icon: "panel-right",
-    name: { zh: "精简右栏", en: "Lean right rail" },
-    summary: {
-      zh: "右栏常驻只留「这条任务」、文件、终端、内置浏览器和设置；审查、上下文、能力、记忆、意图、遗留、归档、通知收进「更多」，各自原来的入口照常能用。条上与「更多」里的入口按同一套类分组，类与类之间一条细线。本机记下每个面板打开了几次（不上传），统计在本页底部。",
-      en: "The right rail keeps only This task, Files, the terminal, the built-in browser and Settings. Review, context, abilities, memory, intent, carryovers, archive and notifications move into More, and every other way in still works. The rail and More group their entries the same way, with a thin line between groups. This computer counts how often each panel is opened (nothing is uploaded); the counts are at the bottom of this page.",
-    },
-    changelog: [
-      {
-        pr: null,
-        date: "2026-10-30",
-        note: {
-          zh: "首版：精简右栏 + 本机的面板打开次数。",
-          en: "First version: the lean rail and local counts of how often each panel is opened.",
-        },
-      },
-      {
-        pr: null,
-        date: "2026-10-31",
-        note: {
-          zh: "文件常驻，不再收进「更多」；条上与「更多」里的入口按类分组，组间一条细线。",
-          en: "Files stays on the rail instead of folding into More; the rail and More group their entries, with a thin line between groups.",
-        },
-      },
-    ],
-  },
-  {
     id: "automation",
     icon: "calendar-clock",
     name: { zh: "自动化", en: "Automations" },

@@ -453,7 +453,7 @@ void app.whenReady().then(async () => {
   // 同一个实例也喂给专注小结（摘抄是素材之一）
   const excerpts = new ExcerptStore(join(configDir, "excerpts.jsonl"));
   registerExcerptIpc(excerpts, sessions);
-  // 面板打开次数（panel-usage:*，实验功能「精简右栏」的数据）：只在本机、不上传，
+  // 面板打开次数（panel-usage:*）：只在本机、不上传，
   // 设置 › 实验功能里给一行只读统计
   registerPanelUsageIpc(new PanelUsageStore(join(configDir, "panel-usage.json")));
   const mcp = new McpStore(configDir);

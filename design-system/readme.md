@@ -539,10 +539,9 @@ centred in the strip — with `--space-2` above and below (`--space-1` when the 
 high); entries inside a group sit `--space-1` apart. It is decoration (`aria-hidden`); each group is a
 `role="group"` with a name for screen readers. A group with no visible entries draws nothing, not even
 its line. A new entry goes into the group of the question it answers (`items` in `RightRail.tsx`) — a
-fifth group is only for a fifth question. The lean rail (experimental `lean-rail`) keeps the *pinned*
-entries on the strip (Files is pinned: it is never folded away) and moves the rest into the More menu in
-the same group order, with the menu's own 1px rule between groups (`Menu` item `rule`), so an entry
-keeps its neighbours in both modes. Badges stay inside the strip (`.rail-badge` right edge −2px: the
+fifth group is only for a fifth question. There is one layout (2026-11-06): *this session* and *agent* stay on the strip,
+then a hairline and a More ⋮ button whose menu holds only For later, Archived and Notifications (the
+unread count is written on the menu item, not as a badge on ⋮); Board and Settings pin to the bottom. Badges stay inside the strip (`.rail-badge` right edge −2px: the
 strip clips at its 32px). Geometry — centring, badge overhang, the line's centring and equal space above
 and below — is guarded by `scripts/ui-edges.mjs`.
 
