@@ -663,7 +663,8 @@ export function Sidebar(props: {
         标题旁边带着回去的路。标题与工作区选择条**钉在列表外面**：列表滚下去了，一排工作区还在手边。
       */}
       {(props.showArchived || props.showCarryovers) && !overlayOpen && (
-        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+        // minmax(0,1fr)：不加的话 grid 的 auto 列按选择条的内容宽撑开，横向滚动永远触发不了
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: "var(--space-1)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
             <IconButton
               label={t.sidebar.backToTasks}

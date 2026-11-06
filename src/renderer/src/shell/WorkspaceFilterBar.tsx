@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Workspace } from "@shared/workspace";
 import { useT } from "../locale.ts";
 import { Chip } from "./Chip";
@@ -30,26 +30,34 @@ export function WorkspaceFilterBar(props: {
     const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
     setFade((now) => (now.start === start && now.end === end ? now : { start, end }));
   }, []);
-  useEffect(() => {
-    measure();
-    const el = scroller.current;
-    if (el === null || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [measure, props.options]);
-  // 选中的那档滚进视野（默认选中的工作区可能排在屏外）；只动这一条自己的横向滚动，不连祖先一起滚
-  const selectedKey = filterKey(props.selected);
-  useEffect(() => {
+  // 选中的那档滚进视野（默认选中的工作区可能排在屏外；栏宽变了也要再来一次）。
+  // 只动这一条自己的横向滚动，不连祖先一起滚
+  const reveal = useCallback(() => {
     const el = scroller.current;
     const chip = el?.querySelector<HTMLElement>('[data-active="true"]');
     if (el == null || chip == null) return;
-    if (chip.offsetLeft < el.scrollLeft) el.scrollLeft = chip.offsetLeft - 8;
+    if (chip.offsetLeft < el.scrollLeft) el.scrollLeft = Math.max(0, chip.offsetLeft - 8);
     else if (chip.offsetLeft + chip.offsetWidth > el.scrollLeft + el.clientWidth) {
       el.scrollLeft = chip.offsetLeft + chip.offsetWidth - el.clientWidth + 8;
     }
+  }, []);
+  useEffect(() => {
+    reveal();
     measure();
-  }, [selectedKey, measure]);
+    const el = scroller.current;
+    if (el === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      reveal();
+      measure();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [measure, reveal, props.options]);
+  const selectedKey = filterKey(props.selected);
+  useEffect(() => {
+    reveal();
+    measure();
+  }, [selectedKey, reveal, measure]);
 
   const labelOf = (filter: WsFilter): string =>
     filter.kind === "all"
@@ -100,8 +108,18 @@ export function WorkspaceFilterBar(props: {
 /**
  * 每个面板各记一份上次选的（key = 面板名），整个应用生命周期内不丢：右栏关了再开、切走又回来仍停在原来那档。
  * **不按会话记**（用户裁决）：没选过时才走默认（当前会话所在工作区），之后随用户。
+ * 同一个面板可能同时挂两份（能力面板：右栏版与设置里的全屏版），所以是个可订阅的小仓库而不是各自的 state——
+ * 一处选了，另一处跟着变。
  */
 const chosen = new Map<string, WsFilter>();
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 export function useWorkspaceFilter(
   panel: string,
@@ -109,12 +127,12 @@ export function useWorkspaceFilter(
   workspaces: readonly Workspace[],
   allow: WsAllow,
 ): [WsFilter, (next: WsFilter) => void] {
-  const [, rerender] = useState(0);
-  const filter = resolveFilter(chosen.get(panel), fallback, workspaces, allow);
+  const picked = useSyncExternalStore(subscribe, () => chosen.get(panel));
+  const filter = resolveFilter(picked, fallback, workspaces, allow);
   const select = useCallback(
     (next: WsFilter) => {
       chosen.set(panel, next);
-      rerender((n) => n + 1);
+      for (const listener of listeners) listener();
     },
     [panel],
   );

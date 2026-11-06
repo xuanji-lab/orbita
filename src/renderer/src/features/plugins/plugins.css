@@ -60,6 +60,7 @@
 
 /* 工作区选择条：钉在列表上方（右栏走 RightPanelFrame 的 subheader，全屏版夹在页头与正文之间），左右血线与正文一致 */
 .pl-wsbar {
+  min-width: 0;
   width: 100%;
   max-width: var(--content-max-width);
   margin-inline: auto;

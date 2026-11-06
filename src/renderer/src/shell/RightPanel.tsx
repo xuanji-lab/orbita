@@ -157,6 +157,8 @@ export function RightPanelFrame(props: {
         height: "100%",
         display: "grid",
         gridTemplateRows: props.subheader === undefined ? "minmax(0,1fr) auto" : "auto minmax(0,1fr) auto",
+        // 有 subheader 时列也钉成 minmax(0,1fr)：auto 列会按子项的内容宽撑开（横向滚动的选择条尤其）
+        ...(props.subheader === undefined ? {} : { gridTemplateColumns: "minmax(0,1fr)" }),
       }}
     >
       {props.subheader}

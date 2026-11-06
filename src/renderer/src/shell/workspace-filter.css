@@ -3,10 +3,13 @@
  * 被裁的一侧用淡出提示（做法同工具栏溢出文字的 mask，toolbar.css）。
  */
 .ws-filter-bar {
+  /* 自己当 offsetParent：「选中的那档滚进视野」按 offsetLeft 算，要的是相对这一条的位置 */
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
+  max-width: 100%;
   padding: var(--space-0-5) 0;
   overflow-x: auto;
   overscroll-behavior-x: contain;
