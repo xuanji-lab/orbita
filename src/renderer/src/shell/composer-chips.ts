@@ -1,5 +1,5 @@
 /**
- * 句中 chip 的纯逻辑——token（`/skill:<slug>`、`/mcp:<server>`）在输入框与气泡里
+ * 句中 chip 的纯逻辑——token（`/skill:<slug>`、`/mcp:<server>`、`/plugin:<name>`）在输入框与气泡里
  * 的视觉包装。
  *
  * 方案 D（选型报告 §3-D，2026-10-06）：保留 textarea，token 就是普通文本，
@@ -19,10 +19,17 @@
  */
 
 import { findInvocationTokens } from "../../../shared/invocation.ts";
+import { FEATURE_ICON } from "./feature-icons.ts";
+import type { IconName } from "./Icon.tsx";
 import type { WhiteoutSegment } from "./whiteout-segments.ts";
 
-/** token 种类：skill 读文件，mcp 用工具（与 InvocationKind 同一集合） */
-export type ChipKind = "skill" | "mcp";
+/** token 种类：skill 读文件，mcp 用工具，plugin 是整个插件（与 InvocationKind 同一集合） */
+export type ChipKind = "skill" | "mcp" | "plugin";
+
+/** chip 的类别图标：技能是书、MCP 是插头、插件是积木（与插件页头像同一套词汇）。输入框与气泡共用。 */
+export function chipIconName(kind: ChipKind): IconName {
+  return kind === "mcp" ? "plug" : kind === "plugin" ? FEATURE_ICON.plugins : "book-open";
+}
 
 /** 原文里的一个 chip：[start, end) 按 UTF-16 下标，与 textarea 的 selectionStart 同一套 */
 export interface ChipSpan {

@@ -5,6 +5,7 @@ import {
   insertToken,
   mcpToken,
   panelInsertPosition,
+  pluginToken,
   skillToken,
   slashSpaceOpensPanel,
 } from "./panel-token.ts";
@@ -13,6 +14,7 @@ describe("skillToken / mcpToken", () => {
   it("带尾随空格（token 天然终止，光标落在可继续打字的位置）", () => {
     equal(skillToken("orbita-always-open-pr"), "/skill:orbita-always-open-pr ");
     equal(mcpToken("miyo"), "/mcp:miyo ");
+    equal(pluginToken("lit-tracker"), "/plugin:lit-tracker ");
   });
 });
 
@@ -56,11 +58,12 @@ describe("insertToken", () => {
     equal(insertToken("你好\u3000世界", 2, "/x ").value, "你好 /x\u3000世界");
   });
   it("插入后的文本能被发送端的 findInvocationTokens 认出来（补空格不破边界）", () => {
-    const cases: Array<[string, number, string, "skill" | "mcp", string]> = [
+    const cases: Array<[string, number, string, "skill" | "mcp" | "plugin", string]> = [
       ["helloworld", 5, skillToken("review"), "skill", "review"],
       ["", 0, skillToken("a-b"), "skill", "a-b"],
       ["先跑 world", 3, mcpToken("miyo"), "mcp", "miyo"],
       ["hello world", 5, mcpToken("s1"), "mcp", "s1"],
+      ["看看吧", 2, pluginToken("lit-tracker"), "plugin", "lit-tracker"],
     ];
     for (const [before, pos, token, kind, target] of cases) {
       const after = insertToken(before, pos, token).value;

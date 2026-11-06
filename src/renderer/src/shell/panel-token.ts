@@ -4,14 +4,14 @@ import { slashTokenAt } from "./slash-trigger.ts";
  * 右栏面板 → 输入框的「token 通道」纯逻辑：
  *
  * 「`/` + 空格」选取：行首或空白后孤立的 `/` 按空格 → 删掉 `/`、打开右栏
- * 能力面板（Skills + MCP 一张列表）进入选取模式，选中后把 token 插回原光标位置。**句中同样触发**
+ * 插件面板进入选取模式（零散技能 / MCP 在插件页里也是一行插件），选中后把 token 插回原光标位置。**句中同样触发**
  *（2026-10-11 用户裁定：只认消息开头是 bug，句中打 `/` 加空格要和开头完全
  * 一样）；防误触靠 slashTokenAt 自带的前导空白闸门与字符集闸门。
  *（曾有第二条路——面板卡片长按后 HTML5 拖入输入框；2026-10 用户裁决删去。）
  *
- * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `
+ * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `，插件 → `/plugin:<name> `
  * （`/skill:` 的展开边界在 `@shared/skill` 的 findSkillTokens，同一套 token 语法）。
- * 两个 token 都带尾随空格——尾随空格让 token 天然终止、光标落在继续打字的位置。
+ * 三种 token 都带尾随空格——尾随空格让 token 天然终止、光标落在继续打字的位置。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
@@ -24,6 +24,11 @@ export function skillToken(slug: string): string {
 /** MCP server 的插入 token：`/mcp:<name> ` */
 export function mcpToken(name: string): string {
   return `/mcp:${name} `;
+}
+
+/** 插件的插入 token：`/plugin:<name> `（name 是插件标识，不是显示名） */
+export function pluginToken(name: string): string {
+  return `/plugin:${name} `;
 }
 
 /**
@@ -51,7 +56,7 @@ export function insertToken(
 }
 
 /**
- * 「`/` + 空格」是否打开右栏能力面板：光标紧跟在孤立 `/` 之后（`/` 之前
+ * 「`/` + 空格」是否打开右栏插件面板：光标紧跟在孤立 `/` 之后（`/` 之前
  * 是行首或空白，`/` 之后还没打任何字）。与 slash-trigger 的 token 规则同源；
  * **句中同样开**（2026-10-11 用户裁定：只认消息开头是 bug）——防误触由
  * slashTokenAt 的前导空白闸门与字符集闸门把关：`a/ `、`https:/ `、`C:/ `、

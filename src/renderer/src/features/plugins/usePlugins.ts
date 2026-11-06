@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PluginScope, PluginView } from "@shared/plugin";
 import { api } from "../../api";
+import { publishPluginNames } from "./usePluginNames.ts";
 import { LOADING, READY, failed, type LoadState } from "../chat/load-state";
 
 export interface PluginsState {
@@ -28,6 +29,7 @@ export function usePlugins(active: boolean): PluginsState {
     try {
       const result = await api.plugin.list();
       setPlugins(result.plugins);
+      publishPluginNames(result.plugins);
       setMcpError(result.mcpError);
       setLoad(READY);
     } catch (cause) {

@@ -383,6 +383,11 @@
 .bubble-chip-mcp {
   --chip-hue: var(--color-filetype-doc);
 }
+/* 插件 = 橙（与插件页头像同一档类别色） */
+.composer-chip[data-kind="plugin"],
+.bubble-chip-plugin {
+  --chip-hue: var(--color-filetype-slides);
+}
 
 .composer-chip[data-kind] {
   position: relative;
@@ -418,6 +423,14 @@
 
 .composer-chip-name {
   flex: 0 0 auto;
+}
+
+/* 插件 chip 写显示名，宽度与 token 原文无关：名字槽可收缩，放不下省略号，胶囊不超出原文的格子 */
+.composer-chip[data-kind="plugin"] .composer-chip-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 名字走伪元素：face 不许往镜像里加文字（caret-point 按 textContent 定位） */
