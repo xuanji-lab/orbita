@@ -1,0 +1,7 @@
+{
+  "name": "durable-lab-2",
+  "private": true,
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.5.0"
+  }
+}
