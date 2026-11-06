@@ -1860,3 +1860,31 @@ button.pl-tag-more:hover {
 .pl-mcp-runtime .pl-mcp-state {
   font-size: var(--font-size-sm);
 }
+
+/* ---------- 已归档分组：默认折叠，行尾「恢复」钉在行右内边距 ---------- */
+.pl-archived {
+  margin-top: var(--space-2);
+}
+
+.pl-archived-head {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pl-archived-main {
+  grid-template-columns: 22px minmax(0, 1fr);
+  cursor: default;
+}
+
+.pl-archived-main:hover {
+  background: transparent;
+}
+
+.pl-archived .pl-note {
+  margin: var(--space-2) var(--space-4);
+}

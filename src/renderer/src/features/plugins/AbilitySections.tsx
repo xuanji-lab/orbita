@@ -7,15 +7,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { McpInstanceInfo, McpServerInfo, McpStatus } from "@shared/mcp";
 import type { PluginScope, PluginView } from "@shared/plugin";
-import type { SkillContent } from "@shared/skill";
+import type { SkillArchiveEntry, SkillContent } from "@shared/skill";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
+import { PluginAvatar } from "./PluginParts.tsx";
 import { mcpErrors, readyWorkspaces } from "./mcp-row-display.ts";
 import { TOOL_CHIP_LIMIT, shortToolName, visibleTools } from "./mcp-tool-chips.ts";
-import { availabilityScopeOf, nextAvailability, rowKind, type AvailabilityChip } from "./plugin-view.ts";
+import { archivedScopeText, availabilityScopeOf, nextAvailability, rowKind, type AvailabilityChip } from "./plugin-view.ts";
 
 /** 列表行 / 选取行右侧的小字种类标：插件 / 内置 / 技能 / MCP。 */
 export function KindTag(props: { view: Pick<PluginView, "origin" | "install"> }) {
@@ -259,5 +260,82 @@ export function PluginMcpRuntime(props: {
       <McpStatusLine status={status} instances={props.disabled ? [] : (props.row?.instances ?? [])} reconnecting={props.reconnecting} onRetry={props.onRetry} />
       {tools.length > 0 && <McpToolChips server={props.server} tools={tools} />}
     </div>
+  );
+}
+
+// ---------- 已归档 ----------
+
+/**
+ * 能力列表底部默认折叠的「已归档 · N」：每行一条归档的技能，「恢复」挪回原 slug 并按记录的范围重建链接；
+ * 原 slug 被占用就停下说明。`refreshKey` 变了（列表刚重读：归档了一条、别处改了）就重读归档。
+ */
+export function ArchivedSkills(props: { refreshKey: unknown; workspaces: readonly Workspace[]; onRestored: () => Promise<void> }) {
+  const t = useT();
+  const p = t.plugins;
+  const [entries, setEntries] = useState<SkillArchiveEntry[]>([]);
+  const [open, setOpen] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void api.skill
+      .archived()
+      .then((next) => {
+        if (live) setEntries(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [props.refreshKey]);
+
+  if (entries.length === 0) return null;
+  const restore = async (entry: SkillArchiveEntry): Promise<void> => {
+    setBusyId(entry.id);
+    setError(null);
+    try {
+      const result = await api.skill.restore(entry.id);
+      if (!result.ok) setError(result.reason === "slug-exists" ? p.archivedExists(entry.slug) : p.archivedGoneNote);
+      await props.onRestored();
+      setEntries(await api.skill.archived());
+    } catch (cause) {
+      setError(p.archivedFailed(cause instanceof Error ? cause.message : String(cause)));
+    } finally {
+      setBusyId(null);
+    }
+  };
+  const nameOf = (id: string): string | null => props.workspaces.find((workspace) => workspace.id === id)?.name ?? null;
+  return (
+    <section className="pl-grp pl-archived" aria-label={p.archivedTitle(entries.length)}>
+      <button type="button" className="pl-gh pl-archived-head" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
+        <Icon name={open ? "chevron-down" : "chevron-right"} size={14} strokeWidth={1.8} />
+        <b>{p.archivedTitle(entries.length)}</b>
+      </button>
+      {open &&
+        entries.map((entry) => {
+          const where = archivedScopeText(entry, p.availableGlobal, nameOf);
+          return (
+            <div key={entry.id} className="pl-row pl-archived-row">
+              <span className="pl-row-main pl-archived-main">
+                <PluginAvatar view={{ origin: "user-skill" }} />
+                <span className="pl-name">
+                  <b>{entry.name}</b>
+                  <small>{[p.archivedWhen(new Date(entry.archivedAt).toLocaleDateString()), where].filter((part) => part !== "").join(" · ")}</small>
+                </span>
+              </span>
+              <button type="button" className="pl-btn" disabled={busyId !== null} onClick={() => void restore(entry)}>
+                {busyId === entry.id ? p.archivedRestoring : p.archivedRestore}
+              </button>
+            </div>
+          );
+        })}
+      {open && error !== null && (
+        <div className="pl-note danger" role="alert">
+          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          <span>{error}</span>
+        </div>
+      )}
+    </section>
   );
 }

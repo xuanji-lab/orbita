@@ -10,6 +10,7 @@ import {
   groupPlugins,
   installedNamesOf,
   creatorAvailable,
+  archivedScopeText,
   availabilityScopeOf,
   isActive,
   isBuiltinView,
@@ -291,5 +292,15 @@ describe("在哪儿可用：小标点击 → 新范围", () => {
     assert.deepEqual(availabilityScopeOf({ ...mcp, placement: null }), { kind: "off" });
     const skill = view({ id: "skill:s", name: "s", origin: "user-skill", scope: { kind: "global" } });
     assert.deepEqual(availabilityScopeOf(skill), { kind: "global" });
+  });
+});
+
+describe("archivedScopeText：已归档行上的范围", () => {
+  const nameOf = (id: string): string | null => ({ a: "paper-a", b: "paper-b" })[id] ?? null;
+  test("全局优先；工作区列名字；已不存在的工作区不列；都没有为空串", () => {
+    assert.equal(archivedScopeText({ global: true, workspaces: ["a"] }, "全局", nameOf), "全局");
+    assert.equal(archivedScopeText({ global: false, workspaces: ["a", "gone", "b"] }, "全局", nameOf), "paper-a、paper-b");
+    assert.equal(archivedScopeText({ global: false, workspaces: ["gone"] }, "全局", nameOf), "");
+    assert.equal(archivedScopeText({ global: false, workspaces: [] }, "全局", nameOf), "");
   });
 });

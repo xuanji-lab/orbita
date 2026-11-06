@@ -191,3 +191,9 @@ export function installedNamesOf(views: ReadonlyArray<{ id: string; origin: stri
   }
   return found;
 }
+
+/** 归档记录里的范围说成一句：全局 / 工作区名（已不存在的工作区不列）；都没有就空。 */
+export function archivedScopeText(entry: { global: boolean; workspaces: readonly string[] }, global: string, nameOf: (id: string) => string | null): string {
+  if (entry.global) return global;
+  return entry.workspaces.flatMap((id) => nameOf(id) ?? []).join("、");
+}
