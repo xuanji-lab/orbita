@@ -109,6 +109,8 @@ import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { registerPanelUsageIpc } from "./panel-usage/ipc.ts";
 import { PanelUsageStore } from "./panel-usage/store.ts";
+import { registerRightPanelMemoryIpc } from "./right-panel-memory/ipc.ts";
+import { RightPanelMemoryStore } from "./right-panel-memory/store.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
@@ -449,6 +451,9 @@ void app.whenReady().then(async () => {
   // 面板打开次数（panel-usage:*）：只在本机、不上传，
   // 设置 › 实验功能里给一行只读统计
   registerPanelUsageIpc(new PanelUsageStore(join(configDir, "panel-usage.json")));
+  // 右栏按会话记忆（right-panel-memory:*）：每条会话离开时右栏开着哪个面板、停在面板的哪一层，
+  // 只存路径数据；跨重启保留。独立小文件而不挤进 settings：整份几百条、改得勤，不该走设置的广播
+  registerRightPanelMemoryIpc(new RightPanelMemoryStore(join(configDir, "right-panel-memory.json")));
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
