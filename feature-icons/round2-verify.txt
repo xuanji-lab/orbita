@@ -1,0 +1,52 @@
+[0.0s] 连 CDP http://127.0.0.1:39337
+[0.0s] 打开 WebSocket
+PASS  右栏入口存在：这条任务
+PASS  右栏「这条任务」图标 == clipboard-list
+PASS  右栏入口存在：审查改动
+PASS  右栏「审查改动」图标 == file-diff
+PASS  右栏入口存在：文件
+PASS  右栏「文件」图标 == folder
+PASS  右栏入口存在：终端
+PASS  右栏「终端」图标 == square-terminal
+PASS  右栏入口存在：内置浏览器
+PASS  右栏「内置浏览器」图标 == globe
+PASS  右栏入口存在：记忆库
+PASS  右栏「记忆库」图标 == notebook-text
+PASS  右栏入口存在：自动化
+PASS  右栏「自动化」图标 == alarm-clock
+PASS  右栏入口存在：以后再做
+PASS  右栏「以后再做」图标 == hourglass
+PASS  右栏入口存在：已归档
+PASS  右栏「已归档」图标 == archive
+FAIL  右栏入口存在：看板
+PASS  右栏入口存在：设置
+PASS  右栏「设置」图标 == settings
+PASS  右栏入口存在：通知
+PASS  右栏「通知」图标 == bell
+PASS  右栏入口存在：技能与 MCP
+PASS  右栏「技能与 MCP」图标 == book-open
+PASS  右栏入口数（12）没有塌掉
+  点击 成功：右栏·自动化
+PASS  自动化面板出现 3 个 alarm-clock（入口 + 标题 + 空态）
+PASS  自动化面板没有 calendar-clock 旧图标
+  点击 成功：右栏·审查改动
+PASS  审查面板「记忆」页签图标 == notebook-text
+  点击 成功：页签·记忆
+PASS  记忆页签空态（还没有任务）图标 == notebook-text
+  点击 成功：右栏·终端
+PASS  终端面板 square-terminal 共 2 个（入口 + 标题）
+  点击 成功：右栏·技能与 MCP
+PASS  技能与 MCP 面板 book-open 共 2 个
+PASS  技能与 MCP 面板没有 blocks（不与插件撞）
+  点击 !!没找到：右栏·看板
+FAIL  看板空态图标 == layout-dashboard
+  点击 !!没找到：右栏·看板（关掉）
+  点击 成功：右栏·记忆库
+PASS  记忆库整页空态图标 == notebook-text
+  点击 成功：右栏·记忆库（关掉）
+  点击 成功：右栏·以后再做（若已开则先关）
+PASS  侧栏以后再做空态图标 == hourglass
+PASS  全页没有 brain-circuit 旧图标
+PASS  全页没有 calendar-clock 旧图标
+
+round2 有 2 项失败
