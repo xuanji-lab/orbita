@@ -3,11 +3,12 @@
  * 和已装列表同一个纪律：只在页面开着时读；读失败不清空手里那份、把原因留给页面说出来
  * （读不到不等于没有——别让一个坏目录把用户的草稿说成「没有」）。
  *
- * 什么时候重读：打开时；agent 预览了草稿（pluginDraft：名字 / 描述可能刚写进清单）；
- * 装好了 / 列表变了（pluginsChanged：草稿从这里消失、出现在已装里）。
+ * 什么时候重读：打开时；agent 预览了草稿（pluginDraft：名字 / 描述可能刚写进清单）；agent 装好了（pluginsChanged）；
+ * 已装列表变了（`installed` 换了引用：用户自己在页面里装 / 卸载 / 改范围不广播事件，但都会重读已装列表——
+ * 草稿从这里消失、出现在已装里就靠它）；用户从草稿长页回到列表（`viewing` 变了：agent 这期间可能改过清单）。
  */
 import { useCallback, useEffect, useState } from "react";
-import type { PluginDraftEntry } from "@shared/plugin";
+import type { PluginDraftEntry, PluginView } from "@shared/plugin";
 import { api } from "../../api";
 
 export interface DraftListState {
@@ -17,7 +18,7 @@ export interface DraftListState {
   refresh: () => Promise<void>;
 }
 
-export function useDraftList(active: boolean): DraftListState {
+export function useDraftList(active: boolean, installed: readonly PluginView[], viewing: string | null): DraftListState {
   const [drafts, setDrafts] = useState<PluginDraftEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +33,7 @@ export function useDraftList(active: boolean): DraftListState {
 
   useEffect(() => {
     if (active) void refresh();
-  }, [active, refresh]);
+  }, [active, refresh, installed, viewing]);
 
   useEffect(() => {
     if (!active) return;

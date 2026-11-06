@@ -83,7 +83,7 @@ export function PluginsView(props: {
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
-  const draftList = useDraftList(true);
+  const draftList = useDraftList(true, state.plugins, props.draft?.path ?? null);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
   // 右栏里看的是详情还是看板视图：换了插件就回详情
   const [boardOpen, setBoardOpen] = useState(false);
@@ -150,12 +150,7 @@ export function PluginsView(props: {
     () => (onlyEnabled ? [] : groupDrafts(filterDrafts(draftList.drafts, query), workspaces, props.currentWorkspaceId)),
     [draftList.drafts, query, workspaces, props.currentWorkspaceId, onlyEnabled],
   );
-  // 从草稿长页回到列表（或换了在看的草稿）：agent 这期间可能改过清单，重读一次
-  const viewedDraftPath = props.draft?.path ?? null;
-  const refreshDrafts = draftList.refresh;
-  useEffect(() => {
-    void refreshDrafts();
-  }, [viewedDraftPath, refreshDrafts]);
+
   const legacy = legacyCounts(state.plugins);
   const list = describeList(state.load, state.plugins.length);
   const filtering = query.trim() !== "";

@@ -462,8 +462,13 @@
   color: var(--color-warning);
 }
 
-.pl-draft-meta {
+/* 「最后改动 · 在『会话标题』里做的」是这一行要告诉你的主要信息，窄了换行（最多两行）而不是截成「在『和…」 */
+.pl-name small.pl-draft-meta {
   font-size: var(--font-size-xs);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .pl-row {
@@ -1611,6 +1616,12 @@ button.pl-wf-chip:hover {
   .pl-gh-count {
     margin-left: 0;
     font-size: var(--font-size-sm);
+  }
+
+  /* 「正在做」的组头也退回右栏的写法（上面的宽档规则特异性更高，这里要同样高才压得过）；
+     它不在 .pl-grp 里，没有那一层 -space-2 的外边距，所以左右内边距直接归零才与其它组头对齐 */
+  .pl-drafts > .pl-gh {
+    padding: 0;
   }
 
   .pl-row {
