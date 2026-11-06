@@ -3321,9 +3321,9 @@ export const en = {
         lead: "A routine you repeat becomes a plugin — skills, scripts and a board — and runs with one sentence from then on.",
         pages: {
           page: {
-            name: "The plugins page",
+            name: "The abilities page",
             title: "Everything installed, in one place",
-            body: "The blocks icon on the right opens **Plugins**: installed plugins, plus your existing skills and MCP servers. The Plugins tab in Settings is the full-screen version.",
+            body: "The blocks icon on the right opens **Abilities**: installed plugins, plus your existing skills and MCP servers. The Abilities tab in Settings is the full-screen version.",
             notes: ["Connect a local plugin, or make one with the agent.", "Installed plugins, by workspace."],
           },
           make: {
