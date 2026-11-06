@@ -24,3 +24,12 @@ export function visibleTools(tools: readonly string[], limit: number, expanded: 
   }
   return { shown: tools.slice(0, limit), hidden: tools.slice(limit) };
 }
+
+/**
+ * 工具在运行时叫 `mcp__<服务>__<工具>`（模型那边的名字，见 shared/mcp 的 qualifiedToolName）；详情里工具已经
+ * 挂在服务名下，chip 只写工具本名。前缀对不上（别家的命名）就原样给。
+ */
+export function shortToolName(server: string, tool: string): string {
+  const prefix = `mcp__${server}__`;
+  return tool.startsWith(prefix) && tool.length > prefix.length ? tool.slice(prefix.length) : tool;
+}

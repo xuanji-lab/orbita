@@ -497,7 +497,7 @@
 /* 点这一块进详情；开关在它外面（<button> 不能嵌 <button>） */
 .pl-row-main {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto minmax(0, 84px);
+  grid-template-columns: 22px minmax(0, 1fr) auto minmax(0, 84px) auto;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) 0 var(--space-2) var(--space-4);
@@ -1676,7 +1676,7 @@ button.pl-wf-chip:hover {
   }
 
   .pl-row-main {
-    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-columns: 22px minmax(0, 1fr) auto;
     padding-left: var(--space-2);
   }
 
@@ -1733,4 +1733,116 @@ button.pl-wf-chip:hover {
     order: 8;
   }
 
+}
+
+/* ---------- 「能力」面板：行尾种类小标、零散技能 / MCP 详情 ---------- */
+
+/* 行尾种类小标（插件 / 内置 / 技能 / MCP）：右缘钉在行右内边距，不抢名字的视线 */
+.pl-kind-tag {
+  justify-self: end;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 选取态的行尾：种类小标 + ↵ 提示并排 */
+.pl-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-self: end;
+}
+
+.pl-legacy {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.pl-mono-area {
+  font-family: var(--font-family-mono);
+  line-height: var(--line-height-code);
+}
+
+button.pl-tag-more {
+  border: 0;
+  cursor: pointer;
+}
+
+button.pl-tag-more:hover {
+  background: var(--option-hover-bg);
+}
+
+/* 「状态」节：启用开关在节标题行右端 */
+.pl-mcp-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--weight-regular);
+}
+
+.pl-mcp-status {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pl-mcp-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-base);
+}
+
+.pl-mcp-state[data-kind="failed"] {
+  color: var(--color-danger);
+}
+
+.pl-mcp-error {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.pl-mcp-error small {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-mcp-error p {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pl-mcp-runtime {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.pl-mcp-spin {
+  animation: mcp-spin 1s linear infinite;
+}
+
+.pl-cmd {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-border);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }

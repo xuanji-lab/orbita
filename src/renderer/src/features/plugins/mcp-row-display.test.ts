@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { headIconKind, mcpErrors, readyWorkspaces, statusLine, summarizeInstances } from "./mcp-row-display.ts";
+import { headIconKind, mcpErrors, namedInstances, readyWorkspaces, statusLine, summarizeInstances } from "./mcp-row-display.ts";
 import type { McpInstanceInfo } from "@shared/mcp";
 
 function inst(workspace: string, kind: "ready" | "failed" | "idle" | "connecting" | "disabled"): McpInstanceInfo {
@@ -83,5 +83,20 @@ describe("readyWorkspaces / mcpErrors", () => {
   test("没有失败：空数组", () => {
     assert.deepEqual(mcpErrors({ kind: "ready", tools: [] }, [inst("a", "ready")]), []);
     assert.deepEqual(mcpErrors({ kind: "idle" }, []), []);
+  });
+});
+
+describe("namedInstances", () => {
+  test("补上工作区名、丢掉 Home 实例、翻不到的原样用 id", () => {
+    const status = { kind: "ready" as const, tools: ["a"] };
+    const named = namedInstances(
+      [
+        { scope: "", label: "", status },
+        { scope: "ws-1", label: "/p/a", status },
+        { scope: "gone", label: "/p/b", status },
+      ],
+      (id) => (id === "ws-1" ? "paper-a" : id),
+    );
+    assert.deepEqual(named.map((each) => [each.scope, each.workspace]), [["ws-1", "paper-a"], ["gone", "gone"]]);
   });
 });

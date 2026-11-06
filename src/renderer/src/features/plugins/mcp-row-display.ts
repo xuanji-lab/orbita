@@ -71,3 +71,14 @@ export function mcpErrors(status: McpStatus, instances: McpInstanceInfo[]): { wo
   const onlyOneInstance = instances.length <= 1;
   return [...byMessage].map(([message, workspaces]) => ({ message, workspaces: onlyOneInstance ? [] : workspaces }));
 }
+
+/**
+ * 运行时快照里的实例（只有工作区 id）→ 详情用的实例（带工作区名）。Home 会话的实例（scope ""）没有分片语义，丢掉；
+ * 翻不到名字的 id 原样显示，不让它凭空消失。
+ */
+export function namedInstances(
+  instances: readonly { scope: string; label: string; status: McpStatus }[],
+  nameOf: (workspaceId: string) => string,
+): McpInstanceInfo[] {
+  return instances.filter((instance) => instance.scope !== "").map((instance) => ({ ...instance, workspace: nameOf(instance.scope) }));
+}

@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { visibleTools, TOOL_CHIP_LIMIT } from "./mcp-tool-chips.ts";
+import { visibleTools, TOOL_CHIP_LIMIT, shortToolName } from "./mcp-tool-chips.ts";
 
 const tools = (n: number): string[] => Array.from({ length: n }, (_, i) => `tool_${i}`);
 
@@ -32,5 +32,15 @@ describe("visibleTools", () => {
 
   test("默认限制常量与简报裁决一致", () => {
     assert.equal(TOOL_CHIP_LIMIT, 6);
+  });
+});
+
+describe("shortToolName", () => {
+  test("去掉 mcp__<服务>__ 前缀；对不上的原样给；前缀后没有名字的不吃成空串", () => {
+    assert.equal(shortToolName("everything", "mcp__everything__echo"), "echo");
+    assert.equal(shortToolName("plugin_lit_search", "mcp__plugin_lit_search__find"), "find");
+    assert.equal(shortToolName("everything", "mcp__other__echo"), "mcp__other__echo");
+    assert.equal(shortToolName("everything", "echo"), "echo");
+    assert.equal(shortToolName("everything", "mcp__everything__"), "mcp__everything__");
   });
 });

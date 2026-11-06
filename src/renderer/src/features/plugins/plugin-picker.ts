@@ -9,7 +9,7 @@
  */
 import { parsePluginViewId, scopeApplies, type PluginSkillInfo, type PluginView } from "../../../../shared/plugin.ts";
 import { mcpToken, pluginToken, skillToken } from "../../shell/panel-token.ts";
-import { filterPlugins } from "./plugin-view.ts";
+import { filterPlugins, isMissingSkillView } from "./plugin-view.ts";
 
 /** 选取态里的一行：一个插件，或展开后它里面的一条技能。 */
 export type PickerRow =
@@ -80,6 +80,8 @@ export function buildPicker(
   for (const view of [...filterPlugins(views, query)].sort(compare)) {
     const token = tokenOfView(view);
     if (token === null) continue;
+    // 断链的技能：文件夹没了，点名也读不到——选取态不列（列表里留着，给清理用）
+    if (isMissingSkillView(view)) continue;
     const isUsable = scopeApplies(view.scope, workspaceId);
     const expandable = isUsable && view.origin === "plugin" && view.skills.length > 0;
     const expanded = expandable && expandedId === view.id;

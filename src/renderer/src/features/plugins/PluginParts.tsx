@@ -65,7 +65,7 @@ export function SkillAbility(props: { skill: PluginSkillInfo }) {
   );
 }
 
-export function McpAbility(props: { server: PluginMcpInfo }) {
+export function McpAbility(props: { server: PluginMcpInfo; /** 插件自带 MCP 的状态与工具（只读，跟着插件启停） */ runtime?: React.ReactNode }) {
   const t = useT().plugins;
   const { server } = props;
   return (
@@ -79,6 +79,7 @@ export function McpAbility(props: { server: PluginMcpInfo }) {
           {server.commandLine}
         </code>
       )}
+      {props.runtime}
     </AbilityRow>
   );
 }
