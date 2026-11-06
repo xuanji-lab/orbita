@@ -330,6 +330,7 @@ export function Sidebar(props: {
     global: null,
     selected: carryoverFilter,
     hideEmpty: true,
+    present: carryCounts.listed,
   });
   const carryoverGroups = groupCarryoversByWorkspace(session.carryovers, session.sessions, session.workspaces, carryoverFilter);
   /** 选了某档却没有东西时空态里写的名字 */
@@ -724,7 +725,7 @@ export function Sidebar(props: {
         ) : props.showCarryovers && !overlayOpen ? (
           <CarryoverPanel
             workspaceGroups={carryoverGroups}
-            emptyForFilter={carryCounts.total > 0 ? filterName(carryoverFilter) : null}
+            emptyForFilter={carryCounts.listed.total > 0 ? filterName(carryoverFilter) : null}
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
             // 开工即回对话：退出面板、新会话落在来源会话的组里并展开那一组——App 的

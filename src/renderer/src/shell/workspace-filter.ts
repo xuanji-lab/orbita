@@ -131,16 +131,23 @@ export function buildOptions(input: {
   global: number | null;
   selected: WsFilter;
   hideEmpty: boolean;
+  /**
+   * 「有没有东西可看」的判据，缺省就是上面的条数。条数与「列着多少」不是一回事时才传——
+   * 以后再做的条数只数没办完的，办结的也列着：一个工作区只剩办结的事项，条数是 0 但不能把它藏了。
+   */
+  present?: { perWorkspace: ReadonlyMap<string, number>; tasks: number };
 }): WsOption[] {
   const options: WsOption[] = [{ filter: FILTER_ALL, count: input.total }];
-  const keep = (filter: WsFilter, count: number): boolean =>
-    !input.hideEmpty || count > 0 || sameFilter(filter, input.selected);
+  const keep = (filter: WsFilter, count: number, present: number): boolean =>
+    !input.hideEmpty || Math.max(count, present) > 0 || sameFilter(filter, input.selected);
   for (const workspace of input.workspaces) {
     const filter: WsFilter = { kind: "workspace", id: workspace.id };
     const count = input.perWorkspace.get(workspace.id) ?? 0;
-    if (keep(filter, count)) options.push({ filter, count });
+    if (keep(filter, count, input.present?.perWorkspace.get(workspace.id) ?? 0)) options.push({ filter, count });
   }
-  if (input.tasks !== null && keep({ kind: "tasks" }, input.tasks)) options.push({ filter: { kind: "tasks" }, count: input.tasks });
+  if (input.tasks !== null && keep({ kind: "tasks" }, input.tasks, input.present?.tasks ?? 0)) {
+    options.push({ filter: { kind: "tasks" }, count: input.tasks });
+  }
   if (input.global !== null) options.push({ filter: { kind: "global" }, count: input.global });
   return options;
 }

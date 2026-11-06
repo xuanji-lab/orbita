@@ -26,7 +26,7 @@ describe("以后再做：工作区 → 来源会话 → 事项", () => {
     const groups = groupCarryoversByWorkspace(items, sessions, spaces, FILTER_ALL);
     assert.deepEqual(groups.map((g) => g.workspace?.id ?? null), ["a", "b", null]);
     assert.deepEqual(groups[0]?.groups.map((g) => g.session?.id), ["s1", "s4"]);
-    assert.equal(groups[0]?.count, 3);
+    assert.equal(groups[0]?.count, 2); // i7 已办结：列着但不计
     assert.deepEqual(groups[2]?.groups.map((g) => g.session?.id ?? null), ["s3", null]);
     assert.equal(groups[2]?.count, 2);
   });
@@ -36,11 +36,13 @@ describe("以后再做：工作区 → 来源会话 → 事项", () => {
     assert.deepEqual(groupCarryoversByWorkspace(items, sessions, spaces, { kind: "tasks" }).map((g) => g.workspace), [null]);
   });
 
-  test("选择条上的条数与列出来的一致（不含丢掉的）", () => {
+  test("选择条上的条数 = 没办完的（办结与丢掉的都不计）；列着的另算", () => {
     const counts = carryoverCounts(items, sessions, spaces);
-    assert.equal(counts.total, 6);
-    assert.equal(counts.perWorkspace.get("a"), 3);
+    assert.equal(counts.total, 5);
+    assert.equal(counts.perWorkspace.get("a"), 2);
     assert.equal(counts.perWorkspace.get("b"), 1);
     assert.equal(counts.tasks, 2);
+    assert.equal(counts.listed.total, 6);
+    assert.equal(counts.listed.perWorkspace.get("a"), 3);
   });
 });

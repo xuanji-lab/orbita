@@ -39,7 +39,7 @@ export interface CarryoverWorkspaceGroup {
   /** null = 「任务」组：来源会话没有工作区，或来源会话已删、查不到它的工作区 */
   workspace: Workspace | null;
   groups: CarryoverGroup[];
-  /** 这一组里列着的事项数 */
+  /** 这一组里没办完的事项数（与来源会话行上的角标、右栏「更多」里的数同一口径；办结的也列着但不计） */
   count: number;
 }
 
@@ -58,19 +58,29 @@ export function groupCarryoversByWorkspace(
     (bucket) => ({
       workspace: bucket.workspace,
       groups: bucket.items,
-      count: bucket.items.reduce((sum, group) => sum + group.items.length, 0),
+      count: bucket.items.reduce((sum, group) => sum + group.items.filter((item) => item.status === "open").length, 0),
     }),
   );
 }
 
-/** 选择条上各档的条数：列着的事项（不含丢掉的）按来源会话的工作区分桶。 */
+/**
+ * 选择条上各档的条数：没办完的事项按来源会话的工作区分桶（与「更多」里的「以后再做（N 项）」同一口径）；
+ * `listed` 是列着的（含办结、不含丢掉的），用来决定哪些档不该藏。
+ */
 export function carryoverCounts(
   carryovers: readonly Carryover[],
   sessions: readonly SessionMeta[],
   workspaces: readonly Workspace[],
-): { total: number; perWorkspace: Map<string, number>; tasks: number } {
-  const listed = carryovers.filter((item) => item.status !== "dismissed");
+): {
+  total: number;
+  perWorkspace: Map<string, number>;
+  tasks: number;
+  listed: { total: number; perWorkspace: Map<string, number>; tasks: number };
+} {
   const workspaceOf = new Map(sessions.map((meta) => [meta.id, meta.workspaceId]));
-  const counts = bucketCounts(listed, (item) => workspaceOf.get(item.sourceSessionId) ?? null, workspaces);
-  return { total: listed.length, ...counts };
+  const bucket = (items: readonly Carryover[]) =>
+    bucketCounts(items, (item) => workspaceOf.get(item.sourceSessionId) ?? null, workspaces);
+  const listed = carryovers.filter((item) => item.status !== "dismissed");
+  const open = listed.filter((item) => item.status === "open");
+  return { total: open.length, ...bucket(open), listed: { total: listed.length, ...bucket(listed) } };
 }

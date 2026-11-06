@@ -93,6 +93,12 @@ describe("选项", () => {
     assert.deepEqual(options.map((o) => filterKey(o.filter)), ["all", "ws:a", "ws:b", "tasks"]);
   });
 
+  test("present：条数为零但列着东西（只剩办结事项）的工作区不能藏", () => {
+    const options = buildOptions({ ...base, perWorkspace: new Map([["a", 7], ["b", 0]]), present: { perWorkspace: new Map([["b", 2]]), tasks: 0 } });
+    assert.deepEqual(options.map((o) => filterKey(o.filter)), ["all", "ws:a", "ws:b", "tasks"]);
+    assert.equal(options[2]?.count, 0);
+  });
+
   test("不 hideEmpty（能力面板）：每个工作区都在；global 为数字时末尾多一档；tasks 为 null 无任务档", () => {
     const options = buildOptions({ ...base, hideEmpty: false, tasks: null, global: 4 });
     assert.deepEqual(options.map((o) => filterKey(o.filter)), ["all", "ws:a", "ws:b", "global"]);
