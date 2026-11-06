@@ -445,6 +445,11 @@ export const ipcChannels = {
   pluginDraftLoad: "plugin:draft-load",
   /** 草稿预览（二）：同一个草稿文件夹的看板，给出与 `plugin:board-load` 同形的快照 */
   pluginDraftBoardLoad: "plugin:draft-board-load",
+  /**
+   * 「正在做」列表：所有工作区里 `<工作区根>/plugins/*\/` 下有清单、还没安装的插件文件夹（无入参，回 PluginDraftEntry[]）。
+   * 用户中途离开、之后回来接着做的入口；每一行还带着最近对它 preview_plugin 的会话。
+   */
+  pluginDrafts: "plugin:drafts",
   /** 卡里点按钮的回传：校验后原子追加到插件数据目录的 actions.jsonl（带 card 字段），不做别的 */
   pluginPanelAction: "plugin:panel-action",
   /**
