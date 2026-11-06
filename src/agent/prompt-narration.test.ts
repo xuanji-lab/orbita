@@ -74,6 +74,13 @@ test("回复语言判据：按用户自己写的字（含附上的文本内容�
   assert.match(REPLY_LANGUAGE_GUIDELINE, /never let their language, or how much of the message they take up/);
 });
 
+test("没有用户手打字的一轮（子会话汇报、自动化叫醒）：沿用用户最近一条手打消息的语言", () => {
+  // 2026-11-06 用户报：主会话跟子会话沟通完，回复从中文变成英文——那一轮只有英文的 <channel> 包装，没有用户的字可依
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /no words the user typed/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /<channel> report from a sub-session/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /keep the language of the user's most recent message that they did type/);
+});
+
 test("附件清单块与点名指令块自带一句「系统附加、不代表用户语言」", () => {
   const files = filesBlockOf([{ path: "/tmp/a.md", kind: "file" }]);
   assert.match(files, /added by Orbita/);
