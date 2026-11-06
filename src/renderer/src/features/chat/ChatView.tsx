@@ -1,6 +1,6 @@
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
@@ -460,17 +460,7 @@ function QuoteSelectionLayer(props: {
   onExcerpt?: (quote: TextQuote, raw: string) => Promise<"saved" | "duplicate">;
 }) {
   const t = useT();
-  /** 摘抄的短暂相位：存的中途、存好、已经摘过、失败——各自停一拍再收起 */
-  const [excerptPhase, setExcerptPhase] = useState<"saving" | "saved" | "duplicate" | "failed" | null>(null);
-  const [candidate, setCandidate] = useState<{
-    quote: TextQuote;
-    /** 选区原文（复制用，保留换行；quote.text 是规整过的） */
-    raw: string;
-    x: number;
-    top: number;
-    bottom: number;
-  } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [candidate, setCandidate] = useState<QuoteCandidate | null>(null);
   const transcriptRef = useRef(props.transcript);
   transcriptRef.current = props.transcript;
   const { paneRef } = props;
@@ -499,8 +489,6 @@ function QuoteSelectionLayer(props: {
         return;
       }
       const rect = range.getBoundingClientRect();
-      setCopied(false);
-      setExcerptPhase(null);
       setCandidate({ quote, raw: selection.toString(), x: rect.left + rect.width / 2, top: rect.top, bottom: rect.bottom });
     };
     const schedule = (event: Event): void => {
@@ -535,125 +523,17 @@ function QuoteSelectionLayer(props: {
     };
   }, [paneRef]);
 
-  // 「已复制」停留约一秒后收起工具栏；选区不动（用户可能还想引用）
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => {
-      setCopied(false);
-      setCandidate(null);
-    }, 1000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  // 摘抄的结果停一拍半再收起；成功（含已经摘过）连选区一起清掉，失败留着选区可以再点
-  useEffect(() => {
-    if (excerptPhase === null || excerptPhase === "saving") return;
-    const timer = window.setTimeout(() => {
-      if (excerptPhase !== "failed") {
-        window.getSelection()?.removeAllRanges();
-        setCandidate(null);
-      }
-      setExcerptPhase(null);
-    }, 1400);
-    return () => window.clearTimeout(timer);
-  }, [excerptPhase]);
-
+  const dismiss = useCallback(() => setCandidate(null), []);
+  const clearSelection = useCallback(() => window.getSelection()?.removeAllRanges(), []);
   if (candidate === null) return null;
-  const { onQuote, onExcerpt } = props;
-  // 贴着窗口顶的选区往上弹会被裁掉，改弹到选区下方
-  const below = candidate.top < 56;
-  return createPortal(
-    <div
-      role="toolbar"
-      aria-label={t.quote.toolbar}
-      data-quote-popover
-      className="quote-toolbar"
-      onPointerDown={(event) => event.preventDefault()}
-      style={{
-        position: "fixed",
-        left: candidate.x,
-        top: below ? candidate.bottom + 8 : candidate.top - 8,
-        transform: below ? "translateX(-50%)" : "translate(-50%, -100%)",
-        zIndex: "var(--z-popover)",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 2,
-        padding: 2,
-        border: "1px solid var(--color-border-subtle)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-bg-panel)",
-        boxShadow: "var(--shadow-popover)",
-      }}
-    >
-      <button
-        type="button"
-        title={copied ? t.chat.copied : t.quote.copyTitle}
-        aria-label={copied ? t.chat.copied : t.quote.copyTitle}
-        onClick={() => {
-          void navigator.clipboard.writeText(candidate.raw).then(
-            () => setCopied(true),
-            () => setCandidate(null),
-          );
-        }}
-      >
-        <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.8} />
-        {copied ? t.chat.copied : t.quote.copy}
-      </button>
-      {onQuote !== undefined && (
-        <button
-          type="button"
-          title={t.quote.addTitle}
-          onClick={() => {
-            onQuote(candidate.quote);
-            window.getSelection()?.removeAllRanges();
-            setCandidate(null);
-          }}
-        >
-          <Icon name="quote" size={13} strokeWidth={1.8} />
-          {t.quote.add}
-        </button>
-      )}
-      {onExcerpt !== undefined && (
-        <button
-          type="button"
-          title={t.quote.excerptTitle}
-          aria-live="polite"
-          disabled={excerptPhase === "saving"}
-          data-done={excerptPhase === "saved" || excerptPhase === "duplicate" || undefined}
-          onClick={() => {
-            if (excerptPhase !== null && excerptPhase !== "failed") return;
-            setExcerptPhase("saving");
-            void onExcerpt(candidate.quote, candidate.raw).then(
-              (result) => setExcerptPhase(result),
-              () => setExcerptPhase("failed"),
-            );
-          }}
-        >
-          <Icon
-            name={
-              excerptPhase === "saving"
-                ? "loader-circle"
-                : excerptPhase === "saved" || excerptPhase === "duplicate"
-                  ? "check"
-                  : excerptPhase === "failed"
-                    ? "triangle-alert"
-                    : "bookmark"
-            }
-            size={13}
-            strokeWidth={1.8}
-            spin={excerptPhase === "saving"}
-          />
-          {excerptPhase === "saved"
-            ? t.quote.excerptSaved
-            : excerptPhase === "duplicate"
-              ? t.quote.excerptDuplicate
-              : excerptPhase === "failed"
-                ? t.quote.excerptFailed
-                : t.quote.excerpt}
-        </button>
-      )}
-    </div>,
-    document.body,
+  return (
+    <QuoteToolbar
+      candidate={candidate}
+      onDismiss={dismiss}
+      onClearSelection={clearSelection}
+      {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+      {...(props.onExcerpt === undefined ? {} : { onExcerpt: props.onExcerpt })}
+    />
   );
 }
 
