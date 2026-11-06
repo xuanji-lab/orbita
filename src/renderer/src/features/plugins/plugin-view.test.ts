@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { PluginPlacement, PluginScope, PluginView } from "../../../../shared/plugin.ts";
 import type { Workspace } from "../../../../shared/workspace.ts";
 import {
+  canRemoveMcpView,
   contentsParts,
   filterEnabled,
   filterPlugins,
@@ -187,6 +188,12 @@ describe("contentsParts / sourceKey / legacyCounts / initialOf", () => {
     assert.equal(creatorAvailable([creator({ kind: "off" })]), false);
     assert.equal(creatorAvailable([view({ id: "plugin:other", name: "other" })]), true);
     assert.equal(creatorAvailable([]), true);
+  });
+
+  test("旧 MCP 的「移除」按钮：只对 user-mcp 出；插件页里它们都来自全局 mcp.json，remove 都够得着", () => {
+    assert.equal(canRemoveMcpView(view({ id: "mcp:kimi-cu", name: "kimi-cu", origin: "user-mcp", scope: { kind: "off" } })), true);
+    assert.equal(canRemoveMcpView(view({ id: "plugin:x", name: "x" })), false);
+    assert.equal(canRemoveMcpView(view({ id: "skill:pdf", name: "pdf", origin: "user-skill" })), false);
   });
 
   test("页首提示的数", () => {
