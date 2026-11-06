@@ -242,6 +242,7 @@ export function FilePreviewPane(props: {
             sessionId={sessionId}
             workspaceId={workspaceId}
             path={path}
+            onClose={() => pickMode("rendered")}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
           />
         ) : pdf ? (

@@ -11,6 +11,8 @@ class FakeDisk {
   text: string;
   writes = 0;
   failNext = false;
+  readonly = false;
+  gone = false;
   constructor(text: string) {
     this.text = text;
   }
@@ -18,13 +20,18 @@ class FakeDisk {
     return { text: this.text, hash: hash(this.text), modifiedAt: 0 };
   }
   io = {
-    read: async (): Promise<DocFile> => this.file(),
+    read: async (): Promise<DocFile> => {
+      if (this.gone) throw new Error("Error invoking remote method 'doc:read': Error: DOC_GONE: 文件被移走或删除了");
+      return this.file();
+    },
     write: async (text: string, expectedHash: string): Promise<DocWriteResult> => {
+      if (this.gone) throw new Error("DOC_GONE: 文件被移走或删除了");
       if (this.failNext) {
         this.failNext = false;
         throw new Error("磁盘写失败");
       }
       if (hash(this.text) !== expectedHash) return { ok: false, reason: "conflict", file: this.file() };
+      if (this.readonly) return { ok: false, reason: "readonly" };
       this.text = text;
       this.writes += 1;
       return { ok: true, hash: hash(text), modifiedAt: 0 };
@@ -159,5 +166,37 @@ describe("DocSession —— agent 同时在写（B1 / B2）", () => {
     session.diskChanged();
     await sleep(60);
     assert.equal(disk.writes, 0);
+  });
+});
+
+describe("DocSession —— 只读 / 被移走（M4、S1）", () => {
+  it("只读：状态 readonly，盘上不变，字留在内存里；文件恢复可写后再打字就存上", async () => {
+    const { disk, session, states } = open(DOC);
+    disk.readonly = true;
+    session.edit(`${DOC}我写的字\n`);
+    await sleep(60);
+    assert.equal(states.at(-1), "readonly");
+    assert.equal(disk.text, DOC);
+    assert.equal(session.text, `${DOC}我写的字\n`);
+    disk.readonly = false;
+    session.edit(`${DOC}我写的字\n再来\n`);
+    await sleep(60);
+    assert.equal(states.at(-1), "saved");
+    assert.equal(disk.text, `${DOC}我写的字\n再来\n`);
+  });
+
+  it("文件被移走：状态 gone（不是笼统的 error），字不丢；放回原处后自动把积压的输入补存", async () => {
+    const { disk, session, states, error } = open(DOC);
+    disk.gone = true;
+    session.edit(`${DOC}移走之后打的\n`);
+    await sleep(60);
+    assert.equal(states.at(-1), "gone");
+    assert.equal(error(), null);
+    assert.equal(session.text, `${DOC}移走之后打的\n`);
+    disk.gone = false; // 用户把文件放回原处（内容与移走前相同）
+    session.diskChanged();
+    await sleep(80);
+    assert.equal(states.at(-1), "saved");
+    assert.equal(disk.text, `${DOC}移走之后打的\n`);
   });
 });

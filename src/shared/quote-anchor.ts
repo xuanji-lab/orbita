@@ -1,0 +1,126 @@
+/**
+ * 文档引用的「以原文为锚」重新定位（纯函数）。
+ *
+ * 划选那一刻记下的行号会过期：用户在引用之后又改了文档、agent 在中间写了几段，行号就指到别处——
+ * 尤其是同一句话在文件里出现两次时，旧行号正好指到新复制出来的那一句，agent 就改错位置
+ * （2026-11-07 独立验收的「重复句」场景）。所以引用以**原文 + 上下文**为锚，发送时按当前文档现算：
+ * - 原文只出现一次 → 用它现在的行号；
+ * - 出现多次 → 先比上下文（前后各 20 字，谁更像划选时的），再比谁离原行号最近；
+ * - 一次都找不到 → 标 missing，发给模型时说「原文已不在文件里」，不让它凭行号去改别处。
+ */
+import { parseDeck } from "./doc-slides.ts";
+import type { TextQuote } from "./quote.ts";
+
+/** 上下文长度（字符，不是码点：只用来比相似度，切开一个代理对无碍） */
+export const QUOTE_CONTEXT_CHARS = 20;
+/** 同一段原文最多比对多少处出现（防病态文档） */
+const MAX_OCCURRENCES = 500;
+
+export function contextAround(text: string, from: number, to: number): { before: string; after: string } {
+  return {
+    before: text.slice(Math.max(0, from - QUOTE_CONTEXT_CHARS), from),
+    after: text.slice(to, to + QUOTE_CONTEXT_CHARS),
+  };
+}
+
+function lineOf(text: string, offset: number): number {
+  let line = 1;
+  for (let i = text.indexOf("\n"); i !== -1 && i < offset; i = text.indexOf("\n", i + 1)) line += 1;
+  return line;
+}
+
+function commonSuffix(a: string, b: string): number {
+  let n = 0;
+  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n += 1;
+  return n;
+}
+
+function commonPrefix(a: string, b: string): number {
+  let n = 0;
+  while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
+  return n;
+}
+
+/** 原文在 `text` 里的所有出现位置（起点偏移） */
+export function occurrences(text: string, needle: string): number[] {
+  const found: number[] = [];
+  if (needle === "") return found;
+  for (let at = text.indexOf(needle); at !== -1 && found.length < MAX_OCCURRENCES; at = text.indexOf(needle, at + 1)) {
+    found.push(at);
+  }
+  return found;
+}
+
+/** 选哪一处：上下文最像的；并列取离原行号最近的 */
+function pick(text: string, quote: TextQuote, at: readonly number[]): number {
+  const length = quote.text.length;
+  const originLine = quote.lines?.from;
+  let best = at[0] as number;
+  let bestScore = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const index of at) {
+    const around = contextAround(text, index, index + length);
+    const score =
+      quote.context === undefined
+        ? 0
+        : commonSuffix(quote.context.before, around.before) + commonPrefix(quote.context.after, around.after);
+    const distance = originLine === undefined ? 0 : Math.abs(lineOf(text, index) - originLine);
+    if (score > bestScore || (score === bestScore && distance < bestDistance)) {
+      best = index;
+      bestScore = score;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** 引用原文就在 `index` 处：算出现在的行号（演示文稿还有页号），清掉 missing */
+export function quoteAt(text: string, quote: TextQuote, index: number): TextQuote {
+  const { missing: _missing, ...rest } = quote;
+  const end = index + quote.text.length;
+  const lastChar = end > index && text[end - 1] === "\n" ? end - 1 : end;
+  const from = lineOf(text, index);
+  const to = Math.max(from, lineOf(text, lastChar));
+  const next: TextQuote = { ...rest, lines: { from, to } };
+  if (quote.slide !== undefined) {
+    const page = parseDeck(text).pages.find((candidate) => index >= candidate.from && index <= candidate.to);
+    if (page !== undefined) next.slide = page.index + 1;
+  }
+  return next;
+}
+
+/**
+ * 按文件当前内容重新定位一条文件引用。非文件引用原样返回。
+ * 成功：lines（演示文稿还有 slide）换成现在的位置，清掉 missing；失败：标 missing，lines 原样留着（只是提示）。
+ */
+export function relocateQuote(text: string, quote: TextQuote): TextQuote {
+  if (quote.filePath === undefined || quote.text === "") return quote;
+  const found = occurrences(text, quote.text);
+  if (found.length === 0) {
+    const { missing: _missing, ...rest } = quote;
+    return { ...rest, missing: true };
+  }
+  return quoteAt(text, quote, pick(text, quote, found));
+}
+
+/**
+ * 发送前把指向某份文件的引用换成它在 `text`（文件此刻的全文）里的位置。
+ * 优先用编辑器追踪的区间（`tracked(anchor)`，准确，分得清「恰好复制在原句上方」的重复句）；
+ * 追踪不到、或区间里的字被改过，退回「原文 + 上下文」定位；都找不到标 missing。
+ */
+export function resolveDocQuotes(
+  text: string,
+  path: string,
+  tracked: (anchor: string) => { from: number; to: number } | null,
+  quotes: readonly TextQuote[],
+): TextQuote[] {
+  return quotes.map((quote) => {
+    if (quote.filePath !== path) return quote;
+    const range = quote.anchor === undefined ? null : tracked(quote.anchor);
+    if (range !== null && range.to > range.from && quote.text !== "") {
+      const at = text.slice(range.from, range.to).indexOf(quote.text);
+      if (at !== -1) return quoteAt(text, quote, range.from + at);
+    }
+    return relocateQuote(text, quote);
+  });
+}

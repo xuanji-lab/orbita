@@ -30,6 +30,7 @@ describe("引用 —— 划选", () => {
       role: "user",
       filePath: "/ws/Q4 计划.md",
       lines: { from: 9, to: 9 },
+      context: { before: "单 agent 立住。\n\n## 风险\n\n", after: "，界面问题往往要到真实例里才暴露。\n" },
     });
   });
 

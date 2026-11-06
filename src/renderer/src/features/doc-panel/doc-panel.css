@@ -309,6 +309,9 @@
   overflow: hidden;
 }
 /* 展开源码编辑时预览缩小在上，让出下面的编辑区 */
+.dp-slide-main:not([data-editing]) {
+  justify-content: center;
+}
 .dp-slide-main[data-editing="true"] .dp-slide-stage {
   width: 58%;
 }
@@ -505,4 +508,39 @@
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
   white-space: nowrap;
+}
+
+/* 横幅：只读 / 文件不见了 / 保存失败——一行，文字省略，出路（另存为、关闭）靠右 */
+.dp-banner {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.dp-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 页超出 16:9 的提示：压在当前页预览的右上角，不进缩略图、不进 PDF */
+.dp-slide-overflow {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
 }

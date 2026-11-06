@@ -10,6 +10,8 @@ import type {
   DocCreateRequest,
   DocExportRequest,
   DocExportResult,
+  DocSaveAsRequest,
+  DocSaveAsResult,
   DocFile,
   DocListEntry,
   DocListRequest,
@@ -36,6 +38,8 @@ export const docsApi = {
     ipcRenderer.on(ipcChannels.docChanged, handler);
     return () => ipcRenderer.removeListener(ipcChannels.docChanged, handler);
   },
+  /** 另存为：把当前文字存成新文件（先弹保存对话框） */
+  saveAs: (req: DocSaveAsRequest): Promise<DocSaveAsResult> => ipcRenderer.invoke(ipcChannels.docSaveAs, req),
   /** 导出：文档 → docx、演示文稿 → PDF（先弹保存对话框） */
   export: (req: DocExportRequest): Promise<DocExportResult> => ipcRenderer.invoke(ipcChannels.docExport, req),
 } as const;

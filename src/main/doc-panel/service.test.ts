@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileRoot } from "../../shared/files.ts";
@@ -30,7 +30,7 @@ describe("白名单", () => {
     await assert.rejects(readDoc(roots, join(dir, "link.md")), /不在这条会话允许/);
     await writeFile(join(dir, "a.txt"), "x");
     await assert.rejects(readDoc(roots, join(dir, "a.txt")), /只能打开 .md/);
-    await assert.rejects(readDoc(roots, join(dir, "nope.md")), /不在这条会话允许|不存在/);
+    await assert.rejects(readDoc(roots, join(dir, "nope.md")), /DOC_GONE|不在这条会话允许/);
     await assert.rejects(resolveDocPath([{ kind: "attachments", label: "a", path: dir, exists: true }], join(dir, "link.md")));
   });
 });
@@ -64,7 +64,7 @@ describe("读写：比较后交换", () => {
     await writeFile(path, "第一段\n\n第二段\n\n总结\n");
     const result = await writeDoc(roots, { ...target(path), text: "第一段改了\n\n第二段\n", expectedHash: mine.hash });
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.file.text, "第一段\n\n第二段\n\n总结\n");
+    if (!result.ok && result.reason === "conflict") assert.equal(result.file.text, "第一段\n\n第二段\n\n总结\n");
     assert.equal(await readFile(path, "utf8"), "第一段\n\n第二段\n\n总结\n");
   });
 
@@ -90,6 +90,58 @@ describe("读写：比较后交换", () => {
     // 谁先排上队不定（两边都先要 await 白名单解析），但只能有一个写成，另一个看到的是对方写完的现状
     assert.deepEqual([a.ok, b.ok].sort(), [false, true]);
     assert.equal(await readFile(path, "utf8"), a.ok ? "A" : "B");
+  });
+});
+
+describe("只读 / 权限位 / 换行风格（M4）", () => {
+  it("只读文件不写穿：回 readonly，盘上内容与权限位原样", async () => {
+    const path = join(dir, "ro.md");
+    await writeFile(path, "原文");
+    await chmod(path, 0o444);
+    const file = await readDoc(roots, path);
+    const result = await writeDoc(roots, { ...target(path), text: "改了", expectedHash: file.hash });
+    assert.deepEqual(result, { ok: false, reason: "readonly" });
+    assert.equal(await readFile(path, "utf8"), "原文");
+    assert.equal((await stat(path)).mode & 0o777, 0o444);
+  });
+
+  it("可写文件覆盖后保留原权限位（600 不变 644）", async () => {
+    const path = join(dir, "private.md");
+    await writeFile(path, "私");
+    await chmod(path, 0o600);
+    const file = await readDoc(roots, path);
+    const result = await writeDoc(roots, { ...target(path), text: "私密", expectedHash: file.hash });
+    assert.equal(result.ok, true);
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  });
+
+  it("CRLF 文件写回仍是 CRLF；LF 文件仍是 LF；摘要按规整后的文字算，不天天冲突", async () => {
+    const crlf = join(dir, "win.md");
+    await writeFile(crlf, "一\r\n二\r\n");
+    const a = await readDoc(roots, crlf);
+    const wrote = await writeDoc(roots, { ...target(crlf), text: "一\n二\n三\n", expectedHash: a.hash });
+    assert.equal(wrote.ok, true);
+    assert.equal(await readFile(crlf, "utf8"), "一\r\n二\r\n三\r\n");
+    const again = await readDoc(roots, crlf);
+    assert.equal(again.text, "一\n二\n三\n");
+    if (wrote.ok) assert.equal(again.hash, wrote.hash);
+    const lf = join(dir, "unix.md");
+    await writeFile(lf, "甲\n");
+    const b = await readDoc(roots, lf);
+    await writeDoc(roots, { ...target(lf), text: "甲\n乙\n", expectedHash: b.hash });
+    assert.equal(await readFile(lf, "utf8"), "甲\n乙\n");
+  });
+});
+
+describe("文件被移走 / 删除（S1）", () => {
+  it("读、写都抛 DOC_GONE 起头的人话；不在允许目录里则是另一句", async () => {
+    const path = join(dir, "moved.md");
+    await writeFile(path, "x");
+    const file = await readDoc(roots, path);
+    await rename(path, join(outside, "moved-away.md"));
+    await assert.rejects(readDoc(roots, path), /^Error: DOC_GONE: 文件被移走或删除了/);
+    await assert.rejects(writeDoc(roots, { ...target(path), text: "y", expectedHash: file.hash }), /DOC_GONE/);
+    await assert.rejects(readDoc(roots, join(outside, "nope.md")), /不在这条会话允许的目录里/);
   });
 });
 

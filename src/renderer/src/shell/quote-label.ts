@@ -20,7 +20,8 @@ function fileSource(quote: TextQuote, t: Messages): string {
   const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
   const parts = [name];
   if (quote.slide !== undefined) parts.push(t.quote.slide(quote.slide));
-  if (quote.lines !== undefined) parts.push(t.quote.lines(quote.lines.from, quote.lines.to));
+  if (quote.missing === true) parts.push(t.quote.missing);
+  else if (quote.lines !== undefined) parts.push(t.quote.lines(quote.lines.from, quote.lines.to));
   return parts.join(" · ");
 }
 

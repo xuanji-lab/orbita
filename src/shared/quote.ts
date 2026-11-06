@@ -47,6 +47,18 @@ export interface TextQuote {
   /** 演示文稿里第几页（1 起）；只有演示文稿的引用带 */
   slide?: number;
   /**
+   * 被选文字前后各约 20 字的上下文。**只活在输入框里**（不进正文）：发送时按当前文档重新定位引用
+   * （quote-anchor.ts），原文在文件里出现多次时靠它挑出用户划选的那一处
+   */
+  context?: { before: string; after: string };
+  /**
+   * 编辑器里给这次划选记的锚点 id（文档编辑器按它随每次改动映射选区位置，见 quote-track.ts）。
+   * **只活在输入框里**，不进正文，不参与判重
+   */
+  anchor?: string;
+  /** 发送时在文件里已找不到这段原文（被用户或 agent 改掉了）：进正文，告诉模型别改 */
+  missing?: true;
+  /**
    * 划选超过上限被截过。**只活在输入框里**（chip 要如实标出「只引了前 N 字」），
    * 不进正文——发出去之后它就是一段 2000 字的引用，模型不需要知道原文更长。
    */
@@ -127,7 +139,8 @@ function quoteBlock(quote: TextQuote, index: number): string {
   if (quote.filePath !== undefined) {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
     const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"`;
-    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
+    const missing = quote.missing === true ? ' missing="true"' : "";
+    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
   }
   const turn = quote.turn !== undefined ? ` turn="${quote.turn}"` : "";
   return `<quoted_context index="${index}" role="${quote.role}"${turn}>\n${sanitizeBody(quote.text)}\n</quoted_context>\n\n`;
@@ -174,10 +187,12 @@ export const QUOTE_GUIDELINE = [
   "The text after the blocks is the user's reply. When it is numbered, item n responds to quote n — " +
     "answer point by point in the same order and numbering.",
   'A quote may instead be <quoted_file index="n" path="…" lines="a-b" slide="k">: a passage of that file ' +
-    "as the user selected it in the document panel (lines are 1-based and inclusive; slide, when present, is " +
-    "the 1-based page of a slide deck). To change it, edit only that passage — match the quoted text exactly " +
-    "— and leave every other byte of the file as it was. If the text at that place no longer matches the " +
-    "quote, say so instead of editing somewhere else.",
+    "as the user selected it in the document panel. The quoted text is authoritative; lines (1-based, inclusive) and " +
+    "slide (the 1-based page of a slide deck) are only a locator hint, already re-resolved against the file as it " +
+    "is now. To change it, edit only that passage — match the quoted text exactly, and when the same text occurs " +
+    "more than once in the file, use lines to pick the quoted occurrence — and leave every other byte of the file " +
+    'as it was. missing="true" means the quoted text no longer exists in the file (it was edited since): do ' +
+    "not edit anything for that quote, tell the user the passage has changed, and ask what they want.",
   '<open_document path="…" kind="doc|slides"/> at the start of a message means the user has that file open ' +
     'in the document panel beside the chat; "the document", "the slides", "this page" mean it. kind=doc is ' +
     "plain Markdown. kind=slides is a Marp-style deck: optional front matter (keep `marp: true`), pages " +
@@ -230,6 +245,7 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
         filePath,
         ...(lines === undefined ? {} : { lines }),
         ...(Number.isInteger(slide) && slide > 0 ? { slide } : {}),
+        ...(attribute(attrs, "missing") === "true" ? { missing: true as const } : {}),
       });
       return "";
     }

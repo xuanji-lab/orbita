@@ -34,7 +34,7 @@ import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
-import { DOC_PANEL_FRACTION } from "./features/doc-panel/doc-panel-width.ts";
+import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
@@ -225,6 +225,8 @@ export function App() {
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   /** 右栏实际渲染宽（RightPanelSlot 夹过 1/3–2/3 后报上来）：工具栏右栏胶囊只认它 */
   const [panelRenderedWidth, setPanelRenderedWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
+  /** 右栏此刻是不是覆盖层（窄窗，或文档面板按聊天列底线判定放不下）：工具栏的右栏胶囊跟它 */
+  const [panelOverlay, setPanelOverlay] = useState(false);
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
@@ -1369,7 +1371,7 @@ export function App() {
           windowWidth={windowWidth}
           panelOpen={rightPanel !== null}
           panelWidth={panelRenderedWidth}
-          narrow={narrow}
+          narrow={narrow || panelOverlay}
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
           onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
@@ -1487,8 +1489,9 @@ export function App() {
           <RightPanelSlot
             open={rightPanel !== null}
             width={isDocPanel ? docPanelWidth : panelWidth}
-            {...(isDocPanel ? { defaultFraction: DOC_PANEL_FRACTION } : {})}
+            {...(isDocPanel ? { resolveLayout: docPanelLayout } : {})}
             narrow={narrow}
+            onOverlay={setPanelOverlay}
             onWidthChange={isDocPanel ? setDocPanelWidth : setPanelWidth}
             onWidthCommit={(width) =>
               changeSettings(isDocPanel ? { docPanelWidth: width } : { rightPanelWidth: width })

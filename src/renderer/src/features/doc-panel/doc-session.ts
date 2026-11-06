@@ -11,11 +11,15 @@
  *
  * 外部改动经 `onExternal` 交给编辑器：给出相对 local 的最小改动（光标靠 CM 映射）与新增区间（绿边）。
  */
-import type { DocFile, DocWriteResult } from "../../../../shared/doc.ts";
+import { DOC_GONE, type DocFile, type DocWriteResult } from "../../../../shared/doc.ts";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
 import { merge3, type TextChange } from "./doc-merge.ts";
 
-export type SyncState = "saved" | "dirty" | "saving" | "error";
+/**
+ * saved 已保存 / dirty 有没写盘的输入 / saving 写盘中 / error 写失败（带原因）/
+ * readonly 文件是只读的（没写，字留在内存里，出路是另存为）/ gone 文件被移走或删除了
+ */
+export type SyncState = "saved" | "dirty" | "saving" | "error" | "readonly" | "gone";
 
 export interface DocIo {
   read(): Promise<DocFile>;
@@ -46,6 +50,8 @@ export class DocSession {
   private chain: Promise<void> = Promise.resolve();
   private saving = false;
   private error: string | null = null;
+  private readonly = false;
+  private gone = false;
   private lastState: SyncState = "saved";
   private disposed = false;
   private readonly io: DocIo;
@@ -85,9 +91,12 @@ export class DocSession {
         return;
       }
       this.error = null;
+      this.gone = false;
       if (file.hash === this.baseHash) {
+        // 自己写的回声 / 没有实质变化。但文件刚从「被移走」放回来时，积压的输入要补写
+        if (this.local !== this.baseText) this.schedule();
         this.publish();
-        return; // 自己写的回声 / 没有实质变化
+        return;
       }
       this.absorb(file);
       if (this.local !== this.baseText) this.schedule();
@@ -144,6 +153,14 @@ export class DocSession {
       }
       this.saving = false;
       this.error = null;
+      this.gone = false;
+      if (!result.ok && result.reason === "readonly") {
+        // 只读：不重试（用户改文件权限后再打一个字就会重新尝试），字留在内存里
+        this.readonly = true;
+        this.publish();
+        return;
+      }
+      this.readonly = false;
       if (result.ok) {
         this.baseText = snapshot;
         this.baseHash = result.hash;
@@ -170,13 +187,26 @@ export class DocSession {
   }
 
   private fail(cause: unknown): void {
-    this.error = ipcErrorText(cause);
+    const message = ipcErrorText(cause);
+    if (message.startsWith(DOC_GONE)) {
+      this.gone = true;
+      this.error = null;
+    } else this.error = message;
     this.publish();
   }
 
   private publish(): void {
-    const state: SyncState =
-      this.error !== null ? "error" : this.saving ? "saving" : this.local !== this.baseText ? "dirty" : "saved";
+    const state: SyncState = this.gone
+      ? "gone"
+      : this.readonly && this.local !== this.baseText
+        ? "readonly"
+        : this.error !== null
+          ? "error"
+          : this.saving
+            ? "saving"
+            : this.local !== this.baseText
+              ? "dirty"
+              : "saved";
     if (state === this.lastState && state !== "error") return;
     this.lastState = state;
     this.hooks.onState(state, this.error);

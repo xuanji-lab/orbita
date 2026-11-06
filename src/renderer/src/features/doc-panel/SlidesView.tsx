@@ -12,6 +12,7 @@ import type { DocSession, ExternalChange } from "./doc-session.ts";
 import { quoteOfPageSelection, quoteOfSlide } from "./doc-quote.ts";
 import { SlideCanvas } from "./slide-render";
 import { useQuoteCandidate } from "./useQuoteCandidate";
+import { getView, setView } from "./view-memory.ts";
 
 /** 新增 / 改动的页缩略图标绿边多久 */
 const FLASH_MS = 3200;
@@ -34,7 +35,8 @@ export function SlidesView(props: {
   const deck = useMemo(() => parseDeck(text), [text]);
   const title = docTitle(path);
   const total = deck.pages.length;
-  const [current, setCurrent] = useState(0);
+  // 上次停在哪页（关面板再开 / 重启后回到原处；页数变少时下面 index 会夹回去）
+  const [current, setCurrent] = useState(() => getView(path).page ?? 0);
   const index = Math.min(current, Math.max(total - 1, 0));
   const page = deck.pages[index];
   const pageHandle = useRef<DocEditorHandle | null>(null);
@@ -47,6 +49,9 @@ export function SlidesView(props: {
   const flashTimer = useRef<number | undefined>(undefined);
   /** 页内编辑器管的那一段文字在全文里的区间：换页 / 外部合并时按当前页重新锚定；之后每次编辑跟着长短走 */
   const region = useRef<{ index: number; from: number; to: number } | null>(null);
+  useEffect(() => {
+    if (total > 0) setView(path, { page: index });
+  }, [path, index, total]);
   const indexRef = useRef(index);
   indexRef.current = index;
   if (page !== undefined && region.current?.index !== index) {
@@ -180,7 +185,7 @@ export function SlidesView(props: {
           data-new={flashPages.has(index) ? "true" : undefined}
           onDoubleClick={() => setEditing((value) => !value)}
         >
-          <SlideCanvas text={page.text} number={index + 1} total={total} title={title} />
+          <SlideCanvas text={page.text} number={index + 1} total={total} title={title} overflowLabel={t.doc.slideOverflow} />
         </div>
         <div className="dp-slide-actions">
           <span className="dp-slide-count">

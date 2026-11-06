@@ -109,8 +109,9 @@ export function inlineRuns(text: string, base: Style = {}): TextRun[] {
 /** 多行（同一段里的软换行）→ 带换行的 run 序列：编辑器里看见的换行，Word 里也是换行 */
 function lineRuns(lines: readonly string[]): TextRun[] {
   const runs: TextRun[] = [];
-  lines.forEach((line, i) => {
-    const part = inlineRuns(line);
+  lines.forEach((rawLine, i) => {
+    // 行尾的硬换行标记（两个空格或反斜杠）不是文字
+    const part = inlineRuns(rawLine.replace(/( {2,}|\\)$/, ""));
     if (i > 0 && part.length > 0) {
       // docx 的 break 挂在 run 上：给下一行首个 run 一个前置换行
       runs.push(new TextRun({ text: "", break: 1 }));

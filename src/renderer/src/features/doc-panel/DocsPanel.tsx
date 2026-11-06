@@ -10,16 +10,12 @@ import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../s
 import { useT } from "../../locale.ts";
 import { formatAge } from "../files/tree-view";
 import { DocEditPane } from "./DocEditPane";
-
-/**
- * 在这个会话+类型里用户明确关掉过文件：回到面板时不要又自动打开最近一份（模块级，面板重挂也记得）。
- * 键 = 工作区 + 类型；打开 / 新建任何文件就清掉。
- */
-const dismissed = new Set<string>();
+import { getLast, setLast } from "./view-memory.ts";
 
 /**
  * 右栏的「文档」「演示文稿」面板（同一个组件，`kind` 决定列哪一类、新建哪一类）。
- * 点开 = 打开这个工作区里这一类**最近改过**的一份；没有就是空态：新建一份，或从已有的里挑。
+ * 点开 = 打开**上次在这个面板里打开过的**那一份（按工作区 × 类型记）；没有（或那份已不在了）就是空态：
+ * 新建一份，或从工作区已有的里挑——不替用户从仓库里随便挑一份 .md 打开（可能正是 agent 刚改的 CHANGELOG）。
  * 编辑本身是 `DocEditPane`——与文件面板里 .md 预览的「编辑」模式是同一个组件，两条路通到同一处。
  */
 export function DocsPanel(props: {
@@ -50,15 +46,15 @@ export function DocsPanel(props: {
     }
   }, [sessionId, workspaceId, kind]);
 
-  // 打开面板：列出这一类，自动打开最近一份（用户这次关掉过的除外）
+  // 打开面板：列出这一类；上次在这里打开的那份还在就接着开它，否则空态
   useEffect(() => {
     let alive = true;
     setOpenPath(null);
     setEntries(null);
     void reload().then((mine) => {
-      if (!alive || dismissed.has(scope)) return;
-      const latest = mine[0];
-      if (latest !== undefined) setOpenPath(latest.path);
+      if (!alive) return;
+      const last = getLast(scope);
+      if (last !== null && mine.some((entry) => entry.path === last)) setOpenPath(last);
     });
     return () => {
       alive = false;
@@ -66,12 +62,12 @@ export function DocsPanel(props: {
   }, [reload, scope]);
 
   const open = (path: string): void => {
-    dismissed.delete(scope);
+    setLast(scope, path);
     setActionError(null);
     setOpenPath(path);
   };
   const close = (): void => {
-    dismissed.add(scope);
+    setLast(scope, null);
     setOpenPath(null);
     void reload();
   };
@@ -114,6 +110,11 @@ export function DocsPanel(props: {
           sessionId={sessionId}
           workspaceId={workspaceId}
           path={openPath}
+          onClose={close}
+          onOpenPath={(next) => {
+            open(next);
+            void reload();
+          }}
           {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
         />
       ) : (

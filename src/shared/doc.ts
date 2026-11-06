@@ -42,7 +42,27 @@ export interface DocWriteRequest extends DocTarget {
 export type DocWriteResult =
   | { ok: true; hash: string; modifiedAt: number }
   /** 盘上已被改过：没写，附盘上的现状 */
-  | { ok: false; reason: "conflict"; file: DocFile };
+  | { ok: false; reason: "conflict"; file: DocFile }
+  /** 文件是只读的：没写（不绕过只读去覆盖，也不偷偷改回权限位）。面板说「这个文件是只读的」+「另存为…」 */
+  | { ok: false; reason: "readonly" };
+
+/**
+ * 文件被移走 / 删除了：`doc:read` / `doc:write` / `doc:watch` 抛的错误消息以它起头。
+ * Electron 的 IPC 错误只剩消息文本、没有 code，所以 renderer 靠这个标记认。
+ */
+export const DOC_GONE = "DOC_GONE";
+
+/** `doc:save-as`：把这段文字另存成一个新文件（系统保存对话框选位置；文件已被删也能用，只取目录与名字做默认值） */
+export interface DocSaveAsRequest extends DocTarget {
+  text: string;
+}
+
+export interface DocSaveAsResult {
+  /** 写到哪了；用户取消 = null */
+  saved: string | null;
+  /** 新文件是否落在这条会话的可写根之内（是 = 面板可以直接切过去打开它） */
+  inside: boolean;
+}
 
 /** `doc:create`：在当前会话的工作区根下新建一份（重名加序号） */
 export interface DocCreateRequest {
@@ -95,7 +115,8 @@ export type DocExportFormat = "docx" | "pdf";
  * 都先弹系统保存对话框，取消回 `saved: null`。
  */
 export type DocExportRequest =
-  | (DocTarget & { format: "docx" })
+  /** text：renderer 此刻的全文（含没写进盘的——文件只读存不进去时，导出的也该是用户眼前这份）；缺席读盘 */
+  | (DocTarget & { format: "docx"; text?: string })
   | (DocTarget & { format: "pdf"; html: string; pages: number });
 
 export interface DocExportResult {

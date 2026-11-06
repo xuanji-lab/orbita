@@ -4,7 +4,8 @@ import { Annotation, EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, placeholder } from "@codemirror/view";
 import { clearFlash, flashRanges, liveMarkdown } from "./cm-live-markdown.ts";
 import { diffToChanges, type TextChange } from "./doc-merge.ts";
-import { cycleHeading, toggleBold, toggleList } from "./doc-commands.ts";
+import { quoteTrackField, quoteTracker, trackRange } from "./quote-track.ts";
+import { cycleHeading, insertParagraph, insertSoftBreak, toggleBold, toggleList } from "./doc-commands.ts";
 
 /** 编辑器里一次选区（偏移按编辑器自己的文本算） */
 export interface EditorSelectionInfo {
@@ -27,10 +28,33 @@ export interface DocEditorHandle {
   focus(): void;
   /** 收起选区（引用 / 摘抄做完后） */
   clearSelection(): void;
+  /** 登记一段被引用的区间，之后随每次改动映射（quote-track.ts） */
+  trackQuote(id: string, from: number, to: number): void;
+  /** 被引用区间现在在哪；追踪不到 = null */
+  trackedRange(id: string): { from: number; to: number } | null;
 }
 
 /** 外部改动（agent / 重新对齐）的事务打这个标：不回报给 onChange、不进撤销栈 */
 const External = Annotation.define<boolean>();
+
+/**
+ * 空文档里用户打的第一个字：前面补 `# `（第一行就是标题）。只认用户输入（外部合并带 External 标记、撤销不算）。
+ * 不动已经以 `#` 起头的内容（粘贴一整段 markdown 时别二次加）。
+ */
+const titleFirstFilter = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || tr.startState.doc.length !== 0 || tr.annotation(External) === true) return tr;
+  const userEvent = tr.annotation(Transaction.userEvent);
+  if (userEvent === undefined || !userEvent.startsWith("input")) return tr;
+  const text = tr.newDoc.toString();
+  if (text === "" || text.startsWith("#") || text.startsWith("\n")) return tr;
+  return [
+    {
+      changes: { from: 0, insert: `# ${text}` },
+      selection: { anchor: tr.newSelection.main.head + 2 },
+      userEvent,
+    },
+  ];
+});
 
 /** 新增段落绿边保持多久（CSS 动画淡出，到点再清装饰） */
 const FLASH_MS = 3200;
@@ -43,6 +67,11 @@ export function DocEditor(props: {
   emptyHint?: { title: string; body: string };
   handleRef: { current: DocEditorHandle | null };
   ariaLabel: string;
+  /**
+   * 文档模式：回车 = 新段落（写成空行分隔）、Shift+回车 = 段内换行；空文档里打的第一个字自动成为
+   * 一级标题（落盘 `# `，占位写的「标题」就是这个意思）。幻灯片页内的源码编辑器不开（那是写 markdown 源码）。
+   */
+  documentMode?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   // 回调放 ref：视图只建一次，之后回调怎么换都不用重建编辑器（重建会丢光标与撤销栈）
@@ -108,8 +137,16 @@ export function DocEditor(props: {
             spellcheck: "false",
           }),
           liveMarkdown(),
+          quoteTracker(),
           ...(hint() === undefined ? [] : [placeholder(hint() as HTMLElement)]),
+          ...(callbacks.current.documentMode === true ? [titleFirstFilter] : []),
           keymap.of([
+            ...(callbacks.current.documentMode === true
+              ? [
+                  { key: "Enter", run: insertParagraph, preventDefault: true },
+                  { key: "Shift-Enter", run: insertSoftBreak, preventDefault: true },
+                ]
+              : []),
             { key: "Mod-b", run: toggleBold, preventDefault: true },
             ...defaultKeymap,
             ...historyKeymap,
@@ -163,6 +200,8 @@ export function DocEditor(props: {
       focus: () => {
         view.focus();
       },
+      trackQuote: (id, from, to) => view.dispatch({ effects: trackRange.of({ id, from, to }) }),
+      trackedRange: (id) => view.state.field(quoteTrackField).get(id) ?? null,
       clearSelection: () => {
         view.dispatch({ selection: { anchor: view.state.selection.main.head } });
       },

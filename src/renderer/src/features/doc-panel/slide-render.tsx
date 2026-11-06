@@ -6,6 +6,7 @@ import remarkCjkFriendly from "remark-cjk-friendly";
 import remarkBreaks from "remark-breaks";
 import type { DocPaper } from "@shared/settings";
 import { splitColumns } from "./slide-columns.ts";
+import { Icon } from "../../shell/Icon";
 // 屏幕上用样式表（副作用导入），导出 PDF 时再把同一份源码当字符串塞进 HTML
 import "./slide.css";
 import slideCss from "./slide.css?inline";
@@ -72,9 +73,23 @@ export function SlidePage(props: { text: string; number: number; total: number; 
 }
 
 /** 按容器宽度缩放一页：外框 16:9，里面的 1280 画布 transform: scale(宽 / 1280) */
-export function SlideCanvas(props: { text: string; number: number; total: number; title: string; className?: string }) {
+export function SlideCanvas(props: {
+  text: string;
+  number: number;
+  total: number;
+  title: string;
+  className?: string;
+  /** 给了就在页角标出「内容超出这一页」（当前页预览用；缩略图不标）。导出的 PDF 里没有这个标记 */
+  overflowLabel?: string;
+}) {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(0);
+  const [overflow, setOverflow] = useState(false);
+  // 内容超出 16:9 的页：页体是 overflow:hidden，超出的部分会被静默裁掉——量出来、告诉用户
+  useLayoutEffect(() => {
+    const body = frameRef.current?.querySelector<HTMLElement>(".dp-slide-body") ?? null;
+    setOverflow(body !== null && body.scrollHeight > body.clientHeight + 1);
+  }, [props.text, props.number, scale]);
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (frame === null) return undefined;
@@ -89,6 +104,12 @@ export function SlideCanvas(props: { text: string; number: number; total: number
       <div className="dp-slide-scaler" style={{ transform: `scale(${scale})` }}>
         <SlidePage text={props.text} number={props.number} total={props.total} title={props.title} />
       </div>
+      {overflow && props.overflowLabel !== undefined && (
+        <span className="dp-slide-overflow" role="status">
+          <Icon name="triangle-alert" size={12} strokeWidth={2} />
+          {props.overflowLabel}
+        </span>
+      )}
     </div>
   );
 }
@@ -120,10 +141,22 @@ const escapeHtml = (value: string): string =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** 把当前主题下 slide.css 要用的 token 值抄成一段 `:root{…}`（所见即所得：导出的页与屏幕上同色） */
-export function resolvedTokenCss(root: Element = document.documentElement): string {
-  const style = getComputedStyle(root);
-  const lines = SLIDE_TOKENS.map((name) => `${name}: ${style.getPropertyValue(name).trim()};`);
-  return `:root { ${lines.join(" ")} }`;
+export function resolvedTokenCss(theme?: "light"): string {
+  // 指定主题时借设计系统给主题预览卡留的 `[data-theme-preview]` 选择器（tokens/colors.css）：
+  // 一个临时的隐藏子树拿到该主题的色值，不动应用自己的主题
+  const probe = theme === undefined ? null : document.createElement("div");
+  if (probe !== null) {
+    probe.setAttribute("data-theme-preview", theme ?? "light");
+    probe.style.display = "none";
+    document.body.append(probe);
+  }
+  try {
+    const style = getComputedStyle(probe ?? document.documentElement);
+    const lines = SLIDE_TOKENS.map((name) => `${name}: ${style.getPropertyValue(name).trim()};`);
+    return `:root { ${lines.join(" ")} }`;
+  } finally {
+    probe?.remove();
+  }
 }
 
 /**

@@ -6,6 +6,7 @@
  * 不靠运气。长度沿用 QUOTE_MAX_CHARS（再长就不是「引一句」）。
  */
 import { clampQuote, type TextQuote } from "../../../../shared/quote.ts";
+import { contextAround } from "../../../../shared/quote-anchor.ts";
 import { parseDeck } from "../../../../shared/doc-slides.ts";
 
 /** 偏移 → 行号（1 起）。偏移越界按文首 / 文末夹 */
@@ -40,6 +41,7 @@ export function quoteOfSelection(input: {
     role: "user",
     filePath: input.path,
     lines: lineRangeOf(input.text, input.from, input.to),
+    context: contextAround(input.text, input.from, input.to),
     ...(clamped.truncated ? { truncated: true as const } : {}),
   };
 }
@@ -57,6 +59,7 @@ export function quoteOfSlide(input: { path: string; text: string; page: number }
     filePath: input.path,
     lines: { from: page.startLine, to: page.endLine },
     slide: input.page + 1,
+    context: contextAround(input.text, page.from, page.to),
     ...(clamped.truncated ? { truncated: true as const } : {}),
   };
 }

@@ -20,11 +20,16 @@ import { useScrolledEdge } from "./WorkspaceFilterBar.tsx";
  */
 export function RightPanelSlot(props: {
   open: boolean;
-  /** null = 还没有记过：按 `defaultFraction` 现算 */
+  /** null = 还没有记过 */
   width: number | null;
-  /** 没有记过宽度（或双击热区复位）时占 pane 宽度的比例；缺席 = 默认 320 */
-  defaultFraction?: number;
+  /**
+   * 自带版式规则的面板（文档 / 演示文稿）：给了它，宽度与是否转覆盖层都由它按量到的 pane 宽决定
+   * （聊天列留底线、放不下转覆盖层），不再走 1/3–2/3 夹取与 <960 的窗口判定。
+   */
+  resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number };
   narrow: boolean;
+  /** 实际是不是覆盖层（窄窗，或 resolveLayout 判定放不下）：工具栏的右栏胶囊要跟 */
+  onOverlay?: (overlay: boolean) => void;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
   /**
@@ -45,14 +50,34 @@ export function RightPanelSlot(props: {
    * 盘上那个宽度可能是在更宽的窗口（或另一台显示器）上存的。只夹渲染值、
    * 不回写 settings；窄窗转覆盖层时宽度写死 320，那时不量也不夹。
    */
-  const paneTotal = usePaneTotalWidth(asideRef, !narrow);
-  const defaultWidth =
-    props.defaultFraction !== undefined && paneTotal > 0
-      ? Math.round(paneTotal * props.defaultFraction)
-      : RIGHT_PANEL_WIDTH_DEFAULT;
-  const wanted = props.width ?? defaultWidth;
-  const width = paneTotal > 0 ? clampRightPanelWidth(wanted, paneTotal) : wanted;
-  const renderedWidth = narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width;
+  const resolveLayout = props.resolveLayout;
+  const paneTotal = usePaneTotalWidth(asideRef, !narrow && resolveLayout === undefined);
+  // 自带版式的面板按「父级 = pane」的宽度算：覆盖层时右栏脱离文档流，父级宽仍是 pane，
+  // 所以量它不会因为转覆盖层而变（不会来回跳）
+  const paneWidth = useParentWidth(asideRef, resolveLayout !== undefined);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = (): void => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const own = resolveLayout?.(paneWidth, props.width, windowWidth);
+  const overlay = own === undefined ? narrow : own.overlay || narrow;
+  const width =
+    own !== undefined
+      ? narrow
+        ? Math.max(280, Math.min(640, windowWidth - 48))
+        : own.width
+      : narrow
+        ? RIGHT_PANEL_WIDTH_DEFAULT
+        : paneTotal > 0
+          ? clampRightPanelWidth(props.width ?? RIGHT_PANEL_WIDTH_DEFAULT, paneTotal)
+          : (props.width ?? RIGHT_PANEL_WIDTH_DEFAULT);
+  const renderedWidth = width;
+  const onOverlay = props.onOverlay;
+  useEffect(() => {
+    onOverlay?.(overlay);
+  }, [overlay, onOverlay]);
   const onRenderedWidth = props.onRenderedWidth;
   useEffect(() => {
     onRenderedWidth?.(renderedWidth);
@@ -69,7 +94,10 @@ export function RightPanelSlot(props: {
     const panel = asideRef.current;
     if (panel === null) return;
     const startWidth = panel.getBoundingClientRect().width;
-    const clamp = (value: number): number => clampRightPanelWidth(value, paneTotal);
+    const clamp = (value: number): number =>
+      resolveLayout !== undefined
+        ? resolveLayout(paneWidth, value, windowWidth).width
+        : clampRightPanelWidth(value, paneTotal);
     const started = startPointerDrag(event, {
       cursor: "col-resize",
       onMove: (delta) => props.onWidthChange(clamp(startWidth - delta.x)),
@@ -87,13 +115,13 @@ export function RightPanelSlot(props: {
       className={`right-panel-slot${open ? " open" : ""}${resizing ? " dragging" : ""}`}
       style={
         {
-          "--right-panel-w": `${narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width}px`,
+          "--right-panel-w": `${width}px`,
           // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条；
           // 那时壳需要自己的面：设计系统「Floating layers」的实色底 + 发丝边 + popover
           // 阴影。不用玻璃：没有 blur，半透明的它压在聊天正文上，底下的字会直接漏上来。
           // top 从工具栏下面算（--chrome-height）：.layer 从窗口顶边开始，工具栏是绝对
           // 定位的，直接 12px 会盖住窗口三键与会话胶囊（2026-10-22 验收实测）
-          ...(narrow && open
+          ...(overlay && open
             ? {
                 position: "absolute",
                 top: "calc(var(--chrome-height) + var(--space-3))",
@@ -111,11 +139,15 @@ export function RightPanelSlot(props: {
       }
     >
       {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320 */}
-      {!narrow && (
+      {!overlay && (
         <span
           onPointerDown={startResize}
           onDoubleClick={() =>
-            props.onWidthCommit(clampRightPanelWidth(defaultWidth, paneTotal))
+            props.onWidthCommit(
+              resolveLayout !== undefined
+                ? resolveLayout(paneWidth, null, windowWidth).width
+                : clampRightPanelWidth(RIGHT_PANEL_WIDTH_DEFAULT, paneTotal),
+            )
           }
           title={t.common.dragResize}
           style={{
@@ -134,6 +166,27 @@ export function RightPanelSlot(props: {
       <div className="right-panel-slot-inner">{props.children}</div>
     </aside>
   );
+}
+
+/** 量父级元素的宽（RightPanelSlot 的父级 = pane）。`active` 为假不量，返回 0 */
+function useParentWidth(ref: React.RefObject<HTMLElement | null>, active: boolean): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const parent = ref.current?.parentElement ?? null;
+    if (!active || parent === null) {
+      setWidth(0);
+      return undefined;
+    }
+    const measure = (): void => {
+      const next = Math.round(parent.getBoundingClientRect().width);
+      setWidth((current) => (current === next ? current : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [ref, active]);
+  return width;
 }
 
 /**

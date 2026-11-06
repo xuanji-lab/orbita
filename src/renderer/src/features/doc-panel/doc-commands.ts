@@ -2,6 +2,7 @@
  * 工具栏命令（标题 / 加粗 / 列表）：只改 markdown 源码，外观由 cm-live-markdown 负责。
  * 纯 `EditorView` 操作，返回 boolean 以便直接当 keymap 的 run。
  */
+import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 
 const HEADING_PREFIX = /^(#{1,6})\s+/;
@@ -97,5 +98,48 @@ export function toggleList(view: EditorView): boolean {
     }),
     userEvent: "input.format",
   });
+  return true;
+}
+
+const LIST_LINE = /^(\s*)([-*+]|\d+[.)])(\s+)(.*)$/;
+
+/**
+ * 回车 = 新段落。markdown 里单个换行只是同一段内的软换行（预览把它连成一段、Word 导出成一大段带断行），
+ * 所以文档编辑器的回车写成空行分隔（`\n\n`）；Shift+回车才是段内换行（`insertSoftBreak`）。
+ * 例外：围栏代码块里是普通换行；列表项里是接着开下一项（空项再按回车 = 退出列表）。
+ */
+export function insertParagraph(view: EditorView): boolean {
+  const { state } = view;
+  const range = state.selection.main;
+  const line = state.doc.lineAt(range.from);
+  // 围栏代码块里：普通换行
+  for (let node: { name: string; parent: unknown } | null = syntaxTree(state).resolveInner(range.from, -1); node !== null; node = node.parent as typeof node) {
+    if (node.name === "FencedCode") {
+      view.dispatch({ changes: { from: range.from, to: range.to, insert: "\n" }, selection: { anchor: range.from + 1 }, userEvent: "input" });
+      return true;
+    }
+  }
+  const item = LIST_LINE.exec(line.text);
+  const prefixLength = item === null ? 0 : (item[1] as string).length + (item[2] as string).length + (item[3] as string).length;
+  if (item !== null && range.from - line.from >= prefixLength) {
+    if ((item[4] as string).trim() === "" && range.empty) {
+      // 空项：去掉标记，退出列表
+      view.dispatch({ changes: { from: line.from, to: line.to, insert: "" }, selection: { anchor: line.from }, userEvent: "delete" });
+      return true;
+    }
+    const marker = item[2] as string;
+    const next = /^\d/.test(marker) ? `${parseInt(marker, 10) + 1}${marker.slice(-1)}` : marker;
+    const insert = `\n${item[1] as string}${next}${item[3] as string}`;
+    view.dispatch({ changes: { from: range.from, to: range.to, insert }, selection: { anchor: range.from + insert.length }, userEvent: "input" });
+    return true;
+  }
+  view.dispatch({ changes: { from: range.from, to: range.to, insert: "\n\n" }, selection: { anchor: range.from + 2 }, userEvent: "input" });
+  return true;
+}
+
+/** Shift+回车：段内换行（markdown 硬换行：行尾两个空格 + 换行） */
+export function insertSoftBreak(view: EditorView): boolean {
+  const range = view.state.selection.main;
+  view.dispatch({ changes: { from: range.from, to: range.to, insert: "  \n" }, selection: { anchor: range.from + 3 }, userEvent: "input" });
   return true;
 }

@@ -309,6 +309,8 @@ export const ipcChannels = {
   docUnwatch: "doc:unwatch",
   /** 主进程 → renderer 推送（`DocChangedEvent`）：被监听的文档在盘上变了（含自己刚写的，renderer 按摘要去回声） */
   docChanged: "doc:changed",
+  /** 另存为：把当前文字存成新文件（先弹保存对话框）；原文件只读 / 被删时的出路 */
+  docSaveAs: "doc:save-as",
   /** 导出：文档 → docx，演示文稿 → PDF（先弹保存对话框） */
   docExport: "doc:export",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */

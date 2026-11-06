@@ -73,6 +73,16 @@ describe("markdown → docx", () => {
     assert.deepEqual(result.messages.filter((m) => m.type === "error"), []);
   });
 
+  it("回车分段（\\n\\n）= 多个 Word 段落；Shift+回车的硬换行留在段内、行尾空格不进文字（M2）", async () => {
+    const md = "# 标题\n\n第一段\n\n第二段第一行  \n第二段第二行";
+    const paragraphs = await paragraphsOf(await markdownToDocx(md));
+    assert.equal(paragraphs.length, expectedParagraphCount(md));
+    assert.deepEqual(paragraphs, ["标题", "第一段", "第二段第一行第二段第二行"]);
+    const html = (await mammoth.convertToHtml({ buffer: await markdownToDocx(md) })).value;
+    assert.match(html, /<h1>标题<\/h1>/);
+    assert.match(html, /<p>第二段第一行<br \/>第二段第二行<\/p>/);
+  });
+
   it("空文档也能导出成合法的 docx（一个空段落）", async () => {
     const result = await mammoth.extractRawText({ buffer: await markdownToDocx("") });
     assert.equal(result.value.trim(), "");

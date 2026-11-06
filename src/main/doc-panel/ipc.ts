@@ -11,6 +11,8 @@ import {
   type DocCreateRequest,
   type DocExportRequest,
   type DocExportResult,
+  type DocSaveAsRequest,
+  type DocSaveAsResult,
   type DocFile,
   type DocListEntry,
   type DocListRequest,
@@ -18,13 +20,14 @@ import {
   type DocWriteRequest,
   type DocWriteResult,
 } from "../../shared/doc.ts";
-import { writeBytesAtomic } from "../atomic-write.ts";
+import { writeBytesAtomic, writeTextAtomic } from "../atomic-write.ts";
+import { realpathInside } from "../path-boundary.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { markdownToDocx } from "./export-docx.ts";
 import { printSlidesPdf } from "./export-pdf.ts";
-import { createDoc, DocWatchers, listDocs, readDoc, resolveDocPath, writeDoc } from "./service.ts";
+import { createDoc, DocWatchers, listDocs, normalizeNewlines, readDoc, resolveDocPath, writeDoc } from "./service.ts";
 
 export function registerDocIpc(workspaces: WorkspaceStore, sessions: SessionStore): void {
   const watchers = new DocWatchers();
@@ -72,6 +75,23 @@ export function registerDocIpc(workspaces: WorkspaceStore, sessions: SessionStor
     watchers.unwatch(`${event.sender.id}:${real}`);
   });
 
+  ipcMain.handle(ipcChannels.docSaveAs, async (event, req: DocSaveAsRequest): Promise<DocSaveAsResult> => {
+    const roots = await rootsOf(req);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const name = basename(req.path).replace(/\.md$/i, "");
+    const options = {
+      // 原文件被删时 dirname 仍是它原来的目录（工作区里）；只当默认值，用户想存哪都行
+      defaultPath: join(dirname(req.path), `${name} 副本.md`),
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    };
+    const picked = await (window === null ? dialog.showSaveDialog(options) : dialog.showSaveDialog(window, options));
+    if (picked.canceled || picked.filePath === "") return { saved: null, inside: false };
+    const target = /\.md$/i.test(picked.filePath) ? picked.filePath : `${picked.filePath}.md`;
+    await writeTextAtomic(target, normalizeNewlines(req.text));
+    const allowed = roots.filter((root) => root.exists && root.kind !== "attachments").map((root) => root.path);
+    return { saved: target, inside: (await realpathInside(target, allowed)) !== null };
+  });
+
   ipcMain.handle(ipcChannels.docExport, async (event, req: DocExportRequest): Promise<DocExportResult> => {
     const real = await resolveDocPath(await rootsOf(req), req.path);
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -80,7 +100,7 @@ export function registerDocIpc(workspaces: WorkspaceStore, sessions: SessionStor
     // 先生成再问存哪：对话框取消不浪费一次生成没关系，生成失败则不必打扰用户弹对话框
     const bytes =
       req.format === "docx"
-        ? await markdownToDocx((await readDoc(await rootsOf(req), real)).text)
+        ? await markdownToDocx(req.text ?? (await readDoc(await rootsOf(req), real)).text)
         : await printSlidesPdf(req.html, req.pages);
     const options = {
       defaultPath: join(dirname(real), `${title}.${ext}`),

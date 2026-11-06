@@ -14,12 +14,13 @@
  */
 import { createHash } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
-import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { access, constants, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import {
   DOC_LIST_DEPTH,
   DOC_LIST_LIMIT,
   DOC_MAX_BYTES,
+  DOC_GONE,
   NEW_DECK_NAME,
   NEW_DOC_NAME,
   type DocCreated,
@@ -33,8 +34,8 @@ import {
 import { isDeckText, NEW_DECK_TEXT } from "../../shared/doc-slides.ts";
 import type { FileRoot } from "../../shared/files.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
-import { errorCode } from "../fs-errors.ts";
-import { realpathInside } from "../path-boundary.ts";
+import { errorCode, isNotFound } from "../fs-errors.ts";
+import { isInside, realpathInside } from "../path-boundary.ts";
 
 /** 能放文档的根：附件副本根只读，不放 */
 const WRITABLE_KINDS: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached"]);
@@ -57,18 +58,42 @@ export async function resolveDocPath(roots: readonly FileRoot[], path: string): 
   if (!isMarkdownPath(path)) throw new Error(`只能打开 .md 文件：${path}`);
   const allowed = roots.filter((root) => root.exists && WRITABLE_KINDS.has(root.kind)).map((root) => root.path);
   const real = await realpathInside(path, allowed);
-  if (real === null) throw new Error(`「${path}」不在这条会话允许的目录里，或文件不存在`);
+  if (real === null) {
+    // 区分「文件没了」与「不在允许的目录里」：前者是用户在 Finder 里改名 / 删除了，要说人话并给出路
+    let gone = false;
+    try {
+      await realpath(path);
+    } catch (cause) {
+      gone = isNotFound(cause) && allowed.some((root) => isInside(root, path));
+    }
+    if (gone) throw new Error(`${DOC_GONE}: 文件被移走或删除了`);
+    throw new Error(`「${path}」不在这条会话允许的目录里`);
+  }
   if (!isMarkdownPath(real)) throw new Error(`只能打开 .md 文件：${real}`);
   const stats = await stat(real);
   if (!stats.isFile()) throw new Error(`不是文件：${real}`);
   return real;
 }
 
-async function readDocAt(real: string): Promise<DocFile> {
+/** 原文件的换行风格：含 CRLF 就是 CRLF（写回时还原，Windows 文件改一个字不该变成整份 diff） */
+export function detectEol(raw: string): "lf" | "crlf" {
+  return raw.includes("\r\n") ? "crlf" : "lf";
+}
+
+async function readRawAt(real: string): Promise<{ file: DocFile; eol: "lf" | "crlf"; mode: number }> {
   const stats = await stat(real);
   if (stats.size > DOC_MAX_BYTES) throw new Error(`文件太大（${stats.size} 字节），不当文档打开：${real}`);
-  const text = normalizeNewlines(await readFile(real, "utf8"));
-  return { text, hash: hashText(text), modifiedAt: stats.mtimeMs };
+  const raw = await readFile(real, "utf8");
+  const text = normalizeNewlines(raw);
+  return {
+    file: { text, hash: hashText(text), modifiedAt: stats.mtimeMs },
+    eol: detectEol(raw),
+    mode: stats.mode & 0o7777,
+  };
+}
+
+async function readDocAt(real: string): Promise<DocFile> {
+  return (await readRawAt(real)).file;
 }
 
 export async function readDoc(roots: readonly FileRoot[], path: string): Promise<DocFile> {
@@ -93,11 +118,17 @@ export async function writeDoc(roots: readonly FileRoot[], req: DocWriteRequest)
 async function writeDocAt(real: string, req: DocWriteRequest): Promise<DocWriteResult> {
   const text = normalizeNewlines(req.text);
   if (Buffer.byteLength(text) > DOC_MAX_BYTES) throw new Error("文档太大，不写");
-  const current = await readDocAt(real);
+  const { file: current, eol, mode } = await readRawAt(real);
   if (current.hash !== req.expectedHash) return { ok: false, reason: "conflict", file: current };
   // 内容没变就不写：不白动 mtime，也不制造一次自己的回声
   if (current.text === text) return { ok: true, hash: current.hash, modifiedAt: current.modifiedAt };
-  await writeTextAtomic(real, text);
+  // 只读文件不写穿：rename 换 inode 不看原文件的权限位，目录可写时 444 的文件也会被「静默覆盖」
+  try {
+    await access(real, constants.W_OK);
+  } catch {
+    return { ok: false, reason: "readonly" };
+  }
+  await writeTextAtomic(real, eol === "crlf" ? text.replace(/\n/g, "\r\n") : text, { mode });
   const stats = await stat(real);
   return { ok: true, hash: hashText(text), modifiedAt: stats.mtimeMs };
 }

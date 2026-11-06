@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TextQuote } from "@shared/quote";
-import { docTitle } from "@shared/doc";
+import { DOC_GONE, docTitle } from "@shared/doc";
 import { isDeckText } from "@shared/doc-slides";
 import { DOC_PAPERS, type DocPaper } from "@shared/settings";
 import { api } from "../../api";
@@ -35,6 +35,10 @@ export function DocEditPane(props: {
   path: string;
   /** 缺席 = 没有输入框可引（工具栏只剩复制） */
   onQuote?: (quote: TextQuote) => void;
+  /** 「关闭」：文件被移走 / 打不开时的出口；缺席 = 不画这个键 */
+  onClose?: () => void;
+  /** 另存为落在可写根之内时，切过去打开新文件；缺席 = 只提示已另存 */
+  onOpenPath?: (path: string) => void;
 }) {
   const t = useT();
   const { sessionId, workspaceId, path } = props;
@@ -52,9 +56,14 @@ export function DocEditPane(props: {
   const ready = doc.phase === "ready" && doc.session !== null && doc.initial !== null;
   useEffect(() => {
     if (!ready) return undefined;
-    setOpenDocument({ path, kind: deck ? "slides" : "doc" });
+    const session = doc.session;
+    if (session === null) return undefined;
+    setOpenDocument(
+      { path, kind: deck ? "slides" : "doc" },
+      { text: () => session.text, trackedRange: (anchor) => docHandle.current?.trackedRange(anchor) ?? null },
+    );
     return () => setOpenDocument(null);
-  }, [ready, path, deck]);
+  }, [ready, path, deck, doc.session]);
 
   // 专注写作纸面：打字时工具栏淡出，鼠标一动回来（只改 data-typing，样式在 CSS）
   const [typing, setTyping] = useState(false);
@@ -74,6 +83,20 @@ export function DocEditPane(props: {
     return () => window.clearTimeout(timer);
   }, [note]);
 
+  const saveAs = useCallback(async (): Promise<void> => {
+    const session = doc.session;
+    if (session === null) return;
+    setNote(null);
+    try {
+      const result = await api.docs.saveAs({ sessionId, workspaceId, path, text: session.text });
+      if (result.saved === null) return;
+      if (result.inside && props.onOpenPath !== undefined) props.onOpenPath(result.saved);
+      else setNote({ text: t.doc.savedAs(result.saved), tone: "ok" });
+    } catch (cause) {
+      setNote({ text: t.doc.saveAsFailed(ipcErrorText(cause)), tone: "danger" });
+    }
+  }, [doc.session, sessionId, workspaceId, path, props, t]);
+
   const exportNow = useCallback(async (): Promise<void> => {
     const session = doc.session;
     if (session === null || exporting) return;
@@ -92,13 +115,14 @@ export function DocEditPane(props: {
               html: deckHtml(pages, {
                 paper,
                 title: docTitle(path),
-                theme: document.documentElement.dataset["theme"] ?? "light",
-                tokens: resolvedTokenCss(),
+                // 导出按纸面走，不跟应用的明暗主题：只有「专注写作」的舞台是深底（slide.css 里 light 档的规则）
+                theme: "light",
+                tokens: resolvedTokenCss("light"),
               }),
               pages: pages.length,
             });
           })()
-        : await api.docs.export({ ...target, format: "docx" });
+        : await api.docs.export({ ...target, format: "docx", text: session.text });
       if (result.saved !== null) setNote({ text: t.doc.exported(result.saved), tone: "ok" });
     } catch (cause) {
       setNote({ text: t.doc.exportFailed(ipcErrorText(cause)), tone: "danger" });
@@ -115,23 +139,41 @@ export function DocEditPane(props: {
     );
   }
   if (doc.phase === "error" || !ready || doc.session === null || doc.initial === null) {
+    const gone = doc.loadError?.startsWith(DOC_GONE) === true;
     return (
       <div className="dp" data-paper={paper}>
-        <PanelEmpty tone="danger" hint={doc.loadError ?? undefined}>
-          {t.doc.loadFailed}
+        <PanelEmpty
+          tone="danger"
+          {...(gone || doc.loadError === null ? {} : { hint: doc.loadError })}
+          {...(props.onClose === undefined ? {} : { exit: { label: t.doc.closeFile, onClick: props.onClose } })}
+        >
+          {gone ? t.doc.goneNotice : t.doc.loadFailed}
         </PanelEmpty>
       </div>
     );
   }
 
+  // 工具栏里的状态只放一个短词（长句会把工具栏挤成两行）；原因与出路在下面那条横幅里
   const status =
     doc.state === "error"
-      ? t.doc.saveFailed(doc.syncError ?? "")
-      : doc.state === "saving"
-        ? t.doc.saving
-        : doc.state === "dirty"
-          ? t.doc.dirty
-          : t.doc.saved;
+      ? t.doc.statusFailed
+      : doc.state === "readonly"
+        ? t.doc.statusReadonly
+        : doc.state === "gone"
+          ? t.doc.statusGone
+          : doc.state === "saving"
+            ? t.doc.saving
+            : doc.state === "dirty"
+              ? t.doc.dirty
+              : t.doc.saved;
+  const banner =
+    doc.state === "readonly"
+      ? { text: t.doc.readonlyNotice, saveAs: true, close: false }
+      : doc.state === "gone"
+        ? { text: t.doc.goneNotice, saveAs: true, close: true }
+        : doc.state === "error"
+          ? { text: t.doc.saveFailed(doc.syncError ?? ""), saveAs: false, close: false }
+          : null;
 
   return (
     <div
@@ -189,6 +231,23 @@ export function DocEditPane(props: {
           <Icon name={exporting ? "loader-circle" : "download"} size={16} strokeWidth={1.8} spin={exporting} />
         </IconButton>
       </div>
+      {banner !== null && (
+        <div className="dp-banner" role="alert">
+          <span className="dp-banner-text" title={banner.text}>
+            {banner.text}
+          </span>
+          {banner.saveAs && (
+            <button type="button" className="dp-text-action" onClick={() => void saveAs()}>
+              {t.doc.saveAs}
+            </button>
+          )}
+          {banner.close && props.onClose !== undefined && (
+            <button type="button" className="dp-text-action" onClick={props.onClose}>
+              {t.doc.closeFile}
+            </button>
+          )}
+        </div>
+      )}
       {note !== null && (
         <div className="dp-note" role={note.tone === "danger" ? "alert" : "status"} data-tone={note.tone}>
           {note.text}
