@@ -609,7 +609,7 @@ function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftT
         title={entry.manifestProblem === null ? meta : `${t.draftManifestProblem}: ${entry.manifestProblem}`}
         onClick={() => props.onOpen({ path: entry.path, workspaceId: entry.workspaceId })}
       >
-        <PluginAvatar view={{ origin: "plugin", name: entry.displayName }} />
+        <PluginAvatar view={{ origin: "plugin" }} />
         <span className="pl-name">
           <span className="pl-draft-head">
             <b>{entry.displayName}</b>

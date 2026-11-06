@@ -1,6 +1,7 @@
 /**
  * 插件页里列表与详情共用的小件：头像、开关、能力行。
  */
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import type { PluginMcpInfo, PluginSkillInfo, PluginUnsupported, PluginView } from "@shared/plugin";
 import type { PluginExternal } from "@shared/plugin-board";
 import { Icon } from "../../shell/Icon";
@@ -14,7 +15,7 @@ export function PluginAvatar(props: { view: Pick<PluginView, "origin">; big?: bo
   const kind = view.origin === "user-skill" ? "skill" : view.origin === "user-mcp" ? "mcp" : "plugin";
   return (
     <span className={`pl-av${props.big === true ? " big" : ""}`} data-kind={kind} aria-hidden="true">
-      <Icon name={kind === "skill" ? "book-open" : kind === "mcp" ? "plug" : "blocks"} size={size} strokeWidth={1.8} />
+      <Icon name={kind === "skill" ? "book-open" : kind === "mcp" ? "plug" : FEATURE_ICON.plugins} size={size} strokeWidth={1.8} />
     </span>
   );
 }
