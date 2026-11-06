@@ -28,6 +28,10 @@ export const FEATURE_ICON = {
   board: "layout-dashboard",
   /** 审查改动 */
   review: "file-diff",
+  /** 文档：右栏入口、面板头、文件面板的「新建文档」 */
+  doc: "file-text",
+  /** 演示文稿：右栏入口、面板头、文件面板的「新建演示文稿」、演示文稿的空态 */
+  slides: "presentation",
   /** 文件面板（注意 folder 同时是「目录」的通用图标，通用处不走表） */
   files: "folder",
   /** 终端 */

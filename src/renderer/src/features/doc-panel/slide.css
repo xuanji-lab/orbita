@@ -1,0 +1,227 @@
+/*
+ * 幻灯片一页的样式（屏幕上的缩略条 / 当前页，和导出 PDF 共用这一份）。
+ *
+ * 颜色与字体全部取 design-system 的 token（所见即所得：导出的 PDF 与屏幕上看到的同一套色，
+ * 导出时 deckHtml 把用到的 token 的当前值写进 HTML，隐藏窗口里没有 token 也能原样复现）。
+ * 字号按画布内的 em / % 排（逻辑画布 1280 × 720，缩放由外面的 transform 做），基准取 --font-size-lg。
+ * 三套纸面只换这几个变量与少数规则：
+ *   quiet 白底细线：标题下一条发丝线，页码右下角一行灰字；
+ *   print 书刊版式：衬线大标题居中，页脚一条细线，左标题右页码；
+ *   focus 舞台：深底、大字，页码淡淡地放在角上。
+ */
+.dp-slide-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+.dp-slide-scaler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1280px;
+  height: 720px;
+  transform-origin: 0 0;
+}
+
+.dp-slide {
+  --slide-bg: var(--color-bg-panel);
+  --slide-ink: var(--color-text-primary);
+  --slide-ink-soft: var(--color-text-secondary);
+  --slide-rule: var(--color-border-default);
+  --slide-code: var(--color-bg-muted);
+  position: relative;
+  box-sizing: border-box;
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  background: var(--slide-bg);
+  color: var(--slide-ink);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-lg);
+}
+.dp-slide-body {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 4.5em 5.5em 4em;
+  font-size: 170%;
+  line-height: var(--line-height-ui);
+  overflow: hidden;
+}
+.dp-slide-body > :first-child {
+  margin-top: 0;
+}
+.dp-slide-body h1 {
+  margin: 0 0 0.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--slide-rule);
+  font-size: 210%;
+  line-height: var(--line-height-tight);
+  font-weight: 650;
+}
+.dp-slide-body h2 {
+  margin: 0.8em 0 0.4em;
+  font-size: 150%;
+  line-height: var(--line-height-tight);
+  font-weight: 650;
+}
+.dp-slide-body h3 {
+  margin: 0.8em 0 0.3em;
+  font-size: 120%;
+  font-weight: 650;
+}
+.dp-slide-body p {
+  margin: 0.5em 0;
+}
+.dp-slide-body ul,
+.dp-slide-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.dp-slide-body li {
+  margin: 0.25em 0;
+}
+.dp-slide-body strong {
+  font-weight: 700;
+}
+.dp-slide-body blockquote {
+  margin: 0.6em 0;
+  padding-left: 0.8em;
+  border-left: 0.18em solid var(--slide-rule);
+  color: var(--slide-ink-soft);
+}
+.dp-slide-body code {
+  padding: 0.05em 0.3em;
+  border-radius: 0.2em;
+  background: var(--slide-code);
+  font-family: var(--font-family-mono);
+  font-size: 88%;
+}
+.dp-slide-body pre {
+  margin: 0.6em 0;
+  padding: 0.7em 0.9em;
+  border-radius: 0.3em;
+  background: var(--slide-code);
+  overflow: hidden;
+}
+.dp-slide-body pre code {
+  padding: 0;
+  background: none;
+}
+.dp-slide-body hr {
+  border: 0;
+  border-top: 1px solid var(--slide-rule);
+}
+.dp-slide-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6em 0;
+  font-size: 90%;
+}
+.dp-slide-body th,
+.dp-slide-body td {
+  padding: 0.35em 0.7em;
+  border: 1px solid var(--slide-rule);
+  text-align: left;
+  vertical-align: top;
+}
+.dp-slide-body th {
+  background: var(--slide-code);
+  font-weight: 650;
+}
+.dp-slide-link {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+/* 页脚：quiet 只有右下角页码；print 另有标题 */
+.dp-slide-foot {
+  position: absolute;
+  right: 3em;
+  bottom: 1.8em;
+  left: 3em;
+  display: flex;
+  align-items: baseline;
+  gap: 1em;
+  color: var(--slide-ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.dp-slide-title {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dp-slide-no {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  margin-left: auto;
+}
+.dp-slide-no-n {
+  font-weight: 650;
+}
+
+/* 导出 PDF 时 data-paper / data-theme 都在 <html> 上（:root 自己），屏幕上 data-paper 在面板容器上，两种写法都要 */
+/* ---- 印刷版式：书刊 ---- */
+[data-paper="print"] .dp-slide {
+  font-family: var(--font-family-brand);
+}
+[data-paper="print"] .dp-slide-body {
+  padding: 4.5em 7em 5em;
+}
+[data-paper="print"] .dp-slide-body h1 {
+  padding-bottom: 0;
+  border-bottom: 0;
+  text-align: center;
+  font-size: 240%;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+[data-paper="print"] .dp-slide-body h2 {
+  font-weight: 600;
+}
+[data-paper="print"] .dp-slide-foot {
+  right: 7em;
+  bottom: 2.2em;
+  left: 7em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--slide-rule);
+}
+[data-paper="print"] .dp-slide-title {
+  display: block;
+}
+[data-paper="print"] .dp-slide-no-of {
+  display: none;
+}
+
+/* ---- 专注写作：舞台 ---- */
+:root[data-theme="light"] [data-paper="focus"] .dp-slide,
+:root[data-theme="light"][data-paper="focus"] .dp-slide,
+:root:not([data-theme]) [data-paper="focus"] .dp-slide,
+:root:not([data-theme])[data-paper="focus"] .dp-slide {
+  --slide-bg: var(--color-text-primary);
+  --slide-ink: var(--color-bg-panel);
+  --slide-ink-soft: color-mix(in srgb, var(--color-bg-panel) 65%, transparent);
+  --slide-rule: color-mix(in srgb, var(--color-bg-panel) 30%, transparent);
+  --slide-code: color-mix(in srgb, var(--color-bg-panel) 14%, transparent);
+}
+:root[data-theme="graphite"] [data-paper="focus"] .dp-slide,
+:root[data-theme="graphite"][data-paper="focus"] .dp-slide,
+:root[data-theme="black"] [data-paper="focus"] .dp-slide,
+:root[data-theme="black"][data-paper="focus"] .dp-slide {
+  --slide-bg: color-mix(in srgb, var(--color-bg-panel) 75%, black);
+}
+[data-paper="focus"] .dp-slide-body {
+  font-size: 200%;
+  padding: 4em 5.5em;
+}
+[data-paper="focus"] .dp-slide-body h1 {
+  border-bottom: 0;
+  font-size: 230%;
+}
+[data-paper="focus"] .dp-slide-foot {
+  right: 3em;
+  bottom: 1.6em;
+}

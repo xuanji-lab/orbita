@@ -4,9 +4,11 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
+import { Menu } from "../../shell/Menu";
 import { PanelFilter, PanelGroupHead, PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { IconButton } from "../../shell/IconButton";
 import { api } from "../../api";
+import { ipcErrorText } from "../../utils/ipc-error.ts";
 import type { ChatSession } from "../chat/useChatSession";
 import {
   countLoadedEntries,
@@ -46,6 +48,7 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
+import type { DocKind } from "@shared/doc";
 import { pathTail, pathWithin } from "../../../../shared/path.ts";
 import { useT } from "../../locale.ts";
 
@@ -109,6 +112,8 @@ export function FilesPanel(props: {
   /** 打开的文件标签（按打开顺序排队）；激活的就是面板正显示的那个 */
   const [tabs, setTabs] = useState<readonly FileTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
+  /** 刚新建的文档 / 演示文稿：对应标签一打开就进「编辑」模式（用户点标签 / 切走再回来则回到常规预览） */
+  const [openInEdit, setOpenInEdit] = useState<ReadonlySet<string>>(new Set());
   /** 文件树显隐（状态，≠显示形态）：只能由「文件」标题开关打开、跨断点缩窄自动折叠 */
   const [treeOn, setTreeOn] = useState(false);
   /** 折叠的根分组（键 = 根的绝对路径，随会话 / 工作区切换重置） */
@@ -310,6 +315,28 @@ export function FilesPanel(props: {
     setTabs((prev) => openTab(prev, root.path, path));
     setActivePath(path);
     if (narrowRef.current) setTreeOn(false);
+  };
+
+  /** 新建文档 / 演示文稿：在当前工作区根下建好，文件树重拉，开成标签并直接进编辑 */
+  const createDocument = (kind: DocKind): void => {
+    const root = tree.roots.find((candidate) => candidate.kind === "workspace" && candidate.exists);
+    if (root === undefined) {
+      setActionError(t.doc.newFailed(t.files.rootsFailed));
+      return;
+    }
+    setActionError(null);
+    void api.docs
+      .create({ sessionId, workspaceId, kind })
+      .then((created) => {
+        tree.refresh();
+        setTabs((prev) => openTab(prev, root.path, created.path));
+        setActivePath(created.path);
+        setOpenInEdit((prev) => new Set(prev).add(created.path));
+        if (narrowRef.current) setTreeOn(false);
+      })
+      .catch((cause: unknown) => {
+        setActionError(t.doc.newFailed(ipcErrorText(cause)));
+      });
   };
 
   /** 单击附图行 = 打开 / 激活附图标签：身份用原图引用（同一张图复用同一个标签），
@@ -667,6 +694,18 @@ export function FilesPanel(props: {
           >
             <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} strokeWidth={1.8} spin={tree.refreshing} />
           </PanelIconButton>
+          <Menu
+            items={[
+              { id: "doc", label: t.doc.newDoc, icon: FEATURE_ICON.doc, onSelect: () => createDocument("doc") },
+              { id: "deck", label: t.doc.newDeck, icon: FEATURE_ICON.slides, onSelect: () => createDocument("slides") },
+            ]}
+            align="end"
+            trigger={({ toggle }) => (
+              <PanelIconButton title={t.doc.newTitle} onClick={toggle}>
+                <Icon name="file-plus" size={16} strokeWidth={1.8} />
+              </PanelIconButton>
+            )}
+          />
           <PanelIconButton title={t.files.attach} onClick={attach}>
             <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
@@ -763,6 +802,8 @@ export function FilesPanel(props: {
               {...(shownTab.name !== undefined ? { sentImage: { name: shownTab.name } } : {})}
               // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
               jump={jump !== null && jump.citation.path === shownTab.path ? jump : null}
+              openInEdit={openInEdit.has(shownTab.path)}
+              onQuote={session.addQuote}
             />
           )}
         </div>

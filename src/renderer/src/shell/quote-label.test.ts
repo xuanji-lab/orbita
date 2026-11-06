@@ -11,6 +11,14 @@ describe("引用 chip 文案", () => {
     assert.equal(quoteSource({ text: "x", messageId: "", role: "user", filePath: "/a/b/notes.md" }, en), "notes.md");
   });
 
+  test("文档里的引用：文件名 · 第几行；演示文稿再加页号（C1：芯片显示所在位置）", () => {
+    const doc = { text: "主要风险", messageId: "", role: "user" as const, filePath: "/ws/Q4 计划.md", lines: { from: 12, to: 14 } };
+    assert.equal(quoteSource(doc, zh), "Q4 计划.md · 第 12–14 行");
+    assert.equal(quoteSource({ ...doc, lines: { from: 9, to: 9 } }, zh), "Q4 计划.md · 第 9 行");
+    assert.equal(quoteSource({ ...doc, slide: 3 }, en), "Q4 计划.md · page 3 · lines 12–14");
+    assert.equal(quoteMeta(doc, zh), "Q4 计划.md · 第 12–14 行 · 4 字");
+  });
+
   test("meta 带字数；截过的如实标出", () => {
     assert.equal(quoteMeta({ text: "a汉😀", messageId: "m", role: "user", turn: 1 }, zh), "第 1 轮 · 你的消息 · 3 字");
     assert.equal(

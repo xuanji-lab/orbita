@@ -62,6 +62,7 @@ import {
   repositionBlocks,
   type ComposerPasteBlock,
 } from "../../shell/paste-blocks.ts";
+import { getOpenDocument } from "../doc-panel/open-document.ts";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import { atMostManual, DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
@@ -2034,7 +2035,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）。
     // 句中粘贴胶囊就地组装成 <pasted-text> 块——位置保留（方案 C），展开的区间本就是
     // 正文。组装后的 text 从这里往下走：排队、投递都以它为准（回填快照另存草稿原文）
-    const raw = composeQuotedMessage(quotes, own);
+    const raw = composeQuotedMessage(quotes, own, getOpenDocument() ?? undefined);
     const text = assemblePasteDraft(raw, pasted);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段

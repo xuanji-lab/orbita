@@ -4,7 +4,7 @@ import { LocaleContext, messagesOf } from "./locale.ts";
 import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
@@ -34,6 +34,7 @@ import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
+import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
   CLOSED_ENTRY,
@@ -76,6 +77,7 @@ import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
+import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -181,6 +183,12 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+
+  /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
+  const docPaper = useMemo(() => {
+    const { paper, locked } = effectivePaper(settings.docPaper, resolvedTheme);
+    return { paper, locked, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
+  }, [settings.docPaper, resolvedTheme, changeSettings]);
 
   /**
    * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
@@ -1335,6 +1343,7 @@ export function App() {
 
   return (
     <LocaleContext.Provider value={locale}>
+    <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
     <AutomationContext.Provider value={automationUi}>
@@ -1497,6 +1506,13 @@ export function App() {
                 focusDone={focus.status.kind === "done"}
                 fileOpen={fileOpenRequest}
               />
+              ) : shownPanel === "docs" || shownPanel === "slides" ? (
+                <DocsPanel
+                  kind={shownPanel === "slides" ? "slides" : "doc"}
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  workspaceId={session.workspaceId}
+                  onQuote={session.addQuote}
+                />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1658,6 +1674,7 @@ export function App() {
     </AutomationContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
+    </DocPaperContext.Provider>
     </LocaleContext.Provider>
   );
 }

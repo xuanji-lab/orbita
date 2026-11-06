@@ -1,0 +1,551 @@
+/*
+ * 文档 / 演示文稿编辑面板（右栏「文档」「演示文稿」，以及文件预览的「编辑」模式）。
+ *
+ * 三套「纸面」同一套结构与交互，只换 `.dp` 上的变量与少数规则（`data-paper`），全部只用
+ * design-system 的 token 组合，不引新颜色：
+ *   quiet 安静编辑台（默认：衬线正文、白纸、细发丝线、新增是 success 绿）
+ *   print 印刷版式（书页式：窄行宽 ≈ 34 个汉字、首行缩进段间不空行、首段首字略大、标题居中小号字距）
+ *   focus 专注写作（深一档的纸色、当前段落以外降低不透明度、正文略大、不打字时工具栏淡出）
+ * 纸面主题（Copybook / Typescript）下恒为 quiet（见 doc-paper.ts）。
+ */
+.dp {
+  --dp-bg: var(--color-bg-panel);
+  --dp-ink: var(--color-text-primary);
+  --dp-rule: var(--color-border-subtle);
+  --dp-new: var(--color-success);
+  --dp-new-soft: var(--color-success-soft);
+  container: dp / inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--dp-bg);
+  color: var(--dp-ink);
+}
+
+/* ---- 工具栏 ---- */
+.dp-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--dp-rule);
+}
+.dp-bar-rule {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--space-1);
+  background: var(--color-border-default);
+}
+.dp-bar-grow {
+  flex: 1 1 auto;
+}
+.dp-status {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.dp-status[data-state="error"] {
+  color: var(--color-danger);
+}
+.dp-note {
+  flex: 0 0 auto;
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--dp-rule);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.dp-note[data-tone="danger"] {
+  color: var(--color-danger);
+}
+
+/* 纸面切换：三枚小色块，名字在 tooltip 与读屏里 */
+.dp-papers {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0 var(--space-2);
+}
+.dp-paper {
+  position: relative;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-panel);
+  cursor: pointer;
+}
+/* 色块：quiet = 白纸；print = 白纸 + 窄栏的文字行；focus = 深一档的纸 + 一行亮字 */
+.dp-paper[data-paper-swatch="print"]::before,
+.dp-paper[data-paper-swatch="focus"]::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  right: 4px;
+  background: repeating-linear-gradient(to bottom, var(--color-text-tertiary) 0 1px, transparent 1px 3px);
+}
+.dp-paper[data-paper-swatch="print"]::before {
+  left: 5px;
+  right: 5px;
+}
+.dp-paper[data-paper-swatch="focus"] {
+  background: var(--color-text-primary);
+  border-color: var(--color-text-primary);
+}
+.dp-paper[data-paper-swatch="focus"]::before {
+  background: repeating-linear-gradient(to bottom, var(--color-bg-panel) 0 1px, transparent 1px 3px);
+}
+.dp-paper[aria-pressed="true"] {
+  border-color: var(--color-text-secondary);
+  box-shadow: 0 0 0 1px var(--color-text-secondary);
+}
+.dp-paper:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* ---- 文档视图 ---- */
+.dp-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dp-page {
+  box-sizing: border-box;
+  max-width: 48em;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-6) 30vh;
+}
+.dp-editor .cm-editor {
+  background: transparent;
+  color: var(--dp-ink);
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-lg);
+}
+.dp-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.dp-editor .cm-scroller {
+  font-family: inherit;
+  line-height: var(--line-height-reading);
+  overflow: visible;
+}
+.dp-editor .cm-content {
+  padding: 0;
+  caret-color: var(--dp-ink);
+  letter-spacing: var(--tracking-reading);
+}
+.dp-editor .cm-line {
+  position: relative;
+  padding: 0;
+}
+.dp-editor .cm-cursor {
+  border-left-color: var(--dp-ink);
+}
+.dp-editor .cm-selectionBackground,
+.dp-editor .cm-focused .cm-selectionBackground {
+  background: color-mix(in srgb, var(--color-info) 22%, transparent);
+}
+.dp-editor .cm-placeholder {
+  color: var(--color-text-tertiary);
+}
+.dp-placeholder-title {
+  font-size: 190%;
+  font-weight: 650;
+  line-height: var(--line-height-tight);
+}
+.dp-placeholder-body {
+  margin-top: var(--space-2);
+}
+
+/* 所见即所得的 markdown：标题放大、加粗变粗、列表是圆点；符号弱化 */
+.dp-editor .cm-h {
+  margin-top: var(--space-2);
+  line-height: var(--line-height-tight);
+  font-weight: 650;
+}
+.dp-editor .cm-h1 {
+  font-size: 190%;
+}
+.dp-editor .cm-h2 {
+  font-size: 135%;
+}
+.dp-editor .cm-h3 {
+  font-size: 112%;
+}
+.dp-editor .cm-blank {
+  height: var(--space-3);
+  line-height: 1;
+}
+.dp-editor .cm-strong {
+  font-weight: 700;
+}
+.dp-editor .cm-em {
+  font-style: italic;
+}
+.dp-editor .cm-icode {
+  padding: 0 var(--space-0-5);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  font-family: var(--font-family-mono);
+  font-size: 88%;
+}
+.dp-editor .cm-syntax {
+  color: var(--color-text-tertiary);
+}
+.dp-editor .cm-link {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.dp-editor .cm-li {
+  padding-left: 1.5em;
+  text-indent: -1.5em;
+}
+.dp-editor .cm-bullet {
+  display: inline-block;
+  width: 1.5em;
+  text-indent: 0;
+  color: var(--color-text-tertiary);
+}
+.dp-editor .cm-quote {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+.dp-editor .cm-codeblock {
+  padding: 0 var(--space-2);
+  background: var(--color-bg-muted);
+  font-family: var(--font-family-mono);
+  font-size: 88%;
+}
+.dp-editor .cm-rule {
+  color: var(--color-text-tertiary);
+}
+
+/* agent 新增 / 改动的行：左边一条标记色边 + 淡底，几秒后淡出（CodeMirror 到点会清掉装饰） */
+.dp-editor .cm-agent-new {
+  margin-left: calc(-1 * var(--space-2));
+  padding-left: var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--dp-new-soft);
+  box-shadow: inset 2px 0 0 var(--dp-new);
+  animation: dp-new-fade 3.2s ease-out forwards;
+}
+@keyframes dp-new-fade {
+  0%,
+  40% {
+    background: var(--dp-new-soft);
+    box-shadow: inset 2px 0 0 var(--dp-new);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dp-editor .cm-agent-new {
+    animation: none;
+  }
+}
+
+/* ---- 演示文稿视图 ---- */
+.dp-slides,
+.dp-slides-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.dp-slides {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+.dp-slides-empty {
+  padding: var(--space-3) 0;
+}
+.dp-thumbs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  overflow-y: auto;
+}
+.dp-thumb {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: none;
+  overflow: hidden;
+  cursor: pointer;
+}
+.dp-thumb[aria-selected="true"] {
+  border-color: var(--color-text-secondary);
+  box-shadow: 0 0 0 1px var(--color-text-secondary);
+}
+.dp-thumb[data-new="true"],
+.dp-slide-stage[data-new="true"] {
+  box-shadow: 0 0 0 2px var(--dp-new);
+  animation: dp-new-ring 3.2s ease-out forwards;
+}
+@keyframes dp-new-ring {
+  0%,
+  40% {
+    box-shadow: 0 0 0 2px var(--dp-new);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+.dp-thumb-n {
+  position: absolute;
+  left: var(--space-1);
+  bottom: var(--space-1);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+.dp-thumb-add {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dp-thumb-add:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+.dp-slide-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dp-slide-stage {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.dp-slide-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+.dp-slide-count {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.dp-text-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dp-text-action:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+.dp-slide-source {
+  flex: 1 0 auto;
+  min-height: 112px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--dp-rule);
+  border-radius: var(--radius-md);
+}
+.dp-slide-source .cm-editor {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+}
+.dp-slide-source .cm-content {
+  padding: 0;
+}
+@container dp (max-width: 420px) {
+  .dp-slides {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .dp-thumbs {
+    flex-direction: row;
+    align-items: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: var(--space-1);
+  }
+  .dp-thumb {
+    width: 96px;
+  }
+  .dp-thumb-add {
+    align-self: center;
+  }
+}
+
+/* ---- 印刷版式 ---- */
+.dp[data-paper="print"] .dp-page {
+  max-width: 34em;
+  padding: var(--space-8) var(--space-6) 30vh;
+}
+/* 段间不空行，改首行缩进（标题 / 列表 / 引用 / 代码块不缩进） */
+.dp[data-paper="print"] .cm-blank {
+  height: 0;
+}
+.dp[data-paper="print"] .cm-line[data-para]:not(.cm-h):not(.cm-li):not(.cm-quote):not(.cm-codeblock) {
+  text-indent: 2em;
+}
+/* 首段首字略大：文档第一段，或第一个标题后面的第一段 */
+.dp[data-paper="print"] .cm-content > .cm-line:first-child[data-para]:not(.cm-h)::first-letter,
+.dp[data-paper="print"] .cm-h + .cm-blank + .cm-line[data-para]:not(.cm-h):not(.cm-li)::first-letter {
+  font-size: 160%;
+  font-weight: 650;
+  line-height: 1;
+}
+/* 标题居中、小号字距 */
+.dp[data-paper="print"] .cm-h {
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-3);
+  text-align: center;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+}
+.dp[data-paper="print"] .cm-h1 {
+  font-size: 150%;
+}
+.dp[data-paper="print"] .cm-h2 {
+  font-size: 118%;
+}
+.dp[data-paper="print"] .cm-h3 {
+  font-size: 100%;
+}
+
+/* ---- 专注写作 ---- */
+:root[data-theme="light"] .dp[data-paper="focus"] {
+  --dp-bg: var(--color-bg-app);
+}
+:root[data-theme="graphite"] .dp[data-paper="focus"],
+:root[data-theme="black"] .dp[data-paper="focus"] {
+  --dp-bg: color-mix(in srgb, var(--color-bg-panel) 78%, black);
+}
+.dp[data-paper="focus"] .dp-page {
+  max-width: 40em;
+  padding: var(--space-8) var(--space-6) 40vh;
+}
+.dp[data-paper="focus"] .dp-scroll .cm-editor {
+  font-size: var(--font-size-xl);
+}
+.dp[data-paper="focus"] .cm-blank {
+  height: var(--space-5);
+}
+.dp[data-paper="focus"] .cm-focused .cm-dim {
+  opacity: 0.38;
+  transition: opacity var(--duration-enter, 200ms) var(--ease-out-quint, ease-out);
+}
+/* 不打字时工具栏淡出：打字时收成近乎透明，鼠标一动 / 键盘焦点进工具栏就回来 */
+.dp[data-paper="focus"] .dp-bar {
+  transition: opacity 400ms ease-out;
+}
+.dp[data-paper="focus"][data-typing="true"] .dp-bar {
+  opacity: 0.12;
+}
+.dp[data-paper="focus"] .dp-bar:focus-within,
+.dp[data-paper="focus"] .dp-bar:hover {
+  opacity: 1;
+}
+/* 演示文稿：不是当前页的缩略图更暗 */
+.dp[data-paper="focus"] .dp-thumb:not([aria-selected="true"]) {
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dp[data-paper="focus"] .dp-bar,
+  .dp[data-paper="focus"] .cm-focused .cm-dim {
+    transition: none;
+  }
+}
+
+/* 文件预览体在「编辑」模式：编辑面板自己管滚动，不要预览体的内边距与外层滚动 */
+.file-preview-body[data-kind="edit"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ---- 右栏面板的空态 / 挑选列表 ---- */
+.dp-picker {
+  padding: var(--space-2) 0;
+}
+.dp-picker-note {
+  padding: 0 var(--space-4);
+}
+.dp-picker-list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3) var(--space-2) 0;
+}
+.dp-picker-head {
+  padding: 0 var(--space-2) var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+.dp-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  text-align: left;
+  cursor: pointer;
+}
+.dp-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dp-picker-age {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}

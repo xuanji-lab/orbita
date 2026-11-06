@@ -38,6 +38,9 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
 /** 右栏面板位里放什么（"channels" 随父子会话面板一起删除：沟通回到两边对话流，子会话面板变收件箱） */
 export type RightPanelKind =
   | "files"
+  /** 文档 / 演示文稿：主工作面（2026-11-07 用户裁决，是「右栏十个常驻入口」的特例），两个入口同一个面板组件 */
+  | "docs"
+  | "slides"
   | "review"
   | "terminal"
   | "drawer"
@@ -152,6 +155,9 @@ export function RightRail(props: {
     { id: "review", group: "session", icon: FEATURE_ICON.review, label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
     // 文件跟审查、会话放一组（用户 2026-11-05）；精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
     { id: "files", group: "session", icon: FEATURE_ICON.files, label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
+    // 文档与演示文稿：写东西、做页的主工作面，紧挨着文件
+    { id: "docs", group: "session", icon: FEATURE_ICON.doc, label: t.doc.panelDoc, lit: props.panel === "docs", onSelect: toggle("docs") },
+    { id: "slides", group: "session", icon: FEATURE_ICON.slides, label: t.doc.panelSlides, lit: props.panel === "slides", onSelect: toggle("slides") },
     ...(props.subSessions === null
       ? []
       : [

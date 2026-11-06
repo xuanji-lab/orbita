@@ -15,9 +15,18 @@ const SUMMARY_CHARS = 20;
  */
 export const QUOTE_ROW_PREVIEW_MAX_CHARS = 300;
 
+/** 文件引用的出处：文件名，演示文稿再加页号，有行号再加行号（`计划.md · 第 12–14 行`） */
+function fileSource(quote: TextQuote, t: Messages): string {
+  const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
+  const parts = [name];
+  if (quote.slide !== undefined) parts.push(t.quote.slide(quote.slide));
+  if (quote.lines !== undefined) parts.push(t.quote.lines(quote.lines.from, quote.lines.to));
+  return parts.join(" · ");
+}
+
 /** 来源：文件取文件名；历史消息是「第 N 轮 · 谁说的」（迁移来的旧块可能没有轮号） */
 export function quoteSource(quote: TextQuote, t: Messages): string {
-  if (quote.filePath !== undefined) return quote.filePath.split(/[\\/]/).pop() || quote.filePath;
+  if (quote.filePath !== undefined) return fileSource(quote, t);
   const who = quote.role === "user" ? t.quote.userMessage : t.quote.agentReply;
   return quote.turn === undefined ? who : `${t.quote.turn(quote.turn)} · ${who}`;
 }
@@ -34,7 +43,7 @@ export function quoteNoteParts(
   const size =
     quote.truncated === true ? t.quote.truncated(countChars(quote.text)) : t.quote.chars(countChars(quote.text));
   if (quote.filePath !== undefined) {
-    return { lead: quote.filePath.split(/[\\/]/).pop() || quote.filePath, who: null, size };
+    return { lead: fileSource(quote, t), who: null, size };
   }
   const who = quote.role === "user" ? t.quote.userMessage : t.quote.agentReply;
   return { lead: quote.turn === undefined ? null : t.quote.turn(quote.turn), who, size };

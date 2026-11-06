@@ -67,6 +67,15 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "文档面板·挑选列表行：改动时间钉在右血线",
+    row: ".dp-picker-row",
+    leading: ".orbita-icon",
+    trailing: ".dp-picker-age",
+    // .dp-picker-row 的左右内边距 var(--space-2)；面板里没有已有文档（挑选列表不出现）时跳过
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
     name: "能力面板·行：开关钉在右血线",
     row: ".ability-row",
     leading: ".ability-dot-slot",

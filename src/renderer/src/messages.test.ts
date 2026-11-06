@@ -24,6 +24,9 @@ const ALLOWED_LATIN = new Set([
   "SSE",
   "HTTP",
   "Markdown",
+  // 文档面板的导出格式名
+  "Word",
+  "PDF",
   "mermaid",
   "stdio",
   "http",

@@ -82,6 +82,9 @@ import layoutDashboard from "../../../../design-system/assets/icons/lucide/layou
 import layoutGrid from "../../../../design-system/assets/icons/lucide/layout-grid.svg?raw";
 import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw";
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
+import filePlus from "../../../../design-system/assets/icons/lucide/file-plus.svg?raw";
+import heading from "../../../../design-system/assets/icons/lucide/heading.svg?raw";
+import bold from "../../../../design-system/assets/icons/lucide/bold.svg?raw";
 import listFilter from "../../../../design-system/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../design-system/assets/icons/lucide/list-todo.svg?raw";
 import listTree from "../../../../design-system/assets/icons/lucide/list-tree.svg?raw";
@@ -194,6 +197,9 @@ const ICONS = {
   "file-spreadsheet": fileSpreadsheet,
   "file-video-2": fileVideo2,
   presentation,
+  heading,
+  bold,
+  "file-plus": filePlus,
   "scroll-text": scrollText,
   "fold-vertical": foldVertical,
   "flask-conical": flaskConical,

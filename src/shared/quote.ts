@@ -181,7 +181,8 @@ export const QUOTE_GUIDELINE = [
   '<open_document path="…" kind="doc|slides"/> at the start of a message means the user has that file open ' +
     'in the document panel beside the chat; "the document", "the slides", "this page" mean it. kind=doc is ' +
     "plain Markdown. kind=slides is a Marp-style deck: optional front matter (keep `marp: true`), pages " +
-    "separated by a line containing only `---`. Change the file with your normal read / edit / write tools — " +
+    "separated by a line containing only `---`; pages render plain Markdown only (headings, lists, tables, bold, " +
+    "code) — no raw HTML and no images, so for columns use a table. Change the file with your normal read / edit / write tools — " +
     "the panel merges changes live, so prefer small edits to rewriting the file, and never touch pages or " +
     "paragraphs you were not asked about.",
   "</orbita-quotes>",
