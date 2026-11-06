@@ -5,6 +5,7 @@ import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   PluginConfigValue,
+  PluginDraftEntry,
   PluginDraftSnapshot,
   PluginInstallRequest,
   PluginInstallResult,
@@ -63,6 +64,8 @@ export const pluginApi = {
   /** 草稿预览（一）：工作区里还没安装的插件文件夹的扫描（路径必须在该工作区根内，主进程校验）；没变回 unchanged */
   draftLoad: (request: PluginDraftLoadRequest): Promise<PluginDraftSnapshot> =>
     ipcRenderer.invoke(ipcChannels.pluginDraftLoad, request),
+  /** 「正在做」列表：所有工作区里有清单、还没安装的插件文件夹，带最近在做它的会话（用户中途离开后回来的入口） */
+  drafts: (): Promise<PluginDraftEntry[]> => ipcRenderer.invoke(ipcChannels.pluginDrafts),
   /** 草稿预览（二）：同一个草稿文件夹的看板 */
   draftBoardLoad: (request: PluginDraftLoadRequest): Promise<PluginBoardSnapshot> =>
     ipcRenderer.invoke(ipcChannels.pluginDraftBoardLoad, request),

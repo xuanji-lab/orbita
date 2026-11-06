@@ -45,6 +45,8 @@ let store: PluginStore;
 let enabled = true;
 let sessions: Map<string, { cwd: string; workspaceId: string | null }>;
 let drafts: PluginDraftEvent[];
+let remembered: { path: string; sessionId: string }[];
+let rememberFails = false;
 let installedCalls = 0;
 let installedInfo: { name: string; sessionId: string }[];
 let requests: PluginAgentRequests;
@@ -59,6 +61,10 @@ function makeRequests(): PluginAgentRequests {
     session: async (id) => sessions.get(id) ?? null,
     workspace: async (id) => (id === "ws-1" ? { name: "文献组", path: workspaceRoot } : null),
     draft: (event) => drafts.push(event),
+    rememberDraft: async (path, sessionId) => {
+      remembered.push({ path, sessionId });
+      if (rememberFails) throw new Error("disk full");
+    },
     installed: (info) => {
       installedCalls += 1;
       installedInfo.push(info);
@@ -110,6 +116,8 @@ beforeEach(async () => {
   userSkills = [];
   enabled = true;
   drafts = [];
+  remembered = [];
+  rememberFails = false;
   installedCalls = 0;
   installedInfo = [];
   sessions = new Map([
@@ -468,6 +476,8 @@ describe("previewDraft：只扫描、不装；成功后让右栏打开「正在�
     assert.equal(outcome.installed, false);
     assert.equal(outcome.issues.some((line) => /names the skill "draft-scan"/.test(line) && /must exist before install_plugin/.test(line)), true);
     assert.deepEqual(drafts, [{ type: "pluginDraft", sessionId: S, path: await realpath(root) }]);
+    // 「正在做」列表的「回到对话」靠这一笔：记的是真实路径 + 会话 id
+    assert.deepEqual(remembered, [{ path: await realpath(root), sessionId: S }]);
     assert.deepEqual(await store.records(), []);
     assert.equal(installedCalls, 0);
   });
@@ -510,6 +520,15 @@ describe("previewDraft：只扫描、不装；成功后让右栏打开「正在�
     enabled = true;
     assert.equal((await preview(root, "nope")).ok, false);
     assert.deepEqual(drafts, []);
+    assert.deepEqual(remembered, []); // 失败的预览不记账
+  });
+
+  test("记账本写失败：预览照常成功，pluginDraft 照发（账本只是提示）", async () => {
+    const root = await makeDraft();
+    rememberFails = true;
+    const outcome = await preview(root);
+    assert.equal(outcome.ok, true);
+    assert.equal(drafts.length, 1);
   });
 
   test("同名插件已装（在改一个已装的）：installed 为 true，且这个文件夹自己的同名不算冲突", async () => {
