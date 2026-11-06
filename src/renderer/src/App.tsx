@@ -26,6 +26,8 @@ import {
 import { SettingsView } from "./features/settings/SettingsView";
 import { BoardWeekView } from "./features/board/BoardWeekView";
 import type { SettingsTab } from "./features/settings/settings-tabs.ts";
+import { OnboardingView } from "./features/onboarding/OnboardingView";
+import { shouldAutoOpenOnboarding } from "./features/onboarding/onboarding-nav.ts";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
@@ -145,10 +147,18 @@ export function App() {
     }
   }, []);
 
+  /** 设置真的从主进程读回来了没有（读回之前手里是默认值，「看没看过引导」不能按它判） */
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   useEffect(() => {
     void refresh();
     // 读不到设置就用默认——主题是可以随时再选的，不值得为此让外壳起不来
-    void api.settings.get().then(setSettings).catch(() => setSettings(DEFAULT_SETTINGS));
+    void api.settings
+      .get()
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsLoaded(true);
+      })
+      .catch(() => setSettings(DEFAULT_SETTINGS));
   }, [refresh]);
 
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
@@ -1108,6 +1118,30 @@ export function App() {
     setRightPanel("automation");
     if (automationId !== undefined) setAutomationFocus((current) => ({ id: automationId, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
+  /**
+   * 新手引导：全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次；
+   * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 通用「再看一遍」打开（不改这个键）。
+   */
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const onboardingAutoRef = useRef(false);
+  useEffect(() => {
+    if (onboardingAutoRef.current || !shouldAutoOpenOnboarding(settingsLoaded, settings)) return;
+    onboardingAutoRef.current = true;
+    setOnboardingOpen(true);
+  }, [settingsLoaded, settings]);
+  const closeOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    if (settings.onboardingSeen !== true) changeSettings({ onboardingSeen: true });
+  }, [settings.onboardingSeen, changeSettings]);
+  /** 「放进输入框试试」：关掉引导与设置页，把那句话放进当前看着的会话（首页就是新任务）的输入框 */
+  const tryFromOnboarding = useCallback(
+    (text: string) => {
+      closeOnboarding();
+      setOverlay(null);
+      session.setDraft(text);
+    },
+    [closeOnboarding, session],
+  );
   const automationUi = useMemo<AutomationUi>(
     () => ({ automations: automations.automations, openPanel: openAutomationPanel, act: automations.act }),
     [automations.automations, automations.act, openAutomationPanel],
@@ -1314,6 +1348,7 @@ export function App() {
                   onOpenSession: openDraftSession,
                 }}
                 onTab={setSettingsTab}
+                onOpenOnboarding={() => setOnboardingOpen(true)}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
@@ -1518,6 +1553,7 @@ export function App() {
           }}
         />
       </div>
+      {onboardingOpen && <OnboardingView theme={resolvedTheme} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
