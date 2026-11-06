@@ -108,9 +108,20 @@ export function groupAutomations(
   return groups;
 }
 
-/** 面板里能「展开看运行记录」的：有过运行记录的任务 */
-export function hasRuns(automation: Automation): boolean {
-  return automation.runs.length > 0;
+/** 能「立即运行」：排期中或暂停的任务，且此刻没有一次运行在跑（列表行悬停的 ▶ 与详情页的按钮共用） */
+export function canRunNow(automation: Automation): boolean {
+  return (automation.status === "active" || automation.status === "paused") && rowStateOf(automation) !== "running";
+}
+
+/** 详情页按钮排：立即运行出不出、第二个按钮是暂停 / 继续 / 重新启动（按状态） */
+export function detailActions(automation: Automation): { runNow: boolean; toggle: "pause" | "resume" | "restart" } {
+  const toggle = automation.status === "active" ? "pause" : automation.status === "paused" ? "resume" : "restart";
+  return { runNow: canRunNow(automation), toggle };
+}
+
+/** 「做什么」卡里指令太长就折起（行数或字数超过其一） */
+export function promptIsLong(prompt: string): boolean {
+  return prompt.length > 140 || prompt.split("\n").length > 4;
 }
 
 /** 运行记录：默认只列最近 30 次，其余按「更早 N 次」折起（不删，只是不默认铺开） */
