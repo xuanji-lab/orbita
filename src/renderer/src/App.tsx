@@ -495,8 +495,12 @@ export function App() {
   /** 下一次右栏变化是「按会话恢复」而不是用户打开的（面板打开次数要跳过它） */
   const panelRestoredRef = useRef(false);
   const panelMainIdRef = useRef(mainOpenId);
-  /** 一次性：下一条**还没记过面板的新会话**拿到 id 时，恢复成这个面板（「和智能体一起做一个」用） */
-  const carryPanelRef = useRef<RightPanelKind | null>(null);
+  /**
+   * 一次性：恢复成这个面板，而不是会话自己的记忆。`sessionId` 为 null = 下一条**还没记过面板的新会话**拿到 id 时
+   * （「和智能体一起做一个」用）；给了 id = 只在切到**那一条**会话时（「正在做」的「回到对话」用：它早就有自己的面板记忆）。
+   * 只带这一次，之后切会话照会话记忆。
+   */
+  const carryPanelRef = useRef<{ panel: RightPanelKind; sessionId: string | null } | null>(null);
   useEffect(() => {
     const previous = panelMainIdRef.current;
     panelMainIdRef.current = mainOpenId;
@@ -505,8 +509,9 @@ export function App() {
     panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
     const target = sessionOf(mainOpenId);
     let recalled = recallPanel(panelMemoryRef.current, target);
-    if (carryPanelRef.current !== null && target !== null && !panelMemoryRef.current.has(target)) {
-      recalled = carryPanelRef.current;
+    const carry = carryPanelRef.current;
+    if (carry !== null && target !== null && (carry.sessionId === null ? !panelMemoryRef.current.has(target) : carry.sessionId === target)) {
+      recalled = carry.panel;
       carryPanelRef.current = null;
     }
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
@@ -978,7 +983,7 @@ export function App() {
     setOverlay(null);
     // 一边聊一边看插件页（用户 2026-11-05）：这条新会话拿到 id 时，右栏恢复成插件页而不是「没记过 = 关」。
     // 只带这一次；之后切会话照会话记忆（用户定：插件页不做应用级例外）
-    carryPanelRef.current = "plugins";
+    carryPanelRef.current = { panel: "plugins", sessionId: null };
     session.startTaskWithDraft(workspace, t.plugins.makeWithAgentDraft);
   }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
@@ -1070,13 +1075,24 @@ export function App() {
     setOpenedDraft(draft);
     setRightPanel("plugins");
   }, []);
-  /** 「正在做」组里的「回到对话」：退出设置、打开做这个插件的那条会话 */
+  /**
+   * 「正在做」组里的「回到对话」：退出设置、打开做这个插件的那条会话，右栏直接是这份草稿的「正在做」长页
+   * （用户回去就是要接着做它）：草稿写进那条会话的 pluginDrafts，右栏一次性带上插件页（carry 只带这一次，
+   * 之后切走切回照那条会话自己的面板记忆）。已经在看那条会话时没有「切到」，直接开右栏。
+   */
   const openDraftSession = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, draftPath: string) => {
       setOverlay(null);
+      setOpenedDraft(null);
+      setPluginDrafts((drafts) => putDraft(drafts, sessionId, draftPath));
+      if (sessionId === mainSessionId) {
+        setRightPanel("plugins");
+        return;
+      }
+      carryPanelRef.current = { panel: "plugins", sessionId };
       void session.openSession(sessionId);
     },
-    [session],
+    [session, mainSessionId],
   );
   const sessionDraft = draftOf(pluginDrafts, mainSessionId);
   const shownDraft: PluginDraftTarget | null =

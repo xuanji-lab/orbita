@@ -76,8 +76,8 @@ export function PluginsView(props: {
   onLeaveDraft?: () => void;
   /** 点「正在做」组里的一行：App 把它设成要看的草稿（全屏版还要先退出设置、打开右栏插件页） */
   onOpenDraft: (draft: PluginDraftTarget) => void;
-  /** 点「正在做」组里的「回到对话」：打开做它的那条会话（全屏版随之退出设置） */
-  onOpenSession: (sessionId: string) => void;
+  /** 点「正在做」组里的「回到对话」：打开做它的那条会话，右栏直接是该草稿的长页（全屏版随之退出设置） */
+  onOpenSession: (sessionId: string, draftPath: string) => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
@@ -567,7 +567,7 @@ function PluginRow(props: { view: PluginView; onOpen: () => void; onToggle: () =
 function DraftsSection(props: {
   groups: ReturnType<typeof groupDrafts>;
   onOpen: (draft: PluginDraftTarget) => void;
-  onOpenSession: (sessionId: string) => void;
+  onOpenSession: (sessionId: string, draftPath: string) => void;
 }) {
   const t = useT().plugins;
   const total = props.groups.reduce((sum, group) => sum + group.items.length, 0);
@@ -594,7 +594,7 @@ function DraftsSection(props: {
   );
 }
 
-function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftTarget) => void; onOpenSession: (sessionId: string) => void }) {
+function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftTarget) => void; onOpenSession: (sessionId: string, draftPath: string) => void }) {
   const messages = useT();
   const t = messages.plugins;
   const { entry } = props;
@@ -624,7 +624,7 @@ function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftT
         </span>
       </button>
       {sessionId !== null && (
-        <button type="button" className="pl-btn" title={t.draftGoToChatTip(entry.sessionTitle)} onClick={() => props.onOpenSession(sessionId)}>
+        <button type="button" className="pl-btn" title={t.draftGoToChatTip(entry.sessionTitle)} onClick={() => props.onOpenSession(sessionId, entry.path)}>
           <Icon name="message-square" size={13} strokeWidth={1.8} />
           {t.draftGoToChat}
         </button>

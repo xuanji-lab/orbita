@@ -86,7 +86,7 @@ export function SettingsView(props: {
     onOpenBoard: (pluginName: string) => void;
     /** 「正在做」组里点一行 / 点「回到对话」：退出设置，右栏开该草稿 / 打开那条会话 */
     onOpenDraft: (draft: PluginDraftTarget) => void;
-    onOpenSession: (sessionId: string) => void;
+    onOpenSession: (sessionId: string, draftPath: string) => void;
   };
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
   onCollapseRail: (() => void) | null;
