@@ -68,6 +68,14 @@ describe("update_plan", () => {
     }
   });
 
+  test("用户中途提计划外的新活：先进计划（自成步骤 + why）再开干，并行的旧活在步骤里写明", () => {
+    const { tool } = setup();
+    const guidelines = (tool.promptGuidelines ?? []).join("\n");
+    assert.match(guidelines, /user's new message asks for something the current plan does not cover/);
+    assert.match(guidelines, /update the plan before you start on it/);
+    assert.match(guidelines, /keeps running alongside/);
+  });
+
   test("计划外的活要先加步骤、顺手看到的写 later：规则在 promptGuidelines（随工具启用、整会话不变），不只在说明里", () => {
     const { tool } = setup();
     const guidelines = (tool.promptGuidelines ?? []).join("\n");
