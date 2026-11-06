@@ -60,7 +60,6 @@ test("turnNumberOf：回显条目在 user 记录里的位置；还没落盘（�
 
 function makeHarness(overrides: {
   transcript?: SessionRecord[] | null;
-  on?: boolean;
   meta?: { workspaceId: string | null; cwd: string } | null;
   /** null = 没配家务活模型；缺席 = 装一份默认的 */
   chore?: MemoryChoreModel | null;
@@ -75,7 +74,6 @@ function makeHarness(overrides: {
     },
     readMeta: async () =>
       overrides.meta === undefined ? { workspaceId: "ws-1", cwd: "/c" } : overrides.meta,
-    isMemoryOn: async () => overrides.on ?? true,
     readChore: async () =>
       overrides.chore === undefined
         ? { provider: { id: "p", api: "openai", baseUrl: "https://x", apiKey: "k", models: [] }, modelId: "m" }
@@ -225,16 +223,7 @@ test("回答正文为空的轮不交并留痕", async () => {
   assert.match(logs[0] ?? "", /不进事件段——回答正文为空/);
 });
 
-test("开关在 settle 时关了 / meta 读不到：不交并留痕；没配家务活模型：照交（chore 缺席）", async () => {
-  const off = makeHarness({ on: false });
-  off.tracker.begin("s1", "x");
-  off.tracker.onEvent(userEcho(1));
-  off.tracker.onEvent(assistantDone());
-  off.tracker.onEvent(phase("idle"));
-  await tick();
-  assert.equal(off.settled.length, 0); // 开关关了：不构建
-  assert.match(off.logs[0] ?? "", /第 1 轮不进事件段——落定时实验开关已关/);
-
+test("meta 读不到：不交并留痕；没配家务活模型：照交（chore 缺席）", async () => {
   const noMeta = makeHarness({ meta: null });
   noMeta.tracker.begin("s1", "x");
   noMeta.tracker.onEvent(userEcho(1));
@@ -349,7 +338,6 @@ test("复现：工具调用轮——idle 时最终回答还没落盘，回答正
     const tracker = new MemoryTurnTracker({
       load: (id) => store.load(id),
       readMeta: async () => ({ workspaceId: null, cwd: "/c" }),
-      isMemoryOn: async () => true, // 真机上 settings.read 有缓存，同样是一个微任务就回来
       readChore: async () => undefined,
       settle: (payload) => {
         settled.push(payload);

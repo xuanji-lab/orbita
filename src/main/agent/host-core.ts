@@ -568,7 +568,7 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
-  /** 插件（实验功能 plugins）：install_plugin 的回执（立即回，不等用户）。同上：不 ensure、发完即回。 */
+  /** 插件：install_plugin 的回执（立即回，不等用户）。同上：不 ensure、发完即回。 */
   answerPluginInstall(requestId: string, outcome: PluginAgentInstallOutcome): void {
     this.child?.postMessage({ type: "pluginInstallResult", requestId, ...outcome } satisfies AgentCommand);
   }
@@ -589,7 +589,7 @@ export class AgentHostCore {
   }
 
   /**
-   * 记忆召回（实验功能 memory-system）：memoryRecallRequest 的回执。同
+   * 记忆召回：memoryRecallRequest 的回执。同
    * answerReadTask 的理由：不 ensure、发完即回——调用方（主进程的转发层）自己
    * 兑超时，agent 侧另有一层硬超时兑底。
    */

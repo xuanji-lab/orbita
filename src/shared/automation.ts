@@ -1,5 +1,5 @@
 /**
- * 自动化（实验功能 automation）的契约真源 —— IPC 四层的第 1 层。
+ * 自动化的契约真源 —— IPC 四层的第 1 层。
  *
  * 自动化 = 一条**定时任务**：到点把一段指令交给 agent 去跑。两种去处（ZCode 的 targetTaskId 思路）：
  * - `new_session`：每次在该工作区**新开一条会话**跑（会话 meta 记 `automationId`，不进左侧栏，

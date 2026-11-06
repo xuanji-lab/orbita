@@ -24,7 +24,6 @@ import { pathParts } from "../chat/path-parts.ts";
 import { Stats } from "../chat/FileTurnCard";
 import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
 import { MemoryTab } from "../memory/MemoryTab";
-import { useExperimentalFeature } from "../../experimental";
 
 /**
  * 悬停动作键的几何（与文件面板树行同一套 --list-item-compact 行配方：22px 方块、
@@ -70,10 +69,7 @@ export function ReviewPanel(props: {
   memoryFocus: number | null;
 }) {
   const t = useT();
-  const memoryOn = useExperimentalFeature("memory-system");
   const [tab, setTab] = useState<"changes" | "excerpts" | "memory">("changes");
-  // 实验开关关掉时记忆页签整个不在：停在它上面的退回改动页签
-  if (tab === "memory" && !memoryOn) setTab("changes");
   useEffect(() => {
     if (props.memoryFocus !== null) setTab("memory");
   }, [props.memoryFocus]);
@@ -329,12 +325,10 @@ export function ReviewPanel(props: {
               <Icon name="quote" size={12} strokeWidth={1.8} />
               {t.review.tabExcerpts}
             </button>
-            {memoryOn && (
-              <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
-                <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
-                {t.review.tabMemory}
-              </button>
-            )}
+            <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
+              <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
+              {t.review.tabMemory}
+            </button>
           </div>
           <div className="cap-slot-right">
             {/* 审查来源（本任务 / 工作区 / 分支）：收成图标键（点开同一个菜单，tooltip

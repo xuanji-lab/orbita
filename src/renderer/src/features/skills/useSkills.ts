@@ -16,7 +16,7 @@ import type { Workspace } from "@shared/workspace";
 export interface SkillsState {
   skills: SkillMeta[];
   /**
-   * 插件里的技能（实验功能 plugins，SkillMeta 形状）。**只给 `/` 选取用**：右栏技能列表本身
+   * 插件里的技能（SkillMeta 形状）。**只给 `/` 选取用**：右栏技能列表本身
    * 仍只是你自己的技能（插件的技能在插件页管），但点名规则与用户技能一致，选取面要选得到。
    */
   pluginSkills: SkillMeta[];
@@ -53,7 +53,7 @@ export interface SkillsState {
  * 刷新会不同步：侧栏删工作区时这里的旧副本还在，Skills 列表 / 韦恩图 / 矩阵
  * 都会显示已经被删掉的工作区（2026-09-23 真机复现的 bug）。
  */
-export function useSkills(active: boolean, workspaces: Workspace[], pluginsOn = false): SkillsState {
+export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [pluginSkills, setPluginSkills] = useState<SkillMeta[]>([]);
   const [load, setLoad] = useState<LoadState>(LOADING);
@@ -75,17 +75,13 @@ export function useSkills(active: boolean, workspaces: Workspace[], pluginsOn = 
     [],
   );
 
-  /** 开关关着不读：插件功能关着时选取面一字不多。读失败静默——选取面少几条比整面报错好。 */
+  /** 插件里的技能。读失败静默——选取面少几条比整面报错好。 */
   const refreshPluginSkills = useCallback(() => {
-    if (!pluginsOn) {
-      setPluginSkills([]);
-      return;
-    }
     void api.plugin
       .skills()
       .then(setPluginSkills)
       .catch(() => setPluginSkills([]));
-  }, [pluginsOn]);
+  }, []);
 
   const refreshServers = useCallback(() => {
     void api.mcp

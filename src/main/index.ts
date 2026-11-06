@@ -408,19 +408,11 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
-  // 记忆服务（实验功能 memory-system）的开关观察：开了就拉起、关了就停
-  // （memoryHost 在后面定义；设置写入只发生在窗口起来之后，那时已就绪）。
-  // 其余设置的写入也会过这道：开关没变时拉起 / 停都是空操作，无副作用
-  registerSettingsIpc(settings, (next) => {
-    // 自动化：开关刚打开立刻 tick 一次（不等 30 秒）；「阻止睡眠」设置变了按当前在跑数重对一次。
-    // 两者都在窗口起来之后才可能被触发，此时 automationScheduler / keepAwake 已就绪
-    if (next.experimentalFeatures?.["automation"] === true) void automationScheduler.tick().catch(() => undefined);
+  // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
+  // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
+  // 不再随设置开关拉起 / 停
+  registerSettingsIpc(settings, () => {
     void keepAwake.sync().catch(() => undefined);
-    if (next.experimentalFeatures?.["memory-system"] === true) {
-      void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
-    } else {
-      memoryHost?.stop();
-    }
   });
   registerWindowIpc();
   const initialSettings = await settings.read();
@@ -555,7 +547,7 @@ void app.whenReady().then(async () => {
       );
       return;
     }
-    // 插件（实验功能 plugins）：agent 的 install_plugin / preview_plugin / list_plugins，都立即回执（不等用户）。
+    // 插件：agent 的 install_plugin / preview_plugin / list_plugins，都立即回执（不等用户）。
     // 任何路径都回执，否则 agent 进程里那次工具调用挂到超时
     if (event.type === "pluginInstallRequest") {
       void pluginAgent
@@ -686,7 +678,7 @@ void app.whenReady().then(async () => {
         );
       return;
     }
-    // 记忆系统（实验功能 memory-system）：agent 的轮前召回问答——转发给记忆服务
+    // 记忆系统：agent 的轮前召回问答——转发给记忆服务
     // 进程（主进程按 scope 解析作用域），任何路径都回执（readTaskRequest 同款
     // 纪律：不回的话 agent 进程里那次调用挂到超时）。服务不在先试拉一把（开关
     // 刚开的第一轮 / 崩溃后的一次自愈）；拉不起 / 超时都回空命中，不拦开轮
@@ -760,7 +752,7 @@ void app.whenReady().then(async () => {
     // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
     // 在 record 之前喂：与 recorder 各自独立，互不阻塞
     intentIngest.onEvent(event);
-    // 记忆构建（实验功能 memory-system）同一处喂：盯轮落定，正常结束的一轮
+    // 记忆构建同一处喂：盯轮落定，正常结束的一轮
     // 交给记忆服务（跟踪器在下面定义，TDZ 说明同 intentIngest）
     memoryTurns.onEvent(event);
     record(event);
@@ -808,7 +800,7 @@ void app.whenReady().then(async () => {
     }
   };
   /*
-   * 记忆系统（实验功能 memory-system）的主进程两件套：
+   * 记忆系统的主进程两件套：
    * 1. 记忆服务进程的管家（开关开着时拉起，与 agent 进程同级的 utility 进程，
    *    env 沿 agent 那份——模型目录缓存的 env 变量在里面）；
    * 2. 轮次跟踪器：submit 时 begin（ipc.ts 已判根会话 + 用户原话），事件泵喂
@@ -899,11 +891,9 @@ void app.whenReady().then(async () => {
       return detail === null ? null : { transcript: detail.transcript };
     },
     readMeta: (id) => sessions.readMeta(id),
-    isMemoryOn: async () =>
-      (await settings.read()).experimentalFeatures?.["memory-system"] === true,
     readChore: () => choreModelPayload(settings, providers),
     settle: async (payload) => {
-      // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）。
+      // 轮后兑现时确保服务在跑（崩溃后自愈；已拉起时这里是空操作）。
       // 没拉起来照样交给 host：它在「服务不在」时记一行带会话 / 轮号的丢弃诊断。
       // 抛错由跟踪器的 deliver 接住记日志（settle 的 Promise 在那里被 await）
       await ensureMemoryService();
@@ -912,12 +902,11 @@ void app.whenReady().then(async () => {
   });
   /**
    * 会话回退后的记忆钩子：第 fromTurn 轮起被撤回 → 服务截段（重说的轮照常收）+ 停用来源轮
-   * 全被撤回的条目。只给根会话发（子会话不写记忆，发了也是一次白扫全库）；开关关着不发、
-   * 不为它拉起服务。失败只记日志，回退本身已经完成
+   * 全被撤回的条目。只给根会话发（子会话不写记忆，发了也是一次白扫全库）。
+   * 失败只记日志，回退本身已经完成
    */
   const memoryOnReverted = async (sessionId: string, fromTurn: number): Promise<void> => {
     try {
-      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) return;
       const meta = await sessions.readMeta(sessionId);
       if (meta === null || meta.parentId !== undefined) return;
       await ensureMemoryService();
@@ -926,13 +915,11 @@ void app.whenReady().then(async () => {
       console.error("[memory] 回退后的记忆停用 / 截段没送成（不影响回退）", cause);
     }
   };
-  // 启动时开关已开：先拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
+  // 启动即拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
   // 半路提取续跑），不等第一轮对话才动。失败只记日志（下次轮后再试拉起）
-  if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
-    void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
-  }
+  void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
   /*
-   * 从历史生成（实验功能 memory-system）：开关打开前的聊天记录按历史时间正序逐轮喂给
+   * 从历史生成：记忆系统上线前的聊天记录按历史时间正序逐轮喂给
    * 记忆服务。「处理过没有」只问段文件（主进程只读），任务快照落在 memory/ 外面——
    * memory/ 只有服务一个写者
    */
@@ -947,9 +934,6 @@ void app.whenReady().then(async () => {
       return choice === undefined ? null : { providerId: choice.providerId, modelId: choice.modelId };
     },
     prepare: async () => {
-      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) {
-        return "记忆实验开关没开";
-      }
       const chore = await choreModelPayload(settings, providers);
       if (chore === undefined) return "没配家务活模型（设置 › 模型服务 › 家务活模型）";
       memoryHost.setChore(chore);
@@ -968,7 +952,7 @@ void app.whenReady().then(async () => {
     emit: (status) => broadcastAgentEvent({ type: "memoryHistory", status }),
     gapMs: EPISODE_IDLE_CLOSE_MS,
   });
-  // 记忆库的读写面（实验功能 memory-system）：读在主进程直读 JSONL，写转发给
+  // 记忆库的读写面：读在主进程直读 JSONL，写转发给
   // 记忆服务（唯一写者）；会话标题 / 工作区名这些连接属性在这里注入
   registerMemoryIpc({
     history: memoryHistory,
@@ -993,11 +977,7 @@ void app.whenReady().then(async () => {
         if (vectorChangeCancelsDownload(before, effectiveVectorSettings(next.vector))) {
           memoryHost.cancelModelDownload();
         }
-        if (next.experimentalFeatures?.["memory-system"] === true) {
-          await ensureMemoryService();
-        } else {
-          await syncVectorConfig();
-        }
+        await ensureMemoryService();
       },
       userDataDir: configDir,
       device: () => ({
@@ -1093,7 +1073,7 @@ void app.whenReady().then(async () => {
   });
   registerSkillIpc(skills);
   /*
-   * 插件（实验功能 plugins）：记录 / 副本 / 数据 / 归档都在 userData 下，不写进上面这个 skills
+   * 插件：记录 / 副本 / 数据 / 归档都在 userData 下，不写进上面这个 skills
    * 目录也不写 mcp.json。冲突检测与开轮装配要避开用户自己的技能，所以把它们的身份读法注入进去
    * （missing 的断链不算：它没有真实文件）。敏感配置值共用 provider 那把密钥存储。
    */
@@ -1111,7 +1091,6 @@ void app.whenReady().then(async () => {
   const draftSessions = new DraftSessionBook(join(configDir, "plugin-draft-sessions.json"));
   const pluginAgent = new PluginAgentRequests({
     plugins,
-    enabled: async () => (await settings.read()).experimentalFeatures?.["plugins"] === true,
     session: async (sessionId) => {
       const meta = await sessions.readMeta(sessionId);
       return meta === null ? null : { cwd: meta.cwd, workspaceId: meta.workspaceId };
@@ -1161,7 +1140,6 @@ void app.whenReady().then(async () => {
   const pluginBoards = new PluginBoards({
     plugins,
     templates: boardTemplates,
-    enabled: async () => (await settings.read()).experimentalFeatures?.["plugins"] === true,
     session: async (sessionId) => {
       const meta = await sessions.readMeta(sessionId);
       return meta === null ? null : { cwd: meta.cwd, workspaceId: meta.workspaceId };
@@ -1270,13 +1248,11 @@ void app.whenReady().then(async () => {
   await applyEnvProxy();
 
   /*
-   * 自动化（实验功能 automation）：定时任务的存盘、调度与「阻止睡眠」。开关关着时调度器每次 tick 直接
+   * 自动化：定时任务的存盘、调度与「阻止睡眠」。开关关着时调度器每次 tick 直接
    * 返回、工具不注册、list 回空。两种去处都走 agentIpc.submitTurn——与用户发消息、delegate 同一套开轮装配。
    * 睡眠唤醒（powerMonitor resume）立刻 tick 一次：Mac 睡眠时定时器不走。
    */
   const automationStore = new AutomationStore(configDir);
-  const automationEnabled = async (): Promise<boolean> =>
-    (await settings.read()).experimentalFeatures?.["automation"] === true;
   const keepAwake = new KeepAwake(
     powerSaveBlocker,
     async () => (await settings.read()).automationKeepAwake === true,
@@ -1292,7 +1268,6 @@ void app.whenReady().then(async () => {
   const automationScheduler = new AutomationScheduler({
     store: automationStore,
     now: Date.now,
-    enabled: automationEnabled,
     launch: (input) => launchAutomationRun(launchDeps, input),
     deliver: (input) => deliverAutomationRun(launchDeps, input),
     sessionExists: async (sessionId) => (await sessions.readMeta(sessionId)) !== null,
@@ -1309,16 +1284,15 @@ void app.whenReady().then(async () => {
     workspaces,
     // 选插件：这个工作区此刻装着、启用着、且带看板的插件（没有看板的插件，自动化到点没有东西可显示）
     plugins: { enabledIn: (workspaceId) => boardPluginsIn(plugins, workspaceId) },
-    enabled: automationEnabled,
     now: Date.now,
     newId: randomUUID,
     notify: broadcastAutomationEvent,
   };
   registerAutomationIpc(automationDeps);
-  // 全局周看板：自动化的运行记录 + 会话里 show_plugin_board 的快照；自动化关着就没有运行与排期
+  // 全局周看板：自动化的运行记录 + 会话里 show_plugin_board 的快照
   registerBoardIpc({
     week: {
-      automations: async () => ((await automationEnabled()) ? automationStore.list() : []),
+      automations: () => automationStore.list(),
       recordPath: (sessionId) => sessions.recordPath(sessionId),
       now: Date.now,
     },

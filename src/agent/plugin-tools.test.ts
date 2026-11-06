@@ -1,5 +1,5 @@
 /**
- * 插件工具（实验功能 plugins）的账：参数校验、参数翻成 pluginInstallRequest / pluginPreviewRequest / pluginListRequest、
+ * 插件工具的账：参数校验、参数翻成 pluginInstallRequest / pluginPreviewRequest / pluginListRequest、
  * 回执翻成工具结果（含那一行的 details）、这一轮被停掉就放手。落地在主进程（main/plugin/agent-requests.ts）。
  */
 import { test, describe } from "node:test";

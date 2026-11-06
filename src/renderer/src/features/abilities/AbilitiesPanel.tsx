@@ -148,7 +148,7 @@ function AbilityList(props: {
   const [pickIndex, setPickIndex] = useState(-1);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // 选取态多带插件里的技能（实验功能 plugins）：点名规则与用户技能一致，选取面要选得到；
+  // 选取态多带插件里的技能：点名规则与用户技能一致，选取面要选得到；
   // 浏览视图仍只列你自己的技能（插件的技能在插件页管）
   const rows = useMemo(
     () =>

@@ -2471,7 +2471,6 @@ export const zh: Messages = {
       pendingGlobal: "它会对所有工作区生效，所以等你点一下。",
       pendingManual: "这条会话每个动作都要先问你，所以等你点一下。",
       failed: {
-        disabled: "插件功能被关了，装不了。",
         noSession: "这条会话已经不在了，没法确认它的工作区。",
         notFound: "插件文件夹不在了，或已不在这条会话的工作区里。",
         changed: "这一行显示之后，插件文件夹里的内容变了（名字、技能或要启动的命令）。请让智能体重新提交一次。",

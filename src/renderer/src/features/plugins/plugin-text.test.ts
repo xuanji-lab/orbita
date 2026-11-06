@@ -82,7 +82,7 @@ describe("对话里「装上插件」那一行的文字", () => {
   });
 
   test("点「安装」没成的每个原因都有话说；invalid / failed 把细节带进去", () => {
-    const reasons = ["disabled", "no-session", "not-found", "changed", "invalid", "failed"] as const;
+    const reasons = ["no-session", "not-found", "changed", "invalid", "failed"] as const;
     for (const table of [zh.plugins.row, en.plugins.row]) {
       for (const reason of reasons) assert.notEqual(rowFailureText(table, reason, "DETAIL"), "");
       assert.equal(rowFailureText(table, "invalid", "DETAIL").includes("DETAIL"), true);

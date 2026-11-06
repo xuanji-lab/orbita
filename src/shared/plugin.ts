@@ -468,8 +468,6 @@ export type PluginRowInstallResult =
   | {
       ok: false;
       reason:
-        /** 实验功能被关了 */
-        | "disabled"
         /** 会话不在了 */
         | "no-session"
         /** 文件夹不在了 / 不在这条会话的工作区内 / 不是插件 */

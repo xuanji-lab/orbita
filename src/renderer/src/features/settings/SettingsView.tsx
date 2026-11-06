@@ -81,7 +81,7 @@ export function SettingsView(props: {
   /** 当前会话所在的工作区与「打开看板」：插件页（全屏版）的详情页用 */
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
-  /** 插件页签（全屏版）要接到会话引擎与右栏上的三样（实验功能 plugins） */
+  /** 插件页签（全屏版）要接到会话引擎与右栏上的三样 */
   plugins: {
     currentWorkspaceId: string | null;
     onMakeWithAgent: () => void;

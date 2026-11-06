@@ -54,7 +54,7 @@ describe("turnFields", () => {
     assert.equal("workspaceName" in fields, false);
   });
 
-  test("pluginTools（实验功能「插件」的开关）原样进命令：开 = true，关 = false", () => {
+  test("pluginTools 原样进命令：开 = true，关 = false", () => {
     assert.equal(turnFields(input, provider, "/pi", "/a", [], { ...environment, pluginTools: true }).pluginTools, true);
     assert.equal(turnFields(input, provider, "/pi", "/a", [], environment).pluginTools, false);
   });

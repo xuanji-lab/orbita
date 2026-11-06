@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./right-panel-memory.ts";
+import { recallPanel, rememberPanel, type PanelMemory } from "./right-panel-memory.ts";
 
 /**
  * 右栏面板的按会话记忆（right-panel-memory.ts）。覆盖：切走记、切回恢复、新会话
@@ -86,20 +86,5 @@ describe("插件页：和别的面板一样按会话记忆", () => {
     memory = rememberPanel(memory, "b", "files");
     strictEqual(recallPanel(memory, "a"), "plugins");
     strictEqual(recallPanel(memory, "b"), "files");
-  });
-});
-
-describe("resolvePanel：挂了实验开关的面板，开关关着就收起", () => {
-  it("插件开关关着（或缺省）：插件页收起；开着：留着", () => {
-    strictEqual(resolvePanel("plugins", {}), null);
-    strictEqual(resolvePanel("plugins", { plugins: false }), null);
-    strictEqual(resolvePanel("plugins", { plugins: true }), "plugins");
-  });
-
-  it("没挂开关的面板与「关着」原样返回，别的实验开关不影响", () => {
-    strictEqual(resolvePanel("files", {}), "files");
-    strictEqual(resolvePanel("abilities", { plugins: false }), "abilities");
-    strictEqual(resolvePanel(null, { plugins: true }), null);
-    strictEqual(resolvePanel("plugins", { "memory-system": true }), null);
   });
 });

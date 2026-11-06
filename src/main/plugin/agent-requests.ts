@@ -1,5 +1,5 @@
 /**
- * agent 的 install_plugin / preview_plugin / list_plugins 在主进程的落地（实验功能 plugins）。
+ * agent 的 install_plugin / preview_plugin / list_plugins 在主进程的落地。
  *
  * **纯逻辑模块**（不 import electron；store 与会话查询都是注入的端口），可被 `node --test` 直接测——
  * main/index.ts 只做路由。**没有任何一个请求会等用户**（以前挂起等用户点确认卡、15 分钟超时，已删）。
@@ -63,8 +63,6 @@ export interface PluginStorePort {
 
 export interface PluginAgentPorts {
   plugins: PluginStorePort;
-  /** 实验开关此刻开着吗（每次现读：用户中途关了就不再装） */
-  enabled: () => Promise<boolean>;
   /** 会话的归属：cwd 与工作区 id；会话不在了为 null */
   session: (sessionId: string) => Promise<{ cwd: string; workspaceId: string | null } | null>;
   /** 工作区 id → 名字与根目录；找不到（被删了）为 null */
@@ -90,7 +88,7 @@ interface Prepared {
 }
 
 /** message 是写给模型的话（照着能改）；detail 是语言中立的事实（给用户点「安装」失败时说原因，不含「再调 install_plugin」这类指令） */
-type PrepareFailure = { ok: false; kind: "disabled" | "no-session" | "not-found" | "invalid"; message: string; detail: string };
+type PrepareFailure = { ok: false; kind: "no-session" | "not-found" | "invalid"; message: string; detail: string };
 
 export class PluginAgentRequests {
   private readonly ports: PluginAgentPorts;
@@ -99,10 +97,9 @@ export class PluginAgentRequests {
     this.ports = ports;
   }
 
-  /** 开关 → 会话 → 范围 → 路径 → 预览 → 冲突与自己写错的东西。任何一步不过都以清楚的话回。 */
+  /** 会话 → 范围 → 路径 → 预览 → 冲突与自己写错的东西。任何一步不过都以清楚的话回。 */
   private async prepare(sessionId: string, rawPath: string, agentScope: PluginAgentScope | null): Promise<({ ok: true } & Prepared) | PrepareFailure> {
     const { ports } = this;
-    if (!(await ports.enabled())) return refuse("disabled", "The plugins feature is turned off in Orbita's experimental settings.");
     const session = await ports.session(sessionId);
     if (session === null) return refuse("no-session", "This session no longer exists.");
     const workspace = session.workspaceId === null ? null : await ports.workspace(session.workspaceId);
@@ -204,7 +201,6 @@ export class PluginAgentRequests {
   /** preview_plugin：路径校验 + 只读扫描，不装；成功后让右栏打开「正在做」视图。 */
   async previewDraft(event: Extract<AgentEvent, { type: "pluginPreviewRequest" }>): Promise<PluginAgentPreviewOutcome> {
     const { ports } = this;
-    if (!(await ports.enabled())) return fail("The plugins feature is turned off in Orbita's experimental settings.");
     const session = await ports.session(event.sessionId);
     if (session === null) return fail("This session no longer exists.");
     const workspace = session.workspaceId === null ? null : await ports.workspace(session.workspaceId);
@@ -248,7 +244,6 @@ export class PluginAgentRequests {
 
   async list(event: Extract<AgentEvent, { type: "pluginListRequest" }>): Promise<PluginAgentListOutcome> {
     const { ports } = this;
-    if (!(await ports.enabled())) return { ok: false, error: "The plugins feature is turned off in Orbita's experimental settings." };
     const session = await ports.session(event.sessionId);
     if (session === null) return { ok: false, error: "This session no longer exists." };
     const views = (await ports.plugins.listViews()).filter((view) => view.origin === "plugin" && scopeApplies(view.scope, session.workspaceId));

@@ -123,9 +123,6 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
   "pdf-citations",
   "intent-system",
-  "memory-system",
-  "automation",
-  "plugins",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
@@ -234,7 +231,7 @@ export interface AppSettings {
    */
   processView?: ProcessView;
   /**
-   * 自动化（实验功能 automation）：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
+   * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
    * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
    * 拦住系统挂起，运行全部结束就放开；屏幕照样可以关。这是应用自己的 API，不是 caffeinate / pmset。
    * 只认布尔，同 gitAttribution 的纪律。
@@ -292,7 +289,7 @@ export interface AppSettings {
    */
   intent?: IntentSettings;
   /**
-   * 向量召回（实验功能 memory-system 的一部分，开关仍由实验开关总控）：
+   * 向量召回（记忆系统的一部分）：
    * 本地 llama-server + GGUF。缺席全默认（关）；只存用户动过的键，读侧并入
    * DEFAULT_MEMORY_VECTOR_SETTINGS（同 intent 的纪律）。
    */

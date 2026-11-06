@@ -666,16 +666,12 @@ function useSkillIndex(): {
   skills: SkillMeta[];
 } {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  // 插件里的技能（实验功能 plugins）也要认：read 它的 SKILL.md 同样标成「在用 skill」
-  const pluginsOn = useExperimentalFeature("plugins");
+  // 插件里的技能也要认：read 它的 SKILL.md 同样标成「在用 skill」
   const reload = useCallback(() => {
-    void Promise.all([
-      api.skill.list(),
-      pluginsOn ? api.plugin.skills().catch((): SkillMeta[] => []) : Promise.resolve<SkillMeta[]>([]),
-    ])
+    void Promise.all([api.skill.list(), api.plugin.skills().catch((): SkillMeta[] => [])])
       .then(([own, fromPlugins]) => setSkills([...own, ...fromPlugins]))
       .catch(() => undefined);
-  }, [pluginsOn]);
+  }, []);
   useEffect(() => {
     reload();
   }, [reload]);
@@ -996,10 +992,9 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
-  // 记忆（实验功能 memory-system）：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
+  // 记忆：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
-  const memoryOn = useExperimentalFeature("memory-system");
-  const memorySession = useMemorySession(memoryOn && openId !== "" ? openId : null);
+  const memorySession = useMemorySession(openId !== "" ? openId : null);
   const memoryLines = useMemo((): MemoryLines | null => {
     const view = memorySession.data;
     if (view === null) return null;
@@ -1687,7 +1682,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有；引用稳定，不破 memo） */
   onOpenIntentPanel?: () => void;
-  /** 记忆行（实验功能 memory-system）：用户气泡 id → 那一轮的账；null = 关着 / 没数据 */
+  /** 记忆行：用户气泡 id → 那一轮的账；null = 关着 / 没数据 */
   memory: MemoryLines | null;
   /** 记忆行的「在审查面板里看」（主槽才有） */
   onOpenMemoryReview?: () => void;
@@ -2984,7 +2979,7 @@ function EntryView(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有） */
   onOpenIntentPanel?: () => void;
-  /** 记忆行（实验功能 memory-system）：挂在用户气泡下；undefined = 不画 */
+  /** 记忆行：挂在用户气泡下；undefined = 不画 */
   memory?: MemoryLines | null;
   onOpenMemoryReview?: () => void;
   /** 产物打开按钮的会话对账（主进程白名单按它查） */
@@ -3272,7 +3267,7 @@ function UserBubble(props: {
   /** 运行中 / 排队非空 / 只读：入口禁用（tooltip 说明） */
   revertDisabled: boolean;
   revertDisabledWhy?: string;
-  /** 记忆（实验功能 memory-system）：这一轮用到 / 记住的；undefined = 这一轮没账（不画） */
+  /** 记忆：这一轮用到 / 记住的；undefined = 这一轮没账（不画） */
   memory?: MemorySessionTurnView;
   /** 展开清单底部的「在审查面板里看」（改 / 删 / 别再用在那里） */
   onOpenMemoryReview?: () => void;

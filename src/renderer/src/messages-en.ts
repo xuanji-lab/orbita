@@ -2362,7 +2362,7 @@ export const en = {
   },
 
 
-  /** 插件页（实验功能 plugins）：已装页按工作区分组、详情、安装确认。文案结构照设计稿第 2 / 6 屏。 */
+  /** 插件页：已装页按工作区分组、详情、安装确认。文案结构照设计稿第 2 / 6 屏。 */
   pluginPanel: {
     loading: "Loading…",
     recorded: "Noted",
@@ -2662,7 +2662,6 @@ export const en = {
       pendingGlobal: "It would be active in every workspace, so it waits for your click.",
       pendingManual: "This session asks before every action, so it waits for your click.",
       failed: {
-        disabled: "The Plugins feature is turned off, so nothing can be installed.",
         noSession: "This session no longer exists, so its workspace can't be checked.",
         notFound: "The plugin folder is gone, or it is not inside this session's workspace anymore.",
         changed: "The plugin folder changed after this line was shown (its name, skills or the commands it starts). Ask the agent to submit it again.",

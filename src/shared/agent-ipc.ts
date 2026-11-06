@@ -126,25 +126,25 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
-  /** 记忆库（实验功能 memory-system）的四条读写通道。读在主进程（纯模块直读
+  /** 记忆库的四条读写通道。读在主进程（纯模块直读
    * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
   memoryScopes: "memory:scopes",
   memoryEntries: "memory:entries",
   memorySession: "memory:session",
   memoryMutate: "memory:mutate",
-  /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
+  /** 向量召回（记忆系统的向量部分）：设置页的三条——状态快照 /
    *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
   memoryVectorStatus: "memory:vector-status",
   memoryVectorSet: "memory:vector-set",
   memoryVectorDownload: "memory:vector-download",
-  /** 从历史生成（实验功能 memory-system）：预估（选中的作用域才读转录）/ 开始 /
+  /** 从历史生成：预估（选中的作用域才读转录）/ 开始 /
    *  暂停·继续·停止 / 状态快照；进度走 agent:event 的 memoryHistory */
   memoryHistoryEstimate: "memory:history-estimate",
   memoryHistoryStart: "memory:history-start",
   memoryHistoryControl: "memory:history-control",
   memoryHistoryStatus: "memory:history-status",
   /**
-   * 自动化（实验功能 automation）的六条通道。list 回全部工作区的 `Automation[]`（面板「全部」范围与
+   * 自动化的六条通道。list 回全部工作区的 `Automation[]`（面板「全部」范围与
    * 侧栏徽标要跨工作区，面板按 target.workspaceId 过滤）；create 载荷 `AutomationCreateInput`
    * （用户在面板里手建，只能是新开会话，直接 active）；update 载荷 `(id, AutomationPatch)`；
    * act 载荷 `(id, AutomationAction)`——面板上的按钮就是状态转移；promote 载荷 sessionId，
@@ -413,7 +413,7 @@ export const ipcChannels = {
   /** 启停一台 server（4-2）：改 disabled 字段后自动重连 */
   mcpSetDisabled: "mcp:set-disabled",
   /**
-   * 插件（实验功能 plugins）。已装页的一切读写：列表 = 真插件 + 原来的技能 / MCP 显示成的
+   * 插件。已装页的一切读写：列表 = 真插件 + 原来的技能 / MCP 显示成的
    * 「一样东西的插件」（PluginView），范围与配置的写入按视图 id 的前缀分派到各自的真源。
    */
   pluginList: "plugin:list",
@@ -860,8 +860,8 @@ export type AgentCommand =
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /**
-       * 实验功能「插件」的开关（settings.experimentalFeatures.plugins）。**主进程从设置装配**
-       * （同 pdfCitations）：开着时 runtime 才注册 install_plugin / list_plugins / preview_plugin；缺席 = 关
+       * 插件工具的注册开关。用户开轮时主进程恒带 true（插件 2026-11-06 转正）；runtime 据此注册
+       * install_plugin / list_plugins / preview_plugin（只给根会话）。缺席 = 不注册（不经 submitTurn 的开轮）
        */
       pluginTools?: boolean;
       /**
@@ -878,14 +878,12 @@ export type AgentCommand =
        */
       backfill?: string[];
       /**
-       * 记忆系统（实验功能 memory-system）的轮前召回开关。**主进程从设置装配**
-       * （同 pdfCitations）：实验开关开着就带 true——召回对根会话与子会话都生效
-       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = 关，runtime 不问
-       * 记忆、命令形状与 main 一字不差。
+       * 记忆系统的轮前召回开关。用户开轮时主进程恒带 true（记忆系统 2026-11-06 转正）——召回对根会话与子会话都生效
+       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = runtime 不问记忆。
        */
       sessionMemory?: boolean;
       /**
-       * 自动化工具（实验功能 automation）的注册开关。**主进程装配**：实验开关开着、且这条会话
+       * 自动化工具的注册开关。**主进程装配**：这条会话
        * 既不是子会话也不是自动化自己跑出来的（防递归）才带 true；runtime 据此注册
        * automation_create / list / cancel。缺席 = 不注册，命令形状与 main 一字不差。
        */
@@ -1004,7 +1002,7 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
-      /** 实验功能「插件」的开关，语义同 submit */
+      /** 插件工具的注册开关，语义同 submit */
       pluginTools?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
@@ -1073,7 +1071,7 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
-      /** 实验功能「插件」的开关，语义同 submit */
+      /** 插件工具的注册开关，语义同 submit */
       pluginTools?: boolean;
     }
   | { type: "listBuiltins" }
@@ -1113,7 +1111,7 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
-  /** 插件（实验功能 plugins）：主进程对 pluginInstallRequest 的回执（立即回，不等用户；ok 双分支） */
+  /** 插件：主进程对 pluginInstallRequest 的回执（立即回，不等用户；ok 双分支） */
   | ({ type: "pluginInstallResult"; requestId: string } & PluginAgentInstallOutcome)
   /** 插件：主进程对 pluginPreviewRequest 的回执 */
   | ({ type: "pluginPreviewResult"; requestId: string } & PluginAgentPreviewOutcome)
@@ -1122,7 +1120,7 @@ export type AgentCommand =
   /** 插件：主进程对 pluginBoardRequest 的回执（show_plugin_board 的卡快照） */
   | ({ type: "pluginBoardResult"; requestId: string } & PluginBoardOutcome)
   /**
-   * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
+   * 记忆系统：主进程对 memoryRecallRequest 的回执
    * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
    * 调用方（轮前召回）对任何失败按「不注入、照常开轮」处理，记忆的失败不拦对话。
    */
@@ -1142,7 +1140,7 @@ export type AgentCommand =
   | ({ type: "modelCostsResult"; requestId: string } & ModelCostsOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
-  /** 自动化（实验功能 automation）：主进程对 automationRequest 的回执（delegateResult 同款） */
+  /** 自动化：主进程对 automationRequest 的回执（delegateResult 同款） */
   | ({ type: "automationResult"; requestId: string } & AutomationToolOutcome)
   | {
       /**
@@ -1337,7 +1335,7 @@ export type AgentEvent =
       server: McpServer;
     }
   /**
-   * 插件（实验功能 plugins）：agent 工具 install_plugin 的请求。**预览与安装都在主进程**
+   * 插件：agent 工具 install_plugin 的请求。**预览与安装都在主进程**
    * （PluginStore）：主进程校验路径（必须在这条会话的工作区 / 工作目录之内）、读出它带了什么，
    * 然后**立即**回 pluginInstallResult，不等用户：低风险直接装；其余在对话里留一行带「安装」的行
    * （数据在工具结果的 details 里，随会话落盘），用户点了走 pluginInstallFromRow。
@@ -1389,7 +1387,7 @@ export type AgentEvent =
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
   /**
-   * 记忆系统（实验功能 memory-system）：轮前召回的问答（readTaskRequest 同一条
+   * 记忆系统：轮前召回的问答（readTaskRequest 同一条
    * requestId 边界）。agent 进程不碰 userData——存储在记忆服务进程，主进程转发。
    * 查询是本轮用户原话，回执 memoryRecallResult；agent 侧 5 秒硬超时，超时 /
    * 出错 / 无命中都不注入（记忆的失败不拦开轮）。
@@ -1466,7 +1464,7 @@ export type AgentEvent =
    */
   | { type: "modelCostsRequest"; requestId: string; sessionId: string }
   /**
-   * 自动化（实验功能 automation）：agent 的 automation_create / list / cancel 请求。
+   * 自动化：agent 的 automation_create / list / cancel 请求。
    * **存盘在主进程**（agent 进程不碰 userData，delegateRequest 同一条边界）：主进程校验入参、
    * 按这条会话所在的工作区落 `automations.json`（只能管当前工作区的）、回 automationResult。
    * 建出来**直接生效**（2026-10-31 用户裁决，不再有待启用）：默认绑定这条会话（this_session），
@@ -1501,23 +1499,23 @@ export type AgentEvent =
  */
 | { type: "carryoversChanged" }
 /**
- * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
+ * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
  * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
  */
 | { type: "memoryChanged" }
 /**
- * 记忆系统（实验功能 memory-system）：模型下载进度（服务 → 主进程转发）。
+ * 记忆系统：模型下载进度（服务 → 主进程转发）。
  * 载荷 MemoryDownloadProgress（phase: downloading/verifying/done/failed）。
  */
 | { type: "vectorDownload"; progress: MemoryDownloadProgress }
 /**
- * 记忆系统（实验功能 memory-system）：后台补算进度（running / deferred-battery /
+ * 记忆系统：后台补算进度（running / deferred-battery /
  * idle 收尾）。载荷 MemoryBackfillProgress。
  */
 | { type: "vectorBackfill"; progress: MemoryBackfillProgress }
 /**
- * 记忆系统（实验功能 memory-system）：「从历史生成」的进度快照（每喂完一轮、状态变化时推）。
+ * 记忆系统：「从历史生成」的进度快照（每喂完一轮、状态变化时推）。
  */
 | { type: "memoryHistory"; status: MemoryHistoryStatus }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */

@@ -192,7 +192,7 @@ describe("update_goal（会话级目标）", () => {
   });
 });
 
-describe("插件工具（实验功能 plugins）", () => {
+describe("插件工具", () => {
   test("list_plugins 是只读：plan 放行、manual 问、skip 放（与 read 同待遇）", () => {
     assert.equal(isReadOnlyTool("list_plugins"), true);
     assert.deepEqual(decidePermission("plan", "list_plugins"), { behavior: "allow" });

@@ -1,5 +1,5 @@
 /**
- * 自动化的校验与状态转移（实验功能 automation）：两个入口，一套规则。
+ * 自动化的校验与状态转移：两个入口，一套规则。
  *
  *   applyAutomationCreate / Update / Act / Promote —— 面板上用户的操作（automation:* IPC）
  *   applyAutomationRequest                          —— agent 的 automation_create / list / cancel 工具请求
@@ -62,18 +62,11 @@ export interface AutomationRequestDeps {
    * （测试与没接插件的场景）。
    */
   plugins?: { enabledIn(workspaceId: string | null): Promise<string[]> };
-  /** 实验开关（每次现读） */
-  enabled(): Promise<boolean>;
   now(): number;
   newId(): string;
   /** 任何一条变了：推给 renderer */
   notify(): void;
 }
-
-const OFF: { ok: false; error: string } = {
-  ok: false,
-  error: "Automations are turned off. Turn them on under Settings › Experimental.",
-};
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
@@ -166,15 +159,13 @@ const TOTAL_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_TOTAL} automations can exi
 
 /* ---------- 面板上的操作 ---------- */
 
-/** 全部自动化（renderer 按工作区过滤）。开关关着回空：关着的功能不该在界面上冒数据 */
+/** 全部自动化（renderer 按工作区过滤） */
 export async function listAutomations(deps: AutomationRequestDeps): Promise<Automation[]> {
-  if (!(await deps.enabled())) return [];
   return deps.store.list();
 }
 
 /** 用户在面板里手建：只能新开会话；直接 active */
 export async function applyAutomationCreate(deps: AutomationRequestDeps, raw: unknown): Promise<AutomationOutcome> {
-  if (!(await deps.enabled())) return OFF;
   if (!isRecord(raw)) return fail("Invalid request.");
   const now = deps.now();
   const workspaceId = await knownWorkspace(deps, raw["workspaceId"]);
@@ -246,7 +237,6 @@ export async function applyAutomationCreate(deps: AutomationRequestDeps, raw: un
 
 /** 编辑表单：只改给了的字段 */
 export async function applyAutomationUpdate(deps: AutomationRequestDeps, rawId: unknown, rawPatch: unknown): Promise<AutomationOutcome> {
-  if (!(await deps.enabled())) return OFF;
   if (typeof rawId !== "string" || rawId === "") return fail("Invalid automation id.");
   if (!isRecord(rawPatch)) return fail("Invalid request.");
   const now = deps.now();
@@ -374,7 +364,6 @@ function parseAction(raw: unknown): Parsed<AutomationAction> {
 
 /** 面板上的按钮 = 状态转移。每个转移都先核对当前状态，不合法的转移回一句话而不是静默无效 */
 export async function applyAutomationAct(deps: AutomationRequestDeps, rawId: unknown, rawAction: unknown): Promise<AutomationOutcome> {
-  if (!(await deps.enabled())) return OFF;
   if (typeof rawId !== "string" || rawId === "") return fail("Invalid automation id.");
   const action = parseAction(rawAction);
   if (!action.ok) return action;
@@ -453,7 +442,6 @@ export async function applyAutomationAct(deps: AutomationRequestDeps, rawId: unk
 
 /** 「转成普通会话」：自动化新开的会话进左侧栏。不是自动化开的会话回「不适用」，不静默成功 */
 export async function applyAutomationPromote(deps: AutomationRequestDeps, rawSessionId: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!(await deps.enabled())) return OFF;
   if (typeof rawSessionId !== "string" || rawSessionId === "") return fail("Invalid session id.");
   const meta = await deps.sessions.readMeta(rawSessionId);
   if (meta === null) return fail("Session not found.");
@@ -473,7 +461,6 @@ export async function applyAutomationRequest(
   deps: AutomationRequestDeps,
   event: Extract<AgentEvent, { type: "automationRequest" }>,
 ): Promise<AutomationToolOutcome> {
-  if (!(await deps.enabled())) return OFF;
   const meta = await deps.sessions.readMeta(event.sessionId);
   if (meta === null) return fail(`Session ${event.sessionId} was not found.`);
   if (meta.automationId !== undefined) {

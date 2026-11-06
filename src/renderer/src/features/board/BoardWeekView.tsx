@@ -22,7 +22,6 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
-import { useExperimentalFeature } from "../../experimental.ts";
 import { useAutomationUi } from "../automation/automation-context.ts";
 import { BoardGrid } from "../plugins/BoardGrid.tsx";
 import { useBoardWeek } from "./useBoardWeek.ts";
@@ -151,7 +150,6 @@ export function BoardWeekView(props: {
 
   const overflow = contentWidth > viewport && viewport > 0;
   const noAutomations = automations.length === 0;
-  const automationOn = useExperimentalFeature("automation");
 
   return (
     <div className="wk" data-shift={shift ? "true" : undefined}>
@@ -197,7 +195,7 @@ export function BoardWeekView(props: {
       ) : noAutomations && week !== null && weekIsBlank(week.days) ? (
         <div className="wk-empty">
           {/* 没有任何自动化、这一周也没有历史记录才算空态（翻到有记录的周照常画） */}
-          <PanelEmpty icon={FEATURE_ICON.board} hint={t.emptyHint} exit={automationOn ? { label: t.openAutomation, onClick: () => openPanel() } : undefined}>
+          <PanelEmpty icon={FEATURE_ICON.board} hint={t.emptyHint} exit={{ label: t.openAutomation, onClick: () => openPanel() }}>
             {t.emptyTitle}
           </PanelEmpty>
         </div>

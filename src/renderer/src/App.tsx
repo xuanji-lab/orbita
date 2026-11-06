@@ -25,7 +25,7 @@ import {
 } from "./features/chat/sub-sessions-state";
 import { SettingsView } from "./features/settings/SettingsView";
 import { BoardWeekView } from "./features/board/BoardWeekView";
-import { resolveSettingsTab, type SettingsTab } from "./features/settings/settings-tabs.ts";
+import type { SettingsTab } from "./features/settings/settings-tabs.ts";
 import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
@@ -33,7 +33,7 @@ import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
-import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
@@ -955,7 +955,7 @@ export function App() {
   // 能力面板（Skills + MCP 一张列表）用这个 hook：skills 与 servers 都在里面，面板开着才读盘。
   // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
   // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
-  const skills = useSkills(shownPanel === "abilities", session.workspaces, settings.experimentalFeatures?.["plugins"] === true);
+  const skills = useSkills(shownPanel === "abilities", session.workspaces);
 
   /**
    * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
@@ -1004,25 +1004,20 @@ export function App() {
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
-  const pluginsOn = experimentalFeatures["plugins"] === true;
-  // 全局周看板（实验功能 plugins 的一部分）：开关关掉时盖层退回聊天
-  if (overlay === "board" && !pluginsOn) setOverlay(null);
   // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
   // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。这份只记在 renderer 内存里、只管「agent 预览时自动切右栏」；
   // 草稿本身是磁盘上的文件夹，用户中途离开 / 重开应用后回来的入口是插件页列表最上面的「正在做」组（主进程 plugin:drafts 扫出来）
   const [pluginDrafts, setPluginDrafts] = useState<PluginDrafts>(new Map());
   // 用户在「正在做」组里点开的草稿（优先于 agent 预览的那一条）；点返回清掉
   const [openedDraft, setOpenedDraft] = useState<PluginDraftTarget | null>(null);
-  const draftContext = useRef({ viewed: mainSessionId, enabled: pluginsOn });
-  draftContext.current = { viewed: mainSessionId, enabled: pluginsOn };
+  const draftContext = useRef(mainSessionId);
+  draftContext.current = mainSessionId;
   useEffect(
     () =>
       api.agent.onEvent((event) => {
         if (event.type !== "pluginDraft") return;
         setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
-        const context = draftContext.current;
-        if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: context.viewed, pluginsEnabled: context.enabled })) {
+        if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: draftContext.current })) {
           setRightPanel("plugins");
         }
       }),
@@ -1091,10 +1086,7 @@ export function App() {
   const sessionDraft = draftOf(pluginDrafts, mainSessionId);
   const shownDraft: PluginDraftTarget | null =
     openedDraft ?? (sessionDraft === null ? null : { path: sessionDraft, workspaceId: session.workspaceId });
-  const resolvedPanel = resolvePanel(rightPanel, experimentalFeatures);
-  if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
-  const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
-  if (shownSettingsTab !== settingsTab) setSettingsTab(shownSettingsTab);
+  const shownSettingsTab = settingsTab;
   // 记忆库住在设置的页签里：打开那个页签才算一次
   useEffect(() => {
     if (overlay === "settings" && shownSettingsTab === "memory") countPanel("memory");
@@ -1109,16 +1101,13 @@ export function App() {
   useEffect(() => {
     if (showArchived) countPanel("archived");
   }, [showArchived, countPanel]);
-  // 自动化（实验功能 automation）：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
-  const automationOn = experimentalFeatures["automation"] === true;
-  const automations = useAutomations(automationOn);
+  // 自动化：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
+  const automations = useAutomations();
   const [automationFocus, setAutomationFocus] = useState<{ id: string; nonce: number } | null>(null);
   const openAutomationPanel = useCallback((automationId?: string): void => {
     setRightPanel("automation");
     if (automationId !== undefined) setAutomationFocus((current) => ({ id: automationId, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
-  // 开关关掉：面板位上若正开着自动化面板就收起（入口一并从右栏消失）
-  if (!automationOn && rightPanel === "automation") setRightPanel(null);
   const automationUi = useMemo<AutomationUi>(
     () => ({ automations: automations.automations, openPanel: openAutomationPanel, act: automations.act }),
     [automations.automations, automations.act, openAutomationPanel],
@@ -1210,18 +1199,14 @@ export function App() {
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
-    ...(pluginsOn
-      ? [
-          {
-            // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
-            id: "board" as const,
-            icon: FEATURE_ICON.board,
-            label: t.rail.board,
-            lit: overlay === "board",
-            onClick: () => setOverlay(overlay === "board" ? null : "board"),
-          },
-        ]
-      : []),
+    {
+      // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
+      id: "board" as const,
+      icon: FEATURE_ICON.board,
+      label: t.rail.board,
+      lit: overlay === "board",
+      onClick: () => setOverlay(overlay === "board" ? null : "board"),
+    },
     {
       id: "settings",
       icon: FEATURE_ICON.settings,
@@ -1515,8 +1500,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
-          automation={automationOn ? { running: runningCount(automations.automations) } : null}
-          pluginsAvailable={pluginsOn}
+          automation={{ running: runningCount(automations.automations) }}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }

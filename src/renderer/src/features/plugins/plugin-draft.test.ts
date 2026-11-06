@@ -25,13 +25,12 @@ describe("草稿按会话记", () => {
   });
 });
 
-describe("shouldOpenDraft：只在正看着该会话、且插件实验功能开着时打开右栏", () => {
-  test("四种情形", () => {
-    const base = { eventSessionId: "s1", viewedSessionId: "s1", pluginsEnabled: true };
+describe("shouldOpenDraft：只在正看着该会话时打开右栏", () => {
+  test("三种情形", () => {
+    const base = { eventSessionId: "s1", viewedSessionId: "s1" };
     assert.equal(shouldOpenDraft(base), true);
     assert.equal(shouldOpenDraft({ ...base, viewedSessionId: "s2" }), false, "别的会话：只记下，不抢右栏");
     assert.equal(shouldOpenDraft({ ...base, viewedSessionId: null }), false, "首页");
-    assert.equal(shouldOpenDraft({ ...base, pluginsEnabled: false }), false, "实验开关关着");
   });
 });
 
