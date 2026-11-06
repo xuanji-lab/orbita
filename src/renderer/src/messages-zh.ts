@@ -370,8 +370,11 @@ export const zh: Messages = {
     },
     waitingIdle: "等会话空闲后送达",
     next: (when) => `下次 ${when}`,
-    countOf: (done, max) => `${done}/${max} 次`,
-    countPlain: (count) => `已运行 ${count} 次`,
+    countTotal: (count) => `累计 ${count} 次`,
+    spark: {
+      dayTip: (date, weekday, count, failed) => `${date} ${weekday} · ${count} 次${failed ? " · 有失败" : ""}`,
+      summary: (total, failedDays) => `近 7 天共运行 ${total} 次${failedDays > 0 ? `，其中 ${failedDays} 天有失败` : ""}`,
+    },
     failedBecause: (reason) =>
       reason === "" ? "连续失败后已停下。重新启动即可再试。" : `连续失败后已停下：${reason}`,
     lastFailed: (reason) => `上一次运行失败：${reason}`,
