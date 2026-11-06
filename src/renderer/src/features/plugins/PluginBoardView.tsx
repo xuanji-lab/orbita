@@ -36,7 +36,7 @@ export function PluginBoardView(props: { target: BoardTarget }) {
       )}
       {feed.kind === "ready" && (
         <>
-          <BoardGrid cards={feed.cards} layout={{ mode: "container" }} actionName={props.target.kind === "installed" ? props.target.name : null} />
+          <BoardGrid cards={feed.cards} layout={{ mode: "container" }} actionName={props.target.kind === "installed" ? props.target.name : null} onFrameStale={feed.refreshFrames} />
           {feed.problems.length > 0 && (
             <div className="pl-note warn" role="status">
               <Icon name="triangle-alert" size={14} strokeWidth={1.8} />

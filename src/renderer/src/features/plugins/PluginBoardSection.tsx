@@ -26,7 +26,7 @@ export function BoardStyleBody(props: { board: PluginBoardInfo; target: BoardTar
       <div className="pd-board">
         {feed.kind === "ready" ? (
           <div className="pd-board-grid">
-            <BoardGrid cards={feed.cards} layout={{ mode: "container" }} actionName={actionName} />
+            <BoardGrid cards={feed.cards} layout={{ mode: "container" }} actionName={actionName} onFrameStale={feed.refreshFrames} />
           </div>
         ) : feed.kind === "loading" ? (
           <p className="pl-muted">{p.loading}</p>

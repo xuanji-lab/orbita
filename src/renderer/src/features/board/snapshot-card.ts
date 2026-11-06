@@ -29,3 +29,14 @@ export function snapshotCardView(key: string, snapshot: BoardCardSnapshot, frame
     usingSample: snapshot.usingSample,
   };
 }
+
+/**
+ * 一张卡的 iframe 地址作废后（同一只 iframe 再 load 一次，见 BoardGrid 的 onFrameStale）最多重换几次。
+ * 被 React 搬动一次只需要换一次；有上限是防模板自己反复跳转（沙箱不拦同框导航）时无限换地址。
+ */
+export const FRAME_REFRESH_MAX = 3;
+
+/** 已经为这张卡重换过 `used` 次：还能不能再换（纯函数，可测） */
+export function canRefreshFrame(used: number): boolean {
+  return used < FRAME_REFRESH_MAX;
+}

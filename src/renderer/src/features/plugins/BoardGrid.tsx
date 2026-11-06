@@ -69,6 +69,11 @@ export interface BoardGridProps {
   actionName: string | null;
   /** 卡上方宿主画的标题行（周看板的「时间 · 插件名」）；不给就没有这一行 */
   caption?: (card: BoardCardView) => ReactNode;
+  /**
+   * 某张卡的 iframe 又加载了一次（同一个 frameKey 第二次 load）：地址是一次性的，第二次取必是 404，
+   * 调用方去换一个新地址（换了 frameKey 卡就重建）。不给就照旧——不重换。
+   */
+  onFrameStale?: (cardKey: string) => void;
 }
 
 interface Toast {
@@ -140,7 +145,7 @@ export function BoardGrid(props: BoardGridProps) {
                     {card.usingSample && <SampleBadge />}
                   </div>
                 )}
-                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} />
+                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} onStale={props.onFrameStale} />
               </div>
             );
           })}
@@ -171,11 +176,15 @@ function BoardCardFrame(props: {
   theme: PanelTheme;
   actionName: string | null;
   onNotify: (text: string, tone: Toast["tone"]) => void;
+  onStale: ((cardKey: string) => void) | undefined;
 }) {
   const t = useT().pluginPanel;
   const { card, onNotify, actionName } = props;
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // 这只 iframe 加载过几次。地址一次性（主进程取走即作废），同一只 iframe 再 load 一次——
+  // 被 React 搬动了 DOM 位置、模板自己跳转——拿到的只会是 404「not found」，交给调用方换新地址
+  const loads = useRef(0);
   const [templateHandlesEmpty, setTemplateHandlesEmpty] = useState(false);
   const [graceOver, setGraceOver] = useState(false);
 
@@ -278,7 +287,14 @@ function BoardCardFrame(props: {
           referrerPolicy="no-referrer"
           allow=""
           style={{ visibility: hostEmpty ? "hidden" : "visible" }}
-          onLoad={() => setLoaded(true)}
+          onLoad={() => {
+            loads.current += 1;
+            if (loads.current > 1 && props.onStale !== undefined) {
+              props.onStale(card.key);
+              return;
+            }
+            setLoaded(true);
+          }}
         />
       )}
       {hostEmpty && (
