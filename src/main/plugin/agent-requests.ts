@@ -17,7 +17,7 @@
  * installFromRow：用户点那一行的「安装」。renderer 传来的会话 / 路径 / 范围一概不信，重走 1–3，
  * 再重算指纹——用户看到那一行之后文件夹里会启动的命令变了就拒装（`changed`），不让「看到的」和「装上的」分叉。
  *
- * preview（立即回执）：同样的路径校验 + 只读扫描，不装；成功后送出 pluginDraft（右栏打开「正在做」视图）。
+ * preview（立即回执）：同样的路径校验 + 只读扫描，不装；成功后记下「这个草稿在哪条会话里做」、送出 pluginDraft（右栏打开「正在做」视图）。
  *
  * 已经链接安装过同一个文件夹的（agent 改完又装一次）不新增一行：链接只记路径、开轮现读目录，改动已经生效。
  */
@@ -71,6 +71,8 @@ export interface PluginAgentPorts {
   workspace: (id: string) => Promise<{ name: string; path: string } | null>;
   /** 草稿能看了：把 pluginDraft 送到 renderer */
   draft: (event: PluginDraftEvent) => void;
+  /** 记下「这个草稿最近是这条会话在做」（「正在做」列表的「回到对话」靠它）；失败不影响预览 */
+  rememberDraft: (path: string, sessionId: string) => Promise<void>;
   /** 装好了（让技能选取面、插件页、对话里那一行刷新；正看着那条会话的窗口还会把右栏切到这个插件） */
   installed: (info: { name: string; sessionId: string }) => void;
 }
@@ -227,6 +229,10 @@ export class PluginAgentRequests {
         .map((file) => `orbita.board${file.card === null ? "" : `.cards[${file.card}]`}.${file.key} points at ${file.path}, which does not exist`),
       ...(boardFiles.length === 0 ? ['plugin.json has no "orbita.board" block with cards, so the board has nothing to show yet'] : []),
     ];
+    // 先记再广播：renderer 收到 pluginDraft 就会重读「正在做」列表，那时账本里要已经有这条
+    await ports.rememberDraft(path, event.sessionId).catch((cause: unknown) => {
+      console.error("[plugin] 记不下草稿对应的会话（不影响预览，「回到对话」会缺）", cause);
+    });
     ports.draft({ type: "pluginDraft", sessionId: event.sessionId, path });
     return {
       ok: true,

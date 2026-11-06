@@ -67,6 +67,8 @@ import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
+import { DraftSessionBook } from "./plugin/draft-sessions.ts";
+import { scanDrafts } from "./plugin/drafts.ts";
 import { builtinPluginsDir } from "./plugin/builtin.ts";
 import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board-snapshot.ts";
 import { registerBoardIpc } from "./plugin/board-ipc.ts";
@@ -1106,6 +1108,7 @@ void app.whenReady().then(async () => {
   });
   // agent 的 install_plugin / preview_plugin / list_plugins 在主进程的落地（草稿与刷新事件经 broadcastAgentEvent 到 renderer；
   // 对话里那一行的「安装」走 plugin ipc 的 pluginInstallFromRow）
+  const draftSessions = new DraftSessionBook(join(configDir, "plugin-draft-sessions.json"));
   const pluginAgent = new PluginAgentRequests({
     plugins,
     enabled: async () => (await settings.read()).experimentalFeatures?.["plugins"] === true,
@@ -1118,6 +1121,7 @@ void app.whenReady().then(async () => {
       return found === undefined ? null : { name: found.name, path: found.path };
     },
     draft: (event) => broadcastAgentEvent(event),
+    rememberDraft: (path, sessionId) => draftSessions.remember(path, sessionId),
     installed: (info) => {
       broadcastAgentEvent({ type: "pluginsChanged", installed: info });
       broadcastAgentEvent({ type: "skillsChanged" });
@@ -1131,7 +1135,27 @@ void app.whenReady().then(async () => {
     frames: panelFrames,
     workspaceRoot: async (id) => (id === null ? null : ((await workspaces.list()).find((each) => each.id === id)?.path ?? null)),
   });
-  registerPluginIpc({ plugins, panels, skills, mcp, workspaces, reloadMcp: () => agentHost.mcpReload(), agentRequests: pluginAgent });
+  registerPluginIpc({
+    plugins,
+    panels,
+    skills,
+    mcp,
+    workspaces,
+    reloadMcp: () => agentHost.mcpReload(),
+    agentRequests: pluginAgent,
+    listDrafts: () =>
+      scanDrafts({
+        workspaces: () => workspaces.list(),
+        records: () => plugins.records(),
+        // 会话删了（meta 读不到）就当没记过：「回到对话」不出现
+        sessionOf: async (path) => {
+          const sessionId = await draftSessions.sessionOf(path);
+          if (sessionId === null) return null;
+          const meta = await sessions.readMeta(sessionId);
+          return meta === null ? null : { sessionId, title: meta.title };
+        },
+      }),
+  });
   // 看板结果（agent 的 show_plugin_board）：模板按内容哈希存进 <userData>/board-templates/，数据快照进工具结果
   const boardTemplates = new BoardTemplateStore(join(configDir, BOARD_TEMPLATES_DIR));
   const pluginBoards = new PluginBoards({

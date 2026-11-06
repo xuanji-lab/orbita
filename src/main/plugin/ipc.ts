@@ -11,6 +11,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parsePluginViewId,
   type PluginConfigValue,
+  type PluginDraftEntry,
   type PluginDraftSnapshot,
   type PluginInstallRequest,
   type PluginInstallResult,
@@ -51,6 +52,8 @@ export function registerPluginIpc(deps: {
   reloadMcp: () => Promise<void>;
   /** 对话里「装上插件」那一行的「安装」落在它身上 */
   agentRequests: PluginAgentRequests;
+  /** 「正在做」列表：所有工作区里有清单、还没安装的插件文件夹（drafts.ts 的 scanDrafts，host 注入端口） */
+  listDrafts: () => Promise<PluginDraftEntry[]>;
 }): void {
   const { plugins, panels, skills, mcp, workspaces } = deps;
 
@@ -172,6 +175,8 @@ export function registerPluginIpc(deps: {
     return { path, workspaceId: optionalId(request["workspaceId"], "workspaceId"), stamp: stampOf(request) };
   };
   ipcMain.handle(ipcChannels.pluginDraftLoad, (_event, raw: unknown): Promise<PluginDraftSnapshot> => panels.loadDraftView(draftRequest(raw)));
+  // 「正在做」列表：无入参，路径都是主进程自己扫出来的（realpath 后在工作区根内），renderer 给不了东西
+  ipcMain.handle(ipcChannels.pluginDrafts, (): Promise<PluginDraftEntry[]> => deps.listDrafts());
   ipcMain.handle(ipcChannels.pluginDraftBoardLoad, (_event, raw: unknown): Promise<PluginBoardSnapshot> => panels.loadDraftBoard(draftRequest(raw)));
 
   ipcMain.handle(ipcChannels.pluginPanelAction, (_event, raw: unknown): Promise<PluginPanelActionResult> => {

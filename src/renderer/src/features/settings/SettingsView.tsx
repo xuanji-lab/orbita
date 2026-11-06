@@ -7,6 +7,7 @@ import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
+import type { PluginDraftTarget } from "../plugins/plugin-draft.ts";
 import { PluginsView } from "../plugins/PluginsView.tsx";
 import type { SettingsTab } from "./settings-tabs.ts";
 import type { ProviderDto } from "@shared/provider";
@@ -79,7 +80,14 @@ export function SettingsView(props: {
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
   /** 插件页签（全屏版）要接到会话引擎与右栏上的三样（实验功能 plugins） */
-  plugins: { currentWorkspaceId: string | null; onMakeWithAgent: () => void; onOpenBoard: (pluginName: string) => void };
+  plugins: {
+    currentWorkspaceId: string | null;
+    onMakeWithAgent: () => void;
+    onOpenBoard: (pluginName: string) => void;
+    /** 「正在做」组里点一行 / 点「回到对话」：退出设置，右栏开该草稿 / 打开那条会话 */
+    onOpenDraft: (draft: PluginDraftTarget) => void;
+    onOpenSession: (sessionId: string, draftPath: string) => void;
+  };
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
   onCollapseRail: (() => void) | null;
 }) {
