@@ -1888,3 +1888,8 @@ button.pl-tag-more:hover {
 .pl-archived .pl-note {
   margin: var(--space-2) var(--space-4);
 }
+
+/* 右栏窄版把组头的图标藏了（.pl-gh .orbita-icon）；折叠分组的展开箭头是它唯一的「可点」提示，要留着 */
+.pl-archived-head .orbita-icon {
+  display: inline-flex;
+}
