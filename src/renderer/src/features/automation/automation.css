@@ -145,7 +145,7 @@
 .auto-bar {
   flex: none;
   width: var(--space-1-5);
-  border-radius: var(--radius-xs);
+  border-radius: 1px;
   background: var(--color-text-tertiary);
 }
 .auto-bar[data-empty] {
