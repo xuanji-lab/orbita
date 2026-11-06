@@ -74,6 +74,8 @@ function LiveBoard(props: { toolCallId: string; board: PluginBoardSnapshotResult
     () => board.cards.map((snapshot) => ({ key: `${toolCallId}:${snapshot.id}:${snapshot.index}`, snapshot, at: board.at })),
     [board, toolCallId],
   );
-  const cards = useSnapshotCards(inputs);
-  return <BoardGrid cards={cards} layout={{ mode: "container" }} actionName={board.source === "installed" ? board.plugin : null} />;
+  const { cards, refresh } = useSnapshotCards(inputs);
+  return (
+    <BoardGrid cards={cards} layout={{ mode: "container" }} actionName={board.source === "installed" ? board.plugin : null} onFrameStale={refresh} />
+  );
 }

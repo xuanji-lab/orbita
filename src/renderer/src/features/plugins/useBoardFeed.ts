@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PluginView } from "@shared/plugin";
 import type { PluginBoardSnapshot, PluginPanelProblem, PluginPanelUnavailable } from "@shared/plugin-panel";
 import { api } from "../../api";
+import { canRefreshFrame } from "../board/snapshot-card.ts";
 import { mergeBoardCards, type BoardCardView, type CardMemory } from "./board-card.ts";
 
 export const BOARD_POLL_MS = 1500;
@@ -38,6 +39,11 @@ export type BoardFeed =
       cards: BoardCardView[];
       /** 看板级的问题（说明读不出来、repeat 不是数组、超限） */
       problems: PluginPanelProblem[];
+      /**
+       * 某张卡的一次性地址作废了（BoardGrid 的 onFrameStale）：丢掉 stamp 与手里的地址重拉一次，主进程按
+       * 「第一次来」给每张卡发新地址。整块最多重拉 FRAME_REFRESH_MAX 次（防模板反复自跳转）。
+       */
+      refreshFrames: () => void;
     };
 
 function loadSnapshot(target: BoardTarget, stamp: string | null): Promise<PluginBoardSnapshot> {
@@ -85,7 +91,16 @@ export function useBoardFeed(target: BoardTarget): BoardFeed {
     let stamp: string | null = null;
     let memory = new Map<string, CardMemory>();
     let frameCounter = 0;
+    let refreshes = 0;
     setFeed({ kind: "loading" });
+    const refreshFrames = (): void => {
+      // stamp 已经是 null = 一次重拉已在路上：同一块看板几张卡同时作废只算一次
+      if (cancelled || stamp === null || !canRefreshFrame(refreshes)) return;
+      refreshes += 1;
+      stamp = null;
+      memory = new Map();
+      void run();
+    };
     const run = async (): Promise<void> => {
       if (cancelled || inflight) return;
       inflight = true;
@@ -100,7 +115,7 @@ export function useBoardFeed(target: BoardTarget): BoardFeed {
         }
         const merged = mergeBoardCards(memory, snapshot.cards, () => (frameCounter += 1));
         memory = merged.memory;
-        setFeed({ kind: "ready", title: snapshot.title, spec: snapshot.spec, cards: merged.views, problems: snapshot.problems });
+        setFeed({ kind: "ready", title: snapshot.title, spec: snapshot.spec, cards: merged.views, problems: snapshot.problems, refreshFrames });
       } catch (cause) {
         // 读失败不清掉手里的看板：下一轮再试；只有从没读成功过才显示错误
         if (!cancelled) setFeed((current) => (current.kind === "ready" ? current : { kind: "error", message: cause instanceof Error ? cause.message : String(cause) }));

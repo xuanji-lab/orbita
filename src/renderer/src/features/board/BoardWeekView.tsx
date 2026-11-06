@@ -289,7 +289,7 @@ function RunBoard(props: { item: BoardWeekItem; cellWidth: number; cells: 1 | 2;
     () => item.cards.map((snapshot) => ({ key: `${item.runId}:${snapshot.id}:${snapshot.index}`, snapshot, at: item.at })),
     [item],
   );
-  const cards = useSnapshotCards(inputs);
+  const { cards, refresh } = useSnapshotCards(inputs);
   const text = cardCaption(item);
   const sessionId = item.sessionId;
   return (
@@ -297,6 +297,7 @@ function RunBoard(props: { item: BoardWeekItem; cellWidth: number; cells: 1 | 2;
       cards={cards}
       layout={{ mode: "column", cellWidth: props.cellWidth, columns: props.cells, gap: WEEK_CELL_GAP }}
       actionName={item.plugin}
+      onFrameStale={refresh}
       caption={() =>
         sessionId === null ? (
           <span>{text}</span>

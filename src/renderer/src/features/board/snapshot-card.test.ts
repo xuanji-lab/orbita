@@ -4,7 +4,7 @@ import type { BoardCardSnapshot } from "../../../../shared/plugin-board.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import { skippedText } from "./board-text.ts";
-import { snapshotCardView } from "./snapshot-card.ts";
+import { canRefreshFrame, FRAME_REFRESH_MAX, snapshotCardView } from "./snapshot-card.ts";
 
 const HASH = "b".repeat(64);
 function card(over: Partial<BoardCardSnapshot> = {}): BoardCardSnapshot {
@@ -54,4 +54,11 @@ describe("skippedText：被跳过的卡在卡下面一行灰字", () => {
     strictEqual(skippedText(zh.board, skipped), "没有显示：today: 数据太大; items: 模板读不出来");
     strictEqual(skippedText(en.board, skipped), "Not shown: today: data too large; items: template unreadable");
   });
+});
+
+it("卡片地址作废后最多重换 FRAME_REFRESH_MAX 次（被搬动一次只用一次；防模板反复自跳转无限换）", () => {
+  strictEqual(FRAME_REFRESH_MAX, 3);
+  strictEqual(canRefreshFrame(0), true);
+  strictEqual(canRefreshFrame(FRAME_REFRESH_MAX - 1), true);
+  strictEqual(canRefreshFrame(FRAME_REFRESH_MAX), false);
 });
