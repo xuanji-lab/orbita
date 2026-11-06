@@ -1,9 +1,9 @@
 /**
- * 右栏入口分组（2026-10-31）：排布纯函数 + 几处结构守卫。
+ * 右栏入口分组（2026-11-06 起只有一种布局）：排布纯函数 + 几处结构守卫。
  *
- * 守卫的是用户的两条原话（2026-10-31）：
- * 「文件面板不应该被收纳」——精简态文件必须常驻；
- * 「类和类之间有一个小横线做分隔」「它们全部都在右上，右下就简单一点」——组间一条线、右下只剩应用组。
+ * 守卫的是用户的原话：
+ * 「类和类之间有一个小横线做分隔」「它们全部都在右上，右下就简单一点」（2026-10-31）；
+ * 「这条任务、审查改动、文件、子会话、终端、内置浏览器、插件、自动化、看板、设置，这些不能被折叠」（2026-11-06）。
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -16,102 +16,105 @@ interface Item extends RailPlacement {
   id: string;
 }
 
-const item = (id: string, group: RailGroupId, pinned: boolean, moreOnly?: boolean): Item =>
-  moreOnly === undefined ? { id, group, pinned } : { id, group, pinned, moreOnly };
+const item = (id: string, group: RailGroupId, inMore?: boolean): Item => (inMore === true ? { id, group, inMore } : { id, group });
+
+interface Switches {
+  subsessions: boolean;
+  plugins: boolean;
+  intent: boolean;
+  automation: boolean;
+}
 
 /** 与 RightRail 里实际登记的入口同序同组（守卫文本见下面的源码断言） */
-const FULL: Item[] = [
-  item("context", "session", true),
-  item("review", "session", false),
-  item("context-tab", "session", false, true),
-  item("subsessions", "session", true),
-  item("files", "session", true),
-  item("terminal", "agent", true),
-  item("browser", "agent", true),
-  item("abilities", "agent", false),
-  item("memory", "agent", false),
-  item("intent", "agent", false),
-  item("carryovers", "shelf", false),
-  item("archived", "shelf", false),
-  item("settings", "app", true),
-  item("bell", "app", false),
-];
+function entries(on: Switches): Item[] {
+  return [
+    item("context", "session"),
+    item("review", "session"),
+    item("files", "session"),
+    ...(on.subsessions ? [item("subsessions", "session")] : []),
+    item("terminal", "agent"),
+    item("browser", "agent"),
+    ...(on.plugins ? [item("plugins", "agent")] : [item("abilities", "agent")]),
+    ...(on.intent ? [item("intent", "agent")] : []),
+    ...(on.automation ? [item("automation", "agent")] : []),
+    item("carryovers", "shelf", true),
+    item("archived", "shelf", true),
+    item("bell", "shelf", true),
+    ...(on.plugins ? [item("board", "app")] : []),
+    item("settings", "app"),
+  ];
+}
 
 const ids = (list: readonly { id: string }[]): string[] => list.map((each) => each.id);
+const shape = (parts: readonly { group: string; items: readonly { id: string }[] }[]): [string, string[]][] =>
+  parts.map((part) => [part.group, ids(part.items)]);
 
 describe("layoutRail", () => {
-  it("常规态：右上四组按组序、组内按数组序，右下只有应用组；moreOnly 不上条；「更多」为空", () => {
-    const layout = layoutRail(FULL, false);
-    assert.deepEqual(
-      layout.stack.map((part) => [part.group, ids(part.items)]),
-      [
-        ["session", ["context", "review", "subsessions", "files"]],
-        ["agent", ["terminal", "browser", "abilities", "memory", "intent"]],
-        ["shelf", ["carryovers", "archived"]],
-      ],
-    );
-    assert.deepEqual(ids(layout.dock), ["settings", "bell"]);
-    assert.deepEqual(layout.more, []);
+  it("全开：条上是会话组 + 智能体组，更多里只有以后再做 / 归档 / 通知，右下是看板与设置", () => {
+    const layout = layoutRail(entries({ subsessions: true, plugins: true, intent: true, automation: true }));
+    assert.deepEqual(shape(layout.stack), [
+      ["session", ["context", "review", "files", "subsessions"]],
+      ["agent", ["terminal", "browser", "plugins", "intent", "automation"]],
+    ]);
+    assert.deepEqual(shape(layout.more), [["shelf", ["carryovers", "archived", "bell"]]]);
+    assert.deepEqual(ids(layout.dock), ["board", "settings"]);
   });
 
-  it("精简态：条上只留 pinned（文件常驻），其余按同一套组序进「更多」，moreOnly 也在里面", () => {
-    const layout = layoutRail(FULL, true);
-    assert.deepEqual(
-      layout.stack.map((part) => [part.group, ids(part.items)]),
-      [
-        ["session", ["context", "subsessions", "files"]],
-        ["agent", ["terminal", "browser"]],
-      ],
-    );
+  it("无子会话：子会话入口不出现，其余不变", () => {
+    const layout = layoutRail(entries({ subsessions: false, plugins: true, intent: true, automation: true }));
+    assert.deepEqual(ids(layout.stack[0]?.items ?? []), ["context", "review", "files"]);
+    assert.deepEqual(ids(layout.stack[1]?.items ?? []), ["terminal", "browser", "plugins", "intent", "automation"]);
+  });
+
+  it("plugins 关：技能与 MCP 顶替插件，看板不出现，右下只剩设置", () => {
+    const layout = layoutRail(entries({ subsessions: false, plugins: false, intent: false, automation: false }));
+    assert.deepEqual(ids(layout.stack[1]?.items ?? []), ["terminal", "browser", "abilities"]);
     assert.deepEqual(ids(layout.dock), ["settings"]);
-    assert.deepEqual(
-      layout.more.map((part) => [part.group, ids(part.items)]),
-      [
-        ["session", ["review", "context-tab"]],
-        ["agent", ["abilities", "memory", "intent"]],
-        ["shelf", ["carryovers", "archived"]],
-        ["app", ["bell"]],
-      ],
-    );
   });
 
-  it("空组不出现：没有子会话 / 记忆 / 意图时，对应的入口与线都不画", () => {
-    const sparse = FULL.filter((each) => !["subsessions", "memory", "intent", "carryovers", "archived"].includes(each.id));
-    const regular = layoutRail(sparse, false);
-    assert.deepEqual(regular.stack.map((part) => part.group), ["session", "agent"]);
-    assert.deepEqual(ids(regular.stack[1]?.items ?? []), ["terminal", "browser", "abilities"]);
-    const lean = layoutRail(sparse, true);
-    assert.deepEqual(lean.more.map((part) => part.group), ["session", "agent", "app"]);
-  });
-
-  it("上段永远不含应用组，应用组永远在 dock（右下只剩它）", () => {
-    for (const lean of [false, true]) {
-      const layout = layoutRail(FULL, lean);
-      assert.ok(layout.stack.every((part) => part.group !== "app"));
-      assert.ok(layout.dock.every((each) => each.group === "app"));
+  it("意图开 / 关、automation 开 / 关：各自只在开着时出现在条上，从不进「更多」", () => {
+    for (const intent of [false, true]) {
+      for (const automation of [false, true]) {
+        const layout = layoutRail(entries({ subsessions: false, plugins: true, intent, automation }));
+        const agent = ids(layout.stack[1]?.items ?? []);
+        assert.equal(agent.includes("intent"), intent);
+        assert.equal(agent.includes("automation"), automation);
+        assert.deepEqual(ids(layout.more.flatMap((part) => part.items)), ["carryovers", "archived", "bell"]);
+      }
     }
   });
 
-  it("每个入口在两种态下恰好出现一次（条上 / 菜单里二选一，常规态的 moreOnly 例外地不出现）", () => {
-    for (const lean of [false, true]) {
-      const layout = layoutRail(FULL, lean);
-      const shown = [...layout.stack.flatMap((part) => part.items), ...layout.dock, ...layout.more.flatMap((part) => part.items)];
-      assert.equal(new Set(ids(shown)).size, shown.length, `lean=${lean} 有入口重复出现`);
-      const expected = FULL.filter((each) => lean || each.moreOnly !== true).length;
-      assert.equal(shown.length, expected, `lean=${lean} 有入口丢了`);
+  it("用户点名不能折叠的入口永远在条上 / 右下，不进「更多」", () => {
+    const layout = layoutRail(entries({ subsessions: true, plugins: true, intent: true, automation: true }));
+    const moreIds = ids(layout.more.flatMap((part) => part.items));
+    for (const id of ["context", "review", "files", "subsessions", "terminal", "browser", "plugins", "automation", "board", "settings"]) {
+      assert.ok(!moreIds.includes(id), `${id} 不该在更多里`);
     }
+  });
+
+  it("每个入口恰好出现一次；上段不含应用组，应用组只在 dock", () => {
+    const all = entries({ subsessions: true, plugins: true, intent: true, automation: true });
+    const layout = layoutRail(all);
+    const shown = [...layout.stack.flatMap((part) => part.items), ...layout.dock, ...layout.more.flatMap((part) => part.items)];
+    assert.equal(new Set(ids(shown)).size, all.length);
+    assert.ok(layout.stack.every((part) => part.group !== "app"));
+    assert.ok(layout.dock.every((each) => each.group === "app"));
+  });
+
+  it("空组不出现：没有 shelf 入口时「更多」为空", () => {
+    const layout = layoutRail(entries({ subsessions: false, plugins: false, intent: false, automation: false }).filter((each) => each.inMore !== true));
+    assert.deepEqual(layout.more, []);
   });
 });
 
 describe("withGroupRules", () => {
   it("组与组之间插一条分隔，首尾不插；单组与空清单没有分隔", () => {
-    const groups = layoutRail(FULL, true).more;
-    const flat = withGroupRules<Item | string, string>(groups, (before) => `rule:${before}`);
-    assert.deepEqual(
-      flat.map((each) => (typeof each === "string" ? each : each.id)),
-      ["review", "context-tab", "rule:agent", "abilities", "memory", "intent", "rule:shelf", "carryovers", "archived", "rule:app", "bell"],
-    );
-    assert.deepEqual(withGroupRules(groups.slice(0, 1), () => "rule"), groups[0]?.items);
+    const groups = [
+      { group: "session" as const, items: ["a", "b"] },
+      { group: "shelf" as const, items: ["c"] },
+    ];
+    assert.deepEqual(withGroupRules(groups, (before) => `rule:${before}`), ["a", "b", "rule:shelf", "c"]);
+    assert.deepEqual(withGroupRules(groups.slice(0, 1), () => "rule"), ["a", "b"]);
     assert.deepEqual(withGroupRules([], () => "rule"), []);
   });
 });
@@ -123,8 +126,14 @@ describe("结构守卫", () => {
   const css = read("../styles.css");
   const menu = read("Menu.tsx");
 
-  it("文件入口在精简态常驻（用户：文件面板不应该被收纳）", () => {
-    assert.match(rail, /id: "files", group: "session", pinned: true/);
+  it("右栏没有精简态：没有 lean 属性、没有 pinned、没有上下文直达项", () => {
+    assert.doesNotMatch(rail, /\blean\b|pinned|context-tab|onOpenContext/);
+    assert.doesNotMatch(read("../experimental-features.ts"), /lean-rail/);
+  });
+
+  it("「更多」里只有以后再做 / 归档 / 通知（记忆库只在实验功能开着时补在它们后面）", () => {
+    const inMore = [...rail.matchAll(/id: "(\w+)", group: "shelf", inMore: true|fromApp\("(\w+)", \{ group: "shelf", inMore: true \}\)/g)].map((m) => m[1] ?? m[2]);
+    assert.deepEqual(inMore, ["memory", "carryovers", "archived", "bell"]);
   });
 
   it("plugins 开着时没有「技能与 MCP」入口，关着时保留", () => {
@@ -143,7 +152,6 @@ describe("结构守卫", () => {
   it("组间一条线：1px、比按钮窄、走分隔线 token 与 --space-*；组内没有分隔", () => {
     assert.match(css, /\.rail-sep\s*\{[^}]*width:\s*var\(--space-4\)[^}]*height:\s*1px[^}]*margin:\s*var\(--space-2\) 0[^}]*background:\s*var\(--color-border-default\)/s);
     assert.match(css, /\.rail-group\s*\{[^}]*gap:\s*var\(--space-1\)/s);
-    // 分隔线只在组与组之间：JSX 里 index > 0 才画
     assert.match(rail, /index > 0 && <span className="rail-sep"/);
   });
 

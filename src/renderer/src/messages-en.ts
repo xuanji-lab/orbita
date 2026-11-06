@@ -841,7 +841,7 @@ export const en = {
     groups: {
       session: "This session",
       agent: "Agent abilities",
-      shelf: "Set aside",
+      shelf: "More",
       app: "App",
     },
     automation: "Automations",
@@ -1102,7 +1102,7 @@ export const en = {
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
     experimentalCollapse: "Collapse",
-    /* ---------- 面板打开次数（实验功能「精简右栏」的数据，只在本机） ---------- */
+    /* ---------- 面板打开次数（本机的统计，不上传） ---------- */
     panelUsageTitle: "How often each panel is opened",
     panelUsageSince: (month: number, day: number) =>
       `Counted on this computer since ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] ?? month} ${day}; nothing is uploaded. Switching tasks does not count.`,
@@ -1120,6 +1120,10 @@ export const en = {
         carryovers: "Carryovers",
         archived: "Archive",
         bell: "Notifications",
+        plugins: "Plugins",
+        automation: "Automations",
+        board: "Board",
+        settings: "Settings",
         subsessions: "Sub-sessions",
         sidechat: "Side chat",
       })[key] ?? String(key),

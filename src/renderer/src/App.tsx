@@ -812,7 +812,7 @@ export function App() {
     handlePanel("context");
   }, [handlePanel]);
 
-  // ── 面板打开次数（shared/panel-usage.ts，实验功能「精简右栏」的数据）──────
+  // ── 面板打开次数（shared/panel-usage.ts，本机的统计）──────
   // 只记用户自己打开的：右栏换成别的面板（不管从哪个入口：图标条、「更多」、对话里的
   // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 遗留 / 归档
   // 打开，铃铛与内置浏览器在各自的入口记。按会话恢复的面板不记（panelRestoredRef）。
@@ -1069,13 +1069,15 @@ export function App() {
     if (overlay === "memory") countPanel("memory");
   }, [overlay, countPanel]);
   useEffect(() => {
+    if (overlay === "board") countPanel("board");
+    if (overlay === "settings") countPanel("settings");
+  }, [overlay, countPanel]);
+  useEffect(() => {
     if (showCarryovers) countPanel("carryovers");
   }, [showCarryovers, countPanel]);
   useEffect(() => {
     if (showArchived) countPanel("archived");
   }, [showArchived, countPanel]);
-  // 精简右栏（实验功能）：常驻只留「这条任务」、终端、内置浏览器，其余收进「更多」
-  const leanRail = experimentalFeatures["lean-rail"] === true;
   // 自动化（实验功能 automation）：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
   const automationOn = experimentalFeatures["automation"] === true;
   const automations = useAutomations(automationOn);
@@ -1502,8 +1504,6 @@ export function App() {
         <RightRail
           panel={rightPanel}
           onPanel={handlePanel}
-          lean={leanRail}
-          onOpenContext={openContextPanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           automation={automationOn ? { running: runningCount(automations.automations) } : null}
@@ -1546,6 +1546,8 @@ const PANEL_USAGE_KEY_OF: Partial<Record<RightPanelKind, PanelUsageKey>> = {
   drawer: "sidechat",
   subsessions: "subsessions",
   intent: "intent",
+  automation: "automation",
+  plugins: "plugins",
 };
 
 /**
