@@ -31,24 +31,29 @@ import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { relativeTime } from "../../shell/relative-time";
+import { WorkspaceFilterBar, useWorkspaceFilter } from "../../shell/WorkspaceFilterBar.tsx";
+import { buildOptions, defaultFilter, type WsAllow } from "../../shell/workspace-filter.ts";
 import type { TokenPickerControl } from "../../shell/panel-token.ts";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
-import { ArchivedSkills, KindTag } from "./AbilitySections.tsx";
+import { ArchivedAbilities, KindTag } from "./AbilitySections.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
 import { PluginPickerBar, PluginPickerGroup } from "./PluginPicker.tsx";
 import { activateRow, buildPicker, clampPick, collapseRow, expandRow, indexOfPlugin, movePick, type PickerOutcome } from "./plugin-picker.ts";
 import { filterDrafts, groupDrafts, type PluginDraftTarget } from "./plugin-draft.ts";
 import { useDraftList } from "./useDraftList.ts";
-import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, isMissingSkillView, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
+import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupUsable, isMissingSkillView, legacyCounts, pluginFilterCounts, rangeOf, sourceKey, toggleTarget, isActive, type PluginGroup, type RangeLabel } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
 
 /** 外壳：右栏单列版 / 设置页全屏版。排法不看它，看容器宽度（plugins.css 的 @container pl） */
 export type PluginsChrome = "rail" | "page";
+
+/** 能力面板的选择条：有「全局」档，没有「任务」档（没有工作区的会话能用的就是全局的） */
+const ABILITY_FILTER_ALLOW: WsAllow = { tasks: false, global: true };
 
 /** 「在右栏打开」的请求在列表里找不到那个插件时，最多等列表更新多久再放弃 */
 const OPEN_REQUEST_WAIT_MS = 5000;
@@ -266,12 +271,21 @@ export function PluginsView(props: {
     () => filterEnabled(filterPlugins(state.plugins, query), onlyEnabled),
     [state.plugins, query, onlyEnabled],
   );
-  const groups = useMemo(() => groupPlugins(filtered, workspaces), [filtered, workspaces]);
-  // 「正在做」：还没装的草稿不算「已启用」，「仅显示已启用」开着时不列
-  const draftGroups = useMemo(
-    () => (onlyEnabled ? [] : groupDrafts(filterDrafts(draftList.drafts, query), workspaces, props.currentWorkspaceId)),
-    [draftList.drafts, query, workspaces, props.currentWorkspaceId, onlyEnabled],
-  );
+  // 工作区选择条：没选过时默认当前会话所在的工作区（Home / 无工作区 = 全部），选过后面板自己记住
+  const [wsFilter, setWsFilter] = useWorkspaceFilter("capabilities", defaultFilter(props.currentWorkspaceId, workspaces), workspaces, ABILITY_FILTER_ALLOW);
+  const wsOptions = useMemo(() => {
+    const counts = pluginFilterCounts(state.plugins, workspaces);
+    return buildOptions({ workspaces, total: counts.total, perWorkspace: counts.perWorkspace, tasks: null, global: counts.global, selected: wsFilter, hideEmpty: false });
+  }, [state.plugins, workspaces, wsFilter]);
+  const wsBar = <WorkspaceFilterBar options={wsOptions} workspaces={workspaces} selected={wsFilter} onSelect={setWsFilter} />;
+  // 「全部」= 按位置分组；选了某个工作区 / 全局 = 一组「它能用的」，每行小字写范围
+  const groups = useMemo(() => groupUsable(filtered, workspaces, wsFilter), [filtered, workspaces, wsFilter]);
+  // 「正在做」：还没装的草稿不算「已启用」，「仅显示已启用」开着时不列；草稿活在某个工作区里，选了别的工作区就不列，选「全局」不列
+  const draftGroups = useMemo(() => {
+    if (onlyEnabled || wsFilter.kind === "global") return [];
+    const scoped = wsFilter.kind === "workspace" ? draftList.drafts.filter((entry) => entry.workspaceId === wsFilter.id) : draftList.drafts;
+    return groupDrafts(filterDrafts(scoped, query), workspaces, props.currentWorkspaceId);
+  }, [draftList.drafts, query, workspaces, props.currentWorkspaceId, onlyEnabled, wsFilter]);
 
   const legacy = legacyCounts(state.plugins);
   const list = describeList(state.load, state.plugins.length);
@@ -395,7 +409,13 @@ export function PluginsView(props: {
         </div>
       )}
       {list.body === "list" && groups.length === 0 && (
-        <p className="pl-empty">{onlyEnabled && !filtering ? t.noneEnabled : t.noMatch(query.trim())}</p>
+        <p className="pl-empty">
+          {wsFilter.kind !== "all" && !filtering && !onlyEnabled
+            ? messages.sidebar.wsFilterNoneIn(wsFilter.kind === "workspace" ? (workspaces.find((workspace) => workspace.id === wsFilter.id)?.name ?? "") : t.availableGlobal)
+            : onlyEnabled && !filtering
+              ? t.noneEnabled
+              : t.noMatch(query.trim())}
+        </p>
       )}
       {/* 全屏版同时带卡片墙与安静列表两棵树，哪棵显示由容器宽度定（plugins.css）；右栏版只有列表 */}
       {!rail && groups.length > 0 && (
@@ -404,6 +424,7 @@ export function PluginsView(props: {
             <WallGroup
               key={groupKey(group)}
               group={group}
+              workspaces={workspaces}
               size={cardSize}
               onOpen={setSelectedId}
               onToggle={(view) => void toggle(view)}
@@ -412,10 +433,10 @@ export function PluginsView(props: {
         </div>
       )}
       {groups.map((group) => (
-        <GroupCard key={groupKey(group)} group={group} onOpen={setSelectedId} onToggle={(view) => void toggle(view)} />
+        <GroupCard key={groupKey(group)} group={group} workspaces={workspaces} onOpen={setSelectedId} onToggle={(view) => void toggle(view)} />
       ))}
       {/* 归档的技能不在上面的表里（文件夹已挪走）：底部一个默认折叠的分组，筛选时不出（它不参与筛选） */}
-      {!filtering && <ArchivedSkills refreshKey={state.plugins} workspaces={workspaces} onRestored={state.refresh} />}
+      {!filtering && <ArchivedAbilities refreshKey={state.plugins} workspaces={workspaces} filter={wsFilter} onRestored={state.refresh} />}
     </>
   );
 
@@ -544,6 +565,8 @@ export function PluginsView(props: {
         <RightPanelFrame
           header={header}
           contentKey={selected === null ? "list" : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
+          // 工作区选择条钉在列表上方（列表滚下去它还在）；详情 / 看板 / 选取态里不出
+          subheader={selected === null && !picking ? <div className="pl-wsbar" data-chrome="rail">{wsBar}</div> : undefined}
           footer={picking && selected === null ? <PluginPickerBar expanded={collapseRow(pickModel.flat[pickIndex]).kind !== "none"} /> : undefined}
         >
           <div className="pl-page" data-chrome="rail" data-picking={picking && selected === null}>
@@ -578,6 +601,7 @@ export function PluginsView(props: {
           <span className="pl-head-actions">{actions}</span>
         </div>
       )}
+      {selected === null && <div className="pl-wsbar">{wsBar}</div>}
       <div className="pl-body scroll">{selected === null ? listBody : detailBody}</div>
       {dialog}
     </div>
@@ -585,11 +609,17 @@ export function PluginsView(props: {
 }
 
 function groupKey(group: PluginGroup): string {
-  return group.kind === "workspace" ? `ws:${group.workspace.id}` : group.kind;
+  return group.kind === "workspace" ? `ws:${group.workspace.id}` : group.kind === "usable" ? `usable:${group.workspace?.id ?? "global"}` : group.kind;
 }
 
 function groupTitle(t: Messages["plugins"], group: PluginGroup): string {
+  if (group.kind === "usable") return group.workspace === null ? t.usableGlobal : t.usableIn(group.workspace.name);
   return group.kind === "global" ? t.groupAll : group.kind === "none" ? t.groupNone : group.workspace.name;
+}
+
+/** 「一组 = 它能用的」时每行 / 每张卡上的范围小字（别的分组里范围已经由组头说了，不重复）。 */
+function rangeText(t: Messages["plugins"], range: RangeLabel): string {
+  return range.kind === "global" ? t.rangeGlobal : range.kind === "only" ? t.rangeOnly(range.names.join("、")) : t.rangeNone;
 }
 
 /** 分组头：图标 + 组名 + 数量。列表（卡片底里）与卡片墙共用 */
@@ -598,7 +628,11 @@ function GroupHead(props: { group: PluginGroup }) {
   const { group } = props;
   return (
     <div className="pl-gh">
-      <Icon name={group.kind === "global" ? "globe" : group.kind === "none" ? "circle-off" : "folder"} size={14} strokeWidth={1.8} />
+      <Icon
+        name={group.kind === "global" || (group.kind === "usable" && group.workspace === null) ? "globe" : group.kind === "none" ? "circle-off" : "folder"}
+        size={14}
+        strokeWidth={1.8}
+      />
       <b>{groupTitle(t, group)}</b>
       <span className="pl-gh-count">{t.groupCount(group.items.length)}</span>
     </div>
@@ -624,6 +658,7 @@ function describePlugin(t: Messages["plugins"], view: PluginView): { kindsLine: 
 /** 卡片墙里的一组：组头 + 大 / 小卡网格（卡片墙的外壳类是模型服务页那套 pv-*，见 card-wall.css） */
 function WallGroup(props: {
   group: PluginGroup;
+  workspaces: readonly Workspace[];
   size: CardSize;
   onOpen: (id: string) => void;
   onToggle: (view: PluginView) => void;
@@ -635,7 +670,7 @@ function WallGroup(props: {
       <GroupHead group={group} />
       <div className={`pv-cards ${props.size}`}>
         {group.items.map((view) => (
-          <PluginCard key={view.id} view={view} size={props.size} onOpen={() => props.onOpen(view.id)} onToggle={() => props.onToggle(view)} />
+          <PluginCard key={view.id} view={view} range={group.kind === "usable" ? rangeOf(view, props.workspaces) : null} size={props.size} onOpen={() => props.onOpen(view.id)} onToggle={() => props.onToggle(view)} />
         ))}
       </div>
     </section>
@@ -647,13 +682,13 @@ function WallGroup(props: {
  * 名字与启用勾（说明进悬停）。启用开关悬停或键盘聚焦才浮出（模型服务卡的「+」同款），不占卡面。
  * 卡片本身是 div + role="button"：里面还套着开关，button 不能嵌 button。
  */
-function PluginCard(props: { view: PluginView; size: CardSize; onOpen: () => void; onToggle: () => void }) {
+function PluginCard(props: { view: PluginView; range: RangeLabel | null; size: CardSize; onOpen: () => void; onToggle: () => void }) {
   const t = useT().plugins;
   const { view } = props;
   const active = isActive(view);
   const large = props.size === "large";
   const { kindsLine, sourceLabel } = describePlugin(t, view);
-  const foot = `${sourceLabel} · ${kindsLine}`;
+  const foot = `${props.range === null ? "" : `${rangeText(t, props.range)} · `}${sourceLabel} · ${kindsLine}`;
   // 已启用：图标 + 文字（不只靠颜色）；小卡只留图标，文字进 aria-label
   const badge = active ? (
     <span className="pv-added-badge" {...(large ? {} : { role: "img", "aria-label": t.enabled, title: t.enabled })}>
@@ -707,20 +742,20 @@ function PluginCard(props: { view: PluginView; size: CardSize; onOpen: () => voi
   );
 }
 
-function GroupCard(props: { group: PluginGroup; onOpen: (id: string) => void; onToggle: (view: PluginView) => void }) {
+function GroupCard(props: { group: PluginGroup; workspaces: readonly Workspace[]; onOpen: (id: string) => void; onToggle: (view: PluginView) => void }) {
   const t = useT().plugins;
   const { group } = props;
   return (
     <section className="pl-grp" aria-label={groupTitle(t, group)}>
       <GroupHead group={group} />
       {group.items.map((view) => (
-        <PluginRow key={view.id} view={view} onOpen={() => props.onOpen(view.id)} onToggle={() => props.onToggle(view)} />
+        <PluginRow key={view.id} view={view} range={group.kind === "usable" ? rangeOf(view, props.workspaces) : null} onOpen={() => props.onOpen(view.id)} onToggle={() => props.onToggle(view)} />
       ))}
     </section>
   );
 }
 
-function PluginRow(props: { view: PluginView; onOpen: () => void; onToggle: () => void }) {
+function PluginRow(props: { view: PluginView; range: RangeLabel | null; onOpen: () => void; onToggle: () => void }) {
   const t = useT().plugins;
   const { view } = props;
   const active = isActive(view);
@@ -732,7 +767,9 @@ function PluginRow(props: { view: PluginView; onOpen: () => void; onToggle: () =
         <PluginAvatar view={view} />
         <span className="pl-name">
           <b>{view.name}</b>
-          <small className={view.origin === "user-mcp" ? "mono" : undefined}>{view.description}</small>
+          <small className={view.origin === "user-mcp" ? "mono" : undefined}>
+            {props.range === null ? view.description : [rangeText(t, props.range), view.description].filter((part) => part !== "").join(" · ")}
+          </small>
         </span>
         <span className="pl-kinds">{kindsLine}</span>
         <span className="pl-from">{sourceLabel}</span>

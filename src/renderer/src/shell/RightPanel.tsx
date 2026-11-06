@@ -145,6 +145,8 @@ export function RightPanelFrame(props: {
   contentKey: string;
   /** 页头最右的动作槽（说明 ?、添加、刷新等） */
   headerExtra?: React.ReactNode;
+  /** 页头与滚动内容之间的一条（不随内容滚动）：能力面板的工作区选择条 */
+  subheader?: React.ReactNode;
   footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -154,9 +156,10 @@ export function RightPanelFrame(props: {
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateRows: "minmax(0,1fr) auto",
+        gridTemplateRows: props.subheader === undefined ? "minmax(0,1fr) auto" : "auto minmax(0,1fr) auto",
       }}
     >
+      {props.subheader}
       {slot !== null &&
         createPortal(
           <div className="cap-panel-content" key={props.contentKey}>

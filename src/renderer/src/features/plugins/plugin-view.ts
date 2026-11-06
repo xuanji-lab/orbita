@@ -2,11 +2,15 @@
  * 插件页的纯函数：分组、筛选、「里面有什么」一行小字、来源、开关落点、范围编辑的状态机。
  * 单独成文件只为可测——`node --test` 只加载 .ts，这些判定写在 .tsx 里就没法直接跑。
  */
-import type { PluginPlacement, PluginScope, PluginView } from "@shared/plugin";
+import type { PluginArchiveEntry, PluginPlacement, PluginScope, PluginView } from "@shared/plugin";
+import type { SkillArchiveEntry } from "@shared/skill";
 import type { Workspace } from "@shared/workspace";
+import type { WsFilter } from "../../shell/workspace-filter.ts";
 
 export type PluginGroup =
   | { kind: "global"; items: PluginView[] }
+  /** 选择条选了某个工作区 / 「全局」：一整组「它能用的」（workspace = null 是「全局」档） */
+  | { kind: "usable"; workspace: Workspace | null; items: PluginView[] }
   | { kind: "workspace"; workspace: Workspace; items: PluginView[] }
   | { kind: "none"; items: PluginView[] };
 
@@ -192,8 +196,95 @@ export function installedNamesOf(views: ReadonlyArray<{ id: string; origin: stri
   return found;
 }
 
-/** 归档记录里的范围说成一句：全局 / 工作区名（已不存在的工作区不列）；都没有就空。 */
-export function archivedScopeText(entry: { global: boolean; workspaces: readonly string[] }, global: string, nameOf: (id: string) => string | null): string {
-  if (entry.global) return global;
-  return entry.workspaces.flatMap((id) => nameOf(id) ?? []).join("、");
+// ---------- 工作区选择条（能力面板） ----------
+
+/**
+ * 这一行**记着的位置**对选择条的这一档算不算「能用的」：全局的对每个工作区都算；
+ * 「只在这些」的要名单里有它；没有位置的（旧技能全没链）哪一档都不算，只在「全部」里的「未启用」组出现。
+ * 按位置（placement）不按此刻生效（scope）——停用的行仍在原来的组里，开关一拨就回原位，同 groupPlugins。
+ * 「任务」档能力面板没有（没有工作区的会话只有全局的能用，那就是「全局」档）。
+ */
+export function usableIn(view: Pick<PluginView, "placement">, filter: WsFilter): boolean {
+  const placement = view.placement;
+  if (placement === null) return false;
+  if (filter.kind === "all") return true;
+  if (filter.kind === "global") return placement.kind === "global";
+  if (filter.kind === "workspace") return placement.kind === "global" || placement.ids.includes(filter.id);
+  return placement.kind === "global";
+}
+
+/** 选择条各档的条数：全部 = 一共几行；某工作区 = 它能用的（含全局）；全局 = 只数全局的。 */
+export function pluginFilterCounts(
+  views: readonly PluginView[],
+  workspaces: readonly Workspace[],
+): { total: number; perWorkspace: Map<string, number>; global: number } {
+  const perWorkspace = new Map<string, number>();
+  for (const workspace of workspaces) {
+    perWorkspace.set(workspace.id, views.filter((view) => usableIn(view, { kind: "workspace", id: workspace.id })).length);
+  }
+  return { total: views.length, perWorkspace, global: views.filter((view) => usableIn(view, { kind: "global" })).length };
+}
+
+/**
+ * 选了某个工作区 / 「全局」时的列表：就一组「它能用的」。「全部」仍走 groupPlugins（按位置分组）。
+ * 组内排序同 groupPlugins；没有可列的给空数组（调用方画空态）。
+ */
+export function groupUsable(views: readonly PluginView[], workspaces: readonly Workspace[], filter: WsFilter): PluginGroup[] {
+  if (filter.kind === "all" || filter.kind === "tasks") return groupPlugins(views, workspaces);
+  const items = views.filter((view) => usableIn(view, filter)).sort(compareViews);
+  if (items.length === 0) return [];
+  const workspace = filter.kind === "workspace" ? (workspaces.find((each) => each.id === filter.id) ?? null) : null;
+  return [{ kind: "usable", workspace, items }];
+}
+
+/** 一行上的范围小字：全局 / 只在这些工作区（已不存在的不列）/ 没有位置。 */
+export type RangeLabel = { kind: "global" } | { kind: "only"; names: string[] } | { kind: "none" };
+
+export function rangeOf(view: Pick<PluginView, "placement">, workspaces: readonly Workspace[]): RangeLabel {
+  const placement = view.placement;
+  if (placement === null) return { kind: "none" };
+  if (placement.kind === "global") return { kind: "global" };
+  const names = placement.ids.flatMap((id) => workspaces.find((workspace) => workspace.id === id)?.name ?? []);
+  return names.length === 0 ? { kind: "none" } : { kind: "only", names };
+}
+
+// ---------- 归档（技能归档 + 插件卸载归档，同一个分组） ----------
+
+/** 能力面板底部「已归档」里的一行：技能归档与插件卸载归档合成同一种形状。 */
+export interface ArchivedRow {
+  kind: "skill" | "plugin";
+  /** 归档句柄（技能：恢复用；插件：只读，不用它做任何事） */
+  id: string;
+  name: string;
+  /** 技能归档的原 slug（恢复冲突时说的是它）；插件没有 */
+  slug: string | null;
+  archivedAt: number;
+  global: boolean;
+  workspaces: string[];
+}
+
+/** 两份归档合并，新的在前（同时刻按 kind、id 定序，保证稳定）。 */
+export function mergeArchived(skills: readonly SkillArchiveEntry[], plugins: readonly PluginArchiveEntry[]): ArchivedRow[] {
+  const rows: ArchivedRow[] = [
+    ...skills.map((entry) => ({ kind: "skill" as const, id: entry.id, name: entry.name, slug: entry.slug, archivedAt: entry.archivedAt, global: entry.global, workspaces: entry.workspaces })),
+    ...plugins.map((entry) => ({ kind: "plugin" as const, id: entry.id, name: entry.name, slug: null, archivedAt: entry.archivedAt, global: entry.global, workspaces: entry.workspaces })),
+  ];
+  return rows.sort((a, b) => b.archivedAt - a.archivedAt || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+}
+
+/**
+ * 归档行按选择条过滤：「原来能在它那儿用的」——全局的对每个工作区都算，「只在这些」的要名单里有它；
+ * 「全局」档只留原来全局的。「全部」不过滤（包括原来哪儿都没链的）。
+ */
+export function archivedUsableIn(entry: Pick<ArchivedRow, "global" | "workspaces">, filter: WsFilter): boolean {
+  if (filter.kind === "all") return true;
+  if (filter.kind === "workspace") return entry.global || entry.workspaces.includes(filter.id);
+  return entry.global;
+}
+
+/** 归档行的「原来在哪」：全局 / 只在这些（已不存在的工作区不列）/ 说不清（空）。 */
+export function archivedRange(entry: Pick<ArchivedRow, "global" | "workspaces">, workspaces: readonly Workspace[]): RangeLabel {
+  if (entry.global) return { kind: "global" };
+  const names = entry.workspaces.flatMap((id) => workspaces.find((workspace) => workspace.id === id)?.name ?? []);
+  return names.length === 0 ? { kind: "none" } : { kind: "only", names };
 }
