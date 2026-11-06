@@ -438,8 +438,15 @@ export const en = {
     },
     waitingIdle: "waiting for the task to be idle",
     next: (when: string) => `next ${when}`,
-    countOf: (done: number, max: number) => `${done}/${max} runs`,
-    countPlain: (count: number) => (count === 1 ? "1 run" : `${count} runs`),
+    countTotal: (count: number) => (count === 1 ? "1 run total" : `${count} runs total`),
+    spark: {
+      /** 柱子的悬停提示：「11/04 Tue · 3 runs」 */
+      dayTip: (date: string, weekday: string, count: number, failed: boolean) =>
+        `${date} ${weekday} · ${count === 1 ? "1 run" : `${count} runs`}${failed ? " · has failure" : ""}`,
+      /** 整块的 aria-label */
+      summary: (total: number, failedDays: number) =>
+        `Last 7 days: ${total === 1 ? "1 run" : `${total} runs`}${failedDays > 0 ? `, failed on ${failedDays} ${failedDays === 1 ? "day" : "days"}` : ""}`,
+    },
     failedBecause: (reason: string) =>
       reason === "" ? "Stopped after repeated failures. Restart to try again." : `Stopped after repeated failures: ${reason}`,
     lastFailed: (reason: string) => `Last run failed: ${reason}`,

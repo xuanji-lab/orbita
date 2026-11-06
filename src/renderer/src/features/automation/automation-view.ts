@@ -210,10 +210,9 @@ export function subtitleOf(automation: Automation, now: number, t: AutomationMes
   }
 }
 
-/** 行右上角的次数：有上限写 3/12 次，没有写「已运行 6 次」；一次都没跑过写空串 */
+/** 行右侧的累计次数：「累计 N 次」（N = runCount，不含 skipped；没有跑过也写 0） */
 export function countLabel(automation: Automation, t: AutomationMessages): string {
-  if (automation.maxRuns !== undefined) return t.countOf(automation.runCount, automation.maxRuns);
-  return automation.runCount === 0 ? "" : t.countPlain(automation.runCount);
+  return t.countTotal(automation.runCount);
 }
 
 /** 这一行要单独提醒的一句话（失败原因 / 最近一次失败 / 会话是 manual 档会卡在审批）；没有返回 null */

@@ -114,18 +114,70 @@
   line-height: var(--line-height-ui);
 }
 
-/* 行尾次数：钉在行右内边距（.row-trailing）；悬停动作簇浮出时让位 */
+/*
+ * 行右侧固定一块：近 7 天小柱状图 + 「累计 N 次」。每行同宽，图与累计跨行上下对齐；钉在行右内边距（.row-trailing）。
+ * 柱高由 TSX 内联（共用一把尺），颜色 / 宽度在这里：今天墨色、其余 tertiary、有失败 danger、没跑一道细线。
+ */
+.auto-list {
+  container: auto-list / inline-size;
+  --auto-run-size: 22px; /* 悬停 ▶ 的边长（IconButton size） */
+}
+
+.auto-trail {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  transition: var(--transition-hover);
+}
+
+.auto-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-0-5);
+  width: calc(7 * var(--space-1-5) + 6 * var(--space-0-5));
+  height: 18px;
+  flex: none;
+}
+
+.auto-bar {
+  flex: none;
+  width: var(--space-1-5);
+  border-radius: 1px;
+  background: var(--color-text-tertiary);
+}
+.auto-bar[data-empty] {
+  background: var(--color-border-strong);
+}
+.auto-bar[data-today] {
+  background: var(--color-text-primary);
+}
+.auto-bar[data-today][data-empty] {
+  background: var(--color-text-tertiary);
+}
+.auto-bar[data-failed] {
+  background: var(--color-danger);
+}
+
+/* 暂停 / 已完成：整张图变淡（失败行保持，红柱本身是信号） */
+.auto-item[data-state="paused"] .auto-spark,
+.auto-item[data-state="completed"] .auto-spark {
+  opacity: 0.5;
+}
+
 .auto-count {
-  padding-top: var(--space-0-5);
+  width: 5.5em;
+  text-align: right;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  transition: var(--transition-hover);
 }
 
 .auto-sub {
-  grid-column: 2 / 4;
+  grid-column: 2;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -134,11 +186,12 @@
   color: var(--color-text-secondary);
 }
 
-/* 悬停动作簇：绝对定位盖在行尾，静止时不占位 */
+/* 悬停动作簇：绝对定位盖在行尾，静止时不占位；▶ 出现时右侧那块整体左让 */
 .auto-acts {
   position: absolute;
-  top: var(--space-2);
+  top: 50%;
   right: var(--space-2);
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: var(--space-0-5);
@@ -153,10 +206,31 @@
   pointer-events: auto;
 }
 
-/* 只有 ▶ 真出现（能运行）的行，次数才让位；不能运行的行次数一直在 */
-.auto-item[data-runnable="true"]:hover .auto-count,
-.auto-item[data-runnable="true"]:focus-within .auto-count {
-  opacity: 0;
+/* 只有 ▶ 真出现（能运行）的行才让位：行右内边距让出 ▶ 的宽（22px）+ 间距，次数不被盖住 */
+.auto-row {
+  transition: padding-right var(--duration-fast) ease;
+}
+.auto-item[data-runnable="true"]:hover .auto-row,
+.auto-item[data-runnable="true"]:focus-within .auto-row {
+  padding-right: calc(var(--space-2) + var(--auto-run-size) + var(--space-2));
+}
+
+/* 右栏窄（容器 < 360px）：先藏柱状图，名字优先，只留「累计 N 次」，回到标题行右上 */
+@container auto-list (max-width: 343px) {
+  .auto-spark {
+    display: none;
+  }
+  .auto-trail {
+    grid-row: 1;
+    align-self: start;
+    padding-top: var(--space-0-5);
+  }
+  .auto-count {
+    width: auto;
+  }
+  .auto-sub {
+    grid-column: 2 / 4;
+  }
 }
 
 /* 一句话提醒（失败原因 / 会卡在审批）：行内左缘与标题对齐 */

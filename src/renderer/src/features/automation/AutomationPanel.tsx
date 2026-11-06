@@ -25,6 +25,7 @@ import {
   type AutomationScope,
   type AutomationTemplate,
 } from "./automation-view.ts";
+import { sparkScale } from "./automation-spark.ts";
 import type { AutomationsState } from "./useAutomations.ts";
 
 /** 「N 分钟后」这类相对文案要跟着走：每分钟重算一次 now（面板开着才有这个定时器） */
@@ -104,6 +105,12 @@ export function AutomationPanel(props: {
   };
 
   const groups = groupAutomations(state.automations, scope, { workspaceId: props.workspaceId, sessionId: props.sessionId });
+
+  // 一把尺只按当前显示出来的那些行算（「本工作区 / 全部」切换时跟着变）
+  const sparkMax = sparkScale(
+    groups.flatMap((group) => group.items),
+    now,
+  );
 
   if (view.kind === "edit") {
     const target = view.id === null ? null : (state.automations.find((automation) => automation.id === view.id) ?? null);
@@ -288,6 +295,7 @@ export function AutomationPanel(props: {
                   key={automation.id}
                   automation={automation}
                   now={now}
+                  sparkMax={sparkMax}
                   boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
                   onOpen={() => setView({ kind: "detail", id: automation.id })}
                   onAct={(action) => void act(automation, action)}
