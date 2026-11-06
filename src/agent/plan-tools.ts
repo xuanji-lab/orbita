@@ -204,6 +204,8 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       "the user answers in the chat box, there are no buttons, and you make no more tool calls until they do. " +
       "Otherwise do not stop to ask; write the plan and get on with it. Steps are short, " +
       "outcome-focused phrases in the user's language.",
+    // 第三条（2026-11-06 用户）：用户中途提了计划外的新活（「先修一个 bug」），智能体直接开干、计划还停在
+    // 旧任务上——「它不会去适当地调整那个 plan 然后再开始干活」。前两条只管「做的过程中发现的」活。
     // 规则放进系统提示的 Guidelines（promptGuidelines，随工具启用、整会话不变）：只写在工具说明里时，
     // Kimi K3.1 Pro 实测两次发现计划没覆盖的问题（顺带修了 completeTask、兼容了旧日期），嘴上说了
     // 「我会先修正」却照旧只打勾、没加步骤、没写 why / later（2026-10-30）
@@ -211,6 +213,7 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
     promptGuidelines: [
       "Keep the plan honest. When you find work it does not cover (a bug you have to fix first, a missing prerequisite, a failing check), call update_plan with that work as its own step and a `why` BEFORE you do it. Saying it in prose, or folding it into another step, leaves the user's checklist wrong.",
       "When you notice something worth doing but decide not to do it in this task, put it in update_plan's `later` right then, not at the end.",
+      "When the user's new message asks for something the current plan does not cover (a bug to look into, another change, a side question that takes several steps), update the plan before you start on it: add it as its own step or steps with a `why` that names the request, keep the unfinished earlier steps (mark them done, or keep them pending if you will come back to them), and if earlier work keeps running alongside (a sub-session you delegated), say so in that step's text. A new request is not a reason to drop the plan or to work outside it.",
     ],
     parameters: {
       type: "object",
