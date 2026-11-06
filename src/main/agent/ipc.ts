@@ -3,6 +3,7 @@
  * 事件是单向广播：主进程收到 agent 进程的消息就原样转给所有窗口，不在中间加工。
  */
 import { ipcMain } from "electron";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { mainWindows } from "../window/main-windows.ts";
 import {
@@ -16,6 +17,7 @@ import {
   composeInvocationPrompt,
   findInvocationTokens,
   type InvokedMcp,
+  type InvokedPlugin,
   type InvokedSkill,
 } from "../../shared/invocation.ts";
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
@@ -34,6 +36,7 @@ import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import { readMcpConfigFile } from "../mcp/store.ts";
 import type { PluginAssembly, PluginStore } from "../plugin/store.ts";
+import { invokedPluginOf } from "../plugin/invoked.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
@@ -407,7 +410,7 @@ export function registerAgentIpc(
   }
 
   /**
-   * `/skill:<target>` / `/mcp:<server>` → 指令式调用块（任意位置、任意多条）：
+   * `/skill:<target>` / `/mcp:<server>` / `/plugin:<name>` → 指令式调用块（任意位置、任意多条）：
    * 在用户原文**前面**拼一段硬措辞指令，点名的 skill 写明 SKILL.md 绝对路径、
    * 要求模型先用 read 工具读了再干活（渐进式披露：索引常驻 system prompt，正文
    * 以 tool result 身份按需进上下文，不内联进 user message）；点名的 MCP server
@@ -415,6 +418,8 @@ export function registerAgentIpc(
    * 如实写明「不要假装加载」。**组装在主进程**：名字与启用状态的真源在 store；
    * transcript 落组装后的全文，重放历史所见即所得（pi 无状态，每轮把历史喂回去，
    * 存原文再改写会打断 provider 的前缀缓存）。
+   * `/plugin:<name>`：指令块写插件的工作流、入口技能路径（要求先 read）与看板句，不内联技能全文；
+   * 没装 / 没启用 / 入口读不出如实写明（判定在 plugin/invoked.ts）。
    * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
    * 通道信封（子会话的投递文本）不组装：首行是 `<channel …>` 头，前面拼块会破
    * parseChannelPrompt 的识别；那不是用户输入，父模型要用 skill 自会在任务说明里
@@ -429,6 +434,7 @@ export function registerAgentIpc(
     if (tokens.length === 0) return text;
     const skillTargets = [...new Set(tokens.filter((t) => t.kind === "skill").map((t) => t.target))];
     const mcpTargets = [...new Set(tokens.filter((t) => t.kind === "mcp").map((t) => t.target))];
+    const pluginTargets = [...new Set(tokens.filter((t) => t.kind === "plugin").map((t) => t.target))];
     // 可用性判定与右栏选取模式共用 isSkillAvailable（选取面认的，发送时必然认）
     const available =
       skillTargets.length > 0
@@ -461,7 +467,24 @@ export function registerAgentIpc(
         invokedMcps.push({ target, available: server !== undefined && server.disabled !== true });
       }
     }
-    return composeInvocationPrompt(text, invokedSkills, invokedMcps);
+    const invokedPlugins: InvokedPlugin[] = [];
+    if (pluginTargets.length > 0) {
+      // 插件功能关着：一个也不认（装配本身就是空的）
+      const on = (await settings.read()).experimentalFeatures?.plugins === true;
+      const views = on ? await plugins.listViews().catch(() => []) : [];
+      const assembly = await readPluginAssembly(workspaceId);
+      for (const target of pluginTargets) {
+        const view = views.find((each) => each.origin === "plugin" && each.id === `plugin:${target}`);
+        // 入口技能文件：只认这一轮装配里的（撞名被丢的不算），且确实读得到
+        const files = new Map(assembly.skills.filter((skill) => skill.plugin === target).map((skill) => [skill.slug, skill.file]));
+        const readable = new Map<string, string>();
+        for (const [slug, file] of files) {
+          if (await access(file).then(() => true, () => false)) readable.set(slug, file);
+        }
+        invokedPlugins.push(invokedPluginOf(target, view, workspaceId, (slug) => readable.get(slug) ?? null));
+      }
+    }
+    return composeInvocationPrompt(text, invokedSkills, invokedMcps, invokedPlugins);
   };
 
   /**

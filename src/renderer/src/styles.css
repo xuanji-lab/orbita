@@ -383,6 +383,11 @@
 .bubble-chip-mcp {
   --chip-hue: var(--color-filetype-doc);
 }
+/* 插件 = 橙（与插件页头像同一档类别色） */
+.composer-chip[data-kind="plugin"],
+.bubble-chip-plugin {
+  --chip-hue: var(--color-filetype-slides);
+}
 
 .composer-chip[data-kind] {
   position: relative;
@@ -418,6 +423,14 @@
 
 .composer-chip-name {
   flex: 0 0 auto;
+}
+
+/* 插件 chip 写显示名，宽度与 token 原文无关：名字槽可收缩，放不下省略号，胶囊不超出原文的格子 */
+.composer-chip[data-kind="plugin"] .composer-chip-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 名字走伪元素：face 不许往镜像里加文字（caret-point 按 textContent 定位） */
@@ -3760,209 +3773,8 @@ html[data-pointer-drag] iframe {
 }
 
 /*
- * ===== MCP · 卡片视图（skills-mcp 第三刀，视觉真源 skills-mcp-ui 第三章） =====
- * 卡片沿用 `.glass-card`（tokens/glass.css）当底——现行规则不用稿子里的
- * 纯色 --color-bg-panel + blur，这里只加布局；hover/focus-within 时描边
- * 加深，呼应稿子的「filesystem 卡演示 hover」帧。
- */
-/*
- * MCP 服务卡（能力面板里点一台服务打开的详情，2026-10-30）：一块圆角区——内缩在
- * .panel-list 里、无边框；第一行状态 + 名字 + 动作（常显），第二行起是命令 / 范围 /
- * 实例状态（tertiary）。列表在能力面板，这张卡只在详情里，所以没有悬停底色与悬停浮现。
- */
-.mcp-card {
-  position: relative;
-  display: grid;
-  gap: var(--space-0-5);
-  padding: var(--space-1-5) var(--space-2);
-  border-radius: var(--radius-md);
-}
-.mcp-name {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mcp-actions {
-  display: inline-flex;
-  gap: var(--space-0-5);
-  flex: 0 0 auto;
-}
-
-/*
- * 工具 chips（简报 1）：mono 小胶囊横排换行，纯函数 `visibleTools`
- * （tool-chips.ts）算出 shown/hidden，这里只管展示。「+N more」是
- * `<button>`（键盘可达），其余 chip 是纯展示 `<span>`。
- */
-.mcp-tool-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-.mcp-tool-chip {
-  display: inline-flex;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  padding: 1.5px var(--space-1-5);
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-muted);
-  border: 1px solid var(--color-border-subtle);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-}
-button.mcp-tool-chip {
-  font: inherit;
-  cursor: pointer;
-}
-.mcp-tool-chip-more {
-  background: transparent;
-  border-style: dashed;
-  color: var(--color-text-tertiary);
-  transition: var(--transition-hover);
-}
-.mcp-tool-chip-more:hover {
-  color: var(--color-text-primary);
-  border-color: var(--color-text-tertiary);
-}
-
-/*
- * 错误软底块 + Retry（简报 2）：danger-soft 圆角块，块内右下角就地重试——
- * 走 reloadMcp() 同一条路，不新增契约。限高滚动而不是折行：401 一类的
- * 长错误信息折行会把卡片撑得很高，滚动把高度还给列表。
- */
-.mcp-error {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-2-5);
-  background: var(--color-danger-soft);
-  border-radius: var(--radius-md);
-}
-.mcp-error-text {
-  margin: 0;
-  max-height: 110px;
-  overflow-y: auto;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-danger);
-  line-height: var(--line-height-ui);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.mcp-error-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-.mcp-retry-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 9px;
-  background: transparent;
-  border: 1px solid var(--color-danger);
-  border-radius: var(--radius-sm);
-  color: var(--color-danger);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.mcp-retry-btn:hover:not(:disabled) {
-  background: var(--color-danger-soft);
-}
-.mcp-retry-btn:disabled {
-  color: var(--color-text-tertiary);
-  border-color: var(--color-border-subtle);
-  cursor: default;
-}
-
-/*
- * ===== MCP · 工作区实例明细（分片/分层之后） =====
- * 设计稿真源 design/mcp-panel-workspace.html。五个类，其余复用现有配方。
- */
-
-/* 限定工作区行 / 定义来源行（同一个视觉：sm + tertiary + folder 图标） */
-.mcp-scope {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-
-/* 实例状态行：独占一行，不挤头行（320px 抽屉放不下「图标+名字+长状态+动作+展开钮」） */
-.mcp-ws-status {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-.mcp-ws-status.bad {
-  color: var(--color-danger);
-}
-
-/* 行尾展开钮：quiet-control 同款中性 hover；aria-expanded 旋转 160ms */
-.mcp-expand {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  transition: transform 160ms var(--ease-out-quint), var(--transition-hover);
-}
-.mcp-expand:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-.mcp-expand[aria-expanded="true"] {
-  transform: rotate(90deg);
-}
-
-/* 实例明细：卡内发丝顶线分隔的子列表 */
-.mcp-instances {
-  display: grid;
-  gap: var(--space-2);
-  border-top: 1px solid var(--color-border-subtle);
-  padding-top: var(--space-2);
-}
-.mcp-instance {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: center;
-  gap: var(--space-1-5);
-  font-size: var(--font-size-sm);
-}
-.mcp-instance .ws {
-  font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
-}
-.mcp-instance .st {
-  color: var(--color-text-tertiary);
-}
-.mcp-instance .st.bad {
-  color: var(--color-danger);
-}
-.mcp-instance .bind {
-  grid-column: 1 / -1;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  overflow-wrap: anywhere;
-  padding-left: var(--space-5);
-}
-
-/*
- * ===== 表单输入框（Skills / MCP 面板） =====
- * McpPanel 与 SkillsPanel 各抄一份逐字节相同的 `inputStyle`（单行 `<input>` 与多行
- * `<textarea>` 只差 height/padding/resize），收成一个 class；等宽字体、
+ * ===== 表单输入框 =====
+ * 单行 `<input>` 与多行 `<textarea>` 只差 height/padding/resize，收成一个 class；等宽字体、
  * line-height、`cursor: not-allowed` 这类只在个别处出现的差异留在各自的 inline
  * style 里，不进这个共用配方。
  *

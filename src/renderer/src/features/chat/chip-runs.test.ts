@@ -27,6 +27,14 @@ describe("splitChipRuns —— 气泡文本节点的切分", () => {
     ]);
   });
 
+  it("/plugin: token 也画，chipKind 为 plugin", () => {
+    deepStrictEqual(splitChipRuns("再用 /plugin:lit-tracker 看", true), [
+      { kind: "text", text: "再用 " },
+      { kind: "chip", chipKind: "plugin", text: "/plugin:lit-tracker", target: "lit-tracker" },
+      { kind: "text", text: " 看" },
+    ]);
+  });
+
   it("token 在节点开头且前面是词（如前一个兄弟是 strong）→ 不画", () => {
     deepStrictEqual(splitChipRuns("/skill:x 后面", false), [
       { kind: "text", text: "/skill:x 后面" },

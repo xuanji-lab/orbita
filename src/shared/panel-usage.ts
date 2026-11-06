@@ -25,8 +25,6 @@ export const PANEL_USAGE_KEYS = [
   /** 文件面板（文件树 / 预览） */
   "files",
   "review",
-  /** 能力：Skills 与 MCP */
-  "abilities",
   /** 记忆库（设置里的页签） */
   "memory",
   "intent",

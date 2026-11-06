@@ -22,8 +22,8 @@ describe("rememberPanel / recallPanel：切走记、切回恢复", () => {
 
   it("同一条会话再次离开时覆盖：最后一次的面板才算数", () => {
     let memory: PanelMemory = rememberPanel(new Map(), "a", "files");
-    memory = rememberPanel(memory, "a", "abilities");
-    strictEqual(recallPanel(memory, "a"), "abilities");
+    memory = rememberPanel(memory, "a", "terminal");
+    strictEqual(recallPanel(memory, "a"), "terminal");
   });
 
   it("离开时面板是关着的：也记（恢复成关着，而不是漏记后回退到更早的记忆）", () => {
@@ -98,7 +98,7 @@ describe("resolvePanel：挂了实验开关的面板，开关关着就收起", (
 
   it("没挂开关的面板与「关着」原样返回，别的实验开关不影响", () => {
     strictEqual(resolvePanel("files", {}), "files");
-    strictEqual(resolvePanel("abilities", { plugins: false }), "abilities");
+    strictEqual(resolvePanel("terminal", { plugins: false }), "terminal");
     strictEqual(resolvePanel(null, { plugins: true }), null);
     strictEqual(resolvePanel("plugins", { "memory-system": true }), null);
   });

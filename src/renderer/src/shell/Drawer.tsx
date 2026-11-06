@@ -248,7 +248,7 @@ function Picker(props: {
         ))}
         {candidates.length === 0 && <PanelEmpty icon="message-square">{t.drawer.noOther}</PanelEmpty>}
         {candidates.length > 0 && shown.length === 0 && (
-          <PanelEmpty icon="search">{t.skills.noMatch(query.trim())}</PanelEmpty>
+          <PanelEmpty icon="search">{t.drawer.noMatch(query.trim())}</PanelEmpty>
         )}
       </div>
     </RightPanelFrame>

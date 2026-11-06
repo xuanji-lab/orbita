@@ -1,5 +1,5 @@
 /**
- * `/skill:` 与 `/mcp:` 的指令式调用契约 —— IPC 四层的第 1 层（纯函数，主进程组装、
+ * `/skill:`、`/mcp:` 与 `/plugin:` 的指令式调用契约 —— IPC 四层的第 1 层（纯函数，主进程组装、
  * 显示端剥离共用）。
  *
  * skills 是渐进式披露的：索引（name + description）常驻 pi 的 system prompt，
@@ -10,6 +10,11 @@
  * 原文**前面**加一段硬措辞的指令块，写明点名的 skill 与 SKILL.md 绝对路径、要求
  * 先 read 再干活；查不到 / 读不出的如实写明「不要假装加载」，不再拦下整条消息。
  *
+ * 插件同一机制：`/plugin:<name>` 点名整个插件。指令块里写插件名、此工作区启没启用、
+ * 工作流各步（标题 → 用哪条技能）、入口技能的 SKILL.md 绝对路径（要求先 read），
+ * 插件带看板就写明跑完调 show_plugin_board。**同样不内联技能全文**；没装 / 没启用
+ * 如实写进块里、不拦消息。
+ *
  * MCP 同一机制：server 也是模型按 `mcp__<server>__<tool>` 名字调用的能力，
  * `/mcp:<server>` 点名后指令块里写明用这家的工具。
  *
@@ -19,8 +24,8 @@
  * 剥掉指令块，只给用户看他自己写的话。
  */
 
-/** 两类点名 token：skill 读文件，mcp 用工具。 */
-export type InvocationKind = "skill" | "mcp";
+/** 三类点名 token：skill 读文件，mcp 用工具，plugin 是一整套（工作流 + 入口技能 + 看板）。 */
+export type InvocationKind = "skill" | "mcp" | "plugin";
 
 /**
  * 一次 `/skill:<target>` 或 `/mcp:<server>` 调用在原文里的位置。start 指向 `/`，
@@ -40,11 +45,12 @@ const isBoundaryChar = (ch: string): boolean => /\s/.test(ch);
 const TOKEN_PREFIXES: ReadonlyArray<{ kind: InvocationKind; prefix: string }> = [
   { kind: "skill", prefix: "/skill:" },
   { kind: "mcp", prefix: "/mcp:" },
+  { kind: "plugin", prefix: "/plugin:" },
 ];
 
 /**
- * 扫出原文里全部 `/skill:<target>` 与 `/mcp:<server>`（任意位置、任意多条，按出现
- * 顺序）。target 是冒号后连续的非空白段，空 target 不算；不是这两个前缀的 `/xxx`
+ * 扫出原文里全部 `/skill:<target>`、`/mcp:<server>` 与 `/plugin:<name>`（任意位置、任意多条，按出现
+ * 顺序）。target 是冒号后连续的非空白段，空 target 不算；不是这三个前缀的 `/xxx`
  * （如 `/compact`、路径）不在这里管。token 在原文里**原样保留**——指令块只追加在
  * 前面，不改动用户写的任何字符。
  */
@@ -68,7 +74,7 @@ export function findInvocationTokens(text: string): InvocationToken[] {
 /**
  * 指令块的包裹标签。显示端按它整体剥离（stripInvocationBlock），转录里它是
  * 「这段不是用户自己写的」的标记。名字取 mentioned：块里列的是用户在消息里
- * **点名**的 skill / server，存在的与不存在的都列。
+ * **点名**的 skill / server / plugin，存在的与不存在的都列。
  */
 export const INVOCATION_OPEN = "<mentioned_tools>";
 export const INVOCATION_CLOSE = "</mentioned_tools>";
@@ -85,6 +91,45 @@ export type InvokedSkill =
 export interface InvokedMcp {
   target: string;
   available: boolean;
+}
+
+/** 插件工作流的一步：标题 + 它用哪条技能（清单里写的原样，可能不是技能而是工具名；没写为 null）。 */
+export interface InvokedPluginStep {
+  title: string;
+  skill: string | null;
+}
+
+/**
+ * 一个被点名的插件。三种状态：
+ * - `not-installed`：没装（或插件功能关着）；
+ * - `disabled`：装了，但对这条会话所在的工作区没启用——模型不该假装在用，要告诉用户去启用；
+ * - `enabled`：可用。`entry` = 入口技能（工作流第一步点名的技能，没有工作流取第一条技能）与它的
+ *   SKILL.md 绝对路径；null = 插件没有可读的技能，如实写明。`hasBoard` = 清单带 `orbita.board`。
+ */
+export type InvokedPlugin =
+  | { target: string; state: "not-installed" }
+  | { target: string; state: "disabled"; displayName: string }
+  | {
+      target: string;
+      state: "enabled";
+      displayName: string;
+      workflow: InvokedPluginStep[];
+      entry: { skill: string; location: string } | null;
+      hasBoard: boolean;
+    };
+
+/**
+ * 入口技能的 slug：工作流第一个对上了本插件技能的步骤点名的那条；没有工作流（或没有一步对上）
+ * 取插件的第一条技能；一条技能也没有为 null。选取规则放在契约层，主进程与测试共用一份。
+ */
+export function entrySkillSlug(
+  workflow: ReadonlyArray<{ skillSlug: string | null }>,
+  skills: ReadonlyArray<{ slug: string }>,
+): string | null {
+  for (const step of workflow) {
+    if (step.skillSlug !== null) return step.skillSlug;
+  }
+  return skills[0]?.slug ?? null;
 }
 
 /** target 里可能带引号（用户手打的），显示时转义掉，别撑破引号包裹。 */
@@ -118,21 +163,59 @@ function mcpLine(server: InvokedMcp): string {
   return `- ${quoted(server.target)} — is not configured or is disabled. Do not pretend to use its tools; proceed without it.`;
 }
 
+function pluginLines(plugin: InvokedPlugin): string[] {
+  if (plugin.state === "not-installed") {
+    return [
+      `- ${quoted(plugin.target)} — is not installed (or the plugins feature is off). Do not pretend to use it; tell the user and handle the request as written.`,
+    ];
+  }
+  const who = `${quoted(plugin.target)} (display name ${quoted(plugin.displayName)})`;
+  if (plugin.state === "disabled") {
+    return [
+      `- ${who} — is installed but NOT enabled in this workspace. Do not pretend to use it and do not read its files; ` +
+        "tell the user in one sentence to enable it in the Plugins panel first, then handle the rest of the request as written.",
+    ];
+  }
+  const lines = [`- ${who} — enabled in this workspace.`];
+  if (plugin.workflow.length > 0) {
+    lines.push("  Workflow:");
+    plugin.workflow.forEach((step, index) => {
+      lines.push(`    ${index + 1}. ${step.title}${step.skill === null ? "" : ` → ${step.skill}`}`);
+    });
+  }
+  if (plugin.entry !== null) {
+    lines.push(
+      `  Entry skill ${quoted(plugin.entry.skill)}: read ${quoted(plugin.entry.location)} with the read tool BEFORE any other ` +
+        "output or tool call in this turn, then follow the workflow above to fulfill the user's request. " +
+        "Load the other skills the workflow names when you reach their step. Never claim to follow a skill you have not actually read.",
+    );
+  } else {
+    lines.push(
+      "  Its entry skill could not be found or read, so there is nothing to load: say so instead of pretending to follow it.",
+    );
+  }
+  if (plugin.hasBoard) {
+    lines.push(`  This plugin has a board: when the workflow is done, call show_plugin_board with plugin ${quoted(plugin.target)}.`);
+  }
+  return lines;
+}
+
 /**
  * 原文 → 发给模型的整段：指令块在前，用户原文一字不动跟在后面。
- * skills 与 mcps 都为空时原文原样返回（调用方可以不预判有没有 token）。
+ * skills、mcps 与 plugins 都为空时原文原样返回（调用方可以不预判有没有 token）。
  * 块内条目按调用方给的顺序排（主进程按首次出现去重后传入）。
  */
 export function composeInvocationPrompt(
   text: string,
   skills: readonly InvokedSkill[],
   mcps: readonly InvokedMcp[],
+  plugins: readonly InvokedPlugin[] = [],
 ): string {
-  if (skills.length === 0 && mcps.length === 0) return text;
+  if (skills.length === 0 && mcps.length === 0 && plugins.length === 0) return text;
   const lines: string[] = [
     INVOCATION_OPEN,
     "The user explicitly invoked the items below in their message; each also appears inline as a " +
-      "/skill:<name> or /mcp:<server> token in the text that follows. " +
+      "/skill:<name>, /mcp:<server> or /plugin:<name> token in the text that follows. " +
       "(This block was added by Orbita, not written by the user; its language is not the language the user writes in.)",
   ];
   if (skills.length > 0) {
@@ -142,6 +225,10 @@ export function composeInvocationPrompt(
   if (mcps.length > 0) {
     lines.push("", "MCP servers:");
     for (const server of mcps) lines.push(mcpLine(server));
+  }
+  if (plugins.length > 0) {
+    lines.push("", "Plugins:");
+    for (const plugin of plugins) lines.push(...pluginLines(plugin));
   }
   lines.push(INVOCATION_CLOSE);
   return `${lines.join("\n")}\n\n${text}`;
