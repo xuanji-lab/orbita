@@ -19,6 +19,7 @@ import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { StatusPie } from "../../shell/StatusPie";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
@@ -163,7 +164,7 @@ export function SubSessionsPanel(props: {
         {child === undefined && (
           // 极少见：子会话在面板开着时被删了。ChatView 会走它自己的「这条会话不存在」
           // 降级，这里只补一行说明面板为什么显示得空落落的
-          <PanelEmpty icon="git-fork">{t.subSessions.gone}</PanelEmpty>
+          <PanelEmpty icon={FEATURE_ICON.subsessions}>{t.subSessions.gone}</PanelEmpty>
         )}
       </div>
     );
@@ -187,7 +188,7 @@ export function SubSessionsPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <PanelTitle icon="git-fork" title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
+          <PanelTitle icon={FEATURE_ICON.subsessions} title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
           {waitingCount > 0 && (
             <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
               {t.subSessions.waitingCount(waitingCount)}
@@ -198,7 +199,7 @@ export function SubSessionsPanel(props: {
       contentKey="list"
     >
       {rows.length === 0 ? (
-        <PanelEmpty icon="git-fork">{t.subSessions.none}</PanelEmpty>
+        <PanelEmpty icon={FEATURE_ICON.subsessions}>{t.subSessions.none}</PanelEmpty>
       ) : (
         <div className="inbox-rows">
           {rows.map((row) => (

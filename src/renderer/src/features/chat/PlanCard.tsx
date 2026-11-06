@@ -1,5 +1,6 @@
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import type { PlanVersion } from "../context/plan-timeline.ts";
 
 /**
@@ -16,7 +17,7 @@ export function PlanCard(props: { version: PlanVersion }) {
   return (
     <section className="plan-card" aria-label={t.chat.planCardTitle}>
       <div className="plan-card-head">
-        <Icon name="list-todo" size={12} strokeWidth={1.8} />
+        <Icon name={FEATURE_ICON.task} size={12} strokeWidth={1.8} />
         <span className="plan-card-kicker">{t.chat.planCardTitle}</span>
         <span className="plan-card-count">{t.chat.planCardSteps(version.items.length)}</span>
       </div>

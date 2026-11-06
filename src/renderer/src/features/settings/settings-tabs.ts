@@ -7,6 +7,7 @@
  */
 import type { ExperimentalFeatureId } from "@shared/settings";
 import type { IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
 export type SettingsTab = "general" | "providers" | "migration" | "browser" | "voice" | "plugins" | "experimental";
 
@@ -21,10 +22,10 @@ export const SETTINGS_TABS: readonly SettingsTabDef[] = [
   { id: "general", icon: "sliders" },
   { id: "providers", icon: "cpu" },
   { id: "migration", icon: "download" },
-  { id: "browser", icon: "globe" },
+  { id: "browser", icon: FEATURE_ICON.browser },
   { id: "voice", icon: "mic" },
   // 插件页的全屏版（右栏图标条的积木图标开的是右栏单列版，两处是同一个组件）
-  { id: "plugins", icon: "blocks", flag: "plugins" },
+  { id: "plugins", icon: FEATURE_ICON.plugins, flag: "plugins" },
   { id: "experimental", icon: "flask-conical" },
 ];
 

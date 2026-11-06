@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
@@ -570,7 +571,7 @@ export function FilesPanel(props: {
               2026-10-19 走 PanelTitle 的开关形态，住工具栏右栏胶囊（样式见
               shell/toolbar.css 的 .cap-pt） */}
           <PanelTitle
-            icon="folder"
+            icon={FEATURE_ICON.files}
             title={t.files.title}
             tip={t.files.treeToggleTip}
             onClick={() => setTreeOn((value) => !value)}

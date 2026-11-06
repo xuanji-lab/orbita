@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { PanelEmpty } from "./PanelEmpty";
+import { FEATURE_ICON } from "./feature-icons.ts";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
@@ -694,7 +695,7 @@ export function Sidebar(props: {
               以前会自动退回，是因为出口只有底部那条会在 0 条时禁用的入口——现在标题旁有返回键、
               入口常驻右栏，死胡同已不存在。与遗留事项面板（09-25 起 0 条也能进）同一口径。
             */}
-            {archived.length === 0 && <Empty icon="archive">{t.sidebar.noArchived}</Empty>}
+            {archived.length === 0 && <Empty icon={FEATURE_ICON.archived}>{t.sidebar.noArchived}</Empty>}
             {archived.map((meta) => (
               <SessionRow
                 key={meta.id}
@@ -1962,7 +1963,7 @@ function CarryoverPanel(props: {
     return (
       <>
         {header}
-        <Empty icon="list-todo">{t.sidebar.noCarryovers}</Empty>
+        <Empty icon={FEATURE_ICON.carryovers}>{t.sidebar.noCarryovers}</Empty>
       </>
     );
   }

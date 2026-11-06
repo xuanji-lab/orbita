@@ -1,4 +1,5 @@
 import type { IconName } from "./Icon";
+import { FEATURE_ICON } from "./feature-icons.ts";
 import type { Messages } from "../messages-en.ts";
 
 /**
@@ -42,7 +43,7 @@ export function rowStatusIcon(
   // running 同一个 token（--color-info）——一条事实一种颜色，暗色主题的 accent
   // 是黄，不拿它说「在跑」
   if (state.subRunning)
-    return { icon: "git-fork", tone: "var(--color-info)", label: t.rowStatus.subRunning };
+    return { icon: FEATURE_ICON.subsessions, tone: "var(--color-info)", label: t.rowStatus.subRunning };
   if (state.pinned)
     return { icon: "pin", tone: "var(--color-text-secondary)", label: t.rowStatus.pinned };
   return null;

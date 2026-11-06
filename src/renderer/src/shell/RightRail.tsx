@@ -3,6 +3,7 @@ import { Icon, type IconName } from "./Icon";
 import { Menu, type MenuItem } from "./Menu";
 import { useT } from "../locale.ts";
 import { layoutRail, withGroupRules, type RailPlacement } from "./rail-groups.ts";
+import { FEATURE_ICON } from "./feature-icons.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
 import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/BellCard";
 
@@ -162,10 +163,10 @@ export function RightRail(props: {
   // 分组的理由见 rail-groups.ts；pinned = 精简态常驻在条上
   const items: RailItem[] = [
     // 这条会话在做什么、做过什么、脑子里装了什么
-    { id: "context", group: "session", pinned: true, icon: "clipboard-list", label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
-    { id: "review", group: "session", pinned: false, icon: "file-diff", label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
+    { id: "context", group: "session", pinned: true, icon: FEATURE_ICON.task, label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
+    { id: "review", group: "session", pinned: false, icon: FEATURE_ICON.review, label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
     // 文件跟审查、会话放一组（用户 2026-11-05）；精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
-    { id: "files", group: "session", pinned: true, icon: "folder", label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
+    { id: "files", group: "session", pinned: true, icon: FEATURE_ICON.files, label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
     // 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路）；常规态条上没有它
     { id: "context-tab", group: "session", pinned: false, moreOnly: true, icon: "layers", label: t.taskPanel.tabContext, lit: false, onSelect: props.onOpenContext },
     ...(props.subSessions === null
@@ -175,7 +176,7 @@ export function RightRail(props: {
             id: "subsessions",
             group: "session" as const,
             pinned: true,
-            icon: "git-fork" as const,
+            icon: FEATURE_ICON.subsessions,
             label: t.rail.subSessions(props.subSessions.count),
             lit: props.panel === "subsessions",
             onSelect: toggle("subsessions"),
@@ -183,15 +184,15 @@ export function RightRail(props: {
           },
         ]),
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
-    { id: "terminal", group: "agent", pinned: true, icon: "square-terminal", label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
+    { id: "terminal", group: "agent", pinned: true, icon: FEATURE_ICON.terminal, label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
     ...fromApp("browser", { group: "agent", pinned: true }),
     // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
     // 插件页已把技能与 MCP 当插件显示：plugins 开着时不再单列这个入口
     ...(props.pluginsAvailable
       ? []
-      : [{ id: "abilities", group: "agent" as const, pinned: false, icon: "book-open" as const, label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") }]),
+      : [{ id: "abilities", group: "agent" as const, pinned: false, icon: FEATURE_ICON.abilities, label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") }]),
     ...(props.pluginsAvailable
-      ? [{ id: "plugins", group: "agent" as const, pinned: true, icon: "blocks" as const, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
+      ? [{ id: "plugins", group: "agent" as const, pinned: true, icon: FEATURE_ICON.plugins, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
       : []),
     ...fromApp("memory", { group: "agent", pinned: false }),
     ...(props.intentAvailable
@@ -200,7 +201,7 @@ export function RightRail(props: {
             id: "intent",
             group: "agent" as const,
             pinned: false,
-            icon: "waypoints" as const,
+            icon: FEATURE_ICON.intent,
             label: t.rail.intent,
             lit: props.panel === "intent",
             onSelect: toggle("intent"),
@@ -214,7 +215,7 @@ export function RightRail(props: {
             id: "automation",
             group: "agent" as const,
             pinned: false,
-            icon: "alarm-clock" as const,
+            icon: FEATURE_ICON.automation,
             label: t.automation.railLabel(props.automation.running),
             lit: props.panel === "automation",
             onSelect: toggle("automation"),
@@ -227,7 +228,7 @@ export function RightRail(props: {
     // 应用级：看板（实验功能 plugins）、设置、通知。铃铛在右下角最底：它是常驻的状态入口，位置稳才扫得到
     ...fromApp("board", { group: "app", pinned: false }),
     ...fromApp("settings", { group: "app", pinned: true }),
-    { id: "bell", group: "app", pinned: false, icon: "bell", label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
+    { id: "bell", group: "app", pinned: false, icon: FEATURE_ICON.bell, label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
   ];
   const layout = layoutRail(items, props.lean);
   const renderItem = (item: RailItem) => {

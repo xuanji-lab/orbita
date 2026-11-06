@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { StatusPie } from "../../shell/StatusPie";
 import {
@@ -301,7 +302,7 @@ function AbilityList(props: {
 
   const header = (
     <>
-      <PanelTitle icon="book-open" title={t.abilities.title} />
+      <PanelTitle icon={FEATURE_ICON.abilities} title={t.abilities.title} />
       <PanelFilter
         inputRef={filterRef}
         value={query}
@@ -363,7 +364,7 @@ function AbilityList(props: {
         </PanelEmpty>
       );
     }
-    return <PanelEmpty icon="blocks">{t.abilities.none}</PanelEmpty>;
+    return <PanelEmpty icon={FEATURE_ICON.abilities}>{t.abilities.none}</PanelEmpty>;
   };
 
   const groupHead = (group: AbilityGroup): React.ReactNode => {
@@ -410,7 +411,7 @@ function AbilityList(props: {
     body = (
       <>
         {pick.pickable.length === 0 && (
-          <PanelEmpty icon={q === "" ? "blocks" : "search"}>
+          <PanelEmpty icon={q === "" ? FEATURE_ICON.abilities : "search"}>
             {q === "" ? t.abilities.pickerEmpty : t.abilities.noMatch(q)}
           </PanelEmpty>
         )}

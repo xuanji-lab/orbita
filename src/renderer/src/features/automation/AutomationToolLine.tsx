@@ -3,6 +3,7 @@ import { useT } from "../../locale.ts";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "../chat/ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { parseAutomationCard, type AutomationCardView } from "../../../../shared/automation.ts";
 import { useAutomationUi } from "./automation-context.ts";
 import { describeSchedule, formatWhen, rowStateOf } from "./automation-view.ts";
@@ -65,7 +66,7 @@ export function AutomationToolLine(props: { result: ToolTranscriptItem | undefin
   return (
     <ExitCard
       kicker={a.title}
-      icon="calendar-clock"
+      icon={FEATURE_ICON.automation}
       title={card.title}
       status={{
         text: statusText,
@@ -77,7 +78,7 @@ export function AutomationToolLine(props: { result: ToolTranscriptItem | undefin
       actions={
         <>
           <PanelButton onClick={() => ui.openPanel(card.id)}>
-            <Icon name="calendar-clock" size={14} /> {a.card.openPanel}
+            <Icon name={FEATURE_ICON.automation} size={14} /> {a.card.openPanel}
           </PanelButton>
           {canToggle && (
             <PanelButton onClick={() => void ui.act(card.id, { type: live.status === "active" ? "pause" : "resume" })}>

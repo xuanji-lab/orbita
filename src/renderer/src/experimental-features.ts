@@ -20,6 +20,7 @@
  */
 import type { ExperimentalFeatureId } from "@shared/settings";
 import type { IconName } from "./shell/Icon.tsx";
+import { FEATURE_ICON } from "./shell/feature-icons.ts";
 
 /** 中英两份文案（界面语言二选一） */
 export interface LocalizedText {
@@ -142,7 +143,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   },
   {
     id: "intent-system",
-    icon: "waypoints",
+    icon: FEATURE_ICON.intent,
     name: { zh: "意图系统", en: "Intent system" },
     summary: {
       zh: "发消息前先召回相关旧对话：门卫拦截寒暄，过岗打分入选进上下文，拿不准的先问你。右栏「意图」看每一问的入选图谱；召回走本机 intent-lab 服务（自己 bun run serve 起）。",
@@ -161,7 +162,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   },
   {
     id: "memory-system",
-    icon: "brain",
+    icon: FEATURE_ICON.memory,
     name: { zh: "记忆系统", en: "Memory system" },
     summary: {
       zh: "对话按事件整理成事实 / 偏好 / 经验三类原子记忆，每轮开始前召回相关的注入上下文（需要先在设置里配好家务活模型）。",
@@ -207,7 +208,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   },
   {
     id: "automation",
-    icon: "calendar-clock",
+    icon: FEATURE_ICON.automation,
     name: { zh: "自动化", en: "Automations" },
     summary: {
       zh: "定时任务：到点把一段指令交给 agent，可以每次新开一条会话跑（收在右栏自动化面板里，不进左侧栏），也可以投回创建它的那条会话继续做。在对话里说「每周五帮我看……」「15 分钟后回来看下日志」，agent 会直接建好。右栏「自动化」进入。",
@@ -226,7 +227,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   },
   {
     id: "plugins",
-    icon: "blocks",
+    icon: FEATURE_ICON.plugins,
     name: { zh: "插件", en: "Plugins" },
     summary: {
       zh: "把技能、MCP 和脚本打包成插件：右侧图标条的积木图标在右栏打开插件页（对话照常能看，列表与详情都是单列），设置里的「插件」页签是全屏版；已装的按工作区分组，你原来的技能和 MCP 也显示在里面（文件不动）。可接入本地文件夹或 git 地址，装之前会列出它会在本机启动的命令。",
