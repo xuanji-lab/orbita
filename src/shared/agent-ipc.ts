@@ -445,6 +445,8 @@ export const ipcChannels = {
   pluginSetConfig: "plugin:set-config",
   /** 卸载 = 归档不是删除（链接安装只归档记录，绝不碰源文件夹） */
   pluginUninstall: "plugin:uninstall",
+  /** 卸载归档的只读清单（plugins-archive/*.json；无入参）：能力面板底部「已归档」按工作区列出，不含恢复 */
+  pluginArchived: "plugin:archived",
   /** 在系统文件管理器里打开插件目录 */
   pluginReveal: "plugin:reveal",
   /** 重新读目录（改了源文件夹、清单后）并让 MCP 连接按新配置重建 */

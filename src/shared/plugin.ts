@@ -40,6 +40,19 @@ export type PluginScope =
 export type PluginPlacement = Exclude<PluginScope, { kind: "off" }>;
 
 /**
+ * 卸载归档里的一条（`plugins-archive/<name>-<时间戳>.json` 的只读投影）。
+ * `id` 是归档文件名去掉 `.json`，只当不透明句柄；`global` / `workspaces` 是卸载前的位置
+ * （placement，停用的也有），界面按它回答「原来在哪个工作区能用」。本契约**只读**——没有恢复通道。
+ */
+export interface PluginArchiveEntry {
+  id: string;
+  name: string;
+  archivedAt: number;
+  global: boolean;
+  workspaces: string[];
+}
+
+/**
  * 这个范围对归属为 `workspaceId` 的会话是否生效。`null` = 会话不属于任何工作区（Home）：
  * 只有「所有工作区」覆盖它——与 MCP 白名单、skill 链接同一口径。
  * **开轮装配与界面分组共用这一份**，两处各写一遍就会走出「列表说在、开轮却没带」的分叉。
