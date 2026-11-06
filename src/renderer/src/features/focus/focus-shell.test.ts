@@ -5,7 +5,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { focusBubbleOf, focusCardMinutesOf, focusCardVisibleOf, focusFilesViewOf, focusSuspendActionOf, settledSayTextOf } from "./focus-shell.ts";
+import { focusBubbleOf, focusCardMinutesOf, focusCardVisibleOf, focusFilesViewOf, focusSlotsOf, focusSuspendActionOf, settledSayTextOf } from "./focus-shell.ts";
 import type { FocusStatus, FocusSummary } from "../../shell/focus/use-focus.ts";
 import type { FocusRun } from "../../shell/focus/focus-timer.ts";
 import { zh } from "../../messages-zh.ts";
@@ -70,6 +70,24 @@ describe("focusBubbleOf", () => {
     assert.deepEqual(focusBubbleOf(status("ending"), summary("ready"), false), { kind: "hidden" });
     assert.deepEqual(focusBubbleOf(status("done"), summary("ready"), false), { kind: "hidden" });
     assert.deepEqual(focusBubbleOf(status("off"), summary("ready"), false), { kind: "hidden" });
+  });
+});
+
+describe("focusSlotsOf（没在专注时两个槽必须是 null，不然用量格悬停失效）", () => {
+  test("没在专注：气泡与卡都没有——UsageMeter 才会让悬停格子冒用量气泡、星云跟着走", () => {
+    assert.deepEqual(focusSlotsOf(status("off"), summary("idle"), false, false, false), { say: null, card: false });
+  });
+  test("专注中但没在整理：气泡没有", () => {
+    assert.equal(focusSlotsOf(status("run"), summary("idle"), false, false, true).say, null);
+  });
+  test("整理中：气泡是转圈那句；点了 x 之后又没有", () => {
+    assert.deepEqual(focusSlotsOf(status("run"), summary("running"), false, false, true).say, { kind: "working", breath: true });
+    assert.equal(focusSlotsOf(status("run"), summary("ready"), true, false, true).say, null);
+  });
+  test("收工卡：时间到且有这次专注才有；关掉、或拿不到这次专注就没有", () => {
+    assert.equal(focusSlotsOf(status("done"), summary("ready"), false, false, true).card, true);
+    assert.equal(focusSlotsOf(status("done"), summary("ready"), false, true, true).card, false);
+    assert.equal(focusSlotsOf(status("done"), summary("ready"), false, false, false).card, false);
   });
 });
 
