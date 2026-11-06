@@ -180,7 +180,7 @@ three-colour set — blue for doc-ish, green for sheets, orange-red for slides �
 types apart **at a glance in their 13–14px icons** (files tree, composer pills, sent-attachment
 list; filenames stay in ink) and colours tool-type chips: skill chips green (`-sheet`), MCP chips
 blue (`-doc`); orange (`-slides`) is reserved for command chips (`/new`, `/compact` — not wired
-yet). The material blocks (Excel / Doc / PPT — the blue / green / orange of the later tetris
+yet) and also colours the plugin avatar (blocks icon; skills green, MCP blue on the same avatar). The material blocks (Excel / Doc / PPT — the blue / green / orange of the later tetris
 view) join the same set when they land. Not the accent or any status colour; ≥ 3:1 on every
 theme's panel / muted / app grounds (icon use), hues ≥ 40° apart, guarded by
 `filetype-colors.test.ts`. Chip usage is tint-and-stroke: a light `color-mix` tint of the same

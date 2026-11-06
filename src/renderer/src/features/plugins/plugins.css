@@ -576,13 +576,7 @@
   color: var(--color-text-secondary);
 }
 
-.pl-av b {
-  font-size: var(--font-size-xs);
-  font-weight: var(--weight-bold);
-  line-height: 1;
-}
-
-/* 类别色只给技能（绿）与 MCP（蓝）：设计系统 Category colours 的既有分工 */
+/* 类别色：技能绿、MCP 蓝、插件橙（设计系统 Category colours） */
 .pl-av[data-kind="skill"] {
   color: var(--color-filetype-sheet);
   background: color-mix(in srgb, var(--color-filetype-sheet) 14%, transparent);
@@ -593,14 +587,15 @@
   background: color-mix(in srgb, var(--color-filetype-doc) 14%, transparent);
 }
 
+.pl-av[data-kind="plugin"] {
+  color: var(--color-filetype-slides);
+  background: color-mix(in srgb, var(--color-filetype-slides) 14%, transparent);
+}
+
 .pl-av.big {
   width: 40px;
   height: 40px;
   border-radius: var(--radius-xl);
-}
-
-.pl-av.big b {
-  font-size: var(--font-size-lg);
 }
 
 /* ---------- 开关（设计稿 v2 的 switch；设计系统没有 Switch 配方，本地定义，状态走 aria） ---------- */

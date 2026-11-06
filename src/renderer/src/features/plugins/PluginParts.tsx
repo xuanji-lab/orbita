@@ -6,25 +6,15 @@ import type { PluginExternal } from "@shared/plugin-board";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { mcpProblemText } from "./plugin-text.ts";
-import { initialOf } from "./plugin-view.ts";
 
-/** 有图标用图标，没有就用名字首字（设计稿同款降级）：技能是书、MCP 是插头，真插件是首字。 */
-export function PluginAvatar(props: { view: Pick<PluginView, "origin" | "name">; big?: boolean }) {
+/** 头像按种类取类别色 + 图标：技能是绿书、MCP 是蓝插头、插件（含草稿）是橙积木。 */
+export function PluginAvatar(props: { view: Pick<PluginView, "origin">; big?: boolean }) {
   const { view } = props;
   const size = props.big === true ? 20 : 13;
+  const kind = view.origin === "user-skill" ? "skill" : view.origin === "user-mcp" ? "mcp" : "plugin";
   return (
-    <span
-      className={`pl-av${props.big === true ? " big" : ""}`}
-      data-kind={view.origin === "user-skill" ? "skill" : view.origin === "user-mcp" ? "mcp" : undefined}
-      aria-hidden="true"
-    >
-      {view.origin === "user-skill" ? (
-        <Icon name="book-open" size={size} strokeWidth={1.8} />
-      ) : view.origin === "user-mcp" ? (
-        <Icon name="plug" size={size} strokeWidth={1.8} />
-      ) : (
-        <b>{initialOf(view.name)}</b>
-      )}
+    <span className={`pl-av${props.big === true ? " big" : ""}`} data-kind={kind} aria-hidden="true">
+      <Icon name={kind === "skill" ? "book-open" : kind === "mcp" ? "plug" : "blocks"} size={size} strokeWidth={1.8} />
     </span>
   );
 }
