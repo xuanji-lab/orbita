@@ -734,6 +734,14 @@ describe("parseSettings 的 intent（实验功能 intent-system）", () => {
   });
 });
 
+describe("parseSettings 的 docPanelWidth", () => {
+  it("≥ 地板的数收下，过小 / 非数丢掉", () => {
+    deepStrictEqual(parseSettings({ docPanelWidth: 640.4 }).docPanelWidth, 640);
+    deepStrictEqual(parseSettings({ docPanelWidth: 50 }).docPanelWidth, undefined);
+    deepStrictEqual(parseSettings({ docPanelWidth: "wide" }).docPanelWidth, undefined);
+  });
+});
+
 describe("parseSettings 的 docPaper", () => {
   it("只认三个纸面；乱值丢掉（缺席 = quiet）", () => {
     for (const paper of ["quiet", "print", "focus"]) deepStrictEqual(parseSettings({ docPaper: paper }).docPaper, paper);

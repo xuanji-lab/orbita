@@ -850,6 +850,8 @@ export const zh: Messages = {
     pageLabel: (n) => `第 ${n} 页`,
     pagesAria: "页面缩略图",
     quotePage: "引用这一页",
+    editPage: "编辑这一页",
+    doneEdit: "收起编辑",
     deletePage: "删除这一页",
     blankPage: "空白页",
     pageSource: "这一页的内容",

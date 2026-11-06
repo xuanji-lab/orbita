@@ -195,6 +195,11 @@ export interface AppSettings {
    */
   rightPanelWidth?: number;
   /**
+   * 右栏显示「文档」「演示文稿」时的宽度（这两个是写东西的主工作面，默认占 pane 的大半，
+   * 与其它右栏页分开记）。缺席 = 按 pane 宽度的比例现算；校验口径同 rightPanelWidth。
+   */
+  docPanelWidth?: number;
+  /**
    * 左侧栏的宽度。缺席 = 默认 288（设计系统的出厂尺寸）；**固定像素区间 240–400**，
    * 越界或非数直接丢掉——左栏与「chat 的 1/3–2/3」无关（2026-09-22 wafo 澄清：
    * 那条比例规则说的是 chat 被一分为二的左右，即 chat 主区与右栏）。
@@ -568,6 +573,7 @@ export function parseSettings(raw: unknown): AppSettings {
     language?: unknown;
     drawer?: unknown;
     rightPanelWidth?: unknown;
+    docPanelWidth?: unknown;
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
@@ -603,6 +609,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
+  const docWidth = record.docPanelWidth;
   const compaction = parseCompaction(record.compaction);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
@@ -629,6 +636,9 @@ export function parseSettings(raw: unknown): AppSettings {
     // 右栏只做 ≥ 地板的硬校验：上界随 pane 宽度变，存储层判不了，渲染层每次夹
     ...(typeof width === "number" && Number.isFinite(width) && width >= RIGHT_PANEL_WIDTH_FLOOR
       ? { rightPanelWidth: Math.round(width) }
+      : {}),
+    ...(typeof docWidth === "number" && Number.isFinite(docWidth) && docWidth >= RIGHT_PANEL_WIDTH_FLOOR
+      ? { docPanelWidth: Math.round(docWidth) }
       : {}),
     // 左栏的区间是固定像素，存储层判得了：越界直接丢，不「猜」用户想要的宽度
     ...(typeof sidebar === "number" &&

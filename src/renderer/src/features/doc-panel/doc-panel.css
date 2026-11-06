@@ -4,7 +4,7 @@
  * 三套「纸面」同一套结构与交互，只换 `.dp` 上的变量与少数规则（`data-paper`），全部只用
  * design-system 的 token 组合，不引新颜色：
  *   quiet 安静编辑台（默认：衬线正文、白纸、细发丝线、新增是 success 绿）
- *   print 印刷版式（书页式：窄行宽 ≈ 34 个汉字、首行缩进段间不空行、首段首字略大、标题居中小号字距）
+ *   print 印刷版式（书页式：窄行宽 ≈ 34 个汉字、首行缩进段间不空行、标题居中小号字距）
  *   focus 专注写作（深一档的纸色、当前段落以外降低不透明度、正文略大、不打字时工具栏淡出）
  * 纸面主题（Copybook / Typescript）下恒为 quiet（见 doc-paper.ts）。
  */
@@ -55,62 +55,12 @@
 .dp-note {
   flex: 0 0 auto;
   padding: var(--space-1-5) var(--space-3);
-  border-bottom: 1px solid var(--dp-rule);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
 }
 .dp-note[data-tone="danger"] {
   color: var(--color-danger);
-}
-
-/* 纸面切换：三枚小色块，名字在 tooltip 与读屏里 */
-.dp-papers {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  margin: 0 var(--space-2);
-}
-.dp-paper {
-  position: relative;
-  box-sizing: border-box;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-panel);
-  cursor: pointer;
-}
-/* 色块：quiet = 白纸；print = 白纸 + 窄栏的文字行；focus = 深一档的纸 + 一行亮字 */
-.dp-paper[data-paper-swatch="print"]::before,
-.dp-paper[data-paper-swatch="focus"]::before {
-  content: "";
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  left: 4px;
-  right: 4px;
-  background: repeating-linear-gradient(to bottom, var(--color-text-tertiary) 0 1px, transparent 1px 3px);
-}
-.dp-paper[data-paper-swatch="print"]::before {
-  left: 5px;
-  right: 5px;
-}
-.dp-paper[data-paper-swatch="focus"] {
-  background: var(--color-text-primary);
-  border-color: var(--color-text-primary);
-}
-.dp-paper[data-paper-swatch="focus"]::before {
-  background: repeating-linear-gradient(to bottom, var(--color-bg-panel) 0 1px, transparent 1px 3px);
-}
-.dp-paper[aria-pressed="true"] {
-  border-color: var(--color-text-secondary);
-  box-shadow: 0 0 0 1px var(--color-text-secondary);
-}
-.dp-paper:disabled {
-  cursor: default;
-  opacity: 0.45;
 }
 
 /* ---- 文档视图 ---- */
@@ -122,7 +72,7 @@
 }
 .dp-page {
   box-sizing: border-box;
-  max-width: 48em;
+  max-width: 680px;
   margin: 0 auto;
   padding: var(--space-6) var(--space-6) 30vh;
 }
@@ -161,7 +111,7 @@
 }
 .dp-placeholder-title {
   font-size: 190%;
-  font-weight: 650;
+  font-weight: 450;
   line-height: var(--line-height-tight);
 }
 .dp-placeholder-body {
@@ -172,7 +122,7 @@
 .dp-editor .cm-h {
   margin-top: var(--space-2);
   line-height: var(--line-height-tight);
-  font-weight: 650;
+  font-weight: 500;
 }
 .dp-editor .cm-h1 {
   font-size: 190%;
@@ -188,10 +138,12 @@
   line-height: 1;
 }
 .dp-editor .cm-strong {
-  font-weight: 700;
+  font-weight: 600;
 }
 .dp-editor .cm-em {
-  font-style: italic;
+  /* 中文没有斜体字形：强调改用字重 + 颜色 */
+  font-style: normal;
+  font-weight: 500;
 }
 .dp-editor .cm-icode {
   padding: 0 var(--space-0-5);
@@ -350,9 +302,15 @@
 }
 .dp-slide-stage {
   flex: 0 0 auto;
+  width: 100%;
+  align-self: center;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   overflow: hidden;
+}
+/* 展开源码编辑时预览缩小在上，让出下面的编辑区 */
+.dp-slide-main[data-editing="true"] .dp-slide-stage {
+  width: 58%;
 }
 .dp-slide-actions {
   display: flex;
@@ -429,12 +387,11 @@
 .dp[data-paper="print"] .cm-line[data-para]:not(.cm-h):not(.cm-li):not(.cm-quote):not(.cm-codeblock) {
   text-indent: 2em;
 }
-/* 首段首字略大：文档第一段，或第一个标题后面的第一段 */
-.dp[data-paper="print"] .cm-content > .cm-line:first-child[data-para]:not(.cm-h)::first-letter,
-.dp[data-paper="print"] .cm-h + .cm-blank + .cm-line[data-para]:not(.cm-h):not(.cm-li)::first-letter {
-  font-size: 160%;
-  font-weight: 650;
-  line-height: 1;
+/* 首字下沉做过、去掉了：文档里的段落多是一两行，下沉首字撑不起来，行内放大又会让基线错位 */
+/* 列表的圆点落在段落首行缩进的位置（2em），文字紧随其后 */
+.dp[data-paper="print"] .cm-li {
+  padding-left: 3.5em;
+  text-indent: -1.5em;
 }
 /* 标题居中、小号字距 */
 .dp[data-paper="print"] .cm-h {
@@ -442,7 +399,7 @@
   margin-bottom: var(--space-3);
   text-align: center;
   letter-spacing: 0.14em;
-  font-weight: 600;
+  font-weight: 400;
 }
 .dp[data-paper="print"] .cm-h1 {
   font-size: 150%;

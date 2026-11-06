@@ -38,6 +38,11 @@ export function SlidesView(props: {
   const index = Math.min(current, Math.max(total - 1, 0));
   const page = deck.pages[index];
   const pageHandle = useRef<DocEditorHandle | null>(null);
+  /** 页内源码编辑器默认收起（预览为主）：点「编辑这一页」或双击预览展开，展开时预览缩小在上 */
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (editing) pageHandle.current?.focus();
+  }, [editing, current]);
   const [flashPages, setFlashPages] = useState<ReadonlySet<number>>(new Set());
   const flashTimer = useRef<number | undefined>(undefined);
   /** 页内编辑器管的那一段文字在全文里的区间：换页 / 外部合并时按当前页重新锚定；之后每次编辑跟着长短走 */
@@ -169,8 +174,12 @@ export function SlidesView(props: {
           <span>{t.doc.addPage}</span>
         </button>
       </div>
-      <div className="dp-slide-main">
-        <div className="dp-slide-stage" data-new={flashPages.has(index) ? "true" : undefined}>
+      <div className="dp-slide-main" data-editing={editing ? "true" : undefined}>
+        <div
+          className="dp-slide-stage"
+          data-new={flashPages.has(index) ? "true" : undefined}
+          onDoubleClick={() => setEditing((value) => !value)}
+        >
           <SlideCanvas text={page.text} number={index + 1} total={total} title={title} />
         </div>
         <div className="dp-slide-actions">
@@ -178,6 +187,10 @@ export function SlidesView(props: {
             {t.doc.pageLabel(index + 1)} · {t.doc.pageCount(total)}
           </span>
           <span className="dp-bar-grow" />
+          <button type="button" className="dp-text-action" onClick={() => setEditing((value) => !value)}>
+            <Icon name="pencil-line" size={14} strokeWidth={1.8} />
+            {editing ? t.doc.doneEdit : t.doc.editPage}
+          </button>
           <button type="button" className="dp-text-action" onClick={quotePage}>
             <Icon name="quote" size={14} strokeWidth={1.8} />
             {t.doc.quotePage}
@@ -186,16 +199,18 @@ export function SlidesView(props: {
             <Icon name="trash-2" size={16} strokeWidth={1.8} />
           </IconButton>
         </div>
-        <div className="dp-slide-source" aria-label={t.doc.pageSource}>
-          <DocEditor
-            key={index}
-            initialText={page.text}
-            onChange={onPageEdit}
-            onSelection={onSelection}
-            handleRef={pageHandle}
-            ariaLabel={t.doc.pageSource}
-          />
-        </div>
+        {editing && (
+          <div className="dp-slide-source" aria-label={t.doc.pageSource}>
+            <DocEditor
+              key={index}
+              initialText={page.text}
+              onChange={onPageEdit}
+              onSelection={onSelection}
+              handleRef={pageHandle}
+              ariaLabel={t.doc.pageSource}
+            />
+          </div>
+        )}
       </div>
       {toolbar}
     </div>

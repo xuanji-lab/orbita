@@ -20,7 +20,10 @@ import { useScrolledEdge } from "./WorkspaceFilterBar.tsx";
  */
 export function RightPanelSlot(props: {
   open: boolean;
-  width: number;
+  /** null = 还没有记过：按 `defaultFraction` 现算 */
+  width: number | null;
+  /** 没有记过宽度（或双击热区复位）时占 pane 宽度的比例；缺席 = 默认 320 */
+  defaultFraction?: number;
   narrow: boolean;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
@@ -43,7 +46,12 @@ export function RightPanelSlot(props: {
    * 不回写 settings；窄窗转覆盖层时宽度写死 320，那时不量也不夹。
    */
   const paneTotal = usePaneTotalWidth(asideRef, !narrow);
-  const width = paneTotal > 0 ? clampRightPanelWidth(props.width, paneTotal) : props.width;
+  const defaultWidth =
+    props.defaultFraction !== undefined && paneTotal > 0
+      ? Math.round(paneTotal * props.defaultFraction)
+      : RIGHT_PANEL_WIDTH_DEFAULT;
+  const wanted = props.width ?? defaultWidth;
+  const width = paneTotal > 0 ? clampRightPanelWidth(wanted, paneTotal) : wanted;
   const renderedWidth = narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width;
   const onRenderedWidth = props.onRenderedWidth;
   useEffect(() => {
@@ -107,7 +115,7 @@ export function RightPanelSlot(props: {
         <span
           onPointerDown={startResize}
           onDoubleClick={() =>
-            props.onWidthCommit(clampRightPanelWidth(RIGHT_PANEL_WIDTH_DEFAULT, paneTotal))
+            props.onWidthCommit(clampRightPanelWidth(defaultWidth, paneTotal))
           }
           title={t.common.dragResize}
           style={{

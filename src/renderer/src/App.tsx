@@ -34,6 +34,7 @@ import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
+import { DOC_PANEL_FRACTION } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
@@ -227,6 +228,11 @@ export function App() {
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
+  /** 文档 / 演示文稿面板的宽度：单独记（null = 没拖过，RightPanelSlot 按比例给默认） */
+  const [docPanelWidth, setDocPanelWidth] = useState<number | null>(null);
+  useEffect(() => {
+    setDocPanelWidth(settings.docPanelWidth ?? null);
+  }, [settings.docPanelWidth]);
 
   /** 左侧栏宽度：同一套口径——拖动中只改本地，松手才落 settings（避免写风暴） */
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
@@ -961,6 +967,7 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
+  const isDocPanel = shownPanel === "docs" || shownPanel === "slides";
   /**
    * 「和智能体一起做一个」（插件页）：在当前工作区（没有则 Home）新开一条任务，输入框预填一句引导，
    * 开头的 `/skill:plugin-creator` 点名内置的做插件技能（发送时由主进程展开成指令块）。
@@ -1479,10 +1486,13 @@ export function App() {
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
           <RightPanelSlot
             open={rightPanel !== null}
-            width={panelWidth}
+            width={isDocPanel ? docPanelWidth : panelWidth}
+            {...(isDocPanel ? { defaultFraction: DOC_PANEL_FRACTION } : {})}
             narrow={narrow}
-            onWidthChange={setPanelWidth}
-            onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+            onWidthChange={isDocPanel ? setDocPanelWidth : setPanelWidth}
+            onWidthCommit={(width) =>
+              changeSettings(isDocPanel ? { docPanelWidth: width } : { rightPanelWidth: width })
+            }
             onRenderedWidth={setPanelRenderedWidth}
           >
             {/* 收起动画期间保持原内容；切换时 key 变化触发 120ms 内容淡入 */}

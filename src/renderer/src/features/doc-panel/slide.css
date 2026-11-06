@@ -57,18 +57,18 @@
   border-bottom: 1px solid var(--slide-rule);
   font-size: 210%;
   line-height: var(--line-height-tight);
-  font-weight: 650;
+  font-weight: 450;
 }
 .dp-slide-body h2 {
   margin: 0.8em 0 0.4em;
   font-size: 150%;
   line-height: var(--line-height-tight);
-  font-weight: 650;
+  font-weight: 450;
 }
 .dp-slide-body h3 {
   margin: 0.8em 0 0.3em;
   font-size: 120%;
-  font-weight: 650;
+  font-weight: 500;
 }
 .dp-slide-body p {
   margin: 0.5em 0;
@@ -82,7 +82,11 @@
   margin: 0.25em 0;
 }
 .dp-slide-body strong {
-  font-weight: 700;
+  font-weight: 600;
+}
+.dp-slide-body em {
+  font-style: normal;
+  font-weight: 500;
 }
 .dp-slide-body blockquote {
   margin: 0.6em 0;
@@ -126,8 +130,7 @@
   vertical-align: top;
 }
 .dp-slide-body th {
-  background: var(--slide-code);
-  font-weight: 650;
+  font-weight: 600;
 }
 .dp-slide-link {
   text-decoration: underline;
@@ -160,7 +163,7 @@
   margin-left: auto;
 }
 .dp-slide-no-n {
-  font-weight: 650;
+  font-weight: 500;
 }
 
 /* 导出 PDF 时 data-paper / data-theme 都在 <html> 上（:root 自己），屏幕上 data-paper 在面板容器上，两种写法都要 */
@@ -176,11 +179,11 @@
   border-bottom: 0;
   text-align: center;
   font-size: 240%;
-  font-weight: 600;
+  font-weight: 400;
   letter-spacing: 0.06em;
 }
 [data-paper="print"] .dp-slide-body h2 {
-  font-weight: 600;
+  font-weight: 400;
 }
 [data-paper="print"] .dp-slide-foot {
   right: 7em;
@@ -224,4 +227,21 @@
 [data-paper="focus"] .dp-slide-foot {
   right: 3em;
   bottom: 1.6em;
+}
+
+/* 分栏（::: columns）：等宽多列，栏间只靠间距，不画框 */
+.dp-slide-cols {
+  display: grid;
+  gap: 2em;
+  margin: 0.6em 0;
+}
+.dp-slide-col {
+  min-width: 0;
+}
+.dp-slide-col > :first-child {
+  margin-top: 0;
+}
+.dp-slide-col h2,
+.dp-slide-col h3 {
+  margin-top: 0;
 }

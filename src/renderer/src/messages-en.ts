@@ -932,6 +932,8 @@ export const en = {
     pageLabel: (n: number) => `Page ${n}`,
     pagesAria: "Page thumbnails",
     quotePage: "Quote this page",
+    editPage: "Edit this page",
+    doneEdit: "Done editing",
     deletePage: "Delete this page",
     blankPage: "Blank page",
     pageSource: "Source of this page",

@@ -8,6 +8,8 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { Menu } from "../../shell/Menu";
+import { SelectButton } from "../settings/SettingControls";
 import { useT } from "../../locale.ts";
 import type { ExternalChange } from "./doc-session.ts";
 import { useOpenDoc } from "./useOpenDoc.ts";
@@ -164,18 +166,20 @@ export function DocEditPane(props: {
         <span className="dp-status" data-state={doc.state} role="status" title={doc.syncError ?? undefined}>
           {status}
         </span>
-        <div className="dp-papers" role="group" aria-label={t.doc.paperLabel} title={locked ? t.doc.paperLocked : undefined}>
-          {DOC_PAPERS.map((value) => (
-            <PaperSwatch
-              key={value}
-              paper={value}
-              label={paperName(value, t)}
-              pressed={paper === value}
-              disabled={locked}
-              onPick={() => setPaper(value)}
-            />
-          ))}
-        </div>
+        <Menu
+          items={DOC_PAPERS.map((value) => ({
+            id: value,
+            label: paperName(value, t),
+            checked: paper === value,
+            onSelect: () => setPaper(value),
+          }))}
+          align="end"
+          trigger={({ open, toggle }) => (
+            <SelectButton open={open} onClick={toggle} disabled={locked} title={locked ? t.doc.paperLocked : t.doc.paperLabel}>
+              {t.doc.paperLabel}：{paperName(paper, t)}
+            </SelectButton>
+          )}
+        />
         <IconButton
           label={deck ? t.doc.exportPdf : t.doc.exportWord}
           size={28}
@@ -214,20 +218,4 @@ export function DocEditPane(props: {
 
 function paperName(paper: DocPaper, t: ReturnType<typeof useT>): string {
   return paper === "quiet" ? t.doc.paperQuiet : paper === "print" ? t.doc.paperPrint : t.doc.paperFocus;
-}
-
-/** 纸面切换里的一格：一枚小色块（纸色 + 该纸面的记号色），名字在 tooltip 与读屏里 */
-function PaperSwatch(props: { paper: DocPaper; label: string; pressed: boolean; disabled: boolean; onPick: () => void }) {
-  return (
-    <button
-      type="button"
-      className="dp-paper"
-      data-paper-swatch={props.paper}
-      aria-pressed={props.pressed}
-      aria-label={props.label}
-      title={props.label}
-      disabled={props.disabled}
-      onClick={props.onPick}
-    />
-  );
 }

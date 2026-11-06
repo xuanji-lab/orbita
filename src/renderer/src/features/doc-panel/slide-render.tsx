@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import remarkCjkFriendly from "remark-cjk-friendly";
 import remarkBreaks from "remark-breaks";
 import type { DocPaper } from "@shared/settings";
+import { splitColumns } from "./slide-columns.ts";
 // 屏幕上用样式表（副作用导入），导出 PDF 时再把同一份源码当字符串塞进 HTML
 import "./slide.css";
 import slideCss from "./slide.css?inline";
@@ -15,10 +16,30 @@ export const SLIDE_HEIGHT = 720;
 
 /**
  * 一页的正文：markdown → 元素，复用聊天里同一条 remark 管线的子集（GFM / CJK 加粗 / 软换行）。
- * 不开 raw HTML；图片不加载（幻灯片是文字稿，且远程图片是隐私洞）——渲染成它的替代文字；
+ * 不开 raw HTML（分栏用 `::: columns` … `+++` … `:::`，见 slide-columns.ts）；图片不加载（幻灯片是文字稿，且远程图片是隐私洞）——渲染成它的替代文字；
  * 链接渲染成普通文字（页内不导航）。
  */
 export function SlideMarkdown(props: { text: string }) {
+  return (
+    <>
+      {splitColumns(props.text).map((block, index) =>
+        block.kind === "md" ? (
+          <SlideMarkdownBlock key={index} text={block.text} />
+        ) : (
+          <div key={index} className="dp-slide-cols" style={{ gridTemplateColumns: `repeat(${block.columns.length}, minmax(0, 1fr))` }}>
+            {block.columns.map((column, i) => (
+              <div key={i} className="dp-slide-col">
+                <SlideMarkdownBlock text={column} />
+              </div>
+            ))}
+          </div>
+        ),
+      )}
+    </>
+  );
+}
+
+function SlideMarkdownBlock(props: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkBreaks]}
