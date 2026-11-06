@@ -96,7 +96,7 @@ export function SkillContentBody(props: { slug: string; onSaved: () => Promise<v
       </label>
       <label className="pl-field">
         <span className="pl-field-label">{p.fieldBody}</span>
-        <textarea className="text-field pl-mono-area" rows={12} value={content.body} onChange={(event) => setContent({ ...content, body: event.target.value })} onBlur={() => commit("body")} />
+        <textarea className="text-field pl-mono-area" rows={8} value={content.body} onChange={(event) => setContent({ ...content, body: event.target.value })} onBlur={() => commit("body")} />
       </label>
       {saving && <span className="pl-field-hint">{p.contentSaving}</span>}
       {error !== null && (
@@ -232,9 +232,14 @@ export function toolsOfStatus(status: McpStatus | null): string[] {
   return status !== null && status.kind === "ready" ? status.tools : [];
 }
 
-/** 你的 MCP 此刻的状态：没读到 = null（读取中）；读到了但没有这一行（刚加 / 还没连过）= 还没连上。 */
+/**
+ * 你的 MCP 此刻的状态：没读到 = null（读取中）；读到了但没有这一行（刚加 / 还没连过）= 还没连上；
+ * 文件里写着停用的就是已停用——运行时快照可能还留着停用前的那一行（停用后重连的快照里它是「没连」），
+ * 以文件事实为准，不让开关关着、状态却说「还没连上」。
+ */
 export function serverStatusOf(server: McpServerInfo | null, loaded: boolean): McpStatus | null {
-  return server !== null ? server.status : loaded ? { kind: "idle" } : null;
+  if (server === null) return loaded ? { kind: "idle" } : null;
+  return server.disabled ? { kind: "disabled" } : server.status;
 }
 
 /** 插件自带的 MCP：状态 + 工具，跟着插件启停（没有自己的开关）。`disabled` = 插件此刻没启用。 */

@@ -643,7 +643,7 @@ export function PluginDetail(props: {
               </section>
               <section className="pl-card" data-sec="command">
                 <div className="pl-card-h">
-                  <Icon name="square-terminal" size={13} strokeWidth={1.8} />
+                  <Icon name="terminal" size={13} strokeWidth={1.8} />
                   {t.mcpCommandTitle}
                 </div>
                 <code className="pl-cmd">{view.mcp[0]?.commandLine ?? view.description}</code>

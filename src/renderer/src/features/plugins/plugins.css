@@ -1764,9 +1764,18 @@ button.pl-wf-chip:hover {
   gap: var(--space-1);
 }
 
-.pl-mono-area {
+/* 说明正文是 SKILL.md 原文：等宽（比 .text-field 的特异性高，不然被它的字体盖掉） */
+.pl-form .text-field.pl-mono-area {
   font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
   line-height: var(--line-height-code);
+}
+
+/* 零散技能的三格：标签退成安静的小灰字（设计稿 b），输入框才是主角 */
+.pl-legacy .pl-field-label {
+  font-weight: var(--weight-regular);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
 }
 
 button.pl-tag-more {
@@ -1845,4 +1854,9 @@ button.pl-tag-more:hover {
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* 插件「它能做什么」里的 MCP 状态：跟旁边的小字同档，不比命令行还大 */
+.pl-mcp-runtime .pl-mcp-state {
+  font-size: var(--font-size-sm);
 }
