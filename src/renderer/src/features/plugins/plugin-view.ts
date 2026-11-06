@@ -118,12 +118,6 @@ export function legacyCounts(views: readonly PluginView[]): { skills: number; mc
   };
 }
 
-/** 头像里的首字：显示名第一个字符（按码点，不劈开代理对）；空名给 ?。 */
-export function initialOf(name: string): string {
-  const first = [...name.trim()][0];
-  return first === undefined ? "?" : first.toUpperCase();
-}
-
 /** 详情里「装在哪」三选一的当前项：生效范围的种类，停用就是 off。 */
 export type ScopeMode = "global" | "workspaces" | "off";
 
