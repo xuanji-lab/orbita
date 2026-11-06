@@ -295,6 +295,22 @@ export const ipcChannels = {
    * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
    */
   fsPickFolders: "fs:pick-folders",
+  /** 文档 / 演示文稿面板（契约在 `doc.ts`）：读一份 .md，回内容 + 摘要。白名单同文件面板，只认 .md */
+  docRead: "doc:read",
+  /** 写回（原子写）：带 expectedHash，盘上已被改过就不写、回盘上的现状（比较后交换） */
+  docWrite: "doc:write",
+  /** 在当前会话的工作区根下新建一份文档 / 演示文稿（重名加序号） */
+  docCreate: "doc:create",
+  /** 列工作区里的 .md（打开已有文档） */
+  docList: "doc:list",
+  /** 开始监听一份文档（同一窗口按路径去重）；盘上变化经 docChanged 推回来 */
+  docWatch: "doc:watch",
+  /** 停止监听 */
+  docUnwatch: "doc:unwatch",
+  /** 主进程 → renderer 推送（`DocChangedEvent`）：被监听的文档在盘上变了（含自己刚写的，renderer 按摘要去回声） */
+  docChanged: "doc:changed",
+  /** 导出：文档 → docx，演示文稿 → PDF（先弹保存对话框） */
+  docExport: "doc:export",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
