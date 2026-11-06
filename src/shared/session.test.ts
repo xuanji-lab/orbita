@@ -222,7 +222,7 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, parentId: "" })?.parentId, undefined);
   });
 
-  // 自动化（实验功能 automation）之前存的会话没有这些字段：缺席即用户自己开的
+  // 自动化之前存的会话没有这些字段：缺席即用户自己开的
   it("automationId：缺席即用户自己开的；非字符串 / 空串按缺席读，不丢会话", () => {
     strictEqual("automationId" in (parseSessionMeta(valid) ?? {}), false);
     strictEqual(parseSessionMeta({ ...valid, automationId: "au1" })?.automationId, "au1");

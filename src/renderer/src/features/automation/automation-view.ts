@@ -488,8 +488,6 @@ export function modeRowView(
 /** 点按钮没成的原因（主进程给稳定的代码，句子在这里出） */
 export function modeRowFailureText(t: AutomationMessages["modeRow"], failure: Extract<AutomationModeRowResult, { ok: false }>): string {
   switch (failure.reason) {
-    case "disabled":
-      return t.failed.disabled;
     case "noSession":
       return t.failed.noSession;
     case "notFound":

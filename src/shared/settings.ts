@@ -123,9 +123,6 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
   "pdf-citations",
   "intent-system",
-  "memory-system",
-  "automation",
-  "plugins",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
@@ -234,12 +231,18 @@ export interface AppSettings {
    */
   processView?: ProcessView;
   /**
-   * 自动化（实验功能 automation）：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
+   * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
    * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
    * 拦住系统挂起，运行全部结束就放开；屏幕照样可以关。这是应用自己的 API，不是 caffeinate / pmset。
    * 只认布尔，同 gitAttribution 的纪律。
    */
   automationKeepAwake?: boolean;
+  /**
+   * 新手引导看过了没有（2026-11-06）：**缺席 = 没看过**，窗口起来、设置读回后自动全屏弹一次；
+   * 看完或跳过都写 true，之后不再自动弹（设置 › 通用里能再看一遍，不改这个键）。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  onboardingSeen?: boolean;
   /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
@@ -292,7 +295,7 @@ export interface AppSettings {
    */
   intent?: IntentSettings;
   /**
-   * 向量召回（实验功能 memory-system 的一部分，开关仍由实验开关总控）：
+   * 向量召回（记忆系统的一部分）：
    * 本地 llama-server + GGUF。缺席全默认（关）；只存用户动过的键，读侧并入
    * DEFAULT_MEMORY_VECTOR_SETTINGS（同 intent 的纪律）。
    */
@@ -541,6 +544,7 @@ export function parseSettings(raw: unknown): AppSettings {
     completionSound?: unknown;
     processView?: unknown;
     automationKeepAwake?: unknown;
+    onboardingSeen?: unknown;
     gitAttribution?: unknown;
     planFirst?: unknown;
     choreModel?: unknown;
@@ -627,6 +631,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.automationKeepAwake === "boolean"
       ? { automationKeepAwake: record.automationKeepAwake }
       : {}),
+    // 同上：非布尔丢掉，缺席 = 没看过新手引导
+    ...(typeof record.onboardingSeen === "boolean" ? { onboardingSeen: record.onboardingSeen } : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),

@@ -1,5 +1,5 @@
 /**
- * 自动化（实验功能 automation）的契约真源 —— IPC 四层的第 1 层。
+ * 自动化的契约真源 —— IPC 四层的第 1 层。
  *
  * 自动化 = 一条**定时任务**：到点把一段指令交给 agent 去跑。两种去处（ZCode 的 targetTaskId 思路）：
  * - `new_session`：每次在该工作区**新开一条会话**跑（会话 meta 记 `automationId`，不进左侧栏，
@@ -570,7 +570,7 @@ export interface AutomationModeRowRequest {
 /** 结局以数据返回（reason 是稳定代码，句子由界面出），不抛 */
 export type AutomationModeRowResult =
   | { ok: true }
-  | { ok: false; reason: "disabled" | "noSession" | "notFound" | "notApplicable" | "finished"; detail: string };
+  | { ok: false; reason: "noSession" | "notFound" | "notApplicable" | "finished"; detail: string };
 
 /** modeDeclined 只留最近这么多条 */
 export const AUTOMATION_MODE_DECLINED_KEPT = 10;

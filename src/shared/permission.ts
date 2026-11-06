@@ -103,7 +103,7 @@ export const READ_ONLY_TOOLS = [
   "read_pdf",
   "read_docx",
   "show_image",
-  // 插件列表：读已装插件的名字与技能，不改任何东西（实验功能 plugins 开着才注册）
+  // 插件列表：读已装插件的名字与技能，不改任何东西
   "list_plugins",
 ] as const;
 
@@ -151,7 +151,7 @@ export function isMemoryTool(toolName: string): boolean {
 }
 
 /**
- * 自动化四件套（实验功能 automation）：automation_create / automation_list /
+ * 自动化四件套：automation_create / automation_list /
  * automation_cancel / automation_update，三档模式一律放行。
  *
  * 它们只写我们自己的 `automations.json`，不碰用户的文件与 shell；建出来的任务**直接生效**

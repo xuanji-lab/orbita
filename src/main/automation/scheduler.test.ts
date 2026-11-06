@@ -318,14 +318,13 @@ function harness(options: { launchError?: Error; deliverError?: Error } = {}) {
   const delivers: { number: number; at: number; automation: Automation }[] = [];
   const aborts: string[] = [];
   const activeChanges: number[] = [];
-  const state = { enabled: true, notifies: 0 };
+  const state = { notifies: 0 };
   const busy = new Set<string>();
   const existing = new Set<string>(["S", "S2"]);
   let counter = 0;
   const scheduler = new AutomationScheduler({
     store,
     now: () => clock.now,
-    enabled: async () => state.enabled,
     launch: async (input) => {
       launches.push(input);
       if (options.launchError !== undefined) throw options.launchError;
@@ -420,17 +419,6 @@ describe("AutomationScheduler：new_session", () => {
     await h.store.insert(makeAutomation({ id: "a", nextRunAt: T0, lastResult: "上次说了 X" }));
     await h.scheduler.tick();
     assert.equal(h.launches[0]?.automation.lastResult, "上次说了 X");
-  });
-
-  test("开关关着：tick 什么都不做", async () => {
-    const h = harness();
-    h.state.enabled = false;
-    await h.store.insert(makeAutomation({ id: "a", nextRunAt: T0 }));
-    await h.scheduler.tick();
-    assert.equal(h.launches.length, 0);
-    assert.equal((await h.store.get("a"))?.runs.length, 0);
-    const refused = await h.scheduler.runNow("a");
-    assert.equal(refused.ok, false);
   });
 
   test("没到点不触发；到点早一点点（在 LATE_MS 内）是 schedule 不是 caughtUp", async () => {
@@ -726,7 +714,6 @@ describe("AutomationScheduler：this_session", () => {
     const restarted = new AutomationScheduler({
       store: h.store,
       now: () => h.clock.now,
-      enabled: async () => true,
       launch: async () => undefined,
       deliver: async (input) => {
         h.delivers.push(input);

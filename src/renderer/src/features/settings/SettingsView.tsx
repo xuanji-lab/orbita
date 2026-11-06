@@ -81,7 +81,7 @@ export function SettingsView(props: {
   /** 当前会话所在的工作区与「打开看板」：插件页（全屏版）的详情页用 */
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
-  /** 插件页签（全屏版）要接到会话引擎与右栏上的三样（实验功能 plugins） */
+  /** 插件页签（全屏版）要接到会话引擎与右栏上的三样 */
   plugins: {
     currentWorkspaceId: string | null;
     onMakeWithAgent: () => void;
@@ -90,6 +90,8 @@ export function SettingsView(props: {
     onOpenDraft: (draft: PluginDraftTarget) => void;
     onOpenSession: (sessionId: string, draftPath: string) => void;
   };
+  /** 通用页「再看一遍新手引导」：全屏打开引导（不改「看过」的设置键） */
+  onOpenOnboarding: () => void;
   /** 记忆库页签里「回到原文」：退出设置、打开出处会话并滚到那一轮 */
   onJumpToMemorySource: (view: MemoryEntryView) => void;
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
@@ -190,6 +192,7 @@ export function SettingsView(props: {
             onChange={props.onSettingsChange}
             highlightChore={highlightChore}
             onHighlightConsumed={() => setHighlightChore(false)}
+            onOpenOnboarding={props.onOpenOnboarding}
           />
         </div>
       )}
@@ -237,6 +240,7 @@ function General(props: {
   /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
   highlightChore?: boolean;
   onHighlightConsumed?: () => void;
+  onOpenOnboarding: () => void;
 }) {
   const t = useT();
   const choreRowRef = useRef<HTMLDivElement | null>(null);
@@ -375,6 +379,11 @@ function General(props: {
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
             </span>
           )}
+        </SettingRow>
+        <SettingRow name={t.settings.onboarding} info={t.settings.onboardingInfo}>
+          <PanelButton onClick={props.onOpenOnboarding}>
+            <Icon name="book-open" size={14} /> {t.settings.onboardingReplay}
+          </PanelButton>
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；

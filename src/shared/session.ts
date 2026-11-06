@@ -555,7 +555,7 @@ export interface SessionMeta {
    */
   parentId?: string;
   /**
-   * 这条会话是哪条自动化**新开**出来的（实验功能 automation，target = new_session）；
+   * 这条会话是哪条自动化**新开**出来的（target = new_session）；
    * **缺席 = 用户自己开的会话**。this_session 的任务是叫醒一条普通会话，不在这条会话上留任何标记。
    *
    * 自动化每次触发开一条新会话（在该自动化所属的工作区里），meta 上记它的 id：

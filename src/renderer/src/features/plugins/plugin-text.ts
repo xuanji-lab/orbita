@@ -106,8 +106,6 @@ export function rowReasonText(t: RowT, row: Pick<PluginInstallRow, "reason">): s
 /** 点「安装」没成的原因（主进程给稳定的代码，句子在这里出）。 */
 export function rowFailureText(t: RowT, reason: Extract<PluginRowInstallResult, { ok: false }>["reason"], detail: string): string {
   switch (reason) {
-    case "disabled":
-      return t.failed.disabled;
     case "no-session":
       return t.failed.noSession;
     case "not-found":

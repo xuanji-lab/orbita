@@ -1,5 +1,5 @@
 /**
- * 自动化的一次触发（实验功能 automation）：两种去处各一个入口——
+ * 自动化的一次触发：两种去处各一个入口——
  * `launchAutomationRun`（new_session）开一条新会话并开一轮；`deliverAutomationRun`（this_session）
  * 把指令送回创建它的那条会话。
  *

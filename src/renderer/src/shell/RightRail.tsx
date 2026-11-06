@@ -45,7 +45,7 @@ export type RightPanelKind =
   | "intent"
   | "context"
   | "automation"
-  /** 插件页的右栏单列版（实验功能 plugins）；全屏版是设置页的「插件」页签 */
+  /** 插件页的右栏单列版；全屏版是设置页的「插件」页签 */
   | "plugins";
 
 /**
@@ -76,16 +76,11 @@ export function RightRail(props: {
   /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
   intentAvailable: boolean;
   /**
-   * 自动化面板入口（实验功能 automation）：null = 不出现（开关关着）；running 是正在跑的自动化数，
+   * 自动化面板入口：running 是正在跑的自动化数，
    * 角标只在有运行时出现（没有「未读」这类计数——自动化的结果在面板里那条任务下面看）。
    * 归「智能体」组、常驻条上（tooltip 带运行数）。
    */
-  automation: { running: number } | null;
-  /**
-   * 插件入口（实验功能 plugins）：false = 不出现（开关关着）。与 Files 等共用右栏面板位（走 `onPanel`，
-   * 互斥、再点收起）；想要全屏版去设置里的「插件」页签。
-   */
-  pluginsAvailable: boolean;
+  automation: { running: number };
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -173,10 +168,9 @@ export function RightRail(props: {
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
     { id: "terminal", group: "agent", icon: FEATURE_ICON.terminal, label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
     ...fromApp("browser", { group: "agent" }),
-    // 智能体会什么：插件页把技能与 MCP 也当插件显示，是技能 / MCP 的唯一面板
-    ...(props.pluginsAvailable
-      ? [{ id: "plugins", group: "agent" as const, icon: FEATURE_ICON.plugins, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
-      : []),
+    // 智能体会什么：插件页把技能与 MCP 也当插件显示，是技能 / MCP 的唯一面板（插件转正后常驻）。
+    // 与 Files 等共用右栏面板位（互斥、再点收起）
+    { id: "plugins", group: "agent" as const, icon: FEATURE_ICON.plugins, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") },
     ...(props.intentAvailable
       ? [
           {
@@ -189,23 +183,19 @@ export function RightRail(props: {
           },
         ]
       : []),
-    ...(props.automation === null
-      ? []
-      : [
-          {
-            id: "automation",
-            group: "agent" as const,
-            icon: FEATURE_ICON.automation,
-            label: t.automation.railLabel(props.automation.running),
-            lit: props.panel === "automation",
-            onSelect: toggle("automation"),
-            badge: props.automation.running,
-          },
-        ]),
+    {
+      id: "automation",
+      group: "agent" as const,
+      icon: FEATURE_ICON.automation,
+      label: t.automation.railLabel(props.automation.running),
+      lit: props.panel === "automation",
+      onSelect: toggle("automation"),
+      badge: props.automation.running,
+    },
     // 收起来以后再看的：全部在「更多」菜单里（记忆库在设置里，不在右栏）
     ...fromApp("carryovers", { group: "shelf", inMore: true }),
     ...fromApp("archived", { group: "shelf", inMore: true }),
-    // 应用级：看板（实验功能 plugins）、设置，钉右下。通知收进「更多」，未读数写在菜单项上
+    // 应用级：看板、设置，钉右下。通知收进「更多」，未读数写在菜单项上
     ...fromApp("board", { group: "app" }),
     ...fromApp("settings", { group: "app" }),
     { id: "bell", group: "shelf", inMore: true, icon: FEATURE_ICON.bell, label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },

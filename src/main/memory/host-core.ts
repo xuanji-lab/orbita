@@ -2,13 +2,13 @@
  * MemoryServiceHost 的全部逻辑 —— **纯模块**：不 import electron，可被 `node --test`
  * 直接测（agent/host-core.ts 的同款先例）。真的 fork 在 host.ts 那层注入。
  *
- * 只做四件事：实验开关开时拉起进程（ready 后发 init）、把轮后事件转发进去、
+ * 只做四件事：启动时拉起进程（ready 后发 init）、把轮后事件转发进去、
  * 把召回请求转发进去并在超时 / 崩溃时回空命中、开关关 / 应用退出时停进程。
  *
  * 崩溃自愈：子进程退出时清掉在途的召回请求（回空命中，不拦开轮），下次
  * ensureStarted 重拉。**不自动重启**——崩溃风暴不该让主进程永远在拉进程，
  * 下一次真正要用（下一轮）时再拉。init 失败（initFailed）是例外：重拉也必然
- * 再失败，记住失败、不再拉，直到 stop()（开关关）后重开。
+ * 再失败，记住失败、不再拉，直到 stop()（应用退出）后下次启动重开。
  *
  * llama-server 补杀：服务报来的 embedServerPid 记在这里。停服务时先发 shutdown
  * （来得及就让服务自己优雅停），再按 pid 补杀、再 kill 服务进程；服务自己崩了
@@ -236,7 +236,7 @@ export class MemoryServiceHostCore {
         }
         if (message.type === "initFailed" && this.child === child) {
           this.initFailure = message.error;
-          this.dropChild(`init 失败：${message.error}；关掉再打开实验开关后重试`);
+          this.dropChild(`init 失败：${message.error}；重启 Orbita 后重试`);
         }
       });
       child.on("exit", () => {
@@ -266,7 +266,7 @@ export class MemoryServiceHostCore {
 
   /**
    * 轮后事件转发。服务不在就丢——构建是易耗品，这一轮没有就没有了；
-   * （实验开关开着时服务应该已在跑；这里只是崩溃窗口的兜底。）
+   * （服务启动即拉起，应该已在跑；这里只是崩溃窗口的兜底。）
    */
   turnSettled(payload: MemoryTurnPayload): void {
     if (this.child === null) {
@@ -402,7 +402,7 @@ export class MemoryServiceHostCore {
         ok: false,
         error:
           this.initFailure !== null
-            ? `记忆服务初始化失败：${this.initFailure}（关掉再打开记忆实验开关重试）`
+            ? `记忆服务初始化失败：${this.initFailure}（重启 Orbita 后重试）`
             : "记忆服务没在跑（先拉起或稍后再试）",
       });
     }
@@ -429,7 +429,7 @@ export class MemoryServiceHostCore {
     call: MemoryAgentCall;
   }): Promise<MemoryAgentOutcome> {
     if (this.child === null) {
-      return Promise.resolve({ ok: false, error: "记忆服务没在跑（实验开关可能关着）" });
+      return Promise.resolve({ ok: false, error: "记忆服务没在跑（稍后再试）" });
     }
     const requestId = `${this.seq += 1}:${randomUUID()}`;
     return new Promise<MemoryAgentOutcome>((resolve) => {

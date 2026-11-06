@@ -13,14 +13,14 @@ import {
 } from "../shared/automation.ts";
 
 /**
- * agent 的自动化工具（实验功能 automation）：automation_create / automation_list / automation_cancel / automation_update。
+ * agent 的自动化工具：automation_create / automation_list / automation_cancel / automation_update。
  *
  * 自动化是**工作区里那个主 agent 的工具**，不是某个会话上的工具卡：只管当前会话所在工作区的。
  * 建出来**直接生效**（用户 2026-10-31 裁决）：默认绑定创建它的这条会话——到点把指令送回这条会话，
  * 让长任务放后台、本轮结束，而不是在 bash 里 sleep 轮询。照 delegate 的范式：agent 进程只把参数翻成
  * automationRequest、把回执翻成工具结果，校验与存盘都在主进程（信任边界在那边，这里的校验只是让模型少撞一次墙）。
  *
- * 只给根会话注册、且实验开关开着时注册（主进程按 automationTools 开关装配）；自动化新开的会话与
+ * 只给根会话注册（主进程按 automationTools 开关装配）；自动化新开的会话与
  * 子会话不注册——自动化不能再建自动化。
  */
 

@@ -139,8 +139,6 @@ export async function boardPluginsIn(plugins: BoardPluginSource, workspaceId: st
 export interface PluginBoardsDeps {
   plugins: BoardPluginSource;
   templates: Pick<BoardTemplateStore, "put">;
-  /** 实验开关 plugins（每次现读） */
-  enabled: () => Promise<boolean>;
   session: (sessionId: string) => Promise<{ cwd: string; workspaceId: string | null } | null>;
   /** 工作区 id → 根目录；找不到为 null */
   workspaceRoot: (workspaceId: string) => Promise<string | null>;
@@ -174,7 +172,6 @@ export class PluginBoards {
   }
 
   async snapshot(request: { sessionId: string; plugin: string; cards: readonly string[] | null }): Promise<PluginBoardOutcome> {
-    if (!(await this.deps.enabled())) return { ok: false, error: "The plugins feature is turned off in Orbita's experimental settings." };
     const session = await this.deps.session(request.sessionId);
     if (session === null) return { ok: false, error: "This session no longer exists." };
     const wanted = request.plugin.trim();

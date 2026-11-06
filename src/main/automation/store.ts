@@ -1,5 +1,5 @@
 /**
- * 自动化的落盘（实验功能 automation）：userData 下一份 `automations.json`。
+ * 自动化的落盘：userData 下一份 `automations.json`。
  *
  * - **全量常驻内存**：自动化是用户手建的少量对象（每条最多 50 条 runs），整份读进来比逐条读盘简单，
  *   也让调度器每 30 秒的 tick 不碰磁盘。

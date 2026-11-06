@@ -105,8 +105,15 @@ const ALLOWED_LATIN = new Set([
   "Chromium",
   // 技术名：登录状态导入的对象就是 cookie（说「登录 cookie」最准，不译成「小甜饼」）
   "cookie",
-  // 系统名（macOS 钥匙串授权的提示）
+  // 系统名（macOS 钥匙串授权的提示；新手引导常见问题里分平台说托盘 / 程序坞）
   "macOS",
+  "Windows",
+  // 新手引导贯穿全程的研究课题案例：论文与模型的名字、论文网站名（专名，没有中文写法）
+  "UrbanGPT",
+  "STG-LLM",
+  "UniST",
+  "UrbanCLIP",
+  "arXiv",
   // 文件名
   "mcp.json",
   "SKILL.md",

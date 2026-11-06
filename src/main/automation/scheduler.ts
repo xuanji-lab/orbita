@@ -1,5 +1,5 @@
 /**
- * 自动化调度器（实验功能 automation）：「nextRunAt 时间戳 + 30 秒短 tick」。
+ * 自动化调度器：「nextRunAt 时间戳 + 30 秒短 tick」。
  *
  * **为什么不是一个 setTimeout 等到点**：Mac 睡眠时定时器不走，醒来后一个长 setTimeout 要么早要么晚且不可知；
  * 每 30 秒看一眼「有没有 nextRunAt ≤ 现在」，睡醒后（`powerMonitor` 的 resume 立刻再 tick 一次）
@@ -310,8 +310,6 @@ export function applyRunResult(automation: Automation, runId: string, result: Ru
 export interface SchedulerDeps {
   store: AutomationStore;
   now(): number;
-  /** 实验开关（每次 tick 现读：关着调度器什么都不做） */
-  enabled(): Promise<boolean>;
   /** new_session：开一条会话并开轮（launch.ts 的 launchAutomationRun 套好依赖）；失败抛错，会话已回滚 */
   launch(input: { automation: Automation; sessionId: string; number: number; at: number; trigger: AutomationRunTrigger }): Promise<void>;
   /** this_session：把指令送回目标会话（launch.ts 的 deliverAutomationRun）；会话没了抛 SessionGoneError */
@@ -412,7 +410,6 @@ export class AutomationScheduler {
 
   /** 看一眼有没有到点的。睡眠唤醒（powerMonitor resume）与启动后都直接调它 */
   async tick(): Promise<void> {
-    if (!(await this.deps.enabled())) return;
     // 队列里已经有一个等着的 tick 就不再叠：开会话慢的时候别攒一串
     if (this.tickQueued) return;
     this.tickQueued = true;
@@ -441,7 +438,6 @@ export class AutomationScheduler {
   /** 面板上的「立即运行」：不动排期，开 / 送一次 */
   runNow(automationId: string): Promise<RunNowOutcome> {
     return this.enqueue(async () => {
-      if (!(await this.deps.enabled())) return { ok: false, error: "Automations are turned off." };
       const automation = await this.deps.store.get(automationId);
       if (automation === null) return { ok: false, error: "Automation not found." };
       if (automation.target.kind === "this_session" && !(await this.deps.sessionExists(automation.target.sessionId))) {

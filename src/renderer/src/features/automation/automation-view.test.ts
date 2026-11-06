@@ -349,7 +349,7 @@ describe("modeRowView（对话里「改权限」那一行画哪一种：看此�
 describe("modeRowFailureText 与文案", () => {
   test("主进程的每个稳定代码都有一句中英文人话，不漏", () => {
     for (const messages of [T.modeRow, Z.modeRow]) {
-      for (const reason of ["disabled", "noSession", "notFound", "notApplicable", "finished"] as const) {
+      for (const reason of ["noSession", "notFound", "notApplicable", "finished"] as const) {
         assert.notEqual(modeRowFailureText(messages, { ok: false, reason, detail: "x" }), "", reason);
       }
     }

@@ -77,10 +77,10 @@ afterEach(async () => {
 });
 
 /** 同一个测试里要两套互不相干的存储时，给不同的 name */
-function setup(options: { enabled?: boolean; metas?: SessionMeta[]; runNow?: RunNowOutcome; name?: string } = {}) {
+function setup(options: { metas?: SessionMeta[]; runNow?: RunNowOutcome; name?: string } = {}) {
   const store = new AutomationStore(join(dir, options.name ?? "main"));
   const metas = new Map((options.metas ?? []).map((m) => [m.id, m]));
-  const state = { enabled: options.enabled ?? true, notifies: 0, promoted: [] as string[], runNowCalls: [] as string[], ids: 0 };
+  const state = { notifies: 0, promoted: [] as string[], runNowCalls: [] as string[], ids: 0 };
   const deps: AutomationRequestDeps = {
     store,
     scheduler: {
@@ -98,7 +98,6 @@ function setup(options: { enabled?: boolean; metas?: SessionMeta[]; runNow?: Run
     },
     providers: { list: async () => [provider("zai", ["glm-5.3", "glm-5.3-flash"]), provider("kimi", ["k3"])] },
     workspaces: { list: async () => workspaces },
-    enabled: async () => state.enabled,
     now: () => NOW,
     newId: () => `id${(state.ids += 1)}`,
     notify: () => {
@@ -115,26 +114,6 @@ const validCreate = {
   schedule: { kind: "daily", time: "18:00", weekdays: [5] },
   mode: "skip",
 };
-
-describe("开关关着", () => {
-  test("list 回空，所有写操作与工具请求都回「已关闭」，什么都不落盘", async () => {
-    const { deps, store, state } = setup({ enabled: false, metas: [meta({ id: "s1" })] });
-    await store.insert(makeAutomation({ id: "a" }));
-    assert.deepEqual(await listAutomations(deps), []);
-    for (const result of [
-      await applyAutomationCreate(deps, validCreate),
-      await applyAutomationUpdate(deps, "a", { title: "x" }),
-      await applyAutomationAct(deps, "a", { type: "pause" }),
-      await applyAutomationPromote(deps, "s1"),
-      await applyAutomationRequest(deps, toolEvent("s1", { op: "list" })),
-    ]) {
-      assert.equal(result.ok, false);
-      assert.match(result.ok ? "" : result.error, /turned off/);
-    }
-    assert.equal((await store.list()).length, 1);
-    assert.equal(state.notifies, 0);
-  });
-});
 
 describe("applyAutomationCreate（面板手建）", () => {
   test("合法：直接 active、只能新开会话、nextRunAt 从现在排好、通知 renderer", async () => {
@@ -714,14 +693,10 @@ describe("applyAutomationModeFromRow（用户点那一行的按钮：主进程�
     assert.equal(state.notifies, 1);
   });
 
-  test("不是这条会话建的、但在同一工作区（用户手建的）也能改；开关关着回 disabled", async () => {
-    const { deps, store, state } = setup({ metas: [meta({ id: "S" })] });
+  test("不是这条会话建的、但在同一工作区（用户手建的）也能改", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S" })] });
     await seed(store, { id: "panel", createdBy: { kind: "user" } });
     assert.deepEqual(await applyAutomationModeFromRow(deps, click({ automationId: "panel" })), { ok: true });
-    assert.equal((await store.get("panel"))?.mode, "skip");
-    state.enabled = false;
-    const off = await applyAutomationModeFromRow(deps, click({ automationId: "panel", action: "readonly" }));
-    assert.equal(!off.ok && off.reason, "disabled");
     assert.equal((await store.get("panel"))?.mode, "skip");
   });
 

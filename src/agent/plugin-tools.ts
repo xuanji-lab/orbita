@@ -5,7 +5,7 @@ import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPrev
 import type { PluginBoardOutcome, PluginBoardResult } from "../shared/plugin-board.ts";
 
 /**
- * agent 的插件工具（实验功能 plugins）：install_plugin / preview_plugin / list_plugins / show_plugin_board。
+ * agent 的插件工具：install_plugin / preview_plugin / list_plugins / show_plugin_board。
  *
  * 与 create_skill / add_mcp_server 同一条路（broker，见 request-broker.ts）：这一层**只是翻译**——
  * 参数 → pluginInstallRequest / pluginPreviewRequest / pluginListRequest → 等回执 → 工具结果。预览、路径校验、
