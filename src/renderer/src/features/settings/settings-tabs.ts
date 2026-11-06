@@ -3,12 +3,12 @@
  *
  * 单独成 .ts 只为可测（`node --test` 只加载 .ts，SettingsView.tsx 带 JSX）。
  * 页签可以挂在某个实验功能后面（`flag`）：开关关着时页签不出现，停在它上面的人退回「通用」——
- * 与记忆库 / 插件页「开关关掉就退回聊天」同一条纪律，只藏入口不动数据。
+ * 与插件页「开关关掉就退回聊天」同一条纪律，只藏入口不动数据。
  */
 import type { ExperimentalFeatureId } from "@shared/settings";
 import type { IconName } from "../../shell/Icon";
 
-export type SettingsTab = "general" | "providers" | "migration" | "browser" | "voice" | "plugins" | "experimental";
+export type SettingsTab = "general" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental";
 
 export interface SettingsTabDef {
   id: SettingsTab;
@@ -25,6 +25,8 @@ export const SETTINGS_TABS: readonly SettingsTabDef[] = [
   { id: "voice", icon: "mic" },
   // 插件页的全屏版（右栏图标条的积木图标开的是右栏单列版，两处是同一个组件）
   { id: "plugins", icon: "blocks", flag: "plugins" },
+  // 记忆库（原右侧图标条的入口，2026-11-06 挪进设置）：实验功能 memory-system 开着才在
+  { id: "memory", icon: "notebook-text", flag: "memory-system" },
   { id: "experimental", icon: "flask-conical" },
 ];
 

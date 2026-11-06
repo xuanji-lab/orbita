@@ -76,8 +76,6 @@ import {
 import { playCompletionChime } from "./features/notify/chime.ts";
 import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
 import { PluginsView } from "./features/plugins/PluginsView.tsx";
-import type { MemoryNav } from "./features/memory/memory-view.ts";
-import { useMemoryScopes } from "./features/memory/useMemory.ts";
 import type { MemoryEntryView } from "@shared/memory";
 import type { PanelUsageKey } from "@shared/panel-usage";
 
@@ -123,8 +121,6 @@ export function App() {
     return () => query.removeEventListener("change", sync);
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
-  /** 记忆库盖层（实验功能 memory-system）里看的是哪一页：某个范围 / 待你确认 / 向量模型 */
-  const [memoryNav, setMemoryNav] = useState<MemoryNav>({ kind: "scope", token: "all" });
   // 初始 state 的主题跟 main.tsx 首帧写的 data-theme 对齐（api.initialTheme），
   // 否则这里先落 DEFAULT_SETTINGS 的 "system"，useTheme 首次 apply 会把主题切到
   // 系统色，api.settings.get() 读回真设置后再切回来——当着用户的面闪两次。
@@ -1002,9 +998,6 @@ export function App() {
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
-  const memoryOn = experimentalFeatures["memory-system"] === true;
-  if (overlay === "memory" && !memoryOn) setOverlay(null);
   // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
   const pluginsOn = experimentalFeatures["plugins"] === true;
   // 全局周看板（实验功能 plugins 的一部分）：开关关掉时盖层退回聊天
@@ -1064,10 +1057,10 @@ export function App() {
   if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
   const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
   if (shownSettingsTab !== settingsTab) setSettingsTab(shownSettingsTab);
-  const memoryScopes = useMemoryScopes(overlay === "memory");
+  // 记忆库住在设置的页签里：打开那个页签才算一次
   useEffect(() => {
-    if (overlay === "memory") countPanel("memory");
-  }, [overlay, countPanel]);
+    if (overlay === "settings" && shownSettingsTab === "memory") countPanel("memory");
+  }, [overlay, shownSettingsTab, countPanel]);
   useEffect(() => {
     if (showCarryovers) countPanel("carryovers");
   }, [showCarryovers, countPanel]);
@@ -1111,11 +1104,11 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" || overlay === "memory" || overlay === "board" ? (
+    overlay === "settings" || overlay === "board" ? (
       <div className="cap-sess">
         <div className="cap-sc">
           <strong className="cap-title">
-            {overlay === "memory" ? t.memory.title : overlay === "board" ? t.board.title : t.settings.tabs[settingsTab]}
+            {overlay === "board" ? t.board.title : t.settings.tabs[settingsTab]}
           </strong>
         </div>
       </div>
@@ -1177,18 +1170,6 @@ export function App() {
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
-    ...(memoryOn
-      ? [
-          {
-            // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
-            id: "memory" as const,
-            icon: "notebook-text" as const,
-            label: t.memory.rail,
-            lit: overlay === "memory",
-            onClick: () => setOverlay(overlay === "memory" ? null : "memory"),
-          },
-        ]
-      : []),
     ...(pluginsOn
       ? [
           {
@@ -1242,9 +1223,6 @@ export function App() {
           settingsTab={settingsTab}
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
-          memoryNav={memoryNav}
-          onMemoryNav={setMemoryNav}
-          memoryScopes={memoryScopes.data}
           showArchived={showArchived}
           showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
@@ -1276,19 +1254,7 @@ export function App() {
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
-            {overlay === "memory" ? (
-              <MemoryLibraryView
-                nav={memoryNav}
-                onNav={setMemoryNav}
-                scopes={memoryScopes.data}
-                onJump={jumpToMemorySource}
-                choreLabel={settings.choreModel?.modelId ?? null}
-                onOpenGeneral={() => {
-                  setSettingsTab("general");
-                  setOverlay("settings");
-                }}
-              />
-            ) : overlay === "board" ? (
+            {overlay === "board" ? (
               <BoardWeekView
                 days={settings.boardDays ?? BOARD_DAYS_DEFAULT}
                 onDaysChange={(boardDays) => changeSettings({ boardDays })}
@@ -1321,6 +1287,7 @@ export function App() {
                   },
                 }}
                 onTab={setSettingsTab}
+                onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
             ) : (
