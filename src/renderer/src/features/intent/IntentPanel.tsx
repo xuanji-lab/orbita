@@ -51,6 +51,8 @@ import { GraphRenderer, nebulaFill, type SceneBuilder } from "./GraphRenderer.ts
 import { ZOOM_MAX, ZOOM_MIN } from "./graph-view.ts";
 import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
 import { startPointerDrag } from "../../shell/pointer-drag.ts";
+import { intentSubOf, type IntentSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 
 type IntentView = "slots" | "questions";
 
@@ -81,6 +83,12 @@ export function IntentPanel(props: {
   openableSessionIds: ReadonlySet<string>;
   /** 「打开会话」：在辅助对话里打开那条来源会话（主槽不动）；turnId 是那一问（能定位更好） */
   onOpenSession: (sessionId: string, turnId: string | null) => void;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：看的哪一轮、视图。选中的节点不记。
+   * 只在挂载时读一次当初值（App 按会话换 key 重挂）；之后经 onSubChange 报给 App。
+   */
+  sub?: IntentSub;
+  onSubChange?: (sub: IntentSub | undefined) => void;
 }) {
   const t = useT();
   const liveTurns = useMemo(
@@ -99,8 +107,9 @@ export function IntentPanel(props: {
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1]! : null;
   const isLive = props.liveRun !== null;
 
-  const [pickedRound, setPickedRound] = useState<number | null>(null);
-  const [view, setView] = useState<IntentView>("slots");
+  const [pickedRound, setPickedRound] = useState<number | null>(() => props.sub?.round ?? null);
+  const [view, setView] = useState<IntentView>(() => props.sub?.view ?? "slots");
+  useReportSub(intentSubOf(pickedRound, view), props.onSubChange);
   const [colorWeight, setColorWeight] = useState<GraphColorWeight>(DEFAULT_COLOR_WEIGHT);
   const [graphH, setGraphH] = useState(DEFAULT_GRAPH_H);
   const [folded, setFolded] = useState(false);

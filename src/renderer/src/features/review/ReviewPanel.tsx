@@ -23,6 +23,8 @@ import {
 import { pathParts } from "../chat/path-parts.ts";
 import { Stats } from "../chat/FileTurnCard";
 import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
+import { reviewSubOf, type ReviewSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 import { MemoryTab } from "../memory/MemoryTab";
 
 /**
@@ -67,13 +69,20 @@ export function ReviewPanel(props: {
   onOpenInFiles: (absPath: string) => void;
   /** 对话里记忆行的「在审查面板里看」：token 递增的一次性请求，切到记忆页签 */
   memoryFocus: number | null;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：页签、来源。展开的文件不记。只在挂载时读一次当初值
+   * （App 按会话换 key 重挂）；之后经 onSubChange 报给 App。
+   */
+  sub?: ReviewSub;
+  onSubChange?: (sub: ReviewSub | undefined) => void;
 }) {
   const t = useT();
-  const [tab, setTab] = useState<"changes" | "excerpts" | "memory">("changes");
+  const [tab, setTab] = useState<"changes" | "excerpts" | "memory">(() => props.sub?.tab ?? "changes");
   useEffect(() => {
     if (props.memoryFocus !== null) setTab("memory");
   }, [props.memoryFocus]);
-  const [source, setSource] = useState<ReviewSource>("task");
+  const [source, setSource] = useState<ReviewSource>(() => props.sub?.source ?? "task");
+  useReportSub(reviewSubOf(tab, source), props.onSubChange);
   const [list, setList] = useState<ReviewList | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);

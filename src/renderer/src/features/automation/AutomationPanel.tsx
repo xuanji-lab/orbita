@@ -26,6 +26,8 @@ import {
   type AutomationTemplate,
 } from "./automation-view.ts";
 import { sparkScale } from "./automation-spark.ts";
+import { automationSubOf, resolveAutomationSub, type AutomationSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 import type { AutomationsState } from "./useAutomations.ts";
 
 /** 「N 分钟后」这类相对文案要跟着走：每分钟重算一次 now（面板开着才有这个定时器） */
@@ -72,13 +74,19 @@ export function AutomationPanel(props: {
   onOpenSession: (sessionId: string) => void;
   /** 「在这条会话里说一句」：往输入框预填一句引导 */
   onAskInChat: () => void;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：看哪一条的详情、范围。只在挂载时读一次当初值
+   * （App 按会话换 key 重挂）；之后经 onSubChange 报给 App。编辑页不记（表单里有没存的字）。
+   */
+  sub?: AutomationSub;
+  onSubChange?: (sub: AutomationSub | undefined) => void;
 }) {
   const t = useT();
   const a = t.automation;
   const { state } = props;
   const now = useNow(60_000);
-  const [view, setView] = useState<View>({ kind: "list" });
-  const [scope, setScope] = useState<AutomationScope>("workspace");
+  const [view, setView] = useState<View>(() => (props.sub?.detail === undefined ? { kind: "list" } : { kind: "detail", id: props.sub.detail }));
+  const [scope, setScope] = useState<AutomationScope>(() => props.sub?.scope ?? "workspace");
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,6 +114,15 @@ export function AutomationPanel(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.focus?.nonce]);
 
+  // 把第二层报给 App：详情里的那一条（编辑页退回它来源的那一层：从详情进的回详情，新建回列表）、范围。
+  // 详情指向的那一条不在了（别处删的 / 重启后已不存在）：列表读回来后按「回列表」报（resolveAutomationSub），面板自己也渲染成回列表
+  const detailId = view.kind === "detail" || (view.kind === "edit" && view.from === "detail") ? view.id : null;
+  const knownIds = useMemo(
+    () => (state.load.kind === "ready" ? new Set(state.automations.map((automation) => automation.id)) : null),
+    [state.load.kind, state.automations],
+  );
+  useReportSub(resolveAutomationSub(automationSubOf(detailId, scope), knownIds), props.onSubChange);
+
   const act = async (automation: Automation, action: AutomationAction): Promise<void> => {
     const outcome = await state.act(automation.id, action);
     setError(outcome.ok ? null : outcome.error);
@@ -122,7 +139,9 @@ export function AutomationPanel(props: {
   if (view.kind === "edit") {
     const target = view.id === null ? null : (state.automations.find((automation) => automation.id === view.id) ?? null);
     // 编辑的那一条被删了（别处删的 / 会话级联）：回列表
-    if (view.id !== null && target === null) return <BackToList onBack={() => setView({ kind: "list" })} />;
+    if (view.id !== null && target === null) {
+      return state.load.kind === "loading" ? <LoadingFrame /> : <BackToList onBack={() => setView({ kind: "list" })} />;
+    }
     return (
       <AutomationEditView
         key={view.id ?? "new"}
@@ -143,7 +162,10 @@ export function AutomationPanel(props: {
   const detailTarget =
     view.kind === "detail" ? (state.automations.find((automation) => automation.id === view.id) ?? null) : null;
   // 看的那一条被删了（别处删的 / 会话级联）：回列表
-  if (view.kind === "detail" && detailTarget === null) return <BackToList onBack={() => setView({ kind: "list" })} />;
+  // 列表还没读回来（刚重启 / 刚挂载）时别急着判「没了」：记着的详情要等数据到了再认
+  if (view.kind === "detail" && detailTarget === null) {
+    return state.load.kind === "loading" ? <LoadingFrame /> : <BackToList onBack={() => setView({ kind: "list" })} />;
+  }
   const headerExtra = (
     <>
       <PanelHelp label={a.helpLabel} text={a.help} />
@@ -317,6 +339,16 @@ export function AutomationPanel(props: {
 }
 
 /** 正在编辑的那条自动化已经不在了：一帧空页后回列表（effect 里切视图，避免渲染期 setState） */
+/** 记着的详情在等列表读回来：只画壳与「加载中」，不抢着回列表 */
+function LoadingFrame() {
+  const a = useT().automation;
+  return (
+    <RightPanelFrame header={<PanelTitle icon={FEATURE_ICON.automation} title={a.title} />} contentKey="loading">
+      <p className="panel-empty">{a.loading}</p>
+    </RightPanelFrame>
+  );
+}
+
 function BackToList(props: { onBack: () => void }) {
   useEffect(props.onBack, [props.onBack]);
   return null;

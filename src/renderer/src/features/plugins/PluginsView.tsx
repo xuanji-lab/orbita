@@ -32,8 +32,10 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { relativeTime } from "../../shell/relative-time";
 import { WorkspaceFilterBar, useWorkspaceFilter } from "../../shell/WorkspaceFilterBar.tsx";
-import { buildOptions, defaultFilter, type WsAllow } from "../../shell/workspace-filter.ts";
+import { buildOptions, defaultFilter, resolveFilter, type WsAllow, type WsFilter } from "../../shell/workspace-filter.ts";
 import type { TokenPickerControl } from "../../shell/panel-token.ts";
+import { parsePluginsSub, resolvePluginsSub, type PluginsSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
@@ -92,15 +94,22 @@ export function PluginsView(props: {
   onOpenSession: (sessionId: string, draftPath: string) => void;
   /** 「/ + 空格」选取态：只有主槽右栏的 App 提供 */
   picker?: TokenPickerControl;
+  /**
+   * 右栏版的第二层（按会话记忆，right-panel-memory.ts）：进了哪个插件 / 是否在看板视图 / 选择条的档。
+   * 只在挂载时读一次当初值（App 按会话换 key 重挂，所以切会话时状态只从记忆里来、不从上一条会话带过来）；
+   * 之后面板自己的状态变了经 onSubChange 报给 App。草稿（draft）不走这里，由 App 管。
+   */
+  sub?: PluginsSub;
+  onSubChange?: (sub: PluginsSub | undefined) => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
   const draftList = useDraftList(true, state.plugins, props.draft?.path ?? null);
-  const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
+  const [selectedId, setSelectedIdRaw] = useState<string | null>(() => (rail ? (props.sub?.selected ?? null) : null));
   // 右栏里看的是详情还是看板视图：换了插件就回详情
-  const [boardOpen, setBoardOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(() => rail && props.sub?.selected !== undefined && props.sub.board === true);
   const setSelectedId = (id: string | null): void => {
     setSelectedIdRaw(id);
     setBoardOpen(false);
@@ -272,7 +281,21 @@ export function PluginsView(props: {
     [state.plugins, query, onlyEnabled],
   );
   // 工作区选择条：没选过时默认当前会话所在的工作区（Home / 无工作区 = 全部），选过后面板自己记住
-  const [wsFilter, setWsFilter] = useWorkspaceFilter("capabilities", defaultFilter(props.currentWorkspaceId, workspaces), workspaces, ABILITY_FILTER_ALLOW);
+  const [sharedFilter, setSharedFilter] = useWorkspaceFilter("capabilities", defaultFilter(props.currentWorkspaceId, workspaces), workspaces, ABILITY_FILTER_ALLOW);
+  // 右栏版按会话记：这条会话自己选过的档优先于全局那份（全局那份仍跟着写——设置里的全屏版与「没选过的会话」据此默认）
+  const [ownFilter, setOwnFilter] = useState<WsFilter | undefined>(() => (rail ? props.sub?.ws : undefined));
+  const wsFilter = rail && ownFilter !== undefined ? resolveFilter(ownFilter, ownFilter, workspaces, ABILITY_FILTER_ALLOW) : sharedFilter;
+  const setWsFilter = (next: WsFilter): void => {
+    setOwnFilter(next);
+    setSharedFilter(next);
+  };
+  // 把第二层报给 App（只右栏版）：选中的那一项、是否在看板、这条会话选过的档。草稿由 App 管，不在这里
+  // 列表读回来后，指向已卸载 / 已删的那一项按「回列表」报（resolvePluginsSub）；面板自己的回列表在下面的 effect
+  const knownIds = useMemo(() => (state.load.kind === "ready" ? new Set(state.plugins.map((view) => view.id)) : null), [state.load.kind, state.plugins]);
+  useReportSub(
+    rail ? resolvePluginsSub(parsePluginsSub({ selected: selectedId ?? undefined, board: boardOpen, ws: ownFilter }), knownIds) : undefined,
+    props.onSubChange,
+  );
   const wsOptions = useMemo(() => {
     const counts = pluginFilterCounts(state.plugins, workspaces);
     return buildOptions({ workspaces, total: counts.total, perWorkspace: counts.perWorkspace, tasks: null, global: counts.global, selected: wsFilter, hideEmpty: false });
@@ -522,6 +545,8 @@ export function PluginsView(props: {
   if (rail) {
     // 页头住工具栏的右栏胶囊（RightPanelFrame 把它 portal 过去）：列表 = 标题 + 筛选；详情 = 返回 + 标题
     const boardOf = selected !== null && boardOpen && parsePluginViewId(selected.id) !== null ? selected : null;
+    // 切回会话时记着的详情在等列表读回来：先画详情的壳 + 加载中，不先闪一下列表再跳进详情
+    const restoring = selectedId !== null && selected === null && state.load.kind !== "ready" && !picking;
     const header =
       boardOf !== null ? (
         <>
@@ -530,7 +555,7 @@ export function PluginsView(props: {
           </PanelIconButton>
           <strong className="cap-title">{t.boardViewTitle(boardOf.name)}</strong>
         </>
-      ) : selected === null ? (
+      ) : selected === null && !restoring ? (
         <>
           <PanelTitle icon={FEATURE_ICON.plugins} title={t.title} />
           {picking ? (
@@ -564,9 +589,9 @@ export function PluginsView(props: {
       <>
         <RightPanelFrame
           header={header}
-          contentKey={selected === null ? "list" : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
+          contentKey={selected === null ? (restoring ? "restoring" : "list") : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
           // 工作区选择条钉在列表上方（列表滚下去它还在）；详情 / 看板 / 选取态里不出
-          subheader={selected === null && !picking ? <div className="pl-wsbar" data-chrome="rail">{wsBar}</div> : undefined}
+          subheader={selected === null && !picking && !restoring ? <div className="pl-wsbar" data-chrome="rail">{wsBar}</div> : undefined}
           footer={picking && selected === null ? <PluginPickerBar expanded={collapseRow(pickModel.flat[pickIndex]).kind !== "none"} /> : undefined}
         >
           <div className="pl-page" data-chrome="rail" data-picking={picking && selected === null}>
@@ -574,7 +599,7 @@ export function PluginsView(props: {
               {boardOf !== null ? (
                 <PluginBoardView target={{ kind: "installed", name: parsePluginViewId(boardOf.id)?.key ?? "", workspaceId: props.currentWorkspaceId }} />
               ) : selected === null ? (
-                picking ? pickBody : listBody
+                restoring ? <p className="pl-empty">{messages.common.loading}</p> : picking ? pickBody : listBody
               ) : (
                 detailBody
               )}
