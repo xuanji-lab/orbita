@@ -18,14 +18,16 @@
  */
 import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { isNotFound } from "../fs-errors.ts";
-import { writeTextAtomic } from "../atomic-write.ts";
+import { writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import {
   isSkillSlug,
   type SkillContent,
   type SkillMeta,
+  type SkillArchiveEntry,
   type SkillPatch,
+  type SkillRestoreResult,
   type SkillScope,
 } from "../../shared/skill.ts";
 
@@ -38,13 +40,20 @@ export const GLOBAL_SET = "global";
 
 const SKILL_FILE = "SKILL.md";
 
+/** 归档根：`skills-archive/<slug>-<时间戳>/` + 旁边同名 `.json`（做法同插件卸载 = 归档）。 */
+export const SKILLS_ARCHIVE_DIR = "skills-archive";
+
 export class SkillStore {
   private readonly storeDir: string;
   private readonly linksRoot: string;
+  private readonly archiveDir: string;
+  private readonly now: () => number;
 
-  constructor(configDir: string) {
+  constructor(configDir: string, now: () => number = Date.now) {
     this.storeDir = join(configDir, SKILLS_DIR);
     this.linksRoot = join(configDir, SKILL_LINKS_DIR);
+    this.archiveDir = join(configDir, SKILLS_ARCHIVE_DIR);
+    this.now = now;
   }
 
   /** 中心存储目录（「在文件管理器中打开」给新建 / 删除用）。 */
@@ -263,6 +272,125 @@ export class SkillStore {
     await writeTextAtomic(file, rebuildSkillMd(raw, patch));
   }
 
+  // ---------- 归档 / 移除 ----------
+
+  /**
+   * 中心存储里这条 skill 的入口路径。**renderer 只给 slug**：slug 过白名单（单段文件名，无 `..`），
+   * 再核对它的父目录真的是中心存储（防 skills 目录本身被换成链接后逃逸），目标必须真有 SKILL.md。
+   * 入口本身可以是导入的 symlink（4-1）——只对入口本身动手（挪 / 删链接），**永不跟进去碰用户的真身目录**。
+   */
+  private async entryOf(slug: string): Promise<string> {
+    assertSlug(slug);
+    const entry = join(this.storeDir, slug);
+    if (relative(this.storeDir, entry) !== slug) throw new Error(`Skill path escapes central storage: ${slug}`);
+    const [parent, root] = await Promise.all([realpath(dirname(entry)).catch(() => null), realpath(this.storeDir).catch(() => null)]);
+    if (parent === null || root === null || parent !== root) throw new Error(`Skill not found: ${slug}`);
+    if (!(await exists(join(entry, SKILL_FILE)))) throw new Error(`Skill not found: ${slug} (use clean for broken links)`);
+    return entry;
+  }
+
+  /**
+   * 归档：先写旁边的 json（原 slug、原范围、时间），再把文件夹挪进 `skills-archive/<slug>-<时间戳>/`，
+   * 最后删掉它在 global 与各工作区的全部链接。挪失败就撤掉 json、什么都没变。
+   * 返回归档 id（文件夹名）。
+   */
+  async archive(slug: string): Promise<string> {
+    const entry = await this.entryOf(slug);
+    const meta = (await this.list()).find((each) => each.slug === slug);
+    if (meta === undefined) throw new Error(`Skill not found: ${slug}`);
+    const at = this.now();
+    await mkdir(this.archiveDir, { recursive: true });
+    let id = `${slug}-${timestamp(at)}`;
+    for (let n = 2; (await lstat(join(this.archiveDir, id)).catch(() => null)) !== null; n += 1) id = `${slug}-${timestamp(at)}-${n}`;
+    const record: SkillArchiveEntry = { id, slug, name: meta.name, archivedAt: at, global: meta.global, workspaces: meta.workspaces };
+    const sidecar = join(this.archiveDir, `${id}.json`);
+    await writeJsonAtomic(sidecar, record);
+    try {
+      await rename(entry, join(this.archiveDir, id));
+    } catch (cause) {
+      await rm(sidecar, { force: true });
+      throw cause;
+    }
+    await this.clean(slug);
+    return id;
+  }
+
+  /** 已归档的技能，新的在前。读坏的记录跳过（一份坏 json 不该让整个分组打不开）。 */
+  async listArchived(): Promise<SkillArchiveEntry[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.archiveDir);
+    } catch (error) {
+      if (isNotFound(error)) return [];
+      throw error;
+    }
+    const found: SkillArchiveEntry[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const record = await this.readArchiveRecord(name.slice(0, -".json".length));
+      if (record !== null && (await exists(join(this.archiveDir, record.id, SKILL_FILE)))) found.push(record);
+    }
+    return found.sort((a, b) => b.archivedAt - a.archivedAt || (a.id < b.id ? -1 : 1));
+  }
+
+  /**
+   * 恢复：原 slug 已被占用（同名文件夹、导入的链接，什么都算）就停下，不覆盖、不改名；
+   * 否则挪回、按记录的范围重建链接。`knownWorkspaceIds` 给了就只重建还存在的工作区
+   * （归档之后被删掉的工作区不该凭空长出一个链接目录）；global 记录照旧。
+   */
+  async restore(id: string, knownWorkspaceIds?: readonly string[]): Promise<SkillRestoreResult> {
+    const record = await this.readArchiveRecord(assertArchiveId(id));
+    if (record === null || !(await exists(join(this.archiveDir, record.id, SKILL_FILE)))) return { ok: false, reason: "not-found" };
+    const target = join(this.storeDir, record.slug);
+    if ((await lstat(target).catch(() => null)) !== null) return { ok: false, reason: "slug-exists" };
+    await mkdir(this.storeDir, { recursive: true });
+    await rename(join(this.archiveDir, record.id), target);
+    await rm(join(this.archiveDir, `${record.id}.json`), { force: true });
+    if (record.global) {
+      await this.link(record.slug, { kind: "global" });
+    } else {
+      for (const workspaceId of record.workspaces) {
+        if (knownWorkspaceIds !== undefined && !knownWorkspaceIds.includes(workspaceId)) continue;
+        await this.link(record.slug, { kind: "workspace", workspaceId });
+      }
+    }
+    return { ok: true };
+  }
+
+  /**
+   * 移除：文件夹交给 `trashItem`（主进程注入 Electron 的 `shell.trashItem`，进系统废纸篓、可找回），再删全部链接。
+   * 导入的技能（入口是指向用户目录的 symlink）只摘掉入口本身，用户原来的文件夹原地不动，不进废纸篓。
+   */
+  async trash(slug: string, trashItem: (path: string) => Promise<void>): Promise<void> {
+    const entry = await this.entryOf(slug);
+    const info = await lstat(entry);
+    if (info.isSymbolicLink()) await unlink(entry);
+    else await trashItem(entry);
+    await this.clean(slug);
+  }
+
+  private async readArchiveRecord(id: string): Promise<SkillArchiveEntry | null> {
+    try {
+      const raw: unknown = JSON.parse(await readFile(join(this.archiveDir, `${id}.json`), "utf8"));
+      if (typeof raw !== "object" || raw === null) return null;
+      const r = raw as Record<string, unknown>;
+      const slug = r["slug"];
+      if (typeof slug !== "string" || !isSkillSlug(slug)) return null;
+      const workspaces = Array.isArray(r["workspaces"]) ? r["workspaces"].filter((w): w is string => typeof w === "string" && isSetId(w)) : [];
+      return {
+        // id 以文件名为准（记录里写的不可信）
+        id,
+        slug,
+        name: typeof r["name"] === "string" && r["name"] !== "" ? r["name"] : slug,
+        archivedAt: typeof r["archivedAt"] === "number" ? r["archivedAt"] : 0,
+        global: r["global"] === true,
+        workspaces,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** 这条 skill 的目录在哪（给「在文件管理器中显示」用）；不存在返回 null。 */
   async locateDir(slug: string): Promise<string | null> {
     const file = await this.locate(assertSlug(slug));
@@ -385,10 +513,24 @@ export class SkillStore {
  * 直接拼进路径的话，一个 `../` 就能删到 skill-links 之外（同 slug 白名单的理由）。
  */
 function assertSetId(id: string): string {
-  if (id === "" || id.includes("/") || id.includes("\\") || id.includes("..") || id === "." || id === GLOBAL_SET) {
-    throw new Error(`Invalid collection id: ${id}`);
-  }
+  if (!isSetId(id)) throw new Error(`Invalid collection id: ${id}`);
   return id;
+}
+
+function isSetId(id: string): boolean {
+  return !(id === "" || id.includes("/") || id.includes("\\") || id.includes("..") || id === "." || id === GLOBAL_SET);
+}
+
+/** 归档 id 来自 renderer：单段文件名，不含分隔符 / `..`，不是点开头。 */
+function assertArchiveId(id: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]{0,150}$/i.test(id) || id.includes("..")) throw new Error(`Invalid archive id: ${id}`);
+  return id;
+}
+
+function timestamp(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 function assertSlug(slug: string): string {

@@ -32,6 +32,15 @@ describe("面板改名：插件面板对用户叫「能力」（只改面板名�
       assert.notEqual(p.mcpToolsTitle(3), "");
       assert.notEqual(p.problem["skill-folder-missing"]("x"), "");
     }
+    for (const messages of [zh, en]) {
+      const p = messages.plugins;
+      for (const text of [p.skillArchive, p.skillTrash, p.skillArchiveAction, p.skillTrashAction, p.archivedRestore, p.skillArchiveHint, p.skillTrashHint]) assert.notEqual(text, "");
+      assert.notEqual(p.archivedTitle(3), "");
+      assert.notEqual(p.skillTrashHintLinked("/x"), "");
+      assert.notEqual(p.archivedExists("s"), "");
+    }
+    // 移除的确认条要写清「移到废纸篓、可以找回」
+    assert.match(zh.plugins.skillTrashHint, /废纸篓.*找回/);
     assert.equal(zh.plugins.availableTitle, "在哪儿可用");
     assert.equal(zh.plugins.mcpToolsTitle(3), "工具 3");
   });

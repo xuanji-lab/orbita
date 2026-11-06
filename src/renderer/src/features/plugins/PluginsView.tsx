@@ -37,7 +37,7 @@ import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
-import { KindTag } from "./AbilitySections.tsx";
+import { ArchivedSkills, KindTag } from "./AbilitySections.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
 import { PluginPickerBar, PluginPickerGroup } from "./PluginPicker.tsx";
 import { activateRow, buildPicker, clampPick, collapseRow, expandRow, indexOfPlugin, movePick, type PickerOutcome } from "./plugin-picker.ts";
@@ -414,6 +414,8 @@ export function PluginsView(props: {
       {groups.map((group) => (
         <GroupCard key={groupKey(group)} group={group} onOpen={setSelectedId} onToggle={(view) => void toggle(view)} />
       ))}
+      {/* 归档的技能不在上面的表里（文件夹已挪走）：底部一个默认折叠的分组，筛选时不出（它不参与筛选） */}
+      {!filtering && <ArchivedSkills refreshKey={state.plugins} workspaces={workspaces} onRestored={state.refresh} />}
     </>
   );
 

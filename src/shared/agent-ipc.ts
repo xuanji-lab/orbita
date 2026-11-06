@@ -402,6 +402,14 @@ export const ipcChannels = {
   skillWrite: "skill:write",
   /** 在系统文件管理器里揭示该 skill 目录（新建 / 删除走这里，不自建 UI） */
   skillReveal: "skill:reveal",
+  /** 归档一条你自己的技能：文件夹挪到 skills-archive，链接全删，记下原范围（可恢复） */
+  skillArchive: "skill:archive",
+  /** 已归档的技能列表（能力面板底部的折叠分组） */
+  skillArchived: "skill:archived",
+  /** 恢复一条归档：挪回原 slug、按记录的范围重建链接；重名以数据返回，不抛 */
+  skillRestore: "skill:restore",
+  /** 移除一条你自己的技能：文件夹移到系统废纸篓（可找回），链接全删 */
+  skillTrash: "skill:trash",
   /** MCP server 列表与它们此刻的连接状态 */
   mcpList: "mcp:list",
   /** 用系统默认编辑器打开 mcp.json（加减 server 走文件，不做表单） */

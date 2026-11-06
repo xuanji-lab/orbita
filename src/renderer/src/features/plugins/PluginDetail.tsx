@@ -15,6 +15,7 @@ import { parsePluginViewId, type PluginScope, type PluginView } from "@shared/pl
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Icon } from "../../shell/Icon";
 import { AvailabilityBody, McpStatusLine, McpToolChips, PluginMcpRuntime, SkillContentBody, serverStatusOf, toolsOfStatus } from "./AbilitySections.tsx";
 import { ConfigField, ScopeEditor } from "./PluginConfig.tsx";
@@ -63,11 +64,13 @@ export function PluginDetail(props: {
   const parsed = parsePluginViewId(view.id);
   const [error, setError] = useState<string | null>(null);
   // 行内二次确认正等着哪个动作：插件卸载或旧 MCP 移除；null = 没在确认
-  const [confirming, setConfirming] = useState<null | "plugin" | "mcp">(null);
-  const [busy, setBusy] = useState<null | "reload" | "uninstall" | "remove">(null);
+  const [confirming, setConfirming] = useState<null | "plugin" | "mcp" | "skill-archive" | "skill-trash">(null);
+  const [busy, setBusy] = useState<null | "reload" | "uninstall" | "remove" | "archive" | "trash">(null);
   const [reloaded, setReloaded] = useState(false);
   const [leadOpen, setLeadOpen] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  // 导入的技能（入口是指向你自己文件夹的链接）：移除时只摘入口，确认条要说清；点「移除」时现查
+  const [linkedSkillPath, setLinkedSkillPath] = useState<string | null>(null);
   const parts = detailParts(view);
   // 确认条一出现就把焦点给「取消」：误按回车不会删东西，Esc 也在这一层收回
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -409,6 +412,22 @@ export function PluginDetail(props: {
           {t.revealInFinder}
         </button>
       )}
+      {parts.skillContent && (
+        <>
+          <button type="button" className="pl-btn" disabled={busy !== null} onClick={() => setConfirming("skill-archive")}>
+            <Icon name={FEATURE_ICON.archived} size={13} strokeWidth={1.8} />
+            {t.skillArchive}
+          </button>
+          <button type="button" className="pl-btn danger" disabled={busy !== null} onClick={() => {
+              setLinkedSkillPath(null);
+              setConfirming("skill-trash");
+              void api.skill.list().then((list) => setLinkedSkillPath(list.find((each) => each.slug === skillKey)?.linkedPath ?? null)).catch(() => undefined);
+            }}>
+            <Icon name="trash-2" size={13} strokeWidth={1.8} />
+            {t.skillTrash}
+          </button>
+        </>
+      )}
       {parts.skillMissing && (
         <button
           type="button"
@@ -451,6 +470,19 @@ export function PluginDetail(props: {
   );
   const hasActions = !draft;
 
+  /** 就地确认条的内容：问句、说明、动作与它做的事。插件卸载 / MCP 移除 / 技能归档 / 技能移除共用同一条。 */
+  const skillKey = parsed?.key ?? "";
+  const confirmation =
+    confirming === "mcp"
+      ? { ask: t.mcpRemoveAsk, hint: t.mcpRemoveHint, action: t.mcpRemoveAction, doing: t.mcpRemoving, busy: "remove" as const, act: () => api.mcp.remove(parsed?.key ?? view.name) }
+      : confirming === "plugin"
+        ? { ask: t.uninstallAsk(view.name), hint: linked ? t.uninstallHintLink : t.uninstallHint, action: t.uninstallAction, doing: t.uninstalling, busy: "uninstall" as const, act: () => api.plugin.uninstall(pluginName) }
+        : confirming === "skill-archive"
+          ? { ask: t.skillArchiveAsk(view.name), hint: t.skillArchiveHint, action: t.skillArchiveAction, doing: t.skillArchiving, busy: "archive" as const, act: () => api.skill.archive(skillKey) }
+          : confirming === "skill-trash"
+            ? { ask: t.skillTrashAsk(view.name), hint: linkedSkillPath !== null ? t.skillTrashHintLinked(linkedSkillPath) : t.skillTrashHint, action: t.skillTrashAction, doing: t.skillTrashing, busy: "trash" as const, act: () => api.skill.trash(skillKey) }
+            : null;
+
   /**
    * 「在哪儿可用」改范围。你的 MCP 停用时改位置不该顺手把它开起来：setScope 的非停用范围会写 disabled: false，
    * 所以原本停着的再补一次停用。
@@ -490,13 +522,13 @@ export function PluginDetail(props: {
       </div>
 
       {hasActions &&
-        (confirming === null ? (
+        (confirming === null || confirmation === null ? (
           <div className="pl-acts">{actionButtons}</div>
         ) : (
           <div
             className="pl-ic"
             role="alertdialog"
-            aria-label={confirming === "mcp" ? t.mcpRemoveAsk : t.uninstallAsk(view.name)}
+            aria-label={confirmation.ask}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 event.stopPropagation();
@@ -506,56 +538,32 @@ export function PluginDetail(props: {
           >
             <div className="pl-ic-bar">
               <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
-              <span className="pl-ic-ask">{confirming === "mcp" ? t.mcpRemoveAsk : t.uninstallAsk(view.name)}</span>
-              {confirming === "mcp" ? (
-                <button
-                  type="button"
-                  className="pl-btn solid-danger"
-                  disabled={busy !== null}
-                  onClick={() =>
-                    void run(async () => {
-                      setBusy("remove");
-                      try {
-                        // 主进程写盘后自动重连；插件页里的 user-mcp 都来自全局 mcp.json，remove 够得着
-                        await api.mcp.remove(parsed?.key ?? view.name);
-                        await props.onChanged();
-                        props.onUninstalled();
-                      } finally {
-                        setBusy(null);
-                        setConfirming(null);
-                      }
-                    })
-                  }
-                >
-                  {busy === "remove" ? t.mcpRemoving : t.mcpRemoveAction}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="pl-btn solid-danger"
-                  disabled={busy !== null}
-                  onClick={() =>
-                    void run(async () => {
-                      setBusy("uninstall");
-                      try {
-                        await api.plugin.uninstall(pluginName);
-                        await props.onChanged();
-                        props.onUninstalled();
-                      } finally {
-                        setBusy(null);
-                        setConfirming(null);
-                      }
-                    })
-                  }
-                >
-                  {busy === "uninstall" ? t.uninstalling : t.uninstallAction}
-                </button>
-              )}
+              <span className="pl-ic-ask">{confirmation.ask}</span>
+              <button
+                type="button"
+                className="pl-btn solid-danger"
+                disabled={busy !== null}
+                onClick={() =>
+                  void run(async () => {
+                    setBusy(confirmation.busy);
+                    try {
+                      await confirmation.act();
+                      await props.onChanged();
+                      props.onUninstalled();
+                    } finally {
+                      setBusy(null);
+                      setConfirming(null);
+                    }
+                  })
+                }
+              >
+                {busy === confirmation.busy ? confirmation.doing : confirmation.action}
+              </button>
               <button type="button" className="pl-btn" ref={cancelRef} onClick={() => setConfirming(null)}>
                 {messages.common.cancel}
               </button>
             </div>
-            <p className="pl-ic-hint">{confirming === "mcp" ? t.mcpRemoveHint : linked ? t.uninstallHintLink : t.uninstallHint}</p>
+            <p className="pl-ic-hint">{confirmation.hint}</p>
           </div>
         ))}
 
