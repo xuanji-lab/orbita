@@ -196,7 +196,7 @@ async function main() {
 				writeFileSync(join(OUT_DIR, `suite-${LABEL}.json`), JSON.stringify(results, null, 1));
 			}
 		}
-		await finish(results, mock, [`${FIXTURES.length}并发`]);
+		await finish(results, mock, [`conc×${FIXTURES.length}`]);
 		return;
 	}
 
