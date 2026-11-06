@@ -21,13 +21,13 @@ import {
   type ModelDefaults,
 } from "@shared/model-defaults";
 import { THINKING_LEVELS, type ThinkingLevel } from "@shared/thinking";
-import type { ModelDecl, ProviderApi, ProviderDto, ValidationIssue } from "@shared/provider";
+import { isProviderEnabled, type ModelDecl, type ProviderApi, type ProviderDto, type ValidationIssue } from "@shared/provider";
 import type { BuiltinProvider, OauthDeviceCode } from "@shared/agent-ipc";
 import { MODEL_ASSIGN_TARGET_GONE_CODE, type ModelAssignGroups, type ModelAssignRunResult } from "@shared/model-assign";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
 import { PanelEmpty } from "../../shell/PanelEmpty";
-import { Segmented } from "./SettingControls";
+import { Segmented, Switch } from "./SettingControls";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import {
   cardAddress,
@@ -701,6 +701,20 @@ export function ProvidersView(props: {
     await refresh();
   };
 
+  /**
+   * 开 / 关一家服务商：配置、密钥、模型列表都不动，只是哪里都不用它。
+   * 先落盘再 refresh（App 的服务商列表随 onChange 重读，模型菜单立刻不列 / 重新列）；失败走页顶错误条。
+   */
+  const toggleProvider = async (id: string, disabled: boolean) => {
+    try {
+      await api.provider.setDisabled({ id, disabled });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
+    await refresh();
+  };
+
   const removeProvider = async () => {
     if (selectedId === null) return;
     try {
@@ -812,6 +826,7 @@ export function ProvidersView(props: {
             onCollapseRail={props.onCollapseRail}
             onOpen={openKind}
             onAddAnother={pickKnown}
+            onToggle={(id, disabled) => void toggleProvider(id, disabled)}
           />
         )}
 
@@ -853,7 +868,7 @@ export function ProvidersView(props: {
                     type="button"
                     role="tab"
                     aria-selected={view.kind === "detail" && provider.id === selectedId}
-                    className={`pv-tab${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}`}
+                    className={`pv-tab${provider.id === dragId ? " dragging" : ""}${dropTarget === provider.id ? " drop-on" : ""}${isProviderEnabled(provider) ? "" : " closed"}`}
                     title={hasCredentials(provider.auth) ? provider.endpoint.baseUrl : t.providers.noApiKey}
                     draggable
                     onDragStart={(e) => {
@@ -879,7 +894,9 @@ export function ProvidersView(props: {
                   >
                     <span className="pv-tab-name">{provider.displayName}</span>
                     {/* 没填 key 直接写出来（原左栏行的口径），不靠一个图标让人猜 */}
-                    {hasCredentials(provider.auth) ? (
+                    {!isProviderEnabled(provider) ? (
+                      <span className="pv-tab-nokey">{t.providers.closed}</span>
+                    ) : hasCredentials(provider.auth) ? (
                       <span className="pv-row-count">{provider.models.declared.length}</span>
                     ) : (
                       <span className="pv-tab-nokey">{t.providers.noApiKey}</span>
@@ -915,6 +932,13 @@ export function ProvidersView(props: {
                   <ApiFormatBadge api={draft.api} />
                 )}
                 <span className="pv-headend">
+                  {!isNew && editing !== undefined && (
+                    <Switch
+                      label={t.providers.switchLabel(editing.displayName)}
+                      checked={isProviderEnabled(editing)}
+                      onChange={(on) => void toggleProvider(editing.id, !on)}
+                    />
+                  )}
                   {isNew ? null : confirmRemove ? (
                     <>
                       <button
@@ -960,6 +984,13 @@ export function ProvidersView(props: {
                   )}
                 </span>
               </div>
+
+              {!isNew && editing !== undefined && !isProviderEnabled(editing) && (
+                <div className="pv-closed-bar" role="note">
+                  <Icon name="pause" size={14} strokeWidth={1.8} />
+                  <span>{t.providers.closedNote}</span>
+                </div>
+              )}
 
               <section className="pv-block" aria-label={t.providers.connection}>
                 <div className="pv-form">
@@ -1564,6 +1595,8 @@ function ProviderGrid(props: {
   onCollapseRail: (() => void) | null;
   onOpen: (kindId: string) => void;
   onAddAnother: (kindId: string) => void;
+  /** 卡片右上角开关：开 / 关这一家的唯一一个实例（多实例的卡在详情页的标签里逐个开关） */
+  onToggle: (id: string, disabled: boolean) => void;
 }) {
   const t = useT();
   const groups = providerCards(props.providers, {
@@ -1625,6 +1658,7 @@ function ProviderGrid(props: {
                   size={props.size}
                   onOpen={() => props.onOpen(card.known.id)}
                   onAddAnother={() => props.onAddAnother(card.known.id)}
+                  onToggle={props.onToggle}
                 />
               ))}
             </div>
@@ -1659,6 +1693,7 @@ function ProviderGridCard(props: {
   size: CardSize;
   onOpen: () => void;
   onAddAnother: () => void;
+  onToggle: (id: string, disabled: boolean) => void;
 }) {
   const t = useT();
   const { known, instances } = props.card;
@@ -1666,7 +1701,31 @@ function ProviderGridCard(props: {
   const added = instances.length > 0;
   const custom = known.baseUrl === "";
   const large = props.size === "large";
-  const addedBadge = added ? (
+  // 服务商开关：只有一个实例的卡，右上角直接是开关（替掉「已添加」角标——开着的卡本来就是已添加）；
+  // 多个实例的卡保留数字角标，关着几个另挂一枚角标，逐个开关去详情页的标签
+  const single = instances.length === 1 ? instances[0] : undefined;
+  const closedCount = instances.filter((provider) => !isProviderEnabled(provider)).length;
+  const allClosed = added && closedCount === instances.length;
+  const switchMark =
+    single !== undefined ? (
+      // 开关坐在 role=button 的卡里：点它不该顺带打开详情
+      <span className="pv-card-switch" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <Switch
+          label={t.providers.switchLabel(single.displayName)}
+          checked={isProviderEnabled(single)}
+          onChange={(on) => props.onToggle(single.id, !on)}
+        />
+      </span>
+    ) : null;
+  const closedBadge =
+    single === undefined && closedCount > 0 ? (
+      <span className="pv-closed-badge" title={t.providers.closedNote}>
+        <Icon name="pause" size={11} strokeWidth={1.8} />
+        {large && <span>{t.providers.closed}</span>}
+        <span className="pv-mono">{closedCount}</span>
+      </span>
+    ) : null;
+  const addedBadge = added && single === undefined ? (
     <span className="pv-added-badge">
       <Icon name="circle-check" size={12} strokeWidth={1.8} />
       {large && <span>{t.providers.added}</span>}
@@ -1686,10 +1745,12 @@ function ProviderGridCard(props: {
       </span>
     ) : null;
   const badge =
-    addedBadge !== null || untestedBadge !== null ? (
+    addedBadge !== null || untestedBadge !== null || switchMark !== null || closedBadge !== null ? (
       <span className="pv-card-marks">
         {addedBadge}
+        {closedBadge}
         {untestedBadge}
+        {switchMark}
       </span>
     ) : null;
   // 底行：加过写实例名；兼容入口写「填你自己的地址」；浏览器登录的没有要填的地址，写登录方式
@@ -1718,7 +1779,7 @@ function ProviderGridCard(props: {
     <div
       role="button"
       tabIndex={0}
-      className={`pv-vcard${custom && !added ? " blank" : ""}`}
+      className={`pv-vcard${custom && !added ? " blank" : ""}${allClosed ? " closed" : ""}`}
       onClick={props.onOpen}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -1740,7 +1801,15 @@ function ProviderGridCard(props: {
             <span className="pv-vcard-name">{label}</span>
             <span className="pv-vcard-note">{t.providers.knownNote(known.id, known.note)}</span>
           </span>
-          <span className="pv-vcard-foot">{foot}</span>
+          {allClosed ? (
+            // 设计稿：关着的卡里整句说明（图标 + 警示底），不止一行脚注
+            <span className="pv-vcard-closed" role="note">
+              <Icon name="pause" size={12} strokeWidth={1.8} />
+              <span>{t.providers.closedNote}</span>
+            </span>
+          ) : (
+            <span className="pv-vcard-foot">{foot}</span>
+          )}
           {more}
         </>
       ) : (

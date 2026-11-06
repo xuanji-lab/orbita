@@ -55,7 +55,7 @@ import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelP
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
 import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
-import { declaredThinkingLevels, modelPreferenceById } from "./providers-view-model.ts";
+import { declaredThinkingLevels, isPairOnClosedProvider, modelPreferenceById } from "./providers-view-model.ts";
 import { useT } from "../../locale.ts";
 import { playCompletionChime } from "../notify/chime.ts";
 
@@ -197,6 +197,7 @@ export function SettingsView(props: {
             highlightChore={highlightChore}
             onHighlightConsumed={() => setHighlightChore(false)}
             onOpenOnboarding={props.onOpenOnboarding}
+            onOpenProviders={() => props.onTab("providers")}
           />
         </div>
       )}
@@ -232,6 +233,18 @@ function inheritedRow(fallback: InheritedFallback): MenuItem {
   };
 }
 
+/** 设置里选的模型指向了被关的服务商：旁边一行提示（不静默改选，运行时按既有兜底退回） */
+function ClosedProviderNote(props: { title: string; body: string }) {
+  return (
+    <span className="set-row-note" role="status">
+      <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
+      <span>
+        {props.title} · {props.body}
+      </span>
+    </span>
+  );
+}
+
 type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
 function General(props: {
@@ -245,6 +258,8 @@ function General(props: {
   highlightChore?: boolean;
   onHighlightConsumed?: () => void;
   onOpenOnboarding: () => void;
+  /** 模型菜单底部「已关闭的服务 · 去模型服务打开」的去向 */
+  onOpenProviders: () => void;
 }) {
   const t = useT();
   const choreRowRef = useRef<HTMLDivElement | null>(null);
@@ -421,6 +436,11 @@ function General(props: {
           name={t.settings.choreModel}
           info={t.settings.choreModelInfo}
           rowRef={choreRowRef}
+          note={
+            isPairOnClosedProvider(usable, choreModel) ? (
+              <ClosedProviderNote title={t.providers.closedModelSet} body={t.providers.closedModelChore} />
+            ) : undefined
+          }
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
           <ModelPickerMenu
@@ -432,6 +452,7 @@ function General(props: {
             onToggleStar={props.onToggleStarModel}
             onSelect={(providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } })}
             leading={[choreFallback]}
+            onOpenProviders={props.onOpenProviders}
             trigger={({ open, toggle }) => (
               <SelectButton
                 open={open}
@@ -450,6 +471,11 @@ function General(props: {
         <SettingRow
           name={t.settings.subSessionModel}
           info={t.settings.subSessionModelInfo}
+          note={
+            isPairOnClosedProvider(usable, subSessionModel) ? (
+              <ClosedProviderNote title={t.providers.closedModelSet} body={t.providers.closedModelSub} />
+            ) : undefined
+          }
         >
           {/* 模型与思考档一行：思考档是模型的属性（档位集与默认档都随型号变），所以先有
               模型芯片、选了具体模型才长出思考档芯片。Same as parent 时思考档跟父走，
@@ -465,6 +491,7 @@ function General(props: {
               onSelect={(providerId, modelId) =>
                 props.onChange({ subSessionModel: { providerId, modelId }, subSessionThinking: null })}
               leading={[subSessionFallback]}
+              onOpenProviders={props.onOpenProviders}
               trigger={({ open, toggle }) => (
                 <SelectButton
                   open={open}

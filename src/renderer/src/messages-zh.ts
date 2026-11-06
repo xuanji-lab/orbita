@@ -1250,6 +1250,8 @@ export const zh: Messages = {
     unstar: "取消星标",
     starredTip: "已加星标 · 点击取消",
     configure: "配置模型",
+    closedServices: (models) => `已关闭的服务 · ${models} 个模型`,
+    openClosedServices: "去模型服务打开",
   },
 
   providers: {
@@ -1260,6 +1262,15 @@ export const zh: Messages = {
     saved: "已保存",
     keyFromEnv: (name, keys) => `${name} · 密钥来自环境变量（${keys}）`,
     noApiKey: "还没有 API 密钥",
+    // —— 服务商开关 ——
+    switchLabel: (name) => `启用 ${name}`,
+    closed: "已关闭",
+    closedNote:
+      "已关闭：配置和密钥都留着。关着时新会话、子会话、自动化、家务活模型都不会用它；正用着它的会话下一条消息会提示你换模型。",
+    closedModelSet: "这家服务已关闭",
+    closedModelSub: "打开之前，派子会话时退回同父的模型。",
+    closedModelChore: "打开之前，家务活退回会话正在用的模型。",
+    closedAutomationModel: "这家服务已关闭。打开它或换一个模型之前，这个自动化不会运行。",
     addProvider: "添加服务商",
     loadingProviders: "正在载入服务商…",
     // —— 给导入的会话分配模型 ——

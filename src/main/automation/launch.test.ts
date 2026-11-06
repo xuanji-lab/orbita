@@ -60,6 +60,33 @@ describe("resolveAutomationModel", () => {
     assert.equal(noProvider.ok, false);
   });
 
+  test("指名的服务商被关了：报错写明原因，不悄悄换别家", () => {
+    const closed = [provider("zai", ["glm-5.3"]), { ...provider("kimi", ["k3"]), disabled: true }];
+    const result = resolveAutomationModel({
+      automation: { providerId: "kimi", modelId: "k3" },
+      settings: { subSessionModel: { providerId: "zai", modelId: "glm-5.3" } },
+      providers: closed,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? "" : result.error, /turned off/);
+  });
+
+  test("没指名：设置指向关着的服务商就落到 lastUsed，lastUsed 也关着就报错", () => {
+    const closed = [{ ...provider("zai", ["glm-5.3"]), disabled: true }, provider("kimi", ["k3"])];
+    const viaLast = resolveAutomationModel({
+      automation: {},
+      settings: { subSessionModel: { providerId: "zai", modelId: "glm-5.3" }, lastUsed: { providerId: "kimi", modelId: "k3" } },
+      providers: closed,
+    });
+    assert.equal(viaLast.ok && viaLast.providerId, "kimi");
+    const allClosed = resolveAutomationModel({
+      automation: {},
+      settings: { subSessionModel: { providerId: "zai", modelId: "glm-5.3" }, lastUsed: { providerId: "zai", modelId: "glm-5.3" } },
+      providers: closed,
+    });
+    assert.equal(allClosed.ok, false);
+  });
+
   test("没指名：设置里的子会话默认模型（带它的思考档）", () => {
     const result = resolveAutomationModel({
       ...base,

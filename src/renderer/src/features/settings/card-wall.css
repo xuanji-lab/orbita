@@ -124,6 +124,62 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
+/*
+ * 服务商开关（单实例的卡右上角）。开关本身是 24 高的点击区，包一层只为把点击挡在卡片之外；
+ * 角标区垂直居中，让 20 高的角标与 24 高的开关同一条中线。
+ */
+.pv-card-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.pv-card-marks {
+  align-items: center;
+}
+/* 关着的卡：整体退到次要（logo、名字、说明、脚注都变淡）；开关保持原样，它是唯一能点的东西 */
+.pv-vcard.closed .pv-logo-tile,
+.pv-vcard.closed .pv-vcard-text,
+.pv-vcard.closed .pv-vcard-foot {
+  opacity: 0.55;
+}
+.pv-vcard.closed {
+  background: var(--color-bg-muted);
+}
+/* 关着的大卡里那句整说明：不随卡片变淡（它是这张卡此刻最该读的一句），警示底、可折行 */
+.pv-vcard-closed {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+}
+.pv-vcard-closed .orbita-icon {
+  flex: none;
+  margin-top: var(--space-0-5);
+  color: var(--color-warning);
+}
+/* 多实例的卡里有关着的：暂停图标 + 个数，图标与文字都在，不只靠颜色 */
+.pv-closed-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.pv-closed-badge .orbita-icon {
+  color: var(--color-warning);
+}
+
 /* 已添加：图标是状态，颜色只是第二信号 */
 .pv-added-badge {
   display: inline-flex;

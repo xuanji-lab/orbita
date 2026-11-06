@@ -716,6 +716,25 @@
 .pv-untested-bar a:hover {
   text-decoration: underline;
 }
+/* 服务商关着时详情页顶部的说明：和「未实测」同一个条，图标用警示色（暂停），文字照旧 */
+.pv-closed-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.pv-closed-bar .orbita-icon {
+  flex: none;
+  margin-top: var(--space-0-5);
+  color: var(--color-warning);
+}
 .pv-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -760,6 +779,10 @@
   font-size: var(--font-size-xs);
   font-weight: var(--weight-regular);
   color: var(--color-text-tertiary);
+}
+/* 关着的实例标签：名字退淡，右端写「已关闭」 */
+.pv-tab.closed .pv-tab-name {
+  opacity: 0.6;
 }
 .pv-tab.dragging {
   opacity: 0.4;

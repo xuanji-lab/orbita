@@ -72,7 +72,8 @@ import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentI
 import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
-import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
+import { isProviderEnabled } from "../../../../shared/provider.ts";
+import { declaredThinkingLevels, enabledProviders, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
 import { collectScanAnswer, locateMessageRange, scanSubmitInput } from "./carryover-parse.ts";
@@ -1500,6 +1501,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (model === null || engine.usable.length === 0) return;
     if (!engine.usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [engine.usable, model]);
+
+  // 服务商开关：**还没起会话的新任务槽**不该带着关着的服务商起步（启动恢复的 lastUsed 可能指着它）。
+  // 清掉后由下面的默认播种落到第一个开着的。已经有会话的槽不碰——正用着关着服务商的会话
+  // 不自动换模型（渠道不替用户选），发消息时主进程拦下并提示
+  useEffect(() => {
+    if (model === null || opened !== null || sessionRef.current !== null) return;
+    const provider = engine.usable.find((p) => p.id === model.providerId);
+    if (provider !== undefined && !isProviderEnabled(provider)) setModel(null);
+  }, [engine.usable, model, opened]);
 
   // 清空的补种：正开着的会话 meta 从占位变成真实模型（设置 › 服务商的「分配
   // 模型」），列表刷新把新 meta 送来时种回模型栏——此前它被上面清成了「没有模型」。
@@ -3011,7 +3021,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 如实显示「没有模型」，发送时引导先选（model-required.ts）
   useEffect(() => {
     if (model !== null || opened !== null) return;
-    const first = engine.usable[0];
+    // 关着的服务商不当默认（服务商开关）：新任务槽只在开着的里挑第一个
+    const first = enabledProviders(engine.usable)[0];
     const firstModel = first?.models.declared[0];
     if (first === undefined || firstModel === undefined) return;
     setModel({ providerId: first.id, modelId: firstModel.id });
