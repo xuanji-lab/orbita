@@ -19,7 +19,11 @@ export function planChangeText(t: Messages, change: PlanChange): string {
     case "reworded":
       return t.planText.reworded(change.from, change.to);
     case "moved":
-      return t.planText.moved(change.text, change.before ?? "");
+      return change.earlier && change.before !== null
+        ? t.planText.movedUp(change.text, change.before)
+        : t.planText.moved(change.text, change.before ?? "");
+    case "waiting":
+      return t.planText.waiting(change.text, change.waitingFor ?? "");
     case "split":
       return t.planText.split(change.from, quote(t, change.into));
     case "merged":

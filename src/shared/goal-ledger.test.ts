@@ -12,12 +12,16 @@ const goal = (g: string, at: number, extra: Record<string, unknown> = {}, failed
   input: { goal: g, ...extra },
   failed,
 });
-const plan = (steps: [string, "pending" | "in_progress" | "done"][], at: number, extra: Record<string, unknown> = {}): LedgerEvent => ({
+const plan = (
+  steps: ([string, "pending" | "in_progress" | "waiting" | "done"] | [string, "waiting", string])[],
+  at: number,
+  extra: Record<string, unknown> = {},
+): LedgerEvent => ({
   kind: "call",
   id: `p${++seq}`,
   at,
   tool: "update_plan",
-  input: { items: steps.map(([text, status]) => ({ text, status })), ...extra },
+  input: { items: steps.map(([text, status, waitingFor]) => ({ text, status, ...(waitingFor === undefined ? {} : { waitingFor }) })), ...extra },
   failed: false,
 });
 
@@ -66,7 +70,7 @@ describe("buildGoalLedger：目标", () => {
   });
 
   test("没有任何事件：空账", () => {
-    assert.deepEqual(buildGoalLedger([]), { goal: null, entries: [], todos: { done: [], open: [] } });
+    assert.deepEqual(buildGoalLedger([]), { goal: null, entries: [], todos: { done: [], open: [], waiting: [] } });
   });
 });
 
@@ -147,6 +151,38 @@ describe("buildGoalLedger：todo 累计", () => {
     ]);
     assert.deepEqual(ledger.todos.done, ["读代码"]);
     assert.deepEqual(ledger.todos.open, ["改代码"]);
+  });
+});
+
+describe("buildGoalLedger：waiting 与跳步", () => {
+  const steps = (...rows: Parameters<typeof plan>[0]) => rows;
+
+  test("waiting 的步仍是没做完的（open），另列在 waiting 里带上等什么；只是变 waiting 不入改动账", () => {
+    const ledger = buildGoalLedger([
+      user("a", 1),
+      plan(steps(["装好", "in_progress"], ["立场表", "pending"]), 2),
+      plan(steps(["装好", "waiting", "等你改权限"], ["立场表", "in_progress"]), 3),
+    ]);
+    assert.deepEqual(ledger.todos.open, ["装好", "立场表"]);
+    assert.deepEqual(ledger.todos.waiting, [{ text: "装好", waitingFor: "等你改权限" }]);
+    assert.deepEqual(ledger.entries, []);
+  });
+
+  test("用户让先做第 2 步：账里记「提到前面」，来源是那条用户消息", () => {
+    const ledger = buildGoalLedger([
+      user("a", 1),
+      plan(steps(["装好", "in_progress"], ["立场表", "pending"], ["检验", "pending"]), 2),
+      user("先做立场表", 3),
+      plan(steps(["立场表", "in_progress"], ["装好", "waiting", "等你改权限"], ["检验", "pending"]), 4, { why: "user asked to do this first" }),
+    ]);
+    const entry = ledger.entries[0];
+    assert.equal(entry?.kind, "plan");
+    if (entry?.kind !== "plan") return;
+    assert.deepEqual(entry.changes, [{ kind: "moved", text: "立场表", before: "装好", earlier: true }]);
+    assert.equal(entry.source.kind, "user");
+    const text = renderLedgerForModel(ledger) ?? "";
+    assert.match(text, /moved up "立场表" before "装好" because user asked to do this first/);
+    assert.match(text, /Todos waiting on the user or something external \(not in progress\): "装好" \(等你改权限\)/);
   });
 });
 

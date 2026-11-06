@@ -7,6 +7,71 @@ const plan = (...texts: string[]): PlanItem[] => texts.map((text) => ({ text, st
 const withStatus = (items: PlanItem[], ...statuses: PlanItem["status"][]): PlanItem[] =>
   items.map((item, i) => ({ ...item, status: statuses[i] ?? item.status }));
 
+describe("diffPlans：waiting 与「先做这一步」的跳步", () => {
+  const four = plan("装好 skill", "每日一篇", "DDPM 立场表", "旧计划检验");
+
+  test("用户让先做第 3 步：它提到前面，说成「提到…前面」；被让位的那步不被算成被挪", () => {
+    const a = withStatus(four, "done", "in_progress", "pending", "pending");
+    const b: PlanItem[] = [
+      { text: "装好 skill", status: "done" },
+      { text: "DDPM 立场表", status: "in_progress" },
+      { text: "每日一篇", status: "waiting", waitingFor: "等你改权限" },
+      { text: "旧计划检验", status: "pending" },
+    ];
+    const diff = diffPlans(a, b);
+    assert.deepEqual(diff.changes, [{ kind: "moved", text: "DDPM 立场表", before: "每日一篇", earlier: true }]);
+    assert.deepEqual(diff.waits, [{ text: "每日一篇", waitingFor: "等你改权限" }]);
+    assert.equal(diff.fresh, false);
+  });
+
+  test("同样的对调，被挪的是哪一步看谁在做：在做的优先算被挪（不是反过来）", () => {
+    const a = plan("甲", "乙", "丙");
+    const b: PlanItem[] = [
+      { text: "甲", status: "pending" },
+      { text: "丙", status: "pending" },
+      { text: "乙", status: "in_progress" },
+    ];
+    // 乙在做：乙是被挪的（往后），而不是丙被挪
+    assert.deepEqual(diffPlans(a, b).changes, [{ kind: "moved", text: "乙", before: null, earlier: false }]);
+    const c: PlanItem[] = [
+      { text: "甲", status: "pending" },
+      { text: "丙", status: "in_progress" },
+      { text: "乙", status: "pending" },
+    ];
+    assert.deepEqual(diffPlans(a, c).changes, [{ kind: "moved", text: "丙", before: "乙", earlier: true }]);
+  });
+
+  test("waits：只记「新变成 waiting」的步；已经是 waiting、新加的 waiting 步、waitingFor 改了都不记；不进 changes", () => {
+    const a: PlanItem[] = [
+      { text: "甲", status: "in_progress" },
+      { text: "乙", status: "waiting", waitingFor: "等你" },
+    ];
+    const toWaiting = diffPlans(a, [
+      { text: "甲", status: "waiting", waitingFor: "等外部构建" },
+      { text: "乙", status: "waiting", waitingFor: "等你确认" },
+    ]);
+    assert.deepEqual(toWaiting.waits, [{ text: "甲", waitingFor: "等外部构建" }]);
+    assert.deepEqual(toWaiting.changes, []);
+    const added = diffPlans(a, [...a, { text: "丙", status: "waiting" }]);
+    assert.deepEqual(added.waits, []);
+    assert.deepEqual(added.changes, [{ kind: "added", text: "丙" }]);
+    // waiting 没写 waitingFor：waitingFor 为 null
+    assert.deepEqual(diffPlans(plan("x", "y"), [{ text: "x", status: "waiting" }, { text: "y", status: "pending" }]).waits, [
+      { text: "x", waitingFor: null },
+    ]);
+  });
+
+  test("没有旧计划 / 新计划：没有 waits", () => {
+    assert.deepEqual(diffPlans(null, [{ text: "a", status: "waiting" }]).waits, []);
+    assert.deepEqual(diffPlans(plan("a"), [{ text: "完全不同的另一件事", status: "waiting" }]).waits, []);
+  });
+
+  test("只是把一步在 pending / waiting 之间切换：不产生改动（只打勾口径不变）", () => {
+    const diff = diffPlans(withStatus(four, "done", "pending", "in_progress", "pending"), withStatus(four, "done", "waiting", "in_progress", "pending"));
+    assert.deepEqual(diff.changes, []);
+  });
+});
+
 describe("diffPlans：只打勾不算改动", () => {
   test("文字不变、status 变 = 没有任何改动，配对一一对应", () => {
     const a = plan("看代码", "写函数", "补测试");
