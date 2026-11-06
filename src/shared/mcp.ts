@@ -123,6 +123,11 @@ export type McpStatusSnapshot = {
   instances: { scope: string; label: string; status: McpStatus }[];
 }[];
 
+/** 运行时快照里插件自带的那几行（名字以 plugin_ 开头）；没有快照（还没建过会话）给空数组。 */
+export function pluginServerRows(snapshot: McpStatusSnapshot | null): McpStatusSnapshot {
+  return (snapshot ?? []).filter((row) => row.name.startsWith(PLUGIN_SERVER_PREFIX));
+}
+
 export function isHttpServer(server: McpServer): server is McpHttpServer {
   return server.transport === "http";
 }

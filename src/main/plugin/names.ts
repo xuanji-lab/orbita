@@ -11,6 +11,7 @@
  * 规整可能让两个不同的原名落到同一个结果（`a.b` 与 `a_b`），所以安装时要查重（见 store 的冲突检测）。
  */
 import { createHash } from "node:crypto";
+import { PLUGIN_SERVER_PREFIX } from "../../shared/mcp.ts";
 
 const MAX_NAME = 64;
 /** 截短时每段保留的字符数：7（plugin_）+ 22 + 1 + 22 + 1 + 6（哈希）= 59 ≤ 64 */
@@ -32,8 +33,8 @@ export function nameSegment(raw: string): string {
 export function qualifiedPluginServerName(plugin: string, server: string): string {
   const p = nameSegment(plugin);
   const s = nameSegment(server);
-  const full = `plugin_${p}_${s}`;
+  const full = `${PLUGIN_SERVER_PREFIX}${p}_${s}`;
   if (full.length <= MAX_NAME) return full;
   const hash = createHash("sha1").update(`${plugin}\0${server}`).digest("hex").slice(0, HASH_LENGTH);
-  return `plugin_${p.slice(0, SEGMENT_KEEP)}_${s.slice(0, SEGMENT_KEEP)}_${hash}`;
+  return `${PLUGIN_SERVER_PREFIX}${p.slice(0, SEGMENT_KEEP)}_${s.slice(0, SEGMENT_KEEP)}_${hash}`;
 }
