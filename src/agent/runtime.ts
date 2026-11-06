@@ -902,7 +902,7 @@ interface OpenedTurn {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
   budget: TurnImageBudget;
-  /** 本轮的记忆附件（实验功能 memory-system）：本子读回的各轮块 + 本轮待认领的块，见 memory-inject.ts */
+  /** 本轮的记忆附件：本子读回的各轮块 + 本轮待认领的块，见 memory-inject.ts */
   memory: TurnMemoryAttach;
   /** 意图召回的中止器：停止 / 抢跑 / 删会话时拆掉 /recall 的 HTTP 流（无意图时闲置） */
   intentAbort: AbortController;
@@ -975,11 +975,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
   /**
-   * 自动化工具（实验功能 automation）：主进程只在开关开、且这条会话不是自动化跑出来的时候带
+   * 自动化工具：主进程只在这条会话不是自动化跑出来的时候带
    * automationTools；这里再叠一道「只给根会话」。与记忆工具同一个装配方式，提示词名单里也同步。
    */
   const automationTools = "automationTools" in command && command.automationTools === true && role === "root";
-  // 实验功能「插件」：开着才注册 install_plugin / preview_plugin / list_plugins（缺席 = 关；子会话不装插件，只有根会话注册）
+  // 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册）
   const pluginTools = command.pluginTools === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
@@ -1359,7 +1359,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     pendingRefs: new Map(),
     protectedFloor: Number.MAX_SAFE_INTEGER,
   };
-  // 记忆附件（实验功能 memory-system）：各轮召回块从本子（当前叶子路径）读回，
+  // 记忆附件：各轮召回块从本子（当前叶子路径）读回，
   // 本轮的块在 echoAndPrompt 召回后放进 pending，首个 LLM 调用时认领落本。
   // 定义在 extensionFactories 之后是安全的（同 budget 的说明）
   const memory: TurnMemoryAttach = { attached: memoryAttachments(sessionManager.getBranch()), pending: null };
@@ -1974,7 +1974,7 @@ function isChildSession(command: { directories?: { related?: readonly { relation
 const MEMORY_RECALL_TIMEOUT_MS = 6_000;
 
 /**
- * 轮前召回（实验功能 memory-system）：拿用户原话问主进程要相关记忆（主进程再
+ * 轮前召回：拿用户原话问主进程要相关记忆（主进程再
  * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
  * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
  */
@@ -2017,7 +2017,7 @@ async function echoAndPrompt(
   // 历史里数用户消息 +1（#228 的口径，与 renderer 划选引用一致）
   const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
   opened.memory.turn = turn;
-  // 轮前记忆召回（实验功能 memory-system）：召回块**不拼进用户原话**，放进本轮的
+  // 轮前记忆召回：召回块**不拼进用户原话**，放进本轮的
   // pending，首个 LLM 调用时由 orbita-memory-attach 扩展作为独立块挂到这条消息上
   // （见 memory-inject.ts）。超时 / 报错 / 空命中都不挂——记忆的失败不拦开轮。
   // 子会话也召回（读不写，写入门禁在主进程的轮后路径）

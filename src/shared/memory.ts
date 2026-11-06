@@ -1,5 +1,5 @@
 /**
- * 记忆系统（实验功能 memory-system）的契约真源。
+ * 记忆系统的契约真源。
  *
  * 设计取向（QUMem + AtomMem + Mandol 的调研结论，细节见各 commit message）：
  * - **按事件段整理**：对话不是按轮、而是按「同一件事的连续轮次」（事件段 / episode）

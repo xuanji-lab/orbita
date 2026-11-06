@@ -25,7 +25,6 @@ let workspace = "";
 let outside = "";
 let templatesDir = "";
 let records: PluginRecord[] = [];
-let enabled = true;
 
 const T1 = "<!doctype html><p>today</p>";
 const T2 = "<!doctype html><p>list</p>";
@@ -79,7 +78,6 @@ function boards(): PluginBoards {
       dataDirOf: (name) => join(dataRoot, name),
     },
     templates: new BoardTemplateStore(templatesDir),
-    enabled: async () => enabled,
     session: async (id) => (id === "s1" ? { cwd: workspace, workspaceId: "ws-1" } : id === "home" ? { cwd: join(dir, "home"), workspaceId: null } : null),
     workspaceRoot: async (id) => (id === "ws-1" ? workspace : null),
     now: () => 1_000,
@@ -103,7 +101,6 @@ beforeEach(async () => {
   await mkdir(join(dir, "home"), { recursive: true });
   await makePlugin(installedRoot, "lit");
   records = [record("lit")];
-  enabled = true;
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -177,7 +174,7 @@ describe("已装插件", () => {
     assert.equal(ready(await boards().snapshot({ sessionId: "s1", plugin: "lit", cards: null })).tuned, true);
   });
 
-  test("没在这个工作区启用 / 没装 / 开关关着 / 会话没了：都以一句话拒", async () => {
+  test("没在这个工作区启用 / 没装 / 会话没了：都以一句话拒", async () => {
     records = [record("lit", { kind: "workspaces", ids: ["ws-2"] })];
     const notEnabled = await boards().snapshot({ sessionId: "s1", plugin: "lit", cards: null });
     assert.equal(notEnabled.ok, false);
@@ -185,9 +182,6 @@ describe("已装插件", () => {
     records = [];
     const missing = await boards().snapshot({ sessionId: "s1", plugin: "lit", cards: null });
     assert.match(missing.ok ? "" : missing.error, /is not installed/);
-    enabled = false;
-    assert.equal((await boards().snapshot({ sessionId: "s1", plugin: "lit", cards: null })).ok, false);
-    enabled = true;
     assert.equal((await boards().snapshot({ sessionId: "gone", plugin: "lit", cards: null })).ok, false);
   });
 

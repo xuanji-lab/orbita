@@ -136,8 +136,10 @@ describe("结构守卫", () => {
     assert.deepEqual(inMore, ["carryovers", "archived", "bell"]);
   });
 
-  it("右栏没有单列的「技能与 MCP」入口（插件页就是它们的面板）", () => {
+  it("插件转正后条上没有「技能与 MCP」入口，插件与自动化常驻", () => {
     assert.doesNotMatch(rail, /id: "abilities"/);
+    assert.match(rail, /\{ id: "plugins", group: "agent"/);
+    assert.match(rail, /id: "automation",\s*group: "agent"/);
   });
 
   it("组名登记齐：RAIL_GROUP_IDS 每一组在中英文案里都有名字（读屏的 group 标签）", () => {

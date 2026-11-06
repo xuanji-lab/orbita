@@ -33,7 +33,7 @@ export function turnFields(
     pdfCitations: boolean;
     /** 「先给我看计划」偏好（settings.planFirst）：开着时第一张新计划写完就停下等你点头；缺席 = 关 */
     planFirst: boolean;
-    /** 实验功能「插件」的开关（settings.experimentalFeatures.plugins）：开着才注册 install_plugin / preview_plugin / list_plugins；缺席 = 关 */
+    /** 插件工具的注册开关：true 才注册 install_plugin / preview_plugin / list_plugins */
     pluginTools: boolean;
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;

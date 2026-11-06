@@ -37,10 +37,10 @@ export function draftOf(drafts: PluginDrafts, sessionId: string | null): string 
 
 /**
  * 收到 `pluginDraft` 事件：要不要把右栏切到插件页的「正在做」视图。
- * 只在**正看着该会话**且实验功能 plugins 开着时切——别的会话的草稿只记下来，等用户切过去、打开插件页再看。
+ * 只在**正看着该会话**时切——别的会话的草稿只记下来，等用户切过去、打开插件页再看。
  */
-export function shouldOpenDraft(args: { eventSessionId: string; viewedSessionId: string | null; pluginsEnabled: boolean }): boolean {
-  return args.pluginsEnabled && args.viewedSessionId !== null && args.eventSessionId === args.viewedSessionId;
+export function shouldOpenDraft(args: { eventSessionId: string; viewedSessionId: string | null }): boolean {
+  return args.viewedSessionId !== null && args.eventSessionId === args.viewedSessionId;
 }
 
 /** 「正在做」组里的一个工作区：当前工作区在前，其余按侧栏顺序；组内最近改动的在前。空组不出现。 */

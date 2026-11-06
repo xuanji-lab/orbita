@@ -25,14 +25,16 @@ import {
 } from "./features/chat/sub-sessions-state";
 import { SettingsView } from "./features/settings/SettingsView";
 import { BoardWeekView } from "./features/board/BoardWeekView";
-import { resolveSettingsTab, type SettingsTab } from "./features/settings/settings-tabs.ts";
+import type { SettingsTab } from "./features/settings/settings-tabs.ts";
+import { OnboardingView } from "./features/onboarding/OnboardingView";
+import { shouldAutoOpenOnboarding } from "./features/onboarding/onboarding-nav.ts";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
-import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
 import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
@@ -143,10 +145,18 @@ export function App() {
     }
   }, []);
 
+  /** 设置真的从主进程读回来了没有（读回之前手里是默认值，「看没看过引导」不能按它判） */
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   useEffect(() => {
     void refresh();
     // 读不到设置就用默认——主题是可以随时再选的，不值得为此让外壳起不来
-    void api.settings.get().then(setSettings).catch(() => setSettings(DEFAULT_SETTINGS));
+    void api.settings
+      .get()
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsLoaded(true);
+      })
+      .catch(() => setSettings(DEFAULT_SETTINGS));
   }, [refresh]);
 
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
@@ -846,16 +856,14 @@ export function App() {
   const tokenPickNonceRef = useRef(0);
   /** 发起号：面板可能已开着，选取态可能已在——靠它重新聚焦/重置 */
   const [tokenPickRequest, setTokenPickRequest] = useState(0);
-  // 选取态开在插件面板里；插件功能（实验开关）关着时没有面板可开：返回 false，Composer 就把输入的 / 留着
-  const pluginsAvailable = settings.experimentalFeatures?.["plugins"] === true;
+  // 选取态开在插件面板里（插件已转正，面板常在）
   const openTokenPicker = useCallback((position: number): boolean => {
-    if (!pluginsAvailable) return false;
     tokenPickAnchorRef.current = position;
     setTokenPickerOn(true);
     setTokenPickRequest((n) => n + 1);
     setRightPanel("plugins");
     return true;
-  }, [pluginsAvailable]);
+  }, []);
   const finishTokenPick = useCallback(
     (token: string | null): void => {
       // 锚点丢失（面板被切走等）就落到草稿末尾——选取的意图仍是「插进来」
@@ -972,25 +980,20 @@ export function App() {
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  // 插件页（实验功能 plugins）：开关关掉时入口不出现；开着的右栏面板收起，停在设置里的「插件」页签退回通用
-  const pluginsOn = experimentalFeatures["plugins"] === true;
-  // 全局周看板（实验功能 plugins 的一部分）：开关关掉时盖层退回聊天
-  if (overlay === "board" && !pluginsOn) setOverlay(null);
   // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
   // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。这份只记在 renderer 内存里、只管「agent 预览时自动切右栏」；
   // 草稿本身是磁盘上的文件夹，用户中途离开 / 重开应用后回来的入口是插件页列表最上面的「正在做」组（主进程 plugin:drafts 扫出来）
   const [pluginDrafts, setPluginDrafts] = useState<PluginDrafts>(new Map());
   // 用户在「正在做」组里点开的草稿（优先于 agent 预览的那一条）；点返回清掉
   const [openedDraft, setOpenedDraft] = useState<PluginDraftTarget | null>(null);
-  const draftContext = useRef({ viewed: mainSessionId, enabled: pluginsOn });
-  draftContext.current = { viewed: mainSessionId, enabled: pluginsOn };
+  const draftContext = useRef(mainSessionId);
+  draftContext.current = mainSessionId;
   useEffect(
     () =>
       api.agent.onEvent((event) => {
         if (event.type !== "pluginDraft") return;
         setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
-        const context = draftContext.current;
-        if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: context.viewed, pluginsEnabled: context.enabled })) {
+        if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: draftContext.current })) {
           setRightPanel("plugins");
         }
       }),
@@ -1059,10 +1062,7 @@ export function App() {
   const sessionDraft = draftOf(pluginDrafts, mainSessionId);
   const shownDraft: PluginDraftTarget | null =
     openedDraft ?? (sessionDraft === null ? null : { path: sessionDraft, workspaceId: session.workspaceId });
-  const resolvedPanel = resolvePanel(rightPanel, experimentalFeatures);
-  if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
-  const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
-  if (shownSettingsTab !== settingsTab) setSettingsTab(shownSettingsTab);
+  const shownSettingsTab = settingsTab;
   // 记忆库住在设置的页签里：打开那个页签才算一次
   useEffect(() => {
     if (overlay === "settings" && shownSettingsTab === "memory") countPanel("memory");
@@ -1077,16 +1077,37 @@ export function App() {
   useEffect(() => {
     if (showArchived) countPanel("archived");
   }, [showArchived, countPanel]);
-  // 自动化（实验功能 automation）：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
-  const automationOn = experimentalFeatures["automation"] === true;
-  const automations = useAutomations(automationOn);
+  // 自动化：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
+  const automations = useAutomations();
   const [automationFocus, setAutomationFocus] = useState<{ id: string; nonce: number } | null>(null);
   const openAutomationPanel = useCallback((automationId?: string): void => {
     setRightPanel("automation");
     if (automationId !== undefined) setAutomationFocus((current) => ({ id: automationId, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
-  // 开关关掉：面板位上若正开着自动化面板就收起（入口一并从右栏消失）
-  if (!automationOn && rightPanel === "automation") setRightPanel(null);
+  /**
+   * 新手引导：全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次；
+   * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 通用「再看一遍」打开（不改这个键）。
+   */
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const onboardingAutoRef = useRef(false);
+  useEffect(() => {
+    if (onboardingAutoRef.current || !shouldAutoOpenOnboarding(settingsLoaded, settings)) return;
+    onboardingAutoRef.current = true;
+    setOnboardingOpen(true);
+  }, [settingsLoaded, settings]);
+  const closeOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    if (settings.onboardingSeen !== true) changeSettings({ onboardingSeen: true });
+  }, [settings.onboardingSeen, changeSettings]);
+  /** 「放进输入框试试」：关掉引导与设置页，把那句话放进当前看着的会话（首页就是新任务）的输入框 */
+  const tryFromOnboarding = useCallback(
+    (text: string) => {
+      closeOnboarding();
+      setOverlay(null);
+      session.setDraft(text);
+    },
+    [closeOnboarding, session],
+  );
   const automationUi = useMemo<AutomationUi>(
     () => ({ automations: automations.automations, loaded: automations.load.kind === "ready", openPanel: openAutomationPanel, act: automations.act }),
     [automations.automations, automations.load.kind, automations.act, openAutomationPanel],
@@ -1178,18 +1199,14 @@ export function App() {
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
-    ...(pluginsOn
-      ? [
-          {
-            // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
-            id: "board" as const,
-            icon: FEATURE_ICON.board,
-            label: t.rail.board,
-            lit: overlay === "board",
-            onClick: () => setOverlay(overlay === "board" ? null : "board"),
-          },
-        ]
-      : []),
+    {
+      // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
+      id: "board" as const,
+      icon: FEATURE_ICON.board,
+      label: t.rail.board,
+      lit: overlay === "board",
+      onClick: () => setOverlay(overlay === "board" ? null : "board"),
+    },
     {
       id: "settings",
       icon: FEATURE_ICON.settings,
@@ -1297,6 +1314,7 @@ export function App() {
                   onOpenSession: openDraftSession,
                 }}
                 onTab={setSettingsTab}
+                onOpenOnboarding={() => setOnboardingOpen(true)}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
@@ -1476,8 +1494,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
-          automation={automationOn ? { running: runningCount(automations.automations) } : null}
-          pluginsAvailable={pluginsOn}
+          automation={{ running: runningCount(automations.automations) }}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }
@@ -1495,6 +1512,7 @@ export function App() {
           }}
         />
       </div>
+      {onboardingOpen && <OnboardingView theme={resolvedTheme} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>

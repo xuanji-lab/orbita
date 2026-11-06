@@ -1,0 +1,586 @@
+/*
+ * 新手引导（OnboardingView）：盖住整个窗口的纸面。版式照用户认可的原型 plugin-design/onboarding-v2
+ * （page-a 章首页、page-b2 步骤页、page-c 玄主题）。
+ *
+ * 引导自己的几样例外，都只服务这一个功能，按设计系统「只给一个功能用的值放在功能自己的 css」
+ * 声明在 .ob 上，不进 tokens/：
+ * - 纸色 --ob-paper：从主题 token 派生，不另立色值。浅色档取外壳与面板之间（暖的米白，比外壳
+ *   亮一点，截图的白窗才浮得起来）；两档暗色取会话井（最深那层，截图里的窗口比它亮，同样浮起）。
+ *   纸面两档跟浅色走（它们的外壳本来就是纸）。
+ * - 展示字号：章名与页标题是这一页唯一的主角，比界面五档大得多；按基准倍数派生，
+ *   改 --ui-font-size 时一起变。字族用品牌衬线（同首页 slogan），不另引字体。
+ * - 原型里的主操作是墨色实心钮、底纹有一圈 accent 光晕：落地时下一页改用 .btn-accent（设计系统：
+ *   主操作只用 accent），光晕不画（Backgrounds：渐变只在有用处时出现）。
+ */
+.ob {
+  --ob-paper: color-mix(in srgb, var(--color-bg-app) 70%, var(--color-bg-panel));
+  --ob-spine-w: 232px;
+  --ob-copy-w: clamp(260px, 28%, 380px);
+  --font-size-ob-display: calc(var(--ui-font-size) * 3.4);
+  --font-size-ob-title: calc(var(--ui-font-size) * 2.3);
+  --font-size-ob-brand: calc(var(--ui-font-size) + 8px);
+  --line-height-ob-display: 1.12;
+  --line-height-ob-title: 1.25;
+
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-tooltip);
+  display: grid;
+  grid-template-columns: var(--ob-spine-w) minmax(0, 1fr);
+  background: var(--ob-paper);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  animation: ob-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root[data-theme="graphite"] .ob,
+:root[data-theme="black"] .ob {
+  --ob-paper: var(--color-bg-panel);
+}
+
+/* 根节点只为接键盘焦点（打开时聚焦），不画全局的焦点描边——那会给整个窗口描一圈 */
+.ob:focus-visible {
+  outline: none;
+}
+
+@keyframes ob-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 顶上一条拖窗口的带（覆盖层盖住了工具栏，窗口仍要拖得动）；按钮另设 no-drag */
+.ob-drag {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: var(--titlebar-row);
+  -webkit-app-region: drag;
+}
+
+.ob button {
+  -webkit-app-region: no-drag;
+}
+
+/* ---------- 左侧目录 ---------- */
+.ob-spine {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  /* 顶部让出红绿灯那一行 */
+  padding: var(--titlebar-row) var(--space-4) var(--space-6) var(--space-6);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.ob-brand {
+  margin-bottom: var(--space-5);
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-ob-brand);
+  font-weight: var(--weight-bold);
+  line-height: var(--line-height-tight);
+}
+
+.ob-brand span {
+  margin-left: var(--space-1-5);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-tertiary);
+}
+
+.ob-part + .ob-part {
+  margin-top: var(--space-4);
+}
+
+.ob-part-name {
+  margin-bottom: var(--space-1-5);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.12em;
+  color: var(--color-text-tertiary);
+}
+
+.ob-ch {
+  display: flex;
+  gap: var(--space-2-5);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.ob-ch:hover {
+  color: var(--color-text-primary);
+}
+
+.ob-ch-no {
+  flex: none;
+  width: var(--space-5);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.ob-ch[aria-current="true"] {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-bold);
+}
+
+.ob-ch[aria-current="true"] .ob-ch-no {
+  color: var(--color-accent);
+}
+
+.ob-sub {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: var(--space-0-5) 0 var(--space-1-5) var(--space-8);
+  padding-left: var(--space-2-5);
+  border-left: 1px solid var(--color-border-default);
+}
+
+.ob-pg {
+  position: relative;
+  padding: var(--space-0-5) 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ob-pg:hover,
+.ob-pg[data-state="done"] {
+  color: var(--color-text-secondary);
+}
+
+.ob-pg[data-state="on"] {
+  color: var(--color-accent);
+  font-weight: var(--weight-bold);
+}
+
+.ob-pg[data-state="on"]::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-2-5) - 2px);
+  top: 50%;
+  width: 3px;
+  height: var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--color-accent);
+  transform: translateY(-50%);
+}
+
+/* ---------- 右侧主区 ---------- */
+.ob-main {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ob-skip {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-6);
+  z-index: 2;
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.ob-skip:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.ob-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--ob-copy-w);
+  gap: var(--space-8);
+  align-items: center;
+  min-height: 0;
+  padding: var(--titlebar-row) var(--space-8) var(--space-6) var(--space-8);
+  animation: ob-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ob-stage[data-kind="faq"] {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+}
+
+/* 截图区：容器查询算出能放下的最大 16:10 框；右下给放大镜留出越界的地方 */
+.ob-figure {
+  container-type: size;
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
+
+.ob-frame {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: min(94cqw, 86cqh * 1.6);
+  aspect-ratio: 16 / 10;
+  transform: translateY(-54%);
+}
+
+.ob-win {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-modal), var(--shadow-border);
+}
+
+.ob-win img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+
+.ob-win-missing {
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg-muted);
+}
+
+/* 框出的那一块：外面整张截图压暗，框本身一圈 accent */
+.ob-spot {
+  position: absolute;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 200vmax var(--overlay-backdrop);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.ob-pin {
+  position: absolute;
+  z-index: 3;
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  box-shadow: 0 0 0 var(--space-1) var(--ob-paper);
+  transform: translate(-50%, -50%);
+}
+
+.ob-pin-inline {
+  position: static;
+  flex: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.ob-loupe {
+  position: absolute;
+  z-index: 2;
+  border: var(--space-1-5) solid var(--color-bg-panel);
+  border-radius: var(--radius-xl);
+  background-color: var(--color-bg-panel);
+  background-repeat: no-repeat;
+  box-shadow: var(--shadow-modal), var(--shadow-border);
+}
+
+/* ---------- 配文 ---------- */
+.ob-copy {
+  display: grid;
+  gap: var(--space-3);
+  align-content: center;
+  min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.ob-faq {
+  width: min(640px, 100%);
+}
+
+.ob-kicker {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.14em;
+  color: var(--color-text-tertiary);
+}
+
+.ob-kicker b {
+  font-family: var(--font-family-mono);
+  letter-spacing: 0;
+  color: var(--color-accent);
+}
+
+.ob-display,
+.ob-title {
+  margin: 0;
+  font-family: var(--font-family-brand);
+  font-weight: var(--weight-bold);
+}
+
+.ob-display {
+  font-size: var(--font-size-ob-display);
+  line-height: var(--line-height-ob-display);
+}
+
+.ob-title {
+  font-size: var(--font-size-ob-title);
+  line-height: var(--line-height-ob-title);
+}
+
+.ob-lead {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+.ob-lead b,
+.ob-note b,
+.ob-faq-note b {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.ob-toc {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ob-toc li {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+}
+
+.ob-toc li span {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+
+.ob-case {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+.ob-note {
+  display: flex;
+  gap: var(--space-2-5);
+  align-items: flex-start;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+.ob-faq-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+/* 「这样告诉它」：一个画出来的输入框样例 + 「放进输入框试试」 */
+.ob-try {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.ob-try-label {
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+}
+
+.ob-composer {
+  display: flex;
+  gap: var(--space-2-5);
+  align-items: flex-end;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-composer), var(--shadow-border);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+}
+
+.ob-composer > span:first-child {
+  flex: 1;
+}
+
+.ob-send {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--control-height-md);
+  height: var(--control-height-md);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.ob-try-btn {
+  justify-self: start;
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.ob-try-btn:hover {
+  background: var(--color-bg-hover);
+}
+
+/* ---------- 底栏 ---------- */
+.ob-bar {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  height: calc(var(--list-item-rich) + var(--space-6));
+  padding: 0 var(--space-8);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.ob-segs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+}
+
+.ob-segs i {
+  width: var(--space-8);
+  height: var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-border-default);
+}
+
+.ob-segs i[data-state="done"] {
+  background: var(--color-text-tertiary);
+}
+
+.ob-segs i[data-state="on"] {
+  background: var(--color-accent);
+}
+
+/* 弹性占位：键位提示在窄窗里藏掉时，上一页 / 下一页仍钉在右缘（行尾血线） */
+.ob-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-keys {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.ob-btn {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-lg);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.ob-btn-ghost {
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+}
+
+/* 窄窗（1100 宽以下）：目录收窄、配文列收窄，键位提示让位 */
+@media (max-width: 1180px) {
+  .ob {
+    --ob-spine-w: 196px;
+  }
+
+  .ob-stage {
+    gap: var(--space-6);
+    padding-right: var(--space-6);
+    padding-left: var(--space-6);
+  }
+
+  .ob-keys {
+    display: none;
+  }
+}
+
+@media (max-height: 760px) {
+  .ob {
+    --font-size-ob-display: calc(var(--ui-font-size) * 2.6);
+    --font-size-ob-title: calc(var(--ui-font-size) * 1.9);
+  }
+
+  .ob-copy {
+    gap: var(--space-2);
+  }
+
+  .ob-lead {
+    font-size: var(--font-size-base);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ob,
+  .ob-stage {
+    animation: none;
+  }
+}

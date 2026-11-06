@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { PanelEmpty } from "./PanelEmpty";
@@ -21,7 +21,7 @@ import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
-import { visibleSettingsTabs, type SettingsTab } from "../features/settings/settings-tabs.ts";
+import { SETTINGS_TABS, type SettingsTab } from "../features/settings/settings-tabs.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
@@ -47,7 +47,6 @@ import {
 } from "./sidebar-fold.ts";
 import { useT } from "../locale.ts";
 import { startPointerDrag } from "./pointer-drag.ts";
-import { ExperimentalFeaturesContext } from "../experimental.ts";
 import type { Messages } from "../messages-en.ts";
 
 /**
@@ -201,7 +200,6 @@ export function Sidebar(props: {
   usageCard: React.ReactNode | null;
 }) {
   const t = useT();
-  const experimentalFlags = useContext(ExperimentalFeaturesContext);
   const { session } = props;
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
@@ -712,7 +710,7 @@ export function Sidebar(props: {
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
-            {visibleSettingsTabs(experimentalFlags).map((tab) => (
+            {SETTINGS_TABS.map((tab) => (
               <NavRow
                 key={tab.id}
                 icon={tab.icon}

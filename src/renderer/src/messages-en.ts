@@ -623,7 +623,6 @@ export const en = {
       note: (mode: string) =>
         `This conversation is in “${mode}” mode: the agent cannot give an automation more permission than the conversation has, so it needs your click.`,
       failed: {
-        disabled: "Automations are turned off.",
         noSession: "This conversation no longer exists, so its workspace cannot be checked.",
         notFound: "The automation is gone, or no longer belongs to this conversation's workspace.",
         notApplicable: "This automation runs inside its conversation and has no permission of its own.",
@@ -1146,6 +1145,9 @@ export const en = {
       "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
+    onboarding: "Getting started",
+    onboardingInfo: "The full-screen guide that opened the first time: what Orbita can do, one research project from start to finish.",
+    onboardingReplay: "Watch again",
     experimentalLead:
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
@@ -2321,7 +2323,7 @@ export const en = {
   },
 
 
-  /** 插件页（实验功能 plugins）：已装页按工作区分组、详情、安装确认。文案结构照设计稿第 2 / 6 屏。 */
+  /** 插件页：已装页按工作区分组、详情、安装确认。文案结构照设计稿第 2 / 6 屏。 */
   pluginPanel: {
     loading: "Loading…",
     recorded: "Noted",
@@ -2634,7 +2636,6 @@ export const en = {
       pendingGlobal: "It would be active in every workspace, so it waits for your click.",
       pendingManual: "This session asks before every action, so it waits for your click.",
       failed: {
-        disabled: "The Plugins feature is turned off, so nothing can be installed.",
         noSession: "This session no longer exists, so its workspace can't be checked.",
         notFound: "The plugin folder is gone, or it is not inside this session's workspace anymore.",
         changed: "The plugin folder changed after this line was shown (its name, skills or the commands it starts). Ask the agent to submit it again.",
@@ -2997,6 +2998,430 @@ export const en = {
     emptyTask: "Nothing has come into the context yet.",
     /** 输入框旁上下文环菜单里的入口 */
     open: "View context",
+  },
+  /**
+   * 新手引导（features/onboarding）：全屏覆盖层的界面字与每一页的文案。页的版式（截图、框选、编号点）
+   * 在 onboarding-pages.ts；这里按章 id → 页 id 对上。正文里的 **…** 是粗体。
+   * notes 的第 n 条对应截图上的编号 n；say 是「这样告诉它」的样例句。
+   */
+  onboarding: {
+    title: "Getting started",
+    toc: "Chapters",
+    skip: "Skip the guide",
+    prev: "Previous",
+    next: "Next",
+    done: "Done",
+    keys: "← → to turn pages · Esc to leave",
+    sayLabel: "Tell it like this",
+    tryIt: "Put it in the message box",
+    where: (no: string, name: string, page: number, total: number) => `Chapter ${no} · ${name} · ${page} / ${total}`,
+    whereOpener: (no: string, name: string) => `Chapter ${no} · ${name} · Overview`,
+    kickerStep: (no: string, page: number, total: number) => `Chapter ${no} · page ${page} / ${total}`,
+    kickerFaq: (page: number, total: number) => `FAQ · ${page} / ${total}`,
+    parts: {
+      basics: { name: "Basics", tagline: "working with it, day to day" },
+      tools: { name: "Tools", tagline: "what it has in hand" },
+      appendix: { name: "Appendix", tagline: "look things up any time" },
+    },
+    chapters: {
+      start: {
+        name: "Start",
+        case: "Case: opening it for the first time",
+        lead: "Connect it to a model first. After that, one sentence is enough: it gets to work on your computer — reading files, running commands, looking things up.",
+        pages: {
+          welcome: {
+            name: "Welcome",
+            title: "An agent that works on your computer",
+            body: "Orbita doesn't just answer — it **does the work**: reads your files, runs commands, searches the web, and writes the results back into your folder. This guide walks through one research project from start to finish.",
+            notes: [
+              "Left: workspaces and tasks. One folder per workspace, one task per piece of work.",
+              "Middle: talk to it. One sentence hands over one job.",
+              "Right: its tools and panels — one chapter each, later on.",
+            ],
+          },
+          providers: {
+            name: "Add a provider",
+            title: "Connect one model first",
+            body: "In Settings › **Model providers**, pick a provider and paste its API key. One is enough to start; add more later and pick per job.",
+            notes: ["Providers you have connected sit first.", "Each card opens its key and model list."],
+          },
+          roles: {
+            name: "Who does what",
+            title: "Three jobs, one model each",
+            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, wrap-up scans — go to a small fast model.",
+            notes: ["Chore model: Settings › General.", "Sub-session model: left alone, it follows the main one."],
+          },
+          import: {
+            name: "Import old chats",
+            title: "Bring your old conversations along",
+            body: "Used Proma, Claude Code or Kimi? Settings › **Import** finds their chat history; tick what you want and carry on where you left off.",
+            notes: ["It scans first and lists what it found.", "Import leaves the original files untouched."],
+          },
+        },
+      },
+      task: {
+        name: "Do one thing with it",
+        case: "Case: “Read this paper and list the experiments we can reproduce”",
+        lead: "Hand over one job and watch it work through it step by step. Not happy? Take it back and say it again.",
+        pages: {
+          composer: {
+            name: "The message box",
+            title: "The row under the message box",
+            body: "One sentence per job is enough. The row underneath decides **where it works, what it may touch, and which model it uses**.",
+            notes: [
+              "Paperclip: attach files, folders, screenshots (or drag them in).",
+              "Workspace: the folder it works in.",
+              "Permission, model, thinking level — permission is next.",
+              "Type / at the start and press space to pick a skill or plugin.",
+            ],
+            say: "Read the UrbanGPT paper in the papers folder and list the experiments we can reproduce on this machine.",
+          },
+          permission: {
+            name: "Plan / Manual / Allow",
+            title: "You decide how much it may do on its own",
+            body: "**Plan** reads but never writes — good for thinking it through first. **Manual** asks before every step. **Allow** just does it, for work you trust it with.",
+            notes: ["Switch any time; it applies from your next message."],
+          },
+          watch: {
+            name: "Watch it work",
+            title: "Every step laid out",
+            body: "What it's doing, which step it's on and for how long — all in this block. When it's done it folds into one line; open it to see each step.",
+            notes: ["The headline is what it's doing right now.", "Below, its latest tool calls — a tick means done."],
+          },
+          rewind: {
+            name: "Undo and rewind",
+            title: "Said it wrong? Go back and say it again",
+            body: "Hover over your message and click **Rewind**: everything after it is taken back — files it changed included — and your words return to the message box to edit.",
+            notes: ["Copy this message.", "Rewind to just before it."],
+          },
+        },
+      },
+      progress: {
+        name: "Progress and context",
+        case: "Case: how far along it is, how much room is left",
+        lead: "The right panel's This task tells you at any moment: which step of the plan it's on, and how much of its context is left.",
+        pages: {
+          plan: {
+            name: "Plan and progress",
+            title: "The plan, ticked off step by step",
+            body: "For bigger jobs it writes a plan first. Under **This task** in the right panel, finished steps get a tick and the current one lights up.",
+            notes: ["The plan: empty ring to do, half-filled in progress, tick done.", "Each turn it has done; open one to see its chapters."],
+          },
+          goal: {
+            name: "Goal",
+            title: "What it's aiming for",
+            body: "For longer work it writes down the **goal** in your own words and keeps it at the top — so a long conversation doesn't drift away from what you actually asked for.",
+            notes: ["The goal, pinned above the plan."],
+          },
+          context: {
+            name: "Context and the usage ring",
+            title: "What it's holding in mind",
+            body: "The small ring by the message box is **context usage**. Near full, it folds older history into a summary and keeps going. The Context tab lists exactly what it is holding right now.",
+            notes: ["The files, tool results and other tasks it is holding, and how much each takes.", "How much this task uses in total — the same number as the ring by the message box."],
+          },
+        },
+      },
+      files: {
+        name: "Files",
+        case: "Case: handing it the project folder",
+        lead: "A workspace is just a folder on your computer. Hand it over and it reads and writes inside.",
+        pages: {
+          workspace: {
+            name: "A workspace is a folder",
+            title: "One project, one folder",
+            body: "Use the folder icon next to **Workspaces** to add a folder (or make a new one). Tasks you start in a workspace all work inside that folder.",
+            notes: ["The workspace and the tasks inside it.", "Start a new task in this workspace."],
+          },
+          files: {
+            name: "The Files panel",
+            title: "Look at files without leaving",
+            body: "**Files** in the right panel lists the workspace; click one to preview it — PDF, Markdown, code and diagrams all open here.",
+            notes: ["The workspace's files.", "The preview."],
+          },
+          changes: {
+            name: "What it changed",
+            title: "Every change in plain sight",
+            body: "**Review** in the right panel lists the files this task changed, line by line. Not right? Ask it to change them back, or rewind that turn.",
+            notes: ["Files changed, with lines added and removed.", "The diff, line by line."],
+          },
+        },
+      },
+      quote: {
+        name: "Quotes and excerpts",
+        case: "Case: highlight a passage, ask about it, keep it",
+        lead: "Found a useful sentence in an answer? Highlight it: ask a follow-up about it, or keep it as an excerpt.",
+        pages: {
+          quote: {
+            name: "Quote into the message box",
+            title: "Highlight a line, ask about it",
+            body: "Select a passage in an answer and click **Quote**: it sits above the message box, and what you ask next is about that passage.",
+            notes: ["Select text: Quote, Excerpt, Copy.", "The quote waits above the message box."],
+            say: "Why can't this one run on an Apple-silicon Mac?",
+          },
+          excerpt: {
+            name: "Excerpts",
+            title: "Keep the good lines",
+            body: "Select and click **Excerpt**: the passage and where it came from go into the **Excerpts** tab next to Review; click one to jump back to the original.",
+            notes: ["Excerpts from this task.", "Jump back to where it came from."],
+          },
+          pdf: {
+            name: "PDF citations",
+            title: "Quoting the source, with a way back",
+            body: "When it explains a PDF, every quoted line is checked against the original first and carries a number; click the number and the Files panel opens that page with the passage highlighted.",
+            notes: ["An experimental feature: turn on PDF citations under Settings › Experimental."],
+          },
+          session: {
+            name: "Refer to another task",
+            title: "Point it at another task",
+            body: "Name another task (“the related-work survey”) and it reads that task's record itself and brings over what you need.",
+            notes: ["It read the other task and brought the table over."],
+            say: "Take the comparison table from the “three related works” task and add it to the end of our reproducible-experiments note.",
+          },
+        },
+      },
+      subsessions: {
+        name: "Sub-sessions",
+        case: "Case: three helpers researching in parallel",
+        lead: "When work splits apart, it sends out sub-sessions to do the pieces in parallel; you only read the summary.",
+        pages: {
+          dispatch: {
+            name: "Send them out",
+            title: "One sentence, three helpers",
+            body: "Ask it to “split this up with sub-sessions” and it opens several, one per piece, waits for them and sums up.",
+            notes: ["Three sub-sessions, each on one paper."],
+            say: "Send three sub-sessions to research STG-LLM, UniST and UrbanCLIP, then sum it up in one comparison table.",
+          },
+          inbox: {
+            name: "The inbox",
+            title: "The sub-sessions inbox",
+            body: "**Sub-sessions** in the right panel lists every helper this task sent out: running, finished, waiting for you. Click one to see everything it did.",
+            notes: ["Each helper and where it stands."],
+          },
+          waiting: {
+            name: "When they need you",
+            title: "They come to you with questions",
+            body: "When a helper needs your decision it goes to the top of the inbox, and the badge counts how many are waiting on you. Answer, and it carries on.",
+            notes: ["The badge: helpers waiting for you."],
+          },
+          cost: {
+            name: "Model and cost",
+            title: "Give helpers a cheaper model",
+            body: "Sub-sessions use the main model by default. Settings › General › **Sub-session model** can switch them to something fast and cheap — or just say so in your message.",
+            notes: ["Sub-session model and its thinking level."],
+          },
+        },
+      },
+      memory: {
+        name: "Memory",
+        case: "Case: you don't have to do anything",
+        lead: "It remembers your preferences and the facts of your project on its own, so you don't repeat yourself. You only need to know it's there.",
+        pages: {
+          remember: {
+            name: "It remembers by itself",
+            title: "It learns as you talk",
+            body: "When a conversation goes quiet it turns it into a few memories — **facts**, **preferences**, **lessons**. In your next task the relevant ones come along by themselves.",
+            notes: ["It needs a chore model (chapter 1)."],
+          },
+          used: {
+            name: "Which memories it used",
+            title: "What this turn drew on",
+            body: "Under your message, “used N · remembered M”: open it to see which memories came along this turn and what it newly remembered.",
+            notes: ["Used and remembered, per turn."],
+          },
+          correct: {
+            name: "Correct it in a sentence",
+            title: "Wrong memory? Just say so",
+            body: "Say “No, …” and it fixes that memory. Every memory lives in Settings › **Memory**, where you can add and delete them yourself.",
+            notes: ["The memory library: by workspace, by kind."],
+            say: "No — I write my group-meeting notes in English, not Chinese.",
+          },
+        },
+      },
+      terminal: {
+        name: "Terminal",
+        case: "Case: running the reproduction code",
+        lead: "When it runs commands, it uses a terminal you can see — and take over at any time.",
+        pages: {
+          run: {
+            name: "Commands you can take over",
+            title: "It runs in a terminal, you watch",
+            body: "**Terminal** in the right panel shows every command it runs and its output. Need to type a password or stop it? Type straight into the terminal.",
+            notes: ["The command it ran and what came out."],
+            say: "Run the zero-shot reproduction script in the terminal and tell me the baseline error.",
+          },
+          background: {
+            name: "Long jobs in the background",
+            title: "Long runs: check back later",
+            body: "For something that runs for hours, it leaves it going in the background and says “I'll check the log in 15 minutes” — and comes back on time by itself.",
+            notes: ["It set itself a reminder to come back."],
+            say: "Run the training in the background, check the log every 30 minutes and tell me when it's done.",
+          },
+        },
+      },
+      browser: {
+        name: "Built-in browser",
+        case: "Case: finding papers on arXiv",
+        lead: "It has its own browser: reads pages, clicks buttons, downloads files.",
+        pages: {
+          read: {
+            name: "Read pages, download",
+            title: "It browses for you",
+            body: "Ask it to find something on a site and it opens the page in the built-in browser, reads, clicks and downloads into your workspace. The globe icon on the right shows you where it is.",
+            notes: ["What it read and clicked, step by step."],
+            say: "Find papers on arXiv about large models for urban spatio-temporal data since 2024, and download the most relevant one into papers.",
+          },
+          login: {
+            name: "Hand-off for sign-in",
+            title: "Sign-ins are yours",
+            body: "At a sign-in or a captcha it stops and hands you the browser; sign in, click Done, and it carries on. The sign-in stays in the built-in browser for next time.",
+            notes: ["The built-in browser is a window of its own."],
+          },
+        },
+      },
+      plugins: {
+        name: "Plugins",
+        case: "Case: turning it into a “Paper tracker”",
+        lead: "A routine you repeat becomes a plugin — skills, scripts and a board — and runs with one sentence from then on.",
+        pages: {
+          page: {
+            name: "The plugins page",
+            title: "Everything installed, in one place",
+            body: "The blocks icon on the right opens **Plugins**: installed plugins, plus your existing skills and MCP servers. The Plugins tab in Settings is the full-screen version.",
+            notes: ["Connect a local plugin, or make one with the agent.", "Installed plugins, by workspace."],
+          },
+          make: {
+            name: "Make one with the agent",
+            title: "Make a plugin as you talk",
+            body: "Click **Make one with the agent** and say what you want. It looks for something existing first, then writes it section by section: skills, inputs and outputs, workflow, board.",
+            notes: ["Your request goes to the built-in plugin-making skill."],
+            say: "Make a “Paper tracker”: every day, find the newest arXiv paper closest to my project and put it on a board.",
+          },
+          draft: {
+            name: "Being made",
+            title: "Each section appears as it's settled",
+            body: "While you work on it, the right panel shows the plugin's **being made** page: every section you settle appears within seconds. It is installed only when everything is settled.",
+            notes: ["Sections written so far."],
+          },
+          result: {
+            name: "Results in the conversation",
+            title: "The result is a board card",
+            body: "When a plugin runs, its result stays in the conversation as board cards — and it can be attached to an automation to run every day (next chapter).",
+            notes: ["The board, kept as it looked at that moment."],
+          },
+        },
+      },
+      automation: {
+        name: "Automations",
+        case: "Case: running by itself every morning",
+        lead: "When the time comes, it opens a new task and gets it done. You only say **what and when**; the result stays in that task and shows up on the board.",
+        pages: {
+          create: {
+            name: "Create one",
+            title: "One sentence, and it's set up",
+            body: "Say “every morning at 8:30 …” in a conversation and it creates it; or create one by hand in the **Automations** panel on the right.",
+            notes: ["Your automations, with their next run."],
+            say: "Every morning at 8:30, use the paper tracker to find a new paper and show me the board when it's done.",
+          },
+          plugin: {
+            name: "Plugin and permission",
+            title: "Which plugin, and what it may touch",
+            body: "Pick a plugin for an automation and its board comes out after each run. Scheduled runs are **read-only** by default — to let one actually write files, loosen it here.",
+            notes: ["The plugin whose board it shows.", "Permission for unattended runs."],
+          },
+          chart: {
+            name: "Detail and the bars",
+            title: "Did it run this week? One glance",
+            body: "Each automation shows the last 7 days on the right: **a bar for each day it ran**, a faint line for days it didn't, today on the far right; a failed day is a red bar.",
+            notes: [
+              "All bars share one scale: the busiest day of the 7 fills the height.",
+              "“28 runs” is its total; when the panel is narrow the bars hide first, the name and total stay.",
+            ],
+          },
+        },
+      },
+      board: {
+        name: "Board",
+        case: "Case: a week's results at a glance",
+        lead: "Cards from plugins and automations, laid out day by day on one sheet.",
+        pages: {
+          card: {
+            name: "Board cards",
+            title: "One card, one thing",
+            body: "A plugin's board is a few fixed-size cards. Buttons on a card (relevant / not relevant) are recorded, and the plugin reads them on its next run.",
+            notes: ["A card from the paper tracker."],
+          },
+          week: {
+            name: "The week board",
+            title: "A week of results on one sheet",
+            body: "Click **Board** at the bottom right: one column per day, each card under the day it ran; days still ahead show what's scheduled. Pick 3 / 5 / 7 days at the top right; hold Shift and scroll to move sideways.",
+            notes: ["Click the “time · plugin” line above a card to return to the task that made it."],
+          },
+        },
+      },
+      focus: {
+        name: "Focus and wrap-up",
+        case: "Case: getting one thing done",
+        lead: "Focus for a stretch, then wrap up: it lists what's left undone and keeps it for later.",
+        pages: {
+          focus: {
+            name: "Focus mode",
+            title: "Focus for a while",
+            body: "The bolt at the top left starts **Focus**: choose a length and a workspace, and the left side turns into that workspace's files, marking new and changed ones. Five minutes before the end, the chore model sums up what you did.",
+            notes: ["Start focus here."],
+          },
+          wrap: {
+            name: "Tick to wrap up",
+            title: "Done? Tick it",
+            body: "The **tick** next to the task title wraps it up: it scans the task first, lists what's still undone, and marks it done once you confirm. You can reopen it any time.",
+            notes: ["Wrap up this task."],
+          },
+          later: {
+            name: "For later",
+            title: "Unfinished work isn't lost",
+            body: "Leftovers you confirm at wrap-up go to More › **For later**; click one to start a new task with its context and pick up where you stopped.",
+            notes: ["Leftovers, grouped by the task they came from."],
+          },
+        },
+      },
+      faq: {
+        name: "FAQ",
+        case: "",
+        lead: "",
+        pages: {
+          perms: {
+            name: "System permissions",
+            title: "The system asks for permission — which ones need a restart?",
+            body: "**Microphone**: asked the first time you use voice input. Allow it; no restart.\n**Folders**: asked the first time it reads something in Documents, Desktop or Downloads. Allow it; no restart.\n**Screen recording**: only needed when it takes screenshots. After switching Orbita on under System Settings › Privacy & Security › Screen Recording, **quit and reopen it once** for it to take effect.",
+            notes: ["These prompts are macOS only; Windows doesn't ask."],
+          },
+          data: {
+            name: "Where data lives",
+            title: "Where is my data?",
+            body: "Tasks, settings and skills are plain files on this computer: the **Data directory** row in Settings › General opens the folder. Workspaces are your own folders; new ones are created under Orbita in your home folder.\nNothing is uploaded or synced — copy it yourself to move computers.",
+          },
+          twice: {
+            name: "One copy at a time",
+            title: "Installed a new build, but the old one opens?",
+            body: "Only one Orbita runs at a time: builds share the same data, so opening a second one just brings up the window that's already open.\nBefore switching builds, **quit the old one completely**: on macOS right-click it in the Dock and Quit (closing the window isn't quitting); on Windows right-click the tray icon and Quit.",
+          },
+          language: {
+            name: "Reply language",
+            title: "Why does it answer in English?",
+            body: "It replies **in the language you write in**: write Chinese, it answers in Chinese. The interface language is set in Settings › General › Language and doesn't change that.\nIf it drifts, just say “answer in English”.",
+          },
+          background: {
+            name: "Long tasks in the background",
+            title: "Can I walk away from a long task?",
+            body: "Yes. Switching to other tasks or starting new ones doesn't stop it; the small pie before each task says running, waiting for you, or finished. It chimes and shows a card when done.\nOn Windows, closing the window sends it to the tray and work goes on; on macOS it stays in the Dock. Sleep stops it — the Automations panel has “keep the computer awake while something runs”.",
+          },
+          update: {
+            name: "Updating",
+            title: "How do I update?",
+            body: "**Software update** at the bottom of Settings › General checks in the background; download the new version and restart to install.\nIf GitHub is unreachable, turn on a system proxy, or set HTTPS_PROXY and restart.",
+          },
+        },
+      },
+    },
   },
 };
 

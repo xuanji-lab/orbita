@@ -42,7 +42,6 @@ let workspaceRoot = "";
 let outside = "";
 let userSkills: { slug: string; name: string }[];
 let store: PluginStore;
-let enabled = true;
 let sessions: Map<string, { cwd: string; workspaceId: string | null }>;
 let drafts: PluginDraftEvent[];
 let remembered: { path: string; sessionId: string }[];
@@ -57,7 +56,6 @@ const HOME_SESSION = "session-home";
 function makeRequests(): PluginAgentRequests {
   return new PluginAgentRequests({
     plugins: store,
-    enabled: async () => enabled,
     session: async (id) => sessions.get(id) ?? null,
     workspace: async (id) => (id === "ws-1" ? { name: "文献组", path: workspaceRoot } : null),
     draft: (event) => drafts.push(event),
@@ -114,7 +112,6 @@ beforeEach(async () => {
   await mkdir(workspaceRoot, { recursive: true });
   await mkdir(outside, { recursive: true });
   userSkills = [];
-  enabled = true;
   drafts = [];
   remembered = [];
   rememberFails = false;
@@ -133,13 +130,8 @@ afterEach(async () => {
 });
 
 describe("install：直接拦下的（不装、也不留那一行）", () => {
-  test("实验开关关着 / 会话不在了", async () => {
+  test("会话不在了", async () => {
     const root = await makePlugin();
-    enabled = false;
-    const off = await requests.install(request(root));
-    assert.equal(off.ok, false);
-    assert.match(off.ok ? "" : off.error, /turned off/);
-    enabled = true;
     const gone = await requests.install(request(root, { sessionId: "nope" }));
     assert.match(gone.ok ? "" : gone.error, /no longer exists/);
     assert.deepEqual(await store.records(), []);
@@ -399,13 +391,9 @@ describe("installFromRow：用户点那一行的「安装」", () => {
     assert.deepEqual(await store.records(), []);
   });
 
-  test("文件夹被删了 / 会话不在了 / 开关被关了：各自回清楚的原因", async () => {
+  test("文件夹被删了 / 会话不在了：各自回清楚的原因", async () => {
     const root = await makePlugin();
     const row = rowOf(await requests.install(request(root, { mode: "manual" })));
-    enabled = false;
-    const off = await requests.installFromRow(clickOf(row));
-    assert.equal(!off.ok && off.reason, "disabled");
-    enabled = true;
     await rm(root, { recursive: true, force: true });
     const gone = await requests.installFromRow(clickOf(row));
     assert.equal(!gone.ok && gone.reason, "not-found");
@@ -508,16 +496,13 @@ describe("previewDraft：只扫描、不装；成功后让右栏打开「正在�
     assert.deepEqual(files, [{ card: "a", key: "template", path: "../../secret.html", exists: false }]);
   });
 
-  test("路径在工作区之外 / 不是插件 / 开关关着 / 会话不在：报错，且不发 pluginDraft", async () => {
+  test("路径在工作区之外 / 不是插件 / 会话不在：报错，且不发 pluginDraft", async () => {
     await put(outside, ".claude-plugin/plugin.json", JSON.stringify({ name: "x" }));
     const escaped = await preview(outside);
     assert.match(escaped.ok ? "" : escaped.error, /outside this session's workspace/);
     await mkdir(join(workspaceRoot, "plugins", "empty"), { recursive: true });
     assert.equal((await preview(join(workspaceRoot, "plugins", "empty"))).ok, false);
     const root = await makeDraft();
-    enabled = false;
-    assert.equal((await preview(root)).ok, false);
-    enabled = true;
     assert.equal((await preview(root, "nope")).ok, false);
     assert.deepEqual(drafts, []);
     assert.deepEqual(remembered, []); // 失败的预览不记账
@@ -541,7 +526,7 @@ describe("previewDraft：只扫描、不装；成功后让右栏打开「正在�
 });
 
 describe("list", () => {
-  test("只列这条会话的工作区里生效的真插件（含 workflow 步骤标题与根目录）；别的工作区的不列；开关关着报错", async () => {
+  test("只列这条会话的工作区里生效的真插件（含 workflow 步骤标题与根目录）；别的工作区的不列", async () => {
     const root = await makePlugin("lit");
     await requests.install(request(root));
     const listed = await requests.list({ type: "pluginListRequest", requestId: "l1", sessionId: S });
@@ -558,8 +543,6 @@ describe("list", () => {
     // Home 会话：只对 ws-1 启用的不在
     const home = await requests.list({ type: "pluginListRequest", requestId: "l2", sessionId: HOME_SESSION });
     assert.deepEqual(home.ok && home.plugins, []);
-    enabled = false;
-    assert.equal((await requests.list({ type: "pluginListRequest", requestId: "l3", sessionId: S })).ok, false);
   });
 });
 

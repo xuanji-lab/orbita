@@ -1,5 +1,5 @@
 /**
- * 「有任务在跑时阻止系统睡眠」（实验功能 automation 的设置项 `automationKeepAwake`，默认关）。
+ * 「有任务在跑时阻止系统睡眠」（自动化的设置项 `automationKeepAwake`，默认关）。
  *
  * 只在**有自动化运行正在执行**期间拦住系统挂起，运行全部结束就放开；屏幕照样可以关。
  * 用的是 Electron 自己的 `powerSaveBlocker.start('prevent-app-suspension')`——应用自己的 API
