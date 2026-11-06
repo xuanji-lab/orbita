@@ -55,7 +55,10 @@ export const REPLY_LANGUAGE_GUIDELINE =
   "What does not count: blocks that Orbita adds around the message on its own — <mentioned_tools>, <attached-files> (the listing and its " +
   "instruction line, not the files' contents), <user_context>, <orbita-memory>, <referenced_task>, and <channel> envelopes — and the " +
   "excerpts inside <quoted_context> (they quote earlier turns, possibly the assistant's own). These are mostly English boilerplate; " +
-  "never let their language, or how much of the message they take up, decide the reply language.";
+  "never let their language, or how much of the message they take up, decide the reply language.\n" +
+  "When the latest message has no words the user typed (a turn opened by a <channel> report from a sub-session, an automation " +
+  "wake-up, or anything else Orbita sends on its own), keep the language of the user's most recent message that they did type; " +
+  "a sub-session's report or your own task text being in another language does not change it.";
 
 /**
  * 改写主循环的系统提示词：替换 concise 行 + 追加进度说明段。
