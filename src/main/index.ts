@@ -1071,7 +1071,7 @@ void app.whenReady().then(async () => {
   void skills.ensureDirs().catch((error: unknown) => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
-  registerSkillIpc(skills);
+  registerSkillIpc(skills, workspaces);
   /*
    * 插件：记录 / 副本 / 数据 / 归档都在 userData 下，不写进上面这个 skills
    * 目录也不写 mcp.json。冲突检测与开轮装配要避开用户自己的技能，所以把它们的身份读法注入进去
