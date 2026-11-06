@@ -192,7 +192,7 @@ export function InstallDialog(props: {
             ) : (
               <>
                 <div className="pl-hero" style={{ gap: "var(--space-3)" }}>
-                  <PluginAvatar view={{ origin: "plugin", name: confirm.preview.displayName }} big />
+                  <PluginAvatar view={{ origin: "plugin" }} big />
                   <div className="pl-hero-main">
                     <div style={{ fontSize: "var(--font-size-lg)", fontWeight: "var(--weight-semibold)" }}>{confirm.preview.displayName}</div>
                     <div className="pl-by">

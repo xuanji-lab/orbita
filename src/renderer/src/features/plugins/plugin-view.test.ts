@@ -8,7 +8,6 @@ import {
   filterEnabled,
   filterPlugins,
   groupPlugins,
-  initialOf,
   installedNamesOf,
   creatorAvailable,
   isActive,
@@ -157,7 +156,7 @@ describe("isActive / toggleTarget", () => {
   });
 });
 
-describe("contentsParts / sourceKey / legacyCounts / initialOf", () => {
+describe("contentsParts / sourceKey / legacyCounts", () => {
   test("里面有什么：技能 N · MCP · 脚本，为 0 的段不出现", () => {
     assert.deepEqual(contentsParts({ skills: 2, mcp: 1, scripts: true }), [
       { kind: "skills", count: 2 },
@@ -204,13 +203,6 @@ describe("contentsParts / sourceKey / legacyCounts / initialOf", () => {
       view({ id: "4", name: "4" }),
     ]);
     assert.deepEqual(counts, { skills: 2, mcp: 1 });
-  });
-
-  test("头像首字：按码点（不劈开代理对），空名给 ?", () => {
-    assert.equal(initialOf("pdf"), "P");
-    assert.equal(initialOf("文献追踪"), "文");
-    assert.equal(initialOf("𠮷野家"), "𠮷");
-    assert.equal(initialOf("  "), "?");
   });
 });
 
