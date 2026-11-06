@@ -11,6 +11,7 @@ import { mainWindows } from "../window/main-windows.ts";
 import {
   applyAutomationAct,
   applyAutomationCreate,
+  applyAutomationModeFromRow,
   applyAutomationPromote,
   applyAutomationUpdate,
   listAutomations,
@@ -23,6 +24,8 @@ export function registerAutomationIpc(deps: AutomationRequestDeps): void {
   ipcMain.handle(ipcChannels.automationUpdate, (_e, id: unknown, patch: unknown) => applyAutomationUpdate(deps, id, patch));
   ipcMain.handle(ipcChannels.automationAct, (_e, id: unknown, action: unknown) => applyAutomationAct(deps, id, action));
   ipcMain.handle(ipcChannels.automationPromote, (_e, sessionId: unknown) => applyAutomationPromote(deps, sessionId));
+  // 对话里「改权限」那一行的按钮：入参全当不可信，重验在 applyAutomationModeFromRow 里；结局以数据返回
+  ipcMain.handle(ipcChannels.automationModeFromRow, (_e, raw: unknown) => applyAutomationModeFromRow(deps, raw));
 }
 
 /** 主进程 → 所有主窗口：自动化变了，renderer 重拉列表 */

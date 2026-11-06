@@ -1413,7 +1413,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           turn: () => memory.turn ?? 1,
         })
       : []),
-    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId) : []),
+    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId, currentMode) : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,

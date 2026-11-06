@@ -2,8 +2,9 @@
  * 自动化的校验与状态转移（实验功能 automation）：两个入口，一套规则。
  *
  *   applyAutomationCreate / Update / Act / Promote —— 面板上用户的操作（automation:* IPC）
- *   applyAutomationRequest                          —— agent 的 automation_create / list / cancel 工具请求
+ *   applyAutomationRequest                          —— agent 的 automation_create / list / cancel / update 工具请求
  *                                                      （agent 进程 → automationRequest 事件 → 这里 → automationResult）
+ *   applyAutomationModeFromRow                      —— 用户点对话里「改权限」那一行的按钮（automation:mode-from-row）
  *
  * **信任边界在这里**：IPC 载荷与工具入参都是 `unknown`，逐字段校验后才落 store（renderer 不是可信输入，
  * 模型更不是）。分层同 `channel/requests.ts`：纯核 + 依赖注入（`AutomationRequestDeps`），可被
@@ -13,13 +14,17 @@
  *   - 用户在面板里建的 → 只能新开会话（new_session），权限档自己选（plan / skip，没有 manual）；
  *   - agent 在对话里建的 → **直接生效**（用户 2026-10-31 裁决），默认投回创建它的会话（this_session），
  *     必须有终点（没给默认 maxRuns = 12）；只能管当前会话所在工作区的；自动化新开的会话与子会话
- *     的请求一律拒（防递归）；新开会话的任务落最保守的 plan 档，用户要放行去面板里改。
+ *     的请求一律拒（防递归）；新开会话的任务默认落最保守的 plan 档。要放行（skip）：**agent 给的权限不能高于这条会话
+ *     此刻的权限**——会话本身是「放行」才直接改；「手动 / 计划」档只在对话里留一行让用户点「允许」（用户没同意过无人值守
+ *     写盘，纯靠对话里一句「可以」可能被网页 / 文件里伪造的文字骗）。
  * 条数护栏对两个入口一视同仁：全局 ≤ 20（所有状态都计），一条会话上活跃的 this_session 任务 ≤ 5。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import {
   AUTOMATION_AGENT_DEFAULT_MAX_RUNS,
   AUTOMATION_AGENT_MAX_RUNS_CAP,
+  AUTOMATION_MODE_DECLINED_KEPT,
+  AUTOMATION_MODE_ROW_ACTIONS,
   AUTOMATION_MAX_ACTIVE_PER_SESSION,
   AUTOMATION_MAX_TOTAL,
   AUTOMATION_PROMPT_MAX,
@@ -34,12 +39,17 @@ import {
   parseSchedule,
   type Automation,
   type AutomationAction,
+  type AutomationMode,
+  type AutomationModeRow,
+  type AutomationModeRowRequest,
+  type AutomationModeRowResult,
   type AutomationOutcome,
   type AutomationPlugin,
   type AutomationSchedule,
   type AutomationTarget,
   type AutomationToolOutcome,
 } from "../../shared/automation.ts";
+import type { PermissionMode } from "../../shared/permission.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
@@ -516,6 +526,28 @@ export async function applyAutomationRequest(
     };
   }
 
+  if (request.op === "update") {
+    if (typeof request.automationId !== "string" || request.automationId === "") return fail('"automationId" is required.');
+    if (!isAutomationMode(request.mode)) return fail('"mode" must be "plan" or "skip".');
+    const target = await deps.store.get(request.automationId);
+    // 别的工作区的当作不存在：不泄露它的存在，也不让这里的 agent 去动它（与 cancel 同一口径）
+    if (target === null || automationWorkspaceId(target) !== workspaceId) return fail("No such automation in this workspace.");
+    if (target.status === "completed") return fail(`Automation "${target.title}" is already finished; its permission no longer matters.`);
+    if (target.target.kind !== "new_session") {
+      return fail(
+        "Only an automation that opens a new session each run has a permission of its own. This one is sent back into its conversation and runs with that conversation's permission.",
+      );
+    }
+    const change = await changeModeForAgent(deps, target, request.mode, event.mode, meta.mode, now);
+    deps.notify();
+    return {
+      ok: true,
+      text: change.text,
+      automation: automationCardOf(change.automation),
+      ...(change.row === null ? {} : { modeRow: change.row }),
+    };
+  }
+
   // create
   const title = parseTitle(request.title);
   if (!title.ok) return title;
@@ -551,6 +583,7 @@ export async function applyAutomationRequest(
     if (!resolved.ok) return resolved;
     model = { providerId: resolved.providerId, modelId: resolved.modelId };
   }
+  if (request.mode !== undefined && !isAutomationMode(request.mode)) return fail('mode must be "plan" or "skip".');
   let plugin: AutomationPlugin | undefined;
   if (request.plugin !== undefined && request.plugin !== "") {
     const parsed = await checkPlugin(deps, { name: request.plugin }, workspaceId);
@@ -574,7 +607,8 @@ export async function applyAutomationRequest(
         ? { kind: "this_session", sessionId: meta.id, workspaceId }
         : { kind: "new_session", workspaceId },
     ...(model === undefined ? {} : model),
-    // 新开会话的无人值守运行落最保守的只读档；要放行写盘，用户在面板里改。this_session 不看这一档
+    // 新开会话的无人值守运行先落最保守的只读档；要放行写盘，下面按会话此刻的档决定直接改还是留一行让用户点。
+    // this_session 不看这一档
     mode: "plan",
     ...(plugin === undefined ? {} : { plugin }),
     status: "active",
@@ -589,6 +623,11 @@ export async function applyAutomationRequest(
     updatedAt: now,
   };
   await deps.store.insert(automation);
+  // 请求 skip：只对 new_session 有意义（this_session 跟会话自己的档）；直接改还是留一行让用户点，看会话此刻的档
+  const modeChange =
+    request.mode === "skip" && targetKind === "new_session"
+      ? await changeModeForAgent(deps, automation, "skip", event.mode, meta.mode, now)
+      : null;
   deps.notify();
   const ends = [
     maxRuns === undefined ? null : `${maxRuns} run(s)`,
@@ -596,6 +635,15 @@ export async function applyAutomationRequest(
   ]
     .filter((part): part is string => part !== null)
     .join(" or ");
+  // 没放行、也没留一行让用户点：提醒模型「要写文件先口头问」（留了行的，changeModeForAgent 的回执已经说了怎么办）
+  const askFirstNote =
+    targetKind === "new_session" && modeChange === null
+      ? (plugin === undefined
+          ? "If this task needs to write files, "
+          : // 插件脚本要往磁盘写数据，Plan 档的 bash / write 一律被拒，到点只能把旧数据 / 样例再快照一遍
+            "IMPORTANT — tell the user in your reply: scheduled runs are read-only by default, so the plugin's scripts cannot write new data and each run will only show the data that already exists. To really write data, ") +
+        'ask the user in one sentence whether it may run with write access; only after they agree, call automation_update with mode "skip". Never request "skip" without asking first. '
+      : "";
   return {
     ok: true,
     text:
@@ -603,14 +651,130 @@ export async function applyAutomationRequest(
       `first run ${new Date(nextRunAt).toISOString()}; ends after ${ends}. ` +
       (plugin === undefined ? "" : `Each run is told to use the plugin "${plugin.name}" and to end with show_plugin_board. `) +
       (targetKind === "this_session"
-        ? "Each time it is due, the instruction is sent back into this conversation (if this conversation is still busy then, it waits until it is idle). "
-        : "Each run opens a new session in this workspace, read-only (Plan) unless the user changes the permission in the Automations panel. ") +
-      // 插件脚本要往磁盘写数据，Plan 档的 bash / write 一律被拒，到点只能把旧数据 / 样例再快照一遍。
-      // 档位只能用户亲手放开（无人值守写盘不能由 agent 自己决定），所以要求模型把这件事转告用户
-      (plugin !== undefined && targetKind === "new_session"
-        ? 'IMPORTANT — tell the user in your reply: scheduled runs are read-only by default, so the plugin\'s scripts cannot write new data and each run will only show the data that already exists. For it to really write data, the user must change the permission of this automation to "Skip — unattended" in the Automations panel. Do not try to change it yourself. '
-        : "") +
+        ? "Each time it is due, the instruction is sent back into this conversation (if this conversation is still busy then, it waits until it is idle). " +
+          (request.mode === "skip" ? 'The "mode" you passed was ignored: a task sent back into this conversation runs with this conversation\'s own permission. ' : "")
+        : `Each run opens a new session in this workspace, ${modeChange?.automation.mode === "skip" ? "with full permissions (Skip, unattended)" : "read-only (Plan)"}. `) +
+      (modeChange === null ? "" : `${modeChange.text} `) +
+      askFirstNote +
       "Do not wait for it or poll — end your turn when you have nothing else to do now.",
-    automation: automationCardOf(automation),
+    automation: automationCardOf(modeChange === null ? automation : modeChange.automation),
+    ...(modeChange === null || modeChange.row === null ? {} : { modeRow: modeChange.row }),
   };
+}
+
+/* ---------- 改权限档：agent 一侧（带上限）与用户点那一行（用户的点头） ---------- */
+
+/**
+ * agent 要把一条新开会话的自动化调成 `requested`（调用方已验过 target 是 new_session、在本工作区、没结束）。
+ * - plan：永远直接改（只会更保守）；
+ * - skip：只有**这条会话此刻本来就是「放行」**才直接改。会话档以 agent 账本的为准（`sessionMode`，最新），
+ *   并与落盘的 meta 交叉核对，任一不是 skip 就不直接改——宁可多让用户点一下；
+ * - 否则不改，在对话里留一行 pending，回执告诉模型「结束这一轮，别重调」。
+ * 返回落盘后的自动化（pending 时是原样）、给模型的话、那一行（没有为 null：plan / 本来就是 skip）。
+ */
+async function changeModeForAgent(
+  deps: AutomationRequestDeps,
+  target: Automation,
+  requested: AutomationMode,
+  sessionMode: PermissionMode,
+  metaMode: PermissionMode,
+  now: number,
+): Promise<{ automation: Automation; text: string; row: AutomationModeRow | null }> {
+  const setMode = async (mode: AutomationMode): Promise<Automation> =>
+    (await deps.store.update(target.id, (existing) => (existing.mode === mode ? existing : { ...existing, mode, updatedAt: now }))) ?? target;
+  if (requested === "plan") {
+    const saved = await setMode("plan");
+    return { automation: saved, text: `Automation "${target.title}" now runs read-only (Plan).`, row: null };
+  }
+  if (target.mode === "skip") {
+    return { automation: target, text: `Automation "${target.title}" already runs with full permissions (Skip, unattended); nothing to change.`, row: null };
+  }
+  // 两处说法不一致时取更严的那个（只可能是 skip 对上别的）
+  const effectiveSession = sessionMode === "skip" ? metaMode : sessionMode;
+  const row = (state: AutomationModeRow["state"]): AutomationModeRow => ({
+    state,
+    requestId: deps.newId(),
+    automationId: target.id,
+    title: target.title,
+    sessionMode: effectiveSession,
+  });
+  if (sessionMode === "skip" && metaMode === "skip") {
+    const saved = await setMode("skip");
+    return {
+      automation: saved,
+      text:
+        `Automation "${target.title}" now runs with full permissions (Skip, unattended): each run can write files and run commands without asking. ` +
+        "A row in the conversation tells the user, with a button to put it back to read-only.",
+      row: row("applied"),
+    };
+  }
+  return {
+    automation: target,
+    text:
+      `The permission of "${target.title}" was NOT changed: this conversation is in "${effectiveSession}" mode, and an automation cannot be given more permission than the conversation that asks for it. ` +
+      "A row with an Allow button is now in the conversation for the user to click. End your turn and wait; do not call automation_update again.",
+    row: row("pending"),
+  };
+}
+
+/** 对话里那一行的按钮：入参一律当不可信，逐字段校验（IPC 与单测共用） */
+export function parseAutomationModeRowRequest(raw: unknown): Parsed<AutomationModeRowRequest> {
+  if (!isRecord(raw)) return fail("Invalid request.");
+  const sessionId = raw["sessionId"];
+  const automationId = raw["automationId"];
+  const requestId = raw["requestId"];
+  const action = raw["action"];
+  for (const [name, value] of [["sessionId", sessionId], ["automationId", automationId], ["requestId", requestId]] as const) {
+    if (typeof value !== "string" || value === "" || value.length > 200) return fail(`Invalid ${name}.`);
+  }
+  if (!(AUTOMATION_MODE_ROW_ACTIONS as readonly unknown[]).includes(action)) return fail("Invalid action.");
+  return {
+    ok: true,
+    value: { sessionId: sessionId as string, automationId: automationId as string, requestId: requestId as string, action: action as AutomationModeRowRequest["action"] },
+  };
+}
+
+/**
+ * 用户点对话里那一行的「允许 / 改回只读 / 保持只读」。**不信 renderer 给的任何东西**：会话还在、是根会话、
+ * 自动化还在且属于这条会话创建的 / 这个工作区、是新开会话型、没结束（允许时），逐项重验后才改。
+ * 这一下是用户亲手点的，所以不受「不高于会话权限」的限制——限制的是 agent 替用户做决定。
+ */
+export async function applyAutomationModeFromRow(deps: AutomationRequestDeps, raw: unknown): Promise<AutomationModeRowResult> {
+  if (!(await deps.enabled())) return { ok: false, reason: "disabled", detail: OFF.error };
+  const parsed = parseAutomationModeRowRequest(raw);
+  if (!parsed.ok) throw new Error(parsed.error);
+  const { sessionId, automationId, requestId, action } = parsed.value;
+  const meta = await deps.sessions.readMeta(sessionId);
+  if (meta === null || meta.automationId !== undefined || meta.parentId !== undefined) {
+    return { ok: false, reason: "noSession", detail: "The conversation no longer exists, or is not one that can manage automations." };
+  }
+  const target = await deps.store.get(automationId);
+  const mine =
+    target !== null &&
+    ((target.createdBy.kind === "agent" && target.createdBy.sessionId === sessionId) || automationWorkspaceId(target) === meta.workspaceId);
+  if (target === null || !mine) return { ok: false, reason: "notFound", detail: "No such automation in this conversation's workspace." };
+  if (target.target.kind !== "new_session") {
+    return { ok: false, reason: "notApplicable", detail: "This automation runs inside its conversation and has no permission of its own." };
+  }
+  if (action === "allow" && target.status === "completed") {
+    return { ok: false, reason: "finished", detail: `Automation "${target.title}" is already finished.` };
+  }
+  const now = deps.now();
+  const saved = await deps.store.update(automationId, (existing) => {
+    const rest = (existing.modeDeclined ?? []).filter((id) => id !== requestId);
+    const declined = [...rest, requestId].slice(-AUTOMATION_MODE_DECLINED_KEPT);
+    const next: Automation = { ...existing, updatedAt: now };
+    if (action === "allow") {
+      next.mode = "skip";
+      if (rest.length === 0) delete next.modeDeclined;
+      else next.modeDeclined = rest;
+    } else {
+      if (action === "readonly") next.mode = "plan";
+      next.modeDeclined = declined;
+    }
+    return next;
+  });
+  if (saved === null) return { ok: false, reason: "notFound", detail: "No such automation in this conversation's workspace." };
+  deps.notify();
+  return { ok: true };
 }
