@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { IconButton } from "../../shell/IconButton";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
@@ -140,7 +141,7 @@ export function TerminalPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <PanelTitle icon="square-terminal" title={t.terminal.title} />
+          <PanelTitle icon={FEATURE_ICON.terminal} title={t.terminal.title} />
           {/* 终端标签住在标题行中段（右栏统一方案 B：没有第二条工具行） */}
           {allIds.length > 0 && (
             <div className="cap-tabs cap-grow no-drag" role="tablist" aria-label={t.terminal.title}>
@@ -193,7 +194,7 @@ export function TerminalPanel(props: {
         </div>
       ) : (
         // 空态（PanelEmpty）：一句现状 + 出口；标题行的 + 是同一个动作
-        <PanelEmpty icon="square-terminal" exit={{ label: t.terminal.startOne, onClick: openTerminal }}>
+        <PanelEmpty icon={FEATURE_ICON.terminal} exit={{ label: t.terminal.startOne, onClick: openTerminal }}>
           {t.terminal.empty}
         </PanelEmpty>
       )}

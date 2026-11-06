@@ -38,6 +38,7 @@ import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, 
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { ProcessViewContext } from "./features/chat/process-view-context";
@@ -1190,14 +1191,14 @@ export function App() {
     // 遗留事项入口（收尾扫描的下游）
     {
       id: "carryovers",
-      icon: "hourglass" as const,
+      icon: FEATURE_ICON.carryovers,
       label: t.app.carryoversEntry(openCarryoverCount),
       lit: railSubviewLit(subviewState, "carryovers"),
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
     },
     {
       id: "archived",
-      icon: "archive" as const,
+      icon: FEATURE_ICON.archived,
       label: t.app.archivedEntry(archivedCount),
       lit: railSubviewLit(subviewState, "archived"),
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "archived")),
@@ -1206,7 +1207,7 @@ export function App() {
       // 受管浏览器是独立的沙盒窗口（不占右栏面板位）：点了就打开或聚焦它，没有「亮」的状态。
       // 它是 agent 的工具，这个入口给用户提前登录、看一眼 agent 停在哪
       id: "browser",
-      icon: "globe" as const,
+      icon: FEATURE_ICON.browser,
       label: t.rail.browser,
       lit: false,
       onClick: () => {
@@ -1219,7 +1220,7 @@ export function App() {
           {
             // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
             id: "memory" as const,
-            icon: "notebook-text" as const,
+            icon: FEATURE_ICON.memory,
             label: t.memory.rail,
             lit: overlay === "memory",
             onClick: () => setOverlay(overlay === "memory" ? null : "memory"),
@@ -1231,7 +1232,7 @@ export function App() {
           {
             // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
             id: "board" as const,
-            icon: "layout-dashboard" as const,
+            icon: FEATURE_ICON.board,
             label: t.rail.board,
             lit: overlay === "board",
             onClick: () => setOverlay(overlay === "board" ? null : "board"),
@@ -1240,7 +1241,7 @@ export function App() {
       : []),
     {
       id: "settings",
-      icon: "settings" as const,
+      icon: FEATURE_ICON.settings,
       label: t.common.settings,
       lit: overlay === "settings",
       onClick: () => setOverlay(overlay === "settings" ? null : "settings"),

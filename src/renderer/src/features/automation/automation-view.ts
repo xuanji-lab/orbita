@@ -19,6 +19,7 @@ import {
 } from "../../../../shared/automation.ts";
 import type { Messages } from "../../messages-en.ts";
 import type { IconName } from "../../shell/Icon.tsx";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
 export type AutomationMessages = Messages["automation"];
 
@@ -35,7 +36,7 @@ export function rowStateOf(automation: Automation): RowState {
 /** 状态 → 图标（状态优先图标与文字，颜色是第二信号）。running 的转圈由调用方给 Icon 的 spin */
 export const ROW_STATE_ICON: Record<RowState, IconName> = {
   running: "loader-circle",
-  active: "calendar-clock",
+  active: FEATURE_ICON.automation,
   paused: "pause",
   failed: "triangle-alert",
   completed: "circle-check",

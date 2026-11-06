@@ -125,6 +125,7 @@ import {
 import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
@@ -2369,7 +2370,7 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
   };
   const content = (
     <>
-      <Icon name="git-fork" size={12} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+      <Icon name={FEATURE_ICON.subsessions} size={12} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {text}
       </span>
@@ -2614,7 +2615,7 @@ function ComposerBar(props: {
       />
       {props.intentToggle !== null && (
         <Chip
-          icon="waypoints"
+          icon={FEATURE_ICON.intent}
           active={props.intentToggle.on}
           title={props.intentToggle.on ? t.composer.intentToggleOnHint : t.composer.intentToggleOffHint}
           onClick={() => props.intentToggle?.onToggle(!props.intentToggle.on)}
@@ -3490,7 +3491,7 @@ function UserBubble(props: {
             aria-pressed={memoryOpen === "used"}
             onClick={() => setMemoryOpen((open) => (open === "used" ? null : "used"))}
           >
-            <Icon name="brain-circuit" size={12} strokeWidth={1.8} />
+            <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
             {t.memory.used(usedMemories.length)}
           </button>
         )}
@@ -3502,7 +3503,7 @@ function UserBubble(props: {
             aria-pressed={memoryOpen === "remembered"}
             onClick={() => setMemoryOpen((open) => (open === "remembered" ? null : "remembered"))}
           >
-            {usedMemories.length === 0 && <Icon name="brain-circuit" size={12} strokeWidth={1.8} />}
+            {usedMemories.length === 0 && <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />}
             {t.memory.remembered(rememberedMemories.length)}
           </button>
         )}

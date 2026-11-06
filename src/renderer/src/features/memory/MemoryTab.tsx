@@ -1,5 +1,6 @@
 import { Icon } from "../../shell/Icon";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import { MemoryEntryCard } from "./MemoryEntryCard";
 import { rememberedTurns } from "./memory-view.ts";
@@ -23,7 +24,7 @@ export function MemoryTab(props: { sessionId: string | null }) {
   const session = useMemorySession(props.sessionId);
   const view = session.data;
 
-  if (props.sessionId === null) return <PanelEmpty icon="brain-circuit">{t.memory.noTask}</PanelEmpty>;
+  if (props.sessionId === null) return <PanelEmpty icon={FEATURE_ICON.memory}>{t.memory.noTask}</PanelEmpty>;
   if (session.error !== null && view === null) {
     return (
       <PanelEmpty tone="danger" exit={{ label: t.memory.retry, onClick: session.reload }}>
@@ -38,7 +39,7 @@ export function MemoryTab(props: { sessionId: string | null }) {
   return (
     <div className="mem-tab">
       {turns.length === 0 ? (
-        <PanelEmpty icon="brain-circuit" className="mem-empty" hint={t.memory.sessionEmptyHint}>
+        <PanelEmpty icon={FEATURE_ICON.memory} className="mem-empty" hint={t.memory.sessionEmptyHint}>
           {t.memory.sessionEmpty}
         </PanelEmpty>
       ) : (

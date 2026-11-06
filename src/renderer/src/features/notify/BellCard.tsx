@@ -4,6 +4,7 @@ import { useT } from "../../locale.ts";
 import { runStateLabel } from "./completion-notice.ts";
 import { StatusPie } from "../../shell/StatusPie";
 import { PanelEmpty } from "../../shell/PanelEmpty";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
 /** 清单里的一行：状态饼状态 + 会话名 + 工作区名（数据由 App 按 sessionRunState 算好） */
 export interface NoticeRow {
@@ -59,7 +60,7 @@ export function BellCard(props: {
         )}
       </div>
       {props.entries.length === 0 ? (
-        <PanelEmpty icon="bell" className="bell-card-empty">
+        <PanelEmpty icon={FEATURE_ICON.bell} className="bell-card-empty">
           {t.bell.empty}
         </PanelEmpty>
       ) : (

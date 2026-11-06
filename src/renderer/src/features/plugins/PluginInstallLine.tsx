@@ -12,6 +12,7 @@ import type { PluginInstallRow } from "@shared/plugin";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { refreshInstalledPlugins, useInstalledPluginNames } from "./installed-plugins.ts";
 import { rowFailureText, rowMode, rowReasonText, rowScopeText, rowSkillsText } from "./plugin-text.ts";
 import "./plugins.css";
@@ -76,7 +77,7 @@ export function PluginInstallLine(props: {
     <div className="pl-line" data-mode={mode} role="group" aria-label={t.aria}>
       <div className="pl-line-main">
         <Icon
-          name={mode === "installed" ? "circle-check" : mode === "uninstalled" ? "circle-off" : "blocks"}
+          name={mode === "installed" ? "circle-check" : mode === "uninstalled" ? "circle-off" : FEATURE_ICON.plugins}
           size={14}
           strokeWidth={1.8}
           className={mode === "installed" ? "pl-line-ic ok" : "pl-line-ic"}

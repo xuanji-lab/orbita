@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { RowHoverAction } from "../../shell/RowHoverAction";
@@ -321,7 +322,7 @@ export function ReviewPanel(props: {
               放不下时轨道压缩，页签组顺排 + 横滚渐隐退化 */}
           <div className="cap-tabs" role="tablist" aria-label={t.review.title}>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
-              <Icon name="file-diff" size={12} strokeWidth={1.8} />
+              <Icon name={FEATURE_ICON.review} size={12} strokeWidth={1.8} />
               {t.review.tabChanges}
             </button>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
@@ -330,7 +331,7 @@ export function ReviewPanel(props: {
             </button>
             {memoryOn && (
               <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
-                <Icon name="brain-circuit" size={12} strokeWidth={1.8} />
+                <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
                 {t.review.tabMemory}
               </button>
             )}
@@ -383,11 +384,11 @@ export function ReviewPanel(props: {
       ) : tab === "memory" ? (
         <MemoryTab sessionId={props.sessionId} />
       ) : props.sessionId === null ? (
-        <PanelEmpty icon="file-diff">{t.review.noTask}</PanelEmpty>
+        <PanelEmpty icon={FEATURE_ICON.review}>{t.review.noTask}</PanelEmpty>
       ) : loading && list === null ? (
         <PanelEmpty busy>{t.common.loading}</PanelEmpty>
       ) : list === null || (list.kind === "ok" && entries.length === 0) ? (
-        <PanelEmpty icon="file-diff" hint={t.review.emptyNoChangesDetail(source)}>
+        <PanelEmpty icon={FEATURE_ICON.review} hint={t.review.emptyNoChangesDetail(source)}>
           {t.review.emptyNoChanges}
         </PanelEmpty>
       ) : list.kind !== "ok" ? (

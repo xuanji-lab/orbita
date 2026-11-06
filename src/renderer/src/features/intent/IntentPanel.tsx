@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon.tsx";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Menu, type MenuItem } from "../../shell/Menu.tsx";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel.tsx";
 import { PanelEmpty } from "../../shell/PanelEmpty.tsx";
@@ -264,8 +265,8 @@ export function IntentPanel(props: {
 
   if (rounds.length === 0 && props.liveRun === null) {
     return (
-      <RightPanelFrame header={<PanelTitle icon="waypoints" title={t.intentPanel.title} />} contentKey="empty">
-        <PanelEmpty icon="waypoints">{t.intentPanel.emptyNoTurns}</PanelEmpty>
+      <RightPanelFrame header={<PanelTitle icon={FEATURE_ICON.intent} title={t.intentPanel.title} />} contentKey="empty">
+        <PanelEmpty icon={FEATURE_ICON.intent}>{t.intentPanel.emptyNoTurns}</PanelEmpty>
       </RightPanelFrame>
     );
   }
@@ -295,7 +296,7 @@ export function IntentPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <PanelTitle icon="waypoints" title={t.intentPanel.title} />
+          <PanelTitle icon={FEATURE_ICON.intent} title={t.intentPanel.title} />
           <Menu
             items={roundItems}
             placement="below"
