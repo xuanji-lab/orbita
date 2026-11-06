@@ -416,6 +416,56 @@
   color: var(--color-text-tertiary);
 }
 
+/* ---------- 「正在做」组（还没装的草稿）：列表最上面一组，行与已装的行同一套 ---------- */
+
+.pl-drafts {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 全屏版：已装的列表树在宽档被藏起来（卡片墙顶替它），「正在做」没有墙版，宽窄都显示这一棵 */
+.pl-page[data-chrome="page"] .pl-grp.pl-dgrp {
+  display: block;
+}
+
+/* 组头在卡片外，不吃卡片底里的左右内边距（同 .pl-wall .pl-gh） */
+.pl-drafts > .pl-gh {
+  padding: 0 var(--space-1);
+}
+
+.pl-draft-main {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.pl-draft-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pl-draft-head b {
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 清单有问题：图标 + 文字（不只靠颜色） */
+.pl-draft-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+
+.pl-draft-meta {
+  font-size: var(--font-size-xs);
+}
+
 .pl-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

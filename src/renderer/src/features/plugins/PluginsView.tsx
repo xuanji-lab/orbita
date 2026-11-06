@@ -20,19 +20,22 @@
  * 选中某个插件时同一槽里换成详情（一张长页）；详情里点「打开看板」右栏换成看板视图；旧技能 / MCP 面板本期保留不动。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { parsePluginViewId, type PluginView } from "@shared/plugin";
+import { parsePluginViewId, type PluginDraftEntry, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import type { CardSize, PluginsPageSettings } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { relativeTime } from "../../shell/relative-time";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
+import { filterDrafts, groupDrafts, type PluginDraftTarget } from "./plugin-draft.ts";
+import { useDraftList } from "./useDraftList.ts";
 import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
@@ -68,14 +71,19 @@ export function PluginsView(props: {
   /** 右栏版收到的请求：选中该插件（并按请求进它的看板视图）；处理完调 onOpenRequestHandled（全屏版不传） */
   openRequest?: PluginOpenRequest | null;
   onOpenRequestHandled?: () => void;
-  /** 正在做的草稿（工作区内插件文件夹的路径）；非 null 时右栏版显示「正在做」视图（全屏版不传） */
-  draft?: string | null;
+  /** 正在看的草稿；非 null 时右栏版显示「正在做」长页（全屏版不传）。来源：agent 刚预览了它，或用户在列表的「正在做」组里点了它 */
+  draft?: PluginDraftTarget | null;
   onLeaveDraft?: () => void;
+  /** 点「正在做」组里的一行：App 把它设成要看的草稿（全屏版还要先退出设置、打开右栏插件页） */
+  onOpenDraft: (draft: PluginDraftTarget) => void;
+  /** 点「正在做」组里的「回到对话」：打开做它的那条会话（全屏版随之退出设置） */
+  onOpenSession: (sessionId: string) => void;
 }) {
   const messages = useT();
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
+  const draftList = useDraftList(true);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
   // 右栏里看的是详情还是看板视图：换了插件就回详情
   const [boardOpen, setBoardOpen] = useState(false);
@@ -137,6 +145,17 @@ export function PluginsView(props: {
     [state.plugins, query, onlyEnabled],
   );
   const groups = useMemo(() => groupPlugins(filtered, workspaces), [filtered, workspaces]);
+  // 「正在做」：还没装的草稿不算「已启用」，「仅显示已启用」开着时不列
+  const draftGroups = useMemo(
+    () => (onlyEnabled ? [] : groupDrafts(filterDrafts(draftList.drafts, query), workspaces, props.currentWorkspaceId)),
+    [draftList.drafts, query, workspaces, props.currentWorkspaceId, onlyEnabled],
+  );
+  // 从草稿长页回到列表（或换了在看的草稿）：agent 这期间可能改过清单，重读一次
+  const viewedDraftPath = props.draft?.path ?? null;
+  const refreshDrafts = draftList.refresh;
+  useEffect(() => {
+    void refreshDrafts();
+  }, [viewedDraftPath, refreshDrafts]);
   const legacy = legacyCounts(state.plugins);
   const list = describeList(state.load, state.plugins.length);
   const filtering = query.trim() !== "";
@@ -241,6 +260,16 @@ export function PluginsView(props: {
         </div>
       )}
 
+      {draftList.error !== null && (
+        <div className="pl-note danger" role="alert">
+          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          <span>
+            {t.draftsLoadFailed} {draftList.error}
+          </span>
+        </div>
+      )}
+      {draftGroups.length > 0 && <DraftsSection groups={draftGroups} onOpen={props.onOpenDraft} onOpenSession={props.onOpenSession} />}
+
       {list.body === "loading" && <p className="pl-empty">{messages.common.loading}</p>}
       {list.body === "empty" && (
         <div className="pl-empty">
@@ -304,7 +333,7 @@ export function PluginsView(props: {
 
   // 正在做的草稿优先于列表与详情（智能体刚预览了它，用户要看的就是它）；点返回回到列表
   if (rail && props.draft !== undefined && props.draft !== null) {
-    return <PluginDraftView path={props.draft} workspaceId={props.currentWorkspaceId} onBack={() => props.onLeaveDraft?.()} />;
+    return <PluginDraftView path={props.draft.path} workspaceId={props.draft.workspaceId} onBack={() => props.onLeaveDraft?.()} />;
   }
 
   if (rail) {
@@ -532,6 +561,79 @@ function PluginRow(props: { view: PluginView; onOpen: () => void; onToggle: () =
         <span className="pl-from">{sourceLabel}</span>
       </button>
       <PluginSwitch checked={active} label={active ? t.toggleOff(view.name) : t.toggleOn(view.name)} onChange={props.onToggle} />
+    </div>
+  );
+}
+
+/**
+ * 「正在做」：还没装、但已经有清单的插件文件夹，列表最上面一组（有草稿才出现），按工作区分组。
+ * 用户中途离开、之后回来接着做的入口——草稿不是只活在对话里的东西。
+ */
+function DraftsSection(props: {
+  groups: ReturnType<typeof groupDrafts>;
+  onOpen: (draft: PluginDraftTarget) => void;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  const t = useT().plugins;
+  const total = props.groups.reduce((sum, group) => sum + group.items.length, 0);
+  return (
+    <section className="pl-drafts" aria-label={t.draftsTitle}>
+      <div className="pl-gh">
+        <Icon name="pencil-line" size={14} strokeWidth={1.8} />
+        <b>{t.draftsTitle}</b>
+        <span className="pl-gh-count">{t.draftsCount(total)}</span>
+      </div>
+      {props.groups.map((group) => (
+        <section key={group.workspace.id} className="pl-grp pl-dgrp" aria-label={group.workspace.name}>
+          <div className="pl-gh">
+            <Icon name="folder" size={14} strokeWidth={1.8} />
+            <b>{group.workspace.name}</b>
+            <span className="pl-gh-count">{t.draftsCount(group.items.length)}</span>
+          </div>
+          {group.items.map((entry) => (
+            <DraftRow key={entry.path} entry={entry} onOpen={props.onOpen} onOpenSession={props.onOpenSession} />
+          ))}
+        </section>
+      ))}
+    </section>
+  );
+}
+
+function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftTarget) => void; onOpenSession: (sessionId: string) => void }) {
+  const messages = useT();
+  const t = messages.plugins;
+  const { entry } = props;
+  const meta = [t.draftEdited(relativeTime(entry.updatedAt, messages)), ...(entry.sessionTitle === null ? [] : [t.draftMadeIn(entry.sessionTitle)])].join(" · ");
+  const { sessionId } = entry;
+  return (
+    <div className="pl-row" data-draft="true">
+      <button
+        type="button"
+        className="pl-row-main pl-draft-main"
+        title={entry.manifestProblem === null ? meta : `${t.draftManifestProblem}: ${entry.manifestProblem}`}
+        onClick={() => props.onOpen({ path: entry.path, workspaceId: entry.workspaceId })}
+      >
+        <PluginAvatar view={{ origin: "plugin", name: entry.displayName }} />
+        <span className="pl-name">
+          <span className="pl-draft-head">
+            <b>{entry.displayName}</b>
+            {entry.manifestProblem !== null && (
+              <span className="pl-draft-flag">
+                <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
+                {t.draftManifestProblem}
+              </span>
+            )}
+          </span>
+          <small>{entry.description === "" ? t.notChatted : entry.description}</small>
+          <small className="pl-draft-meta">{meta}</small>
+        </span>
+      </button>
+      {sessionId !== null && (
+        <button type="button" className="pl-btn" title={t.draftGoToChatTip(entry.sessionTitle)} onClick={() => props.onOpenSession(sessionId)}>
+          <Icon name="message-square" size={13} strokeWidth={1.8} />
+          {t.draftGoToChat}
+        </button>
+      )}
     </div>
   );
 }

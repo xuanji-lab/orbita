@@ -34,7 +34,7 @@ import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import { recallPanel, rememberPanel, resolvePanel, type PanelMemory } from "./shell/right-panel-memory.ts";
-import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
+import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
@@ -1010,9 +1010,11 @@ export function App() {
   // 全局周看板（实验功能 plugins 的一部分）：开关关掉时盖层退回聊天
   if (overlay === "board" && !pluginsOn) setOverlay(null);
   // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
-  // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。只记在 renderer 内存里，
-  // 重开应用后没有草稿视图——草稿本来就是对话进行时的东西，文件还在，agent 再 preview 一次就回来
+  // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。这份只记在 renderer 内存里、只管「agent 预览时自动切右栏」；
+  // 草稿本身是磁盘上的文件夹，用户中途离开 / 重开应用后回来的入口是插件页列表最上面的「正在做」组（主进程 plugin:drafts 扫出来）
   const [pluginDrafts, setPluginDrafts] = useState<PluginDrafts>(new Map());
+  // 用户在「正在做」组里点开的草稿（优先于 agent 预览的那一条）；点返回清掉
+  const [openedDraft, setOpenedDraft] = useState<PluginDraftTarget | null>(null);
   const draftContext = useRef({ viewed: mainSessionId, enabled: pluginsOn });
   draftContext.current = { viewed: mainSessionId, enabled: pluginsOn };
   useEffect(
@@ -1035,6 +1037,7 @@ export function App() {
       setPluginOpenRequest((previous) => ({ name, nonce: (previous?.nonce ?? 0) + 1, board }));
       // 要看的是已装的这个插件：这条会话若正挂着草稿视图，先让位给它
       if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
+      setOpenedDraft(null);
       setRightPanel("plugins");
     },
     [mainSessionId],
@@ -1058,8 +1061,26 @@ export function App() {
     [],
   );
   const leavePluginDraft = useCallback(() => {
+    setOpenedDraft(null);
     if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
   }, [mainSessionId]);
+  /** 「正在做」组里点一行：右栏打开插件页，进该草稿的长页（设置里的全屏版点时先退出设置） */
+  const openPluginDraft = useCallback((draft: PluginDraftTarget) => {
+    setOverlay(null);
+    setOpenedDraft(draft);
+    setRightPanel("plugins");
+  }, []);
+  /** 「正在做」组里的「回到对话」：退出设置、打开做这个插件的那条会话 */
+  const openDraftSession = useCallback(
+    (sessionId: string) => {
+      setOverlay(null);
+      void session.openSession(sessionId);
+    },
+    [session],
+  );
+  const sessionDraft = draftOf(pluginDrafts, mainSessionId);
+  const shownDraft: PluginDraftTarget | null =
+    openedDraft ?? (sessionDraft === null ? null : { path: sessionDraft, workspaceId: session.workspaceId });
   const resolvedPanel = resolvePanel(rightPanel, experimentalFeatures);
   if (resolvedPanel !== rightPanel) setRightPanel(resolvedPanel);
   const shownSettingsTab = resolveSettingsTab(settingsTab, experimentalFeatures);
@@ -1319,6 +1340,8 @@ export function App() {
                     setOverlay(null);
                     openPlugin(name, true);
                   },
+                  onOpenDraft: openPluginDraft,
+                  onOpenSession: openDraftSession,
                 }}
                 onTab={setSettingsTab}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
@@ -1462,8 +1485,10 @@ export function App() {
                   onOpenBoard={(name) => openPlugin(name, true)}
                   openRequest={pluginOpenRequest}
                   onOpenRequestHandled={handlePluginOpenHandled}
-                  draft={draftOf(pluginDrafts, mainSessionId)}
+                  draft={shownDraft}
                   onLeaveDraft={leavePluginDraft}
+                  onOpenDraft={openPluginDraft}
+                  onOpenSession={openDraftSession}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
