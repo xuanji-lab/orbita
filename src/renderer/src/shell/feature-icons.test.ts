@@ -36,7 +36,6 @@ const OK_FILES = new Set(["shell/Icon.tsx", "shell/feature-icons.ts"]);
 const GENERIC_ICON_NAMES = new Map<string, string>([
   ["folder", "目录的通用图标（文件树、工作区行、附件 chip）；「文件」面板的功能表面走表"],
   ["globe", "网页/全局范围的通用图标（web 文件、全局作用域、browser_* 工具行）；「浏览器」的入口与设置页签走表"],
-  ["book-open", "单个技能/文档的通用图标（聊天里的技能行、上下文清单的技能行、插件工作流）；「技能与 MCP」的入口与面板走表"],
   ["archive", "词同时是普通字符串（侧栏的 step 名、迁移视图的归档徽记），字面量扫描分不出；「已归档」的入口与空态走表"],
   ["settings", "词同时是 overlay id（overlay === \"settings\"），字面量扫描分不出；「设置」的入口走表"],
   ["hourglass", "「等待」的通用义（进度面板计划里「在等你 / 等外部」的步，设计稿定的图标）；「以后再做」的入口与空态走表"],

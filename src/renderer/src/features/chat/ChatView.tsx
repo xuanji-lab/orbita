@@ -119,8 +119,6 @@ import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "
 import { Composer } from "../../shell/Composer";
 import {
   insertToken,
-  panelInsertPosition,
-  type PanelInsertRequest,
   type TokenPickResult,
 } from "../../shell/panel-token.ts";
 import { SessionCard } from "../../shell/SessionCard";
@@ -685,15 +683,14 @@ function useSkillIndex(): {
 }
 
 /*
- * 右栏选取回执与行内选用插入的消费水位（模块级）：只有主槽的 ChatView 拿
- * tokenPickResult / panelInsert，不会串合；但主槽会在设置页来回切时重挂——
+ * 右栏选取回执的消费水位（模块级）：只有主槽的 ChatView 拿
+ * tokenPickResult，不会串合；但主槽会在设置页来回切时重挂——
  * 实例 ref 会归零，旧回执被重放、token 插两遍。水位放模块级，重挂也记得
  * 消费过哪一条。
  */
 let consumedPickNonce = 0;
-let consumedPanelInsertNonce = 0;
 
-/** 主槽输入框（选取回执与行内选用的插入目标）：面板 / 抽屉里的 Composer 不算 */
+/** 主槽输入框（选取回执的插入目标）：面板 / 抽屉里的 Composer 不算 */
 const mainComposerTextarea = (): HTMLTextAreaElement | null =>
   document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
@@ -797,12 +794,6 @@ function ChatViewBody(props: {
    * 只有主槽的 ChatView 拿到它。
    */
   tokenPickResult?: TokenPickResult | null;
-  /**
-   * 右栏行内「选用」按钮的一次性插入请求（nonce 单调递增，同 tokenPickResult 的
-   * 先例）：token 插到输入框**当前光标处**（从未聚焦过则落到草稿末尾），焦点回
-   * 输入框。面板不关——浏览态可以连插几条。只有主槽的 ChatView 拿到它。
-   */
-  panelInsert?: PanelInsertRequest | null;
   /** 意图系统（实验功能）：新会话的召回默认（settings.intent.newSessionOn 已解缺省）。
    *  可选：副槽（抽屉 / 子会话面板）不传——那里不出开关 */
   intentNewSessionDefault?: boolean;
@@ -867,29 +858,6 @@ function ChatViewBody(props: {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tokenPickResult]);
-
-  // ── 行内「选用」按钮的插入：token 落到输入框当前光标处（panel-token.ts）──
-  // 光标从 DOM 读（失焦后 selectionStart 仍停在最后一次的位置）；「从未聚焦过」
-  // 的判定在 panelInsertPosition（纯函数，有测试）
-  useEffect(() => {
-    const request = props.panelInsert;
-    if (request == null || request.nonce <= consumedPanelInsertNonce) return;
-    consumedPanelInsertNonce = request.nonce;
-    requestAnimationFrame(() => {
-      const el = mainComposerTextarea();
-      const position = panelInsertPosition(el === null ? 0 : el.selectionStart, session.draft.length);
-      const next = insertToken(session.draft, position, request.token);
-      // 同选取回执：execCommand 保撤销栈，被拒 / 不在就退回直接写
-      if (el === null) {
-        session.setDraft(next.value);
-        return;
-      }
-      el.focus();
-      el.setSelectionRange(position, position);
-      if (!document.execCommand("insertText", false, next.text)) session.setDraft(next.value);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.panelInsert]);
 
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。

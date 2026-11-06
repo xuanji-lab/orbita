@@ -34,7 +34,7 @@ function entries(on: Switches): Item[] {
     ...(on.subsessions ? [item("subsessions", "session")] : []),
     item("terminal", "agent"),
     item("browser", "agent"),
-    ...(on.plugins ? [item("plugins", "agent")] : [item("abilities", "agent")]),
+    ...(on.plugins ? [item("plugins", "agent")] : []),
     ...(on.intent ? [item("intent", "agent")] : []),
     ...(on.automation ? [item("automation", "agent")] : []),
     item("carryovers", "shelf", true),
@@ -66,9 +66,9 @@ describe("layoutRail", () => {
     assert.deepEqual(ids(layout.stack[1]?.items ?? []), ["terminal", "browser", "plugins", "intent", "automation"]);
   });
 
-  it("plugins 关：技能与 MCP 顶替插件，看板不出现，右下只剩设置", () => {
+  it("plugins 关：没有插件入口（技能与 MCP 的面板已并入插件页，不再单列），看板不出现，右下只剩设置", () => {
     const layout = layoutRail(entries({ subsessions: false, plugins: false, intent: false, automation: false }));
-    assert.deepEqual(ids(layout.stack[1]?.items ?? []), ["terminal", "browser", "abilities"]);
+    assert.deepEqual(ids(layout.stack[1]?.items ?? []), ["terminal", "browser"]);
     assert.deepEqual(ids(layout.dock), ["settings"]);
   });
 
@@ -136,8 +136,8 @@ describe("结构守卫", () => {
     assert.deepEqual(inMore, ["carryovers", "archived", "bell"]);
   });
 
-  it("plugins 开着时没有「技能与 MCP」入口，关着时保留", () => {
-    assert.match(rail, /props\.pluginsAvailable\s*\?\s*\[\]\s*:\s*\[\{ id: "abilities"/);
+  it("右栏没有单列的「技能与 MCP」入口（插件页就是它们的面板）", () => {
+    assert.doesNotMatch(rail, /id: "abilities"/);
   });
 
   it("组名登记齐：RAIL_GROUP_IDS 每一组在中英文案里都有名字（读屏的 group 标签）", () => {

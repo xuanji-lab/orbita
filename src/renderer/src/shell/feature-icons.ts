@@ -9,7 +9,7 @@
  * `feature-icons.test.ts` 会拦下渲染层里新出现的字面量（撞通用义的少数名字有放行档，见该测试）。
  *
  * 键名跟功能走，不跟右栏条目的 id 走：task=这条任务（右栏 id 是 context）、
- * carryovers=以后再做、abilities=技能与 MCP。加新功能先在这里登记一行，再在表面里引用。
+ * carryovers=以后再做。加新功能先在这里登记一行，再在表面里引用。
  */
 import type { IconName } from "./Icon.tsx";
 
@@ -26,8 +26,6 @@ export const FEATURE_ICON = {
   plugins: "blocks",
   /** 看板（全局周看板） */
   board: "layout-dashboard",
-  /** 技能与 MCP（插件页把它们当插件显示，入口图标与「插件」不同） */
-  abilities: "book-open",
   /** 审查改动 */
   review: "file-diff",
   /** 文件面板（注意 folder 同时是「目录」的通用图标，通用处不走表） */

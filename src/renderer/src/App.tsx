@@ -26,7 +26,6 @@ import {
 import { SettingsView } from "./features/settings/SettingsView";
 import { BoardWeekView } from "./features/board/BoardWeekView";
 import { resolveSettingsTab, type SettingsTab } from "./features/settings/settings-tabs.ts";
-import { useSkills } from "./features/skills/useSkills";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
@@ -39,11 +38,10 @@ import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
-import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
+import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
-import { AbilitiesPanel } from "./features/abilities/AbilitiesPanel";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
 import {
   AutomationContext,
@@ -848,13 +846,16 @@ export function App() {
   const tokenPickNonceRef = useRef(0);
   /** 发起号：面板可能已开着，选取态可能已在——靠它重新聚焦/重置 */
   const [tokenPickRequest, setTokenPickRequest] = useState(0);
+  // 选取态开在插件面板里；插件功能（实验开关）关着时没有面板可开：返回 false，Composer 就把输入的 / 留着
+  const pluginsAvailable = settings.experimentalFeatures?.["plugins"] === true;
   const openTokenPicker = useCallback((position: number): boolean => {
+    if (!pluginsAvailable) return false;
     tokenPickAnchorRef.current = position;
     setTokenPickerOn(true);
     setTokenPickRequest((n) => n + 1);
-    setRightPanel("abilities");
+    setRightPanel("plugins");
     return true;
-  }, []);
+  }, [pluginsAvailable]);
   const finishTokenPick = useCallback(
     (token: string | null): void => {
       // 锚点丢失（面板被切走等）就落到草稿末尾——选取的意图仍是「插进来」
@@ -869,33 +870,16 @@ export function App() {
   );
   // 面板被切走 / 关掉（rail 点了别的、× 、全局 Esc）：选取态跟着退，锚点一并丢
   useEffect(() => {
-    if (tokenPickerOn && rightPanel !== "abilities") {
+    if (tokenPickerOn && rightPanel !== "plugins") {
       setTokenPickerOn(false);
       tokenPickAnchorRef.current = null;
     }
   }, [rightPanel, tokenPickerOn]);
-  // Tab 在能力面板里轮换「全部 / 技能 / MCP」页签，不再经这里换面板
-  const abilityPicker: TokenPickerControl = {
+  const tokenPicker: TokenPickerControl = {
     onSelect: finishTokenPick,
     onCancel: () => finishTokenPick(null),
     request: tokenPickRequest,
   };
-  /** 能力面板的「这个工作区」：主槽会话所在的（首页 = 输入框选着的）；可用性与 Skill 开关都按它 */
-  const abilityWorkspace = useMemo(() => {
-    const found = session.workspaces.find((w) => w.id === session.workspaceId);
-    return found === undefined ? null : { id: found.id, name: found.name };
-  }, [session.workspaces, session.workspaceId]);
-
-  // ── 面板行内「插入」按钮的插入（panel-token.ts）─────────────────
-  // 能力面板行上（与 MCP 服务详情里）的插入键：token 落到主槽输入框当前
-  // 光标处（从未聚焦过则草稿末尾）、焦点回输入框。与选取的锚点回执分开走：
-  // 按钮是浏览态入口，面板不关，可以连插几条
-  const [panelInsert, setPanelInsert] = useState<PanelInsertRequest | null>(null);
-  const panelInsertNonceRef = useRef(0);
-  const insertPanelToken = useCallback((token: string): void => {
-    panelInsertNonceRef.current += 1;
-    setPanelInsert({ token, nonce: panelInsertNonceRef.current });
-  }, []);
 
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
   // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板内部
@@ -952,22 +936,6 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
-  // 能力面板（Skills + MCP 一张列表）用这个 hook：skills 与 servers 都在里面，面板开着才读盘。
-  // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
-  // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
-  const skills = useSkills(shownPanel === "abilities", session.workspaces, settings.experimentalFeatures?.["plugins"] === true);
-
-  /**
-   * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
-   * 创建走对话里的 create_skill 工具。**面板不关**（用户可能对着现有 skill 参考），
-   * 新会话落在当前 workspace（有的话，agent 的默认 scope 才对）。
-   */
-  const createSkillDraft = useCallback(() => {
-    const intent = session.workspaces.find((w) => w.id === session.workspaceId);
-    if (intent !== undefined) session.newTaskIn(intent);
-    else session.newTask();
-    session.setDraft(t.app.skillDraft);
-  }, [session, t]);
   /**
    * 「和智能体一起做一个」（插件页）：在当前工作区（没有则 Home）新开一条任务，输入框预填一句引导，
    * 开头的 `/skill:plugin-creator` 点名内置的做插件技能（发送时由主进程展开成指令块）。
@@ -1350,7 +1318,6 @@ export function App() {
                 scrollToEndHotkey
                 onSlashSpace={openTokenPicker}
                 tokenPickResult={tokenPickResult}
-                panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
                 onOpenMemoryReview={openMemoryReview}
@@ -1397,14 +1364,6 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   onOpenInFiles={focus.openFile}
                   memoryFocus={memoryFocus}
-                />
-              ) : shownPanel === "abilities" ? (
-                <AbilitiesPanel
-                  skills={skills}
-                  workspace={abilityWorkspace}
-                  onCreateSkill={createSkillDraft}
-                  picker={tokenPickerOn ? abilityPicker : undefined}
-                  onInsert={insertPanelToken}
                 />
               ) : shownPanel === "automation" ? (
                 <AutomationPanel
@@ -1476,6 +1435,7 @@ export function App() {
                   onLeaveDraft={leavePluginDraft}
                   onOpenDraft={openPluginDraft}
                   onOpenSession={openDraftSession}
+                  picker={tokenPickerOn ? tokenPicker : undefined}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
@@ -1551,7 +1511,6 @@ export function App() {
 const PANEL_USAGE_KEY_OF: Partial<Record<RightPanelKind, PanelUsageKey>> = {
   files: "files",
   review: "review",
-  abilities: "abilities",
   terminal: "terminal",
   drawer: "sidechat",
   subsessions: "subsessions",

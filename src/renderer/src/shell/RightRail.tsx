@@ -39,8 +39,6 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
 export type RightPanelKind =
   | "files"
   | "review"
-  /** 能力：Skills 与 MCP 服务一张列表（2026-10-30 合并，原先是 "skills" | "mcp" 两个面板） */
-  | "abilities"
   | "terminal"
   | "drawer"
   | "subsessions"
@@ -175,11 +173,7 @@ export function RightRail(props: {
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
     { id: "terminal", group: "agent", icon: FEATURE_ICON.terminal, label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
     ...fromApp("browser", { group: "agent" }),
-    // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
-    // 插件页已把技能与 MCP 当插件显示：plugins 开着时不再单列这个入口
-    ...(props.pluginsAvailable
-      ? []
-      : [{ id: "abilities", group: "agent" as const, icon: FEATURE_ICON.abilities, label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") }]),
+    // 智能体会什么：插件页把技能与 MCP 也当插件显示，是技能 / MCP 的唯一面板
     ...(props.pluginsAvailable
       ? [{ id: "plugins", group: "agent" as const, icon: FEATURE_ICON.plugins, label: t.rail.plugins, lit: props.panel === "plugins", onSelect: toggle("plugins") }]
       : []),

@@ -17,9 +17,11 @@
  * 本期：页签「发现」是计划中（显示、禁用、写明）；「已装」按工作区分组——
  * 真插件、你原来的技能、你原来的 MCP 都是这张表里的一行（旧的不搬文件，只是投影），
  * 行尾开关、点行进详情。「接入本地插件」打开安装确认（模态框，两种外壳都一样）。
+ * 「/ + 空格」选取态（右栏版、App 传 picker）：同一张列表换成选取排法——顶上搜索框接筛选、↑↓ 选、↵ 插入整个插件、
+ * → 展开里面的技能、Esc 取消；这个工作区没启用的排下面灰着、选了只提示（PluginPicker.tsx、plugin-picker.ts）。
  * 选中某个插件时同一槽里换成详情（一张长页）；详情里点「打开看板」右栏换成看板视图；旧技能 / MCP 面板本期保留不动。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parsePluginViewId, type PluginDraftEntry, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import type { CardSize, PluginsPageSettings } from "@shared/settings";
@@ -29,12 +31,15 @@ import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { relativeTime } from "../../shell/relative-time";
+import type { TokenPickerControl } from "../../shell/panel-token.ts";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
 import { PluginAvatar, PluginSwitch } from "./PluginParts.tsx";
+import { PluginPickerBar, PluginPickerGroup } from "./PluginPicker.tsx";
+import { activateRow, buildPicker, clampPick, collapseRow, expandRow, indexOfPlugin, movePick, type PickerOutcome } from "./plugin-picker.ts";
 import { filterDrafts, groupDrafts, type PluginDraftTarget } from "./plugin-draft.ts";
 import { useDraftList } from "./useDraftList.ts";
 import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupPlugins, legacyCounts, sourceKey, toggleTarget, isActive, type PluginGroup } from "./plugin-view.ts";
@@ -79,6 +84,8 @@ export function PluginsView(props: {
   onOpenDraft: (draft: PluginDraftTarget) => void;
   /** 点「正在做」组里的「回到对话」：打开做它的那条会话，右栏直接是该草稿的长页（全屏版随之退出设置） */
   onOpenSession: (sessionId: string, draftPath: string) => void;
+  /** 「/ + 空格」选取态：只有主槽右栏的 App 提供 */
+  picker?: TokenPickerControl;
 }) {
   const messages = useT();
   const t = messages.plugins;
@@ -115,6 +122,119 @@ export function PluginsView(props: {
   useEffect(() => {
     if (selectedId !== null && state.load.kind === "ready" && selected === null) setSelectedId(null);
   }, [selectedId, selected, state.load.kind]);
+
+  // ── 「/ + 空格」选取态（plugin-picker.ts 排行与按键语义；这里管状态、焦点与画）─────────────
+  const { picker } = props;
+  const picking = rail && picker !== undefined;
+  const [pickIndex, setPickIndex] = useState(0);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pickNotice, setPickNotice] = useState<string | null>(null);
+  const pickListRef = useRef<HTMLDivElement>(null);
+  // 焦点：「/ + 空格」后落到搜索框。搜索框住在工具栏的右栏胶囊里（portal）：面板从关着打开时胶囊这一拍才挂上，
+  // 只在 effect 里 focus 会落空，所以记一个「欠一次聚焦」，输入框真挂上时（回调 ref）补上
+  const filterEl = useRef<HTMLInputElement | null>(null);
+  const focusOwed = useRef(false);
+  const filterRef = useCallback((el: HTMLInputElement | null) => {
+    filterEl.current = el;
+    if (el !== null && focusOwed.current) {
+      focusOwed.current = false;
+      el.focus();
+    }
+  }, []);
+  const { draft: shownDraftTarget, onLeaveDraft } = props;
+  useEffect(() => {
+    if (picker === undefined) return;
+    // 每次「/ + 空格」从干净的状态起：回列表（不在详情 / 草稿里）、清词、不展开、亮第一行
+    setSelectedIdRaw(null);
+    setBoardOpen(false);
+    if (shownDraftTarget != null) onLeaveDraft?.();
+    setQuery("");
+    setPickIndex(0);
+    setExpandedId(null);
+    setPickNotice(null);
+    focusOwed.current = true;
+    const el = filterEl.current;
+    if (el !== null) {
+      focusOwed.current = false;
+      el.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picker?.request]);
+  const pickModel = useMemo(
+    () => buildPicker(state.plugins, props.currentWorkspaceId, query, expandedId),
+    [state.plugins, props.currentWorkspaceId, query, expandedId],
+  );
+  const pickCount = pickModel.flat.length;
+  // 行变了（筛选、展开收起、列表读回来）：高亮夹回范围
+  useEffect(() => {
+    if (picking) setPickIndex((index) => clampPick(index, pickCount));
+  }, [picking, pickCount]);
+  // 高亮行滚进视野：只动列表自己的纵向滚动。不用 scrollIntoView——它连祖先也横着滚：
+  // 「/ + 空格」从关着的面板进来时右栏壳还在从 0 宽展开，高亮行横向「不在视野里」，浏览器就把 overflow:hidden 的壳横滚一点
+  useEffect(() => {
+    if (!picking) return;
+    const row = pickListRef.current?.querySelector<HTMLElement>('[data-pick-active="true"]');
+    let scroller = row?.parentElement ?? null;
+    while (scroller !== null && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
+      scroller = scroller.parentElement;
+    }
+    if (row == null || scroller === null) return;
+    const view = scroller.getBoundingClientRect();
+    const box = row.getBoundingClientRect();
+    if (box.top < view.top) scroller.scrollTop -= view.top - box.top;
+    else if (box.bottom > view.bottom) scroller.scrollTop += box.bottom - view.bottom;
+  }, [picking, pickIndex, pickCount]);
+
+  const changePickQuery = (next: string): void => {
+    setQuery(next);
+    setPickIndex(0);
+    setPickNotice(null);
+  };
+  /** 执行一次按键 / 点击的结果（算在 plugin-picker.ts，这里只落到状态上） */
+  const runPick = (outcome: PickerOutcome): void => {
+    if (picker === undefined) return;
+    if (outcome.kind === "insert") picker.onSelect(outcome.token);
+    else if (outcome.kind === "blocked") setPickNotice(t.pickBlocked(outcome.name));
+    else if (outcome.kind === "expand") setExpandedId(outcome.id);
+    else if (outcome.kind === "collapse") {
+      // 收起后高亮落回那个插件行（技能行没了）
+      setExpandedId(null);
+      setPickIndex(indexOfPlugin(buildPicker(state.plugins, props.currentWorkspaceId, query, null).flat, outcome.id));
+    }
+  };
+  /** 选取态的键盘：↑↓ 移高亮、↵ 插入、→ 展开（光标在词尾才接管）、← 收起、Esc 先清词再取消 */
+  const onPickKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (picker === undefined || event.nativeEvent.isComposing) return;
+    const row = pickModel.flat[pickIndex];
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setPickNotice(null);
+      setPickIndex((index) => movePick(index, event.key === "ArrowDown" ? 1 : -1, pickCount));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      runPick(activateRow(row));
+    } else if (event.key === "ArrowRight") {
+      // 词中间的 → 是在移光标：只有光标已在词尾才当「展开」
+      const input = event.currentTarget;
+      if (input.selectionStart !== input.value.length || input.selectionEnd !== input.value.length) return;
+      const outcome = expandRow(row);
+      if (outcome.kind === "none") return;
+      event.preventDefault();
+      runPick(outcome);
+    } else if (event.key === "ArrowLeft") {
+      const outcome = collapseRow(row);
+      if (outcome.kind === "none") return;
+      event.preventDefault();
+      runPick(outcome);
+    } else if (event.key === "Escape") {
+      // 两段式：人还在搜就先清词；词空了才退出选取（App 的全局 Esc 不能接着关面板）
+      event.preventDefault();
+      event.stopPropagation();
+      if (query !== "") changePickQuery("");
+      else picker.onCancel();
+    }
+  };
+  const currentWorkspaceName = props.workspaces.find((workspace) => workspace.id === props.currentWorkspaceId)?.name ?? null;
 
   // 「在右栏打开」：等列表读到、找到那个插件，就选中它（看板请求直接进看板视图）。
   // 找不到时**留着请求等列表更新**：装好之后马上来的请求（agent 装完 / 点了对话里的「安装」）常常早于列表的重读——
@@ -296,6 +416,49 @@ export function PluginsView(props: {
     </>
   );
 
+  let pickOffset = 0;
+  const pickBody = (
+    <div ref={pickListRef} className="pl-pick-list" role="listbox" aria-label={t.title}>
+      {pickNotice !== null && (
+        <div className="pl-note warn" role="status">
+          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          <span>{pickNotice}</span>
+        </div>
+      )}
+      {list.error !== null && (
+        <div className="pl-note danger" role="alert">
+          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          <span>
+            {t.loadFailed} {list.error}
+          </span>
+        </div>
+      )}
+      {list.body === "loading" && <p className="pl-empty">{messages.common.loading}</p>}
+      {list.body === "empty" && (
+        <div className="pl-empty">
+          <b>{t.emptyTitle}</b>
+          <span>{t.emptyHint}</span>
+        </div>
+      )}
+      {list.body === "list" && pickModel.groups.length === 0 && <p className="pl-empty">{t.noMatch(query.trim())}</p>}
+      {pickModel.groups.map((group) => {
+        const offset = pickOffset;
+        pickOffset += group.rows.length;
+        return (
+          <PluginPickerGroup
+            key={group.key}
+            group={group}
+            workspaceName={currentWorkspaceName}
+            offset={offset}
+            activeIndex={pickIndex}
+            onActivate={(row) => runPick(activateRow(row))}
+            onExpand={(id) => runPick({ kind: "expand", id })}
+          />
+        );
+      })}
+    </div>
+  );
+
   const detailBody =
     selected === null ? null : (
       <PluginDetail
@@ -346,13 +509,24 @@ export function PluginsView(props: {
       ) : selected === null ? (
         <>
           <PanelTitle icon={FEATURE_ICON.plugins} title={t.title} />
-          <PanelFilter
-            value={query}
-            onChange={setQuery}
-            placeholder={t.filterPlaceholder}
-            ariaLabel={t.filterAria}
-            count={filtering ? `${filtered.length} / ${state.plugins.length}` : String(state.plugins.length)}
-          />
+          {picking ? (
+            <PanelFilter
+              inputRef={filterRef}
+              value={query}
+              onChange={changePickQuery}
+              placeholder={t.pickPlaceholder}
+              ariaLabel={t.filterAria}
+              onKeyDown={onPickKeyDown}
+            />
+          ) : (
+            <PanelFilter
+              value={query}
+              onChange={setQuery}
+              placeholder={t.filterPlaceholder}
+              ariaLabel={t.filterAria}
+              count={filtering ? `${filtered.length} / ${state.plugins.length}` : String(state.plugins.length)}
+            />
+          )}
         </>
       ) : (
         <>
@@ -364,13 +538,17 @@ export function PluginsView(props: {
       );
     return (
       <>
-        <RightPanelFrame header={header} contentKey={selected === null ? "list" : `${boardOf === null ? "detail" : "board"}:${selected.id}`}>
-          <div className="pl-page" data-chrome="rail">
+        <RightPanelFrame
+          header={header}
+          contentKey={selected === null ? "list" : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
+          footer={picking && selected === null ? <PluginPickerBar expanded={collapseRow(pickModel.flat[pickIndex]).kind !== "none"} /> : undefined}
+        >
+          <div className="pl-page" data-chrome="rail" data-picking={picking && selected === null}>
             <div className="pl-body">
               {boardOf !== null ? (
                 <PluginBoardView target={{ kind: "installed", name: parsePluginViewId(boardOf.id)?.key ?? "", workspaceId: props.currentWorkspaceId }} />
               ) : selected === null ? (
-                listBody
+                picking ? pickBody : listBody
               ) : (
                 detailBody
               )}

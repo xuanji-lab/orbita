@@ -75,9 +75,8 @@ export function slashSpaceOpensPanel(value: string, cursor: number): number | nu
 /**
  * 选取模式的受控接口：App 持有（面板开在哪个槽、插入锚点都在那边），面板只管
  * 上报。锚点 = 输入框里被删掉的那个 `/` 的位置——选中后 token 插回原处。
- * Tab 在面板里轮换「全部 / 技能 / MCP」三个页签（2026-10-30 合成一张列表后），
- * 不再经 App 换面板，所以这里没有「切到另一边」的回调。
- * 候选按哪个工作区筛，由面板自己拿主槽会话的工作区（App 传给能力面板的 workspace）。
+ * ↑↓ ↵ → ← Esc 都在面板内部处理（plugin-picker.ts），只有「选中」与「取消」经这里上报。
+ * 候选按哪个工作区筛，由面板自己拿主槽会话的工作区（PluginsView 的 currentWorkspaceId）。
  */
 export interface TokenPickerControl {
   /** 选中一条：token 插回锚点、焦点回输入框 */
@@ -95,24 +94,4 @@ export interface TokenPickResult {
   token: string | null;
   position: number;
   nonce: number;
-}
-
-/** 面板行内「选用」按钮的一次性插入请求（nonce 单调递增，先例同
- *  TokenPickResult）。与选取模式的锚点不同：按钮是浏览态入口，没有锚点——
- *  插到输入框**当前光标处**，面板不关（可以连插几条） */
-export interface PanelInsertRequest {
-  token: string;
-  nonce: number;
-}
-
-/**
- * 行内按钮的插入位置：输入框带着光标历史（selectionStart > 0，失焦后仍停在
- * 最后一次的位置）或草稿为空 → 当前光标；selectionStart 停在 0 而草稿非空 →
- * textarea 从未拿到过焦点，按「没碰过输入框」处理，落到草稿末尾——免得把
- * token 前插到恢复出来的草稿头上。越位（草稿被外部改短后光标停在旧位置
- * 之外）夹回草稿长度。
- */
-export function panelInsertPosition(selectionStart: number, draftLength: number): number {
-  const start = Math.max(0, Math.min(selectionStart, draftLength));
-  return start > 0 || draftLength === 0 ? start : draftLength;
 }

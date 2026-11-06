@@ -1,0 +1,152 @@
+/*
+ * 插件面板的「/ + 空格」选取态（PluginPicker.tsx）。行沿用插件页的 .pl-grp / .pl-row / .pl-name，
+ * 这里只补选取态独有的：高亮底、↵ 提示、没启用的灰行、展开的技能子行、底部按键提示、整面板的 accent 内描边。
+ */
+
+/* 列表自己是 .pl-body 唯一的子元素：组与提示条之间的间距在这里给（插件页的列表是 .pl-body 直接分隔） */
+.pl-pick-list {
+  /* 头像列宽（与 .pl-row-main 的第一列同 22px）：子行 / 提示行缩进到名字下面要用 */
+  --pick-av-w: 22px;
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 一行只有「点这块」一列（插件页的行右边还有开关）：行内右缘钉在行右内边距，↵ 提示贴着它 */
+.pl-pick-row {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+}
+
+.pl-pick-row .pl-row-main {
+  grid-template-columns: var(--pick-av-w) minmax(0, 1fr) auto;
+  padding-right: var(--space-4);
+}
+
+/* 选取态的高亮行：选中底（.option-row 选中同一口径），盖过悬停 */
+.pl-pick-row[data-pick-active="true"] .pl-row-main,
+.pl-pick-row[data-pick-active="true"] .pl-row-main:hover {
+  background: var(--option-active-bg);
+}
+
+/* 没启用的：名字与说明退到三级灰、头像去色、不可点（玻璃上用实色淡字，不用透明度） */
+.pl-pick-row[data-usable="false"] .pl-row-main {
+  cursor: default;
+}
+
+.pl-pick-row[data-usable="false"] .pl-row-main:hover {
+  background: transparent;
+}
+
+.pl-pick-row[data-usable="false"] .pl-name b {
+  color: var(--color-text-tertiary);
+}
+
+.pl-pick-row[data-usable="false"] .pl-av {
+  background: var(--color-bg-muted);
+  color: var(--color-text-tertiary);
+}
+
+/* ↵ 提示：只在高亮行上出，不可点 */
+.pl-pick-enter {
+  justify-self: end;
+}
+
+/* 展开的技能子行：缩进在插件名下，与上一行连成一块（不再画分隔线） */
+.pl-pick-sub {
+  border-top: 0;
+}
+
+.pl-pick-sub .pl-row-main,
+.pl-pick-hint-row {
+  padding-left: calc(var(--space-4) + var(--pick-av-w) + var(--space-3));
+}
+
+/* 高亮的插件行下面那一行：「→ 只点其中一条技能：a · b」。点它等于按 → */
+.pl-pick-hint-row {
+  padding-right: var(--space-4);
+  padding-bottom: var(--space-1-5);
+}
+
+.pl-pick-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pl-pick-hint:hover {
+  color: var(--color-text-secondary);
+}
+
+.pl-pick-hint .orbita-icon {
+  flex: none;
+}
+
+.pl-pick-hint span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 选取态：面板内容面一圈 accent 内描边（键盘正对着这里）。画在右栏壳自己的 ::after 上、贴它
+ * 去掉边框后的可见盒：不随列表滚动，底部按键提示条也在圈里。不描在内层（.right-panel-slot-inner）
+ * 上——内层定宽 = 右栏宽，比壳去掉边框的可见宽多 1–2px，描在它上面右边会被裁掉。并排时右侧两个角
+ * 跟内容面（.pane）的圆角；窄窗覆盖层四角都圆、边框 1px，内角少 1px。断点与 App 的 narrow
+ * （matchMedia max-width: 959px）是同一条。
+ */
+.right-panel-slot:has(.pl-page[data-picking="true"])::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+
+@media (max-width: 959px) {
+  .right-panel-slot:has(.pl-page[data-picking="true"])::after {
+    border-radius: calc(var(--radius-xl) - 1px);
+  }
+}
+
+/* 底部吸底的按键提示（RightPanelFrame 的 footer：发丝顶线、字在 --space-4） */
+.pl-pickbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-pickbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pl-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
