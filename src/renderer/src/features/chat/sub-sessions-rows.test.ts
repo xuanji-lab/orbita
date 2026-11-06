@@ -109,7 +109,7 @@ describe("sortSubSessionRows", () => {
     lastAt,
   });
 
-  it("收件箱次序：等你（question/approval）最前，其次 failed，其次 done，其次 running，stopped/idle 收尾", () => {
+  it("收件箱次序：等你（question/approval）最前，其次 running，其次 failed，其次 done，stopped/idle 收尾", () => {
     const rows = [
       row("idle-1", "idle"),
       row("running-1", "running"),
@@ -122,7 +122,7 @@ describe("sortSubSessionRows", () => {
     ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["waiting-1", "approval-1", "failed-1", "done-1", "running-1", "running-2", "idle-1", "stopped-1"],
+      ["waiting-1", "approval-1", "running-1", "running-2", "failed-1", "done-1", "idle-1", "stopped-1"],
     );
   });
 
