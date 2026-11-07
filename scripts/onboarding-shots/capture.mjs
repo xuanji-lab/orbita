@@ -111,7 +111,8 @@ async function run(steps) {
       await mouse("mousePressed", x, y);
       await mouse("mouseReleased", x, y);
     }
-    if (s.type) await cdp.send("Input.insertText", { text: s.type });
+    // type 可以是函数：每次执行时现算（例如带时间戳的文件名）
+    if (s.type) await cdp.send("Input.insertText", { text: typeof s.type === "function" ? s.type() : s.type });
     if (s.key) await key(s.key);
     if (s.drag) {
       const [css, phrase] = s.drag;
@@ -243,6 +244,9 @@ for (const set of ["light", "dark"]) {
   await theme(set === "light" ? "light" : "black");
   for (const scene of SCENES) {
     if (only && !only.has(scene.id)) continue;
+    // both：现跑的场景（浅、玄各跑一遍，两次跑到的进度、行数都不同，浅色量的框对不上玄的图）——
+    // 浅色这一遍里同一时刻直接切 data-theme 再拍玄，两张图是同一帧；玄那一遍跳过
+    if (scene.both && set === "dark") continue;
     step(`${set === "light" ? "浅" : "玄"} · ${scene.id}`);
     try {
       if (scene.composite) {
@@ -254,6 +258,13 @@ for (const set of ["light", "dark"]) {
       await run(scene.steps);
       if (set === "light") boxes[scene.id] = await measure(scene.measure);
       await shoot(join(STAGE, set, `${scene.id}.webp`));
+      if (scene.both) {
+        await cdp.evaluate("document.documentElement.dataset.theme = 'black', 1");
+        await sleep(700);
+        await shoot(join(STAGE, "dark", `${scene.id}.webp`));
+        await cdp.evaluate("document.documentElement.dataset.theme = 'light', 1");
+        await sleep(300);
+      }
       await run(scene.after);
     } catch (error) {
       console.error(`✖ ${set} · ${scene.id} 没拍成：${error.message}`);

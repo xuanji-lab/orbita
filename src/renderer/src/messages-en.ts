@@ -3132,7 +3132,7 @@ export const en = {
             name: "Add a provider",
             title: "Connect one model first",
             body: "In Settings › **Model providers**, pick a provider and paste its API key. One is enough to start; add more later and pick per job.",
-            notes: ["Providers you have connected sit first.", "Each card opens its key and model list."],
+            notes: ["A connected provider has its switch on, top right of the card.", "Each card opens its key and model list."],
           },
           roles: {
             name: "Who does what",
@@ -3314,8 +3314,8 @@ export const en = {
           remember: {
             name: "It remembers by itself",
             title: "It learns as you talk",
-            body: "When a conversation goes quiet it turns it into a few memories — **facts**, **preferences**, **lessons**. In your next task the relevant ones come along by themselves.",
-            notes: ["It needs a chore model (chapter 1)."],
+            body: "When a conversation goes quiet it turns it into a few memories — **facts**, **preferences**, **lessons**. In your next task the relevant ones come along by themselves. It needs a **chore model** set up first (chapter 1).",
+            notes: ["Each memory is a sentence or two; on the right, how many times it has been used."],
           },
           used: {
             name: "Which memories it used",
@@ -3417,9 +3417,9 @@ export const en = {
           create: {
             name: "Create one",
             title: "One sentence, and it's set up",
-            body: "Say “every morning at 8:30 …” in a conversation and it creates it; or create one by hand in the **Automations** panel on the right.",
+            body: "Say “every morning at 9:00 …” in a conversation and it creates it; or create one by hand in the **Automations** panel on the right.",
             notes: ["Your automations, with their next run."],
-            say: "Every morning at 8:30, use the paper tracker to find a new paper and show me the board when it's done.",
+            say: "Every morning at 9:00, use the paper tracker to find a new paper and show me the board when it's done.",
           },
           plugin: {
             name: "Plugin and permission",

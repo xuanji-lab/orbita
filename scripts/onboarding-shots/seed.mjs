@@ -130,7 +130,7 @@ async function drive() {
       await cdp.evaluate(`document.querySelectorAll(".workspace-group button[aria-expanded=false]").forEach((b) => b.click()), 1`);
       await click(`document.querySelector('aside button[aria-label="在此工作区新建任务"]')`);
     } else if (scene.task === "plugin-maker") {
-      await click(`document.querySelector('button[aria-label="插件"]')`);
+      await click(`document.querySelector('button[aria-label="能力"]')`);
       await sleep(1200);
       await click(`[...document.querySelectorAll(".right-panel-slot button")].find((b) => b.textContent.includes("和智能体一起做一个"))`);
     } else {
@@ -175,11 +175,19 @@ function fixup() {
   if (daily === undefined) throw new Error("没找到跑过一次、带看板快照的自动化——先跑完 drive");
   const real = daily.runs.find((r) => r.boardSnapshotIds?.length);
   const history = [];
-  // 近 7 天：今天这次真跑 + 往前 6 天里跑了 5 天（周日没跑），每天 1–3 次，柱子高低才看得出
+  // 近 7 天：今天这次真跑 + 往前 6 天里跑了 5 天（其中 3 天前那次失败 = 红柱），每天 1–3 次，柱子高低才看得出
   const perDay = [1, 2, 1, 0, 3, 1];
   perDay.forEach((count, i) => {
     for (let k = 0; k < count; k += 1) {
-      history.push({ ...real, id: `${real.id}-d${i + 1}-${k}`, runAt: today9.getTime() - (i + 1) * DAY + k * 3_600_000, trigger: k === 0 ? "schedule" : "manual", durationMs: 180_000 + k * 20_000 });
+      const run = { ...real, id: `${real.id}-d${i + 1}-${k}`, runAt: today9.getTime() - (i + 1) * DAY + k * 3_600_000, trigger: k === 0 ? "schedule" : "manual", durationMs: 180_000 + k * 20_000 };
+      // 3 天前那次抓取失败：柱状图里要有一根红柱（引导第 11 章配文讲「失败的那天是红柱」）
+      if (i === 2) {
+        run.status = "error";
+        run.error = "arXiv 抓取超时，没能挑出今天这一篇";
+        delete run.boardSnapshotIds;
+        delete run.resultExcerpt;
+      }
+      history.push(run);
     }
   });
   daily.runs = [real, ...history].sort((a, b) => b.runAt - a.runAt);

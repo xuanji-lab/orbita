@@ -16,6 +16,7 @@ import type { Messages } from "../../messages-en.ts";
 import { GUIDE, type Box, type GuideChapter, type GuidePage, type Loupe, type Pin, type ShotId, type StepPage } from "./onboarding-pages.ts";
 import {
   boldRuns,
+  chapterNumber,
   chapterProgress,
   chapterStart,
   flattenGuide,
@@ -62,9 +63,11 @@ function boxStyle(box: Box): CSSProperties {
   return { left: pct(box.x), top: pct(box.y), width: pct(box.w), height: pct(box.h) };
 }
 
-function PinMark(props: { pin: Pin }) {
+/** edge：放大镜里的编号点，只取 x，竖向骑在放大镜上边框上（见 .ob-pin-edge），不压住放大的字 */
+function PinMark(props: { pin: Pin; edge?: boolean }) {
+  const style: CSSProperties = props.edge === true ? { left: pct(props.pin.x) } : { left: pct(props.pin.x), top: pct(props.pin.y) };
   return (
-    <span className="ob-pin" style={{ left: pct(props.pin.x), top: pct(props.pin.y) }} aria-hidden="true">
+    <span className={props.edge === true ? "ob-pin ob-pin-edge" : "ob-pin"} style={style} aria-hidden="true">
       {props.pin.n}
     </span>
   );
@@ -84,7 +87,7 @@ function LoupeView(props: { loupe: Loupe; url: string | undefined }) {
   };
   return (
     <div className="ob-loupe" style={style} aria-hidden="true">
-      {props.loupe.pins?.map((pin) => <PinMark key={`l${pin.n}-${pin.x}`} pin={pin} />)}
+      {props.loupe.pins?.map((pin) => <PinMark key={`l${pin.n}-${pin.x}`} pin={pin} edge />)}
     </div>
   );
 }
@@ -163,7 +166,7 @@ export function OnboardingView(props: {
   const progress = chapterProgress(chapters, position);
   const pCopy = pageCopy(copy, chapter, page);
   const stepNames = chapter.pages.filter((each) => each.kind !== "opener").map((each) => pageCopy(copy, chapter, each)?.name ?? "");
-  const chapterNo = (ci: number): string => (chapters[ci]?.part === "appendix" ? "··" : String(ci + 1).padStart(2, "0"));
+  const chapterNo = (ci: number): string => chapterNumber(chapters, ci);
   /** 句子里的章号不补零（「第 11 章」「第 1 章」）；目录与章首页的大号才补成两位 */
   const chapterNum = String(position.chapter + 1);
   const where =
