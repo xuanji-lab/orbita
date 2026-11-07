@@ -2282,6 +2282,7 @@ export const zh: Messages = {
     draftGoToChatTip: (title) => (title === null ? "打开做这个插件的那条会话" : `打开会话「${title}」`),
     draftManifestProblem: "清单有问题",
     draftsLoadFailed: "没能读到「正在做」的列表。",
+    draftGone: (name: string) => `「${name}」的草稿文件夹已经不在了（被删或挪走），回到了列表。`,
     notChatted: "还没聊到",
     phLead: "还没聊到：这个插件是干什么的，聊完需求会写在这里。",
     phAbilities: "聊完需求后，它会把要用的技能、脚本、外接服务列在这里。",

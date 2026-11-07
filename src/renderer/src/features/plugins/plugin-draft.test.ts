@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { PluginDraftEntry } from "../../../../shared/plugin.ts";
 import type { Workspace } from "../../../../shared/workspace.ts";
-import { draftOf, dropDraft, filterDrafts, groupDrafts, putDraft, shouldOpenDraft, type PluginDrafts } from "./plugin-draft.ts";
+import { draftFolderGone, draftOf, dropDraft, filterDrafts, groupDrafts, putDraft, shouldOpenDraft, type PluginDrafts } from "./plugin-draft.ts";
 
 describe("草稿按会话记", () => {
   test("各记各的；同一个值再放回同一个引用（不触发多余渲染）；离开只清当前会话的", () => {
@@ -83,5 +83,15 @@ describe("「正在做」组：筛选", () => {
     assert.deepEqual(filterDrafts(entries, "LIT").map((item) => item.name), ["Lit"]);
     assert.deepEqual(filterDrafts(entries, "综述").map((item) => item.name), ["recsys-scan"]);
     assert.deepEqual(filterDrafts(entries, "没有"), []);
+  });
+});
+
+describe("draftFolderGone：草稿文件夹没了才自动退回列表", () => {
+  test("只认 unavailable + not-found；不在当前工作区、读失败、还在读、读到了都不退", () => {
+    assert.equal(draftFolderGone({ kind: "unavailable", reason: "not-found" }), true);
+    assert.equal(draftFolderGone({ kind: "unavailable", reason: "outside-workspace" }), false);
+    assert.equal(draftFolderGone({ kind: "error" }), false);
+    assert.equal(draftFolderGone({ kind: "loading" }), false);
+    assert.equal(draftFolderGone({ kind: "ready" }), false);
   });
 });

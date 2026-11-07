@@ -65,3 +65,13 @@ export function filterDrafts(entries: readonly PluginDraftEntry[], query: string
   if (needle === "") return [...entries];
   return entries.filter((entry) => [entry.displayName, entry.name, entry.description].some((text) => text.toLowerCase().includes(needle)));
 }
+
+/**
+ * 「正在做」那份草稿的文件夹已经不在了（被删 / 挪走）：主进程 locateDraft 回 `not-found` 只有这一种含义
+ * （文件夹不存在或不是目录；「还没有清单」不算——那时扫描照常给 ready 的虚线占位）。
+ * 这时不该停在一页红字上：自动退回能力列表，列表顶上说一句为什么（2026-11-07 用户要修）。
+ * 「不在当前工作区」（outside-workspace）不退：那是工作区配置的问题，红字说明比静默回列表更有用。
+ */
+export function draftFolderGone(scan: { kind: string; reason?: string }): boolean {
+  return scan.kind === "unavailable" && scan.reason === "not-found";
+}
