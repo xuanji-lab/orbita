@@ -58,7 +58,7 @@
   color: var(--color-accent-fg);
 }
 /* 面板窄时只留图标（容器查询：跟面板宽，不跟窗口宽） */
-@container dp (max-width: 560px) {
+@container dp (max-width: 800px) {
   .se-tool-label {
     display: none;
   }
