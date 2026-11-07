@@ -38,32 +38,16 @@ import type { RequestBroker } from "./request-broker.ts";
  * 只有导出要主进程（PDF / PNG 要隐藏窗口），走 requestId 问答通道（照 browser_* 工具）。
  */
 
-/** 元素的 JSON schema 说明：写在描述里让模型一次写对 */
-const ELEMENT_GUIDE =
-  "Canvas coordinates: 16:9 = 1280×720, 4:3 = 960×720 (px, origin top-left). Every element has id (optional, auto-generated), x, y, w, h, rotate (optional, deg). kinds:\n" +
-  '- text: { kind:"text", html, fontSize (px, default 28), color ("#rrggbb"), align left|center|right, valign top|middle|bottom, fontFamily? }. html allows only <b> <i> <u> <br> <ul><li> <ol><li> and <span style="color:#...;font-size:NNpx">; plain "text" is accepted instead of html. Everything else is stripped.\n' +
-  '- image: { kind:"image", src:"<name>.assets/x.png", fit: contain|cover } — only reference files already in the assets folder; to add a picture use slides_insert_image.\n' +
-  '- table: { kind:"table", rows:[["head1","head2"],["a","b"]], header:true, fontSize, colWidths?:[0.4,0.6], headerFill, headerColor, borderColor, color }\n' +
-  '- shape: { kind:"shape", shape: rect|roundRect|ellipse|triangle, fill:"#rrggbb"|"none", stroke:"#rrggbb"|"none", strokeWidth, text?, fontSize, color }\n' +
-  '- line / arrow: { kind:"line", points:[[x1,y1],[x2,y2]] (relative to the element box), startArrow:"none"|"arrow", endArrow:"none"|"arrow", stroke, strokeWidth, dash? } — the box x,y,w,h must contain both points (e.g. left→right arrow: x=100,y=300,w=400,h=1, points [[0,0],[400,0]], endArrow "arrow").';
-
-const THEME_GUIDE = THEME_IDS.map((id) => `${id} — ${THEME_BLURBS[id]?.en ?? ""}`).join("; ");
-
-const LAYOUT_LIST = LAYOUT_NAMES.map((name) => `- ${LAYOUT_GUIDE[name]}`).join("\n");
-
 /**
- * 教 agent 做设计的规矩：写进 slides_create / slides_write 的描述里，超限时工具再用 warning 提醒（不报错）。
- * 数字与 slides-layouts.ts 的 warnLimits 一致：标题 ≤16 字、要点 ≤6 条每条 ≤20 字。
+ * 工具描述只留「做什么 + 关键参数 + 先读 slides 技能」：版式清单、设计规矩、元素格式、主题搭配、
+ * slides_edit 各操作与导出差异的细则在内置插件 docs-slides 的 slides 技能里（resources/builtin-plugins/docs-slides），
+ * 按需加载——此前这些写在描述里（单 slides_write 就 5.4k 字符）每轮都发给模型。
+ * 版式清单与主题说明的真源仍是 LAYOUT_GUIDE / THEME_BLURBS，builtin-content.test 要求技能里逐条同文。
  */
-const DESIGN_GUIDE =
-  "DESIGN RULES (a deck made from raw coordinates looks bad — follow these):\n" +
-  "1. Use layouts, not coordinates. Give { layout, slots } and the app lays the slide out with the deck's theme (colours, serif headings, eyebrow label, footer \"title · page\"). Only fall back to raw `elements` for something no layout covers (a diagram, arrows).\n" +
-  "2. One idea per slide. Title ≤16 characters (a short claim, not a topic word list). At most 6 bullets, each ≤20 characters — cut words, do not shrink the font. A slide that needs more is two slides.\n" +
-  "3. Body text is never smaller than the theme's body size (28px on 16:9). If a warning says the text does not fit, split the slide; never reduce the font or squeeze the box.\n" +
-  "4. A slide with a picture AND text always uses image-left / image-right (or image-full). Never place a picture on a bullets slide by coordinates.\n" +
-  "5. Rhythm: start with cover, end with closing; in 7+ slides add a section slide between groups; alternate layouts (bullets → image-right → stat → quote → two-column) — never the same layout 4 times in a row. Give every content slide a short `eyebrow` label (e.g. \"02 · 景观\").\n" +
-  "6. Colours and sizes are theme tokens ($ink $muted $accent $accent2 $bg $surface $onAccent $line; $display $title $h2 $body $caption; $heading $body fonts) — write \"color\":\"$accent\" instead of hex so a later theme switch re-colours the whole deck. No emoji as decoration, no gradients.\n" +
-  "7. Give every slide speaker notes when the user asked for a talk.";
+const SKILL_HINT = "Before the first slides_create / slides_write in a conversation, read the `slides` skill (layouts, design rules, element format).";
+
+/** 兜底：没读技能的模型至少在 create 的结果里看到版式名与技能指路 */
+const LAYOUT_NAMES_LINE = `Layouts: ${LAYOUT_NAMES.join(", ")} — full rules (design rules, slots per layout, themes, element format) are in the \`slides\` skill; read it before writing slides if you have not yet.`;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -149,18 +133,16 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_create",
     label: "slides_create",
     description:
-      "Create a new presentation file (<name>.slides.json) in the workspace and open it in the right panel. " +
-      "The deck starts with 0 slides — fill it with slides_write. The file is JSON (a list of slides, each a list of positioned elements), " +
-      "pictures live in a sibling <name>.assets/ folder; the user can edit everything by hand in the panel and export to PDF / PPTX / HTML / PNG. " +
-      "Use this (not markdown or html files) whenever the user wants a presentation / slides / deck. " +
-      `Pick a theme that fits the topic (the user can change it later in the panel): ${THEME_GUIDE}. Default ${DEFAULT_THEME_ID}.`,
+      "Create a presentation (<name>.slides.json) and open it in the right panel; it starts empty — fill it with slides_write. " +
+      "Use it, not markdown / html, whenever the user wants slides / a deck. Pick a theme that fits the topic. " +
+      SKILL_HINT,
     parameters: {
       type: "object",
       properties: {
-        title: { type: "string", description: "Deck title (also used for the default file name)" },
-        aspect: { type: "string", enum: ["16:9", "4:3"], description: "Slide ratio, default 16:9" },
-        theme: { type: "string", enum: [...THEME_IDS], description: `Visual theme (palette + fonts + type scale). Default ${DEFAULT_THEME_ID}` },
-        path: { type: "string", description: "Where to create it (relative to the workspace, must end with .slides.json). Default: <title>.slides.json in the workspace root" },
+        title: { type: "string", description: "Deck title (also the default file name)" },
+        aspect: { type: "string", enum: ["16:9", "4:3"], description: "Default 16:9" },
+        theme: { type: "string", enum: [...THEME_IDS], description: `Default ${DEFAULT_THEME_ID}` },
+        path: { type: "string", description: "Relative to the workspace, ends with .slides.json. Default <title>.slides.json" },
       },
       required: ["title"],
     } as never,
@@ -197,9 +179,9 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       const canvas = CANVAS_SIZE[aspect];
       const card: CommandCardData = { kind: "slides", path: target, title, subtitle: `演示文稿 · ${basename(target)}` };
       return ok(
-        `Created ${target} (${aspect}, canvas ${canvas.w}×${canvas.h}, theme ${themeId}, 0 slides) and opened it in the right panel.\n` +
+        `Created ${target} (${aspect}, canvas ${canvas.w}×${canvas.h}, theme ${themeId} — ${THEME_BLURBS[themeId]?.en ?? ""}, 0 slides) and opened it in the right panel.\n` +
           "Next: fill it with slides_write (slides:[{layout:\"cover\", slots:{...}}, {layout:\"bullets\", slots:{...}}, …] — pictures go in slots.image, no separate insert step needed).\n" +
-          DESIGN_GUIDE,
+          LAYOUT_NAMES_LINE,
         { ...openDetails(target, true), card },
       );
     },
@@ -209,13 +191,13 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_read",
     label: "slides_read",
     description:
-      "Read a presentation: slide count, and for every slide its elements (id, kind, position, text preview, image path, table first row, arrow ends) and speaker notes. " +
-      "Pass slide (1-based) to read one slide. Always read before editing a deck you did not just write — the user may have changed it in the panel.",
+      "Read a presentation: per slide its elements (id, kind, position, text preview) and notes. Pass slide for one slide. " +
+      "Read before editing a deck you did not just write — the user may have changed it.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The .slides.json file" },
-        slide: { type: "number", description: "Only this slide (1-based)" },
+        slide: { type: "number", description: "1-based page" },
       },
       required: ["path"],
     } as never,
@@ -234,31 +216,22 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_write",
     label: "slides_write",
     description:
-      "Add slides or replace whole slides in a presentation. slides is a list of { at, layout + slots, notes } (preferred) or { at, elements, background, notes } (free-form): " +
-      'at = a 1-based page number (replaces that slide; page = current count + 1 appends) or "append" (default). ' +
-      "layout + slots: the app lays the slide out in the deck's theme — you give content only, no coordinates. Text slots take plain text; **double asterisks** make a phrase bold; lists are string arrays. " +
-      'Picture slots (slots.image) take a workspace file path, or "attached" / "attached:2" for a picture the user attached to the chat; the file is copied into the deck for you. ' +
-      "Layouts:\n" +
-      LAYOUT_LIST +
-      "\nThe layout becomes ordinary editable elements (the user can drag them). Replace a slide by writing at its page number again. " +
-      "elements (free-form, no layout) replaces the slide's elements; omit both to keep them and only change background / notes. background = css color or a $token ($surface, $accent …). notes = speaker notes (plain text). " +
-      "Several slides can be written in one call. The result lists problems (title too long, too many bullets, text that does not fit, elements outside the canvas) as warnings — fix them by rewriting that slide shorter or splitting it.\n" +
-      DESIGN_GUIDE +
-      "\nFree-form elements only:\n" +
-      ELEMENT_GUIDE,
+      "Add or replace slides: slides = [{ at, layout, slots, notes }] (or free-form elements); at = 1-based page (replaces; count + 1 appends) or \"append\". " +
+      "Several slides per call; slots.image takes a path or \"attached\" (the user's picture). Fix the returned warnings by rewriting the slide shorter or splitting it. " +
+      SKILL_HINT,
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The .slides.json file" },
         slides: {
           type: "array",
-          description: "Slides to write, in order",
+          description: "In order",
           items: {
             type: "object",
             properties: {
               at: { description: '1-based page number, or "append"' },
-              layout: { type: "string", enum: [...LAYOUT_NAMES], description: "Page type; see the layout list. Mutually exclusive with elements" },
-              slots: { type: "object", description: "Content for the layout: eyebrow, title, subtitle, bullets[], body, columns[], rows[][], stats[], quote, source, image, caption, note, number, meta, contact (which ones depends on the layout)" },
+              layout: { type: "string", enum: [...LAYOUT_NAMES], description: "Page type (not with elements)" },
+              slots: { type: "object", description: "Layout content (eyebrow, title, bullets[], image …; per layout in the skill)" },
               elements: { type: "array", items: { type: "object", properties: { kind: { type: "string", enum: ["text", "image", "table", "shape", "line"] } }, required: ["kind"] } },
               background: { type: "string" },
               notes: { type: "string" },
@@ -300,7 +273,10 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
           return { deck: written.deck, result: written };
         });
       } catch (cause) {
-        throw new Error(describeError(cause));
+        // 版式用错（缺槽位、数量不对）时把这几个版式的说明一并回给模型，不必再去翻技能
+        const used = [...new Set(entries.flatMap((entry) => (entry.layout !== undefined && isLayoutName(entry.layout) ? [entry.layout] : [])))];
+        const reference = cause instanceof DeckOpError && used.length > 0 ? `\nLayout reference:\n${used.map((name) => `- ${LAYOUT_GUIDE[name]}`).join("\n")}` : "";
+        throw new Error(describeError(cause) + reference);
       }
       const { deck, result } = outcome;
       const issues = result.pages.flatMap((page) => lintSlide(deck, page));
@@ -334,20 +310,13 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_edit",
     label: "slides_edit",
     description:
-      "Change part of an existing presentation without rewriting whole slides. ops is a list, applied in order (slide = 1-based page, id = element id from slides_read):\n" +
-      '- { op:"patch", slide, id, patch:{...} } — change fields of one element (e.g. patch:{ html:"新标题" } or patch:{ x:100, w:500 }); id and kind cannot change\n' +
-      '- { op:"add", slide, element:{...} } — add one element\n' +
-      '- { op:"delete", slide, id } — remove an element\n' +
-      '- { op:"set_slide", slide, background?, notes? }\n' +
-      '- { op:"delete_slide", slide } and { op:"move_slide", slide, to }\n' +
-      `- { op:"set_deck", title?, aspect?, theme? } — theme: one of ${THEME_IDS.join(" / ")} (re-colours every element bound to a theme token; hand-set values stay), or an object { id?, palette:{bg,surface,ink,muted,accent,accent2}, fonts:{heading,body}, scale:{display,title,h2,body,caption} }\n` +
-      "The user may be looking at another slide; the panel is not moved. In a themed deck write new text with theme tokens (fontSize \"$body\", color \"$ink\"); body text must not be smaller than $body, and a footnote / source line uses $caption and stays above the page footer.\n" +
-      ELEMENT_GUIDE,
+      "Change part of a presentation: ops = list of { op: patch | add | delete | set_slide | delete_slide | move_slide | set_deck, slide, id, … } applied in order (id from slides_read). " +
+      "Fields per operation and the element format: `slides` skill.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The .slides.json file" },
-        ops: { type: "array", description: "Operations, in order", items: { type: "object", properties: { op: { type: "string", enum: ["patch", "add", "delete", "set_slide", "delete_slide", "move_slide", "set_deck"] } }, required: ["op"] } },
+        ops: { type: "array", description: "In order", items: { type: "object", properties: { op: { type: "string", enum: ["patch", "add", "delete", "set_slide", "delete_slide", "move_slide", "set_deck"] } }, required: ["op"] } },
       },
       required: ["path", "ops"],
     } as never,
@@ -424,22 +393,20 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_insert_image",
     label: "slides_insert_image",
     description:
-      "Put a picture on a slide: copies the image (PNG / JPEG / GIF / WebP, ≤30 MB) from image_path — a workspace file, or a file the user attached to this conversation — " +
-      "into the deck's .assets folder and adds an image element. " +
-      "For a picture the user attached to the chat (you may see it but it has no path) pass image_path \"attached\" (the most recent one) or \"attached:2\" (the second most recent). Size and position default to a centred box at the picture's own aspect ratio (≤ half the canvas); " +
-      "pass w / h / x / y (px) to place it exactly, fit contain|cover.",
+      "Put a picture on a slide: copies image_path (a file, or \"attached\" / \"attached:2\" for the user's chat pictures) into the deck's .assets folder as an image element, centred at its own aspect ratio by default. " +
+      "Inside a layout, prefer slots.image in slides_write.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The .slides.json file" },
         slide: { type: "number", description: "1-based page" },
-        image_path: { type: "string", description: 'Path of the picture to insert (absolute, or relative to the workspace), or "attached" / "attached:N" for a picture the user attached to the chat' },
+        image_path: { type: "string", description: 'File path, or "attached" / "attached:N" (N-th most recent picture in the chat)' },
         x: { type: "number" },
         y: { type: "number" },
         w: { type: "number" },
         h: { type: "number" },
         fit: { type: "string", enum: ["contain", "cover"] },
-        alt: { type: "string", description: "Short description of the picture" },
+        alt: { type: "string" },
       },
       required: ["path", "slide", "image_path"],
     } as never,
@@ -478,16 +445,14 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_export",
     label: "slides_export",
     description:
-      "Export a presentation to a file next to it (or to out): pdf (one page per slide), html (single self-contained file with page turning, images inlined), " +
-      "png (one slide, 2× resolution — give page), pptx (PowerPoint, fonts kept as set), pptx-basic (PowerPoint with every font mapped to Arial / Microsoft YaHei, " +
-      "displays the same on any machine). Returns the output path.",
+      "Export a presentation next to it (or to out): pdf, html, png (one slide, give page), pptx, pptx-basic (portable fonts). Returns the path. Format differences: `slides` skill.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The .slides.json file" },
         format: { type: "string", enum: [...SLIDES_EXPORT_FORMATS] },
-        page: { type: "number", description: "png only: which slide (1-based), default 1" },
-        out: { type: "string", description: "Output path (relative to the deck's folder or absolute, inside the workspace). Default <name>.<ext>" },
+        page: { type: "number", description: "png only, 1-based, default 1" },
+        out: { type: "string", description: "Relative to the deck's folder, inside the workspace. Default <name>.<ext>" },
       },
       required: ["path", "format"],
     } as never,

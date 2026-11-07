@@ -50,6 +50,16 @@ const run = async (name: string, params: Record<string, unknown>) => {
 };
 const textOf = (r: { content: { text: string }[] }): string => r.content.map((c) => c.text).join("");
 
+describe("doc 工具的描述", () => {
+  it("三个工具齐全；描述只留一两句 + 指路 docs 技能（Obsidian 语法、附件夹、导出转换的细则在内置插件里），合计 ≤800 字符", () => {
+    assert.deepEqual(Object.keys(tools).sort(), ["doc_export", "doc_insert_image", "doc_open"]);
+    assert.match(tools["doc_open"]?.description ?? "", /read the `docs` skill/);
+    for (const name of ["doc_insert_image", "doc_export"]) assert.match(tools[name]?.description ?? "", /`docs` skill/, `${name} 的描述要指路 docs 技能`);
+    const total = Object.values(tools).reduce((sum, tool) => sum + tool.description.length, 0);
+    assert.equal(total <= 800, true, `doc 三个工具的描述合计 ${total} 字符，超了——细则写进 docs 技能`);
+  });
+});
+
 describe("doc_open", () => {
   it("返回大纲（跳过 frontmatter 与围栏里的 #），details 带 openPanel(files) 与卡", async () => {
     const result = await run("doc_open", { path: "周报/w.md" });
