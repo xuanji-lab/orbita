@@ -12,7 +12,7 @@ import {
   DECK_MAX_SLIDES,
   ElementError,
   SLIDE_MAX_ELEMENTS,
-  normalizeBackground,
+  normalizeBackgroundBound,
   normalizeElement,
   normalizeSlide,
   newId,
@@ -27,6 +27,9 @@ import {
   type Slide,
   type SlideElement,
 } from "./slides.ts";
+import { buildLayout, isLayoutName, LAYOUT_NAMES, LayoutError, type LayoutImage } from "./slides-layouts.ts";
+import { estimateTextHeight } from "./slides-measure.ts";
+import { BINDABLE_FIELDS, DEFAULT_THEME_ID, presetTheme, resolveTheme, tokenName, tokenValue, type BindField, type ElementBindings } from "./slides-theme.ts";
 
 export class DeckOpError extends Error {}
 
@@ -64,8 +67,14 @@ function withSlide(deck: Deck, index: number, slide: Slide): Deck {
 export interface WriteEntry {
   /** 页号（1 起）或 "append"；缺省 = append */
   at?: number | "append";
-  /** 给了就整页替换元素；缺省 = 保留原元素（只改背景 / 备注） */
+  /** 给了就整页替换元素；缺省 = 保留原元素（只改背景 / 备注）。与 layout 二选一 */
   elements?: unknown[];
+  /** 版式名（slides-layouts）+ 内容槽位：由版式落成元素，不用给坐标 */
+  layout?: string;
+  slots?: Record<string, unknown>;
+  /** 版式里的图片槽位 → 已落进 assets 的图（工具层先处理 "attached" / 路径） */
+  images?: Readonly<Record<string, LayoutImage | undefined>>;
+  /** css 颜色或 `$token`（`$surface`、`$accent`…） */
   background?: string;
   notes?: string;
 }
@@ -87,35 +96,63 @@ export function applyWrite(deck: Deck, entries: readonly WriteEntry[]): WriteRes
   const warnings: string[] = [];
   entries.forEach((entry, entryIndex) => {
     const at = entry.at ?? "append";
-    const ctx = ctxOf(next);
     const append = at === "append" || (typeof at === "number" && at === next.slides.length + 1);
     if (append && next.slides.length >= DECK_MAX_SLIDES) throw new DeckOpError(`页数已到上限 ${DECK_MAX_SLIDES}`);
     const existing = append ? null : slideAt(next, at as number);
+    const pageNo = existing === null ? next.slides.length + 1 : existing.index + 1;
     if (entry.elements !== undefined && entry.elements.length > SLIDE_MAX_ELEMENTS) {
       throw new DeckOpError(`单页最多 ${SLIDE_MAX_ELEMENTS} 个元素`);
     }
     const label = `slides[${entryIndex}]`;
+    // 版式：先落成元素。没有主题的老文稿第一次写版式页时补上默认主题（版式的颜色 / 字号都是 token，没有主题没处解析）
+    let elements = entry.elements;
+    let background = entry.background;
+    let layout: string | undefined;
+    let footer: Slide["footer"];
+    if (entry.layout !== undefined) {
+      if (entry.elements !== undefined) throw new DeckOpError(`${label}: give either layout + slots or elements, not both`);
+      if (!isLayoutName(entry.layout)) throw new DeckOpError(`${label}: unknown layout "${entry.layout}" (available: ${LAYOUT_NAMES.join(", ")})`);
+      if (next.theme === undefined || next.theme.palette === undefined) {
+        next = { ...next, theme: presetTheme(next.theme?.id ?? DEFAULT_THEME_ID) as DeckTheme };
+      }
+      try {
+        const built = buildLayout({ layout: entry.layout, slots: entry.slots ?? {}, aspect: next.aspect, theme: next.theme, ...(entry.images === undefined ? {} : { images: entry.images }) }, `slide ${pageNo}`);
+        elements = built.elements;
+        background = background ?? built.background;
+        footer = built.footer;
+        layout = entry.layout;
+        warnings.push(...built.warnings);
+      } catch (cause) {
+        if (cause instanceof LayoutError) throw new DeckOpError(`${label}: ${cause.message}`);
+        throw cause;
+      }
+    }
+    const ctx = ctxOf(next);
     let slide: Slide;
     try {
       const base: Slide = existing?.slide ?? blankSlide();
+      // 只改背景 / 备注时，页的版式名 / 页脚 / 背景绑定要带过去；整页换元素则版式名作废（手写元素不再是那个版式）
+      const keepShape = entry.elements === undefined && entry.layout === undefined;
       const merged = normalizeSlide(
         {
           id: base.id,
-          elements: entry.elements ?? base.elements,
-          background: entry.background ?? base.background,
+          elements: elements ?? base.elements,
+          background: background ?? base.background,
+          ...(background === undefined && base.bind !== undefined ? { bind: base.bind } : {}),
+          layout: layout ?? (keepShape ? base.layout : undefined),
+          footer: footer ?? base.footer,
           notes: entry.notes ?? base.notes,
         },
         ctx,
         warnings,
       );
-      // normalizeSlide 对坏元素是「丢弃 + 警告」；写入口要严格：有警告就当错误告诉 agent
       slide = merged;
     } catch (cause) {
       throw new DeckOpError(`${label}：${cause instanceof Error ? cause.message : String(cause)}`);
     }
-    if (entry.elements !== undefined) {
+    if (elements !== undefined) {
       // 严格校验一遍：丢弃的元素报错而不是静默
-      entry.elements.forEach((element, elementIndex) => {
+      elements.forEach((element, elementIndex) => {
         try {
           normalizeElement(element, ctx);
         } catch (cause) {
@@ -161,11 +198,73 @@ function findElement(slide: Slide, id: string, page: number): { element: SlideEl
   return { element: slide.elements[index] as SlideElement, index };
 }
 
-/** 元素打补丁：kind 与 id 不可改；补丁并进去后整个元素重新规整，所以非法值一定被拦 */
+/**
+ * 元素打补丁：kind 与 id 不可改；补丁并进去后整个元素重新规整，所以非法值一定被拦。
+ * 补丁里**不是 `$token`** 的可绑定字段（color / fontSize …）= 手动指定具体值 → 拆掉该字段的主题绑定，换主题时它保持不变；
+ * 补丁写 `$token` 则（重新）绑定。
+ */
 export function patchElement(deck: Deck, element: SlideElement, patch: Record<string, unknown>): SlideElement {
   const forbidden = ["id", "kind"].filter((key) => key in patch);
   if (forbidden.length > 0) throw new DeckOpError(`不能改元素的 ${forbidden.join(" / ")}`);
-  return normalizeElement({ ...element, ...patch, id: element.id, kind: element.kind }, ctxOf(deck));
+  const bind: ElementBindings = { ...(element.bind ?? {}) };
+  for (const key of Object.keys(patch)) {
+    if (key in BINDABLE_FIELDS && tokenName(patch[key]) === null) delete bind[key as BindField];
+  }
+  const { bind: _old, ...rest } = element;
+  return normalizeElement({ ...rest, ...patch, ...(Object.keys(bind).length === 0 ? {} : { bind }), id: element.id, kind: element.kind }, ctxOf(deck));
+}
+
+/** 编辑器改了元素的某些字段后调：值变了的绑定字段拆掉绑定（手改的值不再跟主题走） */
+export function unbindChanged(before: SlideElement, after: SlideElement): SlideElement {
+  if (after.bind === undefined) return after;
+  const bind: ElementBindings = { ...after.bind };
+  let dropped = false;
+  for (const field of Object.keys(bind) as BindField[]) {
+    if ((before as unknown as Record<string, unknown>)[field] !== (after as unknown as Record<string, unknown>)[field]) {
+      delete bind[field];
+      dropped = true;
+    }
+  }
+  if (!dropped) return after;
+  const { bind: _drop, ...rest } = after;
+  return (Object.keys(bind).length === 0 ? rest : { ...rest, bind }) as SlideElement;
+}
+
+/**
+ * 换主题：只重算「绑定了 token」的颜色 / 字号 / 字体与页背景；手动改过的值（没有绑定）原样保留。
+ * 没动的页 / 元素保持引用相等（缩略图靠它跳过重画）。
+ */
+export function applyTheme(deck: Deck, theme: DeckTheme | undefined): Deck {
+  const rt = resolveTheme(theme);
+  const slides = deck.slides.map((slide) => {
+    let changed = false;
+    let background = slide.background;
+    const bgToken = slide.bind?.background;
+    if (bgToken !== undefined) {
+      const value = tokenValue(rt, "fill", bgToken);
+      if (typeof value === "string" && value !== background) {
+        background = value;
+        changed = true;
+      }
+    }
+    const elements = slide.elements.map((element) => {
+      if (element.bind === undefined) return element;
+      let patched: Record<string, unknown> | null = null;
+      for (const [field, token] of Object.entries(element.bind) as [BindField, string][]) {
+        const value = tokenValue(rt, field, token);
+        if (value !== undefined && (element as unknown as Record<string, unknown>)[field] !== value) {
+          patched = patched ?? { ...element };
+          patched[field] = value;
+        }
+      }
+      if (patched === null) return element;
+      changed = true;
+      return patched as unknown as SlideElement;
+    });
+    return changed ? { ...slide, ...(background === undefined ? {} : { background }), elements } : slide;
+  });
+  const { theme: _old, ...rest } = deck;
+  return { ...rest, ...(theme === undefined ? {} : { theme }), slides };
 }
 
 export function applyEdit(deck: Deck, ops: readonly EditOp[]): EditResult {
@@ -201,12 +300,15 @@ export function applyEdit(deck: Deck, ops: readonly EditOp[]): EditResult {
       }
       case "set_slide": {
         const { slide, index } = slideAt(next, op.slide);
-        const background = op.background === undefined ? slide.background : normalizeBackground(op.background);
+        const bound = op.background === undefined ? undefined : normalizeBackgroundBound(op.background, next.theme);
+        const background = op.background === undefined ? slide.background : bound?.color;
+        const bindToken = op.background === undefined ? slide.bind?.background : bound?.token;
         const notes = op.notes === undefined ? slide.notes : op.notes;
-        const { background: _b, notes: _n, ...rest } = slide;
+        const { background: _b, notes: _n, bind: _bind, ...rest } = slide;
         next = withSlide(next, index, {
           ...rest,
           ...(background === undefined ? {} : { background }),
+          ...(bindToken === undefined ? {} : { bind: { background: bindToken } }),
           ...(notes === undefined || notes === "" ? {} : { notes }),
         });
         pages.add(op.slide);
@@ -231,8 +333,8 @@ export function applyEdit(deck: Deck, ops: readonly EditOp[]): EditResult {
           ...next,
           ...(op.title === undefined ? {} : { title: op.title.slice(0, 200) }),
           ...(op.aspect === undefined ? {} : { aspect: op.aspect }),
-          ...(op.theme === undefined ? {} : { theme: op.theme }),
         };
+        if (op.theme !== undefined) next = applyTheme(next, op.theme);
         break;
       }
     }
@@ -302,7 +404,8 @@ function elementLine(element: SlideElement): string {
     case "text": {
       const plain = richTextToPlain(element.html).replace(/\s+/g, " ").trim();
       const text = plain.length > 80 ? `${plain.slice(0, 80)}…` : plain;
-      return `text id=${element.id} ${geo} size=${element.fontSize} "${text}"`;
+      const role = element.bind?.fontSize === undefined ? "" : `($${element.bind.fontSize})`;
+      return `text id=${element.id} ${geo} size=${element.fontSize}${role} "${text}"`;
     }
     case "image":
       return `image id=${element.id} ${geo} src=${element.src} fit=${element.fit}`;
@@ -318,11 +421,12 @@ function elementLine(element: SlideElement): string {
 /** 给模型看的文本摘要：页数、每页元素（kind / 位置 / 文字前 80 字）、备注。page = 只看那一页 */
 export function summarizeDeck(deck: Deck, page?: number): string {
   const canvas = CANVAS_SIZE[deck.aspect];
-  const head = `Deck "${deck.title}" · ${deck.aspect} (canvas ${canvas.w}×${canvas.h}) · ${deck.slides.length} slide(s)`;
+  const themeNote = deck.theme?.id === undefined ? "" : ` · theme ${deck.theme.id}`;
+  const head = `Deck "${deck.title}" · ${deck.aspect} (canvas ${canvas.w}×${canvas.h})${themeNote} · ${deck.slides.length} slide(s)`;
   const pages = page === undefined ? deck.slides.map((_, i) => i + 1) : [slideAt(deck, page).index + 1];
   const body = pages.map((n) => {
     const slide = deck.slides[n - 1] as Slide;
-    const lines = [`Slide ${n} id=${slide.id}${slide.background === undefined ? "" : ` background=${slide.background}`} · ${slide.elements.length} element(s)`];
+    const lines = [`Slide ${n} id=${slide.id}${slide.layout === undefined ? "" : ` layout=${slide.layout}`}${slide.background === undefined ? "" : ` background=${slide.background}`} · ${slide.elements.length} element(s)`];
     for (const element of slide.elements) lines.push(`  - ${elementLine(element)}`);
     if (slide.notes !== undefined) lines.push(`  notes: ${JSON.stringify(slide.notes.length > 300 ? `${slide.notes.slice(0, 300)}…` : slide.notes)}`);
     return lines.join("\n");
@@ -372,7 +476,7 @@ export function updateElements(
     slides: deck.slides.map((slide) =>
       slide.id !== slideId
         ? slide
-        : { ...slide, elements: slide.elements.map((element) => (ids.has(element.id) ? update(element) : element)) },
+        : { ...slide, elements: slide.elements.map((element) => (ids.has(element.id) ? unbindChanged(element, update(element)) : element)) },
     ),
   };
 }
@@ -399,27 +503,6 @@ export { ElementError };
 
 // ─── 写完后的体检（回给 agent，让它自己修） ─────────────────────────────
 
-const CJK_CHAR = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
-
-/** 估算一段文字在宽 width 的框里要多高（px）：CJK 字宽 ≈ 字号，拉丁 ≈ 0.55 字号，行高 1.25 */
-export function estimateTextHeight(plain: string, fontSize: number, width: number): number {
-  const usable = Math.max(width, fontSize);
-  let lines = 0;
-  for (const line of plain.split("\n")) {
-    let used = 0;
-    let count = 1;
-    for (const ch of line) {
-      const step = CJK_CHAR.test(ch) ? fontSize : fontSize * 0.55;
-      if (used + step > usable) {
-        count += 1;
-        used = step;
-      } else used += step;
-    }
-    lines += count;
-  }
-  return lines * fontSize * 1.25;
-}
-
 /**
  * 一页的体检：文字溢出框、元素伸出画布。只报**大概率是问题**的（宽松阈值，免得吓到模型反复改），
  * 每条带页号与元素 id，模型能直接 slides_edit 修。
@@ -431,14 +514,16 @@ export function lintSlide(deck: Deck, page: number): string[] {
   const out: string[] = [];
   for (const element of slide.elements) {
     if (element.kind === "text") {
-      const need = estimateTextHeight(richTextToPlain(element.html), element.fontSize, element.w);
+      const need = estimateTextHeight(richTextToPlain(element.html), element.fontSize, element.w, { lineHeight: element.lineHeight ?? 1.25, letterSpacing: element.letterSpacing ?? 0 });
       if (need > element.h * 1.15 + 4) {
         out.push(`slide ${page}: text ${element.id} probably overflows its box (needs ≈${Math.round(need)}px, box h=${Math.round(element.h)}) — enlarge h, shorten the text or reduce fontSize`);
       }
     }
     const right = element.x + element.w;
     const bottom = element.y + element.h;
-    if (element.kind !== "line" && (element.x < -4 || element.y < -4 || right > canvas.w + 4 || bottom > canvas.h + 4)) {
+    // 没字的色块 / 圆是有意出血的装饰；图片满版也常出血——只管会丢字的元素
+    const bleed = (element.kind === "shape" && element.text === undefined);
+    if (element.kind !== "line" && !bleed && (element.x < -4 || element.y < -4 || right > canvas.w + 4 || bottom > canvas.h + 4)) {
       out.push(`slide ${page}: ${element.kind} ${element.id} extends past the ${canvas.w}×${canvas.h} canvas (x=${Math.round(element.x)} y=${Math.round(element.y)} right=${Math.round(right)} bottom=${Math.round(bottom)})`);
     }
   }

@@ -13,6 +13,29 @@
  * 认不出的元素丢掉并记一条警告——文件永远能打开，不会因为一个字段整份报错。
  */
 
+import {
+  BINDABLE_FIELDS,
+  presetTheme,
+  PALETTE_KEYS,
+  resolveTheme,
+  SCALE_KEYS,
+  THEME_PRESETS,
+  tokenFitsField,
+  tokenName,
+  tokenValue,
+  withLegacyFields,
+  type BindField,
+  type DeckTheme,
+  type ElementBindings,
+  type ResolvedTheme,
+  type ThemeFonts,
+  type ThemeMotif,
+  type ThemePalette,
+  type ThemeScale,
+} from "./slides-theme.ts";
+
+export type { DeckTheme, ElementBindings };
+
 export type Aspect = "16:9" | "4:3";
 
 export const CANVAS_SIZE: Readonly<Record<Aspect, { w: number; h: number }>> = {
@@ -34,6 +57,8 @@ export type ElementKind = "text" | "image" | "table" | "shape" | "line";
 
 interface ElementBase {
   id: string;
+  /** 哪些字段「跟着主题走」：字段名 → token 名（`color: "accent"`）。字段本身存具体值；手改过的字段会被拆掉绑定 */
+  bind?: ElementBindings;
   x: number;
   y: number;
   w: number;
@@ -51,6 +76,12 @@ export interface TextElement extends ElementBase {
   color: string;
   align: TextAlign;
   valign: VAlign;
+  /** 字距（px）；眉题拉开用 */
+  letterSpacing?: number;
+  /** 行高倍数；缺席 = 1.25 */
+  lineHeight?: number;
+  /** 列表项之间的间距（px） */
+  paraGap?: number;
 }
 
 export interface ImageElement extends ElementBase {
@@ -99,19 +130,21 @@ export interface LineElement extends ElementBase {
 
 export type SlideElement = TextElement | ImageElement | TableElement | ShapeElement | LineElement;
 
+/** 页脚位置：left = 左下（默认），right = 右下（左侧有满幅图时），none = 本页不画 */
+export type SlideFooter = "left" | "right" | "none";
+
 export interface Slide {
   id: string;
   /** 页背景色；缺席 = deck.theme.background */
   background?: string;
+  /** 页背景跟着主题走时记下 token 名（`{ background: "surface" }`），换主题时重算 */
+  bind?: { background?: string };
+  /** 这一页是用哪个版式生成的（信息性：slides_read 给 agent 看；用户拖改后仍保留） */
+  layout?: string;
+  footer?: SlideFooter;
   elements: SlideElement[];
   /** 演讲备注（纯文本） */
   notes?: string;
-}
-
-export interface DeckTheme {
-  fontFamily?: string;
-  color?: string;
-  background?: string;
 }
 
 export interface Deck {
@@ -503,8 +536,26 @@ export function normalizeElement(raw: unknown, ctx: NormalizeContext): SlideElem
   if (item === null) throw new ElementError("元素必须是对象");
   const kind = item["kind"];
   const { canvas } = ctx;
+  const theme = resolveTheme(ctx.theme);
   const textColor = safeColor(ctx.theme?.color, DEFAULT_TEXT_COLOR);
   const id = typeof item["id"] === "string" && /^[\w-]{1,40}$/.test(item["id"]) ? item["id"] : newId();
+  // 已落盘的绑定（文件里的 bind）；只留认得的字段与合法 token，且该字段的值本身仍在
+  const prior = record(item["bind"]) ?? {};
+  const bind: ElementBindings = {};
+  /** 读一个可绑定字段：写成 `$token` → 解析成具体值并登记绑定；否则按 plain 规整，原有绑定保留 */
+  const bound = <T extends string | number>(field: BindField, plain: () => T): T => {
+    const rawValue = item[field];
+    const name = tokenName(rawValue);
+    if (name !== null) {
+      const value = tokenValue(theme, field, name);
+      if (value === undefined) throw new ElementError(`${field}: 未知的主题 token ${String(rawValue)}（${tokenHelp(field)}）`);
+      bind[field] = name;
+      return value as T;
+    }
+    const keep = prior[field];
+    if (typeof keep === "string" && tokenFitsField(field, keep)) bind[field] = keep;
+    return plain();
+  };
   const base = {
     id,
     x: finite(item["x"], 80, -canvas.w, canvas.w * 2),
@@ -513,20 +564,30 @@ export function normalizeElement(raw: unknown, ctx: NormalizeContext): SlideElem
     h: finite(item["h"], 100, 1, canvas.h * 4),
     ...(typeof item["rotate"] === "number" && Number.isFinite(item["rotate"]) && item["rotate"] !== 0 ? { rotate: item["rotate"] % 360 } : {}),
   };
+  const withBind = <E extends SlideElement>(element: E): E => (Object.keys(bind).length === 0 ? element : { ...element, bind });
+  const optionalNumber = (key: string, min: number, max: number): Record<string, number> => {
+    const value = item[key];
+    return typeof value === "number" && Number.isFinite(value) ? { [key]: Math.min(max, Math.max(min, value)) } : {};
+  };
   switch (kind) {
     case "text": {
       const html = typeof item["html"] === "string" ? sanitizeRichHtml(item["html"]) : typeof item["text"] === "string" ? plainToRichHtml(item["text"]) : "";
-      const fontFamily = safeFontFamily(item["fontFamily"]);
-      return {
+      const fontFamily = bound<string>("fontFamily", () => safeFontFamily(item["fontFamily"]) ?? "");
+      const fontSize = bound<number>("fontSize", () => finite(item["fontSize"], 28, 6, 400));
+      const color = bound<string>("color", () => safeColor(item["color"], textColor));
+      return withBind({
         ...base,
         kind: "text",
         html,
-        ...(fontFamily === undefined ? {} : { fontFamily }),
-        fontSize: finite(item["fontSize"], 28, 6, 400),
-        color: safeColor(item["color"], textColor),
+        ...(fontFamily === "" ? {} : { fontFamily }),
+        fontSize,
+        color,
         align: pickEnum(item["align"], ["left", "center", "right"] as const, "left"),
         valign: pickEnum(item["valign"], ["top", "middle", "bottom"] as const, "top"),
-      };
+        ...optionalNumber("letterSpacing", -5, 40),
+        ...optionalNumber("lineHeight", 0.8, 3),
+        ...optionalNumber("paraGap", 0, 80),
+      } as TextElement);
     }
     case "image": {
       const src = safeRelativePath(item["src"]);
@@ -550,31 +611,40 @@ export function normalizeElement(raw: unknown, ctx: NormalizeContext): SlideElem
       const filled = rows.map((row) => [...row, ...Array.from({ length: cols - row.length }, () => "")]);
       const widths = Array.isArray(item["colWidths"]) ? item["colWidths"].filter((n): n is number => typeof n === "number" && n > 0) : [];
       const sum = widths.reduce((a, b) => a + b, 0);
-      return {
+      const fontSize = bound<number>("fontSize", () => finite(item["fontSize"], 20, 6, 200));
+      const color = bound<string>("color", () => safeColor(item["color"], textColor));
+      const headerFill = bound<string>("headerFill", () => safeColor(item["headerFill"], "#1f2937"));
+      const headerColor = bound<string>("headerColor", () => safeColor(item["headerColor"], "#ffffff"));
+      const borderColor = bound<string>("borderColor", () => safeColor(item["borderColor"], "#d0d7de"));
+      return withBind({
         ...base,
         kind: "table",
         rows: filled,
         header: item["header"] !== false,
         ...(widths.length === cols && sum > 0 ? { colWidths: widths.map((n) => n / sum) } : {}),
-        fontSize: finite(item["fontSize"], 20, 6, 200),
-        color: safeColor(item["color"], textColor),
-        headerFill: safeColor(item["headerFill"], "#1f2937"),
-        headerColor: safeColor(item["headerColor"], "#ffffff"),
-        borderColor: safeColor(item["borderColor"], "#d0d7de"),
-      };
+        fontSize,
+        color,
+        headerFill,
+        headerColor,
+        borderColor,
+      } as TableElement);
     }
     case "shape": {
-      return {
+      const fill = bound<string>("fill", () => safePaint(item["fill"], "#e5e7eb"));
+      const stroke = bound<string>("stroke", () => safePaint(item["stroke"], "none"));
+      const fontSize = bound<number>("fontSize", () => finite(item["fontSize"], 24, 6, 400));
+      const color = bound<string>("color", () => safeColor(item["color"], textColor));
+      return withBind({
         ...base,
         kind: "shape",
         shape: pickEnum(item["shape"], SHAPES, "rect"),
-        fill: safePaint(item["fill"], "#e5e7eb"),
-        stroke: safePaint(item["stroke"], "none"),
+        fill,
+        stroke,
         strokeWidth: finite(item["strokeWidth"], 2, 0, 40),
         ...(typeof item["text"] === "string" && item["text"] !== "" ? { text: item["text"].slice(0, 2000) } : {}),
-        fontSize: finite(item["fontSize"], 24, 6, 400),
-        color: safeColor(item["color"], textColor),
-      };
+        fontSize,
+        color,
+      } as ShapeElement);
     }
     case "line": {
       const rawPoints = Array.isArray(item["points"]) ? item["points"] : [];
@@ -582,19 +652,32 @@ export function normalizeElement(raw: unknown, ctx: NormalizeContext): SlideElem
         Array.isArray(value) && value.length >= 2 ? [finite(value[0], fallback[0], -4000, 8000), finite(value[1], fallback[1], -4000, 8000)] : fallback;
       const w = base.w;
       const h = base.h;
-      return {
+      const stroke = bound<string>("stroke", () => safeColor(item["stroke"], textColor));
+      return withBind({
         ...base,
         kind: "line",
         points: [point(rawPoints[0], [0, 0]), point(rawPoints[1], [w, h])],
         startArrow: pickEnum(item["startArrow"], ["none", "arrow"] as const, "none"),
         endArrow: pickEnum(item["endArrow"], ["none", "arrow"] as const, "none"),
-        stroke: safeColor(item["stroke"], textColor),
+        stroke,
         strokeWidth: finite(item["strokeWidth"], 4, 0.5, 40),
         dash: item["dash"] === true,
-      };
+      } as LineElement);
     }
     default:
       throw new ElementError(`未知的元素 kind：${typeof kind === "string" ? kind : String(kind)}（可用：text / image / table / shape / line）`);
+  }
+}
+
+/** token 写错时给 agent 的提示：这个字段认哪些名字 */
+function tokenHelp(field: BindField): string {
+  switch (BINDABLE_FIELDS[field]) {
+    case "color":
+      return `颜色可用：${["bg", "surface", "ink", "muted", "accent", "accent2", "onAccent", "onAccent2", "line"].map((n) => `$${n}`).join(" ")}`;
+    case "size":
+      return `字号可用：${SCALE_KEYS.map((n) => `$${n}`).join(" ")}`;
+    case "font":
+      return "字体可用：$heading $body";
   }
 }
 
@@ -604,19 +687,70 @@ export function normalizeBackground(value: unknown): string | undefined {
   return color === "" ? undefined : color;
 }
 
+/** 页背景：认 `$token`（解析成具体色并返回 token 名）。写错的 token 抛 ElementError，让 agent 改 */
+export function normalizeBackgroundBound(value: unknown, theme: DeckTheme | undefined): { color: string; token?: string } | undefined {
+  const name = tokenName(value);
+  if (name !== null) {
+    const color = tokenValue(resolveTheme(theme), "fill", name);
+    if (typeof color !== "string") throw new ElementError(`background: 未知的主题 token ${String(value)}（${tokenHelp("fill")}）`);
+    return { color, token: name };
+  }
+  const color = normalizeBackground(value);
+  return color === undefined ? undefined : { color };
+}
+
+const MOTIFS: readonly ThemeMotif[] = ["circle", "block", "band"];
+
+/**
+ * 主题规整。接受：内置主题 id 字符串（`"forest"`）、`{ id, palette?, fonts?, scale?, ... }`（缺的项从该 id 的内置主题补，
+ * 没有 id 就从默认主题补）、或只有旧三字段的老写法 `{ fontFamily, color, background }`（保持原样不扩展）。
+ */
 export function normalizeTheme(value: unknown): DeckTheme | undefined {
+  if (typeof value === "string") return presetTheme(value.trim().toLowerCase());
   const item = record(value);
   if (item === null) return undefined;
+  const rawId = typeof item["id"] === "string" ? item["id"].trim().toLowerCase() : "";
+  const preset = THEME_PRESETS[rawId];
+  const rawPalette = record(item["palette"]);
+  const rawFonts = record(item["fonts"]);
+  const rawScale = record(item["scale"]);
+  const structured = preset !== undefined || rawPalette !== null || rawFonts !== null || rawScale !== null || typeof item["motif"] === "string";
   const fontFamily = safeFontFamily(item["fontFamily"]);
   const color = safeColor(item["color"], "");
   const background = safeColor(item["background"], "");
-  const theme: DeckTheme = {
-    ...(fontFamily === undefined ? {} : { fontFamily }),
-    ...(color === "" ? {} : { color }),
-    ...(background === "" ? {} : { background }),
+  if (!structured) {
+    const legacy: DeckTheme = {
+      ...(fontFamily === undefined ? {} : { fontFamily }),
+      ...(color === "" ? {} : { color }),
+      ...(background === "" ? {} : { background }),
+    };
+    return Object.keys(legacy).length === 0 ? undefined : legacy;
+  }
+  const base = resolveTheme(preset);
+  const palette = { ...base.palette } as ThemePalette;
+  for (const key of PALETTE_KEYS) palette[key] = safeColor(rawPalette?.[key], base.palette[key]);
+  // 旧字段也能在结构化主题上覆盖：color → ink，background → bg
+  if (rawPalette?.["ink"] === undefined && color !== "") palette.ink = color;
+  if (rawPalette?.["bg"] === undefined && background !== "") palette.bg = background;
+  const fonts: ThemeFonts = {
+    heading: safeFontFamily(rawFonts?.["heading"]) ?? base.fonts.heading,
+    body: safeFontFamily(rawFonts?.["body"]) ?? (rawFonts === null ? fontFamily : undefined) ?? base.fonts.body,
   };
-  return Object.keys(theme).length === 0 ? undefined : theme;
+  const scale = { ...base.scale } as ThemeScale;
+  for (const key of SCALE_KEYS) scale[key] = finite(rawScale?.[key], base.scale[key], 8, 200);
+  const theme: DeckTheme = {
+    ...(preset === undefined ? {} : { id: rawId }),
+    palette,
+    fonts,
+    scale,
+    motif: pickEnum(item["motif"], MOTIFS, base.motif),
+    headingBold: typeof item["headingBold"] === "boolean" ? item["headingBold"] : base.headingBold,
+    ...(item["footer"] === false ? { footer: false } : {}),
+  };
+  return withLegacyFields(theme);
 }
+
+const FOOTERS: readonly SlideFooter[] = ["left", "right", "none"];
 
 export function normalizeSlide(raw: unknown, ctx: NormalizeContext, warnings: string[] = []): Slide {
   const item = record(raw) ?? {};
@@ -634,11 +768,26 @@ export function normalizeSlide(raw: unknown, ctx: NormalizeContext, warnings: st
       warnings.push(`元素 #${index + 1} 已忽略：${cause instanceof Error ? cause.message : String(cause)}`);
     }
   });
-  const background = normalizeBackground(item["background"]);
+  // 页背景：写 `$token` 就绑定；文件里已有的 bind 在值还在时保留
+  let background: string | undefined;
+  let backgroundToken: string | undefined;
+  try {
+    const bound = normalizeBackgroundBound(item["background"], ctx.theme);
+    background = bound?.color;
+    backgroundToken = bound?.token;
+  } catch (cause) {
+    warnings.push(cause instanceof Error ? cause.message : String(cause));
+  }
+  const priorToken = record(item["bind"])?.["background"];
+  if (backgroundToken === undefined && background !== undefined && typeof priorToken === "string" && tokenFitsField("fill", priorToken)) backgroundToken = priorToken;
   const id = typeof item["id"] === "string" && /^[\w-]{1,40}$/.test(item["id"]) ? item["id"] : newId();
+  const footer = pickEnum(item["footer"], FOOTERS, "left");
   return {
     id,
     ...(background === undefined ? {} : { background }),
+    ...(backgroundToken === undefined ? {} : { bind: { background: backgroundToken } }),
+    ...(typeof item["layout"] === "string" && /^[\w-]{1,30}$/.test(item["layout"]) ? { layout: item["layout"] } : {}),
+    ...(footer === "left" ? {} : { footer }),
     elements,
     ...(typeof item["notes"] === "string" && item["notes"] !== "" ? { notes: item["notes"].slice(0, 20000) } : {}),
   };

@@ -5,7 +5,7 @@
  */
 import { parseDeck as parseMarpPages } from "./doc-slides.ts";
 import { CANVAS_SIZE, newId, plainToRichHtml, type Deck, type Slide, type SlideElement } from "./slides.ts";
-import { estimateTextHeight } from "./slides-ops.ts";
+import { estimateTextHeight } from "./slides-measure.ts";
 
 export interface ConvertedImage {
   /** 新的相对路径（`<名字>.assets/x.png`） */

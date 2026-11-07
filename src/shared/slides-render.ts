@@ -8,6 +8,8 @@
  * 这里输出的是**内容**，不是应用界面：颜色是用户在文稿里选的值（经 safeColor 过白名单），
  * 不走设计系统 token——文稿换主题时不该跟着应用的深浅色变。
  */
+import { footerElement } from "./slides-footer.ts";
+import { HEADING_WRAP_MIN_SIZE } from "./slides-measure.ts";
 import {
   CANVAS_SIZE,
   DEFAULT_BACKGROUND,
@@ -40,6 +42,7 @@ export const SLIDE_CSS = `
 .sl-rich{min-height:1em;white-space:pre-wrap}
 .sl-rich ul,.sl-rich ol{margin:0;padding-left:1.3em}
 .sl-rich li{margin:0}
+.sl-rich li:not(:last-child){margin-bottom:var(--pg,0px)}
 /* 居中 / 右对齐的文字里，列表标记跟着文字走（inside），而不是钉在框的最左边；左对齐保留悬挂缩进 */
 .sl-text[data-align="center"] .sl-rich ul,.sl-text[data-align="center"] .sl-rich ol,.sl-text[data-align="right"] .sl-rich ul,.sl-text[data-align="right"] .sl-rich ol{padding-left:0;list-style-position:inside}
 .sl-table{width:100%;height:100%;border-collapse:collapse;table-layout:fixed}
@@ -69,7 +72,12 @@ export function elementBoxStyle(element: SlideElement): string {
 
 function textInner(element: TextElement, deck: RenderContext["deck"]): string {
   const justify = element.valign === "middle" ? "center" : element.valign === "bottom" ? "flex-end" : "flex-start";
-  const style = `justify-content:${justify};text-align:${element.align};font-family:${escapeHtml(fontOf(element, deck))};font-size:${n(element.fontSize)}px;color:${element.color}`;
+  const extra =
+    (element.letterSpacing === undefined ? "" : `;letter-spacing:${n(element.letterSpacing)}px`) +
+    (element.lineHeight === undefined ? "" : `;line-height:${n(element.lineHeight)}`) +
+    (element.paraGap === undefined ? "" : `;--pg:${n(element.paraGap)}px`) +
+    (element.fontSize >= HEADING_WRAP_MIN_SIZE ? ";text-wrap:balance;word-break:keep-all" : "");
+  const style = `justify-content:${justify};text-align:${element.align};font-family:${escapeHtml(fontOf(element, deck))};font-size:${n(element.fontSize)}px;color:${element.color}${extra}`;
   // html 已在写入 / 读入时 sanitize；这里不再二次转义（那会把 <b> 变成文字）
   return `<div class="sl-text" data-align="${element.align}" style="${style}"><div class="sl-rich">${element.html}</div></div>`;
 }
@@ -165,10 +173,11 @@ export function renderElement(element: SlideElement, ctx: RenderContext): string
 }
 
 /** 一整页：固定在画布逻辑尺寸，缩放交给外层（CSS transform / zoom / 页面尺寸） */
-export function renderSlide(slide: Slide, ctx: RenderContext): string {
+export function renderSlide(slide: Slide, ctx: RenderContext, index?: number): string {
   const { w, h } = CANVAS_SIZE[ctx.deck.aspect];
+  const footer = index === undefined ? null : footerElement(ctx.deck, slide, index);
   const style = `width:${w}px;height:${h}px;background:${slideBackground(slide, ctx.deck)};font-family:${escapeHtml(ctx.deck.theme?.fontFamily ?? DEFAULT_FONT_FAMILY)}`;
-  return `<section class="sl" style="${style}">${slide.elements.map((element) => renderElement(element, ctx)).join("")}</section>`;
+  return `<section class="sl" style="${style}">${slide.elements.map((element) => renderElement(element, ctx)).join("")}${footer === null ? "" : renderElement(footer, ctx)}</section>`;
 }
 
 export type DocumentMode = "web" | "print" | "png";
@@ -184,7 +193,7 @@ export function renderDeckDocument(deck: Deck, ctx: RenderContext, mode: Documen
   const { w, h } = CANVAS_SIZE[deck.aspect];
   const slides = mode === "png" ? [deck.slides[onlyIndex ?? 0] as Slide] : deck.slides;
   const title = escapeHtml(deck.title === "" ? "演示文稿" : deck.title);
-  const pages = slides.map((slide) => renderSlide(slide, ctx));
+  const pages = slides.map((slide, i) => renderSlide(slide, ctx, mode === "png" ? (onlyIndex ?? 0) : i));
   const base = `html,body{margin:0;padding:0}${SLIDE_CSS}`;
   if (mode === "print") {
     return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title><style>${base}@page{size:${w}px ${h}px;margin:0}.sl{page-break-after:always;break-after:page}.sl:last-child{page-break-after:auto;break-after:auto}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>${pages.join("")}</body></html>`;
