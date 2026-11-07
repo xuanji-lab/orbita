@@ -1324,6 +1324,83 @@ html[data-pointer-drag] iframe {
   opacity: 1;
 }
 
+/*
+ * 任务行尾：静止层（常显标记 + 「多久没动了」）与悬停层（上面那三个键 + 角标）叠在同一格里
+ * （grid 同一格重叠，格宽取两层较宽的）。悬停 / 键盘聚焦 / 菜单开着时静止层淡出、悬停层浮出，
+ * 行高与标题截断位置不跳。静止层只是画给人看的：不接指针（点什么都得先把指针移上这一行，
+ * 那时已换成悬停层），读屏与键盘走悬停层里的真按钮。
+ * 右缘：静止层 padding-inline-end 4px = 行首状态槽的左内边距（NavRow 的 padding-left），
+ * 时间的右缘与「⋮」字形右缘（24px 键框里 14px 字形 ≈ 5px）落在同一条血线上；
+ * 悬停层的键保持原位不动。几何由 scripts/ui-edges.mjs 把关。
+ */
+/*
+ * 行的悬停 / 选中底铺满整行（含行尾），不只铺标题那一格（设计稿 a / b 图）：行尾现在常驻着时间，
+ * 底停在标题右缘会让时间悬在高亮外面。底画在 .task-row 的伪元素上（上下各缩 2px = NavRow 的
+ * 外边距，高度与原来逐像素一致），标题按钮自己的底让位。选中盖过悬停靠规则在后（同 .option-row 的取舍）。
+ */
+.task-row {
+  position: relative;
+}
+.task-row::before {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  transition: var(--transition-hover);
+}
+.task-row:hover::before {
+  background: var(--option-hover-bg);
+}
+.task-row:has(> .option-row[data-active="true"])::before {
+  background: var(--option-active-bg);
+}
+.task-row > .option-row,
+.task-row > .option-row:hover,
+.task-row > .option-row[data-active="true"] {
+  background: transparent;
+}
+
+.task-row-tail {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-items: end;
+}
+.task-row-tail > * {
+  grid-area: 1 / 1;
+}
+.task-row-acts,
+.task-row-rest {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.task-row-rest {
+  padding-inline-end: var(--space-1);
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.task-row-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+.task-row-age {
+  /* 小字 + 三级灰 + 等宽数字：一列时间的数字上下对齐好扫 */
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.task-row:hover .task-row-rest,
+.task-row:has(:focus-visible) .task-row-rest,
+.task-row:has([aria-expanded="true"]) .task-row-rest {
+  opacity: 0;
+}
+
 /* ===== 聊天面板：行级 hover / 悬停浮现 ===== */
 
 /* 收尾确认卡（WrapupCard，原型 8 方案 A）。铅笔与行尾按钮恒渲染、hover 到那一行才现形——

@@ -1376,6 +1376,8 @@ export function App() {
             setSidebarWidth(width);
             changeSettings({ sidebarWidth: width });
           }}
+          ageDays={settings.sidebarAgeDays ?? null}
+          onAgeDaysChange={(sidebarAgeDays) => changeSettings({ sidebarAgeDays })}
           usagePet={settings.usagePet}
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
           usageSay={focus.say}

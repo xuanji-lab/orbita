@@ -314,6 +314,17 @@ export const zh: Messages = {
     hoursAgo: (n) => `${n} 小时前`,
     daysAgo: (n) => `${n} 天前`,
     dateTime: (ms) => new Date(ms).toLocaleString("zh-CN"),
+    ageNow: "刚刚",
+    ageMinutes: (n) => `${n} 分钟`,
+    ageHours: (n) => `${n} 小时`,
+    ageYesterday: "昨天",
+    ageDays: (n) => `${n} 天`,
+    lastActiveAt: (ms) => {
+      const at = new Date(ms);
+      const clock = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+      const year = at.getFullYear() === new Date().getFullYear() ? "" : `${at.getFullYear()} 年 `;
+      return `最后活动 ${year}${at.getMonth() + 1} 月 ${at.getDate()} 日 ${clock}`;
+    },
   },
 
   app: {
@@ -871,6 +882,13 @@ export const zh: Messages = {
     filterStarredTip: "只看星标任务",
     filterTodos: "有待办",
     filterTodosTip: "只看有未完成遗留事项的任务",
+    filterAge: "时间范围",
+    filterAgeTip: "只看最近一段时间动过的任务",
+    filterAgeChip: (days) => `${days} 天`,
+    filterAgeHeader: "只看最近活动过的",
+    filterAgeChoice: (days) => `最近 ${days} 天`,
+    filterAgeAny: "不限",
+    emptyInRange: (days) => `最近 ${days} 天里没有符合当前筛选的任务。`,
     backToTasks: "返回任务",
     backToTasksTip: "返回任务列表",
     archived: "已归档",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { PanelEmpty } from "./PanelEmpty";
@@ -23,14 +23,24 @@ import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
+import {
+  SIDEBAR_AGE_CHOICES,
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
+  type SidebarAgeDays,
+  type UsagePetPref,
+} from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/settings-tabs.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { aggregateRunStates, runStateLabel, runStateOf } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
-import { nextFilterRowMode } from "./filter-row-compact.ts";
+import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
+import { ageCounts, filterByAge } from "./sidebar-age.ts";
+import { sessionAgeLabel } from "./relative-time.ts";
+import { useMinuteTick } from "./use-minute-tick.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import {
   effectiveSidebarFilters,
@@ -95,8 +105,11 @@ function filterEmptyText(
   status: StatusFilter,
   starredOnly: boolean,
   hasTodosOnly: boolean,
+  /** 非 null = 时间范围开着，且去掉它之后本来是有会话的（范围才是「扑空」的原因） */
+  emptiedByAge: SidebarAgeDays | null,
   t: Messages,
 ): string {
+  if (emptiedByAge !== null) return t.sidebar.emptyInRange(emptiedByAge);
   if (hasTodosOnly) return t.sidebar.emptyHasTodos;
   if (status === "done") return starredOnly ? t.sidebar.emptyDoneStarred : t.sidebar.emptyDone;
   return t.sidebar.emptyStarred;
@@ -139,6 +152,9 @@ export function Sidebar(props: {
   unread: ReadonlySet<string>;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /** 时间范围筛选（settings.sidebarAgeDays；null = 不限）与改它的回调（落盘由 App 做） */
+  ageDays: SidebarAgeDays | null;
+  onAgeDaysChange: (next: SidebarAgeDays | null) => void;
   /** 左下角星云的摆放偏好（settings.usagePet）与改它的回调 */
   usagePet: UsagePetPref | undefined;
   onUsagePetChange: (next: UsagePetPref) => void;
@@ -180,6 +196,8 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
+  // 每分钟重渲染一次：行尾「刚刚 / N 分钟」与时间范围都在渲染时按 Date.now() 现算（理由见 use-minute-tick.ts）
+  useMinuteTick();
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -187,24 +205,43 @@ export function Sidebar(props: {
   /** 任一整页盖层（设置）开着：主列表、筛选行、子视图都让位 */
   const overlayOpen = props.overlay === "settings";
   /**
-   * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
-   * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
+   * 筛选行的「收几个 chip 成图标」档位：容器放不下五个带字 chip 时，从最右边的字 chip 起往左
+   * 逐个只画图标（设计稿 c 图；判定在 `filter-row-compact.ts`，纯函数、不抖），这里只负责量宽度。
+   * 每个 chip 完整态的宽度量到就记住（图标态的宽度不可信）；语言或时间范围的有无变了、chip 宽度随之变，
+   * 就先回到 0 档重新量一遍（useLayoutEffect，首帧前完成，不闪）。
    */
   const filterRowRef = useRef<HTMLDivElement | null>(null);
-  const [filterCompact, setFilterCompact] = useState(false);
-  const filterFullWidth = useRef<number | null>(null);
-  useEffect(() => {
+  const [filterLevel, setFilterLevel] = useState(0);
+  const chipFullWidths = useRef<(number | null)[]>([null, null, null, null, null]);
+  const chipWidthKey = useRef<{ t: Messages; aged: boolean } | null>(null);
+  useLayoutEffect(() => {
     const row = filterRowRef.current;
     if (row === null) return;
+    const aged = props.ageDays !== null;
+    if (chipWidthKey.current === null || chipWidthKey.current.t !== t || chipWidthKey.current.aged !== aged) {
+      chipWidthKey.current = { t, aged };
+      chipFullWidths.current = [null, null, null, null, null];
+      if (filterLevel !== 0) {
+        // 完整态才量得到完整宽度：先回 0 档，下一轮（依赖 filterLevel 变）再量
+        setFilterLevel(0);
+        return;
+      }
+    }
     const measure = (): void => {
-      const next = nextFilterRowMode({
-        compact: filterCompact,
-        fullWidth: filterFullWidth.current,
-        containerWidth: row.clientWidth,
-        contentWidth: row.scrollWidth,
+      const chips = Array.from(row.querySelectorAll<HTMLElement>("button.chip"));
+      let compactWidth = 24;
+      chips.forEach((chip, index) => {
+        const width = chip.getBoundingClientRect().width;
+        if (chipCompactAt(filterLevel, index)) compactWidth = width;
+        else chipFullWidths.current[index] = width;
       });
-      filterFullWidth.current = next.fullWidth;
-      if (next.compact !== filterCompact) setFilterCompact(next.compact);
+      const next = nextCompactLevel({
+        fullWidths: chipFullWidths.current,
+        compactWidth,
+        gap: 4,
+        containerWidth: row.clientWidth,
+      });
+      if (next !== filterLevel) setFilterLevel(next);
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -213,7 +250,7 @@ export function Sidebar(props: {
     // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
     // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCompact, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
+  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -351,19 +388,32 @@ export function Sidebar(props: {
    * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
    * 有效值过 effectiveSidebarFilters（全是默认值时 null = 不过滤），见 sidebar-filters.ts。
    */
+  const ageDays = props.ageDays;
   const filters = effectiveSidebarFilters({
     status: statusFilter,
     starredOnly,
     hasTodosOnly,
+    ageDays,
   });
   const filtered = filters !== null;
-  const scoped = live.filter((m) => {
+  const now = Date.now();
+  // 先过前三项；时间范围下拉每一档的命中条数以它为底（「选这一档我会看到几条」，与其它筛选叠加后的数）
+  const beforeAge = live.filter((m) => {
     if (filters === null) return true;
     if (filters.status === "done" && !isSessionDone(m)) return false;
     if (filters.starredOnly && m.starred !== true) return false;
     if (filters.hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
     return true;
   });
+  const ageCountsNow = ageCounts(beforeAge, now);
+  // 再过时间范围；正在看的那条出了窗口也留着（同 visibleWithOpen 的思路）
+  const scoped = filterByAge(beforeAge, now, ageDays, openId);
+  /**
+   * 时间范围开着时每组**全部列出**，不截 5 条、也没有「再显示 N 条」（范围本身就是截断）；
+   * 不限时照旧走分组状态里的上限与翻页。
+   */
+  const limitFor = (key: string): number =>
+    ageDays === null ? groupVisibleLimit(groups, key) : Number.POSITIVE_INFINITY;
   const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
   // 筛选开着时，没有命中会话的工作区组整个不显示——一排空组头比没有更吵
   const workspaceMatches = filtered
@@ -371,7 +421,7 @@ export function Sidebar(props: {
     : session.workspaces;
   const tasksFolded = isGroupFolded(groups, TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
-  const looseVisible = visibleWithOpen(loose, groupVisibleLimit(groups, TASKS_FOLD_KEY), openId);
+  const looseVisible = visibleWithOpen(loose, limitFor(TASKS_FOLD_KEY), openId);
   const open = (id: string) => {
     props.onOverlay(null);
     session.openSession(id);
@@ -386,7 +436,7 @@ export function Sidebar(props: {
       const key = foldKeyForWorkspace(workspace.id);
       if (isGroupFolded(groups, key)) return [];
       const members = scoped.filter((m) => m.workspaceId === workspace.id);
-      return visibleWithOpen(members, groupVisibleLimit(groups, key), openId).map((m) => m.id);
+      return visibleWithOpen(members, limitFor(key), openId).map((m) => m.id);
     }),
     ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
   ];
@@ -576,7 +626,7 @@ export function Sidebar(props: {
         >
           <Chip
             icon="list"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 0)}
             active={statusFilter === "all"}
             title={t.sidebar.filterAllTip}
             onClick={() => setStatusFilter("all")}
@@ -585,7 +635,7 @@ export function Sidebar(props: {
           </Chip>
           <Chip
             icon="check"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 1)}
             active={statusFilter === "done"}
             title={t.sidebar.filterDoneTip}
             onClick={() => setStatusFilter("done")}
@@ -594,7 +644,7 @@ export function Sidebar(props: {
           </Chip>
           <Chip
             icon="star"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 2)}
             active={starredOnly}
             title={t.sidebar.filterStarredTip}
             onClick={() => setStarredOnly((value) => !value)}
@@ -604,13 +654,53 @@ export function Sidebar(props: {
           {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
           <Chip
             icon="lightbulb"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 3)}
             active={hasTodosOnly}
             title={t.sidebar.filterTodosTip}
             onClick={() => setHasTodosOnly((value) => !value)}
           >
             {t.sidebar.filterTodos}
           </Chip>
+          {/*
+            时间范围（2026-11-07）：只列最近 N 天动过的。不限时只画「时钟 + ˅」不带字——第五个带字的
+            chip 会把 288px 的筛选行挤进紧凑态；选了某档才露出「3 天」，一眼看出范围开着。
+            菜单每档后面写命中条数（在其它筛选之上算的）。选择落盘（settings.sidebarAgeDays）。
+          */}
+          <Menu
+            items={[
+              { id: "age-header", label: t.sidebar.filterAgeHeader, header: true },
+              ...SIDEBAR_AGE_CHOICES.map(
+                (days): MenuItem => ({
+                  id: `age-${days}`,
+                  label: t.sidebar.filterAgeChoice(days),
+                  hint: String(ageCountsNow[days]),
+                  checked: ageDays === days,
+                  onSelect: () => props.onAgeDaysChange(days),
+                }),
+              ),
+              {
+                id: "age-any",
+                label: t.sidebar.filterAgeAny,
+                hint: String(ageCountsNow.any),
+                checked: ageDays === null,
+                onSelect: () => props.onAgeDaysChange(null),
+              },
+            ]}
+            align="end"
+            panelMinWidth={200}
+            trigger={({ toggle }) => (
+              <Chip
+                icon="clock"
+                compact={chipCompactAt(filterLevel, 4)}
+                chevron={!chipCompactAt(filterLevel, 4)}
+                active={ageDays !== null}
+                title={ageDays === null ? t.sidebar.filterAgeTip : t.sidebar.filterAgeChoice(ageDays)}
+                onClick={toggle}
+              >
+                {ageDays === null ? null : t.sidebar.filterAgeChip(ageDays)}
+              </Chip>
+            )}
+          />
         </div>
       )}
 
@@ -762,7 +852,9 @@ export function Sidebar(props: {
           </>
         ) : filtered && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty icon="list-filter">{filterEmptyText(statusFilter, starredOnly, hasTodosOnly, t)}</Empty>
+          <Empty icon="list-filter">
+            {filterEmptyText(statusFilter, starredOnly, hasTodosOnly, ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
+          </Empty>
         ) : (
           <>
             {(!filtered || workspaceMatches.length > 0) && (
@@ -853,8 +945,9 @@ export function Sidebar(props: {
                           toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
                         )
                       }
-                      limit={groupVisibleLimit(groups, foldKeyForWorkspace(workspace.id))}
-                      expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
+                      limit={limitFor(foldKeyForWorkspace(workspace.id))}
+                      expanded={ageDays === null && groups.pages.has(foldKeyForWorkspace(workspace.id))}
+                      count={ageDays === null ? undefined : scoped.filter((m) => m.workspaceId === workspace.id).length}
                       onMore={() =>
                         setGroups((current) => showMoreInGroup(current, foldKeyForWorkspace(workspace.id)))
                       }
@@ -904,6 +997,7 @@ export function Sidebar(props: {
                     props.onOverlay(null);
                     session.newTask();
                   }}
+                  count={ageDays === null ? undefined : loose.length}
                   folded={tasksFolded}
                   onToggleFold={
                     loose.length > 0
@@ -934,7 +1028,7 @@ export function Sidebar(props: {
                     <ShowMoreRow
                       hidden={loose.length - looseVisible.length}
                       next={nextPageSize(TASKS_FOLD_KEY, loose.length - looseVisible.length)}
-                      expanded={groups.pages.has(TASKS_FOLD_KEY)}
+                      expanded={ageDays === null && groups.pages.has(TASKS_FOLD_KEY)}
                       onMore={() => setGroups((current) => showMoreInGroup(current, TASKS_FOLD_KEY))}
                       onLess={() => setGroups((current) => showLessInGroup(current, TASKS_FOLD_KEY))}
                     />
@@ -1000,9 +1094,11 @@ function WorkspaceGroup(props: {
   unread: ReadonlySet<string>;
   folded: boolean;
   onToggleFold: () => void;
-  /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
+  /** 眼下最多列几条（groupVisibleLimit；时间范围开着时是 Infinity）；expanded = 点过 Show more */
   limit: number;
   expanded: boolean;
+  /** 时间范围开着时组头写这一组命中的条数；undefined = 不写 */
+  count?: number | undefined;
   onMore: () => void;
   onLess: () => void;
   onNewTask: () => void;
@@ -1047,7 +1143,8 @@ function WorkspaceGroup(props: {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "24px 24px minmax(0,1fr) auto 28px",
+          gridTemplateColumns:
+            props.count === undefined ? "24px 24px minmax(0,1fr) auto 28px" : "24px 24px minmax(0,1fr) auto auto 28px",
           alignItems: "center",
           gap: "var(--space-1)",
           minHeight: "var(--control-height-md)",
@@ -1191,6 +1288,9 @@ function WorkspaceGroup(props: {
           </IconButton>
         </span>
 
+        {/* 命中条数：单独占一列、不随悬停淡出（它是信息，不是动作）；落在「+」左边 */}
+        {props.count !== undefined && <GroupCount n={props.count} />}
+
         <IconButton label={t.sidebar.newTaskInWorkspace} size={26} onClick={props.onNewTask}>
           <Icon name="plus" size={14} />
         </IconButton>
@@ -1221,6 +1321,23 @@ function WorkspaceGroup(props: {
         </div>
       )}
     </div>
+  );
+}
+
+/** 时间范围开着时组头的命中条数：sm、tabular、tertiary（与已归档视图的 WsGroupHead 计数同一写法） */
+function GroupCount(props: { n: number }) {
+  return (
+    <span
+      style={{
+        fontSize: "var(--font-size-sm)",
+        fontVariantNumeric: "tabular-nums",
+        color: "var(--color-text-tertiary)",
+        whiteSpace: "nowrap",
+        paddingInline: "var(--space-1)",
+      }}
+    >
+      {props.n}
+    </span>
   );
 }
 
@@ -1256,6 +1373,8 @@ function NodeHeader(props: {
   /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（chevron + 名字） */
   folded?: boolean;
   onToggleFold?: (() => void) | undefined;
+  /** 时间范围开着时组头写命中条数（与工作区组头同口径）；undefined = 不写 */
+  count?: number | undefined;
 }) {
   const addButton = (onClick: () => void, open: boolean): React.ReactNode => (
     <IconButton label={props.addLabel} size={26} active={open} onClick={onClick}>
@@ -1266,7 +1385,7 @@ function NodeHeader(props: {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 26px",
+        gridTemplateColumns: props.count === undefined ? "minmax(0,1fr) 26px" : "minmax(0,1fr) auto 26px",
         alignItems: "center",
         gap: 2,
         minHeight: 28,
@@ -1281,6 +1400,7 @@ function NodeHeader(props: {
       ) : (
         <NodeLabel>{props.label}</NodeLabel>
       )}
+      {props.count !== undefined && <GroupCount n={props.count} />}
       {props.addMenu !== undefined ? (
         <Menu
           items={props.addMenu}
@@ -1576,6 +1696,8 @@ function SessionRow(props: {
    * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
    */
   const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
+  // 行尾常显的「多久没动了」（按最后活动 updatedAt，格式见 sessionAgeLabel）；每分钟随 Sidebar 重渲染刷新
+  const ageLabel = sessionAgeLabel(meta.updatedAt, Date.now(), t);
   // 删父连带删子（session.ts 的级联契约）：删除确认要把这个后果说出来，不能只
   // 提工作台文件数——子会话数是更容易被忽略、也更重的一条后果（子会话 PR4c 2.4）
   const childCount = children.length;
@@ -1753,6 +1875,7 @@ function SessionRow(props: {
             )
           }
           label={meta.title === "" ? t.common.newTask : meta.title}
+          hint={t.time.lastActiveAt(meta.updatedAt)}
           tone={status?.tone}
           iconTitle={status?.label}
           active={props.active}
@@ -1763,119 +1886,150 @@ function SessionRow(props: {
         />
       )}
       {/**
-        星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
-        （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
-        已星标常显（实心，**accent 色**），未星标只在悬停/键盘聚焦时浮出描边形（tertiary）——
-        列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
-        是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
-        与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+        行尾是**叠在同一格里的两层**（2026-11-07 用户：「不 hover 的时候看不出会话是几天前的」）：
+        - 静止层 `.task-row-rest`：已星标 / 已完成 / 遗留角标（常显的标记，accent）+ 「多久没动了」。
+          纯视觉（aria-hidden、不接指针）——要点任何东西必须先把指针移上这一行，那时已换成悬停层。
+        - 悬停层 `.task-row-acts`：星标 / 完成 / 角标 / 更多四个真按钮，静止全透明（含已标记的，它们的
+          常显改由静止层画），悬停 / 键盘聚焦 / 菜单开着时浮出，同时静止层淡出。
+        两层同格重叠、格宽取两者较宽的，所以悬停时行高与标题截断位置都不跳；常见情形（至多一枚标记 +
+        不超过 4 个字的时间）静止层不比悬停层宽，罕见的「星标 + 完成 + 角标」才会把这一行的格撑宽一点。
+        分层规则与淡出信号在 styles.css 的 `.task-row-tail`。
       */}
-      <IconButton
-        label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
-        title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
-        size={20}
-        onClick={() => session.starSession(meta.id, meta.starred !== true)}
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已星标常显，不等 hover / 键盘聚焦
-          opacity: meta.starred === true ? 1 : undefined,
-        }}
-      >
-        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
-      </IconButton>
-      {/**
-        完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
-        hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
-        图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
-        tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
-        不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
-        「还差几件」由右边那个灯泡角标单独说。
-      */}
-      <IconButton
-        label={done ? t.sidebar.reopen : t.sidebar.markDone}
-        title={
-          done
-            ? openTodos > 0
-              ? t.sidebar.doneWithTodos(openTodos)
-              : t.sidebar.doneTip
-            : idleSuggested
-              ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-              : t.sidebar.markDone
-        }
-        size={20}
-        onClick={() =>
-          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-        }
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已完成常显，不等 hover / 键盘聚焦
-          opacity: done ? 1 : undefined,
-        }}
-      >
-        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
-      </IconButton>
-      {/**
-        遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
-        （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
-        **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
-        角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
-      */}
-      {done && openTodos > 0 && (
-        <span
-          title={t.sidebar.openTodosLeft(openTodos)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 2,
-            flex: "0 0 auto",
-            marginInlineStart: -2,
-            fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-xs)",
-            fontWeight: "var(--weight-semibold)",
-            lineHeight: 1,
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
-          <Icon name="lightbulb" size={12} strokeWidth={1.8} />
-          {openTodos}
+      <span className="task-row-tail">
+        <span className="task-row-rest" aria-hidden="true">
+          {meta.starred === true && (
+            <span className="task-row-mark" style={{ color: "var(--color-accent)" }}>
+              <Icon name="star" size={13} strokeWidth={1.8} fill />
+            </span>
+          )}
+          {done && (
+            <span className="task-row-mark" style={{ color: "var(--color-accent)" }}>
+              <Icon name="check" size={13} strokeWidth={3} />
+            </span>
+          )}
+          {done && openTodos > 0 && <TodoBadge n={openTodos} t={t} />}
+          <span className="task-row-age">{ageLabel}</span>
         </span>
-      )}
-      <Menu
-        items={items}
-        align="end"
-        // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
-        // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
-        // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160，上限 240：
-        // 200 装不下「Delete permanently」+ 工作台文件数 hint，label 会被截成半句
-        placement="right"
-        panelMinWidth={160}
-        panelMaxWidth={240}
-        trigger={({ open, toggle }) => (
+        <span className="task-row-acts">
+          {/**
+            星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
+            （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
+            已星标时静止层常显实心 accent 星，未星标只在悬停 / 键盘聚焦时浮出描边形（tertiary）——
+            列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
+            是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
+            与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+          */}
           <IconButton
-            label={t.sidebar.taskActions}
+            label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
+            title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
             size={20}
-            onClick={() => {
-              exitDeleteStep();
-              toggle();
-            }}
+            onClick={() => session.starSession(meta.id, meta.starred !== true)}
             className="reveal"
             style={{
               borderRadius: "var(--radius-xs)",
-              color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
-              // 菜单开着时常显，不等 hover / 键盘聚焦
-              opacity: open ? 1 : undefined,
+              color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
             }}
           >
-            <Icon name="ellipsis-vertical" size={13} />
+            <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
           </IconButton>
-        )}
-      />
+          {/**
+            完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
+            hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后静止层常显、accent；再点 = Reopen。
+            图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
+            tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
+            不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
+            「还差几件」由右边那个灯泡角标单独说。
+          */}
+          <IconButton
+            label={done ? t.sidebar.reopen : t.sidebar.markDone}
+            title={
+              done
+                ? openTodos > 0
+                  ? t.sidebar.doneWithTodos(openTodos)
+                  : t.sidebar.doneTip
+                : idleSuggested
+                  ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
+                  : t.sidebar.markDone
+            }
+            size={20}
+            onClick={() =>
+              session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+            }
+            className="reveal"
+            style={{
+              borderRadius: "var(--radius-xs)",
+              color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            }}
+          >
+            <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
+          </IconButton>
+          {/**
+            遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
+            （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
+            **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
+            角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
+          */}
+          {done && openTodos > 0 && <TodoBadge n={openTodos} t={t} className="reveal" />}
+          <Menu
+            items={items}
+            align="end"
+            // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
+            // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
+            // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160，上限 240：
+            // 200 装不下「Delete permanently」+ 工作台文件数 hint，label 会被截成半句
+            placement="right"
+            panelMinWidth={160}
+            panelMaxWidth={240}
+            trigger={({ open, toggle }) => (
+              <IconButton
+                label={t.sidebar.taskActions}
+                size={20}
+                // 菜单开着时 CSS 的 :has([aria-expanded="true"]) 让悬停层继续显示、静止层继续让位
+                ariaExpanded={open}
+                onClick={() => {
+                  exitDeleteStep();
+                  toggle();
+                }}
+                className="reveal"
+                style={{
+                  borderRadius: "var(--radius-xs)",
+                  color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+                  // 菜单开着时常显，不等 hover / 键盘聚焦
+                  opacity: open ? 1 : undefined,
+                }}
+              >
+                <Icon name="ellipsis-vertical" size={13} />
+              </IconButton>
+            )}
+          />
+        </span>
+      </span>
     </div>
+  );
+}
+
+/** 遗留角标（灯泡 + 数字）：静止层与悬停层各画一份，悬停层的那份带 reveal 淡入 */
+function TodoBadge(props: { n: number; t: Messages; className?: string }) {
+  return (
+    <span
+      className={props.className}
+      title={props.t.sidebar.openTodosLeft(props.n)}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 2,
+        flex: "0 0 auto",
+        fontFamily: "var(--font-family-business)",
+        fontSize: "var(--font-size-xs)",
+        fontWeight: "var(--weight-semibold)",
+        lineHeight: 1,
+        color: "var(--color-text-secondary)",
+      }}
+    >
+      {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
+      <Icon name="lightbulb" size={12} strokeWidth={1.8} />
+      {props.n}
+    </span>
   );
 }
 
