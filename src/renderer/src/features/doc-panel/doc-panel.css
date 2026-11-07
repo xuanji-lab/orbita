@@ -181,6 +181,18 @@
   text-indent: 0;
   color: var(--color-text-tertiary);
 }
+/* 任务项的复选框：占一个圆点的位置，已完成的整行淡掉并划线 */
+.dp-editor .cm-task-box {
+  width: 1.5em;
+  margin: 0;
+  vertical-align: baseline;
+  text-indent: 0;
+  cursor: pointer;
+}
+.dp-editor .cm-task-done {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
 .dp-editor .cm-quote {
   padding-left: var(--space-3);
   border-left: 3px solid var(--color-border-strong);

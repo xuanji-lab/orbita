@@ -11,7 +11,7 @@
  */
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
+import { type ChangeSpec, type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 
 class BulletWidget extends WidgetType {
@@ -26,6 +26,48 @@ class BulletWidget extends WidgetType {
   }
 }
 const bullet = Decoration.replace({ widget: new BulletWidget() });
+
+/**
+ * 任务列表项（`- [ ] x` / `- [x] x`）的复选框：替换「列表标记 + 方括号」整段，点一下就在源码里翻 `[ ]` ↔ `[x]`。
+ * mousedown 里 preventDefault：点复选框不该把光标挪进这一行（挪进去这一行的符号就露出来了）。
+ */
+class TaskWidget extends WidgetType {
+  readonly checked: boolean;
+  /** 方括号 `[` 相对 widget 起点（列表标记开头）的偏移：点击时用它从 DOM 位置反推源码位置 */
+  readonly offset: number;
+  constructor(checked: boolean, offset: number) {
+    super();
+    this.checked = checked;
+    this.offset = offset;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "cm-task-box";
+    box.checked = this.checked;
+    box.setAttribute("aria-label", this.checked ? "已完成" : "未完成");
+    box.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      const change = toggleTaskChange(view.state, view.posAtDOM(box) + this.offset);
+      if (change !== null) view.dispatch({ changes: change });
+    });
+    return box;
+  }
+  eq(other: TaskWidget): boolean {
+    return other.checked === this.checked && other.offset === this.offset;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** 位置 `from` 处若是 `[ ]` / `[x]`，回翻转它的改动；否则 null（文档在点击前被改走了） */
+export function toggleTaskChange(state: EditorState, from: number): ChangeSpec | null {
+  const text = state.doc.sliceString(from, from + 3);
+  if (text === "[ ]") return { from: from + 1, to: from + 2, insert: "x" };
+  if (/^\[[xX]\]$/.test(text)) return { from: from + 1, to: from + 2, insert: " " };
+  return null;
+}
 const hidden = Decoration.replace({});
 
 const HEADING = /^(?:ATX|Setext)Heading(\d)$/;
@@ -36,6 +78,7 @@ const inlineCode = Decoration.mark({ class: "cm-icode" });
 const linkText = Decoration.mark({ class: "cm-link" });
 const dimMark = Decoration.mark({ class: "cm-syntax" });
 const listLine = Decoration.line({ class: "cm-li" });
+const taskDoneLine = Decoration.line({ class: "cm-li cm-task-done" });
 const quoteLine = Decoration.line({ class: "cm-quote" });
 const codeLine = Decoration.line({ class: "cm-codeblock" });
 const ruleLine = Decoration.line({ class: "cm-rule" });
@@ -146,6 +189,21 @@ function build(view: EditorView): DecorationSet {
             return;
           case "ListMark": {
             const line = doc.lineAt(node.from);
+            // 任务项：列表标记 + `[ ]` 整段换成复选框（光标在这一行时露出源码，复选框退回成淡色符号）
+            const task = node.node.nextSibling;
+            const marker = task !== null && task.name === "Task" ? task.firstChild : null;
+            if (marker !== null && marker.name === "TaskMarker") {
+              const checked = /^\[[xX]\]$/.test(doc.sliceString(marker.from, marker.to));
+              lineDeco(node.from, checked ? taskDoneLine : listLine);
+              if (activeLines.has(line.number)) {
+                out.push(dimMark.range(node.from, node.to));
+                out.push(dimMark.range(marker.from, marker.to));
+              } else {
+                const widget = Decoration.replace({ widget: new TaskWidget(checked, marker.from - node.from) });
+                out.push(widget.range(node.from, Math.min(marker.to + 1, line.to)));
+              }
+              return;
+            }
             lineDeco(node.from, listLine);
             const text = doc.sliceString(node.from, node.to);
             if (/^[-*+]$/.test(text) && !activeLines.has(line.number)) out.push(bullet.range(node.from, node.to));
