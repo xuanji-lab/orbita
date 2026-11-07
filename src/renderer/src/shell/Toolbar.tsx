@@ -106,7 +106,6 @@ export function Toolbar(props: {
   });
   const limit = rightEdge({
     windowWidth: props.windowWidth,
-    platform: props.platform,
     panelOpen: props.panelOpen && !props.narrow,
     panelWidth: props.panelWidth,
   });

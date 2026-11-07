@@ -85,7 +85,6 @@ export function conversationColumn(input: {
  */
 export function rightEdge(input: {
   windowWidth: number;
-  platform: ToolbarPlatform;
   panelOpen: boolean;
   panelWidth: number;
 }): number {
