@@ -684,7 +684,7 @@ classes listed under *Implementation rules*.
   `assets/fonts/*`（文件均已入库），经 `styles.css` 依次 `@import` 后，`body { font-family:
   var(--font-family-base) }`（Manrope/思源黑体）与两处 `var(--font-family-brand)`（侧栏 titlebar、
   聊天页 slogan，Literata/思源宋体）都在实际加载这些字重。
-- 代码等宽与既有 fallback 不变（`--font-family-mono`）。
+- 代码等宽（`--font-family-mono`）：拉丁等宽之后紧跟中文回退（PingFang SC → Microsoft YaHei UI → Microsoft YaHei → Noto Sans CJK SC），泛 `monospace` 殿后；否则 Windows 上汉字落到宋体。
 - （历史：商业字体方案 Galaxie Copernicus / Styrene A 已作废，以本平替定稿。）
 
 ### 首页交互（2026-08-22 验收定案）
