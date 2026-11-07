@@ -15,6 +15,22 @@ import { DEFAULT_THEME_ID, THEME_BLURBS, THEME_IDS } from "../../shared/slides-t
 import { SLIDES_EXPORT_FORMATS } from "../../shared/slides-export.ts";
 import { TERMINAL_READ_DEFAULT_LIMIT, TERMINAL_READ_MAX_LIMIT } from "../../shared/terminal.ts";
 import { TERMINAL_TOOL_NAMES } from "../../agent/terminal-tools.ts";
+import {
+  AUTOMATION_AGENT_DEFAULT_MAX_RUNS,
+  AUTOMATION_AGENT_MAX_RUNS_CAP,
+  AUTOMATION_INTERVAL_MIN_MINUTES,
+  AUTOMATION_INTERVAL_UNITS,
+  AUTOMATION_MAX_ACTIVE_PER_SESSION,
+  AUTOMATION_MAX_CONSECUTIVE_FAILURES,
+  AUTOMATION_MAX_RUNS_PER_DAY,
+  AUTOMATION_MAX_TOTAL,
+  AUTOMATION_MODES,
+  AUTOMATION_PROMPT_MAX,
+  AUTOMATION_STATUSES,
+  AUTOMATION_TITLE_MAX,
+} from "../../shared/automation.ts";
+import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "../../agent/automation-tools.ts";
+import { RequestBroker } from "../../agent/request-broker.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { scanPlugin } from "./manifest.ts";
 import { PluginStore } from "./store.ts";
@@ -26,6 +42,7 @@ const CREATOR = join(BUILTIN, "plugin-creator");
 const SKILL_KIT = join(BUILTIN, "skill-kit");
 const DOCS_SLIDES = join(BUILTIN, "docs-slides");
 const TERMINAL = join(BUILTIN, "terminal");
+const AUTOMATION = join(BUILTIN, "automation");
 
 class NoSecrets implements SecretsPort {
   async set(): Promise<void> {}
@@ -359,6 +376,56 @@ describe("内置插件 terminal", () => {
     assert.match(text, /Red line: never type into a busy terminal/);
     assert.match(text, /There is no exit-code event/);
     assert.match(text, /outputSharedWithAgent: false/);
+describe("内置插件 automation", () => {
+  const readSkill = (): Promise<string> => readFile(join(AUTOMATION, "skills", "automation", "SKILL.md"), "utf8");
+
+  test("一条技能 automation；workflow 点名对得上；description 写明何时读、何时用（模型靠它想起技能）", async () => {
+    const scanned = await scanPlugin(AUTOMATION, "automation");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["automation"]);
+    assert.equal(scanned.workflow.length >= 4, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能 ${step.skill} 对不上`);
+    const description = scanned.skills[0]?.description ?? "";
+    assert.match(description, /BEFORE the first automation_create/);
+    for (const needle of ["every Friday", "remind me", "tell me when the build is done", "定时", "提醒"]) assert.equal(description.includes(needle), true, `技能 description 缺触发词 ${needle}`);
+  });
+
+  // 触发规则与取值的真源在代码里（工具的 schema 与主进程的 parseSchedule）；技能里是给模型读的那一份，两边不许分叉
+  test("技能与代码同源：schedule 的 kind / unit / 字段、状态、权限档、四个工具名都在 SKILL.md 里；表里列的 kind 不能比 schema 多", async () => {
+    const text = await readSkill();
+    const create = createAutomationTools(new RequestBroker(() => {}), "S", () => "skip").find((tool) => tool.name === "automation_create");
+    assert.ok(create);
+    const properties = (create.parameters as unknown as { properties: Record<string, { properties?: Record<string, { enum?: string[] }> }> }).properties;
+    const schedule = properties["schedule"]?.properties ?? {};
+    const kinds = schedule["kind"]?.enum ?? [];
+    assert.deepEqual(kinds, ["interval", "hourly", "daily", "monthly", "once"]);
+    for (const kind of kinds) assert.equal(text.includes(`| \`${kind}\` |`), true, `技能的触发规则表缺 kind ${kind}`);
+    const tableKinds = text.split("## Schedule format")[1]?.split("All clock times")[0]?.split("\n").map((line) => /^\| `([a-z]+)` \|/.exec(line)?.[1]).filter((kind) => kind !== undefined);
+    assert.deepEqual([...(tableKinds ?? [])].sort(), [...kinds].sort(), "技能表里的 kind 与 schema 的 enum 不一致");
+    assert.deepEqual(schedule["unit"]?.enum, [...AUTOMATION_INTERVAL_UNITS]);
+    assert.equal(text.includes(AUTOMATION_INTERVAL_UNITS.map((unit) => `\`${unit}\``).join(" \\| ")), true, "技能没按 `minute` \\| `hour` \\| `day` 列 interval 的单位");
+    for (const field of ["at", "every", "minute", "time", "weekdays", "day"]) assert.equal(text.includes(`\`${field}\``), true, `技能没讲 schedule 字段 ${field}`);
+    assert.equal(text.includes("everyMinutes"), true, "技能没讲 everyMinutes 简写");
+    for (const status of AUTOMATION_STATUSES) assert.equal(text.includes(status), true, `技能没提状态 ${status}`);
+    for (const mode of AUTOMATION_MODES) assert.equal(text.includes(`"${mode}"`), true, `技能没提权限档 ${mode}`);
+    for (const name of AUTOMATION_TOOL_NAMES) assert.equal(text.includes(`\`${name}\``), true, `技能没讲工具 ${name}`);
+    for (const param of Object.keys(properties)) assert.equal(text.includes(`\`${param}\``), true, `技能没讲 automation_create 的参数 ${param}`);
+  });
+
+  test("技能里写的护栏数字与代码常量一致（间隔下限、每日次数、默认与上限次数、条数、连续失败、标题与指令长度）", async () => {
+    const text = await readSkill();
+    const expected = [
+      `total ≥ ${AUTOMATION_INTERVAL_MIN_MINUTES} minutes`,
+      `at least ${AUTOMATION_INTERVAL_MIN_MINUTES} minutes`,
+      `at most ${AUTOMATION_MAX_RUNS_PER_DAY} real runs per rolling 24 hours`,
+      `**${AUTOMATION_AGENT_DEFAULT_MAX_RUNS} runs**`,
+      `(1–${AUTOMATION_AGENT_MAX_RUNS_CAP})`,
+      `at most ${AUTOMATION_MAX_ACTIVE_PER_SESSION} active \`this_session\` tasks per conversation`,
+      `at most ${AUTOMATION_MAX_TOTAL} automations in total`,
+      `**${["Zero", "One", "Two", "Three"][AUTOMATION_MAX_CONSECUTIVE_FAILURES]} consecutive failed runs**`,
+      `title at most ${AUTOMATION_TITLE_MAX} characters`,
+      `instruction at most ${AUTOMATION_PROMPT_MAX.toLocaleString("en-US")} characters`,
+    ];
+    for (const needle of expected) assert.equal(text.includes(needle), true, `技能里缺「${needle}」（与代码常量不一致？）`);
   });
 });
 
@@ -375,6 +442,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
     try {
       const assembled = await store.assemble(null);
       assert.deepEqual(assembled.skills.map((skill) => `${skill.plugin}/${skill.slug}`).sort(), [
+        "automation/automation",
         "docs-slides/docs",
         "docs-slides/slides",
         "plugin-creator/board-style",
