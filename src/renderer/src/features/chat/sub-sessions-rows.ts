@@ -85,7 +85,7 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus; last
 }
 
 /**
- * 行首三节竖条亮几节（styles.css 的 `.status-bar`，与侧栏 / 铃铛清单同一根）：
+ * 行首状态饼的档位（shell/StatusPie.tsx 的 `.status-pie`，与侧栏 / 铃铛清单同一个）：
  * running = 1/3 蓝、waiting / approval = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
  * stopped / idle 不亮——「没什么要你做的」是整个东西退场，不是留一根灰杠。
  * stopped 是用户的裁决不是故障，与 idle 同槽。

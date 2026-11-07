@@ -155,7 +155,7 @@ describe("sortSubSessionRows", () => {
   });
 });
 
-describe("subSessionBarFill（行首三节竖条亮几节）", () => {
+describe("subSessionBarFill（行首状态饼亮几节）", () => {
   it("running = 1/3 蓝（running）；waiting 与 approval 同为 2/3 橙（waiting）", () => {
     strictEqual(subSessionBarFill("running"), "running");
     strictEqual(subSessionBarFill("waiting"), "waiting");
@@ -167,7 +167,7 @@ describe("subSessionBarFill（行首三节竖条亮几节）", () => {
     strictEqual(subSessionBarFill("failed"), "failed");
   });
 
-  it("stopped / idle 不亮（undefined = 不渲染竖条）", () => {
+  it("stopped / idle 不亮（undefined = 不渲染状态饼）", () => {
     strictEqual(subSessionBarFill("stopped"), undefined);
     strictEqual(subSessionBarFill("idle"), undefined);
   });

@@ -503,7 +503,6 @@
   color: var(--color-text-primary);
   font-weight: var(--weight-regular);
   transition: var(--transition-hover);
-  /* 行内竖条（.option-row-bar）的定位基准：无偏移的 relative 不改变布局 */
   position: relative;
 }
 
@@ -578,56 +577,43 @@
 }
 
 /*
- * 会话行最左侧的三节竖条（2026-10-10 用户裁决，Sidebar.tsx 的 NavRow `bar` /
- * 铃铛清单 BellCard）：取代上一版的渐变带（动效太耗 GPU，低端 Windows /
- * MacBook 不友好）与未读浅底。**静态，无任何动效**。
- *
- * 三节从上往下依次是进度（同电池表）：
- * - running：第 1 节亮，--color-info（蓝）——在跑（含任一直接子会话在跑）
- * - waiting：前 2 节亮，--color-warning（橙）——挂着工具审批，在等用户
- * - done：3 节全亮，--color-success（绿）——跑完、还没看（meta.unread）
- * - failed：3 节全亮，--color-danger（红）——跑挂了、还没看（unread.failed）
- * 读完就不渲染。颜色用固定 token 不用 accent：暗色主题的 accent 是黄，
- * 会和橙混。选中仍是整行底色（.option-row 的 data-active），两者互不干扰。
+ * 会话运行态的状态饼（2026-10-30，shell/StatusPie.tsx；取代 10-10 的三节竖条——
+ * 3px 宽、每节 4px 的竖条在侧栏里读不出是哪一档）。**静态，无任何动效**。
+ * 份数沿用竖条（同电池表）：
+ * - running：1/3 扇形 + 细圈，--color-info（蓝）——在跑（含任一直接子会话在跑）
+ * - waiting：2/3 扇形 + 细圈，--color-warning（橙）——挂着工具审批，在等用户
+ * - done：满圆，--color-success（绿）——跑完、还没看（meta.unread）
+ * - failed：满圆，--color-danger（红）——跑挂了、还没看（unread.failed）
+ * 读完就不渲染。颜色用固定 token 不用 accent：暗色主题的 accent 是黄，会和橙混。
+ * 侧栏里饼占行首 14px 的状态槽（与 pin / fork 同槽，饼优先）；工作区折叠时组头
+ * 汇总同一套饼加计数（aggregateRunStates）。选中仍是整行底色，互不干扰。
  */
-.status-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  width: 3px;
-  height: 16px;
-  flex: 0 0 auto;
-  pointer-events: none;
+.status-pie {
+  display: block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  pointer-events: auto;
 }
+.status-pie[data-fill="running"] { color: var(--color-info); }
+.status-pie[data-fill="waiting"] { color: var(--color-warning); }
+.status-pie[data-fill="done"] { color: var(--color-success); }
+.status-pie[data-fill="failed"] { color: var(--color-danger); }
 
-.status-bar > i {
-  flex: 1;
-  border-radius: 1px;
+/* 工作区组头的汇总：饼 + 计数一组，组与组隔 6px；等宽数字，不跳 */
+.run-agg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
 }
-
-.status-bar[data-fill="running"] > i:first-child {
-  background: var(--color-info);
-}
-
-.status-bar[data-fill="waiting"] > i:first-child,
-.status-bar[data-fill="waiting"] > i:nth-child(2) {
-  background: var(--color-warning);
-}
-
-.status-bar[data-fill="done"] > i {
-  background: var(--color-success);
-}
-
-.status-bar[data-fill="failed"] > i {
-  background: var(--color-danger);
-}
-
-/* 行内的那一根贴行最左缘（GitHub 选中项光标同款位置），垂直居中 */
-.option-row-bar {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
+.run-agg > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
 }
 
 /*
@@ -1015,6 +1001,19 @@ body {
   opacity: 1;
 }
 
+/* 折叠组头的运行态汇总（.run-agg）：静止时盖在悬停动作键的位置上（右对齐），
+   悬停时让位给动作键——两样东西不同时出现，组头不为它多占一格 */
+.ws-agg {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.workspace-group:hover .ws-agg,
+.workspace-group:has(:focus-visible) .ws-agg {
+  opacity: 0;
+}
+
 /* FoldHeaderButton（TASKS 节的整块折叠键）：只有底色跟着 hover，字色由 NodeLabel 自己定 */
 .fold-header-btn {
   background: transparent;
@@ -1379,7 +1378,7 @@ body {
 }
 
 /* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
- * 一个子会话一行：行首三节竖条（.status-bar，与侧栏 / 铃铛清单同一根）+ 名字 +
+ * 一个子会话一行：行首状态饼（.status-pie，与侧栏 / 铃铛清单同一个）+ 名字 +
  * 最新一句 + 相对时间（行尾，钉在行的右内边距上）。「在问你」的行展开回答框
  * （.channel-reply-box）并给一抹 warning 底，其余行单行收着。行按钮与回答框是
  * 兄弟（button 不能嵌 button），整行 hover 由外层 .inbox-row 统一画。 */
@@ -1423,10 +1422,9 @@ body {
   background: transparent;
 }
 
-/* 行内竖条：与标题行同高、跟在行内左侧（不用 .option-row-bar 的绝对定位——那要求父级
-   relative，收件箱行是两行高，贴行首一行对齐更清楚） */
-.inbox-row-bar {
-  margin-top: var(--space-0-5);
+/* 行首状态饼：与标题行第一行同高居中（收件箱行是两行高，贴首行读得更清楚） */
+.inbox-row-pie {
+  margin-top: var(--space-1);
 }
 
 .inbox-row-item {
@@ -2509,8 +2507,8 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  /* 与名字左缘对齐：竖条 3px + 间距 8px */
-  padding-left: 11px;
+  /* 与名字左缘对齐：状态饼 10px + 间距 8px */
+  padding-left: calc(var(--space-2-5) + var(--space-2));
 }
 
 .completion-card-link {
@@ -2541,7 +2539,7 @@ body {
 
 /*
  * 铃铛弹出的未读清单（features/notify/BellCard.tsx）：主槽右下角的弹出卡，
- * 定位、血线与浮层配方在 `.pane-pop`。清单行最左是同款三节竖条（.status-bar 的行内档）。
+ * 定位、血线与浮层配方在 `.pane-pop`。清单行最左是同款状态饼（.status-pie）。
  */
 .bell-card {
   bottom: var(--pane-pop-block);

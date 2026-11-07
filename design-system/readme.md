@@ -357,17 +357,20 @@ Continuous motion also pauses whenever the window is not in front (unfocused or 
 pixel anywhere forces the whole window to recomposite every frame, so a spinner nobody is looking at
 still costs GPU.
 
-The task row's run state is a **three-segment vertical bar** pinned to the row's left edge
-(2026-10-10, user ruling — it replaced the running band and the leading status glyphs, both
-withdrawn the same day): **static, no motion at all**, cheap for low-end GPUs. Segments fill
-top-down as the task progresses and the colour names the state — 1/3 `--color-info` (blue) =
-running, 2/3 `--color-warning` (orange) = waiting for your reply (a pending tool approval),
-3/3 `--color-success` (green) = finished and not yet viewed, 3/3 `--color-danger` (red) = stopped
-with an error and not yet viewed. A viewed row shows nothing; selection stays a full-row fill and
-the two never interfere. Fixed tokens rather than the accent are deliberate — the dark theme's
-accent is yellow and would blur into the orange. The same bar (same derivation, same state) heads
-each row of the notifications list behind the `bell` at the bottom of the action rail; unread
-marks persist in the session meta, so the bar survives a restart.
+The task row's run state is a **status pie** in the row's leading 14px slot (2026-10-30; it
+replaced the 2026-10-10 three-segment bar, whose 3px × 4px segments could not be told apart at
+sidebar size): **static, no motion at all**, cheap for low-end GPUs. The share filled and the
+colour name the state — a 1/3 wedge in a thin ring, `--color-info` (blue) = running; a 2/3 wedge,
+`--color-warning` (orange) = waiting for your reply (a pending tool approval); a full disc,
+`--color-success` (green) = finished and not yet viewed; a full disc, `--color-danger` (red) =
+stopped with an error and not yet viewed. A viewed row shows nothing; a lit pie takes the slot over
+`git-fork` / `pin`; selection stays a full-row fill and the two never interfere. Fixed tokens
+rather than the accent are deliberate — the dark theme's accent is yellow and would blur into the
+orange. **A folded workspace sums its rows** on the group head — one pie and a count per lit
+state, ordered waiting › failed › running › done — so a collapsed group still says something is
+working or waiting; it yields to the hover actions. The same pie (same derivation, same state)
+heads each row of the notifications list behind the `bell`, the sub-session inbox and the
+completion card; unread marks persist in the session meta, so it survives a restart.
 
 ## Implementation rules
 
@@ -522,7 +525,7 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
 - **Recurring vocabulary**: `bot` = agent mode, `workflow` = orchestration, `folder` = a workspace,
   `plus` = new task, `folder-plus` = new workspace, `archive` = archived tasks,
   `git-branch` = a worktree, and the task-row status slot — `git-fork` when a sub-session
-  is running, empty otherwise (run states live on the row's status bar, see *Motion*),
+  is running, empty otherwise (run states take the slot as a status pie, see *Motion*),
   `lock` = a field fixed by its preset or identity (Providers), `brain` = thinking,
   `terminal`/`wrench`/`file-text` = tool calls, `panel-left`/`panel-right` = the two sidebars,
   `arrow-up` = send, `bell` = the unread notifications list (bottom of the action rail).
