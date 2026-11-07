@@ -595,3 +595,117 @@
   background: var(--color-danger-solid);
   color: var(--color-danger-fg);
 }
+
+/* —— 辅助对话的胶囊页头（DrawerCap）：左段 = 激活的会话（标题 · 短 id），
+ *    右段 = 完成键 · 其它标签（横滚）· 「+」 —— */
+.cap-dcap {
+  padding-left: var(--space-1);
+}
+/* 左段吃剩余宽、是胶囊里第一个让位的：标题先省略号，标签区与「+」不被挤没 */
+.cap-dseg {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  flex: 0 1 auto;
+  /* 标题再窄也留这么多（图标 + 两三个字）；让位到这里为止，右段不再被挤 */
+  min-width: 72px;
+}
+.cap-dseg > .cap-mini,
+.cap-dseg > .cap-sid {
+  flex: 0 0 auto;
+}
+/* 改名中：标题变成输入框，左段吃满剩余宽（输入框要够写字），悬停小键让开 */
+.cap-dseg:has(input) {
+  flex: 1 1 auto;
+}
+.cap-dcap .cap-dseg:has(input) .cap-hov,
+.toolbar-capsule:hover .cap-dcap .cap-dseg:has(input) .cap-hov {
+  display: none;
+}
+/* 左段是左对齐排的、右边有一截弹性空白（.cap-grow）：悬停才出现的小键（铅笔 / 复制 / 关闭）
+ * 直接 display 切换、吃那截空白，不像居中的会话胶囊那样 visibility 占位——占位会在窄栏里
+ * 白白抢走标题的宽度 */
+.cap-dcap .cap-hov {
+  display: none;
+}
+.toolbar-capsule:hover .cap-dcap .cap-hov,
+.toolbar-capsule:focus-within .cap-dcap .cap-hov {
+  display: grid;
+}
+.cap-dseg-icon {
+  flex: 0 0 auto;
+  margin-left: var(--space-1-5);
+  color: var(--color-text-secondary);
+}
+/* 标签区：封顶占胶囊 38% 宽，超出横滚（h-scroll）。**自己不 shrink**：让位全由左段（标题）
+ * 承担——悬停时左段的小键显形、窗口缩窄，标签区的宽与位置都不动，点下去不会点歪 */
+.cap-dtabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  flex: 0 0 auto;
+  max-width: 38%;
+}
+/* 一枚灰标签：名字键 + × 键并排（两个独立的 button，不嵌套） */
+.cap-dtab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--titlebar-field);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.cap-dtab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.cap-dtab-main {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--space-0-5) 0 var(--space-2-5);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cap-dtab-name {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cap-dtab-x {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 100%;
+  padding: 0;
+  margin-right: var(--space-0-5);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.cap-dtab-x:hover {
+  color: var(--color-text-primary);
+}
+/* 窄右栏：短 id 先让位（复制键仍在悬停里），把宽度还给标题 */
+@container (max-width: 440px) {
+  .cap-dcap .cap-dseg .cap-sid {
+    display: none;
+  }
+}
+/* 更窄：悬停才出现的铅笔 / 复制也不挂（改名仍可双击标题）。关闭当前这条的 × 不让：
+ * 它是激活会话唯一的出口 */
+@container (max-width: 340px) {
+  .cap-dcap .cap-dseg .cap-hov:not(.cap-dclose),
+  .toolbar-capsule:hover .cap-dcap .cap-dseg .cap-hov:not(.cap-dclose),
+  .toolbar-capsule:focus-within .cap-dcap .cap-dseg .cap-hov:not(.cap-dclose) {
+    display: none;
+  }
+}
