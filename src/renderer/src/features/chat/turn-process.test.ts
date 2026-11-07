@@ -97,7 +97,8 @@ describe("章节与计数", () => {
     assert.equal(counts.steps, 3);
     assert.equal(counts.failed, 1);
     assert.deepEqual(counts.files, ["notes/a.md"]);
-    assert.deepEqual(counts.byTool.map((b) => b.key).sort(), ["bash", "read", "write"]);
+    // 这里写的是 notes/a.md：落在文档文件上的 write 单算「doc_write」（统计行写「写文档」），其余照旧
+    assert.deepEqual(counts.byTool.map((b) => b.key).sort(), ["bash", "doc_write", "read"]);
   });
 
   test("写计划不算一步", () => {

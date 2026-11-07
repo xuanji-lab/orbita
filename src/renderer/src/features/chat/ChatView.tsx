@@ -3893,6 +3893,17 @@ function TurnProcessLine(props: {
 }
 
 /** 章节时间线的一章：标题 + 前几步的小标签；点开看这一章的每一步（原样的工具行） */
+/**
+ * 落在文档文件上的 edit / write 的摘要：「文件名 · 第几节」（节取自 edit 结果的 diff 上下文，退到此刻开着的文档全文）。
+ * 不是文档上的 edit / write 返回 null，调用方用通用摘要。
+ */
+function docEditCallLabel(toolName: string, input: unknown, result: ToolTranscriptItem | undefined): string | null {
+  const path = docEditPath(toolName, input);
+  if (path === null) return null;
+  const diff = toolName === "edit" && result !== undefined && result.status !== "running" ? editDiffText(result) : null;
+  return docEditSummary(path, diff === null ? null : docEditSection(parseEditDiff(diff), getOpenDocumentText(path)));
+}
+
 function ProcessChapterItem(props: {
   chapter: ProcessChapter;
   toolResults: ToolResultIndex;
@@ -3928,7 +3939,7 @@ function ProcessChapterItem(props: {
             {shown.map((call) => (
               <span key={call.toolCallId} className={props.toolResults.get(call.toolCallId)?.status === "error" ? "bad" : undefined}>
                 {toolWord(t.chat.rollupTool, rollupToolKey(call.toolName, call.input, props.skills), call.input)}{" "}
-                {toolCallSummary(call.toolName, call.input) ?? ""}
+                {docEditCallLabel(call.toolName, call.input, props.toolResults.get(call.toolCallId)) ?? toolCallSummary(call.toolName, call.input) ?? ""}
               </span>
             ))}
             {chapter.calls.length > shown.length && <span>{t.chat.processMore(chapter.calls.length - shown.length)}</span>}
@@ -4334,15 +4345,9 @@ function ToolLine(props: {
   // B-1：read_task 落定后 details 里带任务卡（running/error 帧没有）；别的工具不解析
   const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
   const diff = finished ? editDiffText(result) : null;
-  // 落在文档上的 edit / write：摘要写「文件名 · 第几节」（节取自 diff 上下文，退到此刻开着的文档全文）
-  const docPath = docEditPath(props.toolName, props.input);
-  const callLabel =
-    docPath === null
-      ? baseCallLabel
-      : docEditSummary(
-          docPath,
-          diff !== null ? docEditSection(parseEditDiff(diff), getOpenDocumentText(docPath)) : null,
-        );
+  // 落在文档上的 edit / write：摘要写「文件名 · 第几节」
+  const docLabel = docEditCallLabel(props.toolName, props.input, finished ? result : undefined);
+  const callLabel = docLabel ?? baseCallLabel;
   const stats = finished ? editDiffStats(result) : null;
   // 正文只在**真要用**时才拼：`toolResultText` 把结果里每个 text 块 join 成一整条
   // （实测单条最大 479KB），而折叠着的工具行只有两处需要它——展开体（open）与

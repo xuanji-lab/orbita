@@ -27,7 +27,7 @@ import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
 import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
-import { builtinCommand, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
+import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -768,6 +768,8 @@ export function rollupToolKey(
     const path = (input as Record<string, unknown> | null)?.["path"];
     if (typeof path === "string" && skillForReadPath(path, skills) !== null) return "skill";
   }
+  // 落在文档文件上的 edit / write 单算一类（统计行写「改文档 / 写文档」，不和改代码的 edit 混成「编辑 3」）
+  if (docEditPath(toolName, input) !== null) return toolName === "edit" ? DOC_EDIT_KEY : DOC_WRITE_KEY;
   return parseQualifiedToolName(toolName) !== null ? "mcp" : toolName;
 }
 

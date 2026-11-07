@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { builtinCommand, docEditLabel, docEditPath, docEditSection, docEditSummary, fileLabel, PINNED_CARD_COMMANDS, toolWord } from "./builtin-commands.ts";
-import { parseEditDiff, toolCallSummary } from "./tool-results.ts";
+import { parseEditDiff, rollupToolKey, toolCallSummary } from "./tool-results.ts";
 
 describe("文档内置命令的展示", () => {
   it("中文名与参数摘要", () => {
@@ -63,5 +63,18 @@ describe("文档内置命令的展示", () => {
     assert.equal(docEditPath("edit", { path: "/w/a.md" }), "/w/a.md");
     assert.equal(docEditPath("write", { path: "/w/a.ts" }), null);
     assert.equal(docEditPath("read", { path: "/w/a.md" }), null);
+  });
+
+  it("统计 / 折叠摘要行：文档上的 edit / write 归成「改文档 / 写文档」，改代码的 edit 仍是词表里的「编辑」", () => {
+    const table = (key: string): string => (key === "edit" ? "编辑" : key === "write" ? "写入" : key);
+    const key = (name: string, path: string): string => rollupToolKey(name, { path });
+    assert.equal(key("edit", "/w/周报.md"), "doc_edit");
+    assert.equal(key("write", "/w/随手记.txt"), "doc_write");
+    assert.equal(key("edit", "/w/main.ts"), "edit");
+    assert.equal(toolWord(table, key("edit", "/w/周报.md")), "改文档");
+    assert.equal(toolWord(table, key("write", "/w/a.markdown")), "写文档");
+    assert.equal(toolWord(table, key("edit", "/w/main.ts")), "编辑");
+    // 读文档仍是「读取」，不被归进文档类
+    assert.equal(key("read", "/w/周报.md"), "read");
   });
 });

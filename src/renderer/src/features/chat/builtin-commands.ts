@@ -272,6 +272,10 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
  * 文档正文的改写仍是通用的 edit / write（`.md` 是真身）；落在文档文件（.md / .markdown / .txt）上时
  * 过程行的药丸写「改文档 / 写文档」而不是英文工具名。只改药丸文字，分组、diff 统计、展开体都照旧。
  */
+/** 统计 / 步骤行里文档 edit / write 的归类键（rollupToolKey 产出，toolWord 认） */
+export const DOC_EDIT_KEY = "doc_edit";
+export const DOC_WRITE_KEY = "doc_write";
+
 export function docEditPath(toolName: string, input: unknown): string | null {
   if (toolName !== "edit" && toolName !== "write") return null;
   const path = str(input, "path");
@@ -334,6 +338,8 @@ export function docEditSummary(path: string, section: string | null): string {
  * 写「改文档 / 写文档」（给了 input 才认得出），其余走原来的词表。
  */
 export function toolWord(rollupTool: (key: string) => string, key: string, input?: unknown): string {
+  if (key === DOC_EDIT_KEY) return "改文档";
+  if (key === DOC_WRITE_KEY) return "写文档";
   return docEditLabel(key, input) ?? builtinCommand(key)?.label ?? rollupTool(key);
 }
 

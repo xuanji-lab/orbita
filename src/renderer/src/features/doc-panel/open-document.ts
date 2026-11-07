@@ -33,9 +33,24 @@ export function getOpenDocument(): OpenDocument | null {
   return current;
 }
 
-/** 这份路径此刻开着时的全文（过程行回溯「改在哪一节」用）；没开着 = null */
+/** 最近看过的几份文档的全文（路径 → 文本）：文档面板关了之后，过程行仍能回溯「改在哪一节」 */
+const RECENT_LIMIT = 6;
+const recent = new Map<string, string>();
+
+/** 文档面板每次拿到新全文时记一笔（最近最少使用淘汰） */
+export function rememberDocText(path: string, text: string): void {
+  recent.delete(path);
+  recent.set(path, text);
+  if (recent.size > RECENT_LIMIT) {
+    const oldest = recent.keys().next().value;
+    if (oldest !== undefined) recent.delete(oldest);
+  }
+}
+
+/** 这份路径的全文（过程行回溯「改在哪一节」用）：此刻开着就取实时的，否则取最近看过的；都没有 = null */
 export function getOpenDocumentText(path: string): string | null {
-  return current !== null && source !== null && current.path === path ? source.text() : null;
+  if (current !== null && source !== null && current.path === path) return source.text();
+  return recent.get(path) ?? null;
 }
 
 /**

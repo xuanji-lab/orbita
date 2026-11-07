@@ -17,7 +17,7 @@ import { useT } from "../../locale.ts";
 import type { ExternalChange } from "./doc-session.ts";
 import { useOpenDoc } from "./useOpenDoc.ts";
 import { useDocPaper } from "./doc-paper.ts";
-import { setOpenDocument } from "./open-document.ts";
+import { rememberDocText, setOpenDocument } from "./open-document.ts";
 import { DocView } from "./DocView";
 import { useReadQuote } from "./useReadQuote";
 import { OfmReader, PlainTextReader } from "./OfmReader";
@@ -119,6 +119,11 @@ function MarkdownEditPane(props: DocEditPaneProps) {
     );
     return () => setOpenDocument(null);
   }, [ready, path, deck, doc.session]);
+
+  // 记下最近的全文：面板关了以后，聊天里的「改文档」过程行还能回溯改在哪一节
+  useEffect(() => {
+    if (ready) rememberDocText(path, doc.text ?? doc.session?.text ?? "");
+  }, [ready, path, doc.text, doc.session]);
 
   // 专注写作纸面：打字时工具栏淡出，鼠标一动回来（只改 data-typing，样式在 CSS）
   const [typing, setTyping] = useState(false);

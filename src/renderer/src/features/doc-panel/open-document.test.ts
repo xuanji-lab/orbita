@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { TextQuote } from "../../../../shared/quote.ts";
 import { contextAround } from "../../../../shared/quote-anchor.ts";
-import { setOpenDocument, resolveQuotes } from "./open-document.ts";
+import { getOpenDocumentText, rememberDocText, setOpenDocument, resolveQuotes } from "./open-document.ts";
 import { clearTrackedStore, saveTracked } from "./quote-track.ts";
 
 const S = "重复句：这一句会出现好几次。";
@@ -40,3 +40,22 @@ describe("resolveQuotes（N2）", () => {
     assert.deepEqual(resolveQuotes([q, chat]), [q, chat]);
   });
 });
+
+describe("过程行回溯「改在哪一节」用的文档全文", () => {
+  it("开着的文档取实时全文；关了以后退回最近看过的；没看过 = null；只留最近 6 份", () => {
+    setOpenDocument(null);
+    assert.equal(getOpenDocumentText("/w/没看过.md"), null);
+    rememberDocText("/w/a.md", "旧文本");
+    assert.equal(getOpenDocumentText("/w/a.md"), "旧文本");
+    // 开着：实时全文优先于记的那份
+    setOpenDocument({ path: "/w/a.md", kind: "doc" }, { text: () => "实时文本", trackedRange: () => null });
+    assert.equal(getOpenDocumentText("/w/a.md"), "实时文本");
+    setOpenDocument(null);
+    assert.equal(getOpenDocumentText("/w/a.md"), "旧文本");
+    // 淘汰：再记 6 份，最早的 a.md 出局
+    for (let i = 0; i < 6; i += 1) rememberDocText(`/w/n${i}.md`, `文本${i}`);
+    assert.equal(getOpenDocumentText("/w/a.md"), null);
+    assert.equal(getOpenDocumentText("/w/n5.md"), "文本5");
+  });
+});
+
