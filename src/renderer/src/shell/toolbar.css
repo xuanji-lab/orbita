@@ -384,6 +384,13 @@
   height: var(--titlebar-control);
   padding: 0 var(--space-2) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
+  /* 可缩：标题是文件名时（演示文稿 / 文档）会很长，960 宽里不缩就把行尾动作格（关闭这份文件）
+     挤出胶囊、被旁边的「辅助对话」键盖住点不到（2026-11-07 独立验收）。中段 .cap-grow 先让，
+     还不够才轮到标题收省略号；图标与 chevron 不缩 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.cap-pt > .orbita-icon {
   flex: 0 0 auto;
 }
 .cap-pt strong {
@@ -391,6 +398,9 @@
   font-size: var(--font-size-titlebar);
   color: var(--color-text-primary);
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cap-pt .orbita-icon:first-child {
   color: var(--color-text-secondary);
