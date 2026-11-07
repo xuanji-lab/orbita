@@ -6,6 +6,7 @@ import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions } from "@shared/session";
+import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
@@ -57,6 +58,7 @@ import {
   planNotice,
   sessionRunState,
   settledSessions,
+  treeNotices,
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
@@ -212,6 +214,19 @@ export function App() {
     setShowArchived(false);
     setShowCarryovers(false);
   }, []);
+  /**
+   * 响了一声就记一笔（`<userData>/chime-log.jsonl`，理由见 shared/notify.ts）：标题取此刻
+   * 列表里的真值。记账失败只落 console——提示音的账不能让任何流程失败。
+   */
+  const logChime = (reason: ChimeReason, ids: readonly string[]): void => {
+    const subjects = ids.map((id) => ({
+      id,
+      title: session.sessions.find((meta) => meta.id === id)?.title ?? "",
+    }));
+    void api.notify.logChime({ reason, subjects }).catch((cause: unknown) => {
+      console.warn("[chime] 记账失败", cause);
+    });
+  };
   const expandSidebar = useCallback((): void => setSidebarCollapsed(false), []);
   const openFilesPanel = useCallback((): void => setRightPanel("files"), []);
   const focus = useFocusShell({
@@ -223,7 +238,11 @@ export function App() {
     leaveSurfaces: leaveFocusSurfaces,
     expandSidebar,
     openFilesPanel,
-    playChime: playCompletionChime,
+    // 专注到点那一声也记账（useFocusShell 只在开着提示音时调它）
+    playChime: () => {
+      playCompletionChime();
+      logChime("focus-done", []);
+    },
   });
   /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
   const focusFilesView = focus.filesView;
@@ -563,6 +582,8 @@ export function App() {
     [engine, session],
   );
   const prevStatesRef = useRef(engine.states);
+  /** 落定时子树还在跑、提醒先压着的根会话（treeNotices）：纯判定状态，不驱动渲染 */
+  const heldNoticesRef = useRef<ReadonlySet<string>>(new Set());
   /** 专注中（计时里）：完成提醒静音——记未读、不响铃、不弹卡（用户裁决：专注期间
    * 其它会话跑完只记帐，专注结束后铃铛照常可见）。done 之后恢复常觃。 */
   const focusQuiet = focus.quiet;
@@ -573,24 +594,38 @@ export function App() {
     const settled = settledSessions(prev, engine.states).filter(
       (id) => session.sessions.find((meta) => meta.id === id)?.parentId === undefined,
     );
-    if (settled.length === 0) return;
+    if (settled.length === 0 && heldNoticesRef.current.size === 0) return;
+    // 子树还在跑的先压着，整棵停下那拍再提醒（母会话每被子会话叫醒一次就响一声的根因，
+    // 见 completion-notice.ts 的 treeNotices）
+    const { notify, held } = treeNotices({
+      settled,
+      held: heldNoticesRef.current,
+      states: engine.states,
+      sessions: session.sessions,
+      failed: (id) => session.turnErrorOf(id) !== null,
+    });
+    heldNoticesRef.current = held;
+    if (notify.length === 0) return;
     const windowActive = !isWindowInactive({
       hasFocus: document.hasFocus(),
       visibilityState: document.visibilityState,
     });
-    let ring = false;
+    const ringFor: string[] = [];
     const fresh: string[] = [];
-    for (const id of settled) {
+    for (const id of notify) {
       const plan = planNotice({
         watched: watchedIds.includes(id),
         windowActive,
         soundOn: focusQuiet ? false : (settings.completionSound ?? true),
       });
-      ring ||= plan.sound;
+      if (plan.sound) ringFor.push(id);
       if (plan.unread) fresh.push(id);
     }
-    // 同拍多条只响一声
-    if (ring) playCompletionChime();
+    // 同拍多条只响一声，记在它们所有人头上
+    if (ringFor.length > 0) {
+      playCompletionChime();
+      logChime("session-settled", ringFor);
+    }
     const latest = fresh[fresh.length - 1];
     if (latest !== undefined) {
       markUnread(fresh);
