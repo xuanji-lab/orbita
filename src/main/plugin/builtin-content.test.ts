@@ -31,6 +31,20 @@ import {
 } from "../../shared/automation.ts";
 import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "../../agent/automation-tools.ts";
 import { RequestBroker } from "../../agent/request-broker.ts";
+import { QUOTE_MIN_CHARS } from "../../shared/pdf-quote.ts";
+import {
+  CITE_MAX_QUOTES,
+  FIGURE_INDEX_MAX,
+  PDF_IMAGE_HD_WIDTH,
+  PDF_IMAGE_MAX_PAGES_PER_CALL,
+  PDF_IMAGE_WIDTH,
+  PDF_IMAGE_WIDTH_MAX,
+  PDF_IMAGE_WIDTH_MIN,
+  PDF_MAX_PAGES_PER_CALL,
+  PDF_NO_TEXT_LAYER_MIN_CHARS,
+  PDF_SPARSE_PAGE_CHARS,
+} from "../../agent/pdf-tools.ts";
+import { DOCX_IMAGE_MAX_COUNT, DOCX_MAX_CHARS_PER_CALL, DOCX_OUTLINE_MAX } from "../../agent/docx-tools.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { scanPlugin } from "./manifest.ts";
 import { PluginStore } from "./store.ts";
@@ -43,6 +57,7 @@ const SKILL_KIT = join(BUILTIN, "skill-kit");
 const DOCS_SLIDES = join(BUILTIN, "docs-slides");
 const TERMINAL = join(BUILTIN, "terminal");
 const AUTOMATION = join(BUILTIN, "automation");
+const READING = join(BUILTIN, "reading");
 
 class NoSecrets implements SecretsPort {
   async set(): Promise<void> {}
@@ -426,6 +441,47 @@ describe("内置插件 automation", () => {
       `instruction at most ${AUTOMATION_PROMPT_MAX.toLocaleString("en-US")} characters`,
     ];
     for (const needle of expected) assert.equal(text.includes(needle), true, `技能里缺「${needle}」（与代码常量不一致？）`);
+describe("内置插件 reading", () => {
+  test("一条技能 reading；workflow 点名对得上；description 写明「读 PDF 用 read_pdf、读 docx 用 read_docx，不用 read」与何时读它（模型靠它想起技能）", async () => {
+    const scanned = await scanPlugin(READING, "reading");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["reading"]);
+    assert.equal(scanned.displayName, "读 PDF 与 Word");
+    assert.equal(scanned.workflow.length >= 4, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能 ${step.skill} 对不上`);
+    const description = scanned.skills[0]?.description ?? "";
+    for (const needle of ["read_pdf", "cite_pdf", "read_docx", "never read", "figure", "scanned", "quote"]) assert.match(description, new RegExp(needle, "i"), `description 缺 ${needle}`);
+  });
+
+  // 上限与数字的真源在代码里（工具的分页、渲染、核验都读它）；技能里是给模型读的那一份，两边不许分叉
+  test("reading 技能与代码同源：分页 / 页图 / 宽度 / 引文 / docx 的数字都与常量一致", async () => {
+    const text = await readFile(join(READING, "skills", "reading", "SKILL.md"), "utf8");
+    const fmt = (n: number): string => n.toLocaleString("en-US");
+    const expected = [
+      `pages 1–${PDF_MAX_PAGES_PER_CALL}`,
+      `max ${PDF_MAX_PAGES_PER_CALL})`,
+      `at most ${PDF_IMAGE_MAX_PAGES_PER_CALL} pages per call`,
+      `capped at ${PDF_IMAGE_MAX_PAGES_PER_CALL} pages`,
+      `(${PDF_IMAGE_MAX_PAGES_PER_CALL} pages per call, ${PDF_IMAGE_HD_WIDTH} px`,
+      `rendered ${PDF_IMAGE_HD_WIDTH} px wide`,
+      `${PDF_IMAGE_WIDTH_MIN}–${PDF_IMAGE_WIDTH_MAX}`,
+      `(default ${PDF_IMAGE_WIDTH} px wide)`,
+      `fewer than ${PDF_SPARSE_PAGE_CHARS} characters`,
+      `under ${PDF_NO_TEXT_LAYER_MIN_CHARS} characters`,
+      `at most ${FIGURE_INDEX_MAX} entries`,
+      `up to ${CITE_MAX_QUOTES} quotes`,
+      `at least ${QUOTE_MIN_CHARS} letters`,
+      `at most ${DOCX_OUTLINE_MAX} headings`,
+      `about ${fmt(DOCX_MAX_CHARS_PER_CALL)} characters`,
+      `at most ${DOCX_IMAGE_MAX_COUNT} per call`,
+    ];
+    for (const needle of expected) assert.equal(text.includes(needle), true, `reading 技能缺「${needle}」（与代码常量不一致？）`);
+  });
+
+  test("reading 技能讲到三个工具的要害：不用 read、image_pages 与 crop 像素、offset+limit 省文字、cite_pdf 的编号与 NOT CITED、docx 块号 / 批注 / images", async () => {
+    const text = await readFile(join(READING, "skills", "reading", "SKILL.md"), "utf8");
+    for (const needle of ["`read_pdf`", "`cite_pdf`", "`read_docx`", "Never use `read`", "image_pages", "images: true", "crop", "pixels on the page image", "offset: 7, limit: 1", "no text layer", "NOT CITED", "[^c4k2]", "exactly as written", "block", "Sections:", "[Z1]", "[image N: alt text]"]) {
+      assert.equal(text.includes(needle), true, `reading 技能缺 ${needle}`);
+    }
   });
 });
 
@@ -448,6 +504,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
         "plugin-creator/board-style",
         "plugin-creator/find-existing",
         "plugin-creator/plugin-creator",
+        "reading/reading",
         "skill-kit/find-skills",
         "skill-kit/skill-creator",
         "terminal/terminal",

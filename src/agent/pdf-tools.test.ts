@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   createPdfTools,
   PDF_IMAGE_HD_WIDTH,
@@ -445,5 +445,37 @@ describe("cite_pdf", () => {
 
   test("没给 quotes 报错指路", async () => {
     await assert.rejects(cite(join(dir, "three-pages.pdf"), []), /requires "quotes"/);
+  });
+});
+
+/**
+ * 描述瘦身的守门（细则在内置插件 reading 的技能里）：触发词与指路必须在，总量不许回涨。
+ * 触发词是「模型愿不愿意主动调」的命根：read_pdf 要说「用它代替 read」，cite_pdf 要说「讲解依赖原文时用、给可点引用」。
+ */
+describe("PDF 工具的描述", () => {
+  const tools = createPdfTools(tmpdir(), { pdfCitations: true });
+  const byName = (name: string): ToolDefinition => tools.find((t) => t.name === name)!;
+
+  test("read_pdf：保留「代替 read」「图表索引 → image_pages」的触发词，并指路 reading 技能", () => {
+    const description = byName("read_pdf").description;
+    assert.match(description, /Use this instead of read for any \.pdf file/);
+    assert.match(description, /image_pages/);
+    assert.match(description, /`reading` skill/);
+  });
+
+  test("cite_pdf：保留「何时用 / 可点标记 / 不凭记忆引」，并指路 reading 技能", () => {
+    const description = byName("cite_pdf").description;
+    assert.match(description, /explain a PDF/);
+    assert.match(description, /original text/);
+    assert.match(description, /\[\^c4k2\]/);
+    assert.match(description, /never cite from memory/);
+    assert.match(description, /`reading` skill/);
+  });
+
+  test("两个工具描述合计 ≤1,200 字符，描述 + 参数 schema ≤3,000（瘦身前 1,396 / 3,518）", () => {
+    const description = tools.reduce((sum, tool) => sum + tool.description.length, 0);
+    const withSchema = tools.reduce((sum, tool) => sum + tool.description.length + JSON.stringify(tool.parameters).length, 0);
+    assert.equal(description <= 1200, true, `PDF 工具描述合计 ${description} 字符，超了——细则写进 reading 技能`);
+    assert.equal(withSchema <= 3000, true, `PDF 工具描述 + schema 合计 ${withSchema} 字符，超了`);
   });
 });
