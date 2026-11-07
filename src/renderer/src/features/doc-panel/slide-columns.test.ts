@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { pageCaption, splitColumns } from "./slide-columns.ts";
+import { contentClipped, pageCaption, splitColumns } from "./slide-columns.ts";
 
 describe("splitColumns —— 安全的分栏写法", () => {
   it("三栏：标题 / 前后文留在普通块里", () => {
@@ -47,5 +47,22 @@ describe("pageCaption —— 缩略图下的标题", () => {
     assert.equal(pageCaption("- 要点一"), "要点一");
     assert.equal(pageCaption("> 引语"), "引语");
     assert.equal(pageCaption("   \n  "), "");
+  });
+});
+
+describe("contentClipped —— 只有真被裁的页才点名（S1）", () => {
+  // 页体 720 高、下内边距 64：内容底在 700（落进下内边距，但还在页体里）= 没被裁
+  it("内容落进下内边距、没出页体：不算被裁（原先 scrollHeight 判据会误报）", () => {
+    assert.equal(contentClipped(700, 720), false);
+    assert.equal(contentClipped(720, 720), false);
+    assert.equal(contentClipped(720.8, 720), false, "亚像素误差不算");
+  });
+  it("内容的最低一点超出页体底边：被裁", () => {
+    assert.equal(contentClipped(722.5, 720), true);
+    assert.equal(contentClipped(900, 720), true);
+  });
+  it("缩放后的坐标同样成立（容差随调用方给）", () => {
+    assert.equal(contentClipped(288.4, 288, 1), false);
+    assert.equal(contentClipped(290, 288, 1), true);
   });
 });

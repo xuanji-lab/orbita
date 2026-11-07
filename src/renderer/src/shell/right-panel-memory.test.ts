@@ -10,6 +10,7 @@ import {
   hasSubLayer,
   intentSubOf,
   mergeLoaded,
+  panelFromHome,
   parseAutomationSub,
   parseContextSub,
   parseEntry,
@@ -283,5 +284,40 @@ describe("composeEntry：App 写穿时拼出的完整条目", () => {
     const a = composeEntry({ ...base, rightPanel: "automation", path: { panel: "automation", sub: { detail: "x" } } });
     deepStrictEqual(a, { panel: "automation", sub: { detail: "x" } });
     deepStrictEqual(composeEntry({ ...base, rightPanel: "intent", path: { panel: "automation", sub: { detail: "x" } } }), { panel: "intent" });
+  });
+});
+
+describe("panelFromHome：首页开着文档 / 演示文稿面板时发第一句，面板留着（S2）", () => {
+  it("首页 → 新会话（没记过面板）：docs / slides 留着", () => {
+    strictEqual(panelFromHome(new Map(), "", "s1", "docs"), "docs");
+    strictEqual(panelFromHome(new Map(), "", "s1", "slides"), "slides");
+  });
+
+  it("文件面板等其它面板维持原来的外壳行为（新会话关着）", () => {
+    strictEqual(panelFromHome(new Map(), "", "s1", "files"), null);
+    strictEqual(panelFromHome(new Map(), "", "s1", "review"), null);
+    strictEqual(panelFromHome(new Map(), "", "s1", null), null);
+  });
+
+  it("不适用：不是从首页来、目标不是会话、目标会话自己有记忆", () => {
+    strictEqual(panelFromHome(new Map(), "a", "b", "docs"), null);
+    strictEqual(panelFromHome(new Map(), "", null, "docs"), null);
+    strictEqual(panelFromHome(new Map<string, PanelEntry>([["s1", { panel: "files" }]]), "", "s1", "docs"), null);
+  });
+});
+
+describe("docs / slides 是普通面板：按会话记、落盘往返都不丢", () => {
+  it("composeEntry / parseEntry：记成自己，不被当成未知面板退回关着", () => {
+    const base = { openedDraft: null, subSessionId: null, taskTab: "progress" as const };
+    for (const kind of ["docs", "slides"] as const) {
+      deepStrictEqual(composeEntry({ ...base, rightPanel: kind, path: { panel: kind } }), { panel: kind });
+      deepStrictEqual(parseEntry({ panel: kind, sub: { x: 1 } }), { panel: kind });
+      strictEqual(hasSubLayer(kind), false);
+    }
+  });
+
+  it("落盘往返：docs 条目读回来仍是 docs", () => {
+    const memory = rememberEntry(new Map(), "a", { panel: "docs" });
+    deepStrictEqual(recallEntry(parseMemoryFile(toMemoryFile(memory)), "a"), { panel: "docs" });
   });
 });

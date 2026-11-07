@@ -25,7 +25,11 @@ export function DocsPanel(props: {
   onQuote?: (quote: TextQuote) => void;
 }) {
   const t = useT();
-  const { kind, sessionId, workspaceId } = props;
+  const { kind, workspaceId } = props;
+  // 会话 id 只在挂载时取一次：从首页发第一句话、新会话诞生时面板要原地留着（App 的 panelFromHome），
+  // 文档用的都是工作区根下的路径，不依赖会话（会话 id 只多出一个工作台根）——别因为 id 从 null 变成真 id
+  // 就把文档重读一遍、编辑器重建、光标没了
+  const [sessionId] = useState(props.sessionId);
   const scope = `${workspaceId ?? "home"}:${kind}`;
   const [entries, setEntries] = useState<DocListEntry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);

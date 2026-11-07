@@ -107,9 +107,14 @@ export function resolveDocQuotes(
   return quotes.map((quote) => {
     if (quote.filePath !== path) return quote;
     const range = quote.anchor === undefined ? null : tracked(quote.anchor);
-    if (range !== null && range.to > range.from && quote.text !== "") {
+    if (range !== null && quote.text !== "") {
       const at = text.slice(range.from, range.to).indexOf(quote.text);
       if (at !== -1) return quoteAt(text, quote, range.from + at);
+      // 追踪的区间还在、里面的字却已经不是引用的原文了（被改了几个字，或整句删了）：划选的那一处已经变样。
+      // 此时文件里即便还有一处一模一样的句子，也只是「另一处恰好相同」——不能顺手认它（那是静默指错）：
+      // 标 missing，模型被告知原文已变、不要改、去问用户
+      const { ambiguous: _ambiguous, ...rest } = quote;
+      return { ...rest, missing: true };
     }
     return relocateQuote(text, quote);
   });

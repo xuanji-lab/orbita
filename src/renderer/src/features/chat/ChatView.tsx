@@ -2525,6 +2525,8 @@ function ComposerBar(props: {
             }
             onClick={toggle}
             chevron
+            // 档位芯片：宽 84 是为了「Off → Extra high」切换时不跳；挤的时候要能让（见 styles.css 的 .chip-think）
+            className="chip-think"
           >
             {t.thinkingLevel(session.thinkingLevel, session.model?.modelId)}
           </Chip>

@@ -138,12 +138,10 @@ function decodeAttribute(value: string): string {
 
 /** 引用正文里出现闭合标签会提前截断整块——改写掉（同 Proma 的 sanitizeQuotedText） */
 function sanitizeBody(text: string): string {
-  return text.replace(/<\/quoted_context>/gi, "</quoted_context_>").replace(/<\/quoted_file>/gi, "</quoted_file_>");
-}
-
-/** 属性值里的换行写成字面的 `\n`（两个字符），免得一个属性跨行 */
-function escapeNewlines(value: string): string {
-  return value.replace(/\r?\n/g, "\\n");
+  return text
+    .replace(/<\/quoted_context>/gi, "</quoted_context_>")
+    .replace(/<\/quoted_file>/gi, "</quoted_file_>")
+    .replace(/<\/(before|quoted|after)>/gi, "</$1_>");
 }
 
 function encodeAttribute(value: string): string {
@@ -155,16 +153,19 @@ function quoteBlock(quote: TextQuote, index: number): string {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
     const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"`;
     const missing = quote.missing === true ? ' missing="true"' : "";
-    // 同一段原文在文件里出现多次：说清是第几处，并带上这一处前后的字，模型把它们拼进 edit 的 oldText 就只会命中这一处
-    const several =
-      quote.occurrence !== undefined && quote.occurrence.of > 1 && quote.context !== undefined
-        ? ` occurrence="${quote.occurrence.index}/${quote.occurrence.of}" before="${encodeAttribute(escapeNewlines(quote.context.before))}" after="${encodeAttribute(escapeNewlines(quote.context.after))}"`
-        : "";
+    // 同一段原文在文件里出现多次：说清是第几处，并把这一处前后的字**按原文逐字**写在块体里（不放属性：
+    // 属性要转义换行与引号，模型拼 oldText 时把字面 `\n` 带进去，edit 失败重试——一次花了 172 秒）
+    const several = quote.occurrence !== undefined && quote.occurrence.of > 1 && quote.context !== undefined;
+    const occurrenceAttr = several ? ` occurrence="${quote.occurrence?.index}/${quote.occurrence?.of}"` : "";
     const unsure =
       quote.ambiguous === undefined
         ? ""
         : ` ambiguous="true" was_line="${quote.ambiguous.was}" occurs_at_lines="${quote.ambiguous.at.join(",")}"`;
-    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${several}${unsure}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
+    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${occurrenceAttr}${unsure}>\n${
+      several && quote.context !== undefined
+        ? `<before>${sanitizeBody(quote.context.before)}</before>\n<quoted>${sanitizeBody(quote.text)}</quoted>\n<after>${sanitizeBody(quote.context.after)}</after>`
+        : sanitizeBody(quote.text)
+    }\n</quoted_file>\n\n`;
   }
   const turn = quote.turn !== undefined ? ` turn="${quote.turn}"` : "";
   return `<quoted_context index="${index}" role="${quote.role}"${turn}>\n${sanitizeBody(quote.text)}\n</quoted_context>\n\n`;
@@ -216,8 +217,10 @@ export const QUOTE_GUIDELINE = [
     "is now. To change it, edit only that passage — match the quoted text exactly, and when the same text occurs " +
     "more than once in the file, pick the quoted occurrence (see below) — and leave every other byte of the file " +
     'as it was. occurrence="k/n" means this exact text occurs n times in the file and the quote is the k-th, ' +
-    "counting from the top; before / after (with \\n for line breaks) are the characters right around the quoted " +
-    "occurrence — include them in the edit's old text so it matches only that occurrence. Line numbers are counted " +
+    "counting from the top; the block body then holds <before>…</before>, <quoted>…</quoted> and <after>…</after>: " +
+    "the file's own text, verbatim (real line breaks, nothing escaped), right around the quoted occurrence — " +
+    "build the edit's old text from before + quoted + after (or part of them) so it matches only that occurrence. " +
+    "Line numbers are counted " +
     'like `cat -n`, blank lines included; do not trust your own counting when it disagrees. missing="true" means ' +
     "the quoted text no longer exists in the file (it was edited since): do " +
     "not edit anything for that quote, tell the user the passage has changed, and ask what they want. " +
@@ -269,8 +272,10 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
       if (filePath === undefined) return whole;
       const lines = parseLines(attribute(attrs, "lines"));
       const slide = Number(attribute(attrs, "slide"));
+      // 带前后文的块体是 <before>…</before><quoted>…</quoted><after>…</after>：引用正文只取 <quoted> 里的
+      const inner = body.startsWith("<before>") ? /<quoted>([\s\S]*?)<\/quoted>\n<after>/.exec(body) : null;
       quotes.push({
-        text: body,
+        text: inner === null ? body : (inner[1] as string),
         messageId: "",
         role: "user",
         filePath,

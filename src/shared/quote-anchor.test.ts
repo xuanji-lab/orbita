@@ -51,7 +51,9 @@ describe("relocateQuote —— 以原文为锚（M3）", () => {
     assert.deepEqual(moved.lines, quote.lines);
     assert.deepEqual(moved.occurrence, { index: 1, of: 2 });
     const message = composeQuotedMessage([moved], "改成英文");
-    assert.match(message, / occurrence="1\/2" before="[^"]*写得足够长。\\n\\n" after="\\n\\n后文收尾/);
+    assert.match(message, / occurrence="1\/2">\n<before>[^<]*写得足够长。\n\n<\/before>\n<quoted>重复句：这一句会出现两次。<\/quoted>\n<after>\n\n后文收尾/);
+    assert.doesNotMatch(message, /before="|after="|\\n/, "前后文逐字写在块体里，不放属性、不转义");
+    assert.equal(parseQuotedMessage(message).quotes[0]?.text, SENTENCE, "芯片显示的引用正文只取 <quoted> 里的");
     assert.match(QUOTE_GUIDELINE, /occurrence="k\/n"/);
     // 只有一处：不带这些
     const unique = composeQuotedMessage([relocateQuote(long, select(long, SENTENCE))], "x");
@@ -121,8 +123,27 @@ describe("resolveDocQuotes —— 追踪区间优先，退回上下文", () => {
     assert.deepEqual(resolved?.lines, { from: 7, to: 7 });
   });
 
-  it("追踪的区间里字被改过：退回「周围没动」的兜底（原文仍唯一就找到它，否则 missing）", () => {
-    const other = resolveDocQuotes(base, "/ws/a.md", () => ({ from: 0, to: 3 }), [quote]);
+  it("追踪的区间还在、里面的字已经变了（x-editquoted）：不走「只出现一次就认」——文件里剩的那一处只是另一处恰好相同", () => {
+    // 紧贴着复制了一句，再把被引用的原句（现在在第 7 行）改了几个字：文件里原文只剩复制句那一处
+    const dup = base.replace(SENTENCE, `${SENTENCE}\n\n${SENTENCE}`);
+    const from = dup.lastIndexOf(SENTENCE);
+    const edited = `${dup.slice(0, from)}${SENTENCE.replace("这一句", "这句话")}${dup.slice(from + SENTENCE.length)}`;
+    const [resolved] = resolveDocQuotes(edited, "/ws/a.md", () => ({ from, to: from + SENTENCE.replace("这一句", "这句话").length }), [quote]);
+    assert.equal(resolved?.missing, true);
+    assert.equal(resolved?.occurrence, undefined);
+    assert.match(composeQuotedMessage([resolved as TextQuote], "改成英文"), / missing="true">/);
+  });
+
+  it("追踪的区间还在、原句被整句删掉（x-delorig）：文件里只剩复制句，同样标 missing，不认它", () => {
+    const dup = base.replace(SENTENCE, `${SENTENCE}\n\n${SENTENCE}`);
+    const from = dup.lastIndexOf(SENTENCE);
+    const deleted = `${dup.slice(0, from)}${dup.slice(from + SENTENCE.length)}`; // 区间塌成一个点
+    const [resolved] = resolveDocQuotes(deleted, "/ws/a.md", () => ({ from, to: from }), [quote]);
+    assert.equal(resolved?.missing, true);
+  });
+
+  it("没有追踪区间（追踪丢了）：才走「周围没动」的兜底，原文仍唯一就找到它，否则 missing", () => {
+    const other = resolveDocQuotes(base, "/ws/a.md", () => null, [quote]);
     assert.deepEqual(other[0]?.lines, { from: 5, to: 5 });
     const gone = resolveDocQuotes(base.replace(SENTENCE, "没了"), "/ws/a.md", () => null, [quote]);
     assert.equal(gone[0]?.missing, true);

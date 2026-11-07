@@ -44,6 +44,7 @@ import {
   hasEntry,
   hasSubLayer,
   mergeLoaded,
+  panelFromHome,
   parseMemoryFile,
   parsePath,
   recallEntry,
@@ -1162,6 +1163,12 @@ export function App() {
       const bare = parsePath({ panel: carry.panel }) ?? CLOSED_ENTRY;
       recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
       carryPanelRef.current = null;
+    }
+    // 从首页发第一句：开着的是文档 / 演示文稿面板就留着（panelFromHome）
+    const keepFromHome = panelFromHome(panelMemoryRef.current, previous, target, rightPanel);
+    if (keepFromHome !== null) {
+      const bare = parsePath({ panel: keepFromHome }) ?? CLOSED_ENTRY;
+      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
     }
     const nextTab = taskTabOf(recalled);
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）

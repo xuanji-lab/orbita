@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import remarkCjkFriendly from "remark-cjk-friendly";
 import remarkBreaks from "remark-breaks";
 import type { DocPaper } from "@shared/settings";
-import { splitColumns } from "./slide-columns.ts";
+import { contentClipped, splitColumns } from "./slide-columns.ts";
 import { useDocPaper } from "./doc-paper.ts";
 import { Icon } from "../../shell/Icon";
 // 屏幕上用样式表（副作用导入），导出 PDF 时再把同一份源码当字符串塞进 HTML
@@ -73,6 +73,19 @@ export function SlidePage(props: { text: string; number: number; total: number; 
   );
 }
 
+/** 页体里有没有内容被裁掉：所有后代元素的最低一点 vs 页体的底边（见 contentClipped） */
+function bodyClipped(body: HTMLElement): boolean {
+  const bottom = body.getBoundingClientRect().bottom;
+  let lowest = Number.NEGATIVE_INFINITY;
+  body.querySelectorAll("*").forEach((element) => {
+    const rect = element.getBoundingClientRect();
+    if (rect.height > 0 && rect.bottom > lowest) lowest = rect.bottom;
+  });
+  // 容差 1 个逻辑像素：外层 transform 缩放后，屏幕上的 1 逻辑像素 = 缩放比 × 1 屏幕像素
+  const scale = body.offsetHeight > 0 ? body.getBoundingClientRect().height / body.offsetHeight : 1;
+  return contentClipped(lowest, bottom, Math.max(0.5, scale));
+}
+
 /** 按容器宽度缩放一页：外框 16:9，里面的 1280 画布 transform: scale(宽 / 1280) */
 export function SlideCanvas(props: {
   text: string;
@@ -91,7 +104,7 @@ export function SlideCanvas(props: {
   // 内容超出 16:9 的页：页体是 overflow:hidden，超出的部分会被静默裁掉——量出来、告诉用户
   useLayoutEffect(() => {
     const body = frameRef.current?.querySelector<HTMLElement>(".dp-slide-body") ?? null;
-    setOverflow(body !== null && body.scrollHeight > body.clientHeight + 1);
+    setOverflow(body !== null && bodyClipped(body));
   }, [props.text, props.number, scale, paper]);
   useLayoutEffect(() => {
     const frame = frameRef.current;
@@ -193,7 +206,7 @@ export function overflowPages(pages: readonly string[], paper: DocPaper): number
   try {
     const found: number[] = [];
     host.querySelectorAll<HTMLElement>(".dp-slide-body").forEach((body, index) => {
-      if (body.scrollHeight > body.clientHeight + 1) found.push(index + 1);
+      if (bodyClipped(body)) found.push(index + 1);
     });
     return found;
   } finally {

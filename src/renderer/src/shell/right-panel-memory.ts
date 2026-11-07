@@ -90,7 +90,7 @@ export interface IntentSub {
 /** 路径：开着哪个面板，再往下一层。带 sub 的面板才有 sub 字段，其余只有 panel */
 export type PanelPath =
   | { panel: null }
-  | { panel: "files" | "terminal" | "drawer" }
+  | { panel: "files" | "terminal" | "drawer" | "docs" | "slides" }
   | { panel: "plugins"; sub?: PluginsSub }
   | { panel: "automation"; sub?: AutomationSub }
   | { panel: "review"; sub?: ReviewSub }
@@ -148,6 +148,22 @@ function lastKey(memory: PanelMemory): string | undefined {
 export function recallEntry(memory: PanelMemory, session: string | null): PanelEntry {
   if (session === null) return CLOSED_ENTRY;
   return memory.get(session) ?? CLOSED_ENTRY;
+}
+
+/**
+ * 从首页发第一句、新会话诞生的那一拍：首页开着的是文档 / 演示文稿面板，就让它留着（新会话直接带上这份文档）。
+ * 「新建文档 → 让 agent 写」的第一步就会撞上这条——面板一关用户得再点一次。其它面板（含文件）保持原来的
+ * 外壳行为：新会话没记过面板 = 关着。会话已有自己的记忆（切到老会话）时不适用。
+ * 返回要留着的面板种类（调用方按根路径恢复），不适用返回 null。
+ */
+export function panelFromHome(
+  memory: PanelMemory,
+  previous: string,
+  target: string | null,
+  current: RightPanelKind | null,
+): RightPanelKind | null {
+  if (previous !== "" || target === null || memory.has(target)) return null;
+  return current === "docs" || current === "slides" ? current : null;
 }
 
 /** 这条会话在本次运行里记过没有（「和智能体一起做一个」的 carry 只给从没记过的新会话） */
@@ -266,7 +282,8 @@ export function parseIntentSub(raw: unknown): IntentSub | undefined {
 
 // ── 一条记忆：解析 / 规范化 ────────────────────────────────────────────
 
-const PLAIN_PANELS = ["files", "terminal", "drawer"] as const;
+// docs / slides 是没有第二层的普通面板：文档本身的位置由 doc-panel 自己按 docScope 记，这里只记「开着」
+const PLAIN_PANELS = ["files", "terminal", "drawer", "docs", "slides"] as const;
 
 /** 规范化一条路径（面板报上来的、文件里读回来的都走它）。panel 不认识 → null（整条丢） */
 export function parsePath(raw: unknown): PanelPath | null {

@@ -100,3 +100,13 @@ export function pageCaption(text: string): string {
   }
   return "";
 }
+
+/**
+ * 一页的内容是不是真被裁掉了：内容的最低一点超过了页体的底边（页体 `overflow: hidden`，超出底边的才看不见）。
+ * 页体有下内边距（页脚留白）——内容落进这块留白里只是挤了页码、并没有被裁，不能报「被裁掉了」。
+ * 之前用 scrollHeight > clientHeight，scrollHeight 把下内边距也算进去，对没被裁的页误报。
+ * 参数是同一坐标系（屏幕像素、缩放后也行）下的两个 y；tolerance 吸收亚像素与缩放取整。
+ */
+export function contentClipped(contentBottom: number, bodyBottom: number, tolerance = 1): boolean {
+  return contentBottom > bodyBottom + tolerance;
+}

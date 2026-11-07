@@ -530,10 +530,30 @@
   }
 }
 
-/* 模型芯片：名字可能很长，随时都允许省略号截断，不等断点（compact 无关，随时生效） */
+/* 模型芯片：名字可能很长，随时都允许省略号截断，不等断点（compact 无关，随时生效）。
+   最窄也留头像 + 两个字 + 圆角内边距（原先 32 只剩头像，名字省成「G…」） */
 .composer-bottom-bar .chip-model {
   flex: 1 1 auto;
-  min-width: 32px;
+  min-width: 60px;
+}
+
+/* 档位芯片：Chip 的 fixedWidth 是内联 min-width（84），按钮撑出它外面的包裹层、压在用量环 / 语音键上
+   （聊天列 410 以下实测重叠 16–20px）。包裹层 basis 84、可缩到 40，按钮跟着包裹层的宽，内联 min-width 用 !important 盖掉 */
+.composer-bottom-bar > :has(> .chip-think) {
+  flex: 0 1 84px;
+  min-width: 40px;
+}
+.composer-bottom-bar .chip-think {
+  width: 100%;
+  min-width: 0 !important;
+}
+
+/* 底栏很窄时模型 / 档位芯片的下拉箭头先让位（名字比箭头重要） */
+@container (max-width: 300px) {
+  .composer-bottom-bar .chip-model > .orbita-icon:last-child,
+  .composer-bottom-bar .chip-think > .orbita-icon:last-child {
+    display: none;
+  }
 }
 
 /*
