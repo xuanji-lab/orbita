@@ -548,6 +548,25 @@
   min-width: 0 !important;
 }
 
+/* 方向 N 的索引边栏在窄会话列里仍占 32px（--gutter 收成 32，输入框与消息列同一条左缘），
+   于是同一个会话列下底栏比改版前窄 32px：右栏打开文档 / 演示文稿时聊天列守硬底线 410，
+   底栏只剩 ~199px，模型芯片的 60px 底与档位 53px 加起来压住隔壁（实测重叠 3px）。
+   这一档把两个「可缩」的芯片再让一步：模型只留头像（名字仍在 title），档位包裹层缩到 32。 */
+@container (max-width: 210px) {
+  .composer-bottom-bar .chip-model {
+    min-width: 36px;
+  }
+  .composer-bottom-bar > :has(> .chip-think) {
+    min-width: 32px;
+  }
+}
+/* 更窄（面板 300 + 聊天列 330–390 的最小窗口）：36px 里只剩头像与半个字的碎片，干脆删到只留头像 */
+@container (max-width: 170px) {
+  .composer-bottom-bar .chip-model .chip-label {
+    display: none;
+  }
+}
+
 /* 底栏很窄时模型 / 档位芯片的下拉箭头先让位（名字比箭头重要） */
 @container (max-width: 300px) {
   .composer-bottom-bar .chip-model > .orbita-icon:last-child,
