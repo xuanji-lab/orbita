@@ -25,10 +25,10 @@ import {
 import { splitFrontmatter } from "../../../../shared/ofm/properties.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import type { OfmEnv } from "./ofm-env.ts";
+import { codeRanges, inAny, standardImages } from "./cm-ofm-code.ts";
 import { loadImageUrl } from "./ofm-images.ts";
 
 const hidden = Decoration.replace({});
-const CODE_NODES = new Set(["InlineCode", "FencedCode", "CodeBlock", "CodeText", "CodeInfo", "HTMLBlock", "HTMLTag", "CommentBlock", "URL"]);
 
 const CALLOUT_ICONS: Readonly<Record<string, IconName>> = {
   note: "pencil-line",
@@ -130,25 +130,6 @@ class ImageWidget extends WidgetType {
 
 /** 解析状态变化（找到 / 找不到）后让装饰重算 */
 const refresh = StateEffect.define<null>();
-
-function codeRanges(state: EditorState, from: number, to: number): { from: number; to: number }[] {
-  const out: { from: number; to: number }[] = [];
-  syntaxTree(state).iterate({
-    from,
-    to,
-    enter: (node) => {
-      if (CODE_NODES.has(node.name)) {
-        out.push({ from: node.from, to: node.to });
-        return false;
-      }
-      return undefined;
-    },
-  });
-  return out;
-}
-
-const inAny = (ranges: readonly { from: number; to: number }[], from: number, to: number): boolean =>
-  ranges.some((range) => from < range.to && to > range.from);
 
 export interface OfmLive {
   extension: Extension;
@@ -294,14 +275,9 @@ export function ofmLive(env: OfmEnv, missingText: (name: string) => string): Ofm
             }
 
             // ![](相对路径) 标准图片
-            const stdImage = /!\[([^\]\n]*)\]\((<[^>\n]+>|[^)\s\n]+)(?:\s+"[^"\n]*")?\)/g;
-            for (let m = stdImage.exec(text); m !== null; m = stdImage.exec(text)) {
-              const start = line.from + m.index;
-              const end = start + m[0].length;
-              if (inAny(lineCode, start, end)) continue;
-              const url = (m[2] as string).replace(/^<|>$/g, "");
-              if (/^[a-z][a-z0-9+.-]*:/i.test(url) || near(start, end)) continue;
-              out.push(Decoration.replace({ widget: new ImageWidget(url, m[1] as string, undefined, env, missingText) }).range(start, end));
+            for (const image of standardImages(text, line.from, lineCode)) {
+              if (near(image.from, image.to)) continue;
+              out.push(Decoration.replace({ widget: new ImageWidget(image.url, image.alt, undefined, env, missingText) }).range(image.from, image.to));
             }
 
             // ==高亮==
