@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { builtinCommand, docEditLabel, fileLabel, PINNED_CARD_COMMANDS, toolWord } from "./builtin-commands.ts";
-import { toolCallSummary } from "./tool-results.ts";
+import { builtinCommand, docEditLabel, docEditPath, docEditSection, docEditSummary, fileLabel, PINNED_CARD_COMMANDS, toolWord } from "./builtin-commands.ts";
+import { parseEditDiff, toolCallSummary } from "./tool-results.ts";
 
 describe("文档内置命令的展示", () => {
   it("中文名与参数摘要", () => {
@@ -42,5 +42,26 @@ describe("文档内置命令的展示", () => {
     assert.equal(toolWord(table, "edit", { path: "/w/a.ts" }), "编辑");
     assert.equal(toolWord(table, "edit"), "编辑");
     assert.equal(toolWord(table, "read", { path: "/w/a.md" }), "读取");
+  });
+
+  it("改文档的摘要：文件名 · 第几节（diff 上下文里的标题，退到开着的文档全文）", () => {
+    const rows = parseEditDiff(" 10 ## 下周计划\n 11 \n+12 > [!tip] 提示\n+13 > 周五前提交\n 14 - 旧条目");
+    assert.equal(docEditSection(rows, null), "下周计划");
+    // diff 上下文够不到标题：回溯开着的文档全文
+    const far = parseEditDiff(" 40 一段话\n+41 新加的一句\n 42 另一段");
+    const text = "# 周报\n\n## **风险** 与 [[应对|对策]]\n\n一段话\n新加的一句\n另一段";
+    assert.equal(docEditSection(far, text), "风险 与 对策");
+    assert.equal(docEditSection(far, null), null);
+    assert.equal(docEditSection(far, "没有标题\n新加的一句"), null);
+    // 新增行本身是标题：就是这一节
+    assert.equal(docEditSection(parseEditDiff("+5 ### 新小节\n+6 内容"), null), "新小节");
+    assert.equal(docEditSummary("/w/周报/2026-W45.md", "下周计划"), "2026-W45 · 下周计划");
+    assert.equal(docEditSummary("/w/周报/2026-W45.md", null), "2026-W45");
+  });
+
+  it("docEditPath 只认文档文件上的 edit / write", () => {
+    assert.equal(docEditPath("edit", { path: "/w/a.md" }), "/w/a.md");
+    assert.equal(docEditPath("write", { path: "/w/a.ts" }), null);
+    assert.equal(docEditPath("read", { path: "/w/a.md" }), null);
   });
 });

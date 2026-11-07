@@ -27,7 +27,8 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
-import { builtinCommand, docEditLabel, toolWord } from "./builtin-commands.ts";
+import { builtinCommand, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
+import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
@@ -4324,7 +4325,7 @@ function ToolLine(props: {
     props.toolName === "write" ||
     props.toolName === "edit" ||
     props.toolName === "ls";
-  const callLabel =
+  const baseCallLabel =
     callSummary !== null && pathTool ? splitPathTail(callSummary).name : callSummary;
   // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
   const expandable = toolExpandable(result, props.toolName);
@@ -4333,6 +4334,15 @@ function ToolLine(props: {
   // B-1：read_task 落定后 details 里带任务卡（running/error 帧没有）；别的工具不解析
   const taskCard = props.toolName === "read_task" && finished ? readTaskCard(result) : null;
   const diff = finished ? editDiffText(result) : null;
+  // 落在文档上的 edit / write：摘要写「文件名 · 第几节」（节取自 diff 上下文，退到此刻开着的文档全文）
+  const docPath = docEditPath(props.toolName, props.input);
+  const callLabel =
+    docPath === null
+      ? baseCallLabel
+      : docEditSummary(
+          docPath,
+          diff !== null ? docEditSection(parseEditDiff(diff), getOpenDocumentText(docPath)) : null,
+        );
   const stats = finished ? editDiffStats(result) : null;
   // 正文只在**真要用**时才拼：`toolResultText` 把结果里每个 text 块 join 成一整条
   // （实测单条最大 479KB），而折叠着的工具行只有两处需要它——展开体（open）与

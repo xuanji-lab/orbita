@@ -220,11 +220,61 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
  * 文档正文的改写仍是通用的 edit / write（`.md` 是真身）；落在文档文件（.md / .markdown / .txt）上时
  * 过程行的药丸写「改文档 / 写文档」而不是英文工具名。只改药丸文字，分组、diff 统计、展开体都照旧。
  */
-export function docEditLabel(toolName: string, input: unknown): string | null {
+export function docEditPath(toolName: string, input: unknown): string | null {
   if (toolName !== "edit" && toolName !== "write") return null;
   const path = str(input, "path");
-  if (path === null || !/\.(?:md|markdown|txt)$/i.test(path)) return null;
+  return path !== null && /\.(?:md|markdown|txt)$/i.test(path) ? path : null;
+}
+
+export function docEditLabel(toolName: string, input: unknown): string | null {
+  if (docEditPath(toolName, input) === null) return null;
   return toolName === "edit" ? "改文档" : "写文档";
+}
+
+const HEADING_LINE = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/;
+
+function headingText(line: string): string | null {
+  const match = HEADING_LINE.exec(line);
+  if (match === null) return null;
+  // 去掉标题里的行内标记（加粗 / 代码 / 双链括号），只留可读文字
+  const text = (match[1] ?? "").replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2").replace(/[*_`~=]/g, "").trim();
+  return text === "" ? null : text;
+}
+
+/**
+ * 一次文档 edit 落在哪一节：先看 diff 里首个改动行之前最近的标题（pi 的 diff 带上下文，改动贴着标题时够用），
+ * 再退到「此刻开着的这份文档全文」里按首个新增行回溯到上一个标题（改动离标题远时 diff 上下文里没有）。
+ * 都找不到 = null（宁缺毋编）。
+ */
+export function docEditSection(
+  rows: readonly { kind: "add" | "del" | "ctx"; text: string }[],
+  docText: string | null,
+): string | null {
+  let heading: string | null = null;
+  let firstAdded: string | null = null;
+  for (const row of rows) {
+    const title = headingText(row.text);
+    if (title !== null) heading = title;
+    if (row.kind !== "ctx") {
+      if (row.kind === "add" && row.text.trim() !== "") firstAdded = row.text;
+      break;
+    }
+  }
+  if (heading !== null) return heading;
+  if (docText === null || firstAdded === null) return null;
+  const lines = docText.split("\n");
+  const at = lines.findIndex((line) => line === firstAdded);
+  if (at < 0) return null;
+  for (let index = at; index >= 0; index -= 1) {
+    const title = headingText(lines[index] ?? "");
+    if (title !== null) return title;
+  }
+  return null;
+}
+
+/** 文档 edit / write 过程行的摘要：「文件名 · 第几节」（没有节就只有文件名） */
+export function docEditSummary(path: string, section: string | null): string {
+  return section === null ? fileLabel(path) : `${fileLabel(path)} · ${section}`;
 }
 
 /**

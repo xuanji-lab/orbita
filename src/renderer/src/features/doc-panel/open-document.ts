@@ -33,6 +33,11 @@ export function getOpenDocument(): OpenDocument | null {
   return current;
 }
 
+/** 这份路径此刻开着时的全文（过程行回溯「改在哪一节」用）；没开着 = null */
+export function getOpenDocumentText(path: string): string | null {
+  return current !== null && source !== null && current.path === path ? source.text() : null;
+}
+
 /**
  * 发送前：指向开着那份文件的引用换成现在的位置。
  * 优先用编辑器追踪的区间（准确，分得清重复句）；追踪不到或区间里的字被改过，
